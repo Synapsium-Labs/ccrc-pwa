@@ -1,8 +1,8 @@
 // The endpoint gate's case table, in a fixture module rather than inside the
 // suite, for the reason `server/test/fixtures/leastLoaded.ts` is: more than one
-// caller is driven over it. `base-url.test.ts` runs BOTH implementations of the
-// gate — the TypeScript `shared/base-url.ts` and its bare-`node` twin
-// `shared/base-url.mjs`, row for row and against each other — and the mirror
+// caller is driven over it. `base-url.test.ts` runs the gate through BOTH of its
+// imports — `shared/base-url.ts`, the typed re-export, and `shared/base-url.mjs`,
+// the one implementation (D-7306), row for row — and the mirror
 // task then drives the two ROSTER PARSERS over the same rows
 // (`parseRoster` calls the `.ts`, `rosterFromJson` imports the `.mjs`), so
 // "the mirror may be stricter than the parser, never laxer" stops being a

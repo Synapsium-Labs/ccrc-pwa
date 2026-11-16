@@ -1,14 +1,29 @@
-import { CCD_ARGV, verbSupported } from '../ccdargv.js';
-import { isFullLine, parsePrLines, phaseFor } from '../prstate.js';
+/**
+ * L3 adapter (declared): re-measures a done claim, reads and decides nothing about the world beyond that. It reads the
+ * registry, the branch's ref files and, since landing order wave 4, the radar's `enabled` and `<id>.lineage` files,
+ * all through the `FleetIO` port, and asks `ccd pr-state` through `RunCcd`. It imports no `node:*` module, so its
+ * import block alone would not mark it as an adapter, but the I/O it makes is real. It also takes a runtime import of
+ * `lineageRead.ts`, the reader of the radar's files, which is itself a declared L3 reader, and a file that depends on
+ * an adapter is one.
+ * The lineage DECISION is `lineage.ts`'s (pure, L1); this file reads, asks it, and re-reads the tip once after an accept.
+ */
+import { CCD_ARGV, ccdCan } from '../ccdargv.js';
+import { isFullLine, parsePrLines, phaseFor, type CcdPrLine } from '../prstate.js';
 import { measuredIdentity, readRegistryMeasured } from '../registry.js';
 import { readBranchTip } from './gitref.js';
+import { decideLineage, lineageQualifies } from './lineage.js';
+import { readLandingFacts } from './lineageRead.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
-import type { Deps } from '../server.js';
-import { isPrPhase, type DoneRejectCode, type PrPhase } from '../../../shared/api.js';
+import type { RunCcd } from './ports.js';
+import { isPrPhase, isRegistryId, type DoneRejectCode, type PrPhase } from '../../../shared/api.js';
 
 const SHA = /^[0-9a-f]{40}$/;
+
+/** `measured.via` of a verdict that accepted a stale claim because the live tip is the claim plus clean merges of the
+ *  base (landing order wave 4, `lineage.ts`'s `accept`). Spelled once: the advance reads it to answer `verifiedHead`. */
+export const BASE_ONLY_MERGE = 'base-only-merge';
 
 /** What a `worker_done` claims (mail kind `status`, subject `wave-done` —
  *  spec:127-129). Every field is UNTRUSTED input off an HTTP body, and the
@@ -27,7 +42,19 @@ export interface DoneClaim {
 }
 
 export type DoneVerdict =
-  | { ok: true; measured: { branchTip: string; prNumber: number | null; prPhase: PrPhase } }
+  | { ok: true; measured: { branchTip: string; prNumber: number | null; prPhase: PrPhase;
+                            /** Present ONLY when the claim was accepted through the radar's lineage (landing order
+                             *  wave 4): `branchTip` is then the LIVE tip, which is no longer the claim. */
+                            via?: typeof BASE_ONLY_MERGE };
+      /** The `pr-state` line this verdict measured — SERVER-INTERNAL, never
+       *  serialised onto the wire (neither close route ever spreads `verdict`
+       *  into a reply; both read `.code`/`.detail` off the `ok:false` arm
+       *  only). Spec 2026-09-22 §5.7: the close reuses this line for
+       *  its own child-spent redate instead of asking `pr-state` a second
+       *  time inside the same mutex section — the same `CCD_ARGV.prStateSession`
+       *  call and the same `parsePrLines`, so a second call would measure
+       *  nothing this one has not already. */
+      line: CcdPrLine }
   | { ok: false; code: DoneRejectCode; detail: string };
 
 /** `verifyDone`'s two object parameters, named rather than inlined: the
@@ -37,9 +64,13 @@ export type DoneVerdict =
  *  and does not cover), and an inline multi-line object-type parameter pushes
  *  the `{` onto its own line, which the scanner then cannot resolve to this
  *  function at all — the call site would report `gated: false` regardless of
- *  the `verbSupported(` call two lines below it. Naming the types keeps the
+ *  the `ccdCan(` call two lines below it. Naming the types keeps the
  *  signature, params and return type on one line. */
-export interface VerifyDoneDeps { io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState }
+export interface VerifyDoneDeps {
+  io: FleetIO; cfg: CcrcConfig; runCcd: RunCcd; fleetState?: FleetState;
+  /** The clock the lineage step ages the radar's files against; `Date.now` when absent. */
+  now?: () => number;
+}
 /** `branch` here is a FALLBACK, not the measurement, and after Wave 3 §3.2 it
  *  is reached by EXACTLY ONE state: the live registry has no row for this
  *  session at all (retired, purged, or a narrowed drop `readRegistry` itself
@@ -77,54 +108,32 @@ function prVerdict(claimed: PrPhase, measured: PrPhase): 'ok' | 'regressed' | 'u
   return 'ok';
 }
 
-/**
- * Re-measure a done claim. THE RUN IS NOT TOUCHED HERE — this answers, and the
- * route decides; a verifier that also advanced would be a verifier nobody can
- * call twice.
- *
- * WHAT IS RE-MEASURED, AND WHAT IS NOT (deviation D-2, stated here because this
- * is where a future reader will look for the guarantee):
- *  - `branchTip` — measured, from git's own ref files (`gitref.ts`), against
- *    the branch the LIVE REGISTRY names for this session, not `run.branch`
- *    (see `DoneRun`'s own docstring — `run.branch` is a stale DB column on the
- *    ordinary path, once `sweepNames` has renamed the workspace).
- *  - `prNumber`/`prPhase` — measured, through `ccd pr-state --session`, the
- *    same verb and the same parser the PR lane already uses. Never `gh`: there
- *    is no `gh` key in the agent's whitelist and there must not be one
- *    (`agent/src/whitelist.ts:309-316`).
- *  - `handoffCommit` — CORRESPONDENCE ONLY. The server cannot read a commit
- *    object (no git, and `FleetIO` reads bytes), so it cannot tell whether the
- *    commit edits `docs/superpowers/programs/<slug>.md`. What it CAN prove is
- *    that the worker's own two facts agree and that the tip is real. Whether
- *    the commit is a real handoff is the coordinator's ordinary review of the
- *    diff — spec:246-252, "briefs are written prose reviewed like code". Do
- *    not let a later reader mistake this token for the stronger claim.
- *
- * The claim is UNTRUSTED (`DoneClaim`'s own docstring): `branchTip` and
- * `handoffCommit` are validated below by the same `SHA` regex; `prPhase` and
- * `prNumber` are validated the same way, through `isPrPhase` and a `typeof`
- * check, before either fact is re-measured — never trusted off the wire on
- * the strength of a TypeScript annotation the route's JSON parse cannot
- * enforce.
- */
-export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: DoneClaim): Promise<DoneVerdict> {
-  // Cheapest first, and it is also the one that needs no I/O: a claim whose own
-  // two facts disagree is rejected before the fleet is touched at all.
-  if (!SHA.test(claim.handoffCommit) || !SHA.test(claim.branchTip) ||
-      claim.handoffCommit !== claim.branchTip) {
-    return { ok: false, code: 'no-handoff-commit',
-      detail: 'handoffCommit must be the 40-hex sha this same claim reports as branchTip' };
-  }
-  // Still cheap, still no I/O: `prPhase`/`prNumber` are typed but never
-  // parsed anywhere between the HTTP body and here (no route exists yet in
-  // this PR, and Task 9's plan never names a parse step) — an omitted or
-  // out-of-vocabulary `prPhase`, or a non-number `prNumber`, must be refused
-  // here rather than fall through `prVerdict` unmatched and read as `ok`.
-  if (!isPrPhase(claim.prPhase) || (claim.prNumber !== null && typeof claim.prNumber !== 'number')) {
-    return { ok: false, code: 'pr-unmeasurable',
-      detail: 'prPhase must be a recognised PrPhase and prNumber must be a number or null' };
-  }
+/** `resolveDoneBranch`'s answer. `project` is the registry record's own `.project`, or `null` when the branch came from
+ *  the run row (the registry has no row at all), which the lineage step does not trust. A record with no `.project`
+ *  file reads as its id (`SessionRecord.project`), so it names no project of this run and does not qualify either. */
+interface ResolvedBranch { ok: true; branch: string; provenance: string; project: string | null }
 
+/** Which branch a run's done-claim is about — the registry's answer first, the
+ *  frozen run-row column only when the registry has no row at all. EXTRACTED
+ *  from `verifyDone` so `verifyReviewDone` re-measures through the identical
+ *  read (design 2026-09-14 §5.3 — "the same gitref.ts read the work path
+ *  uses"; D-2796). Every comment that was inline here moved with the code. */
+export async function resolveDoneBranch(
+  deps: VerifyDoneDeps, run: DoneRun,
+): Promise<ResolvedBranch | { ok: false; code: DoneRejectCode; detail: string }> {
+  // FIRST, and pure, so it stands before the read (spec §2.3). A session id
+  // that is not a registry id is refused by `readRegistryMeasured`: listed,
+  // never read, absent from `records`. Without this check `record` below would
+  // be `undefined` and the frozen `run.branch` fallback would answer for it — a
+  // done-claim settled on a ref nobody measured, and `verifyDone`'s `pr-state`
+  // composed with an id ccd could read as a flag. Held, never a fact:
+  // `tip-unmeasurable`. `verifyReviewDone` reaches here with the WORK run's id,
+  // which the review run's own close gate never checks, so on that path this is
+  // the only check.
+  if (!isRegistryId(run.sessionId)) {
+    return { ok: false, code: 'tip-unmeasurable',
+      detail: 'the run\'s session id is not a registry id: it is refused, never read' };
+  }
   // The registry's branch, not `run.branch` — see `DoneRun`'s docstring for
   // why the DB column cannot be trusted here. `record` is undefined on ONE
   // state after Wave 3 §3.2: the registry genuinely no longer carries a row
@@ -140,6 +149,7 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
   // and are refused `tip-unmeasurable` immediately below. A `worker_done`
   // this refuses is replayed and re-verified on the next sweep the same as
   // any other refusal (spec:174-177, D-10).
+  // [registry-refused:holds] the check at the top of this function holds a refused id before this read.
   const registryRead = await readRegistryMeasured(deps.io, deps.cfg);
   if (!registryRead.listed) {
     return { ok: false, code: 'tip-unmeasurable',
@@ -172,7 +182,7 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
   // sentence covering all three would be a lie about two of them.
   //
   // The empty rung arrived a wave later than the other two (review finding).
-  // `field()` trims, so a zero-byte `.branch` used to read as `branch: ''`,
+  // `listedField` trims, so a zero-byte `.branch` used to read as `branch: ''`,
   // sail past the null check below, and be handed to `readBranchTip` as a
   // branch NAME — the refusal a coordinator then read was `tip-unmeasurable`
   // with an empty name in it ("no readable ref for  under demo"), which points
@@ -201,34 +211,164 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
   } else {
     branch = record.branch;
   }
-  /** Appended to every refusal below that NAMES `branch`, and only when the
-   *  name came from the frozen run row. Empty on the ordinary path, so the
-   *  coordinator is never told its measurement is stale when it is not. */
+  /** Appended to every refusal the CALLER makes that NAMES `branch` — the word
+   *  was "below" while this block lived inside `verifyDone`, and the refusals
+   *  it describes are now one function away — and only when the name came from
+   *  the frozen run row. Empty on the ordinary path, so the coordinator is
+   *  never told its measurement is stale when it is not. */
   const provenance = branchFromRunRow ? ' — from the run row, which predates any rename' : '';
+  return { ok: true, branch, provenance, project: record === undefined ? null : record.project };
+}
+
+/** What the lineage step answered for a claim whose branch is no longer where it said. */
+type StaleSettled =
+  /** Today's refusal, in the caller's own words, its detail extended by ` (<detail>)` when one is given. */
+  | { kind: 'today'; detail?: string }
+  | { kind: 'unmeasured'; detail: string }
+  /** The live tip read again, after an accept, is another sha. */
+  | { kind: 'moved' }
+  /** The live tip read again, after an accept, could not be read. Today's `tip-unmeasurable`, never folded into `moved`. */
+  | { kind: 'noref' }
+  | { kind: 'accept' };
+
+/** The detail of a `moved` answer, for both verifiers. */
+const MOVED_DETAIL = 'the tip moved between reads';
+
+/**
+ * THE LINEAGE STEP (landing order wave 4, spec §5.4), shared by both verifiers at the one place each answers
+ * `stale-tip` / `stale-review` today. `liveTip` is the branch's tip as `readBranchTip` read it; `claimTip` the one the
+ * worker (or the reviewer) named. In a project the operator opted in, a claim that the radar's lineage proves is the
+ * live tip minus clean merges of the base is ACCEPTED, and then the tip is read ONCE MORE by the same reader (a full
+ * ref name, loose file then `packed-refs`, never git's name lookup, so a tag named like a branch cannot answer):
+ * the lineage file and the first read are evidence about one moment, and the second read is what binds the accepted tip
+ * to the moment of the verdict. The decision is `lineage.ts`'s (pure); this function reads and re-reads.
+ *
+ * `lineageQualifies` (`lineage.ts`) is the probe's own predicate (D-7105): a registry record naming this run's project,
+ * on a `ws/` branch. A row the radar never measures gets today's refusal, never a wait for a file that cannot come. Nothing
+ * here reads before `resolveDoneBranch`'s `isRegistryId` check has passed, and `readBranchTip` has already guarded the
+ * project and the branch as path segments; the id is checked once more because it names a file below.
+ */
+async function settleStaleTip(
+  deps: VerifyDoneDeps, work: DoneRun, resolved: ResolvedBranch, claimTip: string, liveTip: string,
+): Promise<StaleSettled> {
+  const { branch, project } = resolved;
+  if (!isRegistryId(work.sessionId)) return { kind: 'today' };
+  const facts = await readLandingFacts(
+    deps.io, deps.cfg.registryDir, work.project, work.sessionId, branch, (deps.now ?? Date.now)());
+  const decision = decideLineage({
+    claim: claimTip, live: liveTip, ...facts,
+    qualifies: lineageQualifies(project, work.project, branch),
+  });
+  if (decision.answer === 'today') return decision.detail === undefined ? { kind: 'today' } : { kind: 'today', detail: decision.detail };
+  if (decision.answer === 'unmeasured') return { kind: 'unmeasured', detail: decision.detail };
+  const again = await readBranchTip(deps.io, deps.cfg.projectsRoot, work.project, branch);
+  if (again === null) return { kind: 'noref' };
+  return again === liveTip ? { kind: 'accept' } : { kind: 'moved' };
+}
+
+/** A refusal's detail with the lineage step's own word appended, when it gave one. */
+const withLineageDetail = (today: string, s: Extract<StaleSettled, { kind: 'today' }>): string =>
+  s.detail === undefined ? today : `${today} (${s.detail})`;
+
+/**
+ * Re-measure a done claim. THE RUN IS NOT TOUCHED HERE — this answers, and the
+ * route decides; a verifier that also advanced would be a verifier nobody can
+ * call twice.
+ *
+ * WHAT IS RE-MEASURED, AND WHAT IS NOT (deviation D-2, stated here because this
+ * is where a future reader will look for the guarantee):
+ *  - `branchTip` — measured, from git's own ref files (`gitref.ts`), against
+ *    the branch the LIVE REGISTRY names for this session, not `run.branch`
+ *    (see `DoneRun`'s own docstring — `run.branch` is a stale DB column on the
+ *    ordinary path, once `sweepNames` has renamed the workspace). A claim that
+ *    is not the live tip is `stale-tip` — except in a project the operator
+ *    opted in to the radar's lineage, where `settleStaleTip` may ACCEPT it
+ *    (the live tip is the claim plus clean merges of the base alone) or answer
+ *    `lineage-unmeasured` (the radar has not measured the live tip yet). On an
+ *    accept `measured.branchTip` is the LIVE tip, the head every later step
+ *    binds, and `measured.via` says how.
+ *  - `prNumber`/`prPhase` — measured, through `ccd pr-state --session`, the
+ *    same verb and the same parser the PR lane already uses. Never `gh`: there
+ *    is no `gh` key in the agent's whitelist and there must not be one
+ *    (`agent/src/whitelist.ts:309-316`).
+ *  - `handoffCommit` — CORRESPONDENCE ONLY. The server cannot read a commit
+ *    object (no git, and `FleetIO` reads bytes), so it cannot tell whether the
+ *    commit edits `docs/superpowers/programs/<slug>.md`. What it CAN prove is
+ *    that the worker's own two facts agree and that the tip is real. Whether
+ *    the commit is a real handoff is the coordinator's ordinary review of the
+ *    diff — spec:246-252, "briefs are written prose reviewed like code". Do
+ *    not let a later reader mistake this token for the stronger claim.
+ *
+ * The `ok:true` verdict also carries the measured `pr-state` `line` itself
+ * (spec §5.7) — not a new measurement, the SAME `CCD_ARGV.prStateSession`
+ * row this function already read to answer `prNumber`/`prPhase`. It exists so
+ * the close's own child-spent redate can reuse it instead of asking
+ * `pr-state` again inside the same mutex section; it is never put on the wire.
+ *
+ * The claim is UNTRUSTED (`DoneClaim`'s own docstring): `branchTip` and
+ * `handoffCommit` are validated below by the same `SHA` regex; `prPhase` and
+ * `prNumber` are validated the same way, through `isPrPhase` and a `typeof`
+ * check, before either fact is re-measured — never trusted off the wire on
+ * the strength of a TypeScript annotation the route's JSON parse cannot
+ * enforce.
+ */
+export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: DoneClaim): Promise<DoneVerdict> {
+  // Cheapest first, and it is also the one that needs no I/O: a claim whose own
+  // two facts disagree is rejected before the fleet is touched at all.
+  if (!SHA.test(claim.handoffCommit) || !SHA.test(claim.branchTip) ||
+      claim.handoffCommit !== claim.branchTip) {
+    return { ok: false, code: 'no-handoff-commit',
+      detail: 'handoffCommit must be the 40-hex sha this same claim reports as branchTip' };
+  }
+  // Still cheap, still no I/O: `prPhase`/`prNumber` are typed but never
+  // parsed anywhere between the HTTP body and here (no route exists yet in
+  // this PR, and Task 9's plan never names a parse step) — an omitted or
+  // out-of-vocabulary `prPhase`, or a non-number `prNumber`, must be refused
+  // here rather than fall through `prVerdict` unmatched and read as `ok`.
+  if (!isPrPhase(claim.prPhase) || (claim.prNumber !== null && typeof claim.prNumber !== 'number')) {
+    return { ok: false, code: 'pr-unmeasurable',
+      detail: 'prPhase must be a recognised PrPhase and prNumber must be a number or null' };
+  }
+
+  const resolved = await resolveDoneBranch(deps, run);
+  if (!resolved.ok) return resolved;
+  const { branch, provenance } = resolved;
 
   const tip = await readBranchTip(deps.io, deps.cfg.projectsRoot, run.project, branch);
   if (tip === null) {
     return { ok: false, code: 'tip-unmeasurable',
       detail: `no readable ref for ${branch} under ${run.project}${provenance}` };
   }
+  let via: typeof BASE_ONLY_MERGE | undefined;
   if (tip !== claim.branchTip) {
-    // F5 (build4 dogfood): a stale-tip that NEVER MOVES no matter how many
-    // times the same claim is resubmitted is the signature of a brief that
-    // told the worker to commit on a separate feature branch instead of this
-    // workspace's own — the fingerprint re-measures `branch` (this run's
-    // WORKSPACE branch), never a branch the brief merely mentioned, so real,
-    // reviewed work sitting on the wrong branch reads exactly like a stale
-    // claim forever. Naming that here (not a behaviour change — the code and
-    // the refusal are unchanged) is one line a future coordinator can read
-    // without having lived through the dogfood that found it.
-    return { ok: false, code: 'stale-tip',
-      detail: `${branch}${provenance} is at ${tip}, the claim says ${claim.branchTip} — if the worker committed ` +
-        'on a DIFFERENT branch than this workspace\'s own, that is the almost-certain cause: the brief ' +
-        'must instruct the worker to commit on its workspace branch, never a separate feature branch' };
+    const settled = await settleStaleTip(deps, run, resolved, claim.branchTip, tip);
+    if (settled.kind === 'accept') {
+      via = BASE_ONLY_MERGE;
+    } else if (settled.kind === 'unmeasured') {
+      return { ok: false, code: 'lineage-unmeasured', detail: settled.detail };
+    } else if (settled.kind === 'moved') {
+      return { ok: false, code: 'stale-tip', detail: MOVED_DETAIL };
+    } else if (settled.kind === 'noref') {
+      return { ok: false, code: 'tip-unmeasurable', detail: `no readable ref for ${branch} under ${run.project}${provenance}` };
+    } else {
+      // F5 (build4 dogfood): a stale-tip that NEVER MOVES no matter how many
+      // times the same claim is resubmitted is the signature of a brief that
+      // told the worker to commit on a separate feature branch instead of this
+      // workspace's own — the fingerprint re-measures `branch` (this run's
+      // WORKSPACE branch), never a branch the brief merely mentioned, so real,
+      // reviewed work sitting on the wrong branch reads exactly like a stale
+      // claim forever. Naming that here (not a behaviour change — the code and
+      // the refusal are unchanged) is one line a future coordinator can read
+      // without having lived through the dogfood that found it.
+      return { ok: false, code: 'stale-tip',
+        detail: withLineageDetail(`${branch}${provenance} is at ${tip}, the claim says ${claim.branchTip} — if the worker committed ` +
+          'on a DIFFERENT branch than this workspace\'s own, that is the almost-certain cause: the brief ' +
+          'must instruct the worker to commit on its workspace branch, never a separate feature branch', settled) };
+    }
   }
 
   const argv = CCD_ARGV.prStateSession(run.sessionId);
-  if (!verbSupported(deps.fleetState, argv)) {
+  if (!ccdCan(deps.fleetState, 'prStateSession')) {
     return { ok: false, code: 'pr-unmeasurable', detail: 'the fleet host cannot answer pr-state' };
   }
   const res = await deps.runCcd(argv);
@@ -249,5 +389,68 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
     return { ok: false, code: 'pr-regressed',
       detail: `the claim names PR #${claim.prNumber}, the branch is bound to #${measured.number}` };
   }
-  return { ok: true, measured: { branchTip: tip, prNumber: measured.number, prPhase: measured.phase } };
+  return { ok: true, measured: { branchTip: tip, prNumber: measured.number, prPhase: measured.phase,
+    ...(via === undefined ? {} : { via }) }, line };
+}
+
+/** A review run's done-claim (design 2026-09-14 §5.3): the tip the reviewer
+ *  READ, and where it wrote what it found. Shape-checked by `closeReviewRun`
+ *  before this module sees it; re-validated here all the same. */
+export interface ReviewClaim { reviewedTip: string; report: string }
+
+export type ReviewVerdict =
+  | { ok: true; measured: { tip: string; via?: typeof BASE_ONLY_MERGE } }
+  | { ok: false; code: DoneRejectCode; detail: string };
+
+/**
+ * The parent's "never believe a done claim" (D-6) applied to a new kind of
+ * claim: the reviewer says "I read T", and the server confirms T is still
+ * what there is to read, and that the report it names can be opened. No PR
+ * check, no `.prhistory` — a review run has neither. `work` is the REVIEWED
+ * run (its session, project and frozen branch), never the review run's own.
+ *
+ * `statMeasured`, never `stat`: the convenience read folds absent and
+ * unreadable into one `null` (`io.ts`), and those are two conditions a
+ * reviewer handles differently — a path it typo'd versus a mode bit or a
+ * mount that went away. The detail names which, so the refusal is actionable
+ * rather than merely negative.
+ */
+export async function verifyReviewDone(
+  deps: VerifyDoneDeps, work: DoneRun, claim: ReviewClaim,
+): Promise<ReviewVerdict> {
+  // Defence only: closeReviewRun refuses a malformed reviewedTip as bad-request before this runs.
+  if (!SHA.test(claim.reviewedTip)) {
+    return { ok: false, code: 'stale-review', detail: 'reviewedTip must be a 40-hex sha' };
+  }
+  const resolved = await resolveDoneBranch(deps, work);
+  if (!resolved.ok) return resolved;
+  const { branch, provenance } = resolved;
+  const tip = await readBranchTip(deps.io, deps.cfg.projectsRoot, work.project, branch);
+  const noRef = (): ReviewVerdict => ({ ok: false, code: 'tip-unmeasurable',
+    detail: `no readable ref for ${branch} under ${work.project}${provenance} — the reviewed run may have been abandoned` });
+  if (tip === null) return noRef();
+  let via: typeof BASE_ONLY_MERGE | undefined;
+  if (tip !== claim.reviewedTip) {
+    // A review of any commit of an accepted chain stands (D-7108): each step after it is a proven clean base merge.
+    const settled = await settleStaleTip(deps, work, resolved, claim.reviewedTip, tip);
+    if (settled.kind === 'accept') {
+      via = BASE_ONLY_MERGE;
+    } else if (settled.kind === 'unmeasured') {
+      return { ok: false, code: 'lineage-unmeasured', detail: settled.detail };
+    } else if (settled.kind === 'moved') {
+      return { ok: false, code: 'stale-review', detail: MOVED_DETAIL };
+    } else if (settled.kind === 'noref') {
+      return noRef();
+    } else {
+      return { ok: false, code: 'stale-review',
+        detail: withLineageDetail(`${branch}${provenance} is at ${tip}, the report describes ${claim.reviewedTip} — the worker ` +
+          'pushed after wave-done, or the report is about an older tip; open a fresh review run against the live tip', settled) };
+    }
+  }
+  const st = await deps.io.statMeasured(claim.report);
+  if (!st.ok) {
+    return { ok: false, code: 'report-unreadable',
+      detail: `${claim.report}: ${st.reason === 'absent' ? 'no such file' : `could not be read (${st.reason})`}` };
+  }
+  return { ok: true, measured: via === undefined ? { tip } : { tip, via } };
 }

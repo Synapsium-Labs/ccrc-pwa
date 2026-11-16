@@ -45,8 +45,10 @@ function importsHelper(src: string): boolean {
     .test(src);
 }
 
-/** A file WRITES the block if it spells one of the four alias variables OR the
- *  eighth key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (§6.1 amendment), AND reaches
+/** A file WRITES the block if it spells one of the four alias variables, the
+ *  eighth key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (§6.1 amendment), OR the codex
+ *  lane's plugin switch, `ENABLE_CODE_SECURITY_REVIEW` (operator ruling
+ *  2026-11-12, option b), AND reaches
  *  a settings file in the same breath. Spelling one in a comment, an
  *  assertion or an expected value is not writing it, which is why the second
  *  half of the conjunction is here — the test corpus names these variables
@@ -54,7 +56,7 @@ function importsHelper(src: string): boolean {
  *  settings file only through the one function allowed to. */
 export function writesTheBlock(src: string): boolean {
   if (importsHelper(src)) return false;
-  if (!/(ANTHROPIC_DEFAULT_(HAIKU|SONNET|OPUS|FABLE)_MODEL|CLAUDE_CODE_MAX_CONTEXT_TOKENS)/.test(src)) {
+  if (!/(ANTHROPIC_DEFAULT_(HAIKU|SONNET|OPUS|FABLE)_MODEL|CLAUDE_CODE_MAX_CONTEXT_TOKENS|ENABLE_CODE_SECURITY_REVIEW)/.test(src)) {
     return false;
   }
   return /(writeFileSync|renameSync|mergeSettingsEnv\s*\()/.test(src)
@@ -82,6 +84,9 @@ describe('§6.1 — one writer of the model env block', () => {
       + '// p is a settings.json')).toBe(true);
     expect(writesTheBlock(
       'writeFileSync(p, JSON.stringify({env:{CLAUDE_CODE_MAX_CONTEXT_TOKENS:"1"}}));\n'
+      + '// p is a settings.json')).toBe(true);
+    expect(writesTheBlock(
+      'writeFileSync(p, JSON.stringify({env:{ENABLE_CODE_SECURITY_REVIEW:"0"}}));\n'
       + '// p is a settings.json')).toBe(true);
     expect(writesTheBlock('// ANTHROPIC_DEFAULT_OPUS_MODEL is written by the materialiser'))
       .toBe(false);

@@ -1,0 +1,147 @@
+{
+  "scenario": "ov-compact",
+  "covers": [
+    "W0-05"
+  ],
+  "mainMarker": "You are (an interactive agent|an agent working with the user|Claude Code)",
+  "requests": true,
+  "timing": true,
+  "launch": {
+    "env": {
+      "RIG_EMIT_LOG": "@RIG_ROOT@/logs/emit.ndjson",
+      "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "100000"
+    },
+    "settings": {
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event SessionStart --chars 100 --tag-source"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "steps": [
+    {
+      "waitReady": 60
+    },
+    {
+      "type": "w0 c1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "c1"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "sessionsSnap": "s0-start"
+    },
+    {
+      "type": "/compact"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 20
+    },
+    {
+      "sessionsSnap": "s1-after-manual"
+    },
+    {
+      "type": "w0 c2"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "c2"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "sessionsSnap": "s2-before-auto"
+    },
+    {
+      "type": "w0 c3"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "c3"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "sleep": 10
+    },
+    {
+      "sessionsSnap": "s3-after-auto"
+    },
+    {
+      "type": "/exit"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "settleS": 3,
+  "entries": [
+    {
+      "label": "c1",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 c1$"
+      },
+      "text": "W0-C1"
+    },
+    {
+      "label": "c2",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 c2$"
+      },
+      "text": "W0-C2",
+      "usage": {
+        "input_tokens": 150000
+      }
+    },
+    {
+      "label": "c3",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 c3$"
+      },
+      "text": "W0-C3"
+    }
+  ],
+  "default": {
+    "text": "W0-WAIT",
+    "repeat": true
+  }
+}

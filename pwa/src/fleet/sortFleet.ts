@@ -1,17 +1,10 @@
-import type { FleetSession, SessionBucket } from '../../../shared/api';
+import { BUCKET_RANK, type FleetSession, type SessionBucket } from '../../../shared/api';
 
 /** Bucket priority for the LIST — not a re-derivation of which bucket a session
  *  is in (the server decided that, `shared/api.ts`'s `sessionBucket`), only of
- *  what order the buckets read in. Exported: `FleetScreen`'s bucket sections
- *  render in this same order, from this same constant — one ordering, not two. */
-export const RANK: Record<SessionBucket, number> = {
-  attention: 0, done: 1, idle: 2, working: 3, cleanup: 4, archived: 5, dead: 6,
-};
-
-/** `RANK`'s keys, ascending by value — computed rather than typed a second
- *  time, so retuning a priority above can never leave this order stale. */
-export const BUCKET_ORDER: readonly SessionBucket[] =
-  (Object.keys(RANK) as SessionBucket[]).slice().sort((a, b) => RANK[a] - RANK[b]);
+ *  what order the buckets read in, and that is `shared/api.ts#BUCKET_RANK`, the
+ *  one order (D-7188): read here, never typed a second time. */
+export const RANK: Readonly<Record<SessionBucket, number>> = BUCKET_RANK;
 
 /**
  * Order the fleet by the server's own bucket, then most-recently-interacted

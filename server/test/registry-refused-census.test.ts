@@ -1,0 +1,473 @@
+// Path identity W1a (spec §2.3): every `readRegistry(` and
+// `readRegistryMeasured(` call in server/src is classified by what it does
+// with a REFUSED row: a listed `.uuid` whose id is not a registry id.
+// `readRegistryMeasured` names such a row in `refused` and leaves it out of
+// `records`. The classification is a comment tag, `[registry-refused:<word>]`,
+// within the three lines above the call. Four tags (`stale` at the fleet route
+// and the ws cold start, `reports` at `listProjects`, `refuses` at dispatch's
+// pre-spawn read) name what the site does when the registry cannot be listed;
+// with a refused row those sites omit it (the pre-spawn read counts it as
+// already present). The suite goes red on any of these:
+// - a new call with no tag;
+// - a tag with no call;
+// - a word outside the vocabulary;
+// - a site that moves to another function or route.
+//
+// `unplaced` describes no behaviour. It marks a caller whose handling of a
+// refused row is not built yet, and no site carries it: every caller has its
+// placed word, and the census pins that none is left. `wrapper` is reserved
+// for `readRegistry`'s own read.
+//
+// Tag comments in server/src carry no digit. registry.test.ts's census-claim
+// parser joins every comment line of a file and reads a number followed,
+// within forty characters, by a `[registry-read-census:*]` tag. A digit in a
+// tag line could create or hide such a claim.
+import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { codeOnly } from './sourceScan.js';
+import { sourceOfSymbol } from './scan/symbols.js';
+
+const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+
+/** The census vocabulary. */
+const WORDS: readonly string[] = [
+  'holds', 'refuses', 'gated', 'omits', 'stale', 'reports', 'tests-only', 'knownId', 'raw-name', 'wrapper', 'unplaced',
+];
+
+const TAG = /\[registry-refused:([A-Za-z-]+)\]/;
+const TAGS = /\[registry-refused:[A-Za-z-]+\]/g;
+const READER_CALL = /\b(readRegistryMeasured|readRegistry)\s*\(/g;
+
+/** The scope a call is classified under: the nearest line above it, the call's own line
+ *  included, that registers a route or declares a function, an async arrow or an async
+ *  class method. Matched on `codeOnly` lines, where string literals (route paths) survive. */
+const ROUTE = /\bapp\.(get|post|put|delete|patch)\s*(?:<[^>]*>)?\(\s*'([^']+)'/;
+const FUNC = /^\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*(\w+)/;
+const ARROW = /^\s*(?:export\s+)?(?:const|let)\s+(\w+)\s*=\s*async\b/;
+const METHOD = /^ {2}(?:(?:private|protected|public|static)\s+)*async\s+(\w+)\s*[<(]/;
+
+interface Site { file: string; line: number; enclosing: string; reader: string; word: string | null }
+
+/** `codeOnly`'s output with every '…' and "…" literal blanked to spaces, so a quoted
+ *  reader name is not a call. A template literal is kept as code: a reader named in
+ *  one reads as a call, the safe direction (a false red, never a missed call). */
+const blankQuoted = (code: string): string =>
+  code.replace(/`(?:\\[\s\S]|[^\\`])*`|'(?:\\.|[^\\'\n])*'|"(?:\\.|[^\\"\n])*"/g,
+    (m) => (m.startsWith('`') ? m : m.replace(/[^\n]/g, ' ')));
+
+const enclosingOf = (codeLines: readonly string[], at: number): string => {
+  for (let k = at; k >= 0; k--) {
+    const l = codeLines[k];
+    const route = l.match(ROUTE);
+    if (route) return `${route[1].toUpperCase()} ${route[2]}`;
+    const named = l.match(FUNC) ?? l.match(ARROW) ?? l.match(METHOD);
+    if (named) return named[1];
+  }
+  return '?';
+};
+
+/** The nearest tag in a COMMENT on the three lines above `at`. A tag inside a string is no tag. */
+const tagAbove = (raw: readonly string[], codeLines: readonly string[], at: number): string | null => {
+  for (let k = at - 1; k >= Math.max(0, at - 3); k--) {
+    const t = raw[k].match(TAG);
+    if (t && !TAG.test(codeLines[k])) return t[1];
+  }
+  return null;
+};
+
+/** Whether the name at offset `at` of `text` is a `function name(` declaration, not a call: its own line holds
+ *  `function` and whitespace right before it. */
+const isDefinition = (text: string, at: number): boolean =>
+  /\bfunction\s+$/.test(text.slice(text.lastIndexOf('\n', at) + 1, at));
+
+/** Every reader call in `src`. The definitions (`function readRegistry(`) are not calls. */
+const scan = (file: string, src: string): Site[] => {
+  const raw = src.split('\n');
+  const code = codeOnly(src);
+  const codeLines = code.split('\n');
+  const callLines = blankQuoted(code).split('\n');
+  const sites: Site[] = [];
+  callLines.forEach((l, i) => {
+    for (const m of l.matchAll(READER_CALL)) {
+      if (isDefinition(l, m.index ?? 0)) continue;
+      sites.push({ file, line: i + 1, enclosing: enclosingOf(codeLines, i), reader: m[1], word: tagAbove(raw, codeLines, i) });
+    }
+  });
+  return sites;
+};
+
+/** Tags in comments: every tag in the source, less those `codeOnly` keeps (strings). */
+const commentTagCount = (src: string): number =>
+  (src.match(TAGS) ?? []).length - (codeOnly(src).match(TAGS) ?? []).length;
+
+/** Every `.ts` under server/src, recursively. */
+const sources = (dir = srcRoot): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) return sources(full);
+    return /\.ts$/.test(e.name) ? [full] : [];
+  });
+
+const rel = (f: string): string => path.relative(srcRoot, f).split(path.sep).join('/');
+/** server/src, read once per run and scanned once: every case below shares that one read and that one scan. */
+let sourcesRead: readonly { file: string; src: string }[] | null = null;
+const sourceTexts = (): readonly { file: string; src: string }[] =>
+  (sourcesRead ??= sources().map((f) => ({ file: rel(f), src: readFileSync(f, 'utf8') })));
+let sitesScanned: readonly Site[] | null = null;
+const allSites = (): Site[] => [...(sitesScanned ??= sourceTexts().flatMap(({ file, src }) => scan(file, src)))];
+const key = (s: Site): string => `${s.file} | ${s.enclosing} | ${s.reader} | ${s.word}`;
+const where = (s: Site): string => `${s.file}:${s.line}`;
+
+/** The classified set, as the tree stands. No site is `unplaced`. */
+const EXPECTED_SITES: readonly string[] = [
+  'coord/dispatch.ts | spawnFresh | readRegistryMeasured | refuses',
+  'coord/dispatch.ts | spawnFresh | readRegistryMeasured | refuses',
+  'coord/dispatch.ts | resumeBound | readRegistryMeasured | gated',
+  'coord/fingerprint.ts | resolveDoneBranch | readRegistryMeasured | holds',
+  // The dead-dispatch pass reads the registry once per pass; an unlistable registry or a refused name keeps every
+  // run (deadDispatch.ts, `registry-unmeasured`), so a refused row can never make a run look childless.
+  'coord/abandonDeadDispatch.ts | registryFacts | readRegistryMeasured | refuses',
+  'coord/routes.ts | GET /api/peers | readRegistryMeasured | reports',
+  'coord/routes.ts | POST /api/claims | readRegistryMeasured | reports',
+  'server.ts | GET /api/fleet | readRegistryMeasured | stale',
+  'server.ts | GET /ws/fleet | readRegistryMeasured | stale',
+  // Discard's route-side check (accounts plan Task A17): an unlistable registry refuses the discard, and the verb counts
+  // every row again under its lock, so a refused name is never read as no session on the box.
+  'server.ts | accountSessionsOn | readRegistryMeasured | refuses',
+  'coord/routes.ts | POST /api/mail | readRegistryMeasured | refuses',
+  'coord/routes.ts | POST /api/mail/:id/ack | readRegistryMeasured | refuses',
+  // #1444 (spec §6.2): `attributionVerdict` moved whole out of `registerCoordRoutes` into its own module, the same
+  // reader and the same word; only the file changes. Console speed S2 then took it out of this list: it reads the
+  // sender's one row through `readSessionRecord` and has no whole-registry site left to classify.
+  'coord/questions.ts | raiseApproval | readRegistry | refuses',
+  // W3 Q3f (D-7030; named exception 3): the rule handler's read moved into the claimant's core with its ladder, the
+  // same reader and the same word; only the file and the enclosing symbol change.
+  'coord/questions.ts | ruleApproval | readRegistry | refuses',
+  'fleet.ts | assembleFleetWithPanePids | readRegistryMeasured | tests-only',
+  'lifecycle.ts | listProjects | readRegistryMeasured | reports',
+  'registry.ts | readRegistry | readRegistryMeasured | wrapper',
+  'watch.ts | detectDialogs | readRegistry | tests-only',
+  'watch.ts | sweepHookStates | readRegistryMeasured | tests-only',
+  'watch.ts | fleetFor | readRegistryMeasured | tests-only',
+  'watch.ts | tick | readRegistryMeasured | omits',
+];
+
+describe('every registry reader call is classified for refused rows (spec §2.3)', () => {
+  it('CONTROL: the scan sees a call, and ignores a comment, a string and the definitions', () => {
+    const CONTROL = [
+      '// readRegistry(io, cfg) named in a comment is not a call',
+      "const quoted = 'readRegistryMeasured(io, cfg)';",
+      'export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promise<RegistryRead> {',
+      '  return { listed: false };',
+      '}',
+      'export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<SessionRecord[]> {',
+      '  // [registry-refused:wrapper] the tagged call',
+      '  const r = await readRegistryMeasured(io, cfg);',
+      '  return r.listed ? r.records : [];',
+      '}',
+      'export async function untagged(io: FleetIO, cfg: CcrcConfig): Promise<number> {',
+      "  const label = '[registry-refused:holds]';",
+      '  return (await readRegistry(io, cfg)).length + label.length;',
+      '}',
+      "app.get('/api/demo', async (req, reply) => {",
+      '  // [registry-refused:omits] a route',
+      '  return reply.send(await readRegistry(io, cfg));',
+      '});',
+    ].join('\n');
+    expect(scan('control.ts', CONTROL).map(key)).toEqual([
+      'control.ts | readRegistry | readRegistryMeasured | wrapper',
+      'control.ts | untagged | readRegistry | null',
+      'control.ts | GET /api/demo | readRegistry | omits',
+    ]);
+    // The quoted tag is no tag: two comment tags, not three.
+    expect(commentTagCount(CONTROL)).toBe(2);
+  });
+
+  it('each readRegistry( and readRegistryMeasured( call carries a [registry-refused:<word>] tag within three lines above it', () => {
+    const sites = allSites();
+    expect(sites.length, 'the scan found no reader call: this guard is measuring nothing').toBeGreaterThan(0);
+    expect(sites.filter((s) => s.word === null).map(where), 'an untagged reader call').toEqual([]);
+    expect(sites.filter((s) => s.word !== null && !WORDS.includes(s.word)).map((s) => `${where(s)} ${s.word}`),
+      'a word outside the census vocabulary').toEqual([]);
+    const tags = sources().reduce((n, f) => n + commentTagCount(readFileSync(f, 'utf8')), 0);
+    expect(tags, 'a [registry-refused:*] tag that stands above no reader call').toBe(sites.length);
+  });
+
+  it('no [registry-refused:*] tag line in server/src carries a digit', () => {
+    // The header's rule, pinned: a digit on a tag line could create or hide a `[registry-read-census:*]` claim.
+    const tagLines = sourceTexts().flatMap(({ file, src }) => src.split('\n')
+      .flatMap((l, i) => (l.includes('[registry-refused:') ? [{ at: `${file}:${i + 1}`, l }] : [])));
+    expect(tagLines.length, 'the scan found no tag line: this guard is measuring nothing').toBeGreaterThan(0);
+    expect(tagLines.filter(({ l }) => /\d/.test(l)).map(({ at, l }) => `${at} ${l.trim()}`), 'a tag line with a digit')
+      .toEqual([]);
+  });
+
+  it('the classified set is exactly these 21 sites', () => {
+    expect(EXPECTED_SITES).toHaveLength(21);
+    expect(allSites().map(key).sort()).toEqual([...EXPECTED_SITES].sort());
+  });
+
+  it('wrapper is used once, in registry.ts, inside readRegistry', () => {
+    expect(allSites().filter((s) => s.word === 'wrapper').map(key))
+      .toEqual(['registry.ts | readRegistry | readRegistryMeasured | wrapper']);
+  });
+
+  it('no site is unplaced', () => {
+    expect(allSites().filter((s) => s.word === 'unplaced').map(key)).toEqual([]);
+  });
+});
+
+// Path identity W1a, Task 6 (spec §2.3, R19's precedent): `sweepHookStates`'s own registry read is `tests-only`
+// ONLY because `tick()` hands the lane the `records` of its own listing. Pinned here, so a tick that stopped passing
+// them would turn that read into a second, production read without the census above noticing. `detectDialogs(`,
+// the other `tests-only` lane, is pinned the same way.
+const TICK_WATCH_TS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/watch.ts');
+const TICK_HEAD = 'async tick(): Promise<void> {';
+/** `FleetWatcher.tick`'s source, keyed on its symbol (D-6114, scan/symbols.ts): it follows the method wherever it
+ *  moves, and a renamed or missing method throws by name. */
+const tickSource = (): string => sourceOfSymbol(TICK_WATCH_TS, 'FleetWatcher.tick');
+const TICK_STRINGS = /'(?:\\.|[^\\'\n])*'|"(?:\\.|[^\\"\n])*"|`(?:\\[\s\S]|[^\\`])*`/g;
+/** Code only, every string's contents blanked: a brace inside a comment or a string cannot end a body. */
+const tickCode = (src: string): string => codeOnly(src).replace(TICK_STRINGS, (m) => `${m[0]}${m[0]}`);
+/** The body of the member whose head is `head` (which ends with its own `{`), through its matching `}`. */
+const tickBodyOf = (code: string, head: string): string => {
+  const at = code.indexOf(head);
+  if (at < 0) throw new Error(`${head} is not in the scanned source`);
+  const open = at + head.length - 1;
+  let depth = 0;
+  for (let i = open; i < code.length; i += 1) {
+    if (code[i] === '{') depth += 1;
+    else if (code[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return code.slice(open, i + 1);
+    }
+  }
+  throw new Error(`${head} has no matching closing brace`);
+};
+
+describe('tick hands its records to the lanes that would otherwise read the registry again (spec §2.3)', () => {
+  it('CONTROL: the body slicer ends at the matching brace, past a brace in a comment or a string', () => {
+    const src = `${TICK_HEAD}\n  // a } in a comment\n  if (a) { b('}'); }\n  await this.sweepHookStates(records);\n}\nafter();\n`;
+    const body = tickBodyOf(tickCode(src), TICK_HEAD);
+    expect(body).toMatch(/\bthis\.sweepHookStates\(\s*records\s*\)/);
+    expect(body).not.toContain('after');
+  });
+
+  it('tick() passes its records to sweepHookStates(', () => {
+    const body = tickBodyOf(tickCode(tickSource()), TICK_HEAD);
+    expect(body, 'tick no longer hands sweepHookStates its records: that lane would read the registry itself')
+      .toMatch(/\bthis\.sweepHookStates\(\s*records\s*(?:,[^)]*)?\)/);
+  });
+
+  it('tick() passes its records to detectDialogs(', () => {
+    const body = tickBodyOf(tickCode(tickSource()), TICK_HEAD);
+    expect(body, 'tick no longer hands detectDialogs its records: that lane would read the registry itself')
+      .toMatch(/\bthis\.detectDialogs\([^)]*\brecords\b[^)]*\)/);
+  });
+});
+
+// D-5864 (ARCH-51 #786): the lanes that choose their rows from the registry are handed the tick's one model, and each
+// lane's own read (`fleetFor`, tagged `tests-only`) is reached by tests alone ONLY while `tick()` hands it over. A tick
+// that dropped the argument would turn that read into a second production listing without the census above noticing.
+describe('tick hands its model to the lanes that would otherwise list the registry again (D-5864)', () => {
+  const body = (): string => tickBodyOf(tickCode(tickSource()), TICK_HEAD);
+
+  it('tick() passes registryRead to sweepTasks(', () => {
+    expect(body(), 'tick no longer hands the task lane its model: that lane would list the registry itself')
+      .toMatch(/\bthis\.sweepTasks\(\s*registryRead\s*\)/);
+  });
+
+  it('tick() passes registryRead to sweepMail(', () => {
+    expect(body(), 'tick no longer hands the mail lane its model: that lane would list its recipients itself')
+      .toMatch(/\bthis\.sweepMail\(\s*registryRead\s*\)/);
+  });
+
+  // W3 Q3c (D-7027), named exception 2: tick hands the question sweep its model, and the sweep hands it to the ask
+  // half. The same fact, over the two bodies the hand-off now crosses.
+  it('tick() passes registryRead to sweepQuestions(', () => {
+    expect(body(), 'tick no longer hands the question sweep its model: the ask lane would list the registry itself')
+      .toMatch(/\bthis\.sweepQuestions\(\s*registryRead\s*\)/);
+  });
+
+  it('sweepQuestions passes registryRead to sweepAsks(', () => {
+    expect(tickCode(sourceOfSymbol(TICK_WATCH_TS, 'FleetWatcher.sweepQuestions')), 'the question sweep no longer hands the ask lane its model: that lane would list the registry itself')
+      .toMatch(/\bthis\.sweepAsks\(\s*registryRead\s*\)/);
+  });
+
+  it('tick() passes registryRead to sweepPr(', () => {
+    expect(body(), 'tick no longer hands the PR lane its model: that lane would list the registry itself')
+      .toMatch(/\bthis\.sweepPr\(\s*registryRead\s*\)/);
+  });
+
+  it('tick() passes registryRead to sweepNames(', () => {
+    expect(body(), 'tick no longer hands the name lane its model: that lane would list the registry itself')
+      .toMatch(/\bthis\.sweepNames\(\s*registryRead\s*\)/);
+  });
+});
+
+// Path identity, fix round 2 (spec §2.3; slug `tick-lanes-hold-a-refused-id`): the lanes on the tick that would read a
+// refused id's absence from `records` as a fact are each handed THIS tick's `registryRead.refused`, and hold it. Their
+// lane cases (`tick-refused-lanes.test.ts`) hand a lane the set directly, so a tick that stopped handing it, or handed
+// an empty set, would leave every one of them green. These pins see the hand-off itself.
+describe('tick hands this tick\'s refused set to the lanes that hold a refused id (tick-lanes-hold-a-refused-id)', () => {
+  const tickBody = (): string => tickBodyOf(tickCode(tickSource()), TICK_HEAD);
+
+  it('tick() hands registryRead.refused to sweepStalls( on its StallTick', () => {
+    expect(tickBody(), 'tick no longer hands the stall lane its refused set: a refused worker or claimant would read as absent')
+      .toMatch(/\bthis\.sweepStalls\([^;]*\{[^}]*\brefused:\s*registryRead\.refused\s*\}/);
+  });
+
+  it('tick() hands registryRead.refused to renewClaims(', () => {
+    expect(tickBody(), 'tick no longer hands the renew lane its refused set: a refused holder would read as gone')
+      .toMatch(/\bthis\.renewClaims\(\s*sessions\s*,\s*registryRead\.refused\s*\)/);
+  });
+
+  it('tick() hands registryRead.refused to lapseClaims(', () => {
+    expect(tickBody(), 'tick no longer hands the lapse lane its refused set: a refused holder would lapse session-gone')
+      .toMatch(/\bthis\.lapseClaims\(\s*sessions\s*,\s*registryRead\.refused\s*\)/);
+  });
+
+  it('tick() hands registryRead.refused to sweepDivergences(', () => {
+    expect(tickBody(), 'tick no longer hands the divergence census its refused set: an open run on a refused id would be named a claim-divergence')
+      .toMatch(/\bthis\.sweepDivergences\(\s*records\s*,\s*registryRead\.refused\s*\)/);
+  });
+});
+
+// PATH IDENTITY W1a, TASK 7 (spec §2.3). The three migrated readers and the three new reads carry their placed words,
+// and every production assembly call passes the rows it read as its `records` option, so `assembleFleet`'s own fallback
+// read, tagged `tests-only`, is reached by tests alone. A production call that leaves `records` out would quietly bring
+// back the fallback's `[]` for an unlistable registry, the empty fleet without a stale mark that this wave removes. It
+// reads through this file's one scan (`sourceTexts`, `allSites`, `codeOnly`, `blankQuoted`, `isDefinition`) and adds
+// the argument splitter and the options reader below.
+
+/** The top-level arguments of the call whose `(` sits at `open`, whitespace-normalised. String literals survive
+ *  `codeOnly`, so quotes are tracked and a comma inside one never splits. */
+function callArgs(text: string, open: number): string[] {
+  const args: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  let start = open + 1;
+  for (let i = open; i < text.length; i += 1) {
+    const c = text[i]!;
+    if (quote !== null) {
+      if (c === '\\') { i += 1; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '\'' || c === '"' || c === '`') { quote = c; continue; }
+    if (c === '(' || c === '[' || c === '{') { depth += 1; continue; }
+    if (c === ')' || c === ']' || c === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        args.push(text.slice(start, i));
+        return args.map((a) => a.replace(/\s+/g, ' ').trim());
+      }
+      continue;
+    }
+    if (c === ',' && depth === 1) { args.push(text.slice(start, i)); start = i + 1; }
+  }
+  throw new Error(`no closing parenthesis for the call at offset ${open}`);
+}
+
+/** The `records` option of an assembly call's options object (#2399: every input past the first five is named there),
+ *  whitespace-normalised: `records: <expr>` gives the expression, the shorthand `records` gives `records`. */
+function recordsOption(options: string | undefined): string {
+  if (options === undefined || !options.startsWith('{')) return '<absent>';
+  const props = callArgs(options, 0);
+  const prop = props.find((p) => /^records\b\s*(?::|$)/.test(p));
+  return prop === undefined ? '<absent>' : prop.replace(/^records\s*:?\s*/, '') || 'records';
+}
+
+/** Every production assembly call: `assembleFleet(` and `assembleFleetWithPanePids(` outside `fleet.ts` (whose one call
+ *  is `assembleFleet` handing its own arguments on to `assembleFleetWithPanePids`), found as this file finds reader
+ *  calls (`blankQuoted`, so a quoted name is no call); its blanking keeps every offset, so the arguments are split on
+ *  the `codeOnly` text, where string literals survive. */
+const ASSEMBLY_CALL = /\bassembleFleet(?:WithPanePids)?\s*\(/g;
+const assemblyCalls = (): { file: string; args: string[] }[] => sourceTexts().filter(({ file }) => file !== 'fleet.ts')
+  .flatMap(({ file, src }) => {
+  const text = codeOnly(src);
+  return [...blankQuoted(text).matchAll(ASSEMBLY_CALL)]
+    .filter((m) => !isDefinition(text, m.index ?? 0))
+    .map((m) => ({ file, args: callArgs(text, (m.index ?? 0) + m[0].length - 1) }));
+});
+
+describe('Task 7: the migrated readers and the six production assembleFleet calls (spec §2.3)', () => {
+  it('CONTROL: the argument splitter sees nesting, strings and a commented call; the options reader finds records', () => {
+    const sample = codeOnly([
+      '// assembleFleet(a, b, c, d, e, { records: NOT_THIS })',
+      "const s = assembleFleet(io, cfg, f(x, y), [1, 2], 'a,b', { k: g(1, 2), records: reg.listed ? reg.records : [], coord });",
+      'const t = assembleFleetWithPanePids(io, cfg, tmux, read, now, { records });',
+    ].join('\n'));
+    const hits = [...sample.matchAll(ASSEMBLY_CALL)];
+    expect(hits, 'the commented call is not code').toHaveLength(2);
+    const args = callArgs(sample, (hits[0]!.index ?? 0) + hits[0]![0].length - 1);
+    expect(args).toHaveLength(6);
+    expect(recordsOption(args[5])).toBe('reg.listed ? reg.records : []');
+    expect(recordsOption(callArgs(sample, (hits[1]!.index ?? 0) + hits[1]![0].length - 1)[5]), 'shorthand').toBe('records');
+    expect(recordsOption('{ coord }'), 'no records option').toBe('<absent>');
+    expect(recordsOption(undefined), 'no options object').toBe('<absent>');
+    expect(isDefinition('export async function assembleFleet(', 'export async function '.length)).toBe(true);
+    expect(isDefinition('  const x = assembleFleet(', '  const x = '.length)).toBe(false);
+  });
+
+  it('the six production assembly calls each pass the rows they read, never undefined', () => {
+    const calls = assemblyCalls().map((c) => ({ ...c, records: recordsOption(c.args[5]) }));
+    expect(calls.map((c) => `${c.file} ${c.records}`).sort()).toEqual([
+      'coord/routes.ts reg.listed ? reg.records : []',   // the claims conflict
+      'coord/routes.ts reg.records',                     // GET /api/peers
+      'server.ts reg.records',                           // GET /api/fleet
+      'server.ts reg.records',                           // the ws cold start
+      'turnverdict.ts [rec]',                            // liveRowFor, the archive door's busy read
+      'watch.ts records',                                // tick
+    ]);
+    expect(calls.filter((c) => c.records === 'undefined' || c.records === '<absent>'),
+      'a production call leaves its rows to the tests-only fallback').toEqual([]);
+  });
+
+  it('#2399: every production assembly call is five positional arguments and one options object, padded with no undefined', () => {
+    const calls = assemblyCalls();
+    expect(calls).toHaveLength(6);
+    for (const c of calls) {
+      expect(c.args, `${c.file}: five positional arguments, then the options`).toHaveLength(6);
+      expect(c.args[5]!.startsWith('{'), `${c.file}: the sixth argument is the options object`).toBe(true);
+      expect(c.args.filter((a) => a === 'undefined'), `${c.file}: no positional undefined`).toEqual([]);
+      expect(callArgs(c.args[5]!, 0).filter((p) => /:\s*undefined$/.test(p)), `${c.file}: no option set to undefined`)
+        .toEqual([]);
+    }
+    // The pane pids are the assembly's own output, not an argument (#2399): only the tick hands them on, so it alone
+    // calls the variant that returns them.
+    expect(calls.filter((c) => c.file === 'watch.ts').length).toBe(1);
+    expect(sourceTexts().filter(({ src }) => /\bassembleFleetWithPanePids\s*\(/.test(blankQuoted(codeOnly(src))))
+      .map(({ file }) => file).sort(), 'the callers of assembleFleetWithPanePids, its definition included').toEqual(['fleet.ts', 'watch.ts']);
+  });
+
+  it('the migrated readers carry their placed words, and readRegistry keeps its counted sites', () => {
+    const sitesOf = (file: string, reader: 'readRegistry' | 'readRegistryMeasured') =>
+      allSites().filter((s) => s.file === file && s.reader === reader);
+    const words = (file: string): (string | null)[] => sitesOf(file, 'readRegistryMeasured').map((s) => s.word);
+    expect(words('fleet.ts'), 'assembleFleet’s fallback is reached by tests alone').toEqual(['tests-only']);
+    expect(words('lifecycle.ts'), 'listProjects reports registry').toEqual(['reports']);
+    expect(words('server.ts'), 'GET /api/fleet, then the ws cold start, then discard\'s check (accounts A17)')
+      .toEqual(['stale', 'stale', 'refuses']);
+    // #1444 (spec §6.2): the attribution site moved with `attributionVerdict` into its own module, the same word.
+    // Console speed S2: it now reads the sender's one row through `readSessionRecord`, whose `bad-id` arm is the
+    // refusal, so the file carries no `readRegistryMeasured` site and no `[registry-refused:*]` tag at all.
+    expect(words('coord/attribution.ts'), 'attribution (D-5863; one row since console speed S2)').toEqual([]);
+    expect(words('coord/routes.ts'), 'POST /api/mail and its ack (D-5863), then GET /api/peers and the claims conflict')
+      .toEqual(['refuses', 'refuses', 'reports', 'reports']);
+    expect(sitesOf('fleet.ts', 'readRegistry').map(where)).toEqual([]);
+    expect(sitesOf('lifecycle.ts', 'readRegistry').map(where)).toEqual([]);
+    expect(sitesOf('server.ts', 'readRegistry').map(where), 'prTasks reads one row (D-6434)').toEqual([]);
+    // The two approval sites, placed refuses: the raise's, which moved with its ladder into
+    // `coord/questions.ts#createQuestions`'s `raiseApproval` (D-7029; W3 Q3e, named exception 3), and the rule's, which
+    // moved with its ladder into the claimant's core, `ruleApproval` beside it (D-7030; W3 Q3f, named exception 3).
+    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'no readRegistry left in the routes').toHaveLength(0);
+    expect(sitesOf('coord/questions.ts', 'readRegistry'), 'the raise and the rule, placed refuses').toHaveLength(2);
+    const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
+      allSites().filter((s) => s.reader === reader).length;
+    expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(3);
+    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(18);
+  });
+});

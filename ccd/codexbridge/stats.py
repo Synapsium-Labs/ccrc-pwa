@@ -1,0 +1,743 @@
+"""codexbridge.stats — the bridge's one non-secret output: counts, sizes, names and request ids, per lane.
+
+Codex-bridge spec 2026-10-15 §2.7 ("It records every request's real prompt size and every context refusal, per route
+and model, in a non-secret stats file"), §2.9 D3 (names only, never content), D24 (the count ratio) and D25 (a refusal
+lowers the window through the hourly refresh); plan 2026-10-22, Task 5 and D-6418 (D3's names go to this file, not to
+the credential's status file, which is written only under the credential's lock).
+
+THE FILE, VERSION 1 (`bridge.stats.json` in the lane directory; the name is `lane.json`'s `bridgeFiles.stats`):
+  {"version": 1, "lane", "since", "startedAt", "updatedAt",
+   "routes": {"<route>/<model>": {"requests", "bytesPerToken", "promptTokensMax", "promptTokensLast"}},
+   "refusals": {"<route>/<model>": {"tokens", "window", "at", "estimated": true}},
+   "outcomes": {"<key>": n}, "names": {"<family>": {"<name>": n}}, "unexplained": {"<family>": ["<name>", ...]},
+   "usageHeaders": {"at", "values": {...}} or null, "lastUpstreamRequestId": <id> or null,
+   "store": {"state": "ok" | "set-aside" | "disabled", "reason": <outcome name> or null, "at": <time> or null,
+             "setAside": null or {"at", "found": "integrity-check" | <exception class name>,
+                                  "file": <copy's basename>}},
+   "parity": {"<route>/<model>": {"responses", "inputTokens", "cachedTokens", "outputTokens", "reasoningTokens",
+              "effort": {"<level>" | "none": n}, "served": {"same", "other", "absent"}, "servedOther": {"<model>": n},
+              "servedTier": {"<tier>" | "absent": n},
+              "inputTransformations": {"<type>:<action>:<reason>": n}, "responsesWithTransformations",
+              "replay": {"text-hit", "text-empty", "text-absent", "call-hit", "call-absent"},
+              "firstOutputMs": {"<bucket>": n}, "reasoningMs": {"<bucket>": n}, "totalMs": {"<bucket>": n},
+              "markers": {"<marker>": n}, "fallbacks": {"<marker>": n}, "turnState": {"captured", "echoed"}}}}
+`since` is the file's first start, carried across restarts; `startedAt` is this process's. `promptTokensMax` is the
+largest upstream `input_tokens` of a reply the model accepted (the caller reports only those); a refusal's `tokens`
+is D24's estimate, so it says `estimated: true`. Times are ISO-8601 UTC with milliseconds.
+
+THE STORE ENTRY (D-7677) is the reasoning store's state for THIS process only: reset to STORE_OK at construction and
+never carried from a loaded file (the store's `outcomes` counts are, as every count is). `set-aside` says D-7676's
+start check set a damaged store aside and made a fresh one (`setAside` says when, what it found and the copy's
+basename); `disabled` says the store answers as empty for the rest of the process, `reason` the outcome that did it,
+and outranks `set-aside` when both happened (a fresh store that later failed: `setAside` keeps its record); a
+set-aside that failed after its renames is `disabled` as `store:set-aside-failed` with `setAside` naming the copy. One
+writer, `store_event`, the store's callback. A file written before the entry existed has no `store` key: that means
+the bridge predates it, never `ok`. The constructor's state is flushed before the server binds its port
+(`server.serve`), so the file describes this process from its first moment.
+
+THE PARITY SECTION (D-8618) measures what parity with native Codex hinges on, per route and model, keyed and capped as
+`routes` is (`_slot`, NAMES_MAX, OVERFLOW). It is not in the `routes` rows, which are D24's calibration and have other
+readers, and it is not a D3 family: a reasoning removal or a replay miss is a measurement, not drift, so nothing here
+reaches `unexplained`, the doctor's WARN or the watch's drift. Its numbers are read from what the bridge already
+receives and builds, so nothing new goes on the wire. Every count is cumulative, carried across a restart like the
+outcomes. A row counts:
+- `responses`: upstream responses whose terminal `response.completed` or `response.incomplete` the reducer saw, also
+  when the bridge then answered the client with an error (a `response.failed`, an `error` event or a stream cut before
+  its terminal is no such response); the four token sums are over those responses, each from the terminal's `usage`
+  only when it carried a valid count there (`input_tokens`, `input_tokens_details.cached_tokens`, `output_tokens`,
+  `output_tokens_details.reasoning_tokens`).
+- `effort`: one per upstream POST, the `reasoning.effort` of the body the bridge built (so a lane's default and the
+  shim's choice are what is counted), or `none` when the body carried none; at most PARITY_KEYS_MAX levels, then
+  OVERFLOW.
+- `served`: the terminal's `response.model` (else `response.created`'s) against the model the body asked for: `same`,
+  `other` (that model counted in `servedOther`, capped as `effort` is) or `absent`.
+- `servedTier` (D-8632): the terminal response's `service_tier`, bounded by NAME_RE (else UNRECOGNISED), or `absent`
+  when it carried none (`tier_word`); capped as `effort` is. It says whether the backend honoured the
+  `bridge-service-tier-fast` marker's `priority`, and what it serves without one.
+- `inputTransformations`: one per entry of the terminal response's `input_transformations` (an array on the response
+  object, not an event), keyed `<type>:<action>:<reason>` by `reducer.transformation_key`, so openai/codex's reasoning
+  removals by reason are the keys `reasoning:removed:<reason>`; at most PARITY_TRANSFORMS_MAX keys, then OVERFLOW.
+  `responsesWithTransformations` counts the responses whose array was not empty.
+- `replay`: one per reasoning-store lookup of the message path's translation (`server.counted_lookup`), by what it
+  found: a text or a call with stored reasoning (`-hit`), a text row with none (`text-empty`: that reply had no
+  reasoning before it), or no row (`-absent`). A key is looked up once per request, but every request looks up every
+  assistant block of its history again, so a long conversation re-counts its old blocks: the counts are per lookup,
+  not per turn. A lookup is counted once the request is translated, so a request refused later still counts, and a
+  disabled store answers every lookup as absent (read `store` beside it). A call with no row is often not a loss (a
+  call no reasoning preceded, or a second parallel call after one reasoning item), while a text row is written for
+  every reply text, so `text-absent` is the plain miss.
+- `firstOutputMs` and `totalMs`: milliseconds from the upstream POST's start (`time.monotonic()`) to the first output
+  the reducer released (a text delta or a finished block) and to the terminal event, in PARITY_BUCKETS_MS (each an
+  inclusive upper bound) or PARITY_INF; a response that released no output counts in `totalMs` only.
+- `reasoningMs` (D-8633): for a response counted in `firstOutputMs`, milliseconds from the same POST start, on the
+  same clock, to the moment the bridge saw the last reasoning item before the first released block finish (the
+  reducer's R22), in the same buckets; a response with no reasoning item before its first output counts nothing here.
+- `markers` (D-8622): one per upstream POST that carried a request marker's addition, by the marker
+  (`backend.MARKERS`): the body's `reasoning.context`, `text.verbosity` or `service_tier` (D-8632), or the echoed
+  `x-codex-turn-state`; a marker present that added nothing (the row not eligible, nothing captured yet) is not
+  counted. `fallbacks`: one per marker a 400's fallback dropped (the POST it answered carried it). Both are zero-filled
+  over `backend.MARKERS`.
+- `turnState` (D-8623): `captured`, each turn's first sticky-routing token kept, and `echoed`, each POST that sent one
+  back. The token itself is never in this file (TOKEN_HEADERS).
+A writer ignores a malformed argument (a level, a model or an outcome that is not a string, a count that is not a
+positive int, a usage that is not a mapping, a time that is not a finite number of at least 0, a key outside its
+shape); the load re-checks every bound and drops what fails it, never resetting.
+
+NOTHING HERE HOLDS CONTENT. A name is bounded by NAME_RE (else `unrecognised`), at most NAMES_MAX per family (then
+`overflow`); the parity section's model ids, effort levels and transformation words are names under the same rule (a
+transformation's each part under `reducer.DIAG_PART_RE`), never content; a header's value is never kept, except an
+`x-codex-` header's, for the usage poller, and only when it has the shape the poller reads (USAGE_VALUE_RE: a decimal
+number or a boolean, at most VALUE_MAX characters) and its name is not in TOKEN_HEADERS. Any other value of that family
+is dropped, its name still counted by `header_names`: the family also carries Codex's `x-codex-turn-state`
+sticky-routing token, an opaque value of no fixed shape (so refused by
+name, whatever its value), and free text (upstream openai/codex @ 092d3ac, codex-rs/codex-api/src/sse/responses.rs:32,
+65-71; codex-rs/core/src/client.rs:288-302; codex-rs/codex-api/src/rate_limits.rs:182). A request id is kept only
+under errors.REQUEST_ID_RE, and the bridge gives it only the id the credential library bounded against the lane's
+tokens and account id (`server._Request.record`), as the status file's is bounded. A route or refusal key is `<route>/<model>`, each part bounded by NAME_RE.
+
+A RESTART LOSES NOTHING THE READERS NEED: construction loads a valid version-1 file of the same lane and carries its
+refusals (the hourly refresh may not have read them yet, Task 15), each route's ratio, request count and largest
+prompt (D24's calibration), the names, the unexplained list, the outcomes, the parity rows and `since` (the 7-day
+watch's counters). A file written before the parity section existed has no `parity` key and loads as it is; a parity
+row written before a field existed loads with it empty (`servedTier`) or zero-filled (`reasoningMs`, the markers').
+Any other file (unreadable, another version, another lane) starts fresh and counts `stats:reset`. At load, and at
+every `name()`, a name `known.explained` now covers leaves `unexplained`. The load also drops the two markers,
+UNRECOGNISED and OVERFLOW, from `unexplained` (the Stage 2 wave 3 whole-wave fix round, Z1): neither is a name known.py
+could ever explain, so a carried one would hold Task 17's WARN for good; each comes back only when the bridge meets
+such a name again. The `names` counters are carried whole, so a family already at NAMES_MAX maps its next new name
+to OVERFLOW again, which is new drift. When the load changed what it carried, the constructor flushes at once, so the
+file the doctor reads changes at the restart (Task 17's WARN clears on an idle lane too).
+
+One writer per lane (the lane's one bridge process); every method takes one lock, so handler threads share one Stats.
+A flush is tmp (`<path>.tmp`, one name, so a killed writer's leftover is overwritten, never left) + fchmod 0600 +
+fsync + rename, at most every FLUSH_S unless forced; a failed one is counted in memory (`stats:flush-failed`) and
+retried at the next flush call, whatever FLUSH_S says, so nothing is lost. A flush serialises the document under the
+lock and writes it outside it, under a second lock, so a slow fsync never stalls a counter: an unforced flush while
+another write is in flight writes nothing (its changes stay dirty for the next one), a forced one waits for it. No
+method raises into a request: a malformed argument is ignored (a headers argument that is not a mapping of headers,
+or a header item that is not a (name, value) pair, counts nothing; a byte count that is not an int moves no ratio), and
+a `now` that is not a finite number in range reads as the wall clock. A store event makes the next flush call write
+at once too, whatever FLUSH_S says (D-7677: a store disabled by a request is written at the next flush, which is that
+request's own unless another write is in flight, then the next one's; nothing is lost).
+
+Every constant is read when it is used, so the test driver's `consts` reach it.
+"""
+
+import datetime
+import json
+import math
+import os
+import re
+import threading
+import time
+from typing import Dict, Mapping, Optional
+
+from . import backend, count, errors, known, reducer, store
+
+VERSION = 1
+FAMILIES = tuple(known.KNOWN)  # the eleven D3 families, in the plan's order; spelled once, in known.KNOWN
+NAME_RE = re.compile(r"^[A-Za-z0-9_.:/-]{1,64}$")
+UNRECOGNISED = errors.UNRECOGNISED_CODE  # "unrecognised"
+OVERFLOW = "overflow"
+# D-6823: routes, refusals and outcome keys share the per-family cap, each collapsing past it to the
+# one key OVERFLOW (outside the `<route>/<model>` key shape), and OVERFLOW is listed in `unexplained` like any name.
+NAMES_MAX = 256  # names per family (and routes, refusals and outcome keys) before OVERFLOW
+VALUE_MAX = 64  # an x-codex- header value's length; a longer one is dropped, never cut (a cut number is wrong)
+# D-6822: narrower than the plan's "keeps every header whose lower-cased name starts `x-codex-`,
+# values bounded to 64 printable characters": a value is kept only in the poller's shape (USAGE_VALUE_RE), and a
+# TOKEN_HEADERS name's value is never kept, whatever its shape.
+USAGE_VALUE_RE = re.compile(r"^(?:-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false)$")  # what the poller can read
+# D-6822: x-codex- headers whose value is a token, never kept whatever its shape (upstream
+# openai/codex @ 092d3ac, codex-rs/codex-api/src/sse/responses.rs:32; codex-rs/core/src/client.rs:288-302: the
+# sticky-routing token). A deny-list, grown only by review against upstream: known.PREFIXES explains every x-codex-
+# name, so a new token-carrying x-codex- header never reaches `unexplained`, Task 17's drift row never warns on it,
+# and a value of it in USAGE_VALUE_RE's shape is kept.
+TOKEN_HEADERS = frozenset({"x-codex-turn-state"})
+HEADERS_MAX = 64  # x-codex- headers kept from one response (D-6823)
+FLUSH_S = 10.0  # an unforced flush writes at most this often
+READ_MAX = 16 * 2**20  # a stats file larger than this is unreadable, so the start resets it (D-6823)
+# D-6820: two outcome keys outside the plan's closed list.
+FLUSH_FAILED = "stats:flush-failed"
+RESET = "stats:reset"
+UNKNOWN_FAMILY = "stats:unknown-family"
+# D-6835: another outside that list (as are D-6820's two, D-6833's catalogue-unreadable and store:*). A message whose
+# client went away before its answer was written is counted CLIENT_GONE, never `5xx` (the 7-day watch's upstream
+# failure rate); one the drain cut is counted `drain-cut` alone, by the drain, and nothing else.
+CLIENT_GONE = "client-gone"
+# D-7677: the store entry as construction leaves it (copied, never shared).
+STORE_OK = {"state": "ok", "reason": None, "at": None, "setAside": None}
+# D-8618: the parity section's vocabularies and bounds (the module docstring).
+PARITY_KEYS_MAX = 16  # effort levels, and served models other than the one asked for, per row before OVERFLOW
+PARITY_TRANSFORMS_MAX = 32  # input_transformations keys per row before OVERFLOW
+PARITY_BUCKETS_MS = (250, 500, 1000, 2000, 4000, 8000, 16000, 32000, 64000)  # each an inclusive upper bound
+PARITY_INF = "inf"  # the bucket past the last bound
+NO_EFFORT = "none"  # a body that carried no reasoning.effort
+SERVED = ("same", "other", "absent")
+REPLAY_OUTCOMES = ("text-hit", "text-empty", "text-absent", "call-hit", "call-absent")
+TURN_STATE_EVENTS = ("captured", "echoed")  # D-8623: the turnState counts
+# The terminal usage counts the reducer reads (`reducer.Reducer.diagnostics`), each with the field it sums into.
+PARITY_TOKENS = (("input", "inputTokens"), ("cached", "cachedTokens"), ("output", "outputTokens"),
+                 ("reasoning", "reasoningTokens"))
+
+
+def _iso(t: float) -> str:
+    stamp = datetime.datetime.fromtimestamp(t, tz=datetime.timezone.utc)
+    return stamp.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (stamp.microsecond // 1000)
+
+
+def _stamp(now: object) -> str:
+    """`now` as `_iso` writes it, or the wall clock's when `now` is not a finite number in range (never raised)."""
+    if isinstance(now, (int, float)) and not isinstance(now, bool):
+        try:
+            return _iso(now)
+        except (ValueError, OverflowError, OSError):
+            pass
+    return _iso(time.time())
+
+
+def _bounded(value: object) -> str:
+    """A name as the file may hold it: itself when it matches NAME_RE, else UNRECOGNISED."""
+    if isinstance(value, str) and NAME_RE.fullmatch(value):
+        return value
+    return UNRECOGNISED
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+# D-8619: the per-request record (`reqrecord.row`) reads one answer's figures through these, the parity section's own
+# rules, so the row and the parity row never compute the same figure two ways.
+bounded = _bounded
+is_count = _is_int
+
+
+def served_word(served: object, model: object) -> Optional[str]:
+    """The parity row's `served` word for a response that named `served` (None: it named none) when `model` was
+    asked for: `absent`, `same` or `other`; None (counted nowhere) when `served` is neither None nor a string."""
+    if served is not None and not isinstance(served, str):
+        return None
+    return "absent" if served is None else "same" if served == model else "other"
+
+
+def tier_word(tier: object) -> Optional[str]:
+    """D-8632: the parity row's `servedTier` key for a response's `service_tier`: `absent` for None, else the tier
+    bounded by NAME_RE; None (counted nowhere) when it is neither None nor a string."""
+    if tier is not None and not isinstance(tier, str):
+        return None
+    return SERVED[2] if tier is None else _bounded(tier)
+
+
+def effort_word(effort: object) -> Optional[str]:
+    """The parity row's `effort` key for a body's `reasoning.effort`: NO_EFFORT for None, else the level bounded by
+    NAME_RE; None (counted nowhere) when it is neither None nor a string."""
+    if effort is not None and not isinstance(effort, str):
+        return None
+    return NO_EFFORT if effort is None else _bounded(effort)
+
+
+def count_transformations(held: Dict[str, int], transformations: list) -> None:
+    """Count one response's `input_transformations` keys into `held`, at most PARITY_TRANSFORMS_MAX keys, then
+    OVERFLOW; a key outside `reducer.transformation_key`'s shape is not counted."""
+    for key in transformations:
+        if _is_transform_key(key) and key != OVERFLOW:
+            key = _capped(held, key, PARITY_TRANSFORMS_MAX)
+            held[key] = held.get(key, 0) + 1
+
+
+def _is_ratio(value: object) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+            and count.RATIO_MIN <= value <= count.RATIO_MAX)
+
+
+def _route_key(route: object, model: object) -> str:
+    return _bounded(route) + "/" + _bounded(model)
+
+
+def _is_route_key(key: object) -> bool:
+    """A key `_route_key` (or `_slot`'s OVERFLOW) can have written: each part bounded as it was built."""
+    if key == OVERFLOW:
+        return True
+    if not isinstance(key, str) or "/" not in key:
+        return False
+    route, model = key.split("/", 1)
+    return _bounded(route) == route and _bounded(model) == model
+
+
+def _buckets() -> tuple:
+    """The parity histograms' bucket names, in order: each bound of PARITY_BUCKETS_MS, then PARITY_INF."""
+    return tuple(str(b) for b in PARITY_BUCKETS_MS) + (PARITY_INF,)
+
+
+def _bucket(ms: object) -> Optional[str]:
+    """The bucket of a time in milliseconds, or None when it is not a finite number of at least 0."""
+    if not (isinstance(ms, (int, float)) and not isinstance(ms, bool) and math.isfinite(ms) and ms >= 0):
+        return None
+    for bound in PARITY_BUCKETS_MS:
+        if ms <= bound:
+            return str(bound)
+    return PARITY_INF
+
+
+def _is_transform_key(key: object) -> bool:
+    """A key `reducer.transformation_key` writes (three parts under DIAG_PART_RE), or OVERFLOW."""
+    if key == OVERFLOW:
+        return True
+    parts = key.split(":") if isinstance(key, str) else []
+    return len(parts) == 3 and all(reducer.DIAG_PART_RE.fullmatch(p) for p in parts)
+
+
+def _parity_row() -> dict:
+    """A parity row that has counted nothing: the fixed vocabularies zero-filled, the open maps empty."""
+    row = {"responses": 0, "responsesWithTransformations": 0, "effort": {}, "servedOther": {}, "servedTier": {},
+           "inputTransformations": {}, "served": {k: 0 for k in SERVED}, "replay": {k: 0 for k in REPLAY_OUTCOMES},
+           "firstOutputMs": {k: 0 for k in _buckets()}, "reasoningMs": {k: 0 for k in _buckets()},
+           "totalMs": {k: 0 for k in _buckets()},
+           "markers": {k: 0 for k in backend.MARKERS}, "fallbacks": {k: 0 for k in backend.MARKERS},
+           "turnState": {k: 0 for k in TURN_STATE_EVENTS}}  # type: dict
+    for _, field in PARITY_TOKENS:
+        row[field] = 0
+    return row
+
+
+def _capped(table: Dict[str, int], key: str, cap: int) -> str:
+    """`key`, or OVERFLOW when `table` already holds `cap` other keys (D-6823's rule, at another cap)."""
+    if key in table or len(table) - (OVERFLOW in table) < cap:
+        return key
+    return OVERFLOW
+
+
+def _carried_row(old: dict) -> dict:
+    """A loaded parity row with every bound re-checked: a field or an entry that fails one is dropped, and an open
+    map keeps, in key order, only as many keys as its cap allows, and OVERFLOW (D-8618)."""
+    row = _parity_row()
+    for field in ("responses", "responsesWithTransformations") + tuple(f for _, f in PARITY_TOKENS):
+        if _is_int(old.get(field)):
+            row[field] = old[field]
+    for field in ("served", "replay", "firstOutputMs", "reasoningMs", "totalMs", "markers", "fallbacks", "turnState"):
+        held = old.get(field)
+        for k in row[field] if isinstance(held, dict) else ():
+            if _is_int(held.get(k)):
+                row[field][k] = held[k]
+    for field, valid, cap in (("effort", lambda k: _bounded(k) == k, PARITY_KEYS_MAX),
+                              ("servedOther", lambda k: _bounded(k) == k, PARITY_KEYS_MAX),
+                              ("servedTier", lambda k: _bounded(k) == k, PARITY_KEYS_MAX),
+                              ("inputTransformations", _is_transform_key, PARITY_TRANSFORMS_MAX)):
+        held = old.get(field)
+        for k in sorted(k for k in held if isinstance(k, str)) if isinstance(held, dict) else ():
+            if valid(k) and _is_int(held[k]) and _capped(row[field], k, cap) == k:
+                row[field][k] = held[k]
+    return row
+
+
+def _header_pairs(headers: object) -> list:
+    """The (name, value) pairs of a response's headers, or none when `headers` is not a mapping of headers; an item
+    that is not a pair is skipped."""
+    try:
+        items = list(headers.items())  # type: ignore[attr-defined]
+    except Exception:
+        return []
+    return [item for item in items if isinstance(item, tuple) and len(item) == 2]
+
+
+class Stats:
+    """The lane's stats file, held in memory and written by `flush`."""
+
+    def __init__(self, path: str, lane: str) -> None:
+        self.path = path
+        self.lane = lane
+        self._lock = threading.RLock()
+        self._write_lock = threading.Lock()  # one write at a time, held without self._lock (flush)
+        self._dirty = False
+        self._retry = False  # the next flush writes whatever FLUSH_S says: after a failed write, or a store event
+        self._last_flush = None  # type: Optional[float]
+        started = _iso(time.time())
+        # D-6821: `usageHeaders` and `lastUpstreamRequestId` are null until a first value, and
+        # neither is carried across a restart.
+        self._doc = {
+            "version": VERSION, "lane": lane, "since": started, "startedAt": started, "updatedAt": started,
+            "routes": {}, "refusals": {}, "outcomes": {}, "names": {}, "unexplained": {}, "usageHeaders": None,
+            "lastUpstreamRequestId": None, "store": dict(STORE_OK), "parity": {},
+        }  # type: dict
+        if self._load():
+            self.flush(force=True)
+
+    # ── the load ──
+    def _read(self) -> Optional[object]:
+        """The file's JSON, or None when it is absent. Raises ValueError when it is unreadable."""
+        try:
+            fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            raise ValueError("unreadable")
+        try:
+            chunks, size = [], 0
+            while True:
+                chunk = os.read(fd, 1 << 16)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > READ_MAX:
+                    raise ValueError("too large")
+                chunks.append(chunk)
+            return json.loads(b"".join(chunks).decode("utf-8"))
+        except (OSError, UnicodeDecodeError) as e:
+            raise ValueError(type(e).__name__)
+        finally:
+            os.close(fd)
+
+    def _load(self) -> bool:
+        """Carry what a valid file of this lane holds; True when the carried data changed (a reset, an explained name
+        or a marker dropped), so the constructor writes the file at once."""
+        try:
+            old = self._read()
+        except ValueError:
+            old = False
+        if old is None:  # absent: a fresh file, nothing to say yet
+            return False
+        version = old.get("version") if isinstance(old, dict) else None
+        if not (isinstance(old, dict) and _is_int(version) and version == VERSION and old.get("lane") == self.lane):
+            self._doc["outcomes"][RESET] = 1
+            self._dirty = True
+            return True
+        doc = self._doc
+        if isinstance(old.get("since"), str) and NAME_RE.fullmatch(old["since"]):
+            doc["since"] = old["since"]
+        for key, row in (old.get("routes") or {}).items() if isinstance(old.get("routes"), dict) else ():
+            if isinstance(row, dict) and _is_route_key(key):
+                doc["routes"][key] = {
+                    "requests": row["requests"] if _is_int(row.get("requests")) else 0,
+                    "bytesPerToken": row["bytesPerToken"] if _is_ratio(row.get("bytesPerToken"))
+                    else count.SEED_BYTES_PER_TOKEN,
+                    "promptTokensMax": row["promptTokensMax"] if _is_int(row.get("promptTokensMax")) else 0,
+                    "promptTokensLast": 0,
+                }
+        for key, row in (old.get("refusals") or {}).items() if isinstance(old.get("refusals"), dict) else ():
+            if (isinstance(row, dict) and _is_route_key(key) and _is_int(row.get("tokens"))
+                    and _is_int(row.get("window")) and isinstance(row.get("at"), str)
+                    and NAME_RE.fullmatch(row["at"])):
+                doc["refusals"][key] = {"tokens": row["tokens"], "window": row["window"], "at": row["at"],
+                                        "estimated": True}
+        for key, n in (old.get("outcomes") or {}).items() if isinstance(old.get("outcomes"), dict) else ():
+            if _bounded(key) == key and _is_int(n):
+                doc["outcomes"][key] = n
+        # D-8618: every valid parity row, re-checked; a malformed one is dropped, never a reset
+        for key, row in (old.get("parity") or {}).items() if isinstance(old.get("parity"), dict) else ():
+            if isinstance(row, dict) and _is_route_key(key) and self._slot(doc["parity"], key) == key:
+                doc["parity"][key] = _carried_row(row)
+        names = old.get("names") if isinstance(old.get("names"), dict) else {}
+        for family in FAMILIES:
+            held = names.get(family)
+            if isinstance(held, dict):
+                kept = {k: n for k, n in held.items() if _bounded(k) == k and _is_int(n)}
+                if kept:
+                    doc["names"][family] = kept
+        changed = False
+        unexplained = old.get("unexplained") if isinstance(old.get("unexplained"), dict) else {}
+        for family in FAMILIES:
+            held = unexplained.get(family)
+            if not isinstance(held, list):
+                continue
+            kept = sorted({n for n in held if isinstance(n, str) and _bounded(n) == n})
+            if UNRECOGNISED in kept or OVERFLOW in kept:  # markers, never carried (the module docstring)
+                changed = True
+                kept = [n for n in kept if n not in (UNRECOGNISED, OVERFLOW)]
+            still = [n for n in kept if not known.explained(family, n)]
+            if len(still) != len(kept):
+                changed = True
+            if still:
+                doc["unexplained"][family] = still
+        if changed:
+            self._dirty = True
+        return changed
+
+    # ── the counters ──
+    def _slot(self, table: Dict[str, object], key: str) -> str:
+        """`key`, or OVERFLOW when `table` already holds NAMES_MAX other keys (D-6823)."""
+        return _capped(table, key, NAMES_MAX)  # type: ignore[arg-type]
+
+    def _count(self, key: str) -> None:
+        outcomes = self._doc["outcomes"]
+        key = self._slot(outcomes, _bounded(key))
+        outcomes[key] = outcomes.get(key, 0) + 1
+        self._dirty = True
+
+    def name(self, family: str, value: str) -> None:
+        """Count one name of a D3 family; a name `known.explained` does not cover joins `unexplained`."""
+        with self._lock:
+            if family not in FAMILIES:
+                self._count(UNKNOWN_FAMILY)
+                return
+            held = self._doc["names"].setdefault(family, {})
+            value = self._slot(held, _bounded(value))
+            held[value] = held.get(value, 0) + 1
+            if not known.explained(family, value):
+                listed = self._doc["unexplained"].setdefault(family, [])
+                if value not in listed:
+                    listed.append(value)
+                    listed.sort()
+            self._dirty = True
+
+    def header_names(self, headers: Mapping[str, str]) -> None:
+        """Count each response header's NAME, lower-cased, under `responseHeader`; never its value. A method the plan
+        does not list (D-6818)."""
+        pairs = _header_pairs(headers)
+        with self._lock:
+            for header, _ in pairs:
+                self.name("responseHeader", header.lower() if isinstance(header, str) else UNRECOGNISED)
+
+    def outcome(self, key: str) -> None:
+        with self._lock:
+            self._count(key)
+
+    def store_event(self, reason: str, found: Optional[str] = None, file: Optional[str] = None, *,
+                    now: Optional[float] = None) -> None:
+        """The reasoning store's callback (D-7677): count `reason` as `outcome` does, and set this process's store
+        entry. `store.SET_ASIDE` records `found` and `file` (each bounded by NAME_RE, `file` a basename, never a path)
+        in `setAside`, and sets `state` unless the store is already disabled; any other reason disables, and records
+        `setAside` too when it names a `file` (`store.SET_ASIDE_FAILED` after its renames). `now` is
+        optional, the wall clock."""
+        with self._lock:
+            self._count(reason)
+            self._retry = True  # the next flush writes at once, whatever FLUSH_S says (the module docstring)
+            entry = self._doc["store"]
+            at = _stamp(now)
+            if reason == store.SET_ASIDE or file is not None:  # a set-aside, or a failed one that named its copy
+                name = file if isinstance(file, str) and "/" not in file else None  # a basename, never a path
+                entry["setAside"] = {"at": at, "found": _bounded(found), "file": _bounded(name)}
+            if reason == store.SET_ASIDE:
+                if entry["state"] == "disabled":
+                    return
+                entry["state"] = "set-aside"
+            else:
+                entry["state"] = "disabled"
+            entry["reason"] = _bounded(reason)
+            entry["at"] = at
+
+    def _route(self, route: str, model: str) -> dict:
+        routes = self._doc["routes"]
+        key = self._slot(routes, _route_key(route, model))
+        row = routes.get(key)
+        if row is None:
+            row = routes[key] = {"requests": 0, "bytesPerToken": count.SEED_BYTES_PER_TOKEN, "promptTokensMax": 0,
+                                 "promptTokensLast": 0}
+        return row
+
+    def request(self, route: str, model: str, countable_bytes: int) -> None:
+        """One request sent upstream on this route and model. Its bytes are D24's input; the ratio moves only at
+        `usage`, from a reply's real tokens."""
+        with self._lock:
+            self._route(route, model)["requests"] += 1
+            self._dirty = True
+
+    def usage(self, route: str, model: str, countable_bytes: int, input_tokens: int, *, image_count: int,
+              continued: bool = False) -> None:
+        """A successful reply's real `input_tokens`: the largest and the last prompt, always; the ratio only when the
+        request carried no image (each counts a fixed IMAGE_TOKENS, D-6427) and the message was not continued (its
+        last response's input counts the earlier responses' output against the first request's bytes)."""
+        if not _is_int(input_tokens):
+            return
+        with self._lock:
+            row = self._route(route, model)
+            row["promptTokensMax"] = max(row["promptTokensMax"], input_tokens)
+            row["promptTokensLast"] = input_tokens
+            if image_count == 0 and not continued and _is_int(countable_bytes):
+                row["bytesPerToken"] = count.updated_ratio(row["bytesPerToken"], countable_bytes, input_tokens)
+            self._dirty = True
+
+    # ── the parity section (D-8618; the module docstring) ──
+    def _parity(self, route: str, model: str) -> dict:
+        table = self._doc["parity"]
+        key = self._slot(table, _route_key(route, model))
+        row = table.get(key)
+        if row is None:
+            row = table[key] = _parity_row()
+        return row
+
+    def parity_effort(self, route: str, model: str, effort: Optional[str]) -> None:
+        """One upstream POST's `reasoning.effort` as the body carried it, NO_EFFORT when it carried none (None). A
+        level outside NAME_RE is UNRECOGNISED; one that is not a string counts nothing."""
+        word = effort_word(effort)
+        if word is None:
+            return
+        with self._lock:
+            held = self._parity(route, model)["effort"]
+            level = _capped(held, word, PARITY_KEYS_MAX)
+            held[level] = held.get(level, 0) + 1
+            self._dirty = True
+
+    def parity_replay(self, route: str, model: str, outcome: str, n: int = 1) -> None:
+        """`n` reasoning-store lookups of one request that found `outcome`, one of REPLAY_OUTCOMES; any other outcome,
+        or an `n` that is not a positive int, counts nothing."""
+        if outcome not in REPLAY_OUTCOMES or not _is_int(n) or n < 1:
+            return
+        with self._lock:
+            self._parity(route, model)["replay"][outcome] += n
+            self._dirty = True
+
+    def parity_response(self, route: str, model: str, *, served: Optional[str] = None,
+                        usage: Optional[Mapping[str, int]] = None, transformations: Optional[list] = None,
+                        first_output_ms: Optional[float] = None, total_ms: Optional[float] = None,
+                        served_tier: Optional[str] = None, reasoning_ms: Optional[float] = None) -> None:
+        """One upstream response whose terminal event the reducer saw: `served` is the model the response named (None:
+        it named none), compared with `model`, the one asked for; `served_tier` the service tier it named (None: it
+        named none, D-8632); `usage` the terminal's valid counts by PARITY_TOKENS' names; `transformations` its
+        `input_transformations` keys (None: no array); the three times in milliseconds from the POST
+        (`first_output_ms` None: no output; `reasoning_ms` None: no reasoning before it, D-8633). Each malformed
+        argument counts nothing; the response itself is always counted."""
+        with self._lock:
+            row = self._parity(route, model)
+            row["responses"] += 1
+            if isinstance(usage, Mapping):
+                for name, field in PARITY_TOKENS:
+                    if _is_int(usage.get(name)):
+                        row[field] += usage[name]
+            word = served_word(served, model)
+            if word is not None:
+                row["served"][word] += 1
+                if word == "other":
+                    others = row["servedOther"]
+                    name = _capped(others, _bounded(served), PARITY_KEYS_MAX)
+                    others[name] = others.get(name, 0) + 1
+            tier = tier_word(served_tier)  # D-8632
+            if tier is not None:
+                tiers = row["servedTier"]
+                tier = _capped(tiers, tier, PARITY_KEYS_MAX)
+                tiers[tier] = tiers.get(tier, 0) + 1
+            if isinstance(transformations, list):
+                if transformations:
+                    row["responsesWithTransformations"] += 1
+                count_transformations(row["inputTransformations"], transformations)
+            for field, ms in (("firstOutputMs", first_output_ms), ("reasoningMs", reasoning_ms), ("totalMs", total_ms)):
+                at = _bucket(ms)
+                if at is not None:
+                    row[field][at] += 1
+            self._dirty = True
+
+    def _parity_fixed(self, route: str, model: str, field: str, key: object) -> None:
+        """One count of `key` in a zero-filled map of the row; a key outside that map counts nothing and makes no
+        row."""
+        if not (isinstance(key, str) and key in _parity_row()[field]):
+            return
+        with self._lock:
+            self._parity(route, model)[field][key] += 1
+            self._dirty = True
+
+    def parity_marker(self, route: str, model: str, marker: str) -> None:
+        """D-8622: one upstream POST that carried `marker`'s addition, one of `backend.MARKERS`."""
+        self._parity_fixed(route, model, "markers", marker)
+
+    def parity_fallback(self, route: str, model: str, marker: str) -> None:
+        """D-8622: one `marker` a 400's fallback dropped, one of `backend.MARKERS`."""
+        self._parity_fixed(route, model, "fallbacks", marker)
+
+    def parity_turn_state(self, route: str, model: str, event: str) -> None:
+        """D-8623: one turn-state token `captured` or `echoed` (TURN_STATE_EVENTS); never the token."""
+        self._parity_fixed(route, model, "turnState", event)
+
+    def refusal(self, route: str, model: str, tokens: int, window: int, *, now: Optional[float] = None) -> None:
+        """The latest context refusal per route and model (spec §2.7): D24's estimate and the lane's window then. `now`
+        is optional, the wall clock (D-6819)."""
+        if not (_is_int(tokens) and _is_int(window)):
+            return
+        with self._lock:
+            refusals = self._doc["refusals"]
+            key = self._slot(refusals, _route_key(route, model))
+            refusals[key] = {"tokens": tokens, "window": window, "at": _stamp(now), "estimated": True}
+            self._dirty = True
+
+    def usage_headers(self, headers: Mapping[str, str], *, now: Optional[float] = None) -> None:
+        """Keep the `x-codex-` headers of one response, by prefix, whose value has the poller's shape (USAGE_VALUE_RE,
+        at most VALUE_MAX characters) and whose name is not in TOKEN_HEADERS; every other value is dropped, and every
+        other header's value is never kept. A response with none leaves the last snapshot standing. `now` is optional,
+        the wall clock (D-6819)."""
+        prefix = known.CODEX_HEADER_PREFIX
+        values = {}  # type: Dict[str, str]
+        for header, value in _header_pairs(headers):
+            name = header.lower() if isinstance(header, str) else ""
+            if (not name.startswith(prefix) or not NAME_RE.fullmatch(name) or name in TOKEN_HEADERS
+                    or not isinstance(value, str)):
+                continue
+            value = value.strip()
+            if not (len(value) <= VALUE_MAX and USAGE_VALUE_RE.fullmatch(value)):
+                continue
+            values[name] = value
+            if len(values) >= HEADERS_MAX:
+                break
+        if not values:
+            return
+        with self._lock:
+            self._doc["usageHeaders"] = {"at": _stamp(now), "values": values}
+            self._dirty = True
+
+    def request_id(self, rid: Optional[str]) -> None:
+        """The last upstream request id, kept only when it matches errors.REQUEST_ID_RE."""
+        if isinstance(rid, str) and errors.REQUEST_ID_RE.fullmatch(rid):
+            with self._lock:
+                self._doc["lastUpstreamRequestId"] = rid
+                self._dirty = True
+
+    def ratio(self, route: str, model: str) -> float:
+        """D24's bytes per token for this route and model: the calibrated ratio, else the seed."""
+        with self._lock:
+            row = self._doc["routes"].get(_route_key(route, model))
+            return row["bytesPerToken"] if row is not None else count.SEED_BYTES_PER_TOKEN
+
+    def snapshot(self) -> dict:
+        """A copy of the document as the next flush writes it (but its `updatedAt`)."""
+        with self._lock:
+            return json.loads(json.dumps(self._doc))
+
+    # ── the write ──
+    def _write(self, data: bytes) -> None:
+        tmp = self.path + ".tmp"
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(fd, view):]
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(tmp, self.path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+    def flush(self, *, force: bool = False) -> bool:
+        """Write the file when something changed, at most every FLUSH_S (a forced flush, and the first call after a
+        failed one or a store event, write at once). True when it wrote; a failure is counted and kept for the next
+        call, never raised. The write runs outside self._lock; an unforced flush while another write is in flight
+        returns False."""
+        if not self._write_lock.acquire(blocking=force):
+            return False
+        try:
+            with self._lock:
+                tick = time.monotonic()
+                if not force:
+                    if not self._dirty:
+                        return False
+                    if not self._retry and self._last_flush is not None and tick - self._last_flush < FLUSH_S:
+                        return False
+                self._doc["updatedAt"] = _iso(time.time())
+                data = json.dumps(self._doc, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                self._dirty = False  # a change made during the write sets it again
+                self._retry = False  # so does a store event, and a failure below (cleared here, never after the write)
+            try:
+                self._write(data)
+            except Exception:  # a full disk, a removed directory: counted, retried at the next call
+                with self._lock:
+                    self._count(FLUSH_FAILED)
+                    self._retry = True
+                return False
+            with self._lock:
+                self._last_flush = tick
+            return True
+        finally:
+            self._write_lock.release()

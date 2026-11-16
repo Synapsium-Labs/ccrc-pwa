@@ -24,7 +24,7 @@ afterEach(() => { h.cleanup(); });
 
 const UUID = 'b7001948-1111-4bcc-b60b-0cfc0dc3d199';
 const SRC = '.claude';        // the `claude` account's config dir
-const DST = '.claude-dev0';   // the `claude-dev0` account's config dir
+const DST = '.claude-lab0';   // the `claude-lab0` account's config dir
 
 /** A transcript at <cfg>/projects/<pdir>/<uuid>.jsonl. `mtime` in whole
  *  seconds, because §2.2's newest-wins rule reads `stat -c %Y`. */
@@ -101,7 +101,7 @@ describe('_transcript_matches', () => {
     // M2: the incident uuid exists in FIVE config dirs at five different
     // sizes. A locator allowed to cross accounts would carry a stale copy.
     plant(SRC, '-data-projects-demo', 'MINE\n');
-    plant('.claude-personal', '-data-projects-demo', 'STALE\n');
+    plant('.claude-home', '-data-projects-demo', 'STALE\n');
     const out = h.sh(`_transcript_matches "$HOME/${SRC}" ${UUID}`).split('\n');
     expect(out).toHaveLength(1);
     expect(out[0]).toContain(`/${SRC}/projects/`);

@@ -1,0 +1,103 @@
+import type { Meta, StoryObj } from '@storybook/react-vite';
+import { useState } from 'react';
+import { Button } from './button';
+import { QuickConfirm } from './confirm';
+
+const meta = {
+  title: 'Primitives/QuickConfirm',
+  component: QuickConfirm,
+  parameters: { layout: 'fullscreen', viewport: { defaultViewport: 'phone' } },
+  // As in the Sheet stories: <Demo/> owns `open`, so these are only here to
+  // satisfy the required props.
+  args: {
+    open: true,
+    onClose: () => {},
+    title: '',
+    consequence: '',
+    confirmLabel: '',
+    onConfirm: () => {},
+  },
+} satisfies Meta<typeof QuickConfirm>;
+export default meta;
+
+type Story = StoryObj<typeof meta>;
+
+function Demo(props: Omit<React.ComponentProps<typeof QuickConfirm>, 'open' | 'onClose'>) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="grid min-h-[600px] place-items-center bg-page p-4">
+      <div className="w-[240px]">
+        <Button onClick={() => setOpen(true)}>Ask again</Button>
+      </div>
+      <QuickConfirm {...props} open={open} onClose={() => setOpen(false)} />
+    </div>
+  );
+}
+
+/** The consequence sentence carries the weight, in plain language. A confirm
+ *  that only restates the verb ("Stop this session?") tells the operator
+ *  nothing they did not already know when they tapped. */
+export const Stop: Story = {
+  render: () => (
+    <Demo
+      title="Stop claude-3?"
+      consequence="The turn in flight is lost. The workspace and its branch stay exactly where they are, and you can start the session again from the same place."
+      confirmLabel="Stop the session"
+      onConfirm={() => {}}
+    />
+  ),
+};
+
+/** `tone="danger"` (D-5099): a confirm that destroys something commits with
+ *  the filled red button instead of the phosphor. */
+export const Danger: Story = {
+  render: () => (
+    <Demo
+      title="Reboot the fleet host?"
+      consequence="Reboots the whole fleet box — everything else running on it goes down too, not just the fleet."
+      confirmLabel="Reboot the fleet host"
+      onConfirm={() => {}}
+      tone="danger"
+    />
+  ),
+};
+
+/** `defaultFocus="cancel"` (D-5507): a danger confirm whose Cancel holds the focus on open, so an Enter or a Space
+ *  pressed out of habit answers no; closing hands the focus back to the control that opened it. The default is
+ *  today's: the sheet moves no focus. */
+export const CancelFocused: Story = {
+  render: () => (
+    <Demo
+      title="Clear fleet's refusals?"
+      consequence="It forgets that it refused v0.4.21. With auto-install on, the server may try it again on its next check."
+      confirmLabel="Ack"
+      onConfirm={() => {}}
+      tone="danger"
+      defaultFocus="cancel"
+    />
+  ),
+};
+
+export const MoveAccount: Story = {
+  render: () => (
+    <Demo
+      title="Move to claude?"
+      consequence="The session keeps its history and its workspace; only the wrapper changes. Its 5h window on the current account stays spent."
+      confirmLabel="Move it"
+      onConfirm={() => {}}
+    />
+  ),
+};
+
+/** Several lines: a list renders one paragraph per line, in order — the stall
+ *  watch's sheet says each thing a save turns on or off on its own line. */
+export const SeveralLines: Story = {
+  render: () => (
+    <Demo
+      title="Save the stall watch?"
+      consequence={['Checks turn on.', 'Busy delivery stops.']}
+      confirmLabel="Save"
+      onConfirm={() => {}}
+    />
+  ),
+};

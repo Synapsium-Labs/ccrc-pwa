@@ -1,0 +1,15 @@
+ ❯ the test in test/app.test.ts is flaky
+
+ ● Two ways to fix the flaky test in
+   project-a:
+   1. Pin the clock in src/app.ts so the
+      timeout is deterministic.
+   2. Raise the timeout to 5 s and keep the
+      real clock.
+   Which one do you want?
+
+──
+ ❯
+──
+   ? for shortcuts
+

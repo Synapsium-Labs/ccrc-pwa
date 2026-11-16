@@ -95,9 +95,9 @@ needed to make the screen useful.
 
 ### The measured problem
 
-The live bug report ("claude2 logged out") is stale — the operator fixed it
-2026-08-05 via a setup-token wrapper (`~/.local/bin/claude2` sources
-`~/.cc-secrets/claude2-oauth.env`); claude2 is currently the busiest account.
+The live bug report ("claude9 logged out") is stale — the operator fixed it
+2026-08-05 via a setup-token wrapper (`~/.local/bin/claude9` sources
+`~/.cc-secrets/claude9-oauth.env`); claude9 is currently the busiest account.
 **The structural holes are real regardless of which account they bite next:**
 
 1. `_ws_least_loaded` (`ccd/ccd:982-990`) — ws-add's placement rule — has
@@ -110,7 +110,7 @@ The live bug report ("claude2 logged out") is stale — the operator fixed it
    it as "100% free". Self-reinforcing.
 3. `<wrapper>-disabled` is a **UI-only kill-switch**: `server/src/limits.ts`
    parses it for every lane; ccd honors it for exactly one (`gpt`, via
-   `_gpt_enabled` at `ccd/ccd:53`). `touch ~/.cc-sessions/claude2-disabled`
+   `_gpt_enabled` at `ccd/ccd:53`). `touch ~/.cc-sessions/claude9-disabled`
    hides the account from every picker and changes nothing about where ccd
    puts sessions.
 4. A session spawned onto a broken account has **no failure path**:
@@ -124,7 +124,7 @@ The live bug report ("claude2 logged out") is stale — the operator fixed it
 
 **There is no login detection.** The scout's §2 is conclusive: no passive
 filesystem signal distinguishes logged-in from logged-out on this box
-(claude2's env-token path makes `.credentials.json` mtime actively
+(claude9's env-token path makes `.credentials.json` mtime actively
 misleading; `remote-settings.json` size is folklore). A probe-based check
 (spawn `<wrapper> -p ping` and classify) is rejected: it spends tokens, races
 real logins, and adds a health-prober to a system whose telemetry is
@@ -174,7 +174,7 @@ honest failure paths:
    labels (`homeAbleLabelList`, `pwa/src/lib/accounts.ts`) — the same
    discipline ccd's own placement refusal already uses (`ccd/ccd`'s
    `die "no account available for placement — claude:disabled
-   claude2:disabled claude-corp:disabled …"`, never "all accounts"). Found
+   claude9:disabled claude-acme:disabled …"`, never "all accounts"). Found
    by the whole-branch review's cross-file read (the projection line and the
    row list are two renderings of one `/api/accounts` response, computed
    from different subsets of it); recorded rather than quietly edited — a
@@ -325,7 +325,7 @@ the 2026-08-04 worktree-ownership future-work bullet) is **not built**, on
 three findings:
 
 1. **Measured need ≈ zero.** Fleet-wide, exactly one project has untracked
-   `.env` files (`rp-llm` — which has no workspaces); every other
+   `.env` files (`project-j` — which has no workspaces); every other
    secret-shaped root file is a tracked template that already arrives with
    the worktree. No live worktree is missing an env file it needs.
 2. **The existing mechanism has zero adoption.** `.ccrc/workspace.sh`

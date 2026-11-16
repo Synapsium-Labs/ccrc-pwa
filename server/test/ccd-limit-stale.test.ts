@@ -1,27 +1,29 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-limit-stale-'); });
 afterEach(() => { h.cleanup(); });
 
 const ID = 'myid';
-const STUBS = `sleep() { :; };
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
-    case "\${1:-}" in capture-pane) printf '%s\\n' "\${PANE_TEXT:-}" ;; esac; return 0; };
+/** tmux, RECORDING; the box readers are the real ones. */
+const TMUX_STUBS = `sleep() { :; };
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
+    case "\${1:-}" in capture-pane) printf '%s\\n' "\${PANE_TEXT:-}" ;; esac; return 0; };`;
+const STUBS = `${TMUX_STUBS}
   _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };`;
 /** The bundle's own sentence for `phase:"stale"` (2.1.267, `mu(l)`): what the
  *  status line shows when Claude Code slept through its own reset. */
 const STALE = 'Your usage limit has reset · press enter to continue\n❯ ';
-const STALE_WITH_CONTINUATION_DRAFT = 'Your usage limit has reset · press enter to continue\n❯ \n  half a sentence\n────────────────────────\n  👤 team·max';
+const STALE_WITH_CONTINUATION_DRAFT = 'Your usage limit has reset · press enter to continue\n────────────────────────\n❯ \n  half a sentence\n────────────────────────\n  👤 team·max';
 const STALE_NO_PROMPT = 'Your usage limit has reset · press enter to continue\n';
 const ARMED = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel\n❯ ';
 const BUSY = 'Your usage limit has reset · press enter to continue\nWorking… (esc to interrupt)\n❯ ';
 const READY = '? for shortcuts\n❯ ';
 const seed = (): void => { h.sh(`_reg_set ${ID} wrapper claude`); };
-const enters = (): string[] => h.calls().filter((l) => l === `tmux send-keys -t cc-${ID} Enter`);
+const enters = (): string[] => h.calls().filter((l) => l === `tmux send-keys -t =cc-${ID}: Enter`);
 const swapLog = (): string => {
   const f = path.join(h.home, '.cc-sessions', 'swap.log');
   return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
@@ -76,13 +78,20 @@ describe('_auto_stale_check presses Enter for a stale auto-continue (D-2360)', (
     expect(enters()).toEqual([]);
     expect(swapLog()).toMatch(/stale-skip myid: usage limit has reset but the input box is not empty/);
   });
+  it('an open dialog in the box\'s place: no Enter, which would pick its highlighted row (D-8116)', () => {
+    const dialog = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures', 'panes', 'box', 'rate-limit-dialog.ansi'), 'utf8');
+    seed();
+    h.sh(`${TMUX_STUBS} _auto_stale_check ${ID}`, { PANE_TEXT: `${dialog.trimEnd()}\nYour usage limit has reset · press enter to continue` });
+    expect(h.calls().filter((l) => l.includes('send-keys'))).toEqual([]);
+    expect(swapLog()).toMatch(/stale-skip myid: usage limit has reset but no input box is on screen \(a dialog is open\)/);
+  });
   it('no prompt visible: nothing', () => { seed(); check({ PANE_TEXT: STALE_NO_PROMPT }); expect(enters()).toEqual([]); });
   it('a running turn: nothing', () => { seed(); check({ PANE_TEXT: BUSY }); expect(enters()).toEqual([]); });
   it('an ARMED auto-continue is not stale: nothing (R3 — never cancel it)', () => { seed(); check({ PANE_TEXT: ARMED }); expect(enters()).toEqual([]); });
   it('a ready pane: nothing', () => { seed(); check({ PANE_TEXT: READY }); expect(enters()).toEqual([]); });
   it('a blank pane: nothing', () => { seed(); check({ PANE_TEXT: '' }); expect(enters()).toEqual([]); });
   it('the tick runs the stale check BEFORE the swap arm (source pin)', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).toContain('_sync_uuid "$id"; _auto_stale_check "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"');
   });
 });

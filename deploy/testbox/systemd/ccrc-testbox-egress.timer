@@ -1,0 +1,11 @@
+# Resolves the egress allowlist's names again, so a name whose addresses move is followed (D-7409; spec §2.0).
+[Unit]
+Description=ccrc test box: resolve the egress allowlist on a timer
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=15min
+Unit=ccrc-testbox-egress.service
+
+[Install]
+WantedBy=timers.target

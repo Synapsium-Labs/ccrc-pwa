@@ -232,7 +232,7 @@ makes the remaining fix small: **one rung on a ladder that already exists**, flo
 
 `ccrc-pwa-swift-harbor` has been sitting on the box since 2026-08-12 18:10:03 in exactly the F8 state:
 ten registry rows, **no `.started`**, **no systemd wants-symlink**, **no `.hold`**, a **live tmux pane**
-at an idle prompt, zero transcript, `$0.0000` spent, on the `claude-dev0` lane. Every verb reports it
+at an idle prompt, zero transcript, `$0.0000` spent, on the `claude-lab0` lane. Every verb reports it
 healthy: `ls` → `ALIVE yes`; `ws-audit` → `not-archived` (and carries **no liveness field at all** —
 `_alive` appears nowhere in `cmd_ws_audit`); `ws-gc` → `tracked`, the one state the prune arm prints
 nothing for (`ccd:6214-6219`, `:6679-6680`); `ensure` → `alive: <id>`, exit 0, repairs nothing.
@@ -793,12 +793,12 @@ problem.
 
 > **SECOND CORRECTION, measured 2026-08-18 22:41 — the fix above was necessary and not sufficient.**
 > The reboot that was supposed to verify `_tmux_new_session` verified instead that it loses a race.
-> The server came back in `claude-session@claude-synapsium-platform.service`; the scope was absent.
+> The server came back in `claude-session@claude-project-k.service`; the scope was absent.
 >
 > **This time the journal names the mechanism exactly.** At 22:41:46 fifteen supervisors logged
 > `Failed to start transient scope unit: Unit ccrc-tmux-server.scope was already loaded or has a
 > fragment file`, and one logged `Started ccrc-tmux-server.scope - /usr/bin/tmux new-session -d -s
-> cc-claude-corp-data-internal`. **The scope was created. It never held anything.** The fifteen losers
+> cc-claude-acme-project-e`. **The scope was created. It never held anything.** The fifteen losers
 > did not wait: each fell through to a bare `tmux new-session`, one of those created the server in its
 > own cgroup, and the scope winner's `new-session` then merely CONNECTED to that server — leaving its
 > scope holding a client that exited at once, which `--collect` duly reaped.
@@ -832,11 +832,11 @@ resumes from its transcript). **Six sessions do not come back on their own:**
 | Session | Why not |
 |---|---|
 | `ccrc-pwa-calm-mesa` | unit active, **not enabled** — no `default.target.wants` symlink |
-| `data-internal-plain-harbor` | same |
-| `data-internal-still-prairie` | same |
+| `project-e-plain-harbor` | same |
+| `project-e-still-prairie` | same |
 | `ccrc-pwa-swift-harbor` | **no unit at all** — the F8 orphan; `_ws_supervise` never ran |
-| `custom-tools-brisk-ridge` | no unit at all |
-| `expoAI-assistant-warm-mesa` | no unit at all |
+| `project-d-brisk-ridge` | no unit at all |
+| `project-h-warm-mesa` | no unit at all |
 
 Two of those are archived rows and one is the orphan the operator has said to leave, so the real
 decision is small — but it is a decision, not a surprise, and it must be made **before** the reboot, not
@@ -1485,7 +1485,7 @@ is worth more to the next spec than a clean document is.
 
 ## Live fleet, verified 2026-08-14
 
-Measured first-hand, read-only, on the fleet host (`openclaw`, `198.51.100.7`), 18:33–19:05 UTC. The repo is at `21fef2a`, `ccd/ccd` sha256 `44de6cd4…`, 7523 lines. The box runs a **different** ccd — 7544 lines, sha256 `d71024dc…`, mtime 2026-08-14 07:02:45 — so no repo line number below is taken from the installed file, and where I read the installed file I say so.
+Measured first-hand, read-only, on the fleet host (`<fleet-host>`, `198.51.100.7`), 18:33–19:05 UTC. The repo is at `21fef2a`, `ccd/ccd` sha256 `44de6cd4…`, 7523 lines. The box runs a **different** ccd — 7544 lines, sha256 `d71024dc…`, mtime 2026-08-14 07:02:45 — so no repo line number below is taken from the installed file, and where I read the installed file I say so.
 
 ### F8 is a one-off, not a standing condition
 
@@ -1498,9 +1498,9 @@ So the answer to the highest-value question is: **the F8 residue class has one m
 | Class | Count | Members |
 |---|---|---|
 | **F8 proper** — registered, alive, no `started` | **1** | `ccrc-pwa-swift-harbor` |
-| **Alive, never supervised** — no unit loaded at all | **3** | `swift-harbor`, `custom-tools-brisk-ridge`, `expoAI-assistant-warm-mesa` |
-| **Running but not boot-persistent** — unit `active/running`, no `default.target.wants` symlink | **3** | `ccrc-pwa-calm-mesa`, `data-internal-plain-harbor`, `data-internal-still-prairie` |
-| **Registered, `started=1`, no pane** | **3** | `ccrc-pwa-brisk-harbor`, `expoAI-assistant-clear-cove`, `expoAI-assistant-swift-delta` |
+| **Alive, never supervised** — no unit loaded at all | **3** | `swift-harbor`, `project-d-brisk-ridge`, `project-h-warm-mesa` |
+| **Running but not boot-persistent** — unit `active/running`, no `default.target.wants` symlink | **3** | `ccrc-pwa-calm-mesa`, `project-e-plain-harbor`, `project-e-still-prairie` |
+| **Registered, `started=1`, no pane** | **3** | `ccrc-pwa-brisk-harbor`, `project-h-clear-cove`, `project-h-swift-delta` |
 
 Totals: 24 registry rows, 21 tmux sessions, **18** active units, **15** enabled symlinks. `systemctl --user list-units 'claude-session@*' --all` returns exactly 18 rows; the six ids absent from that list have no unit loaded in the manager, so `try-restart 'claude-session@*'` cannot touch them and `Restart=always` cannot resurrect them. (Note: `systemctl show` on an uninstantiated template *does* report `LoadState=loaded`, which is why a naive check misreads this — use `list-units`.)
 
@@ -1508,7 +1508,7 @@ The fourth class matters most for Wave 1's design. C1 argues F8 cannot leave "a 
 
 ### The specimen, re-measured
 
-Ten registry rows, `.started` absent, `.hold` absent, no unit, live pane (pid 1155964, `ps` elapsed 2d 00:27, started Wed Aug 12 18:10:02), zero transcript, `$0.0000`, wrapper `claude-dev0`. But three details change how it should be described:
+Ten registry rows, `.started` absent, `.hold` absent, no unit, live pane (pid 1155964, `ps` elapsed 2d 00:27, started Wed Aug 12 18:10:02), zero transcript, `$0.0000`, wrapper `claude-lab0`. But three details change how it should be described:
 
 1. **Only eight of the ten are frozen at spawn** (all mtime `2026-08-12 18:10:03.286368465`). `.prphase` and `.prcheckedat` are sweep-written and rewrite themselves every few minutes — I watched the mtime move 18:33:14 → 18:37:14 → 18:57:15. "Ten frozen rows" is not a usable detection signature.
 2. **The splash is still painted.** Not "idle at an empty prompt" — never advanced past first paint. `tmux capture-pane` shows `Claude Code v2.1.228` / `Fable 5 with xhigh effort · Claude API` / `~/worktrees/ccrc-pwa/swift-harbor` / `⚠ 2 MCP servers need authentication · run /mcp` after two days.
@@ -1516,7 +1516,7 @@ Ten registry rows, `.started` absent, `.hold` absent, no unit, live pane (pid 11
 
 The empty box's marker row is **measured** as `❯` + U+00A0: `od -c` on the captured row gives `342 235 257 302 240`. §4.6's premise about the empty box needs no experiment.
 
-`~/.claude-dev0/projects/-home-you-worktrees-ccrc-pwa-swift-harbor/` does not exist (never took a turn). `~/.claude-dev0/session-env/7f0a923c-f98d-4601-b617-058c2c55fd95` **does**, confirming §1.1's parenthetical first-hand. The full argv from `/proc/1155964/cmdline`:
+`~/.claude-lab0/projects/-home-you-worktrees-ccrc-pwa-swift-harbor/` does not exist (never took a turn). `~/.claude-lab0/session-env/7f0a923c-f98d-4601-b617-058c2c55fd95` **does**, confirming §1.1's parenthetical first-hand. The full argv from `/proc/1155964/cmdline`:
 
 ```
 /home/you/.local/bin/claude --remote-control ccrc-pwa-swift-harbor \
@@ -1533,7 +1533,7 @@ The empty box's marker row is **measured** as `❯` + U+00A0: `od -c` on the cap
 
 **"No `.hold`" understates it: there are zero holds fleet-wide,** across all 24 rows. No program currently claims any workspace. Absence of a hold on swift-harbor is not discriminating, and every "held" branch in this build is currently unexercised in production.
 
-**`claude-dev0` is right, but the operator never sees that string.** `~/.ccrc/accounts.json` maps it to the label **`team·d`**, which is what the pane prints. Use the label wherever the spec describes what an operator will recognise. Separately, **the id prefix no longer implies the wrapper**: `claude2-expoAI-assistant` and `claude2-OpenClawHetzner` run on `claude`; `claude-corp-custom-tools` runs on `claude-dev0`. Any code or prose inferring an account from a session id is wrong on 3 of 24 rows today.
+**`claude-lab0` is right, but the operator never sees that string.** `~/.ccrc/accounts.json` maps it to the label **`team·d`**, which is what the pane prints. Use the label wherever the spec describes what an operator will recognise. Separately, **the id prefix no longer implies the wrapper**: `claude9-project-h` and `claude9-project-c` run on `claude`; `claude-acme-project-d` runs on `claude-lab0`. Any code or prose inferring an account from a session id is wrong on 3 of 24 rows today.
 
 ### Registry `.branch` is stale — but less dangerously than one lens reported
 
@@ -1541,20 +1541,20 @@ Comparing each workspace row's `.branch` against `git -C <workdir> symbolic-ref 
 
 | ID | registry `.branch` | actual HEAD | state |
 |---|---|---|---|
-| `custom-tools-calm-river` | `ws/calm-river` | **`main`** | live |
-| `data-internal-quiet-summit` | `ws/review-data-room-sources-followup-spec` | `feat/cube-per-service-authorisation` | live |
+| `project-d-calm-river` | `ws/calm-river` | **`main`** | live |
+| `project-e-quiet-summit` | `ws/review-data-room-sources-followup-spec` | `feat/cube-per-service-authorisation` | live |
 | `ccrc-pwa-calm-mesa` | `ws/fix-workspace-cleanup-issue` | `fix/roster-half-delivery` | archived |
-| `custom-tools-brisk-ridge` | `ws/remove-git-dependency-from-plugin` | `fix/dist-publisher-hardening` | archived |
-| `data-internal-plain-harbor` | `ws/plain-harbor` | `feat/claude-usage-dashboard-asks` | archived |
-| `data-internal-still-prairie` | `ws/still-prairie` | `ws/salary-per-unit` | archived |
-| `expoAI-assistant-swift-delta` | `ws/fix-guardrail-content-filtering-in` | `fix/kb-prefetch-degenerate-chunks` | archived |
-| `expoAI-assistant-warm-mesa` | `ws/evaluate-lightpanda-as-playwright` | **`main`** | archived |
+| `project-d-brisk-ridge` | `ws/remove-git-dependency-from-plugin` | `fix/dist-publisher-hardening` | archived |
+| `project-e-plain-harbor` | `ws/plain-harbor` | `feat/claude-usage-dashboard-asks` | archived |
+| `project-e-still-prairie` | `ws/still-prairie` | `ws/salary-per-unit` | archived |
+| `project-h-swift-delta` | `ws/fix-guardrail-content-filtering-in` | `fix/kb-prefetch-degenerate-chunks` | archived |
+| `project-h-warm-mesa` | `ws/evaluate-lightpanda-as-playwright` | **`main`** | archived |
 
 The done-fingerprint only ever runs against a live claimed workspace, so the live exposure is 2 rows, not 8 — and one of those two reads `main` on disk. That is still a real hazard for `handoffCommit === branchTip`, but it is a two-row hazard, not a third-of-the-fleet hazard, and the spec should say so at the honest size. Which source the fingerprint resolves the branch from I did not trace (see *Still ungrounded*).
 
 ### Eight orphan worktrees, not seven
 
-Worktrees under `~/worktrees/` with no registry row pointing at them: `ccrc-pwa/robust-mail` (`fix/robust-mail-delivery`), `claude-skills/plugin-dist`, `custom-tools-alertwire`, `data-internal/bright-ledger`, `data-internal/dated-grain`, **`data-internal/host-alias`**, `data-internal/session-identity`, `expoAI-assistant/egress-cost`. The research missed `host-alias`. Note `custom-tools-alertwire` sits **flat** at `~/worktrees/`, not nested under a project dir — a detector globbing `~/worktrees/*/*/` misses it. There are no tmux sessions without a registry row; all 21 are `cc-<id>` for a registered id.
+Worktrees under `~/worktrees/` with no registry row pointing at them: `ccrc-pwa/robust-mail` (`fix/robust-mail-delivery`), `project-v/plugin-dist`, `project-d-alertpipe`, `project-e/bright-ledger`, `project-e/dated-grain`, **`project-e/host-alias`**, `project-e/session-identity`, `project-h/egress-cost`. The research missed `host-alias`. Note `project-d-alertpipe` sits **flat** at `~/worktrees/`, not nested under a project dir — a detector globbing `~/worktrees/*/*/` misses it. There are no tmux sessions without a registry row; all 21 are `cc-<id>` for a registered id.
 
 ### The naming-sweep timings are exact
 
@@ -1590,7 +1590,7 @@ One genuinely mixed-version path: `_dispatch_swap` runs `systemd-run … exec '$
 
 `SWEEP_CMD` (`deploy/deploy.sh:388-392`) runs `try-restart "claude-session@*"` then `verify-service.sh` per active unit, serially, aborting on the first failure. `verify-service.sh:60-61` sets `CCRC_VERIFY_SETTLE=3` and `CCRC_VERIFY_WINDOW=5`, so **8 s per unit × 18 = ~2.4 minutes** of verification on top of the restarts.
 
-Sessions survive: `KillMode=process` (`ccd/claude-session@.service:14`) plus `cmd_ensure`'s `_alive` early return (`ccd:7212-7219`) means the restarted supervisor attaches rather than respawns, and fires no SessionStart hooks. Evidence: tmux session `cc-claude-corp-acme-platform-ts` was created 2026-08-09 19:28:04 and its supervisor's `ExecMainStartTimestamp` is 2026-08-12 20:04:41. Sharper still — the **tmux server itself** (pid 1569, started 2026-08-05 22:52:29, 12 s after boot) lives in `claude-session@claude-ccrc-pwa.service`'s cgroup and survived that unit's restart on 2026-08-14 13:22:30.
+Sessions survive: `KillMode=process` (`ccd/claude-session@.service:14`) plus `cmd_ensure`'s `_alive` early return (`ccd:7212-7219`) means the restarted supervisor attaches rather than respawns, and fires no SessionStart hooks. Evidence: tmux session `cc-claude-acme-acme-platform-ts` was created 2026-08-09 19:28:04 and its supervisor's `ExecMainStartTimestamp` is 2026-08-12 20:04:41. Sharper still — the **tmux server itself** (pid 1569, started 2026-08-05 22:52:29, 12 s after boot) lives in `claude-session@claude-ccrc-pwa.service`'s cgroup and survived that unit's restart on 2026-08-14 13:22:30.
 
 That last fact is the least-defended thing on the box. All 21 sessions are children of pid 1569, and 1569 sits in one session unit's cgroup. `KillMode=process` is the only thing between `try-restart 'claude-session@*'` and the death of the whole fleet's substrate — and **nothing pins it**: `grep -rn KillMode` returns the unit file, a comment in `deploy/deploy.sh:375`, and `agent/test/deploy-verify.test.ts:393`, which only *mentions* it in a comment. Meanwhile `deploy.sh:313` copies that unit file and `:364` `daemon-reload`s in the same run that sweeps, so a bad edit goes live and is exercised against 18 units with no window to notice. By this repo's own doctrine — "a comment is a request; a red suite is a mechanism" — that is not a guard.
 
@@ -1604,7 +1604,7 @@ Verdicts measured today: `ccd/ccd` @ `main` → `ccrc-unmodified`; `~/.local/bin
 
 **The gating risk stands: `fix/ccd-swap-jitter` is unmerged** (`git merge-base --is-ancestor` → false; `grep -c SWAP_JITTER` on repo `main`'s ccd → **0**, on the live file → line 53 plus the jittered `_dispatch_swap` body). Deploying Wave 1 from any main-based ref installs a ccd with no jitter — silently reverting the fix for the 2026-08-13 nine-hour thundering-herd outage — and the sweep then **arms the reverted binary on all 18 supervisors at once**, converting a hazard currently dormant on 15 into one armed on 18.
 
-**One correction to the research, which the crosscheck caught and I re-verified:** the claim that the hotfix "has never once executed on this box" is now false. `grep -n dispatch ~/.cc-sessions/swap.log` returns two lines — `2026-08-14 18:40:25 dispatch claude-corp-custom-tools -> claude-corp (in 24s)` and `18:42:16 dispatch data-internal-quiet-summit -> claude-corp (in 79s)` — and both delays are observable downstream in the supervisor start times. The research's census ran seconds before the first of these appeared. The 2026-08-13 herd is still verbatim in the log (six `auto-home` lines across 21:00:03–21:00:05), and jitter is computed inside the **supervisor's own** process, so the 15 supervisors on the old inode still cannot jitter regardless of what is on disk.
+**One correction to the research, which the crosscheck caught and I re-verified:** the claim that the hotfix "has never once executed on this box" is now false. `grep -n dispatch ~/.cc-sessions/swap.log` returns two lines — `2026-08-14 18:40:25 dispatch claude-acme-project-d -> claude-acme (in 24s)` and `18:42:16 dispatch project-e-quiet-summit -> claude-acme (in 79s)` — and both delays are observable downstream in the supervisor start times. The research's census ran seconds before the first of these appeared. The 2026-08-13 herd is still verbatim in the log (six `auto-home` lines across 21:00:03–21:00:05), and jitter is computed inside the **supervisor's own** process, so the 15 supervisors on the old inode still cannot jitter regardless of what is on disk.
 
 ### Deploy procedure for Wave 1
 
@@ -1920,7 +1920,7 @@ Wave 4 must give the coordinator: `MailSummary.attempts`/`lastError` on `GET /ap
 | Live specimen | "`sweepPr` stamped `.prphase=no-commits` onto it at 06:59 on 2026-08-14… no longer invisible in one respect" | The `.prphase` inode's **birth is 2026-08-12 18:11:26 UTC — 83 s after workspace creation**, rewritten in place every sweep. It has been in `prStates` since minute two. Strike the "no longer" framing; the conclusion is unaffected. |
 | Live specimen | "ten registry rows" as a static signature | Ten, but only **eight** are frozen at spawn. `.prphase`/`.prcheckedat` mutate every few minutes, so "ten frozen rows" is not a detection signature. |
 | Live specimen | "a live tmux pane at an idle prompt" | Never advanced past first paint: the v2.1.228 splash and the MCP warning are still on screen after two days, and the statusline is missing `ctx`, diff counts and `limits`. Those absences detect it in one `capture-pane`. |
-| Live specimen | "on the `claude-dev0` lane" | Correct, but the operator sees the label **`team·d`**. Also: the id prefix no longer implies the wrapper (3 of 24 rows). |
+| Live specimen | "on the `claude-lab0` lane" | Correct, but the operator sees the label **`team·d`**. Also: the id prefix no longer implies the wrapper (3 of 24 rows). |
 | Live specimen | "no `.hold`" | **Zero holds fleet-wide** across all 24 rows. Absence of a hold on swift-harbor is not discriminating. |
 | C1 | implies "fully-registered workspace with no session" does not exist | It exists today from another cause — 3 rows are `started=1`, tmux dead, no unit. Adopt-and-enable is the **wrong** repair for them. |
 | §1.4 | "`ExecRes` gains `killed?`/`signal?`" | **No type called `ExecRes` exists.** The sites are `ExecResult` (`server/src/exec.ts:3`), `asExecResult` (`server/src/remote/runner.ts:83-90`, which discards unknown fields), and `ccd()` (`lifecycle.ts:14`). Make `ExecResult.killed` **optional**; `CcdResult.killed` may be required. Also note `realRunner` passes no `timeout`, so `killed` is structurally false in `local` mode. |
@@ -1975,7 +1975,7 @@ Everything below could not be settled read-only from this box. Each entry names 
 
 **10. The exact contrast figures for `.sess-held`/`.sess-unmeasured` on the selected slab.** My ~2.7:1 / ~2.9:1 are computed by hand from `tokens.css` with the WCAG formula, **not** emitted by the auditor — both rules are in its uncovered census. *Settle:* add an `INHERITED_GROUNDS` entry for `fleet.css .sess-line--active .sess-held` and re-run `node design/contrast-check.mjs`. **Blocks:** whether the adjacent fix is a measured bug or a suspected one.
 
-**11. Whether `try-restart` really leaves tmux sessions alive.** Inferred from `KillMode=process` plus strong historical evidence (a session created 2026-08-09 whose supervisor restarted 2026-08-12; the tmux server itself surviving its own unit's restart today), **not** from an observed restart. *Settle (MUTATING, human-only, one unit):* `systemctl --user restart claude-session@data-internal-still-prairie.service && sleep 10 && tmux has-session -t cc-data-internal-still-prairie && echo SURVIVED`. **Blocks:** signing off the deploy procedure's step 6 as safe rather than believed-safe.
+**11. Whether `try-restart` really leaves tmux sessions alive.** Inferred from `KillMode=process` plus strong historical evidence (a session created 2026-08-09 whose supervisor restarted 2026-08-12; the tmux server itself surviving its own unit's restart today), **not** from an observed restart. *Settle (MUTATING, human-only, one unit):* `systemctl --user restart claude-session@project-e-still-prairie.service && sleep 10 && tmux has-session -t cc-project-e-still-prairie && echo SURVIVED`. **Blocks:** signing off the deploy procedure's step 6 as safe rather than believed-safe.
 
 **12. Whether the jittered `_dispatch_swap` behaves correctly under a real herd.** It has now fired twice (18:40:25, 18:42:16), so the code path executes — but never against a simultaneous multi-session rollover. *Settle, in a FIXTURE HOME only, never the live `$HOME`:* drive `_dispatch_swap` under `makeCcdHarness` with `SWAP_JITTER=5` and several ids. **Blocks:** Open decision 5's confidence that the herd surface is closed.
 
@@ -1985,7 +1985,7 @@ Everything below could not be settled read-only from this box. Each entry names 
 
 **15. Why 3 units are active-but-not-enabled and 3 tmux sessions have no unit.** Deliberate (a manual `ccd start`, which does not supervise) or drift — unknown. *Settle:* `journalctl --user -u 'claude-session@*' --since '2026-08-05' | grep -i enable`. **Blocks:** whether the boot-persistence repair is a bug fix or a policy change.
 
-**16. Whether the splash's "· Claude API" means credit-billed.** `CLAUDE_CODE_OAUTH_TOKEN` is present in the orphan's environ (names only, no values read) and a sibling on the same wrapper shows subscription limit bars — which points at OAuth and makes "Claude API" a render artifact — but that is inference. *Settle:* `tmux capture-pane -t cc-claude-synapsium-platform -p -S - | grep -n 'with .* effort ·'` (a `-S -8000` attempt found the splash already scrolled out of retained history on all three `claude-dev0` siblings). **Blocks:** finalising ruling 4 and the F10 scope cut.
+**16. Whether the splash's "· Claude API" means credit-billed.** `CLAUDE_CODE_OAUTH_TOKEN` is present in the orphan's environ (names only, no values read) and a sibling on the same wrapper shows subscription limit bars — which points at OAuth and makes "Claude API" a render artifact — but that is inference. *Settle:* `tmux capture-pane -t cc-claude-project-k -p -S - | grep -n 'with .* effort ·'` (a `-S -8000` attempt found the splash already scrolled out of retained history on all three `claude-lab0` siblings). **Blocks:** finalising ruling 4 and the F10 scope cut.
 
 **17. The `ls` / `ws-audit` verb outputs the live-specimen section quotes.** Not re-verified — I did not first confirm those verbs are write-free, and `ws-gc`/`ensure` are forbidden outright. *Settle:* read `cmd_ls` and `cmd_ws_audit` for any `_reg_set` or redirect, then run them. **Blocks:** nothing structural; the quotes are illustrative.
 

@@ -12,8 +12,23 @@ export type RGBA = [number, number, number, number];
 export type Theme = Record<string, string>;
 
 export interface Themes {
+  /** `:root` — the default palette. */
   DARK: Theme;
+  /** `[data-theme='light']`, named because the token-pair contract and dozens
+   *  of registry comments speak of it by name. */
   LIGHT: Theme;
+  /** EVERY palette discovered in tokens.css, keyed by its `data-theme` value.
+   *  `DARK`/`LIGHT` above are conveniences onto the same data, not a different
+   *  source. */
+  byName: Record<string, Theme>;
+  /** `[label, palette]` for every palette the app can render, `:root` first —
+   *  and THIS is the set every measurement loops over (`audit` destructures
+   *  it as `THEMES`). Declared because it was missing: the declaration said
+   *  `byName` was "the set every measurement actually loops over", which was
+   *  the only description of a field the module does not expose that way, and
+   *  a consumer reading `all` got a type error for a field that has always
+   *  been there. */
+  all: ReadonlyArray<readonly [string, Theme]>;
 }
 
 export interface Rule {
@@ -90,6 +105,9 @@ export type OpacityEntry =
   | { pairs: readonly (readonly [string, string, readonly string[], number])[] };
 
 export const PWA_ROOT: string;
+/** The @ccrc/ui package root. tokens.css and the design system's own
+ *  stylesheets live there; `stylesheets()` walks both packages. */
+export const UI_ROOT: string;
 export const GROUNDS: Record<string, Ground>;
 export const SELF_GROUNDED_EXEMPT: Record<string, string>;
 export const INHERITED_GROUNDS: Record<string, Ground>;

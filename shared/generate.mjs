@@ -62,6 +62,7 @@
 //    deliberately does. Two independent locks on one door, on purpose.
 
 import { SUBAGENT_CLASSES } from './models.mjs';
+import { API_KEY_PROVIDERS } from './roster-json.mjs';
 
 /**
  * Backslash-escapes the characters that are still live inside a
@@ -117,13 +118,13 @@ function idArray(ids) {
  * THAT ORDERING IS THE WHOLE POINT OF EMITTING THIS FUNCTION, and it is worth
  * recording what it cost when the arms were hand-written in `ccd` instead.
  * Bash `case` takes the FIRST arm that matches, never the longest, so
- * `claude-corp-*` and `claude-dev0-*` had to be kept above the shorter
- * `claude-*` by hand. When `claude-dev0` arrived the hand-written comment
+ * `claude-acme-*` and `claude-lab0-*` had to be kept above the shorter
+ * `claude-*` by hand. When `claude-lab0` arrived the hand-written comment
  * beside those arms said "longest match wins" — which is false, and which
  * would have invited a maintainer to sort the arms alphabetically and make
- * `claude-dev0-*` dead code. The failure that follows is silent: every dev0
+ * `claude-lab0-*` dead code. The failure that follows is silent: every lab0
  * id resolves to `claude`, so `_home_for` reports the wrong home and
- * `_swap_target`'s "home recovered" branch permanently evacuates every dev0
+ * `_swap_target`'s "home recovered" branch permanently evacuates every lab0
  * session, with no error printed anywhere. Emitting the arms in
  * length-descending order makes that a property of this function rather than
  * of the care taken by the last person to touch a `case` statement — and it
@@ -167,16 +168,21 @@ function idArray(ids) {
  * for an account the roster says has no such telemetry (`gpt`) — the file
  * would be indistinguishable from a real measurement and would hand
  * `projectHome` the fake zero that `telemetry: 'none'` was added to prevent.
+ * An OpenRouter lane (`telemetry: 'openrouter'`) and a compatible lane (`'none'`)
+ * are outside it and outside `CCRC_ANTHROPIC_BACKEND` too (D-5521): neither
+ * reports Claude Code's rate limits, and neither is an Anthropic backend.
  * Emitted as an array beside `CCRC_HOME_ABLE` rather than as a fifth
  * function, because membership is the only question anyone asks of it.
  *
  * `CCRC_ANTHROPIC_BACKEND` and `CCRC_CODEX_BACKEND` are the two POSITIVE
  * backend memberships, and they are deliberately not each other's complement:
- * `telemetry` has a third value (`none`), so a lane can be in neither. ccd
- * reads the first for the four things that only work against Claude Code's own
- * protocol (`--remote-control`, spawn-effort injection, the cross-backend
- * sanitiser, the 429 exclusion writer) and the second for the one thing that
- * speaks Codex's usage vocabulary (`_codex_lane_status`, the `ccd ls` trailer).
+ * `telemetry` has four values, and a lane whose telemetry is `openrouter` or
+ * `none` is in neither (D-5521). ccd
+ * reads the first for the three things that only work against Claude Code's own
+ * protocol (`--remote-control`, the cross-backend sanitiser, the 429 exclusion
+ * writer), the second for the one thing that speaks Codex's usage vocabulary
+ * (`_codex_lane_status`, the `ccd ls` trailer), and either for spawn-effort
+ * injection, which a Codex lane takes too (D-8631).
  *
  * ── `_ccrc_pool` ──
  *
@@ -207,6 +213,39 @@ function idArray(ids) {
  * copies nobody can see. `hidden` is deliberately outside the digest and stays
  * there.
  *
+ * ── `_ccrc_fable_billing` and `_ccrc_continuity` ──
+ *
+ * The two account facts the Overlord's serviceability reads (H16, `shared/rosterFacts.ts`): `included` or `credits`
+ * for whether Fable bills usage credits, and the epoch seconds the operator recorded the continuity at. Emitted
+ * ALWAYS, even with no arms, exactly as `_ccrc_pool` is, so `declare -F _ccrc_fable_billing` is ccd's probe for "this
+ * box's projection knows the facts" and an accounts.sh from before them reads as unread, never as unset. Empty
+ * stdout at rc 0 is an account with no such fact AND an unknown id; `_is_valid_wrapper` gates ids first. Both
+ * values are a word from a closed set or a non-negative integer, so `echo` of them raw is safe.
+ *
+ * ── `_ccrc_secrets_file` ──
+ *
+ * The roster's `exec.secretsFile`, HOME-relative, for an account that declares
+ * one; nothing at rc 0 for one that does not and for an unknown id. Its one
+ * consumer is ccd's auth-dead marker (D-3524): the marker is a verdict about one
+ * credential and expires once that credential's FILE changes, so ccd must be
+ * able to name the file — and a guessed `<id>-oauth.env` would misname an
+ * api-key lane (`<id>-<provider>.env`). Emitted ALWAYS, like `_ccrc_pool`, so
+ * `declare -F _ccrc_secrets_file` is ccd's version probe: an accounts.sh from
+ * before this function means "ccd cannot name this credential", which keeps the
+ * old rule. Never read or opened by ccd — it stats the path, the file holds a
+ * secret.
+ *
+ * ── `_ccrc_auth_dir` ──
+ *
+ * A codex row's `exec.authDir`, HOME-relative; nothing at rc 0 for any other
+ * row and for an unknown id (codex-bridge Stage 1, Task 10). Its one consumer
+ * is history's sweep shim (`ccd/ccd-history-sweep`), which asks the auth
+ * library (`ccd/ccgpt-auth.py secret-files`) which files under that directory
+ * hold a secret and registers each as a redaction source. Emitted ALWAYS, an
+ * empty `case` for a roster with no codex row, so `declare -F _ccrc_auth_dir`
+ * is the shim's version probe: an accounts.sh from before this function names
+ * no authDir, and the sweep then registers none, as before.
+ *
  * @param {import('./roster.js').Roster} roster
  * @returns {string}
  */
@@ -222,6 +261,7 @@ export function generateAccountsSh(roster) {
   // the cross-backend transcript sanitiser, and the 429 exclusion writer — and
   // the moment a Codex lane becomes placeable those four start lying. Emit the
   // backend answer separately so each site can ask the question it means.
+  // (The spawn-time effort has since asked both: a Codex lane takes it too, D-8631.)
   const anthropicIds = roster.accounts.filter((a) => a.telemetry === 'anthropic').map((a) => a.id);
   // The same split, read from the other side. `ccd ls` tells a Codex lane's
   // usage story in Codex's own vocabulary — weekly caps, ccgpt-usage's JSON
@@ -231,6 +271,13 @@ export function generateAccountsSh(roster) {
   // value, `none`, and a lane on some future backend would answer yes). So the
   // positive membership is emitted, exactly as the Anthropic one is.
   const codexIds = roster.accounts.filter((a) => a.telemetry === 'codex').map((a) => a.id);
+  // WHICH LANES BILL PER USE (D-8098). The roster has no billing field, so this
+  // reads the provider: an API-key lane (openrouter, compatible) spends the key's
+  // credit on every session it takes. ccd keeps such a lane out of the default
+  // auto-swap rotation unless a pool names it. Both producers carry the field:
+  // `parseRoster` under `exec`, `rosterFromJson` flat beside `execKind`.
+  const payPerUseIds = roster.accounts
+    .filter((a) => API_KEY_PROVIDERS.has(a.exec ? a.exec.provider : a.provider)).map((a) => a.id);
 
   const cfgArms = roster.byIdLengthDesc
     .map((a) => `    ${a.id}) echo "$HOME/${dqEscape(a.configDirSuffix)}" ;;`)
@@ -280,6 +327,46 @@ export function generateAccountsSh(roster) {
     .map((a) => `    ${a.id}) echo ${a.pool} ;;`)
     .join('\n');
 
+  // One arm per account carrying each Overlord fact, filtered like `poolArms` and for the same reason: only a value a
+  // producer admitted is emitted, so an unvalidated value reached through a structural caller gets no arm. Both
+  // producers carry the same field names, so no shape split is needed here. The two words are spelled once more in
+  // this file only as the closed set an arm may echo; `roster-exec-parity.test.ts` pins them to `FABLE_BILLINGS`.
+  const billingArms = roster.byIdLengthDesc
+    .filter((a) => a.fableBilling === 'included' || a.fableBilling === 'credits')
+    .map((a) => `    ${a.id}) echo ${a.fableBilling} ;;`)
+    .join('\n');
+  const continuityArms = roster.byIdLengthDesc
+    .filter((a) => typeof a.continuity === 'object' && a.continuity !== null
+      && Number.isSafeInteger(a.continuity.recordedAt) && a.continuity.recordedAt >= 0)
+    .map((a) => `    ${a.id}) echo ${a.continuity.recordedAt} ;;`)
+    .join('\n');
+
+  // One arm per account that DECLARES `exec.secretsFile`, the same filter shape
+  // as `poolArms` and for the same reason (an unvalidated non-string gets no
+  // arm). TWO PRODUCERS, TWO SHAPES: `parseRoster` nests the field under `exec`,
+  // `rosterFromJson` (the deploy CLI's roster) flattens it beside `execKind` —
+  // read either, or the CLI and the TypeScript emit different files and
+  // `gen-accounts.test.ts`'s byte agreement reds. `printf`, not `echo`, and
+  // `dqEscape`d: `SECRETS_SAFE_RE` admits a leading `-`, and this function must
+  // not trust that the value was ever parsed.
+  const secretsArms = roster.byIdLengthDesc
+    .map((a) => [a, a.exec ? a.exec.secretsFile : a.secretsFile])
+    .filter(([, sf]) => typeof sf === 'string')
+    .map(([a, sf]) => `    ${a.id}) printf '%s\\n' "${dqEscape(sf)}" ;;`)
+    .join('\n');
+
+  // One arm per codex row, read from both producers' shapes exactly as
+  // `secretsArms` is: `parseRoster` nests `authDir` under `exec`,
+  // `rosterFromJson` flattens it beside `execKind` (its `codexTopology`,
+  // `shared/roster-json.mjs`). Only a codex row carries the field, and an
+  // unvalidated non-string gets no arm. `printf` and `dqEscape`d for the same
+  // reason as the secrets file: this function trusts no value it was handed.
+  const authDirArms = roster.byIdLengthDesc
+    .map((a) => [a, a.exec ? a.exec.authDir : a.authDir])
+    .filter(([, ad]) => typeof ad === 'string')
+    .map(([a, ad]) => `    ${a.id}) printf '%s\\n' "${dqEscape(ad)}" ;;`)
+    .join('\n');
+
   // `CCRC_SUBAGENT_CLASSES` — the two classes a session's `subagent` routing
   // field may name (routing spec 2026-09-14 §5.1), PROJECTED from
   // `shared/models.mjs`'s `SUBAGENT_CLASSES` so ccd validates against the one
@@ -293,6 +380,7 @@ CCRC_MEASURED=${idArray(measuredIds)}
 CCRC_ANTHROPIC_BACKEND=${idArray(anthropicIds)}
 CCRC_SUBAGENT_CLASSES=${idArray(SUBAGENT_CLASSES)}
 CCRC_CODEX_BACKEND=${idArray(codexIds)}
+CCRC_PAY_PER_USE=${idArray(payPerUseIds)}
 CCRC_UPSTREAM=${roster.upstreamId}
 _ccrc_cfg_dir() {
   case "$1" in
@@ -323,6 +411,26 @@ ${hueArms}
 _ccrc_pool() {
   case "$1" in
 ${poolArms}
+  esac
+}
+_ccrc_fable_billing() {
+  case "$1" in
+${billingArms}
+  esac
+}
+_ccrc_continuity() {
+  case "$1" in
+${continuityArms}
+  esac
+}
+_ccrc_secrets_file() {
+  case "$1" in
+${secretsArms}
+  esac
+}
+_ccrc_auth_dir() {
+  case "$1" in
+${authDirArms}
   esac
 }
 `;

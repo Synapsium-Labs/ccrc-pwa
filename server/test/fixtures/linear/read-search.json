@@ -1,0 +1,180 @@
+{
+  "name": "read-search",
+  "documentSource": "code",
+  "document": "query Search($filter: IssueFilter, $first: Int!, $after: String, $includeArchived: Boolean) { issues(filter: $filter, first: $first, after: $after, includeArchived: $includeArchived) { nodes { id identifier title priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } pageInfo { hasNextPage endCursor } } }",
+  "variables": {
+    "filter": {
+      "team": {
+        "id": {
+          "eq": "00000000-0001-4000-8000-000000000001"
+        }
+      },
+      "or": [
+        {
+          "title": {
+            "containsIgnoreCase": "FX capture"
+          }
+        },
+        {
+          "description": {
+            "containsIgnoreCase": "FX capture"
+          }
+        }
+      ]
+    },
+    "first": 25,
+    "after": null,
+    "includeArchived": false
+  },
+  "requestBody": "{\"query\":\"query Search($filter: IssueFilter, $first: Int!, $after: String, $includeArchived: Boolean) { issues(filter: $filter, first: $first, after: $after, includeArchived: $includeArchived) { nodes { id identifier title priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } pageInfo { hasNextPage endCursor } } }\",\"variables\":{\"filter\":{\"team\":{\"id\":{\"eq\":\"00000000-0001-4000-8000-000000000001\"}},\"or\":[{\"title\":{\"containsIgnoreCase\":\"FX capture\"}},{\"description\":{\"containsIgnoreCase\":\"FX capture\"}}]},\"first\":25,\"after\":null,\"includeArchived\":false}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631374930,
+  "receivedAtMs": 1793631375357,
+  "sentAt": "2026-11-02T14:56:14.930+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:15 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "807"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "12"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999988"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634975720"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634975720"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "issues": {
+        "nodes": [
+          {
+            "id": "00000000-0006-4000-8000-000000000002",
+            "identifier": "AAA-7",
+            "title": "FX capture child issue",
+            "priority": 0,
+            "createdAt": "2026-11-02T14:56:06.026Z",
+            "updatedAt": "2026-11-02T14:56:06.026Z",
+            "team": {
+              "key": "AAA"
+            },
+            "state": {
+              "name": "Backlog",
+              "type": "backlog"
+            },
+            "assignee": null,
+            "labels": {
+              "nodes": []
+            },
+            "project": null,
+            "parent": {
+              "identifier": "AAA-6"
+            }
+          },
+          {
+            "id": "00000000-0006-4000-8000-000000000001",
+            "identifier": "AAA-6",
+            "title": "FX capture parent issue",
+            "priority": 3,
+            "createdAt": "2026-11-02T14:56:01.781Z",
+            "updatedAt": "2026-11-02T14:56:01.781Z",
+            "team": {
+              "key": "AAA"
+            },
+            "state": {
+              "name": "Todo",
+              "type": "unstarted"
+            },
+            "assignee": {
+              "name": "User A"
+            },
+            "labels": {
+              "nodes": [
+                {
+                  "name": "Bug"
+                }
+              ]
+            },
+            "project": null,
+            "parent": null
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "00000000-0006-4000-8000-000000000001"
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"issues\":{\"nodes\":[{\"id\":\"00000000-0006-4000-8000-000000000002\",\"identifier\":\"AAA-7\",\"title\":\"FX capture child issue\",\"priority\":0,\"createdAt\":\"2026-11-02T14:56:06.026Z\",\"updatedAt\":\"2026-11-02T14:56:06.026Z\",\"team\":{\"key\":\"AAA\"},\"state\":{\"name\":\"Backlog\",\"type\":\"backlog\"},\"assignee\":null,\"labels\":{\"nodes\":[]},\"project\":null,\"parent\":{\"identifier\":\"AAA-6\"}},{\"id\":\"00000000-0006-4000-8000-000000000001\",\"identifier\":\"AAA-6\",\"title\":\"FX capture parent issue\",\"priority\":3,\"createdAt\":\"2026-11-02T14:56:01.781Z\",\"updatedAt\":\"2026-11-02T14:56:01.781Z\",\"team\":{\"key\":\"AAA\"},\"state\":{\"name\":\"Todo\",\"type\":\"unstarted\"},\"assignee\":{\"name\":\"User A\"},\"labels\":{\"nodes\":[{\"name\":\"Bug\"}]},\"project\":null,\"parent\":null}],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":\"00000000-0006-4000-8000-000000000001\"}}}}\n"
+}

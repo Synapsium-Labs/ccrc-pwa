@@ -77,7 +77,7 @@ vi.mock('@xterm/addon-fit', () => {
 
 // Imported AFTER the mocks above are declared; `vi.mock` is hoisted, so the module
 // under test binds to the fakes.
-const { defaultMakeHistoryTerm } = await import('../src/session/TerminalDrawer');
+const { defaultMakeHistoryTerm } = await import('../src/session/terminalFactory');
 
 const lastTerm = (): FakeTerm => {
   const all = (globalThis as { __fakeTerms?: FakeTerm[] }).__fakeTerms ?? [];

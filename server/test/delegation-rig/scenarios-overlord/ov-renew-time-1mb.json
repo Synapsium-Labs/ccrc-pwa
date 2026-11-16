@@ -1,0 +1,311 @@
+{
+  "scenario": "ov-renew-time-1mb",
+  "covers": [
+    "W0-06"
+  ],
+  "mainMarker": "You are (an interactive agent|an agent working with the user|Claude Code)",
+  "requests": false,
+  "timing": true,
+  "capS": 3600,
+  "launch": {
+    "env": {
+      "RIG_EMIT_LOG": "@RIG_ROOT@/logs/emit.ndjson"
+    },
+    "settings": {
+      "hooks": {
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "type": "command",
+                "command": "node @RIG_STUBS@/emit-context.mjs --event SessionStart --chars 100 --tag-source"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "steps": [
+    {
+      "waitReady": 60
+    },
+    {
+      "type": "w0 g1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "g1"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "type": "w0 g2"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "g2"
+      ],
+      "timeoutS": 120
+    },
+    {
+      "sleep": 5
+    },
+    {
+      "sessionsSnap": "grown"
+    },
+    {
+      "relaunch": true
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": true
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": true
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": true
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": true
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": true
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": true
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": true
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": true
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": true
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": {
+        "mode": "fresh"
+      }
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": {
+        "mode": "fresh"
+      }
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": {
+        "mode": "fresh"
+      }
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": {
+        "mode": "fresh"
+      }
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": {
+        "mode": "fresh"
+      }
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": {
+        "mode": "fresh"
+      }
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": {
+        "mode": "fresh"
+      }
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": {
+        "mode": "fresh"
+      }
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": {
+        "mode": "fresh"
+      }
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "relaunch": {
+        "mode": "fresh"
+      }
+    },
+    {
+      "waitReady": 180
+    },
+    {
+      "sleep": 3
+    },
+    {
+      "sessionsSnap": "end"
+    },
+    {
+      "type": "/exit"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "settleS": 3,
+  "entries": [
+    {
+      "label": "g1",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 g1$"
+      },
+      "text": "W0-GROW-1 ",
+      "pad": 500000,
+      "chunk_chars": 65536,
+      "chunk_ms": 0
+    },
+    {
+      "label": "g2",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 g2$"
+      },
+      "text": "W0-GROW-2 ",
+      "pad": 500000,
+      "chunk_chars": 65536,
+      "chunk_ms": 0
+    }
+  ],
+  "default": {
+    "text": "W0-WAIT",
+    "repeat": true
+  }
+}

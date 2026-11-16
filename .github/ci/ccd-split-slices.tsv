@@ -1,0 +1,25 @@
+# The ccd file split's slice table (docs/superpowers/plans/2026-11-06-ccd-file-split.md, Task 6; D-8048, D-8634).
+# One row per library a slice creates: <move-order><TAB><library><TAB><context><TAB><name-regex>.
+# A function of ccd/ccd belongs to the FIRST row in file order whose context is its row's in ccd/contexts.tsv and whose
+# regex (Python `re.search`) matches its name, so each context's catch-all row (regex `.`) sits after that context's
+# specific rows, whatever its move order. K rows, `die`, `_roster_fp_to` and `_ccd_lib_load` belong to no slice: they
+# stay in the spine, and `.github/ci/ccd-split.py` refuses a row that names K. C10 has no row (Task 7).
+1	update	C7	^cmd_version$
+2	coordination	C5	.
+3	accounts-carry	C1	^(_carry|cmd_carry)
+4	accounts-lifecycle	C1	^_lc_|hibernate
+5	docs	C9	.
+6	conversation-transcript	C3	^(_ci_|_compact|_transcript|_auto_compact|_pane_tail)
+8	mutation-spawn	C2	^(_spawn|cmd_start$|cmd_ensure$|cmd_supervise$|cmd_enable$)
+7	mutation	C2	.
+9	conversation	C3	.
+10	workspace-pr	C4	^(_pr_|cmd_pr_|_gh)
+11	workspace-create	C4	^cmd_ws_(add|rename|rm)$
+12	accounts-swap	C1	^(_swap|cmd_swap|_auto_swap|_rescue|_strand|_crosspool|_limit|_tick)
+13	accounts	C1	.
+19	workspace-reclaim	C4	reclaim
+14	workspace-archive	C4	archive|restore|attic|expire
+15	workspace-gc	C4	_gc|gc_|audit|leaf
+16	workspace-reap	C4	reap
+18	workspace-collect	C4	collect|^_tmp_
+17	workspace	C4	.

@@ -1,0 +1,561 @@
+// useUpdatesView — the ONE poll of GET /api/updates (design 2026-09-20 §13;
+// W3 Task 5) — and the two pure readers every update surface shares:
+//
+//  • asUpdatesView: a malformed answer is a FAILURE, never an empty fleet. A
+//    stub `{}` read as "no nodes, no releases" would render "nothing to update"
+//    over a fleet the screen simply failed to read.
+//  • pendingTag: THE arrow predicate Tasks 9, 11 and 12 read. No arrow while a
+//    node is unmeasured or has no resolved channel (spec §18 "unreachable is
+//    not current"), and tags compare as semver — `v0.0.10` is newer than
+//    `v0.0.9`, which string order gets backwards.
+//
+// The hook is `useFleetHealth`'s shape (newest issued request wins, `pollMs <=
+// 0` is the injected mode) plus two things that hook does not have: it keeps
+// the last GOOD view across a failed poll while reporting the failure beside
+// it, and it re-polls when the page becomes visible.
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, renderHook } from '@testing-library/react';
+import type { NodeWire, UpdatesView } from '../../shared/api';
+import { ApiError, api } from '../src/lib/api';
+import { UPDATES_POLL_MS, useUpdatesView } from '../src/fleet/useUpdatesView';
+import { asUpdatesView, nodeVersion, pendingTag } from '../src/fleet/updatesRead';
+
+const setVisibility = (v: DocumentVisibilityState): void => {
+  Object.defineProperty(document, 'visibilityState', { value: v, configurable: true });
+};
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  // The own property `setVisibility` planted shadows jsdom's getter; deleting
+  // it restores the prototype's answer for the next file.
+  Reflect.deleteProperty(document, 'visibilityState');
+});
+
+const node = (over: Partial<NodeWire> = {}): NodeWire => ({
+  nodeId: '0f0e0d0c-0b0a-4908-8706-050403020100', role: 'fleet', label: 'fleet', os: 'linux',
+  current: { sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-09-22T00:00:00Z', dirty: false, version: 'v0.0.9' },
+  stampRead: 'ok', installState: 'complete', provenance: 'verified',
+  caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
+  measuredAt: 1_000, reachable: true, unreachableSince: null,
+  channel: 'stable', desiredTag: 'v0.0.9', resolveDetail: null, request: null, report: null,
+  update: { state: 'idle', target: null, startedAt: null, detail: null },
+  ...over,
+});
+
+const view = (over: Partial<UpdatesView> = {}): UpdatesView => ({
+  catalogue: { lastOkAt: 1_000, lastError: null },
+  releases: [],
+  nodes: [node()],
+  intent: [],
+  ...over,
+});
+
+/** One poll interval, flushed. */
+const tick = async (): Promise<void> => {
+  await act(async () => { await vi.advanceTimersByTimeAsync(UPDATES_POLL_MS); });
+};
+
+describe('asUpdatesView — a malformed answer is a failure, never an empty fleet', () => {
+  it('passes a well-formed view through as the same object', () => {
+    const v = view();
+    expect(asUpdatesView(v)).toBe(v);
+    const neverReached = view({ catalogue: { lastOkAt: null, lastError: { at: 5, reason: 'no-egress' } } });
+    expect(asUpdatesView(neverReached)).toBe(neverReached);
+  });
+
+  it('refuses a non-object and every missing or non-array list', () => {
+    for (const raw of [null, undefined, 'x', 7, [], {}]) {
+      expect(asUpdatesView(raw), JSON.stringify(raw)).toBeNull();
+    }
+    const { releases: _r, ...noReleases } = view();
+    void _r;
+    expect(asUpdatesView(noReleases), 'releases absent').toBeNull();
+    expect(asUpdatesView({ ...view(), nodes: {} }), 'nodes: {}').toBeNull();
+    expect(asUpdatesView({ ...view(), intent: null }), 'intent: null').toBeNull();
+  });
+
+  it('refuses a catalogue that is not the two-field line — `lastOkAt` absent is not "never checked"', () => {
+    // The half of "unreachable is not current" this guard owns: the settings
+    // line and the banner decide on `lastOkAt !== null`, and `undefined !==
+    // null` is true — so an object-only check would let `{}` read as checked.
+    expect(asUpdatesView({ ...view(), catalogue: null }), 'catalogue: null').toBeNull();
+    expect(asUpdatesView({ ...view(), catalogue: [] }), 'catalogue: []').toBeNull();
+    expect(asUpdatesView({ ...view(), catalogue: {} }), 'catalogue: {}').toBeNull();
+    expect(asUpdatesView({ ...view(), catalogue: { lastError: null } }), 'lastOkAt absent').toBeNull();
+    expect(asUpdatesView({ ...view(), catalogue: { lastOkAt: '5', lastError: null } }), 'a string lastOkAt').toBeNull();
+    expect(asUpdatesView({ ...view(), catalogue: { lastOkAt: Number.NaN, lastError: null } }), 'NaN').toBeNull();
+    expect(asUpdatesView({ ...view(), catalogue: { lastOkAt: null, lastError: { at: 5 } } }), 'no reason').toBeNull();
+    expect(asUpdatesView({ ...view(), catalogue: { lastOkAt: null } }), 'lastError absent').toBeNull();
+  });
+});
+
+describe('asUpdatesView — a non-conforming ELEMENT is dropped, never the whole answer (fix round 1, F11/item 6)', () => {
+  it('drops a null node and a node whose current has no string sha, keeps the rest, and warns exactly once', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const good = node();
+    const got = asUpdatesView({
+      ...view(),
+      nodes: [null, { ...node(), current: { ...good.current, sha: undefined } }, good],
+    });
+    expect(got).not.toBeNull();
+    expect(got!.nodes).toEqual([good]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('drops a node whose label is not a string — SettingsScreen renders {n.label} as a React child (fix round 2, item 2)', () => {
+    // An object label reaching NodeItem's `{n.label}` blanks /settings with
+    // React's own "Objects are not valid as a React child" — the SAME class
+    // F11 exists to refuse, just discovered on a different dereference.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const good = node();
+    const got = asUpdatesView({ ...view(), nodes: [{ ...node(), label: { bad: true } }, good] });
+    expect(got).not.toBeNull();
+    expect(got!.nodes).toEqual([good]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('drops a node whose reachable is not a boolean, INCLUDING the key entirely absent — REQUIRED, never tolerated absent (W5 review 161, F-B; corrects fix round 2 item 5)', () => {
+    // `statedOf`/`pendingTag` read `reachable === true`; `reachabilityLine`
+    // reads a confirmed `reachable === false`. `NodeWire.reachable` is a
+    // REQUIRED boolean on the wire (shared/api.ts) — an element silent about
+    // it is not "unknown, treat like absent" (fix round 2 item 5's own
+    // reasoning, which this corrects): it is neither of the two spellings
+    // those readers recognise, exactly as a stray truthy non-boolean
+    // (e.g. the string "true") is not, and must not silently vouch for a
+    // version or an arrow it never measured.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const good = node();
+    const { reachable: _r, ...noReachableKey } = good;
+    void _r;
+    const got = asUpdatesView({
+      ...view(),
+      nodes: [{ ...node(), reachable: 'true' }, noReachableKey as NodeWire, good],
+    });
+    expect(got).not.toBeNull();
+    // Both the malformed one AND the one with the key entirely absent are
+    // dropped now; only the fully-formed node is kept.
+    expect(got!.nodes).toEqual([good]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('drops a node whose role is neither a string nor null, and one whose measuredAt is neither a number nor null (W5 review 161, F-K)', () => {
+    // `versionSides` (`shared/update-summary.ts`) dereferences `.role` with
+    // `===`; `pendingTag`/`nodeVersion` dereference `.measuredAt`. Neither
+    // guard has ever been pinned on its own — this proves each independently:
+    // deleting either clause lets its own malformed element through while the
+    // other stays caught.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const good = node();
+    const got = asUpdatesView({
+      ...view(),
+      nodes: [{ ...node(), role: 7 }, { ...node(), measuredAt: 'never' }, good],
+    });
+    expect(got).not.toBeNull();
+    expect(got!.nodes).toEqual([good]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('drops a release with no string tag and an intent row with no string scope or setAt — element-level, not whole-answer', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const goodRelease = {
+      tag: 'v0.0.9', version: 'v0.0.9', channel: 'stable', publishedAt: 1, commitSha: null,
+      bundleListed: false, yanked: false, refused: [], notes: null,
+    };
+    const goodIntent = {
+      scope: '*', channel: null, pinnedTag: null, auto: 'off', notify: 'channel', setAt: 1, setBy: 'x',
+    };
+    const got = asUpdatesView({
+      ...view(),
+      releases: [{ ...goodRelease, tag: 42 }, goodRelease],
+      intent: [{ ...goodIntent, setAt: '1' }, null, goodIntent],
+    });
+    expect(got).not.toBeNull();
+    expect(got!.releases).toEqual([goodRelease]);
+    expect(got!.intent).toEqual([goodIntent]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('is byte-identical (same reference) when every element conforms — no needless allocation on the ordinary poll', () => {
+    const v = view();
+    expect(asUpdatesView(v)).toBe(v);
+  });
+});
+
+describe('nodeVersion and pendingTag — the one arrow predicate', () => {
+  it('nodeVersion is the stamp\'s tag, or null when there is none to compare', () => {
+    expect(nodeVersion(node())).toBe('v0.0.9');
+    expect(nodeVersion(node({ current: null })), 'no stamp').toBeNull();
+    const { version: _v, ...untagged } = node().current!;
+    void _v;
+    expect(nodeVersion(node({ current: untagged })), 'an untagged build').toBeNull();
+    expect(nodeVersion(node({ current: { ...untagged, version: 'dev' } })), 'not a tag').toBeNull();
+  });
+
+  it('points at a newer desired tag — in semver order, across the v0.0.9 → v0.0.10 boundary', () => {
+    expect('v0.0.10' < 'v0.0.9', 'the control: string order gets this pair backwards').toBe(true);
+    expect(pendingTag(node({ desiredTag: 'v0.0.10' }))).toBe('v0.0.10');
+  });
+
+  it('draws no arrow while the node is unmeasured (spec §18 "unreachable is not current")', () => {
+    expect(pendingTag(node({ desiredTag: 'v0.0.10', measuredAt: null }))).toBeNull();
+    const absent = { ...node({ desiredTag: 'v0.0.10' }), measuredAt: undefined } as unknown as NodeWire;
+    expect(pendingTag(absent), 'measuredAt absent is unmeasured, not measured').toBeNull();
+  });
+
+  it('draws no arrow while the node has no resolved channel', () => {
+    expect(pendingTag(node({ desiredTag: 'v0.0.10', channel: null }))).toBeNull();
+    const absent = { ...node({ desiredTag: 'v0.0.10' }), channel: undefined } as unknown as NodeWire;
+    expect(pendingTag(absent), 'channel absent').toBeNull();
+  });
+
+  it('draws no arrow while the node is UNREACHABLE (fix round 2, item 4; D-3316: treated like an unread stamp)', () => {
+    expect(pendingTag(node({ desiredTag: 'v0.0.10', reachable: false }))).toBeNull();
+    const absent = { ...node({ desiredTag: 'v0.0.10' }), reachable: undefined } as unknown as NodeWire;
+    expect(pendingTag(absent), 'reachable absent is not measured-reachable').toBeNull();
+    // The control: reachable true (unchanged from every other case here).
+    expect(pendingTag(node({ desiredTag: 'v0.0.10', reachable: true }))).toBe('v0.0.10');
+  });
+
+  it('draws no arrow for a missing, non-tag, equal or older desired tag', () => {
+    expect(pendingTag(node({ desiredTag: null })), 'no desired tag').toBeNull();
+    expect(pendingTag(node({ desiredTag: 'latest' })), 'not a tag').toBeNull();
+    expect(pendingTag(node({ desiredTag: 'v0.0.9' })), 'equal').toBeNull();
+    expect(pendingTag(node({ desiredTag: 'v0.0.8' })), 'older — a rollback is not an update arrow').toBeNull();
+  });
+
+  it('points at the desired tag when the node runs nothing it can compare', () => {
+    const { version: _v, ...untagged } = node().current!;
+    void _v;
+    expect(pendingTag(node({ current: untagged })), 'unversioned').toBe('v0.0.9');
+    expect(pendingTag(node({ current: null })), 'no stamp').toBe('v0.0.9');
+    expect(pendingTag(node({ current: { ...untagged, version: 'dev' } })), 'a non-tag version').toBe('v0.0.9');
+  });
+});
+
+describe('useUpdatesView — the one poll of /api/updates', () => {
+  it('polls at mount and then every UPDATES_POLL_MS (60 s)', async () => {
+    expect(UPDATES_POLL_MS).toBe(60_000);
+    vi.useFakeTimers();
+    const spy = vi.spyOn(api, 'updates').mockResolvedValue(view());
+    renderHook(() => useUpdatesView());
+    expect(spy).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(UPDATES_POLL_MS - 1); });
+    expect(spy).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts with nothing, then carries the first good answer', async () => {
+    const good = view();
+    vi.spyOn(api, 'updates').mockResolvedValue(good);
+    const { result } = renderHook(() => useUpdatesView());
+    expect(result.current.view).toBeNull();
+    expect(result.current.failure).toBeNull();
+    await act(async () => {});
+    expect(result.current.view).toBe(good);
+    expect(result.current.failure).toBeNull();
+  });
+
+  it('keeps the newest issued poll authoritative when an older request resolves last', async () => {
+    vi.useFakeTimers();
+    const first = Promise.withResolvers<UpdatesView>();
+    const newer = view({ catalogue: { lastOkAt: 2_000, lastError: null } });
+    vi.spyOn(api, 'updates').mockReturnValueOnce(first.promise).mockResolvedValueOnce(newer);
+
+    const { result } = renderHook(() => useUpdatesView());
+    await tick();
+    expect(result.current.view).toBe(newer);
+
+    await act(async () => { first.resolve(view()); await first.promise; });
+    expect(result.current.view).toBe(newer);
+    expect(result.current.failure).toBeNull();
+  });
+
+  it('keeps it authoritative when an older request REJECTS last — a stale failure is not reported', async () => {
+    vi.useFakeTimers();
+    const first = Promise.withResolvers<UpdatesView>();
+    const newer = view();
+    vi.spyOn(api, 'updates').mockReturnValueOnce(first.promise).mockResolvedValueOnce(newer);
+
+    const { result } = renderHook(() => useUpdatesView());
+    await tick();
+    await act(async () => { first.reject(new TypeError('Failed to fetch')); await first.promise.catch(() => {}); });
+    expect(result.current.view).toBe(newer);
+    expect(result.current.failure).toBeNull();
+  });
+
+  it('reads a 501 not-configured as not-configured, and any other failure as failed', async () => {
+    vi.spyOn(api, 'updates').mockRejectedValue(new ApiError(501, { ok: false, error: 'not-configured' }));
+    const unconfigured = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    expect(unconfigured.result.current).toMatchObject({ view: null, failure: 'not-configured' });
+    unconfigured.unmount();
+
+    // Two conditions the screen renders differently must not share one value:
+    // a 501 carrying another word is not "this box has no control plane".
+    vi.spyOn(api, 'updates').mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
+    const other501 = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    expect(other501.result.current).toMatchObject({ view: null, failure: 'failed' });
+    other501.unmount();
+
+    vi.spyOn(api, 'updates').mockRejectedValue(new ApiError(404, 'Not Found'));
+    const older = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    expect(older.result.current).toMatchObject({ view: null, failure: 'failed' });
+  });
+
+  it('keeps the last good view across a failed, a malformed and a 501 poll, and clears the failure on the next good one', async () => {
+    vi.useFakeTimers();
+    const good = view();
+    const fresh = view({ catalogue: { lastOkAt: 9_000, lastError: null } });
+    vi.spyOn(api, 'updates')
+      .mockResolvedValueOnce(good)
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce({ ...good, nodes: {} } as unknown as UpdatesView)
+      .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }))
+      .mockResolvedValueOnce(fresh);
+
+    const { result } = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    expect(result.current.view).toBe(good);
+    expect(result.current.failure).toBeNull();
+
+    await tick();
+    expect(result.current.view, 'a failed poll never clears the view').toBe(good);
+    expect(result.current.failure).toBe('failed');
+
+    await tick();
+    expect(result.current.view, 'a malformed answer is a failure, not an empty fleet').toBe(good);
+    expect(result.current.failure).toBe('failed');
+
+    await tick();
+    expect(result.current.view).toBe(good);
+    expect(result.current.failure).toBe('not-configured');
+
+    await tick();
+    expect(result.current.view).toBe(fresh);
+    expect(result.current.failure).toBeNull();
+  });
+
+  it('pollMs <= 0 is the injected mode — no request, no interval, no listener, and reload does nothing', async () => {
+    vi.useFakeTimers();
+    const spy = vi.spyOn(api, 'updates').mockResolvedValue(view());
+    for (const pollMs of [0, -1]) {
+      const { result, unmount } = renderHook(() => useUpdatesView(pollMs));
+      setVisibility('visible');
+      act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(UPDATES_POLL_MS * 3); });
+      act(() => { result.current.reload(); });
+      expect(spy, `pollMs ${pollMs}`).not.toHaveBeenCalled();
+      expect(result.current.view).toBeNull();
+      expect(result.current.failure).toBeNull();
+      unmount();
+    }
+  });
+
+  it('re-polls once when the page becomes visible, and not when it is hidden', async () => {
+    const spy = vi.spyOn(api, 'updates').mockResolvedValue(view());
+    renderHook(() => useUpdatesView());
+    await act(async () => {});
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    setVisibility('hidden');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    setVisibility('visible');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('reload polls once now, lands its answer, and keeps one identity across renders', async () => {
+    const fresh = view({ catalogue: { lastOkAt: 3_000, lastError: null } });
+    const spy = vi.spyOn(api, 'updates').mockResolvedValueOnce(view()).mockResolvedValueOnce(fresh);
+    const { result, rerender } = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    const reload = result.current.reload;
+
+    await act(async () => { result.current.reload(); });
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(result.current.view).toBe(fresh);
+
+    rerender();
+    expect(result.current.reload).toBe(reload);
+  });
+
+  it('stops the interval and the visibility listener on unmount', async () => {
+    vi.useFakeTimers();
+    const spy = vi.spyOn(api, 'updates').mockResolvedValue(view());
+    const { unmount } = renderHook(() => useUpdatesView());
+    expect(spy).toHaveBeenCalledTimes(1);
+    unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(UPDATES_POLL_MS * 2); });
+    setVisibility('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// D-4273: the poll's issue-number signal. `seq` is the issue number of the read that set `view`, and `reload()` answers
+// the number it issued, so a caller can tell a read issued after some event from one issued before it.
+describe('useUpdatesView — the issue-number signal (D-4273)', () => {
+  it('seq is 0 before any read, and a good read sets it to that read\'s issue number (the mount read is 1)', async () => {
+    const first = Promise.withResolvers<UpdatesView>();
+    vi.spyOn(api, 'updates').mockReturnValueOnce(first.promise);
+    const { result } = renderHook(() => useUpdatesView());
+    expect(result.current.seq).toBe(0);
+    await act(async () => {});
+    expect(result.current.seq, 'issued, not yet answered').toBe(0);
+    await act(async () => { first.resolve(view()); await first.promise; });
+    expect(result.current.seq).toBe(1);
+  });
+
+  it('reload() answers the number it issued (the first after mount is 2), and its good answer sets seq to it', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view());
+    const { result } = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    expect(result.current.seq).toBe(1);
+    let issued = -1;
+    await act(async () => { issued = result.current.reload(); });
+    expect(issued).toBe(2);
+    expect(result.current.seq).toBe(2);
+    await act(async () => { issued = result.current.reload(); });
+    expect(issued).toBe(3);
+    expect(result.current.seq).toBe(3);
+  });
+
+  it('a failed, a malformed and a 501 read each leave seq (and the view) where it was', async () => {
+    const good = view();
+    vi.spyOn(api, 'updates')
+      .mockResolvedValueOnce(good)
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce({ ...good, nodes: {} } as unknown as UpdatesView)
+      .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }));
+    const { result } = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    expect(result.current.seq).toBe(1);
+    await act(async () => { result.current.reload(); });
+    expect(result.current).toMatchObject({ view: good, failure: 'failed', seq: 1 });
+    await act(async () => { result.current.reload(); });
+    expect(result.current).toMatchObject({ view: good, failure: 'failed', seq: 1 });
+    await act(async () => { result.current.reload(); });
+    expect(result.current).toMatchObject({ view: good, failure: 'not-configured', seq: 1 });
+  });
+
+  it('an equal answer keeps view (===) and still advances seq', async () => {
+    // C8 (D-6440): a NEW object on every read, structurally equal, as a JSON body is. The view keeps its reference so
+    // its readers do not re-render; `seq` still takes each good read's number, which HaltBanner reads (D-4273).
+    vi.spyOn(api, 'updates').mockImplementation(async () => view());
+    const { result } = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    const first = result.current.view;
+    expect(first).not.toBeNull();
+    expect(result.current.seq).toBe(1);
+    await act(async () => { result.current.reload(); });
+    expect(result.current.view).toBe(first);
+    expect(result.current.seq).toBe(2);
+    // A changed answer still replaces it.
+    vi.spyOn(api, 'updates').mockImplementation(async () => view({ catalogue: { lastOkAt: 9_000, lastError: null } }));
+    await act(async () => { result.current.reload(); });
+    expect(result.current.view).not.toBe(first);
+    expect(result.current.seq).toBe(3);
+  });
+
+  it('seq stays 0 while no read has ever been good: a failed first read does not advance it', async () => {
+    vi.spyOn(api, 'updates').mockRejectedValue(new TypeError('Failed to fetch'));
+    const { result } = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    expect(result.current).toMatchObject({ view: null, failure: 'failed', seq: 0 });
+  });
+
+  it('an older read resolving after a newer one was issued does not move seq (newest-issued guard)', async () => {
+    const older = Promise.withResolvers<UpdatesView>();
+    const newer = Promise.withResolvers<UpdatesView>();
+    vi.spyOn(api, 'updates').mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    const { result } = renderHook(() => useUpdatesView());
+    let issued = -1;
+    act(() => { issued = result.current.reload(); });
+    expect(issued).toBe(2);
+    const newest = view({ catalogue: { lastOkAt: 2_000, lastError: null } });
+    await act(async () => { newer.resolve(newest); await newer.promise; });
+    expect(result.current).toMatchObject({ view: newest, seq: 2 });
+    await act(async () => { older.resolve(view()); await older.promise; });
+    expect(result.current.view).toBe(newest);
+    expect(result.current.seq).toBe(2);
+  });
+
+  it('numbers stay monotonic across a pollMs change: the counter is not reset by the effect', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view());
+    const { result, rerender } = renderHook(({ ms }) => useUpdatesView(ms), { initialProps: { ms: UPDATES_POLL_MS } });
+    await act(async () => {});
+    expect(result.current.seq).toBe(1);
+    rerender({ ms: UPDATES_POLL_MS + 1 });
+    await act(async () => {});
+    expect(result.current.seq, 'the re-run effect issues its own mount read: number 2, not 1 again').toBe(2);
+  });
+
+  it('pollMs <= 0 (the injected mode): reload() answers 0, seq stays 0, nothing is requested', async () => {
+    const spy = vi.spyOn(api, 'updates').mockResolvedValue(view());
+    for (const pollMs of [0, -1]) {
+      const { result, unmount } = renderHook(() => useUpdatesView(pollMs));
+      let issued = -1;
+      await act(async () => { issued = result.current.reload(); });
+      expect(issued, `pollMs ${pollMs}`).toBe(0);
+      expect(result.current.seq).toBe(0);
+      expect(spy).not.toHaveBeenCalled();
+      unmount();
+    }
+  });
+
+  it('after unmount a stale reload() answers 0 and issues nothing', async () => {
+    const spy = vi.spyOn(api, 'updates').mockResolvedValue(view());
+    const { result, unmount } = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    const reload = result.current.reload;
+    unmount();
+    expect(reload()).toBe(0);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Task 9 (D-3307): a stamp the sweep could not READ is
+// an unmeasured current, not an unversioned one — W2's toNodeWire sets
+// `current` to null for it, and nodeVersion alone cannot tell the two apart.
+describe('pendingTag — a stamp that was not READ draws no arrow', () => {
+  it('reads unreadable, malformed, absent and a missing stampRead as "no arrow", never as unversioned', () => {
+    for (const stampRead of ['unreadable', 'malformed', 'absent'] as const) {
+      expect(pendingTag(node({ stampRead, current: null, desiredTag: 'v0.0.10' })), stampRead).toBeNull();
+    }
+    const missing = { ...node({ current: null, desiredTag: 'v0.0.10' }), stampRead: undefined } as unknown as NodeWire;
+    expect(pendingTag(missing), 'stampRead absent from the element').toBeNull();
+  });
+
+  it('the control: an unversioned stamp that WAS read still points at its desired tag', () => {
+    const { version: _v, ...untagged } = node().current!;
+    void _v;
+    expect(pendingTag(node({ current: untagged, desiredTag: 'v0.0.10' }))).toBe('v0.0.10');
+  });
+});
+
+// Task 9 (D-3309): a macOS node is not centrally managed
+// (decision 17), and W2's resolver resolves it like any other, so its desired
+// tag can be set. The rule lives HERE, in the one arrow predicate, so the
+// inventory row, the update banner and BuildLine cannot disagree about it.
+describe('pendingTag — a macOS node draws no arrow (not centrally managed, decision 17)', () => {
+  it('answers null for os darwin with a newer desired tag, a resolved channel and a read stamp', () => {
+    expect(pendingTag(node({ os: 'darwin', desiredTag: 'v0.0.10' }))).toBeNull();
+  });
+
+  it('the control: the same node on linux, and on an os the caps file did not name, still points up', () => {
+    expect(pendingTag(node({ desiredTag: 'v0.0.10' }))).toBe('v0.0.10');
+    expect(pendingTag(node({ os: 'unknown', desiredTag: 'v0.0.10' }))).toBe('v0.0.10');
+  });
+});

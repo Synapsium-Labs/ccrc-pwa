@@ -1,0 +1,425 @@
+/* The Waiting on you list and the item view (desktop-polish PL5a, D-7712; the prototype's views 1 and 3). Shapes come from
+   the prototype; every colour is a token of tokens.css, never a prototype literal.
+
+   GROUNDS. The screen roots paint the page's own ground and ink (`--bg-page` under `--ink-primary`, as the digest screen
+   does), and each row, card and pill states its own ground beside its ink, so the contrast audit measures every pair in
+   every palette through the stylesheet: nothing here is in the uncovered census. A pill carries its meaning in WORDS
+   (Blocking, Checking…, Came back), so no state is read out of colour. A programme's hue paints only non-text edges (the
+   left rule, the swatch) and, in the item view's programme band, the hue on its own tint: the pair the lane hues are
+   already gated on (`.pg-kicker`'s). Every width from a 360 px phone to a wide desktop holds with no horizontal scroll: the
+   grids' text tracks are `minmax(0, 1fr)` and the words wrap anywhere. */
+
+/* The list's and the item's measure, one value for the list, the item and the strip above it (`.wi-nav`), so the three never
+   drift apart (follow-up A-8). Set on every root that holds one of them. */
+.wl-route,
+.wl,
+.wi { --wl-measure: 72rem; }
+
+.wl,
+.wi {
+  display: grid; gap: var(--sp-2); padding: var(--sp-2); min-width: 0; max-width: var(--wl-measure);
+  background: var(--bg-page); color: var(--ink-primary);
+}
+.wl-route { display: grid; gap: var(--sp-1); min-width: 0; background: var(--bg-page); color: var(--ink-primary); }
+.wl-head { display: flex; align-items: center; gap: var(--sp-2); }
+.wl .wl-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
+.wl .wl-note { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
+
+/* The summary line. */
+.wl-summary { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); list-style: none; margin: 0; padding: 0; }
+.wl-pill {
+  display: inline-flex; align-items: center; padding: 2px var(--sp-2); border-radius: var(--r-full);
+  border: 1px solid transparent; font-size: var(--fs-xs); font-weight: var(--weight-medium); white-space: normal; overflow-wrap: anywhere;
+  background: var(--bg-raised); color: var(--ink-secondary);
+}
+.wl-pill[data-tone='blocking'] { background: var(--status-attention-tint); color: var(--status-attention-text); border-color: var(--status-attention); }
+.wl-pill[data-tone='ask'] { background: var(--status-attention-tint); color: var(--status-attention-text); }
+.wl-pill[data-tone='checking'] { background: var(--accent-tint); color: var(--status-busy-text); }
+.wl-pill[data-tone='stale'],
+.wl-pill[data-tone='bounced'] { background: var(--status-dead-tint-solid); color: var(--status-dead-text); }
+.wl-pill[data-tone='soon'],
+.wl-pill[data-tone='later'] { background: var(--bg-raised); color: var(--ink-secondary); }
+
+/* Rail and list. */
+.wl-grid { display: grid; grid-template-columns: 15rem minmax(0, 1fr); gap: var(--sp-3); align-items: start; }
+@media (max-width: 760px) { .wl-grid { grid-template-columns: minmax(0, 1fr); } }
+.wl-rail { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+.wl-rail-btn {
+  display: flex; align-items: center; gap: var(--sp-2); min-height: var(--row-h); padding: var(--sp-1) var(--sp-2);
+  border: 1px solid transparent; border-radius: var(--r-md); background: var(--bg-page); color: var(--ink-secondary);
+  font: inherit; text-align: left; cursor: pointer; min-width: 0;
+}
+.wl-rail-btn[aria-pressed='true'] { background: var(--bg-surface); color: var(--ink-primary); border-color: var(--edge-subtle); }
+.wl-rail-btn .wl-rail-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.wl-rail-btn .wl-rail-n { margin-left: auto; font-family: var(--family-mono); font-size: var(--fs-xs); }
+.wl-rail-btn[data-hue='cyan'] { --pg: var(--prog-cyan); }
+.wl-rail-btn[data-hue='violet'] { --pg: var(--prog-violet); }
+.wl-rail-btn[data-hue='magenta'] { --pg: var(--prog-magenta); }
+.wl-rail-btn[data-hue='blue'] { --pg: var(--prog-blue); }
+.wl-swatch { flex: none; width: 10px; height: 10px; border-radius: 3px; background: var(--pg, var(--ink-tertiary)); }
+
+.wl-groups { display: grid; gap: var(--sp-3); min-width: 0; }
+.wl-group { display: grid; gap: var(--sp-1); min-width: 0; --pg: var(--edge-strong); }
+.wl-group[data-hue='cyan'] { --pg: var(--prog-cyan); }
+.wl-group[data-hue='violet'] { --pg: var(--prog-violet); }
+.wl-group[data-hue='magenta'] { --pg: var(--prog-magenta); }
+.wl-group[data-hue='blue'] { --pg: var(--prog-blue); }
+.wl-ghead { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+/* The programme's Spec link, at the end of its group's heading and of the programme view's head (desktop-polish PL10, D-7952;
+   D26): a text link in the page's own ink on the page's ground, and under a coarse pointer a box at the tap floor. */
+.wl-gspec, .pv-spec, .wi-spec { margin-left: auto; font-size: var(--fs-meta); }
+@media (pointer: coarse) {
+  .wl-gspec, .pv-spec, .wi-spec { display: inline-flex; align-items: center; min-height: var(--tap-min); }
+}
+.wl .wl-gtitle { font-weight: var(--weight-medium); font-size: var(--fs-base); color: var(--ink-primary); overflow-wrap: anywhere; }
+.wl .wl-gwave { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.wl-items { display: grid; gap: var(--sp-1); list-style: none; margin: 0; padding: 0; }
+
+/* D-8123: `.wl-limit` is the row of a session on a usage limit with no account to take it (`LimitWaitRow`). It wears the item row's
+   shape and tokens through the same rules, under a class of its own (a class worn by a design-system component, `BareRow`'s
+   `wl-item`, names nothing else: `hook-class-collision`). It is not one button: it carries its own two controls. `.wl-capitem` is
+   the review cap row's own hook class (D-8076), worn the same way. */
+.wl-item,
+.wl-limit,
+.wl-capitem {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--sp-2); align-items: start; width: 100%;
+  min-height: var(--row-h); padding: var(--sp-2); text-align: left; font: inherit; cursor: pointer;
+  background: var(--bg-surface); color: var(--ink-primary);
+  border: 1px solid var(--edge-subtle); border-left: 4px solid var(--pg, var(--edge-strong)); border-radius: var(--r-md);
+}
+.wl-item[data-needed='blocking'][data-state='open'], .wl-capitem[data-needed='blocking'][data-state='open'] { box-shadow: inset 0 0 0 1px var(--status-attention); }
+.wl-item[data-state='checking'], .wl-capitem[data-state='checking'] { background: var(--bg-surface); }
+.wl-item .wl-kind,
+.wl-capitem .wl-kind,
+.wl-limit .wl-kind {
+  font: var(--weight-medium) var(--fs-2xs) / 1.6 var(--family-mono); padding: 0 var(--sp-1); border-radius: var(--r-sm);
+  background: var(--bg-raised); color: var(--ink-secondary); white-space: nowrap;
+}
+/* D-8194: an item's number, quiet under its kind chip from 521 up (the chip's column stays narrow), beside it on a narrow row,
+   where the row is one column. Mono and the meta's ink, never truncated. */
+.wl-item .wl-tag { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
+.wl-item .wl-num,
+.wi-card .wi-num { font: var(--weight-medium) var(--fs-2xs) / 1.6 var(--family-mono); color: var(--ink-secondary); white-space: nowrap; }
+.wl-item .wl-main,
+.wl-capitem .wl-main,
+.wl-limit .wl-main { display: grid; gap: 2px; min-width: 0; }
+.wl-item .wl-what,
+.wl-capitem .wl-what,
+.wl-limit .wl-what { font-weight: var(--weight-medium); overflow-wrap: anywhere; color: var(--ink-primary); }
+.wl-item .wl-why,
+.wl-capitem .wl-why,
+.wl-limit .wl-why { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.wl-item .wl-bounce, .wl-capitem .wl-bounce { font-size: var(--fs-meta); color: var(--ink-primary); border-left: 2px solid var(--status-dead); padding-left: var(--sp-2); overflow-wrap: anywhere; }
+.wl-item .wl-meta,
+.wl-capitem .wl-meta,
+.wl-limit .wl-meta { display: grid; justify-items: end; gap: var(--sp-1); font-size: var(--fs-xs); color: var(--ink-secondary); }
+@media (max-width: 520px) {
+  .wl-item,
+  .wl-capitem,
+  .wl-limit { grid-template-columns: minmax(0, 1fr); }
+  .wl-item .wl-meta,
+  .wl-capitem .wl-meta,
+  .wl-limit .wl-meta { justify-items: start; }
+  .wl-item .wl-tag { flex-direction: row; align-items: center; gap: var(--sp-2); }
+}
+/* The controls take a row of their own under the row's three columns and wrap at every width, so nothing scrolls sideways. The
+   row itself is no tap target. */
+.wl-limit { cursor: default; box-shadow: inset 0 0 0 1px var(--status-attention); }
+.wl-limit .wl-limit-acts { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.wl-limit .wl-limit-acts .btn-primary,
+.wl-limit .wl-limit-acts .btn-ghost { width: auto; max-width: 100%; white-space: normal; text-align: center; }
+
+/* An end-request item's two controls and a review cap's Lift cap (runs rebuild §8.7 and §10, F21). They are siblings of the row's
+   button, never inside it, and sit at the right end of the row from 640 up, on their own line below that (§8.1). Buttons are the
+   design system's (the tap floor is theirs); the row keeps its own width. A cap row is no button, so it is not a pointer. */
+.wl-li { min-width: 0; }
+.wl-li[data-acts='true'] { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-2); align-items: center; }
+.wl-acts { display: flex; flex-wrap: wrap; gap: var(--sp-2); justify-content: flex-end; }
+@media (max-width: 639.98px) {
+  .wl-li[data-acts='true'] { grid-template-columns: minmax(0, 1fr); }
+  .wl-acts { justify-content: flex-start; }
+}
+.wl-capitem { cursor: default; }
+.wl-item .wl-why[data-lines='true'] { white-space: pre-line; }
+/* D-8194: the items a card's text names, linked on a line of their own under the card (a link cannot sit inside the card's
+   button), the full width of its list item under the controls too. Meta size; the links are the design system's. */
+.wl .wl-refs { grid-column: 1 / -1; margin: 0; padding: 0 var(--sp-2); font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.wl-li > .wl-refs { margin-top: var(--sp-1); }
+@media (pointer: coarse) {
+  .wl .wl-refs a { display: inline-flex; align-items: center; min-height: var(--tap-min); }
+}
+
+.wl-cleared { display: grid; gap: var(--sp-1); border-top: 1px dashed var(--edge-strong); padding-top: var(--sp-2); }
+.wl .wl-cleared-title { font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-secondary); margin: 0; }
+.wl-cleared ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); }
+.wl .wl-cleared-row { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.wl .wl-cleared-row s { color: var(--ink-secondary); }
+/* The operator's two answer marks (Overlord W1): their own controls under the row, never inside its button. */
+.wl-marks { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); align-items: center; font-size: var(--fs-meta); }
+.wl-li > .wl-marks { grid-column: 1 / -1; padding: 0 var(--sp-2); }
+.wl-cleared-row > .wl-marks { margin-top: var(--sp-1); }
+.wl-mark { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
+/* The label holds its box, so the whole line at the tap floor toggles it. */
+.wl-mark-hit { display: inline-flex; align-items: center; gap: var(--sp-1); min-height: var(--tap-min); cursor: pointer; }
+.wl-mark-note { font-style: italic; }
+.wl-mark-refusal, .wl-marks-explainer { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
+.wl-mark-refusal { padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md); background: var(--status-dead-tint-solid); color: var(--status-dead-text); }
+.wl-cleared .wl-cleared-more { justify-self: start; }
+/* D-8194: the whole trail, by programme. A heading per programme, its swatch in the programme's hue (the list groups' rule: the
+   hue paints the non-text swatch, the name stays in ink), its name, its count and a chevron that turns when the group is open.
+   A row of its own at the tap floor (`BareRow`), every group collapsed until pressed. */
+.wl-cgroups { display: grid; gap: var(--sp-1); min-width: 0; }
+.wl-cgroup { display: grid; gap: var(--sp-1); min-width: 0; --pg: var(--edge-strong); }
+.wl-cgroup[data-hue='cyan'] { --pg: var(--prog-cyan); }
+.wl-cgroup[data-hue='violet'] { --pg: var(--prog-violet); }
+.wl-cgroup[data-hue='magenta'] { --pg: var(--prog-magenta); }
+.wl-cgroup[data-hue='blue'] { --pg: var(--prog-blue); }
+.wl-cgroup .wl-cg-head {
+  display: flex; align-items: center; gap: var(--sp-2); min-width: 0; padding: var(--sp-1) var(--sp-2);
+  border-left: 4px solid var(--pg); border-radius: var(--r-sm); font: inherit; font-size: var(--fs-meta);
+}
+.wl .wl-cg-name { min-width: 0; font-weight: var(--weight-medium); color: var(--ink-primary); overflow-wrap: anywhere; }
+.wl .wl-cg-n { margin-left: auto; flex: none; font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.wl-cgroup .wl-cg-chev {
+  flex: none; width: 6px; height: 6px; border-right: 1.5px solid var(--ink-secondary); border-bottom: 1.5px solid var(--ink-secondary);
+  transform: rotate(-45deg); transition: transform var(--dur-fast) var(--curve-swift);
+}
+.wl-cgroup .wl-cg-head[aria-expanded='true'] .wl-cg-chev { transform: rotate(45deg); }
+@media (prefers-reduced-motion: reduce) { .wl-cgroup .wl-cg-chev { transition: none; } }
+.wl-cgroup ul { padding-left: calc(var(--sp-2) + 4px); }
+
+/* The item view. */
+.wi-band {
+  --pg: var(--edge-strong); --pg-tint: var(--bg-surface); --pg-ink: var(--ink-primary);
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; padding: var(--sp-2); border-radius: var(--r-md);
+  border-left: 4px solid var(--pg); background: var(--pg-tint); color: var(--ink-primary);
+}
+.wi-band[data-hue='cyan'] { --pg: var(--prog-cyan); --pg-tint: var(--prog-cyan-tint); --pg-ink: var(--prog-cyan); }
+.wi-band[data-hue='violet'] { --pg: var(--prog-violet); --pg-tint: var(--prog-violet-tint); --pg-ink: var(--prog-violet); }
+.wi-band[data-hue='magenta'] { --pg: var(--prog-magenta); --pg-tint: var(--prog-magenta-tint); --pg-ink: var(--prog-magenta); }
+.wi-band[data-hue='blue'] { --pg: var(--prog-blue); --pg-tint: var(--prog-blue-tint); --pg-ink: var(--prog-blue); }
+/* The programme's name: its hue on its own tint (the pair `.pg-kicker` is gated on), ink on the surface when it has no hue. */
+.wi-band .wi-prog { font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--pg-ink); overflow-wrap: anywhere; }
+.wi-band .wi-prog-door { font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--pg-ink); overflow-wrap: anywhere; }
+.wi-band .wi-prog + .wi-pill,
+.wi-band .wi-prog-door + .wi-pill { margin-left: auto; }
+/* With pills the Spec link follows the last one, so the pills keep the band's end and the free space stays before them (review
+   1466 F13); with none it takes the free space itself, as every Spec link does. */
+.wi-band .wi-pill + .wi-spec { margin-left: 0; }
+/* The name as a door into the programme view (PL10, D26): a class of its own, since `TextLink` wears it
+   (`hook-class-collision.test.ts`), under a coarse pointer at the tap floor. */
+@media (pointer: coarse) {
+  .wi-band .wi-prog-door { display: inline-flex; align-items: center; min-height: var(--tap-min); }
+}
+.wi-detail { display: grid; grid-template-columns: minmax(0, 1fr) 21rem; gap: var(--sp-3); align-items: start; }
+@media (max-width: 900px) { .wi-detail { grid-template-columns: minmax(0, 1fr); } }
+/* The card's one column is `minmax(0, 1fr)`, never the implicit `auto` track: an `auto` track is as wide as its widest child's
+   min-content, so one run that cannot break (a How step of ids joined by slashes and commas) set it wider than the card, and
+   every child, the Why text with it, was laid out past the card's edge, under the side panel (Task C32, D-8585). */
+.wi-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); padding: var(--sp-3); min-width: 0; background: var(--bg-surface); color: var(--ink-primary); border: 1px solid var(--edge-subtle); border-radius: var(--r-md); }
+.wi-card .wi-tag { justify-self: start; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.wi-card .wi-kind {
+  justify-self: start; font: var(--weight-medium) var(--fs-2xs) / 1.6 var(--family-mono); padding: 0 var(--sp-1); border-radius: var(--r-sm);
+  background: var(--bg-raised); color: var(--ink-secondary); white-space: nowrap;
+}
+.wi-card .wi-what { margin: 0; font: var(--weight-medium) var(--fs-md) / var(--lh-tight) var(--family-ui); color: var(--ink-primary); overflow-wrap: anywhere; }
+.wi-card .wi-h { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-secondary); font-weight: var(--weight-medium); }
+.wi-card .wi-text { margin: 0; color: var(--ink-primary); overflow-wrap: anywhere; }
+.wi-card .wi-steps { margin: 0; padding-left: var(--sp-4); display: grid; gap: var(--sp-1); color: var(--ink-primary); overflow-wrap: anywhere; }
+.wi-card .wi-history { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); font-size: var(--fs-meta); color: var(--ink-secondary); }
+.wi-card .wi-history li { border-left: 2px solid var(--edge-strong); padding-left: var(--sp-2); overflow-wrap: anywhere; }
+/* An option's words wrap anywhere, recommended or not: a plain option's text sits in the radio primitive's sentence span, which
+   sets no wrap of its own, so a long run with no spaces in it ran past the side panel and the window (Task C32 fix round 1). The
+   rule is the item page's, not the shared primitive's. */
+.wi-act .wi-opt {
+  display: flex; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-2); border: 1px solid var(--edge-subtle); border-radius: var(--r-md);
+  background: var(--bg-surface); color: var(--ink-primary); cursor: pointer; min-height: var(--row-h); overflow-wrap: anywhere;
+}
+.wi-act .wi-field { display: grid; gap: var(--sp-1); border: 0; margin: 0; padding: 0; min-width: 0; }
+.wi-card .wi-label { font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-secondary); }
+.wi-act .wi-input {
+  width: 100%; font: inherit; padding: var(--sp-2); border-radius: var(--r-md); border: 1px solid var(--edge-strong);
+  background: var(--bg-page); color: var(--ink-primary); min-width: 0;
+}
+.wi-act .wi-status { padding: var(--sp-2); border-radius: var(--r-md); background: var(--accent-tint); color: var(--status-busy-text); font-size: var(--fs-meta); overflow-wrap: anywhere; }
+.wi-act .wi-status[data-stale='true'] { background: var(--status-dead-tint-solid); color: var(--status-dead-text); }
+/* D-8194: a closed item opened by its number says it is closed, in the page's own ink: a fact, not a state to act on. */
+.wi-act .wi-status[data-closed] { background: var(--bg-raised); color: var(--ink-primary); }
+.wi-act .wi-refusal { padding: var(--sp-2); border-radius: var(--r-md); background: var(--status-dead-tint-solid); color: var(--status-dead-text); font-size: var(--fs-meta); overflow-wrap: anywhere; }
+.wi-card .wi-hint { margin: 0; font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.wi-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+
+/* A decide item's recommended option (desktop-polish PL9; spec §3.2, D24). The mark is the word "Recommended", inside
+   the option's own row, on the accent tint the Settings palette chooser draws its chosen card on (ink on `--accent-tint`), so
+   it adds no new pair; the row's own edge turns to the accent (a non-text edge). The reasons sit above the choices, on the card's
+   surface with an accent rule, so they are read before the pick. Nothing is read out of colour alone. */
+.wi-act .wi-opt:has(.wi-rec) { border-color: var(--accent); }
+.wi-act .wi-opt-text { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; overflow-wrap: anywhere; }
+.wi-act .wi-rec {
+  display: inline-flex; align-items: center; padding: 0 var(--sp-2); border: 1px solid var(--accent); border-radius: var(--r-full);
+  font: var(--weight-medium) var(--fs-2xs) / 1.6 var(--family-mono); background: var(--accent-tint); color: var(--ink-primary); white-space: nowrap;
+}
+.wi-act .wi-why-rec {
+  display: grid; gap: var(--sp-1); padding: var(--sp-2); border-left: 3px solid var(--accent); border-radius: var(--r-md);
+  background: var(--bg-surface); color: var(--ink-primary); min-width: 0;
+}
+
+/* Moving between items (desktop-polish PL9; spec §2, D23). The strip above an item: its way back to the list it was opened
+   from, and the position with Previous and Next. Every control is a design-system button (`min-h-tap`, the 44 px floor under a
+   coarse pointer), visible at every width: the shell hides only the back chevron, and this is not one. */
+/* Capped at the item body's own measure (`--wl-measure`, `.wi`'s), so on a wide screen the position and the steps end where the
+   item does. */
+.wi-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; max-width: var(--wl-measure);
+  padding: var(--sp-2) var(--sp-2) 0; background: var(--bg-page); color: var(--ink-primary);
+}
+/* On a phone the strip stays in view while the operator reads a long item, so stepping through the decisions never needs a
+   scroll back up (desktop-polish PL10, D-7952; D25). The page scrolls the document there, so the strip sticks to the viewport's
+   top on its own ground; at a desk the item scrolls in its pane beside the list, where the strip has always been in reach. In
+   reach is below the status bar: an installed app draws under it, so the strip's own opaque ground covers the top inset and its
+   controls sit under it, at rest and stuck (review 1466 F2). */
+@media (max-width: 899.98px) {
+  .wi-nav {
+    position: sticky; top: 0; z-index: var(--z-header);
+    padding-top: calc(var(--sp-2) + var(--safe-top)); padding-bottom: var(--sp-2);
+  }
+}
+/* The buttons are flex boxes, which drop a space beside the glyph: the gap is that space. */
+.wi-nav .wi-back,
+.wi-nav .wi-step { gap: var(--sp-1); }
+.wi-nav .wi-back-name { overflow-wrap: anywhere; text-align: left; }
+.wi-nav .wi-steps-nav { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); margin-left: auto; min-width: 0; }
+.wi-nav .wi-pos { font-family: var(--family-mono); font-size: var(--fs-xs); background: var(--bg-page); color: var(--ink-secondary); white-space: nowrap; }
+/* The open item has left the list while shown: said in words, on a line of its own under the strip, never by colour alone. */
+.wi-nav .wi-left { flex-basis: 100%; margin: 0; font-size: var(--fs-meta); background: var(--bg-page); color: var(--ink-secondary); overflow-wrap: anywhere; }
+
+/* On a desk the list an item was opened from stays beside it, in the frame's own left column (`ItemListColumn`, which the
+   frame's nav slot draws on the item route in place of the fleet), as the fleet stays beside an open session. Its rows are the
+   list's own, stacked for the column's width; the open item's row is marked current by an accent ring (a non-text edge, and
+   `aria-current` says it too). */
+.wl-beside { max-width: none; }
+/* The fleet's banner stack above the list beside an item, in a skin that draws it in its left column (Instrument; follow-up
+   F1): the fleet column's own top space, side gutters and gap (`.fleet`, fleet.css: the same tokens), so a banner sits where
+   it sits on the list. The stack's slots are `display: contents`, so their banners are this box's own items. Some slots stay
+   mounted while their banner does not show (the notice and resume slots mount only while they apply, and a folded slot holds
+   a hidden banner), so whether the box is `:empty` says nothing: its room is given only while a banner draws, by Refined's own
+   test for the same fact (`.shell-banners` in refined.css), and with none the box takes no room (carry C, D-7951; review 1408
+   F1; review 1437 A11). */
+.wl-banners { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+.wl-banners:has(> .banner-slot > *, > .banner-more) { padding: calc(var(--sp-3) + var(--safe-top)) var(--sp-4) 0; }
+.wl-beside .wl-item { grid-template-columns: minmax(0, 1fr); }
+.wl-beside .wl-item .wl-meta { justify-items: start; }
+.wl-beside .wl-item .wl-tag { flex-direction: row; align-items: center; gap: var(--sp-2); }
+/* The column is 320 to 420 wide in both skins, so the controls of an end-request row or a cap row sit under it, not beside it,
+   whatever the viewport (the media query above reads the viewport; this reads the place). */
+.wl-beside .wl-li[data-acts='true'] { grid-template-columns: minmax(0, 1fr); }
+.wl-beside .wl-acts { justify-content: flex-start; }
+.wl-beside .wl-capitem { grid-template-columns: minmax(0, 1fr); }
+.wl-beside .wl-capitem .wl-meta { justify-items: start; }
+.wl-beside .wl-item[aria-current='page'] { box-shadow: inset 0 0 0 2px var(--accent); }
+
+/* The programme view (desktop-polish PL5b, D-7713; the prototype's view 2): the programme's head, Goals on one side and its
+   share of the list on the other. GROUNDS, as above: the head and each card state their own ground and ink, so the audit
+   measures every pair through the stylesheet. The programme's hue paints its non-text rule on the head, and its NAME ("Programme")
+   in the hue on the card surface, the pair the lane hues are gated on. A pending change says "spec update pending" in
+   words on the attention tint; nothing is read out of colour. */
+.pv { --pg: var(--edge-strong); }
+.pv[data-hue='cyan'] { --pg: var(--prog-cyan); }
+.pv[data-hue='violet'] { --pg: var(--prog-violet); }
+.pv[data-hue='magenta'] { --pg: var(--prog-magenta); }
+.pv[data-hue='blue'] { --pg: var(--prog-blue); }
+.pv-head {
+  --pg: var(--edge-strong); --pg-ink: var(--ink-primary);
+  display: flex; align-items: center; gap: var(--sp-1) var(--sp-2); flex-wrap: wrap; min-width: 0; padding: var(--sp-2);
+  border-left: 4px solid var(--pg); border-radius: var(--r-md); background: var(--bg-surface); color: var(--ink-primary);
+}
+.pv-head[data-hue='cyan'] { --pg: var(--prog-cyan); --pg-ink: var(--prog-cyan); }
+.pv-head[data-hue='violet'] { --pg: var(--prog-violet); --pg-ink: var(--prog-violet); }
+.pv-head[data-hue='magenta'] { --pg: var(--prog-magenta); --pg-ink: var(--prog-magenta); }
+.pv-head[data-hue='blue'] { --pg: var(--prog-blue); --pg-ink: var(--prog-blue); }
+.pv-head .pv-kicker { font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--pg-ink); }
+.pv-head .pv-title { margin: 0; font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); overflow-wrap: anywhere; }
+.pv-head .pv-sub { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.pv-two { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: var(--sp-3); align-items: start; min-width: 0; }
+@media (max-width: 900px) { .pv-two { grid-template-columns: minmax(0, 1fr); } }
+/* The Goals page's columns (the runs rebuild, Task 19, o8): Goals, Waiting on you and Stored secrets stack in the first, and the
+   Runs section is the other. Under 900 everything stacks in that order. */
+.pv-main { display: grid; gap: var(--sp-3); min-width: 0; align-content: start; }
+/* The head's run facts (spec §8.5): the card's elements, the coordinator, the wave counts, a pending-close line per reason and
+   Resume. A full-width row of the head, wrapping; the controls keep the tap floor. */
+.pv-head .pv-facts { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-3); min-width: 0; }
+.pv-head .pv-facts p { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.pv-head .pv-lamp { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.pv-head .pv-counts { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.pv-head .pv-coordinator { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.pv-head .pv-word[data-word='stuck'] { color: var(--status-attention-text); }
+.pv-head .pv-line { flex: 1 1 100%; font-size: var(--fs-2xs); color: var(--ink-secondary); }
+.pv-head .pv-pending { flex: 1 1 100%; font-size: var(--fs-2xs); color: var(--ink-secondary); }
+.pv-head .pv-marker {
+  display: inline-flex; align-items: center; min-height: var(--tap-min); color: var(--ink-primary);
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.pv-head .pv-coordinator-link {
+  display: inline-flex; align-items: center; min-height: var(--tap-min); color: var(--ink-primary);
+  text-decoration: underline; text-underline-offset: 2px;
+}
+/* The Runs section's open waves: a wave per entry, newest first, its reviews indented beneath. */
+.pv-runs .programme-waves { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); min-width: 0; }
+.pv-runs .programme-wave { display: grid; gap: var(--sp-1); min-width: 0; }
+.pv-runs .runs-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); min-width: 0; }
+.pv-runs .programme-reviews { margin-inline-start: var(--sp-4); }
+.pv-card {
+  display: grid; gap: var(--sp-2); padding: var(--sp-3); min-width: 0; background: var(--bg-surface); color: var(--ink-primary);
+  border: 1px solid var(--edge-subtle); border-radius: var(--r-md);
+}
+.pv-card .pv-h { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--ink-secondary); }
+.pv-card .pv-none { margin: 0; color: var(--ink-primary); overflow-wrap: anywhere; }
+/* The Goals page's link to the one Waiting on you list, filtered to the programme (PL11, D-7986): a ghost control at its own
+   width, never stretched across the card. */
+.pv-card .pv-waiting { justify-self: start; }
+
+/* A stored secret (the operator's ruling on programme item 9; review 1416 F5): the programme screen's "Stored secrets" rows and
+   the item's Stored block. A row's name, saved-when and asking item are separate lines, the name in mono as a slot is named
+   elsewhere; its Remove sits under them, and a Remove's refusal and its "Removed." take the item card's tinted styles. */
+.pv-secrets { display: grid; gap: var(--sp-2); min-width: 0; }
+.pv-secrets .pv-secret-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.pv-secrets .pv-secret {
+  display: grid; gap: var(--sp-1); justify-items: start; min-width: 0; padding: var(--sp-2);
+  border-left: 2px solid var(--edge-strong); border-radius: var(--r-md); background: var(--bg-raised); color: var(--ink-primary);
+}
+.pv-secrets .pv-secret-name { font: var(--weight-medium) var(--fs-meta) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); background: var(--bg-raised); overflow-wrap: anywhere; }
+.pv-secrets .pv-secret-when,
+.pv-secrets .pv-secret-asker { font-size: var(--fs-meta); color: var(--ink-secondary); background: var(--bg-raised); overflow-wrap: anywhere; }
+.pv-secrets .wi-status { margin: 0; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md); background: var(--accent-tint); color: var(--status-busy-text); font-size: var(--fs-meta); overflow-wrap: anywhere; }
+.pv-secrets .wi-refusal { margin: 0; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md); background: var(--status-dead-tint-solid); color: var(--status-dead-text); font-size: var(--fs-meta); overflow-wrap: anywhere; }
+.wi-stored { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.wi-stored-remove { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; }
+.wi-stored-remove .wi-refusal { flex-basis: 100%; margin: 0; }
+
+/* Goals (`GoalsPanel`). */
+.pg-goals { display: grid; gap: var(--sp-2); min-width: 0; background: var(--bg-surface); color: var(--ink-primary); }
+.pg-goals .pg-goals-title,
+.pg-goals .pg-goals-label { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--ink-secondary); }
+.pg-goals .pg-goals-short { display: grid; gap: var(--sp-1); padding: var(--sp-2); border-radius: var(--r-md); background: var(--bg-raised); color: var(--ink-primary); }
+.pg-goals .pg-goals-text { margin: 0; color: var(--ink-primary); overflow-wrap: anywhere; }
+.pg-goals .pg-goals-date { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.pg-goals .pg-goals-none,
+.pg-goals .pg-goals-note { margin: 0; font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.pg-goals .pg-goals-open,
+.pg-goals .pg-goals-item { margin: 0; font-size: var(--fs-meta); }
+.pg-goals .pg-goals-changes { display: grid; gap: var(--sp-1); }
+.pg-goals .pg-goals-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.pg-goals .pg-goals-mod { display: grid; grid-template-columns: 6rem minmax(0, 1fr); gap: var(--sp-1) var(--sp-2); align-items: start; min-width: 0; }
+.pg-goals .pg-goals-mod > :not(.pg-goals-date) { grid-column: 2; }
+.pg-goals .pg-goals-mod > .pg-goals-what { color: var(--ink-primary); overflow-wrap: anywhere; }
+.pg-goals .pg-goals-mod > .pg-goals-ruling,
+.pg-goals .pg-goals-mod > .pg-goals-pr,
+.pg-goals .pg-goals-mod > .pg-goals-item { font-size: var(--fs-xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.pg-goals .pg-goals-mod > .pg-goals-pending {
+  justify-self: start; padding: 0 var(--sp-2); border-radius: var(--r-full); font-size: var(--fs-xs);
+  font-weight: var(--weight-medium); background: var(--status-attention-tint); color: var(--status-attention-text); overflow-wrap: anywhere;
+}
+@media (max-width: 520px) {
+  .pg-goals .pg-goals-mod { grid-template-columns: minmax(0, 1fr); }
+  .pg-goals .pg-goals-mod > :not(.pg-goals-date) { grid-column: 1; }
+}

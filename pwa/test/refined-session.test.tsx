@@ -1,0 +1,227 @@
+// Refined's session (W2 Task S7c, D-5471; spec §5.3, Session, phone and laptop rows): the short header with ONE chip
+// rail, the reading column, and the key hints under the composer.
+//
+// RED FIRST, and what each case catches:
+//   Refined's set without a chrome, or a chrome drawing the esc cap ....... "one chip rail from the view, no esc"
+//   the hints line without the pointer query .............................. "…under a fine pointer only"
+//   the column a fixed `width: var(--measure-chat)` ....................... "…reads min(var(--measure-chat), 100%)"
+//   the chat prose rule moved out of the column's ≥900 block (D-8059) ..... "the prose rule sits inside the same ≥900 block family…"
+//   a sheet or an Escape binding moved into the chrome ..................... "the chrome holds no sheet and no Escape effect"
+//   the crumb typed in whenever it changes, renames or not (C12 item 2) ..... "Refined's crumb, corrected by the row…"
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { CommandLayer } from '../src/command/CommandLayer';
+import { Composer } from '../src/session/Composer';
+import { SessionFlows } from '../src/session/SessionFlows';
+import { SessionChromeInputs, type SessionHeaderProps } from '../src/session/SessionHeader';
+import { REFINED_SET } from '../src/skins/refined/parts';
+import { fleetSession } from './fleetFixture';
+
+const SRC = path.join(import.meta.dirname, '..', 'src');
+
+/** `(min-width: 900px)` answers `wide`, `(pointer: fine)` answers `fine`; a query naming both needs both. Reduced
+ *  motion answers true unless `motion` is set, so only a case that asks sees a label type in. */
+function stubMedia({ wide, fine, motion = false }: { wide: boolean; fine: boolean; motion?: boolean }): void {
+  vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: (q.includes('min-width: 900px') ? wide : true) && (q.includes('pointer: fine') ? fine : true)
+      && !q.includes('max-width') && !q.includes('pointer: coarse') && !(motion && q.includes('prefers-reduced-motion')),
+    media: q, onchange: null,
+    addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+  }));
+}
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+const SESSION = fleetSession({
+  id: 'lane-a-project-a-quiet-basin', project: 'project-a', workspace: 'quiet-basin', status: 'busy', bucket: 'working',
+  model: 'model-x', effort: 'high', branch: 'feat/a-branch',
+});
+
+/** Renders Refined's chrome; the returned function redraws it with other inputs, as a frame landing does. */
+function renderChrome(over: Partial<SessionHeaderProps> = {}): (next: Partial<SessionHeaderProps>) => void {
+  const base: SessionHeaderProps = {
+    session: SESSION, status: 'busy', statusUpdatedAt: Date.now(), onInterrupt: vi.fn(), onBack: vi.fn(),
+  };
+  const r = render(chromeTree({ ...base, ...over }));
+  return (next) => r.rerender(chromeTree({ ...base, ...next }));
+}
+
+function chromeTree(inputs: SessionHeaderProps): ReactNode {
+  const Chrome = REFINED_SET.SessionChrome;
+  if (Chrome === null) throw new Error("Refined's set places no SessionChrome");
+  return (
+    <>
+      <CommandLayer openNewSession={() => {}} />
+      <SessionFlows
+        session={inputs.session}
+        title="project-a"
+        actions={{
+          changeModel: vi.fn(), changeEffort: vi.fn(), openBrowser: vi.fn(), openHistory: vi.fn(), moveAccount: vi.fn(), archive: vi.fn(),
+          restore: vi.fn(), openTerminal: vi.fn(), reapWorkspace: vi.fn(),
+        }}
+      >
+        <SessionChromeInputs value={inputs}>
+          <Chrome />
+        </SessionChromeInputs>
+      </SessionFlows>
+    </>
+  );
+}
+
+describe("Refined's session chrome", () => {
+  // Refined draws the crumb above the title through the shared `HeaderCrumbText` (C12 item 2): a fallback whose
+  // crumb guessed the project wrong is corrected by the first frame, drawn, never typed in, and so is the row leaving.
+  it("Refined's crumb, corrected by the row or left by it, is drawn plainly", () => {
+    // With motion on, so a crumb that typed in would show its caret.
+    stubMedia({ wide: true, fine: true, motion: true });
+    vi.useFakeTimers();
+    try {
+      const fallback = { title: 'ws/quiet-basin', crumb: 'project', wrapper: 'lane-a' };
+      const crumb = (): Element | null => document.querySelector('.ref-session-title .chat-crumb');
+      const redraw = renderChrome({ session: null, fallback });
+      expect(crumb()?.textContent).toBe('project');
+      redraw({ session: SESSION, fallback });
+      expect(document.querySelector('.ref-session-title .typed-caret'), 'no crumb typed in').toBeNull();
+      expect(crumb()?.textContent).toBe('project-a');
+      redraw({ session: null, fallback });
+      expect(document.querySelector('.ref-session-title .typed-caret'), 'no crumb typed in as the row leaves').toBeNull();
+      expect(crumb()?.textContent).toBe('project');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("Refined's chrome renders one chip rail from the view, and no esc keycap", () => {
+    // A touch screen with a busy turn: exactly where the shared header draws `esc`. Refined's Stop is the send slot's.
+    stubMedia({ wide: false, fine: false });
+    renderChrome();
+    const rails = document.querySelectorAll('.ref-chip-rail');
+    expect(rails).toHaveLength(1);
+    const rail = rails[0] as HTMLElement;
+    // The status, the model and the effort, in the one rail (spec §5.3's phone row). The crumb is no longer a rail
+    // chip: the project sits above the title (desktop polish T3c, D-6333).
+    expect(rail.querySelector('.status-line')?.textContent).toMatch(/^working/);
+    expect(within(rail).getByText('model-x')).toBeInTheDocument();
+    expect(within(rail).getByText('high')).toBeInTheDocument();
+    expect(rail.querySelector('.chat-crumb')).toBeNull();
+    // The title row names the session (its row's label, here the branch it was born with), and the project is a small
+    // crumb above it; the branch chip would say the title again, so it is gone.
+    expect(rail.querySelector('.metachip--branch')).toBeNull();
+    const titleRow = document.querySelector('.ref-session-title')!;
+    expect(titleRow.querySelector('.chat-crumb')?.textContent).toBe('project-a');
+    expect(titleRow.querySelector('.chat-title')?.textContent).toBe('feat/a-branch');
+    expect([...titleRow.children].map((n) => n.tagName)).toEqual(['SPAN', 'H1']);
+    expect(document.querySelectorAll('.chat-meta')).toHaveLength(1);
+    expect(document.querySelector('.keycap--esc')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Esc (Stop)' })).toBeNull();
+    // ⋯ and the terminal stay, and Back on a phone.
+    expect(screen.getByRole('button', { name: 'More' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Terminal' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back to fleet' })).toBeInTheDocument();
+    // The model chip's glyph is the icon, never the emoji (D-5100's 🤖).
+    expect(rail.textContent).not.toContain('\u{1F916}');
+    expect(rail.querySelector('svg')).not.toBeNull();
+  });
+});
+
+describe('the key hints under the composer', () => {
+  const composer = (): void => { render(<Composer onSend={vi.fn()} pending={[]} id="lane-a-project-a" />); };
+
+  it('the hints line renders at ≥900 under a fine pointer only', () => {
+    for (const [wide, fine, shown] of [[true, true, true], [true, false, false], [false, true, false], [false, false, false]] as const) {
+      stubMedia({ wide, fine });
+      composer();
+      const line = document.querySelector('.composer-hints');
+      expect(line !== null, `wide ${wide}, fine ${fine}`).toBe(shown);
+      if (line !== null) {
+        for (const word of ['send', 'newline', 'stop', 'commands']) expect(line.textContent).toContain(word);
+        // Keys, not controls: a hint is never a tab stop.
+        expect(line.querySelectorAll('kbd').length).toBeGreaterThanOrEqual(4);
+        expect(line.querySelectorAll('button')).toHaveLength(0);
+        // The glyphs are for the eye; a screen reader hears one sentence in words.
+        expect(line).toHaveAttribute('aria-hidden', 'true');
+        expect(line.nextElementSibling?.textContent).toMatch(/Enter sends.*Shift Enter.*Escape.*Command K/);
+      }
+      cleanup();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('the reading column', () => {
+  /** Every `@media (min-width: 900px)` block of chat.css, as its list of rules (selector list, body). The block may hold
+   *  more than the column's rule (D-8059 adds the chat prose measure and the user bubble beside it). */
+  const deskBlocks = (): { selectors: string[]; body: string }[][] => {
+    const css = readFileSync(path.join(SRC, 'session', 'chat.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const opener = '@media (min-width: 900px) {';
+    const bodies: string[] = [];
+    // A brace walk, not a regex over the block: a nested quantifier there backtracks exponentially (CodeQL js/redos).
+    for (let at = css.indexOf(opener); at >= 0; at = css.indexOf(opener, at + 1)) {
+      let depth = 1;
+      let i = at + opener.length;
+      for (; i < css.length && depth > 0; i += 1) {
+        if (css[i] === '{') depth += 1;
+        else if (css[i] === '}') depth -= 1;
+      }
+      if (depth === 0) bodies.push(css.slice(at + opener.length, i - 1));
+    }
+    return bodies.map((body) => [...body.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .map((r) => ({ selectors: (r[1] ?? '').split(/,(?![^(]*\))/).map((s) => s.trim().replace(/\s+/g, ' ')), body: r[2] ?? '' })));
+  };
+  const columnBlock = () => deskBlocks().find((rules) => rules.some((r) => r.selectors.includes('.chat-item')));
+
+  it('the transcript\'s column reads min(var(--measure-chat), 100%)', () => {
+    const found = columnBlock()?.find((r) => r.selectors.includes('.chat-item'));
+    expect(found, 'a ≥900 rule for .chat-item').toBeDefined();
+    const list = found?.selectors ?? [];
+    const body = found?.body ?? '';
+    expect(list).toEqual(expect.arrayContaining(['.chat-item', '.composer']));
+    expect(body).toMatch(/max-width:\s*min\(var\(--measure-chat\),\s*100%\)/);
+    expect(body).toMatch(/margin-inline:\s*auto/);
+    // A max-width, never a fixed width: at 1600 with the inspector rail the column has to yield.
+    expect(body).not.toMatch(/(^|[;\s])width:\s*var\(--measure-chat\)/);
+  });
+
+  it('the prose rule sits inside the same ≥900 block family as the column rule', () => {
+    // D-8059: the chat prose measure applies where the column does, from 900 up, and never on a phone.
+    const prose = columnBlock()?.find((r) => r.selectors.some((s) => s.startsWith('.chat-item .msg-assist > :is(')));
+    expect(prose, 'the chat prose rule, in the column\'s ≥900 block').toBeDefined();
+    // The children read the registered length `.msg-assist` resolves from `--measure-chat-prose` (fix round 1, F3).
+    expect(prose?.body ?? '').toMatch(/max-width:\s*var\(--chat-prose-cap\)/);
+    const source = columnBlock()?.find((r) => r.selectors.includes('.chat-item .msg-assist'));
+    expect(source?.body ?? '', 'the length is set in the same block, from the token').toMatch(/--chat-prose-cap:\s*var\(--measure-chat-prose\)/);
+  });
+});
+
+describe('the chrome holds no flow of its own', () => {
+  it('the chrome holds no sheet and no Escape effect', () => {
+    const src = readFileSync(path.join(SRC, 'skins', 'refined', 'SessionChrome.tsx'), 'utf8')
+      .replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(src).not.toMatch(/\bSheet\b|Dialog|PickSheet|SwapSheet|ArchiveSheet|ReapSheet|TerminalDrawer/);
+    expect(src).not.toMatch(/useEscapeInterrupt|keydown|addEventListener|['"]Escape['"]/);
+    expect(src).toMatch(/useSessionFlows\(\)/);
+  });
+});
+
+describe('the chip rail scrolls sideways on a phone only', () => {
+  it('every nowrap, overflow-x or scrollbar-hiding rail rule sits inside @media (max-width: 899px)', () => {
+    // At ≥900 a mouse wheel and Tab never reach a sideways-scrolled fact, so the desk rail wraps like the shared
+    // `.chat-meta` and the header stays a superset of the card (spec §5.3's laptop row asks for no scrolling rail).
+    const css = readFileSync(path.join(SRC, 'skins', 'refined', 'refined.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const phone = /@media \(max-width: 899px\) \{((?:[^{}]*\{[^}]*\})*)\s*\}/g;
+    const inside = [...css.matchAll(phone)].map((m) => m[1] ?? '').join('\n');
+    const outside = css.replace(phone, '');
+    const scrolling = /nowrap|overflow-x|scrollbar-width|::-webkit-scrollbar/;
+    const railRules = (sheet: string): string[] =>
+      [...sheet.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+        .filter((m) => (m[1] ?? '').includes('.ref-chip-rail'))
+        .map((m) => `${(m[1] ?? '').trim()} {${m[2] ?? ''}}`);
+    const leaks = railRules(outside).filter((r) => scrolling.test(r));
+    expect(leaks, 'rail rules that scroll or refuse to wrap at ≥900').toEqual([]);
+    expect(railRules(inside).some((r) => /overflow-x:\s*auto/.test(r)), 'the phone rail still scrolls').toBe(true);
+  });
+});

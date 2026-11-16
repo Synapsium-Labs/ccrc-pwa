@@ -48,12 +48,12 @@
 // left as plain `expect` — there is nothing for a hard failure to hide there.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import {
   LIFECYCLE_ACTS, LC_ACT_UNKNOWN, LIFECYCLE_OUTCOMES, LC_OUTCOME_UNKNOWN, LC_DIR_NAME,
 } from '../../shared/api.js';
 
-const ccdSrc = readFileSync(CCD, 'utf8');
+const ccdSrc = ccdSource();
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-lc-vocab-'); });
@@ -146,7 +146,7 @@ describe('ccd <-> shared: the journal vocabulary', () => {
     // the length assertion measures the mutant TODAY.
     const want = LIFECYCLE_ACTS.filter((a) => a !== LC_ACT_UNKNOWN);
     // Two independent claims about `want` itself — expect.soft.
-    expect.soft(want.length, 'guards the guard: an empty want passes everything (23 = 22 + route, routing slice 1)').toBe(23);
+    expect.soft(want.length, 'guards the guard: an empty want passes everything (27 = 23 + unarchive, the archive stamp a spawn clears, + reclaim, a child’s pin-then-teardown, + expire, an archived workspace’s, + collect, a dead child’s witnessed temp root, + hibernate, a long-idle session’s deliberate stop (D-5242), + shed-deps, a sleeping session’s ignored dependency directories (D-7278))').toBe(29);
     expect.soft(want, 'the filter must exclude the degrade, not merely run').not.toContain(LC_ACT_UNKNOWN);
     const acts = ccdArray('_LC_ACTS');
     if (acts === null) {
@@ -160,6 +160,11 @@ describe('ccd <-> shared: the journal vocabulary', () => {
     expect.soft(sortedSet(acts)).toEqual(sortedSet(want));
     expect.soft(acts, 'unknown is the READER`s degrade, never a ccd call site')
       .not.toContain(LC_ACT_UNKNOWN);
+  });
+
+  it('hibernate is on BOTH sides (D-5242): the act ccd journals and the act L0 reads', () => {
+    expect(LIFECYCLE_ACTS, 'L0 lacks it: an older reader would ingest the row as unknown').toContain('hibernate');
+    expect(ccdArray('_LC_ACTS'), 'ccd lacks it: _lc_emit would write unknown + badact').toContain('hibernate');
   });
 
   it('_LC_OUTCOMES is exactly LIFECYCLE_OUTCOMES minus the degrade', () => {

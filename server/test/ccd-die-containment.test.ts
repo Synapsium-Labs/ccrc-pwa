@@ -24,7 +24,7 @@
 //      controls go red whatever `ccd/ccd` happens to contain.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 /** A `#` comment starts only where a `#` sits at the start of a word and
  *  outside quotes — `"$REG/$id.hold"` and `'#'` are not comments. `ccd/ccd`
@@ -308,7 +308,7 @@ PY
 // Only now, the real file.
 // ---------------------------------------------------------------------------
 describe('ccd/ccd', () => {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
 
   it('kept its place — the substitution nesting balances at end of file', () => {
     // `_pr_py` alone is ~390 lines of embedded Python; read as shell it
@@ -336,9 +336,65 @@ describe('ccd/ccd', () => {
     // set and must not be — it answers in a RETURN CODE precisely so the one
     // caller that cannot afford a `die` (cmd_swap, past the teardown) can route
     // its refusal through `_swap_refuse` and restart the session instead.
+    // The three `_route_argv_*`/`_route_seed_*` helpers joined them at routing
+    // slice 4: `_route_argv_check` IS a refusal (a bad `--route` value on a verb
+    // that mints a session), `_route_argv_write` dies on a registry write it
+    // could not make, and `_route_seed_default` inherits the second by call.
+    // All three are called plainly by `cmd_ws_add` and `cmd_start` — never
+    // inside `$( )`, which is what the demotion scan above is for, and what
+    // makes "nothing was touched" true rather than merely printed.
+    // `_ws_expire_refuse_return` joined them in workspace lifecycle wave 3: the
+    // return verbs' refusal of an expiry in progress, called plainly by
+    // `cmd_start`, `cmd_ensure`, `cmd_swap` and `cmd_enable` before they journal their act —
+    // never inside `$( )` — so its `die` ends the verb, not a subshell.
+    // `_ws_expire_audit_contained` joined them with `ws-audit --expire`: it
+    // `die`s on an id or a python3 it cannot use, before any read, reached
+    // through `cmd_ws_audit`'s hand-off and never inside `$( )`.
+    // `_ws_collect_audit_contained` joined them with `ws-audit --collect`, for the same reason: it `die`s on an
+    // id or a python3 it cannot use, before any read, reached through `cmd_ws_audit`'s hand-off and never
+    // inside `$( )`.
+    // `_ws_orphan_census` and `_ws_orphan_audit` joined them with `ws-audit --orphans` and `--orphan-hex`, for the
+    // same reason: each `die`s on its arguments or a python3 it cannot use, before any read, reached through
+    // `cmd_ws_audit`'s hand-off and never inside `$( )`.
+    // `_ws_title` and `_ws_title_check` joined them with the named-workspace title: `_ws_title_check` IS a
+    // refusal (a title that breaks a text rule `die`s naming the rule, before any write), and `_ws_title` is
+    // the one door to it (its `check` op). Both are called plainly, by `cmd_ws_add` and `cmd_ws_title`,
+    // never inside `$( )`, so the `die` ends the verb and "nothing was touched" is true.
+    // `_ws_reap_lock_run` joined them with the one reap-lock runner (D-7076): it `die`s only through `_lc_refuse`
+    // (flock unavailable, the lock unopenable), and the four destructive verbs call it plainly, never inside `$( )`,
+    // so its `die` ends the verb.
+    // `_place_for_class` is deliberately NOT here: it is called inside a command
+    // substitution on both of its call sites, so it must answer on stdout and a
+    // `die` in it would be demoted to rc 1 — the D-297 shape.
+    // `_operator_choice_keep` (session-continuity stage 7) is here although it
+    // CANNOT die: it calls `cmd_route` inside a plain `( … )` subshell, so that
+    // verb's refusal ends only the subshell, and this scanner models `$( )` but
+    // not `( )`. Its own suite pins the real property — a refusal inside a swap
+    // never ends the swap (`ccd-operator-choice.test.ts`, "…nor does a value the
+    // record's own checks refuse") — and it is never captured in `$( )`, which
+    // the demotion scan below still checks.
+    // The loose arm's four (fleet disk retention D-6625) die on a malformed hex, token or python; each is reached by a plain
+    // call (the dispatcher, `cmd_ws_audit`'s hand-off or `cmd_ws_collect`'s), never inside a command substitution.
+    // `_operator_choice_promote` (the keep's marker-free body, session-continuity wave 4b) is
+    // here for the same reason, and `_sync_uuid` by calling it before a live uuid rotation: neither CAN die
+    // (the `cmd_route` call sits in the same plain `( … )` subshell, and `ccd-operator-choice.test.ts`'s
+    // live-rotation cases pin that an unreadable or refused choice never stops the synchronisation).
+    // `_pr_state_by_pr` joined them with the PR-keyed `pr-state --project <p> --pr <n>` (landing order wave 5c): it
+    // `die`s on a bad project or pr number, before any read or gh call, and `cmd_pr_state`'s early dispatch calls it
+    // plainly, never inside `$( )`, so its `die` ends the verb.
+    // `_watchdog_resume_run`, `_watchdog_resume_here` and `_watchdog_one` joined them with the fleet limit watchdog
+    // (D-8123): `_watchdog_resume_run` is the body of a transient unit and ends in `cmd_ensure`, which can `die`;
+    // `_watchdog_resume_here` names it (inside the unit's command string), and `_watchdog_one` calls that. All three are
+    // called plainly (the unit runs the first at top level; `cmd_limit_watchdog` calls the third), never inside `$( )`.
     expect([...fatal].filter((f) => f.startsWith('_')).sort())
-      .toEqual(['_account_still_rostered', '_lc_refuse', '_spawn', '_spawn_start',
-        '_supervised_start', '_swap_refuse']);
+      .toEqual(['_account_still_rostered', '_lc_refuse', '_operator_choice_keep', '_operator_choice_promote',
+        '_pr_state_by_pr', '_route_argv_check', '_route_argv_write', '_route_seed_default', '_spawn', '_spawn_start',
+        '_supervised_start', '_swap_refuse', '_sync_uuid', '_watchdog_one', '_watchdog_resume_here',
+        '_watchdog_resume_run', '_ws_collect_audit_contained', '_ws_expire_audit_contained',
+        '_ws_expire_refuse_return', '_ws_loose_audit_contained', '_ws_loose_census', '_ws_loose_collect', '_ws_loose_route',
+        '_ws_orphan_audit', '_ws_orphan_census', '_ws_reap_lock_run', '_ws_title', '_ws_title_check']);
+    expect(fatal.has('_place_for_class'),
+      'placement started dying instead of answering on stdout — both its call sites are `$( )`').toBe(false);
     expect(fatal.has('_wrapper_rostered_now'),
       'the roster re-read started dying instead of answering').toBe(false);
     expect(fatal.has('cmd_ws_add')).toBe(true);

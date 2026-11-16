@@ -1,9 +1,13 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
+import { setStripExpanded } from '../src/fleet/stripExpanded';
+import { clearEveryLru } from '../src/lib/highlightCache';
+import { clearScreenCache } from '../src/lib/screenCache';
+import { memoryStorage } from '../src/lib/storage';
 import { useFleetStore } from '../src/stores/fleet';
 
-// ONE teardown hook doing two unrelated jobs, merged deliberately rather than
+// ONE teardown hook doing three unrelated jobs, merged deliberately rather than
 // registered as two: both arrived in the same week from different branches
 // (the socket teardown from Stage 3a, the Radix timer flush from the
 // draft-conflict flake fix), and each carried an ordering claim about the
@@ -34,9 +38,11 @@ import { useFleetStore } from '../src/stores/fleet';
 //
 // A no-op wherever nothing connected: `disconnect()` on an unconnected store
 // removes two listeners that were never added and returns. It is deliberately
-// the FIRST thing in this file's teardown and this file's only `src/` import —
-// a global hook that reached further into the app would be a fixture pretending
-// to be a harness.
+// the FIRST thing in this file's teardown, and the fleet store the only app state
+// it reaches for — a global hook that reached further into the app would be a
+// fixture pretending to be a harness. (The one other reach is (3)'s fold memory,
+// `stripExpanded`, which is a module value plus a storage key, so only this hook
+// can reset both for every file.)
 //
 // (2) Radix's FocusScope returns focus on unmount from a `setTimeout(..., 0)`
 // (@radix-ui/react-focus-scope dist/index.mjs, the unmount CustomEvent). A
@@ -55,9 +61,40 @@ import { useFleetStore } from '../src/stores/fleet';
 // fake time instead; files that restore real timers in their own afterEach
 // ran it already — vitest's stack hook order runs this setup-registered hook
 // last.
+//
+// (3) THE LANES STRIP'S FOLD CHOICE IS FORGOTTEN AFTER EVERY TEST.
+//
+// `stripExpanded.ts` keeps the operator's choice twice: in `localStorage`
+// (`ccrc-accounts-strip`) and in a module value that holds it for the page when
+// storage refuses. Either one alone would leak an expanded strip into the next
+// test, which reads folded by default. `setStripExpanded(false)` clears the
+// module value (and writes `folded`); the `removeItem` after it then clears the
+// key, so a test starts with nothing stored, as a first visit does.
+//
+// (4) THE HIGHLIGHT CACHE IS EMPTIED AFTER EVERY TEST (desktop polish Task C7).
+//
+// The highlight worker's answerer (`highlightJob.ts`) keeps highlight.js's markup in a bounded cache, and a test builds one in-thread (`markdown-highlight-worker.test.ts`, the test store's `inThreadHighlighter`). Across tests
+// that is a leak: a suite that counts `hljs.highlight`'s calls, or mocks what it answers, would be served markup an
+// earlier test cached. `clearEveryLru` empties every cache `createLru` made. It is test isolation only, and production
+// never calls it. `highlightCache.ts` imports nothing, so this hook loads no renderer and no file's own `vi.mock` of
+// `lib/markdown` meets an instance loaded here first.
+//
+// (5) THE SCREEN CACHE IS EMPTIED AFTER EVERY TEST (console speed C2).
+//
+// `screenCache.ts` keeps the last answer of each Settings read and digest day in module state, and the hooks draw it on
+// their first render. Across tests that is a leak: a later test in the same file would draw an earlier test's answer
+// before any read of its own. `screenCache.ts` imports nothing, so this hook loads no hook or screen.
 afterEach(async () => {
   useFleetStore.getState().disconnect();
   cleanup();
+  setStripExpanded(false);
+  try {
+    window.localStorage.removeItem('ccrc-accounts-strip');
+  } catch {
+    /* a file on the node environment has no window, and a test may have made storage throw: nothing to clear then */
+  }
+  clearEveryLru();
+  clearScreenCache();
   if (vi.isFakeTimers()) {
     vi.runOnlyPendingTimers();
   } else {
@@ -96,20 +133,10 @@ if (typeof window !== 'undefined') {
       return false;
     }
   })();
+  // The shim is the storage port's own test instance (`lib/storage.ts#memoryStorage`, D-7190).
   if (!storageUsable) {
-    const backing = new Map<string, string>();
-    const memStorage: Storage = {
-      get length() {
-        return backing.size;
-      },
-      clear: () => backing.clear(),
-      getItem: (k: string) => backing.get(k) ?? null,
-      key: (i: number) => [...backing.keys()][i] ?? null,
-      removeItem: (k: string) => void backing.delete(k),
-      setItem: (k: string, v: string) => void backing.set(k, String(v)),
-    };
     Object.defineProperty(window, 'localStorage', {
-      value: memStorage,
+      value: memoryStorage(),
       configurable: true,
       writable: true,
     });

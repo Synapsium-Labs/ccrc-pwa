@@ -51,21 +51,21 @@ const harness = (home: string): { run: Runner; calls: string[][] } => {
   const run: Runner = async (_cmd, args) => {
     calls.push([...args]);
     if (args[0] === 'capture-pane') {
-      return { code: 0, stdout: `  👤 claude │ 🤖 Sonnet 5 │ ⎇ ws/quiet-mesa │ 🎯 demo`, stderr: '' };
+      return { ran: true, code: 0, stdout: `  👤 claude │ 🤖 Sonnet 5 │ ⎇ ws/quiet-mesa │ 🎯 demo`, stderr: '' };
     }
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: '4061\n', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4061\n', stderr: '' };
     if (args[0] === 'ws-hold') {
       const at = args.indexOf('--session');
       const reasonAt = args.indexOf('--reason');
       writeFileSync(path.join(home, '.cc-sessions', `${args[at + 1]}.hold`),
         reasonAt >= 0 ? args[reasonAt + 1]! : '');
-      return { code: 0, stdout: 'held', stderr: '' };
+      return { ran: true, code: 0, stdout: 'held', stderr: '' };
     }
     if (args[0] === 'ws-rename') {
-      return { code: 0, stdout: `{"renamed":"${ID}","old":"ws/quiet-mesa","new":"ws/fix-the-pr-sheet"}`, stderr: '' };
+      return { ran: true, code: 0, stdout: `{"renamed":"${ID}","old":"ws/quiet-mesa","new":"ws/fix-the-pr-sheet"}`, stderr: '' };
     }
-    return { code: 1, stdout: '', stderr: '' };
+    return { ran: true, code: 1, stdout: '', stderr: '' };
   };
   return { run, calls };
 };

@@ -1,0 +1,1001 @@
+// The Waiting on you list (desktop-polish PL5a, D-7712; spec §2, view 1 of the prototype). `WaitingScreen` is pure over
+// `{view, sessions, runs, now}`: it grows no store and no route of its own, so the cases pass what the shell would.
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { WAITS_ON_WORDS } from '../../shared/ledgers';
+import type { AskMarkRow } from '../../shared/answerMarks';
+import { fleetHues } from '../src/fleet/programmeBoxes';
+import { ClearedTrail, ItemRows, WaitingScreen } from '../src/ledgers/WaitingScreen';
+import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
+import { MIN, NOW, itemView, runRow, waitingView } from './ledgersFixture';
+import { run as runFixture } from './rollupFixture';
+import { ApiError, api } from '../src/lib/api';
+import { needsYou, needsYouCount } from '../src/ledgers/needsYou';
+import { ITEM_DOORS, closeRefusedAction, endRunAction, releaseReviewAction } from '../../shared/ledgers';
+import { matchRoute } from '../src/lib/routes';
+import { ITEM_DOOR_WORDS } from '../src/ledgers/ItemActs';
+
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+const open = (props: Partial<React.ComponentProps<typeof WaitingScreen>> = {}) => {
+  const onOpenItem = vi.fn();
+  const onOpenSession = vi.fn();
+  render(<WaitingScreen view={waitingView()} sessions={[]} runs={[]} now={NOW} onOpenItem={onOpenItem}
+    onOpenSession={onOpenSession} {...props} />);
+  return { onOpenItem, onOpenSession };
+};
+
+describe('the Waiting on you list', () => {
+  it('the empty list says Nothing needs you', () => {
+    open();
+    expect(screen.getByText('Nothing needs you.')).toBeTruthy();
+  });
+
+  it('no frame yet is not the empty list', () => {
+    open({ view: null });
+    expect(screen.queryByText('Nothing needs you.')).toBeNull();
+    expect(screen.getByRole('status').textContent).toMatch(/first update/i);
+  });
+
+  it('groups by programme in hue, programmes with a blocking item first', () => {
+    const runs = [runRow({ id: 1, program: 'prog-a' }), runRow({ id: 2, program: 'prog-b' })];
+    const hues = fleetHues(runs);
+    open({
+      runs,
+      view: waitingView({
+        items: [
+          itemView({ id: 1, program: 'prog-a', title: 'A soon thing', neededBy: 'soon' }),
+          itemView({ id: 2, program: 'prog-b', title: 'A blocking thing', neededBy: 'blocking' }),
+          itemView({ id: 3, program: 'prog-b', title: 'A later thing', neededBy: 'later' }),
+        ],
+      }),
+    });
+    const groups = screen.getAllByRole('region', { name: /^prog-/ });
+    expect(groups.map((g) => g.getAttribute('data-program'))).toEqual(['prog-b', 'prog-a']);
+    expect(groups.map((g) => g.getAttribute('data-hue'))).toEqual([hues.get('prog-b'), hues.get('prog-a')]);
+    // Within a group, blocking first.
+    const rows = within(groups[0]!).getAllByRole('button').map((b) => b.getAttribute('data-item'));
+    expect(rows).toEqual(['2', '3']);
+  });
+
+  it('a checking item reads Checking… and a stale one reads ticked; coordinator not responding', () => {
+    open({
+      view: waitingView({
+        items: [
+          itemView({ id: 1, state: 'checking', tickedAt: NOW - 5 * MIN, title: 'Fresh tick' }),
+          itemView({ id: 2, state: 'checking', stale: true, tickedAt: NOW - 50 * MIN, title: 'Old tick' }),
+        ],
+      }),
+    });
+    const fresh = screen.getByRole('button', { name: /Fresh tick/ });
+    const stale = screen.getByRole('button', { name: /Old tick/ });
+    expect(within(fresh).getByText('Checking…')).toBeTruthy();
+    expect(within(stale).getByText('ticked; coordinator not responding')).toBeTruthy();
+    expect(within(fresh).queryByText('ticked; coordinator not responding')).toBeNull();
+  });
+
+  it('a returned item shows the coordinator\'s note under Came back', () => {
+    open({
+      view: waitingView({
+        items: [itemView({
+          id: 4, title: 'Flip the lane', note: 'A different line kept on the item.',
+          history: [
+            { at: NOW - 3 * 60 * MIN, act: 'raise', note: null }, { at: NOW - 2 * 60 * MIN, act: 'tick', note: null },
+            { at: NOW - 60 * MIN, act: 'return', note: 'Settings still shows record only.' },
+          ],
+        })],
+      }),
+    });
+    const row = screen.getByRole('button', { name: /Flip the lane/ });
+    expect(within(row).getByText('Came back')).toBeTruthy();
+    // The note is the history's return note, the coordinator's latest word: never the item's own `note` column.
+    expect(within(row).getByText(/Settings still shows record only\./)).toBeTruthy();
+    expect(within(row).queryByText(/A different line kept on the item/)).toBeNull();
+  });
+
+  it('Recently cleared lists done items', () => {
+    open({
+      view: waitingView({
+        cleared: [itemView({ id: 9, state: 'done', title: 'Approve the prototype', closedAt: NOW - 24 * 60 * MIN })],
+      }),
+    });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(trail).getByText('Approve the prototype')).toBeTruthy();
+  });
+
+  // ONE WAITING ON YOU PAGE (desktop-polish PL11, D-7986; spec §2, D29): the programme page lost its cleared trail, so the list
+  // filtered to a programme is where that programme's recently cleared items show, and only those; clearing the filter shows all.
+  it('filtered to a programme, Recently cleared holds that programme\'s items only; unfiltered, every programme\'s', () => {
+    const view = waitingView({
+      items: [itemView({ id: 1, program: 'prog-a' }), itemView({ id: 2, program: 'prog-b' })],
+      cleared: [itemView({ id: 20, program: 'prog-a', state: 'done', title: 'Approve v6', closedAt: NOW - 60 * MIN }),
+        itemView({ id: 21, program: 'prog-b', state: 'done', title: 'Lift the cap', closedAt: NOW - 60 * MIN })],
+    });
+    open({ view, programme: 'prog-a' });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(trail).getByText('Approve v6')).toBeTruthy();
+    expect(within(trail).queryByText('Lift the cap')).toBeNull();
+    cleanup();
+    open({ view, programme: null });
+    const all = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(all).getByText('Approve v6')).toBeTruthy();
+    expect(within(all).getByText('Lift the cap')).toBeTruthy();
+  });
+
+  it('filtered to the sessions in no programme, Recently cleared is not drawn: every cleared item is a programme\'s', () => {
+    const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question', bucketSince: NOW - 6 * MIN });
+    const view = waitingView({ cleared: [itemView({ id: 20, program: 'prog-a', state: 'done', title: 'Approve v6', closedAt: NOW - 60 * MIN })] });
+    open({ view, sessions: [asking], programme: '' });
+    expect(screen.getByText('A question')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Recently cleared' })).toBeNull();
+  });
+
+  it('a question row links to its session and is never tickable', () => {
+    const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'Status flag question', bucketSince: NOW - 6 * MIN });
+    const runs = [runRow({ id: 5, program: 'prog-a', sessionId: 'project-a-ask' })];
+    const { onOpenSession, onOpenItem } = open({ sessions: withRunBinding([asking], runs), runs });
+    const row = screen.getByRole('button', { name: /Status flag question/ });
+    expect(within(row).getByText('Question')).toBeTruthy();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: /mark done|tick/i })).toBeNull();
+    fireEvent.click(row);
+    expect(onOpenSession).toHaveBeenCalledWith('project-a-ask');
+    expect(onOpenItem).not.toHaveBeenCalled();
+  });
+
+  it('before the first fleet frame it says it is waiting, never that nothing needs the operator', () => {
+    open({ view: waitingView(), sessions: null });
+    expect(screen.queryByText('Nothing needs you.')).toBeNull();
+    expect(screen.getByRole('status').textContent).toMatch(/first update/i);
+    cleanup();
+    open({ view: waitingView(), sessions: [] });
+    expect(screen.getByText('Nothing needs you.')).toBeTruthy();
+  });
+
+  it('a list with items waits for the fleet frame too: its rows are not shown without the sessions\' questions', () => {
+    open({ view: waitingView({ items: [itemView({ id: 1, title: 'An item on the list' })] }), sessions: null });
+    expect(screen.getByRole('status').textContent).toMatch(/first update/i);
+    expect(screen.queryByText('An item on the list')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('says why no list will come, in place of the waiting line', () => {
+    open({ view: null, unavailable: 'This box has no coordination database, so there is no Waiting on you list here.' });
+    expect(screen.getByRole('alert').textContent).toMatch(/no coordination database/);
+    expect(screen.queryByText(/first update/i)).toBeNull();
+  });
+
+  it('a programme with no open run is marked ended, and one with a run, or whose runs are unheard, is not', () => {
+    const view = waitingView({ items: [itemView({ id: 1, program: 'prog-a' }), itemView({ id: 2, program: 'prog-b' })] });
+    const runs = [runRow({ id: 1, program: 'prog-a', state: 'working' }), runRow({ id: 2, program: 'prog-b', state: 'done' })];
+    open({ view, runs });
+    const marked = screen.getAllByRole('region', { name: /^prog-/ }).filter((g) => within(g).queryByText(WAITS_ON_WORDS.ended) !== null);
+    expect(marked.map((g) => g.getAttribute('data-program'))).toEqual(['prog-b']);
+    cleanup();
+    open({ view, runs: null });
+    expect(screen.queryByText(WAITS_ON_WORDS.ended)).toBeNull();
+    cleanup();
+    open({ view: waitingView({ items: [itemView({ id: 3 })], }), runs: [runRow({ id: 1, program: 'prog-a', state: 'working' })] });
+    expect(screen.queryByText(WAITS_ON_WORDS.ended)).toBeNull();
+  });
+
+  it('the rail counts each programme\'s open items and questions, not what is being checked, and the total adds up', () => {
+    const runs = [runRow({ id: 5, program: 'prog-a', sessionId: 'project-a-ask' })];
+    const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'Which one?', bucketSince: NOW - MIN });
+    open({
+      runs, sessions: withRunBinding([asking], runs),
+      view: waitingView({
+        items: [
+          itemView({ id: 1, program: 'prog-a' }), itemView({ id: 2, program: 'prog-a', neededBy: 'later' }),
+          itemView({ id: 3, program: 'prog-a', state: 'checking', tickedAt: NOW - MIN }),
+          itemView({ id: 4, program: 'prog-b' }),
+        ],
+      }),
+    });
+    const rail = screen.getByRole('navigation', { name: 'Programmes' });
+    const counts = within(rail).getAllByRole('button').map((b) => [b.querySelector('.wl-rail-name')!.textContent, b.querySelector('.wl-rail-n')!.textContent]);
+    expect(counts).toEqual([['All programmes', '4'], ['prog-a', '3'], ['prog-b', '1']]);
+  });
+
+  it('a row says how soon an item is needed whatever its state', () => {
+    open({
+      view: waitingView({
+        items: [
+          itemView({ id: 1, title: 'Held one', state: 'checking', neededBy: 'blocking', tickedAt: NOW - MIN }),
+          itemView({ id: 2, title: 'Sent back one', neededBy: 'blocking', history: [{ at: 1, act: 'raise', note: null }, { at: 2, act: 'return', note: 'no' }] }),
+        ],
+      }),
+    });
+    const held = screen.getByRole('button', { name: /Held one/ });
+    expect(within(held).getByText('Checking…')).toBeTruthy();
+    expect(within(held).getByText('Blocking')).toBeTruthy();
+    const back = screen.getByRole('button', { name: /Sent back one/ });
+    expect(within(back).getByText('Came back')).toBeTruthy();
+    expect(within(back).getByText('Blocking')).toBeTruthy();
+  });
+
+  it('a tapped item opens it', () => {
+    const { onOpenItem } = open({ view: waitingView({ items: [itemView({ id: 7, title: 'Pick one' })] }) });
+    fireEvent.click(screen.getByRole('button', { name: /Pick one/ }));
+    // The list it was opened from rides along (plan PL9): the combined list, unfiltered.
+    expect(onOpenItem).toHaveBeenCalledWith(7, { at: 'waiting', programme: null });
+  });
+
+  it('the summary counts items by state', () => {
+    const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', bucketSince: NOW - MIN });
+    open({
+      sessions: [asking],
+      view: waitingView({
+        items: [
+          itemView({ id: 1, neededBy: 'blocking' }), itemView({ id: 2, neededBy: 'soon' }), itemView({ id: 3, neededBy: 'soon' }),
+          itemView({ id: 4, state: 'checking' }),
+          itemView({ id: 5, history: [{ at: 1, act: 'raise', note: null }, { at: 2, act: 'return', note: 'no' }] }),
+        ],
+      }),
+    });
+    const summary = screen.getByRole('list', { name: 'Summary' });
+    const words = within(summary).getAllByRole('listitem').map((li) => li.textContent);
+    expect(words).toEqual(['1 blocking now', '1 question from a session', '2 needed soon', '1 being checked', '1 came back']);
+  });
+
+  // REVIEW 1537 F4: under a filter the pills count only what the page draws, so prog-b's blocking item never reads on prog-a's
+  // page, where a programme chip lands.
+  it("filtered to a programme, the summary counts that programme's items alone: another's blocking item does not reach it", () => {
+    open({
+      programme: 'prog-a',
+      view: waitingView({
+        items: [
+          itemView({ id: 1, program: 'prog-b', neededBy: 'blocking' }), itemView({ id: 2, program: 'prog-b', neededBy: 'soon' }),
+          itemView({ id: 3, program: 'prog-a', neededBy: 'soon' }), itemView({ id: 4, program: 'prog-a', neededBy: 'soon' }),
+        ],
+      }),
+    });
+    const words = within(screen.getByRole('list', { name: 'Summary' })).getAllByRole('listitem').map((li) => li.textContent);
+    expect(words).toEqual(['2 needed soon']);
+  });
+
+  // REVIEW 1548 M3: the other filter. Filtered to the sessions in no programme, the pills count those sessions' questions alone:
+  // a programme's blocking item does not reach them.
+  it('filtered to the sessions in no programme, the summary counts their questions alone: a programme\'s blocking item does not reach it', () => {
+    const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question', bucketSince: NOW - 6 * MIN });
+    open({
+      sessions: [asking], programme: '',
+      view: waitingView({ items: [itemView({ id: 1, program: 'prog-a', neededBy: 'blocking' }), itemView({ id: 2, program: 'prog-a', neededBy: 'soon' })] }),
+    });
+    const words = within(screen.getByRole('list', { name: 'Summary' })).getAllByRole('listitem').map((li) => li.textContent);
+    expect(words).toEqual(['1 question from a session']);
+  });
+
+  it('the rail filters to the programme its prop names, keeps no copy of its own, and tells the route of a pick', () => {
+    const view = waitingView({
+      items: [itemView({ id: 1, program: 'prog-a', title: 'In A' }), itemView({ id: 2, program: 'prog-b', title: 'In B' })],
+    });
+    const onFilter = vi.fn();
+    const { rerender } = render(<WaitingScreen view={view} sessions={[]} runs={[]} now={NOW} onOpenItem={vi.fn()}
+      onOpenSession={vi.fn()} programme="prog-b" onFilter={onFilter} />);
+    expect(screen.queryByText('In A')).toBeNull();
+    expect(screen.getByText('In B')).toBeTruthy();
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Programmes' })).getByRole('button', { name: /prog-a/ }));
+    expect(onFilter).toHaveBeenLastCalledWith('prog-a');
+    // The pick is the route's to make: until the prop says prog-a, prog-b is what is drawn.
+    expect(screen.queryByText('In A')).toBeNull();
+    rerender(<WaitingScreen view={view} sessions={[]} runs={[]} now={NOW} onOpenItem={vi.fn()} onOpenSession={vi.fn()}
+      programme={null} onFilter={onFilter} />);
+    expect(screen.getByText('In A')).toBeTruthy();
+    expect(screen.getByText('In B')).toBeTruthy();
+  });
+});
+
+// Desktop-polish PL10 (D-7952; spec §2, D26): each programme group of the combined list links its pinned spec, at the address
+// Goals builds (`programmeSpecHref`), and a programme with no pin, or no home project, has none.
+describe('the spec one tap away on the combined list', () => {
+  const SPEC = 'docs/superpowers/specs/2026-10-31-prog-a-design.md';
+  const goalsOf = (program: string, specPath: string | null) => ({ program, specPath, inShort: null, inShortAt: null, modifications: [] });
+
+  it('each programme group links the pinned spec; no spec link is drawn without a pin', () => {
+    const runs = [runRow({ id: 1, program: 'prog-a', homeProject: 'project-a' } as never), runRow({ id: 2, program: 'prog-b', homeProject: 'project-a' } as never)];
+    open({
+      runs,
+      view: waitingView({
+        items: [itemView({ id: 1, program: 'prog-a' }), itemView({ id: 2, program: 'prog-b' })],
+        goals: [goalsOf('prog-a', SPEC), goalsOf('prog-b', null)],
+      }),
+    });
+    const [a, b] = ['prog-a', 'prog-b'].map((p) => document.querySelector<HTMLElement>(`.wl-group[data-program="${p}"]`)!);
+    const link = within(a!).getByRole('link', { name: 'Spec for prog-a' });
+    expect(link.getAttribute('href')).toBe('/docs/project-a/specs/2026-10-31-prog-a-design.md');
+    expect(within(b!).queryByRole('link')).toBeNull();
+    // Not even as words: a link with no address is no `link` role, so the words are what a dead "Spec" leaves (review 1466 F15).
+    expect(within(b!).queryByText('Spec')).toBeNull();
+  });
+
+  it('no spec link without a home project, nor on the group of sessions in no programme', () => {
+    open({
+      runs: [runRow({ id: 1, program: 'prog-a', homeProject: null } as never)],
+      view: waitingView({ items: [itemView({ id: 1, program: 'prog-a' })], goals: [goalsOf('prog-a', SPEC)] }),
+    });
+    expect(screen.queryByRole('link', { name: /^Spec/ })).toBeNull();
+    expect(screen.queryByText('Spec'), 'no dead Spec word (review 1466 F15)').toBeNull();
+  });
+});
+
+// D-8123 (limit-swap-autofix Task 11): a session on a usage limit that no account has room to take is a row of the list,
+// beside an item and a question, in its programme's group, with its own controls, and it counts.
+describe('a session on a usage limit with no account to take it', () => {
+  const stuck = (id: string, over: object = {}) => fleetSession({
+    id, title: `Worker ${id}`, wrapper: 'lane-a', home: 'lane-a',
+    limitWait: { since: NOW - 12 * MIN, reset: null, account: 'lane-a', waiting: false, waitingBy: null, ...over },
+  });
+
+  it('draws one row with both controls, in the combined list, and counts it in the summary', () => {
+    open({ sessions: [stuck('project-a-w1')] });
+    const row = screen.getByTestId('limit-wait-row');
+    expect(row.textContent).toContain('Worker project-a-w1 is on a usage limit and no account has room');
+    expect(within(row).getAllByRole('button').map((b) => b.textContent)).toEqual(['No account has room yet', 'Wait until the limit resets']);
+    expect(screen.getByLabelText('Summary').textContent).toContain('1 session on a usage limit');
+    expect(screen.queryByText('Nothing needs you.')).toBeNull();
+  });
+
+  it('is filed under its programme, beside that programme\'s items, and the side rail counts it', () => {
+    const runs = [runRow({ id: 1, program: 'prog-a', sessionId: 'project-a-w1' })];
+    open({
+      runs, sessions: withRunBinding([stuck('project-a-w1')], runs),
+      view: waitingView({ items: [itemView({ id: 1, program: 'prog-a', title: 'An item' })] }),
+    });
+    const group = screen.getByRole('region', { name: /prog-a/ });
+    expect(within(group).getByTestId('limit-wait-row')).toBeTruthy();
+    expect(within(group).getByText('An item')).toBeTruthy();
+    expect(within(screen.getByRole('navigation', { name: 'Programmes' })).getByRole('button', { name: /prog-a/ }).textContent).toContain('2');
+  });
+
+  it('keeps the summary count line right while a blocking item and a limit row come and go together', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const blocking = waitingView({ items: [itemView({ id: 1, program: 'prog-a', title: 'Blocker', neededBy: 'blocking' })] });
+    const sessions = [stuck('project-a-w1')];
+    const props = { view: blocking, sessions, runs: [] as never[], now: NOW, onOpenItem: vi.fn(), onOpenSession: vi.fn() };
+    const { rerender } = render(<WaitingScreen {...props} />);
+    const pills = () => within(screen.getByLabelText('Summary')).getAllByRole('listitem').map((li) => li.textContent);
+    expect(pills()).toEqual(['1 blocking now', '1 session on a usage limit']);
+    // The blocking item is resolved: its pill must go, the limit's stays.
+    rerender(<WaitingScreen {...props} view={waitingView()} />);
+    expect(pills()).toEqual(['1 session on a usage limit']);
+    // A blocking item and a second limit row arrive: each pill is drawn once.
+    rerender(<WaitingScreen {...props} view={blocking} sessions={[stuck('project-a-w1'), stuck('project-a-w2')]} />);
+    expect(pills()).toEqual(['1 blocking now', '2 sessions on a usage limit']);
+    expect(errors.mock.calls.flat().join(' ')).not.toContain('same key');
+    errors.mockRestore();
+  });
+
+  it('opens nothing when the row itself is tapped: it is not an item, its controls are its own', () => {
+    const { onOpenItem, onOpenSession } = open({ sessions: [stuck('project-a-w1')] });
+    fireEvent.click(screen.getByTestId('limit-wait-row'));
+    expect(onOpenItem).not.toHaveBeenCalled();
+    expect(onOpenSession).not.toHaveBeenCalled();
+  });
+});
+
+// Task 24 (runs rebuild §8.7, §10, F21; D-8076): the controls an item or a review cap carries on the list.
+describe('the controls on /waiting (Task 24)', () => {
+  const ORIGINS = ['Raised by its coordinator', 'Its coordinator did not answer', 'Its coordinator is gone'] as const;
+  const endItem = (over: Partial<ReturnType<typeof itemView>> = {}) => itemView({
+    id: 31, program: 'port-api', runId: 7, title: 'End run: Port the API, wave 1', why: `It never started.\n${ORIGINS[1]}`,
+    how: ['Read why it asked.', 'Abandon the run, or keep it.'], action: endRunAction(7, null), ...over,
+  });
+  const live = runFixture(7, 'coord', 'w-7');
+  const cap = (id: number, over: object = {}) => runFixture(id, 'coord', `w-${id}`, {
+    reviewCap: { rounds: 3, cap: 3, askedAt: NOW - MIN, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null }, ...over,
+  });
+  const rowOf = (id: number): HTMLElement => document.querySelector<HTMLElement>(`li:has([data-item="${id}"])`)!;
+
+  it('an end-run row carries Abandon run and Keep the run, at the right from 640 and on their own line below it', () => {
+    open({ runs: [live], view: waitingView({ items: [endItem(), itemView({ id: 32, program: 'port-api' })] }) });
+    const li = rowOf(31);
+    const acts = within(li).getByRole('group', { name: 'Run 7' });
+    expect(within(acts).getAllByRole('button').map((b) => b.textContent)).toEqual(['Abandon run', 'Keep the run']);
+    // The controls are siblings of the row's own button, never inside it (a button holds no button).
+    expect(li.querySelector('[data-item="31"] button')).toBeNull();
+    expect(acts.parentElement).toBe(li);
+    // An ordinary item carries neither.
+    expect(within(rowOf(32)).queryByRole('button', { name: /Abandon run|Keep the run/ })).toBeNull();
+    // The width rule: one column below 640, the controls beside the row from 640 up.
+    const css = readFileSync(path.join(__dirname, '../src/ledgers/ledgers.css'), 'utf8');
+    expect(css).toMatch(/\.wl-li\[data-acts='true'\] \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto;/);
+    expect(css).toMatch(/@media \(max-width: 639\.98px\) \{\s*\.wl-li\[data-acts='true'\] \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  });
+
+  it('Abandon run opens the single sheet and calls act', async () => {
+    const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
+    const abandon = vi.spyOn(api, 'abandonRun');
+    open({ runs: [live], view: waitingView({ items: [endItem()] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run' }));
+    // The one sheet of spec §9.1: its title names the run, and nothing is sent by the first tap.
+    expect(await screen.findByText('Abandon run 7?')).toBeTruthy();
+    expect(act).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run 7' }));
+    await waitFor(() => expect(act).toHaveBeenCalledWith(31));
+    expect(abandon).not.toHaveBeenCalled();
+  });
+
+  it('a refused act is said in the sheet, which stays open', async () => {
+    vi.spyOn(api, 'actItem').mockRejectedValue(new ApiError(409, { error: 'not-open' }));
+    open({ runs: [live], view: waitingView({ items: [endItem()] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Abandon run 7' }));
+    expect(await screen.findByText(/This item is not open any more/)).toBeTruthy();
+    expect(screen.getByText('Abandon run 7?')).toBeTruthy();
+  });
+
+  it('Keep the run confirms and calls decline', async () => {
+    const decline = vi.spyOn(api, 'declineItem').mockResolvedValue({ ok: true, item: endItem({ state: 'dismissed' }) });
+    open({ runs: [live], view: waitingView({ items: [endItem()] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Keep the run' }));
+    expect(await screen.findByText('Keep run 7?')).toBeTruthy();
+    expect(screen.getByText('The asker is told.')).toBeTruthy();
+    expect(decline).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Keep the run' }));
+    await waitFor(() => expect(decline).toHaveBeenCalledWith(31));
+  });
+
+  it('Back leaves the item alone', async () => {
+    const decline = vi.spyOn(api, 'declineItem');
+    open({ runs: [live], view: waitingView({ items: [endItem()] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Keep the run' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
+    expect(decline).not.toHaveBeenCalled();
+  });
+
+  it('the row line ends in one of the three origins', () => {
+    open({ runs: [live], view: waitingView({ items: ORIGINS.map((o, i) => endItem({ id: 40 + i, runId: 7, why: `Asked in its own words.\n${o}` })) }) });
+    for (let i = 0; i < ORIGINS.length; i++) {
+      const lines = rowOf(40 + i).querySelector('.wl-why')!.textContent!.split('\n');
+      expect(lines.at(-1)).toBe(ORIGINS[i]);
+      expect(ORIGINS).toContain(lines.at(-1));
+    }
+    // The line keeps its own line: the why is drawn with its newline.
+    expect(rowOf(40).querySelector('.wl-why')!.getAttribute('data-lines')).toBe('true');
+  });
+
+  it('a saved copy draws the controls disabled', () => {
+    open({ runs: [live], notCurrent: 'Saved on this device.', view: waitingView({ items: [endItem()] }) });
+    expect((screen.getByRole('button', { name: 'Abandon run' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Keep the run' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('an end-run item whose run is not among the runs heard still offers Keep the run, and no Abandon run', () => {
+    open({ runs: [], view: waitingView({ items: [endItem()] }) });
+    expect(screen.queryByRole('button', { name: 'Abandon run' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Keep the run' })).toBeTruthy();
+  });
+
+  // D-8293: a review child kept past its ceiling. Its one control needs no run among the runs heard.
+  const releaseItem = (over: Partial<ReturnType<typeof itemView>> = {}) => itemView({
+    id: 51, program: 'port-api', runId: 7, title: 'Review workspace kept: Port the API · review of wave 1',
+    why: 'This review\'s workspace (demo-rv) is kept because the run it reviewed, run 7, is still open.\nIts coordinator did not answer',
+    how: ['Release the workspace.', 'Or leave it.'], action: releaseReviewAction(7, 9, 'demo-rv'), ...over,
+  });
+
+  it('a release-review row carries Release workspace, laid beside the row like the other controls', () => {
+    open({ runs: [], view: waitingView({ items: [releaseItem()] }) });
+    const li = rowOf(51);
+    expect(li.getAttribute('data-acts')).toBe('true');
+    const acts = within(li).getByRole('group', { name: 'Workspace demo-rv' });
+    expect(within(acts).getAllByRole('button').map((b) => b.textContent)).toEqual(['Release workspace']);
+    expect(acts.parentElement).toBe(li);
+    expect(within(li).queryByRole('button', { name: /Abandon run|Keep the run/ })).toBeNull();
+  });
+
+  it('Release workspace opens its sheet, and only the confirm calls act', async () => {
+    const release = vi.spyOn(api, 'releaseReviewItem').mockResolvedValue({ ok: true, released: true, item: releaseItem({ state: 'done' }) });
+    open({ runs: [], view: waitingView({ items: [releaseItem()] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Release workspace' }));
+    expect(await screen.findByText('Release workspace demo-rv?')).toBeTruthy();
+    expect(screen.getByText(/stops keeping it for run 7/)).toBeTruthy();
+    expect(release).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Release workspace' }));
+    await waitFor(() => expect(release).toHaveBeenCalledWith(51));
+  });
+
+  it('a refused release is said in the sheet, which stays open', async () => {
+    vi.spyOn(api, 'releaseReviewItem').mockRejectedValue(new ApiError(409, { error: 'not-open' }));
+    open({ runs: [], view: waitingView({ items: [releaseItem()] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Release workspace' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Release workspace' }));
+    expect(await screen.findByText(/This item is not open any more/)).toBeTruthy();
+    expect(screen.getByText('Release workspace demo-rv?')).toBeTruthy();
+  });
+
+  it('a saved copy draws Release disabled, and a closed release-review item carries none', () => {
+    open({ runs: [], notCurrent: 'Saved on this device.', view: waitingView({ items: [releaseItem()] }) });
+    expect((screen.getByRole('button', { name: 'Release workspace' }) as HTMLButtonElement).disabled).toBe(true);
+    cleanup();
+    open({ runs: [], view: waitingView({ items: [releaseItem({ state: 'checking', tickedAt: NOW })] }) });
+    expect(screen.queryByRole('button', { name: 'Release workspace' })).toBeNull();
+  });
+
+  it('an item being checked or closed carries no end-run control', () => {
+    open({ runs: [live], view: waitingView({ items: [endItem({ state: 'checking', tickedAt: NOW })] }) });
+    expect(screen.queryByRole('button', { name: /Abandon run|Keep the run/ })).toBeNull();
+  });
+
+  it('a review cap is a /waiting row with Lift cap on it', async () => {
+    vi.spyOn(api, 'reviewCap').mockReturnValue(new Promise(() => {}));
+    open({ runs: [cap(12), cap(13, { reviewCap: { rounds: 3, cap: 3, askedAt: 1, liftedAt: 5 } })], view: waitingView() });
+    const row = document.querySelector<HTMLElement>('[data-run="12"]')!;
+    expect(row.textContent).toMatch(/Review cap/);
+    expect(row.textContent).toMatch(/run 12/);
+    expect(row.textContent).toMatch(/3 of 3 review rounds/);
+    // The list is not empty because of it, and a lifted cap is no row.
+    expect(screen.queryByText('Nothing needs you.')).toBeNull();
+    expect(document.querySelector('[data-run="13"]')).toBeNull();
+    fireEvent.click(within(row.closest('li')!).getByRole('button', { name: 'Lift cap' }));
+    expect(await screen.findByText('Lift the review cap?')).toBeTruthy();
+    expect(api.reviewCap).toHaveBeenCalledWith(12);
+  });
+
+  it('a review cap counts once on the page, in its programme group, in the summary, and in the door', () => {
+    const runs = [cap(12), runFixture(14, 'coord', 'w-14', { program: 'other', programTitle: 'Other' })];
+    open({ runs, view: waitingView({ items: [itemView({ id: 1, program: 'port-api' })] }) });
+    const group = document.querySelector('.wl-group[data-program="port-api"]')!;
+    expect(group.querySelectorAll('.wl-item, .wl-capitem')).toHaveLength(2);
+    expect(screen.getByText('1 review cap to lift')).toBeTruthy();
+    const rail = screen.getByRole('navigation', { name: 'Programmes' });
+    expect(within(rail).getByRole('button', { name: /All programmes/ }).textContent).toMatch(/2$/);
+    // The door's number is the page's: both read `needsYou`.
+    expect(needsYouCount(needsYou([itemView({ id: 1, program: 'port-api' })], [], runs))).toBe(2);
+  });
+
+  it('a review cap sits under the programme filter it belongs to', () => {
+    open({ runs: [cap(12)], programme: 'other', view: waitingView({ items: [itemView({ id: 1, program: 'other' })] }) });
+    expect(document.querySelector('[data-run="12"]')).toBeNull();
+  });
+});
+
+// Task 27 (runs rebuild §12.2, A19, A62; D-8077): the controls of a refused close. Each door the item carries renders on its row, a
+// link door opens a page that exists, "Abandon anyway" and "Abandon" reuse the one sheet and `act`, and "Hand to a coordinator"
+// opens the Resume sheet at its third step.
+describe('the doors of a refused close (Task 27)', () => {
+  const live = runFixture(7, 'lane-gone', 'w-7');
+  const refused = (id: number, doors: Parameters<typeof closeRefusedAction>[1], over: Partial<ReturnType<typeof itemView>> = {}) => itemView({
+    id, program: 'port-api', runId: 7, title: 'Item of a refused close: Port the API', why: 'ccrc would close this run on its own, but it did not.\nIts coordinator is gone',
+    how: ['Read why ccrc did not close it.', 'Take the control on this row.'], action: closeRefusedAction(7, doors), ...over,
+  });
+  const rowOf = (id: number): HTMLElement => document.querySelector<HTMLElement>(`li:has([data-item="${id}"])`)!;
+  const WORDS = {
+    'open-pr': 'Open the PR', 'hand-to-coordinator': 'Hand to a coordinator', abandon: 'Abandon', 'abandon-anyway': 'Abandon anyway',
+    'open-worker': 'Open the worker', 'open-coordinator': 'Open the coordinator',
+    'close-run': 'Close this run', 'end-programme': 'Close and end the programme',
+  } as const;
+
+  it('each door renders on the row, in the order the item names, beside the row and never inside its button', () => {
+    const doors = Object.keys(WORDS) as (keyof typeof WORDS)[];
+    open({ runs: [live], view: waitingView({ items: [refused(51, doors as never)] }) });
+    const li = rowOf(51);
+    const acts = within(li).getByRole('group', { name: 'Run 7' });
+    expect(Array.from(acts.querySelectorAll('[data-door]')).map((d) => d.textContent)).toEqual(doors.map((d) => WORDS[d]));
+    expect(li.querySelector('[data-item="51"] button, [data-item="51"] a')).toBeNull();
+    expect(acts.parentElement).toBe(li);
+    expect(li.getAttribute('data-acts')).toBe('true');
+    expect(within(rowOf(51)).queryByRole('button', { name: 'Keep the run' }), 'decline applies to an end request alone').toBeNull();
+  });
+
+  it('each link door opens a page that exists for that run', () => {
+    open({ runs: [live], view: waitingView({ items: [refused(52, ['open-pr', 'open-worker', 'open-coordinator'])] }) });
+    const hrefs = Array.from(rowOf(52).querySelectorAll<HTMLAnchorElement>('a[data-door]')).map((a) => a.getAttribute('href')!);
+    expect(hrefs).toEqual(['/runs/7', '/s/w-7', '/s/lane-gone']);
+    for (const h of hrefs) expect(matchRoute(h), h).not.toBeNull();
+  });
+
+  it('a link door falls back to the run\'s page when the run names no such session', () => {
+    open({ runs: [runFixture(7, 'lane-gone', null)], view: waitingView({ items: [refused(53, ['open-worker'])] }) });
+    expect(rowOf(53).querySelector('a[data-door]')!.getAttribute('href')).toBe('/runs/7');
+  });
+
+  it('Abandon opens the one sheet with the cannot-tell sentence and calls act', async () => {
+    const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
+    open({ runs: [live], view: waitingView({ items: [refused(54, ['abandon'])] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon' }));
+    expect(await screen.findByText('Abandon run 7?')).toBeTruthy();
+    expect(screen.getByText(/cannot tell whether/)).toBeTruthy();
+    expect(screen.queryByText('The branch stays on disk.')).toBeNull();
+    expect(act).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run 7' }));
+    await waitFor(() => expect(act).toHaveBeenCalledWith(54));
+  });
+
+  it('Abandon anyway reuses act, with The branch stays on disk.', async () => {
+    const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
+    const abandon = vi.spyOn(api, 'abandonRun');
+    open({ runs: [live], view: waitingView({ items: [refused(55, ['hand-to-coordinator', 'abandon-anyway'])] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon anyway' }));
+    expect(await screen.findByText('Abandon run 7?')).toBeTruthy();
+    expect(screen.getByText('The branch stays on disk.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run 7' }));
+    await waitFor(() => expect(act).toHaveBeenCalledWith(55));
+    expect(abandon).not.toHaveBeenCalled();
+  });
+
+  it('an act-time refusal shows in the sheet, which stays open', async () => {
+    vi.spyOn(api, 'actItem').mockRejectedValue(new ApiError(409, { error: 'not-open' }));
+    open({ runs: [live], view: waitingView({ items: [refused(56, ['abandon'])] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Abandon run 7' }));
+    expect(await screen.findByText(/This item is not open any more/)).toBeTruthy();
+    expect(screen.getByText('Abandon run 7?')).toBeTruthy();
+  });
+
+  it('Hand to a coordinator opens the Resume sheet at step 3, with the hand-over in front', async () => {
+    open({ runs: [live], view: waitingView({ items: [refused(57, ['hand-to-coordinator', 'abandon-anyway'])] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Hand to a coordinator' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    expect(screen.getByLabelText('Hand run 7 to this session id')).toBeTruthy();
+  });
+
+  it('an abandoning or hand-over door needs the run among the runs heard; the links do not', () => {
+    open({ runs: [], view: waitingView({ items: [refused(58, ['open-pr', 'hand-to-coordinator', 'abandon-anyway'])] }) });
+    expect(Array.from(rowOf(58).querySelectorAll('[data-door]')).map((d) => d.getAttribute('data-door'))).toEqual(['open-pr']);
+  });
+
+  it('a saved copy draws the buttons disabled', () => {
+    open({ runs: [live], notCurrent: 'Saved on this device.', view: waitingView({ items: [refused(59, ['hand-to-coordinator', 'abandon-anyway'])] }) });
+    expect((screen.getByRole('button', { name: 'Abandon anyway' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Hand to a coordinator' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('an item being checked or closed carries no door', () => {
+    open({ runs: [live], view: waitingView({ items: [refused(60, ['abandon'], { state: 'checking', tickedAt: NOW })] }) });
+    expect(screen.queryByRole('button', { name: 'Abandon' })).toBeNull();
+  });
+
+  it('the row gains needs you from the selector', () => {
+    const item = refused(61, ['open-pr']);
+    const entries = needsYou([item], [], [live]);
+    expect(entries).toEqual([{ programme: 'port-api', runId: 7, kind: 'item' }]);
+    expect(needsYouCount(entries)).toBe(1);
+    // A held item (the server leaves it out of every list) never reaches the selector, so it is no marker.
+    expect(needsYou([], [], [live])).toEqual([]);
+  });
+
+  it('every door in the vocabulary has its words and renders', () => {
+    for (const d of ITEM_DOORS) expect(ITEM_DOOR_WORDS[d]).toBe(WORDS[d]);
+  });
+
+  // D-8558: a coordinator the registry no longer holds is never a door; "Close this run" takes the operator's reason.
+  it('Close this run opens the close-run sheet, needs a reason, and sends it with the act', async () => {
+    const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
+    open({ runs: [live], view: waitingView({ items: [refused(62, ['close-run', 'hand-to-coordinator'])] }) });
+    expect(rowOf(62).querySelector('[data-door="open-coordinator"]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Close this run' }));
+    expect(await screen.findByText('Close run 7?')).toBeTruthy();
+    const dialog = screen.getByRole('dialog');
+    const confirm = within(dialog).getAllByRole('button', { name: 'Close this run' }).at(-1) as HTMLButtonElement;
+    expect(confirm.disabled, 'no reason picked yet').toBe(true);
+    expect(within(dialog).queryByRole('group', { name: 'The programme' }), 'the item does not offer the programme\'s end').toBeNull();
+    fireEvent.click(within(dialog).getByLabelText('Done elsewhere'));
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(act).toHaveBeenCalledWith(62, undefined, { reason: 'done elsewhere' }));
+  });
+
+  it('a typed reason is sent as typed, trimmed', async () => {
+    const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
+    open({ runs: [live], view: waitingView({ items: [refused(63, ['close-run'])] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Close this run' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByLabelText('Something else'));
+    const confirm = within(dialog).getAllByRole('button', { name: 'Close this run' }).at(-1) as HTMLButtonElement;
+    expect(confirm.disabled, 'nothing typed yet').toBe(true);
+    fireEvent.change(within(dialog).getByLabelText('The reason, in a few words'), { target: { value: '  landed in another programme ' } });
+    fireEvent.click(confirm);
+    await waitFor(() => expect(act).toHaveBeenCalledWith(63, undefined, { reason: 'landed in another programme' }));
+  });
+
+  it('Close and end the programme opens the same sheet with done picked, and sends the programme\'s end', async () => {
+    const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
+    open({ runs: [live], view: waitingView({ items: [refused(64, ['close-run', 'end-programme'])] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Close and end the programme' }));
+    const dialog = await screen.findByRole('dialog');
+    const programme = within(dialog).getByRole('group', { name: 'The programme' });
+    expect((within(programme).getByLabelText('End it: its work is done') as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(within(dialog).getByLabelText('No longer needed'));
+    fireEvent.click(within(dialog).getAllByRole('button', { name: 'Close this run' }).at(-1)!);
+    await waitFor(() => expect(act).toHaveBeenCalledWith(64, undefined, { reason: 'no longer needed', programme: 'done' }));
+  });
+
+  it('Close this run on an item that offers the end keeps the programme open unless the operator picks an end', async () => {
+    const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
+    open({ runs: [live], view: waitingView({ items: [refused(65, ['close-run', 'end-programme'])] }) });
+    fireEvent.click(screen.getByRole('button', { name: 'Close this run' }));
+    const dialog = await screen.findByRole('dialog');
+    expect((within(dialog).getByLabelText('Keep its plan open') as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(within(dialog).getByLabelText('Done elsewhere'));
+    fireEvent.click(within(dialog).getByLabelText('End it: abandoned'));
+    fireEvent.click(within(dialog).getAllByRole('button', { name: 'Close this run' }).at(-1)!);
+    await waitFor(() => expect(act).toHaveBeenCalledWith(65, undefined, { reason: 'done elsewhere', programme: 'abandoned' }));
+  });
+});
+
+// D-8194: the operator matches a coordinator's "item 129" to its card by the item's own id, and the Recently cleared trail covers
+// the last 48 hours (CLEARED_WINDOW_MS), newest five first, with a Show all control for the rest of the window.
+describe('item numbers and the 48-hour Recently cleared trail (D-8194)', () => {
+  const HOUR = 60 * MIN;
+  const done = (id: number, closedAt: number, title = `Cleared ${id}`) =>
+    itemView({ id, state: 'done', title, closedAt, history: [{ at: closedAt, act: 'confirm', note: null }] });
+
+  it('an item\'s card carries its number, the API\'s own id', () => {
+    open({ view: waitingView({ items: [itemView({ id: 129, title: 'Flip the lane' })] }) });
+    const row = screen.getByRole('button', { name: /Flip the lane/ });
+    expect(within(row).getByText('#129')).toBeTruthy();
+  });
+
+  it('a cleared row carries its number too', () => {
+    open({ view: waitingView({ cleared: [done(131, NOW - HOUR, 'Approve the prototype')] }) });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(trail).getByText(/#131/)).toBeTruthy();
+  });
+
+  it('an item cleared 47h59m ago shows; one cleared 48h01m ago does not', () => {
+    open({ view: waitingView({ cleared: [done(1, NOW - (48 * HOUR - MIN), 'Just inside'), done(2, NOW - (48 * HOUR + MIN), 'Just outside')] }) });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(trail).getByText('Just inside')).toBeTruthy();
+    expect(within(trail).queryByText('Just outside')).toBeNull();
+  });
+
+  it('a trail whose every item is older than 48 hours is not drawn', () => {
+    open({ view: waitingView({ cleared: [done(2, NOW - 3 * 24 * HOUR, 'Three days old')] }) });
+    expect(screen.queryByRole('region', { name: 'Recently cleared' })).toBeNull();
+  });
+
+  it('shows the newest five, and Show all reveals the rest of the 48 hours and collapses back', () => {
+    // Out of order on purpose: the trail orders by when each was cleared, newest first.
+    const cleared = [3, 1, 7, 5, 2, 6, 4].map((h) => done(100 + h, NOW - h * HOUR, `Cleared ${h}h ago`));
+    open({ view: waitingView({ cleared: [...cleared, done(200, NOW - 50 * HOUR, 'Too old')] }) });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    const titles = (): string[] => within(trail).getAllByRole('listitem').map((li) => li.querySelector('s')?.textContent ?? '');
+    expect(titles()).toEqual([1, 2, 3, 4, 5].map((h) => `Cleared ${h}h ago`));
+    const more = within(trail).getByRole('button', { name: 'Show all 7' });
+    expect(more.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(more);
+    // The whole window, grouped by programme with each group collapsed (D-8194): one programme here, opened to its seven.
+    expect(within(trail).queryAllByRole('listitem')).toEqual([]);
+    fireEvent.click(within(trail).getByRole('button', { name: /^prog-a/ }));
+    expect(titles()).toEqual([1, 2, 3, 4, 5, 6, 7].map((h) => `Cleared ${h}h ago`));
+    const fewer = within(trail).getByRole('button', { name: 'Show fewer' });
+    expect(fewer.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(fewer);
+    expect(titles()).toHaveLength(5);
+  });
+
+  it('five or fewer cleared items draw no Show all control', () => {
+    open({ view: waitingView({ cleared: [1, 2, 3, 4, 5].map((h) => done(h, NOW - h * HOUR)) }) });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(trail).getAllByRole('listitem')).toHaveLength(5);
+    expect(within(trail).queryByRole('button')).toBeNull();
+  });
+});
+
+// D-8194: the expanded Recently cleared list is grouped by programme, each heading its programme's name in its hue, every group
+// collapsed by default and nothing remembered across visits; and an item's card links the items its text names.
+describe('the grouped Recently cleared list and item references on a card (D-8194)', () => {
+  const HOUR = 60 * MIN;
+  const RUNS = [runRow({ id: 1, program: 'prog-a', programTitle: 'Programme A' }), runRow({ id: 2, program: 'prog-b', programTitle: 'Programme B' })];
+  const done = (id: number, program: string, hours: number) =>
+    itemView({ id, program, state: 'done', title: `Cleared ${id}`, closedAt: NOW - hours * HOUR, history: [{ at: NOW - hours * HOUR, act: 'confirm', note: null }] });
+  // prog-b holds the newest; seven in all, so Show all is drawn.
+  const CLEARED = [done(1, 'prog-a', 2), done(2, 'prog-b', 1), done(3, 'prog-a', 3), done(4, 'prog-b', 4), done(5, 'prog-a', 5),
+    done(6, 'prog-a', 6), done(7, 'prog-b', 7)];
+  const trail = (): HTMLElement => screen.getByRole('region', { name: 'Recently cleared' });
+  const shownTitles = (): string[] => within(trail()).queryAllByRole('listitem').map((li) => li.querySelector('s')?.textContent ?? '');
+  const heads = (): HTMLElement[] => within(trail()).queryAllByRole('button').filter((b) => b.hasAttribute('data-program'));
+
+  it('Show all draws one heading per programme, newest programme first, in its hue, every group collapsed', () => {
+    open({ runs: RUNS, view: waitingView({ cleared: CLEARED }) });
+    expect(heads()).toEqual([]);
+    fireEvent.click(within(trail()).getByRole('button', { name: 'Show all 7' }));
+    const hues = fleetHues(RUNS);
+    expect(heads().map((h) => [h.getAttribute('data-program'), h.closest('[data-hue]')?.getAttribute('data-hue'), h.getAttribute('aria-expanded')]))
+      .toEqual([['prog-b', hues.get('prog-b'), 'false'], ['prog-a', hues.get('prog-a'), 'false']]);
+    expect(heads().map((h) => h.textContent)).toEqual(['Programme B 3 cleared', 'Programme A 4 cleared']);
+    expect(shownTitles()).toEqual([]);
+  });
+
+  it('a heading opens its programme\'s rows, newest first, without naming the programme on each row; it folds them again', () => {
+    open({ runs: RUNS, view: waitingView({ cleared: CLEARED }) });
+    fireEvent.click(within(trail()).getByRole('button', { name: 'Show all 7' }));
+    const b = heads()[0]!;
+    fireEvent.click(b);
+    expect(b.getAttribute('aria-expanded')).toBe('true');
+    expect(shownTitles()).toEqual(['Cleared 2', 'Cleared 4', 'Cleared 7']);
+    for (const li of within(trail()).getAllByRole('listitem')) expect(li.textContent).not.toContain('Programme B');
+    fireEvent.click(b);
+    expect(shownTitles()).toEqual([]);
+  });
+
+  it('Show fewer, and a new visit, start collapsed again: nothing is remembered', () => {
+    const first = render(<WaitingScreen view={waitingView({ cleared: CLEARED })} sessions={[]} runs={RUNS} now={NOW} onOpenItem={vi.fn()} onOpenSession={vi.fn()} />);
+    fireEvent.click(within(trail()).getByRole('button', { name: 'Show all 7' }));
+    fireEvent.click(heads()[1]!);
+    fireEvent.click(within(trail()).getByRole('button', { name: 'Show fewer' }));
+    fireEvent.click(within(trail()).getByRole('button', { name: 'Show all 7' }));
+    expect(heads().map((h) => h.getAttribute('aria-expanded'))).toEqual(['false', 'false']);
+    first.unmount();
+    open({ runs: RUNS, view: waitingView({ cleared: CLEARED }) });
+    expect(within(trail()).getByRole('button', { name: 'Show all 7' }).getAttribute('aria-expanded')).toBe('false');
+    expect(heads()).toEqual([]);
+    expect(window.localStorage.length).toBe(0);
+  });
+
+  it('the list filtered to one programme shows all of its share as one plain list: there is nothing to group', () => {
+    const mine = [1, 2, 3, 4, 5, 6].map((h) => done(h, 'prog-a', h));
+    open({ runs: RUNS, programme: 'prog-a', view: waitingView({ items: [itemView({ id: 50, program: 'prog-a' })], cleared: mine }) });
+    fireEvent.click(within(trail()).getByRole('button', { name: 'Show all 6' }));
+    expect(heads()).toEqual([]);
+    expect(shownTitles()).toHaveLength(6);
+  });
+
+  it('a card links the items its text names, beside the row and never inside its button; a number that is no item stays text', () => {
+    const itemHref = (id: number): string | null => (id === 12 || id === 13 ? `/waiting/${id}` : null);
+    open({ itemHref, view: waitingView({ items: [
+      itemView({ id: 5, title: 'Unblock item 12', why: 'Items 13 and 99 wait on it.' }),
+      itemView({ id: 6, title: 'Nothing named', why: 'Item 99 only.' }),
+    ] }) });
+    const li = document.querySelector<HTMLElement>('li:has([data-item="5"])')!;
+    const links = within(li).getAllByRole('link');
+    expect(links.map((a) => [a.textContent, a.getAttribute('href')])).toEqual([['item 12', '/waiting/12'], ['item 13', '/waiting/13']]);
+    for (const a of links) expect(a.closest('button')).toBeNull();
+    expect(within(document.querySelector<HTMLElement>('li:has([data-item="6"])')!).queryByRole('link')).toBeNull();
+  });
+});
+
+describe('the answer marks on the list (Overlord W1)', () => {
+  const NEVER = { state: 'never' as const };
+  const MARKS = { couldAnswer: { state: 'never' as const }, unsure: { state: 'marked' as const, id: 4, at: NOW - MIN, signedIn: true } };
+  const view = (withMarks: boolean) => waitingView({
+    items: [itemView({ id: 1, kind: 'decide', title: 'Pick a branch', ...(withMarks ? { answerMarks: MARKS } : {}) })],
+    cleared: [itemView({ id: 2, kind: 'value', state: 'done', title: 'Name the flag', closedAt: NOW - 60 * MIN, ...(withMarks ? { answerMarks: MARKS } : {}) })],
+  });
+  const groupsOf = () => screen.getAllByRole('group', { name: 'Your marks for the Overlord' });
+
+  it('an open item and a cleared item each draw both boxes when the view carries answerMarks', () => {
+    open({ view: view(true) });
+    const groups = groupsOf();
+    expect(groups.map((g) => g.getAttribute('data-item'))).toEqual(['1', '2']);
+    for (const g of groups) {
+      const boxes = within(g).getAllByRole('checkbox') as HTMLInputElement[];
+      expect(boxes.map((b) => b.checked)).toEqual([false, true]);
+    }
+  });
+
+  it('neither draws a box when the field is absent (an older server)', () => {
+    open({ view: view(false) });
+    expect(screen.queryAllByRole('checkbox')).toEqual([]);
+  });
+
+  it('the boxes are not inside the row\'s button', () => {
+    open({ view: view(true) });
+    const row = document.querySelector('[data-item="1"].wl-item')!;
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).queryAllByRole('checkbox')).toEqual([]);
+  });
+
+  it('on the device\'s saved copy every box is disabled', () => {
+    open({ view: view(true), notCurrent: 'Saved on this device' });
+    for (const b of screen.getAllByRole('checkbox') as HTMLInputElement[]) expect(b.disabled).toBe(true);
+  });
+
+  // Review 2196 F5: an unset `rowActs` or `current` fails closed.
+  it('item rows drawn with no rowActs disable their boxes', () => {
+    const item = view(true).items[0]!;
+    render(<ItemRows rows={[{ kind: 'item', item }]} now={NOW} onOpenItem={() => undefined} onOpenSession={() => undefined} />);
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes).toHaveLength(2);
+    for (const b of boxes) expect(b.disabled).toBe(true);
+  });
+
+  it('a cleared trail drawn with no current disables its boxes', () => {
+    render(<ClearedTrail items={view(true).cleared} now={NOW} />);
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes).toHaveLength(2);
+    for (const b of boxes) expect(b.disabled).toBe(true);
+  });
+
+  // Answer marks C (#2900): an open and a cleared task each draw one box, worded for a task.
+  it('an open do row and a cleared do row each draw one box, "The Overlord could handle this"', () => {
+    const TASK = { couldAnswer: { state: 'marked' as const, id: 9, at: NOW - MIN, signedIn: true } };
+    open({ view: waitingView({
+      items: [itemView({ id: 3, kind: 'do', title: 'Rotate the key', answerMarks: TASK })],
+      cleared: [itemView({ id: 4, kind: 'do', state: 'done', title: 'Restart the box', closedAt: NOW - 60 * MIN, answerMarks: { couldAnswer: NEVER } })],
+    }) });
+    const groups = groupsOf();
+    expect(groups.map((g) => g.getAttribute('data-item'))).toEqual(['3', '4']);
+    const boxes = groups.map((g) => within(g).getAllByRole('checkbox') as HTMLInputElement[]);
+    expect(boxes.map((b) => b.length)).toEqual([1, 1]);
+    expect(boxes.map(([b]) => [b!.checked, b!.disabled])).toEqual([[true, false], [false, false]]);
+    for (const g of groups) {
+      expect(within(g).getByLabelText('The Overlord could handle this')).toBeTruthy();
+      expect(within(g).queryByLabelText("I'm not sure of my answer")).toBeNull();
+    }
+  });
+});
+
+describe('the answer marks on asks (Overlord W1, answer marks B)', () => {
+  const NEVER = { state: 'never' as const };
+  const MARKS = { couldAnswer: { state: 'marked' as const, id: 7, at: NOW - MIN, signedIn: true }, unsure: NEVER };
+  const askRow = (o: Partial<AskMarkRow> = {}): AskMarkRow => ({
+    id: 31, childId: 'project-a-ask', program: null, question: 'Which base should the branch use?', how: 'lapsed', reason: null,
+    at: NOW - 30 * MIN, live: true, answerMarks: MARKS, ...o,
+  });
+  const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question', bucketSince: NOW - 6 * MIN });
+  const other = fleetSession({ id: 'project-a-other', bucket: 'attention', title: 'Another question', bucketSince: NOW - 6 * MIN });
+  const groupsOf = () => screen.queryAllByRole('group', { name: 'Your marks for the Overlord' });
+
+  it('a question row whose session has a live ask draws both boxes; a question row with none draws no box', () => {
+    open({ view: waitingView({ asks: [askRow()] }), sessions: [asking, other] });
+    const groups = groupsOf();
+    expect(groups.map((g) => g.getAttribute('data-ask'))).toEqual(['31']);
+    expect((within(groups[0]!).getAllByRole('checkbox') as HTMLInputElement[]).map((b) => b.checked)).toEqual([true, false]);
+    const otherRow = screen.getByRole('button', { name: /Another question/ }).closest('li')!;
+    expect(within(otherRow).queryAllByRole('checkbox')).toEqual([]);
+    // Never inside the row's button.
+    expect(within(screen.getByRole('button', { name: /A question/ })).queryAllByRole('checkbox')).toEqual([]);
+  });
+
+  it('a session whose listed ask is not live (its dialog has gone, or it shows a permission prompt) draws no box on its row', () => {
+    open({ view: waitingView({ asks: [askRow({ live: false })] }), sessions: [asking] });
+    const row = screen.getByRole('button', { name: /A question/ }).closest('li')!;
+    expect(within(row).queryAllByRole('checkbox')).toEqual([]);
+  });
+
+  it('an older server, with no ask lists, draws no ask box anywhere', () => {
+    open({ view: waitingView(), sessions: [asking] });
+    expect(groupsOf()).toEqual([]);
+  });
+
+  it('a cleared ask is a row of Recently cleared, with how it reached you and its age, and its two boxes', () => {
+    const cleared = askRow({ id: 32, live: false, how: 'declined', at: NOW - 2 * 60 * MIN, program: 'prog-a', question: 'Keep the old flag?' });
+    open({ view: waitingView({ asksCleared: [cleared] }), sessions: [] });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    const row = within(trail).getByText(/Keep the old flag\?/).closest('li')!;
+    expect(row.textContent).toContain('its parent passed it to you 2h ago');
+    expect(row.querySelector('s')).toBeNull();
+    expect(within(row).getByRole('group', { name: 'Your marks for the Overlord' }).getAttribute('data-ask')).toBe('32');
+    expect(within(row).getAllByRole('checkbox')).toHaveLength(2);
+  });
+
+  it('filtered to the sessions in no programme, the trail holds their cleared asks alone', () => {
+    const none = askRow({ id: 33, live: false, question: 'An ask in no programme' });
+    const prog = askRow({ id: 34, live: false, program: 'prog-a', question: 'An ask in prog-a' });
+    open({ view: waitingView({ asksCleared: [none, prog] }), sessions: [asking], programme: '' });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(trail).getByText(/An ask in no programme/)).toBeTruthy();
+    expect(within(trail).queryByText(/An ask in prog-a/)).toBeNull();
+  });
+
+  it('a tap on an ask box sends kind ask', async () => {
+    const set = vi.spyOn(api, 'setAnswerMark').mockResolvedValue({ ok: true, mark: 'unsure', answerMark: { state: 'marked', id: 8, at: NOW, signedIn: true } });
+    open({ view: waitingView({ asks: [askRow()] }), sessions: [asking] });
+    fireEvent.click(within(groupsOf()[0]!).getAllByRole('checkbox')[1]!);
+    await waitFor(() => expect(set).toHaveBeenCalledWith('ask', 31, 'unsure', true));
+  });
+
+  it('a new ask on the same session row remounts its boxes: A\'s tick never shows on B (review 2217 F2)', async () => {
+    const UNMARKED = { couldAnswer: NEVER, unsure: NEVER };
+    vi.spyOn(api, 'setAnswerMark').mockResolvedValue({ ok: true, mark: 'could-answer', answerMark: { state: 'marked', id: 8, at: NOW, signedIn: true } });
+    const props = (a: AskMarkRow) => ({ view: waitingView({ asks: [a] }), sessions: [asking], runs: [], now: NOW, onOpenItem: vi.fn(), onOpenSession: vi.fn() });
+    const { rerender } = render(<WaitingScreen {...props(askRow({ id: 31, answerMarks: UNMARKED }))} />);
+    fireEvent.click(within(groupsOf()[0]!).getAllByRole('checkbox')[0]!);
+    await waitFor(() => expect((within(groupsOf()[0]!).getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true));
+    rerender(<WaitingScreen {...props(askRow({ id: 41, answerMarks: UNMARKED }))} />);
+    expect(groupsOf()[0]!.getAttribute('data-ask')).toBe('41');
+    expect((within(groupsOf()[0]!).getAllByRole('checkbox') as HTMLInputElement[]).map((b) => b.checked)).toEqual([false, false]);
+  });
+
+  it('on the device\'s saved copy the ask boxes are disabled', () => {
+    open({ view: waitingView({ asks: [askRow()], asksCleared: [askRow({ id: 35, live: false })] }), sessions: [asking], notCurrent: 'Saved on this device' });
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes).toHaveLength(4);
+    for (const b of boxes) expect(b.disabled).toBe(true);
+  });
+});

@@ -1,0 +1,807 @@
+// Programme ledgers (plan PL3): the coordinator's routes for operator items and goals. Real server over a fixture
+// HOME (`buildServer`, a real `CoordStore`, a recording push sink and a counting bus), neutral names (prog-a, lane-a).
+// The order the routes keep is part of what is pinned: box token before the body, body shape, attribution, ownership
+// (`claimsProgramme`), the decider, the write, the emit, the answer.
+import { describe, it, expect, afterEach } from 'vitest';
+import path from 'node:path';
+import type { FastifyInstance } from 'fastify';
+import { buildServer } from '../src/server.js';
+import { Bus } from '../src/bus.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import type { PushPayload } from '../src/push.js';
+import { NotifyLog } from '../src/notifylog.js';
+import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
+import { testDeps } from './helpers.js';
+import { clientRoutes } from './ccrcApiTable.js';
+import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { RECOMMEND_WHY_MAX } from '../../shared/ledgers.js';
+
+const HEADERS = { 'x-ccrc-mail-token': ID_GATE_TOKEN };
+const as = (who = 'lane-a'): { byId: string; byUuid: string } => ({ byId: who, byUuid: `u-${who}` });
+
+let app: FastifyInstance | null = null;
+afterEach(async () => {
+  await app?.close();
+  app = null;
+  removeTmpFixtures();
+});
+
+interface Rig {
+  app: FastifyInstance; coord: CoordStore; sent: PushPayload[]; waiting: () => number; runA: number; runB: number;
+}
+
+/** prog-a is claimed by lane-a, prog-b by lane-b; both sessions are in the registry. */
+async function rig(viewing: readonly string[] = []): Promise<Rig> {
+  const home = mkTmp('ccrc-ledgers-coord-routes-');
+  seedRow(home, 'lane-a');
+  seedRow(home, 'lane-b');
+  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const sent: PushPayload[] = [];
+  const bus = new Bus();
+  let waiting = 0;
+  bus.on('waiting', () => { waiting += 1; });
+  app = await buildServer(
+    { ...testDeps(home, recorder().run), mailToken: ID_GATE_TOKEN, coord, push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
+      viewers: { isVisible: (id: string) => viewing.includes(id) } as never,
+      notifyLog: new NotifyLog(path.join(home, '.ccrc', 'notify.json')) },
+    bus,
+  );
+  const open = (program: string, claimedBy: string): number =>
+    (coord.openRun({ program, title: program.toUpperCase(), project: 'project-a', wave: 1, waveOf: null, claimedBy }) as { id: number }).id;
+  return { app, coord, sent, waiting: () => waiting, runA: open('prog-a', 'lane-a'), runB: open('prog-b', 'lane-b') };
+}
+
+const post = (r: Rig, url: string, payload: unknown, headers: Record<string, string> = HEADERS) =>
+  r.app.inject({ method: 'POST', url, headers, payload: payload as never });
+const get = (r: Rig, url: string, headers: Record<string, string> = HEADERS) => r.app.inject({ method: 'GET', url, headers });
+
+const RAISE = {
+  kind: 'do', title: 'Turn on the setting', why: 'The wave needs it.', how: ['Open Settings', 'Switch it on'],
+  neededBy: 'soon', soonLabel: 'before wave 6',
+};
+const raise = async (r: Rig, over: Record<string, unknown> = {}, who = 'lane-a', slug = 'prog-a'): Promise<number> => {
+  const res = await post(r, `/api/programmes/${slug}/items`, { ...as(who), ...RAISE, ...over });
+  expect(res.statusCode, res.body).toBe(200);
+  return (res.json() as { id: number }).id;
+};
+const stateOf = (r: Rig, id: number): string | undefined => r.coord.itemById(id)?.state;
+
+describe('the box token comes first, before the body and before any await (plan PL3 Step 3)', () => {
+  const DOORS: readonly (readonly ['GET' | 'POST', string])[] = [
+    ['POST', '/api/programmes/prog-a/items'], ['GET', '/api/programmes/prog-a/items?byId=lane-a&byUuid=u-lane-a'],
+    ['POST', '/api/items/1/confirm'], ['POST', '/api/items/1/return'], ['POST', '/api/items/1/withdraw'],
+    ['POST', '/api/items/1/blocking'], ['POST', '/api/programmes/prog-a/spec'],
+    ['POST', '/api/programmes/prog-a/modifications'], ['POST', '/api/programmes/prog-a/modifications/merged'],
+  ];
+  it.each(DOORS)('%s %s refuses 401 without the token, whatever the body says', async (method, url) => {
+    const r = await rig();
+    const res = await r.app.inject({ method, url, payload: method === 'POST' ? { nonsense: true } as never : undefined as never });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
+    expect(r.waiting()).toBe(0);
+  });
+
+  it('a wrong token refuses 401 too', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/items', { ...as(), ...RAISE }, { 'x-ccrc-mail-token': 'e'.repeat(64) });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
+describe('the client rows and the server agree (review 1331 F8)', () => {
+  const rows = clientRoutes().filter((c) => /^(items|goals)\./.test(c.key));
+  it('the client has exactly the ten items and goals rows', () => {
+    expect(rows.map((c) => c.key).sort()).toEqual(
+      ['goals.merged', 'goals.modify', 'goals.pin', 'goals.show', 'items.block', 'items.confirm', 'items.list', 'items.raise', 'items.return', 'items.withdraw']);
+  });
+  // Every one of the nine is gated by the box token first, so a registered route answers 401 to a call with no token
+  // and a path nobody registered answers 404: a rename on either side turns this red.
+  // goals.show is the one read that is exempt from the cookie gate and authenticated by its own route (session or box
+  // token), so it is probed on its own below rather than through the token-first 401 loop.
+  it.each(rows.filter((c) => c.key !== 'goals.show').map((c) => [c.key, c.method, c.path] as const))('%s (%s %s) is a route the server registers', async (_key, method, rowPath) => {
+    const r = await rig();
+    const res = await r.app.inject({ method: method as 'GET' | 'POST', url: rowPath.replace('{id}', 'prog-a') });
+    expect(res.statusCode, `${method} ${rowPath}: ${res.body}`).toBe(401);
+  });
+});
+
+describe('goals.show is a registered route with its own credential rule', () => {
+  it('GET /api/programmes/{id}/goals is registered (the rig runs with auth off, so it answers rather than 404)', async () => {
+    const r = await rig();
+    const row = clientRoutes().find((c) => c.key === 'goals.show')!;
+    const res = await r.app.inject({ method: row.method as 'GET', url: row.path.replace('{id}', 'prog-a') });
+    expect(res.statusCode, res.body).toBe(200);
+  });
+});
+
+describe('attribution on every route: a valid token and a wrong byUuid is 403 stale-uuid, with nothing written (review 1331 F3)', () => {
+  const SPEC_PATH = 'docs/superpowers/specs/2026-10-31-x-design.md';
+  // One row per call site of `requireAttribution`: `itemHead` serves the first four, then the spec, modifications and merged routes.
+  const ROUTES: readonly (readonly [string, (id: number) => string, Record<string, unknown>])[] = [
+    ['confirm', (id) => `/api/items/${id}/confirm`, {}],
+    ['return', (id) => `/api/items/${id}/return`, { note: 'Not yet.' }],
+    ['withdraw', (id) => `/api/items/${id}/withdraw`, {}],
+    ['blocking', (id) => `/api/items/${id}/blocking`, { blocking: true }],
+    ['spec', () => '/api/programmes/prog-a/spec', { specPath: SPEC_PATH, inShort: 'What the programme builds.' }],
+    ['modifications', () => '/api/programmes/prog-a/modifications', { text: 'Narrowed the scope.' }],
+    ['modifications/merged', () => '/api/programmes/prog-a/modifications/merged', { pr: 77 }],
+  ];
+  it.each(ROUTES)('%s refuses stale-uuid and writes, emits and pushes nothing', async (_name, url, body) => {
+    const r = await rig();
+    const id = await raise(r, { runId: r.runA });
+    await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Earlier.', pr: 77 });
+    const before = { item: r.coord.itemById(id), goals: r.coord.goalsFor('prog-a'), events: r.coord.itemHistory(id) };
+    const emitted = r.waiting();
+    const res = await post(r, url(id), { byId: 'lane-a', byUuid: 'u-someone-else', ...body });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ ok: false, error: 'stale-uuid' });
+    expect({ item: r.coord.itemById(id), goals: r.coord.goalsFor('prog-a'), events: r.coord.itemHistory(id) }).toEqual(before);
+    expect(r.waiting()).toBe(emitted);
+    expect(r.sent).toEqual([]);
+  });
+});
+
+describe('POST /api/programmes/:slug/items (plan PL3)', () => {
+  it('raises an open item for the programme and says so on the bus once', async () => {
+    const r = await rig();
+    const id = await raise(r, { runId: r.runA });
+    expect(r.coord.itemById(id)).toMatchObject({
+      program: 'prog-a', runId: r.runA, raisedBy: 'lane-a', kind: 'do', state: 'open', neededBy: 'soon', soonLabel: 'before wave 6',
+      how: ['Open Settings', 'Switch it on'], options: null, secretSlot: null,
+    });
+    expect(r.waiting()).toBe(1);
+    expect(r.sent).toEqual([]);   // soon does not push
+  });
+
+  it('refuses stale-uuid after the body is checked, and writes nothing', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/items', { byId: 'lane-a', byUuid: 'u-someone-else', ...RAISE });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'stale-uuid' });
+    expect(r.coord.itemsFor('prog-a', Date.now()).open).toEqual([]);
+    expect(r.waiting()).toBe(0);
+  });
+
+  it('refuses not-your-programme for a session that claims another programme (Review Focus 4), before any write', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/items', { ...as('lane-b'), ...RAISE });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ ok: false, error: 'not-your-programme' });
+    expect(r.coord.itemsFor(null, Date.now()).open).toEqual([]);
+    expect(r.waiting()).toBe(0);
+  });
+
+  it('refuses not-your-programme for a programme nobody has a run of', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-z/items', { ...as(), ...RAISE });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'not-your-programme' });
+  });
+
+  it('an unrepresentable open run claimed by the caller answers 503 run-unreadable, never a bare 500 (review 1328 F3)', async () => {
+    const r = await rig();
+    r.coord.db.prepare(
+      'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(4242, 'prog-a', BigInt(Number.MAX_SAFE_INTEGER) + 1n, 3, 'project-a', 'planned', 'lane-a', Date.now());
+    const res = await post(r, '/api/programmes/prog-a/items', { ...as(), ...RAISE });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable', detail: expect.stringMatching(/\S/) });
+    expect(r.coord.db.prepare('SELECT COUNT(*) AS n FROM operator_items').get()).toEqual({ n: 0 });
+    expect(r.waiting()).toBe(0);
+  });
+
+  it('a blocking raise pushes once, tagged item-<id> (plan PL3)', async () => {
+    const r = await rig();
+    const id = await raise(r, { neededBy: 'blocking', soonLabel: null, runId: r.runA });
+    expect(r.sent).toHaveLength(1);
+    expect(r.sent[0]).toMatchObject({ title: 'Waiting on you', body: 'Turn on the setting', tag: `item-${id}`, url: '/waiting' }); // a tap opens the list (review 1331 F1)
+  });
+
+  it('a blocking raise and a block still push while the operator views the raising coordinator (F1: the notice is not a run notice of that session)', async () => {
+    const r = await rig(['lane-a']);
+    const id = await raise(r, { neededBy: 'blocking', soonLabel: null, runId: r.runA });
+    expect(r.sent).toHaveLength(1);
+    const soon = await raise(r, { runId: r.runA });
+    expect((await post(r, `/api/items/${soon}/blocking`, { ...as(), blocking: true })).statusCode).toBe(200);
+    expect(r.sent.map((p) => p.tag)).toEqual([`item-${id}`, `item-${soon}`]);
+    // The feed record is a `coord` notice with no session (review 1332 F4), not a `run` one.
+    expect(r.coord.db.prepare('SELECT kind, sessionId, title, runId FROM feed_events ORDER BY id').all()).toEqual([
+      { kind: 'coord', sessionId: '', title: 'Waiting on you', runId: r.runA },
+      { kind: 'coord', sessionId: '', title: 'Waiting on you', runId: r.runA },
+    ]);
+  });
+
+  it.each([
+    ['a decide item with one option', { kind: 'decide', options: ['only'] }],
+    ['a decide item with seven options', { kind: 'decide', options: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] }],
+    ['a decide item with no options', { kind: 'decide' }],
+    ['options on a do item', { options: ['a', 'b'] }],
+    ['a secret item with no slot', { kind: 'secret' }],
+    ['a secret item with a path as its slot', { kind: 'secret', secretSlot: '../x' }],
+    ['a secret item with options', { kind: 'secret', secretSlot: 'npm-token', options: ['a', 'b'] }],
+    ['a slot on a do item', { secretSlot: 'npm-token' }],
+    ['a kind outside the vocabulary', { kind: 'ask' }],
+    ['a level outside the vocabulary', { neededBy: 'someday' }],
+    ['a soon label over 40 characters', { soonLabel: 'x'.repeat(41) }],
+    ['a title over 140 characters', { title: 'x'.repeat(141) }],
+    ['an empty title', { title: '' }],
+    ['a why over 2000 characters', { why: 'x'.repeat(2001) }],
+    ['thirteen steps', { how: Array.from({ length: 13 }, (_, i) => `step ${i}`) }],
+    ['how that is not a list', { how: 'open settings' }],
+    ['a runId that is not a number', { runId: 'one' }],
+  ])('refuses %s with bad-request and writes nothing', async (_name, over) => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/items', { ...as(), ...RAISE, ...over });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request', detail: expect.stringMatching(/\S/) });
+    expect(r.coord.itemsFor('prog-a', Date.now()).open).toEqual([]);
+    expect(r.waiting()).toBe(0);
+  });
+
+  it('refuses a runId that belongs to another programme', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/items', { ...as(), ...RAISE, runId: r.runB });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'bad-request' });
+  });
+
+  it('accepts a decide item with two to six options, and a secret item with a slot', async () => {
+    const r = await rig();
+    const d = await raise(r, { kind: 'decide', options: ['yes', 'no'], ...RECOMMEND });
+    const s = await raise(r, { kind: 'secret', secretSlot: 'npm-token' });
+    expect(r.coord.itemById(d)).toMatchObject({ kind: 'decide', options: ['yes', 'no'] });
+    expect(r.coord.itemById(s)).toMatchObject({ kind: 'secret', secretSlot: 'npm-token', options: null });
+  });
+});
+
+/** A decide item's recommendation (plan PL9, spec §3.2, D24): the index of the option its raiser recommends and why it beats
+ *  each alternative. */
+const RECOMMEND = { recommended: 0, recommendedWhy: 'Yes keeps the wave on time; no would cost a day of rework.' };
+
+// Desktop-polish PL10 (D-7952; spec §2, D28): a link to a document is its repository path, which the console opens in the Docs
+// reader. The raise route refuses an item that links a document any other way, an artifact page or a document server outside the
+// console, in any field the operator reads, and writes nothing; an outside service's own page stays an ordinary https link.
+describe('document links go only to the Docs reader (plan PL10, spec D28)', () => {
+  const DECIDE = { kind: 'decide', options: ['Ship it', 'Hold it'], recommended: 0, recommendedWhy: 'It is ready.' };
+  it.each([
+    ['an artifact page in why', { why: 'Read https://claude.ai/artifact/0f1e2d3c first.' }],
+    ['a code artifact page in a step', { how: ['Open https://claude.ai/code/artifact/0f1e2d3c-aaaa-bbbb-cccc-0123456789ab'] }],
+    ['an outside document server in the title', { title: 'Read https://b.example/docs/project-a/specs/a-design.md' }],
+    ['a repository document on a code host in why', { why: 'See https://github.com/org-a/repo-a/blob/main/docs/superpowers/plans/p.md.' }],
+    ['an http document server in the soon label', { soonLabel: 'http://b.example/docs/p/plans/x.md' }],
+    ['an artifact page in an option', { ...DECIDE, options: ['Ship it', 'See https://claude.ai/artifact/abc'] }],
+    ['an artifact page in the recommendation', { ...DECIDE, recommendedWhy: 'As https://claude.ai/artifact/abc shows.' }],
+    // Review 1466 F6 (fix round 1): spelt with escapes, trimmed as the console trims, or on the artifact host's plural shape.
+    ['a percent-encoded artifact segment', { why: 'See https://claude.ai/%61rtifact/abc first.' }],
+    ['a percent-encoded section on a document server', { why: 'See https://b.example/docs/p/%73pecs/x.md first.' }],
+    ['an encoded slash between the section directories on a code host', { why: 'See https://github.com/o/r/blob/main/docs/superpowers%2Fspecs/x.md now.' }],
+    ['a document server section with a full stop after it', { why: 'see https://b.example/docs/p/specs.' }],
+    ['a document server section in brackets', { why: 'Read it (https://b.example/docs/p/plans) first.' }],
+    ["the artifact host's public artifacts page", { why: 'See https://claude.ai/public/artifacts/0f1e2d3c first.' }],
+    ["a code host's view of a section directory, with no trailing slash", { why: 'See https://github.com/o/r/tree/main/docs/superpowers/plans now.' }],
+    // Decoded until it is stable, and a decoded backslash is a separator, as some servers read it (fix round 1's hardening).
+    ['a double-encoded artifact segment', { why: 'See https://claude.ai/%2561rtifact/abc first.' }],
+    ['encoded backslashes between the section directories', { why: 'See https://github.com/o/r/blob/main/docs%5Csuperpowers%5Cspecs%5Cx.md now.' }],
+    // Fix round 2 (review 1481 F1 to F3): a stray percent sign hides nothing, an empty segment or an encoded dot-segment
+    // hides nothing, and a segment still changing after four rounds of decoding counts as outside.
+    ['a stray percent before a double-encoded artifact segment', { why: 'See https://h.example/%25zz%252Fartifact now.' }],
+    ['a stray percent before double-encoded section directories', { why: 'See https://github.com/o/r/blob/main/a%25zz%252Fdocs%252Fsuperpowers%252Fspecs%252Fb now.' }],
+    ['an empty segment inside public artifacts', { why: 'See https://claude.ai/public//artifacts/abc now.' }],
+    ['an empty segment after docs on a document server', { why: 'See https://b.example/docs//p/specs/a.md now.' }],
+    ['an empty segment before docs on a document server', { why: 'See https://b.example//docs/p/specs/a.md now.' }],
+    ['an empty segment between the section directories', { why: 'See https://github.com/o/r/blob/main/docs/superpowers//specs/x.md now.' }],
+    ['an encoded slash after a dot-dot', { why: 'See https://b.example/docs/p/x/..%2fspecs/a.md now.' }],
+    ['an encoded backslash after a dot-dot', { why: 'See https://b.example/docs/p/x/..%5cspecs/a.md now.' }],
+    ['a double-encoded dot-dot', { why: 'See https://b.example/docs/p/x/%252e%252e/specs/a.md now.' }],
+    ['an artifact segment an encoded dot-dot would pop', { why: 'See https://x.example/artifact/..%2fy now.' }],
+    ['a section directory an encoded dot-dot would pop', { why: 'See https://b.example/docs/p/specs/..%2fa.md now.' }],
+    // Review 1511 F6: the console's probe of a public artifacts page an encoded dot-dot would pop, pinned on this side too.
+    ['public artifacts an encoded dot-dot would pop', { why: 'See https://claude.ai/public/x/..%2fartifacts/abc now.' }],
+    ['a segment still changing after four rounds', { why: 'See https://a.example/%2525252541bc now.' }],
+    ['a five-deep artifact segment', { why: 'See https://claude.ai/%2525252561rtifact/abc now.' }],
+  ])('the raise route refuses an artifact page or an outside document server as a document link: %s', async (_name, over) => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/items', { ...as('lane-a'), ...RAISE, ...over });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'outside-doc-link' });
+    expect(String(res.json().detail)).toMatch(/Docs reader|repository path/);
+    expect(r.coord.itemsFor(null, Date.now()).open).toEqual([]);
+    expect(r.waiting()).toBe(0);
+  });
+
+  it("an outside service's own page stays a link, and a repository path is the way to link a document", async () => {
+    const r = await rig();
+    const id = await raise(r, {
+      why: 'Sign in at https://github.com/settings/applications/new and read docs/superpowers/specs/a-design.md.',
+      how: ['Open https://console.example.com/sign-in', 'Download https://github.com/org-a/repo-a/actions/runs/1/artifacts/2', 'Open /docs/project-a/specs/a-design.md'],
+    });
+    expect(r.coord.itemById(id)).toMatchObject({ state: 'open' });
+  });
+
+  it('a literal percent sign is an ordinary link, and four encodings deep is judged by its last spelling (review 1481 F1)', async () => {
+    const r = await rig();
+    const id = await raise(r, {
+      why: 'See https://en.wikipedia.org/wiki/100%25 and https://a.example/discount-50%25-off.',
+      how: ['Open https://a.example/50%-off', 'Open https://a.example/%25252541bc'],
+    });
+    expect(r.coord.itemById(id)).toMatchObject({ state: 'open' });
+  });
+});
+
+describe('a decide item names the option its raiser recommends, and why (plan PL9, spec §3.2, D24)', () => {
+  const DECIDE = { kind: 'decide', options: ['Library first', 'Keep the order', 'Split the wave'] };
+
+  it('a decide item with a recommendation is kept with it, and its view carries both', async () => {
+    const r = await rig();
+    const id = await raise(r, { ...DECIDE, recommended: 2, recommendedWhy: 'Splitting keeps both halves reviewable.' });
+    expect(r.coord.itemById(id)).toMatchObject({ recommended: 2, recommendedWhy: 'Splitting keeps both halves reviewable.' });
+    const res = await get(r, '/api/programmes/prog-a/items?byId=lane-a&byUuid=u-lane-a');
+    expect((res.json() as { items: unknown[] }).items[0]).toMatchObject({ recommended: 2, recommendedWhy: 'Splitting keeps both halves reviewable.' });
+  });
+
+  it('accepts reasons of exactly RECOMMEND_WHY_MAX characters, and trims them as it trims every text field', async () => {
+    const r = await rig();
+    const id = await raise(r, { ...DECIDE, recommended: 0, recommendedWhy: 'x'.repeat(RECOMMEND_WHY_MAX) });
+    expect(r.coord.itemById(id)?.recommendedWhy).toBe('x'.repeat(RECOMMEND_WHY_MAX));
+    const trimmed = await raise(r, { ...DECIDE, recommended: 1, recommendedWhy: '  Keeping the order is cheaper.  ' });
+    expect(r.coord.itemById(trimmed)?.recommendedWhy).toBe('Keeping the order is cheaper.');
+  });
+
+  it('every other kind reads null for both', async () => {
+    const r = await rig();
+    const id = await raise(r);
+    expect(r.coord.itemById(id)).toMatchObject({ recommended: null, recommendedWhy: null });
+  });
+
+  it.each([
+    ['a decide item without a recommendation', {}],
+    ['a decide item with reasons and no option named', { recommendedWhy: 'Because.' }],
+    ['a decide item naming an option and no reasons', { recommended: 0 }],
+    ['a decide item with blank reasons', { recommended: 0, recommendedWhy: '   ' }],
+    ['a decide item with null for both', { recommended: null, recommendedWhy: null }],
+    ['a recommendation naming no listed option (one past the last)', { recommended: 3, recommendedWhy: 'Because.' }],
+    ['a recommendation naming no listed option (negative)', { recommended: -1, recommendedWhy: 'Because.' }],
+    ['a recommendation that is not a whole number', { recommended: 1.5, recommendedWhy: 'Because.' }],
+    ['a recommendation given as text', { recommended: '0', recommendedWhy: 'Because.' }],
+    ['reasons over RECOMMEND_WHY_MAX characters', { recommended: 0, recommendedWhy: 'x'.repeat(RECOMMEND_WHY_MAX + 1) }],
+    ['reasons that are not text', { recommended: 0, recommendedWhy: ['Because.'] }],
+  ])('refuses %s with bad-request and writes nothing', async (_name, over) => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/items', { ...as(), ...RAISE, ...DECIDE, ...over });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request', detail: expect.stringMatching(/recommend/) });
+    expect(r.coord.itemsFor('prog-a', Date.now()).open).toEqual([]);
+    expect(r.waiting()).toBe(0);
+  });
+
+  it.each([
+    ['a do item carrying a recommendation', {}, RECOMMEND],
+    ['a do item carrying an index alone', {}, { recommended: 0 }],
+    ['a do item carrying reasons alone', {}, { recommendedWhy: 'Because.' }],
+    ['a value item carrying a recommendation', { kind: 'value' }, RECOMMEND],
+    ['a secret item carrying a recommendation', { kind: 'secret', secretSlot: 'npm-token' }, RECOMMEND],
+  ])('refuses %s with bad-request and writes nothing', async (_name, kind, over) => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/items', { ...as(), ...RAISE, ...kind, ...over });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request', detail: expect.stringMatching(/recommend/) });
+    expect(r.coord.itemsFor('prog-a', Date.now()).open).toEqual([]);
+  });
+
+  it('null for both on another kind is the same as leaving them out', async () => {
+    const r = await rig();
+    const id = await raise(r, { recommended: null, recommendedWhy: null });
+    expect(r.coord.itemById(id)).toMatchObject({ kind: 'do', recommended: null, recommendedWhy: null });
+  });
+});
+
+describe('the item routes act on the caller\'s own programme\'s items (plan PL3)', () => {
+  it('refuses a coordinator acting on another programme\'s item with not-your-programme, and moves nothing', async () => {
+    const r = await rig();
+    const id = await raise(r);
+    r.coord.moveItem(id, 'tick', 'operator', { answer: null }, Date.now(), { programmeHasOpenRun: true });
+    for (const [verb, body] of [['confirm', {}], ['return', { note: 'no' }], ['withdraw', {}], ['blocking', { blocking: true }]] as const) {
+      const res = await post(r, `/api/items/${id}/${verb}`, { ...as('lane-b'), ...body });
+      expect(res.statusCode, verb).toBe(403);
+      expect(res.json(), verb).toMatchObject({ error: 'not-your-programme' });
+    }
+    expect(stateOf(r, id)).toBe('checking');
+    expect(r.waiting()).toBe(1);   // the raise only
+  });
+
+  it('refuses an item that does not exist with unknown-item (404)', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/items/999/confirm', as());
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ error: 'unknown-item' });
+  });
+
+  it('a non-numeric item id is a bad-request', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/items/abc/confirm', as());
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('an item route answers 503 run-unreadable when the caller\'s run series is unreadable', async () => {
+    const r = await rig();
+    const id = await raise(r);
+    r.coord.db.prepare(
+      'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(4242, 'prog-a', BigInt(Number.MAX_SAFE_INTEGER) + 1n, 3, 'project-a', 'planned', 'lane-a', Date.now());
+    const res = await post(r, `/api/items/${id}/withdraw`, as());
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ error: 'run-unreadable' });
+    expect(stateOf(r, id)).toBe('open');
+  });
+
+  it('confirm on an open item is refused not-open (409)', async () => {
+    const r = await rig();
+    const id = await raise(r);
+    const res = await post(r, `/api/items/${id}/confirm`, as());
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'not-open' });
+    expect(stateOf(r, id)).toBe('open');
+    expect(r.waiting()).toBe(1);
+  });
+
+  it('confirm closes a ticked item as done and says so on the bus', async () => {
+    const r = await rig();
+    const id = await raise(r);
+    r.coord.moveItem(id, 'tick', 'operator', { answer: null }, Date.now(), { programmeHasOpenRun: true });
+    const res = await post(r, `/api/items/${id}/confirm`, as());
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true });
+    expect(stateOf(r, id)).toBe('done');
+    expect(r.waiting()).toBe(2);
+  });
+
+  it('return without a note, with a blank note or with a note over 600 characters is refused', async () => {
+    const r = await rig();
+    const id = await raise(r);
+    r.coord.moveItem(id, 'tick', 'operator', { answer: null }, Date.now(), { programmeHasOpenRun: true });
+    for (const note of [undefined, '', '   ', 'x'.repeat(601), 7]) {
+      const res = await post(r, `/api/items/${id}/return`, { ...as(), ...(note === undefined ? {} : { note }) });
+      expect(res.statusCode, String(note)).toBe(400);
+      expect(res.json()).toMatchObject({ error: 'bad-request' });
+    }
+    expect(stateOf(r, id)).toBe('checking');
+  });
+
+  it('return sends a ticked item back open with the coordinator\'s note', async () => {
+    const r = await rig();
+    const id = await raise(r);
+    r.coord.moveItem(id, 'tick', 'operator', { answer: null }, Date.now(), { programmeHasOpenRun: true });
+    const res = await post(r, `/api/items/${id}/return`, { ...as(), note: 'The setting still reads off.' });
+    expect(res.statusCode).toBe(200);
+    expect(r.coord.itemById(id)).toMatchObject({ state: 'open', note: 'The setting still reads off.' });
+  });
+
+  // Review 1466 F5 (fix round 1): the console draws a return's note through `linkRuns` ("sent back: <note>"), so the return
+  // route refuses a document link outside the console as the raise route does, before it reads the item, and moves nothing.
+  it('return with a note that links an artifact page or an outside document server is refused outside-doc-link', async () => {
+    const r = await rig();
+    const id = await raise(r);
+    r.coord.moveItem(id, 'tick', 'operator', { answer: null }, Date.now(), { programmeHasOpenRun: true });
+    for (const note of ['See https://claude.ai/artifact/abc.', 'Read https://b.example/docs/p/%73pecs/x.md again']) {
+      const res = await post(r, `/api/items/${id}/return`, { ...as(), note });
+      expect(res.statusCode, note).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'outside-doc-link' });
+    }
+    expect(stateOf(r, id)).toBe('checking');
+    const ok = await post(r, `/api/items/${id}/return`, { ...as(), note: 'Read docs/superpowers/specs/a-design.md again.' });
+    expect(ok.statusCode).toBe(200);
+    expect(stateOf(r, id)).toBe('open');
+  });
+
+  it('return on an open item is refused not-open', async () => {
+    const r = await rig();
+    const id = await raise(r);
+    const res = await post(r, `/api/items/${id}/return`, { ...as(), note: 'x' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'not-open' });
+  });
+
+  it('withdraw closes an open item as withdrawn, and a second withdraw is refused not-open', async () => {
+    const r = await rig();
+    const id = await raise(r);
+    expect((await post(r, `/api/items/${id}/withdraw`, as())).statusCode).toBe(200);
+    expect(stateOf(r, id)).toBe('withdrawn');
+    const again = await post(r, `/api/items/${id}/withdraw`, as());
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toMatchObject({ error: 'not-open' });
+  });
+});
+
+describe('POST /api/items/:id/blocking (plan PL3, review 1329 F1)', () => {
+  it('pushes only on a change to true', async () => {
+    const r = await rig();
+    const id = await raise(r, { runId: r.runA });
+    expect(r.waiting()).toBe(1);
+    expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: true })).statusCode).toBe(200);
+    expect(r.sent).toHaveLength(1);
+    expect(r.sent[0]).toMatchObject({ title: 'Waiting on you', body: 'Turn on the setting', tag: `item-${id}`, url: '/waiting' }); // a tap opens the list (review 1331 F1)
+    expect(r.waiting()).toBe(2);   // a change to blocking emits once (review 1332 F2)
+    // already blocking: ok, no second push, no second emit
+    expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: true })).statusCode).toBe(200);
+    expect(r.sent).toHaveLength(1);
+    expect(r.waiting()).toBe(2);
+    // lowering never pushes, and emits once
+    expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: false })).statusCode).toBe(200);
+    expect(r.sent).toHaveLength(1);
+    expect(r.waiting()).toBe(3);
+    // lowering again changes nothing, so it emits nothing
+    expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: false })).statusCode).toBe(200);
+    expect(r.waiting()).toBe(3);
+    expect(r.coord.itemById(id)?.neededBy).toBe('soon');
+  });
+
+  it('a push is not made when the item was raised blocking and blocking:true repeats', async () => {
+    const r = await rig();
+    const id = await raise(r, { neededBy: 'blocking', soonLabel: null });
+    expect(r.sent).toHaveLength(1);
+    await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: true });
+    expect(r.sent).toHaveLength(1);
+  });
+
+  it('block, tick, unblock restores a label-less soon item to soon', async () => {
+    const r = await rig();
+    const id = await raise(r, { neededBy: 'soon', soonLabel: null });
+    expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: true })).statusCode).toBe(200);
+    expect(r.coord.itemById(id)?.neededBy).toBe('blocking');
+    // the operator's tick lands between: its event is the newest on the item
+    const ticked = r.coord.moveItem(id, 'tick', 'operator', { answer: null }, Date.now() + 1, { programmeHasOpenRun: true });
+    expect(ticked.ok).toBe(true);
+    expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: false })).statusCode).toBe(200);
+    expect(r.coord.itemById(id)).toMatchObject({ neededBy: 'soon', state: 'checking' });
+  });
+
+  it('refuses a blocking value that is not a boolean, and a closed item (not-open)', async () => {
+    const r = await rig();
+    const id = await raise(r);
+    const bad = await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: 'yes' });
+    expect(bad.statusCode).toBe(400);
+    await post(r, `/api/items/${id}/withdraw`, as());
+    const closed = await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: true });
+    expect(closed.statusCode).toBe(409);
+    expect(closed.json()).toMatchObject({ error: 'not-open' });
+    expect(r.sent).toEqual([]);
+  });
+});
+
+describe('GET /api/programmes/:slug/items (plan PL3)', () => {
+  it('lists the programme\'s waiting and recently cleared items as ItemViews, with their history', async () => {
+    const r = await rig();
+    const a = await raise(r, { title: 'First' });
+    const b = await raise(r, { title: 'Second' });
+    await raise(r, { title: 'Other programme' }, 'lane-b', 'prog-b');
+    r.coord.moveItem(b, 'tick', 'operator', { answer: null }, Date.now(), { programmeHasOpenRun: true });
+    await post(r, `/api/items/${b}/confirm`, as());
+    const res = await get(r, '/api/programmes/prog-a/items?byId=lane-a&byUuid=u-lane-a');
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ok: true; items: { id: number; title: string; state: string; stale: boolean; secretSet: unknown; history: { act: string }[] }[] };
+    expect(body.items.map((i) => [i.id, i.title, i.state])).toEqual([[a, 'First', 'open'], [b, 'Second', 'done']]);
+    expect(body.items[0]).toMatchObject({ stale: false, secretSet: null });
+    expect(body.items[1]!.history.map((h) => h.act)).toEqual(['raise', 'tick', 'confirm']);
+  });
+
+  it('refuses a missing identity (400), a stale uuid (403) and another programme (403)', async () => {
+    const r = await rig();
+    expect((await get(r, '/api/programmes/prog-a/items')).statusCode).toBe(400);
+    const stale = await get(r, '/api/programmes/prog-a/items?byId=lane-a&byUuid=u-someone-else');
+    expect(stale.statusCode).toBe(403);
+    expect(stale.json()).toMatchObject({ error: 'stale-uuid' });
+    const other = await get(r, '/api/programmes/prog-a/items?byId=lane-b&byUuid=u-lane-b');
+    expect(other.statusCode).toBe(403);
+    expect(other.json()).toMatchObject({ error: 'not-your-programme' });
+  });
+
+  it('emits nothing: a read is not a write', async () => {
+    const r = await rig();
+    await get(r, '/api/programmes/prog-a/items?byId=lane-a&byUuid=u-lane-a');
+    expect(r.waiting()).toBe(0);
+  });
+});
+
+describe('POST /api/programmes/:slug/spec (plan PL3, Review Focus 5)', () => {
+  const SPEC = 'docs/superpowers/specs/2026-10-31-x-design.md';
+  it('pins the spec with the copy of its In short, and Goals reads it back', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'What the programme builds.' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true });
+    expect(r.coord.goalsFor('prog-a')).toMatchObject({ specPath: SPEC, inShort: 'What the programme builds.' });
+    expect(r.waiting()).toBe(1);
+  });
+
+  it.each([
+    ['a path with ..', 'docs/superpowers/specs/../x.md'],
+    ['a plans path', 'docs/superpowers/plans/x.md'],
+    ['a leading slash', `/${SPEC}`],
+    ['an html file', 'docs/superpowers/specs/x.html'],
+    ['no path', undefined],
+  ])('refuses %s with bad-spec-path and pins nothing', async (_name, specPath) => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/spec', { ...as(), ...(specPath === undefined ? {} : { specPath }), inShort: 'ok' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-spec-path' });
+    expect(r.coord.goalsFor('prog-a').specPath).toBeNull();
+    expect(r.waiting()).toBe(0);
+  });
+
+  it.each([['empty', ''], ['blank', '   '], ['over 1200 characters', 'x'.repeat(1201)], ['not a string', 7]])(
+    'refuses an In short that is %s with bad-in-short', async (_name, inShort) => {
+      const r = await rig();
+      const res = await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: 'bad-in-short' });
+      expect(r.coord.goalsFor('prog-a').specPath).toBeNull();
+    });
+
+  it('accepts an In short of exactly 1200 characters', async () => {
+    const r = await rig();
+    expect((await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'x'.repeat(1200) })).statusCode).toBe(200);
+  });
+
+  it('refuses a session that does not claim the programme', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/spec', { ...as('lane-b'), specPath: SPEC, inShort: 'ok' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'not-your-programme' });
+    expect(r.coord.goalsFor('prog-a').specPath).toBeNull();
+  });
+});
+
+describe('the definition of done on the pin and the modification (D-8126)', () => {
+  const SPEC = 'docs/superpowers/specs/2026-10-31-x-design.md';
+  it('a pin with doneWhen stores it, and a re-pin without one keeps it', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'ok', doneWhen: [' First. ', 'Second.'] });
+    expect(res.statusCode).toBe(200);
+    expect(r.coord.goalsFor('prog-a').doneWhen).toEqual(['First.', 'Second.']);
+    await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'again' });
+    expect(r.coord.goalsFor('prog-a').doneWhen).toEqual(['First.', 'Second.']);
+  });
+
+  it('a pin with a 13-item list is bad-done-when and the pin is unchanged', async () => {
+    const r = await rig();
+    await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'first', doneWhen: ['a'] });
+    const res = await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'second', doneWhen: Array.from({ length: 13 }, () => 'x') });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-done-when' });
+    expect(r.coord.goalsFor('prog-a')).toMatchObject({ inShort: 'first', doneWhen: ['a'] });
+  });
+
+  it('a re-pin with a different doneWhen over a stored list is done-when-needs-ruling and writes nothing; the same list passes', async () => {
+    const r = await rig();
+    await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'first', doneWhen: ['A', 'B'] });
+    const cut = await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'second', doneWhen: ['A'] });
+    expect(cut.statusCode).not.toBe(200);
+    expect(cut.json()).toMatchObject({ error: 'done-when-needs-ruling' });
+    expect(r.coord.goalsFor('prog-a')).toMatchObject({ inShort: 'first', doneWhen: ['A', 'B'] });
+    const same = await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'third', doneWhen: ['A', 'B'] });
+    expect(same.statusCode).toBe(200);
+  });
+
+  it('a modification with doneWhen and a ruling replaces the list and records the modification', async () => {
+    const r = await rig();
+    await post(r, '/api/programmes/prog-a/spec', { ...as(), specPath: SPEC, inShort: 'ok', doneWhen: ['old'] });
+    const res = await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Changed what done means.', ruling: 'D-8126', doneWhen: ['new one', 'new two'] });
+    expect(res.statusCode).toBe(200);
+    const g = r.coord.goalsFor('prog-a');
+    expect(g.doneWhen).toEqual(['new one', 'new two']);
+    expect(g.modifications).toEqual([expect.objectContaining({ text: 'Changed what done means.', ruling: 'D-8126' })]);
+  });
+
+  it('a modification with doneWhen and an itemId is accepted', async () => {
+    const r = await rig();
+    const mine = await raise(r);
+    const res = await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Changed.', itemId: mine, doneWhen: ['z'] });
+    expect(res.statusCode).toBe(200);
+    expect(r.coord.goalsFor('prog-a').doneWhen).toEqual(['z']);
+  });
+
+  it('a modification with doneWhen and neither ruling nor itemId is done-when-needs-ruling and writes neither', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Changed.', doneWhen: ['z'] });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'done-when-needs-ruling' });
+    const g = r.coord.goalsFor('prog-a');
+    expect(g.doneWhen ?? null).toBeNull();
+    expect(g.modifications).toEqual([]);
+  });
+
+  it('a modification with a malformed doneWhen is bad-done-when and writes nothing', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Changed.', ruling: 'D-8126', doneWhen: [] });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'bad-done-when' });
+    expect(r.coord.goalsFor('prog-a').modifications).toEqual([]);
+  });
+
+  it("a worker's pair is not-your-programme before anything is written", async () => {
+    const r = await rig();
+    const pin = await post(r, '/api/programmes/prog-a/spec', { ...as('lane-b'), specPath: SPEC, inShort: 'ok', doneWhen: ['a'] });
+    expect(pin.statusCode).toBe(403);
+    expect(pin.json()).toMatchObject({ error: 'not-your-programme' });
+    const mod = await post(r, '/api/programmes/prog-a/modifications', { ...as('lane-b'), text: 'x', ruling: 'D-8126', doneWhen: ['a'] });
+    expect(mod.statusCode).toBe(403);
+    expect(mod.json()).toMatchObject({ error: 'not-your-programme' });
+    const g = r.coord.goalsFor('prog-a');
+    expect(g.doneWhen ?? null).toBeNull();
+    expect(g.modifications).toEqual([]);
+  });
+});
+
+describe('modifications (plan PL3)', () => {
+  it('records a modification, pending until merged, then marks it merged once', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Narrowed the scope.', ruling: 'ledger entry 12', pr: 77 });
+    expect(res.statusCode).toBe(200);
+    const id = (res.json() as { id: number }).id;
+    expect(r.coord.goalsFor('prog-a').modifications).toEqual([
+      expect.objectContaining({ id, text: 'Narrowed the scope.', ruling: 'ledger entry 12', pr: 77, merged: false }),
+    ]);
+    const done = await post(r, '/api/programmes/prog-a/modifications/merged', { ...as(), pr: 77 });
+    expect(done.statusCode).toBe(200);
+    expect(done.json()).toEqual({ ok: true, marked: 1 });
+    expect(r.coord.goalsFor('prog-a').modifications[0]!.merged).toBe(true);
+    const again = await post(r, '/api/programmes/prog-a/modifications/merged', { ...as(), pr: 77 });
+    expect(again.json()).toEqual({ ok: true, marked: 0 });
+    // the modification and the first merge changed something; the repeat wrote nothing and says nothing
+    expect(r.waiting()).toBe(2);
+  });
+
+  it('links a modification to an item of the same programme only', async () => {
+    const r = await rig();
+    const mine = await raise(r);
+    const theirs = await raise(r, {}, 'lane-b', 'prog-b');
+    const ok = await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Changed.', itemId: mine });
+    expect(ok.statusCode).toBe(200);
+    const foreign = await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Changed.', itemId: theirs });
+    expect(foreign.statusCode).toBe(403);
+    expect(foreign.json()).toMatchObject({ error: 'not-your-programme' });
+    const missing = await post(r, '/api/programmes/prog-a/modifications', { ...as(), text: 'Changed.', itemId: 999 });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toMatchObject({ error: 'unknown-item' });
+  });
+
+  it.each([
+    ['no text', { text: undefined }], ['blank text', { text: '  ' }], ['text over 2000', { text: 'x'.repeat(2001) }],
+    ['a ruling that is not a string', { text: 'ok', ruling: 4 }], ['a ruling over 600', { text: 'ok', ruling: 'x'.repeat(601) }],
+    ['a pr of zero', { text: 'ok', pr: 0 }], ['a pr that is not an integer', { text: 'ok', pr: 1.5 }],
+    ['an itemId of zero', { text: 'ok', itemId: 0 }],
+  ])('refuses %s with bad-request', async (_name, over) => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/modifications', { ...as(), ...over });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'bad-request' });
+    expect(r.coord.goalsFor('prog-a').modifications).toEqual([]);
+    expect(r.waiting()).toBe(0);
+  });
+
+  it('merged needs a positive integer pr, and a claimed programme', async () => {
+    const r = await rig();
+    expect((await post(r, '/api/programmes/prog-a/modifications/merged', { ...as() })).statusCode).toBe(400);
+    expect((await post(r, '/api/programmes/prog-a/modifications/merged', { ...as(), pr: -3 })).statusCode).toBe(400);
+    const other = await post(r, '/api/programmes/prog-a/modifications/merged', { ...as('lane-b'), pr: 3 });
+    expect(other.statusCode).toBe(403);
+    expect(other.json()).toMatchObject({ error: 'not-your-programme' });
+  });
+
+  it('a modification from a session that does not claim the programme is refused', async () => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/modifications', { ...as('lane-b'), text: 'Changed.' });
+    expect(res.statusCode).toBe(403);
+    expect(r.coord.goalsFor('prog-a').modifications).toEqual([]);
+  });
+});
+
+describe('parseRaise still refuses an action (D-8076, spec 10)', () => {
+  it('a body that carries action and heldUntil raises an ordinary item: neither column is written', async () => {
+    const r = await rig();
+    const id = await raise(r, { action: { verb: 'end-run', runId: r.runA, stuckReason: null }, heldUntil: Date.now() + 999_999 });
+    expect(r.coord.itemById(id)).toMatchObject({ action: null, heldUntil: null });
+    expect(r.coord.itemHistory(id).map((e) => e.actor)).toEqual(['coordinator']);
+  });
+});

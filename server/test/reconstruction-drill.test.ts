@@ -284,6 +284,29 @@ describe('the reconstruction drill', () => {
                                          // board can draw, which is the honest answer and not a gap to
                                          // close: the facts are about the coordination lane's own
                                          // history, and that history lives only here.
+      'reviewCap',                       // D-6909: the review cap's ask and lift times live in `review_cap`
+                                         // alone, and the rounds count review runs, which the drill does
+                                         // not rebuild. So a DB loss resets the rounds to 0 and three more
+                                         // reviews open before the cap refuses again: the PERMISSIVE
+                                         // direction, not a safe one (review 951 F3). Not rebuilt because
+                                         // its inputs are not rebuilt, never because losing it is safe.
+      'reviewCapLifts',                  // D-8125: `review_cap_lifts` (the coordinator lift journal) and the grant
+                                         // beside the ask in `review_cap` live in coord.db alone and no artifact
+                                         // mirrors them. A DB loss resets the grant to 0 and forgets who lifted and
+                                         // why: the cap then stands at 3, the NARROWER direction, and the operator's
+                                         // lift still works.
+      'hadChild',                        // D-8068: migration 41's column, and no artifact stamps it. The live
+                                         // `.child` mark names only the minting run, and a reclaimed child has
+                                         // none. So a DB loss reads every rebuilt row false, and those rows get
+                                         // the chip triggers alone: a label refreshes later, nothing else.
+      'closedBy', 'closeDetail',         // D-8071: migration 44's close columns, written at close beside
+                                         // `closedAt` (above, same class). No artifact records who closed a
+                                         // run or why, so a DB loss rebuilds every row with both null, which
+                                         // `closeWords` reads as a close nobody attributed.
+      'runTitle',                        // D-8071: migration 43's column, the title the open sent. The drill
+                                         // rebuilds no title: the ledger's wave row carries the wave's words,
+                                         // but nothing ties them to what the open sent, so a rebuilt row reads
+                                         // null, the shape of a run opened before the column.
       'work item ids and their blockedBy DAG',
       'per-item doneFingerprint',
       'mail bodies and their delivery/ack state',
@@ -314,19 +337,65 @@ describe('the reconstruction drill', () => {
     const RUN_SUMMARY_KEYS: Record<keyof RunSummary, true> = {
       id: true, program: true, programTitle: true, wave: true, waveOf: true,
       project: true, homeProject: true, sessionId: true, workspace: true, branch: true, state: true,
+      kind: true, reviews: true,
       claimedBy: true,
       resumed: true, clearedAt: true, openedAt: true, dispatchStartedAt: true,
       dispatchedAt: true,
       closedAt: true, handoffCommit: true, items: true, unreadMail: true,
       health: true,
+      childReclaim: true,
+      reviewCap: true,
+      childIds: true,
+      lastMoveAt: true,
+      hadChild: true,
+      runTitle: true, closedBy: true, closeDetail: true,
+      stuck: true, waitsOn: true, blockedBy: true, coordinatorGone: true,
+      workerLastSeen: true, workerLastTurn: true,
     };
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(22);
+    // Bumped 22 -> 24: `kind`/`reviews` (design 2026-09-14 §5.1, task 3).
+    // Bumped 24 -> 25: `childReclaim` (child-reclamation wave 5). It is NOT in
+    // UNRECOVERABLE above, and deliberately so. Nothing stores it: GET /api/runs
+    // derives it on every read. A reconstructed run carries `closedAt: null`
+    // (UNRECOVERABLE), and `withChildReclaim` looks no mirror event up for such
+    // a row, so the answers that rest on the mirror (reclaimed, a refusal, a
+    // failure line) cannot reach it. The registry-side answers still can, and
+    // a rebuilt row is not always silent: where the watcher's last listing
+    // carries a `.child` marker naming the rebuilt run's id and no open run
+    // names its session, the chip answers by the row rule, as for any marked
+    // row (spec §5.9: the sweep's verdict and its in-memory entry, and the
+    // fleet switch). With no such marker it shows no chip. Either way it says
+    // only what the registry and the sweep show now, never a mirror answer for
+    // an instant nobody can place.
+    // Bumped 25 -> 26: `reviewCap` (D-6909), named in UNRECOVERABLE above.
+    // Bumped 26 -> 27: `childIds` (ARCH-61, #796). Like `childReclaim` it is NOT in UNRECOVERABLE: nothing stores it, the
+    // live runs frame derives it on every tick (`childrenOf`, `coord/runWire.ts`) from the runs and the fleet's marks.
+    // Bumped 27 -> 28: `lastMoveAt` (D-7334). NOT in UNRECOVERABLE, `childIds`' reason: nothing stores it, the runs frame
+    // derives it on every tick (`withLastMoves`, `coord/runWire.ts`) from the run's events and mail.
+    // Bumped 28 -> 29: `hadChild` (D-8068), named in UNRECOVERABLE above.
+    // Bumped 29 -> 36 (D-8071): `runTitle`, `closedBy` and `closeDetail`, named in UNRECOVERABLE above; and the stuck
+    // verdict's `stuck`, `waitsOn`, `blockedBy` and `coordinatorGone`. Those four are NOT in UNRECOVERABLE, `childIds`'
+    // reason: nothing stores them on the run, the verdict's pass derives them from the runs and the fleet's readings
+    // (`coord/runStuckPass.ts`). What a DB loss does cost them is `gone_since`'s anchors, so a gone owner's `since`
+    // restarts at the first pass after the rebuild: the later, more patient direction.
+    // Bumped 36 -> 38 (D-8285): the worker heartbeat, `workerLastSeen` and `workerLastTurn`. NOT in UNRECOVERABLE, `childIds`'
+    // reason: nothing stores them, the stall sweep derives them from each worker's turn marker on its next pass.
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(38);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(17);
+    expect(UNRECOVERABLE.length).toBe(23);
+  });
+
+  it('coordinator_calls is a table no artifact mirrors: reconstruct() rebuilds none of it (D-8126)', () => {
+    // A call is the coordinator's own record of a decision taken in the operator's name (migration 55). Neither the
+    // ledger, the registry nor `.prhistory` carries one, so a DB loss forgets every call, the Seen marks and the
+    // overturns with them, and a live block with it: the PERMISSIVE direction for a block (its thread resumes), the
+    // honest one for the rest. It is a named loss here, not a gap to close.
+    const r = reconstruct(fx);
+    expect(JSON.stringify(r)).not.toContain('coordinator_calls');
+    expect(Object.keys(r)).not.toContain('calls');
   });
 
   it('refuses to invent a program when the ledger is missing', () => {

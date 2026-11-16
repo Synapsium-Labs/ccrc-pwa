@@ -141,7 +141,7 @@ describe('ws-rm writes an intent/done pair sharing one tx', () => {
 
 describe('forget writes an intent/done pair', () => {
   it('brackets the purge and names the verb', () => {
-    h.sh(`_reg_set s uuid u; _reg_set s wrapper claude-corp
+    h.sh(`_reg_set s uuid u; _reg_set s wrapper claude-acme
       ${STUB} _session_verdict() { echo gone; }
       cmd_forget s`);
     expect(eventsOf(h.home, 'forget').map((e) => e['outcome'])).toEqual(['intent', 'done']);
@@ -240,7 +240,7 @@ describe('none of the four verbs abort when the journal cannot be written (D7)',
   });
 
   it('forget still purges the registry entry', () => {
-    h.sh(`_reg_set s uuid u; _reg_set s wrapper claude-corp`);
+    h.sh(`_reg_set s uuid u; _reg_set s wrapper claude-acme`);
     const dir = lcDir(h.home);
     fs.mkdirSync(dir, { recursive: true });
     fs.chmodSync(dir, 0o555);

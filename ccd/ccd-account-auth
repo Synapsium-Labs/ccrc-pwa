@@ -5,9 +5,10 @@
 #
 # THE CREDENTIAL NEVER CROSSES THIS SCRIPT'S STDOUT. Two of the three methods
 # hand the credential to somebody else's file (Claude Code writes
-# `~/<suffix>/.credentials.json`; an external launcher writes its own), and the
+# `~/<suffix>/.credentials.json`; an external launcher writes its own; a codex
+# lane's own runtime writes `auth.json` into the lane's `exec.authDir`), and the
 # third captures a token line and SUBSTITUTES it on screen. The status file
-# carries a sign-in URL and, for the external launcher, a device code — the
+# carries a sign-in URL and, for an openai-login, a device code — the
 # spec says out loud that the device code is not a secret (§11).
 #
 # A SEPARATE EXECUTABLE, not a ccd verb, because it must OUTLIVE the process
@@ -26,6 +27,10 @@ SECRETS_DIR="$HOME/.cc-secrets"
 SCRATCH_ROOT="$HOME/.ccrc/auth-scratch"
 WRAPPER_DIR="$HOME/.local/bin"
 CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
+# THE ROSTER ITSELF, read for ONE fact: a lane's `exec.kind`, which the
+# projection above does not carry, and which decides openai-login's program.
+# HOME-derived, like every root here: no override.
+CCRC_ACCOUNTS_JSON="$HOME/.ccrc/accounts.json"
 # Every knob env-overridable for the harness, `ccd-graph-sweep`'s idiom
 # (CCRC_DOCTOR_GH_TIMEOUT precedent). HOME-derived roots take NO override —
 # HOME is the harness's isolation boundary, exactly as in ccd.
@@ -48,6 +53,33 @@ CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 : "${CCRC_AUTH_PUMP_GRACE:=10}"
 : "${CCRC_AUTH_SCRIPT:=script}"
 
+# ── the attempt (accounts plan Task A20; D-5514, D-5515) ─────────────────
+# `ccrc account auth-start` runs this helper in a transient user unit with
+# `--attempt <attemptId>`, the 32-hex id the server generated. The id is
+# echoed into every status file this run writes, so the server can tell this
+# attempt's file from an earlier one's, or from one somebody else wrote.
+#
+# A PANE METHOD (setup-token, openai-login) needs a pty, and in an attempt its
+# pane is on the lane's OWN tmux server, `tmux -L ccrc-auth-<id>`, started
+# inside the unit, never on the fleet's shared server: the agent's tmux grant
+# names subcommands on the default socket only, so no drawer, `ptyOpen` or
+# `send-keys` can reach it. The unit's copy of this helper is the OUTER half:
+# it makes the pane, waits for it and cleans up. The copy in the pane is the
+# INNER half, marked by `CCRC_AUTH_IN_PANE=1`, and it is the one that runs the
+# sign-in and writes the status file while it lives.
+#
+# IN AN ATTEMPT THE CREDENTIAL LANDS IN SCRATCH, never in the lane: the minted
+# token in `~/.ccrc/auth-scratch/<id>/minted.env`, a re-auth's or a switch's
+# sign-in in `~/.ccrc/auth-scratch/<id>/config`, and a Codex lane's sign-in in
+# `~/.ccrc/auth-scratch/<id>/codex` (outside every agent read root). `ccrc account set --method … --attempt` then checks it and
+# installs it under the lane's lock, and only a passing check reaches `done`.
+AUTH_ATTEMPT=''
+AUTH_IN_PANE="${CCRC_AUTH_IN_PANE:-}"
+# 1 for the two pane methods: their terminal states kill the private server.
+AUTH_PANE_ARM=0
+# This file's own path, for the pane's command line (set in `_auth_main`).
+AUTH_SELF=''
+
 # ── platform ──────────────────────────────────────────────────────────────
 # A LOCAL COPY, deliberately, and it is `session-hook.sh`'s situation exactly:
 # this file is exec'd by tmux with no ccd to source (sourcing ccd RUNS ccd's
@@ -69,16 +101,139 @@ case "${OSTYPE:-}" in
 esac
 
 _auth_timeout() {   # <seconds> <cmd> [args...]
-  local bin
+  local secs="$1" bin rc=0 t0 el grace dl stamp pid watcher
+  # THE GRACE BETWEEN THE DEADLINE'S TERM AND THE KILL THAT ENFORCES IT, and
+  # both clamps are MEASURED rather than chosen. `-k 0` does not mean "kill at
+  # once": GNU accepts it and then never escalates at all - measured, a
+  # one-second deadline with `-k 0` sat through a TERM-ignoring child's full
+  # five seconds and still answered 124 - so a caller reaching for "no grace"
+  # would turn the whole bound off with no error. A value that is not a whole
+  # number is worse: GNU exits 125 in five milliseconds WITHOUT RUNNING THE
+  # COMMAND, and one bad environment variable would then read, at these call
+  # sites simultaneously, as a wedged tmux, an unwalkable reap scan and a gh
+  # that needs re-authenticating. The ceiling is `ccd-account-auth`'s own pump
+  # backstop (`CCRC_AUTH_PUMP_GRACE`, 10s): this escalation must finish INSIDE
+  # it, or that last resort becomes the first one. `10#` because a value like
+  # `08` is not octal here, and a bare `$(( 08 ))` writes a bash error to the
+  # stderr this call's caller may be capturing.
+  grace="${CCD_TIMEOUT_KILL_AFTER:-3}"
+  case "$grace" in ''|*[!0-9]*) grace=3 ;; esac
+  grace=$(( 10#$grace ))
+  [ "$grace" -lt 2 ] && grace=2
+  [ "$grace" -gt 8 ] && grace=8
+  # WHEN OUR OWN ESCALATION CAN HAVE LANDED - and nothing else is claimed. The
+  # binary sends TERM at the deadline and waits the WHOLE grace before the
+  # KILL, so an escalated run cannot return before `secs + grace`, and an outer
+  # signal that beat the escalation cannot return after it. A deadline this
+  # shim cannot read as whole seconds (empty, suffixed, or so long the
+  # arithmetic would wrap) leaves `dl` empty, and then no `-k` is passed and no
+  # code is reinterpreted: that call degrades to exactly today's behaviour
+  # rather than to a guess.
+  dl=''
+  case "${secs%%[.,]*}" in
+    ''|*[!0-9]*|??????????*) : ;;
+    *) dl=$(( 10#${secs%%[.,]*} + grace )) ;;
+  esac
+  t0=$SECONDS
   for bin in timeout gtimeout; do
-    if command -v "$bin" >/dev/null 2>&1; then "$bin" "$@"; return $?; fi
+    command -v "$bin" >/dev/null 2>&1 || continue
+    # `-k` IS PROVED, NEVER ASSUMED, AND THE PROOF IS THE CHILD'S OWN BYTES.
+    # An unknown flag measured rc 125 on GNU, rc 1 on busybox and rc 127 with
+    # no `printf` to run - and rc 1 lands on NO branch at any of the twenty
+    # call sites, so there it would read as an ordinary command failure.
+    # Asking "did this exit 0" would therefore believe a parser that swallowed
+    # the flag; asking "did the COMMAND run" cannot, because only a parser that
+    # consumed `-k`, consumed its argument and then exec'd the command can
+    # print these bytes. Measured: GNU 9.4 and busybox 1.36.1 both answer
+    # `ccd-k-ok`; a wrapper that rejects the flag with rc 1 answers nothing and
+    # is refused, and the argv it logged shows no `-k` ever reached it.
+    # The probe runs `printf`, never a caller's command, and that is what makes
+    # a probe possible here at all: the commands below include `gh pr create`
+    # and a billed `claude -p` turn, so "pass `-k`, and retry without it on an
+    # ambiguous code" is not available at any price.
+    if [ -z "${_CCD_TIMEOUT_K:-}" ]; then
+      if [ "$("$bin" -k 1 1 printf ccd-k-ok 2>/dev/null)" = ccd-k-ok ]; then
+        _CCD_TIMEOUT_K=yes
+      else
+        _CCD_TIMEOUT_K=no
+      fi
+    fi
+    # `2>&6 6<&-` ON THE COMMAND AND `6>&2 2>/dev/null` ON THE GROUP, and it is
+    # the difference between a reason and a corrupted one. When the KILL lands,
+    # the binary reports it by re-raising SIGKILL on ITSELF, so THIS shell
+    # prints its own job-status line - `<file>: line N: <pid> Killed ...`.
+    # MEASURED: at a call carrying its own redirections that line lands in the
+    # caller's stderr file, which `_ws_nested_checkouts` and
+    # `_ws_sensitive_inside` read back as `$err`; and at `ccd-account-auth`'s
+    # backgrounded `2>&1` it lands in `$AUTH_RUN/out`, the FIFO `_auth_pump`
+    # parses line by line. Command substitutions are immune (measured clean in
+    # all three shapes), which is why nobody had seen it: until this change the
+    # line needed an OUTER signal to appear at all. Handing the child the
+    # ORIGINAL stderr on fd 6 and silencing this shell's own keeps every byte
+    # the child wrote and drops the line about the shell's job - measured both
+    # ways. `6<&-` closes fd 6 IN THE CHILD, so nothing inherits a descriptor
+    # it was not handed; fd 6 is free, the only numbered descriptors these
+    # files use being 3, 4, 7, 8 and 9.
+    if [ "${_CCD_TIMEOUT_K:-}" = yes ] && [ -n "$dl" ]; then
+      { "$bin" -k "$grace" "$@" 2>&6 6<&-; rc=$?; } 6>&2 2>/dev/null
+    else
+      { "$bin" "$@" 2>&6 6<&-; rc=$?; } 6>&2 2>/dev/null
+    fi
+    el=$(( SECONDS - t0 ))
+    # 137 BECOMES 124 ONLY ON PROOF, AND 137 IS NOT THE PROOF. coreutils'
+    # `timeout.c` relabels any status to 124 once its deadline has fired, with
+    # ONE deliberate exception - `sig == SIGKILL && kill_after`, commented
+    # "Allow users to distinguish if command was forcibly killed" - and that
+    # exception is the whole reason a 137 appears here. No call site can act on
+    # the distinction it exposes, while 137 ALREADY has a meaning in this tree
+    # ("an outer kill landed", `_lc_obs` says so in as many words), so
+    # propagating it would give one number two meanings. The CLOCK separates
+    # them, and only it can: our escalation cannot land before `secs + grace`,
+    # an outer kill that beat it cannot land after. MEASURED, the real binary
+    # SIGKILLed at t=3s of a two-second deadline with a three-second grace: rc
+    # stays 137 and the orphaned child ran to completion - the honest answer,
+    # because our deadline never got to enforce anything. `$SECONDS` is whole
+    # seconds (the declared bash floor is 4.4 and `EPOCHREALTIME` is 5.0), so
+    # the boundary is soft by up to one second in the direction of claiming an
+    # outer kill that landed in the last second before our own; both codes
+    # refuse at every call site, so that is a label, not a decision.
+    if [ "$rc" = 137 ] && [ "${_CCD_TIMEOUT_K:-}" = yes ] && [ -n "$dl" ] \
+       && [ "$el" -ge "$dl" ]; then
+      rc=124
+    fi
+    return "$rc"
   done
-  local secs="$1"; shift
-  local stamp; stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
+  shift
+  # THE PURE-BASH ARM DOES NOT ESCALATE, AND THAT IS A RULING, NOT AN OVERSIGHT
+  # (D-2764). The only escalation available here is a watcher subshell issuing
+  # `kill -KILL "$pid"`, and bash reaps background children ASYNCHRONOUSLY -
+  # measured: a child is unwaitable two seconds after it exits with no `wait`
+  # ever run - so a sibling watcher genuinely can signal a RECYCLED pid. On
+  # this fleet that pid could be a `ccd supervise`, a `claude-session@*` child
+  # or tmux, all three of which CLAUDE.md's SAFETY section forbids touching,
+  # and `ccrc-account.test.ts` deliberately contains PATH to force this arm on
+  # whatever box runs the suite - including the fleet box. A stamp handshake
+  # narrows that window but cannot be made to go red under mutation, which is
+  # an argument rather than a mechanism. So this arm keeps today's single TERM
+  # and reports what it always did; `ccd-plat-timeout.test.ts` text-scans all
+  # three copies for `kill -9`/`kill -KILL` so the ruling is a mechanism too.
+  stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
   rm -f -- "$stamp" 2>/dev/null
-  "$@" &
-  local pid=$! rc=0 watcher
-  # `|| exit 0` ON THE SLEEP, and it is the difference between a deadline and
+  # `<&0` ON THE COMMAND, AND IT IS WHAT GIVES THIS ARM THE BINARY'S STDIN
+  # (D-8658). A shell without job control gives a background job /dev/null for
+  # stdin unless the job carries a stdin redirection of its own, so the command
+  # here used to read nothing where the binary arm's read the caller's stdin:
+  # C28 found it on the sign-in mint, whose pasted code never arrived. `<&0` is
+  # a redirection of the job's own, and it names the caller's fd 0, so the
+  # command now reads what it would under `timeout`: a redirect on the call, a
+  # here-string, the shell's inherited stdin, the rest of a read loop's input.
+  # Not a copy through a spare descriptor: with fd 0 closed that copy fails and
+  # the command never runs, while `<&0` runs it with fd 0 closed, as the binary
+  # does. MEASURED on bash 5.3, `--posix` too; `ccd-plat-timeout.test.ts` pins
+  # all four copies. The watcher below keeps its /dev/null: it reads nothing.
+  "$@" <&0 &
+  pid=$!
+  # `|| exit 0` ON THE SLEEP (via `wait`), and it is the difference between a deadline and
   # a guillotine. If `sleep` is absent or refuses — a contained PATH, a box
   # with no coreutils — it returns INSTANTLY, and without this guard the
   # watcher would stamp and signal in the same breath: every call would report
@@ -91,9 +246,9 @@ _auth_timeout() {   # <seconds> <cmd> [args...]
   # BETWEEN A DEADLINE AND A FLOOR (D-2272). Called inside a command
   # substitution the caller reads, this subshell inherits that pipe on fd 1 -
   # and on fd 2 as well wherever the call site joins the two, which
-  # `ccrc-doctor-checks` does. `kill -TERM` on the subshell below kills the
-  # SUBSHELL and orphans the sleeper it was waiting on, so the sleeper keeps the
-  # write end open and the substitution cannot see EOF until the full duration
+  # `ccrc-doctor-checks` does. `kill -TERM` on the subshell used to kill the
+  # SUBSHELL and orphan its sleeper (D-6123 now takes it along), so the sleeper kept the
+  # write end open and the substitution could not see EOF until the full duration
   # has run out, long after the command answered. MEASURED on a box with no
   # coreutils, a 10-second deadline and a command that answers instantly: 10 006
   # ms before this redirection, 9 ms after. Neither stream carries anything a
@@ -113,7 +268,7 @@ _auth_timeout() {   # <seconds> <cmd> [args...]
   # a fix for the WHOLE call-site population, not for one new call site. The
   # population is measured in ccrc-account.test.ts rather than counted here, so
   # the claim cannot rot back into a claim about one caller.
-  ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  ( t=''; trap 't=1' TERM; sleep "$secs" 2>/dev/null & s=$!; trap 'kill "$s" 2>/dev/null; exit 0' TERM; [ -z "$t" ] || { kill "$s" 2>/dev/null; exit 0; }; wait "$s" || exit 0; trap 'exit 0' TERM; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watcher=$!
   wait "$pid" 2>/dev/null; rc=$?
   kill -TERM "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
@@ -145,6 +300,24 @@ AUTH_SECRET_WRITTEN=0
 # terminal state of `_auth_setup_token`; without this flag the backstop would
 # stamp `failed: the mint exited 143` and break the contract it exists to keep.
 AUTH_EXPIRED=0
+# THE CANCEL TRAP NEVER RUNS ITS WORK INSIDE A TIMED `read`. The pump spends
+# nearly all of a sign-in in `read -t`, so that is where `auth-cancel`'s TERM
+# (or the pane's HUP) nearly always lands, and bash runs a trap from inside
+# that builtin with its timeout still armed. A subshell the trap forks
+# inherits the armed timeout: when the deadline passes while the publish's
+# `( jq … > tmp )` runs, the child either crashes (SIGBUS, measured) or jumps
+# back into the pump loop as a CLONE of this helper, still holding the code
+# channel, and `cancelled` is never written. The status file then says
+# `waiting-code` after a cancel was accepted, and the lane reads as a sign-in
+# in progress until the attempt ages out. MEASURED on bash 5.3 with a 10 ms
+# tick (`ccd-account-auth.test.ts`): the publish done from the trap itself
+# lost the write on 21 of 30 signals; deferred, on none. So while a timed read
+# is in flight (`AUTH_IN_READ`), the trap only records the signal, and
+# `_auth_read` runs `_auth_cancelled` the moment the read returns, from
+# ordinary control flow. Everywhere else the trap runs it at once, as it
+# always did.
+AUTH_IN_READ=0
+AUTH_SIGNALLED=0
 
 _auth_publish() {   # -> $AUTH_DIR/$AUTH_ID.json
   local tmp
@@ -159,8 +332,10 @@ _auth_publish() {   # -> $AUTH_DIR/$AUTH_ID.json
   ( umask 077
     jq -cn --arg state "$AUTH_STATE" --arg url "$AUTH_URL" \
            --arg userCode "$AUTH_CODE" --arg error "$AUTH_ERROR" \
+           --arg attemptId "$AUTH_ATTEMPT" \
            --arg updatedAt "$(date -u +%FT%TZ)" \
       '{state:$state, updatedAt:$updatedAt}
+       + (if $attemptId == "" then {} else {attemptId:$attemptId} end)
        + (if $url == "" then {} else {url:$url} end)
        + (if $userCode == "" then {} else {userCode:$userCode} end)
        + (if $error == "" then {} else {error:$error} end)' > "$tmp"
@@ -177,10 +352,46 @@ _auth_die() {   # <reason> — the file says failed, stderr says why, exit 1
   AUTH_STATE=failed; AUTH_ERROR="$1"
   _auth_publish || true
   echo "$SELF: $1" >&2
+  _auth_cleanup
   exit 1
 }
 
-_auth_cancelled() {   # the trap. `tmux kill-session` sends SIGHUP to the pane.
+# EVERY TERMINAL STATE CLEANS UP (D-5515): the lane's scratch directory goes,
+# with whatever credential an attempt left in it, and a pane method's private
+# tmux server is killed by name. tmux daemonises its server, so the unit's end
+# is not trusted to take it. The INNER half in the pane does not kill its own
+# server (its outer half does, once the pane has ended), and `login` has no
+# pane, so it touches no tmux at all.
+_auth_cleanup() {
+  [[ -n "$AUTH_ID" ]] || return 0
+  rm -rf -- "${SCRATCH_ROOT:?}/$AUTH_ID" 2>/dev/null
+  if (( AUTH_PANE_ARM )) && [[ -z "$AUTH_IN_PANE" ]]; then
+    tmux -L "ccrc-auth-$AUTH_ID" kill-server >/dev/null 2>&1
+  fi
+  return 0
+}
+
+_auth_end() {   # <done|expired> <rc> — a terminal state that is not a refusal
+  _auth_state "$1"
+  _auth_cleanup
+  exit "$2"
+}
+
+_auth_on_signal() {   # the trap: HUP, INT and TERM. A timed read defers it (see AUTH_IN_READ).
+  if (( AUTH_IN_READ )); then AUTH_SIGNALLED=1; return 0; fi
+  _auth_cancelled
+}
+
+_auth_read() {   # <read's own arguments…> — `IFS= read`, with the cancel trap held until it returns
+  local r=0
+  AUTH_IN_READ=1
+  IFS= read "$@" || r=$?
+  AUTH_IN_READ=0
+  (( ! AUTH_SIGNALLED )) || _auth_cancelled
+  return "$r"
+}
+
+_auth_cancelled() {   # the cancel. `tmux kill-session` sends SIGHUP to the pane.
   AUTH_STATE=cancelled; AUTH_ERROR=''
   _auth_publish || true
   # AND IT CLOSES THE CHANNEL (D-2737). This trap used to `exit 0` straight past
@@ -189,6 +400,7 @@ _auth_cancelled() {   # the trap. `tmux kill-session` sends SIGHUP to the pane.
   # one of them. The FIFOs are the worse half: they sit inside $HOME, and a
   # recursive reader that does not skip devices blocks on them for ever.
   _auth_close_pipes
+  _auth_cleanup
   exit 0
 }
 
@@ -216,6 +428,100 @@ _auth_rostered() {   # <id> -> 0 when the roster claims it
   w="$1"
   for v in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do [[ "$w" == "$v" ]] && return 0; done
   return 1
+}
+
+# ── which program an openai-login runs ─────────────────────────────────────
+# `exec.kind`, READ FROM THE ROSTER, and never CCRC_CODEX_BACKEND. That array
+# is keyed on `telemetry` (shared/generate.mjs), and an `external` row may carry
+# codex telemetry (the live Codex lanes did; retired by Plan 4): a telemetry test
+# would send such a row down ccrc's verb. `ccd-account-health` reads this same file
+# with jq for the same reason (a fact the projection does not carry): that is
+# the precedent for this helper.
+#
+# THE BILLING HAZARD THIS FUNCTION EXISTS TO PREVENT (review round 1;
+# restored in round 2, finding N6, after the round-1 rewrite dropped it).
+# `ccrc-codex` hands EVERY argument to Claude Code and interprets none
+# (D-3479), so `<launcher> login` on a codex lane's own wrapper would open a
+# Claude Code session with "login" as its prompt, billed to the lane. An
+# empty or otherwise wrong answer here must therefore never let a codex
+# lane's wrapper reach the OLD external arm's `<launcher> login` line.
+#
+# ONE WORD PER ROSTER STATE, and no two states the caller words differently
+# share one. The empty answer this function used to give folded "no file",
+# "a dangling link", "no row" and "a row with no usable kind" into one
+# value, and the caller re-split it with a second `-e` of its own; the
+# re-split could not see the other three, so a row with `exec: {}` or
+# `exec.kind: 7` was told the roster "no longer lists" it (measured, final
+# review). The words:
+#   * `absent`: no file and no link at the path.
+#   * `dangling`: a symlink at the path whose target does not resolve.
+#   * `undecidable`: the file EXISTS but could not be read, or could not be
+#     parsed as EXACTLY ONE JSON object: empty, whitespace-only, a bare
+#     `null`, a bare `[]`, malformed input, and a multi-document file all
+#     land here (finding N1). jq missing from PATH lands here too, by the
+#     same `&&`.
+#   * `no-row`: one parseable roster object, with no account of this id.
+#   * `no-kind`: a row of this id, but none of its rows carries a STRING
+#     `exec.kind` (`exec` missing or not an object, `kind` missing or not a
+#     string).
+#   * `kind:<word>`: the first string `exec.kind` among this id's rows, the
+#     roster's own word, valid or not (`kind:codex`, `kind:external`,
+#     `kind:bogus`). The `kind:` tag is what keeps a roster that declares a
+#     kind spelled like one of the words above (`"absent"`, `"no-row"`,
+#     `"undecidable"`) from reading as that state.
+# `kind:codex` is the one the DISPATCH below reads directly. Every other
+# word reaches the WRAPPER GATE, which reads the wrapper's own content to
+# tell a codex lane from an external one, and words its refusal from the
+# word this function gave.
+#
+# MEASURED (review round 2, probes P1–P13, P16, P17): a codex lane's own
+# generated wrapper, reached through the OLD external arm, execs
+# `ccrc-codex`, which refuses for any of these roster states — and that
+# refusal is exit 1, but `_auth_openai_login`'s pty vehicle for that arm is
+# util-linux `script` without `-e` (hazard 16's own blind spot), which exits
+# 0 whatever its child did. So EVERY one of these states, not only the
+# unparseable ones, published a false `{"state":"done"}` before the wrapper
+# gate covered them too: an absent roster, a dangling-symlink roster, a
+# valid roster missing the row, `{}`, an unparseable file, and a STALE
+# ccrc-codex wrapper left behind after the roster's row for this id changed
+# to `generated` or `external`. Round 1's fix covered only the last
+# unparseable case (`undecidable`); round 2's gate (below) covers all of
+# them, because the hazard lives in the WRAPPER reaching the external arm at
+# all, not in which word this function happens to answer about the roster.
+_auth_exec_kind() {   # -> absent | dangling | undecidable | no-row | no-kind | kind:<the roster's own exec.kind> for AUTH_ID; always rc 0
+  # `-L` ONLY BEHIND A FALSE `-e`: `-e` follows a link, so a false `-e` with
+  # a true `-L` is exactly a link to nothing (or a loop). A link that
+  # resolves is read through, like any other roster.
+  if [[ ! -e "$CCRC_ACCOUNTS_JSON" ]]; then
+    if [[ -L "$CCRC_ACCOUNTS_JSON" ]]; then printf dangling; else printf absent; fi
+    return 0
+  fi
+  local out
+  if [[ -r "$CCRC_ACCOUNTS_JSON" ]]; then
+    # `-s` (SLURP): the whole file as a JSON array of its top-level values,
+    # so a truncated, whitespace-only or multi-document file is a COUNT this
+    # filter can check (`length == 1`) rather than a parse the plain `-r`
+    # form let jq silently accept or reject by its own rules. Exactly one
+    # value, and that value an object, is what "a roster" means; anything
+    # else (finding N1: empty, whitespace, `null`, `[]`, garbage, trailing
+    # garbage, or a SECOND JSON value after the first — finding R2-4/N1a,
+    # which is why this checks `length == 1` and never `length >= 1`) is
+    # `error(...)`, which fails the `&&` below and answers `undecidable`.
+    # Every other branch emits exactly one word. The kind is the FIRST
+    # string one among this id's rows, as it always was, so a roster that
+    # names the id twice answers what it answered before this split.
+    out="$(jq -rs --arg id "$AUTH_ID" \
+      'if length == 1 and (.[0] | type) == "object"
+       then [.[0] | .accounts[]? | objects | select(.id == $id)]
+            | if length == 0 then "no-row"
+              else (first(.[] | .exec | objects | .kind | strings | "kind:" + .) // "no-kind")
+              end
+       else error("not one roster object")
+       end' \
+      "$CCRC_ACCOUNTS_JSON" 2>/dev/null)" && { printf '%s' "$out"; return 0; }
+  fi
+  printf undecidable
+  return 0
 }
 
 # ── the OSC-8 strip ───────────────────────────────────────────────────────
@@ -273,6 +579,25 @@ AUTH_RUN=''
 # A GLOBAL and not an echoed value: a command substitution would run the spawn
 # in a subshell, and the parent cannot `wait` on another shell's job.
 AUTH_CHILD=''
+# THE MINT'S STDIN CROSSES THE DEADLINE SHIM ON fd 5 (D-8345 fix round 1,
+# `pure-bash-arm-mint-stdin`). `_auth_timeout`'s pure-bash arm, which a box with
+# neither `timeout` nor `gtimeout` runs, starts the command as `"$@" &`, and bash
+# gives an asynchronous command /dev/null for stdin: the redirection a spawn puts
+# on the `_auth_timeout` call never reached the mint, so no pasted code could.
+# MEASURED on Linux, bash 5.3, through this helper's own spawn: the binary arm's
+# mint read the code (rc 0), the pure-bash arm's read nothing (rc 9). The shim is
+# one of three copies pinned byte for byte (`_plat_timeout` in ccd and ccrc), so
+# the fix is here, at the spawns, by the coordinator's ruling: each spawn also
+# hands its stdin over as fd 5 (`5<&0`, after the stdin redirection), which an
+# asynchronous command keeps, and this trampoline puts it back on stdin and
+# `exec`s the mint, so the pid the shim signals is still the mint's. `-p` so no
+# BASH_ENV runs in a shell whose stdout is the stream the pump parses. Both arms
+# of the shim go through it, so the mint sees one shape everywhere.
+# SINCE D-8658 THE SHIM ITSELF PASSES STDIN THROUGH (`"$@" <&0 &`, in all four
+# copies), so the pure-bash arm no longer hands the mint /dev/null. This fd-5
+# handover stays exactly as it is, by the same programme's ruling: it changes
+# nothing at these spawns, and it keeps the mint's stdin independent of the shim.
+AUTH_KEEP_STDIN=("$BASH" -p -c 'exec 0<&5 5<&-; exec "$@"' auth-mint)
 _auth_open_pipes() {
   AUTH_RUN="$AUTH_DIR/$AUTH_ID.run"
   mkdir -p "$AUTH_RUN" || return 1
@@ -282,7 +607,7 @@ _auth_open_pipes() {
   # business. A previous run killed mid-flight leaves its FIFOs behind, and
   # `mkfifo` on an existing path fails — so the removal is not tidiness, it is
   # what makes a retry possible at all.
-  rm -f -- "$AUTH_RUN/in" "$AUTH_RUN/out" "$AUTH_RUN/in.child" 2>/dev/null
+  rm -f -- "$AUTH_RUN/in" "$AUTH_RUN/out" "$AUTH_RUN/in.child" "$AUTH_RUN/code-sent" 2>/dev/null
   mkfifo -m 600 "$AUTH_RUN/in"       || return 1
   mkfifo -m 600 "$AUTH_RUN/out"      || return 1
   mkfifo -m 600 "$AUTH_RUN/in.child" || return 1
@@ -314,7 +639,7 @@ _auth_close_pipes() {
   # it still swallows a "bad file descriptor" from closing an fd a failed
   # `_auth_open_pipes` never opened, which is all it was ever for.
   { exec 7<&-; exec 8<&-; exec 9<&-; } 2>/dev/null
-  rm -f -- "$AUTH_RUN/in" "$AUTH_RUN/out" "$AUTH_RUN/in.child" 2>/dev/null
+  rm -f -- "$AUTH_RUN/in" "$AUTH_RUN/out" "$AUTH_RUN/in.child" "$AUTH_RUN/code-sent" 2>/dev/null
 }
 
 # ── the pump ──────────────────────────────────────────────────────────────
@@ -324,14 +649,26 @@ _auth_close_pipes() {
 # edit can put a token on a stream by accident: a line that carried one is
 # consumed here and the caller is told to stop.
 _auth_write_secret() {   # <token> — 0600, tmp + rename, and nothing is echoed
-  local tok="$1" tmp
-  mkdir -p "$SECRETS_DIR" || return 1
-  chmod 700 "$SECRETS_DIR" || return 1
-  tmp="$SECRETS_DIR/.$AUTH_ID-oauth.env.$$.tmp"
+  local tok="$1" tmp dest="$SECRETS_DIR/$AUTH_ID-oauth.env" dir name
+  # IN AN ATTEMPT THE TOKEN GOES TO SCRATCH, NOT TO THE LANE (D-5514): the
+  # lane's own `<id>-oauth.env` is kept until `ccrc account set --method
+  # setup-token` has probed the new one, so a refused or abandoned mint leaves
+  # the lane byte-identical. Outside an attempt (`ccd account-pane`, the
+  # wave-1 path) the token goes straight to the lane's file, as it always did.
+  [[ -z "$AUTH_ATTEMPT" ]] || dest="$SCRATCH_ROOT/$AUTH_ID/minted.env"
+  dir="${dest%/*}"; name="${dest##*/}"
+  mkdir -p "$dir" || return 1
+  chmod 700 "$dir" || return 1
+  tmp="$dir/.$name.$$.tmp"
   ( umask 077; printf 'export CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$tok" > "$tmp" ) \
     || { rm -f -- "$tmp"; return 1; }
   chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
-  mv -f -- "$tmp" "$SECRETS_DIR/$AUTH_ID-oauth.env" || { rm -f -- "$tmp"; return 1; }
+  # The lane's own file is spelled out on its `mv`: `roster-bash.test.ts` pins it as one of five writers of the name.
+  if [[ -n "$AUTH_ATTEMPT" ]]; then
+    mv -f -- "$tmp" "$dest" || { rm -f -- "$tmp"; return 1; }
+  else
+    mv -f -- "$tmp" "$SECRETS_DIR/$AUTH_ID-oauth.env" || { rm -f -- "$tmp"; return 1; }
+  fi
 }
 
 # TWO SPELLINGS, deliberately. `setup-token` prints the export line, and
@@ -351,9 +688,13 @@ _auth_capture_token() {   # <clean line> -> 0 when the line carried a token (cap
   tok="${tok%\"}"; tok="${tok#\"}"
   tok="${tok%\'}"; tok="${tok#\'}"
   [[ -n "$tok" ]] || return 1
-  _auth_write_secret "$tok" || _auth_die "could not write $SECRETS_DIR/$AUTH_ID-oauth.env"
+  _auth_write_secret "$tok" || _auth_die "could not write the captured token for $AUTH_ID"
   AUTH_SECRET_WRITTEN=1
-  printf '[token captured to ~/.cc-secrets/%s-oauth.env]\n' "$AUTH_ID"
+  if [[ -n "$AUTH_ATTEMPT" ]]; then
+    printf '[token captured; ccrc checks it before it is installed]\n'
+  else
+    printf '[token captured to ~/.cc-secrets/%s-oauth.env]\n' "$AUTH_ID"
+  fi
   return 0
 }
 
@@ -438,12 +779,16 @@ _auth_spawn_pty_child() {   # <argv…> — background the mint under a pty, set
   # credential-minting path: the arm measured working does not change shape to
   # match the arm that was not.
   if [ "$CCD_OS" = darwin ]; then
-    { exec 7<&- 9<&-; _auth_timeout "$CCRC_AUTH_TIMEOUT" "$@"; } \
+    { exec 7<&- 9<&-; _auth_timeout "$CCRC_AUTH_TIMEOUT" "${AUTH_KEEP_STDIN[@]}" "$@" 5<&0; } \
       < <(exec 7<&- 9<&-; exec cat <"$AUTH_RUN/in.child") \
       >"$AUTH_RUN/out" 2>&1 &
   else
-    _auth_timeout "$CCRC_AUTH_TIMEOUT" "$@" <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
+    _auth_timeout "$CCRC_AUTH_TIMEOUT" "${AUTH_KEEP_STDIN[@]}" "$@" \
+      <"$AUTH_RUN/in.child" 5<&0 >"$AUTH_RUN/out" 2>&1 &
   fi
+  # Both arms hand the mint its stdin through AUTH_KEEP_STDIN (D-8345 fix round
+  # 1), the one change either arm has had since the paragraph below: without it
+  # neither arm's code reached the mint on `_auth_timeout`'s pure-bash arm.
   # `exec 7<&- 9<&-` INSIDE THE SUBSTITUTION IS WHAT LETS THE COPIER END AT ALL
   # (D-2735), and it is not hygiene. A process substitution inherits this
   # shell's fds, so without those closes the copier holds fd 9 — a WRITE end on
@@ -481,8 +826,8 @@ _auth_forward_code() {   # the operator's code: in on fd 7, out on fd 9, never o
   # the operator reads the URL. Without the peek this call spends a whole TICK
   # blocked on fd 7 every time round the loop, which halves the rate at which
   # the child's stream reaches the pane for the entire minutes-long wait.
-  IFS= read -t 0 -u 7 2>/dev/null || return 0
-  IFS= read -r -t "$CCRC_AUTH_TICK" -u 7 code || return 0
+  _auth_read -t 0 -u 7 2>/dev/null || return 0
+  _auth_read -r -t "$CCRC_AUTH_TICK" -u 7 code || return 0
   [[ -n "$code" ]] || return 0
   # NOTHING NAMED THE CODE REACHES A STREAM. It goes down fd 9 and nowhere
   # else; the pane and the transcript get the substitution line instead — the
@@ -542,8 +887,69 @@ _auth_line() {   # <raw line from the child> [prefix already classified] — cla
   printf '%s\n' "$clean"
 }
 
-_auth_pump() {   # the one loop: the child's stream out, the operator's code in
-  local line rc pending='' shown=''
+_auth_pump_read() {   # the pump's tick read: fd 8 into the CALLER's `line`, rc 0 / 1 (EOF) / >128 (timeout)
+  # A FUNCTION OF ITS OWN, AND IT IS A TEST SEAM (D-8345). `line` is the pump's
+  # local, reached by bash's dynamic scope. A test that sources this helper
+  # replaces this one function with a stand-in that answers 142 after the writer
+  # has gone, which is what macOS's `read -t` does (below), so a Linux box can
+  # show the pump's answer to it. Production runs only this body.
+  _auth_read -r -t "$CCRC_AUTH_TICK" -u 8 line
+}
+
+AUTH_DRAINED=''
+_auth_drain_read() {   # <seconds> -> one line from fd 8 with NO select(), into AUTH_DRAINED; rc 0 line, 1 EOF, else unconfirmed
+  # THE READ THAT `read -t` CANNOT BE, ON macOS (D-8345, after C27's D-8344).
+  # Darwin delivers a FIFO's end of file ONCE to whatever is waiting for it, and
+  # `select()` can then report a FIFO with no writer left as "not readable" for
+  # good. bash's `read -t` waits in `select()`, so it can consume that EOF and
+  # still answer 142, and every later `read -t` times out. A plain `read(2)`
+  # checks the writer count before it waits, so it answers 0 bytes at once.
+  # MEASURED on macos-26-arm64, bash 5.3.20 (C27's runs, and this task's): see
+  # docs/superpowers/plans/2026-10-22-desktop-polish/c28.md.
+  #
+  # So this read has no `-t`. It still must not block past the pump's backstop,
+  # because a DESCENDANT that holds the write end after the child is gone
+  # (D-2736's case) makes a plain read wait for ever. It runs in its own shell
+  # under `_auth_timeout`, bounded by the caller, and it reads one CHARACTER at a
+  # time and prints each as it goes, so the bytes a read that hits its bound had
+  # already taken still reach the caller rather than dying with it.
+  #
+  # `-u 8`, NEVER fd 8 on stdin: `_auth_timeout`'s pure-bash arm runs the command
+  # as `"$@" &`, and bash gives an asynchronous command /dev/null for stdin, which
+  # would read as an instant EOF while a descendant still writes. MEASURED, bash
+  # 5.3: `f(){ "$@" & wait; }; f cat <&8` prints nothing, while a command that
+  # reads `-u 8` gets the bytes. That arm passes stdin through since D-8658, and
+  # this read keeps `-u 8` regardless: it changes nothing here. `7<&- 9<&-` so
+  # the reader holds neither the code channel nor a write end on `in.child`.
+  #
+  # `-p`, so the reader's bash runs no BASH_ENV or ENV and imports no exported
+  # function (review 1849, M1). Its stdout IS the drained text: a BASH_ENV that
+  # prints would land in the stream the pump parses, one that sleeps would spend
+  # the drain's whole bound and answer a timeout, and an exported `read` would
+  # replace the builtin. Measured in that review; pinned by the BASH_ENV case.
+  AUTH_DRAINED=$(_auth_timeout "$1" "$BASH" -p -c \
+    'printf -v n "\n"; c=""; while IFS= read -r -N 1 -u 8 c; do printf %s "$c"; [ "$c" = "$n" ] && exit 0; done; printf %s "$c"; exit 1' \
+    7<&- 9<&- 2>/dev/null)
+}
+
+_auth_drain_secs() {   # <tick> <seconds left> -> the drain read's bound: the tick, at most what is left
+  # A TICK THAT IS NOT A POSITIVE NUMBER IS 1 (review 1849, M2). `0` and `0.0`
+  # pass the number check, and a zero deadline is no deadline to GNU `timeout`,
+  # so the drain would be unbounded. `10#` because a whole part like `08` is not
+  # octal here, and a bare `(( 08 ))` writes a bash error to stderr and then
+  # picks the wrong arm (M3).
+  local t=$1 left=$2
+  [[ $t =~ ^[0-9]+(\.[0-9]+)?$ && $t =~ [1-9] ]] || t=1
+  (( 10#${t%%.*} < left )) || t=$left
+  printf '%s\n' "$t"
+}
+
+_auth_pump() {   # [child pid] — the one loop: the child's stream out, the operator's code in
+  # `child` is the pid whose exit licenses the drain read below, and the one the
+  # backstop TERMs. The pane methods
+  # spawn through `_auth_spawn_pty_child`, which sets AUTH_CHILD; `login` spawns
+  # its own and passes it.
+  local line rc pending='' shown='' child=${1:-$AUTH_CHILD} r left t
   # THE LOOP'S OWN DEADLINE (D-2736). `_auth_timeout` bounds the CHILD; this
   # bounds the READER, and the two are not the same guarantee. The loop below
   # leaves only on EOF, and EOF needs every writer of `$AUTH_RUN/out` to close
@@ -562,12 +968,40 @@ _auth_pump() {   # the one loop: the child's stream out, the operator's code in
       # given. Kill it so `wait` can answer, and record WHICH ending this was:
       # `wait` reports 143, which on its own reads as "someone killed the mint"
       # and would be stamped `failed` over a state the caller promises.
+      #
+      # THE PUMP'S OWN CHILD, NOT AUTH_CHILD (review 1849, F2). `login` spawns
+      # without `_auth_spawn_pty_child`, so AUTH_CHILD is empty there and this
+      # signal used to reach nobody. That was harmless only where a `timeout`
+      # binary with `-k` had already killed the mint. On `_auth_timeout`'s
+      # pure-bash arm, which sends one TERM and never escalates (D-2764), a mint
+      # that ignores TERM kept the shim alive, and `login`'s `wait` then blocked
+      # until the mint chose to exit. Older than D-8345. TERMing the shim, as the
+      # pane methods always did (`child` defaults to AUTH_CHILD there), lets
+      # `wait` answer.
       AUTH_EXPIRED=1
-      kill -TERM "$AUTH_CHILD" 2>/dev/null
+      kill -TERM "$child" 2>/dev/null
       return 0
     fi
     line=''
-    IFS= read -r -t "$CCRC_AUTH_TICK" -u 8 line; rc=$?
+    _auth_pump_read; rc=$?
+    # A TIMEOUT AFTER THE CHILD HAS GONE IS CONFIRMED WITHOUT select() (D-8345).
+    # On macOS that timeout can be the FIFO's end of file, consumed by `read -t`
+    # and answered as 142; looping on it ran a finished mint to the backstop and
+    # stamped it `expired`. One drain read, bounded by the tick and by what is
+    # left before the backstop, tells the three cases apart: a line (rc 0), the
+    # end of the stream (rc 1), or a writer still there (anything else), which
+    # stays a timeout, so D-2736's descendant still ends at the backstop. While
+    # the child lives nothing here runs, and a Linux FIFO reports its EOF to
+    # `read -t` as rc 1, so this arm is reached there only in D-2736's case.
+    if (( rc > 128 )) && [[ -n "$child" ]] && ! kill -0 "$child" 2>/dev/null; then
+      left=$(( bound - (SECONDS - t0) ))
+      if (( left > 0 )); then
+        t=$(_auth_drain_secs "$CCRC_AUTH_TICK" "$left")
+        _auth_drain_read "$t"; r=$?
+        line="$line$AUTH_DRAINED"
+        (( r > 1 )) || rc=$r
+      fi
+    fi
     if (( rc == 0 )); then
       _auth_line "$pending$line" "$shown"; pending=''; shown=''
     elif (( rc > 128 )); then
@@ -622,33 +1056,47 @@ _auth_login() {   # `auth login --claudeai` — no pane, no pty, no script(1)
   # `setup-token` takes the same shape for the mirror reason (a wrapper's
   # export would overwrite ITS scratch dir); the rule both obey is one rule:
   # run the upstream launcher, and set the dir this method wants.
-  local cfg rc
+  local cfg rc into=lane
   cfg="$(_ccrc_cfg_dir "$AUTH_ID")"
   # `_ccrc_cfg_dir` has NO default arm (shared/generate.mjs), so an id it does
   # not know echoes nothing rather than guessing a home.
   [[ -n "$cfg" ]] || _auth_die "no config dir for $AUTH_ID in the roster"
   [[ -n "${CCRC_UPSTREAM:-}" ]] || _auth_die 'the roster names no upstream account'
   [[ -x "$WRAPPER_DIR/$CCRC_UPSTREAM" ]] || _auth_die "launcher-absent: $WRAPPER_DIR/$CCRC_UPSTREAM"
+  # A LANE THAT ALREADY HOLDS A CREDENTIAL SIGNS IN INTO SCRATCH (D-5514; spec
+  # §9's Sign in again and Switch to sign-in). Its own `.credentials.json`, or
+  # its token, stays until the new sign-in has been checked and installed under
+  # the lane's lock, so a refused, cancelled or expired attempt leaves it
+  # byte-identical. A lane with neither (a fresh add) signs in where it lives,
+  # which is the path OA1a measured.
+  if [[ -n "$AUTH_ATTEMPT" ]] && { [[ -e "$cfg/.credentials.json" || -L "$cfg/.credentials.json" ]] || _auth_token_lane; }; then
+    into=scratch
+    cfg="$SCRATCH_ROOT/$AUTH_ID/config"
+    mkdir -p -m 0700 "$SCRATCH_ROOT" "$SCRATCH_ROOT/$AUTH_ID" || _auth_die "cannot create $SCRATCH_ROOT/$AUTH_ID"
+  fi
   mkdir -p "$cfg" || _auth_die "cannot create $cfg"
   _auth_open_pipes || _auth_die 'cannot create the auth pipes'
   _auth_state starting
-  _auth_timeout "$CCRC_AUTH_TIMEOUT" \
+  # `AUTH_KEEP_STDIN` and `5<&0` carry the code channel past the deadline
+  # shim's pure-bash arm (D-8345 fix round 1; see its definition).
+  _auth_timeout "$CCRC_AUTH_TIMEOUT" "${AUTH_KEEP_STDIN[@]}" \
     env -u CLAUDE_CODE_OAUTH_TOKEN "CLAUDE_CONFIG_DIR=$cfg" \
       "$WRAPPER_DIR/$CCRC_UPSTREAM" auth login --claudeai \
-      <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
+      <"$AUTH_RUN/in.child" 5<&0 >"$AUTH_RUN/out" 2>&1 &
   local child=$!
   exec 8<"$AUTH_RUN/out"
-  _auth_pump
+  _auth_pump "$child"
   wait "$child"; rc=$?
   _auth_close_pipes
   # 124 IS `_plat_timeout`'s own expiry code, and the ONE thing the callers
   # branch on — a bounded call that expired is a different fact from one that
   # failed, and collapsing them would tell an operator to retype a code into a
   # process that is gone.
-  if (( rc == 124 || AUTH_EXPIRED )); then _auth_state expired; exit 1; fi
+  if (( rc == 124 || AUTH_EXPIRED )); then _auth_end expired 1; fi
   (( rc == 0 )) || _auth_die "the sign-in exited $rc"
   [[ -r "$cfg/.credentials.json" ]] || _auth_die "the sign-in reported success but wrote no $cfg/.credentials.json"
-  _auth_state done
+  [[ "$into" == lane ]] || _auth_install login
+  _auth_end done 0
 }
 _auth_setup_token() {   # `claude setup-token` — an Ink TUI, so a pane and a pty
   local scratch rc argv=()
@@ -664,8 +1112,11 @@ _auth_setup_token() {   # `claude setup-token` — an Ink TUI, so a pane and a p
     || _auth_die "pane-unsupported-here: $CCRC_AUTH_SCRIPT is not on this box, so a pty-bound mint cannot run (use --method login or paste)"
   # A THROWAWAY dir: setup-token stores nothing and needs no account state, and
   # a scratch dir carries no settings.json — so no ccrc hook can fire from this
-  # pane.
-  scratch="$SCRATCH_ROOT/$AUTH_ID"
+  # pane. `<id>/config`, every scratch config dir's one spelling (A20): under
+  # `~/.ccrc/auth-scratch`, outside every agent read root, and deleted on every
+  # terminal state.
+  scratch="$SCRATCH_ROOT/$AUTH_ID/config"
+  mkdir -p -m 0700 "$SCRATCH_ROOT" "$SCRATCH_ROOT/$AUTH_ID" || _auth_die "cannot create $SCRATCH_ROOT/$AUTH_ID"
   mkdir -p "$scratch" || _auth_die "cannot create $scratch"
   _auth_open_pipes || _auth_die 'cannot create the auth pipes'
   _auth_state starting
@@ -678,16 +1129,178 @@ _auth_setup_token() {   # `claude setup-token` — an Ink TUI, so a pane and a p
   _auth_pump
   wait "$child"; rc=$?
   _auth_close_pipes
-  if (( rc == 124 || AUTH_EXPIRED )); then _auth_state expired; exit 1; fi
+  if (( rc == 124 || AUTH_EXPIRED )); then _auth_end expired 1; fi
   (( rc == 0 )) || _auth_die "the mint exited $rc"
   # A MINT THAT PRINTED NOTHING IS NOT A SUCCESS. `AUTH_SECRET_WRITTEN` is
   # declared with the other AUTH_* globals and written only by
   # `_auth_capture_token`; without this line an exit-0 run that showed no
   # token would stamp `done` over a lane that has no credential.
   (( AUTH_SECRET_WRITTEN )) || _auth_die 'the mint exited 0 but printed no token'
-  _auth_state done
+  [[ -z "$AUTH_ATTEMPT" ]] || _auth_install setup-token
+  _auth_end done 0
 }
 _auth_openai_login() {   # `<launcher> login` — somebody else's program, under a pty
+  # A CODEX LANE'S LAUNCHER IS CCRC'S, so the argument below is not about it,
+  # and its login is a different program (spec §9.3). `ccrc-codex` hands EVERY
+  # argument to Claude Code and interprets none (D-3479), so
+  # `<launcher> login` would open a Claude Code session with "login" as its
+  # prompt, billed to the lane. Only `codex` leaves this arm.
+  # THIS IS THE DOOR spec §9.3 meant by `ccrc account auth-start`, a verb that
+  # does not exist; the pane's existing door is routed instead (D-3489).
+  local auth_kind auth_gc auth_link auth_link_rc auth_link_dir auth_link_resolved
+  # ONE READ OF THE ROSTER, AND ITS WORD IS THE WHOLE ANSWER. `_auth_exec_kind`
+  # tells no file, a dangling link, no row and no usable kind apart itself, so
+  # nothing below re-tests the path to split an answer it folded (the second
+  # `-e` this arm used to carry could split only "no file" from the rest, and
+  # a row with `exec: {}` was told the roster no longer lists it).
+  auth_kind="$(_auth_exec_kind)"
+  [[ "$auth_kind" == kind:codex ]] && { _auth_openai_login_codex; return; }
+  # THE WRAPPER GATE (review round 2 ruling; D-3530): applies to EVERY answer
+  # other than `kind:codex` — a named other kind, `absent`, `dangling`,
+  # `no-row`, `no-kind` AND `undecidable` alike — because the hazard lives in
+  # the WRAPPER reaching the OLD external arm below, not in which word
+  # `_auth_exec_kind` happens to answer about the roster. A wrapper that execs
+  # `ccrc-codex` must never reach that arm on any other answer: every one of
+  # an absent roster, a dangling-symlink roster, a valid roster missing the
+  # row, `{}`, an unparseable file, and a STALE wrapper left behind after the
+  # roster's row for this id changed to `generated` or `external`, sent a
+  # codex lane's wrapper through `ccrc-codex`'s own refusal, and `script`
+  # without `-e` published that refusal as a false `done` regardless
+  # (measured, Task 8 rounds 2 and 3).
+  #
+  # THE TWO-READ WINDOW IS CLOSED HERE, and measured (final review): the
+  # roster is read twice on the old path, once above and once by
+  # `ccrc-codex`'s own `ccrc codex start`, and a roster REPAIRED between the
+  # two used to let the second read start the lane with "login" as Claude
+  # Code's prompt. A `ccrc-codex` wrapper now never reaches that second read
+  # from this arm on any word but `kind:codex`, whatever the roster says by
+  # then; `kind:codex` itself runs `ccrc codex login`, never the wrapper.
+  # ACCEPTED: the gate cannot close a different window, where the wrapper FILE
+  # is replaced between the `grep` below and the arm's exec of it. It is narrow
+  # (measured on the fleet box: about 20 ms from the first read to the pty spawn,
+  # against 120–190 ms for a whole `ccrc wrappers` run), both actors are the same
+  # UNIX user, and the only ccrc writer replaces the external arm with bytes that
+  # are identical for that arm. Binding exec to the checked bytes would change
+  # what the external arm runs, so this wrapper-swap window remains accepted.
+  #
+  # `-F` (a literal match, not a pattern): the line is `shared/wrapper.mjs`'s
+  # own `generateWrapperBody` output byte for byte, and it contains `$`/`"`
+  # characters a regex would have to escape for no benefit. `-f` FIRST: a
+  # wrapper path that is a FIFO or a directory, not a regular file, is left
+  # to the external arm exactly as it is today — reading a FIFO here could
+  # block forever, and the external arm's own `-x` gate is the one place
+  # that already answers for a non-regular path.
+  #
+  # GREP'S EXIT STATUS IS BRANCHED, not folded (finding N5: `2>/dev/null`
+  # alone made rc 2 — cannot read the wrapper — read the same as rc 1 — no
+  # match — which is the adapter narrowing a distinction it received). rc 0
+  # is a match: this IS a `ccrc-codex` wrapper, and the roster's word decides
+  # which named refusal it gets. rc 1 is no match: a genuinely external
+  # lane's wrapper, left to the arm below, unchanged. Anything else is "could
+  # not even ask", and it is split by WHY, because each why has its own
+  # remedy (final review, D3: with grep off PATH, bash's rc 127 was told the
+  # WRAPPER could not be read): rc 2 is grep's own error, which is a file it
+  # could not read; 126 and 127 are bash failing to run grep at all; any
+  # other rc is a grep that died (a signal answers 128+n). All three are
+  # refused ONLY WHEN THE KIND ITSELF IS UNDECIDED (finding R2-1: a
+  # correctly-rostered `external`/`generated`/… lane whose launcher this
+  # function happens to be unable to read must take the external arm exactly
+  # as BASE does — that arm's own blind spot with an unreadable launcher,
+  # P18/P18b, is pre-existing and outside this ruling). When the word is one
+  # of the undecided five, the wrapper is refused by name, because the
+  # external arm could not have run such a wrapper honestly either, and this
+  # function is the one place already looking at it.
+  if [[ -f "$WRAPPER_DIR/$AUTH_ID" ]]; then
+    grep -qF 'exec "$HOME/.local/bin/ccrc-codex" "$@"' "$WRAPPER_DIR/$AUTH_ID" 2>/dev/null
+    auth_gc=$?
+    case "$auth_gc" in
+      0)
+        # EACH WORD NAMES ITS OWN CAUSE AND ITS OWN MEASURED REMEDY. Every
+        # command a remedy below names was run, in a fixture HOME, in the
+        # state it names, before its text was written (Task 8 round 3 and the
+        # final-review fix wave, whose reports hold the transcripts):
+        #   * `undecidable` → roster-unreadable.
+        #   * `absent` → roster-absent. `ccrc install` SEEDS a roster when
+        #     none exists, but a single-account default that does not know
+        #     `$AUTH_ID`, and it then regenerates `accounts.sh` FROM THAT
+        #     DEFAULT, which drops every other account from the one file that
+        #     still listed them. `ccrc wrappers` never writes `accounts.sh`,
+        #     so after the lane is declared again it is a SECOND
+        #     `ccrc install` that lets `_auth_rostered` see it (measured:
+        #     `unknown-account` after install, declare and `ccrc wrappers`;
+        #     the codex arm after install, declare and install).
+        #   * `dangling` → roster-dangling. `ccrc install` tests `-e`, which
+        #     is false through a broken link, and its `mv -f` then REPLACES
+        #     the link with the seeded default (measured: a regular file
+        #     holding the one default account, the link's target still
+        #     missing). So the remedy is the target, and install is the
+        #     warning.
+        #   * `no-row` → roster-not-codex, "no longer lists it". `ccrc
+        #     wrappers` REPORTS a ccrc-marked wrapper that no row claims as an
+        #     ORPHAN and leaves it where it is. `ccrc install` reports the same
+        #     orphan but also regenerates `accounts.sh` without the id, so a
+        #     row restored after an install needs a second one.
+        #   * `no-kind`, and a `kind:<word>` the validator does not know →
+        #     roster-kind-invalid. `ccrc wrappers` and `ccrc install` both
+        #     refuse the WHOLE roster over it and write nothing, so neither a
+        #     rewrite nor a by-hand replacement is the fix: exec.kind is.
+        #   * `kind:generated` → roster-not-codex, "`ccrc wrappers` rewrites
+        #     it": the stale file is ccrc's own and unedited, and the roster
+        #     changed (the old file is kept beside it, timestamped).
+        #   * `kind:external`, `kind:upstream` → roster-not-codex, "replace
+        #     by hand": `ccrc wrappers`, even with `--force`, never writes
+        #     that id's launcher ("upstream and external are never written"
+        #     is the verb's own summary line).
+        # `upstream`, `generated`, `external` and `codex` are the roster's
+        # EXEC_KINDS (one definition in `shared/roster.ts`, mirrored in order
+        # by the validator `shared/roster-json.mjs`, D-8192), and
+        # `ccd-account-auth.test.ts` runs every kind it declares through this
+        # gate, so a kind added there and not here reads red there, never as
+        # "invalid" on a phone.
+        case "$auth_kind" in
+          undecidable)
+            _auth_die "roster-unreadable: ~/.ccrc/accounts.json exists but could not be read as ONE JSON roster object, so $AUTH_ID (a Codex lane's own wrapper) cannot be safely routed. This can be a permissions problem (fix them by hand), a file that is not valid JSON (fix it by hand, or move it aside — 'ccrc install' never overwrites an existing accounts.json, so moving it aside is what lets the next 'ccrc install' reseed a default), or jq not on PATH (install it, or put it on PATH). Then retry." ;;
+          absent)
+            _auth_die "roster-absent: \$HOME/.ccrc/accounts.json does not exist, so $AUTH_ID (a Codex lane's own wrapper) cannot be safely routed. If you have a copy, put it back and retry. Otherwise note first which accounts \$HOME/.ccrc/accounts.sh lists, then run 'ccrc install': it seeds a single-account default roster that does not know about $AUTH_ID, and regenerates accounts.sh from that default, which drops every other account. Re-declare $AUTH_ID in the new roster as an exec.kind \"codex\" account (with its two ports and authDir), and re-declare every other account you noted, then run 'ccrc install' again — until accounts.sh lists $AUTH_ID this login refuses it as unknown-account, and 'ccrc wrappers' does not regenerate accounts.sh." ;;
+          dangling)
+            auth_link="$(readlink "$CCRC_ACCOUNTS_JSON" 2>/dev/null)"; auth_link_rc=$?
+            if (( auth_link_rc != 0 )) || [[ -z "$auth_link" ]]; then
+              _auth_die "roster-dangling-target-unmeasured: \$HOME/.ccrc/accounts.json is a dangling symlink, but readlink did not return one non-empty target, so ccrc cannot truthfully name where its roster belongs. Inspect or replace the link by hand, then retry. Do not run 'ccrc install' first: it replaces a broken link itself with a seeded single-account default that does not know about $AUTH_ID."
+            fi
+            auth_link_dir="${CCRC_ACCOUNTS_JSON%/*}"
+            if [[ "$auth_link" == /* ]]; then auth_link_resolved="$auth_link"
+            else auth_link_resolved="$auth_link_dir/$auth_link"
+            fi
+            if [[ "$auth_link" == /* ]]; then
+              _auth_die "roster-dangling: \$HOME/.ccrc/accounts.json is a symlink to $auth_link, which does not resolve, so $AUTH_ID (a Codex lane's own wrapper) cannot be safely routed. Put the roster back at $auth_link_resolved (or point the link at where it is now), then retry. Do not run 'ccrc install' first: it cannot see a roster through a broken link, and it replaces the link itself with a seeded single-account default that does not know about $AUTH_ID."
+            fi
+            _auth_die "roster-dangling: \$HOME/.ccrc/accounts.json has symlink target $auth_link, which resolves relative to $auth_link_dir as $auth_link_resolved and does not exist, so $AUTH_ID (a Codex lane's own wrapper) cannot be safely routed. Put the roster back at $auth_link_resolved (or point the link at where it is now), then retry. Do not run 'ccrc install' first: it cannot see a roster through a broken link, and it replaces the link itself with a seeded single-account default that does not know about $AUTH_ID." ;;
+          no-row)
+            _auth_die "roster-not-codex: \$HOME/.ccrc/accounts.json no longer lists $AUTH_ID, though its launcher still runs ccrc-codex. Run 'ccrc wrappers' to see it reported as an orphan — it is never removed automatically. If $AUTH_ID should still exist, restore its row (exec.kind \"codex\", with its two ports and authDir) and retry, before any 'ccrc install': install regenerates \$HOME/.ccrc/accounts.sh from the roster, and without the row that drops $AUTH_ID, which this login then refuses as unknown-account until a second install after the row is back. Otherwise remove \$HOME/.local/bin/$AUTH_ID by hand." ;;
+          kind:generated)
+            _auth_die "roster-not-codex: \$HOME/.ccrc/accounts.json declares $AUTH_ID exec.kind \"generated\", but its launcher still runs ccrc-codex — a stale file. Run 'ccrc wrappers': it rewrites a generated lane's launcher on its own. If $AUTH_ID really is meant to be a Codex lane, set exec.kind to \"codex\" instead and run 'ccrc wrappers'." ;;
+          kind:external|kind:upstream)
+            _auth_die "roster-not-codex: \$HOME/.ccrc/accounts.json declares $AUTH_ID exec.kind \"${auth_kind#kind:}\", but its launcher still runs ccrc-codex — a stale file. 'ccrc wrappers' never writes an exec.kind \"${auth_kind#kind:}\" launcher, not even with --force; replace \$HOME/.local/bin/$AUTH_ID by hand. If $AUTH_ID really is meant to be a Codex lane, set exec.kind to \"codex\" instead and run 'ccrc wrappers'." ;;
+          no-kind)
+            _auth_die "roster-kind-invalid: \$HOME/.ccrc/accounts.json lists $AUTH_ID with no usable exec.kind (none, or not a string), though its launcher runs ccrc-codex. 'ccrc wrappers' and 'ccrc install' both refuse the whole roster over it, and write nothing, until it is fixed. Set exec.kind for $AUTH_ID — to \"codex\", with its two ports and authDir, if it is a Codex lane — then retry." ;;
+          *)
+            _auth_die "roster-kind-invalid: \$HOME/.ccrc/accounts.json declares $AUTH_ID exec.kind \"${auth_kind#kind:}\", which is not a kind ccrc knows, though its launcher runs ccrc-codex. 'ccrc wrappers' and 'ccrc install' both refuse the whole roster over it, and write nothing, until it is fixed. Set exec.kind for $AUTH_ID — to \"codex\", with its two ports and authDir, if it is a Codex lane — then retry." ;;
+        esac ;;
+      1) : ;;
+      *)
+        case "$auth_kind" in
+          absent|dangling|no-row|no-kind|undecidable)
+            case "$auth_gc" in
+              2)
+                _auth_die "launcher-unreadable: $WRAPPER_DIR/$AUTH_ID exists but could not be read, so ccrc cannot tell whether it is a Codex lane's own wrapper or somebody else's launcher. Make it readable, or move it aside — 'ccrc wrappers' will not rewrite a file it cannot read either, under any flag. Then retry." ;;
+              126|127)
+                _auth_die "dependency-missing: grep could not be run (exit $auth_gc: it is not on PATH, or not executable), so ccrc cannot read $WRAPPER_DIR/$AUTH_ID to tell whether it is a Codex lane's own wrapper or somebody else's launcher. Install grep, or put it on PATH, then retry." ;;
+              *)
+                _auth_die "launcher-unmeasured: grep exited $auth_gc reading $WRAPPER_DIR/$AUTH_ID — not a match, not a miss and not a read error — so ccrc cannot tell whether it is a Codex lane's own wrapper or somebody else's launcher. Nothing was run. Retry." ;;
+            esac ;;
+        esac ;;
+    esac
+  fi
   # AN EXTERNAL LANE'S LAUNCHER IS NOT CCRC'S. `shared/wrapper.mjs` refuses to
   # generate a wrapper for `external` outright, so `$WRAPPER_DIR/$id` here is a
   # file a human wrote and this method only runs it. Its id and its launcher
@@ -709,13 +1322,91 @@ _auth_openai_login() {   # `<launcher> login` — somebody else's program, under
   _auth_pump
   wait "$child"; rc=$?
   _auth_close_pipes
-  if (( rc == 124 || AUTH_EXPIRED )); then _auth_state expired; exit 1; fi
+  if (( rc == 124 || AUTH_EXPIRED )); then _auth_end expired 1; fi
   (( rc == 0 )) || _auth_die "the launcher's login exited $rc"
   # NO CREDENTIAL ASSERTION HERE, unlike login and setup-token, and the absence
   # is the point: ccrc does not know where this launcher keeps its credential
   # and must not pretend to. The health probe is what measures whether the lane
   # actually works.
-  _auth_state done
+  _auth_end done 0
+}
+_auth_openai_login_codex() {   # `ccrc codex login <id>` — ccrc's own verb over the lane's auth library, under a pty
+  # CCRC IS THIS LANE'S LAUNCHER, so the external arm's argument is inverted
+  # here, sentence by sentence:
+  #   * the program is ccrc's. `ccrc codex login <id>` runs ccrc's auth
+  #     library's device-code sign-in (`ccd/ccgpt-auth.py`, codex-bridge
+  #     Stage 1) over this lane's `exec.authDir`;
+  #   * the credential lands where ccrc NAMES it will, `auth.json` under
+  #     `exec.authDir`, and that library is the one ccrc program that reads and
+  #     writes it; this helper never opens it;
+  #   * so there IS a credential assertion, and it belongs to the verb.
+  #     `ccrc codex login` exits 0 only when the library's sign-in did (signed
+  #     in, or already signed in). The check is made once, in the file that
+  #     reads the roster row. Asserting it again here would make this helper a
+  #     second reader of `exec.authDir`.
+  # What does not change: the pty (the device flow prints to a terminal, and
+  # the pane is one), the pump that publishes the URL and the device code, and
+  # `pane-unsupported-here`.
+  #
+  # THE VERB'S STATUS COMES FROM A FILE, NEVER FROM `wait`. The pty vehicle is
+  # `script(1)`, and util-linux `script` without `-e` exits 0 whatever its
+  # child did: `server/test/script-shim-platform.test.ts` pins that, and on
+  # util-linux 2.39.3 a child's `exit 7` answers rc 0 (rc 7 only under `-e`).
+  # `_auth_script_argv`'s argv is byte-pinned without `-e`, and BSD `script`
+  # has a different option set, so the flag is not the remedy. The verb runs
+  # under a one-line `sh` INSIDE the pty instead. That shell writes the verb's
+  # own status to `$AUTH_RUN/verb.rc` and exits with it. From there:
+  #   * the file is removed BEFORE the spawn. A run that a cancel cut short
+  #     leaves one behind (`_auth_cancelled` exits past this function), and a
+  #     stale 0 would stamp `done` over a vehicle that ran nothing;
+  #   * NO FILE is its own failure: the verb never reported, so the lane is
+  #     not known to be signed in;
+  #   * `rc` still decides `expired` (124, or the pump's backstop), because an
+  #     expiry is the vehicle's fact, not the verb's.
+  # `setup-token` answers the same blind spot with a printed-token guard. This
+  # verb prints no line that its auth library could not print too, so its own
+  # status is the fact to key on.
+  #
+  # IN AN ATTEMPT THE SIGN-IN LANDS IN SCRATCH (spec §9 row 5; accounts plan Task
+  # A24), a first sign-in and Sign in again alike. This helper cannot tell them
+  # apart, since it never reads the authDir, and need not: a refused, cancelled
+  # or expired attempt then leaves the lane's folder as it was, and a device flow
+  # always runs, where the lane's own folder would answer `already-signed-in`
+  # for a present credential. `_auth_install` checks it and moves it in.
+  #
+  # `$HOME/.local/bin/ccrc` is ABSOLUTE, like `ccd account-pane`'s own exec of
+  # this file. The pane runs under the tmux server's environment, and a user
+  # unit's PATH carries no `~/.local/bin`: `deploy/systemd/ccrc-models.service`
+  # says so beside its own PATH line, measured on the fleet host.
+  local rc vrc='' rcf='' argv=() ccrc="$HOME/.local/bin/ccrc" login=(codex login "$AUTH_ID")
+  [[ -z "$AUTH_ATTEMPT" ]] || login+=(--scratch)
+  [[ -x "$ccrc" ]] \
+    || _auth_die "ccrc-absent: $ccrc does not exist or is not executable, and a codex lane signs in only through it"
+  command -v "$CCRC_AUTH_SCRIPT" >/dev/null 2>&1 \
+    || _auth_die "pane-unsupported-here: $CCRC_AUTH_SCRIPT is not on this box, so a pty-bound login cannot run"
+  _auth_open_pipes || _auth_die 'cannot create the auth pipes'
+  rcf="$AUTH_RUN/verb.rc"
+  rm -f -- "$rcf" 2>/dev/null || _auth_die "cannot clear an earlier run's $rcf"
+  _auth_state starting
+  mapfile -t argv < <(_auth_script_argv \
+    sh -c 'f=$1; shift; "$@"; r=$?; echo "$r" > "$f"; exit "$r"' sh "$rcf" "$ccrc" "${login[@]}")
+  _auth_spawn_pty_child "${argv[@]}"
+  local child=$AUTH_CHILD
+  exec 8<"$AUTH_RUN/out"
+  _auth_pump
+  wait "$child"; rc=$?
+  _auth_close_pipes
+  [[ -r "$rcf" ]] && IFS= read -r vrc <"$rcf"
+  rm -f -- "$rcf" 2>/dev/null
+  if (( rc == 124 || AUTH_EXPIRED )); then _auth_end expired 1; fi
+  [[ -n "$vrc" ]] \
+    || _auth_die "ccrc codex login $AUTH_ID reported no exit status ($CCRC_AUTH_SCRIPT exited $rc), so the lane is not known to be signed in"
+  [[ "$vrc" != 5 ]] || _auth_die lane-credential-refused   # `_codex_login`'s, an attempt's alone: no code was asked for
+  [[ "$vrc" != 6 ]] || _auth_die credential-write   # the same, on a lane folder the library saw no file in
+  [[ "$vrc" == 0 ]] \
+    || _auth_die "ccrc codex login $AUTH_ID exited $vrc (its reason is the last line in this pane)"
+  [[ -z "$AUTH_ATTEMPT" ]] || _auth_install openai-login
+  _auth_end done 0
 }
 _auth_user_code() {   # <clean line> — the launcher's DEVICE CODE, published on purpose
   # The spec says out loud that this value is not a secret and is shown —
@@ -732,18 +1423,133 @@ _auth_user_code() {   # <clean line> — the launcher's DEVICE CODE, published o
   _auth_publish || echo "$SELF: could not publish $AUTH_DIR/$AUTH_ID.json" >&2
 }
 
+# ── what an attempt reads off the roster ──────────────────────────────────
+# A TOKEN LANE is one whose roster entry names an `exec.secretsFile` (A1: the
+# roster has no method field; `secretsFile` present is what makes an Anthropic
+# lane a token lane). Read with jq, `_auth_exec_kind`'s precedent for a fact
+# the projection does not carry. A roster that cannot be read is refused, never
+# guessed at: guessing "sign-in lane" would sign a token lane in over its own
+# config dir.
+_auth_token_lane() {   # -> 0 when AUTH_ID's roster entry names a secretsFile
+  local out
+  out="$(jq -rs --arg id "$AUTH_ID" \
+    'if length == 1 and (.[0] | type) == "object"
+     then [.[0] | .accounts[]? | objects | select(.id == $id) | .exec | objects | .secretsFile | strings]
+          | if length > 0 then "token" else "sign-in" end
+     else error("not one roster object") end' "$CCRC_ACCOUNTS_JSON" 2>/dev/null)" \
+    || _auth_die "roster-unreadable: $CCRC_ACCOUNTS_JSON could not be read as one roster object, so ccrc cannot tell whether $AUTH_ID is a token lane"
+  [[ "$out" == token ]]
+}
+
+# ── the install: ccrc checks the captured credential, then puts it in ──────
+# THE HELPER CALLS IT, NOT `auth-code` (D-7750 (2)): the code reaches this
+# process's FIFO and `auth-code` returns; the exchange ends here, in the unit,
+# and this is the process that knows when. `ccrc account set --method <m>
+# --attempt <a>` probes the credential the attempt left in scratch and installs
+# it under the lane's lock, or refuses with a code and writes nothing. The code
+# is the only part of its answer that reaches the status file: every sentence
+# the sheet shows comes from a code.
+_auth_install() {   # <setup-token|login|openai-login> — returns on an install, _auth_die on a refusal
+  local out='' rc=0 code=''
+  printf '[checking the new credential before it is installed]\n'
+  out="$("$WRAPPER_DIR/ccrc" account set --id "$AUTH_ID" --method "$1" --attempt "$AUTH_ATTEMPT" </dev/null 2>/dev/null)" || rc=$?
+  (( rc == 0 )) && return 0
+  code="$(jq -r '.error // empty' <<<"$out" 2>/dev/null)" || code=''
+  [[ "$code" =~ ^[a-z][a-z0-9-]{0,63}$ ]] || code=install-failed
+  _auth_die "$code"
+}
+
+# ── the pane, on the lane's private tmux server (D-5515) ────────────────────
+_auth_read_state() {   # -> this attempt's state from the status file, or nothing
+  jq -r --arg a "$AUTH_ATTEMPT" 'select(.attemptId == $a) | .state // empty' \
+    "$AUTH_DIR/$AUTH_ID.json" 2>/dev/null
+}
+
+_auth_outer_settle() {   # <the state to publish if the pane left none> — never returns
+  local st='' i
+  # The pane's helper writes its own terminal state as it ends; a moment's grace
+  # lets a trap that is still running finish its write before this one reads.
+  for (( i = 0; i < 30; i++ )); do
+    st="$(_auth_read_state)"
+    case "$st" in done|failed|expired|cancelled) break ;; esac
+    sleep 0.1
+  done
+  case "$st" in
+    done) _auth_cleanup; exit 0 ;;
+    failed|expired|cancelled) _auth_cleanup; exit 1 ;;
+  esac
+  # ONE WRITER, STILL: the pane has ended, so nothing else writes this file now.
+  AUTH_STATE="$1"; AUTH_ERROR=''
+  [[ "$1" != failed ]] || AUTH_ERROR='the auth pane ended without a terminal state'
+  _auth_publish || true
+  _auth_cleanup
+  [[ "$1" == cancelled ]] && exit 0
+  exit 1
+}
+
+_auth_outer_cancelled() {   # the outer half's trap: `auth-cancel` stops the unit
+  # Killing the private server SIGHUPs the pane, whose own trap publishes
+  # `cancelled`; this half then cleans up after it.
+  tmux -L "ccrc-auth-$AUTH_ID" kill-server >/dev/null 2>&1
+  _auth_outer_settle cancelled
+}
+
+_auth_pane_outer() {   # <method> — the unit's half of a pane method: make the pane, wait for it, clean up
+  local method="$1" sock="ccrc-auth-$AUTH_ID" sess="cc-auth-$AUTH_ID" cmd='' t0 bound
+  local secs=${CCRC_AUTH_TIMEOUT%%.*} grace=${CCRC_AUTH_PUMP_GRACE%%.*}
+  [[ $secs  =~ ^[0-9]+$ ]] || secs=600
+  [[ $grace =~ ^[0-9]+$ ]] || grace=10
+  command -v tmux >/dev/null 2>&1 \
+    || _auth_die "pane-unsupported-here: tmux is not on this box, so a pty-bound sign-in has no pane to run in"
+  trap '_auth_outer_cancelled' HUP INT TERM
+  # `starting` with the attempt id FIRST, so `auth-start` can return before the
+  # pane exists; the pane's helper writes every state after this one.
+  _auth_state starting
+  # `%q`, every word: tmux hands this string to a shell. `-f /dev/null`: the
+  # lane's own server reads no tmux.conf, so no hook of the fleet's runs in it.
+  printf -v cmd 'exec env CCRC_AUTH_IN_PANE=1 %q %q %q --attempt %q' \
+    "$AUTH_SELF" "$AUTH_ID" "$method" "$AUTH_ATTEMPT"
+  tmux -L "$sock" -f /dev/null new-session -d -s "$sess" -x 120 -y 40 "$cmd" >/dev/null 2>&1 \
+    || _auth_die "could not create the auth pane $sess on the private tmux socket $sock"
+  # Past the child's deadline and the pump's grace, with room for the install's probe after a late code; still
+  # under the unit's RuntimeMaxSec=660 at the defaults (600 + 20 + 30).
+  bound=$(( secs + 2 * grace + 30 )); t0=$SECONDS
+  while tmux -L "$sock" has-session -t "=$sess" >/dev/null 2>&1; do
+    if (( SECONDS - t0 >= bound )); then
+      tmux -L "$sock" kill-server >/dev/null 2>&1
+      _auth_outer_settle expired
+    fi
+    sleep "$CCRC_AUTH_TICK"
+  done
+  _auth_outer_settle failed
+}
+
 _auth_main() {
-  [[ $# -eq 2 ]] || die "usage: $SELF <id> <login|setup-token|openai-login>"
+  [[ $# -eq 2 || ( $# -eq 4 && "$3" == --attempt ) ]] \
+    || die "usage: $SELF <id> <login|setup-token|openai-login> [--attempt <attemptId>]"
   AUTH_ID="$1"
   # BEFORE any path is built from it — the rule ccd states in its R-3 block
   # ("a dot-leading project aliases EVERY `$REG/.<name>.<dot-free-suffix>`
   # file ccd owns") and applies at every id-minting site. The class is
   # `shared/roster.ts`'s ID_RE, which is where every rostered id comes from.
   [[ "$AUTH_ID" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "bad id: $AUTH_ID"
-  local method="$2"
+  local method="$2" src="${BASH_SOURCE[0]}" dir=.
+  if [[ $# -eq 4 ]]; then
+    # The server's attempt id, `shared/account-argv.ts`'s ATTEMPT_ID_RE.
+    [[ "$4" =~ ^[0-9a-f]{32}$ ]] || die "bad attempt: want 32 lowercase hex characters"
+    AUTH_ATTEMPT="$4"
+  fi
+  [[ "$src" == */* ]] && dir="${src%/*}"
+  AUTH_SELF="$(cd -- "$dir" && pwd -P)/${src##*/}"
   _auth_load_roster
   _auth_rostered "$AUTH_ID" || die "unknown-account: $AUTH_ID"
-  trap '_auth_cancelled' HUP INT TERM
+  case "$method" in setup-token|openai-login) AUTH_PANE_ARM=1 ;; esac
+  # AN ATTEMPT'S PANE METHOD, OUTSIDE ITS PANE: this is the unit's copy, so it
+  # makes the pane on the lane's private server and waits for it.
+  if [[ -n "$AUTH_ATTEMPT" && -z "$AUTH_IN_PANE" ]] && (( AUTH_PANE_ARM )); then
+    _auth_pane_outer "$method"
+  fi
+  trap '_auth_on_signal' HUP INT TERM
   case "$method" in
     login)        _auth_login ;;
     setup-token)  _auth_setup_token ;;

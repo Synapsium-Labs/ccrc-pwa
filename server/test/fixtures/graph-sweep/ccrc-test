@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# A fixture `ccrc test` for server/test/graph-repo-sweep.test.ts (D-7350): it records its argv, the environment and
+# working directory the sweep handed the build, and whether the pass lock's fd 9 reached it, then runs the command
+# exactly as given. Control files under $HOME/fx/ (all optional) shape what the real wrapper could do:
+#   status        two lines: the `--status` line and its exit code (default: a loaded, capped slice, rc 0)
+#   sleep-before  seconds to wait before the command (a heavy-slot queue)
+#   exit-before   exit with this code without running the command (`ccrc test` refusing, before any build)
+#   sleep-after   seconds to wait after the command
+#   oom           print the real wrapper's OOM sentence on stderr after the command
+#   corrupt-after replace $GRAPHIFY_OUT/graph.json after the command with text that does not parse, its stamp
+#                 (the working directory's HEAD) intact
+#   exit-after    exit with this code after the command, whatever it returned
+fx="$HOME/fx"
+mkdir -p "$fx"
+{ printf 'argv'; printf '\t%s' "$@"; printf '\n'; } >> "$fx/ccrc-test.calls"
+if [ "${1:-}" = --status ]; then
+  line="ccrctests.slice holds 0B of its 6.0G memory cap, swap cap 1.0G; heavy slots 0 of 2 held, 0 waiting"; rc=0
+  if [ -f "$fx/status" ]; then line="$(sed -n 1p "$fx/status")"; rc="$(sed -n 2p "$fx/status")"; fi
+  echo "$line"
+  exit "${rc:-0}"
+fi
+{
+  if { : >&9; } 2>/dev/null; then echo 'fd9=open'; else echo 'fd9=closed'; fi
+  echo "cwd=$(pwd -P)"
+  echo "GRAPHIFY_OUT=${GRAPHIFY_OUT:-}"
+  echo "GRAPHIFY_NO_BACKUP=${GRAPHIFY_NO_BACKUP:-}"
+  echo "PYTHONHASHSEED=${PYTHONHASHSEED:-}"
+  echo "GRAPHIFY_MAX_WORKERS=${GRAPHIFY_MAX_WORKERS:-}"
+  echo "GIT_TERMINAL_PROMPT=${GIT_TERMINAL_PROMPT:-}"
+  if [ ! -e "${GRAPHIFY_OUT:-/nonexistent}/graph.json" ]; then echo 'staged=absent'
+  elif [ -w "${GRAPHIFY_OUT}/graph.json" ]; then echo 'staged=writable'
+  else echo 'staged=read-only'; fi
+} >> "$fx/ccrc-test.env"
+[ -f "$fx/sleep-before" ] && sleep "$(cat "$fx/sleep-before")"
+[ -f "$fx/exit-before" ] && exit "$(cat "$fx/exit-before")"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --) shift; break ;;
+    --*) shift ;;
+    *) break ;;
+  esac
+done
+"$@"
+rc=$?
+[ -f "$fx/sleep-after" ] && sleep "$(cat "$fx/sleep-after")"
+if [ -f "$fx/corrupt-after" ]; then
+  printf '{"nodes": [ not json,\n  "built_at_commit": "%s"\n' "$(git rev-parse HEAD)" > "$GRAPHIFY_OUT/graph.json"
+fi
+[ -f "$fx/oom" ] && echo "ccrc test: the test slice's memory cap killed a process during this run (MemoryMax=6G, CCRC_TEST_SLICE_MEMORY_MAX; 1 OOM kill(s) in ccrctests.slice); exit 137" >&2
+[ -f "$fx/exit-after" ] && exit "$(cat "$fx/exit-after")"
+exit "$rc"

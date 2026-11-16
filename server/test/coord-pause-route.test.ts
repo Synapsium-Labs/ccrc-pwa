@@ -14,6 +14,7 @@
 // boundary that only means anything because the two callers differ.
 import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { sourceOfSymbol } from './scan/symbols.js';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
@@ -36,8 +37,8 @@ const makeRunner = (cfg: RunnerCfg = {}): { run: Runner; calls: string[][] } => 
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (cfg.fail?.has(verb)) return { code: 1, stdout: '', stderr: `ccd: ${verb} refused on the box` };
-    return { code: 0, stdout: verb === 'coord-pause' ? 'paused' : '', stderr: '' };
+    if (cfg.fail?.has(verb)) return { ran: true, code: 1, stdout: '', stderr: `ccd: ${verb} refused on the box` };
+    return { ran: true, code: 0, stdout: verb === 'coord-pause' ? 'paused' : '', stderr: '' };
   };
   return { run, calls };
 };
@@ -152,6 +153,46 @@ describe('POST /api/coord/pause', () => {
   });
 });
 
+// Delegation broker wave 3, Task 15. `POST /api/coordinators/:session/intent` is a box-token LANE: it sits in neither `UNGATED` (it
+// releases no wedge) nor `SESSION_ONLY` (a fleet session calls it, with the token and no cookie), so the scans in the next describe
+// hold its gate without a name for it. These rows pin what those scans cannot: that the sets stay disjoint from it BY NAME, and the
+// ORDER of its refusals, which is the design (plan Task 15 step 1): configured, token, closed body, attribution, incarnation, then
+// the one durable write.
+describe('the coordinator intent door is a box-token lane, and its refusals run in the design\'s order', () => {
+  const SRC_FILE = readFileSync(path.resolve(__dirname, '../src/coord/routes.ts'), 'utf8');
+  const ROUTE = '/api/coordinators/:session/intent';
+  const handler = (): string => {
+    const at = SRC_FILE.indexOf(`app.post('${ROUTE}'`);
+    expect(at, 'the intent route moved or was renamed').toBeGreaterThan(-1);
+    const next = SRC_FILE.slice(at + 1).search(/app\.(?:get|post)\('/);
+    return SRC_FILE.slice(at, next === -1 ? SRC_FILE.indexOf('return { withAbandon, withSweepAbandon };', at) : at + 1 + next);
+  };
+
+  it('is named in neither the UNGATED nor the SESSION_ONLY set', () => {
+    const self = readFileSync(__filename, 'utf8');
+    for (const name of ['UNGATED', 'SESSION_ONLY']) {
+      const m = new RegExp(`const ${name} = new Set\\(\\[([^\\]]*)\\]\\)`).exec(self);
+      expect(m, `the ${name} literal moved`).not.toBeNull();
+      expect(m![1], `${ROUTE} was added to ${name}: it is a box-token lane, not a door`).not.toContain(ROUTE);
+    }
+  });
+
+  it('checks the box token before its first await, with attribution after the cheap refusals', () => {
+    const body = handler();
+    const at = (needle: string): number => {
+      const i = body.indexOf(needle);
+      expect(i, `the intent handler no longer contains ${needle}`).toBeGreaterThan(-1);
+      return i;
+    };
+    const order = [
+      at('return notConfigured(reply)'), at('requireMailToken(req'), at('Object.keys(raw)'),
+      at('byId !== session'), at('requireAttribution('), at('settleParentIncarnations('), at('applyCheckpointChange('),
+    ];
+    expect(order, 'the intent refusals are no longer in the design\'s order').toEqual([...order].sort((a, b) => a - b));
+    expect(body.indexOf('await '), 'an await precedes the box-token gate').toBeGreaterThan(order[1]!);
+  });
+});
+
 // D-282. The gate is a property of the FILE, not of the routes anyone
 // remembers to check: `MAIL_REJECT_CODES`-excludes-`undeliverable` is the same
 // idiom — an exclusion written down by name, rather than a scanner quietly
@@ -202,16 +243,84 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
    *  `maxSessionsPerDay`, which before it had no door at all and changed only by
    *  hand-editing sqlite. Raising a cap releases no wedge.
    *
+   *  `/api/coord/reclaim-pause` (child-reclamation wave 4): the operator's
+   *  switch on the automatic reclamation of child workspaces. Raising it
+   *  releases no wedge either — it stops a deleting lane, which is an
+   *  operator's act from the phone, not a machine lane's.
+   *
+   *  `/api/coord/stall-watch` (stall-watch settings wave 1): the operator's
+   *  dial on the stall watch's level and quiet time, chosen on the Settings
+   *  page. Raising it releases no wedge either, and caps' argument holds: the
+   *  box token gates machine lanes, and the PWA holds no such key. Its GET half
+   *  rides this entry as the caps read does, because this scan reads `app.post`
+   *  handlers and the two verbs share the path.
+   *
+   *  `/api/coord/review-cap` (D-6795): the operator's lift of the review-round cap for one work run, caps' argument
+   *  exactly: no machine lane may lift a cap on its own work, and the PWA holds no box token.
+   *
+   *  `/api/questions/:id/answer` (W3 Q3f, D-7030): the operator's answer to a question their fleet put to them, an ask
+   *  or a dialog. caps' argument holds: no machine lane answers in the operator's name, and the PWA holds no box token.
+   *
+   *  `/api/coord/collect-lane` (child-reclamation wave 10): the operator's
+   *  switch on what arms the temp-root collector's deletion. Arming it starts
+   *  a deleting lane rather than releasing a wedge, so `UNGATED`'s argument
+   *  does not apply, and caps' argument holds: no machine lane calls it, and
+   *  the PWA holds no box token. Its POST also refuses `live` while sign-in is
+   *  dark, and its GET half rides this entry as the caps and stall-watch reads
+   *  do.
+   *
+   *  `/api/coord/dispatch-abandon` (D-7319): the operator's switch on the act
+   *  that abandons a dispatch that never came back. Turning it on starts an
+   *  abandoning pass rather than releasing a wedge, so `UNGATED`'s argument
+   *  does not apply, and caps' argument holds: no machine lane calls it, and
+   *  the PWA holds no box token. Its GET half rides this entry as the caps,
+   *  stall-watch and collect-lane reads do.
+   *
    *  A BLIND SPOT, recorded beside the set rather than papered over by widening
    *  the scanner (coordinator ruling, wave 6 item 2). `POST /api/sessions/:id/
-   *  kickoff` is the natural second member — a coordination WRITE that is
-   *  session-gated only — and it is ABSENT here because this file scans
+   *  kickoff` is the natural next member — SESSION_ONLY already holds four
+   *  (`/api/coord/caps`, `/api/coord/reclaim-pause`, `/api/coord/stall-watch`,
+   *  `/api/coord/collect-lane`), so kickoff would be its fifth — a coordination
+   *  WRITE that is session-gated only — and it is
+   *  ABSENT here because this file scans
    *  `coord/routes.ts` alone and that route is registered in `server.ts`. Its
    *  absence is therefore not a judgement that it belongs elsewhere; it is the
    *  scanner's reach, and the difference matters: dodging a pin by placement is
    *  not being ungated, it is being unmeasured. Whoever widens the scan to
    *  `server.ts` should add it here in the same change. */
-  const SESSION_ONLY = new Set(['/api/coord/caps']);
+  const SESSION_ONLY = new Set([
+    '/api/coord/caps', '/api/coord/reclaim-pause', '/api/coord/stall-watch', '/api/coord/collect-lane',
+    '/api/coord/review-cap',
+    // D-7319: the dead-dispatch switch (see the docstring above).
+    '/api/coord/dispatch-abandon',
+    // D-8077: the three-state control over the run-close lanes (Advanced). The operator arms a lane that closes runs on its own, so
+    // no machine lane and no session may call it: session-gated, no box token (the dispatch-abandon argument).
+    '/api/coord/run-close',
+    // D-7453: Settings › Automation › Roll idle sessions, an operator dial, session-gated like the stall-watch door.
+    '/api/coord/roll-idle',
+    // Overlord W1a launch profiles PR B: Settings › Automation › Auto memory for plain sessions, an operator dial, the roll-idle shape.
+    '/api/coord/plain-auto-memory',
+    // D-7411: the test box remote switch, an act for the operator alone (its read and its sync take the box token too, D-7554).
+    '/api/testbox/switch',
+    // D-8289: Capture again on a failed Claude Code build, an act for the operator alone: it moves the queue of the trusted set, so
+    // no machine lane calls it: session-gated, no box token.
+    '/api/testbox/builds/capture',
+    // D-7902: Settings › Automation › Stop leftovers, the reclaim-pause argument: the operator arms it, no machine lane.
+    '/api/coord/pane-scope-stop',
+    // D-7994: the switch of the sweep busy arm and its read, an operator dial, session-gated like the stall-watch door.
+    '/api/coord/scope-sweep',
+    // D-8112: the adoption switch of the delegation lane and its read, a gate for the operator (O5-7 (a)), session-gated, no box token.
+    '/api/coord/delegation-adopt',
+    // D-8274 (R-6): Settings › Automation › Shadow lanes, the one switch of each shadow lane for the operator, which refuses
+    // Live while sign-in is dark: the collect-lane argument, session-gated, no box token.
+    '/api/coord/lane-arm',
+    // W3 Q3f (D-7030): the operator door of the question family (see the docstring above).
+    '/api/questions/:id/answer',
+    // Delegation wave 5 PR8: the lease doors of the operator (keep, attach, not delegated), acts of the PWA on a delegated worktree.
+    // No machine lane calls them and the PWA holds no box token, so the caps argument holds; neither is EXEMPT, so armed they sit
+    // behind the session gate. Retain, the door of the lease parent, is a box-token lane (`requireMailToken`) and is not here.
+    '/api/leases/:lease/operator-retain', '/api/leases/:lease/resolve',
+  ]);
 
   /** The two mechanisms that count as "the token was checked" — the shared
    *  helper AND the two inline `checkMailToken` sites. Hoisted because BOTH
@@ -484,5 +593,42 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
         expect(text, `${name} does not name ${door}`).toContain(door);
       }
     }
+  });
+});
+
+// D-8076 (spec 2026-11-04 §10, "The pins, in both directions"): the operator's act on an end-request item reaches the abandon arm
+// by the serialiser's hold, never by the abandon route, and the abandon route itself keeps its D-280 shape.
+describe("the operator's act and decline consult no box token, and the abandon route's body is still unread", () => {
+  // Read through the symbols' spans (`scan/symbols.ts`), not the files: a literal source pin is a ratcheted count (ARCH-06).
+  const LEDGERS = sourceOfSymbol('server/src/coord/ledgersRoutes.ts', 'registerLedgerOperatorRoutes');
+  const ROUTES = sourceOfSymbol('server/src/coord/routes.ts', 'registerCoordRoutes');
+  const handlerIn = (src: string, route: string): string => {
+    const at = src.indexOf(`app.post('${route}'`);
+    expect(at, `${route} moved or was renamed`).toBeGreaterThan(-1);
+    const next = src.slice(at + 1).search(/\n  app\.(?:get|post|put|delete)\(/);
+    return src.slice(at, next === -1 ? undefined : at + 1 + next);
+  };
+
+  it.each(['/api/items/:id/act', '/api/items/:id/decline'])('%s consults no box token', (route) => {
+    const body = handlerIn(LEDGERS, route);
+    expect(body).not.toMatch(/requireMailToken|checkMailToken|x-ccrc-mail-token/);
+  });
+
+  it('decline reads no body; act reads its body once, through parseItemActBody, which names no run and no archive (D-8558)', () => {
+    expect(handlerIn(LEDGERS, '/api/items/:id/decline')).not.toMatch(/req\.body/);
+    const act = handlerIn(LEDGERS, '/api/items/:id/act');
+    expect(act.match(/req\.body/g)).toHaveLength(1);
+    expect(act).toContain('parseItemActBody(req.body');
+  });
+
+  it('is in neither the UNGATED nor the SESSION_ONLY set of coord/routes.ts, which it is not registered in', () => {
+    expect(ROUTES).not.toContain("'/api/items/:id/act'");
+    expect(ROUTES).not.toContain("'/api/items/:id/decline'");
+  });
+
+  it('POST /api/runs/:id/abandon still reads no body and passes no detail of its own', () => {
+    const body = handlerIn(ROUTES, '/api/runs/:id/abandon');
+    expect(body).not.toMatch(/req\.body/);
+    expect(body).toContain('abandon(id)');
   });
 });

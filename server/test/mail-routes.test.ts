@@ -2,11 +2,15 @@
 // discipline `whitelist-subset.test.ts` and `wsaudit.test.ts` already
 // established), and the happy path.
 import { describe, it, expect, afterEach } from 'vitest';
+import { isDelegationAdoptRefusal } from '../../shared/delegation-adopt.js';
 import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode } from '../../shared/api.js';
+import { isItemMoveRefusal } from '../../shared/ledgers.js';
+import { isReviewRoundsRefusal } from '../../shared/refusal.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal, isTestboxAdminRouteRefusal } from '../../shared/api.js';
+import { isPlanKebab } from '../../shared/plan.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -16,6 +20,45 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField as withUnreadableField } from './ioDoubles.js';
 import { okRun } from './coordReadHelpers.js';
+import { isChildReclaimKebab } from '../src/coord/childReclaim.js';
+import { isClaimantState } from '../src/coord/staleSibling.js';
+import { isApprovalKebab } from '../src/coord/approvalsign.js';
+import { isDigestKebab } from '../src/coord/digest.js';
+import { isStallKebab, isStallCoordGate } from '../src/coord/stall.js';
+import { isQuestionPolicyKebab } from '../src/coord/questionPolicy.js';
+import { isDeadDispatchKebab } from '../src/coord/deadDispatch.js';
+import { isAutoRollKebab } from '../src/coord/rollTarget.js';
+import { isWakeGateKebab } from '../src/coord/wakeBudget.js';
+import { isRunCloseKebab } from '../src/coord/runClose.js';
+import { isHibernateKebab } from '../src/coord/hibernate.js';
+import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
+import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
+import { isDeadCoordinatorKebab } from '../src/deadCoordinator.js';
+import { isCollectExecutorKebab } from '../src/coord/collectTempRoot.js';
+import { isLandingKebab } from '../src/coord/landing.js';
+import { LANDING_INFRASTRUCTURE_CODES, LANDING_MUTATION_CODES } from '../../shared/landingLine.js';
+import { isDelegationModelKebab } from '../src/coord/delegation-model.js';
+import { isDelegationJournalKebab } from '../src/coord/delegation-journal.js';
+import { isOverlordAuthorityKebab } from '../src/coord/overlordAuthorityJournal.js';
+import { isDelegationCheckpointKebab } from '../src/coord/delegation-durability.js';
+import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
+import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
+import { isDelegationCensusKebab } from '../src/coord/gitref.js';
+import { isReceiptDrop } from '../../shared/responses.js';
+import { isClaimsMoveRefusal, isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
+import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
+import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
+import { isDelegationProjectionKebab } from '../src/coord/delegation-projection.js';
+import { isDelegationLeaseStateKebab } from '../src/coord/delegation-lease-state.js';
+import { isDelegationAdoptionKebab } from '../src/coord/delegation-adoption.js';
+import { isDelegationLeaseActsKebab } from '../src/coord/delegation-lease-acts.js';
+import { isCollectLaneKebab } from '../src/collectLane.js';
+import { isNoticeMode } from '../src/notice.js';
+import { isArchiveGateKebab } from '../src/coord/archiveAdmission.js';
+import { isStaleArchiveKebab } from '../src/coord/staleArchive.js';
+import { isDriftLaneTag } from '../src/coord/driftLane.js';
+import { isAnswerMarkKebab } from '../src/coord/answerMarks.js';
+import { isLaneArmImport, isLaneArmLane, isLaneArmRefusal } from '../../shared/lane-arm.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -547,7 +590,10 @@ describe('the rejection table is total, in both directions', () => {
     // amendment, architecture increment 3) rather than living only as an
     // untyped string a route happened to send.
     const src = sources();
-    for (const code of RUN_REFUSE_CODES) expect(src, code).toContain(`'${code}'`);
+    // D-8181: the plan's five run refusals are declared by Task 2.1 and first sent by Task 2.5 (runs attach to tickets);
+    // Task 2.5 deletes this exemption in the commit that sends them.
+    const NOT_YET_SENT = new Set(['wave-epic-mismatch', 'plan-missing', 'reserved-programme', 'ticket-unavailable', 'plan-closed']);
+    for (const code of RUN_REFUSE_CODES) if (!NOT_YET_SENT.has(code)) expect(src, code).toContain(`'${code}'`);
   });
 
   it('every declared AskRefuseCode is emitted somewhere in server/src/coord or server/src/inject (F7)', () => {
@@ -574,6 +620,25 @@ describe('the rejection table is total, in both directions', () => {
     // never merged into one, because a run refusal and a mail refusal are
     // different vocabularies that happen to share this one scanner.
     const NOT_CODES = new Set([
+      // Overlord W1, the vocabulary piece: `renderMailNudge` (`coord/envelope.ts`) reads its fixed head from the
+      // `mail-nudge` row of `INJECTED_PROMPTS` by key. A list key, not a mail or run refusal.
+      'mail-nudge',
+      // The same piece: `coord/practiceCases.ts#stallSignatureMap` keeps the trigger table's rows of the one kind it reads.
+      // A trigger kind (`shared/practice-triggers.ts`), not a refusal.
+      'stall-arm',
+      // D-8126 — the coordinator call record (`coord/coordCalls.ts`, `coord/coordCallsStore.ts`): `big-call` is the digest's
+      // line kind a big call becomes (`DIGEST_LINE_KINDS`), and `not-big` is `markCallSeen`'s answer for a row the Seen door
+      // does not take. Neither is a mail or run refusal; the route that carries `not-big` words it as its own 409 `not-big`.
+      'big-call',
+      'not-big',
+      // D-8289 — the trusted-builds record (`coord/claudeBuildsStore.ts`): `unknown-build` and `not-failed` are
+      // `requeueClaudeBuild`'s answers for a build with no row and one whose capture has not failed. Neither is a mail or
+      // run refusal; the requeue route words them as its own 404 `not-found` and 409 `conflict`.
+      'unknown-build',
+      'not-failed',
+      // D-8289 — the same record's `notSent` words (migration 60's CHECK): why a capture try sent nothing. A row fact, not a refusal.
+      'no-test-box',
+      'no-runner',
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
       // D-2545 — the READ-FAILURE family, and the same family as
@@ -592,6 +657,18 @@ describe('the rejection table is total, in both directions', () => {
       'runs-unreadable',     // the list read's own word: GET /api/runs, all-or-failure
       'ask-unreadable',      // the ask half of the same family, /answer//release//asks
       'no-commits',          // coord/fingerprint.ts — a DoneRun verdict, not a mail code
+      'no-pr',               // coord/landingEntry.ts: a LandingWrite kind (landing order wave 5e), not a refusal code, though it does cross the wire in the advance's landing.kind
+      'no-episode',          // coord/landingEntry.ts: a LandingWrite kind (landing order wave 5e), not a refusal code, though it does cross the wire in the advance's landing.kind
+      'no-entry',            // coord/landingEntry.ts: a LandingWrite kind (landing order wave 5e), not a refusal code, though it does cross the wire in the advance's landing.kind
+      'association-unmeasured',// coord/landingEntry.ts: a recovery subject's projection kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'historical-binding-mismatch', // coord/landingEntry.ts: that projection kind's one reason (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'identity-conflict',  // coord/landingEntry.ts: a recovery subject's projection kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'no-run',             // coord/landingEntry.ts: a binding kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'not-recorded',       // coord/landingEntry.ts: a recovery subject's creation kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'not-set',            // coord/landingEntry.ts: a recovery subject's authority kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'stale-episode-head', // coord/landingEntry.ts: the one quarantine kind, also a schema CHECK literal (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'call-failed',        // coord/landed.ts#landedAnswerOf and coord/landedLane.ts#landedPass: the input word for a ran-but-failed `pr-state` call (landing order wave 5h), a reader-internal discriminant, not a refusal code
+      'missing-field',      // coord/landed.ts#landedAnswerOf: compared against ccd's `pr-state` unmeasured reason, a word ccd writes (landing order wave 5h), a reader-internal discriminant, not a refusal code
       'packed-refs',         // coord/gitref.ts — a git filename
       'refused-project',     // coord/gitref.ts — a `WorktreeRead.reason` (§1.7).
                              // NOT a refusal a client ever sees: `readWorktreeRecords`
@@ -611,6 +688,9 @@ describe('the rejection table is total, in both directions', () => {
       // Task 9 (`coord/routes.ts`'s run routes) — a SEPARATE `refused`/
       // `reject.code` vocabulary for `POST /api/runs*`, now typed as
       // `RunRefuseCode` above and so no longer hand-allowlisted here.
+      'non-terminal',        // coord/store.ts — a `writeDeliveries` guard name (D-5997).
+                             // NOT a wire code: the one delivery writer's private
+                             // guard selector, never answered over a route.
       'no-refs',              // coord/ledgerseed.ts — a `FloorMeasurement.why`
                                // (wave 2, F2). NOT a wire code: the allocator's
                                // refusal stays `not-seeded`, and this only
@@ -622,14 +702,34 @@ describe('the rejection table is total, in both directions', () => {
                                // asymmetry `refused-project`/`unlistable` above
                                // records.
       'coordinator-paused',   // $REG marker filename, not a code
+      'reclaim-paused',       // $REG marker filename, not a code (child-reclamation wave 4)
       'bad-request',          // the generic body-shape refusal server.ts
                                // already uses throughout; not a mail code
+      'bad-session-id',       // the request-id refusal server.ts's session routes
+                               // answer (400 in shared/refusal.ts's table); since
+                               // path identity's landing round 3, coord/routes.ts
+                               // and coord/openRun.ts answer it too, for a request
+                               // id that is not a registry id. Not a mail code,
+                               // and not a run refusal.
       'not-found',            // GET /api/mail/:id's generic 404 for an
                                // unknown delivery id; not a mail reject code
                                // (nothing was ever rejected — it never existed)
       'wave-brief',           // mail SUBJECT text (dispatch's own brief)
+      'brief-retry',          // a `run_events.detail` (D-5841, `coord/briefwatch.ts`): the
+                              // brief watch's one retry row, not a mail or run refusal
+      'brief-not-taken',      // the same file's notice row, and the push tag's stem
+      'draft-present',        // a `SendResult` error (`inject/send.ts`), the `enter-ignored`
+                              // shape: `briefwatch.ts`'s refusal words key on it
       'wave-done-rejected',   // mail SUBJECT text (close's own rejection)
       'wave-advance-rejected', // mail SUBJECT text (advance's own rejection, review findings 1/15)
+      'review-done-rejected', // mail SUBJECT text (the review close's own rejection, design 2026-09-14)
+      // LANDING ORDER WAVE 4, Task 2: the radar-timing answer's three mail SUBJECTS (`closeDecide.ts`'s
+      // `doneRejectionMail`), beside the three refusal subjects above, and `measured.via`'s one word. Subjects are
+      // mail text, never a wire code; the code they carry, `lineage-unmeasured`, is a `MAIL_REJECT_CODES` member.
+      'wave-done-unmeasured',
+      'wave-advance-unmeasured',
+      'review-done-unmeasured',
+      'base-only-merge',      // `fingerprint.ts`'s `measured.via`: a server-internal verdict word, answered on the wire as `verifiedHead`
       'awaiting-review',      // a RunState value (advance's own target list), not a mail code
       'enter-ignored',        // a `SendResult` error (`inject/send.ts`), reached here as
                               // half of `rundefs.ts`'s `CLEAR_REFUSED_STRANDS_TEXT` — the
@@ -639,6 +739,13 @@ describe('the rejection table is total, in both directions', () => {
                               // maps it to a status and no client switches on it. Listed
                               // rather than merged, for the reason stated above — three
                               // vocabularies sharing one scanner stay three.
+      'auto-continue-armed',  // a `SendResult` error (`inject/send.ts`) again, the
+                              // `enter-ignored` shape: store.ts's
+                              // `AUTO_CONTINUE_ARMED_LAST_ERROR`, the `lastError` the
+                              // mail sweep's `backOff` stores and the stall watch's
+                              // `autoContinueHeldUntil` reads back (stall watch wave 1).
+                              // A send refusal passing through, not a mail refusal and
+                              // not a run refusal: nothing here maps it to a status.
       'session-gone',         // claims.ts `claimExpiry`'s `endedBy` values (Build 9 D12) —
       'hard-cap',             // stored forensics on a lapsed claim, never a refusal a
                               // caller switches on. `ClaimSummary.endedBy` is deliberately
@@ -699,12 +806,69 @@ describe('the rejection table is total, in both directions', () => {
                                   // exactly like its two siblings above — no
                                   // `refused`/`reject.code` ever carries it, nothing
                                   // switches on it over the wire.
+      'reverse-demotion',        // routing slice 5, Task 2 — one of `RouteMode`'s own
+                                  // words (`shared/routing-ladder.ts`'s `RungTarget.mode`),
+                                  // compared here only against a run_events.detail token
+                                  // parsed back off `coord.runEvents(id)` to derive
+                                  // `lastDemotion` — same forensic-history family as
+                                  // `session-rebound` above, never a `refused`/`error` code.
+      'newest-page',             // design 2026-09-20 §7 (W2 Task 4) — one of
+                                  // `ListingCoverage`'s two words (store.ts): what a
+                                  // release listing COVERS, passed by the catalogue
+                                  // poller to `applyReleaseListing`. A description of
+                                  // an input, never a refusal: nothing answers it,
+                                  // nothing switches on it over the wire. Its sibling
+                                  // `complete` is one word and never reaches this scan.
+      'no-label-row',            // design 2026-09-20 §8 (W2 Task 5) — one of
+                                  // `RekeyNodeResult`'s three `how` words (store.ts):
+                                  // an ANSWER, not a refusal — the sweep's re-key found
+                                  // no label-keyed row, which is the ordinary case on
+                                  // every sweep after the first. Nothing is declined,
+                                  // nothing switches on it over the wire. Its siblings
+                                  // `rekeyed` and `superseded` are one word each.
+      'bad-id',                  // path identity W1a (spec §2.3) — `SingleRead`'s
+                                  // word (registry.ts), switched on by the
+                                  // `readSessionRecord` callers in this directory.
+                                  // A READ RESULT, never a code: no refusal, no
+                                  // `error`/`refused`/`reject.code` and no wire
+                                  // field ever carries it. Each caller maps it to
+                                  // a word of its own (`bad-session`,
+                                  // `spent-unmeasured`, `marker-unreadable`).
+      // ARCH-19 (#539): `coord/delivery.ts` decides what the sweep does with a refused send, so it now names the
+      // send's own refusal words (`inject/send.ts`'s `SendPromptResult` errors). They are the SEND's vocabulary, set on
+      // a delivery's `lastError` and `lastGate` as free text; none is a `MailRejectCode`, and none reaches the wire as
+      // a refusal.
+      'auto-continue-armed',
+      'turn-running',
+      'stash-failed',
+      'stash-occupied',
+      'enter-ignored',
+      // LANDING ORDER WAVE 4 (plan docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md, Task 1):
+      // `coord/lineage.ts` spells wave 3b's walk-stop words (`LINEAGE_STOPS`, the radar's vocabulary, written into a
+      // lineage file and only read here) and the DETAIL words of `decideLineage`'s answers. A detail is free text
+      // appended to a refusal's own body (` (<detail>)`) or to `lineage-unmeasured`'s, never a code of its own: no
+      // route, no `error`/`refused`/`reject.code` field and no wire union carries one by itself.
+      'not-a-merge',
+      'second-parent-not-on-base',
+      'tree-differs',
+      'landing-marker-unreadable',
+      'landing-marker-stale',
+      'lineage-not-expected',
+      'not-yet-measured',
+      'lineage-unreadable',
+      'lineage-stale',
+      'tip-unmeasured',
+      'older-than-the-live-tip',
+      'partly-measured',
+      'land-probe-paused',    // `coord/lineageRead.ts`: the global pause marker's FILE NAME under `$REG`, wave 3b's; a path segment
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
       if (NOT_CODES.has(tok)) continue;
       expect((MAIL_REJECT_CODES as readonly string[]).includes(tok)
         || isRunRefuseCode(tok)
+        // LINEAR HIERARCHY WAVE 2 (D-8181) — the plan's words, admitted through their exported guard (`shared/plan.ts`).
+        || isPlanKebab(tok)
         // BUILD 9a WAVE 4 — a FOURTH union, checked together and never merged, for
         // the reason the `enter-ignored` note above already states. `LifecycleGapReason`
         // reaches this scanner because `mirrorplan.ts` lives in `server/src/coord` and
@@ -745,8 +909,253 @@ describe('the rejection table is total, in both directions', () => {
         // from the whole-branch review) as literals in server/src/coord,
         // alongside `answerAsk`'s own ten — same refusal family, one union,
         // admitted through its own exported guard rather than NOT_CODES.
-        || isAskRefuseCode(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode or AskRefuseCode`).toBe(true);
+        || isAskRefuseCode(tok)
+        // ROUTING SLICE 5, TASK 2 — the EIGHTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` states above.
+        // `POST /api/runs/:id/route` (coord/routes.ts) spells its own
+        // refusals as literals — a run-scoped write like `RunRefuseCode`'s
+        // four routes, but that union's docstring scopes itself to those
+        // four by name, so this fifth route gets its own vocabulary and its
+        // own exported guard rather than silently widening one whose
+        // docstring would then under-state its own membership.
+        || isRunRouteRefuseCode(tok)
+        // ACCOUNT-POOL MEMBERSHIP, TASK 6 FIX ROUND 2 (C1) — the NINTH union,
+        // checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `CoordStore.setAccountPools`
+        // (server/src/coord/store.ts) refuses synchronously to its caller —
+        // nothing is recorded, nothing replays — so its one member is
+        // neither a mail rejection nor a run refusal, the same family as
+        // `ClaimRefuseCode`/`AskRefuseCode` above. Admitted through its own
+        // exported guard rather than NOT_CODES, for the reason every union
+        // above gives: an allowlist entry accepts one spelling for ever, a
+        // guard accepts a member added later and still rejects a typo'd one.
+        || isSetAccountPoolsRefuseCode(tok)
+        // DESIGN 2026-09-20 §6 (W2) — the TENTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` above states. The
+        // update control plane's `CoordStore` writers refuse synchronously to
+        // an in-process caller (the catalogue poller, the inventory sweep, a
+        // route) — nothing is recorded, nothing replays — so their words are
+        // neither mail rejections nor run refusals. Admitted through their own
+        // exported guard, for the reason every union above gives.
+        || isUpdateStoreRefuseCode(tok)
+        // CHILD RECLAMATION, WAVE 3 — the ELEVENTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` above states.
+        // `coord/childReclaim.ts` spells ccd's fourteen `ws-reclaim` words, the
+        // executor's defer reasons and the close decision's reasons as
+        // literals, and `coord/close.ts` spells `not-queued`. None is a mail
+        // rejection or a run refusal: the box's words are ccd's own
+        // vocabulary, and the reasons ride `CloseOutcome` and the feed, never
+        // a `refused`/`reject.code`. Admitted through the exported guard,
+        // never NOT_CODES, for the reason every union above gives.
+        || isChildReclaimKebab(tok)
+        // WORKER STALL WATCH, WAVE 1: the TWELFTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` above states.
+        // `coord/stall.ts` spells these words as literals:
+        //   - the watch's arms, holds and arming markers, as Record keys;
+        //   - its shadow detail head;
+        //   - the three read failures and the observation miss that its store
+        //     reads answer with (`store.ts`).
+        // None is a mail rejection or a run refusal. They are observation
+        // details, a verdict's words and registry marker names, and no
+        // `refused` or `reject.code` ever carries one. They are admitted
+        // through the exported guard, which is derived from those Records and
+        // tuples, and never through NOT_CODES, for the reason every union
+        // above gives.
+        || isStallKebab(tok)
+        // WORKSPACE LIFECYCLE WAVE 3b: the THIRTEENTH union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/expireArchived.ts` (the expiry lane's one executor) spells ccd's
+        // nineteen `ws-expire` words, its two box words, its outcome kinds and its defer reasons as literals. None is
+        // a mail rejection or a run refusal — they ride the lane's memory and the feed, never a `refused` or
+        // `reject.code`. Admitted through the exported guard, derived from `archivedExpiry.ts`'s Records, never
+        // NOT_CODES, for the reason every union above gives.
+        || isArchivedExpiryKebab(tok)
+        // STALL WATCH SETTINGS, W1: the FOURTEENTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` above states.
+        // `coord/stallsettings.ts` spells a mail-gate mode in its ladder, and
+        // the settings routes spell the POST's refusal code and the feed actor
+        // of an unarmed gate. None is a mail rejection or a run refusal: they
+        // are admitted through the exported guard, never NOT_CODES, for the
+        // reason every union above gives.
+        || isStallSettingsKebab(tok)
+        // WORKSPACE LIFECYCLE WAVE 4: the FIFTEENTH union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/endDeadCoordinator.ts` (the dead-coordinator lane's one executor) spells
+        // its outcome and report kinds, and `coord/close.ts` and `coord/store.ts` spell the compare-and-set refusal
+        // `claimant-changed`. None is a mail rejection or a run refusal — no route answers with one; they ride the lane's
+        // memory and the feed. Admitted through the exported guard, derived from `deadCoordinator.ts`'s Records, never
+        // NOT_CODES, for the reason every union above gives.
+        || isDeadCoordinatorKebab(tok)
+        // CHILD RECLAMATION, WAVE 9: the SIXTEENTH union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/collectTempRoot.ts` (the temp-root collector's one executor) spells its
+        // outcome kinds, its not-asked and answered whys, the open-run hold's whys and the audit's `no-document` as
+        // literals. None is a mail rejection or a run refusal — no route answers with one; they ride the job's outcome
+        // and the lane's memory. Admitted through the exported guard, derived from that file's tables and L1's
+        // `COLLECT_HOLD_WHYS`, never NOT_CODES, for the reason every union above gives.
+        || isCollectExecutorKebab(tok)
+        // PR LANDING IN CCRC, STAGE 1 (D-6785): the checks lane's words. `coord/landing.ts` spells the verdict words
+        // (`not-reported`), the unmeasured reasons ccd gives (`pr-unreadable`, `branch-drift`) and its two marker rows
+        // (`landing-disabled`, `landing-checks-live`) as literals. None is a mail rejection or a run refusal: they ride
+        // the verdict, a `run_events.detail` and the registry listing. Admitted through the exported guard, derived from
+        // `shared/landing.ts`'s maps, never NOT_CODES, for the reason every union above gives.
+        || isLandingKebab(tok)
+        // LANDING ORDER WAVE 5f: the landing journal's infrastructure and mutation refusal codes, read from L0's derived lists
+        // (`shared/landingLine.ts`, mapped to statuses by `LANDING_REFUSAL_STATUS`), never re-spelled and never NOT_CODES.
+        || (LANDING_INFRASTRUCTURE_CODES as readonly string[]).includes(tok) || (LANDING_MUTATION_CODES as readonly string[]).includes(tok)
+        // DELEGATION BROKER, WAVE 3: the SEVENTEENTH union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. The delegation modules (`delegation-model.ts`, `-journal.ts`, `-checkpoint.ts`,
+        // `-ingest.ts`, `-correlation.ts`, `-policy.ts` and `-compaction.ts`) spell, as literals, their refusal codes, the journal's entry kinds, the pruning
+        // hold reasons, the recovery phases and failure codes, the durability edges, the line rejections, the bucket
+        // unreadable reasons, the verdict kinds and every correlation reason; `gitref.ts` spells the worktree census's
+        // diagnostics; the policy spells its six report-effect tags and, as table keys, the correlation reasons it classifies; and
+        // `schema.ts`'s delegation CHECK constraints and `store.ts`'s projection spell some of the same words, from the same vocabularies
+        // (a source kind, a cleanup state, a model refusal). None is a mail rejection or a run refusal — no route answers with one; they ride the journal, the
+        // checkpoint, the cursor detail, a verdict, an effect and a compaction outcome. Admitted through eight exported guards, each derived from its own file's
+        // typed tables (or from `shared/api.ts`'s delegation vocabularies, read and never re-spelled), never NOT_CODES, for the
+        // reason every union above gives.
+        || isDelegationModelKebab(tok) || isDelegationJournalKebab(tok) || isDelegationCheckpointKebab(tok) || isOverlordAuthorityKebab(tok)
+        || isDelegationIngestKebab(tok) || isDelegationCorrelationKebab(tok) || isDelegationCensusKebab(tok)
+        || isDelegationPolicyKebab(tok) || isDelegationCompactionKebab(tok)
+        // DELEGATION BROKER, WAVE 4 (PR1): the projection's words, checked beside the seventeenth union and never merged into it, on
+        // the standing rule `enter-ignored` above states. `coord/delegation-projection.ts` spells the frame's liveness, row groups,
+        // placements and creator kinds (`offline-coordinator`, `bash-call`) as literals. None is a mail rejection or a run refusal:
+        // they ride the `delegation` frame. Admitted through the exported guard, derived from `shared/api.ts`'s four tables, never
+        // NOT_CODES, for the reason every union above gives.
+        || isDelegationProjectionKebab(tok)
+        // DELEGATION BROKER, WAVE 5 (PR5a): the lease transition table's words, beside the projection's and never merged into it.
+        // `coord/delegation-lease-state.ts` spells its transition reasons, lineage close reasons and act refusals as literals. None is
+        // a mail rejection or a run refusal: they ride the journal and the lease doors' outcomes. Admitted through the exported guard,
+        // derived from the module's three tables, never NOT_CODES.
+        || isDelegationLeaseStateKebab(tok)
+        // DELEGATION BROKER, WAVE 5 (PR8): the lease doors' words, beside the lease table's and never merged into it.
+        // `coord/delegation-lease-acts.ts` spells the doors' refusals (`shared/api.ts#LEASE_DOOR_REFUSALS`, read and never re-spelled)
+        // and the `operator-retain` reason. The doors' refusals ARE route refusals, sent through `refuseRoute` at the one status that
+        // table gives each word. Admitted through the exported guard, never NOT_CODES.
+        || isDelegationLeaseActsKebab(tok)
+        // DELEGATION BROKER, WAVE 5 (PR7): the adoption decider's and the lane step's words, beside the lease doors' and never merged
+        // into them. `coord/delegation-adoption.ts` spells its decision kinds (`would-adopt`), the shadow's whys, the breaker's attention
+        // key and an audit not yet asked. None is a mail rejection or a run refusal: they ride the lane's memory, log lines and health.
+        // Admitted through the exported guard, derived from the module's tables, never NOT_CODES.
+        || isDelegationAdoptionKebab(tok)
+        // DELEGATION BROKER, WAVE 5 (PR8b, D-8113): the adoption switch door's refusal words, beside the adoption decider's and never
+        // merged into them. `coord/delegation-adopt-switch.ts` (the L1 rule) and `coord/routes.ts` (the door) spell them; they ARE route
+        // refusals, sent through `refuseRoute` at the one status `shared/delegation-adopt.ts#DELEGATION_ADOPT_REFUSALS` gives each.
+        // Admitted through that file's guard, read and never re-spelled, never NOT_CODES.
+        || isDelegationAdoptRefusal(tok)
+        // CHILD RECLAMATION, WAVE 10: the next union, re-counted on the merged tree, checked together and never merged,
+        // on the standing rule `enter-ignored` above states. `coord/collectLaneJournal.ts` (the collector switch's
+        // generation journal adapter) spells its read kinds as literals, and the switch's other coord-side code
+        // answers in words L1 declares: the journal's read kinds and faults, the control whys, the write refusals and
+        // the latch outcomes. None is a mail rejection or a run refusal. Admitted through the exported guard, derived
+        // from `collectLane.ts`'s tables, never NOT_CODES, for the reason every union above gives.
+        || isCollectLaneKebab(tok)
+        // COORDINATOR-FIRST ROUTING, PLAN TASK 16 (D-5298): the approvals lane's own words — its route refusals,
+        // its release reasons and its two operator files — through its own exported guard, never NOT_CODES.
+        || isApprovalKebab(tok)
+        // COORDINATOR-FIRST ROUTING, PLAN TASK 17 (D-5300): the daily digest's line kinds and route refusals, through its
+        // own exported guard, derived from `shared/api.ts`'s tables, never NOT_CODES.
+        || isDigestKebab(tok)
+        // CHILD RECLAMATION, WAVE 10, THE ROUTE: the next union after `isCollectLaneKebab`, its ordinal counted on the
+        // merged tree rather than fixed here. It is checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `GET`/`POST /api/coord/collect-lane` (coord/routes.ts) answers with the
+        // collector switch's route refusals, spelled there as literals. They are L0's own vocabulary, the words the
+        // PWA reads off the wire. Admitted through the exported guard, derived from `shared/api.ts`'s table, never
+        // NOT_CODES, for the reason every union above gives.
+        || isCollectLaneRefusal(tok)
+        // HIBERNATION (D-5242, plan Task 17a): the next union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/hibernate.ts` spells its holds, its four operator settings and the live
+        // read's reasons as literals. None is a mail rejection or a run refusal: they ride a verdict and a log line,
+        // never a `refused` or `reject.code`. Admitted through the exported guard, derived from that file's tables,
+        // never NOT_CODES, for the reason every union above gives.
+        || isHibernateKebab(tok)
+        // DRIFT (D-5921, plan Task DT1): the next union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/drift.ts` keys its findings by the seven drift kinds, spelled there as
+        // literals. None is a mail rejection or a run refusal: a kind names a finding, never a `refused` or
+        // `reject.code`. Admitted through L0's own guard, derived from `DRIFT_KIND_MAP`, never NOT_CODES.
+        || isDriftKind(tok)
+        // THE NOTIFY FUNNEL (D-5858): `coord/routes.ts`'s five feed writers name their notice mode as a literal
+        // (`'record-only'`). A mode is a ring/push gate, never a mail rejection or a run refusal. Admitted through
+        // `notice.ts`'s exported guard, derived from `NOTICE_MODES`, never NOT_CODES.
+        || isNoticeMode(tok)
+        // THE ARCHIVE ADMISSION (ARCH-36): `coord/archiveAdmission.ts` names its gates as literals. A gate names which
+        // precondition refused, never a `refused` or `reject.code` (the route answers the gate's word). Admitted through
+        // the exported guard, derived from `ARCHIVE_GATES`, never NOT_CODES.
+        || isArchiveGateKebab(tok)
+        // THE TEST BOX CONNECT (D-8166): the switch route in `coord/routes.ts` refuses `on` with `parity-required` until a
+        // passing, current parity record exists. It IS a route refusal, sent through `refuseRoute` at the status
+        // `shared/refusal.ts` gives it. Admitted through L0's own guard, derived from `TESTBOX_ADMIN_ROUTE_REFUSALS`, never NOT_CODES.
+        || isTestboxAdminRouteRefusal(tok)
+        // THE RUN SPEND READ (D-6799): `coord/runSpend.ts` names why a run's spend could not be measured as literals. A
+        // reason rides the `spend` block of `GET /api/runs/:id`, never a `refused` or `reject.code`. Admitted through
+        // `shared/api.ts`'s exported guard, derived from `RUN_SPEND_UNMEASURED_REASON_MAP`, never NOT_CODES.
+        || isRunSpendUnmeasuredReason(tok)
+        // THE STALE-ARCHIVE ARM (D-6643): the next union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/staleArchive.ts` names its outcome kinds and defer reasons as literals. They ride
+        // the feed and the log, never a `refused` or `reject.code`. Admitted through the exported guard, derived from
+        // `STALE_ARCHIVE_OUTCOME_KINDS` and `STALE_ARCHIVE_DEFER_WHYS`, never NOT_CODES.
+        || isStaleArchiveKebab(tok)
+        // THE DRIFT RECONCILER'S LANE (D-5922): `coord/driftLane.ts` tags its summary push and its shadow notice with two
+        // fixed literals. A tag names a ring row, never a `refused` or `reject.code`. Admitted through the exported guard,
+        // derived from `DRIFT_LANE_TAGS`, never NOT_CODES.
+        || isDriftLaneTag(tok)
+        // THE STALE SIBLING (D-6923): `coord/staleSibling.ts` names a run claimant's state as literals. A state decides
+        // whether a sibling run keeps a child, never a `refused` or `reject.code`. Admitted through the exported guard,
+        // derived from `CLAIMANT_STATES`, never NOT_CODES.
+        || isClaimantState(tok)
+        // THE COORD-BLOCKED ARM (D-6942): `coord/stall.ts` names why a coordinator's mail is held as literals
+        // (`'busy-unread'`). A gate reason words the operator push, never a `refused` or `reject.code`. Admitted through
+        // the exported guard, derived from `STALL_COORD_GATES`, never NOT_CODES.
+        || isStallCoordGate(tok)
+        // THE QUESTION SWEEP'S DECIDERS (W3 Q3c, D-7027): `coord/questionPolicy.ts` names its answer words and the ask
+        // read's stages as literals (`'push-and-drop'`, `'row-refused'`). A word decides the sweep's act, never a `refused`
+        // or `reject.code`. Admitted through the exported guard, derived from that file's tables, never NOT_CODES.
+        || isQuestionPolicyKebab(tok)
+        // THE DEAD-DISPATCH ACT (D-7319): `coord/deadDispatch.ts` and `coord/abandonDeadDispatch.ts` name why a run is kept
+        // (`'in-flight'`, `'child-workspace'`) and the switch door's refusals (`'state-unreadable'`) as literals. A keep
+        // reason rides a log line and the arm's re-measure, never a mail rejection or a run refusal. Admitted through the
+        // exported guard, derived from `DEAD_DISPATCH_KEEPS` and `DISPATCH_ABANDON_REFUSALS`, never NOT_CODES.
+        || isDeadDispatchKebab(tok)
+        // THE AUTOMATIC ROLL'S VERDICT (D-7452): `coord/rollTarget.ts` names its skip words, its opt-out suffix and its
+        // actor as literals. A word names a skip in the lane's journal, never a `refused` or `reject.code`.
+        || isAutoRollKebab(tok)
+        // THE PROGRAMME LEDGERS' ITEM MOVES (plan PL2): `coord/ledgersStore.ts` (behind `CoordStore`) answers a refused move of an operator item with
+        // `'unknown-item'`, `'wrong-actor'`, `'not-open'` or `'programme-live'`. The decider's words and the store's, one
+        // union in `shared/ledgers.ts`. Admitted through its exported guard, derived from `ITEM_MOVE_REFUSALS`, never NOT_CODES.
+        || isItemMoveRefusal(tok)
+        // THE RUN STUCK VERDICT (D-8071): `coord/runStuck.ts` names a run's stuck reason and its cause as literals. A word
+        // decides a run's `stuck` stamp on the wire, never a `refused` or `reject.code`. Admitted through the exported guards,
+        // derived from `STUCK_REASONS`, `STUCK_CAUSES` and `RUN_WAITS_ON`, never NOT_CODES.
+        || isStuckReason(tok) || isStuckCause(tok) || isRunWaitsOn(tok)
+        // THE WAKE MEMORY GATE (D-8122): `coord/wakeBudget.ts` names the gate's refusals and its fail-open notes as
+        // literals (`'pressure-warn'`, `'headroom-unmeasured'`). A refusal is journalled as `memory-gate:<word>` where the
+        // lane journals its skips, never a `refused` or `reject.code`. Admitted through the exported guard, derived from
+        // `WAKE_MEMORY_REFUSALS` and `WAKE_MEMORY_NOTES`, never NOT_CODES.
+        // THE COORDINATOR'S REVIEW-ROUNDS DOOR (D-8125): `coord/reviewcap.ts` names the lift's refusals as literals
+        // (`'cap-not-reached'`). Admitted through the exported guard, derived from `REVIEW_ROUNDS_REFUSALS`,
+        // never NOT_CODES.
+        || isReviewRoundsRefusal(tok)
+        || isWakeGateKebab(tok)
+        // THE RUN-CLOSE LANE (D-8077): `coord/runClose.ts` and `coord/runCloseLane.ts` name the lane's rows and the words of a
+        // hold or a verdict as literals. A word rides a feed row and a log line, never a `refused` or `reject.code`.
+        // Admitted through the exported guard, derived from `RUN_CLOSE_ROWS` and `RUN_CLOSE_WORDS`, never NOT_CODES.
+        || isRunCloseKebab(tok)
+        // THE CLAIMS MOVE (D-8199): `coord/reclaim.ts`'s `moveClaims` names a refused move's own kinds as literals
+        // (`'heir-not-live'`). A kind rides the `claims-not-moved` refusal's `refusal` evidence, never a `refused` or
+        // `reject.code`. Admitted through `shared/api.ts`'s exported guard, derived from `CLAIMS_MOVE_REFUSALS`, never NOT_CODES.
+        || isClaimsMoveRefusal(tok)
+        // THE SHADOW LANES CARD (D-8274; spec 2026-10-28 R-6): `coord/laneArm.ts` names how a marker import went
+        // (`'stood-kept'`) and `coord/schema.ts` seeds a lane's row by its name (`'roster-card'`). A word is a stored column
+        // or a row key, never a `refused` or `reject.code`; its door's own refusal (`'lane-gated'`, review 2003 F3) is sent by
+        // `refuseRoute`. Admitted through L0's guards, derived from `LANE_ARM_IMPORTS`, `LANE_ARM_LANES` and
+        // `LANE_ARM_REFUSALS`, never NOT_CODES.
+        || isLaneArmImport(tok) || isLaneArmLane(tok) || isLaneArmRefusal(tok)
+        // THE ANSWER MARKS (Overlord W1, #2870): `coord/answerMarks.ts` names why a row carries no box and the ask detail as
+        // literals, and `coord/answerMarkStore.ts` a mark's name. A reason rides `not-markable`'s `detail`, never a `refused`
+        // or `reject.code`. Admitted through the exported guard, derived from its own map and L0's, never NOT_CODES.
+        || isAnswerMarkKebab(tok)
+        // THE RESPONSE RECORD'S RECEIPTS DOOR (Overlord W1): `coord/responsesStore.ts` names a drop word as a literal
+        // (`'no-row'`). It rides the door's answer as a `dropped` key, never a `refused` or `reject.code`. Admitted through
+        // L0's guard, derived from `RECEIPT_DROPS`, never NOT_CODES.
+        || isReceiptDrop(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word or receipt drop word`).toBe(true);
     }
   });
 });
@@ -786,7 +1195,7 @@ describe('resolving the \'coordinator\' role (fix-round finding 4/6)', () => {
     const home = mkTmp('ccrc-mail-');
     seed(home, 'demo-quiet-mesa');
     const w = await withMail(home); app = w.app;
-    // No program opened at all: resolveCoordinator(null) sees zero active
+    // No program opened at all: soleActiveCoordinator() sees zero active
     // programs — absent, not ambiguous, but the same refusal either way.
     const res = await send(app, GOOD);   // toId: 'coordinator', no runId
     expect(res.statusCode).toBe(404);
@@ -802,7 +1211,7 @@ describe('resolving the \'coordinator\' role (fix-round finding 4/6)', () => {
     const w = await withMail(home); app = w.app;
     w.coord.openRun({ program: 'pA', title: 'A', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-coord-a' });
     w.coord.openRun({ program: 'pB', title: 'B', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-coord-b' });
-    const res = await send(app, GOOD);   // toId: 'coordinator', no runId -> resolveCoordinator(null)
+    const res = await send(app, GOOD);   // toId: 'coordinator', no runId -> soleActiveCoordinator()
     expect(res.statusCode).toBe(404);
     expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
     expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);

@@ -1,0 +1,40 @@
+
+
+⏺ "Which pet?"="Ferret"
+
+✻ Crunched for 3s · done 3:22
+
+❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header "Fruit", question
+  "Which fruit?", options Apple, Pear. Q2: header "Drink", question "Which drink?", options Tea,
+  Coffee. Short descriptions. Afterwards reply with the raw answers only.
+
+⏺ User answered Claude's questions:
+  ⎿  · Which fruit? → Apple
+     · Which drink? → line one
+     line two
+
+⏺ "Which fruit?"="Apple", "Which drink?"="line one
+  line two"
+
+✻ Cooked for 2s · done 3:23
+
+❯ Call AskUserQuestion exactly once with FOUR single-select questions, each with two options and
+  short descriptions. Q1 header "Database" question "Which database engine?" options Postgres,
+  SQLite. Q2 header "Deployment" question "Which deployment target?" options Docker, Bare metal. Q3
+  header "Monitoring" question "Which monitoring stack?" options Grafana, None. Q4 header
+  "Licensing" question "Which licence?" options MIT, AGPL. Afterwards reply with the raw answers
+  only.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ Database  ☐ Deployment  ☐ Monitoring  ☐ Licensing  ✔ Submit  →
+
+Which database engine?
+
+❯ 1. Postgres
+     Full-featured relational database for larger workloads.
+  2. SQLite
+     Embedded, file-based database with no separate server.
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel

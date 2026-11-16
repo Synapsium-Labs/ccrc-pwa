@@ -1,0 +1,348 @@
+// THE HIBERNATION CENSUS (D-5242, plan Task 17b): every reader that can call a session dead states its stance on a
+// HIBERNATED row — `ccd hibernate`'s `.stopped` plus `.hibernated`, a pane gone, lifecycle `stopped`, bucket `dead`.
+//
+// The reader list is DERIVED, never listed by hand (`hibernateCensusScan.ts`): six sources over `server/src`, `shared`
+// and `pwa/src`, grouped by source and file with a hit count, so a new reader — or a new hit in a file already here —
+// is red until its row (or its count) is written. Each row's stance is argued from WHAT THAT READER READS, not only from
+// the verdict's holds (a run can be opened naming a sleeping session: `POST /api/runs` takes `claimedBy` from its body):
+//   - `consults`      it reads `hibernatedAt` (or `.hibernated`) itself, or through the PWA's `hibernatedSince` — held:
+//                     the file mentions it, or (`via`) the file it reads the dead answer through does (plan Task 18);
+//   - `wakes-first`   it meets a hibernated row only through a path that wakes it first (dispatch's `ensure`, the mail
+//                     lane);
+//   - `journal`       the lifecycle journal's `hibernate` row makes the sleep deliberate;
+//   - `held-awake`    the verdict's holds keep it from ever meeting one (no claim, no open run, no background work);
+//   - `other-meaning` the word means something else there;
+//   - `true-of-pane`  it counts a sleeping session's pane as not running, which is true, and says so;
+//   - `definition`    the vocabulary's own definition.
+// THE CENSUS IS THE SERVER TREE'S. The box-side sweeps keyed on a session being dead were audited by hand: `ccd-tmp-sweep`,
+// which Task 16 gave its stance (a hibernated row's uuid is live), and `ccd-scope-sweep`'s busy arm (D-7993: a hibernated
+// row is `session-asleep`). The rows by NAME below are the readers outside the scan's reach: ccd's verbs, the busy arm, the
+// PWA's Forget and the kickoff route.
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import {
+  CENSUS_SCOPES, CENSUS_SOURCE_NAMES, REPO, censusFiles, censusScan, type CensusFile, type CensusSource,
+} from './hibernateCensusScan.js';
+import { FleetWatcher } from '../src/watch.js';
+import { Bus } from '../src/bus.js';
+import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
+
+type Stance = 'consults' | 'wakes-first' | 'journal' | 'held-awake' | 'other-meaning' | 'true-of-pane' | 'definition';
+interface Row {
+  readonly source: CensusSource; readonly file: string; readonly hits: number;
+  readonly stances: readonly Stance[]; readonly why: string;
+  /** For a `consults` row that reads the dead answer through another file (`coordinatorPresence`,
+   *  `lifecycleQualifier`): that file, which is the one that consults the marker. */
+  readonly via?: string;
+}
+
+const CENSUS: readonly Row[] = [
+  // ── server ─────────────────────────────────────────────────────────────────────────────────────────────────────
+  { source: 'dead-compare', file: 'server/src/coord/hibernate.ts', hits: 1, stances: ['definition'],
+    why: 'the verdict itself: a dead row holds `pane`, so a sleeping row is never put to sleep again' },
+  { source: 'dead-compare', file: 'server/src/watch.ts', hits: 4, stances: ['consults', 'true-of-pane', 'held-awake'],
+    why: 'the push copy\'s active projects (a sleeper\'s pane is not running, true); the delegation lane\'s death memory (`noteSessions`) CONSULTS `hibernatedAt`, so a sleep never feeds '
+      + 'its breaker, which suspends at two parent deaths in ten minutes; its owner census skips dead rows, and a sleeper '
+      + 'has no delegation running (the `background`, `roster` and `marker-background` holds)' },
+  { source: 'stopped-compare', file: 'server/src/watch.ts', hits: 1, stances: ['consults', 'journal'],
+    why: 'the dead-coordinator lane\'s released set: it reads `measureClaimant`, which answers a sleeper `alive`; a '
+      + 'claimant whose wake failed reads `orphan`, and its journal\'s `hibernate` row makes it deliberate' },
+  { source: 'tmux-verdict', file: 'server/src/watch.ts', hits: 2, stances: ['consults'],
+    why: 'the dead-coordinator lane\'s tmux port (it feeds `measureClaimant`) and the mail lane\'s rung, which consults '
+      + '`hibernatedAt` on `gone` before the lifecycle' },
+  { source: 'dead-lifecycle', file: 'server/src/sessionReading.ts', hits: 1, stances: ['consults'],
+    why: '`readSession`, the one liveness ladder (ARCH-47): a `stopped` row with `.hibernated` reads `asleep` before the '
+      + 'dead word is asked, so `measureClaimant` answers `alive` and the reclaim door, the dead-coordinator lane and the '
+      + 'ask hold read the same verdict' },
+  { source: 'stopped-compare', file: 'server/src/sessionReading.ts', hits: 1, stances: ['consults'],
+    why: 'that same rung: `lc === \'stopped\' && f.hibernatedAt !== null` reads asleep' },
+  { source: 'tmux-verdict', file: 'server/src/sessionReading.ts', hits: 1, stances: ['consults'],
+    why: '`PaneFact` mirrors the verdict\'s words; `gone` falls to the hibernated rung' },
+  { source: 'dead-compare', file: 'server/src/fleet.ts', hits: 1, stances: ['consults'],
+    why: 'the frame row hands `readSession` the turn word and keeps it only while the row is not dead; a sleeping row '
+      + 'reads asleep there, so it carries no turn' },
+  { source: 'stopped-compare', file: 'server/src/fleet.ts', hits: 1, stances: ['consults'],
+    why: 'the frame row\'s `deadSince` reads `readSession`\'s dead cause: a sleeper reads asleep, not dead, so it has no '
+      + 'dead-since stamp' },
+  { source: 'tmux-verdict', file: 'server/src/fleet.ts', hits: 1, stances: ['consults'],
+    why: 'the frame hands tmux\'s verdict and the `.hibernated` stamp to `readSession`, which reads a sleeping row as asleep' },
+  { source: 'tmux-verdict', file: 'server/src/coord/reclaim.ts', hits: 1, stances: ['consults'],
+    why: '`measureClaimant`\'s tmux rung; it hands the verdict and the `.hibernated` stamp to `readSession`' },
+  { source: 'dead-lifecycle', file: 'server/src/coord/mailRevive.ts', hits: 2, stances: ['held-awake'],
+    why: 'the parked-mail revive (D-5914) reads a recipient live only when `lifecycleIsDead` says not dead, and it is '
+      + 'bounded to an open run, where a role-addressed park goes only to the run\'s worker or claimant, which '
+      + '`run-worker` and `run-claimant` keep awake; a literal-addressed recipient that is asleep reads `stopped`, so its '
+      + 'park waits (nothing written, nothing lost) and comes back once it is listed awake' },
+  { source: 'dead-lifecycle', file: 'server/src/coord/stall.ts', hits: 1, stances: ['held-awake'],
+    why: 'the stall watch reads an open run\'s worker, and an open run as worker or claimant holds `run-worker` or '
+      + '`run-claimant`; were it to meet one, `stopped` holds `lifecycle-stopped` (no push), which is right for a sleep' },
+  { source: 'stopped-compare', file: 'server/src/coord/stall.ts', hits: 1, stances: ['held-awake'],
+    why: 'the same rung: a stopped worker is a deliberate stop, never a stall' },
+  { source: 'stopped-compare', file: 'server/src/deadCoordinator.ts', hits: 1, stances: ['journal'],
+    why: '`deadCoordinatorCrash`: a claimant still reading `stopped` is never counted; one whose wake failed reads '
+      + '`orphan`, and `hibernate` in `DEAD_COORDINATOR_DELIBERATE_ACTS` makes it deliberate' },
+  { source: 'stopped-compare', file: 'server/src/coord/runStuck.ts', hits: 1, stances: ['consults'],
+    why: '`stuckCause` words a gone person\'s cause (`coordinator-stopped`, `worker-stopped`); it runs only after `claimantGone`, '
+      + 'which reads `hibernatedAt` before any dead reading, so a sleeper is asleep and never reaches a cause (D-7371)' },
+  { source: 'stopped-compare', file: 'server/src/coord/collectTempRoot.ts', hits: 1, stances: ['other-meaning'],
+    why: 'the collector\'s own lane state (`lane.kind === \'stopped\'`), not a session' },
+  { source: 'tmux-verdict', file: 'server/src/coord/claims.ts', hits: 7, stances: ['held-awake'],
+    why: '`LivenessVerdict`, `claimVerdictOf`, `claimExpiry` and the re-chain deciders (D-8395): a session holding a claim '
+      + 'is never put to sleep (`claim`), and a sleeping session takes none; were one met, `asleep` reads `gone` (D-6908)' },
+  { source: 'tmux-verdict', file: 'server/src/coord/routes.ts', hits: 1, stances: ['held-awake'],
+    why: '`POST /api/claims` measures the caller\'s own `LivenessVerdict` for a re-chain (D-8395) through '
+      + '`claimLivenessProbe`; a caller posting a claim is awake, and a sleeper reads `gone`, which never re-chains' },
+  { source: 'tmux-verdict', file: 'server/src/coord/store.ts', hits: 1, stances: ['held-awake'],
+    why: '`claimAttempt`\'s `callerLiveness` input (D-8395): only `running` re-chains, so doubt and sleep keep today\'s '
+      + 'renewal, clipped at the hard cap' },
+  { source: 'lifecycle-table', file: 'server/src/coord/peers.ts', hits: 2, stances: ['consults', 'true-of-pane'],
+    why: '`LIFECYCLE_RUNG`: `peerDeliverable` answers a hibernated probe `yes` before the tmux rung and this table; '
+      + '`ARCHIVE_CONTRADICTS`: a sleeper is not live, so it contradicts no archive stamp' },
+  { source: 'tmux-verdict', file: 'server/src/coord/peers.ts', hits: 1, stances: ['consults'],
+    why: '`PeerProbe.tmux`: the hibernated rung answers before it is read' },
+  { source: 'tmux-verdict', file: 'server/src/coord/abandonDeadDispatch.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'the returned-child bind (D-7563) asks tmux for the one child\'s pane: a hibernated child\'s pane is gone, which '
+      + 'is true, so it is never bound and its run is kept as before (`child-workspace`)' },
+  { source: 'tmux-verdict', file: 'server/src/coord/deadDispatch.ts', hits: 1, stances: ['true-of-pane'],
+    why: '`ReturnedChildFacts.pane`: only `live` binds; a hibernated child reads `gone`, which is true of its pane, so '
+      + 'the verdict keeps the run (`child-workspace`) as before' },
+  { source: 'tmux-verdict', file: 'server/src/exec.ts', hits: 1, stances: ['true-of-pane'],
+    why: '`hasSession`: whether a pane is live, which a sleeper\'s is not' },
+  { source: 'tmux-verdict', file: 'server/src/server.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'the archive door\'s stop-after-archive arm acts only on a live pane; `ccd ws-archive` removes `.hibernated`' },
+  { source: 'tmux-verdict', file: 'server/src/sessionws.ts', hits: 1, stances: ['true-of-pane', 'held-awake'],
+    why: 'the session socket\'s `resolve()` (D-5561): `gone` rules the session\'s workflow runs interrupted, so none '
+      + 'shows as running — true of a sleeper, whose pane runs nothing; and a running workflow is background work, '
+      + 'which the verdict\'s holds keep from ever being put to sleep' },
+  { source: 'tmux-verdict', file: 'server/src/turnverdict.ts', hits: 1, stances: ['wakes-first'],
+    why: 'the fail-closed turn verdict reads a sleeper `unmeasured`; dispatch\'s `/clear` gate meets it only after '
+      + 'its `ensure` woke it (D-5238\'s `worker-starting`), and the swap route answers `409 hibernated` before reading it' },
+  // ── shared ─────────────────────────────────────────────────────────────────────────────────────────────────────
+  { source: 'dead-compare', file: 'shared/api.ts', hits: 3, stances: ['consults', 'true-of-pane'],
+    why: '`bucketFor`: a sleeper\'s bucket stays `dead` (D-5242: the PWA words it `hibernated`, Task 18); '
+      + '`inArchivedFold`\'s second clause excludes a row with `hibernatedAt`' },
+  { source: 'dead-lifecycle', file: 'shared/api.ts', hits: 2, stances: ['definition'],
+    why: '`lifecycleIsDead` and `DEAD_LIFECYCLES` themselves; `stopped` stays dead, and every reader that must tell a '
+      + 'sleep from a stop consults `hibernatedAt` (this table)' },
+  { source: 'lifecycle-table', file: 'shared/api.ts', hits: 2, stances: ['definition'],
+    why: '`SESSION_LIFECYCLE_MAP` and `LIFECYCLE_DEAD`: no new lifecycle member (the plan\'s wire discipline)' },
+  // ── pwa ── (plan Task 18 made each of these consult `hibernatedAt`, through `pwa/src/fleet/hibernated.ts`; the
+  // `task-18` stance they waited under is retired, `hibernated-census-stances-consult`, D-5429)
+  { source: 'presence-reader', file: 'pwa/src/fleet/hibernated.ts', hits: 1, stances: ['definition'],
+    why: '`hibernatedSince`, the PWA\'s one reader of `hibernatedAt`: a row is asleep only while its pane is gone '
+      + '(`paneGone`, D-7181) with the marker (both halves), so a crash is never woken and a stale marker on a live row is '
+      + 'ignored' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/presence.ts', hits: 5, stances: ['definition'],
+    why: 'the PWA\'s one reader of the server\'s presence (D-7181): `presenceOf` reads `asleep` as the server sends it, '
+      + '`coordinatorPresence` spells it `hibernated` (never `dead`), `paneGone` words the pane only, and `forgetHeldBack` '
+      + '(D-8111) is the Forget rule and its reasons, written once: a workspace row first, then `alive` running, `unknown` '
+      + 'doubt (never asleep), `asleep`, or `dead` with a marker asleep; `forgetOffered` is its null' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/presence.ts', hits: 1, stances: ['definition'],
+    why: '`paneGone`, the pane predicate OA-C15 (a) keeps for sites that only word the pane: a sleeper\'s pane is gone, '
+      + 'which is true, and the sites that must tell a sleep from a death read `presenceOf` or `hibernatedSince`' },
+  { source: 'dead-compare', file: 'pwa/src/session/sessionHeaderView.ts', hits: 4, stances: ['consults'],
+    why: 'the session header\'s view (W2 S7a, D-5471; `SessionHeader` renders it) forces bucket `dead` for a dead stream and paints the ✕ lamp ("not running") with the word `exited` '
+      + '(`headerStatusWord`, D-5545); a dead row with `hibernatedAt` (`hibernatedSince`) reads `hibernated` with the '
+      + 'calm dot instead, so "not running" never sits above "Waking…"' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/SessionActionsSheet.tsx', hits: 5, stances: ['consults', 'true-of-pane'],
+    why: 'Forget session is offered only where `forgetOffered` says (presence.ts, D-8111, the rule the held-rows list '
+      + 'consults too): never on the server\'s `asleep` or on a row `hibernatedSince` reads asleep, which offers Wake '
+      + 'session (ccd forget refuses it, D-5423); the notes word '
+      + 'the pane (`paneGone`): the narrow-spawn note on a gone pane is hidden on a sleeper, and the quota, narrow and '
+      + 'wrapper notes speak of a live pane only' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/sessionFacts.ts', hits: 1, stances: ['consults'],
+    why: 'the card\'s and the header\'s facts (D-5545) for a row whose pane is gone (`paneGone`, D-7181); a sleeper '
+      + '(`hibernatedSince`) reads `hibernated · 6h` with a calm dot and no stop stamp' },
+  { source: 'dead-compare', file: 'pwa/src/screens/SessionScreen.tsx', hits: 2, stances: ['consults'],
+    why: 'a dead screen is read-only; a sleeper (`useWakeOnOpen`) is woken when shown, reads "Waking…" with Wake, and '
+      + 'keeps the composer shut until its row is alive; the dead banner\'s Restart is for a dead row with no marker' },
+  { source: 'presence-reader', file: 'pwa/src/screens/SessionScreen.tsx', hits: 1, stances: ['consults'],
+    why: 'the header\'s coordinator reads `coordinatorPresence` (D-7181): a sleeping coordinator reads `hibernated`, '
+      + 'never "coordinator gone"' },
+  { source: 'dead-compare', file: 'pwa/src/face/mood.ts', hits: 1, stances: ['consults'],
+    why: 'the Overlord face\'s mood (`cryDeath`): the face cries for a dead row only when `hibernatedAt` is null (and no operator stop), '
+      + 'because a sleep is one the operator chose, so a hibernated session never makes the face cry (the face plan, Task 5)' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/orphanWords.ts', hits: 1, stances: ['consults'],
+    why: 'the orphan marker reads `coordinatorPresence`, and says `coordinator hibernated` for a sleeper, never '
+      + '"coordinator gone"' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/orphanWords.ts', hits: 1, stances: ['consults'],
+    why: 'that read: `coordinatorPresence` (D-7181) spells the server\'s `asleep` `hibernated`, never `dead`' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/statusGroups.ts', hits: 1, stances: ['consults'],
+    why: '`statusView` (desktop-polish G3) makes a claimant\'s workers lone rows with the orphan marker, not members of its '
+      + 'box, only when `coordinatorPresence` answers `dead`: D-7377 as amended (review 1177\'s N1, ruling 12287), these '
+      + 'rows by the ruling on ask 191. Safe across a sleep: a sleeper reads `hibernated`, so its workers '
+      + 'stay its box\'s members' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/statusGroups.ts', hits: 1, stances: ['consults'],
+    why: 'that read (D-7377 as amended): the orphan marker\'s own `coordinatorPresence` (D-7181), through the same lookup, '
+      + 'which spells the server\'s `asleep` `hibernated`, never `dead`' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/runWords.ts', hits: 1, stances: ['other-meaning'],
+    why: '`coordinatorGoneOf` takes the server\'s `coordinatorGone` first and falls back to a `CoordinatorPresence` its caller hands in (D-7181): that word spells a sleeper `hibernated`, so `dead` there is never a sleeper' },
+  { source: 'presence-reader', file: 'pwa/src/screens/RunsScreen.tsx', hits: 2, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
+    why: 'the abandon sheet\'s `abandonPresence` and the Stuck band\'s `presence` prop both read `coordinatorPresence` (D-7181, D-8074): a sleeper reads `hibernated`, never gone' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/runDetailWords.ts', hits: 1, stances: ['other-meaning'],
+    why: '`coordinatorFactWord` (the run page\'s Who facts and the programme page head\'s coordinator word) takes the server\'s `coordinatorGone` first and falls back to a `CoordinatorPresence` its caller hands in (D-7181): that word spells a sleeper `hibernated`, so `dead` there is never a sleeper' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/resumeHeirs.ts', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
+    why: 'the Resume sheet\'s picker lists a project\'s coordinators only where `coordinatorPresence` answers `alive` (D-7181): a sleeper reads `hibernated`, so it is not offered as an heir' },
+  { source: 'presence-reader', file: 'pwa/src/ledgers/ProgrammeRuns.tsx', hits: 2, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
+    why: 'the programme page head\'s Resume door and the abandon sheet\'s coordinator sentence read `coordinatorPresence` (D-7181, D-8075): a sleeper reads `hibernated`, never gone' },
+  { source: 'presence-reader', file: 'pwa/src/screens/RunDetailScreen.tsx', hits: 2, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
+    why: 'those reads, for the coordinator and the worker: the server\'s `asleep`, spelled `hibernated`, reads as asleep, never gone' },
+  { source: 'stopped-compare', file: 'pwa/src/fleet/lifecycleWords.ts', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/sessionFacts.ts',
+    why: '`lifecycleQualifier` words a stopped row "stopped by …"; `sessionFacts`, its one reader (D-5545), skips it '
+      + 'on a sleeper and reads `hibernated · 6h`' },
+  { source: 'dead-compare', file: 'pwa/src/fleet/groupFleet.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'a dead row\'s rank on the card: a sleeper\'s pane is not running; `inArchivedFold` keeps it at the top level' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/groupFleet.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'the stranded count over rows the server reads alive (`presenceOf`, D-7181): a sleeper is not running' },
+  { source: 'dead-compare', file: 'pwa/src/command/sessionEntries.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'the palette\'s session entries (D-6714) rank a dead row last among equal matches (tier 3): a sleeper\'s pane '
+      + 'is not running; it is still listed and found, and opening it is the session screen\'s wake' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/ArchiveAllPlane.tsx', hits: 1, stances: ['true-of-pane'],
+    why: 'counts the batch\'s rows the server reads alive (`presenceOf`, D-7181): a sleeper is not running' },
+  { source: 'presence-reader', file: 'pwa/src/screens/AccountsScreen.tsx', hits: 1, stances: ['true-of-pane'],
+    why: 'counts an account\'s sessions the server reads alive (`presenceOf`, D-7181): a sleeper is not running' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/MoveSessionsSheet.tsx', hits: 1, stances: ['consults'],
+    why: 'the Move sessions sheet (D-7736) lists a lane\'s rows the server reads alive or `asleep` (`presenceOf`, '
+      + 'D-7181): a sleeper is listed so that it is named "refused: asleep" from the swap route\'s `409 hibernated`, '
+      + 'never moved or woken by the sheet' },
+  { source: 'presence-reader', file: 'pwa/src/accounts/RemoveSheet.tsx', hits: 1, stances: ['true-of-pane'],
+    why: 'the remove sheet (D-7742) lists the lane\'s sessions the server reads alive (`presenceOf`, D-7181) for its Move '
+      + 'buttons; a sleeper is not running, and the box\'s pre-check lists the sleeping ones apart, by id, for Wake and move' },
+  { source: 'presence-reader', file: 'pwa/src/accounts/RestartList.tsx', hits: 1, stances: ['true-of-pane'],
+    why: 'the replace and method switch sheets (D-7742, D-7871) offer Restart to the lane\'s sessions the server reads alive '
+      + '(`presenceOf`, D-7181): a sleeper holds no credential in a running process, and wakes onto the new one' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/startProgramPolicy.ts', hits: 3, stances: ['true-of-pane'],
+    why: 'the live main checkout (alive or doubted), the started session and the live ids read the server\'s word '
+      + '(`presenceOf`, D-7181): a sleeping session is not running, which is true of its pane' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/spawnWords.ts', hits: 1, stances: ['true-of-pane'],
+    why: 'silent about a spawn on a row whose pane is gone (`paneGone`, D-7181): a sleeper has no spawn in progress to '
+      + 'speak of' },
+];
+
+/** Readers outside the scan's reach, by name, each with the text that holds its stance. */
+const NAMED: readonly { name: string; stances: readonly Stance[]; file: string; holds: (src: string) => boolean; why: string }[] = [
+  { name: 'readSession', stances: ['consults'], file: 'server/src/sessionReading.ts',
+    holds: (s) => /function presenceOf[\s\S]*?lc === 'stopped' && f\.hibernatedAt !== null/.test(s),
+    why: 'reads a sleeping row `asleep`, never dead' },
+  { name: 'measureClaimant', stances: ['consults'], file: 'server/src/coord/reclaim.ts',
+    holds: (s) => /export async function measureClaimant[\s\S]*?await claimantFacts\([\s\S]*?case 'hibernated'/.test(s)
+      && /export async function claimantFacts[\s\S]*?hibernatedAt: read\.kind === 'found' \? read\.record\.hibernatedAt : null/.test(s),
+    why: 'hands the `.hibernated` stamp to `readSession` (its adapter, `claimantFacts`) and answers a sleeping claimant '
+      + '`alive`, why hibernated' },
+  { name: 'ccd-scope-sweep _ss_busy_judge', stances: ['consults'], file: 'ccd/ccd-scope-sweep',
+    holds: (s) => /\.hibernated[\s\S]*?\.stopped[\s\S]*?session-asleep/.test(bashFn(s, '_ss_busy_judge')),
+    why: 'reads `.hibernated` before `.stopped`, which every sleeping row also carries, and holds the row `session-asleep`' },
+  { name: 'ccd cmd_forget', stances: ['consults'], file: 'ccd/ccd', holds: (s) => /hibernated/.test(bashFn(s, 'cmd_forget')),
+    why: 'refuses a hibernated row (`_lc_refuse hibernated`): wake it or stop it first' },
+  { name: 'ccd cmd_stop', stances: ['consults'], file: 'ccd/ccd', holds: (s) => /hibernat/.test(bashFn(s, 'cmd_stop')),
+    why: 'removes `.hibernated`: a stopped row is never woken by mail' },
+  { name: 'ccd cmd_ws_archive', stances: ['consults'], file: 'ccd/ccd', holds: (s) => /hibernat/.test(bashFn(s, 'cmd_ws_archive')),
+    why: 'removes `.hibernated`: an archived row is never woken by mail' },
+  { name: 'the PWA\'s Forget', stances: ['consults'], file: 'pwa/src/fleet/presence.ts',
+    holds: (s) => /export function forgetHeldBack\([^)]*\)[^{]*\{\s*if \(session\.workspace !== null\) return 'workspace';\s*const presence = presenceOf\(session\);\s*if \(presence === 'alive'\) return 'running';\s*if \(presence === 'unknown'\) return 'doubt';\s*if \(presence === 'asleep' \|\| hibernatedSince\(session\) !== null\) return 'asleep';\s*return null;\s*\}/.test(s)
+      && /export function forgetOffered\([^)]*\): boolean \{\s*return forgetHeldBack\(session\) === null;/.test(s),
+    why: 'the rule, written once (D-8111): offered on a dead non-workspace row and hidden on a sleeper, which offers Wake '
+      + '(ccd forget refuses it)' },
+  { name: 'the session sheet\'s Forget session', stances: ['consults'], file: 'pwa/src/fleet/SessionActionsSheet.tsx',
+    holds: (s) => /\{forgetOffered\(session\) && \(\s*<Button[\s\S]*?Forget session/.test(s),
+    why: 'gates its Forget session button on `forgetOffered`, so a sleeper offers Wake instead (D-8111)' },
+  { name: 'the kickoff route', stances: ['wakes-first'], file: 'server/src/coord/kickoff.ts',
+    holds: (s) => /export function queueProgramKickoff[\s\S]*?queueSystemMail\(/.test(s),
+    why: 'queues system mail and never refuses a dead session: the mail lane wakes its recipient like any mail\'s' },
+];
+
+function bashFn(src: string, name: string): string {
+  const at = src.indexOf(`\n${name}() {`);
+  if (at < 0) return '';
+  const end = src.indexOf('\n}', at + 1);
+  return src.slice(at, end < 0 ? undefined : end);
+}
+const read = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
+const key = (r: Pick<Row, 'source' | 'file'>): string => `${r.source} ${r.file}`;
+const tableMap = (): Map<string, number> => new Map(CENSUS.map((r) => [key(r), r.hits] as const));
+const sorted = (m: Map<string, number>): [string, number][] => [...m].sort(([a], [b]) => (a < b ? -1 : 1));
+
+describe('the hibernation census (D-5242)', () => {
+  it('the derived reader list equals the table — a new reader, or a new hit in a listed file, needs its row', () => {
+    expect(sorted(censusScan(censusFiles()))).toEqual(sorted(tableMap()));
+  });
+
+  it('every row is argued: a stance from the closed set and a reason', () => {
+    for (const r of CENSUS) {
+      expect(r.stances.length, key(r)).toBeGreaterThan(0);
+      expect(r.why.length, key(r)).toBeGreaterThan(20);
+    }
+    expect(new Set(CENSUS.map(key)).size, 'one row per source and file').toBe(CENSUS.length);
+  });
+
+  it('a `consults` stance is real: the file (or the one it reads through) reads hibernatedAt or .hibernated', () => {
+    for (const r of CENSUS.filter((x) => x.stances.includes('consults'))) {
+      const reader = r.via ?? r.file;
+      // A presence reader (D-7181) consults the server's sleep word: it names `'asleep'`, or reads `coordinatorPresence`,
+      // which words a sleeper `hibernated`.
+      expect(/hibernatedAt|\.hibernated|hibernated:|'hibernated'|hibernatedSince|hibernatedWords|'asleep'|coordinatorPresence/.test(read(reader)), `${key(r)} (via ${reader})`).toBe(true);
+      if (r.via !== undefined) expect(read(r.file), `${r.file} reads through ${r.via}`).toMatch(/coordinatorPresence|presenceOf|lifecycleQualifier/);
+    }
+  });
+
+  it('the readers by name hold their stances', () => {
+    for (const n of NAMED) expect(n.holds(read(n.file)), n.name).toBe(true);
+  });
+
+  // The derivation's own teeth: a scratch file holding one reader of each kind, added in turn, reds the census.
+  const SCRATCH: Record<CensusSource, string> = {
+    'dead-lifecycle': 'export const f = (lc: SessionLifecycle) => lifecycleIsDead(lc);',
+    'lifecycle-table': "const T: Record<SessionLifecycle, number> = {} as never;",
+    'stopped-compare': "export const g = (lc: string) => lc === 'stopped';",
+    'tmux-verdict': 'export const h = async (t: Tmux) => (await t.sessionVerdict(\'x\')).verdict;',
+    'dead-compare': "export const k = (s: { bucket: string }) => s.bucket === 'dead';",
+    'presence-reader': "export const p = (s: FleetSession) => presenceOf(s) === 'dead';",
+  };
+  it('the scan reads the six sources, the PWA presence reader among them (D-7181)', () => {
+    expect(CENSUS_SOURCE_NAMES).toEqual(['dead-lifecycle', 'lifecycle-table', 'stopped-compare', 'tmux-verdict', 'dead-compare', 'presence-reader']);
+    expect(CENSUS_SCOPES).toEqual({ 'presence-reader': 'pwa/src/' });
+  });
+  // Where each scratch reader is placed: a scoped source's root (the presence reader is read in `pwa/src` only).
+  const scratchRel = (src: CensusSource): string => `${CENSUS_SCOPES[src] ?? 'server/src/'}zz-scratch-reader.ts`;
+  for (const src of CENSUS_SOURCE_NAMES) {
+    it(`a scratch reader of the ${src} kind is found, and reds the census`, () => {
+      const scratch: CensusFile = { rel: scratchRel(src), text: SCRATCH[src] };
+      const scanned = censusScan([...censusFiles(), scratch]);
+      expect(scanned.get(`${src} ${scratchRel(src)}`)).toBe(1);
+      expect(sorted(scanned)).not.toEqual(sorted(tableMap()));
+    });
+  }
+
+  it('a reader in a comment or an import is not a reader', () => {
+    const quiet: CensusFile = { rel: 'server/src/zz-quiet.ts', text: [
+      "import { lifecycleIsDead, DEAD_LIFECYCLES } from '../../shared/api.js';",
+      "// if (s.status === 'dead') lifecycleIsDead(x)",
+      "/* lc === 'stopped' */",
+    ].join('\n') };
+    expect(censusScan([quiet]).size).toBe(0);
+  });
+});
+
+// The one reader this census changed in behaviour (beside the ones the plan names): the delegation lane's death memory.
+describe('the delegation lane never counts a sleep as a death (D-5242)', () => {
+  const pass = (sessions: { id: string; status: string; hibernatedAt?: number | null }[], now: number) =>
+    ({ records: [], sessions: sessions.map((s) => ({ project: 'project-a', ...s })), now, census: { incarnations: new Map() } }) as never;   // a lane pass always carries its census
+  // The lane is private to the watcher (`delegationLane()`); its two methods are reached through it, as the tick does.
+  type Lane = { noteSessions(p: unknown): void; firstDeadParents(): { parentId: string }[] };
+  const lane = (w: FleetWatcher): Lane => (w as unknown as { delegationLane(): Lane }).delegationLane();
+  const deaths = (w: FleetWatcher): string[] => lane(w).firstDeadParents().map((d) => d.parentId);
+  const note = (w: FleetWatcher, p: unknown): void => { lane(w).noteSessions(p); };
+
+  it('a parent seen alive and then hibernated is not a fresh death; one seen alive and then dead is', () => {
+    const w = new FleetWatcher(testDeps(mkTmp('ccrc-census-')) as never, new Bus(), 10_000);
+    const ids = ['project-a-basin-a', 'project-a-basin-b'];
+    note(w, pass(ids.map((id) => ({ id, status: 'idle', hibernatedAt: null })), 1_000));
+    note(w, pass([
+      { id: ids[0]!, status: 'dead', hibernatedAt: 900_000 },
+      { id: ids[1]!, status: 'dead', hibernatedAt: null },
+    ], 2_000));
+    expect(deaths(w)).toEqual([ids[1]]);
+  });
+});

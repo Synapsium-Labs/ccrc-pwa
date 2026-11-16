@@ -1,5 +1,10 @@
-import type { PrChecks, PrReason, PrState, PrView, TaskItem } from '../../shared/api.js';
+import type { PrChecks, PrReason, PrState, PrView, ProjectRepoWire, TaskItem } from '../../shared/api.js';
 import { isPrReason, UNCHECKED_PR } from '../../shared/api.js';
+import type { CcdResult } from './coord/ports.js';
+import { ccdEnding } from './lifecycle.js';
+import { isHead40 } from '../../shared/landing.js';
+import type { LinkingMode } from '../../shared/linking.js';
+import { ticketRefOfBranch, trackerIdsIn, withoutTrackerIds } from './linking/policy.js';
 
 /** One row of `gh pr list --json …`, as `ccd pr-state` re-emits it — plus the
  *  `ours` annotation ccd computed on the box (proof 0: the PR's head commit
@@ -9,6 +14,29 @@ export interface CcdPrRow {
   baseRefName?: string; isCrossRepository?: boolean; mergedAt?: string | null;
   mergeCommit?: { oid?: string } | null; url?: string; title?: string;
   isDraft?: boolean; statusCheckRollup?: unknown; ours?: boolean;
+  /** gh's own ISO-8601 creation time, passed through unchanged. Absent from
+   *  every row an older ccd emits (it never asked for the field), which the
+   *  one reader, `childSpent`'s incarnation placement, reads as UNDATED —
+   *  never as old and never as new (child-reclamation spec §5.3). */
+  createdAt?: string;
+  /** gh's own labels and close time, passed through unchanged. Neither is read
+   *  here: the label is read on the box, into `landedInTrain` below. */
+  labels?: unknown; closedAt?: string | null;
+  /** ccd's annotation, beside `ours`: a merge train PROVABLY landed this PR's
+   *  work and closed it — GitHub says CLOSED, the PR carries the deployment's
+   *  train label (ccd's `CCD_LANDED_LABEL`, default `landed-in-train`), AND the
+   *  train record proves it: the train PR is MERGED and its `ccrc-train v1`
+   *  block lists this PR at exactly its head sha (D-7362). The label alone is
+   *  never enough. The fleet box is the one reader of the label and the record,
+   *  so this side never names either. Absent on a row from an older ccd, which
+   *  reads as not landed. */
+  landedInTrain?: boolean;
+  /** ccd's other half of the same judgement: CLOSED with the train label and NOT proven by the train record, so
+   *  `closed` with reason `train-unproven`, never merged. Absent on a row from an older ccd. */
+  trainUnproven?: boolean;
+  /** The third answer (D-7378): CLOSED with the train label and the train record NOT READ (no budget, a timeout,
+   *  GitHub unreachable), so `unknown` with reason `train-unread` — unmeasured, never closed. */
+  trainUnread?: boolean;
 }
 
 export interface CcdPrLine {
@@ -29,6 +57,14 @@ export interface CcdPrLine {
    *  fetched the rollup in-band, so a missing key really did mean "no checks".
    *  Read by `phaseFor` and nothing else. */
   checksUnmeasured?: boolean;
+  /** The merge-queue word ccd's THIRD `--project` call stamps (landing-order
+   *  wave 2, `_pr_queue_stamp`), and the ISO time of the last queue act beside
+   *  it. RAW on purpose — `unknown`, never the union: `parsePrLines` casts a
+   *  full line straight through, so the one place these become typed is
+   *  `queueFor` below, their ONE reader. Absent on a `--session` line and on
+   *  every line from an older ccd. */
+  queue?: unknown;
+  queueAt?: unknown;
   commits: { sha: string; subject: string; body: string }[];
   template: string | null; rows: CcdPrRow[];
   phase: PrState['phase']; number: number | null; checkedAt: number;
@@ -81,6 +117,18 @@ export const isFullLine = (
   v: CcdPrLine | CcdPrFailure | CcdPrSessionFailure,
 ): v is CcdPrLine => Array.isArray((v as CcdPrLine).rows);
 
+/** D-8405: the texts of a full line the team link reads for ticket ids: the workspace's branch, each commit's subject and
+ *  body, and each pull request row's title and head branch. A field of the wrong type is skipped (rows are cast through
+ *  from ccd's output). Pull request bodies are not here: the sweep's rows do not carry them. */
+export function ticketTexts(line: CcdPrLine): string[] {
+  const out: string[] = [];
+  const add = (v: unknown): void => { if (typeof v === 'string' && v !== '') out.push(v); };
+  add(line.branch);
+  for (const c of Array.isArray(line.commits) ? line.commits : []) { add(c?.subject); add(c?.body); }
+  for (const r of line.rows) { add(r?.title); add(r?.headRefName); }
+  return out;
+}
+
 /**
  * `ccd pr-state` output → one entry per line. **Every line is parsed inside
  * its own try/catch**: `FleetWatcher.tick()` is invoked as `void this.tick()`,
@@ -120,8 +168,12 @@ const OID_RE = /^[0-9a-f]{7,40}$/;
  * as an identity — two PRs can share one.
  */
 export function isMergedRow(row: CcdPrRow, baseShort: string, registryBranch: string): boolean {
-  return row.state === 'MERGED' && typeof row.mergedAt === 'string'
-    && typeof row.mergeCommit?.oid === 'string' && OID_RE.test(row.mergeCommit.oid)
+  const merged = row.state === 'MERGED' && typeof row.mergedAt === 'string'
+    && typeof row.mergeCommit?.oid === 'string' && OID_RE.test(row.mergeCommit.oid);
+  // A PR closed as landed in a merge train is merged for every phase reader,
+  // with no merge commit behind it; ccd's `is_landed` is the same predicate.
+  const landed = row.state === 'CLOSED' && row.landedInTrain === true;
+  return (merged || landed)
     && row.isCrossRepository === false
     && row.baseRefName === baseShort
     && row.headRefName === registryBranch
@@ -138,6 +190,21 @@ export function boundRow(rows: readonly CcdPrRow[], baseShort: string, branch: s
   return cands[cands.length - 1] ?? null;
 }
 
+/** What a `--session` line's bound row says of a PR GitHub reads MERGED, for the landing line's close mark (landing order
+ *  wave 5h): the PR, the head GitHub merged, its base, when, and the merge commit. A row closed as landed in a train is
+ *  merged for every phase reader but is NOT answered here: a `--session` line carries no train number, so the PR-keyed
+ *  reader marks it. Null for every other phase, and for a row that names no head or no number. */
+export interface PrMergedFacts { pr: number; head: string; base: string; mergedAt: string; mergeCommit: string }
+export function mergedFactsOf(line: CcdPrLine): PrMergedFacts | null {
+  const row = boundRow(line.rows, line.baseShort, line.branch);
+  if (row === null || row.state !== 'MERGED' || !isMergedRow(row, line.baseShort, line.branch)) return null;
+  const { number, headRefOid, baseRefName, mergedAt } = row;
+  const mergeCommit = row.mergeCommit?.oid;
+  if (typeof number !== 'number' || typeof headRefOid !== 'string' || !isHead40(headRefOid)) return null;
+  if (typeof baseRefName !== 'string' || typeof mergedAt !== 'string' || typeof mergeCommit !== 'string') return null;
+  return { pr: number, head: headRefOid, base: baseRefName, mergedAt, mergeCommit };
+}
+
 const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE']);
 const RUNNING = new Set(['PENDING', 'IN_PROGRESS', 'QUEUED', 'WAITING', 'EXPECTED', 'REQUESTED']);
 const MAX_CHECK_NAMES = 10;
@@ -150,8 +217,18 @@ const MAX_CHECK_NAME_LEN = 120;
 export function checksFor(row: CcdPrRow): { checks: PrChecks; checkNames: string[] | null } {
   const raw = Array.isArray(row.statusCheckRollup) ? (row.statusCheckRollup as unknown[]) : null;
   if (raw === null || raw.length === 0) return { checks: null, checkNames: null };
-  const stateOf = (c: unknown): string =>
-    isRecord(c) ? String(c.conclusion ?? c.state ?? c.status ?? '').toUpperCase() : '';
+  // `gh` writes a check run that has not finished with `conclusion: ""`, not
+  // null, and `??` keeps an empty string, so the empty conclusion used to
+  // shadow the run's `status` (QUEUED, IN_PROGRESS) and the entry fell through
+  // to `pass`. An empty or missing field is no answer: the first NON-EMPTY of
+  // conclusion, state, status speaks for the entry.
+  const stateOf = (c: unknown): string => {
+    if (!isRecord(c)) return '';
+    for (const v of [c.conclusion, c.state, c.status]) {
+      if (v !== null && v !== undefined && String(v) !== '') return String(v).toUpperCase();
+    }
+    return '';
+  };
   const nameOf = (c: unknown): string =>
     (isRecord(c) ? String(c.name ?? c.context ?? 'check') : 'check').slice(0, MAX_CHECK_NAME_LEN);
   const failing = raw.filter((c) => FAILED.has(stateOf(c))).map(nameOf).slice(0, MAX_CHECK_NAMES);
@@ -193,7 +270,11 @@ export function phaseFor(line: CcdPrLine): PrState {
     checks, checkNames,
   };
   if (isMergedRow(row, line.baseShort, line.branch)) {
-    return { ...common, phase: 'merged', mergedAt: Date.parse(String(row.mergedAt)) };
+    // A train-landed PR is dated by its close, the moment the train closed it;
+    // a close time gh did not name is no date, never `NaN`.
+    const at = row.state === 'MERGED' ? row.mergedAt : row.closedAt;
+    const ms = typeof at === 'string' ? Date.parse(at) : Number.NaN;
+    return { ...common, phase: 'merged', mergedAt: Number.isNaN(ms) ? null : ms };
   }
   // gh says MERGED but a conjunct failed: never claim merged on a partial
   // match — both the archive trigger and the cleanup offer hang off it.
@@ -205,8 +286,78 @@ export function phaseFor(line: CcdPrLine): PrState {
   // for the same row (Task 3), and Step 6's agreement test pins the two equal on
   // `reason` as well as `phase`.
   if (row.state === 'MERGED') return { ...common, phase: 'unknown', reason: 'merge-unproven' };
-  if (row.state === 'CLOSED') return { ...common, phase: 'closed' };
+  // A train label whose record ccd did not READ (D-7378): unmeasured, never closed — ccd's `train-unread`.
+  if (row.state === 'CLOSED' && row.trainUnread === true) return { ...common, phase: 'unknown', reason: 'train-unread' };
+  // A train label ccd could not prove from the train record: closed, and why (`train-unproven`, D-7362).
+  if (row.state === 'CLOSED') {
+    return { ...common, phase: 'closed', reason: row.trainUnproven === true ? 'train-unproven' : null };
+  }
   return { ...common, phase: row.isDraft === true ? 'draft' : 'open' };
+}
+
+/** The merge-queue vocabulary `ccd pr-state --project` answers in (spec §5.2),
+ *  ENUMERATED ONCE — the word list below is derived from it, never re-typed.
+ *  Since landing-order wave 3d a removal's GitHub `reason` chooses between
+ *  `dequeued` and `landed` inside ccd, and never reaches the line. GitHub
+ *  records that removal within a second of the merge, either side (D-6216):
+ *  `landed` can name a line whose phase still reads open, for up to that
+ *  second, so no reader may take `landed` to mean phase merged. */
+const PR_QUEUE_MAP = {
+  queued: 'the PR is open and in the merge queue now',
+  dequeued: 'the PR is open, out of the queue, and its last queue act was a removal for any reason but a merge',
+  landed: 'the queue merged it: its last queue act was a removal whose reason is merged, or the PR merged and its last queue act was the add',
+  none: 'measured, and none of the above',
+  unmeasured: 'the queue read did not answer, or the bound PR is outside its windows',
+} as const;
+export type PrQueue = keyof typeof PR_QUEUE_MAP;
+/** The words, DERIVED — exported so `ccd-pr-queue-words.test.ts` can compare them with the words ccd's
+ *  `_pr_queue_py` emits (D-3882): a word renamed on the ccd side alone reads here as `unmeasured`, and the
+ *  landing lane says nothing for `unmeasured`. */
+export const PR_QUEUE_WORDS: readonly string[] = Object.keys(PR_QUEUE_MAP);
+
+/** What `queueFor` read off one line. `absent` is its OWN answer and never
+ *  `unmeasured`: a line with no `queue` key comes from a ccd that predates the
+ *  read, or from `--session`, which never makes it — nothing was asked, where
+ *  `unmeasured` means ccd asked and GitHub did not answer. Both mean "no
+ *  evidence" to the landing lane; they are kept apart so no later reader has
+ *  to re-derive which one it was holding. */
+export interface PrQueueRead { state: PrQueue | 'absent'; at: string | null }
+
+const QUEUE_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+
+/** The ONE reader of `CcdPrLine.queue` and `CcdPrLine.queueAt`. A word this
+ *  build does not know reads as `unmeasured` — this is ccd's own output on this
+ *  box, so a stranger token means the two builds disagree, which is a failed
+ *  read, the same rule `asReason` applies above. */
+export function queueFor(line: CcdPrLine): PrQueueRead {
+  if (line.queue === undefined) return { state: 'absent', at: null };
+  const state = typeof line.queue === 'string' && PR_QUEUE_WORDS.includes(line.queue)
+    ? line.queue as PrQueue : 'unmeasured';
+  const at = typeof line.queueAt === 'string' && QUEUE_AT_RE.test(line.queueAt) ? line.queueAt : null;
+  return { state, at };
+}
+
+/** How a failed `pr-state` call failed (landing-order wave 3c). The runner's kill (`ccdEnding` `deadline`: the
+ *  deadline, or node's output cap) and this server's own wait running out (`ran: false`, `timeout`; also a link
+ *  that died without a close, until the heartbeat sees it) are `cut-short`: the read was ended before it answered.
+ *  Everything else keeps the old word, `agent-down`, because nothing else here was measured to be anything more. */
+export function sweepFailureReason(res: CcdResult): PrReason {
+  if (res.ran === false) return res.reason === 'timeout' ? 'cut-short' : 'agent-down';
+  return ccdEnding(res).kind === 'deadline' ? 'cut-short' : 'agent-down';
+}
+
+/** The repo cell for one project, from what the sweep measured about it.
+ *
+ * `absent` has EXACTLY ONE proof — `no-remote`, which is what `_gh_repo_slug`'s
+ * failure produces. Every other `PrReason` means the question was not answered,
+ * not that the answer is "none". The other reasons are NOT listed here: they
+ * are whatever `PR_REASON_MAP` holds that is not `no-remote`, so a reason added
+ * later cannot silently start claiming a project has no repository. */
+export function repoCellFor(
+  m: { slug?: string; reason?: PrReason | null },
+): ProjectRepoWire {
+  if (m.slug !== undefined && m.slug !== '') return { state: 'named', slug: m.slug };
+  return m.reason === 'no-remote' ? { state: 'absent' } : { state: 'unmeasured' };
 }
 
 // `UNCHECKED` was the third copy of this literal (integration finding 6),
@@ -242,6 +393,7 @@ export function prView(
   line: CcdPrLine | CcdPrFailure | CcdPrSessionFailure | null,
   tasks: TaskItem[] | null,
   prev: PrState | null,
+  linking?: DraftLinking,
 ): PrView {
   if (line === null) return { pr: prev ?? UNCHECKED_PR, draft: null, facts: null };
   // Both failure shapes land here and are treated identically — whose fault it
@@ -257,13 +409,16 @@ export function prView(
     branch: line.branch, baseShort: line.baseShort, repo: line.repo,
     commits: line.ahead, dirty: line.dirty,
   };
-  return { pr, draft: pr.phase === 'none' ? draftPr(line, tasks) : null, facts };
+  return { pr, draft: pr.phase === 'none' ? draftPr(line, tasks, linking) : null, facts };
 }
 
 const FIXUP_RE = /^(fixup|squash|amend|wip)!?\b/i;
 
 /** `ws/quiet-basin` → `quiet-basin`. */
 const deslug = (branch: string): string => branch.slice(branch.lastIndexOf('/') + 1);
+
+/** What `draftPr` needs of a project's linking (D-8147): the rule that applies and the team's key. */
+export interface DraftLinking { mode: LinkingMode; teamKey: string | null }
 
 /**
  * Title and body for a new PR — deterministic, no model call, testable
@@ -274,7 +429,7 @@ const deslug = (branch: string): string => branch.slice(branch.lastIndexOf('/') 
  * the one that names the intent. Reading it the other way titles every
  * multi-commit PR "fix typo".
  */
-export function draftPr(line: CcdPrLine, tasks: TaskItem[] | null): { title: string; body: string } {
+export function draftPr(line: CcdPrLine, tasks: TaskItem[] | null, linking?: DraftLinking): { title: string; body: string } {
   const commits = [...line.commits].reverse();
   const real = commits.filter((c) => !FIXUP_RE.test(c.subject));
   const title =
@@ -288,14 +443,212 @@ export function draftPr(line: CcdPrLine, tasks: TaskItem[] | null): { title: str
   else if (real[0] !== undefined && real[0].body.trim() !== '') {
     parts.push(real[0].body.trim().split('\n\n')[0]!.trim());
   }
+  // D-8147: a PRIVATE project's PR carries its ticket (`Refs`, never `Closes`: whether the merge meets the acceptance is
+  // the operator's call in the sheet). It ends the first part, unless that part already names the ticket.
+  const ref = linking?.mode === 'private' ? ticketRefOfBranch(line.branch, linking.teamKey) : null;
+  if (ref !== null && !trackerIdsIn(parts[0] ?? '', linking!.teamKey).includes(ref)) {
+    parts[0] = parts[0] === undefined ? `Refs ${ref}` : `${parts[0]}\n\nRefs ${ref}`;
+  }
   if (tasks !== null && tasks.length > 0) {
     parts.push(['## Plan', ...tasks.map((t) => `- [${t.status === 'completed' ? 'x' : ' '}] ${t.subject}`)].join('\n'));
   }
   if (commits.length > 0) {
     parts.push(['## Commits', ...commits.map((c) => `- ${c.sha.slice(0, 7)} ${c.subject}`)].join('\n'));
   }
-  parts.push(`Opened from ccrc workspace \`${line.id}\` (\`${line.branch}\` → \`${line.baseShort}\`).`);
+  // A project that is not private AND has a team key names neither the workspace id nor the branch: both can carry the
+  // team's ticket (D-8147). With no key there is no id to protect and the footer is today's, byte for byte.
+  const guarded = linking !== undefined && linking.mode !== 'private' && linking.teamKey !== null;
+  if (guarded) parts.push(`Opened from ccrc (→ \`${line.baseShort}\`).`);
+  else parts.push(`Opened from ccrc workspace \`${line.id}\` (\`${line.branch}\` → \`${line.baseShort}\`).`);
   // NEVER empty: an empty --body suppresses the repo's PR template entirely,
   // and ccd refuses one for that reason.
-  return { title, body: parts.join('\n\n') + '\n' };
+  const body = parts.join('\n\n') + '\n';
+  // The same guard leaves the team's ids out of what the sheet shows (its body is read-only, so the POST route's
+  // refusal of an id there is one the operator could never edit away): the title and every line of the body.
+  if (!guarded) return { title, body };
+  const bareTitle = withoutTrackerIds(title, linking.teamKey).trim();
+  return { title: bareTitle === '' ? withoutTrackerIds(deslug(line.branch), linking.teamKey).trim() || 'Changes' : bareTitle,
+    body: withoutTrackerIds(body, linking.teamKey) };
+}
+
+// ── `ccd pr-landing` (PR landing in ccrc, stage 1) ───────────────────────────────────────────────────────────────
+
+/** One required context of a landing line. `checkId` is the check run's own per-attempt id and null for a commit
+ *  status (which carries no attempt id); `runId` is the workflow run's id. `state` is the context's conclusion (a
+ *  check run: empty while it has not completed) or state (a commit status), lowercased by the verdict, never here. */
+export interface PrLandingRequired {
+  name: string; appId: number | null; state: string; checkId: number | null; runId: number | null;
+}
+
+/** One session's line of `ccd pr-landing`, as the checks lane reads it. `unmeasured` carries the reasons ccd gave
+ *  (an alias GitHub answered with no object, a branch-drift refusal, a call that timed out) and this reader's own
+ *  `shape` for a document it could not follow. It is the type of `readPrLandingLine`'s answer, never `LandingLine`
+ *  (`coord/landing.ts` exports that one, the dequeue lane's). */
+export interface PrLandingLine {
+  id: string;
+  bound: boolean;
+  number: number | null;
+  /** GitHub's own state word (`OPEN`, `CLOSED`, `MERGED`), or null when the line is not bound. */
+  state: string | null;
+  isDraft: boolean;
+  base: string | null;
+  head: string | null;
+  required: PrLandingRequired[];
+  requiredCut: boolean;
+  rulesNamed: string[];
+  protectionNamed: string[];
+  /** Required names the rules pin to an App. Absent from an older line, which reads as none. */
+  pinnedNames: string[];
+  /** ccd's `landedInTrain` (see `CcdPrRow`): CLOSED, labelled, and proven by the train record. False when the line
+   *  does not say exactly `true`, including every line from an older ccd. */
+  landedInTrain: boolean;
+  unmeasured: string[];
+}
+
+const isPlainObject = (x: unknown): x is Record<string, unknown> =>
+  typeof x === 'object' && x !== null && !Array.isArray(x);
+const positiveSafe = (x: unknown): x is number => typeof x === 'number' && Number.isSafeInteger(x) && x > 0;
+
+/** The ONE reader of `pr-landing`'s JSON, one parsed line at a time. Null only for a value with no string `id`. A
+ *  field this build cannot follow adds the reason `shape` to `unmeasured`, so the line reads as unmeasured: nothing
+ *  is dropped, and nothing is guessed. */
+export function readPrLandingLine(x: unknown): PrLandingLine | null {
+  if (!isPlainObject(x) || typeof x['id'] !== 'string' || x['id'] === '') return null;
+  let shape = false;
+  const strings = (v: unknown): string[] => {
+    if (v === undefined) return [];
+    if (!Array.isArray(v) || !v.every((s) => typeof s === 'string')) { shape = true; return []; }
+    return v as string[];
+  };
+  const unmeasured = strings(x['unmeasured']);
+  const bound = x['bound'] === true;
+  const required: PrLandingRequired[] = [];
+  if (x['required'] !== undefined) {
+    if (!Array.isArray(x['required'])) shape = true;
+    else {
+      for (const r of x['required'] as unknown[]) {
+        if (!isPlainObject(r) || typeof r['name'] !== 'string' || typeof r['state'] !== 'string') { shape = true; continue; }
+        const checkId = r['checkId'];
+        const appId = r['appId'];
+        const runId = r['runId'];
+        if (checkId !== null && checkId !== undefined && !positiveSafe(checkId)) shape = true;
+        required.push({
+          name: r['name'], state: r['state'],
+          checkId: positiveSafe(checkId) ? checkId : null,
+          appId: positiveSafe(appId) ? appId : null,
+          runId: positiveSafe(runId) ? runId : null,
+        });
+      }
+    }
+  }
+  const optStr = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+  const number = positiveSafe(x['number']) ? x['number'] : null;
+  if (bound && number === null) shape = true;
+  return {
+    id: x['id'], bound, number,
+    state: optStr(x['state']), isDraft: x['isDraft'] === true,
+    base: optStr(x['base']), head: optStr(x['head']),
+    required, requiredCut: x['requiredCut'] === true,
+    rulesNamed: strings(x['rulesNamed']), protectionNamed: strings(x['protectionNamed']),
+    pinnedNames: strings(x['pinnedNames']),
+    landedInTrain: x['landedInTrain'] === true,
+    unmeasured: shape ? [...unmeasured, 'shape'] : unmeasured,
+  };
+}
+
+// ── `ccd pr-state --project <p> --pr <n>` (landing order wave 5c; spec §5.5 "Landed state is PR-keyed") ──
+// One PR's state by number, with no workspace binding. The five words are defined once in the map and the list is derived
+// from it. The form is behind `PR_STATE_PR_CAP` (`CCD_CAN.prStatePr`); its one caller is `coord/landedLane.ts#landedPass`.
+
+const PR_STATE_PR_MAP = {
+  open: 'GitHub reads the PR OPEN (a draft included)',
+  merged: 'GitHub reads it MERGED, or it reads CLOSED with the train claim and the train record proves it landed (landedInTrain)',
+  closed: 'GitHub reads it CLOSED, and it carries no train claim',
+  unmeasured: 'ccd asked and got no definite answer: a timeout, a non-zero exit, an unparsable body, a missing field, or a train claim the proof refused or could not read',
+  absent: 'GitHub answered definitely that the number names no pull request in the repository',
+} as const;
+export type PrStatePrWord = keyof typeof PR_STATE_PR_MAP;
+export const PR_STATE_PR_WORDS: readonly PrStatePrWord[] = Object.keys(PR_STATE_PR_MAP) as PrStatePrWord[];
+
+/** The reason words the PR-keyed form prints: the twelve `_pr_state_by_pr` and `_pr_py by-pr` name. Built from `PrReason`, so
+ *  renaming a shared word is a compile error here. It is a subset map and legitimately different from `PR_REASON_MAP`: it
+ *  is this form's CLOSED set, which holds two words the session form never prints (`unreadable`, `missing-field`) and
+ *  leaves out the five it cannot (the session form's agent, merge and drift words). */
+export type PrStatePrReason = Extract<PrReason, 'no-remote' | 'timeout' | 'unauthenticated' | 'rate-limit' | 'offline'
+  | 'unavailable' | 'truncated' | 'error' | 'train-unproven' | 'train-unread'> | 'unreadable' | 'missing-field';
+export const PR_STATE_PR_REASON_MAP: Record<PrStatePrReason, string> = {
+  'no-remote': 'there is no project directory or its name is dotted, or its origin is not a GitHub repository',
+  timeout: 'the gh call outran its bound',
+  unauthenticated: 'gh is not signed in, or GitHub refused its credentials',
+  'rate-limit': 'GitHub refused the call for rate',
+  offline: 'GitHub could not be reached from this box',
+  unavailable: 'GitHub answered with a server error',
+  truncated: 'gh\'s answer was cut off mid-body',
+  error: 'gh failed in a way with no known shape',
+  unreadable: 'the view body did not parse, or it names another pull request number',
+  'missing-field': 'the view body lacked a field the line needs, or a field was malformed',
+  'train-unproven': 'the PR carries the train label and the train record does not back it',
+  'train-unread': 'the PR carries the train label and its train record could not be read',
+};
+export const PR_STATE_PR_REASONS: readonly PrStatePrReason[] = Object.keys(PR_STATE_PR_REASON_MAP) as PrStatePrReason[];
+const isPrStatePrReason = (v: string): v is PrStatePrReason => (PR_STATE_PR_REASONS as readonly string[]).includes(v);
+
+export interface PrStatePrFacts {
+  headRefOid: string; baseRefName: string; isCrossRepository: boolean; mergedAt: string | null; mergeCommit: string | null;
+}
+/** What the PR-keyed form's one line says, every distinction kept. `unmeasured` says who could not follow: `by: 'ccd'` is
+ *  ccd's own answer (a fleet retry, with ccd's `reason`: a word of the closed map, `unrecognised` for any other string,
+ *  `unstated` for none), `by: 'reader'` is a line this reader could not follow (build skew, a different remedy). `absent`
+ *  is GitHub's definite answer and is never folded into `unmeasured`. A `merged` line the train proved carries the train's
+ *  number and merge commit. */
+export type PrStatePrRead =
+  | { state: 'open' | 'closed'; pr: number; facts: PrStatePrFacts; train: null }
+  | { state: 'merged'; pr: number; facts: PrStatePrFacts; train: { number: number; mergeCommit: string } | null }
+  | { state: 'unmeasured'; pr: number; by: 'ccd'; reason: PrStatePrReason | 'unrecognised' | 'unstated'; train: 'unproven' | 'unread' | null }
+  | { state: 'unmeasured'; pr: number; by: 'reader'; reason: 'line-count' | 'not-json' | 'pr-mismatch' | 'word'
+    | 'train-flags' | 'fields' | 'merge-facts'; train: null }
+  | { state: 'absent'; pr: number };
+
+/** The ONE reader of the PR-keyed form's stdout, for the PR `pr` the caller asked about; the line's `number` must equal it.
+ *  Pure. It stops at the first rule that fails, and every refusal is the reader's own `unmeasured`. */
+export function readPrStatePrLine(stdout: string, pr: number): PrStatePrRead {
+  const refuse = (reason: Extract<PrStatePrRead, { by: 'reader' }>['reason']): PrStatePrRead => ({ state: 'unmeasured', pr, by: 'reader', reason, train: null });
+  const lines = stdout.split('\n').filter((l) => l.trim() !== '');
+  if (lines.length !== 1) return refuse('line-count');
+  let x: unknown;
+  try { x = JSON.parse(lines[0]!); } catch { return refuse('not-json'); }
+  if (!isPlainObject(x)) return refuse('not-json');
+  if (!positiveSafe(x['number']) || x['number'] !== pr) return refuse('pr-mismatch');
+  const state = x['state'];
+  if (typeof state !== 'string' || !(PR_STATE_PR_WORDS as readonly string[]).includes(state)) return refuse('word');
+  const word = state as PrStatePrWord;
+  const landed = x['landedInTrain'] === true, unproven = x['trainUnproven'] === true, unread = x['trainUnread'] === true;
+  const { train, trainMergeCommit } = x;
+  const carriesTrain = (train ?? null) !== null || (trainMergeCommit ?? null) !== null;
+  if (carriesTrain && !(landed && word === 'merged')) return refuse('train-flags');
+  if (word === 'absent') return landed || unproven || unread ? refuse('train-flags') : { state: 'absent', pr };
+  if (word === 'unmeasured') {
+    if (unproven && unread) return refuse('train-flags');
+    const said = x['reason'];
+    const reason = typeof said !== 'string' || said === '' ? 'unstated' : isPrStatePrReason(said) ? said : 'unrecognised';
+    return { state: 'unmeasured', pr, by: 'ccd', reason, train: unread ? 'unread' : unproven ? 'unproven' : null };
+  }
+  if (unproven || unread || (landed && word !== 'merged')) return refuse('train-flags');
+  const { headRefOid, baseRefName, isCrossRepository, mergedAt, mergeCommit } = x;
+  if (typeof headRefOid !== 'string' || !isHead40(headRefOid)) return refuse('fields');
+  if (typeof baseRefName !== 'string' || baseRefName === '') return refuse('fields');
+  if (typeof isCrossRepository !== 'boolean') return refuse('fields');
+  if (mergedAt !== null && !(typeof mergedAt === 'string' && QUEUE_AT_RE.test(mergedAt))) return refuse('fields');
+  if (mergeCommit !== null && !(typeof mergeCommit === 'string' && isHead40(mergeCommit))) return refuse('fields');
+  const facts: PrStatePrFacts = { headRefOid, baseRefName, isCrossRepository, mergedAt, mergeCommit };
+  if (word === 'merged') {
+    if (landed) {
+      if (!positiveSafe(train) || typeof trainMergeCommit !== 'string' || !isHead40(trainMergeCommit)) return refuse('fields');
+      return { state: 'merged', pr, facts, train: { number: train, mergeCommit: trainMergeCommit } };
+    }
+    if (mergedAt === null || mergeCommit === null) return refuse('fields');
+    return { state: 'merged', pr, facts, train: null };
+  }
+  if (mergedAt !== null || mergeCommit !== null) return refuse('merge-facts');
+  return { state: word, pr, facts, train: null };
 }

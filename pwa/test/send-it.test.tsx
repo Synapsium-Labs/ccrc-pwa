@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChatListInner } from '../src/session/ChatList';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import type { PendingSend } from '../src/stores/session';
 
@@ -38,20 +38,21 @@ describe('Send it', () => {
   // design: a refusal earns the button only where the server also PROVED the
   // box holds the whole message.
   it('is absent for every failure with nothing to submit', () => {
-    for (const code of ['dialog-open', 'not-alive', 'draft-clear-failed']) {
+    for (const code of ['dialog-open', 'not-alive', 'draft-clear-failed', 'turn-running']) {
       cleanup();
       render(<ChatListInner id="s" events={[]} pending={[failed({ code, error: 'nope' })]} />);
       expect(screen.queryByRole('button', { name: 'Send it' }), code).toBeNull();
     }
   });
 
-  // THE `verify-failed` LIMB, and it is DORMANT on today's server — see
-  // `SendResult.submittable` in `server/src/inject/send.ts`, which sets the
-  // flag on `enter-ignored` alone and states why neither `verify-failed` arm
-  // can honestly claim it. The client is written against the PROOF rather than
-  // against the code, so a server that ever does prove it needs no client
-  // change; and until then no button appears, which is exactly what the two
-  // cases below assert. That is the safe direction, not dead code.
+  // THE `verify-failed` LIMB, LIVE since the paste-chip arm — see
+  // `SendResult.submittable` in `server/src/inject/send.ts`. It was dormant
+  // while the flag was set on `enter-ignored` alone; the ordinary
+  // `verify-failed` arm now earns it too, for the one shape whose box provably
+  // holds the whole message: Claude Code collapsed a large typed burst into
+  // `[Pasted text #N]`. The client needed NO change for that, which is what
+  // writing the gate against the PROOF rather than against the code bought —
+  // this comment is the only edit the server's new arm required here.
   it('appears for a verify-failed the server marked submittable', () => {
     render(<ChatListInner id="s" events={[]} pending={[
       failed({ code: 'verify-failed', error: 'Typed it, but the session never echoed it back.' }),

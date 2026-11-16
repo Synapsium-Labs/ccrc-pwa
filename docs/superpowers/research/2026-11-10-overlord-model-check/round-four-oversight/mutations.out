@@ -1,0 +1,27 @@
+| machine | mutation | scenario | expected | caught by | states |
+|---|---|---|---|---|---|
+| evidence | chat_ignored | item  | E1 | E1 | 720 |
+| evidence | unmeasured_counts | old-console  | E5 | E5 | 360 |
+| evidence | delegated_counts | item  | E6 | E6 | 720 |
+| spot | seeded_is_a_case | seeded  | S3 | S2 S3 | 25 |
+| spot | seeded_is_a_pair | seeded  | S3 | S3 | 25 |
+| spot | seeded_overturn_acts | seeded  | S4 | S4 | 25 |
+| arming | answers_before_replay | releases  | A2 | A2 | 4895 |
+| arming | gate3_always_passes | releases  | A3 | A3 | 3390 |
+| arming | fallback_no_cap | fallback  | A9 | A9 | 604 |
+| arming | drill_ignored | latches ARMED0=True | A7 | A7 | 30 |
+| arming | server_clears_latch | latches ARMED0=True | A1 | A1 | 45 |
+| arming | restore_undetected | restore  | A1 | A1 | 65 |
+| decision | fail_open_gate | down  | D6 | D6 | 133 |
+| decision | shadow_is_skipped | drift  | D1 | D1 D2 D6 | 2703 |
+| decision | key_change_ignored | key  | D4 | D4 | 744 |
+| decision | record_any_key | key-old-yes  | D2 | D2 D7 | 999 |
+| decision | refit_eases_alone | off  | D5 | D5 | 68 |
+| judges | drill_delivers | drill-burst  | J1 | J1 | 21 |
+| judges | drill_lapse_pushes | drill-burst  | J1 | J1 | 21 |
+| judges | drill_lapse_counts | drill-burst  | J5 | J5 | 21 |
+| judges | missed_weeks_ignored | weekly  | J7 | J7 | 19 |
+| judges | paused_grant_renews | weekly  | J8 | J8 | 19 |
+| judges | low_judge_latches | audit-low-judge  | J9 | J9 | 9 |
+
+not caught: 0; states 15661

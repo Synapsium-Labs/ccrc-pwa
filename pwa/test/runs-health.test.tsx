@@ -6,7 +6,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT,
          type CoordCapsView, type RunHealth, type RunSummary } from '../../shared/api';
-import { RunsScreen } from '../src/screens/RunsScreen';
+import { RowsBoard } from './runs-board';
 import { runWarnings } from '../src/fleet/runWords';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
@@ -23,11 +23,12 @@ const r = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 3, program: 'program-leverage', programTitle: 'Program leverage',
   wave: 7, waveOf: 8, project: 'ccrc-pwa', homeProject: null,
   sessionId: 'ccrc-pwa-quiet-meadow', workspace: 'quiet-meadow', branch: 'ws/quiet-meadow',
-  state: 'working', claimedBy: 'ccrc-pwa-brisk-meadow', resumed: false, clearedAt: null,
+  state: 'working', kind: 'work', reviews: null,
+  claimedBy: 'ccrc-pwa-brisk-meadow', resumed: false, clearedAt: null,
   openedAt: FROZEN - 1_000_000, dispatchStartedAt: null,
   dispatchedAt: FROZEN - 900_000, closedAt: null,
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0,
-  health: HEALTHY, ...over,
+  health: HEALTHY, childReclaim: null, reviewCap: null, hadChild: false, ...over,
 });
 
 const makeStore = (): FleetStore => createFleetStore({
@@ -41,7 +42,7 @@ const board = (over: Partial<RunSummary>): void => {
   vi.useFakeTimers({ now: FROZEN });
   const store = makeStore();
   act(() => { store.setState({ runs: [r(over)], runsFrameSeen: true }); });
-  render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+  render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
 };
 afterEach(() => { vi.useRealTimers(); });
 
@@ -64,7 +65,7 @@ describe('the warn row says nothing it was not told', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [noHealth as RunSummary], runsFrameSeen: true }); });
     expect(() => render(
-      <RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />))
+      <RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />))
       .not.toThrow();
     expect(warn(), 'an older server was made to assert a health claim').toBeNull();
   });
@@ -93,7 +94,7 @@ describe('the warn row says nothing it was not told', () => {
       const store = makeStore();
       act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
       const closed = r({ state, closedAt: Date.now() - 10_000, dispatchedAt: null, ...wedged() });
-      render(<RunsScreen store={store} loadRuns={async () => ({ runs: [closed] })}
+      render(<RowsBoard store={store} loadRuns={async () => ({ runs: [closed] })}
                          loadCaps={NO_CAPS} />);
       await waitFor(() => expect(document.querySelector('.run-row')).not.toBeNull());
       expect(document.querySelector('[aria-label^="finished"]'),
@@ -118,6 +119,18 @@ describe('the warn row says nothing it was not told', () => {
 });
 
 describe('the warn row draws each wedge, with two cues', () => {
+  it('names live PARKED mail as waiting, apart from the given-up count (D-5838)', () => {
+    board(health({ mailParkedLive: 1 }));
+    expect(warn()?.textContent).toContain('1 waiting');
+    expect(warn()?.textContent).not.toContain('parked');
+    expect(warn()?.querySelector('[title]')?.getAttribute('title')).toContain('submitted or cleared');
+  });
+
+  it('an older server, which omits mailParkedLive, draws no waiting mail (D-5838)', () => {
+    board(health({}));
+    expect(warn()?.textContent ?? '').not.toContain('waiting');
+  });
+
   it('names parked mail, and the outstanding half beside it', () => {
     board(health({ mailParked: 2, mailOutstanding: 5 }));
     expect(warn()?.textContent).toContain('2 parked');

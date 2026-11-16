@@ -42,6 +42,7 @@ import {
   EXEC_WHITELIST,
   FORBIDDEN_COMMANDS,
   GRANTABLE_COMMANDS,
+  REQUIRED_VERB_FLAG,
   auditExecWhitelist,
   isExecAllowed,
 } from '../src/whitelist.js';
@@ -110,6 +111,123 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
   // surface; the enrolment in `REQUIRED_VERB_FLAG` is what makes it TS2322.
   'g11-route-without-session.ts': {
     what: 'the routing verb granted without --session',
+    codes: ['TS2322'],
+  },
+  // TERMINAL DRAWER wave 2, the same shape one verb further on: a two-token
+  // grant is only two tokens wide while its verb is ENROLLED in
+  // `REQUIRED_VERB_FLAG`. It is g12 rather than g11 because routing slice 1
+  // took that name first.
+  'g12-win-size-without-session.ts': {
+    what: 'the window-size verb granted without the flag that is its whole argument surface',
+    codes: ['TS2322'],
+  },
+  // CHILD RECLAMATION wave 3, g5's shape for the second destructive verb with a
+  // confirmation token: the enrolment, not the grant, is what refuses it.
+  'g13-ws-reclaim-without-expect.ts': {
+    what: 'the child-reclaim verb granted without its confirmation token',
+    codes: ['TS2322'],
+  },
+  // CHILD RECLAMATION wave 4, g9's shape a fifth time: a two-token grant is
+  // only two tokens wide while its verb is ENROLLED in `REQUIRED_VERB_FLAG`.
+  'g14-reclaim-pause-without-state.ts': {
+    what: 'the reclaim kill-switch granted without the flag that is its whole argument surface',
+    codes: ['TS2322'],
+  },
+  // WORKSPACE LIFECYCLE wave 3, g13's shape for ws-reclaim's sibling: the archived workspace's teardown, enrolled on
+  // its confirmation token, so the narrowed grant is a compile error.
+  'g15-ws-expire-without-expect.ts': {
+    what: 'the archived-workspace expiry verb granted without its confirmation token',
+    codes: ['TS2322'],
+  },
+  // NATIVE DOCS READER wave 2, g14's shape for the four docs verbs: read-only, no confirmation token, so the flag is
+  // each verb's whole argument surface, and the enrolment is what makes the narrowed grant a compile error.
+  'g16-docs-index-without-all.ts': {
+    what: 'the fleet-wide docs listing granted without --all, its whole argument surface',
+    codes: ['TS2322'],
+  },
+  'g17-docs-tree-without-project.ts': {
+    what: 'the docs tree verb granted without --project',
+    codes: ['TS2322'],
+  },
+  'g18-docs-show-without-project.ts': {
+    what: 'the docs show verb (one grant, both argv shapes) granted without --project',
+    codes: ['TS2322'],
+  },
+  'g19-docs-fetch-without-project.ts': {
+    what: 'the docs fetch verb granted without --project',
+    codes: ['TS2322'],
+  },
+  // NATIVE DOCS READER wave 5b, g18's shape for the history verb: read-only, enrolled on `--project`, so the narrowed
+  // grant is a compile error.
+  'g28-docs-log-without-project.ts': {
+    what: 'the docs history verb granted without --project',
+    codes: ['TS2322'],
+  },
+  // CHILD RECLAMATION wave 7, g13's and g15's shape for the temp-root collector: enrolled on its confirmation token, so
+  // the narrowed grant is a compile error.
+  'g20-ws-collect-without-expect.ts': {
+    what: 'the temp-root collector granted without its confirmation token',
+    codes: ['TS2322'],
+  },
+  // NAMED WORKSPACES S9, g11's and g12's shape for the rename verb: enrolled on `--session`, its whole argument surface,
+  // so the narrowed grant is a compile error.
+  'g21-ws-title-without-session.ts': {
+    what: 'the workspace rename verb granted without --session',
+    codes: ['TS2322'],
+  },
+  // FLEET DISK RETENTION DR-18 (D-6630), g20's shape for the orphan-worktree verb: enrolled on its confirmation token, so
+  // the narrowed grant is a compile error.
+  'g22-ws-orphan-without-expect.ts': {
+    what: 'the orphan-worktree verb granted without its confirmation token',
+    codes: ['TS2322'],
+  },
+  // THE DEPS-SHED ARM (D-7278), g21's shape: enrolled on `--session`, so the narrowed grant is a compile error.
+  'g23-ws-shed-deps-without-session.ts': {
+    what: 'the deps-shed verb granted without --session',
+    codes: ['TS2322'],
+  },
+  // THE TEST BOX SWITCH (D-7411), g14's shape: enrolled on `--state`, so the narrowed grant is a compile error.
+  'g24-testbox-remote-without-state.ts': {
+    what: 'the test box switch verb granted without --state',
+    codes: ['TS2322'],
+  },
+  // THE SWEEP'S BUSY ARM SWITCH (D-7994), g14's shape: enrolled on `--state`, so the narrowed grant is a compile error.
+  'g27-scope-sweep-busy-without-state.ts': {
+    what: 'the busy arm switch verb granted without --state',
+    codes: ['TS2322'],
+  },
+  // THE ADOPTION SWITCH (D-8112), g14's shape: enrolled on `--state`, so the narrowed grant is a compile error.
+  'g28-delegation-adopt-without-state.ts': {
+    what: 'the adoption switch verb granted without --state',
+    codes: ['TS2322'],
+  },
+  // THE LEASE CARRIER (delegation broker wave 5, PR1), g23's shape: enrolled on `--lease`, so the narrowed grant is a
+  // compile error.
+  'g25-ws-lease-mark-without-lease.ts': {
+    what: 'the lease carrier writer granted without --lease',
+    codes: ['TS2322'],
+  },
+  // THE LEASE AUDIT (delegation broker wave 5, PR2), g25's shape: enrolled on `--lease`, so the narrowed grant is a
+  // compile error.
+  'g26-ws-lease-audit-without-lease.ts': {
+    what: 'the lease audit granted without --lease',
+    codes: ['TS2322'],
+  },
+  // ADD A PROJECT (add-project spec 2026-11-04 §4), g21's shape: enrolled on `--name`, its whole argument surface, so the
+  // narrowed grant is a compile error.
+  'g26-project-add-without-name.ts': {
+    what: 'the project create verb granted without --name',
+    codes: ['TS2322'],
+  },
+  // THE PANE-SCOPE STOP'S SWITCH (D-7902), g24's shape: enrolled on `--state`, so the narrowed grant is a compile error.
+  'g27-pane-scope-stop-without-state.ts': {
+    what: 'the pane-scope stop switch verb granted without --state',
+    codes: ['TS2322'],
+  },
+  // THE POOL ANSWER (Overlord W1 pool set, plan Task 6), g15's shape: enrolled on `--session`, its whole argument surface,
+  // so the narrowed grant is a compile error.
+  'g29-pool-answer-without-session.ts': {
+    what: 'the pool answer verb granted without --session',
     codes: ['TS2322'],
   },
 };
@@ -312,6 +430,170 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     // own length and nothing past it.
     expect(() => auditExecWhitelist(withCcd([['ws-reap', '--session', '--expect']])))
       .toThrow(/only grantable with '--expect'/);
+  });
+
+  // CHILD RECLAMATION wave 3, fix round 1 — `ws-reap`'s own case one verb over.
+  // Without this, mutation row 2 (narrowing the shipped grant to `['ws-reclaim']`)
+  // is caught only by the module-load crash every consumer of `whitelist.ts`
+  // takes on import, which proves the crash fires, not that THIS verb's rule
+  // is what fires it. This case runs the audit over a CONSTRUCTED table, so
+  // the row reds here as an assertion instead.
+  it('throws on a ws-expire with no confirmation token, the third destructive verb (workspace lifecycle wave 3)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-expire']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-expire', '--session']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-expire', '--expect']]))).not.toThrow();
+  });
+
+  it('throws on a ws-collect with no confirmation token, the fourth destructive verb (child reclamation wave 7)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-collect']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-collect', '--session']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-collect', '--expect']]))).not.toThrow();
+  });
+
+  it('throws on a testbox-remote without --state, and grants exactly the one prefix (D-7411)', () => {
+    expect(() => auditExecWhitelist(withCcd([['testbox-remote']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['testbox-remote', '--on']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['testbox-remote', '--state']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'testbox-remote'), 'one testbox-remote grant, on --state')
+      .toEqual([['testbox-remote', '--state']]);
+  });
+
+  it('throws on a pane-scope-stop without --state, and grants exactly the one prefix (D-7902)', () => {
+    expect(() => auditExecWhitelist(withCcd([['pane-scope-stop']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['pane-scope-stop', '--live']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['pane-scope-stop', '--state']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'pane-scope-stop'), 'one pane-scope-stop grant, on --state')
+      .toEqual([['pane-scope-stop', '--state']]);
+  });
+
+  it('throws on a scope-sweep-busy without --state, and grants exactly the one prefix (D-7994)', () => {
+    expect(() => auditExecWhitelist(withCcd([['scope-sweep-busy']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['scope-sweep-busy', '--on']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['scope-sweep-busy', '--state']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'scope-sweep-busy'), 'one scope-sweep-busy grant, on --state')
+      .toEqual([['scope-sweep-busy', '--state']]);
+  });
+
+  it('throws on a delegation-adopt without --state, and grants exactly the one prefix (D-8112)', () => {
+    expect(() => auditExecWhitelist(withCcd([['delegation-adopt']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['delegation-adopt', '--on']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['delegation-adopt', '--state']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'delegation-adopt'), 'one delegation-adopt grant, on --state')
+      .toEqual([['delegation-adopt', '--state']]);
+  });
+
+  it('throws on a pool-answer without --session, and grants exactly the one prefix (Overlord W1 pool set)', () => {
+    expect(() => auditExecWhitelist(withCcd([['pool-answer']])))
+      .toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['pool-answer', '--all']])))
+      .toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['pool-answer', '--session']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'pool-answer'), 'one pool-answer grant, on --session')
+      .toEqual([['pool-answer', '--session']]);
+  });
+
+  it('throws on a ws-shed-deps without --session, and grants exactly the one prefix (D-7278)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-shed-deps']])))
+      .toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-shed-deps', '--class']])))
+      .toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-shed-deps', '--session']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-shed-deps'), 'one ws-shed-deps grant, on --session')
+      .toEqual([['ws-shed-deps', '--session']]);
+  });
+
+  it('W5-G2: throws on a ws-lease-mark without --lease, and grants exactly the one prefix (delegation broker wave 5)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-mark']]))).toThrow();
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-mark', '--generation']]))).toThrow();
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-mark', '--lease']]))).not.toThrow();
+    expect(REQUIRED_VERB_FLAG['ws-lease-mark']).toBe('--lease');
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-lease-mark'), 'one ws-lease-mark grant, on --lease')
+      .toEqual([['ws-lease-mark', '--lease']]);
+  });
+
+  it('W5-G11: throws on a ws-lease-audit without --lease, and grants exactly the one prefix (delegation broker wave 5)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-audit']]))).toThrow();
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-audit', '--generation']]))).toThrow();
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-audit', '--lease']]))).not.toThrow();
+    expect(REQUIRED_VERB_FLAG['ws-lease-audit']).toBe('--lease');
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-lease-audit'), 'one ws-lease-audit grant, on --lease')
+      .toEqual([['ws-lease-audit', '--lease']]);
+  });
+
+  it('throws on a ws-orphan with no confirmation token, and grants the audit modes without one (D-6630)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-orphan']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-orphan', '--tree-hex']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-orphan', '--expect']]))).not.toThrow();
+    expect(() => auditExecWhitelist(withCcd([['ws-audit', '--orphans'], ['ws-audit', '--orphan-hex']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-orphan'), 'one ws-orphan grant, on its token').toEqual([['ws-orphan', '--expect']]);
+  });
+
+  // NAMED WORKSPACES S9: `ws-title` is enrolled for its ARGUMENT SURFACE (`route`'s reason), so the audit refuses the bare
+  // verb, the wrong flag and the flag out of place, over a CONSTRUCTED table.
+  it('throws on a ws-title with no --session, the wrong flag, or the flag out of place (named workspaces S9)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-title']]))).toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-title', '--title']]))).toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-title', '--clear', '--session']]))).toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-title', '--session']]))).not.toThrow();
+  });
+
+  // ADD A PROJECT (add-project spec 2026-11-04 §4): `project-add` is enrolled for its ARGUMENT SURFACE, so the audit
+  // refuses the bare verb, the wrong flag and the flag out of place, over a CONSTRUCTED table.
+  it('throws on a project-add with no --name, the wrong flag, or the flag out of place (add-project)', () => {
+    expect(() => auditExecWhitelist(withCcd([['project-add']]))).toThrow(/only grantable with '--name'/);
+    expect(() => auditExecWhitelist(withCcd([['project-add', '--url']]))).toThrow(/only grantable with '--name'/);
+    expect(() => auditExecWhitelist(withCcd([['project-add', '--empty', '--name']]))).toThrow(/only grantable with '--name'/);
+    expect(() => auditExecWhitelist(withCcd([['project-add', '--name']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'project-add'), 'one project-add grant, on --name').toEqual([['project-add', '--name']]);
+  });
+
+  // NATIVE DOCS READER wave 2: the four docs verbs, enrolled for their ARGUMENT SURFACE (`coord-pause`'s reason).
+  // Run over CONSTRUCTED tables, so narrowing a shipped docs grant reds here as an assertion naming the verb's own
+  // rule, not only as the module-load crash every importer of `whitelist.ts` takes. The flag must be the token
+  // IMMEDIATELY after the verb, so a misplaced `--project` is refused like a missing one.
+  it('throws on a docs verb with no flag, the wrong flag, or the flag out of place (docs W2)', () => {
+    const REFUSED: readonly (readonly [prefix: readonly string[], flag: string])[] = [
+      [['docs-index'], '--all'],
+      [['docs-index', '--project'], '--all'],
+      [['docs-tree'], '--project'],
+      [['docs-show', '--all'], '--project'],
+      [['docs-fetch'], '--project'],
+      [['docs-log'], '--project'],
+      [['docs-show', '--ref', '--project'], '--project'],
+    ];
+    for (const [prefix, flag] of REFUSED) {
+      expect(() => auditExecWhitelist(withCcd([prefix])), prefix.join(' '))
+        .toThrow(new RegExp(`only grantable with '${flag}'`));
+    }
+    const LAWFUL: readonly (readonly string[])[] = [
+      ['docs-index', '--all'], ['docs-tree', '--project'], ['docs-show', '--project'], ['docs-fetch', '--project'],
+      ['docs-log', '--project'],
+    ];
+    for (const prefix of LAWFUL) {
+      expect(() => auditExecWhitelist(withCcd([prefix])), prefix.join(' ')).not.toThrow();
+    }
+  });
+
+  it('throws on a ws-reclaim with no confirmation token, the second destructive verb', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-reclaim']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-reclaim', '--session']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-reclaim', '--expect']]))).not.toThrow();
   });
 
   it('throws on a coord-pause grant with no --state — the flag is the whole grant', () => {

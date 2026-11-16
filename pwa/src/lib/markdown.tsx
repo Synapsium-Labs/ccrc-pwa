@@ -1,0 +1,549 @@
+// Chat's Markdown renderer, extracted from `session/MessageBubble.tsx` (native Docs reader, W4 Task 2; design
+// 2026-10-01 section 4.9) so chat and the Docs screen share one set of components. Moved unchanged: the image
+// test, `absolute`, `openExternal`, the highlight.js registration (a module side effect), `LANG_LABEL`,
+// `nodeText`, `keystrokeParts`, `CodeBlock`, `TableWrap`, and today's `mdComponents` split into
+// `SHARED_COMPONENTS` (code, pre, table) and `CHAT_COMPONENTS` (those plus chat's `a` and `img`). `ChatMarkdown`
+// is both of `MessageBubble`'s Markdown sites. `markdown-golden.test.tsx` holds chat's output byte for byte.
+// Hardened per ruling U3 (W4 Task 6; section 4.12): a message of at most `CHAT_SYNC_MAX_BYTES` UTF-8 bytes is
+// pre-scanned, then rendered as before; a longer one parses in `chatRunner`'s worker; whatever is not formatted
+// shows as `MsgPlain` with `chatPlainNote`'s sentence; and `isRefusedChatImageSrc` keeps chat from drawing an
+// image whose source is not an absolute http(s) URL (`chat-hardening.test.tsx`).
+// Bounded per W5 Task 3 (section 4.10's "Bounds on the shared components"): `keystrokeParts` moved to `markdownGuard.ts`,
+// where the parse's element count calls it too (2-2) and it refuses a span over `MD_KEYSTROKE_MAX_CHARS` (r11). W5h-b
+// retired r10's word bound and the main-thread highlight bounds beside it: highlight.js runs only in the worker.
+// Desktop polish Task C7: chat's remark plugins are one module constant; `ChatMarkdown` is memoised on its props.
+// Chat reading Task L (D-8062): a mark resolves to a link here, at render time, through `ChatRef` (`refHref` with the context
+// `ChatRefsContext` carries); `ChatLink` is chat's one anchor, external (a new tab, no opener) or in-app (`inAppClick`); a
+// Markdown link the console routes (`routedHref`) moves within the app; an inline code span whose whole text is one name links.
+// W5h-a Task 6 (base spec 2026-10-01 section 4.10 "Highlighting"): this file no longer imports highlight.js. The grammar registration moved to `highlightGrammars.ts` (the highlight worker's closure), `LANG_LABEL` and `codeLanguage` to `highlightNames.ts`, the cache into the worker. `CodeBlock` reads a highlight store (`PreHighlightContext`) with `useSyncExternalStore`, requests in an effect, renders plain first, and draws through `HighlightedCode`, the one `dangerouslySetInnerHTML` in `pwa/src`, which inserts only a value `isCheckedHighlightHtml` accepts. `ChatMarkdown` holds one store per message on `chatHighlighter`.
+import Markdown, { defaultUrlTransform, type Options as MarkdownOptions } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import type { Components } from 'react-markdown';
+import type { Element as HastElement } from 'hast';
+import React, {
+  createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode,
+} from 'react';
+import { remarkAlerts } from './remarkAlerts';
+import { remarkChatMarks } from './remarkChatMarks';
+import { MARK_ATTR, isMarkKind, wholeMark, type Mark } from './chatMarks';
+import { refHref, type RefTarget } from './chatRefs';
+import { messageRepos } from './chatRepoEvidence';
+import { routedHref } from './routes';
+import { inAppClick } from '../fleet/settingsText';
+import { ChatRefsContext, MessageReposContext } from '../session/chatRefsContext';
+import { LANG_LABEL, codeLanguage } from './highlightNames';
+import { HighlighterContext, useChatHighlightStore } from './highlighterContext';
+import {
+  UNREQUESTED_ENTRY, blockKey, isCheckedHighlightHtml, type BlockKey, type HighlightEntry, type HighlightStore,
+  type SkipCeiling,
+} from './highlightStore';
+import {
+  CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN,
+  MD_MAX_TREE_DEPTH,
+} from './markdownLimits';
+import { keystrokeParts, prescanMarkdown, utf8ByteLength } from './markdownGuard';
+import type { ParseOutcome } from './markdownParse';
+import { chatRunner, type MarkdownParser } from './markdownRunner';
+import { renderHast, type RenderHastOptions } from './renderHast';
+import { useParsedMarkdown } from './useParsedMarkdown';
+import '../session/chat.css';
+
+export const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|avif|bmp)(\?|#|$)/i;
+export const isImageUrl = (href: string | undefined): href is string => href !== undefined && IMG_EXT.test(href);
+
+/** Whether chat refuses `src` as an image source. Chat draws an image only when its source is an absolute http(s)
+ *  URL: after leading ASCII whitespace and C0 controls are skipped (as a browser strips them from an attribute URL),
+ *  the source must start with `http://` or `https://` (scheme in either case, then two forward slashes). Everything
+ *  else is refused: a path-relative source (`x.png`, `../api/x`), a root-relative one (`/x`), a protocol-relative one
+ *  (`//h/x`, and `\\h/x`, which a browser reads the same way), `https:/x` and `https:\\h/x` (one slash, or
+ *  backslashes), a `data:` URI, `mailto:` and every other scheme. A relative source would be fetched from ccrc's own
+ *  origin, or from a host the message names, carrying the operator's cookie. Absent (`undefined`) is not refused: the
+ *  `img` component then has no source to draw. Takes the value after react-markdown's `defaultUrlTransform`. The ONE
+ *  predicate: `img` and the auto-embed in `a` both call it; a refused source renders as the ordinary external link,
+ *  except one the url transform left empty, whose image renders its alt text as plain text, or nothing. */
+export function isRefusedChatImageSrc(src: string | undefined): boolean {
+  if (src === undefined) return false;
+  let i = 0;
+  while (i < src.length && src.charCodeAt(i) <= 0x20) i += 1;
+  return !/^https?:\/\//i.test(src.slice(i));
+}
+
+/** Absolute, scheme-qualified URL — a bare "example.com" would otherwise resolve
+ *  same-origin and get swallowed by the PWA's navigation fallback. */
+export function absolute(href: string): string {
+  if (/^https?:\/\//i.test(href)) return href;
+  if (/^[a-z][\w+.-]*:/i.test(href)) return href; // mailto:, tel:, …
+  return `https://${href}`;
+}
+
+/** Open in a real new browser tab/instance. A plain target=_blank in a
+ *  standalone PWA is unreliable (the app window itself can navigate, and the
+ *  service worker's navigateFallback then serves index.html — the "back to the
+ *  landing page" symptom), so force a fresh context via window.open. */
+export function openExternal(e: React.MouseEvent, href: string | undefined): void {
+  if (!href) return;
+  e.preventDefault();
+  window.open(absolute(href), '_blank', 'noopener,noreferrer');
+}
+
+/** Flatten a react-markdown child tree to source text (for copy + highlight). */
+export function nodeText(n: ReactNode): string {
+  if (n == null || typeof n === 'boolean') return '';
+  if (typeof n === 'string' || typeof n === 'number') return String(n);
+  if (Array.isArray(n)) return n.map(nodeText).join('');
+  if (React.isValidElement(n)) return nodeText((n.props as { children?: ReactNode }).children);
+  return '';
+}
+
+export const NO_SUBSCRIPTION = (_listener: () => void): (() => void) => () => undefined;
+
+/** A block's entry in `store`, read as React reads an external store; the shared `unrequested` entry with no store
+ *  or no key. `peek` is also the server snapshot, so `renderToStaticMarkup` reads the store and never requests. */
+export function useHighlightEntry(store: HighlightStore | null, key: string | null): HighlightEntry {
+  const subscribe = store === null || key === null ? NO_SUBSCRIPTION : store.subscribe(key);
+  const snapshot = (): HighlightEntry => (store === null || key === null ? UNREQUESTED_ENTRY : store.peek(key));
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
+/** Holds one reference on `key` while the block shows it, and releases it on cleanup or when the key changes. A
+ *  block's first key is requested at once, and so is a re-run of the same key (React's development double effects);
+ *  on a store with a debounce (chat), a CHANGED key is requested only once it has held still for `store.debounceMs`
+ *  (section 4.12's streaming rule), so a fence that grows on every settle asks the worker when the stream pauses,
+ *  and the request it supersedes was released at the change (detached: the worker lives on). */
+export function useHighlightRequest(store: HighlightStore | null, key: string | null): void {
+  const lastKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (store === null || key === null) return undefined;
+    // The block shows `key` from now, requested or not, so a chat store is not settled while it waits (refinement (r)).
+    const unshow = store.show(key);
+    const immediate = store.debounceMs === 0 || lastKey.current === null || lastKey.current === key;
+    lastKey.current = key;
+    let release: (() => void) | undefined;
+    let timer: number | undefined;
+    if (immediate) release = store.request(key);
+    else timer = window.setTimeout(() => { release = store.request(key); }, store.debounceMs);
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      release?.();
+      unshow();
+    };
+  }, [store, key]);
+}
+
+/** The entry a COPY draws when the page's ceiling skipped it (review 1364 F1): one frozen `skipped` entry per ceiling,
+ *  made on first use, so a render allocates nothing. */
+const COPY_SKIPPED = new Map<SkipCeiling, HighlightEntry>();
+function copySkippedEntry(ceiling: SkipCeiling): HighlightEntry {
+  let entry = COPY_SKIPPED.get(ceiling);
+  if (entry === undefined) {
+    entry = Object.freeze({ kind: 'skipped', ceiling } as const);
+    COPY_SKIPPED.set(ceiling, entry);
+  }
+  return entry;
+}
+
+/** What a block's label says (section 4.10's table): the language, then why a registered block is not coloured. */
+export function codeBlockLabel(label: string, raw: string, answer: BlockKey, entry: HighlightEntry): string {
+  const kib = `${label} · not highlighted (${Math.ceil(raw.length / 1024)} KiB)`;
+  switch (answer.kind) {
+    case 'unregistered':
+      return label;
+    case 'over-cap':
+      return kib;
+    case 'key':
+      break;
+  }
+  switch (entry.kind) {
+    case 'html':
+      return entry.mode === 'line' ? `${label} · highlighted line by line` : label;
+    case 'skipped':
+      return `${label} · not highlighted (page highlighting limit)`;
+    case 'plain':
+      if (entry.first.kind === 'timeout') return `${label} · not highlighted (took over ${entry.first.budgetMs / 1000} s)`;
+      return entry.first.kind === 'too-large' ? `${label} · not highlighted (output too large)` : label;
+    case 'unrequested':
+    case 'pending':
+      return label;
+  }
+}
+
+/** THE highlight sink in `pwa/src` (section 4.10 "The single sink and its check", M4.H15): the one
+ *  `dangerouslySetInnerHTML`, which inserts only the `html` of a value `isCheckedHighlightHtml` accepts. Anything
+ *  else, a plain string from a forged store included, renders `raw` as text in the same element. `CodeBlock` and
+ *  the tool wells draw code through it. */
+export function HighlightedCode({ entry, raw }: { readonly entry: HighlightEntry; readonly raw: string }): ReactNode {
+  const checked: unknown = entry.kind === 'html' ? entry.checked : null;
+  if (isCheckedHighlightHtml(checked)) return <code className="hljs" dangerouslySetInnerHTML={{ __html: checked.html }} />;
+  return <code className="hljs">{raw}</code>;
+}
+
+/** The highlight store a code block reads (section 4.10 `CodeBlock`): a Docs page's, a text leaf's or a chat
+ *  message's. `null`, the default, has ONE meaning: no store, so the block renders plain. Every production mount
+ *  provides one. */
+export const PreHighlightContext = createContext<HighlightStore | null>(null);
+
+/** What a fenced block's code element says: its language (`codeLanguage` of its class), its label (`LANG_LABEL`, own
+ *  keys only, else the language, else `text`) and its raw text with one trailing newline stripped. `CodeBlock` and
+ *  Export's static `pre` (`docs/export/exportMarkdown.tsx`) both read a block through it, so they label and key it alike. */
+export interface CodeBlockParts { readonly lang: string; readonly label: string; readonly raw: string }
+export function codeBlockParts(children: ReactNode): CodeBlockParts {
+  const codeEl = React.Children.toArray(children).find(React.isValidElement) as
+    | React.ReactElement<{ className?: string; children?: ReactNode }>
+    | undefined;
+  const lang = codeLanguage(codeEl?.props.className ?? '');
+  // Own keys only, as `grammarOf` reads its tables: a fence named `__proto__` or `constructor` is no label.
+  const label = (Object.hasOwn(LANG_LABEL, lang) ? LANG_LABEL[lang] : undefined) ?? (lang || 'text');
+  return { lang, label, raw: nodeText(children).replace(/\n$/, '') };
+}
+
+/** Fenced code: language label + copy bar over the well. The bar is a SIBLING above the scrolling <pre>, never an
+ *  overlay. It makes no highlight.js call: it reads its entry in the store, plain until the worker's answer is
+ *  `html` (the plain first frame, section 4.10), and its label says why a registered block is not coloured. `at`,
+ *  when given, is this copy's `pre` element (react-markdown's `node`): a Docs page's store may have skipped THIS copy
+ *  of a shared block (`copySkip`), and then the copy draws plain under that ceiling's label although it still shows
+ *  and requests its key, sharing the one job. */
+export function CodeBlock({ children, at }: { children?: ReactNode; at?: object }): ReactNode {
+  const store = useContext(PreHighlightContext);
+  const [copied, setCopied] = useState(false);
+  const { lang, label, raw } = codeBlockParts(children);
+  const answer = useMemo(() => (store === null ? blockKey(lang, raw) : store.keyOf(lang, raw)), [store, lang, raw]);
+  const key = answer.kind === 'key' ? answer.key : null;
+  const keyEntry = useHighlightEntry(store, key);
+  const copySkipped = store === null || at === undefined ? null : store.copySkip(at);
+  const entry = copySkipped === null ? keyEntry : copySkippedEntry(copySkipped);
+  useHighlightRequest(store, key);
+  const onCopy = useCallback(() => {
+    void navigator.clipboard?.writeText(raw).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    });
+  }, [raw]);
+  return (
+    <div className="code-block">
+      <div className="code-block-bar">
+        <span className="code-block-lang">{codeBlockLabel(label, raw, answer, entry)}</span>
+        <button type="button" className="code-block-copy" onClick={onCopy}
+                aria-label="Copy code" data-copied={copied || undefined}>
+          <span aria-live="polite">{copied ? 'Copied' : 'Copy'}</span>
+        </button>
+      </div>
+      <pre>
+        <HighlightedCode entry={entry} raw={raw} />
+      </pre>
+    </div>
+  );
+}
+
+/** Wrap tables so the scroller is a div (enables the edge-fade affordance). */
+export function TableWrap({ children }: { children?: ReactNode }): ReactNode {
+  return <div className="md-table-wrap"><table>{children}</table></div>;
+}
+
+/** Fenced code through `CodeBlock`, which reads the store `PreHighlightContext` carries. */
+function SharedPre({ children, node }: { children?: ReactNode; node?: HastElement }): ReactNode {
+  return <CodeBlock at={node}>{children}</CodeBlock>;
+}
+
+/** A GFM task-list checkbox's accessible name, by its state. remark-gfm emits the box bare (no `<label>`), so without
+ *  a name a screen reader announces "checkbox, checked, dimmed" and nothing else; the item's own text follows the box.
+ *  `markdown-task-label.test.tsx` holds both renderers and the Prose story's mirror to these words. */
+export const TASK_CHECKBOX_NAME = { checked: 'done', unchecked: 'to do' } as const;
+
+/** Whether a `code` element is block code (a fenced block's, left to `CodeBlock`), not an inline span. */
+const isBlockCode = (className: string | undefined, text: string): boolean => /language-/.test(className ?? '') || text.includes('\n');
+
+/** Code: block code as itself (`CodeBlock` draws it), an inline keystroke as kbd chips, any other inline span as `md-code`. */
+function SharedCode({ className, children }: { className?: string; children?: ReactNode }): ReactNode {
+  const text = String(children ?? '');
+  if (isBlockCode(className, text)) {
+    return <code className={className}>{children}</code>; // block code → left to CodeBlock
+  }
+  const keys = keystrokeParts(text);
+  if (keys) {
+    return (
+      <span className="kbd-combo">
+        {keys.map((k, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <span className="kbd-plus">+</span>}
+            <kbd>{k}</kbd>
+          </React.Fragment>
+        ))}
+      </span>
+    );
+  }
+  return <code className="md-code">{children}</code>;
+}
+
+/** The components chat and the Docs screen share: inline code (kbd chips), fenced code (on the highlight store `PreHighlightContext` carries),
+ *  tables, and task-list checkboxes named by their state (the markup is otherwise
+ *  remark-gfm's: still disabled, still the item's or its first paragraph's first child, which prose.css relies on). */
+export const SHARED_COMPONENTS: Components = {
+  input({ node: _node, ...props }) {
+    if (props.type !== 'checkbox') return <input {...props} />;
+    return <input {...props} aria-label={props.checked ? TASK_CHECKBOX_NAME.checked : TASK_CHECKBOX_NAME.unchecked} />;
+  },
+  code: SharedCode,
+  pre: SharedPre,
+  table: ({ children }) => <TableWrap>{children}</TableWrap>,
+};
+
+/** Chat's one anchor (chat reading Task L, D-8062). External: a new tab with no opener, through `openExternal` (a bare `<a>` in a
+ *  standalone PWA would navigate the app itself). In-app: a path inside the console, which a plain click opens within the app and
+ *  a modified one leaves to the browser (`inAppClick`). */
+export function ChatLink({ target, children }: { target: RefTarget; children?: ReactNode }): ReactNode {
+  const { href, external } = target;
+  if (!external) return <a href={href} onClick={inAppClick(href)}>{children}</a>;
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, href)}>
+      {children}
+    </a>
+  );
+}
+
+/** True under a Markdown link's anchor (chat's `a` arm provides it): a name, an image or a link the parser made there draws
+ *  without an anchor of its own, so a link never holds a link and one click does one thing, the link's (reviews 1586 F1,
+ *  1597 F1 and 1606 F1). The remark plugin marks nothing inside a link, but a whole-name
+ *  code span is decided at render time (R13), where only this tells it it sits inside one. */
+const InsideLinkContext = createContext(false);
+
+/** A recognised name: a link where `refHref` resolves it with the session's context (`ChatRefsContext`) and what its message
+ *  says (`MessageReposContext`, Task C21), else its text only. No context (a chat with no session around it), no message, no
+ *  address, or a place inside a link keeps the name plain text, never a link that goes nowhere and never a link inside a link. */
+export function ChatRef({ mark, children }: { mark: Mark; children?: ReactNode }): ReactNode {
+  const ctx = useContext(ChatRefsContext);
+  const said = useContext(MessageReposContext);
+  const insideLink = useContext(InsideLinkContext);
+  const target = ctx === null || said === null || insideLink ? null : refHref(mark, ctx, said);
+  return target === null ? <>{children}</> : <ChatLink target={target}>{children}</ChatLink>;
+}
+
+/** An image, as a link that opens it full-size outside the app.
+ *
+ *  TWO MARKDOWN RENDERERS, ONE BLOCK: `a` reaches it when a link's href IS an
+ *  image, `img` when the markdown wrote an image directly, and the two had
+ *  the same two elements with the same four attributes each. It is two
+ *  elements, so the markup census's block half (floor: three) could not see
+ *  it, and the classes are one word each, so its literal half could not
+ *  either — the leaf half is what named it.
+ *
+ *  `src={href}` in both arms. The `img` renderer used to pass its raw `src`
+ *  while computing `href` for the anchor from the same value, so a non-string
+ *  `src` would have reached the `<img>` and not the `<a>`; react-markdown
+ *  types it `string | undefined`, and an `<img>` handed anything else was
+ *  already broken, so one value for both is the honest shape. The markup is
+ *  byte-identical to the two copies it replaced, which the W4 goldens pin. */
+function ImageLink({ href, alt }: { href: string | undefined; alt: string }): ReactNode {
+  const img = <img src={href} alt={alt} loading="lazy" className="msg-img" />;
+  // Under a link's anchor the image draws bare, so the link it sits in is the one anchor and one click (review 1597 F1).
+  if (useContext(InsideLinkContext)) return img;
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="msg-img-link" onClick={(e) => openExternal(e, href)}>
+      {img}
+    </a>
+  );
+}
+
+/** Open in the external browser (a bare `<a>` in a standalone PWA would try to
+ *  navigate the app itself), except a path the console routes, which moves within
+ *  the app; and render image URLs inline as tap-to-open images,
+ *  except a source `isRefusedChatImageSrc` refuses, which stays a plain link, or,
+ *  when the url transform left it empty, the image's alt text. A mark's span
+ *  draws its name as a link when the session's context resolves it, else its text. */
+export const CHAT_COMPONENTS: Components = {
+  ...SHARED_COMPONENTS,
+  a: function ChatAnchor({ href, children }) {
+    const insideLink = useContext(InsideLinkContext);
+    if (isImageUrl(href) && !isRefusedChatImageSrc(href)) {
+      const name = href.split('/').pop()?.split(/[?#]/)[0] || 'image';
+      return <ImageLink href={href} alt={name} />;
+    }
+    // A link the parser made inside a link's text (an angle-bracket or mailto autolink, a footnote reference) draws as its
+    // text, as an image there does, so the outer link is the one anchor and one click (review 1606 F1; desktop-polish Task
+    // C14, D-8110).
+    if (insideLink) return <>{children}</>;
+    // A path the console routes moves within the app (Task L); anything else, an unrouted or protocol-relative path included,
+    // keeps the external arm.
+    const inApp = href === undefined ? null : routedHref(href);
+    return (
+      <ChatLink target={inApp === null ? { href: href ?? '', external: true } : { href: inApp, external: false }}>
+        <InsideLinkContext value>{children}</InsideLinkContext>
+      </ChatLink>
+    );
+  },
+  img: function ChatImg({ src, alt }) {
+    const href = typeof src === 'string' ? src : undefined;
+    const insideLink = useContext(InsideLinkContext);
+    if (isRefusedChatImageSrc(href)) {
+      // react-markdown's url transform empties a source with an unsafe scheme (`data:`, `javascript:`, ...) before
+      // chat sees it, and `![x]()` has none: such an image shows its alt text as plain text, or nothing, never an
+      // empty link and never the source as written (review 408, F6). A blank destination (`![x](< >)`) never
+      // arrives blank: the parse percent-encodes it (`%20`), a path-relative URL that renders as the ordinary link.
+      if (!href) return alt ? <>{alt}</> : null;
+      // Under a link's anchor the source draws as text: never a link inside a link (review 1597 F1).
+      return insideLink ? <>{href}</> : <ChatLink target={{ href, external: true }}>{href}</ChatLink>;
+    }
+    return <ImageLink href={href} alt={alt ?? ''} />;
+  },
+  // An inline code span whose whole text is one recognised name links as that name and keeps its code look (R13, Task L);
+  // block code, a keystroke and any other span draw as the shared arm draws them.
+  code(props) {
+    const drawn = <SharedCode className={props.className}>{props.children}</SharedCode>;
+    const text = String(props.children ?? '');
+    const mark = isBlockCode(props.className, text) ? null : wholeMark(text);
+    return mark === null ? drawn : <ChatRef mark={mark}>{drawn}</ChatRef>;
+  },
+  // Chat's marks (chat reading Task M, D-8060): a span `remarkChatMarks` drew for a name carries its kind and id and no
+  // URL. Task L resolves it here through `ChatRef`, so an unresolved name is plain text. Any other span (a status label)
+  // renders as itself.
+  span({ node: _node, ...props }) {
+    if (Object.hasOwn(props, MARK_ATTR.kind)) {
+      const attrs = props as Record<string, unknown>;
+      const kind = attrs[MARK_ATTR.kind];
+      const id = attrs[MARK_ATTR.id];
+      if (typeof kind !== 'string' || !isMarkKind(kind) || typeof id !== 'string') return <>{props.children}</>;
+      // A name that says its repository (`owner/repo#12`, Task C21) carries it; any other carries none.
+      const repo = attrs[MARK_ATTR.repo];
+      const text = nodeText(props.children);
+      const mark: Mark = typeof repo === 'string' ? { kind, id, text, repo } : { kind, id, text };
+      return <ChatRef mark={mark}>{props.children}</ChatRef>;
+    }
+    return <span {...props} />;
+  },
+};
+
+/** The one-line note under a message chat shows as plain text: why it was not formatted. Exhaustive over every
+ *  outcome but `tree` (a new kind is a compile error here); the limits are interpolated from `markdownLimits.ts`. */
+export function chatPlainNote(o: Exclude<ParseOutcome, { kind: 'tree' }>): string {
+  switch (o.kind) {
+    case 'refused':
+      return o.why === 'container-depth'
+        ? `Shown as plain text: line ${o.line} nests ${o.value} levels deep (limit ${MD_MAX_CONTAINER_DEPTH}).`
+        : `Shown as plain text: line ${o.line} has a run of ${o.value} emphasis marks (limit ${MD_MAX_DELIMITER_RUN}).`;
+    case 'too-deep':
+      return `Shown as plain text: this message nests ${o.depth} levels deep (limit ${MD_MAX_TREE_DEPTH}).`;
+    case 'too-wide':
+      return `Shown as plain text: this message would draw ${o.elements} elements (limit ${DOCS_MAX_RENDER_ELEMENTS}).`;
+    case 'threw':
+      return `Shown as plain text: it could not be formatted (${o.error}).`;
+    case 'timeout':
+      return `Shown as plain text: formatting took longer than ${o.budgetMs / 1000} s.`;
+    case 'worker-unavailable':
+      return 'Shown as plain text: this browser cannot format long messages in the background.';
+    case 'worker-failed':
+      return `Shown as plain text: the formatter stopped (${o.error}).`;
+  }
+}
+
+/** A message shown as plain text: the text verbatim in `<pre className="msg-plain">`, then, when `note` is given,
+ *  `<p className="msg-plain-note">`. `note` absent = no note line. */
+export function MsgPlain({ text, note }: { text: string; note?: string }): ReactNode {
+  return (
+    <>
+      <pre className="msg-plain">{text}</pre>
+      {note !== undefined && <p className="msg-plain-note">{note}</p>}
+    </>
+  );
+}
+
+/** An upper bound on the cells the GFM tables in `src` could draw: (the most pipes on any one line + 1) times the
+ *  number of lines. It does not read GFM's table grammar, so no shape of table can slip past it. A table's columns
+ *  equal its delimiter row's cells, which are at most that row's pipe count + 1, so at most the largest pipe count
+ *  + 1; its rows are at most the lines of the text; and any number of tables share those lines, so their cells total
+ *  at most this product. Escaped pipes, pipes in code and in fences only add to the count, which is safe. Lines end
+ *  at `\r\n`, `\r` or `\n`, CommonMark's only line endings; a final line ending adds an empty line. One linear scan,
+ *  no regex, no recursion. The bound can be too high: a pipe-heavy line and many lines multiply past the cap even
+ *  where no table is that wide, and such a message is refused (shown as plain text) although it would have drawn
+ *  fewer elements. */
+export function countChatTableCells(src: string): number {
+  let lines = 1;
+  let maxPipes = 0;
+  let pipes = 0;
+  for (let i = 0; i < src.length; i += 1) {
+    const c = src.charCodeAt(i);
+    if (c === 0x7c /* | */) {
+      pipes += 1;
+    } else if (c === 0x0a || c === 0x0d) {
+      if (c === 0x0d && src.charCodeAt(i + 1) === 0x0a) i += 1;
+      lines += 1;
+      if (pipes > maxPipes) maxPipes = pipes;
+      pipes = 0;
+    }
+  }
+  if (pipes > maxPipes) maxPipes = pipes;
+  return (maxPipes + 1) * lines;
+}
+
+/** Chat's remark plugins: GFM, the alert callouts, then chat's marks (Task M, D-8060), as the parse worker's chat
+ *  profile lists them. One constant, so every render hands react-markdown the same list. */
+const CHAT_REMARK_PLUGINS: NonNullable<MarkdownOptions['remarkPlugins']> = [remarkGfm, remarkAlerts, remarkChatMarks];
+
+/** At most `CHAT_SYNC_MAX_BYTES`: the pre-scan, then `countChatTableCells`'s upper bound on the cells its tables could
+ *  draw, then react-markdown on the main thread, exactly as before. The sync path has no element cap of its own (the
+ *  parse's cap is the worker's), and a table's body lines pad to its width, so a 4 KiB message can draw hundreds of
+ *  thousands of cells; one whose bound is above `DOCS_MAX_RENDER_ELEMENTS` shows as plain text with the too-wide
+ *  note, which reports the bound as its element count. */
+function SyncChatMarkdown({ text }: { text: string }): ReactNode {
+  const scan = prescanMarkdown(text);
+  if (!scan.ok) {
+    return <MsgPlain text={text} note={chatPlainNote({ kind: 'refused', why: scan.why, line: scan.line, value: scan.value })} />;
+  }
+  const cells = countChatTableCells(text);
+  if (cells > DOCS_MAX_RENDER_ELEMENTS) {
+    return <MsgPlain text={text} note={chatPlainNote({ kind: 'too-wide', elements: cells })} />;
+  }
+  return <Markdown remarkPlugins={CHAT_REMARK_PLUGINS} components={CHAT_COMPONENTS}>{text}</Markdown>;
+}
+
+/** How a tree from the worker renders in chat: chat's components and react-markdown's own url transform, so it is
+ *  byte-identical to the synchronous path (M4.P10). */
+const CHAT_RENDER: RenderHastOptions = { components: CHAT_COMPONENTS, urlTransform: defaultUrlTransform };
+
+/** After each commit of the calling component, evicts the keys no mounted block references, so a message's store holds
+ *  its current blocks only (section 4.10 "Chat"). No dependency list: it runs after every commit, after the effects of
+ *  the blocks below it. `ChatMarkdown` calls it for its own commits; the async path's component calls it too, because
+ *  its new tree commits there, after `ChatMarkdown`'s own commit. */
+export function useEvictAfterCommit(store: HighlightStore | null): void {
+  useEffect(() => { store?.evictUnreferenced(); });
+}
+
+/** Over `CHAT_SYNC_MAX_BYTES`: the worker. While the current text parses, the newest tree that settled (so a
+ *  streaming message advances with each settle); else the settled tree for the current text; else, after an outcome
+ *  that is not a tree for the current text, plain text with its note; else (nothing settled yet, or no tree yet
+ *  while the current text parses) plain text alone. No Format anyway. */
+function AsyncChatMarkdown({ text, parser }: { text: string; parser: MarkdownParser }): ReactNode {
+  const { outcome, lastGood, pending } = useParsedMarkdown(text, parser, { profile: 'chat', budgetMs: CHAT_PARSE_BUDGET_MS });
+  useEvictAfterCommit(useContext(PreHighlightContext));
+  if (pending && lastGood !== null) return renderHast(lastGood, CHAT_RENDER);
+  if (outcome?.kind === 'tree') return renderHast(outcome.tree, CHAT_RENDER);
+  if (outcome !== null && !pending) return <MsgPlain text={text} note={chatPlainNote(outcome)} />;
+  return <MsgPlain text={text} />;
+}
+
+/** Chat's parser: `chatRunner.parse`, read at call time, so a test spies it with `vi.spyOn(chatRunner, 'parse')`. */
+const chatParse: MarkdownParser = (src, opts) => chatRunner.parse(src, opts);
+
+/** One chat message body (an assistant turn, an opened compaction recap) as Markdown: GFM, then the alert
+ *  callouts, through chat's components. A text of at most `CHAT_SYNC_MAX_BYTES` UTF-8 bytes renders on the main
+ *  thread behind the pre-scan; a longer one parses through `parser` (absent = `chatRunner`'s), with a
+ *  `CHAT_PARSE_BUDGET_MS` budget. The two paths are two components, so crossing the threshold remounts. The
+ *  streaming caret is the caller's sibling after it. Memoised on its props (desktop polish Task C7): the same text
+ *  through the same parser renders nothing again. It holds one highlight store for the message (W5h-a). */
+export const ChatMarkdown = memo(function ChatMarkdown({ text, parser = chatParse }: { text: string; parser?: MarkdownParser }): ReactNode {
+  const highlighters = useContext(HighlighterContext);
+  // One highlight store per message, on chat's own highlighter, for both paths (section 4.12 "Chat highlighting").
+  const store = useChatHighlightStore();
+  // Chat prewarms its highlighter on its first message's mount (section 4.10's singletons; refinement (p)).
+  useEffect(() => { highlighters.chat.prewarm(); }, [highlighters.chat]);
+  useEvictAfterCommit(store);
+  // What this message says about repositories, for its PR and commit names (Task C21): read once per text, over the whole text.
+  const said = useMemo(() => messageRepos(text), [text]);
+  return (
+    <PreHighlightContext value={store}>
+      <MessageReposContext value={said}>
+        {utf8ByteLength(text) <= CHAT_SYNC_MAX_BYTES
+          ? <SyncChatMarkdown text={text} />
+          : <AsyncChatMarkdown text={text} parser={parser} />}
+      </MessageReposContext>
+    </PreHighlightContext>
+  );
+});

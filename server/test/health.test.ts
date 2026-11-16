@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildServer } from '../src/server.js';
 import { testDeps } from './helpers.js';
+import { SERVER_CAPS } from '../../shared/api.js';
 
 describe('health', () => {
   it('GET /health returns ok and the build stamp (null when unstamped)', async () => {
@@ -9,7 +10,7 @@ describe('health', () => {
     expect(res.statusCode).toBe(200);
     // testDeps() carries no stamp: null is the honest answer for a dev boot,
     // and the deploy's sha assertion greps for the REAL stamp in production.
-    expect(res.json()).toEqual({ ok: true, build: null });
+    expect(res.json()).toEqual({ ok: true, build: null, caps: SERVER_CAPS });
     await app.close();
   });
 
@@ -24,6 +25,7 @@ describe('health', () => {
     expect(res.json()).toEqual({
       ok: true,
       build: { sha: 'b'.repeat(40), ref: 'main', builtAt: '2026-08-11T11:00:00Z', dirty: false },
+      caps: SERVER_CAPS,
     });
     await app.close();
   });
@@ -38,7 +40,24 @@ describe('health', () => {
     };
     const app = await buildServer({ ...testDeps(), build: stamp });
     const res = await app.inject({ method: 'GET', url: '/health' });
-    expect(res.json()).toEqual({ ok: true, build: stamp, version: 'v1.2.3' });
+    expect(res.json()).toEqual({ ok: true, build: stamp, version: 'v1.2.3', caps: SERVER_CAPS });
+    await app.close();
+  });
+
+  // D-5232's mechanism (plan 2026-10-16, Task 9b; spec §6.1): the server's capability words ride additively, on the
+  // auth-exempt route the fleet box's `ccd-update-sync` asks with no token. `ok`, `build` and `version` are unchanged:
+  // deploy.sh's gate greps the build's `"sha"` and the update health gate reads `.version`, so neither sees `caps`.
+  it('GET /health carries `caps`, the server\'s capability words, beside an unchanged ok/build/version', async () => {
+    const stamp = { sha: 'd'.repeat(40), ref: 'main', builtAt: '2026-10-16T00:00:00Z', dirty: false, version: 'v9.9.9' };
+    const app = await buildServer({ ...testDeps(), build: stamp });
+    const res = await app.inject({ method: 'GET', url: '/health' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body['caps']).toEqual([...SERVER_CAPS]);
+    expect(body['caps']).toContain('dispatch-live-gate-v1');
+    expect(body['ok']).toBe(true);
+    expect(body['version']).toBe('v9.9.9');
+    expect(body['build']).toEqual(stamp);
     await app.close();
   });
 });

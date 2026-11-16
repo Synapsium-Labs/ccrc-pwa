@@ -1,0 +1,121 @@
+{
+  "name": "read-comments",
+  "documentSource": "code",
+  "document": "query Comments($id: String!, $first: Int!, $after: String) { issue(id: $id) { comments(first: $first, after: $after) { nodes { id body createdAt user { name } } pageInfo { hasNextPage endCursor } } } }",
+  "variables": {
+    "id": "AAA-7",
+    "first": 25,
+    "after": null
+  },
+  "requestBody": "{\"query\":\"query Comments($id: String!, $first: Int!, $after: String) { issue(id: $id) { comments(first: $first, after: $after) { nodes { id body createdAt user { name } } pageInfo { hasNextPage endCursor } } } }\",\"variables\":{\"id\":\"AAA-7\",\"first\":25,\"after\":null}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631383936,
+  "receivedAtMs": 1793631384255,
+  "sentAt": "2026-11-02T14:56:23.936+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:24 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "329"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "6"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999994"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634984610"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634984610"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "issue": {
+        "comments": {
+          "nodes": [
+            {
+              "id": "00000000-0007-4000-8000-000000000001",
+              "body": "Comment written by the FX fixture capture.\n\n— written by a ccrc fleet session",
+              "createdAt": "2026-11-02T14:56:22.781Z",
+              "user": {
+                "name": "User A"
+              }
+            }
+          ],
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": "00000000-0007-4000-8000-000000000001"
+          }
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"issue\":{\"comments\":{\"nodes\":[{\"id\":\"00000000-0007-4000-8000-000000000001\",\"body\":\"Comment written by the FX fixture capture.\\n\\n— written by a ccrc fleet session\",\"createdAt\":\"2026-11-02T14:56:22.781Z\",\"user\":{\"name\":\"User A\"}}],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":\"00000000-0007-4000-8000-000000000001\"}}}}}\n"
+}

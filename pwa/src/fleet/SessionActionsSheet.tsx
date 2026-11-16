@@ -14,35 +14,25 @@
 // account picker, its limit gauges and its consequence confirm.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { substrateFault, type FleetSession } from '../../../shared/api';
-import { QuickConfirm } from '../components/QuickConfirm';
-import { Sheet } from '../components/Sheet';
-import { toast } from '../components/Toast';
-import { api, ApiError, apiErrorText, HOLD_EMPTY_REASON_TEXT } from '../lib/api';
+import { isArchivedRow, READER_MIN_COLS, substrateFault, type FleetSession, type StopAnswer, type StopBody } from '../../../shared/api';
+import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
+import { api, failedTo } from '../lib/api';
 
-/**
- * D-2731. The hold route is the one caller here whose refusal carries a sentence
- * the operator can ACT on: `oversize` arrives with `limit` and a `detail` saying
- * the reason is written verbatim and refused rather than shortened.
- * `apiErrorText` has no entry for `oversize` — and must not grow one, since the
- * kickoff translator already owns that slug with a different sentence — so
- * without this reader the toast read `Couldn't hold — oversize`, which narrows a
- * distinction the server took care to send. Surface-local for exactly that
- * reason: the same slug means two things at two seams.
- */
-const holdErrorText = (err: unknown): string => {
-  const body: unknown = err instanceof ApiError ? err.body : null;
-  if (body !== null && typeof body === 'object') {
-    const { error, detail } = body as { error?: unknown; detail?: unknown };
-    if (error === 'oversize' && typeof detail === 'string') return detail;
-  }
-  return apiErrorText(err);
-};
 import { accountLabel } from '../lib/accounts';
+import { navigate } from '../lib/router';
+import { sessionDocsHref } from '../docs/docsLinks';
 import { sessionLabel } from './sessionLabel';
+import { narrowSinceWidened } from './spawnWords';
+import { forgetOffered, paneGone } from './presence';
+import { hibernatedSince } from './hibernated';
+import { substrateFaultTitle } from './substrateWords';
 import { SwapSheet } from './SwapSheet';
-import { ArchiveConflictSheet, runOpenRuns, type ArchiveConflictRun } from './ArchiveConflictSheet';
+import { HoldControl } from './HoldControl';
+import { RenameSheet } from './RenameSheet';
+import { ArchiveSheet, restoreSession } from './ArchiveSheet';
+import { isPutAway, restoreReachesEnsure } from './archivePutAway';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { useEnsure } from '../session/useEnsure';
 import './fleet.css';
 
 /** Release's consequence sentence — what releasing the hold actually changes,
@@ -79,7 +69,7 @@ export function SessionActionsSheet({
   archive = api.archive,
 }: {
   /** Injectable for tests, the same default-to-`api.archive` shape `PrSheet`
-   *  and `ArchiveConflictSheet` use — three components, one idiom. */
+   *  and `ArchiveSheet` use — three components, one idiom. */
   archive?: typeof api.archive;
   session: FleetSession | null;
   open: boolean;
@@ -95,23 +85,15 @@ export function SessionActionsSheet({
   // Every hook runs BEFORE the null guard below: `session` goes null whenever
   // the sheet closes, and a conditional hook would throw on that render.
   const [swapOpen, setSwapOpen] = useState(false);
-  const [restarting, setRestarting] = useState(false);
+  const { busy: restarting, ensure: ensureNow } = useEnsure();
   const [archBusy, setArchBusy] = useState(false);
-  /** `undefined` = no refusal to show; otherwise the runs the server named
-   *  (possibly `[]` — a run-open whose runs we could not read, which the sheet
-   *  renders without inventing an id). Three states, because collapsing the
-   *  empty case into "no conflict" is the defect the sheet exists to close. */
-  const [conflict, setConflict] = useState<readonly ArchiveConflictRun[] | undefined>(undefined);
-  // Hold's reason composer — open/closed, the typed text, and a refusal the
-  // empty-reason check leaves behind. `holdBusy` is separate from `archBusy`:
-  // the two actions are mutually exclusive on screen (never-both, see the
-  // buttons below) but nothing enforces that FOR the busy flags themselves,
-  // and sharing one would freeze Hold's own disabled state on an unrelated
-  // archive in flight.
-  const [holdOpen, setHoldOpen] = useState(false);
-  const [holdReason, setHoldReason] = useState('');
-  const [holdError, setHoldError] = useState<string | null>(null);
-  const [holdBusy, setHoldBusy] = useState(false);
+  /** The one Archive's sheet (workspace lifecycle §5.2) is open over this one. It hosts every refusal the archive
+   *  door can answer — the `run-open` claim this sheet used to hold as `conflict` among them. */
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  /** Rename's sheet (named workspaces S9) is open over this one: the title only, the slug stays. */
+  const [renameOpen, setRenameOpen] = useState(false);
+  // Hold's composer is `HoldControl`'s own — state, send and refusal reader
+  // together, including the reset this effect used to carry for it.
   // Release's consequence confirm — a QuickConfirm sibling, same shape as
   // SwapSheet's `target`, open only once Release names what it does. No busy
   // flag: like SwapSheet's `move()`, the confirm tap already WAS the
@@ -150,13 +132,13 @@ export function SessionActionsSheet({
   // that THEIR workspace is claimed by a run that never named it, and offers
   // "Archive anyway" over it. Unconditional, like the rest: the retarget
   // happens with `open` staying true, so a reset gated on close never fires.
+  // Workspace lifecycle §5.2 moved that claim into `ArchiveSheet`, which resets
+  // itself on the same two changes; `archiveOpen` takes its place here.
   useEffect(() => {
-    setHoldOpen(false);
-    setHoldReason('');
-    setHoldError(null);
     setReleaseConfirmOpen(false);
     setForgetConfirmOpen(false);
-    setConflict(undefined);
+    setArchiveOpen(false);
+    setRenameOpen(false);
   }, [open, session?.id]);
 
   if (!session) return null;
@@ -171,80 +153,40 @@ export function SessionActionsSheet({
   // `faultTitle` is THE chip's own string (`SessionLine`'s `.sess-substrate`),
   // never a second copy of the reason.
   const fault = substrateFault(session);
-  const faultTitle = fault !== null ? `tmux unreachable — ${fault.text}` : undefined;
+  const faultTitle = substrateFaultTitle(session);
 
-  const restart = async (): Promise<void> => {
-    if (restarting) return;
-    setRestarting(true);
-    try {
-      await api.ensure(session.id);
-      onClose();
-    } catch (err) {
-      // apiErrorText, never err.message: the runCcd routes fail as
-      // 502 { ok, stderr } with no `error` key, so err.message yields the
-      // generic "request failed (502)" and ccd's refusal never reaches anyone.
-      toast(`Couldn't restart — ${apiErrorText(err)}`, 'error');
-    } finally {
-      setRestarting(false);
-    }
-  };
+  // apiErrorText (through failedTo), never err.message: the runCcd routes fail as
+  // 502 { ok, stderr } with no `error` key, so err.message yields the
+  // generic "request failed (502)" and ccd's refusal never reaches anyone.
+  const restart = (): Promise<void> =>
+    ensureNow(session.id, (err) => failedTo(hibernatedSince(session) !== null ? 'wake' : 'restart', err), onClose);
 
-  const archiveNow = async (): Promise<void> => {
-    if (archBusy) return;
-    setArchBusy(true);
-    try {
-      await archive(session.id);
-      onClose();
-    } catch (err) {
-      // `409 run-open` is not a failure the operator can act on from a toast:
-      // the refusal names WHICH run, and naming it is the whole information.
-      // Everything else keeps the toast it always had.
-      const runs = runOpenRuns(err);
-      if (runs !== null) setConflict(runs);
-      else toast(`Couldn't archive — ${apiErrorText(err)}`, 'error');
-    } finally {
-      setArchBusy(false);
-    }
-  };
+  // Workspace lifecycle §5.2: every session offers Archive, and every session already put away offers Restore.
+  const putAway = isPutAway(session);
 
   const restoreNow = async (): Promise<void> => {
     if (archBusy) return;
     setArchBusy(true);
     try {
-      await api.restore(session.id);
+      await restoreSession(session);
       onClose();
     } catch (err) {
-      toast(`Couldn't restore — ${apiErrorText(err)}`, 'error');
+      toast(failedTo('restore', err), 'error');
     } finally {
       setArchBusy(false);
     }
   };
 
-  // Empty reason refuses CLIENT-SIDE, before `api.hold` is ever called —
-  // ccd's own sentence (`HOLD_EMPTY_REASON_TEXT`), inline in the composer
-  // rather than a toast, so it reads next to the box that needs fixing
-  // instead of a separate surface the operator has to correlate back to it.
-  // The server re-checks the identical rule (a client is not where trust
-  // ends), so this is a UX shortcut, not the enforcement.
-  const confirmHold = async (): Promise<void> => {
-    const reason = holdReason.trim();
-    if (reason === '') {
-      setHoldError(HOLD_EMPTY_REASON_TEXT);
-      return;
-    }
-    if (holdBusy) return;
-    setHoldBusy(true);
-    setHoldError(null);
-    try {
-      await api.hold(session.id, reason);
-      setHoldOpen(false);
-      setHoldReason('');
-      onClose();
-    } catch (err) {
-      toast(`Couldn't hold — ${holdErrorText(err)}`, 'error');
-    } finally {
-      setHoldBusy(false);
-    }
+  // "Stop only" — the one place it survives (spec §5.2): offered by `ArchiveSheet` after an archive refusal the
+  // operator cannot fix from the phone, so a live session is never left without a way to put it down. The same
+  // `POST /api/sessions/:id/stop`. D-8199: the stop door asks the archive door's question of a session that claims open
+  // runs, so `ArchiveSheet` sends it, awaits it and answers its refusal words inside the sheet (the question, then the
+  // stop repeated with the choice); it also re-reads the substrate gate (spec §4) at fire time. A stop that landed
+  // closes this sheet too, as it always did.
+  const stopOnly = async (id: string, body?: StopBody): Promise<StopAnswer | null> => {
+    const answer = body === undefined ? await api.stop(id) : await api.stop(id, body);
+    onClose();
+    return answer;
   };
 
   // Fire-and-forget, same shape as SwapSheet's `move()`: QuickConfirm's own
@@ -256,7 +198,7 @@ export function SessionActionsSheet({
       try {
         await api.release(session.id);
       } catch (err) {
-        toast(`Couldn't release — ${apiErrorText(err)}`, 'error');
+        toast(failedTo('release', err), 'error');
       }
     })();
     onClose();
@@ -273,7 +215,7 @@ export function SessionActionsSheet({
       try {
         await api.forget(session.id);
       } catch (err) {
-        toast(`Couldn't forget — ${apiErrorText(err)}`, 'error');
+        toast(failedTo('forget', err), 'error');
       }
     })();
     onClose();
@@ -282,21 +224,32 @@ export function SessionActionsSheet({
   const five = session.limits?.five ?? null;
   const seven = session.limits?.seven ?? null;
   const critical =
-    session.status === 'dead' ? null
+    paneGone(session) ? null
     : five !== null && five > CRITICAL ? '5h'
     : seven !== null && seven > CRITICAL ? '7d'
     : null;
 
   const label = sessionLabel(session);
+  // The session's link into Docs (docs design 4.8), from the one builder the session menu also calls.
+  const docsLink = sessionDocsHref(session);
+  // D-5242: a row `ccd hibernate` put to sleep. The top button is the same `/ensure` (it WAKES it), Forget is not offered
+  // (`ccd forget` refuses a sleeper, D-5423: wake it or stop it first), and the dead-pane notes do not speak of it.
+  const asleep = hibernatedSince(session) !== null;
 
   return (
     <>
       <Sheet open={open} onClose={onClose} title={label} eyebrow={session.project}>
         <div className="sess-sheet">
-          <button type="button" className="btn-ghost" onClick={() => void restart()}
+          <Button variant="ghost" onClick={() => void restart()}
                   disabled={restarting || fault !== null} title={faultTitle}>
-            {restarting ? 'Restarting…' : 'Restart session'}
-          </button>
+            {asleep ? (restarting ? 'Waking…' : 'Wake session') : restarting ? 'Restarting…' : 'Restart session'}
+          </Button>
+          {asleep && (
+            <p className="sess-sheet-note">
+              It is asleep: hibernated after a long idle. Wake session resumes the same conversation; opening it, mail
+              or a dispatch wakes it too.
+            </p>
+          )}
 
           {/* §4.4: "what would revive it" is a sentence the row can print and
               a button the operator already has. The button above posts
@@ -364,6 +317,26 @@ export function SessionActionsSheet({
               from the transcript, not from that pane.
             </p>
           )}
+          {/* rc 6 answers only for a pane that was LIVE at spawn. While it still
+              is, Restart session (ensure) finds it alive and spawns nothing, so
+              the remedy is widening it. Once it has died, Restart session IS the
+              respawn — the second arm. The width is the constant ccd stands
+              down at. */}
+          {session.spawnState === 'narrow' && !paneGone(session) && !narrowSinceWidened(session) && (
+            <p className="sess-sheet-note">
+              {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, so ccd answered none of its startup prompts, skipped its /effort and turn re-drive, and keeps auto-swap and auto-compact off while it stays that narrow. Opening and closing this session's terminal drawer widens it; then check the terminal for an unanswered startup prompt. A current ccd pins every spawn 220x50, so the usual cause is a terminal attached straight to this session; it can also be a failed pin or a width ccd could not read, and a marker left by an older ccd may come from a narrow terminal on any session.`}
+            </p>
+          )}
+          {narrowSinceWidened(session) && !paneGone(session) && (
+            <p className="sess-sheet-note">
+              {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, so ccd answered none of its startup prompts and skipped its /effort and its re-drive of any interrupted turn. The pane has since been widened and its prompt is up, so auto-swap and auto-compact are back on — if this session was mid-turn when it respawned, it may still be waiting for a nudge. This marker stays until the session next spawns.`}
+            </p>
+          )}
+          {session.spawnState === 'narrow' && paneGone(session) && !asleep && (
+            <p className="sess-sheet-note">
+              {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, and that pane is gone. Restart session builds a new one, which a current ccd pins 220x50.`}
+            </p>
+          )}
 
           {/* `unclaimed` and `orphan` have OPPOSITE repairs and must not share a
               sentence: `orphan` means nothing is bringing this back (fix: a
@@ -378,22 +351,52 @@ export function SessionActionsSheet({
             </p>
           )}
 
-          <button type="button" className="btn-ghost" onClick={() => setSwapOpen(true)}
+          {/* Docs for this session (docs design 4.8): the row right after Restart and its notes. It closes the sheet,
+              then navigates to the href `sessionDocsHref` built; no row when the project fails the project grammar. */}
+          {docsLink !== null && (
+            <Button variant="ghost" className="docs-session-row"
+                    onClick={() => { onClose(); navigate(docsLink.href); }}>
+              {docsLink.label}
+            </Button>
+          )}
+
+          <Button variant="ghost" onClick={() => setSwapOpen(true)}
                   disabled={fault !== null} title={faultTitle}>
             Swap account
-          </button>
+          </Button>
 
-          {session.workspace !== null && session.archivedAt === null && (
-            <button type="button" className="btn-ghost" disabled={archBusy || fault !== null}
-                    title={faultTitle} onClick={() => void archiveNow()}>
-              {archBusy ? 'Archiving…' : 'Archive workspace'}
-            </button>
+          {/* Rename (named workspaces S9): a WORKSPACE's title, never its slug, and never offered on a main checkout,
+              whose name is its project. Offered on every workspace row, auto-named ones included, and on an archived
+              one: ccd's `ws-title` writes two registry fields and touches no pane. The PWA cannot see what `ccd caps`
+              lists, so a box whose ccd predates the verb answers in the Rename sheet itself. */}
+          {session.workspace !== null && (
+            <Button variant="ghost" onClick={() => setRenameOpen(true)}>
+              Rename
+            </Button>
           )}
-          {session.workspace !== null && session.archivedAt !== null && (
-            <button type="button" className="btn-ghost" disabled={archBusy}
+
+          {/* Every session offers Archive (spec §5.2) — a workspace and a main checkout alike; every row the
+              Archived fold holds offers Restore instead. Never both.
+
+              MERGE NOTE: main rewrote this block (the `putAway` fold, the
+              `restoreReachesEnsure` guard on the title, Archive opening a
+              confirm instead of acting). That LOGIC wins wholesale — the
+              design-system branch's only claim on these lines was the
+              primitive swap, so main's conditions are re-expressed through
+              `<Button variant="ghost">` rather than re-argued. */}
+          {!putAway && (
+            <Button variant="ghost" disabled={fault !== null}
+                    title={faultTitle} onClick={() => setArchiveOpen(true)}>
+              Archive
+            </Button>
+          )}
+          {putAway && (
+            <Button variant="ghost"
+                    disabled={archBusy || (fault !== null && restoreReachesEnsure(session))}
+                    title={restoreReachesEnsure(session) ? faultTitle : undefined}
                     onClick={() => void restoreNow()}>
-              {archBusy ? 'Restoring…' : 'Restore workspace'}
-            </button>
+              {archBusy ? 'Restoring…' : 'Restore'}
+            </Button>
           )}
 
           {/* Hold/Release — workspace-only and archived refuses too, the same
@@ -410,52 +413,16 @@ export function SessionActionsSheet({
               exclusive renders (not a stacked sheet): with only ONE control
               ever on screen for this row, "tap Hold, submit empty" needs no
               disambiguation between two same-named buttons. */}
-          {session.workspace !== null && session.archivedAt === null
-            && session.held === null && !holdOpen && (
-            <button type="button" className="btn-ghost"
-                    onClick={() => { setHoldOpen(true); setHoldError(null); }}>
-              Hold
-            </button>
-          )}
-          {session.workspace !== null && session.archivedAt === null
-            && session.held === null && holdOpen && (
-            <div className="sess-hold-form">
-              <input
-                type="text"
-                className="sess-hold-input"
-                placeholder="program:name wave:2/4"
-                aria-label="Hold reason"
-                value={holdReason}
-                /* The refusal clears on the FIRST keystroke, not on the next
-                   Confirm: it was only ever cleared inside `confirmHold`
-                   AFTER the non-empty check passed, so "empty reason — say
-                   which program holds this" sat under a box with a perfectly
-                   good reason typed into it until the operator submitted
-                   again. An error that outlives its cause reads as a refusal
-                   of what is on screen now. */
-                onChange={(e) => { setHoldReason(e.target.value); setHoldError(null); }}
-                autoFocus
-              />
-              {/* Client-side refusal, ccd's own sentence — see `confirmHold`. */}
-              {holdError !== null && <p className="sess-hold-error">{holdError}</p>}
-              <div className="sess-hold-actions">
-                <button type="button" className="btn-primary" disabled={holdBusy}
-                        onClick={() => void confirmHold()}>
-                  {holdBusy ? 'Holding…' : 'Confirm'}
-                </button>
-                <button type="button" className="btn-ghost"
-                        onClick={() => { setHoldOpen(false); setHoldReason(''); setHoldError(null); }}>
-                  Cancel
-                </button>
-              </div>
-            </div>
+          {session.workspace !== null && !isArchivedRow(session)
+            && session.held === null && (
+            <HoldControl session={session} sheetOpen={open} onHeld={onClose} />
           )}
 
           {session.held !== null && (
             <>
-              <button type="button" className="btn-ghost" onClick={() => setReleaseConfirmOpen(true)}>
+              <Button variant="ghost" onClick={() => setReleaseConfirmOpen(true)}>
                 Release
-              </button>
+              </Button>
               {/* The reason is already the fleet chip's whole job (SessionLine's
                   `.sess-held`) — repeated here because the actions sheet is
                   where Release's consequence lives, and the reason belongs
@@ -468,12 +435,12 @@ export function SessionActionsSheet({
               carry. Archived only: archive is the staging step, and the audit
               this opens refuses `not-archived` anyway — offering it earlier
               would just be a button that always refuses. */}
-          {session.workspace !== null && session.archivedAt !== null && (
-            <button type="button" className="btn-ghost sess-sheet-remove"
+          {session.workspace !== null && isArchivedRow(session) && (
+            <Button variant="ghost" className="sess-sheet-remove"
                     disabled={fault !== null} title={faultTitle}
                     onClick={() => onReap(session.id)}>
               Clean up workspace…
-            </button>
+            </Button>
           )}
 
           {/* The end-of-life a non-workspace session never had: stop leaves
@@ -482,16 +449,22 @@ export function SessionActionsSheet({
               non-workspace, strictly: a live session's removal is a kill and
               goes through Stop first; a workspace's removal destroys git
               state and goes through the audited sheet above. ccd re-proves
-              both gates (and the hold) on the box. */}
-          {session.workspace === null && session.status === 'dead' && (
-            <button type="button" className="btn-ghost sess-sheet-remove"
+              both gates (and the hold) on the box. Dead is the SERVER's
+              word (`presenceOf`, OA-C15 (a), D-7181), and a doubted row
+              (`unknown`) hides the door; a sleeper (the server's `asleep`,
+              and any row `hibernatedSince` reads asleep) offers Wake
+              instead (ccd forget refuses it, D-5423). The rule is
+              `forgetOffered`'s, written once (Task C15, D-8111): the
+              held-rows list offers its Forget on the same check. */}
+          {forgetOffered(session) && (
+            <Button variant="ghost" className="sess-sheet-remove"
                     disabled={fault !== null} title={faultTitle}
                     onClick={() => setForgetConfirmOpen(true)}>
               Forget session…
-            </button>
+            </Button>
           )}
 
-          {session.status !== 'dead' && session.wrapper !== session.home && (
+          {!paneGone(session) && session.wrapper !== session.home && (
             <p className="sess-sheet-note">
               Pinned to {accountLabel(roster, session.home)}, running on{' '}
               {accountLabel(roster, session.wrapper)} — moved when its account filled up.
@@ -507,6 +480,15 @@ export function SessionActionsSheet({
           )}
         </div>
       </Sheet>
+
+      {session.workspace !== null && (
+        <RenameSheet
+          session={session}
+          open={open && renameOpen}
+          onClose={() => setRenameOpen(false)}
+          onRenamed={onClose}
+        />
+      )}
 
       <SwapSheet
         session={session}
@@ -541,16 +523,18 @@ export function SessionActionsSheet({
         onConfirm={forgetNow}
       />
 
-      {/* The refusal, as a surface the operator can answer — the SAME sheet
-          and the SAME reader (`runOpenRuns`) PrSheet's archive door uses, so
-          the two doors cannot drift onto two sentences. `onDone` closes this
-          sheet too: the archive succeeded, so there is nothing left here to
-          act on. */}
-      <ArchiveConflictSheet
-        sessionId={conflict === undefined ? null : session.id}
-        runs={conflict !== undefined && conflict.length > 0 ? conflict : null}
-        onClose={() => setConflict(undefined)}
-        onDone={() => { setConflict(undefined); onClose(); }}
+      {/* The one Archive (workspace lifecycle §5.2): the confirm by case and every refusal the door answers, a run's
+          claim on the workspace included, answered INSIDE it. A sibling of `<Sheet open={open}>`, so it is gated on `open`
+          too: closing the door drops whatever it was asking. Archived → this sheet closes as well, as it always did.
+          `onStopOnly` is passed HERE and nowhere else. */}
+      <ArchiveSheet
+        session={session}
+        open={open && archiveOpen}
+        onClose={() => setArchiveOpen(false)}
+        onArchived={onClose}
+        onStopOnly={stopOnly}
+        archive={archive}
+        fleet={fleet}
       />
     </>
   );

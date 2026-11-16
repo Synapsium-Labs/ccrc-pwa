@@ -1,0 +1,9 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_fx1","object":"response","status":"in_progress","output":[]},"sequence_number":0}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_fx0","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Text","annotations":[]}]},"sequence_number":1}
+
+event: response.incomplete
+data: {"type":"response.incomplete","response":{"id":"resp_fx1","object":"response","status":"incomplete","incomplete_details":{"reason":"something_else"},"output":[{"type":"message","id":"msg_fx0","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Text","annotations":[]}]}],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}},"sequence_number":2}
+

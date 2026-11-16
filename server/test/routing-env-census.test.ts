@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (rel: string): string => readFileSync(path.join(root, rel), 'utf8');
@@ -29,7 +30,8 @@ const CCD_SHIPPED = readdirSync(CCD_ROOT, { withFileTypes: true })
   .map((e) => e.name)
   .filter((n) => n !== 'ccrc-doctor-checks')
   .filter((n) => n.endsWith('.sh') || readFileSync(path.join(CCD_ROOT, n), 'utf8').startsWith('#!'))
-  .map((n) => path.join('ccd', n));
+  .map((n) => path.join('ccd', n))
+  .concat(readdirSync(path.join(CCD_ROOT, 'lib')).filter((n) => n.endsWith('.sh')).map((n) => path.join('ccd', 'lib', n)));   // ccd's library, loaded at its foot (D-6913)
 
 describe('routing env census (routing spec 2026-09-14 §5.2, §8)', () => {
   it('CLAUDE_CODE_EFFORT_LEVEL is set NOWHERE — the only shipped mention is the doctor check that refuses it', () => {
@@ -55,7 +57,7 @@ describe('routing env census (routing spec 2026-09-14 §5.2, §8)', () => {
     expect(CCD_SHIPPED).not.toContain('ccd/ccrc-doctor-checks');
   });
   it('ccd composes CLAUDE_CODE_SUBAGENT_MODEL in exactly one place, from the routing record', () => {
-    const ccd = read('ccd/ccd');
+    const ccd = ccdSource();
     expect(count(ccd, 'CLAUDE_CODE_SUBAGENT_MODEL=')).toBe(1);
     expect(ccd).toContain('routeenv="CLAUDE_CODE_SUBAGENT_MODEL=$rsub"');
   });

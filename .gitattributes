@@ -1,0 +1,2 @@
+# The codex bridge replay corpus is compared byte for byte with what make_streams.py writes: no eol conversion (D-6837).
+server/test/fixtures/codexbridge/streams/* -text

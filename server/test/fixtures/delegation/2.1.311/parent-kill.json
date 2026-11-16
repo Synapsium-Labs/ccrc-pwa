@@ -1,0 +1,204 @@
+{
+ "v": 1,
+ "version": "2.1.311",
+ "scenario": "parent-kill",
+ "labels": [
+  "main-call",
+  "sub-hang"
+ ],
+ "notes": [],
+ "events": [
+  {
+   "seq": 1,
+   "dtMs": 0,
+   "event": "SessionStart",
+   "envSid": "fcd23134-3585-4275-9431-32576c55673b",
+   "payload": {
+    "session_id": "fcd23134-3585-4275-9431-32576c55673b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/fcd23134-3585-4275-9431-32576c55673b.jsonl",
+    "cwd": "/rig/repo",
+    "hook_event_name": "SessionStart",
+    "source": "startup",
+    "model": "claude-opus-5-5"
+   }
+  },
+  {
+   "seq": 2,
+   "dtMs": 245,
+   "event": "UserPromptSubmit",
+   "envSid": "fcd23134-3585-4275-9431-32576c55673b",
+   "payload": {
+    "session_id": "fcd23134-3585-4275-9431-32576c55673b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/fcd23134-3585-4275-9431-32576c55673b.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "31d04807-40e6-4ee6-b555-69bc4dd8847a",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "dlg parent-kill"
+   }
+  },
+  {
+   "seq": 3,
+   "dtMs": 423,
+   "event": "PreToolUse",
+   "envSid": "fcd23134-3585-4275-9431-32576c55673b",
+   "payload": {
+    "session_id": "fcd23134-3585-4275-9431-32576c55673b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/fcd23134-3585-4275-9431-32576c55673b.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "31d04807-40e6-4ee6-b555-69bc4dd8847a",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "dlg kill",
+     "prompt": "dlg-sub-kill",
+     "subagent_type": "general-purpose",
+     "model": "haiku",
+     "isolation": "worktree"
+    },
+    "tool_use_id": "toolu_rig000001"
+   }
+  },
+  {
+   "seq": 4,
+   "dtMs": 468,
+   "event": "PostToolUse",
+   "envSid": "fcd23134-3585-4275-9431-32576c55673b",
+   "payload": {
+    "session_id": "fcd23134-3585-4275-9431-32576c55673b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/fcd23134-3585-4275-9431-32576c55673b.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "31d04807-40e6-4ee6-b555-69bc4dd8847a",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "dlg kill",
+     "prompt": "dlg-sub-kill",
+     "subagent_type": "general-purpose",
+     "model": "haiku",
+     "isolation": "worktree"
+    },
+    "tool_response": {
+     "isAsync": true,
+     "status": "async_launched",
+     "agentId": "a0d87ee8d7cb3c856",
+     "description": "dlg kill",
+     "resolvedModel": "claude-haiku-5-5",
+     "prompt": "dlg-sub-kill",
+     "outputFile": "/rig/tmp/claude-1000/-rig-repo/fcd23134-3585-4275-9431-32576c55673b/tasks/a0d87ee8d7cb3c856.output",
+     "canReadOutputFile": true,
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_rig000001",
+    "duration_ms": 24
+   }
+  },
+  {
+   "seq": 5,
+   "dtMs": 468,
+   "event": "SubagentStart",
+   "envSid": "fcd23134-3585-4275-9431-32576c55673b",
+   "payload": {
+    "session_id": "fcd23134-3585-4275-9431-32576c55673b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/fcd23134-3585-4275-9431-32576c55673b.jsonl",
+    "cwd": "/rig/repo/.claude/worktrees/agent-a0d87ee8d7cb3c856",
+    "prompt_id": "31d04807-40e6-4ee6-b555-69bc4dd8847a",
+    "agent_id": "a0d87ee8d7cb3c856",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 6,
+   "dtMs": 543,
+   "event": "Stop",
+   "envSid": "fcd23134-3585-4275-9431-32576c55673b",
+   "payload": {
+    "session_id": "fcd23134-3585-4275-9431-32576c55673b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/fcd23134-3585-4275-9431-32576c55673b.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "31d04807-40e6-4ee6-b555-69bc4dd8847a",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "DLG-WAIT",
+    "background_tasks": [
+     {
+      "id": "a0d87ee8d7cb3c856",
+      "type": "subagent",
+      "status": "running",
+      "description": "dlg kill",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  }
+ ],
+ "disk": {
+  "admin": {
+   "agent-a0d87ee8d7cb3c856": {
+    "files": [
+     "CLAUDE_BASE",
+     "HEAD",
+     "ORIG_HEAD",
+     "commondir",
+     "gitdir",
+     "index",
+     "locked",
+     "logs",
+     "refs"
+    ],
+    "gitdir": "/rig/repo/.claude/worktrees/agent-a0d87ee8d7cb3c856/.git",
+    "head": "ref: refs/heads/worktree-agent-a0d87ee8d7cb3c856",
+    "claudeBase": "e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd",
+    "locked": true,
+    "firstLogSha": "e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd"
+   }
+  },
+  "worktreesLeft": [
+   "agent-a0d87ee8d7cb3c856"
+  ],
+  "branches": [
+   "main",
+   "worktree-agent-a0d87ee8d7cb3c856"
+  ],
+  "worktreeList": "worktree /rig/repo\nHEAD e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd\nbranch refs/heads/main\n\nworktree /rig/repo/.claude/worktrees/agent-a0d87ee8d7cb3c856\nHEAD e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd\nbranch refs/heads/worktree-agent-a0d87ee8d7cb3c856\nlocked claude agent agent-a0d87ee8d7cb3c856 (pid 1044246 start 84690709)",
+  "metas": {
+   "cfg/-rig-repo/fcd23134-3585-4275-9431-32576c55673b/subagents/agent-a0d87ee8d7cb3c856.meta.json": {
+    "agentType": "general-purpose",
+    "isBuiltIn": true,
+    "worktreePath": "/rig/repo/.claude/worktrees/agent-a0d87ee8d7cb3c856",
+    "spawnedWithWorktree": true,
+    "worktreeBranch": "worktree-agent-a0d87ee8d7cb3c856",
+    "description": "dlg kill",
+    "toolUseId": "toolu_rig000001",
+    "spawnDepth": 1,
+    "requestShape": "background",
+    "requestNonInteractive": true,
+    "model": "haiku"
+   }
+  },
+  "snapshots": {
+   "before-kill": {
+    "adminRecords": [
+     "agent-a0d87ee8d7cb3c856"
+    ],
+    "worktrees": [
+     "agent-a0d87ee8d7cb3c856"
+    ]
+   }
+  }
+ }
+}

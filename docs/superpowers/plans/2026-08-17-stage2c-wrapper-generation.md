@@ -158,19 +158,19 @@ describe('exec.secretsFile is a path, not merely a string', () => {
   }
 
   it('accepts the shape every real account uses', () => {
-    const r = parseRoster(rosterWithSecrets('.cc-secrets/claude2-oauth.env'));
-    const acct = r.accounts.find((a) => a.id === 'claude2');
-    expect(acct?.exec).toEqual({ kind: 'generated', secretsFile: '.cc-secrets/claude2-oauth.env' });
+    const r = parseRoster(rosterWithSecrets('.cc-secrets/claude9-oauth.env'));
+    const acct = r.accounts.find((a) => a.id === 'claude9');
+    expect(acct?.exec).toEqual({ kind: 'generated', secretsFile: '.cc-secrets/claude9-oauth.env' });
   });
 
   it('still accepts a generated account with no secretsFile at all', () => {
     const r = parseRoster(rosterWithSecrets(undefined));
-    expect(r.accounts.find((a) => a.id === 'claude2')?.exec).toEqual({ kind: 'generated' });
+    expect(r.accounts.find((a) => a.id === 'claude9')?.exec).toEqual({ kind: 'generated' });
   });
 });
 ```
 
-Write `rosterWithSecrets(secretsFile: string | undefined)` as a local helper that returns a minimal valid two-account roster (one `upstream` `claude`, one `generated` `claude2` whose `exec` carries `secretsFile` when it is not `undefined`). Follow the file's existing fixture idiom rather than inventing a new one.
+Write `rosterWithSecrets(secretsFile: string | undefined)` as a local helper that returns a minimal valid two-account roster (one `upstream` `claude`, one `generated` `claude9` whose `exec` carries `secretsFile` when it is not `undefined`). Follow the file's existing fixture idiom rather than inventing a new one.
 
 In `server/test/gen-accounts.test.ts`, add the same rejection list to whichever existing case asserts "every roster `parseRoster` rejects is rejected here too" — that test already exists and is the mirror-agreement mechanism; extend its table rather than writing a parallel one.
 
@@ -292,17 +292,17 @@ git commit -m "fix(roster): a secretsFile is a path, and the parser now says so"
 import { describe, expect, it } from 'vitest';
 import { generateWrapperBody, WrapperInvalid } from '../../shared/wrapper.mjs';
 
-const CLAUDE2 = { id: 'claude2', configDirSuffix: '.claude-personal', execKind: 'generated',
-  secretsFile: '.cc-secrets/claude2-oauth.env' };
+const CLAUDE9 = { id: 'claude9', configDirSuffix: '.claude-home', execKind: 'generated',
+  secretsFile: '.cc-secrets/claude9-oauth.env' };
 const NOSECRETS = { id: 'plain', configDirSuffix: '.claude-plain', execKind: 'generated' };
 
 describe('generateWrapperBody', () => {
   it('writes the three-line shape when the account has a secrets file', () => {
-    expect(generateWrapperBody(CLAUDE2, 'claude')).toBe(
+    expect(generateWrapperBody(CLAUDE9, 'claude')).toBe(
       '#!/usr/bin/env bash\n'
       + '# Generated from ~/.ccrc/accounts.json. Do not edit — `ccrc wrappers` rewrites it.\n'
-      + 'export CLAUDE_CONFIG_DIR="$HOME/.claude-personal"\n'
-      + '[ -r "$HOME/.cc-secrets/claude2-oauth.env" ] && . "$HOME/.cc-secrets/claude2-oauth.env"\n'
+      + 'export CLAUDE_CONFIG_DIR="$HOME/.claude-home"\n'
+      + '[ -r "$HOME/.cc-secrets/claude9-oauth.env" ] && . "$HOME/.cc-secrets/claude9-oauth.env"\n'
       + 'exec "$HOME/.local/bin/claude" "$@"\n',
     );
   });
@@ -573,12 +573,12 @@ function parseShape(text: string): { ok: string; target: string; suffix: string;
 // with and without a secrets file, ids that are strict prefixes of one another,
 // and a suffix that is not derived from the id.
 const ACCOUNTS = [
-  { id: 'claude2', configDirSuffix: '.claude-personal', execKind: 'generated',
-    secretsFile: '.cc-secrets/claude2-oauth.env' },
-  { id: 'claude-corp', configDirSuffix: '.claude-corp', execKind: 'generated',
-    secretsFile: '.cc-secrets/claude-corp-oauth.env' },
-  { id: 'claude-dev0', configDirSuffix: '.claude-dev0', execKind: 'generated',
-    secretsFile: '.cc-secrets/claude-dev0-oauth.env' },
+  { id: 'claude9', configDirSuffix: '.claude-home', execKind: 'generated',
+    secretsFile: '.cc-secrets/claude9-oauth.env' },
+  { id: 'claude-acme', configDirSuffix: '.claude-acme', execKind: 'generated',
+    secretsFile: '.cc-secrets/claude-acme-oauth.env' },
+  { id: 'claude-lab0', configDirSuffix: '.claude-lab0', execKind: 'generated',
+    secretsFile: '.cc-secrets/claude-lab0-oauth.env' },
   { id: 'plain', configDirSuffix: '.claude-plain', execKind: 'generated' },
   { id: 'x', configDirSuffix: '.x_1-2.3', execKind: 'generated', secretsFile: 'a/b/c.env' },
 ] as const;
@@ -679,8 +679,8 @@ describe('rosterFromJson is importable, and carries the fields the wrapper write
     const byId = new Map(r.accounts.map((a: { id: string }) => [a.id, a]));
     expect(byId.get('claude')?.execKind).toBe('upstream');
     expect(byId.get('claude')?.secretsFile).toBeUndefined();
-    expect(byId.get('claude2')?.execKind).toBe('generated');
-    expect(byId.get('claude2')?.secretsFile).toBe('.cc-secrets/claude2-oauth.env');
+    expect(byId.get('claude9')?.execKind).toBe('generated');
+    expect(byId.get('claude9')?.secretsFile).toBe('.cc-secrets/claude9-oauth.env');
     expect(byId.get('gpt')?.execKind).toBe('external');
     expect(r.upstreamId).toBe('claude');
   });
@@ -1027,6 +1027,6 @@ Numbered from D-74, continuing the global ledger (D-73 was the last, in the Stag
 - **D-78** — Rewriting a line that contains the escape TEXT `\u0000-\u001f\u007f` can emit the raw NUL/0x1f/0x7f BYTES it describes. The regex then behaves identically — same range, same matches — so every test stays green, `tsc` is happy, and the diff looks correct in a terminal. It happened three times during Task 4: twice to the implementer (once in `shared/roster-json.mjs`, then again in the report about the first one) and once to me, inside the guard I was writing FOR it. Closed by `server/test/source-bytes.test.ts`, which walks `git ls-files` over all seven source roots — deliberately not `single-definition`'s `.tsx?` filter (D-76), since the incident was in a `.mjs`. Measured: with the corruption injected, `gen-accounts` + `roster` + `typecheck-tests` + `single-definition` are all GREEN (169 passed) and only the new guard goes red. ESC (0x1b) is allowed because `statusline-script.test.ts` legitimately embeds ANSI sequences; measured, it is the only control byte in the tracked sources. **It then happened a FOURTH time — in this very entry.** The committed text of D-78 itself (`ed1ec4d`) carried the three raw bytes between its backticks instead of the escape spelling, and the guard stayed green because its walk covered eight source roots and `docs/` was not one of them — the exact "new directory is invisible until someone adds the name" weakness the guard's own ROOTS comment had already written down. Found 2026-08-17 21:44 because this box's `grep` is `ugrep`, which silently treats a NUL-carrying file as binary, so the plan stopped answering greps for its own deviation numbers. The guard now walks `git ls-files` WHOLE (no root list — a curated list of "directories that hold text" was itself the hazard), measured red on this line before the bytes were fixed, and green after.
 - **D-80** — **D6's manifest grammar had no way to say "this id is an account ccrc must never write".** `upstream` and `external` accounts simply had no record, so on the wire they were indistinguishable from an id that is not in the roster at all — the overloaded-null-at-a-seam defect this plan's own Global Constraints ban by name. Measured in the Task 6 review: a manifest emitting `wrapper<TAB>gpt<TAB>ccrc-unmodified<TAB>no` made a plain `ccrc wrappers` — **no flags** — rewrite an external account's hand-written launcher and exit 0, while printing "(upstream and external are never written)" in its own summary. The two locks that were supposed to hold D3's absolute rule both key on one predicate (`execKind === 'generated'`), and the third — bash refusing a staged wrapper whose exec target is its own id — covers `upstream` ONLY, because `external` has no self-referential property for bash to derive a violation from. An earlier round reported `gpt` as saved by that third lock; it was saved by **roster order** (`deploy/accounts.migration.json` lists `claude` first, so the run aborted at record #1), which is not a lock. Closed by adding `protected\t<id>` to the grammar, emitted by `deploy/gen-wrappers.mjs` from its own walk of `roster.accounts`, counted by `ccd/ccrc` against the summary's `<upstream>` + `<external>` (a truncation must not be able to delete a lock), and enforced by refusing the WHOLE RUN on any overlap with the `wrapper` list — never by preferring one list over the other. **`ccrc wrappers`'s residual exposure, stated rather than glossed:** if the generator misclassifies an external account as `generated` *and* consistently omits it from the protected list *and* consistently under-counts `<external>`, bash still cannot tell — it has no independent reader of the roster, by design (D5). The lock closes the realistic bug (one of two independent walks going wrong), not an omniscient one.
 - **D-77** — `SUFFIX_SAFE_RE` (`/^\.[A-Za-z0-9._-]+$/`) MATCHES `".."`. Every copy of that expression therefore needs a separate `includes('..')` beside it; `shared/roster.ts` and `deploy/gen-accounts.mjs` have one, and `shared/wrapper.mjs` shipped without it — emitting `CLAUDE_CONFIG_DIR="$HOME/.."`, which the reader accepted too. The regex looks like a complete gate and is not. Found by the Task 2 review, closed in its fix round 1.
-- **D-81** — `deploy/gen-wrappers.mjs`'s `classify()` reads `<bin>/<id>` whole for every generated account, and past V8's ~512 MB string cap `readFileSync` THROWS — so a perfectly readable oversized file is classified `unreadable`, whose remedy ("make it readable and re-run") can never work. Measured by the Task 6 re-review with a sparse 1 GiB file at `<bin>/claude2`; the realistic trigger is an operator setting `exec.kind: "generated"` on the account that is actually the ~304 MB upstream binary. **Not closed by this plan, deliberately:** folding oversize into `foreign` would narrow the `ccrc-edited`/`foreign` distinction exactly the way the rejected shebang gate would have (a marker-carrying wrapper someone appended a megabyte to is `ccrc-edited`, remedy offers `--force`; as `foreign` the remedy deliberately never mentions it). The right shape is a SIXTH classification (`oversize`, cheap `statSync` gate before any read) — a manifest-grammar row, a bash decision-table arm, and its own mutation-pinned guard, with node and bash shipping TOGETHER because bash's catch-all refuses a manifest carrying a classification it does not know. That is a task with D3-table blast radius, not a fix-round line; deferred past this stage and recorded here so the next stage inherits it as a requirement, not a surprise.
+- **D-81** — `deploy/gen-wrappers.mjs`'s `classify()` reads `<bin>/<id>` whole for every generated account, and past V8's ~512 MB string cap `readFileSync` THROWS — so a perfectly readable oversized file is classified `unreadable`, whose remedy ("make it readable and re-run") can never work. Measured by the Task 6 re-review with a sparse 1 GiB file at `<bin>/claude9`; the realistic trigger is an operator setting `exec.kind: "generated"` on the account that is actually the ~304 MB upstream binary. **Not closed by this plan, deliberately:** folding oversize into `foreign` would narrow the `ccrc-edited`/`foreign` distinction exactly the way the rejected shebang gate would have (a marker-carrying wrapper someone appended a megabyte to is `ccrc-edited`, remedy offers `--force`; as `foreign` the remedy deliberately never mentions it). The right shape is a SIXTH classification (`oversize`, cheap `statSync` gate before any read) — a manifest-grammar row, a bash decision-table arm, and its own mutation-pinned guard, with node and bash shipping TOGETHER because bash's catch-all refuses a manifest carrying a classification it does not know. That is a task with D3-table blast radius, not a fix-round line; deferred past this stage and recorded here so the next stage inherits it as a requirement, not a surprise.
 - **D-82** — Doctor's `wr_hard` bucket folds "this generated account's wrapper is ABSENT" (`_dr_wr_present`) together with genuine roster/wrapper DISAGREEMENTS (wrong shape, suffix, secrets, exec target), and the whole bucket surfaces through the single remedy at `ccd/ccrc-doctor-checks:1011`, which points at `ccrc adopt`. For the absent case that is the wrong verb: nothing exists on disk for `ccrc wrappers` to refuse, so `ccrc wrappers` is exactly what fixes it, and `ccrc adopt` will not create anything. Task 7's brief dictated :1011's treatment verbatim ("keeps its sentence... and swaps the adopt invocation"), so the implementer followed spec; the gap is architectural — splitting `wr_hard` by finding type is its own refactor with its own tests, not a remedy-string swap. Found by the Task 7 review; deferred past this stage.
 - **D-83** — Plan D6 sanctioned each half of a composition individually: `deploy/gen-wrappers.mjs`'s orphan scan excluding only `generated` roster ids from its candidate set, AND `ccrc-edited`'s refusal remedy telling an operator to "keep the edit by setting exec.kind to \"external\"" (`ccd/ccrc:1288`). Composed, they produced a standing false report with an impossible remedy: an operator who followed the `ccrc-edited` remedy got `ORPHAN <id>: … carries ccrc's marker and no account in the roster claims it` on every subsequent run, with remedy "add an account \"<id>\" to accounts.json" — both halves false, since the roster already claims the id (as `external`), and adding it again is a duplicate-id error. Found by the final whole-branch review, demonstrated live in a mkdtemp fixture HOME. Closed by excluding EVERY roster account id (of any `exec.kind`), not merely `generated` ones, from the orphan candidate set — walked out of `roster.accounts` on its own terms, the same independent-walk discipline D-80's `protected` records already use. A stale ccrc marker surviving on a non-generated account's file is deliberately left unreported by this generator: bash's `protected` lock already refuses to ever write over it, so nothing is at risk, and reporting a roster/disk marker mismatch is `ccrc doctor`'s surface, not this generator's.

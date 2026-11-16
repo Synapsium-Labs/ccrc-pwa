@@ -1,23 +1,28 @@
 import { describe, it, expect } from 'vitest';
-import fs from 'node:fs';
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { loadConfig, type CcrcConfig } from '../src/config.js';
 import { Tmux, UNMEASURED, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
-import { ccd, ccdRunner, cutShort, listProjects, type CcdResult } from '../src/lifecycle.js';
+import { ccd, ccdEnding, ccdRunner, cutShort, listProjects, type CcdEnding, type CcdResult } from '../src/lifecycle.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
 import { readLocalCcdCaps } from '../src/localcaps.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
 import { LIFECYCLE } from '../../shared/lifecycle.js';
+import { WORKSPACE_TRANSITIONS } from '../../shared/workspaceTransitions.js';
+import { RUN_PREFIX, RUN_QUIET_S } from './run-tmp.globalsetup.mjs';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import type { FleetReadiness } from '../src/readiness.js';
+import { parseOpMarker, parsePassMarker } from '../../ccd/history/lib.mjs';
+import { fakeTime } from './fakeTime.js';
 
-const ID = 'claude2-MekWarLive';
+const ID = 'claude9-Project-F';
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const seedSession = (home: string, id: string, fields: Record<string, string>) => {
   const reg = path.join(home, '.cc-sessions');
@@ -27,12 +32,21 @@ const seedSession = (home: string, id: string, fields: Record<string, string>) =
 
 const seedDefault = (home: string) =>
   seedSession(home, ID, {
-    wrapper: 'claude2',
-    project: 'MekWarLive',
-    workdir: '/data/projects/MekWarLive',
+    wrapper: 'claude9',
+    project: 'Project-F',
+    workdir: '/data/projects/Project-F',
     uuid: '1'.repeat(36),
     started: '1',
   });
+
+/** D-5240: the swap route reads the turn (`turnVerdictFor`) before the queue and inside it, fail-closed, and this
+ *  file's session runs on `claude9`, an account the test roster does not carry, which reads `unmeasured`. A swap case
+ *  here is about argv, queueing and the 502, so it moves the row onto a roster account and proves the pane gone: a
+ *  verdict of `idle` with no further read (`swap-route-busy.test.ts` owns busy and unmeasured). */
+const swappable = (home: string): void => {
+  writeFileSync(path.join(home, '.cc-sessions', `${ID}.wrapper`), 'claude');
+};
+const PANE_GONE = (args: string[]) => ({ ran: true as const, code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` });
 
 /** Server over a seeded one-session registry; every exec succeeds (or fails with stderr 'boom').
  *  `ccdVerbs`, when given, seeds a real `fleetState` (mirroring
@@ -48,6 +62,8 @@ async function makeApp(
     unswept?: boolean;
     /** F3: the `ledgerFloor` port the route reads per project. */
     coord?: unknown;
+    /** D-5240: a session the swap route's turn gate reads `idle` (`swappable`); tmux calls are then not recorded. */
+    swapIdle?: boolean;
   } = {},
 ): Promise<{
   app: FastifyInstance;
@@ -59,15 +75,27 @@ async function makeApp(
   seedRoster(home);
   seedDefault(home);
   const calls: string[][] = [];
+  if (opts.swapIdle) swappable(home);
   const run: Runner = async (cmd, args) => {
+    if (opts.swapIdle && args[0] === 'has-session') return PANE_GONE(args);
     calls.push([cmd, ...args]);
-    return opts.fail ? { code: 1, stdout: '', stderr: 'boom' } : { code: 0, stdout: '', stderr: '' };
+    if (opts.fail) return { ran: true as const, code: 1, stdout: '', stderr: 'boom' };
+    // A real pane pid, as routes.test.ts's makeApp gives: since D-5234 a null pid on an alive pane is an unmeasured
+    // row, which the archive door refuses `status-unknown` (D-5274).
+    if (args[0] === 'list-panes') return { ran: true as const, code: 0, stdout: '4242\n', stderr: '' };
+    return { ran: true as const, code: 0, stdout: '', stderr: '' };
   };
   const env: NodeJS.ProcessEnv = { CCRC_HOME: home };
   if (opts.projectsRoot) env.CCRC_PROJECTS_ROOT = opts.projectsRoot;
   const cfg = loadConfig(env);
   const watcher = (opts.readiness !== undefined || opts.unswept)
-    ? ({ currentReadiness: () => opts.readiness, stop: () => {} } as never)
+    // Task 4 (board placement wave 1): `currentProjectRepos()` rides beside
+    // `currentReadiness()` on the same double — the route calls both
+    // unconditionally, so a watcher stub missing either throws inside the
+    // route rather than answering `unmeasured`. Empty map: no test in this
+    // file measures a repo, only that the key is present and defaulted.
+    // D-6436: and `currentFleetListing()`, null here (no listing), so the route reads the registry itself as before.
+    ? ({ currentReadiness: () => opts.readiness, currentProjectRepos: () => new Map(), currentFleetListing: () => null, currentLimits: () => null, currentProjectPoolsRead: () => null, stop: () => {}, serverCapsSettled: async () => {} } as never)
     : undefined;
   const app = await buildServer({
     cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
@@ -123,7 +151,7 @@ describe('lifecycle routes', () => {
     const { app, calls, cfg } = await makeApp({ ccdVerbs: ['start', 'enable', 'ensure', 'stop', 'swap', 'stop-surface'] });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude9', 'Project-F']]);
     await app.close();
   });
 
@@ -150,6 +178,10 @@ describe('lifecycle routes', () => {
   // exactly the shape the agent reports for that old ccd (it lists `stop`
   // but never prints the new capability token), so this test drives the
   // SAME decision the route makes in that real deployment window.
+  // Since path identity W1a a flagged stop puts the pair FIRST
+  // (`stop --surface pwa <id>`, spec §2.4); the trailing spelling above is
+  // the measured history. The rule this test pins is unchanged: a ccd that
+  // never advertised stop-surface is sent no flag, in either position.
   it('a fleet ccd that does not advertise stop-surface gets the bare argv old ccd understands (the skew case)', async () => {
     const { app, calls, cfg } = await makeApp({ ccdVerbs: ['start', 'enable', 'ensure', 'stop', 'swap'] });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
@@ -159,7 +191,7 @@ describe('lifecycle routes', () => {
     // not a degraded failure.
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude9', 'Project-F']]);
     await app.close();
   });
 
@@ -169,7 +201,7 @@ describe('lifecycle routes', () => {
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude9', 'Project-F']]);
     await app.close();
   });
 
@@ -190,19 +222,19 @@ describe('lifecycle routes', () => {
     // Still 200 — the bare argv is one every ccd generation understands, so
     // the stop still genuinely happens. Only the DECLARATION is withheld.
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude9', 'Project-F']]);
     await app.close();
   });
 
   it('POST /api/sessions/:id/stop uses the id-prefix wrapper, not a swapped registry wrapper', async () => {
     // After `ccd swap`, the registry `wrapper` field flips to the new account but
     // the session id and tmux name keep the ORIGINAL wrapper prefix
-    // (claude2-cctest). Stop must target the id's prefix wrapper so ccd recomputes
+    // (claude9-cctest). Stop must target the id's prefix wrapper so ccd recomputes
     // the correct id — using the swapped wrapper would kill a nonexistent session
     // and leave the real one alive.
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude2-cctest', {
+    seedSession(home, 'claude9-cctest', {
       wrapper: 'claude',            // swapped to claude…
       project: 'cctest',
       workdir: '/data/projects/cctest',
@@ -211,50 +243,50 @@ describe('lifecycle routes', () => {
       lastswap: '1784650000',
     });
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true as const, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     // ccdVerbs explicit (fix round 3): this test is about wrapper-prefix
     // resolution, not the capability gate.
     const app = await buildServer({
-      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       fleetState: { connected: true, downSince: null, ccdVerbs: ['stop', 'stop-surface'], rosterFp: null, build: null },
     });
-    const res = await app.inject({ method: 'POST', url: '/api/sessions/claude2-cctest/stop', payload: {} });
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/claude9-cctest/stop', payload: {} });
     expect(res.statusCode).toBe(200);
-    // …but stop must still target claude2-cctest, not claude-cctest.
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'cctest', '--surface', 'pwa']]);
+    // …but stop must still target claude9-cctest, not claude-cctest.
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude9', 'cctest']]);
     await app.close();
   });
 
   it('POST /api/sessions/:id/stop passes a WORKSPACE id whole, never a reversed one', async () => {
     // A workspace id is `<project>-<slug>`, not `<wrapper>-<project>`. Reversing
-    // it cannot work: `rp-llm-quiet-mesa` does not end in `-rp-llm`, so the
+    // it cannot work: `project-j-quiet-mesa` does not end in `-project-j`, so the
     // prefix rule falls through to rec.wrapper and ccd recomputes
-    // `claude-rp-llm` — a DIFFERENT, live session. It would then kill tmux
-    // cc-claude-rp-llm and disable claude-session@claude-rp-llm, exit 0, and
+    // `claude-project-j` — a DIFFERENT, live session. It would then kill tmux
+    // cc-claude-project-j and disable claude-session@claude-project-j, exit 0, and
     // the PWA would report success while the workspace kept running.
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'rp-llm-quiet-mesa', {
+    seedSession(home, 'project-j-quiet-mesa', {
       wrapper: 'claude',
-      project: 'rp-llm',
+      project: 'project-j',
       workspace: 'quiet-mesa',
-      workdir: '/home/rc/worktrees/rp-llm/quiet-mesa',
+      workdir: '/home/u/worktrees/project-j/quiet-mesa',
       uuid: '3'.repeat(36),
       started: '1',
     });
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true as const, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     // ccdVerbs explicit (fix round 3): this test is about workspace-id
     // handling, not the capability gate.
     const app = await buildServer({
-      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       fleetState: { connected: true, downSince: null, ccdVerbs: ['stop', 'stop-surface'], rosterFp: null, build: null },
     });
-    const res = await app.inject({ method: 'POST', url: '/api/sessions/rp-llm-quiet-mesa/stop', payload: {} });
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/project-j-quiet-mesa/stop', payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'rp-llm-quiet-mesa', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'project-j-quiet-mesa']]);
     await app.close();
   });
 
@@ -267,7 +299,7 @@ describe('lifecycle routes', () => {
   });
 
   it('POST /api/sessions/:id/swap sends exact argv', async () => {
-    const { app, calls, cfg } = await makeApp();
+    const { app, calls, cfg } = await makeApp({ swapIdle: true });
     const res = await app.inject({
       method: 'POST',
       url: `/api/sessions/${ID}/swap`,
@@ -279,7 +311,7 @@ describe('lifecycle routes', () => {
   });
 
   it('a failing ccd maps to 502 with stderr', async () => {
-    const { app } = await makeApp({ fail: true });
+    const { app } = await makeApp({ fail: true, swapIdle: true });
     const res = await app.inject({
       method: 'POST',
       url: `/api/sessions/${ID}/swap`,
@@ -313,8 +345,13 @@ describe('lifecycle routes', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedDefault(home);
+    swappable(home);
     const order: string[] = [];
-    const run: Runner = async (_cmd, args) => { order.push(args.join(' ')); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return PANE_GONE(args);
+      order.push(args.join(' '));
+      return { ran: true as const, code: 0, stdout: '', stderr: '' };
+    };
     const cfg = loadConfig({ CCRC_HOME: home });
     // Recording, so the enqueue itself is observable — see the wait below.
     const enqueued: string[] = [];
@@ -325,7 +362,7 @@ describe('lifecycle routes', () => {
       }
     })();
     const app = await buildServer({
-      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue,
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue, time: fakeTime().ports,
     });
 
     let release!: () => void;
@@ -387,6 +424,8 @@ describe('lifecycle routes', () => {
 // a session literally named `<id>---surface`, exit 0, the real session
 // left running with its unit enabled. That is what a `--surface` in the
 // argv below would have risked; the assertion is that it is never there.
+// Since path identity W1a the flag, when sent, LEADS the id (spec §2.4); the
+// rule pinned here is unchanged: no evidence, no flag, in either position.
 describe('local mode: the stop route with REAL local-caps evidence (fix round 3, task 14)', () => {
   const writeStubCcd = (dir: string, name: string, body: string): string => {
     mkdirSync(dir, { recursive: true });
@@ -411,13 +450,13 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     expect(ccdVerbs).toEqual(['start', 'enable', 'ensure', 'stop', 'swap']);
 
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true as const, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home }); // CCRC_FLEET genuinely unset
     expect(cfg.fleetMode).toBe('local');
     // The rest of this composition mirrors index.ts's local branch: real
     // evidence carried in `fleetState`, exactly as the fix requires.
     const app = await buildServer({
-      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       fleetState: { connected: true, downSince: null, ccdVerbs, rosterFp: null, build: null },
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
@@ -426,7 +465,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     // argv an old ccd would have silently misparsed.
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude9', 'Project-F']]);
     await app.close();
   });
 
@@ -442,16 +481,16 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     expect(ccdVerbs).toContain('stop-surface');
 
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true as const, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     expect(cfg.fleetMode).toBe('local');
     const app = await buildServer({
-      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       fleetState: { connected: true, downSince: null, ccdVerbs, rosterFp: null, build: null },
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude9', 'Project-F']]);
     await app.close();
   });
 
@@ -464,15 +503,15 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     expect(ccdVerbs).toBeNull();
 
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true as const, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer({
-      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       fleetState: { connected: true, downSince: null, ccdVerbs, rosterFp: null, build: null },
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude9', 'Project-F']]);
     await app.close();
   });
 
@@ -495,7 +534,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
       'sleep 0.15\necho start\necho stop\necho stop-surface\nexit 0',
     );
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true as const, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
 
     // index.ts's exact shape: seed null, fire-and-forget the read, mutate
@@ -506,14 +545,14 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     });
 
     const app = await buildServer({
-      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports,
       fleetState,
     });
 
     // Racing the still-in-flight read: no evidence yet, so no --surface.
     const early = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(early.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude9', 'Project-F']]);
 
     await capsPromise; // now it has genuinely resolved
     expect(fleetState.ccdVerbs).toContain('stop-surface');
@@ -521,7 +560,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     calls.length = 0;
     const late = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(late.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude9', 'Project-F']]);
 
     await app.close();
   });
@@ -531,14 +570,14 @@ describe('listProjects', () => {
   it('merges projects-root directories with registry workdirs, deduped by workdir', async () => {
     const root = mkTmp('ccrc-projects-');
     mkdirSync(path.join(root, 'alpha'));
-    mkdirSync(path.join(root, 'mekwar'));
+    mkdirSync(path.join(root, 'mid-project'));
     mkdirSync(path.join(root, '.hidden'));               // dotfile — skipped
     writeFileSync(path.join(root, 'stray.txt'), 'x');    // plain file — skipped
 
     const { app, cfg, home } = await makeApp({ projectsRoot: root });
     // Duplicate of a projects-root dir (same workdir) + one workdir outside the root.
-    seedSession(home, 'claude-mekwar', {
-      wrapper: 'claude', project: 'mekwar', workdir: path.join(root, 'mekwar'),
+    seedSession(home, 'claude-mid-project', {
+      wrapper: 'claude', project: 'mid-project', workdir: path.join(root, 'mid-project'),
       uuid: '2'.repeat(36), started: '1',
     });
     seedSession(home, 'claude-otherproj', {
@@ -549,9 +588,9 @@ describe('listProjects', () => {
     const direct = await listProjects(localIO, cfg);
     expect(direct.roots).toEqual([root]);
     expect(direct.projects).toEqual([
-      { name: 'MekWarLive', workdir: '/data/projects/MekWarLive' },   // default seeded registry session
+      { name: 'Project-F', workdir: '/data/projects/Project-F' },   // default seeded registry session
       { name: 'alpha', workdir: path.join(root, 'alpha') },
-      { name: 'mekwar', workdir: path.join(root, 'mekwar') },         // present once despite registry duplicate
+      { name: 'mid-project', workdir: path.join(root, 'mid-project') },         // present once despite registry duplicate
       { name: 'otherproj', workdir: '/data/projects/other-place' },
     ]);
 
@@ -577,6 +616,11 @@ describe('listProjects', () => {
         readiness: null,
         pool: { state: 'untagged' },
         placement: { kind: 'projected', wrapper: 'claude', score: 0 },
+        // Task 4 (board placement wave 1): this app has no watcher at all, so
+        // `currentProjectRepos()` is never called — every row reads the
+        // sweep-never-reached default, same reasoning as `readiness: null`
+        // just above.
+        repo: { state: 'unmeasured' },
       })));
     await app.close();
   });
@@ -585,7 +629,7 @@ describe('listProjects', () => {
     const { app, cfg } = await makeApp({ projectsRoot: '/nope/does-not-exist' });
     const out = await listProjects(localIO, cfg);
     expect(out.roots).toEqual(['/nope/does-not-exist']);
-    expect(out.projects).toEqual([{ name: 'MekWarLive', workdir: '/data/projects/MekWarLive' }]);
+    expect(out.projects).toEqual([{ name: 'Project-F', workdir: '/data/projects/Project-F' }]);
     await app.close();
   });
 
@@ -607,7 +651,7 @@ describe('listProjects', () => {
 
     const { app, cfg, home } = await makeApp({ projectsRoot: root });
     // `makeApp` -> `seedDefault` seeds `ID` at the box's REAL
-    // `/data/projects/MekWarLive`, which every other test can ignore because it
+    // `/data/projects/Project-F`, which every other test can ignore because it
     // never readdirs that path. This test's whole point is that the union loop
     // NOW readdirs every registry workdir, so a real path outside the sandbox
     // would make the result depend on whatever this box's disk happens to hold
@@ -615,7 +659,7 @@ describe('listProjects', () => {
     // directory (ordinary, `.git`-less, like case (b)) under the test's own
     // tmp root instead, via the same `seedSession` shape `seedDefault` uses,
     // so the expectation holds identically on every box and in CI.
-    const defaultWorkdir = mkTmp('ccrc-mekwarlive-');
+    const defaultWorkdir = mkTmp('ccrc-project-f-');
     seedSession(home, ID, { workdir: defaultWorkdir });
     seedSession(home, 'claude-linked', {
       wrapper: 'claude', project: 'linked-registry', workdir: linkedRegistryWorkdir,
@@ -630,7 +674,7 @@ describe('listProjects', () => {
 
     const out = await listProjects(localIO, cfg);
     expect(out.projects).toEqual([
-      { name: 'MekWarLive', workdir: defaultWorkdir },                // default seeded registry session — fixture, not the box's real path
+      { name: 'Project-F', workdir: defaultWorkdir },                // default seeded registry session — fixture, not the box's real path
       { name: 'gone', workdir: path.join(root, 'does-not-exist') },  // missing workdir — stays listed
       { name: 'plain', workdir: path.join(root, 'plain') },
     ]);
@@ -645,7 +689,7 @@ describe('listProjects', () => {
 // its three decisions apart — which binary it names, how it maps an exit code,
 // and whether a failure still carries the output the 502 body quotes.
 describe('ccdRunner — the one ccd capability Deps carries', () => {
-  const spy = (result: { code: number; stdout: string; stderr: string }) => {
+  const spy = (result: { ran: true, code: number; stdout: string; stderr: string }) => {
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return result; };
     return { run, calls };
@@ -655,35 +699,35 @@ describe('ccdRunner — the one ccd capability Deps carries', () => {
   const cfg = loadConfig({ CCRC_HOME: ccdRunnerHome });
 
   it('names cfg.ccdBin and passes the argv tokens through verbatim', async () => {
-    const { run, calls } = spy({ code: 0, stdout: '', stderr: '' });
+    const { run, calls } = spy({ ran: true as const, code: 0, stdout: '', stderr: '' });
     await ccdRunner(run, cfg)(CCD_ARGV.wsReap('a'.repeat(64), ID));
     expect(calls).toEqual([[cfg.ccdBin, 'ws-reap', '--expect', 'a'.repeat(64), '--session', ID]]);
   });
 
   it('ok is exit code 0 and nothing else', async () => {
-    const zero = spy({ code: 0, stdout: '', stderr: '' });
-    const one = spy({ code: 1, stdout: '', stderr: '' });
-    const other = spy({ code: 127, stdout: '', stderr: '' });
+    const zero = spy({ ran: true as const, code: 0, stdout: '', stderr: '' });
+    const one = spy({ ran: true as const, code: 1, stdout: '', stderr: '' });
+    const other = spy({ ran: true as const, code: 127, stdout: '', stderr: '' });
     expect((await ccdRunner(zero.run, cfg)(CCD_ARGV.ensure(ID))).ok).toBe(true);
     expect((await ccdRunner(one.run, cfg)(CCD_ARGV.ensure(ID))).ok).toBe(false);
     expect((await ccdRunner(other.run, cfg)(CCD_ARGV.ensure(ID))).ok).toBe(false);
   });
 
   it('passes stdout and stderr through untouched on success', async () => {
-    const { run } = spy({ code: 0, stdout: 'out\n', stderr: 'warn\n' });
+    const { run } = spy({ ran: true as const, code: 0, stdout: 'out\n', stderr: 'warn\n' });
     expect(await ccdRunner(run, cfg)(CCD_ARGV.wsAudit(ID)))
       // The kill fields are not decoration: both are REQUIRED on `CcdResult`
       // (§1.4/§1.7), and this runner reported NEITHER — so both read as the
       // token, never as `false`/`null`, which would claim a measurement.
-      .toEqual({ ok: true, stdout: 'out\n', stderr: 'warn\n',
-                 killed: UNMEASURED, signal: UNMEASURED });
+      .toEqual({ ran: true, ok: true, stdout: 'out\n', stderr: 'warn\n',
+                 killed: UNMEASURED, signal: UNMEASURED, exitCode: 0 });
   });
 
   it('a FAILURE still carries stdout and stderr — the 502 body quotes stderr', async () => {
-    const { run } = spy({ code: 1, stdout: 'partial\n', stderr: 'boom\n' });
+    const { run } = spy({ ran: true as const, code: 1, stdout: 'partial\n', stderr: 'boom\n' });
     expect(await ccdRunner(run, cfg)(CCD_ARGV.wsArchive(ID, null)))
-      .toEqual({ ok: false, stdout: 'partial\n', stderr: 'boom\n',
-                 killed: UNMEASURED, signal: UNMEASURED });
+      .toEqual({ ran: true, ok: false, stdout: 'partial\n', stderr: 'boom\n',
+                 killed: UNMEASURED, signal: UNMEASURED, exitCode: 1 });
   });
 });
 
@@ -691,9 +735,9 @@ describe('§1.4/§1.7 — CcdResult stops dropping the kill one hop later', () =
   const cfg = { ccdBin: '/home/u/.local/bin/ccd' } as unknown as CcrcConfig;
 
   it('threads `killed` off the runner', async () => {
-    const killedRun: Runner = async () => ({ code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' });
+    const killedRun: Runner = async () => ({ ran: true as const, code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' });
     expect(await ccd(killedRun, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
-      ok: false, stdout: '', stderr: '', killed: true, signal: 'SIGTERM',
+      ran: true as const, ok: false, stdout: '', stderr: '', killed: true, signal: 'SIGTERM', exitCode: 1,
     });
   });
 
@@ -702,23 +746,34 @@ describe('§1.4/§1.7 — CcdResult stops dropping the kill one hop later', () =
     // absent optional to `false`, telling every downstream caller "this child was
     // not killed" when the truth was "nobody measured whether it was". The
     // adoption gate treats those two differently on purpose.
-    const plainRun: Runner = async () => ({ code: 1, stdout: '', stderr: 'refused' });
+    const plainRun: Runner = async () => ({ ran: true as const, code: 1, stdout: '', stderr: 'refused' });
     expect(await ccd(plainRun, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
-      ok: false, stdout: '', stderr: 'refused', killed: UNMEASURED, signal: UNMEASURED,
+      ran: true as const, ok: false, stdout: '', stderr: 'refused', killed: UNMEASURED, signal: UNMEASURED, exitCode: 1,
     });
   });
 
+  it('ccd carries the exit code on the ran arm, 0 and 2 alike, and never on the not-ran arm', async () => {
+    for (const code of [0, 2]) {
+      const res = await ccd(async () => ({ ran: true as const, code, stdout: '', stderr: '' }), cfg, CCD_ARGV.wsAdd('demo'));
+      expect(res.ran).toBe(true);
+      expect((res as { exitCode?: number }).exitCode).toBe(code);
+    }
+    const nr = await ccd(async () => ({ ran: false as const, code: 2, stdout: '', stderr: 'x', reason: 'transport' as const, detail: 'x' }), cfg, CCD_ARGV.wsAdd('demo'));
+    expect(nr.ran).toBe(false);
+    expect('exitCode' in nr).toBe(false);
+  });
+
   it('keeps a MEASURED false and a MEASURED null — only absence becomes the token', async () => {
-    const measured: Runner = async () => ({ code: 1, stdout: '', stderr: 'die', killed: false, signal: null });
+    const measured: Runner = async () => ({ ran: true as const, code: 1, stdout: '', stderr: 'die', killed: false, signal: null });
     expect(await ccd(measured, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
-      ok: false, stdout: '', stderr: 'die', killed: false, signal: null,
+      ran: true as const, ok: false, stdout: '', stderr: 'die', killed: false, signal: null, exitCode: 1,
     });
   });
 });
 
 describe('§1.7 — cutShort: one reader for both halves, three answers, one adopts', () => {
   const r = (killed: CcdResult['killed'], signal: CcdResult['signal']): CcdResult =>
-    ({ ok: false, stdout: '', stderr: '', killed, signal });
+    ({ ran: true as const, ok: false, stdout: '', stderr: '', killed, signal });
 
   it('true when the runner killed the child at its own deadline', () => {
     expect(cutShort(r(true, 'SIGTERM'))).toBe(true);
@@ -764,36 +819,49 @@ describe('§1.7 — cutShort: one reader for both halves, three answers, one ado
 });
 
 describe('wave 6 — the dec flags are sent only to a ccd that says it parses them', () => {
+  // Workspace lifecycle §5.2: the one Archive sends `ws-archive` for a WORKSPACE (a main checkout is stopped instead)
+  // and measures the pane first, through the same runner — so the default session is made a workspace with a real
+  // worktree here, and only ccd's own calls are compared.
+  const asWorkspace = (home: string): void => {
+    const worktree = path.join(home, 'worktrees', 'mek');
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', `${ID}.workspace`), 'mek');
+    writeFileSync(path.join(home, '.cc-sessions', `${ID}.workdir`), worktree);
+  };
+  const ccdCalls = (calls: string[][], bin: string): string[][] => calls.filter((c) => c[0] === bin);
   // THE HEADLINE CASE. An old ccd meets `--surface pwa` inside
   // `cmd_ws_archive`'s exact-arity guard; on the paths where it does not die,
   // `runCcdOr502` renders exit 0 as `200 {ok:true}` for a call that recorded
   // nothing. Guessing wrong here costs a SILENT SUCCESS, which is why
   // `capSupported` refuses on no evidence.
   it('an OLD ccd (no actor-flags-v1) receives the bare argv, byte for byte', async () => {
-    const { app, calls, cfg } = await makeApp({ ccdVerbs: ['ws-archive', 'ws-restore', 'ws-hold', 'ws-release'] });
+    const { app, calls, cfg, home } = await makeApp({ ccdVerbs: ['ws-archive', 'ws-restore', 'ws-hold', 'ws-release'] });
+    asWorkspace(home);
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/archive`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID]]);
+    expect(ccdCalls(calls, cfg.ccdBin)).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID]]);
     await app.close();
   });
 
   it('NO EVIDENCE AT ALL is treated as an old ccd, never as a new one', async () => {
-    const { app, calls, cfg } = await makeApp({ ccdVerbs: null });
+    const { app, calls, cfg, home } = await makeApp({ ccdVerbs: null });
+    asWorkspace(home);
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/archive`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID]]);
+    expect(ccdCalls(calls, cfg.ccdBin)).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID]]);
     await app.close();
   });
 
   it('a NEW ccd receives --surface pwa and the device actor', async () => {
-    const { app, calls, cfg } = await makeApp({ ccdVerbs: ['ws-archive', 'actor-flags-v1'] });
+    const { app, calls, cfg, home } = await makeApp({ ccdVerbs: ['ws-archive', 'actor-flags-v1'] });
+    asWorkspace(home);
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/archive`, payload: {} });
     expect(res.statusCode).toBe(200);
     // The gate is DARK in this harness (`CCRC_AUTH` unset), so `secretNow()` is
     // SECRET_UNREAD, `sessionVerdict` refuses at the `kind !== 'ok'` arm, and
     // its `device` is null — the record says `unmeasured` rather than naming a
     // browser nobody saw.
-    expect(calls).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID,
+    expect(ccdCalls(calls, cfg.ccdBin)).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID,
                             '--surface', 'pwa', '--actor', 'unmeasured']]);
     await app.close();
   });
@@ -836,7 +904,14 @@ describe('GET /api/projects — the program-ready readiness', () => {
   it('carries a per-project readiness once the watcher has swept', async () => {
     const { app } = await makeApp({
       readiness: SWEPT,
-      coord: { ledgerFloor: () => ({ floor: 1, evidence: 'x', updatedAt: 1 }) },
+      // Item 15 (fix wave B): a stub missing `accountPoolEdges` entirely
+      // makes `readAccountPoolEdges()`'s try/catch swallow a `TypeError`
+      // instead of the `DatabaseSync`-shaped hazard it exists to catch — this
+      // test then quietly measures the DEGRADED path, not the ledger-floor
+      // behaviour its name claims. `projects-route-placement.test.ts`'s "a
+      // throwing accountPoolEdges() degrades placement to declared-only"
+      // already covers that hazard on purpose; this stub just needs to work.
+      coord: { ledgerFloor: () => ({ floor: 1, evidence: 'x', updatedAt: 1 }), accountPoolEdges: () => new Map() },
     });
     const res = await app.inject({ method: 'GET', url: '/api/projects' });
     expect(res.statusCode).toBe(200);
@@ -852,7 +927,7 @@ describe('GET /api/projects — the program-ready readiness', () => {
     // THE CASE THE FEATURE EXISTS FOR. `CoordStore.runs()` joins `programs`,
     // so a runs-shaped seam has no row at all here; this one does.
     const { app } = await makeApp({
-      readiness: SWEPT, coord: { ledgerFloor: () => null },
+      readiness: SWEPT, coord: { ledgerFloor: () => null, accountPoolEdges: () => new Map() },
     });
     const row = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects[0];
     expect(row.readiness.floor).toBe('not-seeded');
@@ -874,7 +949,7 @@ describe('GET /api/projects — the program-ready readiness', () => {
     // would send an operator to seed a floor that may already exist.
     const { app } = await makeApp({
       readiness: SWEPT,
-      coord: { ledgerFloor: () => { throw new Error('SQLITE_BUSY'); } },
+      coord: { ledgerFloor: () => { throw new Error('SQLITE_BUSY'); }, accountPoolEdges: () => new Map() },
     });
     const res = await app.inject({ method: 'GET', url: '/api/projects' });
     expect(res.statusCode).toBe(200);
@@ -895,6 +970,7 @@ describe('GET /api/projects — the program-ready readiness', () => {
           if (project === 'alpha') throw new Error('SQLITE_BUSY');
           return { floor: 1, evidence: 'x', updatedAt: 1 };
         },
+        accountPoolEdges: () => new Map(),
       },
     });
     const rows = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects;
@@ -953,26 +1029,203 @@ describe('GET /api/projects — the program-ready readiness', () => {
     const { cfg, app } = await makeApp({ projectsRoot: root });
     const out = await listProjects(localIO, cfg);
     expect(out.projects.map((p) => p.name), 'both row sources are represented')
-      .toEqual(expect.arrayContaining(['alpha', 'MekWarLive']));
+      .toEqual(expect.arrayContaining(['alpha', 'Project-F']));
     expect(out.projects.every((p) => !('pool' in p) && !('placement' in p))).toBe(true);
     await app.close();
   });
 });
 
 describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
-  it('is L0: imports nothing at all', () => {
-    const src = fs.readFileSync(path.resolve(__dirname, '../../shared/lifecycle.ts'), 'utf8');
-    expect(src).not.toMatch(/^\s*import /m);
-  });
-  it('declares the five graphify classes', () => {
-    const names = LIFECYCLE.map((c) => c.name).sort();
-    for (const n of ['workspace-graph-store', 'project-graph-store', 'graph-corpus-filter',
-      'graph-build-lock', 'graph-sweep-census']) expect(names).toContain(n);
+  // Its L0 ring is held by server/test/rings/shared-imports.test.ts (D-6045).
+  // Graph revision 2 GR8 (D-7354; spec §10): the six repository-store classes replace the per-tree ones, whose paths
+  // nothing writes any more. Counted exit: graph classes 5 -> 6.
+  it('declares the six graphify classes of spec §10, and none of the four retired ones', () => {
+    const graph = LIFECYCLE.filter((c) => c.name.startsWith('graph-') || c.name.endsWith('-graph-store'));
+    // The root is pinned too, so each declaration is held to the layout ccd-graph-sweep writes (the checkout sits
+    // under <key>/checkout/, D-7664).
+    expect(graph.map((c) => [c.name, c.pattern, c.root])).toEqual([
+      ['graph-repo-build', 'E', '<store>/<repo-key>/builds/'],
+      ['graph-repo-checkout', 'O', '<store>/<repo-key>/checkout/<repo-name>/'],
+      ['graph-repo-memory', 'O', '<store>/<repo-key>/memory/'],
+      ['graph-staging', 'E', '<store>/<repo-key>/staging/'],
+      ['graph-tree-link', 'W', '<tree>/graphify-out (a symlink to <store>/<repo-key>/current)'],
+      ['graph-sweep-census', 'R', '~/.ccrc/graph-sweep.json'],
+    ]);
+    for (const c of graph) {
+      expect(c.collector, `${c.name} is collected`).toBeTruthy();
+      expect(c.ruling, `${c.name} needs no ruling`).toBeNull();
+    }
+    const names = LIFECYCLE.map((c) => c.name);
+    for (const n of ['workspace-graph-store', 'project-graph-store', 'graph-corpus-filter', 'graph-build-lock']) {
+      expect(names, `${n} is retired`).not.toContain(n);
+    }
   });
   it('every collector-less class carries a non-empty operator ruling', () => {
     for (const c of LIFECYCLE.filter((c) => c.collector === null)) {
       expect(c.ruling, `${c.name} needs a ruling`).toBeTruthy();
     }
+  });
+  it('declares the orphan-worktree classes as W rows whose collector is the orphan-tree lane (D-6631)', () => {
+    for (const n of ['ccd-orphan-worktrees', 'agent-worktrees']) {
+      const c = LIFECYCLE.find((x) => x.name === n);
+      expect(c, `shared/lifecycle.ts declares no ${n} class`).toBeTruthy();
+      expect(c!.pattern).toBe('W');
+      expect(c!.collector, `${n} names no collector`).toContain('orphan-tree lane');
+      expect(c!.ruling).toBeNull();
+    }
+    expect(LIFECYCLE.find((x) => x.name === 'agent-worktrees')!.root).toContain('.superpowers/worktrees');
+    expect(LIFECYCLE.find((x) => x.name === 'agent-worktrees')!.collector, 'branches of these trees are left').toContain('branches are left');
+  });
+  it('declares the Claude Code temp dir as a session-bound class collected by ccd-tmp-sweep', () => {
+    // Policy row #9 named /tmp/claude-<uid> "a root we declare to agents in
+    // their own system prompt and then never collect"; it reached 138G on the
+    // fleet host before it had a collector.
+    const c = LIFECYCLE.find((x) => x.name === 'claude-tmp-session-dirs');
+    expect(c, 'shared/lifecycle.ts declares no claude-tmp-session-dirs class').toBeTruthy();
+    expect(c!.pattern).toBe('S');
+    expect(c!.collector).toContain('ccd-tmp-sweep');
+    expect(c!.root).toContain('claude-<uid>');
+  });
+  it('claude-tmp-session-dirs names the live arm, the quarantine and the size budget as its collector\'s second half (DR-8, D-6620)', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'claude-tmp-session-dirs')!;
+    expect(c.collector).toContain('live arm');
+    expect(c.collector).toContain('.ccd-tmp-quarantine');
+    expect(c.collector).toContain('tmp-sweep-live-arm');
+    expect(c.bound).toContain('size budget');
+    expect(c.bound).toContain('20');
+    expect(c.root).toContain('.cc-tmp/<id>/claude-<uid>');
+  });
+  it('declares the tmp-sweep census as a rolling class the sweep alone writes (DR-8, D-6620)', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'tmp-sweep-census');
+    expect(c, 'shared/lifecycle.ts declares no tmp-sweep-census class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.root).toBe('~/.ccrc/tmp-sweep.json');
+    expect(c!.creators).toEqual(['ccd-tmp-sweep']);
+    expect(c!.collector).toContain('ccd-tmp-sweep');
+    expect(c!.collector).toContain('1,000');
+  });
+  it('declares a child\'s temp root ~/.cc-tmp/<id>, session-bound and collected by the reclaim tail and ws-collect (D-5888, #298)', () => {
+    // The policy's ruling 4 first described this root: a `--child` workspace spawns with TMPDIR at
+    // `$HOME/.cc-tmp/<id>` (`_child_tmpdir`), the reclaim tail removes it (`_ws_tmproot_remove`), and
+    // `ws-collect` takes one that outlived its row. Only the per-id leaf is declared: loose top-level
+    // entries in `~/.cc-tmp` are `cc-tmp-loose-entries`' (D-6627, which reverses D-5888), and this row must not claim them.
+    const c = LIFECYCLE.find((x) => x.name === 'child-tmp-roots');
+    expect(c, 'shared/lifecycle.ts declares no child-tmp-roots class').toBeTruthy();
+    expect(c!.pattern).toBe('S');
+    expect(c!.root).toBe('~/.cc-tmp/<id>/');
+    expect(c!.creators.join(' ')).toContain('_child_tmpdir');
+    expect(c!.collector).toContain('_ws_tmproot_remove');
+    expect(c!.collector).toContain('ws-collect');
+    expect(c!.bound).toContain('child');
+    expect(c!.ruling).toBeNull();
+  });
+  it('declares the loose entries of ~/.cc-tmp as their own session-bound class, collected by the ws-collect loose arm (D-6627, reversing D-5888)', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'cc-tmp-loose-entries');
+    expect(c, 'shared/lifecycle.ts declares no cc-tmp-loose-entries class').toBeTruthy();
+    expect(c!.pattern).toBe('S');
+    expect(c!.root).toBe('~/.cc-tmp/<name>');
+    expect(c!.collector).toContain('ws-collect loose arm');
+    expect(c!.bound).toContain('48 hours');
+    expect(c!.ruling).toBeNull();
+    // The two rows split ~/.cc-tmp between them: the per-id leaf is the child row's, a loose name this row's.
+    expect(LIFECYCLE.filter((x) => x.root.startsWith('~/.cc-tmp/')).map((x) => x.name).sort())
+      .toEqual(['cc-tmp-loose-entries', 'child-tmp-roots']);
+  });
+  it('declares a child workspace itself, a workspace class the stale arm collects at seven idle days (D-6639)', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'child-workspaces');
+    expect(c, 'shared/lifecycle.ts declares no child-workspaces class').toBeTruthy();
+    expect(c!.pattern).toBe('W');
+    expect(c!.collector).toContain('ws-reclaim');
+    expect(c!.collector).toContain('stale arm at 7 idle days');
+    expect(c!.collector).toContain('ws-expire');
+    expect(c!.bound).toContain('7 idle days');
+    expect(c!.bound).toContain('never while it coordinated');
+    expect(c!.ruling).toBeNull();
+  });
+  // D-8612 (consolidation spec C4: "the manifest's workspace row points at the table"): the child-workspaces row names
+  // the table that holds its collectors' refusal edges. L0 imports nothing, so the row names it as text; this pins the
+  // text to the real export, and the export to edges of both verbs the row's collector runs.
+  it('the child-workspaces row names WORKSPACE_TRANSITIONS, the table of its collectors\' refusal edges (D-8612)', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'child-workspaces');
+    expect(c!.collector).toContain('refusal edges: WORKSPACE_TRANSITIONS (shared/workspaceTransitions.ts)');
+    const verbs = new Set(WORKSPACE_TRANSITIONS.map((t) => t.verb));
+    for (const v of ['reclaim', 'expire'] as const) {
+      expect(c!.collector, v).toContain(`ws-${v}`);
+      expect(verbs.has(v), `WORKSPACE_TRANSITIONS has no ${v} edge`).toBe(true);
+    }
+    const src = readFileSync(path.join(REPO_ROOT, 'shared/lifecycle.ts'), 'utf8');
+    expect(src, 'the L0 manifest imports nothing').not.toMatch(/^\s*import\b|\bimport\s*\(|\brequire\s*\(/m);
+  });
+  // CHARACTERIZATION (D-7278; green on `main` before the deps-shed arm): the manifest's classes, in order, and the
+  // policy's containment row for `node_modules` — it has no class of its own and "dies with" its workspace.
+  it('characterization: the manifest\'s classes, and no class of its own for a workspace\'s node_modules (D-7278)', () => {
+    expect(LIFECYCLE.map((c) => c.name)).toEqual([
+      'graph-repo-build', 'graph-repo-checkout', 'graph-repo-memory', 'graph-staging', 'graph-tree-link', 'graph-sweep-census',
+      'claude-tmp-session-dirs', 'tmp-sweep-census', 'child-tmp-roots', 'ccd-orphan-worktrees', 'agent-worktrees',
+      'cc-tmp-loose-entries', 'child-workspaces', 'workspace-dependency-dirs', 'scope-sweep-verdicts', 'project-pool-tag', 'history-store',
+      'history-migration-snapshot', 'history-store-id', 'history-spool', 'history-journal', 'history-switches',
+      'history-backups', 'history-export', 'history-scope-markers', 'history-card-files', 'history-steer-files', 'history-replay-out',
+      'history-recall-off', 'server-test-run-dirs', 'archived-workspaces',
+      // Test box TB11 (D-7413): the fleet host's four test box classes.
+      'testbox-token', 'testbox-push-key',
+      // Test box connect (D-8166): the files `ccrc testbox-admin` owns.
+      'testbox-admin-key', 'testbox-known-hosts', 'testbox-overlay', 'testbox-admin-state', 'testbox-box-settings',
+      'testbox-rows', 'testbox-parity', 'testbox-admin-lock', 'testbox-admin-log',
+      'testbox-times', 'testbox-runs-log',
+      // D-7857: the carry dedupe sweep's record.
+      'carry-dedupe-record',
+    ]);
+    // D-7278 (the intended change): the one class the ruling took out of containment.
+    expect(LIFECYCLE.filter((c) => c.root.includes('node_modules')).map((c) => c.name)).toEqual(['workspace-dependency-dirs']);
+    const policy = readFileSync(path.join(REPO_ROOT, 'docs/superpowers/specs/2026-08-11-artifact-lifecycle-policy.md'), 'utf8');
+    const row2 = policy.split('\n').find((l) => l.startsWith('| 2 | `node_modules` inside a workspace'));
+    expect(row2, 'the policy\'s inventory row 2').toBeTruthy();
+    expect(row2).toContain('| dies with #1; in a SLEEPING worker');
+  });
+  it('declares the fleet host\'s test box files: the operator\'s token and push key, the durations file and the runs log (D-7413, D-7445)', () => {
+    const by = (n: string) => LIFECYCLE.find((x) => x.name === n);
+    for (const [n, root] of [['testbox-token', '~/.ccrc/testbox.token'], ['testbox-push-key', '~/.ccrc/testbox-push.key']] as const) {
+      const c = by(n);
+      expect(c, `shared/lifecycle.ts declares no ${n} class`).toBeTruthy();
+      expect(c!.root.startsWith(root), `${n}'s root`).toBe(true);
+      // D-8166: the connect verb writes and collects both (testbox-lifecycle-rows.test.ts holds the words).
+      expect([c!.pattern, c!.ruling]).toEqual(['O', null]);
+      expect(c!.collector).toContain('ccrc testbox-admin disconnect');
+    }
+    const times = by('testbox-times');
+    expect(times, 'shared/lifecycle.ts declares no testbox-times class').toBeTruthy();
+    expect(times!.root).toContain('CCRC_TESTBOX_TIMES');
+    expect([times!.pattern, times!.creators[0]]).toEqual(['R', 'ccd-testbox-times (the daily timer)']);
+    expect(times!.collector).toContain('a failed pass keeps the previous file');
+    const runs = by('testbox-runs-log');
+    expect(runs, 'shared/lifecycle.ts declares no testbox-runs-log class').toBeTruthy();
+    expect([runs!.root, runs!.pattern]).toEqual(['$REG/testbox-runs/<UTC date>.log', 'R']);
+    expect(runs!.creators).toEqual(['ccd/ccrc-test (the wrapper, the runs log\'s one writer, D-7445)']);
+    expect(runs!.collector).toContain('ccd/ccrc-test');
+    expect(runs!.bound).toContain('two day files');
+    // The bound is the wrapper's own: its removal keeps a day file only from yesterday on.
+    const wrapper = readFileSync(path.join(REPO_ROOT, 'ccd', 'ccrc-test'), 'utf8');
+    expect(wrapper).toContain('if [[ "$day" < "$yday" ]]; then rm -f -- "$old"; fi');
+  });
+  it('declares a sleeping session\'s ignored dependency directories, the one class the deps-shed arm collects (D-7278)', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'workspace-dependency-dirs');
+    expect(c, 'shared/lifecycle.ts declares no workspace-dependency-dirs class').toBeTruthy();
+    expect(c!.pattern).toBe('W');
+    expect(c!.root).toContain('node_modules');
+    expect(c!.collector).toContain('ws-shed-deps');
+    expect(c!.collector).toContain('its live switch in shared/switches.ts');
+    expect(c!.bound).toContain('CCRC_DEPS_SHED_AFTER_HOURS');
+    expect(c!.ruling).toBeNull();
+  });
+  it('declares the pane-scope sweep\'s verdict record, a rolling class its own writer rewrites', () => {
+    // Session-continuity wave 4: `ccd-scope-sweep` keeps one record in the
+    // runtime dir, and `ccrc doctor` reads it. An unassigned artifact class is a
+    // defect (policy §1.2), so it is declared the day it ships.
+    const c = LIFECYCLE.find((x) => x.name === 'scope-sweep-verdicts');
+    expect(c, 'shared/lifecycle.ts declares no scope-sweep-verdicts class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd-scope-sweep']);
+    expect(c!.root).toBe('$XDG_RUNTIME_DIR/ccd-scope-sweep.state');
   });
   it('declares project-pool-tag, and it is a collector-less class with an operator ruling', () => {
     // `docs/superpowers/specs/2026-08-11-artifact-lifecycle-policy.md` §1.2
@@ -994,5 +1247,363 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.ruling).toContain('ccd project-pool');
     expect(c!.ruling).toContain('pools-stale');
     expect(c!.root).toContain('pools/');
+  });
+
+  // ── ccrc history (spec 2026-10-05 §9.4, pin O17) ────────────────────────
+  // Thirteen classes, landed across seven PRs. `LifecycleClass` has no "lands in" field — the manifest says what
+  // IS, not what a plan will add — so which PR adds which row lives here, beside the assertion that reads it.
+  // Each later PR appends its key to HISTORY_LANDED in the commit that adds its rows.
+  const HISTORY_ROWS_BY_PR = {
+    B1: ['history-store', 'history-migration-snapshot', 'history-store-id', 'history-spool', 'history-journal', 'history-switches'],
+    B2: ['history-backups'],
+    B3: ['history-scope-markers', 'history-card-files'],
+    B4: ['history-export'],
+    'W2-1': ['history-recall-off'],
+    'W2-4': ['history-replay-out'],
+    W3: ['history-steer-files'],
+  } as const;
+  type HistoryPr = keyof typeof HISTORY_ROWS_BY_PR;
+  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3', 'B4', 'W2-4', 'W2-1', 'W3'];
+
+  it('the history classes are §9.4\'s thirteen, each declared by the PR its Lands-in column names, and none before it (O17)', () => {
+    const all: string[] = Object.values(HISTORY_ROWS_BY_PR).flat();
+    expect(new Set(all).size, 'a history class is listed under two PRs').toBe(all.length);
+    expect(all).toHaveLength(13);
+    const declared = new Set(LIFECYCLE.map((c) => c.name));
+    for (const pr of Object.keys(HISTORY_ROWS_BY_PR) as HistoryPr[]) {
+      for (const n of HISTORY_ROWS_BY_PR[pr]) {
+        expect(declared.has(n), HISTORY_LANDED.includes(pr)
+          ? `${n} lands in ${pr}, which has landed, and shared/lifecycle.ts declares no such class`
+          : `${n} lands in ${pr} and is declared before it`).toBe(HISTORY_LANDED.includes(pr));
+      }
+    }
+    expect(LIFECYCLE.map((c) => c.name).filter((n) => n.startsWith('history-')).sort(), 'a history class outside the table')
+      .toEqual(HISTORY_LANDED.flatMap((pr) => [...HISTORY_ROWS_BY_PR[pr]]).sort());
+  });
+
+  it('every history class names its creators and its tier', () => {
+    for (const c of LIFECYCLE.filter((x) => x.name.startsWith('history-'))) {
+      expect(c.creators.length, `${c.name} names no creator`).toBeGreaterThan(0);
+      for (const w of c.creators) expect(w.trim(), `${c.name} has a blank creator`).not.toBe('');
+      expect(c.tier.trim(), `${c.name} has no tier`).not.toBe('');
+      expect(c.bound.trim(), `${c.name} has no bound`).not.toBe('');
+    }
+  });
+
+  it('declares history-store: an O class whose collector is the operator verb prune, created by the sweep through store.mjs', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-store');
+    expect(c, 'shared/lifecycle.ts declares no history-store class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (through store.mjs)']);
+    expect(c!.collector).toContain('ccrc history prune');
+    expect(c!.collector).toContain('stale temp');
+    expect(c!.root).toContain('~/.ccrc/history/db/history.db');
+    expect(c!.root).toContain('history.db.new.<pid>');
+    expect(c!.root).toContain('.history.db.restore.<pid>');
+    expect(c!.tier).toContain('default 50');
+  });
+
+  it('declares history-migration-snapshot: an R class the sweep collects, keeping the newest snapshot', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-migration-snapshot');
+    expect(c, 'shared/lifecycle.ts declares no history-migration-snapshot class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs']);
+    expect(c!.collector).toContain('ccd-history-sweep');
+    expect(c!.collector).toContain('keeps the newest');
+    expect(c!.root).toContain('backups/pre-v<N>.db');
+    expect(c!.root).toContain('.pre-v<N>.attempt');
+  });
+
+  it('declares history-store-id: collector-less, kept with the store and removed only with it', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-store-id');
+    expect(c, 'shared/lifecycle.ts declares no history-store-id class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('kept with the store; removed only with it');
+    for (const f of ['store.id', 'store.writer', 'store.id.pending', 'op']) expect(c!.root).toContain(f);
+    // B2 adds two more files to the same row (D-5016's `pass`, D-5026's `pass-died`). `toContain('pass')` is already true of
+    // 'while an --op pass runs', so each is pinned by the phrase that declares it, which goes when its name is dropped.
+    expect(c!.root).toContain('pass while a scheduled pass runs');
+    expect(c!.root).toContain('pass-died while a recorded death stands, until a pass commits a tick');
+    // and how each goes: a pass removes its own marker, the next pass records a killed one, a committed tick removes the record.
+    expect(c!.ruling).toContain('a scheduled pass removes its own pass in its finally');
+    expect(c!.ruling).toContain('records a killed pass\'s leftover in pass-died and overwrites the marker');
+    expect(c!.ruling).toContain('the first pass that commits a tick removes pass-died');
+  });
+
+  // W5h-2 Task 4 (D-5748, and review 467 F4's erratum): the tier's two marker bounds are the longest lines the op and pass grammars
+  // take, measured here from lib's parsers rather than restated, so a grammar that widens or a tier that drifts goes red.
+  it('the history-store-id tier states the longest op and pass marker lines the grammars accept: 119 B and 86 B (D-5748)', () => {
+    const tier = LIFECYCLE.find((x) => x.name === 'history-store-id')!.tier;
+    const BOOT = '0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e';
+    const passFields = ['9'.repeat(10), '9'.repeat(16), '9'.repeat(20)];
+    const opFields = ['a'.repeat(32), ...passFields];
+    const line = (f: string[]): string => `${f.join(' ')} ${BOOT}\n`;
+    expect(parsePassMarker(line(passFields)), 'the longest pass marker parses').not.toBeNull();
+    expect(parseOpMarker(line(opFields)), 'the longest op marker parses').not.toBeNull();
+    for (let i = 0; i < passFields.length; i += 1) {
+      expect(parsePassMarker(line(passFields.map((v, j) => (j === i ? `9${v}` : v)))), `pass field ${i} one longer`).toBeNull();
+    }
+    for (let i = 0; i < opFields.length; i += 1) {
+      expect(parseOpMarker(line(opFields.map((v, j) => (j === i ? `${v[0]}${v}` : v)))), `op field ${i} one longer`).toBeNull();
+    }
+    expect(tier).toContain(`pass (a marker line of about 70 B, at most ${Buffer.byteLength(line(passFields))} B)`);
+    expect(tier).toContain(`op (a marker line of about 77 B, at most ${Buffer.byteLength(line(opFields))} B)`);
+    expect(tier).not.toContain('at most 87 B');
+  });
+
+  it('declares history-spool: an R class written by the hook, the CLI and the sweep, collected by the two-phase drain', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-spool');
+    expect(c, 'shared/lifecycle.ts declares no history-spool class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd/session-hook.sh', 'ccd/history/cli.mjs', 'ccd/history/sweep.mjs']);
+    expect(c!.collector).toContain('two-phase drain');
+    expect(c!.collector).toContain('journaled and fsynced before');
+    expect(c!.root).toContain('~/.ccrc/history/spool/');
+    expect(c!.root).toContain('.draining/');
+  });
+
+  it('declares history-journal: collector-less, removed only with the store by --purge --purge-history', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-journal');
+    expect(c, 'shared/lifecycle.ts declares no history-journal class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('kept with the store; removed only with it');
+    expect(c!.ruling).toContain('--purge --purge-history');
+    expect(c!.root).toBe('~/.ccrc/history/journal/<store_id>/<YYYY-MM>.<writer>.jsonl');
+    expect(c!.tier).toContain('journal-growth');
+  });
+
+  it('declares history-switches: operator files with no writer in the tree, touched by hand', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-switches');
+    expect(c, 'shared/lifecycle.ts declares no history-switches class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['operator shell']);
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('touched by hand; persists until removed');
+    // B1's two, W2-2b's headless-on (W2-D49) and W4-1's agents-on (D-8151), each spelled from ~/.ccrc as lib's SWITCHES is; W3 adds the steer
+    // markers to this root in its own PR
+    expect(c!.root).toBe('~/.ccrc/history-off, ~/.ccrc/history-max-gb, ~/.ccrc/history/headless-on, ~/.ccrc/history/agents-on');
+  });
+
+  it('declares history-backups: an operator-made O class with no collector, created by --op backup, its stale .tmp removed by the next backup', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-backups');
+    expect(c, 'shared/lifecycle.ts declares no history-backups class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (--op backup)']);
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('ccrc history doctor --backup');
+    expect(c!.ruling).toContain('remove by hand');
+    expect(c!.ruling).toContain('removes a stale .tmp first');
+    expect(c!.root).toBe('~/.ccrc/history/db/backups/<ts>.db, and its .<ts>.db.tmp while one is written');
+    expect(c!.tier).toBe('one store size per backup');
+  });
+
+  it('declares history-export: an O class the sweep writes through store.mjs, kept with the store', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-export');
+    expect(c, 'shared/lifecycle.ts declares no history-export class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (through store.mjs)']);
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('kept with the store; removed only with it, or by hand by segment');
+    expect(c!.ruling).toContain('stale .tmp');
+    expect(c!.root).toContain('~/.ccrc/history/export/<store_id>/<seq>.<writer>.db');
+    expect(c!.tier).toContain('256 MiB');
+  });
+
+  it('declares the server suite\'s per-run temp parent, an E class its own creator collects (#316)', () => {
+    // One `ccrc-testrun-XXXXXX` directory per server vitest run, removed at teardown, by the signal arm, or by a
+    // later run's reap. L0 cannot import the prefix, so the row's `root` is the one textual second copy of it,
+    // and this case is what keeps the two in step. The quiet window has no copy at all: the row names it.
+    const c = LIFECYCLE.find((x) => x.name === 'server-test-run-dirs');
+    expect(c, 'shared/lifecycle.ts declares no server-test-run-dirs class').toBeTruthy();
+    expect(c!.pattern).toBe('E');
+    expect(c!.root).toContain(RUN_PREFIX);
+    expect(c!.collector).toContain('run-tmp.globalsetup.mjs');
+    expect(c!.collector).toContain('RUN_QUIET_S');
+    // The sweep's test-run arm (DR-10, D-6622) is the second collector, for a root no later run visits.
+    expect(c!.collector).toContain('ccd/ccd-tmp-sweep');
+    expect(c!.collector).toContain('test-run arm');
+    expect(`${c!.collector} ${c!.bound}`, 'the row carries a copy of RUN_QUIET_S\'s number').not.toContain(String(RUN_QUIET_S));
+  });
+
+  // ── ccrc history W1-B3 (spec 2026-10-05 §9.4, O17's B3 half) ────────────
+  // The card line's two classes. Both are rolling (R):
+  //   - the hook rewrites a session's scope marker on every PreCompact;
+  //   - the sweep rewrites, consumes, withdraws and collects the card predictions.
+  // Each collector promise has its own case in history-card.test.ts:
+  //   - consumption: consumeAndWriteCards, counters card_consumed:<scope>;
+  //   - withdrawal on a pass that runs no card step: withdrawCards, counters card_withdrawn:<reason>;
+  //   - the 7-day purge: collectPurgedHistoryFiles, counters scope_files_purged and card_files_purged.
+  // A collector promise with no test can go false without a red, which is why each one names its case here.
+  it('declares history-scope-markers: an R class the hook writes and the sweep collects once its session is purged', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-scope-markers');
+    expect(c, 'shared/lifecycle.ts declares no history-scope-markers class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd/session-hook.sh']);
+    expect(c!.collector).toContain('ccd-history-sweep');
+    expect(c!.collector).toContain('the files of purged sessions after 7 days');
+    expect(c!.root).toBe('~/.ccrc/history/scope/<id>');
+    expect(c!.tier).toBe('<=64 B per session');
+    expect(c!.ruling).toBeNull();
+  });
+
+  it('declares history-card-files: an R class the sweep writes through card.mjs, deletes on consumption, withdraws on a pass that runs no card step and collects once its session is purged', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-card-files');
+    expect(c, 'shared/lifecycle.ts declares no history-card-files class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (through card.mjs)']);
+    expect(c!.collector).toContain('ccd-history-sweep');
+    expect(c!.collector).toContain('deleted on consumption');
+    expect(c!.collector).toContain('withdrawn by a pass that runs no card step');
+    expect(c!.collector).toContain('the files of purged sessions after 7 days');
+    // §9.4: the record goes with its session's files.
+    expect(c!.collector).toContain('the record included');
+    expect(c!.root).toContain('~/.ccrc/history/card/<id>/<uuid>.txt');
+    // R-recalloff-parity: the generation record Task 5 writes beside each prediction is in the same class, and
+    // §9.4 names it in the root column.
+    expect(c!.root, 'the class names no generation record').toContain('generation record <uuid>.gen');
+    expect(c!.tier).toBe('<=512 B per session');
+    expect(c!.ruling).toBeNull();
+  });
+
+  it("the B3 rows' numbers are the code's own: 7 days is PURGED_FILES_GRACE_MS, 512 B is CARD_LINE_MAX", async () => {
+    // The manifest is L0 and imports nothing, so its prose numbers are bound here instead. The writer prints only
+    // a grammar-valid line (at most 145 characters, 152 bytes with its LF), so the reader's CARD_LINE_MAX
+    // character cap is the file's bound; with its generation record (37 B, R-recalloff-parity) a session holds at
+    // most 189 B there.
+    const { PURGED_FILES_GRACE_MS, CARD_LINE_MAX } = await import('../../ccd/history/lib.mjs');
+    const days = PURGED_FILES_GRACE_MS / 86_400_000;
+    expect(Number.isInteger(days), 'PURGED_FILES_GRACE_MS is not a whole number of days').toBe(true);
+    for (const n of ['history-scope-markers', 'history-card-files']) {
+      const c = LIFECYCLE.find((x) => x.name === n);
+      expect(c, `shared/lifecycle.ts declares no ${n} class`).toBeTruthy();
+      expect(c!.collector, `${n}'s collector names another grace than the sweep's`)
+        .toContain(`the files of purged sessions after ${days} days`);
+    }
+    expect(LIFECYCLE.find((x) => x.name === 'history-card-files')!.tier).toBe(`<=${CARD_LINE_MAX} B per session`);
+  });
+
+  // ── ccrc history W3-1 (spec 2026-10-05 §9.4; plan 2026-10-29 Task 1B) ────────────────────────────────────────────
+  // The steer file rides the card's per-session step, so its class is the card files' class in kind: the sweep writes it
+  // through card.mjs, deletes it on consumption, withdraws it on a pass that runs no card step, and collects it with its
+  // purged session. Each promise has its own case in history-card.test.ts (the steer file's lifecycle describe).
+  it('declares history-steer-files: an R class the sweep writes through card.mjs on the card\'s lifecycle, 8 KB per session, with the lane map under steer/.lanes/', async () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-steer-files');
+    expect(c, 'shared/lifecycle.ts declares no history-steer-files class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (through card.mjs)']);
+    expect(c!.collector).toContain('ccd-history-sweep');
+    expect(c!.collector).toContain('deleted on consumption');
+    expect(c!.collector).toContain('withdrawn by a pass that runs no card step');
+    expect(c!.root).toBe('~/.ccrc/history/steer/<id>/, and the lane map steer/.lanes/<wrapper>');
+    expect(c!.ruling).toBeNull();
+    // The manifest is L0 and imports nothing, so its prose numbers are bound to the code's own here, as the B3 rows' are.
+    const { PURGED_FILES_GRACE_MS, STEER_FILE_MAX } = await import('../../ccd/history/lib.mjs');
+    expect(c!.collector, "the collector names another grace than the sweep's")
+      .toContain(`the files of purged sessions after ${PURGED_FILES_GRACE_MS / 86_400_000} days`);
+    expect(c!.collector, 'spec §9.4: a lane file whose account left the roster is removed on the next tick')
+      .toContain('a lane file whose account left the roster is removed on the next tick');
+    expect(c!.tier).toBe(`<=${STEER_FILE_MAX / 1024} KB per session; one word per rostered account`);
+  });
+
+  // ── ccrc history W2-4 (spec 2026-10-05 §9.4, O17's W2-4 half; W2-D9, W2-D53) ──────────────────────────────────────
+  // The replay driver's --out. Operator-made: the operator names the directory and removes it by hand once the W2
+  // decision is recorded, so the class has no collector and carries the ruling instead. The marker's name in the
+  // row is the code's own: the manifest is L0 and imports nothing, so it is bound here, as the B3 numbers are above.
+  it('declares history-replay-out: the W2 driver\'s --out, an O class it creates, with no collector, removed by hand once the W2 decision is recorded', async () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-replay-out');
+    expect(c, 'shared/lifecycle.ts declares no history-replay-out class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['deploy/history-replay.mjs']);
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('removed by hand once the W2 decision is recorded');
+    expect(c!.bound).toBe('one W2 run, until the W2 decision is recorded');
+    expect(c!.root).toContain('outside any git tree');
+    expect(c!.root).toContain('mode 0700');
+    const { OUT_MARKER } = await import('../../deploy/history-replay.mjs');
+    expect(c!.root, 'the row names another marker than the driver writes').toContain(`marked by ${OUT_MARKER}`);
+  });
+
+  // ── ccrc history W2-1 (spec 2026-10-05 §9.4, O17's W2-1 half; W2-D9, W2-D28) ──────────────────────────────────────
+  // The replay eval's control arm. sweep.mjs's --op recall-off is its one writer (O13), through its temp recall-off/~tmp.<pid>,
+  // which the next recall-off pass removes; the operator verbs collect it, `recall-off --clear-all` at W2 close. The manifest is
+  // L0 and imports nothing, so the per-file bound is bound here to the code's own UUID grammar, as the B3 numbers are above.
+  it('declares history-recall-off: the eval\'s control arm, an O class sweep.mjs writes through --op recall-off, collected by the operator verbs', async () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-recall-off');
+    expect(c, 'shared/lifecycle.ts declares no history-recall-off class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (--op recall-off)']);
+    expect(c!.root).toContain('~/.ccrc/history/recall-off/<id>');
+    expect(c!.root, 'the row names its temp').toContain('recall-off/~tmp.<pid>');
+    expect(c!.collector).toContain('ccrc history recall-off <id> --clear');
+    expect(c!.collector).toContain('recall-off --clear-all at W2 close');
+    expect(c!.ruling).toBeNull();
+    const { UUID_RE } = await import('../../ccd/history/lib.mjs');
+    const g = '0189abcd-1234-4678-9abc-0123456789ab';
+    expect(UUID_RE.test(g), 'CONTROL: a generation the grammar takes').toBe(true);
+    expect(c!.tier).toContain(`at most ${Buffer.byteLength(`${g}\n`)} B`);
+  });
+
+  // ── ccrc history W2-2b (spec 2026-10-05 §9.4, O17; W2-D9, W2-D49, W2-D44; D-5768) ──────────────────────────────────
+  // headless-on joins B1's switches row: the one switch with content, a store line and one line per listed family. The
+  // manifest is L0 and imports nothing, so the row names HEADLESS_LIST_MAX_BYTES as text and carries its KiB figure; this
+  // case holds the figure to lib's constant and to the grammar, and the paths to SWITCHES, as the B3 numbers are above.
+  it('the history-switches tier is lib\'s: headless-on is bounded at HEADLESS_LIST_MAX_BYTES in KiB, which the marker grammar takes exactly, with one store line plus one line per family (W2-2b Task 5)', async () => {
+    const { HEADLESS_LIST_MAX_BYTES, SWITCHES, parseHeadlessList, formatHeadlessList } = await import('../../ccd/history/lib.mjs');
+    const c = LIFECYCLE.find((x) => x.name === 'history-switches');
+    expect(c, 'shared/lifecycle.ts declares no history-switches class').toBeTruthy();
+    expect(c!.root.split(', '), 'the row spells a switch otherwise than lib\'s SWITCHES')
+      .toEqual([SWITCHES.off, SWITCHES.maxGb, SWITCHES.headlessOn, SWITCHES.agentsOn].map((s) => `~/${s}`));
+    expect(HEADLESS_LIST_MAX_BYTES % 1024, 'CONTROL: the bound is a whole number of KiB').toBe(0);
+    expect(c!.tier).toBe('<64 B each; `headless-on` bounded at ' + `${HEADLESS_LIST_MAX_BYTES / 1024}` + ' KiB (HEADLESS_LIST_MAX_BYTES), one store line plus one line per listed family');
+    // The grammar takes exactly the bound the row states: a marker of HEADLESS_LIST_MAX_BYTES bytes parses, one more does not.
+    const STORE = ['1b2c3d4e', '5f60', '4a7b', '8c9d', '0e1f2a3b4c5d'].join('-');
+    const GEN = ['2c3d4e5f', '6071', '4b8c', '9d0e', '1f2a3b4c5d6e'].join('-');
+    const head = `store ${STORE}\nwrap-a-demo ${GEN}\nwrap-b-demo -\n#`;
+    const sized = (n: number): string => `${head}${'x'.repeat(n - Buffer.byteLength(head) - 1)}\n`;
+    expect(Buffer.byteLength(sized(HEADLESS_LIST_MAX_BYTES)), 'CONTROL: the fixture is the bound exactly').toBe(HEADLESS_LIST_MAX_BYTES);
+    expect(parseHeadlessList(sized(HEADLESS_LIST_MAX_BYTES)).ok, 'a marker of exactly the bound is refused').toBe(true);
+    const over = parseHeadlessList(sized(HEADLESS_LIST_MAX_BYTES + 1));
+    expect(over.ok, 'a marker one byte over the bound parses').toBe(false);
+    expect((over as { reason?: string }).reason).toBe('headless-malformed');
+    // "one store line plus one line per listed family": the formatter's text for two families, a legacy one among them.
+    const text = formatHeadlessList({ storeId: STORE, pairs: [{ ccrcId: 'wrap-a-demo', generation: GEN }, { ccrcId: 'wrap-b-demo', generation: '' }] });
+    expect(text.split('\n').filter((l) => l !== '' && !l.startsWith('#'))).toEqual([`store ${STORE}`, `wrap-a-demo ${GEN}`, 'wrap-b-demo -']);
+    expect(parseHeadlessList(text).ok, 'CONTROL: the formatter\'s text is a marker the grammar takes').toBe(true);
+  });
+});
+
+describe('docs W2 — ccdEnding: the single reader of killed and signal, and cutShort read through it', () => {
+  const r = (killed: CcdResult['killed'], signal: CcdResult['signal']): CcdResult =>
+    ({ ran: true as const, ok: false, stdout: '', stderr: '', killed, signal });
+  const U = UNMEASURED;
+  // Every (killed, signal) cell, killed in {true, false, UNMEASURED} by signal in {null, SIGKILL, SIGTERM, UNMEASURED}.
+  // The UNMEASURED signal column is the token trap: `UNMEASURED` is a string, so a reader that tests the signal by
+  // its javascript type reads the token as a signal name.
+  const TABLE: readonly (readonly [CcdResult['killed'], CcdResult['signal'], CcdEnding])[] = [
+    [true, null, { kind: 'deadline' }],
+    [true, 'SIGKILL', { kind: 'deadline' }],
+    [true, 'SIGTERM', { kind: 'deadline' }],
+    [true, U, { kind: 'deadline' }],
+    [false, null, { kind: 'exited' }],
+    [false, 'SIGKILL', { kind: 'signal', signal: 'SIGKILL' }],
+    [false, 'SIGTERM', { kind: 'signal', signal: 'SIGTERM' }],
+    [false, U, { kind: 'unmeasured' }],
+    [U, null, { kind: 'exited' }],
+    [U, 'SIGKILL', { kind: 'signal', signal: 'SIGKILL' }],
+    [U, 'SIGTERM', { kind: 'signal', signal: 'SIGTERM' }],
+    [U, U, { kind: 'unmeasured' }],
+  ];
+
+  it.each(TABLE)('killed %s, signal %s ends as %j', (killed, signal, want) => {
+    expect(ccdEnding(r(killed, signal))).toEqual(want);
+  });
+
+  it('cutShort answers what the ending says, cell for cell: deadline and signal adopt, unmeasured is UNMEASURED', () => {
+    for (const [killed, signal, ending] of TABLE) {
+      const want = ending.kind === 'unmeasured' ? UNMEASURED : ending.kind !== 'exited';
+      expect(cutShort(r(killed, signal)), `killed ${String(killed)}, signal ${String(signal)}`).toBe(want);
+    }
   });
 });

@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness, DEAD_PANE, WIDE_PANE_IF_UP } from './ccdWsHelpers.js';
 import { describeLinux, describeDarwin } from './platformFixtures.js';
 
 let h: CcdHarness;
@@ -40,6 +40,7 @@ const UNIT = `sleep() { :; };
   };
   tmux() {
     echo "tmux $*" >> "$HOME/ccd-calls"
+    ${WIDE_PANE_IF_UP}
     case "$1" in
       new-session)  : > "$HOME/pane-up" ;;
       kill-session) rm -f "$HOME/pane-up" ;;
@@ -62,6 +63,7 @@ const NO_PANE = `sleep() { :; };
   systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
   tmux() {
     echo "tmux $*" >> "$HOME/ccd-calls"
+    ${DEAD_PANE}
     case "$1" in
       has-session)  echo "can't find session: $3" >&2; return 1 ;;
       capture-pane) printf '' ;;
@@ -217,7 +219,7 @@ describeLinux('cmd_enable reconciles a session that is already alive', () => {
     h.sh(`${UNIT} : > "$HOME/pane-up"`);
     beat('claude-a-demo');
     const out = h.sh(`${UNIT} : > "$HOME/pane-up"; cmd_start claude-a demo`);
-    expect(sysCalls()).toEqual(['systemctl --user enable claude-session@claude-a-demo']);
+    expect(sysCalls()).toEqual(['systemctl --user enable --no-reload claude-session@claude-a-demo']);
     expect(out).toContain('already running: claude-a-demo');
     expect(out).not.toContain('re-supervised');
   });
@@ -306,7 +308,7 @@ describeLinux('ccd ensure revives a live-but-unsupervised session', () => {
     seedLive('myid');
     const NOUNIT = `sleep() { :; };
       systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 1; };
-      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) [[ -e "$HOME/pane-up" ]] ;; esac; };`;
+      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE_IF_UP} case "$1" in has-session) [[ -e "$HOME/pane-up" ]] ;; esac; };`;
     // Captured through a file, not through a thrown exec: `cmd_ensure` returns
     // 0 on this path (the pane really is alive), so the warning would be
     // invisible to a helper that only reads stderr on a non-zero exit.
@@ -352,7 +354,7 @@ describeLinux('the recursion guard is an in-process variable', () => {
     seed('myid');
     const r = shFail(`${NO_PANE} cmd_supervise myid`);
     expect(r.code).toBe(1);   // no session -> the watch loop exits for systemd
-    expect(sysCalls()).toEqual(['systemctl --user enable claude-session@myid']);
+    expect(sysCalls()).toEqual(['systemctl --user enable --no-reload claude-session@myid']);
   });
 });
 
@@ -368,7 +370,7 @@ describeLinux('the start waits on observables', () => {
         case "$*" in "--user enable --now "*) echo "$(date +%s) 3" > "$REG/myid.spawn" ;; esac
         return 0
       };
-      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) return 1 ;; esac; };
+      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${DEAD_PANE} case "$1" in has-session) return 1 ;; esac; };
       cmd_ensure myid`);
     expect(r.code).toBe(3);
     expect(r.stdout).not.toContain('ensured');
@@ -396,7 +398,7 @@ describeLinux('the start waits on observables', () => {
     expect(r.code).toBe(0);
     const calls = h.calls();
     const enableAt = calls.indexOf('systemctl --user enable --now claude-session@claude-a-demo');
-    const attachAt = calls.indexOf('tmux attach -t cc-claude-a-demo');
+    const attachAt = calls.indexOf('tmux attach -t =cc-claude-a-demo:');
     expect(enableAt).toBeGreaterThan(-1);
     expect(attachAt).toBeGreaterThan(enableAt);
   });
@@ -418,7 +420,7 @@ describeLinux('the start waits on observables', () => {
         case "$*" in "--user enable --now "*) echo "$(date +%s) 3" > "$REG/myid.spawn" ;; esac
         return 0
       };
-      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) return 1 ;; esac; };
+      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${DEAD_PANE} case "$1" in has-session) return 1 ;; esac; };
       cmd_ensure myid`);
     expect(h.reg('myid', 'started')).toBe('1');
   });
@@ -470,6 +472,7 @@ describeLinux('when systemd is not there, the start still happens and says so', 
       systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; case "$2" in enable) return 1 ;; esac; return 0; };
       tmux() {
         echo "tmux $*" >> "$HOME/ccd-calls"
+        ${WIDE_PANE_IF_UP}
         case "$1" in
           new-session) : > "$HOME/pane-up" ;;
           has-session) [[ -e "$HOME/pane-up" ]] ;;
@@ -551,6 +554,65 @@ describe('_supervised_start\'s fallbacks take the split form', () => {
     const body = h.sh('type _supervised_start');
     expect(body).not.toMatch(/\$\(\s*_spawn_start/);
     expect(body).toContain('SPAWN_FROMSWAP');
+  });
+});
+
+
+describeLinux('boot persistence never reloads the user manager (wave 15)', () => {
+  // THE RELOAD STORM. `systemctl --user enable` reloads the whole user manager
+  // after it links the unit, unless `--no-reload` says not to. `ccrc update`'s
+  // sweep try-restarts every supervisor, and each one runs `cmd_supervise`'s
+  // self-heal enable on entry, so a sweep of 71 units queued 71 reloads, one
+  // after another (about 27 s, wave 11's attack F3). Nothing on that path writes
+  // a unit file, and the install spine has already reloaded before the sweep,
+  // so the self-heal needs the symlink and nothing else.
+  //
+  // MODELLED FOR THE VERBS CCD ISSUES: this stub counts a reload for
+  // `daemon-reload`, and for an `enable`/`disable` without `--no-reload`, so the
+  // property holds whatever the argv's word order. systemctl reloads for other
+  // install verbs too (reenable, mask, link, preset, ...), which ccd never issues.
+  // The exact argv pins above hold the spelling. The third case is the other edge:
+  // `enable --now` (`_svc_enable_now`) keeps its reload, so the flag cannot leak onto it.
+  const RELOADS = `systemctl() {
+    echo "systemctl $*" >> "$HOME/ccd-calls"
+    case " $* " in
+      *" daemon-reload "*) echo reload >> "$HOME/reloads" ;;
+      *" enable "*|*" disable "*)
+        case " $* " in *" --no-reload "*) ;; *) echo reload >> "$HOME/reloads" ;; esac ;;
+    esac
+    case "$*" in
+      "--user enable --now "*)  : > "$HOME/pane-up" ;;
+      "--user disable --now "*) rm -f "$HOME/pane-up" ;;
+    esac
+    return 0
+  };`;
+  const reloads = (): number => {
+    const f = path.join(h.home, 'reloads');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).length : 0;
+  };
+
+  it('cmd_supervise\'s self-heal enable links the unit and asks for no reload', () => {
+    seed('myid');
+    const r = shFail(`${NO_PANE} ${RELOADS} cmd_supervise myid`);
+    expect(r.code).toBe(1);   // no session -> the watch loop exits for systemd
+    expect(sysCalls()).toHaveLength(1);
+    expect(reloads(), 'a restarted supervisor reloaded the user manager').toBe(0);
+  });
+
+  it('cmd_start on a live, watched row reconciles the symlink and asks for no reload', () => {
+    h.sh(`mkdir -p "$HOME/projects/demo"`);
+    h.sh(`_reg_claim claude-a-demo; _reg_set claude-a-demo supervised "$(date +%s)"`);
+    const out = h.sh(`${UNIT} ${RELOADS} : > "$HOME/pane-up"; cmd_start claude-a demo`);
+    expect(out).toContain('already running: claude-a-demo');
+    expect(sysCalls()).toHaveLength(1);
+    expect(reloads(), 'the already-alive branch reloaded the user manager').toBe(0);
+  });
+
+  it('a fresh start\'s enable --now keeps its one reload: the flag is _svc_enable\'s alone', () => {
+    h.sh(`mkdir -p "$HOME/projects/demo"`);
+    h.sh(`${UNIT} ${RELOADS} cmd_start claude-a demo`);
+    expect(sysCalls()).toContain('systemctl --user enable --now claude-session@claude-a-demo');
+    expect(reloads(), 'enable --now lost its reload').toBe(1);
   });
 });
 

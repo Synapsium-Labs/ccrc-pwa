@@ -53,6 +53,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { CCD_ARGV, type ActorFlags } from '../src/ccdargv.js';
+import { ACCOUNT_DENY_RULES, type CollectToken, type OrphanToken } from '../../shared/api.js';
 import { decOf, eventsOf, measOf } from './lifecycleHelpers.js';
 
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
@@ -126,6 +127,8 @@ interface Probe {
 
 const ABSENT = '__no-such-session__';
 const PROJECT = 'demo';
+/** `/__no-such-tree__`, as the orphan census prints a path: lowercase hex of its bytes. */
+const ABSENT_TREE_HEX = Buffer.from('/__no-such-tree__').toString('hex');
 
 /** The five session verbs' witness, said once: the refusal names the session
  *  the fixture deliberately does not have. That is also what proves the flags
@@ -143,19 +146,65 @@ const uuidRows = (): string[] =>
 
 const PROBES: Record<string, Probe> = {
   'ws-archive': { argv: (d) => CCD_ARGV.wsArchive(ABSENT, d), reached: refusedForTheAbsentSession },
+  // D-5242: `cmd_hibernate` strips the dec before its one-positional arity rule, then refuses the absent row by name.
+  hibernate: { argv: (d) => CCD_ARGV.hibernate(ABSENT, d), reached: refusedForTheAbsentSession },
   'ws-restore': { argv: (d) => CCD_ARGV.wsRestore(ABSENT, d), reached: refusedForTheAbsentSession },
   'ws-hold': { argv: (d) => CCD_ARGV.wsHold(ABSENT, 'probe reason', d), reached: refusedForTheAbsentSession },
   'ws-release': { argv: (d) => CCD_ARGV.wsRelease(ABSENT, d), reached: refusedForTheAbsentSession },
   'ws-rename': { argv: (d) => CCD_ARGV.wsRename(ABSENT, 'ws/probe', d), reached: refusedForTheAbsentSession },
+  // Child reclamation, wave 3. The real verb takes the reap lock and answers
+  // `no-such-session` as JSON for the absent id — the five session verbs'
+  // witness, and proof the dec was stripped before `--session` bound.
+  'ws-reclaim': { argv: (d) => CCD_ARGV.wsReclaim('a'.repeat(64), 7, ABSENT, false, d), reached: refusedForTheAbsentSession },
+  // Workspace lifecycle, wave 3: ws-reclaim's sibling, the same parse and the same witness — the reap lock taken and
+  // `no-such-session` answered as JSON for the absent id, the dec stripped before `--session` bound.
+  'ws-expire': { argv: (d) => CCD_ARGV.wsExpire('a'.repeat(64), ABSENT, d), reached: refusedForTheAbsentSession },
+  // Child reclamation, wave 7: the temp-root collector, ws-expire's argv shape. An absent id is outside the collector's
+  // population (no witness, no quarantine record), so the real verb takes no lock and answers `not-witnessed` as JSON
+  // naming the id — the same witness, and proof the dec was stripped before `--session` bound.
+  'ws-collect': {
+    argv: (d) => CCD_ARGV.wsCollect('a'.repeat(64) as CollectToken, ABSENT, d),
+    reached: (c) => { refusedForTheAbsentSession(c); expect(c.out).toContain('"refused":"not-witnessed"'); },
+  },
+  // Fleet disk retention DR-18 (D-6630): the orphan verb. A tree path that is not one plain real directory is refused as
+  // JSON BEFORE any lock is taken (`not-a-worktree`), the dec stripped before the verb's required-flag check, so the
+  // refusal is byte-identical with and without it and names the path the fixture deliberately does not have.
+  'ws-orphan': {
+    argv: (d) => CCD_ARGV.wsOrphan('a'.repeat(64) as OrphanToken, ABSENT_TREE_HEX, false, d),
+    reached: (c) => { expect(c.out).toContain('"refused":"not-a-worktree"'); },
+  },
   'ws-add': {
     argv: (d) => CCD_ARGV.wsAddWorker(PROJECT, d),
-    setup: () => { h.makeRepo(PROJECT); },
+    // The account deny file is seeded as an installed box has it (D-6202): without it the spawn warns once per
+    // call naming the row, and the two arms' rows have different generated names.
+    setup: () => {
+      h.makeRepo(PROJECT);
+      fs.mkdirSync(path.join(h.home, '.cc-sessions'), { recursive: true });
+      fs.writeFileSync(path.join(h.home, '.cc-sessions', 'account-deny.settings.json'),
+        `${JSON.stringify({ permissions: { deny: [...ACCOUNT_DENY_RULES] } })}\n`);
+    },
     // `ws-add`'s exposure IS its positionals, so "it really got there" means
     // the control got PAST the slug binding: exactly one registry row, named
     // `<project>-<slug>` with a slug `_ws_slug_valid` would accept. The exit
     // status is NOT the witness — this fixture cannot finish a spawn, so both
-    // arms answer rc 3 with no output at all, which is byte-identical and says
-    // nothing about how far either got.
+    // arms answer the SAME non-zero code with no output at all, which is
+    // byte-identical and says nothing about how far either got.
+    //
+    // WHICH CODE, AND WHY IT IS NOT 6. Re-measured 2026-09-16 through this
+    // file's own harness and runCcd: rc 3, stdout+stderr empty. The paragraph
+    // that stood here said rc 6, "because the harness's contained `tmux`
+    // refuses every verb, so the width query is unanswerable and
+    // `_accept_first_run_prompts` stands down BEFORE the `has-session` probe
+    // that used to produce the 3". Both halves are false against this tree:
+    // the §6.3 guard sits AFTER the debounced `has-session` probe, not before
+    // it (`ccd/ccd`, and the "a session that NEVER CAME UP still earns 3"
+    // case in `ccd-reader-standdown.test.ts` is its mechanism), so a tmux that
+    // refuses `has-session` answers 3 and never queries the width at all.
+    // rc 6 requires a LIVE session with a NARROW pane, a pair this fixture
+    // cannot make. Either way the code reaches this file through
+    // `cmd_ws_add`'s failure enumeration, which is why neither arm prints a
+    // success line — and the equality above is what this probe measures, not
+    // the number.
     reached: () => {
       const rows = uuidRows();
       expect(rows, 'the control ws-add created no workspace — it refused before the slug bound')
@@ -189,7 +238,10 @@ const runCcd = (args: readonly string[]): { code: number; out: string } => {
       { systemd: true, tmux: true }),
   };
   try {
-    const stdout = execFileSync('bash', [CCD, ...args], { ...opts, stdio: ['ignore', 'pipe', 'pipe'] });
+    // `bash -p` (D-3696): `ws-reclaim` is refused at the body's entry unless
+    // Bash runs privileged, the state the installed launcher starts it in. The
+    // other verbs are indifferent to it here — this runner stubs only on PATH.
+    const stdout = execFileSync('bash', ['-p', CCD, ...args], { ...opts, stdio: ['ignore', 'pipe', 'pipe'] });
     return { code: 0, out: String(stdout).trim() };
   } catch (e) {
     const err = e as { status?: number; stdout?: string; stderr?: string };
@@ -198,7 +250,7 @@ const runCcd = (args: readonly string[]): { code: number; out: string } => {
 };
 
 describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a dec on', () => {
-  it('derives the dec-appending verbs from the table, and finds six — the five workspace verbs and ws-add', () => {
+  it('derives the dec-appending verbs from the table, and finds eleven — the five workspace verbs, ws-add, ws-reclaim, ws-expire, ws-collect, ws-orphan and hibernate', () => {
     // BOTH DIRECTIONS, and the second one is the one this suite was written
     // for. A verb ADDED here without a ccd that parses it is caught by the
     // execution test below; a verb SILENTLY added is caught right here, because
@@ -211,8 +263,10 @@ describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a de
     // safety of reusing one token across the two is not asserted here and is
     // not a property of source text: it is the AGENT-FIRST deploy order, stated
     // where the argv is composed.
+    // `hibernate` (D-5242) is the tenth: a new verb whose capability word IS its name (`verbSupported`), so no box
+    // receives the flags before it parses them.
     expect(decAppendingVerbs())
-      .toEqual(['ws-add', 'ws-archive', 'ws-hold', 'ws-release', 'ws-rename', 'ws-restore']);
+      .toEqual(['hibernate', 'ws-add', 'ws-archive', 'ws-collect', 'ws-expire', 'ws-hold', 'ws-orphan', 'ws-reclaim', 'ws-release', 'ws-rename', 'ws-restore']);
   });
 
   it('has a probe for every derived verb — a new one cannot join unmeasured', () => {
@@ -239,6 +293,27 @@ describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a de
       expect(declared.out, `${verb} changed its answer when handed a dec`).toBe(control.out);
     });
   }
+});
+
+describe('the hibernate builder takes a mode, sleep, roll or fresh (overlord W1a, fresh start)', () => {
+  it('each mode composes its flags before the id, and nothing else changes', () => {
+    expect(CCD_ARGV.hibernate('lane-a-project-a', null)).toEqual(['hibernate', 'lane-a-project-a']);
+    expect(CCD_ARGV.hibernate('lane-a-project-a', null, null, 'sleep')).toEqual(['hibernate', 'lane-a-project-a']);
+    expect(CCD_ARGV.hibernate('lane-a-project-a', null, null, 'roll')).toEqual(['hibernate', '--roll', 'lane-a-project-a']);
+    expect(CCD_ARGV.hibernate('lane-a-project-a', null, null, 'fresh'))
+      .toEqual(['hibernate', '--roll', '--fresh', 'lane-a-project-a']);
+    expect(CCD_ARGV.hibernate('lane-a-project-a', PROBE_DEC, 'program:p wave:1/2', 'fresh'))
+      .toEqual(['hibernate', '--roll', '--fresh', '--hold-ok', 'program:p wave:1/2', 'lane-a-project-a',
+        '--surface', 'agent', '--actor', 'probe:dec parity']);
+  });
+
+  it.each(['roll', 'fresh'] as const)('%s: real ccd answers identically with and without the dec', (mode) => {
+    const control = runCcd(CCD_ARGV.hibernate(ABSENT, null, null, mode));
+    refusedForTheAbsentSession(control);
+    const declared = runCcd(CCD_ARGV.hibernate(ABSENT, PROBE_DEC, null, mode));
+    expect(declared.code).toBe(control.code);
+    expect(declared.out).toBe(control.out);
+  });
 });
 
 describe('ws-add was this file\'s negative control, and D-410\'s remedy turned it into a positive one', () => {
@@ -289,5 +364,62 @@ describe('ws-add was this file\'s negative control, and D-410\'s remedy turned i
     const created = eventsOf(h.home, 'create');
     expect(created, 'ws-add wrote no create line').toHaveLength(1);
     expect(decOf(created[0]!)).toEqual({ surface: 'none' });
+  });
+});
+
+describe('the child the server composes is the child real ccd records (child-workspace reclamation wave 1)', () => {
+  it('wsAddWorker with a run id: the marker holds exactly that id, beside the declared dec', () => {
+    // THE SAME CROSSING as the describe above, for the flag that makes a
+    // workspace a CHILD. `whitelist-subset.test.ts` proves the tokens cross the
+    // agent's bare `['ws-add']` grant, which they would whatever ccd made of
+    // them; this proves the binary on the fleet box READS them — as the marker,
+    // and not as a slug or a project (D-410, one flag to the left).
+    h.makeRepo(PROJECT);
+    runCcd(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, 7));
+    const rows = uuidRows();
+    expect(rows, 'the child-marked ws-add created no workspace — the flag was bound as a positional')
+      .toHaveLength(1);
+    const id = rows[0]!.replace(/\.uuid$/, '');
+    expect(fs.readFileSync(path.join(h.home, '.cc-sessions', `${id}.child`), 'utf8')).toBe('7');
+    const created = eventsOf(h.home, 'create');
+    expect(created).toHaveLength(1);
+    expect(decOf(created[0]!)).toEqual({ surface: 'agent', actor: 'probe:dec parity' });
+    // And the first spawn already made its root: `_spawn_start` ran before the
+    // fixture's contained tmux refused, and the root is made before the pane.
+    const root = path.join(h.home, '.cc-tmp', id);
+    expect(fs.statSync(root).isDirectory()).toBe(true);
+    expect(fs.statSync(root).mode & 0o777).toBe(0o700);
+  });
+
+  it('wsAddWorker with a slug: real ccd names the child <project>-<slug>, on ws/<slug>, beside the marker and the dec', () => {
+    // The slug is a POSITIONAL, the one token here that is not a flag — the
+    // shape D-410 broke one flag to the left. Real ccd must bind it as the
+    // slug, not as the project, and not lose the dec or the marker around it.
+    h.makeRepo(PROJECT);
+    runCcd(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, 7, 'task-42'));
+    expect(uuidRows(), 'the slug was not the workspace name ccd minted').toEqual([`${PROJECT}-task-42.uuid`]);
+    const reg = path.join(h.home, '.cc-sessions');
+    expect(fs.readFileSync(path.join(reg, `${PROJECT}-task-42.child`), 'utf8')).toBe('7');
+    expect(fs.readFileSync(path.join(reg, `${PROJECT}-task-42.branch`), 'utf8').trim()).toBe('ws/task-42');
+    const created = eventsOf(h.home, 'create');
+    expect(created).toHaveLength(1);
+    expect(decOf(created[0]!)).toEqual({ surface: 'agent', actor: 'probe:dec parity' });
+  });
+
+  it('and handed no slug the argv is byte for byte the four-argument one', () => {
+    expect(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, 7, null))
+      .toEqual(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, 7));
+  });
+
+  it('and handed no child it writes no marker — absence permits, byte for byte the old argv', () => {
+    h.makeRepo(PROJECT);
+    expect(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, null))
+      .toEqual(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC));
+    runCcd(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, null));
+    const rows = uuidRows();
+    expect(rows).toHaveLength(1);
+    const id = rows[0]!.replace(/\.uuid$/, '');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.child`))).toBe(false);
+    expect(fs.existsSync(path.join(h.home, '.cc-tmp'))).toBe(false);
   });
 });

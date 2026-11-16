@@ -1,0 +1,19 @@
+/* — Export's own chrome (spec 2026-10-01 4.14 "Export's stylesheet", 4.17; native Docs reader W5, Export). The app never
+   imports this sheet: docs/export/stylesheet.ts reads it as text into every export's one <style>, after @ccrc/ui's
+   tokens and prose rules, less its comments. Tokens only (contrast.test.ts holds that). An export has no
+   styles/base.css, so .ccrc-export, the export's <body>, restates the app body's ground, ink and face, and
+   .ccrc-export-page holds the reading measure. The quiet lines set --ink-secondary on that ground (design/audit.mjs
+   INHERITED_GROUNDS); every border is currentColor; nothing else sets a colour. — */
+.ccrc-export { background: var(--bg-page); color: var(--ink-primary); font-family: var(--family-ui); }
+.ccrc-export-page { margin: 0 auto; max-width: 52rem; padding: var(--sp-4); }
+.ccrc-export-draft { margin: 0; padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid currentColor; font-weight: var(--weight-semibold); }
+.ccrc-export-provenance, .ccrc-export-note, .ccrc-export-missing, .ccrc-export-caption { color: var(--ink-secondary); }
+.ccrc-export-provenance { margin-block-end: var(--sp-4); font-size: var(--fs-sm); }
+.ccrc-export-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--sp-1) var(--sp-3); }
+.ccrc-export-facts > dt, .ccrc-export-facts > dd { margin: 0; overflow-wrap: anywhere; }
+.ccrc-export-notes { margin: var(--sp-2) 0 0; padding-inline-start: var(--sp-4); }
+.ccrc-export-note, .ccrc-export-caption { font-size: var(--fs-sm); }
+.ccrc-export-plain { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ccrc-export-img { display: block; max-width: 100%; height: auto; }
+.ccrc-export-missing { display: inline-block; padding: var(--sp-1) var(--sp-2); border: 1px dashed currentColor; }
+.ccrc-export-inert { text-decoration: underline dotted; }

@@ -1,6 +1,6 @@
 // server/test/usage-sweep.test.ts
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -262,5 +262,82 @@ describe('ccd-usage-sweep.py', () => {
     mkdirSync(path.join(home, '.cc-sessions', 'usage'), { recursive: true });
     const s = runSweep({ home, dirs: { [a]: 'claude' } });
     expect(s['scan']).toMatchObject({ parseErrors: 1, records: 1 });
+  });
+
+  // --- D-6799: per-run token attribution, the sweep's half ---
+
+  it('groups the deduplicated usage by registry session id across the live rows (D-6799)', () => {
+    const f = fixture();
+    // two registry sessions, one transcript uuid each
+    writeFileSync(path.join(f.home, '.cc-sessions', 'demo-live.uuid'), 'sess-1\n');
+    writeFileSync(path.join(f.home, '.cc-sessions', 'demo-other.uuid'), 'sess-2');
+    const s = runSweep(f);
+    const per = s['perCcdSession'] as Record<string, Record<string, unknown>>;
+    // msg-1 (carried into dir B: counted ONCE), msg-2 and the subagent's msg-3
+    expect(per['demo-live']).toMatchObject({ n: 3, input: 20, output: 1200, cacheWrite: 2000, cacheRead: 120_000 });
+    expect(per['demo-other']).toMatchObject({ n: 1, input: 10, output: 100, cacheWrite: 1000, cacheRead: 10_000 });
+    expect(typeof (per['demo-live'] as Record<string, unknown>)['apiUsd']).toBe('number');
+    // the existing per-transcript block is untouched
+    expect((s['perSession'] as Record<string, unknown>)['sess-1']).toBeDefined();
+  });
+
+  it('a transcript uuid no registry row names is counted apart, never merged into a session (D-6799)', () => {
+    const f = fixture();   // sess-2 has no .uuid row here
+    const s = runSweep(f);
+    const per = s['perCcdSession'] as Record<string, Record<string, unknown>>;
+    expect(Object.keys(per)).toEqual(['demo-live']);
+    expect(s['perCcdSessionUnmapped']).toMatchObject({ records: 1, sessions: 1 });
+  });
+
+  it('sums every uuid a registry session has had: a rotated uuid still counts for its session (D-6799)', () => {
+    const f = fixture();
+    const reg = path.join(f.home, '.cc-sessions');
+    // sweep 1: demo-live is on sess-1
+    runSweep(f);
+    // the row then rotates to sess-2 (a fork hop): the registry now names ONLY sess-2
+    writeFileSync(path.join(reg, 'demo-live.uuid'), 'sess-2');
+    const s = runSweep(f);
+    const per = s['perCcdSession'] as Record<string, Record<string, unknown>>;
+    // sess-1 (3 records) + sess-2 (1 record), both under the one registry session
+    expect(per['demo-live']).toMatchObject({ n: 4 });
+    expect(s['perCcdSessionUnmapped']).toMatchObject({ records: 0, sessions: 0 });
+  });
+
+  it('a uuid whose registry row was removed stays attributed to it, and a bad ledger is rebuilt (D-6799)', () => {
+    const f = fixture();
+    const reg = path.join(f.home, '.cc-sessions');
+    runSweep(f);
+    rmSync(path.join(reg, 'demo-live.uuid'));   // ws-rm after the run finished
+    let s = runSweep(f);
+    expect((s['perCcdSession'] as Record<string, Record<string, unknown>>)['demo-live']).toMatchObject({ n: 3 });
+    writeFileSync(path.join(f.home, 'sweep.json.uuids.json'), '{not json');
+    s = runSweep(f);   // history lost: those records fall back to unmapped, never to a wrong session
+    expect(s['perCcdSession']).toEqual({});
+    expect(s['perCcdSessionUnmapped']).toMatchObject({ records: 4 });
+  });
+
+  it('the ledger drops entries unseen for 30 days and the live map wins over it (D-6799)', () => {
+    const f = fixture();
+    const reg = path.join(f.home, '.cc-sessions');
+    writeFileSync(path.join(reg, 'demo-other.uuid'), 'sess-2');   // the live map names sess-2 as demo-other
+    const ledgerFile = path.join(f.home, 'sweep.json.uuids.json');
+    writeFileSync(ledgerFile, JSON.stringify({
+      'sess-2': { id: 'old-owner', seen: NOW - 10 * 86400 },     // remapped: the live row must win and refresh `seen`
+      'ghost-stale': { id: 'gone', seen: NOW - 30 * 86400 - 60 }, // unseen past LEDGER_KEEP_SECONDS: pruned
+      'ghost-fresh': { id: 'kept', seen: NOW - 29 * 86400 },     // still inside the window: kept
+    }));
+    const s = runSweep(f);
+    const ledger = JSON.parse(readFileSync(ledgerFile, 'utf8')) as Record<string, { id: string; seen: number }>;
+    expect(ledger['ghost-stale']).toBeUndefined();
+    expect(ledger['ghost-fresh']).toEqual({ id: 'kept', seen: NOW - 29 * 86400 });
+    expect(ledger['sess-2']).toEqual({ id: 'demo-other', seen: NOW });
+    const per = s['perCcdSession'] as Record<string, Record<string, unknown>>;
+    expect(per['demo-other']).toMatchObject({ n: 1 });
+    expect(per['old-owner']).toBeUndefined();
+    // a second sweep over the same state keeps the refreshed entry and stays stable
+    runSweep(f);
+    const again = JSON.parse(readFileSync(ledgerFile, 'utf8')) as Record<string, { id: string; seen: number }>;
+    expect(again['sess-2']).toEqual({ id: 'demo-other', seen: NOW });
+    expect(again['ghost-stale']).toBeUndefined();
   });
 });

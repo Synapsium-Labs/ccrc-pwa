@@ -12,7 +12,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness, WIDE_PANE, DEAD_PANE, WIDE_PANE_IF_UP, toolAdjToken as adj, sessionTmpToken, sessionPanePath } from './ccdWsHelpers.js';
+import { paneFragment } from './worktreeIdentityFixture.js';   // path-identity W3 (R8): the pane's entry-identity writer, read from ccd's composer
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-split-'); });
@@ -48,6 +49,7 @@ const shStatus = (snippet: string, env: NodeJS.ProcessEnv = {}): { status: numbe
 const TMUX = `sleep() { :; };
   tmux() {
     echo "tmux $*" >> "$HOME/ccd-calls"
+    ${WIDE_PANE_IF_UP}
     case "$1" in
       new-session)  : > "$HOME/pane-up" ;;
       kill-session) rm -f "$HOME/pane-up" ;;
@@ -68,6 +70,7 @@ const TMUX = `sleep() { :; };
 const RESUME_DIES = `sleep() { :; };
     tmux() {
       echo "tmux $*" >> "$HOME/ccd-calls"
+      ${WIDE_PANE_IF_UP}
       case "$1" in
         new-session)  case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac ;;
         has-session)  [[ -e "$HOME/pane-up" ]] ;;
@@ -96,6 +99,19 @@ describe('_spawn_start / _spawn_settle', () => {
     expect(h.calls().some((c) => c.startsWith('tmux new-session'))).toBe(true);
     // THE INVARIANT: the start half is not the claiming half. The caller is.
     expect(h.reg('myid', 'started')).toBeNull();
+  });
+
+  it('_spawn_start reads the pane scope ONCE, after the pane that stands — the retry line included (D-5237)', () => {
+    seed('myid');
+    // RESUME_DIES, answering the pane pid as well.
+    h.sh(`${RESUME_DIES.replace('list-sessions) return 0 ;;', 'list-sessions) return 0 ;;\n        list-panes) case "$*" in *pane_pid*) echo 4242 ;; esac ;;')}
+          _panescope_proc_root() { echo procread >> "$HOME/ccd-calls"; printf '%s' "$HOME/proc"; }
+          rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
+    const calls = h.calls();
+    expect(calls.filter((c) => c === 'procread')).toHaveLength(1);
+    const lastNew = calls.map((c) => c.startsWith('tmux new-session')).lastIndexOf(true);
+    expect(newSessions()).toHaveLength(2);
+    expect(calls.indexOf('procread')).toBeGreaterThan(lastNew);
   });
 
   it('_spawn_start sets SPAWN_FROMSWAP=1 when the spawn lands within 300s of a swap', () => {
@@ -326,7 +342,7 @@ describe('the settle bound is wall-clock, and it is per caller', () => {
   it('_accept_first_run_prompts returns 4 once the WALL CLOCK passes the bound', () => {
     const out = h.sh(
       `${FAKE_CLOCK}
-       tmux() { case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
+       tmux() { ${WIDE_PANE} case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
        CCD_SETTLE_BOUND=10 _accept_first_run_prompts cc-test 0; echo "rc=$? t=$_faketime"`);
     expect(out).toMatch(/rc=4/);
     // ~5 iterations of `sleep 2`, not 450: the bound fired, not the counter.
@@ -355,7 +371,7 @@ describe('the settle bound is wall-clock, and it is per caller', () => {
     const expiredAt = (fromswap: string): string => h.sh(
       `SPAWN_SETTLE_S=10
        ${FAKE_CLOCK}
-       tmux() { case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
+       tmux() { ${WIDE_PANE} case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
        _accept_first_run_prompts cc-test ${fromswap}; echo "rc=$? t=$_faketime"`);
     expect(expiredAt('1')).toBe('rc=4 t=10');
     expect(expiredAt('0')).toBe(expiredAt('1'));
@@ -433,7 +449,7 @@ describe('the settle bound is not addressable from argv', () => {
     // that keeps `(( ))` safe for whoever edits this function next.
     const out = h.sh(
       `${FAKE_CLOCK}
-       tmux() { case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
+       tmux() { ${WIDE_PANE} case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
        CCD_SETTLE_BOUND=${PAYLOAD}
        _accept_first_run_prompts cc-test 0; echo "rc=$? t=$_faketime"`);
     expect(pwned()).toBe(false);
@@ -455,7 +471,7 @@ describe('the settle bound is not addressable from argv', () => {
     // cmd_supervise's frame, because the real one blocks on a watch loop.
     const out = h.sh(
       `${FAKE_CLOCK}
-       tmux() { case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
+       tmux() { ${WIDE_PANE} case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
        outer() { local CCD_SETTLE_BOUND=30; _accept_first_run_prompts cc-test 0; }
        outer; echo "rc=$? t=$_faketime"`);
     // 30, not SPAWN_SETTLE_S's 240: the caller's frame won.
@@ -496,7 +512,7 @@ describe('_spawn_start: the --resume fallback a monotone `started` owes', () => 
 
   it('does NOT retry a `new` spawn — there is nothing to fall back to', () => {
     seed('myid');
-    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) return 1 ;; esac; };
+    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${DEAD_PANE} case "$1" in has-session) return 1 ;; esac; };
           _spawn_start myid new`);
     expect(newSessions()).toHaveLength(1);
   });
@@ -506,7 +522,7 @@ describe('_spawn_start: the --resume fallback a monotone `started` owes', () => 
     // rc 3 is the honest verdict; a loop here would spend the whole window
     // minting panes nobody watches.
     seed('myid');
-    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) return 1 ;; esac; };
+    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${DEAD_PANE} case "$1" in has-session) return 1 ;; esac; };
           _spawn_start myid resume 2>/dev/null`);
     expect(newSessions()).toHaveLength(2);
   });
@@ -539,6 +555,57 @@ describe('_spawn_start: the --resume fallback a monotone `started` owes', () => 
     // variable, and a spawn bound that an environment could widen would be a
     // way to hold the unclaimed window open from outside.
     expect(h.sh('echo "$SPAWN_RESUME_SETTLE_S"', { SPAWN_RESUME_SETTLE_S: '7' })).toBe('2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A fresh pane is born at the size of whatever client tmux last saw, NOT at
+// `new-session -x 220 -y 50` — and that is what turned 13 overnight spawns
+// into spawn rc 6 ("narrow").
+// ---------------------------------------------------------------------------
+
+describe('_spawn_start pins the new window to 220x50 before handing it to `latest`', () => {
+  // Measured 2026-09-23 on a private tmux 3.4 server (-L, -f /dev/null), with
+  // a 60x20 client attached to a DIFFERENT session:
+  //   new-session -d -x 220 -y 50                          -> 60x19
+  //   … then set-option window-size latest                 -> 60x19, and it
+  //     stays 60x19 after that client detaches
+  //   … resize-window -x 220 -y 50, then window-size latest -> 220x50 and
+  //     `latest`; still 220x50 after the stray client typed, opened a window,
+  //     another session spawned, and the client left. It re-sizes only when a
+  //     client attaches to THIS session, which is what `latest` is for.
+  //   … window-size latest, then resize-window             -> 220x50 but
+  //     latched `manual`: a phone's `ccd attach` would no longer fit.
+  // A stubbed tmux cannot show a window's size, so what is pinned here is
+  // the argv and its ORDER — the two things the measurement says decide it.
+  const calls = (): string[] => h.calls().filter((c) => c.startsWith('tmux '));
+  const pinAt = (cs: string[]): number => cs.indexOf('tmux resize-window -t =cc-myid: -x 220 -y 50');
+  const latestAt = (cs: string[]): number => cs.findIndex((c) => /^tmux set-option -t \S*cc-myid\S* window-size latest$/.test(c));
+  const lastNewAt = (cs: string[]): number => cs.map((c) => c.startsWith('tmux new-session')).lastIndexOf(true);
+
+  it('resizes the window AFTER creating it and BEFORE setting `latest`', () => {
+    seed('myid');
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid new`);
+    const cs = calls();
+    expect(pinAt(cs), 'no 220x50 pin: a narrow client anywhere on the server narrows this pane').toBeGreaterThan(-1);
+    expect(pinAt(cs)).toBeGreaterThan(lastNewAt(cs));
+    expect(latestAt(cs), '`latest` is kept, so a human attach still fits the window').toBeGreaterThan(-1);
+    expect(pinAt(cs), 'a pin AFTER `latest` latches `manual` for good').toBeLessThan(latestAt(cs));
+  });
+
+  it('targets the window EXACTLY — `=name:`, the only form that cannot fnmatch a neighbour (D-2780)', () => {
+    seed('myid');
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid new`);
+    expect(calls().filter((c) => c.startsWith('tmux resize-window'))).toEqual(['tmux resize-window -t =cc-myid: -x 220 -y 50']);
+  });
+
+  it('pins after the --resume fallback too — the retry is the pane that lives', () => {
+    seed('myid');
+    h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
+    const cs = calls();
+    expect(newSessions()).toHaveLength(2);
+    expect(pinAt(cs)).toBeGreaterThan(lastNewAt(cs));
+    expect(pinAt(cs)).toBeLessThan(latestAt(cs));
   });
 });
 
@@ -693,8 +760,8 @@ describe('_spawn_start: --remote-control only when the box says on', () => {
    *  same mechanism every other suite in this file uses to read `ccd` state) —
    *  one definition, read twice. */
   const expectedCommand = (sidflag: string, rc: boolean): string =>
-    `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')} '${h.home}/.local/bin/claude' `
-    + `${rc ? "--remote-control 'myid' " : ' '}${sidflag} --dangerously-skip-permissions`;
+    `cd '${h.home}' && ${paneFragment(h, 'myid', h.home)}true; cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)}${sessionTmpToken(h)} ${sessionPanePath(h)} '${h.home}/.local/bin/claude' `
+    + `${rc ? "--remote-control 'myid' --effort high " : '--effort high '}${sidflag} --dangerously-skip-permissions`;
 
   const UUID = 'deadbeef-0000-4000-8000-000000000000';
 
@@ -806,5 +873,28 @@ describe('ws-add --no-rc — the per-session rc field', () => {
     // And it is the claimed row's ordinary revival otherwise — mode=resume,
     // not a stripped-down spawn.
     expect(news[0]).toContain('--resume');
+  });
+});
+
+describe('_spawn_start: plain tmux placement (no systemd-run) forwards the pressure variable', () => {
+  it('plain tmux placement forwards the same pressure-bearing command', () => {
+    seed('myid');
+    h.sh(`sleep() { :; };
+      command() { [[ "$*" == '-v systemd-run' ]] && return 1; builtin command "$@"; };
+      tmux() {
+        printf 'tmux %s\\n' "$*" >> "$HOME/ccd-calls";
+        case "$1" in
+          list-sessions) return 1 ;;
+          new-session) : > "$HOME/pane-up" ;;
+          has-session) [[ -e "$HOME/pane-up" ]] ;;
+        esac
+        return 0;
+      };
+      _spawn_start myid new`);
+    const lines = newSessions();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('exec env COLORTERM=truecolor ');
+    expect(lines[0]).toContain('CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1');
+    expect(lines[0]).toContain("--session-id 'deadbeef-0000-4000-8000-000000000000' --dangerously-skip-permissions");
   });
 });

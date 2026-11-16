@@ -1,25 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { groupFleet } from '../src/fleet/groupFleet';
-import type { FleetSession } from '../../shared/api';
+import { groupFleet, inReleasedFold, releasedByProgramme } from '../src/fleet/groupFleet';
+import type { FleetSession, ReleasedFrom } from '../../shared/api';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 
-const s = (over: Partial<FleetSession>): FleetSession => ({
-  id: 'x', wrapper: 'claude2', home: 'claude2', project: 'p', workdir: '/p',
-  workspace: null, name: null, status: 'idle', statusUpdatedAt: 0, limits: null,
-  dialogPending: false, version: null, model: null, effort: null,
-  ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, ...over,
-});
+const s = (over: Partial<FleetSession>): FleetSession => (fleetSession({ id: 'x', wrapper: 'claude9', home: 'claude9', project: 'p', workdir: '/p', statusUpdatedAt: 0, ...over }));
 
 describe('groupFleet', () => {
   it('orders groups by their most urgent member, not alphabetically', () => {
     const g = groupFleet([
       s({ id: 'a', project: 'alpha', bucket: 'working' }),
       s({ id: 'z', project: 'zeta', bucket: 'attention' }),
-    ]);
+    ], []);
     expect(g.map((x) => x.project)).toEqual(['zeta', 'alpha']);
   });
 
@@ -27,7 +20,7 @@ describe('groupFleet', () => {
     const g = groupFleet([
       s({ id: 'a', project: 'alpha' }),
       s({ id: 'b', project: 'alpha', bucket: 'attention' }),
-    ]);
+    ], []);
     expect(g).toHaveLength(1);
     expect(g[0]!.attention).toBe(true);
   });
@@ -35,7 +28,7 @@ describe('groupFleet', () => {
   it('counts from the server bucket, so the head cannot contradict its rows', () => {
     const g = groupFleet([
       s({ id: 'a', bucket: 'attention' }), s({ id: 'b', bucket: 'working' }),
-    ])[0]!;
+    ], [])[0]!;
     expect(g.attention).toBe(true);
     expect(g.busy).toBe(1);
   });
@@ -45,7 +38,7 @@ describe('groupFleet', () => {
       s({ id: 'a', project: 'alpha', bucket: 'working' }),
       s({ id: 'b', project: 'alpha', bucket: 'working' }),
       s({ id: 'c', project: 'alpha', bucket: 'idle' }),
-    ]);
+    ], []);
     expect(g).toHaveLength(1);
     expect(g[0]!.busy).toBe(2);
   });
@@ -60,7 +53,7 @@ describe('groupFleet', () => {
     // to prove, only that `busy` reads the field SessionLine's own word reads.
     const g = groupFleet([
       s({ id: 'a', project: 'alpha', bucket: 'attention' }),
-    ]);
+    ], []);
     expect(g).toHaveLength(1);
     expect(g[0]!.busy).toBe(0);
     expect(g[0]!.attention).toBe(true);
@@ -70,13 +63,13 @@ describe('groupFleet', () => {
     const g = groupFleet([
       s({ id: 'a', project: 'alpha', bucket: 'attention' }),
       s({ id: 'b', project: 'alpha', bucket: 'working' }),
-    ]);
+    ], []);
     expect(g).toHaveLength(1);
     expect(g[0]!.busy).toBe(1);
   });
 
   it('reports how many members are unseen', () => {
-    const g = groupFleet([s({ id: 'a', bucket: 'attention', bucketSince: 10 })], { a: 5 })[0]!;
+    const g = groupFleet([s({ id: 'a', bucket: 'attention', bucketSince: 10 })], [], { a: 5 })[0]!;
     expect(g.unseen).toBe(1);
   });
 
@@ -86,6 +79,7 @@ describe('groupFleet', () => {
         s({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: 10 }), // acked after
         s({ id: 'b', project: 'alpha', bucket: 'working', bucketSince: 999 }),  // never badged
       ],
+      [],
       { a: 20 },
     )[0]!;
     expect(g.unseen).toBe(0);
@@ -95,7 +89,7 @@ describe('groupFleet', () => {
     const g = groupFleet([
       s({ id: 'a', project: 'alpha', bucket: 'working' }),
       s({ id: 'b', project: 'alpha', bucket: 'attention' }),
-    ]);
+    ], []);
     expect(g).toHaveLength(1);
     expect(g[0]!.sessions.map((x) => x.id)).toEqual(['b', 'a']);
   });
@@ -103,7 +97,7 @@ describe('groupFleet', () => {
   it('is pure — it does not reorder its argument', () => {
     const input = [s({ id: 'a', project: 'zeta' }), s({ id: 'b', project: 'alpha' })];
     const copy = [...input];
-    groupFleet(input);
+    groupFleet(input, []);
     expect(input).toEqual(copy);
   });
 
@@ -114,7 +108,7 @@ describe('groupFleet', () => {
     const g = groupFleet([
       s({ id: 'a', project: '99', bucket: 'attention' }),
       s({ id: 'b', project: '1', bucket: 'working' }),
-    ]);
+    ], []);
     expect(g.map((x) => x.project)).toEqual(['99', '1']);
   });
 
@@ -131,8 +125,8 @@ describe('groupFleet', () => {
     // so it cannot see a second writer coming back. The live fixture below is
     // the one that can.
     const g = groupFleet([
-      s({ id: 'a', project: 'alpha', status: 'dead', dialogPending: true }),
-    ]);
+      s({ id: 'a', project: 'alpha', status: 'dead', lifecycle: DEAD_LIFECYCLE, dialogPending: true }),
+    ], []);
     expect(g).toHaveLength(1);
     expect(g[0]!.attention).toBe(false);
   });
@@ -146,7 +140,7 @@ describe('groupFleet', () => {
     // bucket is the entire answer, so a session cannot be both.
     const g = groupFleet([
       s({ id: 'a', project: 'alpha', status: 'busy', dialogPending: true, bucket: 'working' }),
-    ])[0]!;
+    ], [])[0]!;
     expect(g.attention).toBe(false);
     expect(g.busy).toBe(1);
   });
@@ -158,10 +152,10 @@ describe('groupFleet', () => {
     const g = groupFleet([
       s({ id: 'idle', status: 'idle', bucket: 'idle', stranded: marker }),
       s({ id: 'working', status: 'busy', bucket: 'working', stranded: marker }),
-      s({ id: 'away', status: 'idle', bucket: 'idle', wrapper: 'claude2', home: 'claude', stranded: marker }),
-      s({ id: 'dead', status: 'dead', bucket: 'dead', stranded: marker }),
-      s({ id: 'archived', status: 'dead', bucket: 'archived', stranded: marker }),
-    ])[0]!;
+      s({ id: 'away', status: 'idle', bucket: 'idle', wrapper: 'claude9', home: 'claude', stranded: marker }),
+      s({ id: 'dead', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stranded: marker }),
+      s({ id: 'archived', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', stranded: marker }),
+    ], [])[0]!;
     expect(g.stranded).toBe(3);
   });
 
@@ -169,7 +163,7 @@ describe('groupFleet', () => {
     // `server/src/registry.ts` reads `.stranded` fail-shut: a present but
     // unreadable marker arrives as `{at: 0, reason: STRANDED_UNREADABLE}`.
     // `at === 0` is a real row, and a truthiness test on `at` would drop it.
-    const g = groupFleet([s({ id: 'a', stranded: { at: 0, reason: 'registry field unreadable' } })])[0]!;
+    const g = groupFleet([s({ id: 'a', stranded: { at: 0, reason: 'registry field unreadable' } })], [])[0]!;
     expect(g.stranded).toBe(1);
   });
 
@@ -180,7 +174,7 @@ describe('groupFleet', () => {
     // — the same discipline `graphReadCount` carries for its own field.
     const older = { ...s({ id: 'a' }) } as Record<string, unknown>;
     delete older['stranded'];
-    const g = groupFleet([older as unknown as FleetSession])[0]!;
+    const g = groupFleet([older as unknown as FleetSession], [])[0]!;
     expect(g.stranded).toBe(0);
   });
 
@@ -188,7 +182,7 @@ describe('groupFleet', () => {
     const g = groupFleet([
       s({ id: 'a', bucket: 'archived', stranded: { at: 1, reason: 'nowhere to go' } }),
       s({ id: 'b', stranded: { at: 2, reason: 'nowhere to go' } }),
-    ])[0]!;
+    ], [])[0]!;
     expect(g.stranded).toBe(1);
   });
 });
@@ -198,18 +192,18 @@ describe('pin', () => {
     ({ ...s({ id, project: 'demo' }), home });
 
   it('is the account all of a project\'s sessions call home', () => {
-    const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude')]);
-    expect(g!.pin).toBe('claude');
+    const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude')], []);
+    expect(g!.pin).toEqual({ state: 'shared', home: 'claude' });
   });
 
-  it('is null when they disagree — the card must not claim one of them', () => {
-    const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude2')]);
-    expect(g!.pin).toBeNull();
+  it('is mixed when they disagree — the card must not claim one of them', () => {
+    const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude9')], []);
+    expect(g!.pin).toEqual({ state: 'mixed' });
   });
 
   it('is the lone session\'s home for a single-session project', () => {
-    const [g] = groupFleet([at('demo-a', 'claude-corp')]);
-    expect(g!.pin).toBe('claude-corp');
+    const [g] = groupFleet([at('demo-a', 'claude-acme')], []);
+    expect(g!.pin).toEqual({ state: 'shared', home: 'claude-acme' });
   });
 });
 
@@ -224,7 +218,7 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
     s({ id, project: 'demo', archivedAt: 1785300000, bucket: 'cleanup', ...over });
 
   it('splits archived sessions out of the live list without dropping them', () => {
-    const [g] = groupFleet([s({ id: 'demo-a', project: 'demo' }), arch('demo-b')]);
+    const [g] = groupFleet([s({ id: 'demo-a', project: 'demo' }), arch('demo-b')], []);
     expect(g!.sessions.map((x) => x.id)).toEqual(['demo-a']);
     expect(g!.archived.map((x) => x.id)).toEqual(['demo-b']);
   });
@@ -234,22 +228,24 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
   // counted `Cleanup 1` and offered "Mark all seen" for a row that rendered
   // nowhere on the screen, under a fold that read `Archived (2)`.
   it('leaves a cleanup row in the live list, where its own chip counts it', () => {
-    const [g] = groupFleet([s({ id: 'demo-a', project: 'demo' }), clean('demo-merged')]);
+    const [g] = groupFleet([s({ id: 'demo-a', project: 'demo' }), clean('demo-merged')], []);
     expect(g!.sessions.map((x) => x.id)).toContain('demo-merged');
     expect(g!.archived.map((x) => x.id)).toEqual([]);
   });
 
-  // And the counts the two surfaces render therefore agree: the fold's own
-  // `Archived (n)` is exactly the `Archived` chip's members, never the union.
-  it('makes the fold the same set the Archived chip counts', () => {
+  // And the counts the two surfaces render therefore agree for workspaces: the
+  // fold's own `Archived (n)` is exactly the `Archived` chip's members while no
+  // main checkout is stopped. Workspace lifecycle §5.2 adds stopped main
+  // checkouts to the fold, which the Dead chip still counts (below).
+  it('makes the fold the same set the Archived chip counts when no main checkout is stopped (workspace lifecycle §5.2 adds those)', () => {
     const fleet = [arch('demo-b'), clean('demo-merged'), s({ id: 'demo-a', project: 'demo' })];
-    const [g] = groupFleet(fleet);
+    const [g] = groupFleet(fleet, []);
     expect(g!.archived).toHaveLength(fleet.filter((x) => x.bucket === 'archived').length);
   });
 
   it('keeps a project whose sessions are ALL archived', () => {
     // Dropping it would make the workspace reachable only by a URL nobody has.
-    const [g] = groupFleet([arch('demo-b')]);
+    const [g] = groupFleet([arch('demo-b')], []);
     expect(g!.sessions).toEqual([]);
     expect(g!.archived).toHaveLength(1);
   });
@@ -257,38 +253,138 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
   it('excludes archived rows from the pin', () => {
     // demo-a and the archived row deliberately disagree on home: if pin were
     // computed over the whole membership (archived included), the mismatch
-    // would read as disagreement (pin: null). Excluding the archived row
+    // would read as disagreement (pin: mixed). Excluding the archived row
     // leaves demo-a as the pin's only voter. `attention`/`busy` cannot be
     // discriminated this way any more and the fixture no longer pretends to:
     // the split is now the bucket itself, so an archived-bucket row is
     // excluded from both by the bucket test alone, whatever the scoping.
     const [g] = groupFleet([
       s({ id: 'demo-a', project: 'demo', home: 'claude' }),
-      arch('demo-b', { home: 'claude2' }),
-    ]);
+      arch('demo-b', { home: 'claude9' }),
+    ], []);
     expect(g!.busy).toBe(0);
     expect(g!.attention).toBe(false);
-    expect(g!.pin).toBe('claude');
+    expect(g!.pin).toEqual({ state: 'shared', home: 'claude' });
   });
 
   it('still computes a pin when every session is archived', () => {
     // The `live.length > 0 ? live : members` fallback (see the comment in
     // groupFleet.ts) exists so this branch never indexes an empty array —
-    // dropping the `: members` half leaves `forPin` empty here, which is
-    // exactly what the "ALL archived" test above does not check.
-    const [g] = groupFleet([arch('demo-b', { home: 'claude-corp' })]);
-    expect(g!.pin).toBe('claude-corp');
+    // dropping the `: members` half would now yield `{ state: 'empty' }` for
+    // this all-archived project, which this assertion rejects (the pin here
+    // must be 'claude-acme', not empty). The empty-membership guard itself is
+    // `first === undefined` in groupFleet.ts.
+    const [g] = groupFleet([arch('demo-b', { home: 'claude-acme' })], []);
+    expect(g!.pin).toEqual({ state: 'shared', home: 'claude-acme' });
   });
 
   it('counts an unseen cleanup member in `unseen`, since it is a live row now', () => {
     // `cleanup` is a BADGED bucket (seen.ts). A per-project badge that
     // skipped it would undercount against the bucket bar's Cleanup chip —
     // the two would be describing the same rows and disagreeing.
-    const [g] = groupFleet([clean('demo-merged', { bucketSince: 5000 })], {});
+    const [g] = groupFleet([clean('demo-merged', { bucketSince: 5000 })], [], {});
     expect(g!.unseen).toBe(1);
-    const [seenGroup] = groupFleet([clean('demo-merged', { bucketSince: 5000 })],
+    const [seenGroup] = groupFleet([clean('demo-merged', { bucketSince: 5000 })], [],
       { 'demo-merged': 6000 });
     expect(seenGroup!.unseen).toBe(0);
+  });
+});
+
+describe('the Archived fold takes stopped main checkouts (workspace lifecycle spec §5.2)', () => {
+  const STOP = (at: number) => ({ at, surface: 'pwa' as const });
+  const main = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
+    s({ id, project: 'demo', workspace: null, status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', ...over });
+  const ws = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
+    s({ id, project: 'demo', workspace: id, ...over });
+
+  it('folds a STOPPED main checkout into Archived, out of the live list', () => {
+    const [g] = groupFleet([ws('demo-a'), main('claude9-demo', { stoppedBy: STOP(5) })], []);
+    expect(g!.sessions.map((x) => x.id)).toEqual(['demo-a']);
+    expect(g!.archived.map((x) => x.id)).toEqual(['claude9-demo']);
+  });
+
+  it.each([
+    ['a main checkout started again — the stop stamp is gone', main('claude9-demo', { status: 'idle', bucket: 'idle' })],
+    ['a crashed main checkout — dead, never stopped', main('claude9-demo')],
+    ['a stopped workspace that is not archived — it offers Archive again', ws('demo-b', {
+      status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stoppedBy: STOP(5) })],
+    ['a merged-and-archived workspace — `cleanup` stays in its chip\'s list',
+      ws('demo-b', { status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1785300000, bucket: 'cleanup' })],
+  ] as const)('keeps %s at the top level', (_label, row) => {
+    const [g] = groupFleet([row], []);
+    expect(g!.sessions.map((x) => x.id)).toEqual([row.id]);
+    expect(g!.archived).toEqual([]);
+  });
+
+  it('runs newest first — a workspace by its archive time, a main checkout by its stop', () => {
+    const [g] = groupFleet([
+      ws('demo-old', { status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1, bucket: 'archived', bucketSince: 100 }),
+      main('claude9-demo', { stoppedBy: STOP(300) }),
+      ws('demo-mid', { status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 2, bucket: 'archived', bucketSince: 200 }),
+    ], []);
+    expect(g!.archived.map((x) => x.id)).toEqual(['claude9-demo', 'demo-mid', 'demo-old']);
+  });
+
+  it('a released workspace once archived is in Archived, never in both folds', () => {
+    const released = { runId: 4, program: 'lifecycle', programTitle: null, claimedBy: 'demo-c', closedAt: 9, child: false };
+    const [g] = groupFleet([ws('demo-r', { status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1, bucket: 'archived', bucketSince: 10,
+      releasedFrom: released })], []);
+    expect(g!.archived.map((x) => x.id)).toEqual(['demo-r']);
+    expect(g!.released).toEqual([]);
+  });
+
+  // FM7 (workspace lifecycle wave 3b, the carried follow-up): the two folds are disjoint BY THE PWA'S OWN PREDICATES,
+  // not only because the server leaves `releasedFrom` null on an archived row. A row the wire marks released that is
+  // ALSO in the Archived fold — a stopped main checkout, whose bucket is `dead`, not `archived` — sits in Archived
+  // alone: `inReleasedFold` excludes `inArchivedFold`, the one predicate, never the bucket by hand.
+  it('a stopped main checkout the wire calls released is in Archived alone — the folds never share a row (FM7)', () => {
+    const released = { runId: 4, program: 'lifecycle', programTitle: null, claimedBy: 'demo-c', closedAt: 9, child: false };
+    const row = main('claude9-demo', { stoppedBy: STOP(5), releasedFrom: released });
+    expect(inReleasedFold(row)).toBe(false);
+    const [g] = groupFleet([row], []);
+    expect(g!.archived.map((x) => x.id)).toEqual(['claude9-demo']);
+    expect(g!.released).toEqual([]);
+  });
+
+  it('a stopped main checkout placed on another card is not "where its work went" — that list is live rows only', () => {
+    const g = groupFleet([ws('demo-live', { boardProject: 'project-n' }),
+      main('claude9-demo', { boardProject: 'project-n', stoppedBy: STOP(5) })], []);
+    expect(g.find((x) => x.project === 'demo')!.elsewhere).toEqual([{ project: 'project-n', count: 1 }]);
+    expect(g.find((x) => x.project === 'project-n')!.archived.map((x) => x.id)).toEqual(['claude9-demo']);
+  });
+
+  it('the fold may hold a row the Dead chip counts — stated, not changed', () => {
+    const fleet = [ws('demo-b', { status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1, bucket: 'archived' }), main('claude9-demo', { stoppedBy: STOP(5) })];
+    const [g] = groupFleet(fleet, []);
+    expect(g!.archived).toHaveLength(2);
+    // What the chips count is the fleet screen's to pin, not this fixture's: `fleet-screen.test.tsx`'s
+    // "a STOPPED main checkout sits behind the Archived fold while the Dead chip still counts it".
+  });
+
+  // The CARD ORDER is keyed on the BUCKET (wave 1's four parts), not on the fold: a stopped main checkout is
+  // bucket `dead`, so it keeps dead's rank in part 4 — after an archived row, and in `sortFleet`'s order among
+  // the other dead rows — even though the Archived fold now holds it.
+  it('keeps a stopped main checkout at dead\'s rank in the card order, though the fold holds it', () => {
+    const fleet = [
+      // oldest by `statusUpdatedAt`: were the order keyed on the fold, it would join part 3 and lead the crashed one.
+      main('claude9-stopped', { project: 'stopped', stoppedBy: STOP(5), statusUpdatedAt: 10 }),
+      main('claude9-crashed', { project: 'crashed', statusUpdatedAt: 99 }),
+      ws('demo-arch', { project: 'arch', status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1, bucket: 'archived', bucketSince: 3, statusUpdatedAt: 1 }),
+    ];
+    const g = groupFleet(fleet, []);
+    expect(g.map((x) => x.project)).toEqual(['arch', 'crashed', 'stopped']);
+    expect(g.find((x) => x.project === 'stopped')!.archived.map((x) => x.id)).toEqual(['claude9-stopped']);
+  });
+
+  it('splits one card three ways — live row on top, the stopped main checkout and the archived workspace in the fold', () => {
+    const [g] = groupFleet([
+      main('claude9-demo', { stoppedBy: STOP(5), statusUpdatedAt: 500 }),
+      ws('demo-arch', { status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1, bucket: 'archived', bucketSince: 3, statusUpdatedAt: 1 }),
+      ws('demo-live', { bucket: 'working', status: 'idle', statusUpdatedAt: 2 }),
+    ], []);
+    expect(g!.sessions.map((x) => x.id)).toEqual(['demo-live']);
+    // Newest first inside the fold (the stop at 5 beats the archive at 3); the card order above is a separate key.
+    expect(g!.archived.map((x) => x.id)).toEqual(['claude9-demo', 'demo-arch']);
   });
 });
 
@@ -314,7 +410,7 @@ describe('the unseen field\'s doc', () => {
    *  wording the doc no longer uses, `continue` fired twice, and the only
    *  assertion left standing was "the doc contains the phrase bucket bar". */
   const SURFACES = [
-    { claim: /bucket bar/i, file: path.join('screens', 'FleetScreen.tsx'), ships: true },
+    { claim: /bucket bar/i, file: path.join('fleet', 'BucketBar.tsx'), ships: true },
     { claim: /row'?s own badge/, file: path.join('fleet', 'SessionLine.tsx'), ships: false },
     { claim: /the bell/, file: path.join('fleet', 'NotificationBell.tsx'), ships: false },
   ];
@@ -330,7 +426,7 @@ describe('the unseen field\'s doc', () => {
     }
     // The loop is not allowed to be vacuous. The shipping surface must be
     // named AND must have been checked — which is what fails if either the
-    // doc stops naming the bucket bar or FleetScreen stops calling isUnseen.
+    // doc stops naming the bucket bar or BucketBar stops calling isUnseen.
     expect(doc).toMatch(SURFACES[0]!.claim);
     expect(checked).toBeGreaterThanOrEqual(1);
   });
@@ -345,5 +441,228 @@ describe('the unseen field\'s doc', () => {
       expect(readFileSync(path.join(srcDir, file), 'utf8')).not.toMatch(/isUnseen/);
     }
     expect(doc).toMatch(/when a row badge or a bell counter arrives/i);
+  });
+});
+
+describe('durable cards (R5, D-3010)', () => {
+  it('renders a known project with zero sessions as a group with no members', () => {
+    const g = groupFleet([s({ id: 'a', project: 'alpha' })], ['alpha', 'ghost']);
+    expect(g.map((x) => x.project)).toEqual(['alpha', 'ghost']);
+    const ghost = g[1]!;
+    expect(ghost.sessions).toEqual([]);
+    expect(ghost.archived).toEqual([]);
+    expect(ghost.attention).toBe(false);
+    expect(ghost.busy).toBe(0);
+    expect(ghost.unseen).toBe(0);
+    expect(ghost.stranded).toBe(0);
+    expect(ghost.pin).toEqual({ state: 'empty' });   // not `mixed`: nothing disagrees
+  });
+
+  it('keeps the populated cards in urgency order and appends the empty ones in list order', () => {
+    // `zeta` is more urgent than `alpha`; `ghost-b`/`ghost-a` are empty and
+    // arrive in the list's order, which is the server's alphabetical one.
+    const g = groupFleet([
+      s({ id: 'a', project: 'alpha', bucket: 'working' }),
+      s({ id: 'z', project: 'zeta', bucket: 'attention' }),
+    ], ['alpha', 'ghost-b', 'ghost-a', 'zeta']);
+    expect(g.map((x) => x.project)).toEqual(['zeta', 'alpha', 'ghost-b', 'ghost-a']);
+  });
+
+  it('dedupes a project the list names twice — one card, one key', () => {
+    const g = groupFleet([], ['twice', 'twice']);
+    expect(g.map((x) => x.project)).toEqual(['twice']);
+  });
+
+  it('a project absent from the list still renders a card for its own sessions', () => {
+    // `listProjects` skips linked worktrees, so a workspace-only project is
+    // NOT in the list; the fallback is load-bearing, not decorative.
+    const g = groupFleet([s({ id: 'w', project: 'worktree-only' })], ['other']);
+    expect(g.map((x) => x.project)).toEqual(['worktree-only', 'other']);
+  });
+});
+
+describe('the grouping key is boardHome (spec §6, Task 4)', () => {
+  it('places a session on its boardProject card, not its own project\'s', () => {
+    const g = groupFleet([
+      s({ id: 'coord', project: 'project-n' }),
+      s({ id: 'w', project: 'project-d', boardProject: 'project-n' }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['project-n', 'project-d']);
+    expect(g[0]!.sessions.map((x) => x.id)).toEqual(['coord', 'w']);
+    expect(g[1]!.sessions).toEqual([]);                          // the own-project card survives, empty
+  });
+
+  it('counts on the DESTINATION card — attention, busy, unseen, stranded and the archived split follow the row', () => {
+    const g = groupFleet([
+      s({ id: 'coord', project: 'project-n' }),
+      s({ id: 'w', project: 'project-d', boardProject: 'project-n', bucket: 'attention', bucketSince: 10 }),
+      s({ id: 'a', project: 'project-d', boardProject: 'project-n', bucket: 'archived', archivedAt: 5 }),
+    ], []);
+    const projectN = g.find((x) => x.project === 'project-n')!;
+    expect(projectN.attention).toBe(true);
+    expect(projectN.unseen).toBe(1);
+    expect(projectN.archived.map((x) => x.id)).toEqual(['a']);
+    const own = g.find((x) => x.project === 'project-d')!;
+    expect(own.attention).toBe(false);
+    expect(own.archived).toEqual([]);
+  });
+
+  it('a placement naming a project nobody knows still renders — on a card of that name', () => {
+    const g = groupFleet([s({ id: 'w', project: 'project-d', boardProject: 'nowhere' })], ['project-d']);
+    expect(g.map((x) => x.project)).toEqual(['nowhere', 'project-d']);
+  });
+
+  it('the emptied card says where its work went, per destination, live rows only', () => {
+    const g = groupFleet([
+      s({ id: 'w1', project: 'project-d', boardProject: 'project-n' }),
+      s({ id: 'w2', project: 'project-d', boardProject: 'project-n' }),
+      s({ id: 'w3', project: 'project-d', boardProject: 'data' }),
+      s({ id: 'a', project: 'project-d', boardProject: 'project-n', bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'home', project: 'project-d' }),
+    ], []);
+    const own = g.find((x) => x.project === 'project-d')!;
+    expect(own.elsewhere).toEqual([{ project: 'project-n', count: 2 }, { project: 'data', count: 1 }]);
+    expect(g.find((x) => x.project === 'project-n')!.elsewhere).toEqual([]);
+  });
+});
+
+describe('the Released sub-fold (workspace lifecycle spec §5.1)', () => {
+  const rel = (runId: number, closedAt: number, program = 'lifecycle', over: Partial<ReleasedFrom> = {}): ReleasedFrom =>
+    ({ runId, program, programTitle: 'Workspace lifecycle', claimedBy: 'coord', closedAt, child: false, ...over });
+
+  it('folds a released row out of the live list, into `released`, never dropping it', () => {
+    const g = groupFleet([
+      s({ id: 'live' }),
+      s({ id: 'done', workspace: 'w', releasedFrom: rel(1, 100) }),
+    ], [])[0]!;
+    expect(g.sessions.map((m) => m.id)).toEqual(['live']);
+    expect(g.released.map((m) => m.id)).toEqual(['done']);
+  });
+
+  // A DEAD stranded row stays too: the `stranded` count skips it, but a marker the row still carries is the
+  // operator's to see, and folding it would hide it a second time.
+  it.each([
+    ['an attention', { bucket: 'attention' }],
+    ['a working', { bucket: 'working' }],
+    ['a live stranded', { stranded: { at: 1, reason: 'no lane' } }],
+    ['a dead stranded', { status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stranded: { at: 1, reason: 'no lane' } }],
+  ] as const)('never folds %s row — the fold cannot hide what needs a person', (_label, over) => {
+    const g = groupFleet([s({ id: 'r', releasedFrom: rel(1, 100), ...(over as Partial<FleetSession>) })], [])[0]!;
+    expect(g.released).toEqual([]);
+    expect(g.sessions.map((m) => m.id)).toEqual(['r']);
+  });
+
+  it('folds an idle, a done and a dead released row alike', () => {
+    const g = groupFleet([
+      s({ id: 'a', bucket: 'idle', releasedFrom: rel(1, 100) }),
+      s({ id: 'b', bucket: 'done', releasedFrom: rel(2, 200) }),
+      s({ id: 'c', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', releasedFrom: rel(3, 300) }),
+    ], [])[0]!;
+    expect(g.released.map((m) => m.id)).toEqual(['c', 'b', 'a']);   // newest close first
+    expect(g.sessions).toEqual([]);
+  });
+
+  it('an archived row stays in `archived`, never in both folds', () => {
+    const g = groupFleet([s({ id: 'x', bucket: 'archived', archivedAt: 5, releasedFrom: rel(1, 100) })], [])[0]!;
+    expect(g.archived.map((m) => m.id)).toEqual(['x']);
+    expect(g.released).toEqual([]);
+  });
+
+  it('a row from a server older than the field (no key at all) stays live', () => {
+    const { releasedFrom: _absent, ...old } = s({ id: 'old' });
+    const g = groupFleet([old as FleetSession], [])[0]!;
+    expect(g.sessions.map((m) => m.id)).toEqual(['old']);
+    expect(g.released).toEqual([]);
+  });
+
+  it('a folded row never lifts its card: cards order by their first VISIBLE row', () => {
+    const g = groupFleet([
+      s({ id: 'r', project: 'alpha', bucket: 'done', releasedFrom: rel(1, 100) }),   // done outranks working
+      s({ id: 'w', project: 'beta', bucket: 'working' }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['beta', 'alpha']);
+  });
+
+  it('a released-only card still ranks above an archived-only card', () => {
+    // Both cards' only rows are folded; the released one was the more urgent before the fold and must stay so.
+    const g = groupFleet([
+      s({ id: 'a', project: 'alpha', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'r', project: 'beta', bucket: 'done', releasedFrom: rel(1, 100) }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['beta', 'alpha']);
+  });
+
+  it('a released DEAD-only card ranks above an archived-only card, though sortFleet alone ranks dead below archived', () => {
+    // Only a RELEASED dead row is lifted past archived (the fold's own rule); `sortFleet` puts dead (6) below archived (5).
+    const g = groupFleet([
+      s({ id: 'a', project: 'B', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'd', project: 'A', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', releasedFrom: rel(1, 100) }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['A', 'B']);
+    expect(g[0]!.released.map((m) => m.id)).toEqual(['d']);
+  });
+
+  it('a STRANDED released dead row is not in the fold, so its card keeps RANK\'s place below an archived-only card', () => {
+    // The strand marker keeps the row out of the fold (`inReleasedFold`), so it is an unfolded dead row: visible in
+    // `sessions`, and in part 4 of the order below archived (5 above dead 6), whatever `releasedFrom` says.
+    const g = groupFleet([
+      s({ id: 'd', project: 'A', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stranded: { at: 1, reason: 'no lane' }, releasedFrom: rel(1, 100) }),
+      s({ id: 'a', project: 'B', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 5 }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['B', 'A']);
+    expect(g[1]!.released).toEqual([]);
+    expect(g[1]!.sessions.map((m) => m.id)).toEqual(['d']);
+  });
+
+  it('an UNRELEASED dead row keeps its rank below archived: the lift is for released rows only', () => {
+    // Neither card holds a released row, so the fold must not reorder them: archived (5) outranks dead (6) in sortFleet.
+    const g = groupFleet([
+      s({ id: 'd', project: 'dead-card', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }),
+      s({ id: 'a', project: 'arch-card', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 5 }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['arch-card', 'dead-card']);
+  });
+
+  it('released rows count toward unseen, and toward neither busy nor pin while a live row exists', () => {
+    const g = groupFleet([
+      s({ id: 'live', home: 'claude9', bucket: 'idle' }),
+      s({ id: 'r', home: 'claude-b', bucket: 'done', bucketSince: 50, releasedFrom: rel(1, 100) }),
+    ], [])[0]!;
+    expect(g.unseen).toBe(1);                                           // the `done` released row
+    expect(g.busy).toBe(0);
+    expect(g.pin).toEqual({ state: 'shared', home: 'claude9' });
+  });
+});
+
+describe('releasedByProgramme', () => {
+  const rel = (runId: number, closedAt: number, program: string, programTitle: string | null = null): ReleasedFrom =>
+    ({ runId, program, programTitle, claimedBy: 'coord', closedAt, child: false });
+
+  it('groups by programme; groups and rows run newest close first', () => {
+    const out = releasedByProgramme([
+      s({ id: 'a1', releasedFrom: rel(1, 100, 'alpha', 'Alpha') }),
+      s({ id: 'b1', releasedFrom: rel(2, 300, 'beta') }),
+      s({ id: 'a2', releasedFrom: rel(3, 200, 'alpha', 'Alpha') }),
+    ]);
+    expect(out.map((g) => [g.program, g.title, g.sessions.map((m) => m.id)])).toEqual([
+      ['beta', null, ['b1']],
+      ['alpha', 'Alpha', ['a2', 'a1']],
+    ]);
+  });
+
+  it('takes a title from any row of the programme that knew it', () => {
+    const out = releasedByProgramme([
+      s({ id: 'a1', releasedFrom: rel(1, 200, 'alpha', null) }),
+      s({ id: 'a2', releasedFrom: rel(2, 100, 'alpha', 'Alpha') }),
+    ]);
+    expect(out[0]!.title).toBe('Alpha');
+  });
+
+  it('breaks a close-time tie by session id, so the order is total', () => {
+    const out = releasedByProgramme([
+      s({ id: 'zz', releasedFrom: rel(1, 100, 'alpha') }),
+      s({ id: 'aa', releasedFrom: rel(2, 100, 'alpha') }),
+    ]);
+    expect(out[0]!.sessions.map((m) => m.id)).toEqual(['aa', 'zz']);
   });
 });

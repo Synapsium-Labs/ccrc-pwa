@@ -1,0 +1,46 @@
+ ❯ explain the cache plan for project-a
+
+ ● The cache in project-a needs a clear eviction policy. If
+   every entry lives forever, memory pressure grows until the
+   process is stopped by the limits of its lane. A bounded
+   LRU keeps hot entries near the front while cold ones fall
+   off the back, and it costs one map and one list per
+   instance.
+
+   Start by measuring hit rates under the current workload.
+   Add counters to src/lib/cache.ts and run test/app.test.ts
+   to establish a baseline. Once the baseline is stable,
+   introduce the capacity limit and assert that evictions
+   happen when the threshold is crossed, and not before it.
+
+   The final design should keep reads fast, avoid lock
+   contention across lanes, and store the new counters
+   alongside the existing metrics so the dashboard can
+   display them without an extra query. None of this changes
+   the public interface that the rest of project-a calls.
+
+   1. Add the LRU map to src/lib/cache.ts and expose get, set
+      and delete methods that match the existing interface,
+      so that no caller has to change; keep the capacity a
+      constructor argument with a sensible default, and
+      document why the default was chosen next to it.
+   2. Write a test in test/app.test.ts that fills the cache
+      beyond its capacity and asserts that the oldest
+      unreferenced entry is removed first.
+   3. Document the eviction policy in a comment so future
+      readers know why the limit exists.
+
+   - Keep the public API unchanged.
+   - Avoid adding dependencies: the standard library already
+     has everything the cache needs, and every new dependency
+     is one more thing to audit, pin and upgrade across every
+     lane that builds project-a, which is exactly the cost
+     the cache was meant to save.
+     - Log eviction events at debug level so they can be
+       traced without flooding the default output.
+
+──
+ ❯
+──
+   ? for shortcuts
+

@@ -1,0 +1,14 @@
+[Unit]
+Description=Report dead ccd pane scopes and stop only the inert ones (the stop shadowed until the operator arms it)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ccd-scope-sweep
+# The deadline for the one call that can block: `tmux list-panes` against a
+# wedged server. A tick that outlives it is killed and the next one starts
+# clean — the record lands by rename, so a killed tick leaves the last one.
+TimeoutStartSec=45
+# bash over /proc and the unit list: the working set is a few hundred small
+# reads. Capped for ccd-cap-scopes' own reason — a reaper must never be the
+# thing that OOMs the fleet host.
+MemoryMax=256M
+Nice=10

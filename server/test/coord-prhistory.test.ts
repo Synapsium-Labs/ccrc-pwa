@@ -32,14 +32,33 @@ describe('readPrHistory', () => {
     });
   });
 
+  it('prbranch parsed when a string, absent when absent, malformed otherwise', async () => {
+    const d = reg();
+    const row = (pr: number, extra: Record<string, unknown>) =>
+      JSON.stringify({ pr, branch: 'ws/quiet-mesa', phase: 'merged', recordedAt: 1, ...extra });
+    writeFileSync(path.join(d, 'demo-quiet-mesa.prhistory'), [
+      row(1, { prbranch: 'ws/earlier' }), row(2, {}), row(3, { prbranch: 7 }), row(4, { prbranch: null }),
+      row(5, { prbranch: ['ws/earlier'] }), row(6, { prbranch: { name: 'ws/earlier' } }), row(7, { prbranch: false }),
+    ].join('\n'));
+    const read = await readPrHistory(localIO, d, 'demo-quiet-mesa');
+    expect(read).toEqual({
+      ok: true,
+      entries: [
+        { pr: 1, branch: 'ws/quiet-mesa', prbranch: 'ws/earlier', phase: 'merged', recordedAt: 1 },
+        { pr: 2, branch: 'ws/quiet-mesa', phase: 'merged', recordedAt: 1 },
+      ],
+    });
+    expect(read.ok && read.entries[1]).not.toHaveProperty('prbranch');
+  });
+
   it('answers a MEASURED [] when the file is absent — the workspace retired no PR', async () => {
     expect(await readPrHistory(localIO, reg(), 'demo-quiet-mesa')).toEqual({ ok: true, entries: [] });
   });
 
   it('skips a torn last line rather than rejecting the whole ledger', async () => {
     // ccd appends with O_APPEND from python; a record larger than the buffer
-    // can split (`ccd/ccd:881-884` and the scout's own caveat). A half-line is
-    // one lost record, not a lost history.
+    // can split (`_pr_py`'s `open(hist_p, 'a')` in `ccd/ccd`, and the scout's
+    // own caveat). A half-line is one lost record, not a lost history.
     const d = reg();
     writeFileSync(path.join(d, 'demo-quiet-mesa.prhistory'), `${LINE(1)}\n{"pr":2,"bra`);
     expect(await readPrHistory(localIO, d, 'demo-quiet-mesa'))

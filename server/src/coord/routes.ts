@@ -1,40 +1,165 @@
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
+import { SHAPE_ONLY_MASKER } from '../accounts/mask.js';
+import { decideShadowJournalQuery } from './shadowJournal.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
-import { UNMEASURED_ASK_AT, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
-import { answerAsk, type AskDeps } from '../inject/ask.js';
-import { assembleFleet } from '../fleet.js';
+import {
+  fieldMeasured, measuredIdentity, readRegistryMeasured, readSessionRecord,
+} from '../registry.js';
+import { fleetCarriesRunsAttribution } from '../fleetstate.js';
+import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
+import { clearSender } from '../inject/send.js';
+import { assembleFleet, fleetNow } from '../fleet.js';
+import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
+import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
-import { claimMailHint } from './claims.js';
-import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
+import { peerMailVerdict } from './peerBound.js';
+import { claimLivenessProbe, claimMailHint, lapseWindowStart, normalizeClaimPath, rechainTargets, recentlyLapsedClaims, type LivenessVerdict } from './claims.js';
+import { CCD_ARGV, ccdCan, deviceActor, sweepDec } from '../ccdargv.js';
+import { decideRoute, parseRouteRequest } from './route.js';
 import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
+import { landingViewOf } from './landingLine.js';
+import { landingCommandOf, parseLandingReadQuery, parseLandingWrite } from './landingWrites.js';
+import { actLandingWrite } from './landingWritesAct.js';
+import type { LandingLineView } from '../../../shared/landingLine.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
-import { toRunSummary, type ClaimEndResult, type CoordStore } from './store.js';
-import { renderEnvelope } from './envelope.js';
+import { RUNS_PAGE_LIMIT_MAX, reclaimAttentionRunIds } from './runsPage.js';
+import { parseRunFind } from './runFind.js';
+import { runRecordTrail } from './runRecord.js';
+import { withLastMoves, withVerdicts, withWorkerSeen } from './runWire.js';
+import { createRunVerdicts } from './runVerdicts.js';
+import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
+import type { WatcherCoordPort } from './ports.js';
+import { coordinatorOfRun, runsTouching, workerOfRun } from './bindingReads.js';
+import { readSessionSpendMeasured } from '../shares.js';
+import { boundSessionsOf, joinRunSpend } from './runSpend.js';
+import { pageInbox, renderEnvelope, renderInboxEntry } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
+import { attributionVerdict } from './attribution.js';
+import { childReclaimGenerationRead } from './childReclaim.js';
+import { childReclaimUnlessDisabled } from './childReclaimDisabled.js';
+import { retireExecutor } from '../retireExecutor.js';
+import { DelegationCheckpointError } from './delegation-checkpoint.js';
+import { type DelegationDurability } from './delegation-durability.js';
+import { COORDINATOR_INTENT_ACTIONS, COORDINATOR_INTENT_REFUSALS, declareCoordinatorIntent, formatDelegationInstant } from './delegation-model.js';
+import { readParentGenerations, settleParentIncarnations } from './gitref.js';
+import { operatorRetainLease, resolveLease, retainLease, runStampsOfSeries, type LeaseDoorDeps } from './delegationLeaseDoor.js';
+import { parseOperatorRetainRequest, parseResolveRequest, parseRetainRequest } from './delegation-lease-acts.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
-import { verifyDone, type DoneClaim } from './fingerprint.js';
-import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispatch.js';
-import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
+import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
+import { doneRejectionMail } from './closeDecide.js';
+import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } from './advance.js';
+import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
+import { dispatchRun, stampDispatchAttempt, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
+import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
+import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
-import { queueSystemMail } from './rundefs.js';
+import { MAIL_DISABLED_MARKER } from './rundefs.js';
+import { queueSystemMail } from './rundefsTx.js';
+import { STALL_QUIET_MS } from './stall.js';
+import {
+  STALL_NOTICE_WINDOW_MS, STALL_QUIET_MAX_MS, STALL_QUIET_MIN_MS, STALL_QUIET_STEP_MS, decideStallSettings,
+  parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBoxHeld, stallEffectKey, stallFilesExceed,
+  stallLevelOf, stallNeedsConfirm, stallNextStep, stallNoticeCounts, stallSettingsAfter, stallSettingsChange,
+  stallStages, stallUnheldBoxOf, stallWriteEffect, type StallBoxArming, type StallResolved,
+} from './stallsettings.js';
+import { dispatchAbandonViewOf } from './deadDispatch.js';
+import { isDispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
+import { decideLaneArmBody, decideLaneArmPost, laneArmChangeLine, laneArmRowViewOf, laneArmViewOf, rosterCardFieldOf } from './laneArm.js';
+import { LANE_ARM_FEED_TITLE, LANE_ARM_TEXT, ROSTER_CARD_LANE, RUNS_ROSTER_CARD_FIELD } from '../../../shared/lane-arm.js';
+import { quizBaselineRead } from '../continuity/quizStore.js';
+import { isRunCloseChoice, isRunCloseGroup, type RunCloseView } from '../../../shared/run-close.js';
+import { RUN_CLOSE_TALLY_MS, closedByGroup, runCloseHeldOf, runCloseViewOf } from './runCloseSwitch.js';
+import { childBindGate } from './childBind.js';
+import {
+  openRunPreconditions, type AttributionRead, type HomeProjectVerdict, type OpenRunRefusal, type SessionMarkRead,
+} from './openRun.js';
+import { collectControlNow, collectLaneCaps, collectSwitches } from './collectTempRoot.js';
+import {
+  COLLECT_LANE_APPLIES_TEXT, COLLECT_SETTING_FEED_TITLE, collectLaneSettingChange, collectLaneView,
+  collectLaneWriteProved, decideCollectLaneBody, decideCollectLanePost, type CollectLaneControl,
+} from '../collectLane.js';
+import { NO_FLEET_IDENTITY } from '../fleetidentity.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
+  type ClaimsListAnswer, type ClaimTakeAnswer,
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
-  parseCanonicalPositiveSafeInteger,
+  parseCanonicalPositiveSafeInteger, parseQuestionId, readDialogAnswer,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
-  MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
-  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
-  type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
-  type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
+  MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES, MAIL_INBOX_PAGE_MAX_BYTES,
+  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, transitionsFor, IDLE_RUN_STATES,
+  isRegistryId, isSessionIdShape, routeEventDetail,
+  type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult,
+  type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
+  type AdvanceOk, type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
+  type ReviewCapAsk, type ReviewCapLiftAnswer, type ReviewCapView, type LeaseDoorAnswer,
 } from '../../../shared/api.js';
+import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal, type RouteRefusal } from '../../../shared/refusal.js';
+import { TESTBOX_PARITY_REQUIRED_SENTENCE, type PeerRetry } from '../../../shared/api.js';
+import type { TestboxActOutcome, TestboxAdminCode } from '../../../shared/testbox-admin.js';
+import { knownFleetIdentity } from '../accounts/audit.js';
+import { parityRefusedByCcd, switchActorOf, switchOnGate, writeSwitchRow } from '../testboxAdmin.js';
+import { CHECKS_MAIL_TOKEN, type ChecksMode } from '../../../shared/landing.js';
+import { landingAdvanceOf } from './landingEntry.js';
+import { landingEjectionAsk } from './landingLine.js';
+import type { LandingEjectionKind } from '../../../shared/landingLine.js';
+import { readSwitches } from '../../../shared/switches.js';
+import { scopeSweepViewOf, type ScopeSweepView } from '../../../shared/scope-sweep.js';
+import { delegationAdoptionHealthOf } from '../../../shared/api.js';
+import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt.js';
+import { delegationAdoptSignInRefusal, delegationAdoptViewOf } from './delegation-adopt-switch.js';
+import { checksModeAt } from './landing.js';
+import { refuseAdvance, refuseRateLimited, refuseRoute, refuseRun } from '../refuse.js';
+import { TESTBOX_SYNC_REFUSAL } from '../testbox.js';
+import { notRanSentence } from '../unmeasured.js';
+import { createHash } from 'node:crypto';
+import { appendFileSync } from 'node:fs';
+import type { SessionRecord } from '../registry.js';
+import { liveStateReaderOver, readLiveStateMeasured } from '../livestate.js';
+import { heldFor } from './heldFor.js';
+import {
+  approvalFor, createQuestions, openFor, type ApprovalRaiseDeps, type ClaimantDoorDeps, type ClaimantRule, type OperatorAnswer,
+  type OperatorDoorDeps, type Questions, type QuestionDoorAnswer,
+} from './questions.js';
+import { noticeSink, questionOutboxOf, type NoticeSink } from '../notice.js';
+import { itemBoundOf, outboxSettledOf } from '../pushSender.js';
+import { registerLedgerCoordinatorRoutes } from './ledgersRoutes.js';
+import { registerReviewRoundsRoute } from './reviewRoundsRoute.js';
+import { endRequestHandler } from './endRequest.js';
+import { registerCoordCallsRoute } from './coordCallsRoute.js';
+import { callViewOf } from './coordCalls.js';
+import { readOperatorSecretMeta } from './ledgersSecrets.js';
+import type { CoordinatorPresence } from '../../../shared/ledgers.js';
+import {
+  APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
+} from './approvalsign.js';
+import {
+  APPROVAL_CHILD_SHELL, APPROVAL_REASON_MAX_CHARS, APPROVAL_REFUSALS_LOG, APPROVAL_REQUEST_MAX_BYTES,
+  CHILD_DENY_SETTINGS_FILE, type ApprovalKeyAnswer, type ApprovalRequestAccepted, type ApprovalRulingAnswer,
+  type ApprovalView,
+} from '../../../shared/api.js';
+import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, isClaudeVersion, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
+import { rollTargetsOf } from './rollTarget.js';
+import { plainAutoMemoryOf } from '../continuity/profileFor.js';
+import { compactRefusal } from '../continuity/compactOwner.js';
+import {
+  PLAIN_AUTO_MEMORY_CHOICES, PLAIN_AUTO_MEMORY_DEFAULT, isPlainAutoMemoryChoice, type PlainAutoMemoryView,
+} from '../../../shared/plainAutoMemory.js';
+import { planStorePort } from './planStore.js';
+import { planFactsOf } from './planRunFacts.js';
+
+/** The approval request's id shapes (plan Task 16): a registry id as `ccrc-api`'s `SAFE_RE` admits it, a lowercase
+ *  sha256, and the hook's 128-bit nonce. */
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+const NONCE_HEX = /^[0-9a-f]{32}$/;
 
 /**
  * One coordinator-wide async mutex, serialising the WRITE routes' bodies
@@ -85,6 +210,36 @@ class CoordMutex {
 }
 
 /**
+ * D-5238: the dispatch route's wait for a pane its own `ensure` just started. The route (L4) owns the timer and
+ * decides nothing: it leaves `coordMutex`, polls the same `turnVerdict` port every `DISPATCH_SPAWN_POLL_MS` for at
+ * most `DISPATCH_SPAWN_WAIT_MS`, and only a MEASURED verdict re-runs `dispatchRun`, once, inside the mutex again.
+ *
+ * THE BOUND HAS A BASIS IN CODE: the coordinator's only client, `ccd/ccrc-api`, caps every request at 30 s
+ * (`curl -m 30`), and a dispatch the server completed after its caller gave up would read to the coordinator as a
+ * transport failure (its retry then meets `bad-transition`). So the wait is at most HALF that cap, leaving the other
+ * half for the two decisions around it (the `ensure`, the registry reads, the hold, `sendPrompt`'s `/clear` with its
+ * echo polling, and any queueing behind other dispatches on the mutex). `dispatch-live-gate.test.ts` reads `-m` from
+ * `ccd/ccrc-api` and holds `2 × DISPATCH_SPAWN_WAIT_MS` within it. The rule is judged on the resumed path's measured
+ * latency, the only path that waits (D-5276).
+ */
+export const DISPATCH_SPAWN_WAIT_MS = 15_000;
+export const DISPATCH_SPAWN_POLL_MS = 2_000;
+const WORKER_STARTING_DETAIL =
+  'the pane this dispatch started is not up yet; nothing was held, cleared or sent and the run is untouched — send the dispatch again';
+
+/** Poll `read` every `DISPATCH_SPAWN_POLL_MS` until it answers anything but `unmeasured`, for at most
+ *  `DISPATCH_SPAWN_WAIT_MS` in all. `true` = a measured verdict came back; `false` = the bound ran out. */
+async function waitForMeasuredVerdict(read: () => Promise<TurnVerdict>): Promise<boolean> {
+  for (let waited = 0; waited < DISPATCH_SPAWN_WAIT_MS;) {
+    const step = Math.min(DISPATCH_SPAWN_POLL_MS, DISPATCH_SPAWN_WAIT_MS - waited);
+    await new Promise<void>((resolve) => { setTimeout(resolve, step); });
+    waited += step;
+    if ((await read()) !== 'unmeasured') return true;
+  }
+  return false;
+}
+
+/**
  * `dispatchRun`'s typed result union -> HTTP status + body (architecture doc
  * increment 4: "the routes become union->status maps"). The ONLY place in
  * this file that turns a `DispatchOutcome` into wire JSON — every shape
@@ -126,13 +281,23 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       // total over the union's MEMBERS, not over one member's fields, so this
       // body would stay green while the distinction silently never shipped.
       adopted: r.adopted, spawnState: r.spawnState, skillState: r.skillState,
+      // D-8086: a `200` with no `intents` field came from a server older than 5g, which took no hold.
+      intents: r.intents,
     });
   }
   switch (r.kind) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
-    case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
+    // Spec §2.3, a stored defect: the run's session id is not a registry id, and nothing was read or composed.
+    case 'bad-session': return refuseRoute(reply, 'bad-session');
+    case 'fable-operator-only': return refuseRoute(reply, 'fable-operator-only');
+    // `detail` spread, not `detail: r.detail`: an L4 adapter may not narrow a
+    // distinction it received (`route: <why>[ <field>]` or `slug: <why>`,
+    // present only for those refusals), so its PRESENCE rides the wire exactly as
+    // this member carries it — never `''` standing in for "nothing to say".
+    case 'bad-request':
+      return reply.code(400).send({ ok: false, error: 'bad-request', ...(r.detail === undefined ? {} : { detail: r.detail }) });
     // `detail` rides along unconditionally — it is a distinction this adapter
     // RECEIVED (which of the two sizes, and by how much), and the sender cannot
     // recompute it: the brief they hold is not the body the cap measured. The
@@ -147,7 +312,6 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       const extra: Record<string, number> = {};
       if (r.limit !== undefined) extra.limit = r.limit;
       if (r.running !== undefined) extra.running = r.running;
-      if (r.used !== undefined) extra.used = r.used;
       if (r.candidates !== undefined) extra.candidates = r.candidates;
       // The `by` spread, not `by: r.by` — the same discipline the
       // `registry-unmeasurable` arm below states for `stderr`: an L4 adapter may
@@ -155,7 +319,8 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       // PRESENCE. Its own spread rather than a member of `extra`, whose value
       // type is `number` and must stay so: `by` is the project's NAME.
       return reply.code(409).send({ ok: false, refused: r.code, ...extra,
-        ...(r.by === undefined ? {} : { by: r.by }) });
+        ...(r.by === undefined ? {} : { by: r.by }),
+        ...(r.key === undefined ? {} : { key: r.key }), ...(r.holder === undefined ? {} : { holder: r.holder }) });
     }
     // The `stderr` spread, not `stderr: r.stderr`: an L4 adapter may not narrow a
     // distinction it received, and this member's `stderr` distinguishes by
@@ -167,7 +332,21 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
         ok: false, error: 'registry-unmeasurable',
         ...(r.stderr === undefined ? {} : { stderr: r.stderr }),
       });
+    // Rule 3 at dispatch. `pr`/`detail` spread by PRESENCE (an L4 adapter may
+    // not narrow a distinction it received); `unbound` unconditionally — it is
+    // the answer to "what do I do next", and absent would read as `false`.
+    // `child-reclaim-refusals.test.ts` harvests this arm's fields and requires
+    // each in `wave-lifecycle.md` §2.
+    case 'childSpent':
+      return reply.code(409).send({ ok: false, refused: r.code,
+        ...(r.pr === undefined ? {} : { pr: r.pr }),
+        ...(r.detail === undefined ? {} : { detail: r.detail }),
+        unbound: r.unbound });
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
+    // D-5238: the `poll` target is the route's own business and never rides the wire; the sentence is what the
+    // coordinator needs to act — dispatch again, nothing to undo.
+    case 'worker-starting':
+      return reply.code(409).send({ ok: false, refused: 'worker-starting', detail: WORKER_STARTING_DETAIL });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);
     default: {
@@ -181,12 +360,17 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
  *  `sendDispatchOutcome` just above: byte-identical to the shapes the route
  *  used to build inline, and the same totality guard (fix round 1,
  *  finding 1/3) — see that function's own docstring for the measurement. */
-function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
-  if (r.ok) return reply.code(200).send({ ok: true, id: r.id, state: r.state, released: r.released });
+export function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
+  if (r.ok) {
+    return reply.code(200).send({ ok: true, id: r.id, state: r.state, released: r.released,
+      childReclaim: r.childReclaim, ...(r.childReclaimWhy === undefined ? {} : { childReclaimWhy: r.childReclaimWhy }) });
+  }
   switch (r.kind) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
+    // Spec §2.3, a stored defect: every close but the abandon refuses it, and nothing was read or composed.
+    case 'bad-session': return refuseRoute(reply, 'bad-session');
     case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
     case 'refused': return reply.code(409).send({ ok: false, refused: r.code });
     case 'doneVerdict': return reply.code(409).send({ ok: false, error: r.code, detail: r.detail });
@@ -197,11 +381,48 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);
+    // Reached only through the sweep's handle, never from a route: no route passes a sweep guard. Mapped so the
+    // switch stays total.
+    case 'claimant-changed': return reply.code(409).send({ ok: false, error: 'claimant-changed', claimedBy: r.claimedBy });
+    case 'sweep-stopped': return reply.code(409).send({ ok: false, error: 'sweep-stopped', stop: r.stop, fleetAct: r.fleetAct });
     default: {
       const _exhaustive: never = r;
       return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
     }
   }
+}
+
+/** D-6910: the review cap's ask, composed ONCE for both of its readers: the `cap-review-rounds` refusal and
+ *  `GET /api/coord/review-cap/:id`. The operator rules with the open findings in front of them, so the last review's
+ *  report is read here (L4, the agent's read allowlist covers its folder); absent and unreadable stay two values and
+ *  the notice falls back to the summary for both. */
+async function composeReviewCapAsk(coord: CoordStore, io: Deps['io'], work: number, rounds: number): Promise<ReviewCapAsk> {
+  const last = coord.lastReviewReport(work);
+  const read = last.report === null ? null : await io.readFileMeasured(last.report, 5000);
+  return reviewCapAsk(work, rounds, last, reviewFindingsOf(read));
+}
+
+/**
+ * The close path's hand-off to THE ONE child-reclaim executor (spec 2026-09-22
+ * §5.7): on the session's OWN queue — the same `KeyedQueue` `POST
+ * /workspace/reap` and the naming sweep join, so a reclaim never races either
+ * on one workspace — and NEVER awaited, so the close answers before the act
+ * runs. Its `ChildReclaimDeps` are read from `deps` WHEN THE JOB RUNS, not
+ * when it was queued, so `fleetState` is the box's current answer. A
+ * rejection is a bug, logged; the sweep reaches the child either way.
+ */
+function childReclaimPort(deps: Deps, coord: WatcherCoordPort): (req: ChildReclaimRequest) => void {
+  return (req) => {
+    void retireExecutor(deps.queue, req.sessionId, () => childReclaimUnlessDisabled(
+      { io: deps.io, registryDir: deps.cfg.registryDir, coord, notifyLog: deps.notifyLog },
+      () => reclaimChild({
+        coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
+        fleetState: deps.fleetState, viewers: deps.viewers, notifyLog: deps.notifyLog,
+      }, req))).catch((err: unknown) => {
+      console.warn(`ccrc-server: the reclaim of ${req.sessionId} threw `
+        + `(${err instanceof Error ? err.message : String(err)}) — left to the sweep`);
+    });
+  };
 }
 
 /** `settleItems`' typed result union -> HTTP status + body (Build 4, Task 3).
@@ -253,93 +474,81 @@ function sendClaimEndOutcome(reply: FastifyReply, r: ClaimEndResult) {
 }
 
 /**
- * THE LEGACY GENERATION, as one constant (design §3 F2). `true` while an absent
- * `homeProject` on `POST /api/runs` is ACCEPTED and RECORDED; `false` once every
- * live coordinator has redeployed and the field is required.
+ * THE LEGACY GENERATION, as one constant (design §3 F2), and the switch that
+ * ends it. `true` ACCEPTED an absent `homeProject` on `POST /api/runs` and
+ * recorded a `legacy-home-project` run event, leaving the programme row's home
+ * NULL; `false` refuses the open `400 bad-request` with
+ * `detail: 'homeProject is required'` (D-2349, D-2744).
  *
- * The flip is its own PR (design §9 wave 3) and its criterion is MEASURED, not
- * judged: zero `legacy-home-project` rows in `run_events` over seven consecutive
- * days. The idiom is the box token's own — accepted-and-warned as `'legacy'` for
- * one generation (`coord/token.ts`, `server.ts`), then removed.
+ * FLIPPED TO `false` on operator ruling D-2867, the spec's seven-day criterion
+ * waived: 8 of the 15 opens since the 2026-09-14 deploy omitted the field, the
+ * last at 2026-09-15T07:38:57Z — the trail is in
+ * `docs/superpowers/programs/home-project-flip.md`'s `## Measurements`. Both
+ * branches of `homeProjectVerdict` stay in the tree and both stay tested
+ * (`home-project.test.ts`) — this is a value change, never a deletion. The
+ * ROUTE's `legacy` arm below is now unreachable, since the only
+ * `legacyAccepted` the route ever passes is this constant; it stays as the
+ * record of what `true` did.
  *
- * Read ONCE, at the single call site below, and passed as an argument to
- * `homeProjectVerdict` rather than read inside it — which is what makes the
- * OTHER branch testable before it ships. `home-project.test.ts` drives both.
+ * Read ONCE, at the single call site below, and passed as an argument —
+ * `openRunPreconditions`' `legacyAccepted` fact, which hands it to
+ * `homeProjectVerdict` (D-5384) — rather than read inside it, which is what keeps the
+ * OTHER branch testable after the flip as it was before it.
+ * `home-project.test.ts` drives both.
  */
-export const HOME_PROJECT_LEGACY_ACCEPTED = true;
+export const HOME_PROJECT_LEGACY_ACCEPTED = false;
 
-/** What the open route must DO about the body's `homeProject` and the
- *  programme's stored one. SIX answers, none folded into another: `write` and
- *  `agrees` both mean "nothing extra to do" but for different reasons and at
- *  different moments (a first insert versus a later open), and collapsing them
- *  would make the backfill event impossible to place correctly. */
-export type HomeProjectVerdict =
-  | { kind: 'write' }
-  | { kind: 'agrees' }
-  | { kind: 'backfill'; home: string }
-  | { kind: 'legacy' }
-  | { kind: 'required' }
-  | { kind: 'mismatch'; by: string };
+/** The home decision and the one home shaping are L1 since D-5384
+ *  (`coord/openRun.ts`), re-exported here so their importers are unchanged;
+ *  `HOME_PROJECT_LEGACY_ACCEPTED` above stays this file's, read once by the
+ *  open route and passed to the decider. */
+export { homeProjectVerdict, shapeHomeProject, type HomeProjectShape, type HomeProjectVerdict } from './openRun.js';
 
 /**
- * The home decision, pure and independently testable — no store, no reply, no
- * clock — even though it is DEFINED here, in `server/src/coord/routes.ts`,
- * which is L4 delivery and by the ring's own rule (`CLAUDE.md`) is NOT allowed
- * to decide. It lives here anyway because the cross-wave contract fixes this
- * exact file as both the constant's home and this function's, so that wave
- * 3's flip stays the one-constant change the spec promises; moving the
- * function to an L1 module would break that promise for a ring compliance
- * this file's own text cannot buy back. Recorded as a further ring
- * compromise, not argued away (a deviation beside the other six). The only
- * L4 thing anywhere near this decision is the reply at the route's two call
- * sites below, which this function never touches.
+ * What `registerCoordRoutes` hands back to `buildServer` (workspace lifecycle spec §5.2): the coordination
+ * serialiser — this server's ONE `CoordMutex` — with the operator's abandon inside it, so a door registered OUTSIDE
+ * this file (the archive door's `{programme:'end'}`, in `server.ts`) runs on the same chokepoint and the same
+ * decision as `POST /api/runs/:id/abandon`, never a second spelling of either. `server.ts`'s archive route used to say
+ * why it held no mutex ("the change is to have `registerCoordRoutes` return its mutex"); this is that change.
  *
- * `known` and `stored` are TWO INPUTS and not one, because `programHome`
- * answers `null` both for a programme row with a NULL home and for a slug with
- * no row, and this function's caller acts on those differently: the first is a
- * BACKFILL that records an event, the second is a first insert that records
- * nothing. Establishing existence is the caller's job (`coord.programs()`), and
- * passing the answer in is what keeps that overloaded null out of the decision.
- *
- * An ABSENT body home is decided by `legacyAccepted` alone — never by `known`
- * or `stored` — because the column stays NULL either way: nothing is guessed
- * into it, so a later explicit home can backfill it instead of colliding.
+ * ONE METHOD, NOT TWO, on purpose: `closeRun` may only be called lexically inside `coordMutex.run(...)`
+ * (`dispatch-mutex-gate.test.ts`, D-46), so the abandon is handed to `fn` from INSIDE the hold rather than exported
+ * beside it — a caller can only reach it serialised.
  */
-export function homeProjectVerdict(input: {
-  body: string | undefined; known: boolean; stored: string | null; legacyAccepted: boolean;
-}): HomeProjectVerdict {
-  if (input.body === undefined) {
-    return input.legacyAccepted ? { kind: 'legacy' } : { kind: 'required' };
-  }
-  if (!input.known) return { kind: 'write' };
-  if (input.stored === null) return { kind: 'backfill', home: input.body };
-  return input.stored === input.body ? { kind: 'agrees' } : { kind: 'mismatch', by: input.stored };
+/**
+ * What `buildServer` hands these routes for the operator's door of the question family (W3 Q3f, D-7030):
+ * `POST /api/questions/session-<id>/answer` gates its session id exactly as `server.ts`'s session routes do, with
+ * `buildServer`'s own `knownId`, and answers through the operator's core with the SAME deps the old operator doors read (the press
+ * functions over `askDeps` and `sendDeps`, the `answeredFrame` emit, the watcher's hookstate read), built once there.
+ */
+export interface OperatorDoorWiring {
+  readonly knownId: (id: string) => Promise<boolean>;
+  readonly answerDeps: OperatorDoorDeps;
 }
 
-/** What `POST /api/runs` accepts as a `homeProject`, decided ONCE at the door
- *  (PR #75 review round 1, F2 + F4). Two answers, never folded: an accepted
- *  value is TRIMMED — the same fold `fieldMeasured` applies to a registry
- *  field — and a refused one carries the sentence the caller is told. */
-export type HomeProjectShape = { ok: true; home: string } | { ok: false; detail: string };
-
-/**
- * A home is a single path segment under `projectsRoot`, and nothing else
- * (D-2349):
- * `ledgerAbsPath` joins it there, and the first non-NULL home a programme
- * stores is permanent (`setProgramHome` is `WHERE homeProject IS NULL`), so
- * a whitespace-wrapped spelling would home the programme at `'demo\n'` for
- * ever — every later open sending the clean spelling refused `home-mismatch`
- * against a value that RENDERS the same — and a `..` segment would name a
- * file outside the projects root. Pure, so `home-project.test.ts` drives
- * every branch; the route reads `detail` onto its 400 verbatim.
- */
-export function shapeHomeProject(raw: string): HomeProjectShape {
-  const home = raw.trim();
-  if (home === '') return { ok: false, detail: 'homeProject is empty' };
-  if (home === '.' || home === '..' || home.includes('/')) {
-    return { ok: false, detail: `homeProject must be a single path segment, not ${JSON.stringify(home)}` };
-  }
-  return { ok: true, home };
+export interface CoordRoutesHandle {
+  /** Run `fn` as one coordination write — queued behind whichever write route's body is running, ahead of the next —
+   *  handed `closeRun`'s abandon arm exactly as the abandon route runs it, and `abandonRefusal` (close.ts): what that
+   *  arm would refuse for a run from its row alone, read without acting, so a caller that ends several runs can find
+   *  the one it cannot move before it ends the first. */
+  withAbandon<T>(coord: CoordStore, fn: (
+    abandon: (runId: number, detail?: string) => Promise<CloseOutcome>,
+    refusalOf: (runId: number) => Extract<CloseOutcome, { ok: false }> | null,
+  ) => Promise<T>): Promise<T>;
+  /** The SAME hold, handed `closeRun`'s abandon arm as the DEAD-COORDINATOR LANE runs it (workspace lifecycle spec
+   *  2026-09-24 §5.4): `causedBy: 'sweep'`, never the operator's word; the compare-and-set on `claimedBy` against the
+   *  crashed id; the lane's re-measure, which the arm runs before the fleet act and again before the commit; #166 wave
+   *  3's `childReclaim` port wired exactly as the abandon route wires it. The lane's only way to end a run, so the
+   *  reclaim door — which runs inside this serialiser — can never interleave with it. */
+  withSweepAbandon<T>(coord: WatcherCoordPort, fn: (
+    abandon: (runId: number, crashedId: string, stillStuck: SweepCloseGuard['stillStuck'],
+      extra?: Pick<SweepCloseGuard, 'fleetAct' | 'detail'>) => Promise<CloseOutcome>,
+  ) => Promise<T>): Promise<T>;
+  /** The SAME hold with nothing handed in — for the stop-done lane (D-5370, `sleepLane.ts`), whose act is a
+   *  `ccd stop` and never a run transition: it re-reads the store and stops inside this hold, so a dispatch opening a
+   *  run onto the worker (which runs inside it too) is either finished first or starts after the stop, never between
+   *  the read and the act. No `closeRun` is reachable through it. */
+  serial<T>(fn: () => Promise<T>): Promise<T>;
 }
 
 /**
@@ -359,12 +568,24 @@ export function shapeHomeProject(raw: string): HomeProjectShape {
  * (architecture doc increment 4); this file keeps the token gate, the
  * `CoordMutex` and the union->status maps.
  */
+/** Global budget for `GET /api/runs/:id`: far above a board open (every open run plus a
+ *  fold of finished ones), far below a loop. ONE constant-keyed bucket for every caller (the
+ *  limiter reads no `req.ip`, like `auth/ratelimit.ts`); it runs on `preHandler`, after the
+ *  route's own auth `onRequest` hook, so an unauthenticated call never spends it. */
+export const RUN_SPEND_RATE_LIMIT = { max: 600, timeWindow: '1 minute' } as const;
+
+/** Budget for `GET /api/runs/find` (D-8071, spec §11.4): 120 a minute, one constant-keyed bucket, like the one above. */
+export const RUN_FIND_RATE_LIMIT = { max: 120, timeWindow: '1 minute' } as const;
+
+/** The refusal the test box's read and sync answer a caller with neither a session nor the box token (D-7554). */
+const TESTBOX_UNAUTHENTICATED = { ok: false, error: 'unauthenticated', detail: `takes a session cookie OR the box token (${MAIL_TOKEN_HEADER})` } as const;
+
 export function registerCoordRoutes(
   app: FastifyInstance, deps: Deps,
-  // Unused by the mail routes below; kept in the signature because Task 9's
-  // run routes land in this same file and share it — a signature that grows
+  // Not used by the mail routes below; the programme ledgers' routes (registered at the end of this function) emit
+  // `'waiting'` on it. Kept in the signature because the run routes in this same file share it — a signature that grows
   // per-task would be a second copy of the token+attribution gate wiring.
-  _bus: Bus,
+  bus: Bus,
   /**
    * Does this request carry a live session? Supplied by `buildServer`, because
    * the session store deliberately does NOT live in `Deps` — it must be loaded
@@ -381,7 +602,7 @@ export function registerCoordRoutes(
    */
   sessionAuth: (req: FastifyRequest) => GateDecision = () => NO_SESSION,
   /**
-   * Task 9's `POST /api/asks/:id/answer` presses a digit through `answerAsk`,
+   * Task 9's parent answer (`POST /api/questions/ask-<n>/rule`) presses a digit through `answerAsk`,
    * which is serialized per-session through `askDeps.queue` — the SAME
    * `KeyedQueue` `server.ts` hands `/api/sessions/:id/{prompt,dialog,ask}`,
    * threaded in here rather than rebuilt, so a parent's pre-emption and a
@@ -391,11 +612,11 @@ export function registerCoordRoutes(
    */
   askDeps: AskDeps,
   /**
-   * Task 10's `POST /api/asks/:id/release` (the decline route) drops the
-   * watcher's in-memory hold and fires the deferred push immediately —
-   * `FleetWatcher.releaseHeldAsk` is the ONLY way in, because `heldAsks` is
-   * watcher-private state (that method's own docstring) and this file has no
-   * business reaching into its shape. Threaded in as its own parameter,
+   * Task 10's decline (`POST /api/questions/ask-<n>/release`) drops the
+   * in-memory hold and fires the deferred push immediately — since W3 Q3f
+   * (D-7030) through the watcher's `Questions` instance (`questions` below,
+   * the watcher's own) and the doors sink the watcher gave it, so this file
+   * never reaches into the hold's shape. Threaded in as its own parameter,
    * the same move `askDeps` just above made for `answerAsk`'s queue: `Deps`
    * deliberately does not carry the watcher (`buildServer`'s own third
    * argument, not a `Deps` field — see that function's signature), so a
@@ -408,12 +629,60 @@ export function registerCoordRoutes(
    * had ever held it in memory in the first place.
    */
   watcher?: FleetWatcher,
-): void {
-  const notConfigured = (reply: FastifyReply) => reply.code(501).send({ ok: false, error: 'not-configured' });
+  /**
+   * D-5858: the notice sink this file's five feed writers raise their rows through (`notice.ts`, D-5857), the one
+   * `buildServer` builds and passes. Defaulted to a sink over these same `deps`, which is what `buildServer`'s is, so a
+   * test that registers these routes on a bare Fastify raises its rows exactly as the server does.
+   */
+  notice: NoticeSink = noticeSink(deps),
+  /**
+   * D-7026: this server's owner of question state (`coord/questions.ts#createQuestions`), the one `buildServer` passes
+   * (the watcher's own when it has one). Defaulted the way `buildServer` chooses it (W3 Q3f: the door cores push through
+   * the instance's own doors sink, so a watcher's routes must reach that watcher's instance): the watcher's own, else a
+   * new instance over these same `deps`, so a test that registers these routes on a bare Fastify gets its own. Q3e: the raise ladder and the approval inputs live in it; Q3d moves the
+   * hold carrier.
+   */
+  questions: Questions = watcher?.questions
+    ?? createQuestions(deps, { heldFor, outbox: questionOutboxOf(deps, () => questions) }), // the push outbox (Overlord W1)
+  /**
+   * W3 Q3f (D-7030): the operator's door's wiring (`OperatorDoorWiring`), which `buildServer` passes, read at a request
+   * (a thunk, because `buildServer` declares `knownId` beside its session routes, after this call). Absent for a test
+   * that registers these routes on a bare Fastify: that server answers the operator's door `not-configured`, having no
+   * session routes and no press wiring of its own.
+   */
+  operatorDoors?: () => OperatorDoorWiring,
+  /**
+   * Programme ledgers (plan PL4): the coordinator's presence for an item's stale label, built ONCE by `buildServer` from the
+   * watcher's last fleet frame and registry ids and handed to this file's ledger routes and to the operator's alike, so the two
+   * lanes cannot read it differently. Defaulted to a doubt, so a bare server labels nothing.
+   */
+  presenceOf: (sessionId: string) => CoordinatorPresence = () => 'unmeasured',
+): CoordRoutesHandle {
+  const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');
 
   // One instance for this server (see `CoordMutex`'s own docstring) —
   // serialises the WRITE routes' bodies below: open, dispatch, close, advance.
   const coordMutex = new CoordMutex();
+  // The turn reads' deps (D-5238), built once from the watcher this function receives.
+  const turnReads = turnReadDeps(deps, watcher);
+
+  /** `closeRun`'s abandon arm exactly as `POST /api/runs/:id/abandon` runs it — `{intent:'abandon'}` built here and
+   *  never read off a body (D-280), `causedBy:'operator'`, #166 wave 3's `childReclaim` port onto the session's own
+   *  queue — handed to `fn` INSIDE `coordMutex`. ONE spelling, two callers: that route, and the archive door's
+   *  `{programme:'end'}` through the handle this function returns. */
+  const withAbandon: CoordRoutesHandle['withAbandon'] = (coord, fn) => coordMutex.run(() => fn((runId, detail) => closeRun(
+    { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState,
+      childReclaim: childReclaimPort(deps, coord) },
+    // D-8071: the run's reason from the stuck verdict's reader, read HERE, inside the hold; null with no verdict. D-8076: the
+    // operator's act on an end-request item names the item instead (`abandon:requested:<item>`), a detail only the act passes.
+    runId, { intent: 'abandon' }, 'operator', detail ?? abandonDetail(watcher?.runVerdicts.of(runId) ?? null)), (runId) => abandonRefusal(coord, runId)));
+
+  /** The dead-coordinator lane's abandon (workspace lifecycle spec §5.4) — `withAbandon`'s deps, `'sweep'` and the
+   *  crashed id, inside the same `coordMutex`. Handed to the watcher by `buildServer`. */
+  const withSweepAbandon: CoordRoutesHandle['withSweepAbandon'] = (coord, fn) => coordMutex.run(() => fn((runId, crashedId, stillStuck, extra) => closeRun(
+    { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState,
+      childReclaim: childReclaimPort(deps, coord) },
+    runId, { intent: 'abandon' }, 'sweep', { claimedBy: crashedId, stillStuck, ...extra })));
 
   // The process's ONE `LedgerLog` (the parts-B handoff): the file half of the
   // allocator's MAX(file, db) recovery, held here and handed into
@@ -447,10 +716,10 @@ export function registerCoordRoutes(
    * neither tolerance applies.
    */
   const requireMailToken = (req: FastifyRequest, reply: FastifyReply, route: string): boolean => {
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], route);
     if (verdict === 'ok') return true;
     const detail = verdict === 'legacy'
-      ? `no box token presented — ${route} grants no legacy tolerance (that is /api/notify only)`
+      ? `no box token presented — ${route} grants no legacy tolerance`
       : verdict === 'unconfigured'
         ? `no box token is configured on this server — ${route} fails shut on an unconfigured token, ` +
           'it does not fail open'
@@ -459,57 +728,17 @@ export function registerCoordRoutes(
     return false;
   };
 
-  /**
-   * The claim lanes' attribution gate — the mail ingress's checks 5/5.5/6 with
-   * the SAME transient-vs-terminal split (D-37), factored because both claim
-   * writes are new in this build and share it exactly. NOT `refuse()`: a claim
-   * refusal is answered synchronously to a live caller and replayed by
-   * nothing, so there is no delivery lane needing a recorded rejection to
-   * explain itself — the claims table itself is the record of every
-   * acquisition that happened.
-   *
-   * `uuidField` (Task 9 fix round 1) names the body field THIS CALLER's
-   * request actually carries — `'byUuid'` for the claim lanes, `'fromUuid'`
-   * for `POST /api/asks/:id/answer` — so the `stale-uuid` detail can tell a
-   * caller which of ITS OWN fields to re-read. Before this, the prose was a
-   * literal `'byUuid does not match...'` no matter who called it: an ask
-   * caller, whose body has no `byUuid` field at all, was told to fix a field
-   * it never sent. The wording is ALSO caller-agnostic now ("sender", not
-   * "claimant") — this gate has two callers with two different verbs for
-   * what they are doing, and "claimant" is only true of one of them.
-   */
+  // The verdict (`attributionVerdict`, coord/attribution.ts) is the gate;
+  // this answers it. Through D-5381's
+  // `refuseRoute` since coordinator-first Task 11b (D-5298), which also hands
+  // the verdict to `POST /api/runs`' `attribution` gate as a fact — one check,
+  // two callers, the same words and statuses as the inline sends it replaced.
   const requireAttribution = async (
-    reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid',
+    reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid' | 'sessionUuid',
   ): Promise<boolean> => {
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
-      reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
-        detail: 'the registry directory could not be listed — transient, not a fact about the sender' });
-      return false;
-    }
-    const registry = await readRegistry(deps.io, deps.cfg);
-    const row = registry.find((r) => r.id === whoId);
-    if (!row) {
-      if (names.includes(`${whoId}.uuid`)) {
-        reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
-          detail: `registry row for ${whoId} is listed but unreadable — transient, not a fact about the sender` });
-        return false;
-      }
-      reply.code(403).send({ ok: false, error: 'unknown-sender', detail: `no registry row for ${whoId}` });
-      return false;
-    }
-    const identity = measuredIdentity(row);
-    if (identity === null) {
-      reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
-        detail: `registry row for ${whoId} is listed but its identity could not be measured — transient` });
-      return false;
-    }
-    if (identity.uuid !== whoUuid) {
-      reply.code(403).send({ ok: false, error: 'stale-uuid',
-        detail: `${uuidField} does not match the registry — stale sender; re-read your own .uuid` });
-      return false;
-    }
-    return true;
+    const v = await attributionVerdict(deps.io, deps.cfg, whoId, whoUuid, uuidField);
+    if (!v.ok) refuseRoute(reply, v.error, { detail: v.detail });
+    return v.ok;
   };
 
   /** One refusal, recorded and answered. The record is the point: spec:147-148
@@ -518,13 +747,13 @@ export function registerCoordRoutes(
    *  message ever arrived. `ctx` never carries `code`/`detail` itself — both
    *  are this function's own parameters, spread on top so a call site cannot
    *  accidentally supply a stale one. */
-  const refuse = (
-    reply: FastifyReply, status: number, code: MailRejectCode,
+  // `extra` (#2726 (c)): fields for the answer body beside `detail`, such as a peer-quota refusal's `retry`; never
+  // recorded in the rejection row, whose shape is unchanged.
+  const refuse = (reply: FastifyReply, code: MailRouteRefusal,   // D-5381: the status is REFUSAL_STATUS's
     ctx: Omit<Parameters<CoordStore['recordRejection']>[0], 'code' | 'detail'>,
-    detail: string,
-  ) => {
+    detail: string, extra: { readonly retry?: PeerRetry } = {}) => {
     deps.coord!.recordRejection({ ...ctx, code, detail });
-    return reply.code(status).send({ ok: false, error: code, detail });
+    return reply.code(REFUSAL_STATUS[code]).send({ ok: false, error: code, detail, ...extra });
   };
 
   /**
@@ -539,7 +768,7 @@ export function registerCoordRoutes(
    * Every session on the box can read every `.uuid` file and could present a
    * neighbour's pair. What it catches is a STALE sender — a session that was
    * `/clear`ed or compacted since it read its own uuid, which `_sync_uuid`
-   * rotates every 5s (`ccd/ccd:9327`, cadence at `ccd/ccd:10795`) — and an honest mistake.
+   * rotates every 5s (the cadence of `cmd_supervise`'s tick) — and an honest mistake.
    *
    * The order below IS the design: a cheaper refusal must never be reached
    * after an expensive one.
@@ -566,18 +795,22 @@ export function registerCoordRoutes(
     //
     // `'unconfigured'` (Task 7 fix-round finding 3 / D-39): a server whose
     // token file was never minted must not run this route open, the way
-    // `/api/notify` is still entitled to — `/api/mail` has no pre-existing
-    // deployed caller a strict gate could strand, the identical argument
+    // `/api/notify` was entitled to until the box-token lifecycle —
+    // `/api/mail` has no pre-existing deployed caller a strict gate could strand, the identical argument
     // that already ruled out a `'legacy'` tolerance here.
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    //
+    // HISTORY since the box-token lifecycle (spec 4.3): `/api/notify` lost both
+    // tolerances too and now refuses the same three verdicts; the contrast above
+    // records why this route never had either.
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/mail');
     if (verdict !== 'ok') {
       const detail = verdict === 'legacy'
-        ? 'no box token presented — /api/mail grants no legacy tolerance (that is /api/notify only)'
+        ? 'no box token presented — /api/mail grants no legacy tolerance'
         : verdict === 'unconfigured'
           ? 'no box token is configured on this server — /api/mail fails shut on an unconfigured ' +
             'token, it does not fail open (fix-round finding 3)'
           : 'wrong box token';
-      return refuse(reply, 401, 'unauthenticated', {}, detail);
+      return refuse(reply, 'unauthenticated', {}, detail);
     }
 
     // 2: body shape. fromId/fromUuid/toId/subject/body must all be strings;
@@ -597,7 +830,7 @@ export function registerCoordRoutes(
 
     if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || typeof toId !== 'string' ||
         typeof subject !== 'string' || typeof msgBody !== 'string') {
-      return refuse(reply, 400, 'bad-kind',
+      return refuse(reply, 'bad-kind',
         { fromId: typeof fromId === 'string' ? fromId : undefined,
           toId: typeof toId === 'string' ? toId : undefined },
         'fromId/fromUuid/toId/subject/body must all be strings');
@@ -605,7 +838,7 @@ export function registerCoordRoutes(
 
     const artifacts = artifactsRaw === undefined ? [] : artifactsRaw;
     if (!Array.isArray(artifacts) || !artifacts.every((a) => typeof a === 'string' && path.isAbsolute(a))) {
-      return refuse(reply, 400, 'bad-kind', { fromId, toId, subject },
+      return refuse(reply, 'bad-kind', { fromId, toId, subject },
         'artifacts must be an array of absolute paths — paths, never payloads (spec:52-53)');
     }
 
@@ -630,14 +863,28 @@ export function registerCoordRoutes(
     } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw) && runIdRaw >= 1) {
       runId = runIdRaw;
     } else {
-      return refuse(reply, 400, 'bad-kind', { fromId, toId, subject },
+      return refuse(reply, 'bad-kind', { fromId, toId, subject },
         'runId must be a positive integer when given');
+    }
+
+    // `inReplyTo` (#2726): the DELIVERY id of the mail this one answers — the number on the sender's own `id:` line,
+    // the only id a recipient ever sees. Optional and additive: absent or null is none, and an older client never sends
+    // it. Its shape rule is `runId`'s; whether it makes the mail an invited reply is check 9's, for peer mail only.
+    const inReplyToRaw = body['inReplyTo'];
+    let inReplyTo: number | null;
+    if (inReplyToRaw === undefined || inReplyToRaw === null) {
+      inReplyTo = null;
+    } else if (typeof inReplyToRaw === 'number' && Number.isInteger(inReplyToRaw) && inReplyToRaw >= 1) {
+      inReplyTo = inReplyToRaw;
+    } else {
+      return refuse(reply, 'bad-kind', { fromId, toId, subject, runId },
+        'inReplyTo must be a positive integer (a delivery id) when given');
     }
 
     // 3: sendable kind. `isSendableMailKind` deliberately excludes `unknown` —
     // a sender cannot ask for the we-do-not-know bucket.
     if (!isSendableMailKind(kind)) {
-      return refuse(reply, 400, 'bad-kind', { fromId, toId, subject, runId },
+      return refuse(reply, 'bad-kind', { fromId, toId, subject, runId },
         `unrecognised or missing mail kind: ${JSON.stringify(kind)}`);
     }
 
@@ -652,19 +899,19 @@ export function registerCoordRoutes(
     // stays well under Fastify's default 1 MiB body limit (`server.ts`
     // builds `Fastify({ logger: false })` with no `bodyLimit` override).
     if (Buffer.byteLength(msgBody, 'utf8') > MAIL_BODY_MAX_BYTES) {
-      return refuse(reply, 413, 'oversize', { fromId, toId, kind, subject, runId },
+      return refuse(reply, 'oversize', { fromId, toId, kind, subject, runId },
         `body exceeds ${MAIL_BODY_MAX_BYTES} bytes`);
     }
     if (Buffer.byteLength(subject, 'utf8') > MAIL_SUBJECT_MAX_BYTES) {
-      return refuse(reply, 413, 'oversize', { fromId, toId, kind, subject, runId },
+      return refuse(reply, 'oversize', { fromId, toId, kind, subject, runId },
         `subject exceeds ${MAIL_SUBJECT_MAX_BYTES} bytes`);
     }
     if (artifacts.length > MAIL_ARTIFACTS_MAX) {
-      return refuse(reply, 413, 'oversize', { fromId, toId, kind, subject, runId },
+      return refuse(reply, 'oversize', { fromId, toId, kind, subject, runId },
         `artifacts exceeds ${MAIL_ARTIFACTS_MAX} entries`);
     }
     if ((artifacts as string[]).some((a) => Buffer.byteLength(a, 'utf8') > MAIL_ARTIFACT_PATH_MAX_BYTES)) {
-      return refuse(reply, 413, 'oversize', { fromId, toId, kind, subject, runId },
+      return refuse(reply, 'oversize', { fromId, toId, kind, subject, runId },
         `an artifact path exceeds ${MAIL_ARTIFACT_PATH_MAX_BYTES} bytes`);
     }
 
@@ -678,22 +925,22 @@ export function registerCoordRoutes(
     // NOT-KNOWING-IS-NOT-`[]` rule `tip-unmeasurable`/`pr-unmeasurable`
     // already state for the done-authority checks, inverted here (fix-round
     // finding 1 / D-37): a fact this route could not measure must never read
-    // as a fact that MISMATCHED either. `names` — the raw directory listing —
-    // is read directly, ONCE, and reused below rather than re-derived,
-    // mirroring the same fail-shut-on-unlistable-registry idiom Task 8's
-    // `sweepMail` and Task 9's dispatch-pause check both use for the same
-    // directory.
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
-      return refuse(reply, 502, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
+    // as a fact that MISMATCHED either. The registry is read ONCE (D-5863):
+    // `readRegistryMeasured`'s `listed: false` is the unlistable arm, and its
+    // `names` (the raw listing) and `records` (the rows built from that same
+    // listing) are reused below rather than re-derived by a second listing.
+    // [registry-refused:refuses] a refused row is in `names`, never in `records`: the ladder reads it as unmeasurable.
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!reg.listed) {
+      return refuse(reply, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
-    const registry = await readRegistry(deps.io, deps.cfg);
+    const { names, records: registry } = reg;
 
     // 5: sender — a registry row must exist for fromId.
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
-      // `readRegistry` also drops a row that WAS listed (its `.uuid` file
+      // `records` also omits a row that WAS listed (its `.uuid` file
       // exists in `names`) when a sibling field read fails (`registry.ts:125`,
       // "incomplete registry entry — skip, don't crash") — ALSO transient,
       // not "this session does not exist". `names` proves presence
@@ -701,10 +948,10 @@ export function registerCoordRoutes(
       // evidence `registry.ts`'s own `HOLD_UNREADABLE` sentinel already
       // trusts for `.hold`.
       if (names.includes(`${fromId}.uuid`)) {
-        return refuse(reply, 502, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
+        return refuse(reply, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
           `registry row for ${fromId} is listed but unreadable — transient, not a fact about the sender`);
       }
-      return refuse(reply, 403, 'unknown-sender', { fromId, toId, kind, subject, runId },
+      return refuse(reply, 'unknown-sender', { fromId, toId, kind, subject, runId },
         `no registry row for ${fromId}`);
     }
 
@@ -723,7 +970,7 @@ export function registerCoordRoutes(
     // one.
     const senderIdentity = measuredIdentity(sender);
     if (senderIdentity === null) {
-      return refuse(reply, 502, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
+      return refuse(reply, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
         `registry row for ${fromId} is listed but its identity could not be measured — ` +
           'transient, not a fact about the sender');
     }
@@ -732,7 +979,7 @@ export function registerCoordRoutes(
     // `measuredIdentity` above — a MEASURED triple member is never the empty
     // string, only a DEGRADED one is, and check 5.5 already refused that).
     if (senderIdentity.uuid !== fromUuid) {
-      return refuse(reply, 403, 'stale-uuid', { fromId, fromUuid, toId, kind, subject, runId },
+      return refuse(reply, 'stale-uuid', { fromId, fromUuid, toId, kind, subject, runId },
         'fromUuid does not match the registry — stale sender');
     }
 
@@ -746,10 +993,10 @@ export function registerCoordRoutes(
     // follows the chair, a session id names a session.
     if (toId !== 'coordinator' && toId !== 'worker' && !registry.some((r) => r.id === toId)) {
       if (names.includes(`${toId}.uuid`)) {
-        return refuse(reply, 502, 'registry-unmeasurable', { fromId, fromUuid, toId, kind, subject, runId },
+        return refuse(reply, 'registry-unmeasurable', { fromId, fromUuid, toId, kind, subject, runId },
           `registry row for ${toId} is listed but unreadable — transient, not a fact about the recipient`);
       }
-      return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId },
+      return refuse(reply, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId },
         `no registry row for ${toId}`);
     }
 
@@ -772,7 +1019,7 @@ export function registerCoordRoutes(
     }
     const run = runRead === null ? null : runRead.run;
     if (runId !== null && run === null) {
-      return refuse(reply, 404, 'unknown-run', { fromId, fromUuid, toId, kind, subject, runId },
+      return refuse(reply, 'unknown-run', { fromId, fromUuid, toId, kind, subject, runId },
         `no run ${runId}`);
     }
 
@@ -785,8 +1032,8 @@ export function registerCoordRoutes(
     // Ambiguous or absent → unknown-recipient, recorded — no guessing: an
     // agent-to-agent message delivered to the wrong session is worse than one
     // refused with a reason.
-    const resolvedToId = toId === 'coordinator' ? coord.resolveCoordinator(runId)
-      : toId === 'worker' ? (runId === null ? null : coord.resolveWorker(runId))
+    const resolvedToId = toId === 'coordinator' ? (runId === null ? coord.soleActiveCoordinator() : coordinatorOfRun(coord, runId))
+      : toId === 'worker' ? (runId === null ? null : workerOfRun(coord, runId))
       : toId;
     if (resolvedToId === null) {
       // ONE SHAPE, TWO SENTENCES. The status and code are the coordinator
@@ -799,7 +1046,7 @@ export function registerCoordRoutes(
         : runId === null
           ? "the 'worker' role needs a runId — a worker is per run, and there is nothing to fall back to"
           : `run ${runId} has no worker`;
-      return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId }, why);
+      return refuse(reply, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId }, why);
     }
 
     // 9: peer-mail bounds — `runId === null` ONLY (Build 9b wave 0, D10 hole
@@ -819,18 +1066,25 @@ export function registerCoordRoutes(
     // 'duplicate' first: the most specific refusal — "your message is
     // already queued" tells the caller not to resend at all, where
     // 'peer-quota' invites a retry later.
+    // The decision, its order and its sentences are `peerMailVerdict`'s (L1, `coord/peerBound.ts`, #2726); this
+    // block reads the facts and acts. An invited reply (a kind `answer` whose `inReplyTo` names a delivery to its
+    // sender, of a mail from its recipient, not yet answered) is admitted outside every arm, and the insert below
+    // records which mail it answers, so it holds no slot and the mail buys no second one.
+    let answersMail: number | null = null;
     if (runId === null) {
-      if (coord.hasOutstandingPeerDuplicate(fromId, resolvedToId, subject)) {
-        return refuse(reply, 409, 'duplicate', { fromId, fromUuid, toId, kind, subject, runId },
-          `an outstanding peer mail from ${fromId} to ${resolvedToId} with this subject is already queued`);
-      }
-      if (coord.outstandingPeerCount(fromId, resolvedToId) >= PEER_MAIL_MAX_OUTSTANDING) {
-        return refuse(reply, 429, 'peer-quota', { fromId, fromUuid, toId, kind, subject, runId },
-          `${PEER_MAIL_MAX_OUTSTANDING} peer mails from ${fromId} to ${resolvedToId} are already outstanding`);
-      }
-      if (coord.peerMailInLastHour(fromId, Date.now()) >= PEER_MAIL_HOURLY) {
-        return refuse(reply, 429, 'peer-quota', { fromId, fromUuid, toId, kind, subject, runId },
-          `${fromId} has sent ${PEER_MAIL_HOURLY} peer mails in the last hour`);
+      const now = Date.now();
+      const v = peerMailVerdict({
+        fromId, toId: resolvedToId, kind, inReplyTo,
+        invitation: inReplyTo === null ? null : coord.invitation(inReplyTo),
+        duplicate: coord.hasOutstandingPeerDuplicate(fromId, resolvedToId, subject),
+        outstanding: coord.outstandingPeerCount(fromId, resolvedToId),
+        hourAts: coord.peerMailAtsInLastHour(fromId, now),
+        now,
+      });
+      if (v.verdict === 'invited') answersMail = v.answersMail;
+      else if (v.verdict !== 'bounded') {
+        return refuse(reply, v.verdict, { fromId, fromUuid, toId, kind, subject, runId }, v.detail,
+          v.verdict === 'peer-quota' ? { retry: v.retry } : {});
       }
     }
 
@@ -848,7 +1102,7 @@ export function registerCoordRoutes(
     const artifactPaths = artifacts as string[];
     const { id } = tx(coord.db, () => {
       const inserted = coord.insertMail({ fromId, fromUuid, toId, runId, kind, subject, body: msgBody,
-        artifacts: artifactPaths });
+        artifacts: artifactPaths, answersMail });
       const delivery = coord.queueDelivery(inserted.id, resolvedToId, '');
       const envelope = renderEnvelope({
         id: delivery.id, fromId, toId: resolvedToId, runId,
@@ -891,20 +1145,20 @@ export function registerCoordRoutes(
     // Same gate, same reasoning: see the ingress route above (fix-round
     // finding 3/5) — `/api/mail/:id/ack` has no legacy caller either, and
     // (fix-round finding 3 / D-39) no unconfigured-token pass-through either.
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/mail/:id/ack');
     if (verdict !== 'ok') {
       const detail = verdict === 'legacy'
-        ? 'no box token presented — /api/mail/:id/ack grants no legacy tolerance (that is /api/notify only)'
+        ? 'no box token presented — /api/mail/:id/ack grants no legacy tolerance'
         : verdict === 'unconfigured'
           ? 'no box token is configured on this server — /api/mail/:id/ack fails shut on an ' +
             'unconfigured token, it does not fail open (fix-round finding 3)'
           : 'wrong box token';
-      return refuse(reply, 401, 'unauthenticated', {}, detail);
+      return refuse(reply, 'unauthenticated', {}, detail);
     }
 
     const body = (req.body ?? {}) as { fromId?: unknown; fromUuid?: unknown };
     if (typeof body.fromId !== 'string' || typeof body.fromUuid !== 'string') {
-      return refuse(reply, 400, 'bad-kind', {}, 'fromId/fromUuid must both be strings');
+      return refuse(reply, 'bad-kind', {}, 'fromId/fromUuid must both be strings');
     }
     const { fromId, fromUuid } = body;
 
@@ -912,42 +1166,44 @@ export function registerCoordRoutes(
     // (fix-round finding 1 / D-37): `io.readdir` failing outright is not
     // evidence the acking session does not exist — the cost here is lower
     // (a replay just retries the ack next sweep) but a recorded, permanent
-    // `unknown-sender` would be equally false.
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
-      return refuse(reply, 502, 'registry-unmeasurable', { fromId },
+    // `unknown-sender` would be equally false. One read (D-5863), as the
+    // ingress route's: `names` and `records` come from the same listing.
+    // [registry-refused:refuses] a refused row is in `names`, never in `records`: the ladder reads it as unmeasurable.
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!reg.listed) {
+      return refuse(reply, 'registry-unmeasurable', { fromId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
-    const registry = await readRegistry(deps.io, deps.cfg);
+    const { names, records: registry } = reg;
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
       if (names.includes(`${fromId}.uuid`)) {
-        return refuse(reply, 502, 'registry-unmeasurable', { fromId },
+        return refuse(reply, 'registry-unmeasurable', { fromId },
           `registry row for ${fromId} is listed but unreadable — transient, not a fact about the sender`);
       }
-      return refuse(reply, 403, 'unknown-sender', { fromId }, `no registry row for ${fromId}`);
+      return refuse(reply, 'unknown-sender', { fromId }, `no registry row for ${fromId}`);
     }
     // 5.5: same gate the ingress route carries — see its own comment.
     const senderIdentity = measuredIdentity(sender);
     if (senderIdentity === null) {
-      return refuse(reply, 502, 'registry-unmeasurable', { fromId },
+      return refuse(reply, 'registry-unmeasurable', { fromId },
         `registry row for ${fromId} is listed but its identity could not be measured — ` +
           'transient, not a fact about the sender');
     }
     if (senderIdentity.uuid !== fromUuid) {
-      return refuse(reply, 403, 'stale-uuid', { fromId, fromUuid },
+      return refuse(reply, 'stale-uuid', { fromId, fromUuid },
         'fromUuid does not match the registry — stale sender');
     }
 
     const { id: idParam } = req.params as { id: string };
     const id = parseCanonicalPositiveSafeInteger(idParam);
     if (id === null) {
-      return refuse(reply, 400, 'bad-kind', { fromId, fromUuid }, 'bad delivery id');
+      return refuse(reply, 'bad-kind', { fromId, fromUuid }, 'bad delivery id');
     }
 
     const delivery = coord.delivery(id);
     if (!delivery || delivery.toId !== fromId) {
-      return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid },
+      return refuse(reply, 'unknown-recipient', { fromId, fromUuid },
         'this delivery is not addressed to you');
     }
 
@@ -972,7 +1228,7 @@ export function registerCoordRoutes(
     // 404s an id that names no row, and nothing in this tree deletes one. Total
     // rather than dropped, and it answers with the SAME code that pre-check
     // does, because from the server's side that is what it is.
-    return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid },
+    return refuse(reply, 'unknown-recipient', { fromId, fromUuid },
       'this delivery is not addressed to you');
   });
 
@@ -1051,7 +1307,42 @@ export function registerCoordRoutes(
     const mail = program !== null
       ? coord.mailForProgram(program, { limit, all })
       : all ? coord.mailForRecipient(to!, limit) : coord.outstandingMailFor(to!, limit);
-    return reply.code(200).send({ ok: true, mail });
+    // Session-derived text, masked before it leaves (D-5513, accounts plan Task A10).
+    return reply.code(200).send({ ok: true, mail: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(mail) });
+  });
+
+  /**
+   * `GET /api/mail/inbox?fromId=<id>&fromUuid=<uuid>` (mail inbox, spec §3.3; D-6778) — the caller's own unacked
+   * mail, rendered, oldest first, one page. The client prints each entry and acks it by `POST /api/mail/:id/ack`;
+   * this route acks nothing and writes nothing (no state, no attempt count, no stamp).
+   *
+   * Gates: the box token, then `requireAttribution` (the check `approvals show` and `asks list` use), so the
+   * pair is re-measured against the registry and nobody reads another session's mail.
+   *
+   * REFUSALS ARE NOT RECORDED (D-6779). Every refusal here goes through `requireMailToken`, `requireAttribution`
+   * or `refuseRoute`, never the ingress's recording `refuse`: `mail_rejections` is the record of mail that was
+   * refused, and a refused read refuses no mail. A stale uuid is also what a session sees for a few seconds after
+   * every `/clear`, so recording it would add a row per nudge and say nothing.
+   *
+   * Registered BEFORE `GET /api/mail/:id`; Fastify matches a static segment before a parameter either way.
+   */
+  app.get('/api/mail/inbox', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'GET /api/mail/inbox')) return;
+    const coord = deps.coord;
+
+    const q = req.query as { fromId?: unknown; fromUuid?: unknown };
+    if (typeof q.fromId !== 'string' || typeof q.fromUuid !== 'string') {
+      return refuseRoute(reply, 'bad-kind', { detail: 'fromId and fromUuid are required strings' });
+    }
+    const fromId = q.fromId;
+    if (!(await requireAttribution(reply, fromId, q.fromUuid, 'fromUuid'))) return;
+
+    const rows = coord.inboxFor(fromId);
+    const masker = deps.masker ?? SHAPE_ONLY_MASKER;
+    const entries = rows.map((r) => ({ deliveryId: r.deliveryId, text: masker.maskDeep(renderInboxEntry(r.deliveryId, r.envelope)) }));
+    const { page, remaining } = pageInbox(entries, MAIL_INBOX_PAGE_MAX_BYTES);
+    return reply.code(200).send({ ok: true, deliveries: page, remaining, abandoned: coord.abandonedCount(fromId) });
   });
 
   /**
@@ -1083,7 +1374,10 @@ export function registerCoordRoutes(
 
     const row = coord.deliveryEnvelope(id);
     if (!row) return reply.code(404).send({ ok: false, error: 'not-found' });
-    return reply.code(200).send({ ok: true, id: row.id, toId: row.toId, state: row.state, envelope: row.envelope });
+    return reply.code(200).send({
+      ok: true, id: row.id, toId: row.toId, state: row.state,
+      envelope: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(row.envelope),   // masked before it leaves (D-5513)
+    });
   });
 
   // ── runs (Task 9) ──────────────────────────────────────────────────────
@@ -1114,6 +1408,103 @@ export function registerCoordRoutes(
   // reopening three routes of it because a DIFFERENT, older surface is also
   // open is the redesign, not gating them.
 
+  /** D-5298's `sessionMark` fact for the open route's `notAChild` gate: what
+   *  the registry says `sessionId` is, through `readSessionRecord` (the one
+   *  reader of `$REG/<id>.child`, `registry.ts`). See `SessionMarkRead` for
+   *  why `deferred` is left to rule 3's child gate, which re-reads. */
+  const sessionMarkOf = async (sessionId: string): Promise<SessionMarkRead> => {
+    const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
+    if (read.kind === 'found') {
+      const k = read.record.child.kind;
+      return k === 'child' ? { kind: 'child' } : k === 'none' ? { kind: 'root' } : { kind: 'deferred' };
+    }
+    // `bad-id` (path identity, spec §2.3) is unmeasured, never absent, so it is
+    // left to rule 3's child gate like `unlistable`. The open gate's `sessionId`
+    // check already refuses such an id before this read.
+    if (read.kind === 'unlistable' || read.kind === 'bad-id') return { kind: 'deferred' };
+    // `absent` (no `.uuid` listed, or a twice-observed retirement) and
+    // `unmeasurable` (a listed row that could not be built, D-1145) both reach
+    // this re-listing, which still splits them by hand: only the first is
+    // row-less; a listed `.child` is the child gate's `spent-unmeasured`.
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    if (names === null || names.includes(`${sessionId}.child`)) return { kind: 'deferred' };
+    return names.includes(`${sessionId}.uuid`) ? { kind: 'unbuilt' } : { kind: 'absent' };
+  };
+
+  /** A refusal `openRunPreconditions` decided (D-5384), answered through the
+   *  route refusal helpers with exactly the body the inline sends wrote; the
+   *  `gate` is the order table's, never sent. */
+  const sendOpenRunRefusal = (reply: FastifyReply, r: OpenRunRefusal): FastifyReply => {
+    if ('refused' in r) {
+      return refuseRun(reply, r.refused, {
+        ...(r.by !== undefined ? { by: r.by } : {}), ...(r.detail !== undefined ? { detail: r.detail } : {}),
+      });
+    }
+    return refuseRoute(reply, r.error, r.detail !== undefined ? { detail: r.detail } : {});
+  };
+
+  // The backfill is RECORDED, not merely done — and the legacy acceptance
+  // was too, while the constant was `true`, which is what let the flip be
+  // dated from `run_events` at all (it was ruled early instead, D-2867; the
+  // trail is in `docs/superpowers/programs/home-project-flip.md`).
+  // `recordRunEvent` writes `fromState === toState`, so the notify lane
+  // skips it and no push impersonates a transition.
+  const recordHomeVerdict = (coord: CoordStore, verdict: HomeProjectVerdict, programSlug: string, runId: number): void => {
+    if (verdict.kind === 'backfill') {
+      tx(coord.db, () => {
+        coord.setProgramHome(programSlug, verdict.home);
+        coord.recordRunEvent(runId, 'coordinator', 'home-project-backfilled');
+      });
+    }
+    if (verdict.kind === 'legacy') {
+      coord.recordRunEvent(runId, 'coordinator', 'legacy-home-project');
+    }
+  };
+
+  // `sessionId` names an existing workspace (wave N>=2, reclaiming what
+  // wave 1 held): place the external hold FIRST, then commit every related
+  // database write as one unit (D-2350, D-2505). `setSession` funnels into
+  // transaction-free `bindSession`, which on a RE-bind re-issues the
+  // predecessor's outstanding worker mail to the heir and parks the
+  // predecessor's rows. Keeping the transaction here avoids nesting at the
+  // dispatch caller while ensuring a late event failure rolls all of those
+  // writes back. A refused hold (501/502) still changes no database fact. The
+  // dispatch route later reads `run.sessionId` back to choose `ensure`
+  // over `ws-add` (deviation D-1; `CoordStore.setSession` is D-45).
+  //
+  // A re-bind is RECORDED on the run's own trail, naming both occupants and
+  // how many deliveries moved (D-2351; store-2): `openRun`'s dup arm keys on
+  // (program, wave, waveOf, claimedBy, planned) and not on `sessionId`, so
+  // a retried open naming a different session reaches this line with a
+  // predecessor — a live path, not a store-test-only one — and an occupant
+  // change must be attributable like every other run write.
+  //
+  // The refusal it answers, or null once the hold is placed and the bind committed.
+  const holdAndBindSession = async (
+    coord: CoordStore, reply: FastifyReply, opened: { id: number; holdReason: string }, sessionId: string,
+  ): Promise<FastifyReply | null> => {
+    const argv = CCD_ARGV.wsHold(
+      sessionId, opened.holdReason,
+      sweepDec(deps.fleetState, `run:${opened.id} open`),
+    );
+    if (!ccdCan(deps.fleetState, 'wsHold')) return refuseRoute(reply, 'unsupported');  // D-5384
+    const res = await deps.runCcd(argv);
+    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    tx(coord.db, () => {
+      const predecessor = workerOfRun(coord, opened.id);
+      const bound = coord.setSession(opened.id, sessionId);
+      if (bound.rebound) {
+        // `bindSession` reports a rebound only when its pre-read found a
+        // non-null predecessor distinct from `sessionId`; keep that invariant
+        // visible rather than interpolating the impossible `null` silently.
+        if (predecessor === null) throw new Error('rebound reported without a predecessor');
+        coord.recordRunEvent(opened.id, 'coordinator',
+          'session-rebound' + `: ${predecessor} -> ${sessionId}, ${bound.reissued} re-issued`);
+      }
+    });
+    return null;
+  };
+
   /**
    * Open a run.
    *
@@ -1139,91 +1530,96 @@ export function registerCoordRoutes(
 
     return coordMutex.run(async () => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const { program, title, project, wave, waveOf, claimedBy, sessionId, homeProject } = body;
-    if (typeof program !== 'string' ||
-        typeof title !== 'string' || title.trim() === '' ||
-        typeof project !== 'string' || project.trim() === '' ||
-        typeof claimedBy !== 'string' || claimedBy.trim() === '' ||
-        !isPositiveDecimalSafeInteger(wave) ||
-        !(waveOf === undefined || waveOf === null || isPositiveDecimalSafeInteger(waveOf)) ||
-        !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== '')) ||
-        // Present-and-not-a-string is a malformed body. The VALUE is shaped
-        // below, by `shapeHomeProject`, ONCE — trimmed, and refused unless it
-        // is a single path segment — because the first non-NULL home a
-        // programme stores is permanent and `ledgerAbsPath` joins it under
-        // `projectsRoot` (D-2349; PR #75 review round 1, F2 + F4).
-        !(homeProject === undefined || typeof homeProject === 'string')) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    // A programme names one ledger file, so separators, dot components, and
-    // display-label punctuation are refused before the value reaches storage or
-    // `ledgerPath`. Every programme consumer below reads this one shaped value.
-    const programShape = shapeProgramSlug(program);
-    if (!programShape.ok) {
-      return reply.code(400).send({ ok: false, error: 'bad-request', detail: programShape.detail });
-    }
-    const programSlug = programShape.slug;
-
-    // THE ONE HOME SHAPING. Every consumer below — the verdict, `openRun`,
-    // `setProgramHome` (through the verdict's own `home`), the response —
-    // reads `home`, never the raw body field.
-    let home: string | undefined;
-    if (typeof homeProject === 'string') {
-      const shaped = shapeHomeProject(homeProject);
-      if (!shaped.ok) return reply.code(400).send({ ok: false, error: 'bad-request', detail: shaped.detail });
-      home = shaped.home;
-    }
-    const waveOfVal = (waveOf ?? null) as number | null;
-
-    // F1 (design 2026-09-08 §3 F1) — a session's workspace is a worktree in ONE
-    // repository, and reusing it for a wave in another is the one crossing this
-    // build refuses. Measured from this store's own history, no I/O at all.
-    //
-    // HERE, AND NOT INSIDE `openRun`: the refusal must leave no `planned`
-    // orphan, so it runs after body validation and BEFORE the row exists. A
-    // null answer refuses nothing — absence permits, and `sessionProject`'s own
-    // docstring says which population that is.
-    if (typeof sessionId === 'string') {
-      const bound = coord.sessionProject(sessionId);
-      if (bound !== null && bound !== project) {
-        return reply.code(409).send({ ok: false, refused: 'project-mismatch', by: bound });
-      }
-    }
-
-    // F2 (design §3 F2) — the programme's home, decided BEFORE the row exists so
-    // a refusal leaves no `planned` orphan, exactly like the check above.
-    //
-    // `known` is measured separately from `stored` on purpose: `programHome`
-    // answers null for two conditions this route handles differently, and asking
-    // it only about a programme this box has proven exists is what keeps them
-    // apart. `programs()` is one read of a table with one row per programme.
-    const known = coord.programs().some((p) => p.slug === programSlug);
-    const homeVerdict = homeProjectVerdict({
-      body: home,
-      known, stored: known ? coord.programHome(programSlug) : null,
-      legacyAccepted: HOME_PROJECT_LEGACY_ACCEPTED,
+    // THE PRECONDITIONS ARE DECIDED IN L1 (D-5384, audit ticket ARCH-21):
+    // `coord/openRun.ts`'s `openRunPreconditions` runs every precondition —
+    // the body shape, path identity's three id checks (spec §2.3), the review
+    // arm (D-2799), the slug and home shaping (D-2349), D-5298's attribution
+    // and registry gates, F1's `project-mismatch`, F2's home verdict and §12's
+    // `claimant-is-a-worker` — in its gate table's order, before any row
+    // exists, so a refusal leaves no `planned` orphan and places no hold.
+    // Every read it makes is handed in here, called only by the gate that
+    // needs it. This route answers its refusal and acts on its plan; it
+    // decides none of it.
+    const pre = await openRunPreconditions({
+      body, legacyAccepted: HOME_PROJECT_LEGACY_ACCEPTED,
+      reviewed: (id) => { const r = coord.run(id); return r.ok ? r : { ok: false, detail: r.detail }; },
+      sessionProject: (s) => coord.sessionProject(s),
+      // `known` is measured apart from `stored`: `programHome` answers null for
+      // two conditions the verdict handles differently (design §3 F2).
+      programKnown: (slug) => coord.programs().some((p) => p.slug === slug),
+      programHome: (slug) => coord.programHome(slug),
+      openClaimantsOf: (s) => coord.bindingsOf(s).claimants(),
+      // D-5298 (coordinator-first Task 11b, spec §6.4): the three registry
+      // facts, each read only by the gate that needs it. The switch-over reads
+      // this box's role (as `config.ts`'s `deriveRole` decided it), its own
+      // build stamp, and the fleet host's last `ready` stamp.
+      fleetCarriesAttribution: fleetCarriesRunsAttribution(
+        deps.cfg.role, deps.build ?? null, deps.fleetState?.build ?? null),
+      attribute: (who, uuid) => attributionVerdict(deps.io, deps.cfg, who, uuid, 'claimedByUuid'),
+      claimantListed: async (who) => {
+        const names = await deps.io.readdir(deps.cfg.registryDir);
+        if (names === null) {
+          return { ok: false, error: 'registry-unmeasurable',
+            detail: 'the registry directory could not be listed, so the claimant could not be checked' };
+        }
+        return names.includes(`${who}.uuid`) ? { ok: true } : { ok: false, error: 'unknown-sender', detail: `no registry row for ${who}` };
+      },
+      // MEASURED, through `fieldMeasured` — never `SessionRecord.project`,
+      // whose `project ?? id` collapsing default (`registry.ts`'s
+      // `buildRecord`) would otherwise answer as if it were a measurement
+      // (D-2342, the same reason `dispatch.ts`'s `project-mismatch` rung reads
+      // `.project` this way). Never `sessionProject`, which reads the runs
+      // table and so answers only for a session that has been a worker.
+      claimantProject: async (who) => {
+        const r = await fieldMeasured(deps.io, deps.cfg.registryDir, who, 'project');
+        if (!r.ok) return r.reason === 'absent' ? { kind: 'none' } : { kind: 'unreadable' };
+        return r.content === '' ? { kind: 'none' } : { kind: 'measured', project: r.content };
+      },
+      sessionMark: (s) => sessionMarkOf(s),
+      // D-8181: the plan facts (`planGate`), read through the plan port, or over the coord handle where a build has none.
+      plan: (slug) => planFactsOf(deps.plan ?? planStorePort(coord.db), coord, slug, String(body.claimedBy)),
     });
-    if (homeVerdict.kind === 'mismatch') {
-      return reply.code(409).send({ ok: false, refused: 'home-mismatch', by: homeVerdict.by });
+    if (!pre.ok) return sendOpenRunRefusal(reply, pre.refusal);
+    const { open, home: homeVerdict } = pre;
+    const { sessionId, claimedBy } = open;
+
+    // Rule 3 (child-reclamation spec §5.4): a CHILD whose branch has had a PR
+    // may not take another run. HERE, for F1's reason: a refusal must leave no
+    // `planned` orphan and place no hold, so it runs before `openRun` and the
+    // hold below. After every DB-only refusal above, because this is the
+    // handler's first awaited read of the registry and, for a child with no PR
+    // on record, a live `pr-state` round trip — a cheaper refusal is never
+    // kept waiting behind it. It runs inside `coordMutex`, which is the cost:
+    // at most `pr-state`'s 25 s budget, and only for a CHILD with no PR on
+    // record — a workspace with no marker costs one registry read. The two
+    // codes are spelled here, not forwarded from the verdict: `mail-routes.
+    // test.ts` requires every `RunRefuseCode` to be quoted in this directory.
+    // Its refusals, like the decider's, answer through `refuseRun` (D-5384).
+    const gate = sessionId === undefined ? null : await childBindGate(deps, coord, sessionId);
+    if (gate !== null && !gate.ok) {
+      return gate.code === 'workspace-spent'
+        ? refuseRun(reply, 'workspace-spent', { pr: gate.pr })
+        : refuseRun(reply, 'spent-unmeasured', { detail: gate.detail });
     }
-    if (homeVerdict.kind === 'required') {
-      // Its OWN sentence (D-2349), not the body-shape guard's bare
-      // `bad-request` 36 lines up: two conditions whose remedies differ —
-      // "your JSON is
-      // malformed" versus "this build requires a home" — must not reach the
-      // caller as one value. Dormant while `HOME_PROJECT_LEGACY_ACCEPTED` is
-      // true; the day wave 3 flips the constant, this is the one refusal the
-      // flip exists to produce. Pinned by `home-project.test.ts`'s scan.
-      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'homeProject is required' });
-    }
+
+    // The coordinator's project, from the REGISTRY, MEASURED (D-2342) — read
+    // ONCE, by the decider's `claimantProject` gate (D-5298), which refuses a
+    // claimant whose project is absent, empty or unreadable (since D-5523 it is
+    // no longer compared with the run's or the home's). So an admitted open always carries a measured stamp; the stamp is still
+    // written once and never backfilled.
+    const coordProject = open.coordProject;
 
     // `openRun` refuses a second coordinator (spec:291-292) rather than
     // arbitrating — the run is NOT opened, nothing else below runs. It is
     // also now IDEMPOTENT for a retry naming the same (program, wave,
     // claimedBy) against an existing `planned` row (fix, review findings
     // 19/32) — see its own docstring.
-    const opened = coord.openRun({ program: programSlug, title, project, wave, waveOf: waveOfVal, claimedBy,
-      ...(home !== undefined ? { homeProject: home } : {}) });
+    const opened = coord.openRun({ program: open.program, title: open.title, project: open.project,
+      wave: open.wave, waveOf: open.waveOf, claimedBy,
+      kind: open.kind, reviews: open.reviews,
+      ...(open.homeProject !== undefined ? { homeProject: open.homeProject } : {}),
+      ...(open.programmeTitle !== undefined ? { programmeTitle: open.programmeTitle } : {}),
+      coordProject, unattributed: open.unattributed, ticket: open.ticket });
     if ('kind' in opened) {
       return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
         ok: false,
@@ -1232,65 +1628,26 @@ export function registerCoordRoutes(
         detail: opened.detail,
       });
     }
-    if ('refused' in opened) {
-      return reply.code(409).send({ ok: false, refused: opened.refused, by: opened.by });
-    }
-
-    // The backfill and the legacy acceptance are RECORDED, not merely done:
-    // wave 3's flip is dated by `run_events` showing zero `legacy-home-project`
-    // rows over seven consecutive days, and a fact nothing wrote down cannot
-    // date anything. `recordRunEvent` writes `fromState === toState`, so the
-    // notify lane skips it and no push impersonates a transition.
-    if (homeVerdict.kind === 'backfill') {
-      tx(coord.db, () => {
-        coord.setProgramHome(programSlug, homeVerdict.home);
-        coord.recordRunEvent(opened.id, 'coordinator', 'home-project-backfilled');
-      });
-    }
-    if (homeVerdict.kind === 'legacy') {
-      coord.recordRunEvent(opened.id, 'coordinator', 'legacy-home-project');
-    }
-
-    // `sessionId` names an existing workspace (wave N>=2, reclaiming what
-    // wave 1 held): place the external hold FIRST, then commit every related
-    // database write as one unit (D-2350, D-2505). `setSession` funnels into
-    // transaction-free `bindSession`, which on a RE-bind re-issues the
-    // predecessor's outstanding worker mail to the heir and parks the
-    // predecessor's rows. Keeping the transaction here avoids nesting at the
-    // dispatch caller while ensuring a late event failure rolls all of those
-    // writes back. A refused hold (501/502) still changes no database fact. The
-    // dispatch route later reads `run.sessionId` back to choose `ensure`
-    // over `ws-add` (deviation D-1; `CoordStore.setSession` is D-45).
-    //
-    // A re-bind is RECORDED on the run's own trail, naming both occupants and
-    // how many deliveries moved (D-2351; store-2): `openRun`'s dup arm keys on
-    // (program, wave, waveOf, claimedBy, planned) and not on `sessionId`, so
-    // a retried open naming a different session reaches this line with a
-    // predecessor — a live path, not a store-test-only one — and an occupant
-    // change must be attributable like every other run write.
-    if (typeof sessionId === 'string') {
-      const argv = CCD_ARGV.wsHold(
-        sessionId, opened.holdReason,
-        sweepDec(deps.fleetState, `run:${opened.id} open`),
-      );
-      if (!verbSupported(deps.fleetState, argv)) {
-        return reply.code(501).send({ ok: false, error: 'unsupported' });
+    if ('refused' in opened && opened.refused === 'cap-review-rounds') {
+      // D-6795: the refusal carries the structured ask, and the operator is told ONCE per work run: the store's insert
+      // is the once-only writer (`raiseReviewCapAsk`), so a repeated refusal or a restart raises nothing more.
+      const work = open.reviews!;
+      const ask = await composeReviewCapAsk(coord, deps.io, work, Number(opened.by));
+      if (coord.raiseReviewCapAsk(work, Date.now())) {
+        const n = reviewCapNotice(ask);
+        notice({ kind: 'run', sessionId: '', title: n.title, body: n.body, runId: work }, 'push',
+          { tag: `review-cap-${work}`, degraded: 'ask recorded, feed archive degraded' });
       }
-      const res = await deps.runCcd(argv);
-      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
-      tx(coord.db, () => {
-        const predecessor = coord.resolveWorker(opened.id);
-        const bound = coord.setSession(opened.id, sessionId);
-        if (bound.rebound) {
-          // `bindSession` reports a rebound only when its pre-read found a
-          // non-null predecessor distinct from `sessionId`; keep that invariant
-          // visible rather than interpolating the impossible `null` silently.
-          if (predecessor === null) throw new Error('rebound reported without a predecessor');
-          coord.recordRunEvent(opened.id, 'coordinator',
-            'session-rebound' + `: ${predecessor} -> ${sessionId}, ${bound.reissued} re-issued`);
-        }
-      });
+      return refuseRun(reply, 'cap-review-rounds', { by: opened.by, ask });
     }
+    if ('refused' in opened) return refuseRun(reply, opened.refused, { by: opened.by });
+
+    recordHomeVerdict(coord, homeVerdict, open.program, opened.id);
+    if (sessionId !== undefined) {
+      const held = await holdAndBindSession(coord, reply, opened, sessionId);
+      if (held !== null) return held;
+    }
+    const programSlug = open.program;
 
     // Re-read rather than reasoned about: `openRun`'s first insert and the
     // backfill above are two different writers of this column, and the response
@@ -1335,16 +1692,35 @@ export function registerCoordRoutes(
     const id = parseCanonicalPositiveSafeInteger(idParam);
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown };
+    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown; slug?: unknown; intents?: unknown };
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState, tmux: deps.tmux, queue: deps.queue,
+      fleetState: deps.fleetState, sendClear: clearSender({ tmux: deps.tmux, queue: deps.queue }),
       // The one place a wrapper becomes a directory, called from L4 where the
       // config already lives. `dispatch.ts` declares the port instead of
       // importing `configDirFor` itself, because `config.ts` imports
       // `./coord/db.js` and a value import would drag the store's module graph
       // into a policy module (D-1015).
-      configDir: (wrapper: string) => configDirFor(deps.cfg, wrapper) };
-    const outcome = await coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items));
+      configDir: (wrapper: string) => configDirFor(deps.cfg, wrapper),
+      // D-5238: the live `/clear` gate's reads — `turnverdict.ts`, their one home, over the watcher this function
+      // already receives (thunks: each call reads the watcher's newest pane-scraped pieces).
+      turnVerdict: (rec, uuid) => turnVerdictFor(turnReads, rec, uuid),
+      // D-5242: the wake budget's one list, the watcher's (optional: a test's stand-in watcher may carry none).
+      ...(watcher?.admitWake === undefined ? {} : { admitWake: (kind: 'asked', sid: string) => watcher.admitWake(kind, sid) }) };
+    const run = () => coordMutex.run(() => stampDispatchAttempt(dispatchDeps.coord, id, () => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route, body.slug, body.intents)));
+    const outcome = await run();
+    // D-5238: a pane this dispatch STARTED and has not published a live file. The wait is HERE, outside
+    // `coordMutex` (close, reclaim, settle and the dead-coordinator lane's abandons share it), and only a measured
+    // verdict re-runs the WHOLE decision, once — pause, caps, transition, the child gate, `ensure`, the verdict are
+    // re-checked against whatever happened meanwhile. A poll that runs out answers `worker-starting` at once (a re-run
+    // would read the same `unmeasured` after an `alive:` ensure, `status-unmeasurable`, which nobody retries); a
+    // second `worker-starting` is answered as it stands, never waited for twice.
+    if (!outcome.ok && outcome.kind === 'worker-starting') {
+      const { record, uuid } = outcome.poll;
+      if (!(await waitForMeasuredVerdict(() => dispatchDeps.turnVerdict(record, uuid)))) {
+        return sendDispatchOutcome(reply, outcome);
+      }
+      return sendDispatchOutcome(reply, await run());
+    }
     return sendDispatchOutcome(reply, outcome);
   });
 
@@ -1367,7 +1743,7 @@ export function registerCoordRoutes(
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState };
+      fleetState: deps.fleetState, childReclaim: childReclaimPort(deps, coord), notice };
     const outcome = await coordMutex.run(() => closeRun(closeDeps, id, req.body, 'coordinator'));
     return sendCloseOutcome(reply, outcome);
   });
@@ -1381,9 +1757,16 @@ export function registerCoordRoutes(
    * THE REQUEST BODY IS NEVER READ (D-280 (was D-B4-7)). `{intent:'abandon'}` is
    * constructed here, so `archive` is not a field a caller can send — "the
    * phone can abandon; the phone can never archive" is structural rather than
-   * a validation a later edit can loosen. Destruction keeps its existing
-   * ceremony (audit → reap, typed `expect`); a release destroys nothing, so
-   * the two-tap confirm in the sheet is the whole ceremony here.
+   * a validation a later edit can loosen. A human's destruction keeps its
+   * existing ceremony (audit → reap, typed `expect`), and a release destroys
+   * nothing. A CHILD's abandon is a finished close all the same
+   * (child-reclamation spec §5.7): the close, or the sweep once nothing keeps
+   * the child, hands it to the server's reclaim, which pins its work in the
+   * attic and then removes it behind a token re-proved on the box. The
+   * sheet's two-tap confirm says which applies (`abandonConsequence`,
+   * `AbandonSheet.tsx`) and is the whole ceremony on this door: a door
+   * ungated against the box token (below) reaching a destructive act is
+   * inside the single-user trust model, recorded, not changed.
    *
    * UNGATED — deliberately NOT behind `requireMailToken`, for
    * `POST /api/coord/pause`'s own reason (D-282 (was D-B4-9) and spec §4.1): the box token
@@ -1399,9 +1782,7 @@ export function registerCoordRoutes(
     const id = parseCanonicalPositiveSafeInteger(idParam);
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState };
-    const outcome = await coordMutex.run(() => closeRun(closeDeps, id, { intent: 'abandon' }, 'operator'));
+    const outcome = await withAbandon(coord, (abandon) => abandon(id));
     return sendCloseOutcome(reply, outcome);
   });
 
@@ -1413,7 +1794,7 @@ export function registerCoordRoutes(
    * `POST /api/claims/:id/break` frees the claim a dead holder still holds.
    * None of them can hand a LIVE program to a new session once the old
    * claimant is a corpse — `openRun`'s one-coordinator guard and
-   * `resolveCoordinator` both read the same lowest-id `claimedBy` with no
+   * `coordinatorOfRun` both read the same lowest-id `claimedBy` with no
    * state predicate, so until this door existed the dead name answered both
    * for ever and every later wave opened onto a grave.
    *
@@ -1474,9 +1855,8 @@ export function registerCoordRoutes(
         return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
       case 'unknown-session': return reply.code(404).send({ ok: false, error: 'unknown-session' });
       case 'no-claimant': return reply.code(409).send({ ok: false, refused: 'no-claimant' });
-      // 502, the coord-route family's status for this condition
-      // (`sendDispatchOutcome` above) — NOT the kickoff route's 503, which is
-      // server.ts's own vocabulary. `detail` rides along because it is a
+      // 502, the table's one status for this condition (`REFUSAL_STATUS`; the
+      // kickoff route's 503 was unified to it, D-5971). `detail` rides along because it is a
       // distinction this adapter RECEIVED: L1 measured WHICH read failed, and
       // this layer cannot recompute it.
       case 'registry-unmeasurable':
@@ -1487,12 +1867,92 @@ export function registerCoordRoutes(
       // operator with a refusal and no next move.
       case 'claimant-alive':
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
+      case 'heir-is-a-worker':
+        return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
+      // spec §2.3: `which` names the side that is not a registry id. The HEIR is
+      // this request's own value, so `bad-session-id` (400), the status main's
+      // refusal table (`shared/refusal.ts`) gives that word, where `bad-session`
+      // is 409. The stored CLAIMANT is a row no retry heals, so `bad-session`
+      // (409), and its detail names the abandon door. Nothing was re-pointed.
+      case 'bad-session':
+        return r.which === 'claimant'
+          ? refuseRoute(reply, 'bad-session', { detail: r.detail })
+          : refuseRoute(reply, 'bad-session-id', { detail: r.detail });
+      // D-5298: through `refuseRun` (D-5384's run-refusal helper), not inline.
+      case 'project-mismatch':
+        return refuseRun(reply, 'project-mismatch', {
+          ...(r.by !== undefined ? { by: r.by } : {}), ...(r.detail !== undefined ? { detail: r.detail } : {}),
+        });
       default: {
         const _exhaustive: never = r;
         return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
       }
     }
   });
+
+  /**
+   * `POST /api/runs/:id/advance`'s ACT, after `advanceGate` admitted the run (ARCH-33): the forward edges re-measure
+   * the claim, then the advance and the read-back. It decides no gate.
+   */
+  const advanceAct = async (
+    coord: CoordStore, reply: FastifyReply, run: RunRow & { sessionId: string }, id: number, to: RunState, claim: DoneClaim,
+    ejection: { base: string; kind: LandingEjectionKind } | null,
+  ): Promise<FastifyReply> => {
+    // Forward motion toward a review claim re-measures; retreating to `working` does not — see the route's docstring.
+    let verdict: Extract<Awaited<ReturnType<typeof verifyDone>>, { ok: true }> | null = null;
+    if (to === 'awaiting-review' || to === 'merging') {
+      const measured = await verifyDone(
+        { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
+        { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
+        claim,
+      );
+      if (!measured.ok) {
+        coord.recordRejection({ code: measured.code, runId: id, toId: run.sessionId, detail: measured.detail });
+        queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
+          kind: 'status', ...doneRejectionMail('advance', measured) });
+        return reply.code(409).send({ ok: false, reject: { code: measured.code, detail: measured.detail } });
+      }
+      verdict = measured;
+    }
+
+    // PR landing in ccrc (stage 1, spec §3.1 and §3.7): the transition row into `merging` IS the episode. Its mode is
+    // decided here from the verified head's measurement; `CoordStore.advanceLanding` builds the `merging-at:` detail
+    // from that same head and writes the landing line's entry with it, in the one transaction (D-7614). The head is
+    // the one the server VERIFIED (D-7102): the claim's own on an ordinary advance, the live tip on one accepted
+    // through the radar's lineage. The landing compares a PR head to this, and a brief prints it.
+    let episodeMode: ChecksMode | null = null;
+    if (to === 'merging' && verdict !== null) {
+      const listing = await deps.io.readdir(deps.cfg.registryDir);
+      episodeMode = checksModeAt(readSwitches(listing), ccdCan(deps.fleetState, 'prLanding'), verdict.measured);
+    }
+    const landing = landingAdvanceOf({ to, measured: verdict?.measured ?? null, mode: episodeMode, handoffCommit: claim.handoffCommit, ejection });
+    const adv = coord.advanceLanding({ runId: id, to, causedBy: 'coordinator', landing });
+    const landingReject = adv.ok ? null : landingAdvanceReject(adv);
+    if (landingReject !== null) return refuseAdvance(reply, { reject: landingReject });
+    if (!adv.ok) return adv.error === 'ejection-not-merging'
+      ? refuseAdvance(reply, { reject: { code: adv.error, from: adv.from } }) : reply.code(409).send({ ok: false, reject: adv });
+    // D-7624: the second ejection of an entry is one operator notice, never a refusal. The written row's count reaching 2 is
+    // the once-only raise (the writer is the count's only writer); it names the worker's session, not the review cap's.
+    // @anchor landing-ejection-ask
+    const entry = adv.landing.kind === 'pinned' || adv.landing.kind === 'ejected' ? adv.landing.entry : null;
+    const ask = entry === null ? { due: false as const } : landingEjectionAsk(entry);
+    if (ask.due) notice({ kind: 'run', sessionId: run.sessionId, title: ask.title, body: ask.body, runId: id }, 'record-always',
+      { tag: ask.tag, degraded: 'ejection recorded, feed archive degraded' });
+    // Re-read after the advance for the fresh row. `!` is gone with the type (D-2545): an advance that succeeded and
+    // then read back absent or unreadable is a real condition, and answering it honestly is cheaper than a
+    // non-null assertion that would throw a bare 500 here.
+    const after = coord.run(id);
+    if (!after.ok) return refuseRoute(reply, 'run-unreadable', { detail: after.detail });
+    if (after.run === null) return refuseAdvance(reply, { reject: { code: 'unknown-run' } });
+    return reply.code(200).send({
+      ok: true, run: toRunSummary(after.run),
+      ...(episodeMode === 'live' ? { checksMail: CHECKS_MAIL_TOKEN } : {}),
+      // Only an advance accepted through the lineage names its head: absent means the claim was the head.
+      ...(verdict?.measured.via === BASE_ONLY_MERGE ? { verifiedHead: verdict.measured.branchTip } : {}),
+      // D-7627: what the line recorded, so a coordinator can tell an ejection it recorded from an advance it could not place.
+      landing: adv.landing,
+    } satisfies AdvanceOk);
+  };
 
   /**
    * `POST /api/runs/:id/advance` (fix, review findings 1/15: neither Build 7
@@ -1523,85 +1983,113 @@ export function registerCoordRoutes(
    * both as "the ordinary case, not a failure") re-measures NOTHING, the
    * same D-49 reasoning close's own abandon path already uses: retreating to
    * `working` asserts no new claim of doneness for the server to check.
+   * It does take the CAP check when it comes from an idle state (design 2026-09-14 §7.2) — retreating asserts no doneness, but it does re-occupy a fleet slot.
    */
   app.post('/api/runs/:id/advance', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'POST /api/runs/:id/advance')) return;
     const coord = deps.coord;
 
-    const { id: idParam } = req.params as { id: string };
-    const id = parseCanonicalPositiveSafeInteger(idParam);
-    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-
-    const body = (req.body ?? {}) as
-      { to?: unknown;
-        fingerprint?: { branchTip?: unknown; prNumber?: unknown; prPhase?: unknown; handoffCommit?: unknown } };
-    const fp = body.fingerprint;
-    if (!isRunState(body.to) ||
-        typeof fp !== 'object' || fp === null ||
-        typeof fp.branchTip !== 'string' || typeof fp.handoffCommit !== 'string' ||
-        typeof fp.prPhase !== 'string' || !(fp.prNumber === null || typeof fp.prNumber === 'number')) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    const to = body.to;
-    const ADVANCE_TARGETS: readonly RunState[] = ['working', 'awaiting-review', 'merging'];
-    if (!ADVANCE_TARGETS.includes(to)) {
-      return reply.code(409).send({ ok: false,
-        reject: { code: 'bad-transition', detail: `POST /api/runs/:id/advance only reaches ${ADVANCE_TARGETS.join('/')} — ` +
-          "'planned'/'dispatched' are POST .../dispatch's job and 'closing'/'done'/'failed' are POST .../close's" } });
-    }
-    const claim: DoneClaim = { branchTip: fp.branchTip, prNumber: fp.prNumber as number | null,
+    // The body shape and the target scope are `advanceRequest`'s, the run-dependent gates `advanceGate`'s (ARCH-33,
+    // D-6733); this handler gathers their facts and acts.
+    const parsed = advanceRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), (req.body ?? {}) as AdvanceBody);
+    if (!parsed.ok) return refuseAdvance(reply, parsed.refusal);
+    const { id, to, fingerprint: fp, ejection } = parsed.req;
+    const claim: DoneClaim = { branchTip: fp.branchTip, prNumber: fp.prNumber,
       prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
 
     return coordMutex.run(async () => {
-    const read = coord.run(id);
-    // D-2545, and the `unknown-run` line below is why it matters: 404 tells
-    // the coordinator this run does not exist, which is a lie about a row
-    // sitting in the table with an integer this process cannot represent.
-    // 503, in the `not-configured` family — a fact about this box, not about
-    // the request. Before any `verifyDone` re-measurement or any advance.
-    if (!read.ok) {
-      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
-    }
-    const run = read.run;
-    if (!run) return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
-    if (!(RUN_TRANSITIONS[run.state] as readonly RunState[]).includes(to)) {
-      return reply.code(409).send({ ok: false, reject: { code: 'bad-transition', from: run.state, to } });
-    }
-    if (run.sessionId === null) {
-      return reply.code(409).send({ ok: false, reject: { code: 'not-dispatched' } });
-    }
+      const gate = advanceGate({ to, read: () => coord.run(id), reviewInFlight: () => coord.reviewInFlightFor(id),
+        overConcurrency: () => capsMeasured(coord).overConcurrency });
+      if (!gate.ok) return refuseAdvance(reply, gate.refusal);
+      return advanceAct(coord, reply, gate.run, id, to, claim, ejection);
+    });
+  });
 
-    // Forward motion toward a review claim re-measures; retreating to
-    // `working` does not — see this route's own docstring.
-    if (to === 'awaiting-review' || to === 'merging') {
-      const verdict = await verifyDone(
-        { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
-        { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
-        claim,
-      );
-      if (!verdict.ok) {
-        coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
-        queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
-          kind: 'status', subject: 'wave-advance-rejected', body: `${verdict.code}: ${verdict.detail}` });
-        return reply.code(409).send({ ok: false, reject: { code: verdict.code, detail: verdict.detail } });
-      }
-    }
+  /**
+   * `POST /api/runs/:id/route` (routing spec 2026-09-14 §5.3, slice 5, Task 2)
+   * — the coordinator's door onto the escalation/demotion ladders
+   * (`shared/routing-ladder.ts`'s `escalate`/`demote`). Clause 1 of the
+   * global constraints: the coordinator NEVER runs `ccd route` itself; this
+   * is the one place a `route` argv is built on a run's behalf, and it never
+   * passes `--apply`. Box-token gated — this route sits in the census
+   * `CLAUDE.md`'s "the bulk of the box-token surface" sentence covers
+   * (`requireMailToken` below, the same gate `dispatch`/`close`/`advance`
+   * carry), never the session-only set.
+   *
+   * This door only ever routes a MAIN session — the run's own worker
+   * (`run.sessionId`) or its coordinator (`run.claimedBy`) — never a
+   * subagent; `scope` is therefore always `'main'`. A subagent's own class
+   * ceiling (`SUBAGENT_CLASS_CEILING`) is a fact the worker/coordinator skill
+   * reasons about when it asks for a `field`/`value` write on `subagent`
+   * itself — this door does not read that field back, so a manual write
+   * records `from: '?'`.
+   *
+   * `kind`/`demote` walk the ladder: read the target session's served class
+   * (`degraded ?? class` — a degraded lane serves the DEGRADED class, and the
+   * ladder must compute from what is actually running, not what the record
+   * still intends) and effort off the registry, derive `priorSameKind` and
+   * `lastDemotion` from the target SESSION's own event trail — every run it
+   * touches, worker or coordinator (`coord.runsTouching`, routing slice 6,
+   * Task 1; that bookkeeping is this door's, not the ladder's), and answer
+   * whatever `escalate()`/`demote()` answers. `field`+`value` is the
+   * coordinator's own judgement —
+   * no registry read, no ladder call, `value` is SHAPE-checked by
+   * `parseRouteFields` (fix round 1, finding #3 — the same guard the picker's
+   * sibling route reuses) and then reaches ccd unvalidated on VOCABULARY
+   * (ccd's `_route_valid` is that authority).
+   *
+   * The run-event/response `mode` is DERIVED from `RungTarget.mode` (S5-R1) —
+   * `RouteMode` is that type plus `'manual'` — never a second, hand-typed
+   * verb string. A ccd refusal (`fleetFailed`) records NO run event, so a
+   * retried call sees the record exactly as it was before the refused write.
+   */
+  app.post('/api/runs/:id/route', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/runs/:id/route')) return;
+    const coord = deps.coord;
+    const parsed = parseRouteRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), req.body);
+    // The launch-profile lane owns `compact` while it and `continuity` are live (`compactRefusal`, review 2024 F3, 2149 F11):
+    // its refusal is one more 400 `bad-request` with its detail, so it rides the parse's own refusal.
+    const owned = parsed.ok && parsed.ask.how.by === 'manual'
+      ? compactRefusal(parsed.ask.how.field, (lane) => laneArmRowViewOf(lane, coord.laneArmSetting(lane)).live) : null;
+    const request = owned === null ? parsed : { ok: false as const, detail: owned };
+    if (!request.ok) return refuseRoute(reply, 'bad-request', { detail: request.detail });
+    const { id, ask } = request;
 
-    const adv = coord.advance(id, to, 'coordinator');
-    if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
-    // Re-read after the advance for the fresh row. `!` is gone with the type
-    // (D-2545): an advance that succeeded and then read back absent or
-    // unreadable is a real condition, and answering it honestly is cheaper
-    // than a non-null assertion that would throw a bare 500 here.
-    const after = coord.run(id);
-    if (!after.ok) {
-      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: after.detail });
-    }
-    if (after.run === null) {
-      return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
-    }
-    return reply.code(200).send({ ok: true, run: toRunSummary(after.run) });
+    return coordMutex.run(async () => {
+      const decision = await decideRoute({
+        ask,
+        run: coord.run(id),
+        // D-5866: the `route` row; `routeSet`, the class rung's pair below, is answered by the same `ROUTE_CAP`.
+        ccdCanRoute: ccdCan(deps.fleetState, 'route'),
+        trail: (sid) => {
+          const touched = runsTouching(coord, sid);
+          return !touched.ok ? touched : { ok: true, events: touched.runs.flatMap((r) =>
+            coord.runEvents(r.id).map((e) => ({ at: e.at, runId: r.id, runSessionId: r.sessionId, detail: e.detail }))) };
+        },
+        measure: (sid, field) => fieldMeasured(deps.io, deps.cfg.registryDir, sid, field),
+      });
+      if (!decision.ok) return refuseRoute(reply, decision.refused, decision.extra);
+      const { sid, mode, field, from, to, kind, effortReset } = decision.move;
+
+      const dec = sweepDec(deps.fleetState, `run:${id} coordinator`);
+      const flags = dec === null ? null : { ...dec, reason: `${mode}${kind ? ' ' + kind : ''}: ${ask.why}` };
+      // ONE ARGV FOR THE PAIR, NEVER TWO CALLS (`CCD_ARGV.routeSet`'s own
+      // docstring / ruling S4-R5): `cmd_route` validates every `--set` pair and
+      // then the class/effort PAIR before its write loop touches the registry,
+      // so one argv is all-or-nothing while two calls would commit `class=haiku`
+      // and then die on the pair check.
+      const argv = effortReset === null
+        ? CCD_ARGV.route(sid, field, to, flags)
+        : CCD_ARGV.routeSet(sid, { class: to, effort: effortReset }, flags);
+      const res = await deps.runCcd(argv);
+      if (!res.ok) return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr });
+
+      // ONE run event, naming the RUNG; the companion effort reset is part of
+      // that one class rung, not a second decision.
+      coord.recordRunEvent(id, 'coordinator', routeEventDetail({ mode, field, from, to, kind: kind ?? 'manual', session: sid }));
+      return reply.code(200).send({ ok: true, applied: { session: sid, mode, field, from, to, kind, effortReset } });
     });
   });
 
@@ -1636,6 +2124,26 @@ export function registerCoordRoutes(
 
     const outcome = await coordMutex.run(async () => settleItems({ coord }, id, req.body));
     return sendSettleItemsOutcome(reply, outcome);
+  });
+
+  /**
+   * `POST /api/runs/:id/end-request` (D-8076; spec 2026-11-04 §10): a session ASKS the operator to end a run it cannot close.
+   * Box token, then attribution; the coordinator, the run's worker or a review run's worker may ask, anyone else is refused
+   * `not-yours`. It only ever raises an item for the operator (`endRequest.ts`); the act that ends a run is the operator's
+   * and no session can reach it. Not behind `coordMutex`: the read, the decision and the write are one synchronous unit.
+   */
+  app.post('/api/runs/:id/end-request', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/runs/:id/end-request')) return;
+    const runId = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    return endRequestHandler(runId, {
+      coord: deps.coord, now: () => Date.now(), requireAttribution, changed: () => { bus.emit('waiting'); },
+      itemReach: (item) => itemBoundOf(deps, item, 'reach'),
+      verdictOf: (runId) => {
+        const v = watcher?.runVerdicts.of(runId) ?? null;
+        return v === null ? null : { reason: v.stuck?.reason ?? null, coordinatorGone: v.coordinatorGone };
+      },
+    }, req, reply);
   });
 
   /**
@@ -1679,7 +2187,7 @@ export function registerCoordRoutes(
     const body = (req.body ?? {}) as { paused?: unknown };
     if (typeof body.paused !== 'boolean') return reply.code(400).send({ ok: false, error: 'bad-request' });
     const argv = CCD_ARGV.coordPause(body.paused ? 'on' : 'off');
-    if (!verbSupported(deps.fleetState, argv)) return reply.code(501).send({ ok: false, error: 'unsupported' });
+    if (!ccdCan(deps.fleetState, 'coordPause')) return reply.code(501).send({ ok: false, error: 'unsupported' });
     const res = await deps.runCcd(argv);
     if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
     // `requested`, never `paused`: this route ran a verb, it did not READ the
@@ -1688,10 +2196,169 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, requested: body.paused });
   });
 
-  /** `GET`/`POST /api/coord/caps` — the two coordination caps become an
+  /** `POST /api/coord/reclaim-pause` — the operator's door onto
+   *  `$REG/reclaim-paused` (child-reclamation spec §5.8), the fleet-wide switch
+   *  on the AUTOMATIC reclamation of child workspaces. Body `{ state: 'on' |
+   *  'off' }` — ccd's own vocabulary, passed through, rather than the pause
+   *  route's boolean: there is no mapping here for a route to get wrong.
+   *
+   *  SESSION-GATED, AND NO BOX TOKEN — `coord-pause-route.test.ts`'s
+   *  `SESSION_ONLY`, beside `/api/coord/caps`, and deliberately NOT `UNGATED`.
+   *  The box token gates machine lanes; an operator toggling this from the phone
+   *  is not one, and gating it on the fleet's shared secret would put it behind
+   *  a key the phone does not hold. Nor is it a release valve: raising it
+   *  releases no wedge, so the release-valve argument does not apply. Armed,
+   *  it sits behind `auth/gate.ts` like every other PWA write. The
+   *  coordinator skill is exempt from naming it AND forbidden from it (`coordinator-skill.test.ts`):
+   *  a coordinator told about this door would be told how to stop or restart
+   *  the reclamation of its own children.
+   *
+   *  THE SKEW GATE IS THE CAPABILITY TOKEN (`RECLAIM_PAUSE_CAP`), asked as
+   *  `ccdCan(state, 'reclaimPause')` (D-5866), whose row REFUSES on no
+   *  evidence. `verbSupported` would permit on an absent verb list and
+   *  send `ccd reclaim-pause` to a box whose ccd answers a usage error, which
+   *  the phone would render as a broken switch rather than an older fleet host.
+   *
+   *  NOT a guard on anything that deletes, and it says so: `ws-reclaim` reads
+   *  the file on the box, inside its lock, at the instant of deletion, and that
+   *  read is what makes the switch real. This route only moves the file.
+   *
+   *  No `coordMutex` (it writes no coordination row) and no `notConfigured` arm
+   *  (a box with no coordination database can still carry the file) — the
+   *  pause route's two reasons, unchanged. */
+  app.post('/api/coord/reclaim-pause', async (req, reply) => {
+    const body = (req.body ?? {}) as { state?: unknown };
+    if (body.state !== 'on' && body.state !== 'off') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    if (!ccdCan(deps.fleetState, 'reclaimPause')) {
+      return reply.code(501).send({ ok: false, error: 'unsupported' });
+    }
+    const res = await deps.runCcd(CCD_ARGV.reclaimPause(body.state));
+    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    // `requested`, never `paused`: the authoritative answer is the next
+    // `{type:'coord'}` frame's `reclaim` field, and the toggle settles on that.
+    return reply.code(200).send({ ok: true, requested: body.state });
+  });
+
+  /** `POST /api/coord/pane-scope-stop` (D-7902): Settings › Automation's switch for the deliberate stop's pane-scope
+   *  stop. Body `{ state: 'live' | 'shadow' }`, ccd's own vocabulary passed through, and nothing else. It runs
+   *  `ccd pane-scope-stop --state <state>` through the agent's two-token grant, the marker's one writer; the act that
+   *  reads the marker is ccd's own (`_pane_scope_stop`, at a stop's kill), so this route only moves the file.
+   *
+   *  SESSION-ONLY (`coord-pause-route.test.ts`'s `SESSION_ONLY`), for `reclaim-pause`'s reason: the operator's switch,
+   *  never the box token's, so no coordinator can arm a stop of its children's leftovers. The skew gate is
+   *  `ccdCan(state, 'paneScopeStop')`: a box whose `ccd caps` lacks the verb is refused 501 rather than sent a usage
+   *  error. No `coordMutex` and no `notConfigured` arm: it writes no coordination row. `requested`, never the state:
+   *  the authoritative answer is the next `{type:'coord'}` frame's `paneScopeStop`, and the card settles on that. */
+  app.post('/api/coord/pane-scope-stop', async (req, reply) => {
+    const body = req.body as { state?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'state'
+      || (body.state !== 'live' && body.state !== 'shadow')) {
+      return refuseRoute(reply, 'bad-request');
+    }
+    if (!ccdCan(deps.fleetState, 'paneScopeStop')) return refuseRoute(reply, 'unsupported');
+    const res = await deps.runCcd(CCD_ARGV.paneScopeStop(body.state));
+    // D-6840: the not-ran arm FIRST, as the test box switch reads it: a verb that never ran said nothing.
+    if (res.ran === false) return refuseRoute(reply, 'fleetFailed', { detail: notRanSentence('ccd pane-scope-stop', res) });
+    if (!res.ok) return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr });
+    return reply.code(200).send({ ok: true, requested: body.state });
+  });
+
+  /** Test box plan TB9 (D-7411; spec 2026-10-28 §2.7): the test box's three doors.
+   *  - `GET /api/testbox` answers the block the poll last decided (`testbox.ts`), `null` before its first pass.
+   *  - `POST /api/testbox/switch` takes `{on: boolean}` and nothing else, and runs `ccd testbox-remote --state on|off`
+   *    through the agent's whitelist, the marker's one writer. SESSION-ONLY (`coord-pause-route.test.ts`'s
+   *    `SESSION_ONLY`): the operator's switch, never the box token's, so no coordinator can arm remote runs.
+   *  - `POST /api/testbox/tools-sync` takes no body: the release and the versions it sends are the fleet host's own.
+   *  D-7554: the read and the sync ALSO take the box token (EXEMPT-BUT-AUTHENTICATED in `auth/gate.ts`, the `GET
+   *  /api/runs` pattern), because `ccrc-api testbox status|tools-sync` is a cookieless fleet-host caller (the update
+   *  lane's signal). No `coordMutex` and no `notConfigured` arm: none of them touches the coordination database. */
+  app.get('/api/testbox', async (req, reply) => {
+    if (deps.cfg.authEnabled && sessionAuth(req).reason !== 'session'
+      && checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/testbox') !== 'ok') return reply.code(401).send(TESTBOX_UNAUTHENTICATED);
+    return reply.code(200).send({ ok: true, testbox: watcher?.testboxLane.block() ?? null });
+  });
+  app.post('/api/testbox/switch', async (req, reply) => {
+    // D-8166 (TC13): every request writes one `switch` ledger row, by the session that asked.
+    const row = (outcome: TestboxActOutcome, code?: TestboxAdminCode | RouteRefusal): void =>
+      writeSwitchRow({ audit: deps.testboxAudit, fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity) }, switchActorOf(req, sessionAuth(req).device), outcome, code);
+    const body = req.body as { on?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') {
+      row('refused', 'bad-request');
+      return refuseRoute(reply, 'bad-request');
+    }
+    if (!ccdCan(deps.fleetState, 'testboxRemote')) { row('refused', 'unsupported'); return refuseRoute(reply, 'unsupported'); }
+    // `on` needs a passing parity record (spec §2.8, T9), read fresh; `off` is never gated.
+    const refused = body.on ? await switchOnGate(deps.testboxAdmin, deps.fleetState) : null;
+    if (refused !== null) { row(refused.audit, refused.code); return refuseRoute(reply, refused.word, refused.extra); }
+    const res = await deps.runCcd(CCD_ARGV.testboxRemote(body.on ? 'on' : 'off'));
+    // D-6840: the not-ran arm FIRST. A verb that never ran, or may not have, said nothing, so its forged code is not
+    // read as the verb's refusal: the answer is the one not-ran sentence (`notRanSentence`), since whether the switch
+    // moved is unmeasured, and the pass forced here re-reads the block's `switch`, the authoritative answer either way.
+    if (res.ran === false) {
+      row('unknown', 'fleetFailed');
+      void watcher?.testboxLane.sweep(true);
+      return refuseRoute(reply, 'fleetFailed', { detail: notRanSentence('ccd testbox-remote', res) });
+    }
+    // The second layer of the same gate: ccd checks the files itself (and the verb's stale mark the status does not carry).
+    if (!res.ok && body.on && parityRefusedByCcd(res.stderr)) {
+      row('refused', 'parity-required');
+      return refuseRoute(reply, 'parity-required', { detail: TESTBOX_PARITY_REQUIRED_SENTENCE });
+    }
+    if (!res.ok) { row('failed', 'fleetFailed'); return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr }); }
+    row('ok');
+    // `requested`, never the switch: the authoritative answer is the block's `switch`, re-read by a pass now.
+    void watcher?.testboxLane.sweep(true);
+    return reply.code(200).send({ ok: true, requested: body.on });
+  });
+  app.post('/api/testbox/tools-sync', async (req, reply) => {
+    if (deps.cfg.authEnabled && sessionAuth(req).reason !== 'session'
+      && checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/testbox/tools-sync') !== 'ok') return reply.code(401).send(TESTBOX_UNAUTHENTICATED);
+    const body = req.body as unknown;
+    if (body !== undefined && body !== null && !(typeof body === 'object' && Object.keys(body).length === 0)) {
+      return refuseRoute(reply, 'bad-request');
+    }
+    const r = watcher === undefined ? await deps.io.testboxToolsSync() : await watcher.testboxLane.toolsSync();
+    if (!r.ok) {
+      const refusal = TESTBOX_SYNC_REFUSAL[r.reason];
+      return refuseRoute(reply, refusal.error, { detail: refusal.detail });
+    }
+    return reply.code(200).send({ ok: r.reply.outcome === 'sent', ...r.reply });
+  });
+
+  /** D-8289: Settings › Automation › Test box's build list (`GET`, the record as `CoordStore.claudeBuilds` reads it) and the
+   *  operator's **Capture again** (`POST`, `{build}` and nothing else: a FAILED build goes back to the queue, which sends it on
+   *  its next pass). Both session-gated, no box token: no machine lane reads or moves the trusted set. A record that cannot be
+   *  read is `unavailable`, never an empty list. */
+  const buildsAnswer = (reply: FastifyReply, coord: NonNullable<typeof deps.coord>): FastifyReply => {
+    try { return reply.code(200).send({ ok: true, claudeBuilds: coord.claudeBuilds() }); } catch (err) {
+      return refuseRoute(reply, 'unavailable', { detail: `the build record could not be read (${err instanceof Error ? err.message : String(err)})` });
+    }
+  };
+  app.get('/api/testbox/builds', async (_req, reply) => (deps.coord ? buildsAnswer(reply, deps.coord) : notConfigured(reply)));
+  app.post('/api/testbox/builds/capture', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const body = req.body as { build?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'build' || !isClaudeVersion(body.build)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'the body is {build}, a Claude Code build such as 2.1.302' });
+    }
+    const r = deps.coord.requeueClaudeBuild(body.build);
+    if (r === 'unknown-build') return refuseRoute(reply, 'not-found', { detail: `no build ${body.build} is recorded` });
+    if (r === 'not-failed') return refuseRoute(reply, 'conflict', { detail: `build ${body.build} has not failed its capture` });
+    if (deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'Claude Code build sent to capture again', runId: null,
+        body: `build ${body.build} is queued for its capture again; by ${actor}` }, 'record-only', { degraded: 'capture re-queued, feed archive degraded' });
+    }
+    return buildsAnswer(reply, deps.coord);
+  });
+
+  /** `GET`/`POST /api/coord/caps` — the coordination cap becomes an
    *  OPERATOR DIAL. Before this, `CoordStore.setCaps` had no caller anywhere in
-   *  `server/src`: the only way to change `maxConcurrentWorkers` or
-   *  `maxSessionsPerDay` was to hand-edit `coord.db` (D-1164).
+   *  `server/src`: the only way to change a cap was to hand-edit `coord.db`
+   *  (D-1164). There were two caps then; the daily dispatch brake is retired
+   *  (D-7068), and `maxConcurrentWorkers` is the one left.
    *
    *  NOT BOX-TOKEN, AND NOT `UNGATED` EITHER — two different facts, and this is
    *  the first route in the tree that needs them apart (D-1240). The box token
@@ -1717,11 +2384,12 @@ export function registerCoordRoutes(
    *
    *  THE READ HALF EXISTS BECAUSE NOTHING ELSE CARRIES THESE NUMBERS (D-1209).
    *  `capsUsage` is computed server-side and reaches the PWA nowhere;
-   *  `CoordStatus` carries `pause` and `mail` and no numbers at all. Caps are
+   *  `CoordStatus` carries `pause`, `mail`, `reclaim` and `childReclaimAttention`
+   *  (child-reclamation wave 4) — the last holding `runId`/`at` numbers of its
+   *  own, but only for a child that currently needs the operator's attention,
+   *  a cached list rather than a value re-derived on every tick. Caps are
    *  deliberately NOT added to that frame: `emitCoord` states it needs no
-   *  try/catch precisely because it touches no `node:sqlite`, and
-   *  `dispatchedIn24h` moves with the clock, so the frame's byte-equality guard
-   *  would let it re-emit on nearly every two-second tick.
+   *  try/catch precisely because it touches no `node:sqlite`.
    *
    *  THE REPLY IS THE CONFIRMATION, unlike the pause toggle one door up. That
    *  toggle refuses to be optimistic because a `{type:'coord'}` frame exists to
@@ -1735,6 +2403,43 @@ export function registerCoordRoutes(
    *  saying something the other does not. */
   const capsView = (store: NonNullable<Deps['coord']>): CoordCapsView =>
     ({ caps: store.caps(), usage: store.capsUsage(), updatedAt: store.capsUpdatedAt() });
+
+  /**
+   * `POST /api/coord/review-cap` (D-6795): the operator lifts the review-round cap for ONE work run, `{ run: <id> }`.
+   * Caps-style: session-gated like `/api/coord/caps`, no box token, because no machine lane may lift a cap on its own
+   * work. After it the run's next review opens as before. Idempotent; 404 for an id that is not a work run.
+   */
+  app.post('/api/coord/review-cap', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const run = (req.body as { run?: unknown } | null | undefined)?.run;
+    if (!isPositiveDecimalSafeInteger(run)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'run must be a positive work run id' });
+    }
+    const lifted = await coordMutex.run(async () => coord.liftReviewCap(run, Date.now()));
+    if (!lifted) return refuseRoute(reply, 'not-found', { detail: `run ${run} is not a work run` });
+    notice({ kind: 'coord', sessionId: '', title: 'review cap lifted', body: `run ${run}`, runId: run },
+      'record-only', { degraded: 'cap lifted, feed archive degraded' });
+    return reply.code(200).send({ ok: true, run, rounds: coord.reviewRounds(run), cap: REVIEW_ROUND_CAP, lifted: true } satisfies ReviewCapLiftAnswer);
+  });
+
+  /**
+   * `GET /api/coord/review-cap/:id` (D-6910): the operator's sheet reads a work run's review-cap ask before lifting it,
+   * through the refusal's own helper, so it shows what the notice said. Session-gated with no box token, like the lift.
+   * 404 for an id that is not a work run, 400 for a bad id, and 503 `run-unreadable` when the store read fails (D-6912).
+   */
+  app.get('/api/coord/review-cap/:id', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const run = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (run === null) return refuseRoute(reply, 'bad-request', { detail: 'id must be a positive work run id' });
+    const read = deps.coord.run(run);
+    if (!read.ok) return refuseRoute(reply, 'run-unreadable', { detail: read.detail });
+    const cap = read.run?.reviewCap ?? null;
+    if (cap === null) return refuseRoute(reply, 'not-found', { detail: `run ${run} is not a work run` });
+    const ask = await composeReviewCapAsk(deps.coord, deps.io, run, cap.rounds);
+    const view: ReviewCapView = { ok: true, ask, askedAt: cap.askedAt, liftedAt: cap.liftedAt };
+    return reply.code(200).send(view);
+  });
 
   app.get('/api/coord/caps', async (_req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -1750,6 +2455,9 @@ export function registerCoordRoutes(
     // This is a shape probe only — the merge that is actually written is
     // recomputed under the lock below, so the caps it reads here do not matter.
     const shape = decideCaps(coord.caps(), req.body ?? {});
+    // AN OLDER PWA'S SAVE OF A RETIRED DIAL (D-7068): accepted, written nowhere and recorded
+    // nowhere — no cap that still exists moved. The answer is the current view, so that PWA settles on it.
+    if (shape.ok === 'retired') return reply.code(200).send({ ok: true, ...capsView(coord) });
     if (!shape.ok) {
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: shape.detail });
     }
@@ -1779,7 +2487,9 @@ export function registerCoordRoutes(
       // `decideCaps`'s verdict depends on the BODY alone — `current` only
       // supplies the untouched fields. Thrown rather than swallowed, so if that
       // ever stops being true it is a 500 that says so and not a silent 200.
-      if (!merged.ok) throw new Error(`caps decision changed under the lock: ${merged.detail}`);
+      if (merged.ok !== true) {
+        throw new Error(`caps decision changed under the lock: ${merged.ok === false ? merged.detail : merged.ok}`);
+      }
       // D-1169: the moment is L4's to supply — read INSIDE the mutex, so the
       // timestamp belongs to the write that actually won the lock.
       coord.setCaps(merged.next, Date.now());
@@ -1790,50 +2500,719 @@ export function registerCoordRoutes(
     // skips outright — the row would land and be seen by nobody. The durable
     // feed is where a coordination change with no run belongs.
     //
-    // A missing `NotifyLog` degrades the RECORD and never the write; and
-    // `recordFeedEvent` throws SYNCHRONOUSLY (`node:sqlite`), so it is caught
-    // here exactly the way `watch.ts:1391-1394` catches it. Refusing an
-    // operator's write because the feed archive is unavailable would be the
-    // collapse, not the safety.
-    const log = deps.notifyLog;
-    if (log) {
-      try {
-        const ev = log.record({
-          kind: 'coord', sessionId: '',
-          title: 'caps changed',
-          body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
-                `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
-          runId: null,
-        });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — caps written, feed archive degraded`);
-      } finally {
-        // FLUSH, like the only other `record()` caller in the tree
-        // (`watch.ts:1396`) and for the reason `NotifyLog.flush`'s own docstring
-        // gives: `record()` bumps the in-memory seq, and a seq handed to a
-        // client but never persisted lets a restart re-mint the same
-        // `{epoch, seq}` pair for a different event — the stale-but-valid
-        // landing `catchUp` cannot tell from the truth. `void`, never awaited:
-        // flush never rejects, and the caps write must not wait on it.
-        //
-        // IN A `finally`, NOT AFTER THE ARCHIVE WRITE (D-1213). It shipped
-        // inside the try, one line below `recordFeedEvent` — which throws
-        // SYNCHRONOUSLY, and is the one failure this try/catch exists for. So
-        // the flush was skipped on precisely the path that needed it: the seq
-        // was already spent, the client already had it, and the file still
-        // held the older number. The seq is minted by `record()`, so its
-        // persistence must follow `record()` and nothing else.
-        void log.flush();
-      }
-    }
+    // Through the notice sink (D-5858), `'record-only'`: recorded whatever the presence, never pushed. A missing
+    // `NotifyLog` degrades the RECORD and never the write; the archive's synchronous throw (`node:sqlite`) is caught
+    // inside `notify`, and the seq `record()` minted is flushed whatever the archive does (D-1213). Refusing an
+    // operator's write because the feed archive is unavailable would be the collapse, not the safety.
+    notice({
+      kind: 'coord', sessionId: '',
+      title: 'caps changed',
+      body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}`,
+      runId: null,
+    }, 'record-only', { degraded: 'caps written, feed archive degraded' });
     return reply.code(200).send({ ok: true, ...view });
   });
 
+  /** `GET`/`POST /api/coord/stall-watch` — the stall watch's level and quiet time become a choice the operator makes
+   *  on the Settings page (stall watch settings, design 2026-10-05 §10). One path serves both verbs, as caps does, so
+   *  one `SESSION_ONLY` entry covers the door.
+   *
+   *  NOT BOX-TOKEN, AND NOT `UNGATED`, for the caps dial's two reasons. The box token gates machine lanes, and an
+   *  operator choosing a level in the PWA is not one; gating it on the fleet's shared secret would put it behind a key
+   *  the PWA does not hold. Nor is it a release valve: raising the level releases no wedge, so `UNGATED`'s argument
+   *  (D-282) does not apply. It is an ordinary same-origin PWA write: session-gated when `CCRC_AUTH` is armed (no row
+   *  in `auth/gate.ts`'s EXEMPT table), open dark otherwise. `coord-pause-route.test.ts`'s `SESSION_ONLY` holds both
+   *  halves against this file.
+   *
+   *  THE UNARMED BOX, said plainly, as the caps door's "open dark, like every other write the console makes" says it.
+   *  With the gate unarmed, any process that reaches this server, a fleet session included, can change the level or
+   *  the quiet time, as it can the caps. What stands against that is three things: no skill names this door (the
+   *  forbid-mention cases in the coordinator, worker and reviewer suites); every change leaves a feed row naming its
+   *  actor, `flag-off` when unarmed; and arming the gate. The worker a check is about is the session most motivated to
+   *  lower the watch, which is why none of the three skills may name the path.
+   *
+   *  THE VIEW IS BUILT ONCE, by `stallWatchView`, and both halves send it (the `capsView` precedent). It composes and
+   *  decides nothing: the resolver and the readers are L1's (`stallsettings.ts`). It never throws.
+   *  - The resolution runs in its own `try`, and only that `try` claims a fallback. On a throw the reply carries what
+   *    the sweeps' own catch runs: the fleet box's files and the built-in quiet time, with the fallback line's reason.
+   *    A fallback the watcher reports (`watcher.stallFallback()`) is reported even when this one succeeded.
+   *  - The resolved reading's stages are read inside that same `try`, beside the resolver, which reads the same
+   *    stages for every chosen running level: a fault there is the resolution's, so it claims the fallback and the
+   *    reply shows the files-only reading.
+   *  - The view-only readers run in a second `try`, which claims no fallback: a throw there leaves `next` and
+   *    `filesExceed` out and keeps the reading measured, and the sweeps are not affected, because they never call
+   *    those readers. `{ measured: false }` means one thing, a registry that could not be listed; a reader fault never
+   *    answers it, except when the files-only reading's own readers throw over the box arming, under a fallback,
+   *    where no reading of the box can be stated and the `fallback` beside it names the fault.
+   *  - The notice counts run in a third, so a count that fails answers `notices: { ok: false }`, never a 500.
+   *  Each `try` warns once per standing fault and re-arms when it next succeeds, so a page polling every minute does
+   *  not repeat the line.
+   *
+   *  THE WRITE IS DECIDED BY THE SERVER (departure `server-decides-the-confirm` (D-4033)). The body is decided by L1
+   *  (`decideStallSettings`; unknown keys are refused, departure `unknown-keys-refused` (D-4029)). The route then
+   *  measures what the write would do, from the row as it stands and the row the write will leave, against the
+   *  listing it just took, and refuses a write that needs a confirm with 409 `confirm-required` until the body carries
+   *  the effect's key (departure `confirm-on-stage-diff` (D-4034)). From the listing to the write there is no `await`,
+   *  so no other request moves the row in between; the store still writes only over the row measured here, and a
+   *  conflict is measured once more on the row it found. One synchronous transaction, so no `coordMutex` (departure
+   *  `no-coord-mutex-for-stall-settings` (D-4030)). The reply re-reads the store, never the body.
+   *
+   *  THE FEED ROW names only what changed, and a write that changed nothing records nothing (departure
+   *  `no-op-write-records-no-feed-event` (D-4031)). The actor is `deviceActor(sessionAuth(req).device)` when the gate
+   *  is armed, the same call `server.ts`'s `pwaDec` makes; unarmed it is `flag-off`, the gate's own word, because the
+   *  session reading does not consult the flag and would record a session nobody presented. The label is only ever
+   *  handed to `deviceActor`, never branched on; `stall-settings-route.test.ts` holds that (M29). */
+  const stallViewWarned = new Set<string>();
+  /** One line per standing fault in one part of the view, re-armed when that part next succeeds. */
+  const stallViewNote = (part: string, fault: string | null): void => {
+    if (fault === null) { stallViewWarned.delete(part); return; }
+    if (stallViewWarned.has(part)) return;
+    stallViewWarned.add(part);
+    try {
+      console.warn(`ccrc-server: stall-watch view: ${part} failed (${fault})`);
+    } catch { /* a log line must not fail the view */ }
+  };
+  /** A thrown value's message, cut to 200 characters, composed as the sweeps' catch composes its own: a fixed word
+   *  stands when even reading the error throws. */
+  const stallFaultReason = (err: unknown): string => {
+    try {
+      return (err instanceof Error ? err.message : String(err)).slice(0, 200);
+    } catch {
+      return 'an unreadable fault';
+    }
+  };
+
+  const stallWatchView = (
+    store: CoordStore, names: readonly string[] | null, now: number,
+    watcherFallback: { readonly at: number; readonly reason: string } | null,
+  ): StallWatchView => {
+    // The resolution, as `stallResolveNow` runs it. With no listing it is still taken, over an empty one, for the
+    // quiet time alone, which reads no flag of the box (§6.2); `effective` then stays unmeasured.
+    let chosen: StallWatchView['chosen'] = { level: 'unreadable', quietMs: 'unreadable', updatedAt: null, stored: 'unreadable' };
+    let resolution: { readonly box: StallBoxArming; readonly r: StallResolved; readonly stages: StallWatchStages } | null = null;
+    let ownFault: string | null = null;
+    try {
+      const parsed = parseStallSettings(store.stallSettings());
+      chosen = {
+        level: parsed.level.kind === 'follow' ? 'follow' : parsed.level.kind === 'chosen' ? parsed.level.level : 'unreadable',
+        quietMs: parsed.quiet.kind === 'default' ? 'default' : parsed.quiet.kind === 'set' ? parsed.quiet.ms : 'unreadable',
+        updatedAt: parsed.updatedAt,
+        stored: parsed.stored,
+      };
+      const box = stallBoxArmingOf(names ?? [], names !== null && names.includes(MAIL_DISABLED_MARKER));
+      const r = resolveStallWatch(box, parsed);
+      resolution = { box, r, stages: stallStages(r.arming) };
+    } catch (err) {
+      ownFault = stallFaultReason(err);
+    }
+    stallViewNote('the resolution', ownFault);
+    const fallback = watcherFallback ?? (ownFault === null ? null : { at: now, reason: ownFault });
+    // Under any fallback the reply shows what the sweeps' catch runs: the files alone and the built-in quiet time.
+    const applied = fallback === null ? resolution : null;
+
+    let effective: StallWatchEffective = { measured: false };
+    let readerFault: string | null = null;
+    if (names !== null) {
+      try {
+        if (applied !== null) {
+          // Every field of the reading comes from the first `try`, so only `next` and `filesExceed` can be left out.
+          const { box, r, stages } = applied;
+          effective = { measured: true, level: r.effective, files: r.files, source: r.levelSource, stages, held: r.held };
+          effective = { measured: true, level: r.effective, files: r.files, source: r.levelSource, stages, held: r.held,
+            next: stallNextStep(r.arming, r.chosen), filesExceed: stallFilesExceed(box, r) };
+        } else {
+          // The files-only reading: neither the parse nor the resolver, so neither fault can reach it.
+          const box = stallBoxArmingOf(names, names.includes(MAIL_DISABLED_MARKER));
+          const level = stallLevelOf(box);
+          const stages = stallStages(box);
+          const held = stallBoxHeld(box);
+          effective = { measured: true, level, files: level, source: 'files', stages, held };
+          effective = { measured: true, level, files: level, source: 'files', stages, held,
+            next: stallNextStep(box, null), filesExceed: false };
+        }
+      } catch (err) {
+        readerFault = stallFaultReason(err);
+      }
+    }
+    stallViewNote('a view reader', readerFault);
+
+    let notices: StallWatchView['notices'] = { ok: false };
+    let countFault: string | null = null;
+    try {
+      const since = now - STALL_NOTICE_WINDOW_MS;
+      const read = store.stallObservationsSince(since);
+      if (read.ok) notices = { ok: true, since, windowMs: STALL_NOTICE_WINDOW_MS, counts: stallNoticeCounts(read.rows) };
+      else countFault = read.detail.slice(0, 200);
+    } catch (err) {
+      countFault = stallFaultReason(err);
+    }
+    stallViewNote('the notice counts', countFault);
+
+    return {
+      chosen,
+      effective,
+      quiet: {
+        effectiveMs: applied === null ? STALL_QUIET_MS : applied.r.quietMs,
+        builtInMs: STALL_QUIET_MS,
+        minMs: STALL_QUIET_MIN_MS,
+        maxMs: STALL_QUIET_MAX_MS,
+        stepMs: STALL_QUIET_STEP_MS,
+        source: applied === null ? 'default' : applied.r.quietSource,
+      },
+      notices,
+      fallback,
+    };
+  };
+
+  app.get('/api/coord/stall-watch', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    return reply.code(200).send({ ok: true, ...stallWatchView(coord, names, Date.now(), watcher?.stallFallback() ?? null) });
+  });
+
+  // The unarmed disk lanes' shadow journal (D-6861), read only: what `expire-child`, `stale-archive` and
+  // `nested-rescue` would have done, newest first, kept past the feed's 2000 rows. `?lane=`, `?subject=`, `?limit=`.
+  app.get('/api/coord/shadow-journal', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const q = decideShadowJournalQuery(req.query as Record<string, unknown>);
+    if (!q.ok) return refuseRoute(reply, 'bad-request', { detail: q.detail });
+    // A path and a detail came off a session's workspace: masked before they leave (D-5995).
+    return reply.code(200).send({ ok: true, rows: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(deps.coord.shadowVerdicts(q, Date.now())) });
+  });
+
+  app.post('/api/coord/stall-watch', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const decided = decideStallSettings(req.body);
+    if (!decided.ok) return reply.code(400).send({ ok: false, error: 'bad-request', detail: decided.detail });
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    // From here to the write there is no `await`.
+    const at = Date.now();
+    let expected = coord.stallSettings();
+    let written: Extract<StallSettingsWrite, { kind: 'written' }> | null = null;
+    // Measured at most twice: on the row read here, and once more on the row a conflict found.
+    for (let measure = 0; measure < 2 && written === null; measure++) {
+      // An effect measured on a row that could not be read would be measured on the wrong row: refused, Fastify's
+      // 500, and nothing written.
+      if (expected.kind === 'unreadable') throw new Error(`stall settings unreadable, nothing written: ${expected.detail}`);
+      const effect: StallWriteEffect = names === null ? { measured: false } : stallWriteEffect(
+        stallBoxArmingOf(names, names.includes(MAIL_DISABLED_MARKER)), stallUnheldBoxOf(names),
+        expected, stallSettingsAfter(expected, decided.patch, at));
+      const effectKey = stallEffectKey(effect, parseStallSettings(expected).updatedAt);
+      if (stallNeedsConfirm(effect) && decided.confirm !== effectKey) {
+        const refusal: StallConfirmRequired = { ok: false, error: 'confirm-required', effect, effectKey };
+        return reply.code(409).send(refusal);
+      }
+      const w = coord.setStallSettings(decided.patch, at, expected);
+      if (w.kind === 'written') written = w;
+      else expected = w.before;
+    }
+    if (written === null) throw new Error('stall settings changed outside the server twice during one write; nothing written');
+    const change = stallSettingsChange(written.before, written.after);
+    // Through the notice sink (D-5858), `'record-only'`, as the caps door's row. The ring check stays here so that the
+    // actor is read only when there is a ring to record it in, as before.
+    if (change !== null && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'stall watch changed', body: `${change}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'stall watch settings written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...stallWatchView(coord, names, Date.now(), watcher?.stallFallback() ?? null) });
+  });
+
+  /** `GET`/`POST /api/coord/collect-lane` — the temp-root collector's switch on the Settings page (path-identity spec
+   *  2026-10-12 §5.6). One path serves both verbs, as the caps and stall-watch doors do, so one `SESSION_ONLY` entry
+   *  covers the door.
+   *
+   *  NOT BOX-TOKEN, AND NOT `UNGATED`, for the caps dial's two reasons.
+   *  - No machine lane calls it, so the fleet's shared secret is the wrong key.
+   *  - Arming starts a deleting lane rather than releasing a wedge, so the release-valve argument does not apply.
+   *  It is session-gated when `CCRC_AUTH` is armed (no row in `auth/gate.ts`'s EXEMPT table) and open dark, with one
+   *  stricter refusal. The POST answers 403 `sign-in-unarmed` to `live` while sign-in is dark, because arming unattended
+   *  deletion needs a signed-in operator. It refuses only after the body parses, so an empty body answers the same dark
+   *  and armed, which the gate's property sweep holds. No skill names this door.
+   *
+   *  THE HANDLERS MEASURE AND MAP; L1 DECIDES (`collectLane.ts`). L1 owns the body, the confirm key over every safety
+   *  fact, the POST's order of answers, the change sentence, the write proof and the view.
+   *  - Each verb reads the connection epoch and lists the registry (its ONE `await`). Then it reads the epoch again,
+   *    the node, the row, the journal, both capabilities and the counts. From the listing's return to the reply there
+   *    is no `await`. So every fact a key binds is read after the listing, and a write that landed during it makes an
+   *    earlier key stale: Off wins over a concurrent Live. One synchronous transaction, so no `coordMutex`, for the
+   *    stall-watch door's reason.
+   *  - The one writer is `CoordStore.setCollectLane`. It appends the generation to the journal before it updates the
+   *    row, inside one transaction. A refusal or a no-op consumes no generation (§5.2).
+   *  - A 200 follows only a synchronous re-read that proves the requested state. When the store answered written and
+   *    the re-read does not prove it, the feed row stands and the answer is 503 `write-failed`.
+   *  - A throw from the store before its append (a defect, or `BEGIN IMMEDIATE` still busy past `busy_timeout`) is
+   *    caught around the one store call and answers 503 `write-failed` too, never a 500. The store keeps propagating
+   *    it; only the answer is mapped here, and the driver's message stays in the log line, off the wire.
+   *  - A refusal carries `{ok, error, detail?}` and never a path or an errno. The two confirm answers carry the sheet's
+   *    facts and the key. A failed write, an unproved write and a store `not-coherent` each log one bounded line
+   *    through `console.warn`. A refusal over a standing control fault logs nothing more here: the GET's latch below
+   *    and the lane's own warn latches already log that fault once.
+   *  - The GET answers 503 `state-unmeasurable` for an absent row alone, because the server never inserts one. Every
+   *    other unmeasurable state is a 200 with a safety-stopped view, warned once per standing fault.
+   *
+   *  THE COUNTS are `watcher.currentCollectCounts()`. A server registered with no watcher reads as "not measured yet"
+   *  (`attention: null`). That is the same answer as a watcher whose lane has not been populated: one null for both,
+   *  said here.
+   *
+   *  THE FEED ROW is written on a change only. Its `kind` is coord and its title is `COLLECT_SETTING_FEED_TITLE`, never
+   *  the lane's own transition title. Its actor is the session's when the gate is armed and `flag-off` dark. The
+   *  session's label is only handed to `deviceActor`, never branched on; `collect-lane-route.test.ts` holds that.
+   *
+   *  An Off accepted after an act's argv was handed to ccd cannot stop that act. The 200's notice says the choice
+   *  applies from the collector's next check. */
+  const collectViewWarned = new Set<string>();
+  /** The collector door's log line: prefixed, bounded, and never a failure of the reply. */
+  const collectWarn = (line: string): void => {
+    try {
+      console.warn(`ccrc-server: collect-lane: ${line.slice(0, 300)}`);
+    } catch { /* a log line must not fail the reply */ }
+  };
+  /** One line per standing fault in one part of the view, re-armed when that part next reads clean. This is the
+   *  stall-watch view's latch, so a page polling every minute does not repeat the line. */
+  const collectViewNote = (part: string, fault: string | null): void => {
+    if (fault === null) { collectViewWarned.delete(part); return; }
+    if (collectViewWarned.has(part)) return;
+    collectViewWarned.add(part);
+    collectWarn(`view: ${part} is ${fault}`);
+  };
+  /** The control state's fault, as a bounded log phrase: null when coherent. */
+  const collectControlFault = (c: CollectLaneControl): string | null =>
+    c.kind === 'coherent' ? null
+      : c.kind === 'mismatch' ? `a mismatch (journal maximum ${c.journalMax}, database generation ${c.rowGeneration})`
+        : `unmeasurable (${c.why})`;
+  /** A refusal body, `{ok, error, detail?}`: never a path, never an errno. */
+  const collectRefuse = (reply: FastifyReply, error: CollectLaneRouteRefusal, detail?: string) =>   // D-5381: REFUSAL_STATUS's
+    reply.code(REFUSAL_STATUS[error]).send(detail === undefined ? { ok: false, error } : { ok: false, error, detail });
+
+  app.get('/api/coord/collect-lane', async (_req, reply) => {
+    if (!deps.coord || !deps.collectLane) return notConfigured(reply);
+    const coord = deps.coord;
+    const lane = deps.collectLane;
+    const link = deps.fleetIdentity ?? NO_FLEET_IDENTITY;
+    const before = link.epochNow();
+    const switches = await collectSwitches(deps.io, deps.cfg.registryDir);
+    // From the listing's return to the reply there is no `await`.
+    const read = collectControlNow({ coord, journal: lane.journal });
+    collectViewNote('the control state', collectControlFault(read.control));
+    const row = read.row;
+    if (row.kind === 'absent') {
+      return collectRefuse(reply, 'state-unmeasurable',
+        'the collector setting row is absent, and the server never inserts one');
+    }
+    const journal = read.journal;
+    // `not-configured` is the lane's word for a server built without the journal, which answered 501 above. The view
+    // admits no such read (`CollectLaneViewInput`), so it is narrowed here, never folded.
+    if (journal.kind === 'not-configured') return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...collectLaneView({
+      row, journal, switches, epoch: { before, after: link.epochNow() }, node: link.current(),
+      caps: collectLaneCaps(deps.fleetState), counts: watcher?.currentCollectCounts() ?? null, notice: null,
+    }) });
+  });
+
+  app.post('/api/coord/collect-lane', async (req, reply) => {
+    const parsed = decideCollectLaneBody(req.body);
+    if (!parsed.ok) return collectRefuse(reply, 'bad-request', parsed.detail);
+    if (!deps.coord || !deps.collectLane) return notConfigured(reply);
+    const coord = deps.coord;
+    const lane = deps.collectLane;
+    const request = parsed.request;
+    if (request.choice === 'live' && !(deps.cfg.authEnabled && sessionAuth(req).reason === 'session')) {
+      return collectRefuse(reply, 'sign-in-unarmed');
+    }
+    const link = deps.fleetIdentity ?? NO_FLEET_IDENTITY;
+    const before = link.epochNow();
+    const switches = await collectSwitches(deps.io, deps.cfg.registryDir);
+    // From the listing's return to the reply there is no `await`: every fact below is read after the listing.
+    const epoch = { before, after: link.epochNow() };
+    const node = link.current();
+    const read = collectControlNow({ coord, journal: lane.journal });
+    const caps = collectLaneCaps(deps.fleetState);
+    const counts = watcher?.currentCollectCounts() ?? null;
+    const decided = decideCollectLanePost({
+      request, row: read.row, journal: read.journal, switches, epoch, node, caps, boot: lane.bootNonce, counts,
+    });
+    if (decided.kind === 'unmeasurable') return collectRefuse(reply, 'state-unmeasurable', decided.detail);
+    if (decided.kind === 'marker') return collectRefuse(reply, 'marker-still-controls');
+    if (decided.kind === 'confirm') return reply.code(409).send(decided.body);
+    let w: ReturnType<typeof coord.setCollectLane>;
+    try {
+      w = coord.setCollectLane(decided.request, Date.now(), lane.journal);
+    } catch (err) {
+      collectWarn(`the ${decided.request.kind} write could not begin (${err instanceof Error ? err.message : String(err)})`);
+      return collectRefuse(reply, 'write-failed', 'the write could not begin');
+    }
+    if (w.kind === 'refused') {
+      if (w.code === 'conflict') return collectRefuse(reply, 'conflict', w.detail);
+      if (w.code === 'marker-still-controls') return collectRefuse(reply, 'marker-still-controls', w.detail);
+      // `not-coherent` is the answer to the latch's retire, which this door never sends. It is logged, and refused
+      // as unmeasurable.
+      if (w.code === 'not-coherent') {
+        collectWarn(`the store refused a ${decided.request.kind} write as not coherent: ${w.detail}`);
+      }
+      return collectRefuse(reply, 'state-unmeasurable', w.detail);
+    }
+    if (w.kind === 'failed') {
+      collectWarn(`the ${decided.request.kind} write failed at its ${w.phase} step (${w.code}); nothing is proved written`);
+      return collectRefuse(reply, 'write-failed', `the write failed at its ${w.phase} step`);
+    }
+    const change = w.kind === 'written' ? collectLaneSettingChange(w.before, w.after, w.journalBefore) : null;
+    // Through the notice sink (D-5858), `'record-only'`, as the stall-watch door's row (the actor read only with a ring).
+    if (change !== null && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: COLLECT_SETTING_FEED_TITLE, body: `${change}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'collector setting written, feed archive degraded' });
+    }
+    const proof = collectControlNow({ coord, journal: lane.journal });
+    const proofRow = proof.row;
+    const proofJournal = proof.journal;
+    // `not-configured` cannot be reached here (501 above); the view admits no such read, so it is narrowed, never folded.
+    if (!collectLaneWriteProved(decided.request, w.kind === 'written' ? w.generation : null, proofRow, proofJournal)
+      || proofRow.kind === 'absent' || proofJournal.kind === 'not-configured') {
+      collectWarn(`a ${decided.request.kind} write answered ${w.kind}, and the re-read after it does not show the requested state`);
+      return collectRefuse(reply, 'write-failed', 'the re-read after the write does not show the requested state');
+    }
+    return reply.code(200).send({ ok: true, ...collectLaneView({
+      row: proofRow, journal: proofJournal, switches, epoch, node, caps, counts, notice: COLLECT_LANE_APPLIES_TEXT,
+    }) });
+  });
+
+  /** `GET`/`POST /api/coord/dispatch-abandon` (D-7319): the Settings switch of the act that abandons a dispatch that
+   *  never came back (`abandonDeadDispatch.ts`). One path for both verbs, the stall-watch door's shape, so one gate entry
+   *  covers it: session-gated when `CCRC_AUTH` is armed, open dark, no box token (no machine lane calls it). The view is
+   *  `dispatchAbandonViewOf`'s (L1): only an exact `on` reads armed. The POST takes `{choice:'on'|'off'}` and nothing
+   *  else, writes the one row, and records the change in the feed (`record-only`), as the stall watch's door does. */
+  app.get('/api/coord/dispatch-abandon', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...dispatchAbandonViewOf(deps.coord.dispatchAbandonSetting(), deps.cfg.dispatchAbandonMs) });
+  });
+
+  app.post('/api/coord/dispatch-abandon', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const body = req.body;
+    const keys = body !== null && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : null;
+    const choice = keys !== null && keys.length === 1 && keys[0] === 'choice' ? (body as { choice: unknown }).choice : undefined;
+    if (!isDispatchAbandonChoice(choice)) {
+      return refuseRoute(reply, 'bad-request', { detail: "the body is {choice:'on'|'off'} and nothing else" });
+    }
+    const before = dispatchAbandonViewOf(coord.dispatchAbandonSetting(), deps.cfg.dispatchAbandonMs);
+    if (before.stored === 'unreadable') {
+      return refuseRoute(reply, 'state-unreadable', { detail: before.detail ?? 'the switch could not be read' });
+    }
+    const after = dispatchAbandonViewOf(coord.setDispatchAbandon(choice, Date.now()), deps.cfg.dispatchAbandonMs);
+    if (before.stored !== after.stored && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'dispatch abandon changed', runId: null,
+        body: `abandoning dispatches that never came back: ${before.stored} -> ${after.stored}; by ${actor}` },
+      'record-only', { degraded: 'dispatch abandon switch written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...after });
+  });
+
+  /** `GET`/`POST /api/coord/lane-arm` (D-8274; spec 2026-10-28 R-6): Settings › Automation › Shadow lanes, the one switch of
+   *  each lane that ships in shadow. One path for both verbs, the dispatch-abandon door's shape: session-gated when
+   *  `CCRC_AUTH` is armed, open dark, no box token (no machine lane calls it, and no skill names it). The view is L1's
+   *  (`laneArm.ts`): a lane is live on an exact `live` only. The POST takes `{lane, choice, confirm?}` and nothing else, and
+   *  answers in the collector door's order: a bad body first; Live on a row whose gate stands is 409 `lane-gated`, its reason
+   *  in `detail` (review 2003 F3); Live with no signed-in operator is 403 `sign-in-unarmed`
+   *  (dark included), before any read; an unreadable row is 503 `state-unreadable`; Live on a W1a row before the replay quiz's
+   *  baseline row exists is 409 `baseline-missing` (W0-28; 503 `state-unreadable` when that cannot be read); Live whose key is missing or stale is
+   *  409 `confirm-required` with the facts the server read and the key that binds them; then the one write, a record-only
+   *  feed row naming the actor on a change, and the rows read after it. */
+  app.get('/api/coord/lane-arm', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    return reply.code(200).send({ ok: true, ...laneArmViewOf((lane) => coord.laneArmSetting(lane)) });
+  });
+
+  app.post('/api/coord/lane-arm', async (req, reply) => {
+    const parsed = decideLaneArmBody(req.body);
+    if (!parsed.ok) return refuseRoute(reply, 'bad-request', { detail: parsed.detail });
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const { lane } = parsed.request;
+    const before = laneArmRowViewOf(lane, coord.laneArmSetting(lane));
+    const signedIn = deps.cfg.authEnabled && sessionAuth(req).reason === 'session';
+    const decided = decideLaneArmPost({ request: parsed.request, row: before, signedIn, baseline: quizBaselineRead(coord.db) });
+    if (decided.kind === 'gated') return refuseRoute(reply, 'lane-gated', { detail: decided.reason });
+    if (decided.kind === 'baseline-missing') return refuseRoute(reply, 'baseline-missing', { detail: LANE_ARM_TEXT.baselineMissing });
+    if (decided.kind === 'sign-in-unarmed') return refuseRoute(reply, 'sign-in-unarmed');
+    if (decided.kind === 'unreadable') return refuseRoute(reply, 'state-unreadable', { detail: decided.detail });
+    if (decided.kind === 'confirm') return reply.code(409).send(decided.body);
+    const after = laneArmRowViewOf(lane, coord.setLaneArm(decided.lane, decided.choice, Date.now()));
+    const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+    const change = laneArmChangeLine(before, after, actor);
+    if (change !== null && deps.notifyLog) {
+      notice({ kind: 'coord', sessionId: '', title: LANE_ARM_FEED_TITLE.changed, body: change, runId: null },
+        'record-only', { degraded: 'shadow lane switch written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...laneArmViewOf((l) => coord.laneArmSetting(l)) });
+  });
+
+  /** `GET`/`POST /api/coord/run-close` (D-8077; spec 2026-11-04 §12.3, A15; the runs rebuild, Task 26): the operator's three-state
+   *  control (off, shadow, on) over each run-close lane group, the Advanced rows' one source. The GET answers each group's state
+   *  word, its would-close list from the lane's last reading, and its closes and refusals of the last 7 days (`runCloseViewOf`,
+   *  L1). The POST takes `{group, choice}` and nothing else. One path for both verbs, the dispatch-abandon door's shape:
+   *  session-gated when `CCRC_AUTH` is armed, open dark, no box token, so no coordinator and no session can arm a lane. While
+   *  coordination or reclamation is paused, or the registry will not list, `on` is refused (o12); `off` and `shadow` never are.
+   *  A change is a record-only feed row naming the actor. */
+  const runCloseNow = async (coord: NonNullable<typeof deps.coord>): Promise<{ view: RunCloseView; names: readonly string[] | null; unreadable: string | null }> => {
+    const read = await deps.io.readdirMeasured(deps.cfg.registryDir);
+    const names = read.ok ? read.entries : null;
+    const setting = coord.runCloseSetting();
+    const now = Date.now();
+    const since = now - RUN_CLOSE_TALLY_MS;
+    const view = runCloseViewOf({
+      names,
+      choices: setting.kind === 'row'
+        ? { 'never-started': setting.neverStarted, 'claimant-crashed': setting.claimantCrashed, 'claimant-gone': setting.claimantGone }
+        : { 'never-started': 'shadow', 'claimant-crashed': 'shadow', 'claimant-gone': 'shadow' },
+      updatedAt: setting.kind === 'row' ? setting.updatedAt : null,
+      reading: watcher?.runVerdicts.reading() ?? null,
+      closed7d: closedByGroup(coord.sweepClosesBetween(since, now + 1)),
+      refused7d: coord.runCloseRefusalCounts(since),
+      nowMs: now,
+    });
+    return { view, names, unreadable: setting.kind === 'unreadable' ? setting.detail : null };
+  };
+  app.get('/api/coord/run-close', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const { view, unreadable } = await runCloseNow(deps.coord);
+    if (unreadable !== null) return refuseRoute(reply, 'state-unreadable', { detail: unreadable });
+    return reply.code(200).send({ ok: true, ...view });
+  });
+
+  app.post('/api/coord/run-close', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const body = req.body as { group?: unknown; choice?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Array.isArray(body) || Object.keys(body).sort().join() !== 'choice,group'
+      || !isRunCloseGroup(body.group) || !isRunCloseChoice(body.choice)) {
+      return refuseRoute(reply, 'bad-request', { detail: "the body is {group:'never-started'|'claimant-crashed'|'claimant-gone', choice:'off'|'shadow'|'on'} and nothing else" });
+    }
+    const { group, choice } = body;
+    const before = await runCloseNow(coord);
+    if (before.unreadable !== null) return refuseRoute(reply, 'state-unreadable', { detail: before.unreadable });
+    // o12: nothing is armed while the lanes are held. `off` and `shadow` are the safe directions and always go through.
+    if (choice === 'on') {
+      const held = runCloseHeldOf(before.names);
+      if (held !== null) return refuseRoute(reply, before.names === null ? 'registry-unread' : 'coordination-paused', { detail: held });
+    }
+    const was = before.view.groups.find((g) => g.group === group)!.choice;
+    coord.setRunCloseChoice(group, choice, Date.now());
+    const after = await runCloseNow(coord);
+    if (was !== choice && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'run close changed', runId: null,
+        body: `the ${group} run-close group: ${was} -> ${choice}; by ${actor}` },
+      'record-only', { degraded: 'run-close switch written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...after.view });
+  });
+
+  /** `GET`/`POST /api/coord/scope-sweep` (D-7994): the door of the Settings card over the sweep's two switches. The GET
+   *  reads them from the registry listing; `scope-sweep-live` has no writer, so it is only read. The POST takes
+   *  `{on: boolean}` and nothing else, and runs `ccd scope-sweep-busy --state on|off` through the agent's whitelist, the
+   *  busy arm's one writer, then answers what the registry reads NOW, the authoritative answer. One path for both verbs,
+   *  the stall-watch door's shape: session-gated when `CCRC_AUTH` is armed, no box token, so no coordinator can arm a stop
+   *  of processes. A change is a record-only feed row naming the actor. No `notConfigured` arm: neither verb touches the
+   *  coordination database. */
+  const scopeSweepNow = async (): Promise<ScopeSweepView> => {
+    const read = await deps.io.readdirMeasured(deps.cfg.registryDir);
+    return scopeSweepViewOf(read.ok ? read.entries : null);
+  };
+  app.get('/api/coord/scope-sweep', async (_req, reply) => reply.code(200).send({ ok: true, ...await scopeSweepNow() }));
+
+  app.post('/api/coord/scope-sweep', async (req, reply) => {
+    const body = req.body as { on?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') {
+      return refuseRoute(reply, 'bad-request', { detail: 'the body is {on: boolean} and nothing else' });
+    }
+    if (!ccdCan(deps.fleetState, 'scopeSweepBusy')) return refuseRoute(reply, 'unsupported');
+    const before = await scopeSweepNow();
+    const res = await deps.runCcd(CCD_ARGV.scopeSweepBusy(body.on ? 'on' : 'off'));
+    // D-6840: the not-ran arm FIRST: a verb that never ran said nothing, so its forged code is not read as its refusal.
+    if (res.ran === false) return refuseRoute(reply, 'fleetFailed', { detail: notRanSentence('ccd scope-sweep-busy', res) });
+    if (!res.ok) return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr });
+    const after = await scopeSweepNow();
+    if (before.busy !== after.busy && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'scope sweep busy arm changed', runId: null,
+        body: `stopping a dead session's busy scopes: ${before.busy} -> ${after.busy}; by ${actor}` },
+      'record-only', { degraded: 'scope sweep busy switch written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...after });
+  });
+
+  /** `GET`/`POST /api/coord/delegation-adopt` (D-8112, D-8113, D-8114): the operator's door over the delegation
+   *  lane's adoption switch. The GET answers the marker from one registry listing, the two capabilities the rule reads from the fleet
+   *  box's measured `ccd caps`, what a tap of each direction would be refused with, and the lane's last pass (its counts and the
+   *  bounded list of worktrees it would keep), all decided in L1 (`delegation-adopt-switch.ts`). The POST takes `{on: boolean}` and
+   *  nothing else; it refuses with the rule's word and changes nothing, or runs `ccd delegation-adopt --state on|off` through the
+   *  agent's whitelist, the marker's one writer, and answers the view read after the verb ran. Session-gated when `CCRC_AUTH` is
+   *  armed, no box token (`coord-pause-route.test.ts`'s `SESSION_ONLY`): the operator's gate (O5-7 (a)), never a coordinator's.
+   *  Open dark, with the collect-lane door's stricter refusal (review 1659 F2): `on` answers 403 `sign-in-unarmed` unless sign-in is
+   *  armed and the caller holds a session, because arming fleet-wide adoption needs a signed-in operator; `off` stays open. The
+   *  route measures that and L1 decides on it, only after the body parses, so an empty body answers the same dark and armed (the
+   *  gate's property sweep), and before any I/O, as collect-lane refuses `live` (review 1665 N8). A change is a record-only feed row naming the actor. No `notConfigured` arm: the verb touches no
+   *  coordination row. */
+  const signedInOf = (req: FastifyRequest): boolean => deps.cfg.authEnabled && sessionAuth(req).reason === 'session';
+  const delegationAdoptNow = async (signedIn: boolean): Promise<DelegationAdoptView> => {
+    const read = await deps.io.readdirMeasured(deps.cfg.registryDir);
+    const health = watcher?.currentDelegationHealth();
+    return delegationAdoptViewOf(read.ok ? read.entries : null, deps.fleetState?.ccdVerbs ?? null,
+      health === undefined ? null : delegationAdoptionHealthOf(health), signedIn);
+  };
+  app.get('/api/coord/delegation-adopt', async (req, reply) => reply.code(200).send({ ok: true, ...await delegationAdoptNow(signedInOf(req)) }));
+
+  app.post('/api/coord/delegation-adopt', async (req, reply) => {
+    const body = req.body as { [K in keyof DelegationAdoptRequest]?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') {
+      return refuseRoute(reply, 'bad-request', { detail: 'the body is {on: boolean} and nothing else' });
+    }
+    const request: DelegationAdoptRequest = { on: body.on };
+    const signedIn = signedInOf(req);
+    const unsigned = delegationAdoptSignInRefusal(request.on, signedIn);
+    if (unsigned !== null) return refuseRoute(reply, unsigned, { detail: 'turning adoption on needs a signed-in operator' });
+    const before = await delegationAdoptNow(signedIn);
+    const refusal = before.refused[request.on ? 'on' : 'off'];
+    if (refusal !== null) return refuseRoute(reply, refusal, { detail: `the fleet box's ccd caps: switch ${before.caps.verb}, check ${before.caps.audit}` });
+    // The exec path's verb gate (`verb-gate.test.ts` pins one at every `CCD_ARGV` call site; review 1659 F4). It reads the same
+    // caps list the rule just read, and no I/O can run between, so it never refuses what the rule let through: it is the census's gate,
+    // not a re-check. With caps unread it permits (`verbRow`), which is what lets `off` through, as the rule wants.
+    if (!ccdCan(deps.fleetState, 'delegationAdopt')) return refuseRoute(reply, 'fleet-switch-missing');
+    const res = await deps.runCcd(CCD_ARGV.delegationAdopt(request.on ? 'on' : 'off'));
+    // D-6840: the not-ran arm FIRST: a verb that never ran said nothing, so its forged code is not read as its refusal.
+    if (res.ran === false) return refuseRoute(reply, 'fleetFailed', { detail: notRanSentence('ccd delegation-adopt', res) });
+    if (!res.ok) return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr });
+    const after = await delegationAdoptNow(signedIn);
+    if (before.state !== after.state && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'delegation keep switch changed', runId: null,
+        body: `keeping finished delegated worktrees: ${before.state} -> ${after.state}; by ${actor}` },
+      'record-only', { degraded: 'delegation keep switch written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...after });
+  });
+
+  /** `GET`/`POST /api/coord/roll-idle` — Settings › Automation › "Roll idle sessions" (D-7453, the operator's rulings of
+   *  2026-10-29): `coordinators` (the default, ON) or `off`. Session-gated when sign-in is armed, open dark, as the
+   *  stall-watch door is: no machine lane calls it, and turning it on releases nothing a signed-in operator has not
+   *  already ruled. The one writer is `CoordStore.setRollTargets`; a change is a record-only feed row naming the actor. */
+  const rollIdleView = (coord: NonNullable<typeof deps.coord>): { targets: ClaudeRollTargets | null; default: ClaudeRollTargets; choices: readonly ClaudeRollTargets[] } =>
+    ({ targets: rollTargetsOf(coord.rollSettings()), default: CLAUDE_ROLL_TARGETS_DEFAULT, choices: CLAUDE_ROLL_TARGETS });
+
+  app.get('/api/coord/roll-idle', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...rollIdleView(deps.coord) });
+  });
+
+  app.post('/api/coord/roll-idle', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const body = req.body as { targets?: unknown } | null | undefined;
+    const targets = body !== null && typeof body === 'object' ? body.targets : undefined;
+    if (!isClaudeRollTargets(targets)) {
+      return refuseRoute(reply, 'bad-request', { detail: `targets must be one of ${CLAUDE_ROLL_TARGETS.join(', ')}` });
+    }
+    const w = deps.coord.setRollTargets(targets, Date.now());
+    const before = rollTargetsOf(w.before);
+    if (before !== targets && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'roll idle sessions changed', body: `roll idle sessions: ${before ?? 'unreadable'} -> ${targets}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'roll idle sessions written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...rollIdleView(deps.coord) });
+  });
+
+  /** `GET`/`POST /api/coord/plain-auto-memory` — Settings › Automation › "Auto memory for plain sessions" (Overlord W1a,
+   *  launch profiles PR B; spec §3.3.7 H14, Table 11.1d): `off` (the default on a fleet host) or `on`. The roll-idle door's
+   *  shape: session-gated when sign-in is armed, open dark, since no machine lane calls it and it moves no session until the
+   *  `launch-profile` lane is live. The one writer is `CoordStore.setPlainAutoMemory`; a change is a record-only feed row. */
+  const plainMemoryView = (coord: NonNullable<typeof deps.coord>): PlainAutoMemoryView =>
+    ({ choice: plainAutoMemoryOf(coord.plainAutoMemorySettings()), default: PLAIN_AUTO_MEMORY_DEFAULT, choices: PLAIN_AUTO_MEMORY_CHOICES });
+  app.get('/api/coord/plain-auto-memory', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...plainMemoryView(deps.coord) });
+  });
+  app.post('/api/coord/plain-auto-memory', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const body = req.body as { choice?: unknown } | null | undefined;
+    const choice = body !== null && typeof body === 'object' ? body.choice : undefined;
+    if (!isPlainAutoMemoryChoice(choice)) {
+      return refuseRoute(reply, 'bad-request', { detail: `choice must be one of ${PLAIN_AUTO_MEMORY_CHOICES.join(', ')}` });
+    }
+    const before = plainAutoMemoryOf(deps.coord.setPlainAutoMemory(choice, Date.now()).before);
+    if (before !== choice && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'plain auto memory changed', body: `auto memory for plain sessions: ${before ?? 'unreadable'} -> ${choice}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'plain auto memory written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...plainMemoryView(deps.coord) });
+  });
+
+  /**
+   * Child-reclamation wave 5 (spec §5.9): each row's `childReclaim`, composed
+   * over the rows `GET /api/runs` already read. The DECISION is
+   * `childReclaimStatus`'s. This closure wires its inputs and owns one degrade.
+   *
+   * COST, measured at planning: at most ONE statement (`childReclaimEvents`,
+   * skipped when nothing on the board is terminal). The registry answer, the
+   * sweep's defers and verdicts, and the fleet-wide switch are the watcher's
+   * in-memory copies of what the 2 s tick already measured, never a
+   * `readRegistry` or a marker read here. There are no ccd calls.
+   *
+   * THE DEGRADE. A failed mirror read ships the board with every chip at the
+   * store's `null`, which renders nothing, and logs once per request. It is not
+   * D-2545's all-or-failure: that rule protects the run rows themselves, and a
+   * chip that could not be read is not a reason to hide the runs.
+   */
+  /** D-8071: the stuck verdict's fields on a `RunSummary` answer, from the watcher's one reader (`withVerdicts`). A server with
+   *  no watcher, or a reader not yet filled, stamps nothing. D-8285: the worker heartbeat rides with them (`withWorkerSeen`). */
+  const stampVerdicts = (summaries: RunSummary[]): RunSummary[] =>
+    watcher === undefined ? summaries : withWorkerSeen(watcher.workerSeen, withVerdicts(watcher.runVerdicts, summaries));
+
+  /** D-8071 (spec §11.2): `lastMoveAt` on a `RunSummary` answer, as the runs frame carries it (`withLastMoves`, ONE read). A read
+   *  that fails leaves every run without the field and logs once, so the board still ships. */
+  const stampLastMoves = (summaries: RunSummary[]): RunSummary[] => {
+    const coord = deps.coord;
+    if (!coord) return summaries;
+    return withLastMoves(coord, summaries, (d) => console.warn(`ccrc-server: a runs read could not read the runs' last moves (${d}) — lastMoveAt absent`));
+  };
+
+  const composeChildReclaim = (summaries: RunSummary[]): RunSummary[] => {
+    const coord = deps.coord;
+    if (!coord) return summaries;
+    const sessions = childReclaimSessions(summaries);
+    let events: ReadonlyMap<string, readonly MirroredLifecycleEvent[]>;
+    try {
+      events = sessions.length === 0 ? new Map() : coord.childReclaimEvents(sessions);
+    } catch (err) {
+      console.warn('ccrc-server: GET /api/runs could not read the lifecycle mirror for the reclaim chip ' +
+        `(${err instanceof Error ? err.message : String(err)}) — the board ships without it`);
+      return summaries;
+    }
+    return withChildReclaim(summaries, {
+      events,
+      marks: watcher?.currentChildMarks() ?? null,
+      defers: watcher?.currentChildReclaimDefers() ?? new Map(),
+      // The sweep's last verdicts (spec §5.9). `null` is "no judging pass", which the chip reads as
+      // not judged yet, never as eligible. Never defaulted to a map.
+      verdicts: watcher?.currentChildReclaimVerdicts() ?? null,
+      // Wave 4's switch as the tick last measured it (spec §5.8). Only a
+      // SET marker pauses the chip: `unmeasurable` and "never measured" claim
+      // no switch this read did not see.
+      fleetPaused: watcher?.currentCoord()?.reclaim === 'set',
+      nowMs: Date.now(),
+    });
+  };
+
   /**
    * `GET /api/runs?closed=1` — cold start, and the archive of finished runs
-   * (spec:225-227). Strips `prLineage` on the way out (`toRunSummary`).
+   * (spec:225-227). Strips `prLineage` and `coordProject` on the way out
+   * (`toRunSummary`).
    *
    * EXEMPT FROM THE SESSION GATE, AND AUTHENTICATED HERE INSTEAD — the
    * `GET /api/auth/status` pattern, for a reason no task-level review could
@@ -1889,7 +3268,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -1902,7 +3281,28 @@ export function registerCoordRoutes(
       }
     }
     if (!deps.coord) return notConfigured(reply);
-    const q = req.query as { closed?: string };
+    const q = req.query as { closed?: string; limit?: string; before?: string };
+    // Console speed S2: `limit` and `before` page the archive and are ADDITIVE. Without `limit` this is today's read,
+    // by today's path. Either parameter without `closed=1`, a `limit` outside 1..500 and a `before` that is not a
+    // canonical positive integer are refused, never clamped or coerced.
+    if (q.limit !== undefined || q.before !== undefined) {
+      const limit = parseCanonicalPositiveSafeInteger(q.limit);
+      const before = q.before === undefined ? undefined : parseCanonicalPositiveSafeInteger(q.before);
+      if (q.closed !== '1' || limit === null || limit > RUNS_PAGE_LIMIT_MAX || before === null) {
+        return refuseRoute(reply, 'bad-request');
+      }
+      const page = deps.coord.runsPage({
+        limit, ...(before === undefined ? {} : { before }),
+        pinned: reclaimAttentionRunIds(watcher?.currentCoord()?.childReclaimAttention),
+      });
+      if (!page.read.ok) {
+        return refuseRoute(reply, 'runs-unreadable', { detail: page.read.detail });
+      }
+      return {
+        runs: stampVerdicts(composeChildReclaim(stampLastMoves(page.read.runs.map(toRunSummary)))),
+        ...(page.nextBefore === undefined ? {} : { nextBefore: page.nextBefore }),
+      };
+    }
     const read = deps.coord.runs({ includeClosed: q.closed === '1' });
     // D-2545, ALL-OR-FAILURE at the board's own door. One unreadable row fails
     // the WHOLE read rather than quietly shipping the others: a board silently
@@ -1913,7 +3313,50 @@ export function registerCoordRoutes(
       return reply.code(503).send({ ok: false, error: 'runs-unreadable', detail: read.detail });
     }
     const summaries: RunSummary[] = read.runs.map(toRunSummary);
-    return { runs: summaries };
+    // D-8274 (R-6): the roster card's switch rides this reply, the one the session hook already makes (`RUNS_ROSTER_CARD_FIELD`).
+    // Left out when the row cannot be read, which the hook reads as shadow.
+    const rosterCard = rosterCardFieldOf(deps.coord.laneArmSetting(ROSTER_CARD_LANE));
+    return {
+      runs: stampVerdicts(composeChildReclaim(stampLastMoves(summaries))),
+      ...(rosterCard === null ? {} : { [RUNS_ROSTER_CARD_FIELD]: rosterCard }),
+    };
+  });
+
+  /** D-8071 (spec 2026-11-04 §11.4): `GET /api/runs/find`, the lookup and the close-order list in one slim read.
+   *  SESSION ONLY: it is not in the gate's box-token exemptions, so the gate's own `onRequest` refuses a caller with no
+   *  session before this runs. It reads stored columns alone (no agent link, no hydrate). Registered before
+   *  `/api/runs/:id`'s siblings are looked up, though find's static segment wins the match whatever the order. */
+  app.get('/api/runs/find', {
+    config: { rateLimit: RUN_FIND_RATE_LIMIT },
+    errorHandler: (err, _req, reply) => {
+      if ((err as { statusCode?: number }).statusCode === 429) return refuseRateLimited(reply);
+      return reply.send(err);
+    },
+  }, async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const parsed = parseRunFind(req.query as Record<string, unknown>);
+    if (parsed === null) return refuseRoute(reply, 'bad-request');
+    return deps.coord.findRuns(parsed);
+  });
+
+  /** D-8075 (spec 2026-11-04 §11.6): `GET /api/programmes?since=<ms>`, one row per programme from one aggregate statement,
+   *  with the stuck pass's answers folded in from `RunVerdicts`. SESSION ONLY: not in the gate's box-token exemptions. `since`
+   *  is the operator's local midnight as the PWA computes it, clamped to the last 48 hours; absent reads the last 24 hours. */
+  app.get('/api/programmes', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const raw = (req.query as { since?: unknown }).since;
+    const now = Date.now();
+    let since = now - 24 * 3_600_000;
+    if (raw !== undefined) {
+      const n = typeof raw === 'string' && /^(0|[1-9][0-9]{0,15})$/.test(raw) ? Number(raw) : null;
+      if (n === null || !Number.isSafeInteger(n)) return refuseRoute(reply, 'bad-request');
+      since = n;
+    }
+    try {
+      return deps.coord.readProgrammes({ since, now }, watcher?.runVerdicts ?? createRunVerdicts());
+    } catch (err) {
+      return refuseRoute(reply, 'runs-unreadable', { detail: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   /** Routing spec 2026-09-14 §6 — the run's speed and quality signals. READ,
@@ -1925,7 +3368,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id/signals');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false, error: 'unauthenticated', verdict: session.verdict,
@@ -1946,6 +3389,90 @@ export function registerCoordRoutes(
     const signals = deps.coord.runSignals(id);
     if (signals === null) return reply.code(404).send({ ok: false, error: 'unknown-run' });
     return { ok: true, signals };
+  });
+
+  /** D-6799 — ONE run, plus what its bound sessions have spent (the usage sweep's
+   *  `perCcdSession` block joined through the run's current and predecessor
+   *  sessions). ADDITIVE and MEASURING ONLY: `run` is the row `GET /api/runs`
+   *  lists, `spend` is the only new thing, and no route refuses on it. Gated like
+   *  its siblings (a session cookie OR the box token). */
+  // Rate-limited (CodeQL js/missing-rate-limiting): the one run route that fans out to the agent
+  // link per call carries its own budget. `global: false` keeps the limiter off every other route.
+  app.get('/api/runs/:id', {
+    config: { rateLimit: RUN_SPEND_RATE_LIMIT },
+    // Auth first (onRequest), then the limiter (preHandler): a refused call spends no budget.
+    errorHandler: (err, _req, reply) => {
+      if ((err as { statusCode?: number }).statusCode === 429) return refuseRateLimited(reply);
+      return reply.send(err);
+    },
+    onRequest: async (req, reply) => {
+      if (deps.cfg.authEnabled) {
+        const session = sessionAuth(req);
+        if (session.reason !== 'session') {
+          const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id');
+          if (token !== 'ok') {
+            return refuseRoute(reply, 'unauthenticated', {
+              verdict: session.verdict,
+              detail: 'GET /api/runs/:id takes a session cookie OR the box token ' +
+                `(${MAIL_TOKEN_HEADER}); the coordinator skill reads it cookieless from the fleet host`,
+            });
+          }
+        }
+      }
+    },
+  }, async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const { id: idParam } = req.params as { id: string };
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return refuseRoute(reply, 'bad-request');
+    const read = deps.coord.run(id);
+    if (!read.ok) return refuseRoute(reply, 'run-unreadable', { detail: read.detail });
+    if (read.run === null) return refuseRoute(reply, 'unknown-run');
+    const bound = boundSessionsOf(read.run.sessionId, deps.coord.runEvents(id));
+    const spend = joinRunSpend(bound, bound.length === 0 ? { kind: 'absent' } : await readSessionSpendMeasured(deps.io, deps.cfg.registryDir));
+    return { ok: true, run: stampVerdicts(stampLastMoves([toRunSummary(read.run)]))[0]!, spend };
+  });
+
+  /** D-8071 (spec 2026-11-04 §11.5): `GET /api/runs/:id/record`, any run's lasting record. DUAL GATE like `GET /api/runs/:id`
+   *  (a session cookie OR the box token). One read of stored rows: no spend, no agent link, so it answers with the link down.
+   *  The run carries `lastMoveAt` and the verdict's fields as a frame row does, so a header can repeat its row. */
+  app.get('/api/runs/:id/record', {
+    config: { rateLimit: RUN_SPEND_RATE_LIMIT },
+    errorHandler: (err, _req, reply) => {
+      if ((err as { statusCode?: number }).statusCode === 429) return refuseRateLimited(reply);
+      return reply.send(err);
+    },
+    onRequest: async (req, reply) => {
+      if (deps.cfg.authEnabled) {
+        const session = sessionAuth(req);
+        if (session.reason !== 'session') {
+          const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id/record');
+          if (token !== 'ok') {
+            return refuseRoute(reply, 'unauthenticated', {
+              verdict: session.verdict,
+              detail: `GET /api/runs/:id/record takes a session cookie OR the box token (${MAIL_TOKEN_HEADER})`,
+            });
+          }
+        }
+      }
+    },
+  }, async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const { id: idParam } = req.params as { id: string };
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return refuseRoute(reply, 'bad-request');
+    const read = deps.coord.run(id);
+    if (!read.ok) return refuseRoute(reply, 'run-unreadable', { detail: read.detail });
+    if (read.run === null) return refuseRoute(reply, 'unknown-run');
+    const trail = runRecordTrail(deps.coord.runEvents(id));
+    return {
+      ok: true,
+      run: stampVerdicts(stampLastMoves([toRunSummary(read.run)]))[0]!,
+      events: trail.events,
+      reviewedBy: deps.coord.runsReviewing(id),
+      olderEvents: trail.olderEvents,
+      calls: deps.coord.callsForRun(id).map(callViewOf),
+    };
   });
 
   /**
@@ -1974,7 +3501,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id/items');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -2005,7 +3532,7 @@ export function registerCoordRoutes(
     if (read.run === null) {
       return reply.code(404).send({ ok: false, error: 'unknown-run' });
     }
-    return { ok: true, items: deps.coord.workItems(id) };
+    return { ok: true, items: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(deps.coord.workItems(id)) };   // D-5513
   });
 
   /**
@@ -2031,7 +3558,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/feed');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -2054,9 +3581,10 @@ export function registerCoordRoutes(
     // predating that grammar legitimately contain dots.
     const program = typeof q.program === 'string' && q.program.trim() !== ''
       ? q.program.trim() : null;
-    return { events: program === null
+    // Every event's text came off a session: masked before it leaves (D-5513, accounts plan Task A10).
+    return { events: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(program === null
       ? deps.coord.feedEvents(limit)
-      : deps.coord.feedEventsForProgram(program, limit) };
+      : deps.coord.feedEventsForProgram(program, limit)) };
   });
 
   /**
@@ -2092,7 +3620,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/lifecycle');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -2167,7 +3695,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/peers');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -2190,21 +3718,27 @@ export function registerCoordRoutes(
         detail: 'exactly one of ?project= or ?of= — a peer list is scoped or it is nothing' });
     }
 
-    // ONE listing, reused below for the presence ladder — the same
-    // fail-shut-on-unlistable idiom the mail ingress uses for this directory.
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
+    // A `?of=` that is not a registry id is refused BEFORE any read (spec §2.3): it can never name a row this server
+    // reads, so the presence ladder below would answer 502 for it forever. Checked on the trimmed value `selfId`
+    // takes below.
+    if (hasOf && !isRegistryId((q.of as string).trim())) {
+      return refuseRoute(reply, 'bad-session-id');
+    }
+
+    // ONE read (spec §2.3). Its listing is the presence ladder's. Its rows are `assembleFleet`'s (its own `records`
+    // parameter's contract: every lane of one pass describes one observation) and this route's own for `uuid`,
+    // which `FleetSession` does not carry. Its refused count rides the 200 as `refusedRows`. Unlistable keeps the
+    // fail-shut 502 that the mail ingress uses for this directory.
+    // [registry-refused:reports]
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!reg.listed) {
       return reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
         detail: 'the registry directory could not be listed — transient, not a fact about any peer' });
     }
-    // The records are read ONCE and handed to `assembleFleet` (its own
-    // `records` parameter's contract: every lane of one pass describes one
-    // observation) — this route needs them itself for `uuid`, which
-    // `FleetSession` does not carry.
-    const recs = await readRegistry(deps.io, deps.cfg);
-    const recById = new Map(recs.map((r) => [r.id, r]));
-    const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-      undefined, undefined, undefined, undefined, undefined, undefined, recs, deps.coord, undefined);
+    const names = reg.names;
+    const recById = new Map(reg.records.map((r) => [r.id, r]));
+    const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io),
+      fleetNow(), { records: reg.records, coord: deps.coord });
 
     let project: string;
     let selfId: string | null = null;
@@ -2266,7 +3800,7 @@ export function registerCoordRoutes(
         // a degraded row is `unmeasurable`, never absent (it is in the list).
         const deliverable = peerDeliverable({
           registry: s.unmeasured.length > 0 ? 'unmeasurable' : 'measured',
-          tmux: 'live', panePid: 0, lifecycle,
+          tmux: 'live', panePid: 0, lifecycle, hibernated: s.hibernatedAt !== null,
         });
         const rec = recById.get(s.id);
         return {
@@ -2277,6 +3811,7 @@ export function registerCoordRoutes(
           lifecycle, deliverable,
           archivedAt: s.archivedAt,
           archivedStale: archiveContradicted(s.archivedAt, lifecycle),
+          hibernatedAt: s.hibernatedAt,
           held: s.held,
           intent: byHolder.get(s.id)?.intent ?? null,
           claimedPaths: byHolder.get(s.id)?.paths ?? [],
@@ -2284,7 +3819,10 @@ export function registerCoordRoutes(
       });
 
     const projects = [...new Set(sessions.map((s) => s.project))].sort();
-    return reply.code(200).send({ ok: true, peers, projects, etiquette: PEER_ETIQUETTE });
+    // `refusedRows` (spec §2.3): additive and absence-permitting, present only when a listed `.uuid` was refused, so a
+    // peer list that is silently short of a row says that it is. One writer of the field: this line.
+    return reply.code(200).send({ ok: true, peers, projects, etiquette: PEER_ETIQUETTE,
+      ...(reg.refused.size > 0 ? { refusedRows: reg.refused.size } : {}) });
   });
 
   /**
@@ -2302,7 +3840,10 @@ export function registerCoordRoutes(
    * duplicate. No `coordMutex`: the mutex exists for routes whose precondition
    * read and commit are separated by fleet-act awaits, and this route has none
    * between them — the deliverable measurement below happens strictly AFTER
-   * the decision, on the losing arm only.
+   * the decision, on the losing arm only. The one read BEFORE it (D-8395) is the
+   * caller's own liveness, taken only when the caller holds a live claim this
+   * take could re-chain: an input to the decision, like `holderDeliverable`,
+   * never a precondition the transaction trusts — the store re-reads its rows.
    *
    * A claim writes NOTHING to the registry — no `.hold`, no run, no verb, no
    * grant (D12 ruling 1; `claims-no-hold.test.ts` exercises the real
@@ -2367,19 +3908,46 @@ export function registerCoordRoutes(
       }
     }
 
+    // D-8395 (operator ruling 2026-11-12): a RUNNING holder's re-take inside the last lease before its hard cap starts
+    // a new window as a chained row. The caller is measured only when it holds such a claim on these paths, by the
+    // watcher's own reading (`claimLivenessProbe`) over one registry read; unlistable is doubt, which never re-chains.
+    // The fleet is read at most ONCE per request (spec §2.3's one observation), memoized: this check and the conflict
+    // arm below share it. Its rows are `assembleFleet`'s and its listing is the presence ladder's. Unlistable gives no
+    // rows and a `null` listing.
+    let fleetRead: Promise<{ reg: Awaited<ReturnType<typeof readRegistryMeasured>>; sessions: Awaited<ReturnType<typeof assembleFleet>> }> | undefined;
+    const measureFleet = () => (fleetRead ??= (async () => {
+      // [registry-refused:reports]
+      const reg = await readRegistryMeasured(deps.io, deps.cfg);
+      const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io),
+        fleetNow(), { records: reg.listed ? reg.records : [], coord: deps.coord });
+      return { reg, sessions };
+    })());
+    const now = Date.now();
+    const asked = paths.flatMap((p) => normalizeClaimPath(p) ?? []);
+    const own = coord.claimsForProject(project.trim()).filter((c) => c.heldBy === byId);
+    let callerLiveness: LivenessVerdict = 'unmeasurable';
+    if (rechainTargets(own, asked, now, 'running').length > 0) {
+      const { reg, sessions } = await measureFleet();
+      if (reg.listed) callerLiveness = claimLivenessProbe(sessions, reg.refused).liveness(byId);
+    }
     const r = coord.claimAttempt({ project: project.trim(), paths, sessionId: byId,
-      uuid: byUuid, intent, runId, now: Date.now() });
+      uuid: byUuid, intent, runId, now, callerLiveness });
     if (r.ok) {
       // The store's ok arm is the rows themselves; the wire summary is DERIVED
       // from them, one reader: `renewed` is true exactly when some row's lease
       // was re-armed after its creation, and the two horizons are the earliest
       // across the batch — the only bound that is true of everything acquired.
-      return reply.code(200).send({
+      // D-8392: `lapsedSince` only when the caller re-took paths its own recent lapse held — a gap it must re-check.
+      const answer: ClaimTakeAnswer = {
         ok: true, ids: r.claims.map((c) => c.id),
         expiresAt: Math.min(...r.claims.map((c) => c.expiresAt)),
         hardExpiresAt: Math.min(...r.claims.map((c) => c.hardExpiresAt)),
-        renewed: r.claims.some((c) => c.renewedAt > c.createdAt),
-      });
+        renewed: r.claims.some((c) => c.renewedAt > c.createdAt) || r.rechained.length > 0,
+        ...(r.lapsedSince.length > 0 ? { lapsedSince: r.lapsedSince } : {}),
+        // D-8395: present only when this take carried a running holder's claim into a new 8 h window.
+        ...(r.rechained.length > 0 ? { rechained: r.rechained } : {}),
+      };
+      return reply.code(200).send(answer);
     }
     switch (r.why) {
       case 'bad-path':
@@ -2392,24 +3960,27 @@ export function registerCoordRoutes(
         // conflict row is REPLACED by what was measured — with the mailHint
         // re-derived through the L1's own `claimMailHint`, so the degradation
         // rule (no:<reason> -> null, never a silent send) has one spelling.
-        const names = await deps.io.readdir(deps.cfg.registryDir);
-        const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-          undefined, undefined, undefined, undefined, undefined, undefined, undefined, deps.coord, undefined);
+        // ONE registry read (spec §2.3), `measureFleet`'s, the same one the re-chain check took if it took one: its
+        // rows are `assembleFleet`'s and its listing is the presence ladder's, so the two describe one observation.
+        // Unlistable gives no rows and a `null` listing: every holder reads unmeasurable, never absent and never
+        // `yes` off a second read the ladder did not see.
+        const { reg, sessions } = await measureFleet();
+        const names = reg.listed ? reg.names : null;
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);
           if (row) {
             return peerDeliverable({
               registry: row.unmeasured.length > 0 ? 'unmeasurable' : 'measured',
-              tmux: 'live', panePid: 0, lifecycle: row.lifecycle ?? 'unmeasurable',
+              tmux: 'live', panePid: 0, lifecycle: row.lifecycle ?? 'unmeasurable', hibernated: row.hibernatedAt !== null,
             });
           }
           if (names === null) {
             return peerDeliverable({ registry: 'unmeasurable', tmux: 'unknown',
-              panePid: null, lifecycle: 'unmeasurable' });
+              panePid: null, lifecycle: 'unmeasurable', hibernated: false });
           }
           return peerDeliverable({
             registry: names.includes(`${id}.uuid`) ? 'unmeasurable' : 'absent',
-            tmux: 'unknown', panePid: null, lifecycle: 'unmeasurable',
+            tmux: 'unknown', panePid: null, lifecycle: 'unmeasurable', hibernated: false,
           });
         };
         const conflicts: ClaimConflict[] = r.conflicts.map((c) => {
@@ -2511,13 +4082,16 @@ export function registerCoordRoutes(
    * read (live rows only) — and the PWA's `claims({all:true})` history call
    * rides the same door, so `all=1` without a project answers EVERY
    * project's rows verbatim (`allClaims`), ended included: the same read
-   * the project arm's `all` gives one project.
+   * the project arm's `all` gives one project. D-8392: the default
+   * per-project answer adds `recentlyLapsed` (`ClaimsListAnswer`), the rows
+   * that lapsed within the last `CLAIM_LEASE_MS`, an unswept one included,
+   * so the coordinator's read tells a lapse from a claim never taken.
    */
   app.get('/api/claims', async (req, reply) => {
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/claims');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -2535,9 +4109,20 @@ export function registerCoordRoutes(
       ? q.project.trim() : null;
     const all = q.all === '1' || q.all === 'true';
     const now = Date.now();
+    if (project !== null && !all) {
+      // D-8392: the default per-project read the coordinator makes (clause 10) answers its recent lapses beside the
+      // live rows, so a lapse no longer reads like a claim never taken. `claims` keeps meaning live rows only.
+      const rows = deps.coord.claimsForProject(project);
+      const answer: ClaimsListAnswer = {
+        ok: true,
+        claims: rows.filter((c) => c.expiresAt > now),
+        recentlyLapsed: recentlyLapsedClaims(
+          [...rows, ...deps.coord.lapsedClaimsSince(project, lapseWindowStart(now))], now),
+      };
+      return reply.code(200).send(answer);
+    }
     const claims = project !== null
-      ? (all ? deps.coord.claimsForProject(project, true)
-             : deps.coord.claimsForProject(project).filter((c) => c.expiresAt > now))
+      ? deps.coord.claimsForProject(project, true)
       : (all ? deps.coord.allClaims()
              : deps.coord.activeClaims().filter((c) => c.expiresAt > now));
     return reply.code(200).send({ ok: true, claims });
@@ -2716,289 +4301,59 @@ export function registerCoordRoutes(
     });
   });
 
+  /**
+   * `GET /api/landing?project=[&pr=]`: the landing line (wave 5h: `entries` are the ones still in the line, or with
+   * `?pr=` that PR's entry in any state; `entriesScope` says which), read cookieless from the fleet host before the coordinator
+   * enqueues. It follows the `GET /api/ledger` convention: box token, a read with no attribution to check, per-project
+   * and REQUIRED. The order is computed on this read by `landingLine.ts#landingOrder` and never stored. A project with
+   * no `landing_projects` row answers both flags `false`: inert until their writers (5i, 5j). The read is advisory
+   * in 5e (D-7626). The handler decides nothing: decide in L1, act here.
+   */
+  app.get('/api/landing', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'GET /api/landing')) return;
+    const query = parseLandingReadQuery(req.query);
+    if (!query.ok) return refuseRoute(reply, 'bad-request', { detail: query.detail });
+    const { project, pr } = query;
+    const read = deps.coord.readLanding(project);
+    if (!read.ok) { const { ok: _ok, error, ...extra } = read; return refuseRoute(reply, error, extra); }
+    const { entries, flags, recovery } = read.facts;
+    const view: LandingLineView = { project, ...flags, ...landingViewOf(entries, flags, recovery, pr), recovery };
+    return reply.code(200).send({ ok: true, ...view });
+  });
+
+  /** The two attributed landing writes: body parse (L1), measured attribution, then ONE synchronous store call inside
+   *  `coordMutex` with no await between the store's facts, decision and write. The setter is the attributed `byId`. */
+  const landingWrite = async (req: FastifyRequest, reply: FastifyReply, kind: 'entry' | 'order') => {
+    const parsed = parseLandingWrite(kind, req.body);
+    if (!parsed.ok) return refuseRoute(reply, 'bad-request', { detail: `the landing ${kind} body is not a closed, well-formed request` });
+    if (!(await requireAttribution(reply, parsed.request.byId, parsed.request.byUuid, 'byUuid'))) return;
+    return coordMutex.run(async () => {
+      const r = actLandingWrite(landingCommandOf(parsed), Date.now(), { write: (c, at) => deps.coord!.writeLandingAuthority(c, at), notice });
+      if (!r.ok) { const { ok: _ok, error, ...extra } = r; return refuseRoute(reply, error, extra); }
+      const { ok: _ok, coordinator: _c, ...answer } = r;
+      return reply.code(200).send({ ok: true, ...answer });
+    });
+  };
+  app.post('/api/landing/entries', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/landing/entries')) return;
+    return await landingWrite(req, reply, 'entry');
+  });
+  app.post('/api/landing/order', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/landing/order')) return;
+    return await landingWrite(req, reply, 'order');
+  });
+
   /* ── asks (ask pre-emption lane, Task 9) ─────────────────────────────── */
 
   // `freshAskAt` (the D-2170 fail-shut re-measurement `takeAskForAnswer`'s
   // CAS is checked against) is `registry.ts`'s export now, fix round 1
-  // finding 2 — this route and `server.ts`'s `POST /api/sessions/:id/ask`
-  // both close over the SAME `Deps` object (this file's own `deps` param IS
-  // `buildServer`'s, passed straight through by `registerCoordRoutes`), so a
-  // security-relevant fail-shut guard had no business existing as two
-  // copies that could silently drift. See `registry.ts`'s own doc comment
-  // on it for the full reasoning.
-
-  /**
-   * `POST /api/asks/:id/answer` — the parent presses the digit into its
-   * child's live menu. The most safety-sensitive route in the lane: unlike
-   * every other coordination write, this one ends in a KEYSTROKE into
-   * another session's pane, so every gate below runs BEFORE `answerAsk` is
-   * ever called, in the order the risk falls.
-   *
-   * Box token (`requireMailToken`) proves only "a process on this box" — one
-   * shared secret, identical for every session on the fleet host. It can
-   * never prove WHICH session is calling, so `requireAttribution` layers the
-   * registry pair on top, exactly as the claims lanes and the mail ingress
-   * already do. Then, and only then, `ask.parentId === fromId`: only this
-   * child's OWN derived parent may pre-empt its question — attribution alone
-   * would let any live session on the box answer any other session's ask.
-   *
-   * The CAS precedes the keystroke: `takeAskForAnswer` is the row acting as
-   * its own mutex, re-proving the INSTANCE (`freshAskAt`, D-2170) and taking
-   * exclusive ownership of the row (`not-held`, D-2171) before `answerAsk`
-   * ever touches the pane. A refused press (`answerAsk` returning
-   * `ok:false`) rolls back with `untakeAsk`, NOT `releaseAsk`: a refusal
-   * here means no digit was pressed and the question is still live and
-   * still pre-emptible — not because every one of `answerAsk`'s twelve
-   * pre-send guards plus its two post-send `sendKey` checks (D-2177)
-   * precedes the loop, but because a row here only ever exists for a
-   * SINGLE-SELECT ask (`askActions` returns null on `multiSelect`, the sole
-   * eligibility gate `hold` checks before minting one — D-2173), which
-   * makes exactly one `sendKey` call and no Enter — see `untakeAsk`'s own
-   * docstring (`store.ts`) for the full argument. `releaseAsk`'s CAS source
-   * is `'held'`, and this row sits in `'answering'`, so it cannot even
-   * reach it (it would silently strand the row forever, `changes: 0` and
-   * all). `untakeAsk` is the exact CAS built for this rollback.
-   */
-  app.post('/api/asks/:id/answer', async (req, reply) => {
-    if (!deps.coord) return notConfigured(reply);
-    const coord = deps.coord;
-    if (!requireMailToken(req, reply, 'POST /api/asks/:id/answer')) return;
-
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const { fromId, fromUuid, optionIndexes } = body;
-    // `optionIndexes`, never a singular `optionIndex`: under `askActions`
-    // eligibility only single-select asks are ever held, so this array
-    // carries one element today — and that is the point. A singular field is
-    // what re-opens the multi-select commit hazard, silently, on the day
-    // someone widens eligibility. The wire shape must not be the thing to
-    // remember.
-    if (typeof fromId !== 'string' || typeof fromUuid !== 'string' ||
-        !Array.isArray(optionIndexes) || !optionIndexes.every((n) => typeof n === 'number')) {
-      return reply.code(400).send({ ok: false, error: 'bad-request',
-        detail: 'fromId/fromUuid strings, optionIndexes an array of numbers' });
-    }
-
-    // The box token proves "a process on this box", one shared secret
-    // identical for every session on the fleet host — it cannot prove "this
-    // ask's parent". The registry pair is what attributes the specific
-    // session, exactly as the mail ingress and the claims lanes do.
-    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
-
-    // Resource ids accept one positive-safe decimal spelling, before any
-    // sqlite read can collapse a different textual name onto this ask.
-    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
-    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    const askRead = coord.askById(id);
-    // D-2545. `unknown-ask` sends the parent to `wave-lifecycle.md`'s remedy
-    // for a row that is gone; this row is not gone, it is unreadable, and the
-    // two need different sentences for the same reason `child-unmeasurable`
-    // was split out of `ask-moved` below. 503, a fact about this box.
-    if (!askRead.ok) {
-      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: askRead.detail });
-    }
-    const ask = askRead.ask;
-    if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
-    if (ask.parentId !== fromId) {
-      return reply.code(403).send({ ok: false, error: 'not-parent',
-        detail: 'only this child\'s derived parent may pre-empt its question' });
-    }
-
-    // D-2170: re-read the child's hookstate and prove the menu on screen is
-    // the INSTANCE this row was minted for — see `freshAskAt`'s own comment.
-    const fresh = await freshAskAt(deps.io, deps.cfg, ask.childId);
-    // …and say WHICH refusal this is (whole-branch review M2). `freshAskAt`
-    // answers `UNMEASURED_ASK_AT` for three READS THAT FAILED, and that
-    // value can never equal a stored `askAt` — so handing it to the CAS
-    // below would answer `ask-moved`, a true statement about the CAS and a
-    // false one about the world. The two are not interchangeable to the
-    // caller: `wave-lifecycle.md` tells a coordinator that `ask-moved` means
-    // "the child repainted — re-read the ask and answer the current one",
-    // and a coordinator told that when the truth is "this box could not read
-    // the child" re-reads, finds the row still `held`, and loops. Same
-    // fail-shut direction, before any keystroke; only the sentence changes.
-    if (fresh === UNMEASURED_ASK_AT) {
-      return reply.code(409).send({ ok: false, error: 'child-unmeasurable',
-        detail: "this box could not read the child's live state — nothing was pressed, and the ask is unchanged" });
-    }
-    const taken = coord.takeAskForAnswer(id, fresh);
-    if (!taken.ok) return reply.code(409).send({ ok: false, error: taken.why });
-
-    const res = await answerAsk(askDeps, ask.childId, ask.askKey, optionIndexes);
-    if (!res.ok) {
-      // The refused-press rollback: `untakeAsk`, NOT `releaseAsk` — see this
-      // route's own docstring. `answerAsk` never pressed a digit on this
-      // path, so the row goes back to `'held'` rather than being abandoned
-      // in `'answering'` with no exit.
-      if (!coord.untakeAsk(id)) {
-        // Unexpected (fix round 1, item 5): `untakeAsk`'s CAS source is
-        // `'answering'`, and THIS request is the one that put the row there
-        // (`takeAskForAnswer` above, this same request). Nothing else should
-        // have moved it in between — `console.warn` on the surprise, the
-        // same idiom `watch.ts`'s `sweepAsks` already uses on its own CAS
-        // calls (e.g. its "unexpectedly still 'held' after a failed
-        // release" warning), rather than a silent discard.
-        console.warn(`ccrc-server: untakeAsk(${id}) returned false after a refused press — ` +
-          "the ask row was not 'answering' when the rollback ran; it may be stranded");
-      }
-      return reply.code(409).send(res);
-    }
-    // D-2172's SECOND record — written BEFORE `settleAsk` (fix round 1, item
-    // 3), deliberately: the mint-time record (`watch.ts`'s `hold()`) is the
-    // question; this one is the answer, naming the parent and what it chose
-    // — the operator's only durable trace of a decision made in their name
-    // over a question that never reached their phone. Ordered first so that
-    // if `settleAsk` below then throws, at least ONE durable trace of the
-    // answer survives — the feed record names who chose what even when the
-    // `asks` row's own `answeredBy`/`answer` never gets written. Same
-    // pattern `POST /api/coord/caps` uses just above: `deps.notifyLog` and
-    // `coord.recordFeedEvent` are independently optional (a box with neither
-    // configured still answers the request), `recordFeedEvent` throws
-    // SYNCHRONOUSLY (`node:sqlite`) so it is caught rather than allowed to
-    // turn a successful press into a 500, and the flush is unconditional in
-    // a `finally` for the reason `POST /api/coord/caps`'s own comment gives:
-    // `record()` mints the seq before this route can fail, so its
-    // persistence must follow regardless.
-    const log = deps.notifyLog;
-    if (log) {
-      try {
-        const ev = log.record({
-          kind: 'ask', sessionId: ask.childId, runId: null,
-          title: 'question answered',
-          body: `${fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
-                `${ask.options[optionIndexes[0]!] ?? '?'}`,
-        });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — ask answered, feed archive degraded`);
-      } finally {
-        void log.flush();
-      }
-    }
-
-    // GUARDED (fix round 1, item 3): the digit has ALREADY landed by this
-    // point — `answerAsk` returned `ok:true` above — so `settleAsk` failing
-    // must never turn a successful press into a 500. The row is held
-    // EXCLUSIVELY by this request (CAS'd to `'answering'` above; `settleAsk`'s
-    // own docstring is why no caller needs to distinguish "settled" from
-    // "lost the row between take and settle" — that race cannot happen
-    // here), so an unguarded throw would be a genuine infra fault (disk,
-    // `node:sqlite`), not a lost race — but left unguarded it would strand
-    // the row `'answering'` with no exit (`settleAsk` never ran to move it),
-    // 500 a press that actually succeeded, and the parent's natural retry
-    // would get `not-held` — a LIE about who holds it, since the retrying
-    // caller IS the one who holds it. The digit is pressed either way, so
-    // this always returns `{ok:true}`.
-    try {
-      coord.settleAsk(id, fromId, ask.options[optionIndexes[0]!] ?? '', Date.now());
-    } catch (err) {
-      console.warn('ccrc-server: settleAsk failed after the digit was already pressed ' +
-        `(${err instanceof Error ? err.message : String(err)}) — the ask row may be stranded ` +
-        "'answering'; the feed record above (if it landed) is the surviving audit trace");
-    }
-
-    return { ok: true };
-  });
-
-  /**
-   * `POST /api/asks/:id/release` — the parent DECLINES to rule on its
-   * child's question. This is the verb that makes the grace window a
-   * CEILING rather than a flat tax on every ask the parent cannot answer
-   * (Task 10, this lane's own reason for existing): a decline fires the
-   * operator's push NOW instead of making them wait out the rest of
-   * `ASK_GRACE_MS` for a question nobody upstream is going to rule on.
-   *
-   * Unlike `/answer` above, this route never touches the pane — no
-   * `answerAsk`, no CAS-then-press-then-rollback dance — so its gate ladder
-   * is the plain box-token + attribution + ownership shape the claims lanes
-   * already use, run in the order the risk falls: box token, then body
-   * shape, then attribution, then `unknown-ask`, then
-   * `ask.parentId === fromId`. Only this child's derived parent may decline
-   * its question — attribution alone would let any live session on the box
-   * decline any other session's ask, exactly the reason `/answer` layers the
-   * same check on top of the box token.
-   *
-   * `releaseAsk`'s CAS is the row acting as its own mutex, the same shape
-   * `/answer`'s `takeAskForAnswer` uses: its source state is `'held'`, so a
-   * decline of a row that is already `'answering'`/`'answered'`/`'released'`/
-   * `'stale'` refuses `not-held` rather than pretending to succeed — a
-   * decline that finds nothing held must not lie about what it did.
-   *
-   * `watcher.releaseHeldAsk` is the ONLY way this route touches the
-   * watcher's in-memory hold (F12's own argument, `watch.ts`'s docstring on
-   * `heldAsks`): the map is watcher-private state, so this route names the
-   * child id and nothing about the map's shape. It runs AFTER the CAS
-   * succeeds, never before — the store row is the fact, the in-memory hold
-   * is only ever a cache of the push `sweepAsks` would otherwise send later.
-   * A `watcher === undefined` server (every non-test `buildServer` caller
-   * always supplies one today, `src/index.ts`'s only construction) still
-   * releases the row and answers `{ok:true}` — that part is genuinely true —
-   * but has no hold to drop and no snapshotted push to fire, so it warns
-   * instead of silently dropping the operator's notification on the floor
-   * (fix round 1, item 1).
-   */
-  app.post('/api/asks/:id/release', async (req, reply) => {
-    if (!deps.coord) return notConfigured(reply);
-    const coord = deps.coord;
-    // Literally inline, not through a wrapper: the census derives lanes by
-    // regex-slicing this file between route registrations, so a gate call it
-    // cannot see is a lane it will not count.
-    if (!requireMailToken(req, reply, 'POST /api/asks/:id/release')) return;
-
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const { fromId, fromUuid } = body;
-    if (typeof fromId !== 'string' || typeof fromUuid !== 'string') {
-      return reply.code(400).send({ ok: false, error: 'bad-request',
-        detail: 'fromId/fromUuid strings' });
-    }
-
-    // The box token proves "a process on this box", one shared secret
-    // identical for every session on the fleet host — it cannot prove "this
-    // ask's parent". The registry pair is what attributes the specific
-    // session, exactly as `/answer` and the mail ingress do.
-    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
-
-    // Resource ids accept one positive-safe decimal spelling, before any
-    // sqlite read can collapse a different textual name onto this ask.
-    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
-    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    const askRead = coord.askById(id);
-    // D-2545, `/answer`'s arm exactly — see its comment.
-    if (!askRead.ok) {
-      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: askRead.detail });
-    }
-    const ask = askRead.ask;
-    if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
-    if (ask.parentId !== fromId) {
-      return reply.code(403).send({ ok: false, error: 'not-parent',
-        detail: 'only this child\'s derived parent may decline its question' });
-    }
-
-    // A decline is not a failure — it is the parent saying "the operator
-    // should see this now", and it is what makes the grace window a CEILING
-    // rather than a tax on every ask the parent cannot rule on.
-    if (!coord.releaseAsk(id, Date.now())) {
-      return reply.code(409).send({ ok: false, error: 'not-held' });
-    }
-    // Fix round 1, item 1: `watcher` is undefined for every non-test caller
-    // of `buildServer` today (`src/index.ts` always builds one) — but the
-    // row above has ALREADY moved `'held' -> 'released'` by the time this
-    // line runs, and the response below is unconditionally `{ok:true}`.
-    // With no watcher there is no `heldAsks` entry to drop and no snapshotted
-    // push to fire, so the decline is real (the row genuinely released) but
-    // the operator's buzz — the entire reason this lane exists — silently
-    // never happens. Warning, not refusing: refusing here would tell the
-    // parent its decline failed when the store row says otherwise, which is
-    // a worse lie than a log line nobody reads until they go looking.
-    if (watcher === undefined) {
-      console.warn(`ccrc-server: POST /api/asks/:id/release released ask ${id} (child ` +
-        `${ask.childId}) with no watcher configured — the row is released but the operator's ` +
-        'push was never fired');
-    } else {
-      watcher.releaseHeldAsk(ask.childId);
-    }
-    return { ok: true };
-  });
+  // finding 2, so a security-relevant fail-shut guard has no second copy
+  // that could silently drift. Since W3 Q3f (D-7030) its one reader on the
+  // answer paths is `coord/questions.ts`, the claimant's and the operator's
+  // cores. See `registry.ts`'s own doc comment on it for the full reasoning.
 
   /**
    * `GET /api/asks?parent=<id>&state=<AskState>` — Task 11, the READ side of
@@ -3032,6 +4387,12 @@ export function registerCoordRoutes(
    * being asked about IS the identity under proof). A missing or mismatched
    * `fromUuid` refuses `400`/`403`, exactly as it does on those routes.
    *
+   * HELD FOR IT, NOT MERELY ADDRESSED TO IT (D-5530): `asksForParent` lists
+   * only rows held for the parent. A row minted `released` was held for
+   * nobody — its parent was never mailed it and may not answer it (D-5363) —
+   * so its question text is not that parent's to read, from either
+   * credential; the operator already has it as a push.
+   *
    * THIS IS FRESHNESS, NOT FORGERY-PROOFNESS — `requireAttribution`'s own
    * honesty, `POST /api/mail`'s docstring above (:427-433), applies unchanged
    * here: every session on the box can read every `.uuid` file under the one
@@ -3056,7 +4417,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/asks');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -3098,7 +4459,7 @@ export function registerCoordRoutes(
       if (!(await requireAttribution(reply, parent, q.fromUuid, 'fromUuid'))) return;
     }
 
-    const read = coord.asksForParent(parent, state);
+    const read = openFor(coord, parent, state);
     // D-2545, ALL-OR-FAILURE: the parent's entire evidentiary surface is this
     // list, so a partial one is worse than none — it looks complete.
     if (!read.ok) {
@@ -3106,4 +4467,478 @@ export function registerCoordRoutes(
     }
     return reply.code(200).send({ ok: true, asks: read.asks });
   });
+
+  // ── approvals: the server half (coordinator-first routing spec 2026-10-17 §6.3, plan Task 16, D-5298) ───────────
+  //
+  // A dispatched child's PermissionRequest hook asks (`POST /api/approvals`), the server mints a row held for the
+  // child's run's attributed claimant (D-5530, D-5531: wherever it sits, no project compared) and mails it, the
+  // claimant rules (`POST /api/questions/approval-<n>/rule`), the server signs the ruling with a key that never leaves this box,
+  // and the hook fetches it (`GET /api/approvals/:id/ruling?nonce=`) and verifies it with the pinned public key. Every
+  // refusal answers through `refuseRoute` (D-5381): the hook prints nothing on any of them, so the prompt stays the
+  // operator's (spec §12 invariant 4).
+
+  /** The signer, created on this server's first start with a coordination store (spec §6.4). A failure to create or
+   *  read it is warned once and leaves every signing route refusing `internal`, never a key made up elsewhere. */
+  let approvalSigner: ApprovalSigner | null = null;
+  const signerFor = (): ApprovalSigner | null => {
+    if (approvalSigner !== null) return approvalSigner;
+    try {
+      approvalSigner = loadOrCreateApprovalSigner(deps.cfg.ccrcDir);
+    } catch (err) {
+      console.warn(`ccrc-server: the approval signing key could not be loaded (${err instanceof Error ? err.message : String(err)}) — approvals refuse until it can`);
+    }
+    return approvalSigner;
+  };
+  if (deps.coord) signerFor();
+
+  /** Either kill switch (spec §6.8): the fleet box's `$REG/approvals-disabled`, read off the registry listing as the
+   *  hold reads `asks-disabled` (an unlistable registry reads as ON, fail shut), and the server box's own
+   *  `~/.ccrc/approvals-disabled`. Both are the operator's; nothing in this tree writes either. */
+  const approvalsKilled = async (): Promise<boolean> => {
+    if (serverApprovalsDisabled(deps.cfg.ccrcDir)) return true;
+    const listing = await deps.io.readdir(deps.cfg.registryDir);
+    return listing === null || listing.includes(APPROVALS_DISABLED_FILE);
+  };
+
+  /** Task 15's two spawn fields (spec §6.6, D-5360's requirement, D-5391): the child's `.deny-settings` equals the
+   *  managed deny file's CURRENT sha256, read off the fleet box, and its `.childshell` shows the bash pin. Anything
+   *  else, including a deny file this box cannot read, is not engaged. */
+  const denyEngaged = async (rec: SessionRecord): Promise<boolean> => {
+    const deny = rec.denySettings ?? { kind: 'none' };
+    const shell = rec.childShell ?? { kind: 'none' };
+    if (deny.kind !== 'digest' || shell.kind !== 'pinned' || shell.shell !== APPROVAL_CHILD_SHELL) return false;
+    const managed = await deps.io.readFileMeasured(path.join(deps.cfg.registryDir, CHILD_DENY_SETTINGS_FILE));
+    return managed.ok && createHash('sha256').update(managed.content, 'utf8').digest('hex') === deny.sha256;
+  };
+
+  /** The child's live Claude Code version, from its pane's live state file (the read `assembleFleet` makes), or null. */
+  const liveVersionOf = async (rec: SessionRecord): Promise<string | null> => {
+    const cfgDir = configDirFor(deps.cfg, rec.wrapper);
+    if (!cfgDir) return null;
+    const pid = await deps.tmux.panePid(rec.id);
+    if (pid === null) return null;
+    const read = await readLiveStateMeasured(deps.io, cfgDir, pid);
+    return read.ok ? read.state.version : null;
+  };
+
+  /** Doctor's `approval-digest-mismatch` reads this journal (spec §6.3: "a divergence is never silent"): one line per
+   *  `409 digest-mismatch`, `<epoch ms> digest-mismatch <session id>`, in the server box's state directory (D-5490). */
+  const journalDigestMismatch = (sessionId: string, now: number): void => {
+    try {
+      appendFileSync(path.join(deps.cfg.ccrcDir, APPROVAL_REFUSALS_LOG), `${now} digest-mismatch ${sessionId}\n`, { mode: 0o600 });
+    } catch (err) {
+      console.warn(`ccrc-server: the approval refusals journal could not be appended (${err instanceof Error ? err.message : String(err)})`);
+    }
+  };
+
+  /** What `questions.raiseApproval` reads (D-7029), built once: this server's closures above, unchanged, and the
+   *  server's own store, I/O, config and tmux. Named here, so the raise ladder reaches nothing on its own. Absent with
+   *  no coordination store, where the raise answers `notConfigured` before it would be read. */
+  const raiseDeps: ApprovalRaiseDeps | undefined = deps.coord === undefined ? undefined : {
+    coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, masker: deps.masker ?? SHAPE_ONLY_MASKER,
+    signerFor, rulingsAllowedHere, heldFor, denyEngaged, liveVersionOf, journalDigestMismatch,
+  };
+
+  /** What the claimant's cores read (W3 Q3f, D-7030; `questions.rule`, `questions.release`), built once: the raise's
+   *  store, I/O, config, tmux, signer, claimant rule and single-box gate, the notice sink, the kill switches' read above,
+   *  and the press of a digit into the child's pane over the server's one queue (`askDeps`). Absent with no coordination
+   *  store, where every claimant door answers `notConfigured` before it would be read. */
+  const claimantDeps: ClaimantDoorDeps | undefined = deps.coord === undefined ? undefined : {
+    coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, signerFor, rulingsAllowedHere, heldFor, notice,
+    approvalsKilled, pressAsk: (childId, key, optionIndexes) => answerAsk(askDeps, childId, key, optionIndexes),
+  };
+  /** A core's answer, sent: the status and the body it answered, never decided here. */
+  const sendAnswer = (reply: FastifyReply, a: QuestionDoorAnswer): FastifyReply => reply.code(a.status).send(a.body);
+
+  /**
+   * `POST /api/approvals` — a child's hook asks for a ruling (spec §6.3 server steps 1 to 3). The ladder, cheapest
+   * refusal first, nothing minted on any refusal above the mint: box token (401), body shape (400), a kill switch
+   * (`approvals-disabled`), attribution of `sessionId` by `sessionUuid` (the registry gate every lane uses), the
+   * single-box opt-in (`single-box`), the registry's `ChildMark` (`not-a-child`), Task 15's spawn fields
+   * (`deny-not-engaged`), the live version (`version-unverified`), the digest and the re-canonicalisation
+   * (`digest-mismatch`, journaled), and the claimant rule (`heldFor`, D-5530): `not-a-child` with nothing minted, or a
+   * row minted `released` with its reason (`approval-released`), or held. A held request whose class is `forbidden` is
+   * minted `released` too, never mailed. Then the mint, the mail, and `201 {id, waitS}`, the window in seconds (D-5441).
+   * The route keeps the first five inline, in this order, so the kill switch is read before attribution; from the
+   * single-box opt-in on, the ladder is `questions.raiseApproval` (D-7029), whose verdict maps here byte for byte.
+   */
+  app.post('/api/approvals', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/approvals')) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { sessionId, sessionUuid, digest, nonce, canonical, truncated } = body;
+    if (body['v'] !== 1 || typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)
+        || typeof sessionUuid !== 'string' || typeof digest !== 'string' || !SHA256_HEX.test(digest)
+        || typeof nonce !== 'string' || !NONCE_HEX.test(nonce)
+        || (canonical === undefined) === (truncated === undefined)
+        || (canonical !== undefined && (typeof canonical !== 'string' || Buffer.byteLength(canonical, 'utf8') > APPROVAL_REQUEST_MAX_BYTES))
+        || (truncated !== undefined && truncated !== true)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'v 1, sessionId, sessionUuid, digest (64 hex), nonce (32 hex), and exactly one of canonical (a string) or truncated (true)' });
+    }
+    if (await approvalsKilled()) return refuseRoute(reply, 'approvals-disabled');
+    if (!(await requireAttribution(reply, sessionId, sessionUuid, 'sessionUuid'))) return;
+    const v = await questions.raiseApproval({
+      sessionId, digest, nonce,
+      ...(canonical === undefined ? {} : { canonical: canonical as string }), ...(truncated === true ? { truncated } : {}),
+    }, raiseDeps!, Date.now());
+    switch (v.kind) {
+      case 'single-box': return refuseRoute(reply, 'single-box', { detail: v.detail });
+      case 'internal': return refuseRoute(reply, 'internal', { detail: v.detail });
+      case 'not-a-child': return refuseRoute(reply, 'not-a-child');
+      case 'deny-not-engaged': return refuseRoute(reply, 'deny-not-engaged');
+      case 'version-unverified': return refuseRoute(reply, 'version-unverified', { detail: v.detail, trust: v.trust });
+      case 'digest-mismatch': return refuseRoute(reply, 'digest-mismatch');
+      case 'run-unreadable': return refuseRoute(reply, 'run-unreadable', { detail: v.detail });
+      // Released at once: the hook prints nothing, the menu stays with the operator, and nobody is mailed.
+      case 'approval-released': return refuseRoute(reply, 'approval-released', { id: v.id, releaseReason: v.releaseReason });
+      case 'minted': {
+        const accepted: ApprovalRequestAccepted = { id: v.id, waitS: v.waitS };
+        return reply.code(201).send(accepted);
+      }
+      default: return v satisfies never;
+    }
+  });
+
+  /**
+   * `GET /api/approvals/:id/ruling?nonce=` — the hook's poll (spec §6.3 hook step 4). Box token; the nonce is the
+   * capability: another nonce, or a malformed one, reads as no row (`unknown-approval`, 404), on which the hook stops.
+   * `200 {state}` while the row is held; `200 {state, ruling}` once it is `allowed` or `denied`; and a row that is
+   * `declined`, `released`, `operator` or `stale` answers its state and no ruling, which the hook stops on (D-5440).
+   */
+  app.get('/api/approvals/:id/ruling', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    if (!requireMailToken(req, reply, 'GET /api/approvals/:id/ruling')) return;
+    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (id === null) return refuseRoute(reply, 'bad-request');
+    const nonce = (req.query as { nonce?: unknown }).nonce;
+    const read = coord.approvalById(id);
+    if (!read.ok) return refuseRoute(reply, 'approval-unreadable', { detail: read.detail });
+    const row = read.row;
+    if (row === null || typeof nonce !== 'string' || !NONCE_HEX.test(nonce) || nonce !== row.nonce) {
+      return refuseRoute(reply, 'unknown-approval');
+    }
+    const answer: ApprovalRulingAnswer = (row.state === 'allowed' || row.state === 'denied') && row.ruling !== null
+      ? { state: row.state, ruling: JSON.parse(row.ruling) as NonNullable<ApprovalRulingAnswer['ruling']> }
+      : { state: row.state };
+    return reply.code(200).send(answer);
+  });
+
+  /** `GET /api/approvals/key` — the server's public key, which the fleet box's install spine pins once (spec §6.4,
+   *  D-5487). Box token, so the pin is read by the fleet box's own client. */
+  app.get('/api/approvals/key', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'GET /api/approvals/key')) return;
+    const signer = signerFor();
+    if (signer === null) return refuseRoute(reply, 'internal', { detail: 'the approval signing key is not loaded' });
+    const answer: ApprovalKeyAnswer = { v: 1, alg: 'ed25519', publicKey: signer.publicKeyPem() };
+    return reply.code(200).send(answer);
+  });
+
+  /** `GET /api/approvals/:id?fromId=&fromUuid=` — one row, redacted, for the claimant it was held for (spec §6.7:
+   *  "the full input is on the row"). Box token and attribution, as `GET /api/asks` scopes a box-token caller: a
+   *  session reads only a row held for it (`403` otherwise, and a row minted released was held for nobody). */
+  app.get('/api/approvals/:id', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    if (!requireMailToken(req, reply, 'GET /api/approvals/:id')) return;
+    const q = req.query as { fromId?: unknown; fromUuid?: unknown };
+    if (typeof q.fromId !== 'string' || typeof q.fromUuid !== 'string') {
+      return refuseRoute(reply, 'bad-request', { detail: '?fromId= and ?fromUuid= prove which claimant is reading' });
+    }
+    if (!(await requireAttribution(reply, q.fromId, q.fromUuid, 'fromUuid'))) return;
+    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (id === null) return refuseRoute(reply, 'bad-request');
+    const read = approvalFor(coord, id);
+    if (!read.ok) return refuseRoute(reply, 'approval-unreadable', { detail: read.detail });
+    const row = read.row;
+    if (row === null) return refuseRoute(reply, 'unknown-approval');
+    if (row.parentId !== q.fromId || row.releaseReason !== null) {
+      return refuseRoute(reply, 'not-parent', { detail: 'a session reads only the rows held for it' });
+    }
+    const view: ApprovalView = {
+      id: row.id, childId: row.childId, parentId: row.parentId, runId: row.runId, agentId: row.agentId, tool: row.tool,
+      input: row.inputRedacted, truncated: row.truncated, class: row.class, state: row.state,
+      releaseReason: row.releaseReason, askAt: row.askAt, notifyAt: row.notifyAt, ruledAt: row.ruledAt,
+      verdict: row.verdict, reason: row.reason, answeredBy: row.answeredBy, toolUseId: row.toolUseId,
+    };
+    return reply.code(200).send({ ok: true, approval: view });
+  });
+
+  // ── the question door family (W3 Q3f, D-7030; ARCH-57's server half; OA-C7 ruled (a), 2026-10-26) ─────────────────
+  //
+  // `/api/questions/:id/*`, here behind this file's one gate (spec §2.5): the PATH picks the principal, never a body
+  // field or a header. `:id` is `parseQuestionId`'s (`ask-<n>`, `approval-<n>`, `session-<id>`), and an id or a body of
+  // the other principal's kind is `400 kind-mismatch`. Each door runs its own front ladder, then the shared core the old
+  // door it replaced called too (`coord/questions.ts`), so a new path answers what its old door answered, byte for
+  // byte; the old claimant doors were retired in K5 Q3l (D-7324), the operator's in W7 C7p (D-7194). `/api/sessions/:id/dialog/tab` answers nothing and stays a session door.
+
+  /**
+   * `POST /api/questions/session-<id>/answer` — THE OPERATOR'S. Session-gated and origin-checked like every PWA write:
+   * it is in no EXEMPT table and consults no box token. Its ladder: the id (`bad-request`), its kind (a claimant's
+   * question is `kind-mismatch`), the session gated by `buildServer`'s `knownId` exactly as the session routes gate it
+   * (`unknown-session`), the body by its `kind` (`readAskAnswer` for an ask, which must name its `askKey`;
+   * `readDialogAnswer` for a dialog's row, free-text row or multiSelect set; anything else `bad-request`), then the
+   * operator's core. It replaces `/api/sessions/:id/ask`, `/dialog`, `/dialog/text` and `/dialog/multi`; the skew reason
+   * that split the last two off `/dialog` (an older server ignoring a field and pressing Enter) does not apply to a new
+   * path, which an older server answers 404.
+   */
+  app.post('/api/questions/:id/answer', async (req, reply) => {
+    const wiring = operatorDoors?.();
+    if (wiring === undefined) return notConfigured(reply);
+    const qid = parseQuestionId((req.params as { id: string }).id);
+    if (qid === null) return refuseRoute(reply, 'bad-request');
+    if (qid.kind !== 'session') return refuseRoute(reply, 'kind-mismatch');
+    if (!(await wiring.knownId(qid.sessionId))) return refuseRoute(reply, 'unknown-session');
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    let answer: OperatorAnswer;
+    if (body.kind === 'ask') {
+      const read = readAskAnswer(body);
+      if (read === null || read.askKey === undefined) return refuseRoute(reply, 'bad-request');
+      answer = { kind: 'ask', sessionId: qid.sessionId, askKey: read.askKey, optionIndexes: read.optionIndexes };
+    } else if (body.kind === 'dialog') {
+      const read = readDialogAnswer(body);
+      if (read === null) return refuseRoute(reply, 'bad-request');
+      answer = 'multi' in read
+        ? { kind: 'dialog', form: 'multi', sessionId: qid.sessionId, dialogId: read.dialogId, optionIndexes: read.optionIndexes }
+        : read.text === undefined
+          ? { kind: 'dialog', form: 'row', sessionId: qid.sessionId, dialogId: read.dialogId, optionIndex: read.optionIndex }
+          : { kind: 'dialog', form: 'text', sessionId: qid.sessionId, dialogId: read.dialogId, optionIndex: read.optionIndex, text: read.text };
+    } else {
+      return refuseRoute(reply, 'bad-request');
+    }
+    return sendAnswer(reply, await questions.answer(answer, wiring.answerDeps));
+  });
+
+  /**
+   * `POST /api/questions/<ask|approval>-<n>/rule` — THE CLAIMANT'S. The box token, then the body by its `kind` (an ask:
+   * `fromId`/`fromUuid` and `readAskAnswer`'s answer; an approval: the widening-field refusal, then `fromId`/`fromUuid`,
+   * `verdict` and `reason`, exactly as the retired `/api/approvals/:id/rule` read them), attribution against the registry, the id
+   * (`parseQuestionId`, `bad-request`), and a body kind that disagrees with the id's is `kind-mismatch`. Then the
+   * claimant's core: the stored parent and everything after it, the signing unchanged. EXEMPT from the session gate,
+   * as the two doors it replaced were (`/api/asks/:id/answer`, `/api/approvals/:id/rule`, retired in K5 Q3l, D-7324).
+   */
+  app.post('/api/questions/:id/rule', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/questions/:id/rule')) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { kind, fromId, fromUuid } = body;
+    let ruleOf: (id: number) => ClaimantRule;
+    if (kind === 'ask') {
+      // D-5293: the answer half is the operator route's, read by the one reader both read (`readAskAnswer`).
+      const answerBody = readAskAnswer(body);
+      if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || answerBody === null) {
+        return refuseRoute(reply, 'bad-request',
+          { detail: 'fromId/fromUuid strings, optionIndexes an array of numbers, askKey a string when given' });
+      }
+      ruleOf = (id) => ({ kind: 'ask', id, fromId, optionIndexes: answerBody.optionIndexes, askKey: answerBody.askKey });
+    } else if (kind === 'approval') {
+      for (const k of ['permanent', 'updatedPermissions', 'mode']) {
+        if (Object.prototype.hasOwnProperty.call(body, k)) {
+          return refuseRoute(reply, 'bad-request', { detail: `a ruling allows once only; ${k} is never accepted` });
+        }
+      }
+      const { verdict, reason } = body;
+      if (typeof fromId !== 'string' || typeof fromUuid !== 'string' || (verdict !== 'allow' && verdict !== 'deny')
+          || typeof reason !== 'string' || reason.trim() === '' || reason.length > APPROVAL_REASON_MAX_CHARS) {
+        return refuseRoute(reply, 'bad-request', { detail: `fromId/fromUuid strings, verdict allow or deny, and a reason of 1 to ${APPROVAL_REASON_MAX_CHARS} characters` });
+      }
+      ruleOf = (id) => ({ kind: 'approval', id, fromId, verdict, reason });
+    } else {
+      return refuseRoute(reply, 'bad-request', { detail: 'kind ask or approval' });
+    }
+    if (!(await requireAttribution(reply, fromId as string, fromUuid as string, 'fromUuid'))) return;
+    const qid = parseQuestionId((req.params as { id: string }).id);
+    if (qid === null) return refuseRoute(reply, 'bad-request');
+    if (qid.kind === 'session' || qid.kind !== kind) return refuseRoute(reply, 'kind-mismatch');
+    return sendAnswer(reply, await questions.rule(ruleOf(qid.id), claimantDeps!));
+  });
+
+  /**
+   * `POST /api/questions/<ask|approval>-<n>/release` — THE CLAIMANT'S hand-over. The box token, the body
+   * (`{kind, fromId, fromUuid}`), attribution, the id, the kind check, then the claimant's core: the stored parent, the
+   * decline, and the operator's push now. EXEMPT from the session gate, as the two doors it replaced
+   * were (`/api/asks/:id/release`, `/api/approvals/:id/release`, retired in K5 Q3l, D-7324).
+   */
+  app.post('/api/questions/:id/release', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/questions/:id/release')) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { kind, fromId, fromUuid } = body;
+    if (kind !== 'ask' && kind !== 'approval') return refuseRoute(reply, 'bad-request', { detail: 'kind ask or approval' });
+    if (typeof fromId !== 'string' || typeof fromUuid !== 'string') {
+      return refuseRoute(reply, 'bad-request', { detail: 'fromId/fromUuid strings' });
+    }
+    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
+    const qid = parseQuestionId((req.params as { id: string }).id);
+    if (qid === null) return refuseRoute(reply, 'bad-request');
+    if (qid.kind === 'session' || qid.kind !== kind) return refuseRoute(reply, 'kind-mismatch');
+    return sendAnswer(reply, await questions.release({ kind, id: qid.id, fromId }, claimantDeps!));
+  });
+
+  /**
+   * `POST /api/coordinators/:session/intent` — a session declares (`set`) or withdraws (`clear`) that it is about to delegate
+   * (delegation broker wave 3, Task 15; spec 2026-10-04 §5.1). IDENTITY, never a restriction: it changes no lease, carrier or
+   * cleanup state, creates no run, hold or capacity slot, and `Agent`/`Workflow` use needs no declaration.
+   *
+   * THE PATH PARAMETER IS NAMED `:session`, NOT `:id`, on purpose. Every `:id` in this file is a positive-integer resource id read
+   * through `parseCanonicalPositiveSafeInteger`, and `routes.test.ts` pins that; a ccd session id is not one. The wire path is the
+   * same either way.
+   *
+   * BOX-TOKEN GATED, and EXEMPT from the session gate like the claim lanes: its only caller is a fleet session through `ccrc-api`,
+   * which holds the token and no cookie. Not one of the ungated release valves: nothing here releases a wedge.
+   *
+   * THE ORDER IS THE DESIGN, cheapest refusal first: the lane is configured (501), the box token (401), the body is exactly
+   * `{action, byId, byUuid}` and `byId` is the session in the path (400, 403), the registry proves `byId` holds `byUuid`
+   * (the claim lanes' attribution gate), the session's CURRENT incarnation is measured (`$REG/<id>.generation`, read before and
+   * after, ruling R38), and only then the declaration is made DURABLE through the lane's own checkpoint door. The generation is read
+   * once more when that write resolves: a proven move answers 409 `incarnation-changed` (the declaration landed on the previous
+   * incarnation, nothing is undone, the retry declares for the new one). Attribution is
+   * freshness, not forgery-proofness (`requireAttribution`'s own honesty): a session declares for itself, and the single UNIX
+   * user means a determined one could present a neighbour's pair.
+   *
+   * THE CHECKPOINT IS THE AUTHORITY. `applyCheckpointChange` is the serialized door of the ONE `DelegationDurability` the watcher's
+   * delegation lane opened (`watcher.delegationApplier()`); a second instance on the directory would race its journal, so this file
+   * opens none. The change rebuilds the row and `coordinatorIntentByParent` together (`declareCoordinatorIntent`), and the answer is
+   * sent only after the checkpoint is durably replaced. Nothing writes SQLite directly: the projection is the lane's repairable
+   * output, so a projection that did not land (and any call that wrote nothing) is repaired once here and, if it stays broken,
+   * reported as `stale` while the declaration stands in the checkpoint. A lane with no applier answers 503 `not-ready`; a failed
+   * application answers 503 and says nothing landed that it can confirm; `set` and `clear` are idempotent, so the retry is safe.
+   */
+  app.post('/api/coordinators/:session/intent', async (req, reply) => {
+    if (!deps.coord || watcher === undefined) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/coordinators/:session/intent')) return;
+
+    const { session } = req.params as { session: string };
+    const raw = req.body;
+    const bad = (detail: string) => refuseRoute(reply, 'bad-request', { detail });
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return bad('the body is a JSON object {action, byId, byUuid}');
+    const { action, byId, byUuid } = raw as Record<string, unknown>;
+    if (Object.keys(raw).sort().join(',') !== 'action,byId,byUuid') return bad('the body carries exactly action, byId and byUuid');
+    if (typeof action !== 'string' || !(COORDINATOR_INTENT_ACTIONS as readonly string[]).includes(action)) {
+      return bad(`action is one of ${COORDINATOR_INTENT_ACTIONS.join(', ')}`);
+    }
+    if (typeof byId !== 'string' || !isSessionIdShape(byId) || typeof byUuid !== 'string' || byUuid === '' || !isSessionIdShape(session)) {
+      return bad('byId and the session in the path are session ids, and byUuid is a non-empty string');
+    }
+    if (byId !== session) {
+      return refuseRoute(reply, 'not-owner',
+        { detail: 'byId is not the session in the path: a session declares its own intent and no other session\'s' });
+    }
+    if (!(await requireAttribution(reply, byId, byUuid, 'byUuid'))) return;
+
+    const generationOf = (id: string) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id);
+    const incarnation = (await settleParentIncarnations(generationOf, await readParentGenerations(generationOf, [byId]))).get(byId);
+    if (incarnation === undefined || incarnation.kind !== 'measured') {
+      return refuseRoute(reply, 'registry-unmeasurable',
+        { detail: `the registry incarnation of ${byId} is unmeasured (${incarnation === undefined ? 'unread' : incarnation.reason}) — transient, retry` });
+    }
+
+    let durable: DelegationDurability | null = null;
+    try { durable = await watcher.delegationApplier(); } catch { durable = null; }
+    if (durable === null) {
+      return refuseRoute(reply, 'not-ready', { detail: 'the delegation lane has no durable applier open yet — retry' });
+    }
+    const request = { action: action as (typeof COORDINATOR_INTENT_ACTIONS)[number], sessionId: byId, parentIncarnation: incarnation.incarnation,
+      declaredAt: formatDelegationInstant(Date.now()) };
+    let applied: Awaited<ReturnType<DelegationDurability['applyCheckpointChange']>>;
+    try {
+      applied = await durable.applyCheckpointChange((checkpoint) => declareCoordinatorIntent(checkpoint, request));
+    } catch (err) {
+      console.warn(`ccrc-server: coordinator-intent: the ${request.action} for ${byId} could not be made durable ` +
+        `(${err instanceof Error ? err.message : String(err)})`);
+      if (err instanceof DelegationCheckpointError && err.code === 'not-ready') {
+        return refuseRoute(reply, 'not-ready',
+          { detail: 'the delegation lane is recovering its checkpoint — retry' });
+      }
+      return refuseRoute(reply, 'application-failed',
+        { detail: 'the declaration is not confirmed durable; set and clear are idempotent, so retry' });
+    }
+
+    // Durable now (or already so). The incarnation is read once more: the declaration was made for the one measured BEFORE the queued
+    // write, and a session that was swapped or recreated meanwhile has a new one. Only a PROVEN move counts (a different value, or no
+    // generation at all); a re-read that cannot be measured is no evidence, and the answer then stands. Nothing is undone: the row
+    // of the incarnation it landed on is the truth for that incarnation. A port that REJECTS is a read that failed (`unreadable`), as it
+    // is for the reads before the write (Task 15 N3), never a 500 for a declaration that is durable.
+    let after: Awaited<ReturnType<typeof generationOf>>;
+    try { after = await generationOf(byId); } catch { after = { kind: 'unreadable' }; }
+    const moved = after.kind === 'absent' || (after.kind === 'value' && after.v !== incarnation.incarnation);
+    // N1 (D-4008): a 200 says whether the re-read CONFIRMED the incarnation (`same`) or could not measure it (`unmeasured`), so an unknown
+    // incarnation never reads as a confirmed one. `ccrc-api` prints the whole body, so the session sees it with no client change.
+    const incarnationAfter: 'same' | 'unmeasured' = after.kind === 'value' && after.v === incarnation.incarnation ? 'same' : 'unmeasured';
+
+    // SQLite is repairable output, and a call that wrote nothing still attempts the repair (queued, and cheap when nothing drifted),
+    // so a retry after a stale answer heals it and the answer reports what is true. If the repair fails too, the answer says so
+    // while the checkpoint keeps the declaration.
+    let projection: 'projected' | 'stale' = applied.durable && applied.projection.status === 'projected' ? 'projected' : 'stale';
+    if (projection === 'stale') {
+      try { projection = (await durable.repairProjection()) === null ? 'stale' : 'projected'; } catch { projection = 'stale'; }
+    }
+    if (moved) {
+      // N2: the detail follows what the re-read found and what was asked.
+      const landed = `the ${request.action} landed on the previous incarnation (${incarnation.incarnation}) and stands there`;
+      const detail = after.kind === 'absent'
+        ? `the registry row of ${byId} is gone (no generation) since the ${request.action} was queued: ${landed}; there is nothing to retry until the id is recreated`
+        : request.action === 'set'
+          ? `the registry incarnation of ${byId} changed while the declaration was queued: ${landed}, and the new one has none — retry to declare for the new one`
+          : `the registry incarnation of ${byId} changed while the clear was queued: ${landed}; the new incarnation never had a declaration, so there is nothing to clear for it`;
+      return refuseRoute(reply, 'incarnation-changed' satisfies keyof typeof COORDINATOR_INTENT_REFUSALS,
+        { incarnation: incarnation.incarnation, projection, detail });
+    }
+    const mine = applied.state.checkpoint.sessions.find((s) => s.sessionId === byId && s.parentIncarnation === incarnation.incarnation);
+    return reply.code(200).send({
+      ok: true, action: request.action, session: byId, incarnation: incarnation.incarnation, changed: applied.durable,
+      explicitIntentAt: mine?.explicitIntentAt ?? null, effective: mine?.effective ?? false, effectiveBasis: mine?.effectiveBasis ?? [],
+      projection, incarnationAfter,
+    });
+  });
+
+  /**
+   * Delegation wave 5 PR8: the lease doors (body in `delegationLeaseDoor.ts`, decisions in `delegation-lease-acts.ts`). The path parameter
+   * is `:lease`, never `:id` (`routes.test.ts`'s integer pin). Retain is a lease parent's (or its coordinator's) through `ccrc-api`: box
+   * token, EXEMPT from the session gate like the intent route. `operator-retain` and `resolve` are the operator's, session-gated when
+   * armed and never EXEMPT; they consult no box token. Each answers a `LeaseDoorAnswer`; a refusal goes through `refuseRoute`.
+   */
+  const leaseDeps = (coord: CoordStore, w: NonNullable<typeof watcher>): LeaseDoorDeps => ({ io: deps.io, registryDir: deps.cfg.registryDir,
+    fleetState: deps.fleetState, applier: () => w.delegationApplier(), runStampsNaming: (id) => runStampsOfSeries(coord, id), now: () => Date.now() });
+  const leaseAnswer = (reply: FastifyReply, a: LeaseDoorAnswer) => (a.ok ? reply.code(200).send(a) : refuseRoute(reply, a.error, { detail: a.detail }));
+  const leaseParam = (req: FastifyRequest): string => (req.params as { lease: string }).lease;
+  app.post('/api/leases/:lease/retain', async (req, reply) => {
+    if (!deps.coord || watcher === undefined) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/leases/:lease/retain')) return;
+    const r = parseRetainRequest(req.body, leaseParam(req));
+    if (!r.ok) return refuseRoute(reply, 'bad-request', { detail: r.detail });
+    if (!(await requireAttribution(reply, r.byId, r.byUuid, 'byUuid'))) return;
+    return leaseAnswer(reply, await retainLease(leaseDeps(deps.coord, watcher), r));
+  });
+  app.post('/api/leases/:lease/operator-retain', async (req, reply) => {
+    if (!deps.coord || watcher === undefined) return notConfigured(reply);
+    const r = parseOperatorRetainRequest(req.body, leaseParam(req));
+    if (!r.ok) return refuseRoute(reply, 'bad-request', { detail: r.detail });
+    return leaseAnswer(reply, await operatorRetainLease(leaseDeps(deps.coord, watcher), r.leaseId));
+  });
+  app.post('/api/leases/:lease/resolve', async (req, reply) => {
+    if (!deps.coord || watcher === undefined) return notConfigured(reply);
+    const r = parseResolveRequest(req.body, leaseParam(req));
+    if (!r.ok) return refuseRoute(reply, 'bad-request', { detail: r.detail });
+    return leaseAnswer(reply, await resolveLease(leaseDeps(deps.coord, watcher), r));
+  });
+
+  // Programme ledgers (plan PL3): the coordinator's item and goals routes. Handlers live in `ledgersRoutes.ts`
+  // (a lane source of its own for `box-token-census.test.ts`); the gate and the sender check are this function's own.
+  registerLedgerCoordinatorRoutes(app, {
+    coord: deps.coord, requireMailToken, requireAttribution, notice, bus, now: () => Date.now(),
+    presenceOf, secretOf: (program, slot) => readOperatorSecretMeta(deps.cfg.ccrcDir, program, slot),
+    outbox: { deps, settledOf: outboxSettledOf(questions, deps.coord) },
+  });
+  // The coordinator call record (D-8126, wave A3): its handler lives in `coordCallsRoute.ts`, a lane source of its own.
+  registerCoordCallsRoute(app, { coord: deps.coord, requireMailToken, requireAttribution, notice, bus, now: () => Date.now(), build: deps.build?.version ?? null });
+
+  // D-8125: the coordinator's review-cap door; its handler lives in `reviewRoundsRoute.ts`.
+  registerReviewRoundsRoute(app, {
+    coord: deps.coord, requireMailToken, requireAttribution, coordMutex, notice,
+  });
+
+  return { withAbandon, withSweepAbandon, serial: (fn) => coordMutex.run(fn) };
 }

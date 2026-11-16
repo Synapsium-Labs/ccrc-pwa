@@ -1,10 +1,27 @@
 import { describe, it, expect, vi } from 'vitest';
-import { appendFileSync, chmodSync, mkdirSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, linkSync, mkdirSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { localIO, type FleetIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import { MAX_READ_B64_BYTES } from '../../agent/src/fileops.js';
+
+// R99's one seam. `readFileFromBytesMeasured` stats the file, then reads the range it was promised, and a file that shrinks
+// in between is the case its length check exists for. The real `stat` is wrapped, never replaced: a row arms `afterStat`, and
+// the wrapper lets the real answer through and THEN runs it, so the shrink is the real filesystem's, at the one moment a
+// test cannot otherwise reach. Disarmed, the wrapper is the real `stat`, which is what every other row in this file sees.
+const afterStat = vi.hoisted(() => ({ run: null as null | ((p: string) => void) }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    stat: (async (p: Parameters<typeof actual.stat>[0], opts?: Parameters<typeof actual.stat>[1]) => {
+      const answer = await actual.stat(p, opts as never);
+      afterStat.run?.(String(p));
+      return answer;
+    }) as typeof actual.stat,
+  };
+});
 
 const mktempDir = (): string => mkTmp('ccrc-io-');
 const tmpFile = (name = 'x.txt'): string => path.join(mktempDir(), name);
@@ -111,14 +128,42 @@ describe('localIO.readFileFromMeasured', () => {
   });
 });
 
-describe('localIO.readFileB64', () => {
-  it('reads a binary file back as base64, and null when missing', async () => {
+describe('localIO.readFileFromBytesMeasured', () => {
+  it('returns the bytes of the range and the whole file\'s size; the EOF arm is a positive answer, not a miss', async () => {
+    const file = tmpFile();
+    writeFileSync(file, '0123456789');
+    expect(await localIO.readFileFromBytesMeasured(file, 3, 4)).toEqual({ ok: true, bytes: new Uint8Array(Buffer.from('3456')), size: 10 });
+    expect(await localIO.readFileFromBytesMeasured(file, 8, 99)).toEqual({ ok: true, bytes: new Uint8Array(Buffer.from('89')), size: 10 });
+    expect(await localIO.readFileFromBytesMeasured(file, 10, 4)).toEqual({ ok: true, bytes: new Uint8Array(0), size: 10 });
+  });
+
+  // [label, offset, maxBytes, the size the file shrinks to once the stat has answered 10]
+  it.each([
+    ['partway through the range', 0, 10, 4],
+    ['partway through a range that starts inside the file', 3, 7, 6],
+    ['to before the offset: nothing at all is left to read', 6, 4, 2],
+    ['to empty', 0, 10, 0],
+  ] as const)('a file that SHRINKS between the stat and the read answers "unreadable", never ok with the short bytes it left (R99): %s', async (label, offset, maxBytes, shrunk) => {
+    const file = tmpFile();
+    writeFileSync(file, '0123456789');
+    let fired = 0;
+    afterStat.run = (p) => { if (p === file) { fired += 1; truncateSync(file, shrunk); } };
+    try {
+      expect(await localIO.readFileFromBytesMeasured(file, offset, maxBytes), label).toEqual({ ok: false, reason: 'unreadable' });
+    } finally { afterStat.run = null; }
+    expect(fired, 'the shrink happened between the stat and the read').toBe(1);
+    expect(statSync(file).size, 'the file really is that short now').toBe(shrunk);
+  });
+});
+
+describe('localIO.readFileB64Measured — the round trip', () => {
+  it('reads a binary file back as base64, and absent when missing', async () => {
     const dir = mktempDir();
     const file = path.join(dir, 'clip.png');
     const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
     writeFileSync(file, bytes);
-    expect(await localIO.readFileB64(file)).toBe(bytes.toString('base64'));
-    expect(await localIO.readFileB64(path.join(dir, 'nope.png'))).toBeNull();
+    expect(await localIO.readFileB64Measured(file)).toEqual({ ok: true, dataB64: bytes.toString('base64') });
+    expect(await localIO.readFileB64Measured(path.join(dir, 'nope.png'))).toEqual({ ok: false, reason: 'absent' });
   });
 });
 
@@ -168,6 +213,75 @@ describe('localIO.stat', () => {
     expect(s!.size).toBe(4);
     expect(typeof s!.mtimeMs).toBe('number');
     expect(await localIO.stat(path.join(path.dirname(file), 'nope'))).toBeNull();
+  });
+});
+
+/** `lstatMeasured` answers about the PATH; every other read on this interface
+ *  answers about what the path RESOLVES TO. The pair below is the whole
+ *  difference, on one fixture: `stat` follows the link and reports the target's
+ *  size, `lstat` reports that the path is a link and never looks past it. */
+describe('localIO.lstatMeasured', () => {
+  const linkTo = (targetBytes: string): { link: string; target: string } => {
+    const dir = mktempDir();
+    const target = path.join(dir, 'target.txt');
+    const link = path.join(dir, 'link.txt');
+    writeFileSync(target, targetBytes);
+    symlinkSync(target, link);
+    return { link, target };
+  };
+
+  it('a plain file is `regular`', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'abcd');
+    expect(await localIO.lstatMeasured(file)).toEqual({ ok: true, kind: 'regular' });
+  });
+
+  it('a LIVE symlink is `symlink`, and statMeasured on the same path still answers about the TARGET', async () => {
+    const { link } = linkTo('abcd');
+    expect(await localIO.lstatMeasured(link)).toEqual({ ok: true, kind: 'symlink' });
+    // The contrast IS the reason this member exists: nothing already on this
+    // interface could have told the caller what `lstatMeasured` just did.
+    expect(await localIO.statMeasured(link)).toMatchObject({ ok: true, size: 4 });
+  });
+
+  it('a DANGLING symlink is still `symlink` — the link exists even though its target does not', async () => {
+    const dir = mktempDir();
+    const link = path.join(dir, 'dangling');
+    symlinkSync(path.join(dir, 'no-such-target'), link);
+    expect(await localIO.lstatMeasured(link)).toEqual({ ok: true, kind: 'symlink' });
+    // And this is the residual `agent/src/fileops.ts`'s `StatResult` docstring
+    // names: `stat` follows, the TARGET's ENOENT throws, and the path reads as
+    // absent though its name is right there in the directory.
+    expect(await localIO.statMeasured(link)).toEqual({ ok: false, reason: 'absent' });
+  });
+
+  it('a directory is `other` — never borrowing one of the two kinds that decide something', async () => {
+    const dir = mktempDir();
+    expect(await localIO.lstatMeasured(dir)).toEqual({ ok: true, kind: 'other' });
+  });
+
+  it('a missing path is {ok:false, reason:"absent"}, and a path THROUGH a file is "unreadable"', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'abcd');
+    expect(await localIO.lstatMeasured(path.join(path.dirname(file), 'nope')))
+      .toEqual({ ok: false, reason: 'absent' });
+    expect(await localIO.lstatMeasured(path.join(file, 'child')))
+      .toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('localIO NEVER answers `unmeasured` — that reason belongs to an io that cannot ask', async () => {
+    // The fourth reason exists for the remote arm against an agent too old to
+    // implement the op. This box can always ask, so a local `unmeasured` would
+    // mean the reason had leaked into a position it cannot occupy.
+    const dir = mktempDir();
+    const file = path.join(dir, 'f.txt');
+    writeFileSync(file, 'x');
+    const link = path.join(dir, 'l');
+    symlinkSync(file, link);
+    for (const p of [file, link, dir, path.join(dir, 'nope'), path.join(file, 'child')]) {
+      const r = await localIO.lstatMeasured(p);
+      if (!r.ok) expect(r.reason, p).not.toBe('unmeasured');
+    }
   });
 });
 
@@ -273,5 +387,85 @@ describe('localIO.tailFile', () => {
     appendFileSync(file, 'two\n');
     await sleep(1800); // longer than the internal poll interval
     expect(chunks).toEqual([]);
+  });
+});
+
+// D-6058 (1), accounts plan Task A12: the local arm reads as the agent's `read` op does. A FIFO is `unreadable` at once
+// and its bytes stay for whoever holds it; a name directly in `~/.cc-sessions/.accounts` is opened with `O_NOFOLLOW`, so
+// a symlink planted there is `unreadable`, while the same link anywhere else is still followed.
+describe('localIO.readFileMeasured reads regular files only (D-6058)', () => {
+  it('a FIFO a writer holds is unreadable at once, and its bytes stay in it', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { closeSync, constants, openSync, readSync, writeSync } = await import('node:fs');
+    const fifo = path.join(mktempDir(), 'in');
+    execFileSync('mkfifo', [fifo]);
+    const reader = openSync(fifo, constants.O_RDONLY | constants.O_NONBLOCK);
+    const writer = openSync(fifo, constants.O_WRONLY | constants.O_NONBLOCK);
+    try {
+      writeSync(writer, 'the-relayed-code');
+      const t0 = Date.now();
+      expect(await localIO.readFileMeasured(fifo)).toEqual({ ok: false, reason: 'unreadable' });
+      expect(Date.now() - t0).toBeLessThan(1_000);
+      const buf = Buffer.alloc(64);
+      expect(buf.subarray(0, readSync(reader, buf, 0, 64, null)).toString('utf8')).toBe('the-relayed-code');
+    } finally {
+      closeSync(writer);
+      closeSync(reader);
+    }
+  }, 4_000);
+
+  it('a symlink at a lane-state name is unreadable; the same link elsewhere is followed', async () => {
+    const home = mktempDir();
+    const dir = path.join(home, '.cc-sessions', '.accounts');
+    mkdirSync(dir, { recursive: true });
+    const target = path.join(home, 'target.json');
+    writeFileSync(target, '{"identity":"the-target"}');
+    symlinkSync(target, path.join(dir, 'lane-a.json'));
+    symlinkSync(target, path.join(home, '.cc-sessions', 'elsewhere.json'));
+    expect(await localIO.readFileMeasured(path.join(dir, 'lane-a.json'))).toEqual({ ok: false, reason: 'unreadable' });
+    expect(await localIO.readFileMeasured(path.join(home, '.cc-sessions', 'elsewhere.json')))
+      .toEqual({ ok: true, content: '{"identity":"the-target"}' });
+    expect(await localIO.readFileMeasured(path.join(dir, 'lane-b.json'))).toEqual({ ok: false, reason: 'absent' });
+  });
+  it('a FIFO with no writer is unreadable at once: the open never waits for one', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { closeSync, constants, openSync } = await import('node:fs');
+    const fifo = path.join(mktempDir(), 'in');
+    execFileSync('mkfifo', [fifo]);
+    try {
+      const t0 = Date.now();
+      const r = await Promise.race([
+        localIO.readFileMeasured(fifo),
+        new Promise<'blocked'>((res) => setTimeout(() => res('blocked'), 1_000)),
+      ]);
+      expect(r).toEqual({ ok: false, reason: 'unreadable' });
+      expect(Date.now() - t0).toBeLessThan(1_000);
+    } finally {
+      // A blocked open (the mutant) is released by a writer; with none blocked there is no reader, and ENXIO is fine.
+      try { closeSync(openSync(fifo, constants.O_WRONLY | constants.O_NONBLOCK)); } catch { /* no reader waiting */ }
+    }
+  }, 4_000);
+
+  it('a hardlink at a lane-state name is unreadable, never the other file\'s bytes; the other file still reads', async () => {
+    const home = mktempDir();
+    const dir = path.join(home, '.cc-sessions', '.accounts');
+    mkdirSync(dir, { recursive: true });
+    const other = path.join(home, '.claude', 'x.json');
+    mkdirSync(path.dirname(other), { recursive: true });
+    writeFileSync(other, '{"identity":"the-other-file"}');
+    linkSync(other, path.join(dir, 'lane-a.json'));
+    expect(await localIO.readFileMeasured(path.join(dir, 'lane-a.json'))).toEqual({ ok: false, reason: 'unreadable' });
+    expect(await localIO.readFileMeasured(other)).toEqual({ ok: true, content: '{"identity":"the-other-file"}' });
+  });
+
+  it('a `.accounts` directory that is a symlink reads as unreadable, never the file it points at', async () => {
+    const home = mktempDir();
+    const away = path.join(mktempDir(), 'accounts-elsewhere');
+    mkdirSync(away, { recursive: true });
+    writeFileSync(path.join(away, 'lane-a.json'), '{"identity":"the-outside"}');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    symlinkSync(away, path.join(home, '.cc-sessions', '.accounts'));
+    expect(await localIO.readFileMeasured(path.join(home, '.cc-sessions', '.accounts', 'lane-a.json')))
+      .toEqual({ ok: false, reason: 'unreadable' });
   });
 });

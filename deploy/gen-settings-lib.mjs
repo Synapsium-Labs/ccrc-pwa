@@ -1,0 +1,126 @@
+#!/usr/bin/env node
+// gen-settings-lib.mjs — ccd/lib/ccrc-settings.sh, ccrc's settings reader generated whole from ccd/ccrc (wave 29).
+//
+//   node deploy/gen-settings-lib.mjs [--check] [--ccrc <path>] [--out <path>]
+//
+// The ccd-* sweeps never source ccd/ccrc, so they read ~/.ccrc/ccrc.env through a library file. That file is a
+// GENERATED COPY, never a move and never a hand-kept second reader: ccd/ccrc keeps `_ccrc_knob` and the byte-wise model
+// it reads through exactly where they are (moving them would shift every line citation and slice that names them), and
+// this script copies the `CCD_OS` detection block, the `BOX_ENV_FILE=` line, the two test box overlay lines (`CCRC_TESTBOX_OVERLAY_FILE=`, `TB_OVERLAY_KEYS=(`), the `CCRC_SETTINGS=` line, the eight
+// functions of that closure and the checks two sweeps and ccd's spawn (D-8121) share with `ccrc settings`, each whole, out of it, in ccd/ccrc's order.
+// server/test/ccrc-settings-lib.test.ts holds the committed file equal to what this writes. Run it after any edit to that
+// block, to those two lines, to `_ccrc_knob`, to a `_box_*` function or to a check the library carries. It reads no environment.
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** The library's functions, in ccd/ccrc's order: the reader's closure (what `_ccrc_knob` calls, and what they call), then
+ *  the checks two sweeps and ccd's spawn share with `ccrc settings`, each a multi-line function this script copies whole. */
+export const SETTINGS_LIB_FUNCTIONS = Object.freeze([
+  '_box_env_value', '_box_env_shell_plain', '_box_env_has_nul', '_box_env_qopen', '_box_env_unit_whole',
+  '_box_unit_env', '_box_unit_env_shell', '_ccrc_knob',
+  '_keepalive_fresh_ok', '_keepalive_fresh_says', '_usage_days_ok', '_usage_days_says',
+  // D-8121: ccd's spawn reads the two browser MCP settings through this library, so their checks ride it too.
+  '_browser_mcp_default_ok', '_browser_mcp_default_says', '_browser_mcp_servers_default', '_browser_mcp_servers_ok', '_browser_mcp_servers_says',
+  // D-8122: deploy.sh's sweep checks the memory gate's settings with the shared `_mg_ok`, so it rides the library too.
+  '_mg_ok', '_mg_says',
+  // D-8123: ccd reads the limit-rescue settings (a lone rescue's jitter) through this library in its own process.
+  '_lr_ok', '_lr_says',
+  // D-8124: ccd's admin-merge door reads its switch through this library, so its check rides it too.
+  '_lnd_ok', '_lnd_says',
+]);
+
+const HEADER = [
+  '# ccd/lib/ccrc-settings.sh — GENERATED from ccd/ccrc by deploy/gen-settings-lib.mjs; never edit it by hand.',
+  '# ccrc\'s one reader of its settings (`_ccrc_knob`), the byte-wise model it reads through and the checks two sweeps share',
+  '# with `ccrc settings`, copied whole out of ccd/ccrc, so the ccd-* sweeps and ccd itself, which never source ccd/ccrc, read ~/.ccrc/ccrc.env',
+  '# and refuse a value exactly as ccrc does. The argument for every rule is in ccd/ccrc, above each function.',
+  '# server/test/ccrc-settings-lib.test.ts reds when the two differ.',
+  '# Installed 0644 at ~/.local/libexec/ccrc/ccrc-settings.sh: sourced, never executed, and sourcing it runs nothing.',
+];
+
+/** The one column-0 line that matches `re`; throws when there is none or more than one. */
+const oneLine = (lines, re, what) => {
+  const hits = lines.filter((l) => re.test(l));
+  if (hits.length !== 1) throw new Error(`gen-settings-lib: ccd/ccrc defines ${what} ${hits.length} times`);
+  return hits[0];
+};
+
+/** A function's text, `name() {` through the first line that is exactly `}`. */
+const bodyOf = (lines, name) => {
+  const starts = lines.flatMap((l, i) => (l.startsWith(`${name}() {`) ? [i] : []));
+  if (starts.length !== 1) throw new Error(`gen-settings-lib: ccd/ccrc defines ${name} ${starts.length} times`);
+  const end = lines.indexOf('}', starts[0]);
+  if (end < 0) throw new Error(`gen-settings-lib: ccd/ccrc's ${name}() never closes`);
+  return lines.slice(starts[0], end + 1).join('\n');
+};
+
+/** ccd/ccrc's platform name, `CCD_OS=linux` through the `esac` that closes its detection. The reader branches on it
+ *  (`_box_unit_env`'s Darwin dispatch, `_ccrc_knob`'s backup-data arm), and a library that left it unnamed read every
+ *  file by the Linux rules on macOS. The block reads `$OSTYPE` and forks `uname` only when bash names no OS it knows. */
+const platformBlock = (lines) => {
+  oneLine(lines, /^CCD_OS=linux$/, 'CCD_OS=linux');
+  const start = lines.indexOf('CCD_OS=linux');
+  const end = lines.indexOf('esac', start);
+  if (end < 0 || lines[start + 1] !== 'case "${OSTYPE:-}" in') {
+    throw new Error('gen-settings-lib: ccd/ccrc\'s CCD_OS detection is not `CCD_OS=linux`, `case "${OSTYPE:-}" in` … `esac`');
+  }
+  return lines.slice(start, end + 1).join('\n');
+};
+
+/** The library's whole text, derived from ccd/ccrc's. */
+export function settingsLibText(ccrcText) {
+  const lines = ccrcText.split('\n');
+  return [
+    ...HEADER,
+    platformBlock(lines),
+    '',
+    oneLine(lines, /^BOX_ENV_FILE=/, 'BOX_ENV_FILE='),
+    // D-8166: the test box overlay's path and the sixteen keys that read it, so the sweeps read the overlay as ccrc does.
+    oneLine(lines, /^CCRC_TESTBOX_OVERLAY_FILE=/, 'CCRC_TESTBOX_OVERLAY_FILE='),
+    oneLine(lines, /^TB_OVERLAY_KEYS=\(/, 'TB_OVERLAY_KEYS=('),
+    '',
+    oneLine(lines, /^CCRC_SETTINGS=\(/, 'CCRC_SETTINGS=('),
+    '',
+    SETTINGS_LIB_FUNCTIONS.map((n) => bodyOf(lines, n)).join('\n\n'),
+  ].join('\n') + '\n';
+}
+
+const main = (argv) => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  let check = false;
+  let ccrc = resolve(root, 'ccd/ccrc');
+  let out = resolve(root, 'ccd/lib/ccrc-settings.sh');
+  let outName = 'ccd/lib/ccrc-settings.sh';
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--check') check = true;
+    else if ((a === '--ccrc' || a === '--out') && i + 1 < argv.length) {
+      if (a === '--ccrc') ccrc = resolve(argv[++i]);
+      else { outName = argv[++i]; out = resolve(outName); }
+    } else {
+      process.stderr.write(`gen-settings-lib: unknown argument '${a}' — usage: node deploy/gen-settings-lib.mjs [--check] [--ccrc <path>] [--out <path>]\n`);
+      return 2;
+    }
+  }
+  const want = settingsLibText(readFileSync(ccrc, 'utf8'));
+  if (check) {
+    let have = null;
+    try { have = readFileSync(out, 'utf8'); } catch { /* absent: line 1 differs */ }
+    if (have === want) return 0;
+    const a = (have ?? '').split('\n');
+    const b = want.split('\n');
+    let n = 0;
+    while (n < a.length && n < b.length && a[n] === b[n]) n++;
+    process.stdout.write(`gen-settings-lib: ${outName} is not ccd/ccrc's reader (first difference at line ${n + 1}) — run: node deploy/gen-settings-lib.mjs\n`);
+    return 1;
+  }
+  const tmp = `${out}.tmp.${process.pid}`;
+  writeFileSync(tmp, want, { mode: 0o644 });
+  renameSync(tmp, out);
+  return 0;
+};
+
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exitCode = main(process.argv.slice(2));
+}

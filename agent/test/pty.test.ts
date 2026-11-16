@@ -1,8 +1,20 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { rmSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { mkTmp } from './tmpHelpers.js';
 import type { RunningAgent } from '../src/server.js';
 import type { PtyProcess, PtySpawn } from '../src/pty.js';
 import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
+
+/** node-pty's `spawn`, REPLACED for this file (D-3525): the real
+ *  `spawnFleetPty` runs against it, so the argv it hands tmux is pinned at its
+ *  own call site without loading the native binding. Every other case here
+ *  injects its own fake `PtySpawn`, so nothing else reaches it. */
+const ptySpawn = vi.hoisted(() => vi.fn(() => ({
+  onData: () => ({ dispose: () => {} }), onExit: () => ({ dispose: () => {} }),
+  write: () => {}, resize: () => {}, kill: () => {},
+})));
+vi.mock('node-pty', () => ({ spawn: ptySpawn }));
 
 interface Res { ok: boolean; err?: string; ptyId?: number; [k: string]: unknown }
 interface PtyMsg { t: 'pty'; ptyId: number; ev: 'data' | 'exit'; dataB64?: string }
@@ -89,10 +101,10 @@ describe('ccrc-agent ptyOpen/pty control frames', () => {
     const fake = makeFakeSpawn();
     await open(fake.spawn);
 
-    const res = await client!.req<Res>(1, { op: 'ptyOpen', sessionId: 'claude2-MekWarLive', cols: 120, rows: 40 });
+    const res = await client!.req<Res>(1, { op: 'ptyOpen', sessionId: 'claude9-project-f', cols: 120, rows: 40 });
     expect(res.ok).toBe(true);
     expect(typeof res.ptyId).toBe('number');
-    expect(fake.calls).toEqual([{ sessionId: 'claude2-MekWarLive', cols: 120, rows: 40 }]);
+    expect(fake.calls).toEqual([{ sessionId: 'claude9-project-f', cols: 120, rows: 40 }]);
   });
 
   it('rejects a sessionId with disallowed characters', async () => {
@@ -185,5 +197,43 @@ describe('ccrc-agent ptyOpen/pty control frames', () => {
     client!.ws.close();
 
     await vi.waitFor(() => expect(fake.instances[0]!.killed).toBe(true), wait);
+  });
+});
+
+describe('spawnFleetPty — the remote drawer attaches EXACTLY one session (D-3525)', () => {
+  it('spawns `tmux attach -t =cc-<id>:`, never the bare name', async () => {
+    // `isSessionIdAllowed` bars every tmux target sigil, but it cannot bar a
+    // PREFIX: a bare `-t cc-<id>` resolves a gone session to a live
+    // `cc-<id>-…` sibling and the drawer attaches to it (measured, tmux 3.4).
+    const { spawnFleetPty } = await import('../src/pty.js');
+    spawnFleetPty('demo', 120, 40);
+    expect(ptySpawn).toHaveBeenCalledTimes(1);
+    const call = ptySpawn.mock.calls[0] as unknown as [string, string[], { cols: number; rows: number }];
+    expect(call[0]).toBe('tmux');
+    expect(call[1]).toEqual(['attach', '-t', '=cc-demo:']);
+    expect(call[2]).toMatchObject({ cols: 120, rows: 40 });
+  });
+});
+
+describe('D-8270 — spawnFleetPty attaches on the socket the setting of the HOME ccd reads names', () => {
+  it('unchanged without a setting; `-L <name>` ahead of the attach once the setting names one', async () => {
+    const { spawnFleetPty } = await import('../src/pty.js');
+    const saved = process.env.HOME;
+    const home = mkTmp('ccrc-agent-pty-sock-');
+    try {
+      ptySpawn.mockClear();
+      process.env.HOME = home;
+      spawnFleetPty('demo', 120, 40);
+      mkdirSync(path.join(home, '.ccrc'));
+      writeFileSync(path.join(home, '.ccrc', 'tmux-socket'), 'fleet-a\n');
+      spawnFleetPty('demo', 120, 40);
+      const calls = ptySpawn.mock.calls as unknown as [string, string[]][];
+      expect(calls.map((c) => [c[0], c[1]])).toEqual([
+        ['tmux', ['attach', '-t', '=cc-demo:']],
+        ['tmux', ['-L', 'fleet-a', 'attach', '-t', '=cc-demo:']],
+      ]);
+    } finally {
+      process.env.HOME = saved;
+    }
   });
 });

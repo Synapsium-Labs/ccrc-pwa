@@ -48,16 +48,17 @@ export function frameRead(
   cursor: number, data: string, size: number, lastSize: number,
 ): FramedRead {
   if (size < cursor || size < lastSize) return { lines: [], nextCursor: 0, shrank: true };
-  const lastLf = data.lastIndexOf('\n');
-  if (lastLf < 0) return { lines: [], nextCursor: cursor, shrank: false };
-  const complete = data.slice(0, lastLf + 1);
+  // D-7059: the framing is the kernel's (shared with the collect-lane journal); the policy is this reader's own. A
+  // blank record is dropped here, its bytes still inside `complete`; the tail is left unconsumed for the next read.
+  const { complete, records } = splitJournalRecords(data);
   return {
-    lines: complete.split('\n').slice(0, -1).filter((l) => l !== ''),
+    lines: records.filter((l) => l !== ''),
     nextCursor: cursor + Buffer.byteLength(complete, 'utf8'),
     shrank: false,
   };
 }
 
+import { splitJournalRecords } from '../journalKernel.js';
 import {
   compareGenerations, looksLikeGenerationFile, parseLifecycleGeneration,
   type LifecycleGapReason,
@@ -179,7 +180,7 @@ export function planSweep(
   };
 }
 
-import type { LifecycleHealthState } from '../../../shared/api.js';
+import type { LifecycleAct, LifecycleHealthState, LifecycleOutcome } from '../../../shared/api.js';
 
 /**
  * THE ONE READER of this token in the whole server, and it stays one: wave 6
@@ -226,4 +227,30 @@ export function lifecycleState(input: {
  *  costs a cheap failed read rather than a silent success. */
 export function shouldSweep(state: LifecycleHealthState): boolean {
   return state !== 'unavailable';
+}
+
+/**
+ * Child-reclamation wave 6 (spec §5.9): the high-water mark of the `at` of a
+ * `reclaim`/`done` journal row, over `prev` and `rows`. `JournalMirror` keeps it
+ * so the coord frame can tell the board that a reclaim's end has been
+ * committed, which is the fact the board's vanish re-read raced.
+ *
+ * ONLY EVER RISES. A late line, an overlapping sweep's re-read of the same
+ * bytes, or a truncation's re-read from 0 can hand the mirror an older row
+ * again, and none of them may lower the mark. A row with no `at` cannot be
+ * placed and is skipped: `at` is ccd's clock alone, and the mirror's
+ * `ingestedAt` is never an event time. `null` means no such row has been seen.
+ * The act and the outcome are compared as typed literals, so a rename in
+ * `LifecycleAct` or `LifecycleOutcome` is a compile error here.
+ */
+export function childReclaimDoneHighWater(
+  prev: number | null,
+  rows: readonly { readonly act: LifecycleAct; readonly outcome: LifecycleOutcome; readonly at: number | null }[],
+): number | null {
+  let high = prev;
+  for (const r of rows) {
+    if (r.act !== 'reclaim' || r.outcome !== 'done' || r.at === null) continue;
+    if (high === null || r.at > high) high = r.at;
+  }
+  return high;
 }

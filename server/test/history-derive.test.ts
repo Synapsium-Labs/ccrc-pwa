@@ -1,0 +1,3160 @@
+// server/test/history-derive.test.ts: node derivation through REAL sweep ticks (spec 2026-10-05 §6.1 span rule
+// and forks, §6.2 `nodes` and the producer, §7.4 items 1, 2, 6-10; W1-B2 plan Task 8, and Task 9 appends). Each
+// describe builds one fixture HOME, plants sessions and transcripts in the measured row shapes
+// (historyFixtures.ts's compactionSequence), spools the SessionStart line the hook would, and runs sweep.mjs as
+// the shim would; the cases then read the store read-only. Linux only (O24): it spawns the sweep.
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import {
+  makeHistoryBox, runSweep, plantSession, plantTranscript, spoolLine, openStoreRO, counters, skipOnDarwin,
+  type HistoryBox,
+} from './historyHelpers.js';
+import { compactionSequence, fixtureSummaryText, steeredBlock, summaryRow, userRow, type Row } from './historyFixtures.js';
+// Importing history-counters.mjs loads cli.mjs, which sets the process umask to 0o077 for this file.
+import * as ctrMod from '../../deploy/history-counters.mjs';
+import {
+  leafId, historyPaths, NODE_PARSER_VERSION, GIST_MAX, NATIVE_GIST_MAX, TOPIC_CHARS, beltWidth, makePairIndex, secretPairs, cardLine, displayPrefixes,
+  parentId, parentRollup, parseBlocks, blockStatus, nodeBlockStatus, gistSha, GIST_MIN, TOPICS_MAX,
+} from '../../ccd/history/lib.mjs';
+import { createStore, openWriter, closeWriter, withTx, getStep, setStep } from '../../ccd/history/store.mjs';
+import {
+  agentKeys, agentRig, armed, counterOf, holdAgainIn, plantAgentTree, T0 as RIG_T0, variantsOf, type AgentRig,
+} from './historyAgentFixtures.js';
+
+skipOnDarwin();
+
+const SLUG = '-home-u-worktrees-p-quiet-basin';
+const GEN = '0189abcd-1234-4678-9abc-0000000000aa';
+/** A day before now: every boundary's raw-leaf grace (lib RAW_LEAF_GRACE_MS) is long past whatever day the suite
+ *  runs, so a file read to its end is final. */
+const T0 = Date.now() - 86_400_000;
+type Seq = ReturnType<typeof compactionSequence>;
+
+/** One session: its registry rows, its transcript under `account`'s projects/, and the SessionStart(startup) line
+ *  the hook spools. Its `reg` equals its sid, so the drain confirms the epoch on the line's own evidence. */
+function plant(box: HistoryBox, id: string, uuid: string, rows: readonly Row[], account = 'claude'): void {
+  plantSession(box, id, { uuid, generation: GEN, project: 'demo', workdir: '/home/u/worktrees/p/quiet-basin' });
+  plantTranscript(box, account, SLUG, uuid, [...rows]);
+  spoolLine(box, id, { v: 1, ev: 'SessionStart', id, sid: uuid, src: 'startup', reg: uuid, gen: GEN });
+}
+
+/** Scheduled passes, as the timer runs them. The first creates the store and renames the spool files; the next
+ *  drains them (the epochs confirm) and derives; one more lets every boundary meet its readiness. */
+function settle(box: HistoryBox, passes = 3): void {
+  for (let i = 0; i < passes; i += 1) {
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+  }
+}
+
+function q<T>(box: HistoryBox, sql: string, ...args: (string | number)[]): T[] {
+  const db = openStoreRO(box);
+  try { return db.prepare(sql).all(...args) as T[]; } finally { db.close(); }
+}
+
+interface LeafRow {
+  node_id: string; kind: string; status: string; gist: string | null; topics: string | null;
+  summary_blob_id: number | null; span_start_uuid: string; boundary_uuid: string; ord: number;
+}
+const leavesOf = (box: HistoryBox, uuid: string): LeafRow[] => q<LeafRow>(box,
+  `SELECT n.node_id, n.kind, n.status, n.gist, n.topics, n.summary_blob_id, n.span_start_uuid, e.uuid AS boundary_uuid, b.ord
+   FROM nodes n JOIN boundaries b ON b.entry_id = n.boundary_entry_id JOIN entries e ON e.entry_id = b.entry_id
+   JOIN transcripts t ON t.transcript_pk = n.transcript_pk
+   WHERE t.cc_session_uuid = ? AND n.depth = 0 ORDER BY b.ord`, uuid);
+const sourcesOf = (box: HistoryBox, nodeId: string): string[] => q<{ uuid: string }>(box,
+  'SELECT e.uuid FROM node_sources ns JOIN entries e ON e.entry_id = ns.entry_id WHERE ns.node_id = ? ORDER BY ns.ord', nodeId)
+  .map((r) => r.uuid);
+const blobOf = (box: HistoryBox, uuid: string): number | null =>
+  q<{ blob_id: number }>(box, 'SELECT blob_id FROM entries WHERE uuid = ?', uuid)[0]?.blob_id ?? null;
+/** Leaf k's sources by construction (§6.1; Task 5's DM5). */
+const expectedSources = (s: Seq, k: number): string[] => [
+  ...(k === 0 ? [] : [...s.keptUuids[k - 1]!, ...s.afterUuids[k - 1]!]),
+  ...s.workUuids[k]!, ...s.unkeptUuids[k]!,
+];
+const firstUuid = (s: Seq): string => String(s.rows[0]!['uuid']);
+const withDirection = (s: Seq, direction: 'from' | 'up_to'): Row[] =>
+  s.rows.map((r) => (r['uuid'] === s.summaryUuids[0] ? { ...r, summarizeMetadata: { direction } } : r));
+
+const UNCLOSED = (): string => [
+  '<analysis>', 'Reviewing the unclosed fixture.', '</analysis>',
+  '<summary>', '1. Primary Request and Intent:', '   The unclosed fixture.',
+  '8. Current Work:', '   Unclosed current work runs to the end of the row.',
+  '9. Optional Next Step:', '   Unclosed next step.',
+].join('\n');
+/** The GPT shape (§7.4 item 8, RG12): a surviving second <analysis>, then two unclosed <summary> opens, each with
+ *  both closing headings. */
+const GPT_SHAPED = (): string => [
+  '<analysis>', 'A first analysis, closed.', '</analysis>',
+  '<analysis>', '8. Current Work:', '   ANALYSIS current work inside the surviving analysis.',
+  '<summary>', '8. Current Work:', '   FIRST current work.', '9. Optional Next Step:', '   FIRST next step.',
+  '<summary>', '8. Current Work:', '   SECOND current work.', '9. Optional Next Step:', '   SECOND next step.',
+].join('\n');
+/** Both closing pairs in one summary, so only the direction can choose (§7.4 item 8). */
+const BOTH_PAIRS = (): string => [
+  '<summary>', '1. Primary Request and Intent:', '   A summary holding both closing pairs.',
+  '8. Current Work:', '   CURRENT-PAIR text, which a from summary ends with.',
+  '9. Optional Next Step:', '   CURRENT-PAIR next step.',
+  '10. Work Completed:', '   COMPLETED-PAIR text, which an up_to summary ends with.',
+  '11. Context for Continuing Work:', '   COMPLETED-PAIR context.',
+  '</summary>',
+].join('\n');
+/** A summary QUOTING a block, at a boundary with no steer receipt (§7.4 item 2). */
+const QUOTED = (): string => [
+  '<summary>', '1. Primary Request and Intent:', '   Testing the block parser on a fixture.',
+  '8. Current Work:', '   Quoting a fixture block while testing the parser:',
+  '<ccrc-leaf id="L0123456789abcdef0123">',
+  'gist: A quoted fixture gist that is long enough to pass the forty character floor of the parser.',
+  'Expand for details about: quoted, fixture',
+  'refs: server/test/history-parser.test.ts',
+  '</ccrc-leaf>',
+  '9. Optional Next Step:', '   Keep the quoted block as data.',
+  '</summary>',
+].join('\n');
+
+describe('native leaves through real ticks: summary row, readiness, gist and counters (PX1, PX7, PX25, DM25; spec 7.4)', () => {
+  const U = {
+    auto: '0189abcd-1234-4678-9abc-0000000000a1', manual: '0189abcd-1234-4678-9abc-0000000000a2',
+    from: '0189abcd-1234-4678-9abc-0000000000a3', raw: '0189abcd-1234-4678-9abc-0000000000a4',
+    unclosed: '0189abcd-1234-4678-9abc-0000000000a5', gpt: '0189abcd-1234-4678-9abc-0000000000a6',
+    upto: '0189abcd-1234-4678-9abc-0000000000a7', fromDir: '0189abcd-1234-4678-9abc-0000000000a8',
+    quoted: '0189abcd-1234-4678-9abc-0000000000a9',
+  };
+  let box: HistoryBox;
+  let auto: Seq; let manual: Seq; let from: Seq; let raw: Seq;
+  beforeAll(() => {
+    box = makeHistoryBox('ccrc-hist-derive-');
+    auto = compactionSequence({ n: 2, trigger: 'auto', seed: 0x81, sessionId: U.auto, startMs: T0 });
+    manual = compactionSequence({ n: 2, trigger: 'manual', unkeptBeforeBoundary: 3, seed: 0x82, sessionId: U.manual, startMs: T0 });
+    from = compactionSequence({ n: 1, trigger: 'manual', anchorIsBoundary: true, seed: 0x83, sessionId: U.from, startMs: T0 });
+    raw = compactionSequence({ n: 1, trigger: 'manual', dropSummary: true, seed: 0x84, sessionId: U.raw, startMs: T0 });
+    const unclosed = compactionSequence({ n: 1, trigger: 'manual', summaryText: UNCLOSED, seed: 0x85, sessionId: U.unclosed, startMs: T0 });
+    const gpt = compactionSequence({ n: 1, trigger: 'auto', model: 'gpt-fixture-5', summaryText: GPT_SHAPED, seed: 0x86, sessionId: U.gpt, startMs: T0 });
+    const upto = compactionSequence({ n: 1, trigger: 'manual', summaryText: BOTH_PAIRS, seed: 0x87, sessionId: U.upto, startMs: T0 });
+    const fromDir = compactionSequence({ n: 1, trigger: 'manual', summaryText: BOTH_PAIRS, seed: 0x88, sessionId: U.fromDir, startMs: T0 });
+    const quoted = compactionSequence({ n: 1, trigger: 'manual', summaryText: QUOTED, seed: 0x89, sessionId: U.quoted, startMs: T0 });
+    plant(box, 'claude-auto', U.auto, auto.rows);
+    plant(box, 'claude-manual', U.manual, manual.rows);
+    plant(box, 'claude-from', U.from, from.rows);
+    plant(box, 'claude-raw', U.raw, raw.rows);
+    plant(box, 'claude-unclosed', U.unclosed, unclosed.rows);
+    plant(box, 'claude-gpt', U.gpt, gpt.rows);
+    plant(box, 'claude-upto', U.upto, withDirection(upto, 'up_to'));
+    plant(box, 'claude-fromdir', U.fromDir, withDirection(fromDir, 'from'));
+    plant(box, 'claude-quoted', U.quoted, quoted.rows);
+    settle(box);
+  }, 240_000);
+
+  it('PX1 auto: the summary is the anchor row 4 rows after each boundary; each leaf is native, with exact sources and its pre-minted id', () => {
+    const leaves = leavesOf(box, U.auto);
+    expect(leaves.map((l) => l.boundary_uuid)).toEqual(auto.boundaryUuids);
+    leaves.forEach((l, k) => {
+      expect({ kind: l.kind, status: l.status }, `leaf ${k}`).toEqual({ kind: 'native_leaf', status: 'not-requested' });
+      expect(l.summary_blob_id, `leaf ${k}`).toBe(blobOf(box, auto.summaryUuids[k]!));
+      expect(l.gist ?? '', `leaf ${k}`).toContain(`Working on segment ${k} of the fixture.`);
+      expect(sourcesOf(box, l.node_id), `leaf ${k}`).toEqual(expectedSources(auto, k));
+      expect(l.node_id, `leaf ${k}`).toBe(leafId('claude-auto', U.auto, k === 0 ? firstUuid(auto) : auto.headUuids[k - 1]!));
+    });
+  });
+
+  it('PX1 manual: the summary is the row right after each boundary; unkept rows stay with their compaction', () => {
+    const leaves = leavesOf(box, U.manual);
+    expect(leaves).toHaveLength(2);
+    leaves.forEach((l, k) => {
+      expect(l.summary_blob_id, `leaf ${k}`).toBe(blobOf(box, manual.summaryUuids[k]!));
+      expect(sourcesOf(box, l.node_id), `leaf ${k}`).toEqual(expectedSources(manual, k));
+    });
+  });
+
+  it('PX1 partial from: an anchor naming the boundary itself reads the next isCompactSummary row, counted, never the boundary', () => {
+    const [l] = leavesOf(box, U.from);
+    expect(l!.kind).toBe('native_leaf');
+    expect(l!.summary_blob_id).toBe(blobOf(box, from.summaryUuids[0]!));
+    expect(l!.summary_blob_id).not.toBe(blobOf(box, from.boundaryUuids[0]!));
+    expect(counters(box)['anchor_is_boundary']).toBe(1);
+  });
+
+  it('DM25: a boundary whose anchor names no row is a raw leaf, not-requested, counted summary_missing, its span still navigable', () => {
+    const [l] = leavesOf(box, U.raw);
+    // §7.4 item 2: with no steer receipt the status is not-requested. `absent` is a block missing from a span that
+    // HAD a receipt (item 5), and the compliance counter would read it as a model's miss.
+    expect({ kind: l!.kind, status: l!.status, gist: l!.gist, summary: l!.summary_blob_id })
+      .toEqual({ kind: 'raw_leaf', status: 'not-requested', gist: null, summary: null });
+    expect(sourcesOf(box, l!.node_id)).toEqual(expectedSources(raw, 0));
+    expect(counters(box)['summary_missing']).toBe(1);
+  });
+
+  it('compliance by status and by reason, by producer (spec 7.4 item 10): every W1 leaf is not-requested, reason no-receipt; none counts absent', () => {
+    const c = counters(box);
+    expect(c['leaf_status:not-requested:anthropic']).toBe(10);
+    expect(c['leaf_status:not-requested:other']).toBe(1);
+    expect(c['leaf_reason:no-receipt:anthropic']).toBe(10);
+    expect(c['leaf_reason:no-receipt:other']).toBe(1);
+    expect(Object.keys(c).filter((k) => k.startsWith('leaf_status:absent'))).toEqual([]);
+  });
+
+  it('PX7: a summary with no </summary> is scanned whole and counted summary_unclosed under its producer', () => {
+    const [l] = leavesOf(box, U.unclosed);
+    expect(l!.gist ?? '').toContain('Unclosed current work runs to the end of the row.');
+    expect(counters(box)['summary_unclosed:anthropic']).toBe(1);
+  });
+
+  it('PX25: a GPT-shaped summary gives the gist from the last occurrence after the last <summary> open, counted under other', () => {
+    const [l] = leavesOf(box, U.gpt);
+    expect(l!.gist ?? '').toContain('SECOND current work');
+    expect(l!.gist ?? '').not.toContain('FIRST current work');
+    expect(l!.gist ?? '').not.toContain('ANALYSIS current work');
+    const c = counters(box);
+    expect(c['summary_unclosed:other']).toBe(1);
+    expect(c['leaf_status:not-requested:other']).toBe(1);
+  });
+
+  it("the native pair follows the summary row's summarizeMetadata.direction, read back from its source line", () => {
+    const [u] = leavesOf(box, U.upto);
+    const [f] = leavesOf(box, U.fromDir);
+    expect(u!.gist ?? '').toContain('COMPLETED-PAIR');
+    expect(u!.gist ?? '').not.toContain('CURRENT-PAIR');
+    expect(f!.gist ?? '').toContain('CURRENT-PAIR');
+    expect(f!.gist ?? '').not.toContain('COMPLETED-PAIR');
+  });
+
+  it('with no steer receipt a quoted <ccrc-leaf> block is never parsed: the leaf is native and not-requested', () => {
+    const [l] = leavesOf(box, U.quoted);
+    expect({ kind: l!.kind, status: l!.status }).toEqual({ kind: 'native_leaf', status: 'not-requested' });
+    expect(l!.gist ?? '').toContain('Keep the quoted block as data.');
+  });
+
+  it('review focus 1: a stored summary in neither section format is a native leaf, not-requested, with no gist; never raw, never a throw', () => {
+    const one = makeHistoryBox('ccrc-hist-plain-');
+    const PLAIN = 'f1a10000-1111-4111-8111-111111111111';
+    const seq = compactionSequence({ n: 1, trigger: 'manual', seed: 0x8a, sessionId: PLAIN, startMs: T0,
+      summaryText: () => 'A plain-prose summary of the work so far, with no numbered sections and no summary tags.' });
+    plant(one, 'claude-plain', PLAIN, seq.rows);
+    settle(one);
+    const [l] = leavesOf(one, PLAIN);
+    expect({ kind: l!.kind, status: l!.status, gist: l!.gist }).toEqual({ kind: 'native_leaf', status: 'not-requested', gist: null });
+    expect(l!.summary_blob_id).toBe(blobOf(one, seq.summaryUuids[0]!));
+    expect(counters(one)['parser_crash'] ?? 0).toBe(0);
+  }, 120_000);
+
+  it('a summary-less boundary with no time of its own takes the newest stamped row before it, so it still becomes a raw leaf (raw-leaf grace)', () => {
+    const one = makeHistoryBox('ccrc-hist-nots-');
+    const NOTS = 'f1a10000-2222-4222-8222-222222222222';
+    const seq = compactionSequence({ n: 1, trigger: 'manual', dropSummary: true, seed: 0x8b, sessionId: NOTS, startMs: T0 });
+    const rows = seq.rows.map((r) => {
+      if (r['uuid'] !== seq.boundaryUuids[0]) return r;
+      const bare: Row = { ...r };
+      delete bare['timestamp'];
+      return bare;
+    });
+    expect(rows.find((r) => r['uuid'] === seq.boundaryUuids[0])!['timestamp'], 'CONTROL: the boundary row carries no time').toBeUndefined();
+    plant(one, 'claude-nots', NOTS, rows);
+    settle(one);
+    const leaves = leavesOf(one, NOTS);
+    expect(leaves.map((l) => ({ kind: l.kind, status: l.status }))).toEqual([{ kind: 'raw_leaf', status: 'not-requested' }]);
+  }, 120_000);
+
+  it("topics are the list items new since the previous summary's sections 2-3, stored as JSON text", () => {
+    const [l0, l1] = leavesOf(box, U.auto);
+    const t0 = JSON.parse(l0!.topics ?? 'null') as string[];
+    const t1 = JSON.parse(l1!.topics ?? 'null') as string[];
+    expect(t0.some((t) => t.includes('fixture-concept-0'))).toBe(true);
+    expect(t1.some((t) => t.includes('fixture-concept-1'))).toBe(true);
+    expect(t1.some((t) => t.includes('fixture-concept-0'))).toBe(false);
+  });
+
+  it("refs are the Read paths mined from the span's tool_use rows, origin tool_use", () => {
+    const [l0] = leavesOf(box, U.auto);
+    const refs = q<{ kind: string; value: string; origin: string }>(box, 'SELECT kind, value, origin FROM node_refs WHERE node_id = ? ORDER BY value', l0!.node_id);
+    expect(refs.map((r) => r.value)).toContain('/home/u/worktrees/p/quiet-basin/src/segment-0-1.ts');
+    for (const r of refs) expect(r.origin).toBe('tool_use');
+  });
+
+  it('every leaf has its nodes_fts row once FTS is ready, and the leaves cursor stands at the last boundary', () => {
+    const n = q<{ n: number }>(box, 'SELECT count(*) AS n FROM nodes')[0]!.n;
+    const f = q<{ f: number }>(box, 'SELECT count(*) AS f FROM nodes_fts')[0]!.f;
+    expect(n).toBe(11);
+    expect(f).toBe(n);
+    const e = q<{ e: number }>(box, 'SELECT max(entry_id) AS e FROM boundaries')[0]!.e;
+    const [step] = q<{ cursor: string }>(box, "SELECT cursor FROM derivation_state WHERE step = 'leaves' AND version = ?", NODE_PARSER_VERSION);
+    expect(Number(step!.cursor)).toBe(e);
+  });
+});
+
+describe('forked copies: positions come from the copy that holds each boundary (DM36; spec 6.1)', () => {
+  const ID = 'claude-fork';
+  const U = '0189abcd-1234-4678-9abc-0000000000f1';
+  let box: HistoryBox;
+  let pre: Seq; let sufA: Seq; let sufB: Seq;
+  beforeAll(() => {
+    box = makeHistoryBox('ccrc-hist-dm36-');
+    pre = compactionSequence({ n: 1, trigger: 'manual', unkeptBeforeBoundary: 2, seed: 0x91, sessionId: U, startMs: T0 });
+    sufA = compactionSequence({ n: 1, trigger: 'auto', seed: 0x92, sessionId: U, startMs: T0 + 600_000 });
+    sufB = compactionSequence({ n: 0, trigger: 'manual', tailRows: 20, seed: 0x93, sessionId: U, startMs: T0 + 600_000 });
+    plantSession(box, ID, { uuid: U, generation: GEN, project: 'demo', workdir: '/home/u/worktrees/p/quiet-basin' });
+    plantTranscript(box, 'claude', SLUG, U, [...pre.rows, ...sufA.rows]);      // copy A: compacts again
+    plantTranscript(box, 'claude-a', SLUG, U, [...pre.rows, ...sufB.rows]);    // copy B: larger, never compacts again
+    spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: U, src: 'startup', reg: U, gen: GEN });
+    settle(box);
+  }, 240_000);
+
+  it('DM36 CONTROL: copy A, under the first rostered home, was bound first; copy B is the larger', () => {
+    const files = q<{ file_id: number; path: string; n: number }>(box,
+      `SELECT f.file_id, p.path, (SELECT count(*) FROM memberships m WHERE m.file_id = f.file_id) AS n
+       FROM ingest_files f JOIN file_paths p ON p.file_id = f.file_id ORDER BY f.file_id`);
+    expect(files).toHaveLength(2);
+    expect(files[0]!.path.startsWith(`${box.accountHome['claude']!}${path.sep}`)).toBe(true);
+    expect(files[1]!.n).toBeGreaterThan(files[0]!.n);
+  });
+
+  it('DM36: each leaf reads the copy that holds its boundary: exact sources, unchanged ids', () => {
+    const leaves = leavesOf(box, U);
+    expect(leaves.map((l) => l.boundary_uuid)).toEqual([pre.boundaryUuids[0], sufA.boundaryUuids[0]]);
+    expect(sourcesOf(box, leaves[0]!.node_id)).toEqual(expectedSources(pre, 0));
+    expect(sourcesOf(box, leaves[1]!.node_id)).toEqual([
+      ...pre.keptUuids[0]!, ...pre.afterUuids[0]!, ...pre.liveUuids, ...sufA.workUuids[0]!, ...sufA.unkeptUuids[0]!,
+    ]);
+    expect(leaves.map((l) => l.node_id)).toEqual([leafId(ID, U, firstUuid(pre)), leafId(ID, U, pre.headUuids[0]!)]);
+  });
+
+  it("DM36: rows only in the other copy's suffix are stored and in no leaf; rows_unspanned and transcript_forked are counted", () => {
+    const stored = new Set(q<{ uuid: string }>(box, 'SELECT uuid FROM entries').map((r) => r.uuid));
+    const inLeaves = new Set(q<{ uuid: string }>(box, 'SELECT e.uuid FROM node_sources ns JOIN entries e ON e.entry_id = ns.entry_id').map((r) => r.uuid));
+    for (const u of sufB.liveUuids) {
+      expect(stored.has(u), u).toBe(true);
+      expect(inLeaves.has(u), u).toBe(false);
+    }
+    const c = counters(box);
+    expect(c['rows_unspanned']).toBe(sufB.liveUuids.length);
+    expect(c['transcript_forked']).toBe(1);
+  });
+
+  it('DM36: rows appended later to the copy that holds no new boundary are counted too, with no leaf derived in that tick', () => {
+    const entriesBefore = q<{ n: number }>(box, 'SELECT count(*) AS n FROM entries')[0]!.n;
+    const nodesBefore = q<{ n: number }>(box, 'SELECT count(*) AS n FROM nodes')[0]!.n;
+    const p = path.join(box.accountHome['claude-a']!, 'projects', SLUG, `${U}.jsonl`);
+    for (let i = 1; i <= 3; i += 1) {
+      const row = userRow({ uuid: `000000b4-0000-4000-8000-00000000000${i}`, ts: new Date(T0 + 9_000_000 + i * 1000).toISOString(), sessionId: U, text: `a later turn in copy B ${i}` });
+      fs.appendFileSync(p, `${JSON.stringify(row)}\n`);
+    }
+    spoolLine(box, ID, { v: 1, ev: 'Stop', id: ID, sid: U });   // the hint that re-reads both copies
+    settle(box);
+    expect(q<{ n: number }>(box, 'SELECT count(*) AS n FROM entries')[0]!.n, 'CONTROL: copy B was read again').toBe(entriesBefore + 3);
+    expect(q<{ n: number }>(box, 'SELECT count(*) AS n FROM nodes')[0]!.n, 'CONTROL: no leaf was derived').toBe(nodesBefore);
+    const c = counters(box);
+    expect(c['rows_unspanned']).toBe(sufB.liveUuids.length + 3);
+    expect(c['transcript_forked'], 'counted once').toBe(1);
+  });
+});
+
+describe('two forks after one head: the first bound keeps the plain id, the later is boundary-qualified (DM37; spec 6.1)', () => {
+  const ID = 'claude-twofork';
+  const U = '0189abcd-1234-4678-9abc-0000000000f2';
+  let box: HistoryBox;
+  let pre: Seq; let sufA: Seq; let sufB: Seq;
+  beforeAll(() => {
+    box = makeHistoryBox('ccrc-hist-dm37-');
+    pre = compactionSequence({ n: 1, trigger: 'manual', seed: 0xa1, sessionId: U, startMs: T0 });
+    sufA = compactionSequence({ n: 1, trigger: 'manual', seed: 0xa2, sessionId: U, startMs: T0 + 600_000 });
+    sufB = compactionSequence({ n: 1, trigger: 'auto', seed: 0xa3, sessionId: U, startMs: T0 + 600_000 });
+    plantSession(box, ID, { uuid: U, generation: GEN, project: 'demo', workdir: '/home/u/worktrees/p/quiet-basin' });
+    plantTranscript(box, 'claude', SLUG, U, [...pre.rows, ...sufA.rows]);
+    plantTranscript(box, 'claude-a', SLUG, U, [...pre.rows, ...sufB.rows]);
+    spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: U, src: 'startup', reg: U, gen: GEN });
+    settle(box);
+  }, 240_000);
+
+  it('DM37: all three boundary rows exist, with distinct ord', () => {
+    const rows = q<{ uuid: string; ord: number }>(box, 'SELECT e.uuid, b.ord FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id ORDER BY b.ord');
+    expect(rows.map((r) => r.uuid)).toEqual([pre.boundaryUuids[0], sufA.boundaryUuids[0], sufB.boundaryUuids[0]]);
+    expect(new Set(rows.map((r) => r.ord)).size).toBe(3);
+  });
+
+  it('DM37: the first bound keeps the plain id, the second takes the boundary-qualified id; leaf_id_forked +1', () => {
+    const byBoundary = new Map(leavesOf(box, U).map((l) => [l.boundary_uuid, l]));
+    const head = pre.headUuids[0]!;
+    const a = byBoundary.get(sufA.boundaryUuids[0]!)!;
+    const b = byBoundary.get(sufB.boundaryUuids[0]!)!;
+    expect(a.node_id).toBe(leafId(ID, U, head));
+    expect(b.node_id).toBe(leafId(ID, U, head, sufB.boundaryUuids[0]!));
+    expect(b.span_start_uuid).toBe(head);
+    expect(sourcesOf(box, b.node_id)).toEqual([
+      ...pre.keptUuids[0]!, ...pre.afterUuids[0]!, ...pre.liveUuids, ...sufB.workUuids[0]!, ...sufB.unkeptUuids[0]!,
+    ]);
+    const c = counters(box);
+    expect(c['leaf_id_forked']).toBe(1);
+    expect(c['transcript_forked']).toBe(1);
+    expect(c['rows_unspanned'] ?? 0, 'each copy holds a boundary, so every row is in a holding copy').toBe(0);
+  });
+
+  it('DM37: a re-ingest mints neither id again', () => {
+    const before = q<{ node_id: string }>(box, 'SELECT node_id FROM nodes ORDER BY node_id').map((r) => r.node_id);
+    const entriesBefore = q<{ n: number }>(box, 'SELECT count(*) AS n FROM entries')[0]!.n;
+    ['claude', 'claude-a'].forEach((acct, i) => {
+      const p = path.join(box.accountHome[acct]!, 'projects', SLUG, `${U}.jsonl`);
+      const row = userRow({ uuid: `000000a4-0000-4000-8000-00000000000${i + 1}`, ts: new Date(T0 + 9_000_000).toISOString(), sessionId: U, text: `a later turn in copy ${i}` });
+      fs.appendFileSync(p, `${JSON.stringify(row)}\n`);
+    });
+    spoolLine(box, ID, { v: 1, ev: 'Stop', id: ID, sid: U });   // the hint that re-reads both copies
+    settle(box);
+    const entriesAfter = q<{ n: number }>(box, 'SELECT count(*) AS n FROM entries')[0]!.n;
+    expect(entriesAfter, 'CONTROL: both copies were read again').toBe(entriesBefore + 2);
+    expect(q<{ node_id: string }>(box, 'SELECT node_id FROM nodes ORDER BY node_id').map((r) => r.node_id)).toEqual(before);
+    expect(counters(box)['leaf_id_forked']).toBe(1);
+  });
+});
+
+describe('a queued receipt holds only its session leaf until the next drain (two-phase spool; spec 7.4 item 2)', () => {
+  const CARRIER_ID = 'claude-pending-receipt';
+  const CARRIER_U = '0189abcd-1234-4678-9abc-0000000000e1';
+  const NATIVE_ID = 'claude-unrelated-native';
+  const NATIVE_U = '0189abcd-1234-4678-9abc-0000000000e2';
+  const steered = (): string => [
+    '<summary>', '1. Primary Request and Intent:', '   A receipt-race fixture.', '</summary>',
+    steeredBlock({ gist: 'The queued receipt must be applied before this leaf is finalised.', expand: 'receipt, race', refs: 'server/test/history-derive.test.ts' }),
+  ].join('\n');
+  let box: HistoryBox;
+  let carrier: Seq;
+  beforeAll(() => {
+    box = makeHistoryBox('ccrc-hist-pending-receipt-');
+    carrier = compactionSequence({ n: 1, trigger: 'manual', summaryText: steered, seed: 0xa4, sessionId: CARRIER_U, startMs: T0 });
+    const native = compactionSequence({ n: 1, trigger: 'manual', seed: 0xa3, sessionId: NATIVE_U, startMs: T0 });
+    plant(box, CARRIER_ID, CARRIER_U, carrier.rows);
+    plant(box, NATIVE_ID, NATIVE_U, native.rows);
+    // Tick N renames the SessionStart files. Tick N+1 drains them, while this receipt is only renamed.
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    const at = Date.parse(String(carrier.rows.find((row) => row['uuid'] === carrier.boundaryUuids[0])!['timestamp']));
+    // This goes into a new spool file after tick N. Tick N+1 drains SessionStart but only renames this receipt.
+    spoolLine(box, CARRIER_ID, { v: 1, ev: 'steer', id: CARRIER_ID, sid: CARRIER_U, leaf: '', ts: at - 500 });
+  }, 120_000);
+
+  it('holds the queued session without delaying an unrelated native leaf, then derives the receipt-bearing leaf after the next drain', () => {
+    const race = runSweep(box);
+    expect(race.code, race.stderr).toBe(0);
+    expect(leavesOf(box, CARRIER_U), 'the receipt was renamed this tick and is not yet durable').toEqual([]);
+    expect(leavesOf(box, NATIVE_U).map((leaf) => ({ kind: leaf.kind, status: leaf.status })), 'no receipt belongs to this session')
+      .toEqual([{ kind: 'native_leaf', status: 'not-requested' }]);
+
+    const drained = runSweep(box);
+    expect(drained.code, drained.stderr).toBe(0);
+    expect(leavesOf(box, CARRIER_U).map((leaf) => ({ kind: leaf.kind, status: leaf.status })))
+      .toEqual([{ kind: 'steered_leaf', status: 'ok' }]);
+  }, 120_000);
+});
+
+describe('an unmeasured spool holds every leaf until receipt candidates are measured (two-phase spool; review fix round 1)', () => {
+  const CARRIER_ID = 'claude-unmeasured-carrier';
+  const CARRIER_U = '0189abcd-1234-4678-9abc-0000000000e3';
+  const NATIVE_ID = 'claude-unmeasured-native';
+  const NATIVE_U = '0189abcd-1234-4678-9abc-0000000000e4';
+  const steered = (): string => [
+    '<summary>', '1. Primary Request and Intent:', '   An unmeasured-spool receipt race fixture.', '</summary>',
+    steeredBlock({ gist: 'The delayed receipt must steer this leaf after spool measurement resumes.', expand: 'receipt, unmeasured', refs: 'server/test/history-derive.test.ts' }),
+  ].join('\n');
+
+  it('holds all leaves for an unusable-spool tick, then drains the receipt and derives its steered leaf while measured-empty permits unrelated leaves', () => {
+    const box = makeHistoryBox('ccrc-hist-unmeasured-spool-');
+    const carrier = compactionSequence({ n: 1, trigger: 'manual', summaryText: steered, seed: 0xa6, sessionId: CARRIER_U, startMs: T0 });
+    const native = compactionSequence({ n: 1, trigger: 'manual', seed: 0xa7, sessionId: NATIVE_U, startMs: T0 });
+    plant(box, CARRIER_ID, CARRIER_U, carrier.rows);
+    plant(box, NATIVE_ID, NATIVE_U, native.rows);
+
+    const first = runSweep(box);
+    expect(first.code, first.stderr).toBe(0);
+    const at = Date.parse(String(carrier.rows.find((row) => row['uuid'] === carrier.boundaryUuids[0])!['timestamp']));
+    spoolLine(box, CARRIER_ID, { v: 1, ev: 'steer', id: CARRIER_ID, sid: CARRIER_U, leaf: '', ts: at - 500 });
+
+    const spool = path.join(box.root, 'spool');
+    const heldSpool = path.join(box.root, 'spool-held');
+    fs.renameSync(spool, heldSpool);
+    fs.writeFileSync(spool, 'refused spool');
+    try {
+      const unavailable = runSweep(box);
+      expect(unavailable.code, unavailable.stderr).toBe(0);
+    } finally {
+      fs.rmSync(spool);
+      fs.renameSync(heldSpool, spool);
+    }
+    expect(leavesOf(box, CARRIER_U), 'a refused spool leaves receipt candidates unmeasured').toEqual([]);
+    expect(leavesOf(box, NATIVE_U), 'unmeasured is a global leaf hold, not measured-empty').toEqual([]);
+
+    const renamed = runSweep(box);
+    expect(renamed.code, renamed.stderr).toBe(0);
+    expect(leavesOf(box, CARRIER_U), 'the receipt is newly renamed and still pending').toEqual([]);
+    expect(leavesOf(box, NATIVE_U).map((leaf) => ({ kind: leaf.kind, status: leaf.status })), 'a measured candidate set excludes unrelated sessions')
+      .toEqual([{ kind: 'native_leaf', status: 'not-requested' }]);
+
+    const drained = runSweep(box);
+    expect(drained.code, drained.stderr).toBe(0);
+    expect(leavesOf(box, CARRIER_U).map((leaf) => ({ kind: leaf.kind, status: leaf.status })))
+      .toEqual([{ kind: 'steered_leaf', status: 'ok' }]);
+  }, 180_000);
+});
+
+describe('field-first miner redaction (review fix round 1)', () => {
+  const ID = 'claude-miner-field-redaction';
+  const U = '0189abcd-1234-4678-9abc-0000000000e5';
+  const SECRET = 'fieldfirstminersecret-0123456789';
+
+  it('redacts raw tool input fields before passing their JSON to mineTokens', async () => {
+    const box = makeHistoryBox('ccrc-hist-miner-field-redaction-');
+    const seq = compactionSequence({ n: 1, trigger: 'manual', workRows: 4, seed: 0xa8, sessionId: U, startMs: T0 });
+    const rows = seq.rows.map((row) => JSON.parse(JSON.stringify(row)) as Row);
+    const source = rows.find((row) => {
+      const content = (row['message'] as { content?: Array<{ type?: string; name?: string }> } | undefined)?.content ?? [];
+      return content.some((item) => item.type === 'tool_use' && item.name === 'Read');
+    });
+    expect(source, 'CONTROL: the fixture supplies a Read tool-use row').toBeDefined();
+    const content = (source!['message'] as { content?: Array<{ type?: string; input?: Record<string, unknown> }> }).content ?? [];
+    const part = content.find((item) => item.type === 'tool_use');
+    expect(part?.input, 'CONTROL: the Read row carries tool input').toBeDefined();
+    part!.input!['file_path'] = `/home/u/${SECRET}/source.ts`;
+    part!.input!['notebook_path'] = `/home/u/${SECRET}/source.ipynb`;
+    part!.input!['command'] = `cat /home/u/${SECRET}/source.ts`;
+    plant(box, ID, U, rows);
+    settle(box);
+
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: unknown): Record<string, unknown>;
+      newBudget(): unknown;
+    };
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as {
+      nodeToolkit(): { HEADING_RE: RegExp; fencedRanges(t: string): { ranges: Array<[number, number]>; closed: number }; mineTokens(w: string, re: RegExp | null): Array<{ token: string; tag: string }> };
+      deriveLeaves(db: ReturnType<typeof openWriter>, ictx: Record<string, unknown>, budget: unknown): unknown;
+    };
+    const db = openWriter(historyPaths(box.home).dbFile);
+    let seen = '';
+    try {
+      withTx(db, 'NORMAL', () => {
+        db.prepare('DELETE FROM node_refs').run();
+        db.prepare('DELETE FROM nodes_fts').run();
+        db.prepare('DELETE FROM nodes').run();
+        db.prepare("DELETE FROM derivation_state WHERE step = 'leaves'").run();
+      });
+      const real = D.nodeToolkit();
+      const ictx = S.makeIngestCtx(box.home, box.homes, Date.now(), null);
+      ictx['pairIdx'] = makePairIndex(secretPairs([SECRET]).pairs);
+      ictx['fts'] = true;
+      ictx['nodeKit'] = {
+        ...real,
+        mineTokens: (input: string, re: RegExp | null) => {
+          seen = input;
+          return real.mineTokens(input, re);
+        },
+      };
+      D.deriveLeaves(db, ictx, S.newBudget());
+    } finally {
+      closeWriter(db);
+    }
+    expect(seen).toContain('[redacted]');
+    expect(seen).not.toContain(SECRET);
+  }, 180_000);
+});
+
+describe('a carried copy of an earlier gist is invalid even past the cap (spec 7.4 items 2, 5, 6, 10; IN-6)', () => {
+  const ID = 'claude-carried';
+  const U = '0189abcd-1234-4678-9abc-0000000000f4';
+  /** One gist longer than GIST_MAX, which the next summary's block carries word for word. */
+  const LONG = `Carried fixture gist that runs past the cap. ${'carried words '.repeat(110)}`.trim();
+  const steered = (): string => [
+    '<summary>', '1. Primary Request and Intent:', '   A steered fixture summary.', '</summary>',
+    steeredBlock({ gist: LONG, expand: 'carried, fixture', refs: 'server/test/history-derive.test.ts' }),
+  ].join('\n');
+  let box: HistoryBox;
+  beforeAll(() => {
+    box = makeHistoryBox('ccrc-hist-carried-');
+    const seq = compactionSequence({ n: 2, trigger: 'manual', summaryText: steered, seed: 0xa5, sessionId: U, startMs: T0 });
+    plant(box, ID, U, seq.rows);
+    // Two generic steer receipts, one inside each leaf's window (the previous boundary, this boundary].
+    const at = (u: string): number => Date.parse(String(seq.rows.find((r) => r['uuid'] === u)!['timestamp']));
+    for (const b of seq.boundaryUuids) spoolLine(box, ID, { v: 1, ev: 'steer', id: ID, sid: U, leaf: '', ts: at(b) - 500 });
+    settle(box);
+  }, 240_000);
+
+  it('leaf 0 is steered and cut at GIST_MAX; leaf 1 carries that gist and is invalid, counted carried_copies and by its reason', () => {
+    expect(LONG.length, 'CONTROL: the carried gist is longer than the cap').toBeGreaterThan(GIST_MAX);
+    const [l0, l1] = leavesOf(box, U);
+    expect({ kind: l0!.kind, status: l0!.status, gist: l0!.gist }).toEqual({ kind: 'steered_leaf', status: 'ok', gist: LONG.slice(0, GIST_MAX) });
+    expect({ kind: l1!.kind, status: l1!.status }).toEqual({ kind: 'native_leaf', status: 'invalid' });
+    const c = counters(box);
+    expect(c['carried_copies']).toBe(1);
+    expect(c['leaf_reason:carried-copy:anthropic']).toBe(1);
+    expect(c['leaf_status:ok:anthropic']).toBe(1);
+    expect(Object.keys(c).filter((k) => k.startsWith('leaf_reason:')), 'an ok leaf has no reason; both spans had a receipt')
+      .toEqual(['leaf_reason:carried-copy:anthropic']);
+  });
+});
+
+describe('a registered value is redacted before any derived field is cut: gist, topic and ref, steered and native (review R30; spec 8.3, 7.4 items 6-8)', () => {
+  // Leaf 0 is steered (one generic receipt in its window): its block's gist holds V across GIST_MAX, one of its
+  // topics holds V across TOPIC_CHARS, and its refs line names a path holding V. One of its span's Read rows
+  // reads a path holding V, so a mined ref holds V too. Leaf 1 is native: V across NATIVE_GIST_MAX in its Current
+  // Work, and across TOPIC_CHARS in a section-2 item. V is PAIR-ONLY when the leaves are derived. The first ticks
+  // record its pair from a secret file, which is then rewritten without it, so redact_hashes keeps the pair and no
+  // belt unit holds V (Task 7A's belt holds the values loaded now). That is the rotated-value shape, and a
+  // sessions.json hash behaves the same. Only the pair, matched on the WHOLE run before any cut, can mask V. A cut
+  // first leaves a prefix that no pair matches, which no later layer (nodeIndexTexts included) can mask.
+  const ID = 'claude-redact';
+  const U = '0189abcd-1234-4678-9abc-0000000000f5';
+  const V = crypto.randomBytes(32).toString('hex');   // one [A-Za-z0-9_-] run: one pair; beltWidth 18
+  /** `n` characters of one filler run, no whitespace, so every position below is exact. */
+  const fill = (n: number): string => 'zqfill-'.repeat(Math.ceil(n / 7)).slice(0, n);
+  const LEAD = 30;   // V characters a cut-first derivation would keep: at least beltWidth(V)
+  const GIST = `${fill(GIST_MAX - LEAD - 1)} ${V} zqsteer tail words`;
+  const TOPIC = `${fill(TOPIC_CHARS - LEAD - 1)} ${V} more`;
+  const CURRENT_LABEL = 'Current Work: ';
+  const steered = (): string => [
+    '<summary>', '1. Primary Request and Intent:', '   A steered fixture summary for the redaction order.', '</summary>',
+    steeredBlock({ gist: GIST, expand: `zqtopic plain, ${TOPIC}`, refs: `src/${V}/model.ts server/test/history-derive.test.ts` }),
+  ].join('\n');
+  const native = (): string => [
+    '<summary>', '1. Primary Request and Intent:', '   A native fixture summary for the redaction order.',
+    '2. Key Technical Concepts:', `   - ${TOPIC}`,
+    '8. Current Work:', `   ${fill(NATIVE_GIST_MAX - CURRENT_LABEL.length - LEAD - 1)} ${V} zqnative tail`,
+    '9. Optional Next Step:', '   zqnative next step.', '</summary>',
+  ].join('\n');
+  let box: HistoryBox;
+  /** Every text derivation stored for one node: its gist and topics, every node_refs value, its nodes_fts columns. */
+  const storedTexts = (nodeId: string, b: HistoryBox = box): string[] => [
+    ...q<{ gist: string | null; topics: string | null }>(b, 'SELECT gist, topics FROM nodes WHERE node_id = ?', nodeId)
+      .flatMap((r) => [r.gist ?? '', r.topics ?? '']),
+    ...q<{ value: string }>(b, 'SELECT value FROM node_refs WHERE node_id = ?', nodeId).map((r) => r.value),
+    ...q<{ gist: string | null; topics: string | null; refs: string | null }>(b,
+      'SELECT f.gist, f.topics, f.refs FROM nodes_fts f JOIN nodes n ON n.rowid = f.rowid WHERE n.node_id = ?', nodeId)
+      .flatMap((r) => [r.gist ?? '', r.topics ?? '', r.refs ?? '']),
+  ];
+  /** Each text holding beltWidth(v) consecutive characters of `v`, ASCII case folded as the belt folds. Its answer
+   *  is a short list, so a red prints no long diff. */
+  const stretches = (texts: readonly string[], v: string): string[] => {
+    const w = beltWidth(v);
+    const low = v.toLowerCase();
+    const out: string[] = [];
+    texts.forEach((t, i) => {
+      const lt = t.toLowerCase();
+      for (let k = 0; k + w <= low.length; k += 1) {
+        if (lt.includes(low.slice(k, k + w))) { out.push(`#${i}: ${low.slice(k, k + w)}`); break; }
+      }
+    });
+    return out;
+  };
+  const refsOf = (nodeId: string, b: HistoryBox = box): { value: string; origin: string }[] =>
+    q<{ value: string; origin: string }>(b, 'SELECT value, origin FROM node_refs WHERE node_id = ? ORDER BY value', nodeId);
+  const ftsRowsOf = (nodeId: string): number => q<{ c: number }>(box,
+    'SELECT count(*) AS c FROM nodes_fts f JOIN nodes n ON n.rowid = f.rowid WHERE n.node_id = ?', nodeId)[0]!.c;
+
+  beforeAll(() => {
+    box = makeHistoryBox('ccrc-hist-derive-redact-');
+    const dir = path.join(box.home, '.cc-secrets');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = path.join(dir, 'x8derive.env');
+    fs.writeFileSync(file, `ZQ_DERIVE_V=${V}\n`, { mode: 0o600 });
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
+    const db = openStoreRO(box);
+    try {
+      const pair = db.prepare('SELECT count(*) AS c FROM redact_hashes WHERE len = ? AND sha256 = ?')
+        .get(V.length, crypto.createHash('sha256').update(V).digest()) as { c: number };
+      expect(pair.c, 'CONTROL: the first ticks recorded the pair').toBe(1);
+    } finally { db.close(); }
+    fs.writeFileSync(file, `ZQ_DERIVE_OTHER=${crypto.randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+    const seq = compactionSequence({
+      n: 2, trigger: 'manual', workRows: 8, seed: 0xc8, sessionId: U, startMs: T0, summaryText: (k) => (k === 0 ? steered() : native()),
+    });
+    // Leaf 0's first Read (segment-0-1.ts) reads a path holding V; its second (segment-0-5.ts) is the mined CONTROL.
+    const rows = seq.rows.map((r) => JSON.parse(JSON.stringify(r).replace('quiet-basin/src/segment-0-1.ts', `quiet-basin/src/${V}/mined.ts`)) as Row);
+    expect(rows.filter((r) => JSON.stringify(r).includes(`/${V}/mined.ts`)), 'CONTROL: one Read row holds V').toHaveLength(1);
+    plant(box, ID, U, rows);
+    const at = (u: string): number => Date.parse(String(rows.find((r) => r['uuid'] === u)!['timestamp']));
+    // One generic receipt, inside leaf 0's window only (leaf 1's window opens after boundary 0).
+    spoolLine(box, ID, { v: 1, ev: 'steer', id: ID, sid: U, leaf: '', ts: at(seq.boundaryUuids[0]!) - 500 });
+    settle(box);
+  }, 240_000);
+
+  it('the steered leaf: the gist and the topic hold the mark where V sat across the cut; no stored field holds a belt-width stretch of V', () => {
+    const [l0] = leavesOf(box, U);
+    expect({ kind: l0!.kind, status: l0!.status }, 'CONTROL: leaf 0 is steered').toEqual({ kind: 'steered_leaf', status: 'ok' });
+    expect(GIST.indexOf(V), 'CONTROL: V straddles GIST_MAX').toBe(GIST_MAX - LEAD);
+    expect(l0!.gist!.slice(GIST_MAX - LEAD, GIST_MAX - LEAD + 10), 'redacted, then cut').toBe('[redacted]');
+    expect(JSON.parse(l0!.topics!) as string[], 'redacted, then cut').toContain(`${fill(TOPIC_CHARS - LEAD - 1)} [redacted] more`);
+    const refs = refsOf(l0!.node_id);
+    expect(refs, 'CONTROL: the model refs were read').toContainEqual({ value: 'server/test/history-derive.test.ts', origin: 'model' });
+    expect(refs, 'CONTROL: the span was mined').toContainEqual({ value: '/home/u/worktrees/p/quiet-basin/src/segment-0-5.ts', origin: 'tool_use' });
+    expect(ftsRowsOf(l0!.node_id), 'CONTROL: the node has its nodes_fts row').toBe(1);
+    expect(stretches(storedTexts(l0!.node_id), V)).toEqual([]);
+  });
+
+  it('the native leaf: its gist and topic hold the mark where V sat across the cut; no stored field holds a belt-width stretch of V', () => {
+    const [, l1] = leavesOf(box, U);
+    expect({ kind: l1!.kind, status: l1!.status }, 'CONTROL: leaf 1 is native').toEqual({ kind: 'native_leaf', status: 'not-requested' });
+    // The native gist is `Current Work: ` and the section's text, so V starts at NATIVE_GIST_MAX - LEAD.
+    const at = NATIVE_GIST_MAX - LEAD;
+    expect(l1!.gist!.slice(0, CURRENT_LABEL.length), 'CONTROL: the Current Work pair').toBe(CURRENT_LABEL);
+    expect(l1!.gist!.slice(at, at + 10), 'redacted, then cut').toBe('[redacted]');
+    expect(JSON.parse(l1!.topics!) as string[], 'redacted, then cut').toContain(`${fill(TOPIC_CHARS - LEAD - 1)} [redacted] more`);
+    expect(ftsRowsOf(l1!.node_id), 'CONTROL: the node has its nodes_fts row').toBe(1);
+    expect(stretches(storedTexts(l1!.node_id), V)).toEqual([]);
+  });
+
+  // Task 1F: the template's semicolon-joined refs. Each case builds its own fixture HOME (one steered leaf), because
+  // the CONTROL's secret file must never name V, and the case's must record V's pair and then drop the value.
+  const SEMI_REFS = `src/${V}/model.ts;ccd/x.mjs`;
+  const semiSteered = (): string => [
+    '<summary>', '1. Primary Request and Intent:', '   A steered fixture summary for the semicolon refs.', '</summary>',
+    steeredBlock({ gist: GIST, expand: 'zqtopic plain', refs: SEMI_REFS }),
+  ].join('\n');
+  /** One steered leaf holding V in its gist and in a semicolon-joined refs line. `register` records V's pair first. */
+  const semiLeaf = (prefix: string, id: string, u: string, register: boolean): { b: HistoryBox; leaf: LeafRow } => {
+    const b = makeHistoryBox(prefix);
+    const dir = path.join(b.home, '.cc-secrets');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = path.join(dir, 'x8derive.env');
+    if (register) {
+      fs.writeFileSync(file, `ZQ_DERIVE_V=${V}\n`, { mode: 0o600 });
+      for (let i = 0; i < 2; i += 1) expect(runSweep(b).code).toBe(0);
+      const db = openStoreRO(b);
+      try {
+        const pair = db.prepare('SELECT count(*) AS c FROM redact_hashes WHERE len = ? AND sha256 = ?')
+          .get(V.length, crypto.createHash('sha256').update(V).digest()) as { c: number };
+        expect(pair.c, 'CONTROL: the first ticks recorded the pair').toBe(1);
+      } finally { db.close(); }
+    }
+    fs.writeFileSync(file, `ZQ_DERIVE_OTHER=${crypto.randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+    const seq = compactionSequence({ n: 1, trigger: 'manual', workRows: 8, seed: 0xc9, sessionId: u, startMs: T0, summaryText: semiSteered });
+    plant(b, id, u, seq.rows);
+    const at = Date.parse(String(seq.rows.find((r) => r['uuid'] === seq.boundaryUuids[0])!['timestamp']));
+    spoolLine(b, id, { v: 1, ev: 'steer', id, sid: u, leaf: '', ts: at - 500 });
+    settle(b);
+    const [leaf] = leavesOf(b, u);
+    expect({ kind: leaf!.kind, status: leaf!.status }, 'CONTROL: the leaf is steered').toEqual({ kind: 'steered_leaf', status: 'ok' });
+    return { b, leaf: leaf! };
+  };
+
+  it('CONTROL: a fixture whose secret file never names V stores V in the gist and src/<V>/model.ts as a path ref', () => {
+    const { b, leaf } = semiLeaf('ccrc-hist-derive-semi-ctl-', 'claude-semi-control', '0189abcd-1234-4678-9abc-0000000000f6', false);
+    expect(stretches([leaf.gist ?? ''], V), 'the gist keeps V when nothing redacts it').not.toEqual([]);
+    const refs = refsOf(leaf.node_id, b);
+    expect(refs, 'the semicolon-joined ref holding V is kept as a path').toContainEqual({ value: `src/${V}/model.ts`, origin: 'model' });
+    expect(refs).toContainEqual({ value: 'ccd/x.mjs', origin: 'model' });
+    expect(q<{ kind: string }>(b, 'SELECT kind FROM node_refs WHERE node_id = ? AND value = ?', leaf.node_id, `src/${V}/model.ts`))
+      .toEqual([{ kind: 'path' }]);
+  }, 240_000);
+
+  it('a semicolon-joined refs token holding a registered value: no stored field keeps the value', () => {
+    const { b, leaf } = semiLeaf('ccrc-hist-derive-semi-', 'claude-semi-redact', '0189abcd-1234-4678-9abc-0000000000f7', true);
+    expect(GIST.indexOf(V), 'CONTROL: V straddles GIST_MAX').toBe(GIST_MAX - LEAD);
+    expect(leaf.gist!.slice(GIST_MAX - LEAD, GIST_MAX - LEAD + 10), 'redacted, then cut').toBe('[redacted]');
+    const refs = refsOf(leaf.node_id, b);
+    expect(refs, 'the clean half of the token is kept').toContainEqual({ value: 'ccd/x.mjs', origin: 'model' });
+    expect(refs.filter((r) => r.value.includes(V) || r.value.includes('[redacted]'))).toEqual([]);
+    expect(stretches(storedTexts(leaf.node_id, b), V)).toEqual([]);
+  }, 240_000);
+});
+
+describe('a steered leaf\'s template-shaped refs reach node_refs (Task 1F; spec 7.1, 7.4 item 7)', () => {
+  const ID = 'claude-template-refs';
+  const U = '0189abcd-1234-4678-9abc-0000000000f8';
+  const MINED = '/home/u/worktrees/p/quiet-basin/src/segment-0-5.ts';
+  const TEMPLATE = [
+    { kind: 'path', value: 'ccd/history/sweep.mjs' }, { kind: 'path:symbol', value: 'ccd/history/lib.mjs:blockFields' },
+    { kind: 'sha', value: 'a0860d1f' }, { kind: 'issue', value: '#286' }, { kind: 'd-number', value: 'D-4740' },
+    { kind: 'test', value: 'server/test/history-steer.test.ts' },
+  ];
+  const BLOCK_REFS = `${TEMPLATE.map((r) => r.value).join('; ')}; ${MINED}`;
+  it('node_refs holds the six with origin model, in order, ahead of the mined refs; a ref also mined stays model', () => {
+    const box = makeHistoryBox('ccrc-hist-derive-template-refs-');
+    const seq = compactionSequence({
+      n: 1, trigger: 'manual', workRows: 8, seed: 0xca, sessionId: U, startMs: T0,
+      summaryText: () => [
+        '<summary>', '1. Primary Request and Intent:', '   A steered fixture summary for the template refs.', '</summary>',
+        steeredBlock({ gist: 'Read the template refs through the parser and stored them, each classified.', expand: 'template, refs', refs: BLOCK_REFS }),
+      ].join('\n'),
+    });
+    plant(box, ID, U, seq.rows);
+    const at = Date.parse(String(seq.rows.find((r) => r['uuid'] === seq.boundaryUuids[0])!['timestamp']));
+    spoolLine(box, ID, { v: 1, ev: 'steer', id: ID, sid: U, leaf: '', ts: at - 500 });
+    settle(box);
+    const [leaf] = leavesOf(box, U);
+    expect({ kind: leaf!.kind, status: leaf!.status }, 'CONTROL: the leaf is steered').toEqual({ kind: 'steered_leaf', status: 'ok' });
+    const refs = q<{ kind: string; value: string; origin: string }>(box, 'SELECT kind, value, origin FROM node_refs WHERE node_id = ? ORDER BY rowid', leaf!.node_id);
+    expect(refs.slice(0, 6)).toEqual(TEMPLATE.map((r) => ({ ...r, origin: 'model' })));
+    expect(refs[6], 'the ref the span also mined stays model').toEqual({ kind: 'path', value: MINED, origin: 'model' });
+    expect(refs.filter((r) => r.origin === 'tool_use').map((r) => r.value), 'CONTROL: another path was mined, after the model refs')
+      .toContain('/home/u/worktrees/p/quiet-basin/src/segment-0-1.ts');
+    expect(refs.findIndex((r) => r.origin === 'tool_use')).toBeGreaterThan(6);
+  }, 240_000);
+});
+
+describe('a parser throw is recorded, counted once and never parsed again by a tick (RB5; NEW history-parser-crash-recorded)', () => {
+  const ID = 'claude-crash';
+  const U = '0189abcd-1234-4678-9abc-0000000000f3';
+  type Kit = { HEADING_RE: RegExp; fencedRanges(t: string): unknown; mineTokens(w: string, re: RegExp | null): unknown };
+  type Derived = { derived: number; waiting: number; failed: number };
+  let box: HistoryBox;
+  let seq: Seq;
+  beforeAll(() => {
+    box = makeHistoryBox('ccrc-hist-crash-');
+    seq = compactionSequence({ n: 3, trigger: 'manual', seed: 0xb1, sessionId: U, startMs: T0 });
+    plant(box, ID, U, seq.rows);
+    settle(box);
+  }, 240_000);
+
+  type Writer = ReturnType<typeof openWriter>;
+  const write = (fn: (db: Writer) => void): void => {
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try { withTx(db, 'NORMAL', () => { fn(db); }); } finally { closeWriter(db); }
+  };
+  /** Delete one node and what references it, as a test only does: its nodes_fts row, its refs; node_sources cascade. */
+  const dropNode = (db: Writer, id: string): void => {
+    if (db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'nodes_fts'").get() !== undefined) {
+      db.prepare('DELETE FROM nodes_fts WHERE rowid = (SELECT rowid FROM nodes WHERE node_id = ?)').run(id);
+    }
+    db.prepare('DELETE FROM node_refs WHERE node_id = ?').run(id);
+    db.prepare('DELETE FROM nodes WHERE node_id = ?').run(id);
+  };
+  const entryOf = (uuid: string): number => q<{ entry_id: number }>(box, 'SELECT entry_id FROM entries WHERE uuid = ?', uuid)[0]!.entry_id;
+  const crashes = (): number => counters(box)['parser_crash'] ?? 0;
+  const atBoundary = (entryId: number) => q<{ node_id: string; kind: string; status: string; gist: string | null; topics: string | null; summary_blob_id: number | null }>(box,
+    'SELECT node_id, kind, status, gist, topics, summary_blob_id FROM nodes WHERE boundary_entry_id = ? ORDER BY node_id', entryId);
+  /** One in-process derivation pass, as the tick runs it, with `kit` as the node toolkit (an in-process seam: the
+   *  sweep never sets ictx.nodeKit). */
+  async function derive(kit: (real: Kit) => Kit): Promise<Derived> {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: unknown): Record<string, unknown>;
+      newBudget(): unknown;
+    };
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as {
+      nodeToolkit(): Kit;
+      deriveLeaves(db: Writer, ictx: Record<string, unknown>, budget: unknown): Derived;
+    };
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      const ictx = S.makeIngestCtx(box.home, box.homes, Date.now(), null);
+      ictx['nodeKit'] = kit(D.nodeToolkit());
+      return D.deriveLeaves(db, ictx, S.newBudget());
+    } finally {
+      closeWriter(db);
+    }
+  }
+
+  it('a throw inside the parser writes the leaf parse-failed under its own id and sources; a throw before the leaf leaves a marker; the next pass parses neither', async () => {
+    const [l0, l1, l2] = leavesOf(box, U);
+    expect([l0, l1, l2].every((l) => l !== undefined && l.kind === 'native_leaf'), 'CONTROL: three native leaves').toBe(true);
+    expect(crashes(), 'CONTROL: the ticks crashed nothing').toBe(0);
+    const src1 = sourcesOf(box, l1!.node_id);
+    const [b0, b1, b2] = seq.boundaryUuids.map(entryOf);
+    const forkedId = leafId(ID, U, seq.headUuids[1]!, seq.boundaryUuids[2]!);
+    write((db) => {
+      dropNode(db, l1!.node_id);
+      dropNode(db, l2!.node_id);
+      // Boundary 2's plain id now names boundary 0 and its fork-qualified id is taken: its insert can only fail.
+      const plantNode = db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status,
+          boundary_entry_id, parser_version, created_ms)
+        SELECT ?, session_pk, epoch_seq, transcript_pk, 'raw_leaf', 0, 'not-requested', ?, parser_version, created_ms FROM nodes WHERE node_id = ?`);
+      plantNode.run(l2!.node_id, b0!, l0!.node_id);
+      plantNode.run(forkedId, null, l0!.node_id);
+      db.prepare("DELETE FROM derivation_state WHERE step = 'leaves'").run();
+    });
+    const throwing = (real: Kit): Kit => ({ ...real, fencedRanges: () => { throw new Error('a planted parser bug'); } });
+    expect(await derive(throwing)).toEqual({ derived: 1, waiting: 0, failed: 1 });
+    expect(await derive(throwing), 'the next pass parses neither boundary again').toEqual({ derived: 0, waiting: 0, failed: 0 });
+    expect(crashes(), 'each throw counted once').toBe(2);
+    expect(atBoundary(b1!)).toEqual([{
+      node_id: l1!.node_id, kind: 'raw_leaf', status: 'parse-failed', gist: null, topics: null,
+      summary_blob_id: blobOf(box, seq.summaryUuids[1]!),
+    }]);
+    expect(sourcesOf(box, l1!.node_id), 'its own sources, as derived before').toEqual(src1);
+    expect(q<{ n: number }>(box, 'SELECT count(*) AS n FROM node_refs WHERE node_id = ?', l1!.node_id)[0]!.n).toBe(0);
+    expect(atBoundary(b2!), 'no leaf at the boundary whose insert failed').toEqual([]);
+    expect(q<{ cursor: string }>(box, "SELECT cursor FROM derivation_state WHERE step = 'leaf-crashed' AND version = ?", b2!))
+      .toEqual([{ cursor: String(NODE_PARSER_VERSION) }]);
+    const [leaves] = q<{ cursor: string }>(box, "SELECT cursor FROM derivation_state WHERE step = 'leaves' AND version = ?", NODE_PARSER_VERSION);
+    expect(Number(leaves!.cursor), 'the cursor moved past both').toBe(b2);
+    expect(Object.keys(counters(box)).filter((k) => k.includes('parse-failed')), 'a crash is no compliance outcome').toEqual([]);
+  });
+
+  it('a summary row stored but unreadable (a tombstoned blob) makes a raw leaf that still names its summary, counted summary_unreadable (spec 6.1)', async () => {
+    const id0 = leafId(ID, U, firstUuid(seq));
+    const b0 = entryOf(seq.boundaryUuids[0]!);
+    const blob0 = blobOf(box, seq.summaryUuids[0]!)!;
+    const doomed = atBoundary(b0).map((n) => n.node_id);   // leaf 0, and the node the case above planted there
+    write((db) => {
+      for (const n of doomed) dropNode(db, n);
+      db.prepare('UPDATE blobs SET z = NULL, pruned_ms = ? WHERE blob_id = ?').run(Date.now(), blob0);
+      db.prepare("DELETE FROM derivation_state WHERE step = 'leaves'").run();
+    });
+    expect(await derive((k) => k)).toEqual({ derived: 1, waiting: 0, failed: 0 });
+    expect(atBoundary(b0)).toEqual([{ node_id: id0, kind: 'raw_leaf', status: 'not-requested', gist: null, topics: null, summary_blob_id: blob0 }]);
+    expect(counters(box)['summary_unreadable']).toBe(1);
+  });
+});
+
+describe('the derivation toolkit and the derivation_state helpers (in-process)', () => {
+  it("nodeToolkit hands lib the card's own heading rule, fence scanner and token miner", async () => {
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as {
+      nodeToolkit(): {
+        HEADING_RE: RegExp;
+        fencedRanges(t: string): { ranges: Array<[number, number]>; closed: number };
+        mineTokens(w: string, re: RegExp | null): Array<{ token: string; tag: string }>;
+      };
+    };
+    const kit = D.nodeToolkit();
+    expect(kit.HEADING_RE.flags).toBe('gm');
+    expect([...'8. Current Work:\n'.matchAll(new RegExp(kit.HEADING_RE.source, kit.HEADING_RE.flags))].map((m) => m[1])).toEqual(['Current Work']);
+    expect(kit.fencedRanges('a\n```\n1. x\n```\nb')).toEqual({ ranges: [[2, 15]], closed: 1 });
+    const line = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: '/home/u/a.ts' } }] } });
+    expect(kit.mineTokens(line, null)).toEqual([{ token: '/home/u/a.ts', tag: 'touched' }]);
+  });
+
+  it('getStep and setStep: one derivation_state row per (step, version), the cursor kept apart from completed_ms', () => {
+    const box = makeHistoryBox('ccrc-hist-step-');
+    createStore(box.home);
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      expect(getStep(db, 'leaves', 1)).toBeNull();
+      withTx(db, 'NORMAL', () => { setStep(db, 'leaves', 1, '41'); });
+      expect(getStep(db, 'leaves', 1)).toEqual({ cursor: '41', completedMs: null });
+      withTx(db, 'NORMAL', () => { setStep(db, 'leaves', 1, '42', 1_700_000_000_000); });
+      expect(getStep(db, 'leaves', 1)).toEqual({ cursor: '42', completedMs: 1_700_000_000_000 });
+      withTx(db, 'NORMAL', () => { setStep(db, 'leaves', 1, '43'); });
+      expect(getStep(db, 'leaves', 1), 'an omitted completedMs leaves it').toEqual({ cursor: '43', completedMs: 1_700_000_000_000 });
+      withTx(db, 'NORMAL', () => { setStep(db, 'leaves', 1, null, null); });
+      expect(getStep(db, 'leaves', 1)).toEqual({ cursor: null, completedMs: null });
+      expect(getStep(db, 'leaves', 2), 'another version is another row').toBeNull();
+    } finally {
+      closeWriter(db);
+    }
+  });
+});
+
+// ── W1-B2 Task 9: parents (fan-in per epoch, final leaves only), the nodes_fts backfill, a re-key moves nodes ──
+// DM26 (spec 2026-10-05 §6.3, §6.7):
+//   - through real ticks: 8 leaves in one epoch make one depth-1 parent; 8 leaves spanning a /clear make none,
+//     and the /clear epoch, confirmed only at a later tick, has no node before it is confirmed (review focus 4);
+//   - in-process: a boundary whose leaf is not derived yet stops the group; fan-in is 4 per level above;
+//   - in-process: fan-in is per holding copy, so two forks of one transcript never share a parent (ruling RB4).
+// Plus (not pins): the nodes_fts backfill indexes redacted text once, and mergeFamily re-points nodes.
+import * as v9 from 'vitest';
+import * as tmp9 from './tmpHelpers.js';
+import * as lib9 from '../../ccd/history/lib.mjs';
+import * as store9 from '../../ccd/history/store.mjs';
+import * as h9 from './historyHelpers.js';
+import * as fx9 from './historyFixtures.js';
+import type { DatabaseSync as Db9 } from 'node:sqlite';
+
+interface Derive9 {
+  deriveParents(db: Db9, ictx: object, budget: object): number;
+  indexNodesFts(db: Db9, ictx: object, budget: object): number;
+  rerollParents(db: Db9, ictx: object, nodeIds: readonly string[]): number;
+}
+interface Sweep9 {
+  newBudget(now?: () => number, limits?: { maxMs?: number; maxBytes?: number }): object;
+  mergeFamily(db: Db9, fromPk: number, toPk: number): void;
+}
+const derive9 = async (): Promise<Derive9> => (await import('../../ccd/history/derive.mjs')) as unknown as Derive9;
+const sweep9 = async (): Promise<Sweep9> => (await import('../../ccd/history/sweep.mjs')) as unknown as Sweep9;
+
+const ID9 = 'claude-a-demo';
+const E9 = 'd9e00000-1111-4111-8111-111111111111';
+const T0_9 = Date.UTC(2026, 9, 1, 10, 0, 0);
+const CWD9 = '/home/u/worktrees/p/quiet-basin';
+const uid9 = (p: string, n: number): string => `${p}-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+const NO_PAIRS9 = lib9.makePairIndex([]);
+
+/** A fresh store: one family, one confirmed epoch, one transcript with `n` boundaries, and a native leaf at
+ *  every boundary except those in `missing` (a leaf the derivation has not reached yet). The transcript has
+ *  `copies` live files (file_id 1, 2, …), and boundary k is a member of the files `holders(k)` names, so fan-in,
+ *  which groups per holding copy, finds each boundary's copy the way Task 8's holdingCopy does. By default one
+ *  copy holds every boundary. */
+function epochFixture9(prefix: string, n: number, missing: ReadonlySet<number>,
+  copies = 1, holders: (k: number) => readonly number[] = () => [1]): { db: Db9; leafIds: string[] } {
+  const home = tmp9.mkTmp(prefix);
+  store9.createStore(home);
+  const db = store9.openWriter(lib9.historyPaths(home).dbFile);
+  const leafIds: string[] = [];
+  db.exec('BEGIN');
+  db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, ?, '', 'demo', 1)").run(ID9);
+  db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (1, 1, ?, 'startup', 'hook', 1)").run(E9);
+  db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(E9);
+  const file = db.prepare("INSERT INTO ingest_files (file_id, dev, ino, transcript_pk, status, parser_version) VALUES (?, 1, ?, 1, 'live', 1)");
+  for (let f = 1; f <= copies; f += 1) file.run(f, 9000 + f);
+  db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 9), Buffer.from([0]));
+  const ent = db.prepare("INSERT INTO entries (entry_id, uuid, transcript_pk, type, subtype, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 1, 'system', 'compact_boundary', 'harness', 1, 0, 0, 1, ?)");
+  const bnd = db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (?, 1, ?)');
+  const member = db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+  for (let k = 1; k <= n; k += 1) {
+    ent.run(k, uid9('d9e00000', k), 1000 * k);
+    bnd.run(k, k);
+    for (const f of holders(k)) member.run(f, k, k);
+    const id = lib9.leafId(ID9, E9, `span-${k}`);
+    leafIds.push(id);
+    if (!missing.has(k)) addLeaf9(db, k, id);
+  }
+  db.exec('COMMIT');
+  return { db, leafIds };
+}
+function addLeaf9(db: Db9, k: number, id: string): void {
+  db.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, boundary_entry_id, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, parser_version, created_ms) VALUES (?, 1, 1, 1, 'native_leaf', 0, 'not-requested', ?, ?, ?, ?, ?, 100, 0, 0, 1, 1)")
+    .run(id, `Leaf ${k} did part ${k}. It also did more.`, JSON.stringify([`topic ${k}`]), k, 1000 * k, 1000 * k + 500);
+}
+
+/** Two confirmed epochs whose leaf rows alternate, for numeric parent-cursor ordering tests. */
+function interleavedEpochs9(prefix: string, n = 32): { db: Db9; first: string[]; second: string[] } {
+  const home = tmp9.mkTmp(prefix);
+  store9.createStore(home);
+  const db = store9.openWriter(lib9.historyPaths(home).dbFile);
+  const first: string[] = []; const second: string[] = [];
+  const secondId = 'claude-a-second';
+  const secondEpoch = 'd9e00000-2222-4222-8222-222222222222';
+  db.exec('BEGIN');
+  const session = db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (?, ?, '', 'demo', 1)");
+  session.run(1, ID9); session.run(2, secondId);
+  const epoch = db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, 1, ?, 'startup', 'hook', 1)");
+  epoch.run(1, E9); epoch.run(2, secondEpoch);
+  const transcript = db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (?, ?)');
+  transcript.run(1, E9); transcript.run(2, secondEpoch);
+  const file = db.prepare("INSERT INTO ingest_files (file_id, dev, ino, transcript_pk, status, parser_version) VALUES (?, 1, ?, ?, 'live', 1)");
+  file.run(1, 9001, 1); file.run(2, 9002, 2);
+  db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 9), Buffer.from([0]));
+  const entry = db.prepare("INSERT INTO entries (entry_id, uuid, transcript_pk, type, subtype, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, ?, 'system', 'compact_boundary', 'harness', 1, 0, 0, 1, ?)");
+  const boundary = db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (?, ?, ?)');
+  const member = db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)');
+  const leaf = db.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, boundary_entry_id, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, parser_version, created_ms) VALUES (?, ?, 1, ?, 'native_leaf', 0, 'not-requested', ?, '[]', ?, ?, ?, 100, 0, 0, 1, 1)");
+  for (let k = 1; k <= n; k += 1) {
+    const aEntry = k; const bEntry = 100 + k;
+    entry.run(aEntry, uid9('d9e00000', k), 1, 1000 * k);
+    entry.run(bEntry, uid9('d9e00001', k), 2, 1000 * k);
+    boundary.run(aEntry, 1, k); boundary.run(bEntry, 2, k);
+    member.run(1, aEntry, k); member.run(2, bEntry, k);
+    const a = lib9.leafId(ID9, E9, `span-${k}`);
+    const b = lib9.leafId(secondId, secondEpoch, `span-${k}`);
+    first.push(a); second.push(b);
+    leaf.run(b, 2, 2, `Second leaf ${k}.`, bEntry, 1000 * k, 1000 * k + 500);
+    leaf.run(a, 1, 1, `First leaf ${k}.`, aEntry, 1000 * k, 1000 * k + 500);
+  }
+  db.exec('COMMIT');
+  return { db, first, second };
+}
+interface Parent9 { node_id: string; kind: string; status: string; gist: string | null; topics: string | null; earliest_ms: number; latest_ms: number; desc_count: number }
+const parents9 = (db: Db9, depth: number): Parent9[] =>
+  (db.prepare('SELECT node_id, kind, status, gist, topics, earliest_ms, latest_ms, desc_count FROM nodes WHERE depth = ? ORDER BY earliest_ms').all(depth) as unknown as Parent9[]).map((r) => ({ ...r }));
+const children9 = (db: Db9, id: string): string[] =>
+  (db.prepare('SELECT child_id FROM node_children WHERE node_id = ? ORDER BY ord').all(id) as { child_id: string }[]).map((r) => r.child_id);
+
+/** `n` manual compactions in one transcript. Each cycle is a user turn, an answer, a kept follow-up, the
+ *  boundary (head = the follow-up, kept = [the follow-up]) and the summary row right after it (§6.1's manual
+ *  shape: the anchor is the summary, one row past the boundary). Row uuids carry the 8-hex prefix `p`, so two
+ *  transcripts never share one. */
+function cycles9(p: string, sid: string, n: number, t0: number): fx9.Row[] {
+  const rows: fx9.Row[] = [];
+  let k = 0;
+  let t = t0;
+  const ts = (): string => new Date((t += 1000)).toISOString();
+  for (let c = 1; c <= n; c += 1) {
+    const u = uid9(p, ++k); const a = uid9(p, ++k); const x = uid9(p, ++k); const b = uid9(p, ++k); const s = uid9(p, ++k);
+    rows.push(fx9.userRow({ uuid: u, ts: ts(), sessionId: sid, cwd: CWD9, text: `fixture request ${c}` }));
+    rows.push(fx9.assistantRow({ uuid: a, ts: ts(), sessionId: sid, cwd: CWD9, text: `Fixture answer ${c}. More detail follows.`, requestId: `req_${p}_${c}`, msgId: `msg_${p}_${c}` }));
+    rows.push(fx9.userRow({ uuid: x, ts: ts(), sessionId: sid, cwd: CWD9, text: `fixture follow-up ${c}` }));
+    rows.push(fx9.boundaryRow({ uuid: b, ts: ts(), sessionId: sid, cwd: CWD9, trigger: 'manual', headUuid: x, anchorUuid: s, tailUuid: x, allUuids: [x] }));
+    rows.push(fx9.summaryRow({ uuid: s, ts: ts(), sessionId: sid, cwd: CWD9, text: [
+      'This session is being continued from a previous conversation. The summary below covers the earlier portion.',
+      '<summary>', '1. Primary Request and Intent:', `   Fixture request ${c}.`,
+      '8. Current Work:', `   Wrote part ${c} of the fixture.`,
+      '9. Optional Next Step:', `   Continue with part ${c + 1}.`, '</summary>',
+    ].join('\n') }));
+  }
+  return rows;
+}
+
+v9.describe('DM26: parents by fan-in, never across an epoch, only over final leaves (W1-B2 Task 9)', () => {
+  v9.it('a boundary whose leaf is not derived yet stops the group: 9 boundaries, leaf 4 missing, no parent; leaf 4 derived, one parent over leaves 1-8', async () => {
+    const d = await derive9();
+    const s = await sweep9();
+    const fx = epochFixture9('ccrc-hist-dm26-nf-', 9, new Set([4]));
+    const ictx = { nowMs: 5_000, fts: false, pairIdx: NO_PAIRS9 };
+    try {
+      d.deriveParents(fx.db, ictx, s.newBudget());
+      v9.expect(parents9(fx.db, 1), 'slot 4 is not final: slots 1-3 and 5-9 are never one group').toEqual([]);
+      addLeaf9(fx.db, 4, fx.leafIds[3]!);
+      d.deriveParents(fx.db, ictx, s.newBudget());
+      const p = parents9(fx.db, 1);
+      v9.expect(p).toHaveLength(1);
+      v9.expect(p[0]!.node_id, 'parentId over the children in boundary order').toBe(lib9.parentId(fx.leafIds.slice(0, 8)));
+      v9.expect(children9(fx.db, p[0]!.node_id)).toEqual(fx.leafIds.slice(0, 8));
+      v9.expect([p[0]!.kind, p[0]!.status]).toEqual(['condensed', 'ok']);
+      v9.expect(p[0]!.gist).toContain('Leaf 1 did part 1');
+      v9.expect(p[0]!.gist).toContain('Leaf 8 did part 8');
+      v9.expect([p[0]!.earliest_ms, p[0]!.latest_ms]).toEqual([1000, 8500]);
+      v9.expect(p[0]!.desc_count).toBe(8);
+      v9.expect(JSON.parse(p[0]!.topics ?? '[]')).toEqual(v9.expect.arrayContaining(['topic 1', 'topic 8']));
+      d.deriveParents(fx.db, ictx, s.newBudget());
+      v9.expect(parents9(fx.db, 1), 'a rerun mints nothing again').toHaveLength(1);
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  v9.it('fan-in is 4 per level above the leaves: 32 leaves give four depth-1 parents and one depth-2 parent over them, in order', async () => {
+    const d = await derive9();
+    const s = await sweep9();
+    const fx = epochFixture9('ccrc-hist-dm26-d2-', 32, new Set());
+    try {
+      d.deriveParents(fx.db, { nowMs: 5_000, fts: false, pairIdx: NO_PAIRS9 }, s.newBudget());
+      const level1 = [0, 8, 16, 24].map((i) => lib9.parentId(fx.leafIds.slice(i, i + 8)));
+      v9.expect(parents9(fx.db, 1).map((r) => r.node_id)).toEqual(level1);
+      const top = parents9(fx.db, 2);
+      v9.expect(top.map((r) => r.node_id)).toEqual([lib9.parentId(level1)]);
+      v9.expect(children9(fx.db, top[0]!.node_id)).toEqual(level1);
+      v9.expect(parents9(fx.db, 3)).toEqual([]);
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  v9.it('a parent never mixes forks: two copies share a head, fork, and interleave in ord; each copy gets its own parent, and a leaf not derived in one stops only that copy (RB4)', async () => {
+    const d = await derive9();
+    const s = await sweep9();
+    // Boundaries 1-2: the shared head, in both copies, so held by file 1 (both are live: the smaller file_id).
+    // Then the forks arrive interleaved: odd k from 3 to 17 is copy A's (file 1 only), even k from 4 to 18 copy
+    // B's (file 2 only). boundaries.ord is per transcript, so the two forks' ords interleave as they do on a box.
+    const holders = (k: number): number[] => (k <= 2 ? [1, 2] : k % 2 === 1 ? [1] : [2]);
+    const fx = epochFixture9('ccrc-hist-dm26-fork-', 18, new Set([7]), 2, holders);
+    const ictx = { nowMs: 5_000, fts: false, pairIdx: NO_PAIRS9 };
+    const leaf = (k: number): string => fx.leafIds[k - 1]!;
+    const copyA = [1, 2, 3, 5, 7, 9, 11, 13].map(leaf);
+    const copyB = [4, 6, 8, 10, 12, 14, 16, 18].map(leaf);
+    try {
+      d.deriveParents(fx.db, ictx, s.newBudget());
+      v9.expect(parents9(fx.db, 1).map((p) => p.node_id), 'leaf 7 (copy A) is not derived yet: copy B still gets its parent')
+        .toEqual([lib9.parentId(copyB)]);
+      addLeaf9(fx.db, 7, leaf(7));
+      d.deriveParents(fx.db, ictx, s.newBudget());
+      const made = parents9(fx.db, 1).map((p) => p.node_id).sort();
+      v9.expect(made).toEqual([lib9.parentId(copyA), lib9.parentId(copyB)].sort());
+      v9.expect(children9(fx.db, lib9.parentId(copyA)), 'the head and copy A\'s first six, in ord').toEqual(copyA);
+      // Every parent's children sit in one holding copy: the smallest live file_id with the boundary as a member.
+      const holderOf = (id: string): number => {
+        const b = (fx.db.prepare('SELECT boundary_entry_id AS e FROM nodes WHERE node_id = ?').get(id) as { e: number }).e;
+        return Number((fx.db.prepare('SELECT min(file_id) AS f FROM memberships WHERE entry_id = ?').get(b) as { f: number }).f);
+      };
+      for (const p of made) v9.expect(new Set(children9(fx.db, p).map(holderOf)).size, `${p}: one holding copy`).toBe(1);
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  v9.it('rerollParents re-rolls every parent above a changed leaf from its children as stored now, ids kept (Tasks 21 and 29 call it)', async () => {
+    const d = await derive9();
+    const s = await sweep9();
+    const fx = epochFixture9('ccrc-hist-reroll-', 32, new Set());
+    const ictx = { nowMs: 5_000, fts: false, pairIdx: NO_PAIRS9 };
+    try {
+      d.deriveParents(fx.db, ictx, s.newBudget());
+      const ids = (): string[] => [...parents9(fx.db, 1), ...parents9(fx.db, 2)].map((p) => p.node_id);
+      const before = ids();
+      fx.db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run('Leaf 3 was re-derived. Its tail is dropped.', fx.leafIds[2]!);
+      v9.expect(d.rerollParents(fx.db, ictx, [fx.leafIds[2]!]), 'its depth-1 parent, then the depth-2 parent above that').toBe(2);
+      const p1 = parents9(fx.db, 1);
+      v9.expect(p1[0]!.gist).toContain('Leaf 3 was re-derived.');
+      v9.expect(p1[0]!.gist).not.toContain('Leaf 3 did part 3');
+      v9.expect(p1[1]!.gist, 'a parent above no changed leaf is untouched').toContain('Leaf 9 did part 9.');
+      v9.expect(ids(), 'no parent id changes').toEqual(before);
+      v9.expect(children9(fx.db, p1[0]!.node_id)).toEqual(fx.leafIds.slice(0, 8));
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  v9.it('rerollParents reaches every reverse-ancestry branch once, including cycles, and replaces every parent FTS row', async (ctx) => {
+    const d = await derive9();
+    const s = await sweep9();
+    const fx = epochFixture9('ccrc-hist-reroll-fanin-', 32, new Set());
+    try {
+      if (store9.probeFts5(fx.db) !== 'present') ctx.skip();
+      store9.createFtsTables(fx.db);
+      const ictx = { nowMs: 5_000, fts: true, pairIdx: NO_PAIRS9 };
+      d.deriveParents(fx.db, { ...ictx, fts: false }, s.newBudget());
+      const left = lib9.parentId(fx.leafIds.slice(0, 8));
+      const right = lib9.parentId(fx.leafIds.slice(8, 16));
+      const top = lib9.parentId([left, right, lib9.parentId(fx.leafIds.slice(16, 24)), lib9.parentId(fx.leafIds.slice(24, 32))]);
+      const branch = 'R9branch00000000000001';
+      const branchTop = 'R9branch00000000000002';
+      const cycle = 'R9branch00000000000003';
+      const node = fx.db.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, parser_version, created_ms) VALUES (?, 1, 1, 1, 'condensed', ?, 'ok', ?, '[]', 1, 1, 0, 0, 0, 1, 1)");
+      node.run(branch, 1, 'stale side branch');
+      node.run(branchTop, 2, 'stale side top');
+      node.run(cycle, 3, 'stale cycle');
+      const edge = fx.db.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)');
+      edge.run(branch, fx.leafIds[2]!, 0);
+      edge.run(branchTop, branch, 0);
+      fx.db.prepare('UPDATE nodes SET depth = 3 WHERE node_id = ?').run(top);
+      edge.run(top, branchTop, 4);
+      edge.run(cycle, cycle, 0); // A reachable damaged cycle must terminate without duplicate rewrites.
+      edge.run(cycle, fx.leafIds[2]!, 1);
+      for (const id of [left, right, top, branch, branchTop, cycle]) {
+        const rid = (fx.db.prepare('SELECT rowid AS rid FROM nodes WHERE node_id = ?').get(id) as { rid: number }).rid;
+        fx.db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, \'\', \'\')').run(rid, `old-${id}`);
+      }
+      fx.db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run('Leaf 3 fresh reroll content.', fx.leafIds[2]!);
+      v9.expect(d.rerollParents(fx.db, ictx, [fx.leafIds[2]!])).toBe(5);
+      for (const id of [left, branch, branchTop, cycle, top]) {
+        const row = fx.db.prepare('SELECT gist FROM nodes WHERE node_id = ?').get(id) as { gist: string };
+        v9.expect(row.gist, `${id}: rewrite follows every parent edge`).toContain('Leaf 3 fresh reroll content.');
+        const rid = (fx.db.prepare('SELECT rowid AS rid FROM nodes WHERE node_id = ?').get(id) as { rid: number }).rid;
+        const fts = fx.db.prepare('SELECT gist FROM nodes_fts WHERE rowid = ?').get(rid) as { gist: string };
+        v9.expect(fts.gist).toContain('Leaf 3 fresh reroll content.');
+        v9.expect(fts.gist).not.toContain(`old-${id}`);
+      }
+      v9.expect(children9(fx.db, branch)).toEqual([fx.leafIds[2]!]);
+      v9.expect(children9(fx.db, branchTop)).toEqual([branch]);
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  v9.it('a tiny advancing budget leaves a parent epoch resumable, then a retry completes every expected parent exactly once', async () => {
+    const d = await derive9();
+    const s = await sweep9();
+    const fx = epochFixture9('ccrc-hist-parents-budget-', 32, new Set());
+    try {
+      let clock = 0;
+      const tight = s.newBudget(() => ++clock, { maxMs: 35 });
+      const first = d.deriveParents(fx.db, { nowMs: 5_000, fts: false, pairIdx: NO_PAIRS9 }, tight);
+      v9.expect(first, 'the budget expires inside this epoch, not only before it starts').toBeGreaterThan(0);
+      v9.expect(first).toBeLessThan(5);
+      v9.expect(store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION), 'an incomplete epoch cannot advance its low-water mark').toBeNull();
+      v9.expect(parents9(fx.db, 1).length).toBeLessThan(4);
+      d.deriveParents(fx.db, { nowMs: 5_000, fts: false, pairIdx: NO_PAIRS9 }, s.newBudget());
+      const level1 = [0, 8, 16, 24].map((i) => lib9.parentId(fx.leafIds.slice(i, i + 8)));
+      v9.expect(parents9(fx.db, 1).map((p) => p.node_id)).toEqual(level1);
+      v9.expect(parents9(fx.db, 2).map((p) => p.node_id)).toEqual([lib9.parentId(level1)]);
+      v9.expect(store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION)?.cursor).toBe('33');
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  v9.it('a numeric parent cursor resumes interleaved epochs by each completed leaf_top', async () => {
+    const d = await derive9();
+    const s = await sweep9();
+    const fx = interleavedEpochs9('ccrc-hist-parents-numeric-cursor-', 32);
+    try {
+      const ictx = { nowMs: 5_000, fts: false, pairIdx: NO_PAIRS9 };
+      const initialTop = Number((fx.db.prepare('SELECT max(rowid) AS r FROM nodes').get() as { r: number }).r);
+      const sameTinyBudget = () => {
+        let calls = 0;
+        return s.newBudget(() => ++calls, { maxMs: 36 });
+      };
+      const trace: Array<{ capturedTop: number; made: number; cursor: string | undefined }> = [];
+      const expectedTrace = [
+        { capturedTop: 64, made: 2, cursor: undefined },
+        { capturedTop: 66, made: 2, cursor: undefined },
+        { capturedTop: 68, made: 1, cursor: '63' },
+        { capturedTop: 69, made: 2, cursor: '63' },
+        { capturedTop: 71, made: 2, cursor: '63' },
+        { capturedTop: 73, made: 1, cursor: '73' },
+        { capturedTop: 74, made: 0, cursor: '74' },
+      ];
+      for (const expected of expectedTrace) {
+        const capturedTop = Number((fx.db.prepare('SELECT max(rowid) AS r FROM nodes').get() as { r: number }).r);
+        const made = d.deriveParents(fx.db, ictx, sameTinyBudget());
+        const cursor = store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION)?.cursor ?? undefined;
+        trace.push({ capturedTop, made, cursor });
+        v9.expect({ capturedTop, made, cursor }).toEqual(expected);
+      }
+      const firstLevel = [fx.first, fx.second].flatMap((leaves) => [0, 8, 16, 24].map((i) => lib9.parentId(leaves.slice(i, i + 8))));
+      const secondLevel = [fx.first, fx.second].map((leaves) => lib9.parentId([0, 8, 16, 24].map((i) => lib9.parentId(leaves.slice(i, i + 8)))));
+      v9.expect(trace).toEqual(expectedTrace);
+      v9.expect(parents9(fx.db, 1).map((p) => p.node_id).sort()).toEqual([...firstLevel].sort());
+      v9.expect(parents9(fx.db, 2).map((p) => p.node_id).sort()).toEqual([...secondLevel].sort());
+      const edgeSets = (fx.db.prepare("SELECT group_concat(child_id, ',') AS children FROM (SELECT node_id, child_id, ord FROM node_children ORDER BY node_id, ord) GROUP BY node_id").all() as { children: string }[]).map((r) => r.children);
+      v9.expect(new Set(edgeSets).size, 'no duplicate child-edge set is minted across retries').toBe(edgeSets.length);
+      v9.expect(new Set([...firstLevel, ...secondLevel]).size, 'every expected parent id is unique').toBe(10);
+      v9.expect(initialTop).toBe(64);
+      v9.expect(trace.at(-2)?.cursor, 'the completing pass ends at that invocation\'s captured top').toBe(String(trace.at(-2)?.capturedTop));
+      v9.expect(trace.at(-1), 'the no-trigger cleanup consumes the final parent output at its own captured top').toEqual({ capturedTop: 74, made: 0, cursor: '74' });
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  v9.it('a stored decimal parent cursor finishes at its captured top before a leaf added mid-pass', async () => {
+    const d = await derive9();
+    const s = await sweep9();
+    const fx = epochFixture9('ccrc-hist-parents-captured-top-', 8, new Set([8]));
+    try {
+      const ictx = { nowMs: 5_000, fts: false, pairIdx: NO_PAIRS9 };
+      const top = Number((fx.db.prepare('SELECT max(rowid) AS r FROM nodes').get() as { r: number }).r);
+      store9.setStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION, '1', null);
+      let calls = 0;
+      const budget = s.newBudget(() => {
+        calls += 1;
+        if (calls === 2) addLeaf9(fx.db, 8, fx.leafIds[7]!);
+        return 0;
+      }, { maxMs: 1 });
+      v9.expect(d.deriveParents(fx.db, ictx, budget)).toBe(0);
+      const post = Number((fx.db.prepare('SELECT rowid AS r FROM nodes WHERE node_id = ?').get(fx.leafIds[7]!) as { r: number }).r);
+      v9.expect(store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION)?.cursor).toBe(String(top));
+      v9.expect(post).toBeGreaterThan(top);
+      v9.expect(parents9(fx.db, 1), 'the post-snapshot leaf cannot complete the current snapshot').toEqual([]);
+      v9.expect(d.deriveParents(fx.db, ictx, s.newBudget())).toBe(1);
+      v9.expect(parents9(fx.db, 1).map((p) => p.node_id)).toEqual([lib9.parentId(fx.leafIds)]);
+      v9.expect(Number(store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION)?.cursor)).toBe(post);
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  v9.it('parent output rows advance the numeric cursor without rewalking, then a newer leaf requeues the epoch', async () => {
+    const d = await derive9();
+    const s = await sweep9();
+    const fx = epochFixture9('ccrc-hist-parents-output-cursor-', 16, new Set([16]));
+    try {
+      const ictx = { nowMs: 5_000, fts: false, pairIdx: NO_PAIRS9 };
+      d.deriveParents(fx.db, ictx, s.newBudget());
+      const afterFirst = Number(store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION)?.cursor);
+      v9.expect(parents9(fx.db, 1)).toHaveLength(1);
+      const noEpochBudget = () => {
+        let calls = 0;
+        return s.newBudget(() => ++calls, { maxMs: 1 });
+      };
+      const secondPass = d.deriveParents(fx.db, ictx, noEpochBudget());
+      v9.expect(secondPass, 'only parent output rows remain and must not re-trigger the epoch').toBe(0);
+      v9.expect(store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION)?.cursor).toBe(String(afterFirst + 1));
+      d.deriveParents(fx.db, ictx, s.newBudget());
+      v9.expect(parents9(fx.db, 1), 'parent output rows are consumed but do not rewalk the epoch').toHaveLength(1);
+      v9.expect(store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION)?.cursor).toBe(String(afterFirst + 1));
+      addLeaf9(fx.db, 16, fx.leafIds[15]!);
+      d.deriveParents(fx.db, ictx, s.newBudget());
+      v9.expect(parents9(fx.db, 1)).toHaveLength(2);
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  v9.it('an already-indexed FTS frontier advances the cursor before the next missing row is indexed', async (ctx) => {
+    const d = await derive9();
+    const s = await sweep9();
+    const fx = epochFixture9('ccrc-hist-nfts-indexed-frontier-', 2, new Set());
+    try {
+      if (store9.probeFts5(fx.db) !== 'present') ctx.skip();
+      store9.createFtsTables(fx.db);
+      const ictx = { nowMs: 5_000, fts: true, pairIdx: NO_PAIRS9 };
+      const firstRid = (fx.db.prepare('SELECT rowid AS rid FROM nodes WHERE node_id = ?').get(fx.leafIds[0]!) as { rid: number }).rid;
+      fx.db.prepare("INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, 'preindexed', '', '')").run(firstRid);
+      const oneRowBudget = () => {
+        let calls = 0;
+        return s.newBudget(() => (++calls <= 3 ? 0 : 1), { maxMs: 1 });
+      };
+      v9.expect(d.indexNodesFts(fx.db, ictx, oneRowBudget())).toBe(0);
+      v9.expect(store9.getStep(fx.db, 'nodes-fts', 1)?.cursor).toBe(String(firstRid));
+      v9.expect(d.indexNodesFts(fx.db, ictx, oneRowBudget())).toBe(1);
+      const secondRid = (fx.db.prepare('SELECT rowid AS rid FROM nodes WHERE node_id = ?').get(fx.leafIds[1]!) as { rid: number }).rid;
+      v9.expect(store9.getStep(fx.db, 'nodes-fts', 1)?.cursor).toBe(String(secondRid));
+      v9.expect(d.indexNodesFts(fx.db, ictx, oneRowBudget())).toBe(0);
+      const indexed = fx.db.prepare('SELECT count(*) AS n, count(DISTINCT rowid) AS distinct_n FROM nodes_fts').get() as { n: number; distinct_n: number };
+      v9.expect(indexed).toEqual({ n: 2, distinct_n: 2 });
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  v9.it('a tiny advancing budget commits only the examined nodes_fts prefix and a retry indexes every remaining node once', async (ctx) => {
+    const d = await derive9();
+    const s = await sweep9();
+    const fx = epochFixture9('ccrc-hist-nfts-budget-', 12, new Set());
+    try {
+      if (store9.probeFts5(fx.db) !== 'present') ctx.skip();
+      store9.createFtsTables(fx.db);
+      let clock = 0;
+      const ictx = { nowMs: 5_000, fts: true, pairIdx: NO_PAIRS9 };
+      const first = d.indexNodesFts(fx.db, ictx, s.newBudget(() => ++clock, { maxMs: 4 }));
+      v9.expect(first, 'the budget expires inside a single 256-row page').toBeGreaterThan(0);
+      v9.expect(first).toBeLessThan(12);
+      const step = store9.getStep(fx.db, 'nodes-fts', 1);
+      v9.expect(step).not.toBeNull();
+      const cursor = Number(step!.cursor);
+      const indexed = fx.db.prepare('SELECT max(rowid) AS r, count(*) AS n FROM nodes_fts').get() as { r: number; n: number };
+      v9.expect(cursor, 'cursor reaches exactly the successful prefix').toBe(Number(indexed.r));
+      v9.expect(Number(indexed.n)).toBe(first);
+      v9.expect((fx.db.prepare('SELECT count(*) AS n FROM nodes WHERE rowid > ? AND rowid IN (SELECT rowid FROM nodes_fts)').get(cursor) as { n: number }).n).toBe(0);
+      const retried = d.indexNodesFts(fx.db, ictx, s.newBudget());
+      v9.expect(retried).toBe(12 - first);
+      v9.expect((fx.db.prepare('SELECT count(*) AS n FROM nodes_fts').get() as { n: number }).n).toBe(12);
+      v9.expect(store9.getStep(fx.db, 'nodes-fts', 1)?.cursor).toBe('12');
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  v9.it('through real ticks: 8 leaves in one epoch make one parent; 8 leaves spanning a /clear make none, and the late-confirmed /clear epoch has no node before it is confirmed', () => {
+    const one = h9.makeHistoryBox('ccrc-hist-dm26-one-');
+    const acct = Object.keys(one.accountHome)[0]!;
+    const T = 'd26a0000-1111-4111-8111-111111111111';
+    h9.plantSession(one, ID9, { uuid: T, project: 'demo' });
+    h9.plantTranscript(one, acct, '-home-u-tree-demo', T, cycles9('d26a1a00', T, 8, T0_9));
+    h9.spoolLine(one, ID9, { v: 1, ev: 'SessionStart', id: ID9, sid: T, src: 'startup', reg: T });
+    for (let i = 0; i < 3; i += 1) v9.expect(h9.runSweep(one).code).toBe(0);
+    const db1 = h9.openStoreRO(one);
+    try {
+      const leaves = (db1.prepare('SELECT n.node_id AS id FROM nodes n JOIN boundaries b ON b.entry_id = n.boundary_entry_id WHERE n.depth = 0 ORDER BY b.ord').all() as { id: string }[]).map((r) => r.id);
+      v9.expect(leaves).toHaveLength(8);
+      v9.expect(parents9(db1, 1).map((r) => r.node_id)).toEqual([lib9.parentId(leaves)]);
+    } finally {
+      db1.close();
+    }
+
+    const two = h9.makeHistoryBox('ccrc-hist-dm26-clear-');
+    const acct2 = Object.keys(two.accountHome)[0]!;
+    const T1 = 'd26c1000-1111-4111-8111-111111111111';
+    const T2 = 'd26c2000-2222-4222-8222-222222222222';
+    // B1 renames a spool line at the END of a tick and drains it at the NEXT (sweep.mjs's listDraining loop, then
+    // renameAndObserve), and the first tick also runs the registry scan, which books a planted .uuid as an 'import'
+    // epoch. So the box is primed first: that tick spends the scan, and epoch 1 is the hook's 'startup'.
+    v9.expect(h9.runSweep(two).code).toBe(0);   // prime: spends the first tick's registry scan, so epoch 1 is the hook's 'startup'
+    h9.plantSession(two, ID9, { uuid: T1, project: 'demo' });
+    h9.plantTranscript(two, acct2, '-home-u-tree-demo', T1, cycles9('d26c1a00', T1, 4, T0_9));
+    h9.spoolLine(two, ID9, { v: 1, ev: 'SessionStart', id: ID9, sid: T1, src: 'startup', reg: T1 });
+    for (let i = 0; i < 2; i += 1) v9.expect(h9.runSweep(two).code).toBe(0);
+    // The /clear line drains while .uuid still names T1 and no .workdir is set: B1 chains its epoch UNCONFIRMED
+    // (SE5; decideEpochLine, then confirmClear waits), out of every scope. .uuid names T2 only after that tick, so
+    // a LATER tick confirms it ('later-tick'), and only then do its leaves appear, in that epoch (review focus 4).
+    h9.plantTranscript(two, acct2, '-home-u-tree-demo', T2, cycles9('d26c2a00', T2, 4, T0_9 + 3_600_000));
+    h9.spoolLine(two, ID9, { v: 1, ev: 'SessionStart', id: ID9, sid: T2, src: 'clear' });
+    for (let i = 0; i < 2; i += 1) v9.expect(h9.runSweep(two).code).toBe(0);   // tick N renames the /clear line, tick N+1 drains it and chains the unconfirmed epoch
+    const early = h9.openStoreRO(two);
+    try {
+      const ep = early.prepare('SELECT seq, confirmed_ms FROM epochs ORDER BY seq').all() as { seq: number; confirmed_ms: number | null }[];
+      v9.expect(ep.map((e) => [e.seq, e.confirmed_ms !== null]), 'the /clear epoch waits unconfirmed').toEqual([[1, true], [2, false]]);
+      v9.expect((early.prepare('SELECT count(*) AS n FROM nodes WHERE epoch_seq = 2').get() as { n: number }).n, 'no node in an unconfirmed epoch').toBe(0);
+    } finally {
+      early.close();
+    }
+    h9.plantSession(two, ID9, { uuid: T2 });
+    h9.spoolLine(two, ID9, { v: 1, ev: 'Stop', id: ID9 });   // a renamed line for the id hints its confirmed epochs and .uuid at ingest; without one, T2 waits for the 30-minute scan
+    for (let i = 0; i < 3; i += 1) v9.expect(h9.runSweep(two).code).toBe(0);
+    const db2 = h9.openStoreRO(two);
+    try {
+      const epochs = (db2.prepare('SELECT seq, cause, confirmed_ms FROM epochs ORDER BY seq').all() as { seq: number; cause: string; confirmed_ms: number | null }[]);
+      v9.expect(epochs.map((e) => [e.seq, e.cause, e.confirmed_ms !== null])).toEqual([[1, 'startup', true], [2, 'clear', true]]);
+      v9.expect((db2.prepare('SELECT count(*) AS n FROM nodes WHERE depth = 0').get() as { n: number }).n).toBe(8);
+      v9.expect((db2.prepare('SELECT epoch_seq AS e, count(*) AS n FROM nodes WHERE depth = 0 GROUP BY epoch_seq ORDER BY epoch_seq').all() as { e: number; n: number }[])
+        .map((r) => [r.e, r.n]), 'the late-confirmed epoch\'s leaves sit in it').toEqual([[1, 4], [2, 4]]);
+      v9.expect(parents9(db2, 1), 'four leaves in each epoch: never one group across the /clear').toEqual([]);
+    } finally {
+      db2.close();
+    }
+  }, 120_000);
+});
+
+v9.describe('the nodes_fts backfill and a re-key that moves nodes (W1-B2 Task 9)', () => {
+  v9.it('indexNodesFts indexes each node once, on redacted text, and a rerun adds nothing', async (ctx) => {
+    const d = await derive9();
+    const s = await sweep9();
+    const fx = epochFixture9('ccrc-hist-nfts-', 2, new Set());
+    try {
+      if (store9.probeFts5(fx.db) !== 'present') ctx.skip();
+      store9.createFtsTables(fx.db);
+      const secret = 'fixturesecretvalue0123456789abc';
+      // A one-case value: no belt gram seeds on it (§8.3 layer 4's seed rule), so only an escape reading separates it.
+      const plain = 'fixtureonlylowercasevalueqwrt';
+      // Leaf 2: the value whole, and the one-case value glued to a literal backslash-n, as a gist quoting JSON holds it
+      // (B1's escape readings, through nodeIndexTexts; spec §6.2 `nodes_fts`, rev 3.5).
+      fx.db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(`Leaf 2 did part 2 with ${secret} and {"t":"a\\n${plain}"}.`, fx.leafIds[1]!);
+      // Leaf 1: the value glued to letters (§8.3 layer 4, Task 7A): one run no pair matches, which the belt masks.
+      fx.db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(`Leaf 1 did part 1 with zq${secret}x.`, fx.leafIds[0]!);
+      const ictx = { nowMs: 5_000, fts: true, pairIdx: lib9.makePairIndex(lib9.secretPairs([secret, plain]).pairs,
+        lib9.makeBelt(lib9.beltUnits([secret, plain]))) };
+      v9.expect(d.indexNodesFts(fx.db, ictx, s.newBudget())).toBe(2);
+      const hits = (q: string): number => (fx.db.prepare('SELECT count(*) AS n FROM nodes_fts WHERE nodes_fts MATCH ?').get(q) as { n: number }).n;
+      v9.expect(hits('"part"')).toBe(2);
+      v9.expect(hits(`"${secret}"`), 'the value was redacted before indexing').toBe(0);
+      v9.expect(hits(`"zq${secret}x"`), 'the glued value was masked by the belt before indexing (§8.3 layer 4)').toBe(0);
+      v9.expect(hits(`"n${plain}"`), 'the escape-glued value was redacted on its decoded reading before indexing').toBe(0);
+      v9.expect(hits(`"${plain}"`)).toBe(0);
+      const nodeBytes = (fx.db.prepare('SELECT block FROM nodes_fts_data').all() as { block: Uint8Array }[])
+        .map((r) => Buffer.from(r.block).toString('latin1')).join('');
+      v9.expect(nodeBytes.includes(secret.slice(4, 18)), 'no 14 characters of the value are an index byte').toBe(false);
+      v9.expect(d.indexNodesFts(fx.db, ictx, s.newBudget()), 'a rerun inserts no duplicate rowid').toBe(0);
+      v9.expect((fx.db.prepare('SELECT count(*) AS n FROM nodes_fts').get() as { n: number }).n).toBe(2);
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  v9.it('mergeFamily moves every node with its epoch: same ids, the merged seqs; a node with no epoch stays and is counted', async () => {
+    const s = await sweep9();
+    const home = tmp9.mkTmp('ccrc-hist-merge-nodes-');
+    store9.createStore(home);
+    const db = store9.openWriter(lib9.historyPaths(home).dbFile);
+    const U = ['e1000000-1111-4111-8111-111111111111', 'e2000000-2222-4222-8222-222222222222',
+      'e3000000-3333-4333-8333-333333333333', 'e4000000-4444-4444-8444-444444444444'];
+    const G = '0189abcd-1234-4678-9abc-0123456789ab';
+    try {
+      db.exec('BEGIN');
+      db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, ?, '', 'demo', 1)").run(ID9);
+      db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (2, ?, ?, 'demo', 2)").run(ID9, G);
+      U.forEach((u, i) => { db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (?, ?)').run(i + 1, u); });
+      const ep = db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, ?, ?, 'startup', 'hook', 1)");
+      ep.run(1, 1, U[0]!); ep.run(1, 2, U[1]!); ep.run(2, 1, U[0]!); ep.run(2, 2, U[2]!);
+      const node = db.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, parser_version, created_ms) VALUES (?, ?, ?, ?, ?, ?, 'ok', 1, 1)");
+      node.run('L1aaaaaaaaaaaaaaaaaaaa', 1, 1, 1, 'native_leaf', 0);
+      node.run('N1aaaaaaaaaaaaaaaaaaaa', 1, 1, 1, 'condensed', 1);
+      node.run('L2aaaaaaaaaaaaaaaaaaaa', 1, 2, 2, 'native_leaf', 0);
+      node.run('L3aaaaaaaaaaaaaaaaaaaa', 2, 2, 3, 'native_leaf', 0);
+      node.run('L4aaaaaaaaaaaaaaaaaaaa', 1, 1, 4, 'native_leaf', 0);
+      db.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, 0)').run('N1aaaaaaaaaaaaaaaaaaaa', 'L1aaaaaaaaaaaaaaaaaaaa');
+      s.mergeFamily(db, 1, 2);
+      db.exec('COMMIT');
+      const where = (id: string): number[] => {
+        const r = db.prepare('SELECT session_pk, epoch_seq FROM nodes WHERE node_id = ?').get(id) as { session_pk: number; epoch_seq: number };
+        return [r.session_pk, r.epoch_seq];
+      };
+      v9.expect((db.prepare('SELECT seq, cc_session_uuid FROM epochs WHERE session_pk = 2 ORDER BY seq').all() as { seq: number; cc_session_uuid: string }[])
+        .map((e) => [e.seq, e.cc_session_uuid])).toEqual([[1, U[1]], [2, U[0]], [3, U[2]]]);
+      v9.expect(where('L1aaaaaaaaaaaaaaaaaaaa'), 'a leaf moves to the retained destination epoch for its shared transcript UUID').toEqual([2, 2]);
+      v9.expect(where('N1aaaaaaaaaaaaaaaaaaaa'), 'a parent moves to that same retained destination epoch').toEqual([2, 2]);
+      v9.expect(where('L2aaaaaaaaaaaaaaaaaaaa')).toEqual([2, 1]);
+      v9.expect(where('L3aaaaaaaaaaaaaaaaaaaa'), "(id, G)'s own unrelated epoch is renumbered after the merged ones").toEqual([2, 3]);
+      v9.expect(where('L4aaaaaaaaaaaaaaaaaaaa'), 'no destination-family epoch holds its transcript: it stays').toEqual([1, 1]);
+      v9.expect((db.prepare("SELECT n FROM counters WHERE name = 'nodes_unrepointed'").get() as { n: number }).n).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+// ── W1-B2 Task 34: DM48's span clause, a fresh-sid fork's leaf (spec 2026-10-05 §6.1; ruled Q16, D-4734 (history-fork-spooled)) ──
+describe('DM48: a fresh-sid fork\'s leaf starts at the parent\'s boundary its copy holds and hashes the fork\'s sid (W1-B2 Task 34; spec 6.1)', () => {
+  it('the parent compacts, an in-pane /branch copies its rows, the fork compacts again: one fork leaf, its span from the copied boundary\'s head, its id the fork\'s; the parent\'s leaf unchanged', () => {
+    const box = makeHistoryBox('ccrc-hist-dm48-span-');
+    const ID = 'claude-forkspan';
+    const UP = '0189abcd-1234-4678-9abc-0000000048a1';   // the parent
+    const UF = '0189abcd-1234-4678-9abc-0000000048a2';   // the fork
+    const pre = compactionSequence({ n: 1, trigger: 'manual', seed: 0x48a, sessionId: UP, startMs: T0 });
+    const own = compactionSequence({ n: 1, trigger: 'manual', tailRows: 0, seed: 0x48b, sessionId: UF, startMs: T0 + 600_000 });
+    plant(box, ID, UP, pre.rows);
+    settle(box);
+    expect(leavesOf(box, UP).map((l) => l.node_id), 'CONTROL: the parent\'s one leaf').toEqual([leafId(ID, UP, firstUuid(pre))]);
+    // An in-pane /branch (spec 6.1): a fresh sid whose transcript copies the parent's rows verbatim, then compacts on
+    // its own. The hook's line carries the parent's uuid as reg (it fires before _sync_uuid moves .uuid), and .uuid
+    // names the fork before the sweep observes the line, so the fork epoch confirms by the observation.
+    plantSession(box, ID, { uuid: UF });
+    plantTranscript(box, 'claude', SLUG, UF, [...pre.rows, ...own.rows]);
+    spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: UF, src: 'fork', reg: UP, gen: GEN });
+    settle(box);
+    expect(q<{ cause: string }>(box, 'SELECT cause FROM epochs WHERE cc_session_uuid = ? AND confirmed_ms IS NOT NULL', UF).map((r) => r.cause),
+      'CONTROL: the fork line chained a confirmed fork epoch').toEqual(['fork']);
+    const leaves = leavesOf(box, UF);
+    expect(leaves.map((l) => l.boundary_uuid), 'the copied parent boundary mints no second leaf under the fork').toEqual([own.boundaryUuids[0]]);
+    expect(leaves[0]!.node_id, 'its span starts at the head of the parent\'s boundary its copy holds, and its id hashes the fork\'s sid')
+      .toBe(leafId(ID, UF, pre.headUuids[0]!));
+    expect(sourcesOf(box, leaves[0]!.node_id)).toEqual([
+      ...pre.keptUuids[0]!, ...pre.afterUuids[0]!, ...pre.liveUuids, ...own.workUuids[0]!, ...own.unkeptUuids[0]!,
+    ]);
+    expect(leavesOf(box, UP).map((l) => l.node_id), 'the parent\'s leaf is unchanged').toEqual([leafId(ID, UP, firstUuid(pre))]);
+  }, 240_000);
+});
+
+// ── Fix round 1, review 441 F13: deriveLeaves' two scans stay under the per-item budget check ───────────────────────────
+// D-5024 (history-leaves-rescan-pinned-cursor). `todo` and `forkCandidates` are stepped with iterate(), one row at a time,
+// never materialised with all() before the first budget check. The rescan from the `leaves` cursor each pass is B3's.
+describe('F13: deriveLeaves steps its scans one row at a time under the budget, and the derived set is unchanged', () => {
+  const ID = 'claude-f13-lazy-scans';
+  const U = '0189abcd-1234-4678-9abc-0000000000f9';
+  const N = 6;
+  let box: HistoryBox;
+  beforeAll(() => {
+    box = makeHistoryBox('ccrc-hist-f13-');
+    const seq = compactionSequence({ n: N, trigger: 'manual', seed: 0xc3, sessionId: U, startMs: T0 });
+    plant(box, ID, U, seq.rows);
+    settle(box);
+  }, 240_000);
+
+  type Writer = ReturnType<typeof openWriter>;
+  interface Spy { db: Writer; all: Record<string, number>; stepped: Record<string, number>; iterated: Record<string, number> }
+  /** `db` with the two scans watched: how often each was materialised with all(), and how many rows each iterate() handed out. */
+  const watch = (db: Writer): Spy => {
+    const spy = { all: { todo: 0, forks: 0 }, stepped: { todo: 0, forks: 0 }, iterated: { todo: 0, forks: 0 } } as Omit<Spy, 'db'>;
+    const proxy = new Proxy(db, {
+      get(target, prop) {
+        if (prop === 'prepare') {
+          return (sql: string) => {
+            const stmt = target.prepare(sql);
+            const tag = sql.includes('HAVING count(*) > 1') ? 'forks' : sql.includes('ORDER BY b.entry_id') && sql.includes('SELECT b.entry_id AS entry_id') ? 'todo' : null;
+            if (tag === null) return stmt;
+            return new Proxy(stmt, {
+              get(st, p) {
+                if (p === 'all') return (...a: unknown[]) => { spy.all[tag] += 1; return (st.all as (...x: unknown[]) => unknown)(...a); };
+                if (p === 'iterate') {
+                  return function* (...a: unknown[]): Generator<unknown> {
+                    spy.iterated[tag] += 1;
+                    for (const r of (st.iterate as (...x: unknown[]) => Iterable<unknown>)(...a)) { spy.stepped[tag] += 1; yield r; }
+                  };
+                }
+                const v: unknown = Reflect.get(st, p, st);
+                return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(st) : v;
+              },
+            });
+          };
+        }
+        const v: unknown = Reflect.get(target, prop, target);
+        return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(target) : v;
+      },
+    }) as Writer;
+    return { db: proxy, ...spy };
+  };
+  const wipe = (): void => {
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      withTx(db, 'NORMAL', () => {
+        db.prepare('DELETE FROM node_refs').run();
+        db.prepare('DELETE FROM nodes_fts').run();
+        db.prepare('DELETE FROM nodes').run();
+        db.prepare("DELETE FROM derivation_state WHERE step = 'leaves'").run();
+      });
+    } finally { closeWriter(db); }
+  };
+  const snapshot = (): unknown[] => q<{ node_id: string; kind: string; status: string; gist: string | null; topics: string | null }>(box,
+    'SELECT node_id, kind, status, gist, topics FROM nodes WHERE depth = 0 ORDER BY boundary_entry_id');
+
+  it('(a) a budget that runs out after k items steps about k rows of the todo scan and never materialises it; (b) CONTROL: an ample budget derives the same set', async () => {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: unknown): Record<string, unknown>;
+      newBudget(now?: () => number, limits?: { maxMs?: number }): unknown;
+    };
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as {
+      deriveLeaves(db: Writer, ictx: Record<string, unknown>, budget: unknown): { derived: number; waiting: number; failed: number };
+    };
+    const before = snapshot();
+    expect(before, 'CONTROL: the settled store holds one leaf per boundary').toHaveLength(N);
+    wipe();
+    const entries = q<{ entry_id: number }>(box, 'SELECT entry_id FROM boundaries ORDER BY entry_id').map((r) => r.entry_id);
+    expect(entries, 'CONTROL: and as many boundaries').toHaveLength(N);
+    const K = 2;
+    let left = Number.POSITIVE_INFINITY;
+    const now = (): number => { if (left > 0) { left -= 1; return 0; } return 3_600_000; };
+    const budget = S.newBudget(now, { maxMs: 1_000 });
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      const spy = watch(db);
+      const ictx = S.makeIngestCtx(box.home, box.homes, Date.now(), null);
+      ictx['fts'] = true;
+      left = K;
+      const cut = D.deriveLeaves(spy.db, ictx, budget);
+      expect(cut, `(a) it derived ${K} leaves and stopped`).toEqual({ derived: K, waiting: 0, failed: 0 });
+      expect(spy.all, '(a) neither scan was materialised with all()').toEqual({ todo: 0, forks: 0 });
+      expect(spy.iterated.todo, '(a) the todo scan was stepped').toBe(1);
+      expect(spy.stepped.todo, '(a) and only as far as the item that failed the budget check (k + 1 rows, of 6)').toBe(K + 1);
+      expect(spy.iterated.forks, '(a) the fork scan was stepped, not read').toBe(1);
+      expect(q<{ cursor: string }>(box, "SELECT cursor FROM derivation_state WHERE step = 'leaves' AND version = ?", NODE_PARSER_VERSION)[0]?.cursor,
+        '(a) the cursor stands just below the first boundary the budget left').toBe(String(entries[K]! - 1));
+      left = Number.POSITIVE_INFINITY;
+      const rest = D.deriveLeaves(spy.db, ictx, S.newBudget());
+      expect(rest, '(b) a pass with budget derives the rest').toEqual({ derived: N - K, waiting: 0, failed: 0 });
+      expect(spy.all, '(b) still no all()').toEqual({ todo: 0, forks: 0 });
+    } finally { closeWriter(db); }
+    expect(snapshot(), '(b) CONTROL: the derived set is the one a settled tick derived').toEqual(before);
+    expect(q<{ cursor: string }>(box, "SELECT cursor FROM derivation_state WHERE step = 'leaves' AND version = ?", NODE_PARSER_VERSION)[0]?.cursor,
+      '(b) and the cursor stands at the last boundary').toBe(String(entries[N - 1]));
+  }, 240_000);
+
+  it('(c) the fork scan is stepped one row at a time too: with four fork candidates and a budget that runs out after the first, only two rows are stepped, and none is materialised (review 462 F5)', async () => {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: unknown): Record<string, unknown>;
+      newBudget(now?: () => number, limits?: { maxMs?: number }): unknown;
+    };
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as {
+      deriveLeaves(db: Writer, ictx: Record<string, unknown>, budget: unknown): { derived: number; waiting: number; failed: number };
+    };
+    // Its own box, settled empty: (c) neither relies on what (a) and (b) left derived in the describe's shared box nor leaves its
+    // transcripts there, so a failure of (a) cannot reach (c), and (c)'s own failure names the fork scan.
+    const own = makeHistoryBox('ccrc-hist-f13-forks-');
+    settle(own);
+    // Four main transcripts, each with two live copies (the `HAVING count(*) > 1` rows of forkCandidates). They hold no boundary, so
+    // the todo scan has nothing to derive and the fork scan is the loop under test.
+    const CANDIDATES = 4;
+    const w = openWriter(historyPaths(own.home).dbFile);
+    try {
+      withTx(w, 'NORMAL', () => {
+        const tr = w.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (?, ?)');
+        const fl = w.prepare("INSERT INTO ingest_files (dev, ino, transcript_pk, offset, status, parser_version) VALUES (1, ?, ?, ?, 'live', 1)");
+        for (let k = 1; k <= CANDIDATES; k += 1) {
+          tr.run(500 + k, `0189abcd-1234-4678-9abc-00000000f1${k}0`);
+          fl.run(7000 + 2 * k, 500 + k, 100);
+          fl.run(7001 + 2 * k, 500 + k, 100);
+        }
+      });
+    } finally { closeWriter(w); }
+    let left = Number.POSITIVE_INFINITY;
+    const now = (): number => { if (left > 0) { left -= 1; return 0; } return 3_600_000; };
+    const budget = S.newBudget(now, { maxMs: 1_000 });
+    const db = openWriter(historyPaths(own.home).dbFile);
+    try {
+      const spy = watch(db);
+      const ictx = S.makeIngestCtx(own.home, own.homes, Date.now(), null);
+      ictx['fts'] = true;
+      left = 1;
+      expect(D.deriveLeaves(spy.db, ictx, budget), 'nothing to derive').toEqual({ derived: 0, waiting: 0, failed: 0 });
+      expect(spy.all, 'neither scan was materialised with all()').toEqual({ todo: 0, forks: 0 });
+      expect(spy.iterated.forks, 'the fork scan was stepped').toBe(1);
+      expect(spy.stepped.forks, 'and only as far as the candidate that failed the budget check (1 + 1 rows, of 4)').toBe(2);
+      left = Number.POSITIVE_INFINITY;
+      const ample = watch(db);
+      D.deriveLeaves(ample.db, ictx, S.newBudget());
+      expect(ample.stepped.forks, 'CONTROL: an ample budget steps every candidate').toBe(CANDIDATES);
+      expect(ample.all, 'CONTROL: still no all()').toEqual({ todo: 0, forks: 0 });
+    } finally { closeWriter(db); }
+  }, 240_000);
+});
+
+// ── CP-39 Task 4 (D-6935, D-6939): every derivation step advances, whatever ingest and its discovery spent ─────────────────
+describe('CP-39 Task 4: every derivation step advances in a pass whose ingest or discovery spent the run (D-6935, D-6939)', () => {
+  const ID = 'claude-cp39-starve';
+  const U = '0189abcd-1234-4678-9abc-0000000039a1';
+  const SIDECARS = 150;
+  interface Budget { startMs: number; now: () => number }
+  interface SW {
+    passCtx(o: Record<string, unknown>): Record<string, unknown> & { budget: Budget };
+    idsFromFiles(P: unknown): { storeId: string; writer: string } | null;
+    tick(db: unknown, ctx: unknown): Promise<void>;
+    periodicCensus(db: unknown, ctx: unknown): void;
+    resetFtsPending(db: unknown): void;
+  }
+  /** A settled store (three spawned passes) whose leaves are wiped and whose every indexed blob is owed to the FTS backfill
+   *  again, a REAL card prediction on disk (the line the card step predicts for U's next compaction), and SIDECARS
+   *  unlinked sidecars: the backlog shape measured on the fleet box. */
+  const starve = (prefix: string): { box: HistoryBox; owed: number[]; settledAt: number; cardFile: string } => {
+    const box = makeHistoryBox(prefix);
+    const seq = compactionSequence({ n: 6, trigger: 'manual', seed: 0x39, sessionId: U, startMs: T0 });
+    plant(box, ID, U, seq.rows);
+    settle(box);
+    const settledAt = Date.now();
+    const w = openWriter(historyPaths(box.home).dbFile);
+    let owed: number[] = [];
+    try {
+      withTx(w, 'NORMAL', () => {
+        w.prepare('DELETE FROM node_refs').run();
+        w.prepare('DELETE FROM nodes_fts').run();
+        w.prepare('DELETE FROM nodes').run();
+        w.prepare("DELETE FROM derivation_state WHERE step = 'leaves'").run();
+        // The census's completion and W1-k's dates, which settle's passes wrote: the census asserted below is this pass's alone (P17).
+        w.prepare("DELETE FROM meta WHERE k IN ('export_census_ms', 'oldest_row_ms', 'first_due_ms', 'first_deletion_ms')").run();
+        owed = (w.prepare('SELECT blob_id FROM blobs WHERE fts_indexed = 1 ORDER BY blob_id').all() as { blob_id: number }[]).map((r) => r.blob_id);
+        for (const id of owed) {
+          w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(id);
+          w.prepare('UPDATE blobs SET fts_indexed = 0 WHERE blob_id = ?').run(id);
+        }
+      });
+    } finally { closeWriter(w); }
+    const dir = path.join(box.accountHome['claude']!, 'projects', SLUG, U, 'tool-results');
+    fs.mkdirSync(dir, { recursive: true });
+    for (let k = 0; k < SIDECARS; k += 1) fs.writeFileSync(path.join(dir, `cp39-${String(k).padStart(3, '0')}.txt`), `cp39 unlinked body ${k}\n`);
+    const cardFile = path.join(box.root, 'card', ID, `${U}.txt`);
+    fs.mkdirSync(path.dirname(cardFile), { recursive: true });
+    // A REAL card line (P1), never placeholder text: a card step that may not write deletes a file that is no card line
+    // (lib decideCardFile), and the withdrawal after it would find nothing to count. This is the line for U's next
+    // compaction: its leaf starts at the last boundary's head (lib predictedSpanStart), with no parent (six leaves make no
+    // fan-in group and no condensed node). Should the pass's own prediction print it otherwise (a parent, a longer prefix),
+    // decideCardFile's same-leaf arm still keeps it whenever the step may not write.
+    const leaf = leafId(ID, U, seq.headUuids[5]!);
+    fs.writeFileSync(cardFile, `${cardLine({ leaf: displayPrefixes([leaf]).get(leaf)!, parent: null })}\n`);
+    return { box, owed, settledAt, cardFile };
+  };
+  /** One in-process scheduled pass, past SCAN_INTERVAL_MS after the settle (every scan and the census are due) and inside the
+   *  export pass's hour (it waits). `limits`, when given, are the run's (deps.budget). Answers how far the budget's clock
+   *  moved from the run's start. */
+  const pass = async (box: HistoryBox, settledAt: number, jumpMs = 0, limits?: { maxMs?: number; maxBytes?: number }, at = '/tool-results'): Promise<number> => {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as SW;
+    const { syncBuiltinESMExports } = await import('node:module');
+    const P = historyPaths(box.home);
+    let t = settledAt + 40 * 60_000;
+    const ctx = S.passCtx({
+      home: box.home, P, ids: S.idsFromFiles(P), now: () => t, out: () => undefined,
+      parsed: { homes: box.homes, secrets: [], unanswered: [], rosterUnreadable: false },
+      deps: { managedSettings: [], ...(limits === undefined ? {} : { budget: limits }) }, pause: null, ingest: true,
+    });
+    ctx.budget.now = () => (t += 1_000);   // the budget's `now` seam: only budget reads move the clock
+    const realReaddir = fs.readdirSync;
+    let listed = false;
+    let jumped = false;
+    (fs as { readdirSync: unknown }).readdirSync = function readdirSync(p: unknown, ...rest: unknown[]): unknown {
+      if (String(p).endsWith(at)) {
+        listed = true;
+        if (!jumped && jumpMs > 0) { jumped = true; t += jumpMs; }
+      }
+      return (realReaddir as (...a: unknown[]) => unknown).call(fs, p, ...rest);
+    };
+    syncBuiltinESMExports();
+    const db = openWriter(P.dbFile);
+    try {
+      S.resetFtsPending(db);
+      await S.tick(db, ctx);
+      S.periodicCensus(db, ctx);
+    } finally {
+      (fs as { readdirSync: unknown }).readdirSync = realReaddir;
+      syncBuiltinESMExports();
+      closeWriter(db);
+    }
+    expect(listed, `CONTROL: a listing of ${at} ran`).toBe(true);
+    if (jumpMs > 0) expect(jumped, 'CONTROL: the jump was taken inside the first such listing').toBe(true);
+    return t - ctx.budget.startMs;
+  };
+  const seenOf = (box: HistoryBox): number => q<{ n: number }>(box, 'SELECT count(*) AS n FROM sidecar_seen')[0]!.n;
+  const indexedOf = (box: HistoryBox, owed: number[]): number =>
+    q<{ n: number }>(box, `SELECT count(*) AS n FROM blobs WHERE fts_indexed = 1 AND blob_id IN (${owed.join(',')})`)[0]!.n;
+
+  it('an ingest that overran its ceiling: the FTS backfill and the leaves advance in the same pass, and the pass ends near the run budget', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const { box, owed, settledAt } = starve('ccrc-hist-cp39-starve-a-');
+    expect(owed.length, 'CONTROL: more owed blobs than the FTS step can take in one pass, so it runs to its limit').toBeGreaterThan(30);
+    const spent = await pass(box, settledAt);
+    expect(seenOf(box), 'CONTROL: the budget cut the ingest, sidecars left').toBeLessThan(SIDECARS);
+    const indexed = indexedOf(box, owed);
+    expect(indexed, 'the FTS backfill indexed owed blobs in the same pass').toBeGreaterThan(0);
+    expect(indexed, 'CONTROL: the backlog outlasted the FTS step').toBeLessThan(owed.length);
+    expect(leavesOf(box, U).length, 'the leaves were derived in the same pass').toBeGreaterThan(0);
+    // Ingest ended at its ceiling, so the steps after it shared what the run had left and the pass ended near RUN_BUDGET_MS.
+    // An ingest on the whole run would leave each step only its floor past it: about RUN_BUDGET_MS plus the floors' 36 s.
+    expect(spent, 'the pass ended within the run budget plus half the floors\' sum').toBeLessThanOrEqual(lib.RUN_BUDGET_MS + 18_000);
+  }, 240_000);
+
+  it('a discovery that overran the whole run before any derivation step: the FTS backfill, the leaves, the card step and the export census each still advance, on its own floor (P13)', async () => {
+    const { box, owed, settledAt, cardFile } = starve('ccrc-hist-cp39-starve-b-');
+    const metaOf = (k: string): string | null => q<{ v: string }>(box, 'SELECT v FROM meta WHERE k = ?', k)[0]?.v ?? null;
+    expect(metaOf('export_census_ms'), 'CONTROL: no census completion stands before the pass').toBeNull();
+    expect(fs.existsSync(cardFile), 'CONTROL: a prediction stands before the pass').toBe(true);
+    await pass(box, settledAt, 100_000);   // past the 70 s the ruling names, and past the whole 90 s run
+    expect(seenOf(box), 'CONTROL: the discovery overran and the ingest was cut').toBeLessThan(SIDECARS);
+    expect(indexedOf(box, owed), 'the FTS backfill indexed owed blobs on its floor').toBeGreaterThan(0);
+    expect(leavesOf(box, U).length, 'the leaves were derived on their floor').toBeGreaterThan(0);
+    expect(counters(box)['card_withdrawn:budget'], 'the card step ran on its floor: no prediction withdrawn for budget').toBeUndefined();
+    expect(fs.existsSync(cardFile), 'the prediction stands: the card step kept it, and no withdrawal took it').toBe(true);
+    const after = metaOf('export_census_ms');
+    expect(after, 'the census completed in this pass, on its floor').not.toBeNull();
+    expect(Number(after), 'a census of this pass, after the settle').toBeGreaterThanOrEqual(settledAt + 40 * 60_000);
+    for (const k of ['oldest_row_ms', 'first_due_ms', 'first_deletion_ms']) expect(metaOf(k), `${k} recorded`).not.toBeNull();
+  }, 240_000);
+
+  it("the card step's own floor, positive and spent before its first check: the prediction left is withdrawn, counted card_withdrawn:budget (P1)", async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const { box, settledAt, cardFile } = starve('ccrc-hist-cp39-starve-c-');
+    // A run of 18 s, injected through deps.budget, the seam the floors are derived from (DERIVE_SHARES of the run's limits).
+    const limits = { maxMs: 18_000 };
+    // The card's floor, read from lib (never hand-copied arithmetic): positive, and under the clock's 1 s step.
+    const cardFloor = lib.budgetFloors({ maxMs: limits.maxMs, maxBytes: lib.RUN_BUDGET_BYTES }).card.maxMs;
+    expect(cardFloor, "CONTROL: the card's floor is positive").toBeGreaterThan(0);
+    expect(cardFloor, "CONTROL: the card's floor is under the 1 s the clock moves between the slice's start and its first check").toBeLessThan(1_000);
+    expect(fs.existsSync(cardFile), 'CONTROL: a prediction stands before the pass').toBe(true);
+    // The jump puts the card step past its 16.2 s ceiling (budgetRungs: 18 s less the census's 100 per mille), so its slice
+    // is its floor alone, from its own start; the slice's first check is 1 s later, past its floor. It is taken in the first
+    // listing of a projects/ directory, not of tool-results/: an 18 s run's ingest ceiling (10.8 s, at a 1 s step a budget read)
+    // is spent in discovery before any tool-results/ listing, so that listing never runs in this arm.
+    await pass(box, settledAt, 100_000, limits, '/projects');
+    expect(seenOf(box), 'CONTROL: the discovery overran and the ingest was cut').toBeLessThan(SIDECARS);
+    expect(counters(box)['card_withdrawn:budget'], "the card step's own positive floor was spent: its prediction withdrawn, counted for budget").toBe(1);
+    expect(fs.existsSync(cardFile), 'the prediction is gone').toBe(false);
+  }, 240_000);
+});
+
+// ── W3-4 T4c: a steered <ccrc-node> gist replaces only the depth-1 parent's gist (spec 2026-10-05 §6.3, §7.1) ──
+describe('a steered <ccrc-node> gist replaces only the depth-1 parent\'s gist (W3-4; spec 6.3, 7.1)', () => {
+  const ID = 'claude-node';
+  const U = '0189abcd-1234-4678-9abc-0000000000b8';
+  const GROUPS = 10;
+  const N = GROUPS * 8;
+  const V = crypto.randomBytes(32).toString('hex');   // one [A-Za-z0-9_-] run: one pair
+  const LEAF_GIST = (k: number): string => `Leaf ${k} built part ${k} of the node fixture and settled it for good.`;
+  const NODE_OK = 'The eight spans together built the first fixture parent: tried two shapes, kept one, and left the docs open.';
+  const NODE_WRONG = 'The eight spans together built the second fixture parent under a block that names some other id entirely.';
+  const NODE_SHORT = 'Too short a gist.';
+  const NODE_REDACT = `The eight spans together built the eighth fixture parent and used the key ${V} throughout the whole run.`;
+  const W = crypto.randomBytes(32).toString('hex');   // a second pair, learned after the parent was made
+  const NODE_ALL_W = W;   // a gist that is one registered run: redacted it is `[redacted]`, under GIST_MIN
+  const NODE_HIDDEN = 'This gist sits inside an analysis block and must never be selected for any parent at all.';
+  const NODE_IGNORED = 'This gist rides a last child that was never asked to steer, so the parent must not read it at all.';
+  const NODE_GENERIC = 'This gist rides a last child with only a generic receipt, which never carried the add-on, so nothing was asked.';
+  // The group (of 8) a leaf index falls in: 0 ok (17 topics lines, none stored), 1 the previous parent's block carried forward
+  // verbatim (its id and its gist), 2 wrong id, 3 short gist, 4 a copy of a leaf's gist, 5 last child not receipted,
+  // 6 node block only inside an <analysis>, 7 a registered value inside the node gist (planted unregistered), 8 a gist that is
+  // one value registered later, 9 a last child with only a generic receipt (the generic text never carries the add-on: nothing asked).
+  // Every other group's last child holds an EXACT receipt (a steer_receipts row whose leaf_id is its id), which is what asks for a node block.
+  const G = { ok: 0, forward: 1, wrong: 2, short: 3, leafCopy: 4, unreceipted: 5, analysis: 6, redact: 7, whole: 8, generic: 9 } as const;
+  const UNRECEIPTED = G.unreceipted * 8 + 7;
+  const GENERIC = G.generic * 8 + 7;
+  /** Whether leaf k's receipt is exact: the last child of a group that was asked. */
+  const exactReceipt = (k: number): boolean => k % 8 === 7 && k !== UNRECEIPTED && k !== GENERIC;
+  /** How many groups were asked. */
+  const exactCount = Array.from({ length: GROUPS }, (_, g) => g * 8 + 7).filter(exactReceipt).length;
+  let box: HistoryBox;
+  let ids: string[] = [];
+  let parents: string[] = [];
+  /** The node counters the first derivation added. The store held none before it, so this snapshot, taken right after the first pass,
+   *  is that pass's delta. The cases that count verdicts read it, never the live counters, so none depends on the order the cases run in;
+   *  the one case that derives again measures its own before and after. */
+  let firstPass: Record<string, number> = {};
+
+  const nodeBlock = (id: string, gist: string, expand?: string): string =>
+    // the depth attribute goes into the opening tag only, so the pattern is anchored to it
+    steeredBlock({ kind: 'node', id, gist, ...(expand === undefined ? {} : { expand }) }).replace(/^(<ccrc-node [^>\n]*)>/, '$1 depth="1">');
+  const MANY_TOPICS = Array.from({ length: TOPICS_MAX + 1 }, (_, i) => `block topic ${i}`).join(', ');
+  const summaryAt = (k: number, parentIds: readonly string[]): string => {
+    const g = Math.floor(k / 8);
+    const lines = ['<summary>', '1. Primary Request and Intent:', `   Node fixture summary ${k}.`, '</summary>',
+      // an exact receipt names the leaf, so its block names it too (an id-less block would be degraded for it)
+      steeredBlock({ ...(exactReceipt(k) ? { id: ids[k] ?? 'unplanned' } : {}), gist: LEAF_GIST(k), expand: `node topic ${k}`, refs: 'ccd/history/derive.mjs' })];
+    if (k % 8 === 7) {
+      const pid = parentIds[g] ?? 'unplanned';
+      if (g === G.ok) lines.push(nodeBlock(pid, NODE_OK, MANY_TOPICS));
+      if (g === G.forward) lines.push(nodeBlock(parentIds[G.ok] ?? 'unplanned', NODE_OK));
+      if (g === G.wrong) lines.push(nodeBlock('not-the-parent-id', NODE_WRONG));
+      if (g === G.short) lines.push(nodeBlock(pid, NODE_SHORT));
+      if (g === G.leafCopy) lines.push(nodeBlock(pid, LEAF_GIST(3)));
+      if (g === G.unreceipted) lines.push(nodeBlock(pid, NODE_IGNORED));
+      if (g === G.analysis) lines.push('<analysis>', nodeBlock(pid, NODE_HIDDEN), '</analysis>');
+      if (g === G.redact) lines.push(nodeBlock(pid, NODE_REDACT));
+      if (g === G.whole) lines.push(nodeBlock(pid, NODE_ALL_W));
+      if (g === G.generic) lines.push(nodeBlock(pid, NODE_GENERIC));
+    }
+    return lines.join('\n');
+  };
+
+  type ParentRow = { node_id: string; kind: string; status: string; gist: string | null; topics: string | null; earliest_ms: number;
+    latest_ms: number; src_chars: number; desc_count: number; desc_chars: number; directive_flag: number; capped: number };
+  const parentRow = (id: string, b: HistoryBox = box): ParentRow => q<ParentRow>(b,
+    'SELECT node_id, kind, status, gist, topics, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, directive_flag, capped FROM nodes WHERE node_id = ?', id)[0]!;
+  const refsOfNode = (id: string, b: HistoryBox = box): string[] => q<{ kind: string; value: string; origin: string }>(b,
+    'SELECT kind, value, origin FROM node_refs WHERE node_id = ? ORDER BY rowid', id).map((r) => `${r.kind}|${r.value}|${r.origin}`);
+  /** What the rollup of a parent's stored children is, computed here from the children rows (never from the parent). */
+  const rollupOf = (id: string, b: HistoryBox = box): ReturnType<typeof parentRollup> => parentRollup(q<{ node_id: string }>(b,
+    'SELECT child_id AS node_id FROM node_children WHERE node_id = ? ORDER BY ord', id).map((c) => {
+    const r = parentRow(c.node_id, b);
+    return {
+      gist: r.gist, topics: JSON.parse(r.topics ?? '[]') as string[],
+      refs: q<{ kind: string; value: string; origin: string }>(b, 'SELECT kind, value, origin FROM node_refs WHERE node_id = ? ORDER BY rowid', c.node_id),
+      earliestMs: r.earliest_ms, latestMs: r.latest_ms, srcChars: r.src_chars, descCount: r.desc_count, descChars: r.desc_chars,
+    };
+  }));
+  /** The fields the node block never touches: all equal the rollup's. */
+  const rollupFields = (id: string, b: HistoryBox = box): object => {
+    const r = rollupOf(id, b);
+    const row = parentRow(id, b);
+    return {
+      topics: JSON.parse(row.topics ?? '[]'), refs: refsOfNode(id, b),
+      time: [row.earliest_ms, row.latest_ms], counts: [row.src_chars, row.desc_count, row.desc_chars],
+      expected: {
+        topics: r.topics, refs: r.refs.map((x) => `${x.kind}|${x.value}|${x.origin}`),
+        time: [r.earliestMs, r.latestMs], counts: [r.srcChars, r.descCount, r.descChars],
+      },
+    };
+  };
+  const expectRollupFields = (id: string, b: HistoryBox = box): void => {
+    const f = rollupFields(id, b) as { expected: object } & Record<string, unknown>;
+    const { expected, ...stored } = f;
+    expect(stored).toEqual(expected);
+  };
+  const ftsTexts = (id: string, b: HistoryBox = box): string[] => q<{ gist: string | null; topics: string | null; refs: string | null }>(b,
+    'SELECT f.gist, f.topics, f.refs FROM nodes_fts f JOIN nodes n ON n.rowid = f.rowid WHERE n.node_id = ?', id)
+    .flatMap((r) => [r.gist ?? '', r.topics ?? '', r.refs ?? '']);
+
+  beforeAll(() => {
+    box = makeHistoryBox('ccrc-hist-derive-node-');
+    // The ids are fixed by the rows' uuids, which the summary text never changes: one plain pass learns them.
+    const probe = compactionSequence({ n: N, trigger: 'manual', seed: 0xd8, sessionId: U, startMs: T0, summaryText: (k) => summaryAt(k, []) });
+    ids = Array.from({ length: N }, (_, k) => leafId(ID, U, k === 0 ? firstUuid(probe) : probe.headUuids[k - 1]!));
+    parents = Array.from({ length: GROUPS }, (_, g) => parentId(ids.slice(g * 8, g * 8 + 8)));
+    const seq = compactionSequence({ n: N, trigger: 'manual', seed: 0xd8, sessionId: U, startMs: T0, summaryText: (k) => summaryAt(k, parents) });
+    expect(seq.boundaryUuids, 'CONTROL: the summary text moves no uuid').toEqual(probe.boundaryUuids);
+    // Group 0's last child (leaf 7) has another producer than the rest: the assistant rows between its summary and the next
+    // boundary name a non-Claude model, so the producer of a counted parent is not the same word everywhere.
+    const from = seq.rows.findIndex((r) => r['uuid'] === seq.summaryUuids[7]);
+    const upto = seq.rows.findIndex((r) => r['uuid'] === seq.boundaryUuids[8]);
+    const rows = seq.rows.map((r, i) => (i > from && i < upto && r['type'] === 'assistant'
+      ? { ...r, message: { ...(r['message'] as object), model: 'gpt-fixture-1' } } : r));
+    plant(box, ID, U, rows);
+    const at = (u: string): number => Date.parse(String(seq.rows.find((r) => r['uuid'] === u)!['timestamp']));
+    seq.boundaryUuids.forEach((b, k) => {
+      if (k !== UNRECEIPTED) spoolLine(box, ID, { v: 1, ev: 'steer', id: ID, sid: U, leaf: exactReceipt(k) ? ids[k]! : '', ts: at(b) - 500 });
+    });
+    settle(box);
+    firstPass = nodeCounters();
+  }, 600_000);
+
+  const rerollMod = async (): Promise<{ rerollParents(db: ReturnType<typeof openWriter>, ictx: object, nodeIds: readonly string[], onlyIfChanged?: boolean): number }> =>
+    (await import('../../ccd/history/derive.mjs')) as never;
+  const topParentsOf = (): string[] => [parentId(parents.slice(0, 4)), parentId(parents.slice(4, 8))];
+
+  it('CONTROL: the store holds the leaves, ten depth-1 parents of eight in order, and two depth-2 parents over groups 0-3 and 4-7', () => {
+    expect(leavesOf(box, U).map((l) => l.node_id)).toEqual(ids);
+    const d1 = q<{ node_id: string }>(box, 'SELECT node_id FROM nodes WHERE depth = 1 ORDER BY earliest_ms').map((r) => r.node_id);
+    expect(d1).toEqual(parents);
+    expect(q<{ child_id: string }>(box, 'SELECT child_id FROM node_children WHERE node_id = ? ORDER BY ord', parents[0]!).map((r) => r.child_id))
+      .toEqual(ids.slice(0, 8));
+    const d2 = q<{ node_id: string }>(box, 'SELECT node_id FROM nodes WHERE depth = 2 ORDER BY earliest_ms').map((r) => r.node_id);
+    expect(d2).toEqual(topParentsOf());
+    expect(leavesOf(box, U)[UNRECEIPTED]!.status, 'CONTROL: the last child of the unreceipted group has no receipt').toBe('not-requested');
+    expect(leavesOf(box, U)[7]!.status, 'CONTROL: group 0\'s last child is a receipted steered leaf').toBe('ok');
+  });
+
+  it('a steered node block replaces only the parent\'s gist (§6.3), and a wrong id is degraded', () => {
+    const p = parentRow(parents[G.ok]!);
+    expect({ kind: p.kind, status: p.status, gist: p.gist }).toEqual({ kind: 'condensed', status: 'ok', gist: NODE_OK });
+    expect(p.gist, 'CONTROL: the rollup gist is another text').not.toBe(rollupOf(parents[G.ok]!).gist);
+    expect(JSON.parse(p.topics!), 'CONTROL: the children have topics, so the equality below means something').not.toEqual([]);
+    expect(JSON.parse(p.topics!), 'the block\'s 17 topics are never the parent\'s').not.toContain('block topic 0');
+    expectRollupFields(parents[G.ok]!);
+    expect({ directive: p.directive_flag, capped: p.capped }, 'nothing stored was cut: the block\'s own topics cut is not the parent\'s').toEqual({ directive: 0, capped: 0 });
+    const w = parentRow(parents[G.wrong]!);
+    expect({ kind: w.kind, status: w.status, gist: w.gist }, 'the gist is replaced all the same, as a leaf\'s is; the status says the id was wrong')
+      .toEqual({ kind: 'condensed', status: 'degraded', gist: NODE_WRONG });
+    expectRollupFields(parents[G.wrong]!);
+  });
+
+  it('a steered node block with no topics or refs is not degraded for it', () => {
+    const block = parseBlocks(nodeBlock(parents[G.ok]!, NODE_OK))[0]!;
+    expect({ expand: block.expand, refs: block.refs }, 'CONTROL: the block carries neither line').toEqual({ expand: null, refs: null });
+    expect(blockStatus({ receipt: true, block, idMismatch: false, priorGistShas: new Set() }), 'CONTROL: a leaf block this bare is degraded')
+      .toEqual({ status: 'degraded', reason: 'topics-missing' });
+    expect(nodeBlockStatus({ block, idMismatch: false, priorGistShas: new Set() })).toEqual({ status: 'ok', reason: null });
+    expect(parentRow(parents[G.ok]!).status).toBe('ok');
+  });
+
+  it('the node verdict by its decider: absent, short, carried copy, wrong id, ok', () => {
+    const block = (gist: string | null) => ({ kind: 'node' as const, attrs: { id: 'x' }, gist, expand: null, refs: null, refsNone: false, inAnalysis: false });
+    const none = new Set<string>();
+    expect(nodeBlockStatus({ block: null, idMismatch: false, priorGistShas: none })).toEqual({ status: 'absent', reason: 'no-block' });
+    expect(nodeBlockStatus({ block: block(null), idMismatch: false, priorGistShas: none })).toEqual({ status: 'invalid', reason: 'gist-short' });
+    expect(nodeBlockStatus({ block: block('x'.repeat(GIST_MIN - 1)), idMismatch: false, priorGistShas: none })).toEqual({ status: 'invalid', reason: 'gist-short' });
+    const g = 'y'.repeat(GIST_MIN);
+    expect(nodeBlockStatus({ block: block(g), idMismatch: false, priorGistShas: new Set([gistSha(g)]) })).toEqual({ status: 'invalid', reason: 'carried-copy' });
+    expect(nodeBlockStatus({ block: block(g), idMismatch: true, priorGistShas: none })).toEqual({ status: 'degraded', reason: 'id-mismatch' });
+    expect(nodeBlockStatus({ block: block(g), idMismatch: false, priorGistShas: none })).toEqual({ status: 'ok', reason: null });
+  });
+
+  it('a short gist gives invalid with the rollup gist; a carried copy of another stored gist in the session gives invalid; no node block gives absent with the rollup gist', () => {
+    const short = parentRow(parents[G.short]!);
+    expect({ status: short.status, gist: short.gist }).toEqual({ status: 'invalid', gist: rollupOf(parents[G.short]!).gist });
+    expectRollupFields(parents[G.short]!);
+    expect(leavesOf(box, U)[3]!.gist, 'CONTROL: leaf 3 stores the gist the block carries').toBe(LEAF_GIST(3));
+    const copy = parentRow(parents[G.leafCopy]!);
+    expect({ status: copy.status, gist: copy.gist }).toEqual({ status: 'invalid', gist: rollupOf(parents[G.leafCopy]!).gist });
+    // The analysis group has a receipted last child and a node block only inside an <analysis>: no node block was selected.
+    const absent = parentRow(parents[G.analysis]!);
+    expect({ status: absent.status, gist: absent.gist }).toEqual({ status: 'absent', gist: rollupOf(parents[G.analysis]!).gist });
+    expect(absent.gist, 'the hidden block\'s gist is nowhere in it').not.toContain('analysis block');
+    expectRollupFields(parents[G.analysis]!);
+  });
+
+  it('a last child that carries the previous parent\'s node block forward verbatim is a carried copy: invalid, the rollup gist, not the stale one', () => {
+    expect(parentRow(parents[G.ok]!).gist, 'CONTROL: the previous parent stores that very gist').toBe(NODE_OK);
+    const p = parentRow(parents[G.forward]!);
+    expect({ kind: p.kind, status: p.status, gist: p.gist }).toEqual({ kind: 'condensed', status: 'invalid', gist: rollupOf(parents[G.forward]!).gist });
+    expect(p.gist).not.toBe(NODE_OK);
+    expectRollupFields(parents[G.forward]!);
+  });
+
+  it('a parent whose last child has no receipt is the rollup gist with status ok, as today', () => {
+    const p = parentRow(parents[G.unreceipted]!);
+    expect({ kind: p.kind, status: p.status, gist: p.gist }).toEqual({ kind: 'condensed', status: 'ok', gist: rollupOf(parents[G.unreceipted]!).gist });
+    expect(p.gist).not.toBe(NODE_IGNORED);
+    expectRollupFields(parents[G.unreceipted]!);
+  });
+
+  it('a last child with only a generic receipt asked for nothing: the rollup gist, status ok, and no node counters (the generic text never carries the add-on)', () => {
+    const last = ids[GENERIC]!;
+    const receipts = q<{ leaf_id: string }>(box, 'SELECT leaf_id FROM steer_receipts WHERE cc_session_uuid = ?', U).map((r) => r.leaf_id);
+    expect(receipts.filter((l) => l === last), 'CONTROL: no exact receipt names that last child').toEqual([]);
+    expect(receipts.filter((l) => l !== '').sort(), 'CONTROL: the exact receipts name the other asked last children, and every other receipt is generic')
+      .toEqual(ids.filter((_, k) => exactReceipt(k)).sort());
+    expect(receipts.length, 'CONTROL: the generic receipts cover every other boundary but the unreceipted one').toBe(N - 1);
+    expect(leavesOf(box, U)[GENERIC]!.status, 'CONTROL: the leaf was asked as a leaf, and answered').toBe('ok');
+    const p = parentRow(parents[G.generic]!);
+    expect({ kind: p.kind, status: p.status, gist: p.gist }).toEqual({ kind: 'condensed', status: 'ok', gist: rollupOf(parents[G.generic]!).gist });
+    expect(p.gist).not.toBe(NODE_GENERIC);
+    expectRollupFields(parents[G.generic]!);
+    // No node_status or node_reason counter moved for it: the verdicts counted are the eight asked groups', one status each.
+    const nc = firstPass;
+    const statuses = Object.entries(nc).filter(([k]) => k.startsWith('node_status:')).reduce((n, [, v]) => n + v, 0);
+    expect(statuses, 'one node_status per asked group, none for the generic one').toBe(exactCount);
+    expect(Object.keys(nc).filter((k) => k.startsWith('node_') && !k.startsWith('node_status:') && !k.startsWith('node_reason:')),
+      'no other node counter either').toEqual([]);
+  });
+
+  /** The parity case: ONE derived store, read by BOTH readers of "a node block was asked" (lib's EXACT_RECEIPT_SQL). Derive asked
+   *  exactly the groups whose last child holds an exact receipt, and the spike report's addOn counts exactly those last children. */
+  it('parity: the groups derive took a node verdict for are the last children the spike report counts in addOn; a generic receipt gets neither', async () => {
+    const asked = Array.from({ length: GROUPS }, (_, g) => g).filter((g) => exactReceipt(g * 8 + 7));
+    expect(asked, 'CONTROL: eight groups were asked; the generic and the unreceipted one were not').toEqual([0, 1, 2, 3, 4, 6, 7, 8]);
+    // derive's reader: a parent holds a verdict when its status is not ok, or its gist is the block's and not the rollup's
+    const verdict = (g: number): boolean => {
+      const p = parentRow(parents[g]!);
+      return p.status !== 'ok' || p.gist !== rollupOf(parents[g]!).gist;
+    };
+    expect(Array.from({ length: GROUPS }, (_, g) => g).filter(verdict), 'derive: only the exact-receipted last children asked').toEqual(asked);
+    const nodeVerdicts = Object.entries(firstPass).filter(([k]) => k.startsWith('node_status:')).reduce((n, [, v]) => n + v, 0);
+    expect(nodeVerdicts, 'derive counts one verdict per asked group').toBe(asked.length);
+    // the counter's reader, over the very same store
+    const ctr = ctrMod as unknown as Record<string, (...a: never[]) => never> & { openCounterStore: (f: string) => { db: object; close(): void }; spikeReport: (a: object) => Record<string, Record<string, { population: { spans: number } }>> };
+    const rs = ctr.openCounterStore(historyPaths(box.home).dbFile);
+    try {
+      const report = (since: number, until: number): Record<string, Record<string, { population: { spans: number } }>> =>
+        ctr.spikeReport({ db: rs.db, sessions: [ID], sinceMs: since, untilMs: until });
+      const sum = (r: ReturnType<typeof report>, side: string): number => Object.values(r[side]!).reduce((n, f) => n + f.population.spans, 0);
+      const all = report(T0 - 1, Date.now() + 86_400_000);
+      expect(sum(all, 'perBackend'), 'CONTROL: the report sees all eighty leaves of the store').toBe(N);
+      expect(sum(all, 'addOn'), 'the report: the same eight in all').toBe(asked.length);
+      // Per key: one report per group, over the range [ts, ts + 1) of its last child's own boundary, so the count is that one span's.
+      const tsOf = (leaf: string): number => q<{ ts_ms: number }>(box,
+        `SELECT e.ts_ms AS ts_ms FROM nodes n JOIN boundaries b ON b.entry_id = n.boundary_entry_id JOIN entries e ON e.entry_id = b.entry_id WHERE n.node_id = ?`, leaf)[0]!.ts_ms;
+      for (let g = 0; g < GROUPS; g += 1) {
+        const ts = tsOf(ids[g * 8 + 7]!);
+        const one = report(ts, ts + 1);
+        expect(sum(one, 'perBackend'), `CONTROL: group ${g}'s range holds only its last child's boundary`).toBe(1);
+        expect(sum(one, 'addOn'), `group ${g}: the report counts its last child in addOn exactly when derive took a node verdict for the parent`).toBe(verdict(g) ? 1 : 0);
+      }
+      const gts = tsOf(ids[GENERIC]!);
+      expect({ derive: verdict(G.generic), report: sum(report(gts, gts + 1), 'addOn') }, 'the generic-receipted last child: neither reader asked').toEqual({ derive: false, report: 0 });
+      // An exact-receipted last child whose leaf did not parse: ASKED is the shared SQL alone, and the report adds its own
+      // measurability rule (a measured leaf), so derive reads a node verdict for the parent and addOn leaves the span out.
+      // Planted in the case on group 0 and restored in `finally`. The parent's verdict is a real read: its summary is readable,
+      // and a re-roll that still reads the block finds nothing to rewrite, while one that did not ask would return the rollup.
+      const D = await rerollMod();
+      const lastId = ids[7]!;
+      const planted = q<{ status: string }>(box, 'SELECT status FROM nodes WHERE node_id = ?', lastId)[0]!.status;
+      const lts = tsOf(lastId);
+      const wdb = openWriter(historyPaths(box.home).dbFile);
+      try {
+        expect(sum(report(lts, lts + 1), 'addOn'), 'CONTROL: before the plant the report counts group 0\'s last child').toBe(1);
+        wdb.prepare("UPDATE nodes SET status = 'parse-failed' WHERE node_id = ?").run(lastId);
+        expect(q<{ status: string }>(box, 'SELECT status FROM nodes WHERE node_id = ?', lastId)[0]!.status, 'CONTROL: the leaf did not parse').toBe('parse-failed');
+        const unparsed = report(lts, lts + 1);
+        expect(sum(unparsed, 'perBackend'), 'CONTROL: the span is still in the cohort').toBe(1);
+        expect(sum(unparsed, 'addOn'), 'the report: an unparsed leaf is no measured add-on span').toBe(0);
+        const ictx = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+        expect(D.rerollParents(wdb, ictx, ids.slice(0, 8), true), 'derive: the parent still reads its node verdict, so nothing differs').toBe(0);
+        expect({ status: parentRow(parents[0]!).status, gist: parentRow(parents[0]!).gist }, 'derive: the steered gist stands, not the rollup').toEqual({ status: 'ok', gist: NODE_OK });
+      } finally {
+        wdb.prepare('UPDATE nodes SET status = ? WHERE node_id = ?').run(planted, lastId);
+        // a red above may have left group 0's parent (and the depth-2 parent over it) rewritten: re-roll them from the restored leaf
+        D.rerollParents(wdb, { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) }, ids.slice(0, 8), false);
+        closeWriter(wdb);
+      }
+      expect(sum(report(lts, lts + 1), 'addOn'), 'CONTROL: restored').toBe(1);
+    } finally { rs.close(); }
+  });
+
+  /** The node verdict counters: the leaf path's form, under node_ names and the last child's producer. */
+  const nodeCounters = (b: HistoryBox = box): Record<string, number> =>
+    Object.fromEntries(Object.entries(counters(b)).filter(([k]) => k.startsWith('node_')));
+  const BACKEND = 'anthropic';
+  /** Leaf 7's producer, another from the rest (see beforeAll), and so group 0's counted verdict. */
+  const OTHER = 'other';
+
+  it('each node verdict is counted once: node_status:<status>:<backend>, and node_reason:<reason>:<backend> when the status is not ok', () => {
+    const c = firstPass;
+    expect(c[`node_status:ok:${BACKEND}`], 'ok: the redact and whole groups').toBe(2);
+    expect(c[`node_status:ok:${OTHER}`], 'ok: the first group, whose last child has another producer').toBe(1);
+    expect(c[`node_status:degraded:${BACKEND}`], 'degraded: the wrong id').toBe(1);
+    expect(c[`node_reason:id-mismatch:${BACKEND}`], 'degraded for id-mismatch').toBe(1);
+    expect(c[`node_status:invalid:${BACKEND}`], 'invalid: the short gist and the two carried copies').toBe(3);
+    expect(c[`node_reason:gist-short:${BACKEND}`], 'invalid for gist-short').toBe(1);
+    expect(c[`node_reason:carried-copy:${BACKEND}`], 'invalid for carried-copy: a leaf\'s gist and the previous parent\'s').toBe(2);
+    expect(c[`node_status:absent:${BACKEND}`], 'absent: the analysis-only group').toBe(1);
+    expect(c[`node_reason:no-block:${BACKEND}`], 'absent for no-block').toBe(1);
+    expect(c, 'nothing else is counted: an ok verdict has no reason, and a parent that was not asked has no verdict').toEqual({
+      [`node_status:ok:${BACKEND}`]: 2, [`node_status:ok:${OTHER}`]: 1, [`node_status:degraded:${BACKEND}`]: 1, [`node_reason:id-mismatch:${BACKEND}`]: 1,
+      [`node_status:invalid:${BACKEND}`]: 3, [`node_reason:gist-short:${BACKEND}`]: 1, [`node_reason:carried-copy:${BACKEND}`]: 2,
+      [`node_status:absent:${BACKEND}`]: 1, [`node_reason:no-block:${BACKEND}`]: 1,
+    });
+    // The producer of a counted parent is its last child's, as the leaf path counted it for that very leaf.
+    const leafC = counters(box);
+    expect(leafC[`leaf_status:ok:${OTHER}`], 'the leaf path counted leaf 7 under the same producer, and no other leaf').toBe(1);
+    expect(Object.keys(leafC).filter((k) => k.endsWith(`:${OTHER}`) && k.startsWith('leaf_status:')), 'CONTROL: only one leaf has it').toEqual([`leaf_status:ok:${OTHER}`]);
+  });
+
+  it('a re-roll and a reparse count no verdict again: the leaf path folds its counters at first derivation only, and the node path matches it', async () => {
+    const D = await rerollMod() as unknown as {
+      rerollParents(db: ReturnType<typeof openWriter>, ictx: object, nodeIds: readonly string[], onlyIfChanged?: boolean): number;
+      reparseLeaves(db: ReturnType<typeof openWriter>, ictx: object, nodeIds: readonly string[]): { changed: number; failed: number; skipped: number };
+    };
+    const leafBefore = Object.fromEntries(Object.entries(counters(box)).filter(([k]) => k.startsWith('leaf_')));
+    expect(Object.keys(leafBefore), 'CONTROL: the leaf counters exist, so an equality below means something').not.toEqual([]);
+    const before = counters(box);
+    const ictx = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]), isBusy: () => false };
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      const r = D.reparseLeaves(db, ictx, ids.slice(0, 16));
+      expect(r.skipped + r.failed, 'CONTROL: the reparse re-derived the leaves it was given').toBe(0);
+      expect(D.rerollParents(db, ictx, ids, false), 'a plain re-roll rewrites every parent').toBeGreaterThan(0);
+    } finally { closeWriter(db); }
+    expect(counters(box), 'every counter, the leaf ones and the node ones, stands').toEqual(before);
+  });
+
+  it('a depth-2 parent never reads a node block: it is the rollup of its four parents, status ok', () => {
+    for (const top of topParentsOf()) {
+      const p = parentRow(top);
+      expect({ kind: p.kind, status: p.status, gist: p.gist }).toEqual({ kind: 'condensed', status: 'ok', gist: rollupOf(top).gist });
+      expectRollupFields(top);
+    }
+  });
+
+  it('a re-roll keeps every steered gist and status, and a belt pass leaves every parent untouched', async () => {
+    const D = await rerollMod();
+    const everyone = [...parents, ...topParentsOf()];
+    const before = everyone.map((id) => parentRow(id));
+    const ictx = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      expect(D.rerollParents(db, ictx, ids, true), 'the belt finds every parent as a re-roll would write it, the steered ones included').toBe(0);
+      expect(D.rerollParents(db, ictx, ids, false), 'a plain re-roll rewrites the ten depth-1 parents and the two depth-2 ones').toBe(GROUPS + 2);
+    } finally { closeWriter(db); }
+    expect(everyone.map((id) => parentRow(id)), 'gist, status and the rest are what they were').toEqual(before);
+    expect(parentRow(parents[G.ok]!).gist).toBe(NODE_OK);
+    expect(parentRow(parents[G.wrong]!)).toMatchObject({ gist: NODE_WRONG, status: 'degraded' });
+    expect(parentRow(parents[G.forward]!).status, 'the carried-forward block stays a carried copy on a re-roll').toBe('invalid');
+    expect(refsOfNode(parents[G.ok]!), 'its refs are written again').not.toEqual([]);
+    expect(ftsTexts(parents[G.ok]!).join('\n')).toContain('eight spans together built the first fixture parent');
+  });
+
+  it('a re-roll writes a changed status: a stored status the new build reads differently is rewritten by the belt, gist and all else equal', async () => {
+    const D = await rerollMod();
+    const ictx = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+    const id = parents[G.analysis]!;
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      // The shape a store holds from before this build: a receipted parent with no node block, stored ok.
+      db.prepare("UPDATE nodes SET status = 'ok' WHERE node_id = ?").run(id);
+      expect(parentRow(id).status, 'CONTROL: the planted status').toBe('ok');
+      expect(D.rerollParents(db, ictx, ids.slice(G.analysis * 8, G.analysis * 8 + 8), true), 'only the status differs, and the belt sees it').toBe(1);
+    } finally { closeWriter(db); }
+    expect(parentRow(id).status).toBe('absent');
+    expect(parentRow(id).gist).toBe(rollupOf(id).gist);
+  });
+
+  it('a re-roll that cannot read an asked last child\'s summary keeps a stored former verdict\'s status and takes the fresh rollup gist', async () => {
+    const D = await rerollMod();
+    const ictx = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+    const id = parents[G.analysis]!;
+    const first = ids[G.analysis * 8]!;
+    const last = ids[G.analysis * 8 + 7]!;
+    const all = ids.slice(G.analysis * 8, G.analysis * 8 + 8);
+    const blobId = q<{ summary_blob_id: number }>(box, 'SELECT summary_blob_id FROM nodes WHERE node_id = ?', last)[0]!.summary_blob_id;
+    const firstGist = parentRow(first).gist;
+    const stored = parentRow(id);
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      expect({ status: stored.status, gist: stored.gist }, 'CONTROL: a former verdict stands, holding the rollup').toEqual({ status: 'absent', gist: rollupOf(id).gist });
+      db.prepare('UPDATE nodes SET summary_blob_id = NULL WHERE node_id = ?').run(last);
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run('This group\'s first span was reparsed and now reads quite differently from before.', first);
+      expect(rollupOf(id).gist, 'CONTROL: the rollup moved with the child, so the stored gist is stale').not.toBe(stored.gist);
+      expect(D.rerollParents(db, ictx, all, true), 'the stale parent differs from the fresh rollup, so the belt writes it').toBeGreaterThan(0);
+      expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'the status stands; the gist can only be the fresh rollup').toEqual({ status: 'absent', gist: rollupOf(id).gist });
+      expect(parentRow(id).gist).not.toBe(stored.gist);
+    } finally {
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(firstGist, first);
+      db.prepare('UPDATE nodes SET summary_blob_id = ? WHERE node_id = ?').run(blobId, last);
+      D.rerollParents(db, ictx, all, false);
+      db.prepare("UPDATE nodes SET status = 'absent' WHERE node_id = ?").run(id);
+      closeWriter(db);
+    }
+    expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: restored').toEqual({ status: 'absent', gist: stored.gist });
+  });
+
+  it('a re-roll that reads a last child that was not asked returns a stored former verdict to ok, with the rollup gist: its receipt is generic now', async () => {
+    const D = await rerollMod();
+    const ictx = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+    const id = parents[G.analysis]!;
+    const last = ids[G.analysis * 8 + 7]!;
+    const receiptKey = q<{ event_key: string }>(box, 'SELECT event_key FROM steer_receipts WHERE leaf_id = ?', last)[0]!.event_key;
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      expect(parentRow(id).status, 'CONTROL: a former verdict stands').toBe('absent');
+      db.prepare("UPDATE steer_receipts SET leaf_id = '' WHERE event_key = ?").run(receiptKey);
+      expect(D.rerollParents(db, ictx, [last], true), 'only the status differs, and the belt sees it').toBe(1);
+      expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'ok, the rollup gist').toEqual({ status: 'ok', gist: rollupOf(id).gist });
+      // A stored status that is no former verdict is left as it is, whatever the read: nothing to rewrite, nothing compared.
+      db.prepare("UPDATE nodes SET status = 'not-requested' WHERE node_id = ?").run(id);
+      expect(D.rerollParents(db, ictx, [last], true), 'a status of another build is neither rewritten nor compared').toBe(0);
+      expect(parentRow(id).status).toBe('not-requested');
+    } finally {
+      // restore group 6's last child (its receipt) and its parent's former verdict, so no later case depends on the order
+      db.prepare('UPDATE steer_receipts SET leaf_id = ? WHERE event_key = ?').run(last, receiptKey);
+      db.prepare("UPDATE nodes SET status = 'absent' WHERE node_id = ?").run(id);
+      closeWriter(db);
+    }
+  });
+
+  it('a re-roll that cannot read an asked last child\'s summary keeps the stored ok steered gist, re-redacted under the current pairs', async () => {
+    const D = await rerollMod();
+    const id = parents[G.ok]!;
+    const last = ids[7]!;
+    const X = crypto.randomBytes(32).toString('hex');
+    const before = parentRow(id);
+    expect({ status: before.status, gist: before.gist }, 'CONTROL: a steered ok parent').toEqual({ status: 'ok', gist: NODE_OK });
+    expect(NODE_OK.length, 'CONTROL: the stored gist is uncut, under GIST_MAX').toBeLessThan(GIST_MAX);
+    const blobId = q<{ summary_blob_id: number }>(box, 'SELECT summary_blob_id FROM nodes WHERE node_id = ?', last)[0]!.summary_blob_id;
+    const plain = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      db.prepare('UPDATE nodes SET summary_blob_id = NULL WHERE node_id = ?').run(last);
+      expect(D.rerollParents(db, plain, [last], true), 'the belt finds the parent as a re-roll would write it').toBe(0);
+      expect(D.rerollParents(db, plain, [last], false), 'a plain re-roll rewrites the parent and the depth-2 parent over it').toBe(2);
+      expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'the steered gist and ok stand, not the rollup').toEqual({ status: 'ok', gist: NODE_OK });
+      expect(parentRow(id).gist).not.toBe(rollupOf(id).gist);
+      // A value learned since is redacted out of the gist that stands.
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(`${NODE_OK} Then ${X} was used.`, id);
+      const learned = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex(secretPairs([X]).pairs) };
+      expect(D.rerollParents(db, learned, [last], true), 'the belt sees the gist change under the new pairs').toBeGreaterThan(0);
+      expect({ status: parentRow(id).status, gist: parentRow(id).gist }).toEqual({ status: 'ok', gist: `${NODE_OK} Then [redacted] was used.` });
+      expect(ftsTexts(id).join('\n')).not.toContain(X);
+      // The summary readable again: the re-roll reads the block and writes the steered gist as before.
+      db.prepare('UPDATE nodes SET summary_blob_id = ? WHERE node_id = ?').run(blobId, last);
+      expect(D.rerollParents(db, plain, [last], true)).toBeGreaterThan(0);
+      expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: the steered gist is back').toEqual({ status: 'ok', gist: NODE_OK });
+      // The other way a summary is unreadable: its blob is there and does not decode. The stored gist and status stand all the same.
+      const z = (db.prepare('SELECT z FROM blobs WHERE blob_id = ?').get(blobId) as { z: Buffer }).z;
+      db.prepare('UPDATE blobs SET z = ? WHERE blob_id = ?').run(Buffer.from('not a brotli stream'), blobId);
+      try {
+        expect(D.rerollParents(db, plain, [last], true), 'an undecodable summary is unreadable too: nothing differs').toBe(0);
+        expect({ status: parentRow(id).status, gist: parentRow(id).gist }).toEqual({ status: 'ok', gist: NODE_OK });
+      } finally { db.prepare('UPDATE blobs SET z = ? WHERE blob_id = ?').run(z, blobId); }
+    } finally {
+      // The blob readable, the block re-read: the steered gist is back whatever a failed step above left.
+      db.prepare('UPDATE nodes SET summary_blob_id = ? WHERE node_id = ?').run(blobId, last);
+      D.rerollParents(db, plain, [last], false);
+      closeWriter(db);
+    }
+    expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: restored').toEqual({ status: 'ok', gist: NODE_OK });
+  });
+
+  it('a re-roll that cannot read an asked last child\'s summary takes the fresh rollup for a steered ok gist of GIST_MAX units, capped (the flag) or not (the length, the second check) (spec 8.3: never keep a gist a cut may have left a prefix in), and the status stays ok', async () => {
+    const D = await rerollMod();
+    const id = parents[G.ok]!;
+    const last = ids[7]!;
+    const blobId = q<{ summary_blob_id: number }>(box, 'SELECT summary_blob_id FROM nodes WHERE node_id = ?', last)[0]!.summary_blob_id;
+    const plain = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+    const capped = `${NODE_OK} ${'and more words of the same steered gist '.repeat(GIST_MAX)}`.slice(0, GIST_MAX);
+    for (const flag of [1, 0]) {
+      const db = openWriter(historyPaths(box.home).dbFile);
+      try {
+        expect(capped.length, 'CONTROL: exactly GIST_MAX units').toBe(GIST_MAX);
+        db.prepare('UPDATE nodes SET gist = ?, capped = ? WHERE node_id = ?').run(capped, flag, id);
+        db.prepare('UPDATE nodes SET summary_blob_id = NULL WHERE node_id = ?').run(last);
+        expect(rollupOf(id).gist, 'CONTROL: the rollup is not the planted gist').not.toBe(capped);
+        expect(D.rerollParents(db, plain, [last], true), `the belt rewrites the parent (capped ${flag})`).toBeGreaterThan(0);
+        expect({ status: parentRow(id).status, gist: parentRow(id).gist }, `capped ${flag}: the fresh rollup, and the status stands`).toEqual({ status: 'ok', gist: rollupOf(id).gist });
+      } finally {
+        db.prepare('UPDATE nodes SET summary_blob_id = ? WHERE node_id = ?').run(blobId, last);
+        D.rerollParents(db, plain, [last], false);
+        closeWriter(db);
+      }
+      expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: restored').toEqual({ status: 'ok', gist: NODE_OK });
+    }
+  });
+
+  it('a re-roll that cannot read an asked last child\'s summary takes the fresh rollup for a steered ok gist whose capped flag is set, though a late pair shrank it under GIST_MAX in place (spec 8.3; the flag is the test, the length a second check)', async () => {
+    const D = await rerollMod();
+    const DV = (await import('../../ccd/history/derive.mjs')) as unknown as { rederiveGistsFor(db: unknown, ictx: object, values: readonly string[], budget: object, slice: object): number };
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as { newBudget(): object };
+    const id = parents[G.ok]!;
+    const last = ids[7]!;
+    const Y = crypto.randomBytes(32).toString('hex');
+    const blobId = q<{ summary_blob_id: number }>(box, 'SELECT summary_blob_id FROM nodes WHERE node_id = ?', last)[0]!.summary_blob_id;
+    const rowid = q<{ r: number }>(box, 'SELECT rowid AS r FROM nodes WHERE node_id = ?', id)[0]!.r;
+    const plain = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+    const learned = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex(secretPairs([Y]).pairs) };
+    // A steered gist as blockFields cut it at GIST_MAX (capped), holding a value whole that was registered only later.
+    const cut = `${NODE_OK} Then ${Y} was used. ${'and more words of the same steered gist '.repeat(GIST_MAX)}`.slice(0, GIST_MAX);
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      expect(cut.length, 'CONTROL: exactly GIST_MAX units').toBe(GIST_MAX);
+      db.prepare('UPDATE nodes SET gist = ?, capped = 1 WHERE node_id = ?').run(cut, id);
+      db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(rowid);
+      db.prepare("INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, '', '')").run(rowid, cut);
+      // The late-pair fast path finds the condensed parent by the value and redacts it in place: the cut gist shrinks.
+      expect(DV.rederiveGistsFor(db, learned, [Y], S.newBudget(), S.newBudget()), 'CONTROL: the late-pair path touched the parent').toBeGreaterThan(0);
+      const shrunk = parentRow(id);
+      expect(shrunk.gist, 'CONTROL: the value was redacted in place').toContain('[redacted]');
+      expect(shrunk.gist!.length, 'CONTROL: the in-place redaction left the cut gist under GIST_MAX').toBeLessThan(GIST_MAX);
+      expect(Number(shrunk.capped), 'CONTROL: the capped flag survived the shrink').toBe(1);
+      expect(shrunk.status, 'CONTROL: still a steered ok parent').toBe('ok');
+      db.prepare('UPDATE nodes SET summary_blob_id = NULL WHERE node_id = ?').run(last);
+      expect(rollupOf(id).gist, 'CONTROL: the rollup is not the shrunk gist').not.toBe(shrunk.gist);
+      expect(D.rerollParents(db, learned, [last], true), 'the belt rewrites the capped parent').toBeGreaterThan(0);
+      expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'the fresh rollup, and the status stands').toEqual({ status: 'ok', gist: rollupOf(id).gist });
+    } finally {
+      db.prepare('UPDATE nodes SET summary_blob_id = ? WHERE node_id = ?').run(blobId, last);
+      D.rerollParents(db, plain, [last], false);
+      closeWriter(db);
+    }
+    expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: restored').toEqual({ status: 'ok', gist: NODE_OK });
+  });
+
+  it('a re-roll that cannot read an asked last child\'s summary keeps a stored degraded steered gist, uncapped and under GIST_MAX, and its status', async () => {
+    const D = await rerollMod();
+    const id = parents[G.wrong]!;
+    const last = ids[G.wrong * 8 + 7]!;
+    const before = parentRow(id);
+    expect({ status: before.status, gist: before.gist, capped: Number(before.capped) }, 'CONTROL: a steered degraded parent, uncapped').toEqual({ status: 'degraded', gist: NODE_WRONG, capped: 0 });
+    expect(NODE_WRONG.length, 'CONTROL: under GIST_MAX').toBeLessThan(GIST_MAX);
+    expect(rollupOf(id).gist, 'CONTROL: the rollup is another gist').not.toBe(NODE_WRONG);
+    const blobId = q<{ summary_blob_id: number }>(box, 'SELECT summary_blob_id FROM nodes WHERE node_id = ?', last)[0]!.summary_blob_id;
+    const plain = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      db.prepare('UPDATE nodes SET summary_blob_id = NULL WHERE node_id = ?').run(last);
+      expect(D.rerollParents(db, plain, [last], true), 'the belt finds the parent as a re-roll would write it').toBe(0);
+      D.rerollParents(db, plain, [last], false);
+      expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'the steered gist and degraded stand, not the rollup').toEqual({ status: 'degraded', gist: NODE_WRONG });
+    } finally {
+      db.prepare('UPDATE nodes SET summary_blob_id = ? WHERE node_id = ?').run(blobId, last);
+      D.rerollParents(db, plain, [last], false);
+      closeWriter(db);
+    }
+    expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: restored').toEqual({ status: 'degraded', gist: NODE_WRONG });
+  });
+
+  it('a re-roll reads only nodes stored before the parent as carried copies: a later node with the parent\'s gist leaves it ok, an earlier one does not', async () => {
+    const D = await rerollMod();
+    const id = parents[G.ok]!;
+    const later = parents[G.unreceipted]!;
+    const earlier = ids[0]!;
+    const ictx = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+    const rowid = (n: string): number => q<{ r: number }>(box, 'SELECT rowid AS r FROM nodes WHERE node_id = ?', n)[0]!.r;
+    expect(rowid(later), 'CONTROL: the planted node was stored after the parent').toBeGreaterThan(rowid(id));
+    expect(rowid(earlier), 'CONTROL: the other was stored before it').toBeLessThan(rowid(id));
+    const laterGist = parentRow(later).gist;
+    const earlierGist = parentRow(earlier).gist;
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(NODE_OK, later);
+      expect(D.rerollParents(db, ictx, ids.slice(0, 8), true), 'a node stored after the parent is no earlier gist: nothing to rewrite').toBe(0);
+      expect(parentRow(id)).toMatchObject({ status: 'ok', gist: NODE_OK });
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(laterGist, later);
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(NODE_OK, earlier);
+      expect(D.rerollParents(db, ictx, [earlier], true), 'CONTROL: the same text stored before the parent is a carried copy').toBeGreaterThan(0);
+      expect(parentRow(id).status).toBe('invalid');
+    } finally {
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(laterGist, later);
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(earlierGist, earlier);
+      D.rerollParents(db, ictx, [earlier], false);
+      closeWriter(db);
+    }
+    expect(parentRow(id), 'CONTROL: restored').toMatchObject({ status: 'ok', gist: NODE_OK });
+  });
+
+  it('a re-roll that cannot read an asked last child\'s summary takes the FRESH rollup for a stored absent or invalid parent, and keeps its status: a changed child, then a late pair', async () => {
+    const D = await rerollMod();
+    const X = crypto.randomBytes(32).toString('hex');
+    const plain = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) };
+    for (const [g, status] of [[G.analysis, 'absent'], [G.short, 'invalid']] as const) {
+      const id = parents[g]!;
+      const first = ids[g * 8]!;
+      const last = ids[g * 8 + 7]!;
+      const all = ids.slice(g * 8, g * 8 + 8);
+      const blobId = q<{ summary_blob_id: number }>(box, 'SELECT summary_blob_id FROM nodes WHERE node_id = ?', last)[0]!.summary_blob_id;
+      const firstGist = parentRow(first).gist;
+      const stored = parentRow(id);
+      expect({ status: stored.status, gist: stored.gist }, `CONTROL: a stored ${status} parent holds the rollup`).toEqual({ status, gist: rollupOf(id).gist });
+      const db = openWriter(historyPaths(box.home).dbFile);
+      try {
+        // retention's tombstone: the last child's summary blob is gone, so the node block cannot be read again
+        db.prepare('UPDATE nodes SET summary_blob_id = NULL WHERE node_id = ?').run(last);
+        db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run('The first child of this group was reparsed and now reads quite differently from before.', first);
+        expect(rollupOf(id).gist, 'CONTROL: the rollup moved with the child').not.toBe(stored.gist);
+        expect(D.rerollParents(db, plain, all, true), `the belt rewrites the stale ${status} parent`).toBeGreaterThan(0);
+        expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'the status stands, the gist is the fresh rollup, not the stale one')
+          .toEqual({ status, gist: rollupOf(id).gist });
+        // a value learned since, inside a child's gist: the fresh rollup is redacted whole, so no prefix of it survives
+        db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(`The first child used the key ${X} for the whole run, start to end.`, first);
+        const learned = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex(secretPairs([X]).pairs) };
+        expect(D.rerollParents(db, learned, all, true)).toBeGreaterThan(0);
+        expect(parentRow(id).status).toBe(status);
+        expect(parentRow(id).gist).toContain('[redacted]');
+        expect(parentRow(id).gist).not.toContain(X);
+        expect(ftsTexts(id).join('\n')).not.toContain(X);
+      } finally {
+        db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(firstGist, first);
+        db.prepare('UPDATE nodes SET summary_blob_id = ? WHERE node_id = ?').run(blobId, last);
+        D.rerollParents(db, plain, all, false);
+        db.prepare('UPDATE nodes SET status = ? WHERE node_id = ?').run(status, id);
+        closeWriter(db);
+      }
+      expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: restored').toEqual({ status, gist: stored.gist });
+    }
+  });
+
+  it('a registered value inside a node gist is redacted in the stored gist and in nodes_fts by the re-roll, and the status stays', async () => {
+    const D = await rerollMod();
+    const last = parents[G.redact]!;
+    expect(parentRow(last).gist, 'CONTROL: no pair was known when the parent was made').toBe(NODE_REDACT);
+    expect(parentRow(last).status).toBe('ok');
+    expect(ftsTexts(last).join('\n'), 'CONTROL: its index row holds the value too').toContain(V);
+    const ictx = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex(secretPairs([V]).pairs) };
+    const db = openWriter(historyPaths(box.home).dbFile);
+    const group = ids.slice(G.redact * 8, G.redact * 8 + 8);
+    try {
+      expect(D.rerollParents(db, ictx, group, true),
+        'the belt sees the gist change under the new pairs, in the parent and in the depth-2 parent that quotes its first sentence').toBe(2);
+      const p = parentRow(last);
+      expect(p.status).toBe('ok');
+      expect(p.gist).toBe(NODE_REDACT.replace(V, '[redacted]'));
+      expect(p.gist).not.toContain(V);
+      expect(ftsTexts(last).join('\n')).not.toContain(V);
+      expect(ftsTexts(last).join('\n'), 'the index row still carries the gist').toContain('built the eighth fixture parent');
+    } finally {
+      // The plain pair index re-reads the block unredacted: the gist and its nodes_fts row are what the first pass stored.
+      D.rerollParents(db, { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) }, group, false);
+      closeWriter(db);
+    }
+    expect(parentRow(last).gist, 'CONTROL: restored, the unredacted gist is back').toBe(NODE_REDACT);
+    expect(ftsTexts(last).join('\n'), 'CONTROL: and its index row').toContain(V);
+  });
+
+  it('a re-roll that changes the status: a value learned after the parent was made leaves its node gist under GIST_MIN, so the parent is invalid with the rollup gist', async () => {
+    const D = await rerollMod();
+    const id = parents[G.whole]!;
+    expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: made before the pair was known, the gist is the block\'s').toEqual({ status: 'ok', gist: NODE_ALL_W });
+    const ictx = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex(secretPairs([W]).pairs) };
+    const db = openWriter(historyPaths(box.home).dbFile);
+    const group = ids.slice(G.whole * 8, G.whole * 8 + 8);
+    try {
+      expect(D.rerollParents(db, ictx, group, true), 'the belt rewrites the parent').toBe(1);
+      const p = parentRow(id);
+      expect({ status: p.status, gist: p.gist }).toEqual({ status: 'invalid', gist: rollupOf(id).gist });
+      expect(p.gist).not.toContain('[redacted]');
+      expect(ftsTexts(id).join('\n')).not.toContain(W);
+    } finally {
+      D.rerollParents(db, { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) }, group, false);
+      closeWriter(db);
+    }
+    expect({ status: parentRow(id).status, gist: parentRow(id).gist }, 'CONTROL: restored').toEqual({ status: 'ok', gist: NODE_ALL_W });
+  });
+
+  it('the belt\'s node step charges the summary decode of every asked last child to the budget it was handed', async () => {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as { newBudget(): { bytes: number } };
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as { beltNodesStep(db: unknown, ictx: object, slice: object): boolean };
+    const lasts = Array.from({ length: GROUPS }, (_, g) => g * 8 + 7).filter(exactReceipt).map((k) => ids[k]!);
+    const zBytes = lasts.reduce((n, l) => n + q<{ n: number }>(box,
+      'SELECT length(b.z) AS n FROM nodes x JOIN blobs b ON b.blob_id = x.summary_blob_id WHERE x.node_id = ?', l)[0]!.n, 0);
+    expect(zBytes, 'CONTROL: the asked last children hold summaries to decode').toBeGreaterThan(0);
+    const ictx = { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]), isBusy: () => false, budgetLeft: () => true };
+    const slice = S.newBudget();
+    expect(slice.bytes, 'CONTROL: the budget starts at 0').toBe(0);
+    const everyone = [...parents, ...topParentsOf()];
+    const before = everyone.map((id) => parentRow(id));
+    const db = openWriter(historyPaths(box.home).dbFile);
+    const step = getStep(db, 'nodes-belt', 1);
+    let after: typeof before = before;
+    try {
+      withTx(db, 'NORMAL', () => { setStep(db, 'nodes-belt', 1, '0', null); });
+      expect(D.beltNodesStep(db, ictx, slice), 'the step completed').toBe(true);
+      after = everyone.map((id) => parentRow(id));
+    } finally {
+      withTx(db, 'NORMAL', () => { if (step !== null) setStep(db, 'nodes-belt', 1, step.cursor, step.completedMs); else db.prepare("DELETE FROM derivation_state WHERE step = 'nodes-belt' AND version = 1").run(); });
+      // a step that rewrote a parent (a red below) is undone by a re-roll from the stored children, as every parent was derived
+      if (JSON.stringify(after) !== JSON.stringify(before) || after === before) {
+        (await rerollMod()).rerollParents(db, { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]) }, [...ids], false);
+      }
+      closeWriter(db);
+    }
+    expect(after, 'CONTROL: the step rewrote no parent').toEqual(before);
+    expect(slice.bytes, 'the decode of each asked last child\'s summary was charged to the handed budget').toBe(zBytes);
+  });
+
+  // It derives every parent again and so moves the live verdict counters; it measures its own before and after, and the other cases read firstPass, so the order is free.
+  it('one read of the holding copy serves every counted parent of a run, and the producer a re-run counts is the same', async () => {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as { newBudget(): object };
+    const before = nodeCounters();
+    const db = openWriter(historyPaths(box.home).dbFile);
+    let copyReads = 0;
+    const prepare = db.prepare.bind(db);
+    (db as unknown as { prepare: (sql: string) => object }).prepare = (sql: string) => {
+      const st = prepare(sql) as { all: (...a: unknown[]) => unknown };
+      if (/FROM memberships m JOIN entries e ON e\.entry_id = m\.entry_id JOIN blobs bl/.test(sql)) {
+        const all = st.all.bind(st);
+        st.all = (...a: unknown[]) => { copyReads += 1; return all(...a); };
+      }
+      return st;
+    };
+    try {
+      const D = (await import('../../ccd/history/derive.mjs')) as unknown as { deriveParents(db: unknown, ictx: object, budget: object): number };
+      withTx(db, 'NORMAL', () => {
+        db.prepare('DELETE FROM nodes_fts WHERE rowid IN (SELECT rowid FROM nodes WHERE depth > 0)').run();
+        db.prepare('DELETE FROM node_refs WHERE node_id IN (SELECT node_id FROM nodes WHERE depth > 0)').run();
+        db.prepare('DELETE FROM node_children WHERE node_id IN (SELECT node_id FROM nodes WHERE depth > 0)').run();
+        db.prepare('DELETE FROM nodes WHERE depth > 0').run();
+        setStep(db, 'parents', NODE_PARSER_VERSION, '0', null);
+      });
+      const made = D.deriveParents(db, { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]), isBusy: () => false }, S.newBudget());
+      expect(made, 'CONTROL: every parent was made again, the ten of depth 1 and the two of depth 2').toBe(GROUPS + 2);
+    } finally { closeWriter(db); }
+    expect(copyReads, `${exactCount} parents were counted from one holding copy: its rows were read once, not once per parent`).toBe(1);
+    const after = nodeCounters();
+    const delta = Object.fromEntries(Object.keys({ ...before, ...after }).map((k) => [k, (after[k] ?? 0) - (before[k] ?? 0)]).filter(([, v]) => v !== 0));
+    expect(delta, 'the same verdicts under the same producers, once more: what the run added is what the first pass added').toEqual(firstPass);
+  });
+});
+
+describe('a parser throw on the node path never wedges parent derivation (W3-4 review; spec 6.3)', () => {
+  const ID = 'claude-node-crash';
+  const U = '0189abcd-1234-4678-9abc-0000000000b9';
+  const LEAF_GIST = (k: number): string => `Crash fixture leaf ${k} did part ${k} of the work and settled it for good.`;
+  let box: HistoryBox;
+  let parent = '';
+  let ids: string[] = [];
+
+  beforeAll(() => {
+    box = makeHistoryBox('ccrc-hist-derive-node-crash-');
+    const build = (parentIds: readonly string[]): ReturnType<typeof compactionSequence> => compactionSequence({
+      n: 8, trigger: 'manual', seed: 0xd9, sessionId: U, startMs: T0,
+      summaryText: (k) => [
+        '<summary>', '1. Primary Request and Intent:', `   Crash fixture summary ${k}.`, '</summary>',
+        // the last child holds an exact receipt (it asks for the node block), so its own block names it
+        steeredBlock({ ...(k === 7 ? { id: ids[7] ?? 'unplanned' } : {}), gist: LEAF_GIST(k), expand: `crash topic ${k}`, refs: 'ccd/history/derive.mjs' }),
+        ...(k === 7 ? [steeredBlock({ kind: 'node', id: parentIds[0] ?? 'unplanned', gist: 'The eight spans together made one parent whose block the parser will choke on.' })] : []),
+      ].join('\n'),
+    });
+    const probe = build([]);
+    ids = Array.from({ length: 8 }, (_, k) => leafId(ID, U, k === 0 ? firstUuid(probe) : probe.headUuids[k - 1]!));
+    parent = parentId(ids);
+    const seq = build([parent]);
+    plant(box, ID, U, seq.rows);
+    const at = (u: string): number => Date.parse(String(seq.rows.find((r) => r['uuid'] === u)!['timestamp']));
+    seq.boundaryUuids.forEach((b, k) => { spoolLine(box, ID, { v: 1, ev: 'steer', id: ID, sid: U, leaf: k === 7 ? ids[7]! : '', ts: at(b) - 500 }); });
+    settle(box);
+  }, 240_000);
+
+  it('a throw in the node selection counts node_parse_crash, makes the parent from the rollup with status ok, and the parents cursor advances', async () => {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as { newBudget(): object };
+    const pb = (await import('../../ccd/history/store.mjs')) as unknown as { getStep(db: unknown, step: string, version: number): { cursor: string | null } | null };
+    expect(q<{ status: string; gist: string }>(box, 'SELECT status, gist FROM nodes WHERE node_id = ?', parent)[0]!.status, 'CONTROL: unbroken, the parent is steered').toBe('ok');
+    const actual = await vi.importActual<typeof import('../../ccd/history/lib.mjs')>('../../ccd/history/lib.mjs');
+    vi.resetModules();
+    vi.doMock('../../ccd/history/lib.mjs', () => ({
+      ...actual,
+      selectBlock: (i: { kind: string }) => { if (i.kind === 'node') throw new Error('node selection crashed'); return (actual.selectBlock as (x: unknown) => unknown)(i); },
+    }));
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      const D = (await import('../../ccd/history/derive.mjs')) as unknown as { deriveParents(db: unknown, ictx: object, budget: object): number };
+      const stepVer = NODE_PARSER_VERSION;
+      withTx(db, 'NORMAL', () => {
+        db.prepare('DELETE FROM node_refs WHERE node_id = ?').run(parent);
+        db.prepare('DELETE FROM nodes_fts WHERE rowid = (SELECT rowid FROM nodes WHERE node_id = ?)').run(parent);
+        db.prepare('DELETE FROM node_children WHERE node_id = ?').run(parent);
+        db.prepare('DELETE FROM nodes WHERE node_id = ?').run(parent);
+        setStep(db, 'parents', stepVer, '0', null);
+      });
+      const top = (db.prepare('SELECT max(rowid) AS r FROM nodes').get() as { r: number }).r;
+      const made = D.deriveParents(db, { nowMs: Date.now(), fts: true, pairIdx: makePairIndex([]), isBusy: () => false }, S.newBudget());
+      expect(made, 'the parent is made despite the throw').toBe(1);
+      expect(Number(pb.getStep(db, 'parents', stepVer)!.cursor), 'the cursor advanced to the top').toBe(Number(top));
+    } finally {
+      closeWriter(db);
+      vi.doUnmock('../../ccd/history/lib.mjs');
+      vi.resetModules();
+    }
+    const row = q<{ status: string; gist: string; kind: string }>(box, 'SELECT status, gist, kind FROM nodes WHERE node_id = ?', parent)[0]!;
+    expect({ kind: row.kind, status: row.status }).toEqual({ kind: 'condensed', status: 'ok' });
+    expect(row.gist, 'the rollup gist, the first sentences of the children').toBe(Array.from({ length: 8 }, (_, k) => LEAF_GIST(k)).join(' '));
+    expect(counters(box)['node_parse_crash']).toBe(1);
+  });
+});
+
+// ── W4 addendum P2, Task 2 (plan 2026-11-09, W4-2): a subagent boundary is a leaf on its own chain, with no receipt and no card ──
+// SA7 (no receipt), SA8 (own chain), SA9 (no card or steer act), failure row 24 (a summary-less subagent boundary is a raw leaf) and
+// SA27 (forked copies of one subagent transcript, and a true conflict). In-process through historyAgentFixtures.ts' rig: a scan tick
+// ingests the subagent files, then deriveNodes runs on the rig's store as the pass runs it (the tick's step 6).
+describe('a subagent leaf has no receipt, no card and its own chain (W4 addendum P2; SA7, SA8, SA9, SA27, failure row 24)', () => {
+  const SLUG_A = '-home-u-tree';
+  const PARENT_A = 'b2000000-0000-4000-8000-000000000001';
+  const SINCE_A = { sinceMs: RIG_T0 };
+  /** Every row a day before the rig's clock, so a stored row is final past the raw-leaf grace. */
+  const DAY_BEFORE = RIG_T0 - 86_400_000;
+  const rigs: AgentRig[] = [];
+  const rigOf = async (prefix: string): Promise<AgentRig> => { const r = await agentRig(prefix); rigs.push(r); return r; };
+  afterAll(() => { for (const r of rigs.splice(0)) { try { closeWriter(r.db); } catch { /* already closed */ } } });
+
+  interface SweepA { makeIngestCtx(home: string, homes: string[], nowMs: number, ids: unknown): Record<string, unknown>; newBudget(): object }
+  interface DeriveA { deriveNodes(db: unknown, ictx: object, budget: object): void }
+  /** deriveNodes as the tick's step 6 runs it, `passes` times (a boundary that waited is derived by a later pass). */
+  async function derive(rig: AgentRig, passes = 2): Promise<void> {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepA;
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as DeriveA;
+    for (let i = 0; i < passes; i += 1) {
+      const ictx = S.makeIngestCtx(rig.box.home, rig.box.homes, RIG_T0 + 3_600_000, null);
+      D.deriveNodes(rig.db, ictx, S.newBudget());
+    }
+  }
+  interface LeafA { node_id: string; kind: string; status: string; agent_id: string; boundary_uuid: string }
+  /** Every leaf, the subagent ones after the main thread's, each in boundary order. */
+  const leavesA = (rig: AgentRig): LeafA[] => (rig.db.prepare(
+    `SELECT n.node_id AS node_id, n.kind AS kind, n.status AS status, t.agent_id AS agent_id, e.uuid AS boundary_uuid
+     FROM nodes n JOIN transcripts t ON t.transcript_pk = n.transcript_pk JOIN entries e ON e.entry_id = n.boundary_entry_id
+     WHERE n.depth = 0 ORDER BY t.agent_id, n.boundary_entry_id, n.node_id`).all() as unknown as LeafA[]).map((r) => ({ ...r }));
+  const parentsOf = (rig: AgentRig, ids: readonly string[]): Array<string | null> => ids.map((id) =>
+    (rig.db.prepare('SELECT node_id FROM node_children WHERE child_id = ?').get(id) as { node_id: string } | undefined)?.node_id ?? null);
+  const childrenOfEveryParent = (rig: AgentRig): string[][] => (rig.db.prepare('SELECT DISTINCT node_id FROM node_children ORDER BY node_id').all() as Array<{ node_id: string }>)
+    .map((p) => (rig.db.prepare('SELECT child_id FROM node_children WHERE node_id = ? ORDER BY ord').all(p.node_id) as Array<{ child_id: string }>).map((c) => c.child_id));
+  const seqOf = (n: number, seed: number, o: Partial<Parameters<typeof compactionSequence>[0]> = {}): Seq =>
+    compactionSequence({ n, trigger: 'manual', seed, sessionId: PARENT_A, startMs: DAY_BEFORE, ...o });
+  const plantA = (rig: AgentRig, agentRows: Row[], o: { main?: Row[] | false } = {}): Record<string, string> =>
+    plantAgentTree(rig, {
+      slug: SLUG_A, uuid: PARENT_A, agents: [{ id: 'a', rows: agentRows }], parent: 'epoch',
+      ...(o.main === false ? { main: false } : o.main === undefined ? {} : { mainRows: o.main }),
+    }, SINCE_A).paths;
+  const quoted = (k: number): string => [
+    fixtureSummaryText(k), '<ccrc-leaf v="1">', 'gist: A quoted gist the summary carries, which no steer asked for on a subagent.',
+    'Expand for details about: quoted, fixture', '</ccrc-leaf>',
+  ].join('\n');
+
+  it('SA7 no receipt on a subagent leaf: a summary quoting a whole <ccrc-leaf> block and a receipt planted for the parent session still read not-requested', async () => {
+    const rig = await rigOf('ccrc-hist-sa7-');
+    plantA(rig, seqOf(1, 0x702, { summaryText: quoted }).rows, { main: seqOf(1, 0x701, { summaryText: quoted }).rows });
+    // a generic receipt for the parent session, before both boundaries: the main leaf's window holds it, and a subagent leaf's would
+    rig.db.prepare("INSERT INTO steer_receipts (event_key, ccrc_id, cc_session_uuid, leaf_id, ts_ms) VALUES ('sa7-r1', 'lane-a-e1', ?, '', ?)").run(PARENT_A, DAY_BEFORE - 1000);
+    await rig.tick(armed, { scan: true });
+    expect(rig.db.prepare("SELECT count(*) AS n FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.agent_id <> ''").get(), 'CONTROL: ingest stored the subagent boundary').toEqual({ n: 1 });
+    await derive(rig);
+    const all = leavesA(rig);
+    expect(all.map((l) => l.agent_id === '' ? 'main' : 'agent')).toEqual(['main', 'agent']);
+    expect(all[0], 'CONTROL: the parent\'s own leaf reads the planted receipt, so it is one a leaf takes').toMatchObject({ kind: 'steered_leaf' });
+    expect(all[1]).toMatchObject({ status: 'not-requested', kind: 'native_leaf' });
+  }, 120_000);
+
+  it('SA8 own chain: 8 main and 8 subagent leaves of one session; the subagent leaves have no parent, and no parent mixes them with main leaves', async () => {
+    const rig = await rigOf('ccrc-hist-sa8-');
+    plantA(rig, seqOf(8, 0x802).rows, { main: seqOf(8, 0x801).rows });
+    await rig.tick(armed, { scan: true });
+    await derive(rig);
+    const all = leavesA(rig);
+    const mainLeaves = all.filter((l) => l.agent_id === '').map((l) => l.node_id);
+    const agentLeaves = all.filter((l) => l.agent_id !== '').map((l) => l.node_id);
+    expect([mainLeaves.length, agentLeaves.length], 'CONTROL: both threads derive all 8 leaves').toEqual([8, 8]);
+    expect(parentsOf(rig, mainLeaves).every((p) => p !== null), 'CONTROL: the main thread\'s 8 make a parent').toBe(true);
+    expect(parentsOf(rig, agentLeaves)).toEqual(Array(8).fill(null));
+    const kids = childrenOfEveryParent(rig);
+    expect(kids.length, 'CONTROL: one parent exists').toBe(1);
+    expect(kids.flat().some((id) => agentLeaves.includes(id))).toBe(false);
+    for (const children of kids) {
+      const kinds = new Set(children.map((id) => (mainLeaves.includes(id) ? 'main' : 'agent')));
+      expect(kinds.size, 'no parent mixes subagent and main leaves').toBe(1);
+    }
+  }, 240_000);
+
+  it('a subagent boundary whose anchor names no row is a raw leaf, counted summary_missing, as on main (failure row 24; DM25)', async () => {
+    const rig = await rigOf('ccrc-hist-row24-');
+    const agent = seqOf(1, 0xb02, { dropSummary: true });
+    // the main thread keeps its summary, so the one summary_missing the pass folds is the subagent's raw leaf
+    plantA(rig, agent.rows, { main: seqOf(1, 0xb01).rows });
+    await rig.tick(armed, { scan: true });
+    expect(counterOf(rig.db, 'summary_missing'), 'CONTROL: nothing is counted before derivation').toBe(0);
+    await derive(rig);
+    const all = leavesA(rig);
+    expect(all.map((l) => ({ main: l.agent_id === '', kind: l.kind, status: l.status }))).toEqual([
+      { main: true, kind: 'native_leaf', status: 'not-requested' },
+      { main: false, kind: 'raw_leaf', status: 'not-requested' },
+    ]);
+    expect(all[1]!.boundary_uuid).toBe(agent.boundaryUuids[0]);
+    expect(counterOf(rig.db, 'summary_missing'), 'DM25: the raw leaf is counted, once').toBe(1);
+  }, 120_000);
+
+  it('SA9 no card or steer side effects: a subagent boundary is never measured, and no card or steer file is written, consumed or removed for it', async () => {
+    const rig = await rigOf('ccrc-hist-sa9-');
+    // The parent's main transcript is not in the store (only its subagent is), so a card step that read an agent row as the session's
+    // own would find a copy and a boundary to predict from; with the main transcript present the main one hides that.
+    plantA(rig, seqOf(1, 0x901).rows, { main: false });
+    await rig.tick(armed, { scan: true });
+    const P = historyPaths(rig.box.home);
+    const id = 'lane-a-e1';
+    for (const dir of ['card', 'steer']) fs.mkdirSync(path.join(P.root, dir, id), { recursive: true });
+    fs.mkdirSync(P.reg, { recursive: true });
+    fs.writeFileSync(path.join(P.reg, `${id}.uuid`), PARENT_A);
+    const C = (await import('../../ccd/history/card.mjs')) as unknown as {
+      measureCardDelivery(db: unknown, ictx: object, budget: object): object;
+      consumeAndWriteCards(db: unknown, ictx: object, budget: object): object;
+    };
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepA;
+    const measureAt = RIG_T0 + 7_200_000;
+    // the measure's first pass sets its cursor to the newest node there is: none yet, so a leaf derived next is above it
+    C.measureCardDelivery(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, measureAt, null), S.newBudget());
+    await derive(rig);
+    expect(leavesA(rig).map((l) => l.agent_id !== ''), 'CONTROL: the subagent boundary has its leaf').toEqual([true]);
+    const eofMs = Number((rig.db.prepare("SELECT max(f.eof_ms) AS e FROM ingest_files f JOIN transcripts t ON t.transcript_pk = f.transcript_pk WHERE t.agent_id <> ''").get() as { e: number }).e);
+    expect(eofMs, 'CONTROL: the subagent copy was read to its end at a tick this pass can name').toBeGreaterThan(0);
+    const tree = (): string[] => ['card', 'steer'].flatMap((d) => fs.readdirSync(path.join(P.root, d), { recursive: true, encoding: 'utf8' }).map((n) => `${d}/${n}`)).sort();
+    const rows = (sql: string): unknown[] => rig.db.prepare(sql).all().map((r) => ({ ...r }));
+    const state = (): unknown => ({
+      tree: tree(),
+      counters: rows('SELECT name, n FROM counters ORDER BY name'),
+      steps: rows('SELECT step, version, cursor FROM derivation_state ORDER BY step, version'),
+      breaker: rows('SELECT key, consecutive_fail, open_until_ms FROM breaker ORDER BY key'),
+    });
+    const before = state();
+    const measured = C.measureCardDelivery(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, measureAt, null), S.newBudget());
+    const cards = C.consumeAndWriteCards(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, eofMs, null), S.newBudget());
+    expect(measured).toEqual({ measured: 0, served: 0, mismatch: 0, waiting: 0 });
+    expect(cards).toEqual({ written: 0, consumed: 0, deleted: 0 });
+    expect(state(), 'no file under card/ or steer/, no counter, no cursor and no breaker row changed').toEqual(before);
+  }, 120_000);
+
+  /** The card step's whole day over one session, as the pass runs it: the card measure primed before derivation (so every leaf is above its
+   *  cursor), the leaves derived, then the measure and the writer, with a registered id, a card/ and a steer/ directory for it. With
+   *  `withAgent` the parent also has a subagent whose one boundary is newer (a higher entry_id) than the main thread's last. */
+  async function cardDay(prefix: string, withAgent: boolean, subagentStoredFirst = false): Promise<{
+    agentAfterMain: boolean; leaves: number; measured: unknown; cards: unknown; files: Record<string, string>; cardCounters: unknown; cursor: unknown;
+    lastMainRowid: number; agentPkBelowMain: boolean;
+  }> {
+    const rig = await rigOf(prefix);
+    const mainRows = seqOf(2, 0x921).rows;
+    plantAgentTree(rig, {
+      slug: SLUG_A, uuid: PARENT_A, agents: withAgent ? [{ id: 'a', rows: seqOf(1, 0x922).rows }] : [], parent: 'epoch', mainRows,
+      ...(subagentStoredFirst ? { main: false } : {}),
+    }, SINCE_A);
+    await rig.tick(armed, { scan: true });
+    if (subagentStoredFirst) {
+      // the main transcript file appears only now, so its transcripts row is made after the subagent's (a higher transcript_pk)
+      fs.writeFileSync(path.join(rig.box.homes[0]!, 'projects', SLUG_A, `${PARENT_A}.jsonl`), mainRows.map((r) => `${JSON.stringify(r)}\n`).join(''));
+      await rig.tick(armed, { scan: true });
+    }
+    const P = historyPaths(rig.box.home);
+    const id = 'lane-a-e1';
+    for (const dir of ['card', 'steer']) fs.mkdirSync(path.join(P.root, dir, id), { recursive: true });
+    fs.mkdirSync(P.reg, { recursive: true });
+    fs.writeFileSync(path.join(P.reg, `${id}.uuid`), PARENT_A);
+    const C = (await import('../../ccd/history/card.mjs')) as unknown as {
+      measureCardDelivery(db: unknown, ictx: object, budget: object): object;
+      consumeAndWriteCards(db: unknown, ictx: object, budget: object): object;
+    };
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepA;
+    const measureAt = RIG_T0 + 7_200_000;
+    C.measureCardDelivery(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, measureAt, null), S.newBudget());
+    await derive(rig);
+    const one = (sql: string): number => Number((rig.db.prepare(sql).get() as { v: number }).v);
+    const mainLast = one("SELECT max(b.entry_id) AS v FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.agent_id = ''");
+    const agentFirst = one("SELECT min(b.entry_id) AS v FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.agent_id <> ''");
+    const eofMs = one("SELECT max(f.eof_ms) AS v FROM ingest_files f JOIN transcripts t ON t.transcript_pk = f.transcript_pk WHERE t.agent_id = ''");
+    const measured = C.measureCardDelivery(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, measureAt, null), S.newBudget());
+    const cards = C.consumeAndWriteCards(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, eofMs, null), S.newBudget());
+    const files: Record<string, string> = {};
+    for (const d of ['card', 'steer']) {
+      for (const n of fs.readdirSync(path.join(P.root, d), { recursive: true, encoding: 'utf8' })) {
+        const full = path.join(P.root, d, n);
+        if (fs.statSync(full).isFile()) files[`${d}/${n}`] = fs.readFileSync(full, 'utf8');
+      }
+    }
+    return {
+      agentAfterMain: withAgent && agentFirst > mainLast, leaves: leavesA(rig).length, measured, cards, files,
+      lastMainRowid: one("SELECT max(n.rowid) AS v FROM nodes n JOIN transcripts t ON t.transcript_pk = n.transcript_pk WHERE t.agent_id = '' AND n.depth = 0"),
+      agentPkBelowMain: withAgent && one("SELECT min(transcript_pk) AS v FROM transcripts WHERE agent_id <> ''") < one("SELECT transcript_pk AS v FROM transcripts WHERE agent_id = ''"),
+      cardCounters: rig.db.prepare("SELECT name, n FROM counters WHERE name LIKE 'card\\_%' ESCAPE '\\' OR name LIKE 'steer\\_%' ESCAPE '\\' ORDER BY name").all().map((r) => ({ ...r })),
+      cursor: (rig.db.prepare("SELECT cursor FROM derivation_state WHERE step = 'card-measure'").get() as { cursor: string }).cursor,
+    };
+  }
+
+  it('SA9 with the main thread present: a subagent boundary newer than the last main one is not measured, and the card and steer files are what the main thread alone produces', async () => {
+    const alone = await cardDay('ccrc-hist-sa9m-alone-', false);
+    const both = await cardDay('ccrc-hist-sa9m-both-', true);
+    expect(both.agentAfterMain, 'CONTROL: the subagent boundary is newer than the main thread\'s last').toBe(true);
+    expect([alone.leaves, both.leaves], 'CONTROL: the subagent adds one leaf').toEqual([2, 3]);
+    expect(alone.measured, 'CONTROL: the main thread\'s two leaves are measured').toMatchObject({ measured: 2, waiting: 0 });
+    expect(Object.keys(alone.files).length, 'CONTROL: the main thread alone has its card and steer files written').toBeGreaterThan(0);
+    expect(both.measured, 'the measure counts only the main leaves').toEqual(alone.measured);
+    expect(both.cursor, 'and its cursor stops at the main thread\'s last leaf').toEqual(alone.cursor);
+    expect(both.cards).toEqual(alone.cards);
+    expect(both.files, 'no card or steer file written, changed or removed for the subagent boundary').toEqual(alone.files);
+    expect(both.cardCounters).toEqual(alone.cardCounters);
+  }, 240_000);
+
+  // ── D-8169 (history-w4-main-gists-main-only): a main leaf's and a parent's carried-copy sets read main nodes only ──
+  /** A subagent summary whose native gist is long enough to be a valid steered gist when a main block quotes it. */
+  const AGENT_TEXT = (k: number): string => [
+    '<summary>',
+    '8. Current Work:',
+    `   The subagent traced one gist through the whole fixture run ${k} and wrote it down plainly for the parent thread to read later.`,
+    '</summary>',
+  ].join('\n');
+  /** AGENT_TEXT's shape with a tag in its sentence: two subagent summaries with two different native gists. */
+  const agentTextOf = (tag: string) => (k: number): string => [
+    '<summary>', '8. Current Work:',
+    `   The ${tag} subagent traced one gist through the whole fixture run ${k} and wrote it down plainly for the parent thread to read later.`,
+    '</summary>',
+  ].join('\n');
+  /** The native gist of a subagent summary, as derivation stores it: a probe rig that derives one subagent leaf and reads it back. */
+  async function nativeGistOfAgent(seed: number, text: (k: number) => string = AGENT_TEXT): Promise<string> {
+    const probe = await rigOf('ccrc-hist-d8169-probe-');
+    plantA(probe, seqOf(1, seed, { summaryText: text }).rows, { main: seqOf(0, seed + 1).rows });
+    await probe.tick(armed, { scan: true });
+    await derive(probe);
+    const row = probe.db.prepare("SELECT n.gist AS g FROM nodes n JOIN transcripts t ON t.transcript_pk = n.transcript_pk WHERE t.agent_id <> ''").get() as { g: string } | undefined;
+    expect(row?.g, 'CONTROL: the probe derived a native subagent gist long enough to steer with').toBeDefined();
+    expect(row!.g, 'CONTROL: one line, so a steered block can carry it').not.toContain('\n');
+    expect(row!.g.length).toBeGreaterThanOrEqual(GIST_MIN);
+    return row!.g;
+  }
+  const leafBlock = (id: string | undefined, gist: string, refs: string | null = null): string => steeredBlock({ ...(id === undefined ? {} : { id }), gist, expand: 'carried, fixture', refs });
+  const withBlocks = (blocks: string): ((k: number) => string) => (k) => [fixtureSummaryText(k), blocks].join('\n');
+
+  it('D-8169 leaf arm: a main leaf whose steered gist equals a subagent leaf\'s native gist stays ok (no carried-copy from another chain)', async () => {
+    const g = await nativeGistOfAgent(0xd02);
+    const rig = await rigOf('ccrc-hist-d8169-leaf-');
+    plantA(rig, seqOf(1, 0xd02, { summaryText: AGENT_TEXT }).rows, { main: seqOf(0, 0xd03).rows });
+    await rig.tick(armed, { scan: true });
+    await derive(rig);   // the subagent leaf exists BEFORE the main compaction is ingested, so the main leaf's check can see it
+    expect(leavesA(rig).map((l) => [l.agent_id !== '', l.kind]), 'CONTROL: the subagent leaf is there first').toEqual([[true, 'native_leaf']]);
+    const main = seqOf(1, 0xd01, { summaryText: withBlocks(leafBlock(undefined, g, 'ccd/history/derive.mjs')), startMs: DAY_BEFORE + 3_600_000 });
+    const mainPath = path.join(rig.box.homes[0]!, 'projects', SLUG_A, `${PARENT_A}.jsonl`);
+    fs.appendFileSync(mainPath, main.rows.map((r) => `${JSON.stringify(r)}\n`).join(''));
+    rig.db.prepare("INSERT INTO steer_receipts (event_key, ccrc_id, cc_session_uuid, leaf_id, ts_ms) VALUES ('d8169-r1', 'lane-a-e1', ?, '', ?)").run(PARENT_A, DAY_BEFORE + 3_600_000 - 1000);
+    await rig.tick(armed, { scan: true });
+    await derive(rig);
+    const mainLeaf = leavesA(rig).find((l) => l.agent_id === '' && l.boundary_uuid === main.boundaryUuids[0])!;
+    expect(mainLeaf, 'the main leaf is derived').toBeDefined();
+    expect(mainLeaf, 'steered and ok: the quoted gist is no carried copy').toMatchObject({ kind: 'steered_leaf', status: 'ok' });
+    expect(rig.db.prepare('SELECT gist FROM nodes WHERE node_id = ?').get(mainLeaf.node_id), 'the steered gist is the one stored').toEqual({ gist: g });
+    expect(counterOf(rig.db, 'carried_copies'), 'a subagent gist is no carried copy').toBe(0);
+  }, 240_000);
+
+  it('D-8169 node arm: a parent\'s node block whose gist equals a subagent leaf\'s native gist stays ok', async () => {
+    const g = await nativeGistOfAgent(0xe02);
+    // learn the eight main leaf ids on a first rig (ids are the same on a second rig with the same rows), then plant the node block
+    const first = await rigOf('ccrc-hist-d8169-ids-');
+    plantA(first, seqOf(1, 0xe02, { summaryText: AGENT_TEXT }).rows, { main: seqOf(8, 0xe01).rows });
+    await first.tick(armed, { scan: true });
+    await derive(first);
+    const ids = leavesA(first).filter((l) => l.agent_id === '').map((l) => l.node_id);
+    expect(ids, 'CONTROL: eight main leaves').toHaveLength(8);
+    const pid = parentId(ids);
+    const nodeBlock = steeredBlock({ kind: 'node', id: pid, gist: g, expand: 'carried, fixture' }).replace(/^(<ccrc-node [^>\n]*)>/, '$1 depth="1">');
+    const rig = await rigOf('ccrc-hist-d8169-node-');
+    const last = (k: number): string => (k === 7 ? [fixtureSummaryText(k), leafBlock(ids[7], 'The eighth leaf was steered with its own distinct gist, asked for by an exact receipt.'), nodeBlock].join('\n') : fixtureSummaryText(k));
+    plantA(rig, seqOf(1, 0xe02, { summaryText: AGENT_TEXT }).rows, { main: seqOf(8, 0xe01, { summaryText: last }).rows });
+    rig.db.prepare("INSERT INTO steer_receipts (event_key, ccrc_id, cc_session_uuid, leaf_id, ts_ms) VALUES ('d8169-r2', 'lane-a-e1', ?, ?, ?)").run(PARENT_A, ids[7]!, DAY_BEFORE);
+    await rig.tick(armed, { scan: true });
+    await derive(rig);
+    const parent = rig.db.prepare('SELECT status, kind, gist FROM nodes WHERE node_id = ?').get(pid) as { status: string; kind: string; gist: string } | undefined;
+    expect(parent, 'CONTROL: the eight main leaves made that parent').toBeDefined();
+    expect(parent).toMatchObject({ kind: 'condensed', status: 'ok', gist: g });
+  }, 240_000);
+
+  it('M2: a subagent boundary that waits holds the leaves cursor below it, yet a main boundary above it derives in the same pass; a later pass derives the subagent leaf', async () => {
+    const rig = await rigOf('ccrc-hist-m2-');
+    // the subagent's compaction is recent (inside the raw-leaf grace of the file's end) and its summary row has not arrived: it waits
+    const agent = seqOf(1, 0xf02, { dropSummary: true, startMs: RIG_T0 });
+    const lateSummary = summaryRow({ uuid: agent.summaryUuids[0]!, ts: new Date(RIG_T0 + 30_000).toISOString(), sessionId: PARENT_A, text: fixtureSummaryText(0) });
+    const agentPaths = plantA(rig, agent.rows, { main: seqOf(0, 0xf01).rows });
+    await rig.tick(armed, { scan: true });
+    // the main compaction arrives after it, so its boundary has the higher entry_id
+    const main = seqOf(1, 0xf03, { startMs: DAY_BEFORE });
+    fs.appendFileSync(path.join(rig.box.homes[0]!, 'projects', SLUG_A, `${PARENT_A}.jsonl`), main.rows.map((r) => `${JSON.stringify(r)}\n`).join(''));
+    await rig.tick(armed, { scan: true });
+    const entryOf = (u: string): number => Number((rig.db.prepare('SELECT entry_id AS e FROM entries WHERE uuid = ?').get(u) as { e: number }).e);
+    const agentB = entryOf(agent.boundaryUuids[0]!);
+    expect(entryOf(main.boundaryUuids[0]!), 'CONTROL: the main boundary is above the subagent one').toBeGreaterThan(agentB);
+    await derive(rig, 1);
+    const cursor = (): number => Number(getStep(rig.db, 'leaves', NODE_PARSER_VERSION)?.cursor ?? -1);
+    expect(leavesA(rig).map((l) => [l.agent_id !== '', l.boundary_uuid]), 'the main leaf above derived in the same pass; the waiting subagent leaf is absent').toEqual([[false, main.boundaryUuids[0]]]);
+    expect(cursor(), 'the cursor is held just below the waiting subagent boundary').toBe(agentB - 1);
+    // the summary row arrives
+    fs.appendFileSync(agentPaths['a']!, `${JSON.stringify(lateSummary)}\n`);
+    await rig.tick(armed, { scan: true });
+    await derive(rig, 1);
+    expect(leavesA(rig).map((l) => l.agent_id !== ''), 'the later pass derives the subagent leaf').toEqual([false, true]);
+    expect(cursor(), 'and the cursor moves past it').toBeGreaterThanOrEqual(entryOf(main.boundaryUuids[0]!));
+  }, 240_000);
+
+  it('SA9 with the main thread present but stored AFTER the subagent (a lower subagent transcript_pk): the measure and the card and steer files are what the main thread alone produces', async () => {
+    const alone = await cardDay('ccrc-hist-sa9f-alone-', false);
+    const both = await cardDay('ccrc-hist-sa9f-both-', true, true);
+    expect(both.agentPkBelowMain, 'CONTROL: the subagent transcript has the lower transcript_pk').toBe(true);
+    expect(both.agentAfterMain, 'CONTROL: and its boundary the lower entry_id').toBe(false);
+    expect([alone.leaves, both.leaves], 'CONTROL: the subagent adds one leaf').toEqual([2, 3]);
+    expect(Object.keys(alone.files).length, 'CONTROL: the main thread alone has its card and steer files written').toBeGreaterThan(0);
+    expect(both.measured, 'the measure counts only the main leaves').toEqual(alone.measured);
+    expect(both.cursor, 'its cursor stands at the main thread\'s last leaf (the subagent leaf has a lower rowid)').toBe(String(both.lastMainRowid));
+    expect(both.cards).toEqual(alone.cards);
+    expect(both.files, 'no card or steer file written, changed or removed for the subagent boundary').toEqual(alone.files);
+    expect(both.cardCounters).toEqual(alone.cardCounters);
+  }, 240_000);
+
+  it('F1 refresh: a subagent leaf refreshed through refreshLeaf (the reparse path) still takes no receipt, though one the parent session holds would match it', async () => {
+    const rig = await rigOf('ccrc-hist-f1-');
+    plantA(rig, seqOf(1, 0x1f02, { summaryText: quoted }).rows, { main: seqOf(1, 0x1f01).rows });
+    await rig.tick(armed, { scan: true });
+    await derive(rig);
+    const agentLeaf = leavesA(rig).find((l) => l.agent_id !== '')!;
+    expect(agentLeaf, 'CONTROL: the subagent leaf was derived native, with no receipt').toMatchObject({ kind: 'native_leaf', status: 'not-requested' });
+    // Receipts arrive for the parent session AFTER the leaf was derived: one naming this very leaf, and a generic one. A leaf that asked for
+    // a receipt would pick the exact one and read its quoted block as a steer.
+    const ins = rig.db.prepare("INSERT INTO steer_receipts (event_key, ccrc_id, cc_session_uuid, leaf_id, ts_ms) VALUES (?, 'lane-a-e1', ?, ?, ?)");
+    ins.run('f1-exact', PARENT_A, agentLeaf.node_id, DAY_BEFORE);
+    ins.run('f1-generic', PARENT_A, '', DAY_BEFORE);
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepA;
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as { refreshLeaf(db: unknown, ictx: object, id: string): string };
+    const row = (): unknown => rig.db.prepare('SELECT kind, status, gist, topics, directive_flag, capped FROM nodes WHERE node_id = ?').get(agentLeaf.node_id);
+    const before = row();
+    expect(D.refreshLeaf(rig.db, S.makeIngestCtx(rig.box.home, rig.box.homes, RIG_T0 + 3_600_000, null), agentLeaf.node_id), 'the refresh changes nothing').toBe('unchanged');
+    expect(row()).toEqual(before);
+    expect(row()).toMatchObject({ kind: 'native_leaf', status: 'not-requested' });
+  }, 120_000);
+
+  it('F2 lastBoundary: a subagent boundary above the session\'s last main boundary, once derived, moves the leaves cursor past it', async () => {
+    const rig = await rigOf('ccrc-hist-f2-');
+    plantA(rig, seqOf(1, 0x2f02).rows, { main: seqOf(1, 0x2f01).rows });
+    await rig.tick(armed, { scan: true });
+    await derive(rig);
+    const entryOf = (sql: string): number => Number((rig.db.prepare(sql).get() as { v: number }).v);
+    const mainLast = entryOf("SELECT max(b.entry_id) AS v FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.agent_id = ''");
+    const agentB = entryOf("SELECT max(b.entry_id) AS v FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.agent_id <> ''");
+    expect(agentB, 'CONTROL: the subagent boundary is above the last main one').toBeGreaterThan(mainLast);
+    expect(leavesA(rig).map((l) => l.agent_id !== ''), 'CONTROL: both boundaries have their leaf').toEqual([false, true]);
+    expect(Number(getStep(rig.db, 'leaves', NODE_PARSER_VERSION)?.cursor)).toBe(agentB);
+  }, 120_000);
+
+  it('the main chain is the same with and without subagent rows beside it: every main leaf and parent field, refs, children and sources', async () => {
+    const REFS = 'ccd/history/derive.mjs';
+    const textA = agentTextOf('alpha');
+    const textB = agentTextOf('beta');
+    const gA = await nativeGistOfAgent(0x1a12, textA);   // subagent a's native gist: main leaf 3's steered gist repeats it
+    const gB = await nativeGistOfAgent(0x1a13, textB);   // subagent b's: the parent's node block repeats it
+    const plain = seqOf(8, 0x1a01);
+    const mainPath = (rig: AgentRig): string => path.join(rig.box.homes[0]!, 'projects', SLUG_A, `${PARENT_A}.jsonl`);
+    const jsonl = (rows: object[]): string => rows.map((r) => `${JSON.stringify(r)}\n`).join('');
+    // the eight main leaf ids (the same in every rig that holds these main rows), learned on a probe
+    const probe = await rigOf('ccrc-hist-diff-ids-');
+    plantAgentTree(probe, { slug: SLUG_A, uuid: PARENT_A, agents: [], parent: 'epoch', mainRows: plain.rows }, SINCE_A);
+    await probe.tick(armed, { scan: true });
+    await derive(probe);
+    const ids = leavesA(probe).map((l) => l.node_id);
+    expect(ids, 'CONTROL: eight main leaves on the probe').toHaveLength(8);
+    const pid = parentId(ids);
+    const tsOf = (k: number): number => Date.parse(String(plain.rows.find((r) => r['uuid'] === plain.boundaryUuids[k])!['timestamp']));
+    const nodeBlock = steeredBlock({ kind: 'node', id: pid, gist: gB, expand: 'carried, fixture' }).replace(/^(<ccrc-node [^>\n]*)>/, '$1 depth="1">');
+    const text = (k: number): string => [fixtureSummaryText(k),
+      ...(k === 3 ? [leafBlock(ids[3], gA, REFS)] : []),
+      ...(k === 5 ? [leafBlock(undefined, 'A generic steered gist for the sixth leaf, asked for by a generic receipt in its window.', REFS)] : []),
+      ...(k === 7 ? [leafBlock(ids[7], 'The eighth leaf was steered with its own distinct gist, asked for by an exact receipt.', REFS), nodeBlock] : []),
+    ].join('\n');
+    const main = seqOf(8, 0x1a01, { summaryText: text });
+    const receipts = (rig: AgentRig): void => {
+      const ins = rig.db.prepare("INSERT INTO steer_receipts (event_key, ccrc_id, cc_session_uuid, leaf_id, ts_ms) VALUES (?, 'lane-a-e1', ?, ?, ?)");
+      ins.run('diff-3', PARENT_A, ids[3]!, tsOf(3) - 500);
+      ins.run('diff-5', PARENT_A, '', tsOf(5) - 500);
+      ins.run('diff-7', PARENT_A, ids[7]!, tsOf(7) - 500);
+    };
+    // rig 1: the main thread alone
+    const alone = await rigOf('ccrc-hist-diff-alone-');
+    plantAgentTree(alone, { slug: SLUG_A, uuid: PARENT_A, agents: [], parent: 'epoch', mainRows: main.rows }, SINCE_A);
+    receipts(alone);
+    await alone.tick(armed, { scan: true });
+    await derive(alone);
+    // rig 2: the same main thread, with subagent boundaries below its first boundary and above its last. Each quotes a block, and the
+    // generic receipt (before every subagent boundary here) is one a subagent leaf WOULD pick if it asked for one.
+    const withQuote = (t: (k: number) => string) => (k: number): string => [t(k), leafBlock(undefined, 'A quoted gist that no steer asked for on a subagent, long enough to be valid.', REFS)].join('\n');
+    const LATE = DAY_BEFORE + 36_000_000;
+    const both = await rigOf('ccrc-hist-diff-both-');
+    plantAgentTree(both, {
+      slug: SLUG_A, uuid: PARENT_A, parent: 'epoch', mainRows: [main.rows[0]!],
+      agents: [
+        { id: 'a', rows: seqOf(1, 0x1a12, { summaryText: withQuote(textA), startMs: LATE }).rows },
+        { id: 'b', rows: seqOf(1, 0x1a13, { summaryText: textB, startMs: LATE + 3_600_000 }).rows },
+      ],
+    }, SINCE_A);
+    receipts(both);
+    await both.tick(armed, { scan: true });                       // the subagents' boundaries are stored first (lower entry_ids)
+    fs.appendFileSync(mainPath(both), jsonl(main.rows.slice(1)));
+    await both.tick(armed, { scan: true });                       // then the main thread's
+    const second = seqOf(1, 0x1a14, { summaryText: withQuote(agentTextOf('gamma')), startMs: LATE + 7_200_000 });
+    fs.appendFileSync(path.join(both.box.homes[0]!, 'projects', SLUG_A, PARENT_A, 'subagents', 'agent-b.jsonl'), jsonl(second.rows));
+    await both.tick(armed, { scan: true });                       // and one more subagent boundary, above the main thread's last
+    await derive(both);
+    const entryOf = (rig: AgentRig, u: string): number => Number((rig.db.prepare('SELECT entry_id AS e FROM entries WHERE uuid = ?').get(u) as { e: number }).e);
+    const sub = (rig: AgentRig): number[] => (rig.db.prepare("SELECT b.entry_id AS e FROM boundaries b JOIN transcripts t ON t.transcript_pk = b.transcript_pk WHERE t.agent_id <> '' ORDER BY b.entry_id").all() as Array<{ e: number }>).map((r) => Number(r.e));
+    const m0 = entryOf(both, main.boundaryUuids[0]!); const m7 = entryOf(both, main.boundaryUuids[7]!);
+    expect(sub(both).filter((e) => e < m0).length, 'CONTROL: subagent boundaries below the first main boundary').toBe(2);
+    expect(sub(both).filter((e) => e > m7).length, 'CONTROL: and one above the last').toBe(1);
+
+    const snap = (rig: AgentRig): unknown => {
+      const nodes = (rig.db.prepare(`SELECT n.node_id AS node_id, n.depth AS depth, n.kind AS kind, n.status AS status, n.gist AS gist, n.topics AS topics,
+          n.earliest_ms AS earliest_ms, n.latest_ms AS latest_ms, n.src_chars AS src_chars, n.desc_count AS desc_count, n.desc_chars AS desc_chars,
+          n.directive_flag AS directive_flag, n.capped AS capped, n.span_start_uuid AS span_start_uuid, n.parser_version AS parser_version, e.uuid AS boundary_uuid
+        FROM nodes n JOIN transcripts t ON t.transcript_pk = n.transcript_pk LEFT JOIN entries e ON e.entry_id = n.boundary_entry_id
+        WHERE t.agent_id = '' ORDER BY n.depth, n.earliest_ms, n.node_id`).all() as Array<Record<string, unknown>>).map((r) => ({ ...r }));
+      const mainIds = `(SELECT n.node_id FROM nodes n JOIN transcripts t ON t.transcript_pk = n.transcript_pk WHERE t.agent_id = '')`;
+      const all = (sql: string): unknown[] => rig.db.prepare(sql).all().map((r) => ({ ...r }));
+      return {
+        nodes,
+        refs: all(`SELECT node_id, kind, value, origin FROM node_refs WHERE node_id IN ${mainIds} ORDER BY node_id, kind, value, origin`),
+        children: all(`SELECT node_id, child_id, ord FROM node_children WHERE node_id IN ${mainIds} ORDER BY node_id, ord`),
+        sources: all(`SELECT ns.node_id AS node_id, e.uuid AS uuid, ns.ord AS ord FROM node_sources ns JOIN entries e ON e.entry_id = ns.entry_id WHERE ns.node_id IN ${mainIds} ORDER BY ns.node_id, ns.ord`),
+      };
+    };
+    const a = snap(alone) as { nodes: Array<{ node_id: string; kind: string; status: string; depth: number; gist: string }>; refs: unknown[] };
+    expect(a.nodes.length, 'CONTROL: eight main leaves and their parent').toBe(9);
+    const byId = (id: string) => a.nodes.find((n) => n.node_id === id)!;
+    expect(byId(ids[3]!), 'CONTROL: leaf 3 is steered ok with the exact receipt and refs').toMatchObject({ kind: 'steered_leaf', status: 'ok', gist: gA });
+    expect(byId(ids[5]!), 'CONTROL: leaf 5 takes the generic receipt').toMatchObject({ kind: 'steered_leaf' });
+    expect(byId(ids[7]!), 'CONTROL: leaf 7 is steered ok').toMatchObject({ kind: 'steered_leaf', status: 'ok' });
+    expect(byId(pid), 'CONTROL: the parent takes the node block').toMatchObject({ kind: 'condensed', status: 'ok', gist: gB });
+    expect(a.refs.length, 'CONTROL: refs are stored').toBeGreaterThan(0);
+    expect(snap(both), 'every main leaf and parent field, refs, children and sources equal the main-only run').toEqual(snap(alone));
+    const subLeaves = leavesA(both).filter((l) => l.agent_id !== '');
+    expect(subLeaves.map((l) => [l.kind, l.status]), 'and the three subagent leaves took no receipt').toEqual([['native_leaf', 'not-requested'], ['native_leaf', 'not-requested'], ['native_leaf', 'not-requested']]);
+  }, 360_000);
+
+  it('SA27 forked copies of one subagent transcript, and a true conflict: every row stored, transcript_forked counted, each leaf from the copy holding its boundary, one entry with two entry_variants rows (one per body, nothing dropped)', async () => {
+    const rig = await rigOf('ccrc-hist-sa27-');
+    const text = (tag: number) => (k: number): string => fixtureSummaryText(k + tag);
+    const shared = seqOf(1, 0xc01, { summaryText: text(100) });
+    const onlyA = seqOf(1, 0xc02, { summaryText: text(200) });
+    const onlyB = seqOf(1, 0xc03, { summaryText: text(300) });
+    // Copy B stops at the shared boundary row: the shared boundary's summary (and what follows it) is a row only copy A holds, then each
+    // copy goes its own way. Both copies hold the shared BOUNDARY, so which copy its leaf is read from decides whether it has a summary.
+    const cut = shared.rows.findIndex((r) => r['uuid'] === shared.boundaryUuids[0]);
+    expect(cut, 'CONTROL: the fixture has rows after the shared boundary that copy B drops').toBeLessThan(shared.rows.length - 1);
+    // the same first row, a true conflict: one message uuid with two bodies
+    const conflictUuid = String(shared.rows[0]!['uuid']);
+    const changed = shared.rows.slice(0, cut + 1).map((r, i): Row => (i !== 0 ? r : { ...r, message: { role: 'user', content: [{ type: 'text', text: 'the same uuid, a different body' }] } }));
+    const paths = plantA(rig, [...shared.rows, ...onlyA.rows], { main: false });
+    const second = holdAgainIn(paths['a']!, rig.box.homes[0]!, rig.box.homes[1]!, 'copy');
+    fs.writeFileSync(second, [...changed, ...onlyB.rows].map((r) => `${JSON.stringify(r)}\n`).join(''));
+    await rig.tick(armed, { scan: true });
+    await rig.tick(armed, { scan: true });
+    const key = agentKeys(rig.db)[0]!;
+    expect(agentKeys(rig.db), 'CONTROL: one subagent transcript, held twice').toEqual([key]);
+    expect(rig.db.prepare("SELECT count(*) AS n FROM ingest_files f JOIN transcripts t ON t.transcript_pk = f.transcript_pk WHERE t.agent_id = ? AND f.source_key = ''").get(key)).toEqual({ n: 2 });
+    const stored = (u: string): number => Number((rig.db.prepare('SELECT count(*) AS n FROM entries WHERE uuid = ?').get(u) as { n: number }).n);
+    for (const u of [...shared.rows, ...onlyA.rows, ...onlyB.rows].map((r) => String(r['uuid']))) expect(stored(u), `row ${u} stored once`).toBe(1);
+    // The store keeps BOTH bodies of a conflicted uuid as entry_variants rows (sweep.mjs inserts the entry's earlier body and the new one
+    // together), so "one entry and one entry_variants row" of the addendum is, measured, one entry and one variant row per body. Nothing is dropped.
+    const bodies = rig.db.prepare('SELECT v.blob_id AS b FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id WHERE e.uuid = ? ORDER BY v.blob_id').all(conflictUuid) as Array<{ b: number }>;
+    expect(bodies.length, 'the conflicted uuid keeps one variant row per body').toBe(2);
+    expect(variantsOf(rig.db, key), 'and no other uuid has one: the shared prefix and each copy\'s own rows agree').toBe(2);
+    const entryBlob = Number((rig.db.prepare('SELECT blob_id AS b FROM entries WHERE uuid = ?').get(conflictUuid) as { b: number }).b);
+    expect(bodies.map((x) => Number(x.b)), 'the entry\'s own body is one of the two').toContain(entryBlob);
+    await derive(rig);
+    expect(counterOf(rig.db, 'transcript_forked'), 'neither copy holds every row').toBeGreaterThan(0);
+    const leaves = leavesA(rig);
+    expect(leaves.map((l) => l.boundary_uuid).sort()).toEqual([shared.boundaryUuids[0]!, onlyA.boundaryUuids[0]!, onlyB.boundaryUuids[0]!].sort());
+    expect(leaves.every((l) => l.agent_id === key && l.kind === 'native_leaf')).toBe(true);
+    const summaryBlob = (u: string): number => Number((rig.db.prepare('SELECT blob_id AS b FROM entries WHERE uuid = ?').get(u) as { b: number }).b);
+    const leafOf = (u: string): { summary_blob_id: number } => rig.db.prepare('SELECT n.summary_blob_id FROM nodes n JOIN entries e ON e.entry_id = n.boundary_entry_id WHERE e.uuid = ?').get(u) as { summary_blob_id: number };
+    for (const sq of [shared, onlyA, onlyB]) expect(Number(leafOf(sq.boundaryUuids[0]!).summary_blob_id), `the leaf of ${sq.boundaryUuids[0]} reads its own copy's summary`).toBe(summaryBlob(sq.summaryUuids[0]!));
+    // Which copy each boundary's leaf is read from: the copy that holds it, and for the boundary both hold, the live copy with the smallest
+    // file_id (lib pickHoldingCopy). That copy is the one with the summary, so a leaf read from the other copy would have none.
+    const fileOf = (u: string): number[] => (rig.db.prepare('SELECT m.file_id AS f FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE e.uuid = ? ORDER BY m.file_id').all(u) as Array<{ f: number }>).map((r) => Number(r.f));
+    const DH = (await import('../../ccd/history/derive.mjs')) as unknown as { holdingCopyOf(db: unknown, b: { entry_id: number; transcript_pk: number }): { file_id: number } | null };
+    const holding = (u: string): number => {
+      const b = rig.db.prepare('SELECT b.entry_id AS entry_id, b.transcript_pk AS transcript_pk FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id WHERE e.uuid = ?').get(u) as { entry_id: number; transcript_pk: number };
+      return Number(DH.holdingCopyOf(rig.db, b)!.file_id);
+    };
+    const withSummary = fileOf(shared.summaryUuids[0]!);
+    expect(withSummary, 'CONTROL: only one copy holds the shared summary').toHaveLength(1);
+    expect(fileOf(shared.boundaryUuids[0]!), 'CONTROL: both copies hold the shared boundary').toHaveLength(2);
+    expect(holding(shared.boundaryUuids[0]!), 'the shared boundary is read from the smallest live file_id, the copy with its summary').toBe(Math.min(...fileOf(shared.boundaryUuids[0]!)));
+    expect(holding(shared.boundaryUuids[0]!)).toBe(withSummary[0]);
+    expect([holding(onlyA.boundaryUuids[0]!)], 'a boundary only one copy holds is read from that copy').toEqual(fileOf(onlyA.boundaryUuids[0]!));
+    expect([holding(onlyB.boundaryUuids[0]!)]).toEqual(fileOf(onlyB.boundaryUuids[0]!));
+  }, 240_000);
+});

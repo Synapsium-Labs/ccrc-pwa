@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Move ccrc out of the `OpenClawHetzner` monorepo into a standalone
+**Goal:** Move ccrc out of the `project-c` monorepo into a standalone
 private repo `ccrc-pwa`, with git history preserved and **zero behaviour
 change**.
 
@@ -128,7 +128,7 @@ built and tested first.
 - [ ] **Step 1: Create the branch**
 
 ```bash
-cd /srv/projects/OpenClawHetzner
+cd /srv/projects/project-c
 git checkout -b ccrc-pwa-extraction
 ```
 
@@ -258,7 +258,7 @@ describe('refuses an unrecognised tree', () => {
 - [ ] **Step 3: Run it and watch it fail**
 
 ```bash
-cd /srv/projects/OpenClawHetzner/infra/ccrc/server
+cd /srv/projects/project-c/infra/ccrc/server
 ./node_modules/.bin/vitest run test/extraction-manifest.test.ts
 ```
 
@@ -275,7 +275,7 @@ Create `infra/ccrc/scripts/extraction-manifest.sh`:
 #
 # It runs in TWO repo layouts and normalises paths so both produce the same key
 # for the same file. That is the entire point: the pre-extraction manifest taken
-# in OpenClawHetzner and the post-extraction manifest taken in ccrc-pwa are
+# in project-c and the post-extraction manifest taken in ccrc-pwa are
 # diffed against each other, and any difference is a file that changed during
 # the move.
 #
@@ -357,7 +357,7 @@ bash -n infra/ccrc/scripts/extraction-manifest.sh
 - [ ] **Step 5: Run the test and watch it pass**
 
 ```bash
-cd /srv/projects/OpenClawHetzner/infra/ccrc/server
+cd /srv/projects/project-c/infra/ccrc/server
 ./node_modules/.bin/vitest run test/extraction-manifest.test.ts
 ```
 
@@ -366,7 +366,7 @@ Expected: PASS, 6 tests.
 - [ ] **Step 6: Capture the real baseline**
 
 ```bash
-cd /srv/projects/OpenClawHetzner
+cd /srv/projects/project-c
 mkdir -p .extraction
 bash infra/ccrc/scripts/extraction-manifest.sh > .extraction/manifest-before.txt
 wc -l .extraction/manifest-before.txt
@@ -392,7 +392,7 @@ was written and the spec's anchor needs updating before proceeding.
 - [ ] **Step 7: Capture the suite baseline**
 
 ```bash
-cd /srv/projects/OpenClawHetzner/infra/ccrc
+cd /srv/projects/project-c/infra/ccrc
 {
   for p in server agent pwa; do
     echo "--- $p ---"
@@ -412,7 +412,7 @@ The server suite legitimately loses this file. The subtraction must be checked,
 not assumed.
 
 ```bash
-cd /srv/projects/OpenClawHetzner/infra/ccrc/server
+cd /srv/projects/project-c/infra/ccrc/server
 ./node_modules/.bin/vitest run test/ccd-ccclip.test.ts --reporter=dot 2>&1 \
   | grep -E 'Test Files|Tests ' | tee -a ../../../.extraction/suites-before.txt
 ```
@@ -423,7 +423,7 @@ cd /srv/projects/OpenClawHetzner/infra/ccrc/server
 to the monorepo's `.gitignore` and keep it out of the commit.
 
 ```bash
-cd /srv/projects/OpenClawHetzner
+cd /srv/projects/project-c
 echo '.extraction/' >> .gitignore
 git add .gitignore infra/ccrc/scripts/extraction-manifest.sh \
         infra/ccrc/server/test/extraction-manifest.test.ts
@@ -517,7 +517,7 @@ describe('extraction finding — one path to the ccd script', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /srv/projects/OpenClawHetzner/infra/ccrc/server
+cd /srv/projects/project-c/infra/ccrc/server
 ./node_modules/.bin/vitest run test/single-definition.test.ts
 ```
 
@@ -579,7 +579,7 @@ worth a second look rather than a silent deletion.
 - [ ] **Step 4: Run the guard and the full server suite**
 
 ```bash
-cd /srv/projects/OpenClawHetzner/infra/ccrc/server
+cd /srv/projects/project-c/infra/ccrc/server
 ./node_modules/.bin/vitest run test/single-definition.test.ts
 ./node_modules/.bin/vitest run --reporter=dot 2>&1 | grep -E 'Test Files|Tests '
 ./node_modules/.bin/tsc --noEmit && echo "tsc clean"
@@ -596,7 +596,7 @@ investigate rather than proceeding.
 A guard that passes when the thing it guards is broken is worse than no guard.
 
 ```bash
-cd /srv/projects/OpenClawHetzner/infra/ccrc/server
+cd /srv/projects/project-c/infra/ccrc/server
 cp test/ccd-clip.test.ts /tmp/ccd-clip.bak
 # Reintroduce a copy exactly as a future author would write it.
 sed -i "s|import { CCD } from './ccdWsHelpers.js';|const CCD = path.resolve(__dirname, '../../../<server-host>-portability/ccd');|" test/ccd-clip.test.ts
@@ -609,7 +609,7 @@ sha256sum test/ccd-clip.test.ts    # confirm pristine restore
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /srv/projects/OpenClawHetzner
+cd /srv/projects/project-c
 git add infra/ccrc/server/test/
 git commit -m "refactor(ccrc): one definition of the path to the ccd script
 
@@ -733,7 +733,7 @@ non-fresh clone. It must never point at the monorepo itself.
 ```bash
 cd /srv/projects
 rm -rf /tmp/ccrc-extract
-git clone --no-local /srv/projects/OpenClawHetzner /tmp/ccrc-extract
+git clone --no-local /srv/projects/project-c /tmp/ccrc-extract
 cd /tmp/ccrc-extract
 git checkout ccrc-pwa-extraction
 git log --oneline -1   # expect Task 2's commit
@@ -1085,7 +1085,7 @@ future extraction.
 
 ```bash
 sha256sum /srv/projects/ccrc-pwa/ccd/ccd
-sha256sum /srv/projects/OpenClawHetzner/infra/<server-host>-portability/ccd
+sha256sum /srv/projects/project-c/infra/<server-host>-portability/ccd
 wc -l /srv/projects/ccrc-pwa/ccd/ccd   # expect 5439
 ```
 
@@ -1097,7 +1097,7 @@ did not.
 - [ ] **Step 3: Suite counts against the baseline**
 
 ```bash
-cat /srv/projects/OpenClawHetzner/.extraction/suites-before.txt
+cat /srv/projects/project-c/.extraction/suites-before.txt
 cd /srv/projects/ccrc-pwa
 for p in server agent pwa; do
   echo "--- $p ---"
@@ -1145,7 +1145,7 @@ one-line exception and noting that the collapse landed in the monorepo before
 the move.
 
 ```bash
-cd /srv/projects/OpenClawHetzner
+cd /srv/projects/project-c
 git add docs/superpowers/specs/2026-08-03-ccrc-pwa-extraction-design.md
 git commit -m "docs(ccrc): spec 0's content-identity check tightens to one line
 
@@ -1158,11 +1158,11 @@ defect rather than something a reviewer adjudicates."
 - [ ] **Step 7: Merge the monorepo branch**
 
 ```bash
-cd /srv/projects/OpenClawHetzner
+cd /srv/projects/project-c
 git checkout main && git pull
 git merge ccrc-pwa-extraction
 cd infra/ccrc/server && ./node_modules/.bin/vitest run --reporter=dot 2>&1 | grep -E 'Test Files|Tests '
-cd /srv/projects/OpenClawHetzner && git push
+cd /srv/projects/project-c && git push
 ```
 
 The monorepo keeps its copy of everything. Deleting it happens after spec 3,

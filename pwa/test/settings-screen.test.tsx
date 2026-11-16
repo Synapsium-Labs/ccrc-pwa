@@ -1,0 +1,3610 @@
+// SettingsScreen (route `/settings`, centralised update management W3 —
+// design 2026-09-20 §13). Task 6 lands the SHELL — the header and its back
+// control — because the route's own pin (app.test.tsx) needs the screen's
+// heading; Tasks 7–10 append one describe each for the sections they add,
+// merging their names into the import lines below.
+//
+// The idiom is accounts-screen.test.tsx's: the FULL afterEach (:46-51) —
+// cleanup, restoreAllMocks, the route back to '/', and the fleet store reset —
+// because a later section spies on `api` and reads the store, and dropping any
+// one of the four leaks state into the next case. CSS is asserted by scraping
+// fleet.css through test/cssRule.ts: vitest runs with `css: false`, so jsdom
+// evaluates no stylesheet and no computed style can carry a claim.
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import type { BuildInfo } from '../../shared/buildinfo';
+import type {
+  CatalogueState, IntentWriteAnswer, NodeWire, NotifyMode, ReleaseWire, UpdateIntentWire, UpdatesView,
+} from '../../shared/api';
+import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, UPDATE_GATE_CAP } from '../../shared/api';
+import { LOOPBACK_HOSTS } from '../../shared/base-url';
+import {
+  AUTO_NOTES,
+  autoGateMissing,
+  CHANNEL_NOTES,
+  UNCONFIRMED_TEXT,
+} from '../src/screens/settings/UpdatesSection';
+import { AUTO_LABELS, CHANNEL_SENTENCES } from '../src/screens/settings/updatesWords';
+import { NOTIFY_LABELS } from '../src/screens/settings/NotificationsSection';
+import { unarmedExposure } from '../src/screens/settings/SignInGateCard';
+import { renderSettings } from './settingsHost';
+import { CommandLayer } from '../src/command/CommandLayer';
+import { SettingsDataProvider } from '../src/screens/settings/SettingsDataProvider';
+import { SettingsScreen } from '../src/screens/settings/SettingsFrame';
+import { App } from '../src/app';
+import { render } from '@testing-library/react';
+import {
+  ACK_UNREADABLE_TEXT,
+  canAck,
+  catalogueLine,
+  catalogueReasonText,
+  clockTime,
+  currentIsAmber,
+  currentText,
+  dayClock,
+  finishedLine,
+  MACOS_UNMANAGED_TEXT,
+  nodeStateLine,
+  reachabilityLine,
+  refusedLine,
+  releaseDirection,
+  releaseRunningText,
+  requestLine,
+  resolveDetailLine,
+  sortReleases,
+  verifiedAt,
+} from '../src/screens/updates';
+import { releaseDate } from '../src/lib/format';
+import {
+  CATALOGUE_CHECK_MINUTES, CATALOGUE_EXPLAIN_TEXT, NOTIFICATIONS_TEXT, SIGN_IN_GATE_TEXT, STALL_LEVEL_NOTE, STALL_WORDS,
+  UPDATES_TEXT, nodeRollbackNote, stallQuietBoundsText,
+} from '../src/fleet/settingsText';
+import { ackNote } from '../src/fleet/updateAck';
+
+/** A card's purpose line (settings Task R2b2): the `Section`'s own paragraph, between its head and its card. */
+const isPurposeLine = (el: HTMLElement): boolean =>
+  el.tagName === 'P' && el.parentElement?.tagName === 'SECTION' && el.previousElementSibling?.querySelector('h3') != null;
+import { MOVE_REQUESTED_TEXT } from '../src/fleet/UpdateMoveSheet';
+import { navigate } from '../src/lib/router';
+import { useFleetStore } from '../src/stores/fleet';
+import { ApiError, api, apiErrorText, updateErrorText } from '../src/lib/api';
+import { buttonVariants, DOOR, RADIO_FIELDSET, RADIO_OPTION } from '@ccrc/ui';
+import { declValue, ruleIn } from './cssRule';
+import type {
+  StallHeld, StallWatchEffective, StallWatchStages, StallWatchView, StallWriteEffect,
+} from '../../shared/api';
+import * as L0 from '../../shared/api';
+import {
+  STALL_BUSY_GATE_OFF_TEXT, STALL_BUSY_GATE_TEXT, STALL_CONFIRM_TEXT, STALL_FALLBACK_TEXT, STALL_FILES_EXCEED_TEXT,
+  STALL_FOLLOW_LABEL, STALL_HAZARD_TEXT, STALL_HELD_REASON, STALL_HELD_TEXT, STALL_LEVELS, STALL_LEVEL_TEXT,
+  STALL_NEXT_TEXT, STALL_NOT_AVAILABLE_TEXT, STALL_NOTICE_TEXT, STALL_QUIET_NOTE, STALL_RUNLESS_FOOTNOTE,
+  STALL_SECTION_TEXT, STALL_SOURCE_TEXT, STALL_STAGE_TEXT, STALL_STORED_TEXT,
+} from '../../shared/api';
+import {
+  fillStallText, quietChoices, quietText, stallConfirmLines, stallConfirmTitle, stallCountLine, stallHeldLine,
+  stallNextLines, stallNowLines,
+} from '../src/screens/StallWatchSection';
+
+const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  navigate('/');
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false }));
+});
+
+describe('SettingsScreen — the shell', () => {
+  it('titles itself Settings, as the one level-1 heading', () => {
+    renderSettings(null);
+    expect(screen.getByRole('heading', { level: 1, name: /^settings$/i })).toBeInTheDocument();
+  });
+
+  it('has a back affordance that returns to the fleet', () => {
+    // Starts ON /settings, so the assertion cannot pass by the route never
+    // having moved (accounts-screen.test.tsx's own back case starts on '/').
+    navigate('/settings');
+    renderSettings(null);
+    fireEvent.click(screen.getByRole('button', { name: /back to fleet/i }));
+    expect(location.pathname).toBe('/');
+  });
+});
+
+describe('SettingsScreen — tap targets and the header door', () => {
+  it('.settings-back is at least one tap square, off the shared token', () => {
+    // `BackButton`'s floor, not this stylesheet's: all five back chevrons are
+    // one component, and `min-w-tap`/`min-h-tap` resolve through theme.css's
+    // `--spacing-tap: var(--tap-min)` (pinned by theme-bridge.test.ts).
+    const backButton = readFileSync(
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'primitives', 'back-button.tsx'), 'utf8');
+    expect(backButton).toContain('min-h-tap');
+    expect(backButton).toContain('min-w-tap');
+    expect(backButton).not.toContain('44px');
+  });
+
+  it('.settings-back is the class the rendered back button carries', () => {
+    renderSettings(null);
+    expect(screen.getByRole('button', { name: /back to fleet/i })).toHaveClass('settings-back');
+  });
+
+  it('.settings-door is at least one tap tall, off the shared token', () => {
+    // The floor is @ccrc/ui's `Door` now, asserted against the EXPORTED
+    // constant rather than the source file — reading the file let a comment
+    // satisfy the identical guard written for `BackButton`, which the mutation
+    // table caught. The render half — a real element still carries the class —
+    // is the fleet-screen.test.tsx door case, where the door is mounted.
+    expect(DOOR).toContain('min-h-tap');
+    expect(DOOR).not.toContain('44px');
+  });
+
+  it('.settings-bell-row .bell is at least one tap square, off the shared token — the CONTROL, not just the row (F2)', () => {
+    // The row's own min-height (:74 above) added the button no tap area: the
+    // caption span beside it is not a <label> for it, so the row's height and
+    // the control's own hit area were two different things. Pinned on the
+    // control itself, per test/cssRule.ts.
+    expect(declValue(ruleIn(fleetCss, '.settings-bell-row .bell'), 'min-width')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(fleetCss, '.settings-bell-row .bell'), 'min-height')).toBe('var(--tap-min)');
+  });
+
+  it("wraps the fleet head's right group rather than overflowing it, by specificity", () => {
+    // D-3303: the group's four steady-state items
+    // leave ~38px at 390px (fleet.css's Chromium-measured width note above
+    // `.fleet-runs-line`), and a fifth, labelled door cannot fit that. The
+    // override must OUT-SPECIFY `.fleet-head-right` rather than restate it —
+    // the cascade trap fleet-css.test.ts documents at the class chooser.
+    const spec = (sel: string): number =>
+      (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
+    const override = ruleIn(fleetCss, '.fleet-head > .fleet-head-right');
+    expect(declValue(override, 'flex-wrap')).toBe('wrap');
+    expect(declValue(override, 'justify-content')).toBe('flex-end');
+    expect(spec('.fleet-head > .fleet-head-right')).toBeGreaterThan(spec('.fleet-head-right'));
+    // Non-vacuity: wrapping means something only on a flex container, and the
+    // base rule must still be the one that makes it one.
+    expect(declValue(ruleIn(fleetCss, '.fleet-head-right'), 'display')).toBe('flex');
+  });
+});
+
+// ── Task 7: the Updates section (design 2026-09-20 §13, §18) ─────────────────
+// Fixtures carry the t7 prefix and stay module-level only because both
+// describes read them: Tasks 8–10 keep their own, so no case here couples to a
+// shape another task's cases own.
+const T7_FLEET_ID = '0f0e0d0c-0b0a-4908-8706-050403020100';
+const T7_SERVER_ID = '1f1e1d1c-1b1a-4918-9716-151413121110';
+/** A full NodeWire (W2 Task 1), measured and settled, WITHOUT the gate word — every W2 node's caps. */
+const t7Node = (over: Partial<NodeWire> = {}): NodeWire => ({
+  nodeId: T7_FLEET_ID, role: 'fleet', label: 'fleet', os: 'linux',
+  current: { sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-09-23T12:00:00Z', dirty: false, version: 'v0.0.9' },
+  stampRead: 'ok', installState: 'complete', provenance: 'verified',
+  caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
+  floorRead: 'measured', previousRead: 'absent',
+  measuredAt: 1_000, reachable: true, unreachableSince: null,
+  channel: 'stable', desiredTag: 'v0.0.9', resolveDetail: null, request: null, report: null,
+  update: { state: 'idle', target: null, startedAt: null, detail: null },
+  ...over,
+});
+const t7Server = (over: Partial<NodeWire> = {}): NodeWire =>
+  t7Node({ nodeId: T7_SERVER_ID, role: 'server', label: 'server', agentOps: null, ...over });
+const T7_GATED = ['verify', 'node-id', 'floor', UPDATE_GATE_CAP];
+const t7Intent = (over: Partial<UpdateIntentWire> = {}): UpdateIntentWire => ({
+  scope: FLEET_SCOPE, channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: 1_000, setBy: 'test',
+  ...over,
+});
+/** Checked 4 min 5 s before the call — "checked 4m ago" for the length of any case. */
+const t7View = (over: Partial<UpdatesView> = {}): UpdatesView => ({
+  catalogue: { lastOkAt: Date.now() - (4 * 60_000 + 5_000), lastError: null },
+  releases: [],
+  nodes: [t7Node(), t7Server()],
+  intent: [t7Intent()],
+  ...over,
+});
+/** 14:02 on 23 Sep 2026, LOCAL time — the clock the amber line prints, whatever zone the suite runs in; the helper cases pass their own `now`. */
+const T7_1402 = new Date(2026, 8, 23, 14, 2).getTime();
+/** 14:02 on the day the suite RUNS, local time. The rendering cases read the real clock (`useNow`), and the
+ *  amber line dates an instant off the viewer's day (`dayClock`), so their fixed stamps must fall on today to
+ *  print a bare `14:02` — T7_1402 there would print `14:02 · 23 Sep` on every other day. */
+const T7_TODAY_1402 = (() => { const d = new Date(); d.setHours(14, 2, 0, 0); return d.getTime(); })();
+/** Task 5's `rate-limited` sentence: a request went out, not that it landed. */
+const T7_ASKED = 'GitHub was asked too recently — try again in a few minutes.';
+const T7_NOT_CONFIGURED = 'This box has no update control plane — it runs without a coordination database.';
+const T7_UNREAD = 'The update plane could not be read — the screen tries again every minute.';
+const T7_STALE = 'The latest read failed — this is the last answer that landed.';
+/** The gate note's lead (settings spec §5.1); the labels follow, then a full stop (`autoGateNoteText`). */
+const T7_GATE_NOTE = 'Auto-install needs every node to run a ccrc with the update gate. Not yet: ';
+/** Mount the screen (beside a toast host) over one answer; resolves once the Updates section has its controls. */
+const t7Mount = async (view: UpdatesView): Promise<HTMLElement> => {
+  vi.spyOn(api, 'updates').mockResolvedValue(view);
+  renderSettings('updates', { toasts: true });
+  const region = screen.getByRole('region', { name: 'Updates' });
+  await within(region).findByRole('button', { name: 'Check now' });
+  return region;
+};
+
+/** The result line a control's server action wrote (settings spec §6.4, D-5507): the element DIRECTLY after the
+ *  control, `role="status"`, polite, holding the sentence the toast held, amber exactly for a refusal, and no toast.
+ *  Waits for it, so a case reads it the way it read the toast. */
+const lineUnder = async (control: () => Element, text: string, tone: 'answer' | 'refusal'): Promise<HTMLElement> => {
+  const line = await waitFor(() => {
+    const next = control().nextElementSibling as HTMLElement | null;
+    expect(next, 'the line sits directly under its control').not.toBeNull();
+    expect(next).toHaveTextContent(text);
+    return next as HTMLElement;
+  });
+  expect(line).toHaveAttribute('role', 'status');
+  expect(line).toHaveAttribute('aria-live', 'polite');
+  expect(line).toHaveClass('settings-result');
+  if (tone === 'refusal') expect(line, 'a refusal is amber').toHaveClass('settings-catalogue--amber');
+  else expect(line, 'an answer is not amber').not.toHaveClass('settings-catalogue--amber');
+  expect(document.querySelector('.toast'), 'not a toast: the control is still on screen').toBeNull();
+  return line;
+};
+
+describe('SettingsScreen — Updates: helpers (W3 Task 7)', () => {
+  it('clockTime is the local 24-hour clock, zero-padded; a time Date cannot place is the missing mark', () => {
+    expect(clockTime(T7_1402)).toBe('14:02');
+    expect(clockTime(new Date(2026, 8, 23, 9, 5).getTime())).toBe('09:05');
+    expect(clockTime(new Date(2026, 8, 23, 0, 0).getTime())).toBe('00:00');
+    expect(clockTime(Number.NaN)).toBe('—');
+  });
+
+  it('dayClock is the bare clock on the viewer\'s own day and a dated clock off it — midnight and a day-long outage included', () => {
+    expect(dayClock(T7_1402, T7_1402 + 9 * 3_600_000), 'same day, later').toBe('14:02');
+    expect(dayClock(T7_1402, T7_1402 + 26 * 3_600_000), 'the next day').toBe('14:02 · 23 Sep');
+    expect(dayClock(new Date(2026, 8, 23, 23, 50).getTime(), new Date(2026, 8, 24, 0, 10).getTime()), 'twenty minutes, across midnight')
+      .toBe('23:50 · 23 Sep');
+    expect(dayClock(T7_1402, new Date(2027, 8, 23, 15, 0).getTime()), 'the same date a year on is not today').toBe('14:02 · 23 Sep');
+    expect(dayClock(Number.NaN, T7_1402)).toBe('—');
+    // The wire only guards Number.isFinite (asUpdatesView); a magnitude this
+    // build's Date cannot place (review R-b) is the missing mark too, not a
+    // thrown exception or a silently wrong day.
+    expect(dayClock(1e20, T7_1402)).toBe('—');
+  });
+
+  it('catalogueReasonText names each CatalogueErrorReason, reads http-NNN, and shows any other word as it came', () => {
+    expect(catalogueReasonText('no-egress')).toBe('no network route to GitHub');
+    expect(catalogueReasonText('rate-limited')).toBe('rate limited');
+    expect(catalogueReasonText('malformed')).toBe('an answer this build could not read');
+    expect(catalogueReasonText('no-release-source')).toBe('no release source configured');
+    expect(catalogueReasonText('redirect')).toBe('a redirect this build will not follow');
+    expect(catalogueReasonText('http-502')).toBe('HTTP 502');
+    expect(catalogueReasonText('http-304')).toBe('HTTP 304');
+    expect(catalogueReasonText('http-5020'), 'not a status code').toBe('http-5020');
+    expect(catalogueReasonText('teapot')).toBe('teapot');
+    expect(catalogueReasonText('toString'), 'own keys only').toBe('toString');
+  });
+
+  it('catalogueLine — checked, the two amber forms, never checked (spec §13, D-3306)', () => {
+    expect(catalogueLine({ lastOkAt: T7_1402, lastError: null }, T7_1402 + 4 * 60_000 + 5_000))
+      .toEqual({ text: 'checked 4m ago', tone: 'calm' });
+    // A lastOkAt in the viewer's future (clock skew) is "moments", never a minus.
+    expect(catalogueLine({ lastOkAt: T7_1402, lastError: null }, T7_1402 - 60_000))
+      .toEqual({ text: 'checked moments ago', tone: 'calm' });
+    // Reached at 14:02, failing since: "since" names the last good answer, which is measured.
+    expect(catalogueLine({ lastOkAt: T7_1402, lastError: { at: T7_1402 + 90 * 60_000, reason: 'rate-limited' } }, T7_1402 + 91 * 60_000))
+      .toEqual({ text: "couldn't reach GitHub since 14:02 — rate limited", tone: 'amber' });
+    // Failing for 26 h: the clock carries its day, or "since 14:02" reads as
+    // today's and makes a day-long outage look like two hours.
+    expect(catalogueLine({ lastOkAt: T7_1402, lastError: { at: T7_1402 + 25 * 3_600_000, reason: 'no-egress' } }, T7_1402 + 26 * 3_600_000))
+      .toEqual({ text: "couldn't reach GitHub since 14:02 · 23 Sep — no network route to GitHub", tone: 'amber' });
+    // Never reached: no "since" it cannot measure — W2 keeps only the latest failure.
+    expect(catalogueLine({ lastOkAt: null, lastError: { at: T7_1402, reason: 'no-egress' } }, T7_1402 + 60_000))
+      .toEqual({ text: "couldn't reach GitHub (tried 14:02) — no network route to GitHub", tone: 'amber' });
+    expect(catalogueLine({ lastOkAt: null, lastError: null }, T7_1402)).toEqual({ text: 'never checked', tone: 'muted' });
+  });
+
+  it('catalogueLine treats a lastOkAt this build\'s Date cannot place as UNMEASURED, never a "checked"/"since —" (review R-b)', () => {
+    // asUpdatesView only guards Number.isFinite — 1e20 is finite and would
+    // reach here over the wire, and new Date(1e20) is Invalid Date. Read as
+    // null, exactly as an absent lastOkAt is: never-checked with no failure,
+    // and the lastOkAt-null "tried" amber form with one, never "since —".
+    expect(catalogueLine({ lastOkAt: 1e20, lastError: null }, T7_1402))
+      .toEqual({ text: 'never checked', tone: 'muted' });
+    expect(catalogueLine({ lastOkAt: 1e20, lastError: { at: T7_1402, reason: 'no-egress' } }, T7_1402 + 60_000))
+      .toEqual({ text: "couldn't reach GitHub (tried 14:02) — no network route to GitHub", tone: 'amber' });
+  });
+
+  it('catalogueLine never says "checked" or "up to date" while lastOkAt is null (spec §18 "unreachable is not current")', () => {
+    const unreached: CatalogueState[] = [
+      { lastOkAt: null, lastError: null },
+      ...['no-egress', 'rate-limited', 'http-503', 'malformed', 'no-release-source', 'redirect']
+        .map((reason) => ({ lastOkAt: null, lastError: { at: T7_1402, reason } })),
+    ];
+    expect(unreached, 'guards the guard').toHaveLength(7);
+    for (const c of unreached) {
+      const { text, tone } = catalogueLine(c, T7_1402 + 60_000);
+      expect(text, JSON.stringify(c)).not.toMatch(/^checked\b/);
+      expect(text, JSON.stringify(c)).not.toMatch(/up to date/i);
+      expect(tone, JSON.stringify(c)).not.toBe('calm');
+    }
+  });
+
+  it('autoGateMissing lists every node whose measured caps lack the gate word, in wire order — a placeholder included', () => {
+    const gated = t7Node({ caps: T7_GATED });
+    const ungated = t7Server();
+    // markUnreachable's label-keyed placeholder: never measured, no caps. §9
+    // is written about exactly this node, and autoGateBlockers counts it too.
+    // Its shape is W2 Task 5's markUnreachable: measuredAt NULL, stampRead
+    // 'unreadable', installState/provenance/os 'unknown', caps '', floorRead/previousRead
+    // 'unmeasured' (highestVersion NULL).
+    const placeholder = t7Node({
+      nodeId: 'fleet', measuredAt: null, reachable: false, unreachableSince: 1_000, caps: [], current: null,
+      stampRead: 'unreadable', installState: 'unknown', provenance: 'unknown', os: 'unknown',
+      highestVersion: null, floorRead: 'unmeasured', previousRead: 'unmeasured', desiredTag: null,
+    });
+    expect(autoGateMissing([gated, ungated, placeholder]).map((n) => n.nodeId)).toEqual([T7_SERVER_ID, 'fleet']);
+    expect(autoGateMissing([gated, t7Server({ caps: T7_GATED })])).toEqual([]);
+    expect(autoGateMissing([])).toEqual([]);
+    // A caps STRING would answer `.includes` by substring and read as gated.
+    const malformed = { ...gated, caps: UPDATE_GATE_CAP } as unknown as NodeWire;
+    expect(autoGateMissing([malformed])).toEqual([malformed]);
+  });
+});
+
+describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () => {
+  it('shows a loading block, and no control, until the first poll lands', () => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    renderSettings('updates');
+    const region = screen.getByRole('region', { name: 'Updates' });
+    expect(within(region).getByRole('status', { name: 'Loading' })).toBeInTheDocument();
+    expect(within(region).queryByRole('radio')).toBeNull();
+    expect(within(region).queryByRole('button', { name: 'Check now' })).toBeNull();
+  });
+
+  it('renders "checked 4m ago" in the calm style', async () => {
+    const region = await t7Mount(t7View());
+    const line = within(region).getByText('checked 4m ago');
+    expect(line).toHaveClass('settings-catalogue');
+    expect(line).not.toHaveClass('settings-catalogue--amber');
+    expect(line).not.toHaveClass('settings-catalogue--muted');
+  });
+
+  it('renders a catalogue that stopped answering in amber — never the calm line it answered with before', async () => {
+    const region = await t7Mount(t7View({
+      catalogue: { lastOkAt: T7_TODAY_1402, lastError: { at: T7_TODAY_1402 + 90 * 60_000, reason: 'rate-limited' } },
+    }));
+    expect(within(region).getByText("couldn't reach GitHub since 14:02 — rate limited")).toHaveClass('settings-catalogue', 'settings-catalogue--amber');
+    expect(within(region).queryByText(/^checked\b/)).toBeNull();
+  });
+
+  it('renders a catalogue never reached in amber with the time it was tried, and no "checked" line (§18)', async () => {
+    const region = await t7Mount(t7View({ catalogue: { lastOkAt: null, lastError: { at: T7_TODAY_1402, reason: 'no-egress' } } }));
+    expect(within(region).getByText("couldn't reach GitHub (tried 14:02) — no network route to GitHub")).toHaveClass('settings-catalogue--amber');
+    expect(within(region).queryByText(/^checked\b/)).toBeNull();
+    expect(within(region).queryByText(/up to date/i)).toBeNull();
+  });
+
+  it('renders "never checked" in the muted style when nothing was ever reached — never a "checked" line (§18)', async () => {
+    const region = await t7Mount(t7View({ catalogue: { lastOkAt: null, lastError: null } }));
+    expect(within(region).getByText('never checked')).toHaveClass('settings-catalogue', 'settings-catalogue--muted');
+    expect(within(region).queryByText(/^checked\b/)).toBeNull();
+    expect(within(region).queryByText(/up to date/i)).toBeNull();
+  });
+
+  it('checks the channel and auto radios the FLEET row names, not the first intent row', async () => {
+    const region = await t7Mount(t7View({
+      intent: [t7Intent({ scope: T7_FLEET_ID, channel: 'dev', auto: 'channel' }), t7Intent({ channel: 'stable', auto: 'off' })],
+    }));
+    expect(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.stable })).toBeChecked();
+    expect(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev })).not.toBeChecked();
+    expect(within(region).getByRole('radio', { name: AUTO_LABELS.off })).toBeChecked();
+    expect(within(region).getByRole('radio', { name: AUTO_LABELS.channel })).not.toBeChecked();
+  });
+
+  it('checks nothing when the fleet row is absent — never a default the server does not hold', async () => {
+    const region = await t7Mount(t7View({ intent: [t7Intent({ scope: T7_FLEET_ID, channel: 'dev' })] }));
+    for (const radio of within(region).getAllByRole('radio')) expect(radio).not.toBeChecked();
+    expect(within(region).getAllByRole('radio')).toHaveLength(5);
+  });
+
+  it('a tap on the other channel sends {scope: "*", channel} once and re-polls — the radio moves only when the server says so', async () => {
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(t7View());
+    const set = vi.spyOn(api, 'setUpdateIntent').mockResolvedValue({ ok: true, intent: t7Intent({ channel: 'dev' }), epoch: 2 });
+    renderSettings('updates');
+    const dev = await screen.findByRole('radio', { name: CHANNEL_SENTENCES.dev });
+    fireEvent.click(dev);
+    await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(set).toHaveBeenCalledWith({ scope: FLEET_SCOPE, channel: 'dev' });
+    // The re-poll still answers stable (the stub never changes), so the screen
+    // shows stable: the server's row, not the tap.
+    expect(screen.getByRole('radio', { name: CHANNEL_SENTENCES.stable })).toBeChecked();
+    expect(dev).not.toBeChecked();
+    // `.finally` clears busy and re-polls in one callback; the call count can
+    // be seen before React has committed the cleared busy, so wait for it.
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Channel' })).not.toBeDisabled());
+  });
+
+  it('a write whose answer is unreadable says, under the control, that it is unconfirmed; a refusal says the update sentence there, amber', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t7View());
+    const set = vi.spyOn(api, 'setUpdateIntent')
+      .mockResolvedValueOnce('unreadable')
+      .mockRejectedValueOnce(new ApiError(503, { ok: false, error: 'journal-unwritable', detail: 'the intent journal could not be written — see the server log' }));
+    renderSettings('updates', { toasts: true });
+    fireEvent.click(await screen.findByRole('radio', { name: CHANNEL_SENTENCES.dev }));
+    const channel = (): Element => screen.getByRole('group', { name: 'Channel' });
+    await lineUnder(channel, "Saved — the server's answer could not be read; the screen will re-check.", 'answer');
+    await waitFor(() => expect(channel()).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
+    await lineUnder(channel, 'The server cannot write its intent journal — nothing was changed.', 'refusal');
+    expect(set).toHaveBeenCalledTimes(2);
+  });
+
+  it('disables the non-off auto-install radios (off stays enabled) and names every node without the gate word (D-3297, D-3315)', async () => {
+    const region = await t7Mount(t7View());   // neither node carries it — every W2 node
+    const auto = within(region).getByRole('group', { name: 'Auto-install' });
+    // The route accepts `auto: 'off'` unconditionally (D-3315): the fieldset
+    // itself is not disabled — only the two non-off radios are — so the one
+    // safe action stays reachable while the gate is incomplete.
+    expect(auto).not.toBeDisabled();
+    expect(within(auto).getByRole('radio', { name: AUTO_LABELS.off })).not.toBeDisabled();
+    for (const m of AUTO_MODES.filter((mode) => mode !== 'off')) {
+      expect(within(auto).getByRole('radio', { name: AUTO_LABELS[m] })).toBeDisabled();
+    }
+    expect(within(region).getByText(`${T7_GATE_NOTE}fleet, server.`)).toHaveClass('settings-note');
+    expect(auto).toHaveAccessibleDescription(`${T7_GATE_NOTE}fleet, server.`);
+    // Only the non-off auto choices are gated: the channel and Check now stay live.
+    expect(within(region).getByRole('group', { name: 'Channel' })).not.toBeDisabled();
+    expect(within(region).getByRole('button', { name: 'Check now' })).not.toBeDisabled();
+  });
+
+  it('with the gate missing, tapping "off" still writes it — the route accepts auto: "off" unconditionally (D-3315)', async () => {
+    const set = vi.spyOn(api, 'setUpdateIntent').mockResolvedValue({ ok: true, intent: t7Intent({ auto: 'off' }), epoch: 4 });
+    const region = await t7Mount(t7View({ intent: [t7Intent({ channel: 'stable', auto: 'stable' })] }));
+    const auto = within(region).getByRole('group', { name: 'Auto-install' });
+    const off = within(auto).getByRole('radio', { name: AUTO_LABELS.off });
+    expect(off).not.toBeDisabled();
+    fireEvent.click(off);
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({ scope: FLEET_SCOPE, auto: 'off' });
+  });
+
+  it('names only the nodes that lack the word', async () => {
+    const region = await t7Mount(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server()] }));
+    const auto = within(region).getByRole('group', { name: 'Auto-install' });
+    expect(within(auto).getByRole('radio', { name: AUTO_LABELS.stable })).toBeDisabled();
+    expect(within(auto).getByRole('radio', { name: AUTO_LABELS.off })).not.toBeDisabled();
+    expect(within(region).getByText(`${T7_GATE_NOTE}server.`)).toBeInTheDocument();
+  });
+
+  it('enables auto-install when every node carries the word, and a tap sends {scope: "*", auto}', async () => {
+    const set = vi.spyOn(api, 'setUpdateIntent').mockResolvedValue({ ok: true, intent: t7Intent({ auto: 'stable' }), epoch: 3 });
+    const region = await t7Mount(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: T7_GATED })] }));
+    const auto = within(region).getByRole('group', { name: 'Auto-install' });
+    expect(auto).not.toBeDisabled();
+    expect(within(region).queryByText(/Not yet:/)).toBeNull();
+    fireEvent.click(within(auto).getByRole('radio', { name: AUTO_LABELS.stable }));
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({ scope: FLEET_SCOPE, auto: 'stable' });
+  });
+
+  it('renders a 409 auto-needs-rollback-gate by node label — an id no row carries shown as the id — and not as a toast', async () => {
+    vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_SERVER_ID, 'gone-node-id'] }));
+    const region = await t7Mount(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: T7_GATED })] }));
+    fireEvent.click(within(region).getByRole('radio', { name: AUTO_LABELS.channel }));
+    expect(await within(region).findByText(`${T7_GATE_NOTE}server, gone-node-id.`)).toHaveClass('settings-note');
+    expect(document.querySelector('.toast--error')).toBeNull();
+  });
+
+  it("a 409's stale node list does not outlive the poll that answers it — a LATER poll showing the node now carries the word clears the note (F5)", async () => {
+    // Before: the fleet node lacks the gate word (the CHANNEL fieldset is not
+    // gated on it, so the radio stays clickable). After: a genuinely later,
+    // distinct poll answer — the write's own reload — shows it now carries
+    // the word. The 409's list must not outlive that: the note is gone, even
+    // though nothing else about the fleet changed.
+    const before = t7View({ nodes: [t7Node({ caps: ['verify', 'node-id', 'floor'] }), t7Server({ caps: T7_GATED })] });
+    const after = t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: T7_GATED })] });
+    vi.spyOn(api, 'updates').mockResolvedValueOnce(before).mockResolvedValue(after);
+    vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
+    renderSettings('updates', { toasts: true });
+    const region = await screen.findByRole('region', { name: 'Updates' });
+    await within(region).findByText(`${T7_GATE_NOTE}fleet.`);
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
+    // The write's own reload fetches `after` — a fresh, distinct poll where
+    // the fleet node now carries update-gate — and supersedes the stale 409
+    // list rather than outliving it.
+    await waitFor(() => expect(within(region).queryByText(/Not yet:/)).toBeNull());
+  });
+
+  it('supersedes fully, not by intersection — a 409 naming only [A] still leaves B named once a later poll clears A but not B (fix round 2, item 1)', async () => {
+    // The coordinator's failing case: A clears, B (never named by the 409,
+    // but ALSO missing per the poll) does not. Intersecting gateRefusal.ids
+    // with the fresh missing set would filter to the empty set (A is no
+    // longer missing; B was never in gateRefusal.ids to begin with) and the
+    // note would vanish — while B's radios stay disabled with no reason
+    // given on screen. Superseding fully names B.
+    const before = t7View({
+      nodes: [t7Node({ caps: ['verify', 'node-id', 'floor'] }), t7Server({ caps: ['verify', 'node-id', 'floor'] })],
+    });
+    const after = t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: ['verify', 'node-id', 'floor'] })] });
+    vi.spyOn(api, 'updates').mockResolvedValueOnce(before).mockResolvedValue(after);
+    vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
+    renderSettings('updates', { toasts: true });
+    const region = await screen.findByRole('region', { name: 'Updates' });
+    await within(region).findByText(`${T7_GATE_NOTE}fleet, server.`);
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
+    await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}server.`)).toBeInTheDocument());
+    expect(within(region).queryByText(`${T7_GATE_NOTE}fleet.`)).toBeNull();
+  });
+
+  it("the 409's list stands until a genuinely LATER poll lands, even when every real poll answer is a FRESH object (fix round 2, item 1)", async () => {
+    // t7Mount's mockResolvedValue(view) returns the SAME object on every
+    // call, so the other 409 cases here pass only through that object's
+    // stable identity. This one controls the reload's own fetch with a
+    // deferred promise, proving two things: (1) the route's list stands,
+    // unfiltered, for as long as the poll active at 409-time has not yet
+    // been superseded by a distinct answer — even though a real reload is
+    // already in flight; (2) once a genuinely fresh, distinct object lands,
+    // it supersedes fully, matching the coordinator's failing case exactly.
+    const before = t7View({
+      nodes: [t7Node({ caps: ['verify', 'node-id', 'floor'] }), t7Server({ caps: ['verify', 'node-id', 'floor'] })],
+    });
+    const afterDeferred = Promise.withResolvers<UpdatesView>();
+    vi.spyOn(api, 'updates').mockResolvedValueOnce(before).mockReturnValueOnce(afterDeferred.promise);
+    vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
+    renderSettings('updates', { toasts: true });
+    const region = await screen.findByRole('region', { name: 'Updates' });
+    await within(region).findByText(`${T7_GATE_NOTE}fleet, server.`);
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
+    // The 409 landed; its own reload is in flight but has not resolved yet —
+    // the route's list stands, unfiltered (fleet only, not "fleet, server").
+    await within(region).findByText(`${T7_GATE_NOTE}fleet.`);
+    // A genuinely fresh, distinct poll object lands: fleet now carries the
+    // word, server still does not.
+    afterDeferred.resolve(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: ['verify', 'node-id', 'floor'] })] }));
+    await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}server.`)).toBeInTheDocument());
+  });
+
+  it("a poll landing MID-WRITE is not a LATER poll — the refusal is stamped with the view live when the 409 LANDS, never the one closed over at the tap (W5 review 161, F-A)", async () => {
+    // The bug this pins: `writeIntent` closes over `view` at the render that
+    // DEFINED it — the tap-time view. If a routine poll lands anywhere
+    // between the tap and the 409 (before this write's own `.finally()`
+    // reload), a stale tap-time stamp would compare unequal to the view
+    // already active by the time the 409 arrives and read as ALREADY
+    // superseded — hiding the route's own answer the instant it lands. Two
+    // genuinely distinct poll objects (never one reused response, F5's own
+    // trap) and a controlled write prove it names the RIGHT node either way.
+    const tapView = t7View({ nodes: [t7Node({ caps: ['verify', 'node-id', 'floor'] }), t7Server({ caps: T7_GATED })] });
+    const midWriteView = t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: ['verify', 'node-id', 'floor'] })] });
+    vi.spyOn(api, 'updates')
+      .mockResolvedValueOnce(tapView)          // the mount poll
+      .mockResolvedValueOnce(midWriteView)     // a routine poll, mid-write — BEFORE the 409
+      .mockReturnValue(new Promise<UpdatesView>(() => {}));   // the write's own reload: never resolves here
+    const write = Promise.withResolvers<never>();
+    vi.spyOn(api, 'setUpdateIntent').mockReturnValue(write.promise);
+    renderSettings('updates', { toasts: true });
+    const region = await screen.findByRole('region', { name: 'Updates' });
+    await within(region).findByText(`${T7_GATE_NOTE}fleet.`);   // tapView: fleet lacks the gate
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));   // the tap
+    // A routine poll lands WHILE the write is still in flight, before the 409
+    // — a fresh, distinct object naming a DIFFERENT missing node.
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    await within(region).findByText(`${T7_GATE_NOTE}server.`);   // midWriteView landed: server lacks it now
+    // The 409 lands. Stamping the stale TAP-time view (`fleet` missing) would
+    // compare unequal to the CURRENT view (`server` missing) and read as
+    // already superseded, silently falling back to midWriteView's own
+    // "server" note and dropping the route's answer. Stamping the view LIVE
+    // AT LANDING time makes the two compare equal, so the route's own list —
+    // naming fleet, never server — stands.
+    write.reject(new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
+    await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}fleet.`)).toBeInTheDocument());
+    expect(within(region).queryByText(`${T7_GATE_NOTE}server.`)).toBeNull();
+  });
+
+  it('a 409 auto-needs-rollback-gate naming an EMPTY node list falls back to the route\'s own line, under Auto-install, not an empty "Not yet:" note', async () => {
+    vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [] }));
+    const region = await t7Mount(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: T7_GATED })] }));
+    fireEvent.click(within(region).getByRole('radio', { name: AUTO_LABELS.channel }));
+    await lineUnder(() => within(region).getByRole('group', { name: 'Auto-install' }),
+      'Auto-install needs the rollback gate on every node, and at least one does not carry it yet.', 'refusal');
+    expect(within(region).queryByText(/Not yet:/)).toBeNull();
+  });
+
+  it('a 409 auto-needs-rollback-gate naming only NON-STRING ids falls back to the route\'s own line, under Auto-install', async () => {
+    vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [42] }));
+    const region = await t7Mount(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: T7_GATED })] }));
+    fireEvent.click(within(region).getByRole('radio', { name: AUTO_LABELS.channel }));
+    await lineUnder(() => within(region).getByRole('group', { name: 'Auto-install' }),
+      'Auto-install needs the rollback gate on every node, and at least one does not carry it yet.', 'refusal');
+    expect(within(region).queryByText(/Not yet:/)).toBeNull();
+  });
+
+  it('Check now refreshes once and re-polls; a 429 says GitHub was asked too recently', async () => {
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(t7View());
+    const refresh = vi.spyOn(api, 'refreshUpdates')
+      .mockResolvedValueOnce({ lastOkAt: Date.now(), lastError: null })
+      .mockRejectedValueOnce(new ApiError(429, { ok: false, error: 'rate-limited', retryAfterS: 42 }));
+    renderSettings('updates');
+    const check = await screen.findByRole('button', { name: 'Check now' });
+    fireEvent.click(check);
+    await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledWith();
+    expect(screen.queryByText(T7_ASKED)).toBeNull();
+    await waitFor(() => expect(check).not.toBeDisabled());
+    fireEvent.click(check);
+    expect(await screen.findByText(T7_ASKED)).toHaveClass('settings-note');
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('a 429 over a catalogue never reached claims only a request — no "checked" text anywhere in the section (§18)', async () => {
+    // W2 answers 429 inside REFRESH_MIN_INTERVAL_MS (derived, D-3218) of lastRequestAt(), which a FAILED
+    // scheduled poll sets too (D-3203): this is a tap just after one.
+    vi.spyOn(api, 'refreshUpdates')
+      .mockRejectedValue(new ApiError(429, { ok: false, error: 'rate-limited', retryAfterS: 42 }));
+    const region = await t7Mount(t7View({ catalogue: { lastOkAt: null, lastError: { at: T7_TODAY_1402, reason: 'no-egress' } } }));
+    fireEvent.click(within(region).getByRole('button', { name: 'Check now' }));
+    expect(await within(region).findByText(T7_ASKED)).toHaveClass('settings-note');
+    expect(within(region).getByText("couldn't reach GitHub (tried 14:02) — no network route to GitHub")).toHaveClass('settings-catalogue--amber');
+    expect(within(region).queryByText(/^checked\b/)).toBeNull();
+    expect(within(region).queryByText(/\bchecked\b/), 'nor a "checked" inside another sentence').toBeNull();
+    expect(within(region).queryByText(/up to date/i)).toBeNull();
+  });
+
+  it('a box with no control plane says so, and nothing else of the section renders', async () => {
+    vi.spyOn(api, 'updates').mockRejectedValue(new ApiError(501, { ok: false, error: 'not-configured' }));
+    renderSettings('updates');
+    const region = screen.getByRole('region', { name: 'Updates' });
+    expect(await within(region).findByText(T7_NOT_CONFIGURED)).toHaveClass('settings-note');
+    expect(within(region).queryByRole('radio')).toBeNull();
+    expect(within(region).queryByRole('button')).toBeNull();
+    expect(within(region).queryByRole('status', { name: 'Loading' })).toBeNull();
+  });
+
+  it('a first read that failed says so instead of loading forever', async () => {
+    vi.spyOn(api, 'updates').mockRejectedValue(new TypeError('Failed to fetch'));
+    renderSettings('updates');
+    const region = screen.getByRole('region', { name: 'Updates' });
+    expect(await within(region).findByText(T7_UNREAD)).toBeInTheDocument();
+    expect(within(region).queryByText(T7_NOT_CONFIGURED)).toBeNull();
+    expect(within(region).queryByRole('status', { name: 'Loading' })).toBeNull();
+  });
+
+  it('a later read that fails keeps the last answer on screen and says it is stale', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValueOnce(t7View()).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    vi.spyOn(api, 'refreshUpdates').mockResolvedValue({ lastOkAt: Date.now(), lastError: null });
+    renderSettings('updates');
+    fireEvent.click(await screen.findByRole('button', { name: 'Check now' }));   // its reload() is the failing read
+    expect(await screen.findByText(T7_STALE)).toHaveClass('settings-note');
+    expect(screen.getByRole('radio', { name: CHANNEL_SENTENCES.stable })).toBeChecked();
+    expect(screen.getByText('checked 4m ago')).toBeInTheDocument();
+  });
+
+  it('floors every option row at the tap target, keeps a fieldset shrinkable, and tints the amber line with the attention ink', () => {
+    // The first two moved from this sheet into `@ccrc/ui`'s `Radio`, with the
+    // rest of a skin that turned out to be entirely layout — so they are read
+    // off the component's class strings and the amber line, which PAINTS and
+    // stayed, is still read off the sheet.
+    const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
+    expect(RADIO_OPTION.split(/\s+/)).toContain('min-h-tap');
+    expect(RADIO_FIELDSET.split(/\s+/)).toContain('min-w-0');
+    expect(declValue(ruleIn(css, '.settings-catalogue--amber'), 'color')).toBe('var(--status-attention-text)');
+  });
+});
+
+// ── Task 8: the release list (design 2026-09-20 §13, §18) ────────────────────
+// Fixtures are local to these two describes on purpose: Tasks 7, 9 and 10 each
+// keep their own, and a shared `node()` would couple four tasks' cases to one
+// shape nobody owns.
+const T8_T0 = Date.UTC(2026, 8, 23, 12, 0, 0);
+const T8_NODE_A = '11111111-1111-4111-8111-111111111111';
+const T8_NODE_B = '22222222-2222-4222-8222-222222222222';
+const T8_NODE_C = '33333333-3333-4333-8333-333333333333';
+/** A stamp at `version`; `undefined` = an unversioned (deploy.sh) build — the key is ABSENT, as the parser leaves it. */
+const t8Stamp = (version: string | undefined): BuildInfo => ({
+  sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-09-23T12:00:00Z', dirty: false,
+  ...(version === undefined ? {} : { version }),
+});
+/** A full NodeWire, every field W2 Task 1 declares, measured and settled. */
+const t8Node = (over: Partial<NodeWire> = {}): NodeWire => ({
+  nodeId: T8_NODE_A, role: 'fleet', label: 'fleet', os: 'linux',
+  current: t8Stamp('v0.0.9'), stampRead: 'ok', installState: 'complete', provenance: 'verified',
+  caps: ['verify', 'node-id', 'floor', 'update-gate'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
+  floorRead: 'measured', previousRead: 'absent',
+  measuredAt: T8_T0, reachable: true, unreachableSince: null,
+  channel: 'stable', desiredTag: 'v0.0.9', resolveDetail: null,
+  request: null, report: null,
+  update: { state: 'idle', target: null, startedAt: null, detail: null },
+  ...over,
+});
+const t8Server = (over: Partial<NodeWire> = {}): NodeWire =>
+  t8Node({ nodeId: T8_NODE_B, role: 'server', label: 'server', agentOps: null, ...over });
+/** A full ReleaseWire; `version` is the tag (W2 Task 4: `version = tag`). */
+const t8Release = (tag: string, over: Partial<ReleaseWire> = {}): ReleaseWire => ({
+  tag, version: tag, channel: 'stable', publishedAt: T8_T0, commitSha: 'c'.repeat(40),
+  bundleListed: true, yanked: false, refused: [], notes: null, ...over,
+});
+
+describe('SettingsScreen — the release list: helpers', () => {
+  it('sortReleases: semver order, newest first — v0.0.10 above v0.0.9 — and a non-tag row last, in wire order', () => {
+    const wire = [t8Release('v0.0.9'), t8Release('vnext'), t8Release('v0.0.10'), t8Release('v0.1.0'), t8Release('v0.0.8 ')];
+    expect(sortReleases(wire).map((r) => r.tag)).toEqual(['v0.1.0', 'v0.0.10', 'v0.0.9', 'vnext', 'v0.0.8 ']);
+    // The input is not reordered in place: the view the poll holds is shared state.
+    expect(wire.map((r) => r.tag)).toEqual(['v0.0.9', 'vnext', 'v0.0.10', 'v0.1.0', 'v0.0.8 ']);
+  });
+
+  it('verifiedAt: only a node MEASURED verified and running THAT tag — provenance alone or the tag alone is not enough', () => {
+    expect(verifiedAt('v0.0.9', [t8Node()])).toBe(true);
+    expect(verifiedAt('v0.0.9', [t8Node({ provenance: 'unverified' }), t8Server({ provenance: 'unknown' })])).toBe(false);
+    expect(verifiedAt('v0.0.9', [t8Node({ current: t8Stamp('v0.0.8') })])).toBe(false);
+    expect(verifiedAt('v0.0.9', [t8Node({ current: null })])).toBe(false);
+    expect(verifiedAt('v0.0.9', [])).toBe(false);
+  });
+
+  it('releaseDirection: Roll back only when EVERY node runs a newer tag, compared by semver across v0.0.9/v0.0.10', () => {
+    const both10 = [t8Node({ current: t8Stamp('v0.0.10') }), t8Server({ current: t8Stamp('v0.0.10') })];
+    expect(releaseDirection('v0.0.9', both10)).toBe('rollback');          // string order would call v0.0.10 older
+    // Wave 8 item F2 (D-3591): every managed node running the tag is now 'running', not 'install'.
+    expect(releaseDirection('v0.0.10', both10)).toBe('running');          // equal — every node runs it already
+    expect(releaseDirection('v0.0.9', [both10[0]!, t8Server({ current: t8Stamp(undefined) })])).toBe('install');
+    expect(releaseDirection('v0.0.9', [both10[0]!, t8Server({ current: null, measuredAt: null })])).toBe('install');
+    expect(releaseDirection('v0.0.9', [])).toBe('install');
+    expect(releaseDirection('vnext', both10)).toBe('install');           // never handed to the comparator, which throws
+  });
+
+  it('releaseDirection leaves a macOS node out, as planMove does (D-3410): a lagging Mac never turns Roll back into Install', () => {
+    const linux12 = [t8Node({ current: t8Stamp('v0.0.12') }), t8Server({ current: t8Stamp('v0.0.12') })];
+    const mac9 = t8Node({ nodeId: T8_NODE_C, label: 'mac', os: 'darwin', current: t8Stamp('v0.0.9') });
+    expect(releaseDirection('v0.0.10', [...linux12, mac9])).toBe('rollback');
+    expect(releaseDirection('v0.0.10', [mac9])).toBe('install');           // nothing managed to roll back
+    expect(releaseDirection('v0.0.10', [])).toBe('install');
+  });
+
+  it("releaseDirection: 'running' is every MANAGED node on the tag by last measurement — a lagging Mac does not stop it, no tag is never running (wave 8 item F2, D-3591)", () => {
+    const both10 = [t8Node({ current: t8Stamp('v0.0.10') }), t8Server({ current: t8Stamp('v0.0.10') })];
+    const both9 = [t8Node({ current: t8Stamp('v0.0.9') }), t8Server({ current: t8Stamp('v0.0.9') })];
+    expect(releaseDirection('v0.0.10', both10)).toBe('running');
+    expect(releaseDirection('v0.0.10', both9)).toBe('install');
+    // EVERY managed node, not just one: a mixed pair (one on the tag, one not) is 'install', never 'running'.
+    expect(releaseDirection('v0.0.10', [both10[0]!, both9[1]!])).toBe('install');
+    const mac9 = t8Node({ nodeId: T8_NODE_C, label: 'mac', os: 'darwin', current: t8Stamp('v0.0.9') });
+    expect(releaseDirection('v0.0.10', [...both10, mac9])).toBe('running');   // D-3410: the Mac is not managed
+    expect(releaseDirection('v0.0.10', [mac9])).toBe('install');              // nothing managed to be running
+    expect(releaseDirection('vnext', both10)).toBe('install');                // not a release tag at all
+  });
+
+  it('releaseRunningText names the set it measured: reachable count, and a macOS node on another version (wave 8 item F2, D-3591)', () => {
+    const both10 = [t8Node({ current: t8Stamp('v0.0.10') }), t8Server({ current: t8Stamp('v0.0.10') })];
+    expect(releaseRunningText('v0.0.10', both10)).toBe('Running on every managed node');
+    const oneAway = [both10[0]!, t8Server({ current: t8Stamp('v0.0.10'), reachable: false })];
+    expect(releaseRunningText('v0.0.10', oneAway)).toContain('1 of them not reachable, as last measured');
+    const mac9 = t8Node({ nodeId: T8_NODE_C, label: 'mac', os: 'darwin', current: t8Stamp('v0.0.9') });
+    expect(releaseRunningText('v0.0.10', [...both10, mac9])).toContain('macOS nodes are not moved from here');
+    expect(releaseRunningText('v0.0.10', [...both10, mac9])).not.toContain('not reachable');
+  });
+
+  it('refusedLine: distinct refusing nodes out of the live count; null with no refusal; a malformed element is ignored', () => {
+    const two = [t8Node(), t8Server()];
+    expect(refusedLine(t8Release('v0.0.9'), two)).toBeNull();
+    expect(refusedLine(t8Release('v0.0.9', { refused: [{ by: T8_NODE_A, at: T8_T0 }] }), two)).toBe('Refused by 1 of 2 nodes');
+    expect(refusedLine(t8Release('v0.0.9', {
+      refused: [{ by: T8_NODE_A, at: T8_T0 }, { by: T8_NODE_A, at: T8_T0 + 1 }, { by: T8_NODE_B, at: T8_T0 + 2 }],
+    }), two)).toBe('Refused by 2 of 2 nodes');
+    expect(refusedLine(t8Release('v0.0.9', { refused: [{ by: T8_NODE_A, at: T8_T0 }] }), [t8Node()])).toBe('Refused by 1 of 1 node');
+    expect(refusedLine(t8Release('v0.0.9', { refused: {} as unknown as ReleaseWire['refused'] }), two)).toBeNull();
+    expect(refusedLine(t8Release('v0.0.9', { refused: [null, { at: 1 }] as unknown as ReleaseWire['refused'] }), two)).toBeNull();
+  });
+
+  it('releaseDate: the UTC calendar day; a time Date cannot place is the missing mark, never a throw', () => {
+    expect(releaseDate(Date.UTC(2026, 8, 23, 23, 59))).toBe('2026-09-23');
+    expect(releaseDate(Date.UTC(2026, 8, 24, 0, 0))).toBe('2026-09-24');
+    expect(releaseDate(Number.NaN)).toBe('—');
+    expect(releaseDate(1e20)).toBe('—');
+    // fix round 1: a non-number (the wire never sends one, but the guard is
+    // load-bearing) must not fall through to `new Date(null)`, which is the
+    // valid 1970-01-01 instant, not the missing mark.
+    expect(releaseDate(null as unknown as number)).toBe('—');
+  });
+});
+
+describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13)', () => {
+  const view = (releases: ReleaseWire[], nodes: NodeWire[], channel: 'stable' | 'dev' = 'stable'): UpdatesView => ({
+    catalogue: { lastOkAt: T8_T0, lastError: null },
+    releases,
+    nodes,
+    intent: [{ scope: FLEET_SCOPE, channel, pinnedTag: null, auto: 'off', notify: 'channel', setAt: T8_T0, setBy: 'test' }],
+  });
+  /** Render the screen over one answer and return the release list — every case reads INSIDE it, because the
+   *  inventory (Task 9) renders the same tags as node versions on the same screen. */
+  const renderList = async (releases: ReleaseWire[], nodes: NodeWire[], channel: 'stable' | 'dev' = 'stable'): Promise<HTMLElement> => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view(releases, nodes, channel));
+    renderSettings('updates');
+    // The release window (D-5505) is a region of groups, each its own list; every case reads INSIDE the region.
+    return screen.findByRole('region', { name: 'Releases' });
+  };
+  const rowOf = (list: HTMLElement, tag: string): HTMLElement => {
+    const row = list.querySelector<HTMLElement>(`li[data-tag="${tag}"]`);
+    if (row === null) throw new Error(`no release row for ${tag}`);
+    return row;
+  };
+
+  it('renders "verified" when a node is measured verified at that tag (§18 "bundleListed is never verified")', async () => {
+    const list = await renderList([t8Release('v0.0.9')], [t8Node(), t8Server({ provenance: 'unverified' })]);
+    const row = rowOf(list, 'v0.0.9');
+    expect(within(row).getByText('Checked on a node')).toHaveAttribute('title', 'A node installed it and verified its signature.');
+    expect(within(row).getByText('Signed bundle')).toBeInTheDocument();
+  });
+
+  it('a signed bundle alone renders "Signed bundle", never "Checked on a node"', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.9', { bundleListed: true })],
+      [t8Node({ provenance: 'unverified' }), t8Server({ provenance: 'unknown' })],
+    );
+    const row = rowOf(list, 'v0.0.9');
+    expect(within(row).getByText('Signed bundle'))
+      .toHaveAttribute('title', 'The release publishes a signature file, so a node can check what it downloads.');
+    expect(within(row).queryByText('Checked on a node')).toBeNull();
+  });
+
+  it('a node verified on ANOTHER tag does not verify this one', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.9'), t8Release('v0.0.8')],
+      [t8Node({ current: t8Stamp('v0.0.8') }), t8Server({ current: t8Stamp('v0.0.8'), provenance: 'unverified' })],
+    );
+    expect(within(rowOf(list, 'v0.0.9')).queryByText('Checked on a node')).toBeNull();
+    expect(within(rowOf(list, 'v0.0.8')).getByText('Checked on a node')).toBeInTheDocument();
+  });
+
+  it('reads "Refused by 1 of 2 nodes" off refused[]', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.9', { refused: [{ by: T8_NODE_B, at: T8_T0 }] })],
+      [t8Node(), t8Server()],
+    );
+    expect(within(rowOf(list, 'v0.0.9')).getByText('Refused by 1 of 2 nodes')).toHaveClass('settings-release-refused');
+  });
+
+  it('renders notes as literal text — no markup, no image, no link (§18 "notes are capped and plain")', async () => {
+    const NOTES = '<b>bold</b> <img src=x onerror=alert(1)>\nsee https://example.com/x or javascript:alert(1)';
+    const list = await renderList([t8Release('v0.0.9', { notes: NOTES })], [t8Node()]);
+    const row = rowOf(list, 'v0.0.9');
+    const pre = row.querySelector('pre.settings-release-notes');
+    expect(pre).not.toBeNull();
+    expect(pre!.textContent).toBe(NOTES);
+    expect(row.querySelector('b, img, a, script')).toBeNull();
+    expect(within(row).queryByRole('link')).toBeNull();
+    expect(within(row).queryByRole('img')).toBeNull();
+  });
+
+  it('lists v0.0.10 above v0.0.9 whatever order the wire carries (semver, never string order)', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.9', { publishedAt: T8_T0 + 5 }), t8Release('v0.0.10', { publishedAt: T8_T0 })],
+      [t8Node()],
+    );
+    expect([...list.querySelectorAll('li[data-tag]')].map((li) => li.getAttribute('data-tag'))).toEqual(['v0.0.10', 'v0.0.9']);
+  });
+
+  it('names the move by direction: Roll back when every node runs a newer tag, Install otherwise, Running when every node is already there (wave 8 item F2, D-3591)', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.10'), t8Release('v0.0.9')],
+      [t8Node({ current: t8Stamp('v0.0.10') }), t8Server({ current: t8Stamp('v0.0.10') })],
+    );
+    expect(within(rowOf(list, 'v0.0.9')).getByRole('button', { name: 'Roll back' })).toBeInTheDocument();
+    expect(within(rowOf(list, 'v0.0.10')).queryByRole('button')).toBeNull();
+    expect(within(rowOf(list, 'v0.0.10')).getByText('Running on every managed node')).toHaveClass('settings-release-running');
+  });
+
+  it('an unversioned node makes the move Install, never Roll back', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.9')],
+      [t8Node({ current: t8Stamp('v0.0.10') }), t8Server({ current: t8Stamp(undefined), provenance: 'unknown' })],
+    );
+    expect(within(rowOf(list, 'v0.0.9')).getByRole('button', { name: 'Install' })).toBeInTheDocument();
+  });
+
+  it('renders every move button ENABLED, with no note beside it (spec §13 "W4 adds" — W3 rendered them disabled)', async () => {
+    const list = await renderList(
+      // v0.0.8 is Stable: this fleet is on Stable, and the release window offers a Stable fleet Stable rollback
+      // targets only (D-5505), so a Dev v0.0.8 would be counted under the window rather than drawn.
+      [t8Release('v0.0.10'), t8Release('v0.0.9'), t8Release('v0.0.8')],
+      [t8Node({ current: t8Stamp('v0.0.9') }), t8Server({ current: t8Stamp('v0.0.9') })],
+    );
+    // v0.0.9 is what both nodes run already: no button there, the running row instead (wave 8 item F2).
+    expect(within(rowOf(list, 'v0.0.9')).queryByRole('button')).toBeNull();
+    const buttons = within(list).getAllByRole('button');
+    expect(buttons.map((b) => b.textContent)).toEqual(['Install', 'Roll back']);
+    for (const b of buttons) {
+      expect(b).not.toBeDisabled();
+      expect(b).not.toHaveAttribute('aria-describedby');
+    }
+    expect(list.querySelector('.settings-move-note')).toBeNull();
+  });
+
+  it('Install opens the move sheet naming the nodes fleet-then-server whatever the wire order, and sends apply {all: true, tag} (§18 "Install names the order and the direction")', async () => {
+    const apply = vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [T8_NODE_A, T8_NODE_B], skipped: [] });
+    const rollback = vi.spyOn(api, 'rollbackUpdate');
+    const list = await renderList(
+      [t8Release('v0.0.10')],
+      [t8Server({ current: t8Stamp('v0.0.9') }), t8Node({ current: t8Stamp('v0.0.9') })],   // the server row first on the wire
+    );
+    fireEvent.click(within(list).getByRole('button', { name: 'Install' }));
+    const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      '1. fleet (fleet) v0.0.9 → v0.0.10',
+      '2. server (server) v0.0.9 → v0.0.10',
+    ]);
+    expect(apply).not.toHaveBeenCalled();   // opening is not confirming
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+    await waitFor(() => expect(screen.queryByRole('list', { name: 'Nodes this moves, in order' })).toBeNull());
+    expect(apply.mock.calls).toEqual([[{ all: true, tag: 'v0.0.10' }]]);
+    expect(rollback).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.updates).toHaveBeenCalledTimes(2));   // the 202 re-polled the screen
+  });
+
+  it('a release every node runs newer than reads Roll back and sends one rollback {nodeId, to} per node, fleet first', async () => {
+    const rollback = vi.spyOn(api, 'rollbackUpdate')
+      .mockResolvedValueOnce({ ok: true, requested: [T8_NODE_A], skipped: [] })
+      .mockResolvedValueOnce({ ok: true, requested: [T8_NODE_B], skipped: [] });
+    const apply = vi.spyOn(api, 'applyUpdate');
+    const list = await renderList(
+      [t8Release('v0.0.10'), t8Release('v0.0.9')],
+      [t8Server({ current: t8Stamp('v0.0.10') }), t8Node({ current: t8Stamp('v0.0.10') })],
+    );
+    fireEvent.click(within(rowOf(list, 'v0.0.9')).getByRole('button', { name: 'Roll back' }));
+    const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      '1. fleet (fleet) v0.0.10 → v0.0.9',
+      '2. server (server) v0.0.10 → v0.0.9',
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back 2 nodes' }));   // the danger commit names the verb (D-5507)
+    await waitFor(() => expect(rollback).toHaveBeenCalledTimes(2));
+    expect(rollback.mock.calls).toEqual([[{ nodeId: T8_NODE_A, to: 'v0.0.9' }], [{ nodeId: T8_NODE_B, to: 'v0.0.9' }]]);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it('a Mac lagging behind does not hide Roll back: the row reads Roll back and the sheet names the Linux nodes only (D-3410)', async () => {
+    const rollback = vi.spyOn(api, 'rollbackUpdate')
+      .mockResolvedValueOnce({ ok: true, requested: [T8_NODE_A], skipped: [] })
+      .mockResolvedValueOnce({ ok: true, requested: [T8_NODE_B], skipped: [] });
+    const list = await renderList(
+      [t8Release('v0.0.12'), t8Release('v0.0.10')],
+      [
+        t8Node({ current: t8Stamp('v0.0.12') }), t8Server({ current: t8Stamp('v0.0.12') }),
+        t8Node({ nodeId: T8_NODE_C, label: 'mac', role: null, os: 'darwin', current: t8Stamp('v0.0.9') }),
+      ],
+    );
+    fireEvent.click(within(rowOf(list, 'v0.0.10')).getByRole('button', { name: 'Roll back' }));
+    const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      '1. fleet (fleet) v0.0.12 → v0.0.10',
+      '2. server (server) v0.0.12 → v0.0.10',
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back 2 nodes' }));   // the danger commit names the verb (D-5507)
+    await waitFor(() => expect(rollback).toHaveBeenCalledTimes(2));
+    expect(rollback.mock.calls).toEqual([[{ nodeId: T8_NODE_A, to: 'v0.0.10' }], [{ nodeId: T8_NODE_B, to: 'v0.0.10' }]]);
+  });
+
+  it('a refusal on the first node leaves the second unsent; the sheet says why and stays open', async () => {
+    const refusal = new ApiError(409, { ok: false, error: 'no-rollback-cap' });
+    const rollback = vi.spyOn(api, 'rollbackUpdate')
+      .mockResolvedValue({ ok: true, requested: [T8_NODE_B], skipped: [] })
+      .mockRejectedValueOnce(refusal);
+    const list = await renderList(
+      [t8Release('v0.0.10'), t8Release('v0.0.9')],
+      [t8Server({ current: t8Stamp('v0.0.10') }), t8Node({ current: t8Stamp('v0.0.10') })],
+    );
+    fireEvent.click(within(rowOf(list, 'v0.0.9')).getByRole('button', { name: 'Roll back' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Roll back 2 nodes' }));
+    const said = await screen.findByText(updateErrorText(refusal));
+    expect(said).toHaveAttribute('role', 'alert');
+    expect(rollback.mock.calls).toEqual([[{ nodeId: T8_NODE_A, to: 'v0.0.9' }]]);
+    expect(screen.getByRole('button', { name: 'Roll back 2 nodes' })).not.toBeDisabled();
+    expect(api.updates).toHaveBeenCalledTimes(1);   // nothing was requested — nothing to re-poll
+  });
+
+  it('an unbundled tag on a verified node disables Roll back and names the reason — a MIXED fleet: only the verified node blocks (wave 8 item C, D-3587)', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.11'), t8Release('v0.0.10', { bundleListed: false })],
+      [
+        t8Server({ current: t8Stamp('v0.0.11') }),   // verified (default): blocks
+        t8Node({ current: t8Stamp('v0.0.11'), provenance: 'unverified' }),   // does not block
+      ],
+    );
+    const row = rowOf(list, 'v0.0.10');
+    expect(within(row).getByRole('button', { name: 'Roll back' })).toBeDisabled();
+    const said = within(row).getByTestId('settings-release-blocked');
+    expect(said.textContent).toContain('server');
+    expect(said.textContent).toContain('ccrc rollback --to v0.0.10');
+    expect(said.textContent).toContain('ccrc update --to v0.0.10 --downgrade --allow-unsigned');
+    expect(said.textContent).not.toContain('<');
+  });
+
+  it('the same with every node unverified: Roll back stays enabled, with no reason line (wave 8 item C)', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.11'), t8Release('v0.0.10', { bundleListed: false })],
+      [
+        t8Server({ current: t8Stamp('v0.0.11'), provenance: 'unverified' }),
+        t8Node({ current: t8Stamp('v0.0.11'), provenance: 'unverified' }),
+      ],
+    );
+    const row = rowOf(list, 'v0.0.10');
+    expect(within(row).getByRole('button', { name: 'Roll back' })).not.toBeDisabled();
+    expect(within(row).queryByTestId('settings-release-blocked')).toBeNull();
+  });
+
+  it('a running row whose tag is unbundled, on a verified node, shows neither a button nor a blocked line — blockers are a rollback-only computation (wave 8 item F2, D-3591)', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.10', { bundleListed: false })],
+      [t8Node({ current: t8Stamp('v0.0.10') }), t8Server({ current: t8Stamp('v0.0.10') })],   // verified (default), already running it
+    );
+    const row = rowOf(list, 'v0.0.10');
+    expect(within(row).queryByRole('button')).toBeNull();
+    expect(within(row).queryByTestId('settings-release-blocked')).toBeNull();
+    expect(within(row).getByText('Running on every managed node')).toHaveClass('settings-release-running');
+  });
+
+  it('names the channel (dev / stable, none for an unknown one) and marks a withdrawn release with its words (D-5505)', async () => {
+    // A Dev fleet on v0.0.12: its window's Roll back to holds all three, a channel this build cannot name included.
+    const list = await renderList(
+      [
+        t8Release('v0.0.12', { channel: 'dev' }),
+        t8Release('v0.0.11', { channel: 'dev' }),
+        t8Release('v0.0.10', { channel: 'stable', yanked: true }),
+        t8Release('v0.0.9', { channel: null }),
+      ],
+      [t8Node({ provenance: 'unknown', current: t8Stamp('v0.0.12'), highestVersion: 'v0.0.12' })],
+      'dev',
+    );
+    expect(within(rowOf(list, 'v0.0.11')).getByText('dev')).toHaveClass('settings-badge', 'settings-badge--dev');
+    expect(within(rowOf(list, 'v0.0.10')).getByText('stable')).toHaveClass('settings-badge', 'settings-badge--stable');
+    expect(within(rowOf(list, 'v0.0.10')).getByText('Withdrawn')).toHaveClass('settings-release-refused');
+    expect(within(rowOf(list, 'v0.0.10')).getByText(/^Its publisher withdrew it from GitHub\./)).toHaveClass('settings-release-refused');
+    expect(within(rowOf(list, 'v0.0.11')).getByText('Signed bundle')).toBeInTheDocument();
+    const unknown = rowOf(list, 'v0.0.9');
+    expect(unknown.querySelector('.settings-badge--dev, .settings-badge--stable')).toBeNull();
+    expect(within(unknown).queryByText('Withdrawn')).toBeNull();
+    expect(within(rowOf(list, 'v0.0.11')).getByText('Released 2026-09-23')).toHaveClass('settings-release-date');
+  });
+
+  it('renders no release list when the catalogue holds no release', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view([], [t8Node()]));
+    renderSettings('updates');
+    await screen.findByText(/^checked /);   // Task 7's calm catalogue line: the view HAS landed, so absence is measured
+    expect(screen.queryByRole('list', { name: 'Releases' })).toBeNull();
+  });
+
+  it('spells no raw-HTML path anywhere in the screen (a literal-absence pin over the source)', () => {
+    // Every page of the screen since settings Task R2b1 (D-5504): the frame, the index and the five sections.
+    const dir = path.join(import.meta.dirname, '..', 'src', 'screens', 'settings');
+    const src = readdirSync(dir).filter((f) => f.endsWith('.tsx')).map((f) => readFileSync(path.join(dir, f), 'utf8')).join('\n');
+    expect(src).toMatch(/UpdatesSection/);
+    expect(src).not.toMatch(/dangerouslySetInnerHTML/);
+    expect(src).not.toMatch(/\binnerHTML\b/);
+  });
+
+  it('wraps the notes block inside the phone width (a <pre> that keeps newlines and breaks a long URL)', () => {
+    const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
+    const rule = ruleIn(css, '.settings-release-notes');
+    expect(declValue(rule, 'white-space')).toBe('pre-wrap');
+    expect(declValue(rule, 'overflow-wrap')).toBe('anywhere');
+  });
+});
+
+// ── Task 9: the node inventory (design 2026-09-20 §13, §18) ──────────────────
+// Local fixtures on purpose, as Task 8's are: a shared module-level `node()`
+// would couple four tasks' cases to one shape nobody owns.
+const T9_T0 = Date.UTC(2026, 8, 23, 12, 0, 0);
+const T9_NODE_A = '33333333-3333-4333-8333-333333333333';
+const T9_NODE_B = '44444444-4444-4444-8444-444444444444';
+const T9_MIN = 60_000;
+/** A stamp at `version`; `undefined` = an unversioned (deploy.sh) build — the key is ABSENT, as the parser leaves it. */
+const t9Stamp = (version: string | undefined): BuildInfo => ({
+  sha: 'b'.repeat(40), ref: 'main', builtAt: '2026-09-23T12:00:00Z', dirty: false,
+  ...(version === undefined ? {} : { version }),
+});
+/** A full NodeWire, every field W2 Task 1 declares: measured, reachable, verified, settled, and current. */
+const t9Node = (over: Partial<NodeWire> = {}): NodeWire => ({
+  nodeId: T9_NODE_A, role: 'fleet', label: 'fleet', os: 'linux',
+  current: t9Stamp('v0.0.9'), stampRead: 'ok', installState: 'complete', provenance: 'verified',
+  caps: ['verify', 'node-id', 'floor', 'update-gate'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
+  floorRead: 'measured', previousRead: 'absent',
+  measuredAt: T9_T0, reachable: true, unreachableSince: null,
+  channel: 'stable', desiredTag: 'v0.0.9', resolveDetail: null,
+  request: null, report: null,
+  update: { state: 'idle', target: null, startedAt: null, detail: null },
+  ...over,
+});
+const t9Server = (over: Partial<NodeWire> = {}): NodeWire =>
+  t9Node({ nodeId: T9_NODE_B, role: 'server', label: 'server', agentOps: null, ...over });
+const t9Release = (tag: string, over: Partial<ReleaseWire> = {}): ReleaseWire => ({
+  tag, version: tag, channel: 'stable', publishedAt: T9_T0, commitSha: 'd'.repeat(40),
+  bundleListed: true, yanked: false, refused: [], notes: null, ...over,
+});
+/** A label placeholder exactly as W2's markUnreachable writes one: keyed by its LABEL (no node-id file was ever
+ *  read), never measured, stamp unreadable, unknowns, caps empty, agentOps null for a non-fleet role. */
+const t9Placeholder = (over: Partial<NodeWire> = {}): NodeWire => t9Server({
+  nodeId: 'server', measuredAt: null, current: null, stampRead: 'unreadable', installState: 'unknown', provenance: 'unknown',
+  os: 'unknown', caps: [], highestVersion: null, floorRead: 'unmeasured', previousRead: 'unmeasured', reachable: false, unreachableSince: T9_T0,
+  // floorRead 'unmeasured' (D-3213): W2's resolver stores no desired for a placeholder, only this sentence
+  desiredTag: null, resolveDetail: "this node's floor has not been measured — nothing resolves until it is", ...over,
+});
+
+describe('SettingsScreen — the node inventory: helpers', () => {
+  it('currentText keeps "not measured", "stamp <word>" and "unversioned" apart (§18 "stampRead keeps EACCES from unversioned")', () => {
+    expect(currentText(t9Node())).toBe('v0.0.9');
+    expect(currentText(t9Node({ current: t9Stamp(undefined) })), 'read, no tag').toBe('unversioned');
+    expect(currentText(t9Node({ stampRead: 'unreadable', current: null })), 'EACCES').toBe('stamp unreadable');
+    expect(currentText(t9Node({ stampRead: 'malformed', current: null }))).toBe('stamp malformed');
+    expect(currentText(t9Node({ stampRead: 'absent', current: null }))).toBe('stamp absent');
+    expect(currentText(t9Node({ stampRead: 'later' as unknown as NodeWire['stampRead'], current: null })), 'an unnamed word')
+      .toBe('stamp unreadable');
+    expect(currentText(t9Placeholder()), 'a placeholder is not an unversioned node').toBe('not measured');
+  });
+
+  it('currentIsAmber: each condition alone turns the cell amber; a measured, verified, complete, tagged stamp does not', () => {
+    expect(currentIsAmber(t9Node())).toBe(false);
+    expect(currentIsAmber(t9Node({ current: t9Stamp(undefined) })), 'unversioned').toBe(true);
+    expect(currentIsAmber(t9Node({ provenance: 'unverified' })), 'unverified').toBe(true);
+    expect(currentIsAmber(t9Node({ provenance: 'unknown' })), 'provenance unknown').toBe(true);
+    expect(currentIsAmber(t9Node({ installState: 'incomplete' })), 'incomplete').toBe(true);
+    expect(currentIsAmber(t9Node({ stampRead: 'unreadable' })), 'stamp not read, tag still present').toBe(true);
+    expect(currentIsAmber(t9Node({ measuredAt: null })), 'never measured').toBe(true);
+  });
+
+  it('canAck: on a settled lease only — then a halted state, an outstanding request or a refusal naming THIS node', () => {
+    const settled = (state: NodeWire['update']['state']): NodeWire =>
+      t9Node({ update: { state, target: null, startedAt: null, detail: null } });
+    expect(canAck(settled('failed'), [])).toBe(true);
+    expect(canAck(settled('reverted'), [])).toBe(true);
+    for (const state of ['idle', 'pending', 'applying', 'unknown'] as const) {
+      expect(canAck(settled(state), []), state).toBe(false);
+    }
+    const REQ = { tag: 'v0.0.10', kind: 'update', at: T9_T0 } as const;
+    expect(canAck(t9Node({ request: REQ }), []), 'a request on an idle row').toBe(true);
+    const refusedHere = t9Release('v0.0.10', { refused: [{ by: T9_NODE_A, at: T9_T0 }] });
+    const refusedThere = t9Release('v0.0.10', { refused: [{ by: T9_NODE_B, at: T9_T0 }] });
+    // A busy lease is never offered, whatever else the row carries: W2's ackNode answers `busy` there (D-3183).
+    for (const state of ['pending', 'applying', 'unknown'] as const) {
+      const busy = { state, target: 'v0.0.10', startedAt: T9_T0, detail: null };
+      expect(canAck(t9Node({ update: busy, request: REQ }), []), `${state} with a request`).toBe(false);
+      expect(canAck(t9Node({ update: busy }), [refusedHere]), `${state} with a refusal`).toBe(false);
+    }
+    const unnamed = { state: 'later', target: null, startedAt: null, detail: null } as unknown as NodeWire['update'];
+    expect(canAck(t9Node({ update: unnamed, request: REQ }), []), 'an unnamed state').toBe(false);
+    expect(canAck({ ...t9Node({ request: REQ }), update: undefined } as unknown as NodeWire, []), 'update absent').toBe(false);
+    expect(canAck(t9Node(), [t9Release('v0.0.9'), refusedHere]), 'refused by this node').toBe(true);
+    expect(canAck(t9Node(), [refusedThere]), 'refused by ANOTHER node').toBe(false);
+    expect(canAck(t9Node(), [t9Release('v0.0.10', { refused: {} as unknown as ReleaseWire['refused'] })])).toBe(false);
+    expect(canAck(t9Node(), [t9Release('v0.0.10', { refused: [null] as unknown as ReleaseWire['refused'] })])).toBe(false);
+  });
+
+  it('requestLine: kind, tag and age of an outstanding request; null with none or a malformed one', () => {
+    expect(requestLine(t9Node(), T9_T0)).toBeNull();
+    expect(requestLine(t9Node({ request: { tag: 'v0.0.10', kind: 'update', at: T9_T0 - 5 * T9_MIN } }), T9_T0))
+      .toBe('update v0.0.10 requested 5m ago');
+    expect(requestLine(t9Node({ request: { tag: 'v0.0.8', kind: 'rollback', at: T9_T0 } }), T9_T0))
+      .toBe('rollback v0.0.8 requested moments ago');
+    expect(requestLine(t9Node({ request: { tag: 'v0.0.8' } as unknown as NodeWire['request'] }), T9_T0)).toBeNull();
+    // fix round 1: a magnitude this build's Date cannot place is not an age (isPlaceableInstant, review finding).
+    expect(requestLine(t9Node({ request: { tag: 'v0.0.10', kind: 'update', at: -1e20 } }), T9_T0), 'at -1e20').toBeNull();
+    expect(requestLine(t9Node({ request: { tag: 'v0.0.10', kind: 'update', at: 1e20 } }), T9_T0), 'at 1e20').toBeNull();
+  });
+
+  it("nodeStateLine: the lease state, then the report's phase, then its detail when it has one", () => {
+    expect(nodeStateLine(t9Node())).toBe('idle');
+    const report = { phase: 'fetching', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T9_T0, detail: null } as const;
+    expect(nodeStateLine(t9Node({
+      update: { state: 'applying', target: 'v0.0.10', startedAt: T9_T0, detail: null }, report,
+    }))).toBe('applying — fetching');
+    expect(nodeStateLine(t9Node({
+      update: { state: 'failed', target: 'v0.0.10', startedAt: T9_T0, detail: null },
+      report: { ...report, phase: 'failed', detail: 'health check did not pass' },
+    }))).toBe('failed — failed: health check did not pass');
+    expect(nodeStateLine(t9Node({ report: { ...report, detail: '' } })), 'an empty detail adds nothing').toBe('idle — fetching');
+    expect(nodeStateLine({ ...t9Node(), update: undefined } as unknown as NodeWire), 'update absent').toBe('unknown');
+  });
+
+  it('finishedLine: merges only when update.detail is EXACTLY what the settle wrote for a done/failed/reverted report of the lease\'s own target (wave 8 item F4)', () => {
+    const T = T9_T0 + 3 * T9_MIN;
+    const done = t9Node({
+      update: { state: 'idle', target: 'v0.0.49', startedAt: T9_T0, detail: 'done: v0.0.49' },
+      report: { phase: 'done', target: 'v0.0.49', startedAt: T9_T0, updatedAt: T, detail: null },
+    });
+    const doneLine = finishedLine(done, T9_T0 + 10 * T9_MIN);
+    expect(doneLine).not.toBeNull();
+    expect(doneLine).toContain('done v0.0.49');
+    expect(doneLine).toContain(dayClock(T, T9_T0 + 10 * T9_MIN));
+
+    // A failed report whose OWN detail equals update.detail: the lead is not doubled ("failed — failed"),
+    // because the lease state IS the report's phase here.
+    const failed = t9Node({
+      update: { state: 'failed', target: 'v0.0.10', startedAt: T9_T0, detail: 'health check did not pass' },
+      report: { phase: 'failed', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T, detail: 'health check did not pass' },
+    });
+    const failedLine = finishedLine(failed, T9_T0 + 10 * T9_MIN);
+    expect(failedLine).not.toBeNull();
+    expect(failedLine).toContain('health check did not pass');
+    expect(failedLine).not.toMatch(/failed — failed/);
+
+    // Controls, every one null:
+    // (a) update.detail holds the ack's own words, not the settle's.
+    expect(finishedLine(t9Node({
+      update: { state: 'idle', target: 'v0.0.49', startedAt: T9_T0, detail: 'acknowledged' },
+      report: { phase: 'done', target: 'v0.0.49', startedAt: T9_T0, updatedAt: T, detail: null },
+    }), T9_T0), 'ack words, not the settle\'s').toBeNull();
+    // (b) a FAILED report whose detail equals update.detail, but whose OWN target differs from update.target.
+    expect(finishedLine(t9Node({
+      update: { state: 'failed', target: 'v0.0.11', startedAt: T9_T0, detail: 'health check did not pass' },
+      report: { phase: 'failed', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T, detail: 'health check did not pass' },
+    }), T9_T0), 'target mismatch').toBeNull();
+    // (c) a busy lease.
+    expect(finishedLine(t9Node({
+      update: { state: 'applying', target: 'v0.0.10', startedAt: T9_T0, detail: null },
+      report: { phase: 'fetching', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T, detail: null },
+    }), T9_T0), 'busy').toBeNull();
+    // (d) an in-flight phase.
+    expect(finishedLine(t9Node({
+      update: { state: 'idle', target: null, startedAt: null, detail: null },
+      report: { phase: 'fetching', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T, detail: null },
+    }), T9_T0), 'in-flight phase').toBeNull();
+    // (e) no report.
+    expect(finishedLine(t9Node({ report: null }), T9_T0), 'no report').toBeNull();
+  });
+
+  it('reachabilityLine: only reachable === false speaks; an absent field claims nothing', () => {
+    expect(reachabilityLine(t9Node(), T9_T0)).toBeNull();
+    expect(reachabilityLine(t9Node({ reachable: false, unreachableSince: T9_T0 - 5 * T9_MIN }), T9_T0))
+      .toBe('unreachable since 5m ago');
+    expect(reachabilityLine(t9Node({ reachable: false, unreachableSince: null }), T9_T0)).toBe('unreachable');
+    expect(reachabilityLine({ ...t9Node(), reachable: undefined } as unknown as NodeWire, T9_T0)).toBeNull();
+    // fix round 1: a magnitude this build's Date cannot place reads as no "since" (isPlaceableInstant, review finding).
+    expect(reachabilityLine(t9Node({ reachable: false, unreachableSince: 1e16 }), T9_T0), 'unreachableSince 1e16').toBe('unreachable');
+  });
+
+  it("spells spec §13's Darwin sentence", () => {
+    expect(MACOS_UNMANAGED_TEXT).toBe('Not updated from here. Update this Mac with ccrc on the Mac itself.');
+  });
+
+  it('resolveDetailLine: qualified only while lastOkAt is null or the node is unreachable, otherwise verbatim (wave 8 item F1, D-3590)', () => {
+    const DETAIL = 'runs v0.0.9, the newest eligible release on stable in the catalogue as last read';
+    expect(resolveDetailLine(DETAIL, t9Node(), T9_T0)).toBe(DETAIL);
+    expect(resolveDetailLine(DETAIL, t9Node(), null))
+      .toBe(`${DETAIL} (the catalogue has not answered since the server started)`);
+    expect(resolveDetailLine(DETAIL, t9Node({ reachable: false }), T9_T0))
+      .toBe(`${DETAIL} (this node is not reachable; last measured)`);
+  });
+});
+
+describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §13)', () => {
+  const view = (
+    nodes: NodeWire[], releases: ReleaseWire[] = [t9Release('v0.0.9')], catalogue: CatalogueState = { lastOkAt: T9_T0, lastError: null },
+  ): UpdatesView => ({
+    catalogue,
+    releases,
+    nodes,
+    intent: [{ scope: FLEET_SCOPE, channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: T9_T0, setBy: 'test' }],
+  });
+  /** Render the screen (with the one toast subscriber) over one answer and return the inventory list — every case
+   *  reads INSIDE it, because the release list (Task 8) renders the same tags on the same screen. */
+  const renderNodes = async (nodes: NodeWire[], releases?: ReleaseWire[], catalogue?: CatalogueState) => {
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(view(nodes, releases, catalogue));
+    renderSettings('updates', { toasts: true });
+    const list = await screen.findByRole('list', { name: 'Nodes' });
+    return { list, updates };
+  };
+  const rowOf = (list: HTMLElement, nodeId: string): HTMLElement => {
+    const row = list.querySelector<HTMLElement>(`li[data-node-id="${nodeId}"]`);
+    if (row === null) throw new Error(`no inventory row for ${nodeId}`);
+    return row;
+  };
+
+  it('renders label, role, os and a calm current, with no arrow and no "up to date" for a node on its desired tag', async () => {
+    const { list } = await renderNodes([t9Node(), t9Server({ role: null })]);
+    expect(within(list).getAllByRole('listitem').map((li) => li.getAttribute('data-node-id'))).toEqual([T9_NODE_A, T9_NODE_B]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText('fleet')).toHaveClass('settings-node-label');
+    expect(within(row).getByText('fleet · linux')).toHaveClass('settings-node-detail');
+    const current = within(row).getByText('v0.0.9');
+    expect(current).toHaveClass('settings-node-current');
+    expect(current).not.toHaveClass('settings-node-current--amber');
+    expect(row.textContent).not.toContain('→');
+    expect(row.textContent).not.toMatch(/up to date/i);
+    expect(within(row).getByText('idle')).toBeInTheDocument();
+    expect(within(rowOf(list, T9_NODE_B)).getByText('unknown role · linux')).toBeInTheDocument();
+  });
+
+  it('draws the arrow for a newer desired tag, with the channel badge', async () => {
+    const { list } = await renderNodes([t9Node({ desiredTag: 'v0.0.10' })]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText('→ v0.0.10')).toHaveClass('settings-node-desired');
+    expect(within(row).getByText('stable')).toHaveClass('settings-badge', 'settings-badge--stable');
+  });
+
+  it('an unreadable stamp renders amber and no arrow, even with a newer desired tag (§13 Pins)', async () => {
+    const { list } = await renderNodes([
+      t9Node({ stampRead: 'unreadable', current: null, provenance: 'unknown', desiredTag: 'v0.0.10' }),
+    ]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText('stamp unreadable')).toHaveClass('settings-node-current--amber');
+    expect(within(row).queryByText('unversioned')).toBeNull();
+    expect(row.textContent).not.toContain('→');
+    expect(row.querySelector('.settings-badge')).toBeNull();
+  });
+
+  it('a node with no resolved channel renders resolveDetail and no badge, no arrow (§13 Pins)', async () => {
+    const WHY = 'a stored channel is one this build cannot read — nothing resolves';
+    const { list } = await renderNodes([t9Node({ channel: null, desiredTag: null, resolveDetail: WHY })]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText(WHY)).toHaveClass('settings-node-detail');
+    expect(row.querySelector('.settings-badge')).toBeNull();
+    expect(row.textContent).not.toContain('→');
+  });
+
+  it('a node never measured reads "not measured" in amber, says it is unreachable, and draws no arrow (§18 "unreachable is not current")', async () => {
+    const { list } = await renderNodes([
+      t9Node(),
+      t9Placeholder({ unreachableSince: Date.now() - 5 * T9_MIN, channel: 'stable', desiredTag: 'v0.0.10', resolveDetail: null }),
+    ]);
+    const row = rowOf(list, 'server');   // the placeholder's id is its label (W2 markUnreachable)
+    expect(within(row).getByText('not measured')).toHaveClass('settings-node-current--amber');
+    expect(within(row).getByText('unreachable since 5m ago')).toHaveClass('settings-node-detail');
+    expect(within(row).queryByText('unversioned')).toBeNull();
+    expect(row.textContent).not.toContain('→');
+  });
+
+  it('a Darwin row reads the macOS sentence in place of its desired, and offers no move', async () => {
+    const { list } = await renderNodes([t9Node({ os: 'darwin', desiredTag: 'v0.0.10' })]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText(MACOS_UNMANAGED_TEXT)).toBeInTheDocument();
+    expect(row.textContent).not.toContain('→');
+    expect(within(row).queryByRole('button', { name: 'Update' })).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Roll back' })).toBeNull();
+    expect(within(row).getByRole('button', { name: 'Ack' })).toBeDisabled();   // idle, nothing to acknowledge
+  });
+
+  it('enables Update iff the node has a pendingTag and Roll back iff previousVersion is a tag — no note on any row (spec §13 "W4 adds")', async () => {
+    const { list } = await renderNodes([
+      t9Node({ desiredTag: 'v0.0.10', previousVersion: 'v0.0.8' }),
+      t9Server({ previousVersion: 'not-a-tag' }),   // on its desired tag; a previous that is no tag
+    ], [t9Release('v0.0.9'), t9Release('v0.0.8'), t9Release('v0.0.10')]);   // wave 8 item C: v0.0.8 catalogued and bundled
+    const a = rowOf(list, T9_NODE_A);
+    expect(within(a).getByRole('button', { name: 'Update' })).not.toBeDisabled();
+    expect(within(a).getByRole('button', { name: 'Roll back' })).not.toBeDisabled();
+    const b = rowOf(list, T9_NODE_B);
+    expect(within(b).getByRole('button', { name: 'Update' })).toBeDisabled();
+    expect(within(b).getByRole('button', { name: 'Roll back' })).toBeDisabled();
+    for (const row of [a, b]) {
+      for (const button of within(row).getAllByRole('button')) expect(button).not.toHaveAttribute('aria-describedby');
+    }
+    expect(list.querySelector('.settings-move-note')).toBeNull();
+  });
+
+  it('Update on a node row opens the sheet for that node alone and sends apply {nodeId, tag: pendingTag}', async () => {
+    const apply = vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [T9_NODE_A], skipped: [] });
+    const { list, updates } = await renderNodes([t9Node({ desiredTag: 'v0.0.10' }), t9Server()]);
+    fireEvent.click(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Update' }));
+    const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['1. fleet (fleet) v0.0.9 → v0.0.10']);
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+    await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));   // a 202 re-polls
+    expect(apply.mock.calls).toEqual([[{ nodeId: T9_NODE_A, tag: 'v0.0.10' }]]);
+    await waitFor(() => expect(screen.queryByRole('list', { name: 'Nodes this moves, in order' })).toBeNull());
+  });
+
+  it('Roll back on a node row sends rollback {nodeId, to: previousVersion}', async () => {
+    const rollback = vi.spyOn(api, 'rollbackUpdate').mockResolvedValue({ ok: true, requested: [T9_NODE_A], skipped: [] });
+    const { list } = await renderNodes(
+      [t9Node({ previousVersion: 'v0.0.8' })],
+      [t9Release('v0.0.9'), t9Release('v0.0.8')],   // wave 8 item C: previousVersion's own catalogue row, bundled
+    );
+    fireEvent.click(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Roll back' }));
+    const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['1. fleet (fleet) v0.0.9 → v0.0.8']);
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back fleet' }));   // the danger commit names the verb (D-5507)
+    await waitFor(() => expect(rollback).toHaveBeenCalledTimes(1));
+    expect(rollback).toHaveBeenCalledWith({ nodeId: T9_NODE_A, to: 'v0.0.8' });
+  });
+
+  it('a previousVersion with no listed bundle disables Roll back on a verified node, with the reason line (wave 8 item C, D-3587)', async () => {
+    const { list } = await renderNodes(
+      [t9Node({ previousVersion: 'v0.0.8' })],
+      [t9Release('v0.0.9'), t9Release('v0.0.8', { bundleListed: false })],
+    );
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByRole('button', { name: 'Roll back' })).toBeDisabled();
+    expect(row.textContent).toContain('ccrc rollback --to v0.0.8');
+    expect(row.textContent).toContain('ccrc update --to v0.0.8 --downgrade --allow-unsigned');
+  });
+
+  it('a previousVersion with its bundle listed leaves Roll back enabled (wave 8 item C)', async () => {
+    const { list } = await renderNodes(
+      [t9Node({ previousVersion: 'v0.0.8' })],
+      [t9Release('v0.0.9'), t9Release('v0.0.8', { bundleListed: true })],
+    );
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByRole('button', { name: 'Roll back' })).not.toBeDisabled();
+  });
+
+  it('a Darwin row with an unbundled previousVersion shows no reason line and no Roll back button (decision 17, wave 8 item C)', async () => {
+    const { list } = await renderNodes(
+      [t9Node({ os: 'darwin', previousVersion: 'v0.0.8' })],
+      [t9Release('v0.0.9'), t9Release('v0.0.8', { bundleListed: false })],
+    );
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).queryByRole('button', { name: 'Roll back' })).toBeNull();
+    expect(row.textContent).not.toContain('provenance bundle');
+  });
+
+  it('a single-node 409 not-newer renders its sentence inside the sheet, which stays open and re-polls nothing', async () => {
+    const refusal = new ApiError(409, { ok: false, error: 'not-newer' });
+    vi.spyOn(api, 'applyUpdate').mockRejectedValue(refusal);
+    const { list, updates } = await renderNodes([t9Node({ desiredTag: 'v0.0.10' })]);
+    fireEvent.click(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Update' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update v0.0.10' }));
+    const said = await screen.findByText(updateErrorText(refusal));
+    expect(said).toHaveAttribute('role', 'alert');
+    expect(updateErrorText(refusal)).not.toBe(apiErrorText(refusal));   // the update table's own word (Task 6)
+    expect(screen.getByRole('button', { name: 'Update v0.0.10' })).not.toBeDisabled();
+    expect(updates).toHaveBeenCalledTimes(1);
+  });
+
+  it('Roll back needs somewhere to go: disabled when previousVersion is the running tag or a newer one (a rollback leaves previous in place, wave 4 D-3262)', async () => {
+    const AHEAD = '5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a5a';
+    const BARE = '6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b';
+    const { list } = await renderNodes([
+      t9Node({ previousVersion: 'v0.0.8' }),                                    // on v0.0.9: back to v0.0.8
+      t9Server({ previousVersion: 'v0.0.9' }),                                  // just rolled back: previous IS current
+      t9Node({ nodeId: AHEAD, label: 'ahead', previousVersion: 'v0.0.10' }),    // a "previous" newer than current
+      t9Node({ nodeId: BARE, label: 'bare', current: t9Stamp(undefined), previousVersion: 'v0.0.8' }),   // no tag to compare
+    ], [t9Release('v0.0.9'), t9Release('v0.0.8'), t9Release('v0.0.10')]);   // wave 8 item C: every named previous tag catalogued and bundled
+    expect(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Roll back' })).not.toBeDisabled();
+    expect(within(rowOf(list, T9_NODE_B)).getByRole('button', { name: 'Roll back' })).toBeDisabled();
+    expect(within(rowOf(list, AHEAD)).getByRole('button', { name: 'Roll back' })).toBeDisabled();
+    expect(within(rowOf(list, BARE)).getByRole('button', { name: 'Roll back' })).not.toBeDisabled();
+  });
+
+  it("renders the dispatcher's own word for the row — update.detail — under the state line (spec §12: per-node refusals are reported through updateDetail)", async () => {
+    const HALT = 'halted — another node failed; acknowledge it to go on';
+    const { list } = await renderNodes([
+      t9Node({ update: { state: 'idle', target: null, startedAt: null, detail: HALT } }),
+      t9Server({ update: { state: 'failed', target: 'v0.0.10', startedAt: T9_T0, detail: 'deadline' } }),
+    ]);
+    expect(within(rowOf(list, T9_NODE_A)).getByText(HALT)).toHaveClass('settings-node-detail');
+    expect(within(rowOf(list, T9_NODE_B)).getByText('deadline')).toHaveClass('settings-node-detail');
+  });
+
+  it('an idle node with no request and no refusal has Ack disabled', async () => {
+    const { list } = await renderNodes([t9Node()]);
+    expect(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Ack' })).toBeDisabled();
+  });
+
+  it("a failed node's Ack is enabled, sends its nodeId and re-polls the view", async () => {
+    const failed = t9Node({ update: { state: 'failed', target: 'v0.0.10', startedAt: T9_T0, detail: null } });
+    const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: t9Node() });
+    const { list, updates } = await renderNodes([failed]);
+    const before = updates.mock.calls.length;
+    const button = within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Ack' });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    expect(ack, 'the Ack opens its confirm first (D-5507)').not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));
+    expect(ack).toHaveBeenCalledTimes(1);
+    expect(ack).toHaveBeenCalledWith(T9_NODE_A);
+    await waitFor(() => expect(updates.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it('a node named in refused[] has Ack enabled; a refusal naming another node does not enable it', async () => {
+    const { list } = await renderNodes(
+      [t9Node(), t9Server()],
+      [t9Release('v0.0.10', { refused: [{ by: T9_NODE_B, at: T9_T0 }] })],
+    );
+    expect(within(rowOf(list, T9_NODE_B)).getByRole('button', { name: 'Ack' })).toBeEnabled();
+    expect(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Ack' })).toBeDisabled();
+  });
+
+  it('an outstanding request renders its line and the state with the report phase; Ack is offered only once the lease is settled', async () => {
+    const request = { tag: 'v0.0.10', kind: 'update', at: Date.now() - 5 * T9_MIN } as const;
+    const { list } = await renderNodes([
+      t9Node({
+        desiredTag: 'v0.0.10', request,
+        update: { state: 'pending', target: 'v0.0.10', startedAt: T9_T0, detail: null },
+        report: { phase: 'fetching', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T9_T0, detail: null },
+      }),
+      t9Server({ request }),   // the same request on an idle row
+    ]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText('update v0.0.10 requested 5m ago')).toHaveClass('settings-node-detail');
+    expect(within(row).getByText('pending — fetching')).toHaveClass('settings-node-detail');
+    // pending is busy: W2's ackNode would answer `busy`, so the control is not offered (D-3183)
+    expect(within(row).getByRole('button', { name: 'Ack' })).toBeDisabled();
+    expect(within(rowOf(list, T9_NODE_B)).getByRole('button', { name: 'Ack' })).toBeEnabled();
+  });
+
+  it("a refused ack says the route's sentence under the Ack, amber — the route stays the authority", async () => {
+    // A race: the poll read the row idle with its request, and by the tap the route found it busy.
+    const busy = new ApiError(409, { ok: false, error: 'busy', detail: 'applying' });
+    vi.spyOn(api, 'ackUpdateNode').mockRejectedValue(busy);
+    const { list } = await renderNodes([t9Node({ request: { tag: 'v0.0.10', kind: 'update', at: T9_T0 } })]);
+    const button = within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Ack' });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Withdraw the request' }));
+    await lineUnder(() => rowOf(list, T9_NODE_A).querySelector('.settings-node-actions')!, updateErrorText(busy), 'refusal');
+  });
+
+  it('an ack whose answer could not be read says so under the Ack, and does not claim failure', async () => {
+    vi.spyOn(api, 'ackUpdateNode').mockResolvedValue('unreadable');
+    const { list } = await renderNodes([t9Node({ update: { state: 'reverted', target: null, startedAt: null, detail: null } })]);
+    fireEvent.click(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Ack' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));
+    await lineUnder(() => rowOf(list, T9_NODE_A).querySelector('.settings-node-actions')!, ACK_UNREADABLE_TEXT, 'answer');
+  });
+
+  it('renders a label and a report.detail carrying markup as literal text', async () => {
+    const LABEL = '<img src=x onerror=alert(1)>box';
+    const DETAIL = '<b>health</b> check failed — see https://example.com/x';
+    const { list } = await renderNodes([t9Node({
+      label: LABEL,
+      update: { state: 'failed', target: 'v0.0.10', startedAt: T9_T0, detail: null },
+      report: { phase: 'failed', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T9_T0, detail: DETAIL },
+    })]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText(LABEL)).toHaveClass('settings-node-label');
+    expect(within(row).getByText(`failed — failed: ${DETAIL}`)).toBeInTheDocument();
+    expect(row.querySelector('img, b, a, script')).toBeNull();
+    expect(within(row).queryByRole('link')).toBeNull();
+  });
+
+  it('renders no inventory list for an empty nodes array', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view([]));
+    renderSettings('updates');
+    await screen.findByText(/^checked /);   // Task 7's catalogue line: the view has landed
+    expect(screen.queryByRole('list', { name: 'Nodes' })).toBeNull();
+  });
+
+  it('keeps the amber ink and lets a long label wrap (css:false — read off fleet.css)', () => {
+    const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
+    expect(declValue(ruleIn(css, '.settings-node-current--amber'), 'color')).toBe('var(--status-attention-text)');
+    expect(declValue(ruleIn(css, '.settings-node-label'), 'overflow-wrap')).toBe('anywhere');
+    // The row's buttons size to their label. That was `.btn-ghost.settings-move`
+    // in this sheet and is now Button's own `fit`, so the claim moves with it:
+    // asserted through the cva, and the rule is gone from fleet.css.
+    expect(buttonVariants({ variant: 'ghost', size: 'fit' })).toContain('w-auto');
+    expect(() => ruleIn(css, '.btn-ghost.settings-move')).toThrow();
+  });
+
+  // Wave 8 item F1 (D-3590): a node at its own floor, on the newest eligible release, renders the resolver's own
+  // atNewest sentence — never "up to date" — qualified while lastOkAt is null/unplaceable or the node is
+  // unreachable. `resolveDetail` is a hand-copied fixture string here, never the real atNewest wording — the
+  // pin is on the QUALIFIER, not on resolve.ts's own text (see server/test/update-resolve.test.ts for that).
+  const AT_NEWEST = 'runs v0.0.9, the newest eligible release on stable in the catalogue as last read';
+
+  it('a node at its own floor shows the resolver\'s sentence unqualified when the catalogue answered and the node is reachable (wave 8 item F1)', async () => {
+    const { list } = await renderNodes([t9Node({ desiredTag: null, resolveDetail: AT_NEWEST })]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText(AT_NEWEST)).toHaveClass('settings-node-detail');
+    expect(row.textContent).not.toMatch(/up to date/i);
+  });
+
+  it('qualifies the same sentence when the catalogue has not answered since the server started (lastOkAt null, wave 8 item F1)', async () => {
+    const { list } = await renderNodes(
+      [t9Node({ desiredTag: null, resolveDetail: AT_NEWEST })], undefined, { lastOkAt: null, lastError: null },
+    );
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText(`${AT_NEWEST} (the catalogue has not answered since the server started)`)).toBeInTheDocument();
+    expect(row.textContent).not.toMatch(/up to date/i);
+  });
+
+  it('qualifies the same sentence for an UNPLACEABLE lastOkAt exactly as for a null one (wave 8 item F1)', async () => {
+    const { list } = await renderNodes(
+      [t9Node({ desiredTag: null, resolveDetail: AT_NEWEST })], undefined, { lastOkAt: 1e20, lastError: null },
+    );
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText(`${AT_NEWEST} (the catalogue has not answered since the server started)`)).toBeInTheDocument();
+    expect(row.textContent).not.toMatch(/up to date/i);
+  });
+
+  it('qualifies the same sentence when the node is not reachable, last measured (wave 8 item F1)', async () => {
+    const { list } = await renderNodes([t9Node({ desiredTag: null, resolveDetail: AT_NEWEST, reachable: false })]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText(`${AT_NEWEST} (this node is not reachable; last measured)`)).toBeInTheDocument();
+    expect(row.textContent).not.toMatch(/up to date/i);
+  });
+
+  // Wave 8 item F4: a finished move — a settled lease whose update.detail is exactly what the settle
+  // wrote for the report that named it — merges the request/state/detail lines into ONE dated line.
+  it('a finished done move merges the state and detail lines into one, dated (wave 8 item F4)', async () => {
+    const T = T9_T0 + 3 * T9_MIN;
+    const { list } = await renderNodes([t9Node({
+      update: { state: 'idle', target: 'v0.0.10', startedAt: T9_T0, detail: 'done: v0.0.10' },
+      report: { phase: 'done', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T, detail: null },
+    })]);
+    const row = rowOf(list, T9_NODE_A);
+    const finished = within(row).getByTestId('settings-node-finished');
+    expect(finished).toHaveClass('settings-node-detail');
+    expect(finished.textContent).toContain('done v0.0.10');
+    expect(finished.textContent).toContain(dayClock(T, Date.now()));
+    expect(within(row).getAllByTestId('settings-node-finished')).toHaveLength(1);
+    // Fix round 1, Important 1: `getAllByTestId(...).toHaveLength(1)` alone is tautological (only one element
+    // ever carries this testid) — it does not prove the OLD two lines are GONE. Pin that directly: exactly one
+    // `p.settings-node-detail` in the row (the finished line, never the old state line PLUS it), and the old
+    // lines' own texts are absent.
+    expect(row.querySelectorAll('p.settings-node-detail')).toHaveLength(1);
+    expect(within(row).queryByText('idle — done')).toBeNull();
+    expect(within(row).queryByText('done: v0.0.10')).toBeNull();
+  });
+
+  it('an ack (update.detail not the settle\'s own words) keeps its two separate lines, never merged (wave 8 item F4)', async () => {
+    const T = T9_T0 + 3 * T9_MIN;
+    const { list } = await renderNodes([t9Node({
+      update: { state: 'idle', target: 'v0.0.10', startedAt: T9_T0, detail: 'acknowledged' },
+      report: { phase: 'done', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T, detail: null },
+    })]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).queryByTestId('settings-node-finished')).toBeNull();
+    expect(within(row).getByText('acknowledged')).toHaveClass('settings-node-detail');
+    expect(within(row).getByText('idle — done')).toHaveClass('settings-node-detail');
+    // Fix round 1, Important 1: the control for the count above — the ack row keeps BOTH old lines (never merged).
+    expect(row.querySelectorAll('p.settings-node-detail')).toHaveLength(2);
+  });
+});
+
+// ── Task 10: Notifications + the unarmed banner (design 2026-09-20 §12, §13) ──
+// Fixtures are local to these describes, as Tasks 7–9 keep theirs. Every case
+// that stubs a global (`fetch`, `location`, the three Web Push globals) undoes
+// it in the describe's own afterEach, which vitest's stack order runs BEFORE
+// the file-level reset — so `navigate('/')` there never meets a stubbed
+// `location`.
+const T10_T0 = Date.UTC(2026, 8, 23, 12, 0, 0);
+const T10_NODE = '11111111-1111-4111-8111-111111111111';
+/** One intent row. `scope` defaults to the fleet row the notifier reads. */
+const t10Intent = (over: Partial<UpdateIntentWire> = {}): UpdateIntentWire => ({
+  scope: FLEET_SCOPE, channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel',
+  setAt: T10_T0, setBy: 'pwa', ...over,
+});
+/** A view that is only an intent list — the Notifications section reads nothing else. A NODE row is listed
+ *  FIRST on purpose: W2 answers '*' first (`ORDER BY scope`), and a reader that took `intent[0]` would pass
+ *  every fixture that kept that order. */
+const t10View = (fleet: Partial<UpdateIntentWire> = {}): UpdatesView => ({
+  catalogue: { lastOkAt: T10_T0, lastError: null },
+  releases: [],
+  nodes: [],
+  intent: [t10Intent({ scope: T10_NODE, notify: 'off', setAt: T10_T0 - 1 }), t10Intent(fleet)],
+});
+const t10Answer = (notify: NotifyMode, setAt: number): IntentWriteAnswer =>
+  ({ ok: true, intent: t10Intent({ notify, setAt }), epoch: 2 });
+const t10Json = (status: number, body: unknown): Response =>
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+/** `GET /api/auth/status` answers `answer`; any other URL is a 404 no case reads. Returns the mock, so a
+ *  "nothing renders" case can wait for the read to have HAPPENED before asserting its absence. */
+const t10AuthStatus = (answer: { status: number; body: unknown } | 'network') => {
+  const f = vi.fn(async (url: unknown): Promise<Response> => {
+    if (String(url) !== '/api/auth/status') return t10Json(404, { error: 'not-found' });
+    if (answer === 'network') throw new TypeError('Failed to fetch');
+    return t10Json(answer.status, answer.body);
+  });
+  vi.stubGlobal('fetch', f);
+  return f;
+};
+const t10Host = (hostname: string): void => { vi.stubGlobal('location', { ...window.location, hostname }); };
+/** A browser that CAN do Web Push, as far as `pushSupported()` looks (lib/push.ts:13); permission stays
+ *  'default', so the bell's mount read (`pushEnabled`) answers false without touching the worker. */
+const t10PushBrowser = (): void => {
+  vi.stubGlobal('PushManager', class {});
+  vi.stubGlobal('Notification', { permission: 'default', requestPermission: vi.fn() });
+  vi.stubGlobal('navigator', { ...navigator, serviceWorker: {} });
+};
+/** Let every microtask and 0 ms timer queued so far run (the status read's fetch → json → setState chain). */
+const t10Settle = async (): Promise<void> => {
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+};
+const t10Group = (): Promise<HTMLElement> => screen.findByRole('group', { name: 'Announce new releases' });
+
+describe('SettingsScreen — notifications: helpers', () => {
+  it('unarmedExposure: the gate reported off AND a non-loopback hostname — both, and nothing else', () => {
+    expect(unarmedExposure({ mode: 'off' }, 'ccrc.example')).toBe(true);
+    for (const host of LOOPBACK_HOSTS) expect(unarmedExposure({ mode: 'off' }, host)).toBe(false);
+    expect(unarmedExposure({ mode: 'passphrase' }, 'ccrc.example')).toBe(false);
+    expect(unarmedExposure({ mode: 'locked-out' }, 'ccrc.example')).toBe(false);
+    // An older server's silence and a failed read are not "off" — a red banner is a claim about this box.
+    expect(unarmedExposure({ authed: true }, 'ccrc.example')).toBe(false);
+    expect(unarmedExposure(null, 'ccrc.example')).toBe(false);
+  });
+
+  it('unarmedExposure: the loopback spellings are shared/base-url.ts\'s own — [::1] with brackets, as URL writes it', () => {
+    expect(unarmedExposure({ mode: 'off' }, '[::1]')).toBe(false);
+    expect(unarmedExposure({ mode: 'off' }, 'localhost')).toBe(false);
+    expect(unarmedExposure({ mode: 'off' }, '127.0.0.1')).toBe(false);
+    expect(unarmedExposure({ mode: 'off' }, '203.0.113.7')).toBe(true);
+  });
+
+  // Settings Task R2b2 (spec §5.5): the remedy moved from the top-of-page paragraph into the Sign-in gate card; the
+  // banner keeps only the lead and a link there (settings-security.test.tsx holds both).
+  it('the gate card\'s remedy names the three settings that arm the gate', () => {
+    for (const word of ['CCRC_AUTH=on', 'CCRC_RP_ID', 'CCRC_ORIGIN']) expect(SIGN_IN_GATE_TEXT.remedy).toContain(word);
+  });
+
+  it('labels every NotifyMode, and nothing else', () => {
+    expect(Object.keys(NOTIFY_LABELS).sort()).toEqual([...NOTIFY_MODES].sort());
+  });
+});
+
+describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 item 2)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('offers one native radio per NotifyMode, in NOTIFY_MODES order, checked from the \'*\' row', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'stable' }));
+    renderSettings('notifications');
+    const group = await t10Group();
+    const radios = within(group).getAllByRole('radio');
+    expect(radios.map((r) => r.getAttribute('value'))).toEqual([...NOTIFY_MODES]);
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable })).toBeChecked();
+    // The node row (listed first, notify 'off') is not what the fleet setting reads.
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.off })).not.toBeChecked();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.channel })).not.toBeChecked();
+  });
+
+  it('a tap writes {scope: \'*\', notify} once, re-polls, and keeps the stored choice checked while the poll lags', async () => {
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
+    const write = vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(t10Answer('stable', T10_T0 + 1));
+    renderSettings('notifications');
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable }));
+    await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith({ scope: FLEET_SCOPE, notify: 'stable' });
+    await t10Settle();
+    // The re-poll still answered the OLD row (setAt T0 < the answer's T0 + 1): the route's answer is shown.
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable })).toBeChecked();
+  });
+
+  it('once the poll carries a row at least as new as the answer, the poll is what is checked', async () => {
+    vi.spyOn(api, 'updates')
+      .mockResolvedValueOnce(t10View({ notify: 'channel' }))
+      .mockResolvedValue(t10View({ notify: 'off', setAt: T10_T0 + 5 }));   // another device, later
+    vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(t10Answer('stable', T10_T0 + 1));
+    renderSettings('notifications');
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable }));
+    await waitFor(() => expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.off })).toBeChecked());
+  });
+
+  it('a poll row whose setAt EQUALS the answer\'s setAt is already caught up (>=, never >)', async () => {
+    // Same shape as the case above, but the poll's second row lands at EXACTLY
+    // the answer's setAt rather than strictly after it — the boundary >= is
+    // meant to cover, not just the strictly-newer case a bare `>` would also pass.
+    vi.spyOn(api, 'updates')
+      .mockResolvedValueOnce(t10View({ notify: 'channel' }))
+      .mockResolvedValue(t10View({ notify: 'off', setAt: T10_T0 + 1 }));   // exactly the answer's setAt
+    vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(t10Answer('stable', T10_T0 + 1));
+    renderSettings('notifications');
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable }));
+    await waitFor(() => expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.off })).toBeChecked());
+  });
+
+  it('a write in flight disables the three radios, so a second tap cannot race the first', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
+    const write = vi.spyOn(api, 'setUpdateIntent').mockReturnValue(new Promise(() => {}));
+    renderSettings('notifications');
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
+    await waitFor(() => expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.off })).toBeDisabled());
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.off })).toBeChecked();
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable }));
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it('an unreadable answer says the write may have landed and shows the stored row, not a guess', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
+    vi.spyOn(api, 'setUpdateIntent').mockResolvedValue('unreadable');
+    renderSettings('notifications', { toasts: true });
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
+    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.channel })).toBeChecked();
+  });
+
+  // fix round 1 (mutation-table finding): a 2xx answer that IS readable as JSON
+  // but whose `intent` carries a shape this build cannot trust is the SAME
+  // "may have landed" outcome as `'unreadable'` — never stored as-is. Three
+  // ways an answer can fail that trust, each guarded by its own clause in
+  // `choose`: a `notify` outside `NotifyMode` (`isNotifyMode`), a `setAt` that
+  // is not a number (`typeof … === 'number'`), and an answer with no `intent`
+  // at all (`answer?.intent ?? null`).
+  it('a malformed notify value in the answer is not stored — unconfirmed, not a guess (isNotifyMode guard)', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
+    vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(
+      { ok: true, intent: { ...t10Intent(), notify: 'loud' as NotifyMode }, epoch: 2 });
+    renderSettings('notifications', { toasts: true });
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
+    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.channel })).toBeChecked();
+  });
+
+  it('a non-number setAt in the answer is not stored — unconfirmed, not a guess (typeof setAt guard)', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
+    vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(
+      { ok: true, intent: { ...t10Intent(), notify: 'off', setAt: 'soon' as unknown as number }, epoch: 2 });
+    renderSettings('notifications', { toasts: true });
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
+    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.channel })).toBeChecked();
+  });
+
+  it('an answer with no intent field at all is not stored — unconfirmed, not a guess (the ?? null guard)', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
+    vi.spyOn(api, 'setUpdateIntent').mockResolvedValue({ ok: true } as unknown as IntentWriteAnswer);
+    renderSettings('notifications', { toasts: true });
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
+    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.channel })).toBeChecked();
+  });
+
+  it('a refusal says the update route\'s own sentence under the control and puts the stored choice back', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
+    vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
+      new ApiError(503, { ok: false, error: 'journal-unwritable', detail: 'the intent journal could not be written — see the server log' }));
+    renderSettings('notifications', { toasts: true });
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable }));
+    await lineUnder(() => group, 'The server cannot write its intent journal — nothing was changed.', 'refusal');
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.channel })).toBeChecked();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable })).not.toBeChecked();
+  });
+
+  it('renders the section while /api/updates is pending and on a box with no control plane — with no release radios', async () => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    renderSettings('notifications');
+    expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
+    expect(screen.getByText('This browser cannot receive Web Push.')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Announce new releases' })).toBeNull();
+    cleanup();
+    // The not-configured sentence is the Updates page's own (settings Task R2b1, D-5504): here the read settles and
+    // the Notifications page draws its section with no radios.
+    const read = vi.spyOn(api, 'updates').mockRejectedValue(new ApiError(501, { ok: false, error: 'not-configured' }));
+    renderSettings('notifications');
+    await waitFor(() => expect(read).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Announce new releases' })).toBeNull();
+  });
+
+  it('reuses the literal NotificationBell where the browser can do Web Push', async () => {
+    t10PushBrowser();
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    renderSettings('notifications');
+    const section = screen.getByRole('heading', { name: 'Notifications' }).closest('section')!;
+    const bell = await within(section).findByRole('button', { name: 'Notifications off' });
+    expect(bell).toHaveClass('bell');
+    expect(bell).toHaveAttribute('aria-pressed', 'false');
+    expect(within(section).getByText('Push notifications for this browser')).toBeInTheDocument();
+    expect(within(section).queryByText('This browser cannot receive Web Push.')).toBeNull();
+  });
+
+  it('spells none of the bell\'s own outcomes — the toggle is reused, never copied (a literal-absence pin)', () => {
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'settings', 'NotificationsSection.tsx'), 'utf8');
+    expect(src).toMatch(/import \{ NotificationBell \} from '\.\.\/\.\.\/fleet\/NotificationBell';/);
+    expect(src).toMatch(/<NotificationBell \/>/);
+    for (const copy of [/\benablePush\b/, /\bdisablePush\b/, /\bpushEnabled\b/, /Allow notifications in your browser/,
+      /Push isn't set up on the server/, /Your browser blocks web push/]) {
+      expect(src).not.toMatch(copy);
+    }
+  });
+});
+
+describe('SettingsScreen — notifications: the unarmed-exposure banner (design 2026-09-20 §12)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  const banner = (): HTMLElement | null => document.querySelector<HTMLElement>('.settings-unarmed');
+
+  it('shows the red sentence when the gate reports off and the page was reached over a non-loopback name', async () => {
+    t10AuthStatus({ status: 200, body: { authed: true, passkeysEnrolled: 0, mode: 'off' } });
+    navigate('/settings/updates');   // before the stub: it copies the location, path included
+    t10Host('ccrc.example');
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));   // independent of the update view
+    renderSettings('updates');
+    const shown = await waitFor(() => {
+      const b = document.querySelector<HTMLElement>('[data-gate-banner]');
+      expect(b).not.toBeNull();
+      return b!;
+    });
+    expect(shown).toHaveTextContent(SIGN_IN_GATE_TEXT.exposedLead);
+    expect(shown).toHaveClass('settings-unarmed');
+    expect(shown).toHaveAttribute('role', 'alert');
+    // Directly under the header: before the Updates section, not inside it.
+    const updates = screen.getByRole('heading', { name: 'Updates' });
+    expect(shown.compareDocumentPosition(updates) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(shown.closest('section')).toBeNull();
+  });
+
+  it('shows nothing when the gate is off but the page is on loopback', async () => {
+    const f = t10AuthStatus({ status: 200, body: { authed: true, passkeysEnrolled: 0, mode: 'off' } });
+    t10Host('127.0.0.1');
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View());
+    renderSettings(null);
+    await waitFor(() => expect(f).toHaveBeenCalledWith('/api/auth/status', expect.anything()));
+    await t10Settle();
+    expect(banner()).toBeNull();
+  });
+
+  it('shows nothing when the gate is armed, whatever the hostname', async () => {
+    const f = t10AuthStatus({ status: 200, body: { authed: true, passkeysEnrolled: 1, mode: 'passphrase' } });
+    t10Host('ccrc.example');
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View());
+    renderSettings(null);
+    await waitFor(() => expect(f).toHaveBeenCalledWith('/api/auth/status', expect.anything()));
+    await t10Settle();
+    expect(banner()).toBeNull();
+  });
+
+  it('shows nothing when the status read fails — a 404 from an older server, or no network', async () => {
+    for (const answer of [{ status: 404, body: { error: 'not-found' } }, 'network'] as const) {
+      const f = t10AuthStatus(answer);
+      t10Host('ccrc.example');
+      vi.spyOn(api, 'updates').mockResolvedValue(t10View());
+      renderSettings(null);
+      await waitFor(() => expect(f).toHaveBeenCalledWith('/api/auth/status', expect.anything()));
+      await t10Settle();
+      expect(banner()).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('shows nothing when the status body carries no mode — silence is not "off"', async () => {
+    const f = t10AuthStatus({ status: 200, body: { authed: false } });
+    t10Host('ccrc.example');
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View());
+    renderSettings(null);
+    await waitFor(() => expect(f).toHaveBeenCalledWith('/api/auth/status', expect.anything()));
+    await t10Settle();
+    expect(banner()).toBeNull();
+  });
+
+  it('is self-grounded red, not sticky, and wraps inside the phone width; the bell row keeps the tap floor', () => {
+    const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
+    const red = ruleIn(css, '.settings-unarmed');
+    expect(declValue(red, 'background')).toBe('var(--status-dead-tint-solid)');
+    expect(declValue(red, 'color')).toBe('var(--status-dead-text)');
+    expect(declValue(red, 'position')).toBeNull();
+    expect(declValue(red, 'overflow-wrap')).toBe('anywhere');
+    expect(declValue(ruleIn(css, '.settings-bell-row'), 'min-height')).toBe('var(--tap-min)');
+  });
+
+  it('reads the gate from /api/auth/status once per mount, never from /health', async () => {
+    const f = t10AuthStatus({ status: 200, body: { authed: true, passkeysEnrolled: 0, mode: 'off' } });
+    t10Host('ccrc.example');
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View());
+    renderSettings(null);
+    await waitFor(() => expect(document.querySelector('[data-gate-banner]')).not.toBeNull());
+    const urls = f.mock.calls.map(([u]) => String(u));
+    expect(urls.filter((u) => u === '/api/auth/status')).toHaveLength(1);
+    expect(urls.some((u) => u.startsWith('/health'))).toBe(false);
+  });
+});
+
+// ── fix round 1 (F11, item 6): a malformed /api/updates ELEMENT is dropped,
+// never a reason to blank the whole screen ────────────────────────────────
+
+describe('SettingsScreen — a malformed /api/updates element does not blank the screen (F11)', () => {
+  it('renders the node inventory over the well-formed rows, dropping a null node, one with no string sha, and one with a non-string label', async () => {
+    const badSha = {
+      ...t7Node(), nodeId: '22222222-2222-2222-2222-222222222222', current: { ...t7Node().current, sha: undefined },
+    };
+    // Fix round 2 (review of d5aefc4a, item 2): NodeItem renders {n.label} as
+    // a React child — an object label blanks the whole screen with React's
+    // own "Objects are not valid as a React child", not a thrown TypeError,
+    // so it needs its own dropped element here, beside the null node and the
+    // bad-sha one.
+    const badLabel = { ...t7Node(), nodeId: '33333333-3333-3333-3333-333333333333', label: { bad: true } };
+    const raw = {
+      catalogue: { lastOkAt: Date.now() - (4 * 60_000 + 5_000), lastError: null },
+      releases: [],
+      nodes: [null, badSha, badLabel, t7Node(), t7Server()],
+      intent: [t7Intent()],
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const region = await t7Mount(raw as unknown as UpdatesView);
+    // The Nodes card, not the page: the Box settings card (D-6917) names each node too.
+    const nodes = within(region).getByRole('region', { name: 'Nodes' });
+    expect(within(nodes).getByText('fleet')).toBeInTheDocument();
+    expect(within(nodes).getByText('server')).toBeInTheDocument();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+});
+
+// ── The Stall watch section (stall watch settings, design 2026-10-05 §13; programme stall-watch-settings W2
+// Task 3). The section reads its own endpoint through its own hook (`useStallWatchView`), so every case here spies
+// `api.stallWatch` and `api.setStallWatch` and leaves `/api/updates` pending. The pure helpers are unit-tested first
+// (P3b, P3d, P9–P12, M6, M24); the rendered section after (P1, P1b, P2, P3, P3c, P5); the source scans last (P6, P9).
+
+const SW_H = 3_600_000;
+const swStages = (over: Partial<StallWatchStages> = {}): StallWatchStages => ({
+  runs: true, checks: true, alerts: false, busyDelivery: false, busyGate: true, wave2: false, ...over,
+});
+const swHeld = (over: Partial<StallHeld> = {}): StallHeld => ({
+  watchOff: false, mailOff: false, gateStrict: false, wave2HeldByStrict: false, ...over,
+});
+type SwMeasured = Extract<StallWatchEffective, { measured: true }>;
+const swEffective = (over: Partial<SwMeasured> = {}): SwMeasured => ({
+  measured: true, level: 'check', files: 'check', source: 'files', stages: swStages(), held: swHeld(),
+  next: { kind: 'step', level: 'alert', waitsOn: ['alerts'] }, filesExceed: false, ...over,
+});
+const swView = (over: Partial<StallWatchView> = {}): StallWatchView => ({
+  chosen: { level: 'follow', quietMs: 'default', updatedAt: 1_000, stored: 'row' },
+  effective: swEffective(),
+  quiet: {
+    effectiveMs: 2 * SW_H, builtInMs: 2 * SW_H, minMs: SW_H / 2, maxMs: 12 * SW_H, stepMs: SW_H / 2,
+    source: 'default',
+  },
+  notices: {
+    ok: true, since: 0, windowMs: 48 * SW_H,
+    counts: [
+      { row: 'checks', sent: 1, shadow: 2 }, { row: 'wakes', sent: 0, shadow: 0 },
+      { row: 'reports', sent: 0, shadow: 3 }, { row: 'pushes', sent: 4, shadow: 0 },
+    ],
+  },
+  fallback: null,
+  ...over,
+});
+const swChosen = (over: Partial<StallWatchView['chosen']>): StallWatchView['chosen'] =>
+  ({ ...swView().chosen, ...over });
+/** A running watch with every confirm stage off: Log only, the busy gate off. */
+const SW_LOG = swStages({ checks: false, busyGate: false });
+type SwEffect = Extract<StallWriteEffect, { measured: true }>;
+const swEffect = (over: Partial<SwEffect> = {}): SwEffect => ({
+  measured: true, turnsOn: [], turnsOff: [], leavesWave2: false, heldByBox: false, quietLowered: false,
+  filesExceed: false, before: SW_LOG, after: SW_LOG, quietMs: { before: 2 * SW_H, after: 2 * SW_H }, mailOff: false,
+  ...over,
+});
+const swConfirm = (effect: StallWriteEffect, effectKey: string): ApiError =>
+  new ApiError(409, { ok: false, error: 'confirm-required', effect, effectKey });
+const swTexts = (v: StallWatchView): string[] => stallNowLines(v).map((l) => l.text);
+const swTurnsOn = (stage: keyof typeof STALL_STAGE_TEXT): string => {
+  const { name, gate } = STALL_STAGE_TEXT[stage];
+  return gate === null
+    ? fillStallText(STALL_CONFIRM_TEXT.turnsOnFree, { name })
+    : fillStallText(STALL_CONFIRM_TEXT.turnsOn, { name, gate });
+};
+const swValue = (ms: number): { value: string } => ({ value: quietText(ms) });
+
+describe('SettingsScreen — stall watch: helpers (stall-watch-settings W2 Task 3)', () => {
+  it('fillStallText fills each named slot, leaves a slot it was not given, and reads a $ in a value literally', () => {
+    expect(fillStallText('{a} and {b}', { a: 'x', b: 'y' })).toBe('x and y');
+    expect(fillStallText('{a} and {b}', { a: 'x' })).toBe('x and {b}');
+    expect(fillStallText(STALL_CONFIRM_TEXT.refused, { detail: 'costs $& and $1' }))
+      .toBe('Nothing was changed: costs $& and $1');
+  });
+
+  it('quietText writes a span in hours and minutes, the shape the spec shows ("30 min to 12 h", "Last 48 h")', () => {
+    expect(quietText(SW_H / 2)).toBe('30 min');
+    expect(quietText(2 * SW_H)).toBe('2 h');
+    expect(quietText(1.5 * SW_H)).toBe('1 h 30 min');
+    expect(quietText(48 * SW_H)).toBe('48 h');
+  });
+
+  it('quietChoices: the built-in first, then every step from min to max except the built-in, which appears once', () => {
+    const choices = quietChoices(swView());
+    expect(choices[0]).toEqual({ value: 'default', label: 'Built-in (2 h)' });
+    const steps = choices.slice(1).map((c) => c.value);
+    expect(steps).toHaveLength(23);
+    expect(steps[0]).toBe(SW_H / 2);
+    expect(steps[steps.length - 1]).toBe(12 * SW_H);
+    expect(steps).not.toContain(2 * SW_H);
+    expect(choices.filter((c) => c.label === '2 h' || c.label.includes('(2 h)'))).toHaveLength(1);
+    expect(choices.find((c) => c.value === 1.5 * SW_H)?.label).toBe('1 h 30 min');
+  });
+
+  it('the Now block: the effective level, its does text, and the busy gate in its two parts (busy-shadow)', () => {
+    const v = swView();
+    expect(stallNowLines(v)[0]).toEqual({ text: STALL_LEVEL_TEXT.check.label, tone: 'head' });
+    expect(swTexts(v)).toContain(STALL_LEVEL_TEXT.check.does);
+    expect(swTexts(v)).toContain(`${STALL_BUSY_GATE_TEXT.holds} ${STALL_BUSY_GATE_TEXT.logs}`);
+    expect(swTexts(v)).toContain(STALL_SOURCE_TEXT.files);
+    const deliver = swView({ effective: swEffective({ level: 'deliver', files: 'deliver',
+      stages: swStages({ alerts: true, busyDelivery: true }) }) });
+    expect(swTexts(deliver)).toContain(STALL_BUSY_GATE_TEXT.holds);
+    expect(swTexts(deliver).some((t) => t.includes(STALL_BUSY_GATE_TEXT.logs))).toBe(false);
+  });
+
+  it('custom reads "Custom", then the names of the stages that are on', () => {
+    const v = swView({ effective: swEffective({ level: 'custom', files: 'custom',
+      stages: swStages({ runs: false, checks: false, busyGate: true, busyDelivery: true }), next: { kind: 'none' } }) });
+    expect(stallNowLines(v)[0]).toEqual({ text: STALL_SECTION_TEXT.custom, tone: 'head' });
+    expect(swTexts(v)).toContain(`${STALL_STAGE_TEXT.busyDelivery.name}, ${STALL_STAGE_TEXT.busyGate.name}`);
+  });
+
+  it('P9: the busy-gate-off note shows for a files-read level without the gate, and only for that cause', () => {
+    // A fresh install: the files read Log only, with the busy gate off.
+    const fresh = swView({ effective: swEffective({ level: 'log', files: 'log', stages: SW_LOG }) });
+    expect(swTexts(fresh)).toContain(STALL_BUSY_GATE_OFF_TEXT);
+    // A chosen level under strict: the ladder sets the gate, and the strict held line says why it is off.
+    const strict = swView({
+      chosen: swChosen({ level: 'check' }),
+      effective: swEffective({ source: 'chosen', stages: swStages({ busyGate: false }), held: swHeld({ gateStrict: true }) }),
+    });
+    expect(swTexts(strict)).not.toContain(STALL_BUSY_GATE_OFF_TEXT);
+    // Files read Check over the busy-shadow file with mail switched off: the gate reads off because mail is off.
+    const mailOff = swView({ effective: swEffective({ stages: swStages({ busyGate: false }), held: swHeld({ mailOff: true }) }) });
+    expect(swTexts(mailOff)).not.toContain(STALL_BUSY_GATE_OFF_TEXT);
+    expect(swTexts(mailOff)).toContain(STALL_HELD_TEXT.mailOff);
+    // Custom and a stopped watch name no busy-gate cause either.
+    const custom = swView({ effective: swEffective({ level: 'custom', stages: swStages({ busyGate: false, alerts: true }) }) });
+    expect(swTexts(custom)).not.toContain(STALL_BUSY_GATE_OFF_TEXT);
+    const stopped = swView({ effective: swEffective({ level: 'off', files: 'off', stages: swStages({ runs: false, checks: false, busyGate: false }) }) });
+    expect(swTexts(stopped)).not.toContain(STALL_BUSY_GATE_OFF_TEXT);
+  });
+
+  it('P10: a held source names the chosen level and the reason, never "Chosen here"', () => {
+    const strict = swView({
+      chosen: swChosen({ level: 'deliver' }),
+      effective: swEffective({ level: 'alert', source: 'held', stages: swStages({ alerts: true, busyGate: false }),
+        held: swHeld({ gateStrict: true }), next: { kind: 'none' } }),
+    });
+    expect(swTexts(strict)).toContain(
+      `Chosen: ${STALL_LEVEL_TEXT.deliver.label}, held back by the fleet box (${STALL_HELD_REASON.gateStrict})`);
+    expect(swTexts(strict)).not.toContain(STALL_SOURCE_TEXT.chosen);
+    const kill = swView({
+      chosen: swChosen({ level: 'all' }),
+      effective: swEffective({ level: 'off', source: 'held', stages: swStages({ runs: false, checks: false, busyGate: false }),
+        held: swHeld({ watchOff: true }), next: { kind: 'none' } }),
+    });
+    expect(swTexts(kill)).toContain(
+      fillStallText(STALL_SOURCE_TEXT.held, { label: STALL_LEVEL_TEXT.all.label, reason: STALL_HELD_REASON.watchOff }));
+    const chosen = swView({ chosen: swChosen({ level: 'check' }), effective: swEffective({ source: 'chosen' }) });
+    expect(swTexts(chosen)).toContain(STALL_SOURCE_TEXT.chosen);
+  });
+
+  it('one line per held flag, in StallHeld order', () => {
+    const v = swView({ effective: swEffective({ source: 'held', held: swHeld({ watchOff: true, mailOff: true, gateStrict: true, wave2HeldByStrict: true }) }),
+      chosen: swChosen({ level: 'all' }) });
+    const held = stallNowLines(v).filter((l) => l.tone === 'warn').map((l) => l.text);
+    expect(held).toEqual([stallHeldLine('watchOff'), STALL_HELD_TEXT.mailOff, stallHeldLine('gateStrict'),
+      STALL_HELD_TEXT.wave2HeldByStrict]);
+  });
+
+  // D-8339: a hold by an override marker names the marker and how to lift it. Both markers are terminal-only emergency
+  // overrides: the card says how, and offers no control for either.
+  const SW_REMEDY = (marker: string): string =>
+    `To lift it, remove ${marker} from the registry at a terminal on the fleet box. It is an emergency override, so it has no control here.`;
+  const swKill = (): StallWatchView => swView({
+    chosen: swChosen({ level: 'all' }),
+    effective: swEffective({ level: 'off', source: 'held', stages: swStages({ runs: false, checks: false, busyGate: false }),
+      held: swHeld({ watchOff: true }), next: { kind: 'none' } }),
+  });
+  const swStrict = (): StallWatchView => swView({
+    chosen: swChosen({ level: 'deliver' }),
+    effective: swEffective({ level: 'alert', source: 'held', stages: swStages({ alerts: true, busyGate: false }),
+      held: swHeld({ gateStrict: true }), next: { kind: 'none' } }),
+  });
+
+  it('D-8339: the kill switch\'s held text names stall-watch-disabled and its remedy, at a terminal', () => {
+    const lines = stallNowLines(swKill());
+    const at = lines.findIndex((l) => l.tone === 'warn');
+    expect(lines.slice(at)).toEqual([
+      { text: 'The stall-watch-disabled marker on the fleet box is a kill switch: the watch is off, whatever is chosen here.', tone: 'warn' },
+      { text: SW_REMEDY('stall-watch-disabled'), tone: 'note' },
+    ]);
+    expect(lines.some((l) => l.text.includes('mail-gate-strict'))).toBe(false);
+  });
+
+  it('D-8339: the strict gate\'s held text names mail-gate-strict, says what it does, and gives its remedy', () => {
+    const lines = stallNowLines(swStrict());
+    const at = lines.findIndex((l) => l.tone === 'warn');
+    expect(lines.slice(at)).toEqual([
+      { text: 'The mail-gate-strict marker on the fleet box sets the mail gate to strict: busy delivery and the busy gate are off.', tone: 'warn' },
+      { text: 'While it stands, mail is delivered to idle sessions only.', tone: 'note' },
+      { text: SW_REMEDY('mail-gate-strict'), tone: 'note' },
+    ]);
+    expect(lines.some((l) => l.text.includes('stall-watch-disabled'))).toBe(false);
+  });
+
+  it('D-8339: both markers held: each names its own marker and remedy; mail off and the wave-2 hold name none', () => {
+    const v = swView({ chosen: swChosen({ level: 'all' }), effective: swEffective({ source: 'held',
+      held: swHeld({ watchOff: true, mailOff: true, gateStrict: true, wave2HeldByStrict: true }) }) });
+    const texts = swTexts(v);
+    expect(texts.filter((t) => t.startsWith('To lift it,'))).toEqual([SW_REMEDY('stall-watch-disabled'), SW_REMEDY('mail-gate-strict')]);
+    expect(texts).toContain(STALL_HELD_TEXT.mailOff);
+    expect(texts).toContain(STALL_HELD_TEXT.wave2HeldByStrict);
+    // Nothing held: no marker is named and no remedy is given.
+    expect(swTexts(swView()).filter((t) => /stall-watch-disabled|mail-gate-strict|To lift it/.test(t))).toEqual([]);
+  });
+
+  it('M24: the hazard line shows for alerts and the further checks without busy delivery, and not under mail off', () => {
+    const hazard = swEffective({ level: 'custom', stages: swStages({ alerts: true, wave2: true, busyDelivery: false }) });
+    expect(swTexts(swView({ effective: hazard }))).toContain(STALL_HAZARD_TEXT);
+    expect(stallNowLines(swView({ effective: hazard })).find((l) => l.text === STALL_HAZARD_TEXT)?.tone).toBe('warn');
+    const delivered = swEffective({ level: 'all', stages: swStages({ alerts: true, wave2: true, busyDelivery: true }) });
+    expect(swTexts(swView({ effective: delivered }))).not.toContain(STALL_HAZARD_TEXT);
+    const mailOff = { ...hazard, held: swHeld({ mailOff: true }) };
+    expect(swTexts(swView({ effective: mailOff }))).not.toContain(STALL_HAZARD_TEXT);
+  });
+
+  it('P11: the files-exceed line follows effective.filesExceed, and nothing else', () => {
+    const chosen = swChosen({ level: 'log' });
+    expect(swTexts(swView({ chosen, effective: swEffective({ source: 'chosen', filesExceed: true }) })))
+      .toContain(STALL_FILES_EXCEED_TEXT);
+    expect(swTexts(swView({ chosen, effective: swEffective({ source: 'chosen', filesExceed: false }) })))
+      .not.toContain(STALL_FILES_EXCEED_TEXT);
+    const unstated = swEffective({ source: 'chosen' });
+    delete unstated.filesExceed;
+    expect(swTexts(swView({ chosen, effective: unstated }))).not.toContain(STALL_FILES_EXCEED_TEXT);
+  });
+
+  it('P12: exactly one stored line whenever the stored row does not apply whole, and the fallback line', () => {
+    const stored = (chosen: StallWatchView['chosen']): string[] =>
+      swTexts(swView({ chosen })).filter((t) => (Object.values(STALL_STORED_TEXT) as string[]).includes(t));
+    const none = { level: 'unreadable', quietMs: 'unreadable', updatedAt: null } as const;
+    expect(stored(swChosen({ ...none, stored: 'absent' }))).toEqual([STALL_STORED_TEXT.absent]);
+    expect(stored(swChosen({ ...none, stored: 'unreadable' }))).toEqual([STALL_STORED_TEXT.unreadable]);
+    expect(stored(swChosen({ level: 'unreadable', quietMs: 'unreadable' }))).toEqual([STALL_STORED_TEXT.both]);
+    expect(stored(swChosen({ level: 'unreadable', quietMs: SW_H }))).toEqual([STALL_STORED_TEXT.level]);
+    expect(stored(swChosen({ level: 'check', quietMs: 'unreadable' }))).toEqual([STALL_STORED_TEXT.quiet]);
+    expect(stored(swChosen({ level: 'check', quietMs: SW_H }))).toEqual([]);
+    const fallback = swView({ fallback: { at: 5, reason: 'the resolver threw' } });
+    expect(swTexts(fallback)).toContain(fillStallText(STALL_FALLBACK_TEXT, { reason: 'the resolver threw' }));
+    expect(swTexts(swView()).some((t) => t.startsWith('Your choice is not being applied'))).toBe(false);
+  });
+
+  it('M6: an unmeasured reading is "Unknown", never Off — and the chosen values still show', () => {
+    const v = swView({ effective: { measured: false }, chosen: swChosen({ stored: 'unreadable', level: 'unreadable',
+      quietMs: 'unreadable', updatedAt: null }) });
+    expect(stallNowLines(v)[0]).toEqual({ text: STALL_SECTION_TEXT.unknown, tone: 'head' });
+    expect(swTexts(v)).not.toContain(STALL_LEVEL_TEXT.off.label);
+    expect(swTexts(v)).toContain(STALL_STORED_TEXT.unreadable);
+    expect(stallNextLines(v.effective)).toBeNull();
+  });
+
+  it('P10: the Next step renders from the wire — none and a missing next show nothing, an empty waitsOn no gates', () => {
+    expect(stallNextLines(swEffective({ next: { kind: 'none' } }))).toBeNull();
+    const unstated = swEffective();
+    delete unstated.next;
+    expect(stallNextLines(unstated)).toBeNull();
+    expect(stallNextLines(swEffective({ next: { kind: 'top' } }))).toEqual({ lead: STALL_NEXT_TEXT.top, waitsOn: [] });
+    expect(stallNextLines(swEffective({ next: { kind: 'step', level: 'alert', waitsOn: [] } })))
+      .toEqual({ lead: `${STALL_NEXT_TEXT.lead} ${STALL_LEVEL_TEXT.alert.label}.`, waitsOn: [] });
+    expect(stallNextLines(swEffective({ next: { kind: 'step', level: 'all', waitsOn: ['busyDelivery', 'wave2'] } })))
+      .toEqual({ lead: `${STALL_NEXT_TEXT.lead} ${STALL_LEVEL_TEXT.all.label}.`,
+        waitsOn: [STALL_STAGE_TEXT.busyDelivery.gate, STALL_STAGE_TEXT.wave2.gate] });
+  });
+
+  it('stallCountLine: "<label> — <sent> sent · <shadow> shadow"', () => {
+    expect(stallCountLine({ row: 'reports', sent: 0, shadow: 3 }))
+      .toBe(`${STALL_NOTICE_TEXT.reports} — 0 sent · 3 shadow`);
+  });
+
+  it('stallConfirmTitle: a level, Follow, a quiet time, and the built-in', () => {
+    expect(stallConfirmTitle({ level: 'alert' }, 2 * SW_H)).toBe(`Set the stall watch to ${STALL_LEVEL_TEXT.alert.label}?`);
+    expect(stallConfirmTitle({ level: 'follow' }, 2 * SW_H)).toBe(`${STALL_FOLLOW_LABEL}?`);
+    expect(stallConfirmTitle({ quietMs: SW_H / 2 }, 2 * SW_H)).toBe('Set the quiet time to 30 min?');
+    expect(stallConfirmTitle({ quietMs: 'default' }, 2 * SW_H)).toBe('Set the quiet time to 2 h (built-in)?');
+  });
+
+  it('M6: the unmeasured effect gives the one unknown line', () => {
+    expect(stallConfirmLines({ measured: false }, { level: 'all' }, 2 * SW_H)).toEqual([STALL_CONFIRM_TEXT.unknown]);
+  });
+
+  it('P3b: Off over a busy file says busy delivery comes back, never the generic turn-on line', () => {
+    const off = swStages({ runs: false, checks: false, busyGate: false });
+    const lines = stallConfirmLines(swEffect({
+      turnsOn: ['busyDelivery'], turnsOff: ['checks'],
+      before: swStages({ busyDelivery: false, busyGate: true }), after: { ...off, busyDelivery: true, busyGate: true },
+    }), { level: 'off' }, 2 * SW_H);
+    expect(lines).toContain("Busy delivery turns back on: the fleet box's files arm it.");
+    expect(lines).not.toContain(swTurnsOn('busyDelivery'));
+    expect(lines).toEqual([
+      STALL_LEVEL_TEXT.off.does,
+      "Busy delivery turns back on: the fleet box's files arm it.",
+      STALL_STAGE_TEXT.checks.stops,
+      STALL_CONFIRM_TEXT.dueMail,
+    ]);
+  });
+
+  it('the order: does, turn-ons, stops, the held line, what falls due, the quiet lines, the files-exceed line', () => {
+    const lines = stallConfirmLines(swEffect({
+      turnsOn: ['checks', 'alerts'], turnsOff: ['busyGate'], leavesWave2: false, filesExceed: true,
+      before: swStages({ checks: true, alerts: false }), after: swStages({ checks: true, alerts: true, busyGate: false }),
+      heldByBox: false, quietLowered: true, quietMs: { before: 2 * SW_H, after: SW_H },
+    }), { level: 'alert' }, 2 * SW_H);
+    expect(lines).toEqual([
+      STALL_LEVEL_TEXT.alert.does,
+      swTurnsOn('checks'),
+      swTurnsOn('alerts'),
+      STALL_STAGE_TEXT.busyGate.stops,
+      STALL_CONFIRM_TEXT.due,
+      fillStallText(STALL_CONFIRM_TEXT.quietDue, swValue(SW_H)),
+      fillStallText(STALL_CONFIRM_TEXT.quietRepeat, swValue(SW_H)),
+      fillStallText(STALL_CONFIRM_TEXT.quietDialogs, swValue(SW_H)),
+      STALL_FILES_EXCEED_TEXT,
+    ]);
+  });
+
+  it('the busy gate turning on takes the free line; Follow shows no does text', () => {
+    const lines = stallConfirmLines(swEffect({ turnsOn: ['busyGate'], after: swStages({ checks: false, busyGate: true }) }),
+      { level: 'follow' }, 2 * SW_H);
+    expect(lines).toEqual([fillStallText(STALL_CONFIRM_TEXT.turnsOnFree, { name: STALL_STAGE_TEXT.busyGate.name })]);
+  });
+
+  it('leaving the further checks shows the wave2 stops line once, from either reading', () => {
+    const fromUnheld = stallConfirmLines(swEffect({ leavesWave2: true }), { level: 'check' }, 2 * SW_H);
+    expect(fromUnheld.filter((l) => l === STALL_STAGE_TEXT.wave2.stops)).toHaveLength(1);
+    const resolved = stallConfirmLines(swEffect({ turnsOff: ['wave2'], leavesWave2: true }), { level: 'check' }, 2 * SW_H);
+    expect(resolved.filter((l) => l === STALL_STAGE_TEXT.wave2.stops)).toHaveLength(1);
+  });
+
+  it('P3d: busy delivery alone makes mail due, never a recorded notice', () => {
+    const lines = stallConfirmLines(swEffect({ turnsOn: ['busyDelivery'],
+      before: swStages(), after: swStages({ busyDelivery: true }) }), { level: 'deliver' }, 2 * SW_H);
+    expect(lines).toContain(STALL_CONFIRM_TEXT.dueMail);
+    expect(lines).not.toContain(STALL_CONFIRM_TEXT.due);
+  });
+
+  it('P3d: checks from a running watch are due; from Off, dueFromOff', () => {
+    const running = stallConfirmLines(swEffect({ turnsOn: ['checks'], after: swStages({ busyGate: false }) }),
+      { level: 'check' }, 2 * SW_H);
+    expect(running).toContain(STALL_CONFIRM_TEXT.due);
+    expect(running).not.toContain(STALL_CONFIRM_TEXT.dueFromOff);
+    const fromOff = stallConfirmLines(swEffect({ turnsOn: ['checks'],
+      before: swStages({ runs: false, checks: false, busyGate: false }), after: swStages({ busyGate: false }) }),
+    { level: 'check' }, 2 * SW_H);
+    expect(fromOff).toContain(STALL_CONFIRM_TEXT.dueFromOff);
+    expect(fromOff).not.toContain(STALL_CONFIRM_TEXT.due);
+  });
+
+  it('P3d: a lowered quiet time is worded by what runs after the write: off, Log, Check, Everything; dialogs with alerts', () => {
+    const lower = (after: StallWatchStages): string[] => stallConfirmLines(swEffect({
+      before: after, after, quietLowered: true, quietMs: { before: 2 * SW_H, after: SW_H },
+    }), { quietMs: SW_H }, 2 * SW_H);
+    const v = swValue(SW_H);
+    expect(lower(swStages({ runs: false, checks: false, busyGate: false })))
+      .toEqual([STALL_CONFIRM_TEXT.quietOff]);
+    expect(lower(SW_LOG)).toEqual([fillStallText(STALL_CONFIRM_TEXT.quietRecorded, v)]);
+    expect(lower(swStages())).toEqual([fillStallText(STALL_CONFIRM_TEXT.quietDue, v),
+      fillStallText(STALL_CONFIRM_TEXT.quietRepeat, v)]);
+    expect(lower(swStages({ alerts: true, busyDelivery: true, wave2: true }))).toEqual([
+      fillStallText(STALL_CONFIRM_TEXT.quietDueAll, v), fillStallText(STALL_CONFIRM_TEXT.quietDialogs, v)]);
+    expect(lower(swStages({ alerts: true }))).toEqual([fillStallText(STALL_CONFIRM_TEXT.quietDue, v),
+      fillStallText(STALL_CONFIRM_TEXT.quietRepeat, v), fillStallText(STALL_CONFIRM_TEXT.quietDialogs, v)]);
+  });
+
+  it('P3d: an off-wire shape the server cannot send (quietLowered true with a quiet time raised, D-4037 quiet-raise-asks-nothing) still below the built-in repeats the check note, with no due line', () => {
+    const lines = stallConfirmLines(swEffect({ before: swStages(), after: swStages(), quietLowered: true,
+      quietMs: { before: SW_H / 2, after: SW_H } }), { quietMs: SW_H }, 2 * SW_H);
+    expect(lines).toEqual([fillStallText(STALL_CONFIRM_TEXT.quietRepeat, swValue(SW_H))]);
+  });
+
+  it('P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not', () => {
+    const v = swValue(SW_H);
+    const checkToAlert = stallConfirmLines(swEffect({ mailOff: true, turnsOn: ['alerts'],
+      before: swStages(), after: swStages({ alerts: true }) }), { level: 'alert' }, 2 * SW_H);
+    expect(checkToAlert).toContain(STALL_CONFIRM_TEXT.dueMailOff);
+    expect(checkToAlert).not.toContain(STALL_CONFIRM_TEXT.due);
+    const logToCheck = stallConfirmLines(swEffect({ mailOff: true, turnsOn: ['checks'],
+      after: swStages({ busyGate: false }) }), { level: 'check' }, 2 * SW_H);
+    expect(logToCheck).toContain(STALL_CONFIRM_TEXT.dueMailOffHeld);
+    expect(logToCheck).not.toContain(STALL_CONFIRM_TEXT.due);
+    const busy = stallConfirmLines(swEffect({ mailOff: true, turnsOn: ['busyDelivery'],
+      before: swStages(), after: swStages({ busyDelivery: true }) }), { level: 'deliver' }, 2 * SW_H);
+    expect(busy).toContain(STALL_CONFIRM_TEXT.dueMailBack);
+    expect(busy).not.toContain(STALL_CONFIRM_TEXT.dueMail);
+    const lower = (after: StallWatchStages): string[] => stallConfirmLines(swEffect({ mailOff: true,
+      before: after, after, quietLowered: true, quietMs: { before: 2 * SW_H, after: SW_H } }), { quietMs: SW_H }, 2 * SW_H);
+    expect(lower(swStages())).toEqual([fillStallText(STALL_CONFIRM_TEXT.quietDueMailOff, v),
+      fillStallText(STALL_CONFIRM_TEXT.quietRepeatMailOff, v)]);
+    expect(lower(swStages({ alerts: true, busyDelivery: true, wave2: true }))).toEqual([
+      fillStallText(STALL_CONFIRM_TEXT.quietDueAllMailOff, v), fillStallText(STALL_CONFIRM_TEXT.quietDialogs, v)]);
+    expect(lower(SW_LOG)).toEqual([fillStallText(STALL_CONFIRM_TEXT.quietRecorded, v)]);
+  });
+
+  it('P3d: stages held by the kill switch take their turn-on lines and the held line — no backOn, nothing due', () => {
+    const off = swStages({ runs: false, checks: false, busyGate: false });
+    const lines = stallConfirmLines(swEffect({ turnsOn: ['alerts', 'busyDelivery', 'wave2'], heldByBox: true,
+      before: off, after: off }), { level: 'all' }, 2 * SW_H);
+    expect(lines).toEqual([
+      STALL_LEVEL_TEXT.all.does,
+      swTurnsOn('alerts'),
+      swTurnsOn('busyDelivery'),
+      swTurnsOn('wave2'),
+      STALL_CONFIRM_TEXT.heldByBox,
+    ]);
+  });
+});
+
+describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)', () => {
+  afterEach(() => { Reflect.deleteProperty(document, 'visibilityState'); });
+
+  // `hidden: true`: an open sheet marks the page behind it aria-hidden, and these cases read the radios under it.
+  const section = (): HTMLElement =>
+    screen.getByRole('heading', { name: STALL_SECTION_TEXT.title, hidden: true }).closest('section')!;
+  const levelGroup = (): Promise<HTMLElement> => within(section()).findByRole('group', { name: STALL_SECTION_TEXT.level });
+  const mount = async (first: StallWatchView): Promise<{ read: ReturnType<typeof vi.spyOn> }> => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    const read = vi.spyOn(api, 'stallWatch').mockResolvedValue(first);
+    renderSettings('automation', { toasts: true });
+    await levelGroup();
+    return { read };
+  };
+  const repoll = async (): Promise<void> => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+  };
+  const radio = (name: string): HTMLElement => within(section()).getByRole('radio', { name, hidden: true });
+
+  // Settings Task R2b1 (D-5503's order, D-5504): the one long page became five; its order is the index's, and
+  // each page keeps today's order inside it.
+  it('the index lists Updates, Appearance, Notifications, Automation, Security, in that order', () => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    renderSettings(null);
+    const nav = screen.getByRole('navigation', { name: 'Settings sections' });
+    const rows = Array.from(nav.querySelectorAll('a[data-section]')).map((a) => a.getAttribute('data-section'));
+    expect(rows).toEqual(['updates', 'appearance', 'notifications', 'automation', 'security']);
+  });
+
+  it('the index\'s two diagnostic rows follow the five sections and open their pages on a click; a modified click opens nothing here', () => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    navigate('/settings');
+    render(<><SettingsDataProvider active><SettingsScreen /></SettingsDataProvider><CommandLayer openNewSession={vi.fn()} /></>);
+    const nav = screen.getByRole('navigation', { name: 'Settings sections' });
+    expect(Array.from(nav.querySelectorAll('a[data-diagnostic]')).map((a) => a.getAttribute('href')))
+      .toEqual(['/settings/reader-lab', '/settings/measure-highlighting']);
+    expect(within(nav).getAllByRole('link')).toHaveLength(7);
+    for (const mod of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey'] as const) {
+      fireEvent.click(within(nav).getByRole('link', { name: /^Reader lab/ }), { [mod]: true });
+      expect(location.pathname, mod).toBe('/settings');
+    }
+    fireEvent.click(within(nav).getByRole('link', { name: /^Reader lab/ }));
+    expect(location.pathname).toBe('/settings/reader-lab');
+    navigate('/settings');
+    fireEvent.click(within(nav).getByRole('link', { name: /^Measure highlighting/ }));
+    expect(location.pathname).toBe('/settings/measure-highlighting');
+  });
+
+  it('LOADING state: the Automation page is Stall watch, Overrides in force (D-8382), Temp root collector, Shadow lanes (D-8274), Dispatches that never came back, Cleanup pause, Browser tools (D-8121), Roll idle sessions (D-7453), Auto memory for plain sessions (Overlord W1a), Stop leftovers (D-7902), Leftover processes (D-7994), Worktrees left behind (D-8114), Backups (D-7860), Work in transcript folders (D-7898), then Test box (D-7412), each a card under the page heading', async () => {
+    vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'dispatchAbandon').mockReturnValue(new Promise(() => {}));
+    await mount(swView());
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Automation']);
+    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent))
+      .toEqual([STALL_SECTION_TEXT.title, 'Overrides in force', 'Temp root collector', 'Shadow lanes', 'Dispatches that never came back', 'Cleanup pause', 'Browser tools', 'Roll idle sessions', 'Auto memory for plain sessions', 'Stop leftovers', 'Leftover processes', 'Worktrees left behind', 'Backups', 'Work in transcript folders', 'Test box']);
+  });
+
+  it('LANDED state (api.updates answered, so the Box token card renders): it renders on the Security page', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t7View());
+    renderSettings('security');
+    await screen.findByRole('heading', { name: 'Box token', level: 3 });
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Security']);
+  });
+
+  it('P1: pending is a skeleton, a failed first read says so, and a view renders — three states, never folded', async () => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'stallWatch').mockReturnValue(new Promise(() => {}));
+    renderSettings('automation');
+    expect(within(section()).getByRole('status', { name: 'Loading' })).toBeInTheDocument();
+    expect(within(section()).queryByText(STALL_SECTION_TEXT.unread)).toBeNull();
+    cleanup();
+    vi.spyOn(api, 'stallWatch').mockRejectedValue(new ApiError(500, { error: 'Internal Server Error' }));
+    renderSettings('automation');
+    expect(await within(section()).findByText(STALL_SECTION_TEXT.unread)).toBeInTheDocument();
+    expect(within(section()).queryByRole('status', { name: 'Loading' })).toBeNull();
+    expect(within(section()).queryByRole('radio')).toBeNull();
+  });
+
+  it('D-8339: a hold by a marker renders its name and remedy as words, and the card offers no control for it', async () => {
+    await mount(swView({ chosen: swChosen({ level: 'all' }), effective: swEffective({ level: 'off', source: 'held',
+      stages: swStages({ runs: false, checks: false, busyGate: false }), held: swHeld({ watchOff: true, gateStrict: true }),
+      next: { kind: 'none' } }) }));
+    const s = section();
+    expect(within(s).getByText(stallHeldLine('watchOff'))).toBeInTheDocument();
+    expect(within(s).getByText(stallHeldLine('gateStrict'))).toBeInTheDocument();
+    expect(within(s).getByText('While it stands, mail is delivered to idle sessions only.')).toBeInTheDocument();
+    for (const marker of ['stall-watch-disabled', 'mail-gate-strict']) {
+      expect(within(s).getByText(new RegExp(`^To lift it, remove ${marker} from the registry at a terminal`))).toBeInTheDocument();
+    }
+    // Terminal-only: no button, switch or checkbox; the only controls are the level radios and the quiet-time select.
+    expect(within(s).queryAllByRole('button', { hidden: true })).toEqual([]);
+    expect(within(s).queryAllByRole('switch', { hidden: true })).toEqual([]);
+    expect(within(s).queryAllByRole('checkbox', { hidden: true })).toEqual([]);
+    expect(within(s).getAllByRole('radio').length).toBe(STALL_LEVELS.length + 1);
+  });
+
+  it('P1: a later failed read keeps the landed view and adds the stale line', async () => {
+    const { read } = await mount(swView());
+    read.mockRejectedValue(new ApiError(500, { error: 'Internal Server Error' }));
+    await repoll();
+    expect(await within(section()).findByText(STALL_SECTION_TEXT.stale)).toBeInTheDocument();
+    expect(radio(`${STALL_FOLLOW_LABEL} (they say: ${STALL_LEVEL_TEXT.check.label})`)).toBeChecked();
+  });
+
+  it('P1b: a 404 not-found after a landed view replaces the whole body — no Now block, no radio checked', async () => {
+    const { read } = await mount(swView({ chosen: swChosen({ level: 'off' }), effective: swEffective({
+      level: 'off', source: 'chosen', stages: swStages({ runs: false, checks: false, busyGate: false }) }) }));
+    expect(radio(STALL_LEVEL_TEXT.off.label)).toBeChecked();
+    read.mockRejectedValue(new ApiError(404, { error: 'not-found' }));
+    await repoll();
+    expect(await within(section()).findByText(STALL_NOT_AVAILABLE_TEXT)).toBeInTheDocument();
+    expect(within(section()).queryByRole('radio')).toBeNull();
+    expect(within(section()).queryByText(STALL_SOURCE_TEXT.chosen)).toBeNull();
+    expect(within(section()).queryByText(STALL_LEVEL_TEXT.off.does)).toBeNull();
+  });
+
+  it('P1b: a 501 not-configured first read is the not-available text, not the unread line', async () => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'stallWatch').mockRejectedValue(new ApiError(501, { ok: false, error: 'not-configured' }));
+    renderSettings('automation');
+    expect(await within(section()).findByText(STALL_NOT_AVAILABLE_TEXT)).toBeInTheDocument();
+    expect(within(section()).queryByText(STALL_SECTION_TEXT.unread)).toBeNull();
+  });
+
+  it('renders the Now block, the Next step, the quiet time and the counts from the view', async () => {
+    await mount(swView());
+    const s = section();
+    expect(within(s).getByText(STALL_LEVEL_TEXT.check.label, { selector: 'p' })).toBeInTheDocument();
+    expect(within(s).getByText(STALL_SOURCE_TEXT.files)).toBeInTheDocument();
+    expect(within(s).getByText(`${STALL_NEXT_TEXT.lead} ${STALL_LEVEL_TEXT.alert.label}.`)).toBeInTheDocument();
+    expect(within(s).getByText(STALL_NEXT_TEXT.waitsOn)).toBeInTheDocument();
+    expect(within(s).getByText(STALL_STAGE_TEXT.alerts.gate)).toBeInTheDocument();
+    expect(within(s).getByText('2 h (built-in)')).toBeInTheDocument();
+    expect(within(s).getByText('Built-in: 2 h · Range: 30 min to 12 h')).toBeInTheDocument();
+    expect(within(s).getByText(STALL_WORDS.quietLine)).toBeInTheDocument();
+    expect(within(s).getByText('Last 48 h')).toBeInTheDocument();
+    expect(within(s).getByText(`${STALL_NOTICE_TEXT.checks} — 1 sent · 2 shadow`)).toBeInTheDocument();
+    expect(within(s).getByText(`${STALL_NOTICE_TEXT.pushes} — 4 sent · 0 shadow`)).toBeInTheDocument();
+    const select = within(s).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet });
+    expect((select as HTMLSelectElement).value).toBe('default');
+    expect(within(select).getAllByRole('option')).toHaveLength(24);
+  });
+
+  it('P10: next.kind none shows no Next step, and a step with an empty waitsOn shows no "Waits on:"', async () => {
+    const { read } = await mount(swView({ effective: swEffective({ next: { kind: 'none' } }) }));
+    expect(within(section()).queryByText(/^Next step:/)).toBeNull();
+    expect(within(section()).queryByText(STALL_NEXT_TEXT.top)).toBeNull();
+    read.mockResolvedValue(swView({ effective: swEffective({ next: { kind: 'step', level: 'alert', waitsOn: [] } }) }));
+    await repoll();
+    await within(section()).findByText(`${STALL_NEXT_TEXT.lead} ${STALL_LEVEL_TEXT.alert.label}.`);
+    expect(within(section()).queryByText(STALL_NEXT_TEXT.waitsOn)).toBeNull();
+  });
+
+  it('M6: an unmeasured reading renders "Unknown" and "they say: unknown", and no level is read as Off', async () => {
+    await mount(swView({ effective: { measured: false }, chosen: swChosen({ level: 'alert' }) }));
+    expect(within(section()).getByText(STALL_SECTION_TEXT.unknown)).toBeInTheDocument();
+    expect(radio(`${STALL_FOLLOW_LABEL} (${STALL_SECTION_TEXT.theySayUnknown})`)).not.toBeChecked();
+    expect(radio(STALL_LEVEL_TEXT.alert.label)).toBeChecked();
+    expect(within(section()).queryByText(STALL_LEVEL_TEXT.off.does)).toBeNull();
+  });
+
+  it('an absent or unreadable stored level checks no radio, and the quiet select shows no built-in it does not hold', async () => {
+    await mount(swView({ chosen: swChosen({ level: 'unreadable', quietMs: 'unreadable', updatedAt: null, stored: 'absent' }) }));
+    for (const r of within(section()).getAllByRole('radio')) expect(r).not.toBeChecked();
+    expect(within(section()).getByText(STALL_STORED_TEXT.absent)).toBeInTheDocument();
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+    expect(select.value).toBe('');
+  });
+
+  it('a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list (the server cannot send it today) selects none', async () => {
+    const select = (): HTMLSelectElement =>
+      within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+    const selectedText = (): string | null => select().selectedOptions[0]?.textContent ?? null;
+    const builtIn = swView().quiet.builtInMs;
+    expect(builtIn, 'the fixture\'s built-in is the 2 h the stored number below equals').toBe(2 * SW_H);
+    expect(quietChoices(swView()).some((c) => c.value === builtIn), 'the list omits the built-in step').toBe(false);
+
+    await mount(swView({ chosen: swChosen({ quietMs: builtIn }), quiet: { ...swView().quiet, effectiveMs: builtIn, source: 'chosen' } }));
+    const quietLine = fillStallText(STALL_SECTION_TEXT.chosenHere, { value: quietText(builtIn) });
+    expect(within(section()).getByText(quietLine, { selector: 'p' }), 'the quiet line says it is chosen here').toBeInTheDocument();
+    expect(select().value, 'the pinned number is the selected option').toBe(String(builtIn));
+    expect(selectedText(), 'and it reads plain, as every step reads, never "chosen here"').toBe(quietText(builtIn));
+    const builtInOption = within(select()).getByRole('option', { name: fillStallText(STALL_SECTION_TEXT.builtInOption, { value: quietText(builtIn) }) }) as HTMLOptionElement;
+    expect(builtInOption.selected, 'Built-in is present and not selected').toBe(false);
+    expect(builtInOption.value).toBe('default');
+    cleanup();
+
+    const offGrid = 75 * 60_000;
+    await mount(swView({ chosen: swChosen({ quietMs: offGrid }), quiet: { ...swView().quiet, effectiveMs: offGrid, source: 'chosen' } }));
+    expect(quietChoices(swView()).some((c) => c.value === offGrid), 'the off-grid value is not on the list').toBe(false);
+    expect(select().value, 'a value off the list that is not the built-in selects none').toBe('');
+    cleanup();
+  });
+
+  it('a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source default) the line reads built-in and the option still reads plain', async () => {
+    const builtIn = swView().quiet.builtInMs;
+    await mount(swView({ chosen: swChosen({ quietMs: builtIn }), quiet: { ...swView().quiet, effectiveMs: builtIn, source: 'default' }, fallback: { at: 5, reason: 'the resolver threw' } }));
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+    expect(within(section()).getByText(fillStallText(STALL_SECTION_TEXT.builtIn, { value: quietText(builtIn) }), { selector: 'p' }),
+      'the quiet line says the value is the built-in').toBeInTheDocument();
+    expect(select.value, 'the pinned number is still the selected option').toBe(String(builtIn));
+    expect(select.selectedOptions[0]?.textContent, 'and it reads plain, claiming no source').toBe(quietText(builtIn));
+  });
+
+  it('a pinned built-in number sits at its step\'s numeric place among the steps, between the step below and the step above', async () => {
+    const builtIn = swView().quiet.builtInMs;
+    await mount(swView({ chosen: swChosen({ quietMs: builtIn }), quiet: { ...swView().quiet, effectiveMs: builtIn, source: 'chosen' } }));
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+    const values = within(select).getAllByRole('option').map((o) => (o as HTMLOptionElement).value);
+    const { stepMs } = swView().quiet;
+    const at = values.indexOf(String(builtIn));
+    expect(values[0], 'Built-in stays first').toBe('default');
+    expect(values.indexOf(String(builtIn - stepMs)), 'the step below sits before it').toBeGreaterThan(0);
+    expect(at, 'it sits after the step below').toBeGreaterThan(values.indexOf(String(builtIn - stepMs)));
+    expect(at, 'and before the step above').toBeLessThan(values.indexOf(String(builtIn + stepMs)));
+    expect(values.slice(1).map(Number), 'the steps stay in numeric order').toEqual(values.slice(1).map(Number).sort((a, b) => a - b));
+  });
+
+  it('from a pinned built-in number, picking Built-in is one change that writes default exactly once', async () => {
+    const builtIn = swView().quiet.builtInMs;
+    await mount(swView({ chosen: swChosen({ quietMs: builtIn }), quiet: { ...swView().quiet, effectiveMs: builtIn, source: 'chosen' } }));
+    const write = vi.spyOn(api, 'setStallWatch').mockResolvedValue(swView());
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+    expect(select.value).toBe(String(builtIn));
+    fireEvent.change(select, { target: { value: 'default' } });
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+    expect(write).toHaveBeenNthCalledWith(1, { quietMs: 'default' });
+    await waitFor(() => expect(select.value).toBe('default'));
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it('P5: the run-less footnote is always shown — zero counts, and counts that could not be read', async () => {
+    const zero = swView({ notices: { ok: true, since: 0, windowMs: 48 * SW_H, counts: (['checks', 'wakes', 'reports', 'pushes'] as const)
+      .map((row) => ({ row, sent: 0, shadow: 0 })) } });
+    const { read } = await mount(zero);
+    expect(within(section()).getByText(STALL_RUNLESS_FOOTNOTE)).toBeInTheDocument();
+    read.mockResolvedValue(swView({ notices: { ok: false } }));
+    await repoll();
+    expect(await within(section()).findByText(STALL_SECTION_TEXT.countsFailed)).toBeInTheDocument();
+    expect(within(section()).getByText(STALL_RUNLESS_FOOTNOTE)).toBeInTheDocument();
+    expect(within(section()).queryByText('Last 48 h')).toBeNull();
+  });
+
+  it('P3: a write answered 2xx at once sends only the field moved, opens no sheet, and settles the reply', async () => {
+    const { read } = await mount(swView());
+    const write = vi.spyOn(api, 'setStallWatch').mockResolvedValue(
+      swView({ chosen: swChosen({ level: 'log' }), effective: swEffective({ source: 'chosen', level: 'log', stages: SW_LOG }) }));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    await waitFor(() => expect(radio(STALL_LEVEL_TEXT.log.label)).toBeChecked());
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith({ level: 'log' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('P3: the quiet select writes { quietMs } alone, and "Built-in" writes default', async () => {
+    await mount(swView({ chosen: swChosen({ quietMs: SW_H }), quiet: { ...swView().quiet, effectiveMs: SW_H, source: 'chosen' } }));
+    expect(within(section()).getByText('1 h (chosen here)')).toBeInTheDocument();
+    const write = vi.spyOn(api, 'setStallWatch').mockResolvedValue(swView());
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet });
+    expect((select as HTMLSelectElement).value).toBe(String(SW_H));
+    fireEvent.change(select, { target: { value: 'default' } });
+    await waitFor(() => expect(write).toHaveBeenCalledWith({ quietMs: 'default' }));
+    await waitFor(() => expect((select as HTMLSelectElement).value).toBe('default'));
+  });
+
+  it('P3: a 409 opens the sheet from its effect; Cancel sends nothing more and leaves the stored choice checked', async () => {
+    await mount(swView());
+    const write = vi.spyOn(api, 'setStallWatch').mockRejectedValue(swConfirm(swEffect({ turnsOn: ['alerts'],
+      before: swStages(), after: swStages({ alerts: true }) }), 'key-1'));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.alert.label));
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText(`Set the stall watch to ${STALL_LEVEL_TEXT.alert.label}?`)).toBeInTheDocument();
+    expect(within(sheet).getByText(swTurnsOn('alerts'))).toBeInTheDocument();
+    expect(within(sheet).getByText(STALL_CONFIRM_TEXT.due)).toBeInTheDocument();
+    expect(radio(STALL_LEVEL_TEXT.alert.label)).toBeDisabled();
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(radio(`${STALL_FOLLOW_LABEL} (they say: ${STALL_LEVEL_TEXT.check.label})`)).toBeChecked();
+    expect(radio(STALL_LEVEL_TEXT.alert.label)).not.toBeChecked();
+    expect(radio(STALL_LEVEL_TEXT.alert.label)).toBeEnabled();
+  });
+
+  it('P3: Set re-POSTs the same body with confirm equal to effectKey, and the 2xx settles', async () => {
+    await mount(swView());
+    const write = vi.spyOn(api, 'setStallWatch')
+      .mockRejectedValueOnce(swConfirm(swEffect({ turnsOn: ['alerts'], before: swStages(), after: swStages({ alerts: true }) }), 'key-1'))
+      .mockResolvedValueOnce(swView({ chosen: swChosen({ level: 'alert' }),
+        effective: swEffective({ level: 'alert', source: 'chosen', stages: swStages({ alerts: true }) }) }));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.alert.label));
+    const sheet = await screen.findByRole('dialog');
+    fireEvent.click(within(sheet).getByRole('button', { name: STALL_CONFIRM_TEXT.confirm }));
+    await waitFor(() => expect(radio(STALL_LEVEL_TEXT.alert.label)).toBeChecked());
+    expect(write).toHaveBeenNthCalledWith(1, { level: 'alert' });
+    expect(write).toHaveBeenNthCalledWith(2, { level: 'alert', confirm: 'key-1' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key', async () => {
+    await mount(swView());
+    const write = vi.spyOn(api, 'setStallWatch')
+      .mockRejectedValueOnce(swConfirm(swEffect({ turnsOn: ['alerts'], before: swStages(), after: swStages({ alerts: true }) }), 'key-1'))
+      .mockRejectedValueOnce(swConfirm(swEffect({ turnsOn: ['alerts'], before: swStages(), after: swStages({ alerts: true }),
+        filesExceed: true }), 'key-2'))
+      .mockResolvedValueOnce(swView({ chosen: swChosen({ level: 'alert' }),
+        effective: swEffective({ level: 'alert', source: 'chosen', stages: swStages({ alerts: true }) }) }));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.alert.label));
+    const first = await screen.findByRole('dialog');
+    expect(within(first).queryByText(STALL_FILES_EXCEED_TEXT)).toBeNull();
+    fireEvent.click(within(first).getByRole('button', { name: STALL_CONFIRM_TEXT.confirm }));
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(2));
+    const fresh = await screen.findByRole('dialog');
+    expect(await within(fresh).findByText(STALL_FILES_EXCEED_TEXT)).toBeInTheDocument();
+    fireEvent.click(within(fresh).getByRole('button', { name: STALL_CONFIRM_TEXT.confirm }));
+    await waitFor(() => expect(radio(STALL_LEVEL_TEXT.alert.label)).toBeChecked());
+    expect(write).toHaveBeenNthCalledWith(2, { level: 'alert', confirm: 'key-1' });
+    expect(write).toHaveBeenNthCalledWith(3, { level: 'alert', confirm: 'key-2' });
+  });
+
+  it('P2: a refused write says the server\'s detail under the level, amber, re-reads, and leaves the stored radio checked', async () => {
+    const { read } = await mount(swView());
+    vi.spyOn(api, 'setStallWatch').mockRejectedValue(
+      new ApiError(400, { ok: false, error: 'bad-request', detail: 'quietMs must be a 30-minute step' }));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.all.label));
+    await lineUnder(() => within(section()).getByRole('group', { name: STALL_SECTION_TEXT.level }),
+      'Nothing was changed: quietMs must be a 30-minute step', 'refusal');
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(radio(STALL_LEVEL_TEXT.all.label)).not.toBeChecked();
+    expect(radio(`${STALL_FOLLOW_LABEL} (they say: ${STALL_LEVEL_TEXT.check.label})`)).toBeChecked();
+  });
+
+  it('an unreadable 2xx says the write may have landed and re-reads; it installs nothing', async () => {
+    const { read } = await mount(swView());
+    vi.spyOn(api, 'setStallWatch').mockResolvedValue('unreadable');
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    expect(screen.queryByText(STALL_CONFIRM_TEXT.unanswered), 'a 2xx that was answered is not "did not answer"').toBeNull();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(radio(STALL_LEVEL_TEXT.log.label)).not.toBeChecked();
+  });
+
+  it('a 2xx body that fails the wire guard is the same unconfirmed outcome', async () => {
+    const { read } = await mount(swView());
+    vi.spyOn(api, 'setStallWatch').mockResolvedValue({ chosen: 'nope' } as unknown as StallWatchView);
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  });
+
+  it('a write whose answer never arrived says it was not confirmed, never "Saved" or "Nothing was changed", and re-reads', async () => {
+    const { read } = await mount(swView());
+    vi.spyOn(api, 'setStallWatch').mockRejectedValue(new TypeError('Failed to fetch'));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    expect(await screen.findByText(STALL_CONFIRM_TEXT.unanswered)).toBeInTheDocument();
+    expect(screen.queryByText(UNCONFIRMED_TEXT), 'the 2xx-unreadable line says Saved; a POST that never answered must not').toBeNull();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/^Nothing was changed/)).toBeNull();
+    expect(radio(STALL_LEVEL_TEXT.log.label)).not.toBeChecked();
+  });
+
+  it('P2 (D-4045): a 500 says the choice may or may not have been saved, with the cause the server named, and re-reads', async () => {
+    const { read } = await mount(swView());
+    const cause = 'stall settings unreadable, nothing written: disk gone';
+    vi.spyOn(api, 'setStallWatch').mockRejectedValue(
+      new ApiError(500, { statusCode: 500, error: 'Internal Server Error', message: cause }));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    expect(await screen.findByText(fillStallText(STALL_CONFIRM_TEXT.unconfirmed, { detail: cause }))).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  });
+
+  it('P2 (D-4045): a gateway 502 says, under the level, the choice may or may not have been saved, plain, never "Nothing was changed", and re-reads', async () => {
+    const { read } = await mount(swView());
+    vi.spyOn(api, 'setStallWatch').mockRejectedValue(new ApiError(502, 'Bad Gateway'));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    await lineUnder(() => within(section()).getByRole('group', { name: STALL_SECTION_TEXT.level }),
+      fillStallText(STALL_CONFIRM_TEXT.unconfirmed, { detail: 'request failed (502)' }), 'answer');
+    expect(screen.queryByText(/^Nothing was changed/)).toBeNull();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(radio(STALL_LEVEL_TEXT.log.label)).not.toBeChecked();
+  });
+
+  it('P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap', async () => {
+    const { read } = await mount(swView({ chosen: swChosen({ quietMs: SW_H }),
+      quiet: { ...swView().quiet, effectiveMs: SW_H, source: 'chosen' } }));
+    const write = vi.spyOn(api, 'setStallWatch')
+      .mockRejectedValueOnce(swConfirm(swEffect({ quietLowered: true, quietMs: { before: SW_H, after: SW_H / 2 } }), 'key-q'))
+      .mockRejectedValueOnce(new ApiError(400, { ok: false, error: 'bad-request', detail: 'quietMs must be a 30-minute step' }));
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: String(SW_H / 2) } });
+    const sheet = await screen.findByRole('dialog');
+    expect(select.value).toBe(String(SW_H));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(select.value).toBe(String(SW_H));
+    fireEvent.change(select, { target: { value: String(3 * SW_H) } });
+    expect(await screen.findByText('Nothing was changed: quietMs must be a 30-minute step')).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(select.value).toBe(String(SW_H));
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+
+  it('P3: the controls are locked while a write is in flight: a second choice sends nothing, and the answer unlocks them', async () => {
+    await mount(swView());
+    const flight = Promise.withResolvers<StallWatchView>();
+    const write = vi.spyOn(api, 'setStallWatch').mockReturnValue(flight.promise);
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet });
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    for (const r of within(section()).getAllByRole('radio')) expect(r).toBeDisabled();
+    expect(select).toBeDisabled();
+    fireEvent.change(select, { target: { value: String(SW_H) } });
+    fireEvent.click(radio(STALL_LEVEL_TEXT.all.label));
+    expect(write).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      flight.resolve(swView({ chosen: swChosen({ level: 'log' }),
+        effective: swEffective({ source: 'chosen', level: 'log', stages: SW_LOG }) }));
+      await flight.promise;
+    });
+    await waitFor(() => expect(radio(STALL_LEVEL_TEXT.log.label)).toBeChecked());
+    expect(radio(STALL_LEVEL_TEXT.all.label)).toBeEnabled();
+    expect(select).toBeEnabled();
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SettingsScreen — stall watch: source scans (P6, P9)', () => {
+  const sectionSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'StallWatchSection.tsx'), 'utf8');
+  const hookSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'useStallWatchView.ts'), 'utf8');
+  const textSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'settingsText.ts'), 'utf8');
+  const DEVICE_WORD = /\b(phones?|mobiles?|desktops?|tablets?|laptops?|iphones?|ipads?|android|touchscreens?|handsets?)\b/i;
+  const DEVICE_BRANCH = /matchMedia|useMediaQuery|userAgent|maxTouchPoints|ontouchstart|pointer:\s*coarse|innerWidth/;
+  const l0Strings = (v: unknown): string[] =>
+    typeof v === 'string' ? [v] : typeof v === 'object' && v !== null ? Object.values(v).flatMap(l0Strings) : [];
+
+  it('P6: the section and its hook have no device branch and no device word', () => {
+    // settingsText.ts holds the text the Settings screen and its sections share, so it is scanned with them. The
+    // Temp root collector's section, hook, words and the shared not-available helper are Settings files too
+    // (path-identity spec 2026-10-12 §5.7: no string names a device). So is the Roll idle sessions card (D-7453).
+    const srcOf = (...p: string[]): string => readFileSync(path.join(import.meta.dirname, '..', 'src', ...p), 'utf8');
+    for (const [name, src] of [['StallWatchSection.tsx', sectionSrc], ['useStallWatchView.ts', hookSrc], ['settingsText.ts', textSrc],
+      ['CollectLaneSection.tsx', srcOf('fleet', 'CollectLaneSection.tsx')], ['useCollectLaneView.ts', srcOf('fleet', 'useCollectLaneView.ts')],
+      ['collectLaneWords.ts', srcOf('fleet', 'collectLaneWords.ts')], ['notAvailable.ts', srcOf('lib', 'notAvailable.ts')],
+      ['RollIdleSection.tsx', srcOf('fleet', 'RollIdleSection.tsx')]]) {
+      expect(src, name).not.toMatch(DEVICE_BRANCH);
+      expect(src, name).not.toMatch(DEVICE_WORD);
+    }
+  });
+
+  it('P6: no L0 STALL_* string names a device, and the Notifications row says push', () => {
+    const strings = Object.entries(L0).filter(([k]) => k.startsWith('STALL_')).flatMap(([, v]) => l0Strings(v));
+    expect(strings.length).toBeGreaterThan(80);
+    for (const s of strings) expect(s).not.toMatch(DEVICE_WORD);
+    const screenSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'settings', 'NotificationsSection.tsx'), 'utf8');
+    expect(screenSrc).toContain('<span>Push notifications for this browser</span>');
+    expect(screenSrc).not.toMatch(/Phone notifications/);
+  });
+
+  it('P9: the section spells no level id — every level reaches it from L0', () => {
+    for (const level of STALL_LEVELS) expect(sectionSrc).not.toMatch(new RegExp(`['"\`]${level}['"\`]`));
+    expect(sectionSrc).toMatch(/STALL_LEVELS\.map/);
+  });
+});
+
+// ── Settings R1a: the release window of three (D-5505; settings spec §7, §4.1, §5.1) ──
+// The window over the whole screen: 22 releases, the five fixture fleets, the one halt line, and Updates' own "See
+// what's new". The pure cases are release-window.test.ts's; these hold what the screen renders from them.
+describe('SettingsScreen — the release window (D-5505)', () => {
+  const W_TAG = (n: number): string => `v0.1.${n}`;
+  const w22 = (over: (n: number) => Partial<ReleaseWire> = () => ({})): ReleaseWire[] =>
+    Array.from({ length: 22 }, (_, i) => t8Release(W_TAG(i + 1), { publishedAt: T8_T0 + i * 86_400_000, ...over(i + 1) }));
+  const wView = (releases: ReleaseWire[], nodes: NodeWire[], channel: 'stable' | 'dev' = 'stable'): UpdatesView => ({
+    catalogue: { lastOkAt: T8_T0, lastError: null },
+    releases,
+    nodes,
+    intent: [{ scope: FLEET_SCOPE, channel, pinnedTag: null, auto: 'off', notify: 'channel', setAt: T8_T0, setBy: 'test' }],
+  });
+  const at = (v: string | undefined, over: Partial<NodeWire> = {}): NodeWire[] => [
+    t8Node({ current: t8Stamp(v), highestVersion: v ?? null, ...over }),
+    t8Server({ current: t8Stamp(v), highestVersion: v ?? null, ...over }),
+  ];
+  const mount = async (v: UpdatesView): Promise<HTMLElement> => {
+    vi.spyOn(api, 'updates').mockResolvedValue(v);
+    renderSettings('updates');
+    return screen.findByRole('region', { name: 'Releases' });
+  };
+  const HALTED: Partial<NodeWire> = { update: { state: 'failed', target: 'v0.1.17', startedAt: T8_T0, detail: 'gate: unit not up' } };
+
+  it('no release group renders more than three rows, over all five fixture fleets', async () => {
+    const fleets: Array<[string, UpdatesView]> = [
+      ['uniform', wView(w22(), at(W_TAG(11)))],
+      ['mixed', wView(w22(), [t8Node({ current: t8Stamp(W_TAG(4)), highestVersion: W_TAG(4) }), t8Server({ current: t8Stamp(W_TAG(18)), highestVersion: W_TAG(18) })])],
+      ['unmeasured', wView(w22(), [t8Node({ current: t8Stamp(W_TAG(11)) }), t8Server({ measuredAt: null })])],
+      ['all macOS', wView(w22(), [t8Node({ os: 'darwin', role: null, label: 'mac', current: t8Stamp(W_TAG(3)) })])],
+      ['stable with newer dev', wView(w22((n) => (n > 2 ? { channel: 'dev' } : {})), at(W_TAG(2)))],
+    ];
+    for (const [name, v] of fleets) {
+      const region = await mount(v);
+      const groups = region.querySelectorAll('ul');
+      expect(groups.length, name).toBeGreaterThan(0);
+      for (const g of groups) expect(g.querySelectorAll('li[data-tag]').length, `${name}: ${g.getAttribute('aria-label')}`).toBeLessThanOrEqual(3);
+      expect(region.querySelectorAll('li[data-tag]').length, name).toBeLessThanOrEqual(7);
+      if (name === 'all macOS') {
+        expect(within(region).queryAllByRole('button'), 'an unmanaged fleet is moved on the Mac itself: no move button').toEqual([]);
+        expect(within(region).getByText('macOS nodes are updated on the Mac itself.')).toBeInTheDocument();
+      }
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('a withdrawn running release keeps its row and adds "Withdrawn by its publisher" in the withdrawn word\'s ink', async () => {
+    const region = await mount(wView(w22((n) => (n === 22 ? { yanked: true } : {})), at(W_TAG(22))));
+    const row = region.querySelector<HTMLElement>(`li[data-tag="${W_TAG(22)}"]`)!;
+    expect(within(row).getByText('Running on every managed node')).toBeInTheDocument();
+    expect(within(row).getByText('Withdrawn by its publisher')).toHaveClass('settings-release-refused');
+  });
+
+  it('the node-row Roll back is offered when its previousVersion is outside the window', async () => {
+    const region = await mount(wView(w22(), [
+      t8Node({ current: t8Stamp(W_TAG(22)), highestVersion: W_TAG(22), previousVersion: W_TAG(5) }),
+      t8Server({ current: t8Stamp(W_TAG(22)), highestVersion: W_TAG(22), previousVersion: W_TAG(6) }),
+    ]));
+    expect(region.querySelector(`li[data-tag="${W_TAG(5)}"]`), 'CONTROL: v0.1.5 is outside the window').toBeNull();
+    const nodes = screen.getByRole('list', { name: 'Nodes' });
+    const back = within(nodes.querySelector<HTMLElement>(`li[data-node-id="${T8_NODE_A}"]`)!).getByRole('button', { name: 'Roll back' });
+    expect(back).not.toBeDisabled();
+    fireEvent.click(back);
+    const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual([`1. fleet (fleet) ${W_TAG(22)} → ${W_TAG(5)}`]);
+  });
+
+  it('Refused by n of m nodes opens the refusals', async () => {
+    const region = await mount(wView(
+      w22((n) => (n === 21 ? { refused: [{ by: T8_NODE_B, at: T8_T0 }] } : {})), at(W_TAG(22)),
+    ));
+    const row = region.querySelector<HTMLElement>(`li[data-tag="${W_TAG(21)}"]`)!;
+    const said = within(row).getByText('Refused by 1 of 2 nodes');
+    const fold = said.closest('details');
+    expect(fold, 'the sentence is a disclosure').not.toBeNull();
+    expect(fold!.open).toBe(false);
+    fireEvent.click(said);
+    expect(fold!.open).toBe(true);
+    expect(fold!.textContent).toContain('server');
+  });
+
+  it('one halt line; every gated Install or Update names it in aria-describedby; absent when no gated control renders', async () => {
+    const [fleetRow, serverRow] = at(W_TAG(15), { desiredTag: W_TAG(17) });
+    const region = await mount(wView(w22(), [{ ...fleetRow!, ...HALTED }, serverRow!]));
+    const lines = screen.getAllByText(/^Update all waits:/);
+    expect(lines, 'one halt line on the page').toHaveLength(1);
+    const line = lines[0]!;
+    expect(line.textContent).toContain('Clear it with Ack on that node, under Nodes, after you have fixed what made it fail.');
+    const installs = within(region).getAllByRole('button', { name: 'Install' });
+    const updates = within(screen.getByRole('list', { name: 'Nodes' })).getAllByRole('button', { name: 'Update' });
+    expect(installs.length + updates.length).toBe(5);
+    for (const b of [...installs, ...updates]) {
+      expect(b).toBeDisabled();
+      expect(b.getAttribute('aria-describedby')).toBe(line.id);
+    }
+    // The halt line comes before every list it gates.
+    expect(line.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    cleanup();
+    vi.restoreAllMocks();
+    await mount(wView(w22(), at(W_TAG(22), { ...HALTED })));
+    expect(screen.queryByText(/^Update all waits:/), 'no Install and no pending Update on screen').toBeNull();
+  });
+
+  it("See what's new opens WhatsNewSheet with the waiting tag, and is absent when no tag is pending", async () => {
+    await mount(wView(w22(), at(W_TAG(20), { desiredTag: W_TAG(22) })));
+    expect(screen.getByText(`${W_TAG(22)} available`)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: "See what's new" }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(`What's new since ${W_TAG(20)}`)).toBeInTheDocument();
+    expect(within(dialog).getAllByRole('listitem').map((li) => li.getAttribute('data-tag')).filter(Boolean))
+      .toEqual([W_TAG(22), W_TAG(21)]);
+    cleanup();
+    vi.restoreAllMocks();
+    await mount(wView(w22(), at(W_TAG(20))));
+    expect(screen.queryByRole('button', { name: "See what's new" })).toBeNull();
+  });
+
+  it("the Newer count line's See every change opens the same sheet", async () => {
+    const region = await mount(wView(w22(), at(W_TAG(15), { desiredTag: W_TAG(22) })));
+    expect(within(region).getByText(/^4 more newer releases on this channel are not shown\./)).toBeInTheDocument();
+    fireEvent.click(within(region).getByRole('button', { name: `See every change since ${W_TAG(15)}` }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(`What's new since ${W_TAG(15)}`)).toBeInTheDocument();
+    expect(within(dialog).getByText('7 releases')).toBeInTheDocument();
+  });
+
+  it('the waiting release\'s Notes are open, the others folded', async () => {
+    const notes = 'Changes since v0.1.0\n\nNew\n- A thing #9\n';
+    const region = await mount(wView(w22(() => ({ notes })), at(W_TAG(18), { desiredTag: W_TAG(20) })));
+    const fold = (t: string): HTMLDetailsElement =>
+      region.querySelector<HTMLDetailsElement>(`li[data-tag="${t}"] details.settings-release-notes-fold`)!;
+    expect(fold(W_TAG(20)).open).toBe(true);
+    expect(fold(W_TAG(22)).open).toBe(false);
+    expect(fold(W_TAG(17)).open).toBe(false);
+  });
+
+  it("a push landing on /settings/updates has the waiting release's notes open (D-5504)", async () => {
+    // The release push's url (server/src/update/notify.ts's RELEASE_PUSH_URL, held there by update-notify.test.ts):
+    // the whole app opened on it, as push-sw.js opens a tap, lands on the Updates page with the notes open.
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    try {
+      const notes = 'Changes since v0.1.0\n\nNew\n- A thing #9\n';
+      vi.spyOn(api, 'updates').mockResolvedValue(wView(w22(() => ({ notes })), at(W_TAG(18), { desiredTag: W_TAG(20) })));
+      navigate('/settings/updates');
+      render(<App />);
+      const region = await screen.findByRole('region', { name: 'Updates' });
+      await within(region).findByRole('button', { name: 'Check now' });
+      const fold = region.querySelector<HTMLDetailsElement>(`li[data-tag="${W_TAG(20)}"] details.settings-release-notes-fold`);
+      expect(fold?.open).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // ── Verifier fix pass: pins for guards that had no red line, and the unmeasured state's truthful lead ──
+  it('a halted mixed fleet with no Newer row and no pending Update: the halt line shows, and Update all to hi is disabled and names it', async () => {
+    const region = await mount(wView(w22(), [
+      t8Node({ current: t8Stamp(W_TAG(4)), highestVersion: W_TAG(4), ...HALTED }),
+      t8Server({ current: t8Stamp(W_TAG(22)), highestVersion: W_TAG(22) }),
+    ]));
+    expect(within(region).queryByRole('button', { name: 'Install' }), 'CONTROL: nothing newer than hi').toBeNull();
+    for (const b of within(screen.getByRole('list', { name: 'Nodes' })).getAllByRole('button', { name: 'Update' })) {
+      expect(b.hasAttribute('aria-describedby'), 'CONTROL: no pending Update (each Update is idle, so not gated)').toBe(false);
+    }
+    const line = screen.getByText(/^Update all waits:/);
+    const all = within(region).getByRole('button', { name: `Update all to ${W_TAG(22)}` });
+    expect(all).toBeDisabled();
+    expect(all.getAttribute('aria-describedby')).toBe(line.id);
+  });
+
+  it('a halt whose only gated control is a node\'s pending Update (no newer release listed): the line shows and the Update names it', async () => {
+    const [f, sv] = at(W_TAG(22), { desiredTag: 'v0.1.23' });
+    const region = await mount(wView(w22(), [{ ...f!, ...HALTED }, sv!]));
+    expect(within(region).queryByRole('button', { name: 'Install' }), 'CONTROL: no Install in the window').toBeNull();
+    expect(within(region).queryByRole('button', { name: /^Update all/ }), 'CONTROL: not mixed').toBeNull();
+    const line = screen.getByText(/^Update all waits:/);
+    const updates = within(screen.getByRole('list', { name: 'Nodes' })).getAllByRole('button', { name: 'Update' });
+    expect(updates.length).toBeGreaterThan(0);
+    for (const b of updates) expect(b.getAttribute('aria-describedby')).toBe(line.id);
+  });
+
+  it('a Newer row at every managed node\'s floor: Install disabled and the floor line drawn for each node; the next row stays enabled', async () => {
+    const region = await mount(wView(w22(), at(W_TAG(19), { highestVersion: W_TAG(20) })));
+    const row20 = region.querySelector<HTMLElement>(`li[data-tag="${W_TAG(20)}"]`)!;
+    expect(within(row20).getByRole('button', { name: 'Install' })).toBeDisabled();
+    expect(within(row20).getByText(/^fleet was rolled back from this release\./)).toBeInTheDocument();
+    expect(within(row20).getByText(/^server was rolled back from this release\./)).toBeInTheDocument();
+    const row21 = region.querySelector<HTMLElement>(`li[data-tag="${W_TAG(21)}"]`)!;
+    expect(within(row21).getByRole('button', { name: 'Install' })).not.toBeDisabled();
+    expect(within(row21).queryByText(/was rolled back from this release/)).toBeNull();
+  });
+
+  it("Settings' See what's new, then the sheet's Update all, opens the move sheet for the waiting tag", async () => {
+    await mount(wView(w22(), at(W_TAG(20), { desiredTag: W_TAG(22) })));
+    fireEvent.click(screen.getByRole('button', { name: "See what's new" }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Update all' }));
+    const moves = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(moves).getAllByRole('listitem').map((li) => li.textContent).join(' ')).toContain(`${W_TAG(20)} → ${W_TAG(22)}`);
+  });
+
+  it("the measured window carries the 'What these mean' glossary; a row with no notes draws no Notes disclosure", async () => {
+    const region = await mount(wView(w22((n) => (n === 21 ? { notes: 'Changes since v0.1.20\n\nNew\n- A thing\n' } : {})), at(W_TAG(22))));
+    const glossary = within(region).getByText('What these mean');
+    expect(glossary.closest('details')).not.toBeNull();
+    expect(region.querySelector(`li[data-tag="${W_TAG(21)}"] details.settings-release-notes-fold`), 'CONTROL: a row with notes has one').not.toBeNull();
+    expect(region.querySelector(`li[data-tag="${W_TAG(20)}"] details.settings-release-notes-fold`)).toBeNull();
+    expect(region.querySelector(`li[data-tag="${W_TAG(22)}"] details.settings-release-notes-fold`)).toBeNull();
+  });
+
+  it('an empty catalogue draws no release window, and a halted mixed fleet then shows no halt line (nothing it gates is drawn)', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(wView([], [
+      t8Node({ current: t8Stamp(W_TAG(4)), highestVersion: W_TAG(4), ...HALTED }),
+      t8Server({ current: t8Stamp(W_TAG(9)), highestVersion: W_TAG(9) }),
+    ]));
+    renderSettings('updates');
+    await screen.findByRole('list', { name: 'Nodes' });
+    expect(screen.queryByRole('region', { name: 'Releases' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Update all to/ })).toBeNull();
+    expect(screen.queryByText(/^Update all waits:/)).toBeNull();
+  });
+
+  it('unmeasured because the channel is unread: no Roll back is drawn under "no rollback is offered" (D-5609)', async () => {
+    const region = await mount({ ...wView(w22(), at(W_TAG(22))), intent: [] });
+    expect(within(region).getByText('The channel could not be read, so no rollback is offered.')).toBeInTheDocument();
+    expect(region.querySelector(`li[data-tag="${W_TAG(21)}"]`), 'CONTROL: an older row is listed').not.toBeNull();
+    expect(within(region).queryAllByRole('button', { name: 'Roll back' })).toEqual([]);
+  });
+
+  it('unmeasured because a node has no measurement: the lead says so (not "has not reported a version"), and no Roll back is drawn', async () => {
+    const region = await mount(wView(w22(), [
+      t8Node({ current: t8Stamp(W_TAG(22)), highestVersion: W_TAG(22) }),
+      t8Server({ current: t8Stamp(W_TAG(22)), highestVersion: W_TAG(22), measuredAt: null }),
+    ]));
+    expect(within(region).getByText('server has not been measured yet, so no rollback is offered.')).toBeInTheDocument();
+    expect(within(region).queryAllByRole('button', { name: 'Roll back' })).toEqual([]);
+  });
+
+  it('unmeasured: a withdrawn newest release takes no slot and draws no Install (D-5608)', async () => {
+    const region = await mount(wView(w22((n) => (n === 22 ? { yanked: true } : {})), [
+      t8Node({ current: t8Stamp(W_TAG(10)), highestVersion: W_TAG(10) }),
+      t8Server({ current: t8Stamp(undefined), highestVersion: null }),
+    ]));
+    expect(region.querySelector(`li[data-tag="${W_TAG(22)}"]`)).toBeNull();
+    expect([...region.querySelectorAll('li[data-tag]')].map((li) => li.getAttribute('data-tag'))).toEqual([W_TAG(21), W_TAG(20), W_TAG(19)]);
+  });
+
+  it('a focused summary link unfolds its line instead of scrolling it blank; each disclosure carries a marker that turns when open', () => {
+    const focus = ruleIn(fleetCss, '.settings-release-date.settings-release-summary:focus-within');
+    expect(declValue(focus, 'white-space')).toBe('normal');
+    expect(declValue(focus, 'overflow')).toBe('visible');
+    const marker = ruleIn(fleetCss, '.settings-release-fold > summary::before');
+    expect(declValue(marker, 'border-color') ?? declValue(marker, 'border-right')).toMatch(/currentColor/);
+    expect(declValue(ruleIn(fleetCss, '.settings-release-fold[open] > summary::before'), 'transform')).toMatch(/rotate/);
+    expect(declValue(ruleIn(fleetCss, '.settings-release-fold > summary::-webkit-details-marker'), 'display')).toBe('none');
+  });
+
+  it('TEXT IS TEXT: the notes surfaces carry no raw-HTML path, no <pre> of their own in the rows, and exactly one link — the TextLink built by pullUrl', () => {
+    const src = (...p: string[]): string => readFileSync(path.join(import.meta.dirname, '..', 'src', ...p), 'utf8');
+    const files: Array<[string, string]> = [
+      ['updates.tsx', src('screens', 'updates.tsx')],
+      ['ReleaseNotes.tsx', src('fleet', 'ReleaseNotes.tsx')],
+      ['WhatsNewSheet.tsx', src('fleet', 'WhatsNewSheet.tsx')],
+    ];
+    let links = 0;
+    for (const [name, s] of files) {
+      expect(s, name).not.toMatch(/dangerouslySetInnerHTML/);
+      expect(s, name).not.toMatch(/\binnerHTML\b/);
+      expect(s, name).not.toMatch(/<a[\s>]/);
+      links += (s.match(/<TextLink\b/g) ?? []).length;
+    }
+    expect(links).toBe(1);
+    expect(src('fleet', 'ReleaseNotes.tsx')).toMatch(/const url = pullUrl\(source, p\.pr\);[\s\S]*<TextLink key=\{i\} href=\{url\}/);
+    // The rows render notes through ReleaseNotes, never a <pre> of their own.
+    expect(files[0]![1]).not.toMatch(/<pre[\s>]/);
+    expect(files[0]![1]).toMatch(/<ReleaseNotes notes=\{r\.notes\} source=\{source\} \/>/);
+  });
+});
+
+// Settings spec §6.3 (D-5507): the node row's Ack opens `AckConfirm`, the one confirm beside `canAck`, `ackBranch`
+// and `sendAck`, before any request. Cancel posts nothing and holds the focus; the commit posts once; closing gives
+// the focus back. The copy and the button come from `ackBranch`, and the refusals Ack forgets are named whatever
+// the branch, because `ackNode` clears every refusal the node holds.
+describe('SettingsScreen — Ack is confirmed (D-5507)', () => {
+  const view = (nodes: NodeWire[], releases: ReleaseWire[] = [t9Release('v0.0.9')]): UpdatesView => ({
+    catalogue: { lastOkAt: T9_T0, lastError: null },
+    releases,
+    nodes,
+    intent: [{ scope: FLEET_SCOPE, channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: T9_T0, setBy: 'test' }],
+  });
+  const renderNodes = async (nodes: NodeWire[], releases?: ReleaseWire[]) => {
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(view(nodes, releases));
+    renderSettings('updates', { toasts: true });
+    const list = await screen.findByRole('list', { name: 'Nodes' });
+    const row = list.querySelector<HTMLElement>(`li[data-node-id="${T9_NODE_A}"]`)!;
+    return { list, row, updates };
+  };
+  const settle = async (): Promise<void> => { await act(async () => { await new Promise((r) => setTimeout(r, 20)); }); };
+  const FAILED = { state: 'failed', target: 'v0.0.10', startedAt: T9_T0, detail: null } as const;
+  const REQUEST = { tag: 'v0.0.10', kind: 'update', at: T9_T0 } as const;
+
+  it('the trigger opens a confirm; Cancel posts nothing; Cancel has the focus; closing returns focus to the trigger', async () => {
+    const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: t9Node() });
+    const { row } = await renderNodes([t9Node({ update: FAILED })]);
+    const trigger = within(row).getByRole('button', { name: 'Ack' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const sheet = await screen.findByRole('dialog');
+    await settle();
+    const cancel = within(sheet).getByRole('button', { name: 'Cancel' });
+    expect(document.activeElement, 'Cancel has the focus').toBe(cancel);
+    expect(ack, 'nothing is sent before the commit').not.toHaveBeenCalled();
+    fireEvent.click(cancel);
+    await settle();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(ack, 'Cancel posts nothing').not.toHaveBeenCalled();
+    expect(document.activeElement, 'closing returns focus to the trigger').toBe(trigger);
+  });
+
+  it('the commit posts once, and re-polls', async () => {
+    const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: t9Node() });
+    const { row, updates } = await renderNodes([t9Node({ update: FAILED })]);
+    const before = updates.mock.calls.length;
+    fireEvent.click(within(row).getByRole('button', { name: 'Ack' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Ack' }));
+    expect(ack.mock.calls).toEqual([[T9_NODE_A]]);
+    await waitFor(() => expect(updates.mock.calls.length).toBeGreaterThan(before));
+    expect(ack).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed move: "Ack fleet\'s failed move?", button "Ack"', async () => {
+    const { row } = await renderNodes([t9Node({ update: FAILED })]);
+    fireEvent.click(within(row).getByRole('button', { name: 'Ack' }));
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText("Ack fleet's failed move?")).toBeInTheDocument();
+    expect(within(sheet).getByText('It returns to idle.')).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Ack' })).toBeInTheDocument();
+  });
+
+  it('the request-only branch: "Withdraw the request on fleet?", button "Withdraw the request", nothing moves', async () => {
+    const { row } = await renderNodes([t9Node({ request: REQUEST })]);
+    fireEvent.click(within(row).getByRole('button', { name: 'Ack' }));
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText('Withdraw the request on fleet?')).toBeInTheDocument();
+    expect(within(sheet).getByText('The request to update to v0.0.10 is cleared, and nothing moves.')).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Withdraw the request' })).toHaveClass('btn-danger');
+    expect(within(sheet).queryByText(/forgets/)).toBeNull();
+  });
+
+  it('request plus refusals names the refusals', async () => {
+    const { row } = await renderNodes([t9Node({ request: REQUEST })], [t9Release('v0.0.10', { refused: [{ by: T9_NODE_A, at: T9_T0 }] })]);
+    fireEvent.click(within(row).getByRole('button', { name: 'Ack' }));
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByRole('button', { name: 'Withdraw the request' })).toBeInTheDocument();
+    expect(within(sheet).getByText(
+      'It also forgets that it refused v0.0.10. With auto-install on, the server may try it again on its next check.',
+    )).toBeInTheDocument();
+  });
+
+  it('a refusal-only node names the refusals', async () => {
+    const { row } = await renderNodes([t9Node()], [t9Release('v0.0.10', { refused: [{ by: T9_NODE_A, at: T9_T0 }] })]);
+    fireEvent.click(within(row).getByRole('button', { name: 'Ack' }));
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText("Clear fleet's refusals?")).toBeInTheDocument();
+    expect(within(sheet).getByText(
+      'It forgets that it refused v0.0.10. With auto-install on, the server may try it again on its next check.',
+    )).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Ack' })).toBeInTheDocument();
+  });
+
+  it('in a row, no danger-ghost precedes a ghost (the release rows and the node rows)', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view(
+      [t9Node({ previousVersion: 'v0.0.8', desiredTag: 'v0.0.10', update: FAILED }), t9Server({ previousVersion: 'v0.0.8' })],
+      [t9Release('v0.0.10'), t9Release('v0.0.9'), t9Release('v0.0.8')],
+    ));
+    renderSettings('updates', { toasts: true });
+    const releases = await screen.findByRole('region', { name: 'Releases' });
+    const nodes = await screen.findByRole('list', { name: 'Nodes' });
+    const groups = [
+      ...releases.querySelectorAll<HTMLElement>('.settings-release-actions'),
+      ...nodes.querySelectorAll<HTMLElement>('.settings-node-actions'),
+    ];
+    expect(groups.length).toBeGreaterThan(2);
+    let sawDanger = 0;
+    for (const g of groups) {
+      const tones = [...g.querySelectorAll<HTMLElement>('.settings-move')]
+        .map((b) => (b.classList.contains('btn-danger-ghost') ? 'danger' : 'ghost'));
+      const firstDanger = tones.indexOf('danger');
+      if (firstDanger >= 0) sawDanger += 1;
+      expect(firstDanger === -1 || !tones.slice(firstDanger).includes('ghost'), tones.join(' ')).toBe(true);
+    }
+    expect(sawDanger, 'the case reads rows that hold a danger action').toBeGreaterThan(0);
+    const nodeTones = [...nodes.querySelector<HTMLElement>(`li[data-node-id="${T9_NODE_A}"] .settings-node-actions`)!
+      .querySelectorAll<HTMLElement>('.settings-move')].map((b) => b.textContent);
+    expect(nodeTones).toEqual(['Update', 'Roll back', 'Ack']);
+  });
+});
+
+// ── Settings Task R1c: the words, the notes and the result lines (D-5503's words, D-5507's results) ──────────────
+describe('SettingsScreen — the words, the notes and the result lines (settings Task R1c)', () => {
+  afterEach(() => { Reflect.deleteProperty(document, 'visibilityState'); });
+
+  const updatesView = (over: Partial<UpdatesView> = {}): UpdatesView => ({
+    catalogue: { lastOkAt: T8_T0, lastError: null },
+    releases: [t8Release('v0.0.10')],
+    nodes: [t8Node({ current: t8Stamp('v0.0.9') }), t8Server({ current: t8Stamp('v0.0.9') })],
+    intent: [{ scope: FLEET_SCOPE, channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: T8_T0, setBy: 'test' }],
+    ...over,
+  });
+  const mountUpdates = async (v: UpdatesView = updatesView()): Promise<HTMLElement> => {
+    vi.spyOn(api, 'updates').mockResolvedValue(v);
+    renderSettings('updates', { toasts: true });
+    const region = screen.getByRole('region', { name: 'Updates' });
+    await within(region).findByRole('button', { name: 'Check now' });
+    return region;
+  };
+
+  it("the labels read spec §11.2's words: auto-install, announce, channel and the macOS row", () => {
+    expect(AUTO_LABELS).toEqual({ off: 'Off', stable: 'On the Stable channel only', channel: 'On any channel' });
+    expect(NOTIFY_LABELS).toEqual({ channel: "Every release on the fleet's channel", stable: 'Stable releases only', off: 'None' });
+    expect(CHANNEL_SENTENCES).toEqual({ stable: 'Stable', dev: 'Dev' });
+    expect(CHANNEL_NOTES).toEqual({ stable: 'Releases promoted only after they have baked.', dev: 'Every merge that changes the build, minutes after it lands.' });
+    expect(AUTO_NOTES).toEqual({
+      off: 'Nothing installs until you press Install or Update.',
+      stable: 'Installs each new stable release by itself. While the channel is Dev, nothing installs by itself.',
+      channel: 'Installs each new release on the chosen channel by itself, Dev included.',
+    });
+    expect(NOTIFICATIONS_TEXT.announceLegend).toBe('Announce new releases');
+  });
+
+  it('each Channel and Auto-install option carries its note under it, as its description, outside its name', async () => {
+    const region = await mountUpdates();
+    for (const c of ['stable', 'dev'] as const) {
+      const r = within(region).getByRole('radio', { name: CHANNEL_SENTENCES[c] });
+      expect(r).toHaveAccessibleDescription(CHANNEL_NOTES[c]);
+      const note = within(region).getByText(CHANNEL_NOTES[c]);
+      expect(note).toHaveClass('settings-note');
+      expect(r.closest('label')!.nextElementSibling, 'the note sits under its option').toBe(note);
+    }
+    for (const m of AUTO_MODES) {
+      expect(within(region).getByRole('radio', { name: AUTO_LABELS[m] })).toHaveAccessibleDescription(AUTO_NOTES[m]);
+    }
+  });
+
+  it("Updates says what each control does and when you would use it (spec §5.1)", async () => {
+    const region = await mountUpdates();
+    for (const line of [
+      UPDATES_TEXT.channelPurpose, UPDATES_TEXT.channelWhen, UPDATES_TEXT.autoPurpose, UPDATES_TEXT.autoWhen,
+      UPDATES_TEXT.checkNowNote, UPDATES_TEXT.checkNowWhen, UPDATES_TEXT.nodesLead, CATALOGUE_EXPLAIN_TEXT,
+    ]) expect(within(region).getByText(line), line).toBeInTheDocument();
+    // Settings Task R2b2 (D-5503): what a control does stays the secondary note; when you would use it is the card's
+    // tertiary when-line; the node lead is the Nodes card's purpose line.
+    for (const line of [UPDATES_TEXT.channelPurpose, UPDATES_TEXT.autoPurpose, UPDATES_TEXT.checkNowNote, CATALOGUE_EXPLAIN_TEXT]) {
+      expect(within(region).getByText(line), line).toHaveClass('settings-note');
+    }
+    for (const line of [UPDATES_TEXT.channelWhen, UPDATES_TEXT.autoWhen, UPDATES_TEXT.checkNowWhen]) {
+      expect(within(region).getByText(line), line).toHaveClass('settings-when');
+    }
+    expect(isPurposeLine(within(region).getByText(UPDATES_TEXT.nodesLead))).toBe(true);
+  });
+
+  it("the catalogue line's interval is the server's own CATALOGUE_POLL_INTERVAL_MS", () => {
+    const src = readFileSync(path.join(import.meta.dirname, '..', '..', 'server', 'src', 'laneSchedule.ts'), 'utf8');
+    const m = /export const CATALOGUE_POLL_INTERVAL_MS = (\d+) \* 60_000;/.exec(src);
+    expect(m, 'the server still spells the interval in minutes').not.toBeNull();
+    expect(CATALOGUE_CHECK_MINUTES).toBe(Number(m![1]));
+    expect(CATALOGUE_EXPLAIN_TEXT).toBe(`The server checks GitHub for new releases every ${m![1]} minutes.`);
+  });
+
+  it("See what's new carries its note and when-line while a release is waiting", async () => {
+    const region = await mountUpdates(updatesView({
+      nodes: [
+        t8Node({ current: t8Stamp('v0.0.9'), highestVersion: 'v0.0.9', desiredTag: 'v0.0.10' }),
+        t8Server({ current: t8Stamp('v0.0.9'), highestVersion: 'v0.0.9', desiredTag: 'v0.0.10' }),
+      ],
+      releases: [t8Release('v0.0.10'), t8Release('v0.0.9')],
+    }));
+    expect(within(region).getByRole('button', { name: "See what's new" })).toBeInTheDocument();
+    expect(within(region).getByText(UPDATES_TEXT.whatsNewNote)).toHaveClass('settings-note');
+    expect(within(region).getByText(UPDATES_TEXT.whatsNewWhen)).toHaveClass('settings-when');
+  });
+
+  it('a node row notes its Update and Roll back where each is offered', async () => {
+    const region = await mountUpdates(updatesView({
+      nodes: [t8Node({ current: t8Stamp('v0.0.10'), previousVersion: 'v0.0.9' }), t8Server({ current: t8Stamp('v0.0.10') })],
+      releases: [t8Release('v0.0.10'), t8Release('v0.0.9')],
+    }));
+    const row = region.querySelector<HTMLElement>(`li[data-node-id="${T8_NODE_A}"]`)!;
+    expect(within(row).getByText(nodeRollbackNote('v0.0.9'))).toHaveClass('settings-note');
+    expect(within(row).queryByText(/^Moves this node to /), 'no Update offered, so no Update note').toBeNull();
+  });
+
+  it("Ack's note follows its branch, and every branch adds when to use it", () => {
+    const failed = t9Node({ update: { state: 'failed', target: 'v0.0.10', startedAt: T9_T0, detail: null } });
+    const request = t9Node({ request: { tag: 'v0.0.10', kind: 'update', at: T9_T0 } });
+    const refusal = t9Node();
+    const refused = [t9Release('v0.0.10', { refused: [{ by: T9_NODE_A, at: T9_T0 }] } as Partial<ReleaseWire>)];
+    const after = ' Use it after you have fixed what made the move fail.';
+    expect(ackNote(failed, [])).toBe(`Clears this node's failed move, so it returns to idle.${after}`);
+    expect(ackNote(request, [])).toBe(`Withdraws the request standing on this node (update to v0.0.10).${after}`);
+    expect(ackNote(refusal, refused)).toBe(`Makes this node forget the releases it refused (v0.0.10).${after}`);
+    expect(ackNote(t9Node(), []), 'no Ack, no note').toBeNull();
+  });
+
+  it('Check now: a refusal says its sentence under the button, amber, not a toast', async () => {
+    vi.spyOn(api, 'refreshUpdates').mockRejectedValue(new ApiError(503, { ok: false, error: 'journal-unwritable' }));
+    const region = await mountUpdates();
+    const check = within(region).getByRole('button', { name: 'Check now' });
+    fireEvent.click(check);
+    await lineUnder(() => check, updateErrorText(new ApiError(503, { ok: false, error: 'journal-unwritable' })), 'refusal');
+  });
+
+  it('a move whose 202 lands says "Requested. The nodes report back within a minute." under the control that opened it', async () => {
+    vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [T8_NODE_A, T8_NODE_B], skipped: [] });
+    const region = await mountUpdates();
+    const row = region.querySelector<HTMLElement>('li[data-tag="v0.0.10"]')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update v0.0.10' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(MOVE_REQUESTED_TEXT).toBe('Requested. The nodes report back within a minute.');
+    await lineUnder(() => region.querySelector('li[data-tag="v0.0.10"] .settings-release-actions')!, MOVE_REQUESTED_TEXT, 'answer');
+  });
+
+  it('a confirm closed while the request was in flight still toasts', async () => {
+    let answer!: (v: { ok: true; requested: string[]; skipped: [] }) => void;
+    vi.spyOn(api, 'applyUpdate').mockReturnValue(new Promise((r) => { answer = r; }));
+    const region = await mountUpdates();
+    const row = region.querySelector<HTMLElement>('li[data-tag="v0.0.10"]')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update v0.0.10' }));
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await act(async () => { answer({ ok: true, requested: [T8_NODE_A, T8_NODE_B], skipped: [] }); });
+    expect(await screen.findByText(MOVE_REQUESTED_TEXT, { selector: '.toast' })).toBeInTheDocument();
+    expect(region.querySelector('.settings-result'), 'the sheet that asked is gone, so no line').toBeNull();
+  });
+
+  it('Announce new releases carries its purpose and when-line; This browser says what push does', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(updatesView());
+    renderSettings('notifications');
+    const group = await screen.findByRole('group', { name: NOTIFICATIONS_TEXT.announceLegend });
+    const page = screen.getByRole('region', { name: 'Notifications' });
+    // Settings Task R2b2: each is its card's purpose line, and each when-line is the card's tertiary step.
+    expect(isPurposeLine(within(page).getByText(NOTIFICATIONS_TEXT.announcePurpose))).toBe(true);
+    expect(within(group.closest('section')!).getByText(NOTIFICATIONS_TEXT.announcePurpose)).toBeInTheDocument();
+    expect(within(page).getByText(NOTIFICATIONS_TEXT.announceWhen)).toHaveClass('settings-when');
+    expect(isPurposeLine(within(page).getByText(NOTIFICATIONS_TEXT.browserPurpose))).toBe(true);
+    expect(within(page).getByText(NOTIFICATIONS_TEXT.browserWhen)).toHaveClass('settings-when');
+  });
+
+  // ── Stall watch (spec §5.4) ──
+  const swSection = (): HTMLElement =>
+    screen.getByRole('heading', { name: STALL_SECTION_TEXT.title, hidden: true }).closest('section')!;
+  const swMount = async (first: StallWatchView): Promise<HTMLElement> => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'stallWatch').mockResolvedValue(first);
+    renderSettings('automation', { toasts: true });
+    return within(swSection()).findByRole('group', { name: STALL_SECTION_TEXT.level });
+  };
+  const swRadio = (name: string): HTMLElement => within(swSection()).getByRole('radio', { name });
+
+  it('every stall level has a note, and the notes are the plan\'s table', () => {
+    expect(STALL_LEVEL_NOTE).toEqual({
+      off: 'Nothing runs.',
+      log: 'Records what it would send, and sends nothing.',
+      check: 'Mails a check to a worker quiet past the quiet time.',
+      alert: 'Tells its coordinator, then you, when a check goes unanswered, and tells you about other long waits.',
+      deliver: 'Delivers mail to a session whose main turn has ended, while its background work runs.',
+      all: 'Adds checks for workers that died, froze or failed, and for stuck mail.',
+    });
+    expect(Object.keys(STALL_LEVEL_NOTE)).toEqual(STALL_LEVELS);
+    expect(STALL_WORDS.followNote).toBe('Uses the arming files set by hand on the fleet box, as before this setting existed.');
+  });
+
+  it('the level reads its purpose, its lead, and each option with its note as its description', async () => {
+    const group = await swMount(swView());
+    expect(isPurposeLine(within(swSection()).getByText(STALL_WORDS.purpose)), 'the card\'s purpose line').toBe(true);
+    expect(within(group).getByText(STALL_WORDS.levelLead)).toHaveClass('settings-note');
+    for (const level of STALL_LEVELS) {
+      expect(swRadio(STALL_LEVEL_TEXT[level].label)).toHaveAccessibleDescription(STALL_LEVEL_NOTE[level]);
+    }
+    expect(swRadio(`${STALL_FOLLOW_LABEL} (they say: ${STALL_LEVEL_TEXT.check.label})`), 'the default keeps its live clause')
+      .toHaveAccessibleDescription(STALL_WORDS.followNote);
+  });
+
+  it('the full sentence shows for the checked or focused option only', async () => {
+    const group = await swMount(swView({ chosen: swChosen({ level: 'log' }) }));
+    const full = Array.from(swSection().querySelectorAll<HTMLElement>('[data-stall-full]'));
+    expect(full.map((el) => el.textContent), 'one sentence, the checked option\'s').toEqual([STALL_LEVEL_TEXT.log.does]);
+    expect(group).toHaveAccessibleDescription(STALL_LEVEL_TEXT.log.does);
+    for (const level of STALL_LEVELS.filter((l) => l !== 'log')) {
+      expect(within(group).queryByText(STALL_LEVEL_TEXT[level].does), level).toBeNull();
+    }
+  });
+
+  it('the full sentence shows for the focused option while the keyboard moves', async () => {
+    const group = await swMount(swView({ chosen: swChosen({ level: 'log' }) }));
+    const full = (): HTMLElement[] => Array.from(swSection().querySelectorAll<HTMLElement>('[data-stall-full]'));
+    act(() => { swRadio(STALL_LEVEL_TEXT.deliver.label).focus(); });
+    expect(full().map((el) => el.textContent)).toEqual([STALL_LEVEL_TEXT.deliver.does]);
+    act(() => { swRadio(STALL_LEVEL_TEXT.all.label).focus(); });
+    expect(full().map((el) => el.textContent)).toEqual([STALL_LEVEL_TEXT.all.does]);
+    act(() => { (document.activeElement as HTMLElement).blur(); });
+    expect(full().map((el) => el.textContent), 'back to the checked one once the focus leaves').toEqual([STALL_LEVEL_TEXT.log.does]);
+    expect(group).toBeInTheDocument();
+  });
+
+  it("Quiet time is one line, its bounds from the wire, and its select capped at 320 px", async () => {
+    await swMount(swView());
+    const s = swSection();
+    expect(within(s).getByText(STALL_WORDS.quietLine)).toHaveClass('settings-note');
+    const v = swView().quiet;
+    expect(within(s).getByText(stallQuietBoundsText(quietText(v.builtInMs), quietText(v.minMs), quietText(v.maxMs)))).toHaveClass('settings-note');
+    expect(within(s).queryByText(STALL_QUIET_NOTE), 'the paragraph became one line').toBeNull();
+    const select = within(s).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet });
+    expect(select.style.maxWidth).toBe('320px');
+    expect(select.getAttribute('style') ?? '', 'no colour rides on the cap').not.toMatch(/color/);
+  });
+
+  it("a Quiet time write's refusal sits directly under the select, never under the level", async () => {
+    await swMount(swView());
+    vi.spyOn(api, 'setStallWatch').mockRejectedValue(
+      new ApiError(400, { ok: false, error: 'bad-request', detail: 'quietMs must be a 30-minute step' }));
+    const select = within(swSection()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet });
+    fireEvent.change(select, { target: { value: String(3 * SW_H) } });
+    await lineUnder(() => within(swSection()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }),
+      'Nothing was changed: quietMs must be a 30-minute step', 'refusal');
+    const afterLevel = within(swSection()).getByRole('group', { name: STALL_SECTION_TEXT.level }).nextElementSibling;
+    expect(afterLevel?.classList.contains('settings-result') ?? false, 'no line under the level').toBe(false);
+  });
+
+  it('a cancelled confirm or a refused write leaves the full sentence on the checked level, never the tapped one', async () => {
+    await swMount(swView({ chosen: swChosen({ level: 'check' }) }));
+    const full = (): Array<string | null> =>
+      Array.from(swSection().querySelectorAll<HTMLElement>('[data-stall-full]')).map((el) => el.textContent);
+    vi.spyOn(api, 'setStallWatch')
+      .mockRejectedValueOnce(swConfirm(swEffect({ turnsOn: ['wave2'], before: swStages(), after: swStages({ wave2: true }) }), 'key-all'))
+      .mockRejectedValueOnce(new ApiError(400, { ok: false, error: 'bad-request', detail: 'refused' }));
+    // A tap focuses the option, then picks it; the 409 opens the confirm, and Cancel keeps Check.
+    act(() => { swRadio(STALL_LEVEL_TEXT.all.label).focus(); });
+    fireEvent.click(swRadio(STALL_LEVEL_TEXT.all.label));
+    const sheet = await screen.findByRole('dialog');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(swRadio(STALL_LEVEL_TEXT.check.label)).toBeChecked();
+    expect(full(), 'the sentence is the checked level\'s after Cancel').toEqual([STALL_LEVEL_TEXT.check.does]);
+    // The keyboard's path: the arrow focuses and picks Alert; the refusal keeps Check, and so does the sentence.
+    act(() => { swRadio(STALL_LEVEL_TEXT.alert.label).focus(); });
+    fireEvent.click(swRadio(STALL_LEVEL_TEXT.alert.label));
+    await within(swSection()).findByText('Nothing was changed: refused');
+    await waitFor(() => expect(swRadio(STALL_LEVEL_TEXT.check.label)).not.toBeDisabled());
+    expect(swRadio(STALL_LEVEL_TEXT.check.label)).toBeChecked();
+    expect(full(), 'the sentence is the checked level\'s after a refusal').toEqual([STALL_LEVEL_TEXT.check.does]);
+  });
+
+  it('a move answer appears under exactly one opener: the release that opened it, no other row, no node', async () => {
+    vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [T8_NODE_A, T8_NODE_B], skipped: [] });
+    const region = await mountUpdates(updatesView({ releases: [t8Release('v0.0.11'), t8Release('v0.0.10')] }));
+    const row = region.querySelector<HTMLElement>('li[data-tag="v0.0.10"]')!;
+    expect(within(region.querySelector<HTMLElement>('li[data-tag="v0.0.11"]')!).getByRole('button', { name: 'Install' }))
+      .toBeInTheDocument();
+    fireEvent.click(within(row).getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update v0.0.10' }));
+    await lineUnder(() => region.querySelector('li[data-tag="v0.0.10"] .settings-release-actions')!, MOVE_REQUESTED_TEXT, 'answer');
+    expect(region.querySelector('li[data-tag="v0.0.11"] .settings-result'), 'no line under the other release').toBeNull();
+    expect(region.querySelectorAll('.settings-result'), 'one line on the whole section').toHaveLength(1);
+    const nodes = within(region).getByRole('list', { name: 'Nodes' });
+    expect(nodes.querySelector('.settings-result'), 'no node row carries the release\'s line').toBeNull();
+  });
+
+  it("a node's Roll back answers under its own action only, never twice on a node that offers Update too", async () => {
+    vi.spyOn(api, 'rollbackUpdate').mockResolvedValue({ ok: true, requested: [T9_NODE_A], skipped: [] });
+    const region = await mountUpdates(updatesView({
+      releases: [t9Release('v0.0.9'), t9Release('v0.0.8'), t9Release('v0.0.10')],
+      nodes: [t9Node({ desiredTag: 'v0.0.10', previousVersion: 'v0.0.8' })],
+    }));
+    const nodeRow = (): HTMLElement => region.querySelector<HTMLElement>(`li[data-node-id="${T9_NODE_A}"]`)!;
+    expect(within(nodeRow()).getByRole('button', { name: 'Update' })).toBeEnabled();
+    fireEvent.click(within(nodeRow()).getByRole('button', { name: 'Roll back' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Roll back fleet' }));
+    await lineUnder(() => nodeRow().querySelector('.settings-node-actions')!, MOVE_REQUESTED_TEXT, 'answer');
+    expect(nodeRow().querySelectorAll('.settings-result'), 'one line, the Roll back\'s').toHaveLength(1);
+    expect(region.querySelectorAll('.settings-result')).toHaveLength(1);
+  });
+
+  it('a refused move whose sheet was dismissed in flight is an error toast with the move sentence, and no line', async () => {
+    let refuse!: (e: unknown) => void;
+    const refusal = new ApiError(503, { ok: false, error: 'journal-unwritable' });
+    vi.spyOn(api, 'applyUpdate').mockReturnValue(new Promise((_, rej) => { refuse = rej; }));
+    const region = await mountUpdates();
+    const row = region.querySelector<HTMLElement>('li[data-tag="v0.0.10"]')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update v0.0.10' }));
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await act(async () => { refuse(refusal); });
+    const toastEl = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('.toast');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(toastEl).toHaveTextContent(updateErrorText(refusal));
+    expect(toastEl, 'an error toast').toHaveClass('toast--error');
+    expect(region.querySelector('.settings-result'), 'the sheet that asked is gone, so no line').toBeNull();
+  });
+
+  it('a refused intent write followed by a clean one leaves no line', async () => {
+    const set = vi.spyOn(api, 'setUpdateIntent')
+      .mockRejectedValueOnce(new ApiError(503, { ok: false, error: 'journal-unwritable' }))
+      .mockResolvedValueOnce({ ok: true, intent: t7Intent({ channel: 'dev' }), epoch: 2 });
+    const region = await mountUpdates();
+    const channel = (): Element => within(region).getByRole('group', { name: 'Channel' });
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
+    await lineUnder(channel, 'The server cannot write its intent journal — nothing was changed.', 'refusal');
+    await waitFor(() => expect(channel()).not.toBeDisabled());
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(channel()).not.toBeDisabled());
+    expect(channel().nextElementSibling?.classList.contains('settings-result') ?? false, 'the clean write cleared the line').toBe(false);
+    expect(region.querySelector('.settings-result')).toBeNull();
+  });
+
+  it("the gate note carries its when-line while it shows, and an option's note takes no pointer", async () => {
+    expect(UPDATES_TEXT.autoGateWhen).toBe('Update the named nodes first.');
+    const region = await mountUpdates(updatesView({ nodes: [t7Node()] }));
+    const gate = await within(region).findByText(/^Auto-install needs every node to run a ccrc with the update gate\. Not yet: /);
+    expect(gate.nextElementSibling).toHaveTextContent(UPDATES_TEXT.autoGateWhen);
+    expect(gate.nextElementSibling).toHaveClass('settings-when');
+    cleanup();
+    const quiet = await mountUpdates(updatesView({ nodes: [t7Node({ caps: T7_GATED })] }));
+    expect(within(quiet).queryByText(UPDATES_TEXT.autoGateWhen), 'no gate note, no when-line').toBeNull();
+    // The note is pulled up over its option's tap row; it must let a tap through to the label (44 px).
+    expect(declValue(ruleIn(fleetCss, '.settings-option-note'), 'pointer-events')).toBe('none');
+  });
+});

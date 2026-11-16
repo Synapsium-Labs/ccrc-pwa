@@ -1,0 +1,86 @@
+{
+  "clean-claude": {
+    "verdict": "token",
+    "refusal": null,
+    "tokenInputs": [
+      "mode=orphan",
+      "pathhex",
+      "tree",
+      "main",
+      "admin",
+      "head",
+      "branch",
+      "status",
+      "ignored",
+      "newestctimens",
+      "entries",
+      "floor",
+      "lease",
+      "leasegen",
+      "leasestate"
+    ],
+    "rescueInputs": []
+  },
+  "clean-ccd-root": {
+    "verdict": "token",
+    "refusal": null,
+    "tokenInputs": [
+      "mode=orphan",
+      "pathhex",
+      "tree",
+      "main",
+      "admin",
+      "head",
+      "branch",
+      "status",
+      "ignored",
+      "newestctimens",
+      "entries",
+      "floor",
+      "lease",
+      "leasegen",
+      "leasestate"
+    ],
+    "rescueInputs": []
+  },
+  "dirty": {
+    "verdict": "refused",
+    "refusal": "dirty",
+    "tokenInputs": [],
+    "rescueInputs": []
+  },
+  "locked": {
+    "verdict": "refused",
+    "refusal": "locked",
+    "tokenInputs": [],
+    "rescueInputs": []
+  },
+  "registry-row-inside": {
+    "verdict": "refused",
+    "refusal": "registered",
+    "tokenInputs": [],
+    "rescueInputs": []
+  },
+  "head-on-no-remote": {
+    "verdict": "refused",
+    "refusal": "head-not-on-remote",
+    "tokenInputs": [],
+    "rescueInputs": [
+      "mode=orphan-rescue",
+      "pathhex",
+      "tree",
+      "main",
+      "admin",
+      "head",
+      "branch",
+      "status",
+      "ignored",
+      "newestctimens",
+      "entries",
+      "floor",
+      "lease",
+      "leasegen",
+      "leasestate"
+    ]
+  }
+}

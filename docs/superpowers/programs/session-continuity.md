@@ -1,0 +1,1847 @@
+# Program: session-continuity
+
+Spec: `docs/superpowers/specs/2026-09-23-session-continuity-design.md`
+Plans: `docs/superpowers/plans/2026-09-2?-session-continuity-wave<N>-*.md` — each written once the waves it depends on
+have measured what it needs (the table's "depends on" column)
+Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-quiet-river` (assigned by the operator 2026-10-02)   Workspace: **a fresh one per wave**
+Issue: GitHub #197 - the coordinator is created from it
+Companion programme: `docs/superpowers/programs/landing-order.md`
+
+**What this program is.** A restart — limit rescue, auto-home, manual swap, supervisor revival — is today a place
+where work is lost: the swap carry skips a session's journals on a return visit, the restarted session is told
+nothing specific, a resumed session is rescued again on the limit banner it brought with it, the operator's
+`/model` reverts, and Claude Code's pressure reap kills the watchers of idle sessions while real orphans go
+uncollected. This programme makes a restart a place where work is handed over. It adds no revival: the swap stays
+the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14); §11 items 1–5 were ruled on
+2026-09-23, and item 6, found at plan review, on 2026-09-24.
+
+## Waves
+
+| # | spec stage | scope | deploy class | depends on | PRs | state |
+|---|---|---|---|---|---|---|
+| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | merged 2026-10-02 (`a934a59b`); run 219 closed; deploy AGENT-FIRST by the update mechanism |
+| 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
+| 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
+| 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; fix-round handoff `2f6caa48e` accepted by the server 2026-10-20 07:25 UTC, NEW review 685 dispatched 07:42 UTC; PR conflicts with main on the generated stamp; review 685 closed done 2026-10-20 13:56 UTC with its report fingerprint accepted, no critical finding; run 308 returned to working 13:59 UTC for fix round 2, its last phase waiting on another run's claims on `ccd/ccd` and README; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED; MERGED 2026-10-21 03:54 UTC (`d8cd4765`, #435) after reviews 714 and 729 and fix round 3; run 308 closed; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 5's week runs 2026-10-21 05:38 to 2026-10-28 05:38 UTC; read 2026-10-28: 0 reap-class, `not-triggered`, the variable stays; week 2 read 2026-11-04: 0 reap-class, `not-triggered` in the part read, its first 2 h 9 m unmeasured (the fleet moved boxes), the variable stays, direct figure 0 in both weeks but partial, reported under spec §9; week 3 read 2026-11-11: 0 reap-class over the whole week, `not-triggered`, the variable stays, the direct reading `measured` (0 kills in 1,208 transcripts, 0 notifications unmeasured; the first week under wave 4c's scanner); weekly reading continues, next due 2026-11-18 05:38 UTC; the scope sweep is no longer shadowed: `scope-sweep-live` exists since 2026-10-26 23:38 UTC, armed by the operator (confirmed 2026-10-28) |
+| 4c | 6, first part | the direct-kill scanner reads the notifications it missed: queued-command attachments, queue enqueue rows, and summary-only notices that name no low memory | the instrument only (`deploy/measure-continuity.py`, in the release) | 4b and its two weekly readings | — | planned 2026-11-04 on the operator's ruling (`docs/superpowers/plans/2026-11-04-session-continuity-wave4c-direct-kill-scanner.md`, D-7960 to D-7963; Decisions, 2026-11-04 10:22); approved as written by the operator 2026-11-04 15:11 UTC (item 30; Decisions, 2026-11-04 15:14); plan merged 2026-11-04 16:18 UTC (`aff374c4`, #2262); run 1450 dispatched 16:23 UTC (`ccrc-pwa-continuity-4c`; Decisions, 2026-11-04 16:25); wave-done verified at `4a24db72` (PR #2277), review 1452 confirmed three important and three minor findings, fix round 1 sent (Decisions, 2026-11-04 17:35); accepted 18:07 UTC at `a5e8071e` after review 1458 (round 2); MERGED 2026-11-04 18:27 UTC (`ba93eb31`, #2277); run 1450 closed; released as prerelease v0.0.962 (18:29 UTC), and the first weekly reading after the fleet box installs v0.0.962 or later is the first under it (Decisions, 2026-11-04 18:44); that is week 3, read on v0.0.1088 (Decisions, 2026-11-11 05:48) |
+| 5 | 2 | the reduced spike: which resume call works after an ordinary swap (step 5), and a paused workflow under a blocked parent (step 6); steps 1 to 4 decided on the evidence, step 7 closed by D-5241 | measurement on a lent account (D-8252); no code | wave 1 | #2602 | deferred by the operator 2026-10-20; resumed 2026-11-07, the operator lending a scratch account (item 59; Decisions, 2026-11-07 14:40); reduced to steps 5 and 6, the manifest primary (item 75; spec rev 11, §11 items 7 and 8; Decisions, 2026-11-07 22:40); plan `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md` (D-8102 to D-8109), approved as written (item 80) and merged (#2443 `86a713a5`); run 730 dispatched 2026-11-08 (Decisions, 2026-11-08 00:50); Task 1 done and row R5 added (Decisions, 2026-11-08 01:03); setup confirmed (item 95; Decisions, 2026-11-10 19:48); Task 3 done and Task 4 not run (item 145; Decisions, 2026-11-10 23:40); merged 2026-11-11 (`ec7a6caf`, D-8252 to D-8264; Decisions, 2026-11-11 01:41); run 730 closed |
+| 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | 6a: plan #2672; implementation #2687; 6b: plan #2695; 6b-1: #2723; 6b-2: #2735 | 6a and both 6b runs merged, 6c to plan; run 1777 (wave 7 of the run record) opened 2026-11-11, `planned`, before run 730 closed (Decisions, 2026-11-11 01:41); split into 6a, 6b and 6c, and 6a planned 2026-11-11 (`docs/superpowers/plans/2026-11-11-session-continuity-wave6a-graceful-stop-shadow.md`, D-8316 to D-8332; Decisions, 2026-11-11 16:20); approved as written with the calls for 6b and 6c (item 174), the plan merged (#2672 `2e81f8b0`) and run 1777 dispatched 2026-11-12 for 6a (Decisions, 2026-11-12 00:14); 6a accepted after three review rounds, merged 2026-11-12 (#2687 `933f293f`), its departures D-8346 to D-8353, run 1777 closed, and run 1845 (wave 8 of the run record) opened for 6b, `planned` (Decisions, 2026-11-12 05:26); 6b planned 2026-11-12 as two runs, 6b-1 and 6b-2 (`docs/superpowers/plans/2026-11-12-session-continuity-wave6b-launch-record-and-manifest.md`, D-8361 to D-8380; Decisions, 2026-11-12 07:51); approved as written (item 176), the plan merged (#2695 `d765e720`) and run 1845 dispatched 2026-11-12 for 6b-1; 6b-1 accepted after three review rounds, merged 2026-11-13 (#2723 `d8c4ed4a`), its departures D-8400 to D-8403, run 1845 closed, and run 1878 (wave 9 of the run record) opened for 6b-2, `planned` (Decisions, 2026-11-13 11:52); 6b-2 dispatched for Tasks 2 to 5, accepted after three review rounds, merged 2026-11-13 (#2735 `99dd85142`), its departures and limits D-8566 to D-8584; run 1878 closed final, and run 1931 (wave 10 of the run record) opened first for 6c, `planned` (Decisions, 2026-11-13 21:17) |
+| 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
+| 8 | 5 | the three skill clauses; review-panel's "resume before re-run"; run signals; `FleetSession.delegations` and its chip | skills, server, pwa | wave 6; landing-order wave 1's clauses | — | after wave 6 |
+| 9 | 6, second part | ccd stops a pane's scope when it ends the pane | **AGENT-FIRST** | waves 5, 6 | — | after wave 6 |
+
+Waves 1–4 are independent in function and may be worked in parallel, but each edits `ccd/ccd`, so they land one at
+a time: each lands on current `main` by a clean `git merge` (landing-order clause 16's triggers), re-stamps, and
+re-measures the citation corpus and the `_reg_get` census on the merged tree before its final gate.
+
+## Decisions & deviations
+
+- **2026-09-23 — the design, its rulings and the written spec.** Approved in the brainstorm (C1–C8); the operator
+  ruled every open decision on the written spec the same day (C9–C14). Two adversarial rounds and a numbers and
+  consistency pass preceded the rulings; each measurement the spec cites names its instrument.
+- **2026-09-23 — stage 4 split at the source.** The spec's §10 said `1 → 2 → 3 → {4, 5}`, but stage 4's rules 1–3
+  read only the transcript, the limits files and the swap log. Corrected in the spec before any plan was written,
+  so wave 2 ships the rescue policy early and wave 7 carries the refusal that needs stage 3's scan. Not a deviation
+  — the spec over-constrained itself and was fixed at the source.
+- **Amendment slugs.** Each is minted by the plan that implements it and defined in that plan's
+  `## Deviations found` in the same act: `sidecar-carry-merges` (wave 1), `carried-in-banner-is-not-a-block` and
+  `rescue-waits-near-reset` (wave 2), `operator-model-survives-restart` (wave 3), `inert-scope-sweep` (wave 4).
+- **2026-09-24 — §11 item 6 ruled: leave it and count it.** A stalled session whose own account is the only one with
+  room idles as today; no in-place restart is sanctioned. Wave 2's plan gains the count — four `noroom_…` rows in
+  `measure-continuity.py --stage 4`, measured red-first and by seven mutations on the plan's prototype — and the
+  question returns to the operator with that count in hand.
+- **2026-09-24 — execution: coordinator dispatch.** The operator creates one coordinator per programme from its
+  ticket. Each wave goes to a fresh worker workspace running subagent-driven development, a review run reads the
+  worker's branch, and the coordinator rules and merges; the plans reach a worker only from `main`, so the docs
+  PR carrying the specs, the ledgers and the first four plans merges before the first dispatch.
+- **2026-09-28 — the plans re-measured against `main` `c62e22b9`.** Nine commits landed after 2026-09-24 (#182–#186,
+  #192–#195); three edit `ccd/ccd`. Wave 1 holds: only line hints, README's two anchors and one scan total moved, and
+  every count and mutation row reproduced on a copy of `c62e22b9` with its edits applied. **Wave 2 is HELD for a
+  re-plan:** #195 (D-3522) made the rescue read a 401 its own process wrote as a block, and the plan as written drops
+  that detection (Task 1), rules the 401 `carried-in` on an account rescued onto after a rate limit (Task 2), and lets a
+  transcript-only 401 chain-wait (Task 4). The plan's status block names the measured fix; the re-plan is
+  prototype-first on current `main`.
+- **2026-09-28 (evening) — wave 1 re-measured again; wave 2's Tasks 1–2 superseded.** `main` moved to `023fe94d`
+  (child-reclamation wave 3, #187; update-management wave 4, #181). Wave 1 still holds: `_swap_carry_sidecars` is
+  byte-identical, 54 lines lower, and only hints, README's anchors and counts moved (restated at `023fe94d`). **Ruled
+  by the operator** in the same day's residue batch: stage 4 rule 1 (C12) ships now as its own one-task fix on
+  #195's carrier, the pane's process start (`_pane_born`), not on `$REG/<id>.landed`, and a landing whose Claude
+  Code never came up (`.spawn` rc 4) is still moved. That fix supersedes wave 2's Tasks 1–2; D-3497 stays rule 1's
+  number. Tasks 3–5 are re-planned on its reader once it is on `main`; a draft re-plan against #195 alone is not
+  used, and its safety review's two rules carry forward (the plan's status block).
+- **2026-09-30 — wave 2 re-planned on the shipped carried-in fix.** Prototype-first on `main` `c88625aa`. The held
+  plan's Tasks 3–6 are its Tasks 1–4; Tasks 1–2 are not rebuilt, because #207 shipped rule 1. The waits read the row
+  that blocked a session through a new `dated` mode of the transcript reader, cached in `.tdate` beside the carried-in
+  fix's own answer, so the 30 s `tscan` cache never hides the reset. Three reviews (rescue-verdict safety at `xhigh`,
+  tests and mutations, executability and merges) raised 23 findings: 22 were applied, and one was refused because it
+  conflicted with a safer fix, shown by measurement. An independent verification followed; 102 mutation rows, all red.
+  The three rules carried from the shelved draft's safety review hold, each pinned: a pane tmux cannot place, or lost
+  auth on either surface, takes no wait; a row written at or after its own reset keeps that reset nowhere; and a
+  stalled no-room wait moves the moment a target has room. **One default is the planner's, for the operator to
+  confirm or reverse** (the plan's open question 4): the hold in place after a reset turned ends `RESCUE_CHAIN_WAIT`
+  (30 minutes) past the reset, where the spec held it without end; measured, `main` rescues that input at once. The
+  plan's deploy step measures ccrc's own update mechanism and moves nothing by hand (operator ruling 2026-09-30).
+  §11 item 6's four `noroom_…` rows ship in its instrument. The spec records rule 1 as shipped and amends
+  rules 2–3 to the plan (rev 6). Before the docs PR the plan was replayed onto `main` `5b1c58a8`: every edit applies
+  and its suites are green there.
+- **2026-10-02 — the coordinator assigned.** The operator made session `ccrc-pwa-quiet-river` — the planning session
+  that wrote this programme's plans — the coordinator of landing-order, session-continuity and workspace-lifecycle
+  together. Each wave is its own run under that session id; a fresh coordinator resumes only under the same id
+  (the coordinator skill's `references/resume.md`).
+  **Wave 1 dispatches now; wave 2 waits until wave 1 has landed.** Both edit `ccd/ccd`, and the coordinator does
+  not dispatch two of its own workers onto overlapping files (coordinator clause 10) — the ledger's "may be worked
+  in parallel" stays true of the plans, which merge either way, but this coordinator serialises them; it also
+  keeps one fewer suite-running worker on the memory-bound fleet box.
+- **2026-10-02 — wave 1 dispatched as run 219** to a fresh workspace (`ccrc-pwa-swift-ridge`, branch `ws/swift-ridge`),
+  executing by subagent-driven development on the matrix's "worker executing a spec'd plan" row (Opus · high,
+  Sonnet · high implementers, an Opus · high reviewer per task, workflow off, compact 40). Its deviation
+  numbers, issued at run-open and written bare here until a plan on the same ref defines them: 3768 through 3777.
+  The brief adds two rules that post-date the plan: the wave stops at the PR (the coordinator merges; the
+  fleet moves by ccrc's own update mechanism, operator ruling 2026-09-30), and main is measured fresh.
+- **2026-10-02 — Task 1's STOP row ruled a false positive (run 219).** The write-model probe printed one
+  `journal: born at its last write (STOP)` row out of 151 finished-here runs. That row was the window's only killed
+  run (13 s). Its journal has two rows, written on one inode, and was born 67 ms before its last write. A
+  temp-and-rename journal is born at its last write, and a two-row journal cannot pass the probe's three-line
+  criterion whatever the write model. Everything that can decide the question agrees with the plan:
+  - the other 150 journals are append-in-place;
+  - that run's agent log grew on one inode;
+  - the live sample grew on one inode;
+  - linkmode shows no crossover.
+
+  Ruled: the plan's verdict stands and Task 2 proceeds. The worker records this as a departure from its own block.
+  The probe's criterion is not changed in this wave.
+- **2026-10-02 — wave 1 done, in review.** Run 219's wave-done (PR #230, tip `48c9156e`) passed the server's
+  re-measurement. The run is at `awaiting-review` and its four items are settled.
+  - The worker merged main `cf9e4cc8` (#222). The only conflict was `ccd/ccd`'s stamp, which it re-stamped. The
+    citation census after the merge reads stated=base=tree, with nothing entering or leaving.
+  - Departures: the worker used 3768 through 3771 from its block, each defined in the plan on the branch. 3772
+    through 3777 went unused.
+  - Task 1's baseline reproduced spec §1.2 exactly.
+  - Task 4 Steps 6–7 (rollout and the week-after measurement) were skipped by standing rule. They are owed after
+    the merge, through ccrc's own update mechanism.
+  - **Signals:** `suite: red`, `failure: unclear`. The reds are boot.test's timing ceiling at load 64 (this wave
+    changes no `server/src`), the known tmp-sweep red, two cases that pass when run alone, and PWA timeouts.
+    **Routing is not escalated:** the red measures the box.
+  - **Review:** review run 227 went to `ccrc-pwa-keen-prairie` on Opus · high with workflows on. It runs the held-out
+    panel, plus the plan's own merge-safety lens on Opus · xhigh, because this wave replaces files inside live
+    account roots.
+- **2026-10-02 — review 227 ruled: one fix round.**
+  - **The panel.** Four lenses, the plan's merge-safety lens on Opus · xhigh included, with 52 agents, none
+    unverified and nothing unexamined: 14 confirmed and 2 refuted. Ten plan mutation rows re-ran red as stated. The
+    citation census is stated=base=tree, and the spec §1.2 baseline reproduced read-only. CI's required checks are
+    green.
+  - **Two important findings.** Two guards that are correct but pinned by nothing:
+    - the same-size, older-record arm of "replace only when strictly newer" (the wave's one irreversible act);
+    - "slot taken once".
+
+    Each stayed green under its mutation.
+  - **Twelve minor findings:**
+    - stale mutation counts;
+    - two `(kept: error)` causes without a test;
+    - the `!D` row's longer-copy choice;
+    - two unpinned dry-pass prices;
+    - "nothing waits" pinned only by a hang;
+    - two comments that overstate (the slot's scope, the drain);
+    - an avoidable compare;
+    - a `set -u` exit through `mapfile`;
+    - the UTF-8 reconfigure line;
+    - the instrument's two TZ conversions.
+
+  **Ruled: everything is fixed in this wave except F10.** The repo's rule is that a guard ships with a test that
+  reds, and this wave replaces files inside live account roots. Its six departures take the block's unused 3772
+  through 3777, one per group. F10 (a same-size record that is not newer is still compared) is carried forward,
+  because deciding it in the dry pass would move F1's effective guard.
+- **2026-10-02 — wave 1's fix round done, in re-review.** The fresh wave-done (tip `322298e5`) passed the server's
+  re-measurement.
+  - **Fixes:** seven commits, numbered 3772 through 3777, which uses up the block.
+    - Eighteen new mutation rows (46–63), each green before its case and red after.
+    - F11's `set -u` exit is closed in shipped code.
+    - The stale counts are restated on the final files.
+  - **F10:** untouched, as ruled.
+  - **Named costs the departures record:**
+    - the python3 and `mapfile` pins work by shadowing, not by a real missing binary;
+    - under the blocking-flock mutation, measure-continuity's real-carry case still hangs.
+  - **Re-review:** review run 230 went to `ccrc-pwa-amber-basin`. It runs the held-out panel plus the merge-safety lens
+    on Opus · xhigh, because the round edits the carry block.
+- **2026-10-02 — re-review 230 ruled: fix round 2.**
+  - **The panel:** four lenses, the merge-safety lens included, none unverified and nothing unexamined.
+  - **Measured:** every ruling holds on behaviour. F11 is rc 0 on every path, F10 is byte-identical, and twelve rows
+    re-measured to their cells.
+  - **One important finding.** D-3776 said the real here-string temp failure cannot be made in a fixture. That is
+    false: `ulimit -f 16` makes it cheaply. So the ruling's "pin it if a fixture can" condition is met, and
+    real-cause cases join the shadow pins.
+  - **Six minor findings, all text:**
+    - the header points the first fill cost at `deferred_*` instead of `kept: budget`;
+    - "measured at zero" drops the census's two assumptions;
+    - a test comment says two cases where there are three;
+    - row 17's message is stale;
+    - D-3774's denominator is stale;
+    - row 50 says "every case" where the measured count is 30 of 41.
+  - **Numbering:** each fix extends its departure, so no new number.
+- **2026-10-02 — fix round 2 done, in re-review.**
+  - **Fixes:** one commit (tip `d1ca968e`). The real-cause `ulimit -f` cases die under `set -u` against the
+    pre-F11 code and pass at the tip; the new rows are 64 and 65.
+  - **Rows re-run:** rows 1 through 65 were re-run on the 43-case file and the moved counts restated.
+  - **Citations:** the citation census reads stated=base=tree.
+  - **Re-review:** review run 233 went out with the held-out panel over `322298e5..d1ca968e`.
+- **2026-10-02 — wave 1 accepted and merged.**
+  - **Review 233** read fix round 2 and found two minor text inaccuracies, neither needing a ruling:
+    - a test comment sizes paths at "~100 bytes" where they are ~165 bytes or more;
+    - D-3774's list of moved rows leaves its scope unstated.
+
+    Every ruling held on behaviour. The `ulimit -f` cases reach the real here-string failure at
+    `ccd/ccd:22567`. The walker is byte-identical, and no non-comment `ccd/ccd` line changed. Accepted, with both
+    texts carried into wave 2's first commit rather than paying another round trip.
+  - **Totals:** three review runs (227, 230, 233) and two fix rounds. All ten numbers used, 3768 through 3777.
+  - **Merge:** #230 shared no file with #229 (merged a minute earlier), and the merge-tree was clean. Squash-merged
+    at the verified tip `d1ca968e` as `a934a59b`. Wave 2's run (237) was opened first. Run 219 closed `done`,
+    released, and its child was queued for reclaim.
+  - **Deploy:** AGENT-FIRST, through ccrc's own update mechanism.
+  - **Owed after convergence:** the plan's Task 4 Steps 6–7 measurement (`measure-continuity.py --stage 1` past
+    `--deployed`).
+- **2026-10-02 — wave 2 dispatched as run 237** to a fresh workspace, on the "worker executing a spec'd plan" row (Opus
+  · high, Sonnet · high implementers, an Opus · high reviewer per task, workflow off, compact 40). Its deviation
+  numbers, written bare: 3846 through 3855.
+  - **Anchors:** replayed in order against `a934a59b`, 28 of 30 match. The two that don't are the `_reg_purge`
+    inventory: the stall watch's `turn` took 42, so `rescuewait` makes 43.
+  - **Serialised (clause 10):** Task 3's README edits wait for landing-order #231 (run 218 claims README).
+  - **Instrument:** `measure-continuity.py` takes the extend arm.
+  - **Open questions:** the plan's four stay the operator's, built at the plan's defaults.
+- **2026-10-02 21:30 — wave 1 deployed.** Both boxes run v0.0.63 (`10f32755`, which carries #230), applied from the
+  console 19:52–20:00.
+  - **Proof:** the fleet box's installed `ccd` body (`~/ccrc-versions/v0.0.63/ccd/ccd`; since #222
+    `~/.local/bin/ccd` is a launcher) carries `_swap_carry_merge_walk() {` once.
+  - **Owed:** Task 4 Step 7's §9 measurement, one week after the deploy (about 2026-10-09), read-only, on the fleet
+    box.
+- **2026-10-03 11:56 — run 237 resumed after 15 idle hours** (mail 3307).
+  - **What happened.** The worker's last turn ended at 21:06 on 2026-10-02 with Task 2's code applied: red-first
+    15|79 of 94, as the plan forecast, and 17 of 24 mutation rows matching. Claude Code had killed its background
+    mutation run for low memory. It restored `ccd/ccd` from its snapshot, then asked for "resume" at its own pane,
+    where no one is attached. No mail was sent, so the coordinator heard nothing. Nothing in the fleet woke it.
+  - **The resume:**
+    - the remaining rows (2.8 again, then 2.18–2.24) and Tasks 3–4 run in the FOREGROUND, one file per process;
+    - a killed run is restored from the snapshot, reported in a status mail, and the turn ends;
+    - its Task 2 finding comes as a `question` mail, while the plan's text ships unchanged meanwhile. The finding:
+      do-not-bounce's strand push says no account can take the session while the account it just left has room.
+  - **README:** no claim is live. The worker claims it before Task 3. Stall-watch #232 also edits README, and the
+    second lander merges main and keeps both sides.
+- **2026-10-03 12:01 — ruling on run 237's Task 2 finding** (question 3308, answer 3312): option (B), fixed in this
+  wave.
+  - **The finding.** When do-not-bounce strands a rescue (the only account with room is one the session just left
+    blocked), the strand marker, swap.log and banner say no account in the pool can take it.
+  - **The ruling.** Those two conditions ask the operator for opposite acts, so collapsing them is the overloaded-result
+    defect CLAUDE.md names, and it invites the hand bounce rule 3 exists to stop.
+    - `_rescue_strand_cause` probes `_swap_target` unskipped on the no-target strand path only.
+    - It feeds `_strand_mark`'s existing 4th argument, one line for one line.
+    - It has a test, a no-room control, a mutation row, and the measured per-tick cost stated in its departure.
+  - **Option (C) was declined:** it adds a history read to every computed cause.
+  - **The stall watch's shadow rows** (stall-watch coordinator, mail 3311) caught run 237's silence: r1 at 23:06,
+    r2 at 00:07 and r3 at 01:08 on 2026-10-03. Armed, r1 would have mailed the worker about 13 hours before it was
+    found by hand.
+- **2026-10-03 15:05 — wave 2 done: PR #235 at `55137231`** (wave-done 3331; report
+  `~/.cc-clips/ccrc-pwa-calm-delta/wave-done-237-55137231.md`).
+  - **Re-measured:** the tip is the claimed sha, and the branch has absorbed main `fe7b9775` (#231, then #233, both
+    clean). Advanced to `working`, then `awaiting-review`, both ok. All 5 items are settled.
+  - **Counts:** every red-first and green count matches the plan where it states one. All 102 mutation rows are red,
+    plus 4 added. The first full run had 3 reds, all load or main-red; the second run's only red is tmp-sweep, which
+    is red on main. Agent 422, PWA 3205. Signals: `suite: red`, `failure: unclear`.
+  - **Departures:**
+    - 3846: the residue;
+    - 3847: inventory 43, plus ccd-auto-swap-pool's window, which `strandnotify` had overflowed;
+    - 3848: the stage-4 TZ pin;
+    - 3849: ruling B, costing about 111 ms per no-room strand tick and 178 ms per do-not-bounce strand tick;
+    - 3850: CLAUDE.md's README figure.
+    3851–3855 are unused.
+  - **Census:** cite-remeasure reads 147/197/52/35, with stated = base = tree. `_reg_get` reads 179/150. The stage-4
+    live baseline (248 rescues, 4 sessions, max 4) reproduces the plan.
+  - **Six minors are carried for the review to weigh:**
+    - the `_rescuewait_close clear` fork;
+    - `end=swap` written before the dispatch;
+    - the 4300-digit `reset=`;
+    - the quadratic scans;
+    - failed dispatches counted as rescues;
+    - §9's target of 0.
+  - **Review run 246** was dispatched at 15:07 to `ccrc-pwa-swift-harbor`. The window had room.
+- **2026-10-03 16:38 — review 246 ruled; wave 2 MERGED as #235 (`db44b136`)**, squash, at the reviewed head
+  `55137231`, with every required check green (report `~/.cc-clips/ccrc-pwa-swift-harbor/review-246-55137231.md`;
+  27 agents, no lens unverified; 4 confirmed and 4 refuted, all minor).
+  - **The safety questions, measured:**
+    - no input makes a session wait forever, because every hold in `_rescue_policy` is bounded;
+    - there is no bounce on the rescue path;
+    - a stalled pane is never held past a turned reset;
+    - open question 4's bound is as planned.
+    The panel replayed the plan's blocks onto `fe7b9775` and found the code matches byte for byte, apart from the
+    ledgered departures.
+  - **Carried to wave 3's first commit (residue):**
+    - F1: `end=swap` is written before a dispatch that can be refused, so stage 4 counts `noroom:swap`/`chain:swap`
+      for a refused auto-rescue. Until it is fixed, a stage-4 reading subtracts refused dispatches, which swap.log's
+      `_swap_refuse` lines show.
+    - F2: "its only account with room" can be one of several; say "best".
+    - F3: README :1579 and the comment at ccd :23225 scope "a strand reads no swap log" to the genuine no-room strand.
+    - F5: a `[[ -e "$REG/$id.rescuewait" ]]` guard on the `clear` close, which forks about 1.7 ms per tick per
+      session today.
+    - The worker's minors 3–5: cap `reset=` at `\d{1,12}`, a set beside the skip lists, and whether the rescue count
+      keys on a landing.
+  - **F6, ruled: spec §9's stage-4 target.** "Sessions with 4+ auto-rescues in an hour: 0" cannot be met by design,
+    because a chain wait that runs its full 30 minutes still ends in a fourth rescue inside the hour. The target is
+    restated to what the design promises: 0 sessions with a fourth rescue in an hour that NO chain wait preceded.
+    The raw 4+ count is still reported. It is spec text, so it goes in wave 3's residue commit; the stall-watch
+    programme claims the spec, so check its claims first.
+  - **The boundary:**
+    - wave 3's run 248 opened first (planned; block 3896–3905, written bare);
+    - run 237 closed `final` (`released:true`, `childReclaim:queued`).
+  - **Overlap notices** (mails 3343–3345):
+    - landing's run 238 merges main and re-stamps before its wave-done;
+    - #215 and #232 are second landers on ccd/ccd and on README/CLAUDE.md.
+  - **Deploy:** AGENT-FIRST (ccd only), through ccrc's updater. The §9 stage-4 week-after reading follows it, with
+    F1's subtraction.
+  - **For wave 4b's priority:** on the night of 2026-10-02, Claude Code's background-shell memory reap killed work
+    in three sessions, and run 237 sat idle for 15 hours. Wave 4b ships `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1`,
+    so that night is measured evidence for it.
+- **2026-10-04 21:20 — wave 3 planned** (#245, `docs/superpowers/plans/2026-10-04-session-continuity-wave3-operator-choice.md`).
+  - **How it was made:** drafted on a measured prototype, reviewed by three Opus lenses, and all 16 findings applied.
+    The plan's 45 blocks replay byte-identically onto main.
+  - **Two design changes from review:**
+    - a journal floor, so the first post-deploy stop never promotes keystrokes the old ccd typed;
+    - the acknowledgement shapes the fleet actually writes, measured read-only across 6,669 transcripts.
+  - **Rulings on its open questions:**
+    - (a) the stage-4 filter is confirmed: count a fourth rescue only where a chain wait could have held it;
+    - (b) the floor's two one-time costs are accepted;
+    - (c) gpt-lane sessions are SKIPPED, keyed on `_is_anthropic_backend` like the settle;
+    - (d) a supervisor revival (`cmd_ensure` after a crash) also keeps the operator's choice, because stage 7's
+      purpose is surviving a RESTART, and a crash revival is the fleet's commonest restart;
+    - (e) `opus[1m]` losing its 1M context is accepted and listed, because the record has no context field;
+    - (f) `ccd stop` and `ws-archive` keep the choice, as planned;
+    - (g) the older unguarded `int()` calls in `--stage 4` are carried.
+  - **Numbers:** 3896–3905, plus 3921–3925 issued for the plan's nine slugs, rulings (c) and (d), and the worker's
+    own.
+- **2026-10-04 22:22 — wave 3 dispatched** (run 248 → `ccrc-pwa-still-harbor`; branch `ws/still-harbor` at
+  `b40f4145`, nothing ahead of `main` although the slug was wave 2's worker's; worker skill present; route Opus · high,
+  Sonnet subagents, workflow off, compact 40; five items, one per plan task).
+  - **Plan merged first:** #245 (`f789d97d`), every required check green.
+  - **Held 20 minutes** while ccrc's PWA-driven update to v0.0.78 restarted the fleet agent. The update ended `failed`
+    on a hand archive inside its serial verify window, not on a broken box (landing-order ledger, same date).
+  - **The brief was re-dated at dispatch.** #215 merged at `b40f4145` (22:10) before it, so the overlap line now says
+    the branch already carries it and the plan's anchors in ccd/ccd, ccd/ccrc and session-hook.test.ts must be
+    re-measured.
+- **2026-10-05 10:00 — wave 3's wave-done** (mail 3469; PR #250 at `b00849ee`): every task done.
+  - **Numbers defined:** 3896–3905 and 3921. The worker also used all four spares:
+    - 3922: the journal floor follows rotation;
+    - 3923: one transcript read per restart (`choicekept`);
+    - 3924: a lane change moves the floor;
+    - 3925: a `/model` typed before `/clear` is lost. It is listed as a known cost, with the code fix deferred.
+  - **Re-measured:** the tip matches the claim, and every required Linux check is green. The reds are load or
+    tmp-sweep, which is red on main. The run went to `awaiting-review`, and its five items were settled.
+  - **Review run 268** is dispatched to `ccrc-pwa-plain-hollow`. It was first refused by ccd's 10 GB disk floor;
+    this coordinator's three spent planning worktrees were removed (1.85 GB, all clean and pushed) and it was
+    dispatched again.
+  - **The worker's asks,** ruled after the review:
+    1. confirm 3922–3924;
+    2. defer the `/clear` fix, or require it now. The review costs the fix. ccd's own header there says "NEVER A
+       SILENT LOSS".
+- **2026-10-05 10:27 — review 268 reported** (mail 3498; `~/.cc-clips/ccrc-pwa-plain-hollow/review-268-b00849ee.md`).
+  - **What it found:** 13 findings, no blocker. Every suite is green, 16 rows are red (spec §5.7's four among them),
+    the merge onto `4100ae1c` is clean, and the residue is whole.
+  - **F1:** `_supervised_start`'s unsupervised fallbacks revive without a keep, a silent loss.
+  - **F2–F4 need rulings:** the "NEVER A SILENT LOSS" header; effort applied before model; 3925's `/clear` fix,
+    costed at about 10 lines on the supervisor tick.
+  - **Not yet ruled.** This coordinator's brief omitted the held-out panel's Lenses line, so the reviewer ran four
+    Opus lenses of its own and no Sonnet refute pass. That is a defect of the brief, not of the reviewer. Mail 3501
+    asks it to put F1–F13 through the refute pass and report again. Review 268 stays open until then, because a
+    close would reclaim the reviewer's workspace. Review 267 had the same omission and was corrected in flight
+    (mail 3500).
+- **2026-10-05 10:35 — review 268 ruled; fix round 1 sent** (mail 3503). The review run closed `done`, keeping its
+  workspace (`review-report-live`).
+  - **The panel** (votes in `review-268-b00849ee-panel.md`): 39 Sonnet refuters, three per finding, all voted.
+    - CONFIRMED: F1, F2, F3, F6, F10 (c)(d)(e), F11, F12.
+    - REFUTED: F4, F5, F7, F8, F9, F13.
+    - Recorded departure from the panel: the does-it-reproduce lens was the reviewer's own measurement (suites, 16
+      rows, citations, the merge probe) rather than a fresh agent, and the refuters named no explicit effort. It is
+      accepted for this round; the re-review runs the panel as written.
+  - **Confirmed departures:** 3922, 3923, 3924.
+  - **Rulings:**
+    - F1 (3966): the guarded keep moves into `_spawn_start`, one choke point covering `_supervised_start`'s
+      unsupervised fallbacks and ws-restore.
+    - F2 (3967): the "NEVER A SILENT LOSS" header and README's list are made true, and acknowledgement-wording drift
+      logs `unmeasured` once per keep. `--stage 7` must never read a rewording as zero.
+    - F3 (3968): model and effort are applied as one `cmd_route` call.
+    - F6 (3969): the stop-site keeps are gated on `choicekept`, and the marker is removed only after a successful kill
+      or spawn.
+    - 3925 (`/clear`) is DEFERRED to wave 4, carrying the review's `_sync_uuid` design note as advice.
+    - F10 (c)(d)(e), F11 and F12 are text.
+  - **Numbers:** 3966–3971 issued (3970–3971 spares).
+- **2026-10-05 15:34 — fix round 1 done** (wave-done 3528, PR #250 at `f6faff4c`).
+  - **The fixes, one commit each:**
+    - F1 `6db10976` (3966): the keep at `_spawn_start`'s choke point;
+    - F6 `2aed328c` (3969): stop keeps gated on `choicekept`, a failed kill unmarks, an absent tmux server proves the
+      session gone;
+    - F3 `c02b96f1` (3968): one route call;
+    - F2(b) `0a7a6579` (3967): acknowledgement drift reads as unmeasured;
+    - the prose `148178f4` and `cb8bbe6f`.
+  - **Evidence:** every row is measured red. The first full run's only red is tmp-sweep, red on main too.
+  - **Main merged** (`00f8a193`; clause 16 trigger 1, the stamp line only). The census is 182/153 and S6-R11 is
+    unchanged. 3970 and 3971 are unused.
+  - **Residuals parked:** R1 (a deleted tmux socket reads as absent and keeps a live pane marked), plus nits R2 and
+    R3.
+  - **Re-measured:** the tip matches the claim, and the run went to `awaiting-review`. Required CI was still running
+    after the push.
+  - **Acceptance review 272** is dispatched to `ccrc-pwa-amber-harbor`. Its brief names the held-out panel (three
+    fresh Opus lenses and three Sonnet refuters per finding) and asks it to classify R1.
+- **2026-10-05 17:03 — review 272 ACCEPTED wave 3; MERGED as #250 (`77f8d63a`)**, squash, at the reviewed head `f6faff4c`, every
+  required check green. Report: `~/.cc-clips/ccrc-pwa-amber-harbor/review-272-f6faff4c.md`.
+  - **The panel ran as written:** three Opus lenses and Sonnet refuters, 17 confirmed and 2 refuted, nothing
+    unexamined, no lens unverified.
+  - **The safety core holds:** all 28 rows red, spec §5.7's four among them; the census 182/153; S6-R11 unchanged;
+    the merge is the stamp only.
+  - **11 findings, all minor, carried to wave 4's FIRST commit as residue** (the precedent of landing's wave 1 and
+    workspace-lifecycle's wave 2):
+    - F1 (R1): narrow `_operator_choice_unmark`'s absent arm to tmux's "no server running", as ws-reclaim does, so a
+      deleted socket stops reading as gone.
+    - F2: recognise the `/effort` slider's own acknowledgement if a counts-only transcript census finds its
+      wording; otherwise ledger the noise in the 3967 entry.
+    - F3–F11: the plan's mutation cells that do not reproduce as written (3.30, 3.35); text-only pins on cmd_swap's
+      3969 lines; comment drift (R3 among it); the refused-command prose; the unpinned `not given` arm; the
+      ws-restore case; two red-first claims citing no commit; the `measure-continuity` key name.
+  - **The boundary:**
+    - wave 4's run 274 opened first (planned; block 4012–4021, written bare);
+    - run 248 closed `final` (`released:true`, `childReclaim:queued`).
+  - **Overlap notice** (mail 3553): landing's #248 must now absorb main (#281 in README and the doctor test; #250 on
+    ccd/ccd's stamp) in its next round, not during review 273.
+  - **Deploy:** AGENT-FIRST, through ccrc's own updater.
+- **2026-10-05 17:05 — wave 4's rulings, and its plan is drafting** (workflow wf_db90af4f-0dd, to branch
+  `docs/session-continuity-wave4-plan`).
+  - **(A)** The first commit is review 272's residue F1–F11, as ruled above.
+  - **(B)** Scope: stage 6 part one minus the spawn variable. That is the reap-class OOM count (its baseline week
+    starts at this wave's deploy), `ccd-scope-sweep` with its verdict record and doctor reader, and the
+    limit-banner harness leak.
+  - **(C) The stop ships SHADOWED.** The sweep records "would stop" and stops a scope only while
+    `$REG/scope-sweep-live` exists. Like `stall-watch-live`, nothing in the tree writes that file; the operator
+    arms it by hand.
+    - Why: it is a minute-cadence sweep that kills processes on the live fleet. The fleet's precedent
+      (`stall-watch-live`, `mail-gate-busy-shadow`) observes such a verdict before arming it. This is a named
+      departure from §5.6, and the operator may reverse it.
+  - **(D)** What it must never stop is pinned class by class: ccd's own server scope, non-pane scopes, an
+    unparseable Description, a live foreign server, a live pane, a reused pid.
+  - **(E)** 3925's `/clear` fix moves to wave 4b, beside the spawn variable. Both change what a session's next start
+    does.
+  - **(F)** The units are installed by the installer spine.
+  - **(G)** The overlap rule with #248, run 245 and run 271.
+- **2026-10-06 04:55 — wave 4's plan is ready: #288** (`1cbb1c75`, 4,604 lines, 8 tasks, 13 departure slugs).
+  - **How it was made:** four Opus lenses, none unverified; the reviser applied all 33 findings.
+  - **What the safety lens found:** no path to a stop while shadowed, while paused or in any must-never-stop class.
+    Its fixes: the cgroup and CPU sanity guard is pinned; the first-seen clock is boot-relative and bounded; an
+    unreadable socket table carries rather than reading as clear.
+  - **The verifier** replayed every anchor exactly once onto `d2bac7ae`. All 26 re-run rows went red. Three counts
+    moved with #287, as pre-flight 15 says.
+  - **Rulings on its open questions:**
+    - accepted: at most three stops per tick once armed; a point-in-time reading of inert survivors; the 120 s MCP
+      window; editing wave 3's merged plan entries in place (text only).
+    - **arming `scope-sweep-live` is the operator's,** recommended after a week of shadow verdicts that match what the
+      operator would stop by hand;
+    - the leaked test tmux server (`/tmp/tmuxtest_verify`, alive since 2026-09-14) is reported to the operator. The
+      sweep ignores it by design, and no session may touch tmux.
+  - **Numbers:** 4088–4093 issued (the last three slugs, then three spares).
+  - **Pre-deploy stage-6 reading, from the plan:** 2026-09-28 to 2026-10-05 17:00 had 40 pane-scope OOM stops, 2 of
+    them reap-class. Baseline B is read one week after this wave deploys; the deploy time is recorded here when it
+    happens.
+  - The brief and its dispatch body are ready. Run 274 dispatches when #288 merges.
+- **2026-10-06 05:20 — #288 merged** (`0dad0fdf`, 05:19, required checks green). The ledgers' own PR #289 merged beside it
+  (`21f536a5`).
+  - **Run 274's dispatch was refused `cap-concurrency`** (seven of seven active runs fleet-wide). Nothing on the
+    run was touched; it stays planned, with the same brief and route.
+  - It dispatches when a slot frees. Review 284 closing frees one of this coordinator's own.
+- **2026-10-06 06:53 — wave 4 dispatched** (run 274 → `ccrc-pwa-still-river`; worker skill present; route Opus · high,
+  Sonnet subagents, workflow off, compact 40; eight items, one per plan task).
+  - **The concurrency cap refused it three times first** (05:19, 05:53 and 06:23, seven of seven). A slot freed
+    by 06:53.
+  - **The workspace branch is at `9221416a`**, origin/main (after #291), with nothing ahead. It contains #288.
+- **2026-10-06 07:02 — ask 18 answered: option 0, Task 1 edits `ccd/ccd` now** and stays the first commit. Explained in
+  mails 3646–3648.
+  - **`ccd/ccd` is shared by region, not by claim.** Claim 1043 (run 250) does not block a disjoint-region edit,
+    and nobody takes, breaks or waits on a `ccd/ccd` claim for it. The regions: run 250 has the stamp and its
+    `pr-state` lines; run 245 has the RECLAIM/EXPIRE region and the spawn paths' refusal; run 274 has wave 3's
+    operator-choice section, then what its plan names. The second to land merges main, re-stamps and re-runs the
+    citation cases, cite-remeasure and the `_reg_get` census. A worker whose edit must leave its region asks first.
+- **2026-10-06 20:21 — wave 4 done: PR #299 at `34cfe5ee`** (wave-done 3694; progress 3662; 14 commits plus a merge of
+  main `77c11245`; report copied to the coordinator's evidence on receipt; the mail was read at 20:15, held behind a
+  background workflow).
+  - **What landed:** Tasks 1–8, each reviewed by Opus, with the kill-safety lens on the sweep. The whole-branch
+    review says ready to merge.
+  - **The spares, all three used:**
+    - 4091: a spawn is claimed by one scope only;
+    - 4092: a scope with a child cgroup, or an unreadable cgroup dir, is carried and never stopped. This was a
+      CRITICAL wrong-stop path, caught before merge: a stop kills the whole subtree.
+    - 4093: the merge block keeps one stamp line.
+  - **The stop ships shadowed,** and nothing writes `scope-sweep-live`.
+  - **Pre-deploy readings, counts only:**
+    - 2026-09-16 to 2026-09-24: 16 stops, 0 reap-class;
+    - 2026-09-28 to 2026-10-05 17:00: 40 stops, 2 reap-class.
+  - **Re-measured:**
+    - The tip matches the claim, and the four required checks are green (CI 37463910980).
+    - #299 now conflicts with main `b27fabc15` (#290) on `ccd/ccd`, `ccrc-install.test.ts` and
+      `single-definition.test.ts`. It merges main after the review, not during it.
+    - The run went from `dispatched` to `working` to `awaiting-review`, and its eight items were settled.
+  - **Acceptance review 305** was dispatched to `ccrc-pwa-warm-mesa`, with the held-out panel named.
+  - **The worker's residue for wave 4b:**
+    - I1, a record line kind for carried or unmeasurable scopes;
+    - `s6_inert`'s staleness;
+    - the zombie child;
+    - the paused log line;
+    - baseline B's non-zero check;
+    - the per-task minors.
+  - **ccrc-history's runs 293 and 302** are cleared to edit README, the doctor checks, deploy.sh and the other paths
+    in their own regions, while 274's claim 1046 stands (3750).
+- **2026-10-06 21:53 — review 305 ACCEPTED wave 4** (review-done 3757, reviewed tip `34cfe5ee`; report copied on receipt).
+  - **The verdict:** 39 agents, none unverified; 9 confirmed (one important) and 3 refuted. All 30 mutation rows are
+    red, covering every never-stop class (4092's child cgroup included), the shadow gate and the paused file, three per
+    tick, the unmeasurable carry, the forged-record bounds, 4091, the doctor bounds and the harness group kill.
+  - **No path to a stop while shadowed or paused:** there is one read of `scope-sweep-live` and one stop call. The
+    readings reproduce: 16 stops / 0 reap-class, and 40 / 2. Departures 4091, 4092 and 4093 are confirmed.
+  - **The landing round was sent** (mail 3758; run 274 is back at `working`):
+    - merge main, keeping both sides of `ccrc-install.test.ts` and `single-definition.test.ts`, then re-stamp;
+    - the text and one-byte fixes F2 (qualified), F3, F4, F6–F9;
+    - one clause in 4020's entry naming F1's (a)–(c) and F5.
+  - **Rulings:**
+    - F2 is accepted as 4092's cost. A scope with a child cgroup is never stopped, even live, and the text says so.
+    - F6: the worker's in-plan definitions were sanctioned by the brief, so the plan's three sentences were stale.
+  - **CARRIED to wave 4b's FIRST commit:**
+    - F1(a): a line doctor cannot read answers through the "cannot read" WARN with its rewrite remedy, never the
+      dead-scope stop remedy;
+    - doctor's PASS line, qualified for a carried live scope.
+    These sit beside the worker's residue (I1, `s6_inert`'s staleness, the zombie, the paused log line, baseline B's
+    non-zero check).
+- **2026-10-06 22:54 — wave 4 MERGED: #299** (`1bb88d5e`, 22:54; after review 305 and the landing round).
+  - **The landing round** (wave-done 3766 at `8c48de36`) merged main `8d85c7cf4` and hit FOUR conflicts, not the three
+    measured. The fourth was `ccd/ccrc-doctor-checks`: main's `_check_model-default` (#302) and this wave's
+    `_check_scope-sweep` were both appended after `_check_timeout`, and both were kept byte-identical. The round's own
+    commits are text, comments, one blank line and the stamp (verified file by file).
+  - **The re-gate** was green on every file's first run. Correction 3767: the round did not re-run the whole suite. By
+    clause 15 its suite word is `unrun`; the last whole run is 3694's, with 4 known environmental reds.
+  - **Runs:** 274 advanced to `merging`, then closed final (`merged`), and its child workspace is queued for
+    reclamation. **Run 308 (wave 4b, the run's wave 5) was opened first,** planned, with numbers 4316–4325 written bare.
+  - **Next:** wave 4b waits for baseline B's week, which starts at THIS wave's deploy. The deploy time is recorded
+    here when both boxes carry `1bb88d5e`. The stop stays shadowed until the operator arms `scope-sweep-live`.
+- **2026-10-07 00:26 — wave 4 DEPLOYED: baseline B starts 2026-10-06 23:16 UTC.** Both boxes run v0.0.110 (`1bb88d5e`), applied
+  from the console. The fleet box finished at 23:16:17 and the server box at 23:16:50 (each box's `update.json`, phase
+  `done`; `ccrc version` reads `1bb88d5e` on both). Baseline B's week ends 2026-10-13 23:16 UTC. Wave 4b (run 308) is
+  planned after that reading, and the stop stays shadowed until the operator arms `scope-sweep-live`.
+- **2026-10-08 — issue #317 amends stage 1, off-wave: a link `EXDEV` refused goes through a common mount, and a copy
+  says why and how much.** Items 1–2 of the issue, the scope the operator set in its comment; items 3–4 (drop the
+  source, `carry-dedupe`) are not part of it. Plan `docs/superpowers/plans/2026-10-08-carry-link-via-mount.md` defines
+  D-4500 (`carry-links-through-common-mount`) and D-4501 (`carry-copy-says-why`), issued by the allocator; the spec's
+  rev 9 carries them into §1.2 item 1, §5.1, §8 and §9. The plan's doctor `carry` check was dropped at dispatch and
+  follows separately. Deploy **AGENT-FIRST** (ccd and the instrument), after the read-only pre-check: each account
+  root and its path under the whole-volume mount share one `dev:inode`, the mount is read-write for the fleet user,
+  and no unit has a private mount namespace (verified by the operator at dispatch). Afterwards, stage 1's
+  `--stage 1 --json` should show `link_via_mount` rising and no `exdev-*` key in `copy_by_cause`.
+- **2026-10-13 23:17 — baseline B COMPLETE: wave 4b is unblocked for planning; the scope sweep stays SHADOWED.**
+  - The read-only stage-6 instrument measured the promised full week from `2026-10-06 23:16:00 UTC` inclusive to
+    `2026-10-13 23:17:00 UTC` exclusive, with the pressure reap still enabled.
+  - **Pressure-reap baseline:** 34 pane-scope OOM stops; `reap_class: 0`; 22 were busy within the idle window and 3
+    were idle without a live background shell. Five stops were unmapped (3 had no spawn, 2 had two sessions spawned
+    together), and 4 were unmeasured. The per-session reap-class map is empty.
+  - **Scope-sweep shadow reading:** 9 dead scopes; 2 inert scopes; both inert scopes had been dead for at least one
+    day. The instrument's verdict-record mode is `shadow`.
+  - This is baseline B, not evidence to arm a kill path: nothing creates `$REG/scope-sweep-live`. Run 308 may now be
+    planned for the pressure-reap spawn variable, 3925's `/clear` fix and the carried wave-4 residue.
+- **2026-10-08 11:15 — the operator's session takes ccrc-pwa #317, the carry's EXDEV copies (mail 4000).** Its first
+  PR links through a common mount of the same filesystem when there is one, and makes the copy fallback loud, with its
+  byte count. It does not drop the source after a carry and adds no dedupe verb. It touches `_swap_carry_*` and the
+  merge walk, and it replaces the EXDEV fallback this spec records as a named cost (§2). No open or planned wave of
+  this programme edits the carry: 4b sets a spawn variable and fixes `/clear`. Wave 6 (spec stage 3) writes the
+  manifest in the swap body right after the carry call. **Before wave 6's plan is written, mail the session that took #317.**
+  The plan reads main with #317 in it, or waits for #317 while it is open. Answered in mail 4001.
+- **2026-10-14 05:36 — wave 4b's written plan is drafted and self-reviewed; operator review is pending.**
+  - Plan: `docs/superpowers/plans/2026-10-13-session-continuity-wave4b-pressure-reap-and-clear.md`. Tasks 1–4 are
+    the worker's sequential units: FIRST the full wave-4 residue, then the child spawn environment, outgoing
+    operator choice before UUID rotation, and the separate direct pressure-kill instrument. Task 5 belongs to
+    the coordinator: independent acceptance, observation of the existing updater, qualified next-start exposure
+    and weekly follow-through against frozen B.
+  - The parent self-review checked spec coverage, placeholders, interfaces and each Review Focus test owner.
+    All 63 code fences are balanced, the Python fences parse, and the 30 referenced test paths were checked
+    (one test is planned new). The snippets and mutations have not been replayed as a product prototype.
+  - Run 308 remains planned; its issued block is 4316–4325. Written-plan review is still required before
+    implementation or dispatch. No updater intent, restart, sweep marker or repository setting is changed.
+- **2026-10-14 05:45 — wave 4b's plan is published as #401; written review remains pending.**
+  - Planning commit `80756e79f` carries only the plan and this ledger. Privacy and deviation-reference guards
+    passed before and after that commit: 2 files, 86 tests, including the introduced-history scan; staged and
+    committed whitespace checks passed. The rendered preview's plan title, distinctive content and served
+    branch were verified. These are documentation checks, not executed implementation tests or mutations.
+  - The existing sequential subagent-driven method is preserved. No implementation, dispatch, merge, updater
+    change, restart or sweep arming follows from publication; run 308 remains planned pending written review.
+- **2026-10-14 16:02 — #401 is MERGED; implementation remains gated on written-plan review.**
+  - Published head `7d997064360bcf983010823cfb6747b8c0186d65` merged as
+    `3786aa755fe5d3a8a1b65fc08f5356ce324cffa5`. The operator reported the merge; no separate implementation
+    approval is recorded. Run 308 was remeasured planned, unbound and undispatched.
+- **2026-10-14 16:45 — wave 4b's pre-dispatch plan is reanchored to current continuation behavior.**
+  - Documentation baseline: `c7776b08037dadaeee832e906f99e4221afdf8d2`. Task 3 adds promotion INSIDE the existing
+    accepted pane-rotation branch, before its UUID write, and preserves `_ci_pane_parked`, `_ci_pane_refused`,
+    worker-follow memory clearing, `_ci_bg_follow` and `_follow_continued_in`. Refused panes and continuation or
+    background-worker writes gain no promotion side effect. This is source integration, not a rebase.
+  - The plan now supplies admitted/refused pane and follow-order controls, separate guard/follow mutation
+    trials, and the existing UUID and both continuation-parity suites as local and final regression gates.
+    Parent self-review retains the spec, interfaces, Review Focus and four-worker-item boundary.
+  - Documentation syntax checks: 63 balanced fences, 10 Python fences parsed after dedenting in-function
+    excerpts, 19 TypeScript/JavaScript fences parsed, the guarded Bash excerpt and two fixture-control strings
+    syntax-checked. All 34 referenced test paths are accounted for, including one planned new test. These are
+    syntax/path checks, not executed test snippets, mutation results or a replay-verified implementation.
+  - Shared-file owners have ratified scoped coexistence: continuity owns the named spawn/choice/sync seams,
+    existing scope-sweep check/test region and continuity README prose; citation-only and measured README-size
+    maintenance are allowed only when this wave actually moves them. Keep neighboring owners' regions and
+    check/list entries. New helper, fixture or source-region overlap stops for fresh agreement. No claims were
+    taken, broken or released; refresh ownership before dispatch. Second-lander preservation is not an
+    independent clause-16 main-absorption trigger.
+  - Pre-publication documentation guards initially passed: privacy and deviation references, 2 files / 86
+    tests; whole changed-document private-name/path scan and whitespace check passed. A later paired rerun
+    passed privacy but timed out in the deviation scanner's 20-second case (85 passed, 1 timed out); the
+    unchanged deviation guard then passed alone, 31/31. The timeout is recorded, not called a clean paired run.
+    Python excerpts were dedented for syntax checking; TypeScript/JavaScript syntax was checked with the
+    installed esbuild, not claimed as type-checking.
+  - Written-plan review remains pending. Run 308 and its issued block 4316-4325 are unchanged; Task 5 remains
+    coordinator-owned. No product implementation, dispatch, updater change, restart, scope-sweep arming or
+    repository-settings write follows from this revision.
+- **2026-10-15 15:43 UTC - written plan approved; dispatch preparation checked.**
+  - The operator explicitly approved the wave-4b written plan at `3d8e5559b11ed4f8243911c08b105b39e6a1e26b`
+    (#409). The written-plan gate is complete; the approved sequential execution method is unchanged.
+  - Read-only source integration from `c7776b080` to measured main `a3cebde1b` found the scoped seams intact.
+    The brief retains the admitted-pane guards, background-memory clearing and both follow paths, and requires
+    current doctor-fixture totals and citation composition to be remeasured rather than copied.
+  - Coexistence was refreshed for the successor work holding shared documentation and citation tests: continuity
+    prose only; leave the context-emitter citation line and history section alone; citation-only maintenance in
+    the test, retaining the other work's appended coverage and dated paragraphs. The shared by-file map is
+    remeasured over stated/base/tree values by the second lander; README size is measured, never summed.
+    Existing ccd and scope-sweep doctor region licences remain narrow; any new overlap needs fresh agreement.
+  - Run 308 was freshly read planned, unbound and undispatched. Tasks 1-4 are its four worker items; Task 5
+    remains coordinator-owned. Existing issued numbers 4316-4325 remain unchanged. No product tests, mutation
+    trials, hand deployment, restart, arming or repository-settings act is claimed by this preparation.
+- **2026-10-15 18:19 UTC - wave 4b dispatch recorded; worker reports final gates running.**
+  - The single dispatch was accepted at 16:00 UTC for run 308, the run's wave 5, with exactly four worker
+    items (Tasks 1-4). The approved plan remains the immutable revision `3d8e5559b11ed4f8243911c08b105b39e6a1e26b`;
+    status-only documentation commit `a0debd0a0` did not change that implementation authority.
+  - The accepted response recorded `briefQueued:true`, `skillState:present`, `adopted:false`, `resumed:false`,
+    `clearedAt:null` and `spawnState:null`. The last field is unrecorded readiness, not proof of a ready pane.
+    Routing remains Opus/high with fresh native Sonnet/high implementers and Opus/high task reviewers, dependent
+    sequential execution, workflow off and compact 40. The existing issued block is 4316-4325; no new allocation.
+  - On this mail wake the server still reads `dispatched`, four declared items and none marked done. The
+    worker reports four task commits with task reviews plus a final-review fix, local head `5033cfb55`, not yet
+    pushed. This is a progress report, not a verified fingerprint, completed gate result or independent acceptance.
+  - The worker also reports launching the full server suite in the background. That departs from the foreground
+    rule; the coordinator instructed it to retain the launch/result evidence, await and measure the already-owned
+    task safely, prove it exited before the next suite, and run subsequent gates in the foreground, serially.
+    No duplicate suite, broad process kill, indefinite CI wait or assumed green result is authorized.
+  - Task 5 remains coordinator-owned and pending. No product acceptance, merge, deployment, updater-intent
+    change, restart, scope-sweep arming or repository-settings act follows from this status. Mail wakes the next
+    step; no polling or repeat dispatch.
+- **2026-10-19 09:14 UTC - handoff recorded; independent review recovery resumes with corrected routing.**
+  - Run 308 reads `awaiting-review`, with four of four items settled and no stored `handoffCommit`. The received
+    wave-done claims Tasks 1-4 at `990c70cbb5cd863f97d6d5e59dd01c203e111dba`, PR #435 open. Fresh local-ref,
+    remote-ref and PR-head measurements agree. That verifies the handoff coordinates, not product correctness.
+    The immutable approved plan remains `3d8e5559b11ed4f8243911c08b105b39e6a1e26b`; Task 5 is not started.
+  - The handoff reported `suite: red`, `failure: unclear`. Its claimed serial coverage of 686 server files,
+    isolated/base reruns, agent/PWA results, builds and mutations remain evidence for the reviewer to examine,
+    not accepted classifications. Preserve the earlier background launch, interrupted attempt, incomplete
+    UTF-8 reruns, owning-command substitution, coverage/exit gaps and code-tested-versus-handoff distinction.
+    PR #435's current check projection has `server 5/12` and `test (server)` red; the selected manifest and
+    actual failure still need examination. Neither a selected green check nor an untouched source file waives a red.
+  - The original review-489 dispatch put `opus` in the session's `subagent` field. The response was an untyped
+    502: the underlying command refused that value outside its vocabulary. This was the coordinator's payload
+    error, not a product defect or evidence that explicit Opus agents are unavailable. The server recorded a
+    dispatch attempt; no reviewer was assigned or dispatched. The underlying command's no-touch message does
+    not erase that server-side attempt record.
+  - Review 489 now reads `failed`, closed at `2026-10-16 21:15:00.251 UTC`, with no reviewer/session binding or
+    `dispatchedAt`. Its closure actor and reason have not been established. Keep that row and the original
+    refusal evidence; do not reopen it or silently describe it as a planned retry. The fresh closed-inclusive
+    run list contains no other review of run 308.
+  - The operator directed continuation through completion after the routing diagnosis. Recovery uses a NEW
+    review run of 308, after this routing record is committed: main Opus/xhigh, session subagent DEFAULT Sonnet,
+    workflows on, compact 40. The default is neither a ceiling nor a hard minimum for explicit per-call models.
+    The fixed panel stays three fresh Opus/high lenses and three fresh Sonnet/high refuters per finding, literal
+    in the prescribed script. Dead/empty lenses are unverified; all-dead refuters are unexamined, never approval.
+    Coordinator intent was declared before delegation. No replacement has yet been opened or dispatched.
+  - The reported landing order is #410 and #448, then #441, then #435. This is a peer's reported ordering, not
+    new merge authority. The previously measured `ccd/ccd` conflict is historical; obtain fresh landing checks
+    before any owner conflict-sync, preserve consent/citation/census fences, regenerate the stamp rather than
+    hand-resolve it, and independently review any changed tip. No integration into the worker's checkout here.
+  - No product acceptance, merge, manual rollout, updater-intent write, restart, scope-sweep arming or repository
+    settings change follows. Task 5 waits for independent acceptance; landing-order Task 7 remains separately
+    gated. The scope sweep stays SHADOWED. Following an accepted review dispatch, end the turn for reviewer mail.
+- **2026-10-19 13:16 UTC - review 630 dispatched; reviewer reports panel complete, suites still in progress.**
+  - After the routing correction was committed as `d995192bb`, a NEW review run 630 of work run 308 opened at
+    09:24 UTC and dispatched once at 09:29 UTC. The accepted response recorded `briefQueued:true`,
+    `skillState:present`, `resumed:false`, `adopted:false`, `clearedAt:null` and `spawnState:null`. Review 489 and
+    its original failure evidence are unchanged; its closure provenance remains unknown.
+  - The actual route is main Opus/xhigh, session subagent default Sonnet, workflows on, compact 40. The brief
+    preserves the literal three Opus/high lenses and three Sonnet/high refuters per finding, the immutable
+    approved plan, all Tasks 1-4 and the mandatory evidence annex. Task 5 is outside implementation acceptance.
+  - The latest run-board read still has work 308 at `awaiting-review`, four settled items, and review 630 at
+    `dispatched`, bound to its reviewer and not closed. The reviewer's 13:14 UTC STATUS, not `review-done`, says
+    it measured `990c70cbb5cd863f97d6d5e59dd01c203e111dba` once. It reports a complete 45-agent panel:
+    10 confirmed findings, four refuted, none unexamined and no lens unverified. These are progress claims;
+    there is no final report or accepted review fingerprint yet, so no finding-level ruling follows.
+  - The reviewer reports the nine owning-gate groups and server build green, with doctor describe partitions;
+    full-server coverage is still in progress at 55 of 71 bounded serial parts plus three oversized files.
+    Two parts were OOM-killed under shared pressure, not test outcomes. It reports one rerun green and the other
+    still owed, followed by the remaining server parts, agent/PWA suites and PWA build. No coverage waiver,
+    assumed process-exit proof or acceptance of those results is inferred; the report must retain the gaps.
+  - Before dispatch, CI job logs identified the last measured `server 5/12` failure as the README-size guard in
+    `pools-prose.test.ts`: the stated 6200 lines versus 6351 measured exceeded the allowed delta of 100 by 51.
+    That explains the red check, not whether it is inherited or introduced. The actual selector manifest is
+    still unestablished. Both questions were included in the review brief; no fresh CI result is claimed here.
+  - The status was acknowledged once. No new reviewer instruction, run advance/close, product acceptance,
+    feature edit, integration, merge, deployment, restart, updater-intent/settings write or arming follows.
+    Task 5 remains pending; Task 7 remains separately gated. End the turn for reviewer mail, without polling.
+- **2026-10-19 14:46 UTC - review 630 closed; implementation returned for correction, not accepted.**
+  - Review 630 closed DONE at 14:32 UTC with its original report fingerprint for
+    `990c70cbb5cd863f97d6d5e59dd01c203e111dba` accepted. The report is immutable. This accepts review provenance,
+    not Tasks 1-4. The review workspace remains retained while work 308 is open; review 489 is unchanged.
+  - The final panel reports 45 agents, zero errors/skips, ten confirmed and four refuted findings, none unexamined
+    and no lens unverified. Its disclosed safety-only shared-preamble addition is accepted as reconciliation with
+    the brief's current safety obligations, NOT described as a byte-for-byte script run. Literal models, efforts,
+    three lenses, three refuters per finding and majority logic were unchanged. The three additional whole-branch
+    findings are not panel-voted; they retain that provenance. No finding is accepted merely from its count.
+  - **F1, R1 and F7: fix.** Preserve the acknowledged class/effort pair through haiku-record rotation; preserve the
+    newer outgoing choice when resuming an older conversation; do not let refused/drifted incoming commands erase
+    the last effective acknowledged choice. Permanent fixture-contained reproductions must also preserve the
+    newer-incoming clear-race protection and no-pane-keystroke control. No loss tradeoff is waived by documenting it.
+  - **R2: uphold the conformance finding.** The third promotion argument, second transcript read and live applied-stamp
+    side effect are not approved merely by the worker's departure entry. Correct within the approved two-argument,
+    current-UUID, combined-route-writer seam if all controls can hold. Otherwise stop that part and submit the exact
+    proposed contract, reasons, costs and tests for an operator ruling; independent residue/evidence work may proceed.
+    Do not simply revert and reintroduce the demonstrated clear race. **R3:** make writer enumerations match the
+    resolved, authorized writer set, not an unapproved side effect.
+  - **F2: fix header/fixture, not stop authority.** Keep the approved fail-safe uppercase-state policy; readable
+    unsupported state `t` must carry without stop. **F3:** add an in-bounds half-clock pair that actually reds when
+    the helper's pair guard is removed, independently of regex, age and shell-arithmetic resets.
+  - **F4: partly overrule the product-change request.** The approved plan itself sets the carried prior verdict to
+    `carry` and retains the verdict-change announcement branch. Correct the stale verbatim-carry/first-ever prose
+    and pin re-announcement after carry; do not add persistence, widen the frozen carry format or expand stop authority.
+  - **F5: fix committed evidence.** Record actual final per-task findings/verdicts and fixes/re-reviews held in existing
+    artifacts. No child reasoning, chat or transcript access and no invented/backdated review. Any unrecoverable
+    historical gate is explicitly UNPROVEN; fresh Opus/high remedial task reviews at the corrected state must be
+    dated honestly before corrective commits. Review 630 is not a substitute for the missing task gates.
+  - **F6: correct checklists and history.** Literal unrun commands stay unrun. Allow future bounded foreground serial
+    full-suite parts with complete file/test-name accounting and actual exits; owning groups stay literal except
+    the oversized doctor may be partitioned with distinct-name coverage. Retain the background/interrupted first
+    RED, timeout/OOM attempts, repeated shards, missing worker JSON, overlapping counts, omitted timed-out-attempt
+    failures, single-case reruns and unproved worker-group exit. Worker-unrerun UTF-8 cases are not worker green;
+    later reviewer passes have separate provenance. This practical substitution never rewrites the original execution.
+  - **F8-F10:** list both base-red pin cases, correct zero README source anchors and the measured line counts, and
+    correct five-for-five comment replacement rather than six. Keep comment-only/line-neutral qualifications.
+  - The reviewer covered 686 server files at the reviewed tip with JSON, in 96 bounded serial parts. Its first complete
+    pass remains RED: 34,456 distinct passes, 103 skipped-only and six failed tests in five files. Its isolated/base
+    evidence classifies those failures; it does not turn the first pass green. Agent 494, PWA 4,990 and both builds
+    passed. Three OOM-killed parts were not test outcomes; their later green reruns and exact-process cleanup are
+    reviewer evidence, not this coordinator's actions or retroactive worker-group exit proof.
+  - The reviewed PR CI selected all 714 server files at its merge commit: 713 passed, the README-size guard failed.
+    The report establishes that failure already exceeded the bound on the merge base. Required server CI remains
+    RED for that inherited failure; skipped macOS/trace/full-suite legs are not green. These old-tip results do not
+    verify a changed fix-round tip. The historical 13:16 entry above retains what was known then.
+  - Routing evidence is original `suite:red`, `failure:unclear`, Opus/high with no prior route changes. Missed cases
+    and incomplete evidence warrant the effort-first rung to Opus/xhigh through the server route door; default Sonnet,
+    workflows off, compact 40 and explicit Sonnet/high implementers / Opus/high task reviewers stay unchanged.
+    At this entry's timestamp the rulings are written, but the route change, work-run retreat and fix-round mail
+    have NOT yet been submitted. Record their real responses below. Do not dispatch again or reset terminal items.
+  - Any corrected handoff needs a NEW independent review run, never reuse 630. Task 5 remains pending; Task 7 remains
+    separately gated. No merge, manual rollout, restart, arming, updater-intent or repository-settings act is authorized.
+- **2026-10-19 14:50 UTC - send-back accepted; worker correction now owns the next step.**
+  - The server accepted the effort-first route change, `high` to `xhigh`, for work 308's worker. This is an
+    effort change, not a class change: main Opus, default Sonnet, workflows off and compact 40 remain. No manual
+    routing command or apply was used, and no demotion or additional escalation is implied.
+  - The server accepted work 308's retreat from `awaiting-review` to `working` using the original verified
+    handoff fingerprint. Four of four terminal items remain settled; none was reopened or rewritten.
+  - One status/fix-round mail was accepted for the bound worker, with the original immutable review-report path
+    first and all finding-level rulings. This was mail, not a second dispatch or a clear. Mail acceptance proves
+    queueing, not that the worker has read it or begun a fix. The private receipt retains the exact payload/results.
+  - The worker owes authorized corrections and truthful evidence, or a concrete Task-3 contract proposal where
+    the approved seam cannot meet the existing requirements. A new tip needs a new independent review. Tasks 1-4
+    remain NOT accepted; Task 5 and Task 7 retain their gates. End the turn for actual mail; no polling.
+- **2026-10-19 15:05 UTC - Task 3 contract question handed to the operator; no option approved.**
+  - The worker reports that the approved outgoing-only promotion seam cannot satisfy both the no-pane-keystroke
+    and newer-incoming clear-race controls. Its structured question offers an epoch merge or deferral to the keep.
+    These are worker claims/options, not independently verified implementation or an approved contract.
+  - The notification was acknowledged once and the question released through the server to the operator. This is
+    a new interface/read/write or tradeoff decision, not authority the coordinator can derive from the earlier
+    plan approval. No option was selected; the wider promotion contract remains unapproved.
+  - Task 3 awaits that ruling. Independent residue/evidence corrections may continue under the existing fix-round
+    brief; their permission does not extend to the blocked contract. A corrected handoff still needs a new review.
+    Tasks 1-4 remain unaccepted, with Task 5 and Task 7 gated. No redispatch, clear or additional routing change.
+- **2026-10-19 17:29 UTC - Task 4 parser-contract question handed to the operator; no option selected.**
+  - The worker reports that valid non-kill notification shapes outside the approved strict envelope keep the
+    stage-6 direct-notification reading partial, preventing a measured zero for Task 5. This is a remedial-review
+    claim, not independently verified coverage or a finding accepted by this coordinator. The offered choices
+    are to widen the parser now or report the limitation without changing it; neither was selected here.
+  - The question also discloses an out-of-brief read-only live-transcript count. No transcript content was
+    supplied or accessed by this coordinator. That departure does not authorize further live-transcript access
+    or disclosure, and its aggregate result is not accepted as independent implementation evidence.
+  - The notification was acknowledged once and the held question released to the operator. A separate worker
+    boundary notice was accepted: no parser widening is authorized by this coordinator; preserve partial or
+    unmeasured results rather than asserting zero. Existing independent corrections may continue, using fixture
+    HOMEs for tests. No whole-run hold, redispatch, clear, routing change or terminal-item mutation was requested.
+  - No operator answer to this question was observed. A corrected handoff still needs a NEW independent review;
+    Tasks 1-4 remain unaccepted and Tasks 5 and 7 remain gated. No merge, rollout, restart, arming or settings act.
+- **2026-10-19 22:25 UTC - fix-round progress received; verification and contract provenance still owed.**
+  - The worker reports code final at `5a71ccf91`, unpushed, with sequential task reviews and scoped re-reviews.
+    This is progress, explicitly not a wave-done. The server still measures work 308 as `working`, four of four
+    items settled, and review 630 as done. No changed-tip fingerprint was submitted or implementation accepted.
+  - The worker now attributes Task 3's epoch merge and Task 4's parser widening to operator answers through the
+    structured asks. These are reported rulings, not coordinator selections. The reply requests exact ask ids,
+    selected answers and the scope/costs presented, without child reasoning, chat or transcript recovery.
+  - A newly disclosed cost can cause an already-pending model command to be typed once instead of read back.
+    That cost is not accepted by receiving this status. Identify its coverage in an existing operator ruling or
+    submit one structured question before treating it as an accepted tradeoff; independent verification may proceed.
+  - The worker reports one conflict-triggered merge of main, owning groups 1-8 green, and group 9 timed out under
+    high load. The timed-out attempt remains failed verification, not a pass or proved load flake. A 76-part serial
+    full pass is still owed. The tip's README-size guard is reported red; claimed merge-ref green is separate,
+    unverified provenance. No additional absorption or check weakening was requested by this coordinator.
+  - The status was acknowledged once and one response accepted. It preserves historical UNPROVEN task-review
+    evidence, the out-of-brief scan disclosure and fixture-HOME boundaries. Waiting for load must not end a worker
+    turn without a permitted wake. No whole-run hold, routing/run/item mutation, redispatch or clear was requested.
+    A final handoff needs NEW independent review; Tasks 1-4 remain unaccepted and Tasks 5 and 7 remain gated.
+- **2026-10-19 22:31 UTC - pending-model read-back tradeoff handed to the operator.**
+  - The worker's structured question describes promotion rewriting the applied-record timestamp, preventing
+    same-tick read-back of an already-pending class that the pane already runs. It reports one redundant model
+    command instead of a read-back, and offers accepting that cost or retaining the old timestamp.
+  - Those behavior and safety claims remain unverified here. The question identifies the lost read-back as not
+    expressly covered by the cited approved control. Accepting the cost or changing the timestamp contract is a new
+    tradeoff, not a choice this coordinator can infer from earlier approval of the epoch merge.
+  - The notification was acknowledged once; the held question was released to the operator without selecting
+    either option. No operator answer was observed. The existing response already permits independent verification;
+    no duplicate notice, whole-run hold, route/run/item mutation, redispatch or clear was requested.
+  - The final handoff still owes ruling provenance and actual verification, followed by NEW independent review.
+    Tasks 1-4 remain unaccepted; Tasks 5 and 7 remain gated. No merge, rollout, restart, arming or settings act.
+- **2026-10-19 22:48 UTC - W2 coexistence reconfirmed with expanded protected regions.**
+  - The merged cross-wave plan differs from the version covered by the earlier consent only by vocabulary
+    substitutions, not tasks, functions or files. Its blob on the measured main is identical to the merged plan.
+    A read-only documentation scout checked that comparison; this is not independent implementation review.
+  - Run 308's local branch was measured at `5a71ccf91` against main `397be1ec5`, with merge base `d7a4c9408`.
+    Function boundaries and diff-hunk coordinates, not product diff-body acceptance, now add `_route_note_clear`,
+    `_route_type_model` and `_route_readback` to the existing off-limits list. The changed `_spawn_start`
+    admission/suppression region and original launch lines are protected too; named functions outlive coordinates.
+  - The two W2-only source consents remain separately fenced: lifecycle-reachable helper changes retain their
+    full prior scope, expiry exclusions and five unclosed residuals; continuity coexistence permits only disjoint
+    edits. The plan authorizes no edits to the protected routing, choice, UUID, resume or spawn functions.
+  - The current `ccd/ccd` claim belongs to a separate file holder. Programme consent neither supplies that
+    holder's concurrence nor releases unmerged code; ownership must be refreshed before editing. New overlaps
+    require scoped agreement. Citation/census/restamp duties remain, without creating an absorption trigger.
+  - One scoped reply was accepted. Lifecycle remains complete; this does not reopen it or authorize cleanup,
+    W3, acceptance, landing, deployment, restart, arming or settings. Work 308 remains working, four items settled
+    but unaccepted; its final handoff needs NEW independent review. Tasks 5 and 7 remain gated.
+- **2026-10-20 07:42 UTC - fix-round handoff verified by the server; NEW independent review dispatched.**
+  - The worker's handoff names PR #435 at `2f6caa48e`: code final at `5a71ccf91`, the last commit gate evidence
+    only. Its signal lines read suite red, failure unclear. The branch tip and PR head were re-read before the
+    claim was submitted unchanged; the server's re-measurement accepted it, and work 308 is awaiting review with
+    four of four items settled but unaccepted. No routing change was made.
+  - The worker reports every review-630 ruling addressed. It attributes Task 3's epoch merge, Task 4's parser
+    widening and acceptance of the pending-model typing cost to answers to its structured asks. This coordinator
+    answered none of those asks and observed none of the answers; they stay the worker's report until the review
+    checks the shipped behaviour against the chosen option texts.
+  - The reported first complete server pass is red: four files said to fail identically on the base, one failure
+    tied to a gitignored build directory, the branch-tip README-size guard, and one indivisible test batch longer
+    than the foreground tool bound. These are classifications to verify, not accepted results.
+  - GitHub reads the PR as unmergeable, with a reported generated-stamp conflict against current main, so no PR
+    pipeline ran at the new head. One manual full-mode CI run was started on the worker branch at that head for the
+    suites' answer; it is not a required check and grants no landing. No absorption was requested; the stamp
+    conflict is resolved at landing.
+  - Review 685 was opened against work 308 and dispatched with the held-out panel, one disclosed safety-only
+    preamble addition, and two wave-specific lenses: conformance to the operator's chosen options, and the
+    absorbed merge. Route opus/xhigh, sonnet default, workflow on. Review 630 is not reused. A read-only check of
+    the brief before dispatch found seven defects, all corrected first.
+  - Tasks 1-4 remain unaccepted; Tasks 5 and 7 remain gated. No merge, rollout, restart, arming or settings act.
+- **2026-10-20 08:50 UTC - the operator stops the programme after wave 4b for now.**
+  - Asked how the programme continues after 4b, the operator chose to stop after 4b: ship it, verify it and take its
+    one-week measurement (Task 5), then pause. Waves 5-9 wait until the operator offers a scratch account for the
+    wave 5 spike; wave 5 is not planned meanwhile.
+  - The spike needs a rostered account carrying no real work: it drives that account into its five-hour limit twice,
+    swaps a scratch session off it and back, and changes one pane scope's memory policy (spec section 5.2).
+  - Wave 4b's own path is unchanged: review 685, then a fix round or landing, then delivery by the update mechanism
+    and Task 5's week. No merge, rollout, restart, arming or settings act is recorded here.
+- **2026-10-20 13:59 UTC - review 685 accepted as a report; fix round 2 sent.**
+  - Review 685 read the fix-round tip `2f6caa48e` once, with the held-out panel and the two wave-specific lenses
+    (74 agents, no error, no unverified lens). The server accepted its report fingerprint; that accepts the report,
+    not the implementation. It found nothing critical: eight panel-confirmed findings, one of them important, and
+    three of the reviewer's own, unvoted.
+  - Rulings, all within the plan and the operator's chosen option texts:
+    - Fix: the instrument's verdict-row reader splits on Unicode whitespace where the sweep folds only ASCII;
+      the scope sweep's zombie exemption also skips a multi-threaded zombie leader; an unused deviation number
+      written with its prefix; the absorbed merge restored a comment the reviewed fix had removed; a deep-JSON pin
+      that holds only on interpreters that raise on it.
+    - The baseline comparison's window stays seven times 24 elapsed hours, as the plan writes its guard, read
+      under `TZ=UTC` as the plan's measurement command sets it. The fix documents the local-zone reading and pins
+      the refusal of a calendar week across a DST change.
+    - The parser widening the operator chose stays attributed to the operator, with its grounds written down: this
+      coordinator released that ask and chose neither option, and a released ask is terminal to its parent, so the
+      returned answer came from the operator's own surface.
+    - Accepted: that widening also tightens an earlier single-task arm toward unmeasured, which the plan discloses.
+    - Narrowed back to the chosen text: trailing reminder blocks made more shapes known non-events, and the chosen
+      text kept the kill rule unchanged, so a killed envelope with trailing text stays unmeasured, as it read when
+      baseline B was measured. Counting it as a kill would be a new operator decision.
+    - The README-size red on the branch clears on the landing merge with main; no CLAUDE.md edit.
+    - No history rewrite for a docs-typed commit that changes one count; the plan's evidence notes it.
+  - The round has two phases. The first covers files no other run holds. The second restores the comment, adds one
+    README sentence and merges current main with a re-stamp; it waits for another run's claims on `ccd/ccd` and
+    README to free. The four required checks must be green on the merged tip, and that tip needs a NEW review.
+  - No routing change. Tasks 1-4 remain unaccepted; Task 5 remains gated. No merge, rollout, restart, arming or
+    settings act.
+- **2026-10-20 19:22 UTC - fix round 2 handed off; NEW independent review dispatched.**
+  - The worker's wave-done names tip `90c37de9b`, PR #435. The server accepted the fingerprint and moved the run to
+    awaiting review. Its suite line is red, because the round's first full pass was red: two files it calls red on
+    `main` on this box, and load timeouts. The review decides those classifications.
+  - The round met every ruling, as the worker reports it, and merged `main` twice. Each merge conflicted only on
+    `ccd/ccd`'s generated stamp, and each was re-stamped.
+  - One structured ask, answered by this coordinator. `main`'s new function-context census counted one more
+    cross-context call once the live promotion's row was added: the promotion looked up the config directory itself.
+    The chosen fix passes the caller's config directory instead, so the count holds at its ceiling and no answer
+    changes. No new deviation number; one line in the plan's evidence.
+  - The worker made six small rulings of its own, among them withdrawing a check it had added beyond the narrowed
+    kill rule, and correcting this coordinator's wording about when baseline B was measured. The review judges each.
+  - The four required checks passed on the merged tip. One full CI run was started there for the files a pull
+    request does not select. `main` touched `ccd/ccd` again after the second merge, so the landing needs one more
+    stamp-only merge.
+  - A NEW review run reads that tip with the held-out panel and the two wave-specific lenses (operator ruling,
+    absorption). No routing change. Tasks 1-4 remain unaccepted; Task 5 remains gated. No merge, rollout, restart,
+    arming or settings act.
+- **2026-10-21 01:34 UTC - review 714 accepted as a report; fix round 3 sent.**
+  - Review 714 read `90c37de9b` with the held-out panel and both wave lenses: no finding unexamined, no lens
+    unverified. It found one important and six minor findings, none of them in behaviour.
+    - Every mechanism of fix round 2 was met, and every red-first and mutation red reproduced.
+    - The complete server pass was green, except six cases. Each is red on the merge base on this box, and CI's
+      full run passed each one.
+    - The required checks were green, and the full run was green on every Linux leg.
+  - **The rulings:**
+    - the predicate-5 change that fix round 2 directed gets its own deviation number, as fix round 1's contract
+      change did;
+    - the operator-choice promotion's Contract is corrected in place to the shipped signature;
+    - the plan records both landing merges, and one invisible character becomes its escape;
+    - README and the spec's §5.7 name the uuid moves that silently lose the operator's choice;
+    - the comment above the resume environment is made true for every lane, if the `ccd/ccd` holder agrees;
+    - the killed-envelope rule is confirmed as it reads at the base;
+    - the worker's wording about when baseline B was measured is accepted.
+  - A third stamp-only merge of `main` goes first, under the `ccd/ccd` holder's consent to one such merge.
+  - Tasks 1-4 remain unaccepted until a scoped review of this round. Task 5 remains gated. No merge, rollout,
+    restart, arming or settings act.
+- **2026-10-21 03:55 UTC - wave 4b merged as #435 (`d8cd4765`); run 308 closed.**
+  - **Fix round 3** came back at `3567a3aa4`. It shipped every ruling:
+    - one stamp-only merge of `main`;
+    - the predicate-5 change numbered;
+    - the Contract corrected;
+    - both earlier landing merges recorded;
+    - the invisible character escaped;
+    - the README and spec silent-cost item;
+    - the resume-environment comment, which is now true.
+  - **The comment's wording.** The round's own review found that this coordinator's suggested clause was false
+    against the code, and the worker wrote the true one, with the `ccd/ccd` holder's consent. That wording is
+    accepted, with no deviation number.
+  - **Review 729** read that tip. It found three minor findings and no regression. One is a residual, carried
+    below: `main`'s own nearby comment is false.
+  - **The landing.** `main` then moved (#1046 touched `ccd/ccd`), so one more stamp-only merge followed, at
+    `cd539c089`, with the holder's consent. Its own change is the stamp alone, as measured. Its required checks
+    passed; one load-sensitive spool case passed on a re-run of the failed job.
+  - **The merge.** It was a squash at that head, through the admin bypass, at 03:54 UTC, after resolving one
+    code-scanning thread on a test file: a command built from the suite's own fixture paths.
+  - **The close.** Run 308 closed done and released its workspace. A planned run for the next wave keeps the
+    programme open. That wave stays deferred, as the operator ruled on 2026-10-20.
+  - **Owed next:** the deploy through ccrc's updater, agent first, then Task 5's one-week measurement against
+    baseline B. The scope sweep stays shadowed.
+- **2026-10-21 05:43 UTC - wave 4b deployed; Task 5's week starts.**
+  - **The deploy.** The operator applied v0.0.508, which carries `d8cd4765`, from the console. ccrc's updater
+    moved the fleet box first. Its update report reads done at 05:35:58 UTC, and the server box's at 05:38:59 UTC.
+    `ccrc version` on each box reads v0.0.508 with a complete install. Nothing was driven by hand.
+  - **Not measured:** the console's updater inventory (`GET /api/updates`). It needs a signed-in session, and this
+    coordinator has none.
+  - **The week.** This coordinator first saw the fleet box converged at about 05:37 UTC. The week starts at the
+    next whole minute, so it holds only time after the deploy:
+    - since `2026-10-21 05:38:00` UTC, until `2026-10-28 05:38:00` UTC;
+    - due 2026-10-28 05:38 UTC; owner: this coordinator;
+    - read with the installed `deploy/measure-continuity.py --stage 6`, both endpoints given, `--reap-baseline 0`
+      and `--all-copies`, under `TZ=UTC`, on the fleet box.
+  - **Exposure.** The variable reaches a pane at its next ordinary start. A pane that started before the deploy
+    and has not restarted since runs without it, and the reading names such panes as a confound. The environment
+    itself is unmeasured. No session is restarted to get a cleaner reading.
+  - **The rule.** Baseline B is unchanged: 0 reap-class among 34 pane-scope OOM stops, with 5 unmapped and 4
+    unmeasured. Three or more reap-class stops in any measured week withdraws the variable through a follow-up
+    wave; two do not. An unmeasured reading is reported, never read as not triggered.
+- **2026-10-28 05:51 UTC - Task 5's first week read: not triggered; the variable stays.**
+  - **The read.** At 05:47 UTC on the fleet box, with the installed tool (v0.0.765, install complete):
+    `TZ=UTC python3 -I deploy/measure-continuity.py --stage 6 --since "2026-10-21 05:38:00" --until "2026-10-28
+    05:38:00" --reap-baseline 0 --all-copies --json`. It exited 0 with no error output. The raw JSON is kept in
+    private evidence; the aggregate follows.
+  - **`reap_class_oom`:** 0 pane-scope OOM stops in the week, so 0 reap-class, 0 busy within the idle window, 0 idle
+    without a live background shell, 0 unmapped and 0 unmeasured. Baseline B's week had 34 such stops. The two weeks
+    differ in load and in what ran, so this is a reading, not a cause.
+  - **`pressure_reap_comparison`:** baseline 0, withdraw above 2, observed 0: `not-triggered`.
+  - **`direct_pressure_kills`:** `partial`. 2,610 transcripts were read (every copy), none unreadable, no malformed
+    row; 0 killed background tasks, in 0 transcripts; 21 notifications unmeasured. So the direct target, 0, is met
+    for what was read, not proven: the 21 unmeasured notifications and the discovery limits stay open. This count
+    never feeds the B comparison.
+  - **`inert_scopes`** (the sweep's current record, not the week's history): mode `live`; 3 dead, 0 inert, 0 dead
+    for a day or more; carried scopes 0 dead, 0 live, 0 unknown.
+  - **The scope sweep is armed.** `$REG/scope-sweep-live` was created at 2026-10-26 23:38 UTC (its birth and
+    modification times agree), and its text cites an operator ruling of 2026-10-26. This coordinator did not write
+    it, and the ruling is not yet confirmed to it. So the week's last 30 hours ran with the sweep's stop armed. The
+    earlier sentences here that the sweep "stays shadowed" describe the state before that.
+  - **Owed: the ruling's confirmation.** Arming is the operator's act. This coordinator asked the operator on
+    2026-10-28 to confirm the ruling, and owns recording the answer here, by the next weekly reading (due
+    2026-11-04 05:38 UTC) at the latest. Until then the arming is recorded as cited, not confirmed. Nothing in this
+    programme writes or removes the marker.
+  - **Exposure.** At the read, 22 sessions were running. Each has an ordinary start (`spawn`, `done`) in the
+    lifecycle journal after 2026-10-21 05:38 UTC, with no journal gaps, so each is expected to carry the variable.
+    The variable in any process's environment is unmeasured. A pane that ran through the week without a restart
+    would have run without it for that time; this read does not count those.
+  - **The rule applied.** The observed reap-class count is 0, so the variable stays (Task 5 Step 5). The rule covers
+    any later week too, so the observation continues weekly. Next: the week since `2026-10-28 05:38:00` UTC, until
+    `2026-11-04 05:38:00` UTC, due 2026-11-04 05:38 UTC; owner: this coordinator. At that read, two weeks after the
+    rollout, the direct-pressure figure is also compared with its target (0), and an unchanged or unmeasurable
+    result is reported for retirement or redesign under spec §9. Changing a product decision stays the operator's.
+- **2026-10-28 08:00 UTC - the operator confirmed arming the scope sweep.** Asked by this coordinator, the operator
+  confirmed that they armed `$REG/scope-sweep-live` on 2026-10-26. The sweep's stop is live by the operator's ruling,
+  and the week's reading above is recorded with it armed for its last 30 hours. The owed confirmation is closed.
+- **2026-11-04 05:52 UTC - Task 5's second week read: not triggered in the part read; the variable stays. Its first
+  2 h 9 m are unmeasured, and the two-week direct-pressure figure is reported.**
+  - **The read.** At 05:48 UTC on the fleet box, with the installed tool (v0.0.945, install complete, a build that
+    contains `d8cd4765`), after `--help` confirmed the flag grammar: `TZ=UTC python3 -I deploy/measure-continuity.py
+    --stage 6 --since "2026-10-28 05:38:00" --until "2026-11-04 05:38:00" --reap-baseline 0 --all-copies --json`. It
+    exited 0 with no error output. The raw JSON is kept in private evidence; the aggregate follows.
+  - **Coverage: the week's first 2 h 9 m are not read.** The fleet moved to another box on 2026-10-28. This box's
+    user journal holds no pane-scope record before 07:46:39 UTC that day, so the kernel reading covers 2026-10-28
+    07:46:39 to 2026-11-04 05:38:00 UTC, 6 days 21 h 51 m of the 7. The first 2 h 8 m 39 s ran on the previous fleet
+    box, whose journal this read does not reach. That part is unmeasured, not zero.
+  - **`reap_class_oom`:** 0 pane-scope OOM stops in the part read, so 0 reap-class, 0 busy within the idle window, 0
+    idle without a live background shell, 0 unmapped and 0 unmeasured. This box's journal holds no pane-scope OOM
+    stop at all.
+  - **`pressure_reap_comparison`:** baseline 0, withdraw above 2, observed 0: `not-triggered` over the part read. The
+    unread 2 h 9 m are not folded into that decision; they stay unmeasured.
+  - **`direct_pressure_kills`:** `partial`. 1,787 transcripts were read (every copy), none unreadable, no malformed
+    row; 0 killed background tasks, in 0 transcripts; 33 notifications unmeasured. So the direct target, 0, is met
+    for what was read, not proven: the 33 unmeasured notifications and the scanner's discovery limits (spec §9's
+    as-built note) stay open, and whether the transcripts read include all of the week's first 2 h 9 m on the
+    previous box is unmeasured. For exposure, only the running sessions' starts were read: for them the variable is
+    expected, not measured (Exposure, below), and the sessions behind the other transcripts were not read for
+    exposure at all. This count never feeds the B comparison.
+  - **`inert_scopes`** (the sweep's current record, not the week's history): mode `live`; 1 dead, 0 inert, 0 dead for
+    a day or more; carried scopes 0 dead, 0 live, 0 unknown.
+  - **Exposure.** At the read, 54 sessions were running, with no lifecycle journal gaps. Each one's latest ordinary
+    start (`spawn`, `done`) is after 2026-10-28 05:38 UTC, the earliest of those at 07:50 UTC that day. Eleven of them
+    also started between 06:59 and 07:05 UTC that day, inside the unread 2 h 9 m, so panes did run in that window.
+    This box's installed build at those start times is not in this read's evidence. Today's build contains
+    `d8cd4765`, and its `ccd` sets the variable in the spawn environment (`_resume_env`), so each running session is
+    expected to carry it, not measured to. The variable in any process's environment is unmeasured.
+  - **The rule applied.** The observed reap-class count is 0 in the part read, so nothing triggers withdrawal (Task 5
+    Step 5) and the variable stays. The unread 2 h 9 m are reported as unmeasured; no rule fires on them without a
+    read, and this coordinator invents none.
+  - **The two-week comparison (spec §9).** The direct figure reads 0 against its target of 0 in both weeks: 0 kills in
+    2,610 transcripts with 21 notifications unmeasured, then 0 in 1,787 with 33 unmeasured. Both readings are
+    partial, and each carries the discovery and exposure limits above, so the target is met for what was read and
+    not proven, and whether the figure moved from its baseline
+    cannot be measured: the baseline's 186 was not counted by this scanner (§9's as-built note). This is reported
+    for the operator's ruling on retirement or redesign under §9; this coordinator changes nothing.
+  - **Next.** The rule covers any later week, so the observation continues weekly: the week since
+    `2026-11-04 05:38:00` UTC, until `2026-11-11 05:38:00` UTC, due 2026-11-11 05:38 UTC; owner: this coordinator.
+- **2026-11-04 10:22 UTC - the operator rules on spec §9's two-week rule: redesign the direct-kill scanner. Wave 4c
+  is planned.**
+  - **The ruling.** Asked through item 27 whether to keep, redesign or retire the direct pressure-kill measure, the
+    operator chose to redesign the scanner so that it reads the notifications it now misses. This coordinator had
+    recommended keeping it. The kill rule, the B + 2 comparison and the target of 0 are not part of the ruling and
+    stay as they are.
+  - **What the scanner misses, measured.** Read-only on the fleet box over both post-deploy weeks (2026-10-21 05:38 to
+    2026-11-04 05:38 UTC), by reusing the installed scanner's own functions and printing counts only:
+    - notifications delivered mid-turn as queued-command attachment rows, about 1,100 to 1,450 a week, never read;
+    - queue enqueue rows carrying the same notices again, about 4,800 to 5,000 a week, never read;
+    - summary-only notices (Claude Code's commit, push and background security-review notices) in user rows, read
+      as unmeasured: 43 re-read today, 9 in week 1 and 34 in week 2, and they are every unmeasured notification of
+      both weeks as re-read;
+    - subagent transcripts: 2,682 files, with no notification in the window.
+    No source held a pressure kill in either week. The weekly readings themselves counted 21 unmeasured (week 1) and
+    33 (week 2, at 05:48). Week 1's ran on the previous fleet box, whose transcripts are not all here, and week 2's
+    re-read finds one more than its reading did.
+  - **The plan:** `docs/superpowers/plans/2026-11-04-session-continuity-wave4c-direct-kill-scanner.md`. The scanner
+    reads the two queued sources through its existing classification and counts each notification once. A
+    summary-only notice that names no low memory becomes a known non-event, and subagent transcripts stay a declared
+    limit. Its decisions are D-7960 to D-7963, allocated at 10:17 UTC and defined in the plan. It waits for the
+    operator's approval before a run is opened and dispatched.
+  - **The weekly reading continues** under the current scanner until 4c is deployed. The next one is due
+    2026-11-11 05:38 UTC.
+- **2026-11-04 15:14 UTC - the operator approves the wave 4c plan as written.**
+  - **The answer.** Asked through item 30 whether to approve the plan, the operator answered at 15:11 UTC: "Approve as
+    written: land the plan and dispatch it". This coordinator had recommended approving it as written.
+  - **Next.** This record lands with the plan. Then this coordinator opens the wave 4c work run, dispatches one worker
+    with the plan's three tasks and D-7960 to D-7963, and records the run, its route and its brief in the next entry.
+  - **The weekly reading** is unchanged: under the current scanner until 4c is deployed, next due 2026-11-11 05:38 UTC.
+- **2026-11-04 16:25 UTC - the wave 4c plan is merged (#2262, `aff374c4`) and run 1450 is dispatched.**
+  - **The landing.** GitHub did not attach the push of the plan's two review-fix commits to #2262, so no check ran on
+    them. The approval record (`cb9314a69`) brought the PR to its tip; two Opus lenses fact-checked that commit and
+    found nothing. The first landing attempt stopped: the fast run's one red was a 20-second hook timeout in a
+    whole-tree test the PR cannot reach, the one rerun was started, and the readiness check after it could not wait.
+    The operator started a second attempt (item 31). The rerun was green, the PR was enqueued at 15:48 UTC at
+    `cb9314a69` and merged at 16:18 UTC. Items 30 and 31 are confirmed.
+  - **The run.** Run 1450, wave 7 of the run record (the Waves row is 4c), worker `ccrc-pwa-continuity-4c`, a fresh
+    workspace (not adopted; the worker skill measured present). Route: Opus at high, Sonnet subagents, workflow off,
+    compact 40, the matrix's row for a worker executing a spec'd plan as one dependent chain. Items: Tasks 1, 2 and 3,
+    and the final gates with one wave-done. Its decisions are the plan's D-7960 to D-7963; anything new comes back by
+    slug for allocation.
+  - **The brief** was reviewed by two Opus lenses with a Sonnet refuter per finding. One finding stood: Task 3's spec
+    paragraph names a merge date the worker cannot know, so the brief tells it to write the UTC date of its Task 3
+    commit, as the 4b note's date is not its merge date either. Two were refuted.
+  - **README.md** is under another programme's claim (run 1442's, for one sentence in the auth paragraph). Task 3
+    changes only the `--stage 6` paragraph, far from it. This coordinator asked the holder for consent at 16:25 UTC;
+    the worker edits README only with the claim or that consent relayed.
+  - **Next.** The wave-done is re-measured and reviewed by a review run before acceptance; this coordinator lands the
+    PR. The weekly reading stays as it is until 4c is deployed, next due 2026-11-11 05:38 UTC.
+- **2026-11-04 17:35 UTC - run 1450's wave-done is verified; review 1452 confirms three important findings; fix round 1
+  is sent.**
+  - **The wave-done** (17:11 UTC) claims PR #2277 at `4a24db72`, suite red (the PR's first CI attempt failed one pwa
+    focus case; the re-run on the same tip was green), failure unclear. Re-measured: the branch and the PR head are that
+    tip, the latest CI attempt is green on every required check, the branch changes four files (the scanner, its test,
+    the spec and README's `--stage 6` paragraph only, under the consent of the README claim's holder), it defines no new
+    deviation, and it merges cleanly with main. The server accepted the fingerprint; the four items are done.
+  - **Review 1452** ran the held-out panel: three Opus lenses and 27 Sonnet refuters, none lost. It reproduced the
+    stage-6, stage-4, stage-7 and README suites and three mutation rows. It could not reproduce `typecheck-tests`
+    green, because the test slice's memory cap killed the native compiler; a direct type check was clean, and CI ran
+    the suite green. It confirmed three important findings, all fail-closed over-counts or test gaps, none losing a
+    kill:
+    - F1: the check for a payload that cannot be dumped runs before the stamp check and the window, so it counts any
+      such row malformed, inside the window or not, holding a notification or not;
+    - F2: an unmeasured notice in two payload shapes, or with different trailing text, counts more than once, which the
+      plan's key allows but README and the spec overstate;
+    - F3: the test that dequeue rows are not read cannot go red for dequeue, because its dequeue row carries nothing.
+    Three minors survived: a test comment that misstates why the payload fails, README leaving out the undumpable
+    exception, and a spec sentence sharing F2's overreach. Seven findings were refuted.
+  - **The rulings** (fix round 1 of 3, mailed 17:34 UTC). F1: the plan's order holds for that check too, and a row whose
+    payload cannot be dumped is malformed only inside the window and only when its raw text holds a notification. F2:
+    the key stays as the plan defines it, an over-count by design, and README and the spec are narrowed to what holds,
+    with one test pinning the two-shape count. F3: the dequeue row carries a kill notice. The three minors are fixed.
+    Each new guard gets a mutation row. No new deviation number: each fix brings the code or the docs to the plan as
+    written. `typecheck-tests` is accepted on CI and run again in the worker's gates.
+  - **D-7962 stands as approved.** The panel measured that its literal "low on memory" lets a summary-only notice
+    with a line break or a hyphen in that phrase read as a known non-event. The worker's final review had suggested
+    widening the exclusion to any memory wording. Changing an approved definition is not this wave's. Every
+    summary-only notice measured so far was a security-review notice, and a summary-only notice cannot be a kill under
+    the unchanged kill rule. This is recorded for a later decision.
+- **2026-11-04 18:44 UTC - wave 4c is accepted and merged (#2277, `ba93eb31`), and run 1450 is closed.**
+  - **Fix round 1's wave-done** (17:55 UTC) claims `a5e8071e`, one commit on the reviewed tip, suite red (it stays red
+    from the wave's first full run). Re-measured: the branch and the PR head are that tip, the PR's fast run on it
+    passed on its first attempt, the same four files changed, README only in its `--stage 6` paragraph, no new
+    deviation, and the branch merges cleanly with main.
+  - **Review 1458** (round 2 of 3) ran the held-out panel: three Opus lenses and 15 Sonnet refuters, none lost. Every
+    ruling of fix round 1 is done, its two mutation rows went red, and no critical or important finding survived.
+    Four minors did, carried below. It also noted, as a fact and not a finding of this round, that a queued-command
+    list prompt holding a readable kill beside an undumpable element drops that row's kill while the reading turns
+    partial. That shape was present at round 1, so the 17:35 entry's "none losing a kill" holds for the findings it
+    lists, not for every shape; it is fail-closed and carried with the four.
+  - **Accepted** at 18:07 UTC. The run moved to `merging` with its landing entry pinned at `a5e8071e`. The readiness
+    verdict gave the queue route on its first run, the required checks passed, and the only attempts other than
+    success were the external per-PR merge gate's, which no rule requires. Enqueued at 18:08 UTC and merged at
+    18:27:39 UTC. On main, the scanner, its test, the spec and README's `--stage 6` paragraph are identical to the
+    reviewed tip. The worker was mailed MERGED, and run 1450 closed final at 18:44 UTC.
+  - **Deploy.** The merge was released as prerelease v0.0.962 (the dev channel) at 18:29 UTC. It reaches the fleet box
+    when the operator's updater installs v0.0.962 or later. The first weekly reading after that install is the first
+    under the new scanner; each reading records the version it ran.
+    The next is due 2026-11-11 05:38 UTC.
+- **2026-11-07 14:40 UTC - the operator lifts the stop: the programme resumes, with a lent scratch account (item 59).**
+  - Asked whether the programme stays stopped after wave 4c, the operator answered: "Resume: I will lend a scratch
+    account; plan the stage 2 spike". The account is not named here, and never will be.
+  - **The survey** (three read-only readers: the stages against `main` at `db3241593`, the spike's steps, and the
+    installed Claude Code builds) re-measured the spike before planning it:
+    - **Step 7 is closed elsewhere.** The working-state programme measured `set-property` refusing `OOMPolicy` on
+      2026-10-17 and shipped two prefix drop-ins instead (D-5241), read by doctor's `oom-policy` check. This
+      coordinator agrees to that take-over, which its spec's §6.3 proposed (D-8103).
+    - **Steps 1 and 2 cannot run on the fleet as it is.** No ccd door or route sets spawn environment
+      (`ccd/ccd#_resume_env` sets only the resume variables and the pressure-reap opt-out), and a session may not stop
+      a unit, signal a pane or kill its tmux session. A pane recorded as kind `bg` would also count as its own
+      background holder, so `cmd_swap` would refuse its swap (D-4944, which `--force` does not override), and the
+      same record drives the resume-follow, spawn, supervise and fork-tracking paths. Opening steps 1 and 2 would be
+      a change to every live session's swap and resume guards.
+    - **The evidence leans one way.** The carry never copies `<config>/jobs/`, and Claude Code's job-dir guard is per
+      config root, so adoption across an account change is predicted to fail (not observed). Claude Code ends
+      workflows and agents before its exit handoff, so their recovery is a resume by run id either way. Since the
+      spec, a third gate (`CLAUDE_DISABLE_ADOPT`), an in-process takeover object and a per-job storage key appeared,
+      and the fleet runs builds 2.1.311 to 2.1.319 across its lanes.
+    - **Step 5 has a likely cause in the strings:** a script path is accepted only if this process's Workflow tool
+      returned it, or it lies under the working directory or an added directory. That fits the five refusals after
+      a swap, and it is not proof.
+    - **Stage 3 is partly built under other names:** the delegation broker's spool (launch rows, run ids and script
+      paths), D-5237's composed resume prompt, the stall watch's restarted and Orphan D arms, the swap's background
+      hold and its `409 session-busy` (D-5240, D-5231), and the deliberate stop's pane-scope stop (D-7902). Carried
+      below for wave 6.
+    - **The test box cannot host the spike:** it has no accounts, no ccd sessions and no route to the model API.
+- **2026-11-07 22:40 UTC - the operator chooses the reduced spike (item 75), and its plan is written.**
+  - **The choice.** Four shapes were offered: reduced (decide on ccd's record now, measure steps 5 and 6 live); full on
+    the fleet after a ccd change; full off the fleet on a throwaway box; no spike. Two independent Opus judges each
+    ranked the reduced spike first, then no spike, then the full spike on the fleet. The operator chose the reduced
+    spike.
+  - **The spec, rev 11.** §5.2 records the decision and its reasons, keeps the steps as first written beneath, and
+    replaces the decision rule: the manifest is primary, and native handoff is recorded as decided on the evidence,
+    not measured (§11 items 7 and 8; D-8102). Making it primary later would be a new ruling; this coordinator
+    proposes measuring it off the fleet first. §5.3's graceful stop has its bound left to stage 3's own wave, where
+    this coordinator proposes a shadow arm (D-8104). §10 no longer waits on a stage-2 decision for stage 6's second
+    part, and §3, §5.6, §8, §9 and §11 item 5 carry rev-11 notes. Step 7's closure by D-5241 is this coordinator's
+    agreement, not a ruling (D-8103).
+  - **The plan,** `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md`, D-8102 to D-8109
+    (issued 2026-11-07). One worker, the conductor, reads, mails a subject session on the scratch account and swaps it
+    with `ccd swap --interrupt` under the operator's consent; the subject makes the calls. Task 1 reads every resume
+    call on disk and doctor's line with no account (D-8105); Task 3 runs step 5 as a matrix of four script paths at
+    one mid-run swap, each row resuming its own run (D-8106); Task 4 runs step 6 by a cut list (D-8107); the
+    conductor's acts are bounded (D-8108), and every committed excerpt is redacted (D-8109).
+  - **Plan review** (three Opus lenses, a Sonnet refuter per important finding). Confirmed and fixed: the console's
+    swap route is out of a worker's reach (no client verb, and a session cookie when sign-in is armed), so the
+    conductor's swap is the open verb `ccd swap --interrupt`, the argv that route builds; and tagging the scratch
+    project does not keep the subject on the scratch accounts, because an untagged account serves a tagged project
+    (`ccd/ccd#_pool_ok`). Also fixed: each matrix row resumes its own run; the current-root path's outcome is
+    unknown (the strings predict a refusal), so the working-directory copy always runs; a restarted subject waits
+    for the conductor's go; the burn's agents are cheap and long-lived; the historical pass counts every resume
+    call; and the decisions the operator did not make are attributed to this coordinator.
+  - **What the operator sets up** goes in its own item, after the plan's approval: two scratch accounts in one pool;
+    a pool tag on every other account, or accepting that a rescue may move the subject onto one; how real sessions
+    are kept off the scratch accounts; a scratch project and the subject session; consent to swap the subject while
+    it is busy; whether the operator will type one `/add-dir`; and a loan across at least one five-hour reset of
+    each account.
+  - **Routing for run 730 (clause 13).** A worker running a measurement whose judgement is in the reading: Opus at
+    high, Haiku scouts only, workflow off, compact 40.
+- **2026-11-08 00:50 UTC - the plan is approved and merged (#2443, `86a713a5`), run 730 is dispatched, and the setup
+  goes to the operator (item 95).**
+  - **The answer** to item 80: "Approve as written: land the plan and dispatch it" (2026-11-07 23:08 UTC).
+  - **The landing.** #2443 was enqueued at 23:12:51 UTC and merged at 00:34:27 UTC as `86a713a52`, from head
+    `70f0ae859`. Items 75 and 80 were then confirmed against `main`. Item 59 was already done.
+  - **The dispatch.** Run 730 went at 00:49 UTC to a fresh child, the conductor. It carries five items (Tasks 1 to 5)
+    and is routed Opus at high, Haiku scouts only, workflow off, compact 40. Task 1 needs no account. Tasks 2 to 4
+    wait for the operator's setup.
+  - **Item 95** asks for that setup at 00:50 UTC, from the plan's setup list. The names go only in the operator's
+    answer and in this coordinator's private mail to the conductor, never in this file.
+- **2026-11-08 01:03 UTC - Task 1 is done, and the matrix gains a fifth row (R5).**
+  - **Task 1's reading,** as the conductor reported it. Its results note is on its branch, and the wave's review reads
+    it at the end:
+    - 184 resume calls are on disk, from 2026-07-20 to 2026-11-08, in 37 sessions: 134 ok, 22 script-path refusals,
+      19 other errors (16 still running, 3 parse errors), 8 journal-missing and 1 with no result.
+    - Wave 1's five script-path refusals are gone from disk (its window now holds 37 of its 72 calls), so the disk
+      cannot explain them.
+    - **The old root's returned path, after a swap.** Up to 10-21, 28 of 33 passed the path check. From 10-22, 13 of
+      13 were refused, on builds 2.1.304 to 2.1.316. Neither the build, the trigger nor the carry mode explains the
+      change.
+    - **The carry's copy under the current root, never returned** (row R1's shape): 3 ok from 09-24 to 10-15, and 4
+      of 4 refused since 10-22.
+    - **Row R3** is untested by history.
+    - **Step 7.** Doctor's `oom-policy` line reads PASS, so step 7 stays closed (D-8103).
+  - **The ruling: R5.** Five calls after a swap passed the whole script inline, as `script` plus `resumeFromRunId`
+    with no `scriptPath`. All five were accepted, from 10-19 to 10-26, on builds 2.1.303 to 2.1.309. The refusal text
+    itself suggests this, but the plan's matrix has no such row.
+    - This coordinator added R5 to Task 3: a fourth identical workflow, resumed after the same swap with its script
+      inline. Its journal is read like the others. It measures the plan's own question, which call resumes an
+      interrupted run after a swap, for one more cheap run.
+    - The worker names it in the wave-done as the departure `inline-script-row`, and this coordinator numbers it at
+      the wave's acceptance.
+    - R1 and R2 are now expected to be refused. The results note says so as history, not as a result.
+  - **Waiting:** the operator's answer to item 95.
+- **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
+  this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
+- **2026-11-08 21:18 UTC - the operator lends one of the fleet's real accounts, not blank scratch accounts, and picks the
+  setup's shape (items 95 and 112).**
+  - **Item 95's first answer** named one existing account. This coordinator re-measured it and returned the item, because a
+    real account sits in a shared pool, so a rescue could land the subject on other real accounts. One account had no pool
+    tag, so it served every project. One real session was homed on the lent account, and no swap lane was named.
+  - **Item 112** asked for the shape. The operator chose option 0: the lent account alone in a pool of its own, every other
+    account tagged, the test project tagged with that pool, and one real lane for Task 3's swap under cross-pool consent.
+    Confirmed at 21:18 UTC. The names go only in the operator's answers and in this coordinator's private mail to the
+    conductor.
+- **2026-11-10 17:59 UTC - §11 item 6's count is taken to the operator (item 140), and item 6 is closed (19:49 UTC).**
+  - **The count**, read-only at 17:58 UTC with `measure-continuity.py --stage 4` from `main`, since 2026-10-04: one no-room
+    wait opened, on 2026-10-19. It had no dated reset, lasted 32 s and ended when Claude Code continued by itself. No
+    no-room wait outlived its own reset by more than the 120 s grace, so the seconds past a reset total 0. The weeks
+    2026-10-27 to 11-03 and 11-03 to 11-10 also read 0. 143 rescue swaps were logged in the same window.
+  - **The answer** to item 140: "Keep idling as ruled and close item 6: the rows stay in every reading, and I ask again if
+    one reads above 0" (19:47 UTC). It was re-measured at 19:48 UTC and confirmed at 19:49 UTC.
+  - **What changes it next.** The operator's session-host ruling Q4 (research doc #2526, §6.1) pins Claude Code's
+    own auto-continue at the usage limit off, the path that ended the one wait on record. PR #2603 builds it and
+    merged on 2026-11-11 at 01:45 UTC. Under the operator's ruling (a), which #2603 also builds, ccd itself waits for
+    a no-room session whose limit states a reset, and restarts it in place after that reset. That is the restart this
+    item ruled out on 2026-09-24, so the later ruling governs. A no-room wait with no stated reset stays the
+    operator's. This coordinator re-reads the four rows after #2603 deploys.
+- **2026-11-10 19:48 UTC - the setup is in and confirmed (item 95).** The lent account is alone in its pool, every other
+  account carries a pool, the test project carries the lent pool, and the subject runs there with workflows on.
+  - Two choices departed from item 112's shape. The operator kept the lent account home-able, and kept one real session
+    homed on it ("accept"), so real work could land there. The operator also declined `/add-dir`, item 112's default, so row R4 is not run.
+  - The swap lane is in another pool, so the move onto it is `--cross-pool`. The loan's end was left to the operator.
+- **2026-11-10 22:44 UTC - the subject would not call Workflow until the operator said so in its own pane (item 143).**
+  - The subject saved the script at 19:52 UTC and refused the rest. Claude Code lets a session call Workflow only when the
+    person using it opts in, in their own words, in that session. A mail citing the operator does not count.
+  - The operator typed a go-ahead in the subject's pane at 22:44:38 UTC, and the four workflows launched at 22:45 UTC. The
+    hold lasted 2 h 52 min. Review runs meet the same rule: reviews 1770, 1772 and 1773 ran the held-out panel on the
+    Agent tool, with the same models, efforts, lenses and refuters. This coordinator counts that as the panel.
+- **2026-11-10 23:40 UTC - Task 3 is done, Task 4 is not run (item 145), and the loan ends.**
+  - **Task 3.** After an ordinary mid-run swap, on build 2.1.314, a resume naming the script's original path is refused,
+    and so is one naming the carry's copy under the new root. A working-directory copy is accepted, and so is the script
+    passed inline with `resumeFromRunId`. Each accepted run finished, with its quick agent from cache and its slow agent
+    run again from its start.
+  - **The wake after the swap.** ccd's redrive stood down, because the subject was idle when stopped. Six notifications
+    covering seven stopped tasks started no turn. The stall watch's orphaned mail woke the subject 15.5 minutes later.
+    This is recorded as a measurement, with no remedy.
+  - **Task 4 held.** It was planned around a five-hour limit and its reset, and the lent plan has none. Five accounts have
+    reported a weekly figure only since 27 to 31 October, which ccrc reads as "no 5-hour limit" since #2473 (D-8120). On
+    the September builds a weekly limit was declined as "too far out to wait for" (spec §1.1, 7 runs).
+  - **The answer** to item 145: "Skip Task 4: record its one-account arm as not run and arm 2 as unreachable, with these
+    reasons; write the results; end the loan" (23:38 UTC). It was re-measured and confirmed. §5.4 rule 2's and §11 item
+    3's longer bound for delegated work stays open.
+  - **The undo** is the operator's (item 146, open): the lent account back to its pool, and the subject archived, not deleted,
+    until the wave is accepted.
+- **2026-11-11 01:41 UTC - wave 5 is accepted after three review rounds, merged (#2602 `ec7a6caf`), and run 730 is
+  closed.**
+  - **The wave-done** came at `4dac58a8`, docs only: the results note
+    `docs/superpowers/plans/2026-11-07-session-continuity-wave5-spike-results.md` and spec §5.2's "As measured (wave 5,
+    2026-11-10)". This coordinator verified the tip, the required checks, a clean merge-tree, the two files and the
+    private-name scan.
+  - **Review 1770** found 14 minors, nothing critical or important. Fix round 1 corrected the record:
+    - who did not resume the idle session;
+    - six notifications, not seven;
+    - five calls, not four, and 27 of 33, not 28;
+    - the swap back, ccd's manual-swap pin (D-3097) and the hibernate that explain the subject's placement and revival;
+    - "The grounds of item 145", which keeps only measured or attributed lines.
+    §5.3's missing Settings level and three stale spec neighbours are carried to wave 6.
+  - **Review 1772** found the rulings done and 12 minors. One was this coordinator's own Q4 wording, which claimed more than
+    its sources. Fix round 2 applied twelve dictated rulings, one of which (F11) added a thirteenth departure.
+  - **Review 1773** found eleven of the twelve replacements in as written, and the Q4 sentence true against #2603's diff.
+    It left two one-line corrections: a stale count of the departures, and the source of the subject's revival (ccd's
+    `.woke` stamp records it). The cap of three rounds was reached and neither is a major, so this coordinator accepted
+    the wave and corrects both lines in this ledger PR.
+  - **Accepted** at `4db5777e5` (01:06 UTC). The thirteen departures are numbered D-8252 to D-8264 and defined in
+    `docs/superpowers/plans/2026-11-07-session-continuity-wave5-departures.md`.
+  - **The landing.**
+    - Run 1777 opened first, for wave 6 (wave 7 of the run record), so closing 730 cannot retire the programme.
+    - Run 730 advanced to `merging`, with landing entry 133 pinned at `4db5777e5`.
+    - A `BOUND_S=0` verdict read the native queue, and the required-checks gate passed.
+    - #2602 was enqueued at 01:07:16 UTC with `--match-head-commit`, at queue position 4. It merged at 01:39:19 UTC as
+      `ec7a6caf`, and the server's `merged:#2602` notice came a minute later.
+  - **The close.** This coordinator mailed the worker MERGED, then closed run 730 final: done, released, with its child's
+    reclaim queued.
+- **2026-11-11 05:48 UTC - Task 5's third week read: not triggered, and the variable stays. The direct reading is
+  measured, the first week read with wave 4c's scanner, and the kernel reading covers the whole week.**
+  - **The read.** At 05:41 UTC on the fleet box, with the installed tool, after `--help` confirmed the flag grammar:
+    `TZ=UTC python3 -I deploy/measure-continuity.py --stage 6 --since "2026-11-04 05:38:00" --until "2026-11-11
+    05:38:00" --reap-baseline 0 --all-copies --json`. The build was v0.0.1088 (install complete), which contains wave
+    4b's `d8cd4765` and wave 4c's `ba93eb31`. The read exited 0 with no error output. The raw JSON is kept in private
+    evidence; the aggregate follows.
+  - **Coverage: the whole week.** One boot of the fleet box runs from 2026-10-27 21:08 UTC to the read, so its user
+    journal spans the window. It holds 2,971 pane-scope records in the window, the first at 2026-11-04 05:48:35 UTC.
+    No pane scope was OOM-killed in the window, by the journal's own records.
+  - **`reap_class_oom`:** 0 pane-scope OOM stops, so 0 reap-class, 0 busy within the idle window, 0 idle without a
+    live background shell, 0 unmapped and 0 unmeasured.
+  - **`pressure_reap_comparison`:** baseline 0, withdraw above 2, observed 0, so the decision is `not-triggered`.
+  - **`direct_pressure_kills`:** `measured`. This is the first week read by the redesigned scanner (#2277).
+    - 1,208 transcripts were read (every copy), none unreadable, no malformed row.
+    - 0 killed background tasks, in 0 transcripts.
+    - 0 notifications unmeasured, against 21 and 33 in the first two weeks.
+    - The notification texts read, counted per source before deduplication: 3,338 in user messages, 1,850 in
+      queued-command attachments and 6,694 in queue enqueues.
+    - So the direct target, 0, is met for the transcripts discovered, not proven. The scanner's discovery limits (spec
+      §9's as-built note) and exposure still qualify it. Only the 24 running sessions' starts were read for exposure
+      (below), the sessions behind the other transcripts were not read for exposure at all, and the variable in any
+      process's environment is unmeasured. This count never feeds the B comparison.
+  - **`inert_scopes`** (the sweep's current record, not the week's history): mode `live`; 1 dead, 0 inert, 0 dead for a day or more; carried
+    scopes 0 dead, 0 live, 0 unknown.
+  - **Exposure.** At the read, 24 sessions were running, all read through the lifecycle client, with no lifecycle
+    gaps.
+    - 19 had their latest ordinary start (`spawn`, `done`) inside the window, the earliest at 2026-11-06 11:55 UTC.
+    - The other 5 had their latest ordinary start before the window, between 2026-10-28 07:50 and 2026-11-02 14:10
+      UTC.
+    - Every one started after wave 4b's deploy, so each is expected to carry the variable (ccd sets it at spawn,
+      `_resume_env`), not measured to. The build installed at each start is not in this read's evidence.
+  - **Stage 4's no-room rows** (item 140), over the same window: no no-room wait opened, 0 past a reset, 24 rescues.
+    The installed build predates #2603, so the rows still read the old path. The re-read after #2603 deploys stays
+    owed.
+  - **The rule applied** (Task 5 Step 5: 3 or more reap-class withdraws the variable, 2 or fewer does not, unmeasured
+    is reported). The observed count is 0 over the whole week and nothing is unmeasured, so nothing triggers, and the
+    variable stays.
+  - **Next.** The rule covers any later week, so the observation continues weekly: the week since `2026-11-11 05:38:00`
+    UTC, until `2026-11-18 05:38:00` UTC, due 2026-11-18 05:38 UTC; owner: this coordinator.
+- **2026-11-11 16:20 UTC - wave 6 (stage 3) is split into 6a, 6b and 6c, and 6a is planned (D-8316 to D-8332); the plan
+  goes to the operator for approval as written.**
+  - **The operator asked** whether further work could proceed. It could: wave 6 waited on nothing but its plan.
+  - **#2603 is deployed.** The fleet box runs v0.0.1124 (`main` `9268365d`, installed 2026-11-11 14:57 UTC), which
+    contains it. Stage 4's no-room rows are re-read with the weekly reading due 2026-11-18, the new build's first week.
+  - **The survey** (workflow `wf_0a7eed9e-9fa`, read-only): three Opus readings of `main` (stage 3 against the code;
+    wave 5's results and #2603; the wake after a swap, weekly-only lanes and the stall watch's arms) and an Opus
+    completeness critic. None of stage 3's four parts is built as §5.3 says:
+    - no ccd stop sends SIGTERM; the graceful stop is missing at all three stop-then-resume sites (the swap, #2603's
+      in-place restart after a reset, and hibernate);
+    - the launch record exists in part as the delegation broker's spool, a programme closed on 2026-11-10, which keeps
+      about 24 hours, keeps subagent rows, and records no `resumeFromRunId` or `SendMessage`;
+    - there is no manifest;
+    - the composed prompt exists in part (D-5237's per-spawn cause clause), with no items.
+  - **A gap the critic found, with or without stage 3.** A turn that ends on a usage limit leaves the turn marker
+    `failed`, and a restart moves background work into `lostBg` only from a `done` marker. So a limit-ended session
+    whose background work a swap or a limit-resume ends records `lostBg` 0, and neither Orphan D nor the `restarted`
+    arm ever wakes it. 6a fixes it.
+  - **The split.** Stage 3 is too large and too unmeasured for one wave:
+    - **6a** (planned now): the graceful stop in shadow at the three sites, measuring Claude Code's shutdown before
+      any bound is armed (D-8104), with SIGTERM before the kill only behind an operator-armed marker that nothing
+      writes; `lostBg` carried across a `failed` marker; a `--stage 3` reading of the stop's time; and the spec's
+      rev 12, which corrects wave 5's stale neighbours and writes stage 3 as three waves.
+    - **6b** (planned after 6a lands): the launch record and the manifest, written in shadow, read by nothing.
+    - **6c** (planned after 6b's shadow week): the composed prompt, the session-start subject, the server's read of
+      the manifest and the not-stalled wake, armed by the operator.
+  - **This coordinator's design calls for 6b and 6c**, fixed now so the operator rules once, each a numbered entry in
+    the plan:
+    - the composed prompt tells the session to read the script at its current-root path and pass it inline with
+      `resumeFromRunId`, the shape wave 5 measured accepted; ccd writes no file into a workspace (D-8323);
+    - the launch record is ccd's own file, not the broker's spool: it keeps rows until the manifest retires them,
+      ccd reads it at the stop, and it drops subagent rows; the hook's one parse gains a second sink (D-8324);
+    - the not-stalled wake keys on a non-empty manifest, not on `lostBg`, and the stall watch mails the session its
+      list as soon as it reads idle, armed by stage 3's own switch; this amends spec §4 and §12 (D-8325);
+    - no live step needs the operator's go-ahead in a session's pane (D-8328); §9's stage-3 baseline is re-cut from
+      6b's shadow week (D-8329); waits to a weekly reset stay unbounded in stage 3, and 6b counts them (D-8330); a
+      session with no Claude Code transcript answers `not-applicable`, keyed on that fact, since a codex lane runs
+      Claude Code itself (D-8331); the manifest shares the carry's slot with the daily dedupe timer (D-8332).
+  - **Drafting and review** (workflow `wf_1399fcad-f11`). An Opus drafter wrote the plan against `main`; three Opus
+    lenses read it (correctness against `main`, spec and ledger fidelity, fail-closed and the repository's rules),
+    and an Opus reviser re-checked each finding and applied it. They found 7 important and 12 minor findings. The
+    drafter's eight notes are at the plan's top, and this coordinator accepted each. Among them: `ccd/ccd` carries no
+    committed stamp, so there is no restamp; today's tmux kill already hangs up Claude Code, whose SIGHUP and SIGTERM
+    handlers run one shutdown, so the shadow sends no new signal and times that shutdown; and the shadow keeps
+    today's acts in today's order but adds one bounded pane read before the kill and a detached observer after it,
+    so it is not today's stop byte for byte.
+  - **The plan** is `docs/superpowers/plans/2026-11-11-session-continuity-wave6a-graceful-stop-shadow.md`. The spec's
+    rev 12 is its Task 4, so this plan's PR changes no spec text.
+  - **Next.** The operator approves the plan as written, as an item, which also rules the design calls for 6b and
+    6c. Then the plan lands and run 1777 is dispatched.
+- **2026-11-12 00:14 UTC - item 174: the 6a plan and the calls for 6b and 6c are approved as written, the plan is merged
+  (#2672 `2e81f8b0`), and run 1777 is dispatched for 6a.**
+  - **The answer.** The operator ticked item 174 at 2026-11-11 23:36 UTC: "Approve as written: 6a and the calls for 6b
+    and 6c". So D-8323 to D-8332 stand as the rulings for 6b's and 6c's plans. This coordinator re-measured the PR and
+    confirmed the item at 23:38.
+  - **The ledger guard.** CI's ledger guard moved to enforce the same day: a pull request whose branch is not a ledger
+    branch may edit an existing programme or plan file only when its head commit carries a `Ledger-Edit:` trailer. #2672
+    edits this file from a plan branch, so an empty commit carrying `Ledger-Edit: D-8316 …` became its head,
+    `a87d56c12`. No pushed commit was rewritten.
+  - **The landing.** At `a87d56c12` the required checks passed, and the one failing check was a non-required external
+    review-gate app. A `BOUND_S=0` verdict read the merge queue. #2672 was enqueued at 23:38:40 UTC with
+    `--match-head-commit`, at queue position 3, and merged at 23:45:37 as `2e81f8b0`.
+  - **The dispatch.** Run 1777 was dispatched at 00:13:58 UTC to a fresh worker, `ccrc-pwa-continuity-6a`, with the
+    plan's five tasks as its items. The route is the spec'd-plan worker row: Opus at high, Sonnet subagents, workflow
+    off, compact 40. The fleet box runs v0.0.1139, which carries #2603's restart after a reset, one of 6a's three
+    stop sites.
+  - **Next.** The worker's wave-done, then a review run. 6b is planned after 6a lands, and 6c after 6b's shadow week.
+- **2026-11-12 05:26 UTC - 6a is accepted after three review rounds, merged (#2687 `933f293f`), and run 1777 is closed;
+  run 1845 is open for 6b.**
+  - **What 6a ships.** The graceful stop in shadow at the three stop-then-resume sites (the swap, the restart after a
+    reset, and hibernate): a bounded read of the pane's process before the kill, and a detached observer that times its
+    exit after it, one `graceful-stop` line in swap.log for each stop. The live arm (SIGTERM, then a bounded wait,
+    before the kill) is behind `$REG/graceful-stop-live`, which nothing in the tree writes. It also ships `lostBg`
+    carried across a `failed` turn marker (D-8316), the `--stage 3` reading of the stop's times (D-8321), and the spec's
+    rev 12.
+  - **The overlap with landing-order 5h.** Run 1661 (5h) and run 1777 both edit `ccd/ccd` and `README.md`, in disjoint
+    hunks. This coordinator's check at dispatch read the live claims only, so it did not catch the overlap; the plans'
+    file lists showed it. The 6a worker met 5h's claim on those two files when it claimed its own. This coordinator
+    holds both runs, so it ruled the overlap itself: each worker edits only its named hunks, and whichever lands second
+    merges `main` once and re-runs the guards. 6a landed first.
+  - **Review 1838** (round 1, at `bd32a892`) found one important finding, six minors, two trivial wording items and
+    one nit:
+    - F1: `_ci_proc_start` aborted the shell under `set -u` when the process exited mid-read, which an armed wait
+      would have hit between the unit stop and the kill;
+    - F2: no test pinned the live wait's own bound;
+    - F3: the live wait was bounded by the wall clock alone.
+
+    Fix round 1 made those three fixes and four wording fixes in the spec. The rest took no change: F4 (stage 3 raises
+    on an unreadable swap.log) is carried, F9 (the tests' wider windows) became a departure, and F10 (the test derives
+    its own set of stops) and the two info items needed none.
+  - **Review 1841** (round 2, at `43b87e88`) found fix round 1's rulings in. It found two minors that matter before
+    the live arm is armed:
+    - at the tests' 1 s bound, the new iteration cap, not the clock, ended the live wait, and the last poll was
+      skipped;
+    - a poll that slices to 0 ms wrote `alive=` at once.
+
+    Fix round 2, the last under the cap, made the clock decide, with the count as a backstop at twice the nominal
+    passes; added one more poll after the loop; and made a zero poll fall back to 100 ms. `ccd/ccd`'s net growth rose to
+    86 lines, so D-8320's waiver rose from 80 to 90, as the fix round allowed.
+  - **Review 1844** (round 3, the last, at `a9512878`) found nothing critical or important. It ran nine mutation rows,
+    all red when mutated and green when restored, and every suite and guard was green. It left seven minors. The cap was
+    reached and none is critical or important, so this coordinator accepted the wave. This PR corrects two wording
+    minors in the spec's rev-12 text (the status line placed §9 and §10 under C15; the call-B paragraph read as if 6b's
+    launch record already ran). Four more are recorded in three departures (D-8350 to D-8352), and the refuter judged
+    the seventh safe. Its F5 said a non-numeric poll lets the caller go on to the kill; this coordinator's fact-check at
+    acceptance measured otherwise: bash abandons the whole verb after the SIGTERM, leaving the session down (D-8350). It
+    is latent: the poll is a constant, and only the armed live wait reads it that way.
+  - **The panels.** All three reviews ran the held-out panel on the Agent tool, with the same models and efforts,
+    not on the Workflow tool, which waits for the operator's go-ahead in the reviewer's own pane (D-8260).
+    Round 1 ran one batched refuter for its eight minors and none for its two info items; rounds 2 and 3 ran none for
+    their nits. Each report says so.
+  - **Accepted** at `a9512878a` (04:42 UTC). The eight departures are numbered D-8346 to D-8353 and defined in
+    `docs/superpowers/plans/2026-11-11-session-continuity-wave6a-departures.md`. This PR also corrects the plan's
+    D-8317, "builds 2.1.314 to 2.1.322", to "and": only those two builds' bundles were read.
+  - **The landing.**
+    - Run 1845 opened first, for 6b (wave 8 of the run record), so closing 1777 cannot retire the programme.
+    - Run 1777 advanced to `merging`, with landing entry 148 pinned at `a9512878a`.
+    - A `BOUND_S=0` verdict read the merge queue, and the required-checks gate passed.
+    - #2687 was enqueued at 04:42:49 UTC with `--match-head-commit`, at queue position 1.
+    - At 04:57 UTC the queue removed it. The queue's run failed one browser test,
+      `pwa/browser/delegation-adopt-card.browser.test.ts:524` ("this row measures nothing"), a timing race in a
+      suite 6a does not touch, which ejected #2663 the same way on 2026-11-11.
+    - The verdict and the required checks were re-read at the same head, and #2687 was re-enqueued at 05:00:17 UTC.
+      It merged at 05:21:23 UTC as `933f293f`.
+  - **The close.** This coordinator mailed the worker MERGED, then closed run 1777 final: done, released, with its
+    child's reclaim queued. It told 5h's worker that 6a landed first, so 5h merges `main` once.
+  - **Next.** 6b's plan: the launch record and the manifest, written in shadow and read by nothing, on the calls
+    D-8323 to D-8332 the operator approved (item 174). #2687 shipped in the prerelease v0.0.1143. Once the fleet box
+    runs it or later, `--stage 3` reads the shadow's shutdown times, from the first weekly reading after that install.
+    After that deploy, the operator chooses whether to arm `graceful-stop-live` (the plan's "Waiting on you").
+- **2026-11-12 07:51 UTC - 6b is planned (D-8361 to D-8380), to be dispatched as two runs; its plan amends call I
+  (D-8332) and goes to the operator for approval as written.**
+  - **The fleet box runs v0.0.1144** (measured 07:20 UTC), which carries 6a (#2687). So the shadow's `graceful-stop`
+    lines are being written, and `--stage 3` reads them from the weekly reading due 2026-11-18.
+  - **This coordinator's calls for the plan** (twelve, read by the drafter as rulings): shadow means written and read
+    by nothing but the instrument and the tests; the plan settles the manifest's writer sites from the code; it writes
+    only the classes it can prove; budgets, privacy, the stage-3 counts for call F, D-8353's fix, one parser for the
+    launch record, a waiver per growing file, and a split if the plan outgrows one wave.
+  - **Drafting and review** (workflows `wf_13736be4-26a`, `wf_a22f3ee8-943` and `wf_6fbb00c2-dfb`). An Opus drafter
+    wrote the plan against `main`, three Opus lenses read it, and an Opus reviser applied each finding after
+    re-checking it: 1 critical, 19 important and 12 minor. The critical one: transcript.jq's `complete` accepts a
+    `tool_use` row, so an agent stopped mid-tool would have read as finished; the plan reads `end_turn` alone. A second
+    pass by three fresh Opus lenses found 12 important and 24 minor, also applied. A third, smaller pass applied this
+    coordinator's rulings below and fixed the four findings its checker raised.
+  - **The drafter's notes.** Ten notes at the plan's top record where a call met the code. This coordinator accepted
+    them. Among them: a run's journal has no end record, so its summary file decides "finished"; `holed` can be computed
+    from the agents' transcripts in the sidecar; the hook cannot read ccd's constants, so the record's two are spelled
+    twice and pinned equal.
+  - **Two runs on one plan.** The drafter proposed one wave; this coordinator ruled two, for review size and so the
+    launch record collects from its own deploy: 6b-1 is Task 1 (the launch record, in the hook), with its own gate;
+    6b-2 is Tasks 2 to 5 (the manifest program, its writer in ccd at the swap, the limit-resume and the supervisor's
+    gone exit, and the `--stage 3` reading). Run 1845 takes 6b-1, and a new run takes 6b-2 after it lands.
+  - **Call I is amended (D-8362).** The second pass found that a manifest holding `$REG/.carry.lock` would make a
+    concurrent swap's carry for another session log `(kept: busy)` and leave that sidecar unmerged: the stage-1 loss
+    this programme removes, caused by a file nothing reads in 6b. This coordinator ruled that the manifest takes a slot
+    of its own, `$REG/.inflight.lock`, and never the carry's. The carry slot bounds heavy work on the box; it is not a
+    lock between sessions, and the manifest has its own read budget and time bound. So no existing act changes, only
+    three timings. Call I was approved by the operator (item 174), so the operator's approval of this plan approves
+    the amendment.
+  - **The plan** is `docs/superpowers/plans/2026-11-12-session-continuity-wave6b-launch-record-and-manifest.md`. Its
+    provisional values (the record's 1 MiB, the manifest's 64 MiB read, 64 KiB file and 30 s bound, the eight-day
+    abandon window) are revisited from the shadow week.
+  - **Next.** The operator approves the plan as written, as an item. Then the plan lands and run 1845 is dispatched
+    for 6b-1.
+- **2026-11-13 11:52 UTC - 6b-1 is accepted after three review rounds, merged (#2723 `d8c4ed4a`), and run 1845 is
+  closed; run 1878 is open for 6b-2.**
+  - **The plan was approved as written (item 176).** On 2026-11-12 at 21:28 UTC the operator approved the 6b plan as
+    written, as two runs, with call I amended by D-8362. The plan merged at 21:36 UTC (#2695 `d765e720`), and run 1845
+    was dispatched for 6b-1 at 21:51 UTC.
+  - **What 6b-1 ships.** The launch record, `$REG/<id>.deleg`: a second output of the session hook's one payload parse.
+    The hook appends a row for each background Workflow launch, background Agent, `resumeFromRunId` call or SendMessage
+    the main thread makes (with a `drop` row before it, or in its place, when a path, an id or the payload's shape
+    fails), under a byte budget; a subagent's own events write nothing. `_reg_purge` removes the record after the
+    generation (D-8367). Nothing in the tree reads it: 6b-2's manifest is its first reader. The hook grew by 22 net code
+    lines and `ccd/ccd` by none, so D-8379's waiver is unused.
+  - **The first wave-done** came at `70139877`. Its suite line was red: the first full gate found two guard reds that
+    the task's own suites had missed, a fixture shaped like an email address (`topology-clean`) and a hand-kept 512
+    where the spool's `maxpath` belongs (`single-definition/ask-digest`). The worker fixed both before it pushed.
+  - **Review 1875** (round 1, at `70139877`) found one important finding (F1), four minor ones (F2, F3, F5, and F6,
+    graded nit or minor), a measured answer on the hook's cost (F4) and three nits (F7 to F9), none critical:
+    - F1: five of `lrpath`'s conjuncts had no test that goes red when deleted, because every bad-path row varied only
+      the script path;
+    - F3: the record's size read printed on the hook's stderr when `.deleg` was removed between its existence test and
+      the open (the purge window);
+    - F2: the hook's comments and the plan's wording said a path failure's pair is one `write(2)`; its plan half is
+      now D-8401;
+    - F4, F5 and F6: the plan's wording, now D-8400, D-8402 and D-8403.
+
+    Fix round 1 added rows that vary the transcript path and the script name, each with a mutation row, made the size
+    read silent, and corrected the hook's comment. Its first fast run went red on one case, a race in the test's `jq`
+    stand-ins, which acted after the hook had read the parse; a second, test-only commit fixed it.
+  - **Review 1876** (round 2, at `1207dff0`) found R1 to R3 in and R4 half done (one comment), asked for a ruling on
+    the extra test-only commit, and found nothing critical or important. It found three coverage gaps that round 1 had
+    not named. The one that mattered: no passing row had a directory starting with a dot, so a mutant refusing such a
+    segment survived. Claude Code keeps its transcripts under such a directory, so that mutant would have recorded
+    `script:null` for every real session. This coordinator accepted the extra commit. Fix round 2, the last under the
+    cap, added that row, rows for a non-string transcript path, and stderr pins for the pair and budget arms, each with
+    a mutation row, and finished R4's comment.
+  - **Review 1877** (round 3, the last, at `d5f977b3`) found nothing critical or important and nothing needing a
+    ruling. Of its five observations, two are nits (N1 and N3, carried below); N2 is not a defect, and N4 and N5 were
+    refuted. It re-ran the four new mutation rows, all red when mutated and green when restored; the worker measured
+    all 40 rows at the tip. The cap was reached and none is critical or important, so this coordinator accepted the
+    wave.
+  - **The panels.** Reviews 1875 and 1876 ran the held-out panel on the Agent tool, and refuted each finding that needed
+    a measurement but not their nits; review 1877 ran it on the Workflow tool, with one refuter for each minor finding,
+    11 in all. Review 1877's does-it-reproduce lens returned nothing, and the reviewer re-ran the mutation rows and
+    suites itself, as its report says.
+  - **Accepted** at `d5f977b34` (11:20 UTC). The four departures are numbered D-8400 to D-8403 and defined in
+    `docs/superpowers/plans/2026-11-13-session-continuity-wave6b1-departures.md`; this PR points the plan's eight
+    sentences they correct at them.
+  - **The landing.**
+    - Run 1878 opened first, for 6b-2 (wave 9 of the run record), so closing 1845 cannot retire the programme.
+    - Run 1845 advanced to `merging`, with landing entry 160 pinned at `d5f977b34`.
+    - A `BOUND_S=0` verdict read the merge queue, and the required-checks gate passed.
+    - #2723 was enqueued at 11:21:08 UTC with `--match-head-commit`, at queue position 1.
+    - At 11:25:58 UTC the queue removed it. The queue's run failed one pwa test, `instrument-shell.test.tsx`'s "every
+      route says where you are" on `/digest`, which races the digest screen's lazy chunk and has failed the same way on
+      PRs that touch no pwa file since #2635. #2723 touches only `ccd/` and `server/test/`.
+    - The verdict and the required checks were re-read at the same head, and #2723 was re-enqueued once at 11:28:26 UTC.
+      It merged at 11:48:29 UTC as `d8c4ed4a`, and shipped in the prerelease v0.0.1161.
+  - **The close.** This coordinator mailed the worker MERGED, then closed run 1845 final: done, released, with its
+    child's reclaim queued.
+  - **Next.** 6b-2, Tasks 2 to 5 of the same plan (the manifest program, its writer in `ccd/ccd` at three sites under
+    its own lock, and the `--stage 3` reading), is run 1878, open at `planned`. It is dispatched next, on a branch cut
+    from `main` after #2723. Once the fleet box runs v0.0.1161 or later, the launch record collects rows, and 6b-2's
+    first manifests read that backlog.
+
+- **2026-11-13 21:17 UTC - 6b-2 is accepted after three review rounds, merged (#2735 `99dd85142`), and run 1878 is
+  closed; run 1931 is open for 6c.**
+  - **Dispatch and scope.** After the 6b-1 acceptance ledger merged (#2725 `cc6bcad17`), run 1878 was dispatched at
+    12:33 UTC for Tasks 2 to 5 of the approved 6b plan. It ships the manifest program, the writer at swap,
+    limit-resume and revival, and the instrument's stage-3 manifest counts. `.inflight` stays shadow-only: no runtime
+    consumer or delivery is added, and the instrument reads the swap-log counts, not the file. The writer takes
+    `.inflight.lock`, never `.carry.lock` (D-8362), and changes no existing restart act's order.
+  - **The first gate and review 1903.** Three guard-suite failures across two fast runs were fixed before the first
+    wave-done: the first run failed the generation-read compaction-lock census (D-8576) and the new test's
+    gh-containment scan; the second failed the gone-exit tick budget, so the absent-generation-file gate was changed
+    to avoid taking the lock or forking external commands. Review 1903 at `dbe85995` found two important findings:
+    the program applied the narrower
+    Claude-side id grammar to ccd's session id, and an unsearchable config root could read `not-applicable` rather
+    than `unmeasured why=error`. Fix round 1 corrected both, made a finished run's absent latest-agent transcript
+    unread (the reviewer had refuted that as a plan defect; the coordinator ruled to harden it), and bounded reads
+    by their price. It also added the nonblocking-open mutation, a second manifest-line grammar pin, and the
+    spec/README/comment corrections. The measured growth became +95, exactly D-8380's cap.
+  - **Review 1917** at `4c215368` found nothing critical or important, but the record read was not limited to its
+    price, tails could read beyond theirs, the static scan did not check the limit's value, and a vanished agent
+    transcript could retire a finished run. Fix round 2, the last, was rulings R10 to R14: limit the record read,
+    price the newest tail window, check each known site's limit expression, keep the vanished transcript unread,
+    and correct the remaining prose. The worker reported all 80 mutation rows red when mutated and green when
+    restored at `fe42050bb`; that is the worker's complete-row measurement, not a coordinator re-run.
+  - **Review 1929** (round 3, at `fe42050bb`) was narrow over R10 to R14 and found nothing critical or important.
+    It found the rulings in and no out-of-scope change. It independently re-ran the named new mutation rows, but
+    found two minors and four nits:
+    - the scan's five current reads are priced correctly, but an unlisted argument without a limit passes, missing
+      sites are not asserted, and pricing is checked by source substrings (F1, D-8583);
+    - a tail window on a line boundary can drop a whole good line, on the conservative side; the cut-key mutant
+      stays green (F2, D-8584); its behavioural half was single-lens, unrefuted;
+    - a stale oversize check can report a false drop-budget after shrink, and the record's cap is redundant beside
+      its limit (N1 and N3, D-8582); the tail-price comment misdescribes its fixture (N2, D-8584); the plan's
+      MP-RECORDMAX wording omitted that the mutation now removes both bounds (N4, corrected in this ledger PR).
+  - **Review coverage.** Review 1903 ran three Opus/high lenses and a Sonnet/high refute pass through Agent; its
+    report names its unverified items. Review 1929 ran three Opus/high lenses through Agent, none lost, but **zero
+    refuters**, despite the brief asking one per minor. F1 was measured by two lenses; F2's behavioural half and the
+    nits were single-lens, unrefuted. The reviewer separately measured the cut-key gap. The review cap was reached;
+    the coordinator accepted with those limits carried, not with a claim that full refuter coverage ran. No fourth
+    code-fix or review round was opened.
+  - **Accepted** at `fe42050bb`, then reconciled at `4ab349ce6` under that acceptance. The nineteen departures and
+    limits, D-8566 to D-8584, were allocated at acceptance and are defined in
+    `docs/superpowers/plans/2026-11-13-session-continuity-wave6b2-departures.md`. The final merge's local suite counts
+    are worker-reported; the coordinator independently verified the reconciliation and exact-tip CI.
+  - **The landing.** #2742 was already queued ahead and conflicted in the shared inventory comment. Under the
+    second-lander agreement, #2735 held until #2742 merged as `d24da2880`, then merged `main` once. The coordinator's
+    remerge-diff read found only the agreed three comment lines: both `fresh` and `inflight`, the extended count
+    sentence, and `The 55:`. No code reconciliation or additional fix was accepted. The merge was clean against
+    the freshly fetched `main`; growth stayed +95, with no headroom.
+    - Fast run 43499048637 passed on `4ab349ce65e36cc92795c0a0d4d4bb0d0f1cde39`, attempt 1, and all four required
+      checks passed. No failed attempt of a required check was found; a non-required external review-gate app
+      failed. A green fast run alone is not a full-suite proof.
+    - Run 1931 opened first, for 6c (wave 10), before closing 1878 could retire the programme.
+    - Run 1878 advanced to `merging`; landing entry 172 pinned the accepted head. The fresh `BOUND_S=0` verdict
+      selected the native queue, the required-checks gate exited 0, the landing line was unpaused, and mail was
+      clear immediately before enqueue.
+    - #2735 entered the native queue at 20:35:47 UTC, position 5, bound by `--match-head-commit` to that exact head.
+      At 21:03 it was position 1, awaiting checks; it merged at 21:14:43 UTC as `99dd85142`. No re-enqueue was needed.
+  - **The close.** The coordinator independently read MERGED with the exact accepted `headRefOid`, mailed the worker
+    MERGED, then closed run 1878 final with that fingerprint: done, `released:true`. Its own closed row reads done.
+    Reclaim was queued and the subsequent row read it deferred by a hold; the close is not proof of deletion.
+  - **Next.** 6b is complete as a shadow producer, not as restart delivery. Run 1931 is planned for 6c, with no
+    worker dispatched. Its plan first settles the carried reader limits below, then the composed delivery and wake
+    contract. No live stop is armed by this acceptance, and no installed version is inferred from the merge.
+
+## Carried constraints
+
+- **Every wave that edits `ccd/ccd`** re-stamps it (`ownership.test.ts`), pays the citation tax for every cited file
+  it moves (`session-hook.test.ts` S6-R11), keeps edits above the frozen corpus anchors length-neutral, and
+  re-measures `ccd-reg-get-census.test.ts`'s sentence if it adds a `_reg_get` call.
+- **Child-reclamation edits the same `ccd/ccd` lines.** Its wave 3 (run 148, dispatched 2026-09-24) rewrites the
+  `_reg_get` census sentence wave 2 also rewrites; wave 2's plan locates those lines by content and derives its
+  numbers from whatever the base states, so either may land first (re-measured 2026-09-24 against `main` `b501698a`).
+- **The instrument grows with the programme.** `deploy/measure-continuity.py` is read-only and run by hand on the
+  fleet box; wave 1 creates it with the carry counter, and every later wave adds the rows of spec §9 it owns in the
+  same PR as the mechanism they measure.
+- **Claude Code's regime changed on 2026-09-15.** Workflow agents pause at a five-hour limit and re-run after the
+  reset. Any delegated-work baseline a plan uses is re-cut at 2026-09-16 (spec §1.1).
+- **The fleet box is memory-bound.** A pane scope throttles at 8G and dies at 12G with its session
+  (`OOMPolicy=stop`), and the session slice sits near its 24G ceiling. Run suites in the foreground, one at a time,
+  sharded; never two full server suites at once from one pane.
+- **`deploy/measure-continuity.py` has one shape, whichever wave lands first.** One registry `STAGES = {N: stageN}`,
+  each `stageN(ctx)` returning named sections; `ctx` carries the home, the swap log, `since`/`until` as epochs
+  (swap-log stamps are local time), `all_copies` and `deployed`; the CLI is `--stage N` (repeatable), `--home`,
+  `--swap-log`, `--since`, `--until`, `--deployed`, `--all-copies`, `--json`. A wave that finds the file already
+  there keeps its header, helpers and parser and adds only its own stage block and registry entry.
+- **A later carry wave owes F10 (review 227).** A same-size record whose source is not newer is still queued as a
+  tier-0 compare costing twice its size, ahead of every journal, although its outcome is fixed. Decide it from
+  `lstat` in the dry pass, and move F1's pin to that decision in the same commit.
+- **Stage 5's worker clause must agree with the stall watch's worker clause 17** (peer finding
+  `monitor-wait-conflict-continuity-stage5`, from stall-watch wave 4 via its coordinator, 2026-10-02).
+  - **The conflict.** Spec §5.5 (about `:486`) and §5.6 item 1 (about `:506`) have workers wait on CI or a deploy
+    with the Monitor tool. Clause 17 (#232, in review) says a turn ends only on a wake you can name, and "a
+    background shell or Monitor is never that wake".
+  - **Before stage 5 is planned,** reword the spec so a Monitor (or a Monitor over a Bash loop) keeps a watcher
+    alive INSIDE a turn and is never an end-of-turn wake.
+  - **Not now:** the spec is under the stall watch's claim 891, and stage 5 is unplanned.
+- **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
+  `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; never print secret contents.
+
+- **From wave 4b's last review (729), carried:** the comment above `_redrive_after_spawn`'s call in `_spawn_settle`
+  says a non-home-able lane never has `_resume_env`'s flag set and that the measurement fails closed there. Neither
+  holds at `d8cd4765`. The next edit to that region of `ccd/ccd` corrects it, with this programme's agreement.
+
+- **Every brief says how a killed run is reported.** A worker that ends its turn waiting for a word typed at its
+  own pane is never woken, because only mail reaches it. A run killed by the memory reaper, or anything else, is
+  restored and reported in a status mail; long runs go in the foreground (run 237, 2026-10-02).
+
+- **The direct-kill scanner's next edit owes review 1458's minors** (Decisions, 2026-11-04 18:44):
+  - B1: the raw-text test for an undumpable payload recognises the angle brackets plain or as a unicode escape, but
+    not an opener whose other characters are escaped, and no test covers the escaped closing bracket or upper-case
+    hex digits; narrow the sentences that say "plain or JSON-escaped", or decide it with a decoded check;
+  - B2: the `s6_unreadable` docstring still says the caller makes the whole row one malformed row;
+  - B3: the non-string-stamp undumpable test cannot go red if the stamp check is skipped on that path, and no case
+    covers an undated undumpable row (accepted as it stands: that check cannot change the output);
+  - B4: README and the spec call the unmeasured key "an unreadable payload's dump", where for a list prompt it is
+    each element's dump;
+  - and the shape noted with them: a queued-command list prompt with a readable kill beside an undumpable element
+    drops that kill, with the reading partial.
+
+- **Wave 6 (stage 3): this coordinator's proposals, for its plan and spec revision to settle** (the survey of
+  2026-11-07; Decisions, 2026-11-07 14:40 and 22:40; the consolidation rule in `CLAUDE.md`). Spec §5.3 still says
+  otherwise on the first and last points until then:
+  - it extends the delegation broker's spool and server projection for the launch record and the manifest's
+    readers, rather than adding a second writer beside `$REG/delegation/` (the spec's `$REG/<id>.deleg`);
+  - it pins in tests the Workflow resume strings it relies on (`scriptPath must be a script path …`, `No journal
+    found for workflow run …`), so a Claude Code update that changes them fails a suite rather than the fleet;
+  - it measures the graceful stop's bound behind a shadow arm before arming the stop (D-8104);
+  - its words avoid the broker's `stale`, `adopt` and `delegation`, the abandon doors' `abandoned`, and the wave-done's
+    `handoffCommit`, or say which they mean;
+  - its composed prompt starts from D-5237's `_resume_prompt_for`, whose typed fallback already types the composed
+    prompt, not the constant §5.3 names.
+
+- **From wave 5 (reviews 1770, 1772 and 1773; Decisions, 2026-11-10 and 2026-11-11), for wave 6's plan:**
+  - spec §5.3's not-stalled restarts name the arming markers only. The stall watch's Settings level can arm the same
+    wave-2 arms (review 1770 F1, the spec half);
+  - three spec neighbours went stale with wave 5 (review 1770 F12):
+    - §1.2 mechanism 2: the five script-path refusals are now past retention, still unexplained, and its first
+      sentence (resuming by run id works across accounts when the journal is present) no longer holds after a swap
+      on 2.1.314, where only a working-directory copy or the inline script resumed;
+    - §11 item 7 says the lent account was a scratch one, where it was a real one (D-8252);
+    - §5.3's Delivery literal is a current-root path, the shape row R1 measured refused;
+  - the wake after a swap (seen once, on 2.1.314). A session that was idle while its background work ran is not redriven, and its stopped-task
+    notifications start no turn. The stall watch woke the subject 15.5 minutes later. The composed redrive prompt is
+    wave 6's, so its plan weighs this;
+  - weekly-only lanes. As measured for item 145 on 2026-11-10, five accounts had reported a weekly figure only since 27
+    to 31 October, and a sixth since that evening. ccrc reads such a lane as having no 5-hour limit since #2473
+    (D-8120). Wave 6's plan, and every stage-4 reading, say which of stage 4's reset-based rules can still fire on one;
+  - a live step that needs a session to call Workflow needs the operator's go-ahead in that session's own pane
+    (D-8260), so a brief plans for it;
+  - the operator's Q4 ruling (#2526 §6.1), built by PR #2603 (merged 2026-11-11), changes how a limited or no-room
+    session is resumed. With a stated reset, ccd waits and restarts a no-room session in place, the restart §11 item 6
+    ruled out (Decisions, 2026-11-10 17:59). Wave 6's plan reads the behaviour as shipped, and this coordinator re-reads
+    stage 4's four no-room rows after it deploys (item 140).
+
+- **From wave 6a (reviews 1838, 1841 and 1844; Decisions, 2026-11-12 05:26), for 6b, 6c and the live arm:**
+  - before `graceful-stop-live` is armed, the live wait owes: its wait of about twice its bound on a clock that stops
+    or steps back (D-8351), which §5.3's "waits up to" should say too; a non-numeric poll, which abandons the whole verb
+    after the SIGTERM and leaves the session down, and a poll of 1 s or more, which the slice misreads (D-8350); and the
+    zero-poll row's unpinned 100 ms (D-8352);
+  - the shadow observer, which runs at every stop today, is bounded by the clock alone, and any `exited=` can read 0
+    or less on a clock that steps back (D-8351);
+  - also before arming: the start time is read at the stop's third step, after the tmux read of the pane's pid, so a
+    pid recycled between the two would be taken for the pane's process. That needs the pid to wrap in that interval;
+  - `deploy/measure-continuity.py` stages 3, 4 and 7 and the carry section raise on an unreadable swap.log; one
+    instrument change makes all four read it as unmeasured (D-8353);
+  - two waves dispatched together are checked for overlap against each plan's file list, not the live claims alone:
+    6a and landing-order 5h overlapped in `ccd/ccd` and `README.md`, and the claims check at dispatch did not show it.
+
+- **From wave 6b-1 (reviews 1875, 1876 and 1877; Decisions, 2026-11-13 11:52), for 6b-2 and later:**
+  - 6b-2's manifest program must assume neither that a path failure's two lines in the launch record are adjacent
+    nor that both are present: a kill between the two writes can leave the drop without its row, and a concurrent
+    append can land between them (D-8401);
+  - the hook's added cost where the spool directory exists, on each event the prefilter matches (measured on a Bash
+    PostToolUse at about +1.2 to +1.5 ms; D-8400), is a recorded limit, revisited with the record's provisional values
+    from the shadow week;
+  - the history spool's fence comment (D-4176) says `\n<json>\n` goes out in one `write(2)`; bash writes it as two
+    (review 1876 F7c, measured on bash 5.3.9). It predates 6b and is not the launch record; the next edit of that
+    region corrects it;
+  - the launch-record test's next edit owes review 1877's two nits: the budget twin's growth check is loose (more
+    than 40 bytes, where the drop row and its newline are 52), and the pair arm's stderr cases sit in the budget's
+    `describe`.
+
+- **From wave 6b-2 (reviews 1903, 1917 and 1929; Decisions, 2026-11-13 21:17), for 6c and the live arm:**
+  - before any runtime consumer reads `.inflight`, tighten the five-site bounded-read/pricing scan (D-8583), add the
+    distinguishing `size <= tail, limit < size` tail-cut case, and decide the boundary peek and its extra byte
+    explicitly (D-8584); the present line-boundary cut can conservatively report unread;
+  - accept both a listed manifest's LF-terminated lines and a header-only file without a final LF (D-8569), and
+    compare `at=` and `gen=` with the latest spawn as D-8374 requires; a merge is not proof that a new build has
+    written a manifest at every restart;
+  - preserve the distinction between an unlistable base's undated unread count (D-8578) and recent work; take the
+    cross-sidecar FIFO-recency admission limit (D-8579) into the first consumer's decision;
+  - a SendMessage restart of a cut-short agent can be retired as an unjoined send (review 1903 D1; D-8373, D-8402).
+    Settle the agent-id and delivery contract before treating the manifest as a complete restart inventory;
+  - a FIFO at swap.log still blocks the instrument: D-8353 fixed unreadable-file failures, not that pre-existing
+    blocking open. Its next hardening owes the FIFO case;
+  - before arming the live stop, measure the `KillMode=process` revival-manifest overlap and the server's swap
+    deadline with the added manifest time. Both remain unverified, alongside the 6a prerequisites above;
+  - the record's stale oversize term can count a false drop-budget after shrink, and its cap is redundant beside
+    the price limit (D-8582). These are recorded limits, not an authorization to alter the closed 6b branch;
+  - `ccd/ccd` grew by exactly D-8380's +95. Any later growth is measured against its own base and authorization,
+    never silently charged to nonexistent headroom in that waiver.
+
+## Next-wave brief
+
+Waves 1 and 2 are merged (#230 `a934a59b`, #235 `db44b136`). Owed after their deploys:
+- wave 1's §9 stage-1 measurement, about 2026-10-09;
+- wave 2's stage-4 reading, with refused dispatches subtracted (F1 above).
+
+Wave 3 (spec stage 7: `$REG/<id>.typed`, the operator's own `/model`/`/effort` promoted to the route record, the
+alias table) is run 248, dispatched 2026-10-04 22:22 to `ccrc-pwa-still-harbor`, with deviation numbers 3896 to
+3905 and 3921 to 3925, written bare.
+- **Its plan's FIRST commit is wave 2's residue**, the list above from review 246: F1, F2, F3, F5, the minors 3–5
+  and F6's restated §9 target.
+
+Wave 3 is merged (#250 `77f8d63a`). Wave 4 is merged (#299 `1bb88d5e`) and deployed. Its full baseline-B week
+is measured above: 0 reap-class among 34 pane-scope OOM stops, with 5 unmapped and 4 unmeasured. The scope-sweep
+record stayed `shadow` through that week; `$REG/scope-sweep-live` is operator-only, and its arming on 2026-10-26 is
+recorded below.
+
+**Wave 4b is merged** (#435 `d8cd4765`, 2026-10-21 03:54 UTC; Decisions, 2026-10-21 03:55) **and deployed**
+(v0.0.508, 2026-10-21; Decisions, 05:43). Task 5's first week is read: 0 reap-class, `not-triggered`, so the
+variable stays (Decisions, 2026-10-28 05:51). Its second week is read too: 0 reap-class in the part read, its first
+2 h 9 m unmeasured, and the two-week direct-pressure figure reported for the operator's ruling under spec §9
+(Decisions, 2026-11-04 05:52). The operator then ruled to redesign the direct-kill scanner, and wave 4c is planned for it
+(Decisions, 2026-11-04 10:22), and the operator approved its plan as written (Decisions, 2026-11-04 15:14). The plan is merged and
+run 1450 is dispatched (Decisions, 2026-11-04 16:25). Wave 4c is merged (#2277, `ba93eb31`) and run 1450 is closed (Decisions, 2026-11-04 18:44); it shipped in
+v0.0.962, and the fleet box read week 3 with it on v0.0.1088. What is owed now: the weekly reading against baseline B. Its third week is read (Decisions, 2026-11-11
+05:48), and the next is due 2026-11-18 05:38 UTC, owned by this coordinator. `$REG/scope-sweep-live`
+exists since 2026-10-26 23:38 UTC: the operator armed it, and confirmed so on 2026-10-28 (Decisions, 08:00). The operator lifted the stop on 2026-11-07 and lent an account for the spike (item 59), a real one rather than scratch
+(D-8252), and chose the reduced spike (item 75; Decisions, 2026-11-07 14:40 and 22:40). Wave 5's plan, `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md`, is merged (#2443 `86a713a5`), and so are its results (#2602 `ec7a6caf`; Decisions, 2026-11-11 01:41). After an ordinary swap, a working-directory copy of the script or the script passed inline resumes a run, and the returned path and the carry's copy are refused (build 2.1.314, one
+swap). Task 4 was not run (item 145). §11 item 6 is closed (item 140). Wave 6, stage 3, is next, split into 6a, 6b and 6c (Decisions, 2026-11-11 16:20): run 1777 was opened at `planned`, and 6a's plan, `docs/superpowers/plans/2026-11-11-session-continuity-wave6a-graceful-stop-shadow.md`, was approved as written with the calls for 6b and 6c (item 174) and merged (#2672); run 1777 was dispatched for 6a on 2026-11-12 (Decisions, 2026-11-12 00:14). 6a is merged (#2687 `933f293f`), run 1777 is closed, and run 1845 was opened for 6b, whose plan, `docs/superpowers/plans/2026-11-12-session-continuity-wave6b-launch-record-and-manifest.md`, the operator approved as written (item 176; Decisions, 2026-11-13 11:52): two runs, 6b-1 then 6b-2, with call I amended (D-8362; Decisions, 2026-11-12 07:51). The plan is merged (#2695 `d765e720`). 6b-1 is merged (#2723 `d8c4ed4a`), run 1845 is closed, and run 1878 was opened for 6b-2, Tasks 2 to 5 (Decisions, 2026-11-13 11:52). #2603 is on the fleet box (v0.0.1124), so stage 4's no-room rows are re-read with the weekly reading due 2026-11-18.
+
+**6b-2 is merged** (#2735 `99dd85142`), run 1878 is closed final, and run 1931 is planned for 6c, opened before that
+close (Decisions, 2026-11-13 21:17). The nineteen departures and carried limits are D-8566 to D-8584, defined in
+`docs/superpowers/plans/2026-11-13-session-continuity-wave6b2-departures.md`. The manifest is still shadow-only;
+merge is not a deployment or live-arm proof. Before dispatch, write 6c's plan against the as-built writer and the
+carried limits above: tighten the scan and tail tests, settle header-only/no-final-LF and freshness handling, the
+unread/recency limits and SendMessage restart identity, then delivery and the wake. The inherited 6a stop prerequisites
+and 6b-2 timing questions remain prerequisites for any live arm. No 6c worker is dispatched yet.
+
+The record below is the wave's history.
+
+Wave 4b is run 308 (dispatched 2026-10-15 16:00 UTC; deviation numbers 4316 to 4325, written bare). Its plan is
+at `docs/superpowers/plans/2026-10-13-session-continuity-wave4b-pressure-reap-and-clear.md`; **written-plan review
+was approved on 2026-10-15** at `3d8e5559b11ed4f8243911c08b105b39e6a1e26b`. Its wave-done names PR #435 at
+`990c70cbb5cd863f97d6d5e59dd01c203e111dba`; implementation is NOT accepted. Review 489 failed without dispatch
+and remains unchanged. Review 630 closed DONE at 14:32 UTC on 2026-10-19 with the original report fingerprint
+accepted. The 14:46 rulings require intent-preservation fixes, a real half-pair mutation owner and truthful
+committed evidence; they do not authorize the widened promotion contract. At 14:50 UTC the server accepted the
+worker effort change to xhigh, work 308's retreat to working and one fix-round mail. At 15:05 UTC Task 3's new
+contract question was handed to the operator without a coordinator selection. At 17:29 UTC Task 4's parser-contract
+question was also handed over, with no option selected; its out-of-brief live-transcript count remains unverified.
+At 22:25 UTC the worker reported code final at `5a71ccf91`, unpushed, and attributed epoch merge and parser widening
+to operator answers. Exact ruling provenance and coverage of a newly disclosed pending-model typing cost are still
+owed; no coordinator selection or cost acceptance is implied. At 22:31 UTC the pending-model read-back cost was
+asked explicitly and handed to the operator without a selection; no answer was observed. Owning groups 1-8 were
+reported green and group 9 timed out. On 2026-10-20 at 07:25 UTC the server accepted the worker's fix-round handoff at
+`2f6caa48e` (code `5a71ccf91`; the last commit is gate evidence only), reported suite red with failure unclear. Work 308
+is awaiting review and review 685 was dispatched at 07:42 UTC. Await its report; review 630 is not reused.
+Required server CI at the old reviewed tip was red for an inherited README-size guard; its 714-file selection is
+not a changed-tip proof or
+full-suite waiver. Tasks 1-4 remain four settled, unaccepted items; Task 5 is pending.
+- **Its FIRST commit is wave 4's residue:** review 305 F1(a), the qualified doctor PASS line, I1, `s6_inert`'s
+  staleness, the zombie child, the paused log line, baseline B's non-zero check and the per-task minors.
+- **Then it ships** `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment and 3925's `/clear`
+  code fix (review 268's F4 design note: read the outgoing transcript at the uuid rotation).
+- **It remains AGENT-FIRST.** It does not arm the scope sweep or create its live marker.

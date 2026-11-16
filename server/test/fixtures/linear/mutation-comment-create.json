@@ -1,0 +1,111 @@
+{
+  "name": "mutation-comment-create",
+  "documentSource": "code",
+  "document": "mutation CommentCreate($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id createdAt } } }",
+  "variables": {
+    "input": {
+      "issueId": "00000000-0006-4000-8000-000000000002",
+      "body": "Comment written by the FX fixture capture.\n\n— written by a ccrc fleet session"
+    }
+  },
+  "requestBody": "{\"query\":\"mutation CommentCreate($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id createdAt } } }\",\"variables\":{\"input\":{\"issueId\":\"00000000-0006-4000-8000-000000000002\",\"body\":\"Comment written by the FX fixture capture.\\n\\n— written by a ccrc fleet session\"}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631382098,
+  "receivedAtMs": 1793631382429,
+  "sentAt": "2026-11-02T14:56:22.098+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:22 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "139"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "3"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999997"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634982746"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634982746"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "commentCreate": {
+        "success": true,
+        "comment": {
+          "id": "00000000-0007-4000-8000-000000000001",
+          "createdAt": "2026-11-02T14:56:22.781Z"
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"commentCreate\":{\"success\":true,\"comment\":{\"id\":\"00000000-0007-4000-8000-000000000001\",\"createdAt\":\"2026-11-02T14:56:22.781Z\"}}}}\n"
+}

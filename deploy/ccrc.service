@@ -19,6 +19,11 @@ EnvironmentFile=-%h/.ccrc/exposure.env
 ExecStart=/usr/bin/env node %h/ccrc/server/dist/server/src/index.js
 Restart=always
 RestartSec=3
+# No core dumps (accounts spec §13.2, G22; D-5513): this process holds secrets in
+# memory on their way to a verb's stdin, and a core file is that memory written
+# to disk, outside the 0600 file the secret's one path ends in.
+# server/test/units-limitcore.test.ts finds every unit that starts this process.
+LimitCORE=0
 
 [Install]
 WantedBy=default.target

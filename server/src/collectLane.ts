@@ -1,0 +1,2822 @@
+// The temp-root collector's server lane: its PURE half (child reclamation spec 2026-09-22 §5.10; attention, §5.9).
+//
+// L1. This file imports `shared/api.js` and `./childReclaimSweep.js` only (L1 to L1, one way: `childReclaimSweep.ts`
+// never imports this file), ONE import statement each, and every later block merges its names into those two.
+// The readers need the first alone. It reaches no file, process, timer or clock: every instant and interval
+// a rule here decides with is an argument. The executor (`coord/collectTempRoot.ts`, L3) runs ccd and hands its answers
+// here, and the watcher (`watch.ts`, L4) wires the pass and decides nothing.
+//
+// The two readers below are TOTAL and the collector's own. Neither borrows reclaim's:
+// - a `ws-collect` document carries no `crumb`;
+// - its refusal words are not reclaim's;
+// - its audit is keyed `session`, not `id`.
+import {
+  CHILD_RUN_ID, COLLECT_BOX_LABELS, COLLECT_BOX_LINES, TMPROOT_ID_MAX_CHARS, isCollectLaneChoice,
+  isPositiveDecimalSafeInteger, isTmpRootId, lcRefusalWord, type ChildReclaimCollectAttention, type CollectArmedBy,
+  type CollectBoxLine, type CollectLaneChoice, type CollectToken, type LcRefusalToken,
+  type CollectLaneConfirmRequired, type CollectLaneRequest, type CollectLaneView,
+} from '../../shared/api.js';
+import {
+  CHILD_RECLAIM_DEFER_CEILING_MS, childReclaimBackoffMs, childReclaimDetailText, childReclaimIdsNamed, childReclaimStuckEnd,
+  childReclaimTierFrom, childReclaimTierPaceMs,
+  type ChildReclaimCollectInput, type ChildReclaimLaneNow, type ChildReclaimTierState,
+} from './childReclaimSweep.js';
+import { COLLECT_LANE_LIVE_MARKER } from '../../shared/switches.js';
+import { CCD_LOCK_UNOPENABLE, readCcdRefusal, withoutCcdRefusal } from '../../shared/ccd-refusal.js';
+import { isWorkspaceRefusal, type WorkspaceRefusal } from '../../shared/workspaceTransitions.js';
+import { splitJournalRecords } from './journalKernel.js';
+import { heldByFieldOf, type HeldByRead } from './heldByRead.js';
+
+const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
+/** A JSON object: never an array, never null. */
+const isObject = (v: unknown): v is Readonly<Record<string, unknown>> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+// ── the switch and its resolver (spec §5.10; path-identity spec 2026-10-12 §5.2) ────────────────────────────────
+
+/** The LEGACY arm of the lane's switch: the marker FILE `$REG/collect-lane-live` (path-identity spec 2026-10-12 §5.2).
+ *  It arms `ws-collect` only while it stands AND its journaled latch is unset; Settings is the other arm, and the
+ *  resolver at this file's foot decides (`collectLaneEffective`). Nothing in the tree writes it: it is hand-touched, on
+ *  the `expire-lane-live` precedent, and once a coherent listing proves it absent the latch retires it for good (§5.4).
+ *  Spelled ONCE, in its `shared/switches.ts` row (D-5855; L0, no `node:` import), and re-exported here; its code holders
+ *  are the row, this file and the executor, nearest the argv. */
+export { COLLECT_LANE_LIVE_MARKER };
+
+// ── the probe and refusal tables (spec §5.10) ───────────────────────────────────────────────────────────────────
+
+/** How an `unmeasured` probe word of `ws-audit --collect` is paced and reported (spec §5.10):
+ *  - `box-wide`: a fact about the fleet box, not the id. One line for the box, never one per id.
+ *  - `per-leaf`: a fact about this temp root that will not change by itself. It is listed at once.
+ *  - `load-sensitive`: a probe a busy or slow box can fail, so it is retried.
+ *  A word this table does not know is `load-sensitive`. */
+export type CollectProbeClass = 'box-wide' | 'per-leaf' | 'load-sensitive';
+
+/** ccd's probe words, each spelled once as a key: the twenty-two first arguments of `_ws_collect_unmeasured`, and the
+ *  four walk words `_ws_collect_eval` admits. `collect-readers.test.ts` holds the keys equal to ccd's text, both ways. */
+const COLLECT_PROBE_CLASS_TABLE = {
+  platform: 'box-wide', mv: 'box-wide', flock: 'box-wide', witness: 'box-wide', floor: 'box-wide', clock: 'box-wide',
+  eval: 'box-wide', quarantine: 'box-wide',
+  aside: 'per-leaf', 'checkouts-cap': 'per-leaf', 'idle:cap': 'per-leaf', 'idle:unreadable': 'per-leaf', mode: 'per-leaf', device: 'per-leaf',
+  'idle:timeout': 'load-sensitive', 'idle:walk-failed': 'load-sensitive', 'in-use': 'load-sensitive',
+  checkouts: 'load-sensitive', rows: 'load-sensitive', registry: 'load-sensitive', identity: 'load-sensitive',
+  leaf: 'load-sensitive', slot: 'load-sensitive', records: 'load-sensitive', token: 'load-sensitive',
+  lock: 'load-sensitive',
+} as const satisfies Readonly<Record<string, CollectProbeClass>>;
+export type CollectProbe = keyof typeof COLLECT_PROBE_CLASS_TABLE;
+export const COLLECT_PROBE_CLASS: Readonly<Record<CollectProbe, CollectProbeClass>> = COLLECT_PROBE_CLASS_TABLE;
+export const COLLECT_PROBES: readonly CollectProbe[] = Object.keys(COLLECT_PROBE_CLASS_TABLE) as CollectProbe[];
+
+/** A probe word's class. An unknown word, a prototype member's name included, is `load-sensitive`. */
+export function collectProbeClass(probe: string): CollectProbeClass {
+  return hasOwn(COLLECT_PROBE_CLASS, probe) ? COLLECT_PROBE_CLASS[probe as CollectProbe] : 'load-sensitive';
+}
+
+/** How a `ws-collect` refusal word, or the same word as an audit verdict, is read (spec §5.10):
+ *  - `terminal`: ccd journals it, and the operator owns what stands;
+ *  - `retry`: nothing was removed, and a later look may differ.
+ *  A word this table does not know is a `retry`, never `terminal`. */
+export type CollectRefusalClass = 'terminal' | 'retry';
+
+/** Every word `ws-collect` prints as `refused`: the collector's five journal words, declared in L0's `LcRefusalToken`,
+ *  and the five shared tokens `wsaudit.ts` words. The audit's refusal verdicts are the same words, save `state-changed`.
+ *  The words are the collect edges of `WORKSPACE_TRANSITIONS` (ARCH-41): the table below must name exactly those, or it
+ *  does not compile. `collect-readers.test.ts` holds the keys equal to ccd's text, both ways. */
+const COLLECT_REFUSAL_CLASS_TABLE = {
+  'witness-mismatch': 'terminal', 'quarantine-kept': 'terminal', 'containment-unproven': 'terminal',
+  'not-witnessed': 'retry', registered: 'retry', 'changed-recently': 'retry',
+  'state-changed': 'retry', 'in-use': 'retry', 'in-progress': 'retry', paused: 'retry',
+} as const satisfies Readonly<Record<WorkspaceRefusal<'collect'>, CollectRefusalClass>>;
+export type CollectRefusalWord = WorkspaceRefusal<'collect'>;
+export const COLLECT_REFUSAL_CLASS: Readonly<Record<CollectRefusalWord, CollectRefusalClass>> = COLLECT_REFUSAL_CLASS_TABLE;
+export const COLLECT_REFUSAL_WORDS: readonly CollectRefusalWord[] =
+  Object.keys(COLLECT_REFUSAL_CLASS_TABLE) as CollectRefusalWord[];
+
+/** A refusal word's class, its membership answered from `WORKSPACE_TRANSITIONS`. An unknown word, a prototype member's
+ *  name included, is a `retry`. */
+export function collectRefusalClass(word: string): CollectRefusalClass {
+  return isWorkspaceRefusal('collect', word) ? COLLECT_REFUSAL_CLASS[word] : 'retry';
+}
+
+// ── the audit reader (spec §5.10) ───────────────────────────────────────────────────────────────────────────────
+
+/** `ws-audit --collect`'s token grammar: exactly 64 lowercase hex characters, nothing trimmed, and no flag. */
+const COLLECT_TOKEN_SHAPE = /^[0-9a-f]{64}$/;
+/** A witness's `at`: epoch milliseconds, exactly thirteen digits, as ccd's witness reader requires. */
+const WITNESS_AT_SHAPE = /^[0-9]{13}$/;
+
+/** `ws-audit --session <id> --collect`'s answer (spec §5.10). Only `collectable` carries a token, and only at exit 0.
+ *  - `collectable`:
+ *    - `resume` is the quarantine PHASE, null when the key is absent: a fresh collection;
+ *    - `witnessRun` and `witnessAt` are `collect.witness`'s `run` and `at` (epoch ms), null when the witness is null;
+ *    - `leaf` is `collect.leaf`, for display only.
+ *  - `verdict`: any other exit-0 verdict, a refusal word or one this build does not know, with `collect.idleAt`
+ *    (epoch seconds) when it is a non-negative safe integer.
+ *  - `unmeasured`: the exit-1 answer, with its probe word verbatim.
+ *  - `verdict` and `unmeasured` carry the document's `witnessRun` and `leaf` too: ccd prints `collect.witness` and
+ *    `collect.leaf` on every document, and the lane's evidence is the LATEST document's. There an absent `witness`
+ *    key reads as none. A witness this reader cannot vouch for makes ANY document `unreadable`.
+ *  - `exists` is not carried: nothing gates on it.
+ *  - `unreadable`: a document that is not this id's collect audit, or not ccd's shape for its exit status. It is never
+ *    spent.
+ *  - `no-document`: nothing on stdout (a runner kill, a timeout, a die before the document). */
+export type CollectAudit =
+  | { readonly kind: 'collectable'; readonly token: CollectToken; readonly resume: string | null;
+      readonly witnessRun: number | null; readonly witnessAt: number | null; readonly leaf: string | null;
+      readonly detail: string }
+  | { readonly kind: 'verdict'; readonly verdict: string; readonly idleAt: number | null;
+      readonly witnessRun: number | null; readonly leaf: string | null; readonly detail: string }
+  | { readonly kind: 'unmeasured'; readonly probe: string; readonly witnessRun: number | null;
+      readonly leaf: string | null; readonly detail: string;
+      /** Cleanup un-wedge R2: the rows that hold the temp root (`heldByOf`); absent from an older ccd. */
+      readonly heldBy?: HeldByRead }
+  | { readonly kind: 'unreadable'; readonly detail: string }
+  | { readonly kind: 'no-document'; readonly stderr: string };
+
+/** `collect.witness` as the document prints it: `null`, or ccd's five fields, each a string, with `run` in the one
+ *  run-id grammar and `at` thirteen digits. Anything else, an absent key included, is `bad`. A `collectable` hands its
+ *  key over as it stands, so an absent one is `bad` there; a `verdict` or `unmeasured` hands an absent key over
+ *  as `null`, so it reads as none. */
+type WitnessRead =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'run'; readonly run: number; readonly at: number }
+  | { readonly kind: 'bad' };
+function readWitness(w: unknown): WitnessRead {
+  if (w === null) return { kind: 'none' };
+  if (!isObject(w)) return { kind: 'bad' };
+  const { dev, ino, btime, run, at } = w;
+  if (typeof dev !== 'string' || typeof ino !== 'string' || typeof btime !== 'string'
+    || typeof run !== 'string' || !CHILD_RUN_ID.test(run) || typeof at !== 'string' || !WITNESS_AT_SHAPE.test(at)) {
+    return { kind: 'bad' };
+  }
+  return { kind: 'run', run: Number(run), at: Number(at) };
+}
+
+/** The witness's run, or null when the document's witness is null. */
+const witnessRunOf = (w: WitnessRead): number | null => (w.kind === 'run' ? w.run : null);
+
+const idleAtOf = (v: unknown): number | null =>
+  (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null);
+
+/** THE ONE READER of `ws-audit --collect` (spec §5.10). `ok` is the runner's exit-0 answer.
+ *  - At exit 0, only an EXACT `collectable` with a 64-hex token, a readable witness, and a `resume` that is absent or
+ *    a non-empty string is spendable. Its `as CollectToken` is the shipped tree's one cast to the brand.
+ *  - At exit 1, only `unmeasured` with a non-empty probe word reads; every other exit-1 shape is unreadable.
+ *  - Every document's witness run and leaf are carried; a witness this reader cannot vouch for makes ANY document
+ *    unreadable.
+ *  - An empty stdout is `no-document`, and never a probe. */
+export function parseCollectAudit(sessionId: string, ok: boolean, stdout: string, stderr: string): CollectAudit {
+  const out = stdout.trim();
+  const err = stderr.trim();
+  if (out === '') return { kind: 'no-document', stderr: err };
+  const said = err === '' ? '' : `: ${err}`;
+  let v: unknown;
+  try { v = JSON.parse(out); } catch {
+    return { kind: 'unreadable', detail: `ws-audit --collect printed no JSON document${said}` };
+  }
+  if (!isObject(v) || v.session !== sessionId || v.mode !== 'collect') {
+    return { kind: 'unreadable', detail: `ws-audit --collect printed a document that is not ${sessionId}'s collect audit${said}` };
+  }
+  const collect = isObject(v.collect) ? v.collect : null;
+  const detail = typeof v.detail === 'string' ? v.detail : '';
+  const leaf = collect !== null && typeof collect.leaf === 'string' ? collect.leaf : null;
+  /** The witness as a `verdict` or `unmeasured` document carries it: an absent key reads as none. A `collectable`
+   *  reads its own, stricter. */
+  const seen = readWitness(collect?.witness ?? null);
+  if (!ok) {
+    const probe = collect === null ? undefined : collect.unmeasured;
+    if (v.verdict !== 'unmeasured' || typeof probe !== 'string' || probe === '') {
+      return { kind: 'unreadable', detail: `ws-audit --collect failed with a document that is not its unmeasured answer${said}` };
+    }
+    if (seen.kind === 'bad') return { kind: 'unreadable', detail: 'ws-audit --collect answered unmeasured with a witness it cannot vouch for' };
+    return { kind: 'unmeasured', probe, witnessRun: witnessRunOf(seen), leaf, detail, ...heldByFieldOf(v) };
+  }
+  if (v.verdict === 'collectable') {
+    if (typeof v.token !== 'string' || !COLLECT_TOKEN_SHAPE.test(v.token)) {
+      return { kind: 'unreadable', detail: 'ws-audit --collect said collectable with no token of 64 lowercase hex characters' };
+    }
+    if (collect === null) return { kind: 'unreadable', detail: 'ws-audit --collect said collectable with no collect block' };
+    const wit = readWitness(collect.witness);
+    if (wit.kind === 'bad') return { kind: 'unreadable', detail: 'ws-audit --collect said collectable with a witness it cannot vouch for' };
+    let resume: string | null = null;
+    if (hasOwn(v, 'resume')) {
+      if (typeof v.resume !== 'string' || v.resume === '') {
+        return { kind: 'unreadable', detail: 'ws-audit --collect said collectable with a resume phase that is not a word' };
+      }
+      resume = v.resume;
+    }
+    return {
+      kind: 'collectable', token: v.token as CollectToken, resume,
+      witnessRun: wit.kind === 'run' ? wit.run : null, witnessAt: wit.kind === 'run' ? wit.at : null,
+      leaf, detail,
+    };
+  }
+  if (typeof v.verdict !== 'string' || v.verdict === '' || v.verdict === 'unmeasured') {
+    return { kind: 'unreadable', detail: `ws-audit --collect answered a verdict that is not one at exit 0${said}` };
+  }
+  if (seen.kind === 'bad') {
+    return { kind: 'unreadable', detail: `ws-audit --collect answered ${v.verdict} with a witness it cannot vouch for` };
+  }
+  return {
+    kind: 'verdict', verdict: v.verdict, idleAt: idleAtOf(collect === null ? null : collect.idleAt),
+    witnessRun: witnessRunOf(seen), leaf, detail,
+  };
+}
+
+// ── the verb reader (spec §5.10) ────────────────────────────────────────────────────────────────────────────────
+
+const COLLECT_WITNESS_WORD_TABLE = { dropped: true, kept: true, absent: true } as const;
+/** What a collection did with the id's witness: dropped it, put a recycled spawn's back (`kept`), or found none. */
+export type CollectWitnessWord = keyof typeof COLLECT_WITNESS_WORD_TABLE;
+
+/** The pre-lock dies of `cmd_ws_collect` the reader RECOGNISES (spec §5.10). Each acted nothing. */
+export type CollectDieWord =
+  | 'flock-unavailable' | typeof CCD_LOCK_UNOPENABLE | 'usage' | 'bad-token' | 'bad-session-id' | 'python3-unavailable';
+
+/** ccd's own message for each single-line recognised die, without its `ccd: ` prefix. Matched against the WHOLE trimmed
+ *  stderr, never as a substring, so a die ccd extends no longer matches. `collect-readers.test.ts` holds these equal to
+ *  `cmd_ws_collect`'s text, both ways. */
+export const COLLECT_DIE_TEXT: Readonly<Record<Exclude<CollectDieWord, typeof CCD_LOCK_UNOPENABLE>, string>> = {
+  usage: 'usage: ccd ws-collect --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]',
+  'bad-token': 'bad token',
+  'bad-session-id': 'bad session id',
+  'python3-unavailable': 'python3 unavailable — cannot quote the collection record safely',
+  'flock-unavailable': 'flock (util-linux) is unavailable — refusing to run the destructive verb unserialised',
+};
+
+/** The fixed prefix of `lock-unopenable`'s die. ccd appends the lock's path. */
+export const COLLECT_LOCK_DIE_PREFIX = 'cannot open the reap lock at ';
+
+/** `lock-unopenable`, recognised whole-output and for THIS id's lock only. The last line is exactly ccd's, naming a path
+ *  that ends `/.reap-<id>.lock`. Every earlier line, zero or more, is bash's own redirection diagnostic for that same
+ *  path. */
+function collectLockDie(sessionId: string, err: string): boolean {
+  const lines = err.split('\n');
+  const last = lines[lines.length - 1] ?? '';
+  const head = `ccd: ${COLLECT_LOCK_DIE_PREFIX}`;
+  if (!last.startsWith(head)) return false;
+  const lockPath = last.slice(head.length);
+  if (!lockPath.endsWith(`/.reap-${sessionId}.lock`)) return false;
+  const mid = `: ${lockPath}: `;
+  return lines.slice(0, -1).every((l) => {
+    const at = l.indexOf(mid);
+    return at > 0 && /: line [0-9]+$/.test(l.slice(0, at)) && l.length > at + mid.length;
+  });
+}
+
+function collectDie(sessionId: string, err: string): CollectDieWord | null {
+  if (collectLockDie(sessionId, err)) return CCD_LOCK_UNOPENABLE;
+  for (const word of Object.keys(COLLECT_DIE_TEXT) as Exclude<CollectDieWord, typeof CCD_LOCK_UNOPENABLE>[]) {
+    if (err === `ccd: ${COLLECT_DIE_TEXT[word]}`) return word;
+  }
+  return null;
+}
+
+/** `ccd ws-collect --expect <token> --session <id> …`'s answer (spec §5.10).
+ *  - `collected` (exit 0, `collected === id`). `record` is the quarantine record's name, or null for a witness-only drop.
+ *  - `refused` (exit 0). ccd's word is kept verbatim and classed by `collectRefusalClass`.
+ *  - `failed`. `token` is ccd's word, and `detail` is ccd's text, or `token` is `''` when this reader made the failure
+ *    (a `collected` document for another id or one it cannot read, a document at an exit status that contradicts it,
+ *    or a `failed` document that carries no word), and `detail` is then this build's own sentence, never ccd's.
+ *  - `die`: a RECOGNISED pre-lock die. It acted nothing.
+ *  - `no-document`: anything else with no document, which MAY have acted (a runner kill, a timeout, a link failure).
+ *    `stderr` is what the runner printed, text ccrc saw and not a word ccd said. */
+export type CollectResult =
+  | { readonly kind: 'collected'; readonly record: string | null; readonly resumed: boolean; readonly witness: CollectWitnessWord }
+  | { readonly kind: 'refused'; readonly word: string; readonly detail: string; readonly paths: readonly string[] }
+  | { readonly kind: 'failed'; readonly token: string; readonly detail: string }
+  | { readonly kind: 'die'; readonly word: CollectDieWord }
+  | { readonly kind: 'no-document'; readonly stderr: string };
+
+function collectedOf(sessionId: string, ok: boolean, v: Readonly<Record<string, unknown>>): CollectResult {
+  if (v.collected !== sessionId) {
+    return { kind: 'failed', token: '', detail: `ws-collect reported collecting ${String(v.collected)}, not ${sessionId}` };
+  }
+  if (!ok) return { kind: 'failed', token: '', detail: `ws-collect reported collecting ${sessionId} but exited non-zero` };
+  const record = v.record === null ? null : typeof v.record === 'string' && v.record !== '' ? v.record : undefined;
+  const witness = typeof v.witness === 'string' && hasOwn(COLLECT_WITNESS_WORD_TABLE, v.witness)
+    ? v.witness as CollectWitnessWord : undefined;
+  if (record === undefined || typeof v.resumed !== 'boolean' || witness === undefined) {
+    return { kind: 'failed', token: '', detail: `ws-collect reported collecting ${sessionId} with a document this build cannot read` };
+  }
+  return { kind: 'collected', record, resumed: v.resumed, witness };
+}
+
+/** THE ONE READER of `ws-collect` (spec §5.10). `ok` is the runner's exit-0 answer. A recognised die needs an empty
+ *  stdout and a non-zero exit, so a document, however cut, is never read as one. */
+export function parseCollectResult(sessionId: string, ok: boolean, stdout: string, stderr: string): CollectResult {
+  const out = stdout.trim();
+  const said = readCcdRefusal(stderr);
+  const err = withoutCcdRefusal(stderr).trim();
+  let v: unknown = null;
+  if (out !== '') { try { v = JSON.parse(out); } catch { v = null; } }
+  if (isObject(v)) {
+    if (typeof v.collected === 'string') return collectedOf(sessionId, ok, v);
+    if (typeof v.refused === 'string') {
+      if (!ok) return { kind: 'failed', token: '', detail: `ws-collect refused ${v.refused} but exited non-zero` };
+      const paths = Array.isArray(v.paths) && v.paths.every((p) => typeof p === 'string') ? v.paths as string[] : [];
+      return { kind: 'refused', word: v.refused, detail: typeof v.detail === 'string' ? v.detail : '', paths };
+    }
+    if (typeof v.failed === 'string') {
+      if (v.failed === '') return { kind: 'failed', token: '', detail: 'ws-collect answered failed with no word' };
+      return { kind: 'failed', token: v.failed, detail: typeof v.detail === 'string' ? v.detail : '' };
+    }
+  }
+  if (out === '' && !ok) {
+    // The machine token first (`refusal-v1`, #560): ccd's own word for the two box dies, whatever their prose says now.
+    if (said !== null && said.act === 'collect' && (said.token === 'flock-unavailable' || said.token === CCD_LOCK_UNOPENABLE)) {
+      return { kind: 'die', word: said.token };
+    }
+    const word = collectDie(sessionId, err);
+    if (word !== null) return { kind: 'die', word };
+  }
+  return { kind: 'no-document', stderr: err };
+}
+
+// ── the population (spec §5.10, "the population") ───────────────────────────────────────────────────────────────
+//
+// The lane finds the temp roots it may collect by listing `$REG/tmproots` (one witness per id) and `$REG/tmpquarantine`
+// (one record per collection begun and not finished), never `~/.cc-tmp`. One dot-leading name is read there too: a
+// compare-and-drop aside, `$REG/tmproots/.<id>.drop.<pid>`, which a crash inside ccd's compare-and-drop can leave with
+// no witness beside it (path-identity spec §3.6). Its id joins the population so that ccd is asked of it; ccd reads
+// the aside's body and decides whether it is the sole parseable one. This block decides, purely, which names become
+// ids, which ids are audited this pass and which are forgotten. The executor's `readCollectPopulation`
+// (`coord/collectTempRoot.ts`) makes the two reads; nothing here reads a file.
+
+/** The most names one listing may carry before the lane reads it as unmeasured (spec §5.10, the population). A
+ *  session of this uid can write any number of names into either directory; past this many, the lane neither audits
+ *  nor forgets from that listing, and says the count alone. Counted over the RAW listing, dot-leading names included,
+ *  because they cost the lane's memory as much as any other name. STATED RESIDUAL: the cap bounds what the lane
+ *  audits and remembers, not the listing itself: the agent's readdir returns every name in one frame, as the
+ *  registry's own $REG listing already does every tick. */
+export const COLLECT_POPULATION_MAX = 1024;
+
+/** The two registry subdirectories the lane lists, by the name its box-wide line gives each. */
+export type CollectListingName = 'tmproots' | 'tmpquarantine';
+
+/** One listing as the executor measured it (spec §5.10): `listed` (a real directory, read), `absent` (a PROVEN
+ *  absence, an empty listing that is MEASURED), or `unmeasured` (a link, a file, a FIFO, a read that failed: the
+ *  listing says nothing about any id, and `why` says which). Never folded: an `unmeasured` listing is never empty. */
+export type CollectListing =
+  | { readonly kind: 'listed'; readonly names: readonly string[] }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unmeasured'; readonly why: string };
+
+/** Why one listing gave the lane no ids this pass: the executor could not measure it, or it carried more than
+ *  `COLLECT_POPULATION_MAX` names (`count`, the raw count, the only thing said of them). */
+export type CollectListingDoubt =
+  | { readonly listing: CollectListingName; readonly kind: 'unmeasured'; readonly why: string }
+  | { readonly listing: CollectListingName; readonly kind: 'over-cap'; readonly count: number };
+
+/** One pass's population (spec §5.10).
+ *  - `ids`: every id a MEASURED listing names, as a witness, as a record's id or as a compare-and-drop aside's id,
+ *    sorted. What forgetting reads.
+ *  - `candidates`: the ids this pass may audit: `ids` less the pre-filter, sorted.
+ *  - `recordIds`: the ids a record in the MEASURED `tmpquarantine` listing names.
+ *  - `refusedNames`: how many names, dot-leading ones aside, are no id the lane may take. A dot-leading name is never
+ *    counted: an aside's name under `tmproots` gives its id or nothing, and every other one is a writer's temp file.
+ *    The names themselves are never carried: they are untrusted same-uid input, and a sentence says the count alone.
+ *  - `unmeasured`: each listing that gave no ids, and why.
+ *  - `bothMeasured`: neither listing is in `unmeasured`, so an id neither names is gone from both.
+ *  - `looseDoubt`: why the loose census (fleet disk retention spec 2026-10-23 section 2.4) gave the lane no loose name this
+ *    pass, or null when it gave all of them (or was never asked: this ccd has no loose arm). The words are ccrc's. */
+export interface CollectPopulation {
+  readonly ids: readonly string[];
+  readonly candidates: readonly string[];
+  readonly recordIds: ReadonlySet<string>;
+  readonly refusedNames: number;
+  readonly unmeasured: readonly CollectListingDoubt[];
+  readonly bothMeasured: boolean;
+  readonly looseDoubt?: string | null;
+}
+
+/** A quarantine record's name, `<id>.<ns>.<pid>` (spec §5.10, the quarantine record): ccd's own `_ws_collect_rec_id`
+ *  grammar, held equal to its text by a test. GREEDY: the id is what the two trailing all-digit dot-fields leave,
+ *  never an `<id>.*` prefix, because ids admit dots. No flag: `g` would make `.exec` stateful. */
+export const COLLECT_RECORD_NAME_RE = /^(.+)\.([0-9]+)\.([0-9]+)$/;
+
+/** The id a quarantine record's name is for, or null when the name is no record's: it does not match the grammar,
+ *  or what it names is not an id the lane may take (`isTmpRootId`, L0's ONE temp-root id predicate). */
+export function parseCollectRecordName(name: string): string | null {
+  const id = COLLECT_RECORD_NAME_RE.exec(name)?.[1];
+  return id !== undefined && isTmpRootId(id) ? id : null;
+}
+
+/** A compare-and-drop aside's name, `.<id>.drop.<pid>` (path-identity spec §3.6): ccd's own `_ws_collect_aside_id`
+ *  grammar, held equal to its text by a test. GREEDY, as the record's: the id is what the one trailing `.drop.<pid>`
+ *  leaves, so `.a.drop.1.drop.2` is for `a.drop.1`. No flag: `g` would make `.exec` stateful. */
+export const COLLECT_ASIDE_NAME_RE = /^\.(.+)\.drop\.([0-9]+)$/;
+
+/** The id a compare-and-drop aside's name is for, or null when the name is no aside's: it does not match the grammar,
+ *  or what it names is not an id the lane may take (`isTmpRootId`, L0's ONE temp-root id predicate). A NAME admits
+ *  the id to the population and nothing more: ccd reads the aside's body under its own rungs, and decides there
+ *  whether it is the sole parseable aside of that id (path-identity spec §3.6). */
+export function parseCollectAsideName(name: string): string | null {
+  const id = COLLECT_ASIDE_NAME_RE.exec(name)?.[1];
+  return id !== undefined && isTmpRootId(id) ? id : null;
+}
+
+/** The pass's population from its two listings and the tick's registry names (spec §5.10, the population). Pure.
+ *  - A proven-absent listing is empty and MEASURED. An unmeasured listing, or one of more than
+ *    `COLLECT_POPULATION_MAX` names, gives NO ids, and the other listing is still read: the lane audits the measured
+ *    side only, and never reads a name's absence from an unmeasured listing.
+ *  - A name that is not a string is dropped uncounted. So is a name that leads with `.` (a writer's temp file), save
+ *    ONE shape, in `tmproots` alone: a compare-and-drop aside (`parseCollectAsideName`), whose id joins `ids`
+ *    (path-identity spec §3.6). An aside name whose id the predicate refuses is dropped uncounted with the rest. Its
+ *    name is the whole of what the lane knows of an aside: ccd decides from the bodies whether it is sole and
+ *    parseable.
+ *  - Every other name must be an id (`isTmpRootId`) in `tmproots`, or a record's name for one
+ *    (`parseCollectRecordName`) in `tmpquarantine`, or it is counted in `refusedNames` and never becomes an id. This
+ *    is the gate before any argv: a name that fails it is never audited and never composed.
+ *  - THE PRE-FILTER is economy, never permission: an id is not a candidate while its EXACT `<id>.child` or `<id>.uuid`
+ *    is among `registryNames`, unless a record in the measured `tmpquarantine` names it, because a kept record is
+ *    never silent. An aside lifts nothing: its id is filtered as a witnessed one is. Never a prefix: a row of `a.b`
+ *    filters nothing of `a`. A row's absence licenses nothing: ccd's own `registered` rung decides. */
+export function collectPopulation(input: {
+  readonly tmproots: CollectListing;
+  readonly tmpquarantine: CollectListing;
+  readonly registryNames: ReadonlySet<string>;
+  /** The loose census (D-6627), or absent when the pass asked none. */
+  readonly loose?: CollectLooseCensus;
+}): CollectPopulation {
+  const unmeasured: CollectListingDoubt[] = [];
+  let refusedNames = 0;
+  /** A listing's string names, dot-leading ones included (each loop decides what one is), or null when it gives no ids
+   *  this pass. */
+  const namesOf = (listing: CollectListingName, l: CollectListing): readonly string[] | null => {
+    switch (l.kind) {
+      case 'absent': return [];
+      case 'unmeasured': unmeasured.push({ listing, kind: 'unmeasured', why: l.why }); return null;
+      case 'listed':
+        if (l.names.length > COLLECT_POPULATION_MAX) {
+          unmeasured.push({ listing, kind: 'over-cap', count: l.names.length });
+          return null;
+        }
+        return l.names.filter((n) => typeof n === 'string');
+    }
+  };
+  const witnessed = new Set<string>();
+  const asides = new Set<string>();
+  for (const n of namesOf('tmproots', input.tmproots) ?? []) {
+    if (n.startsWith('.')) {
+      const id = parseCollectAsideName(n);
+      if (id !== null) asides.add(id);
+      continue;
+    }
+    if (isTmpRootId(n)) witnessed.add(n); else refusedNames += 1;
+  }
+  const recordIds = new Set<string>();
+  for (const n of namesOf('tmpquarantine', input.tmpquarantine) ?? []) {
+    if (n.startsWith('.')) continue;
+    const id = parseCollectRecordName(n);
+    if (id !== null) recordIds.add(id); else refusedNames += 1;
+  }
+  // THE LOOSE ARM (D-6627): the census's names join as `loose:<hex>` ids, a record's hex always a candidate. They never
+  // meet the registry pre-filter (the census already left a row's name out) and never collide with a witnessed id.
+  const looseIn = collectLooseIds(input.loose);
+  refusedNames += looseIn.refused;
+  for (const id of looseIn.recordIds) recordIds.add(id);
+  const ids = [...new Set([...witnessed, ...recordIds, ...asides, ...looseIn.ids])].sort();
+  const looseSet = new Set(looseIn.ids);
+  const candidates = ids.filter((id) => recordIds.has(id) || looseSet.has(id) || !collectRowStands(input.registryNames, id));
+  // The field rides only a pass that asked a census, so a population built without one keeps its shape.
+  return { ids, candidates, recordIds, refusedNames, unmeasured, bothMeasured: unmeasured.length === 0,
+    ...(input.loose === undefined ? {} : { looseDoubt: looseIn.doubt }) };
+}
+
+/** Does `id`'s registry row stand in the tick's listing (spec §5.10, the pre-filter)? Its EXACT `<id>.child` or
+ *  `<id>.uuid`, never a prefix: a row of `a.b` says nothing of `a`. The ONE spelling of the rule, which the pre-filter
+ *  and attention's projection both read. */
+export const collectRowStands = (registryNames: ReadonlySet<string>, id: string): boolean =>
+  registryNames.has(`${id}.child`) || registryNames.has(`${id}.uuid`);
+
+/** Is `id` forgotten this pass, its pacing and feed episodes dropped without a feed row (spec §5.10)? Only when BOTH
+ *  listings were measured and neither names it: an unmeasured listing never says an id is gone. */
+export const collectForgets = (pop: CollectPopulation, id: string): boolean => pop.bothMeasured && !pop.ids.includes(id);
+
+// ── the loose arm (fleet disk retention spec 2026-10-23 section 2.4, D-6627; reverses D-5888) ───────────────────
+//
+// `ws-collect` also collects the entries directly under `~/.cc-tmp` that no witness and no registry row names. ccd's
+// census (`ws-audit --collect-census`) lists them, classed, with each name as even-length lowercase hex so no name can
+// be read as an option. The lane keys such an entry by `loose:<hex>`: a string `isTmpRootId` refuses (the shape has no
+// `:`), so it can never be mistaken for a witnessed id and no witnessed-id argv can be built from it. Everything past
+// the id is today's lane: the licence, the pacing and the gates.
+
+/** The id prefix of a loose entry. */
+export const COLLECT_LOOSE_ID_PREFIX = 'loose:';
+/** The longest name a directory entry has, in bytes; its hex is twice that. */
+const COLLECT_LOOSE_NAME_MAX_BYTES = 255;
+const COLLECT_LOOSE_HEX = /^(?:[0-9a-f]{2})+$/;
+
+/** The lane's id for a loose entry named `hex`. */
+export const collectLooseId = (hex: string): string => `${COLLECT_LOOSE_ID_PREFIX}${hex}`;
+
+/** The hex a loose id carries, or null when `id` is no loose id. The ONE decoder of the prefix. */
+export function collectLooseHexOf(id: unknown): string | null {
+  if (typeof id !== 'string' || !id.startsWith(COLLECT_LOOSE_ID_PREFIX)) return null;
+  const hex = id.slice(COLLECT_LOOSE_ID_PREFIX.length);
+  return COLLECT_LOOSE_HEX.test(hex) && hex.length <= 2 * COLLECT_LOOSE_NAME_MAX_BYTES ? hex : null;
+}
+
+/** Is `id` a loose entry's? */
+export const collectIsLoose = (id: unknown): boolean => collectLooseHexOf(id) !== null;
+
+/** What the census said, as the lane reads it:
+ *  - `unavailable`: this ccd has no loose arm (`collect-loose-v1` not advertised), so nothing was asked;
+ *  - `unmeasured`: the census was asked and measured nothing (`why` is ccd's or the runner's text);
+ *  - `measured`: `looseHex` are the entries classed `loose`; `recordHex` are the loose quarantine records' entries, which
+ *    the listing cannot show (a killed verb's entry sits in the quarantine); `truncated` is a listing past the bound,
+ *    and `recordsUnmeasured` counts the records ccd could not read. */
+export type CollectLooseCensus =
+  | { readonly kind: 'unavailable' }
+  | { readonly kind: 'unmeasured'; readonly why: string }
+  | { readonly kind: 'measured'; readonly truncated: boolean; readonly looseHex: readonly string[];
+      readonly recordHex: readonly string[]; readonly recordsUnmeasured: number };
+
+/** The loose ids one census gives, pure. FAIL TOWARD KEEPING: a census that is unmeasured, or truncated, gives no
+ *  ENTRY name (a name beyond the bound was never classed), and the doubt is said. A record's entry is a candidate
+ *  whatever the listing's bound, because a kept record is never silent. A hex that is no hex, or a population past
+ *  `COLLECT_POPULATION_MAX`, adds nothing and is counted, never carried. */
+function collectLooseIds(c: CollectLooseCensus | undefined): {
+  readonly ids: readonly string[]; readonly recordIds: ReadonlySet<string>; readonly refused: number; readonly doubt: string | null;
+} {
+  const none = { ids: [] as string[], recordIds: new Set<string>(), refused: 0 };
+  if (c === undefined || c.kind === 'unavailable') return { ...none, doubt: null };
+  if (c.kind === 'unmeasured') {
+    return { ...none, doubt: `the census of loose temp entries measured nothing (${childReclaimDetailText(c.why)}), so none was considered` };
+  }
+  let refused = 0;
+  const ok = (h: unknown): h is string => {
+    if (typeof h === 'string' && COLLECT_LOOSE_HEX.test(h) && h.length <= 2 * COLLECT_LOOSE_NAME_MAX_BYTES) return true;
+    refused += 1; return false;
+  };
+  const entries = c.truncated ? [] : c.looseHex.filter(ok);
+  const records = c.recordHex.filter(ok);
+  const all = new Set([...entries, ...records].map(collectLooseId));
+  if (all.size > COLLECT_POPULATION_MAX) {
+    return { ...none, refused, doubt: `the census of loose temp entries named ${all.size} entries, past the ${COLLECT_POPULATION_MAX} the lane takes, so none was considered` };
+  }
+  const why: string[] = [];
+  if (c.truncated) why.push(`the census was cut at its bound, so no loose entry was considered (only the ${records.length} with a record)`);
+  if (c.recordsUnmeasured > 0) why.push(`${c.recordsUnmeasured} loose quarantine record(s) could not be read`);
+  return { ids: [...all], recordIds: new Set(records.map(collectLooseId)), refused, doubt: why.length === 0 ? null : why.join('; ') };
+}
+
+/** `ws-audit --collect-census`'s answer (exit 0 measured, exit 1 the unmeasured document), read totally. Any shape
+ *  this reader cannot vouch for is `unmeasured`, never an empty census. */
+export function parseCollectCensus(ok: boolean, stdout: string, stderr: string): CollectLooseCensus {
+  const out = stdout.trim();
+  const err = stderr.trim();
+  const bad = (why: string): CollectLooseCensus => ({ kind: 'unmeasured', why: err === '' ? why : `${why}: ${err}` });
+  if (out === '') return bad('ccd printed no census');
+  let v: unknown;
+  try { v = JSON.parse(out); } catch { return bad('ccd printed no JSON census'); }
+  if (!isObject(v) || v.mode !== 'collect-census') return bad('ccd printed a document that is not the census');
+  if (!ok || typeof v.unmeasured === 'string') {
+    return { kind: 'unmeasured', why: typeof v.unmeasured === 'string' && v.unmeasured !== '' ? v.unmeasured : (err === '' ? 'ccd measured nothing' : err) };
+  }
+  const entries = v.entries;
+  const records = v.records;
+  if (typeof v.truncated !== 'boolean' || !Array.isArray(entries) || !Array.isArray(records)
+    || typeof v.recordsUnmeasured !== 'number' || !Number.isSafeInteger(v.recordsUnmeasured) || v.recordsUnmeasured < 0) {
+    return bad('ccd printed a census this build cannot read');
+  }
+  const looseHex: string[] = [];
+  for (const e of entries) {
+    if (!isObject(e) || typeof e.hex !== 'string' || typeof e.class !== 'string') return bad('ccd printed a census entry this build cannot read');
+    if (e.class === 'loose') looseHex.push(e.hex);
+  }
+  const recordHex: string[] = [];
+  for (const r of records) {
+    if (!isObject(r) || typeof r.hex !== 'string') return bad('ccd printed a census record this build cannot read');
+    recordHex.push(r.hex);
+  }
+  return { kind: 'measured', truncated: v.truncated, looseHex, recordHex: [...new Set(recordHex)], recordsUnmeasured: v.recordsUnmeasured };
+}
+
+/** `ws-audit --loose-hex <hex> --collect`'s answer, read as the witnessed audit is, by the SAME reader: the document is
+ *  re-keyed (`session`, `mode`) and carries no witness and no leaf, which a loose entry does not have. The reader's
+ *  strictness is therefore not copied: a token of 64 lowercase hex, a resume phase that is a word, an exit status that
+ *  agrees with the verdict. A document for another entry is `unreadable`. */
+export function parseCollectLooseAudit(hex: string, ok: boolean, stdout: string, stderr: string): CollectAudit {
+  const out = stdout.trim();
+  if (out === '') return parseCollectAudit(hex, ok, stdout, stderr);
+  let v: unknown;
+  try { v = JSON.parse(out); } catch { return parseCollectAudit(hex, ok, stdout, stderr); }
+  if (!isObject(v) || v.mode !== 'collect-loose' || v.name !== hex) {
+    return { kind: 'unreadable', detail: `ws-audit --loose-hex --collect printed a document that is not ${collectLooseId(hex)}'s audit` };
+  }
+  const collect = isObject(v.collect) ? v.collect : {};
+  return parseCollectAudit(hex, ok, JSON.stringify({ ...v, session: hex, mode: 'collect',
+    collect: { ...collect, witness: null, leaf: null } }), stderr);
+}
+
+/** `ws-collect --expect <token> --loose-hex <hex>`'s answer. The collected line names the entry's hex and says
+ *  `loose`; it carries no witness word, so the result's is `absent` (an honest "no witness"). Every other shape is the
+ *  witnessed verb's, read by its reader. */
+export function parseCollectLooseResult(hex: string, ok: boolean, stdout: string, stderr: string): CollectResult {
+  const out = stdout.trim();
+  let v: unknown = null;
+  if (out !== '') { try { v = JSON.parse(out); } catch { v = null; } }
+  if (isObject(v) && typeof v.collected === 'string') {
+    if (v.collected !== hex) return { kind: 'failed', token: '', detail: `ws-collect reported collecting ${v.collected}, not ${hex}` };
+    if (!ok) return { kind: 'failed', token: '', detail: `ws-collect reported collecting ${hex} but exited non-zero` };
+    if (typeof v.record !== 'string' || v.record === '' || typeof v.resumed !== 'boolean' || v.loose !== true) {
+      return { kind: 'failed', token: '', detail: `ws-collect reported collecting ${hex} with a document this build cannot read` };
+    }
+    return { kind: 'collected', record: v.record, resumed: v.resumed, witness: 'absent' };
+  }
+  return parseCollectResult(hex, ok, stdout, stderr);
+}
+
+/** A loose entry's name as a feed row shows it: its hex decoded as UTF-8 and made one safe line. The name is untrusted
+ *  same-uid input, so bytes that are not UTF-8 are not shown as a guess: the row names the hex's head instead. */
+export function collectLooseNameText(hex: string): string {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i += 1) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  let t = '';
+  try { t = childReclaimDetailText(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); } catch { t = ''; }   // not UTF-8: never shown as a guess
+  return t === '' ? `an entry named by ${hex.slice(0, 16)}…` : t;
+}
+
+// ── the licence and the pacing (spec §5.10, "the lane": two observations, one job, one act) ─────────────────────
+//
+// The lane's per-id memory, and every rule it decides by. MEMORY ONLY: nothing here is written to coord.db or to any
+// file, so a restart starts every id afresh, and a fresh id needs two fresh observations before anything is spent.
+// Every instant is the lane's MONOTONIC clock (`ChildReclaimLaneNow.monoMs`), stamped when an answer ARRIVES; the wall
+// clock is read once, at a `changed-recently` answer's arrival, against ccd's own `idleAt`. Every interval is an
+// ARGUMENT, because this file imports no L4 constant. The pace is wave 8's, IMPORTED, never a second formula:
+// `childReclaimTierFrom`, `childReclaimTierPaceMs` and `childReclaimBackoffMs` (`childReclaimSweep.ts`, L1).
+
+/** How far a `changed-recently` answer may push the id's next ask at most, and how long `changed-recently` may answer
+ *  without a break before the id is listed (spec §5.10, pacing): 24 hours. One span, both uses. */
+export const COLLECT_CHANGED_RECENTLY_SPAN_MS = 24 * 3_600_000;
+
+/** The class word each of the three runs carries as its tier token (spec §5.10, pacing). ccd's own word is never the
+ *  token, so a change of probe or of terminal word never restarts a run. */
+export type CollectRunToken = 'failing' | 'verb-failed' | 'terminal';
+
+/** One of the id's three runs (spec §5.10, pacing): none, or `run` answers since it was last cleared, the last of
+ *  them ARRIVING at `atMono`. `stuck` is set once an answer entered the run on the tier at once (a per-leaf
+ *  deterministic probe, or any terminal answer) and stays set until the run clears, so a later answer of another
+ *  class never takes the run off the tier. `word` and `detail` are the latest answer's, and their provenance is
+ *  mixed: ccd's own strings, except that a word this build's readers make (`''`, `unreadable` and `no-document`, which
+ *  `collectReaderMade` names) carries ccrc's own sentence or text ccrc saw, such as a runner's stderr. Whatever
+ *  reaches a sentence or a feed row goes through `childReclaimDetailText` first, and a sentence says whose it is. */
+export type CollectRun =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'run'; readonly run: number; readonly atMono: number; readonly stuck: boolean;
+      readonly word: string; readonly detail: string };
+
+export const COLLECT_RUN_NONE: CollectRun = { kind: 'none' };
+
+/** The run after one more answer of its class, arriving at `atMono`. */
+const collectRunAdvance = (r: CollectRun, atMono: number, word: string, detail: string, stuck: boolean): CollectRun => ({
+  kind: 'run', run: (r.kind === 'run' ? r.run : 0) + 1, atMono, stuck: stuck || (r.kind === 'run' && r.stuck), word, detail,
+});
+
+/** The run's place on wave 8's persistent tier, through that tier's ONE derivation of membership and j
+ *  (`childReclaimTierFrom`), with the run's class word as its token. */
+export const collectRunTier = (r: CollectRun, token: CollectRunToken): ChildReclaimTierState =>
+  (r.kind === 'none' ? childReclaimTierFrom(null, 0, false) : childReclaimTierFrom(token, r.run, r.stuck));
+
+/** The run's wait after its last answer: the tier's pace once on the tier, else the ordinary ramp over its count;
+ *  `0` with no run. Both are wave 8's, imported. */
+export const collectRunWaitMs = (r: CollectRun, token: CollectRunToken, passIntervalMs: number): number => {
+  if (r.kind === 'none') return 0;
+  const t = collectRunTier(r, token);
+  return t.tier ? childReclaimTierPaceMs(t.tierJ) : childReclaimBackoffMs(r.run, passIntervalMs);
+};
+
+/** OBSERVATION 1 (spec §5.10, the licence): an audit of the id answered `collectable` with `token`, ARRIVING at
+ *  `arrivedMono`. Keyed (id, token): the entry is the id's, and the token is held only to be COMPARED. */
+export interface CollectObservation { readonly token: CollectToken; readonly arrivedMono: number }
+
+/** Why the open-run hold stands (spec §5.10, the gates), as the executor judges it on observation 2's document: the
+ *  witness's run is open, absent from coord.db, or opened after the witness; coord.db names the id in an open run;
+ *  a fresh collectable document names no witness run; or a store read failed. Spelled once, as a total table's keys. */
+const COLLECT_HOLD_WHY_TABLE = {
+  'run-open': true, 'run-absent': true, 'run-after-witness': true, 'id-in-open-run': true, 'no-witness-run': true,
+  'store-unreadable': true,
+} as const satisfies Readonly<Record<string, true>>;
+export type CollectHoldWhy = keyof typeof COLLECT_HOLD_WHY_TABLE;
+export const COLLECT_HOLD_WHYS: readonly CollectHoldWhy[] = Object.keys(COLLECT_HOLD_WHY_TABLE) as CollectHoldWhy[];
+
+/** The pacing row of each word the collector's audit answers with besides `collectable` and `unmeasured` (spec
+ *  §5.10, pacing): the words ccd's collector refuses with (`_ws_refuse` inside the `COLLECT` and `LOOSE` regions), held
+ *  set-equal to them in both directions by a test.
+ *  - `defer`: a deferral, neutral to every run; `listedAfterMs` is how long it must answer without a break before the
+ *    id is listed (`0`: at once), or null for never by its own continuity.
+ *  - `schedule`: `changed-recently`, re-asked from ccd's `idleAt`, and listed after `listedAfterMs` without a break.
+ *  - `silent`: `not-witnessed`, which clears the three runs, advances the deferral count, and raises nothing.
+ *  - `terminal`: the terminal run.
+ *  A verdict word NOT in this table is read as a failure (the failing run): never spent, and listed at the tier. */
+export type CollectVerdictRow =
+  | { readonly pace: 'defer'; readonly listedAfterMs: number | null }
+  | { readonly pace: 'schedule'; readonly listedAfterMs: number }
+  | { readonly pace: 'silent' }
+  | { readonly pace: 'terminal' };
+export const COLLECT_VERDICT_TABLE = {
+  'changed-recently': { pace: 'schedule', listedAfterMs: COLLECT_CHANGED_RECENTLY_SPAN_MS },
+  'not-witnessed': { pace: 'silent' },
+  registered: { pace: 'defer', listedAfterMs: CHILD_RECLAIM_DEFER_CEILING_MS },
+  'in-use': { pace: 'defer', listedAfterMs: 0 },
+  paused: { pace: 'defer', listedAfterMs: null },
+  // `not-loose` (D-6625): only ws-collect's loose arm says it, of an entry that is not that arm's (another class, not a
+  // regular file or directory, or another uid's). Nothing was touched, and its own continuity never lists the id.
+  'not-loose': { pace: 'defer', listedAfterMs: null },
+  'in-progress': { pace: 'defer', listedAfterMs: CHILD_RECLAIM_DEFER_CEILING_MS },
+  'witness-mismatch': { pace: 'terminal' },
+  'quarantine-kept': { pace: 'terminal' },
+  'containment-unproven': { pace: 'terminal' },
+} as const satisfies Readonly<Record<string, CollectVerdictRow>>;
+export type CollectVerdictWord = keyof typeof COLLECT_VERDICT_TABLE;
+export const COLLECT_VERDICT_WORDS: readonly CollectVerdictWord[] = Object.keys(COLLECT_VERDICT_TABLE) as CollectVerdictWord[];
+const isCollectVerdictWord = (w: string): w is CollectVerdictWord => Object.hasOwn(COLLECT_VERDICT_TABLE, w);
+
+/** A run of one deferral or schedule word, answered without a break (spec §5.10, attention): from the first such
+ *  answer's arrival to the latest's, with the latest's detail (ccd's holder, for `in-use`). */
+export interface CollectStreak {
+  readonly word: CollectVerdictWord; readonly sinceMono: number; readonly lastMono: number; readonly detail: string;
+}
+/** The open-run hold's continuity: first at `sinceMono`, last at `atMono`, latest for `why`. It keeps NO count: the
+ *  hold's next ask waits `CHILD_RECLAIM_DEFER_CEILING_MS` flat. Task 6's `CollectHeld` is the hold's RESULT. */
+export interface CollectHoldClock {
+  readonly why: CollectHoldWhy; readonly sinceMono: number; readonly atMono: number;
+}
+/** A recognised pre-lock die other than `flock-unavailable`, recurring with ONE word: from the first such die's
+ *  arrival to the latest's. `collectable` observations, the hold and presence continue it; any other answer, act
+ *  outcome or would-collect ends it. */
+export interface CollectDieStreak {
+  readonly word: CollectDieWord; readonly sinceMono: number; readonly lastMono: number;
+}
+/** The presence defer's continuity and count: deferred `count` times, first at `sinceMono`, last at `atMono`. */
+export interface CollectViewer { readonly count: number; readonly sinceMono: number; readonly atMono: number }
+/** The LATEST document's own evidence (spec §5.10): its witness's run and its leaf (ccd's path, display only). A
+ *  collectable, verdict or unmeasured document brings its own; no document and an unreadable one bring none. */
+export interface CollectEvidence { readonly runId: number | null; readonly leaf: string | null }
+
+/** The evidence one audit document brings (spec §5.10): a collectable, verdict or unmeasured document brings its own;
+ *  no document and an unreadable one bring none (null), and the last evidence stands. The ONE derivation: the per-id
+ *  fold (`collectAfterAudit`) and a forgotten id's collected row (`collectForgottenActRow`) both read it. */
+export const collectEvidenceOf = (a: CollectAudit): CollectEvidence | null =>
+  (a.kind === 'no-document' || a.kind === 'unreadable' ? null : { runId: a.witnessRun, leaf: a.leaf });
+
+/** THE LANE'S MEMORY OF ONE ID (spec §5.10). Memory only.
+ *  - `idGen`: the id's clear generation. Every reset of the pair stamps a generation the lane never used before, so a
+ *    request composed before it is stale when it answers (`collectFresh`).
+ *  - `obs`: observation 1, or none.
+ *  - `deferrals`, `deferredAtMono`: the DEFERRAL count and its last arrival; it never enters a tier.
+ *  - `failing`, `verbFailed`, `terminal`: the three runs.
+ *  - `scheduleMono`: a `changed-recently` answer's next ask, or none.
+ *  - `refusedAtMono`, `wouldCollectAtMono`, `dieAtMono`: the last verb refusal's arrival, or the fold-failure
+ *    catch's own clock (`collectAfterFoldFailed`), the last would-collect's and the last pre-lock die's
+ *    (`flock-unavailable` aside) arrival, each the origin of a floor of `CHILD_RECLAIM_DEFER_CEILING_MS` under the next
+ *    ask.
+ *  - `streak`, `die`, `held`, `presence`: the four continuity clocks attention reads.
+ *  - `evidence`: the latest document's.
+ *  - `feedEpisode`: the key of the feed episode whose row was written, or none (`collectFeedStep`).
+ *  - `feedOutlivesObservations`: whether that episode is one an observation does not end (a refusal's or a die's, as
+ *    the act's cue itself says); false with no episode. Only `collectFeedStep` decides on it; `collectAfterAct`'s
+ *    `collected` arm carries it. */
+export interface CollectEntry {
+  readonly idGen: number;
+  readonly obs: CollectObservation | null;
+  readonly deferrals: number;
+  readonly deferredAtMono: number | null;
+  readonly failing: CollectRun;
+  readonly verbFailed: CollectRun;
+  readonly terminal: CollectRun;
+  readonly scheduleMono: number | null;
+  readonly refusedAtMono: number | null;
+  readonly wouldCollectAtMono: number | null;
+  readonly dieAtMono: number | null;
+  readonly streak: CollectStreak | null;
+  readonly die: CollectDieStreak | null;
+  readonly held: CollectHoldClock | null;
+  readonly viewer: CollectViewer | null;
+  readonly evidence: CollectEvidence;
+  readonly feedEpisode: string | null;
+  readonly feedOutlivesObservations: boolean;
+  /** Cleanup un-wedge R2: the rows the latest audit said hold this id — set only by an unmeasured audit that named
+   *  them, cleared by every other audit. Absent: no read yet. Counted on the held-rows line, never paced on. */
+  readonly heldBy?: HeldByRead;
+}
+
+/** A first sighting, and every id after a restart: nothing observed, nothing counted, due at once. `gen` is a clear
+ *  generation the lane never used before. */
+export const collectFirstSighting = (gen: number): CollectEntry => ({
+  idGen: gen, obs: null, deferrals: 0, deferredAtMono: null,
+  failing: COLLECT_RUN_NONE, verbFailed: COLLECT_RUN_NONE, terminal: COLLECT_RUN_NONE,
+  scheduleMono: null, refusedAtMono: null, wouldCollectAtMono: null, dieAtMono: null,
+  streak: null, die: null, held: null, viewer: null, evidence: { runId: null, leaf: null }, feedEpisode: null,
+  feedOutlivesObservations: false,
+});
+
+/** One step's context: `now` is the answer's ARRIVAL (or the executor's decision), read in its own callback; `gen`
+ *  is a clear generation the lane never used before, drawn from the ONE counter both kinds of generation come from,
+ *  stamped only by a transition that resets the pair; `passIntervalMs` is the lane's pass interval. */
+export interface CollectStep {
+  readonly now: ChildReclaimLaneNow;
+  readonly gen: number;
+  readonly passIntervalMs: number;
+}
+
+/** What a request was composed under (spec §5.10, stale answers): the lane-wide clear generation and the id's. */
+export interface CollectCapture { readonly lane: number; readonly id: number }
+
+export const collectCapture = (laneGen: number, e: CollectEntry): CollectCapture => ({ lane: laneGen, id: e.idGen });
+
+/** Is an answer to a request composed under `cap` an OBSERVATION? Only when neither generation has moved since, and
+ *  the id is still remembered: a lane-wide clear, any reset of the id's pair, and forgetting the id each make every
+ *  earlier request stale. A stale answer paces the id like any other, and is never an observation. A plain boolean,
+ *  never a type predicate: false means the id is forgotten OR the answer is stale, and a stale answer's entry is still
+ *  the id's, to be paced, so a caller checks `undefined` itself. */
+export const collectFresh = (cap: CollectCapture, laneGen: number, e: CollectEntry | undefined): boolean =>
+  e !== undefined && cap.lane === laneGen && cap.id === e.idGen;
+
+/** A lane-wide clear (a raised pause, an unlistable registry, a missing capability at a pass, a job or a learning
+ *  audit, a flip of the live marker): the OBSERVATION PAIR only. The pacing, every run, the continuity clocks and the
+ *  feed episode stand (spec §5.10). The caller moves the lane-wide generation in the same act. */
+export const collectClearPair = (e: CollectEntry): CollectEntry => (e.obs === null ? e : { ...e, obs: null });
+
+/** A `changed-recently` answer's next ask (spec §5.10, pacing): `arrival.monoMs + clamp(idleAt·1000 − arrival.wallMs,
+ *  passIntervalMs, 24 h)`. The wall clock is compared once, here, with ccd's own stamp; what is stored is monotonic.
+ *  An `idleAt` that is not a finite non-negative integer, or a wall clock that makes the difference no number, has
+ *  no schedule: the answer takes the deferral wait. idleAt never gates a spend; ccd decides the floor in its lock. */
+export type CollectIdleSchedule = { readonly kind: 'at'; readonly monoMs: number } | { readonly kind: 'no-idle-at' };
+export function collectIdleSchedule(idleAt: number | null, arrival: ChildReclaimLaneNow, passIntervalMs: number): CollectIdleSchedule {
+  if (idleAt === null || !Number.isInteger(idleAt) || idleAt < 0) return { kind: 'no-idle-at' };
+  const ahead = idleAt * 1000 - arrival.wallMs;
+  if (Number.isNaN(ahead)) return { kind: 'no-idle-at' };
+  return { kind: 'at', monoMs: arrival.monoMs + Math.min(Math.max(ahead, passIntervalMs), COLLECT_CHANGED_RECENTLY_SPAN_MS) };
+}
+
+/** The memory after one AUDIT answer (spec §5.10, pacing). `observes` is `collectFresh` of the request's capture:
+ *  a stale answer paces the id as any answer does, and never seeds or continues an observation.
+ *  - `collectable`: passed every rung, so the deferral count and the failing run clear; the verb-failed and terminal
+ *    runs NEVER do. A fresh one with the token observation 1 holds continues the pair, observation 1 keeping its first
+ *    arrival; with another token, or none held, it is observation 1 afresh.
+ *  - Every other answer resets the pair.
+ *  - A `defer` word, and an `unmeasured` box-wide probe: a deferral.
+ *  - `changed-recently`: clears the deferral count and the failing run, and schedules from `idleAt`; without one it is
+ *    a deferral.
+ *  - `not-witnessed`: clears the three runs and ADVANCES the deferral count, so it is asked no sooner than the ramp.
+ *  - A terminal word: the terminal run, on the tier at once.
+ *  - An `unmeasured` per-leaf or load-sensitive probe (an unknown probe word is load-sensitive), `no-document`,
+ *    `unreadable` and a verdict word the table does not know: the failing run, a per-leaf probe on the tier at once.
+ *  The hold's, presence's and the die's continuity end at every answer but a `collectable` one; a deferral or schedule
+ *  word continues its own streak and every other answer ends it. Only `changed-recently` keeps a schedule. A
+ *  collectable, verdict or unmeasured document brings its own evidence; no document and an unreadable one keep the last. */
+export function collectAfterAudit(e: CollectEntry, a: CollectAudit, s: CollectStep, observes: boolean): CollectEntry {
+  // R2: the entry keeps the LATEST audit's holding rows, and only an unmeasured one carries any.
+  return { ...collectAfterAuditFrom(e, a, s, observes), heldBy: a.kind === 'unmeasured' ? a.heldBy : undefined };
+}
+
+function collectAfterAuditFrom(e: CollectEntry, a: CollectAudit, s: CollectStep, observes: boolean): CollectEntry {
+  const t = s.now.monoMs;
+  // the LATEST document's evidence (spec §5.10): every document that carries one brings it; the rest keep the last
+  const brought = collectEvidenceOf(a);
+  const d: CollectEntry = brought === null ? e : { ...e, evidence: brought };
+  // EVERY answer but a fresh observation of the token held resets the pair, under a new generation (spec §5.10)
+  const reset = { obs: null, idGen: s.gen } as const;
+  const ended = { held: null, viewer: null, streak: null, scheduleMono: null, die: null } as const;
+  const deferral = { deferrals: e.deferrals + 1, deferredAtMono: t } as const;
+  const undeferred = { deferrals: 0, deferredAtMono: null } as const;
+  const failure = (word: string, detail: string, stuck: boolean): CollectEntry =>
+    ({ ...d, ...reset, ...ended, ...undeferred, failing: collectRunAdvance(e.failing, t, word, detail, stuck) });
+  const streak = (word: CollectVerdictWord, detail: string): CollectStreak =>
+    (e.streak !== null && e.streak.word === word
+      ? { ...e.streak, lastMono: t, detail }
+      : { word, sinceMono: t, lastMono: t, detail });
+  switch (a.kind) {
+    case 'collectable': {
+      const passed: CollectEntry = { ...d, ...undeferred, failing: COLLECT_RUN_NONE, streak: null, scheduleMono: null };
+      if (!observes) return { ...passed, ...reset };
+      if (e.obs !== null && e.obs.token === a.token) return passed;
+      return { ...passed, obs: { token: a.token, arrivedMono: t }, idGen: s.gen };
+    }
+    case 'verdict': {
+      if (!isCollectVerdictWord(a.verdict)) return failure(a.verdict, a.detail, false);
+      const word = a.verdict;
+      const row: CollectVerdictRow = COLLECT_VERDICT_TABLE[word];
+      if (row.pace === 'terminal') {
+        return { ...d, ...reset, ...ended, ...undeferred, terminal: collectRunAdvance(e.terminal, t, word, a.detail, true) };
+      }
+      if (row.pace === 'silent') {
+        return { ...d, ...reset, ...ended, ...deferral,
+          failing: COLLECT_RUN_NONE, verbFailed: COLLECT_RUN_NONE, terminal: COLLECT_RUN_NONE };
+      }
+      if (row.pace === 'defer') return { ...d, ...reset, ...ended, ...deferral, streak: streak(word, a.detail) };
+      const at = collectIdleSchedule(a.idleAt, s.now, s.passIntervalMs);
+      const base: CollectEntry = { ...d, ...reset, ...ended, failing: COLLECT_RUN_NONE, streak: streak(word, a.detail) };
+      return at.kind === 'at' ? { ...base, ...undeferred, scheduleMono: at.monoMs } : { ...base, ...deferral };
+    }
+    case 'unmeasured': {
+      const cls = collectProbeClass(a.probe);
+      if (cls === 'box-wide') return { ...d, ...reset, ...ended, ...deferral };
+      return failure(a.probe, a.detail, cls === 'per-leaf');
+    }
+    case 'no-document': return failure('no-document', a.stderr, false);
+    case 'unreadable': return failure('unreadable', a.detail, false);
+  }
+}
+
+/** The memory after the ACT (spec §5.10, pacing). Every outcome resets the pair and ends every continuity clock but
+ *  a recurring die's.
+ *  - `collected`: every run, count and floor clears, as at a first sighting.
+ *  - `refused`, of any word, retryable included: a deferral, and the refusal floor. A terminal word (the verb's
+ *    refusal table, `collectRefusalClass`) also advances the terminal run, ahead of the refusal row. A
+ *    `not-witnessed` reads as the audit's: the three runs clear, beside the deferral and the floor.
+ *  - `failed` whose word is terminal (`failed quarantine-kept`): the terminal run, ahead of the verb-failed row.
+ *  - Any other `failed`, a reader-made `''` included, and `no-document` (an act that MAY have acted): the verb-failed run.
+ *  - `die` (a recognised pre-lock die, which acted nothing): a deferral, neutral to every run. Every word but
+ *    `flock-unavailable`, which latches box-wide instead (Task 7), also takes the refusal floor (`dieAtMono`) and
+ *    continues a die streak of its own word, which attention reads past the ceiling. */
+export function collectAfterAct(e: CollectEntry, r: CollectResult, s: CollectStep): CollectEntry {
+  const t = s.now.monoMs;
+  const after: CollectEntry = {
+    ...e, obs: null, idGen: s.gen, held: null, viewer: null, streak: null, scheduleMono: null, die: null,
+  };
+  switch (r.kind) {
+    case 'collected':
+      return { ...collectFirstSighting(s.gen), evidence: e.evidence, feedEpisode: e.feedEpisode,
+        feedOutlivesObservations: e.feedOutlivesObservations };
+    case 'refused': {
+      const silent = isCollectVerdictWord(r.word) && COLLECT_VERDICT_TABLE[r.word].pace === 'silent';
+      const runs: Partial<CollectEntry> = silent
+        ? { failing: COLLECT_RUN_NONE, verbFailed: COLLECT_RUN_NONE, terminal: COLLECT_RUN_NONE }
+        : collectRefusalClass(r.word) === 'terminal'
+          ? { terminal: collectRunAdvance(e.terminal, t, r.word, r.detail, true) } : {};
+      return { ...after, ...runs, deferrals: e.deferrals + 1, deferredAtMono: t, refusedAtMono: t };
+    }
+    case 'failed':
+      return collectRefusalClass(r.token) === 'terminal'
+        ? { ...after, deferrals: 0, deferredAtMono: null, terminal: collectRunAdvance(e.terminal, t, r.token, r.detail, true) }
+        : { ...after, deferrals: 0, deferredAtMono: null,
+          verbFailed: collectRunAdvance(e.verbFailed, t, r.token, r.detail, false) };
+    case 'no-document':
+      return { ...after, deferrals: 0, deferredAtMono: null,
+        verbFailed: collectRunAdvance(e.verbFailed, t, 'no-document', r.stderr, false) };
+    case 'die': {
+      if (r.word === 'flock-unavailable') return { ...after, deferrals: e.deferrals + 1, deferredAtMono: t };
+      return { ...after, deferrals: e.deferrals + 1, deferredAtMono: t, dieAtMono: t,
+        die: e.die !== null && e.die.word === r.word ? { ...e.die, lastMono: t } : { word: r.word, sinceMono: t, lastMono: t } };
+    }
+  }
+}
+
+/** The memory after an act job SETTLED but its fold failed (spec §5.10, pacing): the job's outcome is lost to the lane,
+ *  so the lane does not know what the job did, and fails toward slower. The pair resets under a new generation, the id
+ *  takes the refusal floor (`refusedAtMono`: the next ask waits `CHILD_RECLAIM_DEFER_CEILING_MS`), and nothing else
+ *  moves. Never `collectClearPair`, which keeps the id's generation and would leave a request composed before the
+ *  failure to seed an observation. */
+export function collectAfterFoldFailed(e: CollectEntry, s: CollectStep): CollectEntry {
+  return { ...e, obs: null, idGen: s.gen, refusedAtMono: s.now.monoMs };
+}
+
+/** The memory after the open-run hold stood (spec §5.10, the gates): the pair resets, and the hold's continuity runs
+ *  on. It counts nothing: no run, not the deferral count, and no count of its own. Its next ask waits
+ *  `CHILD_RECLAIM_DEFER_CEILING_MS` flat. */
+export function collectAfterHold(e: CollectEntry, why: CollectHoldWhy, s: CollectStep): CollectEntry {
+  const t = s.now.monoMs;
+  return { ...e, obs: null, idGen: s.gen, viewer: null, held: { why, sinceMono: e.held?.sinceMono ?? t, atMono: t } };
+}
+
+/** The memory after the presence defer (spec §5.10, the gates): the pair resets, and presence's own count and
+ *  continuity run on. No ceiling licenses past it: it is only ever listed. */
+export function collectAfterViewer(e: CollectEntry, s: CollectStep): CollectEntry {
+  const t = s.now.monoMs;
+  return { ...e, obs: null, idGen: s.gen, held: null,
+    viewer: { count: (e.viewer?.count ?? 0) + 1, sinceMono: e.viewer?.sinceMono ?? t, atMono: t } };
+}
+
+/** The memory after a shadowed job recorded "would collect" (spec §5.10, shadow): the pair resets, no run moves, and
+ *  the next learning audit waits the shadow floor, so shadow never audits a collectable id every pass. */
+export function collectAfterWouldCollect(e: CollectEntry, s: CollectStep): CollectEntry {
+  return { ...e, obs: null, idGen: s.gen, held: null, viewer: null, die: null, wouldCollectAtMono: s.now.monoMs };
+}
+
+/** THE NEXT ASK (spec §5.10, pacing): the LATEST of every wait that applies, each counted from its own last arrival.
+ *  - the deferral wait, `childReclaimBackoffMs` over the deferral count;
+ *  - each run's wait (`collectRunWaitMs`);
+ *  - the `changed-recently` schedule;
+ *  - the hold's wait: the ceiling, flat (no count of its own);
+ *  - presence's wait: the ramp over its own count;
+ *  - the refusal, die and shadow floors, the ceiling after each (the refusal floor's origin is a verb refusal's
+ *    arrival, or the fold-failure catch's own clock);
+ *  - while observation 1 stands, the observation interval after its arrival, so a holder is not offered again
+ *    before its partner may be composed.
+ *  null when no wait applies: the id is due at once. */
+export function collectNextAskMono(e: CollectEntry, passIntervalMs: number, observeIntervalMs: number): number | null {
+  const waits: number[] = [];
+  if (e.deferredAtMono !== null) waits.push(e.deferredAtMono + childReclaimBackoffMs(e.deferrals, passIntervalMs));
+  for (const [r, token] of [[e.failing, 'failing'], [e.verbFailed, 'verb-failed'], [e.terminal, 'terminal']] as const) {
+    if (r.kind === 'run') waits.push(r.atMono + collectRunWaitMs(r, token, passIntervalMs));
+  }
+  if (e.scheduleMono !== null) waits.push(e.scheduleMono);
+  if (e.held !== null) waits.push(e.held.atMono + CHILD_RECLAIM_DEFER_CEILING_MS);
+  if (e.viewer !== null) waits.push(e.viewer.atMono + childReclaimBackoffMs(e.viewer.count, passIntervalMs));
+  if (e.refusedAtMono !== null) waits.push(e.refusedAtMono + CHILD_RECLAIM_DEFER_CEILING_MS);
+  if (e.dieAtMono !== null) waits.push(e.dieAtMono + CHILD_RECLAIM_DEFER_CEILING_MS);
+  if (e.wouldCollectAtMono !== null) waits.push(e.wouldCollectAtMono + CHILD_RECLAIM_DEFER_CEILING_MS);
+  if (e.obs !== null) waits.push(e.obs.arrivedMono + observeIntervalMs);
+  return waits.length === 0 ? null : Math.max(...waits);
+}
+
+/** May the lane ask about this id now? At or after its next ask, or at once with none. A clock that is no number is
+ *  never due. */
+export const collectDue = (e: CollectEntry, nowMono: number, passIntervalMs: number, observeIntervalMs: number): boolean => {
+  const next = collectNextAskMono(e, passIntervalMs, observeIntervalMs);
+  return next === null ? Number.isFinite(nowMono) : nowMono >= next;
+};
+
+/** Is the id RIPE, offered the act job (spec §5.10)? Due, with observation 1 standing. A due id without one is
+ *  offered a learning audit instead. */
+export const collectRipe = (e: CollectEntry, nowMono: number, passIntervalMs: number, observeIntervalMs: number): boolean =>
+  e.obs !== null && collectDue(e, nowMono, passIntervalMs, observeIntervalMs);
+
+/** THE LICENCE, the ONE rule (spec §5.10, two observations, one job, one act). `ws-collect` may be spent only when:
+ *  - observation 2, the executor's own audit in the act's job, is an observation (`observes`, its capture fresh);
+ *  - it answered `collectable`;
+ *  - observation 1, read from memory before observation 2 was applied, stands;
+ *  - both carry ONE token;
+ *  - observation 2 ARRIVED at least `observeIntervalMs` after observation 1 did, on the monotonic clock.
+ *  Every answer between the two was `collectable` with that token, because any other answer resets the pair. All
+ *  three token modes take this rule. A difference that is no finite number, or an interval that is not positive,
+ *  never licenses. The licence carries NO token: the argv's token is observation 2's own, read off its parsed
+ *  document where the argv is built. `first` is kept for step 6's re-read (`collectLicenceStands`). */
+export type CollectLicence =
+  | { readonly kind: 'licensed'; readonly first: CollectObservation }
+  | { readonly kind: 'stale' | 'not-collectable' | 'no-first' | 'token-changed' | 'too-soon' };
+export function collectLicence(
+  first: CollectObservation | null, second: CollectAudit, secondArrivedMono: number, observeIntervalMs: number,
+  observes: boolean,
+): CollectLicence {
+  if (!observes) return { kind: 'stale' };
+  if (second.kind !== 'collectable') return { kind: 'not-collectable' };
+  if (first === null) return { kind: 'no-first' };
+  if (second.token !== first.token) return { kind: 'token-changed' };
+  const span = secondArrivedMono - first.arrivedMono;
+  if (!(Number.isFinite(span) && observeIntervalMs > 0 && span >= observeIntervalMs)) return { kind: 'too-soon' };
+  return { kind: 'licensed', first };
+}
+
+/** Step 6's re-read (spec §5.10): after the job's last await, the licence still stands only while neither generation
+ *  captured when observation 2 was composed (`composed`) has moved by `now`, and memory still holds the very
+ *  observation 1 the licence was judged on (`obs`). The executor calls it through its port: `now` is
+ *  `lane.generations(id)`, whose `id` is -1 for a forgotten id (a generation no entry carries), and `obs` is
+ *  `lane.observation(id)`. */
+export const collectLicenceStands = (
+  first: CollectObservation, composed: CollectCapture, now: CollectCapture, obs: CollectObservation | null,
+): boolean =>
+  composed.lane === now.lane && composed.id === now.id
+  && obs !== null && obs.token === first.token && obs.arrivedMono === first.arrivedMono;
+
+/** One reason the id stands on the attention list (spec §5.10, attention), in a fixed order, the most severe first.
+ *  `collectAttentionItems` writes the item; this says only that it stands.
+ *  - `terminal`: the terminal run stands, at once.
+ *  - `failing`, `verb-failed`: that run is on the tier.
+ *  - `in-use`: at once. `registered`, `in-progress`: answered without a break for the ceiling. `changed-recently`: for
+ *    24 hours. Each measured from the streak's first answer to its latest.
+ *  - `held`, `presence`: deferred so for the ceiling, first to latest.
+ *  - `die`: one pre-lock die word recurring for the ceiling, first to latest. */
+export type CollectAttentionCause =
+  | { readonly kind: 'terminal' | 'failing' | 'verb-failed'; readonly word: string; readonly detail: string }
+  | { readonly kind: CollectVerdictWord; readonly detail: string; readonly sinceMono: number }
+  | { readonly kind: 'held'; readonly why: CollectHoldWhy; readonly sinceMono: number }
+  | { readonly kind: 'presence'; readonly sinceMono: number }
+  | { readonly kind: 'die'; readonly word: CollectDieWord; readonly sinceMono: number };
+export function collectAttentionCauses(e: CollectEntry): CollectAttentionCause[] {
+  const out: CollectAttentionCause[] = [];
+  const runs = [['terminal', e.terminal], ['failing', e.failing], ['verb-failed', e.verbFailed]] as const;
+  for (const [token, r] of runs) {
+    if (r.kind === 'run' && collectRunTier(r, token).tier) out.push({ kind: token, word: r.word, detail: r.detail });
+  }
+  const s = e.streak;
+  if (s !== null) {
+    const row: CollectVerdictRow = COLLECT_VERDICT_TABLE[s.word];
+    const after = row.pace === 'defer' || row.pace === 'schedule' ? row.listedAfterMs : null;
+    if (after !== null && s.lastMono - s.sinceMono >= after) out.push({ kind: s.word, detail: s.detail, sinceMono: s.sinceMono });
+  }
+  if (e.held !== null && e.held.atMono - e.held.sinceMono >= CHILD_RECLAIM_DEFER_CEILING_MS) {
+    out.push({ kind: 'held', why: e.held.why, sinceMono: e.held.sinceMono });
+  }
+  if (e.viewer !== null && e.viewer.atMono - e.viewer.sinceMono >= CHILD_RECLAIM_DEFER_CEILING_MS) {
+    out.push({ kind: 'presence', sinceMono: e.viewer.sinceMono });
+  }
+  if (e.die !== null && e.die.lastMono - e.die.sinceMono >= CHILD_RECLAIM_DEFER_CEILING_MS) {
+    out.push({ kind: 'die', word: e.die.word, sinceMono: e.die.sinceMono });
+  }
+  return out;
+}
+
+/** What one step means for the feed (spec §5.9's quiet-on-repeat, as the collector reads it). Task 5's
+ *  `collectFeedCueOfAudit` and `collectFeedCueOfAct` say which cue each answer carries.
+ *  - `row`: one row per episode of `key`; a repeat is quiet, and any other key ends the episode. A row cue with
+ *    `outlivesObservations` opens an episode that an observation does not end: only an act's refusal or die says so,
+ *    because ccd answers the same refusal every cycle between two collectable audits. It still ends at any row cue of
+ *    another key, at forgetting the id and at a restart.
+ *  - `observe`: an observation of `token`: no row. It ends an episode, except a would-collect episode of that token and
+ *    an episode that outlives observations, which stand.
+ *  - `quiet`: no row, and the standing episode stands. */
+export type CollectFeedCue =
+  | { readonly kind: 'row'; readonly key: string; readonly outlivesObservations?: true }
+  | { readonly kind: 'observe'; readonly token: CollectToken }
+  | { readonly kind: 'quiet' };
+
+/** The would-collect episode's key: one per (id, token), so a later would-collect of the same token is quiet. In
+ *  memory only, for comparison: never a sentence. */
+const COLLECT_WOULD_COLLECT_PREFIX = 'would-collect ';
+export const collectWouldCollectKey = (token: CollectToken): string => `${COLLECT_WOULD_COLLECT_PREFIX}${token}`;
+
+/** Does a would-collect episode stand for this id? Task 5's projection reads it (shadow's item), so no token is
+ *  carried or cast to answer it: true while the feed episode is a would-collect key. */
+export const collectWouldCollectStands = (e: CollectEntry): boolean =>
+  e.feedEpisode !== null && e.feedEpisode.startsWith(COLLECT_WOULD_COLLECT_PREFIX);
+
+/** The feed episode after one step: the entry, and the key of the episode it opened (a row is due), or null. The row
+ *  arm stores the cue's own `outlivesObservations` beside the key, for a repeat of the key as for a new one; the observe
+ *  arm reads that flag and never the key's text, because an audit verdict is any string ccd prints. */
+export function collectFeedStep(e: CollectEntry, cue: CollectFeedCue): { readonly entry: CollectEntry; readonly opened: string | null } {
+  switch (cue.kind) {
+    case 'quiet': return { entry: e, opened: null };
+    case 'observe':
+      return e.feedEpisode === null || e.feedEpisode === collectWouldCollectKey(cue.token) || e.feedOutlivesObservations
+        ? { entry: e, opened: null }
+        : { entry: { ...e, feedEpisode: null, feedOutlivesObservations: false }, opened: null };
+    case 'row': {
+      const outlives = cue.outlivesObservations === true;
+      return e.feedEpisode === cue.key
+        ? { entry: e.feedOutlivesObservations === outlives ? e : { ...e, feedOutlivesObservations: outlives }, opened: null }
+        : { entry: { ...e, feedEpisode: cue.key, feedOutlivesObservations: outlives }, opened: cue.key };
+    }
+  }
+}
+
+// ── Attention and the feed (spec §5.10, §5.9) ───────────────────────────────────────────────────────────────────
+//
+// A REPORT, gating nothing: no audit, act, slot, pair or pace reads anything below. Every ccd-sourced string (a
+// detail, a path, `collect.leaf`, a record name, an unknown word) reaches a sentence or a body only through
+// `childReclaimDetailText`. No sentence builds a temp-root path: the leaf is the audit document's own.
+
+/** The words a collector item uses for itself (spec §5.10). A TERMINAL item's word is ccd's own instead. */
+export type CollectItemWord =
+  | 'in-use' | 'registered' | 'in-progress' | 'presence' | 'held' | 'die' | 'per-leaf' | 'failing' | 'verb-failed'
+  | 'changed-recently' | 'would-collect';
+
+/** One paced run as attention reads it (spec §5.10): its tier state (wave 8's derivation), and the word and detail
+ *  of the answer that last advanced it. Both are untrusted, and of mixed provenance: ccd's, save where
+ *  `collectReaderMade` says this build's reader made the word, and then the detail is ccrc's text or text ccrc saw. */
+export interface CollectRunView {
+  readonly tier: ChildReclaimTierState;
+  readonly word: string | null;
+  readonly detail: string | null;
+}
+
+/** What attention reads of one id's lane memory (spec §5.10), PROJECTED from Task 4's `CollectEntry` by
+ *  `collectAttentionViewOf`. Each clock field is non-null only while Task 4's `collectAttentionCauses` says that
+ *  cause stands. All instants are on the monotonic clock. */
+export interface CollectAttentionView {
+  /** The latest document's `collect.witness.run`, or null. */
+  readonly witnessRun: number | null;
+  /** The latest document's `collect.leaf`, ccd's spelling, or null. */
+  readonly leaf: string | null;
+  readonly failing: CollectRunView;
+  readonly verbFailed: CollectRunView;
+  readonly terminal: CollectRunView;
+  /** A STANDING deferral (`in-use`, `registered`, `in-progress`): its word, ccd's latest detail, and since when that
+   *  word has answered with no break. Null when none stands. */
+  readonly deferral: { readonly word: string; readonly detail: string; readonly since: number } | null;
+  readonly viewerSince: number | null;
+  readonly hold: { readonly why: CollectHoldWhy; readonly since: number } | null;
+  readonly changedRecentlySince: number | null;
+  /** A recognised arm-1 die other than `flock-unavailable`, recurring for the ceiling, or null. */
+  readonly die: { readonly word: CollectDieWord; readonly since: number } | null;
+  /** A shadow would-collect episode stands (Task 4's `collectWouldCollectStands`). No token is carried: the shipped
+   *  tree's one `as CollectToken` stays the audit reader's. */
+  readonly wouldCollect: boolean;
+}
+
+/** One run as attention reads it: Task 4's tier derivation, and the run's latest word and detail. */
+const collectRunView = (r: CollectRun, token: CollectRunToken): CollectRunView => ({
+  tier: collectRunTier(r, token), word: r.kind === 'run' ? r.word : null, detail: r.kind === 'run' ? r.detail : null,
+});
+
+/** THE PROJECTION: Task 4's entry as attention reads it. It decides NO threshold. Every clock field is copied from
+ *  the cause Task 4's `collectAttentionCauses` says stands (first answer to latest, inclusive), and is null otherwise;
+ *  the runs are projected whole; the evidence is the latest document's. */
+export function collectAttentionViewOf(e: CollectEntry): CollectAttentionView {
+  let deferral: CollectAttentionView['deferral'] = null;
+  let viewerSince: number | null = null;
+  let hold: CollectAttentionView['hold'] = null;
+  let changedRecentlySince: number | null = null;
+  let die: CollectAttentionView['die'] = null;
+  for (const c of collectAttentionCauses(e)) {
+    if (c.kind === 'held') hold = { why: c.why, since: c.sinceMono };
+    else if (c.kind === 'presence') viewerSince = c.sinceMono;
+    else if (c.kind === 'die') die = { word: c.word, since: c.sinceMono };
+    else if (!('sinceMono' in c)) continue;   // the three runs, projected whole below
+    else if (c.kind === COLLECT_CHANGED_RECENTLY) changedRecentlySince = c.sinceMono;
+    else deferral = { word: c.kind, detail: c.detail, since: c.sinceMono };
+  }
+  return {
+    witnessRun: e.evidence.runId, leaf: e.evidence.leaf,
+    failing: collectRunView(e.failing, 'failing'), verbFailed: collectRunView(e.verbFailed, 'verb-failed'),
+    terminal: collectRunView(e.terminal, 'terminal'),
+    deferral, viewerSince, hold, changedRecentlySince, die, wouldCollect: collectWouldCollectStands(e),
+  };
+}
+
+/** Is the quarantine-record listing in doubt this pass (spec §5.10)? It is when `tmpquarantine` is among the
+ *  population's doubted listings, whether it could not be measured (`unmeasured`) or carried more names than the lane
+ *  reads (`over-cap`); an `absent` listing is a proven absence, measured, and never a doubt. It reads the doubts and
+ *  nothing else, so a doubt about `tmproots` alone leaves it false. The ONE spelling: the hide in
+ *  `collectAttentionViews` and the `records` subsumption in `collectAttentionItems` both read it. */
+export const collectRecordsInDoubt = (doubts: readonly CollectListingDoubt[]): boolean =>
+  doubts.some((d) => d.listing === 'tmpquarantine');
+
+/** WHICH remembered ids attention projects (spec §5.10): every one, save an id whose exact registry row stands again
+ *  in the listing the last measured pass's pre-filter read (`registryNames`, through `collectRowStands`) while the
+ *  MEASURED `tmpquarantine` names no record of it. Such an id (a reused slug) is never asked and never forgotten, and
+ *  while its row stands it projects NO per-id item (a terminal word, a failed verb, a die, a failing probe, in-use,
+ *  a hold, in-progress, registered, presence, changed-recently or would-collect), because each would describe what is
+ *  now a live workspace. A record keeps it listed, as it keeps it a candidate: a kept record is never silent. Pacing
+ *  memory is KEPT, untouched: once the row goes, the item returns as it stood.
+ *  - While `tmpquarantine` is in doubt (`collectRecordsInDoubt`: unmeasured, or over its cap) the hide is OFF for every
+ *    id, because a record's absence from a listing that could not be read is no absence. For each id whose row
+ *    stands, that restores the `quarantine-kept` terminal item, its second clause on a reclaim item over that id (a
+ *    member of a kept-many line splitting out included), and every other remembered item of such an id, its share of
+ *    the unvouched box line among them. A reused slug with no record then shows a stale item for the length of the
+ *    doubt; the `tmpquarantine` box line says why.
+ *  - A doubt about `tmproots` alone changes nothing here: the record listing is measured, and the hide applies. An
+ *    `absent` `tmpquarantine` names no record and does not lift it.
+ *  - A record whose name fails `parseCollectRecordName` is a refused name, never a record id, so an id with only such a
+ *    record stays hidden; the refused-names box line says the count.
+ *  With no population measured yet, no id is projected (and none is remembered). Pure: the watcher hands its memory
+ *  and that pass's listing over, and publishes what comes back. */
+export function collectAttentionViews(entries: ReadonlyMap<string, CollectEntry>, pop: CollectPopulation | null,
+  registryNames: ReadonlySet<string>): Map<string, CollectAttentionView> {
+  const out = new Map<string, CollectAttentionView>();
+  if (pop === null) return out;
+  const recordsInDoubt = collectRecordsInDoubt(pop.unmeasured);
+  for (const [id, e] of entries) {
+    if (!recordsInDoubt && collectRowStands(registryNames, id) && !pop.recordIds.has(id)) continue;
+    out.set(id, collectAttentionViewOf(e));
+  }
+  return out;
+}
+
+/** How one pass's audit counts for the two pass-scoped box lines (spec §5.10). */
+export type CollectPassClass = 'no-document' | 'lock' | 'other';
+
+/** Which collector work is unsettled past its bound (spec §5.10): `'audit'`, a learning audit past twice the
+ *  90 s row, or an executor job's own audit past it and short of `CHILD_RECLAIM_STALL_MS`; or an executor JOB that took the act
+ *  slot and has not settled in `CHILD_RECLAIM_STALL_MS`, whether or not it composed a call: `'act'` when its
+ *  `ws-collect` is out, `'job'` otherwise. The job's bound is checked first, and the box line says the act slot is
+ *  held for `'act'` and `'job'` alike. Each bound counts from the enqueue (`unsettled-bound-counts-from-the-queue`). */
+export type CollectUnsettledKind = 'audit' | 'act' | 'job';
+
+/** What the box-wide lines read (spec §5.10): the population's doubted listings (Task 3's `CollectListingDoubt`, the
+ *  count the RAW listing's) and its refused-name count, the box-wide probes standing, this pass's audits by id, the
+ *  flock latch, and the collector work unsettled past its bound. */
+export interface CollectBoxFacts {
+  readonly unmeasured: readonly CollectListingDoubt[];
+  readonly refusedNames: number;
+  /** Why the loose census gave the lane no loose name (`CollectPopulation.looseDoubt`), or null; ccrc's own words. */
+  readonly looseDoubt?: string | null;
+  readonly boxProbes: ReadonlyMap<string, string>;
+  readonly passAudits: ReadonlyMap<string, CollectPassClass>;
+  readonly flockLatched: boolean;
+  readonly unsettled: ReadonlyMap<string, CollectUnsettledKind>;
+}
+
+const COLLECT_LOCK_PROBE = 'lock' satisfies keyof typeof COLLECT_PROBE_CLASS;
+const COLLECT_RECORDS_PROBE = 'records' satisfies keyof typeof COLLECT_PROBE_CLASS;
+const COLLECT_CHANGED_RECENTLY: LcRefusalToken = 'changed-recently';
+const COLLECT_NO_DOCUMENT: Extract<CollectAudit['kind'], 'no-document'> = 'no-document';
+const COLLECT_UNREADABLE: Extract<CollectAudit['kind'], 'unreadable'> = 'unreadable';
+
+/** Is `word` one this build's own readers make, rather than one ccd said (spec §5.10)? Three words are: `''`, the word
+ *  of a `failed` result this reader made (`parseCollectResult`'s `token`), and `unreadable` and `no-document`, the
+ *  words of an audit or an act that printed no document, or none this reader could read. The detail beside such a word
+ *  is ccrc's own text, or text ccrc saw (a runner's stderr): a sentence never quotes it as ccd's. Every other word is
+ *  ccd's, a probe's, a refusal's or a verdict's. */
+const collectReaderMade = (word: string): boolean =>
+  word === '' || word === COLLECT_UNREADABLE || word === COLLECT_NO_DOCUMENT;
+const COLLECT_IN_USE = 'in-use';
+const COLLECT_IN_PROGRESS = 'in-progress';
+const COLLECT_REGISTERED: LcRefusalToken = 'registered';
+
+/** One audit's class for the pass-scoped lines. */
+export function collectPassClass(a: CollectAudit): CollectPassClass {
+  if (a.kind === COLLECT_NO_DOCUMENT) return 'no-document';
+  return a.kind === 'unmeasured' && a.probe === COLLECT_LOCK_PROBE ? 'lock' : 'other';
+}
+
+/** The box-wide probes standing after one answer (spec §5.10): a box-wide `unmeasured` sets its probe's latest
+ *  detail; an answer that passed every rung (`collectable`, `changed-recently`, `collected`) clears them all; any
+ *  other answer leaves them standing. */
+export function collectBoxProbesAfter(prev: ReadonlyMap<string, string>, a: CollectAudit | CollectResult): ReadonlyMap<string, string> {
+  if (a.kind === 'unmeasured') {
+    return collectProbeClass(a.probe) === 'box-wide' ? new Map([...prev, [a.probe, a.detail]]) : prev;
+  }
+  const passed = a.kind === 'collectable' || a.kind === 'collected'
+    || (a.kind === 'verdict' && a.verdict === COLLECT_CHANGED_RECENTLY);
+  return passed ? new Map() : prev;
+}
+
+/** The box-wide probes standing, with the arrival of the answer that last REBUILT them (spec §5.10): a new map, by a
+ *  change, a re-assertion or an empty pass. */
+export interface CollectBoxProbeState {
+  readonly probes: ReadonlyMap<string, string>;
+  readonly changedAtMono: number;
+}
+
+/** The box-wide probes after one answer, by when it ARRIVED (spec §5.10): an answer that arrived before the probes were
+ *  last rebuilt says nothing of them, so it is skipped whole. An act job folds its second audit when the JOB settles, which
+ *  can be after a later answer set or cleared a probe; only the arrival tells the older answer from the newer. A tie
+ *  applies (`<`, never `<=`). Otherwise `collectBoxProbesAfter` decides, and the stamp moves to the arrival whenever it
+ *  returns a new map, a box-wide answer re-asserting a standing probe included, since that is a newer word about the box;
+ *  an answer it returns `prev` for (a per-id probe, a non-passing verdict, no document) never moves it. Pure. */
+export function collectBoxProbesAtArrival(prev: CollectBoxProbeState, a: CollectAudit | CollectResult,
+  arrivedMono: number): CollectBoxProbeState {
+  if (arrivedMono < prev.changedAtMono) return prev;
+  const probes = collectBoxProbesAfter(prev.probes, a);
+  return probes === prev.probes ? prev : { probes, changedAtMono: arrivedMono };
+}
+
+/** The box-wide lines' evidence after a pass measured its population (spec §5.10): no line outlives the ids behind it.
+ *  - The pass-scoped lines (`no-document`, `lock`) read the last finished pass's audits. Once NONE of the ids those
+ *    audits were for is still a candidate, they are dropped: the ids left (removed by hand, or registered again), no
+ *    call will be queued for them, and no later pass would publish over them. While any is still a candidate, merely
+ *    waiting its pace, they stand, so a paced id never makes a line flicker.
+ *  - The box-wide probes are cleared when the population holds no ids at all: no answer will come to clear them.
+ *  Both read absence, so both need BOTH listings measured (`bothMeasured`), as forgetting does: an unmeasured listing
+ *  changes nothing. Pure; the watcher applies what it returns. */
+export function collectBoxAfterPopulation(pop: CollectPopulation, passAudits: ReadonlyMap<string, CollectPassClass>,
+  boxProbes: ReadonlyMap<string, string>): {
+  readonly passAudits: ReadonlyMap<string, CollectPassClass>; readonly boxProbes: ReadonlyMap<string, string>;
+} {
+  if (!pop.bothMeasured) return { passAudits, boxProbes };
+  const candidates = new Set(pop.candidates);
+  const counted = [...passAudits.keys()].some((id) => candidates.has(id));
+  return {
+    passAudits: passAudits.size === 0 || counted ? passAudits : new Map(),
+    boxProbes: boxProbes.size === 0 || pop.ids.length > 0 ? boxProbes : new Map(),
+  };
+}
+
+const CEILING_MIN = CHILD_RECLAIM_DEFER_CEILING_MS / 60_000;
+const CHANGING_HOURS = COLLECT_CHANGED_RECENTLY_SPAN_MS / 3_600_000;
+const COLLECT_ASKS_LONG = 'ccrc asks again on a long, capped schedule.';
+
+const collectTmp = (leaf: string | null): string => {
+  const t = leaf === null ? '' : childReclaimDetailText(leaf);
+  return t === '' ? 'its temp root' : `its temp root ${t}`;
+};
+const collectCap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+/** The detail beside an answer's `word`, made safe, and led by whose it is: ` What ccrc saw: ` for a word this build's
+ *  reader made (`collectReaderMade`), ` What ccd said: ` for any other. `word` is required: no default says whose. */
+const collectSaid = (detail: string | null, word: string | null): string => {
+  const t = detail === null ? '' : childReclaimDetailText(detail);
+  const lead = word !== null && collectReaderMade(word) ? 'What ccrc saw' : 'What ccd said';
+  return t === '' ? '' : ` ${lead}: ${childReclaimStuckEnd(t)}`;
+};
+/** An answer's word as a sentence's parenthesis. No sentence ever prints empty brackets: a word that cleans to nothing
+ *  says so, and the reader's `''` says what ccrc could not do. */
+const collectProbeText = (word: string | null): string => {
+  if (word === null) return 'no word';
+  if (word === COLLECT_NO_DOCUMENT) return 'ccd answered nothing';
+  if (word === '') return 'ccrc could not accept ccd’s answer';
+  const t = childReclaimDetailText(word);
+  return t === '' ? 'a word this build cannot show' : t;
+};
+
+/** Why a hold stands, in a person's words (spec §5.10). Total over `CollectHoldWhy`. */
+const COLLECT_HOLD_WHY: Readonly<Record<CollectHoldWhy, string>> = {
+  'run-open': 'the run that minted it is not closed',
+  'run-absent': 'the run that minted it is not in the coordination database',
+  'run-after-witness': 'the run its witness names opened after ccrc handed the directory out, so it is not the minting run',
+  'id-in-open-run': 'an open run names this id',
+  'no-witness-run': 'ccd’s audit named no run for it',
+  'store-unreadable': 'the coordination database could not be read',
+};
+/** The holds the coordination database cannot vouch for: one box-wide line, never per id (spec §5.10). */
+const COLLECT_HOLD_UNVOUCHED: readonly CollectHoldWhy[] = ['run-absent', 'run-after-witness'];
+
+/** What a collapsed line says of each member, by word (spec §5.10). Total over `CollectItemWord`. */
+const COLLECT_ITEM_MANY: Readonly<Record<CollectItemWord, string>> = {
+  'in-use': 'a process still uses its temp root, so the temp-root collector leaves it alone; the feed row of each names the process ccd found.',
+  registered: 'a registry row of its id, or what one left behind, still stands, so the temp-root collector leaves its temp root alone.',
+  'in-progress': 'another ccd process has held its reap lock for a long time, so the temp-root collector leaves its temp root alone.',
+  presence: 'its id has been open on a screen for a long time, so the temp-root collector leaves its temp root alone.',
+  held: 'the temp-root collector holds its temp root because of what the coordination database says of its run; each is asked again once its hold lifts.',
+  die: `ccd refused to start the temp-root collector’s verb for it before its lock, each time, for at least ${CEILING_MIN} minutes; nothing was removed.`,
+  'per-leaf': 'ccd cannot collect its temp root as it stands, and this does not heal by itself; the feed row of each names what ccd found.',
+  failing: 'the temp-root collector has not been able to measure its temp root for some time; nothing was removed, and ccrc keeps asking.',
+  'verb-failed': 'the temp-root collector’s attempts to collect its temp root keep failing; ccd kept what still stands each time.',
+  'changed-recently': 'something under its temp root has kept changing for more than a day, though no process of this user uses it.',
+  'would-collect': 'while the collector was shadowed, the temp-root collector found its temp root orphaned and idle and removed nothing.',
+};
+const COLLECT_TERMINAL_MANY = 'ccd has answered its temp root with a terminal word, so it is listed for you to look at; '
+  + 'its feed row names that word and what ccd found.';
+
+interface CollectItemText { readonly word: string; readonly sentence: string; readonly many: string }
+
+/** One id's item (spec §5.10), in this precedence: terminal, verb-failed, a recurring pre-lock die, failing (a
+ *  per-leaf word or the tier; `records` subsumed while `tmpquarantine` is unmeasured), in-use, a hold (an unvouched
+ *  one joins one box line instead), in-progress, registered, presence, changed-recently, then shadow's would-collect.
+ *  WHETHER each stands is the view's: Task 4's causes decided it, first answer to latest and inclusive, and this
+ *  function decides no threshold. */
+function collectItemOf(id: string, v: CollectAttentionView, recordsSubsumed: boolean): CollectItemText | 'unvouched' | null {
+  const tmp = collectTmp(v.leaf);
+  if (v.terminal.tier.tier && v.terminal.word !== null) {
+    // True in every state. It says what ccd answered at the run's LAST terminal answer, never that the id is
+    // refused now: in shadow, ccd may answer `collectable` again while the terminal run stands.
+    const w = childReclaimDetailText(v.terminal.word);
+    const lead = lcRefusalWord(v.terminal.word);
+    const said = lead === null
+      ? ', which means the temp-root collector found something it could not prove safe; nothing was removed, and it '
+        + 'is listed for you to look at.'
+      : `, which said: “${lead}”`;
+    return { word: v.terminal.word, many: COLLECT_TERMINAL_MANY,
+      sentence: `${collectCap(tmp)}: ccd’s last terminal answer for it was ${w}${said}${collectSaid(v.terminal.detail, v.terminal.word)} `
+        + COLLECT_ASKS_LONG };
+  }
+  if (v.verbFailed.tier.tier) {
+    return { word: 'verb-failed', many: COLLECT_ITEM_MANY['verb-failed'],
+      sentence: `The temp-root collector’s attempts to collect ${tmp} keep failing (${collectProbeText(v.verbFailed.word)}).`
+        + `${collectSaid(v.verbFailed.detail, v.verbFailed.word)} ccd kept what still stands each time; ${COLLECT_ASKS_LONG}` };
+  }
+  if (v.die !== null) {
+    return { word: 'die', many: COLLECT_ITEM_MANY.die,
+      sentence: `ccd refused to start the temp-root collector’s verb for this id before its lock `
+        + `(${childReclaimDetailText(v.die.word)}) each time for at least ${CEILING_MIN} minutes; nothing was removed `
+        + `from ${tmp}. ccrc asks again later, no sooner than the ceiling after each refusal.` };
+  }
+  if (v.failing.tier.tier && !(recordsSubsumed && v.failing.word === COLLECT_RECORDS_PROBE)) {
+    const probe = collectProbeText(v.failing.word);
+    const said = collectSaid(v.failing.detail, v.failing.word);
+    if (v.failing.word !== null && collectProbeClass(v.failing.word) === 'per-leaf') {
+      return { word: 'per-leaf', many: COLLECT_ITEM_MANY['per-leaf'],
+        sentence: `ccd cannot collect ${tmp} as it stands (${probe}).${said} This does not heal by itself: `
+          + 'ccrc asks again on a long, capped schedule, and a person decides what to do with it.' };
+    }
+    return { word: 'failing', many: COLLECT_ITEM_MANY.failing,
+      sentence: `The temp-root collector has not been able to measure ${tmp} for some time (${probe}).${said} `
+        + 'Nothing was removed; ccrc keeps asking, backing off in between.' };
+  }
+  const d = v.deferral;
+  if (d !== null && d.word === COLLECT_IN_USE) {
+    return { word: 'in-use', many: COLLECT_ITEM_MANY['in-use'],
+      sentence: `A process still uses ${tmp}, so the temp-root collector leaves it alone.${collectSaid(d.detail, d.word)} `
+        + 'ccrc never stops a process; it asks again later, and this line ends once nothing uses it.' };
+  }
+  if (v.hold !== null) {
+    if (COLLECT_HOLD_UNVOUCHED.includes(v.hold.why)) return 'unvouched';
+    return { word: 'held', many: COLLECT_ITEM_MANY.held,
+      sentence: `The temp-root collector has held ${tmp} for at least ${CEILING_MIN} minutes: `
+        + `${COLLECT_HOLD_WHY[v.hold.why]}. It is never collected while the hold stands, and is asked again once it lifts.` };
+  }
+  if (d !== null && d.word === COLLECT_IN_PROGRESS) {
+    return { word: 'in-progress', many: COLLECT_ITEM_MANY['in-progress'],
+      sentence: `Another ccd process has held this id’s reap lock, ~/.cc-sessions/.reap-${id}.lock, for at least `
+        + `${CEILING_MIN} minutes, so the temp-root collector leaves ${tmp} alone.${collectSaid(d.detail, d.word)} A reap, `
+        + 'reclaim, expiry, restore or collection of it may still be running, or a killed one left a process holding '
+        + 'the lock; ccrc asks again later.' };
+  }
+  if (d !== null && d.word === COLLECT_REGISTERED) {
+    return { word: 'registered', many: COLLECT_ITEM_MANY.registered,
+      sentence: `A registry row of this id, or what one left behind, has stood for at least ${CEILING_MIN} minutes, so `
+        + `the temp-root collector treats ${tmp} as that workspace’s and leaves it alone. ccrc asks again later; this `
+        + 'line ends once the id is free.' };
+  }
+  if (v.viewerSince !== null) {
+    return { word: 'presence', many: COLLECT_ITEM_MANY.presence,
+      sentence: `This id has been open on a screen for at least ${CEILING_MIN} minutes, so the temp-root collector `
+        + `leaves ${tmp} alone. It never collects a temp root while its id is open, and asks again once it is not.` };
+  }
+  if (v.changedRecentlySince !== null) {
+    return { word: 'changed-recently', many: COLLECT_ITEM_MANY['changed-recently'],
+      sentence: `Something under ${tmp} has kept changing for at least ${CHANGING_HOURS} hours, though no process of `
+        + 'this user is using it. The temp-root collector leaves it alone while it changes; a person decides what '
+        + 'keeps changing it.' };
+  }
+  if (v.wouldCollect) {
+    return { word: 'would-collect', many: COLLECT_ITEM_MANY['would-collect'],
+      sentence: `While the collector was shadowed, two audits at least a pass apart found ${tmp} orphaned and idle, so it `
+        + 'recorded that it would collect it and removed nothing. This line ends once ccd answers anything else for it.' };
+  }
+  return null;
+}
+
+/** The box-wide lines (spec §5.10): each a single item under its fixed label, in the label table's order. */
+function collectBoxItems(b: CollectBoxFacts, unvouched: readonly string[]): ChildReclaimCollectAttention[] {
+  const out: ChildReclaimCollectAttention[] = [];
+  const line = (word: CollectBoxLine, sentence: string): void => {
+    out.push({ kind: 'collect', sessionId: COLLECT_BOX_LABELS[word], runId: null, word, sentence });
+  };
+  // Task 3's doubts, in the label table's order; an over-cap count is the RAW listing's
+  // (`population-cap-counts-the-raw-listing`).
+  const doubts = [...b.unmeasured].sort((p, q) => COLLECT_BOX_LINES.indexOf(p.listing) - COLLECT_BOX_LINES.indexOf(q.listing));
+  for (const l of doubts) {
+    const also = l.listing === 'tmpquarantine' ? '; a quarantine record it cannot see is not listed' : '';
+    if (l.kind === 'over-cap') {
+      line(l.listing, `${COLLECT_BOX_LABELS[l.listing]} holds ${l.count} names, more than the ${COLLECT_POPULATION_MAX} `
+        + `the temp-root collector reads, so it audits none of them${also}.`);
+    } else {
+      line(l.listing, `The temp-root collector could not list ${COLLECT_BOX_LABELS[l.listing]} `
+        + `(${childReclaimDetailText(l.why)}), so it audits only the ids the other listing names, and never reads an `
+        + `absence from this one${also}.`);
+    }
+  }
+  if (b.refusedNames > 0) {
+    line('refused-names', `${b.refusedNames} names under ${COLLECT_BOX_LABELS.tmproots} or `
+      + `${COLLECT_BOX_LABELS.tmpquarantine} are not temp-root ids ccrc acts on (for example a name that begins with a `
+      + `dash, is longer than ${TMPROOT_ID_MAX_CHARS} characters, is not a session id’s shape, or is no quarantine `
+      + 'record of one), so the collector never audits them. A person looks at them by hand.');
+  }
+  if (b.looseDoubt !== undefined && b.looseDoubt !== null) {
+    line('loose-census', `The temp-root collector kept loose temp entries: ${b.looseDoubt}. Nothing is removed on that account.`);
+  }
+  if (b.boxProbes.size > 0) {
+    const what = [...b.boxProbes].sort(([p], [q]) => (p < q ? -1 : p > q ? 1 : 0)).map(([p, d]) => {
+      const t = childReclaimDetailText(d);
+      return t === '' ? childReclaimDetailText(p) : `${childReclaimDetailText(p)} (${t})`;
+    }).join('; ');
+    line('box-probe', `ccd on the fleet box cannot collect any temp root as things stand: ${what}. The collector `
+      + 'removes nothing until this is fixed, and keeps asking.');
+  }
+  const answers = [...b.passAudits.values()];
+  const only = (c: CollectPassClass): number => (answers.every((a) => a === c) ? answers.length : 0);
+  if (only('no-document') >= 2) {
+    line('no-document', `${answers.length} temp-root audits this pass got no answer from ccd at all, and none got one; `
+      + 'the fleet box or the link to it may be struggling. ccrc keeps asking.');
+  }
+  if (only('lock') >= 2) {
+    line('lock', `${answers.length} temp roots answered this pass that their reap lock could not be opened, and no `
+      + 'audit answered anything else. ccrc keeps asking.');
+  }
+  if (b.flockLatched) {
+    line('flock', 'ccd on the fleet box answered that flock (util-linux) is unavailable, so the temp-root collector '
+      + 'composes nothing until flock is installed and this server restarts.');
+  }
+  const calls = [...b.unsettled].filter(([, k]) => k === 'audit').map(([id]) => id).sort();
+  const jobs = [...b.unsettled].filter(([, k]) => k === 'job' || k === 'act').map(([id]) => id).sort();
+  if (calls.length + jobs.length > 0) {
+    // An unsettled audit call OR executor job; a job's clause, its act out or not, says the act slot is held.
+    const said = [
+      ...(calls.length === 0 ? [] : [`A temp-root collector call to ccd has not settled within its bound for `
+        + `${childReclaimIdsNamed(calls)}.`]),
+      ...(jobs.length === 0 ? [] : [`The collector’s act slot is held by the job for ${childReclaimIdsNamed(jobs)}, `
+        + 'which has not settled within its bound, whether or not it has called ccd yet.']),
+    ];
+    line('unsettled', `${said.join(' ')} The collector asks nothing more of these ids until each settles.`);
+  }
+  if (unvouched.length > 0) {
+    line('unvouched', `${unvouched.length} temp roots are held because the coordination database cannot vouch for the `
+      + `run that minted each one: the run is missing, or opened after the temp root was handed out `
+      + `(${childReclaimIdsNamed(unvouched)}). They stay held, armed or not; a person removes them once nothing still needs them.`);
+  }
+  return out;
+}
+
+/** The collector's attention (spec §5.10): ONE uncollapsed item per id, in id order; each word's collapsed clause;
+ *  and the box-wide lines. An id that fails `isTmpRootId` never lists. Pure. Each entry is already
+ *  `collectAttentionViewOf`'s projection, so WHETHER a per-id cause stands was Task 4's decision and no threshold is
+ *  read here: `nowMono` is carried for the lane's call and read by none
+ *  (`continuity-measured-answer-to-answer`). */
+export function collectAttentionItems(i: {
+  readonly entries: ReadonlyMap<string, CollectAttentionView>;
+  readonly box: CollectBoxFacts;
+  readonly nowMono: number;
+}): ChildReclaimCollectInput {
+  const recordsSubsumed = collectRecordsInDoubt(i.box.unmeasured);
+  const perId: ChildReclaimCollectAttention[] = [];
+  const manyLead: Record<string, string> = {};
+  const unvouched: string[] = [];
+  for (const [id, v] of [...i.entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    if (!isTmpRootId(id)) continue;
+    const t = collectItemOf(id, v, recordsSubsumed);
+    if (t === null) continue;
+    if (t === 'unvouched') { unvouched.push(id); continue; }
+    perId.push({ kind: 'collect', sessionId: id, runId: v.witnessRun, word: t.word, sentence: t.sentence });
+    manyLead[t.word] = t.many;
+  }
+  return { perId, manyLead, box: collectBoxItems(i.box, unvouched) };
+}
+
+/** The collector's feed titles (spec §5.10): its own, never a child reclaim title. */
+export type CollectFeedKind = 'collected' | 'would-collect' | 'answer' | 'switch';
+export const COLLECT_FEED_TITLE: Readonly<Record<CollectFeedKind, string>> = {
+  collected: 'temp root collected',
+  'would-collect': 'temp root would be collected',
+  answer: 'temp root collector',
+  switch: 'temp root collector switch',
+};
+
+const collectWho = (id: string, runId: number | null): string => {
+  const hex = collectLooseHexOf(id);
+  if (hex !== null) return `temp entry ${collectLooseNameText(hex)}`;
+  return runId === null ? id : `${id}, child of run #${runId}`;
+};
+
+/** The feed titles of the loose arm's two rows (D-6627): a loose entry is a temp ENTRY, not a temp root. Its other
+ *  rows keep the collector's `answer` title. */
+export const COLLECT_LOOSE_FEED_TITLE: Readonly<Record<'collected' | 'would-collect', string>> = {
+  collected: 'temp entry collected',
+  'would-collect': 'temp entry would be collected',
+};
+/** The title of a `collected` or `would-collect` row for `id`: the loose arm's for a loose id, else the lane's. */
+export const collectFeedTitle = (id: string, kind: 'collected' | 'would-collect'): string =>
+  (collectIsLoose(id) ? COLLECT_LOOSE_FEED_TITLE[kind] : COLLECT_FEED_TITLE[kind]);
+const COLLECT_WITNESS_SAID: Readonly<Record<Extract<CollectResult, { readonly kind: 'collected' }>['witness'], string>> = {
+  dropped: 'its witness was dropped',
+  kept: 'its witness was kept: a newer spawn on this id had written it again',
+  absent: 'its witness was already gone',
+};
+
+/** A `collected` row (spec §5.10). A witness-only collect (`record: null`) says no leaf stood and what became of the
+ *  witness, and NEVER that a temp root was removed: nothing was. */
+export function collectFeedCollectedBody(id: string, runId: number | null, leaf: string | null,
+  r: Extract<CollectResult, { readonly kind: 'collected' }>): string {
+  if (collectIsLoose(id) && r.record !== null) {
+    return `${collectWho(id, runId)}: the temp-entry collector removed it (record ${childReclaimDetailText(r.record)})`
+      + `${r.resumed ? ', finishing a collection an earlier attempt began' : ''}.`;
+  }
+  const at = leaf === null ? '' : childReclaimDetailText(leaf);
+  if (r.record === null) {
+    return `${collectWho(id, runId)}: no leaf stood${at === '' ? '' : ` at ${at}`}, so nothing was moved; `
+      + `${COLLECT_WITNESS_SAID[r.witness]}.`;
+  }
+  return `${collectWho(id, runId)}: the temp-root collector removed its temp root${at === '' ? '' : ` ${at}`} `
+    + `(record ${childReclaimDetailText(r.record)})${r.resumed ? ', finishing a collection an earlier attempt began' : ''}; `
+    + `${COLLECT_WITNESS_SAID[r.witness]}.`;
+}
+
+/** Shadow's row, once per (id, token) episode (spec §5.10). */
+export function collectFeedWouldCollectBody(id: string, runId: number | null, leaf: string | null): string {
+  if (collectIsLoose(id)) {
+    return `would collect ${collectWho(id, runId)}: it was found idle and held by nothing by two audits at least a pass apart. `
+      + 'The collector, or its loose arm, is shadowed, so nothing was removed.';
+  }
+  return `would collect ${collectWho(id, runId)}: ${collectTmp(leaf)} was found `
+    + 'orphaned and idle by two audits at least a pass apart. The collector is shadowed, so nothing was removed.';
+}
+
+/** One row per (id, word) episode of any other answer (spec §5.10): ccd's word, detail and paths, each made one line.
+ *  An answer this build's reader made (`no-document`, `unreadable`, a `failed` result with no word) is
+ *  `collectFeedReadBody`'s, never this builder's, which words only what ccd said. */
+export function collectFeedAnswerBody(id: string, runId: number | null, word: string, detail: string | null,
+  paths: readonly string[]): string {
+  const w = childReclaimDetailText(word);
+  const d = detail === null ? '' : childReclaimDetailText(detail);
+  const p = paths.map((x) => childReclaimDetailText(x)).filter((x) => x !== '');
+  const said = `${w === '' ? 'a word this build cannot show' : w}${d === '' ? '' : `: ${d}`}`
+    + `${p.length === 0 ? '' : ` (paths: ${p.join(', ')})`}`;
+  return `${collectWho(id, runId)}: ccd answered ${childReclaimStuckEnd(said)}`;
+}
+
+/** What this build's reader could not do with ccd's answer, for a feed row (spec §5.10): `no-document` (ccd printed
+ *  nothing: an audit's or an act's), `unreadable` (a document that is not an audit's shape) and `unaccepted` (a `failed`
+ *  result this reader made, or ccd's with no word). The row's words are ccrc's, never quoted as ccd's. */
+export type CollectReadWhat = 'no-document' | 'unreadable' | 'unaccepted';
+
+const COLLECT_READ_SAID: Readonly<Record<CollectReadWhat, string>> = {
+  'no-document': 'ccd answered nothing',
+  unreadable: 'ccrc could not read ccd’s answer',
+  unaccepted: 'ccrc could not accept ccd’s answer',
+};
+
+/** One row per (id, kind) episode of an answer THIS READER made (spec §5.10): what ccrc could not do, in ccrc's words,
+ *  then `what ccrc saw` (a runner's stderr, or the reader's own sentence) through `childReclaimDetailText`, left out
+ *  when it cleans to nothing. The watcher picks it by the answer's KIND, never by a word. */
+export function collectFeedReadBody(id: string, runId: number | null, what: CollectReadWhat, detail: string): string {
+  const d = childReclaimDetailText(detail);
+  const said = `${COLLECT_READ_SAID[what]}${d === '' ? '' : `; what ccrc saw: ${d}`}`;
+  return `${collectWho(id, runId)}: ${childReclaimStuckEnd(said)}`;
+}
+
+/** The feed cue of one AUDIT answer (spec §5.10: one row per (id, word) episode, quiet on repeats), which the lane
+ *  hands Task 4's `collectFeedStep` after each fold. A `collectable` answer is an observation: no row; a would-collect
+ *  episode of its own token stands, and so does a refusal's or a die's (`outlivesObservations`, set by the ACT's cue),
+ *  while every other episode ends. Every other answer is a row keyed by its word, and none outlives an observation: an
+ *  audit verdict spelled like an act's key (`refused in-use`) is still an audit's episode, which the flag, never the
+ *  key's text, decides. A key is memory only, compared and never shown. A shadow would-collect is
+ *  `{ kind: 'row', key: collectWouldCollectKey(token) }`. */
+export function collectFeedCueOfAudit(a: CollectAudit): CollectFeedCue {
+  switch (a.kind) {
+    case 'collectable': return { kind: 'observe', token: a.token };
+    case 'verdict': return { kind: 'row', key: a.verdict };
+    case 'unmeasured': return { kind: 'row', key: `unmeasured ${a.probe}` };
+    case 'no-document': case 'unreadable': return { kind: 'row', key: a.kind };
+  }
+}
+
+/** The feed cue of one ACT outcome (spec §5.10): every outcome is a row keyed by its kind and word, an act's
+ *  `no-document` apart from an audit's. A refusal and a die, of any word, `flock-unavailable` included, outlive the
+ *  observations between acts: ccd answers the same refusal every cycle, behind a collectable audit each time, so the
+ *  one row of the episode stands until another row cue ends it. `failed` and an act's `no-document` do not, because
+ *  each may have acted: one row per act. */
+export function collectFeedCueOfAct(r: CollectResult): CollectFeedCue {
+  switch (r.kind) {
+    case 'collected': return { kind: 'row', key: 'collected' };
+    case 'refused': return { kind: 'row', key: `refused ${r.word}`, outlivesObservations: true };
+    case 'failed': return { kind: 'row', key: `failed ${r.token}` };
+    case 'die': return { kind: 'row', key: `die ${r.word}`, outlivesObservations: true };
+    case 'no-document': return { kind: 'row', key: 'act no-document' };
+  }
+}
+
+// ── The lane's bounds (spec §5.10): what the watcher's pass applies, decided here so it decides nothing ──────────────
+
+/** At most this many LEARNING audits a pass (spec §5.10), besides the one act job. Declared here, in L1, so the offer
+ *  and every suite read one number; the act job's own audit is not one of them. */
+export const COLLECT_AUDITS_PER_PASS = 2;
+
+/** One id as a pass sees it (spec §5.10): when it may next be asked; its RIPENING instant, observation 1's arrival
+ *  plus the interval, or null when it holds no observation; and whether it is ripe for the act now (Task 4's
+ *  `collectRipe`). Plain facts, so who is asked (`collectOffers`) is decided over them alone. */
+export interface CollectCandidate {
+  readonly id: string;
+  readonly nextAskMono: number;
+  readonly ripeningMono: number | null;
+  readonly ripe: boolean;
+}
+
+/** `id`'s facts from its entry, through Task 4's rules (spec §5.10). An id with no entry has never been asked, and an
+ *  entry with no wait is due at once: both read `-Infinity`. */
+export function collectCandidateOf(
+  id: string, entry: CollectEntry | undefined, nowMono: number, passIntervalMs: number, observeIntervalMs: number,
+): CollectCandidate {
+  if (entry === undefined) return { id, nextAskMono: Number.NEGATIVE_INFINITY, ripeningMono: null, ripe: false };
+  return {
+    id,
+    nextAskMono: collectNextAskMono(entry, passIntervalMs, observeIntervalMs) ?? Number.NEGATIVE_INFINITY,
+    ripeningMono: entry.obs === null ? null : entry.obs.arrivedMono + observeIntervalMs,
+    ripe: collectRipe(entry, nowMono, passIntervalMs, observeIntervalMs),
+  };
+}
+
+/** What one pass may ask for. `busy` holds every id with a collector call or job not yet settled, and the id the slot
+ *  is kept for. `act` is the fleet-wide slot, the `flock-unavailable` latch and the start hold-off, as the watcher
+ *  holds them. */
+export interface CollectOfferInput {
+  readonly candidates: readonly CollectCandidate[];
+  readonly busy: ReadonlySet<string>;
+  readonly nowMono: number;
+  readonly auditsMax: number;
+  readonly act: {
+    readonly slotFree: boolean; readonly flockLatched: boolean; readonly startMono: number; readonly holdOffMs: number;
+  };
+}
+
+/** The pass's asks: the one id offered the act job, or none, and the ids to audit to learn. */
+export interface CollectOffers { readonly learn: readonly string[]; readonly act: string | null }
+
+/** WHO ONE PASS ASKS (spec §5.10). An id with a call or job pending (`busy`) is skipped by both offers.
+ *  - THE ACT FIRST: to the earliest RIPE id (Task 4's `collectRipe`, which is due by its own next ask), by ripening
+ *    instant and then id, so a ripe id whose call never settles never stops another's act. Only while the slot is
+ *    free, no `flock-unavailable` is latched, and the lane is past its start hold-off, shadow's would-collect included
+ *    (`start-hold-off-asked-at-the-offer`), because a restart forgets the slot while the previous process's act may
+ *    still be running on the box.
+ *  - THEN at most `auditsMax` LEARNING audits, to DUE ids holding no observation, by next-ask instant and then id —
+ *    never by observation age or listing order, so an id a deferral moved out cannot take every pass. An id holding an
+ *    observation is never learned: its next ask is its ripening instant, and its act's job audits it itself. */
+export function collectOffers(i: CollectOfferInput): CollectOffers {
+  const byId = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+  const byInstant = (a: number, b: number): number => (a < b ? -1 : a > b ? 1 : 0);
+  // THE LOOSE ARM'S ONE LOCK: ccd's loose audit and its loose act both take `.collect-loose.lock` without waiting, and a
+  // second concurrent loose ask answers `in-progress` (measured: 75 of the lane's own entries met its own lock). So a pass
+  // offers loose ids only while none is in flight, and at most one across the act and the learning audits together
+  // (D-6859).
+  let looseOpen = ![...i.busy].some(collectIsLoose);
+  const free = i.candidates.filter((c) => !i.busy.has(c.id));
+  const due = (c: CollectCandidate): boolean => c.nextAskMono <= i.nowMono;
+  const open = i.act.slotFree && !i.act.flockLatched && i.nowMono - i.act.startMono >= i.act.holdOffMs;
+  const ripe = free.flatMap((c) => (c.ripe && c.ripeningMono !== null && (looseOpen || !collectIsLoose(c.id))
+    ? [{ id: c.id, at: c.ripeningMono }] : []))
+    .sort((a, b) => byInstant(a.at, b.at) || byId(a.id, b.id));
+  const act = open ? (ripe[0]?.id ?? null) : null;
+  if (act !== null && collectIsLoose(act)) looseOpen = false;
+  const learn: string[] = [];
+  const asks = free.filter((c) => c.ripeningMono === null && due(c))
+    .sort((a, b) => byInstant(a.nextAskMono, b.nextAskMono) || byId(a.id, b.id));
+  for (const c of asks) {
+    if (learn.length >= i.auditsMax) break;
+    if (collectIsLoose(c.id)) { if (!looseOpen) continue; looseOpen = false; }
+    learn.push(c.id);
+  }
+  return { act, learn };
+}
+
+/** A settled act job as the LANE folds it (spec §5.10): the executor's outcome, by its kind, or a job that THREW — a
+ *  defect, since the executor names every condition it meets — which may have acted. Declared STRUCTURALLY: L1 may not
+ *  import the executor's L3 `CollectJobOutcome`, which is assignable to this (a compile pin holds it). */
+export type CollectJobSettled =
+  | { readonly kind: 'not-asked' | 'answered' | 'held' | 'would-collect' }
+  | { readonly kind: 'acted'; readonly composedMono: number; readonly result: CollectResult }
+  | { readonly kind: 'threw'; readonly detail: string };
+
+/** What a settled act job does to the LANE (spec §5.10). What it does to its id is Task 4's transitions'. A lane-wide
+ *  clear is not here: the executor applies one through the port the instant it sees it, and it is never folded twice. */
+export interface CollectJobEffects {
+  /** The slot, and its id with it, kept until this monotonic instant; `null` frees it. */
+  readonly keptUntilMono: number | null;
+  /** ccd's `flock-unavailable` die: latched for the process. */
+  readonly latchFlock: boolean;
+}
+
+const COLLECT_SLOT_FREED: CollectJobEffects = { keptUntilMono: null, latchFlock: false };
+
+/** THE SLOT'S LIFE (spec §5.10). FREED by a job that composed no `ws-collect`, at any step — a switch, presence, the hold,
+ *  a cleared pair, the capability re-check, a marker flip and shadow's would-collect alike — and by an act that answered
+ *  a document or a recognised pre-lock die, which acted nothing. ONLY an act that answered no document (a runner kill, a
+ *  timeout, a client wait expiry, a link failure, or anything unrecognised), which MAY have acted, keeps the slot and
+ *  its id until `stallMs` after the act was COMPOSED; a job that threw keeps them until `stallMs` after it SETTLED, the
+ *  later instant, since when it composed is not known. Every arm is named, so a new one is a compile error here before
+ *  it is a slot nobody frees. */
+export function collectJobEffects(s: CollectJobSettled, settledMono: number, stallMs: number): CollectJobEffects {
+  switch (s.kind) {
+    case 'not-asked': case 'answered': case 'held': case 'would-collect':
+      return COLLECT_SLOT_FREED;
+    case 'acted':
+      switch (s.result.kind) {
+        case 'no-document': return { ...COLLECT_SLOT_FREED, keptUntilMono: s.composedMono + stallMs };
+        case 'die': return s.result.word === 'flock-unavailable' ? { ...COLLECT_SLOT_FREED, latchFlock: true } : COLLECT_SLOT_FREED;
+        case 'collected': case 'refused': case 'failed': return COLLECT_SLOT_FREED;
+        default: { const unnamed: never = s.result; return unnamed; }
+      }
+    case 'threw':
+      return { ...COLLECT_SLOT_FREED, keptUntilMono: settledMono + stallMs };
+    default: { const unnamed: never = s; return unnamed; }
+  }
+}
+
+/** The ONE row a settled act job still writes for an id FORGOTTEN while it was out (spec §5.10). Every other
+ *  per-id fold for such an id is dropped (`an-answer-for-a-forgotten-id-is-dropped`); a `collected` act's row is not.
+ *  It is the operator's record of a deletion the server made, and ccd drops the quarantine record as the LAST step of
+ *  a collection, so a gather landing between that drop and the fold forgets the id the act just collected. The row is
+ *  the one a remembered id gets: worded from the job's own observation-2 document (`obs2`, its witness's run and its
+ *  leaf), under the collected title. null for every other outcome. */
+export function collectForgottenActRow(id: string, s: CollectJobSettled, obs2: CollectAudit): {
+  readonly runId: number | null; readonly title: string; readonly body: string;
+} | null {
+  if (s.kind !== 'acted' || s.result.kind !== 'collected') return null;
+  const ev = collectEvidenceOf(obs2) ?? { runId: null, leaf: null };
+  return { runId: ev.runId, title: collectFeedTitle(id, 'collected'),
+    body: collectFeedCollectedBody(id, ev.runId, ev.leaf, s.result) };
+}
+
+// ── the Settings switch's durable state (path-identity spec §5.2) ───────────────────────────────────────────────
+//
+// The switch's control state is ONE database row and ONE generation journal, read together (path-identity spec
+// 2026-10-12 §5.2). This section decides what each read means, whether the two agree, and what one write would do. It
+// reads neither: the store (`coord/store.ts`) and the journal adapter (`coord/collectLaneJournal.ts`) measure, and hand
+// their reads in as arguments.
+// - The row is measured EXACTLY. The seed is `{off, null, null, 0, 0}` and nothing else, and a field outside its
+//   domain is named, never cast.
+// - The journal's grammar is STRICT. A blank, padded, torn or out-of-order record makes the whole file malformed, and
+//   nothing here rebuilds a journal from the row it exists to distrust.
+// - Coherence is EXACT EQUALITY of the journal's maximum and the row's generation. The untouched seed beside a missing
+//   journal is the one bootstrap. The maximum allocates the next generation; it never proves one.
+// - The write decision runs INSIDE the store's transaction, on the row and journal it re-read there.
+
+/** The `collect_lane_settings` row as the store reads it, every value `unknown`: `measureCollectLaneRow` decides what
+ *  each one means. The store reads with `setReadBigInts(true)`, so an INTEGER column arrives as a `bigint`. */
+export interface CollectLaneRowRaw {
+  readonly choice: unknown; readonly fleetNodeId: unknown; readonly markerRetiredAt: unknown;
+  readonly generation: unknown; readonly updatedAt: unknown;
+}
+/** The store's read of the row: a row, no row, or a read that failed (a missing table, a driver throw). Three words,
+ *  never one `null`. */
+export type CollectLaneRowRead =
+  | { readonly kind: 'row'; readonly row: CollectLaneRowRaw } | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable'; readonly detail: string };
+/** A measured row (path-identity spec 2026-10-12 §5.2):
+ *  - `choice` is the raw stored token. Only exact `live` arms through Settings; any other string reads, and arms nothing;
+ *  - `fleetNodeId` is null or a non-empty string, which arms only by exact equality with the directly measured node;
+ *  - `markerRetiredAt` is null until a listing proves the legacy marker absent, and is never cleared once set;
+ *  - `generation` is the database half of the generation proof; `updatedAt` is diagnostic, never an arming input. */
+export interface CollectLaneRow {
+  readonly choice: string; readonly fleetNodeId: string | null; readonly markerRetiredAt: number | null;
+  readonly generation: number; readonly updatedAt: number;
+}
+export type CollectLaneRowField = 'choice' | 'fleetNodeId' | 'markerRetiredAt' | 'generation' | 'updatedAt';
+/** The row, measured. `seed` is EXACTLY `{off, null, null, 0, 0}`; `malformed` names the first field, in column order,
+ *  outside its domain. `absent` and `unreadable` pass through: neither is the seed, and neither arms anything. */
+export type CollectLaneRowMeasure =
+  | { readonly kind: 'seed'; readonly row: CollectLaneRow }
+  | { readonly kind: 'row'; readonly row: CollectLaneRow }
+  | { readonly kind: 'malformed'; readonly field: CollectLaneRowField }
+  | { readonly kind: 'absent' } | { readonly kind: 'unreadable'; readonly detail: string };
+
+/** The two stored choices this section writes, typed by L0's vocabulary. */
+const COLLECT_CHOICE_OFF: CollectLaneChoice = 'off';
+const COLLECT_CHOICE_LIVE: CollectLaneChoice = 'live';
+const COLLECT_SAFE_MIN = BigInt(Number.MIN_SAFE_INTEGER);
+const COLLECT_SAFE_MAX = BigInt(Number.MAX_SAFE_INTEGER);
+/** A `bigint` inside the safe-integer range becomes a `number`; any other `bigint` stays one, which every domain below
+ *  refuses. Every other value passes through as read. A copy of `coord/stallsettings.ts`'s module-private `fromStore`:
+ *  this L1 file imports nothing from `coord/`. */
+function collectFromStore(v: unknown): unknown {
+  if (typeof v !== 'bigint') return v;
+  return v >= COLLECT_SAFE_MIN && v <= COLLECT_SAFE_MAX ? Number(v) : v;
+}
+/** `generation` and `updatedAt`: a safe integer, zero or more. `undefined` is outside the domain. */
+function collectCountOf(v: unknown): number | undefined {
+  const n = collectFromStore(v);
+  return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+}
+/** `fleetNodeId`: null, or any non-empty string. `undefined` is outside the domain. */
+function collectNodeOf(v: unknown): string | null | undefined {
+  return v === null ? null : typeof v === 'string' && v !== '' ? v : undefined;
+}
+/** `markerRetiredAt`: null, or a positive safe integer. `undefined` is outside the domain. */
+function collectLatchOf(v: unknown): number | null | undefined {
+  const n = collectFromStore(v);
+  return n === null ? null : isPositiveDecimalSafeInteger(n) ? n : undefined;
+}
+
+/** THE ROW'S ONE MEASURE (path-identity spec 2026-10-12 §5.2). `choice` is any string; `fleetNodeId` null or a
+ *  non-empty string; `markerRetiredAt` null or a positive safe integer; `generation` and `updatedAt` safe integers, zero
+ *  or more. A bigint converts only inside the safe range. Never throws, never casts. */
+export function measureCollectLaneRow(read: CollectLaneRowRead): CollectLaneRowMeasure {
+  if (read.kind !== 'row') return read;
+  const { choice } = read.row;
+  if (typeof choice !== 'string') return { kind: 'malformed', field: 'choice' };
+  const fleetNodeId = collectNodeOf(read.row.fleetNodeId);
+  if (fleetNodeId === undefined) return { kind: 'malformed', field: 'fleetNodeId' };
+  const markerRetiredAt = collectLatchOf(read.row.markerRetiredAt);
+  if (markerRetiredAt === undefined) return { kind: 'malformed', field: 'markerRetiredAt' };
+  const generation = collectCountOf(read.row.generation);
+  if (generation === undefined) return { kind: 'malformed', field: 'generation' };
+  const updatedAt = collectCountOf(read.row.updatedAt);
+  if (updatedAt === undefined) return { kind: 'malformed', field: 'updatedAt' };
+  const row: CollectLaneRow = { choice, fleetNodeId, markerRetiredAt, generation, updatedAt };
+  const seed = choice === COLLECT_CHOICE_OFF && fleetNodeId === null && markerRetiredAt === null && generation === 0
+    && updatedAt === 0;
+  return seed ? { kind: 'seed', row } : { kind: 'row', row };
+}
+
+/** Why a journal is malformed (path-identity spec 2026-10-12 §5.2, §5.9):
+ *  - `empty`: an existing file with no bytes;
+ *  - `blank`: a record that is empty, is padded by whitespace at either end, or carries a carriage return;
+ *  - `json`: a record that does not parse, a torn tail included;
+ *  - `shape`: a record that parses to anything but an object;
+ *  - `generation`: an object whose own `generation` is not a positive safe integer;
+ *  - `order`: a generation not above the record before it. */
+export type CollectLaneJournalFault = 'empty' | 'blank' | 'json' | 'shape' | 'generation' | 'order';
+const COLLECT_LANE_JOURNAL_FAULT_TABLE: Readonly<Record<CollectLaneJournalFault, true>> = {
+  empty: true, blank: true, json: true, shape: true, generation: true, order: true,
+};
+export const COLLECT_LANE_JOURNAL_FAULTS: readonly CollectLaneJournalFault[] =
+  Object.keys(COLLECT_LANE_JOURNAL_FAULT_TABLE) as CollectLaneJournalFault[];
+
+/** The journal as its adapter measured it (path-identity spec 2026-10-12 §5.2). Never one `null`:
+ *  - `missing`: a PROVEN ENOENT only. It is generation 0 beside the exact seed, and unmeasurable beside anything else;
+ *  - `ok`: every record parsed, and `max` is the last, largest generation;
+ *  - `malformed`: the first fault, at its 1-based record;
+ *  - `unreadable`: an errno word only, never a message or a path (`EFBIG` past the adapter's read cap);
+ *  - `not-regular`: a symlink, a directory or anything else at the path, never followed and never read;
+ *  - `not-configured`: no journal was wired (the executor's control read only). It is never `missing`. */
+export type CollectLaneJournalRead =
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'ok'; readonly max: number; readonly records: number }
+  | { readonly kind: 'malformed'; readonly fault: CollectLaneJournalFault; readonly record: number }
+  | { readonly kind: 'unreadable'; readonly code: string }
+  | { readonly kind: 'not-regular'; readonly fileKind: 'symlink' | 'directory' | 'other' }
+  | { readonly kind: 'not-configured' };
+const COLLECT_LANE_JOURNAL_KIND_TABLE: Readonly<Record<CollectLaneJournalRead['kind'], true>> = {
+  missing: true, ok: true, malformed: true, unreadable: true, 'not-regular': true, 'not-configured': true,
+};
+export const COLLECT_LANE_JOURNAL_KINDS: readonly CollectLaneJournalRead['kind'][] =
+  Object.keys(COLLECT_LANE_JOURNAL_KIND_TABLE) as CollectLaneJournalRead['kind'][];
+
+/** A record padded by whitespace at either end, or carrying a carriage return anywhere. */
+const COLLECT_JOURNAL_BLANK = /^\s|\s$|\r/;
+
+/** THE JOURNAL'S ONE PARSE (path-identity spec 2026-10-12 §5.2, §5.9). Total over every string; never throws. Its
+ *  records are the kernel's complete records (`journalKernel.ts#splitJournalRecords`, D-7059), blanks kept, and a
+ *  non-empty tail as the last record, so a final newline is allowed and never required. Every record is one JSON
+ *  object whose own `generation` is a positive safe integer above the record before it; any other property is ignored.
+ *  The first fault answers, at its 1-based record. */
+export function parseCollectLaneJournal(text: string): Extract<CollectLaneJournalRead, { kind: 'ok' | 'malformed' }> {
+  if (text === '') return { kind: 'malformed', fault: 'empty', record: 1 };
+  const framed = splitJournalRecords(text);
+  const records = framed.tail === '' ? framed.records : [...framed.records, framed.tail];
+  let max = 0;
+  for (let i = 0; i < records.length; i += 1) {
+    const rec = records[i];
+    const record = i + 1;
+    if (rec === '' || COLLECT_JOURNAL_BLANK.test(rec)) return { kind: 'malformed', fault: 'blank', record };
+    let doc: unknown;
+    try { doc = JSON.parse(rec); } catch { return { kind: 'malformed', fault: 'json', record }; }
+    if (!isObject(doc)) return { kind: 'malformed', fault: 'shape', record };
+    const generation = hasOwn(doc, 'generation') ? doc.generation : undefined;
+    if (!isPositiveDecimalSafeInteger(generation)) return { kind: 'malformed', fault: 'generation', record };
+    if (generation <= max) return { kind: 'malformed', fault: 'order', record };
+    max = generation;
+  }
+  return { kind: 'ok', max, records: records.length };
+}
+
+/** The generation journal: an L2 port declared by its consumers (the store's one writer, the executor's final re-read,
+ *  the route). `read` never throws. `appendGeneration` writes exactly `{"generation":g}` and a newline, with a leading
+ *  newline first when the file lacks a final one, fsynced before it returns. It throws, with an errno `code`, on any
+ *  failure, and a throw first returns the file to its bytes before the call (or removes a file the call created), best
+ *  effort: the error thrown is always the original, never the undo's (path-identity spec 2026-10-12 §5.2). */
+export interface CollectLaneJournal { read(): CollectLaneJournalRead; appendGeneration(generation: number): void }
+
+/** Why the control state cannot be measured: the row's read, or the journal's, by its own word. */
+export type CollectLaneUnmeasurable =
+  | 'row-absent' | 'row-unreadable' | 'row-malformed' | 'journal-missing' | 'journal-malformed'
+  | 'journal-unreadable' | 'journal-not-regular' | 'journal-not-configured';
+const COLLECT_LANE_UNMEASURABLE_TABLE: Readonly<Record<CollectLaneUnmeasurable, true>> = {
+  'row-absent': true, 'row-unreadable': true, 'row-malformed': true, 'journal-missing': true,
+  'journal-malformed': true, 'journal-unreadable': true, 'journal-not-regular': true, 'journal-not-configured': true,
+};
+export const COLLECT_LANE_UNMEASURABLE_WHYS: readonly CollectLaneUnmeasurable[] =
+  Object.keys(COLLECT_LANE_UNMEASURABLE_TABLE) as CollectLaneUnmeasurable[];
+/** Each journal read that can never be proof, and its own why. `missing` is decided beside the row; `ok` is compared. */
+const COLLECT_JOURNAL_UNMEASURABLE:
+  Readonly<Record<Exclude<CollectLaneJournalRead['kind'], 'missing' | 'ok'>, CollectLaneUnmeasurable>> = {
+    malformed: 'journal-malformed', unreadable: 'journal-unreadable', 'not-regular': 'journal-not-regular',
+    'not-configured': 'journal-not-configured',
+  };
+
+/** The switch's control state (path-identity spec 2026-10-12 §5.2):
+ *  - `coherent`: the journal's maximum EQUALS the row's generation, or the exact seed stands beside a missing journal
+ *    (`bootstrap`, generation 0);
+ *  - `mismatch`: both are measurable and differ, in either direction. It arms nothing, and only a fresh operator write
+ *    repairs it;
+ *  - `unmeasurable`: the row or the journal cannot be measured. It arms nothing and refuses every write. */
+export type CollectLaneControl =
+  | { readonly kind: 'coherent'; readonly row: CollectLaneRow; readonly generation: number; readonly bootstrap: boolean }
+  | { readonly kind: 'mismatch'; readonly row: CollectLaneRow; readonly journalMax: number; readonly rowGeneration: number }
+  | { readonly kind: 'unmeasurable'; readonly why: CollectLaneUnmeasurable };
+
+/** THE COHERENCE RULE (path-identity spec 2026-10-12 §5.2): exact equality. Never `row == max(journal, row)`, which would
+ *  accept a database generation the journal never recorded. The row is measured first. */
+export function collectLaneControl(row: CollectLaneRowMeasure, journal: CollectLaneJournalRead): CollectLaneControl {
+  if (row.kind === 'absent') return { kind: 'unmeasurable', why: 'row-absent' };
+  if (row.kind === 'unreadable') return { kind: 'unmeasurable', why: 'row-unreadable' };
+  if (row.kind === 'malformed') return { kind: 'unmeasurable', why: 'row-malformed' };
+  if (journal.kind === 'missing') {
+    return row.kind === 'seed' ? { kind: 'coherent', row: row.row, generation: 0, bootstrap: true }
+      : { kind: 'unmeasurable', why: 'journal-missing' };
+  }
+  if (journal.kind !== 'ok') return { kind: 'unmeasurable', why: COLLECT_JOURNAL_UNMEASURABLE[journal.kind] };
+  return journal.max === row.row.generation
+    ? { kind: 'coherent', row: row.row, generation: journal.max, bootstrap: false }
+    : { kind: 'mismatch', row: row.row, journalMax: journal.max, rowGeneration: row.row.generation };
+}
+
+/** The next generation, for ALLOCATION only: `max(journalMax, rowGeneration) + 1`, so a repair lands above both. null
+ *  when that would pass `Number.MAX_SAFE_INTEGER`. */
+export function collectLaneNextGeneration(c: Extract<CollectLaneControl, { kind: 'coherent' | 'mismatch' }>): number | null {
+  const top = c.kind === 'coherent' ? Math.max(c.generation, c.row.generation) : Math.max(c.journalMax, c.rowGeneration);
+  return top >= Number.MAX_SAFE_INTEGER ? null : top + 1;
+}
+
+/** One request to the switch's one writer (path-identity spec 2026-10-12 §5.2, §5.4, §5.6):
+ *  - `live`: arm for `fleetNodeId`, only if the row and journal the transaction re-reads are still exactly the ones the
+ *    caller read (`expected`, `expectedJournal`);
+ *  - `off`: no expectation, so Off wins over a concurrent Live: it takes the latest row, clears the node and keeps the
+ *    latch;
+ *  - `retire`: the automatic latch, from the one latch helper, on the pair it read. It has no repair authority. */
+export type CollectLaneWriteRequest =
+  | { readonly kind: 'live'; readonly fleetNodeId: string; readonly expected: CollectLaneRowRead; readonly expectedJournal: CollectLaneJournalRead }
+  | { readonly kind: 'off' }
+  | { readonly kind: 'retire'; readonly expected: CollectLaneRowRead; readonly expectedJournal: CollectLaneJournalRead };
+/** Why the writer wrote nothing (path-identity spec 2026-10-12 §5.4, §5.6). None consumes a generation:
+ *  - `conflict`: a Live or a retire whose expected row or journal is not what the transaction re-read;
+ *  - `marker-still-controls`: Off while `markerRetiredAt` is null, whatever any listing says;
+ *  - `state-unmeasurable`: the row or journal is unmeasurable, the write instant is not a positive safe integer, the
+ *    node to arm is empty, or the next generation would pass the safe range;
+ *  - `not-coherent`: a retire over a mismatch. The latch never heals one. */
+export type CollectLaneWriteRefusal = 'conflict' | 'marker-still-controls' | 'state-unmeasurable' | 'not-coherent';
+const COLLECT_LANE_WRITE_REFUSAL_TABLE: Readonly<Record<CollectLaneWriteRefusal, true>> = {
+  conflict: true, 'marker-still-controls': true, 'state-unmeasurable': true, 'not-coherent': true,
+};
+export const COLLECT_LANE_WRITE_REFUSALS: readonly CollectLaneWriteRefusal[] =
+  Object.keys(COLLECT_LANE_WRITE_REFUSAL_TABLE) as CollectLaneWriteRefusal[];
+/** The writer's decision: refuse (with a bounded detail that names no path), leave the row as it stands, or write the
+ *  complete row's three intent fields at `generation`. The store writes `updatedAt` from the same instant. */
+export type CollectLaneWriteDecision =
+  | { readonly kind: 'refuse'; readonly code: CollectLaneWriteRefusal; readonly detail: string }
+  | { readonly kind: 'unchanged' }
+  | { readonly kind: 'write'; readonly generation: number;
+      readonly next: { readonly choice: string; readonly fleetNodeId: string | null; readonly markerRetiredAt: number | null } };
+
+const COLLECT_LANE_UNCHANGED: CollectLaneWriteDecision = { kind: 'unchanged' };
+const collectRefuse = (code: CollectLaneWriteRefusal, detail: string): CollectLaneWriteDecision =>
+  ({ kind: 'refuse', code, detail });
+/** A write of `next` at the next generation, or `state-unmeasurable` when none is left in the safe range. */
+function collectWriteNext(control: Extract<CollectLaneControl, { kind: 'coherent' | 'mismatch' }>,
+  next: { readonly choice: string; readonly fleetNodeId: string | null; readonly markerRetiredAt: number | null }): CollectLaneWriteDecision {
+  const generation = collectLaneNextGeneration(control);
+  return generation === null
+    ? collectRefuse('state-unmeasurable', 'the next generation would pass the safe-integer range')
+    : { kind: 'write', generation, next };
+}
+
+/** THE WRITE DECISION (path-identity spec 2026-10-12 §5.2, §5.4, §5.6). The store runs it INSIDE its transaction, on the
+ *  row and journal it re-read there. In order:
+ *  1. the write instant must be a positive safe integer, and a Live's node non-empty, else `state-unmeasurable`;
+ *  2. Live and retire compare the row, then the journal, AS READ with what the caller read; a change is `conflict`;
+ *  3. an unmeasurable control state is `state-unmeasurable`, for every request (an absent row is never inserted);
+ *  4. the request's own rule:
+ *     - Off: a null latch is `marker-still-controls`; a coherent `off` with no node is unchanged; otherwise
+ *       `{off, null, latch kept}`, which repairs a mismatch;
+ *     - Live: a coherent row already `live` for the node is unchanged; otherwise `{live, node, latch kept}`, which
+ *       repairs a mismatch;
+ *     - retire: a mismatch is `not-coherent`; a set latch is unchanged; otherwise the latch at `at`, with the choice and
+ *       node kept as stored, a future token included.
+ *  A refusal and a no-op allocate nothing, and every write is at `max(journal, row) + 1`. No arm writes `markerRetiredAt`
+ *  null over a set value: Off and Live copy it, and retire writes only over null. */
+export function decideCollectLaneWrite(req: CollectLaneWriteRequest, before: CollectLaneRowRead,
+  journal: CollectLaneJournalRead, at: number): CollectLaneWriteDecision {
+  if (!isPositiveDecimalSafeInteger(at)) {
+    return collectRefuse('state-unmeasurable', 'the write instant is not a positive safe integer');
+  }
+  if (req.kind === 'live' && req.fleetNodeId === '') return collectRefuse('state-unmeasurable', 'the node to arm is empty');
+  if (req.kind !== 'off') {
+    if (!sameCollectLaneRow(before, req.expected)) return collectRefuse('conflict', 'the row changed after it was read');
+    if (!sameCollectLaneJournal(journal, req.expectedJournal)) {
+      return collectRefuse('conflict', 'the generation journal changed after it was read');
+    }
+  }
+  const control = collectLaneControl(measureCollectLaneRow(before), journal);
+  if (control.kind === 'unmeasurable') {
+    return collectRefuse('state-unmeasurable', `the switch state is unmeasurable: ${control.why}`);
+  }
+  const { row } = control;
+  switch (req.kind) {
+    case 'off':
+      if (row.markerRetiredAt === null) {
+        return collectRefuse('marker-still-controls', 'the legacy marker file has not been retired');
+      }
+      if (control.kind === 'coherent' && row.choice === COLLECT_CHOICE_OFF && row.fleetNodeId === null) {
+        return COLLECT_LANE_UNCHANGED;
+      }
+      return collectWriteNext(control, { choice: COLLECT_CHOICE_OFF, fleetNodeId: null, markerRetiredAt: row.markerRetiredAt });
+    case 'live':
+      if (control.kind === 'coherent' && row.choice === COLLECT_CHOICE_LIVE && row.fleetNodeId === req.fleetNodeId) {
+        return COLLECT_LANE_UNCHANGED;
+      }
+      return collectWriteNext(control,
+        { choice: COLLECT_CHOICE_LIVE, fleetNodeId: req.fleetNodeId, markerRetiredAt: row.markerRetiredAt });
+    case 'retire':
+      if (control.kind !== 'coherent') {
+        return collectRefuse('not-coherent', 'the journal and the row disagree, and the latch never heals them');
+      }
+      if (row.markerRetiredAt !== null) return COLLECT_LANE_UNCHANGED;
+      return collectWriteNext(control, { choice: row.choice, fleetNodeId: row.fleetNodeId, markerRetiredAt: at });
+    default: { const unnamed: never = req; return unnamed; }
+  }
+}
+
+/** The one latch helper's answer (path-identity spec 2026-10-12 §5.4). It is declared here so that its kinds come from an
+ *  L1 table, and the executor's `collectRetireLatch` (`coord/collectTempRoot.ts`) returns it:
+ *  - `not-due`: the listing or the control state did not prove the marker retirable, and the store was not asked;
+ *  - `retired`: the store wrote the latch;
+ *  - `refused`: the store refused the retire request, with its word;
+ *  - `failed`: the store failed at a phase after its decision;
+ *  - `store-threw`: the store threw BEFORE its append (`BEGIN IMMEDIATE` busy past its timeout, an I/O fault at
+ *    `BEGIN`, a read or a decision that threw), which `setCollectLane` propagates by design. Nothing was appended or
+ *    written. The helper answers it rather than rethrowing, so its callers re-read and go on (the coordinator's
+ *    extension of the warn-latch ruling, 2026-10-12). */
+export type CollectLatchOutcome =
+  | { readonly kind: 'not-due' } | { readonly kind: 'retired' }
+  | { readonly kind: 'refused'; readonly code: CollectLaneWriteRefusal }
+  | { readonly kind: 'failed'; readonly phase: 'append' | 'update' | 'commit' }
+  | { readonly kind: 'store-threw' };
+const COLLECT_LATCH_OUTCOME_KIND_TABLE: Readonly<Record<CollectLatchOutcome['kind'], true>> = {
+  'not-due': true, retired: true, refused: true, failed: true, 'store-threw': true,
+};
+export const COLLECT_LATCH_OUTCOME_KINDS: readonly CollectLatchOutcome['kind'][] =
+  Object.keys(COLLECT_LATCH_OUTCOME_KIND_TABLE) as CollectLatchOutcome['kind'][];
+
+/** Whether two row reads are the same state, compared AS READ, before any measure, so a `bigint` meets a `bigint`: the
+ *  same kind and, for a row, the same five raw values. Two reads that are not rows compare by kind (the
+ *  `sameStallSettingsRead` idiom). */
+export function sameCollectLaneRow(a: CollectLaneRowRead, b: CollectLaneRowRead): boolean {
+  if (a.kind === 'row' && b.kind === 'row') {
+    return a.row.choice === b.row.choice && a.row.fleetNodeId === b.row.fleetNodeId
+      && a.row.markerRetiredAt === b.row.markerRetiredAt && a.row.generation === b.row.generation
+      && a.row.updatedAt === b.row.updatedAt;
+  }
+  return a.kind === b.kind;
+}
+/** Whether two journal reads are the same state: the same kind and every field of that arm. */
+export function sameCollectLaneJournal(a: CollectLaneJournalRead, b: CollectLaneJournalRead): boolean {
+  switch (a.kind) {
+    case 'ok': return b.kind === 'ok' && a.max === b.max && a.records === b.records;
+    case 'malformed': return b.kind === 'malformed' && a.fault === b.fault && a.record === b.record;
+    case 'unreadable': return b.kind === 'unreadable' && a.code === b.code;
+    case 'not-regular': return b.kind === 'not-regular' && a.fileKind === b.fileKind;
+    case 'missing': case 'not-configured': return b.kind === a.kind;
+    default: { const unnamed: never = a; return unnamed; }
+  }
+}
+
+/** Every word this section's tables declare: the journal's read kinds and faults, the control state's whys, the
+ *  writer's refusals and the latch helper's outcomes. A scan of quoted kebab words admits the switch's words through
+ *  this guard, never through an allowlist. Derived from the tables, never a hand list. */
+const COLLECT_LANE_KEBAB_WORDS: readonly string[] = [
+  ...COLLECT_LANE_JOURNAL_KINDS, ...COLLECT_LANE_JOURNAL_FAULTS, ...COLLECT_LANE_UNMEASURABLE_WHYS,
+  ...COLLECT_LANE_WRITE_REFUSALS, ...COLLECT_LATCH_OUTCOME_KINDS,
+];
+export function isCollectLaneKebab(v: string): boolean {
+  return COLLECT_LANE_KEBAB_WORDS.includes(v);
+}
+
+// ── the Settings switch: resolver, latch, bodies, counts (path-identity spec 2026-10-12 §5.2, §5.4, §5.5, §5.7) ────
+//
+// What arms the collector's deletion, decided PURELY from measured inputs: the registry listing, the connection epoch
+// around it, both capabilities, the control state (`collectLaneControl`, above) and the current connection's node.
+// Nothing here reads a file, a row, a clock or the link. `collectLaneEffective` is called by the executor
+// (`coord/collectTempRoot.ts`), nearest the argv, and by the view (`collectLaneView`), and by nothing else.
+
+/** Why a registry listing failed (D-5969). ITS WORDS ARE `ReadFailure`'s (`shared/agent-protocol.ts`). This file cannot
+ *  import that type (its imports are pinned, `collect-readers.test.ts`), so the union is DERIVED from the array rather
+ *  than restated, and `coord/collectTempRoot.ts` holds it EQUAL to `ReadFailure` at compile time. */
+export const COLLECT_LISTING_FAILURES = ['absent', 'unreadable'] as const;
+export type CollectListingFailure = (typeof COLLECT_LISTING_FAILURES)[number];
+
+/** The registry listing as the executor reads it (path-identity spec 2026-10-12 §5.2). `marker` is the MEASURED
+ *  presence of `COLLECT_LANE_LIVE_MARKER`. An unlistable registry carries NO marker field: a listing that failed proves
+ *  no absence, and a proved absence is what retires the latch. It carries instead `reason`, the measured listing's
+ *  failure: an unreadable registry is REPORTED as unreadable, never folded into an empty one (D-5969, ARCH-08b).
+ *  `looseMarker` (D-6627) is the loose arm's own marker, present (`true`) only when it was listed: absent reads as
+ *  shadow, and an unlistable registry never carries it. */
+export type CollectLaneSwitches =
+  | { readonly paused: false; readonly marker: boolean; readonly looseMarker?: true }
+  | { readonly paused: true; readonly why: 'raised'; readonly marker: boolean; readonly looseMarker?: true }
+  | { readonly paused: true; readonly why: 'unlistable'; readonly reason: CollectListingFailure; readonly looseMarker?: never };
+/** The connection epoch around a listing (path-identity spec 2026-10-12 §5.2, §5.5). In the executor, `before` is the
+ *  epoch the job was queued under and `after` the epoch read after the final listing; in the pass, the pass-head epoch
+ *  and the epoch after the gather. Epochs only rise, so `before === after` is "no connection came or went". */
+export interface CollectEpochPair { readonly before: number; readonly after: number }
+/** Both capabilities, as the executor or the route measured them: the collector's own and the cleanup pause's. This
+ *  file spells neither token. */
+export interface CollectLaneCaps { readonly collect: boolean; readonly reclaimPause: boolean }
+/** The current connection's fleet node, declared by this consumer (path-identity spec 2026-10-12 §5.2). The identity
+ *  cell's `CurrentFleetIdentity` satisfies it structurally. Only `known` carries a node id, and only a `known` measured
+ *  on the epoch the listing ended under can arm Settings. */
+export type CollectCurrentNode =
+  | { readonly kind: 'known'; readonly connectionEpoch: number; readonly nodeId: string; readonly measuredAt: number }
+  | { readonly kind: 'unmeasured'; readonly connectionEpoch: number }
+  | { readonly kind: 'collision'; readonly connectionEpoch: number };
+/** Everything the resolver reads, each MEASURED by its caller after the listing's await. */
+export interface CollectLaneInputs {
+  readonly switches: CollectLaneSwitches; readonly epoch: CollectEpochPair; readonly caps: CollectLaneCaps;
+  readonly control: CollectLaneControl; readonly node: CollectCurrentNode;
+}
+/** Why the lane STOPPED: a measurement failed or a pause stands. No flip, no feed row, and a lane-wide clear. */
+export type CollectLaneStopWhy = 'raised' | 'unlistable' | 'epoch-changed' | 'unknown-fleet';
+/** Why the control state cannot be proved coherent. A flip candidate whose boolean is false. */
+export type CollectLaneSafetyWhy = CollectLaneUnmeasurable | 'generation-mismatch';
+/** Beside a settled arm: `latchDue` is `collectLatchDue`'s answer for the same listing; `markerRecreated` says the
+ *  marker stands after its latch was set, which is reported and ignored (path-identity spec 2026-10-12 §5.4). */
+export interface CollectLaneNotes { readonly latchDue: boolean; readonly markerRecreated: boolean }
+/** Figure 5's answer (path-identity spec 2026-10-12 §5.2). `live` is the ONLY arm under which `ws-collect` may be
+ *  composed. */
+export type CollectLaneEffective =
+  | { readonly kind: 'stopped'; readonly why: CollectLaneStopWhy }
+  | { readonly kind: 'not-running' }
+  | { readonly kind: 'safety-stopped'; readonly why: CollectLaneSafetyWhy }
+  | { readonly kind: 'live'; readonly armedBy: Exclude<CollectArmedBy, 'neither'>; readonly notes: CollectLaneNotes }
+  | { readonly kind: 'shadowed'; readonly why: 'off' | 'future-choice' | 'other-node'; readonly notes: CollectLaneNotes };
+/** The arms a transition can name: a flip candidate is never `stopped` or `not-running`. */
+export type CollectLaneSettled = Extract<CollectLaneEffective, { kind: 'live' | 'shadowed' | 'safety-stopped' }>;
+type CollectLaneShadowWhy = Extract<CollectLaneEffective, { kind: 'shadowed' }>['why'];
+
+/** The lane flips on this boolean alone, never on the source (path-identity spec 2026-10-12 §5.5): a handoff from the
+ *  marker to Settings that stays live is no flip. */
+export const collectLaneLive = (r: CollectLaneSettled): boolean => r.kind === 'live';
+
+/** THE latch predicate, its one definer (path-identity spec 2026-10-12 §5.4): a listing that is unpaused, listed, on one
+ *  epoch and proves the marker ABSENT, over a COHERENT control state whose latch is still null. It reads none of the
+ *  arming inputs, so a stored Live on an unknown node still retires a removed marker. It never heals: a mismatch or an
+ *  unmeasurable state is never due. */
+export function collectLatchDue(switches: CollectLaneSwitches, epoch: CollectEpochPair, control: CollectLaneControl): boolean {
+  return !switches.paused && !switches.marker && epoch.before === epoch.after
+    && control.kind === 'coherent' && control.row.markerRetiredAt === null;
+}
+
+/** Figure 5 (path-identity spec 2026-10-12 §5.2, §5.5), in this precedence:
+ *  1. a raised pause, then an unlistable registry: stopped;
+ *  2. an epoch that moved around the listing: stopped;
+ *  3. either capability missing: not running;
+ *  4. control state unmeasurable or incoherent: safety-stopped. This suppresses the marker too;
+ *  5. the marker arm (it stands, latch unset), the Settings arm (exact `live`, for the node measured on this epoch), or
+ *     both;
+ *  6. a stored `live` with no node measured on this epoch: stopped, `unknown-fleet`, never shadowed, so a reconnect
+ *     writes no flip row;
+ *  7. otherwise shadowed: `off`, a choice this build does not know (`future-choice`), or Live for another node.
+ *  A choice outside `off`/`live` is readable and ineffective (`isCollectLaneChoice`, never `in`). Total and pure. */
+export function collectLaneEffective(i: CollectLaneInputs): CollectLaneEffective {
+  const s = i.switches;
+  if (s.paused) return { kind: 'stopped', why: s.why };
+  if (i.epoch.before !== i.epoch.after) return { kind: 'stopped', why: 'epoch-changed' };
+  if (!i.caps.collect || !i.caps.reclaimPause) return { kind: 'not-running' };
+  const c = i.control;
+  if (c.kind === 'unmeasurable') return { kind: 'safety-stopped', why: c.why };
+  if (c.kind === 'mismatch') return { kind: 'safety-stopped', why: 'generation-mismatch' };
+  const notes: CollectLaneNotes = {
+    latchDue: collectLatchDue(s, i.epoch, c),
+    markerRecreated: s.marker && c.row.markerRetiredAt !== null,
+  };
+  const markerArms = s.marker && c.row.markerRetiredAt === null;
+  const choice = isCollectLaneChoice(c.row.choice) ? c.row.choice : null;
+  const n = i.node;
+  const nodeNow = n.kind === 'known' && n.connectionEpoch === i.epoch.after ? n.nodeId : null;
+  const settingsArms = choice === 'live' && nodeNow !== null && c.row.fleetNodeId === nodeNow;
+  if (markerArms && settingsArms) return { kind: 'live', armedBy: 'both', notes };
+  if (markerArms) return { kind: 'live', armedBy: 'legacy-marker', notes };
+  if (settingsArms) return { kind: 'live', armedBy: 'settings', notes };
+  if (choice === 'live' && nodeNow === null) return { kind: 'stopped', why: 'unknown-fleet' };
+  const why: CollectLaneShadowWhy = choice === null ? 'future-choice' : choice === 'off' ? 'off' : 'other-node';
+  return { kind: 'shadowed', why, notes };
+}
+
+/** What armed the lane, in the transition row's words (path-identity spec 2026-10-12 §5.5, §5.7). Total. */
+const COLLECT_ARMED_BY_SAID: Readonly<Record<Exclude<CollectArmedBy, 'neither'>, string>> = {
+  'legacy-marker': "the fleet box's legacy file",
+  settings: 'Settings',
+  both: "both Settings and the fleet box's legacy file",
+};
+/** Why neither arms it. Total; a future token is never quoted here. */
+const COLLECT_SHADOWED_SAID: Readonly<Record<CollectLaneShadowWhy, string>> = {
+  off: 'Settings is off',
+  'future-choice': 'Settings holds a choice this build does not know',
+  'other-node': 'Settings is live for another fleet node',
+};
+/** Why the control state cannot be proved coherent, bounded. Total; no detail, path or file name. */
+const COLLECT_SAFETY_SAID: Readonly<Record<CollectLaneSafetyWhy, string>> = {
+  'row-absent': 'its database row is missing',
+  'row-unreadable': 'its database row could not be read',
+  'row-malformed': 'its database row holds a value this build cannot read',
+  'journal-missing': 'its monotonic journal is missing, though its database row is no longer the untouched seed',
+  'journal-malformed': 'its monotonic journal is malformed',
+  'journal-unreadable': 'its monotonic journal could not be read',
+  'journal-not-regular': 'its monotonic journal is not a regular file',
+  'journal-not-configured': 'this server was started with no monotonic journal',
+  'generation-mismatch': 'its database and its monotonic journal disagree',
+};
+
+/** One row per flip of the effective boolean (path-identity spec 2026-10-12 §5.5). It names the measured source, or
+ *  that neither arms the lane and why, or the bounded safety-stop reason, each from a total table. It never carries a
+ *  detail, a path, a stored token or the journal's file name. It keeps wave 9's prefixes, `the collector lane is now
+ *  live` and `the collector lane is now shadowed`. */
+export function collectSwitchFeedBody(r: CollectLaneSettled): string {
+  switch (r.kind) {
+    case 'live':
+      return `the collector lane is now live, armed by ${COLLECT_ARMED_BY_SAID[r.armedBy]}: the temp-root collector `
+        + 'removes an orphaned temp root it has proved idle twice, with no person in the loop, while cleanup is not paused.';
+    case 'shadowed':
+      return "the collector lane is now shadowed: neither Settings nor the fleet box's legacy file arms it "
+        + `(${COLLECT_SHADOWED_SAID[r.why]}), so the temp-root collector audits and reports what it would collect, and `
+        + 'removes nothing.';
+    case 'safety-stopped':
+      return `the collector lane is now safety-stopped: ${COLLECT_SAFETY_SAID[r.why]}, so the temp-root collector `
+        + 'removes nothing until its control state is proved coherent.';
+    default: { const unnamed: never = r; return unnamed; }
+  }
+}
+
+/** The latch row's sentence (path-identity spec 2026-10-12 §5.4), as ruled. */
+const COLLECT_LATCH_SAID = "the fleet box's legacy file was retired: Settings alone controls the collector now";
+/** The latch row's body: the ruled sentence, then `; by <actor>`, as every coordination row names who acted. The
+ *  executor passes its own sweep actor. */
+export function collectLatchFeedBody(actor: string): string {
+  return `${COLLECT_LATCH_SAID}; by ${actor}`;
+}
+/** The title of a row that records a CHANGE to the switch's stored state: an accepted POST, and the latch
+ *  (path-identity spec 2026-10-12 §5.5). Never the flip row's `COLLECT_FEED_TITLE.switch`. */
+export const COLLECT_SETTING_FEED_TITLE = 'temp root collector setting changed';
+
+/** The view's counts (path-identity spec 2026-10-12 §5.7). */
+export interface CollectLaneCounts { readonly wouldCollect: number; readonly held: number; readonly boxLines: number }
+const COLLECT_WOULD_COLLECT_WORD = 'would-collect' satisfies CollectItemWord;
+const COLLECT_HELD_WORD = 'held' satisfies CollectItemWord;
+/** Is this item the terminal branch's? Its `word` is ccd's own, so a ccd word spelled like one of this build's is never
+ *  that word. The branch is told apart by its collapsed clause, which only it returns. */
+const collectItemTerminal = (t: CollectItemText): boolean => t.many === COLLECT_TERMINAL_MANY;
+
+/** The would-collect and held counts the Settings view shows (path-identity spec 2026-10-12 §5.7). The PWA counts
+ *  nothing, so the server counts, by the items' OWN precedence (`collectItemOf`), never by a second ladder:
+ *  - `wouldCollect`: ids whose item is shadow's would-collect;
+ *  - `held`: ids whose item is a per-id hold, plus the unvouched holds that join one box line instead of an item;
+ *  - `boxLines`: the box-wide lines standing, the unvouched line excluded (its ids are in `held`).
+ *  An id the temp-root id predicate refuses is never counted, as it is never listed, and neither is a terminal item.
+ *  Pure. */
+export function collectLaneCounts(i: {
+  readonly entries: ReadonlyMap<string, CollectAttentionView>;
+  readonly box: CollectBoxFacts;
+}): CollectLaneCounts {
+  const recordsSubsumed = collectRecordsInDoubt(i.box.unmeasured);
+  let wouldCollect = 0;
+  let held = 0;
+  for (const [id, v] of i.entries) {
+    if (!isTmpRootId(id)) continue;
+    const t = collectItemOf(id, v, recordsSubsumed);
+    if (t === 'unvouched') { held += 1; continue; }
+    if (t === null || collectItemTerminal(t)) continue;
+    if (t.word === COLLECT_WOULD_COLLECT_WORD) wouldCollect += 1;
+    else if (t.word === COLLECT_HELD_WORD) held += 1;
+  }
+  return { wouldCollect, held, boxLines: collectBoxItems(i.box, []).length };
+}
+
+// ── the Settings route's decisions and its view (path-identity spec 2026-10-12 §5.6, §5.7) ─────────────────────────
+//
+// Everything `GET`/`POST /api/coord/collect-lane` decides, so the route (`coord/routes.ts`, L4) only reads, awaits its
+// one registry listing, maps a decision to a status and calls the store's one writer. Pure, like the rest of this file:
+// the boot nonce, both epochs, the current node, the capabilities and the counts arrive as arguments. Nothing here
+// spells a capability token or the generation journal's file name, and no sentence carries a path.
+
+/** The keys a POST body may name, each a `CollectLaneRequest` field, enumerated once. */
+const COLLECT_LANE_REQUEST_KEYS = ['choice', 'confirm'] as const satisfies readonly (keyof CollectLaneRequest)[];
+/** A confirm key as `collectConfirmKey` writes it. A `confirm` of any other shape is refused before anything is read. */
+const COLLECT_CONFIRM_KEY_RE = /^[0-9a-f]{8}$/;
+/** How many code points a sentence quotes of an unknown body key or a stored choice token, and of a node id. */
+const COLLECT_LANE_WORD_MAX = 32;
+const COLLECT_LANE_NODE_MAX = 64;
+
+/** `text` as one plain bounded line: `childReclaimDetailText` turns every control, format and separator character into
+ *  a space and trims the ends, then at most `max` code points are kept, an ellipsis marking a cut. */
+function collectBoundedWords(text: string, max: number): string {
+  const cps = [...childReclaimDetailText(text)];
+  return cps.length <= max ? cps.join('') : `${cps.slice(0, max).join('')}…`;
+}
+
+/** The POST body, decided: the request, or a refusal whose detail names what was wrong. Two shapes, never a nullable
+ *  request. */
+export type CollectLaneBody =
+  | { readonly ok: true; readonly request: CollectLaneRequest }
+  | { readonly ok: false; readonly detail: string };
+
+/** Path-identity spec §5.6's 400, decided from the body alone, before anything is read. Refuses, never clamps:
+ *  - a body that is not an object;
+ *  - an unknown key, named and bounded, so a newer page sending a field this server lacks hears it was not applied;
+ *  - a choice `isCollectLaneChoice` refuses (`LIVE`, `toString` and `shadowed` among them), or none;
+ *  - a `confirm` that is present and is not eight lowercase hex characters.
+ *  An absent `confirm` stays absent: no key is invented. */
+export function decideCollectLaneBody(body: unknown): CollectLaneBody {
+  if (!isObject(body)) return { ok: false, detail: 'body must be an object' };
+  for (const k of Object.keys(body)) {
+    if (!(COLLECT_LANE_REQUEST_KEYS as readonly string[]).includes(k)) {
+      return {
+        ok: false,
+        detail: `unknown key ${collectBoundedWords(k, COLLECT_LANE_WORD_MAX)}: a request names only ${COLLECT_LANE_REQUEST_KEYS.join(' and ')}`,
+      };
+    }
+  }
+  const choice = body.choice;
+  if (!isCollectLaneChoice(choice)) return { ok: false, detail: 'choice must be off or live' };
+  if (!hasOwn(body, 'confirm')) return { ok: true, request: { choice } };
+  const confirm = body.confirm;
+  if (typeof confirm !== 'string' || !COLLECT_CONFIRM_KEY_RE.test(confirm)) {
+    return { ok: false, detail: 'confirm must be the eight lowercase hex characters a 409 answered with' };
+  }
+  return { ok: true, request: { choice, confirm } };
+}
+
+/** Every fact a Live confirm stands on (path-identity spec §5.6): the server process (`boot`, a nonce minted once per
+ *  process in `index.ts`), the connection epoch after the listing, the directly measured node, the expected row, the
+ *  journal maximum (`missing` for the untouched bootstrap), the marker as listed, both capabilities and the pause.
+ *  The key's input only: the wire's `facts` carry neither the nonce nor the epoch. */
+export interface CollectLaneKeyFacts {
+  readonly boot: string; readonly epoch: number; readonly node: string;
+  readonly row: { readonly choice: string; readonly fleetNodeId: string | null; readonly markerRetiredAt: number | null; readonly generation: number };
+  readonly journal: number | 'missing'; readonly marker: 'stands' | 'absent';
+  readonly caps: CollectLaneCaps; readonly paused: boolean;
+}
+
+/** The canonical JSON the confirm key hashes: object keys sorted at every depth, arrays in order, every other value as
+ *  `JSON.stringify` writes it. Two fact objects holding the same values hash the same, whatever order built them. */
+function collectCanonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map((x) => collectCanonicalJson(x)).join(',')}]`;
+  if (isObject(v)) {
+    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${collectCanonicalJson(v[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v);
+}
+
+/** The confirm key (path-identity spec §5.6): eight lowercase hex characters of a 32-bit FNV-1a over the facts'
+ *  canonical JSON, over UTF-16 code units in plain JavaScript, so no `node:crypto` (the stall door's hash, over
+ *  canonical JSON here). A staleness check, not a credential: the session gate guards the door, and because the boot
+ *  nonce is a fact, a key a previous server process answered never matches. */
+export function collectConfirmKey(facts: CollectLaneKeyFacts): string {
+  const s = collectCanonicalJson(facts);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+/** What the POST decides over: the parsed request, and the reads the route took AFTER its one listing's await. */
+export interface CollectPostInput {
+  readonly request: CollectLaneRequest; readonly row: CollectLaneRowRead; readonly journal: CollectLaneJournalRead;
+  readonly switches: CollectLaneSwitches; readonly epoch: CollectEpochPair; readonly node: CollectCurrentNode;
+  readonly caps: CollectLaneCaps; readonly boot: string; readonly counts: CollectLaneCounts | null;
+}
+/** The POST's decision; the route maps each kind to one status: 503, 409 `marker-still-controls`, 409 with the confirm
+ *  body, or the store's write. */
+export type CollectPostDecision =
+  | { readonly kind: 'unmeasurable'; readonly detail: string }
+  | { readonly kind: 'marker' }
+  | { readonly kind: 'confirm'; readonly body: CollectLaneConfirmRequired }
+  | { readonly kind: 'write'; readonly request: CollectLaneWriteRequest };
+
+type CollectLaneMeasured = Extract<CollectLaneControl, { kind: 'coherent' | 'mismatch' }>;
+/** The journal fact: its maximum, or `missing` for the untouched bootstrap, read off the measured control. */
+const collectJournalFact = (c: CollectLaneMeasured): number | 'missing' =>
+  c.kind === 'mismatch' ? c.journalMax : c.bootstrap ? 'missing' : c.generation;
+/** The sheet's repair fact: which way a measurable mismatch leans, or null when row and journal agree. */
+const collectRepairFact = (c: CollectLaneMeasured): 'journal-ahead' | 'journal-behind' | null =>
+  c.kind === 'coherent' ? null : c.journalMax > c.rowGeneration ? 'journal-ahead' : 'journal-behind';
+
+/** The marker as one listing measured it. An unlistable registry carries no marker (its switches arm has none), so it
+ *  is `unmeasured`, never `absent`. */
+function collectListingOf(sw: CollectLaneSwitches): 'stands' | 'absent' | 'unmeasured' {
+  if (!sw.paused) return sw.marker ? 'stands' : 'absent';
+  if (sw.why === 'unlistable') return 'unmeasured';
+  return sw.marker ? 'stands' : 'absent';
+}
+
+/** Why the control state cannot be measured, as a 503's detail: bounded, no path, no errno. */
+const COLLECT_LANE_UNMEASURABLE_TEXT: Readonly<Record<CollectLaneUnmeasurable, string>> = {
+  'row-absent': "the collector's settings row is missing",
+  'row-unreadable': "the collector's settings row cannot be read",
+  'row-malformed': "the collector's settings row holds a value this build cannot read",
+  'journal-missing': "the collector's generation journal is missing beside a settings row that has been used",
+  'journal-malformed': "the collector's generation journal is malformed",
+  'journal-unreadable': "the collector's generation journal cannot be read",
+  'journal-not-regular': "the collector's generation journal is not a regular file",
+  'journal-not-configured': "this server runs without the collector's generation journal",
+};
+/** Why Live cannot be confirmed on what the POST measured. */
+type CollectLiveUnmeasurable = 'unlistable' | 'epoch-moved' | 'node-unmeasured' | 'node-collision' | 'node-earlier-connection';
+const COLLECT_LIVE_UNMEASURABLE_TEXT: Readonly<Record<CollectLiveUnmeasurable, string>> = {
+  unlistable: "the fleet box's registry could not be listed, so whether its legacy file stands is unknown",
+  'epoch-moved': 'the fleet connection changed while the registry was being listed',
+  'node-unmeasured': 'the fleet node on the current connection is not measured yet',
+  'node-collision': "the fleet node's id on the current connection keys another live inventory row",
+  'node-earlier-connection': 'the fleet node was measured on an earlier connection',
+};
+const collectLiveUnmeasurable = (why: CollectLiveUnmeasurable): CollectPostDecision =>
+  ({ kind: 'unmeasurable', detail: COLLECT_LIVE_UNMEASURABLE_TEXT[why] });
+
+/** The POST's decision from the 503 down (path-identity spec §5.6), over reads the route took AFTER its one listing's
+ *  await, so a write that landed during it is in the facts and an earlier key is stale:
+ *  1. a row and journal that cannot be measured: `unmeasurable`, for both choices, before any 409;
+ *  2. Off reads no listing, no epoch and no node. A null latch is `marker` (409 `marker-still-controls`), whatever the
+ *     listing says; a set latch is a write, even on an unlistable registry or a moved epoch, and it repairs a mismatch;
+ *  3. Live needs a listed registry, an unmoved epoch and a node measured on this connection, else `unmeasurable`;
+ *  4. Live's facts are keyed by `collectConfirmKey`: no `confirm` is `confirm-required`, a different one is
+ *     `confirm-stale`, each carrying the fresh facts and key; a match writes, carrying the row and journal reads
+ *     themselves as the store's expectation. A no-op Live still needs the key: the store, not this decision, finds it.
+ *  Live stays confirmable with a capability missing or the pause standing: both are on the sheet and in the key. */
+export function decideCollectLanePost(i: CollectPostInput): CollectPostDecision {
+  const control = collectLaneControl(measureCollectLaneRow(i.row), i.journal);
+  if (control.kind === 'unmeasurable') return { kind: 'unmeasurable', detail: COLLECT_LANE_UNMEASURABLE_TEXT[control.why] };
+  if (i.request.choice === 'off') {
+    if (control.row.markerRetiredAt === null) return { kind: 'marker' };
+    return { kind: 'write', request: { kind: 'off' } };
+  }
+  const listing = collectListingOf(i.switches);
+  if (listing === 'unmeasured') return collectLiveUnmeasurable('unlistable');
+  if (i.epoch.before !== i.epoch.after) return collectLiveUnmeasurable('epoch-moved');
+  const node = i.node;
+  if (node.kind === 'unmeasured') return collectLiveUnmeasurable('node-unmeasured');
+  if (node.kind === 'collision') return collectLiveUnmeasurable('node-collision');
+  if (node.connectionEpoch !== i.epoch.after) return collectLiveUnmeasurable('node-earlier-connection');
+  const caps: CollectLaneCaps = { collect: i.caps.collect, reclaimPause: i.caps.reclaimPause };
+  const paused = i.switches.paused;
+  const r = control.row;
+  const confirmKey = collectConfirmKey({
+    boot: i.boot, epoch: i.epoch.after, node: node.nodeId,
+    row: { choice: r.choice, fleetNodeId: r.fleetNodeId, markerRetiredAt: r.markerRetiredAt, generation: r.generation },
+    journal: collectJournalFact(control), marker: listing, caps, paused,
+  });
+  const facts: CollectLaneConfirmRequired['facts'] = {
+    node: { nodeId: node.nodeId, measuredAt: node.measuredAt },
+    caps,
+    paused,
+    marker: listing,
+    repair: collectRepairFact(control),
+    attention: i.counts === null ? null : { wouldCollect: i.counts.wouldCollect, held: i.counts.held, boxLines: i.counts.boxLines },
+  };
+  if (i.request.confirm === undefined) return { kind: 'confirm', body: { ok: false, error: 'confirm-required', confirmKey, facts } };
+  if (i.request.confirm !== confirmKey) return { kind: 'confirm', body: { ok: false, error: 'confirm-stale', confirmKey, facts } };
+  return { kind: 'write', request: { kind: 'live', fleetNodeId: node.nodeId, expected: i.row, expectedJournal: i.journal } };
+}
+
+/** The measured row, when the read is one (`seed` or `row`); null when it is not a readable row. One meaning. */
+const collectRowOf = (m: CollectLaneRowMeasure): CollectLaneRow | null => (m.kind === 'seed' || m.kind === 'row' ? m.row : null);
+
+/** A row as the change body names it: the choice (a future token quoted and bounded), and its node when it has one. */
+function collectRowWords(m: CollectLaneRowMeasure): string {
+  switch (m.kind) {
+    case 'seed':
+    case 'row': {
+      const choice = isCollectLaneChoice(m.row.choice) ? m.row.choice
+        : `the unknown token ${JSON.stringify(collectBoundedWords(m.row.choice, COLLECT_LANE_WORD_MAX))}`;
+      return m.row.fleetNodeId === null ? choice
+        : `${choice} for fleet node ${collectBoundedWords(m.row.fleetNodeId, COLLECT_LANE_NODE_MAX)}`;
+    }
+    case 'malformed': return 'a malformed row';
+    case 'unreadable': return 'an unreadable row';
+    case 'absent': return 'no row';
+    default: { const unnamed: never = m; return unnamed; }
+  }
+}
+
+/** The accepted POST's feed body (path-identity spec §5.5): `choice <before> → <after> (generation <g>)`, the node for
+ *  a Live, then `, repairing a journal that disagreed with the database` whenever the row before and `journalBefore`
+ *  were a mismatch, either way. The repair is read from the journal as read before the append, never from the step
+ *  between generations: a behind journal (row 5, journal 4) is written at 6, one step, and is a repair all the same.
+ *  A latch retirement, which the POST never writes, is named too, so the body is true for every write. No path; the
+ *  route appends the actor. */
+export function collectLaneSettingChange(before: CollectLaneRowRead, after: CollectLaneRowRead,
+  journalBefore: CollectLaneJournalRead): string {
+  const was = measureCollectLaneRow(before);
+  const now = measureCollectLaneRow(after);
+  const wasRow = collectRowOf(was);
+  const nowRow = collectRowOf(now);
+  const generation = nowRow === null ? '' : ` (generation ${nowRow.generation})`;
+  const retired = wasRow !== null && nowRow !== null && wasRow.markerRetiredAt === null && nowRow.markerRetiredAt !== null
+    ? ", retiring the fleet box's legacy file" : '';
+  const repaired = collectLaneControl(was, journalBefore).kind === 'mismatch'
+    ? ', repairing a journal that disagreed with the database' : '';
+  return `choice ${collectRowWords(was)} → ${collectRowWords(now)}${generation}${retired}${repaired}`;
+}
+
+/** Whether a coherent re-read shows what the request asked for: Live for its node, Off with no node, a set latch. */
+function collectWriteTargetShown(request: CollectLaneWriteRequest, r: CollectLaneRow): boolean {
+  switch (request.kind) {
+    case 'live': return r.choice === 'live' && r.fleetNodeId === request.fleetNodeId;
+    case 'off': return r.choice === 'off' && r.fleetNodeId === null;
+    case 'retire': return r.markerRetiredAt !== null;
+    default: { const unnamed: never = request; return unnamed; }
+  }
+}
+
+/** A 200's proof (path-identity spec §5.6): a synchronous re-read that is coherent and shows the requested target.
+ *  - `generation` a number (the store wrote): the re-read stands at exactly that generation.
+ *  - `generation` null (the store answered unchanged): for Live and retire, at the expected row's own generation; for
+ *    Off, which carries no expectation by design (Off wins over a concurrent Live), the coherent re-read showing off
+ *    with no node is the proof.
+ *  Never `true` on the store's word alone. */
+export function collectLaneWriteProved(request: CollectLaneWriteRequest, generation: number | null,
+  row: CollectLaneRowRead, journal: CollectLaneJournalRead): boolean {
+  const c = collectLaneControl(measureCollectLaneRow(row), journal);
+  if (c.kind !== 'coherent' || !collectWriteTargetShown(request, c.row)) return false;
+  if (generation !== null) return c.generation === generation;
+  if (request.kind === 'off') return true;
+  const was = collectRowOf(measureCollectLaneRow(request.expected));
+  return was !== null && was.generation === c.generation;
+}
+
+/** A 200 POST's notice: when the choice applies, and the stated residual it cannot reach. */
+export const COLLECT_LANE_APPLIES_TEXT: string =
+  "The choice applies from the collector's next check; a removal already handed to ccd is not stopped.";
+
+/** The view's input. The row admits no `absent` read (the route answers 503 for it), and the journal no
+ *  `not-configured` read (a server built without the journal answers 501 before any view). */
+export interface CollectLaneViewInput {
+  readonly row: Exclude<CollectLaneRowRead, { kind: 'absent' }>;
+  readonly journal: Exclude<CollectLaneJournalRead, { kind: 'not-configured' }>;
+  readonly switches: CollectLaneSwitches; readonly epoch: CollectEpochPair; readonly node: CollectCurrentNode;
+  readonly caps: CollectLaneCaps; readonly counts: CollectLaneCounts | null; readonly notice: string | null;
+}
+
+type CollectViewState = CollectLaneView['effective']['state'];
+/** A stopped resolver arm as the Settings section names it: the pause is its own state; every other stop is a fact
+ *  this server could not measure, so the fleet is unknown. */
+const COLLECT_STOP_STATE: Readonly<Record<CollectLaneStopWhy, CollectViewState>> = {
+  raised: 'paused', unlistable: 'unknown-fleet', 'epoch-changed': 'unknown-fleet', 'unknown-fleet': 'unknown-fleet',
+};
+function collectViewState(r: CollectLaneEffective): CollectViewState {
+  switch (r.kind) {
+    case 'stopped': return COLLECT_STOP_STATE[r.why];
+    case 'not-running':
+    case 'safety-stopped':
+    case 'live':
+    case 'shadowed': return r.kind;
+    default: { const unnamed: never = r; return unnamed; }
+  }
+}
+
+function collectStoredView(m: CollectLaneRowMeasure): CollectLaneView['stored'] {
+  switch (m.kind) {
+    case 'seed':
+    case 'row':
+      return { read: 'row', choice: m.row.choice, fleetNodeId: m.row.fleetNodeId, markerRetiredAt: m.row.markerRetiredAt,
+        generation: m.row.generation, updatedAt: m.row.updatedAt };
+    case 'malformed': return { read: 'malformed' };
+    case 'unreadable': return { read: 'unreadable' };
+    case 'absent': throw new Error('collectLaneView: an absent row never reaches the view; the route answers 503 for it');
+    default: { const unnamed: never = m; return unnamed; }
+  }
+}
+
+function collectJournalView(j: CollectLaneViewInput['journal']): CollectLaneView['journal'] {
+  switch (j.kind) {
+    case 'ok': return { read: 'ok', max: j.max };
+    case 'missing':
+    case 'malformed':
+    case 'unreadable':
+    case 'not-regular': return { read: j.kind };
+    default: { const unnamed: never = j; return unnamed; }
+  }
+}
+
+function collectControlView(c: CollectLaneControl): CollectLaneView['control'] {
+  switch (c.kind) {
+    case 'coherent': return { state: 'coherent', bootstrap: c.bootstrap };
+    case 'mismatch': return { state: 'mismatch', journal: c.journalMax > c.rowGeneration ? 'ahead' : 'behind' };
+    case 'unmeasurable': return { state: 'unmeasurable' };
+    default: { const unnamed: never = c; return unnamed; }
+  }
+}
+
+/** The current node as the view shows it, with how the stored node compares. A node is `known` only when measured on
+ *  the epoch after the listing; one measured on an earlier connection is not this connection's, so it reads
+ *  `unmeasured`. `unread` means the stored row is not a readable row. */
+function collectNodeView(node: CollectCurrentNode, epochNow: number, row: CollectLaneRow | null): CollectLaneView['node'] {
+  if (node.kind === 'known' && node.connectionEpoch === epochNow) {
+    const stored = row === null ? 'unread' : row.fleetNodeId === null ? 'none' : row.fleetNodeId === node.nodeId ? 'this' : 'other';
+    return { state: 'known', nodeId: node.nodeId, measuredAt: node.measuredAt, stored };
+  }
+  const stored = row === null ? 'unread' : row.fleetNodeId === null ? 'none' : 'set';
+  return { state: node.kind === 'collision' ? 'collision' : 'unmeasured', stored };
+}
+
+/** The remedy for a control state no Settings write can repair: what to do, by hand, outside the route. */
+const COLLECT_LANE_UNMEASURABLE_REMEDY: Readonly<Record<CollectLaneUnmeasurable, string>> = {
+  'row-absent': "The collector's settings row is missing, and the server never inserts one. Re-insert the seed row by hand, with markerRetiredAt set if the legacy file was ever retired; a confirmed Live then repairs the generation.",
+  'row-unreadable': "The collector's settings row cannot be read. The collector removes nothing until the database answers.",
+  'row-malformed': "The collector's settings row holds a value this build cannot read. Repair the row by hand; Settings cannot.",
+  'journal-missing': "The collector's generation journal on the server box is missing beside a settings row that has been used. Write one record above the row's generation by hand, then confirm a choice again.",
+  'journal-malformed': "The collector's generation journal on the server box is malformed. Repair it by hand; Settings cannot.",
+  'journal-unreadable': "The collector's generation journal on the server box cannot be read. Repair it by hand; Settings cannot.",
+  'journal-not-regular': "The collector's generation journal on the server box is not a regular file. Replace it by hand; Settings cannot.",
+  'journal-not-configured': "This server runs without the collector's generation journal, so the collector removes nothing.",
+};
+const COLLECT_LANE_MISMATCH_REMEDY = {
+  preLatch: "Confirm Live again to repair it: the write takes a generation above both. Off waits until the fleet box's legacy file is retired.",
+  latched: 'Confirm Live again, or choose Off, to repair it: either write takes a generation above both.',
+} as const;
+const COLLECT_LANE_RECREATED_REMEDY =
+  `The fleet box's legacy file ${COLLECT_LANE_LIVE_MARKER} was re-created, and this server ignores it: remove it by hand on the fleet box.`;
+const COLLECT_LANE_NOT_RUNNING_REMEDY =
+  "The fleet box's ccd has not reported a capability this collector needs, so it removes nothing; if this persists, update the fleet box.";
+
+/** The one remedy the view carries, most pressing first: an unmeasurable control state, a mismatch, a re-created
+ *  marker, a missing capability. Null otherwise: the pause is deliberate, a stored Live for another node and a standing
+ *  marker before the latch are lines the Settings section says itself, and an unknown fleet clears on measurement. */
+function collectLaneRemedy(control: CollectLaneControl, listing: 'stands' | 'absent' | 'unmeasured', r: CollectLaneEffective): string | null {
+  if (control.kind === 'unmeasurable') return COLLECT_LANE_UNMEASURABLE_REMEDY[control.why];
+  const latched = control.row.markerRetiredAt !== null;
+  if (control.kind === 'mismatch') return latched ? COLLECT_LANE_MISMATCH_REMEDY.latched : COLLECT_LANE_MISMATCH_REMEDY.preLatch;
+  if (latched && listing === 'stands') return COLLECT_LANE_RECREATED_REMEDY;
+  if (r.kind === 'not-running') return COLLECT_LANE_NOT_RUNNING_REMEDY;
+  return null;
+}
+
+/** THE view composer (path-identity spec §5.6, §5.7): the GET's answer and a 200 POST's re-read. The only caller of
+ *  the resolver outside the executor. Nothing folds:
+ *  - the stored row is `row` (the raw token), `malformed` or `unreadable`;
+ *  - the journal keeps each of its five reads;
+ *  - the control state is coherent (and whether by bootstrap), a mismatch leaning ahead or behind, or unmeasurable;
+ *  - the latch is `set`/`unset` only while the row and journal are measurable, else `unmeasured`: a latch no journal
+ *    vouches for is not one the route acts on.
+ *  No field is a path; the remedy may name the marker file, through this file's own constant. */
+export function collectLaneView(i: CollectLaneViewInput): CollectLaneView {
+  const measured = measureCollectLaneRow(i.row);
+  const control = collectLaneControl(measured, i.journal);
+  const effective = collectLaneEffective({ switches: i.switches, epoch: i.epoch, caps: i.caps, control, node: i.node });
+  const listing = collectListingOf(i.switches);
+  return {
+    stored: collectStoredView(measured),
+    journal: collectJournalView(i.journal),
+    control: collectControlView(control),
+    effective: { state: collectViewState(effective), armedBy: effective.kind === 'live' ? effective.armedBy : 'neither' },
+    marker: {
+      listing,
+      latch: control.kind === 'unmeasurable' ? 'unmeasured' : control.row.markerRetiredAt === null ? 'unset' : 'set',
+    },
+    node: collectNodeView(i.node, i.epoch.after, collectRowOf(measured)),
+    caps: { collect: i.caps.collect, reclaimPause: i.caps.reclaimPause },
+    attention: i.counts === null ? null : { wouldCollect: i.counts.wouldCollect, held: i.counts.held, boxLines: i.counts.boxLines },
+    remedy: collectLaneRemedy(control, listing, effective),
+    notice: i.notice,
+  };
+}

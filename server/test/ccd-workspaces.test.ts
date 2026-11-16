@@ -2,11 +2,12 @@
 // owns. These tests source ccd under an isolated HOME, exactly as
 // ccd-limits.test.ts does, so nothing here can touch the real registry.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import path from 'node:path';
 import fs from 'node:fs';
-import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, SCAN_LOOKBACK_LINES, type CcdHarness } from './ccdWsHelpers.js';
-import { asManagerCalls } from './platformFixtures.js';
+import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, SCAN_LOOKBACK_LINES, seedAccountsSh, plantPoolEpoch, type CcdHarness } from './ccdWsHelpers.js';
+import { asManagerCalls, itLinux } from './platformFixtures.js'; import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 
 let h: CcdHarness;
 let home: string;
@@ -81,23 +82,23 @@ describe('slug rules', () => {
   });
 
   it('generates a slug that is itself valid', () => {
-    const slug = sh(`_ws_slug_new demo`);
+    makeRepo('demo'); const slug = sh(`_ws_slug_new demo`);   // a repo: it asks git too, and no repo is `unmeasurable`
     expect(sh(`_ws_slug_valid '${slug}' && echo yes || echo no`)).toBe('yes');
   });
 
   it('never collides with an existing registry entry', () => {
     // Pin the generator to one candidate, then occupy it.
-    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.uuid'), 'x');
+    makeRepo('demo'); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.uuid'), 'x');   // free in git: the REGISTRY refuses
     const slug = sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo || echo EXHAUSTED`);
     expect(slug).toBe('EXHAUSTED');
   });
 
   it('honours CCD_WS_SLUG when the name is free', () => {
-    expect(sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo`)).toBe('quiet-mesa');
+    makeRepo('demo'); expect(sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo`)).toBe('quiet-mesa');   // free in git too
   });
 
   it('rejects an invalid CCD_WS_SLUG rather than passing it through', () => {
-    expect(sh(`CCD_WS_SLUG=quiet.mesa _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');
+    makeRepo('demo'); expect(sh(`CCD_WS_SLUG=quiet.mesa _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');   // VALIDITY refuses
     expect(sh(`CCD_WS_SLUG=feat/thing _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');
   });
 });
@@ -119,16 +120,59 @@ describe('a partially purged registry never frees the slug', () => {
   // comment keeps this list; it is repeated here so the fixture is a full
   // registry entry rather than a plausible subset.
   const FIELDS = ['archived', 'archivedreason', 'archivemanifest', 'base', 'branch',
-    'compactnote', 'compactskip', 'home', 'hookstate.json', 'lastcompact', 'lastswap', 'pool', 'prnumber',
-    'project', 'reaping', 'setup', 'started', 'uuid', 'workdir', 'workspace', 'wrapper'];
+    'compactnote', 'compactskip', 'generation', 'home', 'hookstate.json', 'lastcompact', 'lastswap',
+    'pool', 'prnumber', 'project', 'reaping', 'setup', 'started', 'turn.json', 'uuid', 'workdir', 'workspace', 'wrapper'];
+  /** One DOT-LEADING private compaction family, so the fixture is a full
+   *  POST-D-2605 row rather than the dot-free half of one. `_ws_slug_free` now
+   *  refuses on these too, and `_reg_purge` takes them in a second loop the
+   *  dot-free one cannot see — so leaving them out would make the terminal
+   *  FREE prove less than it claims. */
+  const PRIVATE = '.demo-quiet-mesa.compactset.999.compact-1-999-1-2.stage';
 
   const seedFullEntry = (): string => {
     const regdir = path.join(home, '.cc-sessions');
     for (const f of fs.readdirSync(regdir)) {
       fs.rmSync(path.join(regdir, f), { recursive: true, force: true });
     }
-    for (const f of FIELDS) fs.writeFileSync(path.join(regdir, `demo-quiet-mesa.${f}`), 'x\n');
+    for (const f of FIELDS) {
+      // `generation` has a BYTE GRAMMAR the rest do not; a row seeded with `x`
+      // there is a present-INVALID generation, which is a different subject.
+      fs.writeFileSync(path.join(regdir, `demo-quiet-mesa.${f}`),
+        f === 'generation' ? '0189abcd-1234-5678-9abc-0123456789ab' : 'x\n');
+    }
+    fs.writeFileSync(path.join(regdir, PRIVATE), '');
     return regdir;
+  };
+
+  /** THE BUDGET BOUND, MEASURED RATHER THAN COUNTED BY HAND (D-2605).
+   *
+   *  The shipped bound was the literal `FIELDS.length + 2`, which held exactly
+   *  two budget steps of headroom past the purge's last unlink. Task 9 adds
+   *  three more `rm` calls inside the function's own body — the stable lock's
+   *  init source and its open alias, and the explicit generation unlink after
+   *  the archived/reaping tail — plus the dot-leading private-family loop, so
+   *  a hand-kept literal is now a number that drifts every time the protocol
+   *  gains a step. Measured on the shipped tree at the time of writing: 21 rm
+   *  calls before this task, 24 after, against a bound of 23 — i.e. the
+   *  literal had already gone BELOW the real count, and the only reason the
+   *  terminal FREE stayed reachable was that the old fixture seeded no
+   *  `generation` for the 24th `rm` to take.
+   *
+   *  So the bound is re-derived HERE, by replaying one unbudgeted purge under
+   *  a COUNTING shadow of the same shape. A guessed bound makes the assertion
+   *  pass while proving nothing, which is the failure `:164-166`'s own comment
+   *  exists to prevent. */
+  const measureRmCalls = (): number => {
+    seedFullEntry();
+    const out = sh(
+      `RMCALLS=0
+       rm() { RMCALLS=$(( RMCALLS + 1 )); command rm "$@"; }
+       _reg_purge demo-quiet-mesa
+       unset -f rm
+       echo "$RMCALLS"`);
+    const n = Number(out.trim().split('\n').pop());
+    expect(Number.isInteger(n) && n > 0, `the rm count did not measure: ${out}`).toBe(true);
+    return n;
   };
 
   it('holds at EVERY interruption point of _reg_purge, not just the disclosed one', () => {
@@ -139,8 +183,34 @@ describe('a partially purged registry never frees the slug', () => {
     // terminal state (nothing left, slug genuinely free) is covered too, and
     // the assertion is keyed off the MEASURED residue rather than off a
     // hardcoded expectation of which field goes when.
+    // TWO STEPS OF HEADROOM PAST THE MEASURED LAST UNLINK, which is what the
+    // shipped `FIELDS.length + 2` bought and what makes the terminal FREE
+    // reachable at all.
+    const RM_CALLS = measureRmCalls();
+    // THE COST RATCHET (r3 B-M5), and it has to be a LITERAL. The first form of
+    // this control asserted `verdicts.length === LAST + 1`, which is
+    // TAUTOLOGICAL — `LAST` is derived from this same measurement, so both
+    // sides move together and a mutant adding one `rm` to `_reg_purge` stayed
+    // GREEN (measured). The number that can actually change is the purge's own
+    // unlink count, so that is the one pinned: 29 today, which makes this `it`
+    // run 33 real `sh()` invocations, each taking the row's stable lock — one
+    // for `measureRmCalls` plus the loop's `RM_CALLS + 3`, measured by counting
+    // this file's own `sh` alias for one run of this `it`, not derived.
+    // IT WAS 25 UNTIL `_reg_purge` GAINED `_usage_purge "$id"` (ccd/ccd), whose
+    // two unconditional `rm -f` — the usage sidecar `$REG/usage/<id>.json` and
+    // its `.<id>.*.tmp` partials — take the count 25 → 27; they run mid-purge,
+    // between the `hookstate.json`/`turn.json` unlinks (the stall watch's `turn.json` made it 27 → 28, and the delegation join record's tail unlink after `generation` 28 → 29) and the `reaping`/`archived` tail, so
+    // this is a claim about the TOTAL and not about which unlink goes last. The
+    // function's third `rm`, `-rf` of `$REG/usage/<id>.agents`, stands behind a
+    // `[[ -d ]]` no fixture here satisfies, so it does not count today and WILL
+    // when one seeds that directory. When this reds, the protocol gained or
+    // lost an unlink: update the literal AND re-read this fixture's cost,
+    // because it is the thing that pushed the test past vitest's 20 s default
+    // and made it a load flake.
+    expect(RM_CALLS, 'the purge`s unlink count moved — this `it`s cost moved with it').toBe(29);
+    const LAST = RM_CALLS + 2;
     const verdicts: string[] = [];
-    for (let k = 0; k <= FIELDS.length + 2; k++) {
+    for (let k = 0; k <= LAST; k++) {
       seedFullEntry();
       const out = sh(
         `rm() { if (( RMBUDGET-- > 0 )); then command rm "$@"; fi; }
@@ -161,10 +231,15 @@ describe('a partially purged registry never frees the slug', () => {
     // one interruption that left residue, and the completed purge.
     expect(verdicts.filter((v) => v.endsWith('TAKEN')).length,
       'the budget never actually interrupted anything').toBeGreaterThan(0);
+    // SPELLED AS THE SAME EXPRESSION as the loop bound, so the two cannot drift.
     expect(verdicts[verdicts.length - 1],
       'the purge never ran to completion, so FREE was never proved reachable')
-      .toBe(`${FIELDS.length + 2}:FREE`);
-  });
+      .toBe(`${LAST}:FREE`);
+    // AND THE LOOP REALLY RAN ITS WHOLE BOUND. This one IS relative to `LAST`
+    // on purpose and covers the other failure: a `break` or an early `return`
+    // inside the loop, which the ratchet above cannot see.
+    expect(verdicts.length, 'the loop ran its whole derived bound').toBe(LAST + 1);
+  }, 60_000);
 
   it('refuses ws-add on the residue the purge is documented to leave', () => {
     // The one-field residue fix3-ccd.md disclosed and called harmless: an empty
@@ -179,7 +254,13 @@ describe('a partially purged registry never frees the slug', () => {
     expect(out, 'the refusal happened').toContain('REFUSED');
     expect(out, 'and it names the files holding the slug, which is the reclaim step')
       .toContain('slug in use: quiet-mesa');
-    expect(out).toContain('demo-quiet-mesa.{archived}');
+    // RETARGETED (D-2605). The `$REG/<id>.{…}` brace template is gone: it
+    // could not express the dot-LEADING private compaction families
+    // `_ws_slug_free` now also refuses on, so every path it printed for one
+    // would not exist. Both halves of what the line bought are kept — the root
+    // is named once, and the basename is named in full.
+    expect(out, 'the root is named once').toContain(path.join(home, '.cc-sessions'));
+    expect(out, 'and the basename in full').toContain('demo-quiet-mesa.archived');
     // Nothing was created: no worktree, no branch, no registry entry.
     expect(fs.existsSync(path.join(home, 'worktrees', 'demo', 'quiet-mesa'))).toBe(false);
     expect(reg('demo-quiet-mesa', 'uuid'), 'no new session inherited the marker').toBeNull();
@@ -188,7 +269,7 @@ describe('a partially purged registry never frees the slug', () => {
   });
 
   it('keeps the generator off a residue slug as well as the explicit one', () => {
-    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.reaping'), 'clips\n');
+    makeRepo('demo'); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.reaping'), 'clips\n');   // the residue refuses
     expect(sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo || echo EXHAUSTED`)).toBe('EXHAUSTED');
   });
 
@@ -202,6 +283,120 @@ describe('a partially purged registry never frees the slug', () => {
     fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.x-y.archived'), '');
     expect(sh(`_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN`)).toBe('FREE');
     expect(sh(`_ws_slug_residue demo quiet-mesa`)).toBe('');
+  });
+
+  // ── D-2605: the dot-LEADING private compaction families ────────────────
+  // `_ws_slug_free` globbed `"$REG/$id".*` — id, then a dot — and was
+  // therefore structurally blind to every `.<id>.…` name the compaction
+  // lifecycle creates. A slug handed back while one of those is present is a
+  // slug re-handed with a stranger's claim on it.
+  it('refuses a slug still holding a dot-leading private compaction family — for THAT id only', () => {
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-mesa.compactions.lock-open.1.2.3'), '');
+    // A SECOND LIVE ID sharing the prefix. THE COMMENT THAT STOOD HERE claimed
+    // this pair measured the nested-id hazard, and MEASURED it does not: with
+    // `demo-quiet-mesa-b.uuid` present, `quiet-mesa-b` is TAKEN by the DOT-FREE
+    // loop's own `.uuid` test, which returns before the dot-leading loop is
+    // entered at all — the verdict is byte-identical with the `.<id>.` anchor
+    // and without it. (Control, measured: delete that `.uuid` and the ORIGINAL
+    // answers FREE.) It is kept because it is a real property of the pair —
+    // a live neighbour holds its own slug — and the anchoring is measured
+    // below, where only the dot-leading loop can answer.
+    fs.writeFileSync(path.join(REG, 'demo-quiet-mesa-b.uuid'), 'x');
+    expect(sh('_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN'),
+      'the dot-leading family holds the slug').toBe('TAKEN');
+    expect(sh('_ws_slug_free demo quiet-mesa-b && echo FREE || echo TAKEN'),
+      'a live neighbour holds its own slug — by its .uuid, not by this family').toBe('TAKEN');
+    expect(sh('_ws_slug_free demo quiet-lake && echo FREE || echo TAKEN'),
+      'and an unrelated slug is free').toBe('FREE');
+    // EVERY REASON `_ws_slug_free` CAN REFUSE IS A REASON `_ws_slug_residue`
+    // CAN NAME. The two are pinned as a PAIR, so reverting either alone reds.
+    expect(sh('_ws_slug_residue demo quiet-mesa'))
+      .toBe('.demo-quiet-mesa.compactions.lock-open.1.2.3');
+  });
+
+  it('…and the anchoring is measured in the direction only the dot-leading loop can answer', () => {
+    // THE LEG THE ANCHOR ACTUALLY NEEDS, and it is the mirror of the one above:
+    // the residue is planted under the LONGER id and NEITHER id gets a dot-free
+    // field, so the dot-free loop cannot answer for either and only the
+    // `.<id>.` strip decides. On the shipped exact anchor `quiet-mesa` is FREE
+    // with empty residue; with the anchor widened to an unanchored
+    // `"$REG/.$id"*` glob it reads TAKEN and reports a PHANTOM residue that
+    // belongs to another id — `_ws_slug_new` would then skip that slug for
+    // ever and `cmd_ws_add` refuse it.
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-mesa-b.compactions.lock-open.1.2.3'), '');
+    expect(sh('_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN'),
+      'a NEIGHBOUR id\'s private family is not this slug\'s residue').toBe('FREE');
+    expect(sh('_ws_slug_residue demo quiet-mesa'),
+      'and nothing is named for it').toBe('');
+    // NON-VACUITY: the file really is there, and it really does hold its OWN
+    // slug — so the FREE above is the anchor and not a missing fixture.
+    expect(fs.existsSync(path.join(REG, '.demo-quiet-mesa-b.compactions.lock-open.1.2.3'))).toBe(true);
+    expect(sh('_ws_slug_free demo quiet-mesa-b && echo FREE || echo TAKEN'),
+      'the id it does belong to is held').toBe('TAKEN');
+    expect(sh('_ws_slug_residue demo quiet-mesa-b'))
+      .toBe('.demo-quiet-mesa-b.compactions.lock-open.1.2.3');
+  });
+
+  it('a DOTTED nested id\'s private family does not hold this slug either', () => {
+    // The other nested shape, and the one `_reg_purge`'s own header measures:
+    // project DIRECTORY names may hold dots, so `demo-quiet-mesa.x-y` is a
+    // legal id whose dot-leading families share this id's `.<id>.` prefix
+    // exactly. Only the SUFFIX rule — a private family name has no further dot
+    // before its own grammar — keeps it out.
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-mesa.x-y.compactions.lock-open.1.2.3'), '');
+    expect(sh('_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN')).toBe('FREE');
+    expect(sh('_ws_slug_residue demo quiet-mesa')).toBe('');
+  });
+
+  it('the PERMANENT lock is the sole exclusion: it never holds a slug, and never appears as residue', () => {
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-mesa.compactions.lock'), '');
+    // It spans row generations and safe reuse by design, so its presence
+    // proves HISTORY, not a live regime. Gating on it would wedge every
+    // ever-purged id for ever — `_reg_purge` mints one even for an id that
+    // never existed.
+    expect(sh('_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN')).toBe('FREE');
+    expect(sh('_ws_slug_residue demo quiet-mesa')).toBe('');
+  });
+
+  it('the ws-add refusal names what it found, and EVERY path it names EXISTS', () => {
+    makeRepo('demo');
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-basin.compactions.lock-open.1.2.3'), '');
+    fs.writeFileSync(path.join(REG, 'demo-quiet-basin.archived'), '');
+    // A second LIVE id sharing the prefix, so the message cannot be right by
+    // naming everything in $REG.
+    fs.writeFileSync(path.join(REG, 'demo-quiet-basin-mesa.uuid'), 'x');
+    // POSITIONAL, because `--slug` is not a flag `cmd_ws_add` has: its arg
+    // loop's catch-all would bind `project` to the literal `--slug`, which
+    // `_ws_project_valid` refuses (a leading dash), so the verb would die at its
+    // check long before the slug gate and this test would pass for the wrong
+    // reason.
+    const out = sh(`${WS_ADD} ( cmd_ws_add demo quiet-basin ) 2>&1 || echo REFUSED`);
+    expect(out, '(a) it refuses').toContain('REFUSED');
+    expect(out).toContain('slug in use: quiet-basin');
+    // (b) the exact basename — not an empty brace pair naming no file.
+    expect(out).toContain('.demo-quiet-basin.compactions.lock-open.1.2.3');
+    expect(out).toContain('demo-quiet-basin.archived');
+    expect(out, 'the neighbour id is not named').not.toContain('demo-quiet-basin-mesa.uuid');
+    // (c) THE MUTATION-EFFECTIVE PART: parse the message and stat every path
+    // it names. This is what the `$REG/<id>.{…}` template could never satisfy
+    // for a dot-leading family, and it is why the die had to change alongside
+    // the function rather than after it.
+    // ANCHORED ON THE EM DASH the message actually uses: a bare `/in (\S+): /`
+    // matches "slug in use: " first and captures `use` as the root, which read
+    // as a real failure of the assertion rather than of the parse.
+    const m = /— in (\S+): (.*)$/m.exec(out);
+    expect(m, 'the message roots the list once and then lists basenames').not.toBeNull();
+    const root = m![1]!;
+    const named = m![2]!.trim().split(', ').filter((x) => x !== '');
+    expect(named.length, 'it named something').toBeGreaterThan(0);
+    for (const base of named) {
+      expect(fs.existsSync(path.join(root, base)), `the message names a path that exists: ${base}`).toBe(true);
+    }
   });
 });
 
@@ -266,6 +461,55 @@ describe('ws-add', () => {
     fs.mkdirSync(path.join(wt, 'graphify-out'));
     // the gate the sweep uses, asked in the WORKTREE (common-dir sharing is the point):
     expect(() => h.git(wt, 'check-ignore', '-q', 'graphify-out')).not.toThrow();
+  });
+
+  // Graph revision 2 (D-7350, spec §6.1): a tree's graphify-out becomes a LINK to its repository's shared graph, and
+  // the slash-only line above does not ignore a symlink (`git status` lists it, `git worktree remove` refuses the
+  // tree). ws-add writes the no-slash line too, once.
+  it('ws-add excludes graphify-out with no slash, so a graphify-out LINK is ignored', () => {
+    const main = makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    const lines = excludeOf(main).split('\n');
+    expect(lines.filter((l) => l === 'graphify-out')).toHaveLength(1);
+    const wt = path.join(home, 'worktrees', 'demo', 'quiet-mesa');
+    fs.symlinkSync(path.join(home, 'graph-store-current'), path.join(wt, 'graphify-out'));
+    expect(() => h.git(wt, 'check-ignore', '-q', 'graphify-out')).not.toThrow();
+    expect(h.git(wt, 'status', '--porcelain')).toBe('');
+  });
+
+  // Measured live on the fleet: a workspace whose `node_modules` is a SYMLINK
+  // to a shared cache (an operator's way to skip a fresh `npm install` per
+  // workspace) left `ws-rm` permanently refusing with `dirty-tree`, because a
+  // directory-only gitignore pattern (`node_modules/`, trailing slash) does
+  // not match a symlink even when it points at a directory — git's own
+  // documented rule for that pattern shape. `ws-add`'s lines for this pair
+  // carry NO trailing slash for exactly that reason, so this is the case the
+  // trailing-slash graphify-out/ test above cannot cover.
+  it('ws-add excludes node_modules and cdk.out, including a node_modules SYMLINK', () => {
+    const main = makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    // EXACT LINES, not `toContain`: the whole mechanism of this fix is the
+    // ABSENCE of a trailing slash, and `'node_modules/'.includes('node_modules')`
+    // is true — a regression to the directory-only spelling would satisfy a
+    // substring assertion while reintroducing the bug in full.
+    const lines = excludeOf(main).split('\n');
+    for (const line of ['node_modules', 'cdk.out']) expect(lines).toContain(line);
+    for (const line of ['node_modules/', 'cdk.out/']) expect(lines).not.toContain(line);
+    const wt = path.join(home, 'worktrees', 'demo', 'quiet-mesa');
+
+    // BOTH names get the symlink shape, not just node_modules. A real
+    // DIRECTORY is matched by the directory-only spelling too, so exercising
+    // `cdk.out` as a plain mkdir pins nothing about the slash — the behaviour
+    // would stay green on the regression the two assertions above now catch.
+    const cache = path.join(home, 'shared-build-cache');
+    fs.mkdirSync(cache);
+    for (const name of ['node_modules', 'cdk.out']) {
+      fs.symlinkSync(cache, path.join(wt, name), 'dir');
+      expect(() => h.git(wt, 'check-ignore', '-q', name)).not.toThrow();
+    }
+    // The property that actually unblocks ws-rm: git considers the tree clean
+    // with the symlinks present, not merely that check-ignore names them.
+    expect(h.git(wt, 'status', '--porcelain')).toBe('');
   });
 
   // ...and the environment does not get to redirect that write. The test above
@@ -556,14 +800,15 @@ describe('cmd_stop', () => {
     + `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; };`;
 
   it('takes a workspace id whole rather than reversing it into a wrapper', () => {
-    expect(sh(`${STOP} cmd_stop rp-llm-quiet-mesa`)).toBe('stopped rp-llm-quiet-mesa');
+    expect(sh(`${STOP} cmd_stop project-j-quiet-mesa`)).toBe('stopped project-j-quiet-mesa');
     expect(calls()).toEqual([
       // cmd_stop's own `_lc_done` (task 18) is the first `_lc_emit` in this
       // process, so `_lc_obs`'s once-per-process `tmux list-panes` probe fires
       // before the disable/kill pair.
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
-      'systemctl --user disable --now claude-session@rp-llm-quiet-mesa',
-      'tmux kill-session -t cc-rp-llm-quiet-mesa',
+      'systemctl --user disable --now claude-session@project-j-quiet-mesa',
+      'tmux list-panes -t =cc-project-j-quiet-mesa: -F #{pane_pid}',   // D-7902: the pane's scope, read after the disable and before the kill
+      'tmux kill-session -t =cc-project-j-quiet-mesa:',
     ]);
   });
 
@@ -572,7 +817,8 @@ describe('cmd_stop', () => {
     expect(calls()).toEqual([
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'systemctl --user disable --now claude-session@claude-a-demo',
-      'tmux kill-session -t cc-claude-a-demo',
+      'tmux list-panes -t =cc-claude-a-demo: -F #{pane_pid}',   // D-7902: the pane's scope, read after the disable and before the kill
+      'tmux kill-session -t =cc-claude-a-demo:',
     ]);
   });
 });
@@ -621,7 +867,7 @@ describe('ws-rm', () => {
       // prove gets written.
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
-      'tmux kill-session -t cc-demo-quiet-mesa',
+      'tmux kill-session -t =cc-demo-quiet-mesa:',
     ]);
   });
 
@@ -689,8 +935,50 @@ describe('ws-rm', () => {
     expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
   });
 
+  // `status.showUntrackedFiles=no` hides untracked files from a plain
+  // `status --porcelain` — and under it `git worktree remove` deletes them
+  // with no --force (git 2.43). So the dirty read says `--untracked-files=all`,
+  // and the config cannot make an untracked file read clean.
+  for (const configured of [true, false]) {
+    it(`refuses an untracked-only worktree ${configured ? 'UNDER status.showUntrackedFiles=no' : '— the control, without that config'}`, () => {
+      const wt = addOne();
+      if (configured) execFileSync('git', ['-C', main(), 'config', 'status.showUntrackedFiles', 'no']);
+      fs.writeFileSync(path.join(wt, 'notes.md'), 'draft\n');
+      expect(execFileSync('git', ['-C', wt, 'status', '--porcelain'], { encoding: 'utf8' }).trim(),
+        'the CONTROL: what a plain status read says here').toBe(configured ? '' : '?? notes.md');
+      expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow(/uncommitted changes/);
+      expect(fs.readFileSync(path.join(wt, 'notes.md'), 'utf8')).toBe('draft\n');
+      expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+      expect(branches('ws/quiet-mesa')).not.toBe('');
+      expect(calls(), 'nothing is torn down').toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
+    });
+  }
+
   it('refuses an unknown id', () => {
     expect(() => sh(`${RM} cmd_ws_rm nope-nothing`)).toThrow();
+  });
+
+  // The end-to-end case the "excludes node_modules and cdk.out" test above
+  // (`ws-add`) stops just short of: not merely that git considers the tree
+  // clean, but that `ws-rm` itself now actually tears the workspace down
+  // instead of refusing `dirty-tree` — the exact live-fleet failure this fix
+  // closes. Contrast with "refuses an untracked-only worktree" just above,
+  // which still refuses: the excluded name is the only thing that changed.
+  //
+  // The symlink TARGET is asserted to survive, and that is not paranoia.
+  // Measured on this fleet, the live symlinks do not point at a scratch cache
+  // at all — they point into ANOTHER WORKSPACE's tree — so a teardown that
+  // followed one would delete a second, still-live workspace's node_modules.
+  it('removes a workspace whose node_modules is a symlink, and leaves the symlink target standing', () => {
+    const wt = addOne();
+    const cache = path.join(home, 'shared-build-cache');
+    fs.mkdirSync(cache);
+    fs.writeFileSync(path.join(cache, 'keep.txt'), 'someone else needs this\n');
+    fs.symlinkSync(cache, path.join(wt, 'node_modules'), 'dir');
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`);
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(fs.readFileSync(path.join(cache, 'keep.txt'), 'utf8')).toBe('someone else needs this\n');
   });
 
   it('keeps an unmerged branch and its commit after removing a clean, ahead-of-base workspace', () => {
@@ -964,7 +1252,7 @@ describe('ws-rm', () => {
       // prove gets written.
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
-      'tmux kill-session -t cc-demo-quiet-mesa',
+      'tmux kill-session -t =cc-demo-quiet-mesa:',
     ]);
   });
 
@@ -1025,7 +1313,7 @@ describe('ws-rm', () => {
       // prove gets written.
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
-      'tmux kill-session -t cc-demo-quiet-mesa',
+      'tmux kill-session -t =cc-demo-quiet-mesa:',
     ]);
   });
 
@@ -1057,7 +1345,7 @@ describe('ws-rm', () => {
       // prove gets written.
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
-      'tmux kill-session -t cc-demo-quiet-mesa',
+      'tmux kill-session -t =cc-demo-quiet-mesa:',
     ]);
   });
 
@@ -1177,6 +1465,7 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
     const files = fs.readdirSync(dir).filter((f) => /^ccd.*\.ts$/.test(f));
     expect(files.length).toBeGreaterThanOrEqual(7);
     let asked = 0;
+    let grouped = 0;
     for (const f of files) {
       const src = fs.readFileSync(path.join(dir, f), 'utf8').split('\n');
       src.forEach((ln, i) => {
@@ -1191,7 +1480,11 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
         // must be observed mid-flight cannot be a synchronous call, and the
         // scan's claim is about every bash call site, not every convenient
         // one. Matched by the same alternation so a reader sees one rule.
-        if (!/(?:execFileSync|spawnSync|spawn)\((?:'bash'|BASH)[,)]/.test(ln)) return;
+        // `spawnSyncGroup` joined them when `spawn-group-pin.test.ts` began
+        // sending every timed shell spawn there (#896): it is `spawnSync` in a
+        // process group of its own, and a bash spawned that way reaches the same
+        // gh, systemctl and tmux.
+        if (!/(?:execFileSync|spawnSync(?:Group)?|spawn)\((?:'bash'|BASH)[,)]/.test(ln)) return;
         // Either side of the call: `ccd-archive`'s `runCcd` builds its `opts`
         // object several lines above the spawn.
         const window = src.slice(Math.max(0, i - SCAN_LOOKBACK_LINES), i + 8).join('\n');
@@ -1220,11 +1513,14 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
         expect.soft(window, `${f}:${i + 1} runs ccd without asking for tmux containment`)
           .toContain('tmux: true');
         asked++;
+        if (ln.includes('spawnSyncGroup(')) grouped++;
       });
     }
     // The scan is only worth anything if it is scanning something: a refactor
     // that renamed the spawn helper would otherwise pass by matching nothing.
     expect(asked, 'the scan matched no ccd bash spawn at all').toBeGreaterThanOrEqual(12);
+    // The same for the grouped spelling: the sweep only ever moves sites to it, so the count only ever rises.
+    expect(grouped, 'the scan stopped seeing ccd bash spawns through spawnSyncGroup').toBeGreaterThanOrEqual(29);
   });
 
   it('puts the harness bin FIRST on PATH, whatever the caller passes', () => {
@@ -1232,5 +1528,552 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
     // what makes this structural rather than advisory.
     expect(h.sh('command -v gh')).toBe(path.join(h.home, '.local', 'bin', 'gh'));
     expect(h.sh('command -v gh', { PATH: '/usr/bin:/bin' })).toBe(path.join(h.home, '.local', 'bin', 'gh'));
+  });
+});
+
+// ── D-2605: THE WIDENED SELF-CHECKING SCAN (plan Task 9) ─────────────────
+// The plan widens this enumeration from `_ws_slug_residue` invocations and
+// assertions ALONE to their UNION with every assertion on `cmd_ws_add`'s die
+// message — any `server/test/**` line naming the `.{` brace template, or
+// asserting on the `slug in use:` string. Every member of the union must be
+// named in a disposition list, and an UNLISTED one reds.
+//
+// Each member WAS disposed correctly by Task 9, so the property holds today.
+// What was missing is the mechanism: a NEW `_ws_slug_residue` assertion, or a
+// new `slug in use:` one, added later and not thought about, reds nothing.
+describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposition list (plan Task 9)', () => {
+  const TESTS = path.resolve(__dirname);
+  /** THE UNION, three grammars. `\.{` is the brace template Task 9 deleted from
+   *  the die: it could not express the dot-LEADING private compaction families
+   *  `_ws_slug_free` now also refuses on, so every path it printed for one
+   *  would not exist. A surviving assertion on it is a test pinning a message
+   *  the code no longer produces. */
+  const GRAMMARS: Array<[string, RegExp]> = [
+    ['residue', /_ws_slug_residue/],
+    ['slug-in-use', /slug in use:/],
+    ['brace-template', /\$REG\/<id>\.\{|\$\{?REG\}?\/\$\{?id\}?\.\{/],
+  ];
+
+  /** THE DISPOSITION LIST, as DATA. Each entry names a file, the grammar it
+   *  belongs to, how many lines carry it, and what Task 9 did with them —
+   *  which is what makes an unlisted member visible as a count mismatch rather
+   *  than as prose nobody re-reads. */
+  const DISPOSITION: Array<{ file: string; grammar: string; count: number; what: string }> = [
+    { file: 'ccd-workspaces.test.ts', grammar: 'residue', count: 8,
+      what: 'three assertions on the ROOTED list form (the `_ws_slug_free`/`_ws_slug_residue` pair-pin, the permanent-lock exclusion, the empty case), the fixture that plants residue, the comment that states the pair rule, and — fix round 2, B-I3 — THREE more on the two NESTED-ID legs that measure the `.<id>.` anchoring in the direction only the dot-leading loop can answer: a hyphen-neighbour id holding its own family (this slug FREE, its residue empty; the neighbour TAKEN and named), and a DOTTED nested id (`demo-quiet-mesa.x-y`) whose family shares this id\'s exact `.<id>.` prefix' },
+    { file: 'ccd-workspaces.test.ts', grammar: 'slug-in-use', count: 3,
+      what: 'the two die assertions, retargeted to root-plus-basename, and the em-dash parse comment' },
+    { file: 'ccd-ws-slug-git.test.ts', grammar: 'slug-in-use', count: 3,
+      what: 'the named-slug refusal\'s GIT/DISK arm (ws-slug-collision) — three assertions that a branch, a path and a registered worktree each refuse under the same `slug in use:` prefix, the prefix kept so one grep finds every refusal; the registry arm\'s message is untouched' },
+    { file: 'workspaces-named-route.test.ts', grammar: 'slug-in-use', count: 2,
+      what: 'named workspaces S5: a stubbed ccd stderr carrying the die sentence — one in the 409 `slug-taken` case (with the registry residue after the em-dash, which the route must not forward) and one in the transport-failure case that must NOT read as a refusal; the server classifies the sentence, it never emits it' },
+    { file: 'workspace-create-plan.test.ts', grammar: 'slug-in-use', count: 1,
+      what: 'named workspaces S5: `classifyAddFailure`\'s own unit case, a refusal sentence beside a wrapper refusal proving the wrapper arm is read first; a stubbed stderr, not an assertion on ccd\'s message' },
+    { file: 'ccd-reg-set-atomic.test.ts', grammar: 'residue', count: 3,
+      what: 'retargeted to `<id>.`-prefixed basenames — one assertion and two comments naming the glob family it shares' },
+    { file: 'ccd-authdead.test.ts', grammar: 'residue', count: 1,
+      what: 'a comment naming the three globs that share the dot-leading second pass' },
+    { file: 'session-hook.test.ts', grammar: 'residue', count: 2,
+      what: 'the documentation-consistency pin that the hook comment names BOTH halves of the pair (a comment '
+        + 'stating the pair rule, and the assertion itself). The two prose mentions the deferred citation census '
+        + 'once added (re-measure evidence quoting `_ws_slug_residue`\'s moved line spans) left with that '
+        + 'narrative when the frozen compaction-card documents moved to being measured at their freeze commit' },
+    { file: 'session-hook-precompact.test.ts', grammar: 'residue', count: 2,
+      what: 'the Overlord\'s precompact line (W1a context readings): a case title and one assertion that `_ws_slug_residue` '
+        + 'names a lone dot-free `$REG/<id>.compactevents` or `.compacteventsprev`, the proof that the slug walkers see it' },
+    { file: 'ccd-child-tmproot-witness.test.ts', grammar: 'residue', count: 2,
+      what: 'the temp-root witness\'s walker census (child-reclamation wave 6): a case title and one assertion that `_ws_slug_residue` names nothing for a slug whose only trace is its dotless `$REG/tmproots/<id>` witness, the proof that the witness is invisible to the slug walkers' },
+    { file: 'ccd-collect-record.test.ts', grammar: 'residue', count: 2,
+      what: 'the collector\'s quarantine record census (child-reclamation wave 7): a case title and one assertion that `_ws_slug_residue` names nothing for a slug whose only trace is its dotless `$REG/tmpquarantine/<id>.<ns>.<pid>` record, the proof that the record is invisible to the slug walkers' },
+    { file: 'session-hook-start-report.test.ts', grammar: 'residue', count: 3,
+      what: 'the start report\'s spool census (Overlord W1a, plan review 1890 I2): the header comment, a case title and one assertion that `_ws_slug_residue` names the dot-free `<id>.startpending` field while it stands, the proof that the slug walkers see it' },
+    { file: 'ccd-workspaces.test.ts', grammar: 'brace-template', count: 2,
+      what: 'RETRACTED HISTORY ONLY — two comments naming the template Task 9 deleted, beside the assertions that replaced it; pinned to comments by the clause below' },
+  ];
+
+  const scan = (): Array<{ file: string; grammar: string; line: number }> => {
+    const out: Array<{ file: string; grammar: string; line: number }> = [];
+    for (const f of fs.readdirSync(TESTS).filter((n) => n.endsWith('.ts')).sort()) {
+      const lines = fs.readFileSync(path.join(TESTS, f), 'utf8').split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        for (const [grammar, re] of GRAMMARS) {
+          if (re.test(lines[i]!)) out.push({ file: f, grammar, line: i + 1 });
+        }
+      }
+    }
+    // THIS FILE'S OWN describe carries all three grammars as literals — a
+    // self-reading scan must exclude its own, or it can never be green.
+    return out.filter((h) => !(h.file === 'ccd-workspaces.test.ts' && h.line >= SELF[0] && h.line <= SELF[1]));
+  };
+
+  /** This describe's own line range, bounded BY NAME so the exclusion cannot
+   *  silently widen. */
+  const SELF: [number, number] = (() => {
+    const lines = fs.readFileSync(path.join(TESTS, 'ccd-workspaces.test.ts'), 'utf8').split('\n');
+    const a = lines.findIndex((l) => l.startsWith('// ── D-2605: THE WIDENED SELF-CHECKING SCAN (plan Task 9)'));
+    let b = a;
+    while (b < lines.length && lines[b] !== '});') b++;
+    return [a + 1, b + 1];
+  })();
+
+  it('the found union EQUALS the disposition list, file by file and grammar by grammar', () => {
+    const hits = scan();
+    expect(hits.length, 'the scan found members at all').toBeGreaterThan(0);
+    const counted = new Map<string, number>();
+    for (const h of hits) counted.set(`${h.file}|${h.grammar}`, (counted.get(`${h.file}|${h.grammar}`) ?? 0) + 1);
+    const listed = new Set(DISPOSITION.map((d) => `${d.file}|${d.grammar}`));
+    // AN UNLISTED MEMBER, which is the whole point: a new assertion in a file
+    // nobody thought about.
+    expect([...counted.keys()].filter((k) => !listed.has(k)).sort(),
+      'an assertion on no disposition entry').toEqual([]);
+    // AND EVERY ENTRY ITS EXACT COUNT, so adding a second copy inside a listed
+    // file reds too.
+    expect(DISPOSITION.map((d) => `${d.file}|${d.grammar}=${counted.get(`${d.file}|${d.grammar}`) ?? 0}`))
+      .toEqual(DISPOSITION.map((d) => `${d.file}|${d.grammar}=${d.count}`));
+    // THE BRACE TEMPLATE SURVIVES ONLY AS PROSE. Its entry above has a count,
+    // because the two lines that carry it are RETRACTING comments beside the
+    // assertions that replaced them — quoted history, which this project keeps
+    // rather than deletes. What must not exist is a CODE line pinning it: the
+    // die no longer prints that message, so an assertion on it would be a test
+    // pinning a shape the tree cannot produce.
+    const code = (f: string, line: number): string => fs.readFileSync(path.join(TESTS, f), 'utf8').split('\n')[line - 1] ?? '';
+    expect(hits.filter((h) => h.grammar === 'brace-template' && !/^\s*(\/\/|\*|\/\*)/.test(code(h.file, h.line)))
+      .map((h) => `${h.file}:${h.line}`),
+      'no CODE line still pins the `$REG/<id>.{…}` message the die no longer prints').toEqual([]);
+  });
+
+  it('CONTROL: an unlisted assertion in another file reds, and a second copy in a listed file reds', () => {
+    // Measured against the real found set rather than by writing a file: the
+    // property is of the LIST, so the mutation is to the list.
+    const hits = scan();
+    const counted = new Map<string, number>();
+    for (const h of hits) counted.set(`${h.file}|${h.grammar}`, (counted.get(`${h.file}|${h.grammar}`) ?? 0) + 1);
+    // (a) drop an entry ⇒ its members become unlisted.
+    const without = new Set(DISPOSITION.filter((d) => d.file !== 'ccd-authdead.test.ts').map((d) => `${d.file}|${d.grammar}`));
+    expect([...counted.keys()].filter((k) => !without.has(k)),
+      'dropping an entry orphans its members').toEqual(['ccd-authdead.test.ts|residue']);
+    // (b) a count that no longer matches ⇒ red, with the file named.
+    const bumped = DISPOSITION.map((d) => (d.file === 'ccd-reg-set-atomic.test.ts' ? { ...d, count: d.count + 1 } : d));
+    expect(bumped.map((d) => `${d.file}|${d.grammar}=${counted.get(`${d.file}|${d.grammar}`) ?? 0}`))
+      .not.toEqual(bumped.map((d) => `${d.file}|${d.grammar}=${d.count}`));
+  });
+});
+
+// ── NAMED WORKSPACES, S1: `ws-add --title`, `ws-add --wrapper`, `named`, caps ──
+// (docs/superpowers/specs/2026-10-20-named-workspaces-and-linear-tickets-design.md §4.1.)
+//
+// Everything below runs under the harness's fixture HOME; `WS_ADD` stubs the
+// spawn and the systemd calls, so what is asserted is what `cmd_ws_add` writes
+// and refuses, never a live session.
+describe('ws-add: --title, --wrapper and the named marker', () => {
+  /** Status and BOTH streams, separately: the refusal sentences are stderr and
+   *  a success line is stdout. The snippet and the free-text values ride the
+   *  ENVIRONMENT (`h.sh`'s own rule), so a control character or a 513-byte
+   *  title needs no shell quoting at all. */
+  const run = (snippet: string, extra: NodeJS.ProcessEnv = {}): { status: number | null; stdout: string; stderr: string } => {
+    const r = spawnSync('bash', ['-c', 'source "$NWS_SRC"; eval "$NWS_SNIP"'],
+      { encoding: 'utf8', cwd: h.home, env: { ...ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...extra }, { systemd: true, tmux: true }), NWS_SRC: CCD, NWS_SNIP: snippet } });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  const wsAdd = (args: string, extra: NodeJS.ProcessEnv = {}): ReturnType<typeof run> =>
+    run(`${WS_ADD} cmd_ws_add ${args}`, extra);
+
+  const now = (): number => Math.floor(Date.now() / 1000);
+  const install = (w: string): void =>
+    fs.writeFileSync(path.join(home, '.local', 'bin', w), '#!/bin/sh\n', { mode: 0o755 });
+  const writeLimits = (w: string, five: number, seven: number): void =>
+    fs.writeFileSync(path.join(home, '.cc-limits', `${w}.json`),
+      JSON.stringify({ five, seven, ts: now(), fiveResetAt: now() + 10_000, sevenResetAt: now() + 400_000 }));
+  const tagPool = (project: string, pool: string): void => {
+    fs.mkdirSync(path.join(home, '.cc-sessions', 'pools'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'pools', project), `${pool}\n`);
+  };
+  /** The sweep report `_share_pct` reads, planted as `ccd-place-class.test.ts` plants it. */
+  const plantSweep = (estimates: Record<string, number>): void => {
+    const sw = path.join(home, '.cc-sessions', 'usage', 'sweep');
+    fs.mkdirSync(sw, { recursive: true });
+    const finishedAt = new Date(now() * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    fs.writeFileSync(path.join(sw, 'latest.json'), JSON.stringify({ finishedAt, perAccount: Object.fromEntries(
+      Object.entries(estimates).map(([k, v]) => [k, { fableShare: { estimate: v } }])) }));
+  };
+  const markAuthDead = (w: string): void =>
+    fs.writeFileSync(path.join(home, '.cc-sessions', `${w}-authdead`), '1757203200 auth-401');
+  const disable = (w: string): void => fs.writeFileSync(path.join(home, '.cc-sessions', `${w}-disabled`), '');
+
+  /** FOUR home-able lanes, `claude-b` the CHEAPEST by a wide margin — so a test that names any OTHER lane
+   *  cannot pass by coincidence of the least-loaded pick. */
+  const claudeBCheapest = (): void => {
+    for (const w of ['claude', 'claude-a', 'claude-d']) writeLimits(w, 60, 60);
+    writeLimits('claude-b', 5, 5);
+  };
+
+  /** "Nothing exists": no worktree, no branch, no registry row — the refusal landed above the first write. */
+  const nothingCreated = (slug: string, project = 'demo'): void => {
+    const id = `${project}-${slug}`;
+    expect(fs.existsSync(path.join(home, 'worktrees', project, slug)), 'worktree').toBe(false);
+    expect(h.git(path.join(home, 'projects', project), 'branch', '--list', `ws/${slug}`), 'branch').toBe('');
+    const rows = fs.readdirSync(path.join(home, '.cc-sessions')).filter((f) => f.startsWith(`${id}.`) || f.startsWith(`.${id}.`));
+    expect(rows, 'registry rows').toEqual([]);
+  };
+
+  // ── the reason chain: characterised on the code as it stands, BEFORE it is extracted ─────────────────────
+  describe('the no-placement refusal keeps its exact words (characterisation, green before the extraction)', () => {
+    /** The full die sentence, minus nothing. `REG` is `<home>/.cc-sessions` — the harness plants it there. */
+    const refusal = (args: string): string => {
+      const r = wsAdd(args);
+      expect(r.status, r.stderr).toBe(1);
+      return r.stderr.trim();
+    };
+
+    it('an untagged project: every lane named with its own first failing predicate', () => {
+      h.makeRepo('demo');
+      disable('claude'); disable('claude-a'); disable('claude-b');
+      fs.rmSync(path.join(home, '.local', 'bin', 'claude-d'));
+      expect(refusal('demo eng-1234')).toBe(
+        'ccd: no account available for placement — claude:disabled claude-a:disabled claude-b:disabled claude-d:missing;'
+        + ` enable one (rm ${home}/.cc-sessions/<w>-disabled) and retry — nothing was touched`);
+      nothingCreated('eng-1234');
+    });
+
+    it('a tagged project: pool= and class= reasons, and the pool remedy sentence', () => {
+      h.makeRepo('demo');
+      seedAccountsSh(home, POOLED_TEST_ROSTER);
+      plantPoolEpoch(home, POOL_BY_ID);
+      tagPool('demo', 'pool-b');
+      // claude is pool-a (mismatch); claude-a is switched off; claude-b is pool-b but has no wrapper; claude-d is
+      // untagged, so it passes the pool rule and is stopped by the class it cannot serve.
+      disable('claude-a');
+      fs.rmSync(path.join(home, '.local', 'bin', 'claude-b'));
+      writeLimits('claude-d', 5, 98); plantSweep({ 'claude-d': 0.55 });
+      expect(refusal('--route class=fable demo eng-1234')).toBe(
+        'ccd: no account available for placement in pool pool-b — claude:pool=pool-a claude-a:disabled claude-b:missing'
+        + ' claude-d:class=fable-unservable;'
+        + ` enable one (rm ${home}/.cc-sessions/<w>-disabled), tag an account into pool pool-b in ~/.ccrc/accounts.json`
+        + ` and redeploy the agent lane, then let the projection (${home}/.cc-sessions/pool-epoch) carry the same edge`
+        + ' — that is what decides — or untag the project (ccd project-pool --project demo --clear) and retry — nothing was touched');
+    });
+
+    itLinux('a stale projection is named projection=<word>, the document and not the lane', () => {
+      h.makeRepo('demo');
+      seedAccountsSh(home, POOLED_TEST_ROSTER);
+      plantPoolEpoch(home, POOL_BY_ID, { lease: 1 });   // 1970: expired
+      tagPool('demo', 'pool-b');
+      const why = refusal('demo eng-1234');
+      expect(why).toContain(' claude:projection=stale claude-a:projection=stale claude-b:projection=stale claude-d:projection=stale;');
+    });
+
+    it('an undecidable project tag is named by tag:, never by a lane', () => {
+      h.makeRepo('demo');
+      tagPool('demo', 'Pool a');
+      expect(refusal('demo eng-1234')).toBe(
+        `ccd: no account available for placement — tag:malformed ${home}/.cc-sessions/pools/demo;`
+        + ` enable one (rm ${home}/.cc-sessions/<w>-disabled) and retry — nothing was touched`);
+    });
+  });
+
+  // ── --title: the display title, and the marker that keeps a hand-given name out of the ai-title sweep ─────────
+  describe('--title writes `title` and `named`, and only --title does', () => {
+    const ID = 'demo-eng-1234';
+    const rawTitle = (): string => fs.readFileSync(path.join(home, '.cc-sessions', `${ID}.title`), 'utf8');
+
+    it('writes the title verbatim and the named marker', () => {
+      h.makeRepo('demo');
+      const r = wsAdd('--title "$T" demo eng-1234', { T: 'ENG-1234 - Fix the login flow' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(rawTitle(), 'the bytes, no newline a string-exact reader would trip on').toBe('ENG-1234 - Fix the login flow');
+      expect(h.reg(ID, 'named')).toBe('1');
+    });
+
+    it('the equals form and a position AFTER the positionals bind the same row (the strip loop is positionless)', () => {
+      h.makeRepo('demo');
+      expect(wsAdd('--title="ENG-1234 - Fix" demo eng-1234').status).toBe(0);
+      expect(rawTitle()).toBe('ENG-1234 - Fix');
+      fs.rmSync(path.join(home, 'worktrees'), { recursive: true, force: true });
+      h.git(path.join(home, 'projects', 'demo'), 'worktree', 'prune');
+      h.git(path.join(home, 'projects', 'demo'), 'branch', '-D', 'ws/eng-1234');
+      for (const f of fs.readdirSync(path.join(home, '.cc-sessions'))) {
+        if (f.startsWith(`${ID}.`)) fs.rmSync(path.join(home, '.cc-sessions', f), { force: true });
+      }
+      expect(wsAdd('demo eng-1234 --title "$T"', { T: 'Later position' }).status).toBe(0);
+      expect(rawTitle()).toBe('Later position');
+      expect(h.reg(ID, 'named')).toBe('1');
+    });
+
+    it('a slug WITHOUT a title writes neither — that is the coordinator dispatch shape (M9)', () => {
+      h.makeRepo('demo');
+      const r = wsAdd('--no-rc --surface agent --actor "run:7 dispatch" demo eng-1234');
+      expect(r.status, r.stderr).toBe(0);
+      expect(h.reg(ID, 'title')).toBeNull();
+      expect(h.reg(ID, 'named')).toBeNull();
+      expect(h.reg(ID, 'workspace')).toBe('eng-1234');
+    });
+
+    it('a bare project (a drawn slug) writes neither', () => {
+      h.makeRepo('demo');
+      expect(wsAdd('demo', { CCD_WS_SLUG: 'quiet-mesa' }).status).toBe(0);
+      expect(h.reg('demo-quiet-mesa', 'title')).toBeNull();
+      expect(h.reg('demo-quiet-mesa', 'named')).toBeNull();
+    });
+
+    it('--title with NO slug still marks the workspace named — the title is the signal, not the slug', () => {
+      h.makeRepo('demo');
+      expect(wsAdd('--title "$T" demo', { T: 'Hand named', CCD_WS_SLUG: 'quiet-mesa' }).status).toBe(0);
+      expect(h.reg('demo-quiet-mesa', 'named')).toBe('1');
+      expect(h.reg('demo-quiet-mesa', 'title')).toBe('Hand named');
+    });
+
+    it('accepts exactly 512 bytes', () => {
+      h.makeRepo('demo');
+      expect(wsAdd('--title "$T" demo eng-1234', { T: 'a'.repeat(512) }).status).toBe(0);
+      expect(rawTitle()).toHaveLength(512);
+    });
+
+    it.each([
+      ['a blank title', '   ', '--title must be non-blank'],
+      ['an empty title', '', '--title must be non-blank'],
+      ['a tab', 'ENG-1234\t- Fix', '--title must not contain control characters'],
+      ['a newline', 'ENG-1234\n- Fix', '--title must not contain control characters'],
+      ['an escape', 'ENG-1234 \u001b[31m', '--title must not contain control characters'],
+      ['513 bytes', 'a'.repeat(513), '--title is longer than 512 bytes'],
+      // BYTES, NOT CHARACTERS: 200 characters, 600 bytes.
+      ['200 three-byte characters', '€'.repeat(200), '--title is longer than 512 bytes'],
+    ])('refuses %s, before any worktree, branch or row exists', (_n, title, sentence) => {
+      h.makeRepo('demo');
+      const r = wsAdd('--title "$T" demo eng-1234', { T: title });
+      expect(r.status, r.stderr).toBe(1);
+      expect(r.stderr).toContain(`ccd: ${sentence}`);
+      nothingCreated('eng-1234');
+    });
+
+    it('refuses a second --title, in either spelling', () => {
+      h.makeRepo('demo');
+      for (const args of ['--title one --title two demo eng-1234', '--title one --title=two demo eng-1234', '--title=one --title two demo eng-1234']) {
+        const r = wsAdd(args);
+        expect(r.status, args).toBe(1);
+        expect(r.stderr, args).toContain('usage: ccd ws-add');
+        nothingCreated('eng-1234');
+      }
+    });
+
+    it('as the FINAL token it refuses with the usage line rather than hanging', () => {
+      h.makeRepo('demo');
+      const r = spawnSyncGroup('bash', ['-c', 'source "$NWS_SRC"; eval "$NWS_SNIP"'], { encoding: 'utf8', cwd: h.home, timeout: 30_000,
+        env: { ...ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }), NWS_SRC: CCD, NWS_SNIP: `${WS_ADD} cmd_ws_add demo eng-1234 --title` } });
+      expect(r.status, 'a valueless --title ran past the wall clock').toBe(1);
+      expect(r.stderr).toContain('usage: ccd ws-add');
+      nothingCreated('eng-1234');
+    });
+
+    /** Re-defines `_reg_set` so ONE field's write fails and every other runs the real one. */
+    const failing = (field: string): string =>
+      `eval "$(declare -f _reg_set | sed '1s/^_reg_set/_reg_set_real/')"; `
+      + `_reg_set() { [[ "$2" == ${field} ]] && return 1; _reg_set_real "$@"; }; `;
+
+    it.each(['named', 'title'])('a failed %s write WARNS and the workspace still lands — silence would leave a human name open to the sweep', (field) => {
+      h.makeRepo('demo');
+      const r = run(`${WS_ADD} ${failing(field)} cmd_ws_add --title "$T" demo eng-1234`, { T: 'ENG-1234 - Fix' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stderr).toContain(`ccd: warn: could not write ${home}/.cc-sessions/${ID}.${field}`);
+      expect(h.reg(ID, field)).toBeNull();
+      expect(h.reg(ID, 'uuid')).not.toBeNull();
+    });
+  });
+
+  // ── --wrapper: the operator's account, honoured through placement AND the post-worktree re-take ───────────────
+  describe('--wrapper places on the named account and refuses, never falls back', () => {
+    const ID = 'demo-eng-1234';
+
+    it('lands on the named lane although another is strictly the least loaded, and the registry still says so after the post-worktree step', () => {
+      h.makeRepo('demo');
+      claudeBCheapest();
+      // THE CONTROL: the same fixture, no --wrapper, picks claude-b — so what follows cannot pass by coincidence.
+      expect(wsAdd('demo ctrl-one').status).toBe(0);
+      expect(h.reg('demo-ctrl-one', 'wrapper')).toBe('claude-b');
+      const r = wsAdd('--wrapper claude-d demo eng-1234');
+      expect(r.status, r.stderr).toBe(0);
+      // `wrapper` is written AFTER the re-pick (B2): re-picking there would overwrite the choice with claude-b.
+      expect(h.reg(ID, 'wrapper')).toBe('claude-d');
+      expect(h.reg(ID, 'home')).toBe('claude-d');
+    });
+
+    it('the equals form and a position after the positionals bind the same lane', () => {
+      h.makeRepo('demo');
+      claudeBCheapest();
+      expect(wsAdd('--wrapper=claude-a demo one-one').status).toBe(0);
+      expect(h.reg('demo-one-one', 'wrapper')).toBe('claude-a');
+      expect(wsAdd('demo two-two --wrapper claude-d').status).toBe(0);
+      expect(h.reg('demo-two-two', 'wrapper')).toBe('claude-d');
+    });
+
+    it('composes with --title: both are written', () => {
+      h.makeRepo('demo');
+      claudeBCheapest();
+      expect(wsAdd('--title "$T" --wrapper claude-d demo eng-1234', { T: 'ENG-1234 - Fix' }).status).toBe(0);
+      expect(h.reg(ID, 'wrapper')).toBe('claude-d');
+      expect(h.reg(ID, 'title')).toBe('ENG-1234 - Fix');
+    });
+
+    it('--wrapper alone does not mark the workspace named', () => {
+      h.makeRepo('demo');
+      expect(wsAdd('--wrapper claude-d demo eng-1234').status).toBe(0);
+      expect(h.reg(ID, 'named')).toBeNull();
+      expect(h.reg(ID, 'title')).toBeNull();
+    });
+
+    it('the post-worktree step RE-VALIDATES the named lane: one that stops qualifying while the worktree is made dies with the EXISTS sentence', () => {
+      h.makeRepo('demo');
+      claudeBCheapest();
+      // The lane is switched off in the window between the pre-flight and the re-take — the same window the
+      // placement re-pick exists for. `git worktree add` is the act in that window.
+      const switchOff = `git() { case "$*" in *"worktree add"*) : > "$HOME/.cc-sessions/claude-d-disabled" ;; esac; command git "$@"; }; `;
+      const r = run(`${WS_ADD} ${switchOff} cmd_ws_add --wrapper claude-d demo eng-1234`);
+      expect(r.status, r.stderr).toBe(1);
+      expect(r.stderr).toContain('--wrapper refused');
+      expect(r.stderr).toContain('claude-d:disabled');
+      expect(r.stderr).toContain(`The worktree ${home}/worktrees/demo/eng-1234 and the branch ws/eng-1234 EXIST and no registry row names them`);
+      // It did NOT fall back to claude-b, and no row was written.
+      expect(h.reg(ID, 'uuid')).toBeNull();
+      expect(h.reg(ID, 'wrapper')).toBeNull();
+      expect(fs.existsSync(path.join(home, 'worktrees', 'demo', 'eng-1234'))).toBe(true);
+    });
+
+    describe('a lane that cannot take it is refused with the lane\'s reason, and nothing exists afterwards', () => {
+      const refuses = (args: string, reason: string): void => {
+        const r = wsAdd(args);
+        expect(r.status, r.stderr).toBe(1);
+        expect(r.stderr).toContain('ccd: --wrapper refused');
+        expect(r.stderr).toContain(reason);
+        expect(r.stderr).toContain('nothing was touched');
+        nothingCreated('eng-1234');
+      };
+
+      it('an overflow (non-home-able) lane, even with its wrapper installed and enabled', () => {
+        h.makeRepo('demo');
+        install('gpt');
+        refuses('--wrapper gpt demo eng-1234', 'gpt:not-home-able');
+      });
+
+      it('a lane the roster does not know', () => {
+        h.makeRepo('demo');
+        refuses('--wrapper nosuch demo eng-1234', 'nosuch:not-home-able');
+      });
+
+      it('an auth-dead (condemned) lane — the operator named it, so it is not placed on silently', () => {
+        h.makeRepo('demo');
+        markAuthDead('claude-d');
+        refuses('--wrapper claude-d demo eng-1234', 'claude-d:auth-dead');
+      });
+
+      it('a disabled lane', () => {
+        h.makeRepo('demo');
+        disable('claude-d');
+        refuses('--wrapper claude-d demo eng-1234', 'claude-d:disabled');
+      });
+
+      it('a lane with no wrapper installed', () => {
+        h.makeRepo('demo');
+        fs.rmSync(path.join(home, '.local', 'bin', 'claude-d'));
+        refuses('--wrapper claude-d demo eng-1234', 'claude-d:missing');
+      });
+
+      it('a lane outside the project\'s pool', () => {
+        h.makeRepo('demo');
+        seedAccountsSh(home, POOLED_TEST_ROSTER);
+        plantPoolEpoch(home, POOL_BY_ID);
+        tagPool('demo', 'pool-b');
+        refuses('--wrapper claude demo eng-1234', 'claude:pool=pool-a');
+        // …and the pool's own lane is still welcome: the refusal is the pool rule, not the flag.
+        expect(wsAdd('--wrapper claude-b demo eng-1234').status).toBe(0);
+        expect(h.reg(ID, 'wrapper')).toBe('claude-b');
+      });
+
+      it('a project whose pool tag nobody can read — named by tag:, as the placement refusal names it', () => {
+        h.makeRepo('demo');
+        tagPool('demo', 'Pool a');
+        refuses('--wrapper claude-d demo eng-1234', `tag:malformed ${home}/.cc-sessions/pools/demo`);
+      });
+    });
+
+    describe('the class gate applies ONLY to an explicit --route class=, and never degrades a rung', () => {
+      /** claude-d is past the seven-day ceiling, which makes `opus` unservable there — and `opus` is the coordinator
+       *  row's default class, the one nobody typed. A precondition, asserted: without it the cases below would
+       *  prove nothing about the gate. */
+      const claudeDPastCeiling = (): void => {
+        writeLimits('claude-d', 5, 98);
+        for (const w of ['claude', 'claude-a', 'claude-b']) writeLimits(w, 5, 5);
+        expect(run('_class_gate claude-d opus; echo "rc=$?"').stdout.trim()).toBe('rc=1');
+        expect(run('_class_gate claude-b opus; echo "rc=$?"').stdout.trim()).toBe('rc=0');
+      };
+
+      it('an explicit class the lane cannot serve is refused — not placed one rung down, not placed elsewhere', () => {
+        h.makeRepo('demo');
+        claudeDPastCeiling();
+        const r = wsAdd('--route class=opus --wrapper claude-d demo eng-1234');
+        expect(r.status, r.stderr).toBe(1);
+        expect(r.stderr).toContain('ccd: --wrapper refused');
+        expect(r.stderr).toContain('claude-d:class=opus-unservable');
+        nothingCreated('eng-1234');
+      });
+
+      it('the coordinator row\'s default class (nobody typed it) does NOT refuse the operator\'s pick', () => {
+        h.makeRepo('demo');
+        claudeDPastCeiling();
+        const r = wsAdd('--wrapper claude-d demo eng-1234');
+        expect(r.status, r.stderr).toBe(0);
+        expect(h.reg(ID, 'wrapper')).toBe('claude-d');
+      });
+
+      it('an explicit class the lane serves is placed on it', () => {
+        h.makeRepo('demo');
+        claudeDPastCeiling();
+        const r = wsAdd('--route class=opus --wrapper claude-b demo eng-1234');
+        expect(r.status, r.stderr).toBe(0);
+        expect(h.reg(ID, 'wrapper')).toBe('claude-b');
+        expect(h.reg(ID, 'class')).toBe('opus');
+      });
+    });
+
+    describe('the flag itself is validated like --actor, above everything that creates', () => {
+      it.each([
+        ['a blank lane', '   ', '--wrapper must be non-blank'],
+        ['an empty lane', '', '--wrapper must be non-blank'],
+        ['a lane with a control character', 'claude\td', '--wrapper must not contain control characters'],
+        ['a 513-byte lane', 'a'.repeat(513), '--wrapper is longer than 512 bytes'],
+      ])('refuses %s', (_n, lane, sentence) => {
+        h.makeRepo('demo');
+        const r = wsAdd('--wrapper "$W" demo eng-1234', { W: lane });
+        expect(r.status, r.stderr).toBe(1);
+        expect(r.stderr).toContain(sentence);
+        nothingCreated('eng-1234');
+      });
+
+      it('refuses a second --wrapper', () => {
+        h.makeRepo('demo');
+        for (const args of ['--wrapper claude --wrapper claude-d demo eng-1234', '--wrapper=claude --wrapper claude-d demo eng-1234']) {
+          const r = wsAdd(args);
+          expect(r.status, args).toBe(1);
+          expect(r.stderr, args).toContain('usage: ccd ws-add');
+          nothingCreated('eng-1234');
+        }
+      });
+
+      it('as the FINAL token it refuses with the usage line rather than hanging', () => {
+        h.makeRepo('demo');
+        const r = spawnSyncGroup('bash', ['-c', 'source "$NWS_SRC"; eval "$NWS_SNIP"'], { encoding: 'utf8', cwd: h.home, timeout: 30_000,
+          env: { ...ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }), NWS_SRC: CCD, NWS_SNIP: `${WS_ADD} cmd_ws_add demo eng-1234 --wrapper` } });
+        expect(r.status, 'a valueless --wrapper ran past the wall clock').toBe(1);
+        expect(r.stderr).toContain('usage: ccd ws-add');
+        nothingCreated('eng-1234');
+      });
+    });
+  });
+
+  // ── caps: the server sends neither flag to a box that does not advertise it ───────────────────────────────
+  describe('ccd caps advertises both flags', () => {
+    it('lists ws-title-v1 and ws-wrapper-v1', () => {
+      const caps = h.sh('cmd_caps').split('\n');
+      expect(caps).toContain('ws-title-v1');
+      expect(caps).toContain('ws-wrapper-v1');
+    });
   });
 });

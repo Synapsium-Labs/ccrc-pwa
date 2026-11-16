@@ -1,0 +1,421 @@
+// Settings' frame (settings Task R2b1; spec §3.2, §4.1, §4.4; D-5503, D-5504): the index, the five section routes
+// inside the frame, focus on the way in and out, the not-found line, and the one provider whose reads every page and
+// the index share. The rendering cases mount the frame as `app.tsx` does (`settingsHost.tsx`), with the command
+// layer beside it so an index row's door navigates.
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { CommandLayer } from '../src/command/CommandLayer';
+import { api } from '../src/lib/api';
+import { navigate } from '../src/lib/router';
+import { SETTINGS_SECTIONS } from '../src/lib/routes';
+import { SETTINGS_SCOPE } from '../src/fleet/settingsText';
+import { SettingsDataProvider, useSettingsView } from '../src/screens/settings/SettingsDataProvider';
+import { SettingsScreen } from '../src/screens/settings/SettingsFrame';
+import { useFleetStore } from '../src/stores/fleet';
+import { renderSettings } from './settingsHost';
+import { updatesView } from './settingsViewFixture';
+
+const SRC = path.join(import.meta.dirname, '..', 'src');
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  navigate('/');
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false }));
+});
+
+/** Every Settings read, pending forever, counted. */
+const pendingReads = () => {
+  const never = (): Promise<never> => new Promise(() => {});
+  const fetch = vi.fn((_url: unknown): Promise<never> => never());
+  vi.stubGlobal('fetch', fetch);
+  return {
+    updates: vi.spyOn(api, 'updates').mockImplementation(never),
+    stall: vi.spyOn(api, 'stallWatch').mockImplementation(never),
+    collect: vi.spyOn(api, 'collectLane').mockImplementation(never),
+    dispatchAbandon: vi.spyOn(api, 'dispatchAbandon').mockImplementation(never),
+    testbox: vi.spyOn(api, 'testbox').mockImplementation(never),
+    fetch,
+  };
+};
+
+const index = (): HTMLElement => screen.getByRole('navigation', { name: 'Settings sections' });
+const row = (id: string): HTMLElement => index().querySelector<HTMLElement>(`a[data-section="${id}"]`)!;
+
+describe('the index and the section routes', () => {
+  it('/settings is the index: five rows with icon, name, purpose and a status, each a link to its page', () => {
+    pendingReads();
+    renderSettings(null);
+    expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 2 })).toBeNull();
+    const links = Array.from(index().querySelectorAll('a[data-section]'));
+    expect(links.map((a) => a.getAttribute('href'))).toEqual(SETTINGS_SECTIONS.map((s) => `/settings/${s.id}`));
+    for (const a of links) {
+      expect(a).toHaveClass('settings-index-row');
+      expect(a.querySelectorAll('svg')).toHaveLength(2);   // the section's icon and the chevron
+      expect(a.getAttribute('data-command')).toBe(`go-settings-${a.getAttribute('data-section')}`);
+    }
+    expect(within(row('automation')).getByText(/clearing what dead sessions leave behind/)).toBeInTheDocument();
+  });
+
+  it('a row\'s visible purpose line is not repeated as its title, so a screen reader says it once', () => {
+    pendingReads();
+    renderSettings(null);
+    for (const a of within(index()).getAllByRole('link')) {
+      expect(a.querySelector('.settings-index-purpose')?.textContent).not.toBe('');
+      expect(a).not.toHaveAttribute('title');
+    }
+  });
+
+  it('/settings/<id> renders that section\'s bodies under its h2, and the h1 stays Settings', async () => {
+    pendingReads();
+    const marks: Record<string, () => Promise<unknown>> = {
+      updates: () => screen.findByRole('status', { name: 'Loading' }),
+      appearance: () => screen.findByRole('group', { name: 'Theme' }),
+      notifications: () => screen.findByText(/Push notifications for this browser|This browser cannot receive Web Push\./),
+      automation: () => screen.findByRole('heading', { level: 3, name: 'Temp root collector' }),
+      // Four cards load on this page, and exactly four: the sign-in gate's skeleton, the box token's, the Linear card's
+      // and the Approvals card's (D-8382). A fifth (a card drawn twice, or a skeleton left behind) is a defect, so the
+      // count is asserted and not merely "some".
+      security: () => waitFor(() => {
+        expect(screen.getByRole('heading', { level: 3, name: 'Sign-in gate' })).toBeInTheDocument();
+        expect(screen.getAllByRole('status', { name: 'Loading' })).toHaveLength(4);
+      }),
+    };
+    for (const s of SETTINGS_SECTIONS) {
+      renderSettings(s.id);
+      expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
+      expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([s.title]);
+      await marks[s.id]!();
+      expect(screen.queryByRole('navigation', { name: 'Settings sections' })).toBeNull();
+      expect(document.title).toBe(`${s.title} · Settings · ccrc`);
+      cleanup();
+    }
+  });
+
+  it('an unknown id renders the not-found line above the index', () => {
+    pendingReads();
+    navigate('/settings/bogus');
+    render(<SettingsDataProvider active><SettingsScreen /></SettingsDataProvider>);
+    const line = screen.getByText('That section does not exist.');
+    expect(line.compareDocumentPosition(index()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(Array.from(index().querySelectorAll('a[data-section]'))).toHaveLength(5);
+  });
+
+  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its fifteen cards)', () => {
+    pendingReads();
+    renderSettings('automation');
+    const levels = screen.getAllByRole('heading').map((h) => Number(h.tagName.slice(1)));
+    expect(levels).toEqual([1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]);
+  });
+});
+
+const DIAGNOSTICS = [
+  { label: 'Reader lab', href: '/settings/reader-lab', command: 'go-reader-lab', id: 'reader-lab',
+    purpose: 'Measure reader responsiveness and sandbox checks on this device.' },
+  { label: 'Measure highlighting', href: '/settings/measure-highlighting', command: 'go-measure-highlighting',
+    id: 'measure-highlighting', purpose: 'Measure code-highlighting performance on this device.' },
+] as const;
+
+const diagnosticRow = (label: string): HTMLElement =>
+  within(index()).getByRole('link', { name: new RegExp(`^${label}`) });
+
+describe('the two diagnostics under the five sections (library 1.1 take-up, Task 9)', () => {
+  it('Settings still has exactly five sections', () => {
+    expect(SETTINGS_SECTIONS).toHaveLength(5);
+  });
+
+  it('Reader lab is discoverable after the five ordinary sections', () => {
+    pendingReads();
+    renderSettings(null);
+    const nav = index();
+    const ordinary = nav.querySelectorAll('a[data-section]');
+    expect(ordinary).toHaveLength(5);
+    const lab = diagnosticRow('Reader lab');
+    expect(lab).toHaveAttribute('href', '/settings/reader-lab');
+    expect(lab).toHaveAttribute('data-command', 'go-reader-lab');
+    expect(lab).toHaveAttribute('data-diagnostic', 'reader-lab');
+    expect(lab).not.toHaveAttribute('data-section');
+    expect(lab).not.toHaveAttribute('aria-current');
+    expect(lab.querySelector('.settings-index-name')?.textContent).toBe('Reader lab');
+    expect(lab.querySelector('.settings-index-purpose')?.textContent).toBe(DIAGNOSTICS[0].purpose);
+    expect(lab.querySelector('.settings-index-status')).toBeNull();
+    expect(ordinary[4]!.compareDocumentPosition(lab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('Measure highlighting is discoverable after the five ordinary sections', () => {
+    pendingReads();
+    renderSettings(null);
+    const nav = index();
+    const ordinary = nav.querySelectorAll('a[data-section]');
+    expect(ordinary).toHaveLength(5);
+    const hl = diagnosticRow('Measure highlighting');
+    expect(hl).toHaveAttribute('href', '/settings/measure-highlighting');
+    expect(hl).toHaveAttribute('data-command', 'go-measure-highlighting');
+    expect(hl).toHaveAttribute('data-diagnostic', 'measure-highlighting');
+    expect(hl).not.toHaveAttribute('data-section');
+    expect(hl).not.toHaveAttribute('aria-current');
+    expect(hl.querySelector('.settings-index-name')?.textContent).toBe('Measure highlighting');
+    expect(hl.querySelector('.settings-index-purpose')?.textContent).toBe(DIAGNOSTICS[1].purpose);
+    expect(hl.querySelector('.settings-index-status')).toBeNull();
+    expect(ordinary[4]!.compareDocumentPosition(hl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('the index holds exactly two diagnostic rows and seven links, the diagnostics last and in order', () => {
+    pendingReads();
+    renderSettings(null);
+    expect(index().querySelectorAll('a[data-diagnostic]')).toHaveLength(2);
+    const links = within(index()).getAllByRole('link');
+    expect(links).toHaveLength(7);
+    expect(links.slice(5).map((a) => a.getAttribute('data-diagnostic'))).toEqual(['reader-lab', 'measure-highlighting']);
+  });
+
+  describe.each(DIAGNOSTICS)('$label: a click', (d) => {
+    const mountWithLayer = (): void => {
+      pendingReads();
+      navigate('/settings');
+      render(
+        <>
+          <SettingsDataProvider active><SettingsScreen /></SettingsDataProvider>
+          <CommandLayer openNewSession={vi.fn()} />
+        </>,
+      );
+    };
+
+    it('an ordinary click is prevented and goes to its route through the command', () => {
+      mountWithLayer();
+      const a = diagnosticRow(d.label);
+      let notCancelled = true;
+      act(() => { notCancelled = fireEvent.click(a); });
+      expect(notCancelled, 'the click was default-prevented').toBe(false);
+      expect(location.pathname).toBe(d.href);
+    });
+
+    it.each([['metaKey'], ['ctrlKey'], ['shiftKey'], ['altKey']] as const)('a %s click is left to the browser: not prevented, no command, no navigation', (mod) => {
+      mountWithLayer();
+      const a = diagnosticRow(d.label);
+      const seen: string[] = [];
+      const on = (e: Event): void => { seen.push((e as CustomEvent<string>).detail); };
+      window.addEventListener('ccrc:command', on);
+      let notCancelled = false;
+      try {
+        act(() => { notCancelled = fireEvent.click(a, { [mod]: true }); });
+      } finally { window.removeEventListener('ccrc:command', on); }
+      expect(notCancelled, 'the click was left alone').toBe(true);
+      expect(seen).toEqual([]);
+      expect(location.pathname).toBe('/settings');
+    });
+  });
+});
+
+describe('focus', () => {
+  it('moving to a section focuses its h2, and Back returns focus to its row', () => {
+    pendingReads();
+    navigate('/settings');
+    render(
+      <>
+        <SettingsDataProvider active><SettingsScreen /></SettingsDataProvider>
+        <CommandLayer openNewSession={vi.fn()} />
+      </>,
+    );
+    act(() => { fireEvent.click(row('notifications')); });
+    expect(location.pathname).toBe('/settings/notifications');
+    const h2 = screen.getByRole('heading', { level: 2, name: 'Notifications' });
+    expect(document.activeElement).toBe(h2);
+    expect(h2).toHaveAttribute('tabindex', '-1');
+    act(() => { fireEvent.click(screen.getByRole('button', { name: 'Back to Settings' })); });
+    expect(location.pathname).toBe('/settings');
+    expect(document.activeElement).toBe(row('notifications'));
+  });
+});
+
+describe('the provider: reads made once (spec §4.4)', () => {
+  for (const desk of [false, true]) {
+    it(`one useUpdatesView poll serves the index and every section across a walk of all five, and refetches nothing between them (${desk ? '1280' : 'phone'})`, () => {
+      vi.stubGlobal('matchMedia', (q: string) => ({
+        matches: desk && q.includes('min-width: 900px'), media: q, onchange: null,
+        addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+      }));
+      const reads = pendingReads();
+      renderSettings(null);
+      for (const s of SETTINGS_SECTIONS) {
+        act(() => { navigate(`/settings/${s.id}`); });
+        expect(screen.getByRole('heading', { level: 2, name: s.title })).toBeInTheDocument();
+        act(() => { navigate('/settings'); });
+      }
+      expect(reads.updates).toHaveBeenCalledTimes(1);
+      expect(reads.stall).toHaveBeenCalledTimes(1);
+      expect(reads.collect).toHaveBeenCalledTimes(1);
+      expect(reads.dispatchAbandon).toHaveBeenCalledTimes(1);
+      expect(reads.testbox).toHaveBeenCalledTimes(1);
+      // The auth status, once per mount (its own fetch: `readAuthStatus` never raises auth-lost).
+      expect(reads.fetch.mock.calls.filter(([u]) => String(u).includes('/api/auth/status'))).toHaveLength(1);
+    });
+  }
+
+  /** A browser that can do Web Push, with the given permission and a subscription the test can flip. */
+  const stubPush = (permission: NotificationPermission) => {
+    const state = { subscribed: false };
+    vi.stubGlobal('PushManager', class {});
+    vi.stubGlobal('Notification', { permission, requestPermission: vi.fn() });
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      serviceWorker: {
+        getRegistration: async () => ({ pushManager: { getSubscription: async () => (state.subscribed ? {} : null) } }),
+      },
+    });
+    return state;
+  };
+  const pushLine = (): string => row('notifications').querySelector('.settings-index-status')?.textContent ?? '';
+
+  it('the index reads the push state again when it mounts, so a toggle on the Notifications page shows after Back', async () => {
+    pendingReads();
+    const push = stubPush('granted');
+    renderSettings(null);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(pushLine()).toMatch(/^Pushes off in this browser/);
+    act(() => { navigate('/settings/notifications'); });
+    push.subscribed = true;
+    act(() => { navigate('/settings'); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(pushLine()).toMatch(/^Pushes on in this browser/);
+  });
+
+  it('a denied notification permission reads as blocked, never off', async () => {
+    pendingReads();
+    stubPush('denied');
+    let seen: ReturnType<typeof useSettingsView> = null;
+    function Probe(): null { seen = useSettingsView(); return null; }
+    navigate('/settings');
+    render(<SettingsDataProvider active><SettingsScreen /><Probe /></SettingsDataProvider>);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(seen!.push).toBe('blocked');
+    expect(pushLine()).toMatch(/^Pushes blocked in this browser/);
+  });
+
+  it('no Settings read starts while active is false, and the view is null', () => {
+    const reads = pendingReads();
+    let seen: unknown = 'unset';
+    function Probe(): null { seen = useSettingsView(); return null; }
+    render(<SettingsDataProvider active={false}><Probe /></SettingsDataProvider>);
+    expect(seen).toBeNull();
+    expect(reads.updates).not.toHaveBeenCalled();
+    expect(reads.stall).not.toHaveBeenCalled();
+    expect(reads.collect).not.toHaveBeenCalled();
+    expect(reads.dispatchAbandon).not.toHaveBeenCalled();
+    expect(reads.testbox).not.toHaveBeenCalled();
+    expect(reads.fetch).not.toHaveBeenCalled();
+  });
+
+  it('turning inactive stops the reads and nulls the view; turning active again starts them afresh', () => {
+    const reads = pendingReads();
+    let seen: unknown = 'unset';
+    function Probe(): null { seen = useSettingsView(); return null; }
+    const view = render(<SettingsDataProvider active><Probe /></SettingsDataProvider>);
+    expect(seen).not.toBeNull();
+    view.rerender(<SettingsDataProvider active={false}><Probe /></SettingsDataProvider>);
+    expect(seen).toBeNull();
+    view.rerender(<SettingsDataProvider active><Probe /></SettingsDataProvider>);
+    expect(seen).not.toBeNull();
+    expect(reads.updates).toHaveBeenCalledTimes(2);
+  });
+
+  it('no file under screens/settings/ but the provider imports a read hook or lib/push\'s reads', () => {
+    const dir = path.join(SRC, 'screens', 'settings');
+    const files = readdirSync(dir).filter((f) => /\.tsx?$/.test(f));
+    expect(files).toContain('SettingsDataProvider.tsx');
+    expect(files.length).toBeGreaterThanOrEqual(9);
+    const READS = new Set(['useUpdatesView', 'useStallWatchView', 'useCollectLaneView', 'useTestboxView', 'useLinearWorkspaces', 'readAuthStatus', 'pushEnabled', 'pushSupported']);
+    /** The value names a file imports (a `type` import reads nothing). */
+    const imported = (text: string): string[] => [...text.matchAll(/^import \{([^}]*)\} from '[^']+';/gm)]
+      .flatMap((m) => m[1]!.split(',').map((n) => n.trim()).filter((n) => n !== '' && !n.startsWith('type ')))
+      .map((n) => n.split(' as ')[0]!.trim());
+    const importers = files.filter((f) => imported(readFileSync(path.join(dir, f), 'utf8')).some((n) => READS.has(n)));
+    expect(importers).toEqual(['SettingsDataProvider.tsx']);
+    // And the cards outside the directory take the frame's poll rather than reading their own.
+    for (const f of [path.join('screens', 'StallWatchSection.tsx'), path.join('fleet', 'CollectLaneSection.tsx'), path.join('screens', 'LinearSection.tsx'), path.join('fleet', 'TestBoxSection.tsx')]) {
+      expect(readFileSync(path.join(SRC, f), 'utf8'), f).not.toMatch(/\buse(StallWatchView|CollectLaneView|LinearWorkspaces|LinearConnection|TestboxView)\(/);
+    }
+  });
+});
+
+describe('the move: nothing lost, nothing twice', () => {
+  /** Every control today's page rendered, by its accessible name, with the read each needs answered. */
+  const CONTROLS: readonly (readonly [RegExp | string, string])[] = [
+    ['Check now', 'button'], ['Channel', 'group'], ['Auto-install', 'group'],
+    ['Layout', 'group'], ['Theme', 'group'],
+    ['Announce new releases', 'group'],
+    ['Rotate now', 'button'],
+  ];
+
+  it('every control today\'s page renders is rendered by exactly one section page', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    vi.spyOn(api, 'updates').mockResolvedValue(updatesView());
+    vi.spyOn(api, 'stallWatch').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
+    const counts = new Map<string, number>();
+    for (const s of SETTINGS_SECTIONS) {
+      renderSettings(s.id);
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      for (const [name, role] of CONTROLS) {
+        const found = screen.queryAllByRole(role as 'button', { name });
+        counts.set(String(name), (counts.get(String(name)) ?? 0) + found.length);
+      }
+      cleanup();
+    }
+    for (const [name] of CONTROLS) expect(counts.get(String(name)), String(name)).toBe(1);
+  });
+
+  it('the Stall watch and Temp root collector cards are each on one page only', async () => {
+    pendingReads();
+    const pages: string[] = [];
+    for (const s of SETTINGS_SECTIONS) {
+      renderSettings(s.id);
+      if (screen.queryAllByRole('heading', { name: /^(Stall watch|Temp root collector)$/ }).length > 0) pages.push(s.id);
+      for (const h of screen.queryAllByRole('heading', { name: 'Stall watch' })) expect(h.tagName).toBe('H3');
+      expect(screen.queryAllByRole('heading', { name: 'Stall watch' }).length).toBeLessThanOrEqual(1);
+      cleanup();
+    }
+    expect(pages).toEqual(['automation']);
+  });
+});
+
+// Settings Task R2b2 (D-5503; spec §3.3): every card on every section page is a `Section` with its scope word and its
+// purpose line, in §3.3's order.
+describe('the cards: scope and purpose, in order (spec §3.3)', () => {
+  const ORDER: Record<string, readonly string[]> = {
+    updates: ['Fleet version', 'Nodes', 'Box settings', 'Update policy'],
+    appearance: ['Layout and theme', 'Character'],
+    notifications: ['Push notifications', 'Release announcements'],
+    automation: ['Stall watch', 'Overrides in force', 'Temp root collector', 'Shadow lanes', 'Dispatches that never came back', 'Cleanup pause', 'Browser tools', 'Roll idle sessions', 'Auto memory for plain sessions', 'Stop leftovers', 'Leftover processes', 'Worktrees left behind', 'Backups', 'Work in transcript folders', 'Test box'],
+    security: ['Sign-in gate', 'Box token', 'Linear', 'Project linking', 'Approvals'],
+  };
+  const SCOPES: readonly string[] = Object.values(SETTINGS_SCOPE);
+
+  it('each card carries its scope word and purpose line, on all five pages (the scope census)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    vi.spyOn(api, 'updates').mockResolvedValue(updatesView());
+    vi.spyOn(api, 'stallWatch').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
+    for (const s of SETTINGS_SECTIONS) {
+      renderSettings(s.id);
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      const titles = screen.getAllByRole('heading', { level: 3 });
+      expect(titles.map((h) => h.textContent), s.id).toEqual(ORDER[s.id]);
+      for (const h of titles) {
+        const head = h.parentElement!;
+        const scope = [...head.children].find((el) => el !== h && el.tagName === 'P');
+        expect(scope?.textContent, `${s.id} › ${h.textContent}: its scope`).toBeTruthy();
+        expect(SCOPES, `${s.id} › ${h.textContent}: a scope word`).toContain(scope!.textContent);
+        const purpose = head.nextElementSibling;
+        expect(purpose?.tagName, `${s.id} › ${h.textContent}: its purpose line`).toBe('P');
+        expect(purpose!.textContent!.length, `${s.id} › ${h.textContent}: a purpose`).toBeGreaterThan(20);
+        expect(h.closest('section')!.getAttribute('aria-labelledby')).toBe(h.id);
+      }
+      cleanup();
+    }
+  });
+});

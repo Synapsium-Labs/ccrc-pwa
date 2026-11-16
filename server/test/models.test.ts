@@ -26,10 +26,12 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  CLASSES, CatalogueInvalid, PROBE_KINDS, RegistryInvalid, UNAVAILABLE_PREFIX,
+  CATALOGUE_TRUNCATION_LIMIT_MAX, CATALOGUE_TRUNCATION_MODES, CATALOGUE_VERBOSITIES,
+  CLASSES, CatalogueInvalid, PROBE_KINDS, RegistryInvalid, UNAVAILABLE_PREFIX, WINDOW_MAX, WINDOW_MIN,
   availableFor, classOfModel, deriveModels, familyClassOf, parseCatalogue,
-  parseRegistry, resolveDiscovery,
+  parseRegistry, parseWindows, resolveDiscovery,
 } from '../../shared/models.js';
+import type { CatalogueVerbosity, TruncationMode } from '../../shared/models.js';
 import { CODEX, SEEDED, UNSEEDED, modelCases } from './fixtures/modelCases.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -166,7 +168,7 @@ describe('parseRegistry (§4.1)', () => {
     r['baseUrl'] = '';
     expect(() => parseRegistry(r)).toThrow(/baseUrl/);
     r['baseUrl'] = 'https://api.cortecs.ai';
-    expect(parseRegistry(r).baseUrl).toBe('https://api.cortecs.ai');
+    expect(parseRegistry(r).baseUrl).toBe('https://api.cortecs.ai/'); // stored as the gate's url (D-7460)
   });
 
   it('accepts baseUrl on a codex or openrouter registry but never requires it', () => {
@@ -187,12 +189,63 @@ describe('parseRegistry (§4.1)', () => {
 
   it('accepts an http baseUrl when the host is loopback — the local-proxy case (C13)', () => {
     const r = good(); r['probe'] = 'compatible';
+    // Each stored as the gate's url (OA-BU1 (b), D-7460): the bare host gains its root `/`.
     for (const u of ['http://127.0.0.1:4000', 'http://localhost:4000', 'http://[::1]:4000']) {
       r['baseUrl'] = u;
-      expect(parseRegistry(r).baseUrl).toBe(u);
+      expect(parseRegistry(r).baseUrl).toBe(`${u}/`);
     }
     r['baseUrl'] = 'https://vendor.example.com';
-    expect(parseRegistry(r).baseUrl).toBe('https://vendor.example.com');
+    expect(parseRegistry(r).baseUrl).toBe('https://vendor.example.com/');
+  });
+
+  // D-7308: the registry's baseUrl decides through the one endpoint gate, `BASE_URL_OK`, so it refuses what a roster
+  // `exec.baseUrl` refuses. Each refusal names the gate's reason word and never repeats the value it refused.
+  const baseUrlRefusal = (u: string): { field: string; message: string } => {
+    const r = good(); r['probe'] = 'compatible'; r['baseUrl'] = u;
+    try { parseRegistry(r); } catch (e) {
+      if (e instanceof RegistryInvalid) return { field: e.field, message: e.message };
+      throw e;
+    }
+    throw new Error(`parseRegistry accepted ${u}`);
+  };
+
+  it('refuses a baseUrl that carries a user name or password, naming base-url-credentials (D-7308)', () => {
+    for (const u of ['https://user:pass@vendor.example.com/v1', 'https://user@vendor.example.com/v1']) {
+      const got = baseUrlRefusal(u);
+      expect(got.field, u).toBe('baseUrl');
+      expect(got.message, u).toMatch(/base-url-credentials/);
+      expect(got.message, u).not.toContain('vendor.example.com');
+    }
+  });
+
+  it('refuses a baseUrl that carries a query, naming base-url-query (D-7308)', () => {
+    for (const u of ['https://vendor.example.com/v1?beta=true', 'https://vendor.example.com/v1?']) {
+      const got = baseUrlRefusal(u);
+      expect(got.field, u).toBe('baseUrl');
+      expect(got.message, u).toMatch(/base-url-query/);
+      expect(got.message, u).not.toContain('vendor.example.com');
+    }
+  });
+
+  it('refuses a baseUrl that carries a fragment, naming base-url-fragment (D-7308)', () => {
+    for (const u of ['https://vendor.example.com/v1#frag', 'https://vendor.example.com/v1#']) {
+      const got = baseUrlRefusal(u);
+      expect(got.field, u).toBe('baseUrl');
+      expect(got.message, u).toMatch(/base-url-fragment/);
+    }
+  });
+
+  it("stores an accepted baseUrl as the gate's normalised url (OA-BU1 (b), D-7460)", () => {
+    const r = good(); r['probe'] = 'compatible';
+    for (const [given, stored] of [
+      ['https://vendor.example.com', 'https://vendor.example.com/'],
+      ['HTTPS://Vendor.Example.COM/V1', 'https://vendor.example.com/V1'],
+      ['  https://vendor.example.com/v1  ', 'https://vendor.example.com/v1'],
+      ['http://127.0.0.1./v1', 'http://127.0.0.1/v1'],
+    ]) {
+      r['baseUrl'] = given;
+      expect(parseRegistry(r).baseUrl, given).toBe(stored);
+    }
   });
 
   it('refuses a subagent that is not a class', () => {
@@ -396,6 +449,80 @@ describe('parseRegistry (§4.1)', () => {
   });
 });
 
+// ── codex-bridge spec §2.7: a lane's measured context windows ──────────────
+// They live in a SIBLING of the registry, `<id>.windows.json`, read by
+// `parseWindows`. Neutral model ids only: this repository is public.
+describe('parseWindows (codex-bridge spec §2.7)', () => {
+  const A = 'model-6.1-alpha';
+  const B = 'model-6-beta';
+
+  it('reads each model\'s tokens into a frozen, null-prototype map', () => {
+    const w = parseWindows({ windows: {
+      [A]: { tokens: 511000, setAt: '2026-10-15T00:00:00.000Z' }, [B]: { tokens: 1000 } } });
+    expect({ ...w }).toEqual({ [A]: 511000, [B]: 1000 });
+    expect(Object.getPrototypeOf(w)).toBeNull();
+    expect(Object.isFrozen(w)).toBe(true);
+  });
+
+  it('an empty windows map is legal, and reads as no measured window', () => {
+    expect(Object.keys(parseWindows({ windows: {} }))).toEqual([]);
+  });
+
+  it('the bounds are 1000 and 1000000, and both are accepted exactly', () => {
+    expect(WINDOW_MIN).toBe(1000);
+    expect(WINDOW_MAX).toBe(1000000);
+    const w = parseWindows({ windows: { [A]: { tokens: WINDOW_MIN }, [B]: { tokens: WINDOW_MAX } } });
+    expect({ ...w }).toEqual({ [A]: 1000, [B]: 1000000 });
+  });
+
+  it('TOLERATES unknown keys at the top level and inside an entry — the registry\'s opposite', () => {
+    const w = parseWindows({ version: 2, future: { x: 1 },
+      windows: { [A]: { tokens: 400000, setAt: '2026-10-15T00:00:00.000Z', source: 'probe', note: 'x' } } });
+    expect({ ...w }).toEqual({ [A]: 400000 });
+  });
+
+  it.each([
+    ['a top level that is an array', [], ''],
+    ['a null top level', null, ''],
+    ['no windows key', {}, 'windows'],
+    ['a windows that is an array', { windows: [] }, 'windows'],
+    ['a key that is not a model id', { windows: { 'bad id': { tokens: 5000 } } }, 'windows.bad id'],
+    ['a __proto__ key', JSON.parse('{"windows":{"__proto__":{"tokens":5000}}}'), 'windows.__proto__'],
+    ['an entry that is a bare number', { windows: { [A]: 400000 } }, `windows.${A}`],
+    ['an entry that is null', { windows: { [A]: null } }, `windows.${A}`],
+    ['an entry that is an array', { windows: { [A]: [{ tokens: 400000 }] } }, `windows.${A}`],
+    ['tokens as a string', { windows: { [A]: { tokens: '400000' } } }, `windows.${A}.tokens`],
+    ['tokens missing', { windows: { [A]: { setAt: '2026-10-15T00:00:00.000Z' } } }, `windows.${A}.tokens`],
+    ['a fractional tokens', { windows: { [A]: { tokens: 400000.5 } } }, `windows.${A}.tokens`],
+    ['tokens one below the minimum', { windows: { [A]: { tokens: 999 } } }, `windows.${A}.tokens`],
+    ['tokens one above the maximum', { windows: { [A]: { tokens: 1000001 } } }, `windows.${A}.tokens`],
+    ['a setAt that is not a string', { windows: { [A]: { tokens: 400000, setAt: 1789000000 } } }, `windows.${A}.setAt`],
+  ] as [string, unknown, string][])('refuses %s, as RegistryInvalid naming the field', (_why, json, field) => {
+    try {
+      parseWindows(json);
+      expect.unreachable('parseWindows accepted it');
+    } catch (e) {
+      expect(e).toBeInstanceOf(RegistryInvalid);
+      expect((e as RegistryInvalid).field).toBe(field);
+    }
+  });
+
+  it('the registry still refuses a windows key — the reason the windows live in a sibling file', () => {
+    // An older ccrc refuses any registry key it does not know, so a `windows`
+    // key in `<id>.classes.json` would brick every lane after a rollback. If
+    // this goes green-to-red, someone added `windows` to REGISTRY_KEYS: move
+    // it back to the sibling file instead.
+    const r = { ...(clone(SEEDED) as Record<string, unknown>), windows: {} };
+    try {
+      parseRegistry(r);
+      expect.unreachable('parseRegistry accepted a windows key');
+    } catch (e) {
+      expect(e).toBeInstanceOf(RegistryInvalid);
+      expect((e as RegistryInvalid).field).toBe('windows');
+    }
+  });
+});
+
 describe('familyClassOf', () => {
   it.each([
     ['claude-fable-5-1', 'fable'],
@@ -484,6 +611,82 @@ describe('parseCatalogue', () => {
       efforts: [], hidden: false, priceIn: null, priceOut: null,
     });
   });
+
+  // D-8620: the Codex catalogue's request-shape fields, each optional.
+  describe('the request-shape fields (D-8620)', () => {
+    const SHAPE = {
+      useResponsesLite: true, supportVerbosity: true, defaultVerbosity: 'low', defaultReasoningLevel: 'low',
+      truncationPolicy: { mode: 'tokens', limit: 10000 },
+    } as const;
+    const rowOf = (probe: string, row: Record<string, unknown>): Record<string, unknown> =>
+      parseCatalogue({ probe, fetchedAt: 1, stale: false, models: [{ id: 'x', ...row }] }).models[0] as
+        unknown as Record<string, unknown>;
+    const BARE = { id: 'x', label: 'x', context: null, maxContext: null, efforts: [], hidden: false, priceIn: null, priceOut: null };
+
+    it('passes every valid key through on a Codex catalogue', () => {
+      expect(rowOf('codex', { ...SHAPE })).toStrictEqual({ ...BARE, ...SHAPE });
+    });
+
+    it('keeps a genuine false, and the other verbosities and mode', () => {
+      const row = rowOf('codex', {
+        useResponsesLite: false, supportVerbosity: false, defaultVerbosity: 'high',
+        truncationPolicy: { mode: 'bytes', limit: 10_000_000 },
+      });
+      expect(row['useResponsesLite']).toBe(false);
+      expect(row['supportVerbosity']).toBe(false);
+      expect(row['defaultVerbosity']).toBe('high');
+      expect(row['truncationPolicy']).toStrictEqual({ mode: 'bytes', limit: 10_000_000 });
+      expect(rowOf('codex', { defaultVerbosity: 'medium' })['defaultVerbosity']).toBe('medium');
+      expect(rowOf('codex', { truncationPolicy: { mode: 'tokens', limit: 1 } })['truncationPolicy'])
+        .toStrictEqual({ mode: 'tokens', limit: 1 });
+    });
+
+    it('keeps a reasoning level its own effort list does not offer', () => {
+      expect(rowOf('codex', { efforts: ['low'], defaultReasoningLevel: 'max' })['defaultReasoningLevel']).toBe('max');
+    });
+
+    it('keeps only mode and limit of a truncation policy', () => {
+      expect(rowOf('codex', { truncationPolicy: { mode: 'tokens', limit: 5, extra: 'x' } })['truncationPolicy'])
+        .toStrictEqual({ mode: 'tokens', limit: 5 });
+    });
+
+    it.each([
+      ['useResponsesLite', 'true'], ['useResponsesLite', 1], ['useResponsesLite', null],
+      ['supportVerbosity', 'false'], ['supportVerbosity', 0],
+      ['defaultVerbosity', 'terse'], ['defaultVerbosity', 'LOW'], ['defaultVerbosity', ''], ['defaultVerbosity', 1],
+      ['defaultReasoningLevel', ''], ['defaultReasoningLevel', 7], ['defaultReasoningLevel', ['low']],
+      ['truncationPolicy', { mode: 'tokens', limit: 0 }], ['truncationPolicy', { mode: 'tokens', limit: -1 }],
+      ['truncationPolicy', { mode: 'tokens', limit: 10_000_001 }], ['truncationPolicy', { mode: 'tokens', limit: 1.5 }],
+      ['truncationPolicy', { mode: 'tokens', limit: '10000' }], ['truncationPolicy', { mode: 'tokens' }],
+      ['truncationPolicy', { mode: 'lines', limit: 10000 }], ['truncationPolicy', { limit: 10000 }],
+      ['truncationPolicy', 'tokens'], ['truncationPolicy', null], ['truncationPolicy', []],
+    ] as const)('drops %s = %j and keeps the others', (key, bad) => {
+      const row = rowOf('codex', { ...SHAPE, [key]: bad });
+      expect(row).not.toHaveProperty(key);
+      const { [key]: _gone, ...rest } = SHAPE;
+      expect(row).toStrictEqual({ ...BARE, ...rest });
+    });
+
+    it.each(['openrouter', 'compatible'])('a %s catalogue never carries them, even when its file has them', (probe) => {
+      expect(rowOf(probe, { ...SHAPE })).toStrictEqual(BARE);
+    });
+
+    it('a row without them is deep-equal to today\'s', () => {
+      expect(rowOf('codex', {})).toStrictEqual(BARE);
+      expect(parseCatalogue(clone(CODEX))).toStrictEqual(CODEX);
+    });
+
+    it('the bounds are the runtime lists the type names', () => {
+      // `CatalogueVerbosity` and `TruncationMode` are the TYPES (shared/models.ts); these are the runtime lists that
+      // validate. A Record over the type is a compile error until it names every member, and nothing more.
+      const verbosities: Record<CatalogueVerbosity, true> = { low: true, medium: true, high: true };
+      const modes: Record<TruncationMode, true> = { tokens: true, bytes: true };
+      expect([...CATALOGUE_VERBOSITIES].sort()).toEqual(Object.keys(verbosities).sort());
+      expect([...CATALOGUE_TRUNCATION_MODES].sort()).toEqual(Object.keys(modes).sort());
+      expect(CATALOGUE_TRUNCATION_LIMIT_MAX).toBe(10_000_000);
+      expect(Object.isFrozen(CATALOGUE_VERBOSITIES) && Object.isFrozen(CATALOGUE_TRUNCATION_MODES)).toBe(true);
+    });
+  });
 });
 
 describe('the sentinel prefix', () => {
@@ -555,5 +758,107 @@ describe('shared/models.ts is TypeScript-facing over the single models.mjs imple
     const LITERAL = String.raw`/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/`;
     const src = readFileSync(path.join(REPO, 'shared/models.mjs'), 'utf8');
     expect(src, 'shared/models.mjs must spell MODEL_ID_RE exactly').toContain(`MODEL_ID_RE = ${LITERAL}`);
+  });
+});
+
+// ── the twins' export surfaces, so tsc and the bundle cannot disagree ──────
+//
+// `shared/models` IS THREE FILES: `models.mjs` (the runtime), `models.d.mts`
+// (its hand-written types) and `models.ts` (the TypeScript-side module, which
+// re-exports the `.mjs` and declares `CLASSES`/`PROBE_KINDS` itself so
+// `ModelClass` can be a real union type).
+//
+// EVERY EXTENSION-LESS IMPORT RESOLVES DIFFERENTLY ON THE TWO SIDES. The PWA
+// writes `from '../../../shared/models'`; vite's extension order puts `.mjs`
+// before `.ts`, so the BUNDLE reads `models.mjs` — while `tsc` reads
+// `models.ts`. They have agreed so far because every value `models.ts`
+// declares of its own also exists in the `.mjs`.
+//
+// MEASURED, and this guard exists because it happened: a derived
+// `CLASSES_BY_CAPABILITY` was added to `models.ts` alone, to give two pickers
+// one spelling of `[...CLASSES].reverse()`. `tsc --noEmit` passed in both
+// packages. At runtime the binding was `undefined` and five tests died with
+// `Cannot read properties of undefined (reading 'map')` — visible only to the
+// tests that RENDER the two screens, and invisible to every type check,
+// stylesheet guard and census on this branch.
+//
+// So the dedup was reverted: the derivation cannot live in the `.ts` alone,
+// and putting it in all three files would be three copies of the very
+// expression it was deduplicating. What ships instead is this.
+//
+// MEASURED, two mutations (baseline 87 passed):
+//
+//   | that same derived export added to models.ts alone | 1 red, tsc exit 0 |
+//   | the file read returns an empty string             | 1 red             |
+//
+// The first row IS the guard: `tsc --noEmit` exits 0 on the mutation and this
+// goes red. That is the only order in which this seam can be caught before a
+// render.
+describe('shared/models: the .ts declares nothing the .mjs lacks', () => {
+  const read = (f: string): string =>
+    readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'shared', f), 'utf8');
+
+  /** Value exports DECLARED in a file — `export const|function|class`. A
+   *  `export type`/`export interface` is erased and cannot be read at
+   *  runtime, so it is none of this test's business; a re-export (`export {
+   *  … } from './models.mjs'`) is by construction present in the `.mjs`. */
+  const declared = (src: string): string[] =>
+    [...src.matchAll(/^export (?:const|function|class) ([A-Za-z_$][\w$]*)/gm)]
+      .map((m) => m[1] ?? '').sort();
+
+  it('every value the .ts declares is also an export of the .mjs', () => {
+    const mjs = new Set(declared(read('models.mjs')));
+    const missing = declared(read('models.ts')).filter((n) => !mjs.has(n));
+    expect(
+      missing,
+      'this name exists for tsc and not for the bundle — an extension-less '
+      + "import of `shared/models` reads the .mjs at runtime, so add it there "
+      + '(and to models.d.mts) or do not declare it in the .ts',
+    ).toEqual([]);
+  });
+
+  it('reads both twins at all', () => {
+    // Without this the test above is green on two empty lists.
+    expect(declared(read('models.ts')).length).toBeGreaterThan(1);
+    expect(declared(read('models.mjs')).length).toBeGreaterThan(8);
+    expect(declared(read('models.ts'))).toContain('CLASSES');
+    expect(declared(read('models.mjs'))).toContain('CLASSES');
+  });
+});
+
+// ── auto-advance plan W2 Task 7: every runtime value reaches both twins ─────
+// The describe above pins the .ts's OWN declarations against the .mjs. This
+// one pins the other direction: every value the .mjs exports is reachable
+// through the .ts (re-exported, or declared there for its `as const` type)
+// and declared in the .d.mts, so a name added to the .mjs alone is red here
+// rather than `undefined` in a bundle or invisible to tsc.
+describe('shared/models: every value the .mjs exports reaches the .ts and the .d.mts', () => {
+  const read = (f: string): string => readFileSync(path.join(REPO, 'shared', f), 'utf8');
+  const valueExports = (src: string): string[] =>
+    [...src.matchAll(/^export (?:const|function|class) ([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]!).sort();
+  const reExported = (src: string): string[] => {
+    const m = /export \{([^}]*)\} from '\.\/models\.mjs';/.exec(src);
+    expect(m, "shared/models.ts has no re-export block from './models.mjs'").not.toBeNull();
+    return m![1]!.split(',').map((s) => s.trim()).filter((s) => s !== '');
+  };
+  const declaredIn = (src: string): string[] =>
+    [...src.matchAll(/^export declare (?:const|function|class) ([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]!);
+
+  it('the .ts re-exports, or itself declares, every value export of the .mjs', () => {
+    const ts = read('models.ts');
+    const reachable = new Set([...reExported(ts), ...valueExports(ts)]);
+    expect(valueExports(read('models.mjs')).filter((n) => !reachable.has(n))).toEqual([]);
+  });
+
+  it('the .d.mts declares every value export of the .mjs', () => {
+    const declared = new Set(declaredIn(read('models.d.mts')));
+    expect(valueExports(read('models.mjs')).filter((n) => !declared.has(n))).toEqual([]);
+  });
+
+  it('the lane-id pattern and the reserved words are among them, so the two checks above are not over nothing', () => {
+    const mjs = valueExports(read('models.mjs'));
+    expect(mjs).toContain('MODELS_LANE_ID_RE');
+    expect(mjs).toContain('MODELS_RESERVED_IDS');
+    expect(mjs.length).toBeGreaterThan(15);
   });
 });

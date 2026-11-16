@@ -1,0 +1,118 @@
+{
+  "name": "resolve-issue-and-parent",
+  "documentSource": "code",
+  "document": "query ResolveIssueAndParent($id: String!, $parent: String!) { issue(id: $id) { id identifier team { id key } } parent: issue(id: $parent) { id identifier team { id key } } }",
+  "variables": {
+    "id": "AAA-7",
+    "parent": "AAA-6"
+  },
+  "requestBody": "{\"query\":\"query ResolveIssueAndParent($id: String!, $parent: String!) { issue(id: $id) { id identifier team { id key } } parent: issue(id: $parent) { id identifier team { id key } } }\",\"variables\":{\"id\":\"AAA-7\",\"parent\":\"AAA-6\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631378577,
+  "receivedAtMs": 1793631378797,
+  "sentAt": "2026-11-02T14:56:18.577+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:19 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "292"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "5"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999995"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634979161"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634979161"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "issue": {
+        "id": "00000000-0006-4000-8000-000000000002",
+        "identifier": "AAA-7",
+        "team": {
+          "id": "00000000-0001-4000-8000-000000000001",
+          "key": "AAA"
+        }
+      },
+      "parent": {
+        "id": "00000000-0006-4000-8000-000000000001",
+        "identifier": "AAA-6",
+        "team": {
+          "id": "00000000-0001-4000-8000-000000000001",
+          "key": "AAA"
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"issue\":{\"id\":\"00000000-0006-4000-8000-000000000002\",\"identifier\":\"AAA-7\",\"team\":{\"id\":\"00000000-0001-4000-8000-000000000001\",\"key\":\"AAA\"}},\"parent\":{\"id\":\"00000000-0006-4000-8000-000000000001\",\"identifier\":\"AAA-6\",\"team\":{\"id\":\"00000000-0001-4000-8000-000000000001\",\"key\":\"AAA\"}}}}\n"
+}

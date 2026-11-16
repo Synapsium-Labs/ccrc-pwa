@@ -28,9 +28,32 @@
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll } from 'vitest';
+import { afterAll, afterEach, beforeEach } from 'vitest';
+import { assertNoPoisonLeft } from './containedTools.js';
 
 const made: string[] = [];
+
+/** The errors a recursive remove meets when something still writes into the tree it is removing: a store's
+ *  unawaited write landing between the walk and the `rmdir` (ENOTEMPTY, measured on the Linux CI runner in
+ *  run-close-lane's fixture, D-8394), or a handle not yet let go. */
+const RETRYABLE_RM = new Set(['ENOTEMPTY', 'EBUSY', 'EPERM', 'EMFILE', 'ENFILE']);
+
+/** `rmSync(dir, { recursive, force })`, as main always removed a fixture, made robust to a late writer (D-8394):
+ *  Node's own `maxRetries`, and then the WHOLE recursive remove again, up to four times with a short pause, because
+ *  the JS rimraf some Node versions run retries only the final `rmdir` and never re-reads a child that landed after
+ *  its walk. Any other error, or the last attempt's, is thrown. */
+function removeDir(dir: string): void {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+      return;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code ?? '';
+      if (attempt >= 4 || !RETRYABLE_RM.has(code)) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * attempt);
+    }
+  }
+}
 
 /** `mkdtempSync` under `os.tmpdir()`, remembered for removal. Same signature as
  *  the call it replaces — a prefix, not a path — so nothing about what a test
@@ -58,7 +81,67 @@ export function removeTmpFixtures(): void {
   // `force` because a fixture the test already removed itself is the normal
   // case, not an error — several files own their own cleanup and this is the
   // net underneath them.
-  for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  const dirs = made.splice(0);
+  // Scanned BEFORE removal: a poison record is read off the directory it lies in (D-8394). Every directory is then
+  // removed whatever the scan found, and whatever an earlier removal threw; the leak is reported first.
+  let leak: unknown = null;
+  try { assertNoPoisonLeft(dirs); } catch (e) { leak = e; }
+  let rmErr: unknown = null;
+  for (const dir of dirs) {
+    try { removeDir(dir); } catch (e) { rmErr ??= e; }
+  }
+  if (leak !== null) throw leak;
+  if (rmErr !== null) throw rmErr;
 }
 
+/** How many directories this file's `mkTmp` has made and not yet removed: the mark `removeTmpFixturesSince`
+ *  takes (centralised-update wave 13, R20a). */
+export function tmpMark(): number {
+  return made.length;
+}
+
+/** Remove every directory `mkTmp` made at or after `mark` (a `tmpMark()`), and forget it. A
+ *  removal that throws keeps its directory for the `afterAll` below, which removes it or fails loudly, so a
+ *  directory is never forgotten unremoved (centralised-update wave 13, R20a). */
+export function removeTmpFixturesSince(mark: number): void {
+  const kept: string[] = [];
+  const dirs = made.splice(mark);
+  // Scanned BEFORE removal: a poison record is read off the directory it lies in (D-8394).
+  let leak: unknown = null;
+  try { assertNoPoisonLeft(dirs); } catch (e) { leak = e; }
+  for (const dir of dirs) {
+    try { removeDir(dir); } catch { kept.push(dir); }
+  }
+  made.push(...kept);
+  if (leak !== null) throw leak;
+}
+
+/** OPT-IN, for a file whose one end-of-file sweep is too big for one hook: called at a file's top level, it
+ *  registers a root `beforeEach` that marks `made.length` and a root `afterEach` that removes what the test
+ *  made from that mark on. R20a measured `ccrc-update-*.test.ts`: about 650 directories and 2.5 GB in its one
+ *  `afterAll`, which overran vitest's 20 s hook timeout on two CI shards while every test passed. A directory
+ *  made BEFORE the mark (at collection time, or in a `beforeAll`) is left for the `afterAll`. A root
+ *  `afterEach` runs after every describe-level one (vitest runs a test's after-hooks innermost first), so a
+ *  describe's own teardown still sees its home. */
+export function removeTmpFixturesEachTest(): void {
+  let mark = -1;
+  beforeEach(() => { mark = tmpMark(); });
+  afterEach(() => {
+    if (mark >= 0) removeTmpFixturesSince(mark);
+    mark = -1;
+  });
+}
+
+// THE RUN PARENT (#316). Every directory `mkTmp` makes now lands inside the run's own `$TMPDIR/ccrc-testrun-XXXXXX/tmp`
+// (`run-tmp.globalsetup.mjs`, vitest's `globalSetup`), which the run removes at teardown or on a signal, and which a
+// later run under the same TMPDIR removes once it is quiet after a SIGKILL, so a KILLED run leaves one parent behind
+// until then, not hundreds. The hook below and R20a above both stay: they bound the peak disk use WITHIN a run (R20a's
+// file made about 650 directories and 2.5 GB), and the parent goes only when the whole run ends.
 afterAll(removeTmpFixtures);
+
+// THE POISON TEARDOWN (D-8394, residue R35(e)). After every test, a contained tool's poison that was hit and whose
+// record the test did not take (`takePoisonRecord`) fails THAT test, by `containedTools.ts`'s ledger, so a HOME the
+// test removed itself cannot hide it; and each directory removed above is scanned for any `*-poison` file first,
+// which catches a hand-written poison too. Before it, a test that met a poison and stayed green left one record,
+// removed unread (review 535 F3's coverage half). The ledger lies under the run's TMPDIR, which the run removes.
+afterEach(() => { assertNoPoisonLeft(); });

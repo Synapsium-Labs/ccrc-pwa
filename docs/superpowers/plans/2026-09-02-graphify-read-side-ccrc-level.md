@@ -3234,7 +3234,7 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   row's figures. The block shipped 2026-09-01 (`git log -S'_inst_graph_always_on' -- ccd/ccrc` →
   `551a6cb6`, 2026-09-02 01:37), so 109/4 spans one day, and no calendar-week reading rescues it —
   the seven-day span is the OTHER row. The conclusion is untouched (ccrc-pwa measures **zero** in
-  both rows, and 103/109 in MekWarLive is the load-bearing fact), which is exactly why it survived
+  both rows, and 103/109 in project-f is the load-bearing fact), which is exactly why it survived
   three copies: nothing about it was wrong except the thing this repo says a measurement may never
   get wrong. All three now read "the one day since it was deployed (2026-09-01, measured 2026-09-02)"
   and the README additionally names the week row so the two are not confusable again.
@@ -3846,7 +3846,7 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   ```
 
   So the tracked side spelled a name the corpus side never spells, `comm -23` emitted the corpus
-  spelling as a breach, and the tree was refused. **MEASURED on the live fleet: `mm-data` was refused
+  spelling as a breach, and the tree was refused. **MEASURED on the live fleet: `project-t` was refused
   over exactly two tracked files** — a JSON named with `à`/`ò` and a PNG named with `ö` — both
   committed, both in HEAD, neither in any way untracked. The refusal is permanent: nothing an operator
   can do to the tree changes what `ls-files` prints, and the noise-list remedy (`<repo>.list`) does not
@@ -3900,7 +3900,7 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   survived **unchanged and in full**: the tracked side spells a name the corpus side never spells,
   `comm -23` emits it as a breach, and the tree is refused **for ever**, with the same
   no-remedy-on-the-box property — nothing an operator does to the tree changes what `ls-files`
-  prints, and `<repo>.list` does not apply because the path is not noise. Narrower than mm-data's
+  prints, and `<repo>.list` does not apply because the path is not noise. Narrower than project-t's
   measured case, identical in kind and in consequence.
 
   **Fix:** read the tracked side NUL-separated — `tracked="$(git -C "$tree" ls-files -z | tr '\0'
@@ -3944,8 +3944,8 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   refuses the build. Nothing an operator does to the tree changes what detect picks up, and
   `<repo>.list` does not apply because the path is not ccrc's noise — so the refusal is permanent.
 
-  MEASURED live: **synapsium-platform** refused over `frontend/exposynapse-site/.astro/settings.json`
-  (ignored by `frontend/exposynapse-site/.gitignore`), **MekWarLive/swift-harbor** over `.husky/_/*`
+  MEASURED live: **project-k** refused over `frontend/site-k/.astro/settings.json`
+  (ignored by `frontend/site-k/.gitignore`), **project-f/swift-harbor** over `.husky/_/*`
   (ignored by `.husky/_/.gitignore`).
 
   **Fix:** derive **git's own verdicts** into the generated `.graphifyignore`, so the two sides answer
@@ -3996,7 +3996,7 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   `detect.py:1160-1166` has it.
 
   **Cost, measured** on a fixture repo with **300 ignored entries** (30 directories each holding a
-  tracked `keep.py` beside ten ignored `*.log` files; the live custom-tools tree has 308): the
+  tracked `keep.py` beside ten ignored `*.log` files; the live project-d tree has 308): the
   derivation call **7 ms**, the union probe **6 ms**, whole-pass wall time **170/148/150 ms** with the
   derivation against **127/151/128 ms** without it — ~20 ms on a tree whose real build is minutes.
   The per-entry fallback, which only runs when the union probe finds a culprit, costs **1063 ms** for
@@ -4103,7 +4103,7 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   been breached, and moved on. A measured cost was ACCEPTED instead of REMOVED. What the pruning
   ACHIEVED — one entry per collapsed subtree — stays; the code that achieved it does not (see
   D-1453's own correction below). What it could not fix either way is that the multiplier was 308 on
-  custom-tools where the corpus needed 0. Since D-1458 the derivation reads the breach, not the
+  project-d where the corpus needed 0. Since D-1458 the derivation reads the breach, not the
   census, and the collapse applies to the handful of entries that survive.
 
   **Not done, and why.** The per-(pattern, path) cost is a defect in the installed engine, not in this
@@ -4217,7 +4217,7 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   300/0 → **12 ms**, 1 entry → **2 ms**. Both numbers are the SHELL side only; the corpus-side cost
   (~50 us per (pattern, path), 300 anchored patterns → 30.296 s over 2000 paths) is D-1452 (3)'s
   measurement and is unchanged — pruning cuts the multiplier, and that is still the reason it matters.
-  **SUPERSEDED in part by D-1458:** cutting the multiplier was never enough, because on custom-tools
+  **SUPERSEDED in part by D-1458:** cutting the multiplier was never enough, because on project-d
   the multiplier after pruning was still 308 against a corpus that needed 0. The pruning's EFFECT and the neutralization both stay
   — but the FORWARD PASS ITSELF IS GONE, deleted rather than narrowed (`grep -n 'forward pass'
   ccd/ccd-graph-sweep` returns nothing). It could not survive the narrowing: it is a property of
@@ -4406,7 +4406,7 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   acceptance was the mistake.** A cost you have measured and can remove is not a cost you get to
   keep, and this one was 30 s per pass for a value of approximately zero.
 
-  **MEASURED on the live fleet (2026-09-04 21:43, `custom-tools`, read-only).** The generated filter
+  **MEASURED on the live fleet (2026-09-04 21:43, `project-d`, read-only).** The generated filter
   carried **308 derived entries**: 211 individual files under `.superpowers/`, 59 under `tools/`, 24
   under `.remember/` — individual files rather than directories because `--directory` collapses a
   directory only when it holds no TRACKED file, and every one of those directories holds one.
@@ -4429,7 +4429,7 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   names one, so a whole ignored tree still costs one line; D-1453's metachar neutralisation and the
   RULE-3 probe run on every derived entry, unchanged; (4) only if entries were derived, append them
   and re-run `detect()` ONCE more for the census. Zero derived entries and zero extra cost on a tree
-  like custom-tools; one to three entries on the trees this was written for; at most one extra
+  like project-d; one to three entries on the trees this was written for; at most one extra
   `detect()` run, and only when something was derived. The ownership marker, `_gs_open_filter`'s
   header and `_gs_rm_generated`'s cleanup are unchanged — the filter is now opened once and appended
   to twice instead of written once.
@@ -4447,7 +4447,7 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   **TIMING — the ledger's 300-entry fixture, re-run with the REAL `detect()`** (read-only, scratch
   fixture under the scratchpad; `~/.ccrc/graphify-venv/bin/python`, graphify 0.9.9; 2000 tracked
   `.py` files across 40 directories, 300 ignored `*.tmp` at a root that holds tracked content so
-  `--directory` collapses nothing — the shape custom-tools has). Two runs each, wall clock:
+  `--directory` collapses nothing — the shape project-d has). Two runs each, wall clock:
 
   | tree / filter | detect() |
   | --- | --- |
@@ -4479,7 +4479,7 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   So ~5.9 s where the old shape paid ~1.4 s: **+~3 s on this fixture**, and that extra pass is the
   WHOLE of the new cost — the bash side is strictly cheaper than it was, because the prefix walk is
   O(breach) where the old prune loop was O(the whole census). Two properties bound it. It is paid
-  EXACTLY on the trees the derivation serves: a tree that derives nothing — custom-tools, and every
+  EXACTLY on the trees the derivation serves: a tree that derives nothing — project-d, and every
   tree with no nested `.gitignore` — still runs `detect()` once, which is the row above. And it scales
   with the size of the NESTED-IGNORED SUBTREE, not with the corpus: shrinking `sub/vendor/` from 5000
   files to 1000 takes step 1 from 4.55 s / 4.24 s to **1.89 s**, **1.86 s** against the same 1.38 s
@@ -4629,7 +4629,7 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   same HEAD; and the tree is rebuilt again — every 15 minutes, for ever.
 
   **Measured on the live fleet, six consecutive passes 2026-09-04T23:19Z → 2026-09-05T00:35Z:**
-  `worktrees/data-internal/session-identity` and `worktrees/expoAI-assistant/quiet-meadow` read
+  `worktrees/project-e/session-identity` and `worktrees/project-h/quiet-meadow` read
   `stale-rebuilt … head` on every pass, 6806 ms and 73830 ms respectively; their `graph.json` mtimes
   stayed 2026-08-14 18:50 and 2026-09-02 14:57 while `manifest.json` and `.graphify_engine` were
   rewritten each pass; `~/.ccrc/graph-sweep.log` carried "No code-graph topology changes detected;
@@ -4747,8 +4747,8 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   | the old build's mtime carried onto the restamp (`os.utime(tmp, (st.st_atime, st.st_mtime))` after the splice) | `graph-sweep` — `Tests  1 failed \| 84 passed \| 2 skipped (87)`: *a restamped graph.json carries the mtime of the restamp* — `expected 1788487101526.999 to be greater than or equal to 1788573499545` |
 
 - **D-1510** (2026-09-05, same measurement — DISCOVERY DOES NOT REACH CLAUDE CODE'S OWN WORKTREES) —
-  `ccd ls` 2026-09-05 shows `claude-corp-intake-platform` running in
-  `$PROJECTS_ROOT/intake-platform/.claude/worktrees/board-phase-1` — the directory Claude Code's
+  `ccd ls` 2026-09-05 shows `claude-acme-project-n` running in
+  `$PROJECTS_ROOT/project-n/.claude/worktrees/board-phase-1` — the directory Claude Code's
   EnterWorktree creates — and `_gs_trees` globs only `$PROJECTS_ROOT/*/`, `$WORKTREES_ROOT/*/` and
   `$WORKTREES_ROOT/*/*/`. That tree has a `graph.json` dated 2026-08-28 11:21 with no
   `.graphify_engine` beside it (not the sweep's build) and reads fresh today only because no commit
@@ -4818,10 +4818,10 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
 - **D-1563** (2026-09-05, first pass under #52 — D-1510 SWEPT WHAT NO SESSION LIVES IN, AND THE PASS
   BUDGET WENT TO THROWAWAY TREES) — the three `.claude/worktrees/*/` globs found 15 directories on
   the live fleet, 14 of them git toplevels: one named EnterWorktree tree with a registered session
-  (`intake-platform/.claude/worktrees/board-phase-1`, the tree D-1510 was written for), three named
+  (`project-n/.claude/worktrees/board-phase-1`, the tree D-1510 was written for), three named
   ones with no session, and TEN generated by Claude Code's own isolation — `agent-<17 hex>` subagent
   worktrees and `wf_<run>-<n>` workflow worktrees, six touched within the hour and five fourteen days
-  old. The pass built eight of them cold at ~75 s each (expoAI-assistant is 2,483 files), ran
+  old. The pass built eight of them cold at ~75 s each (project-h is 2,483 files), ran
   02:54:35Z → 03:05:52Z — eleven minutes against the two the pass took before — and recorded
   `skipped-budget` for eight trees, board-phase-1 among them. Every future workflow with worktree
   isolation would mint more. **The rule that was missing is the one the idle gate already states: a
@@ -4837,7 +4837,7 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   the `PreToolUse` speed bump until "one week of R4 data", and D-1365 made the revisit an act: read
   the chips across the live fleet on one dated day and record it here. **Taken 2026-09-05 11:08 UTC,
   two days after the read side deployed (PR #45, 2026-09-03):** graphify's own query log holds 4
-  queries since the deploy, across 3 corpora (custom-tools 2, rp-llm 1, MekWarLive 1), and the 18 live
+  queries since the deploy, across 3 corpora (project-d 2, project-j 1, project-f 1), and the 18 live
   sessions' hookstates agree — `graphQueries` 0 in 10 sessions, 1 in 2, 2 in 1, `null` in 5 (no
   `SessionStart` since the deploy). The counter and the log agree, so R4 measures; what it measures is
   that the card and clause 12 moved nothing. **Operator ruling on that reading:** *"WHY IS IT NOT
@@ -4849,7 +4849,7 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   server; both lanes report that sha; the installed hook carries the gate; `ccrc doctor` on the fleet
   box reads `gate on`; no kill-switch file. **Baseline at deploy, so the reading has something to be
   read against:** the query log holds 40 queries since the ruling at 11:08 UTC (swift-harbor 26,
-  custom-tools 6, rp-llm 5, plain-hollow 3) against 4 in the two days before it — the ruling itself
+  project-d 6, project-j 5, plain-hollow 3) against 4 in the two days before it — the ruling itself
   moved the number before the gate did, which the reading must not credit to the gate. Of 19
   hookstates: `graphQueries` 26, 7, 4, 4, 3, 1 in six sessions, 0 in eight, `null` in five; within
   twelve minutes of the deploy four sessions had written `graphGateDenials: 0` (each had queried
@@ -4868,7 +4868,7 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   day, not the fleet), 0 on Sep 3. The first full day with the nudge is the highest, and one day cannot
   separate the nudge from the workload. Denials: 17, in 9 sessions (1, 1, 1, 1, 2, 2, 3, 3, 3), and all
   9 queried afterwards — 8 inside the same hourly window as their first denial (the day-1 transcript
-  shows two queries within 7 s of it), and one, an expoAI-assistant worktree, reached the bound at 13:04
+  shows two queries within 7 s of it), and one, a project-h worktree, reached the bound at 13:04
   Sep 6, worked four more hours with no query, went idle, and queried six minutes after resuming at 11:06
   Sep 7. Three sessions reached the bound of 3 and every one queried — that worktree sat at `gated 3`
   with no query for thirteen hourly rows, four of them working, before it did — so no SESSION paid the
@@ -4920,12 +4920,12 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   nudges on any `file_path`/`pattern` ending in one of 28 source/doc extensions outside `graphify-out/`.
   Both check only that `graph.json` EXISTS (no freshness), never block, never stop, and cover neither the
   `Grep` tool nor subagents beyond a sentence asking the agent to pass the rule on. On this fleet they
-  are installed in seven projects (MekWarLive, rp-llm, custom-tools, expoAI-assistant,
-  synapsium-platform, one further repository whose name tracked text may not spell (`topology-clean`'s
-  fleet-account-label class), plus MekWarLive's worktree via the tracked file) — four of the
+  are installed in seven projects (project-f, project-j, project-d, project-h,
+  project-k, one further repository whose name tracked text may not spell (`topology-clean`'s
+  fleet-account-label class), plus project-f's worktree via the tracked file) — four of the
   seven as UNTRACKED `.claude/settings.json`, so a fresh clone or worktree has none. Query log, the week
   before the read side shipped (2026-08-25..09-02): 345 queries, 330 in those projects, ccrc-pwa 0; the
-  custom-tools worktrees (no untracked file) at 0 against the main checkout's 104. Since the ruling:
+  project-d worktrees (no untracked file) at 0 against the main checkout's 104. Since the ruling:
   102 queries, ccrc-pwa 24 with only the gate and the card. Read as: the per-call nudge and the
   once-per-session deny both move the number, and only a fleet-wide mechanism reaches every tree.
 - **D-1689** (2026-09-05, review of PR #54, MAJOR, FIXED) — THE DENY WAS SAID BEFORE IT WAS COUNTED. The

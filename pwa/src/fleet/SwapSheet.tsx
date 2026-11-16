@@ -10,379 +10,30 @@
 // opens a QuickConfirm whose consequence sentence does the explaining;
 // confirming posts api.swap — the restart itself then plays out over the fleet
 // stream.
-import { useEffect, useState } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { AccountUsage, FleetSession, RosterWire } from '../../../shared/api';
-import { limitBand } from '../components/LimitBar';
-import { QuickConfirm } from '../components/QuickConfirm';
-import { Sheet } from '../components/Sheet';
-import { toast } from '../components/Toast';
-import { accountHue, accountLabel, accountPool, rosterWrapperIds } from '../lib/accounts';
-import { api, apiErrorText } from '../lib/api';
+import { SWAP_REFUSALS, isSwapRefusal, type SwapRefusal } from '../../../shared/api';
+import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
+import { accountLabel, accountPool } from '../lib/accounts';
+import { ApiError, SWAP_REFUSAL_TEXT, api, failedTo } from '../lib/api';
 import { projectPoolOf, splitByPool } from '../lib/pools';
+import { ensureSession } from '../session/useEnsure';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { useAccountUsage } from './useProjectedHome';
+import { AccountRow } from './AccountRow';
+import { hibernatedSince } from './hibernated';
+import { OtherPoolsDisclosure } from './chips';
+import {
+  disabledWrappers, factsFor, leastLoaded, pickableWrappers, pickerEmptiness,
+} from './accountPicker';
 import './fleet.css';
 
-/** One account's row as `GET /api/accounts` carries it, or `null` when there is
- *  no row for that account — the poll has not landed, or telemetry has never
- *  mentioned this account at all (`readLimits` builds a row per
- *  `~/.cc-limits/*.json`, plus any markered lane, and nothing else).
- *
- *  THE WHOLE ROW, not the `{five, seven}` pair this used to be. The pair came
- *  off the live fleet frame (`FleetSession.limits`) and carried no provenance,
- *  so a window that had merely ROLLED OVER — a rate-limit window whose reset
- *  time elapsed, whose `0` is inferred from a timestamp and was never observed
- *  — was indistinguishable from an account something had measured empty. It
- *  therefore scored 0, won `leastLoaded`, and wore the "suggested" tag on a
- *  fleet where nothing had run on it in days. `AccountUsage` answers that with
- *  `fiveRolledOver`/`sevenRolledOver`, and this sheet was already fetching it.
- *  (`server/src/limits.ts`'s `measured()` and ccd's `_limit_score` are the same
- *  decision on the same fact, one layer down.) */
-export type AccountFacts = AccountUsage | null;
+/** The narrowed picker's sentence (`only`, D-8123) when none of the named accounts is left to offer. */
+export const NO_ROOM_NOTE = 'No account has room right now.';
 
-/** Every account a picker could offer, before anything is taken away:
- *  the roster's own ids plus any wrapper a live session reports that this
- *  build's roster has no entry for.
- *
- *  `excluded` is what may not be offered AT ALL, and the only thing either
- *  picker passes here is `disabledWrappers` — the operator's kill switch.
- *  A health-probe verdict deliberately does NOT come through this parameter;
- *  see `disabledWrappers` for the ruling that keeps it out. */
-export function pickableWrappers(
-  roster: readonly RosterWire[],
-  sessions: FleetSession[],
-  excluded: readonly string[] = [],
-): string[] {
-  // `string[]`, not the roster's own id type: a live session can report a
-  // wrapper the roster doesn't have an entry for at all (a build running an
-  // older/newer roster than the fleet host), and this list must still offer
-  // it as a swap target rather than reject it at the type level.
-  const all: string[] = rosterWrapperIds(roster);
-  for (const s of sessions) {
-    if (!all.includes(s.wrapper)) all.push(s.wrapper);
-  }
-  return all.filter((w) => !excluded.includes(w));
-}
-
-/** The lanes an OPERATOR has switched off — the ONE fact that costs a lane its
- *  place in either picker. (D-1978.)
- *
- *  ONE OF THE TWO CONDEMNED STATES, NOT BOTH, and the split is the whole point.
- *  This function used to fold `authDead` in beside `disabled` "because they
- *  answer the same question". They do not, and `_authdead`'s own header in
- *  ccd/ccd rules on it at the marker's definition:
- *
- *      NOT `-disabled`. That name is OPERATOR intent … This one is a
- *      MEASUREMENT, which can be wrong — so it never joins `_account_ok`, and
- *      its two consumers rank-last (`_swap_target`) and skip-scoring
- *      (`_ws_least_loaded`) instead. A rescue must always have a destination.
- *
- *  So a probe verdict may cost PREFERENCE and must never cost ELIGIBILITY:
- *    - `disabled` (`~/.cc-sessions/<w>-disabled`, touched by a human) is INTENT.
- *      It cannot be wrong, and a lane carrying it is not offered at all.
- *    - `authDead` (`<w>-authdead`, written by `ccd-account-health`) is a
- *      MEASUREMENT. The lane stays PICKABLE, is MARKED with AccountsScreen's own
- *      words, and can never be SUGGESTED — `condemned` below is that one
- *      predicate, and `load`/`AccountRow` are its two consumers, exactly the
- *      shape `_ws_least_loaded` and `projectHome` (server/src/limits.ts) already
- *      hold. All four implementations of this decision now agree; this file was
- *      the one that inverted it, and an all-condemned fleet answered the human
- *      rescuing a wedged session with an EMPTY picker.
- *
- *  WHAT ACTUALLY HAPPENS ON A TAP (D-1979), stated because the sentence this
- *  replaces got it backwards: NOTHING refuses the swap. `cmd_swap` gates on
- *  `_is_valid_wrapper`, a registry entry, target≠current, an executable wrapper
- *  and a transcript match — it reads neither marker, and says so in its own
- *  header ("Manual swaps may target ANY valid wrapper; the pool policy only
- *  constrains auto-swaps"), and `POST /api/sessions/:id/swap` adds no check of
- *  its own. That is deliberate and it is the ruling working: a manual,
- *  human-directed rescue is exactly the case a probe verdict must not veto. The
- *  list below is therefore the WHOLE gate for `disabled`, and for `authDead` it
- *  is deliberately not a gate at all — only a mark.
- *
- *  `=== true`, never truthiness, on both flags. `authDead` is ADDITIVE on the
- *  wire (`shared/api.ts`, on `RosterWire.hidden`'s terms, no `FLEET_PROTO`
- *  bump): a server built before it OMITS it, and ABSENCE MEANS NOT CONDEMNED.
- *
- *  `null` rows — nothing landed, or the poll failed — exclude NOTHING, which is
- *  `useAccountUsage`'s own stated failure posture, and the residual risk is now
- *  named rather than argued away: during a poll gap a switched-off lane IS
- *  offered and a tap on it WILL move the session there (see above — nothing
- *  refuses it), and the operator learns it from the session failing to come
- *  back rather than from a refusal. That is still the better half of the trade,
- *  because hiding every account whenever telemetry hiccups makes a healthy
- *  fleet look like it does not exist, and the swap it would have prevented is
- *  undone by another swap. */
-export function disabledWrappers(rows: readonly AccountUsage[] | null): string[] {
-  return (rows ?? [])
-    .filter((a) => a.disabled === true)
-    .map((a) => a.wrapper);
-}
-
-/** The health probe's durable verdict on ONE account, read off the poll's own
- *  row: `~/.cc-sessions/<w>-authdead` stands for it.
- *
- *  ONE PREDICATE, TWO CONSUMERS, which is `projectHome`'s own phrase for the
- *  identical shape on the server (`server/src/limits.ts`: "`_ws_least_loaded`
- *  reads `_authdead` once per candidate and spends the answer twice"). Here the
- *  two consumers are `load` — a condemned lane is not scored, so it can never
- *  wear "suggested" — and `AccountRow`, which marks the row. What NEITHER does
- *  is remove it: eligibility is not this fact's to spend.
- *
- *  Not scoring it is not the same as waiting for its telemetry to age out, and
- *  that window is the reachable half: nothing runs on a condemned lane, so it
- *  cannot refresh its own statusline, but its LAST sample stays fresh for hours
- *  — and a lane that stopped working at 3% is the emptiest number on the fleet
- *  for that whole window. It would win the tag on the strength of having died.
- *
- *  `=== true` through an optional chain: `null` facts (no row for this account
- *  at all) are NOT a verdict, and neither is an older server's omitted field. */
-export function condemned(facts: AccountFacts): boolean {
-  return facts?.authDead === true;
-}
-
-/** Why a picker has nothing to offer — a distinct token per cause, because the
- *  two are not the same sentence and `null` (there IS something to offer) is
- *  not either. (D-1980.) The component words them; this decides which fact
- *  is true.
- *
- *  It exists because both pickers used to render `wrappers.map(...)` into a
- *  bare `<div className="acct-list">` with no zero branch, so "every lane is
- *  switched off" and "the roster has not arrived" both came out as an empty box
- *  under the words "Pick where it should live meanwhile". `AccountsStrip`
- *  already refuses that in the same file tree — three named placeholders rather
- *  than one silence — and this is that rule on the pickers. */
-export type PickerEmptiness = 'none-known' | 'all-switched-off' | null;
-
-export function pickerEmptiness(
-  candidates: readonly string[],
-  offered: readonly string[],
-): PickerEmptiness {
-  if (offered.length > 0) return null;
-  return candidates.length === 0 ? 'none-known' : 'all-switched-off';
-}
-
-/** One account's row out of the poll, or `null` when the poll has none for it.
- *  Account-level facts are per-ACCOUNT, so a single row speaks for every
- *  session on that lane — which is what the old `limitsFor(sessions, wrapper)`
- *  was really saying when it took the first live session's copy of them. */
-export function factsFor(rows: readonly AccountUsage[] | null, wrapper: string): AccountFacts {
-  return (rows ?? []).find((a) => a.wrapper === wrapper) ?? null;
-}
-
-/** Load score for "suggested" ranking — the tighter of the two windows, or
- *  null when there is no such thing.
- *
- *  Fix round 3, verifier P7 (eleventh measurement forgery, adjudicated REAL).
- *  This was `Math.max(l.five ?? 0, l.seven ?? 0)`, and `five`/`seven` are
- *  `number | null` where null means THE WINDOW WAS NOT READ
- *  (shared/api.ts). Both nulls is a producible state, not a hypothetical:
- *  `readLimits` writes `{five: null, seven: null, …}` for any account whose
- *  limits file is missing or unparseable (server/src/limits.ts), and
- *  `server/src/fleet.ts` hands that straight to the session as a non-null
- *  `limits` object. The row therefore rendered "5h — · 7d —" and wore the
- *  "suggested" tag at the same time, beating a genuinely-measured account at
- *  5%: an account nobody could read was recommended precisely BECAUSE nobody
- *  could read it.
- *
- *  One known window is not enough either. The score is a MAXIMUM, so with the
- *  other window unread the true score is only bounded below — `{five: 3,
- *  seven: null}` scored 3 and won the ranking while its 7-day window could
- *  have been at 99. A recommendation built on that is a guess about the number
- *  that would have decided it.
- *
- *  AN INFERRED ZERO IS UNKNOWN TOO, and it is the same magnet reaching through
- *  a seam this function could not see. A rolled-over window carries a REAL `0`
- *  — `server/src/limits.ts` writes it the moment a `resetAt` lapses or a sample
- *  outlives its own window — but that 0 was DERIVED FROM A TIMESTAMP, never
- *  observed. Read as a measurement it is the best score on the fleet, so the
- *  account wins every placement; nothing runs on an account nothing was moved
- *  to, so nothing ever replaces the inferred number, and the account nobody has
- *  touched in days stays "suggested" forever. Unlike the two above, this one
- *  fires on a perfectly healthy fleet, every time a window turns over.
- *
- *  ONE rolled window is enough, for the same reason one null window is: the
- *  score is a maximum, and the elapsed half bounds the truth only from below.
- *
- *  THIS IS `server/src/limits.ts`'s `measured()`, TERM FOR TERM — the same
- *  disjuncts in the same order over the same fields, and ccd's `_limit_score`
- *  is the third copy of the same decision in bash. Deliberately not a second
- *  spelling of one rule: the swap picker learned the null half first and
- *  placement learned the inferred zero first, and they are the same lesson.
- *  The one difference is punctuation, not meaning — `=== true` rather than
- *  `measured()`'s bare truthiness, because this side reads the flags off the
- *  WIRE, where a field can simply be absent, while `limits.ts` reads a value it
- *  built itself. On every value `AccountUsage`'s declared `boolean` can carry,
- *  the two forms decide identically.
- *
- *  AND A CONDEMNED LANE IS NOT SCORED AT ALL — the fourth disjunct, and the
- *  only one that is not about the number. `projectHome` spells it as a separate
- *  `.filter(notCondemned)` BEFORE `measured()` rather than a disjunct inside it,
- *  which is the same composite by a different arrangement; the disjunct is what
- *  this side can do without a filter step, and `condemned` is the shared
- *  predicate either way. Its own docstring carries the reason the flag cannot
- *  be left to telemetry staleness.
- *
- *  Not scoring is not a refusal to help: an account with no score is simply
- *  not ranked, its gauges still say `—` (or `reset`, which is the rolled-over
- *  window saying so out loud), and it remains tappable. What is gone is ccrc
- *  telling the reader it is the emptiest pool. That is the WHOLE cost a
- *  measurement is allowed to charge — preference, never eligibility. */
-const load = (l: AccountFacts): number | null => {
-  if (condemned(l) || l === null) return null;
-  // A WINDOW THE PLAN DOES NOT HAVE IS NOT AN UNMEASURED WINDOW. `measured()`
-  // and ccd's `_limit_score` carry the same clause; an absent marker falls
-  // through to the pair rule on all three sides.
-  if (l.fiveWindowMinutes === 0) {
-    return l.seven === null || l.sevenRolledOver === true ? null : l.seven;
-  }
-  return l.five === null || l.seven === null
-      || l.fiveRolledOver === true || l.sevenRolledOver === true
-    ? null
-    : Math.max(l.five, l.seven);
-};
-
-/** The least-loaded wrapper among those whose BOTH limit windows were actually
- *  MEASURED — read, and not inferred from an elapsed window; null if none was.
- *  `null` is the honest answer when every candidate is unscoreable: no target
- *  wears the tag, rather than one wearing it off a number nobody took. */
-export function leastLoaded(
-  rows: readonly AccountUsage[] | null,
-  wrappers: string[],
-): string | null {
-  let best: string | null = null;
-  let bestLoad = Infinity;
-  for (const w of wrappers) {
-    const score = load(factsFor(rows, w));
-    if (score !== null && score < bestLoad) {
-      bestLoad = score;
-      best = w;
-    }
-  }
-  return best;
-}
-
-/** One thin gauge row — mono label · track · tabular percentage. Spans only,
- *  so the row stays valid inside the AccountRow button.
- *
- *  THE THREE-WAY IS `AccountsScreen`'s `Bar`, WORD FOR WORD: "reset" (an
- *  inferred zero) ≠ a measured "0%" ≠ "—" (nobody measured it). That screen
- *  already owns the vocabulary for exactly this state and this is the same fact
- *  on a second surface, so it says the same word rather than inventing a second
- *  visual language for it. The track is left EMPTY for a rolled-over window,
- *  which is what `Bar` renders too — its fill is `width: 0%` there, because the
- *  0 it would draw is the inferred one. A confident bar and the word "reset"
- *  would contradict each other in the same row. */
-function Gauge({ label, value, rolledOver }: {
-  label: string; value: number | null; rolledOver: boolean;
-}): ReactNode {
-  const pct = rolledOver || value === null ? null : Math.min(100, Math.max(0, value));
-  return (
-    <span className="acct-gauge">
-      <span>{label}</span>
-      <span className="limit-track">
-        {pct !== null && (
-          <span
-            className={`limit-fill limit-fill--${limitBand(pct)}`}
-            style={{ width: `${pct}%` }}
-          />
-        )}
-      </span>
-      <span className="acct-gauge-pct">
-        {rolledOver ? 'reset' : pct === null ? '—' : `${Math.round(pct)}%`}
-      </span>
-    </span>
-  );
-}
-
-/** A tappable account row: chip (label + hue), limit gauges, chevron.
- *  Shared by SwapSheet (targets) and NewSessionSheet (step 1) — ONE row
- *  component, so both pickers say the same thing about the same account, and
- *  both are fed from the same source (`useAccountUsage`) for the same reason.
- *
- *  A lane the health probe CONDEMNED is rendered here rather than removed
- *  upstream, and it says so in `AccountsScreen`'s own words ("sign-in expired
- *  on the fleet host") through `AccountsScreen`'s own `data-disabled`
- *  attribute — the second vocabulary this file is careful not to invent, for
- *  the same reason `Gauge` borrows "reset" from `Bar`. The row stays TAPPABLE:
- *  a measurement can be wrong, and the manual swap it feeds accepts the target
- *  regardless (see `disabledWrappers`), so removing the affordance would only
- *  hide the one destination a bad probe run left. `condemned` is the single
- *  reader of the flag on this side. */
-export function AccountRow({
-  wrapper,
-  facts,
-  suggested = false,
-  onPick,
-  roster,
-  poolChip,
-}: {
-  wrapper: string;
-  facts: AccountFacts;
-  suggested?: boolean;
-  onPick: (wrapper: string) => void;
-  roster: readonly RosterWire[];
-  /** The account's pool name when a caller chooses to expose membership.
-   *  Swap targets pass it for crossing rows; new-session account rows pass it
-   *  for every known membership. A missing account pool stays quiet. */
-  poolChip?: string | null;
-}): ReactNode {
-  // A direct hue lookup, not a re-parse of `accountColorVar`'s returned
-  // token NAME: the string-inspection this replaced
-  // (`colorVar.startsWith('--acct-')`) worked only by coincidence — it was
-  // really asking "does this wrapper have a real hue", and `accountHue`
-  // answers that directly, `undefined` for a wrapper the roster does not
-  // have. The `--bg-raised` fallback is unchanged: a wrapper outside the
-  // roster (a live session reporting an id this roster build does not know)
-  // still gets a neutral chip, never an invented tint.
-  const hue = accountHue(roster, wrapper);
-  const colorVar = hue === undefined ? '--ink-tertiary' : `--acct-${hue}`;
-  const chipStyle: CSSProperties = {
-    color: `var(${colorVar})`,
-    background: hue === undefined ? 'var(--bg-raised)' : `var(${colorVar}-tint)`,
-  };
-  const off = condemned(facts);
-  const poolLabel = `pool · ${poolChip ?? ''}`;
-  return (
-    <button
-      type="button"
-      className="acct-row"
-      data-disabled={off ? 'true' : 'false'}
-      onClick={() => onPick(wrapper)}
-    >
-      <span className="chip" style={chipStyle}>
-        <i aria-hidden="true" />
-        {accountLabel(roster, wrapper)}
-      </span>
-      {suggested && <span className="acct-suggested">suggested</span>}
-      {poolChip != null && poolChip !== '' && (
-        <span className="acct-pool" aria-label={poolLabel} title={poolLabel}>
-          {poolLabel}
-        </span>
-      )}
-      <span className="acct-gauges">
-        {/* Above the gauges, not instead of them: the numbers are still true of
-            the last moment anything ran there, and this is the sentence that
-            says why they stopped moving. `data-disabled` greys their fills for
-            the reason AccountsScreen greys its own — a frozen crit-red bar
-            reads as live pressure on a lane nothing is running on. */}
-        {off && <span className="acct-condemned">sign-in expired on the fleet host</span>}
-        {facts === null ? (
-          <span className="acct-unknown">limits unknown</span>
-        ) : (
-          <>
-            <Gauge label="5h" value={facts.five} rolledOver={facts.fiveRolledOver === true} />
-            <Gauge label="7d" value={facts.seven} rolledOver={facts.sevenRolledOver === true} />
-          </>
-        )}
-      </span>
-      <span className="acct-chev" aria-hidden="true">
-        ›
-      </span>
-    </button>
-  );
-}
+/** An account picker's sentence when every other lane is switched off; the Move sessions sheet says the same. */
+export const ALL_SWITCHED_OFF = 'Every other account is switched off on the fleet host — turn one back on from Accounts.';
 
 export interface SwapSheetProps {
   /** `home` is required here because §3.4's honest label cannot be written
@@ -430,11 +81,16 @@ export interface SwapSheetProps {
    *      below and nowhere else. */
   session: Pick<FleetSession, 'id' | 'wrapper' | 'project'>
     & { home: string | null }
-    & Partial<Pick<FleetSession, 'held'>>;
+    & Partial<Pick<FleetSession, 'held' | 'status' | 'hibernatedAt'>>;
   open: boolean;
   onClose: () => void;
   /** Injectable for tests; defaults to the app-wide fleet store. */
   fleet?: FleetStore;
+  /** D-8123: narrows the target list to these accounts. The Waiting on you row for a session on a usage limit passes the
+   *  accounts with MEASURED room (`accountsWithMeasuredRoom`), so the sheet offers a place the session can actually run.
+   *  It only ever REMOVES targets: an id the roster does not offer stays unoffered. Absent, the list is the ordinary one.
+   *  A narrowed list that comes up empty says so in its own words (`NO_ROOM_NOTE`), not as the ordinary emptiness. */
+  only?: readonly string[];
 }
 
 export function SwapSheet({
@@ -442,8 +98,10 @@ export function SwapSheet({
   open,
   onClose,
   fleet = useFleetStore,
+  only,
 }: SwapSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
+  const asleep = session.status !== undefined && hibernatedSince({ status: session.status, hibernatedAt: session.hibernatedAt }) !== null;
   const roster = fleet((s) => s.roster);
   const pools = fleet((s) => s.pools);
   // The target awaiting its consequence confirm (null = still browsing).
@@ -480,6 +138,19 @@ export function SwapSheet({
   // is the actual invariant and closing is only the way it usually ends.
   useEffect(() => { setTarget(null); setShowOther(false); }, [open, session.id]);
 
+  // D-5240: the "swap anyway" ask, raised by a `409 session-busy` that arrives AFTER the sheet closed (`move()` closes
+  // on the tap, below), so the sheet's own close is not its end. It is cleared when the sheet opens again and when the
+  // sheet is retargeted (`session.id` changes), and it renders only for the session it was raised for (`busyAsk.id`),
+  // so an actions sheet retargeted to another session (the class the comment above describes) can never show it, or
+  // confirm it, over that session. A refusal that LANDS while the sheet shows another session is not parked for later
+  // either: `move()` reads `shownId` (the session displayed now, not the one its closure captured) and toasts that
+  // refusal in words instead, so returning to the refused session later never pops a consent for a stale refusal.
+  const [busyAsk, setBusyAsk] = useState<{ id: string; project: string; wrapper: string; cross: boolean } | null>(null);
+  const shownId = useRef(session.id);
+  shownId.current = session.id;
+  useEffect(() => { if (open) setBusyAsk(null); }, [open]);
+  useEffect(() => { setBusyAsk(null); }, [session.id]);
+
   // ONE SOURCE FOR EVERY ACCOUNT-LEVEL FACT THIS SHEET SHOWS OR RANKS ON, and
   // it is the poll, not the fleet frame. The frame's `FleetSession.limits` used
   // to feed the gauges while the poll fed eligibility, and that is two sources
@@ -499,7 +170,7 @@ export function SwapSheet({
   // A lane the probe condemned is in BOTH — it is offered, marked and unranked.
   const switchedOff = disabledWrappers(accounts);
   const others = pickableWrappers(roster, sessions).filter((w) => w !== session.wrapper);
-  const wrappers = others.filter((w) => !switchedOff.includes(w));
+  const wrappers = others.filter((w) => !switchedOff.includes(w) && (only === undefined || only.includes(w)));
   const emptiness = pickerEmptiness(others, wrappers);
   // No pools frame is a distinct condition from a measured untagged project.
   // `splitByPool` answers that absence permissively: all candidates remain
@@ -518,20 +189,31 @@ export function SwapSheet({
       ? null
       : emptiness === 'none-known'
         ? 'No other account to move this session to yet.'
-        : 'Every other account is switched off on the fleet host — turn one back on from Accounts.';
+        : only !== undefined
+          ? NO_ROOM_NOTE
+          : ALL_SWITCHED_OFF;
 
-  const move = (wrapper: string): void => {
+  const move = (wrapper: string, cross: boolean, interrupt: boolean): void => {
     // The flag belongs to the selected row, not to the sheet generally. A
     // normal target retains the exact two-argument call used before pools.
-    const cross = split.crossing.includes(wrapper);
+    // `interrupt` is "swap anyway"'s, the second tap after a `409 session-busy` (D-5240), and rides the same way.
+    const { id, project } = session;
+    const opts = { ...(cross ? { crossPool: true } : {}), ...(interrupt ? { interrupt: true } : {}) };
     void (async () => {
       try {
-        await (cross
-          ? api.swap(session.id, wrapper, { crossPool: true })
-          : api.swap(session.id, wrapper));
-        toast(`Moving ${session.project} to ${accountLabel(roster, wrapper)}…`);
+        await (cross || interrupt ? api.swap(id, wrapper, opts) : api.swap(id, wrapper));
+        toast(`Moving ${project} to ${accountLabel(roster, wrapper)}…`);
       } catch (err) {
-        toast(`Couldn't move — ${apiErrorText(err)}`, 'error');
+        const refusal = swapRefusalOf(err);
+        // A measured turn, not yet consented to: ask, archive's shape. Anything else the route refused in its own words.
+        // Only while the refused session is still the one displayed (D-5240); retargeted away, the refusal is a toast.
+        if (refusal === SWAP_REFUSALS.sessionBusy && !interrupt && id === shownId.current) {
+          return setBusyAsk({ id, project, wrapper, cross });
+        }
+        // D-5242: a row that went to sleep between the sheet's frame and the tap is refused `409 hibernated`; the toast's
+        // action is the remedy, the same `ensure` the sheet's own Wake posts.
+        const action = refusal === SWAP_REFUSALS.hibernated ? { label: 'Wake', onClick: () => wakeSession(id, project) } : undefined;
+        toast(refusal !== null ? `Couldn't move ${project} — ${SWAP_REFUSAL_TEXT[refusal]}` : failedTo('move', err), 'error', action);
       }
     })();
     onClose();
@@ -585,57 +267,34 @@ export function SwapSheet({
   return (
     <>
       <Sheet open={open} onClose={onClose} eyebrow="move session" title="Move to another account">
+        {asleep ? (
+          // D-5242: a sleeping session has no process to move (the swap route refuses it `409 hibernated`), so the
+          // sheet offers the one act that applies: wake it, then move it.
+          <>
+            <p className="sheet-copy">
+              {session.project} is asleep, so there is nothing running to move. Wake it, then move it.
+            </p>
+            <Button variant="ghost" onClick={() => { wakeSession(session.id, session.project); onClose(); }}>
+              Wake session
+            </Button>
+          </>
+        ) : (<>
         <p className="sheet-copy">
           {session.project} runs on {accountLabel(roster, session.wrapper)} now.{' '}
           {sheetCopy}{' '}
           Pick where it should live meanwhile.
         </p>
-        <div className="acct-list">
-          {emptyNote === null ? (
-            split.eligible.map((w) => (
-              <AccountRow
-                key={w}
-                wrapper={w}
-                facts={factsFor(accounts, w)}
-                suggested={w === suggested}
-                onPick={setTarget}
-                roster={roster}
-              />
-            ))
-          ) : (
-            <p className="acct-none">{emptyNote}</p>
-          )}
-        </div>
-        {split.unknown ? (
-          <p className="pool-note">
-            This project's pool is not known from here, so pool matching does not hide otherwise available accounts.
-          </p>
-        ) : split.crossing.length > 0 ? (
-          <>
-            <button
-              type="button"
-              className="acct-disclosure"
-              aria-expanded={showOther}
-              onClick={() => setShowOther((shown) => !shown)}
-            >
-              show other pools ({split.crossing.length})
-            </button>
-            {showOther && (
-              <div className="acct-list">
-                {split.crossing.map((w) => (
-                  <AccountRow
-                    key={w}
-                    wrapper={w}
-                    facts={factsFor(accounts, w)}
-                    onPick={setTarget}
-                    roster={roster}
-                    poolChip={accountPool(roster, w)}
-                  />
-                ))}
-              </div>
-            )}
-          </>
-        ) : null}
+        <SwapTargetChooser
+          split={split}
+          accounts={accounts}
+          suggested={suggested}
+          emptyNote={emptyNote}
+          roster={roster}
+          onPick={setTarget}
+          showOther={showOther}
+          onToggleOther={() => setShowOther((shown) => !shown)}
+        />
+        </>)}
       </Sheet>
       <QuickConfirm
         open={target !== null}
@@ -657,9 +316,97 @@ export function SwapSheet({
               : `This is temporary — ccrc moves it back to ${backTo} once ${whenRoom} has room.`)}
         confirmLabel="Move"
         onConfirm={() => {
-          if (target !== null) move(target);
+          if (target !== null) move(target, split.crossing.includes(target), false);
+        }}
+      />
+      {/* D-5240: the spec's words, archive's shape (a second consent after the refusal it answers). */}
+      <QuickConfirm
+        open={busyAsk !== null && busyAsk.id === session.id}
+        onClose={() => setBusyAsk(null)}
+        title="It's working — swap anyway?"
+        consequence="The turn in progress and its background tasks are lost."
+        confirmLabel="Swap anyway"
+        onConfirm={() => {
+          if (busyAsk !== null) move(busyAsk.wrapper, busyAsk.cross, true);
         }}
       />
     </>
   );
+}
+
+/** The target chooser, exported for the Move sessions sheet (accounts plan Task A3; spec 2026-10-18 accounts-connect
+ *  §4.5), which picks its target with exactly this list: the pool's eligible lanes with the suggested one tagged, the
+ *  empty list's sentence, and either the unknown-pool note or the other pools behind their disclosure. Moved out of
+ *  `SwapSheet` unchanged; what a pick MEANS (a confirm here, a selection there) is the caller's `onPick`. */
+export function SwapTargetChooser({
+  split, accounts, suggested, emptyNote, roster, onPick, showOther, onToggleOther,
+}: {
+  split: { eligible: readonly string[]; crossing: readonly string[]; unknown: boolean };
+  accounts: readonly AccountUsage[] | null;
+  suggested: string | null;
+  emptyNote: string | null;
+  roster: readonly RosterWire[];
+  onPick: (wrapper: string) => void;
+  showOther: boolean;
+  onToggleOther: () => void;
+}): ReactNode {
+  return (
+    <>
+      <div className="acct-list">
+        {emptyNote === null ? (
+          split.eligible.map((w) => (
+            <AccountRow
+              key={w}
+              wrapper={w}
+              facts={factsFor(accounts, w)}
+              suggested={w === suggested}
+              onPick={onPick}
+              roster={roster}
+            />
+          ))
+        ) : (
+          <p className="acct-none">{emptyNote}</p>
+        )}
+      </div>
+      {split.unknown ? (
+        <p className="pool-note">
+          This project's pool is not known from here, so pool matching does not hide otherwise available accounts.
+        </p>
+      ) : split.crossing.length > 0 ? (
+        <>
+          <OtherPoolsDisclosure
+            count={split.crossing.length}
+            shown={showOther}
+            onToggle={onToggleOther}
+          />
+          {showOther && (
+            <div className="acct-list">
+              {split.crossing.map((w) => (
+                <AccountRow
+                  key={w}
+                  wrapper={w}
+                  facts={factsFor(accounts, w)}
+                  onPick={onPick}
+                  roster={roster}
+                  poolChip={accountPool(roster, w)}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      ) : null}
+    </>
+  );
+}
+
+/** D-5242: wake a sleeping session (`POST /api/sessions/:id/ensure`), saying so only when it fails. */
+function wakeSession(id: string, project: string): void {
+  ensureSession(id).catch((err: unknown) => { toast(failedTo(`wake ${project}`, err), 'error'); });
+}
+
+/** The swap route's refusal code a failure carries (`409 {error}`, D-5240), or `null` for any other failure. */
+function swapRefusalOf(err: unknown): SwapRefusal | null {
+  if (!(err instanceof ApiError) || err.status !== 409 || typeof err.body !== 'object' || err.body === null) return null;
+  const code = (err.body as { error?: unknown }).error;
+  return isSwapRefusal(code) ? code : null;
 }

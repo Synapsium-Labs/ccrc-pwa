@@ -57,36 +57,19 @@ function trackedFiles(): string[] {
   return out.split('\0').filter((p) => p !== '' && !BINARY.test(p));
 }
 
-describe('L0 stays import-free: the PWA bundles these files', () => {
-  // `shared/base-url.ts` got its row here in Task 2, the task that wrote the
-  // file — it is the SECOND `it` below (`:72`), after `providers.ts`'s own row.
-  // It could not have landed in THIS task (Task 1): asserting it here would
-  // have meant committing a suite with a known-red row — `ENOENT …
-  // shared/base-url.ts` — and this repo's rule is that every task ships green:
-  // a red row in a landed commit is indistinguishable, on the next run, from a
-  // regression.
-  it('shared/providers.ts imports nothing at all', () => {
-    expect(read('shared/providers.ts')).not.toMatch(/^\s*import /m);
-  });
-
-  it('shared/base-url.ts imports nothing at all', () => {
-    // The second of the two L0 files this wave adds, pinned in the SAME
-    // describe as the first so the rule has one home rather than two that can
-    // drift apart. It could not be written in the task that opened this
-    // describe: the file did not exist there, and a row asserted against an
-    // absent file is a committed red — indistinguishable, on the next run, from
-    // a regression.
-    expect(read('shared/base-url.ts')).not.toMatch(/^\s*import /m);
-  });
-
+// The L0 ring of shared/providers.ts and shared/base-url.ts (no import outside ./) is held by
+// server/test/rings/shared-imports.test.ts (D-6045); base-url.test.ts keeps its own stricter "imports nothing" over
+// shared/base-url.mjs, the one implementation (D-7306).
+describe("shared/roster.ts's import list", () => {
   it('shared/roster.ts imports L0 only — the whole list, so an addition must be stated here', () => {
     const imports = read('shared/roster.ts').split('\n').filter((l) => /^import\s/.test(l));
-    // Two lines, both `shared/*.ts`, both import-free themselves (pinned above),
-    // so the browser bundle gains no runtime dependency. `shared/api.ts` carries
+    // Two lines, both `shared/*.ts` siblings whose own imports the L0 ring rule
+    // holds (rings/shared-imports.test.ts), so the browser bundle gains no runtime dependency. `shared/api.ts` carries
     // the same shape and the same pin (peers-claims-l0.test.ts:156-161).
     expect(imports).toEqual([
       "import { PROVIDERS, PROVIDER_IDS, isProviderId, type ProviderId } from './providers.js';",
       "import { BASE_URL_OK } from './base-url.js';",
+      "import { FABLE_BILLINGS, type FableBilling, type ContinuityRecord } from './rosterFacts.js';",
     ]);
   });
 });
@@ -105,8 +88,15 @@ describe('the provider table is derived, never re-listed', () => {
   it('GENERATABLE is a filter over the table, and openai is the one that is not', () => {
     expect(GENERATABLE).toEqual(PROVIDER_IDS.filter((p) => PROVIDERS[p].generatable));
     expect([...GENERATABLE].sort()).toEqual(['anthropic', 'compatible', 'openrouter']);
-    // `openai` is somebody else's launcher: `declare`, never `add` (spec §5).
+    // `generatable` gates only `exec.kind: 'generated'`; openai is the provider
+    // of the ccrc-written Codex launcher, whose OAuth directory is `exec.authDir`.
     expect(GENERATABLE).not.toContain('openai');
+  });
+
+  it('the openai row describes a lane ccrc owns, not somebody else\'s launcher', () => {
+    expect(PROVIDERS.openai.label).not.toMatch(/external launcher/i);
+    expect(PROVIDERS.openai.credential).not.toMatch(/never by ccrc/i);
+    expect(PROVIDERS.openai.credential).toMatch(/OAuth/i);
   });
 
   it('isProviderId narrows the constant, never the input', () => {
@@ -154,7 +144,8 @@ describe('the provider table is derived, never re-listed', () => {
     // refuse `--method setup-token` — a value spec:413 documents — everywhere at
     // once. §4.2's cell (spec:272, :275) writes the prefixed spelling; §5:413,
     // §5:419 and §6:507-508 write these, and §6:543 says what the prefix meant.
-    expect(PROVIDERS.anthropic.connect).toEqual(['login', 'paste', 'setup-token']);
+    // Mint first since accounts plan Task A20 (Q1: the long-lived token is the default).
+    expect(PROVIDERS.anthropic.connect).toEqual(['setup-token', 'login', 'paste']);
     expect(PROVIDERS.openrouter.connect).toEqual(['pkce', 'paste']);
     expect(PROVIDERS.compatible.connect).toEqual(['paste']);
     // Not `pane:login`: §4.2's cell and §6's method name are two different
@@ -165,10 +156,10 @@ describe('the provider table is derived, never re-listed', () => {
     for (const p of PROVIDER_IDS) {
       for (const m of PROVIDERS[p].connect) expect(m, p).not.toContain('pane:');
     }
-    // …and the first member is the default the connect door opens on (§4.2
-    // spells anthropic's `login` "(default)"), which is what `check-add` reads
-    // when `--method` is absent.
-    expect(PROVIDERS.anthropic.connect[0]).toBe('login');
+    // …and the first member is the default the connect door opens on, which is
+    // what `check-add` reads when `--method` is absent: Mint since Q1 (spec
+    // §6.1, accounts plan Task A20), where §4.2 once spelled `login` "(default)".
+    expect(PROVIDERS.anthropic.connect[0]).toBe('setup-token');
   });
 
   it('the doctor vocabulary is a closed list with a type over it', () => {

@@ -498,7 +498,7 @@ The touch/momentum chain. All seven touch only `pwa/src/session/TerminalDrawer.t
 
 **Interfaces:**
 - Consumes: Task 2's `Sheet` with `handleOnly`, and Task 1's `HistoryTerm`/`MakeHistoryTerm`.
-- Produces (relied on by Tasks 9–16): `HistoryTerm` gains `rowHeight(): number` (at `f5fe38e5`) and `offset?(px: number): void` (at `5d65f8aa`) — `scrollLines` it already had from Task 1; `export interface PaintLag { scrolled(rows: number, rowPx: number): void; sub(px: number): void; painted(): void; transform(): number }` and `export function paintLag(): PaintLag` (at `644f4173`); the module-level constants `const TOUCH_OPEN_PX = 24`, `const WHEEL_LINES = 3`, `const FLING_MIN_PX_MS = 0.25`, `const FLING_IDLE_MS = 80`, `const FLING_SMOOTH = 0.35`, `const GLIDE_DECAY = 0.95`, `const GLIDE_STOP_PX_MS = 0.5 / (1000 / 60)`, `const FRAME_MS = 1000 / 60`, `const GLIDE_MAX_STEP_MS = 50`; and in `pwa/test/terminal-scrollback.test.tsx` the private helpers `fakeTermFactory()`, `fakeHistoryFactory({defer?})`, `mountDrawer({defer?, onClose?})`, `jsonFetch(status, body)`, `histHost(view)`, `drag(el, from, to, id?)`, `historyDoor()`, `flush()`, `const ROW_PX = 18`, `const OK_HISTORY = { ok: true, text: HISTORY, lines: 2000 }`, `const HISTORY = 'older output\nolder still\n'`, `const ID = 'claude-a-MekWarLive'`.
+- Produces (relied on by Tasks 9–16): `HistoryTerm` gains `rowHeight(): number` (at `f5fe38e5`) and `offset?(px: number): void` (at `5d65f8aa`) — `scrollLines` it already had from Task 1; `export interface PaintLag { scrolled(rows: number, rowPx: number): void; sub(px: number): void; painted(): void; transform(): number }` and `export function paintLag(): PaintLag` (at `644f4173`); the module-level constants `const TOUCH_OPEN_PX = 24`, `const WHEEL_LINES = 3`, `const FLING_MIN_PX_MS = 0.25`, `const FLING_IDLE_MS = 80`, `const FLING_SMOOTH = 0.35`, `const GLIDE_DECAY = 0.95`, `const GLIDE_STOP_PX_MS = 0.5 / (1000 / 60)`, `const FRAME_MS = 1000 / 60`, `const GLIDE_MAX_STEP_MS = 50`; and in `pwa/test/terminal-scrollback.test.tsx` the private helpers `fakeTermFactory()`, `fakeHistoryFactory({defer?})`, `mountDrawer({defer?, onClose?})`, `jsonFetch(status, body)`, `histHost(view)`, `drag(el, from, to, id?)`, `historyDoor()`, `flush()`, `const ROW_PX = 18`, `const OK_HISTORY = { ok: true, text: HISTORY, lines: 2000 }`, `const HISTORY = 'older output\nolder still\n'`, `const ID = 'claude-a-project-f'`.
 
 - [ ] **Step 1: Cherry-pick all seven, in §5.6's order**
 
@@ -780,12 +780,12 @@ Add this `it` to `server/test/pty.test.ts`, inside the existing `describe('pty d
     const addr = app.server.address();
     const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
 
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/claude2-MekWarLive?cols=43&rows=40`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/pty/claude9-project-f?cols=43&rows=40`);
     await opened(ws);
-    await vi.waitFor(() => expect(log).toContain('spawnPty claude2-MekWarLive 43x40'), wait);
+    await vi.waitFor(() => expect(log).toContain('spawnPty claude9-project-f 43x40'), wait);
 
-    const pin = 'tmux resize-window -t cc-claude2-MekWarLive -x 220 -y 50';
-    const spawn = 'spawnPty claude2-MekWarLive 43x40';
+    const pin = 'tmux resize-window -t cc-claude9-project-f -x 220 -y 50';
+    const spawn = 'spawnPty claude9-project-f 43x40';
     expect(log.indexOf(pin), 'the canonical pin never ran — the client reflows the history')
       .toBeGreaterThanOrEqual(0);
     expect(log.indexOf(pin), 'the pin ran AFTER the attach: by then tmux has already reflowed')
@@ -1130,7 +1130,7 @@ import { describe, it, expect } from 'vitest';
 import { Tmux, PANE_PROBE_FORMAT, type ExecResult, type Runner } from '../src/exec.js';
 import type { PaneProbe } from '../../shared/api.js';
 
-const ID = 'claude-a-MekWarLive';
+const ID = 'claude-a-project-f';
 
 const probeOn = async (r: ExecResult): Promise<{ probe: PaneProbe; calls: string[][] }> => {
   const calls: string[][] = [];

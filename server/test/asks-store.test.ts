@@ -3,24 +3,63 @@
 // Reading/writing it is task 5's job.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { COORD_SCHEMA_VERSION, openCoordDb } from '../src/coord/db.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { MIGRATIONS } from '../src/coord/schema.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
-import { okAsk, okAsksByChild } from './coordReadHelpers.js';
-import { RUN_HOLD_NUMBER_MAX } from '../../shared/api.js';
+import { okAsk, okAsksByChild, parentOfSession } from './coordReadHelpers.js';
+import { ASK_STATES, isAskState, RUN_HOLD_NUMBER_MAX } from '../../shared/api.js';
 
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
 
+/** True when some migration in `list` creates the asks table. */
+const hasAsksMigration = (list: readonly string[]): boolean =>
+  list.some((ddl) => /CREATE TABLE asks \(/.test(ddl));
+
 describe('the asks table', () => {
-  it('is still present after schema version 10 adds the cross-repo columns', () => {
+  it('the asks-migration check finds the DDL in a list and fails on a stub list without it', () => {
+    expect(hasAsksMigration(['CREATE TABLE runs (id TEXT)', 'CREATE TABLE asks (id TEXT)'])).toBe(true);
+    expect(hasAsksMigration(['CREATE TABLE runs (id TEXT)', 'ALTER TABLE runs ADD COLUMN x TEXT'])).toBe(false);
+  });
+
+  it('the cross-repo columns added at schema version 10 are still present at the current version', () => {
     const home = mkTmp('ccrc-coord-');
     const db = openCoordDb(dbPathIn(home));
-    expect(COORD_SCHEMA_VERSION).toBe(10);
+    // TWELVE migrations have landed since this test's own version: MIGRATIONS[10]
+    // (`runs.kind`/`runs.reviews`, review runs, design 2026-09-14 §5.1),
+    // MIGRATIONS[11] (`runs.coordProject`, board placement wave 1 Task 1),
+    // MIGRATIONS[12] (`pool_edges`/`pool_epoch`, account-pool membership wave 1
+    // Task 6), MIGRATIONS[13] (the update control plane's five tables,
+    // centralised update management W2 Task 3), MIGRATIONS[14] (the stall mail
+    // read's indexes, worker stall watch wave 5), MIGRATIONS[15]
+    // (`runs.sessionBornAt`/`sessionBornFor`, child-reclamation spec §5.1,
+    // §5.3), MIGRATIONS[16] (`stall_settings` and `run_events_by_at`, stall
+    // watch settings §8), MIGRATIONS[17] (`dead_claimants`, workspace
+    // lifecycle §5.4), MIGRATIONS[18] (`dead_coordinator_breaker_state`,
+    // workspace lifecycle §5.4), MIGRATIONS[19] (`collect_lane_settings`,
+    // path-identity §5.2), MIGRATIONS[20] (`asks.releaseReason`, D-5290,
+    // coordinator-first routing §5.2), MIGRATIONS[21] (the six
+    // `delegation_*` tables, delegation broker wave 3) and MIGRATIONS[22]
+    // (`runs.unattributed`, D-5298), MIGRATIONS[23] (the `approvals` table,
+    // plan Task 16), MIGRATIONS[24] (`digests` and `asks.corrected`,
+    // D-5300, plan Task 17), MIGRATIONS[25] (`account_events`, D-5516,
+    // accounts plan Task A7), MIGRATIONS[26] (the mail_deliveries park
+    // columns, D-5838), MIGRATIONS[27] (`secret_fingerprints`, D-5513,
+    // accounts plan Task A10) and MIGRATIONS[28] (`feed_events.dedupe_key`,
+    // D-5860), and since then MIGRATIONS[29] to MIGRATIONS[36], the last being the programme ledgers' operator_items,
+    // operator_item_events and programme_modifications tables with the spec pin on programs (PL2). Only
+    // MIGRATIONS[20] and MIGRATIONS[24]
+    // touch the asks table, and the push outbox's migration (Overlord W1) adds `reachedOperatorAt`, the reach stamp. This test asserts "no migration after the one it
+    // knows about has changed the asks table's columns", not anything about
+    // any of the twelve. The total is not pinned: the asks migration is found
+    // by its DDL (slot order is coord-db.test.ts's), so a new migration
+    // elsewhere never forces a re-pin here.
+    expect(hasAsksMigration(MIGRATIONS)).toBe(true);
     const cols = (db.prepare("SELECT name FROM pragma_table_info('asks')").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(cols).toEqual([
-      'answer', 'answeredAt', 'answeredBy', 'askAt', 'askKey', 'at', 'childId',
-      'dialogId', 'id', 'options', 'parentId', 'question', 'releasedAt', 'runId', 'state',
+      'answer', 'answeredAt', 'answeredBy', 'askAt', 'askKey', 'at', 'childId', 'corrected',
+      'dialogId', 'id', 'options', 'parentId', 'question', 'reachedOperatorAt', 'releaseReason', 'releasedAt', 'runId', 'state',
     ]);
     db.close();
   });
@@ -38,8 +77,8 @@ describe('ask store methods', () => {
     const run = s.openRun({ program: 'prog', title: 'Prog', project: 'p',
       wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
     s.setSession(run.id, 'child-1');
-    expect(s.parentOfSession('child-1')).toBe('coord-1');
-    expect(s.parentOfSession('nobody')).toBeNull();
+    expect(parentOfSession(s, 'child-1')).toBe('coord-1');
+    expect(parentOfSession(s, 'nobody')).toBeNull();
   });
 
   it('follows a reclaim, because the parent is derived and not stored', () => {
@@ -48,10 +87,10 @@ describe('ask store methods', () => {
       wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
     s.setSession(run.id, 'child-1');
     // `reclaimProgram` takes the RUN id, not the program slug — the store's
-    // real signature (`reclaimProgram(runId, to, at)`), not the brief's
+    // real signature (`reclaimProgram(runId, to, at, null)`), not the brief's
     // illustrative `('prog', 'coord-2', ...)`.
-    s.reclaimProgram(run.id, 'coord-2', Date.now());
-    expect(s.parentOfSession('child-1')).toBe('coord-2');
+    s.reclaimProgram(run.id, 'coord-2', Date.now(), null);
+    expect(parentOfSession(s, 'child-1')).toBe('coord-2');
   });
 
   it('refuses a second taker — the row is the mutex (D-2171)', () => {
@@ -90,7 +129,7 @@ describe('ask store methods', () => {
       wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
     s.setSession(run.id, 'child-1');
     s.db.prepare("UPDATE runs SET state = 'unknown' WHERE id = ?").run(run.id);
-    expect(s.parentOfSession('child-1')).toBe('coord-1');
+    expect(parentOfSession(s, 'child-1')).toBe('coord-1');
   });
 
   // Fix round 1, finding 2: the `ORDER BY id DESC` tie-break was a comment,
@@ -111,7 +150,7 @@ describe('ask store methods', () => {
     const second = s.openRun({ program: 'prog-b', title: 'B', project: 'p',
       wave: 1, waveOf: null, claimedBy: 'coord-2' }) as { id: number };
     s.setSession(second.id, 'child-1');
-    expect(s.parentOfSession('child-1')).toBe('coord-2');
+    expect(parentOfSession(s, 'child-1')).toBe('coord-2');
   });
 
   // Fix round 1, finding 3: `untakeAsk` — the rollback for a take whose
@@ -123,7 +162,7 @@ describe('ask store methods', () => {
     const id = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k',
       askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
     expect(s.takeAskForAnswer(id, 1000).ok).toBe(true);
-    expect(s.untakeAsk(id)).toBe(true);
+    expect(s.untakeAsk(id, 'held')).toBe(true);
     expect(okAsk(s.askById(id))!.state).toBe('held');
     expect(s.takeAskForAnswer(id, 1000).ok).toBe(true);
   });
@@ -387,5 +426,178 @@ describe('the ask read surface refuses an unrepresentable row, and tells absent 
     expect((s.db.prepare('SELECT COUNT(*) AS n FROM asks').get() as { n: number }).n).toBe(0);
     expect(typeof mint(null)).toBe('number');
     expect(okAsk(s.currentAskFor('c'))!.runId).toBeNull();
+  });
+});
+
+// D-5289 (coordinator-first routing, Task 4; spec §5.1): late answer wins.
+// A lapse moves the row `held -> released` and fires the operator's push, but
+// the row stays answerable by either principal until one of them acts — the
+// `askAt` instance guard still decides WHICH dialog an answer may land in. A
+// parent's own release is a different fact, a terminal `declined`, after which
+// the parent may not answer at all.
+describe('late answer wins; declined (D-5289)', () => {
+  const CHILD = 'project-a-quiet-basin';
+  const PARENT = 'project-a-calm-mesa';
+  const mk = (): CoordStore => new CoordStore(openCoordDb(dbPathIn(mkTmp('ccrc-coord-'))));
+  const mint = (s: CoordStore): number => s.insertAsk({ childId: CHILD, parentId: PARENT, runId: null,
+    askKey: 'k', askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
+
+  it('isAskState knows declined', () => {
+    expect(isAskState('declined')).toBe(true);
+  });
+
+  it('takes a row the lapse released, and settles it answered', () => {
+    const s = mk();
+    const id = mint(s);
+    expect(s.releaseAsk(id, 2)).toBe(true);
+    const taken = s.takeAskForAnswer(id, 1000);
+    expect(taken.ok).toBe(true);
+    s.settleAsk(id, PARENT, 'b', 3);
+    expect(okAsk(s.askById(id))).toMatchObject({ state: 'answered', answeredBy: PARENT, answer: 'b' });
+  });
+
+  it('a refused press after a late take rolls the row back to released, not held', () => {
+    const s = mk();
+    const id = mint(s);
+    expect(s.releaseAsk(id, 2)).toBe(true);
+    const taken = s.takeAskForAnswer(id, 1000);
+    expect(taken.ok && taken.from).toBe('released');
+    expect(s.untakeAsk(id, 'released')).toBe(true);
+    expect(okAsk(s.askById(id))!.state).toBe('released');
+  });
+
+  it('keeps the instance guard on a released row — a re-minted dialog is refused', () => {
+    const s = mk();
+    const id = mint(s);
+    expect(s.releaseAsk(id, 2)).toBe(true);
+    expect(s.takeAskForAnswer(id, 2000)).toEqual({ ok: false, why: 'ask-moved' });
+    expect(okAsk(s.askById(id))!.state).toBe('released');
+  });
+
+  it('declineAsk moves held -> declined, and a declined row is refused declined', () => {
+    const s = mk();
+    const id = mint(s);
+    expect(s.declineAsk(id, 2)).toBe(true);
+    expect(okAsk(s.askById(id))).toMatchObject({ state: 'declined', releasedAt: 2 });
+    expect(s.declineAsk(id, 3)).toBe(false);
+    expect(s.takeAskForAnswer(id, 1000)).toEqual({ ok: false, why: 'declined' });
+    expect(okAsk(s.askById(id))!.state).toBe('declined');
+  });
+
+  it('an answered row is refused already-answered', () => {
+    const s = mk();
+    const id = mint(s);
+    expect(s.takeAskForAnswer(id, 1000).ok).toBe(true);
+    s.settleAsk(id, PARENT, 'a', 2);
+    expect(s.takeAskForAnswer(id, 1000)).toEqual({ ok: false, why: 'already-answered' });
+  });
+
+  it('heldAskFor returns a released row, so the operator after a lapse is recorded', () => {
+    const s = mk();
+    const id = mint(s);
+    expect(s.releaseAsk(id, 2)).toBe(true);
+    expect(okAsk(s.heldAskFor(CHILD))?.id).toBe(id);
+  });
+
+  it('heldAskFor never returns a declined row', () => {
+    const s = mk();
+    const id = mint(s);
+    expect(s.declineAsk(id, 2)).toBe(true);
+    expect(okAsk(s.heldAskFor(CHILD))).toBeNull();
+  });
+
+  it('reads a declined row back as declined, never unknown', () => {
+    const s = mk();
+    const id = mint(s);
+    s.db.prepare("UPDATE asks SET state = 'declined' WHERE id = ?").run(id);
+    expect(okAsk(s.askById(id))!.state).toBe('declined');
+  });
+
+  // The compatibility claim in D-5289: a build whose vocabulary predates
+  // `declined` reads it through the same fold every reader uses
+  // (`isAskState(x) ? x : 'unknown'`). The six members are frozen here as that
+  // older build's map; this build's map must be them plus `declined`.
+  it('an older reader, without the member, degrades declined to unknown', () => {
+    const OLDER: readonly string[] = ['held', 'answering', 'answered', 'released', 'stale', 'unknown'];
+    const olderFold = (v: string): string => (OLDER.includes(v) ? v : 'unknown');
+    expect(olderFold('declined')).toBe('unknown');
+    expect([...ASK_STATES].sort()).toEqual([...OLDER, 'declined'].sort());
+  });
+});
+
+describe('a row minted released, with its reason (D-5290)', () => {
+  const CHILD = 'project-a-quiet-basin';
+  const PARENT = 'project-a-calm-mesa';
+  const mk = (): CoordStore => new CoordStore(openCoordDb(dbPathIn(mkTmp('ccrc-coord-'))));
+
+  it('insertAsk with a release reason mints the row released at once, and reads the reason back', () => {
+    const s = mk();
+    const id = s.insertAsk({ childId: CHILD, parentId: PARENT, runId: null, askKey: 'k', askAt: 1000,
+      dialogId: 'd', question: 'q', options: ['a', 'b'], now: 7, releaseReason: 'parent-not-live' });
+    const row = okAsk(s.askById(id));
+    expect(row).toMatchObject({ state: 'released', releasedAt: 7, releaseReason: 'parent-not-live' });
+    // the operator's route still finds it (`heldAskFor` takes held or released)
+    expect(okAsk(s.heldAskFor(CHILD))?.id).toBe(id);
+  });
+
+  it('a held mint carries no reason, and the lapse leaves it so', () => {
+    const s = mk();
+    const id = s.insertAsk({ childId: CHILD, parentId: PARENT, runId: null, askKey: 'k', askAt: 1000,
+      dialogId: 'd', question: 'q', options: ['a', 'b'], now: 7 });
+    expect(okAsk(s.askById(id))).toMatchObject({ state: 'held', releaseReason: null });
+    expect(s.releaseAsk(id, 8)).toBe(true);
+    expect(okAsk(s.askById(id))).toMatchObject({ state: 'released', releaseReason: null });
+  });
+
+  it('an out-of-vocabulary reason a newer build wrote reads back as unknown, never cast', () => {
+    const s = mk();
+    const id = s.insertAsk({ childId: CHILD, parentId: PARENT, runId: null, askKey: 'k', askAt: 1000,
+      dialogId: 'd', question: 'q', options: ['a'], now: 7, releaseReason: 'parent-not-live' });
+    s.db.prepare("UPDATE asks SET releaseReason = 'a-later-word' WHERE id = ?").run(id);
+    expect(okAsk(s.askById(id))?.releaseReason).toBe('unknown');
+  });
+
+  // D-5530, D-5531: the fail-closed reasons are words this build writes and
+  // reads back; `parent-project-mismatch` is never written again, but a row
+  // an older build wrote still reads back as itself, never `unknown`.
+  for (const reason of ['run-unclaimed', 'run-other-programme', 'parent-unmeasured', 'run-unattributed'] as const) {
+    it(`mints and reads back ${reason} (D-5530)`, () => {
+      const s = mk();
+      const id = s.insertAsk({ childId: CHILD, parentId: PARENT, runId: null, askKey: 'k', askAt: 1000,
+        dialogId: 'd', question: 'q', options: ['a'], now: 7, releaseReason: reason });
+      expect(okAsk(s.askById(id))).toMatchObject({ state: 'released', releaseReason: reason });
+    });
+  }
+
+  it('a parent-project-mismatch row an older build wrote reads back as itself (D-5530)', () => {
+    const s = mk();
+    const id = s.insertAsk({ childId: CHILD, parentId: PARENT, runId: null, askKey: 'k', askAt: 1000,
+      dialogId: 'd', question: 'q', options: ['a'], now: 7, releaseReason: 'parent-not-live' });
+    s.db.prepare("UPDATE asks SET releaseReason = 'parent-project-mismatch' WHERE id = ?").run(id);
+    expect(okAsk(s.askById(id))?.releaseReason).toBe('parent-project-mismatch');
+  });
+
+  // D-5530: the parent's listing is the rows HELD for it. A row minted
+  // released was never held for anyone, so its question text is not the
+  // parent's to read; a row the lapse released was held for it and stays
+  // listed (late answer wins, D-5289).
+  it('asksForParent lists only rows held for the parent: never a minted-released one, nor another parent\'s (D-5530)', () => {
+    const s = mk();
+    const ins = (parentId: string, question: string, releaseReason?: 'parent-not-live' | 'parent-unmeasured') =>
+      s.insertAsk({ childId: CHILD, parentId, runId: null, askKey: 'k', askAt: 1000,
+        dialogId: 'd', question, options: ['a'], now: 7, ...(releaseReason ? { releaseReason } : {}) });
+    const held = ins(PARENT, 'held for it');
+    const lapsed = ins(PARENT, 'lapsed for it');
+    expect(s.releaseAsk(lapsed, 8)).toBe(true);
+    ins(PARENT, 'minted released: not live', 'parent-not-live');
+    ins(PARENT, 'minted released: unmeasured', 'parent-unmeasured');
+    const legacy = ins(PARENT, 'legacy mismatch', 'parent-not-live');
+    s.db.prepare("UPDATE asks SET releaseReason = 'parent-project-mismatch' WHERE id = ?").run(legacy);
+    ins('project-b-far-ridge', "another parent's");
+    const all = s.asksForParent(PARENT);
+    expect(all.ok && all.asks.map((a) => a.question)).toEqual(['held for it', 'lapsed for it']);
+    const released = s.asksForParent(PARENT, 'released');
+    expect(released.ok && released.asks.map((a) => a.id)).toEqual([lapsed]);
+    expect(held).toBeGreaterThan(0);
   });
 });

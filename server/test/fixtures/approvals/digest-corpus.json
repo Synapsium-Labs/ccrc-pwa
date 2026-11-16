@@ -1,0 +1,90 @@
+{
+ "note": "plan Task 14 (spec \u00a76.3 'The canonical form, exactly'): each row's inputText is a PermissionRequest hook input as raw JSON text (so 1.0 and 1E+2 reach jq as written); canonical is its canonical array, or none. Both approvalDigestBytes and the hook's APPROVAL_DIGEST_JQ answer every row.",
+ "rows": [
+  {
+   "name": "plain ASCII, keys sorted, slash never escaped",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"description\":\"d\",\"command\":\"ls -la /tmp\"}}",
+   "canonical": "[\"s1\",\"\",\"Bash\",\"/w/p\",{\"command\":\"ls -la /tmp\",\"description\":\"d\"}]"
+  },
+  {
+   "name": "non-ASCII text is a lowercase \\u escape per UTF-16 code unit",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"command\":\"echo \\u00e9 \\u00FC\"}}",
+   "canonical": "[\"s1\",\"\",\"Bash\",\"/w/p\",{\"command\":\"echo \\u00e9 \\u00fc\"}]"
+  },
+  {
+   "name": "an astral character in a key and in a value, keys by code point (U+FF01 before U+1F600)",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"\\ud83d\\ude00\":\"\\ud83d\\ude00\",\"\\uff01\":1,\"z\":2}}",
+   "canonical": "[\"s1\",\"\",\"Bash\",\"/w/p\",{\"z\":2,\"\\uff01\":1,\"\\ud83d\\ude00\":\"\\ud83d\\ude00\"}]"
+  },
+  {
+   "name": "U+007F is escaped",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"command\":\"a\\u007fb\"}}",
+   "canonical": "[\"s1\",\"\",\"Bash\",\"/w/p\",{\"command\":\"a\\u007fb\"}]"
+  },
+  {
+   "name": "control characters: the five short escapes, every other one as \\u00XX, quote and backslash",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"command\":\"\\b\\f\\n\\r\\t\\u0001\\u001f\\\"\\\\\"}}",
+   "canonical": "[\"s1\",\"\",\"Bash\",\"/w/p\",{\"command\":\"\\b\\f\\n\\r\\t\\u0001\\u001f\\\"\\\\\"}]"
+  },
+  {
+   "name": "1.0 is the integer 1",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"timeout\":1.0}}",
+   "canonical": "[\"s1\",\"\",\"Bash\",\"/w/p\",{\"timeout\":1}]"
+  },
+  {
+   "name": "1E+2 is the integer 100",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"timeout\":1E+2}}",
+   "canonical": "[\"s1\",\"\",\"Bash\",\"/w/p\",{\"timeout\":100}]"
+  },
+  {
+   "name": "-0 is 0",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"n\":-0}}",
+   "canonical": "[\"s1\",\"\",\"Bash\",\"/w/p\",{\"n\":0}]"
+  },
+  {
+   "name": "2^53 - 1 is kept",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"n\":9007199254740991}}",
+   "canonical": "[\"s1\",\"\",\"Bash\",\"/w/p\",{\"n\":9007199254740991}]"
+  },
+  {
+   "name": "0.5 has no canonical form",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"timeout\":0.5}}",
+   "canonical": "none"
+  },
+  {
+   "name": "2^53 has no canonical form",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"n\":9007199254740992}}",
+   "canonical": "none"
+  },
+  {
+   "name": "a non-integer outside the array leaves the request unsent too (the walk runs over the whole input)",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"command\":\"ls\"},\"effort\":0.5}",
+   "canonical": "none"
+  },
+  {
+   "name": "a missing cwd is null",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ls\"}}",
+   "canonical": "[\"s1\",\"\",\"Bash\",null,{\"command\":\"ls\"}]"
+  },
+  {
+   "name": "a missing agent_id is the empty string (the main thread)",
+   "inputText": "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"command\":\"ls\"}}",
+   "canonical": "[\"s1\",\"\",\"Bash\",\"/w/p\",{\"command\":\"ls\"}]"
+  },
+  {
+   "name": "a subagent's agent_id is carried",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"a0000000000000001\",\"agent_type\":\"general-purpose\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"command\":\"ls\"}}",
+   "canonical": "[\"s1\",\"a0000000000000001\",\"Bash\",\"/w/p\",{\"command\":\"ls\"}]"
+  },
+  {
+   "name": "other keys of the input are not in the array",
+   "inputText": "{\"session_id\":\"s1\",\"transcript_path\":\"/t.jsonl\",\"prompt_id\":\"p\",\"permission_mode\":\"bypassPermissions\",\"hook_event_name\":\"PermissionRequest\",\"permission_suggestions\":[{\"type\":\"addRules\"}],\"tool_name\":\"Write\",\"cwd\":\"/w/p\",\"tool_input\":{\"file_path\":\"/w/p/x\",\"content\":\"y\"}}",
+   "canonical": "[\"s1\",\"\",\"Write\",\"/w/p\",{\"content\":\"y\",\"file_path\":\"/w/p/x\"}]"
+  },
+  {
+   "name": "nested arrays and booleans",
+   "inputText": "{\"session_id\":\"s1\",\"agent_id\":\"\",\"tool_name\":\"Bash\",\"cwd\":\"/w/p\",\"tool_input\":{\"a\":[true,false,null,[1,\"x\"]],\"b\":{\"d\":1,\"c\":2}}}",
+   "canonical": "[\"s1\",\"\",\"Bash\",\"/w/p\",{\"a\":[true,false,null,[1,\"x\"]],\"b\":{\"c\":2,\"d\":1}}]"
+  }
+ ]
+}

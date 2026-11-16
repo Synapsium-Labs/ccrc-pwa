@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import { RESUME_PROMPT_PREFIX } from '../../shared/api.js';
-import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 // D-2227 — Claude Code's interrupted-turn resume is env-gated
 // (CLAUDE_CODE_RESUME_INTERRUPTED_TURN); ccd never set it, so every `--resume`
@@ -49,7 +49,7 @@ const seed = (): void => {
  *  The line is found by its STRUCTURAL markers (the `"isMeta":true` glob
  *  clause and the `state=1` transition), not by the sentence itself. */
 const detectorLiteral = (): string => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   const line = src.split('\n').find((l) => l.includes(`*'"isMeta":true'*`) && l.includes('then state=1; continue; fi'));
   if (!line) throw new Error('_transcript_stalled_pair detector line not found in ccd/ccd');
   const literals = [...line.matchAll(/\*'([^']*)'\*/g)].map((m) => m[1]!);
@@ -96,10 +96,63 @@ describe('the resume flag (D-2227)', () => {
     expect(p).toContain('ccd restarted this session');
   });
 
+  it('with a recent recorded end, the spawn line carries the composed prompt, still single-quote free (D-5237)', () => {
+    seed();
+    h.sh(`_reg_set myid lastend "$(( $(date +%s) - 60 )) swap-manual"`);
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid resume`);
+    const line = newSessions()[0]!;
+    const m = /CLAUDE_CODE_RESUME_PROMPT='([^']*)'/.exec(line);
+    expect(m).not.toBeNull();
+    expect(m![1]!.startsWith(RESUME_PROMPT_PREFIX)).toBe(true);
+    expect(m![1]).toContain('an account swap asked for by hand');
+    expect(m![1]).toBe(h.sh('_resume_prompt_for myid'));
+  });
+
   it("the stall detector's own copy of the sentence (ccd/ccd, `_transcript_stalled_pair`) is a prefix of both RESUME_PROMPT_PREFIX and RESUME_PROMPT — closing the coupling's fourth literal (D-2228)", () => {
     const literal = detectorLiteral();
     expect(RESUME_PROMPT_PREFIX.startsWith(literal)).toBe(true);
     const p = h.sh(`printf '%s' "$RESUME_PROMPT"`);
     expect(p.startsWith(literal)).toBe(true);
+  });
+});
+
+describe('the pressure-reap variable is child scoped', () => {
+  it.each(['', '3600000'])('the shared composer carries it once with max-age %s', (age) => {
+    const out = h.sh(`RESUME_REDRIVE_MAX_AGE_MS='${age}'; _resume_env`);
+    expect(out.match(/CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1/g)).toHaveLength(1);
+    expect(out).toContain('CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1');
+    expect(out).toContain("CLAUDE_CODE_RESUME_PROMPT='");
+    if (age) expect(out).toContain(`CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=${age}`);
+    else expect(out).not.toContain('CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS');
+  });
+
+  it.each(['new', 'resume'] as const)('the %s primary command carries the variable before the wrapper', (mode) => {
+    seed();
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid ${mode}`);
+    const lines = newSessions();
+    expect(lines).toHaveLength(1);
+    const line = lines[0]!;
+    expect(line.match(/CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1/g)).toHaveLength(1);
+    expect(line.indexOf('CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1'))
+      .toBeLessThan(line.indexOf('/.local/bin/claude'));
+  });
+
+  it('the retry independently carries it, rather than relying on the failed primary', () => {
+    seed();
+    h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
+    const lines = newSessions();
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('--resume');
+    expect(lines[1]).toContain('--session-id');
+    for (const line of lines) {
+      expect(line.match(/CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1/g)).toHaveLength(1);
+      expect(line.indexOf('CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1'))
+        .toBeLessThan(line.indexOf('/.local/bin/claude'));
+    }
+  });
+
+  it('composing a child command does not export the key into ccd itself', () => {
+    expect(h.sh(`unset CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP;
+      _resume_env >/dev/null; printf '%s' "\${CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP-unset}"`)).toBe('unset');
   });
 });

@@ -1,13 +1,19 @@
-import { execFile } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { execFile, spawn } from 'node:child_process';
+import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
+import { lstat } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type {
+  AccountOpAnswer,
+  AccountOpReq,
+  TestboxAdminOpAnswer,
+  TestboxAdminReq,
   AgentReady,
   AgentReq,
   CapsReq,
+  DiskReq, PressureReq, BackupReq,
   ExecReq,
   PtyData,
   PtyExit,
@@ -19,31 +25,65 @@ import type {
   ReaddirReq,
   ResErr,
   ResOk,
+  LstatReq,
   StatReq,
   TailCloseReq,
   TailData,
   TailOpenReq,
   TailReset,
+  TokenSyncOpError,
+  TokenSyncReq,
+  UpdateOpError,
+  UpdateReq,
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
-import { parseCcdCaps } from '../../shared/agent-protocol.js';
+import {
+  ACCOUNT_OP, TESTBOX_ADMIN_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP, DISK_OP, PRESSURE_OP, BACKUP_OP, READDIR_MTIMES_OP,
+  TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, type TestboxReq, type TestboxToolsSyncReq,
+  TOKEN_SYNC_SPAWN_TIMEOUT_MS, UPDATE_OP, UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine,
+  inFlightBusyDetail, isClaimCode, isReadFromRange, isUpdateLockHeldLine, lockHeldBusyDetail, tokenSyncSpawnArgv, updateLauncherPath,
+  updateSpawnArgv, updateWriterMayLive,
+  type KillProbeOutcome, type UpdateReportRead, type UpdateSpawnResult,
+} from '../../shared/agent-protocol.js';
+import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
+import { measureDisk, type DiskSeams } from './disk.js';
+import { measureHeadroom, measurePressure, type PressureSeams } from './pressure.js';
+import { measureBackup, type BackupSeams } from './backup.js';
+import { measureTestbox, syncTestboxTools, type TestboxOpSeams } from './testboxOp.js';
+import { createHistoryOp, realHistoryOpSeams, type HistoryOp, type HistoryOpSeams } from './historyOp.js';
+import { readOverlordHistoryRequest, type OverlordHistoryRequestRefusal } from '../../shared/overlordHistory.js';
+import { OVERLORD_HISTORY_OP, type OverlordHistoryReq } from '../../shared/agent-protocol.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
+import { boundedSpawn } from '../../shared/spawn.mjs';
 import {
   readB64Measured,
   readFromMeasured,
-  listDir,
+  listDirMeasured,
+  lstatMeasured,
   readWhole,
   statMeasured,
   writeB64,
+  type ListDirResult,
   type ReadB64Result,
   type ReadFromResult,
   type ReadResult,
+  type PathKindResult,
   type StatResult,
 } from './fileops.js';
-import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
+import { fleetTmuxSocket, isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
 import { openTail, type TailHandle } from './tail.js';
-import { checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
+import { tmuxRoute } from '../../shared/tmux-target.js';
+import { makeTokenSyncSpawn, tokenSyncAnswer, tokenSyncEnv, type TokenSyncSpawn } from './tokensync.js';
+import {
+  accountSpawnBounds, buildAccountArgv, decodeAccountStdin, makeAccountOpSpawn, readFleetIdentity, type AccountOpSpawn,
+} from './accountop.js';
+import {
+  buildTestboxAdminArgv, makeTestboxAdminSpawn, testboxAdminSpawnArgv, testboxAdminSpawnBounds, type TestboxAdminSpawn,
+} from './testboxAdminOp.js';
+import type { TestboxAdminArgvRefusal } from '../../shared/testbox-admin.js';
+import type { AccountArgvRefusal } from '../../shared/account-argv.js';
+import { canonicalize, checkCcrcSwitchStat, checkPath, checkReadTarget, checkSteerOnStat, isExecAllowed, type WhitelistConfig } from './whitelist.js';
 
 /**
  * ccrc-agent: a small authenticated WS service exposing a whitelisted
@@ -60,6 +100,15 @@ export interface AgentOpts {
   projectsRoot?: string;    // whitelist root for fleet project checkouts
   helloTimeoutMs?: number;  // default 3000 — override for fast tests only
   spawnPty?: PtySpawn;      // default spawnFleetPty (real node-pty) — tests inject a fake spawn
+  spawnUpdate?: UpdateSpawn; // default realUpdateSpawn (a process-group spawn) — tests inject a recorder; the `update` op's ONLY spawn
+  spawnTokenSync?: TokenSyncSpawn; // default makeTokenSyncSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `token-sync` op's ONLY spawn
+  spawnAccount?: AccountOpSpawn; // default makeAccountOpSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `account` op's ONLY spawn
+  spawnTestboxAdmin?: TestboxAdminSpawn; // default makeTestboxAdminSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `testbox-admin` op's ONLY spawn
+  diskSeams?: Partial<DiskSeams>; // default realDiskSeams() — tests inject the statfs/stat/mountinfo reads; the `disk` op's ONLY disk reads
+  pressureSeams?: Partial<PressureSeams>; // default: the two /proc/pressure files — tests inject the text (#1170)
+  backupSeams?: Partial<BackupSeams>; // default: this process's environment — tests inject CCRC_BACKUP_STATE_DIR (D-7858)
+  testboxSeams?: Partial<TestboxOpSeams>; // default realTestboxSeams() — tests inject the agent's PATH and the clock (D-7411)
+  historySeams?: Partial<HistoryOpSeams>; // default realHistoryOpSeams() — tests inject the worker resolver, the deadline and the platform (Overlord W1)
 }
 
 export interface RunningAgent {
@@ -150,11 +199,29 @@ export function resolveProjectsRoot(
  *
  *  Written as a restatement first, and that was the defect: a hand-copied
  *  member list is a claim about another file with nothing enforcing it. This
- *  frame carries three synchronised fields now (`ccdVerbs`, `rosterFp`,
- *  `build`) and the next task adds to `AgentReady` again — a required field
- *  gained over there is now a compile error here until this send site answers
- *  it, instead of a field the agent silently never sends. */
-type ReadyFrame = Omit<AgentReady, 'ccdVerbs'> & { ccdVerbs: string[] };
+ *  frame carries four synchronised fields now (`ccdVerbs`, `rosterFp`,
+ *  `build`, `observedEpoch`) and the next task adds to `AgentReady` again — a
+ *  required field gained over there is now a compile error here until this
+ *  send site answers it, instead of a field the agent silently never sends.
+ *
+ *  `observedEpoch` is narrowed the same way `ccdVerbs` is, and for the same
+ *  reason: `readObservedEpoch` never throws uncaught and always answers a
+ *  `number | null` — THIS agent always has evidence (a real epoch, or `null`
+ *  for "never synced"). The wire declares it optional only so a READER can
+ *  tolerate an OLDER agent that predates the field entirely; this build is
+ *  never that agent, so its own frame type says so and the send site cannot
+ *  compile while silently omitting it.
+ *
+ *  `ops` is narrowed the same way, for the same reason (design 2026-09-20 §10):
+ *  the wire declares it optional so a READER tolerates an agent from before the
+ *  `update` op, and this build is never that agent. It answers the op, so its
+ *  own frame type says so, and the send site cannot compile while silently
+ *  omitting the one word the server's dispatcher looks for before it sends it. */
+type ReadyFrame = Omit<AgentReady, 'ccdVerbs' | 'observedEpoch' | 'ops'> & {
+  ccdVerbs: string[];
+  observedEpoch: number | null;
+  ops: string[];
+};
 
 type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | ReadyFrame;
 
@@ -166,8 +233,25 @@ function ok(id: number, fields: Record<string, unknown> = {}): ResOk {
   return { t: 'res', id, ok: true, ...fields };
 }
 
-function fail(id: number, message: string): ResErr {
-  return { t: 'res', id, ok: false, err: message };
+/** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): spread
+ *  only when there is one, so every existing refusal's frame is byte-identical
+ *  to what it was. */
+function fail(id: number, message: string, detail?: string): ResErr {
+  return detail === undefined
+    ? { t: 'res', id, ok: false, err: message }
+    : { t: 'res', id, ok: false, err: message, detail };
+}
+
+/** The `update` op's refusals. `err` is typed to the op's closed vocabulary
+ *  (`UPDATE_OP_ERRORS`), so a word the server's answer mapping does not know is
+ *  a compile error here, not a string that drifts. */
+function failUpdate(id: number, err: UpdateOpError, detail?: string): ResErr {
+  return fail(id, err, detail);
+}
+
+/** The `token-sync` op's refusals, typed to its closed vocabulary (`TOKEN_SYNC_OP_ERRORS`) the same way. */
+function failTokenSync(id: number, err: TokenSyncOpError, detail?: string): ResErr {
+  return fail(id, err, detail);
 }
 
 /** Builds the `read` op's wire payload from `readWhole`'s result. `data`
@@ -194,6 +278,17 @@ function statPayload(r: StatResult): { mtimeMs: number; size: number } | { missi
   return { missing: true, ...(r.absent ? { absent: true as const } : {}) };
 }
 
+/** Builds the `lstat` op's payload. `kind` is a POSITIVE answer in all three
+ *  arms, and its absence is therefore never an answer: an agent too old to
+ *  implement this op rejects the request outright with `not-implemented`, which
+ *  is what lets the server tell UNMEASURED from `regular` instead of reading an
+ *  older peer's silence as proof the path is a plain file. That direction is the
+ *  load-bearing one — `regular` is the only kind any caller may condemn on. */
+function lstatPayload(r: PathKindResult): { kind: 'regular' | 'symlink' | 'other' } | { missing: true; absent?: true } {
+  if (r.ok) return { kind: r.kind };
+  return { missing: true, ...(r.absent ? { absent: true as const } : {}) };
+}
+
 /** Builds the `readB64` op's payload. `dataB64` keeps its exact pre-existing
  *  meaning (null for every failure), so an older server's
  *  `typeof data === 'string' ? data : null` reader is unaffected. TWO
@@ -210,10 +305,38 @@ function readB64Payload(r: ReadB64Result): { dataB64: string | null; absent?: tr
 /** Builds the `readFrom` op's payload. Shape is unchanged for both existing
  *  arms — `{data, size}` on success, `{data: null}` on failure — with
  *  `absent` spread in only on a proven ENOENT. The EOF case rides the SUCCESS
- *  arm as `{data: '', size}`, exactly as it does today. */
-function readFromPayload(r: ReadFromResult): { data: string; size: number } | { data: null; absent?: true } {
-  if (r.ok) return { data: r.data, size: r.size };
+ *  arm as `{data: '', size}`, exactly as it does today.
+ *
+ *  `dataB64` is spread in ONLY when the result carries it, and a result carries
+ *  it only for a request that sent `maxBytes` — so an old caller's answer is
+ *  byte-identical to what it was, and a failure never wears bytes. */
+function readFromPayload(
+  r: ReadFromResult,
+): { data: string; dataB64?: string; size: number } | { data: null; absent?: true } {
+  if (r.ok) return { data: r.data, ...(r.dataB64 !== undefined ? { dataB64: r.dataB64 } : {}), size: r.size };
   return { data: null, ...(r.reason === 'absent' ? { absent: true as const } : {}) };
+}
+
+/** Builds the `readdir` op's payload. `{names: string[]}` on success — an empty
+ *  listing included — and `{names: null}` on failure, which is the shape every
+ *  older agent sent for ALL failures, so an older server's `names` reader is
+ *  unaffected. `absent` is spread in ONLY on a proven ENOENT, for the same
+ *  reason and by the same rule as `statPayload`'s and `readB64Payload`'s: a
+ *  newer server reads a bare `names: null` as UNMEASURED, never as absence. */
+function readdirPayload(r: ListDirResult): { names: string[] } | { names: null; absent?: true } {
+  if (r.ok) return { names: r.names };
+  return { names: null, ...(r.reason === 'absent' ? { absent: true as const } : {}) };
+}
+
+/** The `readdir` op's `times` answer (console speed S1): one `lstat` per listed name inside the directory `checkPath`
+ *  already contained (the names are basenames of that listing, never a client path). An entry whose `lstat` fails is
+ *  OMITTED, never a fake 0: the server reads a missing time as "unknown" and keys that row by names alone. */
+async function entryMtimes(dir: string, names: readonly string[]): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  await Promise.all(names.map(async (n) => {
+    try { out[n] = (await lstat(path.join(dir, n))).mtimeMs; } catch { /* omitted */ }
+  }));
+  return out;
 }
 
 function clampTimeout(ms: number | undefined): number {
@@ -226,6 +349,17 @@ function clampTimeout(ms: number | undefined): number {
  *  must be resolved explicitly; `tmux` is a distro binary and PATH suffices. */
 export function resolveSpawnCmd(cmd: string, home: string): string {
   return cmd === 'ccd' ? path.join(home, '.local', 'bin', 'ccd') : cmd;
+}
+
+/** The BODY half of the installed `ccd` pair — the Bash the launcher at
+ *  `resolveSpawnCmd('ccd', home)` hashes and hands control to. Derived here,
+ *  once, and used for ONE thing: a local `stat` that tells `refreshVerbs` whether
+ *  `ccd caps` could now answer differently. It is NOT a wire read and NOT a
+ *  read-whitelist grant — no request can name it, and nothing opens it, execs
+ *  it or reads its bytes; the entry is still the only thing the agent ever
+ *  spawns. */
+function ccdBodyPath(home: string): string {
+  return path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
 }
 
 /**
@@ -250,13 +384,20 @@ function runExec(
   cmd: string,
   args: string[],
   timeoutMs: number,
-): Promise<{ code: number; stdout: string; stderr: string; killed: boolean; signal: string | null }> {
+): Promise<{ code: number; stdout: string; stderr: string; killed: boolean; signal: string | null; ran?: false; detail?: string }> {
   return new Promise((resolve) => {
     execFile(cmd, args, { maxBuffer: EXEC_MAX_BUFFER, timeout: timeoutMs }, (error, stdout, stderr) => {
       const code = error
         ? (((error as NodeJS.ErrnoException & { code?: number }).code as number | undefined) ?? 1)
         : 0;
+      // D-6840 (ARCH-10, #543): a SPAWN error (node names the syscall `spawn <cmd>`: ENOENT, EACCES) means
+      // no child ever existed, so the forged 1 is said to be one: `ran: false`, additive (an older server ignores the key
+      // and reads the exit 1 it always read). Any other string code (a maxBuffer overflow) had a child and stays as it was.
+      const spawnErr = error as (NodeJS.ErrnoException & { syscall?: string }) | null;
+      const neverStarted = spawnErr !== null && typeof spawnErr.code === 'string' && typeof spawnErr.syscall === 'string'
+        && spawnErr.syscall.startsWith('spawn');
       resolve({
+        ...(neverStarted ? { ran: false as const, detail: spawnErr.message } : {}),
         code: typeof code === 'number' ? code : 1,
         stdout: String(stdout),
         stderr: String(stderr),
@@ -266,6 +407,57 @@ function runExec(
     });
   });
 }
+
+/**
+ * The `update` op's spawn port (design 2026-09-20 §10). It is one of the TWO
+ * places a wire-triggered request reaches a process spawn outside the exec
+ * whitelist (the other is the `token-sync` op's port, `./tokensync.ts`, its
+ * own body by D-4390), and it is deliberately NOT `runExec`: `runExec` is the exec op's executor,
+ * and a call to it here would put this op on the exec path in the reader's
+ * mind, which is exactly what §18 "the op never execs" forbids. Production is
+ * `realUpdateSpawn`; tests inject a recorder through `AgentOpts.spawnUpdate`.
+ */
+export type UpdateSpawn = (file: string, args: readonly string[], timeoutMs: number) => Promise<UpdateSpawnResult>;
+
+/**
+ * The `--detach` parent under a bound — the ABSOLUTE launcher and one of the two templates, both built by the
+ * caller from `shared/agent-protocol.ts`. `env` is the parent's whole environment, passed on purpose: the factory
+ * takes it so a test can hand the child a fixture HOME and PATH, and production hands it `process.env`.
+ *
+ * The parent is its own PROCESS GROUP (`detached`, pgid = pid), and the bound kills the WHOLE group with SIGKILL:
+ * a bound that killed only the parent would leave whatever it had already forked running, and the caller would
+ * read that as a stopped run. Answers, kept apart:
+ *  - `killed` — the parent was still running at the bound; the group was sent SIGKILL.
+ *  - A spawn error — the launcher absent or not executable (`ENOENT`/`EACCES`). It answers code 1 with the
+ *    sentence `could not start the launcher (<code>)` (D-3393) and `pid: null`: without that sentence the
+ *    parent's stderr is empty, and a node with no `ccrc` installed would read `spawn-failed: no message`.
+ *  - Every other exit — the parent's own code, its stderr, its stdout.
+ *
+ * The answer comes once the parent has EXITED and then either both pipes reached EOF or
+ * `UPDATE_SPAWN_DRAIN_MS` passed. A grandchild that left the group (setsid) and still holds a pipe therefore never
+ * stops the answer; it costs `stdout: null` (EOF not reached). The drain is ONE deadline, armed by the kill or by the
+ * parent's exit, whichever comes first, so the whole answer is within `timeoutMs + UPDATE_SPAWN_DRAIN_MS` of the spawn.
+ * A parent that a signal ended answers `128 + signo`. A pipe that errors marks the capture incomplete (`stdout: null`).
+ * Nothing resolves twice.
+ */
+export function makeUpdateSpawn(env: NodeJS.ProcessEnv): UpdateSpawn {
+  return (file, args, timeoutMs) => boundedSpawn({ spawn, signals: os.constants.signals }, file, args, { env, timeoutMs, drainMs: UPDATE_SPAWN_DRAIN_MS });
+}
+
+/** The agent's production spawner: the parent inherits this process's own environment. */
+export const realUpdateSpawn: UpdateSpawn = makeUpdateSpawn(process.env);
+
+/** ONE per agent PROCESS, shared by every connection (D-3392).
+ *  A server whose link dropped while an op was spawning reconnects on a NEW
+ *  socket and re-sends the op, and a per-connection flag would let that second
+ *  `--detach` parent start beside the first. Both parents only PROBE the lock
+ *  (wave 4 Task 3), so both would pass it and write `queued`. */
+interface UpdateGate { spawning: boolean }
+
+/** ONE per agent PROCESS as well, for the `token-sync` op (spec 4.4, "one gate per agent process allows one sync at
+ *  a time"), for UpdateGate's reason: a server that reconnects on a new socket and re-sends the op must not start a
+ *  second verb beside the first. Separate from UpdateGate: the driver itself holds while an update is in flight. */
+interface TokenSyncGate { spawning: boolean }
 
 interface PtyEntry {
   proc: PtyProcess;
@@ -280,6 +472,18 @@ interface ConnCtx {
   ptys: Map<number, PtyEntry>;
   nextPtyId: number;
   spawnPty: PtySpawn;
+  spawnUpdate: UpdateSpawn;
+  updateGate: UpdateGate;
+  spawnTokenSync: TokenSyncSpawn;
+  tokenSyncGate: TokenSyncGate;
+  spawnAccount: AccountOpSpawn;
+  spawnTestboxAdmin: TestboxAdminSpawn;
+  diskSeams: Partial<DiskSeams>;
+  pressureSeams: Partial<PressureSeams>;
+  backupSeams: Partial<BackupSeams>;
+  testboxSeams: Partial<TestboxOpSeams>;
+  /** The `overlord-history` op and its ONE slot, per agent PROCESS (Overlord W1): shared by every connection. */
+  historyOp: HistoryOp;
 }
 
 async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: VerbCache): Promise<void> {
@@ -291,38 +495,116 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
     }
     case 'exec': {
       if (!isExecAllowed(req.cmd, req.args)) { send(ws, fail(req.id, 'forbidden')); return; }
-      const result = await runExec(resolveSpawnCmd(req.cmd, ctx.cfg.home), req.args, clampTimeout(req.timeoutMs));
+      // D-8270: AFTER the whitelist, which judged the argv the server sent: a tmux call is routed to the socket the
+      // home's setting names (`-L` ahead of it, or a refusal when the setting names none), and `ccd` passes untouched.
+      const routed = tmuxRoute(req.cmd, req.args, () => fleetTmuxSocket(ctx.cfg.home));
+      const result = await runExec(resolveSpawnCmd(routed.file, ctx.cfg.home), [...routed.args], clampTimeout(req.timeoutMs));
       send(ws, ok(req.id, result));
       return;
     }
+    // The three reads open a regular file only, never blocking on a FIFO, and a lane-state name with `O_NOFOLLOW`
+    // (`checkReadTarget`, `openRegular`; accounts plan Task A12). `unreadable` answers each op's own unreadable shape.
     case 'read': {
-      const p = await checkPath(req.path, ctx.cfg, 'read');
-      if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      send(ws, ok(req.id, readPayload(await readWhole(p))));
+      const t = await checkReadTarget(req.path, ctx.cfg);
+      if (t.kind === 'forbidden') { send(ws, fail(req.id, 'forbidden')); return; }
+      send(ws, ok(req.id, readPayload(t.kind === 'open' ? await readWhole(t.path, t.noFollow) : { data: null, absent: false })));
       return;
     }
     case 'readFrom': {
-      const p = await checkPath(req.path, ctx.cfg, 'read');
-      if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      send(ws, ok(req.id, readFromPayload(await readFromMeasured(p, req.offset))));
+      const t = await checkReadTarget(req.path, ctx.cfg);
+      if (t.kind === 'forbidden') { send(ws, fail(req.id, 'forbidden')); return; }
+      send(ws, ok(req.id, readFromPayload(t.kind === 'open'
+        ? await readFromMeasured(t.path, req.offset, req.maxBytes, t.noFollow) : { ok: false, reason: 'unreadable' })));
       return;
     }
     case 'readB64': {
-      const p = await checkPath(req.path, ctx.cfg, 'read');
-      if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      send(ws, ok(req.id, readB64Payload(await readB64Measured(p))));
+      const t = await checkReadTarget(req.path, ctx.cfg);
+      if (t.kind === 'forbidden') { send(ws, fail(req.id, 'forbidden')); return; }
+      send(ws, ok(req.id, readB64Payload(t.kind === 'open'
+        ? await readB64Measured(t.path, t.noFollow) : { ok: false, reason: 'unreadable' })));
       return;
     }
     case 'readdir': {
       const p = await checkPath(req.path, ctx.cfg, 'read');
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      send(ws, ok(req.id, { names: await listDir(p) }));
+      const listed = await listDirMeasured(p);
+      send(ws, ok(req.id, req.times === true && listed.ok
+        ? { ...readdirPayload(listed), times: await entryMtimes(p, listed.names) }
+        : readdirPayload(listed)));
       return;
     }
     case 'stat': {
-      const p = await checkPath(req.path, ctx.cfg, 'read');
+      // D-8382: the read roots, or the operator's ~/.ccrc switch files, for this op alone (`checkCcrcSwitchStat`); and one
+      // history W3 steer marker, for the launch-profile lane (`checkSteerOnStat`).
+      const p = await checkPath(req.path, ctx.cfg, 'read') ?? await checkCcrcSwitchStat(req.path, ctx.cfg)
+        ?? await checkSteerOnStat(req.path, ctx.cfg);
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
       send(ws, ok(req.id, statPayload(await statMeasured(p))));
+      return;
+    }
+    case 'lstat': {
+      // THE WHITELIST DECISION IS UNCHANGED and still made on the FULLY
+      // RESOLVED path: a link escaping the whitelist is refused here exactly as
+      // it is for every other op.
+      const p = await checkPath(req.path, ctx.cfg, 'read');
+      if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
+      // BUT NOT `p` ITSELF AS THE SUBJECT. `checkPath` canonicalizes, and
+      // canonicalization destroys precisely the fact this op exists to report
+      // — `lstat(p)` follows nothing because there is nothing left to follow,
+      // so a symlinked marker could only ever come back `regular`. That is a
+      // fix that looks like one and is not, and it was caught by an end-to-end
+      // case, not by reading: the local adapter answered `symlink` and this
+      // wire answered `regular` on the same fixture.
+      //
+      // So the subject is the path whose PARENT is canonical and whose last
+      // component is literal. The parent is whitelist-checked in its own right
+      // and exactly one component is appended, so this can only ever name an
+      // entry of a directory the connection may already `readdir` — which
+      // lists this very name. Strictly less disclosure than `readdir`, and
+      // `lstat` reads no content and follows no final link.
+      //
+      // `parent === null` is the whitelist ROOT itself (`.cc-sessions`, whose
+      // parent is $HOME and is not whitelisted): fall back to the canonical
+      // path, which for a directory is the same answer.
+      //
+      // ONE exception to that fallback (F12/D-3195, fix round 1 dispatch C).
+      // `~/.ccrc` is not itself independently whitelisted in the common case
+      // (only its nine literal node-file paths are), so `parent === null`
+      // usually fires for a node-file request, and the fallback subject would
+      // then be `p` — `checkPath`'s CANONICAL, already symlink-resolved,
+      // answer. That is correct when the node file is admitted through
+      // `isCcrcNodeFile` (that grant requires canonical === `<ccrc>/<literal
+      // basename>`, so canonical already equals the literal path). But a node
+      // file can ALSO be admitted through a DIFFERENT whitelist arm: a live
+      // symlink whose FULLY RESOLVED target lies in another admitted prefix
+      // (`.cc-sessions`, `.cc-clips`, a `.claude*` dir, the projects root) —
+      // that target is a regular file the OTHER prefix's own arm admits on
+      // its own — and then `p` names that other file, not the link. Scoped
+      // narrowly so every other request's answer stays byte-for-byte
+      // unchanged, whether or not `~/.ccrc` itself happens to be
+      // independently admitted (e.g. `~/.ccrc` itself under another prefix):
+      // only when the request literally names `<canonical
+      // ~/.ccrc>/<one of the NODE_FILES basenames>` does the subject become that
+      // literal path directly, never the parent-probe fallback. The basename
+      // check runs FIRST — a cheap array lookup — so the two `canonicalize`
+      // calls (realpath walks) below run only when it can possibly matter,
+      // never on every `lstat`.
+      const literalBasename = path.basename(req.path);
+      const viaParentProbe = async (): Promise<string> => {
+        const parent = await checkPath(path.dirname(req.path), ctx.cfg, 'read');
+        return parent === null ? p : path.join(parent, path.basename(req.path));
+      };
+      let subject: string;
+      if (NODE_FILE_BASENAMES.includes(literalBasename)) {
+        const canonicalCcrc = await canonicalize(path.join(ctx.cfg.home, CCRC_DIR_NAME));
+        const literalParent = await canonicalize(path.dirname(req.path));
+        subject = literalParent === canonicalCcrc
+          ? path.join(canonicalCcrc, literalBasename)
+          : await viaParentProbe();
+      } else {
+        subject = await viaParentProbe();
+      }
+      send(ws, ok(req.id, lstatPayload(await lstatMeasured(subject))));
       return;
     }
     case 'writeB64': {
@@ -367,6 +649,188 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       send(ws, ok(req.id, { ptyId }));
       return;
     }
+    case 'update': {
+      // Design 2026-09-20 §10. One of the FOUR wire-triggered spawn classes outside the
+      // exec whitelist (agent/CLAUDE.md; the others are `token-sync`'s, `account`'s and `testbox`'s). `validateReq` has already refused a tag
+      // that fails `isReleaseTag` and a kind outside `RequestKind`, so this body
+      // never sees an unvalidated argument. `updateSpawnArgv` checks both AGAIN
+      // and throws on a caller bug, so an edit that lets one through reaches
+      // the envelope's `.catch`, never `execFile`. Nothing here consults the
+      // exec whitelist, and nothing here may: `ccrc` is on neither list, and
+      // the argv is one of two templates with `tag` the only variable token.
+      //
+      // No `await` before the busy decision. The gate is checked and taken in
+      // one synchronous stretch, so two ops arriving together cannot both pass.
+      if (ctx.updateGate.spawning) {
+        send(ws, failUpdate(req.id, 'busy', 'an update op is already spawning on this agent'));
+        return;
+      }
+      const home = ctx.cfg.home;
+      // ONE read feeds both the in-flight check and the bound's snapshot (D-3400 amended, D-3413): the report's text, proven
+      // absent, or unreadable. Absent and unreadable stay two values, because arm A needs a readable before.
+      const before = readUpdateReport(home);
+      const inFlight = before.kind === 'bytes' ? inFlightReport(before.text) : null;
+      // D-3411: an in-flight report answers busy only while its WRITER lives. A dead writer's report is a
+      // leftover (an updater killed mid-run), and the op spawns: the parent's own lock probe then decides.
+      // An absent or unreadable pid keeps busy — that writer is unmeasurable, which is not dead. The
+      // sentence is `inFlightBusyDetail`'s, the one both roles send, and it stays within the op's detail bound
+      // (D-3391) with its advice intact.
+      if (inFlight !== null && writerMayLive(inFlight.pid)) {
+        send(ws, failUpdate(req.id, 'busy', inFlightBusyDetail(inFlight)));
+        return;
+      }
+      const file = updateLauncherPath(home);
+      const argv = updateSpawnArgv(req.kind ?? 'update', req.tag);
+      ctx.updateGate.spawning = true;
+      let spawned: Awaited<ReturnType<UpdateSpawn>>;
+      try {
+        spawned = await ctx.spawnUpdate(file, argv, UPDATE_SPAWN_TIMEOUT_MS);
+      } finally {
+        ctx.updateGate.spawning = false;
+      }
+      // D-3372: `accepted` is a measured fact about the
+      // node. The `--detach` parent exits 0 only after `_upd_phase queued` (which WARNs, never fails) and
+      // `_svc_run_detached` started the unit (wave 4 Task 3). It is never "a
+      // process was forked". Everything else is `spawn-failed`, carrying what
+      // the parent said.
+      if (spawned.killed) {
+        // D-3400 (amended), D-3413: the bound killed the parent's whole group, and what it did is MEASURED, never guessed:
+        // re-read update.json and let L0's `decideKilledSpawn` attribute the change (A. nothing queued, B. it queued our tag
+        // as this pid, D. anything else). Only A releases (`not-queued`: idle, the request standing); B and D answer the ok
+        // `accepted` reply carrying their words, so the server HOLDS the lease. The old `spawn-failed` here was a halting
+        // answer for a parent that may well have started the run.
+        const verdict = decideKilledSpawn({
+          before, after: readUpdateReport(home), stdout: spawned.stdout, pid: spawned.pid, tag: req.tag,
+        });
+        send(ws, verdict.arm === 'A'
+          ? failUpdate(req.id, 'not-queued', verdict.detail)
+          : ok(req.id, { accepted: true, detail: verdict.detail }));
+        return;
+      }
+      if (spawned.code !== 0) {
+        const line = firstStderrLine(spawned.stderr);
+        // D-3411: the parent's lock probe found the lock HELD and died before its `queued` write, so nothing on
+        // the box changed. That is a busy node, not a faulted one: `busy` releases `idle` with the request
+        // standing. `_upd_flock_die` and the probe's unmeasured arm carry other sentences and stay spawn-failed.
+        // The busy detail carries the way out (`lockHeldBusyDetail`): a holder that hangs writes no report.
+        send(ws, isUpdateLockHeldLine(line)
+          ? failUpdate(req.id, 'busy', lockHeldBusyDetail(line))
+          : failUpdate(req.id, 'spawn-failed', line));
+        return;
+      }
+      send(ws, ok(req.id, { accepted: true }));
+      return;
+    }
+    case 'disk': {
+      // Fleet disk retention spec §2.5 (D-6614). The op takes NO argument (`validateReq` refuses a frame that carries
+      // one), so there is no path to contain: `measureDisk` resolves the work roots itself, against the configured home.
+      // Every disk fault is a `missing` row in the answer, never a throw and never a zero.
+      send(ws, ok(req.id, { ...await measureDisk(ctx.cfg.home, ctx.diskSeams) }));
+      return;
+    }
+    case 'pressure': {
+      // #1170. No argument (`validateReq` refuses a frame that carries one); two fixed kernel files. A file that cannot
+      // be read or parsed throws into the envelope's `.catch`, an error the server reads as unmeasured, never as calm.
+      // D-8122: the session slice's headroom beside it, `null` when unreadable (never a throw: the PSI stands alone).
+      send(ws, ok(req.id, { ...measurePressure(ctx.pressureSeams), headroomBytes: measureHeadroom(ctx.pressureSeams) }));
+      return;
+    }
+    case 'backup': {
+      // D-7858. No argument (`validateReq` refuses a frame that carries one); the directory is this process's own
+      // setting (D-7859). Every fault is an `unreadable` answer, never a throw and never an absent file.
+      send(ws, ok(req.id, { ...measureBackup(ctx.backupSeams) }));
+      return;
+    }
+    case 'testbox': {
+      // Test box plan TB9 (D-7411). No argument (`validateReq` refuses a frame that carries one). The fourth class of
+      // wire-triggered spawn outside the exec whitelist (agent/CLAUDE.md, D-7430): `systemctl --user show-environment`,
+      // the settings printer and the six version probes, each a fixed argv with no field of this frame in it.
+      send(ws, ok(req.id, { ...await measureTestbox(ctx.cfg.home, ctx.testboxSeams) }));
+      return;
+    }
+    case 'testbox-tools-sync': {
+      // The op's one write (spec §2.7): the release and the versions are the fleet host's, read and measured here.
+      send(ws, ok(req.id, { ...await syncTestboxTools(ctx.cfg.home, ctx.testboxSeams) }));
+      return;
+    }
+    case 'token-sync': {
+      // Box-token lifecycle spec 4.4. The second wire-triggered spawn outside the exec whitelist (agent/CLAUDE.md).
+      // `validateReq` has already refused a code that fails `isClaimCode`; it is checked AGAIN here, and a caller bug
+      // that lets one through throws into the envelope's `.catch`, never into a spawn. The argv is one frozen
+      // template with no variable token: the code rides the child's stdin, never argv, and the port hands the child
+      // an explicit {HOME, PATH, LANG}. Nothing here consults the exec whitelist, and nothing may.
+      //
+      // No `await` before the busy decision: the gate is checked and taken in one synchronous stretch.
+      if (ctx.tokenSyncGate.spawning) {
+        send(ws, failTokenSync(req.id, 'busy', 'a token-sync op is already running on this agent'));
+        return;
+      }
+      if (!isClaimCode(req.code)) throw new RangeError('token-sync: the code is not a claim code — a caller bug; nothing was spawned');
+      const file = updateLauncherPath(ctx.cfg.home);
+      const argv = tokenSyncSpawnArgv();
+      ctx.tokenSyncGate.spawning = true;
+      let spawned: Awaited<ReturnType<TokenSyncSpawn>>;
+      try {
+        spawned = await ctx.spawnTokenSync(file, argv, req.code, TOKEN_SYNC_SPAWN_TIMEOUT_MS);
+      } finally {
+        ctx.tokenSyncGate.spawning = false;
+      }
+      // The ONE mapping (`tokenSyncAnswer`): exit code AND first stderr line, or the synced line; neither carries
+      // the code or a value. `transport` is always sent by this build; its one reader is `readTokenTransport`.
+      const answer = tokenSyncAnswer(spawned);
+      send(ws, answer.ok
+        ? ok(req.id, { synced: answer.synced, transport: answer.transport })
+        : failTokenSync(req.id, answer.err, answer.detail));
+      return;
+    }
+    case 'account': {
+      // Accounts spec §13.2 (plan Task A8, D-5513). The THIRD wire-triggered spawn outside the exec whitelist
+      // (agent/CLAUDE.md). `validateReq` has already built the argv and decoded the stdin once; both are built AGAIN
+      // here from the typed frame, and a caller bug that lets a bad one through answers the builder's refusal, never a
+      // spawn. The launcher is absolute, argv comes only from `buildAccountArgv` (no free argv), the secret rides
+      // stdin only, and the port hands the child an explicit {HOME, PATH, LANG}. Nothing here consults the exec
+      // whitelist, and nothing may. The log line names the op, the sub and the lane, never `stdinB64` or a field.
+      const stdin = decodeAccountStdin(req.stdinB64);
+      const built = buildAccountArgv(req.sub, req.laneId, req.fields, stdin.ok && stdin.bytes !== null);
+      let outcome: AccountOpAnswer;
+      if (!stdin.ok) outcome = accountRefusal(ctx.cfg.home, 'key-charset');
+      else if (!built.ok) outcome = accountRefusal(ctx.cfg.home, built.why);
+      else {
+        const file = updateLauncherPath(ctx.cfg.home);
+        const spawned = await ctx.spawnAccount(file, built.argv, stdin.bytes, accountSpawnBounds(req.sub));
+        outcome = { ...spawned, fleetIdentity: readFleetIdentity(ctx.cfg.home) };
+      }
+      console.warn(`ccrc-agent: account ${req.sub} ${req.laneId ?? '-'} -> ${outcome.kind}`);
+      send(ws, ok(req.id, outcome));
+      return;
+    }
+    case 'testbox-admin': {
+      // Test box connect spec §2.1, §2.11 (plan TC11, D-8166). The FIFTH wire-triggered spawn outside the exec
+      // whitelist (agent/CLAUDE.md). `validateReq` has already built the argv once; it is built AGAIN here from the
+      // typed frame, and a caller bug that lets a bad one through answers the builder's refusal, never a spawn. The
+      // launcher is absolute, argv comes only from `buildTestboxAdminArgv` (no free argv), there is NO stdin, and the
+      // port hands the child an explicit {HOME, PATH, LANG}. Nothing here consults the exec whitelist, and nothing
+      // may. The log line names the op and the sub, never a field.
+      const built = testboxAdminSpawnArgv(req.sub, req.fields);
+      let outcome: TestboxAdminOpAnswer;
+      if (!built.ok) outcome = testboxAdminRefusal(ctx.cfg.home, built.why);
+      else {
+        const file = updateLauncherPath(ctx.cfg.home);
+        const spawned = await ctx.spawnTestboxAdmin(file, built.argv, testboxAdminSpawnBounds(req.sub, req.fields));
+        outcome = { ...spawned, fleetIdentity: readFleetIdentity(ctx.cfg.home) };
+      }
+      console.warn(`ccrc-agent: testbox-admin ${req.sub} -> ${outcome.kind}`);
+      send(ws, ok(req.id, outcome));
+      return;
+    }
+    case 'overlord-history': {
+      // Overlord W1 (w1-board-history.md Task 3): history's read verbs over every project, in a worker thread with one
+      // slot (historyOp.ts). It reads ~/.ccrc/history/ only, read-only, outside the read whitelist; it spawns no process.
+      // Every outcome, a failure included, is an OverlordHistoryAnswer on ResOk; the op never throws a message here.
+      const answer = await ctx.historyOp.run(ctx.cfg.home, { verb: req.verb, target: req.target, agents: req.agents, args: req.args }, ws);
+      send(ws, ok(req.id, answer));
+      return;
+    }
     default: {
       // Exhaustive today (every `AgentReq` op above), but kept as a
       // defensive fallback rather than removed — a future protocol variant
@@ -392,6 +856,40 @@ function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === 'string');
 }
 
+/** `validateReq`'s answer for a well-shaped op whose ARGUMENT failed its guard
+ *  (design 2026-09-20 §10). The message handler sends it as
+ *  `fail(req.id, req.refuse)` before any case body runs. It covers the `update`
+ *  op (`bad-tag`, `bad-kind`) and the `token-sync` op (`bad-code`). It is not
+ *  `null`, because the handler answers `null` with `bad-request`, which from
+ *  either op must mean exactly one thing: this agent predates it. */
+export interface ReqRefusal {
+  refuse: Extract<UpdateOpError, 'bad-tag' | 'bad-kind'> | Extract<TokenSyncOpError, 'bad-code'>;
+  id: number;
+}
+
+/** `validateReq`'s answer for an `account` frame whose arguments failed the builder or whose stdin failed its bytes
+ *  check (accounts spec §13.2). Unlike `ReqRefusal` it is answered `ok: true` with `kind: 'refused'` and the node's
+ *  `fleetIdentity`, because every answer of this op carries the identity; `bad-request` keeps meaning "this agent
+ *  predates the op". Nothing was spawned. */
+export interface AccountReqRefusal { accountRefused: AccountArgvRefusal; id: number }
+
+/** `validateReq`'s answer for a `testbox-admin` frame the builder refused (connect spec §2.1): answered `ok: true` with
+ *  `kind: 'refused'` and the node's `fleetIdentity`; `bad-request` keeps meaning "this agent predates the op". */
+export interface TestboxAdminReqRefusal { testboxAdminRefused: TestboxAdminArgvRefusal; id: number }
+/** An `overlord-history` frame its reader refused (Overlord W1): answered `ok: true` as `request-refused` with the word, so
+ *  `bad-request` keeps meaning "this agent predates the op" (the `account` and `testbox-admin` pattern). */
+export interface HistoryReqRefusal { historyRefused: OverlordHistoryRequestRefusal; id: number }
+
+/** A `testbox-admin` refusal's payload, with the node's identity read at answer time. */
+function testboxAdminRefusal(home: string, why: TestboxAdminArgvRefusal): TestboxAdminOpAnswer {
+  return { kind: 'refused', why, fleetIdentity: readFleetIdentity(home) };
+}
+
+/** An `account` refusal's payload, with the node's identity read at answer time. */
+function accountRefusal(home: string, why: AccountArgvRefusal): AccountOpAnswer {
+  return { kind: 'refused', why, fleetIdentity: readFleetIdentity(home) };
+}
+
 /**
  * Runtime shape/type validation for an already-JSON-parsed `req` frame.
  * `msg as AgentReq` (the old dispatch site) is a *compile-time-only*
@@ -404,7 +902,7 @@ function isStringArray(v: unknown): v is string[] {
  * the actual gate: every op's required fields are checked here, by type,
  * before the frame is ever allowed to reach a handler.
  */
-function validateReq(msg: Record<string, unknown>): AgentReq | null {
+function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | AccountReqRefusal | TestboxAdminReqRefusal | HistoryReqRefusal | null {
   if (typeof msg.id !== 'number') return null;
   const id = msg.id;
   switch (msg.op) {
@@ -423,7 +921,17 @@ function validateReq(msg: Record<string, unknown>): AgentReq | null {
     case 'readFrom': {
       if (typeof msg.path !== 'string') return null;
       if (typeof msg.offset !== 'number') return null;
-      return { t: 'req', id, op: 'readFrom', path: msg.path, offset: msg.offset } satisfies ReadFromReq;
+      const req: ReadFromReq = { t: 'req', id, op: 'readFrom', path: msg.path, offset: msg.offset };
+      // `maxBytes` is the byte arm's one field (delegation wave 3). Absent, the
+      // frame is exactly what it always was — including an odd offset, which the
+      // old arm clamps. Present, the whole range must be a valid one: a frame
+      // that says "bound this read" and bounds it wrongly is a malformed frame,
+      // not a request to guess at.
+      if (msg.maxBytes !== undefined) {
+        if (!isReadFromRange(msg.offset, msg.maxBytes)) return null;
+        req.maxBytes = msg.maxBytes as number;
+      }
+      return req;
     }
     case 'readB64': {
       if (typeof msg.path !== 'string') return null;
@@ -431,11 +939,15 @@ function validateReq(msg: Record<string, unknown>): AgentReq | null {
     }
     case 'readdir': {
       if (typeof msg.path !== 'string') return null;
-      return { t: 'req', id, op: 'readdir', path: msg.path } satisfies ReaddirReq;
+      return { t: 'req', id, op: 'readdir', path: msg.path, ...(msg.times === true ? { times: true as const } : {}) } satisfies ReaddirReq;
     }
     case 'stat': {
       if (typeof msg.path !== 'string') return null;
       return { t: 'req', id, op: 'stat', path: msg.path } satisfies StatReq;
+    }
+    case 'lstat': {
+      if (typeof msg.path !== 'string') return null;
+      return { t: 'req', id, op: 'lstat', path: msg.path } satisfies LstatReq;
     }
     case 'writeB64': {
       if (typeof msg.path !== 'string') return null;
@@ -459,6 +971,87 @@ function validateReq(msg: Record<string, unknown>): AgentReq | null {
     }
     case 'caps':
       return { t: 'req', id, op: 'caps' } satisfies CapsReq;
+    case 'update': {
+      // The ONE tag-shape guard (`isReleaseTag`, never a regex here) and the
+      // one kind guard. A failed argument is a `ReqRefusal` carrying the op's
+      // own word; nothing past this point sees an unvalidated tag.
+      if (!isReleaseTag(msg.tag)) return { refuse: 'bad-tag', id };
+      const kind = msg.kind === undefined ? 'update' : msg.kind;
+      if (!isRequestKind(kind)) return { refuse: 'bad-kind', id };
+      return { t: 'req', id, op: 'update', tag: msg.tag, kind } satisfies UpdateReq;
+    }
+    case 'disk': {
+      // The op has no argument. A frame that carries any field beyond the envelope's own is malformed (`null` is
+      // `bad-request`, the word an agent that predates the op also answers), and nothing is measured.
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op')) return null;
+      return { t: 'req', id, op: 'disk' } satisfies DiskReq;
+    }
+    case 'pressure': {
+      // #1170: no argument, the `disk` op's rule. Any extra field is malformed (`bad-request`), and nothing is read.
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op')) return null;
+      return { t: 'req', id, op: 'pressure' } satisfies PressureReq;
+    }
+    case 'backup': {
+      // D-7858: no argument, the `disk` op's rule. Any extra field is malformed (`bad-request`), and nothing is read.
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op')) return null;
+      return { t: 'req', id, op: 'backup' } satisfies BackupReq;
+    }
+    case 'testbox': {
+      // TB9 (D-7411): no argument, the `disk` op's rule. Any extra field is malformed (`bad-request`), nothing runs.
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op')) return null;
+      return { t: 'req', id, op: 'testbox' } satisfies TestboxReq;
+    }
+    case 'testbox-tools-sync': {
+      // The same: a replayed frame that carries a release, a version or anything else is `bad-request`, never sent on.
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op')) return null;
+      return { t: 'req', id, op: 'testbox-tools-sync' } satisfies TestboxToolsSyncReq;
+    }
+    case 'token-sync': {
+      // The ONE code guard (`isClaimCode`, never a regex here). A missing, non-string or malformed code is a
+      // `ReqRefusal` carrying `bad-code`; `bad-request` from this op keeps meaning "this agent predates it".
+      if (!isClaimCode(msg.code)) return { refuse: 'bad-code', id };
+      return { t: 'req', id, op: 'token-sync', code: msg.code } satisfies TokenSyncReq;
+    }
+    case 'account': {
+      // The ONE builder (`buildAccountArgv`, spec §13.2's bounds, never a regex here) and the ONE stdin check
+      // (`decodeAccountStdin`). Every failure is an `AccountReqRefusal` carrying the builder's word; a frame that
+      // passes is retyped field by field, so nothing past this point sees an unvalidated value.
+      const stdin = decodeAccountStdin(msg.stdinB64);
+      if (!stdin.ok) {
+        // The sub is judged first, so a frame off the union says `bad-sub` whatever its stdin.
+        const first = buildAccountArgv(msg.sub, msg.laneId, msg.fields, false);
+        return { accountRefused: !first.ok && first.why === 'bad-sub' ? 'bad-sub' : 'key-charset', id };
+      }
+      const built = buildAccountArgv(msg.sub, msg.laneId, msg.fields, stdin.bytes !== null);
+      if (!built.ok) return { accountRefused: built.why, id };
+      const req: AccountOpReq = {
+        t: 'req', id, op: 'account', sub: msg.sub as AccountOpReq['sub'], laneId: msg.laneId as string | null,
+        fields: { ...(msg.fields as Record<string, string>) },
+      };
+      if (typeof msg.stdinB64 === 'string') req.stdinB64 = msg.stdinB64;
+      return req;
+    }
+    case 'testbox-admin': {
+      // The ONE builder (`buildTestboxAdminArgv`, never a regex here). Every failure is a `TestboxAdminReqRefusal`
+      // carrying the builder's word; a frame with a key beyond `t`, `id`, `op`, `sub`, `fields` is malformed
+      // (`bad-request`); a frame that passes is retyped, so nothing past this point sees an unvalidated value.
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op' && k !== 'sub' && k !== 'fields')) return null;
+      const built = buildTestboxAdminArgv(msg.sub, msg.fields);
+      if (!built.ok) return { testboxAdminRefused: built.why, id };
+      return {
+        t: 'req', id, op: 'testbox-admin', sub: msg.sub as TestboxAdminReq['sub'], fields: msg.fields as TestboxAdminReq['fields'],
+      } satisfies TestboxAdminReq;
+    }
+    case 'overlord-history': {
+      // The ONE reader (shared/overlordHistory.ts), handed the request's body: the frame less its envelope keys, so its
+      // byte bound measures what the server's door bounds (review 2126 F5). A key the reader does not know stays in the
+      // body (it ignores it, and refuses `regex`). A refusal is a HistoryReqRefusal carrying its word, and a request that
+      // passes is retyped field by field.
+      const { t: _t, id: _id, op: _op, ...body } = msg;
+      const read = readOverlordHistoryRequest(body);
+      if (!read.ok) return { historyRefused: read.refusal, id };
+      return { t: 'req', id, op: 'overlord-history', ...read.request } satisfies OverlordHistoryReq;
+    }
     default:
       return null;
   }
@@ -515,6 +1108,124 @@ function readRosterFp(home: string): string | undefined {
   }
 }
 
+/** Re-exported so `pool-epoch-numeric-parity.test.ts`'s existing import
+ *  keeps resolving unchanged. The grammar itself, and the document parser
+ *  below, moved to `shared/agent-protocol.ts` (D-3086,
+ *  item 1, wave-1 fix round A): the SERVER now has its own reader of this
+ *  same file (`server/src/pools.ts`'s `readObservedEpochFromRegistry`, via
+ *  `FleetIO.readFileMeasured` rather than this file's `readFileSync`), and
+ *  the brief that ordered it forbids a second hand-typed copy of one
+ *  grammar — see `parseObservedEpochDoc`'s own docstring for the full
+ *  three-check explanation this file used to carry locally. */
+export { OBSERVED_EPOCH_NUM } from '../../shared/agent-protocol.js';
+
+/**
+ * The epoch of the pool-membership projection THIS node actually has —
+ * `~/.cc-sessions/pool-epoch`, the leased projection `ccd-pool-sync` (Task 3)
+ * writes and `_acct_pool_state` (`ccd/ccd`) reads for placement decisions.
+ *
+ * `null` means this node has never synced — no file, an unreadable one, or a
+ * document `parseObservedEpochDoc` cannot prove a usable epoch out of. That
+ * is NOT the same as epoch 0 (the control plane has issued nothing yet, but
+ * this node has a real, if trivial, projection) and NOT the same as the
+ * field being absent from the `ready` frame (an older agent build that
+ * cannot even ASK the question) — `AgentReady.observedEpoch` and
+ * `FleetState.observedEpoch` both keep those three apart; `undefined` is
+ * what an ABSENT reader sees, never what this function returns.
+ *
+ * The read-and-fold-to-`null` is this function's own remaining job; the
+ * CONTENT grammar (terminator, exactly-one `epoch` line, that line's own
+ * numeric precision) is `parseObservedEpochDoc`'s (`shared/agent-protocol.ts`)
+ * — shared with the server's own reader of the identical file so the two
+ * cannot drift on what counts as a usable epoch.
+ *
+ * Read fresh on every `ready`, synchronously, for the same reason
+ * `readRosterFp`/`readBuildStamp` are: one small file read, at most once per
+ * WS connection, bought against a staleness question that would otherwise
+ * need its own cache-invalidation story. (This per-handshake cadence is
+ * exactly why the SERVER no longer treats the value this produces as its
+ * `pools` wire's `observedEpoch` authority — see the doc on
+ * `AgentReady.observedEpoch` in `shared/agent-protocol.ts`.)
+ */
+export function readObservedEpoch(home: string): number | null {
+  try {
+    const text = readFileSync(path.join(home, '.cc-sessions', POOL_EPOCH_FILE_NAME), 'utf8');
+    return parseObservedEpochDoc(text);
+  } catch {
+    return null;
+  }
+}
+
+/** Wave 4's writer puts ONE line of a few hundred bytes. Anything larger is not its report. */
+const UPDATE_REPORT_READ_MAX = 65_536;
+
+/** The agent's `process.kill(pid, 0)` adapter for `updateWriterAlive` (D-3411; the liveness RULE is L0's). */
+function probeKill(pid: number): KillProbeOutcome {
+  try {
+    process.kill(pid, 0);
+    return { threw: false };
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    return { threw: true, code: typeof code === 'string' ? code : null };
+  }
+}
+/** Whether an in-flight report's writer may still be running: L0's `updateWriterMayLive` over this role's adapter.
+ *  Exported for the pins; the `update` op is its one caller. */
+export function writerMayLive(pid: number | null): boolean {
+  return updateWriterMayLive(pid, probeKill);
+}
+
+/**
+ * Spec §10: the handler refuses when `~/.ccrc/update.json` says an update is in
+ * flight. The agent reads the file ITSELF, as `readObservedEpoch` and
+ * `readBuildStamp` read theirs (D-3371). This
+ * is the agent's own decision about its own box, not a wire file op, so it
+ * never goes through `checkPath`: that gate exists for what the SERVER reads.
+ *
+ * `null` (not busy) covers every failure: an absent, unreadable, over-cap or
+ * unparseable file, a non-regular one, and a report that is not in flight.
+ * The `--detach` parent's own lock probe (`_upd_detach`'s `_upd_lock_probe`) then decides, and a held lock comes back as
+ * `busy` with the lock's sentence (D-3411; it was `spawn-failed` before). A report that IS in flight is returned
+ * with its writer's `pid`; whether that writer lives is `writerMayLive`'s question, asked by the `update` case, not this
+ * read's. Opened `O_NONBLOCK`, because a FIFO
+ * planted at this name would otherwise block `open(2)` and, with it, this
+ * agent's whole event loop; `fstat` then refuses it as not a regular file. The
+ * CONTENT is judged by `inFlightReport` (`shared/api.ts`), the same parser the
+ * server-role spawn uses, so the two roles cannot disagree about what "in
+ * flight" means.
+ */
+export function readInFlightReport(home: string): InFlightReport | null {
+  const read = readUpdateReport(home);
+  return read.kind === 'bytes' ? inFlightReport(read.text) : null;
+}
+
+/**
+ * `~/.ccrc/update.json` on THIS box, bounded and measured (D-3400 amended, D-3413): its text, `absent` on a PROVEN ENOENT
+ * at the open, or `unreadable` for every other failure (a non-regular file, over the cap, any other errno). The `update` op
+ * reads it once before the spawn — that read is both the in-flight check's input and the bound's snapshot — and once
+ * after a kill, and the two are compared byte for byte. Same bounds as ever: `O_NONBLOCK` (a FIFO planted at the name
+ * would block `open(2)` and the agent's whole event loop), `fstat` to a regular file of at most `UPDATE_REPORT_READ_MAX`.
+ */
+export function readUpdateReport(home: string): UpdateReportRead {
+  let fd: number;
+  try {
+    fd = openSync(path.join(home, CCRC_DIR_NAME, NODE_FILES.report), fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'absent' } : { kind: 'unreadable' };
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > UPDATE_REPORT_READ_MAX) return { kind: 'unreadable' };
+    const buf = Buffer.alloc(st.size);
+    const n = readSync(fd, buf, 0, st.size, 0);
+    return { kind: 'bytes', text: buf.subarray(0, n).toString('utf8') };
+  } catch {
+    return { kind: 'unreadable' };
+  } finally {
+    try { closeSync(fd); } catch { /* nothing left to release */ }
+  }
+}
+
 /**
  * This box's own build stamp — `~/.ccrc/build.json` as `deploy/deploy.sh`'s
  * `stamp_build` installed it on the agent lane — or `undefined` when there
@@ -563,43 +1274,71 @@ function readBuildStamp(home: string): BuildInfo | undefined {
   return parseBuildInfo(raw) ?? undefined;
 }
 
-/** The list `readCcdVerbs` last produced, plus the stat of the script that
- *  produced it. Per-`startAgent` state, never module-level: the test suite
- *  boots several agents in one process and they must not share a cache. */
-type VerbCache = { verbs: string[]; mtimeMs: number | null; size: number | null };
+/** One file's `(mtimeMs, size)` — what a half of the cache key is made of. */
+type FileStamp = { mtimeMs: number; size: number };
 
-/** Re-exec `ccd caps` only when the script it would exec has changed. `caps`
- *  is a static heredoc and does no I/O, but a spawn on every server tick would
- *  be tens of thousands of bash processes a day to learn nothing. A replacement
- *  identical in mtime AND size reads as no change — the accepted cost of not
- *  hashing.
+/** The list `readCcdVerbs` last produced, plus the stats of BOTH halves of the
+ *  installed `ccd` that produced it: the entry the agent execs and the body that
+ *  entry hands control to. `caps` is printed by the body, so a body-only change
+ *  (a new verb) leaves the entry's bytes and stat as they were — a key made of the
+ *  entry alone would answer the old list for as long as the agent ran. `null`
+ *  means "never measured", and the two halves are only ever written TOGETHER
+ *  (`refreshVerbs`), so one is `null` exactly when the other is. Per-`startAgent`
+ *  state, never module-level: the test suite boots several agents in one process
+ *  and they must not share a cache. */
+type VerbCache = { verbs: string[]; entry: FileStamp | null; body: FileStamp | null };
+
+/** Re-exec `ccd caps` only when the `ccd` it would exec has changed — in EITHER
+ *  half. `caps` is a static heredoc and does no I/O, but a spawn on every server
+ *  tick would be tens of thousands of bash processes a day to learn nothing. A
+ *  replacement identical in mtime AND size reads as no change — the accepted cost
+ *  of not hashing — and a hit needs all four numbers (entry and body, mtime and
+ *  size) to equal the cached key.
  *
- *  Two situations are "no evidence" and must leave `cache` untouched — neither
- *  writes back `mtimeMs`/`size`, and neither overwrites `cache.verbs`:
- *   - `ccd` missing at stat time (a deploy moving it aside mid-install): the
- *     refresh is a no-op, not a clearing event.
- *   - the exec itself failing once the stat DID differ (a timeout under load,
- *     a fork failure, the `+x` bit lost mid-write): a previously-good list
- *     survives instead of being pinned to `[]`.
- *  Because neither writes back the stat, the NEXT caller (the 60 s fleet lane,
- *  not the 2 s pane poll — the exec only happens from that once-a-minute call
- *  path) sees the exact same mismatch it saw this time and retries, so a
- *  transient failure self-heals within a minute instead of being served
- *  forever from a cache entry that (wrongly) claims to already reflect the
- *  current file. */
+ *  Three situations are "no evidence" and must leave `cache` untouched — none
+ *  writes back either half of the key, and none overwrites `cache.verbs`:
+ *   - EITHER half missing or unmeasurable at stat time (a deploy moving the entry
+ *     or the body aside mid-install, an unreadable directory): the refresh is a
+ *     no-op, not a clearing event, and it is a no-op for the WHOLE key — the half
+ *     that did stat is not adopted while the other cannot be measured, or a
+ *     pair that returns identical to the old one would read as a hit on a
+ *     half-updated key. This includes a box whose installed entry is still the
+ *     self-contained pre-launcher one: it has no body to stat, so its list is the
+ *     one read at boot until the install moves it onto the pair.
+ *   - the exec itself failing once a stat DID differ (a timeout under load, a
+ *     fork failure, the `+x` bit lost mid-write, a launcher refusing a body it
+ *     cannot verify): a previously-good list survives instead of being pinned
+ *     to `[]`.
+ *  Because none writes back the key, the NEXT caller (the 60 s fleet lane, not
+ *  the 2 s pane poll — the exec only happens from that once-a-minute call path)
+ *  sees the exact same mismatch it saw this time and retries, so a transient
+ *  failure self-heals within a minute instead of being served forever from a
+ *  cache entry that (wrongly) claims to already reflect the current files. The
+ *  key is written only after a SUCCESSFUL `caps` read, and both stats are taken
+ *  BEFORE that read, so a file replaced while `caps` runs reads as a change on
+ *  the next call rather than being absorbed into the key. */
 async function refreshVerbs(cache: VerbCache, home: string): Promise<string[]> {
-  const st = await statMeasured(resolveSpawnCmd('ccd', home));
-  if (!st.ok) return cache.verbs;
-  if (st.mtimeMs === cache.mtimeMs && st.size === cache.size) return cache.verbs;
+  const [entry, body] = await Promise.all([
+    statMeasured(resolveSpawnCmd('ccd', home)),
+    statMeasured(ccdBodyPath(home)),
+  ]);
+  if (!entry.ok || !body.ok) return cache.verbs;
+  if (
+    cache.entry !== null && entry.mtimeMs === cache.entry.mtimeMs && entry.size === cache.entry.size &&
+    cache.body !== null && body.mtimeMs === cache.body.mtimeMs && body.size === cache.body.size
+  ) return cache.verbs;
   const verbs = await readCcdVerbs(home);
   if (verbs === null) return cache.verbs;
   cache.verbs = verbs;
-  cache.mtimeMs = st.mtimeMs;
-  cache.size = st.size;
+  cache.entry = { mtimeMs: entry.mtimeMs, size: entry.size };
+  cache.body = { mtimeMs: body.mtimeMs, size: body.size };
   return cache.verbs;
 }
 
-function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number, verbCache: VerbCache): void {
+function handleConnection(
+  ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number, verbCache: VerbCache,
+  updateGate: UpdateGate, tokenSyncGate: TokenSyncGate, historyOp: HistoryOp,
+): void {
   let authed = false;
   const ctx: ConnCtx = {
     cfg: { home: opts.home, projectsRoot: opts.projectsRoot },
@@ -608,6 +1347,17 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
     ptys: new Map(),
     nextPtyId: 1,
     spawnPty: opts.spawnPty,
+    spawnUpdate: opts.spawnUpdate,
+    updateGate,
+    spawnTokenSync: opts.spawnTokenSync,
+    tokenSyncGate,
+    spawnAccount: opts.spawnAccount,
+    spawnTestboxAdmin: opts.spawnTestboxAdmin,
+    diskSeams: opts.diskSeams,
+    pressureSeams: opts.pressureSeams,
+    backupSeams: opts.backupSeams,
+    testboxSeams: opts.testboxSeams,
+    historyOp,
   };
 
   const helloTimer = setTimeout(() => {
@@ -636,11 +1386,32 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
       // stamp — `AgentReady` declares both optional and the server's readers
       // treat absence as "no evidence", the same contract `ccdVerbs` has.
       //
-      // Assembled field by field rather than by the ternary this used to be:
-      // with two optional fields that ternary becomes four spellings of one
-      // frame, and a third field eight. The contract is unchanged — a key is
-      // written only when there is something to write.
-      const frame: ReadyFrame = { t: 'ready', v: 1, ccdVerbs: verbCache.verbs };
+      // `observedEpoch` is DIFFERENT and is never omitted by this build: it is
+      // in the initial literal, not assembled after like the two above,
+      // because `ReadyFrame` narrows it to required (same move as `ccdVerbs`)
+      // — `readObservedEpoch` always has an answer, a real epoch or `null` for
+      // "never synced", and only an agent build old enough to lack this
+      // field's code at all may omit it. This build is never that agent.
+      //
+      // `rosterFp`/`build` are still assembled field by field rather than by
+      // the ternary this used to be: with two optional fields that ternary
+      // becomes four spellings of one frame, and a third field eight. The
+      // contract is unchanged — a key is written only when there is
+      // something to write.
+      // `ops` (design 2026-09-20 §10): the request ops this agent answers beyond
+      // the closed set every agent has always had: `update`, `token-sync`
+      // (box-token lifecycle spec 4.4), `account` (accounts spec §13.2, whose
+      // remote arm sends a secret only to an agent that names it here) and `disk`
+      // (fleet disk retention spec §2.5, D-6614: it takes no field), `pressure`
+      // (#1170), `testbox`/`testbox-tools-sync` (test box plan TB9, D-7411,
+      // D-7555: no field either) and `backup` (D-7858, no field). It is required in `ReadyFrame`, so it cannot
+      // be dropped silently.
+      const frame: ReadyFrame = {
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, TESTBOX_ADMIN_OP, BACKUP_OP, READDIR_MTIMES_OP],
+      };
+      // `overlord-history` (Overlord W1, Task 4) goes last, and only where this agent can serve the history store
+      // (historyOp.ts#servable: the worker's entry found, not macOS), so a server never counts an agent that cannot.
+      if (historyOp.servable) frame.ops!.push(OVERLORD_HISTORY_OP);
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
       const build = readBuildStamp(opts.home);
@@ -663,6 +1434,26 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
         // and keep serving this connection — never tear it down over a
         // malformed request, and never let it reach a handler unvalidated.
         if (typeof msg.id === 'number') send(ws, fail(msg.id, 'bad-request'));
+        return;
+      }
+      // A well-shaped op whose ARGUMENT failed its guard (design 2026-09-20
+      // §10) is answered with the op's own word, never `bad-request`.
+      if ('refuse' in req) { send(ws, fail(req.id, req.refuse)); return; }
+      // An `account` frame the builder refused (accounts spec §13.2): answered with the identity, nothing spawned.
+      if ('accountRefused' in req) {
+        console.warn(`ccrc-agent: account refused -> ${req.accountRefused}`);
+        send(ws, ok(req.id, accountRefusal(opts.home, req.accountRefused)));
+        return;
+      }
+      // A `testbox-admin` frame the builder refused (connect spec §2.1): answered with the identity, nothing spawned.
+      if ('testboxAdminRefused' in req) {
+        console.warn(`ccrc-agent: testbox-admin refused -> ${req.testboxAdminRefused}`);
+        send(ws, ok(req.id, testboxAdminRefusal(opts.home, req.testboxAdminRefused)));
+        return;
+      }
+      // An `overlord-history` frame its reader refused (Overlord W1): the word on ResOk, nothing started.
+      if ('historyRefused' in req) {
+        send(ws, ok(req.id, { outcome: 'request-refused', word: req.historyRefused }));
         return;
       }
       // Defense in depth: even a validated request could hit an unforeseen
@@ -705,6 +1496,8 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
       entry.proc.kill();
     }
     ctx.ptys.clear();
+    // The link closed mid-read: its worker is terminated; the slot frees on the worker's exit (historyOp.ts).
+    ctx.historyOp.abandon(ws);
   });
 }
 
@@ -720,6 +1513,19 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     home: rawOpts.home ?? os.homedir(),
     projectsRoot: resolveProjectsRoot(rawOpts.projectsRoot),
     spawnPty: rawOpts.spawnPty ?? spawnFleetPty,
+    spawnUpdate: rawOpts.spawnUpdate ?? realUpdateSpawn,
+    // The child's environment is built from the agent's CONFIGURED home, not `process.env.HOME`, so the verb's
+    // `~/.cc-secrets` and `~/.ccrc` are the ones the launcher path (`updateLauncherPath(home)`) belongs to.
+    spawnTokenSync: rawOpts.spawnTokenSync ?? makeTokenSyncSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
+    // The `account` op's port gets the same explicit environment, from the same configured home (spec §13.2).
+    spawnAccount: rawOpts.spawnAccount ?? makeAccountOpSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
+    // The `testbox-admin` op's port, the same explicit environment from the same configured home (connect spec §2.1).
+    spawnTestboxAdmin: rawOpts.spawnTestboxAdmin ?? makeTestboxAdminSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
+    diskSeams: rawOpts.diskSeams ?? {},
+    pressureSeams: rawOpts.pressureSeams ?? {},
+    backupSeams: rawOpts.backupSeams ?? {},
+    testboxSeams: rawOpts.testboxSeams ?? {},
+    historySeams: rawOpts.historySeams ?? {},
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const verbCache: VerbCache = {
@@ -727,13 +1533,21 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     // failed read, and there is no prior list yet to fall back to — [] is the
     // correct answer here, not a special case of it.
     verbs: (await readCcdVerbs(opts.home)) ?? [],
-    mtimeMs: null,
-    size: null,
+    // Both halves of the key stay unset: boot's read is not tied to any stat,
+    // so the first live `caps` request measures the pair and establishes it.
+    entry: null,
+    body: null,
   };
 
   const httpServer: Server = createServer();
   const wss = new WebSocketServer({ server: httpServer });
-  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache));
+  // ONE update gate per agent process, shared by every connection (D-3392).
+  const updateGate: UpdateGate = { spawning: false };
+  // ONE token-sync gate per agent process, shared by every connection (spec 4.4).
+  const tokenSyncGate: TokenSyncGate = { spawning: false };
+  // ONE overlord-history op per agent process, its one slot shared by every connection (Overlord W1).
+  const historyOp = createHistoryOp({ ...realHistoryOpSeams(), ...opts.historySeams });
+  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache, updateGate, tokenSyncGate, historyOp));
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);

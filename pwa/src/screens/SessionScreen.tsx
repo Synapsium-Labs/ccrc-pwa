@@ -3,33 +3,62 @@
 // banners for every degraded state (offline, dead/read-only, missing
 // transcript), the chat list, and the optimistic composer. The fleet store
 // (connected app-wide in app.tsx) supplies the header's live identity.
-// DialogSheet and the TerminalDrawer mount at the bottom.
-import { useEffect, useRef, useState } from 'react';
+// DialogSheet mounts between the transcript and the strips (its card is inline at the desk), the TerminalDrawer at the
+// bottom.
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
-import { substrateFault } from '../../../shared/api';
-import { QuickConfirm } from '../components/QuickConfirm';
-import { Skeleton } from '../components/Skeleton';
-import { toast } from '../components/Toast';
+import { backgroundOnlyRefusal, repoLabel, sessionWithCoordinator, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
+import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, WorkflowStrip, toast, useNow } from '@ccrc/ui';
+import { staleFor } from '../session/taskStaleness';
 import { SwapSheet } from '../fleet/SwapSheet';
-import { accountHue, accountLabel } from '../lib/accounts';
-import { api, ApiError, apiErrorText } from '../lib/api';
+import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
+import { accountHue, accountLabel, accountProvider } from '../lib/accounts';
+import { api, ApiError, failedTo, INTERRUPT_REFUSAL_TEXT, refusalText } from '../lib/api';
+import { backgroundTasksClause } from '../lib/refusalWords';
+import { dayKey } from '../lib/clock';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
 import { ack } from '../lib/seen';
+import { onPageHidden, onPageVisible } from '../lib/pageClock';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import { ChatList } from '../session/ChatList';
+import { ChatRefsContext } from '../session/chatRefsContext';
+import { claimsRunElsewhere, type ChatRefContext } from '../lib/chatRefs';
 import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
-import { MailStrip } from '../session/MailStrip';
+import { heldAskLine } from '../session/askWords';
+import { deepLinkFallback, heldCoordinatorWords } from '../session/sessionHeaderView';
+import { sessionLabel } from '../fleet/sessionLabel';
 import { PickSheet } from '../session/PickSheet';
+import { BrowserSheet } from '../session/BrowserSheet';
 import { ReapSheet } from '../session/ReapSheet';
-import { SessionHeader } from '../session/SessionHeader';
+import { useQueuedRoute } from '../session/useQueuedRoute';
+import { ensureSession, useEnsure } from '../session/useEnsure';
+import { routeView } from '../session/routeView';
+import { substrateFaultTitle } from '../fleet/substrateWords';
+import { SessionChromeInputs, SessionHeader, type SessionHeaderProps } from '../session/SessionHeader';
+import { useFrameSet } from '../skins/frame';
+import { useInspectorShown } from '../inspector/inspectorShown';
+import { SessionFlows, type SessionActions } from '../session/SessionFlows';
+import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
+import { liveStatus } from '../session/liveStatus';
+import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
+import { activitiesStartedBy, readDelegation } from '../fleet/delegationWords';
+import { sessionFacts } from '../fleet/sessionFacts';
+import { coordinatorPresence } from '../fleet/presence';
+import { orphanGuidance } from '../fleet/orphanWords';
+import { placementOfRow, poolOfPlacement } from '../fleet/placementWords';
+import { isRunClosed, programmeTitle, sessionProgramme } from '../fleet/runWords';
 import { HistoryTab } from '../session/HistoryTab';
-import { TaskStrip } from '../session/TaskStrip';
+import { TimersSection } from '../session/TimersSection';
 import { TerminalDrawer } from '../session/TerminalDrawer';
-import { modelOptions, effortOptions } from '../lib/models';
+import { modelOptions, effortOptions, type PickOption } from '../lib/models';
+import { useLaneModels } from '../lib/useLaneModels';
 import '../session/chat.css';
+import { answerControlLabel, askSource } from '../session/askLive';
+import { hibernatedSince, hibernatedWords } from '../fleet/hibernated';
+import { fleetClaudeLatest, laneClaudeLatest } from '../../../shared/claudeVersion';
 
 /** Keyboard discipline: the bottom inset the on-screen keyboard covers. The
  *  screen pads its shell by this much so the composer stays above the
@@ -39,6 +68,90 @@ import '../session/chat.css';
 export function useKeyboardInsets(): number {
   return useKeyboardInset({ pinTop: true });
 }
+
+/** `background-aware-working` (D-5231): does the chat wear its working pulse?
+ *  It reads the server's BUCKET once a snapshot row exists, and the live word
+ *  only before it, so card, header and chat cannot disagree: a wedged `busy`
+ *  that the ladder filed `done` stops pulsing, and delegated work after a Stop
+ *  keeps it. A dead session never pulses. */
+export function chatPulsing(
+  live: (Pick<FleetSession, 'bucket'> & { withCoordinator?: unknown }) | null, effectiveStatus: SessionStatus | null,
+): boolean {
+  if (effectiveStatus === 'dead') return false;
+  // D-5296: while the parent holds the question the ladder files the row
+  // `working`, but nothing runs; the header reads it in the calm tint, so the
+  // chat does not pulse either (D-5390).
+  if (live !== null && sessionWithCoordinator(live) !== null) return false;
+  return live !== null ? live.bucket === 'working' : effectiveStatus === 'busy';
+}
+
+/** The wake trigger's phase (D-5242). `armed`: an automatic wake may fire. `pending`: one `ensure` is in flight.
+ *  `sent`: it answered, and nothing fires again on its own until the row reads alive (then `armed`). A failure
+ *  re-arms: the operator's next return to the page, or Wake, tries again. */
+type WakePhase = 'armed' | 'pending' | 'sent';
+
+/**
+ * WAKE ON OPEN (D-5242, `hibernate-long-idle-sessions`, plan Task 18). A mounted session screen wakes its session once
+ * whenever its fleet row reads hibernated (`hibernatedSince`: `dead` with `hibernatedAt`) while the page is visible:
+ * at mount, when the page becomes visible again (a returning operator, a resumed phone), and when a frame turns the
+ * row hibernated while it is in view. At most one `POST /api/sessions/:id/ensure` is in flight per screen; once one
+ * answers, nothing fires on its own again until the row reads alive (or the call fails). The server counts each in the
+ * fleet-wide wake budget and never refuses it (the operator asked).
+ *
+ * It reads the ROW, never the session stream: the stream says `dead` for a crash too, and opening a crashed session
+ * must never restart it silently. And it never fires under a substrate fault (`fault`), the same gate the dead
+ * banner's Restart keeps: nobody can measure that pane (`wake-on-open-surfaces`, D-5430).
+ */
+export function useWakeOnOpen(
+  id: string, live: FleetSession | null, fault: unknown,
+): { asleepAt: number | null; waking: boolean; pending: boolean; wake: () => void } {
+  const asleepAt = live === null ? null : hibernatedSince(live);
+  const asleep = asleepAt !== null;
+  // The row as it reads NOW, for a call that returns after a frame: ccd's ensure starts the pane and then waits for
+  // it to settle, so the row usually reads alive before the call is back (D-5242).
+  const asleepRef = useRef(asleep);
+  asleepRef.current = asleep;
+  const blocked = fault !== null && fault !== undefined;
+  const [visible, setVisible] = useState(() => document.visibilityState === 'visible');
+  const phase = useRef<WakePhase>('armed');
+  const [shown, setShown] = useState<WakePhase>('armed');
+  const set = (p: WakePhase): void => { phase.current = p; setShown(p); };
+
+  useEffect(() => {
+    const onChange = (): void => { setVisible(document.visibilityState === 'visible'); };
+    const stops = [onPageVisible(onChange), onPageHidden(onChange)];
+    return () => { for (const stop of stops) stop(); };
+  }, []);
+
+  // One screen per id: a screen re-pointed at another session starts that session's wake from scratch.
+  useEffect(() => { set('armed'); }, [id]);
+
+  // Never re-entered while a call is out: the trigger below fires only from `armed`, Wake is disabled while
+  // `pending`, and a failure toast's Wake checks before it calls.
+  const wake = useCallback((): void => {
+    set('pending');
+    ensureSession(id).then(
+      // A row still asleep stays `sent` (nothing more until it reads alive); a row that already reads alive
+      // re-arms here, since the effect below skipped it while the call was out.
+      () => { if (phase.current === 'pending') set(asleepRef.current ? 'sent' : 'armed'); },
+      (err: unknown) => {
+        set('armed');
+        // The toast outlives this call: a later wake may be out by the time it is tapped.
+        toast(failedTo('wake', err), 'error', { label: 'Wake', onClick: () => { if (phase.current !== 'pending') wake(); } });
+      },
+    );
+  }, [id]);
+
+  useEffect(() => {
+    if (!asleep) { if (phase.current !== 'pending') set('armed'); return; }
+    if (visible && !blocked && phase.current === 'armed') wake();
+  }, [asleep, visible, blocked, wake]);
+
+  return { asleepAt, waking: asleep && shown !== 'armed', pending: shown === 'pending', wake };
+}
+
+/** The ids in a comma-joined key, as numbers (empty: none). */
+const idSet = (key: string): ReadonlySet<number> => new Set(key === '' ? [] : key.split(',').map(Number));
 
 export function SessionScreen({
   id,
@@ -63,7 +176,20 @@ export function SessionScreen({
   const fileMeasured = useStore((s) => s.fileMeasured);
   const file = useStore((s) => s.file);
   const tasks = useStore((s) => s.tasks);
+  // D-5372: read beside `tasks`, not through its own selector. The reducer sets
+  // `tasksTouchedAt` only together with `tasks`, and every tasks frame brings a
+  // new array, so the `tasks` selector above already re-renders on each change.
+  // (A further `useStore(…)` call site adds one more CodeQL
+  // unvalidated-dynamic-method-call false positive on the route-keyed store.)
+  const tasksTouchedAt = useStore.getState().tasksTouchedAt;
   const mail = useStore((s) => s.mail);
+  // D-5560: subscribed through the store's own `subscribe`/`getState` rather
+  // than one more `useStore(…)` call site (D-5372's CodeQL false positive
+  // above); the reducer replaces the array on every workflows frame, so the
+  // snapshot is stable between frames. The flag is read beside it for
+  // D-5372's reason — the reducer sets it only together with a new array.
+  const workflows = useSyncExternalStore(useStore.subscribe, () => useStore.getState().workflows);
+  const workflowsUnreadable = useStore.getState().workflowsUnreadable;
   // Build 4 Task 18, spec §2.3: the ask card's second derivation source. A
   // live `ask` (hook envelope) and a live `dialog` (scraped pane menu) are
   // hosted by the SAME sheet, so either one makes a resultless ask card
@@ -71,25 +197,74 @@ export function SessionScreen({
   // which is why the card's own `tool_result` wins over both.
   const liveAsk = useStore((s) => s.ask);
   const liveDialog = useStore((s) => s.dialog);
-  const askPending = liveAsk !== null || liveDialog !== null;
+  const liveAskFrameSeen = useStore((s) => s.askFrameSeen);
+  // D-6325: pending exactly when the LIVE inputs make the sheet something (`askSource`, the one decider). On a first
+  // connection, before its first ask frame the sheet is nothing, so a control offered then would raise nothing. A
+  // reconnect's gap is different: the sheet there is the held surface, but the card follows the connection, not the hold,
+  // so while `askFrameSeen` is down it reads unanswered without its Answer control until the new connection decides.
+  // The sheet's own hold through the gap is `DialogSheet`'s.
+  const askPending = askSource({ ask: liveAsk, dialog: liveDialog, askFrameSeen: liveAskFrameSeen }).kind !== 'none';
+  // Decision `ask-answer-control-says-submit`: while the pane is on an ask's review screen, the transcript's control
+  // says what the sheet it raises is waiting on, so a hidden sheet is one labelled click from Submit.
+  const answerLabel = answerControlLabel(liveDialog);
   // This session's fleet entry — live name, account, dialogPending badge.
   const live = useFleet((s) => s.sessions.find((x) => x.id === id) ?? null);
   const roster = useFleet((s) => s.roster);
+  const projects = useFleet((s) => s.projects);
+  // D-5527: the fleet tree's facts about who this session works for, read off
+  // the same sessions and active runs the fleet's rows are drawn from. Only the
+  // PARENT's row is subscribed (C6, D-6438): `parentIdOf` and `coordinationOf`
+  // read no other row, so a fleet frame that changes another session's row must
+  // not re-render this screen, and a change to the coordinator's row must.
+  const parent = useFleet((s) => {
+    const self = s.sessions.find((x) => x.id === id);
+    if (self === undefined) return null;
+    const pid = parentIdOf(self, s.runs.filter((r) => !isRunClosed(r)));
+    return pid === null ? null : s.sessions.find((x) => x.id === pid) ?? null;
+  });
+  const fleetRuns = useFleet((s) => s.runs);
+  const fleetFrameSeen = useFleet((s) => s.fleetFrameSeen);
+  // Delegation visibility (spec §5): the header lists every entry this session started, whatever its placement.
+  const delegation = useFleet((s) => s.delegation);
+  // D-8276: the fleet's newest Claude Code build, so the header names this session's build against it, and the newest
+  // on its own lane, which is what a restart reaches.
+  const claudeLatest = useFleet((s) => fleetClaudeLatest(s.sessions));
+  const claudeLaneLatest = useFleet((s) => (live === null ? null : laneClaudeLatest(s.sessions, live.wrapper)));
 
   const kbInset = useKeyboardInsets();
-  const [restarting, setRestarting] = useState(false);
+  const { busy: restarting, ensure: ensureNow } = useEnsure();
   const [terminalOpen, setTerminalOpen] = useState(false);
   // D-286 (was D-B4-13)'s nonce. Bumped by the transcript's one `Answer` control; read by
   // `DialogSheet` to clear a dismissal the reader had made. It carries no
   // answer and cannot send — raising the sheet is the entire contract.
   const [raise, setRaise] = useState(0);
+  // D-6326: is the INLINE ask card mounted (the desk)? Told by `DialogSheet` through `AskSurface`, so one fact answers
+  // for the transcript (its live ask card points at the card), the Escape interrupt (it stands down) and the composer
+  // (Send holds). A phone's sheet never reports, so none of the three changes there.
+  const [askInline, setAskInline] = useState(false);
+  // The transcript's row callbacks keep their identity across this screen's renders (desktop polish Task C7): each is a
+  // prop of every row, so a new one on every render (a roster answer, a status word) would draw every row again.
+  // D-6326 (R89): Retry is a send, held while the inline card is mounted (the bubble's button is disabled for the same
+  // fact); nothing is queued to go when the card leaves.
+  const onRetry = useCallback((key: string): void => {
+    if (askInline) return;
+    useStore.getState().retry(key);
+  }, [askInline, useStore]);
+  const onDiscard = useCallback((key: string): void => { useStore.getState().discard(key); }, [useStore]);
+  const onAnswer = useCallback((): void => { setRaise((n) => n + 1); }, []);
   // Lifecycle surfaces behind the header's overflow menu.
   const [swapOpen, setSwapOpen] = useState(false);
-  const [stopOpen, setStopOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [picker, setPicker] = useState<'model' | 'effort' | null>(null);
   const [reapOpen, setReapOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);   // D-8121: the session's Browser tools sheet
   const composerRef = useRef<HTMLDivElement>(null);
+  // A routing write in flight, until the fleet frame reads it back — the
+  // badge, its 60s timer and every carve-out that cancels it live in
+  // `useQueuedRoute`. `live` is read below; `routeInfo` is read further down,
+  // so the hook takes the same question in its own words.
+  const queued = useQueuedRoute(live, (live?.route ?? null) !== null);
 
   useEffect(() => {
     // Session sockets live with the screen: resume rides `?since=` on return.
@@ -137,12 +312,79 @@ export function SessionScreen({
   const wrapperFromId = id.split(':', 1)[0] ?? id;
   const project = live?.project ?? (id.slice(wrapperFromId.length + 1) || id);
   const wrapper = live?.wrapper ?? wrapperFromId;
+  // R3: the session view's repo label is unconditional — not conditioned on
+  // a card's context. `projects` is the fleet store's last successful
+  // `/api/projects` read (Task 7). Three conditions render nothing here: no
+  // read yet on this store instance (`projects === null`, D-3013), no row
+  // for this project in that read, or a row whose `repo` is not `named` —
+  // all three collapse deliberately at `repoLabel`, the one reader.
+  const repo = repoLabel(projects?.find((r) => r.name === project)?.repo);
+  // Chat reading Task L (D-8062): what the chat knows to resolve a name, for `ChatRef` and `linkify`. The ids the console
+  // holds (the runs frame, the Waiting on you list and its cleared rows) are read as one string each, so a frame that changes
+  // none of them changes no context and re-renders no name.
+  const runIdsKey = useFleet((s) => s.runs.map((r) => r.id).join(','));
+  const itemIdsKey = useFleet((s) => (s.waiting === null ? '' : [...s.waiting.items, ...s.waiting.cleared].map((i) => i.id).join(',')));
+  // Desktop polish Task C21 (D-8172): whether this session claims an open run whose repository is not its home one, read as
+  // one boolean, so a runs or projects frame that does not change the answer changes no context and re-renders no name.
+  const runsElsewhere = useFleet((s) => claimsRunElsewhere(id, repo, s.runs, s.projects));
+  const branch = live?.branch ?? null;
+  const chatRefs = useMemo((): ChatRefContext => ({
+    repo, project, branch, knownRuns: idSet(runIdsKey), knownItems: idSet(itemIdsKey), runsElsewhere,
+  }), [repo, project, branch, runIdsKey, itemIdsKey, runsElsewhere]);
+  const activeRuns = fleetRuns.filter((r) => !isRunClosed(r));
+  const coordination = live === null ? null : coordinationOf(live, parent === null ? [] : [parent], activeRuns);
+  // D-5545: the header's facts, from the model the fleet card reads, over the same inputs the card is given —
+  // the active run and coordinator (`childRunContext`), whose code (`coordinationOf`), the project's pool
+  // (`placementOfRow`, the cards' own spelling) and the coordinator's presence (`coordinatorPresence`, the orphan
+  // marker's) — so the header can never know less than the card.
+  const lookup = (sid: string): FleetSession | null => (parent !== null && parent.id === sid ? parent : null);
+  const parentId = live === null ? null : parentIdOf(live, activeRuns);
+  const factsNow = useNow(30_000);
+  // Desktop polish Task C7, review 1128: the transcript's day, from this same clock. A row whose words read the clock
+  // (the usage-limit pill) draws again when it changes, within one tick of local midnight. The row barrier skips the
+  // day for every other row, so midnight alone redraws none of them; a bubble that another prop change redraws after
+  // midnight sees the new day too, which costs it one memo miss and no markdown work (`ChatMarkdown`'s own memo).
+  const day = dayKey(factsNow);
+  const presence = parentId === null ? null : coordinatorPresence(parentId, lookup(parentId), fleetFrameSeen);
+  const facts = live === null ? null : sessionFacts({
+    session: live, now: factsNow, roster,
+    projectPool: poolOfPlacement(placementOfRow(projects?.find((r) => r.name === live.project))),
+    childRun: childRunContext(live, activeRuns, lookup),
+    workingOn: coordination?.workingOn ?? null,
+    coordinator: presence,
+    coordinatorTitle: parentId === null || presence === null ? null : orphanGuidance(parentId, presence),
+    delegated: delegation === null ? null : activitiesStartedBy(live.id, readDelegation(delegation)),
+    claudeLatest,
+    claudeLaneLatest,
+  });
+
+  // Routing slice 6, Task 4: once `live.route` rides the wire, the pickers'
+  // active row and the header's queued badge are DERIVED from it instead of
+  // this screen's own optimistic `queued` state below. `route: null` (an
+  // older ccd, or a session it has never routed) leaves every line here
+  // inert and `queuedField` below falls through to exactly today's
+  // behaviour — S6-R4's "nothing changes" contract.
+  // Everything the ROUTING RECORD says, read once (`routeView`): the two
+  // intended values, the two inert lanes, the two unreadable fields, and the
+  // wire's own queued verdict. Pure, and ~95 lines of branch-by-branch
+  // reasoning that had nothing to do with rendering.
+  const routeInfo = live?.route ?? null;
+  // D-8406: the lane's model files, which name each class's model in the picker and give its readback.
+  const laneModels = useLaneModels(wrapper, undefined, picker === 'model');
+  const route = routeView(live, wrapper, accountProvider(roster, wrapper), laneModels);
+  const { classIntended, effortIntended, classInert, effortInert,
+          classUnreadable, effortUnreadable } = route;
+  // Exclusively one source or the other, never both: with `route` present the
+  // wire is the sole answer (a stale local write must not re-light a badge
+  // the wire already cleared); with `route: null`, today's local state.
+  const queuedField: RouteField | null =
+    routeInfo !== null ? route.wireQueuedField : queued.field;
   // A direct roster lookup, not a re-parse of a colour-token NAME: this used
   // to derive `data-acct` by stripping `--acct-` off `accountColorVar`'s
   // return value, which worked only for a wrapper whose colour happened to be
-  // an `--acct-*` token. `claude-dev0`'s `colorVar` used to be the non-hue
+  // an `--acct-*` token. `claude-lab0`'s `colorVar` used to be the non-hue
   // `--ink-tertiary` (no account had it as a real hue), so the strip found no
-  // `--acct-` prefix, `acct` came back `undefined`, and dev0 rendered in
+  // `--acct-` prefix, `acct` came back `undefined`, and lab0 rendered in
   // `claude`'s cyan — a real user-visible bug this lookup closes, since
   // `accountHue` returns `undefined` for an unrostered wrapper and nothing
   // else.
@@ -162,8 +404,15 @@ export function SessionScreen({
   // The stream sends status only on change — until its first frame the fleet
   // snapshot speaks for the session (same fallback the header does), so a
   // dead session is read-only and a busy one wears the caret from first paint.
-  const effectiveStatus = status ?? live?.status ?? null;
+  const effectiveStatus = liveStatus(status, live);
+  // D-6325: who asks, for the header of every ask surface. The held line comes from the header's own gated words
+  // (`heldCoordinatorWords`: only a `working` row), so a dead or idle row that keeps a stale `withCoordinator` shows none.
+  const heldWords = heldCoordinatorWords(live, status);
+  const asker = live === null
+    ? null
+    : { session: sessionLabel(live), project: live.project, held: heldWords === null ? null : heldAskLine(heldWords.short) };
   const dead = effectiveStatus === 'dead';
+  const pulsing = chatPulsing(live, effectiveStatus);
   const loading = uuid === null && missingFile === null;
   // An UNMEASURED absence is not an empty chat. When the resolver could not
   // finish looking (§5.2's `searchComplete: false`, which §5.5 makes routine
@@ -177,35 +426,38 @@ export function SessionScreen({
   const empty = !loading && events.length === 0 && pending.length === 0 && searchComplete && fileMeasured;
 
   // The substrate gate (spec §4): under a standing fault the console cannot
-  // SEE this session, so the two destructive controls this screen owns — the
-  // dead banner's Restart and the stop confirm — refuse rather than fire at a
+  // SEE this session, so the destructive controls this screen owns — the
+  // dead banner's Restart, the archive sheet (which re-reads it as it fires) and the header's Restore of a main
+  // checkout (the same `/ensure` request as Restart) — refuse rather than fire at a
   // pane nobody can measure. Read through `substrateFault`, never
   // `live.substrate`: the live frame is cast, not revived, so an older
   // server's row lacks the key at runtime. `faultTitle` is SessionLine's
-  // chip's own `tmux unreachable — <reason>` string, never a second copy.
+  // chip's own `tmux unreachable — <reason>` string — `substrateFaultText`
+  // now, which is what this comment claimed for seven copies of it.
   const fault = live === null ? null : substrateFault(live);
-  const faultTitle = fault !== null ? `tmux unreachable — ${fault.text}` : undefined;
+  const faultTitle = live === null ? undefined : substrateFaultTitle(live);
+  // D-5242: a sleeping session wakes when this screen shows it (`useWakeOnOpen`); until its row reads alive the
+  // screen says so, offers Wake, and keeps the composer shut, so nothing is typed toward a pane that does not exist.
+  const { asleepAt, waking, pending: wakePending, wake } = useWakeOnOpen(id, live, fault);
+  const asleep = asleepAt !== null;
 
-  const restart = async (): Promise<void> => {
-    if (restarting) return;
-    setRestarting(true);
-    try {
-      await api.ensure(id);
-    } catch (err) {
-      toast(`Couldn't restart — ${err instanceof Error ? err.message : String(err)}`, 'error');
-    } finally {
-      setRestarting(false);
-    }
-  };
+  const restart = (): Promise<void> =>
+    ensureNow(id, (err) => `Couldn't restart — ${err instanceof Error ? err.message : String(err)}`);
 
   // Confirm-free: esc just sends. A 409 means the turn already ended — say so
-  // quietly; anything else is a real failure.
-  const interrupt = async (): Promise<void> => {
+  // quietly; anything else is a real failure. `background-only` (D-5236): the
+  // main turn ended over background work the server would not Escape, because
+  // Escape stops none of it — the toast says what still runs.
+  const interrupt = async (source: 'keycap' | 'escape-key'): Promise<void> => {
     try {
-      await api.interrupt(id);
+      await api.interrupt(id, source);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
-        toast("Claude isn't working right now — nothing to stop");
+      const bg = err instanceof ApiError && err.status === 409 ? backgroundOnlyRefusal(err.body) : null;
+      if (bg !== null) {
+        toast(`The main turn has finished; ${backgroundTasksClause(bg)}.`
+          + ` Escape would not stop ${bg.count === 1 || bg.count === null ? 'it' : 'them'}.`);
+      } else if (err instanceof ApiError && err.status === 409) {
+        toast(refusalText(err, INTERRUPT_REFUSAL_TEXT) ?? INTERRUPT_REFUSAL_TEXT['not-busy']);
       } else {
         toast(`Couldn't stop — ${err instanceof Error ? err.message : String(err)}`, 'error');
       }
@@ -214,65 +466,137 @@ export function SessionScreen({
 
   const openTerminal = (): void => setTerminalOpen(true);
 
-  // Model / effort are one-tap: the chooser sheets send `/model <alias>` or
-  // `/effort <level>` directly (a context-window switch surfaces its own
-  // confirm through DialogSheet).
+  // Model / effort are one-tap: the chooser sheets write the routing record
+  // (`api.route`) and ccd types it into the pane, session-only keystrokes —
+  // never a slash command sent straight from here (a context-window switch
+  // still surfaces its own confirm through DialogSheet).
   const changeModel = (): void => setPicker('model');
   const changeEffort = (): void => setPicker('effort');
-  const pick = async (command: string): Promise<void> => {
+  const pick = async (o: PickOption): Promise<void> => {
     setPicker(null);
+    queued.clear();
+    // Fix round 2, finding 2: once `route` rides the wire (`routeInfo !==
+    // null`), it is the WHOLE STORY for this field — `queuedField` above
+    // already derives straight from it, never from this local `queued`
+    // state. Arming the 60s timer here regardless used to pop "Routing
+    // queued; the pane has not confirmed it yet" a minute later for a field
+    // the wire already read back (or, worse, one on `route.inert` — ccd will
+    // never apply it on this lane, so nothing was ever going to confirm it)
+    // — contradicting the very sheet/badge this same tap just updated. Keep
+    // the optimistic local state only for the tap's own moment on a session
+    // `route` says nothing about yet; an unrouted session keeps exactly
+    // today's behaviour below.
+    //
+    // The timer, when armed, is installed in the SAME statement sequence as
+    // `setQueued`, before the `await` below (fix round 1, finding 1) — not
+    // after the write resolves. A fleet frame (or `route --apply`'s own pane
+    // keystroke) can read the write back WHILE the HTTP request is still in
+    // flight, and the read-back effect's `clearQueuedTimer()` has to find a
+    // real timer at that moment or the resumed continuation below installs a
+    // fresh one for a write that is already confirmed — a false 60s "not
+    // confirmed" toast. Installing it here also means this call's own
+    // leading `clearQueuedTimer()` always cancels a PRIOR pick's real timer,
+    // never a not-yet-installed one, so a fast second tap can no longer leak
+    // the first pick's handle.
+    if (routeInfo === null) queued.arm(o.route.field, o.route.value, o.readback);
     try {
-      await api.prompt(id, command);
+      await api.route(id, o.route.field, o.route.value);
+      // Neither value leaves a mark the pane can read back — `auto` clears no
+      // slider position it can be measured against, and `default` is what the
+      // wrapper falls back to with no distinguishing model string of its own.
+      // Absence, not a lie, so the 2xx response IS the confirmation. The
+      // timer installed above must be cancelled here too, or it outlives its
+      // own confirmation and fires the false toast 60s later. A no-op when
+      // `routeInfo !== null` never armed one in the first place.
+      if ((o.route.field === 'effort' && o.route.value === 'auto')
+          || (o.route.field === 'class' && o.route.value === 'default')) {
+        queued.clear();
+      }
     } catch (err) {
-      toast(`Couldn't apply that — ${apiErrorText(err)}`, 'error');
+      queued.clear();
+      toast(failedTo('apply that', err), 'error');
     }
   };
 
-  const stopSession = async (): Promise<void> => {
-    // The gate's confirm-path half. The header's Stop menu item is already
-    // disabled under a fault, but the fleet frame updates LIVE beneath an
-    // open confirm and QuickConfirm owns its own button — so the fault is
-    // re-checked at the moment of firing, and the refusal is named (the same
-    // one string) rather than swallowed. Guarded on `faultTitle`, the one
-    // composition site, so TS ties the toast to the check without a second
-    // copy of the template.
-    if (faultTitle !== undefined) {
-      toast(faultTitle, 'error');
-      return;
-    }
+  // The header's Restore, for a session already put away (workspace lifecycle §5.2): a workspace is restored, a main
+  // checkout ensured (`restoreSession`). The header's "Stop session", its confirm and `stopSession` are gone: stop and
+  // archive are one feature, and its sheet re-checks the substrate fault at the moment it fires.
+  const restoreNow = async (): Promise<void> => {
+    if (live === null) return;
     try {
-      await api.stop(id);
+      await restoreSession(live);
     } catch (err) {
-      toast(`Couldn't stop the session — ${apiErrorText(err)}`, 'error');
+      toast(failedTo('restore', err), 'error');
     }
+  };
+
+  // The session's flows (W2 Task S2d, D-5466): the ⋯ menu's and the PR sheet's doors run these, whichever skin's
+  // chrome is mounted.
+  const actions: SessionActions = {
+    changeModel,
+    changeEffort,
+    openBrowser: () => setBrowserOpen(true),
+    openHistory: () => setHistoryOpen(true),
+    moveAccount: () => setSwapOpen(true),
+    archive: () => setArchiveOpen(true),
+    restore: () => void restoreNow(),
+    openTerminal,
+    reapWorkspace: () => setReapOpen(true),
+  };
+
+  // The desktop Escape interrupt, once, here: neither skin's chrome holds it (W2 Task S2d). `busy` is `liveStatus`,
+  // the one derivation the header's chip reads too.
+  useEscapeInterrupt({
+    busy: effectiveStatus === 'busy',
+    onInterrupt: () => void interrupt('escape-key'),
+    askInline,
+  });
+
+  // The chrome is the skin's (W2 Task S7c, D-5471): Refined's short header, or the shared header where a skin places
+  // none (Instrument until S12) and outside a frame, as most suites render this screen. A part takes no props, so the
+  // header's inputs reach it through `SessionChromeInputs`.
+  const frameSet = useFrameSet();
+  const SkinChrome = frameSet?.SessionChrome ?? null;
+  // ONE INSTANCE PER WIDTH (W2 Task S8, D-5474): where the skin's inspector holds the plan and the mail (at >=1600, a
+  // skin that places one, and shown: a person may hide it, T3e D-6385), the column does not render their strips, and a
+  // hidden rail brings them back. Asked of the set, never of the skin's id.
+  const inspectorShown = useInspectorShown();
+  const inspectorHoldsStrips = inspectorShown && (frameSet?.Inspector ?? null) !== null;
+  const programmeSlug = live === null ? null : sessionProgramme(live, fleetRuns);
+  const chromeInputs: SessionHeaderProps = {
+    session: live,
+    status,
+    statusUpdatedAt,
+    roster,
+    repo,
+    coordination,
+    facts,
+    onInterrupt: (source) => void interrupt(source),
+    onBack: () => navigate('/'),
+    queuedField,
+    // PL11 (D-7986; spec §2, D30): the Goals door, for a session in a programme, read off its row and the runs it already holds,
+    // named by the programme's title (review 1537 A10).
+    programme: programmeSlug === null ? null : { slug: programmeSlug, title: programmeTitle(programmeSlug, fleetRuns) },
+    fallback: deepLinkFallback(id, roster, projects, { title: project, wrapper }),
   };
 
   return (
+    <SessionFlows key="session-flows" session={live} title={live?.project ?? project} actions={actions}>
     <div
       className="chat"
       data-acct={acct}
+      data-ask-inline={askInline ? 'true' : undefined}
       data-kb={kbInset > 0 ? 'true' : undefined}
       style={kbInset > 0 ? { paddingBottom: kbInset } : undefined}
     >
-      <SessionHeader
-        session={live}
-        status={status}
-        statusUpdatedAt={statusUpdatedAt}
-        roster={roster}
-        onInterrupt={() => void interrupt()}
-        onOpenTerminal={openTerminal}
-        onBack={() => navigate('/')}
-        onChangeModel={changeModel}
-        onChangeEffort={changeEffort}
-        onMoveAccount={() => setSwapOpen(true)}
-        onStopSession={() => setStopOpen(true)}
-        onOpenHistory={() => setHistoryOpen(true)}
-        onReapWorkspace={() => setReapOpen(true)}
-        fallback={{ title: project, wrapper }}
-      />
+      {/* THE COMPOSER NEVER MOVES (D-5466): the chrome, the transcript, the strips and the composer are keyed children
+          in one fixed order, so a switch replaces the chrome alone and the composer keeps its node and its text. */}
+      <SessionChromeInputs key="chrome" value={chromeInputs}>
+        {SkinChrome !== null ? <SkinChrome /> : <SessionHeader {...chromeInputs} />}
+      </SessionChromeInputs>
 
       {conn === 'down' && (
-        <div className="chat-banner chat-banner--offline" role="status">
+        <div className={`chat-banner chat-banner--offline ${ATTENTION_DOT}`} role="status">
           Reconnecting…
         </div>
       )}
@@ -318,28 +642,35 @@ export function SessionScreen({
               : "Can't read the fleet host right now"}
           </span>
           <span className="banner-path">{missingFile ?? file ?? ''}</span>
-          <button type="button" className="btn-ghost" onClick={openTerminal}>
+          <Button variant="ghost" size="fit" onClick={openTerminal}>
             Open terminal
-          </button>
+          </Button>
         </div>
       )}
 
-      {dead && (
-        <div className="chat-banner chat-banner--dead" role="status">
-          <span className="banner-copy">Not running — the chat is read-only.</span>
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={() => void restart()}
-            disabled={restarting || fault !== null}
+      {/* ONE banner for a screen with no running pane. A dead row (no marker) is read-only and offers Restart; a
+          sleeping one (D-5242) reads "Waking…" while its wake is out, and offers Wake, in the calm banner. */}
+      {(dead || asleep) && (
+        <div className={asleep ? 'chat-banner chat-banner--asleep' : 'chat-banner chat-banner--dead'} role="status">
+          <span className="banner-copy">
+            {asleep
+              ? waking ? 'Waking…' : `${hibernatedWords(asleepAt, Date.now())} ago — the chat is read-only until it wakes.`
+              : 'Not running — the chat is read-only.'}
+          </span>
+          <Button
+            variant="ghost"
+            size="fit"
+            className="flex-none"
+            onClick={asleep ? wake : () => void restart()}
+            disabled={(asleep ? wakePending : restarting) || fault !== null}
             title={faultTitle}
           >
-            {restarting ? 'Restarting…' : 'Restart session'}
-          </button>
+            {asleep ? 'Wake' : restarting ? 'Restarting…' : 'Restart session'}
+          </Button>
         </div>
       )}
 
-      <div className="chat-body">
+      <div key="body" className="chat-body">
         {loading ? (
           <div className="chat-skel">
             <Skeleton lines={1} className="skel--user" />
@@ -359,58 +690,106 @@ export function SessionScreen({
             </p>
           </div>
         ) : (
-          <ChatList
-            id={id}
-            events={events}
-            pending={pending}
-            busy={effectiveStatus === 'busy'}
-            onRetry={(key) => useStore.getState().retry(key)}
-            onDiscard={(key) => useStore.getState().discard(key)}
-            askPending={askPending}
-            onAnswer={() => setRaise((n) => n + 1)}
-          />
+          <ChatRefsContext value={chatRefs}>
+            <ChatList
+              id={id}
+              events={events}
+              pending={pending}
+              busy={pulsing}
+              onRetry={onRetry}
+              onDiscard={onDiscard}
+              askPending={askPending}
+              askBelow={askInline}
+              answerLabel={answerLabel}
+              onAnswer={onAnswer}
+              day={day}
+            />
+          </ChatRefsContext>
         )}
       </div>
 
-      {/* Above the plan, which stays the composer's neighbour. */}
-      <MailStrip mail={mail} />
+      {/* D-6326: the ask, answered where it is asked. At the desk the controller draws an inline card here, between the
+          transcript and the strips, in a keyed slot of its own (never keyed by the skin, so a switch keeps the card
+          and the composer's text); on a phone it draws the Sheet, which portals, and this slot holds nothing. */}
+      <DialogSheet
+        key="ask"
+        id={id}
+        store={useStore}
+        onOpenTerminal={openTerminal}
+        raise={raise}
+        asker={asker}
+        onInline={setAskInline}
+      />
 
-      {/* Sits between the conversation and the composer — where the TUI puts it,
-          directly above the prompt you're about to type into. */}
-      <TaskStrip tasks={tasks} />
+      {/* The strips in ONE container under the transcript, in both skins (W2 Task S7c), until S8 and S12 place them
+          by width. */}
+      <div key="strips" className="chat-strips">
+        {/* Above the plan, which stays the composer's neighbour. */}
+        {!inspectorHoldsStrips && <MailStrip mail={mail} />}
+
+        {/* D-5560: the workflows this session is running, between the mail and the
+            plan — one line each, the facts Claude Code's own row prints; the head
+            opens their phases and agents. Read-only. */}
+        <WorkflowStrip workflows={workflows} unreadable={workflowsUnreadable} />
+
+        {/* Overlord W1a, timers Task 13: the reminders this session set itself, with Cancel. Quiet: no line while it has
+            no pending timer, as the workflow strip; a failed read says so. */}
+        <TimersSection sessionId={id} quiet className="mx-4 mb-2 flex-none" />
+
+        {/* Sits between the conversation and the composer — where the TUI puts it,
+            directly above the prompt you're about to type into. */}
+        {!inspectorHoldsStrips && <TaskStrip tasks={tasks} untouchedFor={staleFor(tasksTouchedAt, Date.now())} />}
+      </div>
 
       {/* Plain measuring shell so ToastHost's --composer-h offset has something
           to observe — Composer.tsx itself carries no ref to forward. */}
-      <div ref={composerRef} className="composer-measure">
+      <div key="composer" ref={composerRef} className="composer-measure">
         <Composer
           // send/resolve take the same opts shape the store does, so both cross
           // straight through — attachments included.
           onSend={useStore.getState().send}
           pending={pending}
           id={id}
-          disabled={dead}
-          placeholder={dead ? 'Restart the session to send' : `Message ${project}`}
+          disabled={dead || asleep}
+          placeholder={asleep ? 'It is asleep — it can take a message once it wakes' : dead ? 'Restart the session to send' : `Message ${project}`}
           onResolve={useStore.getState().resolve}
+          // Stop in the send slot (W2 Task S7b, D-5471): the same LIVE `busy` the Escape interrupt reads.
+          busy={effectiveStatus === 'busy'}
+          onInterrupt={(source) => void interrupt(source)}
+          askUp={askInline}
         />
       </div>
 
-      <DialogSheet id={id} store={useStore} onOpenTerminal={openTerminal} raise={raise} />
       <PickSheet
         open={picker === 'model'}
         onClose={() => setPicker(null)}
         eyebrow="model"
         title="Choose a model"
-        options={modelOptions(live?.wrapper ?? wrapperFromId, live?.model ?? null)}
-        onPick={(c) => void pick(c)}
+        options={modelOptions(
+          wrapper, laneModels, live?.model ?? null,
+          routeInfo
+            ? {
+              intended: classIntended, inert: classInert, unreadable: classUnreadable,
+              // Whole-branch review M1: `.degraded` is a CLASS, so it reaches
+              // the model picker alone — the effort sheet below passes none.
+              degraded: routeInfo.degraded,
+            }
+            : undefined,
+        )}
+        onPick={(o) => void pick(o)}
       />
       <PickSheet
         open={picker === 'effort'}
         onClose={() => setPicker(null)}
         eyebrow="effort"
         title="Reasoning effort"
-        options={effortOptions(live?.wrapper ?? wrapperFromId, live?.effort ?? null, live?.ultracode ?? false)}
-        onPick={(c) => void pick(c)}
+        options={effortOptions(
+          wrapper, live?.effort ?? null, live?.ultracode ?? false,
+          routeInfo ? { intended: effortIntended, inert: effortInert, unreadable: effortUnreadable } : undefined,
+        )}
+        onPick={(o) => void pick(o)}
       />
+      <BrowserSheet id={id} session={live} open={browserOpen} onClose={() => setBrowserOpen(false)} />
       <SwapSheet
         // `home: null` — not `wrapper`. With no live row there is no home
         // account to read, and W3 §3.4's copy names the account a swap returns
@@ -428,14 +807,8 @@ export function SessionScreen({
         onClose={() => setSwapOpen(false)}
         fleet={useFleet}
       />
-      <QuickConfirm
-        open={stopOpen}
-        onClose={() => setStopOpen(false)}
-        title="Stop this session?"
-        consequence="The session goes offline until you start it again. Its conversation is kept."
-        confirmLabel="Stop session"
-        onConfirm={() => void stopSession()}
-      />
+      {/* The one Archive (workspace lifecycle §5.2). No `onStopOnly`: "Stop only" survives in the actions sheet alone. */}
+      <ArchiveSheet session={live} open={archiveOpen} onClose={() => setArchiveOpen(false)} fleet={useFleet} />
       <TerminalDrawer id={id} open={terminalOpen} onClose={() => setTerminalOpen(false)} />
       <HistoryTab id={id} open={historyOpen} onClose={() => setHistoryOpen(false)} />
       <ReapSheet
@@ -445,5 +818,6 @@ export function SessionScreen({
         onReaped={() => { setReapOpen(false); navigate('/'); }}
       />
     </div>
+    </SessionFlows>
   );
 }

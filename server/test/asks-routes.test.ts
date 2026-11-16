@@ -29,6 +29,7 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
+import { questionsTestView } from '../src/coord/questions.js';
 import type { PushPayload } from '../src/push.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import { okAsk } from './coordReadHelpers.js';
@@ -56,10 +57,10 @@ const QUESTION = { question: 'Which colour?', options: [{ label: 'Red' }, { labe
 const ASK_KEY = askKey({ questions: [QUESTION] })!;
 const ASK_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\nEnter to select\n';
 
-const seed = (home: string, id: string, uuid: string): void => {
+const seed = (home: string, id: string, uuid: string, project = 'demo'): void => {
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
-  const fields = { wrapper: 'claude', project: 'demo', workdir: `/w/demo/${id}`, uuid, started: '1' };
+  const fields = { wrapper: 'claude', project, workdir: `/w/${project}/${id}`, uuid, started: '1' };
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
 };
 
@@ -94,9 +95,9 @@ const tmuxRunner = (panes: (string | null)[]): { run: Runner; calls: string[][] 
     if (args[0] === 'capture-pane') {
       const pane = panes[Math.min(i, panes.length - 1)] ?? null;
       i++;
-      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 };
@@ -111,9 +112,9 @@ const openApp = async (home: string, run: Runner, over: Partial<Deps> = {}) => {
 
 const answer = (app: FastifyInstance, id: number | string, body: Record<string, unknown>,
                 headers: Record<string, string> = TOK) =>
-  app.inject({ method: 'POST', url: `/api/asks/${id}/answer`, headers, payload: body });
+  app.inject({ method: 'POST', url: `/api/questions/ask-${id}/rule`, headers, payload: { kind: 'ask', ...body } });
 
-describe('POST /api/asks/:id/answer', () => {
+describe('POST /api/questions/ask-<n>/rule (the parent\'s answer)', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
@@ -267,7 +268,7 @@ describe('POST /api/asks/:id/answer', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     // Single-select: the digit alone, no Enter — answerAsk's own contract.
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${CHILD}:`, '2']]);
 
     const row = okAsk(coord.askById(id))!;
     expect(row.state).toBe('answered');
@@ -320,33 +321,63 @@ describe('POST /api/asks/:id/answer', () => {
     expect(good.json()).toEqual({ ok: true });
     expect(okAsk(coord.askById(id))!.state).toBe('answered');
   });
+
+  // D-5293: the parent's route reads the operator's body shape (`readAskAnswer`, `inject/ask.ts`, the reader
+  // the operator's ask reads, `POST /api/questions/session-<id>/answer` since W7 C7p retired `/api/sessions/:id/ask`), so `askKey`, the key the operator's route requires, is understood here too:
+  // the key the parent was shown must be the row's, or nothing is pressed.
+  it("accepts the operator's body shape: the row's own askKey beside optionIndexes presses the digit (D-5293)", async () => {
+    const { coord, id, calls } = await setup(Date.now());
+    const res = await answer(app!, id, { fromId: PARENT, fromUuid: PARENT_UUID, askKey: ASK_KEY, optionIndexes: [1] });
+    expect(res.statusCode).toBe(200);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${CHILD}:`, '2']]);
+    expect(okAsk(coord.askById(id))!.state).toBe('answered');
+  });
+
+  it('refuses ask-mismatch for an askKey that is not the row\'s, before any key, and the row stays held (D-5293, D-5368)', async () => {
+    const { coord, id, calls } = await setup(Date.now());
+    const res = await answer(app!, id,
+      { fromId: PARENT, fromUuid: PARENT_UUID, askKey: 'deadbeefdeadbeef', optionIndexes: [1] });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'ask-mismatch' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(okAsk(coord.askById(id))!.state).toBe('held');
+  });
+
+  it("400s an askKey that is not a string, as the operator's route does (D-5293)", async () => {
+    const { coord, id, calls } = await setup(Date.now());
+    const res = await answer(app!, id, { fromId: PARENT, fromUuid: PARENT_UUID, askKey: 7, optionIndexes: [1] });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(okAsk(coord.askById(id))!.state).toBe('held');
+  });
 });
 
 /**
  * `POST /api/asks/:id/release` — the parent DECLINES to rule on its
  * child's question (Task 10). The verb that makes the grace window a
  * CEILING rather than a flat tax on every ask the parent cannot answer: a
- * decline fires the operator's push NOW, through `FleetWatcher.releaseHeldAsk`
+ * decline fires the operator's push NOW, through the `released` door-in (the watcher's forward until W3 Q3f)
  * — the ONLY door a route has into the watcher's in-memory hold, since
  * `heldAsks` is watcher-private state.
  *
  * Its gate ladder is `/answer`'s minus the pane-touching half: box token,
  * body shape, attribution, `unknown-ask`, `ask.parentId === fromId`, then
- * the store's own `releaseAsk` CAS (`'held' -> 'released'`) — a decline that
+ * the store's own `declineAsk` CAS (`'held' -> 'declined'`, D-5289) — a decline that
  * finds nothing held refuses `not-held` rather than pretending to succeed.
  */
-describe('POST /api/asks/:id/release', () => {
+describe('POST /api/questions/ask-<n>/release (the parent\'s decline)', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
   const release = (id: number | string, body: Record<string, unknown>,
                    headers: Record<string, string> = TOK) =>
-    app!.inject({ method: 'POST', url: `/api/asks/${id}/release`, headers, payload: body });
+    app!.inject({ method: 'POST', url: `/api/questions/ask-${id}/release`, headers, payload: { kind: 'ask', ...body } });
 
   /** Same shape as `buildServer`'s own third argument (`fleetws.test.ts`'s
    *  idiom): the `FleetWatcher` is constructed FIRST, sharing the one `deps`
    *  object `buildServer` also receives, so both sides see the same
-   *  `heldAsks` map this route reaches through `releaseHeldAsk`. */
+   *  hold this route reaches through the `released` door-in (since W3 Q3f, the claimant's core). */
   const openAppWithWatcher = async (home: string, run: Runner, sent: PushPayload[]) => {
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const notify = async (p: PushPayload) => { sent.push(p); };
@@ -357,13 +388,11 @@ describe('POST /api/asks/:id/release', () => {
     return { app: built, coord, w };
   };
 
-  /** Reflection idiom `asks-sweep.test.ts`/`hold-gate.test.ts` already use to
-   *  reach the watcher's private, in-memory hold — `heldAsks` deliberately
-   *  has no public read; `releaseHeldAsk` is its only public WRITE. */
+  /** The watcher's in-memory hold, through its `Questions` instance's test-only view (W3 Q3d, D-7028, named
+   *  exception 1; it was a reflection read of the private `heldAsks`): per child, as that map held it. The hold still
+   *  has no public read; the `released` door-in is its only route WRITE, and `plantHeldAsk` seeds it as `hold()` would. */
   const heldMap = (w: FleetWatcher): Map<string, { until: number; askId: number;
-      ev: unknown; answeringSince: number | null }> =>
-    (w as unknown as { heldAsks: Map<string, { until: number; askId: number;
-      ev: unknown; answeringSince: number | null }> }).heldAsks;
+      ev: unknown; answeringSince: number | null }> => questionsTestView(w.questions).heldAsks();
 
   /** Registry (child + parent + a third, unrelated session), a held ask row,
    *  and the watcher's own in-memory hold seeded to match it — the shape
@@ -385,8 +414,8 @@ describe('POST /api/asks/:id/release', () => {
       askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
       options: QUESTION.options.map((o) => o.label), now,
     });
-    heldMap(built.w).set(CHILD, {
-      until: now + 120_000, askId: id, answeringSince: null,
+    questionsTestView(built.w.questions).plantHeldAsk(CHILD, {
+      until: now + 180_000, askId: id, answeringSince: null,
       ev: { kind: 'ask', sessionId: CHILD, project: 'demo', title: 'question needs you',
         body: QUESTION.question, tag: `ask-${CHILD}` },
     });
@@ -418,7 +447,8 @@ describe('POST /api/asks/:id/release', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
 
-    expect(okAsk(coord.askById(id))!.state).toBe('released');
+    // D-5289: a parent's own release is `declined`, not the lapse's `released`.
+    expect(okAsk(coord.askById(id))!.state).toBe('declined');
     // The deferred push fired NOW rather than waiting for `sweepAsks` to
     // notice the grace window lapse — the whole point of this route.
     expect(sent.filter((p) => p.tag === `ask-${CHILD}`)).toHaveLength(1);
@@ -442,18 +472,18 @@ describe('POST /api/asks/:id/release', () => {
     expect(sent).toEqual([]);
   });
 
-  it('409s not-held on a decline of an already-released ask', async () => {
+  it('409s not-held on a decline of an already-declined ask', async () => {
     const { coord, id, sent } = await setup(Date.now());
     const first = await release(id, { fromId: PARENT, fromUuid: PARENT_UUID });
     expect(first.statusCode).toBe(200);
 
     // A decline that finds nothing held must not pretend it succeeded — the
-    // store's own CAS (`releaseAsk`, source state `'held'`) refuses, and the
+    // store's own CAS (`declineAsk`, source state `'held'`) refuses, and the
     // route must refuse with it rather than reporting `{ok:true}` again.
     const second = await release(id, { fromId: PARENT, fromUuid: PARENT_UUID });
     expect(second.statusCode).toBe(409);
     expect(second.json()).toEqual({ ok: false, error: 'not-held' });
-    expect(okAsk(coord.askById(id))!.state).toBe('released');
+    expect(okAsk(coord.askById(id))!.state).toBe('declined');
     // No double push: the second decline never reached `releaseHeldAsk`.
     expect(sent.filter((p) => p.tag === `ask-${CHILD}`)).toHaveLength(1);
   });
@@ -488,9 +518,9 @@ describe('POST /api/asks/:id/release', () => {
     const res = await release(id, { fromId: PARENT, fromUuid: PARENT_UUID });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    // The decline is genuinely real — the row released — even with no
-    // watcher to notify anyone about it.
-    expect(okAsk(built.coord.askById(id))!.state).toBe('released');
+    // The decline is genuinely real — the row declined (D-5289) — even with
+    // no watcher to notify anyone about it.
+    expect(okAsk(built.coord.askById(id))!.state).toBe('declined');
     expect(warn).toHaveBeenCalledTimes(1);
     const [msg] = warn.mock.calls[0]!;
     expect(msg).toContain(String(id));
@@ -669,7 +699,7 @@ describe('GET /api/asks', () => {
 });
 
 /**
- * `POST /api/sessions/:id/ask` — the OPERATOR's own answer path, closing the
+ * The OPERATOR's own ask answer path, closing the
  * hole Task 12 exists for (D-2171). Before this task the route never
  * consulted the `asks` table at all: if the operator answered first, the
  * row stayed `'held'` forever, the parent's later `/api/asks/:id/answer`
@@ -688,13 +718,19 @@ describe('GET /api/asks', () => {
  * This file adds the coord-configured cases `routes.test.ts` has no way to
  * build: a row held for the child, and a coord-configured box with no row
  * at all (the "parentless path" the overwhelming majority of asks take).
+ *
+ * W7 C7p (D-7194): the path was `POST /api/sessions/:id/ask` until C7p
+ * retired it; these rows run through the family's door that replaced it,
+ * `POST /api/questions/session-<id>/answer` with `{kind:'ask', …}`, which
+ * calls the same operator core (`coord/questions.ts`), so each row asserts
+ * what it asserted before.
  */
-describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
+describe('POST /api/questions/session-<id>/answer {kind:\'ask\'} — closes the held row (Task 12)', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
   const post = (id: string, body: Record<string, unknown>) =>
-    app!.inject({ method: 'POST', url: `/api/sessions/${id}/ask`, payload: body });
+    app!.inject({ method: 'POST', url: `/api/questions/session-${id}/answer`, payload: { kind: 'ask', ...body } });
 
   /** Same shape as `/answer`'s own `setup` above: registry, a fresh waiting
    *  hookstate for the child at `now`, and — the one difference — the
@@ -735,13 +771,14 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     expect(row.answer).toBe('Blue');
 
     // The row is what the parent's own route CASes against — it must now
-    // find nothing to take.
+    // find nothing to take, and say why (D-5289: `already-answered`, no
+    // longer folded onto `not-held`).
     const parent = await app!.inject({
-      method: 'POST', url: `/api/asks/${id}/answer`, headers: TOK,
-      payload: { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [0] },
+      method: 'POST', url: `/api/questions/ask-${id}/rule`, headers: TOK,
+      payload: { kind: 'ask', fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [0] },
     });
     expect(parent.statusCode).toBe(409);
-    expect(parent.json()).toEqual({ ok: false, error: 'not-held' });
+    expect(parent.json()).toEqual({ ok: false, error: 'already-answered' });
 
     // D-2172's second durable record, same as the parent's own route writes
     // on its own successful press.
@@ -783,7 +820,7 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     const res = await post(CHILD, { askKey: ASK_KEY, optionIndexes: [1] });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${CHILD}:`, '2']]);
 
     // The row is untouched by this request — left exactly where the
     // pre-existing take put it, neither settled nor rolled back.
@@ -848,7 +885,7 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     // own result — not shaped by `taken.ok` at all.
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${CHILD}:`, '2']]);
 
     // This request never held the row — left exactly where the competing
     // take put it, neither settled nor rolled back out from under it.
@@ -862,7 +899,7 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     const res = await post(CHILD, { askKey: ASK_KEY, optionIndexes: [1] });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${CHILD}:`, '2']]);
   });
 
   // WHOLE-BRANCH REVIEW, F3 — the operator's LOCK-SCREEN answer must survive
@@ -890,7 +927,7 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ ok: true });
-      expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
+      expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${CHILD}:`, '2']]);
       expect(warn).toHaveBeenCalled();
       expect(id).not.toBeNull();
     });
@@ -903,5 +940,251 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     expect(res.json()).toEqual({ ok: false, error: 'ask-mismatch' });
     expect(sendKeysCalls(calls)).toEqual([]);
     expect(okAsk(coord.askById(id!))!.state).toBe('held');
+  });
+});
+
+/**
+ * D-5289 (coordinator-first routing, Task 4; spec §5.1): late answer wins, and
+ * a parent's own release is `declined`. The lapse (`releaseAsk`, the sweep's)
+ * still fires the operator's push at the deadline, but the parent may answer
+ * the row until the operator acts; when it does, the operator's notification
+ * is replaced under the same tag. A parent that released the question itself
+ * handed it over and is refused `409 declined`; a second answer is refused
+ * `409 already-answered`.
+ */
+describe('late answer wins; declined (D-5289)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const KID = 'project-a-quiet-basin';
+  const MESA = 'project-a-calm-mesa';
+  const KID_UUID = 'q'.repeat(36);
+  const MESA_UUID = 'm'.repeat(36);
+
+  const setup = async (now: number) => {
+    const home = mkTmp('ccrc-asks-');
+    seed(home, KID, KID_UUID);
+    seed(home, MESA, MESA_UUID);
+    seedHookstate(home, KID, KID_UUID, now);
+    const sent: PushPayload[] = [];
+    const { run, calls } = tmuxRunner([ASK_PANE]);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const notify = async (p: PushPayload) => { sent.push(p); };
+    const deps = { ...testDeps(home, run), mailToken: TOKEN, coord, push: { notify } as never };
+    const bus = new Bus();
+    const w = new FleetWatcher(deps, bus, 10_000);
+    app = await buildServer(deps, bus, w);
+    const id = coord.insertAsk({
+      childId: KID, parentId: MESA, runId: null, askKey: ASK_KEY,
+      askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
+      options: QUESTION.options.map((o) => o.label), now,
+    });
+    const ev = { kind: 'ask' as const, sessionId: KID, project: 'demo', title: '❓ Question',
+      body: QUESTION.question };
+    questionsTestView(w.questions).plantHeldAsk(KID,
+      { until: now + 1, askId: id, ev, answeringSince: null });
+    // `sweepAsks` runs only once the watcher has primed; set it the way the
+    // sweep tests' first `tick()` would, without a tick's other lanes.
+    (w as unknown as { primed: boolean }).primed = true;
+    return { coord, w, id, sent, calls };
+  };
+  // K5 Q3l (D-7728): the parent's answer and decline through the question door family, the same claimant core.
+  const by = (id: number, verb: 'answer' | 'release', extra: Record<string, unknown> = {}) =>
+    app!.inject({ method: 'POST', url: `/api/questions/ask-${id}/${verb === 'answer' ? 'rule' : 'release'}`, headers: TOK,
+      payload: { kind: 'ask', fromId: MESA, fromUuid: MESA_UUID, ...extra } });
+
+  it('the release route leaves the row declined and pushes at once', async () => {
+    const { coord, id, sent } = await setup(Date.now());
+    const res = await by(id, 'release');
+    expect(res.statusCode).toBe(200);
+    expect(okAsk(coord.askById(id))!.state).toBe('declined');
+    expect(sent.filter((p) => p.tag === `ask-${KID}`)).toHaveLength(1);
+  });
+
+  it('an answer after the parent declined is refused 409 declined, and nothing is pressed', async () => {
+    const { coord, id, calls } = await setup(Date.now());
+    expect((await by(id, 'release')).statusCode).toBe(200);
+    const res = await by(id, 'answer', { optionIndexes: [1] });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'declined' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(okAsk(coord.askById(id))!.state).toBe('declined');
+  });
+
+  it('an answer after the lapse is 200, names the parent, and replaces the notification', async () => {
+    const { coord, w, id, sent, calls } = await setup(Date.now());
+    await w.sweepAsks();                               // the lapse: held -> released, push fires
+    expect(okAsk(coord.askById(id))!.state).toBe('released');
+    expect(sent.filter((p) => p.tag === `ask-${KID}`)).toHaveLength(1);
+
+    const res = await by(id, 'answer', { optionIndexes: [1] });
+    expect(res.statusCode).toBe(200);
+    expect(sendKeysCalls(calls)).toHaveLength(1);
+    expect(okAsk(coord.askById(id))).toMatchObject({ state: 'answered', answeredBy: MESA, answer: 'Blue' });
+    const tagged = sent.filter((p) => p.tag === `ask-${KID}`);
+    expect(tagged).toHaveLength(2);
+    expect(tagged[1]!.body).toBe(`Answered by ${MESA}`);
+    expect(tagged[1]!.actions).toBeUndefined();
+  });
+
+  it('a second answer is refused 409 already-answered', async () => {
+    const { id, calls } = await setup(Date.now());
+    expect((await by(id, 'answer', { optionIndexes: [0] })).statusCode).toBe(200);
+    const res = await by(id, 'answer', { optionIndexes: [1] });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'already-answered' });
+    expect(sendKeysCalls(calls)).toHaveLength(1);
+  });
+
+  // D-5290: a row MINTED released was never mailed to the parent and never
+  // held: the operator owns it from the first tick, so late answer wins does
+  // not reach it, and the parent's route refuses it as no longer pre-emptible.
+  // D-5530: every reason this build writes, and `parent-project-mismatch`,
+  // which an older build wrote and this one never does.
+  for (const reason of ['parent-not-live', 'parent-unmeasured', 'run-unclaimed', 'run-other-programme', 'run-unattributed',
+    'parent-project-mismatch'] as const) {
+    it(`a row minted released (${reason}) is refused to the parent 409 not-held, and nothing is pressed`, async () => {
+      const { coord, id, calls } = await setup(Date.now());
+      coord.db.prepare("UPDATE asks SET state = 'released', releasedAt = 1, releaseReason = ? WHERE id = ?").run(reason, id);
+      const res = await by(id, 'answer', { optionIndexes: [1] });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ ok: false, error: 'not-held' });
+      expect(sendKeysCalls(calls)).toEqual([]);
+      expect(okAsk(coord.askById(id))!.state).toBe('released');
+    });
+  }
+
+  it('an answer inside the window replaces nothing — there was no notification to replace', async () => {
+    const { id, sent } = await setup(Date.now() + 60_000);
+    expect((await by(id, 'answer', { optionIndexes: [0] })).statusCode).toBe(200);
+    expect(sent.filter((p) => p.tag === `ask-${KID}`)).toEqual([]);
+  });
+
+  // The refused-press rollback after a lapse goes back to `'released'`, where
+  // the take found it (`untakeAsk(id, taken.from)`), not to `'held'`: a
+  // lapsed row in `'held'` has no `heldAsks` entry, so the sweep would never
+  // settle it and the chip would offer a pre-emption whose push already fired.
+  it('a refused late press goes back to released, and a good answer then succeeds and replaces the notification', async () => {
+    const { coord, w, id, sent, calls } = await setup(Date.now());
+    await w.sweepAsks();
+    expect(okAsk(coord.askById(id))!.state).toBe('released');
+
+    // Out of range for a 2-option question: `answerAsk` refuses before any key.
+    const bad = await by(id, 'answer', { optionIndexes: [5] });
+    expect(bad.statusCode).toBe(409);
+    expect(bad.json()).toEqual({ ok: false, error: 'range' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(okAsk(coord.askById(id))!.state).toBe('released');
+
+    const good = await by(id, 'answer', { optionIndexes: [1] });
+    expect(good.statusCode).toBe(200);
+    expect(okAsk(coord.askById(id))).toMatchObject({ state: 'answered', answeredBy: MESA });
+    const tagged = sent.filter((p) => p.tag === `ask-${KID}`);
+    expect(tagged).toHaveLength(2);
+    expect(tagged[1]!.body).toBe(`Answered by ${MESA}`);
+  });
+
+  // W7 C7p (D-7194): the operator's ask through the family's door (was `POST /api/sessions/:id/ask`).
+  const operator = (body: Record<string, unknown>) =>
+    app!.inject({ method: 'POST', url: `/api/questions/session-${KID}/answer`, payload: { kind: 'ask', ...body } });
+
+  it("a refused operator press after the lapse goes back to released, not held", async () => {
+    const { coord, w, id, calls } = await setup(Date.now());
+    await w.sweepAsks();
+    const bad = await operator({ askKey: ASK_KEY, optionIndexes: [5] });
+    expect(bad.statusCode).toBe(409);
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(okAsk(coord.askById(id))!.state).toBe('released');
+  });
+
+  it("the operator's answer after the lapse closes the row, and the parent is then refused 409 already-answered", async () => {
+    const { coord, w, id, calls } = await setup(Date.now());
+    await w.sweepAsks();
+    const res = await operator({ askKey: ASK_KEY, optionIndexes: [1] });
+    expect(res.statusCode).toBe(200);
+    expect(okAsk(coord.askById(id))).toMatchObject({ state: 'answered', answeredBy: 'operator', answer: 'Blue' });
+
+    const parent = await by(id, 'answer', { optionIndexes: [0] });
+    expect(parent.statusCode).toBe(409);
+    expect(parent.json()).toEqual({ ok: false, error: 'already-answered' });
+    expect(sendKeysCalls(calls)).toHaveLength(1);
+  });
+});
+
+// D-5530 (cross-project-claimant-holds-asks; the operator's ruling of
+// 2026-10-18): an ask is held for the child's run's recorded claimant
+// wherever that claimant sits, and the answer route admits exactly that
+// claimant. A session of another project that is NOT the held-for claimant is
+// refused, and the parent's listing never carries a row that was not held for
+// it.
+describe('a cross-project coordinator answers its children (D-5530)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const KID = 'project-a-quiet-basin';
+  const FAR = 'project-b-far-ridge';
+  const NEAR = 'project-c-open-dune';
+  const MESA = 'project-a-calm-mesa';
+  const KID_UUID = 'q'.repeat(36);
+  const FAR_UUID = 'f'.repeat(36);
+  const NEAR_UUID = 'n'.repeat(36);
+  const MESA_UUID = 'm'.repeat(36);
+
+  const setup = async (now: number) => {
+    const home = mkTmp('ccrc-asks-');
+    seed(home, KID, KID_UUID, 'project-a');
+    seed(home, FAR, FAR_UUID, 'project-b');
+    seed(home, NEAR, NEAR_UUID, 'project-c');
+    seed(home, MESA, MESA_UUID, 'project-a');
+    seedHookstate(home, KID, KID_UUID, now);
+    const { run, calls } = tmuxRunner([ASK_PANE]);
+    const opened = await openApp(home, run);
+    app = opened.app;
+    const coord = opened.coord;
+    const ins = (parentId: string, question: string, releaseReason?: 'parent-not-live') => coord.insertAsk({
+      childId: KID, parentId, runId: null, askKey: ASK_KEY, askAt: now, dialogId: 'dlg-1', question,
+      options: QUESTION.options.map((o) => o.label), now, ...(releaseReason ? { releaseReason } : {}),
+    });
+    return { coord, calls, ins };
+  };
+
+  it('the held-for claimant in another project answers: 200, one key pressed, the row answered by it', async () => {
+    const { coord, calls, ins } = await setup(Date.now());
+    const id = ins(FAR, QUESTION.question);
+    const res = await answer(app!, id, { fromId: FAR, fromUuid: FAR_UUID, optionIndexes: [1] });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(sendKeysCalls(calls)).toHaveLength(1);
+    expect(okAsk(coord.askById(id))).toMatchObject({ state: 'answered', answeredBy: FAR });
+  });
+
+  for (const [who, fromId, fromUuid] of [
+    ['a session of a third project', NEAR, NEAR_UUID],
+    ["a session of the child's own project", MESA, MESA_UUID],
+  ] as const) {
+    it(`${who}, attributed, that is not the held-for claimant is refused 403 not-parent, and nothing is pressed`, async () => {
+      const { coord, calls, ins } = await setup(Date.now());
+      const id = ins(FAR, QUESTION.question);
+      const res = await answer(app!, id, { fromId, fromUuid, optionIndexes: [1] });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ ok: false, error: 'not-parent' });
+      expect(sendKeysCalls(calls)).toEqual([]);
+      expect(okAsk(coord.askById(id))!.state).toBe('held');
+    });
+  }
+
+  it('?parent= shows a parent only the rows held for it: never a minted-released row, nor another parent\'s', async () => {
+    const { coord, ins } = await setup(Date.now());
+    ins(FAR, 'held for far');
+    ins(FAR, 'minted released for far', 'parent-not-live');
+    const legacy = ins(FAR, 'legacy mismatch for far', 'parent-not-live');
+    coord.db.prepare("UPDATE asks SET releaseReason = 'parent-project-mismatch' WHERE id = ?").run(legacy);
+    ins(MESA, 'held for mesa');
+    const res = await app!.inject({ method: 'GET', url: `/api/asks?parent=${FAR}&fromUuid=${FAR_UUID}`, headers: TOK });
+    expect(res.statusCode).toBe(200);
+    const asks = (res.json() as { asks: { question: string; parentId: string }[] }).asks;
+    expect(asks.map((a) => a.question)).toEqual(['held for far']);
+    expect(res.body).not.toContain('minted released');
+    expect(res.body).not.toContain('legacy mismatch');
+    expect(res.body).not.toContain('held for mesa');
   });
 });

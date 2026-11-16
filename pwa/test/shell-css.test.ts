@@ -37,10 +37,13 @@
 // which outranks the original on specificity from any position — read as a
 // stranger; cssRule.ts's `simples` is the fix). What is still NOT covered is
 // enumerated at `declaredValues` in cssRule.ts, and this file's claims are
-// scoped to it: no rule shape outside that list, and no other stylesheet.
+// scoped to it: no rule shape outside that list, and no other stylesheet but
+// one rule about one more: docs/docs.css (native Docs reader W5) declares no
+// overflow on `.shell-detail` at all (the describe at the end of this file).
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { BACK_BUTTON } from '@ccrc/ui';
 import { atBlock, declaredValues } from './cssRule';
 
 const shellCss = readFileSync(
@@ -141,17 +144,26 @@ describe('the desktop detail pane scrolls by default (D-161)', () => {
   });
 
   it('the breakpoint is the SAME number in all three places it is written', () => {
-    // The number lives in three files and none of them can derive it from
-    // another: the desktop block, the mobile block's complement, and app.tsx's
-    // `useMediaQuery`, which decides whether the sidebar is rendered AT ALL.
-    // Move one and you get a dead band — a 900 → 901 edit in the stylesheet
-    // alone leaves nothing matching at exactly 900px while the JS still reports
-    // desktop (seen for real in this worktree during the D-161 review). This is
-    // the ledger that says they must move together.
+    // The number lives in three places and none of them can derive it from
+    // another: the desktop block, the mobile block's complement, and the JS
+    // width query, which decides whether the desk bar and the desk sidebar are
+    // rendered AT ALL. Move one and you get a dead band — a 900 → 901 edit in
+    // the stylesheet alone leaves nothing matching at exactly 900px while the
+    // JS still reports desktop (seen for real in this worktree during the D-161
+    // review). This is the ledger that says they must move together.
+    // Since W2 Task S2b the query is `DESK_QUERY`, read by the fleet column and
+    // by the frame (skins/frame.tsx), and by no literal anywhere else. Since
+    // D-5933 its owner is @ccrc/ui (ui/src/lib/use-media-query.ts), where the
+    // Sheet's desktop arm reads it too; lib/useMediaQuery.ts re-exports it.
     expect(shellCss).toContain(`@media (max-width: ${BREAKPOINT - 0.02}px)`);
-    const appTsx = readFileSync(
-      path.join(import.meta.dirname, '..', 'src', 'app.tsx'), 'utf8');
-    expect(appTsx).toContain(`useMediaQuery('(min-width: ${BREAKPOINT}px)')`);
+    const src = (rel: string): string => readFileSync(path.join(import.meta.dirname, '..', 'src', rel), 'utf8');
+    const owner = readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'lib', 'use-media-query.ts'), 'utf8');
+    expect(owner).toContain(`DESK_QUERY = '(min-width: ${BREAKPOINT}px)'`);
+    expect(src('lib/useMediaQuery.ts'), 'the app\'s path is a re-export, not a second owner').not.toMatch(/min-width/);
+    for (const rel of ['screens/FleetColumn.tsx', 'skins/frame.tsx', 'docs/DocsHead.tsx', 'session/SessionDetails.tsx']) {
+      expect(src(rel), rel).toContain('useMediaQuery(DESK_QUERY)');
+    }
+    expect(src('app.tsx'), 'no second spelling in the shell').not.toMatch(/min-width:\s*\d+px/);
   });
 
   it('keeps the two sizing floors the grid needs', () => {
@@ -163,5 +175,82 @@ describe('the desktop detail pane scrolls by default (D-161)', () => {
     for (const prop of ['min-height', 'min-width'] as const) {
       for (const v of values('.shell-detail', prop)) expect(v, prop).toBe('0');
     }
+  });
+  it('hides every back chevron in the detail pane by the component class', () => {
+    // THE ASYMMETRY THIS ANSWERS. The desktop block hid
+    // `.shell-detail .chat-back` and `.shell-detail .accounts-back` and
+    // nothing else, while `.mail-back`, `.runs-back` and `.settings-back`
+    // rendered — three chevrons against this rule's own argument, which is
+    // about the SHELL (the fleet sidebar is always visible, so a way back out
+    // of the detail pane is redundant) and not about two screens.
+    //
+    // It names `BackButton`'s own `back-btn` now, so the next screen with a
+    // chevron inherits the behaviour instead of being the fourth omission.
+    // Asserted in BOTH directions: the component class is hidden, and no
+    // per-screen back class is hidden on its own — a rule that rots back into
+    // a list of names reds here.
+    // BOTH SIDES OF THE SEAM. The rule selects a class `@ccrc/ui` emits, so
+    // the rule alone is not the guarantee — measured: deleting `back-btn` from
+    // `BACK_BUTTON` left the rule in place matching nothing, every chevron
+    // back on desktop, and sixteen tests green. The constant is asserted here,
+    // beside the rule that depends on it.
+    expect(BACK_BUTTON, 'the rule below selects this class').toContain('back-btn');
+    const desktop = atBlock(shellCss, `@media (min-width: ${BREAKPOINT}px)`);
+    expect(declaredValues(desktop, '.shell-detail .back-btn', 'display')).toContain('none');
+    // `declaredValues` THROWS when no rule targets the selector, which is the
+    // answer this half wants — so the absence is read through the throw rather
+    // than through an empty array.
+    const hiddenByName = (per: string): boolean => {
+      try {
+        return declaredValues(desktop, `.shell-detail .${per}`, 'display').includes('none');
+      } catch {
+        return false;
+      }
+    };
+    const named = ['chat-back', 'accounts-back', 'mail-back', 'runs-back', 'settings-back']
+      .filter(hiddenByName);
+    expect(
+      named,
+      'hidden by its own name — the component class is what this rule should say',
+    ).toEqual([]);
+  });
+});
+
+// ── native Docs reader W5 part 1, Task 11: docs/docs.css leaves the pane alone (spec 2026-10-01 section 4.14) ──
+// The Docs screen renders into the same detail pane, and the scroll contract above is shell.css's to keep: the Docs
+// sheet declares NO overflow on `.shell-detail` in any spelling the reader sees (the shorthand, either longhand, any
+// rule whose subject targets the pane, a compound or a descendant chain ending in it). It inherits every gap
+// `declaredValues` lists in cssRule.ts, so it is NOT EXHAUSTIVE: a broader subject (`*`, `section`,
+// `:where(.shell-detail)`) is not seen. A planted control proves the reader would see the regression in this sheet.
+describe('docs/docs.css sets no overflow on .shell-detail (spec 4.14)', () => {
+  const docsCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'docs', 'docs.css'), 'utf8');
+  /** Every overflow value `css` declares on the pane; `[]` when no rule targets it at all (the expected state). */
+  const paneOverflow = (css: string): string[] => {
+    let found: string[] = [];
+    try {
+      found = ['overflow', 'overflow-x', 'overflow-y'].flatMap((prop) => declaredValues(css, '.shell-detail', prop));
+    } catch (e) {
+      if (!String(e).includes('no rule targeting .shell-detail')) throw e;
+    }
+    return found;
+  };
+
+  it('declares none', () => {
+    expect(docsCss).toContain('.docs-screen');          // the real sheet, not an empty read
+    expect(paneOverflow(docsCss)).toEqual([]);
+  });
+
+  it.each([
+    '.shell-detail { overflow: hidden; }',
+    '.app-shell .shell-detail { overflow-y: clip; }',
+    'section.shell-detail { overflow-x: auto; }',
+  ])('would see %s planted in it', (planted) => {
+    expect(paneOverflow(`${docsCss}\n${planted}\n`)).not.toEqual([]);
+  });
+});
+
+describe('the main landmark draws no focus ring (D-5679)', () => {
+  it('.shell-detail:focus-visible sets outline none; Chrome holds the cascade (browser/content-focus-ring)', () => {
+    expect(declaredValues(shellCss, '.shell-detail:focus-visible', 'outline')).toEqual(['none']);
   });
 });

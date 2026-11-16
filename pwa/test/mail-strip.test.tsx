@@ -6,7 +6,8 @@ import type { MailGate, MailSummary } from '../../shared/api';
 import {
   MAIL_GATES, MAIL_GATE_HELD_MS, MAIL_GATE_HELD_COUNT, MAIL_GATE_FRESH_MS,
 } from '../../shared/api';
-import { MailStrip, summarizeMail, heldGate } from '../src/session/MailStrip';
+import { MailStrip, summarizeMail, heldGate } from '@ccrc/ui';
+import { ICONS } from '../../ui/src/icons/lucide';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { applySessionMsg, createSessionStore } from '../src/stores/session';
 import type { SessionSnapshot } from '../src/stores/session';
@@ -45,6 +46,14 @@ describe('the session mail strip', () => {
     // No body on the wire (MailSummary has none — item 1's reconciliation),
     // so there is nothing resembling one to find in the collapsed view.
     expect(screen.queryByText(/rebase/)).not.toBeInTheDocument();
+  });
+
+  it('marks the head with Icon mail, not the ✉ character (D-5100)', () => {
+    const { container } = render(<MailStrip mail={[m()]} />);
+    const mark = container.querySelector('.mail-strip-mark')!;
+    expect(mark.textContent).toBe('');
+    expect(mark.querySelector('svg rect')).not.toBeNull();
+    expect(mark.querySelector('svg path')!.getAttribute('d')).toBe(ICONS.mail[0]![1].d);
   });
 
   it('expands to the rows, with sender, kind and artifact paths', () => {
@@ -218,6 +227,35 @@ describe('a blocked delivery is named before it is lost', () => {
   it('the head carries NO flag when nothing is blocked', () => {
     const { container } = render(<MailStrip mail={[m()]} />);
     expect(container.querySelector('.mail-strip-blocked-mark')).toBeNull();
+  });
+});
+
+// D-5838 (#754): a PARKED delivery — outstanding, recipient alive, waiting
+// for this session's input box to change. Never "attempt N of 6": it is past
+// that budget and is not given up.
+describe('a parked delivery says so, and what lands it (D-5838)', () => {
+  const parked = (over: Partial<MailSummary> = {}) =>
+    m({ state: 'queued', attempts: 7, lastError: 'draft-present', parkedAt: T0 - 60_000, ...over });
+
+  it('names the park and the condition, in place of the attempt count', () => {
+    const { container } = render(<MailStrip mail={[parked()]} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    const line = container.querySelector('.mail-strip-parked')!;
+    expect(line.textContent).toContain('parked');
+    expect(line.textContent).toContain('submitted or cleared');
+    expect(container.textContent).not.toMatch(/attempt \d+ of/);
+  });
+
+  it('the COLLAPSED head carries a parked flag', () => {
+    const { container } = render(<MailStrip mail={[parked()]} />);
+    expect(container.querySelector('.mail-strip-head .mail-strip-parked-mark')).not.toBeNull();
+  });
+
+  it('a rejected row is abandoned even if it once parked, and an older server\'s row (no field) is not parked', () => {
+    const { container } = render(<MailStrip mail={[parked({ state: 'rejected' }), m({ id: 2, state: 'queued' })]} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(container.querySelector('.mail-strip-abandoned')).not.toBeNull();
+    expect(container.querySelector('.mail-strip-parked')).toBeNull();
   });
 });
 

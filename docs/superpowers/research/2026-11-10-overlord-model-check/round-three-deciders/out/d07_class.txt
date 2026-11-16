@@ -1,0 +1,10 @@
+ok  domain: 9 rows x stated class x lineage x raise x grant x entry = 720 inputs
+note item secret, `operatorClass` left out: the sentence gives ['O4', 'unknown'], the floor alone gives ['O4']; held False either way
+note item value, `operatorClass` left out: the sentence gives ['O5', 'unknown'] (held: False), the floor alone gives ['O5'] (held: True)
+note ask operator-only, `operatorClass` left out: the sentence gives ['unknown'], the floor alone gives none; held False either way
+CE CLS-missing: ask cannot-decide, `operatorClass` left out: "A missing field is `unknown`" gives the class ['unknown'], which is not held; Table 6.7a and Table 6.1a give it the class none and hold it
+CE CLS-held: item value is held for `state-a-fact` in 38 inputs where a member of its class has no cover, so the hold can only end in an escalation, e.g. stated missing, effective class ['O5', 'unknown']
+CE CLS-triage: a `decide` item whose class is `unknown` with a member of O1 to O6 beside it (3 inputs, e.g. ['O2', 'unknown']): Table 6.7b's second row ("with class `unknown`") gives a triage hold of 5 minutes, its last row ("any other classed item") sends it to the operator at once. The table gives no order
+CE CLS-add: item decide: adding `unknown` to the class ['O2'] turns "not held" into "held" (54 inputs)
+ok  the effective class contains the floor, the lineage and every raise on all 720 inputs
+== itemClassFloor, class sets, the settling act of mayHold: domain 720 inputs; counterexamples 4; checks passed 2

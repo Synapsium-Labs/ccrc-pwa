@@ -17,7 +17,7 @@ beforeEach(() => { h = makePrHarness('ccrc-ccd-prhistory-'); });
 afterEach(() => { h.cleanup(); });
 
 /** `demo-quiet-basin`, with no commit of its own — the same zero-commit shape
- *  ccd-pr-state.test.ts's "agrees that ahead === 0 …" test uses. `is_ours`
+ *  ccd-pr-state.test.ts's "agrees that ahead === 0 …" test uses. `ours_of`
  *  accepts a `headRefOid` equal to the branch's own tip (a commit is an
  *  ancestor of itself), so the fixture needs no extra commit to bind, and
  *  `ahead` stays 0 across every sweep in this file — which is exactly what the
@@ -37,7 +37,7 @@ const hist = (id: string): unknown[] => {
 };
 
 /** One `cmd_pr_state --session <id>` sweep, gh answering either a single row
- *  bound to this workspace's branch/base/tip (so `bound`/`is_ours` both pass)
+ *  bound to this workspace's branch/base/tip (so `bound`/`ours_of` both pass)
  *  carrying `number`/`state`, or — when `number` is `null` — no PR at all
  *  (`gh pr list` returning `[]`, the "the PR is gone" shape
  *  ccd-pr-state.test.ts's own persistence tests use). Reuses `mergedRow`'s
@@ -395,7 +395,7 @@ describe('the --project fan-out is stamped at its ONE gh read, not per session',
 
   /** One row of the repo-wide answer, bound to `branch` — `mergedRow`'s
    *  defaults for every field the predicate reads that this block never
-   *  varies, with `headRefOid` set to that branch's own tip so `is_ours`
+   *  varies, with `headRefOid` set to that branch's own tip so `ours_of`
    *  passes (a commit is an ancestor of itself). */
   const row = (branch: string, tip: string, number: number, state = 'MERGED'): Record<string, unknown> =>
     mergedRow({

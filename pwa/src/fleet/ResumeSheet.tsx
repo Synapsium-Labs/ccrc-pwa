@@ -19,9 +19,11 @@
 // operator has to read before retrying.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { isReclaimRefuseCode, type RunSummary } from '../../../shared/api';
-import { Sheet } from '../components/Sheet';
-import { ApiError, api, apiErrorText, kickoffErrorText } from '../lib/api';
+import { isReclaimRefuseCode, type ReclaimRefuseCode, type RunSummary } from '../../../shared/api';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, Select, Sheet, TextInput } from '@ccrc/ui';
+import { ApiError, UNKNOWN_RUN_TEXT, api, apiErrorText, isRegistryUnmeasurable, kickoffErrorText } from '../lib/api';
+import { ensureSession } from '../session/useEnsure';
+import type { ResumeHeir } from './resumeHeirs';
 import './fleet.css';
 
 /** The reclaim refusals this sheet renders its OWN sentence for — a total
@@ -29,19 +31,45 @@ import './fleet.css';
  *  cell" discipline `ABANDON_COPY` and `RUN_WORD.unknown` already hold. Keyed
  *  on the conditions THIS route can reach (the door's own status map), not on
  *  every `RunRefuseCode`: copying a vocabulary this route can never speak is
- *  what `ABANDON_COPY`'s own docstring argues against, one file over. */
+ *  what `ABANDON_COPY`'s own docstring argues against, one file over.
+ *  AND THE DOOR'S HALF OF THAT KEY IS DERIVED, never re-spelled: the refusal
+ *  codes enter as `ReclaimRefuseCode` itself, so the day that union gains a
+ *  member this map lacks, the `Record` is a COMPILE ERROR here — never a
+ *  silent fall-through to `unknown`, which is what a hand-written list of the
+ *  three literals would degrade to. Only the arms this sheet adds ON TOP of
+ *  the door's vocabulary are spelled out beside it. That derivation is pinned
+ *  against a hand-written respelling by `server/test/resume-reclaim-l0.test.ts`. */
 export const RECLAIM_COPY: Record<
-  'unknown-run' | 'unknown-session' | 'no-claimant' | 'claimant-alive'
-  | 'registry-unmeasurable' | 'not-configured' | 'bad-request' | 'unknown',
+  ReclaimRefuseCode
+  | 'unknown-run' | 'unknown-session' | 'registry-unmeasurable' | 'not-configured' | 'bad-request' | 'unknown',
   string
 > = {
-  'unknown-run': 'that run is gone — the board will catch up',
+  'unknown-run': UNKNOWN_RUN_TEXT,
   // NOT folded with `unknown-run` even though both arrive at 404: the two have
   // opposite remedies (wait for the board vs. type a different id), and the id
   // in question is one the operator just typed.
   'unknown-session': 'this box has no registry row for that id — type one it knows',
   'no-claimant': 'nobody claims this run, so there is nothing to hand over',
   'claimant-alive': 'the coordinator is not dead',
+  // spec §12 / D-3011, fix round 1: the door refuses an heir that is a live
+  // worker elsewhere — `heir-is-a-worker` carries `by` and nothing else (no
+  // `detail`, unlike `claimant-alive`), so the sentence names the CONDITION
+  // and `by` is appended the same way `claimant-alive`'s evidence is.
+  // "ANOTHER COORDINATOR'S OPEN RUN", never "another programme" (final fix
+  // round): the server measured a RUN and its claimants — `openClaimantsOf`
+  // reads every open claimant off the runs table, and nothing in that read is a programme — and since
+  // D-3028 the refused case is precisely somebody ELSE's open run, because an
+  // heir all of whose open coordinators are the claimant being replaced is now admitted.
+  // A sentence naming a programme would have the operator looking for the
+  // wrong thing on the board.
+  // THE TRAILING CLAUSE IS CONDITIONAL, second fix round: a flat "a worker may
+  // not inherit a programme" is false since D-3028 — the dying coordinator's
+  // own worker inherits — and it was ALSO more than the door could prove while
+  // the read was newest-only. Both halves are now true of the shipped
+  // predicate: every open run naming the heir is read, and the refusal is
+  // exactly "some OTHER coordinator's open run still binds it".
+  'heir-is-a-worker': 'that session is the worker of another coordinator\'s open run right now '
+    + '— a worker may not inherit a programme while another coordinator\'s run still binds it',
   'registry-unmeasurable': 'the registry could not be read, so this box cannot say who is alive',
   'not-configured': 'this box does not run coordination — there is no ledger to rewrite',
   'bad-request': 'that id is not one this box will accept',
@@ -56,6 +84,14 @@ function reclaimErrorText(err: unknown): string {
   if (!(err instanceof ApiError)) return RECLAIM_COPY.unknown;
   const body = typeof err.body === 'object' && err.body !== null
     ? (err.body as Record<string, unknown>) : {};
+  // D-5971: the WORD, not the status (the door answers it 502, the table's status; an older server's kickoff
+  // answered the same word 503). `detail` is the only thing separating this code's two producers — an
+  // unlistable registry and a tmux that did not answer (D-1139).
+  if (isRegistryUnmeasurable(err)) {
+    const detail = typeof body.detail === 'string' && body.detail.trim() !== ''
+      ? body.detail.trim() : null;
+    return detail ?? RECLAIM_COPY['registry-unmeasurable'];
+  }
   if (err.status === 404) {
     return body.error === 'unknown-session' ? RECLAIM_COPY['unknown-session'] : RECLAIM_COPY['unknown-run'];
   }
@@ -81,36 +117,66 @@ function reclaimErrorText(err: unknown): string {
       const who = by === null ? RECLAIM_COPY['claimant-alive'] : `${by} is not dead`;
       return detail === null ? who : `${who} — ${detail}`;
     }
+    if (code === 'heir-is-a-worker') {
+      // Mirrors `claimant-alive` immediately above: a base sentence naming
+      // the CONDITION, and the evidence this refusal carries — here just
+      // `by`, since `heir-is-a-worker` has no `detail` — appended the same
+      // way. An adapter may not narrow a distinction it received (fix round
+      // 1, finding 3): `by` must reach the operator, not fall through to
+      // `RECLAIM_COPY.unknown`.
+      const by = typeof body.by === 'string' && body.by !== '' ? body.by : null;
+      const who = RECLAIM_COPY['heir-is-a-worker'];
+      return by === null ? who : `${who} — ${by}`;
+    }
+    // THE DOOR'S OWN VOCABULARY, REACHED GENERICALLY. `RECLAIM_COPY` keys on
+    // `ReclaimRefuseCode` itself, so every member of that union is guaranteed a
+    // sentence by the `Record` — and `isReclaimRefuseCode` above has already
+    // proved `code` is one. The day the union gains a fourth member, this line
+    // renders ITS sentence instead of "a reason this build does not recognise";
+    // without it the new member would reach the operator as the fallback even
+    // though its sentence exists two screens up, which is the same narrowing
+    // D-3026 fixed for `heir-is-a-worker` one member ago. The three branches
+    // above stay because they add EVIDENCE (`by`, `detail`) this line cannot;
+    // today they exhaust the union, so `code` is `never` here by construction —
+    // which is the point: the line is dead until the union grows, and alive the
+    // moment it does.
+    if (code !== null) return RECLAIM_COPY[code];
     return RECLAIM_COPY.unknown;
-  }
-  if (err.status === 502) {
-    // `detail` is the only thing separating this code's two producers — an
-    // unlistable registry and a tmux that did not answer (D-1139).
-    const detail = typeof body.detail === 'string' && body.detail.trim() !== ''
-      ? body.detail.trim() : null;
-    return detail ?? RECLAIM_COPY['registry-unmeasurable'];
   }
   if (err.status === 501) return RECLAIM_COPY['not-configured'];
   if (err.status === 400) return RECLAIM_COPY['bad-request'];
   return RECLAIM_COPY.unknown;
 }
 
+/** The sheet's lead sentence, always first (spec §9.5): the rule "Abandon, never Reclaim" stated before any door. */
+export const RESUME_LEAD = 'Only if this work should go on. A dead programme is abandoned, not handed over.';
+
+/** The run a sheet needs: a `RunSummary` or a `RunHit` feeds it alike (the programme page's closed waves hand it a hit). */
+export type ResumeRun = Pick<RunSummary, 'id' | 'program' | 'programTitle' | 'wave' | 'claimedBy'>;
+
 export interface ResumeSheetProps {
-  run: RunSummary | null;
+  run: ResumeRun | null;
   onClose: () => void;
   onDone?: () => void;
+  /** Step 3's picker (spec §9.5): the project's live coordinators, by name. None draws no picker, and the typed id stays. */
+  heirs?: readonly ResumeHeir[];
+  /** Open with step 3 (the hand-over) already shown: a refused close under a gone coordinator offers the hand-over directly. */
+  atReclaim?: boolean;
 }
 
 export function ResumeSheet({
   run,
   onClose,
   onDone,
-  ensure = api.ensure,
+  heirs = [],
+  atReclaim = false,
+  ensure = ensureSession,
   kickoff = api.kickoff,
   reclaimRun = api.reclaimRun,
 }: ResumeSheetProps & {
   /** Injectable for tests, `AbandonSheet`'s own `abandonRun` shape — each
-   *  defaults to the real client method, whose URL/method are pinned
+   *  defaults to the real client method (`ensure` through
+   *  `session/useEnsure.ts#ensureSession`, the one ensure, D-7189), whose URL/method are pinned
    *  separately in `api.test.ts` so this injection is never the ONLY coverage
    *  of a write path. */
   ensure?: (id: string) => Promise<void>;
@@ -125,7 +191,7 @@ export function ResumeSheet({
   const [busy, setBusy] = useState<'revive' | 'kickoff' | 'reclaim' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [reclaimOpen, setReclaimOpen] = useState(false);
+  const [reclaimOpen, setReclaimOpen] = useState(atReclaim);
   const [to, setTo] = useState('');
 
   // `gen`, ReapSheet's/AbandonSheet's idiom (`AbandonSheet.tsx` carries the
@@ -139,7 +205,7 @@ export function ResumeSheet({
   const gen = useRef(0);
   const targetId = run?.id ?? null;
   useEffect(() => {
-    setBusy(null); setError(null); setNote(null); setReclaimOpen(false); setTo('');
+    setBusy(null); setError(null); setNote(null); setReclaimOpen(atReclaim); setTo('');
     return () => { gen.current += 1; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetId]);
@@ -232,9 +298,58 @@ export function ResumeSheet({
   };
 
   return (
-    <Sheet open onClose={onClose} title="The coordinator is gone">
+    <Sheet
+      open
+      onClose={onClose}
+      title="The coordinator is gone"
+      // The three doors are pinned in the Sheet's footer (D-5932); a run nobody claims offers none.
+      footer={claimedBy === null ? undefined : (
+        <div className={QC_ACTIONS}>
+          <Button variant="primary" disabled={busy !== null} onClick={revive}>
+            {busy === 'revive' ? 'Reviving…' : `Revive ${claimedBy}`}
+          </Button>
+          <Button variant="ghost" disabled={busy !== null} onClick={reKickoff}>
+            {busy === 'kickoff' ? 'Queueing…' : 'Re-kickoff'}
+          </Button>
+          {reclaimOpen ? (
+            <>
+              {heirs.length > 0 && (
+                <Select aria-label={`Hand run ${run.id} to a coordinator`} value={heirs.some((h) => h.id === to) ? to : ''}
+                        onChange={(e) => setTo(e.target.value)}>
+                  <option value="">Choose a coordinator</option>
+                  {heirs.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+                </Select>
+              )}
+              {/* The same object `.sess-hold-input` was: a single-line id
+                  field inside a fleet sheet, self-grounded, tap-floored, with
+                  the ::placeholder ink. It is `TextInput` now rather than a
+                  third copy of those ten declarations. */}
+              <TextInput
+                aria-label={`Hand run ${run.id} to this session id`}
+                placeholder={heirs.length > 0 ? 'or enter a session id' : 'session id'}
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+              />
+              <Button variant="ghost"
+                      disabled={busy !== null || to.trim() === ''} onClick={reclaim}>
+                {busy === 'reclaim' ? 'Handing over…' : 'Reclaim'}
+              </Button>
+            </>
+          ) : (
+            <Button variant="ghost" disabled={busy !== null}
+                    onClick={() => setReclaimOpen(true)}>
+              That id cannot be revived
+            </Button>
+          )}
+          <Button variant="ghost" disabled={busy !== null} onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
+      )}
+    >
       <div className="abandon-sheet">
-        <p className="qc-consequence">
+        <p className={QC_CONSEQUENCE}>{RESUME_LEAD}</p>
+        <p className={QC_CONSEQUENCE}>
           {claimedBy === null
             // Unreachable from the board (the row's gate needs a claimant to
             // measure), and stated rather than collapsed into `return null`:
@@ -243,46 +358,7 @@ export function ResumeSheet({
             ? `Run ${run.id} names no coordinator, so there is nobody to revive and nothing to hand over.`
             : `${claimedBy} claims run ${run.id} — ${run.program}, wave ${run.wave} — and this box measured it dead. Cheapest door first: bring the pane back, tell it to pick the wave up, or hand the program to another session.`}
         </p>
-        {claimedBy !== null && (
-          <div className="qc-actions">
-            <button type="button" className="btn-primary" disabled={busy !== null} onClick={revive}>
-              {busy === 'revive' ? 'Reviving…' : `Revive ${claimedBy}`}
-            </button>
-            <button type="button" className="btn-ghost" disabled={busy !== null} onClick={reKickoff}>
-              {busy === 'kickoff' ? 'Queueing…' : 'Re-kickoff'}
-            </button>
-            {reclaimOpen ? (
-              <>
-                {/* `.sess-hold-input` verbatim, not a new class: the same
-                    object — a single-line id field inside a fleet sheet — and
-                    it is already self-grounded, tap-floored and carries the
-                    ::placeholder ink. The identical reuse `.run-row` already
-                    makes of `.sess-unmeasured`. */}
-                <input
-                  type="text"
-                  className="sess-hold-input"
-                  aria-label={`Hand run ${run.id} to this session id`}
-                  placeholder="session id"
-                  value={to}
-                  onChange={(e) => setTo(e.target.value)}
-                />
-                <button type="button" className="btn-ghost"
-                        disabled={busy !== null || to.trim() === ''} onClick={reclaim}>
-                  {busy === 'reclaim' ? 'Handing over…' : 'Reclaim'}
-                </button>
-              </>
-            ) : (
-              <button type="button" className="btn-ghost" disabled={busy !== null}
-                      onClick={() => setReclaimOpen(true)}>
-                That id cannot be revived
-              </button>
-            )}
-            <button type="button" className="btn-ghost" disabled={busy !== null} onClick={onClose}>
-              Cancel
-            </button>
-          </div>
-        )}
-        {note !== null && <p className="qc-consequence">{note}</p>}
+        {note !== null && <p className={QC_CONSEQUENCE}>{note}</p>}
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>
     </Sheet>

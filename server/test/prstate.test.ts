@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
-  boundRow, checksFor, draftPr, isFullLine, isMergedRow, parsePrLines, phaseFor,
-  prView, unknownView,
+  boundRow, checksFor, draftPr, isFullLine, isMergedRow, mergedFactsOf, parsePrLines, phaseFor,
+  prView, sweepFailureReason, unknownView,
   type CcdPrLine, type CcdPrRow,
 } from '../src/prstate.js';
-import type { TaskItem } from '../../shared/api.js';
+import { UNMEASURED } from '../src/unmeasured.js';
+import type { CcdResult } from '../src/coord/ports.js';
+import type { PrReason, TaskItem } from '../../shared/api.js';
+import { sessionBucket } from '../../shared/api.js';
 
 const row = (over: Partial<CcdPrRow> = {}): CcdPrRow => ({
   number: 42, state: 'MERGED', headRefName: 'ws/quiet-basin', headRefOid: 'deadbee',
@@ -111,7 +114,7 @@ describe('boundRow', () => {
   });
 
   it('refuses a row bound to a DIFFERENT branch, however well everything else matches', () => {
-    // The `is_ours` class this plan was already bitten by once (Task 3's
+    // The `ours_of` class this plan was already bitten by once (Task 3's
     // review: an unpinned `headRefOid` let a row naming a different ref bind
     // and report merged). `headRefName` is a conjunct, not a hint — a row for
     // `ws/still-cove` must never bind a query for `ws/quiet-basin` just
@@ -137,7 +140,7 @@ describe('checks', () => {
   });
 
   it('truncates an attacker-supplied check name and caps how many arrive', () => {
-    // Fork PRs are accepted continuously on public repos (MegaMek/megamek),
+    // Fork PRs are accepted continuously on public repos (example-org/example-repo),
     // and these names reach the UI. They are inert text there, but they are
     // still bytes crossing a wire and into a React tree.
     const many = Array.from({ length: 40 }, (_, i) => ({ name: 'x'.repeat(500) + i, conclusion: 'FAILURE' }));
@@ -229,6 +232,85 @@ describe('phaseFor', () => {
     // real — the same token-forgery class this plan has closed repeatedly.
     const s = phaseFor(line({ rows: [row({ number: undefined })] }));
     expect(s.number).toBeNull();
+  });
+});
+
+describe('a PR closed as landed in a merge train', () => {
+  // ccd annotates `landedInTrain` — the deployment's label AND the train
+  // record's proof, both judged on the fleet box (D-7362) — the way it
+  // annotates `ours`; this side reads the annotation and never a label name or
+  // a train record of its own.
+  const landed = (over: Partial<CcdPrRow> = {}): CcdPrRow => row({
+    state: 'CLOSED', mergedAt: null, mergeCommit: null, closedAt: '2026-07-21T09:00:00Z', landedInTrain: true, ...over,
+  });
+
+  it('is merged, dated by its close', () => {
+    expect(isMergedRow(landed(), 'main', 'ws/quiet-basin')).toBe(true);
+    const s = phaseFor(line({ rows: [landed()] }));
+    expect(s.phase).toBe('merged');
+    expect(s.reason).toBeNull();
+    expect(s.number).toBe(42);
+    expect(s.mergedAt).toBe(Date.parse('2026-07-21T09:00:00Z'));
+  });
+
+  it('is merged with no date when gh named no close time', () => {
+    const s = phaseFor(line({ rows: [landed({ closedAt: undefined })] }));
+    expect(s.phase).toBe('merged');
+    expect(s.mergedAt).toBeNull();
+  });
+
+  it('reaches the cleanup offer exactly as a merge does', () => {
+    const pr = phaseFor(line({ rows: [landed()] }));
+    const r = sessionBucket({
+      status: 'dead', statusUpdatedAt: 1000, dialogPending: false, hookState: null,
+      archivedAt: 1_800_000_000, pr, background: null,
+    }, null);
+    expect(r.bucket).toBe('cleanup');
+  });
+
+  it.each([
+    ['without the annotation', { landedInTrain: undefined }, 'closed'],
+    ['annotated false', { landedInTrain: false }, 'closed'],
+    ['a fork', { isCrossRepository: true }, 'none'],
+    ['a head not reachable from our tip', { ours: false }, 'none'],
+    ['OPEN, whatever the annotation says', { state: 'OPEN' }, 'open'],
+  ])('is not merged %s', (_name, over, phase) => {
+    expect(isMergedRow(landed(over as Partial<CcdPrRow>), 'main', 'ws/quiet-basin')).toBe(false);
+    expect(phaseFor(line({ rows: [landed(over as Partial<CcdPrRow>)] })).phase).toBe(phase);
+  });
+
+  it('a label the train record did not prove is closed, with reason train-unproven, never merged', () => {
+    const r = landed({ landedInTrain: false, trainUnproven: true });
+    expect(isMergedRow(r, 'main', 'ws/quiet-basin')).toBe(false);
+    const s = phaseFor(line({ rows: [r] }));
+    expect([s.phase, s.reason, s.mergedAt]).toEqual(['closed', 'train-unproven', null]);
+    const b = sessionBucket({
+      status: 'dead', statusUpdatedAt: 1000, dialogPending: false, hookState: null,
+      archivedAt: 1_800_000_000, pr: s, background: null,
+    }, null);
+    expect(b.bucket).not.toBe('cleanup');
+  });
+
+  it('a label whose train record was not READ is unknown, train-unread: never closed, never merged (D-7378)', () => {
+    const r = landed({ landedInTrain: false, trainUnproven: false, trainUnread: true });
+    expect(isMergedRow(r, 'main', 'ws/quiet-basin')).toBe(false);
+    const s = phaseFor(line({ rows: [r] }));
+    expect([s.phase, s.reason]).toEqual(['unknown', 'train-unread']);
+    const b = sessionBucket({
+      status: 'dead', statusUpdatedAt: 1000, dialogPending: false, hookState: null,
+      archivedAt: 1_800_000_000, pr: s, background: null,
+    }, null);
+    expect(b.bucket).not.toBe('cleanup');
+  });
+
+  it('a plain closed PR carries no reason', () => {
+    expect(phaseFor(line({ rows: [landed({ landedInTrain: false })] })).reason).toBeNull();
+  });
+
+  it('leaves a MERGED row exactly as it was', () => {
+    const s = phaseFor(line({ rows: [row({ landedInTrain: true })] }));
+    expect(s.phase).toBe('merged');
+    expect(s.mergedAt).toBe(Date.parse('2026-07-20T10:00:00Z'));
   });
 });
 
@@ -458,5 +540,47 @@ describe('draftPr composition — exact title and body', () => {
     // M50: dropping `commits.length > 0` would render "## Commits" with
     // nothing under it.
     expect(draftPr(line({ commits: [] }), null).body).not.toContain('## Commits');
+  });
+});
+
+describe('sweepFailureReason (landing-order wave 3c)', () => {
+  const base = { ran: true as const, ok: false as const, stdout: '', stderr: '' };
+  const rows: [string, CcdResult, PrReason][] = [
+    ['the agent killed it', { ...base, killed: true, signal: 'SIGTERM' }, 'cut-short'],
+    ["the server's own wait ran out", { ...base, killed: UNMEASURED, signal: UNMEASURED, ran: false, reason: 'timeout', detail: 'timeout' }, 'cut-short'],
+    ['the link dropped', { ...base, killed: UNMEASURED, signal: UNMEASURED, ran: false, reason: 'transport', detail: 'disconnected' }, 'agent-down'],
+    ['the agent declined it', { ...base, killed: UNMEASURED, signal: UNMEASURED, ran: false, reason: 'spawn', detail: 'x' }, 'agent-down'],
+    ['ccd exited non-zero by itself', { ...base, killed: false, signal: null }, 'agent-down'],
+    ['a signal the agent did not send', { ...base, killed: false, signal: 'SIGKILL' }, 'agent-down'],
+    ['an older agent measured nothing', { ...base, killed: UNMEASURED, signal: UNMEASURED }, 'agent-down'],
+  ];
+  it.each(rows)('%s', (_what, res, want) => {
+    expect(sweepFailureReason(res)).toBe(want);
+  });
+});
+
+describe('mergedFactsOf (landing order wave 5h)', () => {
+  const HEAD40 = 'a'.repeat(40);
+  const MERGE40 = 'b'.repeat(40);
+  const merged = (over: Partial<CcdPrRow> = {}): CcdPrRow =>
+    row({ headRefOid: HEAD40, mergeCommit: { oid: MERGE40 }, ...over });
+
+  it('answers a merged bound row\'s facts', () => {
+    expect(mergedFactsOf(line({ rows: [merged()] }))).toEqual({
+      pr: 42, head: HEAD40, base: 'main', mergedAt: '2026-07-20T10:00:00Z', mergeCommit: MERGE40,
+    });
+  });
+  it('is null for a train-landed row: a --session line carries no train number', () => {
+    const landed = merged({ state: 'CLOSED', mergedAt: null, mergeCommit: null, closedAt: '2026-07-21T09:00:00Z', landedInTrain: true });
+    expect(mergedFactsOf(line({ rows: [landed] }))).toBeNull();
+  });
+  it('is null for an open row, a merge-unproven row and a line with no bound row', () => {
+    expect(mergedFactsOf(line({ rows: [merged({ state: 'OPEN', mergedAt: null, mergeCommit: null })] }))).toBeNull();
+    expect(mergedFactsOf(line({ rows: [merged({ mergeCommit: null })] }))).toBeNull();
+    expect(mergedFactsOf(line({ rows: [merged({ ours: false })] }))).toBeNull();
+    expect(mergedFactsOf(line({ rows: [] }))).toBeNull();
+  });
+  it('is null when the row names no head the landing line could record', () => {
+    expect(mergedFactsOf(line({ rows: [row({ mergeCommit: { oid: MERGE40 } })] }))).toBeNull();
   });
 });

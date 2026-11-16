@@ -1,0 +1,1637 @@
+// ccd-scope-sweep — dead ccd pane scopes reported, the inert ones stopped, and
+// the stop SHADOWED until the operator arms it (session-continuity spec §5.6
+// item 2; wave 4). Every run is a FIXTURE: CCRC_PROC_ROOT and CCRC_CGROUP_ROOT
+// point at trees this file writes, `systemctl`, `tmux` and `getconf` are stubs
+// on PATH that log what they are asked, and HOME and XDG_RUNTIME_DIR are
+// fixture directories. No case reaches the live user manager, a real /proc or a
+// real tmux server, so the suite runs on any platform. Each case is red when
+// its guard is removed (the plan's mutation table is the measurement).
+// The harness (the fixture tree, the stubs and the helpers below) lives in `paneScopeFixture.ts` (D-7303), shared
+// with `cap-scopes.test.ts` and `pane-scope-acts.test.ts`; this suite makes its box without `honourPattern`.
+import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { makePaneScopeBox, SWEEP, UP, HOUR, CCD_SERVER } from './paneScopeFixture.js';
+import { spawnSyncGroup } from './spawnGroup.js';
+
+const { fx, proc, server, cgOf, unitName, scope, inert, STATE, seen, seenBusy, arm, armBusy, regRow, livePanes, run, stops, rows } = makePaneScopeBox();
+
+// ── THE STOP SHIPS SHADOWED ─────────────────────────────────────────────────
+
+describe('the stop is shadowed: recorded `would-stop` until the operator arms scope-sweep-live', () => {
+  it('a dead ccd scope inert for six hours, with no scope-sweep-live: would-stop, and NEVER a stop call', () => {
+    const u = inert(1);
+    const r = run();
+    expect(r.code, r.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', why: 'none', server: 'ccd', sockets: '0', oldest: String(2 * 86400), age: String(9 * 86400) });
+    expect(stops()).toEqual([]);
+    expect(fs.readFileSync(STATE(), 'utf8').split('\n')[0]).toMatch(new RegExp(`^# ccd-scope-sweep v1 tick=\\d+ up=${UP} mode=shadow$`));
+  });
+
+  it('the same scope with scope-sweep-live: one `systemctl --user stop --no-block`, recorded `stopped`', () => {
+    const u = inert(1); arm();
+    expect(run().code).toBe(0);
+    expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+    expect(rows('dead')[u]!['verdict']).toBe('stopped');
+    expect(fs.readFileSync(STATE(), 'utf8').split('\n')[0]).toMatch(/ mode=live$/);
+  });
+
+  it('a stop systemd refuses is recorded `stop-failed`', () => {
+    const u = inert(1); arm(); fs.writeFileSync(path.join(fx.base, 'stop-rc'), '1');
+    run();
+    expect(rows('dead')[u]!['verdict']).toBe('stop-failed');
+  });
+
+  it('armed, one tick stops at most three scopes: a fourth inert one is `held` for the next tick', () => {
+    const us = [1, 2, 3, 4].map((n) => inert(n)); arm();
+    expect(run().code).toBe(0);
+    expect(stops()).toHaveLength(3);
+    expect(us.map((u) => rows('dead')[u]!['verdict']).sort()).toEqual(['held', 'stopped', 'stopped', 'stopped']);
+  });
+
+  it('scope-sweep-paused stops EVERYTHING: nothing measured, recorded or stopped, armed or not', () => {
+    inert(1); arm();
+    fs.writeFileSync(path.join(fx.home, '.cc-sessions', 'scope-sweep-paused'), '');
+    const before = fs.readFileSync(STATE(), 'utf8');
+    const r = run();
+    expect(r.code).toBe(0);
+    expect(r.out).toBe('');
+    expect(r.err).toBe('');
+    expect(stops()).toEqual([]);
+    expect(fs.existsSync(path.join(fx.base, 'calls')), 'not even a list-units').toBe(false);
+    expect(fs.readFileSync(STATE(), 'utf8')).toBe(before);
+  });
+
+  // A scope that started after this tick's /proc/uptime read (or a process forked after it) would age negative; doctor's
+  // reader takes `age=${N}`, non-negative only, and would count the whole dead line unreadable. The writer clamps at 0.
+  it('a scope (and a process) that started after the tick\'s uptime read: its ages clamp at 0, never a negative the doctor cannot read', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    proc(3002, { age: -3, ppid: 3001, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001, 3002], bornAgo: -2 });
+    expect(run().code).toBe(0);
+    const line = fs.readFileSync(STATE(), 'utf8').split('\n').find((l) => l.startsWith(`dead ${u} `))!;
+    expect(line).toMatch(/ youngest=0 /);
+    expect(line).toMatch(/ oldest=\d+ /);
+    expect(line).toMatch(/ age=0 /);
+    expect(line).not.toMatch(/=-/);
+  });
+});
+
+// ── EACH PREDICATE ──────────────────────────────────────────────────────────
+
+describe('each stop predicate, one at a time — the scope is reported, never stopped', () => {
+  const reportedFor = (u: string, why: string): void => {
+    arm();
+    expect(run().code).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'report' });
+    expect(rows('dead')[u]!['why']!.split(',')).toContain(why);
+    expect(stops()).toEqual([]);
+  };
+
+  it('first seen dead NOW: its clock starts at the box\'s uptime, and it says so once', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] });
+    arm();
+    const r = run();
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'dead-under-6h', first: String(UP) });
+    expect(r.out).toContain(`${u} is dead`);
+    expect(stops()).toEqual([]);
+  });
+
+  it('dead for five hours, not six', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 5 * HOUR, 7255660000);
+    reportedFor(u, 'dead-under-6h');
+  });
+
+  it('dead a minute short of six hours: not yet', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 6 * HOUR - 60, 7255660000);
+    reportedFor(u, 'dead-under-6h');
+  });
+
+  it('control: dead a minute past six hours, and everything else inert — would-stop', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 6 * HOUR + 60, 7255660000);
+    run();
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', why: 'none' });
+  });
+
+  it('its CPU moved since it was first seen dead', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001], cpu: 7255660001 }); seen(u, 7 * HOUR, 7255660000);
+    reportedFor(u, 'cpu-moved');
+  });
+
+  it('a process in it started in the last six hours', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) }); proc(3002, { age: 5 * HOUR, cg: cgOf(unitName(1)), ppid: 3001 });
+    const u = scope(1, { pane: 3001, procs: [3001, 3002] }); seen(u, 7 * HOUR, 7255660000);
+    reportedFor(u, 'process-started-under-6h');
+  });
+
+  it('a process in it started a minute short of six hours ago', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) }); proc(3002, { age: 6 * HOUR - 60, cg: cgOf(unitName(1)), ppid: 3001 });
+    const u = scope(1, { pane: 3001, procs: [3001, 3002] }); seen(u, 7 * HOUR, 7255660000);
+    reportedFor(u, 'process-started-under-6h');
+  });
+
+  it('control: its youngest process started a minute past six hours ago — would-stop', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) }); proc(3002, { age: 6 * HOUR + 60, cg: cgOf(unitName(1)), ppid: 3001 });
+    const u = scope(1, { pane: 3001, procs: [3001, 3002] }); seen(u, 7 * HOUR, 7255660000);
+    run();
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', youngest: String(6 * HOUR + 60) });
+  });
+
+  it('a process in it holds a TCP socket', () => {
+    fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), '   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 424242 1 0000000000000000 100 0 0 10 0\n');
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)), sockets: [424242] });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
+    reportedFor(u, 'socket');
+  });
+
+  it('a process in it holds a TCP6 socket (a server listening on ::)', () => {
+    fs.appendFileSync(path.join(fx.proc, 'net', 'tcp6'), '   0: 00000000000000000000000000000000:1F40 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 535353 1 0000000000000000 100 0 0 10 0\n');
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)), sockets: [535353] });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
+    reportedFor(u, 'socket');
+  });
+
+  it('a process in it holds a UDP socket', () => {
+    fs.appendFileSync(path.join(fx.proc, 'net', 'udp6'), '   0: 00000000000000000000000000000000:14E9 00000000000000000000000000000000:0000 07 00000000:00000000 00:00000000 00000000  1000        0 525252 2 0000000000000000 0\n');
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)), sockets: [525252] });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
+    reportedFor(u, 'socket');
+  });
+
+  it('a process in it holds a LISTENING Unix socket', () => {
+    fs.appendFileSync(path.join(fx.proc, 'net', 'unix'), '0000000000000000: 00000002 00000000 00010000 0001 01 626262 /tmp/server.sock\n');
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)), sockets: [626262] });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
+    reportedFor(u, 'socket');
+  });
+
+  it('control: a CONNECTED Unix socket (a client of something) does not hold it — would-stop', () => {
+    fs.appendFileSync(path.join(fx.proc, 'net', 'unix'), '0000000000000000: 00000003 00000000 00000000 0001 03 727272\n');
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)), sockets: [727272] });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
+    run();
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', sockets: '0' });
+  });
+
+  it('a process in it is the parent of a process in another cgroup', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    proc(3999, { age: 2 * 86400, ppid: 3001, cg: '/user.slice/user-1000.slice/user@1000.service/app.slice/project-f-ddb.service' });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
+    reportedFor(u, 'parent-of-a-process-elsewhere');
+  });
+
+  it('control: a child in the SAME scope is not elsewhere — would-stop', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) }); proc(3002, { age: 2 * 86400, ppid: 3001, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001, 3002] }); seen(u, 7 * HOUR, 7255660000);
+    run();
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop' });
+  });
+
+  it('a first-seen clock earlier than the scope itself is not believed: first seen now', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, UP - 1, 7255660000);   // first=1: before the scope (born 9 days ago) existed
+    reportedFor(u, 'dead-under-6h');
+    expect(rows('dead')[u]!['first']).toBe(String(UP));
+  });
+
+  it('a first-seen clock later than now is not believed either: first seen now', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, -HOUR, 7255660000);
+    reportedFor(u, 'dead-under-6h');
+    expect(rows('dead')[u]!['first']).toBe(String(UP));
+  });
+});
+
+// ── WHAT THE SWEEP MUST NEVER STOP (the coordinator's ruling D) ─────────────
+
+describe('what the sweep never stops, armed and inert or not', () => {
+  it('ccd\'s own ccrc-tmux-server.scope, even listed with a pane Description: never recorded, never stopped', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf('ccrc-tmux-server.scope') });
+    const u = scope(1, { pane: 3001, procs: [3001], unit: 'ccrc-tmux-server.scope' }); seen(u, 7 * HOUR, 7255660000);
+    arm(); run();
+    expect(Object.keys(rows('dead'))).toEqual([]);
+    expect(stops()).toEqual([]);
+  });
+
+  it('a scope of a LIVE tmux server that is not ccd\'s: never recorded, never stopped', () => {
+    server(5000, 30 * 86400);
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, server: 5000, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
+    arm(); run();
+    expect(rows('dead')[u]).toBeUndefined();
+    expect(stops()).toEqual([]);
+  });
+
+  it('a scope with a live pane of ccd\'s server is LIVE: its old entry drops, nothing stopped', () => {
+    const u = inert(1); livePanes(3001);
+    arm(); run();
+    expect(rows('dead')[u]).toBeUndefined();
+    expect(stops()).toEqual([]);
+  });
+
+  it('a scope whose server pid now names a process that started AFTER the scope: reported server-pid-reused, never stopped', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    server(5000, 3 * 86400);                                        // a tmux server — but younger than the scope (born 9 days ago)
+    const u = scope(1, { pane: 3001, server: 5000, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
+    arm(); run();
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'server-pid-reused', server: 'reused' });
+    expect(stops()).toEqual([]);
+  });
+
+  it('a scope whose server pid now names a process that is not a tmux server: reported, never stopped', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    proc(5000, { age: 30 * 86400, comm: 'node' });
+    const u = scope(1, { pane: 3001, server: 5000, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
+    arm(); run();
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'server-pid-reused' });
+    expect(stops()).toEqual([]);
+  });
+
+  it('ccd\'s server pid itself, recycled after the scope was born: reported, never stopped', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001], bornAgo: 20 * 86400 }); seen(u, 7 * HOUR, 7255660000);
+    livePanes(4242);                                                // ccd's server (born 10 days ago) is up, with other panes
+    arm(); run();
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'server-pid-reused' });
+    expect(stops()).toEqual([]);
+  });
+
+  it('control: ccd\'s server and a scope born in the SAME second, 35 ms apart — the server is ccd\'s, not reused', () => {
+    // Pre-flight 5's measurement: a comparison in whole seconds reads ccd's own server as recycled.
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001], bornAgo: 10 * 86400, monoOffset: 35_000 });
+    run();
+    expect(rows('dead')[u]).toMatchObject({ server: 'ccd', why: 'dead-under-6h' });
+  });
+
+  it('a scope outside the session slice is not the sweep\'s', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001], slice: 'app.slice' }); seen(u, 7 * HOUR, 7255660000);
+    arm(); run();
+    expect(rows('dead')[u]).toBeUndefined();
+    expect(stops()).toEqual([]);
+  });
+
+  it('control: a scope of a server that no longer runs IS ccd\'s, and an inert one is stopped when armed', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, server: 7777, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
+    arm(); run();
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'stopped', server: 'gone' });
+    expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+  });
+});
+
+// ── UNMEASURABLE SKIPS THE SCOPE (NOT THE TICK); LIVE RESETS ────────────────
+
+describe('a value it cannot measure skips that scope for the tick — a carry row keeps its clock pair, the tick run to its end', () => {
+  /** A dead scope beside the unmeasurable one, measurable: first seen this tick (its server is gone). */
+  const companion = (): string => {
+    proc(3900, { age: 2 * 86400, cg: cgOf(unitName(9)) });
+    return scope(9, { pane: 3900, server: 7777, procs: [3900] });
+  };
+  /** Armed; the tick ends with a fresh header and a carry row for `u` (never a dead row, never a stop) — and, when
+   *  there is a companion, the companion judged that same tick (only THAT scope was skipped, not the tick). */
+  const carried = (u: string, why: string, state: 'dead' | 'live' | 'unknown', o: { companion?: string } = {}): void => {
+    arm();
+    const r = run();
+    expect(r.code, r.err).toBe(0);
+    const text = fs.readFileSync(STATE(), 'utf8');
+    expect(text.split('\n')[0]).toMatch(new RegExp(`^# ccd-scope-sweep v1 tick=\\d+ up=${UP} mode=live$`));
+    expect(rows('dead')[u]).toBeUndefined();
+    expect(rows('carry')[u]).toEqual({ state, first: String(UP - 7 * HOUR), cpu0: '7255660000', why });
+    expect(stops()).toEqual([]);
+    if (o.companion) expect(rows('dead')[o.companion]).toMatchObject({ verdict: 'report', why: 'dead-under-6h', first: String(UP) });
+  };
+  const one = (o: Parameters<typeof scope>[1] & { procOpts?: Parameters<typeof proc>[1] }): string => {
+    proc(3001, o.procOpts ?? { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, o); seen(u, 7 * HOUR, 7255660000);
+    return u;
+  };
+
+  it('a Description that does not parse', () => {
+    one({ pane: 3001, procs: [3001], desc: unitName(1) });
+    const v = companion();
+    carried(unitName(1), 'description', 'unknown', { companion: v });
+  });
+
+  it('a `systemctl show` that fails (or answers no Slice: a unit that vanished)', () => {
+    one({ pane: 3001, procs: [3001] });
+    fs.writeFileSync(path.join(fx.base, 'show-rc'), '1');
+    carried(unitName(1), 'unit-show', 'unknown');
+  });
+
+  it('an empty ControlGroup — never the root cgroup\'s processes', () => {
+    one({ pane: 3001, procs: [3001], cgShown: '' });
+    fs.writeFileSync(path.join(fx.cg, 'cgroup.procs'), '3001\n');   // what a path built from an empty string would read
+    const v = companion();
+    carried(unitName(1), 'control-group', 'unknown', { companion: v });
+  });
+
+  it('a ControlGroup that names another unit', () => {
+    const other = '/user.slice/user-1000.slice/user@1000.service/app.slice/project-f-ddb.service';
+    one({ pane: 3001, procs: [3001], cgShown: other });
+    fs.mkdirSync(path.join(fx.cg, other), { recursive: true });
+    fs.writeFileSync(path.join(fx.cg, other, 'cgroup.procs'), '3001\n');
+    const v = companion();
+    carried(unitName(1), 'control-group', 'unknown', { companion: v });
+  });
+
+  it('a CPUUsageNSec systemd does not report', () => {
+    one({ pane: 3001, procs: [3001], cpuShown: '[not set]' });
+    const v = companion();
+    carried(unitName(1), 'cpu', 'unknown', { companion: v });
+  });
+
+  it('an ActiveEnterTimestampMonotonic of 0', () => {
+    one({ pane: 3001, procs: [3001], monoShown: '0' });
+    const v = companion();
+    carried(unitName(1), 'scope-start', 'unknown', { companion: v });
+  });
+
+  it('a cgroup.procs it cannot read — and a scope never seen before records no dead verdict, only a clockless carry', () => {
+    const u = scope(1, { pane: 3001, procs: [3001], noProcsFile: true }); seen(u, 7 * HOUR, 7255660000);
+    const w = scope(2, { pane: 3002, procs: [3002], noProcsFile: true });
+    const v = companion();
+    carried(unitName(1), 'procs', 'unknown', { companion: v });
+    expect(rows('dead')[w]).toBeUndefined();
+    expect(rows('carry')[w]).toEqual({ state: 'unknown', first: 'none', cpu0: 'none', why: 'procs' });
+  });
+
+  it('an empty cgroup.procs', () => {
+    one({ pane: 3001, procs: [] });
+    const v = companion();
+    carried(unitName(1), 'procs', 'unknown', { companion: v });
+  });
+
+  it('an fd directory it cannot read', () => {
+    one({ pane: 3001, procs: [3001], procOpts: { age: 2 * 86400, cg: cgOf(unitName(1)), fdUnreadable: true } });
+    const v = companion();
+    try { carried(unitName(1), 'socket-fd', 'dead', { companion: v }); } finally { fs.chmodSync(path.join(fx.proc, '3001', 'fd'), 0o755); }
+  });
+
+  it('a process in another network namespace, holding a socket these tables do not list', () => {
+    one({ pane: 3001, procs: [3001], procOpts: { age: 2 * 86400, cg: cgOf(unitName(1)), netns: 'net:[4026532999]', sockets: [999999] } });
+    const v = companion();
+    carried(unitName(1), 'socket-fd', 'dead', { companion: v });
+  });
+
+  it('a process in its cgroup.procs that has no /proc entry any more', () => {
+    one({ pane: 3001, procs: [3001, 3002] });
+    const v = companion();
+    carried(unitName(1), 'socket-fd', 'dead', { companion: v });
+  });
+
+  it('a /proc/net/tcp it cannot read, holding the socket', () => {
+    fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), '   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 424242 1 0000000000000000 100 0 0 10 0\n');
+    one({ pane: 3001, procs: [3001], procOpts: { age: 2 * 86400, cg: cgOf(unitName(1)), sockets: [424242] } });
+    fs.chmodSync(path.join(fx.proc, 'net', 'tcp'), 0o000);
+    carried(unitName(1), 'socket-tables', 'dead');
+  });
+
+  it('a /proc/net/unix it cannot read, holding the listening socket', () => {
+    fs.appendFileSync(path.join(fx.proc, 'net', 'unix'), '0000000000000000: 00000002 00000000 00010000 0001 01 626262 /tmp/server.sock\n');
+    one({ pane: 3001, procs: [3001], procOpts: { age: 2 * 86400, cg: cgOf(unitName(1)), sockets: [626262] } });
+    fs.chmodSync(path.join(fx.proc, 'net', 'unix'), 0o000);
+    carried(unitName(1), 'socket-tables', 'dead');
+  });
+
+  it('a process in it whose stat cannot be read', () => {
+    one({ pane: 3001, procs: [3001, 3002] });
+    proc(3002, { age: 2 * 86400, cg: cgOf(unitName(1)), statUnreadable: true });
+    carried(unitName(1), 'box-stat', 'dead');
+  });
+
+  it('a server pid whose comm cannot be read: it cannot be told a tmux server', () => {
+    one({ pane: 3001, procs: [3001] });
+    fs.chmodSync(path.join(fx.proc, String(CCD_SERVER), 'comm'), 0o000);
+    const v = companion();
+    carried(unitName(1), 'server-comm', 'unknown', { companion: v });
+  });
+
+  it('a server pid whose stat cannot be read', () => {
+    one({ pane: 3001, procs: [3001] });
+    fs.chmodSync(path.join(fx.proc, String(CCD_SERVER), 'stat'), 0o000);
+    carried(unitName(1), 'server-stat', 'unknown');
+  });
+
+  it('a process ELSEWHERE on the box whose stat cannot be read: it could be a child of this scope', () => {
+    one({ pane: 3001, procs: [3001] });
+    proc(3500, { age: 2 * 86400, statUnreadable: true });
+    carried(unitName(1), 'box-stat', 'dead');
+  });
+
+  it('with no ccd server answering (tmux: no server running), a scope of a server that still RUNS cannot be judged', () => {
+    fs.rmSync(path.join(fx.base, 'panes'));
+    const u = inert(1); void u;
+    const v = companion();
+    carried(unitName(1), 'tmux-unknown', 'unknown', { companion: v });
+  });
+
+  it('a scope seen live drops its entry, so it dies again from zero', () => {
+    const u = inert(1);
+    livePanes(3001); run();
+    expect(rows('dead')[u]).toBeUndefined();
+    fs.writeFileSync(path.join(fx.base, 'panes'), `${CCD_SERVER} 9999\n`);   // the pane is gone again
+    arm(); run();
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'dead-under-6h' });
+    expect(stops()).toEqual([]);
+  });
+
+  it('with no XDG_RUNTIME_DIR it refuses: no clock can run, nothing is stopped', () => {
+    inert(1); arm();
+    const r = run({ XDG_RUNTIME_DIR: undefined });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/no-runtime-dir/);
+    expect(stops()).toEqual([]);
+  });
+
+  // ── Task 3's review (scope-sweep-child-cgroups-are-unmeasurable): a stop kills the scope's whole cgroup SUBTREE, and a scope's directory is user-writable ──
+
+  const listener = (): void => {   // a double-forked TCP server (ppid 1), listening: the thing a stop must not kill unseen
+    fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), '   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 424242 1 0000000000000000 100 0 0 10 0\n');
+    proc(3999, { age: 2 * 86400, ppid: 1, cg: cgOf(unitName(1)) + '/nested', sockets: [424242] });
+  };
+  const nested = (dir: string): void => {
+    const d = path.join(fx.cg, cgOf(unitName(1)), dir);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'cgroup.procs'), '3999\n');
+  };
+
+  it('a scope whose cgroup holds a CHILD cgroup: its processes there are unseen by every predicate, so it is unmeasurable', () => {
+    one({ pane: 3001, procs: [3001] });
+    listener(); nested('nested');
+    const v = companion();
+    carried(unitName(1), 'child-cgroup', 'unknown', { companion: v });
+  });
+
+  // A scope's owner can chmod its own cgroup directory: cgroup.procs stays readable (the file's own mode), but a glob
+  // of the directory sees nothing, which would read as "no child cgroup". A root test run bypasses mode bits.
+  it.skipIf(process.getuid?.() === 0)('a cgroup directory the sweep cannot list (mode 0300, cgroup.procs still readable) hides a child cgroup: unmeasurable', () => {
+    one({ pane: 3001, procs: [3001] });
+    listener(); nested('nested');
+    const dir = path.join(fx.cg, cgOf(unitName(1)));
+    const v = companion();
+    fs.chmodSync(dir, 0o300);
+    try { carried(unitName(1), 'cgroup-dir', 'unknown', { companion: v }); } finally { fs.chmodSync(dir, 0o755); }
+  });
+
+  it('a child cgroup named like a dotfile is a child cgroup too', () => {
+    one({ pane: 3001, procs: [3001] });
+    listener(); nested('.hidden');
+    const v = companion();
+    carried(unitName(1), 'child-cgroup', 'unknown', { companion: v });
+  });
+
+  it('a Description whose server pid has a leading zero (process 007): /proc/007 is absent, which must not read as a server that is gone', () => {
+    one({ pane: 3001, procs: [3001], desc: 'tmux child pane 3001 launched by process 007' });
+    const v = companion();
+    carried(unitName(1), 'description', 'unknown', { companion: v });
+  });
+
+  it('a socket fd link that exists but cannot be read: not "no socket"', () => {
+    fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), '   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 424242 1 0000000000000000 100 0 0 10 0\n');
+    one({ pane: 3001, procs: [3001], procOpts: { age: 2 * 86400, cg: cgOf(unitName(1)), sockets: [424242] } });
+    // a readlink that fails for that one fd (EACCES on another uid's /proc/<pid>/fd/N) and answers the real one for every other path
+    fs.writeFileSync(path.join(fx.bin, 'readlink'), '#!/usr/bin/env bash\ncase "$1" in */3001/fd/10) exit 1 ;; esac\nexec env PATH="${PATH#*:}" readlink "$@"\n', { mode: 0o755 });
+    const v = companion();
+    carried(unitName(1), 'socket-fd', 'dead', { companion: v });
+  });
+
+  it('a parent chain that loops (a recycled pid) in a live scope: capped, and the scope carried — never a spin to the unit\'s deadline', () => {
+    proc(3001, { age: 3 * 86400, comm: 'claude', cg: cgOf(unitName(1)) });
+    proc(3002, { age: 3 * 86400, ppid: 3003, comm: 'bash', cg: cgOf(unitName(1)) });
+    proc(3003, { age: 3 * 86400, ppid: 3002, comm: 'bash', cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001, 3002, 3003] }); seen(u, 7 * HOUR, 7255660000);
+    livePanes(3001);
+    const v = companion();
+    carried(unitName(1), 'parent-hop-cap', 'live', { companion: v });
+    expect(Object.keys(rows('old')), 'a scope it could not walk lists nothing').toEqual([]);
+  });
+});
+
+// ── A RECORD IT CANNOT BELIEVE: the clock starts now, as for an absent line (Task 3's review) ──
+
+describe('a record line whose first=/cpu0= is out of bounds is not believed: the scope is first seen now', () => {
+  const forged = (u: string, first: string, cpu0: string): void => {
+    fs.writeFileSync(STATE(), `# ccd-scope-sweep v1 tick=1 up=1 mode=shadow\ndead ${u} first=${first} cpu0=${cpu0} verdict=report why=dead-under-6h server=ccd procs=1 mem=1 sockets=0 youngest=1 oldest=1 age=1 pids=1\n`);
+  };
+  it('a first= past 2^64 that WRAPS into the believable range (2^64 + UP - 30000): not believed, never a stop on the first tick', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] });
+    forged(u, String(2n ** 64n + BigInt(UP - 30000)), '7255660000');
+    arm();
+    const r = run();
+    expect(r.code, r.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'dead-under-6h', first: String(UP) });
+    expect(stops()).toEqual([]);
+  });
+  it('a first= with a leading zero (08 is not a bash number): not believed, and the tick is not aborted', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] });
+    forged(u, '08', '7255660000');
+    arm();
+    const r = run();
+    expect(r.code, r.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'dead-under-6h', first: String(UP) });
+    expect(stops()).toEqual([]);
+  });
+});
+
+// ── DOCTOR'S LONG-LIVED PROCESSES IN A LIVE PANE SCOPE ──────────────────────
+
+describe('the record lists every process older than a day in a live pane scope, but the pane\'s own and its MCP servers', () => {
+  it('a background shell two hours after the pane, older than a day: listed; the pane and an MCP server (and its child) are not', () => {
+    const u = unitName(1); const cg = cgOf(u);
+    proc(3001, { age: 3 * 86400, comm: 'claude', cg });                         // the pane's own process
+    proc(3002, { age: 3 * 86400 - 30, ppid: 3001, comm: 'npm exec mcp', cg });  // an MCP server: 30 s after the pane
+    proc(3003, { age: 3 * 86400 - 30, ppid: 3002, comm: 'node', cg });          // its child
+    proc(3004, { age: 3 * 86400 - 2 * HOUR, ppid: 3001, comm: 'bash', cg });    // a background shell, 2 h later
+    proc(3005, { age: 3 * HOUR, ppid: 3001, comm: 'sleep', cg });               // younger than a day
+    scope(1, { pane: 3001, procs: [3001, 3002, 3003, 3004, 3005] });
+    livePanes(3001);
+    run();
+    expect(Object.keys(rows('old'))).toEqual([`${u} pid=3004`]);
+    expect(rows('old')[`${u} pid=3004`]).toMatchObject({ comm: 'bash' });
+    expect(rows('dead')[u]).toBeUndefined();
+  });
+});
+
+// ── THE UNITS' DIRECTIVES ───────────────────────────────────────────────────
+// ccrc-install compares the installed unit against the repo's own copy, so a
+// changed value there goes unnoticed; these pin the values themselves, on
+// tmp-sweep.test.ts's pattern.
+
+describe('ccd-scope-sweep ships a budgeted oneshot on its own activation-anchored timer', () => {
+  const SYSTEMD = path.resolve(__dirname, '../../deploy/systemd');
+  const directives = (name: string): string[] => fs.readFileSync(path.join(SYSTEMD, name), 'utf8')
+    .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+
+  it('the service is a deadline-bounded, memory-capped, nice oneshot running the installed copy', () => {
+    const d = directives('ccd-scope-sweep.service');
+    expect(d).toContain('Type=oneshot');
+    expect(d).toContain('ExecStart=%h/.local/bin/ccd-scope-sweep');
+    // The only bound on a hung `tmux list-panes`: systemd disables the start timeout for oneshot by default.
+    expect(d).toContain('TimeoutStartSec=45');
+    expect(d).toContain('MemoryMax=256M');
+    expect(d).toContain('Nice=10');
+  });
+
+  it('the timer is every minute and anchored to its own activation, never to boot', () => {
+    const d = directives('ccd-scope-sweep.timer');
+    expect(d).toContain('OnActiveSec=2min');
+    expect(d).toContain('OnUnitActiveSec=60s');
+    expect(d.filter((l) => l.startsWith('OnBootSec='))).toEqual([]);
+  });
+});
+
+describe('wave 4b residue: carries, zombies and complete record writes', () => {
+  it('a retained carry clock is read back only after all predicates are measurable', () => {
+    const u = inert(1);
+    const child = path.join(fx.cg, cgOf(u), 'nested');
+    fs.mkdirSync(child);
+    arm();
+    expect(run().code).toBe(0);
+    expect(rows('carry')[u]).toEqual({ state: 'unknown', first: String(UP - 7 * HOUR), cpu0: '7255660000', why: 'child-cgroup' });
+    expect(stops()).toEqual([]);
+    fs.rmdirSync(child);
+    expect(run().code).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ first: String(UP - 7 * HOUR), cpu0: '7255660000', verdict: 'stopped' });
+    expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+  });
+
+  it('a first-ever unmeasurable scope has no invented clock', () => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    const u = scope(1, { pane: 3001, procs: [3001] });
+    fs.mkdirSync(path.join(fx.cg, cgOf(u), 'nested'));
+    expect(run().code).toBe(0);
+    expect(rows('carry')[u]).toEqual({ state: 'unknown', first: 'none', cpu0: 'none', why: 'child-cgroup' });
+    expect(rows('dead')[u]).toBeUndefined();
+    expect(stops()).toEqual([]);
+  });
+
+  it.each(['none cpu0=7', '08 cpu0=7', '99999999999999999 cpu0=7', '123 cpu0=none'])('a malformed carry clock %s is not trusted', (clock) => {
+    const u = inert(1);
+    fs.writeFileSync(STATE(), `# ccd-scope-sweep v1 tick=1 up=1 mode=shadow\ncarry ${u} state=unknown first=${clock} why=child-cgroup\n`);
+    arm();
+    expect(run().code).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ first: String(UP), verdict: 'report', why: 'dead-under-6h' });
+    expect(stops()).toEqual([]);
+  });
+
+  // F3 (fix round 1): the table above never shows the half-pair guard letting a half pair be TRUSTED. `08` and 17 digits are
+  // refused by CARRY_RE first, `123` is below the scope's start so the `first < born` bound resets it, and with the guard
+  // deleted `none cpu0=7` aborts the tick (`none` in `(( ))` under `set -u`: an exit-1 red, not a trusted clock). A numeric
+  // `first` INSIDE [born, UP] with the other half `none` reaches the guard alone: without it the pair is trusted (first kept,
+  // cpu0 `none` read as "moved"), whatever the regex, the age bounds or shell arithmetic do.
+  it('a malformed carry clock whose first is a number inside the scope\'s life and whose cpu0 is none is not trusted: the half-pair guard alone', () => {
+    const u = inert(1);
+    const born = Math.floor(Number(/^ActiveEnterTimestampMonotonic=(\d+)$/m.exec(fs.readFileSync(path.join(fx.base, 'show', u), 'utf8'))![1]) / 1_000_000);
+    const first = UP - 7 * HOUR;                      // the fixture scope's own clocks: born 9 days ago, now UP
+    expect(first, 'inside [born, UP]: no bound resets it').toBeGreaterThanOrEqual(born);
+    expect(first).toBeLessThanOrEqual(UP);
+    fs.writeFileSync(STATE(), `# ccd-scope-sweep v1 tick=1 up=1 mode=shadow\ncarry ${u} state=unknown first=${first} cpu0=none why=child-cgroup\n`);
+    arm();
+    expect(run().code).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ first: String(UP), verdict: 'report', why: 'dead-under-6h' });
+    expect(stops()).toEqual([]);
+  });
+
+  // F2 (fix round 1): `_ss_stat` refuses a state letter outside [A-Z] as unreadable, and Linux reports a ptrace-stopped
+  // process as `t` — a READABLE stat. The approved policy is fail-safe, kept as it is: a traced process anywhere on the box
+  // makes the box check unmeasurable, and a traced tmux server makes the server check unmeasurable. Either way the scope is
+  // carried and nothing is judged or stopped. A broader state vocabulary is not authorised here.
+  it.each(['S', 't'])('an unrelated process on the box in state %s: only the tracing stop makes the box check unmeasurable', (state) => {
+    const u = inert(1);
+    proc(3500, { age: 2 * 86400, state });
+    arm();
+    expect(run().code).toBe(0);
+    if (state === 't') {
+      expect(rows('carry')[u]).toEqual({ state: 'dead', first: String(UP - 7 * HOUR), cpu0: '7255660000', why: 'box-stat' });
+      expect(rows('dead')[u]).toBeUndefined();
+      expect(stops()).toEqual([]);
+    } else {
+      expect(rows('carry')[u]).toBeUndefined();
+      expect(rows('dead')[u]).toMatchObject({ verdict: 'stopped', why: 'none' });
+      expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+    }
+  });
+
+  // ccd's OWN tmux server (the one `tmux list-panes` answers from, CCD_SERVER) in a tracing stop: its stat file is rewritten
+  // in place, as the unreadable-stat case above chmods it, so no new fixture machinery is needed. The control leaves it
+  // untraced, so the same armed, inert scope is judged and stopped: the tracing stop alone decides.
+  it.each(['S', 't'])('ccd\'s own tmux server in state %s: only the tracing stop makes the server check unmeasurable', (state) => {
+    const u = inert(1);
+    if (state === 't') {
+      const stat = path.join(fx.proc, String(CCD_SERVER), 'stat');
+      const before = fs.readFileSync(stat, 'utf8');
+      fs.writeFileSync(stat, before.replace(') S ', ') t '));
+      expect(fs.readFileSync(stat, 'utf8'), 'the fixture server now reads as traced').not.toBe(before);
+    }
+    arm();
+    expect(run().code).toBe(0);
+    if (state === 't') {
+      expect(rows('carry')[u]).toEqual({ state: 'unknown', first: String(UP - 7 * HOUR), cpu0: '7255660000', why: 'server-stat' });
+      expect(rows('dead')[u]).toBeUndefined();
+      expect(stops()).toEqual([]);
+    } else {
+      expect(rows('carry')[u]).toBeUndefined();
+      expect(rows('dead')[u]).toMatchObject({ verdict: 'stopped', server: 'ccd', why: 'none' });
+      expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+    }
+  });
+
+  // F4 (fix round 1): a carry row keeps the bounded clock pair, never the verdict (PREVV becomes `carry`), so the next
+  // measured `would-stop` or `held` after a carry is announced AGAIN on the carried clock. That is a re-announcement, not a
+  // first reach, and not "first seen now": the clock is the original one. Pinned as the approved behaviour. A CONTROL tick
+  // beside each pin shows that an unchanged `would-stop` or `held` is silent, so the line after the carry is announced
+  // because of the carry (PREVV is `carry`), not because every tick announces its verdict.
+  const sayLines = (out: string, u: string): string[] => out.split('\n').filter((l) => l.includes(u));
+  const deadMinutes = (line: string): number => Number(/ — dead (\d+) min,/.exec(line)![1]);
+
+  it('would-stop -> would-stop -> carry -> would-stop (shadow): an unchanged verdict and a carry are silent, the next would-stop is announced again on the ORIGINAL clock', () => {
+    const u = inert(1);
+    const orig = { first: String(UP - 7 * HOUR), cpu0: '7255660000' };
+    const t1 = run();
+    expect(t1.code, t1.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', ...orig });
+    expect(sayLines(t1.out, u)).toHaveLength(1);
+    expect(sayLines(t1.out, u)[0]).toContain(`${u} would-stop`);
+
+    const control = run();                            // control: the same verdict again says nothing
+    expect(control.code, control.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', ...orig });
+    expect(sayLines(control.out, u), 'an unchanged would-stop is silent').toEqual([]);
+
+    const child = path.join(fx.cg, cgOf(u), 'nested');
+    fs.mkdirSync(child);                              // one predicate unmeasurable this tick
+    const t2 = run();
+    expect(t2.code, t2.err).toBe(0);
+    expect(rows('carry')[u]).toEqual({ state: 'unknown', ...orig, why: 'child-cgroup' });
+    expect(rows('dead')[u]).toBeUndefined();
+    expect(sayLines(t2.out, u), 'a carry says nothing').toEqual([]);
+
+    fs.rmdirSync(child);                              // measurable again
+    const t3 = run();
+    expect(t3.code, t3.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'would-stop', ...orig });
+    const said = sayLines(t3.out, u);
+    expect(said, 'announced again').toHaveLength(1);
+    expect(said[0]).toContain(`${u} would-stop`);
+    expect(said[0]).not.toContain('first seen now');
+    expect(deadMinutes(said[0]!), 'measured from the original first').toBeGreaterThanOrEqual(360);
+    expect(deadMinutes(said[0]!)).toBe(7 * 60);
+    expect(stops()).toEqual([]);
+  });
+
+  it('held -> held -> carry -> held (armed): an unchanged verdict and a carry are silent, the next held is announced again on the ORIGINAL clock', () => {
+    const us = [1, 2, 3, 4].map((n) => inert(n));    // one more than the stop budget: the fourth is `held`
+    const u = us[3]!;
+    const orig = { first: String(UP - 7 * HOUR), cpu0: '7255660000' };
+    arm();
+    const t1 = run();
+    expect(t1.code, t1.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'held', ...orig });
+    expect(sayLines(t1.out, u)).toHaveLength(1);
+    expect(sayLines(t1.out, u)[0]).toContain(`${u} held`);
+
+    const control = run();                            // control: the same verdict again says nothing
+    expect(control.code, control.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'held', ...orig });
+    expect(sayLines(control.out, u), 'an unchanged held is silent').toEqual([]);
+
+    const child = path.join(fx.cg, cgOf(u), 'nested');
+    fs.mkdirSync(child);
+    const t2 = run();
+    expect(t2.code, t2.err).toBe(0);
+    expect(rows('carry')[u]).toEqual({ state: 'unknown', ...orig, why: 'child-cgroup' });
+    expect(rows('dead')[u]).toBeUndefined();
+    expect(sayLines(t2.out, u), 'a carry says nothing').toEqual([]);
+
+    fs.rmdirSync(child);
+    const t3 = run();
+    expect(t3.code, t3.err).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'held', ...orig });
+    const said = sayLines(t3.out, u);
+    expect(said, 'announced again').toHaveLength(1);
+    expect(said[0]).toContain(`${u} held`);
+    expect(said[0]).not.toContain('first seen now');
+    expect(deadMinutes(said[0]!), 'measured from the original first').toBeGreaterThanOrEqual(360);
+    expect(deadMinutes(said[0]!)).toBe(7 * 60);
+    expect(stops().filter((l) => l.endsWith(u)), 'held is never stopped').toEqual([]);
+  });
+
+  it.each(['Z', 'S'])('an outside child in state %s has the corresponding live-child verdict', (state) => {
+    const u = inert(1);
+    proc(3500, { age: 2 * 86400, ppid: 3001, state, cg: '/elsewhere.scope' });
+    arm();
+    expect(run().code).toBe(0);
+    expect(rows('dead')[u]).toMatchObject(state === 'Z'
+      ? { verdict: 'stopped', why: 'none' }
+      : { verdict: 'report', why: 'parent-of-a-process-elsewhere' });
+    expect(stops()).toEqual(state === 'Z' ? [`--user stop --no-block ${u}`] : []);
+  });
+
+  // 2 and 11: the exemption reads the count as the whole text `0*[01]`, so 11 (and 10-19, 100+) must not pass as "1…"
+  it.each([2, 11])('an outside child in state Z with %i threads is a live child (a thread-group leader that has exited, its other threads running)', (threads) => {
+    const u = inert(1);
+    proc(3500, { age: 2 * 86400, ppid: 3001, state: 'Z', threads, cg: '/elsewhere.scope' });
+    arm();
+    expect(run().code).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'parent-of-a-process-elsewhere' });
+    expect(stops()).toEqual([]);
+  });
+
+  it('a valid empty replacement succeeds and removes an obsolete prior row', () => {
+    fs.writeFileSync(STATE(), '# old complete record\n');
+    const r = run();
+    expect(r).toMatchObject({ code: 0, out: '', err: '' });
+    expect(fs.readFileSync(STATE(), 'utf8')).toMatch(new RegExp(`^# ccd-scope-sweep v1 tick=\\d+ up=${UP} mode=shadow\\n$`));
+  });
+
+  it.each(['open', 'header', 'body', 'rename'])('a failed %s preserves the complete prior record and removes its own temporary', (where) => {
+    inert(1);
+    const before = fs.readFileSync(STATE(), 'utf8');
+    const env: Record<string, string> = {};
+    if (where === 'open') {
+      // mktemp answers a file below a nonexistent fixture parent: open fails
+      // even as root, creates no temporary, and never needs recursive cleanup.
+      const tmp = path.join(`${STATE()}.open-failure`, 'record');
+      fs.writeFileSync(path.join(fx.bin, 'mktemp'), `#!/usr/bin/env bash\nprintf '%s\\n' ${JSON.stringify(tmp)}\n`, { mode: 0o755 });
+    } else if (where === 'rename') {
+      fs.writeFileSync(path.join(fx.bin, 'mv'), '#!/usr/bin/env bash\nexit 1\n', { mode: 0o755 });
+    } else {
+      const file = path.join(fx.base, 'fail-write.bash');
+      const pattern = where === 'header' ? "'# ccd-scope-sweep'*" : "'%s\\n'";
+      fs.writeFileSync(file, `printf() { case "$1" in ${pattern}) return 1 ;; esac; builtin printf "$@"; }\n`);
+      env.BASH_ENV = file;
+    }
+    const r = run(env);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('previous record retained');
+    // Each failure says which guard caught it: an open failure also fails the later rename, so without this the open pin
+    // would stay green with the write guard deleted (the rename guard alone would catch it).
+    expect(r.err).toContain(where === 'rename' ? 'cannot replace verdict record' : 'cannot write verdict record');
+    expect(fs.readFileSync(STATE(), 'utf8')).toBe(before);
+    expect(fs.readdirSync(fx.xdg).filter((f) => f.startsWith('ccd-scope-sweep.state.'))).toEqual([]);
+    expect(stops()).toEqual([]);
+  });
+});
+
+// ── ROUND TRIP: the record the REAL sweep writes, read by both of its readers ──
+// Every reader fixture elsewhere writes `why=none`; the reasons the sweep really emits carry digits
+// (`dead-under-6h`, `process-started-under-6h`) and a reader whose reason class is `[a-z-]` rejects its
+// own writer's most common row (fix round 1).
+describe('the real sweep\'s record is readable by the doctor and the stage-6 instrument', () => {
+  const DOCTOR = path.resolve(__dirname, '../../ccd/ccrc-doctor-checks');
+  const TOOL = path.resolve(__dirname, '../../deploy/measure-continuity.py');
+  /** Two dead scopes, written by the real sweep: one first seen now (`dead-under-6h`), one past six hours whose CPU
+   *  moved and which holds a process younger than six hours (`cpu-moved,process-started-under-6h`). */
+  const realRecord = (): string => {
+    proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
+    scope(1, { pane: 3001, procs: [3001] });
+    proc(3011, { age: 2 * 86400, cg: cgOf(unitName(2)) });
+    proc(3012, { age: 5 * HOUR, ppid: 3011, cg: cgOf(unitName(2)) });
+    const u2 = scope(2, { pane: 3011, procs: [3011, 3012], cpu: 7255660001 });
+    seen(u2, 7 * HOUR, 7255660000);
+    const r = run();
+    expect(r.code, r.err).toBe(0);
+    expect(rows('dead')[unitName(1)]).toMatchObject({ why: 'dead-under-6h' });
+    expect(rows('dead')[u2]).toMatchObject({ why: 'cpu-moved,process-started-under-6h' });
+    return STATE();
+  };
+
+  it('the doctor reads both rows as measured dead scopes, not as lines it cannot read', () => {
+    const rec = realRecord();
+    // The real `_check_scope-sweep`, cut out of the shipped file, with the verdict printers stubbed.
+    const src = fs.readFileSync(DOCTOR, 'utf8').split('\n');
+    const from = src.findIndex((l) => l.startsWith('_check_scope-sweep() {'));
+    const to = src.findIndex((l, i) => i > from && l === '}');
+    expect(from).toBeGreaterThan(-1);
+    const fn = src.slice(from, to + 1).join('\n');
+    const script = [
+      '_dr_pass() { echo "PASS $1: $2"; return 0; }',
+      '_dr_warn() { echo "WARN $1: $2"; echo "  remedy: $3"; return 2; }',
+      '_dr_skip() { echo "SKIP $1: $2"; return 3; }',
+      fn,
+      '_check_scope-sweep',
+    ].join('\n');
+    const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 30000,
+      env: { PATH: process.env['PATH'] ?? '', HOME: fx.home, LC_ALL: 'C', CCRC_SCOPE_SWEEP_STATE: rec } });
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toMatch(/^WARN scope-sweep: 2 dead pane scope\(s\) and 0 long-lived process\(es\)/);
+    expect(r.stdout).not.toContain('cannot read');
+    expect(r.stdout).toContain('(dead-under-6h)');
+    expect(r.stdout).toContain('(cpu-moved,process-started-under-6h)');
+  });
+
+  it('the instrument counts both rows, and publishes counts rather than `unreadable`', () => {
+    realRecord();
+    const r = spawnSync('python3', ['-I', TOOL, '--home', fx.home, '--stage', '6', '--journal', path.join(fx.base, 'no-journal.json'), '--json'],
+      { encoding: 'utf8', timeout: 30000, env: { PATH: process.env['PATH'] ?? '', TZ: 'UTC', XDG_RUNTIME_DIR: fx.xdg } });
+    expect(r.status, r.stderr).toBe(0);
+    expect((JSON.parse(r.stdout) as { stage6: { inert_scopes: unknown } }).stage6.inert_scopes)
+      .toEqual({ mode: 'shadow', dead: 2, inert: 0, inert_dead_a_day_or_more: 0, carried_scopes: { dead: 0, live: 0, unknown: 0 } });
+  });
+
+  // D-4320: both readers take an `old` row's comm as one run of non-whitespace, so the writer
+  // must fold EVERY whitespace character, not only a space — a process name carrying a TAB
+  // otherwise makes the whole record unreadable to both. "Whitespace" is ASCII whitespace, in the `C`
+  // locale: the six characters (space, \t, \n, \v, \f, \r) the fold replaces, which is also all the
+  // doctor's `[^[:space:]]` treats as a separator there (these tests pin `LC_ALL=C` for both). Neither the
+  // sweep nor the doctor check sets `LC_ALL` itself, so under another locale (`C.UTF-8`, say) the fold and
+  // the doctor's class also take in non-ASCII space characters (U+2003); the instrument's `re.ASCII` `\S`
+  // reads the record folded either way. Python's Unicode `\s` would also split on \x1c-\x1f, \x85 and
+  // \xa0, which the `C`-locale fold leaves alone (fix round 2, F1).
+  /** A live pane scope whose one long-lived process has `comm`; the sweep's `old` row for it is returned with the record's path. */
+  const commRecord = (comm: string): { rec: string; row: Record<string, string> } => {
+    const u = unitName(1); const cg = cgOf(u);
+    proc(3001, { age: 3 * 86400, comm: 'claude', cg });
+    proc(3004, { age: 3 * 86400 - 2 * HOUR, ppid: 3001, comm, cg });
+    scope(1, { pane: 3001, procs: [3001, 3004] });
+    livePanes(3001);
+    const r = run();
+    expect(r.code, r.err).toBe(0);
+    return { rec: STATE(), row: rows('old')[`${u} pid=3004`]! };
+  };
+  /** A live pane scope whose one long-lived process has a TAB (and a space) in its comm. */
+  const tabRecord = (): string => {
+    const { rec, row } = commRecord('bash\tjob x');
+    expect(row).toMatchObject({ comm: 'bash_job_x' });
+    expect(fs.readFileSync(rec, 'utf8')).not.toContain('\t');
+    return rec;
+  };
+  /** The real `_check_scope-sweep`, cut out of the shipped file, run over `rec` with the verdict printers stubbed. */
+  const doctorReads = (rec: string): { stdout: string; stderr: string } => {
+    const src = fs.readFileSync(DOCTOR, 'utf8').split('\n');
+    const from = src.findIndex((l) => l.startsWith('_check_scope-sweep() {'));
+    const to = src.findIndex((l, i) => i > from && l === '}');
+    expect(from).toBeGreaterThan(-1);
+    const script = [
+      '_dr_pass() { echo "PASS $1: $2"; return 0; }',
+      '_dr_warn() { echo "WARN $1: $2"; echo "  remedy: $3"; return 2; }',
+      '_dr_skip() { echo "SKIP $1: $2"; return 3; }',
+      src.slice(from, to + 1).join('\n'),
+      '_check_scope-sweep',
+    ].join('\n');
+    const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 30000,
+      env: { PATH: process.env['PATH'] ?? '', HOME: fx.home, LC_ALL: 'C', CCRC_SCOPE_SWEEP_STATE: rec } });
+    return { stdout: r.stdout, stderr: r.stderr };
+  };
+  /** The stage-6 instrument's published `inert_scopes` for the record the fixture XDG_RUNTIME_DIR holds. */
+  const instrumentPublishes = (): unknown => {
+    const r = spawnSync('python3', ['-I', TOOL, '--home', fx.home, '--stage', '6', '--journal', path.join(fx.base, 'no-journal.json'), '--json'],
+      { encoding: 'utf8', timeout: 30000, env: { PATH: process.env['PATH'] ?? '', TZ: 'UTC', XDG_RUNTIME_DIR: fx.xdg } });
+    expect(r.status, r.stderr).toBe(0);
+    return (JSON.parse(r.stdout) as { stage6: { inert_scopes: unknown } }).stage6.inert_scopes;
+  };
+  const oneOldCounts = { mode: 'shadow', dead: 0, inert: 0, inert_dead_a_day_or_more: 0, carried_scopes: { dead: 0, live: 0, unknown: 0 } };
+
+  it('a comm with a TAB is written with `_`, and the doctor reads that row as one long-lived process', () => {
+    const r = doctorReads(tabRecord());
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toMatch(/^WARN scope-sweep: 0 dead pane scope\(s\) and 1 long-lived process\(es\)/);
+    expect(r.stdout).not.toContain('cannot read');
+    expect(r.stdout).toContain('bash_job_x');
+  });
+
+  it('a comm with a TAB is written with `_`, and the instrument publishes counts rather than `unreadable`', () => {
+    tabRecord();
+    expect(instrumentPublishes()).toEqual(oneOldCounts);
+  });
+
+  // Characters Python's Unicode `\s` calls whitespace but the `C`-locale fold, the doctor and the instrument's ASCII `\S` do not.
+  const UNICODE_ONLY_SPACE = [
+    { name: 'U+001C (file separator)', ch: '\x1c' },
+    { name: 'U+0085 (next line)', ch: '\u0085' },
+    { name: 'U+00A0 (no-break space)', ch: '\u00a0' },
+  ];
+  describe.each(UNICODE_ONLY_SPACE)('a comm with $name', ({ ch }) => {
+    const comm = `bash${ch}job`;
+
+    it('is kept as written by the `C`-locale fold, and the doctor reads that row as one long-lived process', () => {
+      const { rec, row } = commRecord(comm);
+      expect(row).toMatchObject({ comm });
+      const r = doctorReads(rec);
+      expect(r.stderr).toBe('');
+      expect(r.stdout).toMatch(/^WARN scope-sweep: 0 dead pane scope\(s\) and 1 long-lived process\(es\)/);
+      expect(r.stdout).not.toContain('cannot read');
+      expect(r.stdout).toContain(comm);
+    });
+
+    it('is kept as written, and the instrument publishes counts rather than `unreadable`', () => {
+      const { row } = commRecord(comm);
+      expect(row).toMatchObject({ comm });
+      expect(instrumentPublishes()).toEqual(oneOldCounts);
+    });
+  });
+});
+
+// ── THE BUSY ARM (D-7993): a provably dead session's busy orphans ──────────────────────────────────────────────────────
+// A dead scope that is not inert stays `report` on its `dead` line. A `busy` line beside it says whether its SESSION is
+// provably dead: every process's CCRC_SESSION_GENERATION names no registry row, or a stopped one, and no live pane
+// carries it. Past the session's own six hours it reads `would-stop (busy)`, and it is stopped only with BOTH switches.
+describe('the busy arm: a busy scope of a provably dead session', () => {
+  const GEN = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+  const OTHER = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+  const ENV = [`CCRC_SESSION_GENERATION=${GEN}`, 'PATH=/usr/bin'];
+  const TCP_LISTEN = (ino: number, port = '1F90'): string => `   0: 0100007F:${port} 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 ${ino} 1 0000000000000000 100 0 0 10 0\n`;
+  const TCP_ESTAB = (ino: number, local: string, rem: string): string => `   1: ${local} ${rem} 01 00000000:00000000 00:00000000 00000000  1000        0 ${ino} 1 0000000000000000 100 0 0 10 0\n`;
+  type P = Parameters<typeof proc>[1];
+  /** A `while true` loop and its latest `sleep`: CPU moved since first seen dead, a child minutes old. The scope has been
+   *  dead seven hours, and `sessionAgo` (default seven hours) dates the session's own clock; null writes no busy line. */
+  const busy = (n: number, o: { env?: readonly string[]; loop?: Partial<P>; sessionAgo?: number | null } = {}): string => {
+    const u = unitName(n); const cg = cgOf(u); const pid = 3000 + n * 10;
+    proc(pid, { age: 2 * 86400, comm: 'bash', cg, env: o.env ?? ENV, ...o.loop });
+    proc(pid + 1, { age: 60, comm: 'sleep', ppid: pid, cg, env: o.env ?? ENV });
+    scope(n, { pane: pid + 9, procs: [pid, pid + 1], cpu: 7255669999 });
+    seen(u, 7 * HOUR, 7255660000);
+    if (o.sessionAgo !== null) seenBusy(u, o.sessionAgo ?? 7 * HOUR);
+    return u;
+  };
+  const stopped = (): void => regRow('project-a-one', GEN, { stopped: true });
+  const both = (): void => { arm(); armBusy(); };
+  const busyWhy = (u: string): string[] => rows('busy')[u]!['why']!.split(',');
+  const notStopped = (u: string, verdict: string, why: string): void => {
+    both();
+    const r = run();
+    expect(r.code, r.err).toBe(0);
+    expect(rows('busy')[u]).toMatchObject({ verdict });
+    expect(busyWhy(u)).toContain(why);
+    expect(stops()).toEqual([]);
+  };
+
+  describe('(a) live with both switches, shadow otherwise', () => {
+    it('both switches: stopped, its `dead` line still `report`', () => {
+      const u = busy(1); stopped(); both();
+      const r = run();
+      expect(r.code, r.err).toBe(0);
+      expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped', why: 'none', session: 'project-a-one', n: '2', procs: '3010:bash,3011:sleep' });
+      expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'cpu-moved,process-started-under-6h' });
+      expect(r.out).toContain(`${u} stopped (busy)`);
+    });
+
+    it('only scope-sweep-live: would-stop (busy), with its process list, and NEVER a stop', () => {
+      const u = busy(1); stopped(); arm();
+      const r = run();
+      expect(r.code, r.err).toBe(0);
+      expect(stops()).toEqual([]);
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'would-stop', why: 'none', procs: '3010:bash,3011:sleep', first: String(UP - 7 * HOUR) });
+      expect(r.out).toContain(`${u} would-stop (busy)`);
+      expect(r.out).toContain('3010:bash,3011:sleep');
+    });
+
+    it('neither switch: would-stop (busy), and no stop', () => {
+      const u = busy(1); stopped();
+      run();
+      expect(stops()).toEqual([]);
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'would-stop' });
+    });
+
+    it('only scope-sweep-busy-live: the busy switch alone arms nothing', () => {
+      const u = busy(1); stopped(); armBusy();
+      run();
+      expect(stops()).toEqual([]);
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'would-stop' });
+      expect(fs.readFileSync(STATE(), 'utf8')).not.toContain('busy-mode');
+    });
+
+    it('a stop systemd refuses is recorded `stop-failed`', () => {
+      const u = busy(1); stopped(); both(); fs.writeFileSync(path.join(fx.base, 'stop-rc'), '1');
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stop-failed' });
+    });
+
+    it('a mock server: a listening socket and nothing moving is collected too', () => {
+      const u = unitName(1);
+      fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), TCP_LISTEN(424242));
+      proc(3001, { age: 2 * 86400, comm: 'node', cg: cgOf(u), env: ENV, sockets: [424242] });
+      scope(1, { pane: 3009, procs: [3001] }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); both();
+      expect(run().code).toBe(0);
+      expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'socket' });
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped', procs: '3001:node' });
+      expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+    });
+
+    it('a row that is ABSENT is as dead as a stopped one: its generation names no registry row', () => {
+      const u = busy(1); regRow('project-a-two', OTHER, { stopped: false }); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped', session: '-' });
+      expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+    });
+
+    it('a scope of a tmux server that no longer runs is judged the same way', () => {
+      const u = unitName(1); const cg = cgOf(u);
+      proc(3010, { age: 2 * 86400, comm: 'bash', cg, env: ENV });
+      scope(1, { pane: 3019, server: 7777, procs: [3010], cpu: 7255669999 }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped' });
+    });
+
+    it('a comm holding a comma or a space is folded, so a process list stays one word of two-part items', () => {
+      const u = unitName(1); const cg = cgOf(u);
+      proc(3010, { age: 2 * 86400, comm: 'tail,f x', cg, env: ENV });
+      scope(1, { pane: 3019, procs: [3010], cpu: 7255669999 }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ procs: '3010:tail_f_x' });
+    });
+
+    it('a long process list is cut, and `n` still counts every process', () => {
+      const u = unitName(1); const cg = cgOf(u);
+      const pids = Array.from({ length: 20 }, (_, i) => 3100 + i);
+      for (const p of pids) proc(p, { age: 2 * 86400, comm: 'w', cg, env: ENV });
+      scope(1, { pane: 3099, procs: pids, cpu: 7255669999 }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped();
+      run();
+      expect(rows('busy')[u]!['n']).toBe('20');
+      expect(rows('busy')[u]!['procs']!.split(',')).toHaveLength(16);
+    });
+  });
+
+  describe('the grace is the SESSION\'s: six hours from when it was first seen provably dead', () => {
+    it('first seen dead now, though the scope has been dead seven hours: its clock starts, nothing stops', () => {
+      const u = busy(1, { sessionAgo: null }); stopped();
+      notStopped(u, 'report', 'session-dead-under-6h');
+      expect(rows('busy')[u]!['first']).toBe(String(UP));
+    });
+
+    it('a minute short of six hours: not yet', () => {
+      const u = busy(1, { sessionAgo: 6 * HOUR - 60 }); stopped();
+      notStopped(u, 'report', 'session-dead-under-6h');
+    });
+
+    it('control: a minute past six hours: stopped', () => {
+      const u = busy(1, { sessionAgo: 6 * HOUR + 60 }); stopped(); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped' });
+    });
+
+    it('a session seen live drops the clock, so a session stopped again waits its six hours from zero', () => {
+      const u = busy(1); regRow('project-a-one', GEN); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'report', why: 'session-live', first: 'none' });
+      fs.writeFileSync(path.join(fx.home, '.cc-sessions', 'project-a-one.stopped'), '');
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'report', why: 'session-dead-under-6h', first: String(UP) });
+      expect(stops()).toEqual([]);
+    });
+
+    it.each([['earlier than the scope', 1], ['later than now', UP + HOUR], ['past 2^64 wrapped into range', null]])('a clock %s is not believed: first seen now', (_name, first) => {
+      const u = busy(1, { sessionAgo: null }); stopped();
+      const v = first === null ? String(2n ** 64n + BigInt(UP - 30000)) : String(first);
+      fs.appendFileSync(STATE(), `busy ${u} first=${v} verdict=report why=none session=- n=1 procs=1:x\n`);
+      notStopped(u, 'report', 'session-dead-under-6h');
+      expect(rows('busy')[u]!['first']).toBe(String(UP));
+    });
+  });
+
+  describe('(b) a busy scope of a LIVE session is never touched', () => {
+    it('a row that stands with no stop stamp: the swap case, an old pane\'s scope of a session running on a new pane', () => {
+      const u = busy(1); regRow('project-a-one', GEN);
+      notStopped(u, 'report', 'session-live');
+      expect(rows('busy')[u]!['first']).toBe('none');
+    });
+
+    it('a stop stamp beside a live pane carrying that generation: the pane wins', () => {
+      const u = busy(1); stopped();
+      proc(4000, { age: 86400, comm: '2.1.318', env: ENV, cg: cgOf(unitName(8)) });
+      livePanes(4000);
+      notStopped(u, 'report', 'session-live');
+    });
+
+    it('a row gone, but a live pane carries that generation: the pane wins', () => {
+      const u = busy(1);
+      proc(4000, { age: 86400, comm: '2.1.318', env: ENV, cg: cgOf(unitName(8)) });
+      livePanes(4000);
+      notStopped(u, 'report', 'session-live');
+    });
+
+    it('a scope with a live pane is not a dead scope at all: no `dead` line, no `busy` line', () => {
+      const u = busy(1); stopped(); livePanes(3010); both();
+      run();
+      expect(rows('dead')[u]).toBeUndefined();
+      expect(rows('busy')[u]).toBeUndefined();
+      expect(stops()).toEqual([]);
+    });
+  });
+
+  // `cmd_hibernate` writes `.hibernated` and then `_ws_unsupervise` stamps `.stopped`, so every sleeping row reads stopped
+  // too. It is asleep, not dead (D-5242): mail, an open screen or a send-back wakes it, and it expects its scope intact.
+  describe('(b2) a busy scope of a SLEEPING session is never touched', () => {
+    const asleep = (): void => regRow('project-a-one', GEN, { stopped: true, hibernated: true });
+    const mark = (): string => path.join(fx.home, '.cc-sessions', 'project-a-one.hibernated');
+
+    it('a row with `.stopped` and `.hibernated`: the swapped-away dev server of a worker put to sleep, held with both switches up', () => {
+      const u = busy(1); asleep();
+      notStopped(u, 'report', 'session-asleep');
+      expect(rows('busy')[u]).toMatchObject({ why: 'session-asleep', first: 'none', session: '-' });
+      expect(rows('dead')[u]).toMatchObject({ verdict: 'report' });
+    });
+
+    it('shadow says the same: no `would-stop (busy)` for the shadow week to misread', () => {
+      const u = busy(1); asleep();
+      expect(run().out).toBe('');
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'report', why: 'session-asleep' });
+    });
+
+    it('the marker before the stop stamp: `ccd hibernate` writes it first, and the row is asleep already', () => {
+      const u = busy(1); regRow('project-a-one', GEN, { hibernated: true });
+      notStopped(u, 'report', 'session-asleep');
+    });
+
+    it('a marker that is a dangling link still holds: `ccd`\'s own wake clears one, so a mark that stands is no death', () => {
+      const u = busy(1); stopped(); fs.symlinkSync(path.join(fx.base, 'nowhere'), mark());
+      notStopped(u, 'report', 'session-asleep');
+    });
+
+    it('sleep drops the clock, so a `ccd stop` that ends the sleep waits its six hours from zero', () => {
+      const u = busy(1); asleep(); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'report', why: 'session-asleep', first: 'none' });
+      fs.rmSync(mark());
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'report', why: 'session-dead-under-6h', first: String(UP) });
+      expect(stops()).toEqual([]);
+    });
+
+    it('control: the marker gone, an ordinary stopped row past its grace is collected', () => {
+      const u = busy(1); stopped(); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped', why: 'none', session: 'project-a-one' });
+      expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+    });
+
+    it('a process of a sleeping session beside a stopped one\'s: the sleeper holds the scope', () => {
+      const u = unitName(1); const cg = cgOf(u);
+      proc(3010, { age: 2 * 86400, comm: 'bash', cg, env: ENV });
+      proc(3011, { age: 2 * 86400, comm: 'node', cg, env: [`CCRC_SESSION_GENERATION=${OTHER}`] });
+      scope(1, { pane: 3019, procs: [3010, 3011], cpu: 7255669999 }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); regRow('project-a-two', OTHER, { stopped: true, hibernated: true });
+      notStopped(u, 'report', 'session-asleep');
+    });
+
+    it('a live pane beside a sleeping row says `session-live`: the stronger fact', () => {
+      const u = busy(1); asleep();
+      proc(4000, { age: 86400, comm: '2.1.318', env: ENV, cg: cgOf(unitName(8)) });
+      livePanes(4000);
+      notStopped(u, 'report', 'session-live');
+      expect(busyWhy(u)).toEqual(['session-live']);
+    });
+  });
+
+  describe('(c) every existing hold still holds', () => {
+    it('a live Claude Code process, by its real shape: comm the version, argv[0] under claude/versions', () => {
+      const u = busy(1, { loop: { comm: '2.1.318', argv: ['/home/fixture/.local/share/claude/versions/2.1.318', '--session-id', 'x'] } }); stopped();
+      notStopped(u, 'report', 'claude-process');
+    });
+
+    it('a Claude Code process named plainly `claude`', () => {
+      const u = busy(1, { loop: { comm: 'claude', argv: ['claude'] } }); stopped();
+      notStopped(u, 'report', 'claude-process');
+    });
+
+    it('control: a process whose name only contains claude is no Claude Code process', () => {
+      const u = busy(1, { loop: { comm: 'claude-mock', argv: ['/srv/claude-mock'] } }); stopped(); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped' });
+    });
+
+    it('a pane that still exists on ccd\'s server, its process outside this scope', () => {
+      const u = busy(1); stopped();
+      proc(3019, { age: 86400, comm: 'bash', env: [`CCRC_SESSION_GENERATION=${OTHER}`], cg: cgOf(unitName(8)) });
+      regRow('project-a-two', OTHER, { stopped: true });
+      livePanes(3019);
+      notStopped(u, 'report', 'pane-exists');
+    });
+
+    it('a scope another live session uses, by its generation: a process carrying a live row\'s, beside the dead one\'s', () => {
+      const u = unitName(1); const cg = cgOf(u);
+      proc(3010, { age: 2 * 86400, comm: 'bash', cg, env: ENV });
+      proc(3011, { age: 2 * 86400, comm: 'node', cg, env: [`CCRC_SESSION_GENERATION=${OTHER}`] });
+      scope(1, { pane: 3019, procs: [3010, 3011], cpu: 7255669999 }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); regRow('project-a-two', OTHER);
+      notStopped(u, 'report', 'session-live');
+    });
+
+    it('a scope another live session uses, by a child in another cgroup', () => {
+      const u = busy(1); stopped();
+      proc(3500, { age: 2 * 86400, ppid: 3010, cg: '/user.slice/elsewhere.service' });
+      notStopped(u, 'report', 'parent-of-a-process-elsewhere');
+    });
+
+    it('a scope another live session uses, by a loopback connection from outside the scope (v4)', () => {
+      const u = unitName(1);
+      fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), TCP_LISTEN(424242) + TCP_ESTAB(424243, '0100007F:1F90', '0100007F:C000'));
+      proc(3010, { age: 2 * 86400, comm: 'node', cg: cgOf(u), env: ENV, sockets: [424242, 424243] });
+      scope(1, { pane: 3019, procs: [3010] }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped();
+      notStopped(u, 'report', 'peer');
+    });
+
+    it('a scope another live session uses, by a loopback connection from outside the scope (v6)', () => {
+      const u = unitName(1);
+      fs.appendFileSync(path.join(fx.proc, 'net', 'tcp6'), `   0: 00000000000000000000000001000000:1F90 00000000000000000000000001000000:C000 01 00000000:00000000 00:00000000 00000000  1000        0 424243 1 0000000000000000 100 0 0 10 0\n`);
+      proc(3010, { age: 2 * 86400, comm: 'node', cg: cgOf(u), env: ENV, sockets: [424243] });
+      scope(1, { pane: 3019, procs: [3010] }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped();
+      notStopped(u, 'report', 'peer');
+    });
+
+    it('a scope another live session uses, by an accepted connection on its listening Unix socket', () => {
+      const u = unitName(1);
+      fs.appendFileSync(path.join(fx.proc, 'net', 'unix'), '0000000000000000: 00000002 00000000 00010000 0001 01 626262 /tmp/server.sock\n0000000000000000: 00000003 00000000 00000000 0001 03 636363 /tmp/server.sock\n');
+      proc(3010, { age: 2 * 86400, comm: 'node', cg: cgOf(u), env: ENV, sockets: [626262, 636363] });
+      scope(1, { pane: 3019, procs: [3010] }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped();
+      notStopped(u, 'report', 'peer');
+    });
+
+    it('control: a connection between two processes of the SAME scope is no outside user', () => {
+      const u = unitName(1);
+      fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), TCP_LISTEN(424242) + TCP_ESTAB(424243, '0100007F:1F90', '0100007F:C000') + TCP_ESTAB(424244, '0100007F:C000', '0100007F:1F90'));
+      proc(3010, { age: 2 * 86400, comm: 'node', cg: cgOf(u), env: ENV, sockets: [424242, 424243, 424244] });
+      scope(1, { pane: 3019, procs: [3010] }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped' });
+    });
+
+    it('control: an outbound connection to another host is no user of this scope', () => {
+      const u = unitName(1);
+      fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), TCP_ESTAB(424243, '0A00000A:C000', '08080808:01BB'));
+      proc(3010, { age: 2 * 86400, comm: 'node', cg: cgOf(u), env: ENV, sockets: [424243] });
+      scope(1, { pane: 3019, procs: [3010] }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped' });
+    });
+
+    it('ccrc-tmux-server.scope, a scope of another live tmux server, and a scope outside the session slice: no line at all', () => {
+      const mk = (n: number, pid: number, o: Partial<Parameters<typeof scope>[1]>): string => {
+        proc(pid, { age: 2 * 86400, comm: 'bash', cg: cgOf(o.unit ?? unitName(n)), env: ENV });
+        const u = scope(n, { pane: pid + 9, procs: [pid], cpu: 7255669999, ...o });
+        seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+        return u;
+      };
+      server(5000, 30 * 86400);
+      const us = [mk(1, 3010, { unit: 'ccrc-tmux-server.scope' }), mk(2, 3020, { server: 5000 }), mk(3, 3030, { slice: 'app.slice' })];
+      stopped(); both();
+      run();
+      for (const u of us) { expect(rows('dead')[u]).toBeUndefined(); expect(rows('busy')[u]).toBeUndefined(); }
+      expect(stops()).toEqual([]);
+    });
+
+    it('a recycled server pid: reported on the `dead` line, and no busy judgment', () => {
+      const u = unitName(1);
+      proc(3010, { age: 2 * 86400, comm: 'bash', cg: cgOf(u), env: ENV });
+      proc(5000, { age: 30 * 86400, comm: 'node' });
+      scope(1, { pane: 3019, server: 5000, procs: [3010], cpu: 7255669999 }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); both();
+      run();
+      expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'server-pid-reused' });
+      expect(rows('busy')[u]).toBeUndefined();
+      expect(stops()).toEqual([]);
+    });
+
+    it('scope-sweep-paused stops the busy arm too: nothing measured, recorded or stopped', () => {
+      busy(1); stopped(); both();
+      fs.writeFileSync(path.join(fx.home, '.cc-sessions', 'scope-sweep-paused'), '');
+      const before = fs.readFileSync(STATE(), 'utf8');
+      expect(run()).toMatchObject({ code: 0, out: '', err: '' });
+      expect(stops()).toEqual([]);
+      expect(fs.readFileSync(STATE(), 'utf8')).toBe(before);
+    });
+
+    it('a scope dead under six hours whose only reason is its clock is no busy candidate: an inert scope gets no busy line', () => {
+      proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)), env: ENV });
+      const u = scope(1, { pane: 3001, procs: [3001] }); stopped(); both();
+      run();
+      expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'dead-under-6h' });
+      expect(rows('busy')[u]).toBeUndefined();
+    });
+  });
+
+  describe('(d) the three-a-tick bound counts inert and busy stops together', () => {
+    it('two inert and two busy: three stopped, the fourth held for the next tick', () => {
+      const i1 = inert(1, 3901); const i2 = inert(2, 3902);
+      const b1 = busy(3); const b2 = busy(4); stopped(); both();
+      expect(run().code).toBe(0);
+      expect(stops()).toHaveLength(3);
+      expect(rows('dead')[i1]!['verdict']).toBe('stopped');
+      expect(rows('dead')[i2]!['verdict']).toBe('stopped');
+      expect([rows('busy')[b1]!['verdict'], rows('busy')[b2]!['verdict']].sort()).toEqual(['held', 'stopped']);
+    });
+
+    it('three busy first spend the tick: an inert one behind them is held', () => {
+      const bs = [1, 2, 3].map((n) => busy(n)); const i = inert(4, 3904); stopped(); both();
+      expect(run().code).toBe(0);
+      expect(stops()).toHaveLength(3);
+      expect(bs.map((u) => rows('busy')[u]!['verdict'])).toEqual(['stopped', 'stopped', 'stopped']);
+      expect(rows('dead')[i]!['verdict']).toBe('held');
+    });
+
+    it('four busy alone: three stopped, one held', () => {
+      const bs = [1, 2, 3, 4].map((n) => busy(n)); stopped(); both();
+      run();
+      expect(stops()).toHaveLength(3);
+      expect(bs.map((u) => rows('busy')[u]!['verdict'])).toEqual(['stopped', 'stopped', 'stopped', 'held']);
+    });
+
+    it('with only scope-sweep-live the bound is the inert path\'s alone: a would-stop (busy) spends none of it', () => {
+      const b = [1, 2, 3].map((n) => busy(n)); const is = [4, 5, 6].map((n) => inert(n, 3900 + n)); stopped(); arm();
+      run();
+      expect(stops()).toHaveLength(3);
+      expect(is.map((u) => rows('dead')[u]!['verdict'])).toEqual(['stopped', 'stopped', 'stopped']);
+      expect(b.map((u) => rows('busy')[u]!['verdict'])).toEqual(['would-stop', 'would-stop', 'would-stop']);
+    });
+  });
+
+  describe('(e) a fact it cannot measure stays `carry`, never a stop', () => {
+    const carried = (u: string, why: string): void => {
+      notStopped(u, 'carry', why);
+      expect(rows('busy')[u]!['first'], 'the clock survives a carry').toBe(String(UP - 7 * HOUR));
+    };
+
+    it('a process whose environ cannot be read', () => {
+      const u = busy(1, { loop: { envUnreadable: true } }); stopped();
+      try { carried(u, 'env'); } finally { fs.chmodSync(path.join(fx.proc, '3010', 'environ'), 0o644); }
+    });
+
+    it('a process whose cmdline cannot be read: it cannot be told Claude Code or not', () => {
+      const u = busy(1, { loop: { cmdlineUnreadable: true } }); stopped();
+      try { carried(u, 'cmdline'); } finally { fs.chmodSync(path.join(fx.proc, '3010', 'cmdline'), 0o644); }
+    });
+
+    it('no process carries a generation: nothing names its session', () => {
+      const u = busy(1, { env: ['PATH=/usr/bin'] }); stopped();
+      carried(u, 'session-env');
+    });
+
+    it('a generation that is not one (never read as "names no row")', () => {
+      const u = busy(1, { env: ['CCRC_SESSION_GENERATION=not-a-uuid'] }); stopped();
+      carried(u, 'env');
+    });
+
+    it('a registry generation file that is not one: which row is which cannot be said', () => {
+      const u = busy(1); stopped(); regRow('project-a-two', 'garbage');
+      carried(u, 'registry');
+    });
+
+    it('a registry generation that is a link', () => {
+      const u = busy(1); stopped();
+      fs.symlinkSync('/dev/null', path.join(fx.home, '.cc-sessions', 'project-a-two.generation'));
+      carried(u, 'registry');
+    });
+
+    it.skipIf(process.getuid?.() === 0)('a registry it cannot list', () => {
+      const u = busy(1); stopped();
+      const reg = path.join(fx.home, '.cc-sessions');
+      fs.writeFileSync(path.join(reg, 'scope-sweep-live'), ''); fs.writeFileSync(path.join(reg, 'scope-sweep-busy-live'), '');
+      fs.chmodSync(reg, 0o300);
+      try {
+        const r = run();
+        expect(r.code, r.err).toBe(0);
+        expect(rows('busy')[u]).toMatchObject({ verdict: 'carry', why: 'registry' });
+        expect(stops()).toEqual([]);
+      } finally { fs.chmodSync(reg, 0o755); }
+    });
+
+    it('a live pane whose environ cannot be read: it could be this session\'s', () => {
+      const u = busy(1); stopped();
+      proc(4000, { age: 86400, comm: '2.1.318', envUnreadable: true, cg: cgOf(unitName(8)) });
+      livePanes(4000);
+      try { carried(u, 'pane-env'); } finally { fs.chmodSync(path.join(fx.proc, '4000', 'environ'), 0o644); }
+    });
+
+    it('tmux answers nothing: no pane can be asked after', () => {
+      const u = unitName(1);
+      proc(3010, { age: 2 * 86400, comm: 'bash', cg: cgOf(u), env: ENV });
+      scope(1, { pane: 3019, server: 7777, procs: [3010], cpu: 7255669999 }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); fs.rmSync(path.join(fx.base, 'panes'));
+      carried(u, 'tmux-unknown');
+    });
+
+    it('an inert-path predicate it cannot measure: the `carry` row stands, the busy clock survives it, and no stop', () => {
+      const u = busy(1, { loop: { netns: 'net:[4026532999]' } }); stopped(); both();
+      expect(run().code).toBe(0);
+      expect(rows('carry')[u]).toEqual({ state: 'dead', first: String(UP - 7 * HOUR), cpu0: '7255660000', why: 'socket-fd' });
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'carry', why: 'socket-fd', first: String(UP - 7 * HOUR) });
+      expect(rows('dead')[u]).toBeUndefined();
+      expect(stops()).toEqual([]);
+    });
+
+    it('a carried clock reaches a stop only after a later tick measures everything', () => {
+      const u = busy(1, { loop: { netns: 'net:[4026532999]' } }); stopped(); both();
+      run();
+      expect(stops()).toEqual([]);
+      fs.rmSync(path.join(fx.proc, '3010', 'ns', 'net'));
+      fs.symlinkSync('net:[4026531840]', path.join(fx.proc, '3010', 'ns', 'net'));
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped', first: String(UP - 7 * HOUR) });
+    });
+
+    it('a live-scope carry keeps no busy clock: the hop cap\'s scope is live, so its session is', () => {
+      const u = unitName(1); const cg = cgOf(u);
+      proc(3001, { age: 3 * 86400, comm: 'claude', cg });
+      proc(3002, { age: 3 * 86400, ppid: 3003, comm: 'bash', cg });
+      proc(3003, { age: 3 * 86400, ppid: 3002, comm: 'bash', cg });
+      scope(1, { pane: 3001, procs: [3001, 3002, 3003] }); seenBusy(u, 7 * HOUR); livePanes(3001);
+      run();
+      expect(rows('carry')[u]).toMatchObject({ state: 'live', why: 'parent-hop-cap' });
+      expect(rows('busy')[u]).toBeUndefined();
+    });
+
+    it('a previous `busy` line it cannot read is passed over: no clock, no abort', () => {
+      const u = busy(1, { sessionAgo: null }); stopped();
+      fs.appendFileSync(STATE(), `busy ${u} first=08 verdict=report why=none session=- n=1 procs=1:x\n`);
+      notStopped(u, 'report', 'session-dead-under-6h');
+    });
+  });
+
+  describe('the inert path is today\'s, byte for byte', () => {
+    /** One record's lines but the busy arm's own, with the header's tick dropped. */
+    const inertLines = (): string[] => fs.readFileSync(STATE(), 'utf8').split('\n')
+      .filter((l) => !/^busy(-mode)? /.test(l)).map((l) => l.replace(/ tick=\d+ /, ' '));
+
+    it('a busy scope\'s `dead` line and every inert verdict read the same whatever the session and the busy switch say', () => {
+      const i = inert(1, 3901); const u = busy(2);
+      arm(); run();
+      const shadowed = inertLines();
+      const again = (): string[] => {
+        fs.writeFileSync(path.join(fx.base, 'calls'), '');
+        fs.rmSync(STATE());
+        seen(i, 7 * HOUR, 7255660000); seen(u, 7 * HOUR, 7255660000);
+        run();
+        return inertLines();
+      };
+      regRow('project-a-one', GEN);
+      expect(again()).toEqual(shadowed.map((l) => l));
+      expect(shadowed.some((l) => l.includes(`dead ${u} `) && l.includes('verdict=report'))).toBe(true);
+    });
+
+    it('with no busy scope the record has no line of the arm\'s at all, and the empty record is the header alone', () => {
+      const r = run();
+      expect(r).toMatchObject({ code: 0, out: '', err: '' });
+      expect(fs.readFileSync(STATE(), 'utf8')).toMatch(new RegExp(`^# ccd-scope-sweep v1 tick=\\d+ up=${UP} mode=shadow\\n$`));
+    });
+
+    it('both switches stood: the record says `busy-mode live`, its header unchanged', () => {
+      both(); run();
+      expect(fs.readFileSync(STATE(), 'utf8')).toMatch(new RegExp(`^# ccd-scope-sweep v1 tick=\\d+ up=${UP} mode=live\\nbusy-mode live\\n$`));
+    });
+  });
+
+  describe('what it says', () => {
+    it('an unchanged verdict is silent, a changed one says one line, and a `report` says nothing', () => {
+      const u = busy(1); stopped();
+      expect(run().out).toContain(`${u} would-stop (busy)`);
+      expect(run().out).toBe('');
+      const v = busy(2, { sessionAgo: null });
+      const r = run();
+      expect(r.out).not.toContain(v);
+      expect(rows('busy')[v]).toMatchObject({ verdict: 'report' });
+    });
+
+    it('it never writes a word of a process\'s environment, the generation included', () => {
+      const u = busy(1); stopped(); both();
+      const r = run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped' });
+      expect(r.out + r.err + fs.readFileSync(STATE(), 'utf8')).not.toContain(GEN);
+    });
+
+    it('it never reads the pane scope marker: a marker naming this unit for a LIVE row changes nothing', () => {
+      const u = busy(1); stopped();
+      fs.writeFileSync(path.join(fx.home, '.cc-sessions', 'project-a-other.panescope'), u);
+      both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped' });
+    });
+  });
+
+  // The record's two other readers, over rows the REAL sweep wrote.
+  describe('the doctor and the instrument read the arm\'s lines', () => {
+    const DOCTOR = path.resolve(__dirname, '../../ccd/ccrc-doctor-checks');
+    const TOOL = path.resolve(__dirname, '../../deploy/measure-continuity.py');
+    const doctor = (): { stdout: string; stderr: string } => {
+      const src = fs.readFileSync(DOCTOR, 'utf8').split('\n');
+      const from = src.findIndex((l) => l.startsWith('_check_scope-sweep() {'));
+      const to = src.findIndex((l, i) => i > from && l === '}');
+      const script = ['_dr_pass() { echo "PASS $1: $2"; return 0; }', '_dr_warn() { echo "WARN $1: $2"; echo "  remedy: $3"; return 2; }',
+        '_dr_skip() { echo "SKIP $1: $2"; return 3; }', src.slice(from, to + 1).join('\n'), '_check_scope-sweep'].join('\n');
+      const r = spawnSyncGroup('bash', ['-c', script], { encoding: 'utf8', timeout: 30000,
+        env: { PATH: process.env['PATH'] ?? '', HOME: fx.home, LC_ALL: 'C', CCRC_SCOPE_SWEEP_STATE: STATE() } });
+      return { stdout: r.stdout, stderr: r.stderr };
+    };
+    const instrument = (): unknown => {
+      const r = spawnSync('python3', ['-I', TOOL, '--home', fx.home, '--stage', '6', '--journal', path.join(fx.base, 'no-journal.json'), '--json'],
+        { encoding: 'utf8', timeout: 30000, env: { PATH: process.env['PATH'] ?? '', TZ: 'UTC', XDG_RUNTIME_DIR: fx.xdg } });
+      expect(r.status, r.stderr).toBe(0);
+      return (JSON.parse(r.stdout) as { stage6: { inert_scopes: unknown } }).stage6.inert_scopes;
+    };
+
+    it('shadow: the doctor counts the orphan, says the mode and lists the process', () => {
+      const u = busy(1); stopped(); arm(); run();
+      const r = doctor();
+      expect(r.stderr).toBe('');
+      expect(r.stdout).toMatch(/^WARN scope-sweep: 1 dead pane scope\(s\) and 0 long-lived process\(es\) in live ones, from the sweep's record \(mode live\), 1 busy orphan\(s\), busy mode shadow:/);
+      expect(r.stdout).toContain(`${u} would-stop (busy)`);
+      expect(r.stdout).toContain('3010:bash,3011:sleep');
+      expect(r.stdout).not.toContain('cannot read');
+    });
+
+    it('live: the mode reads live, and a stopped orphan still counts this tick', () => {
+      const u = busy(1); stopped(); both(); run();
+      const r = doctor();
+      expect(r.stdout).toContain('(mode live), 1 busy orphan(s), busy mode live:');
+      expect(r.stdout).toContain(`${u} stopped (busy)`);
+    });
+
+    it('a live session\'s busy scope is no orphan: counted zero, its report line unchanged', () => {
+      const u = busy(1); regRow('project-a-one', GEN); run();
+      const r = doctor();
+      expect(r.stdout).toContain('(mode shadow), 0 busy orphan(s), busy mode shadow:');
+      expect(r.stdout).not.toContain(`${u} would-stop (busy)`);
+      expect(r.stdout).not.toContain('cannot read');
+    });
+
+    it('a sleeping session\'s busy scope is no orphan either: counted zero, and the instrument reads the word', () => {
+      const u = busy(1); regRow('project-a-one', GEN, { stopped: true, hibernated: true }); run();
+      const r = doctor();
+      expect(r.stdout).toContain('(mode shadow), 0 busy orphan(s), busy mode shadow:');
+      expect(r.stdout).not.toContain(`${u} would-stop (busy)`);
+      expect(r.stdout).not.toContain('cannot read');
+      expect(instrument()).toEqual({ mode: 'shadow', dead: 1, inert: 0, inert_dead_a_day_or_more: 0, carried_scopes: { dead: 0, live: 0, unknown: 0 } });
+    });
+
+    it('a clean record: the PASS says zero and the mode', () => {
+      arm(); armBusy(); run();
+      expect(doctor().stdout).toMatch(/^PASS scope-sweep: .*mode live; 0 busy orphan\(s\), busy mode live\)$/m);
+    });
+
+    it('a malformed `busy` line is a line it cannot read, as any other', () => {
+      busy(1); stopped(); run();
+      fs.appendFileSync(STATE(), 'busy garbage\n');
+      expect(doctor().stdout).toContain('1 line(s) it cannot read');
+    });
+
+    it('the instrument passes over the arm\'s lines, and its counts are the inert ones', () => {
+      busy(1); stopped(); both(); run();
+      expect(instrument()).toEqual({ mode: 'live', dead: 1, inert: 0, inert_dead_a_day_or_more: 0, carried_scopes: { dead: 0, live: 0, unknown: 0 } });
+    });
+
+    it('a malformed `busy` line makes the instrument say unreadable, as any other', () => {
+      busy(1); stopped(); run();
+      fs.appendFileSync(STATE(), 'busy garbage\n');
+      expect(instrument()).toEqual({ record: 'unreadable' });
+    });
+  });
+});

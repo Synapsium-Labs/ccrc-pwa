@@ -1,0 +1,50 @@
+
+ ▐▛███▛█   Claude Code v2.1.300
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   <projects-root>/project-a
+
+⚠ Safe mode: all customizations are disabled (CLAUDE.md, skills, plugins, hooks, MCP, agents, and more)
+  Restart without --safe-mode to re-enable
+
+▎ Auto mode is now Claude Code's default permission mode.
+▎ Auto mode lets Claude handle permission prompts automatically. Claude checks each tool call for risky actions and prompt injection before executing, runs the ones it assesses as lower-risk, and blocks the rest.
+▎ https://code.claude.com/docs/en/permission-modes
+  1 more notice hidden
+
+❯ Call your AskUserQuestion tool exactly once with TWO questions in one call. Question 1: header "Colour", question "Which colour do you prefer?", multiSelect false, options Red, Green, Blue (each with a short
+  description). Question 2: header "Features", question "Which features do you want?", multiSelect true, options Logging, Metrics, Tracing (each with a short description). After you get the answers, reply with the raw
+  answers exactly as the tool returned them and nothing else.
+
+⏺ User answered Claude's questions:
+  ⎿  · Which colour do you prefer? → Teal 2
+     · Which features do you want? → Tracing, Logging, Audit 3
+
+⏺ "Which colour do you prefer?"="Teal 2", "Which features do you want?"="Tracing, Logging, Audit 3"
+
+✻ Crunched for 3s · done 3:19
+
+❯ Now call AskUserQuestion exactly once with THREE questions. Q1: header "Pets", question "Which pets do you like?", multiSelect true, options Cats, Dogs, Fish. Q2: header "Size", question "Which size?", multiSelect
+  false, options Small, Large. Q3: header "Mode", question "Which mode?", multiSelect false, options Fast, Safe. Give each option a short description. Afterwards reply with the raw answers only.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Pets  ☐ Size  ☒ Mode  ✔ Submit  →
+
+Review your answers
+
+⚠ You have not answered all questions
+
+ ● Which pets do you like?
+   → Dogs
+ ● Which mode?
+   → Safe
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel
+
+
+
+
+
+

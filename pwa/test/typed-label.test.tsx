@@ -2,34 +2,40 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { SessionLine } from '../src/fleet/SessionLine';
-import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
-import { TYPE_MS, TypedLabel } from '../src/fleet/TypedLabel';
+import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
+import { TYPE_MS, TypedLabel } from '@ccrc/ui';
 
-// framer-motion's useReducedMotion caches its matchMedia answer in module state
-// on first use, so a `vi.stubGlobal('matchMedia', …)` after the fact is not
-// reliably observed — and setup.ts:7's shim already answers `matches: false` to
-// every query, which pins only one of the two branches. Mocking the single
-// export this component uses makes both deterministic; the same move
-// test/chat.test.tsx:16 makes for react-virtuoso. Vitest hoists `vi.hoisted`
-// and `vi.mock` above the imports, which is why the holder is reachable here.
-// SessionLine's own subtree imports no framer-motion, so the mock reaches
-// nothing else.
-const { motionPref } = vi.hoisted(() => ({ motionPref: { reduced: false } }));
-vi.mock('framer-motion', () => ({ useReducedMotion: () => motionPref.reduced }));
+// THE PREFERENCE IS STEERED THROUGH THE GLOBAL, NOT THROUGH A MODULE MOCK.
+//
+// `TypedLabel` now lives in @ccrc/ui, and a `vi.mock(…)` here cannot reach it:
+// vitest registers a mock against THIS file's module graph, and @ccrc/ui is an
+// inlined external dependency (pwa/vite.config.ts), so the mock applied to the
+// test's own import of framer-motion and to nothing the component imported.
+// Measured — the reduced-motion branch stayed unreachable, and deleting ui's
+// own framer-motion copy did not change it, so it is a mock SCOPE boundary
+// rather than a duplicate package.
+//
+// `matchMedia` is a global, so stubbing it is observed by every package in the
+// process. setup.ts's shim already answers `matches: false` to every query,
+// which pins the un-reduced branch; `prefersReduced(true)` below pins the
+// other one. The component reads the query live and never caches, which is
+// what makes a mid-test flip observable at all.
+const prefersReduced = (reduced: boolean): void => {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: reduced && query.includes('prefers-reduced-motion'),
+    media: query,
+    onchange: null,
+    addListener: () => {}, removeListener: () => {},
+    addEventListener: () => {}, removeEventListener: () => {},
+    dispatchEvent: () => false,
+  }));
+};
 
-afterEach(() => { cleanup(); vi.useRealTimers(); motionPref.reduced = false; });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-const s = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-quiet-mesa', wrapper: 'claude', home: 'claude', project: 'demo',
-  workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', name: null,
-  status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
-  version: null, model: null, effort: null, ultracode: false, branch: null,
-  ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, ...over,
-});
+const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'demo-quiet-mesa', workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', ...over }));
 
 describe('TypedLabel', () => {
   it('is silent on first mount — the whole value, immediately', () => {
@@ -103,7 +109,7 @@ describe('TypedLabel', () => {
   });
 
   it('reduced motion swaps instantly and never renders a caret', () => {
-    motionPref.reduced = true;
+    prefersReduced(true);
     vi.useFakeTimers();
     const { rerender } = render(<TypedLabel text="ws/quiet-mesa" />);
     rerender(<TypedLabel text="ws/fix-the-pr-sheet" />);
@@ -186,29 +192,29 @@ describe('the fleet line', () => {
 // it — `header.test.tsx` only reads settled text (`toHaveTextContent`,
 // `getAllByText`), which is identical whether the crumb is a plain span or a
 // wrapped one. This is the header's half of the fleet-line case above.
-describe('the session header crumb', () => {
-  const headerProps = (session: FleetSession): SessionHeaderProps => ({
+describe('the session header title', () => {
+  const headerProps = (session: FleetSession): HeaderHostProps => ({
     session, status: 'idle', statusUpdatedAt: null,
     onInterrupt: () => {}, onOpenTerminal: () => {}, onBack: () => {},
     onChangeModel: () => {}, onChangeEffort: () => {}, onMoveAccount: () => {},
-    onStopSession: () => {}, onOpenHistory: () => {}, onReapWorkspace: () => {},
+    onArchive: () => {}, onRestore: () => {}, onOpenHistory: () => {}, onReapWorkspace: () => {},
   });
 
-  it('types the new branch in on the crumb when a rename lands', () => {
-    // workspace non-null, so the crumb renders at all (SessionHeader.tsx:191).
+  it('types the new branch in on the title when a rename lands', () => {
+    // workspace non-null, so the title is the row's label, its branch (desktop polish T3c, D-6333: the crumb is the project).
     vi.useFakeTimers();
     const { rerender, container } = render(
-      <SessionHeader {...headerProps(s({ workspace: 'quiet-mesa', branch: 'ws/quiet-mesa' }))} />);
-    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-mesa');
+      <SessionHeaderHost {...headerProps(s({ workspace: 'quiet-mesa', branch: 'ws/quiet-mesa' }))} />);
+    expect(container.querySelector('.chat-title-text')).toHaveTextContent('ws/quiet-mesa');
 
-    rerender(<SessionHeader {...headerProps(s({ workspace: 'quiet-mesa', branch: 'ws/fix-the-pr-sheet' }))} />);
+    rerender(<SessionHeaderHost {...headerProps(s({ workspace: 'quiet-mesa', branch: 'ws/fix-the-pr-sheet' }))} />);
     // Mid-flight: a plain span would already show the whole new value and
     // would never grow a caret — both false here, exactly as on the fleet line.
-    expect(container.querySelector('.chat-crumb')).not.toHaveTextContent('ws/fix-the-pr-sheet');
+    expect(container.querySelector('.chat-title-text')).not.toHaveTextContent('ws/fix-the-pr-sheet');
     expect(document.querySelector('.typed-caret')).not.toBeNull();
 
     act(() => { vi.advanceTimersByTime(TYPE_MS * 40); });
-    expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/fix-the-pr-sheet');
+    expect(container.querySelector('.chat-title-text')).toHaveTextContent('ws/fix-the-pr-sheet');
     expect(document.querySelector('.typed-caret')).toBeNull();
   });
 });
@@ -240,7 +246,7 @@ describe('the session header crumb', () => {
 //
 // AND THE MIRROR IS NOT PERFECT, which is the part worth knowing: the label
 // follows `FleetSession.branch`, and `server/src/fleet.ts` assembles that as
-// `sl?.branch ?? r.branch` — THE STATUSLINE WINS. §3.1 froze the registry's
+// the pane's branch, else the worktree HEAD's, else the registry's — THE STATUSLINE WINS. §3.1 froze the registry's
 // `.branch` and the verb that writes it; a human running `git checkout -b`
 // inside the worktree still moves this label mid-claim, because that is a live
 // pane capture and no hold is consulted. `watch.ts`'s sweep guards against

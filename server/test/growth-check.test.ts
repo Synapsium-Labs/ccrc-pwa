@@ -1,0 +1,1357 @@
+// D-5848 (ARCH-01, #526; consolidation spec §5.2): the god-file growth check.
+// Net code-line growth of the listed files (`growthFiles`) against the merge-base with
+// `origin/main`, one stripper per language (`growthCheck.ts`). It reported only
+// (`console.warn` and the `GROWTH_OVER` list) until the operator armed it on
+// 2026-10-21 (OA-C2, D-6178); a listed file that grows by more than
+// GROWTH_LIMIT net code lines now fails its row. No per-file absolute constant
+// lives here, so two PRs in flight cannot conflict on this file.
+//
+// It reads `.git` (`git merge-base`, `git show`), so the CI selector's rule 2
+// (ALWAYS) runs it on every PR without a workflow edit. Outside CI (no `CI` in
+// the environment; set GROWTH_CHECK=1 to run it locally) or with no
+// `origin/main`, the growth rows skip with a printed notice and never fail
+// falsely. The stripper's own rows below always run.
+//
+// D-6119 (ARCH-01 acceptance 3): when the rows measure, the absolute code lines
+// of every listed file and FleetWatcher's method count go to the CI job summary
+// (`$GITHUB_STEP_SUMMARY`), never into an assertion.
+//
+// D-6211: a PR the operator names in `growth-exemptions.json` may grow one
+// listed file up to the entry's cap. The armed rows call one helper,
+// `armedGrowth`, which reads `origin/main`'s copy of that list, never this
+// checkout's, takes the PR number from `GITHUB_REF` and its event, and withholds
+// every exemption when the diff the run measures edits the growth check's own
+// files. The HEAD copy's shape is checked on every run, CI or not.
+//
+// D-6223: the reviewed waiver ledger, the directory `growth-waivers/`, one JSON
+// file per waiver. A PR that must grow a listed file past the limit adds one
+// dated waiver file for it in its own diff; the waiver waives that file only while the measured delta stays at or
+// below its `maxDelta`, and a waiver the merge-base already holds (so, not a
+// file added in this diff) waives nothing. The ledger is debt consolidation W5 pays; entries cite D-numbers
+// the plans define.
+import { describe, it, expect } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  stripTs, measureBash, codeLines, netGrowth, growthOver, addedFiles,
+  GROWTH_FILES, GROWTH_LIMIT, growthFiles, ringHomes, NO_HOME, type Home, type HomeOf,
+  agedWaivers, agedLine, WAIVER_AGE_DAYS,
+  classMethodCount, methodCounts, growthSummary, appendJobSummary, METHOD_COUNT_CLASS, METHOD_COUNT_FILE,
+  prNumberFromEnv, parseExemptions, exemptionsOnMain, matchExemptions, GROWTH_EXEMPTIONS_FILE,
+  GROWTH_EXEMPTIONS_STAMP, GROWTH_MACHINERY, overLine, growthVerdicts, armedGrowth, gitRead, type GrowthRow, type GrowthExemption,
+  GROWTH_WAIVERS_DIR, GROWTH_WAIVERS_LEGACY_FILE, parseWaiverFiles, waiversAdded, waiversAt, waiversInDiff, type GrowthWaiver,
+  definedDNumbers, PROGRAM_ROW, isProgramMember, programRow, parseCapFiles, parseFrozenFiles, stageFileName, stageFor, SPINE_LIMIT,
+  type Stage, type StageOf,
+} from './growthCheck.js';
+import { EXEMPTION_SET_STAMPS } from './rings/exemption-age.data.js';
+import { parseFile } from './scan/parse.js';
+import { pwaRing, serverRing } from './rings/ring.js';
+import { assignContexts, readContextTable, SPEC_FILE } from './rings/ringContextMap.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(here, '..', '..');
+
+/** Armed by OA-C2 (D-6178), ruled by the operator on 2026-10-21: a listed file
+ *  over the limit now fails its row. */
+const GROWTH_ARMED = true;
+
+/** The listed files in this checkout's HEAD: the rows that read the tree, not a fixture, take their list from here. */
+const LISTED_AT_HEAD = growthFiles('HEAD', 'HEAD', ROOT);
+
+describe('growthCheck: the stripper (D-5848)', () => {
+  it('a `//` inside a string keeps its line', () => {
+    const src = "const url = 'http://example.invalid/a';\n";
+    expect(codeLines('x.ts', src)).toBe(1);
+  });
+
+  it('a comment marker inside a string, template or regex does not swallow the next line', () => {
+    expect(codeLines('x.ts', "const s = '/*';\nconst b = 1;\n")).toBe(2);
+    expect(codeLines('x.ts', 'const t = `/* ${a} `;\nconst b = 1;\n')).toBe(2);
+    expect(codeLines('x.ts', 'const r = /[/*]/;\nconst b = 1;\n')).toBe(2);
+    expect(stripTs("const u = 'http://x'; // c\n")).toBe("const u = 'http://x'; \n");
+  });
+
+  it('a `//` comment line is not code', () => {
+    const src = '// one\n  // two\nconst a = 1; // trailing\n';
+    expect(codeLines('x.ts', src)).toBe(1);
+  });
+
+  it('a `/* */` spanning lines is stripped', () => {
+    const src = 'const a = 1;\n/* one\n * two\n */\nconst b = 2; /* x\n y */ const c = 3;\n';
+    expect(stripTs(src).split('\n').filter((l) => l.trim() !== '').length).toBe(3);
+    expect(codeLines('x.ts', src)).toBe(3);
+  });
+
+  it('comment markers inside template literals and regex literals are code', () => {
+    const src = 'const t = `a ${"/*"} //`;\nconst r = /\\/\\*/g;\nconst s = "*/";\n';
+    expect(codeLines('x.ts', src)).toBe(3);
+  });
+
+  it('blank lines are not code, in either language', () => {
+    expect(codeLines('x.ts', '\n  \nconst a = 1;\n\n')).toBe(1);
+    expect(codeLines('x.sh', '\n  \necho a\n\n')).toBe(1);
+  });
+
+  it('a bash heredoc holding `#` lines counts as heredoc, not code', () => {
+    const src = [
+      '#!/usr/bin/env bash',
+      '# a comment',
+      "cat <<'EOF'",
+      '# inside the heredoc',
+      'body line',
+      'EOF',
+      'echo done  # trailing comment keeps the line',
+      '',
+    ].join('\n');
+    expect(measureBash(src)).toEqual({ code: 2, heredoc: 2 });
+  });
+
+  it('a `<<-` heredoc ends at a tab-indented delimiter', () => {
+    const src = 'f() {\n\tcat <<-EOF\n\t# kept\n\tEOF\n}\n';
+    expect(measureBash(src)).toEqual({ code: 3, heredoc: 1 });
+  });
+
+  it('a `<<<` here-string opens no heredoc', () => {
+    expect(measureBash('x=$(cat <<<EOF)\necho a\nEOF\n')).toEqual({ code: 3, heredoc: 0 });
+  });
+
+  it('a plain `<<` heredoc ends only at its exact delimiter', () => {
+    expect(measureBash('cat <<EOF\n  EOF\nEOF\necho a\n')).toEqual({ code: 2, heredoc: 1 });
+  });
+
+  it('an empty diff is delta 0', (ctx) => {
+    let head: string;
+    try {
+      head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8', stdio: 'pipe' }).trim();
+    } catch {
+      console.log('growth-check: no git in this checkout, the empty-diff row skips');
+      ctx.skip();
+      return;
+    }
+    expect(netGrowth('server/src/watch.ts', head, head, ROOT).delta).toBe(0);
+  });
+
+  it('over the limit is named unless a new file in its ring and context, or a listed shrink, waives it (D-8563)', () => {
+    const rows = [
+      { file: 'server/src/watch.ts', base: 100, head: 100 + GROWTH_LIMIT + 1, delta: GROWTH_LIMIT + 1, atBoth: true },
+      { file: 'server/src/server.ts', base: 100, head: 100 + GROWTH_LIMIT, delta: GROWTH_LIMIT, atBoth: true },
+    ];
+    const homes: Record<string, Home> = {
+      'server/src/watch.ts': { ring: 'L4', context: 'C3' },
+      'server/src/watchLane.ts': { ring: 'L4', context: 'C3' },
+      'server/src/coord/decider.ts': { ring: 'L1', context: 'C3' },
+      'server/src/otherLane.ts': { ring: 'L4', context: 'C5' },
+    };
+    const homeOf: HomeOf = (f) => homes[f] ?? null;
+    expect(growthOver(rows, [])).toEqual(['server/src/watch.ts']);
+    // The blanket waiver is gone: with no classifier, a new file anywhere waives nothing, shared/ and coord/ included.
+    expect(growthOver(rows, ['server/src/coord/decider.ts', 'shared/newKernel.ts'])).toEqual(['server/src/watch.ts']);
+    expect(growthOver(rows, ['server/src/watchLane.ts'], NO_HOME)).toEqual(['server/src/watch.ts']);
+    // The growth moved into a new file of the grown file's own ring and context: waived.
+    expect(growthOver(rows, ['server/src/watchLane.ts'], homeOf)).toEqual([]);
+    // Same context, another ring; same ring, another context; a file the classifier gives no home: none waives.
+    expect(growthOver(rows, ['server/src/coord/decider.ts'], homeOf)).toEqual(['server/src/watch.ts']);
+    expect(growthOver(rows, ['server/src/otherLane.ts'], homeOf)).toEqual(['server/src/watch.ts']);
+    expect(growthOver(rows, ['shared/newKernel.ts', 'server/src/elsewhere.ts'], homeOf)).toEqual(['server/src/watch.ts']);
+    // A grown file with no home (ccd, shared/) is never waived by a new file, even one that also has no home.
+    const ccd = [{ file: 'ccd/ccd', base: 100, head: 200, delta: 100, atBoth: true }];
+    expect(growthOver(ccd, ['ccd/lib/new.sh', 'server/src/watchLane.ts'], homeOf)).toEqual(['ccd/ccd']);
+    // A listed file new in this diff does not waive itself.
+    const fresh = [{ file: 'server/src/watch.ts', base: 0, head: 100, delta: 100, atBoth: false }];
+    expect(growthOver(fresh, ['server/src/watch.ts'], homeOf)).toEqual(['server/src/watch.ts']);
+    const shrunk = [...rows, { file: 'pwa/src/lib/api.ts', base: 200, head: 100, delta: -100, atBoth: true }];
+    expect(growthOver(shrunk, [])).toEqual([]);
+    // A listed file deleted or renamed away is no shrink: it waives nothing.
+    const gone = [...rows, { file: 'pwa/src/lib/api.ts', base: 200, head: 0, delta: -200, atBoth: false }];
+    expect(growthOver(gone, [])).toEqual(['server/src/watch.ts']);
+  });
+
+  it('the blanket new-file directory list is gone (D-8563)', async () => {
+    const mod: Record<string, unknown> = await import('./growthCheck.js');
+    expect('L1_L2_NEW_FILE_DIRS' in mod).toBe(false);
+  });
+});
+
+describe('growthCheck: the CI job summary (D-6119)', () => {
+  it('counts a class\'s own methods by ARCH-00\'s parser: no getter, arrow property, constructor or nested method', () => {
+    const src = [
+      'export class Watcher {',
+      '  constructor() {}',
+      '  get size() { return 1; }',
+      '  private onTick = () => 1;',
+      '  tick() { const inner = { run() {} }; return inner; }',
+      '  private async sweep(): Promise<void> { function helper() {} helper(); }',
+      '  static make() { return new Watcher(); }',
+      '  build() { const K = class Inner { run() {} }; return K; }',
+      '}',
+      'class Other { tick() {} }',
+      'function tick() {}',
+      '',
+    ].join('\n');
+    expect(classMethodCount(src, 'Watcher')).toBe(4);
+    expect(classMethodCount(src, 'Other')).toBe(1);
+    expect(classMethodCount(src, 'Missing')).toBe(0);
+  });
+
+  it(`${METHOD_COUNT_FILE} declares ${METHOD_COUNT_CLASS} with methods, so the summary's count is not a silent 0`, () => {
+    const src = readFileSync(path.join(ROOT, METHOD_COUNT_FILE), 'utf8');
+    expect(classMethodCount(src, METHOD_COUNT_CLASS)).toBeGreaterThan(0);
+  });
+
+  it('the summary carries every row\'s absolute code lines, the method count and GROWTH_OVER', () => {
+    const rows = [
+      { file: 'server/src/watch.ts', base: 900, head: 950, delta: 50, atBoth: true },
+      { file: 'ccd/ccd', base: 300, head: 290, delta: -10, atBoth: true },
+      { file: 'server/src/index.ts', base: 10, head: 10, delta: 0, atBoth: true },
+    ];
+    const md = growthSummary({ base: 'abcdef1234567', rows, over: ['server/src/watch.ts'],
+      methods: { base: 12, head: 14 }, armed: false });
+    expect(md).toContain('| `server/src/watch.ts` | 900 | 950 | +50 |');
+    expect(md).toContain('| `ccd/ccd` | 300 | 290 | -10 |');
+    // An unchanged file still gets its row: the summary lists every watched file.
+    expect(md).toContain('| `server/src/index.ts` | 10 | 10 | +0 |');
+    expect(md).toContain(`${METHOD_COUNT_CLASS} methods`);
+    expect(md).toMatch(/base 12, head 14, delta \+2/);
+    expect(md).toContain('GROWTH_OVER: `server/src/watch.ts`');
+    expect(md).toContain('abcdef1');
+    expect(md).toMatch(/reporting only/);
+    const none = growthSummary({ base: 'abcdef1234567', rows, over: [], methods: { base: 12, head: 12 }, armed: true });
+    expect(none).toContain('GROWTH_OVER: (none)');
+    expect(none).not.toMatch(/reporting only/);
+  });
+
+  it('method counts are read at the base sha and at the head sha, and a file missing at a sha counts 0', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-methods-'));
+    try {
+      const git = (...a: string[]): string => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+      git('init', '-q');
+      git('config', 'user.name', 'fixture');
+      git('config', 'user.email', 'fixture@example.invalid');
+      // A commit can start `git gc --auto` or `git maintenance run --auto` detached; it keeps writing into .git after the
+      // test body ends and races the teardown's rmdir (ENOTEMPTY). Neither is wanted in a throwaway fixture.
+      git('config', 'gc.auto', '0');
+      git('config', 'maintenance.auto', 'false');
+      git('commit', '-q', '--allow-empty', '-m', 'empty');
+      const empty = git('rev-parse', 'HEAD');
+      writeFileSync(path.join(dir, 'w.ts'), 'class W { a() {} }\n');
+      git('add', 'w.ts');
+      git('commit', '-q', '-m', 'one');
+      const one = git('rev-parse', 'HEAD');
+      writeFileSync(path.join(dir, 'w.ts'), 'class W { a() {} b() {} c() {} }\n');
+      git('commit', '-q', '-am', 'three');
+      const three = git('rev-parse', 'HEAD');
+      expect(methodCounts('w.ts', 'W', one, three, dir)).toEqual({ base: 1, head: 3 });
+      expect(methodCounts('w.ts', 'W', empty, one, dir)).toEqual({ base: 0, head: 1 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it('the summary is appended to $GITHUB_STEP_SUMMARY when set, and nothing is written when it is not', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-summary-'));
+    try {
+      const file = path.join(dir, 'summary.md');
+      writeFileSync(file, 'earlier step\n');
+      expect(appendJobSummary('## one\n', { GITHUB_STEP_SUMMARY: file })).toBe(true);
+      expect(readFileSync(file, 'utf8')).toBe('earlier step\n## one\n');
+      expect(appendJobSummary('## two\n', {})).toBe(false);
+      expect(appendJobSummary('## two\n', { GITHUB_STEP_SUMMARY: '' })).toBe(false);
+      expect(readFileSync(file, 'utf8')).toBe('earlier step\n## one\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+});
+
+describe('growthCheck: a PR the operator names exempt (D-6211)', () => {
+  const SHA = 'a'.repeat(40);
+  const entry = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    pr: 1100, file: 'ccd/ccd', cap: 400, reason: 'the wave grows ccd/ccd by design',
+    ruling: 'operator, 2026-10-21: named exempt for ccd/ccd only', since: '2026-10-21', ...over,
+  });
+  const list = (...entries: unknown[]): string => JSON.stringify({ exemptions: entries });
+  const today = new Date('2026-10-21T12:00:00Z');
+  /** The growth check's own files as ruled (fix rounds 1 and 2), and the ring classifier that decides which new file
+   *  waives growth (D-8563), written out rather than read from the constant. */
+  const MACHINERY = [
+    'server/test/growthCheck.ts',
+    'server/test/growth-check.test.ts',
+    'server/test/growth-exemptions.json',
+    'server/test/rings/exemption-age.test.ts',
+    'server/test/rings/exemption-age.data.ts',
+    'server/test/rings/exemptions.ts',
+    'server/test/scan/parse.ts',
+    'server/test/rings/ring.ts',
+    'server/test/rings/ringContextMap.ts',
+    'server/test/rings/walkSrc.ts',
+    'server/test/ccdContextIds.ts',
+  ];
+
+  it('the PR number comes from GITHUB_REF under its event: a pull request\'s merge ref or a merge-queue branch', () => {
+    const PR = 'pull_request';
+    const MQ = 'merge_group';
+    const queue = (tail: string): string => `refs/heads/gh-readonly-queue/main/${tail}`;
+    const table: [string, string | undefined, string | undefined, number | null][] = [
+      ['pull request', PR, 'refs/pull/1100/merge', 1100],
+      ['merge queue', MQ, queue(`pr-1100-${SHA}`), 1100],
+      ['merge queue, a base with a slash', MQ, `refs/heads/gh-readonly-queue/release/x/pr-7-${SHA}`, 7],
+      ['a merge ref under another event', 'workflow_dispatch', 'refs/pull/1100/merge', null],
+      ['a merge ref under merge_group', MQ, 'refs/pull/1100/merge', null],
+      ['a queue ref under pull_request', PR, queue(`pr-1100-${SHA}`), null],
+      ['a workflow_dispatch on a queue-shaped branch', 'workflow_dispatch', queue(`pr-1100-${SHA}`), null],
+      ['a queue ref with no event', undefined, queue(`pr-1100-${SHA}`), null],
+      ['a merge ref with no event', undefined, 'refs/pull/1100/merge', null],
+      ['push to main', 'push', 'refs/heads/main', null],
+      ['schedule', 'schedule', 'refs/heads/main', null],
+      ['workflow_dispatch on a branch', 'workflow_dispatch', 'refs/heads/ws/lane-a', null],
+      ['a tag', 'push', 'refs/tags/v1.2.3', null],
+      ['no env', undefined, undefined, null],
+      ['an empty ref', PR, '', null],
+      ['a pull request\'s head ref, not its merge ref', PR, 'refs/pull/1100/head', null],
+      ['a merge ref with a trailing suffix', PR, 'refs/pull/1100/merge-x', null],
+      ['PR 0', PR, 'refs/pull/0/merge', null],
+      ['a leading zero', PR, 'refs/pull/01/merge', null],
+      ['not a number', PR, 'refs/pull/abc/merge', null],
+      ['a padded ref', PR, ' refs/pull/1100/merge', null],
+      ['a queue branch with no sha', MQ, queue('pr-1100'), null],
+      ['a queue branch with a trailing suffix', MQ, queue(`pr-1100-${SHA}-x`), null],
+      ['a branch merely named like a queue entry', MQ, `refs/heads/ws/gh-readonly-queue/main/pr-1100-${SHA}`, null],
+      ['a branch whose name embeds a queue ref', MQ, `refs/heads/lane-a/refs/heads/gh-readonly-queue/main/pr-1100-${SHA}`, null],
+    ];
+    for (const [what, event, ref, want] of table) {
+      const vars: NodeJS.ProcessEnv = {};
+      if (event !== undefined) vars['GITHUB_EVENT_NAME'] = event;
+      if (ref !== undefined) vars['GITHUB_REF'] = ref;
+      expect(prNumberFromEnv(vars), what).toBe(want);
+    }
+  });
+
+  it('a well-formed list parses; two entries of one PR for two files are allowed', () => {
+    expect(parseExemptions(list(), GROWTH_FILES, today)).toEqual({ entries: [], problems: [] });
+    const two = parseExemptions(list(entry(), entry({ file: 'ccd/ccrc', cap: 41 })), GROWTH_FILES, today);
+    expect(two.problems).toEqual([]);
+    expect(two.entries.map((e) => `${e.pr} ${e.file} ${e.cap}`)).toEqual(['1100 ccd/ccd 400', '1100 ccd/ccrc 41']);
+  });
+
+  it('every malformed shape is a problem, and a list with one exempts nothing', () => {
+    const noPr = entry();
+    delete noPr['pr'];
+    const shapes: [string, string, string][] = [
+      ['not JSON', '{"exemptions": [', 'not JSON'],
+      ['a top-level array', '[]', 'one key, `exemptions`'],
+      ['no exemptions key', '{}', 'one key, `exemptions`'],
+      ['exemptions not an array', '{"exemptions": {}}', 'one key, `exemptions`'],
+      ['an unknown top-level key', '{"exemptions": [], "extra": 1}', 'one key, `exemptions`'],
+      ['an entry that is not an object', list('ccd/ccd'), '#0: not an object'],
+      ['a null entry', list(null), '#0: not an object'],
+      ['a missing key', list(noPr), '#0: missing `pr`'],
+      ['an unknown key', list(entry({ caps: 400 })), '#0: unknown key `caps`'],
+      ['pr 0', list(entry({ pr: 0 })), '#0: pr must be a positive integer'],
+      ['a negative pr', list(entry({ pr: -3 })), '#0: pr must be a positive integer'],
+      ['a fractional pr', list(entry({ pr: 1.5 })), '#0: pr must be a positive integer'],
+      ['a string pr', list(entry({ pr: '1100' })), '#0: pr must be a positive integer'],
+      ['a file that is not listed', list(entry({ file: 'server/src/index.ts' })), '#0: file must be one of the listed files'],
+      ['a cap at the limit', list(entry({ cap: GROWTH_LIMIT })), '#0: cap must be an integer above 40'],
+      ['a cap under the limit', list(entry({ cap: 10 })), '#0: cap must be an integer above 40'],
+      ['a fractional cap', list(entry({ cap: 100.5 })), '#0: cap must be an integer above 40'],
+      ['a string cap', list(entry({ cap: '400' })), '#0: cap must be an integer above 40'],
+      ['an empty reason', list(entry({ reason: '' })), '#0: the reason must be one non-empty line'],
+      ['a blank reason', list(entry({ reason: '   ' })), '#0: the reason must be one non-empty line'],
+      ['a two-line reason', list(entry({ reason: 'a\nb' })), '#0: the reason must be one non-empty line'],
+      ['a reason that is not a string', list(entry({ reason: 7 })), '#0: reason and since must be strings'],
+      ['an empty ruling', list(entry({ ruling: '' })), '#0: the ruling must be one non-empty line'],
+      ['a two-line ruling', list(entry({ ruling: 'a\nb' })), '#0: the ruling must be one non-empty line'],
+      ['a since that is not a day', list(entry({ since: '2026-02-30' })), "#0: since '2026-02-30' is not a YYYY-MM-DD day"],
+      ['a since in another format', list(entry({ since: '21-10-2026' })), "#0: since '21-10-2026' is not a YYYY-MM-DD day"],
+      ['a since in the future', list(entry({ since: '2026-10-22' })), "#0: since '2026-10-22' is in the future"],
+      ['two entries for one PR and one file', list(entry(), entry({ cap: 500 })), '#1: a second entry for PR 1100 and ccd/ccd'],
+    ];
+    for (const [what, text, problem] of shapes) {
+      const got = parseExemptions(text, GROWTH_FILES, today);
+      expect(got.problems.some((p) => p.includes(problem)), `${what}: ${JSON.stringify(got.problems)}`).toBe(true);
+      expect(got.entries, what).toEqual([]);
+    }
+  });
+
+  it('an entry waives only its own file, only for its own PR, and only at or under its cap', () => {
+    const e = parseExemptions(list(entry({ cap: 400 })), GROWTH_FILES, today).entries;
+    const row = (file: string, delta: number) => ({ file, base: 1000, head: 1000 + delta, delta, atBoth: true });
+    const atCap = [row('ccd/ccd', 400)];
+    expect(matchExemptions(['ccd/ccd'], atCap, e, 1100)).toEqual([{ file: 'ccd/ccd', entry: e[0], applies: true, touched: [] }]);
+    const overCap = [row('ccd/ccd', 401)];
+    expect(matchExemptions(['ccd/ccd'], overCap, e, 1100)).toEqual([{ file: 'ccd/ccd', entry: e[0], applies: false, touched: [] }]);
+    const edits = ['server/test/growthCheck.ts'];
+    expect(matchExemptions(['ccd/ccd'], atCap, e, 1100, edits)).toEqual([{ file: 'ccd/ccd', entry: e[0], applies: false, touched: edits }]);
+    expect(matchExemptions(['ccd/ccd'], atCap, e, 1101)).toEqual([]);
+    expect(matchExemptions(['ccd/ccd'], atCap, e, null)).toEqual([]);
+    const other = [row('ccd/ccd', 100), row('ccd/ccrc', 100)];
+    expect(matchExemptions(['ccd/ccrc'], other, e, 1100)).toEqual([]);
+    // A file that did not grow over the limit needs no entry, and is not reported as exempt.
+    expect(matchExemptions([], atCap, e, 1100)).toEqual([]);
+  });
+
+  it('the list is read from origin/main, never from HEAD: a PR\'s own entry exempts nothing until it lands', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-exempt-'));
+    try {
+      const git = (...a: string[]): string => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+      git('init', '-q');
+      git('config', 'user.name', 'fixture');
+      git('config', 'user.email', 'fixture@example.invalid');
+      // A commit can start `git gc --auto` or `git maintenance run --auto` detached; it keeps writing into .git after the
+      // test body ends and races the teardown's rmdir (ENOTEMPTY). Neither is wanted in a throwaway fixture.
+      git('config', 'gc.auto', '0');
+      git('config', 'maintenance.auto', 'false');
+      git('commit', '-q', '--allow-empty', '-m', 'no list');
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      // Absent on origin/main: no entries, and nothing wrong.
+      expect(exemptionsOnMain(GROWTH_FILES, dir, today)).toEqual({ entries: [], problems: [] });
+      const file = path.join(dir, GROWTH_EXEMPTIONS_FILE);
+      execFileSync('mkdir', ['-p', path.dirname(file)]);
+      writeFileSync(file, list());
+      git('add', '-A');
+      git('commit', '-q', '-m', 'empty list');
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      writeFileSync(file, list(entry()));
+      git('commit', '-q', '-am', 'the PR adds its own entry');
+      // The entry is on HEAD only: it is not read.
+      expect(exemptionsOnMain(GROWTH_FILES, dir, today)).toEqual({ entries: [], problems: [] });
+      // Once origin/main carries it (the entry landed; CI re-ran), it is.
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      expect(exemptionsOnMain(GROWTH_FILES, dir, today).entries.map((x) => x.pr)).toEqual([1100]);
+      // A malformed copy on origin/main exempts nothing, and says why.
+      writeFileSync(file, list(entry({ cap: 1 })));
+      git('commit', '-q', '-am', 'malformed');
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      const bad = exemptionsOnMain(GROWTH_FILES, dir, today);
+      expect(bad.entries).toEqual([]);
+      expect(bad.problems.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it('the growth check\'s own files are exactly the ruled seven and the ring classifier\'s four (D-8563)', () => {
+    expect([...GROWTH_MACHINERY]).toEqual(MACHINERY);
+  });
+
+  it('every module the growth check loads is one of its own files, and every load in them can be followed', () => {
+    const roots = ['server/test/growthCheck.ts', 'server/test/scan/parse.ts', 'server/test/rings/exemptions.ts',
+      'server/test/growth-check.test.ts'];
+    const { modules, unfollowable } = importClosure(roots);
+    expect(modules, 'the closure walk lost a root').toEqual(expect.arrayContaining(roots));
+    expect(modules.filter((p) => !GROWTH_MACHINERY.includes(p) && !(p in DECIDES_NOTHING)),
+      'a module the growth check loads is outside GROWTH_MACHINERY: add it there').toEqual([]);
+    expect(unfollowable, 'a load the closure walk cannot follow: write it as a literal relative import').toEqual([]);
+  });
+
+  it('the decision: a row fails when its file is over and no entry applies to it', () => {
+    const e = parseExemptions(list(entry({ cap: 400 })), GROWTH_FILES, today).entries;
+    const row = (delta: number): GrowthRow => ({ file: 'ccd/ccd', base: 1000, head: 1000 + delta, delta, atBoth: true });
+    const table: [string, GrowthRow, string[], GrowthExemption[], number | null, string[], boolean, string][] = [
+      ['not over', row(10), [], e, 1100, [], false, 'ccd/ccd: delta +10'],
+      ['over, no entry', row(400), ['ccd/ccd'], [], 1100, [], true, 'ccd/ccd: delta +400 (GROWTH_OVER)'],
+      ['over, waived, so not over', row(400), [], e, 1100, [], false, 'ccd/ccd: delta +400'],
+      ['over, its entry, at the cap', row(400), ['ccd/ccd'], e, 1100, [], false, 'ccd/ccd: delta +400 (GROWTH_OVER, exempt: PR #1100, cap 400)'],
+      ['over, its entry, past the cap', row(401), ['ccd/ccd'], e, 1100, [], true,
+        'ccd/ccd: delta +401 (GROWTH_OVER, over its exemption cap of 400 for PR #1100)'],
+      ['over, another PR\'s entry', row(400), ['ccd/ccd'], e, 1101, [], true, 'ccd/ccd: delta +400 (GROWTH_OVER)'],
+      ['over, no PR number', row(400), ['ccd/ccd'], e, null, [], true, 'ccd/ccd: delta +400 (GROWTH_OVER)'],
+      ['over, the measured diff edits the growth check\'s own files', row(400), ['ccd/ccd'], e, 1100, ['server/test/growth-exemptions.json'], true,
+        'ccd/ccd: delta +400 (GROWTH_OVER, not exempt: the diff for PR #1100 edits the growth check\'s own server/test/growth-exemptions.json)'],
+    ];
+    for (const [what, r, over, entries, pr, touched, fails, title] of table) {
+      const [v] = growthVerdicts([r], over, entries, pr, touched);
+      expect({ fails: v!.fails, title: v!.title }, what).toEqual({ fails, title });
+    }
+    // An entry for another file leaves an over file failing.
+    const rows = [row(400), { ...row(100), file: 'ccd/ccrc' }];
+    const other = parseExemptions(list(entry({ file: 'ccd/ccrc' })), GROWTH_FILES, today).entries;
+    expect(growthVerdicts(rows, ['ccd/ccd'], other, 1100, []).map((v) => [v.file, v.fails])).toEqual([['ccd/ccd', true], ['ccd/ccrc', false]]);
+    expect(growthVerdicts([row(401)], ['ccd/ccd'], e, 1100, [])[0]!.why)
+      .toBe('ccd/ccd grew by 401 net code lines, over its exemption cap of 400 for PR #1100');
+    expect(growthVerdicts([row(400)], ['ccd/ccd'], [], 1100, [])[0]!.why).toBe('ccd/ccd grew by 400 net code lines, over the limit of 40');
+  });
+
+  it('the armed path, end to end: only origin/main\'s entry exempts, and never a PR that edits the growth check', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-armed-'));
+    try {
+      const git = (...a: string[]): string => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+      const put = (rel: string, text: string): void => {
+        execFileSync('mkdir', ['-p', path.dirname(path.join(dir, rel))]);
+        writeFileSync(path.join(dir, rel), text);
+      };
+      const lines = (n: number): string => Array.from({ length: n }, (_, i) => `echo line-${i}\n`).join('');
+      git('init', '-q');
+      git('config', 'user.name', 'fixture');
+      git('config', 'user.email', 'fixture@example.invalid');
+      // A commit can start `git gc --auto` or `git maintenance run --auto` detached; it keeps writing into .git after the
+      // test body ends and races the teardown's rmdir (ENOTEMPTY). Neither is wanted in a throwaway fixture.
+      git('config', 'gc.auto', '0');
+      git('config', 'maintenance.auto', 'false');
+      put('ccd/ccd', lines(10));
+      put(GROWTH_EXEMPTIONS_FILE, list());
+      git('add', '-A');
+      git('commit', '-q', '-m', 'base');
+      const base = git('rev-parse', 'HEAD');
+      const vars = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/1100/merge' };
+      const ccd = (head: string) => armedGrowth(GROWTH_FILES, dir, git('merge-base', 'origin/main', head), head, vars, today)
+        .verdicts.find((v) => v.file === 'ccd/ccd')!;
+      // The PR grows ccd/ccd by 100 and adds its own entry; origin/main holds none.
+      git('update-ref', 'refs/remotes/origin/main', base);
+      git('checkout', '-q', '-b', 'pr');
+      put('ccd/ccd', lines(110));
+      put(GROWTH_EXEMPTIONS_FILE, list(entry({ cap: 100 })));
+      git('commit', '-q', '-am', 'the PR names itself');
+      const selfNamed = ccd(git('rev-parse', 'HEAD'));
+      expect({ fails: selfNamed.fails, exemption: selfNamed.exemption }).toEqual({ fails: true, exemption: undefined });
+      // The same growth with the entry on origin/main, and a PR that touches nothing of the check: exempt.
+      git('checkout', '-q', '-B', 'main-side', base);
+      put(GROWTH_EXEMPTIONS_FILE, list(entry({ cap: 100 })));
+      git('commit', '-q', '-am', 'the operator names PR 1100');
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      git('checkout', '-q', '-B', 'pr2', base);
+      put('ccd/ccd', lines(110));
+      git('commit', '-q', '-am', 'the PR grows ccd/ccd');
+      const named = ccd(git('rev-parse', 'HEAD'));
+      expect({ fails: named.fails, applies: named.exemption?.applies }).toEqual({ fails: false, applies: true });
+      // That PR also edits one of the growth check's own files: no exemption. The list is written out here, not
+      // read from GROWTH_MACHINERY, so a member dropped from the constant reds its case. The list file's case is the
+      // ruling's "its own entry included": the entry stands on origin/main, and the PR re-writes the same entry.
+      for (const f of MACHINERY) {
+        git('checkout', '-q', '-B', 'pr3', 'pr2');
+        put(f, f === GROWTH_EXEMPTIONS_FILE ? JSON.stringify({ exemptions: [entry({ cap: 100 })] }, null, 2) : '// an edit\n');
+        git('add', '-A');
+        git('commit', '-q', '-m', `the PR edits ${f}`);
+        const v = ccd(git('rev-parse', 'HEAD'));
+        expect({ fails: v.fails, touched: v.exemption?.touched }, f).toEqual({ fails: true, touched: [f] });
+      }
+      // A branch cut while the entry stood, after main has removed it: HEAD still carries the entry, and the diff
+      // touches nothing of the check, so only a read of HEAD or the working tree would exempt it.
+      const withEntry = git('rev-parse', 'main-side');
+      git('checkout', '-q', '-B', 'main-side', withEntry);
+      put(GROWTH_EXEMPTIONS_FILE, list());
+      git('commit', '-q', '-am', 'the entry goes');
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      git('checkout', '-q', '-B', 'pr4', withEntry);
+      put('ccd/ccd', lines(110));
+      git('commit', '-q', '-am', 'a stale branch grows ccd/ccd');
+      const stale = ccd(git('rev-parse', 'HEAD'));
+      expect({ fails: stale.fails, exemption: stale.exemption }).toEqual({ fails: true, exemption: undefined });
+      // A replace ref that swaps origin/main's list blob for one naming the PR changes nothing the check reads.
+      const forged = execFileSync('git', ['hash-object', '-w', '--stdin'],
+        { cwd: dir, encoding: 'utf8', stdio: 'pipe', input: list(entry({ cap: 100 })) }).trim();
+      git('replace', '-f', git('rev-parse', `origin/main:${GROWTH_EXEMPTIONS_FILE}`), forged);
+      expect(git('show', `origin/main:${GROWTH_EXEMPTIONS_FILE}`), 'the replace ref is live for a plain read').toContain('1100');
+      const replaced = ccd(git('rev-parse', 'HEAD'));
+      expect({ fails: replaced.fails, exemption: replaced.exemption }).toEqual({ fails: true, exemption: undefined });
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it('the summary names an exempted file as exempt, with the PR number, the cap and the ruling', () => {
+    const e = parseExemptions(list(entry({ cap: 400 }), entry({ file: 'ccd/ccrc', cap: 50 })), GROWTH_FILES, today).entries;
+    const rows = [
+      { file: 'ccd/ccd', base: 1000, head: 1350, delta: 350, atBoth: true },
+      { file: 'ccd/ccrc', base: 100, head: 160, delta: 60, atBoth: true },
+    ];
+    const over = ['ccd/ccd', 'ccd/ccrc'];
+    const md = growthSummary({ base: 'abcdef1234567', rows, over, methods: { base: 1, head: 1 }, armed: true,
+      exemptions: matchExemptions(over, rows, e, 1100) });
+    // GROWTH_OVER still lists what grew; the annotation says which is exempt and which passed its cap.
+    expect(md).toContain('GROWTH_OVER: `ccd/ccd` (exempt: PR #1100, cap 400, ruling: operator, 2026-10-21: named exempt for ccd/ccd only), '
+      + '`ccd/ccrc` (over its exemption cap of 50 for PR #1100)');
+    const plain = growthSummary({ base: 'abcdef1234567', rows, over, methods: { base: 1, head: 1 }, armed: true });
+    expect(plain).toContain('GROWTH_OVER: `ccd/ccd`, `ccd/ccrc`');
+    const edits = matchExemptions(['ccd/ccd'], rows, e, 1100, ['server/test/growthCheck.ts']);
+    expect(overLine(['ccd/ccd'], edits)).toBe('ccd/ccd (not exempt: the diff for PR #1100 edits the growth check\'s own server/test/growthCheck.ts)');
+  });
+
+  it(`the HEAD copy of ${GROWTH_EXEMPTIONS_FILE} is well formed, and stamped under the 60-day rule`, () => {
+    const text = readFileSync(path.join(ROOT, GROWTH_EXEMPTIONS_FILE), 'utf8');
+    expect(parseExemptions(text, LISTED_AT_HEAD).problems).toEqual([]);
+    expect(GROWTH_EXEMPTIONS_STAMP).toBe(`${GROWTH_EXEMPTIONS_FILE}#exemptions`);
+    expect(EXEMPTION_SET_STAMPS[GROWTH_EXEMPTIONS_STAMP], 'stamp the list in exemption-age.data.ts').toBeDefined();
+  });
+});
+
+/** The waiver directory's files in the working tree. */
+function waiverItemsAtHead(): { name: string; text: string }[] {
+  const dir = path.join(ROOT, GROWTH_WAIVERS_DIR);
+  return readdirSync(dir).map((name) => ({ name, text: readFileSync(path.join(dir, name), 'utf8') }));
+}
+
+describe('growthCheck: the reviewed waiver ledger (D-6223)', () => {
+  const today = new Date('2026-10-21T12:00:00Z');
+  type Item = { name: string; text: string };
+  const waiver = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    file: 'ccd/ccd', maxDelta: 60, d: 'D-6223', reason: 'a fixture: the verb grows ccd/ccd by design', added: '2026-10-21',
+    createdAt: '2026-10-21', ...over,
+  });
+  /** One waiver file each, named for its D-number (a malformed one borrows D-1 so the name stays well formed). */
+  const ledger = (...waivers: unknown[]): Item[] => waivers.map((w, i) => {
+    const d = (w as { d?: unknown } | null)?.d;
+    return { name: `${typeof d === 'string' && /^D-[1-9]\d*$/.test(d) ? d : 'D-1'}-f${i}.json`, text: JSON.stringify(w, null, 2) };
+  });
+
+  it('a well-formed directory parses; one file may carry waivers under two D-numbers', () => {
+    expect(parseWaiverFiles([], GROWTH_FILES, today)).toEqual({ entries: [], problems: [] });
+    const two = parseWaiverFiles(ledger(waiver(), waiver({ d: 'D-6178', maxDelta: 41 })), GROWTH_FILES, today);
+    expect(two.problems).toEqual([]);
+    expect(two.entries.map((e) => `${e.file} ${e.d} ${e.maxDelta}`)).toEqual(['ccd/ccd D-6178 41', 'ccd/ccd D-6223 60']);
+  });
+
+  it('a directory with two waiver files parses to both, and equals the old single array it was cut from', () => {
+    // The old ledger was one `{payer, waivers: [...]}` array; the directory holds each element as its own file.
+    const old = [waiver(), waiver({ d: 'D-6178', maxDelta: 41 })];
+    const oldText = JSON.stringify({ payer: 'consolidation W5 (ccd in place)', waivers: old }, null, 2);
+    const fromArray = (JSON.parse(oldText) as { waivers: GrowthWaiver[] }).waivers;
+    const items = old.map((w) => ({ name: `${String(w['d'])}-ccd-ccd.json`, text: JSON.stringify(w, null, 2) }));
+    const fromDir = parseWaiverFiles(items, GROWTH_FILES, today);
+    expect(fromDir.problems).toEqual([]);
+    // A set, not a sequence: the directory is read by file name, the array in the order it was written.
+    const byKey = (a: { d: string; file: string }, b: { d: string; file: string }): number => (a.d + a.file).localeCompare(b.d + b.file);
+    expect([...fromDir.entries].sort(byKey)).toEqual([...fromArray].sort(byKey));
+    expect(fromDir.entries).toHaveLength(2);
+  });
+
+  it('every malformed shape is a problem, and a directory with one waives nothing', () => {
+    const noD = waiver();
+    delete noD['d'];
+    const shapes: [string, Item[], string][] = [
+      ['not JSON', [{ name: 'D-1-x.json', text: '{"waivers": [' }], 'D-1-x.json: not JSON'],
+      ['a top-level array', [{ name: 'D-1-x.json', text: '[]' }], 'not an object'],
+      ['a name that is not <D-number>-<slug>.json', [{ name: 'waivers.json', text: JSON.stringify(waiver()) }], 'the name must be <D-number>-<slug>.json'],
+      ['a file that is not .json', [{ name: 'D-6223-x.txt', text: JSON.stringify(waiver()) }], 'the name must be <D-number>-<slug>.json'],
+      ['a name that does not start with its d', [{ name: 'D-7-x.json', text: JSON.stringify(waiver()) }], 'the name must start with its d, D-6223'],
+      ['a missing key', ledger(noD), 'missing `d`'],
+      ['an unknown key', ledger(waiver({ pr: 1 })), 'unknown key `pr`'],
+      ['a file that is not listed', ledger(waiver({ file: 'server/src/index.ts' })), 'file must be one of the listed files'],
+      ['a maxDelta at the limit', ledger(waiver({ maxDelta: GROWTH_LIMIT })), 'maxDelta must be an integer above 40'],
+      ['a fractional maxDelta', ledger(waiver({ maxDelta: 60.5 })), 'maxDelta must be an integer above 40'],
+      ['a string maxDelta', ledger(waiver({ maxDelta: '60' })), 'maxDelta must be an integer above 40'],
+      ['a d that is not a D-number', ledger(waiver({ d: 'ARCH-01' })), 'd must be a D-number'],
+      ['a d with a suffix', ledger(waiver({ d: 'D-6223a' })), 'd must be a D-number'],
+      ['an empty reason', ledger(waiver({ reason: '' })), 'the reason must be one non-empty line'],
+      ['a two-line reason', ledger(waiver({ reason: 'a\nb' })), 'the reason must be one non-empty line'],
+      ['a reason that is not a string', ledger(waiver({ reason: 7 })), 'reason and added must be strings'],
+      ['an added that is not a day', ledger(waiver({ added: '2026-02-30' })), "since '2026-02-30' is not a YYYY-MM-DD day"],
+      ['an added in the future', ledger(waiver({ added: '2026-10-22' })), "since '2026-10-22' is in the future"],
+      ['two waivers for one file and one D-number', ledger(waiver(), waiver({ maxDelta: 90 })), 'a second waiver for ccd/ccd and D-6223'],
+    ];
+    for (const [what, items, problem] of shapes) {
+      const got = parseWaiverFiles(items, GROWTH_FILES, today);
+      expect(got.problems.some((p) => p.includes(problem)), `${what}: ${JSON.stringify(got.problems)}`).toBe(true);
+      expect(got.entries, what).toEqual([]);
+    }
+    // One bad file voids the good one beside it.
+    expect(parseWaiverFiles([...ledger(waiver()), { name: 'D-2-bad.json', text: '{' }], GROWTH_FILES, today).entries).toEqual([]);
+  });
+
+  it('an entry counts as added only when the base holds no entry for its file and D-number', () => {
+    const w = (o: Record<string, unknown> = {}): GrowthWaiver => waiver(o) as unknown as GrowthWaiver;
+    expect(waiversAdded([], [w()])).toEqual([w()]);
+    expect(waiversAdded([w()], [w()])).toEqual([]);
+    // Raising an entry the base already holds is not adding one: it waives nothing.
+    expect(waiversAdded([w()], [w({ maxDelta: 400 })])).toEqual([]);
+    expect(waiversAdded([w()], [w(), w({ d: 'D-6178' })])).toEqual([w({ d: 'D-6178' })]);
+    expect(waiversAdded([w()], [w(), w({ file: 'ccd/ccrc' })])).toEqual([w({ file: 'ccd/ccrc' })]);
+  });
+
+  it('the decision: an over row passes only on an added entry for its file whose maxDelta covers the delta', () => {
+    const row = (delta: number, file = 'ccd/ccd'): GrowthRow => ({ file, base: 1000, head: 1000 + delta, delta, atBoth: true });
+    const w = (o: Record<string, unknown> = {}): GrowthWaiver => waiver(o) as unknown as GrowthWaiver;
+    const table: [string, GrowthRow, GrowthWaiver[], boolean, string][] = [
+      ['+60, no entry', row(60), [], true, 'ccd/ccd: delta +60 (GROWTH_OVER)'],
+      ['+60, an entry of maxDelta 60', row(60), [w()], false, 'ccd/ccd: delta +60 (GROWTH_OVER, waived: D-6223, max 60)'],
+      ['+60, an entry of maxDelta 50', row(60), [w({ maxDelta: 50 })], true,
+        'ccd/ccd: delta +60 (GROWTH_OVER, over its ledger max of 50 under D-6223)'],
+      ['+60, an entry for another file', row(60), [w({ file: 'ccd/ccrc' })], true, 'ccd/ccd: delta +60 (GROWTH_OVER)'],
+      ['+60, two entries, the larger covers', row(60), [w({ maxDelta: 50 }), w({ d: 'D-6178', maxDelta: 70 })], false,
+        'ccd/ccd: delta +60 (GROWTH_OVER, waived: D-6178, max 70)'],
+      ['+10, not over, no note', row(10), [w()], false, 'ccd/ccd: delta +10'],
+    ];
+    for (const [what, r, waivers, fails, title] of table) {
+      const [v] = growthVerdicts([r], r.delta > GROWTH_LIMIT ? [r.file] : [], [], null, [], waivers);
+      expect({ fails: v!.fails, title: v!.title }, what).toEqual({ fails, title });
+    }
+    expect(growthVerdicts([row(60)], ['ccd/ccd'], [], null, [], [w({ maxDelta: 50 })])[0]!.why)
+      .toBe('ccd/ccd grew by 60 net code lines, over its ledger max of 50 under D-6223');
+    expect(overLine(['ccd/ccd'], [], (f) => f, growthVerdicts([row(60)], ['ccd/ccd'], [], null, [], [w()]).flatMap((v) => (v.waiver ? [v.waiver] : []))))
+      .toBe('ccd/ccd (waived: D-6223, max 60, ledger entry added 2026-10-21)');
+  });
+
+  it('every ccd/lib/*.sh is held like ccd/ccd: listed, measured, refused over the limit, passed only by an added waiver (D-6913)', () => {
+    const libs = LISTED_AT_HEAD.filter((f) => f.startsWith('ccd/lib/'));
+    expect(libs.length, 'the tree holds ccd/lib/*.sh, so this row is not empty').toBeGreaterThan(0);
+    for (const lib of libs) {
+      // Each library is listed, and the bash stripper measures it as code, not as nothing.
+      expect(codeLines(lib, readFileSync(path.join(ROOT, lib), 'utf8')), lib).toBeGreaterThan(0);
+      const delta = GROWTH_LIMIT + 1;
+      const row: GrowthRow = { file: lib, base: 1000, head: 1000 + delta, delta, atBoth: true };
+      expect(growthOver([row], [])).toEqual([lib]);
+      const [refused] = growthVerdicts([row], [lib], [], null, [], []);
+      expect({ fails: refused!.fails, why: refused!.why }, 'no waiver')
+        .toEqual({ fails: true, why: `${lib} grew by ${delta} net code lines, over the limit of ${GROWTH_LIMIT}` });
+      // A waiver for the library parses against the listed files, and only one the diff itself adds passes the row.
+      const parsed = parseWaiverFiles(ledger(waiver({ file: lib, maxDelta: delta })), LISTED_AT_HEAD, today);
+      expect(parsed.problems).toEqual([]);
+      const added = waiversAdded([], parsed.entries);
+      expect(added.map((w) => w.file)).toEqual([lib]);
+      const [waived] = growthVerdicts([row], [lib], [], null, [], added);
+      expect({ fails: waived!.fails, title: waived!.title }, 'an added waiver covering the delta')
+        .toEqual({ fails: false, title: `${lib}: delta +${delta} (GROWTH_OVER, waived: D-6223, max ${delta})` });
+      // The same waiver already on the merge-base waives nothing.
+      expect(growthVerdicts([row], [lib], [], null, [], waiversAdded(parsed.entries, parsed.entries))[0]!.fails, 'a waiver on the base').toBe(true);
+    }
+  });
+
+  it('growthFiles: the fixed list plus every ccd/lib/*.sh at either sha, with no library named by hand (#2006)', (ctx) => {
+    expect(GROWTH_FILES.filter((f) => f.startsWith('ccd/lib/')), 'a library is found, never listed').toEqual([]);
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-files-'));
+    ctx.onTestFinished(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+    const commit = (m: string) => { git('add', '-A'); git('commit', '-q', '-m', m); return git('rev-parse', 'HEAD'); };
+    const put = (f: string, lines = 1) => {
+      mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+      writeFileSync(path.join(dir, f), Array.from({ length: lines }, (_, i) => `x${i}=1`).join('\n') + '\n');
+    };
+    git('init', '-q');
+    git('config', 'user.name', 'fixture');
+    git('config', 'user.email', 'fixture@example.invalid');
+    git('config', 'gc.auto', '0');
+    git('config', 'maintenance.auto', 'false');
+    put('README');
+    const bare = commit('no ccd/lib at this sha');
+    put('ccd/lib/old.sh'); put('ccd/lib/kept.sh'); put('ccd/lib/transcript.jq'); put('ccd/lib/nested/deep.sh');
+    const base = commit('base');
+    git('update-ref', 'refs/remotes/origin/main', base);
+    rmSync(path.join(dir, 'ccd/lib/old.sh'));
+    put('ccd/lib/new.sh', GROWTH_LIMIT + 1);
+    const head = commit('head');
+
+    const libs = (b: string, h: string) => growthFiles(b, h, dir).slice(GROWTH_FILES.length);
+    expect(growthFiles(bare, bare, dir), 'no ccd/lib at a sha adds nothing').toEqual([...GROWTH_FILES]);
+    expect(libs(base, base), 'not the .jq, not a nested file').toEqual(['ccd/lib/kept.sh', 'ccd/lib/old.sh']);
+    expect(libs(base, head), 'added at head and deleted at head are both listed').toEqual(['ccd/lib/kept.sh', 'ccd/lib/new.sh', 'ccd/lib/old.sh']);
+    expect(() => growthFiles('0'.repeat(40), head, dir), 'a sha git cannot read throws, never an empty list').toThrow();
+
+    // A library nobody listed goes red on its own first PR, and an added waiver is valid against the same list.
+    const armed = (files: readonly string[]) => armedGrowth(files, dir, base, head, {}, today);
+    const verdict = (files: readonly string[]) => armed(files).verdicts.find((v) => v.file === 'ccd/lib/new.sh');
+    expect(verdict(GROWTH_FILES), 'the fixed list alone has no row for it').toBeUndefined();
+    expect(verdict(growthFiles(base, head, dir))!.fails).toBe(true);
+
+    // A waiver naming a library the tree no longer holds is a named problem at head, in the PR that deletes it.
+    const gone = ledger(waiver({ file: 'ccd/lib/old.sh' }));
+    expect(parseWaiverFiles(gone, growthFiles(base, head, dir), today).problems).toEqual([]);
+    expect(parseWaiverFiles(gone, growthFiles(head, head, dir), today).problems.join()).toContain('file must be one of the listed files');
+  });
+
+  it('the armed path, end to end: only an entry the PR\'s own diff adds waives, and only up to its maxDelta', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-waiver-'));
+    try {
+      const git = (...a: string[]): string => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+      const put = (rel: string, text: string): void => {
+        execFileSync('mkdir', ['-p', path.dirname(path.join(dir, rel))]);
+        writeFileSync(path.join(dir, rel), text);
+      };
+      const lines = (n: number): string => Array.from({ length: n }, (_, i) => `echo line-${i}\n`).join('');
+      git('init', '-q');
+      git('config', 'user.name', 'fixture');
+      git('config', 'user.email', 'fixture@example.invalid');
+      // A commit can start `git gc --auto` or `git maintenance run --auto` detached; it keeps writing into .git after the
+      // test body ends and races the teardown's rmdir (ENOTEMPTY). Neither is wanted in a throwaway fixture.
+      git('config', 'gc.auto', '0');
+      git('config', 'maintenance.auto', 'false');
+      put('ccd/ccd', lines(10));
+      git('add', '-A');
+      git('commit', '-q', '-m', 'base');
+      const base = git('rev-parse', 'HEAD');
+      git('update-ref', 'refs/remotes/origin/main', base);
+      const ccd = (head: string) => armedGrowth(GROWTH_FILES, dir, git('merge-base', 'origin/main', head), head, {}, today)
+        .verdicts.find((v) => v.file === 'ccd/ccd')!;
+      /** Replace the whole waiver directory with `items`. */
+      const putLedger = (items: Item[]): void => {
+        rmSync(path.join(dir, GROWTH_WAIVERS_DIR), { recursive: true, force: true });
+        for (const it of items) put(`${GROWTH_WAIVERS_DIR}/${it.name}`, it.text);
+      };
+      /** A PR off `from` that grows ccd/ccd by 60 and writes `items` as the waiver files (unchanged when undefined). */
+      const pr = (name: string, from: string, items?: Item[]) => {
+        git('checkout', '-q', '-B', name, from);
+        put('ccd/ccd', lines(70));
+        if (items !== undefined) putLedger(items);
+        git('add', '-A');
+        git('commit', '-q', '-m', name);
+        return ccd(git('rev-parse', 'HEAD'));
+      };
+      expect(pr('no-entry', base).fails, '+60 with no entry').toBe(true);
+      const sixty = pr('max-60', base, ledger(waiver()));
+      expect({ fails: sixty.fails, max: sixty.waiver?.entry.maxDelta }, '+60 with maxDelta 60').toEqual({ fails: false, max: 60 });
+      expect(pr('max-50', base, ledger(waiver({ maxDelta: 50 }))).fails, '+60 with maxDelta 50').toBe(true);
+      expect(pr('other-file', base, ledger(waiver({ file: 'ccd/ccrc' }))).fails, 'an entry for another file').toBe(true);
+      const malformed = pr('malformed', base, ledger(waiver({ maxDelta: 60.5 })));
+      expect(malformed.fails, 'a malformed ledger waives nothing').toBe(true);
+      // An entry an EARLIER commit on main added does not waive a later PR.
+      git('checkout', '-q', '-B', 'main-side', base);
+      putLedger(ledger(waiver()));
+      git('add', '-A');
+      git('commit', '-q', '-m', 'an earlier PR lands its entry');
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      const onMain = git('rev-parse', 'HEAD');
+      expect(pr('later', onMain).fails, 'an entry already on main').toBe(true);
+      expect(pr('raised', onMain, ledger(waiver({ maxDelta: 400 }))).fails, 'raising main\'s entry').toBe(true);
+      expect(pr('own-entry', onMain, ledger(waiver(), waiver({ d: 'D-6178' }))).fails, 'its own new entry beside main\'s').toBe(false);
+      // A malformed ledger at the merge-base waives nothing either, so old entries cannot pass as new.
+      git('checkout', '-q', '-B', 'main-bad', base);
+      putLedger([{ name: 'D-1-broken.json', text: '{"waivers": [' }]);
+      git('add', '-A');
+      git('commit', '-q', '-m', 'main holds a broken ledger');
+      git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      const badBase = waiversInDiff(GROWTH_FILES, git('rev-parse', 'HEAD'), git('rev-parse', 'max-60'), dir, today);
+      expect(badBase.added).toEqual([]);
+      expect(badBase.problems.some((p) => p.startsWith('base: ')), JSON.stringify(badBase.problems)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it('a merge-base holding only the legacy single-file ledger reads its waivers array as the base (D-6925)', () => {
+    // SAFETY for the queue transition: a PR behind the migration measures against a merge-base with no directory.
+    // Delete with `parseLegacyWaivers` once the queue has drained.
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-waiver-legacy-'));
+    try {
+      const git = (...a: string[]): string => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+      const put = (rel: string, text: string): void => {
+        execFileSync('mkdir', ['-p', path.dirname(path.join(dir, rel))]);
+        writeFileSync(path.join(dir, rel), text);
+      };
+      git('init', '-q');
+      git('config', 'user.name', 'fixture');
+      git('config', 'user.email', 'fixture@example.invalid');
+      git('config', 'gc.auto', '0');
+      git('config', 'maintenance.auto', 'false');
+      const migrated = [waiver(), waiver({ d: 'D-6178', maxDelta: 41 })];
+      put(GROWTH_WAIVERS_LEGACY_FILE, JSON.stringify({ payer: 'consolidation W5 (ccd in place)', waivers: migrated }, null, 2));
+      git('add', '-A');
+      git('commit', '-q', '-m', 'legacy ledger');
+      const base = git('rev-parse', 'HEAD');
+      expect(waiversAt(GROWTH_FILES, base, dir, today)).toEqual({ entries: migrated, problems: [] });
+      // The migration: the single file goes, each waiver becomes its own file, and one new waiver is added beside them.
+      rmSync(path.join(dir, GROWTH_WAIVERS_LEGACY_FILE));
+      for (const it of ledger(...migrated, waiver({ d: 'D-6925', maxDelta: 50 }))) put(`${GROWTH_WAIVERS_DIR}/${it.name}`, it.text);
+      git('add', '-A');
+      git('commit', '-q', '-m', 'migrate');
+      const got = waiversInDiff(GROWTH_FILES, base, git('rev-parse', 'HEAD'), dir, today);
+      expect(got.problems).toEqual([]);
+      expect(got.added.map((e) => e.d), 'only the new waiver, never the migrated ones').toEqual(['D-6925']);
+      // A malformed legacy ledger is a problem, so nothing is added.
+      git('checkout', '-q', '-B', 'legacy-bad', base);
+      put(GROWTH_WAIVERS_LEGACY_FILE, '{"waivers": [');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'broken legacy');
+      expect(waiversAt(GROWTH_FILES, git('rev-parse', 'HEAD'), dir, today).problems[0]).toContain(`${GROWTH_WAIVERS_LEGACY_FILE}: not JSON`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it(`every file in ${GROWTH_WAIVERS_DIR} is well formed, and cites only D-numbers the plans define`, () => {
+    const got = parseWaiverFiles(waiverItemsAtHead(), LISTED_AT_HEAD);
+    expect(got.problems).toEqual([]);
+    expect(got.entries.length, 'the directory holds the migrated waivers').toBeGreaterThan(0);
+    const defined = definedDNumbers(ROOT);
+    expect(got.entries.filter((e) => !defined.has(e.d)).map((e) => `${e.file} ${e.d}`), 'define the D-number in a plan first').toEqual([]);
+    // The ledger's own number is defined once, in the W0 plan, and names W5 as the payer.
+    const w0 = readFileSync(path.join(ROOT, 'docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md'), 'utf8')
+      .split('\n').filter((l) => l.startsWith('- **D-6223**'));
+    expect(w0).toHaveLength(1);
+    expect(w0[0]).toContain('shrink-only debt that consolidation W5');
+    expect(w0[0]).toMatch(/\) pays/);
+  });
+});
+
+describe('growthCheck: every large file is measured, a new file waives only in its own ring and context, waivers carry an age (D-8563)', () => {
+  const today = new Date('2026-11-13T12:00:00Z');
+
+  /** Tracked files that are not source: tests and their fixtures, docs, data, lockfiles and pictures. */
+  const NOT_SOURCE = /(^|\/)(test|tests|__tests__|fixtures)\/|\.(test|spec)\.|\.(md|json|jsonl|lock|svg|tsv|txt|snap|csv|html|ya?ml|png|jpe?g|webp|ico|woff2?)$/;
+  /** The operator's line for "large", 2026-11-13: over 3,000 lines. */
+  const LARGE = 3000;
+
+  it('the named large files are listed, at the one per-PR limit', () => {
+    for (const f of ['shared/api.ts', 'ccd/ccrc-doctor-checks', 'ccd/history/lib.mjs', 'ccd/history/sweep.mjs',
+      'deploy/history-replay.mjs', 'server/src/coord/delegation-checkpoint.ts']) {
+      expect(GROWTH_FILES, f).toContain(f);
+    }
+    expect(new Set(GROWTH_FILES).size, 'no file listed twice').toBe(GROWTH_FILES.length);
+  });
+
+  it(`every tracked non-test source file over ${LARGE} lines is listed`, (ctx) => {
+    let tracked: string[];
+    try {
+      tracked = gitRead(['ls-files', '-z'], ROOT).split('\0').filter((p) => p !== '');
+    } catch {
+      console.log('growth-check: no git in this checkout, the large-file row skips');
+      ctx.skip();
+      return;
+    }
+    const large = tracked.filter((f) => !NOT_SOURCE.test(f) && existsSync(path.join(ROOT, f)))
+      .filter((f) => readFileSync(path.join(ROOT, f), 'utf8').split('\n').length - 1 > LARGE);
+    expect(large.length, 'the walk found the known large files').toBeGreaterThan(5);
+    expect(large.filter((f) => !LISTED_AT_HEAD.includes(f)), 'add each to GROWTH_FILES').toEqual([]);
+  });
+
+  it('a CSS file is measured by its own stripper: comments and blank lines go, an #id rule stays', () => {
+    const css = '/* a\n   comment */\n#fleet {\n  color: red; /* trailing */\n}\n\n.a::before { content: "/* not a comment */"; }\n';
+    expect(codeLines('x.css', css)).toBe(4);
+    expect(codeLines('pwa/src/fleet/fleet.css', readFileSync(path.join(ROOT, 'pwa/src/fleet/fleet.css'), 'utf8')))
+      .toBeGreaterThan(1000);
+  });
+
+  it('ringHomes: a server/src or pwa/src source takes ring.ts\'s ring and the spec table\'s context; anything else has none', (ctx) => {
+    let head: string;
+    try {
+      head = gitRead(['rev-parse', 'HEAD'], ROOT).trim();
+    } catch {
+      ctx.skip();
+      return;
+    }
+    const homeOf = ringHomes(ROOT, head, head);
+    const rows = readContextTable(ROOT);
+    for (const [pkg, f, ringOf] of [
+      ['server', 'server/src/coord/store.ts', serverRing],
+      ['server', 'server/src/watch.ts', serverRing],
+      ['pwa', 'pwa/src/lib/api.ts', pwaRing],
+      ['pwa', 'pwa/src/fleet/fleet.css', pwaRing],
+    ] as const) {
+      const sub = f.slice(`${pkg}/src/`.length);
+      expect(homeOf(f), f).toEqual({ ring: ringOf(f).ring, context: assignContexts(pkg, [sub], rows).context.get(sub) });
+    }
+    for (const f of ['ccd/ccd', 'shared/api.ts', 'deploy/history-replay.mjs', 'server/test/growthCheck.ts',
+      'server/src/no-such-file.ts', 'pwa/src/README.md']) {
+      expect(homeOf(f), f).toBeNull();
+    }
+  });
+
+  it('the armed path, end to end: a new file waives a listed file\'s growth only in its ring and context, read at the merge-base\'s table', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-home-'));
+    try {
+      const git = (...a: string[]): string => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+      const put = (rel: string, text: string): void => {
+        mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+        writeFileSync(path.join(dir, rel), text);
+      };
+      const commit = (m: string): string => { git('add', '-A'); git('commit', '-q', '-m', m); return git('rev-parse', 'HEAD'); };
+      const pure = (n: number, name: string): string => Array.from({ length: n }, (_, i) => `export const ${name}${i} = ${i};\n`).join('');
+      const table = (extra = ''): string => ['# spec', '<!-- ring-context-map:start -->', '| Context | `server/src` | `pwa/src` |',
+        '|---|---|---|', `| C3 Coordination | \`coord/**\`${extra} | (none) |`, '| C5 Landing | `landing/**` | (none) |',
+        '<!-- ring-context-map:end -->', ''].join('\n');
+      git('init', '-q');
+      git('config', 'user.name', 'fixture');
+      git('config', 'user.email', 'fixture@example.invalid');
+      git('config', 'gc.auto', '0');
+      git('config', 'maintenance.auto', 'false');
+      put(SPEC_FILE, table());
+      put('server/src/coord/big.ts', pure(10, 'a'));
+      const base = commit('base');
+      const listed = ['server/src/coord/big.ts'];
+      const over = (name: string, files: Record<string, string>): string[] => {
+        git('checkout', '-q', '-B', name, base);
+        put('server/src/coord/big.ts', pure(10 + GROWTH_LIMIT + 1, 'a'));
+        for (const [f, t] of Object.entries(files)) put(f, t);
+        return armedGrowth(listed, dir, base, commit(name), {}, today).over;
+      };
+      expect(over('alone', {}), 'no new file').toEqual(listed);
+      expect(over('same-home', { 'server/src/coord/part.ts': pure(3, 'b') }), 'L1 C3 beside L1 C3').toEqual([]);
+      expect(over('other-context', { 'server/src/landing/part.ts': pure(3, 'b') }), 'L1 C5').toEqual(listed);
+      const io = "import { readFileSync } from 'node:fs';\nexport const r = readFileSync;\n";
+      expect(over('other-ring', { 'server/src/coord/io.ts': io }), 'L3 C3').toEqual(listed);
+      expect(over('kernel', { 'shared/part.ts': pure(3, 'b') }), 'shared/ has no context').toEqual(listed);
+      expect(over('test-file', { 'server/src/coord/part.test.ts': pure(3, 'b') }), 'a test is not a source').toEqual(listed);
+      // The context is read from the merge-base's table: the PR's own row moves nothing.
+      expect(over('own-row', { 'server/src/elsewhere.ts': pure(3, 'b'), [SPEC_FILE]: table(', `elsewhere.ts`') }),
+        'a row the PR adds').toEqual(listed);
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  const waiverText = (over: Record<string, unknown> = {}): string => JSON.stringify({
+    file: 'ccd/ccd', maxDelta: 60, d: 'D-6223', reason: 'a fixture', added: '2026-10-01', createdAt: '2026-10-02', ...over,
+  });
+
+  it('a waiver may carry a createdAt day, never in the future; one without it still parses (its age is unknown)', () => {
+    const at = (text: string) => parseWaiverFiles([{ name: 'D-6223-x.json', text }], GROWTH_FILES, today);
+    expect(at(waiverText()).problems).toEqual([]);
+    expect(at(waiverText()).entries[0]!.createdAt).toBe('2026-10-02');
+    const noCreated = JSON.parse(waiverText()) as Record<string, unknown>;
+    delete noCreated['createdAt'];
+    expect(at(JSON.stringify(noCreated)).problems).toEqual([]);
+    expect(at(waiverText({ createdAt: '2026-02-30' })).problems.join()).toContain("createdAt '2026-02-30' is not a YYYY-MM-DD day");
+    expect(at(waiverText({ createdAt: '2026-11-14' })).problems.join()).toContain("createdAt '2026-11-14' is in the future");
+    expect(at(waiverText({ createdAt: 20261002 })).problems.join()).toContain('createdAt must be a string');
+    // Read as a merge-base, a waiver written before createdAt existed still parses; a malformed one present does not.
+    const lenient = { createdAtOptional: true };
+    expect(parseWaiverFiles([{ name: 'D-6223-x.json', text: JSON.stringify(noCreated) }], GROWTH_FILES, today, lenient).problems).toEqual([]);
+    expect(parseWaiverFiles([{ name: 'D-6223-x.json', text: waiverText({ createdAt: 'soon' }) }], GROWTH_FILES, today, lenient).problems)
+      .not.toEqual([]);
+  });
+
+  it('a merge-base ledger with no createdAt is read, and backfilling it adds nothing', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-created-'));
+    try {
+      const git = (...a: string[]): string => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+      const put = (rel: string, text: string): void => {
+        mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+        writeFileSync(path.join(dir, rel), text);
+      };
+      const commit = (m: string): string => { git('add', '-A'); git('commit', '-q', '-m', m); return git('rev-parse', 'HEAD'); };
+      git('init', '-q');
+      git('config', 'user.name', 'fixture');
+      git('config', 'user.email', 'fixture@example.invalid');
+      git('config', 'gc.auto', '0');
+      git('config', 'maintenance.auto', 'false');
+      const old = JSON.parse(waiverText()) as Record<string, unknown>;
+      delete old['createdAt'];
+      put(`${GROWTH_WAIVERS_DIR}/D-6223-ccd-ccd.json`, JSON.stringify(old));
+      const base = commit('a ledger from before createdAt');
+      put(`${GROWTH_WAIVERS_DIR}/D-6223-ccd-ccd.json`, waiverText());
+      put(`${GROWTH_WAIVERS_DIR}/D-6224-ccd-ccd.json`, waiverText({ d: 'D-6224' }));
+      const head = commit('backfill, and a new waiver');
+      const got = waiversInDiff(GROWTH_FILES, base, head, dir, today);
+      expect(got.problems).toEqual([]);
+      expect(got.added.map((w) => w.d)).toEqual(['D-6224']);
+      // At HEAD the field is optional too: an open PR's waiver written before D-8563 still counts (its age unknown).
+      put(`${GROWTH_WAIVERS_DIR}/D-6225-ccd-ccd.json`, JSON.stringify({ ...old, d: 'D-6225' }));
+      const undated = waiversInDiff(GROWTH_FILES, base, commit('a waiver with no createdAt'), dir, today);
+      expect(undated.problems).toEqual([]);
+      expect(undated.added.map((w) => w.d)).toEqual(['D-6224', 'D-6225']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it(`waivers older than ${WAIVER_AGE_DAYS} days are reported by name, oldest first; a report, never a failure`, () => {
+    expect(WAIVER_AGE_DAYS).toBe(30);
+    const items = [
+      { name: 'D-3-young.json', text: waiverText({ d: 'D-3', createdAt: '2026-10-20' }) },
+      { name: 'D-2-edge.json', text: waiverText({ d: 'D-2', createdAt: '2026-10-14' }) },
+      { name: 'D-1-old.json', text: waiverText({ d: 'D-1', createdAt: '2026-09-01' }) },
+      { name: 'D-4-older-by-name.json', text: waiverText({ d: 'D-4', createdAt: '2026-10-13' }) },
+      { name: 'D-5-broken.json', text: '{' },
+      { name: 'D-6-no-date.json', text: JSON.stringify({ d: 'D-6' }) },
+    ];
+    const aged = agedWaivers(items, today);
+    expect(aged).toEqual([{ name: 'D-1-old.json', days: 73 }, { name: 'D-4-older-by-name.json', days: 31 }, { name: 'D-6-no-date.json', days: null }]);
+    expect(agedLine(aged)).toBe('D-1-old.json (73 days), D-4-older-by-name.json (31 days), D-6-no-date.json (age unknown)');
+    expect(agedLine([])).toBe('(none)');
+    const md = growthSummary({ base: 'abcdef1234567', rows: [], over: [], methods: { base: 1, head: 1 }, armed: true, aged });
+    expect(md).toContain(`Waivers older than ${WAIVER_AGE_DAYS} days (a report, not a failure): D-1-old.json (73 days)`);
+    expect(growthSummary({ base: 'abcdef1234567', rows: [], over: [], methods: { base: 1, head: 1 }, armed: true }))
+      .not.toContain('Waivers older than');
+  });
+
+  it(`every waiver in ${GROWTH_WAIVERS_DIR} carries its createdAt`, () => {
+    const items = waiverItemsAtHead();
+    expect(items.filter((i) => typeof (JSON.parse(i.text) as { createdAt?: unknown }).createdAt !== 'string').map((i) => i.name))
+      .toEqual([]);
+  });
+});
+
+describe('growthCheck: the program row, ccd/ccd and its libraries as one total (D-8048)', () => {
+  const today = new Date('2026-11-15T12:00:00Z');
+  const row = (file: string, delta: number): GrowthRow => ({ file, base: 5000, head: 5000 + delta, delta, atBoth: true });
+  /** A library the diff adds: no base, so its whole size is its delta. */
+  const newLib = (n: number, file = 'ccd/lib/docs.sh'): GrowthRow => ({ file, base: 0, head: n, delta: n, atBoth: false });
+  /** A library the diff deletes (a revert, an `unmove`): its whole size is the shrink. */
+  const deletedLib = (n: number, file = 'ccd/lib/docs.sh'): GrowthRow => ({ file, base: -n, head: 0, delta: n, atBoth: false });
+  const program = (delta: number): GrowthRow => row(PROGRAM_ROW, delta);
+  const threeLibsAt = (delta: number): GrowthRow[] => ['a', 'b', 'c'].map((n) => row(`ccd/lib/${n}.sh`, delta));
+  const exemption = (o: Partial<GrowthExemption>): GrowthExemption => ({
+    pr: 1100, file: 'ccd/ccd', cap: 100, reason: 'a fixture', ruling: 'operator, a fixture', since: '2026-11-15', ...o,
+  });
+  const waiver = (o: Partial<GrowthWaiver>): GrowthWaiver => ({
+    file: 'ccd/lib/workspace.sh', maxDelta: 60, d: 'D-8048', reason: 'a fixture', added: '2026-11-15', createdAt: '2026-11-15', ...o,
+  });
+  const failing = (vs: readonly { file: string; fails: boolean }[]): string[] => vs.filter((v) => v.fails).map((v) => v.file);
+  const list = (...entries: unknown[]): string => JSON.stringify({ exemptions: entries });
+  const files = [...GROWTH_FILES, 'ccd/lib/workspace.sh'];
+
+  it('the program is ccd/ccd and every ccd/lib/*.sh not named ccrc-*', () => {
+    expect(PROGRAM_ROW).toBe('ccd (program)');
+    for (const f of ['ccd/ccd', 'ccd/lib/disk-retention.sh', 'ccd/lib/workspace.sh']) expect(isProgramMember(f), f).toBe(true);
+    for (const f of ['ccd/ccrc', 'ccd/lib/ccrc-settings.sh', 'ccd/lib/transcript.jq', 'ccd/lib/nested/x.sh', 'ccd/session-hook.sh']) {
+      expect(isProgramMember(f), f).toBe(false);
+    }
+  });
+
+  it('FIXTURE: a pure move passes: the new library against the shrink, and the program row at 0', () => {
+    expect(growthOver([newLib(1000), row('ccd/ccd', -1000), program(0)], [])).toEqual([]);
+  });
+
+  it('FIXTURE: a feature of 41 lines in a library is named, in the file and in the program', () => {
+    expect(growthOver([row('ccd/lib/workspace.sh', 41), program(41)], [])).toEqual(['ccd/lib/workspace.sh', PROGRAM_ROW]);
+  });
+
+  it('FIXTURE: 30 lines in each of three libraries passes every file and reds the program', () => {
+    expect(growthOver([...threeLibsAt(30), program(90)], [])).toEqual([PROGRAM_ROW]);
+  });
+
+  it('FIXTURE: shrinking one library cannot pay for growing two', () => {
+    expect(growthOver([row('ccd/lib/a.sh', -1000), row('ccd/lib/b.sh', 1000), row('ccd/lib/c.sh', 1000), program(1000)], []))
+      .toEqual([PROGRAM_ROW]);
+  });
+
+  it('FIXTURE: a revert passes: the deleted library is the shrink', () => {
+    expect(growthOver([row('ccd/ccd', 1000), deletedLib(-1000), program(0)], [])).toEqual([]);
+    // Only a member counts whole when deleted: any other listed file deleted is no shrink, as before.
+    expect(growthOver([row('ccd/ccd', 1000), { ...deletedLib(-1000), file: 'ccd/ccrc' }, program(1000)], []))
+      .toEqual(['ccd/ccd', PROGRAM_ROW]);
+  });
+
+  it('FIXTURE: the program row is never a shrink for another row, and no new file waives it', () => {
+    expect(growthOver([row('ccd/ccrc', 100), program(-1000)], [])).toEqual(['ccd/ccrc']);
+    const homeOf: HomeOf = () => ({ ring: 'L4', context: 'C3' });
+    expect(growthOver([program(100)], ['server/src/watchLane.ts'], homeOf)).toEqual([PROGRAM_ROW]);
+  });
+
+  it('FIXTURE: one waiver on a library covers its file up to maxDelta, and raises the program row by maxDelta', () => {
+    const verdicts = (lib: number, prog: number, maxDelta = 60) => {
+      const rows = [row('ccd/lib/workspace.sh', lib), program(prog)];
+      return growthVerdicts(rows, growthOver(rows, []), [], null, [], [waiver({ maxDelta })]);
+    };
+    expect(failing(verdicts(60, 60))).toEqual([]);
+    expect(failing(verdicts(60, GROWTH_LIMIT + 60)), 'the program at its limit plus the waiver').toEqual([]);
+    expect(failing(verdicts(60, GROWTH_LIMIT + 61)), 'one past it').toEqual([PROGRAM_ROW]);
+    // A waiver over its own limit applies to nothing, so it raises nothing.
+    expect(failing(verdicts(61, 61))).toEqual(['ccd/lib/workspace.sh', PROGRAM_ROW]);
+    // A waiver on a member that is not over raises nothing: the program is judged alone.
+    const notOver = [row('ccd/lib/workspace.sh', 30), row('ccd/lib/b.sh', 30), program(60)];
+    expect(failing(growthVerdicts(notOver, growthOver(notOver, []), [], null, [], [waiver({})]))).toEqual([PROGRAM_ROW]);
+    const v = growthVerdicts([row('ccd/lib/workspace.sh', 60), program(60)], ['ccd/lib/workspace.sh', PROGRAM_ROW], [], null, [], [waiver({})])
+      .find((x) => x.file === PROGRAM_ROW)!;
+    expect(v.title).toBe(`${PROGRAM_ROW}: delta +60 (GROWTH_OVER, raised by 60: its members' entries)`);
+  });
+
+  it('FIXTURE: an exemption on main for a member raises the program row by its cap; one that does not apply raises nothing', () => {
+    const rows = [row('ccd/ccd', 60), program(60)];
+    const over = growthOver(rows, []);
+    const named = [exemption({ pr: 1100, file: 'ccd/ccd', cap: 100 })];
+    expect(failing(growthVerdicts(rows, over, named, 1100, []))).toEqual([]);
+    expect(failing(growthVerdicts(rows, over, named, 1101, []))).toEqual(['ccd/ccd', PROGRAM_ROW]);
+    expect(failing(growthVerdicts(rows, over, named, 1100, ['server/test/growthCheck.ts']))).toEqual(['ccd/ccd', PROGRAM_ROW]);
+    // Past its cap, the exemption applies to nothing and raises nothing.
+    const past = [row('ccd/ccd', 101), program(101)];
+    expect(failing(growthVerdicts(past, growthOver(past, []), named, 1100, []))).toEqual(['ccd/ccd', PROGRAM_ROW]);
+    expect(growthVerdicts(past, growthOver(past, []), named, 1100, []).find((x) => x.file === PROGRAM_ROW)!.why)
+      .toBe(`${PROGRAM_ROW} grew by 101 net code lines, over the limit of ${GROWTH_LIMIT}`);
+  });
+
+  it('FIXTURE: the program row keeps the listed stage, whatever stage its members hold (D-8635)', () => {
+    const everywhere = (st: Stage): StageOf => () => st;
+    const frozen = everywhere({ stage: 'frozen' });
+    const capped = everywhere({ stage: 'capped', base: 9000, head: 9000, prior: 'frozen' });
+    const newCap = everywhere({ stage: 'capped', base: null, head: 9000, prior: 'frozen' });
+    for (const st of [frozen, capped, newCap]) expect(stageFor(st, PROGRAM_ROW)).toEqual({ stage: 'listed' });
+    expect(stageFor(frozen, 'ccd/ccd')).toEqual({ stage: 'frozen' });
+    // Frozen members: each is held at SPINE_LIMIT; the program stays at GROWTH_LIMIT, never SPINE_LIMIT.
+    const small = SPINE_LIMIT + 5;
+    expect(growthOver([row('ccd/ccd', small), program(small)], [], NO_HOME, frozen)).toEqual(['ccd/ccd']);
+    expect(growthOver([row('ccd/ccd', small), program(GROWTH_LIMIT + 1)], [], NO_HOME, frozen)).toEqual(['ccd/ccd', PROGRAM_ROW]);
+    // Capped members: no per-PR limit of their own, and still the program's total is bounded per PR.
+    expect(growthOver([row('ccd/ccd', GROWTH_LIMIT), program(GROWTH_LIMIT)], [], NO_HOME, capped)).toEqual([]);
+    expect(growthOver([row('ccd/ccd', 300), program(300)], [], NO_HOME, capped)).toEqual([PROGRAM_ROW]);
+    expect(growthOver([row('ccd/ccd', 300), program(300)], [], NO_HOME, newCap)).toEqual(['ccd/ccd', PROGRAM_ROW]);
+    // The verdicts agree: the program row is the listed row's verdict, never a cap's.
+    const rows = [row('ccd/ccd', 300), program(300)];
+    const v = growthVerdicts(rows, growthOver(rows, [], NO_HOME, capped), [], null, [], [], capped);
+    expect(failing(v)).toEqual([PROGRAM_ROW]);
+    expect(v.find((x) => x.file === PROGRAM_ROW)!.title).toBe(`${PROGRAM_ROW}: delta +300 (GROWTH_OVER)`);
+  });
+
+  it('FIXTURE: a cap or freeze cannot name the program row', () => {
+    const name = stageFileName(PROGRAM_ROW);
+    const cap = parseCapFiles([{ name, text: JSON.stringify({ file: PROGRAM_ROW, cap: 9000, d: 'D-8048', since: '2026-11-15' }) }], today);
+    expect(cap).toEqual({ entries: [], problems: [`${name}: file must not be the program row, ${PROGRAM_ROW}`] });
+    const freeze = parseFrozenFiles([{ name, text: JSON.stringify({ file: PROGRAM_ROW, d: 'D-8048', since: '2026-11-15' }) }], files, today);
+    expect(freeze.problems).toEqual([`${name}: file must be one of the listed files`]);
+  });
+
+  it('FIXTURE: no waiver or exemption can name the program row', () => {
+    expect(parseExemptions(list({ ...exemption({ file: PROGRAM_ROW }) }), files, today).problems).not.toEqual([]);
+    expect(parseWaiverFiles([{ name: 'D-8048-program.json', text: JSON.stringify(waiver({ file: PROGRAM_ROW })) }], files, today).problems)
+      .not.toEqual([]);
+  });
+
+  it('programRow sums the members at each sha, and armedGrowth adds it: a move between files leaves it at 0', (ctx) => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'growth-program-'));
+    ctx.onTestFinished(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: 'pipe' }).trim();
+    const commit = (m: string) => { git('add', '-A'); git('commit', '-q', '-m', m); return git('rev-parse', 'HEAD'); };
+    const put = (f: string, text: string) => {
+      mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+      writeFileSync(path.join(dir, f), text);
+    };
+    const fns = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => `f${from + i}() {\n  echo ${from + i}\n}\n`).join('');
+    git('init', '-q');
+    git('config', 'user.name', 'fixture');
+    git('config', 'user.email', 'fixture@example.invalid');
+    git('config', 'gc.auto', '0');
+    git('config', 'maintenance.auto', 'false');
+    put('ccd/ccd', `#!/usr/bin/env bash\n${fns(0, 100)}`);
+    put('ccd/lib/ccrc-settings.sh', 'x=1\n');
+    const base = commit('base');
+    // The move: 60 functions (180 code lines) leave ccd/ccd for a new library, behind one pointer line.
+    put('ccd/ccd', `#!/usr/bin/env bash\n${fns(0, 40)}# @ccd-lib:moved\n`);
+    put('ccd/lib/moved.sh', `# a header\n# @ccd-lib:moved\n${fns(40, 100)}`);
+    const moved = commit('move');
+    expect(programRow(base, moved, dir)).toEqual({ file: PROGRAM_ROW, base: 300, head: 300, delta: 0, atBoth: true });
+    const armed = armedGrowth(growthFiles(base, moved, dir), dir, base, moved, {}, today);
+    expect(armed.rows.map((r) => r.file)).toContain(PROGRAM_ROW);
+    expect(failing(armed.verdicts)).toEqual([]);
+    // 30 lines in ccd/ccd and 30 in the library: each file passes, and the program, at +60, does not. ccrc-settings.sh
+    // is no member: its +99 is its own row, and the program's total leaves it out.
+    put('ccd/ccd', `#!/usr/bin/env bash\n${fns(0, 40)}${'echo a\n'.repeat(30)}# @ccd-lib:moved\n`);
+    put('ccd/lib/moved.sh', `# a header\n# @ccd-lib:moved\n${fns(40, 100)}${'echo b\n'.repeat(30)}`);
+    put('ccd/lib/ccrc-settings.sh', 'y=1\n'.repeat(100));
+    const grown = commit('grow both');
+    expect(programRow(moved, grown, dir).delta).toBe(60);
+    expect(failing(armedGrowth(growthFiles(moved, grown, dir), dir, moved, grown, {}, today).verdicts))
+      .toEqual(['ccd/lib/ccrc-settings.sh', PROGRAM_ROW]);
+  });
+});
+
+/** The base, or why the growth rows cannot measure. */
+function resolveBase(): { base: string } | { skip: string } {
+  if (!process.env['CI'] && !process.env['GROWTH_CHECK']) {
+    return { skip: 'not in CI (set GROWTH_CHECK=1 to run locally)' };
+  }
+  try {
+    gitRead(['rev-parse', '--verify', '--quiet', 'origin/main^{commit}'], ROOT);
+  } catch {
+    return { skip: 'no origin/main in this checkout' };
+  }
+  try {
+    const base = gitRead(['merge-base', 'origin/main', 'HEAD'], ROOT).trim();
+    return { base };
+  } catch {
+    return { skip: 'no merge-base between origin/main and HEAD' };
+  }
+}
+
+/** The names `node:module` exports that load no module (D-8563: ring.ts reads `builtinModules`). */
+const LOADS_NOTHING: ReadonlySet<string> = new Set(['builtinModules', 'isBuiltin']);
+
+/** Modules the growth check may load that decide nothing, each with why; empty today. */
+const DECIDES_NOTHING: Readonly<Record<string, string>> = {};
+
+/** The relative-import closure of `roots` (repo paths), and every load in it the walk cannot follow: a `require(…)` or
+ *  `createRequire` call, an import of `node:module`, or an `import(…)` whose argument is not a literal. */
+function importClosure(roots: readonly string[]): { modules: string[]; unfollowable: string[] } {
+  const seen = new Set<string>();
+  const unfollowable: string[] = [];
+  const queue = [...roots];
+  while (queue.length) {
+    const rel = queue.shift()!;
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    const abs = path.join(ROOT, rel);
+    const parsed = parseFile(abs);
+    for (const spec of parsed.imports.map((i) => i.specifier)) {
+      if (spec === 'module' || spec === 'node:module') {
+        // D-8563: `builtinModules` and `isBuiltin` load nothing; any other binding (`createRequire`, `register`) can.
+        const edge = parsed.imports.find((i) => i.specifier === spec)!;
+        if (edge.names.length === 0 || edge.names.some((n) => !LOADS_NOTHING.has(n))) unfollowable.push(`${rel}: imports ${spec}`);
+      }
+      if (!spec.startsWith('.')) continue;
+      const target = path.resolve(path.dirname(abs), spec);
+      const asTs = target.replace(/\.js$/, '.ts');
+      queue.push(path.relative(ROOT, target !== asTs && existsSync(asTs) ? asTs : target));
+    }
+    for (const c of parsed.calls) {
+      if (c.name === 'require' || c.name === 'createRequire') unfollowable.push(`${rel}:${c.line}: ${c.name}(…)`);
+    }
+    // The parser records an `import(…)` only when its argument is a literal, so any `import(` in the code (comments
+    // stripped) beyond the ones it recorded has a computed specifier.
+    const calls = stripTs(parsed.text).match(/\bimport\s*\(/g)?.length ?? 0;
+    const literal = parsed.imports.filter((i) => i.kind === 'dynamic' || i.kind === 'type-query').length;
+    if (calls > literal) unfollowable.push(`${rel}: ${calls - literal} dynamic imports of a computed specifier`);
+  }
+  return { modules: [...seen].sort(), unfollowable };
+}
+
+/** D-8563: the ledger's waivers older than WAIVER_AGE_DAYS, by name; printed on every run, a report and never a failure. */
+const AGED = agedWaivers(waiverItemsAtHead());
+console.log(`growth-check: waivers older than ${WAIVER_AGE_DAYS} days (a report, not a failure): ${agedLine(AGED)}`);
+
+const resolved = resolveBase();
+const measured = 'base' in resolved
+  ? (() => {
+      const head = gitRead(['rev-parse', 'HEAD'], ROOT).trim();
+      // D-6211: one helper reads and decides; the exemption list is origin/main's copy, never this checkout's.
+      const files = growthFiles(resolved.base, head, ROOT);
+      const armed = armedGrowth(files, ROOT, resolved.base, head, process.env);
+      // D-6119: absolute numbers go to the job summary only, never an assertion.
+      const methods = methodCounts(METHOD_COUNT_FILE, METHOD_COUNT_CLASS, resolved.base, head, ROOT);
+      const summaryWritten = appendJobSummary(growthSummary({ base: resolved.base, rows: armed.rows, over: armed.over,
+        methods, armed: GROWTH_ARMED, exemptions: armed.exemptions, waivers: armed.waivers, aged: AGED, caps: armed.caps }));
+      return { ...armed, files, summaryWritten };
+    })()
+  : null;
+
+if (measured === null) {
+  console.log(`growth-check: skipped, ${'skip' in resolved ? resolved.skip : ''}`);
+} else {
+  console.log(['growth-check: net code lines against the merge-base',
+    ...measured.rows.map((r) => `  ${r.file.padEnd(42)} base ${String(r.base).padStart(6)}  head ${String(r.head).padStart(6)}  delta ${r.delta >= 0 ? '+' : ''}${r.delta}`),
+    `GROWTH_OVER: ${overLine(measured.over, measured.exemptions, (f) => f, measured.waivers)}`,
+    `Caps (D-8635): ${measured.caps.map((c) => `${c.file} ${c.head} of ${c.cap}`).join(', ') || '(none)'}`,
+    `PR: ${measured.pr === null ? '(none: no entry applies)' : `#${measured.pr}`}; `
+      + `exemption entries on origin/main: ${measured.onMain.entries.length}; `
+      + `growth-check files this diff edits: ${measured.touched.length ? measured.touched.join(', ') : '(none)'}; `
+      + `ledger entries this diff adds: ${measured.ledger.added.map((w) => `${w.file} ${w.d} max ${w.maxDelta}`).join(', ') || '(none)'}`].join('\n'));
+  for (const p of measured.ledger.problems) {
+    console.warn(`growth-check: ${GROWTH_WAIVERS_DIR} is malformed, so it waives nothing: ${p}`);
+  }
+  for (const p of measured.onMain.problems) {
+    console.warn(`growth-check: origin/main's ${GROWTH_EXEMPTIONS_FILE} is malformed, so it exempts nothing: ${p}`);
+  }
+  for (const f of measured.over) {
+    if (!GROWTH_ARMED) console.warn(`growth-check: ${f} grew by more than ${GROWTH_LIMIT} net code lines (reporting only until OA-C2)`);
+  }
+}
+
+describe.skipIf(measured === null)('growth-check: the listed files against the merge-base (D-5848)', () => {
+  it('the job summary is written whenever the runner names a summary file (D-6119)', () => {
+    expect(measured!.summaryWritten).toBe(Boolean(process.env['GITHUB_STEP_SUMMARY']));
+  });
+  it(`${GROWTH_WAIVERS_DIR} is shrink-only debt: no waiver the merge-base holds is edited, and every added one cites a defined D-number (D-6223)`, () => {
+    // Absent at the merge-base (the ledger's own landing), the base holds no waiver.
+    const base = waiversAt(measured!.files, (resolved as { base: string }).base, ROOT, new Date(), { createdAtOptional: true }).entries;
+    const head = parseWaiverFiles(waiverItemsAtHead(), measured!.files).entries;
+    // D-8563: backfilling `createdAt` onto a waiver the merge-base holds without one is the one edit allowed.
+    const asOnBase = (b: GrowthWaiver, h: GrowthWaiver): GrowthWaiver => {
+      if ('createdAt' in b) return h;
+      const { createdAt: _backfilled, ...rest } = h;
+      return rest as GrowthWaiver;
+    };
+    const edited = head.filter((h) => base.some((b) => b.file === h.file && b.d === h.d && JSON.stringify(b) !== JSON.stringify(asOnBase(b, h))));
+    expect(edited.map((e) => `${e.file} ${e.d}`), 'an entry on the merge-base is never edited; add a new one under its own D-number').toEqual([]);
+    const defined = definedDNumbers(ROOT);
+    expect(waiversAdded(base, head).filter((w) => !defined.has(w.d)).map((w) => w.d)).toEqual([]);
+  });
+  it('every ccd/lib/*.sh in the tree has a measured row (#2006)', () => {
+    const libs = readdirSync(path.join(ROOT, 'ccd/lib')).filter((n) => n.endsWith('.sh')).map((n) => `ccd/lib/${n}`);
+    expect(libs.length).toBeGreaterThan(0);
+    expect(measured!.rows.map((r) => r.file)).toEqual(expect.arrayContaining(libs));
+  });
+  for (const v of measured?.verdicts ?? []) {
+    it(v.title, () => {
+      if (GROWTH_ARMED) expect(v.fails, v.why).toBe(false);
+    });
+  }
+});

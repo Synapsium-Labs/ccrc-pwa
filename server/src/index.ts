@@ -1,22 +1,62 @@
-import { buildServer, type Deps } from './server.js';
-import { loadConfig } from './config.js';
+import { buildServer, type CollectLaneDeps, type Deps } from './server.js';
+import { derivedRoleNote, loadConfig } from './config.js';
+import { reloadRoster, rosterAnswerOf } from './config.js';
+import { reconcilingAccountOps } from './accounts/reconcile.js';
+import { bodyDigest } from '../../shared/mark.mjs';
+import { generateAccountsSh } from '../../shared/generate.mjs';
 import { readBuildInfo, type BuildInfo } from './buildinfo.js';
 import { realRunner, Tmux } from './exec.js';
 import { ccdRunner } from './lifecycle.js';
-import { localIO } from './io.js';
+import { localIOFor } from './io.js';
 import { attachPty } from './pty.js';
 import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
-import { connectFleet } from './remote/client.js';
+import { installShutdownSeal } from './shutdownseal.js';
+import { connectFleet, type FleetClient } from './remote/client.js';
+import { bootPushOutbox } from './pushSender.js';
+import { responseStampNow } from './responses/stamp.js';
+import { PerfRecorder } from './perf/recorder.js';
 import { makeRefreshCaps } from './refreshcaps.js';
+import { recordCcdVerbs } from './fleetstate.js';
+import { FleetIdentityCell } from './fleetidentity.js';
 import { PushService } from './push.js';
 import { NotifyLog } from './notifylog.js';
-import { Presence } from './presence.js';
+import { Viewers } from './viewer.js';
 import { KeyedQueue } from './inject/queue.js';
-import { readMailToken } from './coord/token.js';
-import { openCoordDb } from './coord/db.js';
+import { systemTimePorts } from './time/system.js';
+import { OverlordAuthorityJournal, overlordAuthorityFileAt } from './coord/overlordAuthorityJournal.js';
+import { OverlordAuthorityGuard, runOverlordAuthorityBoot, type AuthorityBootPort } from './coord/overlordAuthorityGuard.js';
+import { bootBoxToken } from './token/boot.js';
+import { BoxTokenDriver } from './token/driver.js';
+import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
+import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
+import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
+import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
+import { createLandingJournal } from './coord/landingJournal.js';
+import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
+import { UpdateIntentLog, defaultUpdateIntentLogPath } from './coord/updateintentlog.js';
+import { collectLaneJournalAt, defaultCollectLaneJournalPath } from './coord/collectLaneJournal.js';
+import { operatorSecretRows, withOperatorSecretRows } from './coord/ledgersSecrets.js';
 import { readLocalCcdCaps } from './localcaps.js';
+import { localUpdateSpawnFor } from './update/converge.js';
+import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
+import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
+import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
+import { LinearJournal } from './linear/journal.js';
+import { planStorePort } from './coord/planStore.js';
+import { quizLanePortOf } from './continuity/quizStore.js';
+import { QUIZ_RECORD_READY } from './continuity/quiz.js';
+import { allowAll } from './linear/policyPoint.js';
+import { LinearRateService } from './linear/rate.js';
+import { LinearRefresher } from './linear/refresher.js';
+import { accountOpsFor } from './accounts/ops.js';
+import { TestboxAudit } from './testboxAudit.js';
+import { testboxCaptureTransport } from './buildCaptureLane.js';
+import { testboxAdminOpsFor } from './testboxAdmin.js';
+import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf, fingerprintGeneration, fingerprintRow } from './accounts/mask.js';
+import { mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 const cfg = loadConfig();
@@ -30,6 +70,7 @@ const push = cfg.vapidPublic && cfg.vapidPrivate
   ? new PushService(
       { publicKey: cfg.vapidPublic, privateKey: cfg.vapidPrivate, subject: cfg.vapidSubject },
       path.join(cfg.home, '.ccrc', 'push-subs.json'),
+      SHAPE_ONLY_MASKER,
     )
   : undefined;
 
@@ -37,24 +78,29 @@ const push = cfg.vapidPublic && cfg.vapidPrivate
 // suppression are useful even on a box with no VAPID keys, so both are always
 // wired. Same directory as the push subscription store.
 const notifyLog = new NotifyLog(path.join(cfg.home, '.ccrc', 'notify-log.json'));
-const presence = new Presence();
+const viewers = new Viewers();
 
-// D-57 (Task 11 review): this line said /api/notify AND /api/mail "accept
-// unauthenticated callers" — true the day it landed (eb9c88a), false since
-// D-39 (Task 7 fix round) made `checkMailToken(null, …)` answer
-// `'unconfigured'`, which BOTH mail gates (`routes.ts`'s ingress and ack)
-// treat as `verdict !== 'ok'` and refuse with 401 — in their own words,
-// "/api/mail fails shut on an unconfigured token, it does not fail open."
-// Only `/api/notify` still passes an unconfigured token through (`server.ts`
-// has no `'unconfigured'` arm on that gate, and logs nothing on that path
-// either). The two routes now have OPPOSITE postures on a missing token, and
-// this was the one line an operator would grep the journal for.
-const mailToken = readMailToken(cfg.mailTokenPath);
-if (mailToken === null) {
-  console.warn(`ccrc-server: no box token at ${cfg.mailTokenPath} — /api/notify accepts ` +
-    'unauthenticated callers (its one-deploy legacy tolerance), while /api/mail and ' +
-    '/api/mail/:id/ack FAIL SHUT and refuse every caller with 401 — the mail bus is dead, not ' +
-    'open. Ship a token with deploy.sh (see deploy/ccrc-mail.token.example).');
+// The box token (spec 4.2, D-4388): minted, adopted or recovered by `bootBoxToken`,
+// which refuses a hand-made unusable or placeholder file exactly as
+// `readMailToken` did and never adopts a retired value. Every warning it
+// returns is one line with paths and words only. The holder replaces the old
+// string: every call site still reads `deps.mailToken ?? null` at request time,
+// and the driver below mutates the holder in place.
+const tokenBoot = await bootBoxToken({
+  mailTokenPath: cfg.mailTokenPath, home: cfg.home, role: cfg.role, roleSource: cfg.roleSource,
+  fleetMode: cfg.fleetMode, now: Date.now(),
+});
+for (const line of tokenBoot.warnings) console.warn(line);
+const mailToken = tokenBoot.holder;
+
+// R24 (delegation broker wave 3): an active coordination restore marker stops the process BEFORE coord.db is opened, and so does a
+// marker that cannot be measured (fail closed). `ccrc coordination-snapshot` publishes the marker while it replaces coord.db and the
+// delegation journal and checkpoint, so booting over it would open a half-replaced set. Refused the way the agent-link check below
+// refuses: one `ccrc-server:` line on stderr, then a nonzero exit.
+const restoreRefusal = coordinationRestoreRefusal(cfg.ccrcDir, COORDINATION_RESTORE_MARKER_FILE);
+if (restoreRefusal !== null) {
+  console.error(restoreRefusal);
+  process.exit(1);
 }
 
 // Opened at the root, before the watcher: a database that cannot be migrated
@@ -63,7 +109,90 @@ if (mailToken === null) {
 // ccrc.service` (added this build) is what turns it into a failed deploy with
 // the journal tail attached, rather than a green deploy in front of a
 // three-second crash loop.
-const coord = new CoordStore(openCoordDb(cfg.coordDbPath));
+// The process's ONE set of time ports (Overlord spec §11.5): both modes and every consumer get the same object, through
+// `Deps.time`. Nothing else builds the system adapters (`single-definition/time-ports.test.ts`). Built before the store,
+// whose boot pass below reads its clock; it takes no argument and reads nothing the store builds.
+const time = systemTimePorts();
+const coordDb = openCoordDb(cfg.coordDbPath);
+// Landing order wave 5f (shared contract §6): the store owns ONE authority journal, `landing.log` inside `cfg.ccrcDir`
+// (made here, because the adapter never creates a directory), and its landing entrances start fenced. The replay below
+// is the only thing that opens them, and it runs before the HTTP server, the watchers and every timer, in both fleet
+// modes (one store, built above the mode branch). A callback that cannot prove the connection closed stops the process.
+mkdirSync(cfg.ccrcDir, { recursive: true });
+const coord = new CoordStore(coordDb, {
+  landingJournal: createLandingJournal(cfg.ccrcDir),
+  onUnusableConnection: (): never => { console.error('ccrc-server: landing connection unusable, stopping'); process.exit(1); },
+});
+const landingReplay = coord.replayLandingJournal();
+if (!landingReplay.ok) {
+  console.error(`ccrc-server: landing journal recovery refused ${landingReplay.error}`);
+  try { coordDb.close(); } catch { /* the process stops either way */ }
+  process.exit(1);
+}
+// The push outbox's boot pass (Overlord W1, `pushSender.ts#bootPushOutbox`): synchronously, before the fleet link
+// connects, the server listens or the watcher starts, so nothing can push before it and every `sending` row it finds
+// belongs to a process that died.
+bootPushOutbox(coord, time.clock);
+// The response record's boot (Overlord W1, question 17): one `response_boots` row, before anything can push, so every
+// response row this process writes carries this boot's epoch (or `unmeasured` when the row could not be written).
+const responseBoot = coord.recordResponseBoot(build?.sha ?? null, time.clock.wall());
+if (!responseBoot.ok) console.warn(`ccrc-server: response record: ${responseBoot.detail}; this process's response rows are stamped unmeasured`);
+// The Overlord authority journal (Overlord W1, `coord/overlordAuthorityJournal.ts`, spec §7.6): built once, its guard
+// passed to the writer as its port, and its boot coherence (Table 7.6a, after the torn-tail heal) run before the fleet link,
+// the HTTP server, the watchers and every timer. A detected rollback fences the doors, never the boot: the server starts
+// whatever the verdict, and the boot step logs it.
+const overlordAuthorityPort: AuthorityBootPort = {
+  healTornTail: () => overlordAuthority.healTornTail(coordDb), measure: () => overlordAuthority.measure(coordDb),
+};
+const overlordAuthorityGuard: OverlordAuthorityGuard = new OverlordAuthorityGuard(overlordAuthorityPort);
+const overlordAuthority: OverlordAuthorityJournal = new OverlordAuthorityJournal(
+  overlordAuthorityFileAt(cfg.ccrcDir), { clock: time.clock }, overlordAuthorityGuard);
+runOverlordAuthorityBoot(overlordAuthorityPort, overlordAuthorityGuard, (line) => console.warn(line));
+
+// The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
+// `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`
+// INSIDE its transaction, so every caller needs to share this one instance
+// rather than each route constructing its own.
+const poolEdgeLog = new PoolEdgeLog(defaultPoolEdgeLogPath(cfg.home));
+
+// The process's ONE catalogue poller (design 2026-09-20 §7), beside `coord`
+// because its only write is `coord.applyReleaseListing`. Its state and ETag
+// are memory (D-3182). A box whose release source
+// could not be read (Task 9, D-3175) still builds one: every poll
+// then answers `no-release-source` and sends nothing — said once, here.
+const catalogue = createCataloguePoller({ source: cfg.releaseSource, apiUrl: cfg.releaseApiUrl, store: coord });
+if (cfg.releaseSource.ok === false) {
+  // `env-malformed` carries `path: null` (Task 9): the fault is the env pair, not a file.
+  const where = cfg.releaseSource.why === 'env-malformed'
+    ? 'CCRC_RELEASE_OWNER/CCRC_RELEASE_REPO are both set and one is not a plain GitHub name'
+    : cfg.releaseSource.path;
+  console.warn(`ccrc-server: no release source (${cfg.releaseSource.why}: ${where}) — the update ` +
+    'catalogue will not poll. Set BOTH CCRC_RELEASE_OWNER and CCRC_RELEASE_REPO in ~/.ccrc/ccrc.env, or run the ' +
+    'server from an installed tree whose ccd/ccrc carries its release-source lines.');
+}
+
+// D-3209: validated once, beside the release-source check above — a bad
+// `apiUrl` is just as fatal to the catalogue lane as a missing owner/repo.
+const releaseApiUrlProblem = apiBaseProblem(cfg.releaseApiUrl);
+if (releaseApiUrlProblem !== null) {
+  console.warn(`ccrc-server: ${releaseApiUrlProblem} — the update catalogue will not poll.`);
+}
+
+// The process's ONE `UpdateIntentLog`, beside `poolEdgeLog` and for its reason:
+// `CoordStore.setIntent` appends to it INSIDE its transaction, so the intent
+// route must share this instance rather than construct its own (design
+// 2026-09-20 §6).
+const updateIntentLog = new UpdateIntentLog(defaultUpdateIntentLogPath(cfg.ccrcDir));
+
+// The collector switch's ONE generation journal and this process's ONE boot nonce (path-identity spec 2026-10-12
+// §5.2, §5.6), beside `updateIntentLog` and for its reason: `CoordStore.setCollectLane` appends to the journal INSIDE
+// its transaction, so the route and the collector's latch share this instance. The journal resolves through
+// `cfg.ccrcDir`. The nonce is minted once per process and read only by the route's confirm key, so a key minted
+// before a restart never confirms after it; it never enters L1 state.
+const collectLane: CollectLaneDeps = {
+  journal: collectLaneJournalAt(defaultCollectLaneJournalPath(cfg.ccrcDir)),
+  bootNonce: randomUUID(),
+};
 
 // ONE queue, above the mode branch, so both modes and both consumers get the
 // same object. Serialising the naming sweep's rename against
@@ -71,20 +200,32 @@ const coord = new CoordStore(openCoordDb(cfg.coordDbPath));
 // call only against itself.
 const queue = new KeyedQueue();
 
+// The one agent connection, hoisted out of the remote arm so the `ready`
+// hook below can reach it once the watcher exists. Null in local mode.
+let fleetClient: FleetClient | null = null;
+const perf = new PerfRecorder();   // console speed S1: timers that change nothing; started beside the watcher, stopped by `watcher.stop()`
 let deps: Deps;
 if (cfg.fleetMode === 'remote') {
   if (!cfg.agentUrl || !cfg.agentToken) {
     console.error('ccrc-server: CCRC_FLEET=remote requires CCRC_AGENT_URL and CCRC_AGENT_TOKEN');
     process.exit(1);
   }
-  const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken });
+  const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken, onRoundTrip: (op, ms) => perf.link(op, ms) });
+  fleetClient = fleet.client;
   // The composition root is the ONLY place a raw `Runner` is in scope: it binds
   // one into `runCcd` and hands the other to `Tmux`'s constructor. Nothing
   // downstream holds a runner, which is what makes `CcdArgv` total (task 13S).
   deps = {
-    cfg, build, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
-    spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence, queue, mailToken, coord,
-    refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
+    cfg, perf, build, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
+    spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, viewers, queue, time, mailToken, coord,
+    poolEdgeLog,
+    catalogue,
+    updateIntentLog,
+    collectLane,
+    updateRunner: localUpdateSpawnFor(cfg.home),
+    sendUpdateOp: (tag, kind) => fleet.client.request({ t: 'req', op: 'update', tag, kind }, UPDATE_OP_TIMEOUT_MS),
+    fleetIdentity: fleet.identity,
+    refreshCaps: makeRefreshCaps(fleet.client, fleet.state, fleet.identity, recordCcdVerbs),
   };
 } else {
   // Fix round 3 (task 14, Important #3): real evidence, not an absent
@@ -116,13 +257,38 @@ if (cfg.fleetMode === 'remote') {
     // compare it with itself and answer `'agreed'` — a green tick for a check
     // that never ran, and the one answer worse than saying nothing.
     build: null as BuildInfo | null,
+    // `observedEpoch` is OMITTED entirely (review T8-R1, F6), not set to an
+    // explicit `null` the way `rosterFp`/`build` are just above — and this is
+    // a DIFFERENT reason, not the same one restated. Those two are
+    // cross-box COMPARISONS with no second box to compare against in local
+    // mode, so `null` there is a considered "not applicable". `observedEpoch`
+    // is not a comparison — it is a fact about what pool epoch THIS box
+    // holds, which this box, running its own `ccd` locally, could in
+    // principle answer. Nothing here reads `~/.cc-sessions/pool-epoch` to
+    // populate it, so the omission is an honest gap (no evidence gathered),
+    // not a decided absence — `fleetstate.ts`'s own comment on this field
+    // says the same. `FleetState` declares the field OPTIONAL, so the
+    // omitted key reads as `undefined` on access either way.
   };
+  // Local mode's epoch is 0 (the cell below is never invalidated), so the one read asks and lands under epoch 0:
+  // the measured rule then writes only a non-null list (D-7079).
   void readLocalCcdCaps(cfg.ccdBin).then((verbs) => {
-    if (verbs !== null) fleetState.ccdVerbs = verbs;
+    recordCcdVerbs(fleetState, { from: 'measured', verbs, askedEpoch: 0, epochNow: () => 0 });
   });
+  // Path-identity spec 2026-10-12 §5.2, local mode. There is no agent connection, so nothing invalidates this cell
+  // and its epoch stays 0. The inventory's own sweep publishes THIS box's directly read node-id into it
+  // (`runInventory`'s `ownIdentity`), because in local mode this box is the fleet node. A box whose node-id cannot
+  // be read stays unmeasured; the connection label is never an identity.
+  const localFleetIdentity = new FleetIdentityCell();
   deps = {
-    cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
-    spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
+    cfg, perf, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIOFor(cfg.home),
+    spawnPty: attachPty, push, notifyLog, viewers, queue, time, mailToken, coord,
+    poolEdgeLog,
+    catalogue,
+    updateIntentLog,
+    collectLane,
+    updateRunner: localUpdateSpawnFor(cfg.home),
+    fleetIdentity: localFleetIdentity,
     // `connected`/`downSince` are inert for local mode — every reader of
     // them is gated on `cfg.fleetMode === 'remote'` first (server.ts,
     // watch.ts) — so `true`/`null` are placeholders, never read as a claim
@@ -142,7 +308,136 @@ await notifyLog.load();
 const bus = new Bus();
 const watcher = new FleetWatcher(deps, bus);
 
+// Design 2026-09-20 §8: a `ready` frame measures the fleet node at once. The
+// handshake is when an agent that just restarted — a self-update among the
+// reasons — becomes measurable, and a minute is too long to show the old
+// build. A `ready` that fired before this line (the client connects while
+// `notifyLog.load()` is awaited above) is covered by the first tick: the
+// inventory lane's clock starts at 0.
+fleetClient?.onConnected(() => watcher.triggerInventory());
+
+// The box-token driver (spec §5): its own unref'd 60 s timer, never a lane in
+// watch.ts. Built before buildServer so the claim door and the rotate route read
+// it from `deps.tokenDriver`; started after listen. `lastReadyAt` is the time
+// of the last agent handshake, which re-probes a learned hold and resets backoff.
+let lastReadyAt: number | null = null;
+fleetClient?.onConnected(() => { lastReadyAt = Date.now(); });
+const tokenStore = fileTokenStore(tokenPaths(cfg.mailTokenPath, cfg.home));
+const tokenDriver = new BoxTokenDriver({
+  store: tokenStore, holder: tokenBoot.holder,
+  link: fleetClient === null ? null : tokenSyncLinkOver(fleetClient),
+  generation: fleetClient === null ? null : generationReaderOver(deps.io, cfg.ccrcDir, Date.now),
+  rows: gateRowsOver(coord, () => cfg.fleetMode === 'remote' && (deps.fleetState?.connected ?? false), () => lastReadyAt),
+  env: { fleetMode: cfg.fleetMode, role: cfg.role, roleSource: cfg.roleSource, agentEnvMarksFleet: tokenBoot.agentEnvMarksFleet },
+  bothWriter: tokenBoot.bothWriterArmed ? fileBothRoleWriter(tokenStore.paths) : null,
+}, tokenBoot);
+deps.tokenDriver = tokenDriver;
+// The ONE Linear rate service (D-7670, R4; spec §6.7, #1444), on the wall clock: every caller of Linear asks it before
+// each call, so nothing else holds a bucket. Its state lives in memory and starts each lane at a quarter on a restart.
+const linearRate = new LinearRateService(Date.now);
+deps.linearRate = linearRate;
+// The ONE background refresher (D-7668; spec §4.3), over the same rate service: it alone asks Linear for a slot's teams
+// after a routing miss, a slot at a time, on each slot's floor, never inside a request.
+const linearRefresher = new LinearRefresher({ ccrcDir: cfg.ccrcDir, rate: linearRate });
+deps.linearRefresher = linearRefresher;
+
+// The account audit (D-5516) over the one coord.db, and the ONE `AccountOps` arm (spec §13.2, G13), chosen by
+// `cfg.fleetMode` ONLY: in remote mode the local spawner is never constructed, so `ccrc account` can never run on
+// the controller. Built before `buildServer`, which hands the audit to the step-up lock and the arm to the account
+// routes (A14 onward).
+const accountAudit = new AccountAudit(coord.db);
+deps.accountAudit = accountAudit;
+// The test box ledger (D-8166) over the same coord.db, and the ONE `TestboxAdminOps` arm, chosen by `cfg.fleetMode` ONLY as the
+// account arm is: a remote fleet gets the agent's `testbox-admin` op, and the local spawner is never constructed there.
+const testboxAudit = new TestboxAudit(coord.db);
+deps.testboxAudit = testboxAudit;
+deps.testboxAdmin = testboxAdminOpsFor(cfg, deps.io);
+// D-8289: the capture queue's transport, over the test box lane's connection (`watcher.testboxLane`).
+deps.buildCapture = testboxCaptureTransport(() => watcher.testboxLane.block());
+// The Linear write journal (D-7671) over the same coord.db, its one instance, and the policy point's default (D-7672):
+// both handed to the proxy and Settings routes that journal and ask (LK9, LK11; #1444).
+const linearJournal = new LinearJournal(coord.db);
+deps.linearJournal = linearJournal;
+// The plan tables through their port (D-8181), built once beside the journal: the plan routes' only door to them.
+deps.plan = planStorePort(coord.db);
+// The weekly replay quiz lane's port (Overlord W1a), over the same coord.db; it raises nothing until the record path ships.
+deps.quiz = quizLanePortOf(coord, QUIZ_RECORD_READY);
+deps.linearPolicy = allowAll;
+// Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
+// roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown
+// runs the `roster` sub and writes a `reconcile` row. `masker` is read only when an answer lands, after it exists.
+const accountOps = reconcilingAccountOps(accountOpsFor(cfg, { client: fleetClient }), {
+  reload: (stdout) => {
+    const a = rosterAnswerOf(stdout, fingerprintAnswerOf);
+    return a === null ? null : reloadRoster(cfg, a, {
+      fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity),
+      fingerprints: { offer: (f, keep) => masker.offer(f, keep) },
+    });
+  },
+  audit: accountAudit,
+  fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity),
+  actor: actorOf('ccrc server', ''),
+});
+deps.accountOps = accountOps;
+// A roster the fleet holds that is not this server's (its `ready` frame's fingerprint) is reconciled once per
+// disagreement (spec §3.9: "whenever FleetHostBanner sees a roster mismatch"). The ready frame also invalidates the
+// fleet identity, which `reloadRoster` needs, so the check runs again when the inventory publishes it (D-6057 (6)).
+const reconcileRosterDivergence = (): void => {
+  const fleetFp = deps.fleetState?.rosterFp ?? null;
+  if (fleetFp !== null && fleetFp !== bodyDigest(generateAccountsSh(cfg.roster))) void accountOps.reconcileDivergence(fleetFp);
+};
+fleetClient?.onConnected(reconcileRosterDivergence);
+if (fleetClient !== null) fleetClient.identity.onKnown(reconcileRosterDivergence);
+// The egress mask (D-5513, accounts plan Task A10) over the same coord.db and the box token's holder: every server
+// egress of session-derived text passes it. It follows the holder's current value, keeps every previous generation
+// whose rows it holds in memory across a rotation, and asks for the re-keying `roster` sub, whose answer it ingests,
+// retrying with backoff until it lands (D-5995); A12's `reloadRoster` ingests every other answer's fingerprints.
+const masker = new SecretMasker({
+  db: coord.db,
+  token: () => mailToken.currentValue(),
+  requestRekey: async () => {
+    const r = await deps.accountOps?.run('roster', null, {});
+    const fromBox = r?.kind === 'exited' && r.code === 0 ? fingerprintAnswerOf(r.stdout) : null;
+    // The operator's pasted secrets (plan PL6) are held here, not on the box, so the box's answer never carries them: their
+    // rows are re-keyed under the current token beside it, or a rotation would leave them stale (and the re-key retrying).
+    const token = mailToken.currentValue();
+    if (token === null || token === '') return fromBox;
+    const listed = await operatorSecretRows(cfg.ccrcDir, (laneId, value) => fingerprintRow(token, laneId, value));
+    // A slot that could not be read is not named, so its rows stay under their old generation and the re-key retries them.
+    // The warn is fixed text: it names no slot and no value (departure pl6f-rekey-unreadable-warn, review 1391 A-12).
+    if (listed.unreadable) console.warn('ccrc-server: the operator-secrets store could not be read whole; its unread slots are re-keyed on a later pass');
+    // A save that lands while this re-key is in flight keeps its own row: the masker adds the row read here beside an operator
+    // lane's current-token rows and drops its older ones, and never writes one the operator removed meanwhile (`ingest`'s
+    // `rekey`, reviews 1391 F1 and 1418 F1).
+    return withOperatorSecretRows(fromBox, fingerprintGeneration(token), listed.rows);
+  },
+});
+deps.masker = masker;
+deps.responseStamp = () => responseStampNow(responseBoot);
+push?.setMasker(masker);
+// The audit's 365-day retention, at boot and then daily on its own unref'd timer (D-5620). The Linear journal's 365 days
+// ride the same beat (D-7671). Not a row of `LANE_SCHEDULE`: this root holds the three stores, none of them is a watcher
+// lane, and the sweep runs before the server listens and whether or not the tick does. A recorded exception (D-8614).
+accountAudit.sweep(Date.now());
+testboxAudit.sweep(Date.now());
+linearJournal.sweep(Date.now());
+setInterval(() => { accountAudit.sweep(Date.now()); testboxAudit.sweep(Date.now()); linearJournal.sweep(Date.now()); }, 86_400_000).unref();
+
+deps.overlordAuthority = overlordAuthority;
+deps.overlordAuthorityGuard = overlordAuthorityGuard;
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
+perf.start();
 await app.listen({ host: cfg.host, port: cfg.port });
+tokenDriver.start();
 console.log(`ccrc-server on ${cfg.host}:${cfg.port} (fleet=${cfg.fleetMode})`);
+
+// Said once at boot, beside the line above: a role DERIVED because CCRC_ROLE
+// is absent or invalid (D-3174) is visible nowhere else — the
+// inventory's server row carries the role, never where it came from.
+const roleNote = derivedRoleNote(cfg);
+if (roleNote !== null) console.warn(roleNote);
+
+// A clean shutdown seals the dead-coordinator breaker's typed state (D-4916): the one signal handler this process has. It
+// stops the watcher, seals within one bound, says a refusal in one warn line and re-raises the signal (`shutdownseal.ts`).
+installShutdownSeal(watcher);

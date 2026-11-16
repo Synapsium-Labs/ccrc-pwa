@@ -20,8 +20,18 @@ get wrong when editing `src/whitelist.ts`.
 - **Boot-refusal asymmetry:** refuse to boot for OVER-permission (forbidden/undeclared key, over-granting or
   empty prefix, ungrantable verb, gated verb missing its flag). NEVER refuse for UNDER-permission (a declared
   command missing an entry → loud non-fatal; one route answers 502).
-- **Gated verbs:** `ws-reap` requires `--expect` (confirmation token), `ws-rename` requires `--session` (its argv
-  is built from model output with no human in the path). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
+- **Gated verbs:** `ws-reap` requires `--expect` (confirmation token), `ws-rename` requires `--session` (its argv is
+  built from model output with no human in the path), `ws-reclaim` requires `--expect` (the child-reclaim token; the
+  server composes it for a child with no human in the path), `ws-expire` requires `--expect` (the expiry token, which
+  binds the archive; the server composes it for an archived workspace with no human in the path), `ws-collect` requires
+  `--expect` (the collection token, which binds the witnessed temp root; only the server composes it, for an orphaned
+  temp root with no human in the path), `ws-title` requires `--session` (the workspace rename: it sets or clears one
+  workspace's operator title and nothing else, and the flag is its whole argument surface), `ws-shed-deps` requires `--session` (the
+  deps-shed arm's act on one sleeping session's ignored dependency directories; only the server composes it, D-7278),
+  `ws-lease-mark` requires `--lease` (the write of one delegation lease's carrier; only the server composes it, delegation
+  broker wave 5), `ws-lease-audit` requires `--lease` (the read-only measure of one leased tree; it writes nothing to any
+  durable path, its residuals named in `ccd/lib/delegation-lease.sh`, and only the server composes it, delegation broker
+  wave 5). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
   `[]` grants every subcommand and is fatal.
 - `EXEC_WHITELIST` and its prefix lists are `Object.freeze`d at load; `isExecAllowed` uses `Object.hasOwn` +
   `GRANTABLE_COMMANDS.includes` + `Array.isArray` so prototype-named keys (`constructor`, `__proto__`) fail
@@ -42,9 +52,89 @@ get wrong when editing `src/whitelist.ts`.
 - **Write whitelist:** the agent may write files only under `$HOME/.cc-clips/`. Every other fleet mutation crosses
   the WS as a whitelisted `ccd`/`tmux` verb, never a raw file write. Read whitelist is canonical-prefix,
   realpath-resolved (closes symlink escapes): `~/.cc-sessions/`, `~/.cc-limits/`, `~/.cc-clips/`, `~/.claude*`,
-  and the fleet projects root.
-- `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>` with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
+  and the fleet projects root — plus ONE non-prefix grant: exactly the nine `~/.ccrc` node files
+  (`NODE_FILES`, `shared/agent-protocol.ts`: `build.json`, `installed`, `ccrc-caps`, `floor`, `previous`,
+  `node-id`, `update.json`, `update-intent`, `box-token-generation` — the last holds a generation id, never a token
+  value), by canonical-path EQUALITY, a live symlink inside `~/.ccrc`
+  carrying one of those names is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the server's update inventory refuses to read as that file (design 2026-09-20 §8). Never `isUnder(~/.ccrc)`: that directory holds `agent.env`,
+  `auth.scrypt`, `coord.db` and `deploy.env`, and `test/whitelist.test.ts` reds the moment one becomes readable.
+  One more grant, for the `stat` op ALONE (D-8382): the operator's `~/.ccrc` switch files (`CCRC_SWITCH_FILES`, derived
+  from the switchboard's `~/.ccrc` rows in `shared/switches.ts`), by literal path and canonical-path equality
+  (`checkCcrcSwitchStat`), so the server can say which stands. It is not part of `checkPath`: `read`, `readdir` and
+  `lstat` admit none of them.
+  And a second `stat`-alone grant (Overlord W1a launch profiles PR B, reviews 2024 F1 and 2031 F1): one history W3 steer
+  marker, `~/.ccrc/history/steer-on/<registry id>` (`checkSteerOnStat`), so the server's launch-profile lane can tell a
+  steered session on a remote fleet. The name must pass `isRegistryId`; `~/.ccrc` may be a link, but `history` and
+  `steer-on` must each be a real directory or absent (`lstat`), and a live link at the marker is refused. A hard link at a
+  marker's name cannot be detected (same user). `read`, `readdir` and `lstat` admit none of it.
+  And one more READ grant (D-8406): a lane's class registry and catalogue, `~/.ccrc/models/<lane>.classes.json` and
+  `<lane>.json`, by exact name (`isLaneModelsReadName`, `shared/models.mjs`) and canonical-path equality
+  (`isLaneModelsFile`), for the session's model picker. `~/.ccrc/models` stays unlistable, and its other files unread.
+- `ptyOpen` only ever spawns `tmux attach -t =cc-<sessionId>:` (exact — `tmuxTarget`, D-3525) with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
   never an arbitrary command.
+- The **`update` op** (design 2026-09-20 §10) is one of the FIVE wire-triggered spawn classes outside the exec whitelist
+  (the others are `token-sync`, `account`, `testbox` and `testbox-admin`, below). It spawns
+  exactly one of two argv templates — `$HOME/.local/bin/ccrc update|rollback --to <tag> --detach --from pwa`, built by
+  `updateLauncherPath` + `updateSpawnArgv` (`shared/agent-protocol.ts`), `tag` the only variable token — validated by
+  `isReleaseTag` in `validateReq` BEFORE any case body runs (`bad-tag`/`bad-kind`, never `bad-request`, which from this
+  op means "this agent predates it"). It never calls `isExecAllowed`, `runExec` or `resolveSpawnCmd`, and `ccrc` is on
+  neither `EXEC_COMMANDS` nor `FORBIDDEN_COMMANDS`; `test/update-op.test.ts`'s source scan reds the day either changes.
+  Its busy check reads `~/.ccrc/update.json` itself (bounded, `O_NONBLOCK`, never through `checkPath`), and one gate
+  per agent process refuses a second op while a `--detach` parent is still running. **Adding an op:** an `AgentReq`
+  member in `shared/agent-protocol.ts`; a `validateReq` case that type-checks every field (an argument failing its
+  guard answers a `ReqRefusal` word, a shape failure `null`); a `handleReq` case; and, when the server must know this
+  agent answers it, a word in the ready frame's `ops` (`readReadyOps`, `server/src/remote/client.ts`, is its reader).
+- The **`token-sync` op** (box-token lifecycle spec 2026-10-07 §4.4) is the other. It spawns exactly
+  `$HOME/.local/bin/ccrc token sync --from agent` (`updateLauncherPath` + `tokenSyncSpawnArgv`, no variable token) and
+  writes the one-time claim code to the child's STDIN, then EOF — never argv. `validateReq` refuses a code that fails
+  `isClaimCode` with `bad-code` before any case body. Its port (`src/tokensync.ts`) is its OWN bounded body, not a third
+  twin of the update spawn (D-4390): the child gets an explicit `{HOME, PATH, LANG}`, never `process.env` (which carries
+  `CCRC_AGENT_TOKEN`), and at 40 s its process group gets SIGTERM, then SIGKILL 2 s later. One gate per agent process
+  answers a second op `busy`. The agent still reads and writes no secret file: the verb, not the agent, claims and
+  writes the token. `test/token-sync-op.test.ts`'s source scan reds the day the op reaches an exec path.
+- The **`account` op** (accounts spec §13.2, D-5513, D-5622) is the third. It spawns the absolute launcher
+  (`updateLauncherPath`) with `account <sub> …`, argv built ONLY by `buildAccountArgv` (`shared/account-argv.ts`, the
+  one builder the server's local arm calls too) from typed fields: no free argv, no `--force`, no sub that installs or
+  replaces the management key or raises its ceiling, no `seed`. The secret or code is `stdinB64`, decoded to the
+  child's stdin, never argv and never logged; the log line names the op, the sub and the lane only. Its port
+  (`src/accountop.ts`) is its own bounded body: an explicit `{HOME, PATH, LANG}`, an 8 MiB stdout cap (`too-large`),
+  and each sub's bound (`check` 90 s, `add` 180 s, the rest 120 s) ending SIGTERM to the group, then SIGKILL 5 s
+  later, never cancelled. Every answer, a refusal included, is `ok: true` with a `kind` and `fleetIdentity` (the
+  node-id); `bad-request` from it means the agent predates it. `test/account-op.test.ts`'s source scan reds the day
+  the op reaches an exec path.
+- The **`testbox` and `testbox-tools-sync` ops** (test box plan TB9, D-7411, D-7430) are the fourth class. Neither takes
+  a field (`validateReq` answers `bad-request` to a frame carrying one), and `src/testboxOp.ts` spawns only fixed
+  templates through the bounded spawner (`src/testbox/exec.ts#boundedExec`), each with an explicit `{HOME, PATH, LANG}`
+  and `TESTBOX_PROBE_DEADLINE_MS`: `systemctl --user show-environment` (found on the agent's own PATH; the user
+  manager's PATH is the one sessions get, D-7427; it alone also carries `XDG_RUNTIME_DIR` and
+  `DBUS_SESSION_BUS_ADDRESS`, defaulted from the uid by `userBusEnv`, or it cannot reach the user manager), `$HOME/.local/bin/ccrc test --testbox-knobs host` (the fleet host's
+  test box settings, because this unit reads no `ccrc.env`), and the six version probes `node --version`,
+  `npm --version`, `"$CCRC_CHROME" --version`, `python3 --version`, `git --version` and `tmux -V` on the user
+  manager's PATH. It reads `~/.ccrc/build.json` and the token file `CCRC_TESTBOX_TOKEN_FILE` names, nothing else, and
+  calls the box over one WebSocket within `CCRC_TESTBOX_STATUS_DEADLINE`. The sync's `tools.sync` frame carries the
+  release in `build.json` and the versions just measured, never a field of the request. `server/test/whitelist-subset.test.ts`'s
+  layer 4c reds the day either case reaches an exec path.
+- The **`testbox-admin` op** (test box connect spec §2.1, §2.11, plan TC11, D-8166) is the fifth. It spawns the absolute
+  launcher (`updateLauncherPath`) with `testbox-admin <sub> [--name=value…] --from agent`, the words built ONLY by
+  `buildTestboxAdminArgv` (`shared/testbox-admin.ts`, the one builder the server's local arm calls too) from typed
+  fields: no free argv, and no caller field can name `--from`. It takes **no stdin**: the browser holds no secret
+  (spec §2.3), so none crosses the wire, and the child's stdin is empty, then EOF. Its port (`src/testboxAdminOp.ts`)
+  is `accountop.ts`'s shape through `boundedStdinSpawn`: an explicit `{HOME, PATH, LANG}`, a 1 MiB stdout cap
+  (`too-large`), 60 s for a short sub and 30 s for a long sub's detach (the unit it starts outlives the call), then
+  SIGTERM to the group and SIGKILL 5 s later, never cancelled. Every answer, a refusal included, is `ok: true` with a
+  `kind` and `fleetIdentity`; the agent never parses the verb's JSON line (the server reads it through
+  `readTestboxAdminStatus`). The log line names the op and the sub only. `bad-request` from it means the agent predates
+  it. `test/testbox-admin-op.test.ts`'s source scan and `server/test/whitelist-subset.test.ts`'s layer 4d red the day
+  the op reaches an exec path.
+- The **`overlord-history` op** (Overlord W1, `docs/superpowers/plans/2026-11-14-overlord-w1/w1-board-history.md`) spawns
+  NO process. It runs `ccd/history/overlord-worker.mjs` in a `node:worker_threads` worker (`src/historyOp.ts`) with
+  `env: {}` and both streams drained, one slot per agent process freed only on the worker's `exit`, and a 20 s deadline.
+  The read opens `~/.ccrc/history/` only, read-only (`openReader`), OUTSIDE the read whitelist; it opens no other file
+  under `~/.ccrc` (no `ccrc.env`, no token) and no secret file anywhere, and its belt is the store's recorded pairs
+  alone. `validateReq` reads the frame's body (the frame less `t`, `id` and `op`, so the byte bound is the body's)
+  through `readOverlordHistoryRequest` (`shared/overlordHistory.ts`), which refuses `--regex` and a bare `--`; every
+  answer, a refusal or a failure included, is `ok: true`, and a thrown message never reaches the wire or the log. A
+  closed link terminates its read's worker. `test/overlord-history-op.test.ts` pins the slot, the close and the masking.
 - The agent has **no HTTP routes** (its `createServer` carries only a WS upgrade), so the deploy's
   `verify-service.sh` (MainPID stability across a window > `RestartSec`) is its only post-restart check — it
   catches the `refuseToBoot` crash-loop that a `systemctl restart` exit-0 would otherwise hide.

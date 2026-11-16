@@ -13,7 +13,7 @@ handoff-as-commit discipline are intended to outlive it.
 
 ## The problem, in one case
 
-`expoAI-assistant-clear-cove` was mid-program: wave 1's PR #591 merged and the
+`project-h-clear-cove` was mid-program: wave 1's PR #591 merged and the
 agent was poised to start wave 2. `archiveMerged` is level-triggered on
 `pr.phase === 'merged'` with only busy/attached deferrals — an **idle agent
 waiting between waves is indistinguishable from a finished one** — so the

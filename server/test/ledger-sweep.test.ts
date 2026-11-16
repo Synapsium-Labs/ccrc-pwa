@@ -20,7 +20,7 @@ import { LedgerLog } from '../src/coord/ledgerlog.js';
 import { readRegistry } from '../src/registry.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
-import { seedRoster, testDeps } from './helpers.js';
+import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const NOW = 1_785_300_000_000;
@@ -42,7 +42,7 @@ const fixture = (overIo?: (base: FleetIO) => FleetIO) => {
     readdir: async (p: string) => { reads.push(p); return localIO.readdir(p); },
   };
   const io: FleetIO = overIo ? overIo(counted) : counted;
-  const watcher = new FleetWatcher({ ...testDeps(home), cfg, io, coord } as never, new Bus(), 10_000);
+  const watcher = new FleetWatcher(withFakeClock({ ...testDeps(home), cfg, io, coord } as never), new Bus(), 10_000);
   const plantDoc = (project: string, dir: 'plans' | 'specs', name: string, text: string): void => {
     const d = path.join(projectsRoot, project, 'docs', 'superpowers', dir);
     mkdirSync(d, { recursive: true });
@@ -350,7 +350,7 @@ describe('sweepLedgerReconcile', () => {
   });
 
   it('runs with NO coord at all', async () => {
-    const w = new FleetWatcher(testDeps(mkTmp('ccrc-ledger-sweep-')), new Bus(), 10_000);
+    const w = new FleetWatcher(withFakeClock(testDeps(mkTmp('ccrc-ledger-sweep-'))), new Bus(), 10_000);
     await expect(w.sweepLedgerReconcile()).resolves.toBeUndefined();
     await expect(w.sweepLedgerFloor([])).resolves.toBeUndefined();
   });

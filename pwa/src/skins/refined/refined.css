@@ -1,0 +1,359 @@
+/* Refined's own rules (W2, D-5469): `ref-*` classes only, never a `data-skin` selector (skins.css is the one sheet
+   that may select on the attribute, skin-identity (k)). Structure channel: layout, grid placement and spacing on
+   tokens. Colour comes from the identity core's tokens and nothing here defines one (D-5094); every colour-bearing
+   rule added later is a `contrast.test.ts` identity. S4b put Refined's desktop frame here (below); `shell.css` keeps
+   the frame-shared rules and, until S9, the interim grid and accounts strip Instrument still places. */
+
+/* W2 Task S7c (D-5471): Refined's session chrome, the short header. Layout only: every colour is the shared header's
+   (`chat.css`), so nothing here is a new contrast identity. Two rows: Back, the title and the doors; then ONE chip rail
+   that scrolls sideways inside itself instead of wrapping (spec §5.3: about 96px at 390, against 180 for the shared
+   header with the same session). */
+.ref-session-head {
+  flex-wrap: wrap;
+  row-gap: var(--sp-1);
+  padding-bottom: var(--sp-2);
+}
+.ref-session-title {
+  flex: 1;
+  min-width: 0;
+}
+.chat-head .ref-chip-rail {
+  order: 1;
+  flex-basis: 100%;
+  min-width: 0;
+}
+.chat-head .ref-chip-rail .chat-coord {
+  margin: 0;
+}
+.chat-head .ref-chip-rail .chat-facts {
+  display: contents;
+}
+/* The sideways scroll is the phone's only: a swipe reaches every chip there. At >=900 a wheel and Tab never reach a
+   scrolled-off fact, so the desk rail wraps like the shared `.chat-meta` and the header stays a superset of the card. */
+@media (max-width: 899px) {
+  .chat-head .ref-chip-rail {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .chat-head .ref-chip-rail::-webkit-scrollbar {
+    display: none;
+  }
+  .chat-head .ref-chip-rail > *,
+  .chat-head .ref-chip-rail .chat-fact,
+  .chat-head .ref-chip-rail .sess-meta > * {
+    flex: none;
+    white-space: nowrap;
+  }
+  /* The coordination line and the details read as rail items, one row, never a wrapped block. */
+  .chat-head .ref-chip-rail .chat-coord {
+    flex-wrap: nowrap;
+  }
+  /* The Goals door (desktop-polish PL11, D-7986; spec §2, D30; review 1537 F1): on a phone it stands on the coordination line in
+     this sideways rail (`SessionChrome`), first on it, beside the status, so the phone shows it without a swipe. The rail does
+     not wrap, so its place costs no height. At a desk it is the rail's last item instead (review 1548 F1). */
+  .chat-head .ref-chip-rail .chat-coord-goals {
+    order: -1;
+  }
+  /* D-7784 (review 1424 F2): the session's recorded entries, once opened. `.chat-facts` is `display: contents` here, so
+     the list is an item of this one sideways row, and the only one that may shrink: beside a full rail it shrank to
+     nothing. While it is open the rail wraps, as the desk's rail always does, so the list's own `flex-basis: 100%`
+     (chat.css) gives it a line of its own, the rail's whole width, under the chips: each row keeps its condition word
+     whole, and its note wraps inside that width rather than running on as one line. Closed, the rail is the one
+     sideways row it always was. (`SessionDetails`' `showEntries` brings the opened list into view.) */
+  .chat-head .ref-chip-rail:has(.sess-entries) {
+    flex-wrap: wrap;
+  }
+  .chat-head .ref-chip-rail .sess-entries .chat-fact {
+    white-space: normal;
+  }
+}
+
+/* Desktop polish T3c (D-6333): the header names the session. The project is a small crumb above the title (the shared
+   header draws it before the title, on the one line); the title row stays beside the doors. Layout and type only: the
+   crumb's ink is `.chat-crumb`'s. */
+.ref-session-crumb {
+  display: block;
+  font-size: var(--fs-2xs);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+/* Nothing in the phone rail is cut: its chips are whole and the rail scrolls to them. The shared rules cap a chip, and
+   the coordinator's status line, at the row's width (they wrap there); in a row that scrolls, a capped box would
+   leave its text overflowing it and the next chip painted over that text. */
+@media (max-width: 899px) {
+  .chat-head .ref-chip-rail .metachip,
+  .chat-head .ref-chip-rail .status-line--coordinator,
+  .chat-head .ref-chip-rail .status-line-name {
+    max-width: none;
+  }
+}
+
+/* W2 Task S13b (D-5475): the grouped tool row, one line for a run of tool entries. Layout and type only: the row
+   paints no ground and declares no colour, so its sentence and count take the chat column's own ink and nothing here
+   is a new contrast identity. The line is cut, never wrapped, so the row is one fixed height (`itemHeight.ts`'s
+   `group` bucket); opened, it shows today's tool cards, spaced as the list spaces its rows. */
+.ref-tool-group {
+  /* The sentence never wraps, so its min-content is the whole sentence: without this the row grows past a phone's
+     column and its count is cut off the edge (measured at 360 and 390). */
+  min-width: 0;
+  max-width: 100%;
+}
+.ref-tool-group-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
+}
+.ref-tool-group-chev {
+  flex: none;
+  transition: transform var(--dur-base) var(--curve-swift);
+}
+.ref-tool-group-row[aria-expanded='true'] .ref-tool-group-chev {
+  transform: rotate(90deg);
+}
+.ref-tool-group-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ref-tool-group-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.ref-tool-group-body {
+  display: grid;
+  /* One track held to the column: an implicit `auto` track grew to a card's one-line header, so a long command put
+     every card past the column and gave the scroller sideways scroll (`browser/tool-group-fit.browser.test.ts`). */
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-2);
+  padding-top: var(--sp-1);
+}
+
+/* W2 Task S8 (D-5474): Refined's inspector rail. The frame mounts the `<aside aria-label="Inspector">` in every width;
+   `InspectorRail` fills it only at >=1600 on a session route, so an EMPTY aside takes no cell and no track. A filled
+   one is a third, 320 column right of the reading column, from under the banners to the foot, and scrolls itself. The
+   first two tracks are Refined's own (S4b's grid below: a 400 sidebar from 1600), and the rail sits in S4b's third row.
+   The edge reuses the bar's own (`shell.css`'s `.shell-accounts` border), so nothing here is a new contrast identity. */
+.ref-frame > .shell-inspector:empty {
+  display: none;
+}
+@media (min-width: 1600px) {
+  .ref-frame:has(> .shell-inspector:not(:empty)) {
+    grid-template-columns: 400px minmax(0, 1fr) 320px;
+  }
+  .ref-frame > .shell-inspector:not(:empty) {
+    grid-column: 3;
+    grid-row: 3;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-left: 1px solid var(--edge-subtle);
+  }
+}
+
+/* W2 Task S4b (D-5471; spec §5.3, Shell, laptop and wide rows): Refined's frame at a desk. Three rows: the header (the
+   56px bar's line, and under it the lanes row, T2c D-6329, so the row is `auto`), the banner stack spanning the frame
+   under it, then the sidebar and the detail. The sidebar is
+   clamp(320px, 24vw, 400px), and 400 from 1600. Below 900 nothing here applies: the phone swap is `shell.css`'s,
+   shared. Layout only: the bar's ground and edge are the frame header's own (`shell.css`'s `.shell-accounts`), and its
+   inks are the primitives' utilities, so the one colour declared here is the current tab's underline. */
+@media (min-width: 900px) {
+  .app-shell.ref-frame {
+    grid-template-columns: clamp(320px, 24vw, 400px) minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+  /* The frame's `<header>`, named for the strip it was built to hold: two lines, the bar's, then the lanes row
+     (`shell.css` lays the row's cards out). */
+  .ref-frame > .shell-accounts {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    min-width: 0;
+    padding: 0 var(--sp-4) var(--sp-2);
+  }
+  .ref-frame > .shell-banners {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    min-width: 0;
+    padding: 0 var(--sp-4);
+  }
+  /* Room above and below only while a banner draws: every banner stays mounted in an empty slot when it does not. */
+  .ref-frame > .shell-banners:has(> .banner-slot > *, > .banner-more) {
+    padding-block: var(--sp-2);
+  }
+  .ref-frame > .shell-nav,
+  .ref-frame > .shell-detail {
+    grid-row: 3;
+  }
+}
+@media (min-width: 1600px) {
+  .app-shell.ref-frame {
+    grid-template-columns: 400px minmax(0, 1fr);
+  }
+}
+
+/* The app bar's line (AppBar.tsx): one row that never wraps, 56px tall itself since the frame's first row is `auto`
+   now (the lanes row sits under it). The wordmark, the tabs, the doors and New session keep their width, and the
+   doors take the room left over, so New session stays at the line's right edge. */
+.ref-bar {
+  display: flex;
+  flex: none;
+  height: 56px;
+  align-items: center;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+.ref-bar-mark {
+  flex: none;
+}
+/* The face after the wordmark (Overlord face plan, Task 8): one 32px cell that never shrinks. On the phone's row, which
+   spreads its children apart, its auto margin keeps it beside the wordmark and the doors at the far edge. */
+.ref-bar .face-mark,
+.ref-phone-row .face-mark {
+  flex: none;
+}
+.ref-phone-row .face-mark {
+  margin-right: auto;
+}
+.ref-tabs {
+  display: flex;
+  flex: none;
+  align-self: stretch;
+}
+/* A tab is a `Door` the bar's full height, its underline the accent while it is the current page (F9's active state;
+   the ink is the primitive's `aria-[current=page]` utility). */
+.ref-tab {
+  height: 100%;
+  min-width: var(--tap-min);
+  padding: 0 var(--sp-3);
+  border-radius: 0;
+  white-space: nowrap;
+}
+/* The Waiting on you tab (desktop-polish PL5a) is 127px wide before its count, and the bar's line never wraps: under
+   1000px the tabs' side padding is 6px, not 8 (12 from 1000), and the line's gap 12px, not 16. That gives back 24 + 8 = 32px (measured
+   at 900 with the widest count badge, "99+", drawn on the Waiting tab: the line ran 20.8px past its frame, `+ New
+   session` cut, and at 930 it had 9.2px free; with this rule 900 has 11.2px free and 930 has 41.2). The tabs stay the
+   line's full height and the narrowest is 47.6px wide, so a finger still lands on each. */
+@media (max-width: 999px) {
+  .ref-bar {
+    gap: var(--sp-3);
+  }
+  .ref-tab {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+}
+/* The 2px the underline takes at the foot is given back at the head, so the current tab's word does not move. */
+.ref-tab[aria-current='page'] {
+  padding-top: 2px;
+  border-bottom: 2px solid var(--accent);
+}
+/* The keyboard's ring, inside the tab: the tab is the bar's full height, so Door's ring 2px outside it lost its top
+   edge off the page and its bottom edge under the banners and the sidebar row (the inset-ring precedent, fleet.css). */
+.ref-tab:focus-visible {
+  outline-offset: -2px;
+}
+.ref-bar-doors {
+  display: flex;
+  flex: none;
+  align-items: center;
+  margin-left: auto;
+  gap: var(--sp-1);
+}
+.ref-bar-door {
+  justify-content: center;
+  min-width: var(--tap-min);
+  padding: 0 var(--sp-2);
+}
+/* The bell is the fleet head's own control, 28 square there; in the bar it is a finger's square like its neighbours
+   (W2 Task S4b review: Door is one tap tall already, the icon doors and the bell were narrower). */
+.ref-bar-doors > .bell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+}
+.ref-bar-new {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* W2 Task S5 (D-5471; spec §5.3, Fleet and Shell, phone rows): Refined's phone header and its `+ New`. Layout only: the
+   readout keeps `.fleet-count`'s face and ink, the doors `Door`'s, the accounts strip its own (fleet.css's
+   `.accounts-strip`), the button `Button`'s primary fill. Neither is mounted at a desk (`useMediaQuery`), so nothing
+   here is width-gated. */
+.ref-phone-head {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-1) 0;
+}
+.ref-phone-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.ref-phone-doors {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* Five doors (Waiting on you joined them, PL5a) and the wordmark need 326px with an 8px gap, and a 360 phone's row is 320:
+   the doors sit 4px apart there, each still a 44px square. From 381px the gap is 8px as before. */
+@media (max-width: 380px) {
+  .ref-phone-doors {
+    gap: var(--sp-1);
+  }
+}
+/* A finger's square: the glyph centred, the badge pinned to its corner so a three-digit count never widens the row.
+   The badge starts at the glyph's middle, so a "99+" covers only the glyph's top-right corner (the glyph is the door's
+   only visible label); what it sticks out over the gap stays the door's neighbour's to tap. */
+.ref-phone-door {
+  position: relative;
+  padding: 0;
+}
+.ref-phone-badge {
+  position: absolute;
+  top: 2px;
+  left: calc(50% + 1px);
+  pointer-events: none;
+}
+.ref-phone-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  min-width: 0;
+  margin: 0;
+  white-space: nowrap;
+}
+/* Today's round `+`'s place, hugging a 640 column on a wide phone; above the home indicator. Its `bottom` is the
+   margin `NewFab` adds to its height when it publishes `--phone-nav-h`. */
+.ref-fab {
+  position: fixed;
+  right: max(var(--sp-4), calc(50vw - 320px + var(--sp-4)));
+  bottom: calc(var(--sp-4) + var(--safe-bottom));
+  z-index: var(--z-header);
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-full);
+  box-shadow: var(--elev-card);
+}

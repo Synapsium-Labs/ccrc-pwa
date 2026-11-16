@@ -29,9 +29,9 @@ export const ACT_WORD: Record<LifecycleAct, string> = {
   supervise: 'supervised', unsupervise: 'unsupervised', destroy: 'destroyed',
   rename: 'branch renamed', hold: 'held', release: 'released',
   archive: 'archived', restore: 'restored', 'attic-drop': 'attic refs dropped',
-  reap: 'reaped', rehome: 'home account moved', gc: 'gc pass', spawn: 'respawned', route: 'routing written', start: 'started',
+  reap: 'reaped', reclaim: 'reclaimed', expire: 'expired', collect: 'temp root collected', rehome: 'home account moved', gc: 'gc pass', spawn: 'respawned', route: 'routing written', start: 'started',
   ensure: 'ensured', swap: 'account swapped', enable: 'enabled',
-  stop: 'stopped', forget: 'forgotten',
+  stop: 'stopped', forget: 'forgotten', hibernate: 'hibernated', 'shed-deps': 'dependencies removed', unarchive: 'archive stamp cleared',
   unknown: 'unmodelled act',
 };
 

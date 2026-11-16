@@ -32,7 +32,7 @@ The official claude.ai remote-control experience fails the ccd fleet in four way
 
 Decisive constraint: the fleet is only economical while sessions remain
 **interactive TUI processes on Max subscription billing**. Therefore the app
-drives the existing tmux sessions from the outside — the pattern the OpenClaw
+drives the existing tmux sessions from the outside — the pattern the legacy tree's
 Discord bridge already validated (JSONL tailing + tmux keystroke injection).
 
 ## Chosen approach
@@ -209,7 +209,7 @@ Robust *and* effortless — the two goals reinforce, not trade off:
   nothing the app offers can wedge a session in a way `ensure` + the drawer
   can't recover.
 - **Self-explanatory states.** Every card and banner says what's happening
-  *and* what to do next ("Session hit its 5h limit — moving to claude-corp"
+  *and* what to do next ("Session hit its 5h limit — moving to claude-acme"
   / "Claude is asking you something — tap to answer"). No state the user has
   to interpret from a status dot alone.
 

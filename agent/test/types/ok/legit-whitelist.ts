@@ -69,6 +69,63 @@ export const lawful: LawfulGrants<typeof lawfulTable> = lawfulTable;
  *  silently re-permit a token-free reap, and it breaks this build. */
 export type ReapNeedsExpect = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-reap'], '--expect'>>;
 export type RenameNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-rename'], '--session'>>;
+/** The terminal drawer's un-pin (wave 2). Deleting this ENROLMENT is what turns
+ *  `['win-size','--session']` into a bare `['win-size']` with every subset test
+ *  still green — so the enrolment is asserted here, where losing it stops this
+ *  project compiling and `whitelist-structural.test.ts` reads that as a failure
+ *  of the positive control. `g12-win-size-without-session.ts` is the same
+ *  mechanism from the other side. */
+export type WinSizeNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['win-size'], '--session'>>;
+/** The reclaim kill-switch (child-reclamation wave 4). Deleting this ENROLMENT
+ *  turns `['reclaim-pause','--state']` into a bare `['reclaim-pause']` with every
+ *  subset test still green; asserted here, losing it stops this project
+ *  compiling. `g14-reclaim-pause-without-state.ts` is the other side. */
+export type ChildReclaimPauseNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['reclaim-pause'], '--state'>>;
+/** The test box switch (test box plan TB9, D-7411). Deleting this ENROLMENT turns `['testbox-remote','--state']` into a
+ *  bare `['testbox-remote']` with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g24-testbox-remote-without-state.ts` is the other side. */
+export type TestboxRemoteNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['testbox-remote'], '--state'>>;
+
+/** The sweep's busy arm switch (D-7994). Deleting this ENROLMENT turns `['scope-sweep-busy','--state']` into a bare
+ *  `['scope-sweep-busy']` with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g27-scope-sweep-busy-without-state.ts` is the other side. */
+export type ScopeSweepBusyNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['scope-sweep-busy'], '--state'>>;
+
+/** The adoption switch (D-8112). Deleting this ENROLMENT turns `['delegation-adopt','--state']` into a bare
+ *  `['delegation-adopt']` with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g28-delegation-adopt-without-state.ts` is the other side. */
+export type DelegationAdoptNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['delegation-adopt'], '--state'>>;
+/** The pool answer (Overlord W1 pool set, plan Task 6). Deleting this ENROLMENT turns `['pool-answer','--session']` into
+ *  a bare `['pool-answer']` with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g29-pool-answer-without-session.ts` is the other side. */
+export type PoolAnswerNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['pool-answer'], '--session'>>;
+
+/** The project create (add-project spec 2026-11-04 §4). Deleting this ENROLMENT turns `['project-add','--name']` into a
+ *  bare `['project-add']` with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g26-project-add-without-name.ts` is the other side. */
+export type ProjectAddNeedsName = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['project-add'], '--name'>>;
+
+/** The pane-scope stop's switch (D-7902). Deleting this ENROLMENT turns `['pane-scope-stop','--state']` into a bare
+ *  `['pane-scope-stop']` with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g27-pane-scope-stop-without-state.ts` is the other side. */
+export type PaneScopeStopNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['pane-scope-stop'], '--state'>>;
+/** Child reclamation (wave 3). The destructive verb the server composes with no
+ *  human in the path is enrolled on its confirmation token; losing the
+ *  enrolment stops this project compiling. `g13-ws-reclaim-without-expect.ts`
+ *  is the same mechanism from the other side. */
+export type WsReclaimNeedsExpect = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-reclaim'], '--expect'>>;
+/** Archived-workspace expiry (workspace lifecycle wave 3): ws-reclaim's sibling, enrolled on its confirmation token;
+ *  losing the enrolment stops this project compiling. `g15-ws-expire-without-expect.ts` is the other side. */
+export type WsExpireNeedsExpect = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-expire'], '--expect'>>;
+/** The child temp-root collector (child reclamation wave 7): enrolled on its confirmation token like its two siblings;
+ *  losing the enrolment stops this project compiling. `g20-ws-collect-without-expect.ts` is the other side. */
+export type WsCollectNeedsExpect = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-collect'], '--expect'>>;
+/** The four docs verbs (native Docs reader, wave 2): read-only, enrolled on the flag that is each one's whole
+ *  argument surface; losing an enrolment stops this project compiling. `g16`-`g19` are the other side. */
+export type DocsIndexNeedsAll = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['docs-index'], '--all'>>;
+export type DocsTreeNeedsProject = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['docs-tree'], '--project'>>;
+export type DocsShowNeedsProject = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['docs-show'], '--project'>>;
+export type DocsFetchNeedsProject = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['docs-fetch'], '--project'>>;
 export type WsRmIsUngrantable = Assert<'ws-rm' extends (typeof UNGRANTABLE_VERBS)[number] ? true : false>;
 export type WsGcIsUngrantable = Assert<'ws-gc' extends (typeof UNGRANTABLE_VERBS)[number] ? true : false>;
 

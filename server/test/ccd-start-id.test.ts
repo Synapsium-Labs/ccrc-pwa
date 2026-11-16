@@ -14,7 +14,7 @@
  * rather than the already-running short-circuit.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
@@ -31,7 +31,7 @@ const STUBS = `_supervised_start() { echo "supervised_start $*" >> "$HOME/ccd-ca
  *  under test is emitted on a SUCCESSFUL run — so this runner captures all
  *  three. `timeout` so a parse bug hangs the case, not the suite. */
 const run = (snippet: string): { code: number; stdout: string; stderr: string } => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
     env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
   });
@@ -53,14 +53,14 @@ describe('ccd start — the one-argument id form', () => {
   it('starts the id it was given whole, without re-deriving one', () => {
     // Kills the mutant that still runs `_id "$1" "$2"` on a single argument:
     // that starts `<id>-` (or dies), never the row the operator named.
-    seedRow('claude-a-expoAI-assistant', 'claude-d', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_start claude-a-expoAI-assistant`);
+    seedRow('claude-a-project-h', 'claude-d', 'project-h');
+    const r = run(`${STUBS} cmd_start claude-a-project-h`);
     expect(r.code).toBe(0);
-    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-expoAI-assistant']);
-    expect(r.stdout).toContain('started claude-a-expoAI-assistant (resume)');
+    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-project-h']);
+    expect(r.stdout).toContain('started claude-a-project-h (resume)');
     // A workspace id (`<project>-<slug>`, no wrapper prefix) is the case the
     // two-argument form cannot express at all.
-    expect(h.reg('claude-a-expoAI-assistant', 'wrapper')).toBe('claude-d');
+    expect(h.reg('claude-a-project-h', 'wrapper')).toBe('claude-d');
   });
 
   it('refuses a single argument it has no row for, and says how to create one', () => {
@@ -90,25 +90,25 @@ describe('ccd start — the one-argument id form', () => {
 
 describe('ccd start — the registry account wins over the argument', () => {
   it('leaves wrapper alone and warns when the two-argument form disagrees', () => {
-    // THE INCIDENT, exactly: auto-swap moved claude-a-expoAI-assistant to
+    // THE INCIDENT, exactly: auto-swap moved claude-a-project-h to
     // claude-d; the operator typed the account off the board back in; the
     // unconditional `_reg_set wrapper` pointed the row at a config dir that
     // does not hold the transcript. Kills the mutant that keeps the write.
-    seedRow('claude-a-expoAI-assistant', 'claude-d', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_start claude-a expoAI-assistant`);
+    seedRow('claude-a-project-h', 'claude-d', 'project-h');
+    const r = run(`${STUBS} cmd_start claude-a project-h`);
     expect(r.code).toBe(0);
-    expect(h.reg('claude-a-expoAI-assistant', 'wrapper')).toBe('claude-d');
+    expect(h.reg('claude-a-project-h', 'wrapper')).toBe('claude-d');
     expect(r.stderr).toContain('lives on claude-d, not claude-a');
-    expect(r.stderr).toContain('ccd swap claude-a-expoAI-assistant claude-a');
+    expect(r.stderr).toContain('ccd swap claude-a-project-h claude-a');
     // And it really started — a refusal here would strand the row.
-    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-expoAI-assistant']);
+    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-project-h']);
   });
 
   it('does not warn when the argument agrees with the row', () => {
     // Kills the mutant that warns unconditionally, which teaches the operator
     // to ignore the one warning that matters.
-    seedRow('claude-a-expoAI-assistant', 'claude-a', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_start claude-a expoAI-assistant`);
+    seedRow('claude-a-project-h', 'claude-a', 'project-h');
+    const r = run(`${STUBS} cmd_start claude-a project-h`);
     expect(r.code).toBe(0);
     expect(r.stderr).not.toContain('warn');
   });
@@ -136,10 +136,10 @@ describe('ccd start — the registry account wins over the argument', () => {
 
 describe('ccd enable', () => {
   it('takes the id form too — after §3.1 the two verbs are one act', () => {
-    seedRow('claude-a-expoAI-assistant', 'claude-d', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_enable claude-a-expoAI-assistant`);
+    seedRow('claude-a-project-h', 'claude-d', 'project-h');
+    const r = run(`${STUBS} cmd_enable claude-a-project-h`);
     expect(r.code).toBe(0);
-    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-expoAI-assistant']);
+    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-project-h']);
   });
 
   it('keeps its own usage line rather than borrowing start\'s', () => {
@@ -312,5 +312,130 @@ describe('an UNCLAIMED live pane is adopted, not ignored', () => {
     const t = h.sh('type _resupervise_live');
     expect(t).toMatch(/unsupervised\s*\|\s*unclaimed/);
     expect(t).toContain('_reg_claim');
+  });
+});
+
+// THE WORKDIR `ccd start` STORES IS ONE PLAIN ABSOLUTE PATH, AND IT NAMES THE
+// DIRECTORY `-d` ACCEPTED (spec §5.5, rung 9 — the reclaim cannot place an
+// OTHER row whose workdir is not absolute, because each reader resolves a
+// relative spelling against its own cwd). So `cmd_start` enters the operand
+// itself, on both forms, and stores the logical path it entered — or refuses
+// and writes nothing.
+describe('ccd start stores only a plain absolute workdir, naming the directory it was given', () => {
+  const rowFile = (id: string, field: string): string => path.join(h.home, '.cc-sessions', `${id}.${field}`);
+  /** The raw bytes of the stored workdir, and the one line they must be. */
+  const storedLines = (id: string): string[] => fs.readFileSync(rowFile(id, 'workdir'), 'utf8').split('\n').filter(Boolean);
+  const nothingWritten = (id: string): void => {
+    for (const f of ['workdir', 'uuid', 'wrapper', 'project']) {
+      expect(fs.existsSync(rowFile(id, f)), `no .${f} was written`).toBe(false);
+    }
+    expect(asManagerCalls(h.calls()), 'nothing was started').toEqual([]);
+  };
+
+  it('a RELATIVE directory stores its logical absolute path', () => {
+    fs.mkdirSync(path.join(h.home, 'worktrees', 'demo', 'quiet-basin', 'server'), { recursive: true });
+    const r = run(`${STUBS} builtin cd -- "$HOME/worktrees/demo" && cmd_start claude demo quiet-basin/server`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(storedLines('claude-demo')).toEqual([path.join(h.home, 'worktrees', 'demo', 'quiet-basin', 'server')]);
+  });
+
+  it('the default form and an absolute `$HOME/elsewhere` are stored byte-identical; `…/elsewhere/` and `//…/elsewhere` are stored plain', () => {
+    fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
+    fs.mkdirSync(path.join(h.home, 'elsewhere'), { recursive: true });
+    const cases: Array<[string, string]> = [
+      ['', path.join(h.home, 'projects', 'demo')],
+      ['"$HOME/elsewhere"', path.join(h.home, 'elsewhere')],
+      ['"$HOME/elsewhere/"', path.join(h.home, 'elsewhere')],
+      ['"/$HOME/elsewhere"', path.join(h.home, 'elsewhere')],
+    ];
+    for (const [arg, want] of cases) {
+      fs.rmSync(rowFile('claude-demo', 'workdir'), { force: true });
+      const r = run(`${STUBS} cmd_start claude demo ${arg}`);
+      expect(r.code, `${arg}: ${r.stderr}`).toBe(0);
+      expect(fs.readFileSync(rowFile('claude-demo', 'workdir'), 'utf8').trimEnd(), arg || 'the default form').toBe(want);
+    }
+  });
+
+  it('the CONTROL: under a LINKED `$HOME/projects` the stored path is the LOGICAL one — the default form byte-identical to what a pre-fix ccd stored', () => {
+    // On the fleet box `$HOME/projects` is a link to a mounted volume, and
+    // divergence.ts reads a row's workdir as written (its UNRESOLVED contract):
+    // `pwd -P` would rewrite every default-form row to the mount's spelling.
+    fs.mkdirSync(path.join(h.home, 'vol', 'projects', 'demo'), { recursive: true });
+    fs.symlinkSync(path.join(h.home, 'vol', 'projects'), path.join(h.home, 'projects'));
+    const want = path.join(h.home, 'projects', 'demo');
+    for (const [label, snippet] of [
+      ['the default form', `${STUBS} cmd_start claude demo`],
+      ['the absolute operand', `${STUBS} cmd_start claude demo "$HOME/projects/demo"`],
+      ['a relative operand from the linked cwd', `${STUBS} builtin cd -- "$HOME/projects" && cmd_start claude demo demo`],
+    ] as const) {
+      fs.rmSync(rowFile('claude-demo', 'workdir'), { force: true });
+      const r = run(snippet);
+      expect(r.code, `${label}: ${r.stderr}`).toBe(0);
+      expect(fs.readFileSync(rowFile('claude-demo', 'workdir'), 'utf8').trimEnd(), label).toBe(want);
+    }
+  });
+
+  it('the id form writes back the RESOLVED spelling of a legacy row — relative, a trailing `/`, a leading `//`', () => {
+    fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
+    const want = path.join(h.home, 'projects', 'demo');
+    for (const legacy of ['projects/demo', `${want}/`, `/${want}`]) {
+      seedRow('claude-demo', 'claude', 'demo');
+      fs.writeFileSync(rowFile('claude-demo', 'workdir'), legacy);
+      const r = run(`${STUBS} cmd_start claude-demo`);
+      expect(r.code, `${legacy}: ${r.stderr}`).toBe(0);
+      expect(storedLines('claude-demo'), legacy).toEqual([want]);
+    }
+  });
+
+  it('an exported CDPATH naming another `<rel>` cannot move it: the cwd’s directory is stored, as one line', () => {
+    fs.mkdirSync(path.join(h.home, 'cdp', 'sub'), { recursive: true });
+    fs.mkdirSync(path.join(h.home, 'sub'), { recursive: true });
+    const r = run(`${STUBS} export CDPATH="$HOME/cdp"; cmd_start claude demo sub`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(storedLines('claude-demo')).toEqual([path.join(h.home, 'sub')]);
+  });
+
+  it('an exported `cd` function that prints cannot reach the stored path: one line is stored', () => {
+    fs.mkdirSync(path.join(h.home, 'sub'), { recursive: true });
+    const r = run(`${STUBS} cd() { echo "HIJACKED $*"; builtin cd "$@"; }; export -f cd; cmd_start claude demo sub`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(storedLines('claude-demo')).toEqual([path.join(h.home, 'sub')]);
+  });
+
+  it('a cwd whose name holds `\'` is refused, and nothing is written — the quote guard runs on the RESOLVED path', () => {
+    // The operand `sub` holds no quote; the path it names does, and `_spawn`
+    // interpolates the stored workdir into the pane's command.
+    fs.mkdirSync(path.join(h.home, "it's", 'sub'), { recursive: true });
+    const r = run(`${STUBS} builtin cd -- "$HOME/it's" && cmd_start claude demo sub`);
+    expect(r.code, r.stdout).not.toBe(0);
+    expect(r.stderr).toContain('workdir must not contain a single quote');
+    nothingWritten('claude-demo');
+  });
+
+  it('a mode-000 relative directory is refused — `-d` passes it, and it cannot be entered', (ctx) => {
+    // Root enters a mode-000 directory, so the refusal is unobservable there.
+    if (process.getuid?.() === 0) ctx.skip();
+    const locked = path.join(h.home, 'locked');
+    fs.mkdirSync(locked);
+    fs.chmodSync(locked, 0o000);
+    try {
+      const r = run(`${STUBS} cmd_start claude demo locked`);
+      expect(r.code, r.stdout).not.toBe(0);
+      expect(r.stderr).toContain('cannot be entered, or does not resolve to one plain absolute path naming that same directory — nothing was written');
+      nothingWritten('claude-demo');
+    } finally { fs.chmodSync(locked, 0o755); }
+  });
+
+  it('`../x` from a symlinked cwd, where the logical `../x` also exists, is refused — the stored path must name the directory `-d` accepted', () => {
+    // Physically `lnk/..` is `real`, so `-d ../x` accepts `real/x`; logically
+    // it is `$HOME`, so a captured `cd` lands in `$HOME/x` — another directory.
+    fs.mkdirSync(path.join(h.home, 'real', 'a'), { recursive: true });
+    fs.mkdirSync(path.join(h.home, 'real', 'x'), { recursive: true });
+    fs.mkdirSync(path.join(h.home, 'x'), { recursive: true });
+    fs.symlinkSync(path.join(h.home, 'real', 'a'), path.join(h.home, 'lnk'));
+    const r = run(`${STUBS} builtin cd -- "$HOME/lnk" && cmd_start claude demo ../x`);
+    expect(r.code, r.stdout).not.toBe(0);
+    expect(r.stderr).toContain('does not resolve to one plain absolute path naming that same directory');
+    nothingWritten('claude-demo');
   });
 });

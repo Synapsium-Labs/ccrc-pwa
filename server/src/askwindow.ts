@@ -5,14 +5,15 @@
  * that was right while the watcher was their only reader. Whole-branch review
  * F2(b) gave them a SECOND reader — `fleet.ts`'s `fleetAsk`, which must bound
  * the `held` chip by the same numbers the lane it describes actually runs on —
- * and `fleet.ts` cannot import `watch.ts`: `watch.ts` imports `assembleFleet`
+ * and `fleet.ts` cannot import `watch.ts`: `watch.ts` imports `assembleFleetWithPanePids`
  * from it, so the arrow only points one way. Re-spelling either number in
  * `fleet.ts` would be the second copy this codebase treats as a defect, so
  * they moved HERE, to a module both may import and neither owns. `ASK_SWEEP_MS`
  * did not move: it is the lane's poll cadence, not a window, and `watch.ts` is
  * still its only reader.
  *
- * L1, pure: no `fs`, no fastify, no clock, no database handle — three numbers
+ * L1, pure: no `fs`, no fastify, no clock, no database handle — three numbers,
+ * the one deadline function (`askNotifyAt`, D-5294)
  * and the arithmetic between two of them.
  */
 
@@ -21,27 +22,69 @@
  *  transcribed from cited the wrong pair): the parent is BY CONSTRUCTION the
  *  `claimedBy` of a non-terminal run — exactly `openCoordinatorIds()`'s
  *  membership test — so `sweepMail` scores it against the COORDINATOR pair
- *  (`watch.ts`'s `COORD_QUIET_MS`/`COORD_COOLDOWN_MS`), not the worker one: `COORD_QUIET_MS` (15s, measured from
- *  `statusUpdatedAt`) gates a just-idle parent, and `COORD_COOLDOWN_MS` (30s)
+ *  (`coord/mailPace.ts`'s `MAIL_PACE.coordinator`), not the worker one: `MAIL_PACE.coordinator.quietMs` (15s, measured from
+ *  `statusUpdatedAt`) gates a just-idle parent, and `MAIL_PACE.coordinator.cooldownMs` (30s)
  *  does not bind it — that gate is measured from the recipient's own LAST
  *  successful injection, in-memory, so a parent with no prior mail (the
  *  ordinary case for an ask nudge) clears it for free. Add the same
  *  sweep-granularity/injection-sleep overhead an already-quiet session pays
- *  anyway and the real floor is ~25s — not the ~70s a `MAIL_QUIET_MS`
- *  (`watch.ts`) reading
+ *  anyway and the real floor is ~25s — not the ~70s a `MAIL_PACE.worker.quietMs`
+ *  (`coord/mailPace.ts`) reading
  *  would suggest — so a window under that gives a just-idle parent no turn at
  *  all. CEILING: every second here is latency the operator pays on the asks
- *  the parent declines, which is why `POST /api/asks/:id/release` exists — a
+ *  the parent declines, which is why the claimant's release (`POST /api/questions/ask-<n>/release`) exists — a
  *  parent that answers "not mine" fires the push at once, so only a parent
- *  that has genuinely gone quiet ever costs the full window. */
-export const ASK_GRACE_MS = 120_000;
+ *  that has genuinely gone quiet ever costs the full window.
+ *
+ *  180 s (D-5295), by the operator's ruling of 2026-10-17 ("180 s, late answer
+ *  wins"): with D-5289 a parent's answer after the lapse still counts until the
+ *  operator acts, so the window is no longer the parent's only chance, and the
+ *  longer one lets a parent that is mid-turn finish before the phone buzzes.
+ *  The approval lapse reads it for a subagent's prompt only, through `approvalWindowMs` (D-5441). */
+export const ASK_GRACE_MS = 180_000;
+
+/** The moment the operator is notified of a held ask: its mint time plus
+ *  `ASK_GRACE_MS`. THE ONE deadline computation (D-5294): the hold's sweep
+ *  deadline, the parent's brief ("notified at hh:mm:ss UTC") and the fleet's
+ *  "with coordinator" state (plan Task 7) all read it, so the time the mail
+ *  states is the time the sweep acts. `heldAt` is the mint time, the asks
+ *  row's `at` (the clock `sweepAsks` counts from), NOT its `askAt`, which is
+ *  hookstate's `updatedAt` and serves as the instance guard (D-2170); the
+ *  plan's `askNotifyAt(askAt)` departs here (D-5364). */
+export function askNotifyAt(heldAt: number): number {
+  return heldAt + ASK_GRACE_MS;
+}
+
+/** The coordinator-first window in whole seconds, for a mail's words: the one reader a sentence takes instead of the constant. */
+export function askGraceSeconds(): number {
+  return Math.round(ASK_GRACE_MS / 1000);
+}
+
+/** D-5441 (`approval-countdown-window-60s`, the operator's ruling of 2026-10-18): the coordinator's window on a
+ *  permission prompt that carries Claude Code's unattended auto-deny countdown (the main thread and foreground
+ *  subagents; the deny was measured at about 120 s on 2.1.300, after which a hook's allow was ignored). Then the hook
+ *  returns no decision and the prompt is the operator's until Claude Code's own deny. One home, beside
+ *  `ASK_GRACE_MS`; read only through `approvalWindowMs`. */
+export const APPROVAL_COUNTDOWN_WINDOW_MS = 60_000;
+
+/** D-5441: THE ONE selection of an approval row's window, from the request's `agent_id` as the canonical array
+ *  carries it. A main-thread request (`""`) gets `APPROVAL_COUNTDOWN_WINDOW_MS` on every version, the safe direction
+ *  where no countdown was observed; a subagent request gets `ASK_GRACE_MS`, because a fleet child's subagents run in
+ *  the background (its spawn sets no `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, D-5443) and carry no countdown. The
+ *  mint's `notifyAt`, the `201`'s `waitS` and the ruling's `expiresAt` all come from this. */
+export function approvalWindowMs(agentId: string): number {
+  return agentId === '' ? APPROVAL_COUNTDOWN_WINDOW_MS : ASK_GRACE_MS;
+}
 
 /** Ceiling on how long a row may sit `'answering'` before `sweepAsks` gives up
  *  on the principal that took it and never came back (fix round 1, item 1 —
- *  the reviewer's own reasoning, verbatim): `sweepAsks` is the ONLY garbage
- *  collector `heldAsks` has. `detectDialogs`'s orphan-settle fires only on a
- *  NEW dialog id, and a session blocked on `AskUserQuestion` does not
- *  repaint — so a row stuck at `'answering'` (the press refused, `answerAsk`
+ *  the reviewer's own reasoning): `sweepAsks` is the ONLY collector of a held
+ *  ask whose dialog stays painted (the hold was `watch.ts`'s `heldAsks` map;
+ *  since Q3d it is an entry of `coord/questions.ts`'s `questionHolds`). The
+ *  orphan-settle (`settleReplaced`) fires only on a NEW dialog id, the clear
+ *  (`settleCleared`) only when the dialog leaves the pane, and a session
+ *  blocked on `AskUserQuestion` does neither — so a row stuck at
+ *  `'answering'` (the press refused, `answerAsk`
  *  threw, the request abandoned — `untakeAsk`'s own rollback never ran)
  *  would otherwise be kept forever, WITHIN THIS SERVER'S OWN LIFETIME:
  *  `releaseAsk` fails every sweep because the state is not `'held'`, and
@@ -49,13 +92,14 @@ export const ASK_GRACE_MS = 120_000;
  *  inverted.
  *
  *  NOT a restart bound (fix round 1, item 4 — a prior draft of this comment
- *  claimed it was, falsely): `heldAsks` is an in-memory `Map`, never
- *  reconstructed from the `asks` table at boot, so a row `'answering'` at
- *  restart time has no map entry the moment the process comes back —
- *  invisible to `sweepAsks` by construction, not merely slow to reach. A
- *  restart mid-hold loses the push outright, a pre-existing, accepted
- *  residual the design already names elsewhere; this ceiling has no way to
- *  bound a process that is no longer running to enforce it.
+ *  claimed it was, falsely): the hold lives in memory, so a restart empties
+ *  it, and this ceiling cannot bound a process that is no longer running.
+ *  Since D-5925 the boot re-seeds it from the `asks` table instead: a `held`
+ *  or `answering` row whose dialog the pane still paints, under the same
+ *  `askKey`, is held again with `answeringSince` null, so the ceiling counts
+ *  afresh from the first sweep that sees it `'answering'`; a row whose
+ *  dialog is gone or replaced settles `stale`. A lost `coord.db` has no rows
+ *  and re-seeds nothing.
  *
  *  Sixty seconds is generous, not tight: `answerAsk`'s whole job — take the
  *  row, press a digit, settle — happens well inside one `ASK_SWEEP_MS`
@@ -79,12 +123,15 @@ export const ASK_ANSWERING_MAX_MS = 60_000;
  * within one process lifetime, and only while `staleAsk` can still reach the
  * row. Two reachable failures broke it:
  *
- *   - RESTART MID-HOLD. `heldAsks` is never rehydrated from the table
- *     (deliberately — D-2169: the deferred push is the watcher's memory, and
- *     its loss is free) and there is no boot reconciliation. `dialogIds` is
- *     stamped on the priming tick BEFORE the `notify` gate, so no later tick
- *     ever re-mints and nothing clears the row. Every deploy therefore leaves
- *     one stuck chip per session that had a live ask.
+ *   - RESTART MID-HOLD. When this bound was added the hold was never
+ *     rehydrated from the table (D-2169: the deferred push is the watcher's
+ *     memory) and there was no boot reconciliation. `dialogIds` is stamped on
+ *     the priming tick BEFORE the `notify` gate, so no later tick re-minted
+ *     and nothing cleared the row: every deploy left one stuck chip per
+ *     session that had a live ask. Since D-5925 the boot re-seeds the hold
+ *     from the rows and settles `stale` a row whose dialog is gone, and this
+ *     bound stays the backstop, so the chip never depends on the re-seed
+ *     having reached the row.
  *   - A STRANDED `answering`. Closed at the CAS by F2(a) (`staleAsk` now names
  *     both live states), but the chip must not depend on that write having
  *     landed: `staleAsk` is called through a `try`/`catch` on every path, and
@@ -107,3 +154,11 @@ export const ASK_ANSWERING_MAX_MS = 60_000;
  * nothing, while a chip that never goes away is the defect this closes.
  */
 export const ASK_HELD_CHIP_MAX_MS = ASK_GRACE_MS + ASK_ANSWERING_MAX_MS;
+
+/** D-5290 (coordinator-first routing spec §5.2): how many ticks the FIRST
+ *  actionless raise of a dialog waits while the child's hookstate is not yet
+ *  `waiting`. `tick()` sweeps hookstate before `detectDialogs` captures the
+ *  panes, so a menu that paints after that read is seen with no envelope; one
+ *  or two ticks later the envelope is there and the question can be held
+ *  instead of pushed. Counted per `dialog.id`; the third sighting raises. */
+export const ASK_SETTLE_TICKS = 2;

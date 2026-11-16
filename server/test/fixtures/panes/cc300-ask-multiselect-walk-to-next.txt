@@ -1,0 +1,50 @@
+⏺ - Engine: Postgres
+  - Order: Sentence 01 of answer A: keep the schema portable and test it nightly. Sentence 02 of answer A: keep the schema portable and test it nightly. Sentence 03 of answer A: keep the schema portable and test it
+    nightly. Sentence 04 of answer A: keep the schema portable and test it nightly. Sentence 05 of answer A: keep the schema portable and test it nightly. Sentence 06 of answer A: keep the schema portable and test it
+    nightly. Sentence 07 of answer A: keep the schema portable and test it nightly. Sentence 08 of answer A: keep the schema portable and test it nightly. Sentence 09 of answer A: keep the schema portable and test it
+    nightly. Sentence 10 of answer A: keep the schema portable and test it nightly. Sentence 11 of answer A: keep the schema portable and test it nightly. Sentence 12 of answer A: keep the schema portable and test it
+    nightly. Sentence 13 of answer A: keep the schema portable and test it nightly. Sentence 14 of answer A: keep the schema portable and test it nightly.. END-A
+  - Notes: Sentence 01 of answer B: keep the schema portable and test it nightly. Sentence 02 of answer B: keep the schema portable and test it nightly. Sentence 03 of answer B: keep the schema portable and test it
+    nightly. Sentence 04 of answer B: keep the schema portable and test it nightly. Sentence 05 of answer B: keep the schema portable and test it nightly. Sentence 06 of answer B: keep the schema portable and test it
+    nightly. Sentence 07 of answer B: keep the schema portable and test it nightly. Sentence 08 of answer B: keep the schema portable and test it nightly. Sentence 09 of answer B: keep the schema portable and test it
+    nightly. Sentence 10 of answer B: keep the schema portable and test it nightly. Sentence 11 of answer B: keep the schema portable and test it nightly. Sentence 12 of answer B: keep the schema portable and test it
+    nightly. Sentence 13 of answer B: keep the schema portable and test it nightly. Sentence 14 of answer B: keep the schema portable and test it nightly.. END-B
+  - Region: Sentence 01 of answer C: keep the schema portable and test it nightly. Sentence 02 of answer C: keep the schema portable and test it nightly. Sentence 03 of answer C: keep the schema portable and test it
+    nightly. Sentence 04 of answer C: keep the schema portable and test it nightly. Sentence 05 of answer C: keep the schema portable and test it nightly. Sentence 06 of answer C: keep the schema portable and test it
+    nightly. Sentence 07 of answer C: keep the schema portable and test it nightly. Sentence 08 of answer C: keep the schema portable and test it nightly. Sentence 09 of answer C: k END-C
+
+  The Region answer came back cut off mid-word ("k END-C"), so it may be incomplete.
+
+✻ Cogitated for 7s · done 4:05
+
+❯ Call AskUserQuestion exactly once with THREE questions, short descriptions on every option. Q1 header "Drink" question "Which drink?" multiSelect false, options Tea, Coffee. Q2 header "Features" question "Which
+  features do you want?" multiSelect true, options Logging, Metrics, Tracing. Q3 header "Tools" question "Which tools?" multiSelect true, options Hammer, Saw, Drill. Afterwards reply with the raw answers only.
+
+⏺ User answered Claude's questions:
+  ⎿  · Which drink? → - oolong, no sugar
+     · Which features do you want? → Logging, Tracing
+     · Which tools? → Saw, Drill
+
+⏺ - Drink: - oolong, no sugar
+  - Features: Logging, Tracing
+  - Tools: Saw, Drill
+
+✻ Crunched for 3s · done 4:07
+
+❯ Call AskUserQuestion exactly once with TWO multiSelect questions, short descriptions on every option. Q1 header "Pets" question "Which pets?" options Cats, Dogs. Q2 header "Sizes" question "Which sizes?" options
+  Small, Large. Afterwards reply with the raw answers only.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Pets  ☐ Sizes  ✔ Submit  →
+
+Which pets?
+
+  1. [✔] Cats
+         Feline companions
+  2. [ ] Dogs
+         Canine companions
+  3. [ ] Type something
+❯    Next
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · ctrl+g to edit in Vim · Esc to cancel

@@ -29,7 +29,18 @@
 // exports ONCE, imported through `shared/models.ts`'s re-export — there is no
 // second implementation left to compare it against.
 //
-// It imports nothing, not even `node:*`.
+// One import, and only one: `./base-url.mjs`, the endpoint gate (D-7308),
+// which imports nothing itself, `node:*` included — `shared/roster-json.mjs`'s
+// precedent. The registry's `baseUrl` is the endpoint the `compatible` probe
+// sends the lane's bearer key to, so whether one is admissible is the gate's
+// decision, imported rather than mirrored. The inline test and private
+// loopback set this file kept until D-7308 had drifted from it (the set in
+// another order, the test laxer on six case-table rows: a user name or
+// password, a query, a fragment). Every tree that ships this file ships the
+// gate beside it (`installTreeFixture.ts`'s TREE_FILES,
+// `ccrc-doctorFixture.ts`'s MODELS_OP_CLOSURE, the deployed checkout
+// `ccd-usage-sweep` reads). Nothing else is imported, not even `node:*`.
+import { BASE_URL_OK } from './base-url.mjs';
 
 /** The runtime twin of `shared/models.ts`'s own `as const` `CLASSES`, in the
  *  same order — that file keeps its own literal because only `.ts` can derive
@@ -86,13 +97,161 @@ export const PROBE_KINDS = ['codex', 'openrouter', 'compatible'];
  *  shipped as raw control bytes with every suite green. */
 export const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
 
+/** The lane-id shape `ccrc models` and `deploy/models-op.mjs` accept (C6),
+ *  DEFINED ONCE, here (auto-advance plan W2 Task 7). The same shape as
+ *  `shared/roster.ts`'s module-private ID_RE and the bash shape contract's
+ *  WRAPPER_ID_RE: a lane id becomes a file name under ~/.ccrc/models and a
+ *  directory under ~/.ccrc/codex, so it is lowercase letters, digits and "-"
+ *  only, a letter first, 32 characters at most. Its readers today:
+ *  `deploy/models-op.mjs`, which re-exports it as ACCOUNT_ID_RE, and
+ *  `deploy/models-canary.mjs` check an `--id` against it before any path is
+ *  built, and PUSH_HEAD below reads a push line's lane with it. The agent's
+ *  `models` op (plan §3.10, W4) will validate against it too; no agent code
+ *  reads it yet. `server/test/models-lane-id-parity.test.ts` holds the four
+ *  spellings equal. */
+export const MODELS_LANE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+
+/** The two words `ccrc models <here> …` reads as box-wide subcommands, never as
+ *  a lane id (deviation B-4): `ccd/ccrc`'s MODELS_RESERVED in bash, here for
+ *  node and TypeScript. No runtime code reads it yet: the agent's `models` op
+ *  (plan §3.10, W4) will refuse them as a lane. Its one reader today is the
+ *  same test, which pins it equal to the bash list. */
+export const MODELS_RESERVED_IDS = Object.freeze(['refresh', 'litellm']);
+
+/** D-8406: the directory under `~/.ccrc` that holds every lane's model files, and the names of the two a reader
+ *  outside the models verbs needs — the class registry and the catalogue — each spelled ONCE, here.
+ *  `deploy/models-op.mjs` builds its paths from them, the fleet's read grant admits exactly them
+ *  (`isLaneModelsReadName`, `agent/src/whitelist.ts`), and the server reads them by them
+ *  (`server/src/laneModels.ts`), so the three cannot come to name different files. */
+export const MODELS_DIR_NAME = 'models';
+/** `<id>.classes.json`: the lane's class registry (§4.1). */
+export const registryFileName = (id) => `${id}.classes.json`;
+/** `<id>.json`: the lane's catalogue (§4.2). */
+export const catalogueFileName = (id) => `${id}.json`;
+
+/** D-8406: whether `name` is one of the two lane files the console may read — `registryFileName` or
+ *  `catalogueFileName` of a lane id `MODELS_LANE_ID_RE` accepts and `MODELS_RESERVED_IDS` does not hold. A lane id
+ *  has no dot, so `<id>.effort.json`, `<id>.windows.json` and every other sibling are refused by shape. Pure. */
+export function isLaneModelsReadName(name) {
+  if (typeof name !== 'string') return false;
+  const id = [registryFileName(''), catalogueFileName('')]
+    .filter((suffix) => name.endsWith(suffix)).map((suffix) => name.slice(0, -suffix.length))[0];
+  return id !== undefined && MODELS_LANE_ID_RE.test(id) && !MODELS_RESERVED_IDS.includes(id);
+}
+
+/** The longest models notice `/api/notify` sends to the phone (auto-advance
+ *  plan W2 Task 12). A CEILING, not a promise that every well-formed line
+ *  fits: a `moved` line is at most a 32-character lane id, the longest class
+ *  word, two 128-character model ids and the fixed text between them, which
+ *  makes exactly 300, so it always fits (`server/test/notify-push.test.ts`
+ *  holds that sum); the two failure lines carry a reason of up to 120
+ *  characters on top of the same two ids, so with long ids they pass it. Such
+ *  a line still gets its banner and is refused the phone push, with the reason
+ *  `over-cap` in `modelsPushDecision`'s answer and one line in the server's
+ *  log. The cap is not raised to make them fit. */
+export const MODELS_PUSH_MAX = 300;
+
+/** Whether `message` is a string longer than the cap: the ONE place the cap is compared, read by `modelsPushOf` (which
+ *  refuses such a message) and by `modelsPushDecision` (which names that refusal `over-cap`), so the two can never
+ *  disagree on a boundary. */
+const overCap = (message) => typeof message === 'string' && message.length > MODELS_PUSH_MAX;
+
+/** The lane, class and model-id patterns without their anchors, so the three
+ *  shapes below are built from `MODELS_LANE_ID_RE`, `CLASSES` and
+ *  `MODEL_ID_RE` and never spell any of them a second time; and the reason
+ *  slot of the two failure shapes, written once: up to 120 printable-ASCII
+ *  characters in brackets. */
+const pushInner = (re) => re.source.replace(/^\^/, '').replace(/\$$/, '');
+const PUSH_HEAD = `^(${pushInner(MODELS_LANE_ID_RE)}): (${CLASSES.join('|')}) `;
+const PUSH_ID = `(?:${pushInner(MODEL_ID_RE)})`;
+const PUSH_REASON = '\\([\\x20-\\x7e]{0,120}\\)';
+const PUSH_SHAPES = Object.freeze([
+  ['moved', new RegExp(`${PUSH_HEAD}${PUSH_ID} → ${PUSH_ID}$`)],
+  ['canary-failed', new RegExp(`${PUSH_HEAD}stays on ${PUSH_ID}: ${PUSH_ID} failed its canary ${PUSH_REASON}$`)],
+  ['move-failed', new RegExp(`${PUSH_HEAD}stays on ${PUSH_ID}: moving to ${PUSH_ID} failed ${PUSH_REASON}$`)],
+]);
+
+/** The ONE reader of the advance step's push lines (the auto-advance plan's
+ *  `### 3.8 Push`, docs/superpowers/plans/2026-10-15-model-class-auto-advance-codex-arm.md;
+ *  `ccd/ccrc`'s receipt program and its `recovered` definition write them):
+ *  `{lane, cls, kind}` for a message of exactly one of the three shapes
+ *    `<lane>: <class> <from|none> → <to>`                                        kind `moved`
+ *    `<lane>: <class> stays on <from|none>: <to> failed its canary (<reason>)`   kind `canary-failed`
+ *    `<lane>: <class> stays on <from|none>: moving to <to> failed (<reason>)`    kind `move-failed`
+ *  and null for anything else: a `cc swap:` notice, a second line, a message
+ *  that is not a string, and any message over MODELS_PUSH_MAX included. The
+ *  lane is MODELS_LANE_ID_RE's, the class one of CLASSES, each model id
+ *  MODEL_ID_RE's (`none` is one) and the reason printable ASCII of at most 120
+ *  characters. It is a PARSER only: whether a line may reach a phone is
+ *  `modelsPushDecision`'s, which calls it. */
+export function modelsPushOf(message) {
+  if (typeof message !== 'string' || overCap(message)) return null;
+  for (const [kind, re] of PUSH_SHAPES) {
+    const m = re.exec(message);
+    if (m !== null) return { lane: m[1], cls: m[2], kind };
+  }
+  return null;
+}
+
+/** THE POLICY OF `POST /api/notify`'s `push: true` (auto-advance plan W2
+ *  Task 12, D-5211): pure, no I/O, no Fastify, no push call. The box token
+ *  proves only "a process on the fleet box" (`deploy/notify.sh`'s own header),
+ *  so the route sends a message to the phone only when `modelsPushOf` reads it
+ *  AND its lane is a row of `roster` whose `exec.kind` is `codex`. The roster
+ *  arrives as a PARAMETER, anything with a `get(laneId)` that answers the
+ *  lane's row or `undefined` (the server's `roster.byId`, a `ReadonlyMap`, is
+ *  one), so this file reads no file and imports nothing.
+ *
+ *  Answers one of two shapes, and never a bare null: `{verdict: 'pushable',
+ *  lane, cls, kind, tag}` or `{verdict: 'refused', reason}` with the reason one
+ *  of
+ *    `not-a-model-line`  no shape of `modelsPushOf` matched (or not a string)
+ *    `over-cap`          longer than MODELS_PUSH_MAX, so `modelsPushOf` refused it
+ *    `unknown-lane`      a model line of a lane the roster has no row for
+ *    `not-a-codex-lane`  a model line of a row whose exec kind is not codex.
+ *  The last two also carry the `lane` (grammar-checked, so safe to print), for
+ *  the operator's remedy. The roster is asked only about a line that matched,
+ *  once. The tag is per lane AND class (D-5212): a phone REPLACES a
+ *  notification that carries the same tag (`pwa/public/push-sw.js`), so a
+ *  constant tag would let a second move or failure in one run erase the first.
+ *
+ *  WHAT A PUSHABLE LINE CAN CARRY, stated exactly: the lane, the class and the
+ *  model ids are grammar-checked, but a model id may be URL-shaped (`:` and `/`
+ *  are in MODEL_ID_RE) and the reason slot of a failure line takes up to 120
+ *  characters of ANY printable ASCII. So a box-token holder can put a sentence
+ *  of up to 120 characters in the reason slot of a well-shaped failure line for
+ *  a codex-kind lane and have it pushed under the title "Model classes"
+ *  (attribution, not authentication); a models push also gets no feed record
+ *  and no per-(lane, class) rate cap. That residual is accepted (D-5211). */
+export function modelsPushDecision(message, roster) {
+  const line = modelsPushOf(message);
+  if (line === null) return { verdict: 'refused', reason: overCap(message) ? 'over-cap' : 'not-a-model-line' };
+  const row = roster.get(line.lane);
+  if (row === undefined) return { verdict: 'refused', reason: 'unknown-lane', lane: line.lane };
+  if (row.exec.kind !== 'codex') return { verdict: 'refused', reason: 'not-a-codex-lane', lane: line.lane };
+  return { verdict: 'pushable', lane: line.lane, cls: line.cls, kind: line.kind, tag: `models-advance:${line.lane}:${line.cls}` };
+}
+
 const REGISTRY_KEYS = ['probe', 'classes', 'subagent', 'discovery', 'effort', 'baseUrl'];
 
-/** The hostnames `parseRegistry`'s `baseUrl` scheme gate (C13) treats as a
- *  local proxy, and so the one case http:// is legal for. `URL#hostname`
- *  keeps the brackets on an IPv6 literal (`new URL('http://[::1]/').hostname`
- *  is `'[::1]'`, measured), so that is the form matched here. */
-const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '[::1]'];
+/** `parseRegistry`'s sentence for each of `BASE_URL_OK`'s five refusals, by
+ *  reason. The three that the gate added to this file (D-7308) name their
+ *  reason word, and none of them repeats the value: a user name and password,
+ *  or a key in a query, would otherwise be printed back on the refusal. The
+ *  `base-url-insecure` sentence is the C13 wording this file always had. */
+const BASE_URL_REFUSED = {
+  'base-url-unparseable': (raw) => `base-url-unparseable: baseUrl ${JSON.stringify(raw)} is not a valid URL.`,
+  'base-url-credentials': () => 'base-url-credentials: baseUrl carries a user name or password, which would be stored '
+    + 'in this file and sent on every probe request. Put the key in the lane\'s secrets file and give the endpoint '
+    + 'without it.',
+  'base-url-query': () => 'base-url-query: baseUrl carries a query string (a "?"), which is not part of an endpoint. '
+    + 'Give the endpoint without it.',
+  'base-url-fragment': () => 'base-url-fragment: baseUrl carries a fragment (a "#"), which is not part of an '
+    + 'endpoint. Give the endpoint without it.',
+  'base-url-insecure': (raw) => `baseUrl ${JSON.stringify(raw)} must be https:// — the lane's key goes out on every `
+    + 'request this probe makes. http:// is accepted only for a loopback host (127.0.0.1, '
+    + 'localhost, [::1]), the one legitimate local-proxy case.',
+};
 
 /** Thrown by `parseRegistry`. Carries the offending FIELD as data, not only in
  *  the sentence: the verbs' contract is "refuses, with the field named" (§10),
@@ -118,6 +277,41 @@ export class CatalogueInvalid extends Error {
 
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/** A non-empty string: the bound `parseRegistry`'s `effort` map and `parseCatalogue`'s `defaultReasoningLevel`
+ *  apply (D-8620), and the same bound the probe's Codex arm applies to each `supported_reasoning_levels` name and to
+ *  `default_reasoning_level` (`effort_name`, ccd/ccrc-models-probe). `parseCatalogue`'s `efforts` filter is NOT
+ *  bound by it: that filter keeps any string, unchanged, so a row reads exactly as it did before D-8620. */
+const isEffortName = (v) => typeof v === 'string' && v.length > 0;
+
+/** D-8620: the bounds of the Codex catalogue's request-shape fields (`CatalogueModel`, shared/models.ts), defined
+ *  ONCE here for every JavaScript reader. `CatalogueVerbosity` and `TruncationMode` are their TYPES, pinned to these
+ *  lists by `server/test/models.test.ts`; the probe's Python spells the same bounds in its own language, and
+ *  `server/test/models-probe.test.ts` runs every candidate through both and reds on any disagreement. The words are
+ *  upstream Codex's own: `text.verbosity`'s three values and `truncation_policy.mode`'s two. */
+export const CATALOGUE_VERBOSITIES = Object.freeze(['low', 'medium', 'high']);
+export const CATALOGUE_TRUNCATION_MODES = Object.freeze(['tokens', 'bytes']);
+/** A truncation policy's `limit` is an integer in `1..CATALOGUE_TRUNCATION_LIMIT_MAX` (D-8620). */
+export const CATALOGUE_TRUNCATION_LIMIT_MAX = 10_000_000;
+
+/** D-8620: the request-shape keys of one Codex catalogue row, each kept only when valid and otherwise ABSENT, never
+ *  null or a default: a model without them must read exactly as before, and a genuine `false` is a fact a later
+ *  reader acts on, so it must stay distinct from "the catalogue did not say". Of a truncation policy, only `mode`
+ *  and `limit` are kept. */
+function requestShapeOf(raw) {
+  const out = {};
+  if (typeof raw['useResponsesLite'] === 'boolean') out.useResponsesLite = raw['useResponsesLite'];
+  if (typeof raw['supportVerbosity'] === 'boolean') out.supportVerbosity = raw['supportVerbosity'];
+  if (CATALOGUE_VERBOSITIES.includes(raw['defaultVerbosity'])) out.defaultVerbosity = raw['defaultVerbosity'];
+  if (isEffortName(raw['defaultReasoningLevel'])) out.defaultReasoningLevel = raw['defaultReasoningLevel'];
+  const policy = raw['truncationPolicy'];
+  if (isObj(policy) && CATALOGUE_TRUNCATION_MODES.includes(policy['mode'])
+    && Number.isInteger(policy['limit']) && policy['limit'] >= 1
+    && policy['limit'] <= CATALOGUE_TRUNCATION_LIMIT_MAX) {
+    out.truncationPolicy = { mode: policy['mode'], limit: policy['limit'] };
+  }
+  return out;
+}
 
 /** `(json: unknown) => Catalogue`. Validates a catalogue read off disk and
  *  fills its optional fields. Refuses the WHOLE file on a model with no `id`
@@ -153,6 +347,8 @@ export function parseCatalogue(json) {
       hidden: raw['hidden'] === true,
       priceIn: num(raw['priceIn']),
       priceOut: num(raw['priceOut']),
+      // D-8620: kept on a Codex catalogue only, the one probe whose reply carries them.
+      ...(probe === 'codex' ? requestShapeOf(raw) : {}),
     };
   });
   const out = { probe, fetchedAt, stale: json['stale'] === true, models };
@@ -299,23 +495,17 @@ export function parseRegistry(json, catalogue) {
       throw new RegistryInvalid('baseUrl', 'baseUrl must be a non-empty string when it is present.');
     }
     // C13: this URL carries the lane's bearer token on every request the
-    // probe makes (`ccrc-models-probe`'s `compatible` arm). http:// sends
-    // that key in cleartext, so it is refused — except for a loopback host
-    // (127.0.0.1, localhost, [::1]), the one legitimate local-proxy case.
-    let parsed;
-    try {
-      parsed = new URL(baseUrlRaw);
-    } catch {
-      throw new RegistryInvalid('baseUrl', `baseUrl ${JSON.stringify(baseUrlRaw)} is not a valid URL.`);
-    }
-    const isLoopbackHost = LOOPBACK_HOSTS.includes(parsed.hostname);
-    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopbackHost)) {
-      throw new RegistryInvalid('baseUrl',
-        `baseUrl ${JSON.stringify(baseUrlRaw)} must be https:// — the lane's key goes out on every `
-        + 'request this probe makes. http:// is accepted only for a loopback host (127.0.0.1, '
-        + 'localhost, [::1]), the one legitimate local-proxy case.');
-    }
-    baseUrl = baseUrlRaw;
+    // probe makes (`ccrc-models-probe`'s `compatible` arm), so whether it is
+    // admissible is the endpoint gate's decision, `BASE_URL_OK`
+    // (`shared/base-url.mjs`, D-7308), the one every roster `exec.baseUrl`
+    // already passes: https://, or http:// only on a loopback host (the one
+    // legitimate local-proxy case), and never a user name or password, a query
+    // or a fragment. An admitted value is stored as the gate's normalised `url`
+    // (OA-BU1 ruled (b), D-7460, as `shared/roster.ts` stores `exec.baseUrl`),
+    // so this file holds the endpoint the probe will actually resolve.
+    const verdict = BASE_URL_OK(baseUrlRaw);
+    if (!verdict.ok) throw new RegistryInvalid('baseUrl', BASE_URL_REFUSED[verdict.reason](baseUrlRaw));
+    baseUrl = verdict.url;
   }
   if (probe === 'compatible' && baseUrl === undefined) {
     throw new RegistryInvalid('baseUrl',
@@ -338,7 +528,7 @@ export function parseRegistry(json, catalogue) {
         throw new RegistryInvalid(`effort.${key}`,
           `effort.${key} is an unknown key — the keys are ${CLASSES.join(', ')}.`);
       }
-      if (typeof value !== 'string' || value.length === 0) {
+      if (!isEffortName(value)) {
         throw new RegistryInvalid(`effort.${key}`,
           `effort.${key} is ${JSON.stringify(value)}. Set it to one of the classed model's own `
           + "effort levels — run 'ccrc models <id> show' to see them.");
@@ -356,6 +546,76 @@ export function parseRegistry(json, catalogue) {
   }
   if (baseUrl !== undefined) out.baseUrl = baseUrl;
   return out;
+}
+
+/** The bounds of a measured context window, in tokens (codex-bridge spec
+ *  §2.7: "an integer from 1,000 to 1,000,000"). `parseWindows` refuses a value
+ *  outside them, `deploy/models-op.mjs`'s `set-window` refuses to write one,
+ *  and `shared/modelenv.mjs`'s `contextWindowFor` caps at `WINDOW_MAX`. Defined
+ *  here, once, and imported by every reader — never re-spelled. */
+export const WINDOW_MIN = 1000;
+export const WINDOW_MAX = 1000000;
+
+/**
+ * `(json: unknown) => ModelWindows` — a lane's MEASURED context windows, read
+ * from `~/.ccrc/models/<id>.windows.json`:
+ * `{"windows": {"<model id>": {"tokens": <integer>, "setAt": "<ISO-8601 UTC>"}}}`.
+ * Returns a frozen, null-prototype object mapping each model id to its tokens.
+ *
+ * A SIBLING FILE, NOT A REGISTRY KEY (D-5160).
+ * `parseRegistry` above refuses any key outside `REGISTRY_KEYS`, so a
+ * `windows` key in `<id>.classes.json` would make an older ccrc, after a
+ * rollback, refuse every lane's registry — and with it every verb on the
+ * lane, the one that could remove the key included. An older ccrc never
+ * opens this file, so its lanes fall back to the default window rule, the
+ * safe direction.
+ *
+ * AND THE OPPOSITE POLICY ON UNKNOWN KEYS. The registry refuses them; this
+ * file TOLERATES them, at the top level and inside every entry, because it is
+ * forward-compatible by design (a later build may record more per model), and
+ * `deploy/models-op.mjs`'s writer PRESERVES them by editing the raw parsed
+ * object rather than this function's answer.
+ *
+ * What it refuses, naming the field the way `parseRegistry` does: a top level
+ * that is not an object; a `windows` that is missing or not an object; a key
+ * that is not a model id (`MODEL_ID_RE`, which refuses `__proto__` too); an
+ * entry that is not an object; a `tokens` that is not an integer from
+ * `WINDOW_MIN` to `WINDOW_MAX`; a `setAt` that is present and not a string.
+ */
+export function parseWindows(json) {
+  if (!isObj(json)) {
+    throw new RegistryInvalid('',
+      'a windows file must be a JSON object: {"windows": {"<model id>": {"tokens": <integer>}}}.');
+  }
+  const raw = json['windows'];
+  if (!isObj(raw)) {
+    throw new RegistryInvalid('windows',
+      `windows is missing or is not an object. It maps each model id to {"tokens": <integer from ${WINDOW_MIN} `
+      + `to ${WINDOW_MAX}>}.`);
+  }
+  const out = Object.create(null);
+  for (const [id, entry] of Object.entries(raw)) {
+    if (!MODEL_ID_RE.test(id)) {
+      throw new RegistryInvalid(`windows.${id}`,
+        `windows has the key ${JSON.stringify(id)}, which is not a model id.`);
+    }
+    if (!isObj(entry)) {
+      throw new RegistryInvalid(`windows.${id}`,
+        `windows.${id} is ${JSON.stringify(entry)}: each entry is an object, {"tokens": <integer>}.`);
+    }
+    const tokens = entry['tokens'];
+    if (typeof tokens !== 'number' || !Number.isInteger(tokens) || tokens < WINDOW_MIN || tokens > WINDOW_MAX) {
+      throw new RegistryInvalid(`windows.${id}.tokens`,
+        `windows.${id}.tokens is ${JSON.stringify(tokens)}: it must be an integer from ${WINDOW_MIN} to `
+        + `${WINDOW_MAX}.`);
+    }
+    if (entry['setAt'] !== undefined && typeof entry['setAt'] !== 'string') {
+      throw new RegistryInvalid(`windows.${id}.setAt`,
+        `windows.${id}.setAt is ${JSON.stringify(entry['setAt'])}: when present it is an ISO-8601 time string.`);
+    }
+    out[id] = tokens;
+  }
+  return Object.freeze(out);
 }
 
 /** `(reg, catalogue) => string[]`. What discovery and classification operate
@@ -466,6 +726,22 @@ export function classOfModel(reg, modelId) {
     if (reg.classes[c] === modelId) return c;
   }
   return null;
+}
+
+/** `(reg, catalogue) => LaneClassModels` (D-8406): each class's model on this lane and the catalogue's label for it —
+ *  the facts `ccrc models <id> show` prints, and the only source the session's model picker takes a model's name from.
+ *  `model` is the registry's slot as it stands (`null`: the class is unavailable on this lane by nature); `label` is
+ *  the catalogue row's `label` for that id (`parseCatalogue` fills it with the id when the probe gave none), or `null`
+ *  when there is no catalogue, no row for the id, or no model. Never a name this file spells: a model advance changes
+ *  the registry, and the label follows it with no code change. Pure. */
+export function laneClassModels(reg, catalogue) {
+  const out = {};
+  for (const c of CLASSES) {
+    const model = reg.classes[c];
+    const row = model === null || catalogue === null ? undefined : catalogue.models.find((m) => m.id === model);
+    out[c] = { model, label: row === undefined ? null : row.label };
+  }
+  return out;
 }
 
 /** What the materialiser writes into the env block for a `null` slot (§6.1).

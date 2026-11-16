@@ -1,0 +1,1634 @@
+#!/usr/bin/env python3
+"""ccgpt-proxy — ccrc's front shim between Claude Code and the LiteLLM proxy
+that fronts a ChatGPT/Codex subscription lane.
+
+Binds a port, answers its own identity, and forwards every request
+byte-for-byte — except a POST body on a path ending `/messages`, which is
+parsed as JSON and rewritten. Claude Code sends a system instruction through
+two doors, and the shim handles each one differently:
+
+  1. `_fold_midturn_system` — every mid-conversation `role: "system"` entry
+     inside `messages` becomes `role: "user"`, in place. Codex refuses such
+     an entry, and because it is replayed with the conversation history, one
+     unfolded injection fails every later turn of that session.
+  2. `_system_as_instructions` — the top-level Anthropic `system` field is
+     KEPT top-level, as the system prompt: flattened to one plain string
+     behind `SYSTEM_LEAD`, so LiteLLM carries it in the Responses
+     `instructions` field after the Codex CLI base prompt. LiteLLM's chatgpt
+     provider always fills `instructions` with its own "You are Codex ...
+     running in the Codex CLI" prompt and appends whatever `instructions`
+     the request carries after it; its Anthropic adapter maps a top-level
+     `system` to `instructions` only when it is a PLAIN STRING — measured
+     offline on LiteLLM 1.101.0 and 1.104.0, and re-measured on every
+     runtime build by the behaviour probe (`top-system-in-instructions`).
+     A block-list `system` is not mapped: on a lane's path (the
+     chat-completions bridge, since provider chatgpt is not a
+     direct-Responses provider) it becomes a `role: "system"` input item,
+     which Codex refuses ("System messages are not allowed") — measured
+     offline on both versions. So the flattening is load-bearing, not
+     cosmetic. `messages` is not touched: nothing is merged into or
+     inserted before the first turn.
+
+The top-level door used to be a fold as well (`_fold_system`): `system` was
+removed and merged into, or inserted as, the conversation's leading user
+turn. Claude Code's whole system prompt — a subagent's role, its tool rules,
+its report contract — then reached the model as user text, below the Codex
+prompt, and lost every conflict with it. Spec §22 retires that fold and
+supersedes the two arguments this file carried for it: D-3152's (the fold's
+merge branch made the two steps' call order load-bearing) and D-3156's
+acceptance of the merge prepending a text block ahead of a leading
+`tool_result`. The two steps now write disjoint fields — the first only the
+roles inside `messages`, the second only `system` — so their order is no
+longer load-bearing.
+
+A body on that path the shim cannot parse at all is REFUSED, never forwarded
+unexamined. D-3151 — three silent passthrough arms, one in
+`_rewrite_messages_body` for a body that is not valid JSON at all, a second
+in the same function for valid JSON whose top level is not an object, a
+third in `_fold_midturn_system` for a `messages` field present but not a
+list — is CLOSED as of this task (Task 7a): each now raises `_UnusableBody`,
+caught once in `_relay`, and answered as an explicit HTTP 400 naming what
+was wrong. See the plan's `## Deviations found` for the full history of why
+those three arms were accepted for two tasks' worth of time, and D-3151's
+own CLOSED entry there (durable, unlike the gitignored `task-7a-rulings.md`
+this paragraph also cites) for what retired them.
+
+A `/messages` POST body carrying `Content-Encoding: gzip` or `deflate` is
+decompressed before the two system steps above run and the rewritten result
+is re-compressed in the same encoding before forwarding — the identical
+rewrite pipeline, never a second one built for compressed input. An absent or
+`identity` `Content-Encoding` is left alone, exactly as an unencoded body
+already was: folded and forwarded like any other. Any OTHER encoding this
+shim does not implement — `br`, or the list/trailing-comma forms
+`"gzip, br"` / `"gzip,"` (D-3151 arm 1 used to swallow both silently) — is
+refused outright with an HTTP 415 naming the encoding, rather than forwarded
+unexamined. A body that CLAIMS `gzip`/`deflate` but does not actually decode
+as one is refused with an HTTP 400 naming what was wrong (see
+`_decode_body`) — neither a fourth D-3151 arm nor left to drop the
+connection the way a malformed chunked frame does (see `_read_chunked_body`).
+
+Once a `/messages` body is safely parsed and both system doors are handled,
+`_apply_effort` resolves Codex's own `reasoning.effort`: an explicit client
+`output_config.effort` — any value except `"auto"`, ccrc's own first-class
+synonym for "the lane decides", which is treated as absent (task-8 fix round 1,
+C-1) — wins outright, else this lane's own per-model default from
+`~/.ccrc/models/<id>.effort.json` (materialised by `effortFile()`,
+`shared/modelenv.mjs`, reloaded here by a single-slot `(path, mtime)` cache),
+else nothing at all, and the provider's own default applies untouched.
+`output_config` and `thinking` are popped unconditionally either way, so
+neither field reaches LiteLLM's own order-dependent translation of them
+(Task 8; ownership design §6.2, model-class-registry design §6.4). A broken
+effort file — absent, unreadable or malformed — is ccrc's OWN config, not
+client input, so it falls through to "no lane default" rather than refusing
+an otherwise-usable client request.
+
+Every refusal in this file — the two encoding refusals above, the three
+closed D-3151 arms, and malformed chunked framing below — answers the SAME
+shape (D-3153): a JSON body `{"error": "..."}`, `Content-Type:
+application/json`, never `send_error`'s HTML body with the exception text
+folded into the status-line reason phrase. See `Handler._refuse`.
+
+Malformed or truncated `Transfer-Encoding: chunked` framing — and a
+non-numeric `Content-Length` on the non-chunked path (task-7a fix round 1, M-1) —
+is refused with an HTTP 400 too, for every path, not only `/messages`: this
+is a transport-framing failure, not a parsed-content one, so a body whose
+length cannot be trusted has no complete bytes to examine, refuse
+specifically, or forward anywhere. See `_read_request_body`.
+
+Listens on 127.0.0.1:$CCGPT_PROXY_PORT; forwards to the LiteLLM proxy at
+127.0.0.1:$CCGPT_LITELLM_PORT. No credentials are stored here — the
+Authorization header passes through unexamined.
+
+THE LANE'S NAME, ANSWERED LOCALLY. A caller asks GET /ccgpt/lane before it
+trusts a listening shim port, because a port is only a number: two lanes can
+have their proxy ports collide with something else entirely (a stray test
+mock, another lane's leftover listener), and the only way to tell this
+listener apart from one of those is to ask it who it is. The answer is the
+account id this shim was started with — the same id a later task will use to
+resolve this lane's own effort defaults and credentials. Plan 2b's adoption
+check refuses to attach to a listener that answers a DIFFERENT lane's id.
+
+THERE ARE NO DEFAULT PORTS OR LANE ID. `CCGPT_ACCOUNT_ID`, `CCGPT_PROXY_PORT`
+and `CCGPT_LITELLM_PORT` are all required; a missing one is a refusal to
+start, loudly, naming the variable — not a guessed port. A defaulted port is
+the exact mechanism by which one lane's shim would silently reach another
+lane's gateway and bill the wrong account.
+
+ONE OPTIONAL VARIABLE. `CCGPT_UPSTREAM_WAIT_S` (D-4933) bounds how long the
+shim waits out a REFUSED connection to the LiteLLM proxy: a whole number of
+seconds from 0 to 600, default 60, where 0 means no waiting. A release that
+rebuilds a lane's runtime restarts its gateway, which takes about a minute to
+listen again (measured: ~46 s), and in that window every connect is refused.
+The shim used to answer each request in it with an immediate 502, and Claude
+Code ended the turn on it. Now a refused connect — the one failure where
+nothing reached upstream — is retried every half second, with the same
+method, path, headers and body bytes, but only while its client is still
+connected: before each re-send the shim peeks at the client's socket
+(`Handler._client_gone`), and once the client has closed it stops waiting,
+sends nothing upstream and answers the same immediate 502 as before (a client
+that only half-closed and still reads gets it; one that has gone discards it),
+so a request is never sent for a client that has gone. One client cannot be
+seen to leave: one with a further request already queued behind this one (HTTP
+pipelining), whose old request is then still sent when the gateway returns. The
+shim's one real client does not pipeline.
+The wait ends at the bound (measured from the first refusal); then the same 502
+refusal as before answers, saying it was refused for the whole wait. Anything
+else (a reset, a timeout, a connection accepted and then closed, any other
+error) may have reached upstream, and a request that reached upstream is never
+re-sent: an immediate 502, exactly as before. See `_urlopen_through_refusal`.
+An invalid value refuses to start, like a required variable's.
+"""
+import os
+import sys
+import time
+import json
+import socket
+import gzip
+import zlib
+import functools
+import socketserver
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+def _required_env(name: str) -> str:
+    """Read one required environment variable, or refuse to start.
+
+    No default is offered for any of the three REQUIRED variables this shim
+    reads — see the module docstring's note on why a defaulted port is unsafe
+    here, not merely unhelpful. The one other variable it reads,
+    `CCGPT_UPSTREAM_WAIT_S`, is optional and has a default
+    (`_optional_wait_s`, D-4933).
+    """
+    value = os.environ.get(name)
+    if not value:
+        sys.exit(f"ccgpt-proxy: refusing to start — {name} is not set")
+    return value
+
+
+def _required_port(name: str) -> int:
+    """Like `_required_env`, but for a variable that must parse as a port
+    number. Left unwrapped, a non-numeric value escaped as a bare
+    `ValueError` traceback instead of the same named refusal every other
+    missing or invalid variable gets (commit 8903d18a fix round 1, M-3)."""
+    raw = _required_env(name)
+    try:
+        return int(raw)
+    except ValueError:
+        sys.exit(f"ccgpt-proxy: refusing to start — {name} is not a valid port number: {raw!r}")
+
+
+# D-4933: the bound on waiting out a refused upstream connection, in seconds.
+# 60 because the measured gateway restart took ~46 s and Claude Code's own
+# request timeout is far longer; 600 is the ceiling an operator may set.
+UPSTREAM_WAIT_DEFAULT_S = 60
+UPSTREAM_WAIT_MAX_S = 600
+
+
+def _optional_wait_s(name: str, default: int) -> int:
+    """Read the one OPTIONAL variable this shim has: a whole number of seconds
+    from 0 to `UPSTREAM_WAIT_MAX_S`, or `default` when it is absent (D-4933).
+
+    Parsed once, at start-up, and an invalid value is the same named refusal
+    `_required_port` gives — not a guessed bound: a unit that says
+    `CCGPT_UPSTREAM_WAIT_S=sixty` has said something this shim cannot act on,
+    and quietly using 60 would hide it. Only a string of ASCII digits is read,
+    leading zeros included (`0600` is 600), so `int()`'s own leniency (' 5',
+    '+5', '5_0', non-ASCII digits) never decides what a unit file means. The
+    length is checked after the zeros are stripped and BEFORE `int()` is
+    called, so a 5000-digit string, which `int()` refuses past its own
+    digit limit, never reaches it.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    if raw.isascii() and raw.isdigit():
+        digits = raw.lstrip("0") or "0"
+        if len(digits) <= len(str(UPSTREAM_WAIT_MAX_S)) and int(digits) <= UPSTREAM_WAIT_MAX_S:
+            return int(digits)
+    sys.exit(
+        f"ccgpt-proxy: refusing to start — {name} is not a whole number of seconds "
+        f"from 0 to {UPSTREAM_WAIT_MAX_S}: {raw!r}"
+    )
+
+
+class _UnusableBody(Exception):
+    """Raised when a `/messages` body cannot be safely rewritten at all: not
+    JSON, not a JSON object once parsed, or a `messages` field present but
+    not a list. Raised by `_rewrite_messages_body` and the
+    `_fold_midturn_system` it calls, caught by `_relay` alone, which answers
+    an explicit HTTP 400 via `Handler._refuse` — this is D-3151's CLOSURE:
+    three arms that used to `return` the body (or `data`) unrewritten now
+    raise this instead, rather than adding a fourth silent branch beside
+    them.
+
+    Follows `_BadEncoding`'s own precedent below (a dedicated exception
+    raised where the condition is detected, caught once, turned into one
+    explicit response) rather than overloading `_rewrite_messages_body`'s
+    return value: it must not return `None` for "refuse" and `bytes` for
+    "rewritten" — two conditions a caller handles differently collapsing to
+    the same value is a seam defect, not a style note (ring conventions,
+    project CLAUDE.md).
+    """
+
+
+def _fold_midturn_system(data):
+    """Every messages[*] with role 'system' becomes 'user', IN PLACE.
+
+    The beta that produces these entries exists because position carries
+    meaning, so this never hoists. Both content shapes convert: the sender
+    draws no distinction between a plain string and a content-block list, and
+    the string arm survives today only because a layer below happens to hoist
+    it. Codex refuses either, and the entry is replayed with the history, so
+    one unfolded injection fails every later turn.
+
+    Raises `_UnusableBody` — D-3151, arm 3 of 3, CLOSED — when `messages` is
+    PRESENT but not a list (e.g. a dict): there is nothing inside it to
+    examine for a `role: "system"` entry, and forwarding it unexamined is
+    exactly the sticky-replay hazard this whole task exists to close. This
+    arm used to `return data` unmodified; Task 7a replaces it with an
+    explicit refusal instead of a fourth branch beside it.
+
+    ABSENT or explicit `null` `messages` is NOT this arm and must not become
+    it (task-7a fix round 1, C-1): `data.get("messages")` returns `None` for both,
+    and D-3151 arm 3's own census — the plan's and the deleted comment's —
+    was always "present but not a list", never "absent". A body carrying
+    only a top-level `system` and no `messages` at all is one this shim
+    forwards perfectly well (`_system_as_instructions` writes `system` alone
+    and never reads `messages`, so an absent key stays absent and an
+    explicit `null` stays `null` — no turn is manufactured for either),
+    so refusing it is the over-refusal task-7a-rulings.md §6 (fix round 1,
+    C-1) exists to prevent — it buys nothing, since a `messages` key that is not there
+    cannot hide an unfolded mid-turn `system` entry either. `None` is
+    checked and returned on FIRST, before the `isinstance` refusal, so the
+    absent/`null` case keeps returning `data` unmodified exactly as it did
+    before this task, and only a `messages` key that is PRESENT with the
+    wrong type earns the refusal.
+    """
+    msgs = data.get("messages")
+    if msgs is None:
+        # Absent key or explicit `null` — not D-3151 arm 3's condition, see
+        # above. Forwarded as sent; nothing downstream invents a list for it.
+        return data
+    if not isinstance(msgs, list):
+        raise _UnusableBody("ccgpt-proxy: 'messages' is present but not a list")
+    for m in msgs:
+        if isinstance(m, dict) and m.get("role") == "system":
+            m["role"] = "user"
+    return data
+
+
+def _system_to_text(system):
+    """Flatten a top-level `system` value to plain text.
+
+    Same two shapes `_fold_midturn_system` already tolerates on a message's
+    own `content`: a plain string, or a list of Anthropic content blocks.
+    Blocks are joined in the order the sender wrote them — one instruction in
+    sequence, not concatenated ad hoc — and a non-dict entry, a block with
+    no string `text`, or a block whose `text` is the empty string
+    contributes nothing (it is skipped, not joined as an empty part) rather
+    than raising, since this function's caller must never let a malformed
+    block crash a request that a well-formed one would have carried cleanly.
+    The text it keeps is returned as written, never stripped.
+    """
+    if isinstance(system, str):
+        return system
+    if isinstance(system, list):
+        parts = [
+            b["text"] for b in system
+            if isinstance(b, dict) and isinstance(b.get("text"), str) and b["text"]
+        ]
+        return "\n\n".join(parts)
+    return ""
+
+
+# The one line put ahead of Claude Code's own system prompt. LiteLLM's chatgpt
+# provider writes its Codex CLI base prompt into the Responses `instructions`
+# FIRST and appends the request's own after it, so "above" in this line is
+# that base prompt, and this line is what tells the model which of the two
+# wins where they conflict (spec §22). ASCII only, one line: it is compared
+# byte for byte by `ccgpt-proxy.test.ts`, which spells it as its own literal.
+SYSTEM_LEAD = "You are running inside Claude Code, not the Codex CLI. What follows is Claude Code's system prompt for this session: wherever it differs from the Codex CLI instructions above, follow it."
+
+
+def _system_as_instructions(data):
+    """Keep the top-level `system` field as the system prompt, as ONE plain
+    string led by `SYSTEM_LEAD` (spec §22, D-4858).
+
+    LiteLLM's Anthropic adapter maps a top-level `system` to the Responses
+    `instructions` field only when it is a PLAIN STRING, and its chatgpt
+    provider writes its own Codex CLI prompt there first and appends the
+    request's after it — measured offline on LiteLLM 1.101.0 and 1.104.0;
+    the runtime's behaviour probe re-measures that mapping on every build
+    (`top-system-in-instructions`). A block-list `system` is not mapped: on
+    a lane's path (the chat-completions bridge, since provider chatgpt is
+    not a direct-Responses provider) it becomes a `role: "system"` input
+    item, which Codex refuses ("System messages are not allowed") —
+    measured offline on both versions. So the flattening is load-bearing,
+    not cosmetic: the value is flattened by `_system_to_text` (a string as
+    is, non-empty text blocks joined with a blank line, anything else to
+    nothing) and written back as a string, the one shape the mapping holds
+    for, whatever shape the client sent. The blocks' own extra keys
+    (`cache_control`, say) do not survive — the field they land in is a
+    single string.
+
+    `messages` is NOT touched. Nothing is merged into the first turn and
+    nothing is inserted ahead of it — the old `_fold_system` did both, and
+    that is what spec §22 retires: Claude Code's whole system prompt reached
+    the model as user text, below the Codex prompt, and lost every conflict
+    with it. Two consequences of that fold no longer exist: its merge branch
+    made call order against `_fold_midturn_system` load-bearing (D-3152's
+    argument), and its block-list merge prepended a text block ahead of a
+    leading `tool_result` (D-3156's acceptance). Both are superseded by spec
+    §22; `ccgpt-proxy.test.ts` pins the second as a regression case.
+
+    A `system` whose flattened text is empty or whitespace only — absent,
+    `null`, an empty or whitespace-only string, or a block list carrying no
+    string `text`, only empty text or only whitespace — is popped and NOT
+    re-added: the lead line is never sent with nothing behind it, since it
+    would announce a system prompt that is not there. The text that is kept
+    is sent as flattened, not stripped.
+    """
+    text = _system_to_text(data.pop("system", None))
+    if not text.strip():
+        return data
+    data["system"] = f"{SYSTEM_LEAD}\n\n{text}"
+    return data
+
+
+def _rewrite_messages_body(body: bytes) -> bytes:
+    """The `/messages`-path rewrite: turn mid-conversation `system` entries
+    into `user` ones in place (`_fold_midturn_system`), then keep the
+    top-level `system` field as the system prompt — one plain string behind
+    `SYSTEM_LEAD`, which LiteLLM carries in Codex's `instructions`
+    (`_system_as_instructions`, spec §22; it used to be folded into the
+    leading user turn) — then resolve `_apply_effort`'s own
+    `reasoning.effort` (task-8 fix round 1, I-1 — this line used to stop at
+    "then re-encode" three steps early, above the `_apply_effort`
+    call this function actually makes), then re-encode. `ensure_ascii=False`
+    (commit 8009b4f4 fix round 1, M-5): the default would re-escape every non-ASCII byte the
+    client sent even when nothing needed rewriting, and a proxy that rewrites
+    more of the wire than it must is a proxy whose diffs are harder to reason
+    about — keep the forwarded body as close to what arrived as re-encoding
+    allows.
+
+    Raises `_UnusableBody` — D-3151, arms 1 and 2 of 3, CLOSED — when the
+    body cannot be turned into a JSON object at all: malformed JSON, a
+    non-object top level (e.g. a bare array — carries no `messages` key and
+    cannot be routed as an Anthropic request either), or JSON nested deep
+    enough that the decoder itself gives up (task-7a fix round 1, I-1:
+    `RecursionError` is a `RuntimeError` subclass, not a `ValueError`, and
+    used to escape this except arm entirely, dropping the connection with no
+    HTTP response). Both arms used to `return body` unrewritten; Task 7a
+    replaces them with the explicit refusal D-3151 always said Task 7 would
+    ship, rather than adding a fourth branch beside `_fold_midturn_system`'s
+    own arm 3.
+    """
+    try:
+        data = json.loads(body)
+    except (TypeError, ValueError, RecursionError) as e:
+        raise _UnusableBody(f"ccgpt-proxy: malformed JSON body: {e}") from None
+    if not isinstance(data, dict):
+        raise _UnusableBody("ccgpt-proxy: top-level JSON value is not an object")
+    # The two system steps touch disjoint fields — `_fold_midturn_system` the
+    # roles inside `messages`, `_system_as_instructions` the top-level
+    # `system` alone — so their order is no longer load-bearing (spec §22:
+    # the retired `_fold_system`'s merge branch is what made it so, D-3152).
+    data = _fold_midturn_system(data)
+    if "system" in data:
+        data = _system_as_instructions(data)
+    data = _apply_effort(data)
+    return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
+
+# Effort resolution and its single-slot (path, mtime) cache (Task 8;
+# ownership design §6.2, model-class-registry design §6.4 — task-8 fix round 1,
+# I-2: this citation and the one below used to read "design doc §N" with no
+# document named, which silently resolves under this file's own convention
+# to the WRONG document for both). Claude Code sends `output_config:
+# {"effort": "..."}` and `thinking: {"type": "adaptive"}` on EVERY request,
+# under the `effort-2025-11-24` beta header. Measured against the installed
+# LiteLLM (model-class-registry design §1): neither field is discarded by
+# `drop_params` — `output_config.effort` is LIFTED into LiteLLM's own
+# `reasoning_effort`, and `thinking` competes for that SAME key inside one
+# LiteLLM key-iteration loop, order-dependently. This shim resolves the
+# level itself, sets Codex's own `reasoning.effort` directly, and pops both
+# client fields on every `/messages` request so nothing downstream
+# reinterprets either one.
+#
+# A single TUPLE slot, `(key, effort_map)` — not two separate dict-key
+# writes (task-8 fix round 1, M-3): this runs under `ThreadingHTTPServer`, and two
+# worker threads straddling a materialise could otherwise interleave two
+# assignments to leave a NEW key paired with an OLD map, or tear the same
+# way on read. One assignment, read and written as a whole, closes that
+# window structurally rather than narrowing it.
+_EFFORT_CACHE = (None, {})
+
+
+def _effort_path() -> str:
+    """`~/.ccrc/models/<id>.effort.json` for THIS lane — the same path
+    `deploy/models-op.mjs`'s `effortPath` and the materialiser
+    (`effortFile`, `shared/modelenv.mjs`) write, keyed by account id, never
+    by model: one lane, one file, holding every model that lane can reach.
+    `os.path.expanduser` resolves against the process's own `HOME` — the
+    fixture HOME under test, never the real one, exactly like every other
+    home-relative path this shim or its test harness touches."""
+    return os.path.expanduser(os.path.join("~", ".ccrc", "models", f"{ACCOUNT_ID}.effort.json"))
+
+
+def _lane_effort_map() -> dict:
+    """This lane's per-model effort defaults — the `byModel` object
+    `effortFile()` materialises, `{"<model>": "<level>", ...}` — reloaded by
+    `(path, mtime)` in a SINGLE-SLOT cache (task-8-brief.md (commit e5318e97)/task-8-
+    rulings.md §1): one key, one value, read and written as ONE tuple
+    assignment (`_EFFORT_CACHE = (key, effort_map)`; see the module-level
+    comment above this cache's declaration for why — task-8 fix round 1, M-3).
+
+    The cache is sound because the materialiser writes a FRESH TMP FILE —
+    which carries a NEW mtime of its own — and renames THAT over the
+    target, so the inode this shim stats is always the just-written one
+    (task-8 fix round 1, M-7: corrects this docstring's own former claim that "a
+    rename always moves mtime" — `rename(2)` itself PRESERVES the renamed
+    file's mtime; it creates nothing new. The soundness comes from the tmp
+    file being fresh, not from the rename call). So this shim never sees a
+    same-mtime content change in practice — the documented, accepted
+    consequence of keying on mtime at all, pinned observably (not by an
+    unfalsifiable "did not re-read" assertion) in `ccgpt-proxy.test.ts`'s
+    case-4 control, by writing DIFFERENT bytes at the SAME mtime and
+    asserting the OLD value still applies. That same case, under a
+    mutation that deletes the cache-hit check outright (task-8 fix round 1
+    review, mutation M7), is the ONLY one of 68 cases that reds — it is
+    the sole pin for this cache existing at all, not merely a control on
+    the opposite direction (task-8 fix round 1 correction to task-8-rulings.md (commit 1a0196d5)
+    §1, which called it "a control, not a pin").
+
+    `st_mtime_ns`, not `st_mtime` (task-8-rulings.md (commit e5318e97) §2): an integer
+    nanosecond count compares exactly, with no float-precision surprise
+    across a rewrite the test harness pins with `fs.utimesSync`.
+
+    A broken file must not break the lane (task-8-rulings.md (commit e5318e97) §3): this is
+    ccrc's OWN config, not client input — every refusal Task 7a built
+    answers a client that sent something unusable, and refusing a perfectly
+    good client request because *our* config is broken would break the lane
+    for a fault the client cannot fix or even see. So:
+      - ABSENT (`os.stat` raises `OSError`, typically `FileNotFoundError`) —
+        no lane default at all; ordinary, not an error. Caught before the
+        cache is even consulted, since there is no mtime to key on, and the
+        cache slot is never written for this arm.
+      - UNREADABLE or MALFORMED (`open`/`json.loads` raises `OSError` or a
+        `json.JSONDecodeError`, a `ValueError` subclass) — also no lane
+        default, for the identical reason. Deliberately NOT shaped like
+        `_UnusableBody`/`_BadEncoding`: those answer a CLIENT body this shim
+        cannot use; this is ccrc's own local file, and the client's request
+        is examined and rewritten exactly as always regardless of what this
+        function returns.
+    Either way this function returns `{}` WITHOUT writing the cache slot
+    (task-8 fix round 1, M-2 — a caching bug in the original round: a FAILURE
+    does have a real mtime to key on, unlike absence, and caching `{}`
+    under it would LATCH "no lane default" until that exact mtime changes.
+    A transient failure (EMFILE, ENOMEM) or a permission-only fix (`chmod`
+    moves ctime, not mtime) would then have no way to self-heal — nothing
+    here would ever move the file's mtime to invalidate the wrongly-cached
+    empty map. So a failing read is re-attempted on every call until it
+    either succeeds (and IS cached) or the file's own mtime changes; the
+    price is a repeated open+parse for as long as the file stays broken,
+    and that is the correct price for letting a fix take effect
+    immediately rather than waiting on an unrelated mtime bump). Either
+    way `_apply_effort` finds nothing for the request's own model, and the
+    provider default applies untouched.
+    """
+    global _EFFORT_CACHE
+    path = _effort_path()
+    try:
+        mtime_ns = os.stat(path).st_mtime_ns
+    except OSError:
+        return {}
+    key = (path, mtime_ns)
+    cached_key, cached_map = _EFFORT_CACHE
+    if cached_key == key:
+        return cached_map
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        parsed = json.loads(raw)
+        by_model = parsed.get("byModel") if isinstance(parsed, dict) else None
+        effort_map = by_model if isinstance(by_model, dict) else {}
+    except (OSError, ValueError):
+        # task-8 M-2: NOT cached — see docstring for why a failure must not latch.
+        return {}
+    _EFFORT_CACHE = (key, effort_map)
+    return effort_map
+
+
+def _apply_effort(data: dict) -> dict:
+    """Resolve `reasoning.effort` and strip both client-side effort fields,
+    IN PLACE, on an already-parsed `/messages` body. Called from
+    `_rewrite_messages_body` alone, AFTER both system doors are handled
+    (`_fold_midturn_system`, then `_system_as_instructions`) — task-8-
+    rulings.md (commit e5318e97) §4: this must run only where those two already run, a POST
+    body on a path ending `/messages`, and nowhere else, and it introduces
+    no new "cannot use this body" condition of its own — nothing here
+    raises.
+
+    Precedence (task-8-brief.md, unchanged from production —
+    `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` §6.2): an explicit
+    client `output_config.effort` wins outright over the lane default; with
+    none, `_lane_effort_map()`'s entry for THIS request's own `model`
+    applies; with neither, nothing is set here and the provider's own
+    default applies untouched.
+
+    `"auto"` is treated as ABSENT, never as an explicit choice (task-8 fix round 1,
+    C-1): it is a first-class word in ccrc's OWN routing vocabulary meaning
+    "the lane decides" — `ccd/ccd`'s `ROUTE_EFFORTS`, its own exclusion from
+    the spawn argv's `--effort` (`"$reff" != auto`), and `/effort auto`'s
+    documented behaviour of clearing a saved level all agree — and the
+    model-class-registry design says so explicitly (§6.4: "when present and
+    not `auto`"; §12: "`auto` and absent → the lane default for that
+    model"). Left unhandled, the measured consequence is not merely inertness:
+    the literal string `"auto"` would be written into `reasoning.effort` and
+    forwarded, and `auto` has no entry in Codex's own level vocabulary
+    (`low|medium|high|xhigh|max`, plus `ultra` as a lane default only), so
+    the likely live outcome is a provider 400 on every turn of a session
+    using it.
+
+    `output_config` and `thinking` are popped UNCONDITIONALLY — independent
+    of whether either one actually carries a usable effort value at all
+    (task-8-rulings.md (commit e5318e97) §5): a body carrying `thinking` and no `output_config`
+    whatsoever must still come out with `thinking` gone, so a mutation that
+    stops stripping `thinking` cannot hide behind the effort path.
+
+    A resolved level is set as `.effort` on an EXISTING client-sent
+    `reasoning` object when there is one, never by REPLACING it wholesale
+    (task-8 fix round 1, M-4): this function's job is to decide one field, and
+    discarding a sibling key it was never asked to touch (a hypothetical
+    `reasoning.summary`, say) is exactly the kind of narrowed distinction
+    this project's own ring rules forbid an adapter from making — even
+    though no caller sends one today; unreachable is not the same as
+    permitted.
+
+    Malformed client shapes (a non-dict `output_config`, a `model` that is
+    not a string) are tolerated, never refused — this is the SAME body the
+    two system steps above already accepted; effort resolution adds no new refusal
+    surface (task-8-rulings.md (commit e5318e97) §4).
+    """
+    output_config = data.pop("output_config", None)
+    data.pop("thinking", None)
+    explicit = output_config.get("effort") if isinstance(output_config, dict) else None
+    if explicit == "auto":
+        explicit = None
+    model = data.get("model")
+    lane_default = _lane_effort_map().get(model) if isinstance(model, str) else None
+    level = explicit or lane_default
+    if level:
+        reasoning = data.get("reasoning")
+        if not isinstance(reasoning, dict):
+            reasoning = {}
+        reasoning["effort"] = level
+        data["reasoning"] = reasoning
+    return data
+
+
+def _joined_header(headers, name: str) -> str:
+    """Read a header RFC 7230 §3.2.2 permits a sender to spell EITHER as one
+    comma-separated line or as several repeated lines carrying the same
+    field name — `Transfer-Encoding` and `Content-Encoding`, this file's two
+    callers, are both exactly this shape — by reading every occurrence via
+    `email.message.Message.get_all` (7b fix round 1, M-3: corrects a garbled
+    parenthetical the first draft of this docstring shipped with, that named
+    `get_all` and `Content-Encoding` side by side with nothing saying what
+    connected them) and joining them with a comma. `headers.get(name)` — what both
+    `_is_chunked` and `_content_encoding` used before task-7b-rulings.md (commit 458ae3a7) §1 —
+    reads only the FIRST occurrence on an `http.client.HTTPMessage`; a
+    request splitting `Transfer-Encoding: gzip, chunked` across two lines
+    (`Transfer-Encoding: gzip` then `Transfer-Encoding: chunked`) would then
+    answer `'gzip'` alone, `chunked` never seen, and reopen exactly the
+    zero-bytes-forwarded hole Task 5 closed for the single-line spelling.
+    Absent entirely, `get_all` returns `None`, not `[]` — the `or []` here
+    keeps this function's own `''` contract for "not present" identical to
+    the single-line read it replaces."""
+    return ",".join(headers.get_all(name) or [])
+
+
+def _is_chunked(headers) -> bool:
+    """True iff the request declares `Transfer-Encoding: chunked` — checked
+    against the LAST comma-separated token (RFC 7230 §3.3.1: chunked, when
+    present, must be the final encoding applied), so a header naming another
+    encoding ahead of it (e.g. `gzip, chunked`) is still recognised while a
+    value that merely mentions the word elsewhere is not. The value read is
+    every `Transfer-Encoding` LINE joined first (`_joined_header`,
+    task-7b-rulings.md (commit 8bd10c1c) §1/I4) — the same last-token check applied to a
+    header split across repeated lines, not only the single-line spelling
+    it was written against, so the two cases (one line, several lines) are
+    not two separate readings of this function's own contract.
+
+    `False` here does NOT mean "read Content-Length instead" is always
+    safe — `chunked` named but not last (`"chunked, gzip"`) also answers
+    `False`, and that condition has its own dedicated refusal,
+    `_chunked_named_but_not_final` below (task-7b-fix-rulings.md I-2 — see
+    that function's own docstring; spec §6.3), not
+    a silent fallthrough. This function only ever decides whether to
+    ACTUALLY DECODE chunked framing; it was never the place that decided
+    whether an absent decode is safe to treat as "no framing at all"."""
+    te = _joined_header(headers, "Transfer-Encoding")
+    if not te:
+        return False
+    return te.strip().split(",")[-1].strip().lower() == "chunked"
+
+
+def _chunked_named_but_not_final(headers) -> bool:
+    """True iff `Transfer-Encoding` names `chunked` among its tokens but NOT
+    as the final one — e.g. `"chunked, gzip"`, or `chunked`/`gzip` split
+    across two separate header lines in that order. RFC 7230 §3.3.3 item 3:
+    when chunked is present anywhere but is not the last encoding applied,
+    the message's length cannot be determined by ANY means this shim
+    implements, and a server receiving it MUST respond 400 (and close the
+    connection, which every refusal in this file already does via
+    `Connection: close`).
+
+    Before this (task-7b-fix-rulings.md I-2; durable anchor for the class of
+    hazard, not this specific spelling: spec §6.3, "the hazard is the
+    silent arm, not the encoding" — 7b fix round 1, M-4), that condition
+    fell through `_is_chunked` (`False`, correctly — `chunked` is not what
+    this shim should decode AS chunked-framed) straight to the
+    `Content-Length` branch below, which a request naming
+    `Transfer-Encoding` at all is RFC-forbidden from also carrying reliably
+    — measured, the shim forwards ZERO bytes, the exact silent-empty-body
+    symptom this whole wave exists to kill, reached by a spelling
+    `_is_chunked`'s own fix did not close (task-7b-review.md I-2:
+    `"gzip, chunked"` split across lines, chunked LAST, was the hole task-7b
+    closed; `"chunked, gzip"`, chunked NOT last, is this one — joining split
+    lines made the split spelling agree with the single-line one, which was
+    already wrong).
+
+    Deliberately narrow, matching the over-refusal hazard every refusal in
+    this file is written against: `Transfer-Encoding` ABSENT answers
+    `False` (nothing to name `chunked` about — falls through to
+    `Content-Length` exactly as always), and a `Transfer-Encoding` that
+    never mentions `chunked` at all — `"gzip"` alone, say — also answers
+    `False` and keeps falling through to `Content-Length` exactly as it
+    does today. Refusing either of those would be refusing a request this
+    shim already forwards correctly, which is the worse failure this
+    project's own convention names explicitly."""
+    te = _joined_header(headers, "Transfer-Encoding")
+    if not te:
+        return False
+    tokens = [t.strip().lower() for t in te.split(",")]
+    return "chunked" in tokens and tokens[-1] != "chunked"
+
+
+def _read_chunked_body(rfile) -> bytes:
+    """Decode an HTTP/1.1 chunked request body (RFC 7230 §4.1) from the
+    handler's own buffered `rfile` and return the reassembled bytes.
+
+    This is the fix for the measured production defect: `_relay` used to
+    read `Content-Length` only, and a `Transfer-Encoding: chunked` request
+    carries no `Content-Length` header at all — so the prior code read zero
+    bytes and forwarded an empty body while reporting success. Chunked
+    framing is: a hex chunk-size line (optional `;`-delimited extensions,
+    ignored here — this shim does not act on any chunk extension), CRLF,
+    exactly that many body bytes, CRLF, repeated until a zero-size chunk,
+    optionally followed by trailer header lines, terminated by a blank line.
+
+    A malformed or truncated chunked body RAISES `ValueError` rather than
+    being forwarded as an empty or partial body: the chunk framing IS the
+    only description of where the body ends, so a body whose framing cannot
+    be trusted has no complete, trustworthy byte string to forward at all —
+    there is no passthrough available that would not silently ship
+    truncated or misframed bytes upstream, the same reasoning D-3151's three
+    (now closed) arms never had to make because THEY always had a complete
+    byte string in hand, just not one that parsed as JSON.
+
+    Caught once, at the `_read_request_body` call site in `_relay`, and
+    answered as an explicit HTTP 400 (Task 7a, task-7a-rulings.md §4; the
+    durable version of this rule is spec §6.3,
+    `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`) — for
+    EVERY path, not only `/messages`, because the failure is in the
+    transport, below the path: there is no body to relay anywhere, so the
+    non-`/messages` passthrough guarantee has nothing to apply to here. This
+    supersedes the design this function shipped with through Tasks 5 and 6,
+    which deliberately left the `ValueError` uncaught (a loud traceback and
+    a dropped connection, on the argument that Task 7's explicit-refusal
+    shape was for a different failure surface); the controller's ruling for
+    Task 7a is that giving every "cannot use this body" condition ONE
+    explicit shape now includes this one too.
+
+    Both `readline()` calls below are bound at 65537 bytes (task-7b-
+    rulings.md (commit 458ae3a7) §2/I2), matching the exact figure
+    `BaseHTTPRequestHandler.handle_one_request` already uses for its own
+    request-line read: an unbounded `readline()` blocks the calling thread
+    growing an ever-larger buffer for as long as the client keeps sending
+    bytes with no CRLF in sight, a client-controlled memory/CPU hazard
+    distinct from the stalled-with-no-bytes-at-all one that `_relay`'s
+    scoped `settimeout(30)` around the body read guards against (7b fix
+    round 1, I-1: that bound was a class-level `Handler.timeout` until it
+    was found to bound the RESPONSE write too, and no such attribute
+    exists now). A line this shim would ever legitimately need to
+    read — a hex chunk-size plus a short `;`-extension, or one trailer
+    header — is nowhere near that bound, so truncating there costs nothing
+    real: it either still parses as a normal chunk-size/trailer, or it was
+    already garbage and now fails the existing hex/format checks below
+    instead of growing forever first.
+    """
+    chunks = []
+    while True:
+        size_line = rfile.readline(65537)
+        if not size_line:
+            raise ValueError(
+                "ccgpt-proxy: truncated chunked body: connection closed while reading a chunk-size line"
+            )
+        size_token = size_line.split(b";", 1)[0].strip()
+        try:
+            size = int(size_token, 16)
+        except ValueError:
+            raise ValueError(
+                f"ccgpt-proxy: malformed chunked body: not a hex chunk-size: {size_token!r}"
+            ) from None
+        if size < 0:
+            raise ValueError(f"ccgpt-proxy: malformed chunked body: negative chunk-size: {size_token!r}")
+        if size == 0:
+            # Terminating chunk: drain optional trailer header lines up to
+            # the blank line that closes the body (RFC 7230 §4.1.2).
+            while True:
+                trailer_line = rfile.readline(65537)
+                if not trailer_line:
+                    raise ValueError(
+                        "ccgpt-proxy: truncated chunked body: connection closed while reading trailers"
+                    )
+                if trailer_line in (b"\r\n", b"\n"):
+                    break
+            break
+        chunk = rfile.read(size)
+        if len(chunk) != size:
+            raise ValueError("ccgpt-proxy: truncated chunked body: connection closed mid-chunk")
+        chunks.append(chunk)
+        crlf = rfile.read(2)
+        if crlf != b"\r\n":
+            raise ValueError(f"ccgpt-proxy: malformed chunked body: missing CRLF after chunk data, got {crlf!r}")
+    return b"".join(chunks)
+
+
+def _read_request_body(headers, rfile) -> bytes:
+    """The one place `_relay` decides how many body bytes to read and how.
+
+    `Transfer-Encoding: chunked` is checked first and, when present, wins
+    outright: RFC 7230 §3.3.3 item 3 treats a message that somehow declares
+    both as chunked, and the two framings describe the body length in
+    mutually exclusive ways, so there is nothing to reconcile between them.
+    `chunked` named but NOT last (`_chunked_named_but_not_final`, task-7b-
+    fix-rulings.md I-2) is checked second and refused outright, for the
+    same RFC 7230 §3.3.3 item 3 reason: that shape's length is undeterminable
+    by any means this shim implements, and forwarding it via `Content-Length`
+    (which a `Transfer-Encoding`-bearing request is RFC-forbidden from also
+    carrying reliably) is the silent-empty-body hazard measured in
+    task-7b-review.md (commit 8bd10c1c) I-2. Otherwise this is the original `Content-Length`-
+    only read, unchanged.
+
+    Can raise `ValueError` from any of its THREE raisers (task-7b-fix-
+    rulings.md (commit 1ac3ec20) I-2 adds the second; task 7a's own fix round 1, M-1 — the
+    docstring here used to name only the first, then only two):
+    `_read_chunked_body` on malformed or truncated chunk framing,
+    `_chunked_named_but_not_final` on `chunked` present but not final, and
+    the `int()` parse below on a `Content-Length` that is not a valid
+    integer (e.g. `Content-Length: abc`). `_relay` catches it at this
+    function's own call site and answers an explicit HTTP 400, for every
+    path (see `_read_chunked_body`'s docstring). The `int()` failure is
+    wrapped with a `ccgpt-proxy:`-prefixed message so it matches every
+    other refusal in the file — a bare `ValueError` from a stdlib call is
+    otherwise the one refusal message in the file that would not name the
+    shim.
+    """
+    if _is_chunked(headers):
+        return _read_chunked_body(rfile)
+    if _chunked_named_but_not_final(headers):
+        raise ValueError(
+            "ccgpt-proxy: Transfer-Encoding names chunked but not as the final "
+            f"encoding, so the body length cannot be determined: {_joined_header(headers, 'Transfer-Encoding')!r}"
+        )
+    try:
+        length = int(headers.get("Content-Length") or 0)
+    except ValueError as e:
+        raise ValueError(f"ccgpt-proxy: invalid Content-Length: {e}") from None
+    return rfile.read(length) if length else b""
+
+
+def _content_encoding(headers) -> str:
+    """The request's `Content-Encoding`, lower-cased and stripped — `''`
+    when absent. Case-insensitive header lookup (`.lower()`, task-7b-
+    rulings.md §3/M9 — content-coding values are case-insensitive per
+    RFC 7231's Content-Coding section), the same contract `_is_chunked`
+    above relies on for `Transfer-Encoding` — and, like it, every LINE
+    named `Content-Encoding`
+    is joined first (`_joined_header`, task-7b-rulings.md (commit 458ae3a7) §1/I4), not only
+    the first one `headers.get` alone would see, for the same reason: RFC
+    7230 §3.2.2 permits a comma-list header to be split across repeated
+    lines, and reading only the first would silently lose whatever a later
+    line named.
+
+    `_relay` treats the result three ways (task-7a-rulings.md §3; spec
+    §6.3's "an encoding the shim cannot decode is answered with an
+    explicit error" is the durable version): absent
+    (`''`) or `identity` means no encoding at all — folded and forwarded
+    like any other unencoded body. `gzip`/`deflate` — this shim's only two
+    implemented codecs, `_CODECS` below — are decoded, folded, and
+    re-encoded. Anything else, INCLUDING the list/trailing-comma forms
+    `"gzip, br"` and `"gzip,"` (neither equals the bare token `"gzip"`, so
+    neither ever reaches the decode branch) and a value split across
+    repeated lines that does not join back into a bare recognised token
+    (e.g. `"identity"` then `"gzip"` — two real lines joining to
+    `"identity,gzip"`, not `"gzip"`), is refused outright with an HTTP 415
+    naming the encoding rather than forwarded unexamined — the D-3151 arm-1
+    hole both shapes used to fall into.
+    """
+    return _joined_header(headers, "Content-Encoding").strip().lower()
+
+
+# M4 (task-7a-rulings.md (commit ef4c4e6b) §8): the encoding vocabulary this shim can
+# decode/re-encode, enumerated ONCE — the repo's own "enumerated once and
+# derived" convention (project CLAUDE.md). Before this, "gzip"/"deflate"
+# were named three separate times with nothing forcing them to agree: the
+# `_relay` call site's `encoding in ("gzip", "deflate")` tuple, and once
+# each inside `_decode_body`'s and `_encode_body`'s own `if` chains —
+# widening the decoder without widening the call site's tuple would have
+# silently left the new branch unreachable, with nothing red, and
+# `single-definition.test.ts` cannot catch it (its roots are the four TS
+# trees, not `ccd/`). Both the `_relay` call site's membership check and
+# §3's 415 refusal now key off this same dict.
+#
+# gzip's entry is a `functools.partial`, not a bare function reference like
+# every other slot here (task-7b-rulings.md §5/M6-minor, addendum §2 —
+# judged deliberately, not a default): `gzip.compress` embeds the current
+# wall-clock time in its container header, so two calls on IDENTICAL bytes a
+# second apart produce different output (measured: `c550b16a` vs
+# `c650b16a`). Harmless to the upstream, which never inspects it, but this
+# shim's OWN re-encoded output is then not byte-for-byte reproducible run to
+# run — worth pinning in something whose whole job is to be legible on the
+# wire, and cheap enough (`mtime=0`) that the one-slot asymmetry it costs
+# this otherwise-uniform mapping is a fair trade. `zlib.compress` (deflate)
+# carries no such field, so it stays a bare reference; widening
+# `compresslevel` off its default was considered and rejected — it buys
+# nothing here and only adds a second knob to this same judgment call.
+_CODECS = {
+    "gzip": (gzip.decompress, functools.partial(gzip.compress, mtime=0)),
+    "deflate": (zlib.decompress, zlib.compress),
+}
+
+
+class _BadEncoding(Exception):
+    """Raised by `_decode_body` when a request claims `Content-Encoding:
+    gzip`/`deflate` but its bytes do not actually decode as one. Caught by
+    `_relay` alone, which answers an explicit HTTP 400 via `Handler._refuse`
+    (D-3153) — see `_decode_body`'s own docstring for why that is neither a
+    fourth D-3151-style silent passthrough arm nor a second
+    `_read_chunked_body`-style dropped connection."""
+
+
+def _decode_body(body: bytes, encoding: str) -> bytes:
+    """Reverse `Content-Encoding: gzip`/`deflate` so `_rewrite_messages_body`
+    sees the same plain JSON bytes it already handles for an unencoded
+    body — one fold pipeline, not a second one built for compressed input.
+    An `encoding` not present in `_CODECS` (absent/identity, or anything
+    this shim does not implement) is returned unchanged; `_relay` decides
+    what to do with it — see `_content_encoding`'s docstring: absent/
+    identity are folded normally, anything else is refused with a 415
+    before this function is ever called with it.
+
+    Raises `_BadEncoding` when the body claims a recognised encoding but
+    does not actually decode as one — a failure mode that is deliberately
+    NOT shaped like either of this shim's two other "body could not be
+    used" outcomes:
+
+    - It is not a fourth D-3151 silent-passthrough arm. Those three arms
+      forward a body that was read to completion and simply is not JSON
+      once decoded; forwarding STILL-COMPRESSED, unrewritten bytes here
+      instead would repeat, byte for byte, the exact production hazard this
+      task closes — the client's mid-conversation `role: "system"` entries
+      would still be sitting inside them, compressed and unconverted (and
+      its top-level `system` would arrive without `SYSTEM_LEAD`).
+    - It is not `_read_chunked_body`'s let-it-raise-and-drop-the-connection
+      shape either. That shape is accepted there only because chunk framing
+      is the sole description of where the body ends, so a malformed frame
+      leaves nothing complete and trustworthy either to forward or to
+      refuse cleanly with. A gzip/deflate body, by contrast, was already
+      read to completion (via `_read_request_body`, chunked-decoded first
+      if needed) by the time this function sees it: the shim knows exactly
+      how many bytes arrived and can name the failure precisely, so there
+      is no reason to drop the connection instead of answering it.
+
+    So the caller answers an explicit HTTP-level refusal instead (a 400 via
+    `Handler._refuse` — D-3153 unified this and Task 6's own gzip/deflate
+    refusal into one JSON shape) — spec §6.3's own stated preference ("the
+    hazard is the silent arm, not the encoding") applied to a failure mode
+    neither D-3151 nor Task 5's chunked-body work anticipated.
+
+    ONE shared `except (OSError, EOFError, zlib.error)` covers BOTH codecs
+    (C1, task-7a-rulings.md (commit ef4c4e6b) §1) — measured directly, not assumed:
+    `gzip.decompress` raises `gzip.BadGzipFile` (an `OSError` subclass) for
+    a structurally-bad header or a CRC/length mismatch, `EOFError` (NOT an
+    `OSError` subclass) for data simply cut short before its own
+    end-of-stream marker, and — the case `except (OSError, EOFError)` alone
+    used to miss, dropping the connection with no HTTP response — a bare
+    `zlib.error` for a valid gzip header wrapping a corrupted DEFLATE
+    payload; `zlib.error`'s MRO is `(zlib.error, Exception, BaseException,
+    object)`, neither `OSError` nor `EOFError`. `zlib.decompress` (the
+    `deflate` codec) only ever raises `zlib.error` in practice, so widening
+    its catch to include `OSError`/`EOFError` too is harmless — one shared
+    except clause for both codecs beats two codec-specific ones that could
+    individually go stale the way gzip's just did.
+    """
+    codec = _CODECS.get(encoding)
+    if codec is None:
+        return body  # unreachable: the sole call site (_relay) only invokes this inside `if encoding in _CODECS`
+    decode, _encode = codec
+    try:
+        return decode(body)
+    except (OSError, EOFError, zlib.error) as e:
+        raise _BadEncoding(f"ccgpt-proxy: invalid {encoding} body: {e}") from None
+
+
+def _encode_body(body: bytes, encoding: str) -> bytes:
+    """The inverse of `_decode_body`: re-apply `gzip`/`deflate` framing
+    after the fold so the forwarded body matches the `Content-Encoding`
+    header the shim still forwards unchanged (that header is not a member
+    of `HOP_BY_HOP`, below). An `encoding` not present in `_CODECS` is
+    returned unchanged, mirroring `_decode_body`."""
+    codec = _CODECS.get(encoding)
+    if codec is None:
+        return body  # unreachable: same pre-filtered call site as _decode_body's tail above
+    _decode, encode = codec
+    return encode(body)
+
+
+ACCOUNT_ID = _required_env("CCGPT_ACCOUNT_ID")
+PROXY_PORT = _required_port("CCGPT_PROXY_PORT")
+LITELLM_PORT = _required_port("CCGPT_LITELLM_PORT")
+UPSTREAM_WAIT_S = _optional_wait_s("CCGPT_UPSTREAM_WAIT_S", UPSTREAM_WAIT_DEFAULT_S)
+UPSTREAM = f"http://127.0.0.1:{LITELLM_PORT}"
+
+LANE_PATH = "/ccgpt/lane"
+
+# Per-hop headers (this eight-member set, plus accept-encoding) must never
+# be copied from one connection onto the next — they describe THIS hop, not
+# the message, and copying content-length/transfer-encoding across a body
+# this shim may later rewrite would describe a size that no longer matches.
+# Shipped, `"trailers"` (plural) and all, in `85f97a4d` — this file's own
+# durable anchor for the paragraph below, alongside the scratch rulings
+# citations `.superpowers/` carries but this PUBLIC repo does not ship.
+#
+# task-9 M-1 / task-9 fix round 1 I-2 (task-9-rulings.md (commit 5a99aaf1) §3,
+# task-9-fix-rulings.md I-2): `"trailer"`, singular — corrected from
+# `"trailers"` (plural). The EIGHT-member set itself is not an RFC 7230
+# enumeration at all — §6.1 is purely declarative, naming no fixed list; its
+# only normative instruction is to strip whatever `Connection` itself names.
+# The fixed list — Connection, Keep-Alive, Proxy-Authenticate,
+# Proxy-Authorization, TE, Trailers, Transfer-Encoding, Upgrade — is the
+# OBSOLETED RFC 2616 §13.5.1, and reading it verbatim explains the bug's own
+# provenance: that list spells the entry "Trailers" (plural), while §14.40 of
+# the SAME obsoleted document defines the header as `Trailer` (singular) —
+# an erratum in RFC 2616's own text, almost certainly where the shipped
+# token came from. RFC 7230 §4.4 gives the current, correct spelling:
+# "Trailer = 1#field-name" defines the header FIELD `Trailer`; RFC 7230 §4.3
+# is where `"trailers"` (plural) actually lives, as the one value the `TE`
+# header field can carry ("the sender will not discard trailer fields").
+# Before this fix, a request naming `Trailer: …` was NOT in this set (only
+# the TE value's spelling was), so it forwarded upstream unfiltered.
+#
+# Independently right on RFC 7230's own terms too, not merely historically:
+# §4.4 defines `Trailer` only "when a message includes a message body
+# encoded with the chunked transfer coding", and this shim always de-chunks
+# the request and re-frames it with `Content-Length` (`_read_chunked_body`,
+# `_read_request_body`) — forwarding a client's `Trailer` header upstream
+# would describe a promise about trailer fields the re-framed message cannot
+# keep, since Task 7b's `_read_chunked_body` drains and discards any
+# trailer lines on the way in regardless of what was promised.
+HOP_BY_HOP = {
+    "host", "connection", "content-length", "transfer-encoding", "keep-alive",
+    "proxy-authenticate", "proxy-authorization", "te", "trailer", "upgrade",
+    "accept-encoding",
+}
+
+
+# D-4933: how long to sleep between tries while upstream refuses connections.
+# Short next to a ~46 s restart, long enough that waiting costs about 100 µs of
+# CPU per try, roughly 12 ms per request per minute of waiting, not a busy loop.
+_REFUSED_RETRY_S = 0.5
+
+
+class _UpstreamRefused(Exception):
+    """Raised by `_urlopen_through_refusal` when upstream refused every
+    connection for the whole `UPSTREAM_WAIT_S`. Carries the LAST error as
+    `.last`. Caught by `_relay` alone, which answers the 502 naming the wait.
+    A dedicated exception, not a re-raise of the `URLError`: `_relay` must tell
+    "refused for the whole wait" from "refused, and waiting was switched off
+    (`UPSTREAM_WAIT_S` 0)", whose message stays today's, and two conditions a
+    caller handles differently must not look the same (ring conventions,
+    project CLAUDE.md)."""
+
+    def __init__(self, last: BaseException):
+        super().__init__(last)
+        self.last = last
+
+
+class _ClientGone(Exception):
+    """Raised by `_urlopen_through_refusal` when its client closed while the
+    shim was waiting out a refused connection (D-4933). Carries the LAST error
+    as `.last`. Caught by `_relay` alone, which sends nothing upstream and
+    answers the same immediate 502 a refused connection got before D-4933, with
+    that last error in it. A peek cannot tell a client that closed both
+    directions from one that only half-closed (sent its request, shut its
+    writing side, and still reads), so the answer is written either way: the
+    half-closed one gets it, and the one that has gone discards it. A dedicated
+    exception, not a `None` or a re-raise of the `URLError`, for
+    `_UpstreamRefused`'s reason: "the wait ran out" and "the client closed" are
+    handled differently."""
+
+    def __init__(self, last: BaseException):
+        super().__init__(last)
+        self.last = last
+
+
+def _is_refused(e: BaseException) -> bool:
+    """True iff `e` is the TCP connect itself being refused (ECONNREFUSED).
+
+    Measured on this Python (3.12): `urllib.request.urlopen` against a closed
+    local port raises `URLError(ConnectionRefusedError(111, ...))`, so the
+    refusal is the `URLError`'s `.reason`; a bare `ConnectionRefusedError` is
+    accepted too, for a caller that surfaces one unwrapped. Nothing else
+    qualifies, and that narrowness is the point: a refused connect is the one
+    failure that proves no byte of the request reached upstream, so a request
+    that reached upstream is never re-sent. A reset, a timeout,
+    `RemoteDisconnected` (a connection accepted and then closed) and every
+    other `URLError`/`OSError` may have come AFTER upstream saw the request,
+    so none of them is retried. A refused connect is itself retried only
+    while its client is still connected (`_urlopen_through_refusal`). An
+    `HTTPError` is a `URLError` whose `.reason` is a string, so it never
+    matches either.
+    """
+    if isinstance(e, urllib.error.URLError):
+        e = e.reason
+    return isinstance(e, ConnectionRefusedError)
+
+
+def _urlopen_through_refusal(req, client_gone):
+    """`urlopen(req)`, but a REFUSED connection is waited out (D-4933).
+
+    On a refusal (`_is_refused`), sleeps `_REFUSED_RETRY_S` and sends the SAME
+    `req` again — method, path, forwarded headers and body bytes, since a
+    refused connect sent none of them and `urlopen` adds its own headers
+    idempotently — until `UPSTREAM_WAIT_S` seconds have passed since the FIRST
+    refusal (`time.monotonic`, not the wall clock), then raises
+    `_UpstreamRefused`. The last sleep is clipped to the time left, so the
+    final try lands on the bound itself and "refused for the whole wait" is
+    literally true. `UPSTREAM_WAIT_S` of 0 retries nothing. Every other error,
+    `HTTPError` included, propagates untouched on its first occurrence: see
+    `_is_refused` for why nothing but a refusal is safe to send again.
+
+    A refused connect is retried only while its client is still connected.
+    `client_gone` (`Handler._client_gone`) is called after each sleep, before
+    the re-send; once it answers True this raises `_ClientGone` (carrying the
+    last refusal) and nothing is sent upstream, so a request is never sent for
+    a client that has gone (one that gave up and retried would otherwise reach
+    a restarted gateway twice), and a request that reached upstream is never
+    re-sent. One client cannot be seen to leave: one with a further request
+    already queued behind this one (HTTP pipelining), because the peek then
+    returns that request's bytes, not the client's close; its old request is
+    still sent when the gateway returns. The shim's one real client does not
+    pipeline. Sleeps in the handler's own thread (`ThreadingHTTPServer`), which
+    blocks no other request.
+    """
+    refused_at = None
+    while True:
+        try:
+            return urllib.request.urlopen(req, timeout=900)
+        except (urllib.error.URLError, OSError) as e:
+            if not UPSTREAM_WAIT_S or not _is_refused(e):
+                raise
+            now = time.monotonic()
+            if refused_at is None:
+                refused_at = now
+            left = refused_at + UPSTREAM_WAIT_S - now
+            if left <= 0:
+                raise _UpstreamRefused(e) from None
+            time.sleep(min(_REFUSED_RETRY_S, left))
+            if client_gone():
+                raise _ClientGone(e) from None
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):
+        pass
+
+    def _lane(self):
+        payload = json.dumps({"lane": ACCOUNT_ID}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _client_gone(self) -> bool:
+        """True iff the client has closed its connection (D-4933). Peeks one
+        byte without consuming it or blocking: `b''` is the client's FIN, so it
+        closed; `BlockingIOError` is a client that is still there and silent;
+        bytes are a client that is still there (a pipelined request, left for
+        the next read); any other `OSError` (a reset, a closed descriptor)
+        counts as gone. Asked by `_urlopen_through_refusal` before each
+        re-send, so a request is never sent for a client that has gone. Two
+        limits: a client that only half-closed (shut its writing side and still
+        reads) reads as gone too, which is why `_relay` still answers it; and a
+        client with a further request already queued behind this one (HTTP
+        pipelining) cannot be seen to leave, since the peek returns that
+        request's bytes, so its old request is still sent when the gateway
+        returns. The shim's one real client does not pipeline."""
+        try:
+            return self.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+        except BlockingIOError:
+            return False
+        except OSError:
+            return True
+
+    def _refuse(self, status: int, message: str) -> None:
+        """Answer ONE refusal shape for the entire file (D-3153): a JSON
+        body `{"error": message}`, `Content-Type: application/json` — never
+        `send_error`'s HTML body with the exception text folded into the
+        status-line reason phrase (measured, pre-D-3153:
+        `HTTP/1.1 400 ccgpt-proxy: invalid gzip body: …`,
+        `Content-Type: text/html;charset=utf-8`). A client of `/v1/messages`
+        speaks JSON, and two shapes for one problem class — "I cannot use
+        this body" — is a seam defect, not a style choice. Status is a
+        DECISION the caller makes (415: this shim does not implement the
+        claimed content-encoding; 400: what you sent is malformed; 502: the
+        upstream is unreachable).
+
+        task-7a Fix round 1, I-1: the upstream handler being never reached is an
+        INVARIANT, but only at the BODY-REFUSAL call sites — the chunked/
+        `_UnusableBody`/`_BadEncoding`/415 sites above `_relay`'s own
+        `urlopen` call — because those are the ones this method's own
+        docstring used to (falsely) claim it upholds universally. The 502
+        upstream-unreachable call site is the DELIBERATE EXCEPTION: it
+        fires AFTER `urlopen`, i.e. after the request body WAS offered
+        upstream — measured, an upstream that reads the body and then
+        drops its socket makes `_refuse(502, …)` answer with the recording
+        sink already having seen the request. (A 502 for a REFUSED connection,
+        D-4933, is the exception to that exception: the connect itself failed,
+        so nothing was offered upstream.) What every call to this method
+        upholds unconditionally is narrower and still real: the ONE JSON
+        refusal shape (D-3153), never `send_error`'s HTML/status-line one.
+        Every refusal in this file — Task 6's gzip/deflate decode failure and
+        the upstream-unreachable 502 included — now calls this instead of
+        `send_error`.
+        task-7a Fix round 1, M-3: a HEAD request gets headers describing the body
+        (including its real `Content-Length`) but not the body bytes
+        themselves, matching `send_error`'s own `self.command != 'HEAD'`
+        behaviour — `_refuse` used to write the body unconditionally, a
+        protocol wart on the two paths that can reach a refusal via HEAD
+        (malformed chunked framing, upstream down). Harmless in practice
+        (`Connection: close` means no desync window), but wrong.
+        """
+        payload = json.dumps({"error": message}).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(payload)
+
+    def _relay(self):
+        # I2 (task-7b-rulings.md §2) / 7b fix round 1, I-1 (task-7b-fix-
+        # rulings.md) — durable anchor: D-3155,
+        # docs/superpowers/plans/2026-09-21-gpt-lane-ownership-2a-request-path.md,
+        # which already names "the handler gains a socket timeout there"
+        # while holding the two chunk/decompress SIZE caps open (7b fix
+        # round 1, task-7b M-4: cited alongside the scratch rulings/review this
+        # round, not only them). Bounds ONLY the request-BODY read below,
+        # not the whole connection. The first shape of this guard was a class-level
+        # `Handler.timeout`, which `socketserver.StreamRequestHandler.setup`
+        # applies to the client socket for the WHOLE connection — reads
+        # AND the response write together — and the review measured what
+        # that costs: a genuinely wedged reader (draining below ~0.3 KB/s,
+        # once kernel send buffers fill) got its RESPONSE silently
+        # truncated by the same bound, undetectably at both ends. Neither
+        # `Content-Length` nor `Transfer-Encoding` survives `HOP_BY_HOP`
+        # below, so the response body is delimited by connection close —
+        # a short body then looks exactly like a complete one — and
+        # `log_message` is `pass`, so nothing prints either (measured:
+        # 1,982,645 of 134,217,909 expected bytes delivered, `hadError=
+        # false`, empty stderr). Scoped here instead — 30s armed only while
+        # `_read_request_body` is actually blocked reading from the client,
+        # disarmed the instant it returns, in EITHER outcome, before any
+        # response (including this method's own `_refuse` calls) is
+        # written — bounds the ORIGINAL I2 hazard exactly (30s with no
+        # request bytes arriving at all) and leaves the response leg, and
+        # the initial request-line/header read `handle_one_request` does
+        # before this method is ever called, exactly as unbounded as they
+        # were before any of this task's work.
+        #
+        # An unset timeout is not "reaped by TCP keepalive, on the order of
+        # hours" (7b fix round 1, M-1 — corrects an error in task-7b-
+        # rulings.md §2 that this comment's own first draft carried forward
+        # verbatim): measured, `SO_KEEPALIVE` on the accepted client socket
+        # is 0 — `socketserver` never sets it — so nothing reaps a
+        # half-open connection at all; without this guard the thread hangs
+        # indefinitely, which makes the guard MORE valuable than that
+        # sentence argued, not less.
+        #
+        # No `handle_timeout` override is added alongside this (measured
+        # against this box's own `/usr/lib/python3.12/socketserver.py`
+        # before writing this, not assumed, and independently re-verified
+        # by 7b's review): that hook is defined on `socketserver.
+        # BaseServer`, called ONLY from `handle_request()`, which
+        # `serve_forever()` (what `__main__` below runs) never calls —
+        # `_handle_request_noblock()` is called instead, and its own
+        # docstring says it "Ignores self.timeout." A blocking
+        # `rfile.read()`/`rfile.readline()` inside `_read_request_body`
+        # raises `TimeoutError` once `settimeout` below fires; that
+        # propagates up through this method (uncaught here — only
+        # `ValueError` is caught below) to `BaseHTTPRequestHandler.
+        # handle_one_request`'s own `except TimeoutError` clause (stdlib,
+        # unmodified), which sets `self.close_connection = True` and
+        # returns — the connection closes in `finish()` exactly as a
+        # dropped connection already does for every other transport-level
+        # failure in this file, with no second mechanism needed here.
+        # `handle_one_request` calls `self.log_error(...)` on that path,
+        # but it prints nothing (7b fix round 1, M-2 — the first draft of
+        # this comment said "logs it"): `log_error` calls `self.
+        # log_message`, overridden to `pass` above, deliberately, for a
+        # shim in a hot path — every timeout on this shim is silent, which
+        # is the operational half of the response-truncation hazard this
+        # scoping fixes.
+        #
+        # 30s: comfortably above any real transfer time on loopback (this
+        # shim's only client) for even a large conversation body — the
+        # review measured a 10 MB chunked body arriving complete over 40s
+        # of deliberately-paced wall clock without tripping this bound at
+        # all, confirming the rule is "30s with NO bytes arriving", not "30s
+        # to finish the upload" — and nowhere near the unrelated 900s
+        # `urlopen` timeout on the UPSTREAM leg in this same method, below,
+        # which bounds a completely different wait (Codex's own response
+        # latency, not this shim's client-facing socket).
+        #
+        # DELIBERATELY UNPINNED (task-7b-rulings.md, "Mutations required"
+        # §7; reaffirmed for the narrower scope by task-7b-fix-rulings.md's
+        # own mutation 1): measured, removing either `settimeout` call
+        # below leaves the full suite green. A case that proves the read
+        # leg's hang is bounded, or that the response leg is no longer
+        # bound by it, needs an actual wedged socket and real wall-clock —
+        # judged not worth the suite's runtime for either; this comment and
+        # the manual verification in the task-7b report(s) are the record.
+        self.connection.settimeout(30)
+        try:
+            body = _read_request_body(self.headers, self.rfile)
+        except ValueError as e:
+            self.connection.settimeout(None)
+            # Task 7a, §4: malformed/truncated chunked framing, a
+            # non-numeric Content-Length (task 7a's own fix round 1, M-1),
+            # or (7b fix round 1, I-2) chunked named but not the final
+            # Transfer-Encoding — all three raised by `_read_request_body`,
+            # not only the chunked-framing one. The transport itself, not
+            # the parsed content, is what's wrong — there is no complete
+            # byte string to examine at all, so this is refused for EVERY
+            # path, not only `/messages` (the deliberate exception to the
+            # non-`/messages` passthrough guarantee below: framing that
+            # cannot be parsed cannot be forwarded anywhere, because there
+            # is no body to relay).
+            self._refuse(400, str(e))
+            return
+        self.connection.settimeout(None)
+        path_only = self.path.split("?", 1)[0].rstrip("/")
+        if path_only == LANE_PATH:
+            # A body on this endpoint is unexpected but drained above so a
+            # client that sent one (a generic HTTP client dressing every
+            # verb with headers) doesn't leave bytes on the wire.
+            self._lane()
+            return
+        # Every other path is forwarded exactly as received, except one
+        # ending `/messages`: that body is JSON, and this shim rewrites it
+        # three ways before forwarding, all inside `_rewrite_messages_body`
+        # below — Codex refuses a mid-conversation `role: "system"` entry
+        # inside its `messages` (`_fold_midturn_system` converts each one to
+        # `user`, in place); the top-level `system` field is KEPT top-level,
+        # as one plain string behind `SYSTEM_LEAD`, so LiteLLM carries it in
+        # Codex's `instructions` after the Codex CLI base prompt
+        # (`_system_as_instructions`, spec §22 — it used to be folded into
+        # the leading user turn, below that prompt); and Codex's own
+        # `reasoning.effort` is resolved from the client's `output_config`
+        # or this lane's own default (`_apply_effort`, task-8 fix round 1,
+        # M-5 — this comment used to name the system fold alone and
+        # under-describe the branch).
+        #
+        # Suffix match, not the exact literal `/v1/messages` (fix round 1,
+        # commit 8903d18a M-4): spec §6.4 speaks of
+        # "non-/messages paths", and nothing in this repo yet pins the
+        # generated launcher's base URL to an empty path component — a
+        # prefixed mount (e.g. a path-carrying `ANTHROPIC_BASE_URL`) must
+        # not silently bypass the fold.
+        #
+        # A gzip/deflate-encoded body on this same path is decoded first so
+        # the SAME fold pipeline (`_rewrite_messages_body`) sees plain JSON
+        # bytes exactly as it does for an unencoded body, then the folded
+        # result is re-compressed before forwarding — `Content-Encoding`
+        # itself is not in HOP_BY_HOP, so the header below still reaches
+        # upstream unchanged and must describe bytes that actually match it.
+        # `_read_request_body` above has already stripped any chunked
+        # transfer framing by this point, so a request carrying BOTH
+        # `Transfer-Encoding: chunked` and `Content-Encoding: gzip` is
+        # already down to the plain gzip bytes here — transport framing
+        # peeled off first, content encoding second, each handled once.
+        #
+        # An encoding this shim does not implement is refused outright
+        # (task-7a-rulings.md §3; spec §6.3) rather than left to fall into the old
+        # D-3151 arm 1: absent (`''`) and `identity` are the two values
+        # that mean "no encoding", checked first and folded like any other
+        # unencoded body; everything else that is not a known codec —
+        # `br`, `"gzip, br"`, `"gzip,"` among them — earns a 415 naming the
+        # encoding, never a silent, still-compressed forward.
+        if body and path_only.endswith("/messages"):
+            encoding = _content_encoding(self.headers)
+            if encoding not in ("", "identity") and encoding not in _CODECS:
+                self._refuse(415, f"ccgpt-proxy: unimplemented content-encoding: {encoding!r}")
+                return
+            try:
+                if encoding in _CODECS:
+                    body = _encode_body(_rewrite_messages_body(_decode_body(body, encoding)), encoding)
+                else:
+                    body = _rewrite_messages_body(body)
+            except (_BadEncoding, _UnusableBody) as e:
+                self._refuse(400, str(e))
+                return
+        req = urllib.request.Request(UPSTREAM + self.path, data=body or None, method=self.command)
+        for key, value in self.headers.items():
+            if key.lower() not in HOP_BY_HOP:
+                req.add_header(key, value)
+        if body:
+            req.add_header("Content-Length", str(len(body)))
+        try:
+            resp = _urlopen_through_refusal(req, self._client_gone)
+        except urllib.error.HTTPError as e:
+            # task-9 fix round 1 I-4 (task-9-fix-rulings.md): a non-2xx
+            # upstream status lands here, and `read1` below reaches it by a
+            # different inheritance path than the plain-response arm — see
+            # the task-9 fix round 1 I-5 comment on that loop. Before this
+            # fix round, no case
+            # in this file ever exercised a non-2xx upstream at all
+            # (measured: replacing this line's body with an unconditional
+            # refusal left the suite green); pinned now by the hop-by-hop
+            # describe block's own "relays a non-2xx upstream response,
+            # status and body" case.
+            resp = e
+        except _ClientGone as e:
+            # D-4933: the client closed while the shim waited out a refused
+            # connection, and nothing was sent upstream. The same immediate 502
+            # a refused connection got before D-4933 answers, because a peek
+            # cannot tell a client that has gone from one that half-closed
+            # (sent its request, shut its writing side, and still reads): the
+            # half-closed one gets its answer, the gone one discards it. The
+            # write is guarded, so a client that has gone (BrokenPipeError,
+            # ConnectionResetError, any OSError) never prints a traceback; the
+            # connection is marked closed so the handler loop does not read
+            # from it again.
+            try:
+                self._refuse(502, f"ccgpt-proxy: upstream unreachable: {e.last}")
+            except OSError:
+                pass
+            self.close_connection = True
+            return
+        except _UpstreamRefused as e:
+            # D-4933: every connect was refused for the whole wait, so nothing
+            # reached upstream. Same 502 shape as below; the message says the
+            # wait was spent, so a log reader can tell it from an instant one.
+            self._refuse(
+                502,
+                f"ccgpt-proxy: upstream unreachable: connection refused for {UPSTREAM_WAIT_S}s: {e.last}",
+            )
+            return
+        except (urllib.error.URLError, OSError) as e:
+            # Everything `_is_refused` does not match, and a refusal with
+            # `UPSTREAM_WAIT_S` at 0: an immediate 502, never retried, as
+            # before D-4933.
+            self._refuse(502, f"ccgpt-proxy: upstream unreachable: {e}")
+            return
+        self.send_response(resp.status)
+        for key, value in resp.headers.items():
+            if key.lower() not in HOP_BY_HOP:
+                self.send_header(key, value)
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            while True:
+                # task-9 — THE MAIN EVENT (task-9-rulings.md §1). This used to
+                # be `resp.read(8192)`, which BLOCKS until 8 KB has
+                # accumulated or the stream ends: measured, an 18-byte SSE
+                # event written by upstream at t=0 reached the client only at
+                # t=40.2s, when the stream itself closed (task-7b-review.md,
+                # "SSE / streaming" — the defect predates 7b, `git log -S
+                # 'resp.read(8192)'` -> `85f97a4d`, this wave's own Task 2). A
+                # lane that buffers a full 8 KB — or waits for EOF — before
+                # forwarding anything looks hung to someone watching a model
+                # think, while every existing suite stayed green, because
+                # every prior case asserted CONTENT ("the frames arrived
+                # intact"), and content survives buffering, just late.
+                #
+                # `read1(n)` is `io.BufferedIOBase`'s "at most one underlying
+                # system call" read: it returns whatever is ALREADY buffered
+                # (or the result of one `recv`) rather than blocking to fill
+                # `n` bytes, so a small frame reaches the client as soon as it
+                # arrives instead of waiting on seven more like it.
+                #
+                # task-9 fix round 1 I-5 (task-9-fix-rulings.md, "read1 is
+                # safe, no guard needed — close it"): NO VERSION GUARD IS
+                # NEEDED HERE, and this is a floor fact, not a per-box
+                # observation. The stdlib docs pin it: `http.client.
+                # HTTPResponse` has implemented the full `io.BufferedIOBase`
+                # interface, `read1` included, since Python 3.5 ("Changed in
+                # version 3.5: The io.BufferedIOBase interface is now
+                # implemented and all of its reader operations are
+                # supported"). This file's own effective floor is already
+                # 3.6 — `_required_env`'s `sys.exit(f"...")` and every other
+                # f-string in it would already fail to import below that —
+                # so the reliance here sits strictly BELOW a floor this file
+                # already assumes elsewhere, not above it.
+                #
+                # Both `resp` shapes this method can hold were exercised
+                # directly against a live `http.server.BaseHTTPRequestHandler`
+                # (200 Content-Length, 200 chunked, 404 Content-Length, 500
+                # chunked) before this line was written, and both stream
+                # incrementally — but the two shapes reach `read1` by
+                # DIFFERENT paths, worth being precise about rather than
+                # loose: `urlopen`'s plain-response return IS an
+                # `HTTPResponse`, a real `io.BufferedIOBase`, directly. The
+                # caught-`HTTPError` arm above (`resp = e`) is NOT one —
+                # `urllib.error.HTTPError` inherits `urllib.response.addbase`,
+                # which inherits `tempfile._TemporaryFileWrapper` WITHOUT
+                # overriding its `__getattr__` (measured: `'__getattr__' not
+                # in urllib.response.addbase.__dict__`), and `read1` on an
+                # `HTTPError` arrives through THAT inherited delegation to
+                # the wrapped `HTTPResponse`, not from `HTTPError` itself
+                # implementing the interface. Both paths were measured to
+                # stream correctly; only the mechanism differs. See
+                # task-9 fix round 1 I-4 on the `except urllib.error.
+                # HTTPError` arm above for this arm's own case.
+                #
+                # Correctness is unchanged either way — this loop still
+                # reads until EOF and forwards every byte in order, so every
+                # existing byte-identical/refusal/encoding case is
+                # unaffected; only the TIMING of when each chunk reaches the
+                # client changes.
+                chunk = resp.read1(8192)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        # task-9 fix round 1 M-5 (task-9-fix-rulings.md): a RST mid-chunk on
+        # the UPSTREAM leg surfaces here as `ConnectionResetError`, caught
+        # above like any other — but a CLEAN FIN mid-chunk (upstream's own
+        # chunk-size line promised N bytes and the socket then closed before
+        # N arrived) raises `http.client.IncompleteRead` instead, which is
+        # NOT caught here or anywhere else in this method. That is a
+        # decision, not an oversight, made after building and measuring the
+        # alternative rather than only reasoning about it:
+        #
+        # The client-facing response is close-delimited — `Content-Length`
+        # and `Transfer-Encoding` are both `HOP_BY_HOP` — so its only
+        # "message complete" signal IS the connection closing, and a plain
+        # graceful close (what an uncaught exception gets here, since
+        # `TCPServer.shutdown_request` sends a graceful `SHUT_WR` before
+        # this method's own caller ever gets a chance to intervene) makes a
+        # truncated stream indistinguishable from a finished one. Forcing an
+        # ABORTIVE close instead — `SO_LINGER{on,0}` on `self.connection`,
+        # closed early enough to beat the framework's own graceful shutdown
+        # — was built and measured, not assumed: it does turn a raw
+        # `node:http` client's read into `ECONNRESET`, but `fetch()` — the
+        # exact client this whole suite already uses to validate this shim,
+        # and, decisively, undici itself, which is what this shim's ONE real
+        # client (Claude Code) speaks; LiteLLM is upstream of here, not a
+        # client of it — swallows that RST at the fetch/response-body layer
+        # and still resolves 200 with the truncated body, no error surfaced
+        # at all. So "visible to the client" is not reliably achievable at
+        # THIS framing without forwarding real length information this shim
+        # does not have for a genuinely streamed response (a redesign out of
+        # this task's scope), and an uncaught `IncompleteRead` — printed by
+        # socketserver's `handle_error`, since `log_message` above is
+        # deliberately `pass` everywhere else — is left as the one honest
+        # signal this otherwise-silent shim still gives. Not a regression:
+        # the old `_read_chunked_body` raised the identical exception class
+        # for the identical condition (measured both ways in the review this
+        # ruling responds to). Do not silence this without also solving
+        # client-side visibility, or a truncated stream becomes perfectly
+        # silent on both ends.
+        finally:
+            resp.close()
+
+    # Every verb Claude Code or ccgpt itself might issue is forwarded — GET
+    # and HEAD for probes/health checks, OPTIONS for a preflight-shaped
+    # client, the rest for the actual traffic. Without HEAD/OPTIONS here,
+    # `BaseHTTPRequestHandler`'s own default answers a bare 501 for either,
+    # which would make "everything else forwarded untouched" (module
+    # docstring) not literally true (commit 85f97a4d fix round 1, M-5).
+    do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = _relay
+
+
+class _Server(ThreadingHTTPServer):
+    """`ThreadingHTTPServer` minus the reverse lookup of its own bind address.
+
+    `HTTPServer.server_bind` fills `server_name` with `socket.getfqdn(host)`,
+    which nothing here reads. On the macOS CI runner that lookup of 127.0.0.1
+    took 35.0 s in every new process (measured 2026-09-28, diagnostic run
+    36410278756), so each shim start waited 35 s before it listened. This bind
+    is `TCPServer`'s own, then the two attributes `HTTPServer` would have set,
+    with the address the socket was given as the name.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
+
+def _run_direct() -> int:
+    """A `direct` lane's entry (codex bridge Stage 2 plan 2026-10-22, Task 9;
+    spec 2026-10-15 §2.1): hand the process to the `codexbridge` package,
+    which serves the lane itself and speaks the backend's Responses route, so
+    nothing here relays to LiteLLM and `litellm` mode (CCGPT_BRIDGE unset)
+    never reaches this function.
+
+    `sys.dont_write_bytecode` is set before the import: a lane's unit runs
+    this file under `python3 -I`, `-I` implies `-E`, so
+    PYTHONDONTWRITEBYTECODE is ignored, and the import would otherwise write
+    `__pycache__` into the installed tree. The package is imported from
+    CCGPT_BRIDGE_DIR's parent, put first on `sys.path` (with `-I`, nothing
+    else of the caller's is on it), and must be the very directory that
+    variable names. That directory is checked BEFORE the import (fix round 1,
+    T9-CQ-1): it must be named `codexbridge` and hold an `__init__.py` file,
+    so a directory with none (empty, or half-written by a push) is never
+    imported as a namespace package (whose `__file__` is None), and no
+    sibling package's code runs before the refusal. After the import, the
+    package's `__file__` must be a string (fix round 2, T9-R2-CQ-1: a None
+    one, which an `__init__.py` removed between that check and the import
+    leaves, is a line of its own) in that same directory (an `__init__.py`
+    that links out of it fails here). The shim's own request hooks are
+    passed in, so none is copied into the package: an encoding this shim
+    does not implement is its 415 there too. `_effort_and_output_config` reads `output_config` before
+    `_apply_effort` pops it, and `_apply_effort` itself is unchanged, so
+    `litellm` mode stays byte for byte. A failure before the package serves
+    is one `ccgpt-proxy: direct: <reason>` line (the exception's class, never
+    its text) and exit 1."""
+    sys.dont_write_bytecode = True
+    bridge_dir = os.environ.get("CCGPT_BRIDGE_DIR")
+    if not bridge_dir:
+        sys.exit("ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not set")
+    bridge_dir = os.path.realpath(bridge_dir)
+    if os.path.basename(bridge_dir) != "codexbridge" or not os.path.isfile(os.path.join(bridge_dir, "__init__.py")):
+        sys.exit("ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'")
+    sys.path.insert(0, os.path.dirname(bridge_dir))
+    try:
+        import codexbridge
+    except Exception as e:  # its text can carry a path or a line of the package; the class is enough
+        sys.exit("ccgpt-proxy: direct: the codexbridge package did not import from CCGPT_BRIDGE_DIR "
+                 f"({type(e).__name__}); run 'ccrc update'")
+    origin = getattr(codexbridge, "__file__", None)
+    # The likely cause is a namespace package: its __init__.py went between the check above and the import. The
+    # check reads only the attribute, so the line says what was measured, not why (fix round 3, T9-R3-CQ-1).
+    if not isinstance(origin, str):
+        sys.exit("ccgpt-proxy: direct: the codexbridge package imported with no file path "
+                 "(its __file__ is not a string); run 'ccrc update'")
+    if os.path.dirname(os.path.realpath(origin)) != bridge_dir:
+        sys.exit("ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not the directory the codexbridge package "
+                 "imported from; run 'ccrc update'")
+    codexbridge.load_all()
+    bridge = codexbridge.server
+
+    def _effort_and_output_config(data):
+        oc = data.get("output_config")
+        return _apply_effort(data), oc
+
+    return bridge.serve(bridge.config_from_env(os.environ),
+                        bridge.Hooks(_read_request_body, _content_encoding, _decode_body,
+                                     _effort_and_output_config, _Server))
+
+
+if __name__ == "__main__":
+    # CCGPT_BRIDGE picks the mode: unset is `litellm` mode, today's shim
+    # exactly (the lines after this check); `direct` is the bridge; any other
+    # value, the empty one included, is refused rather than read as either.
+    _mode = os.environ.get("CCGPT_BRIDGE")
+    if _mode == "direct":
+        sys.exit(_run_direct())
+    if _mode is not None:
+        sys.stderr.write(f"ccgpt-proxy: unknown CCGPT_BRIDGE '{_mode}'\n")
+        sys.exit(2)
+    try:
+        server = _Server(("127.0.0.1", PROXY_PORT), Handler)
+    except OSError as e:
+        # Unwrapped, a bind failure (most commonly EADDRINUSE) is a bare
+        # socketserver traceback with no ccrc-shaped message (fix round 1,
+        # commit b56286a4 M-4) — easy to miss in a unit's journal next to everything else a
+        # crashing process prints.
+        sys.exit(f"ccgpt-proxy: failed to bind 127.0.0.1:{PROXY_PORT}: {e}")
+    server.serve_forever()

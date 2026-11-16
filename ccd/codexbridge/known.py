@@ -1,0 +1,206 @@
+"""codexbridge.known — the names the bridge expects to see, per stats family; any other name is `unexplained`.
+
+Codex-bridge spec 2026-10-15 §2.9, D3 ("Names only, never content: unknown request fields, event types, item types,
+error codes, incomplete reasons, response headers, unsupported-field names, model substitutions … the doctor warns
+on a new name"); plan 2026-10-22, Task 5 and D-6418 (the names go to the stats file). `stats.Stats` records a name
+outside this table in the stats file's `unexplained`, and Task 17's doctor row WARNs on it. A name is explained only
+here, in a reviewed change: the rollout of that change restarts the bridge, whose stats file then drops the name at
+load (`stats.Stats`).
+
+EVERY NAME BELOW IS MEASURED OR SOURCED, never guessed, so a name the bridge has not seen yet WARNs once and is then
+explained here or fixed. The sources:
+- Claude Code 2.1.308 against a local stub (the plan's "What was measured", 27 runs, 75 requests): every message
+  request carries `model, messages, system, tools, metadata, max_tokens, thinking, context_management,
+  output_config, stream`; `context_management` is always the one edit `clear_thinking_20251015`; tools carry
+  `defer_loading`; `output_config.effort` rides the `effort-2025-11-24` beta (`ccd/ccgpt-proxy.py`'s effort hook).
+- Claude Code 2.1.310's `anthropic-beta` values, measured on the live lane's first traffic after the flip (runbook
+  step 4, 2026-10-27; D-7093), each read against the Messages API's documentation and the client's own beta table.
+- The Stage 4 watch's stats files (both lanes, 2026-10-29 to 2026-11-04): the `redact-thinking-2026-02-12` beta and
+  the CDN edge's HTML error page's four header names (`content-type:text/html`, `cache-control`, `expires`,
+  `x-frame-options`), each explained at its entry below.
+- The fields inbound drops by rule (D-6426 and the plan's Task 2 table), and the names inbound counts for a shape
+  it maps (a dropped `thinking` block, `is_error`, `output_config.format`, D-6425) or refuses by name (a `document`
+  block, an `output_config.format` of another type, D-6414).
+- The Codex CLI's own reader of the same wire (upstream openai/codex @ 092d3ac, `codex-rs/`): the event types it
+  reads or skips (codex-api/src/sse/responses.rs:347-501), the response headers it reads
+  (codex-api/src/sse/responses.rs:31-34, 43-72), and the `x-codex-` header family it reads by prefix
+  (codex-api/src/rate_limits.rs:28-48, 63-67, 180-231; codex-api/src/safety_buffering.rs:4-6).
+- The reducer's and the error table's own sets, imported, never re-spelled: `reducer.IGNORED_EVENTS`,
+  `reducer.KNOWN_INCOMPLETE`, `errors.ALL_CODES` (the single-definition row: an upstream code is spelled only in
+  errors.py).
+
+NOT HERE, ON PURPOSE: `clear_tool_uses_20250919` (D-6417: the doctor names that edit the first day it arrives); a
+reasoning item with no encrypted content (`reducer.UNREADABLE_REASONING`: a reply whose reasoning cannot be replayed
+is drift); every model substitution: the modelSubstitution family holds every substitution from a request carrying
+the claude-code beta (each is a Claude Code fallback worth seeing), and foreignSubstitution every other (below); the
+system-entry block names the bridge does not handle, `unrecognised` and inbound.UNKNOWN_REFERENCE among them
+(D-7143: the honoured ones are explained in `requestField` below).
+
+MEASURED SINCE: the response headers of the backend's front end. The runbook's first live step (step 2, 2026-10-27)
+printed every answer's header names, and each name every answer carried is now in `responseHeader` below, with what
+it is (D-7083): the edge and security headers, the cookie, `x-oai-request-id` (D-7084) and a 2xx stream's absent
+content type. A name the front end adds later still WARNs once, as any new name does.
+"""
+
+from typing import Dict, FrozenSet, Tuple
+
+from . import errors, inbound, reducer
+
+# The `x-codex-` response headers: the usage poller's family (`ccd/ccgpt-usage.py`), and Codex's rate-limit, credit
+# and safety-buffering headers. Read by this prefix only, so the poller's five names stay spelled once (the plan's
+# Global Constraints). `stats.Stats.usage_headers` keeps their values by the same prefix, under the rule its docstring
+# states: a decimal number or a boolean (stats.USAGE_VALUE_RE), and never a stats.TOKEN_HEADERS name's value.
+CODEX_HEADER_PREFIX = "x-codex-"
+
+# The event types the reducer acts on (reducer.Reducer.feed) are not listed: the reducer never counts one, so a copy
+# here would only hide the drift of the reducer ceasing to handle one.
+# The event types the Codex CLI skips on purpose over HTTP SSE (codex-api/src/sse/responses.rs:480-491) that the
+# reducer's IGNORED_EVENTS does not hold.
+_CODEX_SKIPPED_EVENTS = frozenset({"codex.response.metadata", "response.metadata"})
+
+# The event types the backend sends that the Codex CLI does not name at all (D-7119). `keepalive` (by its name a
+# heartbeat; its payload, timing and which responses carry it were not recorded) was counted by name on lane-b's
+# direct traffic (2026-10-27: 4 events in the first 471 message requests after the flip). Upstream Codex at
+# rust-v0.164.0 yields no event for it (codex-api/src/sse/responses.rs): process_responses_event has no arm for it and
+# its default arm only logs, and a frame without a `type` fails Codex's parse and is skipped; only that file's
+# kind-independent readers (the served model in `headers`, `safety_buffering`) could act on it, and only on fields
+# nothing measured it carrying. The bridge names it and reads nothing else (reducer.Reducer.feed), and its arrival
+# resets the idle bound like any parsed event (server.py#_Request._reduce sets last_event for each), as each frame
+# restarts Codex's per-event idle timeout (process_sse_with_treatment).
+_BACKEND_EVENTS = frozenset({"keepalive"})
+
+KNOWN = {
+    "requestField": frozenset({
+        # measured on every Claude Code 2.1.308 message request
+        "system", "metadata", "max_tokens", "thinking",
+        # dropped by rule (D-6426; inbound.READ_KEYS' comment)
+        "temperature", "top_p", "top_k", "stop_sequences", "service_tier", "mcp_servers", "container",
+        # the names inbound counts for a shape it maps
+        "thinking-block", "is_error", "defer_loading", "output_config.format",
+        # The tool-change blocks of a `role: system` entry, under Claude Code 2.1.310's two tool-change betas (betaValue
+        # below; D-7093), counted by inbound._count_dropped (D-7094) and honoured since D-7143: inbound._tool_changes
+        # reads each and inbound._fold_tool_changes folds them into the tools offered upstream, in message order.
+        # A removal (by reference) drops that tool.
+        "tool_removal-block",
+        # An addition, and its tool's type: by reference (a tool `tools` already offers, or one an earlier addition
+        # defined), or by value (a tools-style definition, made a tool exactly as a `tools` entry is, inbound._tool).
+        "tool_addition-block", "tool_addition-block.tool_reference", "tool_addition-block.tool_definition",
+        # NOT HERE, ON PURPOSE: `tool_addition-block.unrecognised` (an addition with no typed tool, passed over),
+        # any other block or tool type, and inbound.UNKNOWN_REFERENCE (a by-reference addition of a name nothing
+        # offers), so the doctor names a shape the bridge does not handle the day it arrives.
+    }),
+    "eventType": reducer.IGNORED_EVENTS | _CODEX_SKIPPED_EVENTS | _BACKEND_EVENTS,
+    # R12's unmapped items, skipped and counted (plan Task 3)
+    "itemType": frozenset({"web_search_call", "image_generation_call", "compaction"}),
+    "errorCode": errors.ALL_CODES,
+    "incompleteReason": reducer.KNOWN_INCOMPLETE,
+    "responseHeader": frozenset({
+        # read by Codex (responses.rs:31-34, 43-72) and by the error table (errors.py: the request id, retry-after)
+        "openai-model", "x-reasoning-included", "x-models-etag", "x-request-id", "request-id", "retry-after",
+        # the HTTP framing http.client itself reads, and the origin's Date (RFC 9110 §6.6.1, §8.3, §8.6; RFC 9112 §6)
+        "content-type", "content-length", "transfer-encoding", "connection", "date",
+        # the media type, counted as a name (the plan's Global Constraints): a stream, and an error body
+        "content-type:text/event-stream", "content-type:application/json",
+        # Every name below was measured on every answer of runbook step 2 (2026-10-27; D-7083). Only the name is
+        # counted: stats.Stats.header_names keeps no value, and stream.AnthropicStream writes its own head.
+        # The upstream request id: the backend's one, sent with no x-request-id and no request-id. errors.request_id_of
+        # reads it third, as Codex does (openai/codex codex-rs/codex-api/src/api_bridge.rs at rust-v0.164.0,
+        # extract_request_id; D-7084).
+        "x-oai-request-id",
+        # A backend 2xx stream carries no content type (server._media_type counts it so); it is reduced as a stream.
+        "content-type:absent",
+        # The CDN's edge: the server name, the ray id and the cache status. Codex reads cf-ray only, as a request
+        # tracking id when no request id came (openai/codex codex-rs/codex-api/src/api_bridge.rs at rust-v0.164.0,
+        # extract_request_tracking_id); nothing here reads one.
+        "server", "cf-ray", "cf-cache-status",
+        # The load-balancer and CDN cookies. Codex keeps only infrastructure cookies in its jar (openai/codex
+        # codex-rs/http-client/src/chatgpt_cloudflare_cookies.rs at rust-v0.164.0); the bridge keeps none and sends
+        # no Cookie (backend.build_headers).
+        "set-cookie",
+        # The browser policy and reporting headers of the origin's front end, read by nothing here or in Codex.
+        "nel", "report-to", "strict-transport-security", "x-content-type-options", "cross-origin-opener-policy",
+        "referrer-policy",
+        # The origin proxy's own marker, read by nothing here or in Codex.
+        "x-openai-proxy-wasm",
+        # The CDN edge's own HTML error page, measured twice on lane-a between 2026-10-29 and 2026-11-04 out of about
+        # 27.8k upstream answers (lane-b: none): the edge's `server` and `cf-ray` without the origin's headers, and
+        # these four names with them, `content-type:text/html` (the media type, counted as a name above) among them.
+        # Inferred from the name counts, not proven per answer: every answer carried `cf-ray`, and only the answers
+        # with no content type carried the origin's own headers. Each name is only counted, never its value
+        # (stats.Stats.header_names), and `content-type` carries its media type because server._media_type counts
+        # that as a second name. The bridge answers such a page by status: errors.classify_http reads no code from a
+        # body that is not JSON, so a 5xx or a 403 that is not a JSON object is a 503 `api_error` (counted 5xx). On
+        # the stream path a 2xx page has no terminal event, so the reducer's `finish` makes it a 503 `api_error` too
+        # (`the stream closed before a terminal event`, counted 5xx unless the client had gone). Only an error reaches
+        # the client, and the page's own text never does. The line `server.log_upstream_page` writes for each such
+        # answer (status, route, media type, edge marker) is how to see one.
+        "content-type:text/html", "cache-control", "expires", "x-frame-options",
+    }),
+    "unsupportedField": frozenset({"document", "output_config.format"}),
+    "modelSubstitution": frozenset(),
+    "betaValue": frozenset({
+        "effort-2025-11-24",
+        # The values of Claude Code 2.1.310's `anthropic-beta` header, measured on the live lane's first traffic
+        # after the flip (runbook step 4, 2026-10-27; D-7093). The bridge forwards no beta upstream
+        # (backend.build_headers), so each is a name only; each line says what it gates on the Messages API and why
+        # the bridge need not act.
+        # Claude Code's own identity beta: it gates no request field, block or response shape of its own. A request
+        # carrying it is Claude Code's (inbound.from_claude_code), which picks a substitution's family.
+        inbound.CLAUDE_CODE_BETA,
+        # Thinking blocks between tool calls: the effort hook pops `thinking`, the reducer emits no thinking block,
+        # and an assistant thinking block sent back is dropped and counted `requestField:thinking-block`.
+        "interleaved-thinking-2025-05-14",
+        # `context_management.edits` and the response's `context_management.applied_edits`: each edit's type is
+        # counted `contextEdit` (`clear_tool_uses_20250919` stays unexplained there, D-6417), and Claude Code reads
+        # `applied_edits` as optional, so a reply without it is a reply where nothing was cleared.
+        "context-management-2025-06-27",
+        # Tool search: `defer_loading` tools (counted `requestField:defer_loading`, sent as ordinary tools) and a
+        # `tool_reference` in a tool_result (sent as `Tool loaded: <name>`). A server tool search tool would be
+        # refused and counted `unsupportedField`; Claude Code searches client-side.
+        "advanced-tool-use-2025-11-20",
+        # `thinking.display: "updates"`, status lines as thinking text: `thinking` is popped and no thinking block
+        # is emitted, so there is nothing to display.
+        "thinking-display-updates-2026-08-18",
+        # `usage.output_tokens_details.thinking_tokens`, which Claude Code reads as optional: the bridge's usage
+        # carries the four counts (reducer.anthropic_usage) and no thinking count.
+        "thinking-token-count-2026-05-13",
+        # The token-counting endpoint (`POST /v1/messages/count_tokens`), which rides only that request: the bridge
+        # answers it locally (Task 8, `outcomes.countTokens`) and sends nothing upstream for it.
+        "token-counting-2024-11-01",
+        # Tool changes in the middle of a conversation: `tool_addition`/`tool_removal` blocks in a `role: system`
+        # message, each naming a tool by reference. Inbound honours them (D-7143, inbound._fold_tool_changes): the
+        # tools offered upstream are the request's `tools` with each entry's blocks folded in, in message order.
+        # (D-7093 left this beta open until the bridge honoured those blocks.)
+        "mid-conversation-tool-changes-2026-07-01",
+        # A tool defined in a message: a `tool_addition` whose tool is a `tool_definition`, a tool absent from
+        # `tools`. Inbound makes it a tool exactly as a `tools` entry (inbound._tool) and offers it (D-7143).
+        "inline-tools-2026-09-15",
+        # Claude Code's `redact_thinking` beta (its beta table at 2.1.312 to 2.1.322; measured on both lanes between
+        # 2026-10-29 and 2026-11-04: 5 requests on lane-a, 20 on lane-b). Claude Code sends it when interleaved
+        # thinking is on, the session is interactive and `showThinkingSummaries` is off, and removes it from any
+        # request that sets `thinking.display`. It asks for thinking returned redacted. The request already gets that:
+        # the shim's effort hook pops `thinking` before inbound (ccgpt-proxy.py `_apply_effort`, called by
+        # server._Request.messages first), and the reducer opens only text and tool_use blocks (reducer.Reducer._open),
+        # so no thinking block, readable or redacted, ever reaches the client.
+        "redact-thinking-2026-02-12",
+    }),
+    "contextEdit": frozenset({"clear_thinking_20251015"}),
+    # A model substitution from a request that does not carry inbound.CLAUDE_CODE_BETA (server.py's catalogue check):
+    # every such id measured on the fleet so far (two `claude-*` ids) came from a plugin's raw-HTTP review, which sends
+    # the `structured-outputs-2025-11-13` beta (and `oauth-2025-04-20` on its token path), never the claude-code beta,
+    # under urllib's default User-Agent. One of those ids is exactly what Claude Code sends when a lane's alias is not
+    # overridden, so the family is apart from modelSubstitution: a name explained here can never hide a Claude Code
+    # fallback. EMPTY ON PURPOSE (the operator's ruling of 2026-11-12): such a caller still WARNs and fails the
+    # watch's drift, under its own name, so a caller that was switched off and comes back stays visible.
+    "foreignSubstitution": frozenset(),
+}  # type: Dict[str, FrozenSet[str]]
+
+# Families whose names are also explained by a prefix (the x-codex- family above).
+PREFIXES = {"responseHeader": (CODEX_HEADER_PREFIX,)}  # type: Dict[str, Tuple[str, ...]]
+
+
+def explained(family: str, name: str) -> bool:
+    """True when `name` is a known name of `family`, or carries one of that family's known prefixes."""
+    if name in KNOWN.get(family, frozenset()):
+        return True
+    return any(name.startswith(p) for p in PREFIXES.get(family, ()))

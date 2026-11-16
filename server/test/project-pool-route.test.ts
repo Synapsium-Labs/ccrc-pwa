@@ -41,8 +41,8 @@ const runnerThat = (
       calls.push([...args]);
       act([...args]);
       return code === 0
-        ? { code: 0, stdout: '', stderr: '' }
-        : { code, stdout: '', stderr: `ccd: pool tag for demo is malformed: ${poolsDir()}/demo` };
+        ? { ran: true, code: 0, stdout: '', stderr: '' }
+        : { ran: true, code, stdout: '', stderr: `ccd: pool tag for demo is malformed: ${poolsDir()}/demo` };
     },
   };
 };

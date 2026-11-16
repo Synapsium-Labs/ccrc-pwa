@@ -1,4 +1,4 @@
-import type { ExecResult, Runner } from '../exec.js';
+import type { ExecResult, NotRanReason, Runner } from '../exec.js';
 import type { FleetClient } from './client.js';
 
 /**
@@ -25,10 +25,37 @@ const CLIENT_TIMEOUT_SLACK_MS = 5_000;
  *  CCD_TIMEOUT_MS default is what bounds the push, and 90 s is the right budget
  *  for one, so there is nothing to override here. */
 const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
-  'pr-state': 20_000,
-  // Same reach as pr-state, and the same number: it shells out to `git
-  // ls-remote` against origin before it will rename. Without an entry it
-  // silently inherits the flat 90 s, which is nine naming lanes' worth.
+  // 25, not 20, since landing-order wave 2: `pr-state --project` makes THREE
+  // gh calls now (rows, rollups, the merge-queue read), and their timeouts are
+  // summed against this number by `pr-timeout-budget.test.ts`. The key is the
+  // VERB, so `--session` (one gh call) is bounded at 25 s too, and it is read
+  // INSIDE `coordMutex` — by `verifyDone` at close and at advance, and through
+  // `childSpent` by every child-bind check (`childBindGate` on `POST /api/runs`,
+  // dispatch's resume arm) and by the close's child gate (`childGateAtClose`,
+  // up to two reads per close) — so every other coordination write can queue
+  // behind one slow read for up to this long.
+  'pr-state': 25_000,
+  // `pr-landing --project` makes at most THREE gh calls on its worst path: one GraphQL read (`PR_LANDING_GQL_TIMEOUT`)
+  // and two REST reads (`PR_LANDING_REST_TIMEOUT` each), the base's rules and protection, for ONE uncached base. Any
+  // further uncached base answers rules-unread that pass, so the count does not grow with the number of bases.
+  // `pr-timeout-budget.test.ts` sums them.
+  'pr-landing': 25_000,
+  // D-7378: `pr-train-prove --project` makes one row-window call (`PR_GH_TIMEOUT`) and then spends at most
+  // `PR_TRAIN_PROVE_TIMEOUT` on train records, over at most `PR_TRAIN_PROVE_MAX` members. Its own row, so the sweep's
+  // `pr-state` bound (held inside `coordMutex` by `--session`) is not raised; `pr-timeout-budget.test.ts` sums it.
+  'pr-train-prove': 40_000,
+  // D-8147: `repo-visibility --project` makes one `gh api` call (`PR_GH_TIMEOUT`, 8 s).
+  'repo-visibility': 15_000,
+  // D-8147: `pr-template --project` makes up to NINE bounded gh calls, all `PR_GH_TIMEOUT` plus the kill grace: the repository
+  // read, the branch's PR rows, the default branch's tip, the template there, the branch ref, the ref POST (or the template
+  // read on the branch), the file PUT, `gh pr create` and the PR rows read back. Nine at 8 s + 3 s grace is 99 s, so the
+  // bound is 100 s; `pr-timeout-budget.test.ts` sums it. A kill mid-sequence is recoverable: the retry reuses the branch
+  // and puts the template on it if it is missing.
+  'pr-template': 100_000,
+  // Same reach as pr-state: it shells out to `git ls-remote` against origin
+  // before it will rename. Without an entry it silently inherits the flat
+  // 90 s, which is nine naming lanes' worth. It makes ONE network call, so it
+  // keeps the 20 s pr-state had before its third.
   'ws-rename': 20_000,
   'ws-archive': 60_000,
   'ws-restore': 60_000,
@@ -38,6 +65,44 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // even though no test can tell this line apart from its own absence.
   'ws-audit': 90_000,
   'ws-reap': 240_000,
+  // Child reclamation (spec 2026-09-22 §5.6): ws-reap's destruction — a
+  // worktree that can hold gigabytes of node_modules, a branch, the clips, a
+  // temp root — plus a pin phase and a settle. It earns ws-reap's budget, not
+  // the flat 90 s it would silently inherit without this row.
+  'ws-reclaim': 240_000,
+  // Archived-workspace expiry (spec 2026-09-24 §5.3): ws-reclaim's machinery — the pin phase, the settle and the same
+  // teardown — on an archived workspace, so it earns the same budget.
+  'ws-expire': 240_000,
+  // The child temp-root collector (spec 2026-09-22 §5.10): its probes, a quarantine move, and the removal of a tree that
+  // can hold gigabytes, all under the reap lock. It earns ws-reclaim's budget, not the flat 90 s it would silently
+  // inherit without this row. Its audit is `ws-audit` and keeps that verb's row. A fresh collection runs eight bounded
+  // probes, at most about 180 s in all: the evaluation's 70 s (the idle walk 30, the in-use probe 10, the checkout scan
+  // 30), step 3a's checkout scan 30, step 5's two in-use probes 2 x 10, and the removal's 60 (its checkout scan 30, then
+  // the permission pass `_ws_reclaim_normalise`'s bounded walk, 30). A probe that reaches its bound ends the act, so at
+  // most ONE TERM-to-KILL grace is paid (3 s by default, 8 s at the widest): about 183 s, or 188 s. The rest of the row,
+  // about 57 s (52 s at the widest grace), is shared by work no bound caps: the permission pass's second walk, which
+  // looks for what is still unreadable, the registry row passes, and the `rm` itself. A big leaf can outrun the row, and
+  // it fails safe: it may need several passes, and nothing is lost, because the quarantine record carries the next pass.
+  'ws-collect': 240_000,
+  // The deps-shed act (D-7278): the removal of a sleeping session's ignored dependency directories, gigabytes of
+  // node_modules, under the reap lock. Its bounded calls do not grow with the candidates: six tree walks at 30 s (the
+  // ignored listing, the repository walk, the size, two `git status` reads, ONE `rm` over every candidate), two quick
+  // reads at 10 s and the process walk at 10 s, with at most two TERM-to-KILL graces (8 s at the widest): 226 s.
+  // `deps-shed-budget.test.ts` reads both sides from source and holds the sum under this row. A kill here would leave no
+  // stamp and no journal row, so the row is ws-reap's, not the flat 90 s.
+  'ws-shed-deps': 240_000,
+  // The lease audit (delegation broker wave 5, PR2; O5-2 (b), D-7841). What this row buys is a TIGHTER bound than the
+  // flat 90 s an unlisted verb gets: 60 s. With `--holders` the audit asks both holder probes, each a 10 s walk
+  // (`WS_PATH_USERS_SCAN_S`, `WS_CWD_USERS_SCAN_S`) under `_plat_timeout`, whose TERM-to-KILL grace is 3 s by default and
+  // 2 to 8 s at the widest: about 26 s for the two, 36 s at the widest. The git reads of one tree (a `git status` that lists
+  // untracked files, the hidden-edit read, two `rev-list --count`) and one carrier read have no bound of their own and take
+  // the rest. The key is the verb, so an audit without `--holders` has the same bound. It writes nothing durable, so a kill
+  // here loses only the answer. W5-G15 pins the row below the flat default.
+  'ws-lease-audit': 60_000,
+  // The project create (add-project spec 2026-11-04 §4) is one whole `git clone` of a repository the operator named, of
+  // any size, under a batch-mode ssh and no prompt, so a credential failure ends at once; a large repository is the
+  // wait. ws-reap's row, under the agent's 300 s clamp (`MAX_EXEC_TIMEOUT_MS`) with the client's 5 s margin.
+  'project-add': 240_000,
   // The two SPAWNING verbs, and the reason they need the agent's MAXIMUM
   // (`MAX_EXEC_TIMEOUT_MS`, agent/src/server.ts) rather than a merely larger
   // number (F8, found live 2026-08-12). Both end in `_spawn`, which blocks in
@@ -77,17 +142,17 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // but they are bounded at very different numbers, and it is the SECOND one that
   // sets this budget:
   //   • systemd happy path: `reset-failed` + `enable --now`, then a poll bounded
-  //     at `SUPERVISED_START_WAIT` (30 s, ccd/ccd:81). Comfortably inside 90 s.
+  //     at `SUPERVISED_START_WAIT` (30 s, set at the top of ccd/ccd). Comfortably inside 90 s.
   //   • the two UNSUPERVISED fallbacks (no `systemctl`, or the unit refuses to
   //     enable): `_spawn_start` + `_spawn_settle`, whose wall-clock bound on this
-  //     agent-reachable path is `SPAWN_SETTLE_S` (240 s, ccd/ccd:84) — a COLD
+  //     agent-reachable path is `SPAWN_SETTLE_S` (240 s, set beside it) — a COLD
   //     Claude Code start against a freshly seeded workspace HOME. That is what
   //     exceeds 90 s, and 300 s is the agent's own `MAX_EXEC_TIMEOUT_MS` ceiling.
   // `cmd_enable` is an arity check plus `cmd_start`, so it inherits the same worst
   // case exactly — hence the same number rather than a guess.
   start: 300_000,
   enable: 300_000,
-  // `cmd_swap` stops the supervisor unit (ccd/ccd:13722) and kills the tmux
+  // `cmd_swap` stops the supervisor unit (ccd/ccd#cmd_swap) and kills the tmux
   // pane (:13723) BEFORE it flips the registry's `wrapper` (:13817). A kill
   // inside that window leaves a session that is not running, a registry that
   // still names the old account, and NO marker of either: no `swapblocked`, no
@@ -102,10 +167,55 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // it, and a carry slower than 300 s is still killed mid-flight. Closing it
   // needs a ccd-side bound and is not this row's job.
   swap: 300_000,
+  // The Docs verbs (spec 2026-10-01 section 2 (a), Budgets). ccd's python helper bounds each one itself: a
+  // whole-verb deadline (`HELPER_DEADLINE_S` in ccd/ccd: index 12 s, tree 12 s, show 7 s, fetch 45 s, log 10 s), at which it
+  // sends SIGTERM to every git process group it started and SIGKILL `KILL_GRACE_S` (2 s) later. Each budget below
+  // is strictly greater than that deadline + the 2 s grace + 5 s; `docs-budget.test.ts` reads both sides from
+  // source and holds the inequality, and docs-show's margin is the thinnest (exactly 1 s).
+  //
+  // Why the margin must stay positive: these budgets exist so the AGENT never kills ccd in normal operation. The
+  // agent's deadline (`runExec`'s `execFile` timeout) kills only its direct child, so a kill landing while the
+  // helper still waits on git would orphan git's process group (`git-remote-https`, ssh, `git-lfs`) rather than
+  // let the helper's own `killpg` reap it. The helper's deadline must always fire first. Without these rows a
+  // docs verb silently inherits the flat 90 s.
+  //
+  // The docs-index budget is also doctor's wait: ccd/ccrc-doctor-checks defaults `CCRC_DOCTOR_DOCS_TIMEOUT` to it
+  // in seconds, so doctor waits exactly as long as a Docs page would; `docs-budget.test.ts` holds the two equal.
+  'docs-index': 20_000,
+  'docs-tree': 20_000,
+  'docs-show': 15_000,
+  'docs-fetch': 60_000,
+  // docs-log (rich-docs spec G4, W5b): helper deadline 10 s, so 10 + 2 + the redactor's 0.9 + 5 = 17.9 s < 20 s.
+  'docs-log': 20_000,
 };
 
-function timeoutMsFor(cmd: string, args: string[]): number {
+/** The deps-shed SHADOW's own, shorter row (D-7278): `ws-shed-deps … --dry-run` runs every rung and removes nothing, so
+ *  the removal and the second `git status` are never reached. Its bounded calls: four tree walks at 30 s (the ignored
+ *  listing, the repository walk, the size, ONE `git status`), two quick reads at 10 s and the process walk at 10 s, with
+ *  at most two TERM-to-KILL graces (8 s at the widest): 166 s. The shadow runs inside the run-done lane's single flight
+ *  (`depsShedPass.ts`), so a stuck dry run holds that lane for this long and no longer. `deps-shed-budget.test.ts` holds
+ *  the sum under this row. ccd refuses a dash-led value for every flag of the verb, so `--dry-run` in its argv is the
+ *  flag itself. */
+const CCD_DRY_RUN_TIMEOUT_MS: Record<string, number> = {
+  'ws-shed-deps': 180_000,
+};
+
+/** `cmd_hibernate --roll` (D-7458) is the automatic roll's one act: the sleep, then `cmd_ensure` inside the same verb,
+ *  so it inherits ensure's worst case, and the same number, the agent's ceiling. It is keyed on the flag, not the verb
+ *  (D-7541): a plain hibernate (the two sleep lanes) is a re-measure and a kill, and those lanes hold the coordination
+ *  serialiser across their call, so a hung one would hold every coordination write for as long as its bound; it keeps
+ *  the flat default. The roll's call is not held on the serialiser (`sleepLane.ts`'s `wakeAct`), so this bound holds
+ *  only the roll lane's single flight and the rolled session's own queue. ccd refuses a dash-led value for every flag
+ *  of the verb, so `--roll` in its argv is the flag itself. */
+const CCD_ROLL_TIMEOUT_MS = 300_000;
+
+/** The bound one runner call gets. Exported for the lease audit's budget row (delegation broker wave 5, W5-G15), the one
+ *  lookup that reads `CCD_VERB_TIMEOUT_MS` from outside; unchanged otherwise. */
+export function timeoutMsFor(cmd: string, args: string[]): number {
   if (cmd !== 'ccd') return TMUX_TIMEOUT_MS;
+  const dry = CCD_DRY_RUN_TIMEOUT_MS[args[0] ?? ''];
+  if (dry !== undefined && args.includes('--dry-run')) return dry;
+  if (args[0] === 'hibernate' && args.includes('--roll')) return CCD_ROLL_TIMEOUT_MS;
   // `?? ''` guards an empty `args` (args[0] === undefined) from reaching the
   // lookup as a literal `undefined` key. Provably redundant against THIS
   // map, disclosed rather than removed: no key here is `''` or the coerced
@@ -131,8 +241,14 @@ function timeoutMsFor(cmd: string, args: string[]): number {
  *  ("measured: no signal") is a different fact from the key being missing ("an
  *  older agent, which measured nothing"), and only the spread keeps them apart. */
 function asExecResult(res: unknown): ExecResult {
-  const r = res as { code?: unknown; stdout?: unknown; stderr?: unknown; signal?: unknown };
+  const r = res as { code?: unknown; stdout?: unknown; stderr?: unknown; signal?: unknown; ran?: unknown; detail?: unknown };
+  // D-6840: an agent that says the exec never started (`ran: false`, a spawn error) is carried as the
+  // `spawn` arm; an agent that says nothing (older than the arm) ran it, as it always answered.
+  const base = r.ran === false
+    ? { ran: false as const, reason: 'spawn' as const, detail: typeof r.detail === 'string' ? r.detail : 'the exec never started' }
+    : { ran: true as const };
   return {
+    ...base,
     code: typeof r.code === 'number' ? r.code : 1,
     stdout: typeof r.stdout === 'string' ? r.stdout : '',
     stderr: typeof r.stderr === 'string' ? r.stderr : '',
@@ -182,7 +298,24 @@ export function createRunner(client: FleetClient): Runner {
       // on was never uniqueness — it is that omitting BOTH lands on
       // `UNMEASURED`, and it still does. Adding either field here would demote
       // this from "unknown" to "measured, and it refused cleanly".
-      return { code: 1, stdout: '', stderr: e instanceof Error ? e.message : String(e) };
+      //
+      // D-6034 (ARCH-10, #543): and the ARM says which of the three it is not. `ran: false` rides beside the forged
+      // `code: 1`, which stays, so every reader of `code` is unchanged; a refusal-classifying reader narrows on `ran`
+      // first. The agent DECLINING the request (`AgentOpError`: `forbidden`, `bad-request`) started nothing:
+      // `spawn`. This server's own wait expiring is `timeout`. Every other rejection is the link: `transport`.
+      const detail = e instanceof Error ? e.message : String(e);
+      return { code: 1, stdout: '', stderr: detail, ran: false, reason: notRanReason(e), detail };
     }
   };
+}
+
+/** D-6034: which `NotRanReason` a rejected `request()` is, read off the error's `name`: `client.ts` imports this
+ *  file, so an `instanceof` here would be an import cycle. `AgentOpError` (the agent declined) and `LinkNotSentError`
+ *  (a link failure before the send) name themselves; a plain `Error('timeout')` is the client's own wait, the one
+ *  word `register` rejects with for it. */
+function notRanReason(e: unknown): NotRanReason {
+  if (!(e instanceof Error)) return 'transport';
+  if (e.name === 'AgentOpError') return 'spawn';
+  if (e.name === 'Error' && e.message === 'timeout') return 'timeout';
+  return 'transport';
 }

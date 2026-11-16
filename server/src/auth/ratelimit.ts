@@ -280,3 +280,94 @@ export class LoginRateLimiter {
     this.state = recordSuccess(this.state, now);
   }
 }
+
+/**
+ * Failed step-ups one session may make before its step-up locks (D-5512, spec §3.2). Single source.
+ *
+ * FIVE, AND NOT A WINDOW. The caller already holds a live session, so this is not a login brake: it bounds a
+ * stolen or left-open browser guessing the passphrase (or replaying assertions) to raise its own session's
+ * freshness. A window would let that browser wait and guess again; a lock that lasts until the session ends
+ * does not, and the operator's way out is the ordinary one, signing in again, which mints a new session with
+ * its own budget.
+ */
+export const STEP_UP_MAX_FAILURES = 5;
+
+/** What {@link StepUpRateLimiter.reserve} refuses with: the session's budget is spent (`locked`), or one of
+ *  its step-ups is already running (`busy`). Two answers, two words on the wire. */
+export type StepUpReserveRefusal = 'locked' | 'busy';
+
+/**
+ * THE STEP-UP BUDGET, PER SESSION (D-5512) — separate from {@link LoginRateLimiter} in state AND in shape.
+ *
+ * Separate state, so a failed step-up never spends the login door's window (a stolen session must not be able
+ * to lock the operator out of signing in) and a login flood never spends a step-up budget. Keyed by the
+ * session's `idHash`, so one session exhausting its budget locks that session only; another session keeps its
+ * own. A success clears the session's failure count; it never clears a lock, which lasts until the session
+ * ends (its row is gone, so its key is never presented again) or the operator signs in again (a new session,
+ * a new key).
+ *
+ * THE CONCURRENCY HALF: one step-up in flight per session (`busy`), so a session cannot queue passphrase
+ * derivations onto the threadpool, the reason `LoginRateLimiter.reserve` exists. The map holds one small entry
+ * per session that has failed or is in flight; sessions are minted only through the login doors, whose own
+ * limiters bound how many exist.
+ *
+ * In memory, like the login limiter: a restart forgets the counts, and the session store's own TTLs and the
+ * scrypt cost remain.
+ */
+export class StepUpRateLimiter {
+  private readonly bySession = new Map<string, { failures: number; locked: boolean; inFlight: boolean }>();
+
+  constructor(private readonly max = STEP_UP_MAX_FAILURES) {}
+
+  private entry(idHash: string): { failures: number; locked: boolean; inFlight: boolean } {
+    let e = this.bySession.get(idHash);
+    if (e === undefined) {
+      e = { failures: 0, locked: false, inFlight: false };
+      this.bySession.set(idHash, e);
+    }
+    return e;
+  }
+
+  /** Is this session's step-up locked? A read. */
+  isLocked(idHash: string): boolean {
+    return this.bySession.get(idHash)?.locked === true;
+  }
+
+  /** ADMIT one step-up for this session, or say why not. `release` must run on every exit path (a `finally`),
+   *  and is idempotent. */
+  reserve(idHash: string): { ok: true; release: () => void } | { ok: false; reason: StepUpReserveRefusal } {
+    const e = this.entry(idHash);
+    if (e.locked) return { ok: false, reason: 'locked' };
+    if (e.inFlight) return { ok: false, reason: 'busy' };
+    e.inFlight = true;
+    let released = false;
+    return {
+      ok: true,
+      release: () => {
+        if (released) return;
+        released = true;
+        e.inFlight = false;
+        if (!e.locked && e.failures === 0) this.bySession.delete(idHash);
+      },
+    };
+  }
+
+  /** Count one failed step-up for this session. `true` exactly when this failure engaged the lock, so the
+   *  caller writes the `step-up-locked` record once (A7's audit row hangs off it). */
+  fail(idHash: string): boolean {
+    const e = this.entry(idHash);
+    if (e.locked) return false;
+    e.failures += 1;
+    if (e.failures >= this.max) {
+      e.locked = true;
+      return true;
+    }
+    return false;
+  }
+
+  /** A proven step-up: this session's failure count is cleared. A lock is never cleared here. */
+  succeed(idHash: string): void {
+    const e = this.bySession.get(idHash);
+    if (e !== undefined && !e.locked) e.failures = 0;
+  }
+}

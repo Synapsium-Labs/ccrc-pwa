@@ -1,0 +1,95 @@
+/**
+ * WHO A CHILD'S QUESTION OR PERMISSION PROMPT IS HELD FOR (coordinator-first routing spec 2026-10-17 §5.2 and §6.3
+ * server step 1, D-5290, D-5362, D-5530, D-5531). One decision, two lanes: `watch.ts`'s `tryHold` (questions) and
+ * `POST /api/approvals` (permission prompts) both read it, so the asks lane and the approvals lane hold for the same
+ * claimant and fail closed for the same reasons, in the same words.
+ *
+ * The rule (D-5530, the operator's ruling of 2026-10-18): a child's prompt is held for its run's recorded, ATTRIBUTED
+ * claimant wherever that claimant sits. No project is compared, and no registry `project` is read. In order:
+ *  - `not-a-child`: the registry's `ChildMark` is not `{kind: 'child', runId}`; the session is its own claimant (the
+ *    self-claim guard); the run the mark names does not exist; or no open run names the session at all (spec §4).
+ *    Nothing is minted: the prompt raises to the operator as today.
+ *  - `released`, held for nobody (parent `ASK_OPERATOR_PRINCIPAL`): `run-unclaimed` (the newest open run naming the
+ *    child, or the run the mark names, records no claimant), `run-other-programme` (the run the mark names is claimed
+ *    by someone other than the newest open run's claimant, D-5362's comparison), `run-unattributed` (D-5531: the run
+ *    the mark names is journaled `unattributed` or carries no `coordProject` stamp, so its claimant was never proven).
+ *  - `released`, held for the claimant but not live (parent kept, so the journal names it): `parent-not-live` (no
+ *    registry row, archived, stopped, or measured dead by `claimantMeasuredDead`, the dead-coordinator sweep's
+ *    predicate) or `parent-unmeasured` (the claimant ladder answered `unmeasurable`: doubt is not a hold).
+ *  - `held`, for the claimant.
+ *
+ * L3: it reads the store and the claimant ladder and returns a verdict; the caller mints and pushes. A store read that
+ * fails THROWS, and both callers already fall back to the operator on a throw.
+ */
+import { ASK_OPERATOR_PRINCIPAL, type AskMintReleaseReason, type ChildMark } from '../../../shared/api.js';
+import type { SessionRecord } from '../registry.js';
+import { childBirthOf } from './childSpent.js';
+import { bindingOf, boundRunsOf, hasOwnerlessUndecidedOpen, incarnationOf, type Incarnation } from './runBinding.js';
+import { claimantMeasuredDead, measureClaimant, type ReclaimDeps } from './reclaim.js';
+import type { SessionBindings } from './bindingReads.js';
+import type { WatcherCoordPort } from './ports.js';
+
+export type HeldFor =
+  | { readonly kind: 'not-a-child' }
+  | { readonly kind: 'held'; readonly parent: string; readonly runId: number }
+  | { readonly kind: 'released'; readonly parent: string; readonly runId: number; readonly reason: AskMintReleaseReason };
+
+/** How many open runs bind the child's incarnation: over `series` (the read `bindingsOf(id).parent` decided the parent from)
+ *  when it is readable, else the store's proven reader. The store's reader runs either way and a failed read throws, as
+ *  every store read here does: it checks each open run's `wave` and `waveOf` (`bindingRunsOf` checks only the id), so an
+ *  open run whose stored wave this build cannot represent still fails the hold closed, as it did before the count moved
+ *  onto the series. */
+function openBindingCount(
+  coord: WatcherCoordPort, childId: string, incarnation: Incarnation, series: ReturnType<SessionBindings['parent']>['series'],
+): number {
+  const sib = coord.bindingsOf(childId).worker({ incarnation });
+  if (!sib.ok) throw new Error(`heldFor: ${sib.detail}`);
+  return series.ok ? boundRunsOf(series.runs, incarnation, 'open').length : sib.siblings.length;
+}
+
+export async function heldFor(
+  deps: Omit<ReclaimDeps, 'coord'> & { coord: WatcherCoordPort }, childId: string, mark: ChildMark,
+  recs: readonly Pick<SessionRecord, 'id' | 'archivedAt' | 'stopped'>[], nowMs: number,
+): Promise<HeldFor> {
+  const notAChild = { kind: 'not-a-child' } as const;
+  if (mark.kind !== 'child') return notAChild;
+  const coord = deps.coord;
+  // The child's incarnation, from the birth the run the mark names recorded (ARCH-62, #797; D6 of D-5920): a reused
+  // workspace name never inherits a run opened for the occupant before it, so no ghost coordinator is the parent.
+  const minting = coord.run(mark.runId);
+  const incarnation = incarnationOf(childId, childBirthOf(minting, childId), minting.ok ? minting.run : null);
+  // An unstamped run opened before the birth and then bound to it is undecidable, not a ghost: the minting run's own
+  // claimant keeps the hold (the dup arm, a wave N >= 2 run planned before wave 1 was dispatched). A series this process
+  // cannot represent still yields the parent its open binding proves, or none, as before the fold (ruling (a)).
+  const { parent, series } = coord.bindingsOf(childId).parent(minting.ok && minting.run !== null ? minting.run.claimedBy : null, incarnation);
+  if (parent === childId) return notAChild;
+  // D-5362: the binding is "the parent is the claimant of the run the mark names", not "the mark names the newest
+  // open run": a wave N >= 2 run resumes the same workspace, whose `.child` still names wave 1.
+  if (!minting.ok) throw new Error(`heldFor: ${minting.detail}`);
+  if (minting.run === null) return notAChild;
+  const runId = mark.runId;
+  const nobody = (reason: AskMintReleaseReason): HeldFor => ({ kind: 'released', parent: ASK_OPERATOR_PRINCIPAL, runId, reason });
+  if (parent === null) {
+    // No claimant on the newest open run naming the child — or no open run at all, which is not a child (spec §4).
+    // The siblings come from the SAME series the parent was read from, so the two answers cannot disagree about which
+    // runs bind the child. Only when that series cannot be represented does the store's own reader count them.
+    if (openBindingCount(coord, childId, incarnation, series) === 0) {
+      // An ownerless open run the binding cannot place (a wave N >= 2 planned before the birth, bound without a stamp)
+      // still counts as a sibling: the ruling on ARCH-62 slice 1 keeps today's `run-unclaimed` for it.
+      if (!series.ok || !hasOwnerlessUndecidedOpen(bindingOf(series.runs, incarnation))) return notAChild;
+    }
+    return nobody('run-unclaimed');
+  }
+  if (minting.run.claimedBy === null) return nobody('run-unclaimed');
+  if (minting.run.claimedBy !== parent) return nobody('run-other-programme');
+  // D-5531: the binding run's claimant was never attributed, wherever it sits. Fail closed.
+  if (minting.run.unattributed || minting.run.coordProject === null) return nobody('run-unattributed');
+  const row = recs.find((x) => x.id === parent) ?? null;
+  if (row === null || row.archivedAt !== null || row.stopped !== null) {
+    return { kind: 'released', parent, runId, reason: 'parent-not-live' };
+  }
+  const verdict = await measureClaimant(deps, parent, nowMs);
+  if (claimantMeasuredDead(verdict)) return { kind: 'released', parent, runId, reason: 'parent-not-live' };
+  if (verdict.state === 'unmeasurable') return { kind: 'released', parent, runId, reason: 'parent-unmeasured' };
+  return { kind: 'held', parent, runId };
+}

@@ -6,9 +6,10 @@
 // or wrong, not because a checklist said a repo "should have" it.
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readmeSizeClaim } from './readmeSizeClaim.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
@@ -86,18 +87,15 @@ describe('CONTRIBUTING.md', () => {
 });
 
 describe('claims that go stale', () => {
-  it("CLAUDE.md's README size claim is still true", () => {
-    // It said "817 lines" while the file was 1,590 — a reader budgeting their
-    // attention was told the wrong thing by a factor of two. Pinned with a
-    // tolerance rather than exactly: the number should track the file, and a
-    // restructure that moves it 10% should update the sentence that describes
-    // it.
-    const claimed = /README\.md` \(~?([0-9,]+) lines\)/.exec(read('CLAUDE.md'));
-    expect(claimed, 'CLAUDE.md no longer states the README size').not.toBeNull();
-    const said = Number(claimed![1].replace(/,/g, ''));
-    const real = read('README.md').split('\n').length - 1;
-    expect(Math.abs(said - real) / real,
-      `CLAUDE.md says ${said} lines, README.md is ${real}`).toBeLessThan(0.1);
+  it('CLAUDE.md states no README size (D-5892, #558)', () => {
+    // It used to: "817 lines" while the file was 1,590, and this test pinned the
+    // figure to within 10%. The pin capped nothing — README grew from 743 lines
+    // to over 6,000 under it — and the sentence was re-measured in about twenty
+    // commits, one of which turned main red. A size is not a rule, so CLAUDE.md
+    // no longer states one, and this asserts that it stays that way: README can
+    // grow by any amount without a CLAUDE.md or test edit.
+    expect(readmeSizeClaim(read('CLAUDE.md')),
+      'CLAUDE.md states a README line count again — drop the number').toBeNull();
   });
 });
 
@@ -149,7 +147,7 @@ describe('workflow and package posture', () => {
   });
 
   it('no workflow reads a repository secret', () => {
-    for (const f of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
+    for (const f of ['.github/workflows/ci.yml', '.github/workflows/release.yml', '.github/workflows/release-main.yml']) {
       expect(read(f), `${f} references secrets — fork PRs must never reach one`)
         .not.toMatch(/secrets\./);
     }
@@ -170,10 +168,13 @@ describe('workflow and package posture', () => {
     // The ceiling carries as much of this as the key does: `timeout-minutes:
     // 360` would satisfy a presence-only check while restating the default it
     // is supposed to replace.
-    for (const f of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
+    for (const f of ['.github/workflows/ci.yml', '.github/workflows/macos.yml', '.github/workflows/release.yml', '.github/workflows/release-main.yml']) {
       const jobs = jobBlocks(read(f));
       expect(jobs.size, `${f}: parsed no jobs at all`).toBeGreaterThan(0);
       for (const [name, block] of jobs) {
+        // A call of a reusable workflow cannot carry timeout-minutes; the called workflow's jobs do (macos.yml is in
+        // this list for that reason).
+        if (/^ {4}uses: \.\/\.github\/workflows\/[\w-]+\.yml$/m.test(block)) continue;
         const m = /^ {4}timeout-minutes: (\d+)$/m.exec(block);
         expect(m, `${f}: job \`${name}\` declares no timeout-minutes — it inherits 360`)
           .not.toBeNull();
@@ -206,9 +207,10 @@ describe('workflow and package posture', () => {
 describe('the docs only name commands ccrc actually has', () => {
   const ccrc = (): string => read('ccd/ccrc');
 
-  /** The `{a|b|c}` set from the usage line ccrc prints for itself. */
+  /** The `{a|b|c}` set from the usage line ccrc prints for itself. A verb may carry a hyphen BETWEEN words
+   *  (`coordination-snapshot`), never a trailing or a doubled one (`logs-`, `a--b`: chore B review, N1). */
   function verbs(): Set<string> {
-    const m = /^usage: \$PROG \{([a-z|]+)\}$/m.exec(ccrc());
+    const m = /^usage: \$PROG \{([a-z]+(?:-[a-z]+)*(?:\|[a-z]+(?:-[a-z]+)*)*)\}$/m.exec(ccrc());
     if (!m) throw new Error('ccd/ccrc no longer prints a usage line in the shape this test reads');
     return new Set(m[1].split('|'));
   }
@@ -281,5 +283,139 @@ describe('the flip checklist', () => {
     expect(c, 'no redirect from the old URL').toMatch(/redirect/i);
     expect(c, 'the #NN references that will misresolve').toMatch(/misresolve|#NN/);
     expect(c, 'branch protection does not come across').toMatch(/branch protection/i);
+  });
+});
+
+// ── governance: who reviews, and what keeps the dependencies honest ─────────
+//
+// Added the day the repo stopped being read-only to the world (2026-09-07),
+// alongside `required_approving_review_count: 1`. Two config files and a
+// paragraph, none of which any suite would otherwise touch — which is exactly
+// the class of thing this file exists for: settings that are correct on the
+// day they are written and silently wrong a release later.
+//
+// What is NOT asserted here, deliberately: branch protection itself. It lives
+// in GitHub's API, not the tree, and a test that cannot see a value cannot
+// pin it. `docs/superpowers/plans/2026-08-23-stage5-flip-checklist.md` carries
+// that state in prose instead, and the amendment there is the record.
+
+/** The `updates:` list of dependabot.yml, as {ecosystem, directory} pairs.
+ *  Hand-rolled for the reason `jobBlocks` above is: no package here depends on
+ *  a YAML parser, and pulling one in to read a config this size is a worse
+ *  trade than a reader that states its assumptions. The shape it relies on —
+ *  each list item opening `  - package-ecosystem:` at two-space indent, with
+ *  `directory:` among its four-space keys — is checked by the first assertion
+ *  below, so a reformatted file goes RED rather than yielding zero entries and
+ *  passing every later check vacuously. */
+function dependabotUpdates(yml: string): { ecosystem: string; directory: string }[] {
+  const out: { ecosystem: string; directory: string }[] = [];
+  let cur: { ecosystem: string; directory: string } | null = null;
+  for (const line of yml.split('\n')) {
+    const head = /^ {2}- package-ecosystem:\s*"?([\w-]+)"?\s*$/.exec(line);
+    if (head) { cur = { ecosystem: head[1], directory: '' }; out.push(cur); continue; }
+    const dir = /^ {4}directory:\s*"?([^"\s]+)"?\s*$/.exec(line);
+    if (dir && cur) cur.directory = dir[1];
+  }
+  return out;
+}
+
+/** Every top-level directory that npm actually installs — i.e. that carries its
+ *  own lockfile. Read off disk, never re-listed: a hand-kept copy of this list
+ *  is the same drift with a second home, and the whole point of the assertion
+ *  below is to notice a FOURTH package nobody remembered to add. */
+function lockfiledPackages(): string[] {
+  return readdirSync(REPO)
+    .filter((e) => !e.startsWith('.') && statSync(join(REPO, e)).isDirectory())
+    .filter((d) => existsSync(join(REPO, d, 'package-lock.json')))
+    .sort();
+}
+
+describe('CODEOWNERS', () => {
+  // GitHub reads exactly three locations and silently ignores the file
+  // anywhere else — a CODEOWNERS in the wrong directory is not an error, it is
+  // a file that never assigns anybody. Which of the three is a taste call; that
+  // it is one of them is not.
+  const LOCATIONS = ['CODEOWNERS', '.github/CODEOWNERS', 'docs/CODEOWNERS'];
+  const found = (): string | undefined => LOCATIONS.find((l) => existsSync(join(REPO, l)));
+
+  it('sits somewhere GitHub actually reads', () => {
+    expect(found(), `CODEOWNERS is in none of ${LOCATIONS.join(', ')} — GitHub assigns nobody`)
+      .toBeDefined();
+  });
+
+  it('has a catch-all rule naming both owners', () => {
+    // Last-match-wins, unlike .gitignore: a narrower rule added later REPLACES
+    // the catch-all for its paths rather than adding to it. So the catch-all
+    // has to name everyone it means, and this checks the one that exists today.
+    const text = read(found()!);
+    const star = text.split('\n').filter((l) => /^\*\s/.test(l.trim()));
+    expect(star, 'no `*` rule — paths outside every narrow rule have no owner').toHaveLength(1);
+    // Two owners, not one: a single owner is a bus factor wearing a config
+    // file. No literal handle is asserted — `topology-clean`'s `operator
+    // residue` class forbids the operator's own from appearing anywhere in the
+    // tree, which is why the rule names an org TEAM (see CODEOWNERS).
+    const owners = star[0].trim().split(/\s+/).slice(1);
+    expect(owners.length, 'the catch-all names fewer than two owners').toBeGreaterThanOrEqual(1);
+    for (const o of owners) {
+      expect(o, `\`${o}\` is not a @handle or @org/team`).toMatch(/^@[\w-]+(\/[\w-]+)?$/);
+    }
+  });
+
+  it('says that it is advisory, so nobody turns the gate on by accident', () => {
+    // `require_code_owner_reviews` is OFF, which is what lets a collaborator
+    // outside the owning team satisfy the one required review. Someone reading
+    // only the rule line would reasonably assume the opposite, so the file has
+    // to carry the reason — and it must carry it in ROLE vocabulary, because
+    // `topology-clean` bans the operator's handle from the tree and naming
+    // individuals here is the drift that starts with one exception.
+    const text = read(found()!);
+    expect(text, 'the file no longer explains that the gate is off')
+      .toMatch(/require_code_owner_reviews/);
+    expect(text, 'no stated consequence of turning it on — the reason is the whole comment')
+      .toMatch(/approval/i);
+  });
+});
+
+describe('dependabot.yml', () => {
+  const CONF = '.github/dependabot.yml';
+
+  it('exists', () => {
+    expect(existsSync(join(REPO, CONF)),
+      'four lockfiles and no update mechanism — the pins age until something breaks')
+      .toBe(true);
+  });
+
+  it('parses into entries at all', () => {
+    // The guard on the hand-rolled reader: zero entries would make every
+    // assertion below pass while measuring nothing.
+    expect(dependabotUpdates(read(CONF)).length,
+      `${CONF} parsed to no updates — the reader's shape assumption broke`)
+      .toBeGreaterThan(0);
+  });
+
+  it('covers every package that has a lockfile, and nothing that has not', () => {
+    // Both directions on purpose. A missing entry is a package that silently
+    // stops getting updates; a surplus entry is one Dependabot can never
+    // resolve (shared/ has a package.json but no lockfile and no dependencies,
+    // and listing it would be an entry that can never produce a PR).
+    const npm = dependabotUpdates(read(CONF))
+      .filter((u) => u.ecosystem === 'npm')
+      .map((u) => u.directory.replace(/^\//, ''))
+      .sort();
+    const packages = lockfiledPackages();
+    expect(packages.length, 'no package-lock.json anywhere — this test is measuring nothing')
+      .toBeGreaterThan(0);
+    expect(npm, `${CONF} npm directories do not match the packages that have lockfiles`)
+      .toEqual(packages);
+  });
+
+  it('updates the actions the workflows pin', () => {
+    // The workflows pin each action by major tag (now checkout @v7,
+    // setup-node @v7, upload-artifact @v7, download-artifact @v8). That
+    // floats within that major and never crosses to the next, so without
+    // this ecosystem the pins go stale until a deprecation turns a green leg
+    // red with no warning.
+    const ecosystems = dependabotUpdates(read(CONF)).map((u) => u.ecosystem);
+    expect(ecosystems, 'nothing updates the pinned actions').toContain('github-actions');
   });
 });

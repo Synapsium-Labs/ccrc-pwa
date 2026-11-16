@@ -1,0 +1,105 @@
+{
+  "name": "read-title",
+  "documentSource": "code (client.ts QUERY, the title lookup)",
+  "document": "query Issue($id: String!) { issue(id: $id) { identifier title } }",
+  "variables": {
+    "id": "AAA-7"
+  },
+  "requestBody": "{\"query\":\"query Issue($id: String!) { issue(id: $id) { identifier title } }\",\"variables\":{\"id\":\"AAA-7\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631373217,
+  "receivedAtMs": 1793631373425,
+  "sentAt": "2026-11-02T14:56:13.217+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:13 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "75"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "2"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999998"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634973789"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2498"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634973789"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "issue": {
+        "identifier": "AAA-7",
+        "title": "FX capture child issue"
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"issue\":{\"identifier\":\"AAA-7\",\"title\":\"FX capture child issue\"}}}\n"
+}

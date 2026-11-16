@@ -369,3 +369,35 @@ export function effectiveValue(text: string, sel: string, prop: string): string 
   const all = declaredValues(text, sel, prop);
   return all.length === 0 ? null : all[all.length - 1]!;
 }
+
+/** The `:root` palette's declarations as ONE body: every TOP-LEVEL rule whose
+ *  selector list names `:root`, joined in source order. tokens.css writes
+ *  `:root` as two blocks, its colours (which also answer to
+ *  `[data-theme='phosphor']`, D-5503) and then type, density and motion, so a
+ *  reader that takes the first `:root {` sees half of it. `@media`-wrapped
+ *  `:root` rules are width or motion overrides, not the defaults, and are left
+ *  out. Returned with comments blanked, so a `;` in prose splits nothing. */
+export function rootBody(text: string): string {
+  const scan = blankComments(text);
+  const bodies: string[] = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < scan.length; i += 1) {
+    if (scan[i] === '{') {
+      if (depth === 0) {
+        const prelude = scan.slice(from, i);
+        const close = scan.indexOf('}', i);
+        if (!prelude.includes('@') && prelude.split(',').some((s) => normSel(s) === ':root') && close > i) {
+          bodies.push(scan.slice(i + 1, close));
+        }
+      }
+      depth += 1;
+    } else if (scan[i] === '}') {
+      depth -= 1;
+      if (depth === 0) from = i + 1;
+    } else if (scan[i] === ';' && depth === 0) {
+      from = i + 1;
+    }
+  }
+  return bodies.join(';\n');
+}

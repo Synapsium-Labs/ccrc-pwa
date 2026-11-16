@@ -20,8 +20,11 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MAIL_MAX_ATTEMPTS, type PrPhase } from '../../shared/api.js';
+import { FAILURE_KINDS, MAIL_MAX_ATTEMPTS, SUITE_WORDS, WAVE_DONE_SUBJECT, type PrPhase } from '../../shared/api.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
+import { SUBAGENT_CLASSES } from '../../shared/models.mjs';
+import { STALL_RESUMING_KINDS, STALL_WAKE_KINDS } from '../src/coord/stall.js';
+import { COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/worker-skill');
@@ -33,7 +36,7 @@ const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
  *  first. */
 const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
-// The thirteen clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
+// The twenty clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
 // quotes `toId:'coordinator'` — the one genuinely single-quoted literal left,
 // since clause 1 stopped quoting `'#S'` — and clause 9 carries the apostrophe in
 // `done-claim's` (its eight enum words are BACKTICKED, not single-quoted).
@@ -45,7 +48,8 @@ const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 // paraphrase failure that reads like a mystery.
 //
 // D-104, the operative constraint both files live under: NO clause in this
-// skill may contain a `"` character, and a curly apostrophe pasted into
+// skill may contain a `"` character (one exception: clause 5's `rm -rf "$X"`,
+// D-5292, the measured shape itself, escaped below), and a curly apostrophe pasted into
 // SKILL.md reds this pin without looking like a change. SKILL.md's contract
 // section states the same rule where an editor of the prose will see it.
 const CONTRACT = [
@@ -53,28 +57,172 @@ const CONTRACT = [
   "Commit on THIS workspace's own branch (`ws/<slug>`), never a separate feature branch. The done-fingerprint re-measures the workspace branch's tip, so work parked on a feature branch leaves that tip unmoved and wedges every close `stale-tip` forever (F5 — the server's own `stale-tip` detail names this as the almost-certain cause).",
   // D-105: this clause used to name the 6 for BOTH lanes. It is the
   // PRE-DELIVERY budget only; a delivered-but-unacked nudge has its own.
-  "Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.",
-  "Keep your input box empty. A half-typed draft makes the delivery lane refuse `draft-present`, only you can clear your own text, and a parked delivery means your brief was never read.",
-  "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may.",
+  "Ack before you act: `mail inbox`, run bare (no pipe, no redirect, no `head` or `tail`), acks what it printed; by hand, key the ack on the DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.",
+  "A draft in your input box never stops mail. The delivery lane stashes it with Claude Code's own prompt stash (ctrl+s), delivers, and Claude Code restores it after the delivery; if you see `Draft restored`, that is why. Keep using your box normally. The one draft case you can cause is a draft typed over a stash you already hold yourself, which makes the lane refuse (`stash-occupied`), so send or pop your own stash rather than leaving it held.",
+  "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may. In a shell script, never delete through a variable (`rm -rf \"$X\"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.",
   "Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.",
   "Large payloads travel as files: write the file, then name its ABSOLUTE path in the mail's `artifacts` (a relative entry is refused `bad-kind`). Never ask for content to be pasted into your pane (F7).",
   "Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, at any wave, for any reason.",
-  "A done-claim's fingerprint is measured ONCE and sent ONCE: `handoffCommit` must equal the branch tip you measured, and `prPhase` must be one of the eight enum words (`unchecked`, `none`, `no-commits`, `open`, `draft`, `merged`, `closed`, `unknown`). After `wave-done` you stop pushing — a new commit under your own claim makes it stale — and a rejected claim is never re-asserted without new commits and a fresh measurement.",
+  "A done-claim's fingerprint is measured ONCE and sent ONCE: `handoffCommit` must equal the branch tip you measured, and `prPhase` must be one of the eight enum words (`unchecked`, `none`, `no-commits`, `open`, `draft`, `merged`, `closed`, `unknown`). After `wave-done` you stop pushing — a new commit under your own claim makes it stale — and a rejected claim is never re-asserted without new commits and a fresh measurement. The one exception is a project your brief names as opted in to the radar's lineage: there, only when clause 16 licenses the absorption, you may push exactly one merge commit after `wave-done`, made by `git merge` of the brief's radar base with no conflict and no edit, amend or restamp, with nothing after it; your claim stands, and a `lineage-unmeasured` rejection is re-sent unchanged, at most twice, after the radar's next tick.",
   "Remote control is decided at your creation, not by you: dispatched workers spawn WITHOUT it (the 2026-08-13 ruling, task #37 — landed), declared by the dispatch path at `ws-add --no-rc` and stamped as the registry's `rc` field, while `~/.ccrc/remote-control` still governs every non-dispatched session on this box. Neither file is yours to write.",
   "Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.",
   "When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts — but weigh that answer by your SessionStart card: only `fresh` licenses taking it as read, while `N commits behind HEAD`, `not an ancestor of HEAD` (the graph was built on a tree yours cannot reach, so it describes code you do not have), `freshness unmeasured`, or no freshness clause at all makes every query answer a LEAD to verify by opening the file it names. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.",
-  "When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session's pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child's reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator's; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.",
+  "When a child of yours asks a question, you may answer it — `\"$API\" asks answer` is the one call that does, and this session never types into another session's pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child's reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator's; decline it with `\"$API\" asks release` so their notification fires at once rather than waiting out the window.",
+  "Route your own subagents by the shape of their task, from `../ccrc-coordinator/references/routing-matrix.md`, and never let one inherit your model: name the class on every Agent call (an Agent-tool subagent runs at your own effort) — implementation from a spec'd plan on Sonnet at high, the per-task reviewer of a spec'd task on Sonnet at high (the held-out panel is the gate), review with judgement and adversarial verification on Opus at high, scouts and transcription-grade edits on Haiku, and Fable never as a fan-out worker. A subagent effort the brief names governs over that default.",
+  "Your wave-done body opens with two signal lines the server parses, before any prose and before the fingerprint: `suite: green|red|unrun` says whether the whole suite passed on its FIRST full run after this wave's implementation was complete (red stays red however many fix rounds followed; unrun when no full run happened), and, only when a check failed, `failure: shallow|ceiling|unclear` names the kind — shallow for tests missed or a plan half-followed, ceiling for an ambiguity you could not resolve, a design flaw or a debug that survived two attempts, unclear otherwise. The suite line is never omitted.",
+  // Landing-order wave 1 (spec 2026-09-23 §5.1). The probe's exit code alone
+  // is NOT the conflict verdict: measured on git 2.43, `git merge-tree
+  // --write-tree` exits 1 for a conflict (a tree id on stdout's first line)
+  // AND for an unresolvable ref (`not something we can merge`, stdout empty),
+  // so the clause names both halves of the conflict answer and says what every
+  // other answer licenses: nothing.
+  "Absorb `origin/main` into this branch only on one of three triggers, each read after one `git fetch origin`: your own probe `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its first line (the branch conflicts; exit 0 is clean, and any other answer is unmeasured and licenses nothing); a required check on your PR is red while main passes the same tests, measured by re-running its failing test files on a clean checkout of `origin/HEAD` in scratch; or a `fix-round` mail from the coordinator names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository. The first two license at most one absorption per PR — a second occurrence before the first absorption lands is not a second license — and the third arrives on the `merging → working` edge, after which you absorb, re-gate and send a fresh `wave-done`. Absorb with `git merge` only: never a rebase, a force-push or `update-branch` by any route, including `gh api -X PUT`. Never write any repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`. Never hand-resolve a generated stamp: on a conflict in a `# ccrc:generated` line such as the one in the session hook's generated region, take either side of that line only, resolve every other hunk of the file as the source it is, then run `~/.local/bin/ccrc restamp <file>`; `ccd/ccd` carries no committed stamp (its marker is written when it is installed), so it never conflicts on one and `restamp` refuses it. A red that main also shows is reported once as `main-red` and left alone. Keep no local `main`: read `origin/HEAD`, fetched once. The operator's keeper is the operator's own tool and may rebase or force-push a PR branch on its own authority; this clause binds your own absorbs only, so a fixer the keeper spawns is not caught between the two. If the keeper rewrote your branch, take its tip (`git fetch origin`, then `git reset --hard origin/<branch>`) before you commit; never rebase or force-push it yourself. You never merge your own PR.",
+  // Worker stall watch, wave 3 (spec 2026-09-29 §6.2): ASCII only, no apostrophe.
+  "End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent you launched from your main thread yourself that has not yet reported, a structured ask, or a timer the server accepted (`ccrc-api timer set`). A background shell or Monitor is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn ends.",
+  // Fleet disk retention, DR-25 (spec 2026-10-23 §2.7.2, §10): ASCII only, no apostrophe, no double quote.
+  "A workflow script, a subagent brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree. Work, scratch repositories, reports and build output never go under the `projects/` transcript folders of a Claude config dir (`~/.claude*/projects/`): they belong in the workspace or in that temp root. Every test and typecheck runs through `ccrc test -- <command>` (for example `ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts` or `ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json`), which runs it in the fleet test slice and queues heavy runs fleet-wide; never run one bare, and never under a `systemd-run` of your own, which the session hook denies.",
+  // Workflow rule, operator ruling 2026-10-25: no double quote, straight apostrophe.
+  "Never launch a workflow. A worker is the fan-out unit: work that wants a wider fan-out is more workers, which the coordinator dispatches, and your wave's review is a separate review run, never a workflow of yours. A mechanical edit, such as a D-number substitution, a PR body edit or a re-pin, is done in your own main thread.",
+  // Push once per round, operator ruling 2026-11-12 (D-8397): ASCII only, no double quote.
+  "Commit as often as useful, but push once per round: when the wave's build or a review fix round is complete, push its code, tests and notes together (plan, ledger and deviation lines in the same push), then measure the wave-done fingerprint. Every push re-runs the PR's checks, so a push per commit buys CI runs and nothing else. Push before that only to hand work to another session, or before a stop that could lose the work (D-8397).",
 ];
+
+/** The absorb clause, by its own index — the one clause licensed to name
+ *  `update-branch`, and it names it to forbid it (spec §5.1 "Pins"). */
+const ABSORB = CONTRACT[15]!;
 
 /** The forbidding clause, by its own index — named once so a re-ordering of the
  *  array cannot silently point the census at the wrong sentence. */
 const FORBIDS = CONTRACT[7]!;
 
+describe('the worker skill: clause 19, a worker never launches a workflow (operator ruling 2026-10-25)', () => {
+  const c19 = CONTRACT[18]!;
+
+  it('is the nineteenth clause, and SKILL.md numbers it so', () => {
+    expect(c19.startsWith('Never launch a workflow. ')).toBe(true);
+    expect(skill).toContain(`\n19. ${c19}\n`);
+  });
+
+  it('makes the worker the fan-out unit and its review a separate review run', () => {
+    expect(c19).toContain('A worker is the fan-out unit');
+    expect(c19).toContain('more workers, which the coordinator dispatches');
+    expect(c19).toContain('a separate review run, never a workflow of yours');
+  });
+
+  it('leaves no workflow as a wake or a routing surface in the worker clauses', () => {
+    expect(CONTRACT[13]).not.toMatch(/Workflow/);
+    expect(CONTRACT[16]).not.toMatch(/workflow/i);
+    const routing = skill.slice(skill.indexOf('## Routing your subagents'), skill.indexOf('## Mutation testing'));
+    expect(routing).not.toMatch(/Workflow `agent\(\)`|Workflow script on this/);
+    expect(routing).toContain('clause 19');
+  });
+});
+
+describe('the worker skill: clause 20, push once per round (operator ruling 2026-11-12, D-8397)', () => {
+  const c20 = CONTRACT[19]!;
+
+  it('is the twentieth clause, and SKILL.md numbers it so', () => {
+    expect(c20.startsWith('Commit as often as useful, but push once per round: ')).toBe(true);
+    expect(skill).toContain(`\n20. ${c20}\n`);
+  });
+
+  it('pushes once when a build or a review fix round is complete, code, tests and notes together', () => {
+    expect(c20).toContain("when the wave's build or a review fix round is complete");
+    expect(c20).toContain('push its code, tests and notes together');
+    expect(c20).toContain('then measure the wave-done fingerprint');
+  });
+
+  it('licenses an earlier push only for a hand-off or a stop that could lose the work', () => {
+    expect(c20).toContain('Push before that only to hand work to another session, or before a stop that could lose the work');
+    expect(c20).not.toMatch(/push (?:each|every) commit|commit and push/i);
+  });
+
+  it('the fix-round bullet points the round at clause 20', () => {
+    const bullet = skill.slice(skill.indexOf('- **A `fix-round` mail arrives**'), skill.indexOf('A `fix-round` mail whose first line reads'));
+    expect(bullet).toContain('clause 20');
+  });
+});
+
 describe('the worker skill: its contract', () => {
-  it('carries all thirteen clauses verbatim', () => {
+  // DR-25 (D-6637): the temp clause is its own pin beside the verbatim one, so a softened half reds by name.
+  it('clause 18 keeps scratch out of a work tree and sends long output to a file or tail (D-6637)', () => {
+    const line = skill.split('\n').find((l) => l.startsWith('18. '));
+    expect(line, 'SKILL.md has no clause 18').toBeTruthy();
+    expect(line).toContain('never sets `TMPDIR` to a path inside a work tree');
+    expect(line).toContain('never writes scratch inside one');
+    expect(line).toContain('`CCRC_SESSION_TMPDIR`');
+    expect(line).toContain('Long command output goes to a file there, or through `tail`');
+  });
+
+  // D-7898: clause 18 keeps work out of a Claude config dir's transcript folders.
+  it('clause 18 keeps work out of the transcript folders of a Claude config dir (D-7898)', () => {
+    const line = skill.split('\n').find((l) => l.startsWith('18. '));
+    expect(line).toContain('Work, scratch repositories, reports and build output never go under the `projects/` transcript folders of a Claude config dir (`~/.claude*/projects/`)');
+    expect(line).toContain('they belong in the workspace or in that temp root');
+  });
+  // D-7298: clause 18 routes every test and typecheck through `ccrc test`, and names the hook's refusal.
+  it('clause 18 routes tests and typechecks through ccrc test, never a bare run or a systemd-run of its own (D-7298)', () => {
+    const line = skill.split('\n').find((l) => l.startsWith('18. '));
+    expect(line).toContain('Every test and typecheck runs through `ccrc test -- <command>`');
+    expect(line).toContain('never run one bare, and never under a `systemd-run` of your own');
+  });
+
+  // Landing order wave 4 (stage 4): clause 9 gains the one exception the server's lineage reader
+  // honours. The whole line is pinned as its own assertion, so dropping the exception from the
+  // skill alone (mutation S1) reds by name, and the two halves of the exception are named so that
+  // dropping "with nothing after it" from both copies (S2) reds by name too.
+  it('clause 9 carries the lineage exception, as one whole numbered line', () => {
+    expect(skill, 'SKILL.md no longer carries clause 9 as the whole line CONTRACT[8] pins')
+      .toContain(`\n9. ${CONTRACT[8]}\n`);
+    const line = skill.split('\n').find((l) => l.startsWith('9. '));
+    expect(line, 'SKILL.md has no clause 9').toBeTruthy();
+    for (const half of ['exactly one merge commit', 'with nothing after it']) {
+      expect(CONTRACT[8], `CONTRACT[8] lost: ${half}`).toContain(half);
+      expect(line, `clause 9 lost: ${half}`).toContain(half);
+    }
+    expect(line).toContain('only when clause 16 licenses the absorption');
+    expect(line).toContain('a `lineage-unmeasured` rejection is re-sent unchanged, at most twice, after the radar\'s next tick');
+  });
+
+  it('the stop-pushing paragraph and the unmeasured bullet carry the same exception (landing order wave 4)', () => {
+    const flat = skill.replace(/\s+/g, ' ');
+    const at = flat.indexOf('Then stop pushing (clause 9).');
+    expect(at, 'the stop-pushing paragraph is gone').toBeGreaterThanOrEqual(0);
+    const para = flat.slice(at, flat.indexOf('This workspace ends when the coordinator', at));
+    expect(para).toContain('In a project your brief names as opted in to the radar\'s lineage, the one clean merge clause 9 allows is not a stale-making commit');
+    expect(para).toContain('anything else still is');
+    // The bullet sits beside `rejected: stale-tip`, in the section that follows the reporting one,
+    // and names the server's two subjects (never a `rejected:` mail of the coordinator's own).
+    const bulletAt = flat.indexOf('**`wave-done-unmeasured` or `wave-advance-unmeasured`');
+    expect(bulletAt, 'the unmeasured bullet is gone').toBeGreaterThan(flat.indexOf('## When something is wrong'));
+    expect(bulletAt).toBeGreaterThan(flat.indexOf('**`rejected: stale-tip`.**'));
+    expect(bulletAt).toBeLessThan(flat.indexOf('**`rejected: pr-unmeasurable`'));
+    const bullet = flat.slice(bulletAt, flat.indexOf('**`rejected: pr-unmeasurable`'));
+    for (const w of ['lineage-unmeasured', 're-send the same `wave-done`, unchanged', 'after the radar\'s next tick',
+      'at most twice', 'then report it to your coordinator']) {
+      expect(bullet, `the unmeasured bullet lost: ${w}`).toContain(w);
+    }
+  });
+
+  it('carries all twenty clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
+  });
+
+  // D-5292 (coordinator-first routing, Task 1): subagents never read this
+  // skill, and they raised 25 of the 26 measured child permission prompts, so
+  // the no-variable-rm rule reaches them only if this session carries it into
+  // every brief it writes. That sentence is pinned as its OWN literal, against
+  // SKILL.md's clause 5 line itself, so dropping it reds by name rather than
+  // only as a whole-clause mismatch above.
+  it('clause 5 carries the no-variable-rm rule into every subagent brief (D-5292)', () => {
+    const SUBAGENT_BRIEF = 'every subagent brief you write carries this rule';
+    const line = skill.split('\n').find((l) => l.startsWith('5. '));
+    expect(line, 'SKILL.md has no clause 5').toBeTruthy();
+    expect(CONTRACT[4]).toContain(SUBAGENT_BRIEF);
+    expect(line, 'clause 5 no longer carries the rule into subagent briefs').toContain(SUBAGENT_BRIEF);
+    expect(line, 'clause 5 no longer forbids deletes through a variable').toContain('never delete through a variable (`rm -rf "$X"`)');
   });
 
   // ── the COUNT, which the verbatim pin above structurally cannot see ──────
@@ -154,6 +302,46 @@ describe('the worker skill: its contract', () => {
     }
   });
 
+  // Child reclamation, wave 3 (spec 2026-09-22 §6): NOT a clause — clause 8 is
+  // unchanged and the count was fifteen then, unmoved by this wave — but a sentence in the reporting
+  // section, because it is the fact a worker needs at the moment it reports.
+  it('says, in its reporting section, that this workspace ends when the coordinator is finished with it', () => {
+    const at = skill.indexOf('**This workspace ends when the coordinator is finished with it — usually when\nits run closes.**');
+    expect(at, 'the sentence is gone').toBeGreaterThanOrEqual(0);
+    expect(at, 'it moved out of the reporting section').toBeGreaterThan(skill.indexOf('## Reporting a wave-done'));
+    expect(at).toBeLessThan(skill.indexOf('## When something is wrong'));
+    expect(skill.slice(at).replace(/\s+/g, ' ')).toContain('committed for you as a WIP commit and attic-pinned');
+    expect(skill).not.toContain('ws-reclaim');
+  });
+
+  it('names `update-branch` ONLY inside clause 16, which forbids it — counted, not absent (spec §5.1)', () => {
+    // The skill corpus is where the word is LICENSED, once, to forbid it; the
+    // executable source is where it is absent (`update-branch-absent.test.ts`).
+    // EQUALITY, as the destructive-verb census above: an extra mention anywhere
+    // else in SKILL.md is a model given a reason to consider the act.
+    // (`allow_update_branch` is spelled with underscores and is not a hit.)
+    const hits = skill.split('update-branch').length - 1;
+    const licensed = ABSORB.split('update-branch').length - 1;
+    expect(licensed, 'clause 16 no longer names update-branch to forbid it').toBe(1);
+    expect(hits, `update-branch appears ${hits}×; only clause 16 may name it`).toBe(licensed);
+  });
+
+  it('clause 16 names the probe with both halves of its conflict answer, the settings it never writes, and the regenerator', () => {
+    // A clause that said "exits 1" alone would license an absorb on a
+    // mistyped ref: git 2.43 exits 1 for `not something we can merge` too.
+    expect(ABSORB).toContain('git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD');
+    expect(ABSORB).toContain('exits 1 with a tree id on its first line');
+    expect(ABSORB).toContain('any other answer is unmeasured and licenses nothing');
+    // Spec §4's Worker row: settings writes are forbidden to the worker too.
+    expect(ABSORB).toContain('rulesets, branch protection, auto-merge setting or `allow_update_branch`');
+    // The STAMP line is taken, never the whole file: `ccd/ccd` is hand-written
+    // source carrying a stamp, and taking one side of the file would drop the
+    // other side's hunks. And the launcher by its PATH: `~/.local/bin` is not
+    // on the fleet session unit's PATH (this skill's own ccrc-api section).
+    expect(ABSORB).toContain('take either side of that line only');
+    expect(ABSORB).toContain('`~/.local/bin/ccrc restamp <file>`');
+  });
+
   it('carries no references of its own — the census corpus is the whole skill (D-103)', () => {
     // The plan's locked decision, made mechanical. Two things break the moment
     // a `references/` directory appears here: the duplicate-content ban (the
@@ -165,7 +353,8 @@ describe('the worker skill: its contract', () => {
     // `<config dir>/skills/ccrc-worker/` to the coordinator's own tree.
     for (const ref of ['../ccrc-coordinator/references/wave-lifecycle.md',
       '../ccrc-coordinator/references/mail-envelope.md',
-      '../ccrc-coordinator/references/peer-protocol.md']) {
+      '../ccrc-coordinator/references/peer-protocol.md',
+      '../ccrc-coordinator/references/routing-matrix.md']) {
       expect(skill, `the skill points at no ${ref}`).toContain(ref);
       expect(readFileSync(path.join(root, 'ccd/coordinator-skill',
         ref.replace('../ccrc-coordinator/', '')), 'utf8').length,
@@ -196,6 +385,39 @@ describe('the worker skill: its contract', () => {
     expect(fm.toLowerCase()).toContain(
       'never use it to coordinate a program — a worker that starts dispatching ' +
       'has become a coordinator without a ledger');
+    // #361: a subagent working in a worker's, reviewer's or coordinator's workspace meets this
+    // skill's own trigger word for word, so the description excludes it in so many words.
+    expect(fm.toLowerCase()).toContain(
+      'never use it inside a subagent — a session started by another session\'s agent tool or a workflow agent() call is a subagent, whatever its brief names, and returns its report to its parent without acking, claiming or sending mail.');
+  });
+
+  it('reads a fix-round mail with no report in its two forms: an ejection under clause 16, a red the PR owns with no absorb (landing order wave 5b; review 1302 F2)', () => {
+    const text = skill.replace(/\s+/g, ' ');
+    expect(text).toContain('A `fix-round` mail whose first line reads `ejected: dequeued:#<pr>` or `ejected: new-head:#<pr>` has no report and no `artifacts`: it is clause 16\'s ejection, and its three body lines are your whole brief.');
+    expect(text).toContain('Absorb the `base:` sha with `git merge`, then fix only the `paths:` it names; on `ejected: new-head:#<pr>` the merge is the whole round, with nothing else in it.');
+    expect(text).toContain('If the new-head merge does not apply cleanly, run `git merge --abort`, push nothing (clause 9) and ask, as clause 5 says: resolving a conflict is not that round\'s work.');
+    expect(text).toContain('A `fix-round` mail whose first line reads `red: #<pr>` has no report, no `artifacts` and no `base:`: its `checks:` line is your whole brief, so fix the named checks on this branch.');
+    expect(text).toContain('It licenses no absorb: clause 16\'s first two triggers still apply to it, and its third does not.');
+    expect(text).toContain('naming this run): usually a review run read your wave and the coordinator ruled.');
+    expect(text).toContain('Report a FRESH wave-done as for any fix round.');
+    expect(text, 'a new-head round again fixes its checks too (review 1302)').not.toContain('then fix only the `paths:` or `checks:` it names');
+  });
+
+  it('pins the whole fix-round bullet, from its heading to the end of the file, so no sentence can widen a report-less round (review 1303 F2; the fix-round pin)', () => {
+    const from = skill.indexOf('- **A `fix-round` mail arrives**');
+    expect(from, 'the worker skill lost its fix-round bullet').toBeGreaterThanOrEqual(0);
+    const whole = [
+      '- **A `fix-round` mail arrives** (kind `status`, from the coordinator, naming this run): usually a review run read your wave and the coordinator ruled.',
+      'The report at the path in the mail\'s `artifacts`, plus the rulings in its body, is your brief for the round.',
+      'Ack it (clause 3), fix on this workspace\'s own branch (clause 2), push once (clause 20) and report a FRESH wave-done fingerprint (clause 9); never re-send the old numbers.',
+      'A `fix-round` mail whose first line reads `ejected: dequeued:#<pr>` or `ejected: new-head:#<pr>` has no report and no `artifacts`: it is clause 16\'s ejection, and its three body lines are your whole brief.',
+      'Absorb the `base:` sha with `git merge`, then fix only the `paths:` it names; on `ejected: new-head:#<pr>` the merge is the whole round, with nothing else in it.',
+      'If the new-head merge does not apply cleanly, run `git merge --abort`, push nothing (clause 9) and ask, as clause 5 says: resolving a conflict is not that round\'s work.',
+      'A `fix-round` mail whose first line reads `red: #<pr>` has no report, no `artifacts` and no `base:`: its `checks:` line is your whole brief, so fix the named checks on this branch.',
+      'It licenses no absorb: clause 16\'s first two triggers still apply to it, and its third does not.',
+      'Report a FRESH wave-done as for any fix round.',
+    ].join(' ');
+    expect(skill.slice(from).replace(/\s+/g, ' ').trim()).toBe(whole);
   });
 });
 
@@ -232,21 +454,31 @@ describe('the worker skill: the facts it states about the wire', () => {
     expect(skill, 'the skill should say the vocabulary is closed at eight').toContain('eight');
   });
 
+  it('never tells an idle worker a draft blocked its brief (D-5913)', () => {
+    const start = skill.indexOf('## When something is wrong');
+    expect(start).toBeGreaterThan(-1);
+    const rest = skill.slice(start + 1);
+    const next = rest.indexOf('\n## ');
+    const section = next === -1 ? rest : rest.slice(0, next);
+    expect(section, 'the retired draft-present refusal is named again').not.toContain('draft-present');
+  });
+
   it('states the delivery budget as the number the lane actually enforces', () => {
-    // `MAIL_MAX_ATTEMPTS` (shared/api.ts) is 6, and a worker whose input box is
-    // occupied has that many ticks before its brief parks unread. DERIVED from
-    // the constant rather than typed as a 6, so raising the ceiling turns this
-    // red — the clause-9-style literal pin above cannot see that change. The
-    // `draft-present` bullet is what satisfies it: a refused draft is a row
-    // that was NEVER delivered, which is the one lane this ceiling governs.
+    // `MAIL_MAX_ATTEMPTS` (shared/api.ts) is 6, and a worker whose pane blocks
+    // the lane (a menu, or a draft over its own held stash) has that many ticks
+    // before its brief parks unread. DERIVED from the constant rather than typed
+    // as a 6, so raising the ceiling turns this red — the clause-9-style literal
+    // pin above cannot see that change. The no-brief bullet is what satisfies
+    // it: a refused send is a row that was NEVER delivered, which is the one
+    // lane this ceiling governs (D-5913: a draft alone no longer refuses).
     expect(skill, 'the skill states a delivery budget the lane does not enforce')
       .toContain(`${MAIL_MAX_ATTEMPTS} attempts`);
   });
 
   /**
-   * The OTHER ceiling, harvested from `watch.ts`'s source text rather than
-   * imported: `MAIL_REPLAY_MAX_ATTEMPTS` is module-private there, and
-   * re-exporting it so a test could read it conveniently is the hole
+   * The OTHER ceiling, harvested from `coord/delivery.ts`'s source text rather
+   * than imported (ARCH-19 moved it there from `watch.ts`): importing it only so
+   * a test could read it conveniently is the hole
    * `PR_PHASES`' own docstring warns about at length. Harvest-and-compare is
    * this repo's established idiom for exactly that shape (`wsaudit.test.ts`,
    * and the coordinator suite's route/refusal scans). A rename or a deletion
@@ -254,9 +486,9 @@ describe('the worker skill: the facts it states about the wire', () => {
    */
   const REPLAY_CONST = 'MAIL_REPLAY_MAX_ATTEMPTS';
   const replayCeiling = ((): number => {
-    const src = readFileSync(path.join(root, 'server/src/watch.ts'), 'utf8');
-    const m = new RegExp(`^const ${REPLAY_CONST} = (\\d+);$`, 'm').exec(src);
-    if (!m) throw new Error(`watch.ts declares no ${REPLAY_CONST} — this harvest is ` +
+    const src = readFileSync(path.join(root, 'server/src/coord/delivery.ts'), 'utf8');
+    const m = new RegExp(`^export const ${REPLAY_CONST} = (\\d+);$`, 'm').exec(src);
+    if (!m) throw new Error(`coord/delivery.ts declares no ${REPLAY_CONST} — this harvest is ` +
       'looking at the wrong file, or the constant was renamed and the skill now cites a ghost');
     return Number(m[1]);
   })();
@@ -268,9 +500,9 @@ describe('the worker skill: the facts it states about the wire', () => {
     // The two lanes are deliberately separate in the delivery code, and
     // `MAIL_MAX_ATTEMPTS`'s own docstring is emphatic about it: that budget
     // "applies ONLY while a delivery's own `deliveredAt` is still null"
-    // (`watch.ts:170-186`), the park is gated on `d.deliveredAt === null`
-    // (`:2042`), and a delivered row that is merely never acked parks on
-    // `MAIL_REPLAY_MAX_ATTEMPTS` instead (`:207`, park at `:1981-1983`).
+    // (`coord/delivery.ts`), the park is gated on `d.deliveredAt === null`
+    // (`decideSendFailure`), and a delivered row that is merely never acked
+    // parks on `MAIL_REPLAY_MAX_ATTEMPTS` instead (`decideReplayCeiling`).
     //
     // D-105: clause 3's plan-locked content named the 6 for both, which
     // under-states a worker's real ack window by more than 3x AND calls a mail
@@ -562,5 +794,257 @@ describe('the worker skill: a plan in another repository (cross-repo wave 2)', (
       '/advance', '/close', '/dispatch']) {
       expect(section, `the foreign-plan section names ${forbidden}`).not.toContain(forbidden);
     }
+  });
+});
+
+describe('the worker skill: the routing clauses (routing slice 2)', () => {
+  const cap = (s: string): string => s[0]!.toUpperCase() + s.slice(1);
+
+  it('clause 14 names every subagent class the record admits, Opus for judgement, and Fable never', () => {
+    const c14 = CONTRACT[13]!;
+    for (const c of SUBAGENT_CLASSES) expect(c14, `clause 14 never names ${cap(c)}`).toContain(cap(c));
+    expect(c14).toContain('Opus at high');
+    expect(c14).toContain('Fable never as a fan-out worker');
+    expect(c14).toContain('../ccrc-coordinator/references/routing-matrix.md');
+    // the same rule outside the contract, where a reader lands from the skill's own section
+    expect(skill).toMatch(/## Routing your subagents[\s\S]{0,900}routing-matrix\.md/);
+  });
+
+  it('clause 15 spells every suite word and failure kind the parser admits, in the grammar it parses', () => {
+    const c15 = CONTRACT[14]!;
+    expect(c15).toContain(`\`suite: ${SUITE_WORDS.join('|')}\``);
+    expect(c15).toContain(`\`failure: ${FAILURE_KINDS.join('|')}\``);
+    for (const w of SUITE_WORDS) expect(c15).toMatch(new RegExp(`\\b${w}\\b`));
+    for (const k of FAILURE_KINDS) expect(c15).toMatch(new RegExp(`\\b${k}\\b`));
+  });
+
+  it('the wave-done section shows the two lines ABOVE the fingerprint, in a complete body', () => {
+    const section = skill.slice(skill.indexOf('## Reporting a wave-done'));
+    expect(section).toMatch(/```\nsuite: (green|red|unrun)\nfailure: (shallow|ceiling|unclear)\n\{"branchTip"/);
+    expect(section).toContain('one space');
+  });
+
+  it('states the SUBJECT as the exact byte string the signals read selects on, and sends that same string', () => {
+    // Review #1. `runSignals` (`server/src/coord/store.ts`) filters
+    // `... AND subject = ?` bound to `WAVE_DONE_SUBJECT` — an EQUALITY, not a
+    // prefix. So `wave-done (wave 3)` is not a variant spelling that still
+    // matches: it answers `waveDoneMails: 0, signals: null`, the FOURTH
+    // condition, which the `RunSignals` docstring defines as "no wave-done has
+    // arrived" and the coordinator reads as a wave that reported nothing. That
+    // is exactly the mechanism-defect-as-silence collapse the three answers per
+    // signal line exist to prevent, one level up, where no vocabulary covers
+    // it. Nothing in the contract governs the subject — clause 15 governs the
+    // BODY — so the prose sentence and the worked JSON ARE the contract, and
+    // both are derived from L0 here rather than matched as a literal: a change
+    // to `WAVE_DONE_SUBJECT`, to the sentence, or to the example reds this.
+    const section = skill.slice(skill.indexOf('## Reporting a wave-done'));
+    expect(section, 'the wave-done section no longer states the exact subject')
+      .toContain(`The subject is exactly \`${WAVE_DONE_SUBJECT}\``);
+    expect(skill, 'the worked mail-send JSON no longer carries the exact wave-done subject')
+      .toContain(`"subject":"${WAVE_DONE_SUBJECT}"`);
+  });
+
+  // The reclaim switch is the operator's alone (child-reclamation spec §5.8).
+  // ccd has no caller auth, so `ccd reclaim-pause --state on` from a session's
+  // own shell is a door the route's session gate cannot close — and the
+  // session most motivated to walk through it is the one whose workspace is
+  // about to be reclaimed. The skill names neither the verb nor the marker it
+  // writes (`reclaim-paused` contains the same token).
+  it('never names the reclaim switch — neither the route nor the bare ccd verb', () => {
+    expect(skill).not.toContain('reclaim-pause');
+  });
+
+  // The stall watch's level and quiet time are the operator's alone (stall-watch
+  // settings design 2026-10-05 §10). The skill never names the door that sets
+  // them.
+  it('never names the stall-watch settings door — the worker a check is about is the session most motivated to lower the watch', () => {
+    expect(skill).not.toContain('/api/coord/stall-watch');
+  });
+
+  // The collector switch is the operator's alone (path-identity spec 2026-10-12
+  // §5.6, §5.9). Settings, or the hand-touched legacy file, arms the deletion of
+  // temp roots that belong to dispatched workspaces like this one. The skill
+  // names neither of the route's two methods, nor that file, which is read here
+  // from its definer. The bare `collect-lane` token covers the route, the file
+  // and the generation journal at once.
+  it('never names the collector switch or its legacy file — the session whose temp root it removes is the one most motivated to arm or stop it', () => {
+    const words = ['/api/coord/collect-lane', 'GET /api/coord/collect-lane', 'POST /api/coord/collect-lane',
+      'COLLECT_LANE_LIVE_MARKER', COLLECT_LANE_LIVE_MARKER, 'collect-lane'];
+    const named = (text: string): string[] => words.filter((w) => text.includes(w));
+    expect(named(`${skill}\nPOST /api/coord/collect-lane\n`), 'CONTROL: a mention planted in a scratch copy is seen')
+      .toEqual(['/api/coord/collect-lane', 'POST /api/coord/collect-lane', 'collect-lane']);
+    expect(named(skill)).toEqual([]);
+  });
+});
+
+// ── Worker stall watch, wave 3 (spec 2026-09-29 §6.2) ────────────────────────
+// APPENDED at the foot. The stop clause exists for two measured stalls: S3, a
+// worker that ended its turn on a background shell that never reported, and S4,
+// one that counted an agent's interim completion as a wake. The verbatim pin
+// holds today's bytes; these rows hold the two properties through any later
+// rewording. They read SKILL.md and find the clause by its opening words, never
+// by its number, which §10 assigns at merge. The server half is `stall.ts`'s
+// kind map, whose comments cite this clause: a shell can wake a session and
+// never resumes one.
+describe('the stop clause names only wakes that wake (stall watch spec §6.2)', () => {
+  const stopClause = (): string | undefined =>
+    skill.split('\n').find((l) => /^\d+\. End a turn only on a wake you can name: /.test(l));
+
+  it('lists no background shell, Bash or Monitor among its wakes, and says a shell never is one (S3)', () => {
+    const line = stopClause();
+    expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
+    // The wake list is the first sentence after the colon.
+    const wakes = line!.slice(0, line!.indexOf('. ', line!.indexOf(': ')) + 1);
+    expect(wakes, 'the wake list lost its last member').toContain('or a timer the server accepted (`ccrc-api timer set`).');
+    // Case-insensitive, on word boundaries: a lowercase `monitor` or `bash` is the same dead wait.
+    const named = /\b(shell|bash|monitor)\b/i.exec(wakes)?.[1];
+    expect(named, `the wake list names ${named}: the wait S3 never woke from`).toBeUndefined();
+    expect(line).toContain('A background shell or Monitor is never that wake');
+    expect(STALL_WAKE_KINDS, 'stall.ts no longer counts a shell among the kinds that can wake a session')
+      .toContain('shell');
+    expect(STALL_RESUMING_KINDS, 'stall.ts now reads a shell as resuming the session, which the clause denies')
+      .not.toContain('shell');
+  });
+
+  it('does not count an agent that may resume on its own as a wake (S4)', () => {
+    const line = stopClause();
+    expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
+    expect(line).toContain(
+      'an agent whose completion says it may resume on its own has reported, and is not that wake either');
+  });
+
+  // Stall watch wave 7 (`stop-clause-wake-list-allowlist` (D-3806)): ledger R21
+  // F1 and R17 F2. The S3 row above scans for three words, so a rewording that
+  // names a background task, job or command, or says `shells`, passes it; the
+  // S4 row pins one sentence and never reads the list. These two read the wake
+  // list itself. The first is an allowlist: every member must be a mail that
+  // asks, a structured ask, or a background kind whose words map, one for one,
+  // to `stall.ts`'s STALL_RESUMING_KINDS. The second scans the list for any
+  // form of resume, the word S4's interim completion used.
+  // Where the stopping line sits (`wake-list-split-closes-and-joins` (D-3807),
+  // review 262 F3; the rows are D-3806's). Closed: a comma; a semicolon; an `or`
+  // or `and` before a determiner (a, an, any, the, your, one, another, other,
+  // some, every, each, its); an `or` or `and` before a bare plural ("or
+  // background jobs you started"); and an `or`, `and` or `background` after a
+  // background member's kinds, which the tail anchor on the `bg` shape refuses
+  // (none of the three may follow the `you`, `that` or `which` word). So a wake
+  // joined in any of those ordinary ways must match a member shape on its own.
+  // The anchor fails closed: a legitimate `and`, `or` or `background` in that
+  // tail reds too, so a rewording of that member must avoid those three words.
+  // The list splits on every comma, so kinds inside one background member are
+  // joined by `or` or `and` only, with no determiner: "a background agent,
+  // workflow or teammate" leaves a bare "a background agent" that matches no
+  // member shape, and reds on purpose. Not closed, known evasions, and the
+  // stated line (the coordinator rules no further chasing): any text after
+  // "asks" in the mail member that the split does not cut, such as "or all
+  // background jobs", "or until a timer fires", or a capitalised determiner
+  // (the split is case-sensitive); a coordination before "asks" ("a mail or
+  // reminder you set that asks for an answer"); other joins after a background
+  // member's kinds, such as "plus" or "as well as"; a `. ` inside a member, or
+  // a new sentence after the list, because wakeMembers and the S3 row both stop
+  // at the first `. `.
+  // A fourth member shape (`stop-clause-allowlist-admits-a-server-timer`, the
+  // timers piece of Overlord W1a, plan `w1a-timers.md` Task 12): a timer the
+  // server accepted, in those exact words and no others. The operator approved
+  // clause 17 naming it (spec C65, item 227) and the coordinator ruled the
+  // widening (review 2030 B1): it is a row the server keeps and the timers lane
+  // fires once as mail, so it wakes a session that sleeps or was renewed, which
+  // no background task does. "A timer", "a timer that fires" and "until a timer
+  // fires" are refused as members. "Or until a timer fires" after "asks" in the
+  // mail member stays the known evasion above: it names no timer anything
+  // accepted, and the shape below never reads it. The verdict is a predicate
+  // over one line, `stopClauseVerdict`, so the row applies it to the real clause
+  // and to fixtures (as the collector-switch row reads a scratch copy), and a
+  // widening reds on a fixture, not only when SKILL.md changes.
+  const wakeMembers = (line: string): string[] => {
+    const colon = line.indexOf(': ');
+    const list = line.slice(colon + 2, line.indexOf('. ', colon));
+    return list.split(
+      /;\s+|,\s+(?:(?:or|and)\s+)?|\s+(?:or|and)\s+(?=(?:an?|any|the|your|one|another|other|some|every|each|its)\s)|\s+(?:or|and)\s+(?=(?:background\s+)?[a-z]+s\s+(?:you|that|which)\b)/);
+  };
+  /** The word the clause uses for each kind `stall.ts` says resumes the session on its own. */
+  const RESUMING_WORD: Record<string, string> = { subagent: 'agent', workflow: 'workflow' };
+
+  /** The allowlist's verdict on one stop clause line: each problem it finds, in words, or none when every member is a mail
+   *  that asks, a structured ask, a background kind `stall.ts` reads as resuming the session, or a timer the server accepted. */
+  const stopClauseVerdict = (line: string): string[] => {
+    const allowed = new Set(Object.values(RESUMING_WORD));
+    const members = wakeMembers(line);
+    if (members.length <= 1) return ['the wake list split into nothing'];
+    const out: string[] = [];
+    for (const m of members) {
+      const mail = /^an? mail\b.*\basks?\b/i.test(m);
+      const ask = /^an? structured ask$/i.test(m);
+      const bg = /^an? background ((?:[a-z]+(?: or | and ))*[a-z]+) (?:you|that|which)\b(?:(?!\b(?:or|and|background)\b).)*$/i.exec(m);
+      // Case-sensitive (review 2064 F6): the verb is a command, and `CCRC-API TIMER SET` names none.
+      const timer = /^an? timer the server accepted \(`ccrc-api timer set`\)$/.test(m);
+      if ([mail, ask, bg !== null, timer].filter(Boolean).length !== 1) {
+        out.push(`the wake list member "${m}" is not a mail that asks, a structured ask, a background kind, or a timer the server accepted`);
+      }
+      for (const k of bg ? bg[1]!.split(/ or | and /) : []) {
+        if (!allowed.has(k.toLowerCase())) {
+          out.push(`the wake list counts a background ${k}, which is not the clause's word for any kind stall.ts reads as resuming the session (see RESUMING_WORD)`);
+        }
+      }
+    }
+    return out;
+  };
+  const TIMER_MEMBER = ', or a timer the server accepted (`ccrc-api timer set`). ';
+
+  it('admits only a mail that asks, a structured ask, a kind stall.ts says resumes the session, or a timer the server accepted (S3, allowlist)', () => {
+    const line = stopClause();
+    expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
+    expect(Object.keys(RESUMING_WORD).sort(),
+      'stall.ts changed the kinds that resume a session: name the word the clause uses for each, or drop it')
+      .toEqual([...STALL_RESUMING_KINDS].sort());
+    expect(stopClauseVerdict(line!)).toEqual([]);
+  });
+
+  it.each([
+    ['a background shell', 'a background shell you started'], ['a Monitor', 'a Monitor you armed'], ['"a timer"', 'a timer'],
+    ['"a timer that fires"', 'a timer that fires'], ['"or until a timer fires"', 'until a timer fires'],
+    ['the timer member in upper case (review 2064 F6)', 'A TIMER THE SERVER ACCEPTED (`CCRC-API TIMER SET`)'],
+  ])('refuses a wake list that names %s in the timer\'s place (fixtures on the real clause)', (_name, member) => {
+    const line = stopClause()!;
+    expect(line, 'the real clause no longer names the timer as its last wake').toContain(TIMER_MEMBER);
+    const fixture = line.replace(TIMER_MEMBER, `, or ${member}. `);
+    expect(fixture).not.toBe(line);
+    expect(stopClauseVerdict(fixture), fixture.slice(0, fixture.indexOf('. ', fixture.indexOf(': ')) + 1)).not.toEqual([]);
+  });
+
+  it('names nothing that may resume on its own among its wakes (S4, scan)', () => {
+    const line = stopClause();
+    expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
+    const wakes = wakeMembers(line!).join(', ');
+    const said = /\bresum\w*/i.exec(wakes)?.[0];
+    expect(said, `the wake list says ${said}: an agent that may resume on its own has reported, and is no wake`)
+      .toBeUndefined();
+  });
+});
+
+describe('the worker skill: the Linear section links by the repository\'s visibility (D-8147)', () => {
+  const linear = skill.slice(skill.indexOf('\n## Linear\n'), skill.indexOf('\n## When something is wrong')).replace(/\s+/g, ' ');
+
+  it('the Linear section reads the rule with ccrc-api linking show', () => {
+    expect(linear).toContain('**Link every pull request for ticketed work, by the repository\'s visibility.**');
+    expect(linear).toContain('~/.local/bin/ccrc-api linking show');
+    expect(linear).toContain('`mode`');
+    expect(linear).toContain('`teamKey`');
+  });
+
+  it('a failed or odd read follows the public rule', () => {
+    expect(linear).toContain('If `linking show` fails or answers anything else, follow the `public` rule.');
+  });
+
+  it('it states both arms and both keywords', () => {
+    for (const w of ['`private`', '`public` or `unknown`', 'a dispatch\'s `slug` starts `key-123-`', '`Related: KEY-123`',
+      '`Closes KEY-123`', '`Refs KEY-123`', '`Closes #<n>`', '`Refs #<n>`', 'ccrc-api linear link <REF> --json -',
+      'never write a tracker id in the repository', 'ask, and do not guess one']) {
+      expect(linear, w).toContain(w);
+    }
+  });
+
+  it('it names no tracker id of this repository', () => {
+    expect(linear).not.toMatch(new RegExp(`\\b${['CCRC', 'P'].join('')}-[0-9]`));
   });
 });

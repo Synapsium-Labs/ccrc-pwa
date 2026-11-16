@@ -53,10 +53,11 @@ fi
 # (`deploy/deploy.sh`'s `rsync -az --delete`, interrupted; SKILL.md sorts
 # before `references/`) does not fail closed, it REPLACES a good install with
 # the fragment, exit 0, no stderr. Every file below is named by something a
-# live session reads: SKILL.md points at wave-lifecycle.md ("Read it before
-# the first dispatch of a program"), at ledger-template.md and
-# mail-envelope.md in the lifecycle steps, and at resume.md in the paragraph
-# on what survives this session's death; the WORKER skill points across at
+# live session reads: SKILL.md's map ("Where the procedures live") points at
+# wave-steps.md ("Read it before the first dispatch of a program"), at
+# wave-lifecycle.md (the index, which names each wave-lifecycle-*.md part),
+# at api.md, cross-project.md and resume.md, and names ledger-template.md and
+# mail-envelope.md among those the steps use; the WORKER skill points across at
 # peer-protocol.md (`../ccrc-coordinator/references/peer-protocol.md` — Build
 # 9 wave 8, D-214: it ships here because a skill's references install as one
 # unit and the worker ships none of its own). Every one of them missing is
@@ -68,8 +69,10 @@ fi
 # is the whole failure this guard exists for. What keeps it honest is
 # `wrapper-roster-fixture.test.ts`'s I8 row, which compares it against the real
 # directory in both directions; a fifth entry landed here in
-# program-leverage wave 1 only because that row went red first.
-REQUIRED_REFS=(ledger-template.md mail-envelope.md peer-protocol.md resume.md wave-lifecycle.md)
+# program-leverage wave 1 only because that row went red first. The row
+# covers every file there, not only the .md ones, so the mutation-run.py
+# helper is guarded like the prose.
+REQUIRED_REFS=(api.md cross-project.md delegated-worktrees.md ledger-template.md mail-envelope.md mutation-run.py peer-protocol.md plan.md resume.md review-brief.md review-panel.md routing-matrix.md wave-lifecycle-1-open.md wave-lifecycle-2-dispatch.md wave-lifecycle-3-mail.md wave-lifecycle-4-advance.md wave-lifecycle-5-boundary.md wave-lifecycle-5b-landing.md wave-lifecycle-6-final-merge.md wave-lifecycle-asks.md wave-lifecycle-mutation.md wave-lifecycle-run-care.md wave-lifecycle.md wave-steps.md)
 [[ -f "$SRC/SKILL.md" ]] || { echo "install-coordinator-skill: no SKILL.md under $SRC — refusing" >&2; exit 1; }
 for ref in "${REQUIRED_REFS[@]}"; do
   [[ -f "$SRC/references/$ref" ]] \

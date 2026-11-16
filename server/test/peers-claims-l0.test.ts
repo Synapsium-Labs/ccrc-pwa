@@ -154,10 +154,54 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly one import line, and it is a type', () => {
+  it('shared/api.ts has exactly twenty import lines: seventeen types, and three values from import-free L0 siblings (D-3021)', () => {
+    // Account-pool membership, release rollout, the box-token console card and
+    // the node role each added an L0 sibling shape, and the session's workflow
+    // rows (D-5560) a sixth, and the lane state's wire words (D-6058 (3)) a seventh, and the fleet health's disk block (D-6615) an eighth, and the landing checks mail token (a type-only import, `typeof import(...)` being forbidden) a tenth: no duplicate wire types.
+    // The reaping breadcrumb (ARCH-25, #531) a ninth, its parser a value: the rule this pin defends still
+    // holds, shared/api.ts pulls nothing into the PWA but L0, because reapcrumb.ts imports nothing
+    // (`reapcrumb.test.ts` pins that). The fleet health's host-pressure block (#1170) an
+    // eleventh, a type from the import-free pressure.ts. The landing line's wire answer (landing order wave 5e, its type moved here in 5f) a twelfth,
+    // `LandingWrite`, a type from the import-free landingLine.ts. The operator's waiting frame (programme ledgers PL4) a thirteenth, a type from
+    // ledgers.ts, which imports from api.ts only types and the run-state list: the import is erased, so nothing cycles.
+    // The fleet health's backup block (D-7858) a fourteenth, a type from the import-free backup.ts. The box settings' failure
+    // words (D-6916) a fifteenth, the `ReadFailure` type from agent-protocol.ts, which does import values from api.ts at run
+    // time: no cycle forms because this file's import is `import type`, erased at compile; and single-definition forbids
+    // restating the absent/unreadable pair.
+    // The test box connect routes (D-8166) a sixteenth, the verb's act and status types from testbox-admin.ts, which imports
+    // values from api.ts: the same `import type`, erased at compile, so again no cycle forms.
+    // The hook event union (D-8613) an eighteenth, `HookEvent` and its compare `hookEventIs`, a value from the import-free
+    // hook-events.ts (`single-definition/hook-events.test.ts` pins that it imports nothing).
+    // The list of what ccrc types (Overlord W1, the vocabulary piece) a nineteenth, `IDLE_COMPACT_NUDGE_PROMPT` and
+    // `RESUME_PROMPT_PREFIX`, values from the import-free injected-prompts.mjs, which `shared/api.ts` re-exports so no
+    // importer changes (`single-definition/injected-prompts.test.ts` and `time-ports.test.ts` hold that it reads nothing).
+    // The account facts (Overlord W1 serviceability A) a twentieth, `RosterFactsWire`, a type from the import-free
+    // rosterFacts.ts, which `RosterWire` extends as it extends `RosterKindWire`.
     const lines = readFileSync(apiPath, 'utf8').split('\n');
     const imports = lines.filter((l) => /^import\s/.test(l));
-    expect(imports).toEqual(["import type { Hue } from './roster.js';"]);
+    expect(imports).toEqual([
+      "import type { Hue, RosterKindWire } from './roster.js';",
+      "import type { RosterFactsWire } from './rosterFacts.js';",
+      "import type { AccountPoolWire } from './poolrule.js';",
+      "import type { BuildInfo } from './buildinfo.js';",
+      "import type { BoxTokenView } from './box-token.js';",
+      "import type { ReadFailure } from './agent-protocol.js';",
+      "import type { PerfHealth } from './perf.js';",
+      "import type { WorkflowView } from './workflows.js';",
+      "import type { WaitingView } from './ledgers.js';",
+      "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
+      "import type { LandingWrite } from './landingLine.js';",
+      "import { hookEventIs, type HookEvent } from './hook-events.js';",
+      "import { IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX } from './injected-prompts.mjs';",
+      "import type { NodeRole } from './node-role.js';",
+      // The sign-in's state words (accounts plan Task A21) join the same import-free `accounts.ts` line: no new import.
+      "import type { AccountStateAnswer, AuthMethod, AuthStatusState, LaneState } from './accounts.js';",
+      "import type { DiskHealth } from './disk.js';",
+      "import { parseReapCrumb, type ReapCrumb } from './reapcrumb.js';",
+      "import type { HostPressureHealth } from './pressure.js';",
+      "import type { BackupHealth } from './backup.js';",
+      "import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus, TestboxSettingChange } from './testbox-admin.js';",
+    ]);
   });
 });
 
@@ -167,7 +211,7 @@ describe('the wire shapes compile as declared (typecheck-tests carries the real 
       id: 'ccrc-pwa-quiet-river', uuid: null, project: 'ccrc-pwa',
       workspace: 'quiet-river', branch: 'feat/mirror-lens', wrapper: null,
       lifecycle: 'running', deliverable: 'yes',
-      archivedAt: null, archivedStale: false,
+      archivedAt: null, archivedStale: false, hibernatedAt: null,
       held: null, intent: null,
     };
     expect(peer.deliverable).toBe('yes');
@@ -181,7 +225,7 @@ describe('the wire shapes compile as declared (typecheck-tests carries the real 
       state: 'live', createdAt: 1_756_000_000_000, renewedAt: 1_756_000_000_000,
       expiresAt: 1_756_000_000_000 + CLAIM_LEASE_MS,
       hardExpiresAt: 1_756_000_000_000 + CLAIM_HARD_CAP_MS,
-      endedAt: null, endedBy: null,
+      endedAt: null, endedBy: null, chainedFrom: null,
     };
     const conflict: ClaimConflict = {
       path: 'server/src/coord/store.ts', claimedPath: 'server/src/coord',

@@ -26,7 +26,8 @@
 // WHAT THIS DOES NOT COVER, stated plainly rather than left to be assumed: the
 // scan recognises a call site by the literal text `CCD_ARGV.<name>(`, and a
 // gate by the literal text `verbSupported(` somewhere in the enclosing
-// function. Code that reaches `deps.runCcd` with an argv obtained some other
+// function, or (D-5866) a `ccdCan(<state>, '<row>')` there whose row emits
+// the call site's own verb. Code that reaches `deps.runCcd` with an argv obtained some other
 // way — a `CcdArgv` passed in as a parameter, an aliased `const A = CCD_ARGV`,
 // a table lookup `CCD_ARGV[k]` — is invisible to it, and a `verbSupported`
 // call in a sibling branch of the same function counts as a gate even if the
@@ -39,7 +40,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CCD_ARGV } from '../src/ccdargv.js';
+import { CCD_ARGV, CCD_CAN } from '../src/ccdargv.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const srcRoot = path.resolve(here, '..', 'src');
@@ -59,11 +60,108 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
   'start', 'enable', 'ensure', 'ws-add', 'stop', 'swap',
 ]);
 
+/**
+ * Verbs whose skew question is answered by a CAPABILITY token rather than by
+ * `verbSupported` at all. `route` is one of them:
+ * `routing spec 2026-09-14 §5.3`'s `POST /api/sessions/:id/route` handler
+ * gates on `capSupported(deps.fleetState, ROUTE_APPLY_CAP)` alone, the same
+ * pattern this file's sibling `ROUTE_ARGV_CAP`/`POOLS_CAP` call sites already
+ * use and already document (`server.ts`'s "REFUSE ON NO EVIDENCE —
+ * `capSupported`, never `verbSupported`" comment beside the `POOLS_CAP`
+ * cross-pool gate) — a literal `verbSupported(argv)` call there would be dead
+ * weight, not a second guarantee: `capSupported(ROUTE_APPLY_CAP)` can only
+ * read true when the deployed `cmd_caps` echoed `route-apply-v1`, and a box
+ * that echoes a FLAG capability for a verb necessarily emits the bare verb
+ * name in the same breath, so the base verb's presence is already implied.
+ * `verbSupported`'s permit-on-no-evidence default would in fact be WEAKER
+ * here than the `capSupported` refuse-on-no-evidence gate already sitting at
+ * that call site, so adding it would read as a second check while providing
+ * none.
+ *
+ * Scoped to exactly these verbs, not accepted blanket for every call site
+ * (`'ignores a bare capSupported for a verb outside the set'` below pins the
+ * boundary) — a verb whose skew is genuinely about ccd not knowing the VERB
+ * AT ALL (this branch's own `NEW_GENERATION` list) still needs a real
+ * `verbSupported` call, and widening this past named verbs would let a
+ * missing one hide behind an unrelated `capSupported` in the same function.
+ *
+ * The other two members argue the same way. `ws-reclaim` (child-reclamation
+ * wave 3): the executor composes it only behind
+ * `capSupported(deps.fleetState, RECLAIM_CAP)` — no `reclaim-v1` token, no
+ * argv. `reclaim-pause` (wave 4): its route gates on
+ * `capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)` alone. For both, a box
+ * that echoes the token necessarily dispatches the verb, so `route`'s
+ * argument above holds for each of them unchanged. `ws-expire` (workspace
+ * lifecycle wave 3b): the expiry executor composes it only behind
+ * `capSupported(deps.fleetState, EXPIRE_CAP)`, asked again in the act's own
+ * scope (`coord/expireArchived.ts`), and the same argument holds.
+ *
+ * The four Docs verbs (docs W2, spec 2026-10-01 section 2 (a)) argue it once more: a box that echoes `docs-v1`
+ * dispatches all four at their final arity, so the token is the gate, and `capSupported` refuses on no evidence where
+ * `verbSupported` would permit. Their two call-site functions (`docs/ccdsource.ts`'s `readDocs` and `fetchDocs`)
+ * carry the token check behind a `caps` arm of their own, which this scan does not read: `docs-source.test.ts` pins
+ * that arm by behaviour.
+ *
+ * `ws-collect` (child reclamation wave 9, spec 2026-09-22 §5.10) argues it once more: the collector lane's act job
+ * (`coord/collectTempRoot.ts`'s `collectTempRoot`) composes it only behind `capSupported(deps.fleetState, COLLECT_CAP)`,
+ * asked at the job's start and again after its last await. The job's own `ws-audit` is composed in `collectAudit`, a
+ * separate function, so this scope holds no `verbSupported(` and this entry is the act site's gate here; the second
+ * ask's place is pinned in `collect-lane-scans.test.ts`.
+ */
+const CAP_GATED_VERBS: ReadonlySet<string> = new Set([
+  'route', 'ws-reclaim', 'reclaim-pause', 'ws-expire', 'ws-collect', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'docs-log',
+  // D-6784: sent only behind the `pr-landing-v1` capability word (CCD_CAN's `capRow`); PL-4's lane is its one call site.
+  'pr-landing',
+]);
+
+/**
+ * Args that make each `CCD_ARGV` entry build without throwing, keyed by
+ * `CCD_ARGV` key — `VERB_OF` only needs `built[0]`, the literal verb string,
+ * so any well-shaped input works. The bare four-string probe below covers
+ * every entry except `routeSet`, whose SECOND parameter is a `RouteFields`
+ * object (`ROUTE_WRITABLE_FIELDS.filter((f) => fields[f] !== undefined)`,
+ * `src/ccdargv.ts`): a bare string `'x'` indexes to `undefined` for every
+ * field name, `pairs.length` comes out 0, and `routeSet` throws by design
+ * (`ccd route` refuses an argv with no `--set` pair) — at MODULE LOAD, before
+ * a single test in this file runs, which is why this suite's own redness was
+ * indistinguishable from the branch's routing changes until measured
+ * (fix round 1, finding #2). This is a TEST-HARNESS fix only: `routeSet`'s
+ * throw is correct production behaviour for a real empty-fields caller, and
+ * nothing about it changes here.
+ */
+const PROBE_ARGS: Partial<Record<string, readonly unknown[]>> = {
+  routeSet: ['x', { effort: 'x' }, null],
+  // `wsTitle`'s second parameter is a `WsTitleChange` object, not a string (named workspaces S9).
+  wsTitle: ['x', { title: 'x' }],
+  // An orphaned tree travels as even-length lowercase hex; the builders refuse anything else (D-6630). The probe passes valid hex so the table loads.
+  wsOrphanAudit: ['00'],
+  wsOrphan: ['x', '00', false, null],
+  wsShedDeps: ['x', 'child', false, null],
+  // Delegation broker wave 5 PR3: `wsAddWorkerBase` refuses a --base that is not a full commit id; the probe passes one.
+  wsAddWorkerBase: ['x', null, null, 7, 'a'.repeat(40), null, false],
+  // Delegation broker wave 5: `leaseMark` takes one object and refuses a value its verb would refuse as usage.
+  leaseMark: [{ leaseId: '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', generation: 2, project: 'demo', adminRecord: 'agent-a', parentId: 'lane-a-demo', parentIncarnation: '11111111-2222-4333-8444-555555555555', activityId: 'act-1', source: 'agent', state: 'adopted', journalSeq: 9, expiresAtMs: 1767225600000, releaseReason: null, promoted: null }],
+  // `leaseAudit` refuses a lease id that is not one and a generation below 1; the probe passes a valid pair so the table loads.
+  leaseAudit: ['0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', 1, false],
+  // A loose entry travels as even-length lowercase hex; the builders refuse anything else, which is correct production behaviour (D-6626). The probe passes valid hex so the table loads.
+  wsCollectLooseAudit: ['00'],
+  wsCollectLoose: ['x', '00', null],
+  // D-6784: `prLanding` takes a list of {id, pr} pairs, not a string.
+  prLanding: ['x', [{ id: 'x', pr: 1 }]],
+  // Landing order wave 5c: `prStatePr`'s pr number is checked (`PR_NUMBER_RE`), so the default probe `'x'` would throw at load.
+  prStatePr: ['x', 1],
+  // D-8147: `prTemplate` checks the team key against Linear's upper-case grammar, so the default probe `'x'` would throw at load.
+  prTemplate: ['x', 'KEY'],
+  // Overlord W1a (fresh start): `hibernate`'s fourth argument is a mode word (`sleep`, `roll` or `fresh`), not a flag, so the default probe `'x'` names no mode.
+  hibernate: ['x', null, null, 'sleep'],
+};
+
 /** `CCD_ARGV` key -> the verb it emits, taken from the table itself rather
  *  than from a second copy of the mapping that could disagree with it. */
 const VERB_OF: Record<string, string> = Object.fromEntries(
   Object.entries(CCD_ARGV).map(([k, fn]) => {
-    const built = (fn as (...a: unknown[]) => readonly string[])('x', 'x', 'x', 'x');
+    const args = PROBE_ARGS[k] ?? ['x', 'x', 'x', 'x'];
+    const built = (fn as (...a: unknown[]) => readonly string[])(...args);
     return [k, built[0] ?? ''];
   }),
 );
@@ -72,7 +170,7 @@ const VERB_OF: Record<string, string> = Object.fromEntries(
  *  position and newline so line numbers and brace depth stay true. Without
  *  this, `CCD_ARGV.ensure('x')` inside ccdargv.ts's own doc comment reads as a
  *  call site, and prose mentioning `verbSupported` reads as a gate. */
-function blankCommentsAndStrings(text: string): string {
+function blankCommentsAndStrings(text: string, keepStrings = false): string {
   const out = text.split('');
   const blank = (a: number, b: number): void => {
     for (let k = a; k < b; k++) if (out[k] !== '\n') out[k] = ' ';
@@ -96,7 +194,7 @@ function blankCommentsAndStrings(text: string): string {
         else if (text[j] === c) break;
         else j++;
       }
-      blank(i + 1, Math.min(j, text.length));
+      if (!keepStrings) blank(i + 1, Math.min(j, text.length));
       i = Math.min(j + 1, text.length);
     } else i++;
   }
@@ -128,10 +226,37 @@ function isHandlerHead(head: string): boolean {
   return /\)\s*(?::[^{]*)?\{\s*$/.test(head);
 }
 
-interface Site { file: string; line: number; key: string; verb: string; gated: boolean; scope: string | null }
+/** `body` is the scope with comments AND strings blanked; `src` blanks comments only, so a `ccdCan` row literal is
+ *  readable there (D-5866). */
+interface Site { file: string; line: number; key: string; verb: string; gated: boolean; scope: string | null; body: string; src: string }
+
+/** D-5866 (Task C1k): the verbs a `ccdCan(<state>, <row>)` call in `code[from, to)` asks about. The row is a
+ *  `CCD_ARGV` key, read from the ORIGINAL text at the call's own argument span (`code` has its strings blanked), so a
+ *  ternary between two rows (`ok ? 'wsHold' : 'wsRelease'`) gates both, and each row maps to its verb through
+ *  `VERB_OF`. A `ccdCan(` in a comment or a string is blanked in `code` and is never read. */
+function canVerbsIn(text: string, code: string, from: number, to: number): Set<string> {
+  const out = new Set<string>();
+  const re = /\bccdCan\s*\(/g;
+  re.lastIndex = from;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null && m.index < to) {
+    let end = m.index + m[0].length; let depth = 1;
+    while (end < code.length && depth > 0) {
+      if (code[end] === '(') depth++;
+      else if (code[end] === ')') depth--;
+      end++;
+    }
+    for (const r of text.slice(m.index, end).matchAll(/'([A-Za-z]\w*)'/g)) {
+      const verb = VERB_OF[r[1]!];
+      if (verb !== undefined) out.add(verb);
+    }
+  }
+  return out;
+}
 
 function scanCcdCallSites(text: string, file: string): Site[] {
   const code = blankCommentsAndStrings(text);
+  const prose = blankCommentsAndStrings(text, true);
   const depthStack: number[] = [];
   const chains: number[][] = new Array(code.length);
   for (let i = 0; i < code.length; i++) {
@@ -175,7 +300,7 @@ function scanCcdCallSites(text: string, file: string): Site[] {
       if (isHandlerHead(code.slice(lineStart(b), b + 1))) { open = b; break; }
     }
     if (open === null) {
-      sites.push({ file, line: lineOf(m.index), key, verb: VERB_OF[key] ?? key, gated: false, scope: null });
+      sites.push({ file, line: lineOf(m.index), key, verb: VERB_OF[key] ?? key, gated: false, scope: null, body: '', src: '' });
       continue;
     }
     let depth = 0; let end = code.length;
@@ -183,10 +308,16 @@ function scanCcdCallSites(text: string, file: string): Site[] {
       if (code[i] === '{') depth++;
       else if (code[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
     }
+    const verb = VERB_OF[key] ?? key;
+    const scopeText = code.slice(open, end);
     sites.push({
-      file, line: lineOf(m.index), key, verb: VERB_OF[key] ?? key,
-      gated: /verbSupported\s*\(/.test(code.slice(open, end)),
+      file, line: lineOf(m.index), key, verb,
+      gated: /verbSupported\s*\(/.test(scopeText)
+        || (CAP_GATED_VERBS.has(verb) && /capSupported\s*\(/.test(scopeText))
+        || canVerbsIn(text, code, open, end).has(verb),
       scope: text.slice(text.lastIndexOf('\n', open) + 1, open + 1).trim(),
+      body: scopeText,
+      src: prose.slice(open, end),
     });
   }
   return sites;
@@ -223,6 +354,26 @@ describe('the scanner itself', () => {
     expect(s!.gated).toBe(true);
   });
 
+  it('counts a bare capSupported( as the gate for a CAP_GATED_VERBS verb (fix round 1, finding #2)', () => {
+    const [s] = scanCcdCallSites(wrap(
+      `  app.post('/x', async (req, reply) => {\n    if (!capSupported(deps.fleetState, ROUTE_APPLY_CAP)) return reply.code(501).send({});\n    return run(reply, CCD_ARGV.routeApply(id, f, v, dec));\n  });`,
+    ), 'f.ts');
+    expect(s!.key).toBe('routeApply');
+    expect(s!.verb).toBe('route');
+    expect(s!.gated).toBe(true);
+  });
+
+  it('does NOT count a bare capSupported( as a gate for a verb outside CAP_GATED_VERBS', () => {
+    // The concession is scoped to named verbs, not blanket — otherwise an
+    // unrelated `capSupported` call anywhere in a handler could silence a
+    // genuinely missing `verbSupported` check on a brand-new verb.
+    const [s] = scanCcdCallSites(wrap(
+      `  app.post('/x', async (req, reply) => {\n    if (!capSupported(deps.fleetState, POOLS_CAP)) return reply.code(501).send({});\n    return run(reply, CCD_ARGV.wsArchive(id));\n  });`,
+    ), 'f.ts');
+    expect(s!.verb).toBe('ws-archive');
+    expect(s!.gated).toBe(false);
+  });
+
   it('does not count a NEIGHBOURING route\'s gate as this route\'s gate', () => {
     // The scope is the handler, not the file: two adjacent routes are exactly
     // the shape that shipped broken, so a scanner that read file-wide would
@@ -252,6 +403,27 @@ describe('the scanner itself', () => {
     const [ungated] = scanCcdCallSites(wrapped('  return deps.runCcd(CCD_ARGV.wsArchive(id));'), 'f.ts');
     expect(ungated!.scope).not.toBeNull();
     expect([ungated!.key, ungated!.gated]).toEqual(['wsArchive', false]);
+  });
+
+  // D-5866 (Task C1k): `ccdCan(state, row)` is a gate for the verb its ROW emits, never for another verb.
+  it('counts a ccdCan( as the gate for its own row\'s verb', () => {
+    const [s] = scanCcdCallSites(wrap(`  app.post('/x', async (req, reply) => {\n    const argv = CCD_ARGV.wsArchive(id);\n    if (!ccdCan(deps.fleetState, 'wsArchive')) return reply.code(501).send({});\n    return run(reply, argv);\n  });`), 'f.ts');
+    expect(s!.gated).toBe(true);
+  });
+
+  it('does NOT count a ccdCan( for another row\'s verb as this site\'s gate', () => {
+    const [s] = scanCcdCallSites(wrap(`  app.post('/x', async (req, reply) => {\n    const argv = CCD_ARGV.wsArchive(id);\n    if (!ccdCan(deps.fleetState, 'wsReclaim')) return reply.code(501).send({});\n    return run(reply, argv);\n  });`), 'f.ts');
+    expect(s!.gated).toBe(false);
+  });
+
+  it('a ccdCan( over a ternary of two rows gates both rows\' sites', () => {
+    const sites = scanCcdCallSites(wrap(`  app.post('/x', async (req, reply) => {\n    const argv = ok ? CCD_ARGV.wsHold(id, r, null) : CCD_ARGV.wsRelease(id, null);\n    if (!ccdCan(deps.fleetState, ok ? 'wsHold' : 'wsRelease')) return reply.code(501).send({});\n    return run(reply, argv);\n  });`), 'f.ts');
+    expect(sites.map((x) => [x.key, x.gated])).toEqual([['wsHold', true], ['wsRelease', true]]);
+  });
+
+  it('a ccdCan( named only in a comment or a string is not a gate', () => {
+    const [s] = scanCcdCallSites(wrap(`  app.post('/x', async (req, reply) => {\n    // ccdCan(deps.fleetState, 'wsArchive')\n    const note = "ccdCan(deps.fleetState, 'wsArchive')";\n    return run(reply, CCD_ARGV.wsArchive(id));\n  });`), 'f.ts');
+    expect(s!.gated).toBe(false);
   });
 
   it('ignores a call site and a gate that are only mentioned in a comment', () => {
@@ -309,11 +481,114 @@ describe('every ccd call site in server/src answers the version-skew question', 
     // `verbSupported`'s permit-on-no-evidence default means a route that forgets
     // the gate sends it to a box that answers `die "usage: ..."` -> 502 "the tag
     // failed", which reads as a broken feature rather than an old fleet host.
-const NEW_GENERATION = ['pr-state', 'pr-open', 'ws-archive', 'ws-restore', 'ws-audit', 'ws-reap', 'project-pool'];
+    // `ws-reclaim` (child reclamation, wave 3) joins too: its one call site
+    // (`coord/childReclaim.ts`'s `childReclaimAct`) is gated by
+    // `capSupported(RECLAIM_CAP)` — CAP_GATED_VERBS above — because a verb
+    // that never existed must REFUSE on no evidence, and `verbSupported`
+    // permits on none. Named here so the site cannot vanish or lose its gate.
+    // The four Docs verbs (docs W2) join for `ws-reclaim`'s reason: each is gated by `capSupported(DOCS_CAP)` in
+    // CAP_GATED_VERBS above, and naming them here reds a vanished call site or a lost gate.
+    // `docs-log` (docs W5b-1) joins the Docs verbs for the same reason: gated by `ccdCan`'s `docsLog` row (`DOCS_LOG_CAP`),
+    // so naming it reds a vanished call site or a lost gate.
+    // `ws-collect` (child reclamation wave 9) joins for the same reason: naming it reds a vanished act site or a lost gate.
+    // `project-add` (add-project spec 2026-11-04 §4) joins for `project-pool`'s reason: its one site is
+    // `planProjectAdd` (`projectAdd.ts`), gated by `ccdCan`'s `verbRow`, and naming it reds a vanished site or a lost gate.
+const NEW_GENERATION = ['pr-state', 'pr-open', 'ws-archive', 'ws-restore', 'ws-audit', 'ws-reap', 'project-pool',
+  'ws-reclaim', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'docs-log', 'ws-collect', 'project-add'];
     for (const verb of NEW_GENERATION) {
       const sites = ALL_SITES.filter((s) => s.verb === verb);
       expect(sites.length, `${verb} has no call site at all`).toBeGreaterThan(0);
       expect(sites.filter((s) => !s.gated).map(show), verb).toEqual([]);
     }
+  });
+});
+
+// Child reclamation wave 9 (spec 2026-09-22 §5.10). The collector's audit is the OLD verb `ws-audit`, so the scan
+// above already requires `verbSupported(` in its scope. The FLAG's question, `collect-v1`, is asked there too, as
+// `learnExpiry` asks `EXPIRE_CAP` before its audit: a box that stopped advertising the token is never audited. The
+// one site is the executor's `collectAudit`, which the learning audit and the act job both call.
+// `ws-audit` itself is never added to CAP_GATED_VERBS.
+describe('every wsCollectAudit( scope asks the collector’s capability too (spec §5.10)', () => {
+  // D-5866 (Task C1k): the collector's gate is `capSupported(…, COLLECT_CAP)` or `ccdCan(<state>, 'wsCollect')`, read
+  // on `src` (comments blanked, the row literal kept); no other row and no other token.
+  const COLLECT_GATE = /capSupported\s*\(\s*[\w.]+\s*,\s*COLLECT_CAP\s*\)|ccdCan\s*\(\s*[\w.]+\s*,\s*'wsCollect'\s*\)/;
+  const AUDIT_VERB_GATE = /verbSupported\s*\(|ccdCan\s*\(\s*[\w.]+\s*,\s*'wsCollectAudit'\s*\)/;
+  const sites = ALL_SITES.filter((s) => s.key === 'wsCollectAudit');
+
+  it('CONTROL: the gate pattern sees the call, not another token, and not prose', () => {
+    expect(COLLECT_GATE.test('if (!capSupported(deps.fleetState, COLLECT_CAP)) return x;')).toBe(true);
+    expect(COLLECT_GATE.test('if (!capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)) return x;')).toBe(false);
+    expect(COLLECT_GATE.test("if (!ccdCan(deps.fleetState, 'wsCollect')) return x;")).toBe(true);
+    expect(COLLECT_GATE.test("if (!ccdCan(deps.fleetState, 'wsReclaim')) return x;"), 'another row is not the collector\'s gate').toBe(false);
+    expect(COLLECT_GATE.test("if (!ccdCan(deps.fleetState, 'wsCollectAudit')) return x;"), 'the audit row is not the token').toBe(false);
+    expect(AUDIT_VERB_GATE.test("if (!ccdCan(deps.fleetState, 'wsCollectAudit')) return x;")).toBe(true);
+    expect(AUDIT_VERB_GATE.test("if (!ccdCan(deps.fleetState, 'wsCollect')) return x;")).toBe(false);
+    const [s] = scanCcdCallSites('export function f(deps: D) {\n  // capSupported(deps.fleetState, COLLECT_CAP)\n'
+      + '  return deps.runCcd(CCD_ARGV.wsCollectAudit(id));\n}\n', 'f.ts');
+    expect(COLLECT_GATE.test(s!.src), 'a comment is not a gate').toBe(false);
+    const [c] = scanCcdCallSites("export function f(deps: D) {\n  // ccdCan(deps.fleetState, 'wsCollect')\n"
+      + '  return deps.runCcd(CCD_ARGV.wsCollectAudit(id));\n}\n', 'f.ts');
+    expect(COLLECT_GATE.test(c!.src), 'a commented ccdCan is not a gate').toBe(false);
+  });
+
+  it('the one site is the executor’s collectAudit, shared by the learning audit and the act job', () => {
+    expect([...new Set(sites.map((s) => s.file))]).toEqual(['coord/collectTempRoot.ts']);
+    expect(sites.length).toBe(1);
+  });
+
+  it('each holds capSupported(…, COLLECT_CAP) and verbSupported( in its own scope', () => {
+    expect(sites.filter((s) => !COLLECT_GATE.test(s.src)).map(show)).toEqual([]);
+    expect(sites.filter((s) => !AUDIT_VERB_GATE.test(s.src)).map(show)).toEqual([]);
+  });
+});
+
+// D-5866 (Task C1k; ARCH-71 #806). `CCD_CAN` is the one table `ccdCan(state, row)` answers from, keyed by `CCD_ARGV`
+// row name. These rows hold it to this file's own vocabulary, so the table and the scan above cannot disagree.
+describe('CCD_CAN agrees with the verb-gate vocabulary (D-5866)', () => {
+  const rows = Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[];
+
+  it('every CCD_ARGV row has a CCD_CAN entry, and CCD_CAN names no other row', () => {
+    // The type-level half: `CCD_CAN satisfies Record<keyof typeof CCD_ARGV, CanRow>` in `ccdargv.ts`, so a row with
+    // no entry is a compile error there too. This is the runtime half.
+    expect(Object.keys(CCD_CAN).sort()).toEqual([...rows].sort());
+  });
+
+  it('every CAP_GATED_VERBS verb\'s CCD_CAN rows default to refuse', () => {
+    const wrong = rows.filter((r) => CAP_GATED_VERBS.has(VERB_OF[r]!))
+      .filter((r) => { const c = CCD_CAN[r]; return c === 'none' || c.default !== 'refuse'; });
+    expect(wrong).toEqual([]);
+    expect(rows.filter((r) => CAP_GATED_VERBS.has(VERB_OF[r]!)).length, 'CONTROL: the filter found rows').toBeGreaterThan(0);
+  });
+
+  /** Rows of an ungated-by-decision verb that carry a FLAG an older ccd does not know, so the row is gated by that flag's
+   *  capability (refuse on no evidence) while the verb's other rows stay ungated. Delegation broker wave 5 PR3: `ws-add`'s
+   *  `--base`, which an older ccd binds as the project (D-6164). */
+  const FLAG_GATED_ROWS: ReadonlySet<string> = new Set(['wsAddWorkerBase']);
+
+  it('a row is ungated (\'none\') exactly when its verb is in UNGATED_BY_DECISION', () => {
+    expect(rows.filter((r) => !FLAG_GATED_ROWS.has(r))
+      .filter((r) => (CCD_CAN[r] === 'none') !== UNGATED_BY_DECISION.has(VERB_OF[r]!))).toEqual([]);
+  });
+
+  it('W5-G17e: a flag-gated row of an ungated verb refuses on no evidence, and is the only exception', () => {
+    for (const r of FLAG_GATED_ROWS) {
+      expect(rows, r).toContain(r);
+      expect(UNGATED_BY_DECISION.has(VERB_OF[r]!), `${r}'s verb is ungated by decision`).toBe(true);
+      const c = CCD_CAN[r as keyof typeof CCD_CAN];
+      expect(c !== 'none' && c.default === 'refuse', `${r} refuses on no evidence`).toBe(true);
+    }
+    expect([...FLAG_GATED_ROWS]).toEqual(['wsAddWorkerBase']);
+  });
+
+  it('a permitting row is answered by its own verb name, spelled as the builder spells it', () => {
+    // A `permit` row's token is the verb `ccd caps` lists (`verbSupported`'s question). Held equal to the builder's
+    // first argv word here, so the verb is not a second, drifting spelling.
+    const drift = rows.filter((r) => { const c = CCD_CAN[r]; return c !== 'none' && c.default === 'permit' && c.token !== VERB_OF[r]; });
+    expect(drift).toEqual([]);
+  });
+
+  it('a refusing row is answered by a capability token, never by its bare verb name', () => {
+    const bare = rows.filter((r) => { const c = CCD_CAN[r]; return c !== 'none' && c.default === 'refuse' && c.token === VERB_OF[r]; });
+    expect(bare).toEqual([]);
   });
 });

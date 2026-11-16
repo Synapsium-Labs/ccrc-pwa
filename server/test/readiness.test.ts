@@ -221,14 +221,14 @@ describe('projectReadiness — the per-project compose', () => {
 // On the live topology `CCRC_FLEET=remote` is standing config, so `deps.io` is
 // the agent-backed FleetIO: handing it `cfg.mailTokenPath` asks the FLEET
 // box's agent to read a path that describes the SERVER box. The agent's read
-// whitelist has no `.ccrc` arm, so the refusal arrives as `unreadable` ->
+// whitelist admits only eight `.ccrc` node files, never `mail.token`, so the refusal arrives as `unreadable` ->
 // `unmeasurable` -> the verdict could never answer `ready` on the real fleet.
 // And whitelisting it would be worse, not better: the fleet host's own token
 // lives elsewhere, so the read would answer `absent` -> `blocked`, which is a
 // lie rather than an unknown.
 describe('the box token is measured on the SERVER box, not across the fleet', () => {
-  /** The production shape: a fleet io that refuses `.ccrc` exactly as the
-   *  agent whitelist does, beside a local io that can read the file. */
+  /** The production shape: a fleet io that refuses `.ccrc`'s secret files as
+   *  the agent does (which now admits the eight node files), beside a local io that can read the file. */
   const fleetRefusingCcrc: ReadDouble = {
     readFileMeasured: async (p: string) => (p.includes('.ccrc')
       ? { ok: false, reason: 'unreadable' } : { ok: true, content: 'x' }),

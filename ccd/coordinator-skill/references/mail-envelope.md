@@ -1,7 +1,12 @@
 # The envelope
 
-Your session is never typed a message directly — only a tiny one-line nudge
-pointing at `GET /api/mail?to=<you>` (`references/wave-lifecycle.md` §3). Each
+Your session is never typed a message directly — only a tiny one-line nudge.
+Read your mail with `~/.local/bin/ccrc-api mail inbox`, run bare (no pipe, no
+redirect, no `head` or `tail`; a piped run acks nothing): it prints each
+unacked delivery in the shape below, under `delivery:` and without the `ack:`
+lines, and acks each one it printed; its footer lists them, for
+`mail fetch <delivery>` (`references/wave-lifecycle.md` §3). The fallback is
+the list the older nudge points at, `GET /api/mail?to=<you>`. Each
 listed row carries a `deliveryId` — use THAT, never the row's `id`
 (`references/wave-lifecycle.md` §3, re-opened D-41) — for
 `GET /api/mail/<deliveryId>`, which is what returns one outstanding delivery:
@@ -40,6 +45,18 @@ answer it) now, rather than assuming a fresh copy will keep arriving. A
 delivery the lane gave up on this way still shows up on `GET
 /api/mail?to=<your id>` (`state: "rejected"`) — it was never acked and never
 acted on, so it stays visible there rather than silently disappearing.
+
+**Answering a peer's mail is outside the peer bound.** Mail with no `runId` is
+bounded at the door (`references/peer-protocol.md`), but a reply you were asked
+for is not: send it with `"kind":"answer"` and `"inReplyTo":<id>`, where `<id>`
+is the DELIVERY id of the mail you are answering, the same number you acked:
+the envelope's `id:` line, the inbox's `delivery:` line, `deliveryId` in
+`mail list`. Never the 202's `id` or a listed row's `id`: those are MAIL ids,
+and a wrong number silently falls back to the bound. The server checks that the
+delivery went to you, from the session you are replying to, and admits one
+reply per mail that way. Only an unasked mail invites: a reply to an invited
+reply, a reply to your own mail, a second reply, or one whose `inReplyTo` does
+not match is ordinary peer mail.
 
 **Artifacts are paths, never payloads.** Read the file; do not expect its
 contents in the body. The path above is **absolute**, because it is quoting
@@ -87,25 +104,55 @@ database:
   for does not move it.
 - `lastError` — how the last attempt failed. **Raw text**, never validated on
   the way in: four writers put four different kinds of thing there, one of them
-  a whole English sentence. Match the one value below; do not build a table off
+  a whole English sentence. Match the values below; do not build a table off
   it and do not show it to anyone as if it were written for them.
 
-### `lastError: "draft-present"` — the recipient's input box is occupied
+### A draft in the recipient's input box never blocks mail
 
-The worker has unsent text sitting in its Claude Code input box, so the lane
-refuses to type over it. It backs off and retries; it does **not** give up
-immediately. You will see `attempts` climb on every tick.
+A draft never stops mail. When the recipient has unsent text in its Claude
+Code input box, the lane saves it with Claude Code's own prompt stash
+(ctrl+s), types and submits the delivery, and checks that Claude Code restored
+the draft afterwards; the recipient sees `Draft restored`, and that is why.
+Nothing is typed over the draft and nothing clears it. A send that fails
+after the stash gives the draft back where it safely can; if a menu or an
+unreadable pane stops it, the stash stays held (the pane shows `stashed`) and
+Claude Code restores it at the next submit. There is no
+back-off for a draft: a row still carrying `lastError: "draft-present"` was
+refused before the lane stashed drafts.
+
+Two words say the stash itself could not be used. The lane types nothing onto
+the draft for either:
+
+- `lastError: "stash-occupied"` — the box holds a draft AND the recipient
+  already holds a stash of its own (ctrl+s; its pane shows `stashed`). A second
+  stash would destroy the first, so the lane refuses.
+- `lastError: "stash-failed"` — the lane pressed ctrl+s and the box never
+  emptied.
+
+Either one backs off and retries, as `dialog-open` (a menu on the pane) does;
+it does **not** give up immediately. You will see `attempts` climb on every
+tick.
 
 The budget is **6 attempts**, and it applies only to a delivery that has never
-been delivered at all. At the sixth the lane parks it `state: "rejected"` and
-stops. That is deliberate — a message that can never land should not retry for
-the life of the box — but a park means your brief was never read.
+been delivered at all. At the sixth the lane **parks** it — and a park is not a
+give-up while the recipient session is alive: the delivery stays outstanding
+(`state: "queued"`, with a `parkedAt` time on `GET /api/mail`), and the lane
+delivers it the moment the worker's input box changes (the draft sent or
+cleared), or on its own retry every 10 minutes. It is rejected
+(`state: "rejected"`) only when the recipient is gone for good, its run closes,
+or it has sat parked for 24 hours.
 
 **One failure parks on the FIRST attempt, not the sixth:** `enter-ignored`,
-where the lane typed your message into a never-delivered row's box and the
-session swallowed both Enters. The text is sitting there whole, so re-injecting
-would type the entire envelope a second time underneath the first. Do not wait
-for a count to climb on that one.
+where the lane typed the nudge into a never-delivered row's box and the session
+swallowed both Enters. The nudge is sitting there whole, so the lane never
+types it again. Every 10 minutes it presses Enter on that nudge once more, only
+after checking that the box still holds exactly its own text, and it delivers
+at once if the box is submitted or cleared in between.
+
+**You are told.** When a message YOU sent parks, you get a system mail from
+`operator` with the subject `mail parked: <your subject>`, saying why and what
+will land it — and `mail rejected: <your subject>` if it ever hits the 24-hour
+ceiling. The operator is told once too, about 15 minutes in.
 
 What to do, in order:
 
@@ -114,23 +161,26 @@ What to do, in order:
    the worker's own input box, the one the delivery lane types into, which is
    **not** the composer you type into on that screen. Nothing you can do to the
    mail row fixes it.
-2. **If the text in the box is the worker's own half-typed message**, it is
-   theirs. Ask them to send or discard it. Do not replace it.
+2. **If the lane refused `stash-occupied`**, the worker holds a stash of its
+   own under a fresh draft, and both are theirs. Ask them to send or pop one
+   of them. Do not replace either.
 3. **If the box holds a stranded `/clear`**, the lane may clear that one itself
    on the next attempt — but only where it can **prove** the `/clear` is its
    own: a dispatch of this run typed it and had it swallowed, the box still
    holds nothing but that single line, and **no message has landed in that box
    since**. That last one is what spends the proof: a delivery that lands is
    how the lane knows the box it had proof about was emptied, so the first
-   message through clears the wedge and every one after it is refused like any
-   other draft. The characters alone prove nothing,
+   message through clears the wedge and every one after it is stashed and
+   restored like any other draft. The characters alone prove nothing,
    because they are four an operator plausibly types and leaves sitting, so a
-   `/clear` with no such record behind it is treated as the operator's and
-   refused. Assume nothing will be cleared for you; check the screen.
-4. **If the delivery has already parked**, send the message again with
-   `POST /api/mail` once the box is clear. The park is terminal for that
-   delivery, not for the conversation: the mail row is untouched and nothing you
-   said is lost.
+   `/clear` with no such record behind it is treated as the operator's
+   draft: stashed, never cleared. Assume nothing will be cleared for you; check the screen.
+4. **If the delivery has parked**, do not send it again: clearing the box is
+   enough, and the lane delivers it on its own. Only a delivery that was
+   REJECTED (`state: "rejected"` — its recipient gone, its run closed, or 24 h
+   parked) needs a fresh `POST /api/mail`. Even then the rejection is terminal
+   for that delivery, not for the conversation: the mail row is untouched and
+   nothing you said is lost.
 
    You do not have to do that for a report addressed to the CHAIR after the
    operator hands the program to a new coordinator. That handover queues the new
@@ -145,10 +195,11 @@ What to do, in order:
    rather than to the chair, or for a report the new coordinator can already
    read. The door itself is the operator's, and this corpus does not name it.
 
-You do not have to poll for any of this. The first `draft-present` back-off and
-the park each raise **one** notification addressed to you, the sender — the
-first one only, not one per tick, because the tray is not a ticker. What stays
-live across every back-off is `attempts` on the delivery row.
+You do not have to poll for any of this. The park raises **one** notification
+addressed to you, the sender, and a draft or stash back-off before it raises
+none, because the tray is not a ticker. (A nudge held while the recipient waits
+out a usage limit, `auto-continue-armed`, tells you once per hold.) What stays live across every back-off is `attempts` on
+the delivery row.
 
 ### A queued brief is not a delivered brief
 
@@ -166,6 +217,6 @@ when there is one to report.
   as briefed only when the worker acks the mail.
 
 A wave that has gone quiet after a dispatch that answered `ok` is very often
-this: the brief is queued, the box is occupied, and the worker has been sitting
+this: the brief is queued, the pane is blocked, and the worker has been sitting
 with nothing to do. Read `attempts` and `lastError` on the delivery before
 assuming the worker is stuck on the work.

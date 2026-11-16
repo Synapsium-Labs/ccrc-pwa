@@ -1,0 +1,1388 @@
+// codex-bridge-count-stats.test.ts — D24's count estimator (`ccd/codexbridge/count.py`), the stats file
+// (`ccd/codexbridge/stats.py`) and the known names (`ccd/codexbridge/known.py`); codex-bridge Stage 2 plan 2026-10-22,
+// Task 5; spec 2026-10-15 §2.7 ("It records every request's real prompt size and every context refusal, per route and
+// model, in a non-secret stats file"), §2.9 D3 ("Names only, never content"), D24 ("seeded at 3.5 bytes per token,
+// rounded up"), and the plan's D-6418 (D3's names go to the stats file).
+//
+// Every case runs the package through `runBridgeDriver`'s `count`, `known` and `stats-*` ops in a mkTmp HOME, with the
+// stats file in a lane directory this file makes 0700 (as the tier's start does), and both endpoint variables at a
+// closed loopback URL: nothing here makes a request. Model ids are neutral, lanes are `lane-a`/`lane-b`, and the
+// `x-codex-` headers used here are fixture names under that prefix, never the usage poller's own names, except in the
+// one case that lists the header names the live probe measured (D-7083): names only, never their values.
+import { describe, it, expect } from 'vitest';
+import {
+  mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, existsSync, lstatSync, symlinkSync,
+} from 'node:fs';
+import path from 'node:path';
+import { pythonOrSkip } from './ccgptHarness.js';
+import { mkTmp } from './tmpHelpers.js';
+import { driverLines, runBridgeDriver } from './codexBridgeFixture.js';
+
+const PY = pythonOrSkip();
+
+it('this box has a usable python3', () => {
+  if (process.env.CI) expect(PY).toBeTruthy();
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Line = Record<string, any>;
+
+const MODEL = 'model-6.1-alpha';
+const ROUTE_KEY = `backend/${MODEL}`;
+const STATS = 'bridge.stats.json';
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/** A fixture HOME with a 0700 lane directory; the stats file's path inside it. */
+function lane(prefix: string): { home: string; dir: string; file: string } {
+  const home = mkTmp(prefix);
+  const dir = path.join(home, 'lane');
+  mkdirSync(dir, { mode: 0o700 });
+  return { home, dir, file: path.join(dir, STATS) };
+}
+
+async function run(home: string, ops: object[], o: { consts?: Record<string, unknown> } = {}): Promise<Line[]> {
+  const r = await runBridgeDriver(home, { ops, ...(o.consts ? { consts: o.consts } : {}) }, {}, { timeoutMs: 60_000 });
+  expect(r.timedOut, r.stderr).toBe(false);
+  const lines = driverLines(r.stdout);
+  expect(lines.map((l) => l.op), `${r.stdout}\n${r.stderr}`).toEqual(ops.map((o) => (o as { op: string }).op));
+  for (const l of lines) expect(l.raised, JSON.stringify(l)).toBeUndefined();
+  return lines;
+}
+
+/** One Stats method call through the driver's single Stats object. */
+const call = (method: string, args: unknown[] = [], kwargs: Record<string, unknown> = {}): object =>
+  ({ op: 'stats-call', method, args, kwargs });
+const open = (file: string, laneId = 'lane-a', extra: Record<string, unknown> = {}): object =>
+  ({ op: 'stats-open', path: file, lane: laneId, ...extra });
+const readDoc = (file: string): Line => JSON.parse(readFileSync(file, 'utf8')) as Line;
+
+describe.skipIf(!PY)('D24, the count estimator (codex-bridge spec §2.7, D24)', () => {
+  it('a fresh route estimates at 3.5 bytes per token, rounded up', async () => {
+    const { home, file } = lane('cb-count-fresh-');
+    const [c, , ratio] = await run(home, [
+      { op: 'count', estimate: [[7001, 3.5], [7000, 3.5], [1, 3.5], [0, 3.5]] },
+      open(file),
+      call('ratio', ['backend', MODEL]),
+    ]);
+    expect(c.consts.SEED_BYTES_PER_TOKEN).toBe(3.5);
+    expect(c.estimate).toEqual([2001, 2000, 1, 1]);
+    expect(ratio.result).toBe(3.5);
+  });
+
+  it('the ratio follows measured usage and stays clamped', async () => {
+    const { home, file } = lane('cb-count-ratio-');
+    const [c, , , ratio] = await run(home, [
+      { op: 'count', ratio: [[3.5, 40_000, 10_000], [3.5, 40_000, 999], [8.0, 1_000_000, 1000], [1.0, 100, 10_000]] },
+      open(file),
+      call('usage', ['backend', MODEL, 40_000, 10_000], { image_count: 0 }),
+      call('ratio', ['backend', MODEL]),
+    ]);
+    expect(c.consts).toMatchObject({ ALPHA: 0.2, RATIO_MIN: 1.0, RATIO_MAX: 8.0, CALIBRATE_MIN_TOKENS: 1000 });
+    expect(c.ratio[0]).toBeCloseTo(3.6, 12); // 3.5 + 0.2 × (4.0 − 3.5)
+    expect(c.ratio[1]).toBe(3.5); // under 1,000 input tokens: unchanged
+    expect(c.ratio[2]).toBe(8.0); // a sample of 1,000 bytes per token stays at the ceiling
+    expect(c.ratio[3]).toBe(1.0); // a sample of 0.01 stays at the floor
+    expect(ratio.result).toBeCloseTo(3.6, 12);
+    // And iterated, 40 extreme samples each way (100 and 0.01 bytes per token): the average reaches the bound and
+    // stays on it, never past it.
+    const [walk] = await run(home, [{ op: 'count', ratioWalk: [[3.5, 100_000, 1000, 40], [3.5, 100, 10_000, 40]] }]);
+    expect(walk.ratioWalk[0]).toBe(8.0);
+    expect(walk.ratioWalk[1]).toBe(1.0);
+  });
+
+  it('the estimate errs high after calibration on a skewed sample', async () => {
+    const { home } = lane('cb-count-ceil-');
+    // One sample of 5 bytes per token moves the seed to 3.8; 7001 / 3.8 = 1842.37…, so the estimate is 1843.
+    const [c] = await run(home, [{ op: 'count', ratio: [[3.5, 50_000, 10_000]] }]);
+    const r = c.ratio[0] as number;
+    expect(r).toBeCloseTo(3.8, 12);
+    const bytes = [7001, 12_345, 99_999, 3];
+    const [e] = await run(home, [{ op: 'count', estimate: bytes.map((b) => [b, r]) }]);
+    bytes.forEach((b, i) => {
+      expect(e.estimate[i]).toBe(Math.ceil(b / r));
+      expect(e.estimate[i]).toBeGreaterThan(b / r);
+    });
+    expect(e.estimate[0]).toBe(1843);
+  });
+
+  it('an image adds IMAGE_TOKENS to the estimate', async () => {
+    const { home } = lane('cb-count-image-');
+    const [c] = await run(home, [{ op: 'count', estimate: [[7001, 3.5, 2], [0, 3.5, 1]] }]);
+    expect(c.consts.IMAGE_TOKENS).toBe(1600);
+    expect(c.estimate).toEqual([2001 + 2 * 1600, 1600]);
+  });
+});
+
+describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)', () => {
+  it('the stats file is 0600, atomic and version 1', async () => {
+    const { home, dir, file } = lane('cb-stats-file-');
+    const [o, , first, before, , throttled, second, after] = await run(home, [
+      open(file, 'lane-a', { umask: 0o277 }),
+      call('name', ['requestField', 'metadata']),
+      call('flush', [], { force: true }),
+      { op: 'stats-file', path: file },
+      call('outcome', ['2xx']),
+      call('flush'),
+      call('flush', [], { force: true }),
+      { op: 'stats-file', path: file },
+    ]);
+    expect(first.result).toBe(true);
+    // An unforced flush inside FLUSH_S (10 s) of the last one writes nothing; a forced one does.
+    expect(throttled.result).toBe(false);
+    expect(second.result).toBe(true);
+    // Each write is a new file renamed over the old one (a new inode), with no tmp file left beside it.
+    expect(before.mode).toBe(0o600);
+    expect(after.mode).toBe(0o600);
+    expect(after.ino).not.toBe(before.ino);
+    expect(before.dir).toEqual([STATS]);
+    expect(after.dir).toEqual([STATS]);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dir)).toEqual([STATS]);
+    const doc = readDoc(file);
+    expect(Object.keys(doc).sort()).toEqual([
+      'lane', 'lastUpstreamRequestId', 'names', 'outcomes', 'parity', 'refusals', 'routes', 'since', 'startedAt',
+      'store', 'unexplained', 'updatedAt', 'usageHeaders', 'version',
+    ]);
+    expect(doc.parity).toEqual({}); // D-8618: the parity section, empty until a response is measured
+    expect(doc.store).toEqual({ state: 'ok', reason: null, at: null, setAside: null });
+    expect(doc.version).toBe(1);
+    expect(doc.lane).toBe('lane-a');
+    expect(doc.since).toMatch(ISO);
+    expect(doc.since).toBe(doc.startedAt); // an absent file starts fresh, since = startedAt
+    expect(doc.startedAt).toBe(o.doc.startedAt);
+    expect(doc.updatedAt).toMatch(ISO);
+    expect(doc.names).toEqual({ requestField: { metadata: 1 } });
+    expect(doc.outcomes).toEqual({ '2xx': 1 });
+    expect(doc.lastUpstreamRequestId).toBeNull();
+    expect(doc.usageHeaders).toBeNull();
+  });
+
+  it('the stats file throttles an unforced flush to FLUSH_S', async () => {
+    const { home, file } = lane('cb-stats-throttle-');
+    const [, , first, , early, , late] = await run(home, [
+      open(file),
+      call('outcome', ['2xx']),
+      call('flush'),
+      call('outcome', ['2xx']),
+      call('flush'),
+      { op: 'sleep', s: 0.3 },
+      call('flush'),
+    ], { consts: { 'stats.FLUSH_S': 0.2 } });
+    expect(first.result).toBe(true);
+    expect(early.result).toBe(false);
+    expect(late.result).toBe(true);
+    expect(readDoc(file).outcomes).toEqual({ '2xx': 2 });
+  });
+
+  it('a name is counted, never a value', async () => {
+    const { home, file } = lane('cb-stats-novalue-');
+    const SENTINEL = 'SENTINEL-VALUE-fx7';
+    await run(home, [
+      open(file),
+      call('name', ['requestField', 'temperature']),
+      call('name', ['requestField', 'temperature']),
+      call('header_names', [{ 'X-Fx-Sentinel': SENTINEL, 'Content-Type': `text/event-stream; charset=${SENTINEL}` }]),
+      call('usage_headers', [{ 'x-fx-other': SENTINEL, 'x-codex-fx-bad': `${SENTINEL}\u0001` }], { now: 1_000_000 }),
+      call('request_id', [`req ${SENTINEL}`]),
+      call('flush', [], { force: true }),
+    ]);
+    const raw = readFileSync(file, 'utf8');
+    expect(raw).not.toContain(SENTINEL);
+    const doc = readDoc(file);
+    expect(doc.names.requestField).toEqual({ temperature: 2 });
+    expect(doc.names.responseHeader).toEqual({ 'content-type': 1, 'x-fx-sentinel': 1 });
+    expect(doc.lastUpstreamRequestId).toBeNull();
+    expect(doc.usageHeaders).toBeNull();
+  });
+
+  it('a name outside NAME_RE is unrecognised', async () => {
+    const { home, file } = lane('cb-stats-namere-');
+    const [, , , , , snap] = await run(home, [
+      open(file),
+      call('name', ['eventType', 'has space']),
+      call('name', ['eventType', 'x'.repeat(65)]),
+      call('name', ['eventType', 'ok.name/1:2-3_4']),
+      call('name', ['eventType', '']),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.names.eventType).toEqual({ unrecognised: 3, 'ok.name/1:2-3_4': 1 });
+    expect(snap.doc.unexplained.eventType).toEqual(['ok.name/1:2-3_4', 'unrecognised']);
+  });
+
+  it('past 256 names a family counts overflow', async () => {
+    const { home, file } = lane('cb-stats-overflow-');
+    const ops: object[] = [open(file)];
+    for (let i = 0; i < 300; i += 1) ops.push(call('name', ['eventType', `response.fx_event_${i}`]));
+    ops.push(call('name', ['eventType', 'response.fx_event_0'])); // a name already held still counts as itself
+    ops.push({ op: 'stats-snapshot' });
+    const lines = await run(home, ops);
+    const names = lines[lines.length - 1].doc.names.eventType as Record<string, number>;
+    expect(Object.keys(names)).toHaveLength(257);
+    expect(names.overflow).toBe(44);
+    expect(names['response.fx_event_0']).toBe(2);
+    expect(names['response.fx_event_255']).toBe(1);
+    expect(names['response.fx_event_256']).toBeUndefined();
+  });
+
+  it('x-codex- headers are kept by prefix, others never', async () => {
+    const { home, file } = lane('cb-stats-headers-');
+    // A value longer than VALUE_MAX (64) is dropped, never cut: a cut number is a wrong number.
+    const [, , snap] = await run(home, [
+      open(file),
+      call('usage_headers', [{
+        'X-Codex-Fx-Alpha': '42.5', 'x-codex-fx-long': '1'.repeat(65), 'x-codex-fx-max': '1'.repeat(64),
+        'x-codex-fx-flag': 'true', 'x-codex-fx-ctl': '4\u00072', 'x-other-fx': '7', 'retry-after': '30',
+      }], { now: 1_700_000_000.25 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.usageHeaders).toEqual({
+      at: '2023-11-14T22:13:20.250Z',
+      values: { 'x-codex-fx-alpha': '42.5', 'x-codex-fx-max': '1'.repeat(64), 'x-codex-fx-flag': 'true' },
+    });
+  });
+
+  it('a name outside KNOWN is listed in unexplained', async () => {
+    const { home, file } = lane('cb-stats-unexplained-');
+    const [k] = await run(home, [{ op: 'known' }]);
+    const code = (k.known.errorCode as string[])[0];
+    const [, , , , , , , snap] = await run(home, [
+      open(file),
+      call('name', ['eventType', 'response.fx_new_event']),
+      call('name', ['eventType', 'response.metadata']),
+      call('name', ['errorCode', code]),
+      call('name', ['errorCode', 'fx_new_code']),
+      call('name', ['responseHeader', 'x-codex-fx-anything']),
+      call('name', ['contextEdit', 'clear_thinking_20251015']),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.unexplained).toEqual({ eventType: ['response.fx_new_event'], errorCode: ['fx_new_code'] });
+    expect(snap.doc.names.eventType).toEqual({ 'response.fx_new_event': 1, 'response.metadata': 1 });
+  });
+
+  // The backend's `keepalive` event, counted on the live lane's direct traffic (2026-10-27; D-7119): Codex yields no
+  // event for it and the bridge only names it (known.py#_BACKEND_EVENTS), so it is explained and the doctor stops
+  // naming it.
+  it("the backend's keepalive event is explained, and an unknown event beside it is not", async () => {
+    const { home, file } = lane('cb-stats-keepalive-');
+    const [, , , snap] = await run(home, [
+      open(file),
+      call('name', ['eventType', 'keepalive']),
+      call('name', ['eventType', 'response.fx_new_event']),
+      { op: 'stats-snapshot' },
+    ]);
+    // the control: both names were counted, so the unexplained list is about KNOWN, not a call that missed
+    expect(snap.doc.names.eventType).toEqual({ keepalive: 1, 'response.fx_new_event': 1 });
+    expect(snap.doc.unexplained.eventType).toEqual(['response.fx_new_event']);
+  });
+
+  // The 33 response header names every answer of runbook step 2 carried (2026-10-27, measured on the live probe's
+  // first step; D-7083), in the order the probe printed them, and the media-type name a 2xx stream with no content
+  // type counts. Unlike this file's other x-codex- names these are the backend's own: the case pins that the
+  // measured set is explained, so the doctor's drift row stays quiet on the backend's ordinary answers.
+  const MEASURED_HEADERS = [
+    'date', 'transfer-encoding', 'connection', 'server', 'x-codex-active-limit', 'x-codex-plan-type',
+    'x-codex-primary-used-percent', 'x-codex-secondary-used-percent', 'x-codex-primary-window-minutes',
+    'x-codex-primary-over-secondary-limit-percent', 'x-codex-secondary-window-minutes',
+    'x-codex-primary-reset-after-seconds', 'x-codex-secondary-reset-after-seconds', 'x-codex-primary-reset-at',
+    'x-codex-secondary-reset-at', 'x-codex-credits-has-credits', 'x-codex-credits-balance', 'x-codex-credits-unlimited',
+    'x-models-etag', 'x-codex-turn-state', 'x-codex-safety-buffering-enabled', 'x-codex-safety-buffering-faster-model',
+    'x-oai-request-id', 'x-openai-proxy-wasm', 'x-content-type-options', 'cf-cache-status', 'cross-origin-opener-policy',
+    'strict-transport-security', 'nel', 'report-to', 'set-cookie', 'referrer-policy', 'cf-ray',
+  ];
+  it('every response header name the live probe measured (runbook step 2) is explained', async () => {
+    expect(MEASURED_HEADERS).toHaveLength(33);
+    const { home, file } = lane('cb-stats-measured-');
+    const [, , , snap] = await run(home, [
+      open(file),
+      call('header_names', [Object.fromEntries(MEASURED_HEADERS.map((n) => [n, 'fx']))]),
+      call('name', ['responseHeader', 'content-type:absent']),
+      { op: 'stats-snapshot' },
+    ]);
+    // the control: every name was counted, so the empty unexplained list is about KNOWN, not a call that missed
+    expect(Object.keys(snap.doc.names.responseHeader).sort()).toEqual([...MEASURED_HEADERS, 'content-type:absent'].sort());
+    expect(snap.doc.unexplained.responseHeader).toBeUndefined();
+  });
+
+  // Claude Code 2.1.310's nine `anthropic-beta` values, measured on the live lane's first traffic after the flip
+  // (runbook step 4, 2026-10-27; D-7093), and `redact-thinking-2026-02-12`, Claude Code's `redact_thinking` beta, first
+  // seen on both lanes between 2026-10-29 and 2026-11-04 (ccd/codexbridge/known.py says why the bridge needs no
+  // action). Seven of the nine gate shapes the bridge never sends, answers itself or already counts by their own
+  // family; the other two, the tool-change betas, gate `tool_addition`/`tool_removal` blocks in a system entry, which
+  // inbound honours since D-7143 (ccd/codexbridge/inbound.py#_fold_tool_changes). All ten are explained, so the doctor is
+  // quiet on them.
+  const MEASURED_BETAS = [
+    'advanced-tool-use-2025-11-20', 'claude-code-20250219', 'context-management-2025-06-27',
+    'inline-tools-2026-09-15', 'interleaved-thinking-2025-05-14', 'mid-conversation-tool-changes-2026-07-01',
+    'redact-thinking-2026-02-12', 'thinking-display-updates-2026-08-18', 'thinking-token-count-2026-05-13',
+    'token-counting-2024-11-01',
+  ];
+  it("Claude Code's ten measured betas are explained, the two tool-change betas and redact_thinking among them (D-7143)", async () => {
+    expect(MEASURED_BETAS).toHaveLength(10);
+    const { home, file } = lane('cb-stats-betas-');
+    const all = [...MEASURED_BETAS, 'effort-2025-11-24'];
+    const out = await run(home, [open(file), ...all.map((b) => call('name', ['betaValue', b])), { op: 'stats-snapshot' }]);
+    const snap = out[out.length - 1];
+    // the control: every beta was counted, so the empty unexplained list is about KNOWN, not a call that missed
+    expect(Object.keys(snap.doc.names.betaValue).sort()).toEqual([...all].sort());
+    expect(snap.doc.unexplained.betaValue).toBeUndefined();
+  });
+
+  // The four response header names of the CDN edge's own HTML error page (lane-a, twice between 2026-10-29 and
+  // 2026-11-04): `content-type` carries its media type as a second name (server._media_type), so `text/html` is a name
+  // of its own. All four are explained, and a header name nobody has explained still lands in `unexplained`.
+  const EDGE_PAGE_NAMES = ['cache-control', 'expires', 'x-frame-options'];
+  it("the CDN edge page's four header names are explained, and a new header name is still not", async () => {
+    const { home, file } = lane('cb-stats-edge-');
+    const out = await run(home, [
+      open(file),
+      call('header_names', [Object.fromEntries(['server', 'cf-ray', 'content-type', ...EDGE_PAGE_NAMES].map((n) => [n, 'fx']))]),
+      call('name', ['responseHeader', 'content-type:text/html']),
+      { op: 'stats-snapshot' },
+    ]);
+    const snap = out[out.length - 1];
+    // the control: every name was counted, so the empty unexplained list is about KNOWN, not a call that missed
+    expect(Object.keys(snap.doc.names.responseHeader).sort()).toEqual(
+      ['server', 'cf-ray', 'content-type', ...EDGE_PAGE_NAMES, 'content-type:text/html'].sort());
+    expect(snap.doc.unexplained.responseHeader).toBeUndefined();
+
+    const next = lane('cb-stats-edge-new-');
+    const out2 = await run(next.home, [
+      open(next.file),
+      call('header_names', [{ 'x-fx-new-header': 'fx', 'cache-control': 'fx' }]),
+      call('name', ['responseHeader', 'content-type:text/xml']),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(out2[out2.length - 1].doc.unexplained.responseHeader).toEqual(['content-type:text/xml', 'x-fx-new-header']);
+  });
+
+  // The block names inbound counts for a system entry (ccd/codexbridge/inbound.py#@system-entry-dropped-blocks): the
+  // four it honours since D-7143 are explained; a block or tool it cannot type (`unrecognised`), a tool type it does
+  // not know, and a by-reference addition of a name nothing offers stay unexplained, so the doctor names each the day
+  // it arrives.
+  const HONOURED_BLOCKS = [
+    'tool_addition-block', 'tool_addition-block.tool_definition', 'tool_addition-block.tool_reference', 'tool_removal-block',
+  ];
+  const OPEN_BLOCKS = [
+    'future_fx-block', 'tool_addition-block.future_kind', 'tool_addition-block.unknown-reference',
+    'tool_addition-block.unrecognised', 'unrecognised-block',
+  ];
+  it('the honoured tool-change block names are explained, and the shapes the bridge cannot handle are not (D-7143)', async () => {
+    const { home, file } = lane('cb-stats-blocks-');
+    const all = [...HONOURED_BLOCKS, ...OPEN_BLOCKS];
+    const out = await run(home, [open(file), ...all.map((n) => call('name', ['requestField', n])), { op: 'stats-snapshot' }]);
+    const snap = out[out.length - 1];
+    // the control: every name was counted, so the unexplained list is about KNOWN, not a call that missed
+    expect(Object.keys(snap.doc.names.requestField).sort()).toEqual([...all].sort());
+    expect(snap.doc.unexplained.requestField).toEqual([...OPEN_BLOCKS].sort());
+  });
+
+  it('KNOWN covers every family, and its errorCode family is errors.ALL_CODES', async () => {
+    const { home } = lane('cb-stats-known-');
+    const [k, sets] = await run(home, [{ op: 'known' }, { op: 'sets' }]);
+    expect(k.families).toEqual([
+      'requestField', 'eventType', 'itemType', 'errorCode', 'incompleteReason', 'responseHeader', 'unsupportedField',
+      'modelSubstitution', 'betaValue', 'contextEdit', 'foreignSubstitution',
+    ]);
+    expect(Object.keys(k.known).sort()).toEqual([...k.families].sort());
+    expect(k.known.errorCode).toEqual(sets.ALL_CODES);
+    // Both substitution families are empty on purpose (known.py): a Claude Code fallback and a substitution from any
+    // other caller each warn under their own name, and neither is ever explained away.
+    expect(k.known.modelSubstitution).toEqual([]);
+    expect(k.known.foreignSubstitution).toEqual([]);
+    expect(k.known.contextEdit).toEqual(['clear_thinking_20251015']);
+    expect(k.known.eventType).toContain('response.metadata');
+    expect(k.known.eventType).toContain('keepalive');
+    expect(k.prefixes).toEqual({ responseHeader: ['x-codex-'] });
+  });
+
+  it('a flush that fails is retried, nothing lost', async () => {
+    const { home, dir, file } = lane('cb-stats-enospc-');
+    // A first good flush starts the FLUSH_S clock (10 s), so the retry below is inside it.
+    const [, , ok, , , failed, snap, onDisk, retried] = await run(home, [
+      open(file),
+      call('name', ['requestField', 'metadata']),
+      call('flush', [], { force: true }),
+      call('name', ['requestField', 'max_tokens']),
+      { op: 'stats-fault', call: 'fsync', errno: 'ENOSPC', times: 1 },
+      call('flush', [], { force: true }),
+      { op: 'stats-snapshot' },
+      { op: 'stats-file', path: file },
+      call('flush'),
+    ]);
+    expect(ok.result).toBe(true);
+    expect(failed.result).toBe(false);
+    expect(snap.doc.outcomes).toEqual({ 'stats:flush-failed': 1 });
+    expect(snap.doc.names.requestField).toEqual({ metadata: 1, max_tokens: 1 });
+    expect(onDisk.dir).toEqual([STATS]); // the failed attempt's tmp file was removed
+    expect(retried.result).toBe(true); // the next flush retries at once, inside FLUSH_S
+    expect(readdirSync(dir)).toEqual([STATS]);
+    const doc = readDoc(file);
+    expect(doc.names.requestField).toEqual({ metadata: 1, max_tokens: 1 });
+    expect(doc.outcomes).toEqual({ 'stats:flush-failed': 1 });
+  });
+
+  it('a restart keeps unconsumed refusals, the ratio, the counters and the unexplained list', async () => {
+    const { home, file } = lane('cb-stats-restart-');
+    const [first] = await run(home, [
+      open(file),
+      call('request', ['backend', MODEL, 40_000]),
+      call('usage', ['backend', MODEL, 40_000, 10_000], { image_count: 0 }),
+      call('refusal', ['backend', MODEL, 450_000, 400_000], { now: 1_700_000_000 }),
+      call('outcome', ['2xx']),
+      call('name', ['eventType', 'response.fx_new_event']),
+      call('flush', [], { force: true }),
+    ]);
+    const before = readDoc(file);
+    const [second, ratio] = await run(home, [open(file), call('ratio', ['backend', MODEL])]);
+    const doc = second.doc as Line;
+    expect(doc.since).toBe(first.doc.since);
+    expect(doc.startedAt).not.toBe(first.doc.startedAt);
+    expect(Date.parse(doc.startedAt)).toBeGreaterThan(Date.parse(first.doc.startedAt));
+    expect(doc.refusals).toEqual({
+      [ROUTE_KEY]: { tokens: 450_000, window: 400_000, at: '2023-11-14T22:13:20.000Z', estimated: true },
+    });
+    expect(doc.routes[ROUTE_KEY]).toMatchObject({ requests: 1, promptTokensMax: 10_000 });
+    expect(doc.routes[ROUTE_KEY].bytesPerToken).toBeCloseTo(3.6, 12);
+    expect(ratio.result).toBeCloseTo(3.6, 12);
+    expect(doc.outcomes).toEqual({ '2xx': 1 });
+    expect(doc.names).toEqual(before.names);
+    expect(doc.unexplained).toEqual({ eventType: ['response.fx_new_event'] });
+    // Nothing the load changed, so the file is the first process's until a flush.
+    expect(readDoc(file)).toEqual(before);
+  });
+
+  it('an other-lane or other-version file starts fresh and counts stats:reset', async () => {
+    for (const [label, body] of [
+      ['other lane', JSON.stringify({ version: 1, lane: 'lane-b', since: '2026-01-01T00:00:00.000Z', outcomes: { '2xx': 9 } })],
+      ['other version', JSON.stringify({ version: 2, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', outcomes: { '2xx': 9 } })],
+      ['unreadable', '{"version": 1, "lane": "lane-a", '],
+    ] as const) {
+      const { home, file } = lane('cb-stats-reset-');
+      writeFileSync(file, body, { mode: 0o600 });
+      const [o] = await run(home, [open(file)]);
+      expect(o.doc.outcomes, label).toEqual({ 'stats:reset': 1 });
+      expect(o.doc.since, label).toBe(o.doc.startedAt);
+      // The reset reached the file at construction, with no request and no flush call.
+      const doc = readDoc(file);
+      expect(doc.lane, label).toBe('lane-a');
+      expect(doc.version, label).toBe(1);
+      expect(doc.outcomes, label).toEqual({ 'stats:reset': 1 });
+    }
+  });
+
+  it('an image never moves the ratio', async () => {
+    const { home, file } = lane('cb-stats-image-');
+    const [, , snap] = await run(home, [
+      open(file),
+      call('usage', ['backend', MODEL, 80_000, 10_000], { image_count: 1 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.routes[ROUTE_KEY]).toMatchObject({ bytesPerToken: 3.5, promptTokensMax: 10_000, promptTokensLast: 10_000 });
+  });
+
+  it('a continued message never moves the ratio', async () => {
+    const { home, file } = lane('cb-stats-continued-');
+    const [, , , snap] = await run(home, [
+      open(file),
+      call('usage', ['backend', MODEL, 80_000, 10_000], { image_count: 0, continued: true }),
+      call('usage', ['backend', MODEL, 10_000, 2000], { image_count: 0, continued: true }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.routes[ROUTE_KEY]).toMatchObject({ bytesPerToken: 3.5, promptTokensMax: 10_000, promptTokensLast: 2000 });
+  });
+
+  it('a carried unexplained name that KNOWN now lists is dropped at load', async () => {
+    const { home, file } = lane('cb-stats-dropknown-');
+    const [k] = await run(home, [{ op: 'known' }]);
+    expect(k.known.eventType).toContain('response.metadata');
+    expect(k.known.eventType).not.toContain('response.fx_new_event');
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: { '2xx': 3 },
+      names: { eventType: { 'response.metadata': 1, 'response.fx_new_event': 1 } },
+      unexplained: { eventType: ['response.fx_new_event', 'response.metadata'] },
+      usageHeaders: null, lastUpstreamRequestId: null,
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o] = await run(home, [open(file)]);
+    expect(o.doc.unexplained).toEqual({ eventType: ['response.fx_new_event'] });
+    expect(o.doc.since).toBe('2026-01-01T00:00:00.000Z');
+    expect(o.doc.outcomes).toEqual({ '2xx': 3 });
+    // Read back with no request and no flush call after construction: the file no longer lists the explained name.
+    expect(existsSync(file)).toBe(true);
+    const doc = readDoc(file);
+    expect(doc.unexplained).toEqual({ eventType: ['response.fx_new_event'] });
+    expect(doc.since).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  // A version-1 file a bridge from before foreignSubstitution wrote has no such key: it loads as it is, no reset, and a
+  // carried modelSubstitution name stays unexplained (it leaves only when a reviewed change explains it). Additive:
+  // stats.VERSION stays 1.
+  it('a version-1 file with no foreignSubstitution key loads with no reset, and keeps a carried modelSubstitution name', async () => {
+    const { home, file } = lane('cb-stats-nofsub-');
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: { '4xx': 2 },
+      names: { modelSubstitution: { 'claude-opus-5-5': 2 } },
+      unexplained: { modelSubstitution: ['claude-opus-5-5'] },
+      usageHeaders: null, lastUpstreamRequestId: null,
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o, , snap] = await run(home, [open(file), call('name', ['foreignSubstitution', 'claude-sonnet-4-6']), { op: 'stats-snapshot' }]);
+    expect(o.doc.outcomes).toEqual({ '4xx': 2 });
+    expect(o.doc.since).toBe('2026-01-01T00:00:00.000Z');
+    expect(o.doc.names).toEqual(planted.names);
+    expect(o.doc.unexplained).toEqual({ modelSubstitution: ['claude-opus-5-5'] });
+    // Nothing the load changed, so the file is the old process's until a flush.
+    expect(readDoc(file)).toEqual(planted);
+    expect(snap.doc.names.foreignSubstitution).toEqual({ 'claude-sonnet-4-6': 1 });
+    expect(snap.doc.unexplained).toEqual({ foreignSubstitution: ['claude-sonnet-4-6'], modelSubstitution: ['claude-opus-5-5'] });
+  });
+
+  // The whole-wave fix round, Z1: `unrecognised` and `overflow` are markers, which no change to known.py can explain,
+  // so the load carries neither in `unexplained`; each comes back only when the bridge meets such a name again. A real
+  // unexplained name, and every `names` counter, is carried as before.
+  it('a restart clears the unrecognised and overflow markers, and carries a real unexplained name', async () => {
+    const { home, file } = lane('cb-stats-markers-');
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: {},
+      names: { eventType: { unrecognised: 2, 'response.fx_new_event': 1 }, responseHeader: { overflow: 3 } },
+      unexplained: { eventType: ['response.fx_new_event', 'unrecognised'], responseHeader: ['overflow'] },
+      usageHeaders: null, lastUpstreamRequestId: null,
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o, , snap] = await run(home, [open(file), call('name', ['eventType', 'x'.repeat(65)]), { op: 'stats-snapshot' }]);
+    expect(o.doc.unexplained).toEqual({ eventType: ['response.fx_new_event'] });
+    expect(o.doc.names).toEqual(planted.names);
+    // The load changed what it carried, so the file the doctor reads changed at the restart, with no flush call.
+    expect(readDoc(file).unexplained).toEqual({ eventType: ['response.fx_new_event'] });
+    // Met again, the marker is listed again.
+    expect(snap.doc.unexplained).toEqual({ eventType: ['response.fx_new_event', 'unrecognised'] });
+  });
+});
+
+// Review fix round 1 (Task 5): a case for each guard the task added beyond the plan's list, each with a measured
+// mutation row in the commit body.
+describe.skipIf(!PY)('the stats file\'s added guards (codex-bridge Stage 2, Task 5 fix round 1)', () => {
+  /** A valid lane-a version-1 file with one carried outcome, as raw text. */
+  const plantedValid = (): string => JSON.stringify({
+    version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: { '2xx': 9 }, names: {},
+    unexplained: {}, usageHeaders: null, lastUpstreamRequestId: null,
+  });
+
+  it('a ratio that is not a finite positive number estimates at the seed', async () => {
+    const { home } = lane('cb-count-badratio-');
+    const [c] = await run(home, [{
+      op: 'count',
+      estimate: [[7, 3.5], [7, 0], [7, -2], [7, { float: 'nan' }], [7, { float: 'inf' }], [7, true]],
+    }]);
+    // ceil(7 / 3.5) = 2, the seed's estimate, for every row.
+    expect(c.estimate).toEqual([2, 2, 2, 2, 2, 2]);
+  });
+
+  it('a carried field of the wrong type or range is not carried', async () => {
+    const { home, file } = lane('cb-stats-badfield-');
+    const at = '2026-01-02T00:00:00.000Z';
+    // Raw text, so a NaN reaches the loader as Python's json reads it.
+    const body = `{"version": 1, "lane": "lane-a", "since": "has space", "startedAt": "${at}", "updatedAt": "${at}",
+      "routes": {
+        "backend/model-fx-low": {"requests": "x", "bytesPerToken": 0.01, "promptTokensMax": -1, "promptTokensLast": 5},
+        "backend/model-fx-high": {"requests": 3, "bytesPerToken": 50, "promptTokensMax": 7},
+        "backend/model-fx-nan": {"requests": 2, "bytesPerToken": NaN, "promptTokensMax": 1},
+        "backend/model-fx-ok": {"requests": 4, "bytesPerToken": 4.5, "promptTokensMax": 9},
+        "has space/model-fx": {"requests": 1, "bytesPerToken": 4.5, "promptTokensMax": 1},
+        "nokey": {"requests": 1, "bytesPerToken": 4.5, "promptTokensMax": 1}
+      },
+      "refusals": {
+        "backend/model-fx-tokens": {"tokens": "x", "window": 1, "at": "${at}", "estimated": true},
+        "backend/model-fx-window": {"tokens": 1, "window": -5, "at": "${at}", "estimated": true},
+        "backend/model-fx-at": {"tokens": 1, "window": 1, "at": "has space", "estimated": true},
+        "has space/model-fx": {"tokens": 1, "window": 1, "at": "${at}", "estimated": true},
+        "backend/model-fx-ok": {"tokens": 5, "window": 6, "at": "${at}", "estimated": true}
+      },
+      "outcomes": {"2xx": "x", "has space": 1, "4xx": 2},
+      "names": {"eventType": {"has space": 1, "response.fx_a": "x", "response.fx_b": 3}},
+      "unexplained": {"eventType": ["response.fx_b", 7, "has space"]},
+      "usageHeaders": null, "lastUpstreamRequestId": null}`;
+    writeFileSync(file, body, { mode: 0o600 });
+    const [o] = await run(home, [open(file)]);
+    const doc = o.doc as Line;
+    expect(doc.since).toBe(doc.startedAt); // a since outside NAME_RE is not carried
+    expect(doc.routes).toEqual({
+      'backend/model-fx-low': { requests: 0, bytesPerToken: 3.5, promptTokensMax: 0, promptTokensLast: 0 },
+      'backend/model-fx-high': { requests: 3, bytesPerToken: 3.5, promptTokensMax: 7, promptTokensLast: 0 },
+      'backend/model-fx-nan': { requests: 2, bytesPerToken: 3.5, promptTokensMax: 1, promptTokensLast: 0 },
+      'backend/model-fx-ok': { requests: 4, bytesPerToken: 4.5, promptTokensMax: 9, promptTokensLast: 0 },
+    });
+    expect(doc.refusals).toEqual({ 'backend/model-fx-ok': { tokens: 5, window: 6, at, estimated: true } });
+    expect(doc.outcomes).toEqual({ '4xx': 2 });
+    expect(doc.names).toEqual({ eventType: { 'response.fx_b': 3 } });
+    expect(doc.unexplained).toEqual({ eventType: ['response.fx_b'] });
+  });
+
+  it('a symlink at the stats path is replaced, never followed', async () => {
+    const { home, file } = lane('cb-stats-symlink-');
+    const decoy = path.join(home, 'decoy.json');
+    writeFileSync(decoy, plantedValid(), { mode: 0o600 });
+    symlinkSync(decoy, file);
+    const [o] = await run(home, [open(file)]);
+    expect(o.doc.outcomes).toEqual({ 'stats:reset': 1 });
+    expect(readFileSync(decoy, 'utf8')).toBe(plantedValid());
+    expect(lstatSync(file).isSymbolicLink()).toBe(false);
+    expect(readDoc(file).outcomes).toEqual({ 'stats:reset': 1 });
+  });
+
+  it('a symlink at the tmp name is never written through', async () => {
+    const { home, dir, file } = lane('cb-stats-tmplink-');
+    const decoy = path.join(home, 'decoy.txt');
+    writeFileSync(decoy, 'DECOY', { mode: 0o600 });
+    symlinkSync(decoy, `${file}.tmp`);
+    const [, , failed, snap, retried] = await run(home, [
+      open(file),
+      call('name', ['requestField', 'metadata']),
+      call('flush', [], { force: true }),
+      { op: 'stats-snapshot' },
+      call('flush'),
+    ]);
+    expect(failed.result).toBe(false);
+    expect(snap.doc.outcomes).toEqual({ 'stats:flush-failed': 1 });
+    expect(retried.result).toBe(true);
+    expect(readFileSync(decoy, 'utf8')).toBe('DECOY');
+    expect(readdirSync(dir)).toEqual([STATS]);
+    expect(lstatSync(file).isSymbolicLink()).toBe(false);
+  });
+
+  it('a killed writer\'s leftover tmp file is overwritten, never left', async () => {
+    const { home, dir, file } = lane('cb-stats-staletmp-');
+    writeFileSync(`${file}.tmp`, 'partial', { mode: 0o600 });
+    await run(home, [open(file), call('outcome', ['2xx']), call('flush', [], { force: true })]);
+    expect(readdirSync(dir)).toEqual([STATS]);
+    expect(readDoc(file).outcomes).toEqual({ '2xx': 1 });
+  });
+
+  it('a stats file over READ_MAX starts fresh', async () => {
+    const { home, file } = lane('cb-stats-readmax-');
+    const size = Buffer.byteLength(plantedValid());
+    writeFileSync(file, plantedValid(), { mode: 0o600 });
+    const [at] = await run(home, [open(file)], { consts: { 'stats.READ_MAX': size } });
+    expect(at.doc.outcomes).toEqual({ '2xx': 9 });
+    writeFileSync(file, plantedValid(), { mode: 0o600 });
+    const [over] = await run(home, [open(file)], { consts: { 'stats.READ_MAX': size - 1 } });
+    expect(over.doc.outcomes).toEqual({ 'stats:reset': 1 });
+  });
+
+  it('a response keeps at most 64 x-codex- headers', async () => {
+    const { home, file } = lane('cb-stats-headersmax-');
+    const headers: Record<string, string> = {};
+    for (let i = 0; i < 65; i += 1) headers[`x-codex-fx-h${i}`] = String(i);
+    const [, , snap] = await run(home, [open(file), call('usage_headers', [headers], { now: 1_700_000_000 }),
+      { op: 'stats-snapshot' }]);
+    const values = snap.doc.usageHeaders.values as Record<string, string>;
+    expect(Object.keys(values)).toHaveLength(64);
+    expect(values['x-codex-fx-h63']).toBe('63');
+    expect(values['x-codex-fx-h64']).toBeUndefined();
+  });
+
+  it('an x-codex- value that is not a number or a boolean is never kept', async () => {
+    const { home, file } = lane('cb-stats-turnstate-');
+    const SENTINEL = 'SENTINEL-tok_fx1';
+    await run(home, [
+      open(file),
+      call('usage_headers', [{
+        'x-codex-fx-state': `${SENTINEL}AbCdEf0123`, 'x-codex-fx-promo': `${SENTINEL} free text`,
+        'x-codex-fx-percent': '12', 'x-codex-fx-flag': 'false',
+      }], { now: 1_700_000_000 }),
+      call('header_names', [{ 'x-codex-fx-state': `${SENTINEL}AbCdEf0123` }]),
+      call('flush', [], { force: true }),
+    ]);
+    const raw = readFileSync(file, 'utf8');
+    expect(raw).not.toContain(SENTINEL);
+    const doc = readDoc(file);
+    expect(doc.usageHeaders.values).toEqual({ 'x-codex-fx-percent': '12', 'x-codex-fx-flag': 'false' });
+    expect(doc.names.responseHeader).toEqual({ 'x-codex-fx-state': 1 }); // the name is still counted
+  });
+
+  it('a family outside FAMILIES counts stats:unknown-family and records nothing', async () => {
+    const { home, file } = lane('cb-stats-family-');
+    const [, , snap] = await run(home, [open(file), call('name', ['noSuchFamily', 'fx-name']),
+      { op: 'stats-snapshot' }]);
+    expect(snap.doc.outcomes).toEqual({ 'stats:unknown-family': 1 });
+    expect(snap.doc.names).toEqual({});
+    expect(snap.doc.unexplained).toEqual({});
+  });
+
+  it('a route key longer than 64 characters survives a restart', async () => {
+    const { home, file } = lane('cb-stats-longkey-');
+    const model = `model-${'x'.repeat(54)}`; // 60 characters, so `backend/<model>` is 68
+    const key = `backend/${model}`;
+    await run(home, [
+      open(file),
+      call('usage', ['backend', model, 40_000, 10_000], { image_count: 0 }),
+      call('refusal', ['backend', model, 450_000, 400_000], { now: 1_700_000_000 }),
+      call('flush', [], { force: true }),
+    ]);
+    const [second] = await run(home, [open(file)]);
+    expect(second.doc.routes[key]).toMatchObject({ promptTokensMax: 10_000 });
+    expect(second.doc.routes[key].bytesPerToken).toBeCloseTo(3.6, 12);
+    expect(second.doc.refusals[key]).toEqual({ tokens: 450_000, window: 400_000, at: '2023-11-14T22:13:20.000Z',
+      estimated: true });
+  });
+
+  it('a malformed argument is ignored, never raised into a request', async () => {
+    const { home, file } = lane('cb-stats-badarg-');
+    // `run` fails the case on any op that raised.
+    const [, , , , , snap] = await run(home, [
+      open(file),
+      call('usage', ['backend', MODEL, 'x', 10_000], { image_count: 0 }),
+      call('header_names', [null]),
+      call('usage_headers', [[1, 2]], { now: 1_700_000_000 }),
+      call('header_names', [[1, 2]]),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.routes[ROUTE_KEY]).toMatchObject({ bytesPerToken: 3.5, promptTokensMax: 10_000 });
+    expect(snap.doc.usageHeaders).toBeNull();
+    expect(snap.doc.names).toEqual({});
+  });
+});
+
+// Review fix round 2 (Task 5): the flush's write lock, a malformed `now` and header item, and the x-codex- value rule.
+// The `stats-race` op runs a flush whose fsync, once, lets a second thread make Stats calls while the write is in
+// flight; `duringFinished` says whether that thread ended inside the write.
+describe.skipIf(!PY)('the stats file\'s write lock and value rules (codex-bridge Stage 2, Task 5 fix round 2)', () => {
+  const race = (flush: Record<string, unknown>, during: object[], waitS: number): object =>
+    ({ op: 'stats-race', flush, during: during.map((c) => ({ args: [], kwargs: {}, ...c })), waitS });
+
+  it('a counter call returns while a flush\'s write is in fsync, and its change goes out with the next flush', async () => {
+    const { home, file } = lane('cb-stats-race-counter-');
+    const [, , r, next] = await run(home, [
+      open(file),
+      call('outcome', ['2xx']),
+      race({ force: true }, [{ method: 'outcome', args: ['fx-during'] }], 5),
+      call('flush'),
+    ], { consts: { 'stats.FLUSH_S': 0 } });
+    expect(r.result).toBe(true);
+    expect(r.duringFinished).toBe(true); // the counter never waited for the fsync
+    expect(r.duringRaised).toEqual([]);
+    expect(r.duringAlive).toBe(false);
+    expect(next.result).toBe(true); // the change made during the write stayed dirty
+    expect(readDoc(file).outcomes).toEqual({ '2xx': 1, 'fx-during': 1 });
+  });
+
+  it('an unforced flush while a write is in flight writes nothing, and its change goes out with the next one', async () => {
+    const { home, file } = lane('cb-stats-race-unforced-');
+    const [, , r, next] = await run(home, [
+      open(file),
+      call('outcome', ['2xx']),
+      race({ force: true }, [{ method: 'outcome', args: ['fx-during'] }, { method: 'flush' }], 5),
+      call('flush'),
+    ], { consts: { 'stats.FLUSH_S': 0 } });
+    expect(r.result).toBe(true);
+    expect(r.duringFinished).toBe(true); // the unforced flush did not wait for the write in flight
+    expect(r.duringResults).toEqual([null, false]);
+    expect(r.duringRaised).toEqual([]);
+    expect(next.result).toBe(true);
+    expect(readDoc(file).outcomes).toEqual({ '2xx': 1, 'fx-during': 1 });
+  });
+
+  it('a forced flush while a write is in flight waits for it, then writes', async () => {
+    const { home, dir, file } = lane('cb-stats-race-forced-');
+    const [, , r] = await run(home, [
+      open(file),
+      call('outcome', ['2xx']),
+      race({ force: true }, [{ method: 'outcome', args: ['fx-during'] }, { method: 'flush', kwargs: { force: true } }],
+        0.5),
+    ]);
+    expect(r.result).toBe(true);
+    expect(r.duringFinished).toBe(false); // it waited for the write in flight
+    expect(r.duringAlive).toBe(false);
+    expect(r.duringRaised).toEqual([]);
+    expect(r.duringResults).toEqual([null, true]);
+    expect(readDoc(file).outcomes).toEqual({ '2xx': 1, 'fx-during': 1 });
+    expect(readdirSync(dir)).toEqual([STATS]);
+  });
+
+  it('a malformed now reads as the wall clock, and a header item that is not a pair is skipped', async () => {
+    const { home, file } = lane('cb-stats-badnow-');
+    const [o, , , , , clock, early, , , snap] = await run(home, [
+      open(file),
+      call('refusal', ['backend', 'model-fx-str', 5, 6], { now: 'x' }),
+      call('refusal', ['backend', 'model-fx-nan', 5, 6], { now: { float: 'nan' } }),
+      call('refusal', ['backend', 'model-fx-big', 5, 6], { now: 1e300 }),
+      call('refusal', ['backend', 'model-fx-bool', 5, 6], { now: true }),
+      call('usage_headers', [{ 'x-codex-fx-a': '1' }], { now: 'x' }),
+      { op: 'stats-snapshot' }, // read before the next usage_headers call replaces the snapshot
+      call('header_names', [{ itemsOf: [['x-codex-fx-b', '2'], 7, ['a', 'b', 'c'], 'xy'] }]),
+      call('usage_headers', [{ itemsOf: [['x-codex-fx-c', '3'], 7, ['a', 'b', 'c'], 'xy'] }], { now: 1_700_000_000 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(clock.result).toBeNull();
+    const started = Date.parse(o.doc.startedAt as string);
+    const first = (early.doc as Line).usageHeaders as { at: string; values: Record<string, string> };
+    expect(first.values).toEqual({ 'x-codex-fx-a': '1' });
+    expect(first.at).toMatch(ISO);
+    expect(Date.parse(first.at)).toBeGreaterThanOrEqual(started - 1000); // the wall clock, never 1970
+    const doc = snap.doc as Line;
+    for (const model of ['model-fx-str', 'model-fx-nan', 'model-fx-big', 'model-fx-bool']) {
+      const at = doc.refusals[`backend/${model}`].at as string;
+      expect(at, model).toMatch(ISO);
+      expect(Date.parse(at), model).toBeGreaterThanOrEqual(started - 1000); // the wall clock, never 1970
+    }
+    expect(doc.names.responseHeader).toEqual({ 'x-codex-fx-b': 1 });
+    expect(doc.usageHeaders).toEqual({ at: '2023-11-14T22:13:20.000Z', values: { 'x-codex-fx-c': '3' } });
+  });
+
+  it('a near-miss number and a token header are never kept as x-codex- values', async () => {
+    const { home, file } = lane('cb-stats-nearmiss-');
+    // `x-codex-turn-state` is Codex's sticky-routing token (upstream openai/codex @ 092d3ac,
+    // codex-rs/core/src/client.rs:288-302); an all-digit value under it is still a token.
+    const TOKEN = '9081726354453627';
+    const headers = {
+      'x-codex-fx-near': '1-2', 'x-codex-fx-dots': '1..5', 'x-codex-fx-exp': '9e+e-', 'x-codex-fx-trail': '1.',
+      'x-codex-turn-state': TOKEN, 'x-codex-fx-ok': '1.5e-3', 'x-codex-fx-n': '-17',
+    };
+    await run(home, [
+      open(file),
+      call('usage_headers', [headers], { now: 1_700_000_000 }),
+      call('header_names', [headers]),
+      call('flush', [], { force: true }),
+    ]);
+    expect(readFileSync(file, 'utf8')).not.toContain(TOKEN);
+    const doc = readDoc(file);
+    expect(doc.usageHeaders.values).toEqual({ 'x-codex-fx-ok': '1.5e-3', 'x-codex-fx-n': '-17' });
+    expect(doc.names.responseHeader['x-codex-turn-state']).toBe(1); // the name is still counted
+  });
+});
+
+describe.skipIf(!PY)('the store entry: the reasoning store\'s state for this process (D-7677)', () => {
+  const STORE_OK = { state: 'ok', reason: null, at: null, setAside: null };
+  const COPY = 'reasoning.sqlite.damaged-20261028T120000Z';
+
+  it('the entry is reset at construction, never carried, while the outcomes are', async () => {
+    const { home, file } = lane('cb-stats-store-reset-');
+    writeFileSync(file, JSON.stringify({
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      outcomes: { 'store:DatabaseError': 3, 'store:set-aside': 1 },
+      store: {
+        state: 'disabled', reason: 'store:DatabaseError', at: '2026-01-01T00:00:01.000Z',
+        setAside: { at: '2026-01-01T00:00:00.500Z', found: 'integrity-check', file: COPY },
+      },
+    }), { mode: 0o600 });
+    const [o, , flushed] = await run(home, [open(file), call('flush', [], { force: true }), { op: 'stats-snapshot' }]);
+    expect(o.doc.store).toEqual(STORE_OK);
+    expect(o.doc.outcomes).toEqual({ 'store:DatabaseError': 3, 'store:set-aside': 1 });
+    expect(flushed.doc.store).toEqual(STORE_OK);
+    expect(readDoc(file).store).toEqual(STORE_OK);
+  });
+
+  it('a set-aside is recorded, and counted through the one method', async () => {
+    const { home, file } = lane('cb-stats-store-aside-');
+    const [, , snap] = await run(home, [
+      open(file),
+      call('store_event', ['store:set-aside', 'integrity-check', COPY], { now: 1_700_000_000 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.store).toEqual({
+      state: 'set-aside', reason: 'store:set-aside', at: '2023-11-14T22:13:20.000Z',
+      setAside: { at: '2023-11-14T22:13:20.000Z', found: 'integrity-check', file: COPY },
+    });
+    expect(snap.doc.outcomes).toEqual({ 'store:set-aside': 1 });
+  });
+
+  it('disabled outranks set-aside in either order, and setAside keeps its record', async () => {
+    for (const order of ['aside-first', 'disabled-first'] as const) {
+      const { home, file } = lane('cb-stats-store-rank-');
+      const aside = call('store_event', ['store:set-aside', 'DatabaseError', COPY], { now: 1_700_000_000 });
+      const failed = call('store_event', ['store:DatabaseError'], { now: 1_700_000_060 });
+      const [, , , snap] = await run(home, [
+        open(file), ...(order === 'aside-first' ? [aside, failed] : [failed, aside]), { op: 'stats-snapshot' },
+      ]);
+      expect(snap.doc.store, order).toEqual({
+        state: 'disabled', reason: 'store:DatabaseError', at: '2023-11-14T22:14:20.000Z',
+        setAside: { at: '2023-11-14T22:13:20.000Z', found: 'DatabaseError', file: COPY },
+      });
+      expect(snap.doc.outcomes, order).toEqual({ 'store:set-aside': 1, 'store:DatabaseError': 1 });
+    }
+  });
+
+  it('a set-aside that failed after its renames records the copy, and the store is disabled', async () => {
+    const { home, file } = lane('cb-stats-store-aside-failed-');
+    const [, , snap] = await run(home, [
+      open(file),
+      call('store_event', ['store:set-aside-failed', 'integrity-check', COPY], { now: 1_700_000_000 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.store).toEqual({
+      state: 'disabled', reason: 'store:set-aside-failed', at: '2023-11-14T22:13:20.000Z',
+      setAside: { at: '2023-11-14T22:13:20.000Z', found: 'integrity-check', file: COPY },
+    });
+    expect(snap.doc.outcomes).toEqual({ 'store:set-aside-failed': 1 });
+  });
+
+  it('a found or file outside NAME_RE is unrecognised, never written as given', async () => {
+    const { home, file } = lane('cb-stats-store-bound-');
+    const [, , snap] = await run(home, [
+      open(file),
+      call('store_event', ['store:set-aside', 'a found with spaces', '/an/absolute/path/to/a/copy'], { now: 1_700_000_000 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.store.setAside).toEqual({ at: '2023-11-14T22:13:20.000Z', found: 'unrecognised', file: 'unrecognised' });
+  });
+
+  it('a store event makes the next unforced flush write at once, whatever FLUSH_S says; a count does not', async () => {
+    const { home, file } = lane('cb-stats-store-due-');
+    const [, first, , quiet, , due] = await run(home, [
+      open(file),
+      call('flush', [], { force: true }),
+      call('outcome', ['2xx']),
+      call('flush'),
+      call('store_event', ['store:DatabaseError']),
+      call('flush'),
+    ], { consts: { 'stats.FLUSH_S': 600 } });
+    expect(first.result).toBe(true);
+    expect(quiet.result).toBe(false); // inside FLUSH_S an ordinary count waits
+    expect(due.result).toBe(true);
+    expect(readDoc(file).store).toMatchObject({ state: 'disabled', reason: 'store:DatabaseError' });
+    expect(readDoc(file).outcomes).toEqual({ '2xx': 1, 'store:DatabaseError': 1 });
+  });
+
+  it('a store event while a write is in flight still makes the next unforced flush write', async () => {
+    const { home, file } = lane('cb-stats-store-due-race-');
+    const [, r, next] = await run(home, [
+      open(file),
+      { op: 'stats-race', flush: { force: true }, during: [{ method: 'store_event', args: ['store:DatabaseError'], kwargs: {} }],
+        waitS: 5 },
+      call('flush'),
+    ], { consts: { 'stats.FLUSH_S': 600 } });
+    expect(r.result).toBe(true);
+    expect(r.duringFinished).toBe(true);
+    expect(r.duringRaised).toEqual([]);
+    // The write in flight serialised the document before the event; its success must not spend the event's one-shot.
+    expect(next.result).toBe(true);
+    expect(readDoc(file).store).toMatchObject({ state: 'disabled', reason: 'store:DatabaseError' });
+  });
+});
+
+// D-8618: the parity section, the measurements GPT-lane parity with native Codex hinges on, keyed `<route>/<model>` as
+// `routes` is but never in a `routes` row (D24's calibration has other readers), and never a D3 family (a removal or a
+// miss is a measurement, not drift, so nothing here reaches `unexplained`).
+const BUCKETS = ['250', '500', '1000', '2000', '4000', '8000', '16000', '32000', '64000', 'inf'];
+const zeros = (keys: string[]): Record<string, number> => Object.fromEntries(keys.map((k) => [k, 0]));
+const REPLAY = ['text-hit', 'text-empty', 'text-absent', 'call-hit', 'call-absent'];
+/** D-8622: the request markers, in backend.MARKERS' order (D-8632's last). */
+const MARKERS = ['bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state', 'bridge-service-tier-fast'];
+/** A parity row as the writers leave it when they have counted nothing, with `over` laid on top. */
+function parityRow(over: Record<string, unknown> = {}): Line {
+  return {
+    responses: 0, inputTokens: 0, cachedTokens: 0, outputTokens: 0, reasoningTokens: 0, effort: {},
+    served: { same: 0, other: 0, absent: 0 }, servedOther: {}, servedTier: {}, inputTransformations: {},
+    responsesWithTransformations: 0, replay: zeros(REPLAY), firstOutputMs: zeros(BUCKETS), reasoningMs: zeros(BUCKETS),
+    totalMs: zeros(BUCKETS),
+    markers: zeros(MARKERS), fallbacks: zeros(MARKERS), turnState: { captured: 0, echoed: 0 }, ...over,
+  };
+}
+const hist = (counts: Record<string, number>): Record<string, number> => ({ ...zeros(BUCKETS), ...counts });
+const response = (kwargs: Record<string, unknown>, model = MODEL): object => call('parity_response', ['backend', model], kwargs);
+
+describe.skipIf(!PY)('the parity section (D-8618)', () => {
+  it('effort is counted once per call, the level the body carried, none when it carried none', async () => {
+    const { home, file } = lane('cb-parity-effort-');
+    const [, , , , , , snap] = await run(home, [
+      open(file),
+      call('parity_effort', ['backend', MODEL, 'high']),
+      call('parity_effort', ['backend', MODEL, 'high']),
+      call('parity_effort', ['backend', MODEL, 'low']),
+      call('parity_effort', ['backend', MODEL, null]),
+      call('parity_effort', ['backend', MODEL, 'two words']),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.parity).toEqual({ [ROUTE_KEY]: parityRow({ effort: { high: 2, low: 1, none: 1, unrecognised: 1 } }) });
+    // a measurement, never drift: nothing reaches `names`, `unexplained` or `routes`
+    expect(snap.doc.names).toEqual({});
+    expect(snap.doc.unexplained).toEqual({});
+    expect(snap.doc.routes).toEqual({});
+  });
+
+  it('a response sums its valid tokens, compares the served model and buckets its two times', async () => {
+    const { home, file } = lane('cb-parity-response-');
+    const [, , , , , snap] = await run(home, [
+      open(file),
+      response({
+        served: MODEL, usage: { input: 120, cached: 20, output: 7, reasoning: 3 },
+        transformations: ['reasoning:removed:turn_boundary', 'reasoning:removed:turn_boundary', 'message:changed:none'],
+        first_output_ms: 250, total_ms: 250.5,
+      }),
+      response({ served: 'model-6.1-beta', usage: { input: 30, output: 2 }, transformations: [], total_ms: 64_000 }),
+      response({ served: null, usage: { input: 1, cached: 1, output: 1, reasoning: 1 }, first_output_ms: 0, total_ms: 64_001 }),
+      response({ served: 'model-6.1-beta', total_ms: 999.9 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.parity[ROUTE_KEY]).toEqual(parityRow({
+      responses: 4, inputTokens: 151, cachedTokens: 21, outputTokens: 10, reasoningTokens: 4,
+      served: { same: 1, other: 2, absent: 1 }, servedOther: { 'model-6.1-beta': 2 },
+      servedTier: { absent: 4 }, // none of them named a service tier (D-8632)
+      inputTransformations: { 'reasoning:removed:turn_boundary': 2, 'message:changed:none': 1 },
+      responsesWithTransformations: 1,
+      // an upper bound is inclusive; a response with no output counts only in totalMs
+      firstOutputMs: hist({ 250: 2 }), totalMs: hist({ 500: 1, 1000: 1, 64000: 1, inf: 1 }),
+    }));
+  });
+
+  it('a replay lookup is counted by its outcome, n at a time', async () => {
+    const { home, file } = lane('cb-parity-replay-');
+    const [, , , , , , snap] = await run(home, [
+      open(file),
+      call('parity_replay', ['backend', MODEL, 'text-hit']),
+      call('parity_replay', ['backend', MODEL, 'text-hit', 2]),
+      call('parity_replay', ['backend', MODEL, 'text-empty']),
+      call('parity_replay', ['backend', MODEL, 'call-hit', 4]),
+      call('parity_replay', ['backend', MODEL, 'call-absent']),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.parity[ROUTE_KEY].replay).toEqual({
+      'text-hit': 3, 'text-empty': 1, 'text-absent': 0, 'call-hit': 4, 'call-absent': 1,
+    });
+  });
+
+  it('malformed arguments count nothing', async () => {
+    const { home, file } = lane('cb-parity-malformed-');
+    const [, ...rest] = await run(home, [
+      open(file),
+      call('parity_effort', ['backend', MODEL, 5]),
+      call('parity_effort', ['backend', MODEL, { level: 'high' }]),
+      call('parity_replay', ['backend', MODEL, 'text-miss']),
+      call('parity_replay', ['backend', MODEL, 7]),
+      call('parity_replay', ['backend', MODEL, 'text-hit', 0]),
+      call('parity_replay', ['backend', MODEL, 'text-hit', true]),
+      call('parity_replay', ['backend', MODEL, 'text-hit', 'two']),
+      { op: 'stats-snapshot' },
+    ]);
+    // no row is even made: every call above was refused before it touched the section
+    expect(rest.at(-1)!.doc.parity).toEqual({});
+    const [, , , snap] = await run(home, [
+      open(path.join(path.dirname(file), 'other.json')),
+      response({
+        served: 5, usage: { input: -1, cached: true, output: '7', reasoning: 1.5 },
+        // `overflow` is the cap's own key: a caller can never count it directly
+        transformations: ['reasoning:removed', 'a b:removed:none', 'reasoning:removed:' + 'x'.repeat(33), 7, null, 'overflow'],
+        first_output_ms: { float: 'nan' }, total_ms: -1,
+      }),
+      // a bool is not a time, though Python's bool is an int
+      response({ first_output_ms: true, total_ms: false }),
+      { op: 'stats-snapshot' },
+    ]);
+    // each response is counted, and nothing malformed in either is: no token, no served word, no key, no bucket
+    expect(snap.doc.parity[ROUTE_KEY]).toEqual(parityRow({
+      responses: 2, responsesWithTransformations: 1, served: { same: 0, other: 0, absent: 1 }, servedTier: { absent: 2 },
+    }));
+    const [, , notMapping] = await run(home, [
+      open(path.join(path.dirname(file), 'third.json')),
+      response({ usage: 'lots', transformations: { type: 'reasoning' }, first_output_ms: 'soon', total_ms: { float: 'inf' } }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(notMapping.doc.parity[ROUTE_KEY]).toEqual(parityRow({ responses: 1, served: { same: 0, other: 0, absent: 1 }, servedTier: { absent: 1 } }));
+  });
+
+  it('each open map reaches OVERFLOW at its cap: 16 effort levels, 16 served models, 32 transformations', async () => {
+    const { home, file } = lane('cb-parity-caps-');
+    const levels = Array.from({ length: 18 }, (_, i) => `level-${i}`);
+    const served = Array.from({ length: 18 }, (_, i) => `model-x-${i}`);
+    const keys = Array.from({ length: 34 }, (_, i) => `reasoning:removed:reason_${i}`);
+    const ops = [
+      open(file),
+      ...levels.map((l) => call('parity_effort', ['backend', MODEL, l])),
+      call('parity_effort', ['backend', MODEL, 'level-0']),
+      ...served.map((m) => response({ served: m })),
+      response({ transformations: keys }),
+      response({ transformations: [keys[0], keys[33]] }),
+      { op: 'stats-snapshot' },
+    ];
+    const lines = await run(home, ops);
+    const row = lines.at(-1)!.doc.parity[ROUTE_KEY];
+    expect(Object.keys(row.effort)).toHaveLength(17);
+    expect(row.effort.overflow).toBe(2);
+    expect(row.effort['level-0']).toBe(2); // a key already held is still counted under its own name
+    expect(row.effort['level-16']).toBeUndefined();
+    expect(Object.keys(row.servedOther)).toHaveLength(17);
+    expect(row.servedOther.overflow).toBe(2);
+    expect(row.served).toEqual({ same: 0, other: 18, absent: 2 });
+    expect(Object.keys(row.inputTransformations)).toHaveLength(33);
+    expect(row.inputTransformations.overflow).toBe(3);
+    expect(row.inputTransformations[keys[0]]).toBe(2);
+    expect(row.responsesWithTransformations).toBe(2);
+  });
+
+  it('past NAMES_MAX route keys the next one is the overflow row, as in routes', async () => {
+    const { home, file } = lane('cb-parity-rows-');
+    const [, , , , snap] = await run(home, [
+      open(file),
+      call('parity_effort', ['backend', 'model-a', 'low']),
+      call('parity_effort', ['backend', 'model-b', 'low']),
+      call('parity_effort', ['backend', 'model-c', 'low']),
+      { op: 'stats-snapshot' },
+    ], { consts: { 'stats.NAMES_MAX': 2 } });
+    expect(Object.keys(snap.doc.parity).sort()).toEqual(['backend/model-a', 'backend/model-b', 'overflow']);
+    expect(snap.doc.parity.overflow.effort).toEqual({ low: 1 });
+  });
+
+  it('a restart carries every valid parity row and drops what is malformed, with no reset', async () => {
+    const { home, file } = lane('cb-parity-load-');
+    const good = parityRow({
+      responses: 3, inputTokens: 300, cachedTokens: 100, outputTokens: 30, reasoningTokens: 9,
+      effort: { high: 2, none: 1 }, served: { same: 2, other: 1, absent: 0 }, servedOther: { 'model-6.1-beta': 1 },
+      inputTransformations: { 'reasoning:removed:turn_boundary': 4, overflow: 1 }, responsesWithTransformations: 2,
+      replay: { 'text-hit': 1, 'text-empty': 0, 'text-absent': 2, 'call-hit': 3, 'call-absent': 0 },
+      firstOutputMs: hist({ 250: 2 }), totalMs: hist({ 1000: 2, inf: 1 }),
+    });
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: { '2xx': 3 }, names: {},
+      unexplained: {}, usageHeaders: null, lastUpstreamRequestId: null,
+      parity: {
+        [ROUTE_KEY]: good,
+        'backend/model-6.1-beta': {
+          responses: -1, inputTokens: '5', cachedTokens: true, outputTokens: 4, reasoningTokens: null,
+          effort: { high: 1, 'two words': 3, low: -2, max: 1.5 }, served: { same: 1, elsewhere: 4, other: 'x' },
+          servedOther: { 'a model with spaces': 1, 'model-z': 2 },
+          inputTransformations: { 'reasoning:removed:prefix_mismatch': 1, 'reasoning:removed': 9, 'a:b:c:d': 1 },
+          responsesWithTransformations: 1, replay: { 'text-hit': 2, 'text-miss': 9 },
+          firstOutputMs: { 250: 1, 300: 5, inf: -1 }, totalMs: 'many', extra: 1,
+        },
+        'not a route key': good,
+        'backend/model-6.1-gamma': 'not a row',
+      },
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o] = await run(home, [open(file)]);
+    expect(o.doc.outcomes).toEqual({ '2xx': 3 });
+    expect(o.doc.since).toBe('2026-01-01T00:00:00.000Z');
+    expect(o.doc.parity).toEqual({
+      [ROUTE_KEY]: good,
+      'backend/model-6.1-beta': parityRow({
+        outputTokens: 4, effort: { high: 1 }, served: { same: 1, other: 0, absent: 0 }, servedOther: { 'model-z': 2 },
+        inputTransformations: { 'reasoning:removed:prefix_mismatch': 1 }, responsesWithTransformations: 1,
+        replay: { ...zeros(REPLAY), 'text-hit': 2 }, firstOutputMs: hist({ 250: 1 }),
+      }),
+    });
+  });
+
+  it('a restart re-checks the caps: a carried map past its cap keeps its first keys and OVERFLOW', async () => {
+    const { home, file } = lane('cb-parity-load-caps-');
+    const effort = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`level-${String(i).padStart(2, '0')}`, 1]));
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: {}, names: {}, unexplained: {},
+      usageHeaders: null, lastUpstreamRequestId: null,
+      parity: { [ROUTE_KEY]: { effort: { ...effort, overflow: 4 } }, 'backend/model-b': {}, 'backend/model-c': {} },
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o] = await run(home, [open(file)], { consts: { 'stats.NAMES_MAX': 2 } });
+    expect(Object.keys(o.doc.parity).sort()).toEqual([ROUTE_KEY, 'backend/model-b']);
+    const kept = o.doc.parity[ROUTE_KEY].effort;
+    expect(Object.keys(kept)).toHaveLength(17);
+    expect(kept.overflow).toBe(4);
+    expect(kept['level-15']).toBe(1);
+    expect(kept['level-16']).toBeUndefined();
+  });
+
+  it('a version-1 file with no parity key loads with no reset, and counts from empty', async () => {
+    const { home, file } = lane('cb-parity-nokey-');
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: { [ROUTE_KEY]: { requests: 4, bytesPerToken: 3.6, promptTokensMax: 900, promptTokensLast: 9 } },
+      refusals: {}, outcomes: { '2xx': 4 }, names: {}, unexplained: {}, usageHeaders: null, lastUpstreamRequestId: null,
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o, , snap] = await run(home, [open(file), call('parity_effort', ['backend', MODEL, 'medium']), { op: 'stats-snapshot' }]);
+    expect(o.doc.outcomes).toEqual({ '2xx': 4 });
+    expect(o.doc.since).toBe('2026-01-01T00:00:00.000Z');
+    expect(o.doc.routes[ROUTE_KEY].requests).toBe(4);
+    expect(o.doc.parity).toEqual({});
+    // nothing the load changed, so the file is the old process's until a flush
+    expect(readDoc(file)).toEqual(planted);
+    expect(snap.doc.parity).toEqual({ [ROUTE_KEY]: parityRow({ effort: { medium: 1 } }) });
+  });
+});
+
+// D-8622, D-8623: the request markers' counts in the same rows. `markers` counts the POSTs that carried each marker's
+// addition, `fallbacks` each one a 400's fallback dropped, and `turnState` the sticky-routing tokens captured and echoed:
+// fixed vocabularies, zero-filled like `served` and `replay`, so no cap can be reached and no name is ever free text.
+describe.skipIf(!PY)('the parity section: the request markers (D-8622, D-8623)', () => {
+  it('each marker, fallback and turn-state event is counted once per call, under its own name', async () => {
+    const { home, file } = lane('cb-parity-markers-');
+    const [, ...rest] = await run(home, [
+      open(file),
+      call('parity_marker', ['backend', MODEL, 'bridge-reasoning-all-turns']),
+      call('parity_marker', ['backend', MODEL, 'bridge-reasoning-all-turns']),
+      call('parity_marker', ['backend', MODEL, 'bridge-verbosity']),
+      call('parity_marker', ['backend', MODEL, 'bridge-turn-state']),
+      call('parity_marker', ['backend', MODEL, 'bridge-service-tier-fast']),
+      call('parity_fallback', ['backend', MODEL, 'bridge-reasoning-all-turns']),
+      call('parity_fallback', ['backend', MODEL, 'bridge-service-tier-fast']),
+      call('parity_turn_state', ['backend', MODEL, 'captured']),
+      call('parity_turn_state', ['backend', MODEL, 'echoed']),
+      call('parity_turn_state', ['backend', MODEL, 'echoed']),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(rest.at(-1)!.doc.parity).toEqual({ [ROUTE_KEY]: parityRow({
+      markers: { 'bridge-reasoning-all-turns': 2, 'bridge-verbosity': 1, 'bridge-turn-state': 1, 'bridge-service-tier-fast': 1 },
+      fallbacks: { ...zeros(MARKERS), 'bridge-reasoning-all-turns': 1, 'bridge-service-tier-fast': 1 },
+      turnState: { captured: 1, echoed: 2 },
+    }) });
+    // a measurement, never drift
+    expect(rest.at(-1)!.doc.names).toEqual({});
+    expect(rest.at(-1)!.doc.unexplained).toEqual({});
+  });
+
+  it('a name outside the vocabularies counts nothing, and makes no row', async () => {
+    const { home, file } = lane('cb-parity-markers-bad-');
+    const [, ...rest] = await run(home, [
+      open(file),
+      call('parity_marker', ['backend', MODEL, 'bridge-instructions']),
+      call('parity_marker', ['backend', MODEL, 'priority']),
+      call('parity_marker', ['backend', MODEL, 'overflow']),
+      call('parity_marker', ['backend', MODEL, ['bridge-verbosity']]),
+      call('parity_marker', ['backend', MODEL, null]),
+      call('parity_fallback', ['backend', MODEL, 'record-streams']),
+      call('parity_fallback', ['backend', MODEL, 7]),
+      call('parity_turn_state', ['backend', MODEL, 'replaced']),
+      call('parity_turn_state', ['backend', MODEL, 'ts-fixture-token']),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(rest.at(-1)!.doc.parity).toEqual({});
+  });
+
+  it('a restart carries the counts and re-checks them; a row from before them loads zero-filled', async () => {
+    const { home, file } = lane('cb-parity-markers-load-');
+    const good = parityRow({
+      responses: 1,
+      markers: { 'bridge-reasoning-all-turns': 4, 'bridge-verbosity': 0, 'bridge-turn-state': 2, 'bridge-service-tier-fast': 3 },
+      fallbacks: { 'bridge-reasoning-all-turns': 1, 'bridge-verbosity': 0, 'bridge-turn-state': 0, 'bridge-service-tier-fast': 1 },
+      turnState: { captured: 3, echoed: 7 },
+    });
+    const before = parityRow({ responses: 2 }) as Record<string, unknown>;
+    delete before.markers;
+    delete before.fallbacks;
+    delete before.turnState;
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: {}, names: {}, unexplained: {},
+      usageHeaders: null, lastUpstreamRequestId: null,
+      parity: {
+        [ROUTE_KEY]: good,
+        'backend/model-b': before,
+        'backend/model-c': {
+          markers: { 'bridge-reasoning-all-turns': -1, 'bridge-verbosity': '2', 'bridge-turn-state': 5, 'other-marker': 9 },
+          fallbacks: 'many', turnState: { captured: 1.5, echoed: 2, value: 3 },
+        },
+      },
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o] = await run(home, [open(file)]);
+    expect(o.doc.parity).toEqual({
+      [ROUTE_KEY]: good,
+      'backend/model-b': parityRow({ responses: 2 }),
+      'backend/model-c': parityRow({
+        markers: { ...zeros(MARKERS), 'bridge-turn-state': 5 }, turnState: { captured: 0, echoed: 2 },
+      }),
+    });
+  });
+});
+
+// D-8632: the served tier, an open map capped like servedOther; D-8633: the reasoning time, a histogram in the
+// firstOutputMs buckets. Both are additive: a row from before them loads with the map empty and the histogram zero-filled.
+describe.skipIf(!PY)('the parity section: the served tier and the reasoning time (D-8632, D-8633)', () => {
+  it('each response counts its service tier, bounded, absent when it named none, nothing when it is not a string', async () => {
+    const { home, file } = lane('cb-parity-tier-');
+    const lines = await run(home, [
+      open(file),
+      response({ served_tier: 'priority' }),
+      response({ served_tier: 'priority' }),
+      response({ served_tier: 'default' }),
+      response({ served_tier: null }),
+      response({}),
+      response({ served_tier: 'two words' }),
+      response({ served_tier: `tier-${'x'.repeat(80)}` }),
+      response({ served_tier: 5 }),
+      response({ served_tier: ['priority'] }),
+      { op: 'stats-snapshot' },
+    ]);
+    const row = lines.at(-1)!.doc.parity[ROUTE_KEY];
+    expect(row.responses).toBe(9);
+    // an unbounded value is never written as it came: it is `unrecognised`, as a model or an effort level is
+    expect(row.servedTier).toEqual({ priority: 2, default: 1, absent: 2, unrecognised: 2 });
+    expect(JSON.stringify(lines.at(-1)!.doc)).not.toContain('x'.repeat(65));
+    expect(lines.at(-1)!.doc.names).toEqual({});
+    expect(lines.at(-1)!.doc.unexplained).toEqual({});
+  });
+
+  it('servedTier reaches OVERFLOW at PARITY_KEYS_MAX, a held tier still counted under its own name', async () => {
+    const { home, file } = lane('cb-parity-tier-cap-');
+    const tiers = Array.from({ length: 18 }, (_, i) => `tier-${i}`);
+    const lines = await run(home, [
+      open(file),
+      ...tiers.map((t) => response({ served_tier: t })),
+      response({ served_tier: 'tier-0' }),
+      { op: 'stats-snapshot' },
+    ]);
+    const row = lines.at(-1)!.doc.parity[ROUTE_KEY];
+    expect(Object.keys(row.servedTier)).toHaveLength(17);
+    expect(row.servedTier.overflow).toBe(2);
+    expect(row.servedTier['tier-0']).toBe(2);
+    expect(row.servedTier['tier-16']).toBeUndefined();
+  });
+
+  it('reasoningMs is bucketed as firstOutputMs is; a response with none counts nothing there', async () => {
+    const { home, file } = lane('cb-parity-reasoning-');
+    const lines = await run(home, [
+      open(file),
+      response({ first_output_ms: 900, reasoning_ms: 250, total_ms: 1200 }),
+      response({ first_output_ms: 900, reasoning_ms: 250.5, total_ms: 1200 }),
+      response({ first_output_ms: 70_000, reasoning_ms: 64_001, total_ms: 70_001 }),
+      response({ first_output_ms: 300, total_ms: 400 }),
+      response({ first_output_ms: 300, reasoning_ms: -1, total_ms: 400 }),
+      response({ first_output_ms: 300, reasoning_ms: true, total_ms: 400 }),
+      response({ first_output_ms: 300, reasoning_ms: { float: 'nan' }, total_ms: 400 }),
+      { op: 'stats-snapshot' },
+    ]);
+    const row = lines.at(-1)!.doc.parity[ROUTE_KEY];
+    expect(Object.keys(row.reasoningMs)).toEqual(BUCKETS);
+    expect(row.reasoningMs).toEqual(hist({ 250: 1, 500: 1, inf: 1 }));
+    expect(row.firstOutputMs).toEqual(hist({ 500: 4, 1000: 2, inf: 1 }));
+  });
+
+  it('a restart carries both, re-checked and capped; a row from before them loads with them empty', async () => {
+    const { home, file } = lane('cb-parity-tier-load-');
+    const good = parityRow({ responses: 4, servedTier: { priority: 3, absent: 1 }, reasoningMs: hist({ 1000: 2, inf: 1 }) });
+    const before = parityRow({ responses: 2 }) as Record<string, unknown>;
+    delete before.servedTier;
+    delete before.reasoningMs;
+    const tiers = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`tier-${String(i).padStart(2, '0')}`, 1]));
+    const planted = {
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', routes: {}, refusals: {}, outcomes: {}, names: {}, unexplained: {},
+      usageHeaders: null, lastUpstreamRequestId: null,
+      parity: {
+        [ROUTE_KEY]: good,
+        'backend/model-b': before,
+        'backend/model-c': {
+          servedTier: { priority: 2, 'two words': 1, flex: -1, auto: '3', [`t${'x'.repeat(70)}`]: 1 },
+          reasoningMs: { 250: 1, 300: 4, inf: 1.5, 64000: 2 },
+        },
+        'backend/model-d': { servedTier: { ...tiers, overflow: 5 }, reasoningMs: 'many' },
+      },
+    };
+    writeFileSync(file, JSON.stringify(planted), { mode: 0o600 });
+    const [o] = await run(home, [open(file)]);
+    expect(o.doc.parity[ROUTE_KEY]).toEqual(good);
+    expect(o.doc.parity['backend/model-b']).toEqual(parityRow({ responses: 2 }));
+    expect(o.doc.parity['backend/model-c']).toEqual(parityRow({ servedTier: { priority: 2 }, reasoningMs: hist({ 250: 1, 64000: 2 }) }));
+    const capped = o.doc.parity['backend/model-d'];
+    expect(Object.keys(capped.servedTier)).toHaveLength(17);
+    expect(capped.servedTier.overflow).toBe(5);
+    expect(capped.servedTier['tier-15']).toBe(1);
+    expect(capped.servedTier['tier-16']).toBeUndefined();
+    expect(capped.reasoningMs).toEqual(zeros(BUCKETS));
+  });
+});

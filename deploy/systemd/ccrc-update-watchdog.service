@@ -1,0 +1,28 @@
+[Unit]
+Description=Re-measure a stale self-update and revert it only if the box is unhealthy
+[Service]
+Type=oneshot
+# user units carry no ~/.local/bin on PATH (measured, ccrc-models.service),
+# but a bare `Environment=PATH=` REPLACES the manager's PATH rather than
+# extending it — and `ccrc.service` (which execs node via /usr/bin/env)
+# finds `node` through whatever THAT PATH holds, environment.d fragments
+# (e.g. /snap/bin) included. A rollback this may run is a whole `ccrc
+# update`, whose node preflight would then die on a box where node is
+# reachable only through one of those fragments. Prepend instead, in the
+# start command below, so the watchdog sees exactly the `node` that
+# ccrc.service sees (D-3282).
+# A oneshot has NO start timeout by default (systemd.service(5), TimeoutStartSec=:
+# "except when Type=oneshot is used, in which case the timeout is disabled"),
+# and while this unit runs its timer starts no second instance — so a rollback
+# that hung (a download that never ends) would silence the one actor that
+# bounds a wedged update. Thirty minutes is twice the default deadline
+# (CCRC_UPDATE_DEADLINE_MS); on expiry systemd stops this cgroup, the
+# rollback included, and the next tick re-measures.
+TimeoutStartSec=1800
+# A restore or rollback onto a release older than this unit runs THAT
+# release's spine, which neither knows nor removes this pair, so the timer
+# stays enabled over a tree with no `watchdog` verb. Skip there: an
+# ExecCondition rc of 1-254 skips the run and does not mark the unit failed.
+# %h/ccrc is the tree ~/.local/bin/ccrc execs.
+ExecCondition=/bin/sh -c 'grep -q "^cmd_watchdog()" %h/ccrc/ccd/ccrc'
+ExecStart=/bin/sh -c 'PATH="%h/.local/bin:$$PATH" exec %h/.local/bin/ccrc watchdog'

@@ -1,12 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
-import { SessionStream, foreignConfigDirs, nextDialogFrame, shouldRepoint, type DialogSeen } from '../src/sessionws.js';
-import type { TranscriptResolution, TranscriptRung } from '../src/transcript/resolve.js';
+import {
+  NO_TICK, SessionStream, dialogFrameLine, foreignConfigDirs, nextDialogFrame, registryCaughtUp, shouldRepoint, type DialogSeen,
+} from '../src/sessionws.js';
+import { parseDialog } from '../src/pane/dialog.js';
+import { RESOLVER_BACKOFF_MS, type TranscriptResolution, type TranscriptRung } from '../src/transcript/resolve.js';
 import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { askKey } from '../src/askkey.js';
 import { Bus } from '../src/bus.js';
@@ -21,12 +24,13 @@ import type { AskQuestion, Dialog, SessionStreamMsg } from '../../shared/api.js'
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { degradedReadIO, unreadableField, degradedStatIO } from './ioDoubles.js';
+import { fakeTime } from './fakeTime.js';
 
-const ID = 'claude-a-MekWarLive';
+const ID = 'claude-a-project-f';
 const UUID_A = 'a'.repeat(36);
 const UUID_B = 'b'.repeat(36);
-const WORKDIR = '/data/projects/MekWarLive';
-const MUNGED = '-data-projects-MekWarLive';
+const WORKDIR = '/data/projects/project-f';
+const MUNGED = '-data-projects-project-f';
 const PID = 40613;
 
 const userLine = (uuid: string, text: string): string =>
@@ -39,17 +43,26 @@ const userLine = (uuid: string, text: string): string =>
     message: { role: 'user', content: text },
   }) + '\n';
 
+/** Task 4 (§5.3 supersession): a `continued-in` marker and a plain turn — the
+ *  shape a live fork produces. `transcript-ladder.test.ts` owns the identical
+ *  two literals; a shared fixture module for two lines would be the heavier
+ *  thing, so they're copied here rather than imported. */
+const marker = (from: string, to: string): string =>
+  `${JSON.stringify({ type: 'continued-in', sessionId: from, continuedInSessionId: to })}\n`;
+const turn = (text: string): string =>
+  `${JSON.stringify({ type: 'user', uuid: text, message: { role: 'user', content: text } })}\n`;
+
 /** Registry entry + live state + transcript A with two user messages. */
 const seed = (home: string): void => {
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
-  const fields = { wrapper: 'claude-a', project: 'MekWarLive', workdir: WORKDIR, uuid: UUID_A, started: '1' };
+  const fields = { wrapper: 'claude-a', project: 'project-f', workdir: WORKDIR, uuid: UUID_A, started: '1' };
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
 
   const sess = path.join(home, '.claude-a', 'sessions');
   mkdirSync(sess, { recursive: true });
   writeFileSync(path.join(sess, `${PID}.json`), JSON.stringify({
-    pid: PID, sessionId: UUID_A, cwd: WORKDIR, name: 'mekwar-a1',
+    pid: PID, sessionId: UUID_A, cwd: WORKDIR, name: 'project-f-a1',
     status: 'idle', statusUpdatedAt: 1784582728369, version: '2.1.210',
   }));
 
@@ -121,7 +134,7 @@ const menu = (over: Partial<Dialog> = {}): Dialog => ({
   selectedIndex: 1, parsed: true, raw: 'pane', ...over,
 });
 
-const NONE: DialogSeen = { id: null, ask: null };
+const NONE: DialogSeen = { id: null, ask: null, raw: null };
 
 describe('dialog frame gate', () => {
   it('sends a menu the first time it is seen, and not again unchanged', () => {
@@ -153,7 +166,22 @@ describe('dialog frame gate', () => {
     const rich = nextDialogFrame(NONE, menu({ ask: ASK }));
     const next = nextDialogFrame(rich.seen, menu({ id: 'def456' }));
     expect((next.msg as { dialog: Dialog }).dialog.ask).toBeUndefined();
-    expect(next.seen).toEqual({ id: 'def456', ask: null });
+    expect(next.seen).toEqual({ id: 'def456', ask: null, raw: null });
+  });
+
+  it('re-sends an UNPARSED dialog that repaints under the same id — its raw pane is all the phone shows', () => {
+    // A 2.1.280 multi-select keeps one id while its boxes are ticked at the
+    // terminal; without this the phone's well kept its first capture.
+    const unticked = menu({ id: 'multi', parsed: false, options: [], raw: '❯ 1. [ ] Logging' });
+    const first = nextDialogFrame(NONE, unticked);
+    expect(first.msg).toEqual({ type: 'dialog', dialog: unticked });
+    const ticked = { ...unticked, raw: '❯ 1. [✔] Logging' };
+    expect(nextDialogFrame(first.seen, ticked).msg).toEqual({ type: 'dialog', dialog: ticked });
+    expect(nextDialogFrame(nextDialogFrame(first.seen, ticked).seen, ticked).msg).toBeNull();
+    // A PARSED dialog's raw is not what the phone shows, so a repaint alone
+    // (a cursor move) sends nothing, as before.
+    const parsed = nextDialogFrame(NONE, menu());
+    expect(nextDialogFrame(parsed.seen, menu({ raw: 'pane, cursor moved' })).msg).toBeNull();
   });
 
   it('clears once when the menu vanishes, and stays quiet after', () => {
@@ -170,8 +198,14 @@ describe('dialog frame gate', () => {
 // `nextDialogFrame` and `parseSince` are — the io-bound half (does the tailed
 // file still exist?) is the ONE fact the caller measures and passes in.
 describe('shouldRepoint (spec §5.3)', () => {
-  const found = (rung: TranscriptRung, p: string): TranscriptResolution =>
-    ({ kind: 'found', path: p, rung, account: null });
+  // `uuid` defaults so every PRE-EXISTING call below (which never passed one)
+  // keeps comparing two SAME-uuid answers — the shape the original three
+  // clauses were written against. Supersession tests pass distinct uuids
+  // explicitly rather than this file growing a second `found`-shaped helper.
+  const found = (
+    rung: TranscriptRung, p: string, uuid: string = 'u'.repeat(36),
+    facts: { followedFrom?: readonly string[]; declinedTo?: string; tailUnmeasured?: true } = {},
+  ): TranscriptResolution => ({ kind: 'found', path: p, rung, account: null, uuid, ...facts });
 
   it('re-points to a strictly better rung even while the tailed file still exists', () => {
     // THE case the uuid-only gate could never see: a swap lands, the exact
@@ -217,6 +251,153 @@ describe('shouldRepoint (spec §5.3)', () => {
     expect(shouldRepoint(fb(true), found('uuid-glob', '/b'), true)).toBe(true);
     expect(shouldRepoint(fb(true), fb(false), true)).toBe(false);
   });
+
+  it('re-points to a successor at the same rung while the old file still exists', () => {
+    // The shape a fork actually produces: `continued-in` resolves at the SAME
+    // rung as the transcript it superseded, to a DIFFERENT path, while the old
+    // file sits frozen (not deleted) on disk. All three of the original
+    // clauses decline this — same path? no. worse rung? no, same rung. file
+    // gone? no, it's still there — so without the uuid clause this is the one
+    // shape that leaves a stream tailing a dead file forever.
+    expect(shouldRepoint(
+      found('registry-raw', '/a.jsonl', UUID_A),
+      found('registry-raw', '/b.jsonl', UUID_B, { followedFrom: [UUID_A] }),
+      true,
+    )).toBe(true);
+  });
+
+  it('never re-points from a successor BACK to its predecessor while the successor is still there (D-4946)', () => {
+    // #189 review, S1. The uuid clause used to fire on ANY uuid difference,
+    // in either direction, so one re-ladder that could not read the
+    // predecessor's tail (or could not stat the successor) answered the
+    // predecessor — and a stream already reading the fork went BACK to the
+    // frozen pre-fork file. Supersession runs one way: only an answer whose
+    // walk passed THROUGH the uuid being tailed is downstream of it.
+    const tailedB = found('registry-raw', '/b.jsonl', UUID_B, { followedFrom: [UUID_A] });
+    expect(shouldRepoint(tailedB, found('registry-raw', '/a.jsonl', UUID_A), true)).toBe(false);
+    // And the address rules still govern it: a successor that is GONE is not
+    // something to keep tailing, so the predecessor is the best file left.
+    expect(shouldRepoint(tailedB, found('registry-raw', '/a.jsonl', UUID_A), false)).toBe(true);
+  });
+
+  it('never re-points BACK to a predecessor that merely resolves at a BETTER RUNG while the successor is there ' +
+     '(D-4946)', () => {
+    // #189 fix-forward, probes E2/E2b. The uuid clause no longer runs
+    // backwards, but the RUNG clause below it still could: a `<pid>.json`
+    // read that comes back unmeasured makes the stream resolve from the
+    // registry workdir instead of the live cwd, which changes the memo KEY,
+    // and under that key the predecessor sits at a better rung (a symlinked
+    // workdir's resolved spelling) — or is served stale from a blip before the
+    // fork. "Strictly better rung" then re-pointed a stream reading B back
+    // onto A: a 2 s flap of the whole chat on every such blip after a fork.
+    const tailedB = found('live-raw', '/b.jsonl', UUID_B, { followedFrom: [UUID_A] });
+    expect(shouldRepoint(tailedB, found('live-resolved', '/a.jsonl', UUID_A), true)).toBe(false);
+    // The address rules still govern a successor that is GONE.
+    expect(shouldRepoint(tailedB, found('live-resolved', '/a.jsonl', UUID_A), false)).toBe(true);
+    // And a better rung for the SAME uuid is still a better address for it.
+    expect(shouldRepoint(tailedB, found('live-resolved', '/x/b.jsonl', UUID_B, { followedFrom: [UUID_A] }), true))
+      .toBe(true);
+  });
+
+  it('a successor the tailed file DECLINED is downstream — re-points once it has content, never onto it empty ' +
+     '(D-4947, #189 re-review SV-2)', () => {
+    // After the registry moves onto a successor that is not written yet, the
+    // stream keeps the file it has and remembers the successor as declined.
+    // A later answer for that successor comes off ITS OWN ladder, so it
+    // carries no `followedFrom` — the decline is the only thing that says it
+    // is downstream. Content is a MEASURED fact: absent, it never re-points.
+    const tailedA = found('registry-raw', '/a.jsonl', UUID_A, { declinedTo: UUID_B });
+    const b = found('registry-raw', '/b.jsonl', UUID_B);
+    expect(shouldRepoint(tailedA, b, true, { successorHasContent: true })).toBe(true);
+    expect(shouldRepoint(tailedA, b, true, { successorHasContent: false })).toBe(false);
+    expect(shouldRepoint(tailedA, b, true)).toBe(false);
+    // A tailed file that is GONE gives way to the best file left, empty or not.
+    expect(shouldRepoint(tailedA, b, false, { successorHasContent: false })).toBe(true);
+  });
+
+  it('a predecessor RESUMED past its marker is the conversation again — re-points back to it ' +
+     '(D-4946, #189 re-review)', () => {
+    // Claude Code's own reader (`Txn`) answers "not continued" for a file with
+    // a finished turn after its marker, and drops the session's `superseded`
+    // flag in /resume. The stream measures that itself (`predecessorResumed`)
+    // before it un-follows; without the measurement the backward refusal holds.
+    const tailedB = found('registry-raw', '/b.jsonl', UUID_B, { followedFrom: [UUID_A] });
+    const a = found('registry-raw', '/a.jsonl', UUID_A);
+    expect(shouldRepoint(tailedB, a, true, { predecessorResumed: true })).toBe(true);
+    expect(shouldRepoint(tailedB, a, true, { predecessorResumed: false })).toBe(false);
+    expect(shouldRepoint(tailedB, a, true)).toBe(false);
+  });
+
+  it('a different uuid that is not downstream of the tailed one is not a supersession', () => {
+    // Pins the direction test against a mutant that inverts it: an unrelated
+    // uuid at the same rung, tailed file present, is a sideways move.
+    const unrelated = found('registry-raw', '/c.jsonl', 'c'.repeat(36), { followedFrom: ['d'.repeat(36)] });
+    expect(shouldRepoint(found('registry-raw', '/a.jsonl', UUID_A), unrelated, true)).toBe(false);
+  });
+
+  it('still declines a same-rung, same-uuid, same-path answer', () => {
+    // Pins the uuid clause against a mutant that inverts it (`===` for `!==`):
+    // that mutant would re-point the ordinary healthy-tick case above, and
+    // this case alone catches it since the fallthrough clauses also answer
+    // `false` here for their own reasons.
+    expect(shouldRepoint(found('registry-raw', '/a.jsonl', UUID_A), found('registry-raw', '/a.jsonl', UUID_A), true))
+      .toBe(false);
+  });
+
+  it('declines a worse rung for the same uuid', () => {
+    // The uuid clause must not fire just because two `found` answers differ —
+    // only a DIFFERENT uuid earns it. Same uuid, worse rung, file present:
+    // the pre-existing rule still governs, exactly as it did before this task.
+    expect(shouldRepoint(found('live-raw', '/a.jsonl', UUID_A), found('foreign-glob', '/c.jsonl', UUID_A), true))
+      .toBe(false);
+  });
+});
+
+// D-4947: the tick's "is this registry move a reset?" decision, pure, for the
+// same reason `shouldRepoint` is — the stream-level cases below pin it end to
+// end, this table pins each clause on its own.
+describe('registryCaughtUp (D-4947)', () => {
+  const C = 'c'.repeat(36);
+  const at = (p: string, uuid: string, facts: Partial<Record<'followedFrom' | 'declinedTo', unknown>> = {}):
+    TranscriptResolution => ({ kind: 'found', path: p, rung: 'registry-raw', account: null, uuid, ...facts } as TranscriptResolution);
+
+  it('the registry landing on the file already being tailed is caught up', () => {
+    // ISOLATED (fix-forward): the registry names A, the tailed answer is B
+    // with no `followedFrom` (the stream opened while the registry said B),
+    // and A's walk lands on B — only the PATH clause says "caught up". The
+    // row used to pass the registry B, which the uuid clause answers too, so
+    // deleting the path clause left every test green.
+    expect(registryCaughtUp(at('/b.jsonl', UUID_B), UUID_A, at('/b.jsonl', UUID_B, { followedFrom: [UUID_A] })))
+      .toBe(true);
+    // A tailed FALLBACK has no uuid at all; only its path can say it.
+    const fb: TranscriptResolution = { kind: 'fallback', path: '/b.jsonl', complete: true };
+    expect(registryCaughtUp(fb, UUID_B, at('/b.jsonl', UUID_B))).toBe(true);
+  });
+
+  it('the registry landing on the uuid being tailed, at another address, is caught up', () => {
+    expect(registryCaughtUp(at('/x/b.jsonl', UUID_B), UUID_B, at('/y/b.jsonl', UUID_B))).toBe(true);
+  });
+
+  it('the registry landing on the successor the tailed file names but the walk declined is caught up', () => {
+    // ccd moved first: the server saw the marker while the successor was
+    // still unwritten, declined, and was waiting out its back-off.
+    expect(registryCaughtUp(at('/a.jsonl', UUID_A, { declinedTo: UUID_B }), UUID_B, at('/b.jsonl', UUID_B))).toBe(true);
+  });
+
+  it('the registry landing on a uuid the tailed answer was followed THROUGH is caught up', () => {
+    // The hop bound: the stream stopped four hops down; ccd advances one.
+    const tailed = at('/c.jsonl', C, { followedFrom: [UUID_A, UUID_B] });
+    expect(registryCaughtUp(tailed, UUID_B, at('/d.jsonl', 'd'.repeat(36)))).toBe(true);
+  });
+
+  it('a registry uuid with no link to the tailed answer is a rotation', () => {
+    expect(registryCaughtUp(at('/a.jsonl', UUID_A), UUID_B, at('/b.jsonl', UUID_B))).toBe(false);
+    expect(registryCaughtUp(at('/a.jsonl', UUID_A, { declinedTo: C }), UUID_B, at('/b.jsonl', UUID_B))).toBe(false);
+    expect(registryCaughtUp(at('/c.jsonl', C, { followedFrom: [UUID_A] }), UUID_B, at('/b.jsonl', UUID_B))).toBe(false);
+    expect(registryCaughtUp(null, UUID_B, at('/b.jsonl', UUID_B))).toBe(false);
+    const fb: TranscriptResolution = { kind: 'fallback', path: '/a.jsonl', complete: true };
+    expect(registryCaughtUp(fb, UUID_B, at('/b.jsonl', UUID_B))).toBe(false);
+  });
 });
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -225,10 +406,12 @@ const fixture = (name: string): string =>
   readFileSync(path.join(FIXTURES, name.endsWith('.jsonl') ? name : path.join('panes', name)), 'utf8');
 
 /** One poll of a live stream. `tick` is private only to keep it off the class's
- *  public surface; the harness wants exactly what the 2 s interval does, awaited,
- *  so these tests never sleep. */
-const pollOnce = (s: SessionStream): Promise<void> =>
-  (s as unknown as { tick: () => Promise<void> }).tick();
+ *  public surface; the harness wants exactly what a row event does (D-8611: the
+ *  stream has no 2 s interval), then the feed's tick, awaited, so these tests never sleep. */
+const pollOnce = async (s: SessionStream): Promise<void> => {
+  await (s as unknown as { tick: () => Promise<void> }).tick();
+  await (s as unknown as { feed: { poll(): Promise<void> } | null }).feed?.poll();   // the session feed's own tick (ARCH-52)
+};
 
 /**
  * Run a SessionStream against a scripted sequence of pane captures and transcript
@@ -240,12 +423,21 @@ const pollOnce = (s: SessionStream): Promise<void> =>
  */
 const streamWith = async (opts: {
   pane?: string;
-  paneSequence?: readonly string[];
+  /** `null`: that poll's capture fails (tmux exits non-zero, as a failed remote capture reads). */
+  paneSequence?: readonly (string | null)[];
   transcript?: string | null;
   transcriptSequence?: readonly (string | null)[];
   hookstate?: unknown | null;
   hookstateSequence?: readonly (unknown | null)[];
-}): Promise<{ frames: any[]; askReads: number }> => {
+  /** After the poll of step `after`, an answer route's `answered:<id>` with `next` (decision
+   *  `ask-answer-returns-next-screen`); `marks` records how many frames had been sent once each was handled. */
+  answered?: readonly { after: number; next: Dialog | null }[];
+  /** An answer route's `answered:<id>` handled WHILE the capture of poll `step` is in flight: that capture began
+   *  before the answer and returns after it (decision `ask-stale-poll-dropped`). */
+  answeredDuringCapture?: readonly { step: number; next: Dialog | null }[];
+  /** The same, handled while poll `step`'s stat of the transcript is in flight (the capture before it is older). */
+  answeredDuringStat?: readonly { step: number; next: Dialog | null }[];
+}): Promise<{ frames: any[]; askReads: number; hookReads: number; marks: number[] }> => {
   const home = mkTmp('ccrc-ask-');
   seedRoster(home);
   seed(home);
@@ -264,26 +456,49 @@ const streamWith = async (opts: {
     writeFileSync(hookFile, JSON.stringify(v));
   };
   const panes = opts.paneSequence ?? [opts.pane ?? ''];
+  const bus = new Bus();
   let step = 0; // which poll we are on: 0 is start(), then one per tick
   const at = <T,>(xs: readonly T[], i: number): T => xs[Math.min(i, xs.length - 1)]!;
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: at(panes, step), stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') {
+      const pane = at(panes, step);
+      for (const a of opts.answeredDuringCapture ?? []) if (a.step === step) bus.emit(`answered:${ID}`, a.next);
+      return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
+    }
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   // The tailer reads through io.tailFile, and `since` skips the backlog, so a
-  // readFileFrom on the transcript is an ask read and nothing else.
+  // readFileFrom on the transcript is an ask read and nothing else — save the
+  // resolver's own continuation check, which reads through
+  // `readFileFromMeasured` since D-4946 (it must tell a failed read from a file
+  // with no marker) and is counted alongside, so the "+1 (Task 2)" figures
+  // below still pin that it is paid once per stream. `readFileFrom` calls
+  // straight into `localIO`'s own, so nothing is counted twice.
   let askReads = 0;
+  let hookReads = 0; // reads of this session's hookstate file, to pin one per tick (D-6324)
   const io: FleetIO = {
     ...localIO,
+    readFileMeasured: (p) => {
+      if (p === hookFile) hookReads += 1;
+      return localIO.readFileMeasured(p);
+    },
     readFileFrom: (p, off) => {
       if (p === file) askReads += 1;
       return localIO.readFileFrom(p, off);
     },
+    readFileFromMeasured: (p, off) => {
+      if (p === file) askReads += 1;
+      return localIO.readFileFromMeasured(p, off);
+    },
+    stat: (p) => {
+      if (p === file) for (const a of opts.answeredDuringStat ?? []) if (a.step === step) bus.emit(`answered:${ID}`, a.next);
+      return localIO.stat(p);
+    },
   };
   const cfg = loadConfig({ CCRC_HOME: home });
-  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
   const seq = opts.transcriptSequence ?? [opts.transcript ?? null];
   const hookSeq = opts.hookstateSequence ?? [opts.hookstate ?? null];
   put(at(seq, 0));
@@ -295,19 +510,29 @@ const streamWith = async (opts: {
   // final review's follow-up an echo-less `since` past offset 0 is read as a
   // stale build and answered with a backlog — which here would mean a
   // `readFileFrom` that is not an ask read, silently inflating `askReads`.
-  const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), { uuid: UUID_A, offset, file });
+  const marks: number[] = [];
+  const answerAfter = (n: number): void => {
+    for (const a of opts.answered ?? []) {
+      if (a.after !== n) continue;
+      bus.emit(`answered:${ID}`, a.next);
+      marks.push(frames.length);
+    }
+  };
+  const stream = new SessionStream(deps, bus, ID, (m) => frames.push(m), { uuid: UUID_A, offset, file }, NO_TICK);
   try {
     await stream.start();
+    answerAfter(0);
     for (step = 1; step < Math.max(seq.length, panes.length, hookSeq.length); step += 1) {
       put(at(seq, step));
       putHook(at(hookSeq, step));
       await pollOnce(stream);
+      answerAfter(step);
     }
   } finally {
     stream.stop();
     rmSync(home, { recursive: true, force: true });
   }
-  return { frames, askReads };
+  return { frames, askReads, hookReads, marks };
 };
 
 /** A complete, valid hookstate body — `session-hook.sh`'s own shape, same
@@ -431,6 +656,207 @@ describe('hook ask envelope frames', () => {
     const { frames } = await streamWith({ hookstateSequence: [null, null, null] });
     expect(frames.filter((f) => f.type === 'ask_cleared')).toHaveLength(1);
   });
+
+  // D-6324: the structured copy outlives the 30-minute cut while the pane's menu is that question. Every age is an
+  // absolute 31 minutes before the clock, never relative to HOOKSTATE_FRESH_MS, so raising the constant is caught.
+  describe('an aged envelope is kept while its menu is up (D-6324)', () => {
+    const AGED_MS = 31 * 60_000;
+    const aged = (over: Record<string, unknown> = {}): Record<string, unknown> =>
+      hookBody({ updatedAt: Date.now() - AGED_MS, ...over });
+    /** The envelope session-hook.sh would have copied for the 2-column fixture's call: the transcript's own
+     *  `questions`, keeping `question` and each option's `label`/`description` and dropping `preview`. */
+    const ENVELOPE = (() => {
+      for (const line of fixture('transcript-ask-2col.jsonl').split('\n')) {
+        if (line.trim() === '') continue;
+        const content = JSON.parse(line)?.message?.content;
+        if (!Array.isArray(content)) continue;
+        for (const b of content) {
+          if (b?.name !== 'AskUserQuestion') continue;
+          return {
+            questions: (b.input.questions as { question: string; options: { label: string; description?: string }[] }[]).map((q) => ({
+              question: q.question,
+              options: q.options.map((o) => ({ label: o.label, description: o.description })),
+            })),
+          };
+        }
+      }
+      throw new Error('fixture holds no AskUserQuestion');
+    })();
+    const MENU = { pane: fixture('ask-2col-chat-about.txt'), transcript: fixture('transcript-ask-2col.jsonl') };
+    /** The garden-club call whose review `cc296-ask-2q-long-review.txt` paints (and `-right-review`, unanswered). */
+    const GARDEN = { questions: [
+      { question: 'The garden club waters the north beds from one shared tank. On hot weeks the tank runs dry by Thursday, and the volunteers on the late shift find nothing left for the tomato rows near the fence. A second tank would cost about two hundred pounds and needs a flat spot beside the shed, which the parish council must approve first. Until then, how should the weekly watering rota cope?',
+        options: [{ label: 'Split shifts (Recommended)' }, { label: 'Wait for the second tank' }] },
+      { question: 'The spring seed swap is booked at the village hall on the second Saturday in April. The hall committee now asks every group to bring its own folding tables, since theirs went to the school fete and never came back. We own four tables, but the swap usually fills nine. Two neighbouring groups have offered to lend theirs if we collect them on Friday evening in a hired van. Which arrangement should the club confirm with the hall?',
+        options: [{ label: 'Borrow and transport (Recommended)' }, { label: 'Move the swap outdoors' }, { label: 'Hire five big tables' }] },
+    ] };
+    const asks = (frames: any[]) => frames.filter((f) => f.type === 'ask');
+    const cleared = (frames: any[]) => frames.filter((f) => f.type === 'ask_cleared');
+
+    it('a stream that connects 31 minutes after the hook wrote the ask still receives it while its menu is up', async () => {
+      const { frames } = await streamWith({ ...MENU, hookstate: aged({ ask: ENVELOPE }) });
+      expect(asks(frames)).toHaveLength(1);
+      expect(asks(frames)[0].ask).toEqual(ENVELOPE);
+      expect(asks(frames)[0].key).toBe(askKey(ENVELOPE));
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('an open stream sends no ask_cleared at 31 minutes while its menu is up', async () => {
+      const { frames } = await streamWith({
+        ...MENU,
+        hookstateSequence: [hookBody({ ask: ENVELOPE }), aged({ ask: ENVELOPE }), aged({ ask: ENVELOPE })],
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('keeps an aged multiSelect envelope while its unparsed multi menu is up', async () => {
+      const multi = { questions: [{ question: 'Which tools?', multiSelect: true, options: [{ label: 'Hammer' }, { label: 'Saw' }, { label: 'Drill' }] }] };
+      const { frames } = await streamWith({
+        pane: fixture('cc300-ask-multiselect-tools-open.txt'),
+        hookstateSequence: [aged({ ask: multi }), aged({ ask: multi })],
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('ask_cleared follows once the menu leaves the pane', async () => {
+      const { frames } = await streamWith({
+        paneSequence: [MENU.pane, MENU.pane, ''],
+        transcript: MENU.transcript,
+        hookstate: aged({ ask: ENVELOPE }),
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(1);
+      expect(frames.indexOf(asks(frames)[0])).toBeLessThan(frames.indexOf(cleared(frames)[0]));
+    });
+
+    it('an aged envelope is not kept while a different menu is up', async () => {
+      const { frames } = await streamWith({ pane: fixture('model-confirm.txt'), hookstate: aged({ ask: ENVELOPE }) });
+      expect(frames.some((f) => f.type === 'dialog')).toBe(true);
+      expect(asks(frames)).toHaveLength(0);
+      expect(cleared(frames)).toHaveLength(1);
+    });
+
+    it('an aged multi-question envelope is NOT kept on the review screen of another call', async () => {
+      // The colour/size envelope against `cc296-ask-2q-long-review.txt`, whose review lists two other questions.
+      const two = { questions: [
+        { question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Green' }] },
+        { question: 'Which size?', options: [{ label: 'Small' }, { label: 'Large' }] },
+      ] };
+      const { frames } = await streamWith({
+        paneSequence: [fixture('cc296-ask-2q-long-review.txt'), fixture('cc296-ask-2q-long-review.txt')],
+        hookstateSequence: [hookBody({ ask: two }), aged({ ask: two })],
+      });
+      expect(frames.some((f) => f.type === 'dialog')).toBe(true);
+      expect(asks(frames)).toHaveLength(1); // the fresh read
+      expect(cleared(frames)).toHaveLength(1); // the aged read, on a review that is not its own
+    });
+
+    it('an aged one-question multiSelect envelope is kept on its own review screen', async () => {
+      const tools = { questions: [{ question: 'Which tools?', multiSelect: true, options: [{ label: 'Hammer' }, { label: 'Saw' }, { label: 'Drill' }] }] };
+      const review = fixture('cc300-ask-review-1q-multiselect.txt');
+      const { frames } = await streamWith({
+        paneSequence: [review, review], hookstateSequence: [aged({ ask: tools }), aged({ ask: tools })],
+      });
+      expect(frames.some((f) => f.type === 'dialog')).toBe(true);
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('an aged envelope whose questions are the ones the review screen lists is kept', async () => {
+      // The listed text is the first line of each question, a prefix of the full text the envelope carries.
+      const review = fixture('cc296-ask-2q-long-review.txt');
+      const { frames } = await streamWith({ paneSequence: [review, review], hookstateSequence: [aged({ ask: GARDEN }), aged({ ask: GARDEN })] });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('an aged envelope is NOT kept on its own review screen while no question is answered (the review lists none)', async () => {
+      // `cc296-ask-2q-long-right-review.txt` is the garden-club call's review reached by → with nothing answered: it
+      // lists no question, and an empty listing cannot tell this call's review from another call's (fail-closed).
+      const review = fixture('cc296-ask-2q-long-right-review.txt');
+      const { frames } = await streamWith({
+        paneSequence: [review, review], hookstateSequence: [hookBody({ ask: GARDEN }), aged({ ask: GARDEN })],
+      });
+      expect(frames.some((f) => f.type === 'dialog')).toBe(true);
+      expect(asks(frames)).toHaveLength(1); // the fresh read
+      expect(cleared(frames)).toHaveLength(1); // the aged read, on a review that lists no answered question
+    });
+
+    it('a mid-redraw capture followed by a failed capture is not two redraws', async () => {
+      const redraw = fixture('ask-2col-partial-redraw.txt');
+      const { frames } = await streamWith({
+        paneSequence: [MENU.pane, redraw, null, MENU.pane], transcript: MENU.transcript, hookstate: aged({ ask: ENVELOPE }),
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(0);
+    });
+
+    it('an aged, kept envelope clears with the menu once FAILED_CAPTURES_CLEAR captures fail in a row', async () => {
+      // The third failure frames no menu (`dialog_cleared`); the envelope follows it on that tick and stays cleared.
+      for (const failures of [3, 5]) {
+        const { frames } = await streamWith({
+          paneSequence: [MENU.pane, MENU.pane, ...Array<null>(failures).fill(null)], transcript: MENU.transcript,
+          hookstate: aged({ ask: ENVELOPE }),
+        });
+        const dialogCleared = frames.findIndex((f) => f.type === 'dialog_cleared');
+        expect(asks(frames), `${failures}`).toHaveLength(1);
+        expect(dialogCleared, `${failures}`).toBeGreaterThan(-1);
+        expect(cleared(frames), `${failures}`).toHaveLength(1);
+        expect(frames.indexOf(cleared(frames)[0]), `${failures}`).toBe(dialogCleared + 1);
+      }
+    });
+
+    // The failed capture holds the menu (captureHeld); the empty pane that follows is a reading of no menu, and the
+    // hold must end with it, or the aged envelope would outlive a pane that shows nothing. One case per pane, so each
+    // is red on its own.
+    it.each(['menu', 'review'] as const)(
+      'a successful capture after a failed one ends the hold: an empty pane clears the aged envelope (%s)',
+      async (label) => {
+        const review = fixture('cc296-ask-2q-long-review.txt');
+        const opts = label === 'menu'
+          ? { paneSequence: [MENU.pane, MENU.pane, null, ''], transcript: MENU.transcript, hookstate: aged({ ask: ENVELOPE }) }
+          : { paneSequence: [review, review, null, ''], hookstate: aged({ ask: GARDEN }) };
+        const { frames } = await streamWith(opts as Parameters<typeof streamWith>[0]);
+        expect(asks(frames)).toHaveLength(1);
+        expect(cleared(frames)).toHaveLength(1);
+        expect(frames.indexOf(asks(frames)[0])).toBeLessThan(frames.indexOf(cleared(frames)[0]));
+      },
+    );
+
+    it('one unparsed mid-redraw capture does not clear an aged envelope; two in a row decide as today', async () => {
+      const redraw = fixture('ask-2col-partial-redraw.txt');
+      const one = await streamWith({
+        paneSequence: [MENU.pane, redraw, MENU.pane], transcript: MENU.transcript, hookstate: aged({ ask: ENVELOPE }),
+      });
+      expect(asks(one.frames)).toHaveLength(1);
+      expect(cleared(one.frames)).toHaveLength(0);
+      const two = await streamWith({
+        paneSequence: [MENU.pane, redraw, redraw], transcript: MENU.transcript, hookstate: aged({ ask: ENVELOPE }),
+      });
+      expect(asks(two.frames)).toHaveLength(1);
+      expect(cleared(two.frames)).toHaveLength(1);
+    });
+
+    it('an aged approval envelope clears at 31 minutes as today', async () => {
+      const approval = { approval: { tool: 'Bash', summary: 'rm -rf build/' } };
+      const { frames } = await streamWith({
+        ...MENU,
+        hookstateSequence: [hookBody({ ask: approval }), aged({ ask: approval })],
+      });
+      expect(asks(frames)).toHaveLength(1);
+      expect(cleared(frames)).toHaveLength(1);
+    });
+
+    it('an aged session reads its hookstate once per tick', async () => {
+      const { hookReads } = await streamWith({
+        ...MENU,
+        hookstateSequence: [aged({ ask: ENVELOPE }), aged({ ask: ENVELOPE }), aged({ ask: ENVELOPE })],
+      });
+      expect(hookReads).toBe(3); // start() plus two ticks
+    });
+  });
 });
 
 describe('dialog enrichment', () => {
@@ -497,12 +923,17 @@ describe('dialog enrichment', () => {
   it('reads the transcript for a menu once, not once per poll', async () => {
     // The enrichment is a latch: a 256 KB tail read every 2 s for an answer that
     // cannot change the frame (nextDialogFrame would suppress it) is pure cost.
+    // +1 (Task 2): `resolveTranscript`'s own continuation check reads this same
+    // file's tail once, at the single full ladder run `TranscriptResolver`
+    // performs for the life of this stream — a second, distinct reason to call
+    // `readFileFrom` on `file`, which this harness's `askReads` counter (by
+    // design) cannot tell apart from an ask read.
     const t = fixture('transcript-ask-2col.jsonl');
     const { askReads } = await streamWith({
       pane: fixture('ask-2col-chat-about.txt'),
       transcriptSequence: [t, t, t],
     });
-    expect(askReads).toBe(1);
+    expect(askReads).toBe(2);
   });
 
   it('stops re-reading the transcript for a menu it cannot explain', async () => {
@@ -510,12 +941,14 @@ describe('dialog enrichment', () => {
     // /model, trust-folder — and they sit on screen until a human answers. An
     // unchanged transcript cannot start explaining one, so re-reading its 256 KB
     // tail every 2 s (over the agent RPC, in remote-fleet mode) buys nothing.
+    // +1 (Task 2): see the previous test — the resolver's own one-time
+    // continuation check.
     const t = fixture('transcript-ask-2col.jsonl');
     const { askReads } = await streamWith({
       pane: fixture('model-confirm.txt'),
       transcriptSequence: [t, t, t],
     });
-    expect(askReads).toBe(1);
+    expect(askReads).toBe(2);
   });
 
   it('re-enriches a menu that flapped off-screen and came back', async () => {
@@ -544,7 +977,8 @@ describe('dialog enrichment', () => {
     const dialogs = frames.filter((f) => f.type === 'dialog');
     expect(dialogs[1]!.dialog.ask?.options).toHaveLength(3);
     // Two appearances, two reads — and the fourth poll re-latches, not re-reads.
-    expect(askReads).toBe(2);
+    // +1 (Task 2): the resolver's own one-time continuation check on `file`.
+    expect(askReads).toBe(3);
   });
 
   it('re-enriches a menu that came back through an unparsed capture', async () => {
@@ -566,7 +1000,8 @@ describe('dialog enrichment', () => {
     expect(dialogs[1]!.dialog.parsed).toBe(false); // the half-drawn capture itself
     expect(dialogs[2]!.dialog.ask?.options).toHaveLength(3);
     // Two parsed appearances, two reads — the unparsed one is never read for.
-    expect(askReads).toBe(2);
+    // +1 (Task 2): the resolver's own one-time continuation check on `file`.
+    expect(askReads).toBe(3);
   });
 
   it('leaves a /model-style confirm unenriched', async () => {
@@ -576,14 +1011,15 @@ describe('dialog enrichment', () => {
     const d = frames.find((f) => f.type === 'dialog')!.dialog;
     // It looked and alignAsk declined — not "never looked". Without the read the
     // assertion below holds for any build, enrichment ripped out included.
-    expect(askReads).toBe(1);
+    // +1 (Task 2): the resolver's own one-time continuation check on `file`.
+    expect(askReads).toBe(2);
     expect(d.ask).toBeUndefined();
     expect(d.options.map((o: { label: string }) => o.label)).toEqual(['Yes, switch to Fable 5', 'No, go back']);
   });
 
   // Stage 2e Task 3 (D-102). With RC off, a genuinely busy pane renders "esc
   // to interrupt" WHILE a permission/AskUserQuestion dialog is painted below
-  // it — a real, expected combined screen (fleet.ts's liveStatus doc: an
+  // it — a real, expected combined screen (the deleted liveStatus's doc said so: an
   // RC-off pane DOES render the busy marker, unlike a --remote-control one).
   // `checkDialog`'s own gate asks `hasMenu`, not `paneState() === 'menu'` —
   // the send.ts:320 idiom, independent of the busy check for exactly this
@@ -610,6 +1046,8 @@ describe('session WS', () => {
   let port: number;
   let fileA: string;
   let fileB: string;
+  /** The bus the server shares with its watcher: a test sends what the watcher's tick would (D-8611). */
+  let bus: Bus;
 
   beforeEach(async () => {
     home = mkTmp('ccrc-sws-');
@@ -619,13 +1057,14 @@ describe('session WS', () => {
     fileB = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
 
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
-    app = await buildServer(deps, new Bus());
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
+    bus = new Bus();
+    app = await buildServer(deps, bus);
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();
     port = typeof addr === 'object' && addr !== null ? addr.port : 0;
@@ -658,9 +1097,11 @@ describe('session WS', () => {
     expect(ev.events[0]).toMatchObject({ kind: 'user', uuid: 'u3', text: 'three' });
     expect(ev.offset).toBe(statSync(fileA).size);
 
-    // Rotate: new transcript file, registry uuid flipped (clear/compact/swap).
+    // Rotate: new transcript file, registry uuid flipped (clear/compact/swap). The watcher's tick sees the row's
+    // record change and sends `row:<id>`; that is what re-resolves the stream (D-8611: it has no 2 s poll).
     writeFileSync(fileB, userLine('r1', 'fresh transcript'));
     writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+    bus.emit(`row:${ID}`, { listedAt: Date.now() });
 
     const rotated = await next(8000);
     expect(rotated).toEqual({ type: 'rotated', uuid: UUID_B });
@@ -765,13 +1206,13 @@ describe('session WS', () => {
       '  3. Chat about this\n' +
       '\nEnter to select · ↑/↓ to navigate · Esc to cancel\n';
     const menuRun: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: menuPane, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: menuPane, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const menuCfg = loadConfig({ CCRC_HOME: home });
-    const menuApp = await buildServer({ cfg: menuCfg, runCcd: ccdRunner(menuRun, menuCfg), tmux: new Tmux(menuRun), io: localIO, queue: new KeyedQueue() }, new Bus());
+    const menuApp = await buildServer({ cfg: menuCfg, runCcd: ccdRunner(menuRun, menuCfg), tmux: new Tmux(menuRun), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports }, new Bus());
     await menuApp.listen({ host: '127.0.0.1', port: 0 });
     const a = menuApp.server.address();
     const p = typeof a === 'object' && a !== null ? a.port : 0;
@@ -829,19 +1270,22 @@ const unlistableIO: FleetIO = { ...localIO, readdir: async () => null };
 
 const mkLadderDeps = (home: string, io: FleetIO): Deps => {
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const cfg = loadConfig({ CCRC_HOME: home });
-  return { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+  return { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
 };
 
 /** Private-field peeks, same discipline as this file's own `pollOnce` (a cast
  *  through `unknown`, not a public API this class needs for production). */
-const pollTimer = (s: SessionStream): unknown => (s as unknown as { poll: unknown }).poll;
+/** The stream's one re-resolve timer, the backstop (D-8611): set once `start()` armed it. */
+const retryTimer = (s: SessionStream): unknown => (s as unknown as { backstop: unknown }).backstop;
 const streamUuid = (s: SessionStream): string | null => (s as unknown as { uuid: string | null }).uuid;
 const streamTailer = (s: SessionStream): unknown => (s as unknown as { tailer: unknown }).tailer;
+const streamTailed = (s: SessionStream): TranscriptResolution | null =>
+  (s as unknown as { tailed: TranscriptResolution | null }).tailed;
 const streamStatus = (s: SessionStream): string | null => (s as unknown as { status: string | null }).status;
 
 describe('foreignConfigDirs (spec §5.2)', () => {
@@ -887,7 +1331,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
 
     const deps = mkLadderDeps(home, localIO);
     const frames: any[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       const first = frames.find((f) => f.type === 'backlog');
@@ -939,7 +1383,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
 
     const deps = mkLadderDeps(home, localIO);
     const frames: any[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames.find((f) => f.type === 'backlog').file).toBe(globA);
@@ -961,6 +1405,1247 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     }
   });
 
+  it('sends a fresh backlog and never `rotated` when it follows a fork', async () => {
+    // Task 4: the shape a LIVE fork produces, distinct from the two cases
+    // above — same rung, DIFFERENT path, and the OLD file still on disk
+    // (Claude Code freezes a superseded transcript, it never deletes it).
+    // Same setup as "follows a SAME-RUNG answer to a different path" above,
+    // with one change: append the marker instead of deleting the tailed file.
+    const home = mkTmp('ccrc-repoint-fork-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+
+    const deps = mkLadderDeps(home, localIO);
+    const frames: any[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+    try {
+      await stream.start();
+      expect(frames.find((f) => f.type === 'backlog').file).toBe(tailed);
+      frames.length = 0;
+
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+      writeFileSync(successor, turn('after the fork'), 'utf8');
+      // The memoized resolver follows a fork on the SECOND poll after it
+      // happens, not the first (resolve.ts's `TranscriptResolver.resolve`,
+      // its own comment): a file still being written cannot carry a terminal
+      // marker, so the poll that SEES the growth only records it, and the
+      // poll after that — seeing the file unchanged since — re-ladders. So
+      // this first poll must send neither `backlog` nor `rotated`.
+      await pollOnce(stream);
+      expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+      await pollOnce(stream);
+
+      const types = frames.map((f) => f.type);
+      expect(types).toContain('backlog');
+      // `rotated` paints "Session context reset" in the operator's chat, and
+      // nothing was reset — the conversation continued in another file — the
+      // tick's own repoint branch refuses that frame for exactly this reason.
+      expect(types).not.toContain('rotated');
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor });
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('the registry catching up with a fork it already followed sends a backlog and NEVER `rotated` ' +
+     '(whole-branch review, F2)', async () => {
+    // THE SECOND HALF OF THE FORK, and the half the fixture above cannot
+    // see. `tick`'s first branch compares the REGISTRY uuid, not the resolved
+    // one — and `ccd`'s `_sync_uuid` advances the registry ONE HOP PER
+    // QUIESCENCE, so every hop of a chain lands in that branch, seconds after
+    // the resolver already followed it. Each landing used to send `rotated`,
+    // which mints a "Session context reset" divider the following backlog
+    // keeps on top: one to three false reset dividers over a two-hop chain,
+    // printed at exactly the moment the operator's conversation was
+    // recovered.
+    //
+    // The fixture above never moves the registry, which is why this was
+    // missed. Here the registry moves AFTER the follow has already landed —
+    // the production order once the `ccd` lane ships.
+    const home = mkTmp('ccrc-repoint-caughtup-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+
+    const deps = mkLadderDeps(home, localIO);
+    const frames: any[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+    try {
+      await stream.start();
+      expect(frames.find((f) => f.type === 'backlog').file).toBe(tailed);
+
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+      writeFileSync(successor, turn('after the fork'));
+      await pollOnce(stream);   // sees the growth, records it
+      await pollOnce(stream);   // the file stood still: re-ladders and follows
+      expect(frames.find((f) => f.type === 'backlog' && f.file === successor)).toBeDefined();
+      expect(streamUuid(stream)).toBe(UUID_A);   // the REGISTRY has not moved yet
+      frames.length = 0;
+
+      // `ccd` finally walks the same pointer into the registry.
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+      await pollOnce(stream);
+
+      expect(streamUuid(stream)).toBe(UUID_B);
+      const types = frames.map((f) => f.type);
+      expect(types).toContain('backlog');
+      expect(types).not.toContain('rotated');   // nothing was reset — no divider
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor, uuid: UUID_B });
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a registry uuid that moves to a DIFFERENT file is still a rotation — the suppression is scoped to the ' +
+     'transcript, not to the uuid', async () => {
+    // The other side of F2's mutation. A blanket suppression would swallow
+    // the `/clear` rotation this branch has always reported, so the
+    // discriminator is asserted from both directions: same file, no frame;
+    // different file, `rotated`.
+    const home = mkTmp('ccrc-repoint-rotation-');
+    seedRoster(home);
+    seed(home);
+    const fresh = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    writeFileSync(fresh, userLine('c1', 'cleared'));
+
+    const deps = mkLadderDeps(home, localIO);
+    const frames: any[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+    try {
+      await stream.start();
+      frames.length = 0;
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+      await pollOnce(stream);
+      expect(frames.filter((f) => f.type === 'rotated')).toEqual([{ type: 'rotated', uuid: UUID_B }]);
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: fresh, uuid: UUID_B });
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a tail read that fails ONCE after the stream followed a fork never sends it BACK to the pre-fork file ' +
+     '(D-4946)', async () => {
+    // #189 review, S1, end to end. The registry still names A (ccd has not
+    // moved it, or is not deployed), the stream already follows A->B, and B
+    // finishes a turn — so the memo re-ladders from A. That re-ladder's read
+    // of A's tail fails once (one agent RPC timing out). It used to answer a
+    // CLEAN A, the uuid clause re-pointed BACKWARDS onto the frozen pre-fork
+    // transcript, its backlog replaced the chat, and A — terminal, and no
+    // longer a "keep looking" answer — was served for the life of the socket.
+    const home = mkTmp('ccrc-repoint-blip-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    let failA = 0;   // how many of A's next tail reads fail
+    const io: FleetIO = {
+      ...localIO,
+      readFileFromMeasured: async (p, off) => {
+        if (p === tailed && failA > 0) { failA -= 1; return { ok: false, reason: 'unreadable' }; }
+        return localIO.readFileFromMeasured(p, off);
+      },
+    };
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+    try {
+      await stream.start();
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+      writeFileSync(successor, turn('after the fork'), 'utf8');
+      await pollOnce(stream);
+      await pollOnce(stream);
+      expect(frames.find((f) => f.type === 'backlog' && f.file === successor)).toBeDefined();
+      frames.length = 0;
+
+      appendFileSync(successor, turn('a turn in the fork'), 'utf8');
+      failA = 1;
+      await pollOnce(stream);   // sees B grow, records it
+      await pollOnce(stream);   // B stood still: re-ladders from A, and A's read fails
+      expect(failA, 'the blip really landed on the re-ladder').toBe(0);
+      for (let i = 0; i < 5; i += 1) await pollOnce(stream);
+      expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+      expect(streamTailed(stream)?.path).toBe(successor);
+
+      // And when ccd moves the registry, the stream is already there.
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+      await pollOnce(stream);
+      expect(frames.map((f) => f.type)).not.toContain('rotated');
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor, uuid: UUID_B });
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a reconnect that lands on a blip shows the pre-fork file only until the back-off — never for the life of ' +
+     'the socket (D-4946)', async () => {
+    // The reconnect half of #189 review, S1. The client was reading B and
+    // echoes it; the fresh stream's first walk cannot read A's tail. Nothing
+    // here can vouch for B without that read (the echo is client input, never
+    // a path to open), so the honest answer is A — but flagged
+    // `tailUnmeasured`, a "keep looking" answer, so the back-off re-ladders
+    // and the stream moves FORWARD to B. It used to be a clean, terminal A,
+    // served for as long as the socket stayed open.
+    const home = mkTmp('ccrc-repoint-reconnect-blip-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+    writeFileSync(successor, turn('after the fork'), 'utf8');
+    let failA = 1;
+    const io: FleetIO = {
+      ...localIO,
+      readFileFromMeasured: async (p, off) => {
+        if (p === tailed && failA > 0) { failA -= 1; return { ok: false, reason: 'unreadable' }; }
+        return localIO.readFileFromMeasured(p, off);
+      },
+    };
+    // Before the stream exists: its resolver takes `Date.now` at construction.
+    let clock = 1_000_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m),
+      { uuid: UUID_A, offset: statSync(successor).size, file: successor }, NO_TICK);
+    try {
+      await stream.start();
+      expect(failA, 'the blip really landed on the first walk').toBe(0);
+      expect(frames.find((f) => f.type === 'backlog')?.file).toBe(tailed);
+      frames.length = 0;
+      clock += RESOLVER_BACKOFF_MS;
+      await pollOnce(stream);
+      expect(frames.map((f) => f.type)).not.toContain('rotated');
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor });
+    } finally {
+      now.mockRestore();
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a successor whose stat is UNREADABLE is not a successor that is gone — no backward re-point (D-4946)', async () => {
+    // The same flap through the other door. The re-ladder cannot stat B, so
+    // it declines and answers A; `repointNeeded` then asks whether the tailed
+    // file (B) still exists — and a stat that merely FAILED used to read as
+    // "gone", which re-points onto the best file left: the pre-fork one. Only
+    // a proven ENOENT says a file is gone; an unmeasured one is still there.
+    const home = mkTmp('ccrc-repoint-statblip-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    let statBFails = false;
+    const io: FleetIO = {
+      ...localIO,
+      statMeasured: async (p) =>
+        (p === successor && statBFails ? { ok: false, reason: 'unreadable' } : localIO.statMeasured(p)),
+    };
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+    try {
+      await stream.start();
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+      writeFileSync(successor, turn('after the fork'), 'utf8');
+      await pollOnce(stream);
+      await pollOnce(stream);
+      expect(streamTailed(stream)?.path).toBe(successor);
+      frames.length = 0;
+
+      statBFails = true;
+      for (let i = 0; i < 3; i += 1) await pollOnce(stream);
+      expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+      expect(streamTailed(stream)?.path).toBe(successor);
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('the registry moving to the successor BEFORE the stream followed it is a continuation, not a reset ' +
+     '(D-4947)', async () => {
+    // #189 review, S2: F2's guard above only covered the server-first
+    // order. Here the successor is written AFTER the server's re-ladder
+    // declined it (the fork announced itself first, the common shape), the
+    // server waits out its 30 s back-off, and ccd — reading the file a few
+    // seconds later — moves the registry first. That move used to send
+    // `rotated`, and the PWA keeps that divider on top of the backlog after it.
+    const home = mkTmp('ccrc-repoint-ccdfirst-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+    try {
+      await stream.start();
+      frames.length = 0;
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');   // B not written yet
+      await pollOnce(stream);   // sees the growth
+      await pollOnce(stream);   // re-ladders: declines B, which is not there
+      expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+
+      writeFileSync(successor, turn('after the fork'), 'utf8');
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);   // ccd got there first
+      await pollOnce(stream);
+      expect(frames.map((f) => f.type)).not.toContain('rotated');
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor, uuid: UUID_B });
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a chain longer than the hop bound: the registry\'s first hop is a continuation, not a reset (D-4947)', async () => {
+    // #189 review, the server lens's missed item. The walk stops MAX_CONTINUATION_HOPS
+    // down (A->B->C->D->E, E's own marker unread); ccd moves the registry one
+    // hop, to B, whose own walk lands one file further, on F. The stream is
+    // tailing E, not F, so the old path test called that a rotation.
+    const [C, D, E, F] = ['c', 'd', 'e', 'f'].map((x) => x.repeat(36));
+    const home = mkTmp('ccrc-repoint-hopbound-');
+    seedRoster(home);
+    seed(home);
+    const dir = path.join(home, '.claude-a', 'projects', MUNGED);
+    const chain = [UUID_A, UUID_B, C!, D!, E!, F!];
+    for (let i = 0; i < chain.length - 1; i += 1) {
+      writeFileSync(path.join(dir, `${chain[i]}.jsonl`), turn(`turn ${i}`) + marker(chain[i]!, chain[i + 1]!));
+    }
+    const end = path.join(dir, `${F}.jsonl`);
+    writeFileSync(end, turn('the end of the chain'));
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+    try {
+      await stream.start();
+      expect(frames.find((f) => f.type === 'backlog').file).toBe(path.join(dir, `${E}.jsonl`));   // the bound
+      frames.length = 0;
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);   // ccd's first hop
+      await pollOnce(stream);
+      expect(frames.map((f) => f.type)).not.toContain('rotated');
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: end, uuid: UUID_B });
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a decline the stream already learned survives a later UNMEASURED read of the same file (D-4947)', async () => {
+    // #189 fix-forward, probe R1. The marker is appended, B is not there yet,
+    // so the re-ladder answers A{declinedTo B} and `tailed` learns it. After
+    // the back-off the re-walk's read of A's tail FAILS and answers
+    // A{tailUnmeasured} — same file, same rung — and the refresh used to
+    // replace `tailed` outright, throwing the decline away. ccd then moved
+    // the registry to B and the stream sent `rotated`. A's read keeps failing
+    // through the move here, so nothing but the kept decline can say so.
+    const home = mkTmp('ccrc-repoint-keepdecline-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    let failA = false;
+    const io: FleetIO = {
+      ...localIO,
+      readFileFromMeasured: async (p, off) =>
+        (p === tailed && failA ? { ok: false, reason: 'unreadable' } : localIO.readFileFromMeasured(p, off)),
+    };
+    let clock = 1_000_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+    try {
+      await stream.start();
+      frames.length = 0;
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');   // B not written yet
+      await pollOnce(stream);
+      await pollOnce(stream);
+      expect(streamTailed(stream)).toMatchObject({ path: tailed, declinedTo: UUID_B });
+      clock += RESOLVER_BACKOFF_MS;
+      failA = true;
+      await pollOnce(stream);   // the back-off re-walk: A's read fails
+      expect(streamTailed(stream)).toMatchObject({ path: tailed, tailUnmeasured: true, declinedTo: UUID_B });
+
+      writeFileSync(successor, turn('after the fork'), 'utf8');
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);   // ccd's move
+      await pollOnce(stream);
+      expect(frames.map((f) => f.type)).not.toContain('rotated');
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor, uuid: UUID_B });
+    } finally {
+      now.mockRestore();
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a file RESUMED past its marker no longer names the successor — a registry move onto it is a rotation ' +
+     '(D-4947)', async () => {
+    // The other side of the kept decline: only a read that FAILED keeps it.
+    // A measured answer whose last line is no longer the marker (the
+    // pre-fork session was resumed and kept writing) replaces it whole, and
+    // the fork is then a different conversation from the one on screen — it
+    // lacks every turn written after the fork — so a registry move onto it
+    // is announced, exactly as before this branch.
+    const home = mkTmp('ccrc-repoint-resumed-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    let clock = 1_000_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+    try {
+      await stream.start();
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');   // B not written yet
+      await pollOnce(stream);
+      await pollOnce(stream);
+      expect(streamTailed(stream)).toMatchObject({ path: tailed, declinedTo: UUID_B });
+      appendFileSync(tailed, turn('resumed in the pre-fork session'), 'utf8');
+      clock += RESOLVER_BACKOFF_MS;
+      await pollOnce(stream);   // sees the growth
+      await pollOnce(stream);   // re-ladders: a MEASURED last line, no marker
+      expect(streamTailed(stream)).not.toHaveProperty('declinedTo');
+      frames.length = 0;
+
+      writeFileSync(successor, turn('after the fork'), 'utf8');
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+      await pollOnce(stream);
+      expect(frames.filter((f) => f.type === 'rotated')).toEqual([{ type: 'rotated', uuid: UUID_B }]);
+    } finally {
+      now.mockRestore();
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('the registry moving to the successor before the stream even READ the marker is a continuation (D-4947)',
+    async () => {
+      // #189 fix-forward, probe P2early. `tailed` predates the marker, so it
+      // carries no `declinedTo`; the registry moves on a delayed tick (a
+      // loaded box, remote mode) before this stream's own re-ladder ran. No
+      // clause of `registryCaughtUp` can see it — the marker on the tailed
+      // file is the only witness, so the stream reads it.
+      const home = mkTmp('ccrc-repoint-early-');
+      seedRoster(home);
+      seed(home);
+      const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+      const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        frames.length = 0;
+        appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+        await pollOnce(stream);   // sees the growth only — no re-ladder yet
+        expect(streamTailed(stream)).not.toHaveProperty('declinedTo');
+        writeFileSync(successor, turn('after the fork'), 'utf8');
+        writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+        await pollOnce(stream);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor, uuid: UUID_B });
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+  it('a registry that jumps TWO hops past a declined successor between two ticks is a continuation (D-4947)',
+    async () => {
+      // #189 fix-forward, probe P2twohop — the lane's own stated limit. The
+      // stream declined B; before its next tick ccd moved the registry twice
+      // (A->B->C, a tick stalled across two quiescences). C is downstream of
+      // the tailed file through B's marker, and the witness walks that chain.
+      const C = 'c'.repeat(36);
+      const home = mkTmp('ccrc-repoint-twohop-');
+      seedRoster(home);
+      seed(home);
+      const dir = path.join(home, '.claude-a', 'projects', MUNGED);
+      const tailed = path.join(dir, `${UUID_A}.jsonl`);
+      const end = path.join(dir, `${C}.jsonl`);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        frames.length = 0;
+        appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(streamTailed(stream)).toMatchObject({ path: tailed, declinedTo: UUID_B });
+        writeFileSync(path.join(dir, `${UUID_B}.jsonl`), turn('b') + marker(UUID_B, C), 'utf8');
+        writeFileSync(end, turn('c'), 'utf8');
+        writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), C);
+        await pollOnce(stream);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: end, uuid: C });
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+  it('the registry stepping BACK to a predecessor whose walk lands on the tailed file is not a reset (D-4947)',
+    async () => {
+      // #189 fix-forward: the path clause of `registryCaughtUp`, end to end.
+      // The stream opened while the registry already said B (no
+      // `followedFrom`); the registry then names A again (the pane's own
+      // pre-fork id written back), and A's walk follows its marker to B — the
+      // file already on screen. Nothing moved; the backlog alone says so.
+      const home = mkTmp('ccrc-repoint-stepback-');
+      seedRoster(home);
+      seed(home);
+      const dir = path.join(home, '.claude-a', 'projects', MUNGED);
+      const pre = path.join(dir, `${UUID_A}.jsonl`);
+      const successor = path.join(dir, `${UUID_B}.jsonl`);
+      appendFileSync(pre, marker(UUID_A, UUID_B), 'utf8');
+      writeFileSync(successor, turn('after the fork'), 'utf8');
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        expect(streamTailed(stream)).toMatchObject({ path: successor, uuid: UUID_B });
+        expect(streamTailed(stream)).not.toHaveProperty('followedFrom');
+        frames.length = 0;
+        writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_A);
+        await pollOnce(stream);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor, uuid: UUID_A });
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+  describe('a registry move the stream calls a continuation never trades the file on screen for less ' +
+           '(#189 re-review, SV-1/SV-2)', () => {
+    const C = 'c'.repeat(36);
+    const regFile = (home: string): string => path.join(home, '.cc-sessions', `${ID}.uuid`);
+
+    /** A -> B -> C, all written; the stream opens on the registry's A and
+     *  follows both hops. */
+    const twoHops = (home: string): { a: string; b: string; c: string } => {
+      seedRoster(home);
+      seed(home);
+      const dir = path.join(home, '.claude-a', 'projects', MUNGED);
+      const a = path.join(dir, `${UUID_A}.jsonl`);
+      const b = path.join(dir, `${UUID_B}.jsonl`);
+      const c = path.join(dir, `${C}.jsonl`);
+      appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
+      writeFileSync(b, turn('in the first fork') + marker(UUID_B, C), 'utf8');
+      writeFileSync(c, turn('in the second fork'), 'utf8');
+      return { a, b, c };
+    };
+
+    it('the registry landing one hop BEHIND the followed file, on a tick whose read of that hop fails, sends no ' +
+       'backlog of it (SV-1)', async () => {
+      // ccd advances one hop per quiescence, so a stream that followed A->B->C
+      // sees the registry land on B. A walk from B that cannot read B's tail
+      // answers B{tailUnmeasured} — and the registry-move branch used to send
+      // its backlog whenever the move was a continuation: the chat went BACK
+      // to the frozen intermediate file for the whole back-off.
+      const home = mkTmp('ccrc-sv1-behind-');
+      const { b, c } = twoHops(home);
+      let failB = 0;
+      const io: FleetIO = {
+        ...localIO,
+        readFileFromMeasured: async (p, off) => {
+          if (p === b && failB > 0) { failB -= 1; return { ok: false, reason: 'unreadable' }; }
+          return localIO.readFileFromMeasured(p, off);
+        },
+      };
+      let clock = 1_000_000;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        expect(streamTailed(stream)).toMatchObject({ path: c, followedFrom: [UUID_A, UUID_B] });
+        const tailer = streamTailer(stream);
+        frames.length = 0;
+
+        failB = 1;
+        writeFileSync(regFile(home), UUID_B);   // ccd's one hop
+        await pollOnce(stream);
+        expect(failB, 'the blip really landed on the walk from B').toBe(0);
+        for (let i = 0; i < 3; i += 1) await pollOnce(stream);
+        // B is a link C was followed THROUGH, not a successor C declined.
+        expect(streamTailed(stream)).not.toHaveProperty('declinedTo');
+        clock += RESOLVER_BACKOFF_MS;
+        await pollOnce(stream);   // the back-off re-walk from B lands on C again
+        await pollOnce(stream);
+        expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+        expect(streamUuid(stream)).toBe(UUID_B);
+        expect(streamTailed(stream)?.path).toBe(c);
+        expect(streamTailer(stream)).toBe(tailer);   // the same tail, never rebuilt
+      } finally {
+        now.mockRestore();
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('…unless the followed file is GONE: then the hop the registry names is the best file left (SV-1)', async () => {
+      // The keep is the backward refusal's own rule, so it ends where that
+      // one does: a proven ENOENT gives way to the address rules.
+      const home = mkTmp('ccrc-sv1-gone-');
+      const { b, c } = twoHops(home);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        expect(streamTailed(stream)?.path).toBe(c);
+        frames.length = 0;
+        rmSync(c);
+        writeFileSync(regFile(home), UUID_B);
+        await pollOnce(stream);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: b, uuid: UUID_B });
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('…and a followed file whose stat FAILS on the move tick is still there: only a proven ENOENT is gone ' +
+       '(SV-1, D-4946)', async () => {
+      // The keep's "gone" is the same one `repointNeeded` uses. Calling an
+      // unreadable stat "gone" re-opens the door this rule closed: the one
+      // tick on which the registry lands behind AND the followed file's stat
+      // drops (one agent RPC timing out, in remote mode) sent B's backlog.
+      const home = mkTmp('ccrc-sv1-unread-');
+      const { b, c } = twoHops(home);
+      let failB = 0;
+      let failC = 0;
+      const io: FleetIO = {
+        ...localIO,
+        readFileFromMeasured: async (p, off) => {
+          if (p === b && failB > 0) { failB -= 1; return { ok: false, reason: 'unreadable' }; }
+          return localIO.readFileFromMeasured(p, off);
+        },
+        statMeasured: async (p) => {
+          if (p === c && failC > 0) { failC -= 1; return { ok: false, reason: 'unreadable' }; }
+          return localIO.statMeasured(p);
+        },
+      };
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        expect(streamTailed(stream)).toMatchObject({ path: c, followedFrom: [UUID_A, UUID_B] });
+        const tailer = streamTailer(stream);
+        frames.length = 0;
+
+        failB = 1;
+        failC = 1;
+        writeFileSync(regFile(home), UUID_B);
+        await pollOnce(stream);
+        expect(failB, 'the walk from B really failed its read').toBe(0);
+        expect(failC, 'the followed file\'s stat really failed on the move tick').toBe(0);
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+        expect(streamTailed(stream)?.path).toBe(c);
+        expect(streamTailer(stream)).toBe(tailer);
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('a /clear onto a uuid with nothing written yet is a ROTATION: `rotated`, then the new session\'s empty ' +
+       'backlog — the keep is for continuations only (SV-2, D-4947)', async () => {
+      // The most common path through the registry-move branch. `/clear` mints
+      // a uuid whose file Claude Code writes only with its first line, so the
+      // answer is a fallback; keeping the pre-clear tailer there would announce
+      // the reset and then leave the cleared chat streaming under it.
+      const home = mkTmp('ccrc-sv2-clear-');
+      seedRoster(home);
+      seed(home);
+      const D = 'd'.repeat(36);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        const tailer = streamTailer(stream);
+        frames.length = 0;
+
+        writeFileSync(regFile(home), D);
+        await pollOnce(stream);
+        expect(frames.filter((f) => f.type === 'rotated')).toEqual([{ type: 'rotated', uuid: D }]);
+        const backlog = frames.find((f) => f.type === 'backlog');
+        expect(backlog).toMatchObject({ uuid: D, events: [] });
+        expect(streamUuid(stream)).toBe(D);
+        expect(streamTailed(stream)?.kind).toBe('fallback');
+        expect(streamTailer(stream)).not.toBe(tailer);
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('the registry moving onto a successor that is not WRITTEN yet keeps the conversation on screen, and the ' +
+       'stream opens the successor at its first line (SV-2)', async () => {
+      // ccd's resume path could name a successor a live background job holds
+      // but has not written (D-4944). The walk itself never trades a file with
+      // content for an absent one; the registry-move branch did — it sent the
+      // backlog of a fallback, and the whole conversation became an empty chat.
+      const home = mkTmp('ccrc-sv2-absent-');
+      seedRoster(home);
+      seed(home);
+      const dir = path.join(home, '.claude-a', 'projects', MUNGED);
+      const a = path.join(dir, `${UUID_A}.jsonl`);
+      const b = path.join(dir, `${UUID_B}.jsonl`);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');   // the fork announced itself; B is not there
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(streamTailed(stream)).toMatchObject({ path: a, declinedTo: UUID_B });
+        const tailer = streamTailer(stream);
+        frames.length = 0;
+
+        writeFileSync(regFile(home), UUID_B);   // the registry names the held, unwritten end
+        for (let i = 0; i < 3; i += 1) await pollOnce(stream);
+        expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+        expect(streamUuid(stream)).toBe(UUID_B);
+        expect(streamTailed(stream)).toMatchObject({ path: a, declinedTo: UUID_B });
+        expect(streamTailer(stream)).toBe(tailer);
+
+        writeFileSync(b, turn('after the fork'), 'utf8');   // its first line
+        await pollOnce(stream);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: b, uuid: UUID_B });
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('…and the same for a successor that exists but is still EMPTY — never a backlog of zero bytes (SV-2)',
+      async () => {
+        const home = mkTmp('ccrc-sv2-empty-');
+        seedRoster(home);
+        seed(home);
+        const dir = path.join(home, '.claude-a', 'projects', MUNGED);
+        const a = path.join(dir, `${UUID_A}.jsonl`);
+        const b = path.join(dir, `${UUID_B}.jsonl`);
+        const frames: any[] = [];
+        const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+        try {
+          await stream.start();
+          appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
+          writeFileSync(b, '', 'utf8');                       // created, nothing in it yet
+          await pollOnce(stream);
+          await pollOnce(stream);
+          expect(streamTailed(stream)).toMatchObject({ path: a, declinedTo: UUID_B });
+          frames.length = 0;
+
+          writeFileSync(regFile(home), UUID_B);
+          for (let i = 0; i < 3; i += 1) await pollOnce(stream);   // an empty B every tick: never opened
+          expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+          expect(streamTailed(stream)?.path).toBe(a);
+
+          writeFileSync(b, turn('after the fork'), 'utf8');
+          await pollOnce(stream);
+          expect(frames.map((f) => f.type)).not.toContain('rotated');
+          expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: b, uuid: UUID_B });
+        } finally {
+          stream.stop();
+          rmSync(home, { recursive: true, force: true });
+        }
+      });
+
+    it('…and for one whose stat FAILS: unreadable is not "has content" — opened once it is measured (SV-2)',
+      async () => {
+        const home = mkTmp('ccrc-sv2-unread-');
+        seedRoster(home);
+        seed(home);
+        const dir = path.join(home, '.claude-a', 'projects', MUNGED);
+        const a = path.join(dir, `${UUID_A}.jsonl`);
+        const b = path.join(dir, `${UUID_B}.jsonl`);
+        let statBFails = false;
+        // Only the MEASURED stat fails: the ladder's folded `stat` is pinned
+        // to `localIO`'s own, so the ladder still finds B and the answer is a
+        // `found` (B{tailUnmeasured}), not a fallback — the content check is
+        // what decides.
+        const io: FleetIO = {
+          ...localIO,
+          stat: (p) => localIO.stat(p),
+          statMeasured: async (p) =>
+            (p === b && statBFails ? { ok: false, reason: 'unreadable' } : localIO.statMeasured(p)),
+        };
+        const frames: any[] = [];
+        const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+        try {
+          await stream.start();
+          appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
+          await pollOnce(stream);
+          await pollOnce(stream);
+          expect(streamTailed(stream)).toMatchObject({ path: a, declinedTo: UUID_B });
+          frames.length = 0;
+
+          writeFileSync(b, turn('after the fork'), 'utf8');
+          statBFails = true;
+          writeFileSync(regFile(home), UUID_B);
+          await pollOnce(stream);
+          expect(await (stream as unknown as { resolve: () => Promise<{ ok: boolean; data?: { resolution: unknown } }> })
+            .resolve().then((r) => r.data?.resolution)).toMatchObject({ kind: 'found', path: b, tailUnmeasured: true });
+          for (let i = 0; i < 3; i += 1) await pollOnce(stream);
+          expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+          expect(streamTailed(stream)?.path).toBe(a);
+
+          statBFails = false;
+          await pollOnce(stream);
+          expect(frames.map((f) => f.type)).not.toContain('rotated');
+          expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: b, uuid: UUID_B });
+        } finally {
+          stream.stop();
+          rmSync(home, { recursive: true, force: true });
+        }
+      });
+
+    it('a move only the tailed file\'s own marker explains, onto an unwritten successor, is remembered as a ' +
+       'decline — so the stream still moves forward once it is written (SV-2)', async () => {
+      // `tailed` predates the marker (the stream's re-ladder has not read it),
+      // so `continuesInto` is what calls the move a continuation. Keeping the
+      // tailer without remembering the successor would leave nothing to say
+      // its later answer — off its own ladder, no `followedFrom` — is
+      // downstream: the chat would sit on the pre-fork file for good.
+      const home = mkTmp('ccrc-sv2-witness-');
+      seedRoster(home);
+      seed(home);
+      const dir = path.join(home, '.claude-a', 'projects', MUNGED);
+      const a = path.join(dir, `${UUID_A}.jsonl`);
+      const b = path.join(dir, `${UUID_B}.jsonl`);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
+        await pollOnce(stream);   // sees the growth only — no decline learned
+        expect(streamTailed(stream)).not.toHaveProperty('declinedTo');
+        frames.length = 0;
+
+        writeFileSync(regFile(home), UUID_B);
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+        expect(streamTailed(stream)).toMatchObject({ path: a, declinedTo: UUID_B });
+
+        writeFileSync(b, turn('after the fork'), 'utf8');
+        await pollOnce(stream);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: b, uuid: UUID_B });
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('a predecessor RESUMED past its marker is the conversation again (#189 re-review, server lens)', () => {
+    // Claude Code's own reader (`Txn`, 2.1.296) scans a transcript's tail
+    // newest line first and answers "not continued" at the first finished
+    // turn — and /resume drops the session's `superseded` flag on that
+    // answer. An explicit `claude --resume A` never checks the marker, so a
+    // supervisor that resumes the pre-fork id (one not yet moved to this
+    // build, or a head ccd cannot see) puts the operator's prompts in A while
+    // the stream shows the fork: the original report's symptom.
+    const setup = (home: string): { a: string; b: string } => {
+      seedRoster(home);
+      seed(home);
+      const dir = path.join(home, '.claude-a', 'projects', MUNGED);
+      return { a: path.join(dir, `${UUID_A}.jsonl`), b: path.join(dir, `${UUID_B}.jsonl`) };
+    };
+
+    it('while the fork keeps writing: the next re-walk answers A, and the stream returns to it', async () => {
+      const home = mkTmp('ccrc-resumed-live-');
+      const { a, b } = setup(home);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
+        writeFileSync(b, turn('after the fork'), 'utf8');
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(streamTailed(stream)).toMatchObject({ path: b, followedFrom: [UUID_A] });
+        frames.length = 0;
+
+        appendFileSync(a, turn('typed into the resumed pre-fork session'), 'utf8');
+        appendFileSync(b, turn('the fork carries on'), 'utf8');
+        await pollOnce(stream);   // sees B grow
+        await pollOnce(stream);   // B stood still: re-walks from A, whose tail now ends in a finished turn
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: a, uuid: UUID_A });
+        expect(streamTailed(stream)?.path).toBe(a);
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('the re-read is spent only on a CLEAN predecessor answer — one that could not read A, or that read A\'s ' +
+       'marker and declined, costs the stream no read of A at all (cost pin)', async () => {
+      // Either flag is a "keep looking" answer the memo serves for the whole
+      // back-off, every tick, and a fresh one at every re-walk; the stream
+      // does not second-guess it — not per tick, and not once per answer
+      // (`notResumed` alone would still allow that one read per back-off).
+      // The only read of A counted from the re-walk on is the walk's own.
+      const run = async (flag: 'tailUnmeasured' | 'declinedTo'): Promise<number> => {
+        const home = mkTmp(`ccrc-resumed-cost-${flag}-`);
+        const { a, b } = setup(home);
+        let readsOfA = 0;
+        let failA = 0;
+        let statBFails = false;
+        let statBFailed = 0;
+        const io: FleetIO = {
+          ...localIO,
+          readFileFromMeasured: async (p, off) => {
+            if (p === a) {
+              readsOfA += 1;
+              if (failA > 0) { failA -= 1; return { ok: false, reason: 'unreadable' }; }
+            }
+            return localIO.readFileFromMeasured(p, off);
+          },
+          statMeasured: async (p) => {
+            if (p === b && statBFails) { statBFailed += 1; return { ok: false, reason: 'unreadable' }; }
+            return localIO.statMeasured(p);
+          },
+        };
+        const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, () => {}, undefined, NO_TICK);
+        try {
+          await stream.start();
+          appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
+          writeFileSync(b, turn('after the fork'), 'utf8');
+          await pollOnce(stream);
+          await pollOnce(stream);
+          expect(streamTailed(stream)?.path).toBe(b);
+          appendFileSync(b, turn('a turn in the fork'), 'utf8');
+          await pollOnce(stream);   // sees B grow
+          if (flag === 'tailUnmeasured') failA = 1; else statBFails = true;
+          const before = readsOfA;
+          await pollOnce(stream);   // re-walks from A: answers A, flagged
+          if (flag === 'tailUnmeasured') expect(failA, 'the re-walk really read A').toBe(0);
+          else expect(statBFailed, 'the re-walk really stat-ed B').toBeGreaterThan(0);
+          statBFails = false;
+          for (let i = 0; i < 5; i += 1) await pollOnce(stream);
+          expect(streamTailed(stream)?.path).toBe(b);
+          return readsOfA - before - 1;   // less the walk's own read of A's tail
+        } finally {
+          stream.stop();
+          rmSync(home, { recursive: true, force: true });
+        }
+      };
+      expect(await run('tailUnmeasured')).toBe(0);
+      expect(await run('declinedTo')).toBe(0);
+    });
+
+    it('while the fork is FROZEN: the followed answer is re-walked on the back-off, and the stream returns to A',
+      async () => {
+        // B never changes again, so its stamp alone would serve B for the life
+        // of the socket and A would never be read again.
+        const home = mkTmp('ccrc-resumed-frozen-');
+        const { a, b } = setup(home);
+        let clock = 1_000_000;
+        const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+        const frames: any[] = [];
+        const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+        try {
+          await stream.start();
+          appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
+          writeFileSync(b, turn('after the fork'), 'utf8');
+          await pollOnce(stream);
+          await pollOnce(stream);
+          expect(streamTailed(stream)?.path).toBe(b);
+          frames.length = 0;
+
+          appendFileSync(a, turn('typed into the resumed pre-fork session'), 'utf8');
+          for (let i = 0; i < 3; i += 1) await pollOnce(stream);   // inside the back-off: B is served
+          expect(frames.filter((f) => f.type === 'backlog')).toEqual([]);
+          clock += RESOLVER_BACKOFF_MS;
+          await pollOnce(stream);
+          expect(frames.map((f) => f.type)).not.toContain('rotated');
+          expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: a, uuid: UUID_A });
+        } finally {
+          now.mockRestore();
+          stream.stop();
+          rmSync(home, { recursive: true, force: true });
+        }
+      });
+
+    it('a window with NO deciding line is not a resume: metadata past the marker never un-follows the fork — ' +
+       'only a finished turn does (D-4946, #189 re-review)', async () => {
+      // The 8 KiB window can hold no deciding line at all: more than that of
+      // records that are not turns after the marker. The walk then answers A
+      // (the shared 8 KiB rule, a declined follow), but nothing in the window
+      // says A was resumed — Claude Code, reading 64 KiB back, still sees the
+      // marker and says "continued". Un-following on that sent the open
+      // stream BACK to the frozen pre-fork file. A finished turn after it is
+      // what Claude Code itself stops at, so that still re-points.
+      const home = mkTmp('ccrc-resumed-undecided-');
+      const { a, b } = setup(home);
+      let clock = 1_000_000;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
+        writeFileSync(b, turn('after the fork'), 'utf8');
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(streamTailed(stream)).toMatchObject({ path: b, followedFrom: [UUID_A] });
+        frames.length = 0;
+
+        // 9 KB of a record that is not a turn lands after A's marker.
+        appendFileSync(a, `${JSON.stringify({ type: 'system', subtype: 'informational', content: 'x'.repeat(9000) })}\n`);
+        for (let i = 0; i < 2; i += 1) await pollOnce(stream);
+        clock += RESOLVER_BACKOFF_MS;
+        for (let i = 0; i < 3; i += 1) await pollOnce(stream);   // the re-walk from A answers A: undecided, not resumed
+        expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+        expect(streamTailed(stream)?.path).toBe(b);
+
+        appendFileSync(a, turn('typed into the resumed pre-fork session'), 'utf8');
+        clock += RESOLVER_BACKOFF_MS;
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: a, uuid: UUID_A });
+      } finally {
+        now.mockRestore();
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('…but a predecessor whose re-read FAILED is read again on the next tick: only a measured "not shown" is ' +
+       'remembered', async () => {
+      // The walk read A's finished turn and answered a clean A; the stream's
+      // own read of A, the one that decides, fails this once. Nobody knows —
+      // so the same answer, served again, is read again.
+      const home = mkTmp('ccrc-resumed-reread-');
+      const { a, b } = setup(home);
+      let readsOfA = 0;
+      let failReadNo = 0;
+      const io: FleetIO = {
+        ...localIO,
+        readFileFromMeasured: async (p, off) => {
+          if (p === a) {
+            readsOfA += 1;
+            if (readsOfA === failReadNo) return { ok: false, reason: 'unreadable' };
+          }
+          return localIO.readFileFromMeasured(p, off);
+        },
+      };
+      let clock = 1_000_000;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
+        writeFileSync(b, turn('after the fork'), 'utf8');
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(streamTailed(stream)?.path).toBe(b);
+        appendFileSync(a, turn('typed into the resumed pre-fork session'), 'utf8');
+        frames.length = 0;
+        failReadNo = readsOfA + 2;   // the walk's read of A succeeds; the stream's own read after it fails
+        clock += RESOLVER_BACKOFF_MS;
+        await pollOnce(stream);
+        expect(readsOfA, 'both reads of A happened on that tick').toBe(failReadNo);
+        expect(frames.filter((f) => f.type === 'backlog')).toEqual([]);
+        await pollOnce(stream);   // the same clean A, served by its unchanged stamp
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: a, uuid: UUID_A });
+      } finally {
+        now.mockRestore();
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('…and a predecessor measured NOT resumed is not re-read every tick while the memo serves the same answer ' +
+       '(cost pin)', async () => {
+      // That state can last for the life of the socket: `ccd` reads the same
+      // 8 KiB, sees no marker either, and never moves the registry off A, so
+      // the memo serves a clean A for as long as A does not change.
+      const home = mkTmp('ccrc-resumed-undecided-cost-');
+      const { a, b } = setup(home);
+      let readsOfA = 0;
+      let statsOfA = 0;
+      // The memo's own revalidation stat (the folded `stat`, one per tick on
+      // a healthy row) is pinned to `localIO`'s and not counted: what is
+      // counted is the stream's MEASURED look at A.
+      const io: FleetIO = {
+        ...localIO,
+        stat: (p) => localIO.stat(p),
+        readFileFromMeasured: async (p, off) => {
+          if (p === a) readsOfA += 1;
+          return localIO.readFileFromMeasured(p, off);
+        },
+        statMeasured: async (p) => {
+          if (p === a) statsOfA += 1;
+          return localIO.statMeasured(p);
+        },
+      };
+      let clock = 1_000_000;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, () => {}, undefined, NO_TICK);
+      try {
+        await stream.start();
+        appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
+        writeFileSync(b, turn('after the fork'), 'utf8');
+        await pollOnce(stream);
+        await pollOnce(stream);
+        appendFileSync(a, `${JSON.stringify({ type: 'system', subtype: 'informational', content: 'x'.repeat(9000) })}\n`);
+        clock += RESOLVER_BACKOFF_MS;
+        await pollOnce(stream);   // the re-walk from A answers a clean A; the stream reads it once
+        expect(streamTailed(stream)?.path).toBe(b);
+        expect(readsOfA, 'the stream really measured A once').toBeGreaterThan(0);
+        readsOfA = 0;
+        statsOfA = 0;
+        for (let i = 0; i < 5; i += 1) await pollOnce(stream);
+        expect({ readsOfA, statsOfA }).toEqual({ readsOfA: 0, statsOfA: 0 });
+        expect(streamTailed(stream)?.path).toBe(b);
+      } finally {
+        now.mockRestore();
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('a symlinked workdir and a `<pid>.json` blip after a fork (D-4946, probes E2/E2b)', () => {
+    // The registry workdir is the SYMLINK spelling, the pane's live cwd its
+    // realpath, and the transcripts sit under the realpath's munge. A
+    // `<pid>.json` read that comes back unmeasured makes the stream resolve
+    // from the registry workdir instead: a different memo KEY, under which A
+    // is the RESOLVED spelling of `dir` (rung 1) where the live key had it at
+    // rung 2. "Strictly better rung" re-pointed B back onto A for one tick.
+    const setup = (home: string): { pre: string; successor: string; pidJson: string } => {
+      seedRoster(home);
+      seed(home);
+      const phys = path.join(home, 'phys', 'proj');
+      mkdirSync(phys, { recursive: true });
+      symlinkSync(path.join(home, 'phys'), path.join(home, 'link'));
+      const workdir = path.join(home, 'link', 'proj');
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.workdir`), workdir);
+      const pidJson = path.join(home, '.claude-a', 'sessions', `${PID}.json`);
+      const live = JSON.parse(readFileSync(pidJson, 'utf8'));
+      writeFileSync(pidJson, JSON.stringify({ ...live, cwd: phys }));
+      const dir = path.join(home, '.claude-a', 'projects', phys.replace(/[^a-zA-Z0-9]/g, '-'));
+      mkdirSync(dir, { recursive: true });
+      const pre = path.join(dir, `${UUID_A}.jsonl`);
+      writeFileSync(pre, userLine('u1', 'one') + userLine('u2', 'two'));
+      return { pre, successor: path.join(dir, `${UUID_B}.jsonl`), pidJson };
+    };
+    const blippy = (pidJson: string, flags: { pid: boolean; tailOf: string | null }): FleetIO => ({
+      ...localIO,
+      readFileMeasured: async (p) =>
+        (flags.pid && p === pidJson ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
+      readFile: async (p) => (flags.pid && p === pidJson ? null : localIO.readFile(p)),
+      readFileFromMeasured: async (p, off) =>
+        (p === flags.tailOf ? { ok: false, reason: 'unreadable' } : localIO.readFileFromMeasured(p, off)),
+    });
+
+    it('a stale memo entry from a blip BEFORE the fork never re-points the stream back to the pre-fork file', async () => {
+      const home = mkTmp('ccrc-repoint-e2b-');
+      const { pre, successor, pidJson } = setup(home);
+      const flags = { pid: false, tailOf: null as string | null };
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, blippy(pidJson, flags)), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        expect(streamTailed(stream)).toMatchObject({ path: pre });
+        flags.pid = true; await pollOnce(stream); flags.pid = false;   // a blip before the fork: memoizes A
+        await pollOnce(stream);
+        appendFileSync(pre, marker(UUID_A, UUID_B), 'utf8');
+        writeFileSync(successor, turn('after the fork'), 'utf8');
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(streamTailed(stream)).toMatchObject({ path: successor });
+        frames.length = 0;
+
+        flags.pid = true; await pollOnce(stream); flags.pid = false;   // the blip after it
+        await pollOnce(stream);
+        expect(frames.filter((f) => f.type === 'backlog' && f.file === pre)).toEqual([]);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(streamTailed(stream)).toMatchObject({ path: successor });
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('a stale memo entry served on a tick the stream cannot re-read the pre-fork file never re-points back to it ' +
+       '(#189 re-review)', async () => {
+      // E2b's stale clean A is what the stream re-measures before it may
+      // un-follow (a predecessor resumed past its marker): an unmeasured read
+      // is not "resumed", it is nobody knows — the backward refusal holds.
+      const home = mkTmp('ccrc-repoint-e2b-unread-');
+      const { pre, successor, pidJson } = setup(home);
+      const flags = { pid: false, tailOf: null as string | null };
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, blippy(pidJson, flags)), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        flags.pid = true; await pollOnce(stream); flags.pid = false;   // a blip before the fork: memoizes A
+        await pollOnce(stream);
+        appendFileSync(pre, marker(UUID_A, UUID_B), 'utf8');
+        writeFileSync(successor, turn('after the fork'), 'utf8');
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(streamTailed(stream)).toMatchObject({ path: successor });
+        frames.length = 0;
+
+        flags.pid = true; flags.tailOf = pre;
+        await pollOnce(stream);   // the stale A is served, and the stream's own read of A fails
+        flags.pid = false; flags.tailOf = null;
+        await pollOnce(stream);
+        expect(frames.filter((f) => f.type === 'backlog' && f.file === pre)).toEqual([]);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(streamTailed(stream)).toMatchObject({ path: successor });
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('a blip that also fails the pre-fork file\'s tail read never re-points the stream back to it', async () => {
+      const home = mkTmp('ccrc-repoint-e2-');
+      const { pre, successor, pidJson } = setup(home);
+      const flags = { pid: false, tailOf: null as string | null };
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, blippy(pidJson, flags)), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+      try {
+        await stream.start();
+        appendFileSync(pre, marker(UUID_A, UUID_B), 'utf8');
+        writeFileSync(successor, turn('after the fork'), 'utf8');
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(streamTailed(stream)).toMatchObject({ path: successor });
+        frames.length = 0;
+
+        flags.pid = true; flags.tailOf = pre;
+        await pollOnce(stream);
+        flags.pid = false; flags.tailOf = null;
+        await pollOnce(stream);
+        expect(frames.filter((f) => f.type === 'backlog' && f.file === pre)).toEqual([]);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(streamTailed(stream)).toMatchObject({ path: successor });
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+  });
+
   it('an unchanged answer re-points NOTHING — same tailer instance, no frames', async () => {
     // Kills the mutant that re-resolves and re-points unconditionally: this is
     // what every tick of every healthy session does, ~43,000 times a day.
@@ -969,7 +2654,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     seed(home);
     const deps = mkLadderDeps(home, localIO);
     const frames: any[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       const tailerBefore = streamTailer(stream);
@@ -999,7 +2684,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
 
     const deps = mkLadderDeps(home, localIO);
     const frames: any[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       const backlog = frames.find((f) => f.type === 'backlog');
@@ -1033,7 +2718,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       stat: async (p) => (p === cfgDir2 ? null : localIO.stat(p)),
     };
     const frames2: any[] = [];
-    const stream2 = new SessionStream(mkLadderDeps(home2, unmeasurableOwnAccountIO), new Bus(), ID, (m) => frames2.push(m));
+    const stream2 = new SessionStream(mkLadderDeps(home2, unmeasurableOwnAccountIO), new Bus(), ID, (m) => frames2.push(m), undefined, NO_TICK);
     try {
       await stream2.start();
       const backlog = frames2.find((f) => f.type === 'backlog');
@@ -1058,7 +2743,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     seed(home);
     const io = degradedStatIO((p) => p.endsWith(`${UUID_A}.jsonl`));
     const frames: any[] = [];
-    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start();
       const backlog = frames.find((f) => f.type === 'backlog');
@@ -1082,12 +2767,12 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     seed(home);
     const deps = mkLadderDeps(home, unreadableField(ID, 'uuid'));
     const frames: { type: string; message?: string }[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string }));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string }), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames[0]).toEqual({ type: 'notice', message: `session ${ID} is temporarily unreadable — retrying` });
-      // degrade-and-heal keeps polling — see the next test for the absent contrast.
-      expect(pollTimer(stream)).not.toBeNull();
+      // degrade-and-heal stays armed — see the next test for the absent contrast.
+      expect(retryTimer(stream)).not.toBeNull();
     } finally {
       stream.stop();
       rmSync(home, { recursive: true, force: true });
@@ -1101,11 +2786,11 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     seed(home);
     const deps = mkLadderDeps(home, unlistableIO);
     const frames: { type: string; message?: string }[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string }));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string }), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames[0]).toEqual({ type: 'notice', message: `session ${ID} is temporarily unreadable — retrying` });
-      expect(pollTimer(stream)).not.toBeNull();
+      expect(retryTimer(stream)).not.toBeNull();
     } finally {
       stream.stop();
       rmSync(home, { recursive: true, force: true });
@@ -1119,11 +2804,14 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true }); // listable, but names nobody
     const deps = mkLadderDeps(home, localIO);
     const frames: { type: string; message?: string }[] = [];
-    const stream = new SessionStream(deps, new Bus(), 'no-such-session', (m) => frames.push(m as { type: string; message?: string }));
+    const bus = new Bus();
+    const stream = new SessionStream(deps, bus, 'no-such-session', (m) => frames.push(m as { type: string; message?: string }), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames[0]).toEqual({ type: 'notice', message: 'unknown session no-such-session' });
-      expect(pollTimer(stream)).toBeNull();
+      expect(retryTimer(stream)).toBeNull();
+      expect({ row: bus.listenerCount('row:no-such-session'), fleet: bus.listenerCount('fleet') }, 'and no event trigger (D-8611)')
+        .toEqual({ row: 0, fleet: 0 });
     } finally {
       stream.stop();
       rmSync(home, { recursive: true, force: true });
@@ -1139,7 +2827,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     const io = degradedReadIO((p) => broken && p.endsWith(`${ID}.uuid`));
     const deps = mkLadderDeps(home, io);
     const frames: { type: string; message?: string; uuid?: string }[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string; uuid?: string }), { uuid: UUID_A, offset: 0 });
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string; uuid?: string }), { uuid: UUID_A, offset: 0 }, NO_TICK);
     try {
       await stream.start();
       expect(streamUuid(stream)).toBeNull(); // never resolved yet — the honest starting point
@@ -1168,7 +2856,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     const io = degradedReadIO((p) => broken && p.endsWith(`${ID}.uuid`));
     const deps = mkLadderDeps(home, io);
     const frames: { type: string }[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string }));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string }), undefined, NO_TICK);
     try {
       await stream.start(); // clean resolve — installs the real tailer
       const uuidBefore = streamUuid(stream);
@@ -1210,7 +2898,7 @@ describe('chat header: an unmeasured live status file is not a session at rest (
     const deps = mkLadderDeps(home, io);
     const frames: { type: string; status?: string; statusUpdatedAt?: number | null }[] = [];
     const stream = new SessionStream(deps, new Bus(), ID,
-      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }));
+      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }), undefined, NO_TICK);
     try {
       await stream.start();          // clean resolve: the file reads 'idle'
       frames.length = 0;
@@ -1238,6 +2926,44 @@ describe('chat header: an unmeasured live status file is not a session at rest (
     }
   });
 
+  // D-5275: the header mirrors `assembleFleet` (D-5234) for a pane that is alive but whose pid read FAILED — the card
+  // paints that `busy`, so the header must too (the mirror rule above); before, `if (pid)` left it at `idle`.
+  it('an alive pane whose pid read fails reads busy on the header, with no timestamp, and idle once it heals (D-5275)', async () => {
+    const home = mkTmp('ccrc-live-hdr-');
+    seedRoster(home);
+    seed(home);   // the live file says status: 'idle'
+    let pidFails = true;
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') {
+        return pidFails ? { ran: true, code: 1, stdout: '', stderr: 'tmux: timeout' } : { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      }
+      return { ran: true, code: 0, stdout: '', stderr: '' };
+    };
+    const deps: Deps = { ...mkLadderDeps(home, localIO), tmux: new Tmux(run) };
+    const frames: { type: string; status?: string; statusUpdatedAt?: number | null }[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID,
+      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }), undefined, NO_TICK);
+    try {
+      await stream.start();
+      const first = frames.filter((f) => f.type === 'status');
+      expect(first).toHaveLength(1);
+      expect(first[0]!.status).toBe('busy');
+      expect(first[0]!.statusUpdatedAt).toBeNull();
+
+      frames.length = 0;
+      pidFails = false;
+      await (stream as unknown as { tick: () => Promise<void> }).tick();
+      const back = frames.filter((f) => f.type === 'status');
+      expect(back).toHaveLength(1);
+      expect(back[0]!.status).toBe('idle');
+      expect(back[0]!.statusUpdatedAt).toBe(1784582728369);
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('… and an ABSENT live file still resolves idle — the positive control', async () => {
     // Same separation the fleet suite draws: this fix must not turn every
     // pane with no published `<pid>.json` into a busy header.
@@ -1245,7 +2971,7 @@ describe('chat header: an unmeasured live status file is not a session at rest (
     seedRoster(home);
     seed(home);
     rmSync(path.join(home, '.claude-a', LIVE));
-    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, () => {});
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, () => {}, undefined, NO_TICK);
     try {
       await stream.start();
       expect(streamStatus(stream)).toBe('idle');
@@ -1266,7 +2992,7 @@ describe('chat header: an unmeasured live status file is not a session at rest (
 // `status` is written by this frame and nothing else.
 //
 // So a status learned in an EARLIER connection outlived it. MEASURED
-// 2026-09-10 on `expoAI-assistant-warm-cove`: a swap into another lane left
+// 2026-09-10 on `project-h-warm-cove`: a swap into another lane left
 // the pane gone for 4.8s (`ccd swap` 10:20:19 -> re-spawn 10:20:23), a client
 // watching it was told `dead`, and the socket that would have corrected it on
 // its next poll was replaced instead (screen closed and reopened, phone
@@ -1285,7 +3011,7 @@ describe('chat header: the stream STATES the status on connect, it does not only
     seed(home);                      // live file says idle @ 1784582728369
     const frames: { type: string; status?: string; statusUpdatedAt?: number | null }[] = [];
     const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID,
-      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }));
+      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }), undefined, NO_TICK);
     try {
       await stream.start();
       const st = frames.filter((f) => f.type === 'status');
@@ -1318,7 +3044,7 @@ describe('chat header: the stream STATES the status on connect, it does not only
     const frames: { type: string; status?: string }[] = [];
     const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID,
       (m) => frames.push(m as { type: string; status?: string }),
-      { uuid: UUID_A, offset: statSync(fileA).size, file: fileA });
+      { uuid: UUID_A, offset: statSync(fileA).size, file: fileA }, NO_TICK);
     try {
       await stream.start();
       expect(frames.filter((f) => f.type === 'backlog')).toHaveLength(0);   // resumed, as designed
@@ -1337,7 +3063,7 @@ describe('chat header: the stream STATES the status on connect, it does not only
     seed(home);
     const frames: { type: string }[] = [];
     const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID,
-      (m) => frames.push(m as { type: string }));
+      (m) => frames.push(m as { type: string }), undefined, NO_TICK);
     try {
       await stream.start();
       frames.length = 0;
@@ -1361,7 +3087,7 @@ describe('chat header: the stream STATES the status on connect, it does not only
     seed(home);
     const frames: { type: string }[] = [];
     const stream = new SessionStream(mkLadderDeps(home, unreadableField(ID, 'uuid')), new Bus(), ID,
-      (m) => frames.push(m as { type: string }));
+      (m) => frames.push(m as { type: string }), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames.filter((f) => f.type === 'status')).toHaveLength(0);
@@ -1377,7 +3103,7 @@ describe('chat header: the stream STATES the status on connect, it does not only
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     const frames: { type: string }[] = [];
     const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), 'no-such-session',
-      (m) => frames.push(m as { type: string }));
+      (m) => frames.push(m as { type: string }), undefined, NO_TICK);
     try {
       await stream.start();
       expect(frames.filter((f) => f.type === 'status')).toHaveLength(0);
@@ -1399,12 +3125,12 @@ describe('registry ladder: a mid-stream degrade never interrupts the open tail (
     let degrade = false;
     const io = degradedReadIO((p) => degrade && p.endsWith(`${ID}.uuid`));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(), time: fakeTime().ports };
     const app = await buildServer(deps, new Bus());
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();
@@ -1433,7 +3159,7 @@ describe('registry ladder: a mid-stream degrade never interrupts the open tail (
 
 /**
  * THE SYMLINK-MUNGE MISMATCH, pinned at the stream level — the exact shape of
- * `claude-b-data-internal` in production. Claude Code munges its PHYSICAL
+ * `claude-b-project-e` in production. Claude Code munges its PHYSICAL
  * cwd; the registry keeps the path ccd wrote; when the workdir traverses a
  * symlink and the session is DEAD (no live cwd to paper over it), the chat
  * used to look under the registry munge and render "Can't find this session's
@@ -1445,14 +3171,14 @@ describe('session WS — dead session behind a symlinked workdir', () => {
     seedRoster(home);
     // The production chain in miniature: <home>/data-link -> <home>/volume,
     // registry workdir through the link, transcript under the physical munge.
-    const volumeDir = path.join(home, 'volume', 'projects', 'MekWarLive');
+    const volumeDir = path.join(home, 'volume', 'projects', 'project-f');
     mkdirSync(volumeDir, { recursive: true });
     symlinkSync(path.join(home, 'volume'), path.join(home, 'data-link'));
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const fields = {
-      wrapper: 'claude-a', project: 'MekWarLive',
-      workdir: path.join(home, 'data-link', 'projects', 'MekWarLive'),
+      wrapper: 'claude-a', project: 'project-f',
+      workdir: path.join(home, 'data-link', 'projects', 'project-f'),
       uuid: UUID_A, started: '1',
     };
     for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
@@ -1463,9 +3189,9 @@ describe('session WS — dead session behind a symlinked workdir', () => {
 
     // DEAD is the point: has-session answers 1, so no live cwd can rescue the
     // resolution the way it always rescued running sessions.
-    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
     const deadApp = await buildServer(deps, new Bus());
     await deadApp.listen({ host: '127.0.0.1', port: 0 });
     const addr = deadApp.server.address();
@@ -1496,20 +3222,22 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
   let app: FastifyInstance | undefined;
   let port: number;
   let coord: CoordStore;
+  let bus: Bus;
 
   beforeEach(async () => {
     home = mkTmp('ccrc-sws-mail-');
     seedRoster(home);
     seed(home);
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord };
-    app = await buildServer(deps, new Bus());
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, coord };
+    bus = new Bus();
+    app = await buildServer(deps, bus);
     await app.listen({ host: '127.0.0.1', port: 0 });
     const addr = app.server.address();
     port = typeof addr === 'object' && addr !== null ? addr.port : 0;
@@ -1551,8 +3279,9 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
   });
 
   // Task 8 fix round 1, finding 1: the test above waits up to 36 s across six
-  // messages — plenty of time for the first 2 s poll tick's OWN checkMail()
-  // call (`tick()`) to deliver the identical frame, so it cannot actually
+  // messages — when this was written, plenty of time for the first 2 s poll tick's OWN checkMail()
+  // call (`tick()`) to deliver the identical frame (the mail is the feed's now, ARCH-52, and the stream has no 2 s
+  // poll, D-8611), so it cannot actually
   // tell `start()`'s own call site (`if (r.ok) await this.checkMail();`)
   // apart from the tick's. Constructing the stream directly and reading
   // `frames` the instant `start()` resolves — never calling `tick()` at all
@@ -1562,14 +3291,14 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
   it("start()'s own checkMail call puts mail on the wire before any poll tick could", async () => {
     queueTo(ID, 'on connect, not on a tick');
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), coord };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports, coord };
     const frames: SessionStreamMsg[] = [];
-    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
     try {
       await stream.start(); // no tick() called — real timer never fires inside a sync test
       const mailFrame = frames.find((f) => f.type === 'mail') as { mail: { subject: string }[] } | undefined;
@@ -1723,6 +3452,8 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     expect(initialMail?.mail).toEqual([]);
 
     queueTo(ID, 'fresh mail after connect');
+    // The tick is the watcher's (ARCH-52): a session's feed has no clock, a published pane is what wakes it.
+    bus.emit(`pane:${ID}`, { at: Date.now(), doneAt: Date.now(), pane: 'idle\n❯ \n' });
     let mailFrame: { type: string; mail: { subject: string }[] } | undefined;
     for (let i = 0; i < 6 && !mailFrame; i++) {
       const m = await next(6000);
@@ -1739,9 +3470,9 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
   // an unchanged ask' — hook ask envelope frames, line 295); `checkMail`'s
   // own change gate (`if (json === this.lastMailJson) return;`) never had
   // one. Undetected, deleting that gate would put a `mail` frame on the wire
-  // every ~2 s poll tick, for the life of every session socket, whether or
+  // every feed tick, for the life of every session socket, whether or
   // not anything changed.
-  it('does not resend an unchanged mail list on a later poll tick', { timeout: 15_000 }, async () => {
+  it('does not resend an unchanged mail list on a later feed tick', { timeout: 15_000 }, async () => {
     queueTo(ID, 'steady state');
 
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
@@ -1757,12 +3488,14 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     expect(mailFrame?.mail).toHaveLength(1);
 
     // The store is untouched from here on — collect everything that arrives
-    // over two more real poll ticks (POLL_MS = 2 s in sessionws.ts) and
+    // over two more feed ticks (each woken by a published pane, as the watcher's
+    // tick sends one: the feed and the stream have no clock of their own, ARCH-52, D-8611) and
     // confirm no second `mail` frame is among it. A deleted change gate
     // fails this deterministically (one extra frame per tick), unlike the
     // pre-existing 'pushes freshly queued mail' test, which only proves a
     // CHANGE gets sent and says nothing about an UNCHANGED one.
-    const deadline = Date.now() + 5000;
+    for (let i = 0; i < 2; i++) bus.emit(`pane:${ID}`, { at: Date.now(), doneAt: Date.now(), pane: 'idle\n❯ \n' });
+    const deadline = Date.now() + 3000;
     const extra: { type: string }[] = [];
     for (;;) {
       const remaining = deadline - Date.now();
@@ -1779,12 +3512,12 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
 
   it('sends no mail frame at all with no coord configured — the same absent-store silence every coord route answers', async () => {
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
     const noCoordApp = await buildServer(deps, new Bus());
     await noCoordApp.listen({ host: '127.0.0.1', port: 0 });
     const addr = noCoordApp.server.address();
@@ -1800,5 +3533,217 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     } finally {
       await noCoordApp.close();
     }
+  });
+});
+
+
+// Decision `ask-answer-returns-next-screen` (the 2026-10-16 report): the last answer of a two-question ask landed, a
+// poll caught the pane with no menu and sent `dialog_cleared`, and until a later poll sent the review the envelope sheet
+// had nothing to match and showed "Open terminal to answer". The answer route now hands the screen it saw to every
+// open stream of the session (`answered:<id>`). Panes: a recorded Claude Code 2.1.296 ask in unrelated made-up content.
+describe('an answer route\'s next screen reaches the stream (decision ask-answer-returns-next-screen)', () => {
+  const q2 = fixture('cc296-ask-2q-long-q2.txt');
+  const review = fixture('cc296-ask-2q-long-review.txt');
+  // DERIVED from the review: the same screen caught before its cursor row repainted, which `hasMenu` reads as no menu.
+  const halfPainted = review.replace('❯ 1. Submit answers', '  1. Submit answers');
+  const dialogFrames = (frames: any[]): any[] => frames.filter((f) => f.type === 'dialog' || f.type === 'dialog_cleared');
+
+  it('a no-menu poll, then the answer\'s review: the review is sent at once, not on the next poll', async () => {
+    const { frames, marks } = await streamWith({
+      paneSequence: [q2, halfPainted, review],
+      answered: [{ after: 1, next: parseDialog(review) }],
+    });
+    const seq = dialogFrames(frames);
+    expect(seq.map((f) => f.type)).toEqual(['dialog', 'dialog_cleared', 'dialog']);
+    expect(seq[2].dialog.id).toBe(parseDialog(review)!.id);
+    // Sent when the answer was handled (before the poll of step 2), and the poll that then saw the review sent nothing.
+    expect(frames.slice(0, marks[0]!).filter((f) => f.type === 'dialog').map((f) => f.dialog.id))
+      .toContain(parseDialog(review)!.id);
+  });
+
+  it('the stream\'s record follows the answer: a later poll that finds no menu still clears it', async () => {
+    const { frames } = await streamWith({
+      paneSequence: [q2, halfPainted, halfPainted],
+      answered: [{ after: 1, next: parseDialog(review) }],
+    });
+    expect(dialogFrames(frames).map((f) => f.type)).toEqual(['dialog', 'dialog_cleared', 'dialog', 'dialog_cleared']);
+  });
+
+  it('an answer that saw the screen the client already has sends nothing', async () => {
+    const { frames } = await streamWith({ paneSequence: [review, review], answered: [{ after: 1, next: parseDialog(review) }] });
+    expect(dialogFrames(frames).map((f) => f.type)).toEqual(['dialog']);
+  });
+});
+
+// Decision `ask-failed-capture-holds`: a failed capture (tmux, or the remote call behind it, returned nothing) is NO
+// READING of the pane. It is not "no menu": sending `dialog_cleared` on it is what put the 2026-10-16 sheet on
+// "Open terminal to answer" with the review still on the pane. Only a measured no-menu reading clears, or a run of
+// FAILED_CAPTURES_CLEAR failed captures in a row (a pane tmux can no longer read, which an answer refuses anyway).
+describe('a failed capture holds the dialog (decision ask-failed-capture-holds)', () => {
+  const q2 = fixture('cc296-ask-2q-long-q2.txt');
+  const review = fixture('cc296-ask-2q-long-review.txt');
+  const dialogFrames = (frames: any[]): any[] => frames.filter((f) => f.type === 'dialog' || f.type === 'dialog_cleared');
+
+  it('Q2 answered, the answer\'s next is the review, then one failed capture: the review stays', async () => {
+    const { frames } = await streamWith({
+      paneSequence: [q2, q2, null, review],
+      answered: [{ after: 1, next: parseDialog(review) }],
+    });
+    const seq = dialogFrames(frames);
+    expect(seq.map((f) => f.type)).toEqual(['dialog', 'dialog']);
+    expect(seq[1].dialog.id).toBe(parseDialog(review)!.id);
+  });
+
+  it('a failed capture on a question neither clears it nor re-sends it when the pane reads again', async () => {
+    const { frames } = await streamWith({ paneSequence: [q2, null, null, q2] });
+    expect(dialogFrames(frames).map((f) => f.type)).toEqual(['dialog']);
+  });
+
+  it('a measured no-menu reading still clears', async () => {
+    const { frames } = await streamWith({ paneSequence: [q2, null, 'done\n❯ \n'] });
+    expect(dialogFrames(frames).map((f) => f.type)).toEqual(['dialog', 'dialog_cleared']);
+  });
+
+  it('three failed captures in a row clear it; two do not', async () => {
+    const two = await streamWith({ paneSequence: [q2, null, null] });
+    expect(dialogFrames(two.frames).map((f) => f.type)).toEqual(['dialog']);
+    const three = await streamWith({ paneSequence: [q2, null, null, null] });
+    expect(dialogFrames(three.frames).map((f) => f.type)).toEqual(['dialog', 'dialog_cleared']);
+  });
+
+  it('a reading between failures restarts the count', async () => {
+    const { frames } = await streamWith({ paneSequence: [q2, null, null, q2, null, null] });
+    expect(dialogFrames(frames).map((f) => f.type)).toEqual(['dialog']);
+  });
+});
+
+// Decision `ask-stale-poll-dropped`: a poll whose capture began before an answer's `answered:<id>` and came back after
+// it read the pane as it was BEFORE that answer. Framing it would send the answered question back over the screen the
+// answer reported, and a tap on it would be refused as stale. Such a reading is dropped; the next poll reads afresh.
+describe('a poll that began before an answer is dropped (decision ask-stale-poll-dropped)', () => {
+  const q2 = fixture('cc296-ask-2q-long-q2.txt');
+  const review = fixture('cc296-ask-2q-long-review.txt');
+  const dialogFrames = (frames: any[]): any[] => frames.filter((f) => f.type === 'dialog' || f.type === 'dialog_cleared');
+
+  it('the capture of Q2 resolves after the answer reported the review: Q2 is not sent back', async () => {
+    const { frames } = await streamWith({
+      paneSequence: [q2, q2, review],
+      answeredDuringCapture: [{ step: 1, next: parseDialog(review) }],
+    });
+    const seq = dialogFrames(frames);
+    expect(seq.map((f) => f.type)).toEqual(['dialog', 'dialog']);
+    expect(seq[1].dialog.id).toBe(parseDialog(review)!.id);
+  });
+
+  it('a no-menu grab whose capture began before the answer does not clear the review the answer reported', async () => {
+    const halfPainted = review.replace('❯ 1. Submit answers', '  1. Submit answers');
+    const { frames } = await streamWith({
+      paneSequence: [q2, halfPainted, review],
+      answeredDuringCapture: [{ step: 1, next: parseDialog(review) }],
+    });
+    expect(dialogFrames(frames).map((f) => f.type)).toEqual(['dialog', 'dialog']);
+  });
+
+  it('an answer handled during the poll\'s transcript stat drops that poll too', async () => {
+    const { frames } = await streamWith({
+      paneSequence: [q2, q2, review],
+      answeredDuringStat: [{ step: 1, next: parseDialog(review) }],
+    });
+    const seq = dialogFrames(frames);
+    expect(seq.map((f) => f.type)).toEqual(['dialog', 'dialog']);
+    expect(seq[1].dialog.id).toBe(parseDialog(review)!.id);
+  });
+
+  it('the next poll after it reads afresh and is framed', async () => {
+    const { frames } = await streamWith({
+      paneSequence: [q2, q2, 'done\n❯ \n'],
+      answeredDuringCapture: [{ step: 1, next: parseDialog(review) }],
+    });
+    expect(dialogFrames(frames).map((f) => f.type)).toEqual(['dialog', 'dialog', 'dialog_cleared']);
+  });
+});
+
+describe('dialogFrameLine (decision dialog-frame-log)', () => {
+  const review = parseDialog(fixture('cc296-ask-2q-long-review.txt'))!;
+  const q2 = parseDialog(fixture('cc296-ask-2q-long-q2.txt'))!;
+  it('names the session, the kind, the short id, where it came from and the tick time; never pane text', () => {
+    expect(dialogFrameLine('lane-a', { type: 'dialog', dialog: review }, 'poll', 37))
+      .toBe(`ccrc-server: dialog-frame lane-a review ${review.id.slice(0, 8)} from=poll tick=37`);
+    expect(dialogFrameLine('lane-a', { type: 'dialog', dialog: q2 }, 'answer', null))
+      .toBe(`ccrc-server: dialog-frame lane-a question ${q2.id.slice(0, 8)} from=answer tick=-`);
+    expect(dialogFrameLine('lane-a', { type: 'dialog_cleared' }, 'poll', 5)).toBe('ccrc-server: dialog-frame lane-a cleared - from=poll tick=5');
+    expect(dialogFrameLine('lane-a', { type: 'dialog', dialog: { ...q2, parsed: false } }, 'poll', 1)).toContain(' unparsed ');
+  });
+});
+
+// D-5372: the tasks frame carries `touchedAt` (the newest task file mtime) as
+// an OPTIONAL field, so the strip can tell a live plan from one left open days
+// ago. Absent when nothing answered — an older PWA ignores it either way.
+describe('the tasks frame carries touchedAt (D-5372)', () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkTmp('ccrc-sws-tasks-');
+    seedRoster(home);
+    seed(home);
+  });
+  afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+  const startFrames = async (): Promise<SessionStreamMsg[]> => {
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
+    const frames: SessionStreamMsg[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+    try { await stream.start(); } finally { stream.stop(); }
+    return frames;
+  };
+  const seedTasks = (statuses: string[], at: Date): void => {
+    const dir = path.join(home, '.claude-a', 'tasks', UUID_A);
+    mkdirSync(dir, { recursive: true });
+    statuses.forEach((status, i) => {
+      const f = path.join(dir, `${i + 1}.json`);
+      writeFileSync(f, JSON.stringify({ id: String(i + 1), subject: `task ${i + 1}`, description: '', activeForm: `Doing ${i + 1}`, status }));
+      utimesSync(f, at, at);
+    });
+  };
+
+  it('an open list sends touchedAt = the newest task file mtime', async () => {
+    const at = new Date('2026-10-14T11:53:34Z');
+    seedTasks(['completed', 'in_progress', 'pending'], at);
+    const frame = (await startFrames()).find((f) => f.type === 'tasks');
+    expect(frame).toEqual({ type: 'tasks', tasks: expect.any(Array), touchedAt: at.getTime() });
+  });
+  it('a rewrite that leaves the rows equal still sends the new touchedAt — it is in the dedupe key', async () => {
+    const at = new Date('2026-10-14T11:53:34Z');
+    seedTasks(['in_progress'], at);
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports };
+    const frames: SessionStreamMsg[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m), undefined, NO_TICK);
+    try {
+      await stream.start();
+      const later = new Date('2026-10-17T18:00:00Z');
+      utimesSync(path.join(home, '.claude-a', 'tasks', UUID_A, '1.json'), later, later);
+      await (stream as unknown as { feed: { poll(): Promise<void> } }).feed.poll();   // the next reading of the plan
+    } finally {
+      stream.stop();
+    }
+    const sent = frames.filter((f) => f.type === 'tasks').map((f) => (f as { touchedAt?: number }).touchedAt);
+    expect(sent).toEqual([at.getTime(), Date.parse('2026-10-17T18:00:00Z')]);
+  });
+  it('a list with nothing open sends no touchedAt — the frame is what it was', async () => {
+    seedTasks(['completed'], new Date('2026-10-14T11:53:34Z'));
+    const frame = (await startFrames()).find((f) => f.type === 'tasks');
+    expect(frame).toBeDefined();
+    expect('touchedAt' in frame!).toBe(false);
   });
 });

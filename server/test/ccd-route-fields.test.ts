@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { execFileSync } from 'node:child_process';
+import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-route-fields-'); });
@@ -41,6 +42,11 @@ describe('the routing record (routing spec 2026-09-14 §5.1)', () => {
     ['compact', '10', true], ['compact', '50', true], ['compact', '100', true], ['compact', '9', false], ['compact', '101', false], ['compact', '50%', false],
     ['degraded', 'opus', true], ['degraded', 'default', false],
     ['inert', 'effort,workflow', true], ['inert', 'effort', true], ['inert', 'ultracode', false], ['inert', 'effort workflow', false],
+    // `subagent` joined `ROUTE_INERTABLE` in slice 6 Task 3: a lane that composes no
+    // `CLAUDE_CODE_SUBAGENT_MODEL` now says so by field name. `noeffort` is shape-legal
+    // (`^[a-z]+(,[a-z]+)*$`) and vocabulary-illegal, so it pins the PER-WORD lookup and
+    // not the regex — measured: deleting that loop reds this row and the `ultracode` one.
+    ['inert', 'subagent', true], ['inert', 'effort,workflow,subagent', true], ['inert', 'noeffort', false],
     ['colour', 'blue', false],
   ])('_route_valid %s=%s → %s', (field, value, ok) => {
     expect(h.sh(`_route_valid ${field} '${value}' && echo yes || echo no`)).toBe(ok ? 'yes' : 'no');
@@ -149,7 +155,135 @@ describe('the routing record (routing spec 2026-09-14 §5.1)', () => {
     expect(swapLog()).toBe('');
   });
 
-  it('ROUTE_FIELDS is the seven-field record, in the spec\'s order', () => {
-    expect(h.sh('printf "%s " "${ROUTE_FIELDS[@]}"').trim()).toBe('class effort subagent workflow compact degraded inert');
+  it('ROUTE_FIELDS is the fifteen-field record, in the spec\'s order (`browser` after `compact`, D-8121; the launch profile\'s three, Overlord W1a; `precompact`, the compaction piece; the pool set\'s `poolset acctorder` last, Overlord W1)', () => {
+    expect(h.sh('printf "%s " "${ROUTE_FIELDS[@]}"').trim()).toBe('class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact poolset acctorder profiledigest');
+  });
+
+  // Overlord W1a compaction, Task 4: the PreCompact refusal arm's switch. `refuse` or `allow`; the hook reads it, ccd's
+  // routing reads nothing of it (plan slug route-fields-outside-route-any, as `browser`).
+  it('precompact: refuse and allow are its vocabulary, anything else is not', () => {
+    for (const ok of ['refuse', 'allow']) expect(h.sh(`_route_valid precompact ${ok}; echo "rc=$?"`), ok).toBe('rc=0');
+    for (const bad of ['Refuse', 'refusex', 'on', 'block', "''"]) expect(h.sh(`_route_valid precompact ${bad}; echo "rc=$?"`), bad).toBe('rc=1');
+    seed();
+    h.sh(`_reg_set ${ID} precompact refuse`);
+    expect(get('precompact')).toBe('refuse|rc=0');
+  });
+  it('a row naming only precompact has no routing record: _route_any says no, and the coordinator row is still seeded', () => {
+    seed();
+    h.sh(`_reg_set ${ID} precompact refuse`);
+    expect(h.sh(`_route_any ${ID} && echo yes || echo no`)).toBe('no');
+    h.sh(`_route_seed_default ${ID} claude`);
+    expect(h.reg(ID, 'class')).toBe('opus');
+  });
+});
+
+/** `cmd_route`, observed through its exit status (it refuses through `die`): the `ccd-launch-profile.test.ts` shape. */
+const route = (args: string, env: NodeJS.ProcessEnv = {}): { status: number; out: string } => {
+  try {
+    const out = execFileSync('bash', ['-c', `source "${CCD}"; exec 2>&1; cmd_route ${args}`],
+      { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...env }, { systemd: true, tmux: true }) });
+    return { status: 0, out };
+  } catch (e) {
+    const err = e as { status?: number | null; stdout?: string; stderr?: string };
+    return { status: err.status ?? -1, out: `${err.stdout ?? ''}${err.stderr ?? ''}` };
+  }
+};
+const regFile = (f: string): string => path.join(h.home, '.cc-sessions', `${ID}.${f}`);
+
+// The Overlord W1 pool set, PR A1 (plan 2026-11-14-overlord-w1/w1-pool-set.md, Task 2): the session's set and the
+// Overlord's ordered account list, written only by `ccd route --session` (open question 10), read by nothing yet.
+describe('the pool set route fields: poolset and acctorder', () => {
+  it('cmd_route writes a set in its one spelling, and refuses every other spelling as a bad value', () => {
+    seed();
+    expect(route(`--session ${ID} --set poolset=pool-a,pool-b`).status).toBe(0);
+    expect(h.reg(ID, 'poolset')).toBe('pool-a,pool-b');
+    for (const ok of ['pool-b+untagged', '+untagged', 'pool-a,pool-ab+untagged']) {
+      expect(route(`--session ${ID} --set poolset=${ok}`).status, ok).toBe(0);
+      expect(h.reg(ID, 'poolset'), ok).toBe(ok);
+    }
+    // Unsorted, a repeat, the empty set's non-spelling (a bare `,`), a name off POOL_NAME_RE, and one byte past the cap.
+    const long = `poolset=${Array.from({ length: 205 }, (_, i) => `p${String(i).padStart(3, '0')}`).join(',')}`;
+    expect(long.length - 'poolset='.length).toBe(1024);
+    expect(route(`--session ${ID} --set ${long}`).status, 'exactly 1024 bytes passes').toBe(0);
+    for (const bad of ['pool-b,pool-a', 'pool-a,pool-a', ',', 'Pool-A', 'pool-a+untagged+untagged', `${long}x`]) {
+      const r = route(`--session ${ID} --set 'poolset=${bad}'`);
+      expect(r.status, bad.slice(0, 40)).not.toBe(0);
+      expect(r.out, bad.slice(0, 40)).toMatch(/bad value for poolset \(\d+ bytes\)/);
+    }
+  });
+  it('acctorder is account ids joined by commas, with no repeat, checked for shape and never for roster membership', () => {
+    seed();
+    expect(route(`--session ${ID} --set acctorder=claude-a,claude-b`).status).toBe(0);
+    expect(h.reg(ID, 'acctorder')).toBe('claude-a,claude-b');
+    expect(route(`--session ${ID} --set acctorder=lane-not-on-the-roster`).status, 'shape only, open question 9').toBe(0);
+    const id64 = 'a'.repeat(64);
+    expect(route(`--session ${ID} --set acctorder=${id64},claude-a`).status, 'a 64-character id is ACCOUNT_ID_RE\'s longest').toBe(0);
+    expect(h.reg(ID, 'acctorder')).toBe(`${id64},claude-a`);
+    for (const bad of ['claude-a,claude-a', 'claude a', 'claude/a', 'claude-a,', ',claude-a', `${'a'.repeat(65)}`]) {
+      const r = route(`--session ${ID} --set 'acctorder=${bad}'`);
+      expect(r.status, bad).not.toBe(0);
+      expect(r.out, bad).toMatch(/bad value for acctorder/);
+    }
+  });
+  it('an empty value clears both, and each change is logged to swap.log as every field is (open question 13)', () => {
+    seed();
+    expect(route(`--session ${ID} --set poolset=pool-a --set acctorder=claude-a,claude-b`).status).toBe(0);
+    const r = route(`--session ${ID} --set poolset= --set acctorder=`);
+    expect(r.status, r.out).toBe(0);
+    expect(fs.existsSync(regFile('poolset'))).toBe(false);
+    expect(fs.existsSync(regFile('acctorder'))).toBe(false);
+    const log = swapLog();
+    expect(log).toMatch(new RegExp(`route ${ID}: poolset ∅ -> pool-a`));
+    expect(log).toMatch(new RegExp(`route ${ID}: acctorder ∅ -> claude-a,claude-b`));
+    expect(log).toMatch(new RegExp(`route ${ID}: poolset pool-a -> ∅`));
+    expect(log).toMatch(new RegExp(`route ${ID}: acctorder claude-a,claude-b -> ∅`));
+  });
+  // PR A2 (the coordinator's ruling on A1's review, slug a-session-shell-cannot-write-its-own-set): from A2 a standing set is
+  // honoured at `_pool_ok`, so a session's shell (CLAUDECODE set, as `_route_fable_shell` reads it) may neither write nor
+  // clear a set or the ordered list. The designate door, composed by the server, is not a session's shell.
+  describe('a session\'s shell cannot write its own set (a-session-shell-cannot-write-its-own-set)', () => {
+    const shell = { CCRC_TEST_CLAUDECODE: '1' };
+    it.each([
+      ['poolset', 'pool-b'], ['acctorder', 'claude-a,claude-b'],
+    ])('--set %s=… from a session shell is refused and writes nothing', (field, value) => {
+      seed();
+      const r = route(`--session ${ID} --set ${field}=${value}`, shell);
+      expect(r.status).not.toBe(0);
+      expect(r.out).toContain(`pool-set-operator-only: a Claude Code session may not write ${field}`);
+      expect(fs.existsSync(regFile(field))).toBe(false);
+      expect(swapLog()).toBe('');
+    });
+    it.each(['poolset', 'acctorder'])('clearing %s from a session shell is refused too, and the standing value stays', (field) => {
+      seed();
+      h.sh(`_reg_set ${ID} poolset pool-b; _reg_set ${ID} acctorder claude-b`);
+      const r = route(`--session ${ID} --set ${field}=`, shell);
+      expect(r.status).not.toBe(0);
+      expect(r.out).toContain('pool-set-operator-only');
+      expect(h.reg(ID, 'poolset')).toBe('pool-b');
+      expect(h.reg(ID, 'acctorder')).toBe('claude-b');
+    });
+    it('a refused field refuses the whole call: another field in it is not written either', () => {
+      seed();
+      const r = route(`--session ${ID} --set class=opus --set poolset=pool-b`, shell);
+      expect(r.status).not.toBe(0);
+      expect(h.reg(ID, 'class')).toBeNull();
+    });
+    it('the same writes without CLAUDECODE pass (the server\'s designate door, the operator\'s own shell)', () => {
+      seed();
+      expect(route(`--session ${ID} --set poolset=pool-b --set acctorder=claude-b`).status).toBe(0);
+      expect(h.reg(ID, 'poolset')).toBe('pool-b');
+      expect(route(`--session ${ID} --set poolset= --set acctorder=`).status).toBe(0);
+      expect(fs.existsSync(regFile('poolset'))).toBe(false);
+    });
+    it('other fields from a session shell still pass', () => {
+      seed();
+      expect(route(`--session ${ID} --set class=opus`, shell).status).toBe(0);
+      expect(h.reg(ID, 'class')).toBe('opus');
+    });
+  });
+  it('a row carrying only poolset and acctorder has no routing record: _route_any says no (pool-fields-outside-route-any)', () => {
+    seed();
+    h.sh(`_reg_set ${ID} poolset pool-a; _reg_set ${ID} acctorder claude-a`);
+    expect(h.sh(`_route_any ${ID} && echo yes || echo no`)).toBe('no');
   });
 });

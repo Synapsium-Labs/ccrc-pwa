@@ -1,0 +1,19 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`SGR is stripped identically at the other sites > a command stdout row loses its SGR and keeps non-SGR escapes out of the strip 1`] = `
+[
+  {
+    "kind": "system",
+    "text": "Done[2K",
+    "ts": "2026-01-01T00:00:00Z",
+    "uuid": "u",
+  },
+]
+`;
+
+exports[`SGR is stripped identically at the other sites > the box draft read drops colour and dim runs 1`] = `
+{
+  "box": "present",
+  "draft": "hello",
+}
+`;

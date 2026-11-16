@@ -1709,6 +1709,13 @@ The measurement is in `2026-09-07-swap-verb-timeout.md`'s `## Deviations found`.
   else on the box does. Two of the thirteen files had a timestamped backup (added by an earlier
   review's finding I2); the other eleven had none.
 
+  *Later (2026-10-18, centralised update wave 15, D-4286):* the clause above, "`_svc_enable` / `_svc_disable_now`
+  reload on the next session start or stop", was true when written and is no longer true of `_svc_enable`. On
+  systemd it now runs `systemctl --user enable --no-reload`, so it links the unit without reloading the user
+  manager. The verbs a session start or stop issues that still reload are `_svc_enable_now` (`enable --now`) and
+  `_svc_disable_now` (`disable --now`), which is why the same argument in `deploy/deploy.sh` and in
+  `agent/test/deploy-verify.test.ts` now names those two.
+
   **Fixed with `_inst_atomic`'s shape rather than `install_atomic`'s**, deliberately: these are local
   copies ON THE BOX out of the tree `rsync` already landed there, so the right idiom is the box-side
   one `ccrc install` has always used for these same unit files (`ccd/ccrc`'s `_inst_atomic`: temp,

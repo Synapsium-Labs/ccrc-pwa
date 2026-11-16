@@ -21,8 +21,12 @@
 // its consumers: `deploy/gen-wrappers.mjs` classifies real paths, while this
 // module's `verifyMarker` operates only on TEXT it is handed. Keeping path
 // reads and install manifests out of this shared helper preserves that seam.
+// The one file read here is the `--check <file>` command line at the bottom,
+// which runs only when this file is the script node was started with.
 
 import { createHash } from 'node:crypto';
+import { readFileSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 /** The only marker line this module ever writes or recognises. Version `1`
  *  is part of the literal text, not interpolated, so a future format change
@@ -161,4 +165,48 @@ export function verifyMarker(text) {
   const expectedHash = match[1];
   const actualHash = sha256Hex(stripMarkerLine(text));
   return actualHash === expectedHash ? 'ccrc-unmodified' : 'ccrc-edited';
+}
+
+/**
+ * THE STAMP GATE AS A COMMAND: `node shared/mark.mjs --check <file>` exits 0
+ * ONLY when `verifyMarker` answers `ccrc-unmodified` for that file, and
+ * non-zero for every other answer — `ccrc-edited` and `foreign` exit 1, and a
+ * file that cannot be read (a missing one included) exits 1 too, so a gate can
+ * never pass on a file it did not measure. A usage error exits 2. The verdict
+ * is printed either way.
+ *
+ * It runs only when THIS FILE is the script node was started with — never on
+ * import. Under `node -e`/`-p`, `process.argv[1]` is merely the first argument
+ * (`ccrc restamp` imports this module that way and hands it this file's own
+ * path there), so an eval run is not a script run — unless `--check` follows,
+ * which no importer passes: the command is never silently skipped.
+ */
+function startedAsScript() {
+  const script = process.argv[1];
+  if (!script) return false;
+  try {
+    if (realpathSync(script) !== realpathSync(fileURLToPath(import.meta.url))) return false;
+  } catch {
+    return false;
+  }
+  if (process.argv[2] === '--check') return true;
+  return !process.execArgv.some((a) => /^-[^-]*[ep]/.test(a) || /^--(eval|print)(=|$)/.test(a));
+}
+
+if (startedAsScript()) {
+  const args = process.argv.slice(2);
+  if (args.length !== 2 || args[0] !== '--check') {
+    process.stderr.write('usage: node shared/mark.mjs --check <file>\n');
+    process.exit(2);
+  }
+  let text;
+  try {
+    text = readFileSync(args[1], 'utf8');
+  } catch (e) {
+    process.stdout.write(`${args[1]}: unreadable (${e && e.code ? e.code : 'error'})\n`);
+    process.exit(1);
+  }
+  const verdict = verifyMarker(text);
+  process.stdout.write(`${args[1]}: ${verdict}\n`);
+  process.exit(verdict === 'ccrc-unmodified' ? 0 : 1);
 }

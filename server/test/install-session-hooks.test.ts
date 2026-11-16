@@ -5,12 +5,14 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { seedAccountsSh } from './ccdWsHelpers.js';
+import { ACCOUNT_DENY_RULES, CHILD_DENY_RULES, childDenyRules } from '../../shared/api.js';
+import { HOOK_EVENTS } from '../../shared/hook-events.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-session-hooks.sh');
 
 // The MEASURED real-world shape (2026-08-05): SessionStart with a compact
 // matcher + a matcher-less entry, SessionEnd; one home carries an extra
-// cloneme SessionEnd entry. The installer must preserve every byte of these.
+// project-w SessionEnd entry. Every foreign entry survives byte-identically; managed ones are appended after them.
 const EXISTING = {
   hooks: {
     SessionStart: [
@@ -19,7 +21,7 @@ const EXISTING = {
     ],
     SessionEnd: [
       { hooks: [{ type: 'command', command: "'/home/u/.claude/skills/code-usage/scripts/cron-upload.sh' --hook" }] },
-      { hooks: [{ type: 'command', command: '/home/u/.cloneme/cloneme-session-end.sh' }] },
+      { hooks: [{ type: 'command', command: '/home/u/.project-w/project-w-session-end.sh' }] },
     ],
   },
   statusLine: { type: 'command', command: 'bash "$HOME/.claude/statusline-command.sh"' },
@@ -29,7 +31,7 @@ let home: string;
 const cfg = (d: string): string => path.join(home, d, 'settings.json');
 beforeEach(() => {
   home = mkTmp('ccrc-hookinstall-');
-  for (const d of ['.claude', '.claude-personal']) {
+  for (const d of ['.claude', '.claude-home']) {
     fs.mkdirSync(path.join(home, d), { recursive: true });
     fs.writeFileSync(cfg(d), JSON.stringify(EXISTING, null, 2));
   }
@@ -38,7 +40,7 @@ beforeEach(() => {
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const run = (...args: string[]): void => {
-  execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude'), path.join(home, '.claude-personal'), ...args],
+  execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude'), path.join(home, '.claude-home'), ...args],
     { env: { ...process.env, HOME: home } });
 };
 
@@ -50,11 +52,11 @@ describe('install-session-hooks', () => {
   // after confirming the red. Main found the same gap independently (D-306 (was D-B8-10))
   // and made the pairing a mechanism: the derived-set test below fails on any
   // divergence between EVENTS_JSON and the hook's own case arms.
-  it('registers the ten measured events and preserves existing entries byte-identically', () => {
+  it('registers the twelve measured events and preserves existing entries byte-identically', () => {
     run();
     const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
     for (const ev of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest',
-      'Stop', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'SessionStart']) {
+      'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'SessionStart', 'SessionEnd']) {
       const entries = s.hooks[ev] as any[];
       expect(entries.some((e) => e.hooks?.some((h: any) => String(h.command).includes('/session-hook.sh'))),
         ev).toBe(true);
@@ -70,7 +72,10 @@ describe('install-session-hooks', () => {
     expect(s.hooks.SessionStart.slice(0, EXISTING.hooks.SessionStart.length))
       .toEqual(EXISTING.hooks.SessionStart);
     expect(s.hooks.SessionStart).toHaveLength(EXISTING.hooks.SessionStart.length + 1);
-    expect(s.hooks.SessionEnd).toEqual(EXISTING.hooks.SessionEnd);
+    expect(s.hooks.SessionEnd.slice(0, EXISTING.hooks.SessionEnd.length)).toEqual(EXISTING.hooks.SessionEnd);
+    expect(s.hooks.SessionEnd).toHaveLength(EXISTING.hooks.SessionEnd.length + 1);   // one managed entry, appended (delegation broker §5.3)
+    expect(s.hooks.WorktreeCreate).toBeUndefined();   // registering either REPLACES Claude Code's own worktree handling (delegation broker §3.1)
+    expect(s.hooks.WorktreeRemove).toBeUndefined();
     expect(s.statusLine).toEqual(EXISTING.statusLine);
   });
   it('re-running converges (second run is a byte no-op)', () => {
@@ -96,17 +101,17 @@ describe('install-session-hooks', () => {
     expect(after.statusLine).toEqual(EXISTING.statusLine);
   });
   it('refuses a home whose settings.json is broken JSON, touching nothing — but still processes the other home in the same run', () => {
-    fs.writeFileSync(cfg('.claude-personal'), '{broken');
+    fs.writeFileSync(cfg('.claude-home'), '{broken');
     expect(() => run()).toThrow();
-    expect(fs.readFileSync(cfg('.claude-personal'), 'utf8')).toBe('{broken');
+    expect(fs.readFileSync(cfg('.claude-home'), 'utf8')).toBe('{broken');
     const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
     expect(s.hooks.Stop.some((e: any) => e.hooks?.some((h: any) => String(h.command).includes('/session-hook.sh'))))
       .toBe(true);
   });
   it('a home with NO settings.json gets one with only the managed hooks and the seeded statusLine', () => {
-    fs.rmSync(cfg('.claude-personal'));
+    fs.rmSync(cfg('.claude-home'));
     run();
-    const s = JSON.parse(fs.readFileSync(cfg('.claude-personal'), 'utf8'));
+    const s = JSON.parse(fs.readFileSync(cfg('.claude-home'), 'utf8'));
     expect(Object.keys(s).sort()).toEqual(['hooks', 'statusLine']);
     expect(s.statusLine).toEqual({ type: 'command', command: 'bash "$HOME/.claude/statusline-command.sh"' });
   });
@@ -168,7 +173,7 @@ describe('install-session-hooks.sh default homes are the roster, behaviourally',
   // There is no `hooksAble` subset any more, which is why the expectation is a
   // flat `true` rather than a per-account flag. That concept only ever meant
   // "in the hand-kept array", and its point — a sixth account that the array
-  // forgot, the silent mail hole `claude-dev0` had — is now impossible by
+  // forgot, the silent mail hole `claude-lab0` had — is now impossible by
   // construction rather than caught by a comparison.
   let rosterHome: string;
   beforeEach(() => {
@@ -196,6 +201,67 @@ describe('install-session-hooks.sh default homes are the roster, behaviourally',
     } finally {
       fs.rmSync(bare, { recursive: true, force: true });
     }
+  });
+});
+
+// ── The delegation event set (delegation broker wave 3, Task 5; mutation W3-M05) ───────────────────────────────────────
+// The spool records seven hook events (`DELEGATION_EVENT_KINDS`), and the installer must register every one of them and
+// nothing that would change what Claude Code does. `WorktreeCreate` and `WorktreeRemove` are the second half of that: a
+// registered hook for either REPLACES Claude Code's own worktree handling (spec §3.1), so ccrc never registers them, and
+// `ToolSearch` is not an event at all (a tool name; the one PreToolUse entry's matcher `*` already reaches the hook, which
+// records nothing for it). Registration is measured per home by the doctor (Task 14), not attested by the capability token.
+describe('the installer registers the delegation events, and never a native worktree hook (W3-M05)', () => {
+  const managed = (s: any, ev: string): any[] => ((s.hooks?.[ev] ?? []) as any[]).filter((e) =>
+    e.hooks?.some((h: any) => String(h.command).includes('/session-hook.sh')));
+  const wiredEvents = (s: any): string[] => Object.keys(s.hooks ?? {}).filter((ev) => managed(s, ev).length > 0).sort();
+
+  it('every kind of DELEGATION_EVENT_KINDS has exactly one managed entry in every home, and PreToolUse alone carries a matcher (*)', async () => {
+    const { DELEGATION_EVENT_KINDS } = await import('../../shared/api.js');
+    run();
+    for (const d of ['.claude', '.claude-home']) {
+      const s = JSON.parse(fs.readFileSync(cfg(d), 'utf8'));
+      for (const ev of DELEGATION_EVENT_KINDS) expect(managed(s, ev), `${d} ${ev}`).toHaveLength(1);
+      for (const ev of wiredEvents(s)) {
+        for (const e of managed(s, ev)) {
+          if (ev === 'PreToolUse') expect(e.matcher, 'PreToolUse reaches every tool, Agent, Task, Workflow and Bash among them').toBe('*');
+          else expect(e, `${ev} has no matcher`).not.toHaveProperty('matcher');
+        }
+      }
+    }
+  });
+
+  it('the wired set is the hook\'s handled set and contains no native worktree event, no ToolSearch and nothing spelled like one', () => {
+    run();
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    const wired = wiredEvents(s);
+    expect(wired).not.toContain('WorktreeCreate');
+    expect(wired).not.toContain('WorktreeRemove');
+    expect(wired.filter((e) => /worktree|toolsearch/i.test(e))).toEqual([]);
+    expect(s.hooks.WorktreeCreate).toBeUndefined();
+    expect(s.hooks.WorktreeRemove).toBeUndefined();
+    const SRC = fs.readFileSync(INSTALLER, 'utf8');
+    const list = JSON.parse(/^EVENTS_JSON='(.*)'$/m.exec(SRC)![1]!) as string[];
+    expect(list.filter((e) => /worktree|toolsearch/i.test(e)), 'EVENTS_JSON names neither').toEqual([]);
+    expect(SRC.replace(/^\s*#.*$/gm, '')).not.toMatch(/Worktree(Create|Remove)/);
+  });
+
+  it('a foreign WorktreeCreate or WorktreeRemove hook the operator owns survives a run untouched, and none of ours is added beside it', () => {
+    const s0 = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    s0.hooks.WorktreeCreate = [{ hooks: [{ type: 'command', command: '/opt/x/make-worktree.sh' }] }];
+    s0.hooks.WorktreeRemove = [{ hooks: [{ type: 'command', command: '/opt/x/remove-worktree.sh' }] }];
+    fs.writeFileSync(cfg('.claude'), JSON.stringify(s0, null, 2));
+    run();
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    expect(s.hooks.WorktreeCreate).toEqual(s0.hooks.WorktreeCreate);
+    expect(s.hooks.WorktreeRemove).toEqual(s0.hooks.WorktreeRemove);
+  });
+
+  it('--remove takes every managed delegation entry out and leaves the operator\'s own hooks', () => {
+    run();
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude'), path.join(home, '.claude-home')], { env: { ...process.env, HOME: home } });
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    expect(wiredEvents(s)).toEqual([]);
+    expect(s.hooks.SessionEnd).toEqual(EXISTING.hooks.SessionEnd);
   });
 });
 
@@ -239,5 +305,254 @@ describe('installer wiring cannot drift from the hook it installs (D-306)', () =
   it('the derivation is real: it reads SessionStart out of the hook source', () => {
     expect(handledEvents()).toContain('SessionStart');
     expect(handledEvents().length).toBeGreaterThanOrEqual(10);
+  });
+
+  // D-8613: the TypeScript vocabulary is the same set a third time, so it is held to the hook's case arms in both
+  // directions: an arm the union lacks, or a member no arm handles, is red.
+  it('HOOK_EVENTS, the L0 union, is the hook\'s handled set as a set, both directions (D-8613)', () => {
+    expect(new Set(HOOK_EVENTS).size, 'no duplicate member').toBe(HOOK_EVENTS.length);
+    expect([...HOOK_EVENTS].sort()).toEqual(handledEvents());
+  });
+});
+
+describe('every managed hook entry but SessionEnd\'s carries HOOK_TIMEOUT_S, a bounded timeout (D-4418)', () => {
+  const SRC = fs.readFileSync(INSTALLER, 'utf8');
+  const CLAUDE_CODE_DEFAULT_S = 600;   // a command hook's default timeout, measured on 2.1.289 (history spec §4.1, Tl=600000)
+  const timeoutS = (): number => Number(/^HOOK_TIMEOUT_S=(\d+)$/m.exec(SRC)![1]);
+  /** `run`, with the session environment scrubbed (Global Constraints: test isolation). */
+  const runScrubbed = (): void => {
+    execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude'), path.join(home, '.claude-home')], {
+      env: { ...process.env, HOME: home, CLAUDECODE: '', CLAUDE_CONFIG_DIR: '', TMUX: '', TMUX_PANE: '',
+        ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_')).map((k) => [k, ''])) },
+    });
+  };
+
+  it('defined once, a positive integer no larger than Claude Code\'s default', () => {
+    expect([...SRC.matchAll(/^HOOK_TIMEOUT_S=(\d+)$/gm)]).toHaveLength(1);
+    expect(timeoutS()).toBeGreaterThan(0);
+    expect(timeoutS()).toBeLessThanOrEqual(CLAUDE_CODE_DEFAULT_S);
+  });
+
+  it("README's hook section states the managed timeout from HOOK_TIMEOUT_S, SessionEnd's exception and the spool append's one blocking open (W1-B2 task 33)", () => {
+    const readme = fs.readFileSync(path.resolve(__dirname, '../../README.md'), 'utf8').replace(/\s+/g, ' ');
+    expect(readme).toContain(`Every managed entry but \`SessionEnd\`'s carries \`"timeout": ${timeoutS()}\``);
+    expect(readme).toContain("`SessionEnd`'s carries none, because Claude Code runs `SessionEnd` hooks under its own 1.5 s budget");
+    expect(readme).toContain("a FIFO swapped in between that test and the append blocks the hook until Claude Code kills it at its entry's timeout");
+  });
+
+  it('every event\'s managed entry but SessionEnd\'s, PreToolUse\'s included, carries timeout === HOOK_TIMEOUT_S; SessionEnd\'s and every foreign entry carry none', () => {
+    runScrubbed();
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    let managed = 0;
+    for (const [ev, entries] of Object.entries(s.hooks as Record<string, any[]>)) {
+      for (const entry of entries) {
+        for (const h of entry.hooks as any[]) {
+          if (String(h.command).includes('/session-hook.sh')) {
+            managed++;
+            if (ev === 'SessionEnd') expect(h, ev).not.toHaveProperty('timeout');
+            else expect(h.timeout, ev).toBe(timeoutS());
+          } else {
+            expect(h, ev).not.toHaveProperty('timeout');
+          }
+        }
+      }
+    }
+    expect(managed).toBe((JSON.parse(/^EVENTS_JSON='(.*)'$/m.exec(SRC)![1]!) as string[]).length + 1);   // +1: PreToolUse
+  });
+
+  it('managed entries written in another timeout shape converge, and the next run is a byte no-op', () => {
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    s.hooks.Stop = [{ hooks: [{ type: 'command', command: 'bash "$HOME/.cc-sessions/session-hook.sh"' }] }];
+    s.hooks.SessionEnd.push({ hooks: [{ type: 'command', command: 'bash "$HOME/.cc-sessions/session-hook.sh"', timeout: 600 }] });
+    fs.writeFileSync(cfg('.claude'), JSON.stringify(s, null, 2));
+    runScrubbed();
+    const after = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    const managedIn = (ev: string): any[] => (after.hooks[ev] as any[]).flatMap((e) => e.hooks as any[])
+      .filter((h) => String(h.command).includes('/session-hook.sh'));
+    expect(managedIn('Stop')).toHaveLength(1);
+    expect(managedIn('Stop')[0].timeout).toBe(timeoutS());
+    expect(managedIn('SessionEnd')).toHaveLength(1);
+    expect(managedIn('SessionEnd')[0]).not.toHaveProperty('timeout');
+    const bytes = fs.readFileSync(cfg('.claude'), 'utf8');
+    runScrubbed();
+    expect(fs.readFileSync(cfg('.claude'), 'utf8')).toBe(bytes);
+  });
+});
+
+describe('the children\'s deny file (spec §6.6, plan Task 15, D-5299)', () => {
+  const denyFile = (): string => path.join(home, '.cc-sessions', 'child-deny.settings.json');
+  it('holds exactly CHILD_DENY_RULES, iterated, and nothing else', () => {
+    run();
+    const doc = JSON.parse(fs.readFileSync(denyFile(), 'utf8'));
+    expect(Object.keys(doc)).toEqual(['permissions']);
+    expect(Object.keys(doc.permissions)).toEqual(['deny']);
+    expect(doc.permissions.deny).toHaveLength(CHILD_DENY_RULES.length);
+    CHILD_DENY_RULES.forEach((rule, i) => expect(doc.permissions.deny[i], `rule ${i}`).toBe(rule));
+  });
+  // D-5696 (spec §7.6): the bash twin names `claude install` and `claude update` under the roster's upstream id too,
+  // read from the generated roster this installer already sources, and is held equal to `childDenyRules` of it.
+  it('with a roster whose upstream id is upstream-a, holds exactly childDenyRules(upstream-a), iterated', () => {
+    const roster = { ...DEFAULT_TEST_ROSTER, accounts: DEFAULT_TEST_ROSTER.accounts.map((a) => (a.id === 'claude' ? { ...a, id: 'upstream-a', label: 'upstream-a' } : a)) };
+    seedAccountsSh(home, roster);
+    run();
+    const doc = JSON.parse(fs.readFileSync(denyFile(), 'utf8'));
+    const want = childDenyRules('upstream-a');
+    expect(want.length).toBeGreaterThan(CHILD_DENY_RULES.length);
+    expect(doc.permissions.deny).toHaveLength(want.length);
+    want.forEach((rule, i) => expect(doc.permissions.deny[i], `rule ${i}`).toBe(rule));
+  });
+  it('an upstream id not in the roster id\'s shape is never written into a rule: the file is CHILD_DENY_RULES', () => {
+    for (const bad of ['Upstream_A', 'up a', 'x:*) Bash(true', '../up']) {
+      seedAccountsSh(home);
+      fs.appendFileSync(path.join(home, '.ccrc', 'accounts.sh'), `CCRC_UPSTREAM=${JSON.stringify(bad)}\n`);
+      run();
+      expect(JSON.parse(fs.readFileSync(denyFile(), 'utf8')).permissions.deny, bad).toEqual([...CHILD_DENY_RULES]);
+    }
+  });
+  it('with the default roster (upstream id claude), holds exactly CHILD_DENY_RULES', () => {
+    seedAccountsSh(home);
+    run();
+    expect(JSON.parse(fs.readFileSync(denyFile(), 'utf8')).permissions.deny).toEqual([...CHILD_DENY_RULES]);
+  });
+  it('touches no home\'s own settings.json: no permissions key, and a home\'s own deny list survives as it was', () => {
+    const own = { ...EXISTING, permissions: { deny: ['Bash(rm -rf /:*)'] } };
+    fs.writeFileSync(cfg('.claude-home'), JSON.stringify(own, null, 2));
+    run();
+    expect(JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8')).permissions).toBeUndefined();
+    expect(JSON.parse(fs.readFileSync(cfg('.claude-home'), 'utf8')).permissions).toEqual(own.permissions);
+  });
+  it('re-running keeps the file\'s bytes (so every recorded digest still matches)', () => {
+    run();
+    const bytes = fs.readFileSync(denyFile());
+    const ino = fs.statSync(denyFile()).ino;
+    run();
+    expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
+    expect(fs.statSync(denyFile()).ino).toBe(ino);
+  });
+  // D-5392: the file is the BOX's, not a home's. `ccrc account remove` runs
+  // `--remove --homes <that one home>`; deleting the file there stripped every
+  // other account's children of the deny layer until the next install. Only
+  // `ccrc uninstall`'s `_uninst_cc_sessions` removes it (ccrc-uninstall.test.ts).
+  it('--remove, scoped to one home or roster-wide, leaves the file byte-identical (D-5392)', () => {
+    run();
+    const bytes = fs.readFileSync(denyFile());
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude')], { env: { ...process.env, HOME: home } });
+    expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude'), path.join(home, '.claude-home')], { env: { ...process.env, HOME: home } });
+    expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
+  });
+});
+
+// D-6202 (accounts plan Task A9): the box's second managed file, beside the children's, written the same way.
+describe('the account deny file (D-6202)', () => {
+  const acctFile = (): string => path.join(home, '.cc-sessions', 'account-deny.settings.json');
+  it('holds exactly ACCOUNT_DENY_RULES, touches no home\'s settings.json, and a re-run keeps its bytes and inode', () => {
+    run();
+    expect(JSON.parse(fs.readFileSync(acctFile(), 'utf8'))).toEqual({ permissions: { deny: [...ACCOUNT_DENY_RULES] } });
+    expect(JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8')).permissions).toBeUndefined();
+    const bytes = fs.readFileSync(acctFile());
+    const ino = fs.statSync(acctFile()).ino;
+    run();
+    expect(fs.readFileSync(acctFile()).equals(bytes)).toBe(true);
+    expect(fs.statSync(acctFile()).ino).toBe(ino);
+  });
+  it('a hand-edited or symlinked file is rewritten to the list; --remove leaves it byte-identical (D-5392\'s rule)', () => {
+    run();
+    const bytes = fs.readFileSync(acctFile());
+    fs.writeFileSync(acctFile(), '{"permissions":{"deny":[]}}\n');
+    run();
+    expect(fs.readFileSync(acctFile()).equals(bytes)).toBe(true);
+    const elsewhere = path.join(home, 'elsewhere.json');
+    fs.renameSync(acctFile(), elsewhere);
+    fs.symlinkSync(elsewhere, acctFile());
+    run();
+    expect(fs.lstatSync(acctFile()).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(acctFile()).equals(bytes)).toBe(true);
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude')], { env: { ...process.env, HOME: home } });
+    expect(fs.readFileSync(acctFile()).equals(bytes)).toBe(true);
+  });
+});
+
+// W4-I1..W4-I5 (delegation broker wave 4, PR4 Task 4.5a; option B, ruled 2026-10-15): the sweep removes ccrc's own hook
+// COMMAND, never a foreign command that shares its group. A group the sweep empties goes; a foreign group that was already
+// empty, and a non-object hook, are foreign and stay.
+describe('the installer sweeps per hook, not per entry (option B, W4-I1..W4-I5)', () => {
+  const FOREIGN = { type: 'command', command: '/opt/tools/guard.sh' };
+  const OURS = { type: 'command', command: 'bash /old/place/session-hook.sh' };
+  const isOurs = (h: any): boolean => typeof h === 'object' && h !== null && String(h.command ?? '').includes('/session-hook.sh');
+  const plantMixed = (): string => {
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    s.hooks.PreToolUse = [{ matcher: 'Bash', hooks: [FOREIGN, OURS] }];
+    s.hooks.Stop = [{ hooks: [OURS, FOREIGN] }];
+    const text = JSON.stringify(s, null, 2);
+    fs.writeFileSync(cfg('.claude'), text);
+    return text;
+  };
+  const read = (): any => JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+  /** `--remove` goes FIRST: the installer reads it as argv[1] only, before `--homes`. */
+  const remove = (): void => {
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude'), path.join(home, '.claude-home')], { env: { ...process.env, HOME: home } });
+  };
+
+  it('W4-I1: a group mixing a foreign hook with ours keeps the foreign hook and its matcher, beside one fresh managed group', () => {
+    plantMixed();
+    run();
+    const s = read();
+    expect((s.hooks.PreToolUse as any[]).filter((g) => g.hooks?.some((h: any) => !isOurs(h)))).toEqual([{ matcher: 'Bash', hooks: [FOREIGN] }]);
+    expect((s.hooks.Stop as any[]).filter((g) => g.hooks?.some((h: any) => !isOurs(h)))).toEqual([{ hooks: [FOREIGN] }]);
+    for (const ev of ['PreToolUse', 'Stop']) {
+      const ours = (s.hooks[ev] as any[]).filter((g) => g.hooks?.some(isOurs));
+      expect(ours, ev).toHaveLength(1);
+      expect(ours[0].hooks, `${ev}: the managed group holds ours alone, at the current path`).toEqual([expect.objectContaining({ command: 'bash "$HOME/.cc-sessions/session-hook.sh"' })]);
+    }
+  });
+
+  it('W4-I2: --remove keeps both foreign hooks in their groups', () => {
+    plantMixed();
+    remove();
+    const s = read();
+    expect(s.hooks.PreToolUse).toEqual([{ matcher: 'Bash', hooks: [FOREIGN] }]);
+    expect(s.hooks.Stop).toEqual([{ hooks: [FOREIGN] }]);
+  });
+
+  it('W4-I3: a foreign group with an empty hooks list survives byte-identically (only a group the sweep emptied is dropped)', () => {
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    s.hooks.Notification = [{ matcher: 'idle', hooks: [] }];
+    fs.writeFileSync(cfg('.claude'), JSON.stringify(s, null, 2));
+    const jqS = (v: unknown): string => execFileSync('jq', ['-S', '.'], { input: JSON.stringify(v), encoding: 'utf8' });
+    run();
+    expect(jqS(read().hooks.Notification)).toBe(jqS([{ matcher: 'idle', hooks: [] }]));
+    remove();
+    expect(jqS(read().hooks.Notification)).toBe(jqS([{ matcher: 'idle', hooks: [] }]));
+  });
+
+  it('W4-I3b: a non-object hook is foreign and kept, beside ours swept out of its group (today jq fails: "merge failed")', () => {
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    s.hooks.Stop = [{ hooks: ['not-an-object', OURS, FOREIGN] }];
+    fs.writeFileSync(cfg('.claude'), JSON.stringify(s, null, 2));
+    run();
+    expect((read().hooks.Stop as any[]).filter((g) => g.hooks?.some((h: any) => !isOurs(h)))).toEqual([{ hooks: ['not-an-object', FOREIGN] }]);
+    remove();
+    expect(read().hooks.Stop).toEqual([{ hooks: ['not-an-object', FOREIGN] }]);
+  });
+
+  it('W4-I4: the run that rewrites a mixed file first backs it up, byte for byte', () => {
+    const before = plantMixed();
+    run();
+    const stamps = fs.readdirSync(path.join(home, 'ccrc-backups'));
+    expect(stamps).toHaveLength(1);
+    expect(fs.readFileSync(path.join(home, 'ccrc-backups', stamps[0]!, '.claude.settings.json'), 'utf8')).toBe(before);
+  });
+
+  it('W4-I5: a second run over a swept mixed file is a no-op: bytes and mtime unchanged', () => {
+    plantMixed();
+    run();
+    const bytes = fs.readFileSync(cfg('.claude'), 'utf8');
+    const t = Date.now() / 1000 - 3600;
+    fs.utimesSync(cfg('.claude'), t, t);
+    const mtime = fs.statSync(cfg('.claude')).mtimeMs;
+    run();
+    expect(fs.readFileSync(cfg('.claude'), 'utf8')).toBe(bytes);
+    expect(fs.statSync(cfg('.claude')).mtimeMs).toBe(mtime);
   });
 });

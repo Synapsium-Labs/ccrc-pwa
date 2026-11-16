@@ -1,0 +1,133 @@
+// The fleet-level flows' host (D-5468): the five sheets `FleetScreen` used to render inside its own `<main>`, now
+// rendered once beside the shell from `useFleetChrome()`'s state, with the same props they had there. A sheet opened
+// from a fleet list therefore outlives that list: a skin switch remounts the list (spec §5.4) and the sheet stays.
+// Every sheet is a portalled layer, so where this mounts in the tree moves no pixel.
+//
+// `useFleetFlows()` is how a part opens one. It never holds state of its own; the state is the chrome's.
+import { useMemo } from 'react';
+import type { ReactNode } from 'react';
+import { AddProjectSheet } from './AddProjectSheet';
+import { AddWorkspaceSheet } from './AddWorkspaceSheet';
+import { NewSessionSheet } from './NewSessionSheet';
+import { PoolSheet } from './PoolSheet';
+import { SessionActionsSheet } from './SessionActionsSheet';
+import { ArchiveAllConfirm } from './ArchiveAllPlane';
+import { ReapSheet } from '../session/ReapSheet';
+import { useFleetChrome } from './FleetChrome';
+
+export interface FleetFlowDoors {
+  openNewSession: () => void;
+  /** The new-session sheet on `project`, which it picks once an account is chosen (the Add project toast's action). */
+  openNewSessionOn: (project: string) => void;
+  /** The `+` sheet for a project (named workspaces S7): the tap no longer creates, it asks. */
+  openAddWorkspace: (project: string) => void;
+  /** The Add project sheet (add-project spec 2026-11-04): clone a GitHub repository, or start an empty one. */
+  openAddProject: () => void;
+  /** The ··· sheet for a session in the live list; an id the list does not hold opens nothing. */
+  openActions: (id: string) => void;
+  /** The pool sheet for a project. The project alone (D-5677): the pool is read from that project's `/api/projects` row, as today. */
+  openPool: (project: string) => void;
+  openArchiveAll: (project: string) => void;
+  openReap: (id: string) => void;
+}
+
+export function useFleetFlows(): FleetFlowDoors {
+  const {
+    store, setNewOpen, setNewProject, setAddWorkspaceFor, setAddProjectOpen, setArchiveAllFor, setReapId, actions, projects,
+  } = useFleetChrome();
+  const { openFor } = actions;
+  const { openPool } = projects;
+  // Stable doors (C6, D-6438): a part that holds them (the command layer, a list row) is not handed new ones by a
+  // fleet frame. `openActions` reads the NEWEST row from the store at call time, so no subscription to `sessions`
+  // is needed to keep it current. The dependencies are the chrome's setters and openers, named one by one, and none
+  // changes on a fleet frame; `openPool` does change when `/api/projects` answers (it reads that answer's placement).
+  return useMemo<FleetFlowDoors>(() => ({
+    openNewSession: () => {
+      setNewProject(null);
+      setNewOpen(true);
+    },
+    openNewSessionOn: (project) => {
+      setNewProject(project);
+      setNewOpen(true);
+    },
+    openAddWorkspace: (project) => setAddWorkspaceFor(project),
+    openAddProject: () => setAddProjectOpen(true),
+    openActions: (id) => {
+      const session = store.getState().sessions.find((s) => s.id === id);
+      if (session !== undefined) openFor(session);
+    },
+    openPool,
+    openArchiveAll: (project) => setArchiveAllFor(project),
+    openReap: (id) => setReapId(id),
+  }), [store, setNewOpen, setNewProject, setAddWorkspaceFor, setAddProjectOpen, setArchiveAllFor, setReapId, openFor, openPool]);
+}
+
+export function FleetFlows(): ReactNode {
+  const {
+    store, projects, actions, archiveAll, archiveAllFor, setArchiveAllFor, newOpen, setNewOpen, newProject,
+    addWorkspaceFor, setAddWorkspaceFor, addProjectOpen, setAddProjectOpen, reapId, setReapId,
+  } = useFleetChrome();
+  const doors = useFleetFlows();
+  const sessions = store((s) => s.sessions);
+  const roster = store((s) => s.roster);
+  return (
+    <>
+      <NewSessionSheet
+        open={newOpen}
+        onClose={() => setNewOpen(false)}
+        fleet={store}
+        initialProject={newProject}
+        addProject={projects.addProject}
+        addingProject={projects.addingProject}
+      />
+
+      <AddWorkspaceSheet
+        project={addWorkspaceFor}
+        onClose={() => setAddWorkspaceFor(null)}
+        add={projects.addWorkspace}
+        adding={addWorkspaceFor !== null && projects.adding.has(addWorkspaceFor)}
+        placement={projects.placementFor(addWorkspaceFor ?? '')}
+        roster={roster}
+      />
+
+      <AddProjectSheet
+        open={addProjectOpen}
+        onClose={() => setAddProjectOpen(false)}
+        add={projects.addProject}
+        adding={projects.addingProject}
+        onStartSession={doors.openNewSessionOn}
+      />
+
+      <PoolSheet
+        project={projects.poolSelection?.project ?? null}
+        selectedPool={projects.poolSelection?.pool}
+        open={projects.poolOpen}
+        onClose={projects.closePool}
+        onPoolChanged={projects.notePoolWrite}
+        fleet={store}
+      />
+
+      <SessionActionsSheet
+        session={actions.session}
+        open={actions.open}
+        onClose={actions.close}
+        onReap={setReapId}
+        fleet={store}
+      />
+
+      <ArchiveAllConfirm
+        project={archiveAllFor}
+        sessions={sessions}
+        onClose={() => setArchiveAllFor(null)}
+        onConfirm={(project) => void archiveAll.run(project)}
+      />
+
+      <ReapSheet
+        session={sessions.find((sn) => sn.id === reapId) ?? null}
+        open={reapId !== null}
+        onClose={() => setReapId(null)}
+        onReaped={() => setReapId(null)}
+      />
+    </>
+  );
+}

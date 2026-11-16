@@ -113,7 +113,7 @@ Flooring them is a motion-language decision this design owes an answer to.
   "JetBrains Mono", Menlo, Consolas, "Roboto Mono", monospace`. No webfonts —
   every platform's best mono is already installed, and the PWA shell stays
   featherweight.
-- **Scale:** 11 / 12 / 13 / 15 / 17 / 20 / 24, with `--text-input: 16px`
+- **Scale:** 11 / 12 / 13 / 15 / 17 / 20 / 24, with `--fs-input: 16px`
   (iOS zoom-jump guard, a spec acceptance criterion). Chat body 15px/1.5.
   Card titles are **17px medium mono** — the project name set like a directory
   listing is the fleet's most characterful move.
@@ -136,8 +136,8 @@ sheets — promoted to tokens (`--safe-top` / `--safe-bottom`, aliasing
 ## Motion language
 
 Durations: press 120 · fade 180 · expand 240 · ping 300 · navigate 320 · sheet
-420 · limit-bar 600. Easings: `--ease-swift cubic-bezier(0.2,0,0,1)` for
-everyday movement; `--ease-spring cubic-bezier(0.32,1.25,0.46,1)` (small
+420 · limit-bar 600. Easings: `--curve-swift cubic-bezier(0.2,0,0,1)` for
+everyday movement; `--curve-spring cubic-bezier(0.32,1.25,0.46,1)` (small
 overshoot) for sheets and drawer only.
 
 What animates, and why:
@@ -273,23 +273,23 @@ Full annotated values (with computed contrast ratios per theme) live in
 | limits | `--limit-track` | `#242A25` | `#E3E7E2` | bar track |
 | limits | `--limit-ok` / `-warn` / `-critical` | `#45D67E` / `#F2B84B` / `#E06A55` | `#178A48` / `#B27400` / `#B2402C` | fills, 3:1 vs track; bands <50 / 50–75 / >75% |
 | diff | `--diff-add` / `--diff-del` | `#57E08B` / `#F08A78` | same (wells stay dark) | well-only accents |
-| type | `--font-ui` / `--font-mono` | system sans / ui-monospace stack | same | voice split |
-| type | `--text-2xs…2xl` | 11/12/13/15/17/20/24 | same | scale |
-| type | `--text-input` | 16px | same | iOS zoom guard |
-| type | `--leading-tight/normal/mono` | 1.25 / 1.5 / 1.55 | same | line heights |
+| type | `--family-ui` / `--family-mono` | system sans / ui-monospace stack | same | voice split |
+| type | `--fs-2xs…2xl` | 11/12/13/15/17/20/24 | same | scale |
+| type | `--fs-input` | 16px | same | iOS zoom guard |
+| type | `--lh-tight/normal/mono` | 1.25 / 1.5 / 1.55 | same | line heights |
 | type | `--weight-regular/medium/semibold` | 400 / 500 / 600 | same | weights |
-| type | `--tracking-caps` | 0.08em | same | mono label tracking |
+| type | `--ls-caps` | 0.08em | same | mono label tracking |
 | space | `--sp-1…12` | 4→48px (4px grid) | same | spacing |
 | space | `--safe-top` / `--safe-bottom` | `env(safe-area-inset-*, 0px)` | same | notch / home-bar padding |
 | space | `--tap-min` | 44px | same | touch floor |
 | size | `--lamp-size` / `--well-max` | 18px / 240px | same | dot lamp bezel / well height cap |
 | radius | `--r-sm/md/lg/xl/full` | 6/10/16/22/999px | same | radii |
-| elevation | `--shadow-card` / `--shadow-sheet` | subtle black | real gray shadows | depth |
+| elevation | `--elev-card` / `--elev-sheet` | subtle black | real gray shadows | depth |
 | glow | `--glow-busy` / `--glow-attention` | green/amber 3-layer bloom | darker hue, lower alpha | the signature |
 | glow | `--glow-dot-busy` / `-attention` | 8px dot bloom | 7px, dimmer | dot halo |
 | motion | `--dur-press/fast/base/slow/sheet/bar` | 120/180/240/320/420/600ms | same | durations |
 | motion | `--dur-ping` | 300ms | same | dot state-change ring |
-| motion | `--ease-swift` / `--ease-spring` / `--ease-breathe` | see tokens | same | easings |
+| motion | `--curve-swift` / `--curve-spring` / `--curve-breathe` | see tokens | same | easings |
 | motion | `--breathe-period` / `--pulse-period` / `--caret-period` | 2600/1300/1100ms | same | rhythms |
 | z | `--z-header/sheet/drawer/toast` | 10/40/50/60 | same | stacking |
 

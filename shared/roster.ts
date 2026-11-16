@@ -4,12 +4,13 @@
 //
 // Pure, and L0 rather than import-free: this file bundles into the PWA
 // (`pwa/src/lib/offline.ts:10` is `import { HUES } from '../../../shared/roster';`
-// — a VALUE import), so it imports exactly two other `shared/*.ts` modules and
-// nothing else — no `node:*`, no `fs`, no path. The two are `./providers.js`
-// (the provider table, §4.1's `exec.provider` gate) and `./base-url.js` (the
-// endpoint gate), both themselves import-free, so the bundle gains no runtime
-// dependency. `server/test/providers.test.ts` asserts the WHOLE import list, so
-// a third import is a red suite and not a review comment. `parseRoster`
+// — a VALUE import), so it imports exactly three other `shared/*.ts` modules and
+// nothing else — no `node:*`, no `fs`, no path. The three are `./providers.js`
+// (the provider table, §4.1's `exec.provider` gate), `./base-url.js` (the
+// endpoint gate) and `./rosterFacts.js` (the two Overlord account facts' words),
+// each itself import-free, so the bundle gains no runtime dependency.
+// `server/test/providers.test.ts` asserts the WHOLE import list, so a fourth
+// import is a red suite and not a review comment. `parseRoster`
 // therefore still takes already-parsed JSON (`unknown`), never a path: the
 // server's `loadConfig` reads and parses `~/.ccrc/accounts.json` and hands the
 // value here, and deploy-side bare-Node tooling uses the parity-pinned `.mjs`
@@ -25,12 +26,13 @@
 
 import { PROVIDERS, PROVIDER_IDS, isProviderId, type ProviderId } from './providers.js';
 import { BASE_URL_OK } from './base-url.js';
+import { FABLE_BILLINGS, type FableBilling, type ContinuityRecord } from './rosterFacts.js';
 
 /**
  * The six colors an account can render in. Replaces today's hand-picked
  * `colorVar` per account (`shared/api.ts`'s `AccountDef.colorVar`) — a
  * free-form id (the whole point of Stage 2a) cannot name a bespoke CSS
- * token the way `claude`/`claude2`/`claude-corp` could, so accounts get a
+ * token the way `claude`/`claude9`/`claude-acme` could, so accounts get a
  * hue instead and `pwa/src/styles/tokens.css` supplies the `--acct-<hue>`
  * custom property. Declared as a runtime list, not just a type, because the
  * auto-assignment walk below needs an actual sequence to walk; exported because
@@ -98,6 +100,21 @@ export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'] as const sa
  *  (`server/test/source-bytes.test.ts:5-15`). */
 export const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
 
+/** A codex lane's two additive words (codex-bridge spec D20, Stage 2 Task 10).
+ *  `exec.bridge` is the lane's MODE: `litellm`, today's shim in front of a
+ *  LiteLLM tier, or `direct`, one ccrc process answering Claude Code itself.
+ *  `exec.upstream` is the ROUTE that process speaks: the ChatGPT `backend`, or
+ *  `siwc` (Stage 3). Each set is the ONE spelling of its words in TypeScript,
+ *  mirrored once in `shared/roster-json.mjs` and pinned equal IN ORDER by
+ *  `server/test/roster-exec-parity.test.ts`, because the FIRST entry is the
+ *  default an absent key reads: a roster written before the bridge keeps
+ *  meaning a LiteLLM lane on the backend route. A present value outside the
+ *  set is refused, never read as the default. */
+export const CODEX_BRIDGE_MODES = ['litellm', 'direct'] as const;
+export const CODEX_UPSTREAMS = ['backend', 'siwc'] as const;
+export type CodexBridgeMode = (typeof CODEX_BRIDGE_MODES)[number];
+export type CodexUpstream = (typeof CODEX_UPSTREAMS)[number];
+
 /**
  * How ccrc reaches an account's binary. The disk forced this shape (design
  * spec §1, from reading a live box): `claude` itself is 304,282,632 bytes of
@@ -139,7 +156,37 @@ export type ExecSpec =
     kind: 'generated'; secretsFile?: string; provider: ProviderId;
     baseUrl?: string; models?: ApiKeyModels;
   }
-  | { kind: 'external'; secretsFile?: string; provider?: ProviderId; baseUrl?: string };
+  | { kind: 'external'; secretsFile?: string; provider?: ProviderId; baseUrl?: string }
+  /** A ChatGPT/Codex subscription lane ccrc OWNS end to end: it writes the
+   *  launcher, installs the runtime, renders the LiteLLM config, publishes the
+   *  usage and removes all of it. Distinct from `external` — whose contract is
+   *  "ccrc records this launcher and never writes it" — and from `generated`,
+   *  whose contract is one wrapper in front of an API credential.
+   *
+   *  The three extra fields are TOPOLOGY: two loopback ports and the directory
+   *  holding the lane's OAuth. None can be derived, none may be defaulted (the
+   *  fallbacks in the shim this replaces are how one lane bound another lane's
+   *  ports and spent another account's subscription), and none may appear as a
+   *  real value in this public tree — they live in `~/.ccrc/accounts.json`. */
+  | {
+    kind: 'codex'; secretsFile?: string; provider: 'openai';
+    proxyPort: number; litellmPort: number; authDir: string;
+    /** RESOLVED by `parseExec`: absent in the roster reads the first word of
+     *  `CODEX_BRIDGE_MODES` / `CODEX_UPSTREAMS`, so a reader never meets an
+     *  absent mode. */
+    bridge: CodexBridgeMode; upstream: CodexUpstream;
+  };
+
+/** `exec.kind`'s closed set: the ONE definition (D-8192), in the order every refusal names the kinds. TypeScript
+ *  readers import it, or `ExecKind`; `shared/roster-json.mjs`, the bare-Node validator that cannot import
+ *  TypeScript, keeps the one mirror, pinned equal IN ORDER by `server/test/roster-exec-parity.test.ts`, and
+ *  `server/test/single-definition/exec-kinds.test.ts` refuses a third list. `ExecSpec`'s arms are the shapes; the
+ *  pin below holds the two to the same kinds at compile time. */
+export const EXEC_KINDS = ['upstream', 'generated', 'external', 'codex'] as const;
+export type ExecKind = (typeof EXEC_KINDS)[number];
+const EXEC_KINDS_ARE_EXEC_SPEC_KINDS: [ExecKind] extends [ExecSpec['kind']]
+  ? ([ExecSpec['kind']] extends [ExecKind] ? true : never) : never = true;
+void EXEC_KINDS_ARE_EXEC_SPEC_KINDS;
 
 /** One account, as validated by `parseRoster`. */
 export interface AccountDef {
@@ -165,8 +212,13 @@ export interface AccountDef {
    *  `telemetry === 'anthropic'` and drives the STATUSLINE writer — calling a
    *  Codex lane 'anthropic' would enlist a second writer racing ccgpt-usage on
    *  the same `~/.cc-limits/<id>.json`. It scores like a real account (it is not
-   *  `'none'`) and is written by its own publisher. */
-  telemetry: 'anthropic' | 'codex' | 'none';
+   *  `'none'`) and is written by its own publisher.
+   *
+   *  `'openrouter'` (D-5521) is an OpenRouter key lane. It reports no Claude Code rate limits (its meter
+   *  is the key's credit, read by validation and `check`), so it is not in `CCRC_MEASURED`, not an
+   *  Anthropic backend (`CCRC_ANTHROPIC_BACKEND`, `serviceability`'s `anthropic`, `models-op.mjs`'s
+   *  `isAnthropicLane`), and not scorable in `projectHome` (D-5754). A `compatible` lane writes `'none'`. */
+  telemetry: 'anthropic' | 'codex' | 'none' | 'openrouter';
   /** The operator's declaration that this entry is roster PLUMBING rather than
    *  one of their accounts.
    *
@@ -207,6 +259,13 @@ export interface AccountDef {
    *  finish, and answering "untagged" for it would be this parser narrowing a
    *  distinction it received. */
   pool: string | null;
+  /** H16: whether Fable on this account bills usage credits (`shared/rosterFacts.ts`). REQUIRED on the type with
+   *  `null` for absent, as `pool` is: absence in the file is "nobody set it", and a written `null` is REFUSED, never
+   *  folded into absence. Written only by `deploy/account-op.mjs`'s `set-facts` op. */
+  fableBilling: FableBilling | null;
+  /** H16, continued: the operator's record that this lane keeps the Overlord's guards, hooks and reader types.
+   *  Same shape discipline as `fableBilling`: `null` for absent, a written `null` refused. */
+  continuity: ContinuityRecord | null;
 }
 
 /**
@@ -231,7 +290,7 @@ export interface Roster {
   byId: ReadonlyMap<string, AccountDef>;
   /**
    * Longest-`id`-first, so a shorter id that happens to be a prefix of a
-   * longer one (`claude-` inside `claude-dev0-`) never wins a prefix match
+   * longer one (`claude-` inside `claude-lab0-`) never wins a prefix match
    * first. Sorted by `id.length` descending, `id` ascending as the
    * tie-break.
    *
@@ -240,7 +299,7 @@ export interface Roster {
    * fleet.ts's deleted `BY_ID_PREFIX_LENGTH_DESC`) had no secondary key, so
    * equal-length ids fell back to whatever order the JS engine's sort
    * happened to leave them in. Real ids collide on
-   * length today — `claude-corp` and `claude-dev0` are both 11 characters —
+   * length today — `claude-acme` and `claude-lab0` are both 11 characters —
    * so "engine-defined" was never hypothetical. Sorting by `id` ascending
    * as the second key makes the order total and deterministic.
    */
@@ -275,6 +334,57 @@ export interface Roster {
  */
 export function inRoster(roster: Roster, v: unknown): boolean {
   return typeof v === 'string' && roster.byId.has(v);
+}
+
+/** What kind of credential a lane runs on, in the words the Accounts screen's kind chip reads (spec §4.1,
+ *  D-5517): `sign-in` (an Anthropic lane signed in through its config dir), `token` (an Anthropic lane on a
+ *  long-lived token), `codex` (a ChatGPT/Codex lane) and `key` (an API-key lane: OpenRouter or compatible).
+ *  Paste versus mint is NOT a roster fact and is not here: it lives in the lane state (`mintedAt`). */
+export type RosterKind = 'sign-in' | 'token' | 'codex' | 'key';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const ROSTER_KIND_MAP: Record<RosterKind, true> = { 'sign-in': true, token: true, codex: true, key: true };
+export const ROSTER_KINDS: readonly RosterKind[] = Object.keys(ROSTER_KIND_MAP) as RosterKind[];
+
+/** The lane-kind half of `RosterWire` (`shared/api.ts`), with one home. Every field is a closed union or a
+ *  boolean, so none can carry free text (`test/types/bypasses/b8-roster-wire-open-string.ts` pins that). Every
+ *  field is OPTIONAL and ABSENT when the entry does not say, never defaulted: an older server omits all four, and
+ *  an undeclared lane omits `provider` and `kind`, so a reader shows no kind chip rather than a wrong one. */
+export interface RosterKindWire {
+  provider?: ProviderId;
+  kind?: RosterKind;
+  telemetry?: AccountDef['telemetry'];
+  /** True for a Codex lane ccrc owns end to end (`exec.kind: 'codex'`), false for an `external` launcher ccrc only
+   *  records, under any provider or none (D-8051 (13)). Absent on every other lane, and from an older server. */
+  managed?: boolean;
+}
+
+/**
+ * The lane's kind, derived ONCE from a parsed roster entry (D-5517, D-5751). The one reader: the server's
+ * `RosterWire` builder spreads it, and nothing else re-derives a kind from `exec`.
+ *
+ * The provider is `exec.provider`, except on `upstream`, which is `anthropic` by construction (`ExecSpec`'s
+ * header) and never spells one. An `external` entry with no provider is UNDECLARED, a real third answer, so it
+ * gets no provider and no kind. The roster has no method field (`ACCOUNT_KEYS`), so an Anthropic lane's kind is
+ * read from `exec.secretsFile`: present is `token`, absent is `sign-in`.
+ */
+export function rosterKindOf(entry: Pick<AccountDef, 'exec' | 'telemetry'>): RosterKindWire {
+  const { exec } = entry;
+  const provider: ProviderId | undefined = exec.kind === 'upstream' ? 'anthropic' : exec.provider;
+  const managed = exec.kind === 'codex' ? { managed: true } : exec.kind === 'external' ? { managed: false } : {};
+  if (provider === undefined) return { telemetry: entry.telemetry, ...managed };
+  switch (provider) {
+    case 'anthropic':
+      return { provider, kind: exec.secretsFile !== undefined ? 'token' : 'sign-in', telemetry: entry.telemetry, ...managed };
+    case 'openai':
+      return { provider, kind: 'codex', telemetry: entry.telemetry, ...managed };
+    case 'openrouter':
+    case 'compatible':
+      return { provider, kind: 'key', telemetry: entry.telemetry, ...managed };
+    default:
+      // A fifth provider in `PROVIDERS` is a compile error here before it is a lane with no kind.
+      return provider satisfies never;
+  }
 }
 
 /**
@@ -357,6 +467,30 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  */
 export const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
+/**
+ * The ACCOUNT-ID grammar of the pool-epoch document's `acct <id> <pool>` line
+ * (account-pool-membership wave 1, "THE PROJECTION GRAMMAR — frozen by Task
+ * 1, binding on Task 3"): `^[A-Za-z0-9._-]{1,64}$`. DELIBERATELY NOT {@link
+ * ID_RE} — this box's OWN roster ids are the stricter, lowercase-only
+ * `^[a-z][a-z0-9-]{0,31}$`, but `pool_edges.subjectId` (and therefore this
+ * document's `acct` key) is a wrapper name off the FLEET side, which ccd's
+ * own wrapper grammar permits wider than this box's JSON schema does — an
+ * account can be centrally tagged before this box's `accounts.json` has ever
+ * heard of it (spec §3.3, O4).
+ *
+ * Two independent hand-kept spellings already exist and must agree with this
+ * one: `ccd/ccd-pool-sync:154`'s python `ID = re.compile(...)` (the writer)
+ * and `_acct_pool_state`'s bash `[[ "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ]]` (the
+ * reader) — `pool-accounts-route.test.ts`'s parity scan holds this constant's
+ * `.source` equal to both by text extraction, `POOL_NAME_RE`'s own D-2480
+ * pattern. `POST /api/pools/accounts/:id` (`server/src/server.ts`) is the
+ * THIRD spelling this grammar must never be allowed to become: an id off this
+ * grammar becomes a key in the document `ccd-pool-sync`'s renderer refuses
+ * OUTRIGHT (the whole document, not just the bad row), which stops
+ * convergence fleet-wide until the next operator notices (D-3085).
+ */
+export const ACCOUNT_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
+
 /** C0 controls plus DEL — everything a one-line status bar cannot survive.
  *  Deliberately NOT a whitelist of "printable" characters: real labels are
  *  `team·max` and `team·alt`, so anything narrower than "no control bytes"
@@ -374,10 +508,21 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
  *  a caller that never went through this parser). */
 const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
 
-const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external']);
+const EXEC_KIND_SET: ReadonlySet<string> = new Set(EXEC_KINDS);
+/** The kinds as the refusals below name them, each quoted, comma-joined, the last after "or": built from
+ *  `EXEC_KINDS`, never retyped (D-8192). */
+const EXEC_KINDS_SAID =
+  `${EXEC_KINDS.slice(0, -1).map((k) => JSON.stringify(k)).join(', ')} or ${JSON.stringify(EXEC_KINDS[EXEC_KINDS.length - 1])}`;
+/** `AccountDef['telemetry']`'s values, keyed by the union so the two cannot drift here, and an object rather than
+ *  an array so it is not read as a restatement of the provider ids (`single-definition.test.ts`). The bare-Node
+ *  mirror (`shared/roster-json.mjs`) declares the same keys and `roster-exec-parity.test.ts` compares them (D-5753). */
+const TELEMETRY_VALUES: Readonly<Record<AccountDef['telemetry'], true>> = { anthropic: true, codex: true, none: true, openrouter: true };
+/** Dotless GPT-lane names fit the account-id grammar, so refuse them before wrapper convergence reaches its
+ *  self-exec lock: ccrc's `ccrc-codex` and `ccgpt-runtime`, and `ccgpt` (a box may still carry another repository's). */
+const GPT_TOOLCHAIN_ACCOUNT_IDS: ReadonlySet<string> = new Set(['ccrc-codex', 'ccgpt-runtime', 'ccgpt']);
 const ROOT_KEYS: ReadonlySet<string> = new Set(['version', 'accounts']);
 const ACCOUNT_KEYS: ReadonlySet<string> = new Set(
-  ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry', 'hidden', 'pool'],
+  ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry', 'hidden', 'pool', 'fableBilling', 'continuity'],
 );
 // THREE sets, not two, and written as a containment chain so the shared members
 // are never retyped. `upstream` and `external` used to share `EXEC_KEYS_BASE`
@@ -396,6 +541,13 @@ const EXEC_KEYS_EXTERNAL: ReadonlySet<string> =
   new Set([...EXEC_KEYS_UPSTREAM, 'provider', 'baseUrl']);
 const EXEC_KEYS_GENERATED: ReadonlySet<string> =
   new Set([...EXEC_KEYS_EXTERNAL, 'models']);
+/** NOT in the containment chain above. A codex lane takes neither `baseUrl`
+ *  (its upstream is its own LiteLLM, on `litellmPort` — a second spelling is a
+ *  second thing to disagree) nor `models` (the class registry owns model
+ *  policy), and it takes five fields no other kind has: the three topology
+ *  fields and the two words `bridge` and `upstream` (codex-bridge spec D20). */
+const EXEC_KEYS_CODEX: ReadonlySet<string> =
+  new Set([...EXEC_KEYS_UPSTREAM, 'provider', 'proxyPort', 'litellmPort', 'authDir', 'bridge', 'upstream']);
 /** Keyed so the call site is a lookup rather than a chain of ternaries, and so
  *  a fourth `ExecSpec` kind would be a compile error here before it was a
  *  silent fall-through to the wrong set. */
@@ -403,6 +555,7 @@ const EXEC_KEYS: Readonly<Record<ExecSpec['kind'], ReadonlySet<string>>> = {
   upstream: EXEC_KEYS_UPSTREAM,
   external: EXEC_KEYS_EXTERNAL,
   generated: EXEC_KEYS_GENERATED,
+  codex: EXEC_KEYS_CODEX,
 };
 
 /** Named in every remedy below, since `parseRoster` itself never sees a
@@ -511,6 +664,99 @@ function parseModels(raw: unknown, id: string, provider: ProviderId): ApiKeyMode
   };
 }
 
+/** The unprivileged TCP range. A lane's tiers are started by a user systemd
+ *  manager or a plain `nohup`, neither of which can bind below 1024, so a
+ *  privileged port is not a preference here — it is a lane that cannot start,
+ *  and saying so at parse time is the difference between one refusal and a
+ *  tier that flaps on `Restart=always`. */
+const PORT_MIN = 1024;
+const PORT_MAX = 65535;
+
+function parseLanePort(raw: unknown, id: string, field: 'proxyPort' | 'litellmPort'): number {
+  if (typeof raw !== 'number' || !Number.isInteger(raw)) {
+    throw new RosterError(
+      `account "${id}" has a missing or invalid exec.${field}: it must be a whole number.`,
+      `Set exec.${field} for account "${id}" in ${ROSTER_PATH} to a free TCP port between ` +
+        `${PORT_MIN} and ${PORT_MAX}. It cannot be defaulted: two lanes sharing a port send one ` +
+        "account's traffic through the other account's subscription.",
+    );
+  }
+  if (raw < PORT_MIN || raw > PORT_MAX) {
+    throw new RosterError(
+      `account "${id}" has an exec.${field} of ${raw}, which is out of range.`,
+      `Set exec.${field} for account "${id}" in ${ROSTER_PATH} to a free TCP port between ` +
+        `${PORT_MIN} and ${PORT_MAX} — below ${PORT_MIN} needs privileges this lane never has.`,
+    );
+  }
+  return raw;
+}
+
+/** `exec.bridge` / `exec.upstream` on a codex lane: absent reads the set's
+ *  FIRST word, the one place that default is decided in TypeScript; anything
+ *  present must be one of the set's words, compared by strict equality, so a
+ *  written `null`, a number or a name `Object.prototype` carries is refused like
+ *  a typo. Refused rather than defaulted because a misspelt `direct` that
+ *  quietly ran the lane on LiteLLM would be a mode the operator asked for and
+ *  never got. Choosing the field's VALUE is the roster's; moving a running lane
+ *  between the two modes is not a roster edit — the next materialise only
+ *  renders the word into `lane.json`. */
+function parseCodexWord<W extends string>(
+  raw: unknown, id: string, field: 'bridge' | 'upstream', words: readonly W[],
+): W {
+  if (raw === undefined) return words[0]!;
+  const said = words.map((w) => JSON.stringify(w)).join(' or ');
+  const hit = words.find((w) => w === raw);
+  if (hit === undefined) {
+    throw new RosterError(
+      `account "${id}" has an invalid exec.${field} ${JSON.stringify(raw)}: it must be ${said}.`,
+      `Set exec.${field} for account "${id}" in ${ROSTER_PATH} to ${said}, or remove it — absent reads ` +
+        `${JSON.stringify(words[0])}.`,
+    );
+  }
+  return hit;
+}
+
+/** `exec.authDir` — the directory holding a codex lane's OAuth. Gated exactly
+ *  as `exec.secretsFile` is (same charset, same four path refusals), plus one
+ *  rule of its own: it may not sit under `~/.ccrc`. `_uninst_purge` empties
+ *  that tree except `memory`, and a lane's sign-in goes only by `ccrc account
+ *  remove` of that lane — a refusal here makes "uninstall cannot destroy it"
+ *  structural rather than documented. The test compares against `.ccrc/` WITH the separator, so a
+ *  sibling like `.ccrc-backups` is untouched. */
+function parseAuthDir(raw: unknown, id: string): string {
+  if (typeof raw !== 'string') {
+    throw new RosterError(
+      `account "${id}" has a missing or non-string exec.authDir.`,
+      `Set exec.authDir for account "${id}" in ${ROSTER_PATH} to the directory holding that ` +
+        'lane\'s ChatGPT OAuth, as a path relative to $HOME (e.g. ' +
+        `".local/share/ccrc/codex/${id}"). ccrc's auth library reads and refreshes the credential there, and ` +
+        "'ccrc account remove' deletes a folder under .local/share/ccrc/codex/ unless told to keep it.",
+    );
+  }
+  if (
+    raw === '' || raw === '.' || raw.startsWith('./') || raw.includes('/./')
+    || raw.startsWith('/') || raw.endsWith('/') || raw.includes('..') || !SECRETS_SAFE_RE.test(raw)
+  ) {
+    throw new RosterError(
+      `account "${id}" has an invalid exec.authDir ${JSON.stringify(raw)}.`,
+      `Set exec.authDir for account "${id}" in ${ROSTER_PATH} to a path relative to $HOME using ` +
+        'only letters, digits, ".", "-", "_" and "/" — never absolute, never containing "..", ' +
+        'never ending in "/".',
+    );
+  }
+  if (raw === '.ccrc' || raw.startsWith('.ccrc/')) {
+    throw new RosterError(
+      `account "${id}" has an exec.authDir under $HOME/.ccrc (${JSON.stringify(raw)}).`,
+      `Move account "${id}"'s OAuth directory outside $HOME/.ccrc (e.g. ` +
+        `".local/share/ccrc/codex/${id}") and set exec.authDir in ${ROSTER_PATH} to the new ` +
+        'path. `ccrc uninstall --purge` empties $HOME/.ccrc, and a sign-in must not go with it. ' +
+        "'ccrc account remove' deletes a folder under .local/share/ccrc/codex/ unless told to keep it; " +
+        'a folder elsewhere outside $HOME/.ccrc it leaves alone.',
+    );
+  }
+  return raw;
+}
+
 /**
  * @param assumedProvider collects the ids of `generated` accounts that named no
  *   provider, so `parseRoster` can warn ONCE for the whole file instead of once
@@ -524,19 +770,17 @@ function parseExec(raw: unknown, id: string, assumedProvider: string[]): ExecSpe
   if (!isPlainObject(raw)) {
     throw new RosterError(
       `account "${id}" has a missing or invalid "exec".`,
-      `Set "exec" for account "${id}" in ${ROSTER_PATH} to an object with a "kind" of ` +
-        '"upstream", "generated" or "external".',
+      `Set "exec" for account "${id}" in ${ROSTER_PATH} to an object with a "kind" of ${EXEC_KINDS_SAID}.`,
     );
   }
   const kind = raw['kind'];
-  if (typeof kind !== 'string' || !EXEC_KINDS.has(kind)) {
+  if (typeof kind !== 'string' || !EXEC_KIND_SET.has(kind)) {
     throw new RosterError(
-      `account "${id}" has an invalid exec.kind ${JSON.stringify(kind)}: it must be ` +
-        '"upstream", "generated" or "external".',
-      `Set exec.kind for account "${id}" in ${ROSTER_PATH} to "upstream", "generated" or "external".`,
+      `account "${id}" has an invalid exec.kind ${JSON.stringify(kind)}: it must be ${EXEC_KINDS_SAID}.`,
+      `Set exec.kind for account "${id}" in ${ROSTER_PATH} to ${EXEC_KINDS_SAID}.`,
     );
   }
-  warnUnknownKeys(raw, EXEC_KEYS[kind as ExecSpec['kind']], `on account "${id}"'s exec`);
+  warnUnknownKeys(raw, EXEC_KEYS[kind as ExecKind], `on account "${id}"'s exec`);
 
   // HOISTED out of the `generated` arm (D-1857). This is the one change in this
   // wave that is not absence-permitting: `{kind:'upstream', secretsFile:'../x'}`
@@ -572,6 +816,40 @@ function parseExec(raw: unknown, id: string, assumedProvider: string[]): ExecSpe
   const withSecrets = secretsFile !== undefined ? { secretsFile } : {};
 
   if (kind === 'upstream') return { kind: 'upstream', ...withSecrets };
+
+  if (kind === 'codex') {
+    const proxyPort = parseLanePort(raw['proxyPort'], id, 'proxyPort');
+    const litellmPort = parseLanePort(raw['litellmPort'], id, 'litellmPort');
+    if (proxyPort === litellmPort) {
+      throw new RosterError(
+        `account "${id}"'s exec.proxyPort and exec.litellmPort are both ${proxyPort}.`,
+        `Give account "${id}" two different ports in ${ROSTER_PATH}: the shim Claude Code talks ` +
+          'to and the LiteLLM behind it are two listeners.',
+      );
+    }
+    const providerRaw = raw['provider'];
+    if (providerRaw !== 'openai') {
+      throw new RosterError(
+        providerRaw === undefined
+          ? `account "${id}" has exec.kind "codex" and no exec.provider.`
+          : `account "${id}" has exec.provider ${JSON.stringify(providerRaw)}, and exec.kind ` +
+            '"codex" accepts only "openai".',
+        `Set exec.provider for account "${id}" in ${ROSTER_PATH} to "openai". The kind names a ` +
+          'ChatGPT/Codex subscription lane, so the provider is not a choice — it is the one fact ' +
+          'the kind already asserts, spelled where every other kind spells it.',
+      );
+    }
+    return {
+      kind: 'codex',
+      provider: 'openai',
+      proxyPort,
+      litellmPort,
+      authDir: parseAuthDir(raw['authDir'], id),
+      bridge: parseCodexWord(raw['bridge'], id, 'bridge', CODEX_BRIDGE_MODES),
+      upstream: parseCodexWord(raw['upstream'], id, 'upstream', CODEX_UPSTREAMS),
+      ...withSecrets,
+    };
+  }
 
   // `provider`. Refused if present and unknown, on both remaining kinds; the
   // DEFAULT applies to `generated` only, because absent on `external` is the
@@ -669,6 +947,13 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
     );
   }
 
+  if (GPT_TOOLCHAIN_ACCOUNT_IDS.has(id)) {
+    throw new RosterError(
+      `account id "${id}" collides with the GPT-lane toolchain executable of the same name.`,
+      `Choose another account ID in ${ROSTER_PATH}; "${id}" is reserved for the GPT-lane toolchain.`,
+    );
+  }
+
   const label = raw['label'];
   if (typeof label !== 'string' || label.length === 0) {
     throw new RosterError(
@@ -745,8 +1030,8 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
   //
   // The safe set is deliberately conservative rather than "everything that
   // isn't a metacharacter": letters, digits, `.`, `-` and `_` cover every
-  // production suffix today (`.claude`, `.claude-personal`, `.claude-corp`,
-  // `.claude-gpt`, `.claude-dev0`) with room to spare, and a legitimate new
+  // production suffix today (`.claude`, `.claude-home`, `.claude-acme`,
+  // `.claude-gpt`, `.claude-lab0`) with room to spare, and a legitimate new
   // account name has no reason to need anything outside it.
   if (!/^\.[A-Za-z0-9._-]+$/.test(configDirSuffix)) {
     throw new RosterError(
@@ -801,12 +1086,43 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
   }
   const pool = poolRaw === undefined ? null : poolRaw;
 
+  // The two Overlord facts, gated as `pool` is: optional, absence is null, and a present value that is wrong, a
+  // written `null` included, is refused (`typeof null === 'object'`, so the `!== undefined` guard admits it).
+  const billingRaw = raw['fableBilling'];
+  if (billingRaw !== undefined && (typeof billingRaw !== 'string' || !(FABLE_BILLINGS as readonly string[]).includes(billingRaw))) {
+    throw new RosterError(
+      `account "${id}" has an invalid fableBilling ${JSON.stringify(billingRaw)}: it must be ` +
+        `${FABLE_BILLINGS.map((w) => JSON.stringify(w)).join(' or ')}.`,
+      `Set "fableBilling" for account "${id}" in ${ROSTER_PATH} to ${FABLE_BILLINGS.map((w) => JSON.stringify(w)).join(' or ')}, ` +
+        'or remove the key entirely to leave the fact unset.',
+    );
+  }
+  const fableBilling = billingRaw === undefined ? null : (billingRaw as FableBilling);
+
+  const continuityRaw = raw['continuity'];
+  let continuity: ContinuityRecord | null = null;
+  if (continuityRaw !== undefined) {
+    const keys = typeof continuityRaw === 'object' && continuityRaw !== null && !Array.isArray(continuityRaw)
+      ? Object.keys(continuityRaw) : null;
+    const at = keys !== null && keys.length === 1 && keys[0] === 'recordedAt'
+      ? (continuityRaw as Record<string, unknown>)['recordedAt'] : undefined;
+    if (typeof at !== 'number' || !Number.isSafeInteger(at) || at < 0) {
+      throw new RosterError(
+        `account "${id}" has an invalid continuity ${JSON.stringify(continuityRaw)}: it must be an object with exactly ` +
+          'one key, "recordedAt", a non-negative integer of epoch seconds.',
+        `Set "continuity" for account "${id}" in ${ROSTER_PATH} to {"recordedAt": <epoch seconds>}, ` +
+          'or remove the key entirely to leave the fact unset.',
+      );
+    }
+    continuity = { recordedAt: at };
+  }
+
   const telemetry = raw['telemetry'];
-  if (telemetry !== 'anthropic' && telemetry !== 'codex' && telemetry !== 'none') {
+  if (typeof telemetry !== 'string' || !Object.hasOwn(TELEMETRY_VALUES, telemetry)) {
     throw new RosterError(
       `account "${id}" has an invalid telemetry ${JSON.stringify(telemetry)}: it must be ` +
-        '"anthropic", "codex" or "none".',
-      `Set "telemetry" for account "${id}" in ${ROSTER_PATH} to "anthropic", "codex" or "none".`,
+        '"anthropic", "codex", "openrouter" or "none".',
+      `Set "telemetry" for account "${id}" in ${ROSTER_PATH} to "anthropic", "codex", "openrouter" or "none".`,
     );
   }
 
@@ -826,7 +1142,7 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
     hue = hueRaw;
   }
 
-  return { id, label, configDirSuffix, exec, homeAble, telemetry, hue, hidden, pool };
+  return { id, label, configDirSuffix, exec, homeAble, telemetry: telemetry as AccountDef['telemetry'], hue, hidden, pool, fableBilling, continuity };
 }
 
 /**
@@ -968,6 +1284,28 @@ export function parseRoster(json: unknown): Roster {
     seenDirs.set(a.configDirSuffix, a.id);
   }
 
+  // THE SAME SHAPE AS `seenDirs`, and for the same reason: a collision is a
+  // fact about two entries, so it cannot be seen from inside either one.
+  // Both fields of every codex lane go into ONE map, because the hazard is a
+  // port serving two purposes, not a field colliding with its own name — a
+  // lane whose shim port is another lane's LiteLLM port is just as wrong.
+  const seenPorts = new Map<number, string>();
+  for (const a of drafts) {
+    if (a.exec.kind !== 'codex') continue;
+    for (const port of [a.exec.proxyPort, a.exec.litellmPort]) {
+      const owner = seenPorts.get(port);
+      if (owner !== undefined && owner !== a.id) {
+        throw new RosterError(
+          `accounts "${owner}" and "${a.id}" both use port ${port}.`,
+          `Give each codex lane in ${ROSTER_PATH} its own two ports. Two lanes on one port send ` +
+            "one account's requests through the other account's OAuth, and the box cannot tell " +
+            'you which turn went where afterwards.',
+        );
+      }
+      seenPorts.set(port, a.id);
+    }
+  }
+
   const upstreams = drafts.filter((a) => a.exec.kind === 'upstream');
   if (upstreams.length === 0) {
     throw new RosterError(
@@ -1007,4 +1345,38 @@ export function parseRoster(json: unknown): Roster {
   const homeAble = accounts.filter((a) => a.homeAble);
 
   return { version: 1, accounts, byId, byIdLengthDesc, homeAble, upstreamId };
+}
+
+// ── The connect sheet's reading of a new lane's name (accounts plan Task A18, D-7740) ──────────────────────────────
+// APPENDED at the foot: the parser's own gates above stay the authority, and these read them rather than restate them.
+
+/** The lane ids `ccrc account add` refuses as reserved: `auth` (`_acct_id_or_refuse`, ccd/ccrc: the auth pane's tmux
+ *  session is `cc-auth-<id>`), and the GPT-lane toolchain names the parser above refuses. Display only: the verb is
+ *  the authority, and the sheet reads this list to say so before it asks. */
+export const RESERVED_LANE_IDS: readonly string[] = ['auth', ...GPT_TOOLCHAIN_ACCOUNT_IDS];
+
+/** Why a new lane's id cannot be added, or `null` (spec §5's identity step, live against the roster the server holds):
+ *  `ID_RE` above, the reserved ids, then the ids already taken. */
+export function newLaneIdProblem(id: string, taken: readonly string[]): 'bad-id' | 'reserved-id' | 'duplicate-id' | null {
+  if (!ID_RE.test(id)) return 'bad-id';
+  if (RESERVED_LANE_IDS.includes(id)) return 'reserved-id';
+  if (taken.includes(id)) return 'duplicate-id';
+  return null;
+}
+
+/** Why a new lane's label cannot be used, or `null`: 1 to 64 characters, and none of them a control byte
+ *  (`LABEL_UNSAFE_RE` above, the parser's own gate). */
+export function newLaneLabelProblem(label: string): 'empty' | 'too-long' | 'unsafe' | null {
+  if (label.length === 0) return 'empty';
+  if ([...label].length > 64) return 'too-long';
+  if (LABEL_UNSAFE_RE.test(label)) return 'unsafe';
+  return null;
+}
+
+/** The config folder `ccrc account add` gives a new lane (G4): `.claude-<id>`, or `.<id>` when the id already starts
+ *  `claude-`, so `claude-a` is `.claude-a` and never `.claude-claude-a`. The verb owns the rule (`_acct_add_parse` in
+ *  ccd/ccrc and `defaultSuffixOf` in deploy/account-op.mjs, which `ccrc-account.test.ts` holds equal); the sheet only
+ *  shows what it will be, and `connect-sheet.test.tsx` holds this copy to the same cases. */
+export function newLaneConfigSuffix(id: string): string {
+  return id.startsWith('claude-') ? `.${id}` : `.claude-${id}`;
 }

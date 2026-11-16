@@ -1,7 +1,7 @@
 # Cross-repo programmes — the build spec: a programme has a home, its waves work anywhere, its mail finds its role
 
 **Status:** design approved in dialogue 2026-09-08 (operator: cross-repo first of the three open
-roadmap items; the Aug 11 mail proposal adopted in full; dogfood pair custom-tools ↔ data-internal).
+roadmap items; the Aug 11 mail proposal adopted in full; dogfood pair project-d ↔ project-e).
 Written for the plan; every file:line below was measured against `main` at `d0064e6e` on
 2026-09-08 by three read-only scouts, not carried over from the earlier draft. Plan-time deviations
 D-2054–D-2070 (the three wave plans' `## Deviations found`) were ratified the same day and are folded
@@ -259,7 +259,7 @@ explanation — correct, and silent.
   the legacy generation (D-2064). `nestFleet` stays pure and its five rules unchanged; the marker is
   computed in the card from the run it already has.
 - **Fleet board, the home card:** the programme line gains one sentence per wave abroad
-  ("wave 2 in data-internal"). `FleetScreen` already filters runs per card by `run.project`; it passes
+  ("wave 2 in project-e"). `FleetScreen` already filters runs per card by `run.project`; it passes
   a second, additive list — runs whose `homeProject` is this card's project and whose `project` is
   not — so the home card can say it without the tree changing.
 - **Pinned by:** `nestFleet.test.ts` unchanged (the tree does not change), one runs-screen test for the
@@ -437,8 +437,8 @@ the whole-suite gate, and CI on the quiet box is the arbiter of a load flake.
   own commit when §3 F2's measured criterion holds, else deferred with the measurement recorded. Not
   agent-first — the coordinator references belong to waves 1 and 2, not here (D-2069).
 
-**Dogfood, as its own programme after wave 2 is live:** home `custom-tools`, wave 1 there, wave 2 in
-`data-internal` on real work the operator names, opened without `sessionId`. Acceptance, from the Aug
+**Dogfood, as its own programme after wave 2 is live:** home `project-d`, wave 1 there, wave 2 in
+`project-e` on real work the operator names, opened without `sessionId`. Acceptance, from the Aug
 draft with D-2684/D-2687 and D-2715/D-2716's provenance corrections: the wave-2 brief carries
 `homeRepoRoot`, `planRepoPath`, and `planSha` and reads that exact plan blob. Because this consumer
 depends on wave 1's producer interface, the brief also carries `producerRepoRoot`,

@@ -1,0 +1,1309 @@
+// Instrument's shell at laptop and wide (W2 Task S9, D-5472): the top bar and its doors (the rail's until desk-nav Task A,
+// D-8100), the list column and the status bar, placed by the shared frame. Each case mounts the whole `App` under Instrument with a desk width stubbed
+// (`(min-width: 900px)` true), or reads `instrument.css` where the claim is the stylesheet's (jsdom applies no media
+// query and lays nothing out, so a width or a pointer branch is asserted on the rule, and the real-browser renders in
+// the PR measure the pixels).
+//
+// RED FIRST, on the task's base: this file did not compile there (no `skins/instrument/Rail.tsx`).
+//
+// MUTATION TABLE (plan Task S9 Step 3; RUN, each mutant on a `git archive` copy, this suite or skin-boundary alone):
+//   Activity rendered as a disabled door ............... "…Activity not rendered…"
+//   the status bar's 24px outside (pointer: fine) ...... "…under a coarse one it and its buttons are at least --tap-min"
+//   the command field as a TextInput ................... "…is not a text field"
+//   the status bar filters s.bucket === 'attention' .... "the status bar renders fleetSummary"
+//   the top bar starts at column 2 ..................... "the top bar spans the rail's column"
+//   the rail's tooltip on :hover only .................. "…shows on focus-visible"
+//   Wordmark removed from TopBar ....................... skin-boundary (a)
+//   a hex in instrument.css ............................ skin-boundary (c)
+//
+// Desktop polish G3 (D-7333): status mode draws `statusView`'s groups (statusGroups.ts); the skin scan below holds over the
+// new FleetTable. MUTATION TABLE (RUN, on the working tree, this suite alone, then restored from a saved copy, sha checked;
+// the task's other 36 rows are status-programmes.test.tsx's header):
+//   FleetTable holding Needs you open by `s.bucket === 'attention'` itself  "the status bar renders fleetSummary" (the skin scan)
+//
+// W2 Task T2e (desk-polish, D-6335): the frame's fourth track, the list column's one head, the pool-lag readout.
+// MUTATION TABLE (plan Task T2e Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
+//   the fourth track unconditional ..................... "the fourth-track attribute follows the set's Inspector part, whatever its id"
+//   the attribute set from the skin id ................. "the fourth-track attribute follows the set's Inspector part, whatever its id"
+//   `ListColumn` keeps the head chrome ................. "at 900, 1280 and 1920 the frame holds one wordmark, and one each of …"
+//   the banners tied to the head flag .................. "one banner stack at any width"
+//   the pool lag dropped with the chrome ............... "the pool-lag readout shows once at the desk when the epochs differ"
+// Fix round 1 (review 826, F1):
+//   the rail's Inbox door without the count ............ "at the desk with mail unread, the rail's Inbox door names and shows the count, and nothing else in the frame does"
+// T2e review R32, F5 (carried into T2g, D-6715; RUN, this suite alone, then reverted):
+//   `unreadMailCount` without the `isUnseenAt(...)` term  "mail at the ack's own stamp, or before it, is not unread: …"
+//   `isUnseenAt` as `since >= (acks[key] ?? 0)` ........ "mail at the ack's own stamp, or before it, is not unread: …"
+//
+// W2 Task T2g (desk-polish, D-6715): one count at the desk, in the status bar; the list head empty is not drawn.
+// MUTATION TABLE (plan Task T2g Step 3; RUN, each mutant on the working tree, this suite alone unless named, then reverted):
+//   `ListColumn` without `headCount={false}` ........... "at 900, 1280 and 1920 Instrument's list column draws no count line, …", the head-is-the-lag case,
+//                                                         and T2e's census case (the browser leg holds the offset case)
+//   `FleetColumn` passes `headCount` without `|| !desktop`  "at 899 Instrument's list column keeps its count line"
+//   in `FleetScreen`, `poolLag={headCount ? poolLag : null}`  "…the head is the pool lag alone when the epochs differ…", and T2e's "the pool-lag readout shows once at the desk when the epochs differ"
+//   `FleetHead`'s nothing-to-draw `return null` removed  "…and there is no head when they agree", "Refined at 1280 on an empty fleet with no lag draws no …", T2e's census case
+//   Refined's `Sidebar` passes `headCount={false}` ..... "Refined's desk column keeps its count line"
+//   the flag removed and `@media (min-width: 900px) { .shell-nav .fleet-count { display: none } }` in instrument.css
+//                                                       seven red cases (measured, T2f R51 F5), four in skin-boundary.test.ts, all under (j) "no skin stylesheet hides by width":
+//                                                         "holds on the real tree", "display: none under @container is red",
+//                                                         "a pseudo-element is exempt, but not when an element shares its selector list" and
+//                                                         "hiding outside a width block is not this case's" (the last three scan the real sheet too); and three here:
+//                                                         T2e's "at 900, 1280 and 1920 the frame holds one wordmark, and one each of the Docs, Accounts, Settings, Inbox and Bell doors",
+//                                                         "at 900, 1280 and 1920 Instrument's list column draws no count line, …" and
+//                                                         "at the desk the list column's head is the pool lag alone when the epochs differ, and there is no head when they agree"
+// Row 8 (Step 0's `flex: none` removed) does not apply: Step 0 found the count whole at 900, so T2g adds no `flex: none`.
+// Rows 1 and 4 also run in browser/instrument-desk.browser.test.ts (its own table); row 7 (`.ins-status-summary { max-width: 6ch }`, the plan's row 7) runs only there.
+//
+// W2 Task T2f (D-6371): Instrument's desk column draws no runs row; Refined keeps its own at every width (review 1117, A2).
+// MUTATION TABLE (RUN, each mutant on the working tree, this suite alone, then restored from a saved copy; the rows that
+// guard Instrument's side are in instrument-list.test.tsx and fleet-class-chooser.test.tsx):
+//   Refined's `Sidebar` passes `runsLine={false}` ...... "Refined keeps its runs row at every width (T2f, D-6371)"
+//                                                         (`900px: runs lines: expected  to have a length of 1 but got +0`; the 390 and 899 rounds pass first)
+//
+// Desk polish S5b (D-6530): the lanes fold.
+// MUTATION TABLE (plan Task S5b Step 3; the whole table RUN at 182d2ac58, whose pwa/ tree is fix round 1's last code commit
+// (856076c2e) unchanged, and the flyout rows (the R120 `strip-hover-flyout` block, the Escape and flyout-name rows, fix round 2's)
+// RUN again at dbe5e0506, whose pwa/ tree is fix round 2's last code commit (d51cbc7c1) unchanged; below, "182d2ac58" and
+// "d51cbc7c1" name those two runs; bounded and hash-checked; the logs are kept outside the repo. Each mutant was applied to the working tree as one
+// exact-once replacement and restored from a saved copy with its sha256 checked; the named jsdom suite(s) alone, and
+// browser/lanes-row.browser.test.ts or browser/refined-phone.browser.test.ts too where a row names one; then reverted.
+// At 182d2ac58: 75 mutants run, 75 red, none survived, none invalid. At d51cbc7c1: 33 mutants run, 33 red, none survived, none
+// invalid. The counts "of 70" and "of 26" are the browser files' sizes at 182d2ac58, "of 72" lanes-row's at d51cbc7c1; the flyout rows
+// below carry the d51cbc7c1 figures, the other rows the 182d2ac58 ones):
+//   fold when it would hide one lane (`count + 1`; at the desk, the line folding when one lane would overflow)
+//                                                       strip-fold "it never folds to hide a single lane: five lanes show all five", "foldable is false at five lanes
+//                                                         and true at six, folded or expanded", "one rule at every width: …"
+//   `foldable` read from `hidden.length` ............... strip-fold "foldable is false at five lanes and true at six, folded or expanded", "expanded shows every lane, in the same order"
+//   the shown lanes taken from the end ................. strip-fold "…the fold shows the freest four, in lanesByFree's order…", "six lanes fold to four and +2"; refined-phone
+//                                                         "at 390 with 17 lanes the phone header shows four cards and '+13 more · …'"
+//   expired and never-read lanes hidden whatever their position
+//                                                       strip-fold "the fold hides by position, never by state: …"
+//   the attention counts dropped from the words ........ strip-fold "+n more counts the hidden lanes that need you: …"
+//   a critical lane (above 75%) counted ................ strip-fold "a hidden lane that is only critical is not counted"
+//   a sign-in-expired lane at its limit counted under both
+//                                                       strip-fold "a lane counts once, sign-in expired first"
+//   a never-read lane counted as needing you ........... strip-fold "a never-read lane is hidden but not counted as needing you"
+//   "sign-in expired" retyped in `stripFold.ts` ........ strip-fold "the words take SIGN_IN_EXPIRED and the state word"
+//   the limit re-tested inline instead of `stateWordFor` strip-fold "the words take SIGN_IN_EXPIRED and the state word"
+//   `FOLD_SHOWN` used at the desk too .................. strip-fold "a desk folds to one card fewer than rowFit's tracks, the last track the end cell's", "one rule at every width: …";
+//                                                         lanes-row (8 of 70) "folded with 17 lanes at 900, 1280 and 1920 in both skins, the row is one line: …", "from 1920 to 1280 the folded row re-fits: …"
+//   the end cell's track not left (`foldShown(true, t)` is `t`)
+//                                                       strip-fold "a desk folds to one card fewer than rowFit's tracks, …", "one rule at every width: …";
+//                                                         lanes-row (8 of 70) "folded with 17 lanes at 900, 1280 and 1920 in both skins, the row is one line: …", "from 1920 to 1280 the folded row re-fits: …"
+//   a width query in `stripFold.ts` .................... strip-fold "stripFold.ts reads no layout"
+//   `rowFit` without the gap added back ................ strip-fold "rowFit counts the tracks one line holds: …"
+//   an unmeasured row read as one card (width 0 -> 1) .. strip-fold "an unmeasured desk row folds nothing: every lane, no control"
+//   the floor's figure kept in `shell.css` ............. strip-fold "the card's floor is LANE_CARD_MIN, once"
+//   `--lane-card-min: 260px` in the strip's rule ....... strip-fold "the card's floor is LANE_CARD_MIN, once: every lanes-row rule in shell.css reads the token, and none writes the figure"
+//   `minmax(260px, 1fr)` in the flyout's rule .......... strip-fold, the same case (fix round 1: both were SURVIVED while the guard read only the strip's `grid-template-columns`)
+//   the fold applied below 900 only .................... app "one fold control per width, in both skins: refined, desk, …" and the instrument one; lanes-row "folded with 17
+//                                                         lanes at 900, 1280 and 1920 …" (RED, run filtered to the one view refined, phosphor, 1280px; the whole file is not run for this row:
+//                                                         it outran its 580 s bound, twice, in an earlier run, with every folded desk case waiting out its own timeout)
+//   hidden cards rendered and hidden by CSS ............ accounts-strip "the folded strip mounts only the shown cards", and six more
+//   the control rendered outside the end cell .......... accounts-strip "the control sits in the end cell, after the last shown card and before All accounts, …"
+//   the control rendered after All accounts ............ accounts-strip "the control sits in the end cell, after the last shown card and before All accounts, …"
+//   the tab stop left on a card that folds away ........ accounts-strip "…a stop on a card that folds away goes to the first shown card"
+//   `lanesRowLabel` called with the shown lanes ........ accounts-strip "folded, the group's name names the fullest lane, which is hidden"
+//   the control spreads `commandDoor('go-accounts')` before its own `onClick`
+//                                                       accounts-strip "a tap on the control folds and unfolds and never navigates, and the control carries no data-command …"
+//   the same spread after its own `onClick` ............ accounts-strip "a tap on the control folds and unfolds and never navigates, …", and five more
+//   an `aria-label` on the control ..................... accounts-strip "the control's name is its words (no aria-label), …", and 26 more
+//   the control keyed on its state (remounts) .......... accounts-strip "focus stays on the control across Show fewer and +n more"
+//   the control rendered iff `hidden.length > 0` ....... accounts-strip "focus stays on the control across Show fewer and +n more", "a tap on the control folds and unfolds …"
+//   the control rendered when `expanded` regardless of `foldable`
+//                                                       accounts-strip "five lanes render no fold control at all, folded or expanded: the only button in the strip is All accounts"
+//                                                         (a fix round: it was SURVIVED while the one case looked for the control by name, which a control with no words does not have)
+//   the component compares `live.length` with `FOLD_SHOWN`
+//                                                       accounts-strip "the control renders from foldLanes alone: …"
+//   the scroll run on mount ............................ accounts-strip "another tab's choice to fold, arriving after the load, scrolls nothing: only this page's own Show fewer does"
+//                                                         (a fix round: it was SURVIVED while no case let a choice arrive after the load, the effect running only at mount)
+//   the sentence built inline in `AccountsStrip` ....... accounts-strip "the control's words are foldWords': the component builds no sentence of its own", and six more
+//   Show fewer's scroll call removed ................... accounts-strip "Show fewer scrolls the control into view with block nearest; …"; refined-phone browser (2 of 26)
+//                                                         "after Show fewer the control is focused and on screen: refined, phosphor, 360px" and 390px
+//   the choice kept in component state ................. strip-expanded "the choice survives a remount and a reload", and four more; refined-phone "the choice to expand is remembered across a remount"
+//   a malformed value read as expanded ................. strip-expanded "absent, malformed or unreadable storage reads folded"
+//   the read without try/catch ......................... strip-expanded "absent, malformed or unreadable storage reads folded", "unreadable storage reads folded until this page chooses, …"
+//   the in-page value dropped when storage refuses ..... strip-expanded "a choice storage refuses still holds for this page", and two more
+//   `useState` per hook instead of the shared store .... strip-expanded "two strips agree", and four more
+//   the `storage` listener removed ..................... strip-expanded "a storage event for ccrc-accounts-strip updates a mounted hook", and one more
+//   the fold applied in `PhoneHeader` only (the fleet column's mount given an unfolded prop)
+//                                                       instrument-shell "Instrument's phone fleet column folds the same strip"
+//   Instrument's first-row bound lowered below its measured 533.8 px (540 -> 530) ... refined-phone browser (1 of 26) "folded, with 17 lanes, four cards and one control …, and the first session row sits at most
+//                                                         540 px down at 390×844: instrument, phosphor, 390px" (fix round 1, `instrument-first-row-is-its-chrome`: the 440 check was gated on Refined's head, so Instrument ran none)
+// Fix round 1 trimmed the browser leg's geometry matrices to one palette (lanes-row 88 -> 70 cases, refined-phone 31 -> 26);
+// the counts above are of the trimmed files, from the run at 182d2ac58.
+// R120 `strip-hover-flyout` (accounts-strip alone, plus lanes-row where named):
+//   open without the delay (`FLYOUT_OPEN_MS` -> 0) ..... "…hovering the line opens the flyout after FLYOUT_OPEN_MS, …", "a pointer passing by does not open it", "a pointer passing over the strip while the open delay
+//                                                         that focus started is pending does not cancel the open", "an open the pointer started is cancelled when the pointer leaves, …"
+//   close without the grace (`FLYOUT_CLOSE_MS` -> 0) ... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it", "focus leaving the strip closes it, …", and four more
+//   close without handing focus back to the line ....... "Escape closes it and returns focus to the card it came from", "an open the pointer started is cancelled when the pointer leaves, …"
+//   the flyout while expanded .......................... "no flyout while expanded, and none below 900", and the moot-focus case below
+//   the flyout below 900 ............................... "no flyout while expanded, and none below 900"
+//   the flyout reset removed when it is moot ........... "no flyout while expanded, and none below 900", and the moot-focus case below
+//   a pointer leave with keyboard focus inside closing the flyout (the early return in `onLeave` removed)
+//                                                       accounts-strip "it stays open while either the pointer or keyboard focus is inside the line or the flyout, and closes when neither is",
+//                                                         "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open", and three more
+//                                                         (fix round 1: the ruled rule is "either"; the old case pinned a pointer leave closing the flyout with focus inside)
+//   the early return kept for an open flyout only (`&& flyOpen`): a pointer pass cancelling the open focus started
+//                                                       accounts-strip "a pointer passing over the strip while the open delay that focus started is pending does not cancel the open",
+//                                                         "keyboard focus arriving while the pointer's open delay is pending takes the open over: …"
+//   the early return kept for a pending open only (`&& !flyOpen`): the pointer leaving closing an open flyout focus holds
+//                                                       accounts-strip "it stays open while either the pointer or keyboard focus is inside the line or the flyout, and closes when neither is", and two more
+//   the moot flyout's focus hand-back removed ......... "a flyout made moot while a card of it holds focus hands the focus to the line's tab stop, never to the page: another tab expands the strip"
+//                                                         (fix round 1: the reset called `setFlyOpen(false)` directly, so a focused flyout card was unmounted and focus fell to the page)
+//   a second copy of the card markup ................... "the flyout's cards render through the line's own card code: one card markup in the component"
+//   the panel's cards from `live` or `shown`, or the split off by one either way, not `fold.hidden` (Task C13)
+//                                                       accounts-strip "the flyout holds only the lanes the line folds away: …" and the cases that count the panel;
+//                                                         lanes-row (4 of 89) "hovering the folded line opens a flyout below it, …"; refined-phone browser (4 of 41) "a tap on the control opens the thirteen lanes …"
+//   the desk flyout's offset (`left`/`right` 0) ........ lanes-row (4 of 89) "hovering the folded line opens a flyout below it, … its cards in the line's tracks, …" (Task C13)
+//   focusout ignoring `relatedTarget` .................. "focus leaving the strip closes it, and focus moving between the line and the flyout does not"
+//   pointer enter not cancelling a pending close ....... "leaving the line and the flyout closes it after FLYOUT_CLOSE_MS; coming back within the grace keeps it"
+//   focus between the strip's own cards opening it again "Escape stays shut for a keyboard user: an arrow move between the line's cards does not open it again"
+//   the flyout `position: absolute` -> `static` ........ lanes-row (4 of 72) "hovering the folded line opens a flyout below it, drawn over the content, …"
+//   the flyout's `z-index` removed ..................... lanes-row (4 of 72) "hovering the folded line opens a flyout below it, drawn over the content, …"
+//   the `returningFocus` guard removed from `onGroupFocus`: no row. It was SURVIVED as a dead guard (the `relatedTarget` test above it already returns for the move the guard
+//                                                         covered), so the guard was removed from `AccountsStrip` in a fix round and the cases stay green
+//   the timers not cleared on unmount .................. accounts-strip "unmounting with the open delay pending, or the close grace pending, leaves no timer behind"  (a fix round: it was SURVIVED)
+//   `preventDefault` dropped from the flyout's Escape .. accounts-strip "an Escape that closes it is handled there: the key press is default-prevented, …", "an Escape while the open is still pending cancels the open"
+//                                                         (final review: an Escape that closes the flyout reached the desk's Escape interrupt and stopped a busy session's turn)
+//   the Escape not acting while the open is pending .... accounts-strip "an Escape while the open is still pending cancels the open"
+//   the flyout group named as the line's group is ...... accounts-strip "at the desk, folded, hovering the line opens the flyout after FLYOUT_OPEN_MS, …"
+// R120 `strip-hover-flyout`, fix round 2 (review 1106; accounts-strip alone, each mutant on the working tree and restored from a saved copy with its sha256 checked;
+// the browser rows are lanes-row's, in real Chrome). Only KEYBOARD focus (`:focus-visible`) on a card holds the flyout, and who started an open decides what a pointer does:
+//   `keyboardHeld` matching `.account-gauge` without `:focus-visible` (a click's focus on a card holds the flyout)
+//                                                       accounts-strip "focus a click leaves behind never holds the flyout: hover-open, click a card, the pointer leaves, …"
+//   `keyboardHeld` as the bare `group.contains(el)`, the rule before this round (anything focused in the strip holds it)
+//                                                       accounts-strip the same case, "nor does the end cell: hover-open, click All accounts, …" and the end-cell cases of the next row;
+//                                                         lanes-row (1 of 72) "a click's focus never holds the flyout: hover-open, click All accounts, move off the strip, and it closes
+//                                                         within the grace: refined, phosphor, 1280px" (the flyout never closes: the wait for it times out)
+//   `keyboardHeld` testing `:focus-visible` on any element of the group, the end cell's controls too
+//                                                       accounts-strip "keyboard focus in the end cell holds nothing either", "keyboard focus moving from a card of the flyout to
+//                                                         the end cell, with the pointer outside, starts the grace", "focus arriving at the end cell from outside the strip opens nothing"
+//   `handFocusBack` without its `focus()` call (Escape drops focus to the page)
+//                                                       lanes-row (1 of 72) "Escape closes the flyout keyboard focus holds, the pointer having opened it, and hands focus to a card of the line: refined, phosphor, 1280px"
+//   `onLeave` without the `openBy` test (any keyboard focus parked in the strip saves a pointer's open)
+//                                                       accounts-strip "an open the pointer started is cancelled when the pointer leaves, whatever focus is parked in the strip: after Escape the flyout stays shut"
+//   a pending pointer open not taken over by keyboard focus arriving (the `openBy` upgrade removed)
+//                                                       accounts-strip "keyboard focus arriving while the pointer's open delay is pending takes the open over: …"
+//   `onGroupFocus` starting no close grace for focus that holds nothing
+//                                                       accounts-strip "keyboard focus moving from a card of the flyout to the end cell, with the pointer outside, starts the grace"
+//   `handFocusBack` without the `document.activeElement` guard (a stale `flyHeld` pulls focus out of a field)
+//                                                       accounts-strip "a poll that drops the lane of the flyout card holding focus: …"
+//   `handFocusBack` guarding on the body only (focus inside the strip, or nothing, not allowed)
+//                                                       accounts-strip "Escape closes it and returns focus to the card it came from", "an open the pointer started is cancelled …"
+//   `handFocusBack` ignoring `flyHeld` (the reviewer's mutant (a): it always focuses)
+//                                                       accounts-strip "a hover-only flyout hands no focus to the line when it closes: …", "focus that left the flyout is not handed back: …",
+//                                                         "a window that loses focus while a flyout card holds it: …", "Escape with focus on All accounts, which a flyout card left, …"
+//   the flyout's `onBlur` not resetting `flyHeld` (the reviewer's mutant (b))
+//                                                       accounts-strip "focus that left the flyout is not handed back: …", "a window that loses focus while a flyout card holds it: …",
+//                                                         "Escape with focus on All accounts, which a flyout card left, …"
+//   `handFocusBack` ignoring both `flyHeld` and the `activeElement` guard
+//                                                       the five above and "focus outside the strip stays put when the pointer leaves and the grace runs",
+//                                                         "a window that loses focus, then a field outside the strip taking it: …" (neither mutant alone reaches these two: each guard covers the other)
+// The reset of a moot flyout is a plain effect now (a one-frame focus on the page is accepted), and no case pins "before the browser paints".
+// `useRowWidth` (final review: it had no row; each run against accounts-strip and strip-fold):
+//   the observer not disconnected on cleanup ........... accounts-strip "the desk row's observer is disconnected when the strip unmounts"  (it was SURVIVED: no case unmounted a measured strip)
+//   the column gap read without the `Number.isFinite` fallback
+//                                                       nineteen accounts-strip cases, the first "at the desk the row folds to the measured fit: three cards at 1248 px, …" (jsdom's gap is not a number)
+//   the column gap ignored (`gap: 0` in `useRowWidth`) . accounts-strip "the desk's fit counts the column gap the group computes: 1050 px with an 8 px gap holds three tracks, …"
+//                                                         (fix round 1: it was SURVIVED, every jsdom case ran with a gap of 0 and the browser leg's three desk widths count alike with 8 px or 0)
+// R120 `lanes-tie-break-soonest-reset` (lane-order alone):
+//   drop the reset key ................................. "lanes that tie on binding use sort by the binding window's reset, soonest first", and four more
+//   reset latest first ................................. the same five
+//   a lane with no reset time sorted first ............. "a tie with no reset time sorts after one with a reset time"
+//   drop the other window's key ........................ "a tie on use and reset sorts by the other window's use, lowest first", "the reset outranks the other window's use, …"
+//   the other window read as the binding pct ........... the same two
+//   the reset read from `fiveResetAt` directly ......... "the tie-break reads the reset through bindingWindow"
+//   keys 2 and 3 swapped (other window before reset) ... "the reset outranks the other window's use, and the other window's use outranks the roster"
+//   key 3 after the roster ............................. "a tie on use and reset sorts by the other window's use, lowest first", "the reset outranks the other window's use, …"
+//   the last group (never read, expired) sorted by reset "never-read and expired lanes still go last, in roster order, whatever their resets"
+// W2 Task T2d (desk-polish, D-6330): the rail's Inbox door counts what waits on the operator, as Refined's tab does.
+// MUTATION TABLE (plan Task T2d Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
+//   the rail's Inbox door left on the unread count .... "the rail's Inbox door says 'waiting for you' with Refined's count"
+// T2e's rows 1 and 2 under "T2e review R32, F5" above are retired: `unreadMailCount` is gone, and no door here counts
+// unread mail. The F5 case lives in mail-screen.test.tsx, against the Inbox's own row mark, and its two mutant rows in
+// needs-you-counts.test.ts. Fix round 1's row (review 826, F1) above is retired too: its case was renamed to the row
+// just above, "the rail's Inbox door says 'waiting for you' with Refined's count".
+//
+// W2 Task T2b (desk-polish, D-6328): no floating + at the desk; Instrument's round + mounts below 900 only.
+// MUTATION TABLE (plan Task T2b Step 3; RUN, each mutant on the working tree, this suite alone, then reverted):
+//   `PhoneFab` mounted at every width .................. "exactly one [data-command=new-session] at 900, 1280 and 1920"
+//   `PhoneFab` with its own `onClick` that navigates ... "at 390 the round + dispatches the new-session door event"
+//   `PhoneFab` gated on a narrower width (min-width: 600px) "at 899 the round + is the one New session door"
+//
+// Desk-nav Task A (D-8100): the rail's doors move into the top bar, the breadcrumb goes. The rail and top bar cases above
+// whose names say "rail" are history: the rail is gone, and the cases are "the desk top bar (desk-nav Task A)" below.
+// MUTATION TABLE (plan Task A Step 5, fix round 1's 12 to 14 from review 1638, and fix round 2's 15 from review 1643;
+// RUN, each mutant on the working tree from a
+// saved copy, restored and sha-checked, the named case alone; the browser rows under vitest.browser.config.ts):
+//   1 Archive inserted before Accounts ................. phone-bar "they are the desk places with Archive after Accounts"
+//   2 the wordmark door without commandDoor('go-fleet') "the wordmark door runs go-fleet, …"; phone-bar "the desk bar shows no fleet place, …";
+//                                                         browser phone-bar "no bar at a desk" (900, 1280)
+//   3 DOOR_WORDS_QUERY at 1440px ....................... "at 1280 and 1920 each door shows its word and no tip; …"; browser "the doors show words from 1280" 1280px
+//   4 the space before the badge removed ............... "label in name at 1280, and in the icon form at 900 and 1279" ("Waiting on you2")
+//   5 the tip mounted at the words width too ........... the same case; browser "the doors show words from 1280" 1280px, 1920px
+//   6 the frame's rail branch kept, an empty Primary nav "exactly one nav[aria-label="Primary"] …" (instrument 900: 2)
+//   7 `.ins-command`'s min-width raised to 280px ....... "the command field takes the rest, with its floor at the tap square and --sp-10";
+//                                                         SURVIVED by the browser's "the bar fits on one line with every badge at 99+" (24 of 24 green):
+//                                                         the field is 329 px at 900, so a 280 px floor never binds there and the bar keeps 49 px
+//   8 the `.ins-bar-doors > .bell` rule deleted ........ "the bell in the bar is at the tap floor"; control-census "every twin exemption …";
+//                                                         browser "a touch screen keeps the floor" at 900 and 1280 ("Notifications off: 28 x 28")
+//   9 the 52px track put back .......................... "the grid has two tracks …"; browser instrument-desk "the tracks follow the width …"
+//  10 the tip's :focus-visible rule deleted ............ "a door's tip shows on hover and on focus-visible, …"; browser "… by hover and by Tab" (8 of 8, "Tab: opacity")
+//  11 the current door from matchRoute(path)?.route.id . "which door is current" (/settings/updates); "the wordmark door … is current on / and on a session"
+//  12 the tip's z-index line deleted ................... browser "… by hover and by Tab" and "the widest tips, by hover" (16 of 16, "drawn on top"); "the tip has an edge, …"
+//  13 the tip's hairline border dropped ................ "the tip has an edge: a hairline border and the popover elevation, on its own ground"
+//  14 the tip's popover elevation dropped .............. the same case
+//  15 the tip's aria-hidden dropped ................... "at 1280 and 1920 each door shows its word and no tip; … a tip reading its word" (Settings at 1280)
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { lazy, Suspense } from 'react';
+import type { ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { INSTRUMENT, REFINED } from '@ccrc/ui';
+import type { AccountUsage, FleetSession, NotifyEvent, RunSummary } from '../../shared/api';
+import { api } from '../src/lib/api';
+import { poolLagText } from '../src/fleet/poolLag';
+import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
+import { seventeenLanes } from './seventeenLanes';
+import { itemView, waitingView } from './ledgersFixture';
+import { labelInName, labelWords, namesWithoutTheirLabel, shownText } from './labelInName';
+
+// The bell renders only where the browser can push; this one can, so the doors' census counts it (T2e).
+vi.mock('../src/lib/push', () => ({
+  pushSupported: () => true,
+  pushEnabled: async () => false,
+}));
+
+// The Digest screen's chunk is held at a gate until a row opens it (#2780). `app.tsx` loads it through `lazyScreen`, which
+// keeps the first load for the life of the page, so the first mount of `/digest` in this file is the one that finds the
+// chunk still loading, and which row that is must not depend on how fast the box imports a module. Held, the pane shows
+// "Loading…" and nothing else, exactly as it does on a loaded runner. Only the route walk opens it, and it is the first
+// row to read `/digest`'s pane, so it finds the chunk loading on any box, however fast.
+const digestChunk = vi.hoisted(() => {
+  let open!: () => void;
+  const held = new Promise<void>((resolve) => { open = resolve; });
+  return { held, open };
+});
+vi.mock('../src/screens/DigestScreen', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/screens/DigestScreen')>();
+  await digestChunk.held;
+  return real;
+});
+
+const { App } = await import('../src/app');
+const { navigate } = await import('../src/lib/router');
+const { initSkin, setSkin } = await import('../src/lib/skin');
+const { useFleetStore } = await import('../src/stores/fleet');
+const { ROUTES } = await import('../src/lib/routes');
+const { DESK_DOORS, DOOR_WORDS_QUERY, HOME_DOOR_NAME } = await import('../src/skins/instrument/TopBar');
+const { fleetSummary } = await import('../src/fleet/fleetSummary');
+const { ack, FEED_ACK_KEY, resetAcks } = await import('../src/lib/seen');
+const { ShellFrame } = await import('../src/skins/frame');
+const { INSTRUMENT_SET } = await import('../src/skins/instrument/parts');
+const { REFINED_SET } = await import('../src/skins/refined/parts');
+
+const SKIN_DIR = path.join(import.meta.dirname, '..', 'src', 'skins');
+const CSS = readFileSync(path.join(SKIN_DIR, 'instrument', 'instrument.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+
+const S: FleetSession = fleetSession({ id: 'lane-a-project-a', wrapper: 'lane-a', home: 'lane-a', project: 'project-a', bucket: 'attention' });
+const WS: FleetSession = fleetSession({
+  id: 'project-a-quiet-basin', wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workspace: 'quiet-basin',
+});
+
+/** A desk (or not) with a fine pointer: `(min-width: 900px)` answers `desk`. */
+function stubWidth(desk: boolean): void {
+  vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: q.includes('min-width: 900px') ? desk : q.includes('pointer: fine'),
+    media: q, onchange: null,
+    addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+  }));
+}
+
+function mount(at: string, sessions: FleetSession[] = [S, WS]): void {
+  act(() => useFleetStore.setState({ conn: 'open', sessions }));
+  navigate(at);
+  render(<App />);
+}
+
+/** The pane's loading line: what `app.tsx`'s Suspense draws while a lazy screen's chunk loads (and nothing else draws). */
+const paneLoading = (): HTMLElement | null =>
+  [...document.querySelectorAll<HTMLElement>('main.shell-detail [role="status"]')].find((el) => el.textContent === 'Loading…') ?? null;
+
+/** Wait for the pane to be a page and not the loading line (#2780). A lazy screen (`/digest`, `/runs`, `/settings`, the
+ *  session) draws "Loading…" until its chunk lands, which a loaded runner can take longer than the mount's own commit
+ *  to do; a row that reads the pane straight after `mount` reads that line, which has no heading and no current door.
+ *  This waits for what the row asserts to be able to exist, and asserts nothing itself: a page that never leaves the
+ *  loading line fails here, and a page that settles on neither a door nor a heading fails in the row. */
+async function settled(): Promise<void> {
+  await waitFor(() => { expect(paneLoading(), 'the pane is still loading its screen').toBeNull(); }, { timeout: 15_000 });
+}
+
+const topBar = (): HTMLElement => document.querySelector<HTMLElement>('header.shell-accounts')!;
+const footer = (): HTMLElement => document.querySelector<HTMLElement>('footer.shell-status')!;
+
+/** The declarations of every rule whose selector list includes `selector` exactly, outside any at-rule or inside
+ *  the one named by `media` (its prelude, e.g. `(pointer: fine)`). */
+function declsOf(selector: string, media: string | null = null): string {
+  const blocks: { media: string | null; body: string }[] = [];
+  let rest = CSS;
+  const at = /@media\s*([^{]+)\{/g;
+  let m: RegExpExecArray | null;
+  let top = '';
+  let from = 0;
+  while ((m = at.exec(rest)) !== null) {
+    top += rest.slice(from, m.index);
+    let depth = 1;
+    let i = at.lastIndex;
+    for (; i < rest.length && depth > 0; i += 1) depth += rest[i] === '{' ? 1 : rest[i] === '}' ? -1 : 0;
+    blocks.push({ media: m[1]!.trim(), body: rest.slice(at.lastIndex, i - 1) });
+    from = i;
+    at.lastIndex = i;
+  }
+  top += rest.slice(from);
+  rest = media === null ? top : blocks.filter((b) => b.media === media).map((b) => b.body).join('\n');
+  const out: string[] = [];
+  for (const r of rest.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+    if (r[1]!.split(',').map((s) => s.trim()).includes(selector)) out.push(r[2]!);
+  }
+  return out.join(';');
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  document.documentElement.removeAttribute('data-skin');
+  initSkin();
+  act(() => { setSkin(INSTRUMENT); });
+  stubWidth(true);
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  // The `api.accounts` spies the lanes-row cases add must not leak into the next case.
+  vi.restoreAllMocks();
+  navigate('/');
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null, feed: [], fleetFrameSeen: false, waiting: null }));
+  resetAcks();
+  act(() => { setSkin(REFINED); });
+  localStorage.clear();
+});
+
+// Desk-nav Task A Step 0 (D-8100): the desk doors' names, counts and current door, pinned on main against the rail
+// before the move, so the move commit changes only where `deskDoors()` finds them.
+describe('the desk doors, characterized', () => {
+  /** The desk's place doors, in order. */
+  const deskDoors = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('header.shell-accounts .ins-door:not(.ins-home)')];
+  // `/settings` is the bare path: Settings is the current door there as on `/settings/updates` (desk-nav Task A review 1646 A3;
+  // desktop-polish Task C14, D-8110).
+  const PATHS = ['/', '/runs', '/settings', '/settings/updates', '/docs/project-a/specs/a.md', `/s/${S.id}`, '/waiting/1'] as const;
+
+  /** `S` and two more sessions waiting on the operator, the two bound to open runs, and one open item, so Waiting on you,
+   *  Inbox and Runs all count. */
+  function countedFleet(): FleetSession[] {
+    const runs = [
+      { id: 1, state: 'working', closedAt: null, sessionId: 'ask-0', claimedBy: null },
+      { id: 2, state: 'working', closedAt: null, sessionId: 'ask-1', claimedBy: null },
+    ] as unknown as RunSummary[];
+    act(() => useFleetStore.setState({ runs, runsFrameSeen: true, fleetFrameSeen: true, waiting: waitingView({ items: [itemView({ id: 1 })] }) }));
+    return withRunBinding([
+      S,
+      ...[0, 1].map((i) => fleetSession({ id: `ask-${i}`, project: 'proj', bucket: 'attention' })),
+    ], runs);
+  }
+
+  afterEach(() => {
+    act(() => useFleetStore.setState({ runs: [], runsFrameSeen: false }));
+  });
+
+  it("each door's name, in order", () => {
+    stubAt(1280);
+    for (const at of PATHS) {
+      mount(at, countedFleet());
+      expect(deskDoors().map((d) => d.getAttribute('aria-label')), at).toEqual([
+        'Waiting on you, 4 waiting on you', 'Inbox, 3 waiting for you', 'Runs, 2 needs you', 'Accounts', 'Archive', 'Docs', 'Settings',
+      ]);
+      cleanup();
+    }
+  });
+
+  it('which door is current', () => {
+    stubAt(1280);
+    const want: Record<(typeof PATHS)[number], string | null> = {
+      '/': null, '/runs': 'go-runs', '/settings': 'go-settings', '/settings/updates': 'go-settings', '/docs/project-a/specs/a.md': 'go-docs',
+      [`/s/${S.id}`]: null, '/waiting/1': 'go-waiting',
+    };
+    for (const at of PATHS) {
+      mount(at, countedFleet());
+      const current = deskDoors().filter((d) => d.getAttribute('aria-current') === 'page').map((d) => d.getAttribute('data-command'));
+      expect(current, at).toEqual(want[at] === null ? [] : [want[at]]);
+      cleanup();
+    }
+  });
+});
+
+// ---- Desk-nav Task A (D-8100): the doors in the top bar ----------------------------------------------------------
+
+/** The bar's line, and its controls in DOM order: every `[data-command]` and the bell. */
+const barLine = (): HTMLElement => topBar().querySelector<HTMLElement>('.ins-topbar')!;
+const barControls = (root: Element = topBar()): Element[] => [...root.querySelectorAll('[data-command], .bell')];
+/** The wordmark door, and the six place doors. */
+const homeDoor = (): HTMLElement => topBar().querySelector<HTMLElement>('.ins-door.ins-home')!;
+const placeDoors = (): HTMLElement[] => within(primary()).getAllByRole('button').filter((b) => !b.classList.contains('ins-home'));
+const primary = (): HTMLElement => screen.getByRole('navigation', { name: 'Primary' });
+const doorNamed = (name: string): HTMLElement => within(topBar()).getByRole('button', { name });
+const FLEET = (): string => ROUTES.find((r) => r.id === 'fleet')!.title;
+
+/** One path per `ROUTES` row, and one outside the table. */
+const ROUTE_PATHS: Record<string, string> = {
+  fleet: '/', session: `/s/${S.id}`, 'settings-section': '/settings/nope', digest: '/digest', item: '/waiting/1',
+  programme: '/programmes/prog-a', run: '/runs/410', 'runs-advanced': '/runs/advanced',
+};
+
+describe('the desk top bar (desk-nav Task A)', () => {
+  it("the bar's DOM order is its focus order", () => {
+    stubAt(1280);
+    mount('/');
+    const order = barControls().map((el) => el.getAttribute('data-command') ?? '(bell)');
+    expect(order.slice(0, 11)).toEqual([
+      'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs', 'open-palette', '(bell)', 'go-settings',
+      'new-session',
+    ]);
+    // The eleven are the bar's line, and every control after them is the lanes row's, under the line.
+    for (const el of barControls().slice(0, 11)) expect(barLine().contains(el), el.outerHTML.slice(0, 60)).toBe(true);
+    const strip = topBar().querySelector('.accounts-strip')!;
+    for (const el of barControls().slice(11)) expect(strip.contains(el), el.outerHTML.slice(0, 60)).toBe(true);
+    // The bar is the frame's first chrome after the skip link, and no other landmark sits before the list column.
+    const frame = document.querySelector('.app-shell')!;
+    const kids = [...frame.children].map((c) => c.tagName.toLowerCase() + (c.getAttribute('aria-label') ? `:${c.getAttribute('aria-label')}` : ''));
+    expect(kids.slice(0, 4)).toEqual(['a', 'header', 'div', 'main']);
+  });
+
+  it('the Primary nav holds the wordmark door and the six doors, and nothing else', () => {
+    stubAt(1280);
+    mount('/');
+    const nav = primary();
+    expect(nav.closest('.ins-topbar')).not.toBeNull();
+    expect([...nav.children].map((c) => c.getAttribute('data-command')))
+      .toEqual(['go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs']);
+    // Activity is held in the registry, reserved, and draws nothing: no control that does nothing ships.
+    expect(DESK_DOORS.find((i) => i.id === 'activity')).toEqual({ id: 'activity', reserved: 'F4, W4' });
+    expect(within(nav).queryByRole('button', { name: /activity/i })).toBeNull();
+    expect(nav.textContent).not.toMatch(/activity/i);
+    expect(within(nav).getAllByRole('button').filter((b) => b.hasAttribute('disabled'))).toEqual([]);
+    // Every door is the tap floor tall and wide: `Door`'s own floor, and the bar's rule restates the width.
+    for (const b of within(nav).getAllByRole('button')) expect(b.className).toContain('min-h-tap');
+    expect(declsOf('.ins-door')).toMatch(/min-width:\s*var\(--tap-min\)/);
+  });
+
+  it('exactly one nav[aria-label="Primary"] at 900, 1280 and 1920 in both skins, none at 899', () => {
+    for (const skin of [INSTRUMENT, REFINED]) {
+      act(() => { setSkin(skin); });
+      for (const width of [899, 900, 1280, 1920]) {
+        stubAt(width);
+        mount('/');
+        expect(document.querySelectorAll('nav[aria-label="Primary"]').length, `${skin} ${width}`).toBe(width >= 900 ? 1 : 0);
+        cleanup();
+      }
+    }
+  });
+
+  it('the wordmark door runs go-fleet, is named "ccrc, Fleet", holds the wordmark, and is current on / and on a session', () => {
+    stubAt(1280);
+    expect(HOME_DOOR_NAME).toBe(`ccrc, ${FLEET()}`);
+    for (const at of ['/', `/s/${S.id}`, `/s/${WS.id}`]) {
+      mount(at);
+      const home = homeDoor();
+      expect(home, at).toBe(doorNamed('ccrc, Fleet'));
+      expect(home).toHaveAttribute('data-command', 'go-fleet');
+      expect(home.querySelector('[data-wordmark]'), `${at}: the wordmark is inside the door`).not.toBeNull();
+      expect(topBar().querySelectorAll('[data-wordmark]'), `${at}: one wordmark`).toHaveLength(1);
+      expect(home, at).toHaveAttribute('aria-current', 'page');
+      cleanup();
+    }
+    mount('/runs');
+    fireEvent.click(homeDoor());
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('it is current nowhere else', () => {
+    stubAt(1280);
+    for (const at of ['/runs', '/mail', '/settings', '/settings/updates', '/docs', '/waiting', '/waiting/1', '/archive', '/digest', '/nope']) {
+      mount(at);
+      expect(homeDoor().getAttribute('aria-current'), at).toBeNull();
+      cleanup();
+    }
+  });
+
+  // The tip reads the door's word, not its whole name (`tip-reads-the-word`, ruled 2026-11-07 in fix round 1): the pill beside
+  // it prints the count, so the icon form shows what the word form shows, and label in name holds at every desk width.
+  it('at 1280 and 1920 each door shows its word and no tip; at 900 and 1279 its icon and a tip reading its word', () => {
+    const doors = (): HTMLElement[] => [...placeDoors(), doorNamed('Settings')];
+    for (const width of [1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      for (const d of placeDoors()) {
+        const name = d.getAttribute('aria-label')!;
+        expect(d.querySelector('.ins-door-word')?.textContent, `${width} ${name}`).toBe(name);
+        expect(d.querySelector('.ins-door-tip'), `${width} ${name}: no tip`).toBeNull();
+        expect(d.querySelector('svg'), `${width} ${name}: its icon`).not.toBeNull();
+      }
+      // Settings is an icon door with its tip at every width (`settings-icon-door`).
+      expect(doorNamed('Settings').querySelector('.ins-door-tip')?.textContent, `${width}: Settings`).toBe('Settings');
+      // The tip is drawn, never read: the door's name already says its word (review 1643 F4, mutant 15).
+      expect(doorNamed('Settings').querySelector('.ins-door-tip'), `${width}: Settings`).toHaveAttribute('aria-hidden', 'true');
+      expect(doorNamed('Settings').querySelector('.ins-door-word'), `${width}: Settings`).toBeNull();
+      cleanup();
+    }
+    for (const width of [900, 1279]) {
+      stubAt(width);
+      mount('/');
+      for (const d of doors()) {
+        const name = d.getAttribute('aria-label')!;
+        expect(d.querySelector('.ins-door-tip')?.textContent, `${width} ${name}`).toBe(name.split(',')[0]);
+        expect(d.querySelector('.ins-door-tip'), `${width} ${name}`).toHaveAttribute('aria-hidden', 'true');
+        expect(d.querySelector('.ins-door-word'), `${width} ${name}: no word`).toBeNull();
+        expect(d.querySelector('svg'), `${width} ${name}: its icon`).not.toBeNull();
+      }
+      cleanup();
+    }
+    expect(DOOR_WORDS_QUERY).toBe('(min-width: 1280px)');
+  });
+
+  it('label in name at 1280, and in the icon form at 900 and 1279', () => {
+    stubAt(1280);
+    const runs = [
+      { id: 1, state: 'working', closedAt: null, sessionId: 'ask-0', claimedBy: null },
+    ] as unknown as RunSummary[];
+    act(() => useFleetStore.setState({ runs, runsFrameSeen: true, fleetFrameSeen: true, waiting: waitingView({ items: [itemView({ id: 1 })] }) }));
+    try {
+      mount('/', withRunBinding([fleetSession({ id: 'ask-0', project: 'proj', bucket: 'attention' })], runs));
+      const counted = placeDoors().filter((d) => d.querySelector('.ins-door-count') !== null).map((d) => d.getAttribute('data-command'));
+      expect(counted, 'the counted doors').toEqual(['go-waiting', 'go-inbox', 'go-runs']);
+      for (const d of [homeDoor(), ...placeDoors()]) {
+        const name = d.getAttribute('aria-label')!;
+        expect(labelInName(shownText(d), name), `${JSON.stringify(shownText(d))} in ${JSON.stringify(name)}`).toBe(true);
+      }
+      // The visible words start the name: the wordmark's caret is no word, and "ccrc" starts "ccrc, Fleet".
+      expect(labelWords(shownText(homeDoor()))).toEqual(['ccrc']);
+      expect(shownText(doorNamed('Inbox, 1 waiting for you'))).toBe('Inbox 1');
+      // The icon form shows the same words: the tip's word, a space, the pill (review 1638 A2).
+      for (const width of [900, 1279]) {
+        cleanup();
+        stubAt(width);
+        mount('/', withRunBinding([fleetSession({ id: 'ask-0', project: 'proj', bucket: 'attention' })], runs));
+        expect(placeDoors().filter((d) => d.querySelector('.ins-door-count') !== null), `${width}: counted`).toHaveLength(3);
+        for (const d of [homeDoor(), ...placeDoors(), doorNamed('Settings')]) {
+          const name = d.getAttribute('aria-label')!;
+          expect(labelInName(shownText(d), name), `${width}: ${JSON.stringify(shownText(d))} in ${JSON.stringify(name)}`).toBe(true);
+        }
+        expect(shownText(doorNamed('Inbox, 1 waiting for you')), `${width}`).toBe('Inbox 1');
+      }
+    } finally {
+      act(() => useFleetStore.setState({ runs: [], runsFrameSeen: false }));
+    }
+  });
+
+  // Review 1643 F5 (desktop-polish Task C14, D-8110): no contract change. At 100 or more the pill prints "99+" and the name
+  // carries the real count, by design (`badgePrint`), so label in name is read on the door's word, not on its pill.
+  it('at a count of 100 or more the pill prints 99+, the name the real count, and the word is in the name', () => {
+    stubAt(1280);
+    const items = Array.from({ length: 120 }, (_, i) => itemView({ id: i + 1 }));
+    act(() => useFleetStore.setState({ fleetFrameSeen: true, waiting: waitingView({ items }) }));
+    mount('/');
+    // 120 open items and the suite's own asking session: a three-digit count, whatever it is exactly.
+    const d = within(topBar()).getByRole('button', { name: /^Waiting on you, 1\d\d waiting on you$/ });
+    const name = d.getAttribute('aria-label')!;
+    expect(d.querySelector('.ins-door-count')).toHaveTextContent(/^99\+$/);
+    expect(labelInName(d.querySelector('.ins-door-word')!.textContent!, name)).toBe(true);
+    expect(labelInName(shownText(d), name), 'the pill is read out of the check, by design').toBe(false);
+  });
+
+  it('the current door\'s underline is 2px of --accent on its bottom edge', () => {
+    const rule = declsOf(".ins-door[aria-current='page']::after");
+    expect(rule).toMatch(/content:\s*''/);
+    expect(rule).toMatch(/position:\s*absolute/);
+    // The bottom edge, full width: `inset: auto 0 0` (top auto, right 0, bottom 0, left 0).
+    expect(rule).toMatch(/inset:\s*auto 0 0\s*(;|$)/);
+    expect(rule).not.toMatch(/(^|;)\s*(top|bottom):/);
+    expect(rule).toMatch(/height:\s*2px/);
+    expect(rule).toMatch(/background:\s*var\(--accent\)/);
+    expect(declsOf(".ins-door[aria-current='page']::before")).toBe('');
+  });
+
+  it('no rule names .ins-rail or .shell-rail', () => {
+    expect(CSS).not.toMatch(/\.ins-rail|\.shell-rail/);
+    for (const name of readdirSync(SKIN_DIR, { recursive: true }) as string[]) {
+      if (!/\.(css|tsx?)$/.test(name)) continue;
+      expect(readFileSync(path.join(SKIN_DIR, name), 'utf8'), name).not.toMatch(/ins-rail|shell-rail/);
+    }
+  });
+
+  it('no breadcrumb', () => {
+    for (const at of ['/', '/runs', '/settings/updates', `/s/${WS.id}`]) {
+      mount(at);
+      expect(document.querySelector('ol[aria-label="Breadcrumb"]'), at).toBeNull();
+      expect(document.querySelector('.ins-crumb, .ins-crumbs'), at).toBeNull();
+      cleanup();
+    }
+    expect(existsSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'breadcrumb.ts'))).toBe(false);
+    expect(CSS).not.toMatch(/\.ins-crumb/);
+  });
+
+  it('no set has a Rail part', () => {
+    expect(Object.keys(INSTRUMENT_SET)).not.toContain('Rail');
+    expect(Object.keys(REFINED_SET)).not.toContain('Rail');
+  });
+
+  it('the grid has two tracks below 1600 and from 1600, a third only with an inspector', () => {
+    expect(declsOf('.ins-frame', '(min-width: 900px)')).toMatch(/grid-template-columns:\s*340px minmax\(0, 1fr\)\s*(;|$)/);
+    expect(declsOf('.ins-frame', '(min-width: 1600px)')).toMatch(/grid-template-columns:\s*420px minmax\(0, 1fr\)\s*(;|$)/);
+    expect(declsOf(".ins-frame[data-inspector='placed']", '(min-width: 1600px)'))
+      .toMatch(/grid-template-columns:\s*420px minmax\(0, 1fr\) 320px\s*(;|$)/);
+    expect(CSS).not.toMatch(/\b52px\b/);
+    expect(declsOf('.ins-frame .shell-accounts', '(min-width: 900px)')).toMatch(/grid-column:\s*1\s*\/\s*-1/);
+    expect(declsOf('.ins-frame .shell-nav', '(min-width: 900px)')).toMatch(/grid-column:\s*1\s*(;|$)/);
+    expect(declsOf('.ins-frame .shell-detail', '(min-width: 900px)')).toMatch(/grid-column:\s*2\s*(;|$)/);
+  });
+
+  it('the bell in the bar is at the tap floor', () => {
+    stubAt(1280);
+    mount('/');
+    expect(topBar().querySelector('.ins-bar-doors > .bell')).not.toBeNull();
+    const rule = declsOf('.ins-bar-doors > .bell');
+    expect(rule).toMatch(/min-height:\s*var\(--tap-min\)/);
+    expect(rule).toMatch(/min-width:\s*var\(--tap-min\)/);
+  });
+
+  // The guard for `settled()` (#2780), whatever order the rows run in: a screen whose chunk lands late, built here, draws
+  // the loading line under the pane's own Suspense and its heading only afterwards. Read at once it says nothing; read
+  // after `settled()` it says its heading. The walk below holds the real `/digest` chunk the same way, through the gate.
+  // MUTATION TABLE (RUN, each mutant on the working tree, this file alone, then restored from a saved copy):
+  //   `settled()` without its `waitFor` ......... this row ("a late screen: its heading, once settled") and the walk
+  //   the walk without `await settled()` ........ the walk (`/digest: a current door or the page's own heading`)
+  //   the walk without `digestChunk.open()` ..... the walk ("the pane is still loading its screen": the wait times out)
+//   the gate opened before the walk reaches /digest   the walk ("/digest: its chunk is held, so the pane is loading")
+  it('settled() waits for a lazy screen that lands late, and the loading line says nothing', async () => {
+    const Late = lazy(() => new Promise<{ default: () => ReactNode }>((resolve) => {
+      setTimeout(() => resolve({ default: () => <h1>Late page</h1> }), 25);
+    }));
+    render(
+      <main className="shell-detail">
+        <Suspense fallback={<p className="shell-placeholder-copy" role="status">Loading…</p>}><Late /></Suspense>
+      </main>,
+    );
+    expect(paneLoading(), 'a late screen draws the loading line first').not.toBeNull();
+    expect(document.querySelector('main.shell-detail h1, main.shell-detail .chat-title'), 'and no heading yet').toBeNull();
+    await settled();
+    expect(document.querySelector('main.shell-detail h1')?.textContent, 'a late screen: its heading, once settled').toBe('Late page');
+    cleanup();
+  });
+
+  // The walk reads each page's heading, so it reads it once the page has drawn: a lazy screen's chunk can still be loading
+  // at the first read (#2780, the `/digest` row on a loaded runner), and the loading line says nothing. `settled()` waits
+  // for the pane to leave it; the assertion below is as strict as it was.
+  it('every route says where you are', async () => {
+    stubAt(1280);
+    act(() => useFleetStore.setState({ waiting: waitingView({ items: [itemView({ id: 1 })] }) }));
+    const paths = ROUTES.map((r) => ROUTE_PATHS[r.id] ?? r.path);
+    expect(paths.every((p) => p !== null), 'a path for every row').toBe(true);
+    for (const at of paths as string[]) {
+      mount(at);
+      if (at === ROUTE_PATHS.digest) {
+        // The first read of `/digest` in this file: its chunk is held, so the pane is the loading line, which says nothing.
+        // The read below, taken now, is the flake of #2780 on any box; opened and waited for, it reads the page.
+        expect(paneLoading(), '/digest: its chunk is held, so the pane is loading').not.toBeNull();
+        expect(document.querySelector('main.shell-detail h1, main.shell-detail .chat-title'), '/digest: no heading yet').toBeNull();
+        digestChunk.open();
+      }
+      await settled();
+      const current = topBar().querySelectorAll('[aria-current="page"]');
+      const detail = document.querySelector('main.shell-detail')!;
+      const heading = detail.querySelector('h1, .chat-title');
+      const says = current.length === 1 || (heading !== null && (heading.textContent ?? '').trim() !== '');
+      expect(current.length, `${at}: at most one current door`).toBeLessThanOrEqual(1);
+      expect(says, `${at}: a current door or the page's own heading`).toBe(true);
+      cleanup();
+    }
+    // A path outside the table (`unknown-path-is-the-placeholder`, ruled 2026-11-07): the desk draws the fleet's placeholder,
+    // as on `/`, and no door is current, since `topRouteOf` places it under no place. The breadcrumb was empty there too.
+    mount('/nope');
+    expect(topBar().querySelectorAll('[aria-current="page"]'), '/nope: no current door').toHaveLength(0);
+    expect(document.querySelector('main.shell-detail .shell-placeholder-copy')?.textContent, '/nope').toBe('Select a session');
+  });
+
+  it('the chords reach their places from a bar door', () => {
+    stubAt(1280);
+    mount('/runs');
+    const runsDoor = placeDoors().find((d) => d.getAttribute('data-command') === 'go-runs')!;
+    // `r` runs last, from `/`, so it moves the page: from `/runs` itself `g r` would change nothing (review 1646 A3; Task C14, D-8110).
+    for (const [key, where] of [['i', '/mail'], ['a', '/accounts'], ['s', '/settings'], ['f', '/'], ['r', '/runs']] as const) {
+      act(() => { runsDoor.focus(); });
+      expect(document.activeElement, key).toBe(runsDoor);
+      fireEvent.keyDown(runsDoor, { key: 'g' });
+      fireEvent.keyDown(runsDoor, { key });
+      expect(window.location.pathname, `g ${key}`).toBe(where);
+    }
+    cleanup();
+    mount('/runs');
+    fireEvent.click(homeDoor());
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('the command field opens the palette, and is not a text field', () => {
+    mount('/');
+    const field = within(topBar()).getByRole('button', { name: 'Search or run a command' });
+    expect(field.tagName).toBe('BUTTON');
+    expect(field).toHaveAttribute('data-command', 'open-palette');
+    expect(within(topBar()).getByRole('button', { name: 'New session' })).toHaveAttribute('data-command', 'new-session');
+    expect(within(topBar()).queryByRole('textbox')).toBeNull();
+    expect(within(topBar()).queryByRole('combobox')).toBeNull();
+    expect(topBar().querySelector('input, textarea, [contenteditable]')).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Command palette' })).toBeNull();
+    fireEvent.click(field);
+    expect(screen.getByRole('combobox', { name: 'Command palette' })).toBeInTheDocument();
+  });
+
+  it('a door runs its command: Runs goes to /runs', () => {
+    stubAt(900);
+    mount('/');
+    fireEvent.click(placeDoors().find((b) => b.getAttribute('data-command') === 'go-runs')!);
+    expect(window.location.pathname).toBe('/runs');
+  });
+
+  // The command field takes the room the doors leave, and gives it up first: its basis is zero, it shrinks a hundred times
+  // faster than anything beside it, and its floor is the search glyph and ⌘K (the Interfaces' "today's min-width"). The
+  // browser's fit case cannot see a raised floor at the widths it measures (the field is 329 px at 900), so this pins it.
+  it('the command field takes the rest, with its floor at the tap square and --sp-10', () => {
+    const rule = declsOf('.ins-command');
+    expect(rule).toMatch(/flex:\s*1 100 0\s*(;|$)/);
+    expect(rule).toMatch(/min-width:\s*calc\(var\(--tap-min\) \+ var\(--sp-10\)\)/);
+  });
+
+  // Review 1638 F2: the tip lies over the first row of lane cards, which are painted in its own `--bg-raised`, so it takes
+  // the desk's popover elevation and a hairline edge from the palette, and stays self-grounded.
+  it('the tip has an edge: a hairline border and the popover elevation, on its own ground', () => {
+    const rule = declsOf('.ins-door-tip');
+    expect(rule).toMatch(/border:\s*1px solid var\(--edge-subtle\)/);
+    expect(rule).toMatch(/box-shadow:\s*var\(--elev-pop\)/);
+    expect(rule).toMatch(/background:\s*var\(--bg-raised\)/);
+    expect(rule).toMatch(/color:\s*var\(--ink-primary\)/);
+    expect(rule).toMatch(/z-index:\s*var\(--z-header\)/);
+  });
+
+  // Review 1646 A3 (desktop-polish Task C14, D-8110): the doors' line is a flex row at its own width, and a count pill takes no clicks.
+  it("the doors' line is a flex row that keeps its own width and centres its doors", () => {
+    const rule = declsOf('.ins-doors');
+    expect(rule).toMatch(/display:\s*flex\s*(;|$)/);
+    expect(rule).toMatch(/flex:\s*none\s*(;|$)/);
+    expect(rule).toMatch(/align-items:\s*center\s*(;|$)/);
+    expect(rule).toMatch(/gap:\s*var\(--sp-1\)\s*(;|$)/);
+  });
+
+  it("a door's count pill takes no clicks of its own", () => {
+    expect(declsOf('.ins-door-count')).toMatch(/pointer-events:\s*none\s*(;|$)/);
+  });
+
+  it("a door's tip shows on hover and on focus-visible, below it, and the bar is no clip box", () => {
+    expect(declsOf('.ins-door:hover .ins-door-tip', '(hover: hover)')).toMatch(/opacity:\s*1/);
+    expect(declsOf('.ins-door:focus-visible .ins-door-tip')).toMatch(/opacity:\s*1/);
+    expect(declsOf('.ins-door-tip')).toMatch(/top:\s*calc\(100% \+ var\(--sp-1\)\)/);
+    for (const sel of ['.ins-topbar', '.ins-doors', '.ins-door', '.ins-bar-doors']) expect(declsOf(sel), sel).not.toMatch(/overflow/);
+  });
+});
+
+describe('the status bar', () => {
+  it('the status bar is 24px only under a fine pointer; under a coarse one it and its buttons are at least --tap-min', () => {
+    // Outside the fine-pointer block, nothing in the sheet is 24px tall …
+    expect(declsOf('.ins-status')).not.toMatch(/height:\s*24px/);
+    expect(declsOf('.ins-status-key')).not.toMatch(/height:\s*(?:2[0-4])px/);
+    expect(declsOf('.ins-status')).toMatch(/min-height:\s*var\(--tap-min\)/);
+    expect(declsOf('.ins-status-key')).toMatch(/min-height:\s*var\(--tap-min\)/);
+    expect(declsOf('.ins-status-key')).toMatch(/min-width:\s*var\(--tap-min\)/);
+    // … and inside it, the bar is 24px.
+    expect(declsOf('.ins-status', '(pointer: fine)')).toMatch(/height:\s*24px/);
+    // No other block in the sheet makes the bar dense.
+    const other = CSS.replace(/@media\s*\(pointer:\s*fine\)\s*\{(?:[^{}]*\{[^}]*\})*[^{}]*\}/g, '');
+    expect(other).not.toMatch(/24px/);
+    // And the keys carry the hook the rules select.
+    mount('/');
+    const keys = within(footer()).getAllByRole('button');
+    expect(keys.map((k) => k.getAttribute('data-command'))).toEqual(['open-palette', 'show-shortcuts']);
+    for (const k of keys) expect(k).toHaveClass('ins-status-key');
+  });
+
+  // LABEL IN NAME (WCAG 2.5.3, D-8383): no story renders the status bar, so its
+  // keys are measured here. The ⌘K cap shows a command icon and `K`; its name
+  // spells the key as it is said, `Command K`, then what it does.
+  it('the status bar\'s keys hold the words they show (label in name, D-8383)', () => {
+    mount('/');
+    const palette = within(footer()).getByRole('button', { name: 'Command K (Open the command palette)' });
+    expect(palette).toHaveAttribute('data-command', 'open-palette');
+    expect(shownText(palette)).toBe('K');
+    expect(namesWithoutTheirLabel(footer())).toEqual([]);
+  });
+
+  it('the agent link reads "agent: checking" until the health poll answers, never an all-clear', () => {
+    vi.stubGlobal('fetch', () => new Promise(() => {}));
+    mount('/');
+    expect(footer().querySelector('.ins-status-link')).toHaveTextContent('agent: checking');
+    expect(footer()).not.toHaveTextContent('agent connected');
+  });
+
+  it('runs are counted only after a runs frame has arrived', () => {
+    const runs = [{ state: 'working' }] as unknown as RunSummary[];
+    act(() => useFleetStore.setState({ runs, runsFrameSeen: false }));
+    mount('/');
+    const summary = (): string => footer().querySelector('.ins-status-summary')!.textContent ?? '';
+    expect(summary()).toBe(fleetSummary([S, WS], null).readout);
+    expect(summary()).not.toContain('run');
+    act(() => useFleetStore.setState({ runsFrameSeen: true }));
+    expect(summary()).toBe(fleetSummary([S, WS], runs).readout);
+    expect(summary()).toContain('1 run');
+    act(() => useFleetStore.setState({ runs: [], runsFrameSeen: false }));
+  });
+
+  it('the status bar renders fleetSummary', () => {
+    mount('/');
+    expect(footer()).toHaveTextContent(fleetSummary([S, WS], null).readout);
+    expect(footer().textContent).toContain('1 waiting');
+    // The footer is not a live region.
+    expect(footer().querySelector('[role="status"], [role="alert"], [aria-live]')).toBeNull();
+    expect(footer()).not.toHaveAttribute('aria-live');
+    // The source scan: the status bar imports the one function, and no skin file filters sessions by bucket itself.
+    const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true })
+      .flatMap((e) => (e.isDirectory() ? files(path.join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [path.join(dir, e.name)] : []));
+    const status = readFileSync(path.join(SKIN_DIR, 'instrument', 'StatusBar.tsx'), 'utf8');
+    expect(status).toMatch(/import \{[^}]*\bfleetSummary\b[^}]*\} from '\.\.\/\.\.\/fleet\/fleetSummary'/);
+    expect(status).toMatch(/fleetSummary\(/);
+    for (const f of files(SKIN_DIR)) {
+      const code = readFileSync(f, 'utf8').replace(/\/\/.*$/gm, '');
+      expect(code, path.relative(SKIN_DIR, f)).not.toMatch(/\.bucket\s*[!=]==|\bbucket\s*[!=]==|['"]attention['"]\s*[!=]==/);
+    }
+  });
+});
+
+describe('the lanes row (T2c, D-6329)', () => {
+  it("the top bar's line holds no meters, and the header's second line is the lanes row", async () => {
+    const lane = (wrapper: string, five: number): AccountUsage => ({
+      wrapper, five, seven: five, ts: 1, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
+      disabled: false, authDead: false,
+    });
+    const lanes = ['lane-a', 'lane-b', 'lane-c', 'lane-d', 'lane-e', 'lane-f', 'lane-g', 'lane-h'].map((w, i) => lane(w, 5 + i));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
+    mount('/');
+    const line = topBar().querySelector<HTMLElement>('.ins-topbar')!;
+    await within(topBar()).findByText('lane-h');
+    expect(line.querySelector('.accounts-strip, .account-gauge, .meter')).toBeNull();
+    expect([...topBar().children]).toEqual([line, topBar().querySelector('.accounts-strip')]);
+    expect(topBar().querySelectorAll('.accounts-strip > .account-gauge')).toHaveLength(lanes.length);
+  });
+});
+
+describe('the lanes fold (S5b, D-6530)', () => {
+  it("Instrument's phone fleet column folds the same strip", async () => {
+    const f = seventeenLanes(Math.floor(Date.now() / 1000));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+    stubWidth(false);
+    mount('/');
+    const fleet = screen.getByRole('region', { name: 'Fleet' });
+    const strip = await within(fleet).findByRole('group', { name: /^account usage, highest lane-q 100%/ });
+    await within(strip).findByText('lane-a');
+    expect(strip.querySelectorAll('.account-gauge')).toHaveLength(4);
+    expect(within(strip).getByRole('button', { name: '+13 more · 1 sign-in expired · 1 rate-limited' })).toHaveAttribute('aria-expanded', 'false');
+    expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
+  });
+
+  it("a tap on the control in Instrument's phone fleet column opens the panel holding the 13 lanes the line folds away (S5c, C13)", async () => {
+    const f = seventeenLanes(Math.floor(Date.now() / 1000));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+    stubWidth(false);
+    mount('/');
+    const fleet = screen.getByRole('region', { name: 'Fleet' });
+    const strip = await within(fleet).findByRole('group', { name: /^account usage, highest lane-q 100%/ });
+    await within(strip).findByText('lane-a');
+    const more = within(strip).getByRole('button', { name: /^\+13 more/ });
+    fireEvent.click(more);
+    const panel = strip.querySelector<HTMLElement>('.accounts-flyout');
+    expect(panel).not.toBeNull();
+    expect(panel!.querySelectorAll('.account-gauge')).toHaveLength(13);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    expect(more).toHaveAttribute('aria-controls', panel!.id);
+    // The line is still four cards: the panel is over the content, the strip is not expanded in place. No lane is drawn
+    // on both.
+    const line = [...strip.children].filter((c) => c.classList.contains('account-gauge'));
+    expect(line).toHaveLength(4);
+    const label = (c: Element): string => c.querySelector('.account-gauge-label')?.textContent ?? '';
+    const inPanel = [...panel!.querySelectorAll('.account-gauge')].map(label);
+    expect(line.map(label).filter((n) => inPanel.includes(n))).toEqual([]);
+  });
+});
+
+describe('one instance per width', () => {
+  it('one banner stack and one full strip at any width: at 900 the full strip, in the header', () => {
+    for (const desk of [false, true]) {
+      stubWidth(desk);
+      act(() => useFleetStore.setState({ conn: 'down', sessions: [S] }));
+      navigate('/');
+      render(<App />);
+      const at = desk ? '900' : '899';
+      expect(document.querySelectorAll('[data-banner="offline"]').length, `${at}: banner stacks`).toBe(1);
+      const meters = document.querySelectorAll('.accounts-strip');
+      expect(meters.length, `${at}: lanes`).toBe(1);
+      expect(meters[0]!.closest('header.shell-accounts') !== null, at).toBe(desk);
+      // The bar's Primary nav and the status bar are desk parts: mounted at 900, absent at 899.
+      expect(document.querySelectorAll('nav[aria-label="Primary"]').length, `${at}: the desk doors`).toBe(desk ? 1 : 0);
+      expect(document.querySelectorAll('footer.shell-status').length, `${at}: status bar`).toBe(desk ? 1 : 0);
+      cleanup();
+    }
+  });
+});
+
+// ---- Desk polish, T2e (D-6335) ----------------------------------------------------------------------------------
+
+/** The width at which a desk `(min-width: N)` query answers, so one test can stand at 899, 900, 1280 and 1920. */
+function stubAt(width: number): void {
+  vi.stubGlobal('matchMedia', (q: string) => {
+    const min = /min-width:\s*(\d+)px/.exec(q);
+    return {
+      matches: min !== null ? width >= Number(min[1]) : q.includes('pointer: fine'),
+      media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    };
+  });
+}
+
+/** The frame's doors, counted by what each one IS (its name), never by a class: the rail's and the list head's doors
+ *  carry different names for one destination, and the meters' door to /accounts is not a second Accounts door. The
+ *  rail's `Inbox` (`Inbox, N waiting for you`) and the list head's `Mail — N waiting for you` are told apart, so a desk
+ *  that has the second back, or a rail door that lost its count, is a different census (T2e fix round 1, F1; T2d). */
+function doorCounts(): Record<string, number> {
+  const named = [...document.querySelectorAll<HTMLElement>('[aria-label]')];
+  const count = (re: RegExp): number => named.filter((el) => re.test(el.getAttribute('aria-label') ?? '')).length;
+  return {
+    wordmark: document.querySelectorAll('[data-wordmark], .wordmark').length,
+    docs: count(/^Docs\b/),
+    // The header door's name leads with its word, "Account" (label in name, D-7897).
+    accounts: count(/^(Accounts|Account — your sign-in and accounts)$/),
+    settings: count(/^Settings\b/),
+    inbox: count(/^Inbox\b/),
+    mail: count(/^Mail\b/),
+    waiting: count(/\d+ waiting for you$/),
+    bell: count(/^Notifications (on|off)$/),
+  };
+}
+
+describe('the desk (T2e): no second head in the list column, no empty fourth column', () => {
+  it("the fourth-track attribute follows the set's Inspector part, whatever its id", () => {
+    function Stub(): ReactNode { return <p>an inspector</p>; }
+    // The frame is driven directly: the sets' own parts read providers this case does not mount.
+    const bare = { Bar: null, Banners: null, Nav: null, StatusBar: null } as const;
+    const attr = (set: Parameters<typeof ShellFrame>[0]['set']): string | null => {
+      const view = render(<ShellFrame set={set} view="fleet" detailRef={{ current: null }}><p>ladder</p></ShellFrame>);
+      const value = view.container.querySelector('.app-shell')!.getAttribute('data-inspector');
+      view.unmount();
+      return value;
+    };
+    stubAt(1920);
+    expect(attr({ ...INSTRUMENT_SET, ...bare, Inspector: Stub })).toBe('placed');
+    expect(attr({ ...INSTRUMENT_SET, ...bare, Inspector: null })).toBe('none');
+    expect(attr({ ...REFINED_SET, ...bare, Inspector: null })).toBe('none');
+    expect(attr({ ...REFINED_SET, ...bare, Inspector: Stub })).toBe('placed');
+    // Instrument's set carries no Inspector part until S12: the attribute reads none for the set as shipped.
+    expect(INSTRUMENT_SET.Inspector).toBeNull();
+    expect(attr({ ...INSTRUMENT_SET, ...bare })).toBe('none');
+    // The sheet keys the 320px track on the attribute and on nothing else.
+    expect(declsOf('.ins-frame', '(min-width: 1600px)')).toMatch(/grid-template-columns:\s*420px minmax\(0, 1fr\)\s*(;|$)/);
+    expect(declsOf(".ins-frame[data-inspector='placed']", '(min-width: 1600px)'))
+      .toMatch(/grid-template-columns:\s*420px minmax\(0, 1fr\) 320px/);
+    for (const media of [null, '(min-width: 900px)'] as const) expect(declsOf('.ins-frame', media), String(media)).not.toMatch(/\b320px/);
+    expect(declsOf('.ins-frame', '(min-width: 1600px)')).not.toMatch(/\b320px/);
+  });
+
+  it('at 900, 1280 and 1920 the frame holds one wordmark, and one each of the Docs, Accounts, Settings, Inbox and Bell doors', () => {
+    for (const width of [900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      expect(document.querySelector('.shell-nav section[aria-label="Fleet"]'), `${width}px: the fleet column is mounted`).not.toBeNull();
+      expect(doorCounts(), `${width}px, fleet`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, waiting: 0, bell: 1 });
+      // The list column's head drops its chrome and, with no count line (T2g) and no lag in this fixture, is not drawn.
+      expect(document.querySelector('.shell-nav .fleet-head'), `${width}px`).toBeNull();
+      expect(document.querySelector('.shell-nav .fleet-head .wordmark'), `${width}px`).toBeNull();
+      expect(document.querySelector('.shell-nav .fleet-count'), `${width}px: no count line`).toBeNull();
+      cleanup();
+    }
+    // Below 900 the head holds its chrome, and the rail and the bar are not mounted; the phone's bottom bar is, and it holds the
+    // Docs, Accounts and Inbox doors, so the head keeps only Settings and the bell (desktop-polish PL10, D-7952; the ruling of
+    // 2026-11-04): one door per place.
+    stubAt(899);
+    mount('/');
+    expect(doorCounts(), '899px').toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, waiting: 0, bell: 1 });
+    expect(document.querySelectorAll('.shell-phone-nav [data-command]'), '899px: the bottom bar').toHaveLength(7);
+    expect(document.querySelector('.shell-nav .fleet-head .wordmark')).not.toBeNull();
+  });
+
+  /** `n` sessions waiting on the operator and a held child (its question is with its coordinator, so it reads
+   *  `working`), past the first fleet frame, and two unread mail records, which no door counts (T2d, D-6330). */
+  function waitingFleet(n: number): FleetSession[] {
+    const stamp = Date.now();
+    act(() => { ack(FEED_ACK_KEY, stamp); });
+    const feed = [1, 2].map((seq): NotifyEvent => ({ seq, at: stamp + 60_000 + seq, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null }));
+    act(() => useFleetStore.setState({ feed, fleetFrameSeen: true }));
+    return [
+      ...Array.from({ length: n }, (_, i) => fleetSession({ id: `ask-${i}`, project: 'proj', bucket: 'attention' })),
+      fleetSession({ id: 'held-child', project: 'proj', bucket: 'working' }),
+    ];
+  }
+
+  // Desk-nav Task A (D-8100): a badged door draws one CountBadge, aria-hidden, printing badgePrint, in both forms: with its
+  // word from 1280, and with its tip below it from 900 to 1279.
+  it("the bar's Inbox door says 'waiting for you' with Refined's count, in both forms", () => {
+    for (const width of [900, 1280, 1920]) {
+      stubAt(width);
+      mount('/', waitingFleet(2));
+      const door = within(primary()).getByRole('button', { name: 'Inbox, 2 waiting for you' });
+      expect(door, `${width}px`).toHaveAttribute('data-command', 'go-inbox');
+      // The word reads in both forms, as the label from 1280 and as the tip below it, and the pill prints the number.
+      const words = width >= 1280;
+      expect(door.querySelector(words ? '.ins-door-word' : '.ins-door-tip')?.textContent, `${width}px`).toBe('Inbox');
+      expect(door.textContent, `${width}px: the word or the tip, then the count`).toBe('Inbox 2');
+      expect(door.querySelectorAll('.ins-door-count'), `${width}px: one pill`).toHaveLength(1);
+      expect(door.querySelector('.ins-door-count'), `${width}px`).toHaveAttribute('aria-hidden', 'true');
+      // Nothing else in the frame names or draws the count: the list head's Mail door is gone at a desk.
+      expect(doorCounts(), `${width}px`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, waiting: 1, bell: 1 });
+      expect(document.querySelector('.mail-badge'), `${width}px`).toBeNull();
+      expect(document.querySelectorAll('.ins-door-count, .mail-badge-count'), `${width}px: count pills`).toHaveLength(1);
+      cleanup();
+    }
+    // Refined's tab counts the same fleet the same way (R32's F1): one function, so no skin's door counts for itself.
+    act(() => { setSkin(REFINED); });
+    stubAt(1280);
+    mount('/', waitingFleet(2));
+    expect(screen.getByRole('button', { name: 'Inbox, 2 waiting for you' })).toHaveAttribute('data-command', 'go-inbox');
+    cleanup();
+    act(() => { setSkin(INSTRUMENT); });
+    // The printed count is capped like the sibling doors' and the name carries the real number.
+    stubAt(1280);
+    mount('/', waitingFleet(120));
+    const capped = within(primary()).getByRole('button', { name: 'Inbox, 120 waiting for you' });
+    expect(capped.textContent).toBe('Inbox 99+');
+    cleanup();
+    stubAt(900);
+    mount('/', waitingFleet(120));
+    expect(within(primary()).getByRole('button', { name: 'Inbox, 120 waiting for you' }).textContent).toBe('Inbox 99+');
+  });
+
+  // Desktop-polish PL5a (D-7712): the bar's Waiting on you door counts the open items plus the sessions' questions.
+  it("the bar's Waiting on you door says 'waiting on you' with its count, never counting an item being checked", () => {
+    stubAt(1280);
+    const sessions = waitingFleet(1);
+    act(() => useFleetStore.setState({ waiting: waitingView({ items: [itemView({ id: 1 }), itemView({ id: 2, state: 'checking' })] }) }));
+    mount('/', sessions);
+    const door = within(primary()).getByRole('button', { name: 'Waiting on you, 2 waiting on you' }); // 1 open item + 1 question
+    expect(door).toHaveAttribute('data-command', 'go-waiting');
+    expect(door.querySelector('.ins-door-word')?.textContent).toBe('Waiting on you');
+    expect(door.querySelector('.ins-door-count')?.textContent).toBe('2');
+    fireEvent.click(door);
+    expect(window.location.pathname).toBe('/waiting');
+  });
+
+  // Review 1466 F4 (desktop-polish PL10, fix round 1): the bar's badges are `placeBadge`'s, the one decision the phone bar and
+  // Refined's desk bar read, so the bar's Runs door counts the open runs that need the operator as theirs do.
+  it("the bar's Runs door says 'needs you' with the count the phone bar and Refined's tab show", () => {
+    stubAt(1280);
+    const runs = [
+      { id: 1, state: 'working', closedAt: null, sessionId: 'ask-0', claimedBy: null },
+      { id: 2, state: 'working', closedAt: null, sessionId: 'held-child', claimedBy: null },
+    ] as unknown as RunSummary[];
+    const sessions = withRunBinding(waitingFleet(1), runs);
+    act(() => useFleetStore.setState({ runs, runsFrameSeen: true }));
+    try {
+      mount('/', sessions);
+      const door = within(primary()).getByRole('button', { name: 'Runs, 1 needs you' });
+      expect(door).toHaveAttribute('data-command', 'go-runs');
+      expect(door.querySelector('.ins-door-word')?.textContent).toBe('Runs');
+      expect(door.querySelector('.ins-door-count')?.textContent).toBe('1');
+      cleanup();
+      stubAt(1279);
+      mount('/', sessions);
+      const tipped = within(primary()).getByRole('button', { name: 'Runs, 1 needs you' });
+      expect(tipped.querySelector('.ins-door-tip')?.textContent).toBe('Runs');
+      expect(tipped.querySelector('.ins-door-count')?.textContent).toBe('1');
+      cleanup();
+      stubAt(1280);
+      act(() => { setSkin(REFINED); });
+      mount('/', sessions);
+      expect(screen.getByRole('button', { name: 'Runs, 1 needs you' })).toHaveAttribute('data-command', 'go-runs');
+    } finally {
+      act(() => { setSkin(INSTRUMENT); });
+      act(() => useFleetStore.setState({ runs: [], runsFrameSeen: false }));
+    }
+  });
+
+  it('with nobody waiting on the operator the Inbox door draws no badge, however much mail is unread', () => {
+    for (const width of [900, 1920]) {
+      stubAt(width);
+      mount('/', waitingFleet(0));
+      const door = within(primary()).getByRole('button', { name: 'Inbox' });
+      expect(door.textContent, `${width}px`).toBe('Inbox');
+      expect(door.querySelector('.ins-door-count'), `${width}px`).toBeNull();
+      expect(document.querySelectorAll('.ins-door-count, .mail-badge-count'), `${width}px: no count pill anywhere`).toHaveLength(0);
+      expect(doorCounts(), `${width}px`).toMatchObject({ inbox: 1, mail: 0, waiting: 0 });
+      cleanup();
+    }
+    // Before the first fleet frame the rows are the offline snapshot's, not a fact: the door says nothing yet.
+    stubAt(1280);
+    const sessions = waitingFleet(2);
+    act(() => useFleetStore.setState({ fleetFrameSeen: false }));
+    mount('/', sessions);
+    expect(within(primary()).getByRole('button', { name: 'Inbox' }).textContent).toBe('Inbox');
+  });
+
+  it('the pool-lag readout shows once at the desk when the epochs differ', () => {
+    act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 3 } }));
+    for (const width of [900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      expect(screen.getAllByTestId('pool-epoch-lag'), `${width}px`).toHaveLength(1);
+      expect(screen.getByTestId('pool-epoch-lag')).toHaveTextContent('epoch 5 / observed 3');
+      cleanup();
+    }
+    act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5 } }));
+    stubAt(1280);
+    mount('/');
+    expect(screen.queryByTestId('pool-epoch-lag')).toBeNull();
+  });
+
+  it('one banner stack at any width', () => {
+    for (const width of [899, 900, 1280, 1920]) {
+      stubAt(width);
+      act(() => useFleetStore.setState({ conn: 'down', sessions: [S] }));
+      navigate('/');
+      render(<App />);
+      expect(document.querySelectorAll('[data-banner="offline"]').length, `${width}px: banner stacks`).toBe(1);
+      cleanup();
+    }
+  });
+});
+
+// ---- Desk polish, T2g (D-6715) ----------------------------------------------------------------------------------
+
+describe('the desk (T2g): one count, in the status bar', () => {
+  const readout = fleetSummary([S, WS], null).readout;
+
+  it("at 900, 1280 and 1920 Instrument's list column draws no count line, and the status bar's fleetSummary is the one count in the frame", () => {
+    for (const width of [900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      expect(document.querySelector('.shell-nav section[aria-label="Fleet"]'), `${width}px: the fleet column is mounted`).not.toBeNull();
+      const counts = document.querySelectorAll('.fleet-count, .ins-status-summary');
+      expect(counts, `${width}px: count elements`).toHaveLength(1);
+      expect(footer().contains(counts[0]!), `${width}px: inside the status bar`).toBe(true);
+      expect(counts[0]!.textContent, `${width}px`).toBe(readout);
+      // By its text, not its class: a count that came back under a new class name is still a second one.
+      const leaves = [...document.body.querySelectorAll('*')].filter((el) => el.children.length === 0);
+      expect(leaves.filter((el) => (el.textContent ?? '').includes(readout)), `${width}px: leaves that say the count`).toHaveLength(1);
+      cleanup();
+    }
+  });
+
+  it("at 899 Instrument's list column keeps its count line", () => {
+    stubAt(899);
+    mount('/');
+    expect(document.querySelector('.shell-nav .fleet-count')).toHaveTextContent(readout);
+    expect(document.querySelector('footer.shell-status')).toBeNull();
+  });
+
+  it("at the desk the list column's head is the pool lag alone when the epochs differ, and there is no head when they agree", () => {
+    stubAt(1280);
+    act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 3 } }));
+    mount('/');
+    const head = document.querySelector('.shell-nav .fleet-head');
+    expect(head).not.toBeNull();
+    expect(head!.textContent).toBe(poolLagText(5, 3));
+    expect(head!.querySelector('.fleet-count, .wordmark')).toBeNull();
+    cleanup();
+    act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5 } }));
+    mount('/');
+    expect(document.querySelector('.shell-nav section[aria-label="Fleet"]')).not.toBeNull();
+    expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
+  });
+
+  it("Refined's desk column keeps its count line", () => {
+    act(() => { setSkin(REFINED); });
+    stubAt(1280);
+    mount('/');
+    expect(document.querySelector('.shell-nav .fleet-count')).toHaveTextContent(readout);
+  });
+
+  it('Refined keeps its runs row at every width (T2f, D-6371)', () => {
+    act(() => { setSkin(REFINED); });
+    for (const width of [390, 899, 900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      const columns = document.querySelectorAll<HTMLElement>('section[aria-label="Fleet"]');
+      expect(columns, `${width}px: the fleet column is mounted, once`).toHaveLength(1);
+      if (width >= 900) expect(columns[0]!.closest('.shell-nav'), `${width}px: the column is the frame's nav`).not.toBeNull();
+      const lines = columns[0]!.querySelectorAll('.fleet-runs-line');
+      expect(lines, `${width}px: runs lines`).toHaveLength(1);
+      const row = within(lines[0] as HTMLElement).getByRole('button', { name: /^Runs · / });
+      expect(row, `${width}px`).toHaveClass('fleet-runs-row');
+      const choosers = document.querySelectorAll('select[aria-label="Class"]');
+      expect(choosers, `${width}px: class choosers in the document`).toHaveLength(1);
+      expect(lines[0]!.contains(choosers[0]!), `${width}px: the chooser is on the runs line`).toBe(true);
+      cleanup();
+    }
+  });
+
+  it('Refined at 1280 on an empty fleet with no lag draws no .shell-nav .fleet-head', () => {
+    act(() => { setSkin(REFINED); });
+    stubAt(1280);
+    mount('/', []);
+    expect(document.querySelector('.shell-nav section[aria-label="Fleet"]')).not.toBeNull();
+    expect(document.querySelector('.shell-nav .fleet-head')).toBeNull();
+  });
+});
+
+// ---- Desk polish, T2b (D-6328) ----------------------------------------------------------------------------------
+
+describe('no floating + at the desk (T2b, D-6328)', () => {
+  it('exactly one [data-command=new-session] at 900, 1280 and 1920', () => {
+    for (const width of [900, 1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      const doors = document.querySelectorAll('[data-command="new-session"]');
+      expect(doors, `${width}px: marked doors`).toHaveLength(1);
+      expect(topBar().contains(doors[0]!), `${width}px: inside the top bar`).toBe(true);
+      // By name, so the legacy unmarked `.fab` counts as a second door.
+      expect(screen.getAllByRole('button', { name: 'New session' }), `${width}px: buttons named New session`).toHaveLength(1);
+      expect(document.querySelector('.fab'), `${width}px: no floating +`).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('at 390 the round + dispatches the new-session door event', async () => {
+    stubAt(390);
+    mount('/');
+    const { DOOR_EVENT } = await import('../src/command/door');
+    const seen: string[] = [];
+    const listen = (e: Event): void => { seen.push((e as CustomEvent<string>).detail); };
+    window.addEventListener(DOOR_EVENT, listen);
+    const buttons = screen.getAllByRole('button', { name: 'New session' });
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]).toHaveClass('fab');
+    expect(buttons[0]).toHaveAttribute('data-command', 'new-session');
+    fireEvent.click(buttons[0]!);
+    expect(seen).toEqual(['new-session']);
+    window.removeEventListener(DOOR_EVENT, listen);
+  });
+
+  it('at 899 the round + is the one New session door', () => {
+    stubAt(899);
+    mount('/');
+    const doors = document.querySelectorAll('[data-command="new-session"]');
+    expect(doors).toHaveLength(1);
+    expect(doors[0]).toHaveClass('fab');
+    expect(screen.getAllByRole('button', { name: 'New session' })).toHaveLength(1);
+  });
+});

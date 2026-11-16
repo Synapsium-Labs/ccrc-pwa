@@ -2,26 +2,49 @@
 // suites run ccd: a stub tmux on PATH answers the session name, stdin carries
 // the hook payload, and the assertion reads the file the script wrote.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync, spawn, type SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
+import { tl, GRAPH, type GraphContent } from './compactCardFixtures.js';
 import { isScratchSlug } from './scratchSlugs.js';
+import { hasCommit, isAncestorOfHead, isShallow, readAtSha } from './frozenSource.js';
+import { itLinux, IS_DARWIN } from './platformFixtures.js'; import { anchorCites } from './anchors.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
+const realTool = (name: string): string => execFileSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).trim();
+const sh = (text: string): string => `'${text.replace(/'/g, "'\"'\"")}'`;
 
+/** THE ROW'S GENERATION, and this pane's copy of it — exactly what ccd's row
+ *  creation mints and `_spawn_start` exports. Every compaction arm validates
+ *  the two against each other under the lock and FAILS CLOSED on a mismatch or
+ *  an absence, so a fixture without them is a session whose whole compaction
+ *  lifecycle is inert — which is a real state (a pre-D-2605 row), and one this
+ *  file tests deliberately below, but not the ordinary one. */
+const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 let home: string;
 beforeEach(() => {
   home = mkTmp('ccrc-hook-');
   fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  // EXACTLY 36 BYTES, NO TERMINAL LF — the contract the ccd writer keeps, and a
+  // 37-byte file here would wedge the fixture the same way it wedges a row.
+  fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.generation'), GENERATION);
   const bin = path.join(home, 'bin');
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\necho "cc-demo-quiet-basin"\n', { mode: 0o755 });
 });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
+/** The env every hook spawn in this file shares (B3M19: one definition, so a variable added here reaches `run`, `runFull`
+ *  and the spool describe's `runSpoolBounded` alike): the fixture HOME, a PATH that finds the fixture's tmux, the pane, the
+ *  session id, the pid, the generation and a BLANK job dir (D-4953: `forkedEnv` at the end of this file says why). `env`
+ *  overrides it: each test adds or breaks its own legs there, never in a second copy of this literal. */
+const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => ({
+  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, CLAUDE_JOB_DIR: '', ...env,
+});
 /** Run the hook with a payload; env overrides let each test break one leg.
  *  Returns the hook's STDOUT, which is empty on every event but SessionStart
  *  (R1) — `encoding: 'utf8'` is what makes execFileSync hand it back as a
@@ -30,13 +53,56 @@ const run = (payload: object, env: Record<string, string> = {}): string =>
   execFileSync('bash', [HOOK], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
-    env: {
-      ...process.env, HOME: home,
-      PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
-      ...env,
-    },
+    env: hookEnv(env),
   });
+/** `run`, plus stderr: the hook's contract is silence on BOTH streams, and a
+ *  bare `find` over a directory that does not exist would break it on stderr
+ *  while stdout stays clean. EXIT 0 IS ASSERTED HERE, ONCE (fix-round I5):
+ *  `run`'s `execFileSync` throws on a non-zero exit, so every test using it
+ *  implicitly checked the hook's own header contract ("exit 0 on every
+ *  path") — but that throw fires on ANY non-zero exit, including one after a
+ *  card printed clean, so a caller that discarded `r.status` (as this file's
+ *  callers of `runFull` did until this fix) had a blind spot exactly where
+ *  the compact-serve arm's own `exit 0`/`exit 1` sits, after the print. One
+ *  assertion, here, covers every existing and future call site instead of
+ *  being sprinkled at each one (the same single-definition argument fix
+ *  round 1 applied to the emitter's clip). `allowNonZeroExit` is the escape
+ *  hatch for a test that deliberately drives one. */
+const runFull = (payload: object, env: Record<string, string> = {}, opts: { allowNonZeroExit?: boolean } = {}): { stdout: string; stderr: string } => {
+  const r = spawnSync('bash', [HOOK], {
+    input: JSON.stringify(payload), encoding: 'utf8',
+    env: hookEnv(env),
+  });
+  if (!opts.allowNonZeroExit) expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+  return { stdout: r.stdout, stderr: r.stderr };
+};
+/** `n` real hook PROCESSES started as close together as `spawn` (async,
+ *  non-blocking) allows, all against the same fixture HOME/id — the shape
+ *  M1's concurrency regression needs: `execFileSync`/`spawnSync` block, so a
+ *  loop of them can never overlap in wall time and would never race. Captures
+ *  stderr per racer too (M2's stderr-silence check, extended to N processes),
+ *  and asserts exit 0 per racer (fix-round I5, same reasoning as `runFull`'s
+ *  own comment) — a failing `expect` inside the `close` handler is caught and
+ *  turned into a rejection, so `Promise.all` surfaces it as a real test
+ *  failure rather than a silently unresolved promise. */
+const runConcurrent = (payload: object, n: number, opts: { allowNonZeroExit?: boolean } = {}): Promise<{ stdout: string; stderr: string }[]> =>
+  Promise.all(Array.from({ length: n }, () => new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+    const child = spawn('bash', [HOOK], {
+      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
+        CCRC_SESSION_GENERATION: GENERATION },
+    });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', (d: Buffer) => { stdout += d.toString('utf8'); });
+    child.stderr.on('data', (d: Buffer) => { stderr += d.toString('utf8'); });
+    child.on('close', (code) => {
+      try {
+        if (!opts.allowNonZeroExit) expect(code, 'the hook contract: exit 0 on every path, every racer').toBe(0);
+        resolve({ stdout, stderr });
+      } catch (e) { reject(e as Error); }
+    });
+    child.stdin.end(JSON.stringify(payload));
+  })));
 const stateFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.hookstate.json');
 const readState = (): any => JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
 
@@ -58,7 +124,7 @@ const readState = (): any => JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
  *  the one deciding, and so the only shape that measures it. */
 const plantGraph = (dir: string, opts: {
   built?: string; nodes?: number; engine?: string | null; report?: boolean;
-  pad?: number;
+  pad?: number; content?: GraphContent;
 } = {}): void => {
   const out = path.join(dir, 'graphify-out');
   fs.mkdirSync(out, { recursive: true });
@@ -66,8 +132,17 @@ const plantGraph = (dir: string, opts: {
   const pad = opts.pad ?? 9000;
   const decoy = `  "built_at_commit": "${'0'.repeat(40)}",\n`;
   const filler = pad > 0 ? `  "pad": "${'x'.repeat(pad)}",\n` : '';
+  // A REAL-SHAPED body when a test needs the helper to parse the graph: the
+  // node-link keys graphify writes, between the decoy and the real stamp, so
+  // the same file exercises the hook's tail read AND the helper's JSON.parse
+  // (which takes the LAST duplicate key — the real one).
+  const body = opts.content
+    ? `  "directed": false,\n  "multigraph": false,\n  "graph": {},\n`
+      + `  "nodes": ${JSON.stringify(opts.content.nodes)},\n  "links": ${JSON.stringify(opts.content.links)},\n`
+    : '';
   fs.writeFileSync(path.join(out, 'graph.json'),
-    `{\n${decoy}${filler}  "hyperedges": [],\n  "built_at_commit": "${built}"\n}\n`);
+    `{\n${decoy}${filler}${body}  "hyperedges": [],\n  "built_at_commit": "${built}"\n}\n`);
+  if (opts.content) fs.writeFileSync(path.join(out, '.graphify_labels.json'), JSON.stringify(opts.content.labels));
   if (opts.report !== false) {
     fs.writeFileSync(path.join(out, 'GRAPH_REPORT.md'),
       `# Graph Report - demo  (2026-09-02)\n\n## Summary\n`
@@ -135,11 +210,177 @@ const gatedTree = (commits = 1): string => {
   plantGraph(tree, { built: first, nodes: NODES });
   return tree;
 };
+
+// ── The compaction-card fixtures (spec §3.0–§3.4). Module scope, the same
+// reason as `plantGraph`: four describes ask one mechanism of one hook.
+const HELPER_SRC = path.resolve(__dirname, '../../ccd/compact-card.mjs');
+/** The helper lands beside the hook, where deploy.sh's agent lane and `ccrc
+ *  install` put it (Task 10). A test that wants "no helper" simply does not
+ *  call this. */
+const plantHelper = (): void =>
+  fs.copyFileSync(HELPER_SRC, path.join(home, '.cc-sessions', 'compact-card.mjs'));
+
+/** The liveness rule (spec §3.0) reads mtimes against `COMPACT_LIVE_S` =
+ *  120 s: a transcript written inside the window is a LIVE context. These two
+ *  ages sit well on either side of it. */
+const LIVE = 5;
+const DEAD = 600;
+/** A session's transcripts under a fixture `~/.claude/projects/<slug>/`: the
+ *  parent at `<sid>.jsonl`, each subagent at
+ *  `<sid>/subagents/[<under>/]agent-<id>.jsonl` — the layout measured on the
+ *  fleet box (Agent-tool subagents directly in `subagents/`, Workflow agents
+ *  under `subagents/workflows/<run>/`). mtimes are SET, never inherited from
+ *  the write order, because the scope rule IS an mtime rule: each file's
+ *  `age` is seconds before now. The parent defaults to DEAD — quiet, the
+ *  shape measured while it waits on a subagent — which is also harmless for
+ *  a main-thread test with no agents (no live agent → main). */
+const plantSession = (opts: {
+  sid?: string; lines: string[]; parentAge?: number;
+  subagents?: { id: string; lines: string[]; age: number; under?: string }[];
+}): { transcript: string; agents: Record<string, string> } => {
+  const sid = opts.sid ?? 'sess-1';
+  const proj = path.join(home, '.claude', 'projects', '-home-u-tree');
+  fs.mkdirSync(proj, { recursive: true });
+  const transcript = path.join(proj, `${sid}.jsonl`);
+  fs.writeFileSync(transcript, opts.lines.join('\n') + '\n');
+  const now = Math.floor(Date.now() / 1000);
+  const pt = now - (opts.parentAge ?? DEAD);
+  fs.utimesSync(transcript, pt, pt);
+  const agents: Record<string, string> = {};
+  for (const a of opts.subagents ?? []) {
+    const dir = path.join(proj, sid, 'subagents', ...(a.under ? [a.under] : []));
+    fs.mkdirSync(dir, { recursive: true });
+    const f = path.join(dir, `agent-${a.id}.jsonl`);
+    fs.writeFileSync(f, a.lines.join('\n') + '\n');
+    fs.utimesSync(f, now - a.age, now - a.age);
+    agents[a.id] = f;
+  }
+  return { transcript, agents };
+};
+
+/** A tree whose graph is fresh at HEAD and carries the twelve-file GRAPH. */
+const cardTree = (): string => {
+  const tree = path.join(home, 'tree');
+  const first = gitTree(tree, 1);
+  plantGraph(tree, { built: first, nodes: NODES, content: GRAPH });
+  return tree;
+};
+/** A PATH of symlinks to the real tools the hook forks — everything except
+ *  the ones named — so a test can make ONE command genuinely absent (the
+ *  `command -v` guard is about absence; a stub that exits 127 is not absence).
+ *  `tmux` stays the fixture stub. */
+const minimalPath = (omit: string[]): string => {
+  const bin = path.join(home, 'binmin');
+  fs.mkdirSync(bin, { recursive: true });
+  for (const t of ['bash', 'jq', 'git', 'tail', 'head', 'grep', 'tr', 'cat', 'mv', 'rm', 'wc', 'sort', 'date',
+    'find', 'timeout', 'node', 'sed', 'mkdir', 'link',
+    // D-2605's own externals. `flock`, `mktemp` and `touch` are as load-bearing
+    // as `link` now: the stable lock is minted by `mktemp`+`link`, acquired
+    // through a `link` alias and bounded by `flock`, and PostCompact's claim is
+    // stamped by `touch`. Measured, `type -t` answers `file` for every one of
+    // them, so a PATH that omits them makes the arms genuinely refuse — which
+    // is what `minimalPath(['flock'])` is FOR, and what every OTHER caller of
+    // this helper must not accidentally get.
+    'flock', 'mktemp', 'touch',
+    // `ls` JOINED THAT SET WITH THE /dev/fd INODE FALLBACK, AND ONLY DARWIN
+    // FORKS IT. `_hook_lock_same` decides identity with `-ef` (dev+ino) through
+    // `/proc/self/fd/<n>`; where there is no `/proc` it reaches the descriptor
+    // through `/dev/fd/<n>`, whose stat answers the fdesc DEVICE, so `-ef` is
+    // false for the very inode it holds and `ls -i` is what decides. On Linux
+    // that arm never runs, so omitting `ls` here was invisible — and on macOS
+    // it made EVERY acquisition under this PATH refuse. MEASURED on the
+    // `probe-macos` leg at b856a939 with the hook under `bash -x`:
+    // `command -v ls: ABSENT`, then `ls -i -- /dev/fd/11` → `a=` → `return 1`
+    // out of `_hook_lock_same`, `return 1` out of the acquire, and PreCompact's
+    // arm gave up before the helper fork — `resolves gtimeout when timeout is
+    // absent` died `ENOENT …/gtimeout-argv` for that reason and no other. The
+    // CONTROL was run in the same act: the same PATH with `ls` symlinked in
+    // published the card and the argv. This is a FIXTURE gap, not a userland
+    // difference — `ls -i` is POSIX and both userlands ship it.
+    'ls']) {
+    if (omit.includes(t)) continue;
+    const real = execFileSync('sh', ['-c', `command -v ${t}`], { encoding: 'utf8' }).trim();
+    if (real) fs.symlinkSync(real, path.join(bin, t));
+  }
+  fs.copyFileSync(path.join(home, 'bin', 'tmux'), path.join(bin, 'tmux'));
+  fs.chmodSync(path.join(bin, 'tmux'), 0o755);
+  return bin;
+};
+/** A stub on the fixture PATH: `timeout` that records its argv and execs the
+ *  rest, or `node` that fails / prints garbage.
+ *
+ *  `timeout` IS INVOKED TWICE PER HOOK RUN, and a stub that does not know that
+ *  is a barrier in the wrong place. BEFORE the `case "$event"`, the hook
+ *  resolves `timeout`/`gtimeout` into `$hooktmo` and asks
+ *  `"$hooktmo" 2 tmux display-message -p -t "$TMUX_PANE" '#S'` — the bound on the one tmux
+ *  question every hook event asks, which exists because a wedged tmux server
+ *  answers nothing and never returns. That is invocation ONE, and it happens
+ *  before the compaction arms are reached at all; the helper's
+ *  `_hook_timeout "$COMPACT_HELPER_TIMEOUT" node …` is invocation TWO. So a
+ *  stub body that asserts hookstate, plants a sibling verdict, or takes the
+ *  row's lock fires first against a hook that has not started its arm — and an
+ *  `exit` there leaves `$tname` empty, which ends the run before anything is
+ *  written. `HELPER_ONLY` below is the prologue that makes such a stub a
+ *  barrier around the HELPER invocation alone. */
+const stub = (name: string, body: string): void =>
+  fs.writeFileSync(path.join(home, 'bin', name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+/** The prologue that narrows a `timeout`/`gtimeout` stub to the helper call:
+ *  any other bounded command — in practice the tmux question above — is run
+ *  BOUNDLESS and unobserved, which costs nothing here because the fixture
+ *  `tmux` is an instant `echo`. Both helper invocations (`card` from
+ *  PreCompact, `measure` from PostCompact) name `$COMPACT_HELPER`, i.e.
+ *  `.cc-sessions/compact-card.mjs`, so one pattern covers the arms and nothing
+ *  else; a stub that RECORDS its argv therefore records the helper's only. */
+const HELPER_ONLY = 'case "$*" in *compact-card.mjs*) ;; *) shift; exec "$@" ;; esac';
+/** The three compaction payloads, with the keys 2.1.266 sends (measured
+ *  2026-09-09: PreCompact `custom_instructions|cwd|hook_event_name|prompt_id|
+ *  session_id|transcript_path|trigger`; PostCompact the same with
+ *  `compact_summary` for `custom_instructions`; SessionStart(compact)
+ *  `cwd|hook_event_name|model|prompt_id|session_id|source|transcript_path`). */
+const preCompact = (tree: string, transcript: string, trigger = 'manual'): object =>
+  ({ hook_event_name: 'PreCompact', trigger, cwd: tree, transcript_path: transcript,
+    session_id: 'sess-1', prompt_id: 'p1', custom_instructions: null });
+const compactStart = (tree: string, transcript: string): object =>
+  ({ hook_event_name: 'SessionStart', source: 'compact', cwd: tree, transcript_path: transcript,
+    session_id: 'sess-1', prompt_id: 'p1', model: 'claude-opus-5' });
+const postCompact = (tree: string, transcript: string, summary: string, trigger = 'manual'): object =>
+  ({ hook_event_name: 'PostCompact', trigger, cwd: tree, transcript_path: transcript,
+    session_id: 'sess-1', prompt_id: 'p1', compact_summary: summary });
+const setFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.compactset');
+const cardFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.compactcard');
+const journalFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.compactions');
+const readSet = (): any => JSON.parse(fs.readFileSync(setFile(), 'utf8'));
+/** The card file: line 1 is the set's collision-resistant nonce, then the text. */
+const readCard = (): { nonce: string; text: string } => {
+  const raw = fs.readFileSync(cardFile(), 'utf8');
+  const nl = raw.indexOf('\n');
+  return { nonce: raw.slice(0, nl), text: raw.slice(nl + 1) };
+};
+/** Tool calls that name files of GRAPH: an absolute Read under the tree and
+ *  a view-shaped shell line (bypass-permissions sessions read through `sed`). */
+const workLines = (tree: string): string[] => [
+  tl.toolUse('Read', { file_path: path.join(tree, 'server/src/pane/statusline.ts') }),
+  tl.toolUse('Bash', { command: 'sed -n 1,40p server/src/watch.ts' }),
+];
+
 const pre = (tool: string, input: object, cwd: string): object =>
   ({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd });
+/** What graphify 0.9.9 really prints for one answered `query`, and the
+ *  `tool_response` Claude Code really sends with a Bash `PostToolUse`
+ *  (`server/test/fixtures/delegation/<version>/agent-iso-bg.json` carries the
+ *  same five keys). A read counts on this, never on the command alone. */
+const ANSWER = "Traversal: BFS depth=2 | Start: ['assembleFleet'] | 2 nodes found\n\n"
+  + 'NODE assembleFleet [src=server/src/fleet.ts loc=L10 community=0]\n'
+  + 'NODE readHookState [src=server/src/hookstate.ts loc=L20 community=0]\n'
+  + 'EDGE assembleFleet --calls [EXTRACTED]--> readHookState\n';
+/** The command the deny and the nudge teach, spelled here so a drift is red. */
+const GRAPH_RUN = 'PATH="$HOME/.local/bin:$PATH" graphify';
+const bashResponse = (stdout: string): object =>
+  ({ stdout, stderr: '', interrupted: false, isImage: false, noOutputExpected: false });
 const query = (cwd: string): object =>
   ({ hook_event_name: 'PostToolUse', tool_name: 'Bash',
-    tool_input: { command: 'graphify query "who calls assembleFleet"' }, cwd });
+    tool_input: { command: 'graphify query "who calls assembleFleet"' },
+    tool_response: bashResponse(ANSWER), cwd });
 
 /** The one PreToolUse envelope on stdout, asserted to be exactly one line of
  *  JSON — a deny (R5) or a nudge (R6), and the assertion that it is never
@@ -254,11 +495,11 @@ describe('event → state mapping', () => {
     run({ hook_event_name: 'SessionStart' });
     expect(readState().state).toBe('done');
   });
-  it('Stop is done and clears ask; interrupted survives when the payload says so', () => {
+  it('Stop is done and clears ask; a Stop carrying is_interrupt writes no interrupted key', () => {
     run({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: { questions: [] } });
     run({ hook_event_name: 'Stop', is_interrupt: true });
     const s = readState();
-    expect(s).toMatchObject({ state: 'done', ask: null, interrupted: true });
+    expect(s).toMatchObject({ state: 'done', ask: null }); expect(s).not.toHaveProperty('interrupted');
   });
   it('PostCompact: auto is working, manual is done', () => {
     run({ hook_event_name: 'PostCompact', trigger: 'auto' });
@@ -275,7 +516,7 @@ describe('event → state mapping', () => {
     expect(readState().state).toBe('working');
   });
   it('an unrecognized event writes nothing', () => {
-    run({ hook_event_name: 'SessionEnd' });
+    run({ hook_event_name: 'Notification' });
     expect(fs.existsSync(stateFile())).toBe(false);
   });
 });
@@ -314,14 +555,21 @@ describe('subagents', () => {
 });
 
 describe('the fleet gate and failure polarity', () => {
+  /** What the HOOK put in the registry — never the row's `.generation`, which
+   *  ccd's row creation mints before any hook runs and the harness plants for
+   *  the same reason. It is an INPUT to every arm, so a "wrote nothing" scan
+   *  that counted it would be red for a reason that has nothing to do with the
+   *  gate under test. */
+  const written = (): string[] =>
+    fs.readdirSync(path.join(home, '.cc-sessions')).filter((n) => n !== 'demo-quiet-basin.generation');
   it('no TMUX_PANE → writes nothing, exits 0', () => {
     run({ hook_event_name: 'Stop' }, { TMUX_PANE: '' });
-    expect(fs.readdirSync(path.join(home, '.cc-sessions'))).toEqual([]);
+    expect(written()).toEqual([]);
   });
   it('a foreign tmux session name → writes nothing', () => {
     fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "main"\n', { mode: 0o755 });
     run({ hook_event_name: 'Stop' });
-    expect(fs.readdirSync(path.join(home, '.cc-sessions'))).toEqual([]);
+    expect(written()).toEqual([]);
   });
   it('a corrupt existing state file is overwritten, not crashed on', () => {
     fs.writeFileSync(stateFile(), '{nope');
@@ -336,43 +584,43 @@ describe('the fleet gate and failure polarity', () => {
     expect(s.ask).toBeNull();
     expect(fs.statSync(stateFile()).size).toBeLessThan(65536);
   });
-  it('p95 of 20 runs stays under the budget (150ms CI allowance; 50ms target)', () => {
-    const times: number[] = [];
-    for (let i = 0; i < 20; i++) {
+  it.runIf(process.env['CCRC_PERF'] === '1')('p95 of 40 runs stays under the budget (150ms CI allowance; 50ms target)', () => {
+    const times: number[] = []; run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });   // one warm-up, discarded; CCRC_PERF=1 only (the perf job, D-6929)
+    for (let i = 0; i < 40; i++) {
       const t0 = Date.now();
       run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
       times.push(Date.now() - t0);
     }
     times.sort((a, b) => a - b);
-    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
-  }, 30000);
+    expect(times[37]).toBeLessThan(150);   // p95 of 40 = the third-largest (times[37]); the threshold is unchanged
+  }, 60000);
   // R1 FIX (D-1898): an absolute ms budget was tried first and rejected — see the
-  // measurement below for why. This asserts a RATIO of SessionStart's p95 to
-  // PostToolUse's p95, both measured IN THE SAME RUN (interleaved, same
+  // measurement below for why. This asserts a RATIO of SessionStart's median to
+  // PostToolUse's median, both measured IN THE SAME RUN (interleaved, same
   // process, same few seconds of box load), because box load inflates every
   // arm together: a slow moment makes the cheap arm slow too, so the ratio
   // between them stays put while either arm's raw ms does not.
   //
-  // WHY NOT AN ABSOLUTE MS NUMBER (measured on `openclaw`, the fleet box,
-  // under real concurrent-session load, load average ~2.1-4.3 across the
-  // runs below): 15 isolated runs of the shipped `case` gates measured a
-  // SessionStart p95 range of 136.9-164.5 ms across two 15-run samples
-  // (means 149.1 ms and 153.1 ms) against the 150 ms budget this test
-  // originally inherited from the file's PostToolUse test below — a near
-  // coin flip (8/15 passed in the first sample). The ERE mutation (see
-  // below) measured 203.9-227.2 ms, non-overlapping with the shipped range,
-  // but the ~39 ms gap between the shipped worst case and the mutated best
-  // case is too narrow to host ANY absolute threshold with the ~15% margin
-  // asked for on BOTH sides at once: every candidate T from 170-195 ms gave
-  // one side under 15% (T=180 -> 8.6%/13.3%; T=185 -> 11.1%/10.2%; the
-  // symmetric midpoint T=182 -> 9.6%/12.0%). An absolute ms number is the
-  // wrong shape for an arm timed on a box whose own load varies run to run.
+  // WHY NOT AN ABSOLUTE MS NUMBER (measured on the fleet box, under
+  // concurrent-session load ~2.1-4.3): two 15-run samples of the shipped `case`
+  // gates gave a SessionStart p95 of 136.9-164.5 ms (means 149.1 and 153.1)
+  // against the 150 ms budget inherited from the PostToolUse test below, a near
+  // coin flip (8/15 passed in the first). The ERE mutation measured 203.9-227.2
+  // ms, non-overlapping, but a ~39 ms gap hosts no absolute threshold with the
+  // ~15% margin asked on BOTH sides (T=180 -> 8.6%/13.3%; T=185 -> 11.1%/10.2%;
+  // T=182 -> 9.6%/12.0%). An absolute ms number is the wrong shape for an arm
+  // timed on a box whose own load varies run to run.
   //
-  // THE RATIO, measured the same way (15 isolated runs each, same box, same
-  // interleaved-in-one-run method): shipped `case` gates gave ratios of
-  // 3.03-3.47 (mean 3.30, n=15); the ERE mutation gave ratios of 4.48-5.61
-  // (mean 4.87, n=15) — non-overlapping, 15/15 under and 15/15 over R=4 with
-  // ~13% margin on the shipped side and ~12% margin on the mutated side of R.
+  // THE RATIO, same method (15 isolated runs each, interleaved in one run). D-1898,
+  // p95/p95: shipped `case` gates 3.03-3.47 (mean 3.30), ERE mutation 4.48-5.61
+  // (mean 4.87). Wave 2's turn marker, remedy (a): the cheap arm carries agent_id,
+  // so it never writes the marker and SessionStart pays its jq+mv in both bands.
+  // Re-measured p95/p95 on a loaded box (load 17-25), two sets: shipped 2.61-3.77
+  // and 2.86-3.97, ERE 3.79-5.39 and 4.33-5.94. Set 1 separates by 0.02, set 2 by
+  // 0.36, pooled they overlap (3.79 < 3.97): p95 of n=20 is the second-largest
+  // sample, an outlier's statistic. ratio-row-reads-the-median (D-3704): median/median,
+  // 15+15 alternating, shipped 3.19-3.64 (mean 3.46), ERE 4.88-5.73 (mean 5.19),
+  // R=4.2 (+15%/+16%).
   //
   // WHAT THIS GUARD CANNOT SEE — its masking window, recorded here rather than
   // in a gitignored measurement file, because this repo's convention is that a
@@ -382,14 +630,14 @@ describe('the fleet gate and failure polarity', () => {
   // denominator, and it is not frozen: it forks jq on a prefilter hit and reads
   // the hookstate back. If that arm slows down on its own, the ratio falls
   // while the SessionStart arm is exactly as slow as it was. Against the
-  // measured mutated band, a compound regression of >=12% in the cheap arm
-  // (4.48/4 = 1.12) pulls the mutation's BEST case back under R=4, and ~13%
-  // would put a typical mutated run there — so a >=10-13% cheap-arm regression
-  // is enough to mask the very mutation this test exists to catch, silently and
-  // with the suite green. The absolute p95 budget in the test above is what
-  // still binds the cheap arm; if that budget is ever raised, this ratio's
+  // measured median bands, a compound regression of >=16% in the cheap arm
+  // (4.88/4.2 = 1.16) pulls the mutation's BEST case back under R=4.2, and ~24%
+  // (5.19/4.2 = 1.24) pulls a MEAN mutated run there, so a cheap-arm regression
+  // of that size is enough to mask the very mutation this test exists to catch,
+  // silently and with the suite green. The absolute p95 budget in the test above
+  // is what still binds the cheap arm; if that budget is ever raised, this ratio's
   // masking window widens with it, and the two must be re-argued together.
-  it('SessionStart costs no more than 4x the cheap PostToolUse arm, on a 200-row registry', () => {
+  it.runIf(process.env['CCRC_PERF'] === '1')('SessionStart costs no more than 4.2x the cheap PostToolUse arm, on a 200-row registry (40 pairs after a warm-up pair; perf job only, D-6929)', () => {
     const reg = path.join(home, '.cc-sessions');
     const now = Math.floor(Date.now() / 1000);
     for (let i = 0; i < 200; i++) {
@@ -409,21 +657,94 @@ describe('the fleet gate and failure polarity', () => {
     plantGraph(tree, { built: 'deadbee' });
 
     const cheapTimes: number[] = [];
-    const mainTimes: number[] = [];
-    for (let i = 0; i < 20; i++) {
+    const mainTimes: number[] = []; run({ hook_event_name: 'UserPromptSubmit' }); run({ hook_event_name: 'SubagentStart', agent_id: 'a-1', agent_type: 'general-purpose' }); run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a-1' }); run({ hook_event_name: 'SessionStart', cwd: tree, source: 'startup' });   // the last two are the discarded warm-up pair; a-1 is JOINED, so the cheap arm stays a subagent's (delegation broker wave 3)
+    for (let i = 0; i < 40; i++) {
       const t0 = process.hrtime.bigint();
-      run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+      run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a-1' });
       cheapTimes.push(Number(process.hrtime.bigint() - t0) / 1e6);
       const t1 = process.hrtime.bigint();
       run({ hook_event_name: 'SessionStart', cwd: tree, source: 'startup' });
       mainTimes.push(Number(process.hrtime.bigint() - t1) / 1e6);
     }
-    const p95 = (xs: number[]): number => {
+    const median = (xs: number[]): number => {
       const s = [...xs].sort((a, b) => a - b);
-      return s[Math.floor(s.length * 0.95) - 1]!;
+      return (s[Math.floor((s.length - 1) / 2)]! + s[Math.floor(s.length / 2)]!) / 2;
     };
-    const ratio = p95(mainTimes) / p95(cheapTimes);
-    expect(ratio).toBeLessThan(4);
+    const ratio = median(mainTimes) / median(cheapTimes);   // ratio-row-reads-the-median (D-3704) (above)
+    expect(ratio).toBeLessThan(4.2);
+  }, 120000);
+});
+
+// ── The fork fallback: attribution with no pane at all ─────────────────────
+// Claude Code can fork a live session into a daemon-hosted background PTY with
+// no TMUX and no TMUX_PANE. The pane path stays first and unchanged; this is
+// the second source, read only with no pane AND the job marker (D-4953).
+describe('a session with no pane', () => {
+  const REG = (): string => path.join(home, '.cc-sessions');
+  const hookstate = (id: string): unknown =>
+    JSON.parse(fs.readFileSync(path.join(REG(), `${id}.hookstate.json`), 'utf8'));
+  const planted = (id: string, uuid: string): void =>
+    fs.writeFileSync(path.join(REG(), `${id}.uuid`), uuid);
+
+  it('writes hookstate when the registry names its session id as its own', () => {
+    planted('demo-quiet-basin', 'uuid-1');
+    run({ hook_event_name: 'UserPromptSubmit' }, forkedEnv());
+    expect(hookstate('demo-quiet-basin')).toMatchObject({ sessionId: 'uuid-1', state: 'working' });
+  });
+
+  // The guard, stated in the other direction. This is what the TMUX_PANE check
+  // was protecting: a Claude session on this box that ccd does not own must
+  // still be attributed to nobody.
+  it('writes nothing when no registry row names its session id', () => {
+    planted('demo-quiet-basin', 'uuid-someone-else');
+    run({ hook_event_name: 'UserPromptSubmit' }, forkedEnv());
+    // NOT just the named row: attribute-on-CLAUDE_CODE_SESSION_ID-alone (drop
+    // the registry match) would leave `demo-quiet-basin.hookstate.json`
+    // absent while still writing SOME row's state file, named after the raw
+    // session id itself — a stranger attributed to a wrong row instead of to
+    // nobody. Scanning the whole registry for any `.hookstate.json` at all is
+    // what actually pins "attribution stays POSITIVE and measured" rather
+    // than merely "this one row stays untouched".
+    const wroteAnyHookstate = fs.readdirSync(REG()).some((n) => n.endsWith('.hookstate.json'));
+    expect(wroteAnyHookstate, 'no row anywhere was attributed').toBe(false);
+  });
+
+  it('matches a registry uuid file that carries a trailing newline — which every real one does', () => {
+    // Whole-branch review, F8: this loop now reads each row with `read -r var
+    // < file` instead of `$(cat file)`, to stop forking ~21 times per hook
+    // event on the hot path of exactly the forked sessions it serves. The one
+    // real behavioural risk of that substitution is the newline: a command
+    // substitution strips trailing newlines, and `ccd`'s own writers end every
+    // registry field with one, so a reader that kept the newline would match
+    // NOTHING on a real box while this suite — whose `planted` writes no
+    // newline — stayed green. `read -r` strips it too, and this pins that.
+    fs.writeFileSync(path.join(REG(), 'demo-quiet-basin.uuid'), 'uuid-1\n');
+    run({ hook_event_name: 'UserPromptSubmit' }, forkedEnv());
+    expect(hookstate('demo-quiet-basin')).toMatchObject({ sessionId: 'uuid-1', state: 'working' });
+  });
+
+  it('writes nothing when it has no session id to be attributed by, even beside an EMPTY row', () => {
+    planted('demo-quiet-basin', 'uuid-1'); planted('ghost', '');   // '' == '' is the match the `-n` guard refuses
+    run({ hook_event_name: 'UserPromptSubmit' }, { ...forkedEnv(), CLAUDE_CODE_SESSION_ID: '' });
+    expect(fs.readdirSync(REG()).some((n) => n.endsWith('.hookstate.json')), 'no row anywhere was attributed').toBe(false);
+  });
+
+  it('still prefers the pane when there is one', () => {
+    // Two rows: the pane names one, the session id matches the OTHER. The pane
+    // wins, so the fallback can never quietly re-attribute a live session.
+    planted('demo-quiet-basin', 'uuid-pane');
+    planted('other-row', 'uuid-1');
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(fs.existsSync(path.join(REG(), 'demo-quiet-basin.hookstate.json'))).toBe(true);
+    expect(fs.existsSync(path.join(REG(), 'other-row.hookstate.json'))).toBe(false);
+  });
+
+  it('is silent on both streams, and exits 0, with no pane and no match', () => {
+    // The file's own header contract. `runFull` is this suite's stdout+stderr
+    // runner, which asserts exit 0 once (see its own comment) rather than the
+    // implicit throw-on-nonzero-exit `run` relies on.
+    expect(runFull({ hook_event_name: 'UserPromptSubmit' }, forkedEnv()))
+      .toMatchObject({ stdout: '', stderr: '' });
   });
 });
 
@@ -434,8 +755,9 @@ describe('the fleet gate and failure polarity', () => {
 // read. `graphify update` and builds deliberately do NOT count: this is
 // measuring READS.
 describe('graphQueries — the read counter the console can see', () => {
-  const bash = (command: string): object =>
-    ({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command } });
+  const bash = (command: string, stdout: string = ANSWER): object =>
+    ({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command },
+      tool_response: bashResponse(stdout) });
 
   it('counts query, path and explain — each one, once', () => {
     run(bash('graphify query "who calls assembleFleet"'));
@@ -451,6 +773,83 @@ describe('graphQueries — the read counter the console can see', () => {
     expect(readState().graphQueries).toBe(1);
     run(bash('true; graphify explain "y"'));
     expect(readState().graphQueries).toBe(2);
+  });
+
+  // D-8046. MEASURED: 283 real queries went uncounted, because a session whose
+  // PATH has no graphify calls it by path and the leading class refused the `/`.
+  it('counts a path-qualified graphify, in every spelling the fleet uses', () => {
+    const spellings = [
+      '$HOME/.local/bin/graphify query "x"',
+      '"$HOME/.local/bin/graphify" query "x"',
+      "'/opt/tools/graphify' query x",
+      '~/.local/bin/graphify path "a" "b"',
+      '/opt/tools/graphify explain "y"',
+      'cd /tmp && "$HOME/.local/bin/graphify" query "x" | head -40',
+      'PATH="$HOME/.local/bin:$PATH" graphify query "x"',
+      'bash -lc "graphify query x"',
+      '(graphify query x)',
+      'out=$(graphify query x); echo "$out"',
+    ];
+    spellings.forEach((command, i) => {
+      run(bash(command));
+      expect(readState().graphQueries, `not counted: ${command}`).toBe(i + 1);
+    });
+  });
+
+  it('holds both boundaries on a path-qualified graphify', () => {
+    run(bash('/opt/tools/mygraphify query "x"'));
+    run(bash('"$HOME/.local/bin/mygraphify" query "x"'));
+    run(bash('$HOME/.local/bin/graphify update .'));
+    run(bash('"$HOME/.local/bin/graphify" --version'));
+    run(bash('/opt/tools/graphify query-builder run'));
+    run(bash('/opt/tools/graphify.bak query "x"'));
+    expect(readState().graphQueries).toBe(0);
+  });
+
+  // D-8046. MEASURED: 73 of 239 denied sessions never got a real answer. The
+  // failures that opened the gate are the ones that exit 0: a pipe into `head`,
+  // an `|| true`, an `|| echo`, and graphify's own exit-0 misses.
+  it.each([
+    ['the engine is not on PATH, behind a pipe', 'bash: line 1: graphify: command not found\n'],
+    ['the link is missing', 'bash: /x/graphify: No such file or directory\n'],
+    ['nothing came back at all', ''],
+    ['stderr was thrown away', '   \n'],
+    ['a query that matched nothing', 'No matching nodes found.\n'],
+    ['an explain that matched nothing', "No node matching 'x' found.\n"],
+    ['there is no graph here', 'error: graph file not found: /x/graph.json\n'],
+    ['a bad call', 'Usage: graphify query "<question>"\n'],
+    ['the engine crashed', 'Traceback (most recent call last):\n  File "x", line 1\n'],
+    ['the fallback spoke', 'graphify is not available, using grep\n'],
+    ['a signature inside a line, not at its head', 'grep hit: NODE x\nsaw Traversal: BFS\n'],
+  ])('does NOT count a query that exits 0 but answered nothing: %s', (_label, stdout) => {
+    run(bash('graphify query "x" 2>&1 | head -40', stdout));
+    expect(readState().graphQueries).toBe(0);
+  });
+
+  it.each([
+    ['query', 'graphify query "x"', ANSWER],
+    ['query, its header cut away by tail', 'graphify query "x" | tail -2',
+      'NODE a [src=a.ts loc=L1 community=0]\nEDGE a --calls [EXTRACTED]--> b\n'],
+    ['query, one note ahead of the answer', 'graphify query "x" 2>&1',
+      `[graphify] note: this graph uses the pre-#1504 node-ID scheme\n${ANSWER}`],
+    ['path', 'graphify path "a" "b"', 'Shortest path (1 hops):\n  a --calls [EXTRACTED]--> b\n'],
+    ['path, two nodes the graph says are apart', 'graphify path "a" "b"',
+      "No path found between 'a' and 'b'.\n"],
+    ['explain', 'graphify explain "a"', 'Node: a\n  ID:        a_id\n  Source:    a.ts L1\n'],
+  ])('counts every shape of a real answer: %s', (_label, command, stdout) => {
+    run(bash(command, stdout));
+    expect(readState().graphQueries).toBe(1);
+  });
+
+  it('does NOT count a query with no usable response on the event', () => {
+    const base = { hook_event_name: 'PostToolUse', tool_name: 'Bash',
+      tool_input: { command: 'graphify query "x"' } };
+    run(base);
+    run({ ...base, tool_response: ANSWER });
+    run({ ...base, tool_response: { stderr: ANSWER } });
+    run({ ...base, tool_response: { stdout: 7 } });
+    run({ ...base, tool_response: { ...bashResponse(ANSWER), interrupted: true } });
+    expect(readState().graphQueries).toBe(0);
   });
 
   it('does NOT count graphify update, a build, or a bare graphify', () => {
@@ -584,11 +983,16 @@ describe('graphQueries — the read counter the console can see', () => {
 // nobody asked.
 describe('the SessionStart graph card', () => {
   /** THE CENSUS FIXTURE IS WRITTEN BY THE SWEEP'S OWN WRITER (D-1337).
-   *  `_gs_row` and `_gs_finish` are lifted verbatim out of ccd/ccd-graph-sweep
-   *  and run in a bash subshell against this fixture HOME, because the hook is
-   *  a SECOND, hand-rolled reader of that schema (`.passes[].trees[]` carrying
-   *  `path`/`outcome`/`reason`) with nothing importable to couple it to the
-   *  writer — the shape D-306 is the scar from. Hand-written JSON here would
+   *  `_gs_emit` (the one builder of a row's JSON), `_gs_row`, `_gs_finish` and
+   *  the sweep's `declare -A K_…` lines are lifted verbatim out of
+   *  ccd/ccd-graph-sweep and run from a driver file against this fixture HOME,
+   *  the rows travelling as arguments, because the hook is
+   *  a SECOND, hand-rolled reader of that schema (since graph revision 2's
+   *  repository sweep, D-7350: `.passes[].repos[]`, one row per repository
+   *  carrying `source`/`outcome`/`reason`) with nothing importable to couple it
+   *  to the writer — the shape D-306 is the scar from. A row is given here by the
+   *  tree it is about and written for that tree's repository: `source` is the
+   *  realpath of its common dir, the key the hook selects by. Hand-written JSON here would
    *  let a `reason` -> `why` rename leave every suite green while the shipped
    *  card went permanently silent on the no-graph path. install-session-hooks
    *  .test.ts derives its event list from the hook's own `case` block for
@@ -607,16 +1011,31 @@ describe('the SessionStart graph card', () => {
    *  it. Call twice for two passes; the hook reads the LAST. */
   const sweepPass = (rows: { path: string; outcome: string; reason: string }[]): void => {
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
-    const script = [
+    const declares = fs.readFileSync(SWEEP, 'utf8').split('\n').filter((l) => /^declare -A K_/.test(l));
+    expect(declares.length, 'ccd-graph-sweep no longer declares its K_* state').toBeGreaterThan(0);
+    // The sweep's own top-level counter initialisers, verbatim (`GS_LINKED=0 …`, `GS_MDONE=0 …`): every counter
+    // `_gs_emit` reads must be among them, so a rename or a new counter cannot leave this driver behind.
+    const counters = fs.readFileSync(SWEEP, 'utf8').split('\n').filter((l) => /^GS_[A-Z]+=0 /.test(l));
+    const initialised = new Set(counters.flatMap((l) => [...l.matchAll(/(GS_[A-Z]+)=/g)].map((m) => m[1])));
+    for (const v of new Set([...liftFn('_gs_emit').matchAll(/\$\{?(GS_[A-Z_]+)/g)].map((m) => m[1]))) {
+      expect(initialised.has(v!), `ccd-graph-sweep no longer initialises ${v} at the top level`).toBe(true);
+    }
+    const driver = path.join(home, 'sweep-pass.sh');
+    fs.writeFileSync(driver, [
       'set -uo pipefail',
       'CENSUS="$HOME/.ccrc/graph-sweep.json"',
       'STARTED="2026-09-02T00:00:00Z"', 'PIN="0.9.9"', 'ROWS=()',
-      liftFn('_gs_row'), liftFn('_gs_finish'),
-      'while [ "$#" -gt 0 ]; do _gs_row "$1" "$2" "$3" 0; shift 3; done',
+      ...declares, ...counters,
+      liftFn('_gs_row'), liftFn('_gs_finish'), liftFn('_gs_emit'),
+      'n=0',
+      'while [ "$#" -gt 0 ]; do n=$((n+1)); K_RK["k$n"]=project-a-0123abcd; K_COMMON["k$n"]="$1"; K_OUTCOME["k$n"]="$2"; K_REASON["k$n"]="$3"; _gs_emit "k$n" >/dev/null; shift 3; done',
       '_gs_finish ok 0',
-    ].join('\n');
-    execFileSync('bash', ['-c', script, 'sweep',
-      ...rows.flatMap((r) => [r.path, r.outcome, r.reason])],
+    ].join('\n'));
+    const source = (tree: string): string => {
+      const gitDir = path.join(tree, '.git');
+      return fs.existsSync(gitDir) ? fs.realpathSync(gitDir) : gitDir;
+    };
+    execFileSync('bash', [driver, ...rows.flatMap((r) => [source(r.path), r.outcome, r.reason])],
       { env: { ...process.env, HOME: home }, encoding: 'utf8' });
   };
 
@@ -822,7 +1241,7 @@ describe('the SessionStart graph card', () => {
 
   it('prints NOTHING when the tree has no graph and the sweep never mentioned it', () => {
     const tree = path.join(home, 'tree');
-    gitTree(tree, 1);
+    gitTree(tree, 1); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so this subject's own silence is what is measured
     expect(run({ hook_event_name: 'SessionStart', cwd: tree })).toBe('');
   });
 
@@ -842,7 +1261,7 @@ describe('the SessionStart graph card', () => {
   // engine's stderr, or from a whole matched refusal line.
   it('clips a pathological census reason instead of injecting it whole', () => {
     const tree = path.join(home, 'tree');
-    gitTree(tree, 1);
+    gitTree(tree, 1); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so the bound measures this subject alone
     sweepPass([{ path: tree, outcome: 'failed', reason: 'x'.repeat(100_000) }]);
     const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
     expect(text).toContain('failed');
@@ -903,21 +1322,45 @@ describe('the SessionStart graph card', () => {
     // execFileSync THROWS on a non-zero exit, so a green run is the exit-0
     // assertion — the contract this whole file lives under.
     //
-    // The census row is what makes the `[ -d "$cwd" ]` guard MEASURABLE. With
-    // nothing seeded, deleting that guard is invisible: the no-graph branch is
-    // taken anyway, the census read finds no file, and the card stays silent —
-    // the same green. Seeded with a row FOR THIS PATH, a hook that skipped the
-    // directory check would print the sweep's line about a directory that is
-    // not there, and this assertion goes red.
+    // A census is present, so the no-graph branch has a file to read. Until GR7
+    // (D-7353) this row seeded a per-tree row FOR THIS PATH, which made the
+    // `[ -d "$cwd" ]` guard measurable through the hook's old-shape arm (read by
+    // path). That arm is retired with the sweep's rewrite live (GR4): the hook
+    // reads only repository rows, matched by the realpath of the tree's common
+    // dir, which a directory that is not there cannot have. The guard's own
+    // effect on the census line is therefore no longer observable here; the row
+    // keeps the exit-0-and-silent contract.
     const gone = path.join(home, 'gone');
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     fs.writeFileSync(path.join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({
-      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [
-        { path: gone, outcome: 'never-built', reason: 'no exclude entry', duration_ms: 3 },
-      ] }],
-    }));
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', repos: [] }],
+    })); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so this subject's own silence is what is measured
     expect(run({ hook_event_name: 'SessionStart', cwd: gone })).toBe('');
     expect(readState().state).toBe('done');
+  });
+
+  // GR7 (D-7353): the per-tree arm the hook kept while the sweep still wrote the
+  // old shape (GR4-interim) is retired. A last pass with no `repos[]` says
+  // nothing about this tree, so the card gives no census line: neither one the
+  // sweep ended before any repository (`paused`, `pass-locked`, `failed`) nor a
+  // pass of the retired per-tree shape that names THIS PATH, which the old arm
+  // read by path and printed. That second census is the retirement's proof, and
+  // the one per-tree spelling left in the tree (graph-r2-consumers names it).
+  it('a last pass with no repos[] gives no census line, even an old-shape row for this path', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so this subject's own silence is what is measured
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const census = path.join(home, '.ccrc', 'graph-sweep.json');
+    fs.writeFileSync(census, JSON.stringify({
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'paused' }],
+    }));
+    expect(run({ hook_event_name: 'SessionStart', cwd: tree }), 'a pass ended before any repository').toBe('');
+    fs.writeFileSync(census, JSON.stringify({
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [
+        { path: tree, outcome: 'refused', reason: 'no exclude entry', duration_ms: 3 },
+      ] }],
+    }));
+    expect(run({ hook_event_name: 'SessionStart', cwd: tree }), 'a retired per-tree row for this path').toBe('');
   });
 
   it('exits 0 and still prints a card when the tree is not a git repo', () => {
@@ -986,7 +1429,7 @@ describe('the SessionStart graph card', () => {
     plantGraph(tree, { built: first });
     const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
     expect(text).toContain('Search tools (Grep, Glob, shell grep/rg/find) are gated, '
-      + "and source-file reads are nudged, until this session's first graph query.");
+      + "and source-file reads are nudged, until this session's first answered graph query.");
     // …and the gate itself agrees, in the same tree, on the next call.
     const out = run({ hook_event_name: 'PreToolUse', tool_name: 'Grep',
       tool_input: { pattern: 'x' }, cwd: tree });
@@ -1046,9 +1489,9 @@ describe('the PreToolUse search gate (R5, D-1613)', () => {
   /** The spec's reason, spelled here so a drift in either direction is red. */
   const reasonFor = (nodes: number, fresh: string, k: number): string =>
     `graphify gate: this tree has a knowledge graph (${nodes} nodes, ${fresh}) and this session `
-    + 'has not queried it yet. Search tools open after one graph query — run: '
-    + '`graphify query "<your question in plain words>"` (`graphify path "<A>" "<B>"` for a '
-    + 'relationship, `graphify explain "<concept>"` for one concept). '
+    + 'has no answer from it yet. Search tools open after one graph query that answers — run: '
+    + `\`${GRAPH_RUN} query "<your question in plain words>"\` (\`${GRAPH_RUN} path "<A>" "<B>"\` for a `
+    + `relationship, \`${GRAPH_RUN} explain "<concept>"\` for one concept). `
     + `Denial ${k} of 3; after 3 the gate opens anyway.`;
 
   it('denies the first Grep in a fresh-graph tree, with the whole envelope byte-exact', () => {
@@ -1066,6 +1509,46 @@ describe('the PreToolUse search gate (R5, D-1613)', () => {
     // The denial is COUNTED, in the state file the hook was already writing.
     expect(readState().graphGateDenials).toBe(1);
     expect(readState().state, 'the deny path skipped the state write').toBe('working');
+  });
+
+  // D-8046. The bound is what keeps a session with no working graphify moving.
+  it('stays armed after a query that answered nothing, and still opens after 3', () => {
+    const tree = gatedTree();
+    const failed = { ...(query(tree) as Record<string, unknown>),
+      tool_response: bashResponse('bash: line 1: graphify: command not found\n') };
+    for (const k of [1, 2, 3]) {
+      run(failed);
+      expect(readState().graphQueries).toBe(0);
+      const j = deny(run(grepPre(tree)));
+      expect(j.hookSpecificOutput.permissionDecisionReason).toBe(reasonFor(NODES, 'fresh', k));
+    }
+    run(failed);
+    expect(run(grepPre(tree)), 'the bound of three no longer opens the gate').toBe('');
+    expect(readState().graphGateDenials).toBe(3);
+  });
+
+  // D-8046. The text a denied session copies has to run from a shell whose PATH
+  // carries neither `~/.local/bin` nor graphify, which is what fleet sessions
+  // have; and what it runs has to open the gate it was printed by.
+  it('prints a command that runs on any PATH and that the gate then counts', () => {
+    const tree = gatedTree();
+    const bin = path.join(home, '.local', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'graphify'),
+      `#!/bin/sh\nprintf '%s\\n' 'Traversal: BFS depth=2 | Start: [x] | 1 nodes found' "ran $1"\n`,
+      { mode: 0o755 });
+    const reason = String(deny(run(grepPre(tree))).hookSpecificOutput.permissionDecisionReason);
+    const shown = /`([^`]* query "<your question in plain words>")`/.exec(reason)?.[1];
+    expect(shown, 'the reason names no query command').toBeDefined();
+    const command = shown!.replace('<your question in plain words>', 'who calls what');
+    expect(reason, 'a machine-specific path reached the reason').not.toContain(home);
+    const out = execFileSync('/bin/sh', ['-c', command], { cwd: tree, encoding: 'utf8',
+      env: { HOME: home, PATH: '/usr/bin:/bin' } });
+    expect(out).toContain('ran query');
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command },
+      tool_response: bashResponse(out), cwd: tree });
+    expect(readState().graphQueries).toBe(1);
+    expect(run(grepPre(tree)), 'the printed command did not open the gate').toBe('');
   });
 
   it('is silent once the session has run one graphify query — the gate opens on the READ', () => {
@@ -1115,7 +1598,8 @@ describe('the PreToolUse search gate (R5, D-1613)', () => {
       // into the bound the next assertions depend on.
       fs.rmSync(stateFile());
     }
-    for (const cmd of ['vitest run | grep Tests', 'graphify query "x"', 'ls', 'echo find',
+    for (const cmd of ['vitest run | grep Tests', 'graphify query "x"',
+      `${GRAPH_RUN} query "find the grep"`, '"$HOME/.local/bin/graphify" query "x"', 'ls', 'echo find',
       'git status', 'cat f | ag x', 'grepper x', 'findutils --help', 'echo hi && grep x']) {
       expect(run(bashPre(cmd, tree)), `${cmd} was gated`).toBe('');
     }
@@ -1265,9 +1749,9 @@ describe('the PreToolUse Read nudge (R6, D-1745)', () => {
   const nudgeFor = (nodes: number | null, fresh: string): string =>
     'graphify: this tree has a knowledge graph ('
     + (nodes === null ? '' : `${nodes} nodes, `)
-    + `${fresh}) and this session has not queried it yet. `
-    + 'Before reading files to orient, run: `graphify query "<your question in plain words>"` '
-    + '(`graphify explain "<concept>"` for one concept). '
+    + `${fresh}) and this session has no answer from it yet. `
+    + `Before reading files to orient, run: \`${GRAPH_RUN} query "<your question in plain words>"\` `
+    + `(\`${GRAPH_RUN} explain "<concept>"\` for one concept). `
     + 'Reading a named file to edit it needs no query.';
 
   it('nudges the first source Read in a fresh-graph tree, with the whole envelope byte-exact', () => {
@@ -1716,7 +2200,7 @@ describe('the co-tenant subject', () => {
   // and can source nothing.
   it('the hook, ccd and shared agree on the supervised-freshness window', () => {
     const hook = fs.readFileSync(path.resolve(__dirname, '../../ccd/session-hook.sh'), 'utf8');
-    const ccd = fs.readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const api = fs.readFileSync(path.resolve(__dirname, '../../shared/api.ts'), 'utf8');
     const h = /CCRC_FRESH_S=(\d+)/.exec(hook);
     const c = /now - sup >= 0 && now - sup < (\d+)/.exec(ccd);
@@ -2141,6 +2625,5877 @@ describe('the R7 counters', () => {
   });
 });
 
+describe('the compaction card — which context is compacting (spec §3.0)', () => {
+  it('PreCompact writes the set: scope main, the parent transcript, files null, the rule\'s inputs — no graph, no subagents/, no stderr', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);                                  // a tree with NO graph
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const r = runFull(preCompact(tree, transcript, 'auto'));
+    expect(r).toEqual({ stdout: '', stderr: '' });
+    expect(readState().state).toBe('working');
+    const set = readSet();
+    expect(set).toMatchObject({ v: 1, scope: 'main', agent: null, transcript, parentLive: null, liveAgents: 0,
+      cwd: tree, built: null, fresh: null, steered: false, files: null, stats: null });
+    expect(Number.isInteger(set.at)).toBe(true);
+    expect(fs.existsSync(cardFile()), 'no graph, so no card').toBe(false);
+  });
+
+  it('one LIVE agent beside a quiet parent is that subagent, with its id, its path and the inputs the rule saw', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript, agents } = plantSession({ lines: workLines(tree), parentAge: DEAD,
+      subagents: [{ id: 'a43142b934b4bf501', lines: [tl.user('hi')], age: LIVE }] });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet()).toMatchObject({ scope: 'subagent', agent: 'a43142b934b4bf501',
+      transcript: agents['a43142b934b4bf501'], parentLive: false, liveAgents: 1 });
+  });
+
+  it('finds a Workflow agent one directory deeper — subagents/workflows/<run>/', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript, agents } = plantSession({ lines: workLines(tree),
+      subagents: [{ id: 'ad18df71e1499fc22', lines: [tl.user('hi')], age: LIVE, under: 'workflows/wf_d5df1d76-69e' }] });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet()).toMatchObject({ scope: 'subagent', agent: 'ad18df71e1499fc22',
+      transcript: agents['ad18df71e1499fc22'] });
+  });
+
+  it('a DEAD agent file beside a live parent is main — liveness, not existence', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree), parentAge: LIVE,
+      subagents: [{ id: 'a1', lines: [tl.user('x')], age: DEAD }] });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet()).toMatchObject({ scope: 'main', agent: null, transcript, liveAgents: 0, parentLive: null });
+  });
+
+  it('two live contexts are AMBIGUOUS — a live parent beside a live agent, or two live agents — and the set says which', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const both = plantSession({ lines: workLines(tree), parentAge: LIVE,
+      subagents: [{ id: 'a1', lines: [tl.user('x')], age: LIVE }] });
+    run(preCompact(tree, both.transcript, 'auto'));
+    expect(readSet()).toMatchObject({ scope: 'ambiguous', agent: null, transcript: null, files: null,
+      parentLive: true, liveAgents: 1 });
+    fs.rmSync(setFile());
+    const fanout = plantSession({ sid: 'sess-2', lines: workLines(tree), parentAge: DEAD, subagents: [
+      { id: 'a1', lines: [tl.user('x')], age: LIVE },
+      { id: 'a2', lines: [tl.user('y')], age: LIVE, under: 'workflows/wf_1' },
+    ] });
+    run(preCompact(tree, fanout.transcript, 'auto'));
+    expect(readSet()).toMatchObject({ scope: 'ambiguous', agent: null, transcript: null, parentLive: null, liveAgents: 2 });
+  });
+
+  it('a MANUAL trigger is main whatever is live — only the main thread takes /compact — and records no liveness', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree), parentAge: LIVE,
+      subagents: [{ id: 'a1', lines: [tl.user('x')], age: LIVE }] });
+    run(preCompact(tree, transcript, 'manual'));
+    expect(readSet()).toMatchObject({ scope: 'main', transcript, parentLive: null, liveAgents: null });
+  });
+
+  it('OVERLAP: an unconsumed set inside the in-flight window makes the next PreCompact ambiguous and removes the card', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet().scope).toBe('main');
+    fs.writeFileSync(cardFile(), `${readSet().at}\ngraphify card — planted\n`);
+    run(preCompact(tree, transcript, 'auto'));            // a second compaction, the first unfinished
+    expect(readSet()).toMatchObject({ scope: 'ambiguous', transcript: null });
+    expect(fs.existsSync(cardFile()), 'the card of the overlapped compaction is gone').toBe(false);
+    // …but a set OLDER than the window is a compaction that never finished, not overlap
+    const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+    fs.utimesSync(setFile(), old, old);
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet().scope).toBe('main');
+  });
+
+  it('the published set SAYS whether the verdict was overlap-forced — `overlap` is false on an ordinary one and true on a degraded one', () => {
+    // This tree carries NO graph, so `_hook_gate_tree` refuses and PreCompact
+    // returns before the helper fork — which makes the jq publication itself
+    // observable, the one place the `false` arm of this member can be read.
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet(), 'an ordinary verdict publishes the member as false').toMatchObject({ scope: 'main', overlap: false });
+    run(preCompact(tree, transcript, 'auto'));
+    // Scope alone cannot tell these apart: a measured ambiguous verdict and a
+    // forced one both read "ambiguous", and §3.0 prescribes different records
+    // for them. This member is the only channel that distinguishes them.
+    expect(readSet(), 'the forced verdict says WHY').toMatchObject({ scope: 'ambiguous', overlap: true });
+    expect(readSet().liveAgents, 'while the liveness under it is still the MAIN measurement').toBe(0);
+  });
+
+  it('sweeps this id\'s AGED EXACT FAMILIES — and the two legacy grammars of the transition — never a coincidental `*compact*.tmp` match', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const reg = path.join(home, '.cc-sessions');
+    const at = (n: string): string => path.join(reg, n);
+    // RETARGETED (D-2605). The pre-round-7 fixture planted rollback-family
+    // basenames and asserted against `-name ".$id.*compact*.tmp" -delete`; both
+    // the producers and the sweep are gone. What replaces them is the §3.4
+    // target inventory, matched by GRAMMAR after the literal `.<id>.` strip.
+    const swept = [
+      '.demo-quiet-basin.compactset.999.compact-1-999-1-2.stage',
+      '.demo-quiet-basin.compactcard.999.compact-1-999-1-2.stage',
+      '.demo-quiet-basin.compactset.999.compact-1-999-1-2.stage.part',
+      '.demo-quiet-basin.compactset.999.compact-1-999-1-2.hook-write.tmp',
+      '.demo-quiet-basin.compactcard.999.compact-1-999-1-2.session-claim.tmp',
+      '.demo-quiet-basin.compactpost.999.1.2.claim',
+      '.demo-quiet-basin.compactions.lock-init.AbCdEf',
+      '.demo-quiet-basin.compactions.lock-open.999.1.2',
+      '.demo-quiet-basin.compactserved-source.compact-1-999-1-2.AbCdEf',
+      // THE FINAL SERVED MARKER, moved here from `kept` (D-2605 fix round 1).
+      // §3.4's inventory cell says BOTH things — "PostCompact only under
+      // validated final lock; age under later lock" — and the second half was
+      // unbuilt, so a compaction whose PostCompact never came (a missing or
+      // timed-out helper, a refused shape gate) left one permanent file on a
+      // live row, reclaimed only by row destruction. The young control below
+      // is what keeps this from reaching a marker a settlement may still read.
+      '.demo-quiet-basin.compactserved.compact-1-999-1-2',
+      '.demo-quiet-basin.generation-init.AbCdEf',
+      '.demo-quiet-basin.generation-read.999.1.2',
+      '.demo-quiet-basin.compactions-stage.999.1.2.tmp',
+      '.demo-quiet-basin.compactions-snapshot.999.1.2.tmp',
+      // THE TRANSITION ALLOWANCE, both legacy grammars. The set temp carries
+      // the id TWICE — `_hook_write_atomic`'s pre-D-2605 `.$id.$$.${1##*/}.tmp`
+      // expands that way — which is why the bare `<pid>.compactset.tmp` an
+      // earlier draft assumed would have matched nothing on a real box.
+      '.demo-quiet-basin.999.demo-quiet-basin.compactset.tmp',
+      '.demo-quiet-basin.999.compactcard-claim.tmp',
+    ];
+    const kept = [
+      // PERMANENT: it spans row generations and safe slug reuse by design.
+      '.demo-quiet-basin.compactions.lock',
+      // WHICH GUARD EXCLUDES WHICH, measured rather than asserted — the comment
+      // that stood here credited the `.<id>.` strip with keeping these two out,
+      // and it does not: the sweep's OUTER `find "$REG" -maxdepth 1 -name
+      // ".$id.*"` never hands them over. Measured over a directory holding both,
+      // `find . -maxdepth 1 -name '.demo-quiet-basin.*'` returns ONLY the
+      // dotted-nested name; the hyphen neighbour and the other id are excluded
+      // by the GLOB, before any strip runs.
+      '.demo-quiet-basin-x.compactset.999.compact-1-999-1-2.stage',
+      '.other-id.compactset.999.compact-1-999-1-2.stage',
+      // THESE are the strip's own subjects, and they were absent. A project
+      // DIRECTORY name may hold dots (the hazard `_reg_purge`'s header
+      // measures), so `demo-quiet-basin.x-y` is a legal sibling id whose
+      // artifacts DO reach `_hook_family_sweepable` through the glob above —
+      // and only the literal `.<id>.` strip keeps them. Measured on the shipped
+      // matcher: exact-strip leaves `x-y.compactset.999.compact-1-999-1-2.stage`
+      // unrecognised (KEEP), while a substring matcher over the whole basename
+      // answers SWEEP — i.e. it would delete another LIVE session's stage,
+      // claim and marker under this row's lock, with 260/260 green.
+      '.demo-quiet-basin.x-y.compactset.999.compact-1-999-1-2.stage',
+      '.demo-quiet-basin.x-y.compactcard.999.compact-1-999-1-2.session-claim.tmp',
+      '.demo-quiet-basin.x-y.compactions.lock-open.999.1.2',
+      '.demo-quiet-basin.x-y.compactserved.compact-1-999-1-2',
+      // …AND THE NEIGHBOUR'S TWO LEGACY-GRAMMAR NAMES (r3 A-I2), which the
+      // strip alone does NOT keep out. Both transition arms begin with a bare
+      // `*`, so before the decimal-head anchor these two matched after the
+      // strip and one ordinary PreCompact for this row DELETED a live
+      // neighbour's residue — measured, and the exact hazard `_ws_private_family`
+      // was anchored against (D-2801). The positive control is the pair in
+      // `swept` above: this row's OWN `<pid>`-headed legacy names, which must
+      // still be reclaimed, so the anchor cannot be satisfied by refusing
+      // everything.
+      '.demo-quiet-basin.x-y.999.compactcard-claim.tmp',
+      '.demo-quiet-basin.x-y.777.demo-quiet-basin.x-y.compactset.tmp',
+      // …and the GRAMMAR's own subject: a name that begins `compact` and is in
+      // no declared family. An over-broad `compact*) return 0` arm swallows it
+      // while every other assertion here stays green.
+      '.demo-quiet-basin.compactfoo',
+      // A name in no family at all: an unrecognised aged dotfile is LEFT
+      // ALONE, which is the direction a sweep must fail in.
+      '.demo-quiet-basin.something-nobody-declared',
+    ];
+    // THE YOUNG CONTROLS, in both directions: a stage a helper may still be
+    // writing, and a marker whose own PostCompact may still be coming. Age is
+    // the whole gate, and the second one is what shows the new
+    // `compactserved.*` arm did not simply start deleting live markers.
+    const young = ['.demo-quiet-basin.compactset.4242.compact-9-4242-1-2.stage',
+      '.demo-quiet-basin.compactserved.compact-9-4242-1-2'];
+    for (const n of [...swept, ...kept, ...young]) fs.writeFileSync(at(n), 'x');
+    const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+    for (const n of [...swept, ...kept]) fs.utimesSync(at(n), old, old);
+    run(preCompact(tree, transcript, 'auto'));
+    for (const n of swept) expect(fs.existsSync(at(n)), `aged exact family swept: ${n}`).toBe(false);
+    for (const n of kept) expect(fs.existsSync(at(n)), `NOT ours to sweep: ${n}`).toBe(true);
+    for (const n of young) expect(fs.existsSync(at(n)), `young, so not yet anyone's to reclaim: ${n}`).toBe(true);
+  });
+
+  it('a served session (empty transcript_path) and an unreadable path write no set', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    run({ ...preCompact(tree, ''), transcript_path: '' });
+    expect(fs.existsSync(setFile())).toBe(false);
+    run(preCompact(tree, path.join(home, 'nowhere', 'gone.jsonl')));
+    expect(fs.existsSync(setFile())).toBe(false);
+    expect(readState().state, 'the state write is not gated on the card').toBe('working');
+  });
+
+  it('with no `find` on PATH nothing may be said — no set, the state written, no stderr', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const r = runFull(preCompact(tree, transcript, 'auto'), { PATH: minimalPath(['find']) });
+    expect(r).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(setFile())).toBe(false);
+    expect(readState().state).toBe('working');
+  });
+
+  it('an agent file whose name is unspeakable is refused — nothing is written', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree),
+      subagents: [{ id: 'x y`z', lines: [tl.user('hi')], age: LIVE }] });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(fs.existsSync(setFile())).toBe(false);
+  });
+
+  it('the operator file ~/.ccrc/compact-card-off silences the arm', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
+    run(preCompact(tree, transcript));
+    expect(fs.existsSync(setFile())).toBe(false);
+    expect(readState().state).toBe('working');
+  });
+
+  it('with a fresh graph the set carries built and fresh, still files null before the helper exists', () => {
+    const tree = cardTree();                            // no plantHelper(): Task 6 adds the card
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const set = readSet();
+    expect(set.built).toMatch(/^[0-9a-f]{40}$/);
+    expect(set.fresh).toBe('fresh');
+    expect(set.files).toBeNull();
+  });
+
+  it('the set is written whole or not at all — no temp survives, and the temp is dot-prefixed with the pid', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const names = fs.readdirSync(path.join(home, '.cc-sessions'));
+    expect(names.filter((n) => n.includes('compactset'))).toEqual(['demo-quiet-basin.compactset']);
+    // THE PIN, MOVED ONTO THE NEW CONSTRUCTION in the same commit that migrated
+    // the producer (D-2605): the temp is no longer `.$id.$$.${1##*/}.tmp` — a
+    // name matched only by a `*compact*.tmp` glob — but the §3.4 target family
+    // `compactset.<pid>.<nonce>.hook-write.tmp` after the literal `.<id>.`
+    // prefix, which PreCompact's sweep and `_reg_purge`'s exact cleanup can
+    // both recognise by grammar.
+    expect(fs.readFileSync(HOOK, 'utf8')).toContain('local tmp="$REG/.$id.$base.$$.$2.hook-write.tmp"');
+  });
+
+  it('the constants are the spec\'s, the total is DERIVED, and the shape predicate is spelled once', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src).toMatch(/^COMPACT_CARD_MAX_CHARS=4000$/m);
+    expect(src).toMatch(/^CARD_MAX_CHARS=2400$/m);
+    expect(src).toMatch(/^CARD_TOTAL_MAX_CHARS=\$\(\( CARD_MAX_CHARS \+ 1 \+ COMPACT_CARD_MAX_CHARS \)\)$/m);
+    expect(src).toMatch(/^COMPACT_CARD_MAX_AGE=1200$/m);
+    expect(src).toMatch(/^COMPACT_LIVE_S=120$/m);
+    expect(src).toMatch(/^COMPACT_HELPER_TIMEOUT=8$/m);
+    expect(src).toMatch(/^COMPACT_WORKSET_MAX=12$/m);
+    expect(2400 + 1 + 4000 + 1 + Number(src.match(/^ *ROSTER_CARD_MAX_CHARS=(\d+)$/m)?.[1])).toBeLessThan(10000);  // the emitter's REAL maximum (standing + compact + D4 roster) under the harness's spill (2.1.266 `Pdr=1e4`)
+    expect(src.match(/^COMPACT_SHAPE_PRED=/gm)).toHaveLength(1);
+  });
+
+  it('the anchor\'s slot joins the sum: 1500 + 1 + 2400 + 1 + 4000 + 1 + 2048 = 9951, under 10000, with 49 characters left (C38)', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    // A declaration line may carry several (`ANCHOR_CARD_MAX_CHARS=1500 ANCHOR_PROMPT_MAX_CHARS=600 ...`, as the start report's).
+    const num = (name: string): number => Number(new RegExp(`^(?:[A-Z_]+=\\S+ )*${name}=(\\d+)(?: |$)`, 'm').exec(src)?.[1]);
+    const [anchor, card, compact, roster] = ['ANCHOR_CARD_MAX_CHARS', 'CARD_MAX_CHARS', 'COMPACT_CARD_MAX_CHARS', 'ROSTER_CARD_MAX_CHARS'].map(num);
+    expect([anchor, card, compact, roster], 'all four read from the hook\'s own source').toEqual([1500, 2400, 4000, 2048]);
+    // The emitter joins each slot to the next with one character: the anchor first and a newline (fix round 1, F9), then
+    // the standing clip, the compact card and the roster card, each after a space.
+    const sum = anchor! + 1 + card! + 1 + compact! + 1 + roster!;
+    expect(sum).toBe(9951);
+    expect(10_000 - sum, 'the characters left under Claude Code\'s cap on hook context').toBe(49);
+    // The server fits the anchor under the same number (`shared/continuity-card.ts`), so its answer never meets this clip.
+    expect(src).toContain('[ -z "${4:-}" ] || text="${4:0:$ANCHOR_CARD_MAX_CHARS}${text:+$\'\\n\'$text}"');
+  });
+});
+
+
+describe('the compaction card — PreCompact and the helper (spec §3.1)', () => {
+  it('with a fresh graph and the helper, PreCompact writes the card (nonce first) and the mined set, and prints nothing (unarmed: PreCompact prints only when armed and scope main)', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    const set = readSet();
+    expect(set).toMatchObject({ scope: 'main', transcript, steered: false, parentLive: null, liveAgents: null,
+      files: [{ path: 'server/src/pane/statusline.ts', tag: 'touched', count: 1 },
+        { path: 'server/src/watch.ts', tag: 'touched', count: 1 }],
+      stats: { tokens: 2, resolved: 2, ambiguous: 0, outside: 0, nomatch: 0 } });
+    const compactCard = readCard();
+    expect(compactCard.nonce).toBe(set.nonce);
+    expect(typeof set.at).toBe('number');
+    expect(set.nonce).toMatch(/^compact-/);
+    expect(compactCard.text).toContain('graphify card — this context\'s working set at compaction, from graphify-out/ (built at');
+    expect(compactCard.text).toContain('- server/src/pane/statusline.ts [touched]');
+    expect(readState().state).toBe('working');
+  });
+
+  it('a subagent\'s card is mined from ITS transcript, and says so in the header', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({
+      lines: [tl.toolUse('Read', { file_path: path.join(tree, 'server/src/fleet.ts') })], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.toolUse('Read', { file_path: path.join(tree, 'pwa/src/lib/models.ts') })], age: LIVE }],
+    });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet()).toMatchObject({ scope: 'subagent', agent: 'a1', files: [{ path: 'pwa/src/lib/models.ts', tag: 'touched', count: 1 }] });
+    const { text } = readCard();
+    expect(text).toContain('(subagent a1)');
+    expect(text).toContain('pwa/src/lib/models.ts');
+    expect(text).not.toContain('server/src/fleet.ts');
+  });
+
+  it('an ambiguous scope writes no card even with a graph and the helper', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree), parentAge: LIVE,
+      subagents: [{ id: 'a1', lines: [tl.user('x')], age: LIVE }] });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet()).toMatchObject({ scope: 'ambiguous', files: null });
+    expect(fs.existsSync(cardFile())).toBe(false);
+  });
+
+  it('a graph further behind HEAD than the gate allows writes the set but no card', () => {
+    const tree = path.join(home, 'tree'); plantHelper();
+    const first = gitTree(tree, 12);                         // HEAD is 11 commits past the graph
+    plantGraph(tree, { built: first, nodes: NODES, content: GRAPH });
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    expect(readSet()).toMatchObject({ files: null, fresh: '11 commits behind HEAD' });
+    expect(fs.existsSync(cardFile())).toBe(false);
+  });
+
+  it('a failing helper, a missing helper, and a helper printing garbage each leave the hook\'s own set', () => {
+    const tree = cardTree();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));                        // no helper planted
+    expect(readSet().files).toBeNull();
+    fs.rmSync(setFile());
+    plantHelper(); stub('node', 'printf garbage; exit 1');
+    run(preCompact(tree, transcript));
+    expect(readSet().files).toBeNull();
+    expect(fs.existsSync(cardFile())).toBe(false);
+  });
+
+  it('the helper runs through `timeout` with the constant, and the argv is the spec\'s', () => {
+    const tree = cardTree(); plantHelper();
+    stub('timeout', [HELPER_ONLY, 'printf \'%s\\n\' "$*" > "$HOME/timeout-argv"; shift; exec "$@"'].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const argv = fs.readFileSync(path.join(home, 'timeout-argv'), 'utf8');
+    expect(argv.startsWith('8 node ')).toBe(true);
+    expect(argv).toContain(' card --transcript ');
+    expect(argv).toContain(` --transcript ${transcript} `);
+    expect(argv).toContain(' --max-chars 4000 --max-files 12 ');
+    expect(argv).toContain(` --scope main --at ${readSet().at} --nonce ${readSet().nonce}`);
+    expect(argv).not.toContain('--steer');                   // stage 1: never
+    expect(fs.existsSync(cardFile())).toBe(true);
+  });
+
+  it('records working hookstate before the bounded helper starts and rolls back its exact hook-owned document after a nonzero helper', () => {
+    const tree = cardTree(); plantHelper();
+    const original = path.join(home, 'hook-before-helper.compactset');
+    stub('timeout', [
+      HELPER_ONLY,
+      'state="$HOME/.cc-sessions/demo-quiet-basin.hookstate.json"',
+      'test "$(jq -r .state "$state")" = working || exit 91',
+      `cp "$HOME/.cc-sessions/demo-quiet-basin.compactset" "${original}"`,
+      'shift; "$@"',
+      'exit 71',
+    ].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(setFile(), 'utf8')).toBe(fs.readFileSync(original, 'utf8'));
+    expect(readSet().files).toBeNull();
+    expect(fs.existsSync(cardFile())).toBe(false);
+    expect(readState().state).toBe('working');
+  });
+
+  it('resolves gtimeout when timeout is absent, with the local resolver shape pinned', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src).toContain(`_hook_timeout() {
+  local bin
+  for bin in timeout gtimeout; do
+    if command -v "$bin" >/dev/null 2>&1; then
+      "$bin" "$@"
+      return $?
+    fi
+  done
+  return 127
+}`);
+    const tree = cardTree(); plantHelper();
+    stub('gtimeout', [HELPER_ONLY, 'printf \'%s\\n\' "$*" > "$HOME/gtimeout-argv"; shift; exec "$@"'].join('\n'));
+    const bin = minimalPath(['timeout']);
+    fs.copyFileSync(path.join(home, 'bin', 'gtimeout'), path.join(bin, 'gtimeout'));
+    fs.chmodSync(path.join(bin, 'gtimeout'), 0o755);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript), { PATH: bin });
+    expect(fs.readFileSync(path.join(home, 'gtimeout-argv'), 'utf8')).toMatch(/^8 node /);
+    expect(fs.existsSync(cardFile())).toBe(true);
+  });
+
+  it('with no timeout or gtimeout on PATH (a BSD userland) the WHOLE HOOK is inert — no set, no card, no hookstate, silence', () => {
+    // A DESIGN COLLISION, RESOLVED IN THE TMUX BOUND'S FAVOUR (merge fix M1).
+    // This row used to assert that the arm ran and stopped at the helper: the
+    // set written, `state: working`, `_hook_timeout` returning 127 because
+    // neither deadline name resolves, and the swallowed helper call leaving the
+    // hook-owned set standing for PostCompact. That is no longer what this
+    // userland gets. The tmux bound sits ABOVE the event switch: the hook
+    // resolves `timeout`/`gtimeout` into `$hooktmo` BEFORE it reads the event,
+    // and with neither present it does not ask `tmux display-message -p -t "$TMUX_PANE" '#S'`
+    // at all — `$tname` stays empty and `[[ "$tname" == cc-?* ]] || exit 0`
+    // ends the run before there is a session id to write anything under.
+    // "A hook that cannot bound its own tmux call must not make it" is the
+    // later and more explicit rule, and it is about the hot path of every tool
+    // call in ~20 live sessions, so it wins over this arm's older degrade.
+    //
+    // WHAT THE OLD ROW PINNED IS NOW UNREACHABLE BY THIS ROUTE, not merely
+    // untested here: `_hook_timeout`'s `return 127` is guarded by the same
+    // `command -v timeout || command -v gtimeout` predicate the bound above
+    // uses, so any box that reaches this arm at all has already resolved one of
+    // them. The 127 CONTRACT still holds for what it can still see (a `node`
+    // that is missing or a helper that refuses — `a failing helper, a missing
+    // helper, and a helper printing garbage each leave the hook's own set`),
+    // and `resolves gtimeout when timeout is absent` still pins the resolver's
+    // macOS arm.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // `runFull` asserts exit 0 itself — the hook's own header contract, kept on
+    // the path that writes nothing at all.
+    const r = runFull(preCompact(tree, transcript), { PATH: minimalPath(['timeout']) });
+    expect(r).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(setFile()), 'no set — the arm was never reached').toBe(false);
+    expect(fs.existsSync(cardFile()), 'and no card').toBe(false);
+    // NEVER WRITTEN, not "unchanged": `beforeEach` plants the generation file
+    // and the tmux stub and nothing else, so this fixture HOME carries no
+    // hookstate before the run and the stronger spelling is the honest one.
+    expect(fs.existsSync(stateFile()), 'and no hookstate — the exit is above every state write').toBe(false);
+    // NON-VACUITY, the shape main's own bound test uses: the SAME payload on
+    // the SAME fixture, with the ordinary PATH (which carries `timeout`),
+    // writes the state and the set. Without this the row passes for a hook
+    // that is broken outright.
+    run(preCompact(tree, transcript));
+    expect(readState().state, 'the control: with a deadline on PATH the hook runs').toBe('working');
+    expect(fs.existsSync(setFile()), 'and the arm publishes its set').toBe(true);
+  });
+
+  it('a transcript with no tool calls: the set says mined-empty (files []), no card', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: [tl.user('hello')] });
+    run(preCompact(tree, transcript));
+    expect(readSet().files).toEqual([]);
+    expect(fs.existsSync(cardFile())).toBe(false);
+  });
+
+  it('the file header declares the TWO waits it allows — the R2 amendment, and D-2605\'s lock', () => {
+    // THE SLICE GREW WITH THE HEADER: D-2605 added a SECOND declared exception
+    // (the bounded stable-lock acquisition), and a 16-line window no longer
+    // reaches the end of the amendment this row is asserting.
+    const head = fs.readFileSync(HOOK, 'utf8').split('\n').slice(0, 24).join('\n');
+    expect(head).toContain('COMPACT_HELPER_TIMEOUT');
+    expect(head).toContain('locally resolved');
+    expect(head).toContain('`timeout`/`gtimeout` deadline');
+    expect(head).toContain('COMPACT_LOCK_WAIT');
+    expect(head, 'and it says a miss publishes nothing').toContain('publishes nothing');
+  });
+});
+
+describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
+  /** A card+set pair on disk exactly as Task 6 leaves them, without running
+   *  the helper: numeric `at` is measurement; `nonce` owns the first line. */
+  const plantPair = (at: number, text: string, opts: { nonce?: string; setNonce?: string } = {}): void => {
+    // WELL-FORMED BY DEFAULT (D-2605). §3.3 step 2 validates the set's nonce
+    // against `^compact-[0-9]+-[0-9]+-[0-9]+-[0-9]+$` BEFORE it can name the
+    // marker path, so the old `nonce-<at>` fixture spelling is now refused by
+    // the arm — correctly, and not as an accident of this fixture.
+    const nonce = opts.setNonce ?? `compact-${at}-1-2-3`;
+    fs.writeFileSync(setFile(), JSON.stringify({ v: 1, at, nonce, scope: 'main', agent: null,
+      transcript: '/t.jsonl', parentLive: null, liveAgents: 0, cwd: null, built: null, fresh: null,
+      steered: false, served: false, files: null, stats: null }) + '\n');
+    fs.writeFileSync(cardFile(), `${opts.nonce ?? nonce}\n${text}\n`);
+  };
+  /** The nonce marker §3.3 step 5 publishes instead of rewriting `set.served`
+   *  — `$REG/.<id>.compactserved.<nonce>` — and the list of every marker on
+   *  disk, which is what "exactly one racer served" is now asserted against. */
+  const markerFile = (nonce: string): string => path.join(home, '.cc-sessions', `.demo-quiet-basin.compactserved.${nonce}`);
+  const markers = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'))
+    .filter((n) => n.startsWith('.demo-quiet-basin.compactserved.'));
+  const CARD_TEXT = 'graphify card — this context\'s working set at compaction, from graphify-out/ (built at deadbeef, fresh):\n- a.ts [edited]\nBlast radius: 0 files import or call something in these 1 files.\nRe-derive any node with `graphify explain "<symbol>"`; cite path:symbol:line rather than re-reading whole files.';
+  /** `card`, plus the stderr assertion the 13 sibling PreCompact tests already
+   *  make via `runFull` and this describe was missing (fix-round M2). */
+  const cardChecked = (payload: object, env: Record<string, string> = {}): string => {
+    const r = runFull(payload, env);
+    expect(r.stderr).toBe('');
+    return card(r.stdout);
+  };
+
+  it('serves the card as the fourth subject on compact, strips the nonce, deletes the card, writes no hookstate (D-306)', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const { nonce, text } = readCard();
+    const setBytes = fs.readFileSync(setFile());
+    const out = cardChecked(compactStart(tree, transcript));
+    expect(out).toContain('graphify: this tree has a knowledge graph');       // the standing subject
+    expect(out).toContain('graphify card — this context');                    // the fourth
+    expect(out.endsWith(text.trimEnd())).toBe(true);
+    expect(out).not.toContain(`${nonce}\n`);
+    expect(out.includes(` ${nonce} `), 'the nonce line reached the model').toBe(false);
+    expect(fs.existsSync(cardFile()), 'consume-once').toBe(false);
+    expect(fs.existsSync(setFile()), 'the set is PostCompact\'s to consume').toBe(true);
+    // THE FACT OF SERVING IS A SEPARATE NAME, not a rewrite of the set
+    // (D-2605): the canonical set is never rewritten, so its BYTES are the
+    // assertion, and the marker's existence is what `measure` derives
+    // `served` from under the final lock.
+    expect(fs.existsSync(markerFile(nonce)), 'the fact of serving is a marker for this exact nonce').toBe(true);
+    expect(fs.readFileSync(setFile()), 'the canonical set is byte-identical — nothing rewrote it').toEqual(setBytes);
+    expect(readSet().nonce, 'the set still owns the pair').toBe(nonce);
+    expect(typeof readSet().at, 'and still carries its numeric measurement').toBe('number');
+    expect(readState().event, 'the compact SessionStart wrote state after all').toBe('PreCompact');
+    // consume-once: a second compact SessionStart has no fourth subject
+    const again = cardChecked(compactStart(tree, transcript));
+    expect(again).not.toContain('graphify card');
+  });
+
+  // ── §3.3 step 2's SAFE-NONCE GATE, its REJECTION leg ───────────────────
+  // Replacing the gate with `:` left session-hook at 260/260 (mutant M21), and
+  // the line IS executed — changing its anchor from `$` to `\z` reds 8 tests
+  // (M22) — so the rejection leg was genuinely unpinned rather than dead code.
+  // What it gates is a PATH COMPONENT: the nonce is interpolated into the
+  // claim name and into the marker and its source, so a nonce carrying `/` or
+  // `..` names a path OUTSIDE `$REG`. No code change — the gate is correct; the
+  // fixture is what was missing.
+  const everyFileUnder = (dir: string): string[] => {
+    const out: string[] = [];
+    const walk = (d: string): void => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const f = path.join(d, e.name);
+        if (e.isDirectory() && !e.isSymbolicLink()) walk(f); else out.push(f);
+      }
+    };
+    walk(dir);
+    return out;
+  };
+
+  it.each([
+    ['a path traversal', '../../escape'],
+    ['a trailing-`z` near-miss', 'compact-1-2-3-4z'],
+    ['an embedded slash', 'compact-1-2-3/4'],
+  ])('REFUSES to serve on %s nonce — no card, no claim anywhere under $HOME, no marker', (_label, badNonce) => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT, { setNonce: badNonce, nonce: badNonce });
+    const before = fs.readFileSync(cardFile());
+    const out = cardChecked(compactStart(tree, '/t.jsonl'));
+    expect(out, 'nothing was served').not.toContain('graphify card');
+    // CONSUME-ONCE IS NOT TRIGGERED EITHER: the gate precedes the atomic claim,
+    // so the card is neither claimed nor deleted.
+    expect(fs.readFileSync(cardFile()), 'the card is untouched').toEqual(before);
+    // THE WHOLE OF $HOME, not just `$REG` — the point of the gate is that an
+    // unsafe component names a path this arm never intended to write.
+    expect(everyFileUnder(home).filter((f) => f.includes('session-claim.tmp')),
+      'no claim was created anywhere').toEqual([]);
+    expect(everyFileUnder(home).filter((f) => f.includes('compactserved')),
+      'no marker and no marker source, anywhere').toEqual([]);
+  });
+
+  it('CONTROL: the SAME fixture with a well-formed nonce serves, claims and marks', () => {
+    // Without this the legs above could be a fixture that never serves for some
+    // other reason — a stale card, a missing set, a broken plant.
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT);
+    const out = cardChecked(compactStart(tree, '/t.jsonl'));
+    expect(out, 'the same fixture DOES serve when the nonce is safe').toContain('graphify card');
+    expect(fs.existsSync(cardFile()), 'and the card is consumed').toBe(false);
+    expect(markers(), 'and exactly one marker is published').toHaveLength(1);
+  });
+
+  it('EEXIST at the marker is idempotent ONLY after the incumbent validates (§3.3 step 5)', () => {
+    // The arm published its marker with `link "$src" "$marker" || true` and
+    // then dropped the source UNCONDITIONALLY. If the pathname is already
+    // occupied by something that is not a marker — a symlink, a directory — the
+    // `link` fails EEXIST, the source is discarded, NO marker is published, and
+    // PostCompact's bare `[ -e … ]` lookup then derived `served` from that
+    // object: `true` for a symlink to anything, `false` for a dangling one.
+    // Both ends now spell one definition of what a marker IS.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const { nonce } = readCard();
+    // A SYMLINK TO A REAL FILE, so a bare `-e` would answer TRUE — the
+    // direction that fabricates `served:true` for a compaction nobody served.
+    const decoy = path.join(home, '.cc-sessions', 'decoy');
+    fs.writeFileSync(decoy, 'x');
+    fs.symlinkSync(decoy, markerFile(nonce));
+    cardChecked(compactStart(tree, transcript));
+    // The occupant is untouched — this arm never replaces, repairs or unlinks
+    // what it did not publish.
+    expect(fs.lstatSync(markerFile(nonce)).isSymbolicLink(), 'the occupant stands').toBe(true);
+    // AND NO SOURCE IS LEFT: the disjoint private name goes on every handled
+    // result, EEXIST included.
+    expect(fs.readdirSync(path.join(home, '.cc-sessions')).filter((n) => n.includes('compactserved-source')))
+      .toEqual([]);
+  });
+
+  it('…and a following PostCompact reads that occupant as served:false', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const { nonce } = readCard();
+    const decoy = path.join(home, '.cc-sessions', 'decoy');
+    fs.writeFileSync(decoy, 'x');
+    fs.symlinkSync(decoy, markerFile(nonce));
+    cardChecked(compactStart(tree, transcript));
+    const SUM = ['1. Task', 'did a thing', '', '3. Files and Code Sections:',
+      '- server/src/pane/statusline.ts was edited', '', '4. Errors and fixes', 'none', ''].join('\n');
+    expect(runFull(postCompact(tree, transcript, SUM))).toEqual({ stdout: '', stderr: '' });
+    const j = fs.readFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.compactions'), 'utf8')
+      .split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(j, 'the record still commits').toHaveLength(1);
+    expect(j[0]!['served'], 'a symlink is not a marker, whatever it points at').toBe(false);
+  });
+
+  it('CONTROL: an ordinary serve publishes a REGULAR marker and reads back served:true', () => {
+    // Without this the two legs above could be an arm that never publishes and
+    // a lookup that never answers true.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const { nonce } = readCard();
+    cardChecked(compactStart(tree, transcript));
+    expect(fs.lstatSync(markerFile(nonce)).isFile(), 'a regular file, not a symlink').toBe(true);
+    const SUM = ['1. Task', 'did a thing', '', '3. Files and Code Sections:',
+      '- server/src/pane/statusline.ts was edited', '', '4. Errors and fixes', 'none', ''].join('\n');
+    expect(runFull(postCompact(tree, transcript, SUM))).toEqual({ stdout: '', stderr: '' });
+    const j = fs.readFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.compactions'), 'utf8')
+      .split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(j[0]!['served']).toBe(true);
+  });
+
+  // fix-round M1: a bare read-then-`rm` lets every one of N concurrent
+  // SessionStart(compact) racers read the card before the first deletes it —
+  // the main thread and its own live subagents can all hit this arm close
+  // together. Measured against the PRE-fix code, 8 real concurrent hook
+  // PROCESSES (spawn, not spawnSync — a loop of blocking calls can never
+  // overlap and would never race) against one planted card, 3 isolated
+  // trials: 2 of 3 served the card to 2 racers instead of 1 (the third trial
+  // happened to serialize cleanly — the race is real but not every trial
+  // hits it). Contradicts spec §3.3 step 3, "a card is never served to two
+  // contexts". Fixed by an atomic `mv` claim: exactly one racer's `mv` can
+  // win the pathname — 5/5 isolated runs of THIS test serve exactly once
+  // after the fix, deterministically.
+  it('consume-once is ATOMIC: N concurrent SessionStart(compact) racers against one card serve exactly once (M1)', async () => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT);
+    const setBytes = fs.readFileSync(setFile());
+    const outs = await runConcurrent(compactStart(tree, '/t.jsonl'), 8);
+    for (const o of outs) expect(o.stderr, 'every racer, silent on stderr').toBe('');
+    const served = outs.filter((o) => o.stdout.includes('graphify card'));
+    expect(served, 'exactly one of the 8 racers served the card').toHaveLength(1);
+    expect(fs.existsSync(cardFile()), 'consumed, not left behind').toBe(false);
+    // RETARGETED, NOT LOOSENED: this row pins CONSUME-ONCE ATOMICITY, so the
+    // marker is counted rather than merely checked for existence — exactly one
+    // marker for exactly one racer — and the canonical set is asserted
+    // byte-identical, which is the stronger statement the old `served:true`
+    // stamp could not make because it WAS a rewrite.
+    expect(markers(), 'exactly one racer published a marker').toHaveLength(1);
+    expect(markers()[0], 'and it is the pair\'s own nonce').toBe(`.demo-quiet-basin.compactserved.${readSet().nonce}`);
+    expect(fs.readFileSync(setFile()), 'no racer rewrote the canonical set').toEqual(setBytes);
+  });
+
+  // I4: the brief's mutation #8b (return 1 -> return 0) was CONFOUNDED —
+  // breaking jq entirely reds the same assertions `card()`'s own "the hook
+  // printed nothing" check trips on, before the `served` line is ever
+  // reached. This is the real single-site pin: a jq shim that fails ONLY the
+  // SessionStart-envelope program (matched by text, not by call order) and
+  // execs the REAL jq for every other call this file makes (three other card
+  // builders, the served/set-doc rewrites, the nonce regex uses no jq at
+  // all). Reading stdout directly (not through `card()`) avoids the same
+  // confound the brief's version had.
+  it('a jq that fails ONLY the envelope build stamps served:false and prints nothing — the single-site pin for the emitter\'s return code (I4)', () => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT);
+    const real = realTool('jq');
+    stub('jq', `for a in "$@"; do\n  case "$a" in\n    *hookSpecificOutput*SessionStart*) exit 1 ;;\n  esac\ndone\nexec ${sh(real)} "$@"`);
+    const r = runFull(compactStart(tree, '/t.jsonl'));
+    expect(r.stdout.trim(), 'the broken envelope printed nothing').toBe('');
+    expect(r.stderr).toBe('');
+    expect(markers(), 'no print, no marker').toEqual([]);
+    expect(fs.existsSync(cardFile()), 'still consumed independent of the print').toBe(false);
+  });
+
+  it('never serves it on startup, resume or clear — a card describes the compacted context and nothing else', () => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT);
+    for (const source of ['startup', 'resume', 'clear']) {
+      const out = cardChecked({ hook_event_name: 'SessionStart', source, cwd: tree });
+      expect(out, source).not.toContain('graphify card');
+      expect(fs.existsSync(cardFile()), source).toBe(true);
+    }
+  });
+
+  it('an aged card is REMOVED, not served', () => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT);
+    const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+    fs.utimesSync(cardFile(), old, old);
+    const out = cardChecked(compactStart(tree, '/t.jsonl'));
+    expect(out).not.toContain('graphify card');
+    expect(fs.existsSync(cardFile())).toBe(false);
+  });
+
+  it('a crossed pair is not served: another nonce, or no set at all — the card stays, served stays false', () => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT, { nonce: '2' });
+    expect(cardChecked(compactStart(tree, '/t.jsonl'))).not.toContain('graphify card');
+    expect(fs.existsSync(cardFile())).toBe(true);
+    expect(markers(), 'a crossed pair publishes no marker').toEqual([]);
+    fs.rmSync(setFile());
+    expect(cardChecked(compactStart(tree, '/t.jsonl'))).not.toContain('graphify card');
+    expect(fs.existsSync(cardFile())).toBe(true);
+  });
+
+  // M3: `[[ "$body" != "$raw" ]]` is real, not a no-op like the deleted
+  // `[ -n "$body" ]` — without it the nonce ITSELF would be served as the
+  // card body (`body` would equal `raw`, i.e. the whole file, i.e. the
+  // nonce line). Only reachable when the bounded read finds NO newline at
+  // all: the file IS the nonce, with nothing after it.
+  it('a nonce with no text after it is not served — the card stays', () => {
+    const tree = cardTree();
+    const nonce = 'compact-1-1-2-3';
+    fs.writeFileSync(setFile(), JSON.stringify({ v: 1, at: 1, nonce, scope: 'main', agent: null,
+      transcript: '/t.jsonl', parentLive: null, liveAgents: 0, cwd: null, built: null, fresh: null,
+      steered: false, served: false, files: null, stats: null }) + '\n');
+    fs.writeFileSync(cardFile(), nonce);   // no trailing newline: the file IS the nonce
+    const out = cardChecked(compactStart(tree, '/t.jsonl'));
+    expect(out).not.toContain('graphify card');
+    expect(fs.existsSync(cardFile()), 'restored, not consumed').toBe(true);
+    expect(fs.readFileSync(cardFile(), 'utf8')).toBe(nonce);
+    // ITS OWN CASE, retargeted rather than deleted: a body-less nonce restores
+    // the card and serves nothing, so there is no marker either.
+    expect(markers(), 'a body-less nonce publishes no marker').toEqual([]);
+  });
+
+  // M3: `command -v find` is real, not a no-op — without it, `find "$f"
+  // -mmin ...` fails to run at all, `$(...)` captures nothing, and the age
+  // check's `|| { rm -f "$f"; ... }` fires as though the card were aged out,
+  // silently deleting every card on a box without `find` regardless of age.
+  it('with no find on PATH the card is left untouched, nothing served', () => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT);
+    const out = cardChecked(compactStart(tree, '/t.jsonl'), { PATH: minimalPath(['find']) });
+    expect(out).not.toContain('graphify card');
+    expect(fs.existsSync(cardFile()), 'find absent: must not be silently deleted').toBe(true);
+  });
+
+  it('the operator file silences the fourth subject and leaves the card on disk', () => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT);
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
+    expect(cardChecked(compactStart(tree, '/t.jsonl'))).not.toContain('graphify card');
+    expect(fs.existsSync(cardFile())).toBe(true);
+  });
+
+  it('TWO CLIPS: the standing subjects are clipped at CARD_MAX_CHARS exactly (D-1899\'s fixture) and the card is intact after them', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    plantGraph(tree, { built: 'deadbee', report: false });
+    fs.writeFileSync(path.join(tree, 'graphify-out', 'GRAPH_REPORT.md'),
+      `# Graph Report - demo  (2026-09-02)\n\n## Summary\n`
+      + `- ${'9'.repeat(3000)} nodes · 15645 edges · 423 communities\n`);
+    const standing = cardChecked(compactStart(tree, '/t.jsonl'));   // no card on disk: the standing clip alone
+    expect(standing.length).toBe(2400);
+    plantPair(1, CARD_TEXT);
+    const out = cardChecked(compactStart(tree, '/t.jsonl'));
+    expect(out.slice(0, 2400)).toBe(standing);
+    expect(out.charAt(2400)).toBe(' ');
+    expect(out.slice(2401)).toBe(CARD_TEXT);
+    expect(out.length).toBeLessThanOrEqual(2400 + 1 + 4000);
+  });
+
+  it('a pathological card is clipped at COMPACT_CARD_MAX_CHARS and the sum at CARD_TOTAL_MAX_CHARS', () => {
+    const tree = cardTree();
+    plantPair(1, 'x'.repeat(100_000));
+    const out = cardChecked(compactStart(tree, '/t.jsonl'));
+    expect(out.length).toBeLessThanOrEqual(6401);
+    expect(out.length - out.indexOf(' x')).toBeLessThanOrEqual(4001);
+  });
+
+  // I2(a): CARD_TOTAL_MAX_CHARS's VALUE cannot redden — max(text) is
+  // 2400+1+4000=6401, exactly the constant, so deleting the clip or raising
+  // the constant 10x is invisible to any output-shaped assertion (only a
+  // three-site mutation — text AND both source ceilings — would fire it).
+  // Defence in depth is the intended design (spec §3.3 step 4: the sum clip
+  // is a pin on the DERIVATION, never a third budget), so this pins the
+  // SOURCE spelling instead of the runtime effect the value can never prove.
+  it('CARD_TOTAL_MAX_CHARS is spelled as the derivation, not a hand-kept number (I2a)', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src).toContain('CARD_TOTAL_MAX_CHARS=$(( CARD_MAX_CHARS + 1 + COMPACT_CARD_MAX_CHARS ))');
+  });
+
+  // I2(b): spec:189's HARNESS_CONTEXT_SPILL_CHARS (10000 — 2.1.266 spills
+  // SessionStart context to disk above this, per the emitter's own header
+  // comment) named a "ceilings drift" row that no task in this plan owned —
+  // confirmed absent from every file and every task before this test. Reads
+  // the two ceilings from the HOOK'S OWN SOURCE (not hand-copied numbers) so
+  // raising either one reddens this, independent of CARD_TOTAL_MAX_CHARS's
+  // own unreddenable value above.
+  it('the two clip ceilings stay under the harness context-spill budget (I2b, spec:189)', () => {
+    const HARNESS_CONTEXT_SPILL_CHARS = 10_000;
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const cardMax = Number(/^CARD_MAX_CHARS=(\d+)$/m.exec(src)?.[1]);
+    const compactMax = Number(/^COMPACT_CARD_MAX_CHARS=(\d+)$/m.exec(src)?.[1]);
+    const anchorMax = Number(/^ANCHOR_CARD_MAX_CHARS=(\d+)(?: |$)/m.exec(src)?.[1]);
+    expect(Number.isFinite(cardMax) && Number.isFinite(compactMax) && Number.isFinite(anchorMax), 'the constants found in source').toBe(true);
+    expect(anchorMax + cardMax + compactMax).toBeLessThan(HARNESS_CONTEXT_SPILL_CHARS);
+  });
+
+  it.runIf(process.env['CCRC_PERF'] === '1')('costs no more than 4x the cheap PostToolUse arm with a card present, on a 200-row registry — its OWN ratio (perf job only, D-6929)', () => {
+    // D-1898's method (see the startup-arm test above for why an absolute ms
+    // number is the wrong shape): the compact arm interleaved with the cheap
+    // arm in ONE run, its own array, its own p95 — SUPERSEDED to median below
+    // (I3). Original finding (2026-09-11, p95 estimator, 15+15 isolated runs):
+    // shipped 2.257-4.057 (p95-over-15-runs 3.326), a two-jq-fork mutated band
+    // 2.292-3.740 (p95 3.672) — overlapping bands, the two-fork mutation never
+    // crossing R=4. Read at the time as "this row has no power here"; fix-round
+    // review (I3) corrected the DIAGNOSIS: the row has real power (see the
+    // true-positive measurement below), the ESTIMATOR was the defect.
+    //
+    // WHY p95 WAS THE WRONG ESTIMATOR: p95 of n=20 is `s[18]`, the
+    // SECOND-LARGEST of only 20 samples — one noisy outlier (iteration 0 is a
+    // cold-start outlier: 258 ms vs ~90 ms typical) owns the statistic. On
+    // this loaded box (`<fleet-host>`, 16 cores, load average ~34 — this box runs
+    // the live fleet at the same time, unlike D-1898's quieter sample) that
+    // made the RATIO OF p95s noisy. RE-MEASURED 2026-09-11 with warm-up added
+    // and the estimator switched to median: 15 isolated shipped runs gave
+    // 2.926-3.375 (mean 3.089), a spread of 14.5% of the mean against p95's
+    // earlier 58.2% — 0/15 false positives (none crossed R=4). A LARGER
+    // mutation (ten extra no-op `jq -n 'empty'` forks in `_hook_compact_card`,
+    // five times the original two-fork probe) gave 4.071-4.679 (mean 4.391)
+    // over 10 isolated runs — 10/10 true positives, cleanly separated from
+    // the shipped band. The two-jq-fork mutation's signal genuinely sits
+    // inside this row's noise floor UNDER EVERY ESTIMATOR (unchanged by this
+    // fix — a ~2-fork cost is simply too small against this box's variance to
+    // detect with 20 samples); the ten-fork measurement proves the row still
+    // has real power for a regression an order of magnitude bigger, so R=4
+    // and the row itself stand — median replaces p95, nothing else changes.
+    //
+    // D-1898's sibling row (~line 548) is DELIBERATELY NOT touched: it was
+    // separately measured and argued on its own (quieter) sample, and
+    // generalizing an estimator fix from THIS row's noisier sample to that
+    // one without measuring it there would repeat this repo's own lesson
+    // about not applying one sample's fix to a different one blind.
+    //
+    // What this row was never meant to catch stands too: the mutations Step 7
+    // actually lists (delete the nonce compare, delete the age find, delete
+    // the consume-once `rm`, etc.) are correctness mutations pinned by the
+    // other rows in this describe, not by the ratio.
+    //
+    // RE-MEASURED AND RE-ARGUED FOR D-2605 (2026-09-14), because Task 9 is the
+    // one change that measurably PERTURBS this arm: it adds roughly six to
+    // eight external-binary children per invocation — the lock-open alias
+    // `link`+`rm`, the `flock`, the generation-read alias `link`+`rm`, and the
+    // marker source `mktemp`+`link`+`rm`, every one of which `type -t` answers
+    // `file` for — plus, on a contended row, up to COMPACT_LOCK_WAIT_SERVE of
+    // real waiting.
+    //
+    // THE BOUND WAS NOT RAISED. R stays 4, and the argument is a fresh sample
+    // rather than the old one carried forward. 15 isolated runs on the
+    // post-Task-9 arm (fleet box, load ~7): 2.867-3.324, median 3.108, mean
+    // 3.108, spread 14.7% of the mean — 0/15 crossed R=4, and the band sits
+    // essentially where the pre-Task-9 one did (2.926-3.375, mean 3.089). The
+    // added children are small against this arm's ~90 ms baseline, and an
+    // UNCONTENDED `flock -w` returns immediately, so the cost lands inside the
+    // noise the estimator already absorbs.
+    //
+    // AND THE POWER IS RE-PROVED IN THE SAME ACT, on the same arm: the same
+    // ten-extra-fork mutation measured above gives 4.126-4.509 (median 4.279,
+    // mean 4.273) over 10 isolated runs — 10/10 true positives, cleanly
+    // separated from the shipped band. Raising the bound to make a green is
+    // the repair this row's own D-2549 comment exists to forbid; the sample is
+    // what says it does not need one.
+    const reg = path.join(home, '.cc-sessions');
+    const now = Math.floor(Date.now() / 1000);
+    for (let i = 0; i < 200; i++) {
+      const id = `row-${i}`;
+      fs.writeFileSync(path.join(reg, `${id}.uuid`), `uuid-${id}`);
+      fs.writeFileSync(path.join(reg, `${id}.project`), i < 40 ? 'alpha' : `proj-${i}`);
+      fs.writeFileSync(path.join(reg, `${id}.supervised`), String(now - 5));
+    }
+    fs.writeFileSync(path.join(reg, 'demo-quiet-basin.uuid'), 'uuid-1');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-basin.project'), 'alpha');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-basin.supervised'), String(now - 5));
+    const tree = cardTree();
+    // WARM-UP (I3): iteration 0's cold start (process/OS caches, not yet
+    // touched by this test) measured as an outlier (258 ms vs ~90 ms typical
+    // for later iterations) — one untimed pass of both arms before the timed
+    // loop, so every array entry is a steady-state measurement.
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+    plantPair(0, CARD_TEXT);
+    run(compactStart(tree, '/t.jsonl'));
+    const cheapTimes: number[] = [];
+    const compactTimes: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const t0 = process.hrtime.bigint();
+      run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+      cheapTimes.push(Number(process.hrtime.bigint() - t0) / 1e6);
+      plantPair(i + 1, CARD_TEXT);
+      const t1 = process.hrtime.bigint();
+      run(compactStart(tree, '/t.jsonl'));
+      compactTimes.push(Number(process.hrtime.bigint() - t1) / 1e6);
+    }
+    // MEDIAN, not p95 (I3): p95 of n=20 is `s[18]`, the SECOND-LARGEST value —
+    // one noisy outlier owns it, and on this loaded box (<fleet-host>, load ~34)
+    // that made the ratio itself noisy: run-to-run spread of the p95/p95
+    // ratio was far wider than median/median's (measured below). This row's
+    // own power to catch a REGRESSION was unaffected by the swap (see the
+    // measurement below); D-1898's sibling row at line ~548 is DELIBERATELY
+    // NOT touched — it was separately measured and argued on its own sample
+    // (a quieter one), and applying an estimator fix measured on THIS row's
+    // noisier sample to that one blind would be exactly the error this repo
+    // already has a memory about (a-shared-deadline-hides-serialization's
+    // sibling lesson: don't generalize one sample's fix to another's).
+    const median = (xs: number[]): number => {
+      const s = [...xs].sort((a, b) => a - b);
+      const mid = Math.floor(s.length / 2);
+      return s.length % 2 === 1 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
+    };
+    // THE BOUND IS PER-PLATFORM, AND ONLY THE DARWIN ARM IS NEW (round M4).
+    // R=4 is a FLEET-BOX ratio and the whole argument above is a fleet-box
+    // sample; the macOS runner is a different machine and the row measured 4.64
+    // there, on `test-macos` at ab08bd92 — a red that says nothing about the
+    // hook. THREE Darwin observations, all on `macos-latest` and all real:
+    //   4.6368  `test-macos`, the whole-suite run, at ab08bd92
+    //   3.3083  `test-macos`, the whole-suite run, at b856a939 — cheap-median
+    //           68.5 ms, compact-median 226.7 ms
+    //   3.5427  `probe-macos`, this one case almost alone on the runner, at
+    //           b856a939 — cheap-median 73.5 ms, compact-median 260.3 ms
+    // AND THE SPREAD IS NOT A LOAD EFFECT, which is what the third observation
+    // corrects: the two extremes, 3.31 and 4.64, are BOTH whole-suite runs, and
+    // the near-idle leg lands BETWEEN them. So this is run-to-run variance of
+    // the runner itself — 3.31-4.64 across three runs, ~35% of the mean,
+    // against the fleet box's 14.7% within one sample — and no amount of
+    // quieting the leg would narrow it. 8 is ~1.7x the worst of the three,
+    // which is the headroom a machine that variable needs before a
+    // slow-but-healthy leg reads as a regression — and it is a BOUND, not a
+    // skip: the row still
+    // fails there on anything an order of magnitude bigger, which is the size
+    // of regression its own power measurement (the ten-extra-fork mutation,
+    // 4.13-4.51 on the fleet box) says it can see.
+    // THE LINUX BOUND IS UNTOUCHED, deliberately: raising the bound that is
+    // measured to make a different platform green is the repair this row's own
+    // D-2549 comment exists to forbid, and the fleet box is what ships.
+    const bound = IS_DARWIN ? 8 : 4;
+    const ratio = median(compactTimes) / median(cheapTimes);
+    expect(ratio, `R=${ratio.toFixed(4)} on ${process.platform} (cheap ${median(cheapTimes).toFixed(1)} ms,`
+      + ` compact ${median(compactTimes).toFixed(1)} ms) against a bound of ${bound}`).toBeLessThan(bound);
+  });
+
+  // ── §3.3 STEP 2's "REGULAR/NON-SYMLINK CARD AND CANONICAL SET" ────────
+  // The sentence is normative and the serve arm was the one arm that did not
+  // implement it: both of its guards were `[[ -f … && -r … ]]` with no `! -L`,
+  // and `-f` DEREFERENCES. Measured on the shipped arm with exactly this
+  // fixture: a symlink standing at `$REG/<id>.compactcard` passed the guard,
+  // `mv -f "$f" "$claim"` renamed THE SYMLINK onto the no-clobber placeholder,
+  // `IFS= read -r -N` followed it, and the target's body was emitted into the
+  // model's `additionalContext` because the target's first line satisfied the
+  // set's nonce. PreCompact, PostCompact's marker read and the PostCompact
+  // settlement all already ask `-f && ! -L`; this is the two ends of the card
+  // contract spelling ONE definition of what a card IS, as the two ends of the
+  // marker already do.
+  //
+  // SAME-UID-ONLY, which is why it is a hardening and not a boundary: the
+  // fleet is one UNIX user and same-UID is attribution. The sentence is
+  // normative regardless, and every sibling arm implements it.
+  it('A SYMLINK AT THE CANONICAL CARD IS NOT A CARD — not claimed, not read through, not deleted', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const { nonce } = readCard();
+    // The planted target: line 1 is the REAL set's nonce, so the only thing
+    // standing between it and the model is the regular-file guard.
+    const target = path.join(home, 'planted-not-a-card');
+    const BODY = 'SECRET-BODY-LINE-that-is-not-a-card';
+    fs.writeFileSync(target, `${nonce}\n${BODY}\n`);
+    const targetBytes = fs.readFileSync(target);
+    fs.rmSync(cardFile());
+    fs.symlinkSync(target, cardFile());
+
+    const out = runFull(compactStart(tree, transcript));
+    expect(out.stderr, 'and the arm is silent about it').toBe('');
+    expect(out.stdout, 'the target\'s body never reaches `additionalContext`').not.toContain(BODY);
+    expect(fs.lstatSync(cardFile()).isSymbolicLink(),
+      'the symlink is neither consumed by the `mv` nor deleted by the aged branch').toBe(true);
+    expect(fs.readFileSync(target), 'and the object it points at is byte-identical').toEqual(targetBytes);
+  });
+
+  it('A SYMLINK AT THE CANONICAL SET IS NOT A SET — the nonce is not read through it', () => {
+    // THE SECOND SUBJECT of the same §3.3 step 2 sentence, and it needs its own
+    // fixture: measured, the card-guard fixture above stays GREEN when `! -L`
+    // is deleted from the SET guard alone, because it never reaches that line.
+    // Here the card is an ordinary regular file and the SET is the symlink, so
+    // the only thing between the planted nonce and the served card is the set
+    // guard. Without `! -L` the arm reads the nonce through the link and serves.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const setBytes = fs.readFileSync(setFile());
+    const cardBytes = fs.readFileSync(cardFile());
+    const target = path.join(home, 'planted-not-a-set');
+    fs.writeFileSync(target, setBytes);
+    fs.rmSync(setFile());
+    fs.symlinkSync(target, setFile());
+
+    const out = runFull(compactStart(tree, transcript));
+    expect(out.stderr, 'the arm is silent about it').toBe('');
+    expect(out.stdout, 'no card is served off a set read through a symlink')
+      .not.toContain('graphify card — this context');
+    expect(fs.lstatSync(setFile()).isSymbolicLink(), 'and the symlink still stands').toBe(true);
+    expect(fs.readFileSync(cardFile()), 'the card is neither claimed nor consumed').toEqual(cardBytes);
+  });
+
+  it('CONTROL: a REGULAR card at the same pathname, same nonce, still serves and is still consumed', () => {
+    // The discriminator for the guard above: without it, an arm that served
+    // nothing ever would satisfy that test. Same fixture, same body, the only
+    // difference being that the object at the canonical pathname is a regular
+    // file rather than a symlink to one.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const { nonce } = readCard();
+    const BODY = 'SECRET-BODY-LINE-that-is-not-a-card';
+    fs.writeFileSync(cardFile(), `${nonce}\n${BODY}\n`);
+
+    const out = runFull(compactStart(tree, transcript));
+    expect(out.stderr).toBe('');
+    expect(card(out.stdout), 'a regular card at that pathname is served').toContain(BODY);
+    expect(fs.existsSync(cardFile()), 'and consumed — the claim renamed it away').toBe(false);
+  });
+});
+
+// ── D-2605: the permanent stable lock (spec §3.4, "Stable lock") ──────────
+// The whole of D-2605's ownership story rests on ONE mutex per registry row,
+// and on it being the SAME inode for every owner. The three properties below
+// are what make that true and are each pinned here: canonical is published by
+// `link` off a private `mktemp` source and never opened at its own pathname;
+// every acquisition opens a private hard-link ALIAS and unlinks it once the FD
+// is held, so no acquisition ever has a create-capable operation at canonical;
+// and the bounded wait is the acquire helper's FIRST POSITIONAL PARAMETER, so
+// `COMPACT_LOCK_WAIT_SERVE` (the one acquisition a human waits on) and
+// `COMPACT_LOCK_WAIT` (every other) coexist through one code path.
+describe('the compaction card — the permanent stable lock (spec §3.4)', () => {
+  const lockFile = (): string => path.join(home, '.cc-sessions', '.demo-quiet-basin.compactions.lock');
+  const regNames = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'));
+
+  /** Hold the row's permanent lock from a REAL process for `ms` ms. Resolves
+   *  only once the child reports it HAS the lock, so the racing arm starts
+   *  against a genuinely held mutex rather than a hoped-for one — the
+   *  `a-shared-deadline-hides-serialization` shape, avoided by waiting for the
+   *  holder's own acknowledgement instead of sleeping a guessed interval. */
+  const holdLock = async (ms: number): Promise<() => void> => {
+    fs.closeSync(fs.openSync(lockFile(), 'a'));
+    const child = spawn('bash', ['-c',
+      `exec {g}<>"$1" || exit 1; flock "$g" || exit 1; echo held; exec sleep ${ms / 1000}`, '_', lockFile()]);
+    let out = '';
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error('the holder never took the lock')), 10_000);
+      child.stdout.on('data', (d: Buffer) => { out += d.toString('utf8'); if (out.includes('held')) { clearTimeout(t); res(); } });
+      child.on('error', (e) => { clearTimeout(t); rej(e); });
+    });
+    return () => { try { child.kill('SIGKILL'); } catch { /* already gone */ } };
+  };
+
+
+  /** A FRESH ACQUIRER, from outside the hook entirely: the only way to ask
+   *  whether the row's mutex is actually free. Returns GOT or BLOCKED. */
+  const freshAcquire = (waitS: number): string => {
+    const r = spawnSync('bash', ['-c',
+      'exec 9<>"$1" || exit 1; if flock -w "$2" 9; then echo GOT; else echo BLOCKED; fi',
+      '_', lockFile(), String(waitS)], { encoding: 'utf8', timeout: (waitS + 10) * 1000 });
+    return (r.stdout ?? '').trim();
+  };
+
+  it('NOTHING MAY BE BACKGROUNDED inside compact SessionStart\'s retained-lock section — both directions, measured', () => {
+    // §5's round-9 row. The serve arm RETAINS its lock descriptor past
+    // `_hook_compact_card`'s own return (`COMPACT_SERVE_FD`), and a held
+    // `{fd}<>` descriptor is inherited across fork/exec — the flock lifts only
+    // when EVERY referencing descriptor closes — so one child started inside
+    // that section and outliving it pins the ROW's mutex for the child's whole
+    // life. Nothing measured this: a `sleep 5 &` inside the section reds only
+    // the compact cost-ratio row, whose subject is COST and whose own comment
+    // forbids raising its bound, so a future regression here would surface as a
+    // performance failure naming the wrong cause.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+
+    // THE CONTROL FIRST, on the shipped arm: every child inside the section is
+    // forked and reaped there, so the mutex is free the moment the arm returns.
+    run(preCompact(tree, transcript));
+    const served = runFull(compactStart(tree, transcript));
+    expect(served.stdout, 'the card was served, so the RETAINED-lock path really ran').not.toBe('');
+    expect(freshAcquire(2), 'the shipped arm leaves the row free').toBe('GOT');
+
+    // …AND THE OTHER DIRECTION, which is what makes the control a measurement.
+    // `find` is forked by the locked body itself (the card's age check); the
+    // stub leaves a child behind that outlives the arm. The orphan is not
+    // inside the hook's source at all — it is what an added `&` would produce.
+    // AGE THE UNCONSUMED SET FIRST, or the second leg is VACUOUS — measured:
+    // the first cycle's set is still standing (SessionStart consumes the CARD,
+    // not the set), so the next PreCompact is overlap-forced, removes the card
+    // and publishes none, and `_hook_compact_card_locked` then returns at its
+    // `[[ -f "$f" ]]` test BEFORE it ever forks `find`. The orphan would never
+    // be started and the leg would pass for the wrong reason.
+    const stale = Math.floor(Date.now() / 1000) - 1200 - 60;
+    fs.utimesSync(setFile(), stale, stale);
+    run(preCompact(tree, transcript));
+    expect(fs.existsSync(cardFile()), 'a card really was republished').toBe(true);
+    stub('find', [
+      `${sh(realTool('sleep'))} 5 >/dev/null 2>&1 &`,
+      `exec ${sh(realTool('find'))} "$@"`,
+    ].join('\n'));
+    const second = runFull(compactStart(tree, transcript));
+    expect(second.stdout, 'and the retained-lock path really ran again').not.toBe('');
+    expect(freshAcquire(2), 'a child that outlives the section keeps the ROW locked').toBe('BLOCKED');
+  }, 90_000);
+  it('the two waits are constants, and the acquire helper takes its wait as its FIRST positional', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src).toMatch(/^COMPACT_LOCK_WAIT=5$/m);
+    expect(src).toMatch(/^COMPACT_LOCK_WAIT_SERVE=2$/m);
+    expect(src.match(/^COMPACT_LOCK_WAIT=/gm)).toHaveLength(1);
+    expect(src.match(/^COMPACT_LOCK_WAIT_SERVE=/gm)).toHaveLength(1);
+    // THE PARAMETERIZATION, which is what lets the two bounds share one path.
+    // A helper that spelled either constant inside its own body would make the
+    // second bound unreachable, and no behaviour test distinguishes "waited 2 s
+    // because it was asked to" from "waited 2 s because that is all it knows".
+    const body = src.slice(src.indexOf('_hook_lock_acquire() {'));
+    const acquire = body.slice(0, body.indexOf('\n}\n') + 3);
+    expect(acquire, 'the acquire helper exists').toContain('flock -w "$1"');
+    expect(acquire).not.toContain('COMPACT_LOCK_WAIT');
+  });
+
+  it('canonical is published by link off an mktemp source and NEVER opened at its own pathname', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    // CODE ONLY. `single-definition.test.ts`'s own bash corpus filters on
+    // non-comment lines for the same reason: the negative below is a claim
+    // about what the file DOES, and the comment that explains why it must not
+    // do it necessarily spells the forbidden form out.
+    const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code).toContain('mktemp "$REG/.$id.compactions.lock-init.XXXXXX"');
+    expect(code).toContain('link "$src" "$lock"');
+    // THE MUTATION §3.4 names: `exec {fd}<>"$lock"` at canonical. A direct open
+    // is create-capable, so two racers can each create a DIFFERENT inode at the
+    // same pathname and each hold "the" lock. Nothing about the flock call
+    // itself would look wrong.
+    expect(code).not.toMatch(/exec\s*\{[A-Za-z_][A-Za-z0-9_]*\}<>"\$lock"/);
+    // What it opens instead is the private ALIAS, and the alias is the one the
+    // `lock-open` family names — asserted as a pair so neither half can be
+    // satisfied by a variable that happens to be spelled right and bound wrong.
+    expect(code).toMatch(/exec\s*\{fd\}<>"\$al"/);
+    expect(code).toContain('al="$REG/.$id.compactions.lock-open.$$.$RANDOM.$RANDOM"');
+    expect(code).toContain('link "$lock" "$al"');
+  });
+
+  it('an uncontended acquisition leaves no init source and no open alias behind', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    expect(fs.existsSync(lockFile()), 'the permanent lock was minted').toBe(true);
+    expect(regNames().filter((n) => n.includes('lock-init'))).toEqual([]);
+    expect(regNames().filter((n) => n.includes('lock-open'))).toEqual([]);
+    // and it is a REGULAR file, not a directory or a symlink someone can swap
+    expect(fs.lstatSync(lockFile()).isFile()).toBe(true);
+  });
+
+  /** Hold the row's mutex EXACTLY AS THE SHIPPED ACQUIRE DOES: link a private
+   *  exact-family alias off canonical — `<canonical>-open.<pid>.<r>.<r>`, i.e.
+   *  `.<id>.compactions.lock-open.…`, which is the family name and NOT
+   *  `<canonical>.lock-open.…`; the first draft of this helper spelled the
+   *  latter, and the guard correctly ignored it — open THAT, unlink the alias, then
+   *  `flock`. `holdLock` above opens canonical at its own pathname, which is
+   *  the one thing `_hook_lock_acquire` never does, so its descriptor names
+   *  canonical and not a deleted alias — a different on-disk fact entirely.
+   *  This file cannot be SOURCED (it runs to the end on every path), so the
+   *  holder reproduces the acquire's five operations rather than calling it;
+   *  what makes that faithful is the state it leaves, and the leg below
+   *  asserts that state rather than assuming it. */
+  const holdThroughAlias = async (ms: number): Promise<() => void> => {
+    const child = spawn('bash', ['-c',
+      `al="$1-open.$$.$RANDOM.$RANDOM"
+       link "$1" "$al" || exit 1
+       exec {g}<>"$al" || exit 1
+       rm -f "$al"
+       flock "$g" || exit 1
+       echo held
+       exec sleep ${ms / 1000}`, '_', lockFile()]);
+    let out = '';
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error(`the holder never took the lock: ${out}`)), 10_000);
+      child.stdout.on('data', (d: Buffer) => { out += d.toString('utf8'); if (out.includes('held')) { clearTimeout(t); res(); } });
+      child.stderr.on('data', (d: Buffer) => { out += d.toString('utf8'); });
+      child.on('error', (e) => { clearTimeout(t); rej(e); });
+    });
+    return () => { try { child.kill('SIGKILL'); } catch { /* already gone */ } };
+  };
+
+  // ── §4 / §5: A LATER CANONICAL DISAPPEARANCE REFUSES AND MINTS NOTHING ──
+  // §4's row: "a later canonical disappearance/replacement refuses, never
+  // recreates it." §5's: "canonical-disappearance/old-inode holder race refuses
+  // promptly, recreates no canonical, and never admits split critical
+  // sections." Both were UNBUILT — `_hook_lock_acquire` minted on absence
+  // unconditionally — so a stranger's unlink of the permanent lock let the next
+  // arm publish a SECOND inode at the same pathname while a live holder still
+  // owned the first: two processes each told by `flock` that it holds "the"
+  // lock, the exact hazard this file's own header says the design removes.
+  // LINUX ONLY (round M4). Its second half asks `/proc` to NAME the live
+  // holder's descriptor, which is exactly the capability a box without `/proc`
+  // does not have — the residue `_hook_lock_vanished`'s own `[ -d /proc ]` gate
+  // records. Its first half (a holder leaves no exact-family NAME) is
+  // platform-neutral and keeps being asserted on both platforms by
+  // `an uncontended acquisition leaves no init source and no open alias behind`.
+  itLinux('a holder past its acquire leaves NO name in $REG, only a descriptor — measured', async () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const release = await holdThroughAlias(20_000);
+    try {
+      // THE MEASUREMENT THAT SHAPES THE GUARD. The acquire unlinks its alias
+      // the instant the FD is held, by design and by its own comment, so
+      // "is an exact-family alias present in $REG" answers NO for every holder
+      // that is past its acquire. A guard built on that question alone would be
+      // green, correct-looking, and blind to the scenario §4 names.
+      expect(regNames().filter((n) => n.includes('lock-open')),
+        'the holder keeps a descriptor, not a name').toEqual([]);
+      // What it DOES keep is nameable, and that is what arm (b) walks.
+      const found = spawnSync('bash', ['-c',
+        `find /proc -mindepth 3 -maxdepth 3 -path '/proc/[0-9]*/fd/*' -lname "$1-open.*" -print -quit 2>/dev/null`,
+        '_', lockFile()], { encoding: 'utf8' });
+      expect((found.stdout ?? '').trim(), 'the live holder is nameable through /proc').not.toBe('');
+    } finally { release(); }
+  }, 60_000);
+
+  // LINUX ONLY, and this is the case that NAMES the residue (round M4). With no
+  // `/proc` the two states §4 separates — "nobody ever held this lock" and
+  // "somebody holds it and its name was taken away" — are indistinguishable, so
+  // the arm mints a second inode at the same pathname and both holders are told
+  // by `flock` that they hold "the" lock. That hazard STANDS on Darwin; the
+  // gate's own comment in `ccd/session-hook.sh` says so in place.
+  itLinux('PreCompact REFUSES and recreates no canonical when it vanished under a live holder', async () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    expect(fs.existsSync(lockFile()), 'the permanent lock was minted').toBe(true);
+    const release = await holdThroughAlias(20_000);
+    try {
+      const setBytes = fs.readFileSync(setFile());
+      // THE OUT-OF-CONTRACT ACT. Nothing in this tree unlinks the permanent
+      // lock — the sweep's own vocabulary excludes it by name — so this is a
+      // stranger, which is the condition §4 rules on.
+      fs.unlinkSync(lockFile());
+      const r = runFull(preCompact(tree, transcript));
+      expect(r.stderr, 'the hook stays silent, as it must on every path').toBe('');
+      // RECREATES NO CANONICAL. The refusal happens BEFORE the mint, so there
+      // is nothing to clean up either: no init source, no open alias.
+      expect(fs.existsSync(lockFile()), 'canonical was NOT recreated').toBe(false);
+      expect(regNames().filter((n) => n.includes('lock-init')), 'no private source').toEqual([]);
+      expect(regNames().filter((n) => n.includes('lock-open')), 'no open alias').toEqual([]);
+      // …and it published nothing, because it never entered the section.
+      expect(fs.readFileSync(setFile()), 'the set it could not claim is untouched').toEqual(setBytes);
+    } finally { release(); }
+  }, 60_000);
+
+  it('CONTROL: with NO holder, an absent canonical is a first-ever mint and PreCompact publishes', () => {
+    // Without this the refusal above could be an acquire that refuses on every
+    // absent canonical, which would make the first compaction of every session
+    // inert for its whole life.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(fs.existsSync(lockFile()), 'no canonical yet').toBe(false);
+    run(preCompact(tree, transcript));
+    expect(fs.existsSync(lockFile()), 'the first-ever acquisition minted it').toBe(true);
+    expect(fs.existsSync(setFile()), 'and the arm ran').toBe(true);
+  });
+
+  it('the permanent lock is NOT swept, NOT rewritten, and survives a second compaction', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const ino = fs.statSync(lockFile()).ino;
+    run(compactStart(tree, transcript));
+    run(preCompact(tree, transcript));
+    expect(fs.existsSync(lockFile())).toBe(true);
+    expect(fs.statSync(lockFile()).ino, 'the same inode spans compactions').toBe(ino);
+  });
+
+  it('compact SessionStart waits COMPACT_LOCK_WAIT_SERVE, not COMPACT_LOCK_WAIT, and serves nothing on a miss', async () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const cardBytes = fs.readFileSync(cardFile());
+    const setBytes = fs.readFileSync(setFile());
+    const release = await holdLock(3000);
+    try {
+      const t0 = Date.now();
+      const r = runFull(compactStart(tree, transcript));
+      const elapsed = Date.now() - t0;
+      expect(r.stderr).toBe('');
+      expect(r.stdout, 'no card was served under a held lock').not.toContain('graphify card —');
+      // THE BOUND, in both directions. `COMPACT_LOCK_WAIT` (5 s) at this call
+      // site outlives the 3 s holder, so the arm would SERVE at ~3 s; the 2 s
+      // bound cannot. Asserting only "< 3000" would pass for an arm that never
+      // took a lock at all, so the lower bound is asserted too.
+      expect(elapsed, 'it actually waited its own bound').toBeGreaterThanOrEqual(1500);
+      expect(elapsed, 'it gave up before the 3 s holder released').toBeLessThan(2900);
+      expect(fs.readFileSync(cardFile()), 'the card it could not claim is untouched').toEqual(cardBytes);
+      expect(fs.readFileSync(setFile()), 'the canonical set is untouched').toEqual(setBytes);
+    } finally { release(); }
+  }, 30_000);
+
+  it('lock-MECHANISM absence is its own condition, established before any acquire: the arms publish nothing', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // `command -v flock` is the probe, and absence is a property of the PATH.
+    // A contended acquire and a missing binary both spell their failure `1`
+    // (measured), which is why the distinction must live in WHICH probe
+    // answered rather than in an exit status.
+    const r = runFull(preCompact(tree, transcript), { PATH: minimalPath(['flock']) });
+    expect(r.stderr).toBe('');
+    expect(fs.existsSync(setFile()), 'no canonical set is published unlocked').toBe(false);
+    expect(fs.existsSync(cardFile()), 'no canonical card is published unlocked').toBe(false);
+    // SCOPED TO COMPACTION ARTIFACTS, in both directions. `compact-card.mjs` is
+    // the planted HELPER — an input to this arm, not anything it published —
+    // and `<id>.hookstate.json` is the `working` stamp, which lands BEFORE any
+    // of this and is not gated on the mutex at all. A scan counting either
+    // would be red for a reason that has nothing to do with the lock.
+    // `<id>.generation` is excluded: it is the row's AUTHORIZATION, minted by
+    // ccd before any hook runs, and an input to this arm rather than anything
+    // it published.
+    expect(regNames().filter((n) => /^\.?demo-quiet-basin\.compact/.test(n))).toEqual([]);
+    expect(readState().state, 'the working stamp is NOT gated on the mutex').toBe('working');
+    expect(fs.existsSync(lockFile()), 'not even the permanent lock is minted').toBe(false);
+  });
+});
+
+// ── D-2605 option A: the four staging-only-helper controls ───────────────
+// These replace the twenty-three deleted rollback/slot-check race tests. Their
+// subject is not "what does the helper do when its canonical write loses a
+// race" — the helper HAS no canonical write — but the three properties that
+// make that true: it cannot reach canonical, the hook's reconfirm-then-rename
+// is one compare-and-swap inside one held section, and a stage exists iff it
+// is complete.
+describe('the compaction card — option A, the staging-only helper (spec §3.1 protocol steps 9-14)', () => {
+  const lockFile = (): string => path.join(home, '.cc-sessions', '.demo-quiet-basin.compactions.lock');
+  const stages = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'))
+    .filter((n) => n.includes('.stage'));
+
+  it('THE CAS: a sibling that publishes its own verdict while the helper runs keeps it — this arm publishes nothing', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // The BARRIER. `timeout` is the hook's own deadline wrapper, so this fires
+    // exactly between the release (protocol step 9) and the reacquire (step
+    // 11) — the window round 6's helper-side check could not close, because
+    // its check and its act were two separate steps with this gap between
+    // them. The sibling publishes a DIFFERENT nonce and removes the card,
+    // which is what a second PreCompact of the same session does when it
+    // reaches the overlap rule.
+    const sibling = '{"v":1,"at":9,"nonce":"compact-9-9-9-9","scope":"ambiguous","agent":null,"transcript":null,"parentLive":null,"liveAgents":null,"cwd":null,"built":null,"fresh":null,"steered":false,"files":null,"stats":null}\n';
+    stub('timeout', [
+      HELPER_ONLY,
+      'shift; "$@"; rc=$?',
+      `printf '%s' ${sh(sibling)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
+      'rm -f "$HOME/.cc-sessions/demo-quiet-basin.compactcard"',
+      'exit $rc',
+    ].join('\n'));
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(setFile(), 'utf8'), 'the sibling\'s verdict survives byte-for-byte').toBe(sibling);
+    expect(fs.existsSync(cardFile()), 'and no card was published over it').toBe(false);
+    // ONLY THIS PROCESS'S OWN STAGES are gone — nothing else was touched.
+    expect(stages(), 'the losing arm removed its own stages and published neither').toEqual([]);
+  });
+
+  it('NO CANONICAL PATHNAME IN THE HELPER\'S ARGV, and with both canonical files present it writes neither', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // Record the argv the hook actually built, then run the real helper under
+    // it — so this is the shipped call site, not a reconstruction of it.
+    stub('timeout', [HELPER_ONLY, 'printf \'%s\\n\' "$*" > "$HOME/helper-argv"', 'shift; exec "$@"'].join('\n'));
+    run(preCompact(tree, transcript));
+    const argv = fs.readFileSync(path.join(home, 'helper-argv'), 'utf8');
+    expect(argv).toContain('--set-stage ');
+    expect(argv).toContain('--card-stage ');
+    expect(argv).toContain('--parent-live ');
+    expect(argv).toContain('--live-agents ');
+    expect(argv, 'no --out').not.toContain('--out ');
+    // WORD-EXACT: a bare `not.toContain('--set')` would be satisfied by
+    // `--set-stage` and so could never red the mutation it exists for.
+    expect(argv, 'no --set').not.toMatch(/--set(?!-stage)/);
+    expect(argv, 'no canonical set pathname anywhere in the argv').not.toContain(setFile());
+    expect(argv, 'no canonical card pathname anywhere in the argv').not.toContain(cardFile());
+    // AND THE EFFECT, with both canonical names already occupied by a stranger:
+    // the helper is handed neither, so neither moves.
+    const strangerSet = '{"v":1,"at":9,"nonce":"compact-9-9-9-9","scope":"main","files":null}\n';
+    fs.writeFileSync(setFile(), strangerSet);
+    fs.writeFileSync(cardFile(), 'compact-9-9-9-9\nstranger card\n');
+    const helperArgs = argv.trim().split(' ').slice(2);   // drop `<seconds> node`
+    const r = spawnSync('node', helperArgs, { encoding: 'utf8', env: { ...process.env, HOME: home } });
+    expect(r.status, 'the helper ran on its own, outside the hook').toBe(0);
+    expect(fs.readFileSync(setFile(), 'utf8'), 'the stranger\'s canonical set is byte-identical').toBe(strangerSet);
+    expect(fs.readFileSync(cardFile(), 'utf8')).toBe('compact-9-9-9-9\nstranger card\n');
+  });
+
+  it('STAGE COMPLETENESS: a helper killed between its `.part` write and its rename publishes nothing', () => {
+    const tree = cardTree();
+    // A helper that writes only the `.part` and dies — the exact mid-write
+    // state `writeAtomic`'s temp-then-rename exists to make unobservable.
+    // Exit 0, so the hook takes its PUBLISHING arm and the rename is what has
+    // to fail: a fixture that exited nonzero would be testing the other branch.
+    stub('node', [
+      'for a in "$@"; do case "$prev" in --set-stage) printf partial > "$a.part" ;; esac; prev="$a"; done',
+      'exit 0',
+    ].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    plantHelper();
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(cardFile()), 'no canonical card').toBe(false);
+    expect(readSet().files, 'the canonical set is still the hook\'s initial one').toBeNull();
+    expect(stages(), 'neither the stage nor its .part survives').toEqual([]);
+  });
+
+  // ── The step-12 reacquire's regular-file guard (r3 A-I1) ───────────────
+  // The canonical pathname is unguarded across the helper window BY DESIGN —
+  // step 9 releases the lock — so the object step 11 reacquires over may be
+  // anything a same-UID stranger left there. A FIFO is the one shape whose
+  // failure has no bound: `open(2)` BLOCKS on it rather than failing, so the
+  // hook's `2>/dev/null` silences nothing and the process parks inside the
+  // HELD stable lock for ever, taking `_reg_purge` (and so ws-rm, forget,
+  // ws-gc --prune, ws-reap and the slug's ws-add/start) with it. Both legs
+  // run the SAME instrument; only the object at `$set` differs.
+  /** One hook process with a wall-clock bound of its own, which `runFull` has
+   *  no reason to carry: every other fixture in this file asserts what a hook
+   *  WROTE, and these two assert that it RETURNED. `spawnSync`'s `timeout`
+   *  kills the blocked bash rather than letting vitest's own deadline stop
+   *  the file, so the mutant's failure text names the signal instead of the
+   *  suite. */
+  const runBounded = (payload: object, ms: number): { status: number | null; signal: string | null; ms: number } => {
+    const t0 = Date.now();
+    const r = spawnSync('bash', [HOOK], {
+      input: JSON.stringify(payload), encoding: 'utf8', timeout: ms, killSignal: 'SIGKILL',
+      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
+        CCRC_SESSION_GENERATION: GENERATION },
+    });
+    return { status: r.status, signal: r.signal, ms: Date.now() - t0 };
+  };
+  /** Is the row's mutex free to a stranger? `flock -n` answers without waiting;
+   *  0 is FREE, 1 is HELD. The lock file outlives every arm by design, so its
+   *  presence is not the question — who holds it is. */
+  const mutexFree = (): boolean =>
+    spawnSync('flock', ['-n', lockFile(), 'true'], { encoding: 'utf8' }).status === 0;
+
+  it('A NON-REGULAR CANONICAL SET AT THE REACQUIRE: the arm refuses inside its bound and leaves the row mutex FREE', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // THE SUBSTITUTION LANDS IN THE WINDOW THE HOOK ITSELF OPENS, with no
+    // external timing at all: the stub IS the helper, so the FIFO replaces
+    // canonical strictly between step 9's release and step 11's reacquire.
+    // Exit 0, so the hook takes its PUBLISHING arm and the step-12 read is
+    // what has to be reached.
+    stub('node', [
+      'rm -f "$HOME/.cc-sessions/demo-quiet-basin.compactset"',
+      'mkfifo "$HOME/.cc-sessions/demo-quiet-basin.compactset"',
+      'exit 0',
+    ].join('\n'));
+    const r = runBounded(preCompact(tree, transcript), 15_000);
+    // RETURNED, not killed. Without the guard this is `signal: 'SIGKILL'` at
+    // the full 15 s; the bound is an order of magnitude above the ~1 s the
+    // control leg measures and still two thirds under this `it`'s deadline.
+    expect(r.signal, 'the hook was not killed at its bound — it returned on its own').toBe(null);
+    expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+    expect(r.ms, 'the refusal is prompt, not a wait').toBeLessThan(10_000);
+    // PUBLISHES NOTHING, and leaves none of its own residue behind.
+    expect(fs.existsSync(cardFile()), 'no canonical card is published over a slot that is not ours').toBe(false);
+    expect(stages(), 'this process removed its own stages').toEqual([]);
+    // AND THE CONSEQUENCE THE FINDING IS ABOUT: the row's destruction path is
+    // still open to everybody else.
+    expect(mutexFree(), 'the stable lock is released, so `_reg_purge` and every later arm can still run').toBe(true);
+  });
+
+  it('THE CONTROL for the same instrument: an ordinary helper over a REGULAR set returns fast and frees the same mutex', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const r = runBounded(preCompact(tree, transcript), 15_000);
+    expect(r.signal, 'nothing was killed').toBe(null);
+    expect(r.status).toBe(0);
+    expect(r.ms, 'the ordinary path is ~1 s, so the leg above measures the FIFO and not the fixture').toBeLessThan(10_000);
+    expect(mutexFree(), 'and the mutex is free here too — so a HELD mutex above would be the FIFO').toBe(true);
+  });
+
+  // ── §3.4 stable-lock item 3: the pre-mutation identity re-check (r3 R1) ─
+  // Item 3 asks the holder to prove its descriptor still names canonical
+  // BEFORE EACH MUTATION. MEASURED first, with the shipped acquire on both
+  // sides: holder H acquires, a same-UID stranger unlinks canonical and mints
+  // a fresh inode at the same pathname, and a second acquirer S then GETS the
+  // lock while H is still inside its section — two processes on one pathname's
+  // mutex. (Control, replacement suppressed: S is refused.) D-2793 refuses a
+  // DISAPPEARANCE and cannot see a REPLACEMENT, because the acquire's
+  // `[ -e "$lock" ]` arm is satisfied by one.
+  //
+  // THE INJECTION IS A CHILD THE SECTION ALREADY SPAWNS, not a second process
+  // racing on wall time: PreCompact's first held section forks `find` for its
+  // overlap measurement, so a `find` stub on the fixture PATH lands the
+  // replacement in exactly the window the code itself opens — the same device,
+  // and the same reason, as the `timeout`/`node` stubs above.
+  const strangerFind = (replace: boolean): void => {
+    const real = realTool('find');
+    stub('find', [
+      'LOCK="$HOME/.cc-sessions/.demo-quiet-basin.compactions.lock"',
+      // A FRESH INODE AT THE SAME PATHNAME, minted the way the acquire itself
+      // mints one (private mktemp source + no-clobber link) — so this is a
+      // stranger doing a legal thing, not a corrupted file.
+      replace
+        ? 'if [ -e "$LOCK" ]; then rm -f "$LOCK";'
+          + ' SRC=$(mktemp "$HOME/.cc-sessions/.stranger.XXXXXX");'
+          + ' link "$SRC" "$LOCK"; rm -f "$SRC"; fi'
+        : ': # the control: same stub, same fork, no replacement',
+      `exec ${real} "$@"`,
+    ].join('\n'));
+  };
+
+  it('ITEM 3: canonical REPLACED under a holder — the section refuses and publishes NOTHING', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    strangerFind(true);
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    // NO MUTATION LANDS. The set is this section's one canonical publication
+    // and the card its one canonical removal; neither happens once the
+    // descriptor stops naming canonical.
+    expect(fs.existsSync(setFile()), 'no canonical set is published on a lock that is no longer ours').toBe(false);
+    expect(fs.existsSync(cardFile()), 'and no card').toBe(false);
+    expect(stages(), 'and no stage residue').toEqual([]);
+  });
+
+  it('ITEM 3, THE CONTROL: the same stub and the same fork WITHOUT the replacement publish normally', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    strangerFind(false);
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    // Without this leg the assertions above are satisfied by a stub that broke
+    // `find` outright, which is a different test.
+    expect(fs.existsSync(setFile()), 'the ordinary path still publishes its set').toBe(true);
+    expect(readSet().nonce, 'a real one').toMatch(/^compact-/);
+  });
+
+  // ── r4 A-M1: the refusal at the card claim owns its own placeholder ─────
+  // SAME DEVICE, DIFFERENT SITE. Compact SessionStart's retained-lock body
+  // forks exactly one child between its acquire and the claim — the age `find`
+  // — so a `find` stub lands the replacement in the window the code itself
+  // opens, and the proof that refuses is the one guarding `mv -f "$f"
+  // "$claim"`, AFTER the no-clobber placeholder has already been created. That
+  // refusal used to return without removing it, and the leaked zero-byte file
+  // is not inert: it matches `_ws_private_family`'s `compactcard.*` arm, which
+  // is what `_ws_slug_free` reads.
+  /** A young, well-formed card+set pair, exactly as PreCompact leaves them —
+   *  planted rather than run, because this leg's subject is the SessionStart
+   *  body and a real PreCompact would fork `find` of its own and spend the
+   *  stub's one replacement before this arm ever started. */
+  const plantServablePair = (): string => {
+    const nonce = `compact-${Date.now()}-4242-31-7`;
+    fs.writeFileSync(setFile(), `${JSON.stringify({ v: 1, at: Date.now(), nonce, scope: 'main',
+      overlap: false, agent: null, transcript: '/t.jsonl', parentLive: null, liveAgents: 0,
+      cwd: null, built: null, fresh: null, steered: false, files: null, stats: null })}\n`);
+    fs.writeFileSync(cardFile(), `${nonce}\ngraphify card — a young servable pair\n`);
+    return nonce;
+  };
+  /** Every `.<id>.compactcard.<pid>.<nonce>.session-claim.tmp` on disk — the
+   *  §3.4 target family the placeholder is named into. */
+  const claimResidue = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'))
+    .filter((n) => /^\.demo-quiet-basin\.compactcard\..+\.session-claim\.tmp$/.test(n));
+
+  it('ITEM 3 AT THE CARD CLAIM: the refusal removes the placeholder it just created (r4 A-M1)', () => {
+    const tree = cardTree();
+    plantServablePair();
+    strangerFind(true);
+    const r = runFull(compactStart(tree, '/t.jsonl'));
+    expect(r.stderr).toBe('');
+    expect(r.stdout, 'the arm refused, so nothing is served').not.toContain('graphify card —');
+    // THE FINDING ITSELF. Without the `rm` this is one zero-byte file, and it
+    // reads the slug NOT FREE until an aged sweep reclaims it.
+    expect(claimResidue(), 'the refusal took its own placeholder with it').toEqual([]);
+    expect(fs.existsSync(cardFile()), 'and canonical never moved — the claim lost its `mv`').toBe(true);
+  });
+
+  it('ITEM 3 AT THE CARD CLAIM, THE CONTROL: the same stub and the same fork WITHOUT the replacement serve, and leave nothing either', () => {
+    const tree = cardTree();
+    plantServablePair();
+    strangerFind(false);
+    const r = runFull(compactStart(tree, '/t.jsonl'));
+    expect(r.stderr).toBe('');
+    // Without this leg the assertions above are satisfied by a stub that broke
+    // `find` outright, which is a different test.
+    expect(r.stdout, 'the ordinary path still serves the card').toContain('graphify card —');
+    expect(claimResidue(), 'a consumed claim leaves no residue on the serving path either').toEqual([]);
+    expect(fs.existsSync(cardFile()), 'and the card is consumed').toBe(false);
+  });
+
+  // ── r4 A-M2: the aged-card removal is proved on the far side of its fork ─
+  // The age `find` is the fork, and the `rm` is the mutation. With the proof
+  // above the find, a replacement landing inside that child deleted the aged
+  // canonical card anyway — the refusal never fired. The leg below drives
+  // exactly that, and its control is the same stub with the replacement
+  // suppressed, which must still remove the card: without the control the
+  // assertion is satisfied by a stub that broke `find` outright, and a broken
+  // `find` also leaves an aged card standing.
+  it('ITEM 3 AT THE AGED-CARD REMOVAL: a replacement inside the age find\'s fork refuses, and the aged card SURVIVES (r4 A-M2)', () => {
+    const tree = cardTree();
+    plantServablePair();
+    const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+    fs.utimesSync(cardFile(), old, old);
+    strangerFind(true);
+    const r = runFull(compactStart(tree, '/t.jsonl'));
+    expect(r.stderr).toBe('');
+    expect(r.stdout, 'an aged card is never served, refusal or not').not.toContain('graphify card —');
+    expect(fs.existsSync(cardFile()),
+      'the removal is a canonical mutation and the descriptor stopped naming canonical inside the find').toBe(true);
+  });
+
+  it('ITEM 3 AT THE AGED-CARD REMOVAL, THE CONTROL: the same stub and the same fork WITHOUT the replacement still remove it', () => {
+    const tree = cardTree();
+    plantServablePair();
+    const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+    fs.utimesSync(cardFile(), old, old);
+    strangerFind(false);
+    const r = runFull(compactStart(tree, '/t.jsonl'));
+    expect(r.stderr).toBe('');
+    expect(r.stdout).not.toContain('graphify card —');
+    expect(fs.existsSync(cardFile()), 'an aged card is REMOVED when the proof holds').toBe(false);
+  });
+
+  // ── r4 A-M2: the two pairs that shared one proof across a fork ──────────
+  // Each pair had an EXTERNAL BINARY between two mutations, so the second
+  // mutation was taken on a proof one fork old. The injection is the same
+  // device as `strangerFind`, moved onto the binary that actually forks in
+  // each pair — `mv` for PreCompact's stage renames, `rm` for PostCompact's
+  // canonical unlink — and each stub matches only the one invocation it means
+  // to land inside, execing the real tool for every other call the arm makes.
+  /** A `mv` that replaces canonical inside the CARD-STAGE rename's own fork.
+   *  The pattern matches `.<id>.compactcard.<pid>.<nonce>.stage` and nothing
+   *  else this file renames: the initial atomic publication goes through a
+   *  `…hook-write.tmp` name, the set stage through `compactset`, and the serve
+   *  arm's claim through `…session-claim.tmp`. */
+  const strangerMv = (replace: boolean): void => {
+    const real = realTool('mv');
+    stub('mv', [
+      'LOCK="$HOME/.cc-sessions/.demo-quiet-basin.compactions.lock"',
+      'case "$*" in',
+      '  *compactcard.*.stage*)',
+      replace
+        ? '    if [ -e "$LOCK" ]; then rm -f "$LOCK";'
+          + ' SRC=$(mktemp "$HOME/.cc-sessions/.stranger.XXXXXX");'
+          + ' link "$SRC" "$LOCK"; rm -f "$SRC"; fi ;;'
+        : '    : ;;   # the control: same stub, same fork, no replacement',
+      '  *) : ;;',
+      'esac',
+      `exec ${real} "$@"`,
+    ].join('\n'));
+  };
+  /** An `rm` that replaces canonical inside PostCompact's CANONICAL-SET unlink
+   *  own fork. The pattern ends at `/demo-quiet-basin.compactset`, so the stage
+   *  and `.part` removals (which carry a suffix) and every claim, snapshot and
+   *  marker removal run the real `rm` untouched. */
+  const strangerRm = (replace: boolean): void => {
+    const real = realTool('rm');
+    stub('rm', [
+      'LOCK="$HOME/.cc-sessions/.demo-quiet-basin.compactions.lock"',
+      'case "$*" in',
+      '  */demo-quiet-basin.compactset)',
+      replace
+        ? '    if [ -e "$LOCK" ]; then '
+          + ` ${real} -f "$LOCK";`
+          + ' SRC=$(mktemp "$HOME/.cc-sessions/.stranger.XXXXXX");'
+          + ' link "$SRC" "$LOCK";'
+          + ` ${real} -f "$SRC"; fi ;;`
+        : '    : ;;   # the control: same stub, same fork, no replacement',
+      '  *) : ;;',
+      'esac',
+      `exec ${real} "$@"`,
+    ].join('\n'));
+  };
+  /** A `touch` that FAILS on PostCompact's claim — the failed-`touch` restore
+   *  path — and, when `replace`, swaps canonical inside its OWN fork first.
+   *  Only the claim pathname is touched by this hook (`ccd/session-hook.sh` has
+   *  exactly one `touch` call site), but the `case` keeps every other argument
+   *  on the real binary so a future one is not silently broken by this fixture.
+   *  `command -v touch` is gated earlier in the same body, and a stub on PATH
+   *  satisfies it — so this drives the RUNTIME failure, not the absence. */
+  const strangerTouch = (replace: boolean): void => {
+    const realRm = realTool('rm');
+    const realTouch = realTool('touch');
+    stub('touch', [
+      'LOCK="$HOME/.cc-sessions/.demo-quiet-basin.compactions.lock"',
+      'case "$*" in',
+      '  *compactpost.*.claim)',
+      replace
+        ? '    if [ -e "$LOCK" ]; then '
+          + ` ${realRm} -f "$LOCK";`
+          + ' SRC=$(mktemp "$HOME/.cc-sessions/.stranger.XXXXXX");'
+          + ' link "$SRC" "$LOCK";'
+          + ` ${realRm} -f "$SRC"; fi`
+        : '    :   # the control: same stub, same fork, no replacement',
+      '    exit 1 ;;',
+      `  *) exec ${realTouch} "$@" ;;`,
+      'esac',
+    ].join('\n'));
+  };
+  /** Every `.<id>.compactpost.<pid>.<r>.<r>.claim` on disk. */
+  const postClaims = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'))
+    .filter((n) => /^\.demo-quiet-basin\.compactpost\..+\.claim$/.test(n));
+  const journalLines = (): any[] => fs.readFileSync(journalFile(), 'utf8')
+    .split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l));
+
+  it('ITEM 3 BETWEEN THE TWO STAGE RENAMES: the card is published and the SET IS NOT — and the serve arm tolerates that pair (r4 A-M2)', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    strangerMv(true);
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    // THE INTERMEDIATE STATE, asserted rather than argued: the card rename
+    // landed before the proof, and the canonical set is step 7's OWN
+    // publication — `files` still null, because the helper's staged set never
+    // replaced it.
+    expect(fs.existsSync(cardFile()), 'the card rename landed before the proof').toBe(true);
+    expect(readSet().files, 'the set is the hook OWN initial publication, not the helper enriched one').toBe(null);
+    expect(readSet().nonce, 'and it carries the same nonce as the card line 1').toBe(readCard().nonce);
+    expect(stages(), 'the refusal dropped this process own stages').toEqual([]);
+    expect(mutexFree(), 'and released the row').toBe(true);
+    // AND THE NEXT ARM TOLERATES IT. This is the measurement the decision to
+    // ADD this re-check rests on: the serve arm inspects card + set, this pair
+    // is matched, and it serves.
+    const r = runFull(compactStart(tree, transcript));
+    expect(r.stderr).toBe('');
+    expect(r.stdout, 'a card published without its enriched set is still a servable pair').toContain('graphify card —');
+  });
+
+  it('ITEM 3 BETWEEN THE TWO STAGE RENAMES, THE CONTROL: the same stub and the same fork WITHOUT the replacement publish BOTH', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    strangerMv(false);
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(cardFile()), 'the card is published here too').toBe(true);
+    // Without this leg the assertion above is satisfied by a stub that broke
+    // `mv` outright, which is a different test.
+    expect(readSet().files, 'the helper ENRICHED set is published when the proof holds').not.toBe(null);
+  });
+
+  it('ITEM 3 BETWEEN THE CANONICAL UNLINK AND THE CLAIM TOUCH: the settlement refuses and RETAINS the claim — and the next arm tolerates that (r4 A-M2)', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    strangerRm(true);
+    expect(runFull(postCompact(tree, transcript, 'a summary'))).toEqual({ stdout: '', stderr: '' });
+    // THE INTERMEDIATE STATE: canonical unlinked (the `rm` landed before the
+    // proof), the claim RETAINED as the only verified copy of those bytes, and
+    // nothing committed under a lock that stopped naming canonical.
+    expect(fs.existsSync(setFile()), 'the unlink landed before the proof').toBe(false);
+    expect(postClaims(), 'the claim is RETAINED — the refusal discards no verified copy').toHaveLength(1);
+    expect(fs.existsSync(journalFile()), 'and no journal line commits on this path').toBe(false);
+    expect(mutexFree(), 'and the row is released').toBe(true);
+    // AND THE NEXT ARM TOLERATES IT. A later PostCompact finds no canonical
+    // set and takes the absent-set branch, which attributes nothing — the
+    // measurement the decision to ADD this re-check rests on.
+    strangerRm(false);
+    expect(runFull(postCompact(tree, transcript, 'a later summary'))).toEqual({ stdout: '', stderr: '' });
+    const lines = journalLines();
+    expect(lines, 'the absent-set branch commits exactly one line').toHaveLength(1);
+    expect(lines[0].scope, 'a genuinely absent canonical set attributes nothing').toBe(null);
+  });
+
+  it('ITEM 3 BETWEEN THE CANONICAL UNLINK AND THE CLAIM TOUCH, THE CONTROL: the same stub and the same fork WITHOUT the replacement settle and commit', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    strangerRm(false);
+    expect(runFull(postCompact(tree, transcript, 'a summary'))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(setFile()), 'the settlement consumes canonical here too').toBe(false);
+    // Without this leg the assertions above are satisfied by a stub that broke
+    // `rm` outright, which is a different test.
+    expect(postClaims(), 'a COMPLETED settlement consumes its own claim').toEqual([]);
+    const lines = journalLines();
+    expect(lines, 'and commits its one line').toHaveLength(1);
+    expect(lines[0].scope, 'attributed from the claim, not from nothing').not.toBe(null);
+  });
+
+  it('ITEM 3 AT THE FAILED-TOUCH RESTORE: a replacement inside `touch`\'s fork refuses, and canonical is NOT republished (r5 R4-M4)', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    // THE ONE STUB DOES BOTH HALVES OF THE RACE. `touch` fails, which is what
+    // sends this arm into the restore at all; and it replaces the row lock
+    // inside its own fork, which is the state the restore must not write
+    // through. Without the re-check this process republishes canonical with no
+    // mutex and then, on a successful `-ef`, unlinks the claim that holds the
+    // only verified copy of those bytes.
+    strangerTouch(true);
+    expect(runFull(postCompact(tree, transcript, 'a summary'))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(setFile()), 'canonical is NOT restored under a lock that stopped naming it').toBe(false);
+    expect(postClaims(), 'and the claim is RETAINED — the only verified copy survives').toHaveLength(1);
+    expect(fs.existsSync(journalFile()), 'nothing is committed on this path').toBe(false);
+    expect(mutexFree(), 'and the row is released').toBe(true);
+    // AND THE NEXT ARM TOLERATES IT, exactly as it does for the refusal one
+    // statement earlier: a later PostCompact finds no canonical set, takes the
+    // absent-set branch and attributes nothing.
+    strangerTouch(false);
+    expect(runFull(postCompact(tree, transcript, 'a later summary'))).toEqual({ stdout: '', stderr: '' });
+    const lines = journalLines();
+    expect(lines, 'the absent-set branch commits exactly one line').toHaveLength(1);
+    expect(lines[0].scope, 'a genuinely absent canonical set attributes nothing').toBe(null);
+  });
+
+  it('ITEM 3 AT THE FAILED-TOUCH RESTORE, THE CONTROL: the same stub and the same failing `touch` WITHOUT the replacement DO restore canonical', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    strangerTouch(false);
+    expect(runFull(postCompact(tree, transcript, 'a summary'))).toEqual({ stdout: '', stderr: '' });
+    // Without this leg the assertions above are satisfied by a stub that merely
+    // broke the settlement outright, which is a different test: here the
+    // `touch` fails just the same, the proof HOLDS, and the restore runs.
+    expect(fs.existsSync(setFile()), 'the restore republished canonical').toBe(true);
+    expect(postClaims(), 'and a proved restore consumes its own claim').toEqual([]);
+    expect(fs.existsSync(journalFile()), 'a failed settlement still commits nothing').toBe(false);
+    expect(mutexFree(), 'and the row is released here too').toBe(true);
+  });
+
+  // — and the SOURCE pin for the sites one fixture cannot reach ————————————
+  // The fixture above drives ONE site, because a stub can only inject where
+  // the section it targets actually forks. The rule item 3 states is about
+  // EVERY canonical mutation in EVERY held section, and the honest instrument
+  // for the rest is a scan — the same choice this suite already makes for
+  // guards whose input is derived rather than driven.
+  //
+  // THE RULE, AS A MECHANISM RATHER THAN A COUNT: every listed mutation must
+  // have a re-check between it and whatever came before it in its own section
+  // — the previous listed mutation, or the section's acquire if it is the
+  // first. A bare count goes green on a guard moved to the wrong place, and a
+  // "the guard appears somewhere in the section" rule survives deleting every
+  // call but one.
+  // ── The acquire-site census, as a mechanism (r3 A-M1) ────────────────
+  // "Every one of this file's six acquire sites" was written in three places
+  // at once — the hook's comment, the spec, and D-2793's ledger entry — and
+  // there are FIVE. The ARGUMENT those sentences carry is sound and unchanged;
+  // only the count was wrong, in a task whose own scope included correcting
+  // falsified comments. A numeral about the code is a claim about the code, so
+  // it is counted rather than trusted.
+  it('THE ACQUIRE-SITE CENSUS: the numerals in the prose are the numbers in the source', () => {
+    const hookSrc = fs.readFileSync(HOOK, 'utf8');
+    // THROUGH `CCD`, never a second spelling of the path: `single-definition`
+    // allows exactly one file in the test tree to name the ccd script, and it
+    // is `ccdWsHelpers.ts`. (Measured — this line spelled it directly for one
+    // commit and reds that rule in chunk 03.)
+    const ccdSrc = ccdSource();
+    const specSrc = fs.readFileSync(path.resolve(__dirname,
+      '../../docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md'), 'utf8');
+    // CALL SITES, not the definition: the trailing quote is what separates
+    // `_hook_lock_acquire "` from the `_hook_lock_acquire() {` header.
+    const count = (src: string, needle: string): number => src.split(needle).length - 1;
+    const hookSites = count(hookSrc, '_hook_lock_acquire "');
+    const ccdSites = count(ccdSrc, '_compact_lock_acquire "');
+    // THE FALL-THROUGH PAIR'S SITES, counted in their own bodies rather than
+    // assumed to be one each — which is the half the old prose got wrong.
+    const bodyOf = (name: string): string => {
+      const from = ccdSrc.indexOf(`${name}() {`);
+      expect(from, `${name} is in ccd`).toBeGreaterThan(-1);
+      const end = ccdSrc.indexOf('\n}\n', from);
+      expect(end, `${name}'s body ends`).toBeGreaterThan(from);
+      return ccdSrc.slice(from, end);
+    };
+    const fallThroughSites = count(bodyOf('cmd_start'), '_compact_lock_acquire "')
+      + count(bodyOf('_spawn_start'), '_compact_lock_acquire "');
+    // NON-VACUITY: a scan that counted zero would satisfy every equality below
+    // by making the prose say "zero", which is the one reading that is never
+    // right here.
+    expect(hookSites, 'the hook has acquire sites at all').toBeGreaterThan(0);
+    expect(ccdSites, 'and so does ccd').toBeGreaterThan(0);
+    expect(fallThroughSites, 'and the fall-through pair holds some of them').toBeGreaterThan(0);
+
+    const WORD = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+    const w = (n: number): string => {
+      expect(n, 'the census is inside the spelled-numeral range').toBeLessThan(WORD.length);
+      return WORD[n]!;
+    };
+    // THE HOOK'S OWN SENTENCE.
+    expect(hookSrc, `the hook's comment must say ${w(hookSites)} acquire sites`)
+      .toContain(`this file's ${w(hookSites)} acquire sites`);
+    expect(hookSrc, `and that ccd's ${w(ccdSites)} read the VALUE`)
+      .toContain(`ccd's ${w(ccdSites)} read the VALUE`);
+    expect(hookSrc, `and that the fall-through pair spans ${w(fallThroughSites)} of them`)
+      .toContain(`across ${w(fallThroughSites)} of those sites`);
+    // THE SPEC'S, which repeats the same two claims and drifted with it.
+    expect(specSrc, `the spec must say all ${w(hookSites)} hook acquire sites`)
+      .toContain(`all ${w(hookSites)} hook acquire sites`);
+    expect(specSrc, `and ${w(fallThroughSites)} of its ${w(ccdSites)} sites`)
+      .toContain(`across ${w(fallThroughSites)} of its ${w(ccdSites)} sites`);
+  });
+
+  it('ITEM 3, EVERY SITE: each canonical mutation in a held section is preceded by its own re-check', () => {
+    const src = fs.readFileSync(HOOK, 'utf8').split('\n');
+    const lineOf = (needle: string): number => {
+      const hits = src.map((l, i) => [l, i + 1] as const).filter(([l]) => l.includes(needle));
+      expect(hits, `the source anchor moved or is not unique: ${needle}`).toHaveLength(1);
+      return hits[0]![1];
+    };
+    const linesOf = (needle: string): number[] =>
+      src.map((l, i) => [l, i + 1] as const).filter(([l]) => l.includes(needle)).map(([, n]) => n);
+
+    // CALL SITES, never the definition: the definition's own line carries the
+    // name too, and counting it would let the scan pass with zero callers.
+    const guards = linesOf('_hook_lock_still_canonical "');
+    const acquires = linesOf('_hook_lock_acquire "');
+    // NON-VACUITY, both halves: a scan over an empty set proves nothing, and a
+    // scan whose anchors had all vanished would report success just as loudly.
+    expect(guards.length, 'the re-check is called at all').toBeGreaterThan(0);
+    expect(acquires.length, 'and the sections exist to be guarded (the sixth, the precompact line\'s)').toBe(6);
+
+    // Each entry is the FIRST line of a statement that mutates a canonical
+    // pathname while the row's mutex is held. Order matters: the scan walks
+    // them in file order and each one bounds the next.
+    //
+    // ONE ENTRY PER MUTATION (r4 A-M2). Two entries used to name a PAIR — "the
+    // two stage renames" and "the canonical unlink and the claim touch" — and
+    // a pair sharing one proof is the one thing a scan built on floors cannot
+    // see: the LABEL said two mutations while the MECHANISM required a single
+    // guard, with an external binary (and therefore a fork) standing between
+    // them. Splitting them is what forces a re-check into each gap; the
+    // decision to add those re-checks, and what a refusal between each pair
+    // leaves, is argued at the sites themselves and driven by the two effect
+    // fixtures above, not carried in these labels.
+    //
+    // THREE MORE ON THE FAR SIDE OF A FORK (r5 R4-M4). The split above stated
+    // the rule as ONE ENTRY PER MUTATION and this list then disagreed with it:
+    // the failed-`touch` restore, and the crossed-nonce and body-less card
+    // restores, each WRITE a canonical pathname under the row mutex and each
+    // sits after an external binary (`touch` at the first, `mv` at the other
+    // two), and none of the three was here. MEASURED before the re-checks were
+    // inserted: adding these entries alone reds with "(line 1525) has no
+    // identity re-check after line 1520" and "(line 1979) has no identity
+    // re-check after line 1969". The concrete state the first one allowed: a
+    // stranger replaces the lock inside `touch`'s fork, the `touch` fails, and
+    // this process republishes canonical with no mutex and then discards the
+    // claim holding the only verified copy.
+    //
+    // THE BODY-LESS ENTRY TAKES NO `branchOf`, deliberately, even though it is
+    // an alternative arm of the crossed-nonce one. `branchOf` LOWERS a floor,
+    // and `between` does not exclude guards that live inside the sibling's arm
+    // — so inheriting here would let the crossed-nonce proof, which returns
+    // before this path is ever reached, satisfy this entry. The default floor
+    // (the previous mutation) is higher and strictly stronger, and it is
+    // satisfied by this arm's OWN proof.
+    //
+    // `pick` names which occurrence of a needle that appears more than once,
+    // and pins the TOTAL beside it, so a new occurrence reds rather than
+    // silently shifting the anchor. `branchOf` says this mutation sits in an
+    // ALTERNATIVE arm of a named earlier entry's branch: neither that entry's
+    // mutation nor any re-check inside its arm ever runs on this path, so the
+    // floor is the floor THAT entry used and not the line before this one.
+    type Mut = { what: string; needle: string; pick?: [number, number]; branchOf?: string };
+    const MUTATIONS: Mut[] = [
+      { what: 'PreCompact: the ambiguous-scope card removal', needle: '[[ "$CS_SCOPE" != ambiguous ]] || rm -f "$cardf"' },
+      { what: 'PreCompact: the exact-family sweep', needle: 'while IFS= read -r cand; do' },
+      { what: 'PreCompact: the canonical set publication', needle: '_hook_write_atomic "$set" "$nonce" "$doc"' },
+      { what: 'PreCompact: the card-stage rename', needle: 'mv -f "$cardstage" "$cardf"' },
+      { what: 'PreCompact: the set-stage rename, rc 0 arm', needle: 'mv -f "$setstage" "$set"', pick: [0, 2] },
+      { what: 'PreCompact: the set-stage rename, rc 3 arm', needle: 'mv -f "$setstage" "$set"', pick: [1, 2],
+        branchOf: 'PreCompact: the card-stage rename' },
+      { what: 'PostCompact: the canonical unlink', needle: 'if ! rm -f "$set" 2>/dev/null; then' },
+      { what: 'PostCompact: the claim touch', needle: 'if ! touch "$claim" 2>/dev/null; then' },
+      { what: 'PostCompact: the failed-touch restore link', needle: 'if link "$claim" "$set" 2>/dev/null' },
+      { what: 'PostCompact: the journal commit', needle: 'mv -f "$stage" "$journal" 2>/dev/null' },
+      { what: 'SessionStart(compact): the aged-card removal', needle: 'rm -f "$f"' },
+      { what: 'SessionStart(compact): the card claim', needle: 'if ! { mv -f "$f" "$claim"; } 2>/dev/null; then' },
+      { what: 'SessionStart(compact): the crossed-nonce card restore',
+        needle: '{ link "$claim" "$f"; } 2>/dev/null || true', pick: [0, 2] },
+      { what: 'SessionStart(compact): the body-less card restore',
+        needle: '{ link "$claim" "$f"; } 2>/dev/null || true', pick: [1, 2] },
+      // The Overlord's PreCompact events line (W1a, review 1927 I3): its rotation and its append.
+      { what: 'PreCompact events line: a symlink at .compacteventsprev removed (review 1937 F1)', needle: 'rm -f "$prev" 2>/dev/null' },
+      { what: 'PreCompact events line: the rotation', needle: 'mv -f "$f" "$prev" 2>/dev/null && rot=0' },
+      { what: 'PreCompact events line: the append', needle: `{ printf '%s\\n' "$line" >> "$f"; } 2>/dev/null` },
+    ];
+    /** The k-th line carrying `needle`, with the total pinned: an anchor that
+     *  gained or lost an occurrence is a moved anchor, not a re-indexed one. */
+    const nthOf = (needle: string, k: number, of: number): number => {
+      const hits = linesOf(needle);
+      expect(hits, `the source anchor moved or changed count: ${needle}`).toHaveLength(of);
+      return hits[k]!;
+    };
+    const floorUsed = new Map<string, number>();
+    let prev = 0;
+    for (const e of MUTATIONS) {
+      const m = e.pick ? nthOf(e.needle, e.pick[0], e.pick[1]) : lineOf(e.needle);
+      expect(m, `${e.what}: the mutations are scanned in file order`).toBeGreaterThan(prev);
+      // The floor is whichever is nearer: the previous mutation, or this
+      // section's own acquire when this is the section's first — except in an
+      // alternative branch, which inherits its sibling's floor.
+      const lastAcquire = Math.max(0, ...acquires.filter((a) => a < m));
+      let floor: number;
+      if (e.branchOf !== undefined) {
+        const inherited = floorUsed.get(e.branchOf);
+        expect(inherited, `${e.what}: its branch sibling "${e.branchOf}" is listed above it`).toBeGreaterThan(0);
+        floor = inherited!;
+      } else {
+        floor = Math.max(prev, lastAcquire);
+      }
+      floorUsed.set(e.what, floor);
+      const between = guards.filter((g) => g > floor && g < m);
+      expect(between.length,
+        `${e.what} (line ${m}) has no identity re-check after line ${floor} — item 3 is unbuilt there`)
+        .toBeGreaterThan(0);
+      prev = m;
+    }
+  });
+
+  it('CLOSE-BEFORE-FORK, BY EFFECT: the helper can take the row\'s lock while it runs', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // A held `{fd}<>` descriptor is NOT close-on-exec — measured, an exec'd
+    // child's `/proc/self/fd` lists the parent's lock fd — so a shape-only
+    // "the release statement precedes the fork" pin cannot tell a real release
+    // from a descriptor that merely went out of scope. This asks the CHILD,
+    // which is the only party that can answer: it tries the mutex itself with
+    // a one-second bound and records what it got.
+    // A FIXED descriptor number, not bash's `{var}<>`: `stub()` writes
+    // `#!/bin/sh`, and varredir is a bash-ism dash does not have — measured,
+    // the stub silently produced no file at all under it, which would have
+    // read as "the child never ran" rather than as a broken fixture.
+    stub('timeout', [
+      HELPER_ONLY,
+      'exec 9<>"$HOME/.cc-sessions/.demo-quiet-basin.compactions.lock" 2>/dev/null || { echo noopen > "$HOME/child-lock"; shift; exec "$@"; }',
+      'if flock -w 1 9; then echo got > "$HOME/child-lock"; else echo blocked > "$HOME/child-lock"; fi',
+      'exec 9>&-',
+      'shift; exec "$@"',
+    ].join('\n'));
+    run(preCompact(tree, transcript));
+    expect(fs.readFileSync(path.join(home, 'child-lock'), 'utf8').trim(),
+      'the arm released before forking the helper').toBe('got');
+    expect(fs.existsSync(lockFile())).toBe(true);
+  });
+});
+
+// ── D-2605: the two source-order pins §3.1 assigns to Task 9 ─────────────
+// Both exist because the properties they assert are UNPINNABLE by behaviour.
+// Moving the acquire above the scope call changes no observable output on an
+// uncontended box; swapping the two renames leaves the post-arm state
+// byte-identical under either order, because they are adjacent inside ONE held
+// lock and Plan A runs neither of the stage-2 acts that would sit between
+// them. An unpinned outcome is the defect class the round-10 split existed to
+// close, so these are source-offset assertions and say so.
+describe('the compaction card — PreCompact source order (spec §3.1)', () => {
+  const preBody = (): string => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const start = src.indexOf('_hook_compact_pre() {');
+    expect(start, '_hook_compact_pre exists').toBeGreaterThan(0);
+    const end = src.indexOf('\n}\n', start);
+    return src.slice(start, end);
+  };
+
+  it('the acquire sits AFTER scope and graph measurement and BEFORE the overlap find', () => {
+    const b = preBody();
+    const scope = b.indexOf('_hook_compact_scope "$tp" "$trig"');
+    const measure = b.indexOf('_hook_graph_measure ||');
+    const acquire = b.indexOf('_hook_lock_acquire "$COMPACT_LOCK_WAIT"');
+    const overlap = b.indexOf('find "$REG" -maxdepth 1 \\( -name "$id.compactset"');
+    const release = b.indexOf('_hook_lock_release "$lockfd"; lockfd=""');
+    const helper = b.indexOf('_hook_timeout "$COMPACT_HELPER_TIMEOUT" node');
+    for (const [n, v] of Object.entries({ scope, measure, acquire, overlap, release, helper })) {
+      expect(v, `${n} was found`).toBeGreaterThan(-1);
+    }
+    // Moving the acquire above the scope call is the mutation that would
+    // reverse round 8's I8 correction: it would hold the row's mutex across
+    // work that reads no lifecycle artifact and has nothing to exclude,
+    // serialising every sibling context of this session behind it.
+    expect(acquire, 'after the scope call').toBeGreaterThan(scope);
+    expect(acquire, 'after the graph measurement').toBeGreaterThan(measure);
+    expect(acquire, 'before the overlap find').toBeLessThan(overlap);
+    expect(release, 'and the release precedes the helper fork').toBeLessThan(helper);
+  });
+
+  it('the card-stage rename precedes EVERY set-stage rename, and the counts are pinned beside the order', () => {
+    const b = preBody();
+    const cardMvs = [...b.matchAll(/mv -f "\$cardstage" "\$cardf"/g)].map((m) => m.index!);
+    const setMvs = [...b.matchAll(/mv -f "\$setstage" "\$set"/g)].map((m) => m.index!);
+    // THE COUNTS ARE PART OF THE PIN. Protocol step 13 has two publishing arms
+    // (rc 0 renames card then set; rc 3 renames set alone), so a per-arm
+    // `case`/`if` factoring has TWO set-stage renames and "the set-stage mv's
+    // offset" would otherwise be undefined. Either factoring is allowed; this
+    // records which shipped, and splitting or merging that rename reds.
+    expect(cardMvs, 'exactly one card-stage rename').toHaveLength(1);
+    expect(setMvs, 'exactly two set-stage renames — the rc 0 arm and the rc 3 arm').toHaveLength(2);
+    for (const s of setMvs) expect(cardMvs[0], 'card before set, every time').toBeLessThan(s);
+  });
+});
+
+// ── D-2605: the comment corrections, pinned where the claim is falsifiable ─
+// Each of these was a shipped sentence this task makes untrue, and each stayed
+// green under every existing suite — a comment that goes on giving the OLD
+// reason is a lie no behaviour test can catch, which is the whole reason these
+// are asserted rather than merely edited.
+describe('the compaction card — the sentences D-2605 falsifies (spec §3.4)', () => {
+  const hook = (): string => fs.readFileSync(HOOK, 'utf8');
+  const ccd = (): string => ccdSource();
+
+  /** Every comment BLOCK (a run of consecutive `#` lines) that carries
+   *  `needle` and is NOT marked as a retraction.
+   *
+   *  The allow-list is ONE rule, stated as a mechanism: a block is exempt iff
+   *  it carries a retraction marker from this exact list. A correction has to
+   *  QUOTE the sentence it retracts or the record of the correction is
+   *  unreadable — and a scan that reds on that record teaches the next round
+   *  to delete it, which is how the false sentences this task fixes survived
+   *  as long as they did. */
+  const RETRACTION = /\breplaces\b|\bsuperseded\b|\bno longer\b|\bforbids\b|\bmeasurably false\b|\bused to\b/i;
+  const liveClaims = (src: string, needle: string): string[] => {
+    const blocks: string[] = [];
+    let cur: string[] = [];
+    for (const line of src.split('\n')) {
+      if (/^\s*#/.test(line)) { cur.push(line); continue; }
+      if (cur.length) { blocks.push(cur.join('\n')); cur = []; }
+    }
+    if (cur.length) blocks.push(cur.join('\n'));
+    return blocks.filter((b) => b.includes(needle) && !RETRACTION.test(b));
+  };
+
+  it('the file\'s two statements of its own lock-free contract are SCOPED to the hot path, and name the stable lock', () => {
+    const src = hook();
+    // TWO SITES, both of which asserted "no locks" flatly before this task
+    // introduced a real `flock`: the header, and the emitter's restatement of
+    // the standing contract. Neither may go on saying it unqualified.
+    const header = src.split('\n').slice(0, 24).join('\n');
+    expect(header).toContain('on the HOT PATH, no locks and no waiting');
+    expect(header, 'the header names the new exception by its constant').toContain('COMPACT_LOCK_WAIT');
+    expect(header).toContain('COMPACT_LOCK_WAIT_SERVE');
+    const restated = src.slice(src.indexOf('# event, never both.'));
+    expect(restated.slice(0, 600)).toContain('on the hot\n# path no locks and no waiting');
+    // and NEITHER may carry the flat form any more
+    const comments = src.split('\n').filter((l) => /^\s*#/.test(l)).join('\n');
+    expect(comments, 'the unqualified claim is gone from every comment')
+      .not.toContain('no network, no locks, no waiting');
+  });
+
+  it('the constants block describes the EXACT-family sweep, and names BOTH halves of the widened slug pair', () => {
+    const src = hook();
+    const block = src.slice(src.indexOf('# ── THE COMPACTION CARD'), src.indexOf('COMPACT_CARD_OFF='));
+    // The sweep it describes is the one that ships. The pre-D-2605 sentence
+    // rested on `.compact*.tmp`, which is the glob this task deletes.
+    expect(block).toContain('_hook_family_sweepable');
+    expect(block, 'and it says what that replaced').toContain('.compact*.tmp');
+    expect(block).toContain('by coincidence rather than');
+    // BOTH NAMES, because round 9's own closure rules that every reason
+    // `_ws_slug_free` can refuse is a reason `_ws_slug_residue` can name — so a
+    // comment naming only one of the pair re-creates the half-widening defect
+    // in prose. Deleting either name from this block reds.
+    expect(block).toContain('_ws_slug_free');
+    expect(block).toContain('_ws_slug_residue');
+  });
+
+  it('the single-definition sentence is TRUE: the four ROOTS are TypeScript, and a second bash corpus covers ccd/', () => {
+    const src = hook();
+    // The sentence this replaces — "`single-definition.test.ts` does not scan
+    // `ccd/` at all" — is measurably false against the shipped test, and told
+    // the next reader no mechanism existed where one does.
+    // LIVE CLAIMS ONLY, through the retraction rule above.
+    expect(liveClaims(src, 'does not scan `ccd/` at all'), 'no LIVE copy survives').toEqual([]);
+    // NON-VACUITY: the phrase really IS still in the file, as quoted history,
+    // so the emptiness above is the allow-list working rather than the scan
+    // finding nothing at all.
+    expect(src, 'the retracted sentence is kept as history').toContain('does not scan `ccd/` at all');
+    expect(src).toContain('bashRoots');
+    // AND THE MEASUREMENT THE SENTENCE NOW RESTS ON, re-derived here rather
+    // than quoted: the bash corpus really does carry both files by name.
+    const sd = ['helpers.ts', ...fs.readdirSync(path.resolve(__dirname, 'single-definition')).filter((f) => f.endsWith('.test.ts'))].map((f) => fs.readFileSync(path.resolve(__dirname, 'single-definition', f), 'utf8')).join('\n');
+    expect(sd).toContain('bashRoots');
+    expect(sd).toContain('ccd/session-hook.sh');
+    expect(sd).toContain('ccd/ccd');
+  });
+
+  it('COMPACT_SHAPE_PRED\'s comment names what the constant is FOR, and no longer asserts two forbidden behaviours', () => {
+    const src = hook();
+    const i = src.indexOf('COMPACT_SHAPE_PRED=');
+    const block = src.slice(src.lastIndexOf('# ONE SPELLING', i), i);
+    expect(block).toContain('jq -ce -s');
+    expect(block).toContain('JOURNAL_RECORD_PRED');
+    // The two D-2605 forbids: the hook adding `n`, and a hookstate read-back.
+    expect(block).toContain('no hookstate compaction cache and no persisted');
+    // Same rule: the two forbidden behaviours are NAMED here, inside a block
+    // that retracts them, and must exist nowhere as a live claim.
+    expect(liveClaims(hook(), 'the hook adds `n`')).toEqual([]);
+    expect(liveClaims(hook(), 'read back from hookstate')).toEqual([]);
+    expect(block, 'and both are named as what this replaces').toContain('read back from hookstate');
+  });
+
+
+  it('no LIVE comment still claims PreCompact sweeps a `.$id.*compact*.tmp` glob', () => {
+    const src = hook();
+    // The plan's Task 9 comment scope named two further broad-sweep sentences
+    // as this task's own. One went with the rollback functions; this one
+    // survived, in SessionStart's claim-naming block, asserting a sweep this
+    // task deleted — while the very next paragraph in the same block announced
+    // the migration that made it false.
+    expect(liveClaims(src, 'existing `.$id.*compact*.tmp` glob'), 'no LIVE copy survives').toEqual([]);
+    // NON-VACUITY, the same shape the neighbouring tests use: the phrase really
+    // IS still in the file, as quoted history inside a retracting block, so the
+    // emptiness above is the retraction rule working rather than the needle
+    // matching nothing at all.
+    expect(src, 'the retracted sentence is kept as history').toContain('existing `.$id.*compact*.tmp` glob');
+    // AND THE MECHANISM THAT REPLACED IT, named where the claim is made.
+    const i = src.indexOf('claim="$REG/.$id.compactcard.$$.$nonce.session-claim.tmp"');
+    expect(i, 'the claim this block is about').toBeGreaterThan(-1);
+    const block = src.slice(src.lastIndexOf('# ATOMIC CLAIM', i), i);
+    expect(block).toContain('_hook_family_sweepable');
+    expect(block).toContain('compactcard.*.session-claim.tmp');
+  });
+  it('COMPACT_CARD_MAX_AGE is split BY ARTIFACT: an aged card is removed unread, an aged set is still claimed', () => {
+    const src = hook();
+    const i = src.indexOf('COMPACT_CARD_MAX_AGE=');
+    const block = src.slice(src.lastIndexOf('# THE IN-FLIGHT WINDOW', i), i);
+    expect(block).toContain('An aged\n# CARD belongs to no compaction');
+    expect(block).toContain('removed UNREAD');
+    expect(block).toContain('An aged\n# canonical SET is NOT removed unread');
+    expect(block).toContain('provenance\n# eligibility');
+  });
+
+  it('ccd\'s authdead sentence gives BOTH reasons the marker is invisible, not the dot-skip alone', () => {
+    const src = ccd();
+    const block = src.slice(src.indexOf('# DOTLESS AND PER-ACCOUNT'), src.indexOf('# NOT `-disabled`.'));
+    expect(block).toContain('second pass over the dot-LEADING');
+    expect(block).toContain('not because of the dot-skip alone');
+    // THE THIRD COPY of the same sentence, in the test that pins the marker.
+    // Its assertions stay GREEN after the widening (the marker is dotless AND
+    // matches no private family), so nothing reds and the comment would simply
+    // have become a lie — the `correcting-the-instance-is-not-correcting-the-claim`
+    // shape, which is why all three copies are asserted here in one place.
+    const ad = fs.readFileSync(path.resolve(__dirname, 'ccd-authdead.test.ts'), 'utf8');
+    expect(ad).toContain('dot-LEADING pass over the private compaction families');
+  });
+
+  it('_reg_purge\'s "nothing here can gate the purge" is restated WITHOUT overstating the change', () => {
+    const src = ccd();
+    const i = src.indexOf("  # `_lc_done` returns 0 on every path");
+    expect(i, 'the sentence is still there to be restated').toBeGreaterThan(0);
+    const block = src.slice(i, src.indexOf('_lc_done purge', i));
+    // What stays true: the emit carries no condition and precedes the loop.
+    expect(block).toContain('still carries no condition');
+    expect(block).toContain('still precedes the unlink loop');
+    // What changed: the gate moved one level up, to the lock.
+    expect(block).toContain('under the row\'s stable compaction lock');
+    // And the distinction round 10 (B-4) found conflated: a lock miss and a
+    // REMOVAL failure are different conditions, and only the first can suppress
+    // the fact — writing "emits no purge-done" for a removal failure is the
+    // falsified round-5 phrasing, and an implementer obeying it would gate the
+    // emit on the loop, which is the mutant `ccd-lifecycle-purge.test.ts` reds.
+    expect(block).toContain('REMOVAL failure is a different condition');
+    expect(block).toContain('already journaled');
+  });
+});
+
+// ── D-2605: the DOCUMENTATION-CONSISTENCY scan (spec §3.4, round 11) ──────
+// It sits beside `_reg_purge`'s source-order pin because that pin stays GREEN
+// under the prose regression, and that is exactly why the prose regression
+// survived three rounds: `_reg_purge` emits its terminal fact EARLY — capture
+// under lock, emit, then delete — while four sentences across the two
+// documents said the opposite. An implementer obeying the prose would gate the
+// emit on the unlink loop, which is the mutant `ccd-lifecycle-purge.test.ts`
+// exists to red.
+describe('the compaction card — the two documents say what the code does (spec §3.4)', () => {
+  const DOCS = path.resolve(__dirname, '../../docs/superpowers');
+  // README IS IN THIS CORPUS TOO (wb2 B-I2 = A1). The two documents are where
+  // the retracted sentences lived, but README is the OPERATOR-facing account of
+  // the same mechanisms and nothing stopped a retracted claim being restated
+  // there — it was simply never read. Adding it costs one file read and closes
+  // the gap by construction rather than by anyone remembering to look.
+  const CORPUS = [
+    ['spec', path.join(DOCS, 'specs/2026-09-09-graphify-compaction-card-design.md')],
+    ['plan', path.join(DOCS, 'plans/2026-09-10-graphify-compaction-card-plan-a.md')],
+    ['readme', path.resolve(__dirname, '../../README.md')],
+  ] as const;
+
+  // PATTERN 1 — the purge-emit regression, in the three shapes the four
+  // retracted sentences take. PATTERN 2 — the pre-gate four-caller rule.
+  const P1 = /may not emit .{0,40}until completed|removal failure[^.]*no purge-done|mutation failure[^|]*no purge-done/gi;
+  const P2 = /_reg_purge[^.]{0,80}four callers[^.]{0,60}keep working/gi;
+  // THE ALLOW-LIST, ONE RULE, STATED AS A MECHANISM. Quotations exist in order
+  // to retract the phrasing they quote; a scan that reds on the RECORD of a
+  // correction teaches the next round to delete that record, and those
+  // deletions are what kept this regression alive.
+  const MARKERS = /declines to restore|superseded|said the opposite|retract/i;
+
+  /** PARAGRAPH-JOINED, and the join is load-bearing rather than cosmetic: a
+   *  line-scoped grammar never crosses a hard-wrapped quotation, which made the
+   *  round-10 guard simultaneously RED on a correct tree and VACUOUS against a
+   *  restored sentence that happens to wrap at this corpus's ~110-column
+   *  width. §6's own retraction quotation is wrapped mid-phrase and is the
+   *  control that proves it. */
+  const paragraphs = (text: string): string[] =>
+    text.split(/\n\s*\n/)
+      .map((p) => p.split('\n').map((l) => l.trim()).filter((l) => l !== '').join(' '))
+      .filter((p) => p !== '');
+
+  /** Backtick- or quote-delimited spans of a JOINED paragraph. The containment
+   *  half of the rule is what stops an alternation running from inside one
+   *  quotation, across prose, into another — which is what both of round 10's
+   *  own live matches did. */
+  const quotedSpans = (p: string): Array<[number, number]> => {
+    const spans: Array<[number, number]> = [];
+    for (const re of [/`[^`]*`/g, /"[^"]*"/g, /“[^”]*”/g]) {
+      for (const m of p.matchAll(re)) spans.push([m.index!, m.index! + m[0].length]);
+    }
+    return spans;
+  };
+
+  const scan = (corpus: Array<readonly [string, string]>, pat: RegExp):
+    { raw: number; allowed: number; live: string[] } => {
+    let raw = 0; let allowed = 0; const live: string[] = [];
+    for (const [label, text] of corpus) {
+      for (const p of paragraphs(text)) {
+        const spans = quotedSpans(p);
+        for (const m of p.matchAll(pat)) {
+          raw++;
+          const [a, b] = [m.index!, m.index! + m[0].length];
+          if (spans.some(([s, e]) => s <= a && b <= e) && MARKERS.test(p)) allowed++;
+          else live.push(`${label}: ${m[0].slice(0, 120)}`);
+        }
+      }
+    }
+    return { raw, allowed, live };
+  };
+
+  const realCorpus = (): Array<readonly [string, string]> =>
+    CORPUS.map(([l, f]) => [l, fs.readFileSync(f, 'utf8')] as const);
+
+  it('no retracted purge-emit sentence stands as a LIVE claim in either document', () => {
+    const r = scan(realCorpus(), P1);
+    // NON-VACUITY, MANDATORY, and all three numbers are asserted: if RAW drops
+    // the join or the corpus is broken and the scan proves nothing; if LIVE
+    // rises a retracted sentence has come back as a live claim. Measured on
+    // this tree — one in the spec (§6's WRAPPED retraction quotation, which a
+    // line-scoped grammar finds ZERO times), three in the plan's own scan
+    // paragraph, and two in the D-2605 ledger entry.
+    expect(r.raw, 'the raw match set').toBe(6);
+    expect(r.allowed, 'all of them allow-listed as quoted history').toBe(6);
+    expect(r.live, 'live claims').toEqual([]);
+  });
+
+  // PATTERN 3 — D-2756's withdrawal (fix round 2, A-I4). Round 1 rewrote §3.1
+  // item 5 to say the redundant-canonical-alias unlink "is WITHDRAWN" and left
+  // THREE other sentences asserting it as built behaviour, two of them inside
+  // the paragraph the spec itself nominates as the authority the fork-multiset
+  // pin is written against — so a reader rebuilding that pin was instructed to
+  // expect a child that does not exist, and the pin is red on a correct tree.
+  // P1's and P2's quotation rule does not fit here: a withdrawal is normally
+  // stated in PROSE, not quoted, so demanding a quotation would force every
+  // correct retraction into scare quotes. THE RULE INSTEAD IS CITATION: every
+  // mention of this unlink must carry `D-2756` in its own paragraph — the
+  // number that withdrew it. A restored live claim does not cite the
+  // withdrawal, which is precisely what made the three survivors survivors.
+  const P3 = /unlinks? only the redundant canonical alias|redundant-canonical-alias unlink/gi;
+
+  /** The citation-scoped variant of `scan`. Same paragraph normalisation, so
+   *  the join stays load-bearing for the same reason. */
+  const scanCited = (corpus: Array<readonly [string, string]>):
+    { raw: number; cited: number; live: string[] } => {
+    let raw = 0; let cited = 0; const live: string[] = [];
+    for (const [label, text] of corpus) {
+      for (const p of paragraphs(text)) {
+        for (const m of p.matchAll(P3)) {
+          raw++;
+          if (/D-2756/.test(p)) cited++;
+          else live.push(`${label}: ${m[0].slice(0, 120)}`);
+        }
+      }
+    }
+    return { raw, cited, live };
+  };
+
+  it('every mention of the WITHDRAWN redundant-canonical-alias unlink cites its withdrawal', () => {
+    const r = scanCited(realCorpus());
+    // NON-VACUITY: if RAW drops to zero the corpus is broken or the phrase was
+    // deleted outright, and the scan proves nothing about a restoration.
+    expect(r.raw, 'the raw match set').toBeGreaterThan(4);
+    expect(r.cited, 'each one carries D-2756 in its own paragraph').toBe(r.raw);
+    expect(r.live, 'live claims of a withdrawn behaviour').toEqual([]);
+  });
+
+  it('CONTROL: re-inserting any of the three survivors reds it', () => {
+    // The three sentences as they actually stood at c80e6b02, verbatim.
+    const survivors = [
+      'PreCompact final-rechecks it, unlinks only the redundant canonical alias, and leaves that claim and its marker untouched before it publishes its successor.',
+      "and step 6's conditional redundant-canonical-alias unlink (§3.1 item 5, an `rm`).",
+      'the redundant-canonical-alias unlink only on an `-ef` match.',
+    ];
+    for (const sentence of survivors) {
+      const r = scanCited([['spec', `${sentence}\n`], ['plan', '']]);
+      expect(r.raw, `the pattern finds it: ${sentence.slice(0, 40)}`).toBeGreaterThan(0);
+      expect(r.live.length, `and it is LIVE: ${sentence.slice(0, 40)}`).toBeGreaterThan(0);
+    }
+    // …and the same sentence in a paragraph that cites the withdrawal is
+    // history, not a claim — or the next round deletes the record.
+    const withCitation = `${survivors[0]!} That clause is WITHDRAWN (D-2756).\n`;
+    expect(scanCited([['spec', withCitation], ['plan', '']]).live, 'a cited retraction is exempt').toEqual([]);
+  });
+
+  it('the pre-gate four-caller rule stands only as a quotation of what it replaced', () => {
+    const r = scan(realCorpus(), P2);
+    expect(r.raw).toBe(1);
+    expect(r.allowed).toBe(1);
+    expect(r.live).toEqual([]);
+  });
+
+  it('CONTROL: the JOIN is load-bearing — a WRAPPED restoration reds, and a line-scoped grammar does not see it', () => {
+    // The restoration, as §6 would carry it: hard-wrapped mid-phrase, and NOT
+    // inside a quotation — a live claim.
+    // ONE alternative only, and it is the wrap-crossing one. A fixture whose
+    // second line independently matched `removal failure … no purge-done`
+    // would be seen by a line-scoped grammar too — for a different reason —
+    // and the control would prove nothing about the join. (Measured: that was
+    // this control's own first draft, and it failed here.)
+    const wrapped = 'The purge may not emit its terminal fact\nuntil completed.\n';
+    const mutated: Array<readonly [string, string]> = [['spec', wrapped], ['plan', '']];
+    expect(scan(mutated, P1).live.length, 'the joined scan sees the wrapped sentence').toBeGreaterThan(0);
+    // AND THE CONTROL ON THE CONTROL: a line-scoped grammar stays GREEN on the
+    // very same input, which is what makes the normalisation the mechanism
+    // rather than a formatting preference.
+    const lineScoped = wrapped.split('\n').filter((l) => P1.test(l));
+    P1.lastIndex = 0;
+    expect(lineScoped, 'a line-scoped grammar never crosses the wrap').toEqual([]);
+  });
+
+  it('CONTROL: an UNWRAPPED restoration reds too, and a quotation of it does not', () => {
+    const oneLine = 'The purge may not emit its terminal fact until completed.\n';
+    expect(scan([['spec', oneLine], ['plan', '']], P1).live.length).toBeGreaterThan(0);
+    // The SAME sentence inside a quotation, in a paragraph carrying a
+    // retraction marker, is history rather than a claim — and must not red, or
+    // the next round deletes the record of the correction.
+    const quoted = 'This invariants section said the opposite ("may not emit its terminal fact until completed") for three rounds.\n';
+    expect(scan([['spec', quoted], ['plan', '']], P1).live, 'quoted history is exempt').toEqual([]);
+    // THE MARKER HALF IS REAL: the same quotation in a paragraph with NO
+    // retraction marker is a live claim again.
+    const noMarker = 'The rule is ("may not emit its terminal fact until completed") and that is all.\n';
+    expect(scan([['spec', noMarker], ['plan', '']], P1).live.length,
+      'a marker-less paragraph is not exempt, however it is punctuated').toBeGreaterThan(0);
+    // AND SO IS THE CONTAINMENT HALF, which needs its OWN fixture: a paragraph
+    // that DOES carry a retraction marker, with the match sitting OUTSIDE any
+    // quotation. Measured on the real corpus, deleting the containment
+    // requirement changes nothing — every allow-listed match there happens to
+    // be quoted anyway — so without this the half would be unpinned, and a
+    // green deletion means AMBIGUOUS rather than untested. Under the rule this
+    // is a LIVE claim: retracting something else in the same paragraph does
+    // not license asserting this.
+    const markerButUnquoted = 'The old wording is retracted. The purge may not emit its terminal fact until completed.\n';
+    expect(scan([['spec', markerButUnquoted], ['plan', '']], P1).live.length,
+      'a retraction marker does not license an UNQUOTED claim beside it').toBeGreaterThan(0);
+  });
+
+  // ── THE DANGLING-IDENTIFIER SCAN (fix round 2, B-M1 / B-M2) ────────────
+  // Two comments in this range pointed at functions that do not exist:
+  // `ccd/session-hook.sh` named `_hook_compact_rollback_card`, whose definition
+  // and one call site this range DELETED, and a line `ccd/ccd` ADDED cited
+  // `_reg_field_state` as the precedent for a `-e`/`-L` pairing — a name that
+  // has never existed on either tree. A reader following either pointer finds
+  // nothing, and a future editor copying the cited shape has nothing to copy.
+  // Neither is visible to the needle-driven describe above, which has an arm
+  // per sentence it knows about.
+  //
+  // THE RULE: a backticked lower-case `_name` on a COMMENT line of either
+  // shipped shell file is a function reference, and must resolve to a `name() {`
+  // definition somewhere in `ccd/`. Three exemptions, each a mechanism rather
+  // than a list: a name that is also a VARIABLE in the scanned files, a name on
+  // the measured allow-list below, and a name inside a comment block carrying a
+  // RETRACTION marker — because a correction that names what it corrects is the
+  // record this project keeps rather than deletes.
+  const SHELL_CORPUS = (): Array<[string, string]> => {
+    const dir = path.resolve(__dirname, '../../ccd');
+    // ccd's library, loaded at ccd's foot (D-6913), is ccd's code: its definitions resolve the references
+    // the moved comments and the comments left behind make, and its own comments are held to the same rule.
+    const libs = fs.readdirSync(path.join(dir, 'lib')).filter((n) => n.endsWith('.sh'))
+      .map((n) => [`lib/${n}`, fs.readFileSync(path.join(dir, 'lib', n), 'utf8')] as [string, string]);
+    return [...fs.readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => [e.name, fs.readFileSync(path.join(dir, e.name), 'utf8')] as [string, string]), ...libs];
+  };
+  const SCANNED = ['session-hook.sh', 'ccd', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh'];   // the second and third libraries' comments too (D-7463)
+  /** NOT FUNCTIONS, and each is here for a stated reason rather than because it
+   *  was in the way. All three are declared by the GENERATED roster projection
+   *  (`~/.ccrc/accounts.sh`, `shared/generate.mjs`), which this repo builds but
+   *  does not ship as a file under `ccd/`, so no definition can be found here.
+   *  `_ccrc_secrets_file` joined for D-3524: ccd's auth-dead credential rule
+   *  probes it with `declare -F`, as `_acct_pool` probes `_ccrc_pool`. */
+  const NOT_A_FUNCTION = ['_ccrc_cfg_dir', '_ccrc_pool', '_ccrc_secrets_file'];
+
+  /** A comment BLOCK, normalised the way `paragraphs` normalises prose and for
+   *  the same measured reason: a retraction is hard-wrapped, so a line-scoped
+   *  marker test never sees one that straddles a wrap. (Measured: the retired
+   *  `_lc_refused` spelling's own retraction reads "The earlier\n  # spelling",
+   *  and a line-scoped rule reported it as dangling.) */
+  const RETRACT = /used to|no longer|never existed|has never|deleted|superseded|replaces|retract|earlier spelling/i;
+
+  const danglers = (corpus: Array<[string, string]>): string[] => {
+    const defined = new Set<string>();
+    for (const [, text] of corpus) {
+      for (const m of text.matchAll(/^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(\)[ \t]*\{/gm)) defined.add(m[1]!);
+    }
+    const vars = new Set<string>();
+    for (const [name, text] of corpus) {
+      if (!SCANNED.includes(name)) continue;
+      for (const m of text.matchAll(/^[^#\n]*?\b([A-Za-z_][A-Za-z0-9_]*)=/gm)) vars.add(m[1]!);
+      for (const m of text.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) vars.add(m[1]!);
+    }
+    const out: string[] = [];
+    for (const [name, text] of corpus) {
+      if (!SCANNED.includes(name)) continue;
+      const lines = text.split('\n');
+      const isComment = (l: string | undefined): boolean => l !== undefined && /^\s*#/.test(l);
+      for (let i = 0; i < lines.length; i++) {
+        if (!isComment(lines[i])) continue;
+        let a = i; while (a > 0 && isComment(lines[a - 1])) a--;
+        let b = i; while (b < lines.length - 1 && isComment(lines[b + 1])) b++;
+        const block = lines.slice(a, b + 1).map((l) => l.replace(/^\s*#\s?/, '').trim()).join(' ');
+        if (RETRACT.test(block)) continue;
+        for (const m of lines[i]!.matchAll(/`(_[a-z][a-z0-9_]*[a-z0-9])`/g)) {
+          const id = m[1]!;
+          if (defined.has(id) || vars.has(id) || NOT_A_FUNCTION.includes(id)) continue;
+          out.push(`${name}:${i + 1}: ${id}`);
+        }
+      }
+    }
+    return out.sort();
+  };
+
+  it('every backticked _identifier in a shell comment resolves to a function that exists', () => {
+    const corpus = SHELL_CORPUS();
+    // NON-VACUITY, both halves: the corpus really is the shell files, and the
+    // scan really is finding identifiers to check.
+    expect(corpus.map(([n]) => n), 'both scanned files are in the corpus')
+      .toEqual(expect.arrayContaining(SCANNED));
+    const anyId = corpus.filter(([n]) => SCANNED.includes(n))
+      .flatMap(([, t]) => [...t.matchAll(/^\s*#.*`(_[a-z][a-z0-9_]*)`/gm)]);
+    expect(anyId.length, 'the scan has subjects at all').toBeGreaterThan(100);
+    expect(danglers(corpus), 'a comment points at a function that does not exist').toEqual([]);
+  });
+
+  it('CONTROL: a made-up name reds, and the same name inside a retraction does not', () => {
+    const corpus = SHELL_CORPUS();
+    const withFake: Array<[string, string]> = corpus.map(([n, t]) =>
+      (n === 'ccd' ? [n, `# see \`_a_function_nobody_wrote\` for the shape\n${t}`] : [n, t]));
+    expect(danglers(withFake).some((d) => d.includes('_a_function_nobody_wrote')),
+      'the scan sees a made-up name').toBe(true);
+    const withRetraction: Array<[string, string]> = corpus.map(([n, t]) =>
+      (n === 'ccd' ? [n, `# this used to say \`_a_function_nobody_wrote\`, which was deleted\n${t}`] : [n, t]));
+    expect(danglers(withRetraction).some((d) => d.includes('_a_function_nobody_wrote')),
+      'a retraction that names what it corrects is the record, not a defect').toBe(false);
+    // AND THE TWO REAL ONES: re-inserting either survivor reds.
+    for (const gone of ['_hook_compact_rollback_card', '_reg_field_state']) {
+      const restored: Array<[string, string]> = corpus.map(([n, t]) =>
+        (n === 'ccd' ? [n, `# the same one-expression pairing \`${gone}\` uses\n${t}`] : [n, t]));
+      expect(danglers(restored).some((d) => d.includes(gone)), `${gone} reds`).toBe(true);
+    }
+  });
+
+  it('CONTROL: pattern 2 reds on the restored rule and not on this document\'s quotation of it', () => {
+    const restored = 'On such a box `_reg_purge` and its four callers keep working exactly as they do today.\n';
+    expect(scan([['spec', restored], ['plan', '']], P2).live.length).toBeGreaterThan(0);
+  });
+});
+
+// ── D-2605: PostCompact — settle, measure, commit ONE journal line (§3.4) ─
+describe('the compaction card — PostCompact settlement and the journal (spec §3.4)', () => {
+  const lockFile = (): string => path.join(home, '.cc-sessions', '.demo-quiet-basin.compactions.lock');
+  const reg = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'));
+  const journal = (): Array<Record<string, unknown>> =>
+    fs.readFileSync(journalFile(), 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l));
+  const SUMMARY = [
+    '1. Task', 'did a thing', '',
+    '3. Files and Code Sections:', '- server/src/pane/statusline.ts was edited', '',
+    '4. Errors and fixes', 'none', '',
+  ].join('\n');
+
+  /** A full PreCompact → serve → PostCompact cycle against a real tree. */
+  const cycle = (opts: { serve?: boolean; trigger?: 'auto' | 'manual' } = {}): { tree: string; transcript: string } => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript, opts.trigger ?? 'manual'));
+    if (opts.serve) run(compactStart(tree, transcript));
+    return { tree, transcript };
+  };
+
+  it('THE SERVED-MARKER NONCE IS CAPTURED INSIDE ITS SAFE GATE — an unsafe one forms no pathname at all', () => {
+    // §3.3 step 2's rule is that the grammar gates a PATH COMPONENT: "a nonce
+    // this refuses forms no marker path at all", and the settlement's own
+    // comment says the same ("an unsafe or missing nonce forms no marker path
+    // and reads false"). Both were false: the capture sat OUTSIDE the grammar
+    // test and only `served` was gated by it, while the commit path built
+    // `rm -f "$REG/.$id.compactserved.$nonce"` from the ungated value.
+    // MEASURED on the shipped arm with exactly this fixture: the record
+    // committed AND `$REG/victim` was DELETED.
+    //
+    // Both preconditions need an out-of-contract same-UID writer — no
+    // in-contract path can put an unsafe nonce in the set, since PreCompact
+    // mints `compact-<at>-<pid>-<r>-<r>` and the helper copies it verbatim —
+    // and such a writer can already unlink anything in `$REG`, so this grants
+    // no capability. It is here because a shipped invariant should be true.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const regd = path.join(home, '.cc-sessions');
+    fs.writeFileSync(setFile(), `${JSON.stringify({
+      v: 1, at: 1, nonce: 'x/../victim', scope: 'main', overlap: false, agent: null, transcript: null,
+      parentLive: false, liveAgents: 0, cwd: tree, built: null, fresh: null,
+      steered: false, files: null, stats: null,
+    })}\n`);
+    // A DIRECTORY at the marker's stem is what makes the traversal resolve:
+    // `.../compactserved.x/../victim` is `$REG/victim` only if `.x` is one.
+    fs.mkdirSync(path.join(regd, '.demo-quiet-basin.compactserved.x'), { recursive: true });
+    fs.writeFileSync(path.join(regd, 'victim'), 'a registry file that is not a marker\n');
+    run(postCompact(tree, transcript, SUMMARY));
+    const recs = journal();
+    expect(recs, 'the record still commits — so the assertion below discriminates').toHaveLength(1);
+    expect(recs[0]!['served'], 'an unsafe nonce reads false').toBe(false);
+    expect(fs.existsSync(path.join(regd, 'victim')),
+      'and it forms no pathname for the cleanup to traverse').toBe(true);
+  });
+
+  // ── §3.4 SETTLEMENT: the claim is consumed BY IDENTITY, not by name ────
+  // "…revalidates generation and claim-FD/current-path identity, then holds it
+  // through raw JSONL validation, stage/whole-file atomic rename, and any
+  // claim/marker cleanup." Only the generation half was built: the retained
+  // claim FD was closed at the snapshot copy, and the final transaction then
+  // unlinked `$claim` BY PATHNAME with no proof the name still referred to the
+  // inode this process linked. Between the settlement release and the final
+  // reacquire the lock is NOT held — `measure` runs there by design — so the
+  // claim pathname is unguarded for exactly that window.
+  //
+  // THE FIXTURE PUTS THE REPLACEMENT WHERE THE WINDOW IS: the helper is
+  // wrapped, and the wrapper swaps the claim for a byte-identical file at the
+  // same name (a NEW inode) before delegating to the real helper. Nothing else
+  // in the test can reach that window.
+  const plantClaimSwappingHelper = (): void => {
+    const regd = path.join(home, '.cc-sessions');
+    fs.copyFileSync(HELPER_SRC, path.join(regd, 'compact-card.real.mjs'));
+    fs.writeFileSync(path.join(regd, 'compact-card.mjs'), [
+      "import { spawnSync } from 'node:child_process';",
+      "import fs from 'node:fs';",
+      "import path from 'node:path';",
+      "const REG = path.join(process.env.HOME, '.cc-sessions');",
+      "if (process.argv.includes('measure')) {",
+      '  for (const n of fs.readdirSync(REG)) {',
+      '    if (/^\\.demo-quiet-basin\\.compactpost\\..*\\.claim$/.test(n)) {',
+      '      const f = path.join(REG, n);',
+      '      const bytes = fs.readFileSync(f);',
+      '      fs.unlinkSync(f);',
+      '      fs.writeFileSync(f, bytes);',
+      '    }',
+      '  }',
+      '}',
+      "const r = spawnSync(process.execPath, [path.join(REG, 'compact-card.real.mjs'), ...process.argv.slice(2)],",
+      "  { stdio: ['inherit', 'inherit', 'inherit'] });",
+      'process.exit(r.status ?? 1);',
+      '',
+    ].join('\n'));
+  };
+
+  it('a claim REPLACED while the lock is down is left standing, and the record still commits', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    plantClaimSwappingHelper();
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    // THE RECORD STILL COMMITS: it was built from the SNAPSHOT, which is
+    // FD-derived, so a stranger at the claim pathname cannot falsify it.
+    expect(journal(), 'exactly one line, from the FD-derived snapshot').toHaveLength(1);
+    // AND THE STRANGER STANDS. Without the identity check this arm unlinks
+    // whatever now wears the name — a file it never created and has no licence
+    // to delete.
+    const left = reg().filter((n) => /^\.demo-quiet-basin\.compactpost\..*\.claim$/.test(n));
+    expect(left, 'the replaced claim was NOT unlinked by name').toHaveLength(1);
+    // The snapshot is this process's own and goes either way; so does the
+    // marker, which the identity check does not gate.
+    expect(reg().filter((n) => n.includes('compactions-snapshot')), 'our own snapshot went').toEqual([]);
+  }, 60_000);
+
+  it('CONTROL: with the claim NOT replaced, the same cycle consumes it', () => {
+    // What makes the leg above a measurement rather than a fixture that can
+    // only pass: the identical wrapper, with the swap disabled.
+    const { tree, transcript } = cycle({ serve: true });
+    const regd = path.join(home, '.cc-sessions');
+    fs.copyFileSync(HELPER_SRC, path.join(regd, 'compact-card.real.mjs'));
+    fs.writeFileSync(path.join(regd, 'compact-card.mjs'), [
+      "import { spawnSync } from 'node:child_process';",
+      "import path from 'node:path';",
+      "const REG = path.join(process.env.HOME, '.cc-sessions');",
+      "const r = spawnSync(process.execPath, [path.join(REG, 'compact-card.real.mjs'), ...process.argv.slice(2)],",
+      "  { stdio: ['inherit', 'inherit', 'inherit'] });",
+      'process.exit(r.status ?? 1);',
+      '',
+    ].join('\n'));
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    expect(journal()).toHaveLength(1);
+    expect(reg().filter((n) => /^\.demo-quiet-basin\.compactpost\..*\.claim$/.test(n)),
+      'an unreplaced claim IS consumed').toEqual([]);
+  }, 60_000);
+
+  it('commits EXACTLY ONE sixteen-key line, and consumes the claim, the snapshot and the marker', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    const setBytes = fs.readFileSync(setFile(), 'utf8');
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    const j = journal();
+    expect(j, 'exactly one line').toHaveLength(1);
+    // THE SIXTEEN KEYS, and `sorted ===` rather than a presence check: an extra
+    // key is as much a defect as a missing one, and there is NO `n` — D-2605
+    // removes the persisted ordinal.
+    expect(Object.keys(j[0]!).sort()).toEqual(['agent', 'at', 'built', 'chars', 'cited', 'cwd', 'fences',
+      'filesChars', 'liveAgents', 'parentLive', 'scope', 'served', 'setSize', 'steered', 'transcript', 'trigger']);
+    expect(j[0]).toMatchObject({ trigger: 'manual', scope: 'main', steered: false, served: true });
+    // PROVENANCE IS COPIED FROM THE SET, not re-derived.
+    expect(j[0]!['cwd']).toBe(tree);
+    expect(j[0]!['transcript']).toBe(transcript);
+    expect(j[0]!['parentLive']).toBeNull();
+    expect(j[0]!['liveAgents']).toBeNull();
+    // The canonical set is CONSUMED by the claim, and nothing private survives.
+    expect(fs.existsSync(setFile()), 'canonical was claimed and unlinked').toBe(false);
+    expect(setBytes.length, 'the fixture really had a set').toBeGreaterThan(0);
+    expect(reg().filter((n) => n.includes('compactpost')), 'the claim is consumed').toEqual([]);
+    expect(reg().filter((n) => n.includes('compactions-snapshot'))).toEqual([]);
+    expect(reg().filter((n) => n.includes('compactions-stage'))).toEqual([]);
+    expect(reg().filter((n) => n.includes('compactserved')), 'and so is the marker').toEqual([]);
+    expect(fs.existsSync(lockFile()), 'the permanent lock is NEVER consumed').toBe(true);
+  });
+
+  it('`served` is MARKER-DERIVED: the same cycle WITHOUT a serve commits served:false', () => {
+    const { tree, transcript } = cycle({ serve: false });
+    run(postCompact(tree, transcript, SUMMARY));
+    const j = journal();
+    expect(j).toHaveLength(1);
+    // It is not copied from a set — the set has no `served` member at all any
+    // more — so a card that was mined but never reached the model reads false,
+    // which is what makes `cited` interpretable only where `served` is true.
+    expect(j[0]!['served']).toBe(false);
+  });
+
+  it('a GENUINELY ABSENT canonical set commits one line with scope:null and all six provenance fields null', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // No PreCompact at all — every pre-upgrade row, and every PreCompact that
+    // went inert for one of its documented silent reasons. Under option A this
+    // branch's premise has exactly one meaning: nothing was ever published.
+    expect(fs.existsSync(setFile())).toBe(false);
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    const j = journal();
+    expect(j, 'the absent branch still commits, and commits ONCE').toHaveLength(1);
+    // `null` is NOT `"main"`, and it is not the link-failure branch either:
+    // "no set" and "the main thread" are different answers.
+    expect(j[0]!['scope']).toBeNull();
+    for (const k of ['cwd', 'built', 'agent', 'transcript', 'parentLive', 'liveAgents']) {
+      expect(j[0]![k], `${k} is null without a set`).toBeNull();
+    }
+    expect(j[0]!['cited'], 'and cited is null, never 0').toBeNull();
+    expect(j[0]!['setSize']).toBeNull();
+    expect(reg().filter((n) => n.includes('compactpost')), 'no claim was taken at all').toEqual([]);
+  });
+
+  /** §3.0's CLAIMED-OVERLAP NORMALISATION, end to end. The forced `ambiguous`
+   *  verdict is not a measured one: `_hook_compact_scope` answered `main` here
+   *  (auto trigger, no live subagent, so `liveAgents` is 0 and `parentLive` is
+   *  null), and only the overlap `find` degraded the scope — leaving a set
+   *  whose five provenance members still describe a MAIN compaction while its
+   *  `scope` says ambiguous. Copied onto a record verbatim that tuple matches
+   *  no row of NORMAL_PROVENANCE's grammar (the ambiguous row wants
+   *  `parentLive:true, liveAgents:1` or `parentLive:null, liveAgents>=2`), so
+   *  `JOURNAL_RECORD_PRED` refused the record and this compaction's line went
+   *  missing altogether — silently, in the design's sole measurement sink. */
+  it('an OVERLAP-FORCED ambiguous set commits ONE line, normalised to scope ambiguous with every provenance field null', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet().scope, 'the FIRST verdict is an ordinary main one').toBe('main');
+    // ABSENT, not `false`: this tree carries a graph, so the helper ran and
+    // rewrote the set without the member — which §3.0 rules legacy-compatible
+    // ordinary/false. That is sound and not merely tolerated, because a `true`
+    // value can never reach the helper: PreCompact's ambiguous return sits
+    // between the jq publication and the helper fork.
+    expect('overlap' in readSet(), 'the helper rewrote the ordinary set without it').toBe(false);
+    run(preCompact(tree, transcript, 'auto'));            // the first set is still unconsumed
+    // `overlap` is the ONLY channel §3.0 gives PostCompact to tell an
+    // overlap-degraded set from a genuinely ambiguous verdict — the two are
+    // indistinguishable by scope alone.
+    expect(readSet(), 'the set says WHY it is ambiguous').toMatchObject({ scope: 'ambiguous', overlap: true });
+    expect(readSet().liveAgents, 'and its liveness is still the MAIN measurement').toBe(0);
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    const j = journal();
+    expect(j, 'exactly one journal line — the record is committed, not refused').toHaveLength(1);
+    expect(j[0]!['scope'], 'normalised to the honest ambiguous scope, not to null').toBe('ambiguous');
+    for (const k of ['cwd', 'built', 'agent', 'transcript', 'parentLive', 'liveAgents']) {
+      expect(j[0]![k], `${k} cannot be attributed after a symmetric degradation`).toBeNull();
+    }
+    expect(j[0]!['cited'], 'measure ran WITHOUT --set').toBeNull();
+    expect(j[0]!['setSize']).toBeNull();
+    // The predicate that refused the un-normalised record accepts this one.
+    expect(Object.keys(j[0]!).sort()).toEqual(['agent', 'at', 'built', 'chars', 'cited', 'cwd', 'fences',
+      'filesChars', 'liveAgents', 'parentLive', 'scope', 'served', 'setSize', 'steered', 'transcript', 'trigger']);
+  });
+
+  it('THE CASCADE: two back-to-back overlapped compactions commit TWO lines, not zero', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // Before the normalisation each refused record left its claim behind, and
+    // that retained young claim is exactly what the overlap `find` scans — so
+    // the NEXT PreCompact was ambiguous too and every compaction of this row
+    // inside the window went unrecorded, for ever.
+    for (let i = 0; i < 2; i++) {
+      run(preCompact(tree, transcript, 'auto'));
+      run(preCompact(tree, transcript, 'auto'));
+      expect(readSet().overlap, `cycle ${i} really overlapped`).toBe(true);
+      run(postCompact(tree, transcript, SUMMARY));
+    }
+    expect(journal(), 'both compactions are on the record').toHaveLength(2);
+    expect(journal().map((r) => r['scope'])).toEqual(['ambiguous', 'ambiguous']);
+    expect(reg().filter((n) => n.includes('compactpost')), 'and no claim accumulated').toEqual([]);
+  });
+
+  /** §3.0's FOURTH normalisation trigger. Reachable whenever PreCompact goes
+   *  inert for one of its documented silent reasons while a previous
+   *  compaction's set still stands: PostCompact then claims the OLD set and,
+   *  un-normalised, writes the PREVIOUS compaction's transcript, agent and cwd
+   *  onto THIS one's line — a wrong record, which is worse than a missing one.
+   *  Age gates only what may be ATTRIBUTED; the claim itself is still taken. */
+  it('an ORIGINALLY AGED canonical set is provenance-INELIGIBLE: scope null, six nulls, and the claim still consumed', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    const old = Math.floor(Date.now() / 1000) - 1200 - 60;   // past COMPACT_CARD_MAX_AGE
+    fs.utimesSync(setFile(), old, old);
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    const j = journal();
+    expect(j, 'the aged set is still settled and still recorded').toHaveLength(1);
+    expect(j[0]!['scope'], 'null — NOT the set\'s own "main"').toBeNull();
+    for (const k of ['cwd', 'built', 'agent', 'transcript', 'parentLive', 'liveAgents']) {
+      expect(j[0]![k], `${k} is not this compaction's to claim`).toBeNull();
+    }
+    expect(j[0]!['cited'], 'measure ran WITHOUT --set').toBeNull();
+    expect(j[0]!['setSize']).toBeNull();
+    // AGE NEVER GATES THE CLAIM. The set is consumed exactly as an eligible one
+    // is, and the nonce it carried still owns the marker lookup — which is why
+    // `served` survives the normalisation while provenance does not.
+    expect(fs.existsSync(setFile()), 'canonical was claimed and unlinked').toBe(false);
+    expect(reg().filter((n) => n.includes('compactpost')), 'the claim is consumed, not retained').toEqual([]);
+    expect(j[0]!['served'], '`served` is still marker-derived').toBe(true);
+    expect(reg().filter((n) => n.includes('compactserved')), 'and the marker is consumed').toEqual([]);
+  });
+
+  it('CONTROL: the same cycle WITHOUT ageing attributes the set in full', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    run(postCompact(tree, transcript, SUMMARY));
+    const j = journal();
+    expect(j).toHaveLength(1);
+    expect(j[0]!['scope'], 'so the null above is the AGE and not the fixture').toBe('main');
+    expect(j[0]!['cwd']).toBe(tree);
+    expect(j[0]!['transcript']).toBe(transcript);
+  });
+
+  it('PRECEDENCE: an aged set that ALSO carries overlap:true commits scope null — age is evaluated last and wins', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript, 'auto'));
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet().overlap, 'both triggers are live on this one claim').toBe(true);
+    const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+    fs.utimesSync(setFile(), old, old);
+    run(postCompact(tree, transcript, SUMMARY));
+    const j = journal();
+    expect(j).toHaveLength(1);
+    // §3.0 states the precedence once, in prose, precisely because
+    // JOURNAL_RECORD_PRED accepts BOTH spellings — the predicate cannot decide
+    // it. What the order CANNOT change is the rest of the line: both triggers
+    // run `measure` without `--set`, so every other member is null either way.
+    expect(j[0]!['scope'], 'the aged trigger wins over the overlap trigger').toBeNull();
+    for (const k of ['cwd', 'built', 'agent', 'transcript', 'parentLive', 'liveAgents', 'cited', 'setSize']) {
+      expect(j[0]![k], `${k} is null under BOTH triggers, so the order cannot reach it`).toBeNull();
+    }
+  });
+
+  /** §3.4's absent-canonical branch has exactly ONE meaning — "nothing was ever
+   *  published for this compaction" — and it is entered from the PATHNAME test
+   *  alone. A failed snapshot copy used to reach the same record shape from a
+   *  compaction that HAD a set, and then discarded the claim holding the only
+   *  surviving copy of those bytes: canonical is already unlinked by then. */
+  it('A FAILED SNAPSHOT COPY commits NOTHING and retains the verified claim', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    // `cat` fails its SECOND no-operand invocation. The first is the hook's own
+    // `payload=$(cat)`; the second is `cat <&"$claimfd" > "$snap"`. Every
+    // invocation WITH operands is the real `cat`, so nothing else in the run
+    // is disturbed.
+    const counter = path.join(home, 'catcount');
+    stub('cat', [
+      `C=${sh(counter)}`,
+      'if [ "$#" -eq 0 ]; then',
+      `  n=0; [ -f "$C" ] && n=$(${sh(realTool('cat'))} "$C")`,
+      '  n=$((n+1)); printf %s "$n" > "$C"',
+      '  [ "$n" -eq 2 ] && exit 1',
+      'fi',
+      `exec ${sh(realTool('cat'))} "$@"`,
+    ].join('\n'));
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(counter, 'utf8'), 'the stub really reached the snapshot copy').toBe('2');
+    expect(fs.existsSync(journalFile()), 'no record at all — a falsified one is worse than none').toBe(false);
+    expect(reg().filter((n) => n.includes('compactpost')),
+      'the claim is RETAINED: it holds the only copy of these bytes').toHaveLength(1);
+    expect(reg().filter((n) => n.includes('compactions-snapshot')),
+      'only this process\'s own snapshot goes').toEqual([]);
+    expect(fs.existsSync(setFile()), 'canonical was legitimately claimed, so it stays gone').toBe(false);
+  });
+
+  it('APPENDS: a second compaction adds one line and leaves the first byte-identical', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    run(postCompact(tree, transcript, SUMMARY));
+    const first = fs.readFileSync(journalFile(), 'utf8');
+    run(preCompact(tree, transcript));
+    run(compactStart(tree, transcript));
+    run(postCompact(tree, transcript, SUMMARY));
+    const after = fs.readFileSync(journalFile(), 'utf8');
+    expect(after.startsWith(first), 'the old bytes are still the exact prefix').toBe(true);
+    expect(journal()).toHaveLength(2);
+    expect(after.endsWith('\n'), 'the file ends in exactly one LF').toBe(true);
+  });
+
+  it('THE PARAMETERIZED WAIT: the final transaction waits COMPACT_LOCK_WAIT, and still lands', async () => {
+    const { tree, transcript } = cycle({ serve: true });
+    // Hold the mutex for 3 s — longer than COMPACT_LOCK_WAIT_SERVE (2 s) and
+    // shorter than COMPACT_LOCK_WAIT (5 s) — from BEFORE PostCompact starts.
+    // WHICH ACQUIRE THIS REACHES, measured rather than assumed: the SETTLEMENT
+    // one, at the top of `_hook_compact_post`. It runs first and outlasts the
+    // holder, so by the time the final transaction reacquires the lock is
+    // uncontended — and substituting `COMPACT_LOCK_WAIT_SERVE` at the
+    // final-transaction call site alone leaves this test GREEN, while the same
+    // substitution at the settlement acquire reds it. The sentence here used to
+    // say the 2 s bound "at either call site" loses the record, which that pair
+    // of mutants measures as false. The final transaction's own call site is
+    // pinned by its own fixture below, where the holder is started INSIDE the
+    // measure window.
+    fs.closeSync(fs.openSync(lockFile(), 'a'));
+    const holder = spawn('bash', ['-c',
+      'exec 9<>"$1" || exit 1; flock 9 || exit 1; echo held; exec sleep 3', '_', lockFile()]);
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error('holder never took the lock')), 10_000);
+      holder.stdout.on('data', (d: Buffer) => { if (d.toString().includes('held')) { clearTimeout(t); res(); } });
+      holder.on('error', (e) => { clearTimeout(t); rej(e); });
+    });
+    try {
+      expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+      expect(journal(), 'exactly one journal line still lands').toHaveLength(1);
+    } finally { holder.kill('SIGKILL'); }
+  }, 40_000);
+
+  it('A FAILED canonical unlink leaves canonical\'s bytes AND ITS MTIME unchanged, and removes only the claim', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    const beforeBytes = fs.readFileSync(setFile());
+    // NANOSECONDS, through the `bigint` overload — `mtimeNs` exists only on
+    // `BigIntStats`, and `mtimeMs` is a float whose resolution is coarse enough
+    // that a `touch` landing inside the same millisecond would be invisible.
+    const beforeMtime = fs.statSync(setFile(), { bigint: true }).mtimeNs;
+    // `rm` refuses exactly the canonical set and is the real `rm` for
+    // everything else — so the claim's own removal on this failure path still
+    // works and the assertion is about canonical alone.
+    stub('rm', `for a in "$@"; do case "$a" in *demo-quiet-basin.compactset) exit 1 ;; esac; done\nexec ${sh(realTool('rm'))} "$@"`);
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(setFile()), 'canonical survives a failed unlink').toBe(true);
+    expect(fs.readFileSync(setFile()), 'its bytes are unchanged').toEqual(beforeBytes);
+    // THE MTIME IS THE ASSERTION THAT PINS THE ORDER, and nothing else can.
+    // HARD LINKS SHARE MTIME (measured), so a `touch "$claim"` taken while the
+    // claim and canonical are still one inode ages CANONICAL too — and a
+    // sibling's overlap check would then read this settled compaction as still
+    // in flight. Unlinking first is what makes the touch unobservable here, and
+    // this row is the only place that difference reaches the disk.
+    const after = fs.statSync(setFile(), { bigint: true });
+    expect(after.mtimeNs, 'canonical was never touched').toBe(beforeMtime);
+    expect(fs.existsSync(journalFile()), 'and nothing was committed').toBe(false);
+    expect(reg().filter((n) => n.includes('compactpost')), 'only the verified claim went').toEqual([]);
+  });
+
+
+  it('THE PARAMETERIZED WAIT, at the FINAL TRANSACTION\'s own call site: only it contends, and the line still lands', async () => {
+    // WHY A SECOND FIXTURE. The test above holds the lock before PostCompact
+    // starts, so the SETTLEMENT acquire absorbs the whole contention window and
+    // the final transaction reacquires an UNCONTENDED lock — measured: passing
+    // `COMPACT_LOCK_WAIT_SERVE` at the final-transaction acquire alone leaves
+    // that test green, while the same substitution at the settlement acquire
+    // reds it. So the row §5 states — "hold the lock 3 s while ONLY the final
+    // transaction waits on it" — was unreached, and its call site's positional
+    // argument unverified.
+    //
+    // The window this uses is the arm's own: `_hook_compact_post` RELEASES the
+    // lock across `measure` and reacquires after it. So the holder is started
+    // by the `measure` invocation itself — `node`, stubbed to spawn a 3 s
+    // holder, wait for it to report held, and then exec the real binary.
+    const { tree, transcript } = cycle({ serve: true });
+    const flag = path.join(home, 'held-flag');
+    fs.closeSync(fs.openSync(lockFile(), 'a'));
+    stub('node', [
+      'case "$*" in',
+      '  *measure*)',
+      `    ${sh(realTool('bash'))} -c 'exec 9<>"$1" || exit 1; flock 9 || exit 1; echo held > "$2"; exec sleep 3' \\`,
+      `      _ ${sh(lockFile())} ${sh(flag)} >/dev/null 2>&1 &`,
+      '    i=0',
+      `    while [ ! -s ${sh(flag)} ] && [ "$i" -lt 200 ]; do i=$((i+1)); sleep 0.05; done`,
+      '    ;;',
+      'esac',
+      `exec ${sh(realTool('node'))} "$@"`,
+    ].join('\n'));
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(flag), 'the holder really took the lock inside the measure window').toBe(true);
+    expect(journal(), 'exactly one journal line still lands — the 5 s bound reached this acquire')
+      .toHaveLength(1);
+  }, 60_000);
+
+  /** §4: "if restore cannot prove same inode or collides, retain claim as exact
+   *  stale residue and never overwrite occupant." Both halves in one fixture,
+   *  because the difference between them is the whole contract: a restore that
+   *  LANDS consumes the claim, and one that CANNOT must not. Before this, the
+   *  entire failed-`touch` branch had no behaviour fixture at all — replacing
+   *  the no-clobber restore with a bare `rm -f "$claim"`, which destroys the
+   *  compaction's only verified copy, left the suite fully green. */
+  it('A FAILED CLAIM TOUCH restores canonical by no-clobber link — same bytes, same mtime, same INODE', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    const before = fs.readFileSync(setFile());
+    const st = fs.statSync(setFile(), { bigint: true });
+    stub('touch', 'exit 1');
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(setFile()), 'canonical is back').toBe(true);
+    expect(fs.readFileSync(setFile()), 'byte-identical').toEqual(before);
+    const after = fs.statSync(setFile(), { bigint: true });
+    // THE INODE is what makes this a restore rather than a rewrite: the claim
+    // and canonical are one inode, and `link` is the only way back to that.
+    expect(after.ino, 'the same inode, not a copy').toBe(st.ino);
+    expect(after.mtimeNs, 'and the mtime the failed touch never changed').toBe(st.mtimeNs);
+    expect(reg().filter((n) => n.includes('compactpost')), 'the claim is consumed by a proved restore').toEqual([]);
+    expect(fs.existsSync(journalFile()), 'and nothing was committed').toBe(false);
+  });
+
+  it('…but a COLLIDING restore never overwrites the occupant, and RETAINS the claim as exact residue', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    const STRANGER = '{"v":1,"nonce":"compact-9-9-9-9","note":"a stranger already owns this name"}\n';
+    // The stub fails on exactly the claim AND re-occupies the canonical
+    // pathname while it does — which is the only moment the collision can
+    // happen: canonical has just been unlinked and the restore is the next act.
+    stub('touch', [
+      'case "$1" in',
+      `  *demo-quiet-basin.compactpost.*) ${sh(realTool('cat'))} > ${sh(setFile())} <<'XEOF'`,
+      STRANGER.trimEnd(),
+      'XEOF',
+      '    exit 1 ;;',
+      'esac',
+      `exec ${sh(realTool('touch'))} "$@"`,
+    ].join('\n'));
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(setFile(), 'utf8'), 'the occupant is untouched — never overwritten').toBe(STRANGER);
+    // THE CLAIM SURVIVES. It holds the only verified copy of this compaction's
+    // set, and the restore could not place it; discarding it here is the exact
+    // data loss §4's row forbids.
+    expect(reg().filter((n) => n.includes('compactpost')), 'the claim is RETAINED as exact stale residue').toHaveLength(1);
+    expect(fs.existsSync(journalFile()), 'and nothing was committed').toBe(false);
+  });
+
+  /** `minimalPath` was widened to carry `flock`, `mktemp` and `touch` because
+   *  each is as load-bearing as `link` now — but only `flock` was ever made
+   *  absent, so deleting either of PostCompact's two guards changed no test's
+   *  result. ONE `it` PER BINARY, and that is forced twice over: a single leg
+   *  omitting both cannot say which guard carried it, and `minimalPath` builds
+   *  one `binmin` directory per fixture HOME, so calling it twice in one test
+   *  throws EEXIST before the second run starts. */
+  for (const missing of ['touch', 'mktemp'] as const) {
+    it(`PostCompact is INERT with no \`${missing}\` — nothing claimed, nothing staged, nothing said`, () => {
+      const { tree, transcript } = cycle({ serve: true });
+      const bytes = fs.readFileSync(setFile());
+      const r = runFull(postCompact(tree, transcript, SUMMARY), { PATH: minimalPath([missing]) });
+      expect(r, 'the arm says nothing at all').toEqual({ stdout: '', stderr: '' });
+      expect(fs.existsSync(journalFile()), 'no record').toBe(false);
+      expect(fs.readFileSync(setFile()), 'canonical is byte-identical').toEqual(bytes);
+      expect(reg().filter((n) => n.includes('compactpost')), 'no claim').toEqual([]);
+      expect(reg().filter((n) => n.includes('compactions-snapshot')), 'no snapshot').toEqual([]);
+      // …and the hookstate stamp still lands: the ARM is inert, not the hook.
+      expect(readState().state, 'the state write is not gated on the card').toBe('done');
+    }, 60_000);
+  }
+
+
+  it('PostCompact is INERT with no `find` — and that guard is LIVE again, because settlement measures the set\'s age', () => {
+    // The guard at the head of `_hook_compact_post` was guarding a dependency
+    // the function did not use: `find` appeared nowhere in its body, which is
+    // the corroborating trace that §3.0's age trigger had been dropped rather
+    // than deferred. With the age measurement built, the guard has a subject
+    // again — and, unlike the `touch` and `mktemp` guards beside it, this one
+    // is mutation-effective: deleting it does not make the arm fall back to
+    // safety, it makes the arm read EVERY set as aged (a `find` that answers
+    // nothing reads aged) and commit a `scope:null` line for a set it could
+    // have attributed in full.
+    const { tree, transcript } = cycle({ serve: true });
+    const bytes = fs.readFileSync(setFile());
+    const r = runFull(postCompact(tree, transcript, SUMMARY), { PATH: minimalPath(['find']) });
+    expect(r, 'the arm says nothing at all').toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(journalFile()), 'and commits NOTHING — never a null-scope line it cannot vouch for').toBe(false);
+    expect(fs.readFileSync(setFile()), 'canonical is byte-identical').toEqual(bytes);
+    expect(reg().filter((n) => n.includes('compactpost')), 'no claim was taken').toEqual([]);
+  }, 60_000);
+
+  it('the two guards beside it are ARGUED, not pinnable by behaviour — and the reason is measured', () => {
+    // MEASURED on this box, in a throwaway copy: deleting `command -v touch`
+    // or `command -v mktemp` from `_hook_compact_post` leaves the whole
+    // session-hook suite GREEN, including the two absence legs above, because
+    // every mechanism downstream of them already fails safely. With `mktemp`
+    // gone `_hook_lock_acquire` refuses with rc 2 before anything is claimed;
+    // with `touch` gone the claim is taken and the failed-touch branch restores
+    // canonical by no-clobber `link` — same inode, same bytes, same mtime — and
+    // returns without committing. The end states are indistinguishable from the
+    // guards firing, so no fixture can tell them apart.
+    //
+    // KEPT ANYWAY, and pinned HERE by source, for the reason the `[[ -f "$set"
+    // && -r "$set" ]]` guard in `_hook_compact_card_locked` is kept: this file
+    // declares two userlands, and "the fallback happens to be safe" is a
+    // property of THIS box's bash and coreutils, not of every `sh` a fleet box
+    // might run. A source pin is what a derived, environment-dependent guard
+    // can honestly carry; a behaviour assertion here would pin shape while
+    // claiming effect.
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const post = src.slice(src.indexOf('_hook_compact_post() {'), src.indexOf('_hook_compact_post_abandon() {'));
+    expect(post, 'the touch guard is present').toContain('command -v touch  >/dev/null 2>&1 || return 0');
+    expect(post, 'and the mktemp guard').toContain('command -v mktemp >/dev/null 2>&1 || return 0');
+    // …and the find guard has a SUBJECT, which is what makes it different from
+    // the two above: the settlement really does run `find` on the set.
+    expect(post, 'the find guard is present').toContain('command -v find   >/dev/null 2>&1 || return 0');
+    expect(post, 'and the age measurement it guards').toMatch(/find "\$set" -mmin "-\$\(\( COMPACT_CARD_MAX_AGE \/ 60 \)\)"/);
+  });
+  it('the acquire is INERT with no `link` — the lock-open alias is how it opens canonical safely', () => {
+    // `_hook_lock_acquire`'s own `command -v link` guard, which no fixture
+    // reached either. Without it the arm would fall through to a direct open of
+    // the canonical lock pathname — the create-capable open §3.4 forbids.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const r = runFull(preCompact(tree, transcript), { PATH: minimalPath(['link']) });
+    expect(r).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(setFile()), 'nothing was published').toBe(false);
+    expect(readState().state).toBe('working');
+  });
+  it('NO UNLOCKED CLEANUP: a helper that says nothing usable leaves the claim and the marker as residue', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    // The helper answers garbage, so the shape gate refuses and no record is
+    // committed. The verified claim is the ONLY copy of this compaction's set
+    // — canonical is already unlinked — so discarding it because the
+    // measurement failed would destroy the evidence the retry needs.
+    stub('node', 'echo not-json\nexit 0');
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(journalFile()), 'no journal line').toBe(false);
+    expect(reg().filter((n) => n.includes('compactpost')), 'the claim is RETAINED as recovery residue').toHaveLength(1);
+    expect(reg().filter((n) => n.includes('compactserved')), 'and so is the marker').toHaveLength(1);
+    expect(reg().filter((n) => n.includes('compactions-snapshot')), 'only this process\'s own snapshot goes').toEqual([]);
+  });
+
+  it('the record and every physical line pass ONE predicate, and a mutant record commits nothing', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    // The sixteen keys are spelled ONCE, as a sorted-equality rather than a
+    // presence test, and `\z` is jq/Oniguruma's — the bash arms in this file
+    // must use `$`, because POSIX ERE reads `\z` as a literal z.
+    expect(src).toContain('def JOURNAL_RECORD_PRED:');
+    expect(src.match(/\(keys \| sort\) == \["agent", "at", "built"/g)).toHaveLength(1);
+    expect(src, 'no persisted ordinal').not.toMatch(/"n",|, "n"/);
+    expect(src).toContain('test("^[A-Za-z0-9_-]+\\\\z")');
+    // BOTH gates run: the merged object, then the whole staged file.
+    const post = src.slice(src.indexOf('_hook_compact_post() {'), src.indexOf('_hook_compact_post_abandon() {'));
+    expect(post).toContain('$JOURNAL_RECORD_PRED_DEFS JOURNAL_RECORD_PRED');
+    expect(post).toContain('$JOURNAL_RECORD_PRED_DEFS $JOURNAL_STAGE_PRED');
+    // NO `printf >>` PATH EXISTS to canonical: the only way in is the stage
+    // rename, under the retained FD and the validated lock. The positive clause
+    // is the load-bearing one — deleting the rename reds it however the
+    // replacement is spelled. The negative below sees only the LITERAL
+    // `"$journal"`; an append through a second name (`j="$journal"; … >> "$j"`)
+    // is caught by the canonical-write scan's variable trace instead, which has
+    // its own control in that describe. §5's row names a partial-failure
+    // fixture as the observable, and that fixture is unbuildable here:
+    // measured, `printf` is a bash BUILTIN, so a `printf` stub first on PATH
+    // never runs and `type -t printf` still answers `builtin`.
+    expect(post).toContain('mv -f "$stage" "$journal"');
+    expect(post, 'canonical is never appended to directly').not.toMatch(/>>\s*"\$journal"/);
+  });
+
+  it('the constants block does not say the journal is never READ — PostCompact reads it four ways', () => {
+    // The comment said "`.compactions` (the per-session journal PostCompact
+    // appends, / # never read here)". Measured in the same file,
+    // `_hook_compact_post` opens the journal, copies it into its private
+    // stage, reads the copied bytes back to build the byte-exact prefix, and
+    // re-validates EVERY prior physical line through the stage predicate
+    // before the rename. What the sentence meant — no arm INTERPRETS a record
+    // or derives state from one — is a different claim, and it is the one
+    // README's own block already makes. Both halves are asserted, so neither
+    // an inverted sentence nor a `_hook_compact_post` that stopped reading the
+    // journal can leave this green.
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const post = src.slice(src.indexOf('_hook_compact_post() {'), src.indexOf('_hook_compact_post_abandon() {'));
+    expect(post.match(/"\$journal"/g)?.length ?? 0,
+      '`_hook_compact_post` really does read and write the journal').toBeGreaterThanOrEqual(2);
+    expect(post, 'it opens it for reading').toContain('exec {jfd}<"$journal"');
+    // THE SENTENCE ITSELF, bound to its own subject: a clause naming
+    // `.compactions` may not also say the journal is never read.
+    const comments = src.split('\n').filter((l) => l.startsWith('#')).join(' ');
+    expect(/\.compactions[^.]{0,200}never read/i.test(comments),
+      'no comment says the journal named here is never read').toBe(false);
+    expect(src, 'and the true, narrower statement is the one that stands')
+      .toContain('it never interprets a record or');
+  });
+
+  // ── §4's MALFORMED-`files[]` ROW, MEASURED AS THE RECORD COMMITS IT ─────
+  // §4 states: "the claimed set will not parse, or any `files[]` entry lacks a
+  // non-empty string `path` | measured as NO set — `measure` runs without
+  // `--set`, so `scope`/`cited`/`setSize` **and all six provenance fields**
+  // are null". Only the first disjunct was implemented. The `norm` decision
+  // (`ccd/session-hook.sh#@compact-post-norm`) consults `aged`, `.overlap` and
+  // `NORMAL_PROVENANCE`, and `NORMAL_PROVENANCE` (`ccd/session-hook.sh#NORMAL_PROVENANCE`)
+  // validates trigger/scope/agent/transcript/parentLive/liveAgents/cwd/built
+  // and never looks at `files` — so a set carrying valid provenance and ONE
+  // malformed entry was passed with `--set` and the record committed
+  // `scope:"main"` with six NON-null provenance fields, which
+  // `JOURNAL_RECORD_PRED` accepts because `NORMAL_PROVENANCE` holds. Nothing
+  // refused it.
+  //
+  // WHY THIS IS A BEHAVIOUR FIXTURE AND NOT A HELPER UNIT TEST. The helper's
+  // own answer is not where the defect lives: `measureCommand` nulls `cited`
+  // and `setSize` on a malformed entry but derives `scope` from the set
+  // independently, and `server/test/compact-card.test.ts` asserts that pair
+  // and stops — the exact pair that is null on the shipped arm. The seven
+  // nulls §4 requires are a property of WHAT THE HOOK PASSES, so only the
+  // committed line can state it.
+  const PROVENANCE = ['cwd', 'built', 'agent', 'transcript', 'parentLive', 'liveAgents'] as const;
+  /** A canonical set that PASSES the provenance grammar on its own — `auto` +
+   *  `main` + agent null + transcript non-empty + parentLive null +
+   *  liveAgents 0 — so `files` is the only thing under test. */
+  const plantSetWithFiles = (tree: string, transcript: string, files: unknown): void => {
+    fs.writeFileSync(setFile(), `${JSON.stringify({
+      v: 1, at: 1, nonce: 'compact-1-2-3-4', scope: 'main', overlap: false, agent: null,
+      transcript, parentLive: null, liveAgents: 0, cwd: tree, built: null, fresh: null,
+      steered: false, files, stats: null,
+    })}\n`);
+  };
+
+  it('A MALFORMED `files[]` ENTRY IS MEASURED AS NO SET — §4\'s seven nulls, on the committed line', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript, 'auto'));
+    plantSetWithFiles(tree, transcript, [{ path: 123 }]);
+    run(postCompact(tree, transcript, SUMMARY, 'auto'));
+    const recs = journal();
+    expect(recs, 'the record still commits — so the assertions below discriminate').toHaveLength(1);
+    expect(recs[0]!['scope'], '§4: measured as NO set, so `scope` is null').toBe(null);
+    expect(recs[0]!['cited'], 'and `cited`').toBe(null);
+    expect(recs[0]!['setSize'], 'and `setSize`').toBe(null);
+    for (const k of PROVENANCE) {
+      expect(recs[0]![k], `and all six provenance fields — ${k}`).toBe(null);
+    }
+  });
+
+  it('CONTROL: the SAME set with a well-formed `files[]` entry still attributes in full', () => {
+    // The discriminator. Without this, the assertion above is satisfied by any
+    // arm that attributes nothing ever, and the `norm` clause under test would
+    // be indistinguishable from a blanket refusal.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript, 'auto'));
+    plantSetWithFiles(tree, transcript, [{ path: 'server/src/pane/statusline.ts' }]);
+    run(postCompact(tree, transcript, SUMMARY, 'auto'));
+    const recs = journal();
+    expect(recs, 'one record').toHaveLength(1);
+    expect(recs[0]!['scope'], 'an ordinary claim keeps its scope').toBe('main');
+    expect(recs[0]!['cwd'], 'and its cwd').toBe(tree);
+    expect(recs[0]!['transcript'], 'and its transcript').toBe(transcript);
+    expect(recs[0]!['liveAgents'], 'and its liveAgents').toBe(0);
+    expect(recs[0]!['setSize'], 'and the set is measured').toBe(1);
+  });
+});
+
+
+
+
+// ── D-2605: THE SELF-CHECKING `served` SCAN (plan Task 9) ────────────────
+// Task 9 removed `served` from the canonical set document — the hook never
+// writes it, and `measure` derives it from the exact nonce marker under the
+// final lock — and disposed of every assertion that read it from a set. All
+// seven dispositions were carried out; what was missing is the MECHANISM that
+// keeps them carried out. The regression it exists to catch is a future editor
+// re-adding `served` to the SET WRITER and to a set assertion together, which
+// reds nothing else in this file.
+//
+// THIS FILE READS ITSELF. Nothing else here does; the other scans read
+// `ccd/session-hook.sh`, `shared/api.ts`, `single-definition.test.ts` and
+// `ccd-authdead.test.ts`.
+describe('the compaction card — no test reads `served` off a set (plan Task 9)', () => {
+  const SELF = path.resolve(__dirname, 'session-hook.test.ts');
+  /** THE UNION OF TWO GRAMMARS, because neither sees both shapes: `\.served` is
+   *  the READ position and `served:` the PROPERTY position, and measured on
+   *  this file each grammar finds a disjoint set. */
+  const READ = /\.served\b/;
+  const PROP = /(^|[^A-Za-z_])served\s*:/;
+  const matches = (l: string): boolean => READ.test(l) || PROP.test(l);
+
+  /** A match inside an `it(…)`/`describe(…)` TITLE is out of scope — the same
+   *  treatment the canonical-write scan gives the helper's `writeAtomic`
+   *  primitives: excluded BY THE SCOPE, never by an allow-list entry, so it can
+   *  never be mistaken for something argued-for. */
+  const isTitle = (l: string): boolean => /^\s*(it|describe)\(/.test(l);
+  /** PROSE is out of scope for the same reason a title is: a `//` or `/** *\/`
+   *  line is a sentence about the member, never a read of it. */
+  const isProse = (l: string): boolean => /^\s*(\/\/|\/\*|\*)/.test(l);
+  /** AND SO IS THIS BLOCK. A scan that reads its own file must exclude its own
+   *  grammar, or it can never be green — the two regexes above are literal
+   *  `served` text. Bounded by NAME, from this describe's own banner to the
+   *  `});` that closes it, so the exclusion cannot silently widen. */
+  const SELF_BANNER = '// \u2500\u2500 D-2605: THE SELF-CHECKING `served` SCAN (plan Task 9)';
+  const selfRange = (lines: string[]): [number, number] => {
+    const a = lines.findIndex((l) => l.startsWith(SELF_BANNER));
+    if (a < 0) return [-1, -1];
+    let b = a;
+    while (b < lines.length && lines[b] !== '});') b++;
+    return [a, b];
+  };
+
+  /** The enclosing CONSTRUCT: from the statement head at or above this line to
+   *  the line that closes it. An allow-list entry is pinned to what the line is
+   *  PART OF, not to a free-text class name — so moving a planting line out of
+   *  its `fs.writeFileSync(setFile(), …)` call reds. */
+  const construct = (lines: string[], i: number): string => {
+    let a = i;
+    while (a > 0 && !/^\s*(expect|fs\.writeFileSync|fs\.appendFileSync|const|let|run|return)\b/.test(lines[a]!)) a--;
+    let b = i;
+    while (b < lines.length - 1 && !/;\s*$/.test(lines[b]!)) b++;
+    return lines.slice(a, b + 1).join('\n');
+  };
+
+  type Row = { line: number; text: string; klass: 0 | 1 | 2 };
+  /** `classTwo` is a parameter so the class-(2) control can turn it OFF and
+   *  measure that the class is load-bearing rather than decorative. */
+  const audit = (src: string, classTwo = true): { raw: Row[]; scoped: Row[]; unallowed: Row[] } => {
+    const lines = src.split('\n');
+    const [sa, sb] = selfRange(lines);
+    const raw: Row[] = []; const scoped: Row[] = []; const unallowed: Row[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (sa >= 0 && i >= sa && i <= sb) continue;
+      const l = lines[i]!;
+      if (!matches(l)) continue;
+      const row: Row = { line: i + 1, text: l.trim(), klass: 0 };
+      raw.push(row);
+      if (isTitle(l) || isProse(l)) continue;
+      const c = construct(lines, i);
+      // (1) SessionStart(compact) fixtures that PLANT a canonical set: inputs to
+      //     the hook, whose serve arm reads only the head's nonce.
+      if (/fs\.writeFileSync\(\s*setFile\(\)/.test(c)) row.klass = 1;
+      // (2) assertions on a JOURNAL record — the sixteen-key row, whose `served`
+      //     is true iff the exact nonce marker existed under the final lock.
+      else if (classTwo && /\bjournal\(\)|\bj\[0\]|readJournal/.test(c)) row.klass = 2;
+      scoped.push(row);
+      if (row.klass === 0) unallowed.push(row);
+    }
+    return { raw, scoped, unallowed };
+  };
+
+  it('every `served` in a SET context is on one of the two classes, and nothing else survives', () => {
+    const a = audit(fs.readFileSync(SELF, 'utf8'));
+    expect(a.unallowed.map((r) => `${r.line}: ${r.text}`),
+      'a `served` read off a set — the member Task 9 removed').toEqual([]);
+    // NON-VACUITY, ALL THREE NUMBERS, so a change to any one of them forces the
+    // sentence to be re-measured rather than silently absorbed. RE-DERIVED
+    // against the post-Task-9 file: the plan's own eleven/nine/seven were
+    // measured on the pre-Task-9 line set, where the seven were the assertions
+    // this task deleted.
+    // 8 -> 11 (fix round 2, A-M1): three PROSE/TITLE mentions of `served:` in
+    // the new EEXIST-idempotence legs — two `it(…)` titles and one comment
+    // naming the value a bare `-e` lookup would fabricate. All three are
+    // excluded from SCOPE by the title/prose rules, which is why the three
+    // numbers below are unchanged; `raw` moving alone is the scan saying the
+    // file grew prose about the member and not a read of it.
+    expect(a.raw.length, 'raw union matches').toBe(11);
+    expect(a.scoped.length, 'in SET scope — the three `it(…)` titles and two prose lines are excluded BY THE SCOPE').toBe(3);
+    expect(a.scoped.filter((r) => r.klass === 1).length, 'class (1), the planting fixtures').toBe(2);
+    expect(a.scoped.filter((r) => r.klass === 2).length, 'class (2), journal-record assertions').toBe(1);
+  });
+
+  it('CONTROL: re-adding `served` to a SET assertion reds it, and moving a planting line out of its call reds it too', () => {
+    const src = fs.readFileSync(SELF, 'utf8');
+    // (a) THE REGRESSION THE SCAN EXISTS FOR: a set assertion reading the member
+    //     back. This is the exact shape the two retired pins had.
+    const readded = src.replace(
+      "expect(readSet(), 'an ordinary verdict publishes the member as false').toMatchObject({ scope: 'main', overlap: false });",
+      "expect(readSet(), 'an ordinary verdict publishes the member as false').toMatchObject({ scope: 'main', overlap: false, served: false });");
+    expect(readded, 'the mutation applied').not.toBe(src);
+    expect(audit(readded).unallowed.length, 'the re-added set assertion is found').toBe(1);
+    // (b) THE ENCLOSING-CONSTRUCT PIN: the same line, no longer inside an
+    //     `fs.writeFileSync(setFile(), …)` call, is no longer allow-listed.
+    const moved = src.replace('    fs.writeFileSync(setFile(), JSON.stringify({ v: 1, at, nonce, scope: \'main\', agent: null,',
+      '    const planted = JSON.stringify({ v: 1, at, nonce, scope: \'main\', agent: null,');
+    expect(moved, 'the mutation applied').not.toBe(src);
+    expect(audit(moved).unallowed.length, 'a planting line outside its call is found').toBeGreaterThan(0);
+  });
+
+  it('CONTROL: class (2) is load-bearing — the journal record\'s own `served` assertions red without it', () => {
+    const src = fs.readFileSync(SELF, 'utf8');
+    expect(audit(src, true).unallowed, 'green WITH the class').toEqual([]);
+    const without = audit(src, false).unallowed;
+    expect(without.length, 'and RED without it — the class is doing work, not decorating').toBeGreaterThan(0);
+    expect(without.every((r) => /served/.test(r.text)), 'and every one of them is a journal `served`').toBe(true);
+  });
+});
+// ── D-2605: jq AND SHELL-WORD DISCIPLINE IN THE COMPACTION ARMS (spec §5) ─
+// §5's row: "every `jq` invocation that receives lifecycle or graph text must
+// receive it through `--arg`/`--argjson`/`--rawfile`, and no `eval`, `bash -c`,
+// or unquoted expansion of a card/set/summary/graph variable may appear in
+// those arms". Its FIRST Plan-A leg reds behaviourally — interpolating card text
+// into a jq program breaks the program and ~15 tests go red — but its SECOND
+// does not and cannot: fixture HOMEs never contain a space, so word-splitting
+// from an unquoted `$src`/`$marker` is invisible to every behaviour test in this
+// file. That is why the row asks for a scan, and why the row's own mutant m28
+// (dropping the quotes from `_hook_compact_mark_served`'s `link`/`rm`) passed
+// 230/230 before this.
+describe('the compaction card — jq programs and shell words in the compaction arms (spec §5)', () => {
+  /** The three arms and every helper they reach that names a row artifact or
+   *  builds a jq program. `_hook_emit_context` is here because the row's own
+   *  non-vacuity clause names its `jq -cn --arg c "$text"` as a site the scan
+   *  must FIND. */
+  const ARMS = ['_hook_compact_scope', '_hook_compact_pre_line', '_hook_compact_pre', '_hook_compact_card',
+    '_hook_compact_card_locked', '_hook_compact_mark_served', '_hook_compact_serve_end',
+    '_hook_compact_post', '_hook_compact_post_abandon', '_hook_compact_post_fail',
+    '_hook_lock_init', '_hook_lock_acquire', '_hook_lock_release', '_hook_lock_same',
+    '_hook_generation_ok', '_hook_write_atomic', '_hook_family_sweepable',
+    '_hook_emit_context'] as const;
+  /** The ONLY names a jq PROGRAM may expand: the three predicate constants,
+   *  which are jq source and are spelled once each (`single-definition` owns
+   *  that). Anything else inside a program's double quotes is shell text
+   *  reaching jq's parser, which is the injection this row forbids. */
+  const PRED_CONSTS = ['COMPACT_SHAPE_PRED', 'JOURNAL_RECORD_PRED_DEFS', 'JOURNAL_STAGE_PRED'];
+  /** jq flags and how many words they consume AFTER themselves. `--arg` takes
+   *  a NAME and a VALUE — two — and getting that wrong is not a near miss: the
+   *  walk then stops on the value and reports `"$CS_SCOPE"` as the program,
+   *  which reads as an injection on a compliant tree (measured, in the first
+   *  spelling of this scan). */
+  const JQ_TWO = ['--arg', '--argjson', '--rawfile', '--slurpfile'];
+  const JQ_ONE = ['--indent'];
+  const PRIMS = ['mktemp', 'link', 'rm', 'mv', 'touch'];
+  const OPS = new Set([';', '|', '&', '(', ')', '{', '}', '||', '&&', '\n', '$(']);
+
+  /** A QUOTE-AWARE splitter. Each word keeps its own quoting — `"$x"`, `'lit'`,
+   *  `$x` and `"$A"'lit'` stay four distinguishable answers — and unquoted
+   *  shell operators become their own words so an argument list has an end.
+   *
+   *  TWO THINGS IT MUST NOT DO, both measured as defects in the first spelling.
+   *  It must not swallow a `$( )` body: nearly every `jq` in this file is
+   *  captured (`j=$(jq -cn …)`), so a splitter that keeps the substitution
+   *  whole finds ZERO jq programs and the scan passes vacuously. And a NEWLINE
+   *  must end a command: without it an argument walk from `rm -f "$cardf"` ran
+   *  on into the next statement and reported `aged=$(find …)` — a word that is
+   *  not an argument of anything — as an unquoted expansion. */
+  const words = (code: string): string[] => {
+    const out: string[] = [];
+    let cur = ''; let i = 0;
+    const flush = (): void => { if (cur) { out.push(cur); cur = ''; } };
+    while (i < code.length) {
+      const c = code[i]!;
+      if (c === '\\' && code[i + 1] === '\n') { flush(); i += 2; continue; }   // a continued line is ONE line
+      if (c === '\\' && i + 1 < code.length) { cur += code.slice(i, i + 2); i += 2; continue; }
+      if (c === "'") { const j = code.indexOf("'", i + 1); const e = j < 0 ? code.length - 1 : j; cur += code.slice(i, e + 1); i = e + 1; continue; }
+      if (c === '"') {
+        let j = i + 1;
+        while (j < code.length) { if (code[j] === '\\') { j += 2; continue; } if (code[j] === '"') break; j++; }
+        cur += code.slice(i, Math.min(j + 1, code.length)); i = j + 1; continue;
+      }
+      if (c === '$' && code[i + 1] === '(') { flush(); out.push('$('); i += 2; continue; }
+      // A COMMENT ENDS AT THE LINE, and it is recognised HERE rather than by a
+      // line filter, because quoting is tracked in ONE place. A filter that
+      // dropped whole `#` lines left TRAILING comments standing, and one of
+      // those carries an apostrophe (`# this process's own`) — which opened a
+      // single-quoted run that swallowed the rest of `_hook_compact_post`:
+      // measured, the arm reported 2 jq programs where it has 9.
+      if (c === '#' && (out.length === 0 || cur === '')) {
+        const j = code.indexOf('\n', i); i = j < 0 ? code.length : j; continue;
+      }
+      if (c === '\n') { flush(); out.push('\n'); i++; continue; }
+      if (/\s/.test(c)) { flush(); i++; continue; }
+      if (';|&(){}'.includes(c)) { flush(); out.push(c); i++; continue; }
+      cur += c; i++;
+    }
+    flush();
+    return out;
+  };
+
+  /** A word is SAFE when every expansion in it is inside quotes: built only
+   *  from single-quoted chunks, double-quoted chunks and unquoted text with no
+   *  `$` in it. `link $src` fails; `link "$src"` passes. */
+  const safeWord = (w: string): boolean => {
+    let i = 0;
+    while (i < w.length) {
+      const c = w[i]!;
+      if (c === '\\') { i += 2; continue; }
+      if (c === "'") { const j = w.indexOf("'", i + 1); if (j < 0) return false; i = j + 1; continue; }
+      if (c === '"') {
+        let j = i + 1;
+        while (j < w.length) { if (w[j] === '\\') { j += 2; continue; } if (w[j] === '"') break; j++; }
+        if (j >= w.length) return false;
+        i = j + 1; continue;
+      }
+      if (c === '$') return false;
+      i++;
+    }
+    return true;
+  };
+
+  /** A jq PROGRAM word: single-quoted chunks freely, and double-quoted chunks
+   *  whose only expansions are the three predicate constants. */
+  const safeProgram = (w: string): boolean => {
+    let i = 0;
+    while (i < w.length) {
+      const c = w[i]!;
+      if (c === '\\') { i += 2; continue; }
+      if (c === "'") { const j = w.indexOf("'", i + 1); if (j < 0) return false; i = j + 1; continue; }
+      if (c === '"') {
+        let j = i + 1;
+        while (j < w.length) { if (w[j] === '\\') { j += 2; continue; } if (w[j] === '"') break; j++; }
+        if (j >= w.length) return false;
+        for (const m of w.slice(i + 1, j).matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g)) {
+          if (!PRED_CONSTS.includes(m[1]!)) return false;
+        }
+        i = j + 1; continue;
+      }
+      if (c === '$') return false;
+      i++;
+    }
+    return true;
+  };
+
+  const armBodies = (src: string): Array<{ fn: string; body: string }> => {
+    const code = src;
+    return ARMS.map((fn) => {
+      const i = code.indexOf(`${fn}() {`);
+      const rest = i < 0 ? '' : code.slice(i);
+      return { fn, body: i < 0 ? '' : rest.slice(0, rest.indexOf('\n}\n') + 2) };
+    });
+  };
+
+  type Hit = { fn: string; what: string; word: string };
+  /** The found set: every jq PROGRAM, every argument of every named primitive,
+   *  and every `eval`/`bash -c` in the arms — each with its verdict. */
+  const audit = (src: string): { programs: Hit[]; args: Hit[]; shells: Hit[] } => {
+    const programs: Hit[] = []; const args: Hit[] = []; const shells: Hit[] = [];
+    for (const { fn, body } of armBodies(src)) {
+      const w = words(body);
+      for (let i = 0; i < w.length; i++) {
+        if (w[i] === 'eval') shells.push({ fn, what: 'eval', word: w.slice(i, i + 3).join(' ') });
+        if (w[i] === 'bash' && w[i + 1] === '-c') shells.push({ fn, what: 'bash -c', word: w.slice(i, i + 3).join(' ') });
+        if (w[i] === 'jq') {
+          let j = i + 1;
+          while (j < w.length && w[j]!.startsWith('-')) {
+            j += JQ_TWO.includes(w[j]!) ? 3 : JQ_ONE.includes(w[j]!) ? 2 : 1;
+          }
+          if (j < w.length && !OPS.has(w[j]!)) programs.push({ fn, what: 'jq program', word: w[j]! });
+        }
+        if (PRIMS.includes(w[i]!) && (i === 0 || OPS.has(w[i - 1]!) || w[i - 1] === '!' || w[i - 1] === 'then'
+          || w[i - 1] === 'else' || w[i - 1] === 'do' || w[i - 1] === 'exec')) {
+          for (let j = i + 1; j < w.length && !OPS.has(w[j]!); j++) {
+            if (/^\d?[<>]/.test(w[j]!)) { j++; continue; }      // a redirection and its target
+            args.push({ fn, what: `${w[i]} argument`, word: w[j]! });
+          }
+        }
+      }
+    }
+    return { programs, args, shells };
+  };
+
+  const hookSrc = (): string => fs.readFileSync(HOOK, 'utf8');
+
+  it('every jq PROGRAM in the arms is literal or a predicate constant, and no arm spawns a shell', () => {
+    const a = audit(hookSrc());
+    // NON-VACUITY, MANDATORY and BY IDENTITY — §5 names these two sites by
+    // pre-Task-9 line anchors that this task moved, so they are required by
+    // what they ARE rather than by where they sit.
+    expect(a.programs.length, 'the scan found every jq program in the arms — 3 in PreCompact, 2 in its precompact line (Overlord W0-05, and the anchor mark\'s trigger check), 9 in PostCompact, 1 in the emitter')
+      .toBe(15);
+    const emit = audit(hookSrc()).programs.filter((h) => h.fn === '_hook_emit_context');
+    expect(emit.length, 'the emitter\'s program is in the found set').toBeGreaterThan(0);
+    const pre = a.programs.filter((h) => h.fn === '_hook_compact_pre');
+    expect(pre.some((h) => h.word.includes('nonce:$nonce')), 'and the set-document build is too').toBe(true);
+    // THE RULE.
+    expect(a.programs.filter((h) => !safeProgram(h.word)).map((h) => `${h.fn}: ${h.word.slice(0, 60)}`),
+      'a jq program carrying shell text').toEqual([]);
+    expect(a.shells, 'no eval and no bash -c in any compaction arm').toEqual([]);
+  });
+
+  it('every mktemp/link/rm/mv/touch argument in the arms is quoted or literal', () => {
+    const a = audit(hookSrc());
+    expect(a.args.length, 'the scan found primitive arguments at all').toBeGreaterThan(20);
+    expect(a.args.some((h) => h.fn === '_hook_compact_mark_served'),
+      'including the marker publication\'s, which is where the row\'s own mutant lives').toBe(true);
+    expect(a.args.filter((h) => !safeWord(h.word)).map((h) => `${h.fn}: ${h.what} ${h.word}`),
+      'an unquoted expansion in a command word').toEqual([]);
+  });
+
+  it('CONTROL m28: dropping the quotes from the marker\'s link/rm is FOUND', () => {
+    // The row's second Plan-A mutant, and the one no behaviour test in this file
+    // can carry: fixture HOMEs never contain a space, so word-splitting here is
+    // invisible to every run.
+    const mutated = hookSrc()
+      .replace('link "$src" "$marker" 2>/dev/null || true', 'link $src $marker 2>/dev/null || true')
+      .replace('  rm -f "$src" 2>/dev/null || true\n  return 0\n}', '  rm -f $src 2>/dev/null || true\n  return 0\n}');
+    expect(mutated, 'the mutation applied').not.toBe(hookSrc());
+    const bad = audit(mutated).args.filter((h) => !safeWord(h.word));
+    expect(bad.map((h) => h.word).sort(), 'all three unquoted words are found').toEqual(['$marker', '$src', '$src']);
+  });
+
+  it('CONTROL m27: interpolating card text into the emitter\'s jq program is FOUND', () => {
+    // The row's FIRST Plan-A mutant. It also reds ~15 behaviour tests, because
+    // an interpolated program stops being valid jq — but a mutant that happened
+    // to stay valid would not, and this is the mechanism that does not care.
+    const mutated = hookSrc().replace('jq -cn --arg c "$text" \\', 'jq -cn \\');
+    expect(mutated, 'the mutation applied').not.toBe(hookSrc());
+    const injected = mutated.replace("'{hookSpecificOutput:", '"{hookSpecificOutput: $text,\n');
+    const bad = audit(injected).programs.filter((h) => !safeProgram(h.word));
+    expect(bad.length, 'the program carrying `$text` is found').toBeGreaterThan(0);
+    expect(bad.map((h) => h.fn), 'and the emitter is named among the arms it names').toContain('_hook_emit_context');
+  });
+});
+// ── D-2605: NO HOOKSTATE COMPACTION CACHE (spec §5, §8) ──────────────────
+// One of the four subjects §8 records as D-2605's headline REJECTIONS, listed
+// as covered while nothing executable named it: measured, the only thing in the
+// tree on this subject was a scan of the COMMENT that says it, and a mutant
+// adding `compaction:{n:1}` to the hookstate `jq -cn` object passed the whole
+// session-hook suite. Both halves the row states are built here — the writer's
+// source, and the document's key set on a real run.
+describe('the compaction card — no hookstate compaction cache (spec §5)', () => {
+  const SUMMARY = '1. Task\ndid a thing\n';
+
+  it('the hookstate document\'s key set is pinned BY EQUALITY on a real run, compaction and all', () => {
+    // BY EQUALITY, not by presence: a new member is as much a defect as a
+    // missing one here, and `readState()` is used everywhere else with
+    // `toMatchObject`, which a new key passes silently. Run through the two
+    // events that actually carry a compaction — so an arm that cached something
+    // would have had its chance — and assert the same key set both times.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const KEYS = ['ask', 'ccrcClaims', 'ccrcPeerReads', 'event', 'graphGateDenials', 'graphQueries',
+      'pid', 'sessionId', 'state', 'subagents', 'updatedAt', 'v'];
+    run(preCompact(tree, transcript));
+    expect(Object.keys(readState()).sort(), 'after PreCompact').toEqual(KEYS);
+    run(postCompact(tree, transcript, SUMMARY));
+    expect(Object.keys(readState()).sort(), 'after PostCompact — no ordinal, no cached measurement').toEqual(KEYS);
+    // And the journal really was written, so the assertion above is about a run
+    // that HAD a compaction to cache rather than about an inert one.
+    expect(fs.existsSync(journalFile()), 'the compaction really happened').toBe(true);
+  });
+
+  it('no arm BUILDS a `compaction` member into the hookstate document, and the writer is the one place that could', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    // THE WRITER'S OWN OBJECT, bounded to the `jq -cn` that builds it. A key is
+    // a `<name>:` at the head of a member, so this is a claim about the
+    // document's shape rather than about the word appearing somewhere.
+    const i = code.indexOf("'{v:$v, state:$state, event:$event");
+    expect(i, 'the hookstate writer').toBeGreaterThan(-1);
+    const obj = code.slice(i, code.indexOf("') || exit 0", i));
+    expect(obj, 'the writer builds no compaction member').not.toMatch(/\bcompaction\s*:/);
+    expect(obj, 'and no cached ordinal either').not.toMatch(/\bn\s*:/);
+    // NON-VACUITY: the bounded slice really is the object, and really does carry
+    // the members the equality above lists.
+    expect(obj).toContain('ccrcClaims:$ccrcClaims');
+    expect(obj).toContain('graphQueries:$graphQueries');
+    // THE THREE ARMS, none of which may write into that document at all: the
+    // hookstate write is a single site, and an arm reaching it would be a
+    // second author for one artifact.
+    for (const fn of ['_hook_compact_pre() {', '_hook_compact_card() {', '_hook_compact_post() {'] as const) {
+      const body = code.slice(code.indexOf(fn));
+      const arm = body.slice(0, body.indexOf('\n}\n'));
+      expect(arm, `${fn} names no hookstate path`).not.toContain('hookstate');
+    }
+  });
+});
+// ── D-2605: the generation gate, in all three arms (spec §3.1 step 5, §3.3) ─
+describe('the compaction card — the row generation authorizes every arm (spec §3.4)', () => {
+  const genFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.generation');
+  const reg = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'));
+  /** Compaction ARTIFACTS only. The PERMANENT LOCK is excluded by name: it is
+   *  minted by the acquire itself, BEFORE the generation gate can run, and it
+   *  deliberately spans row generations and safe reuse — its presence proves
+   *  history, never that anything was published. (Measured: without this
+   *  exclusion every inert-arm assertion below is red on a correct tree, for a
+   *  file the arm is supposed to create.) */
+  const published = (): string[] => reg()
+    .filter((n) => /^\.?demo-quiet-basin\.compact/.test(n) && n !== '.demo-quiet-basin.compactions.lock');
+  const SUMMARY = '1. Task\ndid a thing\n';
+
+  /** Every compaction arm, in order, against one fixture — so a leg that goes
+   *  inert is visible as "nothing was published" rather than as one arm's
+   *  silence. */
+  const allThree = (env: Record<string, string> = {}): void => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript), env)).toEqual({ stdout: '', stderr: '' });
+    expect(runFull(compactStart(tree, transcript), env).stderr).toBe('');
+    expect(runFull(postCompact(tree, transcript, SUMMARY), env)).toEqual({ stdout: '', stderr: '' });
+  };
+
+  // ── PreCompact protocol STEP 12, first half: the generation AGAIN ──────
+  // Deleting the whole `if ! _hook_generation_ok; then … fi` that opens the
+  // reacquired section left session-hook at 260/260, and it is the one guard in
+  // this file with neither a fixture nor an argued-unpinnable disclosure beside
+  // it. It is NOT redundant with the nonce compare-and-swap two lines below,
+  // and that is measurable: the CAS asks whether the canonical set still
+  // carries THIS run's nonce, which says nothing about whether the ROW is still
+  // the one this pane was authorized for. A row re-created while the helper
+  // runs presents a different generation and the SAME canonical set — because
+  // the set is published in the FIRST held section, before the helper — so the
+  // CAS passes and only this guard refuses.
+  //
+  // THE WINDOW IS THE HELPER, which runs between the release and the
+  // reacquire, so the helper is where the fixture has to act.
+  const plantGenerationRewritingHelper = (next: string): void => {
+    const regd = path.join(home, '.cc-sessions');
+    fs.copyFileSync(HELPER_SRC, path.join(regd, 'compact-card.real.mjs'));
+    fs.writeFileSync(path.join(regd, 'compact-card.mjs'), [
+      "import { spawnSync } from 'node:child_process';",
+      "import fs from 'node:fs';",
+      "import path from 'node:path';",
+      "const REG = path.join(process.env.HOME, '.cc-sessions');",
+      `fs.writeFileSync(path.join(REG, 'demo-quiet-basin.generation'), ${JSON.stringify(next)});`,
+      "const r = spawnSync(process.execPath, [path.join(REG, 'compact-card.real.mjs'), ...process.argv.slice(2)],",
+      "  { stdio: ['inherit', 'inherit', 'inherit'] });",
+      'process.exit(r.status ?? 1);',
+      '',
+    ].join('\n'));
+  };
+
+  it('STEP 12 revalidates the generation — a row re-created while the helper runs publishes NOTHING', () => {
+    const OTHER = '0189abcd-1234-5678-9abc-0123456789fe';
+    expect(OTHER, 'the fixture really changes it').not.toBe(GENERATION);
+    const tree = cardTree();
+    plantGenerationRewritingHelper(OTHER);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    // THE ROW REALLY MOVED, so the leg is about the guard and not about a
+    // fixture that failed to fire.
+    expect(fs.readFileSync(genFile(), 'utf8'), 'the helper re-authorized the row').toBe(OTHER);
+    // AND THE CAS WOULD HAVE PASSED: the canonical set published in the first
+    // held section still carries this run's nonce, which is what makes this
+    // guard the only thing refusing.
+    expect(fs.existsSync(setFile()), 'the initial set was published before the helper').toBe(true);
+    expect(fs.existsSync(cardFile()), 'no card was published onto a row this pane no longer owns').toBe(false);
+    // …and the two stages are reclaimed by the refusal itself rather than left.
+    expect(reg().filter((n) => n.includes('.stage')), 'the stages went with the refusal').toEqual([]);
+  });
+
+  it('CONTROL: the identical wrapper that does NOT move the generation publishes the card', () => {
+    // Without this the leg above could be a wrapper that breaks the helper.
+    const tree = cardTree();
+    plantGenerationRewritingHelper(GENERATION);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(genFile(), 'utf8')).toBe(GENERATION);
+    expect(fs.existsSync(cardFile()), 'the same helper, the same tree, an unchanged row').toBe(true);
+  });
+
+  it('the MARKER publication revalidates the generation — a row re-authorized between the print and the mark mints nothing', () => {
+    // §3.3 step 5: "Before unlock and only after successful output, REVALIDATE
+    // environment generation and publish the exact nonce marker." The serve arm
+    // holds the stable lock from the claim through the print, so the window is
+    // narrow — which is exactly why the omission survived review: no behaviour
+    // could reach it without something running INSIDE the section. The
+    // emitter's own `jq` is that something, and it is the last fork before the
+    // marker. A marker is a durable fact about a row, and this pane may write
+    // one only for the row it was authorized for.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    // The stub fires on the ONE invocation that carries `--arg c` — the emit —
+    // and then execs the real binary, so the card is still rendered and still
+    // printed; only the authorization underneath it changes.
+    const OTHER = '0189abcd-1234-5678-9abc-0123456789ff';
+    expect(OTHER, 'the fixture really changes it').not.toBe(GENERATION);
+    stub('jq', [
+      `case "$*" in *"--arg c "*) printf %s ${sh(OTHER)} > ${sh(genFile())} ;; esac`,
+      `exec ${sh(realTool('jq'))} "$@"`,
+    ].join('\n'));
+    const r = runFull(compactStart(tree, transcript));
+    expect(r.stderr).toBe('');
+    expect(r.stdout, 'the card still reached the model — the PRINT is not what this gates').not.toBe('');
+    expect(fs.readFileSync(genFile(), 'utf8'), 'and the row really was re-authorized').toBe(OTHER);
+    expect(reg().filter((n) => n.includes('compactserved')),
+      'no marker, and no source residue either').toEqual([]);
+  });
+
+  it('CONTROL: the same serve with the generation left alone DOES publish its marker', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const r = runFull(compactStart(tree, transcript));
+    expect(r.stdout, 'the same card').not.toBe('');
+    expect(reg().filter((n) => n.startsWith('.demo-quiet-basin.compactserved.')),
+      'so the absence above is the generation and not the fixture').toHaveLength(1);
+  });
+
+  it('with the pane\'s generation matching the row\'s, all three arms run', () => {
+    allThree();
+    expect(published().length, 'the lifecycle published').toBeGreaterThan(0);
+    expect(fs.existsSync(journalFile()), 'and committed its record').toBe(true);
+  });
+
+  it('NO generation in the environment — a pre-D-2605 pane — publishes NOTHING, and says nothing', () => {
+    // The disclosed cost, stated as a test rather than as prose: a pane whose
+    // spawn could not hand it a generation is inert for THAT PANE's life, its
+    // environment being fixed at exec — while the ROW recovers on its next
+    // supervised respawn, where `cmd_ensure` mints one it finds missing. That is exactly the property ccd's
+    // fail-open at `_reg_purge` is gated on — no hook on that row ever ran the lifecycle, so a destructive verb has nothing to race.
+    allThree({ CCRC_SESSION_GENERATION: '' });
+    expect(published(), 'not a set, not a card, not a stage, not a claim').toEqual([]);
+    expect(fs.existsSync(journalFile()), 'and no journal line').toBe(false);
+    // The hookstate write is NOT gated on it — that lands on every event and is
+    // what the server reads a session's health from. `done` because PostCompact
+    // is the LAST of the three arms this helper runs, and PostCompact's state
+    // is `done`: the point is that a hook whose whole compaction lifecycle is
+    // inert still keeps its session visible and healthy to the fleet.
+    expect(readState().state).toBe('done');
+    expect(readState().event).toBe('PostCompact');
+  });
+
+  it('NO generation on the ROW — the file absent — publishes nothing either', () => {
+    fs.rmSync(genFile());
+    allThree();
+    expect(published()).toEqual([]);
+    expect(fs.existsSync(journalFile())).toBe(false);
+  });
+
+  it('a MISMATCH — the row purged and re-created under a pane that outlived it — publishes nothing', () => {
+    // This is the case the file half of the check exists for: the environment
+    // value is what this PANE was authorized with, the file is what the ROW is
+    // authorized with NOW, and publishing on a stale pane's authority would
+    // write one session's measurement into another's slot.
+    fs.writeFileSync(genFile(), '0189abcd-1234-5678-9abc-ffffffffffff');
+    allThree();
+    expect(published()).toEqual([]);
+    expect(fs.existsSync(journalFile())).toBe(false);
+  });
+
+  it('every present-INVALID generation refuses, and none of them is repaired or removed', () => {
+    for (const [name, bytes] of [
+      ['uppercase', '0189ABCD-1234-5678-9ABC-0123456789AB'],
+      ['trailing LF', '0189abcd-1234-5678-9abc-0123456789ab\n'],
+      ['empty', ''],
+      ['multiline', '0189abcd-1234-5678-9abc-0123456789ab\nmore\n'],
+      ['malformed', 'not-a-uuid'],
+    ] as const) {
+      fs.rmSync(path.join(home, '.cc-sessions'), { recursive: true, force: true });
+      fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+      fs.writeFileSync(genFile(), bytes);
+      allThree({ CCRC_SESSION_GENERATION: bytes });
+      expect(published(), `${name} publishes nothing`).toEqual([]);
+      // NEVER repaired, replaced or removed — that is what makes "genuine
+      // absence is the only mint condition" a mechanism on the ccd side.
+      expect(fs.readFileSync(genFile(), 'utf8'), `${name} is left exactly as found`).toBe(bytes);
+    }
+  });
+
+  it('the gate is read through an owned alias and leaves none behind, and the arms validate UNDER the lock', () => {
+    allThree();
+    expect(reg().filter((n) => n.includes('generation-read')), 'no read alias survives').toEqual([]);
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    // NEVER a bare `cat` on a pathname that can be replaced between the test
+    // and the read: the value comes off a retained FD whose inode is rechecked.
+    expect(code).toContain('link "$p" "$al"');
+    expect(code).toContain('_hook_lock_same "$fd" "$p"');
+    expect(code, 'no bare read of the canonical generation').not.toMatch(/cat\s+"\$REG\/\$id\.generation"/);
+    // AND IT IS ALWAYS INSIDE A HELD SECTION: every call site sits after an
+    // acquire and before that section's release.
+    for (const fn of ['_hook_compact_pre() {', '_hook_compact_card() {', '_hook_compact_post() {'] as const) {
+      const body = code.slice(code.indexOf(fn));
+      const fnBody = body.slice(0, body.indexOf('\n}\n'));
+      const acq = fnBody.indexOf('_hook_lock_acquire');
+      const gate = fnBody.indexOf('_hook_generation_ok');
+      expect(acq, `${fn} acquires`).toBeGreaterThan(-1);
+      expect(gate, `${fn} validates the generation`).toBeGreaterThan(-1);
+      expect(gate, `${fn}: the gate is inside the held section`).toBeGreaterThan(acq);
+    }
+  });
+});
+
+// ── D-2605: the INVERTED canonical-write source scan (spec §5, round 9/11) ─
+// The round-8 recognizer grepped for a canonical-set LITERAL adjacent to a
+// primitive, and measured against the shipped tree it matches ZERO real
+// mutation sites: every mutating line names a VARIABLE, and the only lines in
+// either file where a canonical literal sits beside a primitive-shaped word
+// are two comments. So the recognizer is inverted.
+//
+// THE ORDER IS THE WHOLE MECHANISM. The canonical-pathname resolution is the
+// FILTER that PRODUCES the found set; only then is the found set compared
+// against the allow-list. Read the other way round — "require each primitive to
+// appear on a named list" — the rule would demand that every `mv`/`rm`/`>` in a
+// 1,900-line hook sit on a seventeen-entry list, which no correct tree
+// satisfies.
+//
+// CANONICAL, fixed for this scan, is the FOUR row artifacts Plan A's Global
+// Constraints name — `.compactset`, `.compactcard`, `.compactions` and
+// `.generation` — not the set and card alone: three of the entries below are
+// `.compactions`/`.generation` mutations a set+card scoping produces none of.
+describe('the compaction card — every canonical write is on the list (spec §5)', () => {
+  type Site = { file: string; fn: string; line: number; cmd: string; target: string; locked: boolean; text: string };
+
+  /** A canonical pathname LITERAL. `$1` as well as `$id`, because ccd's own
+   *  `local id="$1" p="$REG/$1.generation"` cannot reference `id` in the same
+   *  `local` under `set -u` and spells the path off the positional. */
+  const CANON_LIT = /"\$REG\/\$(?:id|1|\{id\}|\{1\})\.(?:compactset|compactcard|compactions|generation)"/;
+  /** A GLOB whose pattern CAN match a canonical basename. This clause is what
+   *  puts `_reg_purge`'s `rm -f "$f"` into the found set honestly: measured,
+   *  `ccd/ccd` carries ZERO `compactset`/`compactcard`/`compactions` literals,
+   *  so that site is unreachable by variable-binding or text adjacency alone,
+   *  and a second glob-based canonical unlink added elsewhere would otherwise
+   *  evade the scan entirely. */
+  const CANON_GLOB = /"\$REG\/\$(?:id|1|\{id\}|\{1\})"\.\*/;
+  const ACQ = /^_(?:hook|compact)_lock_acquire$/;
+  const REL = /^_(?:hook|compact)_lock_release$/;
+  /** The primitives, exactly as §5 enumerates them for the bash corpus.
+   *  `_hook_write_atomic` is a PRIMITIVE in its own right — which is why the
+   *  scan never descends into it and its call site, not its internal
+   *  `mv -f "$tmp" "$1"`, is the found member. */
+  const PRIMS = ['mv', 'rm', 'link', '_hook_write_atomic'];
+  const OPAQUE = ['_hook_write_atomic'];
+
+  const noComments = (t: string): string =>
+    t.split('\n').map((l) => (/^\s*#/.test(l) ? '' : l)).join('\n');
+
+  /** `^name() {` … `^}`. Both corpus files spell every function that way. */
+  const fnsOf = (code: string): Array<{ name: string; a: number; b: number }> => {
+    const out: Array<{ name: string; a: number; b: number }> = [];
+    let off = 0; let cur: string | null = null; let start = 0;
+    for (const ln of code.split('\n')) {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{/.exec(ln);
+      if (m && cur === null) { cur = m[1]!; start = off; }
+      else if (ln === '}' && cur !== null) { out.push({ name: cur, a: start, b: off + ln.length }); cur = null; }
+      off += ln.length + 1;
+    }
+    return out;
+  };
+
+  /** Statement fragments: newline, `;`, `&&`, `||` and `|` all end one. */
+  const fragsOf = (body: string): Array<{ off: number; text: string }> => {
+    const out: Array<{ off: number; text: string }> = [];
+    let i = 0;
+    for (const ln of body.split('\n')) {
+      let pos = 0;
+      for (const part of ln.split(/(;|&&|\|\||\|)/)) {
+        if (part === ';' || part === '&&' || part === '||' || part === '|') { pos += part.length; continue; }
+        out.push({ off: i + pos, text: part }); pos += part.length;
+      }
+      i += ln.length + 1;
+    }
+    return out;
+  };
+
+  const cmdOf = (frag: string): { cw: string | null; rest: string } => {
+    let s = frag;
+    for (;;) {
+      const m = /^\s*(\{|\(|!|if|elif|while|until|then|else|do)\s+/.exec(s);
+      if (!m) break;
+      s = s.slice(m[0].length);
+    }
+    s = s.replace(/^\s+/, '');
+    const m = /^([A-Za-z_][A-Za-z0-9_.-]*)\b/.exec(s);
+    return { cw: m ? m[1]! : null, rest: s };
+  };
+
+  /** argv words after the command word, with double quotes kept and honoured. */
+  const wordsOf = (rest: string): string[] => {
+    let s = rest.replace(/^[A-Za-z_][A-Za-z0-9_.-]*/, '');
+    const out: string[] = []; let cur = ''; let q = false;
+    for (const ch of s) {
+      if (ch === '"') { q = !q; cur += ch; }
+      else if (/\s/.test(ch) && !q) { if (cur) { out.push(cur); cur = ''; } }
+      else cur += ch;
+    }
+    if (cur) out.push(cur);
+    return out;
+  };
+
+  /** THE FILTER, as a pure function of the corpus text — so a mutated STRING is
+   *  a real control rather than a stub. Resolution has four clauses, and §5
+   *  names each: a variable bound to a canonical literal; a variable bound by a
+   *  canonical-matching GLOB; a LITERAL canonical pathname written straight
+   *  into a primitive's argument; and a POSITIONAL traced from every call site
+   *  that passes one, transitively (which is what reaches a restored
+   *  `_hook_compact_rollback_set`'s `$set` → `$1` → `mv -f "$set" "$claim"`). */
+  const scan = (corpus: Array<readonly [string, string]>): Site[] => {
+    const files = corpus.map(([label, text]) => {
+      const code = noComments(text);
+      return { label, code, fns: fnsOf(code) };
+    });
+    const defined = new Set(files.flatMap((f) => f.fns.map((x) => x.name)));
+    const canonVars = new Map<string, Set<string>>();   // `${label}\0${fn}`
+    const canonPos = new Map<string, Set<number>>();    // fn name -> positions
+    const vkey = (l: string, f: string): string => `${l}\0${f}`;
+    for (const f of files) {
+      for (const { name, a, b } of f.fns) {
+        const body = f.code.slice(a, b);
+        const s = new Set<string>();
+        for (const m of body.matchAll(new RegExp(`([A-Za-z_][A-Za-z0-9_]*)=${CANON_LIT.source}`, 'g'))) s.add(m[1]!);
+        for (const m of body.matchAll(new RegExp(`for\\s+([A-Za-z_][A-Za-z0-9_]*)\\s+in\\s+${CANON_GLOB.source}`, 'g'))) s.add(m[1]!);
+        canonVars.set(vkey(f.label, name), s);
+      }
+    }
+    const resolves = (w: string, label: string, fn: string): boolean => {
+      if (CANON_LIT.test(w)) return true;
+      for (const v of canonVars.get(vkey(label, fn)) ?? []) if (new RegExp(`^"\\$\\{?${v}\\}?"$`).test(w)) return true;
+      for (const k of canonPos.get(fn) ?? []) if (new RegExp(`^"\\$\\{?${k}\\}?"$`).test(w)) return true;
+      return false;
+    };
+    // FIXPOINT, bounded: the corpus's call graph is shallow, and a bound turns
+    // a cycle into a finite answer instead of a hang.
+    for (let pass = 0; pass < 12; pass++) {
+      let changed = false;
+      for (const f of files) {
+        for (const { name, a, b } of f.fns) {
+          if (OPAQUE.includes(name)) continue;
+          const body = f.code.slice(a, b);
+          for (const { text } of fragsOf(body)) {
+            const { cw, rest } = cmdOf(text);
+            if (cw === null || OPAQUE.includes(cw) || !defined.has(cw)) continue;
+            let i = 0;
+            for (const w of wordsOf(rest)) {
+              i++;
+              if (w.startsWith('-')) continue;
+              if (!resolves(w, f.label, name)) continue;
+              const set = canonPos.get(cw) ?? new Set<number>();
+              if (!set.has(i)) { set.add(i); canonPos.set(cw, set); changed = true; }
+            }
+          }
+        }
+      }
+      for (const f of files) {
+        for (const { name, a, b } of f.fns) {
+          if (OPAQUE.includes(name)) continue;
+          const body = f.code.slice(a, b);
+          for (const k of canonPos.get(name) ?? []) {
+            for (const m of body.matchAll(new RegExp(`([A-Za-z_][A-Za-z0-9_]*)="\\$\\{?${k}\\}?"`, 'g'))) {
+              const s = canonVars.get(vkey(f.label, name))!;
+              if (!s.has(m[1]!)) { s.add(m[1]!); changed = true; }
+            }
+          }
+          // LOCAL TO LOCAL, the third hop and the one the positional trace
+          // cannot make: `j="$journal"` inside the SAME body. Without it a
+          // write spelled through a second name — `printf … >> "$j"` — resolved
+          // to nothing and the scan produced no site for it at all, which is
+          // the residual §5 gap round 15 measured. It rides the same fixpoint,
+          // so a chain of aliases converges rather than needing a pass count.
+          for (const v of [...(canonVars.get(vkey(f.label, name)) ?? [])]) {
+            for (const m of body.matchAll(new RegExp(`([A-Za-z_][A-Za-z0-9_]*)="\\$\\{?${v}\\}?"`, 'g'))) {
+              const s = canonVars.get(vkey(f.label, name))!;
+              if (!s.has(m[1]!)) { s.add(m[1]!); changed = true; }
+            }
+          }
+        }
+      }
+      if (!changed) break;
+    }
+    // LOCK STATE. Within a function, the state at an offset is decided by the
+    // LAST acquire/release statement before it. A release that shares its LINE
+    // with a `return` is an EARLY-EXIT release and does not end the section for
+    // the code that follows it — measured, `_hook_compact_pre` guards every
+    // step with `|| { _hook_lock_release "$lockfd"; return 0; }`, so counting
+    // those as section ends reads the whole published arm as unlocked. A
+    // function with NO lock statement of its own inherits: it is held iff EVERY
+    // call site of it is itself held (`_hook_compact_card_locked`,
+    // `_hook_generation_ok`, `_reg_generation_read`/`_mint` are all of that
+    // shape — their caller takes the lock).
+    const lockStmts = (body: string): Array<{ off: number; kind: 'a' | 'r' }> => {
+      const out: Array<{ off: number; kind: 'a' | 'r' }> = [];
+      for (const { off, text } of fragsOf(body)) {
+        const { cw } = cmdOf(text);
+        if (cw === null) continue;
+        const ls = body.lastIndexOf('\n', off) + 1;
+        const leRaw = body.indexOf('\n', off);
+        const line = body.slice(ls, leRaw < 0 ? body.length : leRaw);
+        if (ACQ.test(cw)) out.push({ off, kind: 'a' });
+        else if (REL.test(cw) && !line.includes('return')) out.push({ off, kind: 'r' });
+      }
+      return out.sort((x, y) => x.off - y.off);
+    };
+    const bodyOf = (label: string, fn: string): { body: string; a: number } | null => {
+      const f = files.find((x) => x.label === label);
+      const d = f?.fns.find((x) => x.name === fn);
+      return f && d ? { body: f.code.slice(d.a, d.b), a: d.a } : null;
+    };
+    const callSites = (fn: string): Array<{ label: string; fn: string; off: number }> => {
+      const out: Array<{ label: string; fn: string; off: number }> = [];
+      for (const f of files) {
+        for (const { name, a, b } of f.fns) {
+          if (name === fn) continue;
+          for (const { off, text } of fragsOf(f.code.slice(a, b))) {
+            if (cmdOf(text).cw === fn) out.push({ label: f.label, fn: name, off });
+          }
+        }
+      }
+      return out;
+    };
+    /** THE ONE HELD SECTION THIS MODEL CANNOT SEE, named rather than left to
+     *  read as an unlocked canonical write. `_hook_compact_card` does NOT
+     *  release on the serving path: it retains the descriptor in
+     *  `COMPACT_SERVE_FD` and returns, `_hook_compact_serve_end` is its single
+     *  release site, and the marker publication sits between the print and that
+     *  release. So `_hook_compact_mark_served` runs inside a section whose
+     *  acquire is in one function and whose release is in a third — which
+     *  `lockStmts`'s per-function acquire/release walk has no model for — and
+     *  whose only call site is at TOP LEVEL, where `callSites` does not look at
+     *  all, so the inherit clause answers false on `cs.length > 0` without ever
+     *  measuring a lock. All three facts are re-measured by the test below, so
+     *  this is an exception with a measurement under it and not an assertion. */
+    const RETAINED_SERVE = vkey('hook', '_hook_compact_mark_served');
+    const held = (label: string, fn: string, off: number, seen: Set<string> = new Set()): boolean => {
+      if (vkey(label, fn) === RETAINED_SERVE) return true;
+      const d = bodyOf(label, fn);
+      if (!d) return false;
+      const before = lockStmts(d.body).filter((s) => s.off < off);
+      if (before.length) return before[before.length - 1]!.kind === 'a';
+      if (seen.has(vkey(label, fn))) return false;
+      const next = new Set(seen); next.add(vkey(label, fn));
+      const cs = callSites(fn);
+      return cs.length > 0 && cs.every((c) => held(c.label, c.fn, c.off, next));
+    };
+
+    const sites: Site[] = [];
+    for (const f of files) {
+      for (const { name, a, b } of f.fns) {
+        if (OPAQUE.includes(name)) continue;
+        const body = f.code.slice(a, b);
+        for (const { off, text } of fragsOf(body)) {
+          const { cw, rest } = cmdOf(text);
+          let target: string | null = null;
+          let cmd = cw ?? '';
+          if (cw !== null && PRIMS.includes(cw)) {
+            for (const w of wordsOf(rest)) {
+              if (w.startsWith('-')) continue;
+              if (resolves(w, f.label, name)) { target = w; break; }
+            }
+          }
+          if (target === null) {
+            // `>` / `>>` redirection onto a canonical word.
+            for (const m of text.matchAll(/>>?\s*("[^"]*")/g)) {
+              if (resolves(m[1]!, f.label, name)) { cmd = '>'; target = m[1]!; break; }
+            }
+          }
+          if (target === null) continue;
+          sites.push({
+            file: f.label, fn: name, line: f.code.slice(0, a + off).split('\n').length,
+            cmd, target, locked: held(f.label, name, off),
+            text: text.trim().replace(/\s+/g, ' '),
+          });
+        }
+      }
+    }
+    return sites;
+  };
+
+  /** THE ALLOW-LIST, ENUMERATED BY MEASUREMENT, with each entry's arm, its
+   *  protocol step and its lock state — and with the exact number of SITES the
+   *  filter produces for it, because two entries are one act spelled in two
+   *  branches (§5's own "either factoring is permitted" point) and a bare
+   *  seventeen-site list could not say which.
+   *
+   *  TWO ENTRIES DEPARTED FROM §5's SIXTEEN, both measured, and fix round 1
+   *  closed both IN THE SPEC rather than in the list:
+   *
+   *  - Entry (2), §3.1 item 5's redundant-canonical-alias unlink, had ZERO
+   *    sites: it was NOT BUILT on this tree. Ruled, and the SPEC dropped the
+   *    step (D-2756) — measured, it changes nothing it could change, because
+   *    the overlap `find`'s claim clause already decides the verdict and the
+   *    unconditional initial publication's `mv -f` already replaces the
+   *    directory entry. §5 withdraws the entry and retains its ID rather than
+   *    renumbering, so citations to (3)–(16) stay true; this list simply does
+   *    not carry it, and the equality is over (1) and (3)–(17).
+   *  - Entry (17) was on NO §5 entry and IS produced by the filter:
+   *    `_reg_generation_read`'s `link "$p" "$al"` (`ccd/ccd#_reg_generation_read`), the
+   *    ccd-side twin of entry (16)'s hook-side generation-read alias, a `link`
+   *    whose SOURCE names canonical. §5 enumerated the hook's and not ccd's;
+   *    fix round 1 ADDED it there (D-2757), so the list below is now the
+   *    spec's own.
+   *
+   *  Named for completeness and EXCLUDED BY THE FILTER — each appears on no
+   *  entry, and a scan producing any of them is over-broad: the exact-family
+   *  age sweep (dot-LEADING `.tmp` grammar, which no canonical basename has);
+   *  the stage `rm`s on the non-publishing outcomes; SessionStart's
+   *  `( set -C; : > "$claim" )` placeholder and its `rm -f "$claim"`;
+   *  PostCompact's `touch "$claim"`; the marker source's `mktemp`/`link`/`rm`;
+   *  the permanent lock's own init and every acquisition's lock-open alias
+   *  (dot-leading, and not among the four row artifacts); and the helper's two
+   *  `writeAtomic` primitives, excluded because no canonical pathname reaches
+   *  its argv at all — option A's load-bearing property. */
+  const ALLOW: Array<{ id: number; file: string; fn: string; cmd: string; needle: string; count: number; where: string }> = [
+    { id: 1, file: 'hook', fn: '_hook_compact_pre', cmd: 'rm', needle: 'rm -f "$cardf"', count: 1, where: 'PreCompact step 6, ambiguous-card removal, FIRST held lock' },
+    { id: 3, file: 'hook', fn: '_hook_compact_pre', cmd: '_hook_write_atomic', needle: '_hook_write_atomic "$set"', count: 1, where: 'PreCompact step 7, initial publication, FIRST held lock' },
+    { id: 4, file: 'hook', fn: '_hook_compact_pre', cmd: 'mv', needle: 'mv -f "$cardstage" "$cardf"', count: 1, where: 'PreCompact step 13, card-stage rename, SECOND held lock' },
+    { id: 5, file: 'hook', fn: '_hook_compact_pre', cmd: 'mv', needle: 'mv -f "$setstage" "$set"', count: 2, where: 'PreCompact step 13, set-stage rename (rc 0 arm and rc 3 arm), SECOND held lock' },
+    { id: 6, file: 'hook', fn: '_hook_compact_card_locked', cmd: 'rm', needle: 'rm -f "$f"', count: 1, where: 'SessionStart(compact) step 2, aged-card deletion, the one retained lock' },
+    { id: 7, file: 'hook', fn: '_hook_compact_card_locked', cmd: 'mv', needle: 'mv -f "$f" "$claim"', count: 1, where: 'SessionStart(compact) step 3, claim by rename, same lock' },
+    { id: 8, file: 'hook', fn: '_hook_compact_card_locked', cmd: 'link', needle: 'link "$claim" "$f"', count: 2, where: 'SessionStart(compact) step 3, card restore on a crossed or body-less claim, same lock' },
+    { id: 9, file: 'hook', fn: '_hook_compact_post', cmd: 'link', needle: 'link "$set" "$claim"', count: 1, where: 'PostCompact settlement, claim link off canonical, settlement lock' },
+    { id: 10, file: 'hook', fn: '_hook_compact_post', cmd: 'rm', needle: 'rm -f "$set"', count: 1, where: 'PostCompact settlement, canonical unlink strictly before the claim touch, same lock' },
+    { id: 11, file: 'hook', fn: '_hook_compact_post', cmd: 'link', needle: 'link "$claim" "$set"', count: 1, where: 'PostCompact settlement, no-clobber restore after a failed touch, same lock' },
+    { id: 12, file: 'ccd', fn: '_reg_purge', cmd: 'rm', needle: 'rm -f "$f"', count: 1, where: '_reg_purge purge-loop body, glob-bound, stable lock held for the whole body' },
+    { id: 13, file: 'ccd', fn: '_reg_purge', cmd: 'rm', needle: 'rm -f "$REG/$id.generation"', count: 1, where: '_reg_purge generation-last unlink, literal-canonical, same lock' },
+    { id: 14, file: 'hook', fn: '_hook_compact_post', cmd: 'mv', needle: 'mv -f "$stage" "$journal"', count: 1, where: 'PostCompact final journal transaction, reacquired and validated FINAL lock' },
+    { id: 15, file: 'ccd', fn: '_reg_generation_mint', cmd: 'link', needle: 'link "$src" "$p"', count: 1, where: 'row creation, no-clobber link mint of the generation, ROW-CREATION lock' },
+    { id: 16, file: 'hook', fn: '_hook_generation_ok', cmd: 'link', needle: 'link "$p" "$al"', count: 1, where: 'PreCompact step 5 generation-read alias off canonical, the caller\'s held lock' },
+    { id: 17, file: 'ccd', fn: '_reg_generation_read', cmd: 'link', needle: 'link "$p" "$al"', count: 1, where: 'ccd-side generation-read alias off canonical — NOT on §5\'s sixteen' },
+  ];
+
+  const bashCorpus = (): Array<readonly [string, string]> =>
+    [['hook', fs.readFileSync(HOOK, 'utf8')], ['ccd', ccdSource()]] as const;
+
+  const entryOf = (s: Site): number[] =>
+    ALLOW.filter((e) => e.file === s.file && e.fn === s.fn && e.cmd === s.cmd && s.text.includes(e.needle)).map((e) => e.id);
+
+  it('the found set EQUALS the allow-list, entry by entry, with every site under a held lock', () => {
+    const sites = scan(bashCorpus());
+    // NON-VACUITY, MANDATORY and in BOTH clauses: a scan that finds nothing
+    // cannot red on anything — the round-8 spelling found nothing — and
+    // requiring only the `_hook_write_atomic` call site would leave the GLOB
+    // clause itself unproven. §5 names these two by their pre-Task-9 anchors
+    // (`session-hook.sh:886` and `ccd/ccd:1848`); this task moved both, so they
+    // are required BY IDENTITY — file, function and statement — rather than by
+    // a line number that drifts with every edit above them.
+    expect(sites.length, 'the found set is non-empty').toBeGreaterThan(0);
+    expect(sites.some((s) => s.file === 'hook' && s.fn === '_hook_compact_pre' && s.text.startsWith('_hook_write_atomic "$set"')),
+      'the initial publication is in the found set').toBe(true);
+    expect(sites.some((s) => s.file === 'ccd' && s.fn === '_reg_purge' && s.text === 'rm -f "$f"'),
+      'the GLOB clause reaches _reg_purge\'s unlink loop').toBe(true);
+
+    // EVERY SITE ON EXACTLY ONE ENTRY — an unmatched site is a canonical write
+    // nobody argued for, a doubly-matched one is an ambiguous allow-list.
+    const unmatched = sites.filter((s) => entryOf(s).length === 0)
+      .map((s) => `${s.file}:${s.line} ${s.fn} ${s.text}`);
+    expect(unmatched, 'canonical writes on no allow-list entry').toEqual([]);
+    expect(sites.filter((s) => entryOf(s).length > 1), 'sites matching two entries').toEqual([]);
+
+    // AND EVERY ENTRY ITS EXACT COUNT — which is what makes DELETING an entry,
+    // or adding a second copy of a site an entry already names, red.
+    const counted = ALLOW.map((e) => `${e.id}=${sites.filter((s) => entryOf(s).includes(e.id)).length}`);
+    expect(counted).toEqual(ALLOW.map((e) => `${e.id}=${e.count}`));
+    expect(sites.length, 'and nothing outside the counted sites').toBe(ALLOW.reduce((n, e) => n + e.count, 0));
+
+    // THE LOCK STATE IS PART OF THE ENTRY, not a comment beside it.
+    expect(sites.filter((s) => !s.locked).map((s) => `${s.file}:${s.line} ${s.text}`),
+      'every canonical write happens under a held lock').toEqual([]);
+  });
+
+
+  it('the RETAINED SERVE LOCK is real: the arm keeps its descriptor past the return, and exactly one site releases it', () => {
+    // The measurement `held`'s one named exception rests on. Each clause is
+    // independent, and deleting any of them would make the exception an
+    // assertion about a lock nobody holds.
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src, 'the serving path retains rather than releases')
+      .toContain('if [ -n "$CARD_COMPACT" ]; then COMPACT_SERVE_FD="$lockfd"; return 0; fi');
+    expect([...src.matchAll(/_hook_lock_release "\$COMPACT_SERVE_FD"/g)],
+      'and there is exactly ONE release site for it').toHaveLength(1);
+    // …with the marker publication BETWEEN the print and that release, which is
+    // what puts `_hook_compact_mark_served` inside the section.
+    const mark = src.indexOf('_hook_compact_mark_served || true');
+    const end = src.indexOf('_hook_compact_serve_end || true');
+    expect(mark, 'the marker is published at top level').toBeGreaterThan(-1);
+    expect(end, 'and the release follows it').toBeGreaterThan(mark);
+    // AND THE CALL SITE REALLY IS TOP LEVEL — the reason `callSites` cannot see
+    // it. No function body in the file names it.
+    const inFns = bashCorpus().flatMap(([label, code]) =>
+      fnsOf(code).filter(({ a, b }) => code.slice(a, b).includes('_hook_compact_mark_served'))
+        .map(({ name }) => `${label}:${name}`))
+      .filter((n) => !n.endsWith(':_hook_compact_mark_served'));
+    expect(inFns, 'no function calls it; only the SessionStart arm does').toEqual([]);
+  });
+  it('the helper writes NO canonical pathname — excluded by the FILTER, not by an entry', () => {
+    // Option A's load-bearing property: no canonical pathname reaches the
+    // helper's argv, so its two surviving `writeAtomic` primitives are not
+    // canonical writes at all. A JS-shaped filter, because the bash resolution
+    // above cannot read this file.
+    const helper = fs.readFileSync(HELPER_SRC, 'utf8');
+    const jsCanon = (t: string): string[] =>
+      [...t.matchAll(/\b(renameSync|unlinkSync|linkSync|writeFileSync)\s*\(([^;]*)\)/g)]
+        .filter((m) => /\.(compactset|compactcard|compactions|generation)\b/.test(m[2]!))
+        .map((m) => m[0]!.slice(0, 100));
+    expect(jsCanon(helper), 'the helper names no canonical row artifact').toEqual([]);
+    // CONTROL, so the emptiness above is a measurement and not a broken
+    // matcher: the same filter over a mutated copy finds the re-added write.
+    const mutant = helper.replace('    renameSync(tmp, target);',
+      '    renameSync(tmp, `${process.env["REG"]}/${id}.compactset`);');
+    expect(mutant, 'the mutation applied').not.toBe(helper);
+    expect(jsCanon(mutant).length, 'and the filter sees it').toBeGreaterThan(0);
+  });
+
+  it('CONTROL: a restored rollback is reached through the POSITIONAL trace, two hops from its call site', () => {
+    // §5's first mutation. The restored function binds `local set="$1"` — no
+    // canonical literal anywhere in it — so a scan resolving only literals and
+    // locally-bound variables stays GREEN on it, which is exactly what round
+    // 9's resolution rule did. The chain the filter must walk is
+    // `$set` (call site) → `$1` → `local set="$1"` → `mv -f "$set" "$claim"`.
+    const [hook, ccd] = bashCorpus() as [readonly [string, string], readonly [string, string]];
+    const restored = `
+_hook_compact_rollback_set() {
+  local set="$1" nonce="$2" original="$3" claim=""
+  claim="$REG/.$id.$$.\${nonce}.compactset-rollback.tmp"
+  if ! { mv -f "$set" "$claim"; } 2>/dev/null; then
+    { rm -f "$claim"; } 2>/dev/null || true
+    return 0
+  fi
+  { link "$claim" "$set"; } 2>/dev/null || true
+}
+`;
+    const mutated = hook[1]
+      .replace('_hook_write_atomic() {', `${restored.trim()}\n\n_hook_write_atomic() {`)
+      .replace('  _hook_write_atomic "$set" "$nonce" "$doc" ||',
+        '  _hook_compact_rollback_set "$set" "$nonce" "$doc" || true\n  _hook_write_atomic "$set" "$nonce" "$doc" ||');
+    expect(mutated, 'the mutation applied').not.toBe(hook[1]);
+    const sites = scan([['hook', mutated], ccd]);
+    const found = sites.filter((s) => s.fn === '_hook_compact_rollback_set');
+    // The fragment text keeps its leading group/control tokens — `cmdOf` strips
+    // them to find the command word and does not rewrite the statement.
+    expect(found.map((s) => s.text), 'the restored rollback\'s canonical mutations').toEqual([
+      'if ! { mv -f "$set" "$claim"', '{ link "$claim" "$set"',
+    ]);
+    expect(found.every((s) => entryOf(s).length === 0), 'and they sit on no entry — the scan reds').toBe(true);
+  });
+
+  it('CONTROL: an unlocked publication of an entry the list already names reds on its COUNT and on its lock state', () => {
+    // §5's second mutation. It is the one mutant an equality keyed only on
+    // "which statements exist" would miss the point of: the statement is one
+    // the allow-list names, so what reds is the COUNT (1 → 2) and the LOCK
+    // STATE of the copy, not its shape.
+    const [hook, ccd] = bashCorpus() as [readonly [string, string], readonly [string, string]];
+    const mutated = hook[1].replace(
+      '  _hook_lock_release "$lockfd"; lockfd=""\n  [[ "$CS_SCOPE" != ambiguous ]] || return 0',
+      '  _hook_lock_release "$lockfd"; lockfd=""\n  _hook_write_atomic "$set" "$nonce" "$doc" || true\n  [[ "$CS_SCOPE" != ambiguous ]] || return 0');
+    expect(mutated, 'the mutation applied').not.toBe(hook[1]);
+    const sites = scan([['hook', mutated], ccd]);
+    expect(sites.filter((s) => entryOf(s).includes(3)), 'entry 3 now has two sites').toHaveLength(2);
+    expect(sites.filter((s) => !s.locked).map((s) => s.text), 'and one of them is outside the lock')
+      .toEqual(['_hook_write_atomic "$set" "$nonce" "$doc"']);
+  });
+
+  it('CONTROL: a second glob-bound unlink loop elsewhere in ccd reds — the clause round 9 had no way to reach', () => {
+    // §5's added mutation. Under the round-9 resolution rule, with no glob
+    // clause, this stayed GREEN: `ccd/ccd` carries ZERO canonical literals, so
+    // nothing in it resolved to canonical by variable binding or adjacency.
+    const [hook, ccd] = bashCorpus() as [readonly [string, string], readonly [string, string]];
+    const mutated = ccd[1].replace('_substrate_mark() {',
+      '_evil_sweep() {\n  local id="$1" f\n  for f in "$REG/$id".*; do\n    rm -f "$f"\n  done\n}\n_substrate_mark() {');
+    expect(mutated, 'the mutation applied').not.toBe(ccd[1]);
+    const sites = scan([hook, ['ccd', mutated]]);
+    const evil = sites.filter((s) => s.fn === '_evil_sweep');
+    expect(evil.map((s) => s.text), 'the second loop is in the found set').toEqual(['rm -f "$f"']);
+    expect(evil[0]!.locked, 'and it is unlocked').toBe(false);
+    expect(entryOf(evil[0]!), 'on no entry').toEqual([]);
+  });
+
+  it('CONTROL: an unlocked rename over the canonical JOURNAL reds — green under every set+card scoping', () => {
+    // §5's third mutation, and the one that shows why "canonical" is the FOUR
+    // row artifacts rather than the set and card: a scan scoped to set+card
+    // reaches neither this statement nor entries 13, 14 and 15.
+    const [hook, ccd] = bashCorpus() as [readonly [string, string], readonly [string, string]];
+    const mutated = hook[1].replace('  _hook_lock_release "$lockfd"\n  return 0\n}\n\n# NO UNLOCKED CLEANUP.',
+      '  _hook_lock_release "$lockfd"\n  mv "$stage" "$REG/$id.compactions" 2>/dev/null || true\n  return 0\n}\n\n# NO UNLOCKED CLEANUP.');
+    expect(mutated, 'the mutation applied').not.toBe(hook[1]);
+    const sites = scan([['hook', mutated], ccd]);
+    const extra = sites.filter((s) => s.text.startsWith('mv "$stage" "$REG/$id.compactions"'));
+    expect(extra, 'the literal-canonical clause finds it').toHaveLength(1);
+    expect(extra[0]!.locked, 'outside the final held lock').toBe(false);
+    expect(entryOf(extra[0]!), 'and on no entry').toEqual([]);
+  });
+
+
+  it('CONTROL: an append spelled through ANOTHER variable is still a canonical write, resolved by the trace', () => {
+    // §5's `printf >>` row names a partial-failure fixture as its observable —
+    // "the write interrupted between the first and last byte of the appended
+    // record LOSES the old bytes". MEASURED: that fixture is unbuildable
+    // through this suite's stub mechanism, because `printf` is a bash BUILTIN:
+    // with a `printf` stub first on PATH, `type -t printf` still answers
+    // `builtin` and the stub never runs. So the mechanism is this scan, and the
+    // gap the reviewer named — `j="$journal"; printf … >> "$j"` evading the
+    // narrow `not.toMatch(/>>\s*"\$journal"/)` clause in the PostCompact
+    // describe — is closed HERE, by the same variable trace the `mv` sites use.
+    const [hook, ccd] = bashCorpus() as [readonly [string, string], readonly [string, string]];
+    const mutated = hook[1].replace(
+      '  mv -f "$stage" "$journal" 2>/dev/null ||',
+      '  j="$journal"; { printf \'%s\\n\' "$rec" >> "$j"; } 2>/dev/null ||');
+    expect(mutated, 'the mutation applied').not.toBe(hook[1]);
+    const sites = scan([['hook', mutated], ccd]);
+    const appends = sites.filter((s) => s.cmd === '>' && s.text.includes('>> "$j"'));
+    expect(appends, 'the redirection clause resolves `$j` through `journal`').toHaveLength(1);
+    expect(entryOf(appends[0]!), 'and it is on no allow-list entry').toEqual([]);
+    // …and entry 14 loses its site with it, so the EQUALITY reds from both
+    // directions at once — which is what makes the scan, not the narrow clause,
+    // the thing that carries this row.
+    expect(sites.filter((s) => entryOf(s).includes(14)), 'entry 14 has no site left').toEqual([]);
+  });
+  it('CONTROL: deleting any ONE entry reds, and entry 2 is the measured absence this tree carries', () => {
+    // "Delete any one of the entries ⇒ reds" is a property of the LIST, not of
+    // the source, so it is measured here against the real found set rather than
+    // by mutating a file: with an entry removed its sites become unmatched.
+    const sites = scan(bashCorpus());
+    for (const e of ALLOW) {
+      const without = ALLOW.filter((x) => x.id !== e.id);
+      const orphaned = sites.filter((s) =>
+        without.filter((x) => x.file === s.file && x.fn === s.fn && x.cmd === s.cmd && s.text.includes(x.needle)).length === 0);
+      // EVERY entry now has sites, which is the state §5 could not reach while
+      // it required the §3.1 item 5 unlink: that step is WITHDRAWN (D-2756),
+      // and the count-0 arm this loop used to need went with it.
+      expect(orphaned.length, `deleting entry ${e.id} orphans its sites`).toBe(e.count);
+    }
+    expect(ALLOW.filter((e) => e.count === 0).map((e) => e.id), 'no entry is unbuilt').toEqual([]);
+    // THE WITHDRAWAL, measured rather than asserted: the file's only `-ef` tests
+    // against the canonical set are PostCompact's two claim-identity proofs, so
+    // an implementer who built the dropped step would produce a site on no
+    // entry and red the equality above — which is the direction that matters.
+    const hookSrc = fs.readFileSync(HOOK, 'utf8');
+    const pre = hookSrc.slice(hookSrc.indexOf('_hook_compact_pre() {'), hookSrc.indexOf('_hook_compact_post() {'));
+    expect(pre.includes('-ef "$set"'), '_hook_compact_pre runs no -ef identity test against canonical').toBe(false);
+    expect([...hookSrc.matchAll(/-ef "\$set"/g)], 'the two that exist are PostCompact\'s').toHaveLength(2);
+  });
+});
+
+// ── D-2605: leg (e) of the mechanism-absence matrix — the OTHER two arms ──
+// The landed PreCompact leg covers one arm of three. §5's row says "the three
+// hook arms publish NOTHING", and the two that were uncovered are the ones
+// whose failure would be least visible: a SessionStart that served a card it
+// could not claim, and a PostCompact that committed a journal line for a
+// settlement it could not serialise. There is no unlocked fallback anywhere —
+// that is §10's forbidden second concurrency regime — so absence of the
+// mechanism makes each arm INERT, not degraded.
+describe('the compaction card — mechanism absence, the serve and settle arms (spec §4, §5)', () => {
+  const reg = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions')).sort();
+  const SUMMARY = [
+    '1. Task', 'did a thing', '',
+    '3. Files and Code Sections:', '- server/src/pane/statusline.ts was edited', '',
+    '4. Errors and fixes', 'none', '',
+  ].join('\n');
+
+  it('(e) with no flock, SessionStart(compact) serves nothing and PostCompact commits nothing', () => {
+    // PreCompact runs with the mechanism PRESENT, so there is a real card, a
+    // real canonical set and a real permanent lock for the two inert arms to
+    // fail to touch. Without that the assertions below would be satisfied by a
+    // fixture that never had anything to publish.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const setBytes = fs.readFileSync(setFile());
+    const cardBytes = fs.readFileSync(cardFile());
+    expect(setBytes.length, 'the fixture really published a set').toBeGreaterThan(0);
+    expect(cardBytes.length, 'and a card').toBeGreaterThan(0);
+    const before = reg();
+
+    const noflock = minimalPath(['flock']);
+    const serve = runFull(compactStart(tree, transcript), { PATH: noflock });
+    expect(serve.stderr, 'silent on stderr, as on every path').toBe('');
+    expect(serve.stdout, 'no card is served without the mutex').not.toContain('graphify card —');
+    const settle = runFull(postCompact(tree, transcript, SUMMARY), { PATH: noflock });
+    expect(settle, 'and the settlement is silent too').toEqual({ stdout: '', stderr: '' });
+
+    // NOTHING PUBLISHED, NOTHING CONSUMED, NOTHING STAGED. The name list is
+    // compared whole rather than by a handful of `existsSync` calls, so a
+    // stage, a claim or a marker the arms should never have created shows up
+    // as a diff instead of slipping past an enumeration nobody updated. The start report's spool (Overlord W1a) is set
+    // aside: a compact start is reported whatever the card's mechanism, and no server answers in this fixture.
+    const spool = (n: string): boolean => !n.endsWith('.startpending');
+    expect(reg().filter(spool), 'no stage, claim, marker or journal appears').toEqual(before.filter(spool));
+    expect(fs.existsSync(journalFile()), 'and no journal line is committed').toBe(false);
+    expect(fs.readFileSync(setFile()), 'the canonical set is byte-identical').toEqual(setBytes);
+    expect(fs.readFileSync(cardFile()), 'and so is the card it could not claim').toEqual(cardBytes);
+  });
+});
+
+/** `strace -f` splits a call that blocks (or races another process) into a START line
+ *  ending `<unfinished ...>` and, later, `PID <... NAME resumed>TAIL` — other PIDs'
+ *  lines between them. The census regexes match a COMPLETE line only, so before
+ *  matching, each START is joined with the next resumed line of the SAME pid and
+ *  SYSCALL, keeping the START's place in trace order (the order the fork happened
+ *  in). A resumed line with no START, or a START that never resumes, is returned
+ *  in `unparsed`, never silently dropped. */
+const rejoinStrace = (raw: string): { lines: string[]; unparsed: string[] } => {
+  const lines = raw.split('\n');
+  const open = new Map<string, Array<{ at: number; name: string }>>();
+  const dropped = new Set<number>();
+  const unparsed: string[] = [];
+  lines.forEach((ln, i) => {
+    const u = /^(\d+)\s+(.*?)\s*<unfinished \.\.\.>$/.exec(ln);
+    if (u) {
+      const name = /^(\w+)\(/.exec(u[2]!)?.[1] ?? '';
+      lines[i] = `${u[1]} ${u[2]}`;
+      const q = open.get(u[1]!) ?? [];
+      q.push({ at: i, name });
+      open.set(u[1]!, q);
+      return;
+    }
+    const r = /^(\d+)\s+<\.\.\. (\w+) resumed>(.*)$/.exec(ln);
+    if (!r) return;
+    dropped.add(i);
+    const q = open.get(r[1]!) ?? [];
+    const k = q.findIndex((o) => o.name === r[2]);
+    if (k === -1) { unparsed.push(ln); return; }
+    const [start] = q.splice(k, 1);
+    lines[start!.at] += r[3]!;
+  });
+  for (const q of open.values()) for (const o of q) unparsed.push(`${lines[o.at]} <unfinished ...>`);
+  return { lines: lines.filter((_, i) => !dropped.has(i)), unparsed };
+};
+
+/** The children the hook's own shell took inside the first held section, named by
+ *  the first command each one's subtree execs (`(subshell)` for none). */
+const forkCensus = (raw: string, whole = false): { forks: string[]; unparsed: string[] } => {
+  const { lines, unparsed } = rejoinStrace(raw);
+
+  // PARSE. Two shapes matter: a `clone` that returns a child pid, and a
+  // SUCCESSFUL `execve`. An `execve` returning -1 is the PATH walk, not a
+  // command that ran.
+  const parent = new Map<string, string>();
+  const firstExec = new Map<string, string>();
+  const events: Array<{ i: number; kind: 'clone' | 'exec'; pid: string; child?: string; name?: string }> = [];
+  lines.forEach((ln, i) => {
+    const c = /^(\d+)\s+(?:clone3?|v?fork)\(.*\)\s*=\s*(\d+)$/.exec(ln);
+    if (c) {
+      parent.set(c[2]!, c[1]!);
+      events.push({ i, kind: 'clone', pid: c[1]!, child: c[2]! });
+      return;
+    }
+    const e = /^(\d+)\s+execve\("([^"]+)".*\)\s*=\s*0$/.exec(ln);
+    if (e) {
+      const name = e[2]!.split('/').pop()!;
+      if (!firstExec.has(e[1]!)) firstExec.set(e[1]!, name);
+      events.push({ i, kind: 'exec', pid: e[1]!, name });
+    }
+  });
+  expect(events.length, 'strace produced a trace — a silent empty one proves nothing').toBeGreaterThan(5);
+  const root = events[0]!.pid;
+
+  /** The first command executed anywhere under `pid`, in trace order. */
+  const under = (pid: string): string | null => {
+    for (const ev of events) {
+      if (ev.kind !== 'exec') continue;
+      let p: string | undefined = ev.pid;
+      for (let hop = 0; p !== undefined && hop < 8; hop++) {
+        if (p === pid) return ev.name!;
+        p = parent.get(p);
+      }
+    }
+    return null;
+  };
+
+  // THE WINDOW. The acquire's LAST child is its `flock`, so the section opens
+  // straight after the first one; it closes at the helper fork (the first
+  // child after the release) or, on an arm that releases and returns, at the
+  // next `flock`. `_hook_compact_pre` is no longer the last arm: the Overlord's
+  // precompact line (`_hook_compact_pre_line`) runs after it with an acquire of
+  // its own, so such a window closes at THAT acquire's `flock` and carries the
+  // three children it takes first: its line's `jq`, its alias `link` and `rm`.
+  const flockAt = whole ? 0 : events.findIndex((e) => e.kind === 'exec' && e.name === 'flock');   // `whole`: every child of the run, no window
+  expect(flockAt, 'the arm took the row mutex').toBeGreaterThan(-1);
+  // THE END IS THE CLONE, NOT ITS EXEC. `timeout`'s `execve` happens in the
+  // child, i.e. AFTER the parent's `clone` line, so a window ending at the
+  // exec swallows the helper fork itself — measured, that was this pin's
+  // first draft and it reported a seventh member.
+  const ENDERS = ['timeout', 'gtimeout', 'node', 'flock'];
+  const endAt = whole ? -1 : events.findIndex((e, k) => k > flockAt && e.kind === 'clone' && e.pid === root
+    && ENDERS.includes(under(e.child!) ?? ''));
+  const last = endAt === -1 ? events.length : endAt;
+
+  const forks = events.slice(flockAt + 1, last)
+    .filter((e) => e.kind === 'clone' && e.pid === root)
+    .map((e) => under(e.child!) ?? '(subshell)');
+  return { forks, unparsed };
+};
+
+describe('the strace fork census — split lines are rejoined (runs on every platform: it parses a canned trace)', () => {
+  const trace = (...l: string[]): string => l.join('\n') + '\n';
+  const ARGS = '["rm", "-f", "x"], 0x7ffd /* 40 vars */';
+  // Six events at least, the first of them the root; `flock` opens the window.
+  const head = [
+    '100 execve("/bin/bash", ["bash"], 0x1) = 0',
+    '100 clone(child_stack=NULL, flags=SIGCHLD) = 101',
+    '101 execve("/usr/bin/flock", ["flock"], 0x1) = 0',
+    '100 clone(child_stack=NULL, flags=SIGCHLD) = 102',
+    '102 execve("/usr/bin/find", ["find"], 0x1) = 0',
+  ];
+
+  it('an execve split around another pid\'s line is named by its command, not "(subshell)"', () => {
+    const raw = trace(...head,
+      '100 clone(child_stack=NULL, flags=SIGCHLD <unfinished ...>',
+      '555 execve("/bin/other", ["other"], 0x1) = 0',
+      '1234 execve("/bin/rm", ' + ARGS + ' <unfinished ...>',
+      '100 <... clone resumed>, child_tidptr=0x7f) = 1234',
+      '1234 <... execve resumed>) = 0');
+    const { forks, unparsed } = forkCensus(raw);
+    expect(unparsed).toEqual([]);
+    expect(forks, 'the split clone and the split execve are one fork named rm, after the find').toEqual(['find', 'rm']);
+  });
+
+  it('a resumed line with no start, and a start that never resumes, are reported unparsed', () => {
+    const { unparsed } = rejoinStrace(trace(
+      '7 <... execve resumed>) = 0',
+      '8 execve("/bin/rm", ["rm"], 0x1 <unfinished ...>'));
+    expect(unparsed).toHaveLength(2);
+  });
+
+  it('a resumed line joins only a start of the SAME syscall: a clone resume never closes an open execve', () => {
+    const { lines, unparsed } = rejoinStrace(trace(
+      '9 execve("/bin/rm", ["rm"], 0x1 <unfinished ...>',
+      '9 <... clone resumed>) = 10'));
+    expect(unparsed, 'the clone resume found no clone start').toContain('9 <... clone resumed>) = 10');
+    expect(lines[0], 'the execve start took no tail').toBe('9 execve("/bin/rm", ["rm"], 0x1');
+  });
+
+  it('keeps the start line\'s position in trace order', () => {
+    const { lines } = rejoinStrace(trace('1 a(1 <unfinished ...>', '2 b() = 0', '1 <... a resumed>) = 0'));
+    expect(lines.slice(0, 2)).toEqual(['1 a(1) = 0', '2 b() = 0']);
+  });
+});
+
+// LINUX-ONLY BY ITS INSTRUMENT: `strace` does not exist on Darwin, so the describe skips there (the macOS leg reds otherwise).
+// The companion to this file's two source-order pins, and the one of the three
+// that no reading of the source can supply: `find` counted by grep cannot see a
+// child of any OTHER shape appearing or vanishing, and §3.1's enumeration of
+// what the section forks is prose until something measures it. So this runs the
+// arm under `strace -f -e trace=clone,clone3,fork,vfork,execve` and compares the
+// MULTISET of children the arm's own shell takes between the acquire and the
+// release against the section as built.
+//
+// THE MULTISET IS STATED PER SCENARIO, because several members are
+// branch-conditional and no single run produces all of them: a single expected
+// list naming every conditional member is RED on a correct tree, which is the
+// weakening this pin exists to prevent.
+describe.skipIf(process.platform === 'darwin')('the compaction card — the first held section forks exactly this (spec §3.1)', () => {
+  /** One fork the arm's own shell took, named by the first command its subtree
+   *  execs — or `(subshell)` when it execs nothing at all, which is what a
+   *  `$( )` around a builtin-only function is. Naming by the SUBTREE rather
+   *  than by the direct child is what makes this stable across bash's own
+   *  choice to fork once or twice for a command substitution; what it counts is
+   *  the children the ARM takes, not bash's implementation of them. */
+  type Fork = string;
+
+  const straceRun = (payload: object): { forks: Fork[]; raw: string } => {
+    const trace = path.join(home, 'trace.txt');
+    const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork,execve', 'bash', HOOK], {
+      input: JSON.stringify(payload), encoding: 'utf8',
+      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
+        CCRC_SESSION_GENERATION: GENERATION },
+    });
+    expect(r.status, `the hook exits 0 under strace. stderr: ${r.stderr}`).toBe(0);
+    const raw = fs.readFileSync(trace, 'utf8');
+    const { forks, unparsed } = forkCensus(raw);
+    expect(unparsed, 'every split strace line was rejoined to its other half').toEqual([]);
+    return { forks, raw };
+  };
+
+  const tally = (forks: Fork[]): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const f of forks.slice().sort()) out[f] = (out[f] ?? 0) + 1;
+    return out;
+  };
+
+  it('strace is present — a pin that cannot run is not a pin', () => {
+    // ASSERTED, never skipped. A `describe.skipIf` here would turn a box with
+    // no `strace` into a silent green, which is the one answer this section has
+    // no other guard for.
+    const r = spawnSync('strace', ['-V'], { encoding: 'utf8' });
+    expect(r.status, 'strace -V').toBe(0);
+  });
+
+  it('the ORDINARY publishing run forks exactly: the generation alias pair, two finds, the epoch substitution, the jq and the publishing mv', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const { forks } = straceRun(preCompact(tree, transcript));
+    // EVERY MEMBER IS §3.1's, and the count beside each is what makes adding or
+    // deleting any child THIS SCENARIO DRIVES red — not only a third `find`.
+    // The qualifier is load-bearing (closing gate M6): "any child" is false of
+    // a multiset, however exact, because a member the path never reaches
+    // contributes nothing to it. That is not hypothetical — it is what hid the
+    // sweep loop's per-iteration `rm` from both of this describe's original
+    // scenarios; the residue scenario at the end of this describe is the one
+    // that drives it, and only together do the three cover §3.1's list:
+    //   link + rm  — step 5's generation-read hard-link alias and its unlink,
+    //                the two children Task 9 ADDS to this section;
+    //   find × 2   — the overlap check and the exact-family sweep. The scope
+    //                `find`s are NOT here: they run at step 2, before the
+    //                acquire, and folding them in would inflate the section's
+    //                p95 that `COMPACT_LOCK_WAIT` is set from;
+    //   (subshell) — `at=$(_hook_epoch_ms)`, which forks even though the
+    //                `EPOCHREALTIME` fast path is builtin-only and execs
+    //                NOTHING. It stays inside the section because step 7 mints
+    //                the nonce from `at`, and `at` is the publication timestamp
+    //                the nonce embeds;
+    //   jq         — the initial set document;
+    //   mv         — `_hook_write_atomic`'s publishing rename.
+    expect(tally(forks)).toEqual({ '(subshell)': 1, find: 2, jq: 1, link: 1, mv: 1, rm: 1 });
+  }, 60_000);
+
+  it('the AMBIGUOUS run forks the same set PLUS the conditional card removal, and nothing else', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree), parentAge: LIVE,
+      subagents: [{ id: 'a1', lines: [tl.user('x')], age: LIVE }] });
+    const { forks } = straceRun(preCompact(tree, transcript, 'auto'));
+    // The ambiguous-card `rm -f "$cardf"` fires ONLY on this branch, and this
+    // arm releases at step 8 and never opens the second section — so the window
+    // runs to the end of the trace here, where the publishing run's ends at the
+    // helper fork. A SINGLE expected list carrying this member would be red on
+    // the ordinary run, which is why the multiset is stated per scenario.
+    // Plus the precompact line's three children before its own `flock` (the
+    // window's note above): jq, link and rm each one higher than the card's.
+    expect(tally(forks)).toEqual({ '(subshell)': 1, find: 2, jq: 2, link: 2, mv: 1, rm: 3 });
+  }, 60_000);
+
+  // THE RESIDUE SCENARIO (closing gate I1). The sweep loop's per-iteration
+  // `rm -f "$cand"` (`ccd/session-hook.sh#@compact-sweep-rm`) is the one member of this
+  // section neither scenario above can see: both leave the registry free of
+  // AGED family residue, so `$aged` is empty, the loop body never runs, and a
+  // child that costs one `execve` per swept candidate contributes nothing to
+  // either multiset. That is also why the comment above says what it now says:
+  // a multiset pins the children the scenario DRIVES, not every child the arm
+  // can take.
+  //
+  // ONE PLANTED AND TWO, because presence and UNBOUNDEDNESS are two claims.
+  // A single-N pin stays green if the loop ever learns to batch — `rm -f a b`
+  // is one fork for two candidates, and it is the obvious optimisation here —
+  // so the property worth pinning is that the count RISES WITH THE WORK.
+  // The residue is `.stage` temp family, deliberately not `compactpost.*.claim`:
+  // the overlap `find` (`ccd/session-hook.sh#@compact-pre-overlap-find`)
+  // reads that second name, and although it
+  // reads it YOUNG-only and aged residue could not flip the verdict, a fixture
+  // whose planted file is also an input to the scope decision would couple two
+  // measurements that have no business being coupled.
+  for (const planted of [1, 2]) {
+    it(`the SWEEP run forks one further \`rm\` per swept candidate — ${planted} planted, ${planted} swept`, () => {
+      const tree = cardTree(); plantHelper();
+      const { transcript } = plantSession({ lines: workLines(tree) });
+      const at = (f: string): string => path.join(home, '.cc-sessions', f);
+      // Older than `COMPACT_CARD_MAX_AGE` (1200 s), by the same margin the
+      // sweep's own fixture uses, so `find -mmin +20` matches every one.
+      const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+      const residue = Array.from({ length: planted }, (_, k) =>
+        at(`.demo-quiet-basin.compactset.99${k}.compact-1-99${k}-1-2.stage`));
+      for (const f of residue) { fs.writeFileSync(f, 'x'); fs.utimesSync(f, old, old); }
+      const { forks, raw } = straceRun(preCompact(tree, transcript));
+      // THE DIAGNOSTIC BELONGS IN THE FAILURE. A busy box makes `strace -f`
+      // split an `execve` into `<unfinished ...>` / `<... execve resumed>`;
+      // `forkCensus` rejoins the halves before matching (measured 2026-09-17: the
+      // unrejoined halves read as `(subshell)`, `find` 2 -> 1), and `straceRun`
+      // asserts that none was left unparsed. `split` is only how many were seen.
+      const split = raw.split('\n').filter((l) => l.includes('<unfinished ...>')).length;
+      // The ORDINARY multiset, plus exactly one `rm` per planted candidate.
+      expect(tally(forks), `the first held section's forks, with the sweep loop's removals (${split} split lines rejoined)`)
+        .toEqual(
+        { '(subshell)': 1, find: 2, jq: 1, link: 1, mv: 1, rm: 1 + planted });
+      // AND THE SWEEP REALLY SWEPT: a green multiset over residue that was
+      // never removed would be measuring a fork this arm did not take.
+      for (const f of residue) expect(fs.existsSync(f), `swept: ${f}`).toBe(false);
+    }, 60_000);
+  }
+});
+
+// ── D-2605: the CITATION AUDIT over both documents (spec §3.4, round 14) ──
+// These two documents cite tracked source by line in the hundreds, and a line
+// citation is the one claim that goes false without anybody editing it. The
+// rule, restated so it is decidable:
+//
+//   PREMISE — it relates a QUOTATION to a RANGE. Where a reference's clause
+//     quotes nothing there is nothing to check and the rule does not apply; a
+//     correct citation may point at a line with no token to quote (measured,
+//     `ccd/session-hook.sh:843` is a BLANK line and is cited as one).
+//   THE RULE — at least ONE quoted token or excerpt in the SAME CLAUSE occurs
+//     within the cited lines. One clause may carry several quotations and one
+//     quotation may anchor several references; a single hit anywhere in the
+//     clause satisfies it, and an excerpt with an ellipsis is satisfied when
+//     each part occurs.
+//   SUB-RULE A — a citation naming a function while pointing at a STATEMENT
+//     must have its range inside that function's body.
+//   SUB-RULE B — a `pinned by <test>:N` citation must land on that test's
+//     `it(` / `describe(` / `expect(` line. Evaluated BEFORE the premise's
+//     early-out, because such a clause usually quotes nothing but the
+//     reference itself and what it asserts is about the LINE, not a quotation.
+//   ALLOW-LIST — quoted HISTORY is exempt: a reference inside the
+//     `## Deviations found` ledger, or in a clause the same sentence marks as
+//     superseded. A scan that reds on the record of a correction teaches the
+//     next round to delete that record.
+//
+// PARAGRAPH-JOINED, and the join is load-bearing exactly as it is in the
+// documentation-consistency scan above: this corpus hard-wraps at ~110 columns,
+// and a line-scoped clause cuts the quotation away from the reference it
+// anchors. Measured over these two documents at the commit this task started
+// from, with the prototype this rule grew out of: a line-scoped reading failed
+// 196 references, the joined reading 143, and clause-scoping the bare-`:N`
+// inheritance 36. The rule as landed here — which also reads double-quoted
+// excerpts and applies sub-rule B before the premise's early-out — fails 41 of
+// them on that same tree.
+describe('the compaction card — every line citation is anchored (spec §3.4)', () => {
+  const DOCS_DIR = path.resolve(__dirname, '../../docs/superpowers');
+  const REPO = path.resolve(__dirname, '../..');
+  // THE CORPUS IS THREE DOCUMENTS, NOT TWO (wb2 B-I2 = A1). README carries
+  // operator-facing anchors into shipped source, and TWO of them — the
+  // `_hook_emit_context` call site and ccd's contended-acquire warning — were
+  // byte-exact at `f18c1be5` and were falsified by the whole-branch fix round's
+  // own edits to those two files. No assertion in this tree ever resolved a
+  // README reference, while the comment further down claimed the complete pass
+  // had classified it; a reader following either pointer landed on a comment
+  // and nothing reddened. `fromRepo` already resolves any repo-relative source
+  // path, so admitting README is a corpus change and not a rule change.
+  const CORPUS = [
+    ['spec', path.join(DOCS_DIR, 'specs/2026-09-09-graphify-compaction-card-design.md')],
+    ['plan', path.join(DOCS_DIR, 'plans/2026-09-10-graphify-compaction-card-plan-a.md')],
+    ['readme', path.join(REPO, 'README.md')],
+  ] as const;
+
+  const FILE_RE = '(?:(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\\.(?:ts|mts|mjs|js|sh)|ccd/ccd|ccd/ccrc)';
+  const REF_RE = new RegExp(`(${FILE_RE})?:(\\d+)(?:[-–](\\d+))?\\b`, 'g');
+  const LEDGER = '## Deviations found';
+  /** ONE RULE, as a mechanism: a clause carrying a retraction marker is quoted
+   *  history. Same device, same reason, as the documentation-consistency scan. */
+  const SUPERSEDED = /supersed|formerly|used to |previously |the old |deleted by|stale|pre-merge|before the merge|no longer|falsif|round \d+ (said|read|claimed|wrote|stated)|this replaces|shifted|corrected|was the wrong|moved →|→ *`?:/i;
+  /** A sentence end, a semicolon, or a table-cell pipe. */
+  const SENT = /(?<![A-Z0-9])\.\s+(?=[A-Z*`(\[—])|;\s+|\|/g;
+  /** QUOTED SPANS: backticks, curly quotes, and straight double quotes of four
+   *  characters or more — the corpus quotes shipped sentences that way as often
+   *  as it backticks tokens. ONE copy, read by both passes below. */
+  const QUOTED = /`([^`]+)`|“([^”]+)”|"([^"]{4,})"/g;
+  /** The head of a task section's file list, which the second pass scopes to. */
+  const FILES_HEAD = '**Files:**';
+
+  /** The two compaction-card documents are FROZEN history, dated and closed: each
+   *  is measured at the commit that last edited it, so an unrelated edit to a
+   *  cited source file moves nothing. Only editing a document moves its debt.
+   *  README is live operator text and stays checked against the working tree. */
+  const FREEZE: Readonly<Record<string, string>> = {
+    // specs/2026-09-09-graphify-compaction-card-design.md
+    spec: '514a4a7dbb79ff14e455ee9f61a6ca5ed5378514',
+    // plans/2026-09-10-graphify-compaction-card-plan-a.md
+    plan: 'a5333c6253875ea6baaedaf148828d2c0e9b5922',
+  };
+  /** Only a shallow checkout may lack a freeze commit, and then the frozen-doc rows skip with a
+   *  notice. In any other checkout a missing freeze commit is a mistake (a branch-only sha that a
+   *  squash-merge dropped), so the rows fail naming it rather than switching themselves off. */
+  const missingFreeze = Object.entries(FREEZE).filter(([, sha]) => !hasCommit(REPO, sha));
+  const skipUnlessFreeze = (ctx: { skip: () => void }): void => {
+    if (missingFreeze.length === 0) return;
+    if (isShallow(REPO)) {
+      console.warn('session-hook: skipped the frozen-doc citation rows, a freeze commit is not in this shallow checkout');
+      ctx.skip();
+      return;
+    }
+    throw new Error(`freeze commit missing from a full checkout: ${missingFreeze.map(([d, s]) => `${d} ${s}`).join(', ')}`);
+  };
+
+  type Resolve = (rel: string, doc?: string) => string[] | null;
+  const srcCache = new Map<string, string[] | null>();
+  const fromRepo: Resolve = (rel, doc) => {
+    const sha = doc === undefined ? undefined : FREEZE[doc];
+    const key = `${sha ?? 'live'}:${rel}`;
+    if (!srcCache.has(key)) {
+      const full = path.join(REPO, rel);
+      srcCache.set(key, sha !== undefined ? readAtSha(REPO, sha, rel)
+        : fs.existsSync(full) ? fs.readFileSync(full, 'utf8').split('\n') : null);
+    }
+    return srcCache.get(key)!;
+  };
+
+  /** `name`'s body, as a 1-based inclusive line range, or null. */
+  const funcBody = (rel: string, name: string, lines: string[]): [number, number] | null => {
+    const sh = rel.endsWith('.sh') || rel === 'ccd/ccd' || rel === 'ccd/ccrc';
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i]!;
+      const got = sh
+        ? (/^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{/.exec(l)?.[1] ?? null)
+        : (/^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)/.exec(l)?.[1]
+          ?? /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=/.exec(l)?.[1] ?? null);
+      if (got !== name) continue;
+      if (sh) {
+        for (let j = i + 1; j < lines.length; j++) if (lines[j]!.startsWith('}')) return [i + 1, j + 1];
+      } else {
+        const ind = l.length - l.replace(/^\s+/, '').length;
+        for (let j = i + 1; j < lines.length; j++) {
+          const s = lines[j]!; const t = s.trim();
+          if ((t === '}' || t === '};' || t === '});') && s.length - s.replace(/^\s+/, '').length === ind) return [i + 1, j + 1];
+        }
+      }
+      return [i + 1, lines.length];
+    }
+    return null;
+  };
+
+  const norm = (s: string): string => s.replace(/\s+/g, ' ');
+  /** A SPECIFICITY FLOOR on what counts as a satisfying quotation, and the
+   *  blind spot both Important citation findings hid in. The rule's only
+   *  length condition was non-empty, so a reference quoting `}` or `fi` or
+   *  `at` was satisfied by almost any line of bash or TypeScript and the audit
+   *  reported it as anchored wherever it pointed.
+   *
+   *  MEASURED, with a byte-faithful replica of the shipped audit that
+   *  reproduced the census exactly: spec's suffix-rule sentence anchored three
+   *  `ccd/compact-card.mjs` functions ~107 lines high and all three passed on
+   *  the two-character token `" ("`; re-anchoring one of them to a line
+   *  reading `} else if (item.name === 'Read') {` kept the whole suite green
+   *  and the census at exactly 55. `ccd/ccd:1840-1848` survived on `" ("`
+   *  alone, because `SENT` cuts its clause at the `||` inside the quoted
+   *  condition; plan's glob clause survived because its ONE-character token
+   *  `f` occurs in the word "refuse" on the comment it pointed at.
+   *
+   *  THE FIRST SPELLING OF THIS FLOOR DID NOT CLOSE THAT BLIND SPOT, and this
+   *  paragraph is the record of it (wb2 B-I1). "At least MIN_QUOTE non-space
+   *  characters OR ONE identifier-class character" refuses `" ("` and `/` and
+   *  `$`, and admits every one- or two-character WORD — so `rm`, `f`, `$1`
+   *  and `" in "` went on anchoring references, MEASURED by instrumenting
+   *  `occurs` on the tip tree, and two references passed on such a token with
+   *  no other satisfying token at all: plan's `ccd/ccd:1861` on `rm` (the
+   *  referent is `ccd/ccd:2445`) and plan's `ccd/session-hook.sh:792-819` on
+   *  `$1`. The paragraph this replaces named `f` as a CLOSED blind spot while
+   *  the rule still accepted it.
+   *
+   *  THE RULE, and it is still the narrowest one that closes what is measured
+   *  rather than the strictest available: an ellipsis-part satisfies when it
+   *  is at least MIN_QUOTE non-space characters, OR carries at least TWO
+   *  identifier-class characters AND is not one of the shell builtins and
+   *  control words named in `STOPWORD`. One identifier character is not a
+   *  quotation of anything — `f` occurs in every `printf`, `refuse` and
+   *  `find` — and a bare builtin is not either, because it occurs on whatever
+   *  line of bash you point at. A token that satisfies neither states nothing
+   *  about the line it points at, so a reference carrying only such tokens is
+   *  QUOTATIONLESS — a class the audit already has (`unanchored`) and already
+   *  does not count as a failure, which is why this floor RAISES what the
+   *  census can see without inventing a new verdict.
+   *
+   *  SELF-REFUTATION, because a floor stated as a rule has to be measured as
+   *  one — and stating that here, in prose, was not a measurement: this
+   *  paragraph used to CLAIM, unmeasured, that of the tokens offered to every
+   *  reference these three documents resolve, the ones of THREE non-space
+   *  characters or fewer that this rule still ACCEPTS are exactly `jq`,
+   *  `ccd`, `it(` and `out`, and that none of the four ever anchors a
+   *  reference on shortness alone. Main has since mechanised that check —
+   *  see "THE TWO CORPUS FACTS the docstring above states, asserted rather
+   *  than asserted-about" below, whose `accepted`/`weak` assertions run both
+   *  claims against the real corpus. Read that assertion for the current
+   *  answer, not this paragraph. */
+  const MIN_QUOTE = 8;
+  /** The six tokens the review MEASURED as self-anchoring across this corpus,
+   *  refused by name. Five of them rule (a) already refuses for carrying no
+   *  identifier character at all; `at` is the one that does not, and it is the
+   *  token `ccd/session-hook.sh:865` survived on for four rounds. */
+  const NEVER = new Set(['/', ',', '(', 'at', '""', '$']);
+  /** THE STOPLIST: shell builtins, shell control words and the positional and
+   *  special parameters. Each occurs on so many lines of this corpus's own
+   *  sources that quoting one states nothing about any of them, and the rule
+   *  above cannot refuse them by shape — `rm`, `in`, `do` and `fi` all carry
+   *  two identifier characters. Some entries are refused by the two-identifier
+   *  rule anyway (`f`, and `$1`..`$9`/`$?`/`$!`/`$$`, which carry one or
+   *  none); they are named here rather than left implicit because the rule and
+   *  the list are separately mutable and the next reader should not have to
+   *  re-derive which arm refuses which token. MEASURED on this tree: deleting
+   *  the list alone, and changing nothing else, moves the census from 55 to
+   *  51 — four references re-anchoring on `die` or `case` — and the
+   *  `**Files:**` set from 12 to 11 and the `|`-row set from 20 to 15. */
+  const STOPWORD = new Set(['rm', 'f', 'at', 'in', 'die', 'echo', 'set', 'local', 'return',
+    'fi', 'do', 'done', 'then', 'else', 'case', 'esac', 'if', 'for', 'while', 'exit',
+    '$1', '$2', '$3', '$4', '$5', '$6', '$7', '$8', '$9', '$?', '$!', '$$']);
+  const specific = (part: string): boolean => {
+    const t = part.trim();
+    if (t === '' || NEVER.has(t) || STOPWORD.has(t)) return false;
+    if (t.replace(/\s+/g, '').length >= MIN_QUOTE) return true;
+    return (t.match(/[A-Za-z0-9_]/g) ?? []).length >= 2;
+  };
+  const partsOf = (tok: string): string[] =>
+    tok.split(/…|\.\.\./).map((x) => x.trim()).filter((x) => x !== '');
+  /** Whether a quoted span is EVIDENCE at all. A token that cannot satisfy the
+   *  rule under any anchor is not a quotation of anything, so it must not make
+   *  a reference CHECKED either — otherwise the floor would report a correct
+   *  anchor as stale for the sin of having said nothing. It is QUOTATIONLESS,
+   *  which is the class the audit already has and already does not fail. */
+  const usable = (tok: string): boolean => {
+    const parts = partsOf(tok);
+    return parts.length > 0 && parts.every(specific);
+  };
+  /** An excerpt with an ellipsis is satisfied when EACH part occurs. */
+  const occurs = (tok: string, cited: string): boolean => {
+    const c = norm(cited);
+    const parts = partsOf(tok);
+    return parts.length > 0 && parts.every((x) => specific(x) && c.includes(norm(x)));
+  };
+
+  /** Blank-line separated, each line stripped and joined with ONE space — and
+   *  each table ROW its own paragraph, because two cells of a table are two
+   *  subjects and joining them would widen every clause in both. */
+  const paragraphs = (text: string): Array<{ line: number; text: string }> => {
+    const out: Array<{ line: number; text: string }> = [];
+    let cur: string[] = []; let start = 0;
+    text.split('\n').forEach((l, idx) => {
+      const i = idx + 1; const s = l.trim();
+      if (s === '') { if (cur.length) { out.push({ line: start, text: cur.join(' ') }); cur = []; } return; }
+      if (s.startsWith('|')) {
+        if (cur.length) { out.push({ line: start, text: cur.join(' ') }); cur = []; }
+        out.push({ line: i, text: s }); return;
+      }
+      if (!cur.length) start = i;
+      cur.push(s);
+    });
+    if (cur.length) out.push({ line: start, text: cur.join(' ') });
+    return out;
+  };
+
+  /** One `file:N[-M]` reference, with the CLAUSE it sits in and that clause's
+   *  quoted tokens. EXTRACTION ONLY — which references are exempt, and on what
+   *  ground, is the caller's question, and the two passes below answer it
+   *  differently. Shared so that the second pass cannot drift from the first on
+   *  what a reference IS while deliberately differing on what excuses one. */
+  type Ref = { file: string; n1: number; n2: number; clause: string; toks: string[]; at: number };
+  const refsOf = (p: string): Ref[] => {
+    const spans: Array<{ a: number; b: number; tok: string }> = [];
+    for (const m of p.matchAll(QUOTED)) {
+      const tok = m[1] ?? m[2] ?? m[3] ?? '';
+      // A bare `:N` or `file:N` is a REFERENCE, never a quotation of the
+      // cited line — counting it would make every reference self-anchoring.
+      if (tok === '' || new RegExp('^:?\\d+(?:[-–]\\d+)?$').test(tok)
+        || new RegExp('^\\S*:\\d+[-–,\\d]*$').test(tok)) continue;
+      spans.push({ a: m.index!, b: m.index! + m[0].length, tok });
+    }
+    const bounds = [0, ...[...p.matchAll(SENT)].map((m) => m.index! + m[0].length), p.length];
+    const out: Ref[] = [];
+    let last: string | null = null; let lastCs = -1;
+    for (const m of p.matchAll(REF_RE)) {
+      const n1 = Number(m[2]); const n2 = m[3] ? Number(m[3]) : n1;
+      const cs = Math.max(...bounds.filter((b) => b <= m.index!), 0);
+      const ce = Math.min(...bounds.filter((b) => b >= m.index! + m[0].length), p.length);
+      let file: string | null = m[1] ?? null;
+      if (file === null) {
+        // INHERITANCE IS CLAUSE-SCOPED. A bare `:N` takes the file named
+        // before it in the SAME clause; across a sentence boundary the
+        // last-named file is a different subject, and inheriting it invents
+        // a citation the document never wrote. Measured over this corpus,
+        // paragraph-wide inheritance mis-attributed 23 references — every
+        // one of them to a file whose length the range does not even reach.
+        file = lastCs === cs ? last : null;
+        if (file === null || m.index === 0 || p[m.index! - 1] !== '`') continue;
+      } else { last = file; lastCs = cs; }
+      out.push({ file, n1, n2, at: m.index!, clause: p.slice(cs, ce),
+        toks: spans.filter((s) => s.a >= cs && s.b <= ce).map((s) => s.tok).filter(usable) });
+    }
+    return out;
+  };
+
+  type Audit = {
+    resolved: number; history: number; unanchored: number; checked: number;
+    failures: Array<{ doc: string; line: number; file: string; from: number; to: number; clause: string }>;
+  };
+
+  const audit = (corpus: Array<readonly [string, string]>, resolve: Resolve = fromRepo): Audit => {
+    const r: Audit = { resolved: 0, history: 0, unanchored: 0, checked: 0, failures: [] };
+    for (const [label, text] of corpus) {
+      const docLines = text.split('\n');
+      let ledgerStart: number | null = null; let ledgerEnd = docLines.length + 1;
+      docLines.forEach((l, i) => { if (ledgerStart === null && l.startsWith(LEDGER)) ledgerStart = i + 1; });
+      if (ledgerStart !== null) {
+        for (let i = ledgerStart; i < docLines.length; i++) {
+          if (docLines[i]!.startsWith('## ')) { ledgerEnd = i + 1; break; }
+        }
+      }
+      for (const { line: pstart, text: p } of paragraphs(text)) {
+        for (const { file, n1, n2, clause, toks } of refsOf(p)) {
+          const lines = resolve(file, label);
+          if (lines === null) continue;           // not a tracked source file
+          r.resolved++;
+          if ((ledgerStart !== null && pstart >= ledgerStart && pstart < ledgerEnd) || SUPERSEDED.test(clause)) {
+            r.history++; continue;
+          }
+          const cited = lines.slice(n1 - 1, n2).join('\n');
+          // SUB-RULE B, before the premise's early-out.
+          if (file.endsWith('.test.ts') && /pinned (by|at)\b/.test(clause)) {
+            r.checked++;
+            if (/\b(it|describe|expect)\s*\(/.test(cited)) continue;
+            r.failures.push({ doc: label, line: pstart, file, from: n1, to: n2, clause: norm(clause).trim().slice(0, 160) });
+            continue;
+          }
+          if (!toks.length) { r.unanchored++; continue; }   // the rule does not apply
+          r.checked++;
+          if (toks.some((t) => occurs(t, cited))) continue;
+          // SUB-RULE A.
+          let ok = false;
+          for (const t of toks) {
+            const nm = /^([A-Za-z_$][A-Za-z0-9_$]*)(?:\(\))?$/.exec(t);
+            if (!nm) continue;
+            const fb = funcBody(file, nm[1]!, lines);
+            if (fb && fb[0] <= n1 && n2 <= fb[1]) ok = true;
+          }
+          if (ok) continue;
+          r.failures.push({ doc: label, line: pstart, file, from: n1, to: n2, clause: norm(clause).trim().slice(0, 160) });
+        }
+      }
+    }
+    return r;
+  };
+
+  /** THE SECOND PASS, and why there are two (D-2849). A `**Files:**` list is a
+   *  LOCATION INDEX — where a task's work lands — never a quotation of history
+   *  and never an argument about one, so NONE of the audit's exemptions can be
+   *  right for a reference inside one: not the ledger arm, not the SUPERSEDED
+   *  retraction marker, and not sub-rule A, whose function-body fallback
+   *  anchors a citation on a body the task is about to lengthen. Measured, the
+   *  audit above exempts FIVE references in these paragraphs, two of them the
+   *  ones D-2849 recorded as surviving, so no ratchet built on it can ever
+   *  surface them. Same extraction (`refsOf`), same PREMISE — a clause that
+   *  quotes nothing states nothing to check — and no exemptions at all. */
+  type FilesAudit = {
+    paragraphs: number; resolved: number; unanchored: number; checked: number;
+    failures: Array<{ doc: string; line: number; file: string; from: number; to: number }>;
+  };
+  const filesAudit = (corpus: Array<readonly [string, string]>, resolve: Resolve = fromRepo): FilesAudit => {
+    const r: FilesAudit = { paragraphs: 0, resolved: 0, unanchored: 0, checked: 0, failures: [] };
+    for (const [label, text] of corpus) {
+      for (const { line: pstart, text: p } of paragraphs(text)) {
+        if (!p.startsWith(FILES_HEAD)) continue;
+        r.paragraphs++;
+        for (const { file, n1, n2, toks } of refsOf(p)) {
+          const lines = resolve(file, label);
+          if (lines === null) continue;
+          r.resolved++;
+          if (!toks.length) { r.unanchored++; continue; }
+          r.checked++;
+          if (toks.some((t) => occurs(t, lines.slice(n1 - 1, n2).join('\n')))) continue;
+          r.failures.push({ doc: label, line: pstart, file, from: n1, to: n2 });
+        }
+      }
+    }
+    return r;
+  };
+  const refKey = (f: { file: string; from: number; to: number }): string =>
+    `${f.file}:${f.from}${f.to !== f.from ? `-${f.to}` : ''}`;
+
+  const realCorpus = (): Array<readonly [string, string]> =>
+    CORPUS.map(([l, f]) => [l, fs.readFileSync(f, 'utf8')] as const);
+
+  // ── THE CONTROLS, fully HERMETIC: a fixture document against FIXTURE
+  // SOURCES. The audit is a pure function of text, so this is a real control
+  // rather than a stub — and it cannot rot when a real file's lines move,
+  // which is exactly the failure this whole guard is about.
+  const FX_SH = ['_fx_helper() {', '  local a="x"', '  printf "%s" "$a"', '  return 0', '}', '', 'echo done'].join('\n');
+  const FX_TEST = ["describe('x', () => {", "  it('pins the thing', () => {", '    expect(1).toBe(1);', '  });', '});'].join('\n');
+  const FX: Resolve = (rel) => (rel === 'ccd/fx.sh' ? FX_SH.split('\n')
+    : rel === 'server/test/fx.test.ts' ? FX_TEST.split('\n') : null);
+  const FX_DOC = [
+    'The helper writes with `printf "%s" "$a"` (`ccd/fx.sh:3`).',
+    '',
+    '`_fx_helper` (`ccd/fx.sh:4`) leaves nothing behind.',
+    '',
+    'The thing is pinned by `server/test/fx.test.ts:2`.',
+    '',
+    'And it points at a line with nothing to quote: ccd/fx.sh:6.',
+  ].join('\n');
+
+  it('CONTROL: each leg decides, and a ONE-LINE shift reds exactly the reference it moved', () => {
+    const base = audit([['fx', FX_DOC]], FX);
+    expect(base.failures, `the fixture is green: ${JSON.stringify(base.failures)}`).toEqual([]);
+    expect(base.checked, 'and all three anchored references were really checked').toBe(3);
+    expect(base.unanchored, 'with the quoteless one counted, not checked').toBe(1);
+
+    // THE MUTATION §5 names: shift an anchor by ±1 line.
+    for (const delta of [-1, 1]) {
+      const shifted = FX_DOC.replace('ccd/fx.sh:3', `ccd/fx.sh:${3 + delta}`);
+      expect(shifted, 'the mutation applied').not.toBe(FX_DOC);
+      expect(audit([['fx', shifted]], FX).failures.map((f) => `${f.file}:${f.from}`),
+        `a ${delta > 0 ? '+' : ''}${delta}-line shift reds`).toEqual([`ccd/fx.sh:${3 + delta}`]);
+    }
+    // SUB-RULE A in both directions: inside the body passes above, outside reds.
+    expect(audit([['fx', FX_DOC.replace('`ccd/fx.sh:4`', '`ccd/fx.sh:7`')]], FX).failures.map((f) => f.from),
+      'a citation naming a function and landing outside its body reds').toEqual([7]);
+    // SUB-RULE B in both directions: on the `it(` passes above, off it reds.
+    expect(audit([['fx', FX_DOC.replace('fx.test.ts:2', 'fx.test.ts:5')]], FX).failures.map((f) => f.from),
+      'a `pinned by` citation landing off the test reds').toEqual([5]);
+    // THE ALLOW-LIST: the same broken citation, inside a retraction.
+    const hist = audit([['fx', 'The anchor was previously `ccd/fx.sh:1`, which is the wrong line.']], FX);
+    expect(hist.failures, 'quoted history is exempt').toEqual([]);
+    expect(hist.history, 'and counted as history rather than silently skipped').toBe(1);
+    // AND THE CONTROL ON THE ALLOW-LIST: without the marker, the same reference reds.
+    expect(audit([['fx', 'The anchor is `ccd/fx.sh:1`, which is the `return 0` line.']], FX).failures.map((f) => f.from),
+      'the marker is what exempts it, not the shape of the sentence').toEqual([1]);
+  });
+
+  it('CONTROL: a quotation too weak to be evidence anchors NOTHING, and a real one still anchors', () => {
+    // THE SPECIFICITY FLOOR, in both directions, on ONE clause and ONE
+    // fixture line, so the difference measured is the QUOTATION and nothing
+    // else. `ccd/fx.sh:3` is `  printf "%s" "$a"`; `:7` is `echo done`, which
+    // carries neither quotation.
+    const weak = 'The helper writes ` (` at `ccd/fx.sh:7`.';
+    const strong = 'The helper writes `printf "%s" "$a"` at `ccd/fx.sh:7`.';
+    // A clause whose ONLY quotation is ` (` states nothing about any line, so
+    // it is QUOTATIONLESS rather than anchored — the class the audit already
+    // has. Before the floor this passed as ANCHORED, because `(` occurs in
+    // `printf "%s" "$a"`'s neighbours and in most lines of most files.
+    const w = audit([['fx', weak]], FX);
+    expect(w.failures, 'a ` (` quotation cannot anchor, so it cannot pass').toEqual([]);
+    expect(w.checked, 'and it is not CHECKED either — nothing was stated').toBe(0);
+    expect(w.unanchored, 'it is counted QUOTATIONLESS, which is what it is').toBe(1);
+    // THE SAME CLAUSE SHAPE with a real quotation IS checked, and reds here
+    // because `:7` does not carry it — so the floor removed the weak token's
+    // power to satisfy without removing the rule's power to refuse.
+    const st = audit([['fx', strong]], FX);
+    expect(st.checked, 'a real quotation is checked').toBe(1);
+    expect(st.failures.map(refKey), 'and reds on a line that does not carry it').toEqual(['ccd/fx.sh:7']);
+    // AND IT STILL PASSES WHERE IT IS TRUE, which is the other end of the pin.
+    expect(audit([['fx', strong.replace('fx.sh:7', 'fx.sh:3')]], FX).failures,
+      'the same quotation on the line that does carry it passes').toEqual([]);
+    // THE SIX NAMED TOKENS, each refused by name or by shape.
+    for (const tok of ['/', ', ', ' (', ' at ', '""', '$']) {
+      const doc = `The helper writes \`${tok}\` at \`ccd/fx.sh:3\`.`;
+      expect(audit([['fx', doc]], FX).checked, `\`${tok}\` is not evidence`).toBe(0);
+    }
+  });
+
+  it('CONTROL: a builtin and a one-character token anchor nothing; a two-character NAME still does', () => {
+    // THE HOLE THE FIRST SPELLING OF THE FLOOR LEFT OPEN (wb2 B-I1), in both
+    // directions, against the same fixture sources — so this control cannot rot
+    // when a real file's lines move. `ccd/fx.sh` is seven lines: `:2` is
+    // `  local a="x"`, `:3` is `  printf "%s" "$a"`, `:4` is `  return 0`, and
+    // `:7` is `echo done`.
+    //
+    // (1) THE REVIEWER'S OWN CONTROL. A clause whose only quotation is `rm`
+    // states nothing about any line, so it must be QUOTATIONLESS — counted in
+    // `unanchored`, never in `checked`. Under the rule this replaces it was
+    // CHECKED, which is what let `rm` decide two references' fate.
+    const rm = audit([['fx', 'The helper removes with `rm` at `ccd/fx.sh:3`.']], FX);
+    expect(rm.checked, '`rm` is not evidence').toBe(0);
+    expect(rm.unanchored, 'so the reference is QUOTATIONLESS, which is what it is').toBe(1);
+    expect(rm.failures, 'and it cannot red on its own account either').toEqual([]);
+    // (2) AND THE DIRECTION THAT MATTERS MORE: a builtin that OCCURS on the
+    // line cited. `do` occurs inside `done`, so under the previous rule this
+    // clause PASSED as anchored while stating nothing — the exact shape the
+    // plan's two stale anchors survived in for four rounds.
+    expect(audit([['fx', 'The tail is `do` at `ccd/fx.sh:7`.']], FX).checked,
+      'a builtin that occurs on the cited line still anchors nothing').toBe(0);
+    // (3) ONE identifier character is refused, TWO are not — same line, same
+    // clause shape, so the difference measured is the RULE and nothing else.
+    const one = audit([['fx', 'The local holds `"x"` at `ccd/fx.sh:2`.']], FX);
+    expect(one.checked, 'a one-identifier-character token is not evidence').toBe(0);
+    expect(one.unanchored, 'so that reference is quotationless too').toBe(1);
+    const two = audit([['fx', 'The local holds `a="x"` at `ccd/fx.sh:2`.']], FX);
+    expect(two.checked, 'a two-identifier-character token IS evidence').toBe(1);
+    expect(two.failures, 'and it anchors, because `:2` carries it').toEqual([]);
+    // …and it still REFUSES where it is false, which is the other end of the
+    // pin: a floor that admitted nothing would be green here too.
+    expect(audit([['fx', 'The local holds `a="x"` at `ccd/fx.sh:4`.']], FX).failures.map(refKey),
+      'the same quotation on a line that does not carry it reds').toEqual(['ccd/fx.sh:4']);
+    // (4) THE STOPLIST BY NAME, in the arm that would otherwise admit each one,
+    // and the four short tokens the rule DOES accept — named so a later reader
+    // sees the whole of what this floor lets through AT THREE NON-SPACE
+    // CHARACTERS OR FEWER rather than having to re-derive it. "That length"
+    // used to be left to the reader (closing gate M2); it is now both stated
+    // and MEASURED, by the corpus test directly below — these four loops are
+    // about the PREDICATE, that one is about the CORPUS, and only the pair
+    // makes the sentence above a claim anything could falsify.
+    for (const tok of ['rm', 'die', 'in', 'do', 'case', 'echo', 'local', 'return', 'while', '$1']) {
+      expect(specific(tok), `\`${tok}\` never satisfies`).toBe(false);
+    }
+    for (const tok of ['jq', 'ccd', 'it(', 'out']) {
+      expect(specific(tok), `\`${tok}\` is a name, not a keyword, and still satisfies`).toBe(true);
+    }
+  });
+
+  it('THE TWO CORPUS FACTS the docstring above states, asserted rather than asserted-about', (ctx) => {
+    skipUnlessFreeze(ctx);
+    // A DOCSTRING IS NOT A PIN. The comment above states two facts about the
+    // REAL corpus — not about `FX`, the seven-line fixture the loops use — and
+    // until now nothing measured either: the loops prove the PREDICATE's
+    // verdict on four hand-written strings, which is a different claim from
+    // "these four are the whole of what the corpus gets through the floor".
+    // Both facts were TRUE when measured (2026-09-17, origin/main 2f9deae2);
+    // that is exactly why they were worth pinning, since a fact nobody checks
+    // is one edit away from being prose that used to be true.
+    const short = (x: string): boolean => x.replace(/\s+/g, '').length <= 3;
+    const accepted = new Set<string>();
+    const weak: string[] = [];
+    let resolved = 0; let anchored = 0;
+    for (const [label, text] of realCorpus()) {
+      for (const { text: p } of paragraphs(text)) {
+        for (const { file, n1, n2, toks } of refsOf(p)) {
+          const lines = fromRepo(file, label);
+          if (lines === null) continue;
+          resolved++;
+          for (const t of toks) for (const part of partsOf(t)) if (short(part)) accepted.add(part);
+          const cited = lines.slice(n1 - 1, n2).join('\n');
+          const hits = toks.filter((t) => occurs(t, cited));
+          if (!hits.length) continue;
+          anchored++;
+          // ANCHORED BY SHORTNESS ALONE: every token that actually occurs in
+          // the cited lines is at or below the floor's short bound. Such a
+          // reference passes on evidence the loops above call too weak to be
+          // evidence, so the audit's verdict on it would rest on nothing.
+          if (hits.every((t) => partsOf(t).every(short))) weak.push(refKey({ file, from: n1, to: n2 }));
+        }
+      }
+    }
+    // NON-VACUITY FIRST, because both facts below are shapes an empty walk
+    // would satisfy for free: an unread corpus offers no short token and
+    // anchors nothing, and would print exactly the two answers wanted here.
+    expect(resolved, 'references into tracked source that the walk resolved')
+      .toBeGreaterThanOrEqual(400);
+    expect(anchored, 'and references some quotation of theirs actually anchors')
+      .toBeGreaterThanOrEqual(100);
+    // FACT ONE — the docstring's "the whole of what this floor lets through".
+    // `toks` is already `usable`-filtered, so this set cannot contain a token
+    // the floor refuses; what it CAN contain, and what this asserts it does
+    // not, is a FIFTH short token the comment above never named. The partition
+    // is not tautological: the stoplist loop directly above names ten short
+    // tokens the floor refuses, and `rm`, `do` and `in` are all offered by
+    // this same corpus.
+    expect([...accepted].sort(), 'every short token the real corpus gets through the floor')
+      .toEqual(['ccd', 'it(', 'jq', 'out']);
+    // FACT TWO — nothing in the corpus is anchored by shortness alone, so none
+    // of those four decides a reference's fate on its own. This is the fact
+    // that makes the floor SAFE to have tightened: had the set been non-empty,
+    // tightening it would have turned correct references stale.
+    // EMPTY AGAIN on the merge of `origin/main` at `cf9e4cc8` into child-reclamation
+    // wave 4, measured on the merged tree, as on main: the one coincidental entry
+    // the `338b7ff3` merge recorded (`spec:91`'s `ccd/ccd:13602`, anchored on
+    // `ccd` alone) is stale again under main's layout and back in the census.
+    // No rule changed.
+    expect(weak, 'references anchored only by tokens at or below the short bound').toEqual([]);
+  });
+
+  it('the audit reads the whole corpus — the numbers it is entitled to claim anything from', (ctx) => {
+    skipUnlessFreeze(ctx);
+    const r = audit(realCorpus());
+    // NON-VACUITY, MANDATORY. An audit that resolves nothing cannot red on
+    // anything, and these two documents are where every D-2605 anchor lives.
+    // LOWER BOUNDS, not equalities: the documents grow, and a grammar that
+    // BROKE would fall below these rather than merely differ from them.
+    expect(r.resolved, 'resolved line references').toBeGreaterThanOrEqual(400);
+    expect(r.checked, 'references the rule actually applies to').toBeGreaterThanOrEqual(240);
+    expect(r.history, 'and the quoted-history allow-list is doing work').toBeGreaterThanOrEqual(120);
+  });
+
+  it('every FREEZE commit is an ancestor of HEAD, so a squash-merge cannot drop it', (ctx) => {
+    skipUnlessFreeze(ctx);
+    for (const [doc, sha] of Object.entries(FREEZE)) {
+      expect(isAncestorOfHead(REPO, sha), `${doc} freeze ${sha} is on this history`).toBe(true);
+    }
+  });
+
+  it('THE CITATION DEBT of the two frozen documents is a constant, measured per cited file', (ctx) => {
+    skipUnlessFreeze(ctx);
+    // Each document is read against its cited files AS THEY STOOD at its freeze commit
+    // (`FREEZE`), so an edit to a cited file after that commit moves nothing here. The debt
+    // changes only when a document is edited: burn it down there, lower this map, and set the
+    // document's `FREEZE` entry to a commit already on origin/main, such as the edit's base,
+    // never the branch commit (a squash-merge drops it). Never widen the rule.
+    const r = audit(realCorpus());
+    const byFile: Record<string, number> = {};
+    for (const f of r.failures) byFile[f.file] = (byFile[f.file] ?? 0) + 1;
+    expect(byFile, 'the citation debt moved — a frozen document changed, or the rule did').toEqual({
+      'ccd/ccd': 146,
+      'ccd/session-hook.sh': 21,
+      'ccd/compact-card.mjs': 4,
+      'server/test/ccd-ws-reap.test.ts': 2,
+      'server/test/ccd-workspaces.test.ts': 5,
+      'deploy/deploy.sh': 3,
+      'deploy/build-release.sh': 1,
+      'ccd/ccrc': 5,
+      'server/test/single-definition.test.ts': 11,
+      'shared/api.ts': 1,
+    });
+    const total = Object.values(byFile).reduce((a, b) => a + b, 0);
+    expect(total, 'the headline is the sum of the census').toBe(199);
+
+    const TOUCHED = ['ccd/ccd', 'ccd/session-hook.sh', 'ccd/compact-card.mjs', 'ccd/compact-card.d.mts',
+      'server/test/ccd-workspaces.test.ts', 'server/test/ccd-ws-reap.test.ts',
+      'server/test/compact-card.test.ts', 'server/test/session-hook.test.ts',
+      'server/test/ccd-lifecycle-purge.test.ts', 'server/test/ccd-reg-set-atomic.test.ts',
+      'server/test/lifecycleHelpers.ts',
+      'ccd/ccrc', 'deploy/deploy.sh',
+      'shared/api.ts',
+      'server/test/single-definition.test.ts',
+      'deploy/build-release.sh'];
+    expect([...new Set(r.failures.map((f) => f.file))].filter((f) => !TOUCHED.includes(f)),
+      'a stale citation into a file this task never touched').toEqual([]);
+  });
+
+  it('README HAS ITS OWN CENSUS ENTRY, and it is EMPTY — every operator anchor resolves (wb2 B-I2)', (ctx) => {
+    skipUnlessFreeze(ctx);
+    // WHY THIS IS SEPARATE FROM THE MAP ABOVE. `byFile` is keyed on the CITED
+    // file, so a document's own contribution can never appear in it — which is
+    // exactly how two rotted README anchors sat inside the corpus's blind spot
+    // for a whole round while the file's own comment said the pass had
+    // classified README. This is the per-DOCUMENT measure.
+    //
+    // AND IT IS AN EQUALITY WITH EMPTY, NOT A RATCHET. README's anchors are
+    // operator pointers into shipped source: a reader follows them by hand,
+    // one at a time, and lands on a comment when one rots. There is no
+    // stale-by-construction debt here to park — every one of them resolved at
+    // `f18c1be5` and every one resolves now — so the honest assertion is that
+    // none is stale, not that no more than N are.
+    //
+    // AND THE MERGE WITH `origin/main` PROVED THAT WORTH ASSERTING (merge fix
+    // M2): SIX of the eight stopped resolving at the merge commit `6e84524a`,
+    // because README's anchors point into files BOTH sides grew —
+    // `ccd/session-hook.sh:2680`, `shared/api.ts:5560-5562`/`:5600`/`:5608`/
+    // `:5621` and `ccd/ccd:14431-14433`. Each was re-anchored BY CONTENT, not
+    // by arithmetic: the block it named at the branch base `fcf2c660` was
+    // located byte-identically in the merged file and the anchor moved there —
+    // `:2680` -> `:2900` (`_hook_emit_context "$CARD" "$CARD_COMPACT"`),
+    // `:5560-5562` -> `:6560-6562` and its three sentences -> `:6600`/`:6608`/
+    // `:6621` (the `'purge-refused'`/`'purge-incomplete'`/
+    // `'purge-mechanism-absent'` arms), `:14431-14433` -> `:16330-16332` (the
+    // `genrc == 1` arm). The other two, `:97` and `:103-105`, never moved:
+    // every insertion in that file lands below them.
+    //
+    // AND BOARD-PLACEMENT WAVE 2 PROVED IT AGAIN, on this branch's own edits
+    // rather than on a merge's: FOUR of the nine stopped resolving, all four
+    // the `shared/api.ts` anchors of ONE sentence — the purge-refusal
+    // vocabulary paragraph — because this wave added a NET +44 lines to
+    // `shared/api.ts` above them (seven hunks, at `:368`, `:2886`, `:5173`,
+    // `:5182`, `:5238`, `:5247`, `:5365`; `64 20` by `git diff --numstat
+    // origin/main --`). EACH WAS RE-ANCHORED BY CONTENT, never by adding 44 to
+    // a number: the block the anchor named at the branch base was located
+    // byte-identically in this tree — `diff` over the two extractions, empty —
+    // and the anchor moved to where those bytes now stand.
+    //   `:7311-7313` -> `:7355-7357`, the three `LcRefusalToken` union arms
+    //     (`'purge-refused'`, `'purge-incomplete'`, `'purge-mechanism-absent'`
+    //     with their `D-2605` comments), and the three operator sentences
+    //   `:7351` -> `:7395`, `:7359` -> `:7403`, `:7372` -> `:7416`, the map
+    //     keys of those same three words.
+    // All four shifts MEASURE +44, which is a result of following the bytes and
+    // not the method that produced them. AND README IS THE ONE DOCUMENT IN THIS
+    // CORPUS THIS BRANCH MAY REPAIR: the spec and the plan are byte-identical
+    // to `origin/main` here, so the same +44 rots an anchor of theirs into the
+    // census above instead. That asymmetry is the whole reason README gets an
+    // equality with empty and they get a debt.
+    expect(CORPUS.map(([label]) => label),
+      'README is in the corpus, and dropping it would make the line below vacuous')
+      .toEqual(['spec', 'plan', 'readme']);
+    const r = audit(realCorpus());
+    expect(r.failures.filter((f) => f.doc === 'readme').map(refKey),
+      'a README anchor stopped naming what its own sentence quotes').toEqual([]);
+    // NON-VACUITY, and it is mandatory here for the same reason as everywhere
+    // else: an equality with empty proves nothing if the document is not being
+    // read. D-6928: the seven numeric README references this once
+    // counted (two of them `.tsx`, outside `FILE_RE`) are anchors now, which
+    // `anchors.test.ts` resolves over the whole tree, so no numeric reference
+    // is left here to check or to find stale. The last number is the
+    // non-vacuity that matters now: README names nine anchors, so the
+    // paragraph really is cited, not merely emptied. `FILE_RE` is unchanged.
+    const readmeText = fs.readFileSync(path.join(REPO, 'README.md'), 'utf8'); const readmeOnly = audit([['readme', readmeText]]);
+    expect([readmeOnly.resolved, readmeOnly.checked, readmeOnly.failures.length, anchorCites(readmeText).length],
+      'README: line references resolved, checked, stale; anchor citations').toEqual([0, 0, 0, 9]);
+  });
+
+  it('CONTROL: the **Files:** pass takes neither exemption, and looks only at **Files:** lists', () => {
+    // FIXTURE DOC against the FIXTURE SOURCES above, so this control cannot
+    // rot when a real file's lines move — the failure the whole guard is about.
+    const doc = [
+      '**Files:**',
+      '- Modify: `ccd/fx.sh` — the write (`printf "%s" "$a"` at `ccd/fx.sh:3`).',
+      '',
+      '**Files:**',
+      '- Modify: `ccd/fx.sh` — `_fx_helper`\'s early return (`ccd/fx.sh:4`).',
+      '',
+      '**Files:**',
+      '- Modify: `ccd/fx.sh` — an addition here falsifies the `printf "%s" "$a"` header (`ccd/fx.sh:5`).',
+      '',
+      'Prose, not a file list: the write is `printf "%s" "$a"` (`ccd/fx.sh:7`).',
+    ].join('\n');
+    const r = filesAudit([['fx', doc]], FX);
+    expect(r.paragraphs, 'the three **Files:** paragraphs, and only those').toBe(3);
+    // The anchored one passes on merit; the sub-rule-A one and the "falsifies"
+    // one red, because neither exemption exists here; the prose paragraph is
+    // out of scope even though its reference is broken.
+    expect(r.failures.map(refKey), 'the exemption-free set').toEqual(['ccd/fx.sh:4', 'ccd/fx.sh:5']);
+    // THE CONTROL IN THE OTHER DIRECTION, on the SAME text: the audit exempts
+    // both of those — sub-rule A for the first, the retraction marker for the
+    // second — and reds only the prose reference this pass never looks at. So
+    // the two passes differ exactly where the argument says they differ.
+    expect(audit([['fx', doc]], FX).failures.map(refKey),
+      'the audit exempts both, and reds the one out of this pass\'s scope').toEqual(['ccd/fx.sh:7']);
+  });
+
+  it('THE **Files:** LISTS ARE LOCATION INDEXES — the exact stale set, exemption-free (D-2849)', (ctx) => {
+    skipUnlessFreeze(ctx);
+    const r = filesAudit(realCorpus());
+    // NON-VACUITY: the lists are still there, and the rule reaches most of what
+    // they cite. Lower bounds — the documents grow; a grammar that BROKE would
+    // fall below these rather than merely differ from them.
+    expect(r.paragraphs, '**Files:** paragraphs read').toBeGreaterThanOrEqual(11);
+    expect(r.checked, 'references in them the rule applies to').toBeGreaterThanOrEqual(20);
+    // THE RATCHET, EXACT and in document order, and it is NOT the census above:
+    // a **Files:** entry names where work lands, so a reference in one that no
+    // longer reaches what its clause quotes is a wrong index, whatever marker
+    // the sentence around it carries. RE-MEASURE AND LOWER IT; never widen the
+    // rule, and never "repair" a reference inside a frozen section.
+    const set = r.failures.map(refKey);
+    expect(set, 'a **Files:** reference stopped naming what its clause quotes — re-measure (D-2849)')
+      .toEqual([
+        'ccd/compact-card.mjs:433-560',
+        'ccd/compact-card.mjs:726-728',
+        'ccd/compact-card.mjs:726',
+        'ccd/ccd:6478',
+        'ccd/ccd:13020',
+        'ccd/ccd:19131',
+        'ccd/ccd' + ':4006-4035',
+        'ccd/ccd:4045',
+        'ccd/ccd:4029',
+        'ccd/ccd:4047',
+        'ccd/ccd' + ':3940-3951',
+        'ccd/ccd:5828-5830',
+        'ccd/ccd:1330-1333',
+        'ccd/session-hook.sh:1098',
+        'ccd/session-hook.sh:1175-1177',
+        // ENTERS at the design-system wave, on this branch's one added import
+        // line in the cited file — see the note above this assertion.
+        'server/test/single-definition.test.ts' + ':32-37',
+        'deploy/deploy.sh:560',
+        'ccd/ccrc:5217',
+        'ccd/ccrc:6531',
+        'ccd/ccrc:7129-7130',
+        'deploy/build-release.sh:103-104',
+      ]);
+    // D-2849's OWN FIVE (its 2026-09-17 append), named rather than counted, so a set
+    // that keeps its length while losing one of them still reds.
+    const D2849 = ['deploy/deploy.sh:560', 'deploy/deploy.sh:629', 'ccd/ccrc:5217', 'ccd/ccrc:6531', 'ccd/ccrc:7129-7130'];
+    const D2849_INVISIBLE_SINCE_PR136: string[] = ['deploy/deploy.sh:629'];
+    expect(D2849.filter((k) => set.includes(k)),
+      'the five references Task 10\'s own **Files:** paragraph falsifies (D-2849, and its 2026-09-17 append)')
+      .toEqual(D2849.filter((k) => !D2849_INVISIBLE_SINCE_PR136.includes(k)));
+    // AND THE REACH THIS PASS ADDS, which is the whole reason it exists: the
+    // references the census NEVER reports, at any line, because an exemption
+    // swallows them. One is D-2849's; the other answers the open question
+    // about whether the retraction marker hides anything ELSE — it does.
+    // THE MERGE TOOK ONE OF THE THREE OFF THIS LIST (merge fix M2), and by
+    // LOSING an exemption rather than by any repair: `ccd/ccrc:5217` was
+    // invisible to the census because sub-rule A anchored it on `_inst_files`'
+    // body, and main's +4,567 lines to `ccd/ccrc` moved that body out from
+    // under the number, so the census now reports it too. It is still in THIS
+    // set, and still unrepairable — it lives in the 24,688-byte freeze.
+    const census = new Set(audit(realCorpus()).failures.map(refKey));
+    expect(set.filter((k) => !census.has(k)), 'the stale references only this pass can see')
+      .toEqual([
+      'ccd/ccd:1330-1333',
+      'ccd/session-hook.sh:1098',
+      'ccd/ccrc:7129-7130',
+    ]);
+  });
+
+  /** THE THIRD PASS, and the third reason the census under-reports (D-2849,
+   *  round 14 B-M2). D-2849's appends name two mechanisms — sub-rule A's
+   *  function-body fallback and the SUPERSEDED retraction marker. A THIRD is
+   *  live: `SENT` counts a table-cell `|` as a clause boundary and `paragraphs`
+   *  makes each `|`-row its own paragraph, so INSIDE a row every cell is its own
+   *  clause and an anchor in cell 1 is never joined to the quotation in cell 3.
+   *  Measured with the shipped `refsOf`, every `ccd/ccd` reference in §4's
+   *  five-row `command -v flock` census extracted `toks=[]` and was counted
+   *  `unanchored` — by BOTH passes above — which is why a table claiming to BE
+   *  the measured census stood four rounds with all five rows naming comment
+   *  lines. This pass joins the row and asks the ordinary question of it, and it
+   *  takes NO exemption: not the ledger arm, not SUPERSEDED, not sub-rule A, not
+   *  sub-rule B. It shares `refsOf` for what a reference IS and nothing else. */
+  type RowAudit = {
+    rows: number; resolved: number; unanchored: number; checked: number;
+    failures: Array<{ doc: string; line: number; file: string; from: number; to: number }>;
+  };
+  /** A quoted span is a QUOTATION unless it is itself a reference. `refsOf`
+   *  makes the same exclusion clause-locally; this one is whole-token and is
+   *  DERIVED from `FILE_RE` rather than respelling a path grammar, so the two
+   *  cannot disagree about what a path looks like. */
+  const REF_TOKEN = new RegExp(`^(?:${FILE_RE})?:\\d+(?:[-–,\\d]*)$`);
+  /** A row's CELLS, as [start, end) offsets into the joined row text. The row
+   *  is the paragraph, so a cell is the span between two unescaped `|`. */
+  const cellsOf = (p: string): Array<[number, number]> => {
+    const bars: number[] = [];
+    for (let i = 0; i < p.length; i++) if (p[i] === '|' && p[i - 1] !== '\\') bars.push(i);
+    const out: Array<[number, number]> = [];
+    for (let k = 0; k < bars.length - 1; k++) out.push([bars[k]! + 1, bars[k + 1]!]);
+    return out;
+  };
+  const rowAudit = (corpus: Array<readonly [string, string]>, resolve: Resolve = fromRepo): RowAudit => {
+    const r: RowAudit = { rows: 0, resolved: 0, unanchored: 0, checked: 0, failures: [] };
+    for (const [label, text] of corpus) {
+      for (const { line: pstart, text: p } of paragraphs(text)) {
+        if (!p.startsWith('|')) continue;
+        r.rows++;
+        // A REFERENCE DRAWS ON ITS OWN CELL PLUS THE ROW'S FIRST CELL, not on
+        // the whole joined row (whole-branch review, B-I2(b)). The join is why
+        // this pass exists — a cell-scoped clause quotes nothing — but joining
+        // it whole gave ONE reference in a 12,996-byte row every one of that
+        // row's ~128 quotable tokens to satisfy itself with, so any anchor into
+        // any line carrying a slash passed. MEASURED: re-anchoring a real
+        // reference in that row to the FILE'S OWN HEADER COMMENT left all four
+        // ratchets green. The first cell is the row's SUBJECT and is what makes
+        // the join legitimate; every other cell is a different statement.
+        const cells = cellsOf(p);
+        const head = cells.length ? cells[0]! : null;
+        const cellToksOf = (idx: number): string[] => {
+          const own = cells.find(([a, b]) => a <= idx && idx < b) ?? null;
+          const spans = own && head && own[0] === head[0] ? [own] : [own, head].filter((x) => x !== null);
+          const out: string[] = [];
+          for (const m of p.matchAll(QUOTED)) {
+            const tok = m[1] ?? m[2] ?? m[3] ?? '';
+            if (tok === '' || REF_TOKEN.test(tok) || !usable(tok)) continue;
+            const a = m.index!; const b = a + m[0].length;
+            if ((spans as Array<[number, number]>).some(([s, e]) => a >= s && b <= e)) out.push(tok);
+          }
+          return out;
+        };
+        for (const { file, n1, n2, at } of refsOf(p)) {
+          const lines = resolve(file, label);
+          if (lines === null) continue;
+          r.resolved++;
+          const toks = cellToksOf(at);
+          if (!toks.length) { r.unanchored++; continue; }
+          r.checked++;
+          if (toks.some((t) => occurs(t, lines.slice(n1 - 1, n2).join('\n')))) continue;
+          r.failures.push({ doc: label, line: pstart, file, from: n1, to: n2 });
+        }
+      }
+    }
+    return r;
+  };
+
+  /** THE FOURTH PASS: the RANGE BOUND (round 14, A-I1). `lines.slice(n1 - 1, n2)`
+   *  CLAMPS silently, so a range past end-of-file is truncated rather than
+   *  refused, and sub-rule B then passes it on whatever `it(`/`expect(` line
+   *  happens to fall inside the clamp. Measured, eleven §3.4 anchors and one §5
+   *  anchor stood past the end of an 854-line `compact-card.test.ts` that way:
+   *  not stale but UNMEASURABLE, and invisible to every pass above. This one
+   *  asks a single question of every resolved reference — does the file have
+   *  the line it names — and takes no exemption either. */
+  type EofAudit = {
+    resolved: number;
+    failures: Array<{ doc: string; line: number; file: string; from: number; to: number }>;
+  };
+  const eofAudit = (corpus: Array<readonly [string, string]>, resolve: Resolve = fromRepo): EofAudit => {
+    const r: EofAudit = { resolved: 0, failures: [] };
+    for (const [label, text] of corpus) {
+      for (const { line: pstart, text: p } of paragraphs(text)) {
+        for (const { file, n1, n2 } of refsOf(p)) {
+          const lines = resolve(file, label);
+          if (lines === null) continue;
+          r.resolved++;
+          if (n2 <= lines.length) continue;
+          r.failures.push({ doc: label, line: pstart, file, from: n1, to: n2 });
+        }
+      }
+    }
+    return r;
+  };
+
+  it('CONTROL: the `|`-row pass joins the row, and takes none of the exemptions the other two take', () => {
+    // FIXTURE ROWS against the FIXTURE SOURCES above. `ccd/fx.sh:3` is
+    // `  printf "%s" "$a"`; `:4` is `  return 0`, inside `_fx_helper`'s body.
+    const rows = [
+      '| `ccd/fx.sh:3` | `_fx_helper` | writes with `printf "%s" "$a"` |',
+      '| `ccd/fx.sh:4` | `_fx_helper` | writes with `printf "%s" "$a"` |',
+    ].join('\n');
+    const r = rowAudit([['fx', rows]], FX);
+    expect(r.rows, 'both rows read').toBe(2);
+    // A REFERENCE DRAWS ON ITS OWN CELL PLUS THE ROW'S FIRST CELL. Here the
+    // anchor IS the first cell, so the quotation in cell 3 is out of its
+    // reach and both rows are QUOTATIONLESS — which is the point: before the
+    // binding, one reference in a 12,996-byte row could satisfy itself from
+    // any of that row's ~128 tokens, and re-anchoring a real reference to the
+    // file's own header comment left all four ratchets green.
+    expect(r.unanchored, 'a first-cell anchor cannot reach cell 3\'s quotation').toBe(2);
+    expect(r.failures, 'so neither row states anything for this pass to refuse').toEqual([]);
+    // AND THE BINDING IS NOT VACUOUS: with the quotation in the reference's OWN
+    // cell, the pass checks it and reds the row whose line does not carry it.
+    const bound = [
+      '| `ccd/fx.sh:3` writes with `printf "%s" "$a"` | `_fx_helper` |',
+      '| `ccd/fx.sh:4` writes with `printf "%s" "$a"` | `_fx_helper` |',
+    ].join('\n');
+    const rb = rowAudit([['fx', bound]], FX);
+    expect(rb.checked, 'both references reach their own cell\'s quotation').toBe(2);
+    expect(rb.failures.map(refKey), 'and the one whose line does not carry it reds')
+      .toEqual(['ccd/fx.sh:4']);
+    // THE CONTROL IN THE OTHER DIRECTION, on the SAME text: the shipped audit
+    // sees a cell, not a row, so BOTH references extract no tokens at all and
+    // it reports zero failures and two unanchored. That gap IS the finding.
+    const a = audit([['fx', rows]], FX);
+    expect(a.failures, 'the audit cannot see either row').toEqual([]);
+    expect(a.unanchored, 'it counts both as quoting nothing').toBe(2);
+    // AND NO EXEMPTION: sub-rule A would anchor `:4` on `_fx_helper`'s body,
+    // and the retraction marker would excuse it in the audit. Neither does here.
+    expect(rowAudit([['fx', '| `ccd/fx.sh:4` previously quoted `printf "%s" "$a"` | `_fx_helper` |']], FX)
+      .failures.map(refKey), 'a retraction marker does not excuse a row reference').toEqual(['ccd/fx.sh:4']);
+  });
+
+  it('CONTROL: the range-bound pass reds on a line the file does not have, at any clause shape', () => {
+    // `ccd/fx.sh` is 7 lines. `:99` cannot be read at all; `:3` can.
+    expect(eofAudit([['fx', 'The write is at `ccd/fx.sh:99`.']], FX).failures.map(refKey),
+      'a range past EOF reds').toEqual(['ccd/fx.sh:99']);
+    expect(eofAudit([['fx', 'The write is at `ccd/fx.sh:3`.']], FX).failures,
+      'and a line the file has does not').toEqual([]);
+    // THE SUB-RULE-B SHAPE, which is what hid A-I1: the audit passes this
+    // because the clamp lands on the fixture's `it(` line, and the range bound
+    // refuses it anyway. Both directions, on one text.
+    const past = 'The thing is pinned by `server/test/fx.test.ts:2-40`.';
+    expect(audit([['fx', past]], FX).failures, 'sub-rule B passes a clamped range').toEqual([]);
+    expect(eofAudit([['fx', past]], FX).failures.map(refKey), 'the range bound does not')
+      .toEqual(['server/test/fx.test.ts:2-40']);
+    // AND THE LEDGER IS NO EXEMPTION HERE EITHER — a superseded number may be
+    // wrong, but it may not name a line that cannot exist.
+    expect(eofAudit([['fx', 'The anchor was previously `ccd/fx.sh:99`, which is the wrong line.']], FX)
+      .failures.map(refKey), 'quoted history is not exempt from the range bound').toEqual(['ccd/fx.sh:99']);
+  });
+
+  it('THE `|`-ROW PASS: the exact set a joined row still fails on (round 14, B-M2)', (ctx) => {
+    skipUnlessFreeze(ctx);
+    const r = rowAudit(realCorpus());
+    // NON-VACUITY: the tables are still there and the rule reaches what they
+    // cite. Lower bounds — the documents grow.
+    expect(r.rows, '`|` rows read').toBeGreaterThanOrEqual(120);
+    expect(r.checked, 'references in them the rule applies to').toBeGreaterThanOrEqual(60);
+    expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
+      .toEqual([
+        'ccd/ccd:203',
+        'server/test/single-definition.test.ts' + ':1274',
+        'server/test/single-definition.test.ts' + ':1319-1320',
+        'server/test/ccd-ws-reap.test.ts:344',
+        'ccd/ccd' + ':3038',
+        'ccd/ccd:5797',
+        'ccd/ccd:7568',
+        'ccd/ccd:11025',
+        'ccd/ccd:11665-11670',
+        'ccd/ccd:11669',
+        'ccd/ccd:11670',
+        'ccd/ccd:13561',
+        'ccd/ccd:13567',
+        'ccd/ccd:13673',
+        'ccd/ccd:13560-13562',
+        'ccd/ccd:19109',
+        'ccd/ccd:19098',
+        'ccd/ccd:19120',
+        'ccd/ccd:19131',
+        'ccd/ccd:11669',
+        'ccd/ccd:11670',
+        'ccd/ccd:13650-13652',
+        'ccd/ccd:12032-12034',
+        'ccd/ccd:5810-5811',
+        'ccd/ccd:12032-12034',
+        'ccd/ccd:11665-11670',
+        'ccd/ccd:13809',
+        'ccd/ccd:13812',
+        'ccd/ccd:6425',
+        'ccd/ccd:1223',
+        'ccd/ccd:6547',
+        'ccd/ccd:3390-3402',
+        'ccd/ccd:3401',
+        'ccd/ccd:4029',
+        'ccd/ccd:3038',
+        'ccd/ccd:2972-2973',
+        'ccd/ccd:8609',
+        'ccd/ccd:8654',
+        'ccd/ccd:8673',
+        'ccd/ccd:11665-11670',
+        'ccd/session-hook.sh:795',
+        'ccd/session-hook.sh:796',
+        'ccd/session-hook.sh:993',
+        'ccd/ccd' + ':3070',
+        'ccd/ccd' + ':3070',
+        'ccd/ccd:2455',
+        'ccd/ccd' + ':3070',
+        'ccd/session-hook.sh:802',
+        'ccd/ccd:6771',
+        'ccd/ccd' + ':5385-5388',
+      ]);
+    // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
+    // reference, because the same `file:N` is cited from several paragraphs and
+    // a key-only comparison would credit this pass with a failure another pass
+    // found somewhere else. THIRTEEN of the eighteen are reachable by no other
+    // pass: a cell-scoped clause quotes nothing, so both passes above count
+    // them `unanchored` rather than checking them. The five below are the
+    // honest bound on that claim, and they are measured rather than asserted:
+    // three sit in §4's mechanism-absent row and one in §5's `die` row, both
+    // long enough to carry a `. ` sentence break the audit can read, and the
+    // fifth is the recognizer row's LIVE `_hook_write_atomic` reference.
+    // `spec:2210 ccd/session-hook.sh:802` left this list when that clause was
+    // era-marked (wb2 B-I1): the audit now classes it as history, so it is no
+    // longer a site another pass reaches.
+    // THE MERGE (merge fix M2) MOVES FOUR OF THESE NUMBERS AND DROPS ONE, and
+    // every document line below moved too — `spec:2115` -> `:2125`, `:2199` ->
+    // `:2209`, `:2210` -> `:2220` — because M1's own prose edits lengthened the
+    // spec, not because any citation changed. The DROP is the sixth entry: the
+    // two `:795` were the recognizer row's PAIR and matched each other's site
+    // string only because they carried the same number. The live copy is now
+    // `:993` (re-anchored by content onto `_hook_write_atomic() {`, which main's
+    // +220 lines moved) while the `8e457995:` copy keeps `:795` as quoted
+    // history, so the pair no longer collides and this list names one of them.
+    // Both are still in the set above; only their coincidence is gone.
+    const site = (f: { doc: string; line: number; file: string; from: number; to: number }): string =>
+      `${f.doc}:${f.line} ${refKey(f)}`;
+    const seen = new Set([...audit(realCorpus()).failures, ...filesAudit(realCorpus()).failures].map(site));
+    expect(r.failures.map(site).filter((k) => seen.has(k)),
+      'the rows this pass reads that another pass already reaches').toEqual([
+        'spec:308 server/test/single-definition.test.ts' + ':1274',
+        'spec:308 server/test/single-definition.test.ts' + ':1319-1320',
+        'spec:2124 ccd/ccd' + ':3038',
+        'spec:2125 ccd/ccd:5797',
+        'spec:2125 ccd/ccd:7568',
+        'spec:2125 ccd/ccd:11025',
+        'spec:2125 ccd/ccd:13561',
+        'spec:2125 ccd/ccd:13567',
+        'spec:2125 ccd/ccd:13673',
+        'spec:2125 ccd/ccd:13560-13562',
+        'spec:2125 ccd/ccd:19109',
+        'spec:2125 ccd/ccd:19098',
+        'spec:2125 ccd/ccd:19120',
+        'spec:2125 ccd/ccd:19131',
+        'spec:2204 ccd/ccd:12032-12034',
+        'spec:2204 ccd/ccd:12032-12034',
+        'spec:2209 ccd/ccd:13809',
+        'spec:2209 ccd/ccd:13812',
+        'spec:2209 ccd/ccd:6425',
+        'spec:2209 ccd/ccd:1223',
+        'spec:2209 ccd/ccd:6547',
+        'spec:2209 ccd/ccd:3390-3402',
+        'spec:2209 ccd/ccd:3401',
+        'spec:2209 ccd/ccd:4029',
+        'spec:2209 ccd/ccd:3038',
+        'spec:2209 ccd/ccd:2972-2973',
+        'spec:2209 ccd/ccd:8609',
+        'spec:2209 ccd/ccd:8654',
+        'spec:2209 ccd/ccd:8673',
+        'spec:2220 ccd/session-hook.sh:993',
+        'spec:2220 ccd/ccd' + ':3070',
+        'spec:2220 ccd/ccd' + ':3070',
+        'spec:2220 ccd/ccd' + ':3070',
+        'spec:2222 ccd/ccd:6771',
+        'spec:2222 ccd/ccd' + ':5385-5388',
+      ]);
+  });
+
+  it('THE RANGE BOUND: no citation names a line its file does not have, outside the ledger (round 14, A-I1)', (ctx) => {
+    skipUnlessFreeze(ctx);
+    const r = eofAudit(realCorpus());
+    // NON-VACUITY: the pass resolved most of the corpus's references.
+    expect(r.resolved, 'references resolved to a tracked source file').toBeGreaterThanOrEqual(400);
+    // THE CLAIM, and it is an EQUALITY WITH EMPTY rather than a ratchet: an
+    // anchor past end-of-file is not stale, it is unreadable, and no era marker
+    // can make it true. The operative text of both documents carries none.
+    const planLines = fs.readFileSync(CORPUS[1][1], 'utf8').split('\n');
+    const ledgerLine = planLines.findIndex((l) => l.startsWith(LEDGER)) + 1;
+    expect(ledgerLine, 'the ledger heading was found, so the filter below means something')
+      .toBeGreaterThan(0);
+    expect(r.failures.filter((f) => !(f.doc === 'plan' && f.line >= ledgerLine)),
+      'a citation names a line its file does not have').toEqual([]);
+    // AND THE RATCHET over what remains, which is entirely inside the ledger —
+    // quoted history, corrected by dated appends only, so these are recorded
+    // rather than repaired. Stated as an exact list so that DELETING the range
+    // check reds this line even while the assertion above stays green.
+    expect(r.failures.map(refKey), 'the ledger\'s own past-EOF citations (history, not debt)')
+      .toEqual([
+        'server/test/compact-card.test.ts:842-871',
+        'server/test/compact-card.test.ts:873-895',
+        'server/test/compact-card.test.ts:897-931',
+        'server/test/compact-card.test.ts:949-951',
+        'server/test/compact-card.test.ts:959-968',
+        'server/test/compact-card.test.ts:969',
+        'server/test/compact-card.test.ts:870',
+        'server/test/compact-card.test.ts:906-927',
+        'server/test/compact-card.test.ts:929-931',
+        'server/test/compact-card.test.ts:875-893',
+        'server/test/compact-card.test.ts:897-931',
+        'server/test/compact-card.test.ts:870',
+        'server/test/compact-card.test.ts:906-927',
+        'server/test/compact-card.test.ts:929-931',
+      ]);
+  });
+});
+
 // R32 (whole-branch review): the harness files the TRANSCRIPT under the
 // session's CWD slug and the MEMORY directory under the REPOSITORY MAIN
 // CHECKOUT's slug, so inside a git worktree — which on this fleet is nearly
@@ -2326,6 +8681,42 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
     expect(fs.existsSync(storeRoot())).toBe(false);
   });
 
+  it("skips a marked child's own temp root — the infix (A4)", () => {
+    // A4: `$HOME/.cc-tmp/<id>` is the TMPDIR wave 1 mints for a marked child
+    // (`_child_tmpdir`, ccd/ccd), and its `/.` becomes TWO dashes once
+    // slugified — `--cc-tmp-` — an INFIX, not a prefix, so it needs its own
+    // arm in the `case`. Rooted under `/var/tmp`: under `/tmp` the existing
+    // `-tmp*` prefix arm already matches, and this row would stay green with
+    // the infix arm deleted (A4's own warning).
+    const base = mkProjBase();
+    const childRoot = path.join(base, '.cc-tmp', '7', 'proj');
+    fs.mkdirSync(childRoot, { recursive: true });
+    const childSlug = slugOf(childRoot);
+    expect(isScratchSlug(childSlug),
+      `a marked child's temp root ${childRoot} is not a shape the shipped guard skips`).toBe(true);
+    const d = path.join(home, '.claude-x', 'projects', childSlug);
+    fs.mkdirSync(d, { recursive: true });
+    run(payload({ cwd: childRoot, transcript_path: path.join(d, 'x.jsonl') }));
+    expect(fs.existsSync(path.join(d, 'memory'))).toBe(false);
+    expect(fs.existsSync(storeRoot())).toBe(false);
+  });
+
+  it('does NOT skip a `.cc-tmpx` lookalike root — the infix needs the second dash', () => {
+    // THE CONTROL for the row above: `.cc-tmpx` slugifies to `--cc-tmpx-…`,
+    // one character short of the shipped `--cc-tmp-` arm (the dash the glob
+    // requires right after `tmp` is an `x` here instead), so a careless
+    // widening that dropped the trailing `-` would swallow this fixture too.
+    const base = mkProjBase();
+    const lookalike = path.join(base, '.cc-tmpx', '9', 'proj');
+    fs.mkdirSync(lookalike, { recursive: true });
+    const lookalikeSlug = slugOf(lookalike);
+    expect(isScratchSlug(lookalikeSlug), lookalikeSlug).toBe(false);
+    const d = path.join(home, '.claude-x', 'projects', lookalikeSlug);
+    fs.mkdirSync(d, { recursive: true });
+    run(payload({ cwd: lookalike, transcript_path: path.join(d, 'y.jsonl') }));
+    expect(fs.lstatSync(path.join(d, 'memory')).isSymbolicLink()).toBe(true);
+  });
+
   // ── R32: the worktree fixtures ──────────────────────────────────────────
   it('converges the MAIN CHECKOUT pair, not the transcript pair, from inside a git worktree (R32)', () => {
     const wt = mkWorktree(root);
@@ -2410,7 +8801,7 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
   // deleted fleet-wide. Every other memory test here reads the filesystem, so
   // a stray `echo` on the converge path was invisible to all of them.
   it('prints nothing on the converge path — a second stdout line deletes both cards fleet-wide', () => {
-    expect(run(payload())).toBe('');
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), ''); expect(run(payload())).toBe('');   // a child row: the D-5301 role subject is silent
   });
 
   // The call site sits ABOVE the `source == compact` early return, and the
@@ -2445,9 +8836,442 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
   });
 });
 
+// ── EXACT-PANE OWNERSHIP (delegation broker wave 3, task 1; mutation W3-M01) ──
+//
+// The hook learns WHOSE event it is from one question to the tmux server, and the
+// answer decides every file it writes: the hookstate, the turn marker, the capture
+// of a `-hookcap` session, and the delegation spool this wave adds. Untargeted,
+// `tmux display-message -p '#S'` answers for the pane the server calls CURRENT,
+// which is this hook's own only while tmux can still resolve the pane from its
+// client. MEASURED on tmux 3.4: with `TMUX_PANE` in the client's environment and
+// the pane alive, tmux resolves it by itself; with the pane GONE, or with a client
+// that carries no pane, it falls back to the most recently active session. So a
+// hook event from a torn-down pane was written under whatever ccrc session was
+// current, and that session's state belonged to someone else. The lookup is
+// therefore `-t "$TMUX_PANE"`: the exact pane or nothing.
+//
+// Two groups. The first drives a REAL tmux on a private socket (`-L <name> -f
+// /dev/null`, the way ccd-tmux-anchor.test.ts does: never the default server);
+// the second a stub that answers the untargeted question and fails or wedges the
+// targeted one, which is the lookup-failure half and needs no tmux at all.
+const EXACT_PANE_TMUX: string | null = (() => {
+  const r = spawnSync('sh', ['-c', 'command -v tmux'], { encoding: 'utf8' });
+  const p = (r.stdout ?? '').trim();
+  return r.status === 0 && p.startsWith('/') ? p : null;
+})();
+describe('exact-pane hook ownership: the session name is asked of $TMUX_PANE, never of the server\'s current pane', () => {
+  /** The fixture row (`stateFile()` reads its hookstate) and a SECOND ccrc session whose id ends
+   *  `-hookcap`, so a wrong attribution to it leaves BOTH a hookstate and a capture directory. */
+  const OWNER = 'cc-demo-quiet-basin';
+  const OTHER = 'cc-other-hookcap';
+  const reg = (): string => path.join(home, '.cc-sessions');
+  const otherState = (): string => path.join(reg(), 'other-hookcap.hookstate.json');
+  const captureRoot = (): string => path.join(home, '.ccrc', 'hook-capture');
+  const spoolRoot = (): string => path.join(reg(), 'delegation');
+  /** An ordinary prompt: it writes a hookstate for the session it is attributed to, and no spool line (it is not a delegation event). */
+  const EVENT = { hook_event_name: 'UserPromptSubmit' };
+  /** A valid delegation event: with its pane attributed to a session that has a spool directory and a generation, it WOULD write a
+   *  line there, so "no line" below measures the attribution and not a payload the spool would have refused anyway. Every row that
+   *  claims "no delegation spool" sends it as well as `EVENT`. */
+  const SESSION_END = { hook_event_name: 'SessionEnd', session_id: 'uuid-1', reason: 'clear' };
+  /** BOTH sessions' spool directories exist, each with the row's generation, so a mis-attributed SessionEnd has somewhere valid to land
+   *  (delegation broker wave 3, carried minor of Task 1: this check could not fail while the directories did not exist). */
+  const plantSpoolDirs = (): void => {
+    for (const sid of ['demo-quiet-basin', 'other-hookcap']) fs.mkdirSync(path.join(spoolRoot(), 'spool', sid), { recursive: true });
+    fs.writeFileSync(path.join(reg(), 'other-hookcap.generation'), GENERATION);
+  };
+  beforeEach(plantSpoolDirs);
+  /** What the hook may have written for ANY session: a hookstate, a turn marker, a capture, a spool bucket. */
+  const wroteNothing = (): void => {
+    expect(fs.readdirSync(reg()).sort(), 'the registry holds only the two rows\' generation files and the spool root')
+      .toEqual(['delegation', 'demo-quiet-basin.generation', 'other-hookcap.generation']);
+    expect(fs.existsSync(captureRoot()), 'no capture directory').toBe(false);
+    for (const sid of ['demo-quiet-basin', 'other-hookcap']) {
+      const dir = path.join(spoolRoot(), 'spool', sid);
+      expect(fs.existsSync(dir), `${sid}'s spool directory stands (anti-vacuity: a line had somewhere to go)`).toBe(true);
+      expect(fs.readdirSync(dir), `no bucket in ${sid}'s spool`).toEqual([]);
+    }
+  };
+
+  describe.skipIf(EXACT_PANE_TMUX === null)('real tmux, private socket'
+    + (EXACT_PANE_TMUX === null ? ' — SKIPPED: no tmux on PATH, so there is no real tmux to measure against' : ''), () => {
+    /** Short (macOS `sun_path`) and unique per run (concurrent suites). */
+    const SOCK = `hkex${process.pid}${Math.random().toString(36).slice(2, 6)}`;
+    const T = (...args: string[]): SpawnSyncReturns<string> =>
+      spawnSync(EXACT_PANE_TMUX!, ['-L', SOCK, '-f', '/dev/null', ...args], {
+        encoding: 'utf8', env: { ...process.env, TMUX: undefined, TMUX_PANE: undefined, TMUX_TMPDIR: undefined } as NodeJS.ProcessEnv });
+    /** `kill-server` returns before the server has gone, and a `new-session` that lands in that window
+     *  answers `server exited unexpectedly` (measured, ccd-tmux-anchor.test.ts) — so poll until tmux itself
+     *  says there is nothing to connect to. */
+    const resetServer = (): void => {
+      T('kill-server');
+      for (let i = 0; i < 200; i++) {
+        const r = T('list-sessions');
+        if (r.status !== 0 && /no server running|error connecting/.test(r.stderr)) return;
+        spawnSync('sleep', ['0.05']);
+      }
+      throw new Error(`the private tmux server on ${SOCK} would not go away`);
+    };
+    /** A session whose one pane sits in `sleep`; its pane id, which is what the hook receives as `TMUX_PANE`. */
+    const mk = (name: string): string => {
+      const r = T('new-session', '-d', '-P', '-F', '#{pane_id}', '-s', name, '-x', '80', '-y', '24', 'exec sleep 600');
+      expect(r.status, `fixture new-session ${name}: ${r.stderr}`).toBe(0);
+      return r.stdout.trim();
+    };
+    const argvLog = (): string[] => fs.readFileSync(path.join(home, 'tmux-argv'), 'utf8').split('\n').filter(Boolean);
+    /** The fixture PATH's `tmux`: the private-socket tmux, argv recorded. `CLIENT_BLIND` strips `TMUX_PANE`
+     *  from the CLIENT's environment — a tmux client that carries no pane, which is what an untargeted
+     *  question needs the server's idea of "current" for. */
+    const plantShim = (): void => fs.writeFileSync(path.join(home, 'bin', 'tmux'),
+      `#!/bin/sh\nunset TMUX TMUX_TMPDIR\n[ -n "\${CLIENT_BLIND:-}" ] && unset TMUX_PANE\n`
+      + `printf '%s\\n' "$*" >> "$HOME/tmux-argv"\nexec '${EXACT_PANE_TMUX}' -L '${SOCK}' -f /dev/null "$@"\n`, { mode: 0o755 });
+
+    beforeEach(() => { resetServer(); plantShim(); });
+    afterEach(() => {
+      T('kill-server');
+      // tmux leaves the socket FILE behind after `kill-server` (measured, 3.4): tmux's own default
+      // directory, since TMUX_TMPDIR is unset, and a name that is this run's alone.
+      if (typeof process.getuid === 'function') fs.rmSync(path.join('/tmp', `tmux-${process.getuid()}`, SOCK), { force: true });
+    });
+
+    it('another pane is CURRENT while TMUX_PANE names the owner: the event is the owner\'s, and only the owner\'s', () => {
+      const ownerPane = mk(OWNER);
+      spawnSync('sleep', ['0.1']);
+      mk(OTHER);
+      // THE PREMISE, MEASURED: an untargeted question to this server answers the other, newer session. Without
+      // this the case below passes for a hook that asks nothing exact.
+      expect(T('display-message', '-p', '#S').stdout.trim(), 'the server\'s current session is the OTHER one').toBe(OTHER);
+      const r = runFull(EVENT, { TMUX_PANE: ownerPane, CLIENT_BLIND: '1' });
+      expect(r).toEqual({ stdout: '', stderr: '' });
+      expect(fs.existsSync(stateFile()), 'the owner\'s hookstate was written').toBe(true);
+      expect(readState().state, 'the owner\'s hookstate').toBe('working');
+      expect(fs.existsSync(otherState()), 'the current pane\'s session got nothing').toBe(false);
+      expect(fs.existsSync(captureRoot()), 'and no capture of its').toBe(false);
+      expect(argvLog(), 'the one tmux question names the pane').toEqual([`display-message -p -t ${ownerPane} #S`]);
+    });
+
+    it('exact-pane teardown: the pane is gone but another ccrc pane remains — no hookstate, no capture, no delegation spool', () => {
+      const ownerPane = mk(OWNER);
+      mk(OTHER);
+      expect(T('kill-session', '-t', `=${OWNER}`).status, 'the owner\'s session is torn down').toBe(0);
+      expect(T('list-sessions', '-F', '#{session_name}').stdout.trim(), 'only the other ccrc session remains').toBe(OTHER);
+      // THE PREMISE, MEASURED: the very question the old hook asked, from a client whose `TMUX_PANE` still
+      // names the dead pane, answers the survivor — which is the wrong session for this event.
+      const old = spawnSync(EXACT_PANE_TMUX!, ['-L', SOCK, '-f', '/dev/null', 'display-message', '-p', '#S'], {
+        encoding: 'utf8', env: { ...process.env, TMUX: undefined, TMUX_PANE: ownerPane, TMUX_TMPDIR: undefined } as NodeJS.ProcessEnv });
+      expect(old.stdout.trim(), 'an untargeted question names the survivor').toBe(OTHER);
+      const events = [EVENT, { hook_event_name: 'Stop' }, SESSION_END];
+      for (const event of events) {
+        expect(runFull(event, { TMUX_PANE: ownerPane }), `${event.hook_event_name}: silent, exit 0`).toEqual({ stdout: '', stderr: '' });
+      }
+      wroteNothing();
+      // The exact log, not `every` over it (which passes on an empty one): one question per event, each naming the dead pane.
+      expect(argvLog(), 'every question named the dead pane, once per event').toEqual(events.map(() => `display-message -p -t ${ownerPane} #S`));
+    });
+  });
+
+  describe('a stub tmux that answers the UNTARGETED question with a ccrc name', () => {
+    /** Untargeted: the fixture row's name. Targeted: `ask`. */
+    const plantTmux = (ask: string): void => fs.writeFileSync(path.join(home, 'bin', 'tmux'),
+      `#!/bin/sh\ncase " $* " in *" -t "*) ${ask} ;; esac\necho "${OWNER}"\n`, { mode: 0o755 });
+
+    it('a targeted lookup that FAILS attributes nothing: exit 0, no hookstate, no capture, no delegation spool', () => {
+      plantTmux('echo "can\'t find pane" >&2; exit 1');
+      for (const event of [EVENT, SESSION_END]) expect(runFull(event, { TMUX_PANE: '%7' }), event.hook_event_name).toEqual({ stdout: '', stderr: '' });
+      wroteNothing();
+    });
+
+    it('a targeted lookup that NEVER ANSWERS costs the bound and attributes nothing', () => {
+      plantTmux('sleep 30');
+      for (const event of [EVENT, SESSION_END]) {
+        const t0 = Date.now();
+        expect(runFull(event, { TMUX_PANE: '%7' }), event.hook_event_name).toEqual({ stdout: '', stderr: '' });
+        const ms = Date.now() - t0;
+        expect(ms, `${event.hook_event_name}: the hook took ${ms}ms — the bound did not fire`).toBeLessThan(10_000);
+      }
+      wroteNothing();
+    });
+
+    it('control: the same stub, asked about the pane it can resolve, attributes to it', () => {
+      plantTmux(`echo "${OWNER}"; exit 0`);
+      runFull(EVENT, { TMUX_PANE: '%7' });
+      expect(readState().state).toBe('working');
+      // And it is the SESSION_END that makes the rows above able to fail: attributed, it writes its line into the owner's spool.
+      runFull(SESSION_END, { TMUX_PANE: '%7' });
+      const dir = path.join(spoolRoot(), 'spool', 'demo-quiet-basin');
+      expect(fs.readdirSync(dir).filter((f) => f.endsWith('.spool')), 'attributed, a SessionEnd writes a bucket').toHaveLength(1);
+    });
+  });
+});
+
+// ── A bare agent_id is not a subagent: the captured payloads, replayed (delegation broker wave 3, Task 2) ──
+//
+// The turn marker treated ANY non-empty `agent_id` as a subagent's event. The captured real-lane payloads
+// (`fixtures/delegation/<version>/*.json`) say what an id means: every tool event that carries one comes after a
+// SubagentStart naming it, no main-thread event (Stop, StopFailure, PostCompact, PreCompact, SessionStart,
+// SessionEnd, UserPromptSubmit) carries one in any captured scenario of the corpus (every version in it; the
+// `interrupt-exit` cells from 2.1.295 on are unmeasured), and the only SubagentStop with no Start is the unpaired kind:
+// empty agent_type, an agent id no SubagentStart ever named. It is the compaction's around /compact in every version's
+// `clear-compact-resume` (one stop up to 2.1.299, two from 2.1.311, as `session-hook-compact-carry.test.ts` pins); the
+// unmeasured `interrupt-exit` cells of 2.1.295 to 2.1.299 also carry one at `/exit` (empty agent_type, a foreign id), and
+// those from 2.1.311 none, which nothing here relies on. The marker therefore trusts an id only once a
+// SubagentStart has named it in THIS owner's join file (`<id>.joined`); the same payloads with their SubagentStarts
+// taken out are the measured "agent_id alone" lane (amendment `tool-agent-id-alone-is-unjoined-evidence`), and there
+// the parent's own tool call must be recorded. SessionStart and SessionEnd are left out of the replay: they carry no
+// id and run the card and teardown machinery this property does not need.
+describe('a bare agent_id is not a subagent: captured delegation payloads replayed through the hook', () => {
+  const FIXTURES = path.resolve(__dirname, 'fixtures/delegation');
+  type Captured = { seq: number; event: string; envSid: string; payload: Record<string, unknown> & { agent_id?: string } };
+  const load = (version: string, scenario: string): Captured[] =>
+    (JSON.parse(fs.readFileSync(path.join(FIXTURES, version, `${scenario}.json`), 'utf8')) as { events: Captured[] }).events
+      .filter((e) => e.event !== 'SessionStart' && e.event !== 'SessionEnd');
+  const markerFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.turn.json');
+  const marker = (): string | null => (fs.existsSync(markerFile()) ? fs.readFileSync(markerFile(), 'utf8') : null);
+  const TOOL = new Set(['PreToolUse', 'PostToolUse']);
+  /** Replays the events through the hook and reports, for each TOOL event that carries an id, the marker before and after. */
+  const replay = (events: Captured[]): Array<{ seq: number; id: string; before: string | null; after: string | null; joined: boolean }> => {
+    const seenStart = new Set<string>();
+    const rows: Array<{ seq: number; id: string; before: string | null; after: string | null; joined: boolean }> = [];
+    for (const e of events) {
+      const before = marker();
+      runFull(e.payload, { CLAUDE_CODE_SESSION_ID: e.envSid });
+      const id = e.payload.agent_id;
+      if (TOOL.has(e.event) && typeof id === 'string' && id !== '') rows.push({ seq: e.seq, id, before, after: marker(), joined: seenStart.has(id) });
+      if (e.event === 'SubagentStart' && typeof id === 'string') seenStart.add(id);
+    }
+    return rows;
+  };
+  const withoutStarts = (events: Captured[]): Captured[] => events.filter((e) => e.event !== 'SubagentStart');
+  /** `agent-input-keys-are-the-callers`: the Agent `tool_input` key set is whatever the calling model sends, and both real
+   *  lanes omitted `subagent_type`, which the rig's mock always sends. The classification reads no `tool_input` key. */
+  const withoutSubagentType = (events: Captured[]): Captured[] => {
+    let removed = 0;
+    const out = events.map((e) => {
+      const input = e.payload['tool_input'];
+      if (e.payload['tool_name'] !== 'Agent' || typeof input !== 'object' || input === null || !('subagent_type' in input)) return e;
+      removed += 1;
+      const { subagent_type: _gone, ...rest } = input as Record<string, unknown>;
+      return { ...e, payload: { ...e.payload, tool_input: rest } };
+    });
+    expect(removed, 'anti-vacuity: the capture\'s Agent launch events did carry a subagent_type').toBeGreaterThanOrEqual(1);
+    return out;
+  };
+
+  const CASES: Array<[string, string]> = [
+    ['2.1.280', 'agent-plain'], ['2.1.292', 'agent-plain'],
+    ['2.1.280', 'agent-iso-bg'], ['2.1.292', 'agent-iso-bg'],
+    ['2.1.280', 'wf-iso'], ['2.1.292', 'wf-iso'],
+  ];
+
+  it.each(CASES)('%s %s: a joined subagent\'s tool events never move the marker, however they interleave with the parent\'s Stop', (version, scenario) => {
+    const rows = replay(load(version, scenario));
+    expect(rows.length, 'the scenario carries tool events with an agent_id').toBeGreaterThanOrEqual(2);
+    for (const r of rows) {
+      expect(r.joined, `seq ${r.seq}: the capture names ${r.id} in a SubagentStart first`).toBe(true);
+      expect(r.after, `seq ${r.seq}: the subagent's tool event left the marker as it found it`).toBe(r.before);
+    }
+  });
+
+  it.each(CASES)('%s %s: the same events with their SubagentStarts taken out are the agent_id-alone lane: each tool event is the main thread', (version, scenario) => {
+    const rows = replay(withoutStarts(load(version, scenario)));
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    // A tool event over a marker that already reads working is a builtin read and writes nothing, whoever sent it; the
+    // lane bites where the parent's Stop has come first, so those rows must exist and each must be re-opened by it.
+    const afterStop = rows.filter((r) => r.before !== null && (JSON.parse(r.before) as { state: string }).state === 'done');
+    expect(afterStop.length, 'the scenario has an agent_id tool event after the parent\'s Stop').toBeGreaterThanOrEqual(1);
+    for (const r of rows) {
+      expect(r.joined).toBe(false);
+      expect(JSON.parse(r.after as string), `seq ${r.seq}: an unjoined id leaves the parent's turn working`).toMatchObject({ state: 'working' });
+    }
+    for (const r of afterStop) {
+      expect(JSON.parse(r.after as string), `seq ${r.seq}: an unjoined id's tool event after Stop stamps the parent's turn`)
+        .toMatchObject({ state: 'working', event: expect.stringMatching(/ToolUse$/) });
+    }
+  });
+
+  const AGENT_CASES = CASES.filter(([, scenario]) => scenario.startsWith('agent-'));
+  it.each(AGENT_CASES)('%s %s, agent-input-keys-are-the-callers: with `subagent_type` removed from every Agent launch the joined subagent is still a subagent', (version, scenario) => {
+    const rows = replay(withoutSubagentType(load(version, scenario)));
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    for (const r of rows) {
+      expect(r.joined, `seq ${r.seq}`).toBe(true);
+      expect(r.after, `seq ${r.seq}: the subagent's tool event left the marker as it found it`).toBe(r.before);
+    }
+  });
+
+  it.each(AGENT_CASES)('%s %s, agent-input-keys-are-the-callers: with `subagent_type` removed and the Starts taken out, the bare id is still the main thread', (version, scenario) => {
+    const rows = replay(withoutStarts(withoutSubagentType(load(version, scenario))));
+    const afterStop = rows.filter((r) => r.before !== null && (JSON.parse(r.before) as { state: string }).state === 'done');
+    expect(afterStop.length).toBeGreaterThanOrEqual(1);
+    for (const r of afterStop) {
+      expect(JSON.parse(r.after as string), `seq ${r.seq}`).toMatchObject({ state: 'working', event: expect.stringMatching(/ToolUse$/) });
+    }
+  });
+
+  it('post-turn-subagentstop-is-unpaired: the captured unpaired SubagentStop (empty agent_type, no Start), after the parent\'s Stop, admits nothing: its id is still the main thread', () => {
+    for (const version of ['2.1.280', '2.1.292']) {
+      const stray = (JSON.parse(fs.readFileSync(path.join(FIXTURES, version, 'clear-compact-resume.json'), 'utf8')) as { events: Captured[] })
+        .events.find((e) => e.event === 'SubagentStop')!;
+      expect(stray.payload.agent_type, `${version}: fixture is the unpaired kind`).toBe('');
+      const tool = load(version, 'agent-plain').find((e) => e.event === 'PreToolUse' && e.payload.agent_id)!;
+      runFull({ hook_event_name: 'UserPromptSubmit' });
+      runFull({ hook_event_name: 'Stop' });
+      runFull(stray.payload, { CLAUDE_CODE_SESSION_ID: stray.envSid });
+      const done = marker();
+      expect(JSON.parse(done as string).state).toBe('done');
+      runFull({ ...tool.payload, agent_id: stray.payload.agent_id }, { CLAUDE_CODE_SESSION_ID: stray.envSid });
+      expect(JSON.parse(marker() as string), `${version}: a tool event under the unpaired id`).toMatchObject({ state: 'working', event: 'PreToolUse' });
+      fs.rmSync(markerFile());
+      fs.rmSync(stateFile());
+    }
+  });
+});
+
+// ── The delegation spool beside the hook's other writers (delegation broker wave 3, Task 5) ──
+//
+// `delegation-spool.test.ts` owns the line grammar, the caps and the prune. This describe owns what the append must NOT
+// disturb in the hook around it: the compact SessionStart still exits before the hookstate, the turn marker and the capture arm
+// (its early `exit 0` became a flag that the same tail honours, so the spool line can be written first); a SessionEnd is still
+// inert; and the line does not wait on the hookstate write that follows it.
+describe('the delegation spool leaves the hook\'s other writers alone', () => {
+  const SPOOL = (): string => path.join(home, '.cc-sessions', 'delegation', 'spool', 'demo-quiet-basin');
+  const turnFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.turn.json');
+  const spoolLines = (): any[] => (fs.existsSync(SPOOL()) ? fs.readdirSync(SPOOL()).filter((f) => f.endsWith('.spool')).flatMap((f) =>
+    fs.readFileSync(path.join(SPOOL(), f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : []);
+  const SID = '6350faa0-a1be-4e78-939c-57485268f6fc';
+  beforeEach(() => { fs.mkdirSync(SPOOL(), { recursive: true }); });
+
+  it('compact SessionStart: one spool line, and still no hookstate, no turn marker, and an untouched marker already on disk', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });                       // a turn is open: marker working, hookstate working
+    const marker = fs.readFileSync(turnFile(), 'utf8');
+    const state = fs.readFileSync(stateFile(), 'utf8');
+    runFull({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID, transcript_path: '/rig/t.jsonl', cwd: home });
+    expect(spoolLines().map((l) => [l.eventKind, l.source])).toEqual([['SessionStart', 'compact']]);
+    expect(fs.readFileSync(turnFile(), 'utf8'), 'compact leaves whatever PreCompact wrote standing (D-306)').toBe(marker);
+    expect(fs.readFileSync(stateFile(), 'utf8')).toBe(state);
+  });
+
+  it('compact SessionStart on a -hookcap session is still not captured (it never reached the capture arm), while a startup is', () => {
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "cc-demo-hookcap"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-hookcap.generation'), GENERATION);
+    const cap = path.join(home, '.ccrc', 'hook-capture', 'demo-hookcap');
+    runFull({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID, cwd: home });
+    expect(fs.existsSync(cap) ? fs.readdirSync(cap) : [], 'no capture for compact').toEqual([]);
+    runFull({ hook_event_name: 'SessionStart', source: 'startup', session_id: SID, cwd: home });
+    expect(fs.readdirSync(cap).filter((f) => f.startsWith('SessionStart-')), 'a startup is captured as before').toHaveLength(1);
+  });
+
+  it('compact SessionStart writes no history-spool line (its arm excludes compact) though the delegation spool takes one', () => {
+    const hist = path.join(home, '.ccrc', 'history', 'spool');
+    fs.mkdirSync(hist, { recursive: true });
+    const sid = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+    runFull({ hook_event_name: 'SessionStart', source: 'compact', session_id: sid, cwd: home });
+    expect(fs.existsSync(path.join(hist, 'demo-quiet-basin.jsonl'))).toBe(false);
+    expect(spoolLines()).toHaveLength(1);
+    runFull({ hook_event_name: 'SessionStart', source: 'startup', session_id: sid, cwd: home });
+    expect(fs.existsSync(path.join(hist, 'demo-quiet-basin.jsonl')), 'control: a startup does write the history line').toBe(true);
+  });
+
+  it('SessionEnd: a spool line, and no hookstate and no turn marker (it stays a termination hint)', () => {
+    runFull({ hook_event_name: 'SessionEnd', session_id: SID, reason: 'prompt_input_exit' });
+    expect(spoolLines().map((l) => [l.eventKind, l.reason])).toEqual([['SessionEnd', 'prompt_input_exit']]);
+    expect(fs.existsSync(stateFile())).toBe(false);
+    expect(fs.existsSync(turnFile())).toBe(false);
+  });
+
+  it('the line does not wait on the hookstate write: with the hookstate path unwritable the delegation line is still in', () => {
+    fs.mkdirSync(stateFile());                                          // a directory where the file belongs: the rename fails
+    runFull({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'true' }, tool_use_id: 'toolu_01', session_id: SID, tool_response: { stdout: '' } });
+    expect(spoolLines().map((l) => l.eventKind)).toEqual(['PostToolUse']);
+  });
+
+  it('a Stop and a StopFailure add no line and change nothing they changed before', () => {
+    runFull({ hook_event_name: 'UserPromptSubmit', session_id: SID });
+    runFull({ hook_event_name: 'Stop', session_id: SID });
+    expect(readState().state).toBe('done');
+    runFull({ hook_event_name: 'StopFailure', session_id: SID, error: 'server_error' });
+    expect(spoolLines()).toEqual([]);
+  });
+
+  // THE PRODUCTION CONFIGURATION'S COST (review of Task 5, Important 2). The p95 pin in 'the fleet gate and failure polarity' runs with NO
+  // spool directory and a payload with no `session_id` or `tool_use_id`, so the spool's jq text is never compiled there. Once ccd has
+  // made the directory (every session, at its next spawn) every Bash, Agent, Task, Workflow and session event compiles it: about
+  // 11 ms of jq CPU on top of the parse. This row binds that increment, and it asserts the line was written so it cannot pass by
+  // never reaching the spool. It is its own `it` (the existing pin's lines are not edited); the helpers it needs are this file's
+  // module-level `run` and the describe's `spoolLines`.
+  //
+  // the-spool-cost-pin-reads-a-same-run-ratio (D-6321): this row first asserted a p95 under the same absolute 150 ms, and on
+  // 2026-10-22 it read 164 ms in a merge-queue run on a slow runner and ejected an unrelated docs-only pull request; its three
+  // 150 ms siblings (the pin above, the `ccd-tool-adj` row and the agent PostToolUse row) have failed full runs at 150-233 ms.
+  // An absolute ms number is the wrong shape here for D-1898's reason (above), so this asserts its method instead: a RATIO of two
+  // arms timed IN THE SAME RUN, interleaved one present then one absent, 40 pairs after a warm-up of one of each, read as
+  // median over median (ratio-row-reads-the-median, D-3704). The present arm is the payload with the owner directory and the
+  // generation present; the absent arm is the same payload shape with the directory moved aside (outside the timed region), so
+  // the gate's `-d` fails, the spool's text is never compiled and the arm is the parse alone.
+  //
+  // THE BANDS (15+ isolated runs each, fleet box, 1-minute load recorded per set). Shipped: 1.193-1.275 (mean 1.230, load
+  // 8.8-9.9) and 1.160-1.285 (mean 1.236, load 7.4-8.6), absent-arm medians 33.3-39.3 ms. The default mutation, the spool's jq run a
+  // second time (one more jq fork per event), measured 1.463-1.628 (mean 1.570, load 8.8-9.9): its best case sits 15% above the
+  // shipped worst, so no R leaves even 10% on both sides of it (the best, 1.371, leaves ~7% each side), and this row does NOT
+  // see one extra fork. The smallest mutation it separates is two more forks: 1.749-1.951 (mean 1.858, load 7.4-8.7).
+  // R=1.5: +17% over the shipped worst (1.5/1.285), +17% under the mutation's best (1.749/1.5).
+  //
+  // WHAT THIS GUARD CANNOT SEE — its masking window. A ratio is blind to anything that inflates BOTH arms (the parse every event
+  // pays, the box's load), and blind in one direction to anything that slows the DENOMINATOR alone: the absent arm is the hook's
+  // whole no-spool path, and if it grows on its own the ratio falls while the spool costs exactly what it did. Against the
+  // measured bands, a no-spool regression of >=17% (1.749/1.5 = 1.166) pulls the two-fork mutation's BEST case back under R=1.5,
+  // and ~24% (1.858/1.5 = 1.239) pulls a MEAN mutated run there, silently and with the suite green. What still binds the
+  // absolute cost is the p95 pin above, which times the hook's no-spool cost; this ratio binds the spool's increment over it. If
+  // that pin's budget is ever raised, this window widens with it, and the two must be re-argued together. And below the
+  // window, with no masking at all: one extra jq fork of the spool (mutant 1.463-1.628 against shipped 1.160-1.285, ~7% best
+  // margin) does not separate, so the smallest spool regression this row can see is two forks.
+  it.runIf(process.env['CCRC_PERF'] === '1')('the spool\'s increment: 40 realistic Bash PostToolUse runs with the spool present cost under 1.5x the same runs without it (median/median), each writing its line', () => {
+    const payload = (toolUseId: string): object => ({
+      session_id: SID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${SID}.jsonl`, cwd: '/rig/repo', prompt_id: 'd9a6fd11-6f0f-41f3-8c1b-0932efbc04a6',
+      permission_mode: 'default', effort: { level: 'medium' }, hook_event_name: 'PostToolUse', tool_name: 'Bash',
+      tool_input: { command: 'git status --short', description: 'show the working tree state' },
+      tool_response: { stdout: ' M ccd/session-hook.sh\n', stderr: '', interrupted: false, isImage: false, noOutputExpected: false },
+      tool_use_id: toolUseId, duration_ms: 41,
+    });
+    const ms = (p: object): number => { const t0 = process.hrtime.bigint(); run(p); return Number(process.hrtime.bigint() - t0) / 1e6; };
+    const aside = `${SPOOL()}.aside`;
+    const absent = (p: object): number => {                            // the move aside and back are outside the timed region
+      fs.renameSync(SPOOL(), aside);
+      try {
+        const t = ms(p);
+        expect(fs.existsSync(SPOOL()), 'the absent arm made no owner directory').toBe(false);
+        return t;
+      } finally { fs.renameSync(aside, SPOOL()); }
+    };
+    const ids = (arm: string): string[] => Array.from({ length: 40 }, (_, i) => `toolu_01${arm}${String(i).padStart(2, '0')}AAAAAAAAAAAAAAAA`);
+    const presentIds = ids('Pin');
+    const absentIds = ids('Abs');
+    const WARM = 'toolu_01WarmPresentAAAAAAAAAAAAAA';
+    ms(payload(WARM)); absent(payload('toolu_01WarmAbsentAAAAAAAAAAAAAAA'));
+    const present: number[] = [];
+    const without: number[] = [];
+    for (let i = 0; i < 40; i++) {
+      present.push(ms(payload(presentIds[i]!)));
+      without.push(absent(payload(absentIds[i]!)));
+    }
+    const lines = spoolLines();
+    expect(lines.map((l) => l.toolUseId).sort(), 'the warm-up and every present run wrote one line each, and no absent run wrote any')
+      .toEqual([WARM, ...presentIds].sort());
+    expect(lines.map((l) => `${l.eventKind}:${l.toolName}`), 'every one of those lines is the Bash PostToolUse it was sent')
+      .toEqual(Array(41).fill('PostToolUse:Bash'));
+    const median = (xs: number[]): number => {
+      const s = [...xs].sort((a, b) => a - b);
+      return (s[Math.floor((s.length - 1) / 2)]! + s[Math.floor(s.length / 2)]!) / 2;
+    };
+    const ratio = median(present) / median(without);   // the-spool-cost-pin-reads-a-same-run-ratio (D-6321) (above)
+    expect(ratio, `R=${ratio.toFixed(4)} (present ${median(present).toFixed(1)} ms, absent ${median(without).toFixed(1)} ms) against a bound of 1.5`)
+      .toBeLessThan(1.5);
+  }, 120000);
+});
+
 // ── The tmux question's BOUND (slice-0 carry) ──────────────────────────────
 //
-// `tmux display-message -p '#S'` talks to the tmux SERVER over its socket, and
+// `tmux display-message -p -t "$TMUX_PANE" '#S'` talks to the tmux SERVER over its socket, and
 // a wedged server (SIGSTOP, a swapping box) answers nothing and never returns.
 // Unbounded, that hangs the HOOK — which runs on the hot path of every tool
 // call in every live session on the box, not once per render in one pane the
@@ -2479,7 +9303,7 @@ describe('the tmux session-name read is bounded', () => {
   });
 
   it('a tmux that never answers costs the hook the bound, not the turn', () => {
-    // Mutation: drop the bound (`tname=$(tmux display-message -p '#S' …)`) and
+    // Mutation: drop the bound (`tname=$(tmux display-message -p -t "$TMUX_PANE" '#S' …)`) and
     // this waits the stub's full 30 s instead of ~2.
     fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\nsleep 30\n', { mode: 0o755 });
     const t0 = Date.now();
@@ -2487,5 +9311,2467 @@ describe('the tmux session-name read is bounded', () => {
     const ms = Date.now() - t0;
     expect(ms, `the hook took ${ms}ms — the bound did not fire`).toBeLessThan(10_000);
     expect(fs.existsSync(stateFile())).toBe(false);
+  });
+});
+
+// ── ccrc history: the hook's spool line (history spec 2026-10-05 §5.1, §5.5; W1-B1 task 29) ──
+// APPENDED, with NO new import line: an import at the top shifts every line
+// this file's citation census cites. The history modules are reached by
+// dynamic import inside the cases, the way single-definition.test.ts's tail
+// reaches the stall lane. `run`/`runFull`/`home`/`readState`/`GENERATION` are
+// this file's module-level fixture (a fixture HOME, a stub tmux answering
+// cc-demo-quiet-basin, the row's 36-byte generation file).
+describe('history spool: the hook enqueues one fenced, text-free line (spec §5.1)', () => {
+  const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+  const ID = 'demo-quiet-basin';
+  /** spec §10.1: the operator's own session must not reach the hook through
+   *  `run`'s `...process.env`. TMUX_PANE is deliberately not blanked (`run` sets '%1', which the hook needs);
+   *  every inherited CCRC_RECALL_* is blanked, per spec §10.1. */
+  const SCRUB: Record<string, string> = {
+    TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
+    ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_')).map((k) => [k, ''])),
+  };
+  const spoolDir = (): string => path.join(home, '.ccrc', 'history', 'spool');
+  const spoolFile = (id = ID): string => path.join(spoolDir(), `${id}.jsonl`);
+  const plantSpool = (): void => { fs.mkdirSync(spoolDir(), { recursive: true, mode: 0o700 }); };
+  const offSwitch = (): string => path.join(home, '.ccrc', 'history-off');
+  /** Re-point the stub tmux at an id of exactly `n` characters. */
+  const longId = (n: number): string => {
+    const id = 'a'.repeat(n);
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${id}"\n`, { mode: 0o755 });
+    return id;
+  };
+  /** Every line of the spool file, through the drain's own grammar. */
+  const parsed = async (id = ID): Promise<Array<{ ordinal: number; raw: string; rec: Record<string, unknown> | null }>> => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    return lib.splitSpoolText(fs.readFileSync(spoolFile(id), 'utf8')).map((l) => {
+      const p = lib.parseSpoolLine(l.raw);
+      return { ordinal: l.ordinal, raw: l.raw, rec: p.ok ? (p.rec as unknown as Record<string, unknown>) : null };
+    });
+  };
+  /** A BASH_ENV that strips the dynamic EPOCHREALTIME builtin (a bash variable
+   *  loses its special value once unset, for good) and, given a value, sets a
+   *  plain variable of that name — the only way to hand the hook a chosen clock. */
+  const epochEnv = (value: string | null): string => {
+    const f = path.join(home, 'epochrealtime.bash');
+    fs.writeFileSync(f, value === null ? 'unset EPOCHREALTIME\n' : `unset EPOCHREALTIME\nEPOCHREALTIME='${value}'\n`);
+    return f;
+  };
+  const PARTIAL = '{"v":1,"ev":"Sto';
+  /** FR3c/FR3d (review 351 F1): a subscript that is not an integer literal, `@` or `*`, on a `name[…]` or as a
+   *  compound-assignment key. Both S1 pins read it: the string pin's subscript arm on the block's text, forkForms on its
+   *  whole source. Its key arm reads a key only to the key's first `]`, so a key that holds brackets of its own
+   *  (`x=([y[0]]=1)`) is not read: it is on the stopping line in forkForms' header (review 353 F1). */
+  const SUBSCRIPT_FORK = /(?<![\w$])[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])|[(\s]\[(?!-?\d+\]|[@*]\])[^\]\n]*\]\+?=/;
+  /** The commands the S1 string pin refuses by name: each runs a program, so it forks on the hot path. */
+  const S1_EXTERNAL = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|readlink|realpath|dirname|basename|env|timeout|flock|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
+  /** The spool block's code as both S1 pins read it: every `#`-led line dropped. */
+  const s1Code = (block: string): string => block.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  /** FR4 (review 353 F2): the S1 string pin, one labelled arm per form it refuses. Each arm answers the first text it
+   *  refuses, or null. The string case runs every arm on the block; STRING_ROWS (below INERT) plants a ROWS form for each
+   *  arm and expects that arm to name it, so an arm deleted here reds its planted rows.
+   *  FR3a (review 351 F1): arithmetic evaluates a variable's text, so `a[$(…)]` in a name forks there. An operand of
+   *  `(( ))` is an integer literal or `${#name}`; a substring offset or length is an integer literal; a subscript is an
+   *  integer literal, `@` or `*`, and so is a compound-assignment key that holds no bracket of its own; no `-eq` family,
+   *  no `$[`, no `let` and no integer attribute. The S1 stopping line (the forms neither pin chases) and its known
+   *  fail-closed costs are in forkForms' header. */
+  const S1_STRING_ARMS: ReadonlyArray<readonly [string, (code: string) => string | null]> = [
+    ['a command substitution in the spool block', (code) => (code.includes('$(') ? '$(' : null)],
+    ['a backtick in the spool block', (code) => (code.includes('`') ? '`' : null)],
+    ['a sha program in the spool block', (code) => (code.includes('sha') ? 'sha' : null)],
+    // FR2a (review 344 F1): no `@` inside a `${…}`. `${X@P}` runs prompt expansion, and so command substitution: a fork.
+    ['a ${…@…} transformation in the spool block (@P forks)', (code) => code.match(/\$\{[^}]*@/)?.[0] ?? null],
+    ['a (( )) operand that is not an integer literal or ${#name} (review 351 F1)', (code) => [...code.matchAll(/\(\(([\s\S]*?)\)\)/g)]
+      .map((x) => x[1]!)
+      .find((x) => /[^\s0-9+\-*/%<>=!&|^~?:,()]/.test(x.replace(/\$\{#[A-Za-z_][A-Za-z0-9_]*\}/g, '0'))) ?? null],
+    ['an arithmetic test operator (review 351 F1)', (code) => code.match(/(?<![\w-])-(?:eq|ne|lt|le|gt|ge)(?![\w-])/)?.[0] ?? null],
+    ['a ${name:offset:length} whose offset or length is not a literal (review 351 F1)',
+      (code) => code.match(/\$\{[!#]?(?:[A-Za-z_]\w*|\d+|[@*#?$!-])(?:\[[^\]\n]*\])?:(?![-=?+])(?!\s*-?\d+(?::\s*-?\d+)?\})/)?.[0] ?? null],
+    ['a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)',
+      (code) => code.match(SUBSCRIPT_FORK)?.[0] ?? null],
+    ['a $[ ] arithmetic expansion in the spool block (review 351 F1)', (code) => (code.includes('$[') ? '$[' : null)],
+    ['let and an integer attribute evaluate arithmetic (review 351 F1)',
+      (code) => code.match(/(?<![\w-])(?:let|declare|typeset|local|readonly)(?![\w-])/)?.[0] ?? null],
+    ['an external command in the spool block forks on the hot path', (code) => code.match(S1_EXTERNAL)?.[0] ?? null],
+  ];
+
+  it('S1: the block is builtins only — no $(, backtick, jq, sha, cat or other external — and sits below the turn marker, above the StopFailure exit', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const open = '# >>> history-spool (spec 2026-10-05 §5.1)';
+    const start = src.indexOf(open);
+    const end = src.indexOf('# <<< history-spool');
+    expect(start, 'no history-spool block in the hook').toBeGreaterThan(-1);
+    expect(src.indexOf(open, start + 1), 'two history-spool blocks').toBe(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(start, 'the block must sit below the turn marker').toBeGreaterThan(src.indexOf('_hook_turn_mark "$tmkind" || true; fi'));
+    expect(end, 'the block must sit above the StopFailure exit').toBeLessThan(src.indexOf('[[ -n "$stopfail$sessend" ]] && exit 0'));
+    // W3-1 Task 1C: the write moved into `_hook_history_spool_append`, which sits right above the block; its body is read with the block.
+    const fnBody = hookFnBody(src, '_hook_history_spool_append');
+    expect(fnBody, '_hook_history_spool_append is not defined in the hook').not.toBeNull();
+    expect(src.indexOf('\n_hook_history_spool_append() {'), 'the append function sits above the block').toBeLessThan(start);
+    expect(src.indexOf('\n_hook_history_spool_append() {'), 'the append function sits below the compact-arm emit anchor (the tail rule)')
+      .toBeGreaterThan(src.indexOf('# @anchor compact-arm-emit-call'));
+    const code = s1Code(`${fnBody!}\n${src.slice(start, end)}`);
+    expect(code, 'the slice holds no write: the markers moved off the block').toContain(`printf '\\n%s\\n' "$1"`);
+    expect(code, 'the block no longer appends through the function').toContain('_hook_history_spool_append "$_hs"');
+    // FR4 (review 353 F2): every arm of the string pin, each under its own label. STRING_ROWS plants a form for each arm.
+    for (const [arm, check] of S1_STRING_ARMS) expect(check(code), arm).toBeNull();
+  });
+
+  it('S2: a subagent payload (agent_id) writes no line', () => {
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: SID, agent_id: 'agent-7' }, SCRUB);
+    expect(fs.existsSync(spoolFile())).toBe(false);
+  });
+
+  it('S3: history-off silences Stop and PostCompact (CONTROL: without it both write)', async () => {
+    plantSpool();
+    fs.writeFileSync(offSwitch(), '');
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'PostCompact', trigger: 'manual', compact_summary: 'a summary', session_id: SID }, SCRUB);
+    expect(fs.existsSync(spoolFile())).toBe(false);
+    fs.rmSync(offSwitch());
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'PostCompact', trigger: 'manual', compact_summary: 'a summary', session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => l.rec?.['ev'])).toEqual(['Stop', 'PostCompact']);
+  });
+
+  it('S4: with no spool directory the hook writes nothing and creates nothing', () => {
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, SCRUB);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'history'))).toBe(false);
+  });
+
+  it('S5: a PostCompact with a 50 KB summary writes one line under SPOOL_LINE_MAX whose keys are a declared set, and no text', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    run({ hook_event_name: 'PostCompact', trigger: 'auto', compact_summary: 'S'.repeat(50_000), session_id: SID }, SCRUB);
+    const lines = await parsed();
+    expect(lines).toHaveLength(1);
+    expect(Buffer.byteLength(lines[0]!.raw)).toBeLessThan(lib.SPOOL_LINE_MAX);
+    expect(lines[0]!.raw).not.toContain('SSSS');
+    const rec = lines[0]!.rec!;
+    const keys = lib.SPOOL_KEYS['PostCompact']!;
+    for (const k of keys.required) expect(rec, k).toHaveProperty(k);
+    for (const k of Object.keys(rec)) expect([...keys.required, ...keys.optional], k).toContain(k);
+    expect(rec).toMatchObject({ v: 1, ev: 'PostCompact', id: ID, sid: SID, trig: 'auto', gen: GENERATION });
+  });
+
+  it('S5: a SessionStart(startup) line carries reg when .uuid holds a uuid, and omits it otherwise', async () => {
+    plantSpool();
+    const uuidFile = path.join(home, '.cc-sessions', `${ID}.uuid`);
+    fs.writeFileSync(uuidFile, `${SID}\n`);
+    run({ hook_event_name: 'SessionStart', source: 'startup', session_id: SID }, SCRUB);
+    fs.rmSync(uuidFile);
+    run({ hook_event_name: 'SessionStart', source: 'resume', session_id: SID }, SCRUB);
+    const [a, b] = await parsed();
+    expect(a!.rec).toMatchObject({ ev: 'SessionStart', src: 'startup', reg: SID });
+    expect(b!.rec).toMatchObject({ ev: 'SessionStart', src: 'resume' });
+    expect(b!.rec).not.toHaveProperty('reg');
+  });
+
+  it('S5: an id of SPOOL_ID_MAX chars writes a line under SPOOL_LINE_MAX; one char more writes none', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    const fits = longId(lib.SPOOL_ID_MAX);
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    const lines = await parsed(fits);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.rec).toMatchObject({ ev: 'Stop', id: fits });
+    expect(Buffer.byteLength(lines[0]!.raw)).toBeLessThan(lib.SPOOL_LINE_MAX);
+    const over = longId(lib.SPOOL_ID_MAX + 1);
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(fs.existsSync(spoolFile(over))).toBe(false);
+    // The hook spells the bound as a literal (no fork may read lib.mjs on the hot path); the two runs above,
+    // sized from the constant the drain's idOk reads, already red on any disagreement. This names the literal.
+    expect(fs.readFileSync(HOOK, 'utf8')).toContain(`(( \${#id} <= ${lib.SPOOL_ID_MAX} ))`);
+  });
+
+  it('S8: under history-off a SessionStart(clear) epoch line is still appended', async () => {
+    plantSpool();
+    fs.writeFileSync(offSwitch(), '');
+    run({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => l.rec)).toEqual([expect.objectContaining({ ev: 'SessionStart', src: 'clear', sid: SID })]);
+  });
+
+  it('S11: a Stop under set -u with trig never set writes no trig, prints nothing and exits 0', async () => {
+    plantSpool();
+    const r = runFull({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe('');
+    const [l] = await parsed();
+    expect(l!.rec).toMatchObject({ ev: 'Stop' });
+    expect(l!.rec).not.toHaveProperty('trig');
+  });
+
+  it('S11: a SessionStart whose source is x"y or absent writes no line at all; fork (ruled Q16, W1-B2) writes one carrying src, and reg when .uuid holds a uuid', async () => {
+    plantSpool();
+    run({ hook_event_name: 'SessionStart', source: 'x"y', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'SessionStart', session_id: SID }, SCRUB);
+    expect(fs.existsSync(spoolFile())).toBe(false);
+    const uuidFile = path.join(home, '.cc-sessions', `${ID}.uuid`);
+    fs.writeFileSync(uuidFile, `${SID}\n`);
+    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
+    fs.rmSync(uuidFile);
+    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
+    const [a, b] = await parsed();
+    expect(a!.rec).toMatchObject({ ev: 'SessionStart', src: 'fork', sid: SID, reg: SID });
+    expect(b!.rec).toMatchObject({ ev: 'SessionStart', src: 'fork', sid: SID });
+    expect(b!.rec).not.toHaveProperty('reg');
+  });
+
+  it('S11: a session_id that is not a lowercase UUID drops sid from a Stop line, never the line; a SessionStart, whose grammar requires sid, writes no line at all', async () => {
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: 'not-a-uuid' }, SCRUB);
+    run({ hook_event_name: 'SessionStart', source: 'startup', session_id: 'not-a-uuid' }, SCRUB);
+    const lines = await parsed();
+    // lib.mjs SPOOL_KEYS.SessionStart requires sid (Task 5): a writer with no lowercase-UUID sid emits no
+    // SessionStart line, rather than one the drain would reject whole. `null` here is a line the drain's
+    // grammar rejects: a Stop carrying the wrong sid, or a SessionStart written without one.
+    expect(lines.map((l) => l.rec?.['ev'] ?? null), 'one Stop line, and no SessionStart line').toEqual(['Stop']);
+    expect(lines[0]!.rec).not.toHaveProperty('sid');
+  });
+
+  it('S11: a malformed generation drops gen and a malformed .uuid drops reg; the line is still written', async () => {
+    plantSpool();
+    fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), 'NOT-A-UUID\n');
+    run({ hook_event_name: 'SessionStart', source: 'startup', session_id: SID }, { ...SCRUB, CCRC_SESSION_GENERATION: 'not-a-generation' });
+    const [l] = await parsed();
+    expect(l!.rec).toMatchObject({ ev: 'SessionStart', src: 'startup', sid: SID });
+    expect(l!.rec).not.toHaveProperty('gen');
+    expect(l!.rec).not.toHaveProperty('reg');
+  });
+
+  it('S12: an unwritable spool file costs the line, never the exit status, the silence or the hookstate write', () => {
+    plantSpool();
+    fs.mkdirSync(spoolFile());   // a DIRECTORY where the file would be: refused before the open (D-4418)
+    const r = runFull({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(r.stderr).toBe('');
+    expect(readState().state).toBe('done');
+  });
+
+  // W3-1 Task 1C, commit 1: the bytes the spool append writes, which the factoring into `_hook_history_spool_append`
+  // must leave exactly as they are. The whole file, not a parsed line: the fence's two LFs are part of the contract.
+  it('S12 (W3-1 pin): the file holds exactly the fenced lines, byte for byte: a leading LF, the JSON, a trailing LF, once per append', () => {
+    plantSpool();
+    const env = { ...SCRUB, CCRC_SESSION_GENERATION: '', BASH_ENV: epochEnv('1700000000.123456') };
+    const stop = `\n{"v":1,"ev":"Stop","id":"${ID}","sid":"${SID}","ts":1700000000123}\n`;
+    const post = `\n{"v":1,"ev":"PostCompact","id":"${ID}","sid":"${SID}","trig":"auto","ts":1700000000123}\n`;
+    expect(runFull({ hook_event_name: 'Stop', session_id: SID }, env)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(spoolFile(), 'utf8')).toBe(stop);
+    runFull({ hook_event_name: 'PostCompact', trigger: 'auto', session_id: SID }, env);
+    expect(fs.readFileSync(spoolFile(), 'utf8')).toBe(stop + post);
+  });
+
+  it('S14: SessionStart(compact) writes no line; startup, resume, clear and fork (ruled Q16, W1-B2) write one each, each carrying src', async () => {
+    plantSpool();
+    run({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID }, SCRUB);
+    expect(fs.existsSync(spoolFile())).toBe(false);
+    for (const source of ['startup', 'resume', 'clear', 'fork']) run({ hook_event_name: 'SessionStart', source, session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => [l.ordinal, l.rec?.['src']])).toEqual([[1, 'startup'], [2, 'resume'], [3, 'clear'], [4, 'fork']]);
+  });
+
+  it('S17: the line is fenced — after a torn partial the next line stands alone, at the ordinal an unfenced file gives it', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    fs.writeFileSync(spoolFile(), PARTIAL);
+    run({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, SCRUB);
+    const text = fs.readFileSync(spoolFile(), 'utf8');
+    expect(text.endsWith('\n')).toBe(true);
+    const lines = lib.splitSpoolText(text);
+    expect(lines.map((l) => l.ordinal)).toEqual([1, 2]);
+    expect(lines[0]!.raw, 'the torn partial and the new line fused').toBe(PARTIAL);
+    expect(lib.parseSpoolLine(lines[0]!.raw).ok).toBe(false);
+    expect(lib.parseSpoolLine(lines[1]!.raw)).toMatchObject({ ok: true });
+    expect(lib.splitSpoolText(`${PARTIAL}\n${lines[1]!.raw}\n`).map((l) => [l.ordinal, l.raw]))
+      .toEqual(lines.map((l) => [l.ordinal, l.raw]));
+  });
+
+  it.each([
+    ['a comma decimal point', '1700000000,123456', 1700000000123],
+    ['a dot decimal point', '1700000000.123456', 1700000000123],
+    ['an empty fraction', '1700000000,', 1700000000000],
+  ] as const)('ts from EPOCHREALTIME with %s is integer milliseconds', async (_what, value, ms) => {
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: epochEnv(value) });
+    expect((await parsed())[0]!.rec).toMatchObject({ ev: 'Stop', ts: ms });
+  });
+
+  it.each([
+    ['unset', null],
+    ['malformed', 'not-a-clock'],
+    ['with a leading zero (not a JSON number)', '0.5'],
+  ] as const)('EPOCHREALTIME %s writes the line without ts (the drain stamps the receive time)', async (_what, value) => {
+    plantSpool();
+    // runFull, not run: a malformed clock also reaches the hook's pre-existing turn marker, whose jq
+    // complains on stderr; `run` would let that through to the test output.
+    runFull({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: epochEnv(value) });
+    const [l] = await parsed();
+    expect(l!.rec).toMatchObject({ ev: 'Stop', id: ID });
+    expect(l!.rec).not.toHaveProperty('ts');
+  });
+
+  // ── the drain halves: a real sweep over a real store (Linux: the sweep's carrier is systemd-only) ──
+  itLinux('S14 (drain half): a SessionStart line with no src, planted in the spool, counts spool_line_rejected at drain', async () => {
+    const hh = await import('./historyHelpers.js');
+    const store = await import('../../ccd/history/store.mjs');
+    const box = hh.makeHistoryBox('ccrc-hook-spool-reject-', { role: 'fleet' });
+    store.createStore(box.home);
+    const spool = path.join(box.home, '.ccrc', 'history', 'spool');
+    fs.mkdirSync(spool, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(spool, `${ID}.jsonl`), `\n${JSON.stringify({ v: 1, ev: 'SessionStart', id: ID, sid: SID })}\n`);
+    for (let pass = 0; pass < 2; pass += 1) {   // renamed on the first tick, drained on the next
+      const r = hh.runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+    }
+    expect(hh.counters(box)['spool_line_rejected']).toBe(1);
+  });
+
+  itLinux('S17 (drain half): the hook\'s fenced clear line after a torn partial drains and chains, keyed at ordinal 2', async () => {
+    // The bytes the HOOK wrote, in this file's fixture HOME…
+    plantSpool();
+    fs.writeFileSync(spoolFile(), PARTIAL);
+    run({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, SCRUB);
+    const bytes = fs.readFileSync(spoolFile(), 'utf8');
+    // …drained by the real sweep in a history box whose registry names the
+    // row's project and generation. NO `.uuid` row: the periodic scan's
+    // registry backfill (task 17) would map that uuid as an `import` epoch on
+    // the first tick, before this line drains — the row this case measures is
+    // the one the CLEAR line chains (confirmation is DM19's, not this pin's).
+    const hh = await import('./historyHelpers.js');
+    const store = await import('../../ccd/history/store.mjs');
+    const lib = await import('../../ccd/history/lib.mjs');
+    const box = hh.makeHistoryBox('ccrc-hook-spool-chain-', { role: 'fleet' });
+    store.createStore(box.home);
+    const reg = path.join(box.home, '.cc-sessions');
+    fs.mkdirSync(reg, { recursive: true });
+    fs.writeFileSync(path.join(reg, `${ID}.project`), 'alpha');
+    fs.writeFileSync(path.join(reg, `${ID}.generation`), GENERATION);
+    const spool = path.join(box.home, '.ccrc', 'history', 'spool');
+    fs.mkdirSync(spool, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(spool, `${ID}.jsonl`), bytes);
+    for (let pass = 0; pass < 2; pass += 1) {
+      const r = hh.runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+    }
+    const db = hh.openStoreRO(box);
+    try {
+      const epochs = db.prepare(
+        'SELECT e.cc_session_uuid AS uuid, e.cause AS cause FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE s.ccrc_id = ?',
+      ).all(ID) as Array<{ uuid: string; cause: string }>;
+      expect(epochs).toEqual([{ uuid: SID, cause: 'clear' }]);
+      const keys = db.prepare('SELECT event_key AS k FROM spool_receipts').all() as Array<{ k: string }>;
+      expect(keys).toHaveLength(1);
+      const file = (hh.journalRecords(box) as Array<Record<string, unknown>>).find((rec) => rec['k'] === 'file');
+      expect(file, 'no file record in the journal').toBeDefined();
+      expect(keys[0]!.k).toBe(lib.eventKey(String(file!['name']), 2));
+    } finally {
+      db.close();
+    }
+    expect(hh.counters(box)['spool_line_rejected']).toBe(1);
+  });
+
+  // ── Task 36G item 1 (D-4315): the block writes only fields its event's grammar admits ──
+  it('an inherited trig in the hook environment writes no trig on Stop or SessionStart, and the drain accepts both lines (D-4315)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, trig: 'manual' });
+    run({ hook_event_name: 'SessionStart', source: 'startup', session_id: SID }, { ...SCRUB, trig: 'manual' });
+    const lines = await parsed();
+    expect(lines.map((l) => l.rec?.['ev'] ?? null), 'the drain refused a line whole').toEqual(['Stop', 'SessionStart']);
+    for (const l of lines) {
+      expect(lib.parseSpoolLine(l.raw), l.raw).toMatchObject({ ok: true });
+      expect(l.rec, l.raw).not.toHaveProperty('trig');
+    }
+  });
+
+  it('CONTROL: a PostCompact still writes its trig, from the payload and not the environment (D-4315)', async () => {
+    plantSpool();
+    run({ hook_event_name: 'PostCompact', trigger: 'auto', compact_summary: 'a summary', session_id: SID }, { ...SCRUB, trig: 'manual' });
+    expect((await parsed())[0]!.rec).toMatchObject({ ev: 'PostCompact', trig: 'auto' });
+  });
+
+  it.each([
+    ['thirteen-digit seconds, dot', '9999999999999.500'],
+    ['thirteen-digit seconds, comma', '9007199254741,000'],
+    ['thirteen-digit seconds, the smallest', '1000000000000.000'],
+  ] as const)('an EPOCHREALTIME of %s writes the line without ts, which the drain accepts (D-4315)', async (_what, value) => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    runFull({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: epochEnv(value) });
+    const [l] = await parsed();
+    expect(l!.rec, 'the drain refused the line').not.toBeNull();
+    expect(lib.parseSpoolLine(l!.raw)).toMatchObject({ ok: true });
+    expect(l!.rec).not.toHaveProperty('ts');
+  });
+
+  it('CONTROL: twelve-digit seconds, the widest admitted, write a ts that is a safe integer in ms (D-4315)', async () => {
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: epochEnv('999999999999.999') });
+    const ts = (await parsed())[0]!.rec!['ts'];
+    expect(ts).toBe(999999999999999);
+    expect(Number.isSafeInteger(ts)).toBe(true);
+  });
+
+  // ── review 316 F38: S1 as SYNTAX — the spool block, and every function it calls, fork nothing ──
+  /** Every form in `code` that makes bash fork or run a program: command or process substitution, a backtick,
+   *  a `${…@…}` parameter transformation (FR2a, review 344 F1: `@P` runs prompt expansion, and so command substitution),
+   *  a subshell, a pipeline, a background job, a coproc, a here-document, or a command word outside `allowed`; and
+   *  (FR3a, review 351 F1) an arithmetic operand bash may evaluate from a variable's text: an operand of `(( ))` or
+   *  `$(( ))` that is not an integer literal or `${#name}`; any `$[ ]`; a `${name:offset:length}` whose offset or length
+   *  is not an integer literal; a subscript that is not an integer literal, `@` or `*`, on a `name[…]` anywhere (a
+   *  `${…}`, an assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not) or as a key
+   *  that holds no bracket of its own in a compound assignment (`x=([v]=1)`); and the `-eq -ne -lt -le -gt -ge`
+   *  operators of `[[ ]]`. An indexed array's subscript is arithmetic, so a variable holding `a[$(…)]` forks there; an
+   *  associative one is not, but the scan cannot tell them apart and names both.
+   *  Not chased (the S1 stopping line, review 351 F1), each a deliberate spelling the spool block does not use: ${!x}
+   *  indirection; [[ -v $v ]], and printf -v "$v" or read -r "$v", with a dynamic name, which forks when the name holds
+   *  a[$(…)]; a dynamic name with a variable subscript there ($x[v], ${x}[v]), which forks through its subscript
+   *  whatever the name holds; a name split from its `[` by a quote, a backslash or a line continuation (x"[v]", x'[v]',
+   *  x\[v\], x\<newline>[v]), which bash joins before the subscript is read; an assignment, printf -v or read into
+   *  bash's own integer variables (RANDOM, SRANDOM, OPTIND, HISTCMD); text on a `#`-led line inside a quoted string
+   *  that spans lines, which the comment filter drops before either pin reads it; and (review 353 F1) a
+   *  compound-assignment key that holds brackets of its own (x=([y[0]]=1), x=([${y[0]}]=1), x=(["${y[0]}"]=1)), which
+   *  the key arm reads only to its first `]` and which forks when y[0] holds a[$(…)]. forkForms names those three only
+   *  by accident, as a subshell (step 4 reads the `(` of any `name=(`), and the string pin not at all.
+   *  Known fail-closed costs of the line (review 353 F5): both pins name some spellings that fork nothing, under a label
+   *  that misleads. A bracket class after a letter, in `[[ … =~ … ]]` or in a case pattern (^cc[a-z]+$, a[bc])), is named
+   *  "subscript"; an empty substring offset (${x::3}) is named "substring offset"; and, by ruling (4043), the -eq family
+   *  is named "arithmetic test operator" even on ${#name} ([[ ${#x} -le 224 ]]: write (( ${#x} <= 224 )) instead).
+   *  [] = builtins only. Conservative by construction, outside the stopping line above: what it cannot classify is
+   *  reported, never passed. */
+  const forkForms = (code: string, allowed: ReadonlySet<string>): string[] => {
+    const found: string[] = [];
+    /** FPM3: where does the `((` that starts at `p` end, if it is ARITHMETIC (its content balanced, closed by `))`)? -1 when
+     *  it is not: bash re-parses a `((` that closes any other way as two nested subshells (`$((` as a command
+     *  substitution holding one), and those fork. */
+    const arithEnd = (s: string, p: number): number => {
+      let depth = 0;
+      for (let k = p + 2; k < s.length && s[k] !== '\n'; k++) {
+        if (s[k] === '(') depth++;
+        else if (s[k] === ')') {
+          if (depth === 0) return s[k + 1] === ')' ? k + 2 : -1;
+          depth--;
+        }
+      }
+      return -1;
+    };
+    /** FR2a (review 344 F1): does the `${` whose body starts at `p` apply a transformation, `${name@op}` (`name` a
+     *  variable, a positional or special parameter, `!`/`#` before it, a subscript after it)? Every operator is named,
+     *  not `@P` alone: the block needs none, and only `@P` was measured to fork, so naming them all is the conservative read. */
+    const transformAt = (s: string, p: number): boolean => {
+      const re = /[!#]?(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])(?:\[[^\]\n]*\])?@[^}]/y;
+      re.lastIndex = p;
+      return re.test(s);
+    };
+    /** FR3a (review 351 F1): may this arithmetic text stand? Only integer literals, operators and `${#name}` (read as 0). */
+    const arithOk = (content: string): boolean => !/[^\s0-9+\-*/%<>=!&|^~?:,()]/.test(content.replace(/\$\{#[A-Za-z_][A-Za-z0-9_]*\}/g, '0'));
+    /** FR3a (review 351 F1; FR3c): the `${` whose body starts at `p` evaluates an operand as arithmetic when it names a
+     *  substring whose offset or length is not a literal, of a variable, a positional or a special parameter (`${$:v}` forks).
+     *  `${x:-}` and `${x:+y}` are operators, not substrings. A subscript is named once, over the whole source (below). */
+    const exprAt = (s: string, p: number): string | null => {
+      const sub = /[!#]?(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])(?:\[[^\]\n]*\])?:(?![-=?+])/y;
+      sub.lastIndex = p;
+      const m = sub.exec(s);
+      if (!m) return null;
+      const close = s.indexOf('}', p + m[0].length);
+      return close < 0 || !/^\s*-?\d+(?::\s*-?\d+)?$/.test(s.slice(p + m[0].length, close)) ? 'substring offset' : null;
+    };
+    const src = code.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').replace(/\\\n/g, ' ');
+    // FR3c (review 351 F1): a subscript that is not an integer literal, `@` or `*` — on a `name[…]` anywhere (a `${…}`, an
+    // assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not) or as a compound-assignment key
+    // that holds no bracket of its own (`x=([v]=1)`, FR3d; one that does is on the stopping line, review 353 F1) — is named on
+    // the whole source, before step 1 masks quoted text: an indexed array evaluates it as arithmetic (an associative one does not,
+    // and is named too). The `$` in the lookbehind skips an unbraced `$x[v]`, which in an expansion or an assignment is `$x` and
+    // literal text; as a name `[[ -v ]]`, `read` or `printf -v` takes, it is a dynamic name with a subscript, which is on the
+    // stopping line, as is a name split from its `[` (forkForms' header).
+    if (SUBSCRIPT_FORK.test(src)) found.push('subscript');
+    // 1. Mask quoted text and ${...}, recording any substitution inside them ("$(…)" still forks).
+    let out = '';
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i]!;
+      if (c === '\\') { out += '__'; i++; continue; }
+      if (c === "'") {
+        const j = src.indexOf("'", i + 1);
+        if (j < 0) { found.push('unterminated quote'); break; }
+        out += "''"; i = j; continue;
+      }
+      if (c === '`') { found.push('backtick'); out += '_'; continue; }
+      if (c === '$' && src[i + 1] === '[') found.push('arithmetic operand');   // FR3a: `$[ … ]`, bash's legacy arithmetic expansion
+      if (c === '$' && src[i + 1] === '(' && src[i + 2] !== '(') { found.push('command substitution'); out += '__'; i++; continue; }
+      if (c === '$' && src[i + 1] === '(' && arithEnd(src, i + 1) < 0) { found.push('command substitution'); out += '$( '; i++; continue; }   // FPM3: `$((` that is no arithmetic is a substitution holding a subshell
+      if (c === '"' || (c === '$' && src[i + 1] === '{')) {
+        if (c === '$' && transformAt(src, i + 2)) found.push('parameter transformation');
+        if (c === '$') { const x = exprAt(src, i + 2); if (x !== null) found.push(x); }
+        const stack: string[] = [c === '"' ? '"' : '}'];
+        let j = c === '"' ? i + 1 : i + 2;
+        for (; j < src.length && stack.length > 0; j++) {
+          const d = src[j]!;
+          const top = stack[stack.length - 1];
+          if (d === '\\') { j++; continue; }
+          if (d === '`') found.push('backtick');
+          else if (d === '$' && src[j + 1] === '[') found.push('arithmetic operand');
+          else if (d === '$' && src[j + 1] === '(' && (src[j + 2] !== '(' || arithEnd(src, j + 1) < 0)) found.push('command substitution');
+          else if (d === '$' && src[j + 1] === '(' && !arithOk(src.slice(j + 3, arithEnd(src, j + 1) - 2))) found.push('arithmetic operand');   // FR3a: balanced `$((…))` nested in quotes or a ${…}
+          else if (d === '$' && src[j + 1] === '{') {
+            if (transformAt(src, j + 2)) found.push('parameter transformation');
+            const x = exprAt(src, j + 2);
+            if (x !== null) found.push(x);
+            stack.push('}'); j++;
+          }
+          else if (d === "'" && top === '}' && !stack.includes('"')) { const k = src.indexOf("'", j + 1); j = k < 0 ? src.length : k; }   // B3M16: inside double quotes a ${…} word's single quotes are literal, so what they enclose is live
+          else if (d === '"') { if (top === '"') stack.pop(); else stack.push('"'); }
+          else if (d === '}' && top === '}') stack.pop();
+        }
+        if (stack.length > 0) found.push('unterminated quote');
+        out += c === '"' ? '""' : /^\$\{#[A-Za-z_][A-Za-z0-9_]*\}$/.test(src.slice(i, j)) ? '0' : '$V'; i = j - 1; continue;   // FR3a: `${#name}` is a literal-valued operand, so the arithmetic check before step 3 reads `(( ${#id} <= 224 ))` as `(( 0 <= 224 ))`
+      }
+      out += c;
+    }
+    // 2. Process substitution is expanded even inside [[ ]], so it is looked for BEFORE step 3 blanks those.
+    if (/[<>]\(/.test(out)) found.push('process substitution');
+    // FR3a (review 351 F1): arithmetic operands, checked before step 3 blanks [[ ]] (a `$(( ))` inside one forks too), and the
+    // `[[ ]]` operators that evaluate their operands as arithmetic. On `out`, a quoted "-eq" is a masked string, not an operator.
+    for (let p = out.indexOf('(('); p >= 0; p = out.indexOf('((', p + 1)) {
+      const e = arithEnd(out, p);
+      if (e >= 0 && !arithOk(out.slice(p + 2, e - 2))) found.push('arithmetic operand');
+    }
+    if (/(?<![\w-])-(?:eq|ne|lt|le|gt|ge)(?![\w-])/.test(out)) found.push('arithmetic test operator');
+    // 3. Blank what may legally hold ( | & : [[ ]] tests, (( )) and $(( )) arithmetic, case patterns.
+    //    FPM3: only a BALANCED `((…))` is arithmetic; any other `((` is two subshell openers and stays visible as such.
+    let m = out.replace(/\[\[ [^\n]*? \]\]/g, '[[ ]]');
+    for (let p = m.indexOf('(('); p >= 0; p = m.indexOf('((', p + 1)) {
+      const e = arithEnd(m, p);
+      if (e < 0) { m = `${m.slice(0, p)}( ${m.slice(p + 1)}`; continue; }
+      const from = m[p - 1] === '$' ? p - 1 : p;
+      m = `${m.slice(0, from)}(( ))${m.slice(e)}`;
+      p = from;
+    }
+    m = m.replace(/(^|\n|;;|\bin)([ \t]*)[^\s();|&<>]+(?:\|[^\s();|&<>]+)*\)/g, '$1$2');
+    // 4. What is left may hold none of these.
+    const bare = m.replace(/\(\( \)\)/g, '');
+    const FORMS: Array<[RegExp, string]> = [
+      [/<</, 'here-document'], [/\bcoproc\b/, 'coproc'],
+      [/(?<!\()\((?!\()/, 'subshell'], [/(?<!\|)\|(?!\|)/, 'pipeline'], [/(?<![&>])&(?![&>])/, 'background'],
+    ];
+    for (const [re, name] of FORMS) if (re.test(bare)) found.push(name);
+    // 5. The first word of every simple command, past its assignments and redirections, must be allowed. The
+    //    split drops the words that open a command position (`if`, `elif`, `then`, `else`, `do`, `!`, a `case WORD in`
+    //    header), so the command after each of them is checked rather than hidden behind an allowed keyword.
+    const LEAD = /^(?:[A-Za-z_][A-Za-z0-9_]*\+?=\S*|\d*[<>]+&?\S*)\s*/;
+    for (const seg of m.split(/;;|&&|\|\||;|\n|\{|\}|!|\bcase\s+\S+\s+in\b|\bif\b|\belif\b|\bthen\b|\bdo\b|\belse\b/)) {
+      let s = seg.trim();
+      for (let a = LEAD.exec(s); a && a[0].length > 0; a = LEAD.exec(s)) s = s.slice(a[0].length);
+      const w = /^\S+/.exec(s)?.[0];
+      if (w !== undefined && !allowed.has(w)) found.push(`command ${w}`);
+    }
+    return found;
+  };
+  /** Bash keywords and builtins the block may run. None of them forks. */
+  const SPOOL_BUILTINS: ReadonlySet<string> = new Set(['if', 'then', 'elif', 'else', 'fi', 'case', 'esac', '[[', '((', 'printf', 'read', 'return', 'true']);
+  /** The hook functions the block calls. Each body is scanned too, against the builtins alone. */
+  const SPOOL_FUNCS = ['_ct_read', '_hook_history_spool_append'] as const;
+  /** The block's code as the S1 pins read it: the block, behind the body of `_hook_history_spool_append` (W3-1 Task 1C: the gate and
+   *  the append moved out of the block into that tail function, which the block calls with its built line). */
+  const spoolBlock = (src: string): string =>
+    `${hookFnBody(src, '_hook_history_spool_append') ?? ''}\n${src.slice(src.indexOf('# >>> history-spool (spec 2026-10-05 §5.1)'), src.indexOf('# <<< history-spool'))}`;
+  const hookFnBody = (src: string, name: string): string | null => new RegExp(`^${name}\\(\\) \\{[^\\n]*\\n([\\s\\S]*?)^\\}`, 'm').exec(src)?.[1] ?? null;
+  const A = '_hs_g="${CCRC_SESSION_GENERATION:-}"';
+  const T = "_hs+='}'";
+  const ROWS: Array<[string, string, string, string]> = [
+    ['a command substitution', A, '_hs_g="$(printf x)"', 'command substitution'],
+    ['a backtick', A, '_hs_g=`printf x`', 'backtick'],
+    ['a substitution inside ${}', A, '_hs_g="${CCRC_SESSION_GENERATION:-$(printf x)}"', 'command substitution'],
+    ['a subshell', "{ printf '\\n%s\\n'", "( printf '\\n%s\\n'", 'subshell'],
+    ['a pipeline', '2>/dev/null || true', '2>/dev/null | true', 'pipeline'],
+    ['a background job', '2>/dev/null || true', '2>/dev/null & true', 'background'],
+    ['an input process substitution', T, "_hs+='}'; read -r _hs_x < <(printf x)", 'process substitution'],
+    ['an output process substitution', T, "_hs+='}'; printf x > >(read -r _hs_x)", 'process substitution'],
+    ['a process substitution inside [[ ]]', T, "_hs+='}'; [[ -e <(printf x) ]] && true", 'process substitution'],
+    ['a coproc', T, "_hs+='}'; coproc true", 'coproc'],
+    ['a trailing &', T, "_hs+='}'; true &", 'background'],
+    ['a here-string', T, "_hs+='}'; read -r _hs_x <<< x", 'here-document'],
+    ['an external program', T, "_hs+='}'; mkdir -p x", 'command mkdir'],
+    ['a path-spelled program', T, "_hs+='}'; /bin/true", 'command /bin/true'],
+    ['a variable command word', T, '_hs+=\'}\'; "$_hs_x" x', 'command ""'],
+    ['a program as an if condition', T, "_hs+='}'; if mkdir -p x; then true; fi", 'command mkdir'],
+    ['a program as an elif condition', T, "_hs+='}'; if [[ -n x ]]; then true; elif /bin/true; then true; fi", 'command /bin/true'],
+    ['a program in a case arm on the case line', T, "_hs+='}'; case \"$src\" in clear) mkdir -p x ;; esac", 'command mkdir'],
+    ['a substitution in single quotes inside ${} inside double quotes', A, '_hs_g="${CCRC_SESSION_GENERATION:-\'$(id)\'}"', 'command substitution'],
+    ['a backtick in single quotes inside ${} inside double quotes', A, '_hs_g="${CCRC_SESSION_GENERATION:-\'`id`\'}"', 'backtick'],
+    // FPM3: bash re-parses a `((` / `$((` that is not balanced arithmetic as nested subshells / a substitution holding one.
+    ['a subshell spelled ((', T, "_hs+='}'; ((echo x) )", 'subshell'],
+    ['two subshells joined by && under ((', T, "_hs+='}'; ((true) && (mkdir x))", 'subshell'],
+    ['a subshell inside $( (', T, "_hs+='}'; _hs_x=$( (echo x) )", 'command substitution'],
+    ['a substitution spelled $((', T, "_hs+='}'; _hs_x=$((echo x) )", 'command substitution'],
+    ['a substitution spelled $(( inside double quotes', T, '_hs+=\'}\'; _hs_x="$((true) && (mkdir x))"', 'command substitution'],
+    // FR2a (review 344 F1): `${name@op}`, at each place step 1 meets a `${`. `@Q` forks nothing; it is named by choice (transformAt).
+    ['an @P transformation inside double quotes', A, '_hs_g="${CCRC_SESSION_GENERATION@P}"', 'parameter transformation'],
+    ['an @P transformation outside double quotes', A, '_hs_g=${CCRC_SESSION_GENERATION@P}', 'parameter transformation'],
+    ['an @P transformation nested in a ${} default word', A, '_hs_g="${CCRC_SESSION_GENERATION:-${_hs@P}}"', 'parameter transformation'],
+    ['an @P transformation in single quotes inside ${} inside double quotes', A, '_hs_g="${CCRC_SESSION_GENERATION:-\'${_hs@P}\'}"', 'parameter transformation'],
+    ['an @P transformation of a subscripted name', A, '_hs_g="${_hs[0]@P}"', 'parameter transformation'],
+    ['an @Q transformation', A, '_hs_g="${CCRC_SESSION_GENERATION@Q}"', 'parameter transformation'],
+    // FR3a (review 351 F1): arithmetic evaluates a variable's text, so a name holding `a[$(…)]` forks wherever one is an operand.
+    ['bare-name arithmetic', T, "_hs+='}'; (( _hs_g ))", 'arithmetic operand'],
+    ['a bare name beside ${#name} in the bound', '(( ${#id} <= 224 ))', '(( ${#id} <= _hs_g ))', 'arithmetic operand'],
+    ['a ++ on a name (the old INERT row: it forks when the name holds a subscript)', T, "_hs+='}'; (( i++ ))", 'arithmetic operand'],
+    ['a $name operand in $(( ))', T, "_hs+='}'; printf x $(( $_hs_g + 1 ))", 'arithmetic operand'],
+    ['a bare name in $(( )) inside double quotes', T, '_hs+=\'}\'; printf "$(( _hs_g ))"', 'arithmetic operand'],
+    ['a bare name in $(( )) inside [[ ]]', T, "_hs+='}'; [[ $(( _hs_g )) == 1 ]] && true", 'arithmetic operand'],
+    ['a $[ ] arithmetic expansion', T, "_hs+='}'; printf x $[ _hs_g ]", 'arithmetic operand'],
+    ['a $[ ] arithmetic expansion inside double quotes', T, '_hs+=\'}\'; printf "$[ _hs_g ]"', 'arithmetic operand'],
+    ['an -eq test', T, "_hs+='}'; [[ $_hs_g -eq 0 ]] && true", 'arithmetic test operator'],
+    ['a -gt test on a quoted operand', T, '_hs+=\'}\'; [[ "$_hs_g" -gt 0 ]] && true', 'arithmetic test operator'],
+    ['a variable substring offset', A, '_hs_g=${_hs:_hs_g}', 'substring offset'],
+    ['a variable substring offset inside double quotes', A, '_hs_g="${_hs:_hs_g}"', 'substring offset'],
+    ['a variable substring length', A, '_hs_g="${_hs:0:_hs_g}"', 'substring offset'],
+    ['a variable subscript', A, '_hs_g="${_hs[_hs_g]}"', 'subscript'],
+    ['a $name subscript', A, '_hs_g=${_hs[$_hs_g]}', 'subscript'],
+    ['an indexed assignment with a variable subscript', T, "_hs+='}'; _hs_x[_hs_g]=1", 'command _hs_x[_hs_g]=1'],
+    // FR3c (review 351 F1, task review): a `name[subscript]` wherever it stands, and a special parameter's substring offset.
+    ['read into a variable subscript', T, "_hs+='}'; read -r _hs_x[_hs_g]", 'subscript'],
+    ['printf -v into a variable subscript', T, "_hs+='}'; printf -v _hs_x[_hs_g] %s x", 'subscript'],
+    ['printf -v into a single-quoted variable subscript', T, "_hs+='}'; printf -v '_hs_x[_hs_g]' %s x", 'subscript'],
+    ['a [[ -v ]] test of a variable subscript', T, "_hs+='}'; [[ -v _hs_x[_hs_g] ]] && true", 'subscript'],
+    ['a [[ -v ]] test of a double-quoted variable subscript', T, '_hs+=\'}\'; [[ -v "_hs_x[_hs_g]" ]] && true', 'subscript'],
+    ['an indexed assignment with a variable subscript, as a subscript', T, "_hs+='}'; _hs_x[_hs_g]=1", 'subscript'],
+    ['a $ special parameter with a variable substring offset', A, '_hs_g=${$:_hs_g}', 'substring offset'],
+    ['a ? special parameter with a variable substring offset', A, '_hs_g=${?:_hs_g}', 'substring offset'],
+    ['a - special parameter with a variable substring offset', A, '_hs_g=${-:_hs_g}', 'substring offset'],
+    ['a let', T, "_hs+='}'; let _hs_g", 'command let'],
+    // Fix-round-3 whole-round review (#1/#5): a compound assignment's key is a subscript, and bash evaluates it as arithmetic.
+    ['a compound array assignment with a variable key', T, "_hs+='}'; _hs_x=([_hs_g]=1)", 'subscript'],
+    ['an appended compound assignment with a spaced variable key', T, "_hs+='}'; _hs_x+=( [_hs_g]=1 )", 'subscript'],
+    // FR4 (review 353 F2): a form for the string pin's sha arm and one for its integer-attribute arm, which STRING_ROWS plants.
+    ['a sha program', T, "_hs+='}'; sha256sum x", 'command sha256sum'],
+    ['an integer attribute', T, "_hs+='}'; local -i _hs_x=_hs_g", 'command local'],
+  ];
+  /** Text bash never expands, which the scanner must not name: a substitution inside plain single quotes. */
+  const INERT: Array<[string, string, string]> = [
+    ['a substitution inside plain single quotes', A, "_hs_g='${CCRC_SESSION_GENERATION:-$(id)}'"],
+    // FU9 (B4M5): this row reaches the `${`-state's single-quote skip (B3M16), which the row above never does: its quotes
+    // enclose the whole `${…}`, so step 1's top-level arm masks it. Here the `${…}` sits outside double quotes and its
+    // word's single quotes are live, so bash prints `$(id)` literally (measured: C:$(echo SUB)).
+    ['a substitution in single quotes inside a ${} outside double quotes', A, "_hs_g=${CCRC_SESSION_GENERATION:-'$(id)'}"],
+    // FPM3: a balanced arithmetic form is no fork, in either spelling and inside double quotes.
+    ['a (( )) arithmetic command on a literal and ${#name}', T, "_hs+='}'; (( ${#_hs} > 1 ))"],
+    ['a $(( )) arithmetic expansion', T, "_hs+='}'; printf x $(( 1 + 2 ))"],
+    ['a $(( )) arithmetic expansion inside double quotes', T, '_hs+=\'}\'; printf "$(( 1 + (2 * 3) ))"'],
+    // FR2a (review 344 F1): an `@` bash applies no transformation at: in plain single quotes, in a ${} word past its operator, and
+    // in a ${} word's single quotes outside double quotes (B3M16's skip; measured inert, as the first two are).
+    ['an @P transformation inside plain single quotes', A, "_hs_g='${CCRC_SESSION_GENERATION@P}'"],
+    ['an @ in a ${} default word', A, '_hs_g="${CCRC_SESSION_GENERATION:-a@P}"'],
+    ['an @P transformation in single quotes inside a ${} outside double quotes', A, "_hs_g=${CCRC_SESSION_GENERATION:-'${_hs@P}'}"],
+    // FR3a (review 351 F1; the probe, fr3-probe.out): operands that are literals or ${#name}, and the operators and forms that
+    // look like arithmetic and are not (a `==` test, a `${name:-}` default).
+    ['a ${#name} operand in $(( )) inside double quotes', T, '_hs+=\'}\'; printf "$(( ${#_hs} + 1 ))"'],
+    ['a literal substring offset and length', A, '_hs_g="${_hs:0:3}"'],
+    ['a literal negative substring offset', A, '_hs_g=${_hs: -1}'],
+    ['a literal subscript', A, '_hs_g="${_hs[0]}"'],
+    ['a == test', T, "_hs+='}'; [[ $_hs_g == 0 ]] && true"],
+    ['a ${name:-} default, an operator and not a substring', A, '_hs_g=${_hs:-0}'],
+    // FR3c (review 351 F1, task review): a literal subscript is no arithmetic hazard, and `$x[v]` is `$x` and literal text.
+    ['printf -v into a literal subscript', T, "_hs+='}'; printf -v _hs_x[0] %s x"],
+    ['read into a literal subscript', T, "_hs+='}'; read -r _hs_x[0]"],
+    ['an unbraced $name before literal brackets', A, '_hs_g=$_hs[_hs_g]'],
+  ];
+
+  it('S1 (syntax, F38): the spool block and every function it calls hold no fork form', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(forkForms(spoolBlock(src), new Set<string>([...SPOOL_BUILTINS, ...SPOOL_FUNCS]))).toEqual([]);
+    for (const f of SPOOL_FUNCS) {
+      const body = hookFnBody(src, f);
+      expect(body, f + ' is not defined in the hook').not.toBeNull();
+      expect(forkForms(body!, SPOOL_BUILTINS), f).toEqual([]);
+    }
+  });
+
+  it.each(ROWS)('S1 (syntax, F38): %s planted in the spool block is named', (_label, anchor, replacement, form) => {
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    const allowed = new Set<string>([...SPOOL_BUILTINS, ...SPOOL_FUNCS]);
+    expect(block).toContain(anchor);
+    expect(forkForms(block.replace(anchor, replacement), allowed)).toContain(form);
+  });
+
+  it.each(INERT)('S1 (syntax, B3M16): %s planted in the spool block is inert and is not named', (_label, anchor, replacement) => {
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    const allowed = new Set<string>([...SPOOL_BUILTINS, ...SPOOL_FUNCS]);
+    expect(block).toContain(anchor);
+    expect(forkForms(block.replace(anchor, replacement), allowed)).toEqual([]);
+  });
+
+  // ── review 353 F2: the S1 string pin over ROWS — each of its arms has a planted form it must name ──
+  /** FR4: a ROWS label and the string-pin arm that must name that form planted in the block. A ROWS form missing here is
+   *  one no string arm reads (a subshell, a pipeline, a background job, a coproc, a here-string, a process substitution,
+   *  a command word its external list does not hold), or one it reads only by accident: forkForms alone names those. */
+  const ARITH = 'a (( )) operand that is not an integer literal or ${#name} (review 351 F1)';
+  const SUBSTRING = 'a ${name:offset:length} whose offset or length is not a literal (review 351 F1)';
+  const SUBSCRIPT = 'a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)';
+  const STRING_ROWS: Array<[string, string]> = [
+    ['a command substitution', 'a command substitution in the spool block'],
+    ['a substitution inside ${}', 'a command substitution in the spool block'],
+    ['a substitution in single quotes inside ${} inside double quotes', 'a command substitution in the spool block'],
+    ['a subshell inside $( (', 'a command substitution in the spool block'],
+    ['a substitution spelled $((', 'a command substitution in the spool block'],
+    ['a substitution spelled $(( inside double quotes', 'a command substitution in the spool block'],
+    ['a backtick', 'a backtick in the spool block'],
+    ['a backtick in single quotes inside ${} inside double quotes', 'a backtick in the spool block'],
+    ['a sha program', 'a sha program in the spool block'],
+    ['an @P transformation inside double quotes', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation outside double quotes', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation nested in a ${} default word', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation in single quotes inside ${} inside double quotes', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation of a subscripted name', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @Q transformation', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['bare-name arithmetic', ARITH],
+    ['a bare name beside ${#name} in the bound', ARITH],
+    ['a ++ on a name (the old INERT row: it forks when the name holds a subscript)', ARITH],
+    ['a $name operand in $(( ))', ARITH],
+    ['a bare name in $(( )) inside double quotes', ARITH],
+    ['a bare name in $(( )) inside [[ ]]', ARITH],
+    ['an -eq test', 'an arithmetic test operator (review 351 F1)'],
+    ['a -gt test on a quoted operand', 'an arithmetic test operator (review 351 F1)'],
+    ['a variable substring offset', SUBSTRING],
+    ['a variable substring offset inside double quotes', SUBSTRING],
+    ['a variable substring length', SUBSTRING],
+    ['a $ special parameter with a variable substring offset', SUBSTRING],
+    ['a ? special parameter with a variable substring offset', SUBSTRING],
+    ['a - special parameter with a variable substring offset', SUBSTRING],
+    ['a variable subscript', SUBSCRIPT],
+    ['a $name subscript', SUBSCRIPT],
+    ['an indexed assignment with a variable subscript', SUBSCRIPT],
+    ['read into a variable subscript', SUBSCRIPT],
+    ['printf -v into a variable subscript', SUBSCRIPT],
+    ['printf -v into a single-quoted variable subscript', SUBSCRIPT],
+    ['a [[ -v ]] test of a variable subscript', SUBSCRIPT],
+    ['a [[ -v ]] test of a double-quoted variable subscript', SUBSCRIPT],
+    ['a compound array assignment with a variable key', SUBSCRIPT],
+    ['an appended compound assignment with a spaced variable key', SUBSCRIPT],
+    ['a $[ ] arithmetic expansion', 'a $[ ] arithmetic expansion in the spool block (review 351 F1)'],
+    ['a $[ ] arithmetic expansion inside double quotes', 'a $[ ] arithmetic expansion in the spool block (review 351 F1)'],
+    ['a let', 'let and an integer attribute evaluate arithmetic (review 351 F1)'],
+    ['an integer attribute', 'let and an integer attribute evaluate arithmetic (review 351 F1)'],
+    ['an external program', 'an external command in the spool block forks on the hot path'],
+    ['a program as an if condition', 'an external command in the spool block forks on the hot path'],
+    ['a program in a case arm on the case line', 'an external command in the spool block forks on the hot path'],
+  ];
+
+  it.each(STRING_ROWS)('S1 (string, review 353 F2): %s planted in the spool block is caught by the string pin: %s', (label, arm) => {
+    const row = ROWS.find((r) => r[0] === label);
+    expect(row, `no ROWS row is labelled ${label}`).toBeDefined();
+    const [, anchor, replacement] = row!;
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    expect(block).toContain(anchor);
+    const code = s1Code(block.replace(anchor, replacement));
+    expect(S1_STRING_ARMS.filter(([, check]) => check(code) !== null).map(([name]) => name)).toContain(arm);
+  });
+
+  it('S1 (string, review 353 F2): every arm has a planted row, so each arm is caught by the string pin rows', () => {
+    const arms = S1_STRING_ARMS.map(([name]) => name);
+    expect(new Set(arms).size, 'two string-pin arms share a label').toBe(arms.length);
+    expect([...new Set(STRING_ROWS.map(([, arm]) => arm))].sort(), 'an arm with no planted row, or a row naming no arm').toEqual([...arms].sort());
+  });
+
+  it('F37: EPOCHREALTIME is read once: a clock that moves between the test and the slice writes no ts or the tested reading, never a mix', async () => {
+    plantSpool();
+    const trapFile = path.join(home, 'epochtrap.bash');
+    fs.writeFileSync(trapFile, 'unset EPOCHREALTIME\nEPOCHREALTIME=1700000001\n'
+      + 'trap \'case $BASH_COMMAND in *"=~ ^[1-9]"*) EPOCHREALTIME=1700000000.999999 ;; *) EPOCHREALTIME=1700000001 ;; esac\' DEBUG\n');
+    runFull({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: trapFile });
+    const [l] = await parsed();
+    expect(l!.rec).not.toBeNull();
+    expect([undefined, 1700000000999]).toContain(l!.rec!['ts']);
+  });
+
+  it('F37: the spool block expands EPOCHREALTIME exactly once', () => {
+    const code = spoolBlock(fs.readFileSync(HOOK, 'utf8')).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect((code.match(/\$\{?EPOCHREALTIME\b/g) ?? []).length).toBe(1);
+  });
+
+  /** The hook with a wall-clock bound: a hook blocked in open(2) is killed, never left to hang the suite. */
+  const runSpoolBounded = (payload: object): ReturnType<typeof spawnSync> => spawnSync('bash', [HOOK], {
+    input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', env: hookEnv(SCRUB),
+  });
+
+  it('F24: a FIFO at the spool path writes no line and never blocks: exit 0, silent, hookstate written, the FIFO left as it was (D-4418)', () => {
+    plantSpool();
+    execFileSync('mkfifo', [spoolFile()]);
+    const r = runSpoolBounded({ hook_event_name: 'Stop', session_id: SID });
+    expect(r.signal).toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(readState().state).toBe('done');
+    expect(fs.lstatSync(spoolFile()).isFIFO()).toBe(true);
+  }, 30_000);
+
+  it('F24: a symlink at the spool path writes no line and leaves its target byte-identical (D-4418)', () => {
+    plantSpool();
+    const outside = path.join(home, 'outside.txt');
+    fs.writeFileSync(outside, 'outside\n');
+    fs.symlinkSync(outside, spoolFile());
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(fs.readFileSync(outside, 'utf8')).toBe('outside\n');
+    expect(fs.lstatSync(spoolFile()).isSymbolicLink()).toBe(true);
+  });
+
+  it('F24: a dangling symlink at the spool path creates nothing at its target (D-4418)', () => {
+    plantSpool();
+    const nowhere = path.join(home, 'nowhere.jsonl');
+    fs.symlinkSync(nowhere, spoolFile());
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(fs.existsSync(nowhere)).toBe(false);
+  });
+
+  it('F24: a symlinked spool directory gets no line (D-4418)', () => {
+    fs.mkdirSync(path.join(home, '.ccrc', 'history'), { recursive: true });
+    const elsewhere = path.join(home, 'elsewhere');
+    fs.mkdirSync(elsewhere, { mode: 0o700 });
+    fs.symlinkSync(elsewhere, spoolDir());
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(fs.readdirSync(elsewhere)).toEqual([]);
+  });
+
+  it('F24 CONTROL: an existing regular spool file is appended to (D-4418)', async () => {
+    plantSpool();
+    fs.writeFileSync(spoolFile(), '');
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => l.rec?.['ev'])).toEqual(['Stop', 'Stop']);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('F24 (S12\'s guard kept): a regular spool file the hook cannot open costs the line, never the exit status, the silence or the hookstate write (D-4418)', () => {
+    plantSpool();
+    fs.writeFileSync(spoolFile(), '');
+    fs.chmodSync(spoolFile(), 0o400);
+    const r = runFull({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(r.stderr).toBe('');
+    expect(readState().state).toBe('done');
+    expect(fs.readFileSync(spoolFile(), 'utf8')).toBe('');
+  });
+
+  it('F24: the block names its residue\'s bound, and the installer defines it (D-4418)', () => {
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    expect(block).toContain('HOOK_TIMEOUT_S');
+    expect(block).toContain('D-4418');
+    expect(fs.readFileSync(path.resolve(__dirname, '../../ccd/install-session-hooks.sh'), 'utf8')).toMatch(/^HOOK_TIMEOUT_S=\d+$/m);
+  });
+});
+
+// ── D-4953 / D-4954: who may take the pane-less fallback, and how it reads a row ──
+// APPENDED, never inserted: this file's citation audit cites it by line. The
+// cases of 'a session with no pane' above run through `forkedEnv`; the cases
+// that pin the two gates and the reader live here.
+
+/** A FORKED session's hook environment: no pane, and the job directory Claude Code hands every background job it
+ *  hosts — the fallback's second gate (D-4953). MEASURED on 2.1.296, not read off its launcher: a hook run by a
+ *  process carrying the background-job identity (`CLAUDE_CODE_SESSION_KIND=bg`, `CLAUDE_BG_BACKEND=daemon`,
+ *  `CLAUDE_BG_SOURCE`, `CLAUDE_JOB_DIR`) sees `CLAUDE_JOB_DIR` and none of the other three, because Claude Code builds
+ *  a hook's environment from a copy scrubbed of its background-identity list. The hook tests the value for presence
+ *  only, so the directory need not exist. `hookEnv` BLANKS it rather than inheriting it: a suite run from inside a
+ *  forked job inherits a real one, and every "a stranger is nobody's" case would quietly test a fork instead.
+ *  A FUNCTION DECLARATION, hoisted, so the describe above can call it from here. */
+function forkedEnv(): Record<string, string> {
+  return { TMUX_PANE: '', CLAUDE_JOB_DIR: path.join(home, '.claude', 'jobs', 'ab12cd34') };
+}
+
+describe('the pane-less fallback: forked sessions only (D-4953), every row read safely (D-4954)', () => {
+  const reg = (...p: string[]): string => path.join(home, '.cc-sessions', ...p);
+  const row = (id: string, uuid: string): void => fs.writeFileSync(reg(`${id}.uuid`), uuid);
+  /** Every row the hook attributed an event to, by its hookstate file — the whole registry, never one named row. */
+  const attributed = (): string[] => fs.readdirSync(reg()).filter((n) => n.endsWith('.hookstate.json')).sort();
+  /** The hook with a wall-clock bound (the spool describe's `runSpoolBounded`, for this describe's env): a hook blocked
+   *  in open(2) is killed, never left to hang the suite. `unset` REMOVES variables, which `env` cannot: a blank variable
+   *  and an unset one are different inputs under the hook's `set -u`. */
+  const runBounded = (payload: object, env: Record<string, string>, unset: string[] = []): ReturnType<typeof spawnSync> => {
+    const e = hookEnv(env);
+    for (const k of unset) delete e[k];
+    return spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', env: e });
+  };
+
+  // THE STRANGER THE FALLBACK MUST NOT ADOPT (H2). A plain `claude --resume
+  // <uuid>` keeps the resumed id and its hooks carry it as
+  // CLAUDE_CODE_SESSION_ID (measured on 2.1.296), so a hand-run resume of a
+  // live row, outside tmux, matched that row and wrote SessionStart(resume)
+  // 'done' with the row's own uuid: state the server reads as current while
+  // the row's real pane is mid-turn.
+  it('a Claude session outside tmux that resumes a registry uuid is still nobody\'s', () => {
+    row('demo-quiet-basin', 'uuid-1\n');
+    expect(runFull({ hook_event_name: 'SessionStart', source: 'resume', session_id: 'uuid-1' }, { TMUX_PANE: '' }))
+      .toMatchObject({ stdout: '', stderr: '' });
+    expect(fs.readdirSync(reg()).sort()).toEqual(['demo-quiet-basin.generation', 'demo-quiet-basin.uuid']);
+  });
+
+  // The fleet gate's 'a foreign tmux session name' case, WITH the row it was
+  // missing: without one, it passed because the fallback had nothing to match.
+  it('a tmux session not named cc-* writes nothing, even beside a row that names its session id', () => {
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "main"\n', { mode: 0o755 });
+    row('demo-quiet-basin', 'uuid-1\n');
+    run({ hook_event_name: 'Stop' });
+    expect(attributed()).toEqual([]);
+  });
+
+  // THE PANE IS THE PANE'S QUESTION: a process with a pane is answered by the
+  // pane or by nobody, even when it also carries the job marker. This is the
+  // case that isolates the `elif` from the job-marker conjunct.
+  it('a process in a tmux session not named cc-* is never attributed by its session id, job marker or not', () => {
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "main"\n', { mode: 0o755 });
+    row('demo-quiet-basin', 'uuid-1\n');
+    run({ hook_event_name: 'UserPromptSubmit' }, { ...forkedEnv(), TMUX_PANE: '%3' });
+    expect(attributed()).toEqual([]);
+  });
+
+  // UNSET IS NOT BLANK (H4). Under `set -u`, a comparison that expands an
+  // unset CLAUDE_CODE_SESSION_ID kills the hook with "unbound variable" and
+  // exit 1. The blank-id case is 'a session with no pane' above.
+  it('the session id UNSET: exit 0, silent on both streams, nobody attributed', () => {
+    row('demo-quiet-basin', 'uuid-1\n');
+    row('ghost', '');
+    const r = runBounded({ hook_event_name: 'UserPromptSubmit' }, forkedEnv(), ['CLAUDE_CODE_SESSION_ID']);
+    expect(r.signal).toBeNull();
+    expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+    expect({ stdout: r.stdout, stderr: r.stderr }).toEqual({ stdout: '', stderr: '' });
+    expect(attributed()).toEqual([]);
+  });
+
+  // ── D-4954. The walk opens EVERY row, not just this session's own, so one
+  // bad node anywhere used to reach every event of every forked session. The
+  // `a`/`b`-prefixed names sort before the matching row: the walk meets the
+  // bad node first and must pass it to attribute at all.
+
+  it.skipIf(process.getuid?.() === 0)('a row it cannot read is passed in silence, and the walk goes on to the match', () => {
+    row('a-row', 'uuid-other\n');
+    fs.chmodSync(reg('a-row.uuid'), 0o000);
+    row('demo-quiet-basin', 'uuid-1\n');
+    expect(runFull({ hook_event_name: 'UserPromptSubmit' }, forkedEnv())).toMatchObject({ stdout: '', stderr: '' });
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+  });
+
+  // THE RACE ITSELF, made deterministic (H3's own scenario: a row unlinked
+  // between the walk's test and its open). A DEBUG trap deletes the row just
+  // before each `read -r` runs (functrace on, so a reader moved into a
+  // function is still reached): the row passes `-f` and is gone at open(2).
+  // Where the open's failure is sent then decides whether bash's "No such
+  // file or directory" reaches the hook's stderr — the braces (D-1691). The
+  // mode-000 case above pins the same braces from the other side: a `-r`
+  // could hide that row, and no `-r` can see this one.
+  it('a row unlinked between its test and its open is passed in silence', () => {
+    row('a-row', 'uuid-other\n');
+    row('demo-quiet-basin', 'uuid-1\n');
+    const trap = path.join(home, 'unlink-race.bash');
+    fs.writeFileSync(trap, 'set -o functrace\ntrap \'case $BASH_COMMAND in *"read -r"*) rm -f "$RACE_ROW" ;; esac\' DEBUG\n');
+    expect(runFull({ hook_event_name: 'UserPromptSubmit' }, { ...forkedEnv(), BASH_ENV: trap, RACE_ROW: reg('a-row.uuid') }))
+      .toMatchObject({ stdout: '', stderr: '' });
+    expect(fs.existsSync(reg('a-row.uuid')), 'the trap fired: the row is gone').toBe(false);
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+  });
+
+  // THE BOUND: one row costs at most CCRC_ID_MAX characters, whatever it
+  // holds. Not visible in anything the hook writes, so a DEBUG trap records
+  // the length of the value each comparison is about to test. Coupled to the
+  // walk's variable name on purpose: a rename that drops the bound must red.
+  it('reads at most CCRC_ID_MAX characters of a row, however long it is', () => {
+    row('a-long', 'x'.repeat(300));
+    row('demo-quiet-basin', 'uuid-1\n');
+    const lens = path.join(home, 'lens.txt');
+    const trap = path.join(home, 'len-probe.bash');
+    fs.writeFileSync(trap, 'trap \'case $BASH_COMMAND in *"\\"\\$ruuid\\" =="*) printf "%s\\n" "${#ruuid}" >> "$LEN_LOG" ;; esac\' DEBUG\n');
+    run({ hook_event_name: 'UserPromptSubmit' }, { ...forkedEnv(), BASH_ENV: trap, LEN_LOG: lens });
+    const max = Number(/^CCRC_ID_MAX=(\d+)$/m.exec(fs.readFileSync(HOOK, 'utf8'))![1]);
+    expect(fs.readFileSync(lens, 'utf8').trim().split('\n').map(Number)).toEqual([max, 'uuid-1'.length]);
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+  });
+
+  it('a FIFO at a registry row never blocks the hook: exit 0, silent, the match still found', () => {
+    execFileSync('mkfifo', [reg('aaa-junk.uuid')]);
+    row('demo-quiet-basin', 'uuid-1\n');
+    const r = runBounded({ hook_event_name: 'PreToolUse', tool_name: 'Read' }, forkedEnv());
+    expect(r.signal, 'killed at the bound: the hook blocked in open(2)').toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+    expect(fs.lstatSync(reg('aaa-junk.uuid')).isFIFO()).toBe(true);
+  }, 30_000);
+
+  it('a row that is a symlink to a character device is never read: exit 0, silent, the match still found', () => {
+    fs.symlinkSync('/dev/zero', reg('bbb-dev.uuid'));
+    row('demo-quiet-basin', 'uuid-1\n');
+    const r = runBounded({ hook_event_name: 'PreToolUse', tool_name: 'Read' }, forkedEnv());
+    expect(r.signal, 'killed at the bound: the hook read an endless device').toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
+  }, 30_000);
+
+  // THE ONE STRANGER THE MARKER LETS THROUGH, written where the gate is.
+  // CLAUDE_JOB_DIR is INHERITED: Claude Code's child-environment builder keeps
+  // it, so a `claude --resume <registry uuid>` started from a forked session's
+  // own shell reaches the fallback with the inputs a fork's own hook has. The
+  // first case of 'a session with no pane' IS that run as far as the hook can
+  // see, so no case can tell them apart, and what is left to drift is the
+  // prose: the header once said a stranger "exits 0 exactly as it did before
+  // the fallback existed" with no exception. Both halves are pinned: the claim
+  // carries its condition, and the block names the inheritance and both
+  // spellings of the stranger.
+  it('the identity block names the stranger the job marker lets through: a process a forked session starts (D-4953)', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const start = src.indexOf('# TWO SOURCES FOR ONE QUESTION');
+    const end = src.indexOf('elif [[ -n "${CLAUDE_JOB_DIR:-}"');
+    expect(start, 'the block\'s first line').toBeGreaterThan(-1);
+    expect(end, 'the fallback\'s gate, after the block').toBeGreaterThan(start);
+    const prose = src.slice(start, end).replace(/\n#[ \t]*/g, ' ').replace(/\s+/g, ' ');
+    expect(prose).toMatch(/does not carry CLAUDE_JOB_DIR exits 0 exactly as it did before the fallback existed/);
+    expect(prose).toMatch(/CLAUDE_JOB_DIR is INHERITED/);
+    expect(prose).toMatch(/claude --resume <registry uuid>` run from a forked session's own shell/);
+    // ...and the uuid-less spelling of the same stranger (#189 re-review): a
+    // bare `claude --continue` there resumes the newest transcript in that
+    // directory, which is usually the fork's own.
+    expect(prose).toMatch(/a bare `claude --continue` there/);
+  });
+});
+
+// ── ccrc history (spec 2026-10-05 §8.1, §8.9 C17). END-APPENDED, with no import line, because this file is in
+// the citation corpus. A session recalls by running `"$HOME/.local/bin/ccrc" history grep …`, and the search gate
+// must not treat that as a code search. GRAPH_SEARCH_RE anchors on the command's first word, which here is a
+// quoted path, so this pins a property the regex already has: it reds only if a later edit loosens the anchor.
+describe('ccrc history: the recall CLI is not search-gated (spec 2026-10-05 §8.9 C17)', () => {
+  it('a PreToolUse Bash call to "$HOME/.local/bin/ccrc" history grep prints no deny, in a tree where a bare grep is denied', () => {
+    const tree = gatedTree();
+    // The positive control first, in the same armed tree. A plain grep IS denied here, so the silence below is
+    // the gate declining this command, not a gate that never armed.
+    const j = oneLine(run(pre('Bash', { command: 'grep -rn assembleFleet server/src' }, tree)));
+    expect(j.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(readState().graphGateDenials).toBe(1);
+    for (const command of [
+      '"$HOME/.local/bin/ccrc" history grep x',
+      '$HOME/.local/bin/ccrc history grep \'"connection refused"\'',
+      '"$HOME/.local/bin/ccrc" history grep --regex \'a|b\' --json',
+    ]) {
+      expect(run(pre('Bash', { command }, tree)), `the search gate denied a recall: ${command}`).toBe('');
+    }
+    expect(readState().graphGateDenials, 'a recall call was counted as a denial').toBe(1);
+  });
+});
+
+describe.runIf(process.env['CCRC_PERF'] === '1')('the hot-path budget through the shell prefix (D-5241)', () => {
+  // AT THE END OF THIS FILE, not beside the PostToolUse pin it mirrors: this file's lines are cited
+  // by number (the citation census above), and an insertion above them moves that census.
+  // D-5241: on Linux every hook command runs through `CLAUDE_CODE_SHELL_PREFIX`
+  // (`ccd-tool-adj`), as ONE string (plan Task 13 step 7), so the same budget
+  // holds with the prefix in front. The hook is not a Bash tool snippet, so the
+  // prefix runs it unchanged (no score raise); what it adds is its own start
+  // and one `bash -c`. Measured 2026-10-17 on a workstation (macOS), 20 runs
+  // each, the two tests in one run: this PostToolUse hook 56 ms a run bare, 58
+  // ms through the prefix (a bare `bash -c true` 6.1 ms p50, 17.9 ms through it).
+  it('p95 of 40 runs through the ccd-tool-adj prefix stays under the same budget (D-5241)', () => {
+    const prefix = path.resolve(__dirname, '../../ccd/ccd-tool-adj');
+    const times: number[] = [];
+    for (let i = 0; i < 41; i++) {   // the first run is a warm-up, discarded (CCRC_PERF=1 only: the perf job, D-6929)
+      const t0 = Date.now();
+      execFileSync(prefix, [`bash ${sh(HOOK)}`], {
+        input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash' }),
+        encoding: 'utf8', env: hookEnv(),
+      });
+      if (i > 0) times.push(Date.now() - t0);
+    }
+    times.sort((a, b) => a - b);
+    expect(times[37]).toBeLessThan(150);   // p95 of 40 = times[37]; the threshold is unchanged
+  }, 60000);
+});
+
+// The hot-path budget for an agent payload (D-5232). APPENDED at the very end, so no line a citation anchors moves.
+describe.runIf(process.env['CCRC_PERF'] === '1')('the PostToolUse budget holds for agent payloads (D-5232)', () => {
+  // D-5232 (plan 2026-10-16 Task 2): the same budget for an AGENT PostToolUse behind the server's word
+  // `hook-main-state-v1`, which reads `~/.ccrc/server-caps` with builtins and takes the one fresh read to carry the
+  // main state. The file to carry is a Stop's `done`, written first.
+  it('p95 of 40 agent PostToolUse runs behind hook-main-state-v1 stays under the same 150 ms budget (D-5232)', () => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'server-caps'),
+      `at ${Math.floor(Date.now() / 1000)}\ncaps dispatch-live-gate-v1 hook-main-state-v1\nend\n`);
+    run({ hook_event_name: 'Stop', background_tasks: [] });
+    const times: number[] = [];
+    for (let i = 0; i < 41; i++) {   // the first run is a warm-up, discarded (CCRC_PERF=1 only: the perf job, D-6929)
+      const t0 = Date.now();
+      run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a0000000000000001', agent_type: 'general-purpose' });
+      if (i > 0) times.push(Date.now() - t0);
+    }
+    expect(readState().state, 'the carry ran: the Stop\'s done stands').toBe('done');
+    times.sort((a, b) => a - b);
+    expect(times[37]).toBeLessThan(150);   // p95 of 40 = times[37]; the threshold is unchanged
+  }, 60000);
+});
+// ── ccrc history: the PreCompact scope marker (history spec 2026-10-05 §5.1, §5.5 S16; W1-B3 task 8) ──
+// APPENDED, with NO new import line: the citation census cites this file by line.
+// `runFull`/`hookEnv`/`home`/`preCompact`/`plantSession`/`setFile`/`tl`/`LIVE`/`DEAD`/`GENERATION` are
+// this file's module-level fixture (a fixture HOME, a stub tmux answering
+// cc-demo-quiet-basin, the row's 36-byte generation file).
+// D-5055 (history-hook-test-scrub-once): ONE scrub for every history hook describe below, spec §10.1: the operator's own
+// session must not reach the hook through `hookEnv`'s `...process.env`, so `CCRC_RECALL_*` and `HISTORY_TEST_*` are blanked.
+const HISTORY_HOOK_SCRUB: Record<string, string> = {
+  TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
+  ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_') || k.startsWith('HISTORY_TEST_')).map((k) => [k, ''])),
+};
+describe('history scope marker: PreCompact records whose context is compacting (spec §5.1, S16)', () => {
+  const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+  const ID = 'demo-quiet-basin';
+  const histDir = (...p: string[]): string => path.join(home, '.ccrc', 'history', ...p);
+  const scopeDir = (): string => histDir('scope');
+  const marker = (id = ID): string => histDir('scope', id);
+  const plantScope = (): void => { fs.mkdirSync(scopeDir(), { recursive: true, mode: 0o700 }); };
+  const cardOff = (): void => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
+  };
+  const historyOff = (): void => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'history-off'), '');
+  };
+  /** PreCompact with this describe's UUID session id: the module's `preCompact` hard-codes `sess-1`. */
+  const pre = (transcript: string, trigger = 'manual', extra: object = {}): object =>
+    ({ ...preCompact(home, transcript, trigger), session_id: SID, ...extra });
+  /** The marker's three fields, asserted to be one line of at most 64 bytes. */
+  const read = (id = ID): { scope: string; sid: string; ms: number } => {
+    const raw = fs.readFileSync(marker(id), 'utf8');
+    expect(Buffer.byteLength(raw), 'the marker is at most 64 bytes').toBeLessThanOrEqual(64);
+    expect(raw.endsWith('\n') && raw.indexOf('\n') === raw.length - 1, 'one line').toBe(true);
+    const [scope, sid, ms] = raw.trimEnd().split(' ');
+    return { scope: scope!, sid: sid!, ms: Number(ms) };
+  };
+  /** Re-point the stub tmux at an id of exactly `n` characters. */
+  const longId = (n: number): string => {
+    const id = 'a'.repeat(n);
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${id}"\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(home, '.cc-sessions', `${id}.generation`), GENERATION);
+    return id;
+  };
+
+  it('S16: with no scope/ directory there is no marker, nothing is created, and stdout and stderr are both empty', () => {
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(histDir()), 'the hook never mkdirs').toBe(false);
+  });
+
+  // The case above cannot see the gate on scope/: without it, the block's write into a missing directory fails
+  // silently and leaves the same nothing behind. What the gate saves is the block's forks, so this case counts them
+  // against the same run under history-off, whose own gate stops the block. compact-card-off keeps the card from
+  // scoping, so CS_SCOPE stays unset and the block, past its gate, would run its own jq, scope and clock.
+  itLinux('S16: with no scope/ directory the gate forks nothing: the same forks as the run under history-off', () => {
+    cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const forks = (): number => {
+      const trace = path.join(home, 'scope-trace.txt');
+      const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork', 'bash', HOOK], {
+        input: JSON.stringify(pre(transcript)), encoding: 'utf8', env: hookEnv(HISTORY_HOOK_SCRUB),
+      });
+      expect(r.status, `strace ran the hook: ${r.stderr}`).toBe(0);
+      const lines = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => l !== '');
+      fs.rmSync(trace);
+      const root = /^(\d+)\s/.exec(lines[0] ?? '')?.[1];
+      expect(root, 'strace traced a fork').toBeDefined();
+      return lines.filter((l) => new RegExp(`^${root}\\s+(?:clone3?|v?fork)\\(`).test(l)).length;
+    };
+    forks();                                              // WARM-UP: a first run may make state no later run repeats
+    const open = forks();
+    historyOff();
+    expect(open, 'the block forked although scope/ is absent').toBe(forks());
+    expect(fs.existsSync(histDir()), 'the hook never mkdirs').toBe(false);
+  }, 60_000);
+
+  it('S16: under compact-card-off a manual compaction is scoped by the marker itself — main <psid> <ms>', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const before = Date.now();
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    const m = read();
+    expect([m.scope, m.sid]).toEqual(['main', SID]);
+    expect(m.ms).toBeGreaterThanOrEqual(before - 1000);
+    expect(m.ms).toBeLessThanOrEqual(Date.now() + 1000);
+  });
+
+  it('S16: the card\'s own verdict is reused — an unconsumed set inside the window makes it ambiguous', () => {
+    plantScope();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    fs.writeFileSync(setFile(), '{}\n');                 // a young canonical set: the card's overlap check
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(read().scope).toBe('ambiguous');
+  });
+
+  it('S16: one live subagent beside a quiet parent is scoped subagent, on the card\'s path and under compact-card-off alike', () => {
+    plantScope();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    runFull(pre(transcript, 'auto'), HISTORY_HOOK_SCRUB);
+    expect(read().scope).toBe('subagent');
+    fs.rmSync(marker());
+    cardOff();
+    runFull(pre(transcript, 'auto'), HISTORY_HOOK_SCRUB);
+    expect(read().scope).toBe('subagent');
+  });
+
+  it('S16: scope rc 1 (no readable transcript) writes no marker', () => {
+    plantScope();
+    expect(runFull(pre(path.join(home, 'missing.jsonl')), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+    cardOff();                                            // the unset arm's own scope run answers rc 1 too
+    expect(runFull(pre(path.join(home, 'missing.jsonl')), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  // W3-1 Task 1C, commit 1: pins the factoring of `_hook_history_scope`'s unset arm into `_hook_history_scope_verdict`
+  // could change. The unset arm (compact-card-off: the card returns before scoping) is the one the factoring moves.
+  it('S16 (W3-1 pin): an ambiguous verdict is written as ambiguous, on the card\'s path and on the unset arm alike, exit 0 and silent', () => {
+    plantScope();
+    // two live subagents: the scope rule's own overlap, with no card-side set file involved
+    const two = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }, { id: 'a2', lines: [tl.user('z')], age: LIVE }] });
+    expect(runFull(pre(two.transcript, 'auto'), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(read().scope).toBe('ambiguous');
+    fs.rmSync(marker());
+    cardOff();                                            // the unset arm: the block parses the payload and scopes itself
+    expect(runFull(pre(two.transcript, 'auto'), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect([read().scope, read().sid]).toEqual(['ambiguous', SID]);
+    // one live subagent beside a LIVE parent: ambiguous by the parent's own liveness
+    fs.rmSync(marker());
+    const live = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: LIVE,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    expect(runFull(pre(live.transcript, 'auto'), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(read().scope).toBe('ambiguous');
+  });
+
+  it('S16 (W3-1 pin): an empty transcript_path writes no marker, exit 0 and silent, on the card\'s path and on the unset arm alike', () => {
+    plantScope();
+    plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre('', 'manual', { transcript_path: '' }), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+    cardOff();
+    expect(runFull(pre('', 'manual', { transcript_path: '' }), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+    // the key absent altogether reads as the same empty path
+    const { transcript_path: _gone, ...bare } = pre('', 'manual') as Record<string, unknown>;
+    expect(runFull(bare, HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  it('S16 (W3-1 pin): an absent trigger on the unset arm is read as auto — one live subagent beside a quiet parent is subagent', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    const { trigger: _gone, ...bare } = pre(transcript, 'auto') as Record<string, unknown>;
+    expect(runFull(bare, HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(read().scope).toBe('subagent');
+  });
+
+  it('an undecided verdict empties a fresh main marker this psid left, and creates nothing where none was', () => {
+    plantScope();
+    fs.writeFileSync(marker(), `main ${SID} ${Date.now()}\n`);
+    expect(runFull(pre(path.join(home, 'missing.jsonl')), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(marker(), 'utf8'), 'the earlier main marker survived an undecided compaction').toBe('');
+  });
+
+  it.skipIf(process.getuid?.() === 0)('S16: a hookstate write that fails leaves no marker and still exits 0, silent', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const reg = path.join(home, '.cc-sessions');
+    fs.chmodSync(reg, 0o500);                             // root writes through 0500, so root skips this
+    try {
+      expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    } finally {
+      fs.chmodSync(reg, 0o700);
+    }
+    expect(fs.existsSync(marker()), 'a marker landed although the hookstate write failed').toBe(false);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a hookstate write that fails empties an older fresh main marker, so a following SessionStart(compact) serves no line', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantScope(); cardOff();
+    fs.writeFileSync(marker(), `main ${SID} ${Date.now()}\n`);  // an earlier main compaction's, still fresh
+    fs.mkdirSync(histDir('card', ID), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(histDir('card', ID, `${SID}.txt`), `${lib.cardLine({ leaf: 'L03a9c1', parent: null })}\n`, { mode: 0o600 });
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const reg = path.join(home, '.cc-sessions');
+    fs.chmodSync(reg, 0o500);                             // the hookstate write fails, and the tail exits there
+    try {
+      expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    } finally {
+      fs.chmodSync(reg, 0o700);
+    }
+    expect(fs.readFileSync(marker(), 'utf8'), 'the older main marker survived a PreCompact that exited at its hookstate write').toBe('');
+    // Once Task 9's reader exists, this is the end-to-end form: an emptied marker serves no line.
+    const r = runFull({ hook_event_name: 'SessionStart', source: 'compact', cwd: home, transcript_path: path.join(home, 't.jsonl'),
+      session_id: SID, prompt_id: 'p1', model: 'claude-opus-5' }, HISTORY_HOOK_SCRUB);
+    expect(r.stdout.includes('History: node '), 'a line served from an emptied marker').toBe(false);
+  });
+
+  it('S16: a CS_SCOPE exported into the pane is never read as this run\'s verdict', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    runFull(pre(transcript, 'auto'), { ...HISTORY_HOOK_SCRUB, CS_SCOPE: 'main' });
+    expect(read().scope).toBe('subagent');
+  });
+
+  it('S2 (marker half): a payload with agent_id writes no marker', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull(pre(transcript, 'manual', { agent_id: 'agent-7' }), HISTORY_HOOK_SCRUB);
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  // D-5054 (history-scope-marker-hardening): the early truncation's main-thread and event tests each need a case that
+  // reds without them. The block's own gate refuses an agent_id payload and a non-PreCompact event too, so only a
+  // marker that was ALREADY there can tell the early line's tests from the block's.
+  it('D-5054: a PreCompact whose payload carries an agent_id leaves a fresh main marker byte for byte intact', () => {
+    plantScope(); cardOff();
+    const fresh = `main ${SID} ${Date.now()}\n`;
+    fs.writeFileSync(marker(), fresh);
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript, 'manual', { agent_id: 'agent-7' }), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(marker(), 'utf8'), 'a subagent thread emptied the main thread\'s marker').toBe(fresh);
+  });
+
+  it('D-5054: a later main-thread event after a main PreCompact leaves the fresh marker intact', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull(pre(transcript), HISTORY_HOOK_SCRUB);
+    const written = fs.readFileSync(marker(), 'utf8');
+    expect(read().scope, 'the PreCompact wrote the marker this case then leaves to a Stop').toBe('main');
+    expect(runFull({ hook_event_name: 'Stop', session_id: SID }, HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(marker(), 'utf8'), 'an event that is not a PreCompact emptied the marker').toBe(written);
+  });
+
+  it('S3 (marker half): history-off present writes no marker', () => {
+    plantScope(); cardOff(); historyOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  it('S8 (marker half): under history-off a PreCompact writes no marker while a SessionStart(clear) still spools its epoch line', () => {
+    plantScope(); cardOff(); historyOff();
+    fs.mkdirSync(histDir('spool'), { recursive: true, mode: 0o700 });
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull(pre(transcript), HISTORY_HOOK_SCRUB);
+    expect(fs.existsSync(marker())).toBe(false);
+    runFull({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, HISTORY_HOOK_SCRUB);
+    expect(fs.readFileSync(histDir('spool', `${ID}.jsonl`), 'utf8')).toContain('"ev":"SessionStart"');
+  });
+
+  it('the id bound is SPOOL_ID_MAX: a 224-char id is marked, a 225-char id is not', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const fits = longId(lib.SPOOL_ID_MAX);
+    runFull(pre(transcript), HISTORY_HOOK_SCRUB);
+    expect(read(fits).scope).toBe('main');
+    const over = longId(lib.SPOOL_ID_MAX + 1);
+    runFull(pre(transcript), HISTORY_HOOK_SCRUB);
+    expect(fs.existsSync(marker(over))).toBe(false);
+  });
+
+  it('an id of . or .. names a directory, so no marker can land and nothing outside scope/ changes', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    for (const id of ['.', '..']) {
+      fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${id}"\n`, { mode: 0o755 });
+      expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    }
+    expect(fs.readdirSync(scopeDir())).toEqual([]);
+    expect(fs.readdirSync(histDir()).sort()).toEqual(['scope']);
+  });
+
+  it('a session_id that is not a lowercase UUID writes no marker', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull(pre(transcript, 'manual', { session_id: 'sess-1' }), HISTORY_HOOK_SCRUB);
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  it('a symlink where the marker goes is left alone, and its target is never written', () => {
+    plantScope(); cardOff();
+    const target = path.join(home, 'elsewhere.txt');
+    fs.writeFileSync(target, 'keep\n');
+    fs.symlinkSync(target, marker());
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(target, 'utf8')).toBe('keep\n');
+    expect(fs.lstatSync(marker()).isSymbolicLink()).toBe(true);
+  });
+
+  // B1's F24 rows, for the marker (spec §5.1 and S16; B1's D-4418 rule, ruled R-B3-fifo). A
+  // FIFO already standing at scope/<id> passes a test that keeps only `! -L`, and the `>` open then blocks with no
+  // reader, so the run is bounded: a blocked hook is killed at the deadline, never left to hang the suite.
+  const runBounded = (payload: object): ReturnType<typeof spawnSync> => spawnSync('bash', [HOOK], {
+    input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', env: hookEnv(HISTORY_HOOK_SCRUB),
+  });
+
+  it('a FIFO where the marker goes writes no marker and never blocks: exit 0, silent, the FIFO left as it was', () => {
+    plantScope(); cardOff();
+    execFileSync('mkfifo', [marker()]);
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const r = runBounded(pre(transcript));
+    expect(r.signal, 'the hook blocked opening the FIFO and was killed at the deadline').toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe('');
+    expect(fs.lstatSync(marker()).isFIFO()).toBe(true);
+  }, 30_000);
+
+  it('a symlinked scope/ is neither written nor truncated through', () => {
+    fs.mkdirSync(histDir(), { recursive: true, mode: 0o700 });
+    const elsewhere = path.join(home, 'elsewhere');
+    fs.mkdirSync(elsewhere, { mode: 0o700 });
+    fs.symlinkSync(elsewhere, scopeDir());
+    cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readdirSync(elsewhere), 'the block wrote a marker through a symlinked scope/').toEqual([]);
+    fs.writeFileSync(path.join(elsewhere, ID), 'keep\n');
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(path.join(elsewhere, ID), 'utf8'), 'a file behind a symlinked scope/ was truncated or overwritten').toBe('keep\n');
+  });
+
+  it('CONTROL: an existing regular marker is replaced by this run\'s decided verdict', () => {
+    plantScope(); cardOff();
+    fs.writeFileSync(marker(), `subagent ${SID} ${Date.now() - 60_000}\n`);
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect([read().scope, read().sid]).toEqual(['main', SID]);
+  });
+
+  it('the block sits after the card\'s call and before PostCompact\'s, and its gate forks nothing', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const open = src.indexOf('# >>> history-scope (spec 2026-10-05 §5.1)');
+    const close = src.indexOf('# <<< history-scope');
+    const preCall = src.indexOf('if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi');
+    expect(open, 'no history-scope block').toBeGreaterThan(-1);
+    expect(src.indexOf('# >>> history-scope', open + 1), 'two history-scope blocks').toBe(-1);
+    expect(open, 'the marker must follow the card, whose verdict it reuses').toBeGreaterThan(preCall);
+    expect(close).toBeLessThan(src.indexOf('if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi'));
+    const UNSET = 'unset CS_SCOPE CS_RULE_SCOPE CS_RULE_TRANSCRIPT CS_REFUSED';   // review 1937 F3, and the refusal arm's flag
+    expect(src.split('\n').filter((l) => l.startsWith('unset CS_SCOPE')), 'CS_SCOPE is unset once').toEqual([UNSET]);
+    expect(src, 'unset directly above the card\'s call').toContain(
+      `${UNSET}\nif [[ "$event" == PreCompact ]]; then _hook_compact_refuse || true; fi\nif [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi`);
+    const gate = src.slice(open, close).split('\n').find((l) => l.startsWith('if [[ "$event" == PreCompact && -z "$paid" ]]'));
+    expect(gate, 'the gate line').toBeDefined();
+    expect(gate!.slice(0, gate!.indexOf('; then')), 'the gate forks').not.toMatch(/\$\(|`/);
+    // The early invalidation: below the event case, above every tail exit, builtin-only.
+    const early = src.split('\n').filter((l) => l.startsWith('[[ "$event" == PreCompact && -z "$paid" ]] && [[ -f '));
+    expect(early, 'one early invalidation line').toHaveLength(1);
+    const at = src.indexOf(`\n${early[0]!}\n`);
+    expect(at, 'below the event case').toBeGreaterThan(src.indexOf('\nesac\n'));
+    // The hookstate compose, wherever it is indented (main's dispatch-live gate wraps it in `if [[ -z "$hs_skip" ]]`).
+    const compose = src.search(/\n[ \t]*out=\$\(jq -cn \\\n[ \t]*--argjson v 1 --arg state /);
+    expect(compose, 'the hookstate compose').toBeGreaterThan(-1);
+    expect(at, 'above the hookstate compose and every exit after it').toBeLessThan(compose);
+    expect(early[0], 'the invalidation forks').not.toMatch(/\$\(|`/);
+    // B1's S1 form (its FR2a): a `${…@…}` transformation forks too, since `@P` runs prompt expansion and so command
+    // substitution. The early line, the gate and `_hook_history_scope`'s body spell none (past the gates the body may
+    // fork, but only by the forms its comment names: one jq, the scope rule, the clock).
+    const fnAt = src.indexOf('\n_hook_history_scope() {');
+    expect(fnAt, 'no _hook_history_scope definition').toBeGreaterThan(-1);
+    const fnCode = src.slice(fnAt, src.indexOf('\n}\n', fnAt)).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    // W3-1 Task 1C: the unset arm's jq read and scope call moved into `_hook_history_scope_verdict`, so its body is scanned too.
+    const verdictAt = src.indexOf('\n_hook_history_scope_verdict() {');
+    expect(verdictAt, 'no _hook_history_scope_verdict definition').toBeGreaterThan(-1);
+    expect(verdictAt, 'the verdict function sits below the compact-arm emit anchor (the tail rule)').toBeGreaterThan(src.indexOf('# @anchor compact-arm-emit-call'));
+    expect(verdictAt, 'the verdict function sits inside the history-scope block').toBeGreaterThan(open);
+    expect(verdictAt).toBeLessThan(close);
+    const verdictCode = src.slice(verdictAt, src.indexOf('\n}\n', verdictAt)).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(`${early[0]!}\n${gate!}\n${fnCode}\n${verdictCode}`.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the marker lines (@P forks)').toBeNull();
+    // B1's D-4418 rule (spec §5.1): the type test is the line DIRECTLY above the write,
+    // so nothing but builtins runs between the test and the `>`; the gate and the early line refuse a symlinked scope/.
+    const fnLines = fnCode.split('\n');
+    const w = fnLines.findIndex((l) => l.includes('> "$f"; } 2>/dev/null'));
+    expect(w, 'no marker write').toBeGreaterThan(0);
+    expect(fnLines[w - 1]!.trim(), 'the regular-file test sits directly above the write, builtins only (D-5434\'s positive form, W4)')
+      .toBe('if [[ -L "$f" || -d "$f" || -p "$f" || -S "$f" || -b "$f" || -c "$f" ]]; then return 0; fi');
+    // Either spelling of the directory: Task 9 re-points these lines to its HISTORY_SCOPE_DIR constant.
+    const notLinkedScope = /&& ! -L "(?:\$HOME\/\.ccrc\/history\/scope|\$HISTORY_SCOPE_DIR)" \]\]/;
+    expect(gate, 'the gate refuses a symlinked scope/').toMatch(notLinkedScope);
+    expect(early[0], 'the early line refuses a symlinked scope/').toMatch(notLinkedScope);
+  });
+});
+// ── ccrc history: the card line SessionStart(compact) folds into the compact subject (history spec 2026-10-05 §8.6, §8.9; W1-B3 task 9) ──
+// APPENDED, with NO new import line: the citation census cites this file by line.
+// The history lib is reached by dynamic import. `run`/`runFull`/`hookEnv`/`card`/`home`/
+// `HOOK`/`HELPER_SRC`/`GENERATION`/`setFile`/`cardFile`/`cardTree`/`plantSession`/
+// `preCompact`/`LIVE`/`DEAD`/`tl` are this file's module-level fixture.
+describe('history card line: SessionStart(compact) serves the sweep\'s prediction to a main compaction (spec §8.6)', () => {
+  const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+  const OTHER = '9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b4';
+  const G2 = '0189abcd-1234-5678-9abc-0123456789ff';
+  const ID = 'demo-quiet-basin';
+  const ROOT = process.getuid?.() === 0;
+  let lib: typeof import('../../ccd/history/lib.mjs');
+  let LINE = '';
+  beforeEach(async () => {
+    lib = await import('../../ccd/history/lib.mjs');
+    LINE = lib.cardLine({ leaf: 'L03a9c1', parent: 'N7c1e2f' });
+    // A child row (the stub pane names `demo-quiet-basin`): the D-5301 role subject is silent, so what each case reads is
+    // the card line alone, as main's compact-card cases measure their subject (it rides the standing card, not the line's clip).
+    fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.child`), '');
+  });
+  const histDir = (...p: string[]): string => path.join(home, '.ccrc', 'history', ...p);
+  const reg = (f: string): string => path.join(home, '.cc-sessions', f);
+  /** The two directories the sweep makes (Task 5); the hook never makes them. */
+  const plantDirs = (id = ID): void => {
+    fs.mkdirSync(histDir('scope'), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(histDir('card', id), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(reg(`${id}.child`), '');   // the id's own child row: the D-5301 role subject stays silent (beforeEach above)
+  };
+  /** What Task 8's marker writes, planted directly: `<scope> <psid> <ms>`. */
+  const mark = (text = `main ${SID} ${Date.now()}`, id = ID): void => fs.writeFileSync(histDir('scope', id), `${text}\n`);
+  const cardPath = (sid = SID, id = ID): string => histDir('card', id, `${sid}.txt`);
+  /** The whole fixture of a servable compaction: both directories, a fresh main marker, the prediction. */
+  const plantAll = (text?: string, id = ID): void => {
+    plantDirs(id); mark(undefined, id);
+    fs.writeFileSync(cardPath(SID, id), text ?? `${LINE}\n`, { mode: 0o600 });
+  };
+  const offFile = (name: string): string => path.join(home, '.ccrc', name);
+  const touchOff = (name: string): void => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(offFile(name), '');
+  };
+  /** SessionStart(compact) with a UUID session id: the module's `compactStart` hard-codes `sess-1`. */
+  const start = (extra: object = {}): object =>
+    ({ hook_event_name: 'SessionStart', source: 'compact', cwd: home, transcript_path: path.join(home, 't.jsonl'),
+      session_id: SID, prompt_id: 'p1', model: 'claude-opus-5', ...extra });
+  /** The additionalContext the hook printed, or null when it printed nothing; silent stderr asserted. */
+  const served = (payload: object = start(), env: Record<string, string> = {}): string | null => {
+    const r = runFull(payload, { ...HISTORY_HOOK_SCRUB, ...env });
+    expect(r.stderr, 'the hook is silent on stderr').toBe('');
+    return r.stdout === '' ? null : card(r.stdout);
+  };
+  const hasLine = (out: string | null): boolean => out !== null && out.includes('History: node ');
+  /** A compact card pair as `_hook_compact_pre` leaves it: the shape of the describe-local `plantPair` above, whose
+   *  serve arm reads only the set's nonce. A fresh nonce per pair, because a served nonce is never served again. */
+  let pairs = 0;
+  const plantCompactCard = (text: string): void => {
+    pairs += 1;                                  // a fresh nonce per pair: a served nonce is never served again
+    const nonce = `compact-${pairs}-1-2-3`;
+    fs.writeFileSync(setFile(), JSON.stringify({ v: 1, at: 1, nonce, scope: 'main', agent: null, transcript: '/t.jsonl',
+      parentLive: null, liveAgents: 0, cwd: null, built: null, fresh: null, steered: false, files: null, stats: null }) + '\n');
+    fs.writeFileSync(cardFile(), `${nonce}\n${text}\n`);
+  };
+  /** The helper's own footer, read from its source rather than retyped. */
+  const FOOTER = (): string => /^const FOOTER = '(.*)';$/m.exec(fs.readFileSync(HELPER_SRC, 'utf8'))![1]!;
+  /** ASCII, like everything else in the synthetic card below, so its width is the same in every locale. */
+  const HEADER = 'graphify card - this context\'s working set at compaction, from graphify-out/ (built at deadbeef, fresh):';
+  /** A compact card of exactly `n` chars, shaped as `renderCard` shapes a truncated one: header, a row, the
+   *  `(+k files not shown)` line, the blast line, and the helper's footer last. All ASCII, so `n` chars are `n`
+   *  bytes and the hook's `${#…}` reads `n` under any locale; only the history line's width depends on it. */
+  const compactCardOf = (n: number): string => {
+    const row = (k: number): string => `- server/src/a.ts [touched] - symbols ${'s'.repeat(k)}`;
+    const parts = (k: number): string[] => [HEADER, row(k), '(+4 files not shown)',
+      'Blast radius: 0 files import or call something in these 5 files.', FOOTER()];
+    const text = parts(n - parts(0).join('\n').length).join('\n');
+    expect(text.length).toBe(n);
+    return text;
+  };
+  /** A BASH_ENV that strips the dynamic EPOCHREALTIME builtin and, given a value, plants a plain one. */
+  const epochEnv = (value: string | null): string => {
+    const f = path.join(home, 'epochrealtime.bash');
+    fs.writeFileSync(f, value === null ? 'unset EPOCHREALTIME\n' : `unset EPOCHREALTIME\nEPOCHREALTIME='${value}'\n`);
+    return f;
+  };
+
+  it('serves the prediction, alone, as the compact subject of a main compaction', () => {
+    plantAll();
+    expect(served()).toBe(LINE);
+  });
+
+  it('a parent-less line and a 20-hex line pass the grammar too', () => {
+    plantAll(`${lib.cardLine({ leaf: 'L03a9c1', parent: null })}\n`);
+    expect(served()).toBe(lib.cardLine({ leaf: 'L03a9c1', parent: null }));
+    const long = lib.cardLine({ leaf: `L${'0123456789abcdef0123'}`, parent: `N${'fedcba9876543210fedc'}` });
+    fs.writeFileSync(cardPath(), `${long}\n`);
+    expect(served()).toBe(long);
+  });
+
+  // THE UNIT. `${#…}` and the emitter's `${2:0:N}` count in the hook's locale: bytes under C, characters under a
+  // UTF-8 locale. The history line carries `…` and `·`, so its width is 109 bytes but 103 characters, and the
+  // fold's room test must be in the emitter's own unit or a fold could still be cut. Each case below pins a
+  // locale and measures the line in that locale's unit.
+  it('C18: a reserved 3,487-char compact card plus the line — the line first, the header second, the footer last, within 4,000, one JSON line', () => {
+    plantAll();
+    const reserved = compactCardOf(4000 - (lib.CARD_LINE_MAX + 1));
+    plantCompactCard(reserved);
+    const out = served(start(), { LC_ALL: 'C' })!;   // `card` asserts exactly one stdout line, a SessionStart envelope
+    const lines = out.split('\n');
+    expect(lines[0]).toBe(LINE);
+    expect(lines[1]).toBe(HEADER);
+    expect(lines[lines.length - 1]).toBe(FOOTER());
+    expect(out).toBe(`${LINE}\n${reserved}`);
+    expect(Buffer.byteLength(out), 'within the compact clip in its strictest unit').toBeLessThanOrEqual(4000);
+  });
+
+  it('C18: a 4,000-char card rendered before install leaves no room — no history line, the card intact', () => {
+    plantAll();
+    const full = compactCardOf(4000);
+    plantCompactCard(full);
+    expect(served(start(), { LC_ALL: 'C' })).toBe(full);
+  });
+
+  it.each([
+    ['C', (l: string) => Buffer.byteLength(l)],
+    ...(IS_DARWIN ? [] : [['C.UTF-8', (l: string) => l.length] as const]),
+  ] as const)('C18: under LC_ALL=%s the room test is inclusive — 4000 - line - 1 folds, one more does not', (locale, width) => {
+    plantAll();
+    const fits = compactCardOf(4000 - width(LINE) - 1);
+    plantCompactCard(fits);
+    expect(served(start(), { LC_ALL: locale })).toBe(`${LINE}\n${fits}`);
+    plantAll();
+    const over = compactCardOf(4000 - width(LINE));
+    plantCompactCard(over);
+    expect(served(start(), { LC_ALL: locale })).toBe(over);
+  });
+
+  it('with standing cards present the compact positional still begins with the line', () => {
+    const tree = cardTree();
+    plantAll();
+    const out = served(start({ cwd: tree }))!;
+    expect(out).toContain('graphify: this tree has a knowledge graph');
+    expect(out.slice(out.indexOf('History: node '))).toBe(LINE);
+    expect(out.charAt(out.indexOf('History: node ') - 1), 'one space joins the standing text and the compact subject').toBe(' ');
+  });
+
+  it('C19: independent of compact-card-off — the line alone is served while the compact card is silenced', () => {
+    plantAll();
+    plantCompactCard(compactCardOf(500));
+    touchOff('compact-card-off');
+    expect(served()).toBe(LINE);
+    expect(fs.existsSync(cardFile()), 'compact-card-off leaves the compact card on disk').toBe(true);
+  });
+
+  it('C19 and S3 (card half): history-off present serves no line', () => {
+    plantAll();
+    touchOff('history-off');
+    expect(served()).toBeNull();
+  });
+
+  it('C20: a prediction for another uuid serves nothing', () => {
+    plantDirs(); mark();
+    fs.writeFileSync(cardPath(OTHER), `${LINE}\n`);
+    expect(served()).toBeNull();
+  });
+
+  it.each([
+    ['a trailing LF is stripped and the line served', (l: string) => `${l}\n`, true],
+    ['no trailing LF', (l: string) => l, true],
+    ['ONE trailing LF is stripped, not two', (l: string) => `${l}\n\n`, false],
+    ['an extra line', (l: string) => `${l}\nextra\n`, false],
+    ['a control character', (l: string) => `${l.slice(0, 20)}${String.fromCharCode(1)}${l.slice(20)}\n`, false],
+    ['free text after History: ', () => 'History: run rm -rf ~ now\n', false],
+    ['text after the describe id', (l: string) => `${l} && echo hi\n`, false],
+    ['over 512 chars', (l: string) => `${l}${' '.repeat(600)}\n`, false],
+    ['an upper-case id', (l: string) => `${l.replace('L03a9c1… ', 'L03A9C1… ')}\n`, false],
+    ['a 5-hex prefix', () => 'History: node L03a9c… (this compaction) · ~/.local/bin/ccrc history describe L03a9c\n', false],
+  ] as const)('C21: %s', (_what, text, ok) => {
+    plantAll(text(LINE));
+    expect(served()).toBe(ok ? LINE : null);
+  });
+
+  it('C21: a FIFO at the card path is never opened, and the hook exits at once', () => {
+    plantDirs(); mark();
+    execFileSync('mkfifo', [cardPath()]);
+    const r = spawnSync('bash', [HOOK], {
+      input: JSON.stringify(start()), encoding: 'utf8', timeout: 20_000, killSignal: 'SIGKILL', env: hookEnv(HISTORY_HOOK_SCRUB),
+    });
+    expect(r.status, 'the hook blocked on the FIFO').toBe(0);
+    expect(r.stdout).toBe('');
+  }, 30_000);   // above the spawn's own 20 s deadline, so a blocked hook reds by the assertion above, not by vitest's default
+
+  it('C22: the line alone stamps no served marker', () => {
+    plantAll();
+    expect(served()).toBe(LINE);
+    expect(fs.readdirSync(path.join(home, '.cc-sessions')).filter((n) => n.startsWith(`.${ID}.compactserved.`))).toEqual([]);
+  });
+
+  // The commonest real shape (review of the landing merge): a manual session, which D-5301 makes its project's
+  // coordinator (no `.child` row, no `.hold`). It gets the role subject AND the line: the role rides the standing card,
+  // the line the compact subject, and the emitter joins the two with one space. The baseline is the same session with
+  // no prediction planted, so the role subject is shown to be the hook's own, unchanged by the line beside it.
+  it('a manual session (no child row, no hold: a coordinator under D-5301) gets its role subject and the card line together', () => {
+    const child = path.join(home, '.cc-sessions', `${ID}.child`);
+    fs.rmSync(child, { force: true });
+    expect(fs.existsSync(path.join(home, '.cc-sessions', `${ID}.hold`)), 'no hold row').toBe(false);
+    const roleOnly = served();
+    expect(roleOnly, 'the role subject alone, before any prediction').toMatch(/^ccrc-role: You are still this project's coordinator\./);   // a compaction gets the short reminder (D-8142)
+    expect(hasLine(roleOnly), 'no line without a prediction').toBe(false);
+    plantAll();
+    fs.rmSync(child, { force: true });   // plantDirs plants the child row; this case is the session without one
+    expect(LINE, 'the line keeps its grammar').toMatch(lib.CARD_LINE_RE);
+    expect(LINE.length, 'the line stays under its cap').toBeLessThanOrEqual(lib.CARD_LINE_MAX);
+    expect(served(), 'the role subject, unchanged, then the line').toBe(`${roleOnly} ${LINE}`);
+  });
+
+  const MARKERS: ReadonlyArray<readonly [string, () => string]> = [
+    ['subagent', () => `subagent ${SID} ${Date.now()}`],
+    ['ambiguous', () => `ambiguous ${SID} ${Date.now()}`],
+    ['another psid', () => `main ${OTHER} ${Date.now()}`],
+    ['older than COMPACT_CARD_MAX_AGE', () => `main ${SID} ${Date.now() - 1_201_000}`],
+    ['in the future', () => `main ${SID} ${Date.now() + 60_000}`],
+    // `empty` is refused by two guards at once (the scope-word test and the ms digit test), so it is defence in depth, as
+    // is the scope read's `_ct_read … || return 0`: `_ct_read` empties CT_V before it fails and the prefix test refuses an
+    // empty value, so no input can red that fallback's removal (D-5056).
+    ['empty', () => ''],
+    ['a bare ms', () => `${Date.now()}`],
+    ['a non-numeric ms', () => `main ${SID} soon`],
+  ];
+  it.each(MARKERS)('C37: a scope marker reading %s serves no line', (_what, text) => {
+    plantAll();
+    mark(text());
+    expect(served()).toBeNull();
+  });
+
+  it('C37: a marker inside the age bound serves', () => {
+    plantAll();
+    mark(`main ${SID} ${Date.now() - 1_190_000}`);
+    expect(served()).toBe(LINE);
+  });
+
+  it('C37: end to end — a main compaction serves, a subagent\'s does not (Task 8 writes the marker)', () => {
+    plantDirs();
+    fs.writeFileSync(cardPath(), `${LINE}\n`);
+    const main = plantSession({ sid: SID, lines: [tl.user('x')] });
+    runFull({ ...preCompact(home, main.transcript, 'manual'), session_id: SID }, HISTORY_HOOK_SCRUB);
+    expect(served(start({ transcript_path: main.transcript }))).toBe(LINE);
+    fs.rmSync(setFile(), { force: true });       // PostCompact's to consume; left, it reads as an overlap
+    const sub = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    runFull({ ...preCompact(home, sub.transcript, 'auto'), session_id: SID }, HISTORY_HOOK_SCRUB);
+    expect(fs.readFileSync(histDir('scope', ID), 'utf8')).toMatch(/^subagent /);
+    expect(served(start({ transcript_path: sub.transcript }))).toBeNull();
+  });
+
+  it('S2 (card half): a SessionStart(compact) payload with agent_id serves no line', () => {
+    plantAll();
+    expect(served(start({ agent_id: 'agent-7' }))).toBeNull();
+  });
+
+  it('only a compact SessionStart serves: startup, resume, clear and fork (spooled from B2, ruled Q16) never read the prediction', () => {
+    plantAll();
+    for (const source of ['startup', 'resume', 'clear', 'fork']) expect(hasLine(served(start({ source }))), source).toBe(false);
+  });
+
+  it('S8 (card half): under history-off a SessionStart(clear) still spools its epoch line and prints no card line', () => {
+    plantAll();
+    fs.mkdirSync(histDir('spool'), { recursive: true, mode: 0o700 });
+    touchOff('history-off');
+    expect(hasLine(served(start({ source: 'clear' })))).toBe(false);
+    expect(fs.readFileSync(histDir('spool', `${ID}.jsonl`), 'utf8')).toContain('"src":"clear"');
+  });
+
+  it('the id bound is SPOOL_ID_MAX: a 224-char id is served, a 225-char id is not', () => {
+    for (const [n, ok] of [[lib.SPOOL_ID_MAX, true], [lib.SPOOL_ID_MAX + 1, false]] as const) {
+      const id = 'a'.repeat(n);
+      fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${id}"\n`, { mode: 0o755 });
+      plantAll(undefined, id);
+      expect(served(), `${n} chars`).toBe(ok ? LINE : null);
+    }
+  });
+
+  it('a session_id that is not a lowercase UUID serves nothing, even beside a marker and a file keyed on it', () => {
+    plantDirs();
+    mark(`main sess-1 ${Date.now()}`);
+    fs.writeFileSync(cardPath('sess-1'), `${LINE}\n`);
+    expect(served(start({ session_id: 'sess-1' }))).toBeNull();
+  });
+
+  it.each([
+    ['unset', null],
+    ['malformed', 'not-a-clock'],
+  ] as const)('EPOCHREALTIME %s serves no line and never forks a clock', (_what, value) => {
+    plantAll();
+    expect(served(start(), { BASH_ENV: epochEnv(value) })).toBeNull();
+  });
+
+  // B1's F37 shape (its spool block): each expansion of EPOCHREALTIME reads the clock anew, so the reader reads it ONCE.
+  // A DEBUG trap (`set -T` carries it into the function) hands the command whose text matches `match` a valid reading,
+  // 1700000000.999999, and every other command one with no fraction, 1700000001. The first case matches the grammar test
+  // (`=~ ^[123456789][0123456789]{0,11}`, the reader's own text since D-5064). Read once, the reader tests and slices the
+  // no-fraction reading and serves nothing; the tested reading alone would put the marker 101 ms in the future and serve
+  // nothing either. Only a reader that tests one reading and slices another serves: its `now` takes 1700000001's digits as
+  // the fraction. The CONTROL matches the one read instead (`t="${EPOCHREALTIME:-}"`): the trap's valid reading is then
+  // the reading the reader holds, and the marker 499 ms before it is served, so the trap is shown to hand it out.
+  const epochTrap = (match: string): string => {
+    const trapFile = path.join(home, 'epochtrap.bash');
+    fs.writeFileSync(trapFile, 'set -T\nunset EPOCHREALTIME\nEPOCHREALTIME=1700000001\n'
+      + `trap 'case $BASH_COMMAND in ${match}) EPOCHREALTIME=1700000000.999999 ;; *) EPOCHREALTIME=1700000001 ;; esac' DEBUG\n`);
+    return trapFile;
+  };
+  it('EPOCHREALTIME is read once: a clock that moves between the test and the slice serves no mis-aged line', () => {
+    plantAll();
+    mark(`main ${SID} 1700000001100`);
+    expect(served(start(), { BASH_ENV: epochTrap('*"=~ ^[123456789][0123456789]{0,11}"*') }), 'a line served on a clock no single reading gave').toBeNull();
+  });
+
+  it('EPOCHREALTIME is read once (CONTROL): the trap hands the valid reading to the one read, and the line is served', () => {
+    plantAll();
+    mark(`main ${SID} 1700000000500`);
+    expect(served(start(), { BASH_ENV: epochTrap('*EPOCHREALTIME*') }), 'the trap\'s valid reading was not handed out').toBe(LINE);
+  });
+
+  // RECALL-OFF PARITY (spec §9.7, §8.2, C68; B2's D-4680 (history-recall-off-generation); coordinator ruling
+  // R-recalloff-parity): every row runs the hook, and its expectation is the CLI's own decision over the
+  // fixture, so the card and `ccrc history` can never put one family in two eval arms. The CLI resolves the
+  // generation as B2's readContext does: the env's, else the registry's (lib resolveGeneration), else, under
+  // 'newest', the id's newest family's ('' for a legacy family or none), which only the store knows. The hook
+  // cannot read the store, so there it reads the record the sweep writes beside the prediction,
+  // card/<id>/<psid>.gen (Task 5 pins that record against B2's familiesOf); this fixture's record IS the
+  // store's newest family. With no usable record the CLI's answer is the store's, which the hook cannot know:
+  // a recall-off file that exists then withholds the line (fail closed), and an absent or unreadable one
+  // answers as it does for the CLI whatever the generation.
+  // A fail-closed row (coordinator ruling R-recalloff-trim, named under R-recalloff-parity): the hook trims ASCII whitespace only, where
+  // B2's presenceOf decodes UTF-8 and trims with String.prototype.trim, which also strips U+00A0 and U+FEFF. So a
+  // value that holds a character outside the generation grammar after the hook's trim withholds the line: the
+  // `G-nbsp` and `G-bom` rows read OFF in the CLI (exit 8) and withhold here. The characters are built from their
+  // code points, never written as escapes or as themselves, so no write can turn them into something else.
+  const NBSP_G = `${String.fromCharCode(0xa0)}${GENERATION}\n`;
+  const BOM_G = `${String.fromCharCode(0xfeff)}${GENERATION}\n`;
+  const EMSP_G = `${GENERATION}${String.fromCharCode(0x2003)}\n`;   // D-5064: U+2003 after G; glibc's UTF-8 [:space:] takes it
+  type Reg = 'fifo' | 'G-lf' | 'G-ws' | 'blank-ws' | 'G-emsp' | 'G-nul' | 'G2-nul' | 'G2-nul-split' | 'nul-only' | 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G' | 'junk' | 'G-wide' | 'G-nbsp' | 'empty' | 'blank-wide' | 'G2-wide-junk' | 'dangling';
+  type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G' | 'unsearchable' | 'parent-file' | 'G2-tabcr' | 'link-loop' | 'link-notdir' | 'link-000' | 'link-dangling' | 'G-nul';
+  type Rec = 'fifo' | 'G-nbsp' | 'G-ws' | 'G-emsp' | 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G' | 'G-nul' | 'G-wide';
+  /** B1's Presence, as a type-only import expression: this file gains no import line (the census cites it by line). */
+  type Pres = import('../../ccd/history/lib.mjs').Presence<string>;
+  /** A row is an AGREE row (the hook's verdict is the CLI's) unless its sixth cell reads 'fail-closed': the hook
+   *  withholds where the CLI serves, the one difference R-recalloff-parity allows (it never serves where the CLI
+   *  answers exit 8), named in §8.2 and §8.6 check 2. */
+  const PARITY: ReadonlyArray<readonly [string, string, Reg, Off, Rec, 'fail-closed'?]> = [
+    ['no recall-off file', GENERATION, 'G', 'absent', 'G'],
+    ['recall-off names this generation', GENERATION, 'G', 'G', 'G'],
+    ['recall-off names it inside whitespace', GENERATION, 'G', 'G-padded', 'G'],
+    // Ruling RC4: 130 spaces push the generation past the hook's CCRC_ID_MAX-char read, inside the CLI's 4,096 bytes.
+    ['130 spaces followed by the resolved generation G', GENERATION, 'G', 'G-wide', 'G'],
+    // Ruling R-recalloff-trim: the CLI's trim strips each, so it reads G and exits 8; the hook withholds.
+    ['a no-break space before the resolved generation G', GENERATION, 'G', 'G-nbsp', 'G'],
+    ['a byte-order mark before the resolved generation G', GENERATION, 'G', 'G-bom', 'G'],
+    ['recall-off names another generation (stale)', GENERATION, 'G', 'G2', 'G'],
+    // The hook's ASCII trim strips both ends and every one of tab, CR, LF, VT and FF: a stale value inside tab, space and CR
+    // is still stale (the CLI trims it to G2 and recalls); a trim that misses one end or one character withholds instead.
+    ['another generation inside tab, space and CR whitespace (stale)', GENERATION, 'G', 'G2-tabcr', 'G'],
+    ['an empty recall-off file beside a generation', GENERATION, 'G', 'empty', 'G'],
+    ['an unreadable recall-off file', GENERATION, 'G', 'unreadable', 'G'],
+    ['a directory at recall-off/<id>', GENERATION, 'G', 'dir', 'G'],
+    ['a symlink at recall-off/<id>', GENERATION, 'G', 'symlink-G', 'G'],
+    // D-5060 (history-card-recall-off-dir-unreadable-is-off): the CLI opens recall-off/<id> and reads EACCES (the directory
+    // cannot be searched) or ENOTDIR (a file where the directory goes) as UNREADABLE, so off (exit 8); the hook agrees.
+    ['recall-off/ itself at mode 000 (cannot be searched)', GENERATION, 'G', 'unsearchable', 'G'],
+    ['a regular file where the recall-off/ directory goes', GENERATION, 'G', 'parent-file', 'G'],
+    // F5 of review 476 (D-5060): recall-off/ itself a link. The CLI opens through it and reads ELOOP, ENOTDIR and EACCES
+    // as UNREADABLE (off); builtins cannot tell those from ENOENT, so the hook withholds on any link (RV9 forbids one).
+    ['recall-off/ a link that loops on itself (ELOOP)', GENERATION, 'G', 'link-loop', 'G'],
+    ['recall-off/ a link through a regular file (ENOTDIR)', GENERATION, 'G', 'link-notdir', 'G'],
+    ['recall-off/ a link into a directory at mode 000 (EACCES)', GENERATION, 'G', 'link-000', 'G'],
+    ['recall-off/ a dangling link (fail-closed: the CLI reads ENOENT as absent and recalls)', GENERATION, 'G', 'link-dangling', 'G', 'fail-closed'],
+    ['a malformed env generation falls back to .generation (named)', 'not-a-uuid', 'G', 'G', 'G'],
+    ['a malformed env generation falls back to .generation (stale)', 'not-a-uuid', 'G', 'G2', 'G'],
+    ['the env generation wins over .generation (named)', GENERATION, 'G2', 'G', 'G'],
+    ['the env generation wins over .generation (stale)', GENERATION, 'G2', 'G2', 'G'],
+    // R-recalloff-parity: no env or registry generation, so the CLI compares with the newest family's generation.
+    // No resolvable generation and an empty file: the CLI compares '' with '' (a legacy newest family, or a store
+    // holding no family of the id, which Task 5's record writes the same way) and exits 8; the hook agrees.
+    ['a legacy newest family recorded empty and an empty recall-off file', '', 'absent', 'empty', 'legacy'],
+    ['the newest family recorded G and an empty recall-off file reads stale', '', 'absent', 'empty', 'G'],
+    ['no env or registry generation and recall-off names the recorded newest family', '', 'absent', 'G', 'G'],
+    ['recall-off names G while the recorded newest family is G2', '', 'absent', 'G', 'G2'],
+    ['an unreadable .generation is unusable: the hook withholds and the CLI answers exit 8 too', '', 'unreadable', 'G', 'G'],
+    // D-5063: the record decides ONLY when .generation is absent or empty. One the hook cannot read as a UUID (linked,
+    // unreadable, a full read window, any non-UUID value) is unusable, and a recall-off file that exists withholds.
+    ['a symlinked .generation is unusable, recall-off names the recorded G2', '', 'symlink-G', 'G2', 'G2'],
+    ['a symlinked .generation is unusable, recall-off is stale (fail-closed: the CLI recalls)', '', 'symlink-G', 'G', 'G2', 'fail-closed'],
+    ['a malformed .generation, recall-off names the recorded G', '', 'junk', 'G', 'G'],
+    ['a malformed .generation, recall-off is stale (fail-closed: the CLI recalls)', '', 'junk', 'G2', 'G', 'fail-closed'],
+    ['an unreadable .generation, recall-off is stale (fail-closed: the CLI recalls)', '', 'unreadable', 'G2', 'G', 'fail-closed'],
+    // F3 of review 476: a .generation the hook's CCRC_ID_MAX-char window cannot hold (or a no-break space it will not
+    // trim) is G to the CLI, which reads 4,096 bytes and trims in JS. recall-off names G, the record names G2: the CLI
+    // answers exit 8, so a hook that fell back to the record would serve.
+    ['a .generation padded past the read window, recall-off names G, the record G2', '', 'G-wide', 'G', 'G2'],
+    ['a .generation behind a no-break space, recall-off names G, the record G2', '', 'G-nbsp', 'G', 'G2'],
+    ['a .generation padded past the read window, recall-off is stale (fail-closed: the CLI recalls)', '', 'G-wide', 'G2', 'G', 'fail-closed'],
+    // D-5064 (macOS CI): this row holds on every platform. glibc's [:space:] leaves U+00A0 out and Darwin's takes it, but the
+    // reader trims the probe's raw read of ASCII whitespace only, never `_ct_read`'s class, so both read a value that is no UUID.
+    // The CLI's JS trim strips U+00A0 and reads G, so the row is fail-closed on both. The U+2003 cases below pin the widening locale.
+    ['a .generation behind a no-break space, recall-off is stale (fail-closed: the CLI recalls)', '', 'G-nbsp', 'G2', 'G', 'fail-closed'],
+    // D-5064: the reader trims a generation of ASCII whitespace itself (the probe's raw read, `$ws`), both ends: padded still reads as G
+    // (the registry wins over the record, so recall-off naming the record's G2 is stale and the line serves), and a value of ASCII
+    // whitespace only is none, so the record decides.
+    ['a .generation of G then LF (the registry wins over the record)', '', 'G-lf', 'G2', 'G2'],
+    ['a .generation inside tab, space, CR and LF whitespace (the registry wins over the record)', '', 'G-ws', 'G2', 'G2'],
+    ['a generation record inside tab, space, CR and LF whitespace is the newest family G, recall-off names G', '', 'absent', 'G', 'G-ws'],
+    ['a generation record inside tab, space, CR and LF whitespace is the newest family G, recall-off is stale', '', 'absent', 'G2', 'G-ws'],
+    ['an all-ASCII-whitespace .generation is none: the record decides (stale)', '', 'blank-ws', 'G2', 'G'],
+    ['a .generation of whitespace only past the read window (fail-closed: the CLI recalls)', '', 'blank-wide', 'G2', 'G', 'fail-closed'],
+    // A window that FILLS is unusable even with a UUID inside it: the CLI trims all 4,096 bytes, finds junk after the
+    // padding, and falls to the newest family (the record G, which recall-off names: exit 8).
+    ['a .generation holding G2 in a full read window, junk beyond it, recall-off names the recorded G', '', 'G2-wide-junk', 'G', 'G'],
+    ['a dangling-link .generation is unusable, recall-off is stale (fail-closed: the CLI recalls)', '', 'dangling', 'G2', 'G', 'fail-closed'],
+    // D-5063 (C4 of fix round 1): `read -N` drops a NUL and does not count it, so a .generation holding one read as the
+    // UUID around it. The CLI keeps the NUL (presenceOf's trim does not strip U+0000), finds no UUID and resolves the
+    // newest family's generation, the record. A bounded `read -d ''` finds the NUL, and the hook withholds.
+    ['a .generation of G2 then a NUL, recall-off names the recorded G (the hook once read G2 and served)', '', 'G2-nul', 'G', 'G'],
+    ['a .generation of G then a NUL, recall-off is stale (fail-closed: the CLI recalls)', '', 'G-nul', 'G2', 'G', 'fail-closed'],
+    ['a NUL between two halves that join into a UUID, recall-off names the recorded G', '', 'G2-nul-split', 'G', 'G'],
+    ['a NUL-only .generation (once empty to the hook, so the record decided), recall-off is stale (fail-closed: the CLI recalls)', '', 'nul-only', 'G2', 'G', 'fail-closed'],
+    ['a NUL-only .generation, recall-off names the recorded G', '', 'nul-only', 'G', 'G'],
+    ['a record holding G and a NUL is no record', '', 'absent', 'G2', 'G-nul'],
+    // D-5063 (review 479 F1): a record padded past the read window would read as empty (legacy) from `_ct_read`, which holds only the
+    // first CCRC_ID_MAX characters. The CLI resolves the newest family, G, and recall-off names it: exit 8. A hook that took the record
+    // for empty would compare '' with G and serve. Against both shapes, a window-filling pad and a NUL, the record's one guard is the
+    // bounded NUL probe (`read -d '' -n CCRC_ID_MAX`), which answers rc 0 on either, so it withholds both; the value it tests is the probe's own
+    // read, ASCII-trimmed, never `_ct_read`'s `CT_V` (D-5064). The record spells no window test of its own.
+    ['a generation record padded past the read window, recall-off names G', '', 'absent', 'G', 'G-wide'],
+    ['a generation record padded past the read window, recall-off is stale (fail-closed: the CLI recalls)', '', 'absent', 'G2', 'G-wide', 'fail-closed'],
+    // D-5064 (review 495 F2): the record arm trims the probe's raw read of ASCII whitespace only, so U+00A0 stays and fails the
+    // grammar, where the CLI's JS trim strips it and reads G (stale beside G2: it recalls). A record that tested `_ct_read`'s CT_V
+    // instead would trim U+00A0 on a libc whose [:space:] takes it (Darwin's, measured on the `.generation` twin by the macOS leg
+    // that 116663ad5 answers) and serve, so under a UTF-8 runner locale (the row inherits the runner's) this row would red there for
+    // that mutant, as the U+2003 case does on glibc: argued, not measured. On glibc it pins only the withhold; the macOS leg
+    // (`test-macos`) proves the withhold there, never the mutant's red.
+    ['a generation record behind a no-break space, recall-off is stale (fail-closed: the CLI recalls)', '', 'absent', 'G2', 'G-nbsp', 'fail-closed'],
+    // D-5063 (review 495 F1, review 503 F2 and F5): `.generation`'s `(( CT_RAWN >= CCRC_ID_MAX ))` and the record's `_ct_read … ||
+    // return 0`. The guards' only unique work is a non-regular file: drop either and only a FIFO (or a device node, which only root can
+    // plant) changes the verdict, because the seed would withhold an unreadable file too (the probes' `x=.`). A FIFO present at `_ct_read`'s
+    // `-f` test is refused there, so the probe's `<` never opens it; without the guards it would block, SessionStart(compact) would hang to
+    // the hook timeout and the whole compact card be lost. The tests are builtin, so one swapped in after the test still blocks, a window no
+    // row can measure. These rows run bounded (the FIFO runner below), so a dropped guard reds on the bound, not by wedging.
+    ['a FIFO .generation is unusable: the hook returns at once and withholds (fail-closed: the CLI recalls)', '', 'fifo', 'G2', 'G', 'fail-closed'],
+    ['a FIFO generation record is no record: the hook returns at once and withholds', '', 'absent', 'G2', 'fifo'],
+    // The safe direction, named (R-recalloff-parity): the hook drops the NUL and reads G, so it withholds; the CLI reads
+    // 'G' + NUL, which is not the generation, so recall-off is stale there and the line is served.
+    ['recall-off holds G and a NUL, the generation is G (fail-closed: the CLI recalls)', GENERATION, 'G', 'G-nul', 'G', 'fail-closed'],
+    ['an empty .generation is none: the record decides (stale)', '', 'empty', 'G2', 'G'],
+    ['an empty .generation is none: the record decides (named)', '', 'empty', 'G', 'G'],
+    // The ruling's pin: the CLI exits 8 here, so the card line must not reach the control arm.
+    ['R-recalloff: an invalid env generation, an unreadable .generation, recall-off naming the recorded G', 'not-a-uuid', 'unreadable', 'G', 'G'],
+    ['R-recalloff: an invalid env generation, no .generation, recall-off naming the recorded G', 'not-a-uuid', 'absent', 'G', 'G'],
+    ['nothing recorded withholds a line beside a recall-off value', '', 'absent', 'G2', 'absent'],
+    ['nothing recorded and no recall-off file serves', '', 'absent', 'absent', 'absent'],
+    ['a symlinked record is no record', '', 'absent', 'G2', 'symlink-G'],
+    ['a malformed record is no record', '', 'absent', 'G2', 'junk'],
+    ['the env generation wins over the record', GENERATION, 'absent', 'G2', 'G2'],
+    ['the registry generation wins over the record', '', 'G', 'G2', 'G2'],
+  ];
+  const parityRows = PARITY.filter(([, , r, o, k]) => r !== 'fifo' && k !== 'fifo' && (!ROOT || (r !== 'unreadable' && o !== 'unreadable' && o !== 'unsearchable' && o !== 'link-000')))
+    .map(([what, env, r, o, k, kind]) => [what, env, r, o, k, kind ?? 'agree'] as const);
+  /** The FIFO rows stay in PARITY (CONTROL and the CLI model cover them) but run through `fifoServed`, which bounds the spawn. */
+  const fifoRows = PARITY.filter(([, , r, , k]) => r === 'fifo' || k === 'fifo')
+    .map(([what, env, r, o, k, kind]) => [what, env, r, o, k, kind ?? 'agree'] as const);
+  /** The text each Reg kind plants in $REG/<id>.generation (the CLI reads the same text through presenceOf's trim). */
+  const REG_TEXT: Partial<Record<Reg, string>> = {
+    G: GENERATION, G2, junk: 'not-a-generation', empty: '',
+    'G-nul': `${GENERATION}\0\n`, 'G2-nul': `${G2}\0\n`, 'G2-nul-split': `${G2.slice(0, 18)}\0${G2.slice(18)}\n`, 'nul-only': '\0',
+    'G-wide': `${' '.repeat(130)}${GENERATION}\n`, 'G2-wide-junk': `${G2}${' '.repeat(100)}junk\n`, 'G-nbsp': NBSP_G, 'G-emsp': EMSP_G, 'G-lf': `${GENERATION}\n`, 'G-ws': ` \t\r${GENERATION}\v\f \r\n`, 'blank-ws': ' \t\r\n\v\f', 'blank-wide': `${' '.repeat(130)}\n`,
+  };
+  const plantParity = (regKind: Reg, offKind: Off, recKind: Rec): void => {
+    const genFile = reg(`${ID}.generation`);
+    fs.rmSync(genFile, { force: true });
+    if (regKind in REG_TEXT) fs.writeFileSync(genFile, REG_TEXT[regKind]!);
+    if (regKind === 'unreadable') { fs.writeFileSync(genFile, GENERATION); fs.chmodSync(genFile, 0o000); }
+    if (regKind === 'dangling') fs.symlinkSync(path.join(home, 'gen-nowhere'), genFile);
+    if (regKind === 'fifo') execFileSync('mkfifo', [genFile]);   // removed with the fixture HOME; nothing ever opens it but a guard-less hook
+    if (regKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'gen-target'), GENERATION); fs.symlinkSync(path.join(home, 'gen-target'), genFile); }
+    const off = histDir('recall-off', ID);
+    if (offKind === 'parent-file' || offKind.startsWith('link-')) fs.rmSync(histDir('recall-off'), { recursive: true, force: true });
+    else fs.mkdirSync(histDir('recall-off'), { recursive: true, mode: 0o700 });
+    if (offKind === 'G') fs.writeFileSync(off, `${GENERATION}\n`);
+    if (offKind === 'G-padded') fs.writeFileSync(off, `  ${GENERATION}  \n\n`);
+    if (offKind === 'G-wide') fs.writeFileSync(off, `${' '.repeat(130)}${GENERATION}\n`);
+    if (offKind === 'G-nbsp') fs.writeFileSync(off, NBSP_G);
+    if (offKind === 'G-bom') fs.writeFileSync(off, BOM_G);
+    if (offKind === 'G-nul') fs.writeFileSync(off, `${GENERATION}\0\n`);
+    if (offKind === 'G2') fs.writeFileSync(off, `${G2}\n`);
+    if (offKind === 'G2-tabcr') fs.writeFileSync(off, `\t${G2} \r\n`);
+    if (offKind === 'empty') fs.writeFileSync(off, '');
+    if (offKind === 'unreadable') { fs.writeFileSync(off, `${G2}\n`); fs.chmodSync(off, 0o000); }
+    if (offKind === 'dir') fs.mkdirSync(off);
+    if (offKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'off-target'), `${G2}\n`); fs.symlinkSync(path.join(home, 'off-target'), off); }
+    // The file inside is a stale value, so a reader that searched the directory would serve; the mode comes last.
+    if (offKind === 'unsearchable') { fs.writeFileSync(off, `${G2}\n`); fs.chmodSync(histDir('recall-off'), 0o000); }
+    if (offKind === 'parent-file') fs.writeFileSync(histDir('recall-off'), `${G2}\n`);
+    // A link at recall-off/ itself. The 'stale' value sits where a reader that followed the link would find it.
+    const rdir = histDir('recall-off');
+    if (offKind === 'link-loop') fs.symlinkSync(rdir, rdir);
+    if (offKind === 'link-notdir') { fs.writeFileSync(path.join(home, 'off-file'), 'x'); fs.symlinkSync(path.join(home, 'off-file', 'sub'), rdir); }
+    if (offKind === 'link-000') {
+      fs.mkdirSync(path.join(home, 'off-root', 'sub'), { recursive: true });
+      fs.writeFileSync(path.join(home, 'off-root', 'sub', ID), `${G2}\n`);
+      fs.symlinkSync(path.join(home, 'off-root', 'sub'), rdir);
+      fs.chmodSync(path.join(home, 'off-root'), 0o000);
+    }
+    if (offKind === 'link-dangling') fs.symlinkSync(path.join(home, 'off-nowhere'), rdir);
+    // The sweep's generation record beside the prediction (Task 5; plantAll made card/<id>/).
+    const rec = histDir('card', ID, `${SID}.gen`);
+    fs.rmSync(rec, { force: true });
+    if (recKind === 'G') fs.writeFileSync(rec, `${GENERATION}\n`);
+    if (recKind === 'G2') fs.writeFileSync(rec, `${G2}\n`);
+    if (recKind === 'G-nul') fs.writeFileSync(rec, `${GENERATION}\0\n`);
+    if (recKind === 'G-wide') fs.writeFileSync(rec, `${' '.repeat(130)}${GENERATION}\n`);
+    if (recKind === 'G-emsp') fs.writeFileSync(rec, EMSP_G);
+    if (recKind === 'G-nbsp') fs.writeFileSync(rec, NBSP_G);
+    if (recKind === 'fifo') execFileSync('mkfifo', [rec]);
+    if (recKind === 'G-ws') fs.writeFileSync(rec, ` \t\r${GENERATION}\v\f \r\n`);
+    if (recKind === 'legacy') fs.writeFileSync(rec, '\n');
+    if (recKind === 'junk') fs.writeFileSync(rec, 'not-a-generation\n');
+    if (recKind === 'symlink-G') { fs.writeFileSync(path.join(home, 'rec-target'), `${GENERATION}\n`); fs.symlinkSync(path.join(home, 'rec-target'), rec); }
+  };
+  /** The generation B2's CLI compares recall-off/<id> with over the same fixture: lib resolveGeneration's value
+   *  when it answers 'env' or 'registry'; under 'newest', the newest family's, which the record stands for
+   *  ('' for a legacy family); null when no usable record says it (the store's answer, unknown to the hook).
+   *  Never `resolveGeneration(…).value ?? ''`: B2's readContext forbids that comparison under 'newest'. */
+  const cliGeneration = (envGen: string, regGen: Pres, recKind: Rec): string | null => {
+    const r = lib.resolveGeneration({ envGen, regGen });
+    if (r.via !== 'newest') return r.value;
+    return recKind === 'G' || recKind === 'G-wide' || recKind === 'G-emsp' || recKind === 'G-nbsp' || recKind === 'G-ws' ? GENERATION : recKind === 'G2' ? G2 : recKind === 'legacy' ? '' : null;
+  };
+  /** The CLI's reading of the same fixture (B2's presenceOf: absent, unreadable — a symlink or a non-file
+   *  included — or the trimmed value), handed to B2's own decideRecallOff with the CLI's generation. `unknown`:
+   *  a recall-off value the CLI decides against a store this fixture has none of. */
+  const cliVerdict = (envGen: string, regKind: Reg, offKind: Off, recKind: Rec): string => {
+    const regGen: Pres = regKind in REG_TEXT ? { state: 'value', value: REG_TEXT[regKind]!.trim() }
+      : regKind === 'absent' ? { state: 'absent' } : { state: 'unreadable' };
+    const file: Pres = offKind === 'absent' ? { state: 'absent' }
+      : offKind === 'G' || offKind === 'G-padded' || offKind === 'G-wide' || offKind === 'G-nbsp' || offKind === 'G-bom'
+        ? { state: 'value', value: GENERATION }
+        : offKind === 'G-nul' ? { state: 'value', value: `${GENERATION}\0` }
+        : offKind === 'G2' || offKind === 'G2-tabcr' ? { state: 'value', value: G2 }
+          : offKind === 'empty' ? { state: 'value', value: '' }
+            : offKind === 'link-dangling' ? { state: 'absent' } : { state: 'unreadable' };
+    const generation = cliGeneration(envGen, regGen, recKind);
+    // An absent or unreadable file needs no generation (B2 readContext's offNow): decided now, whatever it is.
+    if (generation === null) return file.state === 'value' ? 'unknown' : lib.decideRecallOff({ file, generation: GENERATION });
+    return lib.decideRecallOff({ file, generation });
+  };
+  /** The CLI recalls (`none` or `stale`): the hook serves then, except on a row marked fail-closed (R-recalloff-parity); `off` and `unknown` always withhold. */
+  const serves = (verdict: string): boolean => verdict === 'none' || verdict === 'stale';
+
+  it('CONTROL: the parity table reaches every answer, so it cannot pass by serving always or never', () => {
+    const verdicts = PARITY.map(([, env, r, o, k]) => cliVerdict(env, r, o, k));
+    expect(new Set(verdicts)).toEqual(new Set(['none', 'stale', 'off', 'unknown']));
+    // A fail-closed row is one the CLI SERVES (else it would be an agree row), and the table holds both kinds.
+    const closed = PARITY.filter((row) => row.length === 6);
+    expect(closed.length).toBeGreaterThan(0);
+    expect(PARITY.length - closed.length).toBeGreaterThan(0);
+    for (const [what, env, r, o, k] of closed) expect(serves(cliVerdict(env, r, o, k)), `fail-closed row "${what}" must be one the CLI serves`).toBe(true);
+    // The two R-recalloff-trim rows' CLI reading: presenceOf's String.prototype.trim over the planted text.
+    expect([NBSP_G, BOM_G].map((t) => t.trim()), 'the CLI reads both as the generation').toEqual([GENERATION, GENERATION]);
+  });
+
+  /** One parity row: plant it, then assert the hook's answer against the CLI's own decision over the fixture. */
+  const parityCase = (serve: (envGen: string) => string | null, envGen: string, regKind: Reg, offKind: Off, recKind: Rec, kind: string): void => {
+    plantAll();
+    plantParity(regKind, offKind, recKind);
+    try {
+      const verdict = cliVerdict(envGen, regKind, offKind, recKind);
+      // R-recalloff-parity: never LINE where the CLI refuses; a fail-closed row withholds where the CLI serves.
+      expect(serve(envGen), `the CLI reads ${verdict}${kind === 'fail-closed' ? ' (fail-closed)' : ''}`)
+        .toBe(serves(verdict) && kind === 'agree' ? LINE : null);
+    } finally {
+      for (const f of [reg(`${ID}.generation`), histDir('recall-off'), histDir('recall-off', ID), path.join(home, 'off-root')]) {
+        try { fs.chmodSync(f, 0o700); } catch { /* absent or a symlink */ }
+      }
+    }
+  };
+  it.each(parityRows)('C19/C68 (card half), recall-off parity: %s', (_what, envGen, regKind, offKind, recKind, kind) => {
+    parityCase((g) => served(start(), { CCRC_SESSION_GENERATION: g }), envGen, regKind, offKind, recKind, kind);
+  });
+
+  // The FIFO rows' runner (D-5063): `served` goes through `runFull`, whose spawnSync has no timeout, and a hook blocked on a FIFO's
+  // open is a sync call vitest's test timeout cannot interrupt. C21's numbers: a 20 s spawn with SIGKILL, a 30 s test above it. A killed
+  // run has status null, so the exit-0 assertion reds it as "the hook blocked", and it never reads as the no-line answer.
+  const fifoServed = (envGen: string): string | null => {
+    const r = spawnSync('bash', [HOOK], {
+      input: JSON.stringify(start()), encoding: 'utf8', timeout: 20_000, killSignal: 'SIGKILL',
+      env: hookEnv({ ...HISTORY_HOOK_SCRUB, CCRC_SESSION_GENERATION: envGen }),
+    });
+    expect(r.status, 'the hook blocked on a FIFO (exit 0 within 20 s is its contract)').toBe(0);
+    expect(r.stderr, 'the hook is silent on stderr').toBe('');
+    return r.stdout === '' ? null : card(r.stdout);
+  };
+  it.each(fifoRows)('C19/C68 (card half), recall-off parity: %s', (_what, envGen, regKind, offKind, recKind, kind) => {
+    parityCase(fifoServed, envGen, regKind, offKind, recKind, kind);
+  }, 30_000);
+
+  it.each([
+    ['POSIXLY_CORRECT=1', { POSIXLY_CORRECT: '1' }],
+    ['LC_ALL=C', { LC_ALL: 'C' }],
+    ...(IS_DARWIN ? [] : [['LC_ALL=C.UTF-8', { LC_ALL: 'C.UTF-8' }] as const]),
+  ] as const)('the fold puts the line on its own first line under %s', (_what, env) => {
+    plantAll();
+    plantCompactCard(compactCardOf(600));
+    const out = served(start(), env)!;
+    expect(out.split('\n').slice(0, 2)).toEqual([LINE, HEADER]);
+  });
+
+  it('_hook_history_card is defined above the case, outside it, called only beside the compact card, and spells no fork', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const def = src.indexOf('\n_hook_history_card() {');
+    const kase = src.indexOf('\ncase "$event" in\n');
+    expect(def, 'no _hook_history_card definition').toBeGreaterThan(-1);
+    expect(def, 'defined after the case: the SessionStart arm would call an undefined function').toBeLessThan(kase);
+    expect(src.indexOf('\n_hook_history_card() {', def + 1), 'defined twice').toBe(-1);
+    const calls = src.split('\n').filter((l) => !l.trim().startsWith('#') && /_hook_history_card \|\| true/.test(l));
+    expect(calls).toEqual(['    [[ "$src" == compact ]] && { _hook_compact_card || true; _hook_history_card || true; }']);
+    const body = src.slice(def, src.indexOf('\n}\n', def));
+    const code = body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    // B1's S1 string pin, in its final grammar, over the reader: no `$(` (an arithmetic `$((` is not one), no backtick,
+    // no `${…@…}` transformation (its FR2a: `@P` runs prompt expansion, and so command substitution), and none of its
+    // external commands, plus `find` and `link`, which the card path could reach for.
+    expect(code, 'a command substitution forks').not.toMatch(/\$\((?!\()/);
+    expect(code).not.toContain('`');
+    expect(code.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the reader (@P forks)').toBeNull();
+    const external = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|find|readlink|realpath|dirname|basename|env|timeout|flock|link|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
+    expect(code.match(external)?.[0] ?? null, 'an external command in the reader').toBeNull();
+    // B1's F37 rule: the clock is read once, so its test and its slice see one reading.
+    expect((code.match(/\$\{?EPOCHREALTIME\b/g) ?? []).length, 'EPOCHREALTIME expanded more than once').toBe(1);
+  });
+
+  // D-5064 (F6 of review 476): under a UTF-8 collating locale (glibc), a bash `[0-9a-f]` or `[0-9]` range widens to take
+  // characters outside ASCII. The reader spells every class as an explicit list, with no locale switch and no fork.
+  it('the reader spells no bracket range: every class is an explicit list (D-5064)', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const from = src.indexOf('\nHISTORY_CARD_MAX=512\n');
+    const code = src.slice(from, src.indexOf('\n}\n', src.indexOf('\n_hook_history_card() {', from)))
+      .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(from, 'the constants and the reader were found').toBeGreaterThan(-1);
+    expect(code).toContain('[0123456789abcdef]{8}');    // the scan is over the reader's own text
+    // A range is `x-y` inside one bracket expression; a trailing literal `-` (`[!0123456789abcdef-]`) is not one.
+    // A bracket expression holds no whitespace here, which keeps `[[ -e "…history-off" ]]` out of the match.
+    const range = /\[(?!\[)[^\]\s]*?[0-9A-Za-z]-[^\]\s][^\]\s]*\]/;
+    expect(code.match(range)?.[0] ?? null, 'a bracket range in the reader').toBeNull();
+    expect('[0-9a-f]{8}'.match(range)?.[0], 'CONTROL: the scan sees a range').toBe('[0-9a-f]');
+    expect('[!0123456789abcdef-]'.match(range), 'CONTROL: a trailing literal - is no range').toBeNull();
+    expect('[[ -e "$HOME/.ccrc/history-off" ]]'.match(range), 'CONTROL: a test bracket is no class').toBeNull();
+  });
+
+  /** Does bash take `ch` for a member of `class_` (a bracket range) in this locale? The hook runs the same builtin. */
+  const widens = (locale: string, class_: string, ch: string): boolean =>
+    spawnSync('bash', ['-c', `[[ $1 =~ ^${class_}$ ]]`, '_', ch], { env: { PATH: process.env.PATH ?? '', LC_ALL: locale } }).status === 0;
+  const WIDE_LOCALE = IS_DARWIN ? null : ['en_US.UTF-8', 'en_GB.UTF-8'].find((l) => widens(l, '[0-9a-f]', String.fromCharCode(0xe1))) ?? null;
+  const A_ACUTE = String.fromCharCode(0xe1);          // U+00E1, which glibc collates into [0-9a-f]
+  const ARABIC_THREE = String.fromCharCode(0x663);    // U+0663, which glibc collates into [0-9]
+  describe.skipIf(WIDE_LOCALE === null)(`under a widening UTF-8 locale (${WIDE_LOCALE}) a non-ASCII character is never a hex digit or a decimal digit`, () => {
+    const env = { LC_ALL: WIDE_LOCALE ?? 'C' };
+    it('CONTROL: the same fixture, ASCII, is served under that locale, silently', () => {
+      plantAll();
+      expect(served(start(), env)).toBe(LINE);
+    });
+
+    it('a CCRC_SESSION_GENERATION with a non-ASCII character in a hex position is no generation: the recorded one decides', () => {
+      plantAll();
+      plantParity('absent', 'G', 'G');
+      // The CLI: an env generation outside the grammar falls to the newest family (the record G), which recall-off names.
+      expect(lib.resolveGeneration({ envGen: `${A_ACUTE}${GENERATION.slice(1)}`, regGen: { state: 'absent' } }).via).toBe('newest');
+      expect(served(start(), { ...env, CCRC_SESSION_GENERATION: `${A_ACUTE}${GENERATION.slice(1)}` })).toBeNull();
+    });
+
+    // CONTROL, not a pin of `uuid_re`: the payload jq filter (the `keep(alpha or (. >= 48 and . <= 57) or . == 95 or . == 45)`
+    // one that reads session_id) keeps only ASCII letters, digits, `_` and `-`, so the non-ASCII character is dropped before
+    // the reader sees it. The psid arrives ASCII and 35 characters long, which fails the grammar's length under either
+    // spelling of the class. The env-generation case above alone pins `uuid_re` against a widening locale.
+    it('CONTROL: the payload filter already makes a session id ASCII, so one with a non-ASCII character in a hex position serves nothing', () => {
+      const bad = `${A_ACUTE}${SID.slice(1)}`;
+      plantDirs();
+      mark(`main ${bad} ${Date.now()}`);
+      fs.writeFileSync(cardPath(bad), `${LINE}\n`);
+      expect(served(start({ session_id: bad }), env)).toBeNull();
+    });
+
+    it('a marker ms with a non-ASCII digit serves nothing and prints nothing on stderr (no arithmetic syntax error)', () => {
+      plantAll();
+      mark(`main ${SID} 1${ARABIC_THREE}${ARABIC_THREE}`);
+      expect(served(start(), env)).toBeNull();     // `served` asserts stderr is empty
+    });
+
+    it('a card line with non-ASCII characters in its hex positions is refused by the grammar', () => {
+      plantAll(`${LINE.replace('L03a9c1', `L${A_ACUTE.repeat(6)}`)}\n`);
+      expect(served(start(), env)).toBeNull();
+    });
+  });
+
+  // D-5064 (macOS CI): the reader's generation reads trim ASCII whitespace only, in every locale and on every C library. The CLI's
+  // JS trim strips U+2003, so it reads G + U+2003 as G and recalls beside a stale recall-off; the hook must withhold (a named
+  // fail-closed row, both arms). A reader that tested `_ct_read`'s CT_V would trim U+2003 wherever the locale's [:space:] holds
+  // it (glibc's UTF-8 locales do), read G and serve: these cases are red for that mutant. The finder takes the first UTF-8
+  // locale on the box whose bash really counts U+2003 a space; with none, the cases skip, never fake.
+  const spacey = (locale: string): boolean =>
+    spawnSync('bash', ['-c', '[[ $1 == [[:space:]] ]]', '_', String.fromCharCode(0x2003)], { env: { PATH: process.env.PATH ?? '', LC_ALL: locale } }).status === 0;
+  const SPACE_LOCALE = IS_DARWIN ? null : ['C.UTF-8', 'en_US.UTF-8', 'en_GB.UTF-8'].find(spacey) ?? null;
+  describe.skipIf(SPACE_LOCALE === null)(`under a UTF-8 locale whose [:space:] holds U+2003 (${SPACE_LOCALE}) a generation behind it is unusable`, () => {
+    const env = { LC_ALL: SPACE_LOCALE ?? 'C', CCRC_SESSION_GENERATION: '' };
+    it('CONTROL: the CLI reads G + U+2003 as G, so recall-off naming a stale G2 recalls', () => {
+      expect(EMSP_G.trim()).toBe(GENERATION);
+      expect(cliVerdict('', 'G-emsp', 'G2', 'G')).toBe('stale');
+      expect(cliVerdict('', 'absent', 'G2', 'G-emsp')).toBe('stale');
+    });
+
+    it('a .generation of G + U+2003 + LF, recall-off stale (fail-closed: the CLI recalls)', () => {
+      plantAll();
+      plantParity('G-emsp', 'G2', 'G');
+      expect(served(start(), env)).toBeNull();
+    });
+
+    it('a generation record of G + U+2003, no .generation, recall-off stale (fail-closed: the CLI recalls)', () => {
+      plantAll();
+      plantParity('absent', 'G2', 'G-emsp');
+      expect(served(start(), env)).toBeNull();
+    });
+
+    it('CONTROL: the same fixtures with a plain G serve the line, so the cases above withhold for the U+2003', () => {
+      plantAll();
+      plantParity('G', 'G2', 'G');
+      expect(served(start(), env)).toBe(LINE);
+      plantParity('absent', 'G2', 'G');
+      expect(served(start(), env)).toBe(LINE);
+    });
+  });
+
+  // D-5064 (fix round 2, follow-up 2): a NUL probe that cannot open its file withholds. The window is the microseconds between
+  // `_ct_read` and the probe's `<`, so no fixture reaches it from outside; the harness below defines the hook's OWN `_ct_read`, the
+  // HISTORY_* lines and `_hook_history_card`, extracted by content at test time (a copy would not follow the hook), wraps
+  // `_ct_read` so that after the real read it makes the file unreadable (chmod 000), and runs the reader on a fixture HOME. A
+  // probe that never opened its file used to keep the `''` it carried in: an empty record (a legacy family) that served where
+  // the CLI exits 8. Each probe seeds `x` with a value outside the grammar, so that probe withholds.
+  describe.skipIf(ROOT)('a NUL probe that cannot open its file withholds (the file turns unreadable between the two reads)', () => {
+    const hookText = (): string => fs.readFileSync(HOOK, 'utf8');
+    const fn = (name: string): string => {
+      const m = new RegExp(`^${name}\\(\\) \\{[^\\n]*\\n[\\s\\S]*?\\n\\}\\n`, 'm').exec(hookText());
+      expect(m, `${name} is defined in the hook`).not.toBeNull();
+      return m![0];
+    };
+    const assign = (name: string): string => {
+      const m = new RegExp(`^${name}=[^\\n]*\\n`, 'm').exec(hookText());
+      expect(m, `${name} is assigned in the hook`).not.toBeNull();
+      return m![0];
+    };
+    /** Run the reader over the planted fixture; `armed` is the suffix of the file `_ct_read` makes unreadable after its real read. */
+    const reader = (armed: string | null): string => {
+      const script = path.join(home, 'reader-harness.sh');
+      fs.writeFileSync(script, [
+        'set -uo pipefail',
+        ...['REG', 'CCRC_ID_MAX', 'COMPACT_CARD_MAX_CHARS', 'COMPACT_CARD_MAX_AGE', 'HISTORY_CARD_MAX', 'HISTORY_CARD_RE', 'HISTORY_SCOPE_DIR', 'HISTORY_CARD_DIR'].map(assign),
+        fn('_ct_read').replace('_ct_read() {', '_ct_read_real() {'),
+        // The race: the file is read, then it goes unreadable (a chmod by hand, a purge) before the probe opens it.
+        `_ct_read() { _ct_read_real "$1"; local rc=$?; case "$1" in *${armed ?? 'NEVER-MATCHES'}) [[ -f "$1" ]] && chmod 000 "$1" ;; esac; return $rc; }`,
+        fn('_hook_history_card'),
+        `id=${ID} psid=${SID} paid="" CARD_COMPACT=""`,
+        '_hook_history_card',
+        'printf "%s" "$CARD_COMPACT"',
+        '',
+      ].join('\n'));
+      const r = spawnSync('bash', [script], { encoding: 'utf8', env: hookEnv({ ...HISTORY_HOOK_SCRUB, CCRC_SESSION_GENERATION: '' }) });
+      expect(r.stderr, 'the reader is silent on stderr').toBe('');
+      expect(r.status).toBe(0);
+      return r.stdout;
+    };
+    afterEach(() => {
+      for (const f of [reg(`${ID}.generation`), histDir('card', ID, `${SID}.gen`)]) { try { fs.chmodSync(f, 0o600); } catch { /* absent */ } }
+    });
+
+    it('CONTROL: the harness serves the line when nothing is armed (a stale recall-off beside a G record, and beside a G2 .generation)', () => {
+      plantAll();
+      plantParity('absent', 'G2', 'G');
+      expect(reader(null)).toBe(LINE);
+      plantParity('G2', 'G', 'G2');
+      expect(reader(null)).toBe(LINE);
+    });
+
+    it('CONTROL: armed on a file the reader does not probe, the same fixtures still serve', () => {
+      plantAll();
+      plantParity('absent', 'G2', 'G');
+      expect(reader('.generation')).toBe(LINE);           // no .generation exists: the wrapper never fires
+      plantParity('G2', 'G', 'G2');
+      expect(reader('.gen')).toBe(LINE);                  // the .generation arm decides: the record is never read
+    });
+
+    it('the record arm: the record turns unreadable after its first read, recall-off names G, the record is G (the probe once read an empty record and served)', () => {
+      plantAll();
+      plantParity('absent', 'G', 'G');
+      expect(reader('.gen')).toBe('');
+      // The verdict above is the unarmed one too (o == gen), so this proves the wrapper fired: the record went unreadable.
+      expect(fs.statSync(histDir('card', ID, `${SID}.gen`)).mode & 0o777, 'the wrapper made the record unreadable').toBe(0);
+    });
+
+    it('the .generation arm: .generation turns unreadable after its first read, recall-off is stale, the record is G2', () => {
+      plantAll();
+      plantParity('G2', 'G', 'G2');
+      expect(reader('.generation')).toBe('');
+      expect(fs.statSync(reg(`${ID}.generation`)).mode & 0o777, 'the wrapper made .generation unreadable').toBe(0);
+    });
+  });
+
+  itLinux('forks nothing at runtime: serving the line takes exactly the forks a box without history takes', () => {
+    const traced = (env: Record<string, string> = {}): { forks: number; stdout: string } => {
+      const trace = path.join(home, 'card-trace.txt');
+      const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork', 'bash', HOOK], {
+        input: JSON.stringify(start()), encoding: 'utf8', env: hookEnv({ ...HISTORY_HOOK_SCRUB, ...env }),
+      });
+      expect(r.status, `strace ran the hook: ${r.stderr}`).toBe(0);
+      const lines = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => l !== '');
+      fs.rmSync(trace);
+      const root = /^(\d+)\s/.exec(lines[0] ?? '')?.[1];
+      expect(root, 'strace traced a fork').toBeDefined();
+      // One START line per fork, complete or `<unfinished ...>`; a `resumed` line is the same fork's tail.
+      return { forks: lines.filter((l) => new RegExp(`^${root}\\s+(?:clone3?|v?fork)\\(`).test(l)).length, stdout: r.stdout };
+    };
+    // WARM-UP: the first acquisition on a fresh row mints the stable lock (mktemp + link), which no later run
+    // repeats, so one unmeasured serve comes first and the two measured runs start from the same row.
+    plantCompactCard(compactCardOf(600));
+    expect(served()).not.toBeNull();
+    plantCompactCard(compactCardOf(600));        // both runs serve a compact card: the same emit, the same marker
+    const without = traced();
+    expect(hasLine(card(without.stdout))).toBe(false);
+    plantAll();
+    plantCompactCard(compactCardOf(600));
+    const withLine = traced();
+    expect(card(withLine.stdout).startsWith(`${LINE}\n`), 'the measured run served the line').toBe(true);
+    expect(withLine.forks).toBe(without.forks);
+    // Review 479 F4: the NUL probes (`.generation`'s and the generation record's) sit behind the env generation, so a pane whose
+    // CCRC_SESSION_GENERATION is a UUID, the pane that also serves the compact card, never reaches them. They get a pair of runs
+    // of their own, with an env generation that names none (the parity rows' arm; no compact card is served then, so the line
+    // stands alone in both runs). DIRECT has no `.generation` and no recall-off file: neither probe runs. PROBED has an EMPTY
+    // `.generation` (the first probe runs, rc 1, no NUL, and the record decides), a recall-off file naming G2 and a record naming
+    // G (the second probe runs, rc 1), so o != gen and the line is served. Since the probes' `x=.` seed a `: |` prefix
+    // reds earlier, at the served-line assertion (the subshelled `read` leaves the parent's `x=.`, so the line withholds). The tally
+    // still reds a fork that keeps the verdict: `( : );`, `true | true;` or `x=$(printf .)` inside a probe costs PROBED a fork or two (12 or 13 vs 11).
+    const noGen = { CCRC_SESSION_GENERATION: '' };
+    plantAll();
+    plantParity('absent', 'absent', 'G');
+    const direct = traced(noGen);
+    expect(card(direct.stdout), 'the unprobed run served the line').toBe(LINE);
+    plantAll();
+    plantParity('empty', 'G2', 'G');
+    const probed = traced(noGen);
+    expect(card(probed.stdout), 'the probed run served the line, through both NUL probes').toBe(LINE);
+    expect(probed.forks, `forks through both probes ${probed.forks}, without them ${direct.forks}`).toBe(direct.forks);
+  }, 60_000);
+});
+// ── ccrc history: the compact card's reserved room (history spec 2026-10-05 §8.6, §8.9 C38; W1-B3 task 10) ──
+// APPENDED, with NO new import line: the citation census cites this file by line. `runFull`/`hookEnv`/`home`/
+// `HOOK`/`stub`/`HELPER_ONLY`/`plantHelper`/`cardTree`/`plantSession`/`workLines`/`preCompact` are this
+// file's module-level fixture, and `HISTORY_HOOK_SCRUB` (D-5055) is the one scrub of every history hook describe.
+describe('history card reserve: the compact card renders HISTORY_CARD_MAX + 1 chars short on a history box (spec §8.6, C38)', () => {
+  const cardDir = (): string => path.join(home, '.ccrc', 'history', 'card');
+  /** PreCompact through the real arm with a stub `timeout` recording the helper's argv (the helper-argv case's idiom). */
+  const helperArgv = (env: Record<string, string> = {}): string => {
+    const tree = cardTree(); plantHelper();
+    stub('timeout', [HELPER_ONLY, 'printf \'%s\\n\' "$*" > "$HOME/timeout-argv"; shift; exec "$@"'].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const r = runFull(preCompact(tree, transcript), { ...HISTORY_HOOK_SCRUB, ...env });
+    expect(r).toEqual({ stdout: '', stderr: '' });
+    return fs.readFileSync(path.join(home, 'timeout-argv'), 'utf8');
+  };
+
+  it('C38: card/ present — the helper renders at 4000 - (HISTORY_CARD_MAX + 1) = 3487', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    fs.mkdirSync(cardDir(), { recursive: true, mode: 0o700 });
+    expect(4000 - (lib.CARD_LINE_MAX + 1)).toBe(3487);
+    expect(helperArgv()).toContain(' --max-chars 3487 --max-files 12 ');
+  });
+
+  it('C38: card/ absent — 4000, exactly as before history', () => {
+    expect(helperArgv()).toContain(' --max-chars 4000 --max-files 12 ');
+  });
+
+  it('history-off present beside card/ — 4000', () => {
+    fs.mkdirSync(cardDir(), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(home, '.ccrc', 'history-off'), '');
+    expect(helperArgv()).toContain(' --max-chars 4000 --max-files 12 ');
+  });
+
+  it.each(['999999', 'abc'])('an exported HISTORY_CARD_RESERVE=%s is reset — 4000, exit 0, silent', (value) => {
+    expect(helperArgv({ HISTORY_CARD_RESERVE: value })).toContain(' --max-chars 4000 --max-files 12 ');
+  });
+
+  itLinux('no other event pays for it: a PostToolUse with card/ present names no history path in any syscall', () => {
+    fs.mkdirSync(cardDir(), { recursive: true, mode: 0o700 });
+    const trace = path.join(home, 'reserve-trace.txt');
+    const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=file', 'bash', HOOK], {
+      input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: {}, cwd: home }), encoding: 'utf8',
+      env: hookEnv(HISTORY_HOOK_SCRUB),
+    });
+    expect(r.status, `strace ran the hook: ${r.stderr}`).toBe(0);
+    const touched = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => l.includes('/.ccrc/history/card'));
+    expect(touched, 'a PostToolUse stats the card directory').toEqual([]);
+  }, 60_000);
+
+  it('the reserve is spelled from HISTORY_CARD_MAX, reset unconditionally, and set directly above the scope reset', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src).toContain('    --max-chars "$(( COMPACT_CARD_MAX_CHARS - ${HISTORY_CARD_RESERVE:-0} ))" --max-files "$COMPACT_WORKSET_MAX" \\\n');
+    const reset = src.indexOf('\nHISTORY_CARD_RESERVE=0\n');
+    const set = src.indexOf('\n[[ "$event" == PreCompact ]] && [[ -d "$HISTORY_CARD_DIR" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]] && HISTORY_CARD_RESERVE=$(( HISTORY_CARD_MAX + 1 ))\n');
+    expect(reset, 'no unconditional reset').toBeGreaterThan(-1);
+    expect(set, 'no PreCompact-gated set').toBeGreaterThan(reset);
+    expect(set, 'the reserve must be set before the card renders').toBeLessThan(src.indexOf('\nunset CS_SCOPE CS_RULE_SCOPE CS_RULE_TRANSCRIPT CS_REFUSED\n'));
+  });
+});
+
+// ── The cheap PostToolUse arm's fork count: a load-independent cost pin (D-6929) ──
+// APPENDED, with NO new import line: the citation census cites this file by line.
+// The wall-clock budgets (150 ms, 4.2x, 4x, 1.5x) run in the `perf` CI job only (`CCRC_PERF=1`); this is what the required
+// suite keeps of the hook's cost: how many children the arm forks, counted under strace, which a loaded runner cannot move.
+// MEASURED on main at ece3dfbee (linux, bash 5.2, strace -f -e trace=clone,clone3,fork,vfork,execve, a fixture HOME with
+// the stub tmux, the p95 row's payload `{PostToolUse, Bash}`): the whole-run census came to EXPECTED_FORKS below (measured in a linux container, vitest on this file; the
+// first run, against an empty expectation, was the red: it printed this table).
+describe('the cheap PostToolUse arm forks exactly this (D-6929)', () => {
+  const HOOK_PATH = (): string => process.env['CCRC_HOOK_UNDER_PIN'] ?? HOOK;
+  const forksOf = (): Record<string, number> => {
+    const trace = path.join(home, 'cheap-trace.txt');
+    const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork,execve', 'bash', HOOK_PATH()], {
+      input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash' }), encoding: 'utf8', env: hookEnv(),
+    });
+    expect(r.status, `the hook exits 0 under strace. stderr: ${r.stderr}`).toBe(0);
+    const { forks, unparsed } = forkCensus(fs.readFileSync(trace, 'utf8'), true);
+    expect(unparsed, 'every split strace line was rejoined to its other half').toEqual([]);
+    const out: Record<string, number> = {};
+    for (const f of forks.slice().sort()) out[f] = (out[f] ?? 0) + 1;
+    return out;
+  };
+  const EXPECTED_FORKS: Record<string, number> = { '(subshell)': 1, cat: 1, jq: 4, mv: 2, timeout: 1 };
+  itLinux('the real hook forks the measured children and no more', () => {
+    expect(forksOf()).toEqual(EXPECTED_FORKS);
+  }, 60_000);
+  itLinux('a copy of the hook with one more `$(true)` on that arm adds exactly one (subshell), so the pin above goes red on it', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const copy = path.join(home, 'session-hook-mutant.sh');
+    const marker = '\n  PostToolUse)\n    state="working"\n';   // the PostToolUse case arm itself, after its state=working line
+    expect(src.split(marker).length, 'the anchor the mutant is spliced at exists, once').toBe(2);
+    fs.writeFileSync(copy, src.replace(marker, marker + '    _pin_probe=$(true)\n'));
+    process.env['CCRC_HOOK_UNDER_PIN'] = copy;
+    try { expect(forksOf()).toEqual({ ...EXPECTED_FORKS, '(subshell)': EXPECTED_FORKS['(subshell)']! + 1 }); } finally { delete process.env['CCRC_HOOK_UNDER_PIN']; }
+  }, 60_000);
+});
+// ── W4-H6, W4-H7 (delegation broker wave 4, PR4 Task 4.1): the scope marker's guard refuses only a POSITIVE non-regular
+// type, as D-5434's form in `_hook_join_record`. APPENDED, with NO new import line (the citation census cites this file by
+// line): the seam is loaded by a dynamic import, and the helpers are this describe's own, over the module-level fixture.
+describe('W4-H: the scope marker\'s guard refuses only a positive non-regular type (D-5434\'s form)', () => {
+  const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+  const marker = (): string => path.join(home, '.ccrc', 'history', 'scope', 'demo-quiet-basin');
+  const plant = (): void => {
+    fs.mkdirSync(path.dirname(marker()), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
+  };
+  const pre = (transcript: string): object => ({ ...preCompact(home, transcript, 'manual'), session_id: SID });
+
+  it('W4-H6: a marker created between any two of the guard\'s reads is still written: main <psid> <ms>', async () => {
+    const { seamHook, seamEnv, seamCount } = await import('./hookGuardSeam.js');
+    plant();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const { file, reads } = seamHook(home, '_hook_history_scope', 'f');
+    for (let k = 1; k <= reads; k += 1) {
+      fs.rmSync(marker(), { force: true }); fs.rmSync(path.join(home, 'w4-seam-n'), { force: true });
+      const r = spawnSync('bash', [file], {
+        input: JSON.stringify(pre(transcript)), encoding: 'utf8', env: hookEnv({ ...HISTORY_HOOK_SCRUB, ...seamEnv(home, k) }), timeout: 60_000,
+      });
+      expect(r.status, `k=${k}: exit 0`).toBe(0);
+      expect(seamCount(home), `k=${k}: the seam fired at read ${k}`).toBeGreaterThanOrEqual(k);
+      expect(fs.readFileSync(marker(), 'utf8'), `k=${k}: the marker reads main <psid> <ms>`).toMatch(new RegExp(`^main ${SID} \\d+\\n$`));
+    }
+  }, 120_000);
+
+  it('W4-H7: the scope guard tests a positive type (-L -d -p -S -b -c) and returns 0; no two-read shape stands before the write', async () => {
+    const { guardPin } = await import('./hookGuardSeam.js');
+    expect(guardPin('_hook_history_scope', 'f', 'return 0')).toEqual([]);
   });
 });

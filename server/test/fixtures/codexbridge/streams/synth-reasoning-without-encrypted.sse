@@ -1,0 +1,12 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_fx1","object":"response","status":"in_progress","output":[]},"sequence_number":0}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_fx0","summary":[{"type":"summary_text","text":"thinking"}]},"sequence_number":1}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_fx1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Answer.","annotations":[]}]},"sequence_number":2}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_fx1","object":"response","status":"completed","output":[],"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}},"sequence_number":3}
+

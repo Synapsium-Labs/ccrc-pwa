@@ -10,6 +10,7 @@ import {
   openCoordDb, shouldRemoveMigrationFailureArtifact, tx,
 } from '../src/coord/db.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
+import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
@@ -56,7 +57,7 @@ describe('openCoordDb', () => {
     // warning is the ONLY observable difference — pin it, not just the data.
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const b = openCoordDb(p);
-    expect((b.prepare('SELECT count(*) AS c FROM programs').get() as { c: number }).c).toBe(1);
+    expect((b.prepare('SELECT count(*) AS c FROM programs WHERE slug <> \'linear-sync\'').get() as { c: number }).c).toBe(1);
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
     b.close();
@@ -77,6 +78,9 @@ describe('openCoordDb', () => {
     // MAIL_SWEEP_MS lane) was maintaining a b-tree no query ever read.
     // This pins the FULL index set, not just the dead one's absence, so
     // a stray replacement index cannot slip back in unnoticed either.
+    // Since the stall-read entry the set is two: `mail_deliveries_by_mail` serves the stall
+    // read's delivery statement, and the plan rows in `stall-store.test.ts` pin that `dueDeliveries` still reads
+    // `mail_deliveries_due`.
     const home = mkTmp('ccrc-coord-');
     const p = dbPathIn(home);
     const db = openCoordDb(p);
@@ -84,7 +88,10 @@ describe('openCoordDb', () => {
       "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='mail_deliveries' " +
       "AND name NOT LIKE 'sqlite_%'",
     ).all() as { name: string }[]).map((r) => r.name).sort();
-    expect(indexNames).toEqual(['mail_deliveries_due']);
+    // D-5914 adds the third, `mail_deliveries_by_revived`: a PARTIAL index holding heirs only, which serves
+    // `HAS_HEIR_SQL`'s `EXISTS` lookup (pinned by EXPLAIN in its own describe below) and costs a write to rows that
+    // are heirs, never to the ordinary queue.
+    expect(indexNames).toEqual(['mail_deliveries_by_mail', 'mail_deliveries_by_revived', 'mail_deliveries_due']);
     db.close();
   });
 
@@ -154,7 +161,7 @@ describe('openCoordDb', () => {
     // here would catch it.
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const b = openCoordDb(p);                       // no throw
-    expect((b.prepare('SELECT count(*) AS c FROM programs').get() as { c: number }).c).toBe(1);
+    expect((b.prepare('SELECT count(*) AS c FROM programs WHERE slug <> \'linear-sync\'').get() as { c: number }).c).toBe(1);
     expect((b.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION + 7);              // never written DOWN
     expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -260,9 +267,9 @@ describe('openCoordDb', () => {
       db.prepare("INSERT INTO programs (slug,title,createdAt,state) VALUES ('b','B',1,'active')").run();
       throw new Error('nope');
     })).toThrow('nope');
-    const slugs = (db.prepare('SELECT slug FROM programs ORDER BY slug').all() as { slug: string }[])
+    const slugs = (db.prepare("SELECT slug FROM programs WHERE slug <> 'linear-sync' ORDER BY slug").all() as { slug: string }[])
       .map((r) => r.slug);
-    expect(slugs).toEqual(['a']);
+    expect(slugs).toEqual(['a']);   // D-8181: the reserved `linear-sync` row (migration 59) is left out of every count here
     db.close();
   });
 });
@@ -657,9 +664,81 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 10 — never hand-edited beside a growing array', () => {
-    expect(COORD_SCHEMA_VERSION).toBe(10);
-    expect(MIGRATIONS.length).toBe(10);
+  it('COORD_SCHEMA_VERSION derives to 23 — never hand-edited beside a growing array', () => {
+    // Bumped to 23 by thirteen migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
+    // design 2026-09-14 §5.1), MIGRATIONS[11] (runs.coordProject, board
+    // placement wave 1 Task 1), MIGRATIONS[12] (pool_edges/pool_epoch,
+    // account-pool membership wave 1 Task 6), MIGRATIONS[13] (releases,
+    // node_release_refusals, nodes, update_intent, update_epoch — centralised
+    // update management W2 Task 3), MIGRATIONS[14] (the stall mail read's
+    // indexes, worker stall watch wave 5), MIGRATIONS[15]
+    // (runs.sessionBornAt / runs.sessionBornFor — child-reclamation spec §5.1,
+    // §5.3), MIGRATIONS[16] (stall_settings and run_events_by_at — stall
+    // watch settings design 2026-10-05 §8), MIGRATIONS[17] (dead_claimants,
+    // workspace lifecycle spec §5.4), MIGRATIONS[18]
+    // (dead_coordinator_breaker_state, the breaker's typed state, §5.4/§12),
+    // MIGRATIONS[19] (collect_lane_settings, the collector switch,
+    // path-identity spec 2026-10-12 §5.2), MIGRATIONS[20]
+    // (asks.releaseReason, D-5290, coordinator-first routing §5.2),
+    // MIGRATIONS[21] (the six delegation_* tables, delegation broker wave 3,
+    // spec §5.2), MIGRATIONS[22] (runs.unattributed, D-5298,
+    // coordinator-first Task 11b), MIGRATIONS[23] (the approvals table,
+    // D-5298, coordinator-first Task 16) and MIGRATIONS[24] (the digests table
+    // and asks.corrected, D-5300, coordinator-first Task 17), MIGRATIONS[25]
+    // (account_events, D-5516, accounts plan Task A7), MIGRATIONS[26]
+    // (the mail_deliveries park columns, D-5838), MIGRATIONS[27]
+    // (secret_fingerprints, D-5513, accounts plan Task A10) and MIGRATIONS[28]
+    // (feed_events.dedupe_key, D-5860, consolidation W1a Task C1f) and MIGRATIONS[29] (review_cap, D-6795), and
+    // MIGRATIONS[32] (dispatch_abandon_settings, D-7319), and MIGRATIONS[33] (roll_settings, D-7453), and
+    // MIGRATIONS[34] (landing_entries and landing_projects, landing order wave 5e), and MIGRATIONS[35]
+    // (linear_events, D-7671, #1444), and MIGRATIONS[36] (operator_items, operator_item_events,
+    // programme_modifications and the spec pin on programs, programme ledgers PL2), and MIGRATIONS[37]
+    // (operator_items.recommended and recommendedWhy, programme ledgers PL9), and MIGRATIONS[38] (the landing
+    // authority overlay, its journal cursor, the projection witness and quarantineKind, landing order wave 5f), and
+    // MIGRATIONS[39] (mail_deliveries.revivedFrom and its partial index, D-5914), and MIGRATIONS[40] (runs.hadChild,
+    // D-8068), and MIGRATIONS[41] (landing_intents, landing order wave 5g),
+    // and MIGRATIONS[42] (runs.title, D-8071),
+    // and MIGRATIONS[43] (runs.closedBy and runs.closeDetail, D-8071),
+    // and MIGRATIONS[44] (gone_since, D-8071),
+    // and MIGRATIONS[45] (the runs_by_closed_at index, D-8071)
+    // and MIGRATIONS[46] (run_close_untold and mail_deliveries.wake, D-8073)
+    // and MIGRATIONS[47] (review_cap.granted and askHandledAt, review_cap_lifts, D-8125)
+    // and MIGRATIONS[48] (operator_items.action and heldUntil, D-8076)
+    // and MIGRATIONS[49] (runs.lastDispatchAttemptAt, run_close_anchors and run_close_warnings, D-8077)
+    // and MIGRATIONS[50] (run_close_settings and run_close_refusals, D-8077)
+    // and MIGRATIONS[51] (project_linking, D-8147)
+    // and MIGRATIONS[52] (programs.doneWhen, D-8126)
+    // and MIGRATIONS[53] (run_close_settings.claimantGone, D-8078)
+    // and MIGRATIONS[54] (coordinator_calls, D-8126)
+    // and MIGRATIONS[55] (lane_arm_settings, D-8274)
+    // and MIGRATIONS[56] (testbox_events, the test box ledger, D-8166)
+    // and MIGRATIONS[57] (practice_cases, Overlord W1a)
+    // and MIGRATIONS[58] (the plan tables, bindings, runs.ticketId and the hierarchy settings, D-8181)
+    // and MIGRATIONS[59] (claude_builds, the trusted set of Claude Code builds, D-8289)
+    // and MIGRATIONS[60] (nodes.reportedSweep, the update sweep's record, D-8386)
+    // and MIGRATIONS[61] (claims.chainedFrom, a running holder's re-chained claim, D-8395) and MIGRATIONS[62]
+    // (testbox_events.changes and testbox_staged_changes, the ledger's old and new values, D-8399)
+    // and MIGRATIONS[63] (project_linking's team source, evidence and candidates, the automatic team link, D-8405)
+    // and MIGRATIONS[64] (mail.answersMail and mail_answers_once, the invited reply, #2726)
+    // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a)
+    // and MIGRATIONS[66] (face_settings, the operator's character choice, the Overlord face plan Task 6)
+    // and MIGRATIONS[67] (continuity_generations, continuity_cursor and the continuity lane-arm row, Overlord W1a)
+    // and MIGRATIONS[68] (continuity_snapshots and continuity_card_reads, the card door, Overlord W1a)
+    // and MIGRATIONS[69] (continuity_timers, the timers, Overlord W1a)
+    // and MIGRATIONS[70] (plain_memory_settings and the launch-profile lane-arm row, Overlord W1a launch profiles PR B)
+    // and MIGRATIONS[71] (continuity_notes and continuity_handovers, the note door, Overlord W1a)
+    // and MIGRATIONS[72] (continuity_probes and continuity_reads, the probe door, Overlord W1a)
+    // and MIGRATIONS[73] (the anchor-slot lane-arm row, the anchor, Overlord W1a)
+    // and MIGRATIONS[74] (push_outbox, push_outbox_meta and the reach stamps on asks and items, the push outbox, Overlord W1)
+    // and MIGRATIONS[75] (portfolio_rank and portfolio_rank_revision, the portfolio, Overlord W1)
+    // and MIGRATIONS[76] (continuity_quiz_runs, the replay quiz, Overlord W1a)
+    // and MIGRATIONS[77] (continuity_start_loads, the loads report, Overlord W1 sandbox)
+    // and MIGRATIONS[78] (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, the renewal act, Overlord W1a)
+    // and MIGRATIONS[79] (answer_marks, the operator's answer marks, Overlord W1)
+    // and MIGRATIONS[80] (overlord_authority_head, the Overlord authority journal's head row, Overlord W1)
+    // and MIGRATIONS[81] (operator_responses, response_receipts and response_boots, the response record, Overlord W1).
+    expect(COORD_SCHEMA_VERSION).toBe(82);
+    expect(MIGRATIONS.length).toBe(82);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -676,6 +755,825 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
       'handoffCommit', 'prLineage', 'dispatchStartedAt',
     ]));
     db.close();
+  });
+});
+
+describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-14 §5.1)', () => {
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
+  const runsColumn = (db: DatabaseSync, name: string): ColumnInfo | undefined =>
+    (db.prepare('PRAGMA table_info(runs)').all() as unknown as ColumnInfo[]).find((c) => c.name === name);
+
+  it('gives a fresh database both columns: kind NOT NULL DEFAULT work, reviews nullable with no default', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const kind = runsColumn(db, 'kind');
+    expect(kind).toBeDefined();
+    expect(kind!.type).toBe('TEXT');
+    expect(kind!.notnull).toBe(1);
+    expect(kind!.dflt_value).toBe("'work'");
+    const reviews = runsColumn(db, 'reviews');
+    expect(reviews).toBeDefined();
+    expect(reviews!.type).toBe('INTEGER');
+    expect(reviews!.notnull).toBe(0);
+    expect(reviews!.dflt_value).toBeNull();
+    db.close();
+  });
+
+  it('reaches a database ALREADY at user_version 10 and reads every existing row as a work run', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 10; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 10');
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) " +
+               "VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION);
+    // 22 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
+    // (runs.sessionBornAt/sessionBornFor, child-reclamation spec §5.1, §5.3)
+    // MIGRATIONS[16] (stall_settings and run_events_by_at, stall watch
+    // settings §8), MIGRATIONS[17] (dead_claimants), MIGRATIONS[18]
+    // (dead_coordinator_breaker_state), MIGRATIONS[19]
+    // (collect_lane_settings), MIGRATIONS[20] (asks.releaseReason),
+    // MIGRATIONS[21] (the six delegation_* tables), MIGRATIONS[22]
+    // (runs.unattributed), MIGRATIONS[23] (approvals), MIGRATIONS[24] (digests, asks.corrected), MIGRATIONS[25]
+    // (account_events), MIGRATIONS[26] (the mail_deliveries park columns), MIGRATIONS[27] (secret_fingerprints) and
+    // MIGRATIONS[28] (feed_events.dedupe_key), up to MIGRATIONS[33] (roll_settings, D-7453) and MIGRATIONS[34] (landing_entries and landing_projects, landing order wave 5e) and MIGRATIONS[35]
+    // (linear_events, D-7671) and MIGRATIONS[36] (the programme ledgers' three tables and the spec pin on programs)
+    // and MIGRATIONS[37] (the PL9 recommendation columns) and MIGRATIONS[38] (the landing authority overlay, 5f)
+    // and MIGRATIONS[39] (mail_deliveries.revivedFrom, D-5914)
+    // and MIGRATIONS[40] (runs.hadChild, D-8068) and MIGRATIONS[41] (landing_intents, landing order wave 5g)
+    // and MIGRATIONS[42] (runs.title, D-8071)
+    // and MIGRATIONS[43] (runs.closedBy and runs.closeDetail, D-8071)
+    // and MIGRATIONS[44] (gone_since, D-8071)
+    // and MIGRATIONS[45] (the runs_by_closed_at index, D-8071)
+    // and MIGRATIONS[46] (run_close_untold and mail_deliveries.wake, D-8073)
+    // and MIGRATIONS[47] (review_cap.granted and askHandledAt, review_cap_lifts, D-8125)
+    // and MIGRATIONS[48] (operator_items.action and heldUntil, D-8076)
+    // and MIGRATIONS[49] (runs.lastDispatchAttemptAt, run_close_anchors and run_close_warnings, D-8077)
+    // and MIGRATIONS[50] (run_close_settings and run_close_refusals, D-8077)
+    // and MIGRATIONS[51] (project_linking, D-8147)
+    // and MIGRATIONS[52] (programs.doneWhen, D-8126)
+    // and MIGRATIONS[53] (run_close_settings.claimantGone, D-8078)
+    // and MIGRATIONS[54] (coordinator_calls, D-8126)
+    // and MIGRATIONS[55] (lane_arm_settings, D-8274)
+    // and MIGRATIONS[56] (testbox_events, D-8166)
+    // and MIGRATIONS[57] (practice_cases, Overlord W1a)
+    // and MIGRATIONS[58] (the plan model, D-8181)
+    // and MIGRATIONS[59] (claude_builds, D-8289)
+    // and MIGRATIONS[60] (nodes.reportedSweep, D-8386)
+    // and MIGRATIONS[61] (claims.chainedFrom, D-8395) and MIGRATIONS[62] (testbox_events.changes and testbox_staged_changes, D-8399)
+    // and MIGRATIONS[63] (project_linking's team link columns, D-8405)
+    // and MIGRATIONS[64] (mail.answersMail, #2726)
+    // and MIGRATIONS[65] (continuity_starts, the start report, Overlord W1a)
+    // and MIGRATIONS[66] (face_settings)
+    // and MIGRATIONS[67] (continuity_generations, Overlord W1a)
+    // and MIGRATIONS[68] (continuity_snapshots and continuity_card_reads, Overlord W1a)
+    // and MIGRATIONS[69] (continuity_timers, Overlord W1a)
+    // and MIGRATIONS[70] (plain_memory_settings, launch profiles PR B)
+    // and MIGRATIONS[71] (continuity_notes and continuity_handovers, Overlord W1a)
+    // and MIGRATIONS[72] (continuity_probes and continuity_reads, Overlord W1a)
+    // and MIGRATIONS[73] (the anchor-slot lane-arm row, Overlord W1a)
+    // and MIGRATIONS[74] (push_outbox and the reach stamps, Overlord W1)
+    // and MIGRATIONS[75] (portfolio_rank and portfolio_rank_revision, Overlord W1)
+    // and MIGRATIONS[76] (continuity_quiz_runs, the replay quiz, Overlord W1a)
+    // and MIGRATIONS[77] (continuity_start_loads, Overlord W1 sandbox)
+    // and MIGRATIONS[78] (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, Overlord W1a)
+    // and MIGRATIONS[79] (answer_marks, Overlord W1)
+    // and MIGRATIONS[80] (overlord_authority_head, Overlord W1)
+    // and MIGRATIONS[81] (operator_responses, response_receipts and response_boots, Overlord W1); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(82);
+    const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
+    expect(row).toEqual({ kind: 'work', reviews: null });
+    db.close();
+  });
+});
+
+describe('coord.db: dead_claimants, the dead-coordinator lane’s durable anchor (workspace lifecycle §5.4)', () => {
+  /** This entry's slot, found by its DDL and never hard-coded (the rule the stall-watch settings entry's case states):
+   *  whichever of two branches holding one slot merges second moves up, and that renumber must not edit a line here. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('dead_claimants')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
+  it('a NEW TABLE and nothing else: three columns, the claimant its key — no column on an older build’s tables', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates dead_claimants').toBeGreaterThanOrEqual(18);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const cols = (db.prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('dead_claimants')").all() as unknown as ColumnInfo[])
+      .map((c) => [c.name, c.type, c.notnull, c.pk]);
+    expect(cols).toEqual([['claimantId', 'TEXT', 1, 1], ['firstDeadAt', 'INTEGER', 1, 0], ['lastDeadAt', 'INTEGER', 1, 0]]);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and alters nothing')
+      .toMatch(/^CREATE TABLE dead_claimants \([^;]*\);$/);
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it and leaves every existing row as it was', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates dead_claimants').toBeGreaterThanOrEqual(18);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM dead_claimants').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_start_loads, the loads report (Overlord W1 sandbox, Task 5)', () => {
+  /** Found by its DDL, never hard-coded (the dead_claimants case's rule): a sibling that lands first moves this entry up. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_start_loads')) + 1;
+  it('a NEW TABLE and nothing else, keyed by its start', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates continuity_start_loads').toBeGreaterThanOrEqual(78);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and alters nothing')
+      .toMatch(/^CREATE TABLE continuity_start_loads \([^;]*\);$/);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const pk = db.prepare("SELECT name FROM pragma_table_info('continuity_start_loads') WHERE pk = 1").all() as { name: string }[];
+    expect(pk).toEqual([{ name: 'startId' }]);
+    db.close();
+  });
+  it('reaches a database ALREADY at the version before it and leaves every existing start as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_starts (sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt) VALUES ('lane-a-project-a', 'r-00000001', 'u', 'startup', NULL, NULL, 1, 2)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_start_loads').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT reportId FROM continuity_starts').get()).toEqual({ reportId: 'r-00000001' });
+    db.close();
+  });
+});
+
+describe('coord.db: practice_cases, the case lane\'s table (Overlord §10.5)', () => {
+  /** Found by its DDL, never hard-coded (the dead_claimants case's rule). */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE practice_cases')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
+  const ENTRY = /^CREATE TABLE practice_cases \([^;]*\);\s*CREATE INDEX practice_cases_by_signature ON practice_cases\(signature, openedAt\);$/;
+  it('a NEW TABLE and an INDEX, nothing on an existing table: ten columns, the id its key', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates practice_cases').toBeGreaterThanOrEqual(58);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const cols = (db.prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('practice_cases')").all() as unknown as ColumnInfo[])
+      .map((c) => [c.name, c.type, c.notnull, c.pk]);
+    expect(cols).toEqual([['id', 'INTEGER', 0, 1], ['signature', 'TEXT', 1, 0], ['state', 'TEXT', 1, 0], ['mode', 'TEXT', 1, 0],
+      ['cause', 'TEXT', 1, 0], ['occurrences', 'INTEGER', 1, 0], ['programmes', 'TEXT', 1, 0], ['evidence', 'TEXT', 1, 0],
+      ['windowFrom', 'INTEGER', 1, 0], ['openedAt', 'INTEGER', 1, 0]]);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and one index and alters nothing')
+      .toMatch(ENTRY);
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it and leaves every existing row as it was', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates practice_cases').toBeGreaterThanOrEqual(58);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM practice_cases').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_starts, the start report\'s record (Overlord §3.3.11)', () => {
+  /** Found by its DDL, never hard-coded (the dead_claimants case's rule). */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_starts')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
+  const ENTRY = /^CREATE TABLE continuity_starts \([^;]*\);\s*CREATE INDEX continuity_starts_by_session ON continuity_starts\(sessionId, receivedAt\);$/;
+  it('a NEW TABLE and an INDEX, nothing on an existing table: nine columns, the id its key, one row per report id', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates continuity_starts').toBeGreaterThanOrEqual(64);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const cols = (db.prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('continuity_starts')").all() as unknown as ColumnInfo[])
+      .map((c) => [c.name, c.type, c.notnull, c.pk]);
+    expect(cols).toEqual([['id', 'INTEGER', 0, 1], ['sessionId', 'TEXT', 1, 0], ['reportId', 'TEXT', 1, 0], ['uuid', 'TEXT', 1, 0],
+      ['source', 'TEXT', 1, 0], ['model', 'TEXT', 0, 0], ['rowIncarnation', 'TEXT', 0, 0], ['reportedAt', 'INTEGER', 1, 0],
+      ['receivedAt', 'INTEGER', 1, 0]]);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and one index and alters nothing')
+      .toMatch(ENTRY);
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it and leaves every existing row as it was', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates continuity_starts').toBeGreaterThanOrEqual(64);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_starts').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
+    db.close();
+  });
+});
+
+describe('coord.db: dead_coordinator_breaker_state, the breaker\'s typed state (workspace lifecycle §5.4, §12; D-4857)', () => {
+  /** Found by its DDL, never hard-coded (the dead_claimants case's rule). */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE dead_coordinator_breaker_state')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
+  it('a NEW TABLE and nothing else: one typed row — generation, a clean/dirty/sealed state, the snapshot, the write time — and NO seed row', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates dead_coordinator_breaker_state').toBeGreaterThanOrEqual(19);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const cols = (db.prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('dead_coordinator_breaker_state')").all() as unknown as ColumnInfo[])
+      .map((c) => [c.name, c.type, c.notnull, c.pk]);
+    expect(cols).toEqual([['id', 'INTEGER', 0, 1], ['generation', 'INTEGER', 1, 0], ['state', 'TEXT', 1, 0], ['held', 'TEXT', 0, 0], ['writtenAt', 'INTEGER', 1, 0]]);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table, seeds nothing and alters nothing')
+      .toMatch(/^CREATE TABLE dead_coordinator_breaker_state \([^;]*\);$/);
+    expect(db.prepare('SELECT count(*) AS n FROM dead_coordinator_breaker_state').get(), 'an absent row is the lane\'s dirty').toEqual({ n: 0 });
+    // typed: one row, three state words
+    expect(() => db.exec("INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (2, 1, 'dirty', NULL, 1)")).toThrow();
+    expect(() => db.exec("INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'paused', NULL, 1)")).toThrow();
+    // `sealed` joined the CHECK in fix round 5 (D-4916); a word near it does not
+    expect(() => db.exec("INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'Sealed', NULL, 1)")).toThrow();
+    db.exec("INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'sealed', 'dead-coordinator-breaker-held:', 1)");
+    db.exec('DELETE FROM dead_coordinator_breaker_state');
+    db.exec("INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'dirty', NULL, 1)");
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it and leaves every existing row as it was', () => {
+    expect(SLOT).toBeGreaterThanOrEqual(19);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO dead_claimants (claimantId, firstDeadAt, lastDeadAt) VALUES ('c', 5, 6)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM dead_coordinator_breaker_state').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT claimantId, firstDeadAt, lastDeadAt FROM dead_claimants').get()).toEqual({ claimantId: 'c', firstDeadAt: 5, lastDeadAt: 6 });
+    db.close();
+  });
+});
+
+describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec §5.2)', () => {
+  /** This entry's slot, found by its DDL and never hard-coded (the dead_claimants case's rule): whichever of two branches
+   *  holding one slot merges second moves up, and that renumber must not edit a line here. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE delegation_sessions')) + 1;
+  /** Its predecessor at measurement time, also found by DDL: this entry was written after it. A later migration from
+   *  another branch lands AFTER this entry and needs no edit here: nothing below asks for "the newest" or for the version
+   *  a current build ends at, only for `SLOT` itself, `COORD_SCHEMA_VERSION` and a build cut at this entry. */
+  const PREDECESSOR = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE dead_coordinator_breaker_state')) + 1;
+  /** The REAL db.ts over a schema.ts that stops at entry `n`: a build whose newest migration is `MIGRATIONS[n - 1]`. */
+  const buildAt = async <T>(n: number, use: (m: typeof import('../src/coord/db.js')) => T | Promise<T>): Promise<T> => {
+    vi.resetModules();
+    vi.doMock('../src/coord/schema.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../src/coord/schema.js')>();
+      const cut = actual.MIGRATIONS.slice(0, n);
+      return { ...actual, MIGRATIONS: cut, COORD_SCHEMA_VERSION: cut.length };
+    });
+    try { return await use(await import('../src/coord/db.js')); } finally {
+      vi.doUnmock('../src/coord/schema.js');
+      vi.resetModules();
+    }
+  };
+  const userVersion = (d: DatabaseSync): number => (d.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+  const TABLES = [
+    'delegation_activities', 'delegation_attempts', 'delegation_events', 'delegation_leases', 'delegation_lineage',
+    'delegation_sessions',
+  ];
+  const INDEXES = [
+    'delegation_activities_by_parent', 'delegation_attempts_by_parent', 'delegation_attempts_by_path',
+    'delegation_events_by_observed', 'delegation_events_by_parent', 'delegation_leases_by_activity',
+    'delegation_leases_by_cleanup', 'delegation_leases_by_parent', 'delegation_leases_identity_null_base',
+    'delegation_leases_identity_with_base', 'delegation_leases_one_active_path', 'delegation_lineage_by_activity',
+    'delegation_lineage_by_lease', 'delegation_lineage_by_parent', 'delegation_lineage_by_run',
+    'delegation_sessions_by_effective',
+  ];
+  interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
+  interface FkInfo { table: string; from: string; to: string }
+  const masterNames = (db: DatabaseSync, type: 'table' | 'index'): string[] =>
+    (db.prepare("SELECT name FROM sqlite_master WHERE type = ? AND name LIKE 'delegation\\_%' ESCAPE '\\' AND sql IS NOT NULL ORDER BY name")
+      .all(type) as { name: string }[]).map((r) => r.name);
+  const cols = (db: DatabaseSync, table: string): Array<[string, string, number, number]> =>
+    (db.prepare(`SELECT name, type, "notnull", pk FROM pragma_table_info('${table}')`).all() as unknown as ColumnInfo[])
+      .map((c) => [c.name, c.type, c.notnull, c.pk]);
+  const fks = (db: DatabaseSync, table: string): string[] =>
+    (db.prepare(`SELECT "table", "from", "to" FROM pragma_foreign_key_list('${table}')`).all() as unknown as FkInfo[])
+      .map((f) => `${f.table}.${f.to}<-${f.from}`).sort();
+  /** 'ok' or the SQLite message: a constraint matrix reads as a table of verdicts. */
+  const verdict = (fn: () => unknown): string => {
+    try { fn(); return 'ok'; } catch (err) { return (err as Error).message; }
+  };
+  const put = (db: DatabaseSync, table: string, row: Record<string, string | number | null>): unknown =>
+    db.prepare(`INSERT INTO ${table} (${Object.keys(row).join(', ')}) VALUES (${Object.keys(row).map(() => '?').join(', ')})`)
+      .run(...Object.values(row));
+  const SESSION = { sessionId: 's1', parentIncarnation: 'g1', explicitIntentAt: null, effective: 0, effectiveBasisJson: '[]',
+    claudeSessionIdsJson: '[]', firstObservedAt: 10, lastObservedAt: 20 };
+  const ACTIVITY = { activityId: 'a1', parentId: 's1', parentIncarnation: 'g1', sourceKind: 'agent', upstreamId: 'u1',
+    identityJournalId: 'j'.repeat(64), displayName: null, executionState: 'active', openedAt: 10, endedAt: null, lastEventAt: 11 };
+  const LEASE = { leaseId: 'l1', generation: 0, creatingJournalSequence: 1, currentJournalSequence: 1, activityId: 'a1',
+    parentId: 's1', parentIncarnation: 'g1', project: 'p', adminRecord: 'wt', canonicalPath: '/w/one', creationBase: null,
+    sourceKind: 'agent', parentageState: 'linked', workspaceState: 'unmeasured', disposition: 'ephemeral',
+    cleanupState: 'not-due', cleanupPopulation: 'ephemeral-lease', firstObservedAt: 10, lastObservedAt: 11 };
+  /** A fresh store with one session and one activity, the parents every other row needs. */
+  const seeded = (): DatabaseSync => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    put(db, 'delegation_sessions', SESSION);
+    put(db, 'delegation_activities', ACTIVITY);
+    return db;
+  };
+  const lease = (over: Record<string, string | number | null>) => ({ ...LEASE, ...over });
+
+  it('comes after the dead-coordinator breaker entry, is one migration, and holds exactly the six spec tables and their sixteen indexes', () => {
+    expect(PREDECESSOR, 'no MIGRATIONS entry creates dead_coordinator_breaker_state').toBeGreaterThanOrEqual(19);
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
+    expect(SLOT).toBeLessThanOrEqual(MIGRATIONS.length);
+    expect(MIGRATIONS.filter((m) => m.includes('delegation_')), 'one migration, not several').toHaveLength(1);
+    const ddl = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '');
+    const statements = ddl.split(';').map((s) => s.trim()).filter((s) => s !== '');
+    expect(statements.every((s) => /^CREATE (UNIQUE )?(TABLE|INDEX) /.test(s)),
+      'the migration only CREATEs tables and indexes: it alters, seeds and drops nothing').toBe(true);
+    expect(statements.filter((s) => /^CREATE TABLE /.test(s)).map((s) => /^CREATE TABLE (\w+)/.exec(s)![1]).sort())
+      .toEqual(TABLES);
+    expect(statements.filter((s) => /^CREATE (UNIQUE )?INDEX /.test(s)).map((s) => /INDEX (\w+)/.exec(s)![1]).sort())
+      .toEqual(INDEXES);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    expect(userVersion(db), 'a fresh database reaches this build’s version').toBe(COORD_SCHEMA_VERSION);
+    expect(masterNames(db, 'table')).toEqual(TABLES);
+    expect(masterNames(db, 'index')).toEqual(INDEXES);
+    db.close();
+  });
+
+  it('steps SLOT-1 -> SLOT: a build whose newest migration is this entry takes a fresh file to SLOT and a SLOT-1 file to SLOT', async () => {
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
+    await buildAt(SLOT, (older) => {
+      expect(older.COORD_SCHEMA_VERSION).toBe(SLOT);
+      const fresh = older.openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+      expect(userVersion(fresh)).toBe(SLOT);
+      expect(masterNames(fresh, 'table')).toEqual(TABLES);
+      fresh.close();
+      const p = dbPathIn(mkTmp('ccrc-coord-'));
+      mkdirSync(path.dirname(p), { recursive: true });
+      const raw = new DatabaseSync(p);
+      tx(raw, () => { for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!); raw.exec(`PRAGMA user_version = ${SLOT - 1}`); });
+      expect(userVersion(raw)).toBe(SLOT - 1);
+      raw.close();
+      const stepped = older.openCoordDb(p);
+      expect(userVersion(stepped), 'exactly one step').toBe(SLOT);
+      expect(masterNames(stepped, 'table')).toEqual(TABLES);
+      stepped.close();
+    });
+  });
+
+  it('gives each table exactly its spec columns, types, nullability and keys', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    expect(cols(db, 'delegation_sessions')).toEqual([
+      ['sessionId', 'TEXT', 1, 1], ['parentIncarnation', 'TEXT', 1, 2], ['explicitIntentAt', 'INTEGER', 0, 0],
+      ['effective', 'INTEGER', 1, 0], ['effectiveBasisJson', 'TEXT', 1, 0], ['claudeSessionIdsJson', 'TEXT', 1, 0],
+      ['firstObservedAt', 'INTEGER', 1, 0], ['lastObservedAt', 'INTEGER', 1, 0],
+    ]);
+    expect(cols(db, 'delegation_attempts')).toEqual([
+      ['attemptId', 'TEXT', 1, 1], ['parentId', 'TEXT', 1, 0], ['parentIncarnation', 'TEXT', 1, 0], ['project', 'TEXT', 1, 0],
+      ['adminRecord', 'TEXT', 1, 0], ['canonicalPath', 'TEXT', 0, 0], ['attemptedAt', 'INTEGER', 1, 0], ['rung', 'INTEGER', 0, 0],
+      ['verdict', 'TEXT', 1, 0], ['evidenceJournalIdsJson', 'TEXT', 1, 0], ['detail', 'TEXT', 0, 0],
+    ]);
+    expect(cols(db, 'delegation_activities')).toEqual([
+      ['activityId', 'TEXT', 1, 1], ['parentId', 'TEXT', 1, 0], ['parentIncarnation', 'TEXT', 1, 0], ['sourceKind', 'TEXT', 1, 0],
+      ['upstreamId', 'TEXT', 1, 0], ['identityJournalId', 'TEXT', 1, 0], ['displayName', 'TEXT', 0, 0],
+      ['executionState', 'TEXT', 1, 0], ['openedAt', 'INTEGER', 1, 0], ['endedAt', 'INTEGER', 0, 0], ['lastEventAt', 'INTEGER', 1, 0],
+    ]);
+    expect(cols(db, 'delegation_leases')).toEqual([
+      ['leaseId', 'TEXT', 1, 1], ['generation', 'INTEGER', 1, 0], ['creatingJournalSequence', 'INTEGER', 1, 0],
+      ['currentJournalSequence', 'INTEGER', 1, 0], ['activityId', 'TEXT', 1, 0], ['parentId', 'TEXT', 1, 0],
+      ['parentIncarnation', 'TEXT', 1, 0], ['project', 'TEXT', 1, 0], ['adminRecord', 'TEXT', 1, 0], ['canonicalPath', 'TEXT', 1, 0],
+      ['creationBase', 'TEXT', 0, 0], ['sourceKind', 'TEXT', 1, 0], ['parentageState', 'TEXT', 1, 0], ['workspaceState', 'TEXT', 1, 0],
+      ['disposition', 'TEXT', 1, 0], ['cleanupState', 'TEXT', 1, 0], ['cleanupPopulation', 'TEXT', 1, 0],
+      ['firstObservedAt', 'INTEGER', 1, 0], ['lastObservedAt', 'INTEGER', 1, 0], ['terminalEvidenceAt', 'INTEGER', 0, 0],
+      ['adoptedAt', 'INTEGER', 0, 0], ['retainedAt', 'INTEGER', 0, 0], ['promotedAt', 'INTEGER', 0, 0],
+      ['cleanupDueAt', 'INTEGER', 0, 0], ['cleanupStartedAt', 'INTEGER', 0, 0], ['cleanupFinishedAt', 'INTEGER', 0, 0],
+      ['cleanupEvidenceJson', 'TEXT', 0, 0], ['carrierGenerationSeen', 'INTEGER', 0, 0], ['releasedAt', 'INTEGER', 0, 0],
+    ]);
+    expect(cols(db, 'delegation_lineage')).toEqual([
+      ['lineageId', 'TEXT', 1, 1], ['parentId', 'TEXT', 1, 0], ['parentIncarnation', 'TEXT', 1, 0], ['activityId', 'TEXT', 0, 0],
+      ['leaseId', 'TEXT', 0, 0], ['runId', 'INTEGER', 0, 0], ['openedAt', 'INTEGER', 1, 0], ['closedAt', 'INTEGER', 0, 0],
+      ['closeReason', 'TEXT', 0, 0],
+    ]);
+    expect(cols(db, 'delegation_events')).toEqual([
+      ['id', 'INTEGER', 0, 1], ['eventId', 'TEXT', 1, 0], ['journalSequence', 'INTEGER', 1, 0], ['journalDigest', 'TEXT', 1, 0],
+      ['acceptedAt', 'INTEGER', 1, 0], ['sessionId', 'TEXT', 1, 0], ['parentIncarnation', 'TEXT', 1, 0],
+      ['claudeSessionId', 'TEXT', 1, 0], ['eventKind', 'TEXT', 1, 0], ['observedAt', 'INTEGER', 1, 0], ['payloadJson', 'TEXT', 1, 0],
+    ]);
+    db.close();
+  });
+
+  it('declares every foreign key, and enforces them with the connection’s foreign_keys ON', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const sessionsFk = ['delegation_sessions.parentIncarnation<-parentIncarnation', 'delegation_sessions.sessionId<-parentId'];
+    expect(fks(db, 'delegation_sessions')).toEqual([]);
+    expect(fks(db, 'delegation_attempts')).toEqual(sessionsFk);
+    expect(fks(db, 'delegation_activities')).toEqual(sessionsFk);
+    expect(fks(db, 'delegation_leases')).toEqual([...sessionsFk, 'delegation_activities.activityId<-activityId'].sort());
+    expect(fks(db, 'delegation_lineage')).toEqual([
+      ...sessionsFk, 'delegation_activities.activityId<-activityId', 'delegation_leases.leaseId<-leaseId', 'runs.id<-runId',
+    ].sort());
+    expect(fks(db, 'delegation_events')).toEqual([
+      'delegation_sessions.parentIncarnation<-parentIncarnation', 'delegation_sessions.sessionId<-sessionId',
+    ]);
+    expect((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number }).foreign_keys).toBe(1);
+    expect(verdict(() => put(db, 'delegation_activities', ACTIVITY)), 'an activity needs its parent session').toMatch(/FOREIGN KEY/);
+    expect(verdict(() => put(db, 'delegation_attempts', { attemptId: 'x', parentId: 'no', parentIncarnation: 'g1', project: 'p',
+      adminRecord: 'a', canonicalPath: null, attemptedAt: 1, rung: null, verdict: 'unresolved', evidenceJournalIdsJson: '[]',
+      detail: null }))).toMatch(/FOREIGN KEY/);
+    db.close();
+  });
+
+  it('defines every index as the spec does: its table, uniqueness, partial predicate and column order', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    // [index, table, unique, partial predicate (or null), columns]
+    const spec: Array<[string, string, 0 | 1, string | null, string[]]> = [
+      ['delegation_sessions_by_effective', 'delegation_sessions', 0, null, ['effective', 'lastObservedAt']],
+      ['delegation_attempts_by_parent', 'delegation_attempts', 0, null, ['parentId', 'parentIncarnation', 'attemptedAt']],
+      ['delegation_attempts_by_path', 'delegation_attempts', 0, null, ['project', 'adminRecord', 'attemptedAt']],
+      ['delegation_activities_by_parent', 'delegation_activities', 0, null, ['parentId', 'parentIncarnation', 'executionState']],
+      ['delegation_leases_identity_null_base', 'delegation_leases', 1, 'creationBase IS NULL AND releasedAt IS NULL',
+        ['project', 'adminRecord', 'canonicalPath']],
+      ['delegation_leases_identity_with_base', 'delegation_leases', 1, 'creationBase IS NOT NULL AND releasedAt IS NULL',
+        ['project', 'adminRecord', 'creationBase', 'canonicalPath']],
+      ['delegation_leases_one_active_path', 'delegation_leases', 1, 'releasedAt IS NULL', ['canonicalPath']],
+      ['delegation_leases_by_parent', 'delegation_leases', 0, null, ['parentId', 'parentIncarnation', 'releasedAt']],
+      ['delegation_leases_by_activity', 'delegation_leases', 0, null, ['activityId']],
+      ['delegation_leases_by_cleanup', 'delegation_leases', 0, null, ['cleanupPopulation', 'cleanupState', 'cleanupDueAt']],
+      ['delegation_lineage_by_parent', 'delegation_lineage', 0, null, ['parentId', 'parentIncarnation', 'closedAt']],
+      ['delegation_lineage_by_activity', 'delegation_lineage', 0, null, ['activityId', 'closedAt']],
+      ['delegation_lineage_by_lease', 'delegation_lineage', 0, null, ['leaseId', 'closedAt']],
+      ['delegation_lineage_by_run', 'delegation_lineage', 0, null, ['runId', 'closedAt']],
+      ['delegation_events_by_parent', 'delegation_events', 0, null, ['sessionId', 'parentIncarnation', 'journalSequence']],
+      ['delegation_events_by_observed', 'delegation_events', 0, null, ['observedAt']],
+    ];
+    expect(spec.map((x) => x[0]).sort()).toEqual(INDEXES);
+    for (const [name, table, unique, predicate, columns] of spec) {
+      const listed = (db.prepare(`SELECT "unique", partial FROM pragma_index_list('${table}') WHERE name = ?`).get(name) as
+        { unique: number; partial: number } | undefined);
+      expect(listed, `${name} is on ${table}`).toBeDefined();
+      expect(listed!.unique, `${name} unique`).toBe(unique);
+      expect(listed!.partial, `${name} partial`).toBe(predicate === null ? 0 : 1);
+      expect((db.prepare(`SELECT name FROM pragma_index_info('${name}') ORDER BY seqno`).all() as { name: string }[]).map((c) => c.name),
+        `${name} columns`).toEqual(columns);
+      const sql = (db.prepare('SELECT sql FROM sqlite_master WHERE name = ?').get(name) as { sql: string }).sql.replace(/\s+/g, ' ');
+      if (predicate === null) expect(sql, `${name} has no predicate`).not.toMatch(/\bWHERE\b/);
+      else expect(sql, `${name} predicate`).toContain(`WHERE ${predicate}`);
+    }
+    db.close();
+  });
+
+  it('checks the table-level constraints: effective, observation order, activity order, the identity length', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    expect(verdict(() => put(db, 'delegation_sessions', { ...SESSION, effective: 2 }))).toMatch(/CHECK/);
+    expect(verdict(() => put(db, 'delegation_sessions', { ...SESSION, firstObservedAt: 30, lastObservedAt: 20 }))).toMatch(/CHECK/);
+    expect(verdict(() => put(db, 'delegation_sessions', SESSION))).toBe('ok');
+    expect(verdict(() => put(db, 'delegation_sessions', { ...SESSION, parentIncarnation: 'g2' })), 'a new incarnation is a new row').toBe('ok');
+    expect(verdict(() => put(db, 'delegation_sessions', SESSION)), 'the key is (sessionId, parentIncarnation)').toMatch(/UNIQUE|PRIMARY/);
+    const act = (over: Record<string, string | number | null>) => put(db, 'delegation_activities', { ...ACTIVITY, ...over });
+    expect(verdict(() => act({ executionState: 'running' }))).toMatch(/CHECK/);
+    expect(verdict(() => act({ identityJournalId: 'j'.repeat(63) }))).toMatch(/CHECK/);
+    expect(verdict(() => act({ identityJournalId: 'j'.repeat(65) }))).toMatch(/CHECK/);
+    expect(verdict(() => act({ endedAt: 5 }))).toMatch(/CHECK/);
+    expect(verdict(() => act({ lastEventAt: 9 }))).toMatch(/CHECK/);
+    expect(verdict(() => act({}))).toBe('ok');
+    expect(verdict(() => act({ activityId: 'a2' })), 'a natural key cannot mint a second activity').toMatch(/UNIQUE/);
+    expect(verdict(() => act({ activityId: 'a3', sourceKind: 'workflow' })), 'another source kind is another key').toBe('ok');
+    for (const sourceKind of ['agent', 'workflow', 'bash-worktree']) {
+      expect(verdict(() => act({ activityId: `k-${sourceKind}`, upstreamId: `u-${sourceKind}`, sourceKind })), sourceKind).toBe('ok');
+    }
+    for (const sourceKind of ['raw', 'attached', 'carrier']) {
+      expect(verdict(() => act({ activityId: `x-${sourceKind}`, upstreamId: `x-${sourceKind}`, sourceKind })),
+        `${sourceKind} is not an ACTIVITY source`).toMatch(/CHECK/);
+    }
+    db.close();
+  });
+
+  it('nullable-attempt-path: unresolved, conflicting and unmeasured may keep canonicalPath NULL; linked may not (W3-M67)', () => {
+    const db = seeded();
+    const attempt = (over: Record<string, string | number | null>) => put(db, 'delegation_attempts', {
+      attemptId: `x${Math.random()}`, parentId: 's1', parentIncarnation: 'g1', project: 'p', adminRecord: 'a', canonicalPath: null,
+      attemptedAt: 1, rung: null, verdict: 'unresolved', evidenceJournalIdsJson: '[]', detail: null, ...over,
+    });
+    for (const v of ['unresolved', 'conflicting', 'unmeasured']) {
+      expect(verdict(() => attempt({ verdict: v })), `${v} with no path`).toBe('ok');
+      expect(verdict(() => attempt({ verdict: v, canonicalPath: '/w/p' })), `${v} with a path`).toBe('ok');
+    }
+    expect(verdict(() => attempt({ verdict: 'linked', canonicalPath: '/w/p' })), 'linked with a path').toBe('ok');
+    expect(verdict(() => attempt({ verdict: 'linked', canonicalPath: null })), 'linked with NO path').toMatch(/CHECK/);
+    expect(verdict(() => attempt({ verdict: 'probably' }))).toMatch(/CHECK/);
+    for (const rung of [1, 2, 3, 4, null]) expect(verdict(() => attempt({ rung })), `rung ${rung}`).toBe('ok');
+    for (const rung of [0, 5, -1]) expect(verdict(() => attempt({ rung })), `rung ${rung}`).toMatch(/CHECK/);
+    db.close();
+  });
+
+  it('lease-sequence table: creating and current are separate columns, current may not fall below creating, creating is unique', () => {
+    const db = seeded();
+    expect(verdict(() => put(db, 'delegation_leases', lease({ creatingJournalSequence: 0, currentJournalSequence: 0 })))).toMatch(/CHECK/);
+    expect(verdict(() => put(db, 'delegation_leases', lease({ creatingJournalSequence: 5, currentJournalSequence: 4 })))).toMatch(/CHECK/);
+    expect(verdict(() => put(db, 'delegation_leases', lease({ generation: -1 })))).toMatch(/CHECK/);
+    expect(verdict(() => put(db, 'delegation_leases', lease({ creatingJournalSequence: 4, currentJournalSequence: 9, generation: 3 }))),
+      'the DDL is the complete future-facing shape: current may run ahead of creating').toBe('ok');
+    expect(db.prepare('SELECT creatingJournalSequence AS c, currentJournalSequence AS u, generation AS g FROM delegation_leases').get())
+      .toEqual({ c: 4, u: 9, g: 3 });
+    expect(verdict(() => put(db, 'delegation_leases', lease({ leaseId: 'l2', canonicalPath: '/w/two', creatingJournalSequence: 4,
+      currentJournalSequence: 4 }))), 'one journal record creates one lease').toMatch(/UNIQUE/);
+    db.close();
+  });
+
+  it('checks the lease vocabularies, the population, the carrier generation and every clock', () => {
+    const db = seeded();
+    let n = 0;
+    const l = (over: Record<string, string | number | null>) =>
+      put(db, 'delegation_leases', lease({ leaseId: `l${++n}`, canonicalPath: `/w/${n}`, creatingJournalSequence: n + 100,
+        currentJournalSequence: n + 100, ...over }));
+    for (const sourceKind of ['agent', 'workflow', 'raw', 'attached']) expect(verdict(() => l({ sourceKind })), sourceKind).toBe('ok');
+    expect(verdict(() => l({ sourceKind: 'bash-worktree' })), 'bash-worktree is an ACTIVITY word').toMatch(/CHECK/);
+    for (const c of ['parentageState', 'workspaceState', 'disposition', 'cleanupState']) {
+      expect(verdict(() => l({ [c]: 'nonsense' })), c).toMatch(/CHECK/);
+    }
+    for (const disposition of ['ephemeral', 'adopted', 'retained', 'promoted']) expect(verdict(() => l({ disposition })), disposition).toBe('ok');
+    for (const cleanupState of ['not-due', 'pending', 'running', 'refused', 'reclaimed', 'unmeasured']) {
+      expect(verdict(() => l({ cleanupState })), cleanupState).toBe('ok');
+    }
+    expect(verdict(() => l({ cleanupPopulation: 'persistent-lease' }))).toMatch(/CHECK/);
+    expect(verdict(() => l({ carrierGenerationSeen: 0 }))).toMatch(/CHECK/);
+    expect(verdict(() => l({ carrierGenerationSeen: 1 }))).toBe('ok');
+    expect(verdict(() => l({ carrierGenerationSeen: null }))).toBe('ok');
+    expect(verdict(() => l({ lastObservedAt: 5 }))).toMatch(/CHECK/);
+    for (const c of ['terminalEvidenceAt', 'adoptedAt', 'retainedAt', 'promotedAt', 'cleanupDueAt', 'cleanupStartedAt', 'cleanupFinishedAt', 'releasedAt']) {
+      expect(verdict(() => l({ [c]: 9, ...(c === 'cleanupFinishedAt' ? { cleanupStartedAt: 10 } : {}) })), `${c} before firstObservedAt`).toMatch(/CHECK/);
+      expect(verdict(() => l({ [c]: 10, ...(c === 'cleanupFinishedAt' ? { cleanupStartedAt: 10 } : {}) })), `${c} at firstObservedAt`).toBe('ok');
+    }
+    expect(verdict(() => l({ cleanupFinishedAt: 12 })), 'finished without started').toMatch(/CHECK/);
+    expect(verdict(() => l({ cleanupStartedAt: 12 })), 'started without finished').toBe('ok');
+    expect(verdict(() => put(db, 'delegation_leases', lease({ leaseId: 'orphan', activityId: 'nobody', canonicalPath: '/w/orphan',
+      creatingJournalSequence: 900, currentJournalSequence: 900 }))), 'a lease needs its activity').toMatch(/FOREIGN KEY/);
+    db.close();
+  });
+
+  /** The lease identity and path indexes are tested ONE AT A TIME: a scratch store drops the others, because the same
+   *  duplicate tuple would otherwise trip two indexes and the test could not tell which one did the work. */
+  const isolated = (keep: string): DatabaseSync => {
+    const db = seeded();
+    for (const idx of ['delegation_leases_identity_null_base', 'delegation_leases_identity_with_base', 'delegation_leases_one_active_path']) {
+      if (idx !== keep) db.exec(`DROP INDEX ${idx}`);
+    }
+    return db;
+  };
+  const dup = (db: DatabaseSync, over: Record<string, string | number | null>) =>
+    verdict(() => put(db, 'delegation_leases', lease({ leaseId: 'l2', creatingJournalSequence: 2, currentJournalSequence: 2, ...over })));
+
+  it('null-base identity: two UNRELEASED leases with a NULL creationBase cannot share (project, adminRecord, canonicalPath) (W3-M18B)', () => {
+    const db = isolated('delegation_leases_identity_null_base');
+    put(db, 'delegation_leases', LEASE);
+    expect(dup(db, {}), 'the exact tuple again').toMatch(/UNIQUE/);
+    expect(dup(db, { adminRecord: 'wt2' }), 'another admin record').toBe('ok');
+    expect(dup(db, { leaseId: 'l3', creatingJournalSequence: 3, currentJournalSequence: 3, project: 'p2' }), 'another project').toBe('ok');
+    expect(dup(db, { leaseId: 'l4', creatingJournalSequence: 4, currentJournalSequence: 4, canonicalPath: '/w/other' }), 'another path').toBe('ok');
+    db.close();
+  });
+
+  it('with-base identity: the same tuple with a non-null creationBase is unique, and a different base is a different identity', () => {
+    const db = isolated('delegation_leases_identity_with_base');
+    put(db, 'delegation_leases', lease({ creationBase: 'abc' }));
+    expect(dup(db, { creationBase: 'abc' }), 'the exact tuple again').toMatch(/UNIQUE/);
+    expect(dup(db, { leaseId: 'l3', creatingJournalSequence: 3, currentJournalSequence: 3, creationBase: 'def' }), 'another base').toBe('ok');
+    expect(dup(db, { leaseId: 'l4', creatingJournalSequence: 4, currentJournalSequence: 4, creationBase: null }),
+      'a NULL base is not covered by this index').toBe('ok');
+    db.close();
+  });
+
+  it('the null and non-null base indexes do not collapse through SQLite’s null-distinct UNIQUE', () => {
+    // One UNIQUE (project, adminRecord, creationBase, canonicalPath) would admit unlimited NULL-base duplicates; the
+    // partial pair exists so that it does not. Measured on the full migration, with the path index dropped.
+    const db = seeded();
+    db.exec('DROP INDEX delegation_leases_one_active_path');
+    put(db, 'delegation_leases', LEASE);
+    expect(dup(db, {}), 'NULL base, exact tuple').toMatch(/UNIQUE/);
+    db.close();
+  });
+
+  it('active path: one UNRELEASED lease per canonicalPath, whatever its identity', () => {
+    const db = isolated('delegation_leases_one_active_path');
+    put(db, 'delegation_leases', LEASE);
+    expect(dup(db, { adminRecord: 'other', project: 'q', creationBase: 'abc' }), 'a different identity on the same path').toMatch(/UNIQUE/);
+    expect(dup(db, { leaseId: 'l3', creatingJournalSequence: 3, currentJournalSequence: 3, canonicalPath: '/w/two' }), 'another path').toBe('ok');
+    db.close();
+  });
+
+  it('released-identity-reuse table: a RELEASED lease frees its identity tuple and its path (W3-M64)', () => {
+    const cases: Array<[string, string, Record<string, string | number | null>]> = [
+      ['null base', 'delegation_leases_identity_null_base', {}],
+      ['with base', 'delegation_leases_identity_with_base', { creationBase: 'abc' }],
+      ['active path', 'delegation_leases_one_active_path', {}],
+    ];
+    for (const [label, keep, over] of cases) {
+      const db = isolated(keep);
+      put(db, 'delegation_leases', lease(over));
+      expect(dup(db, over), `${label}: still unreleased`).toMatch(/UNIQUE/);
+      db.prepare("UPDATE delegation_leases SET releasedAt = 15 WHERE leaseId = 'l1'").run();
+      expect(dup(db, over), `${label}: reusable after release`).toBe('ok');
+      expect(dup(db, { ...over, leaseId: 'l3', creatingJournalSequence: 3, currentJournalSequence: 3 }),
+        `${label}: the reuse is itself unreleased and so unique again`).toMatch(/UNIQUE/);
+      db.close();
+    }
+  });
+
+  it('lineage owns exactly one of an activity, a lease or a run, and closes with a reason or not at all', () => {
+    const db = seeded();
+    put(db, 'delegation_leases', LEASE);
+    db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')").run();
+    db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)").run();
+    const runId = (db.prepare('SELECT id FROM runs').get() as { id: number }).id;
+    const L = { lineageId: 'x', parentId: 's1', parentIncarnation: 'g1', activityId: null, leaseId: null, runId: null, openedAt: 10,
+      closedAt: null, closeReason: null };
+    const l = (over: Record<string, string | number | null>) => put(db, 'delegation_lineage', { ...L, lineageId: `x${Math.random()}`, ...over });
+    expect(verdict(() => l({ activityId: 'a1' }))).toBe('ok');
+    expect(verdict(() => l({ leaseId: 'l1' }))).toBe('ok');
+    expect(verdict(() => l({ runId }))).toBe('ok');
+    expect(verdict(() => l({})), 'owning nothing').toMatch(/CHECK/);
+    expect(verdict(() => l({ activityId: 'a1', leaseId: 'l1' })), 'owning two').toMatch(/CHECK/);
+    expect(verdict(() => l({ activityId: 'a1', leaseId: 'l1', runId })), 'owning three').toMatch(/CHECK/);
+    expect(verdict(() => l({ activityId: 'a1', closedAt: 12, closeReason: 'done' }))).toBe('ok');
+    expect(verdict(() => l({ activityId: 'a1', closedAt: 12 })), 'closed with no reason').toMatch(/CHECK/);
+    expect(verdict(() => l({ activityId: 'a1', closeReason: 'done' })), 'a reason with no close').toMatch(/CHECK/);
+    expect(verdict(() => l({ activityId: 'a1', closedAt: 9, closeReason: 'done' })), 'closed before opened').toMatch(/CHECK/);
+    expect(verdict(() => l({ activityId: 'nobody' }))).toMatch(/FOREIGN KEY/);
+    expect(verdict(() => l({ leaseId: 'nobody' }))).toMatch(/FOREIGN KEY/);
+    expect(verdict(() => l({ runId: runId + 99 }))).toMatch(/FOREIGN KEY/);
+    expect(verdict(() => l({ lineageId: 'x', activityId: 'a1' }))).toBe('ok');
+    expect(verdict(() => put(db, 'delegation_lineage', { ...L, lineageId: 'x', activityId: 'a1' })), 'the lineage id is the key').toMatch(/UNIQUE|PRIMARY/);
+    db.close();
+  });
+
+  it('events: eventId and journalSequence are each unique, the digest is 64 characters, the kind is one of seven', () => {
+    const db = seeded();
+    const E = { eventId: 'e1', journalSequence: 1, journalDigest: 'd'.repeat(64), acceptedAt: 10, sessionId: 's1',
+      parentIncarnation: 'g1', claudeSessionId: 'c', eventKind: 'PostToolUse', observedAt: 9, payloadJson: '{}' };
+    expect(verdict(() => put(db, 'delegation_events', E))).toBe('ok');
+    expect(verdict(() => put(db, 'delegation_events', { ...E, journalSequence: 2 })), 'the same eventId').toMatch(/UNIQUE/);
+    expect(verdict(() => put(db, 'delegation_events', { ...E, eventId: 'e2' })), 'the same journalSequence').toMatch(/UNIQUE/);
+    expect(verdict(() => put(db, 'delegation_events', { ...E, eventId: 'e2', journalSequence: 0 }))).toMatch(/CHECK/);
+    expect(verdict(() => put(db, 'delegation_events', { ...E, eventId: 'e2', journalSequence: 2, journalDigest: 'd'.repeat(63) }))).toMatch(/CHECK/);
+    expect(verdict(() => put(db, 'delegation_events', { ...E, eventId: 'e2', journalSequence: 2, eventKind: 'Stop' }))).toMatch(/CHECK/);
+    for (const [i, k] of ['SessionStart', 'PreToolUse', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit', 'SessionEnd'].entries()) {
+      expect(verdict(() => put(db, 'delegation_events', { ...E, eventId: `k${i}`, journalSequence: 10 + i, eventKind: k })), k).toBe('ok');
+    }
+    expect(verdict(() => put(db, 'delegation_events', { ...E, eventId: 'e9', journalSequence: 9, sessionId: 'nobody' }))).toMatch(/FOREIGN KEY/);
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it: all six tables arrive in that one step, every older row untouched', async () => {
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+      raw.exec("INSERT INTO dead_claimants (claimantId, firstDeadAt, lastDeadAt) VALUES ('c', 5, 6)");
+    });
+    expect(masterNames(raw, 'table'), 'none of the six exists before').toEqual([]);
+    raw.close();
+    await buildAt(SLOT, (older) => {
+      const db = older.openCoordDb(p);
+      expect(userVersion(db)).toBe(SLOT);
+      expect(masterNames(db, 'table')).toEqual(TABLES);
+      expect(masterNames(db, 'index')).toEqual(INDEXES);
+      for (const t of TABLES) expect(db.prepare(`SELECT count(*) AS n FROM ${t}`).get(), t).toEqual({ n: 0 });
+      expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
+      expect(db.prepare('SELECT claimantId, firstDeadAt FROM dead_claimants').get()).toEqual({ claimantId: 'c', firstDeadAt: 5 });
+      db.close();
+    });
+    // And the CURRENT build takes the same file to its own version, whatever has landed after this entry.
+    const p2 = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p2), { recursive: true });
+    const raw2 = new DatabaseSync(p2);
+    tx(raw2, () => { for (let v = 0; v < SLOT - 1; v++) raw2.exec(MIGRATIONS[v]!); raw2.exec(`PRAGMA user_version = ${SLOT - 1}`); });
+    raw2.close();
+    const current = openCoordDb(p2);
+    expect(userVersion(current)).toBe(COORD_SCHEMA_VERSION);
+    expect(masterNames(current, 'table')).toEqual(TABLES);
+    current.close();
+  });
+
+  it('a failure at ANY statement of the migration leaves the prior user_version and no partial table, then boots clean', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
+    const original = MIGRATIONS[SLOT - 1]!;
+    const statements = original.replace(/--[^\n]*/g, '').split(';').map((s) => s.trim()).filter((s) => s !== '');
+    expect(statements.length, 'six tables and sixteen indexes').toBe(22);
+    const mutable = MIGRATIONS as unknown as string[];
+    for (let k = 0; k <= statements.length; k++) {
+      const p = dbPathIn(mkTmp('ccrc-coord-'));
+      mkdirSync(path.dirname(p), { recursive: true });
+      const raw = new DatabaseSync(p);
+      tx(raw, () => {
+        for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+        raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+        raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('keep', 'Keep', 1, 'active')");
+      });
+      raw.close();
+      let caught: unknown;
+      try {
+        // The first k statements are the real DDL; the next one cannot run. `db.ts` executes the entry in its own tx().
+        mutable[SLOT - 1] = [...statements.slice(0, k), 'SELECT * FROM delegation_injected_fault'].join(';\n') + ';';
+        try { openCoordDb(p); } catch (err) { caught = err; }
+      } finally {
+        mutable[SLOT - 1] = original;
+      }
+      expect(caught, `fault after ${k} statements`).toBeInstanceOf(CoordDbUnmigratable);
+      const after = new DatabaseSync(p);
+      expect((after.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, `fault after ${k}`).toBe(SLOT - 1);
+      expect(masterNames(after, 'table'), `no partial table after ${k}`).toEqual([]);
+      expect(masterNames(after, 'index'), `no partial index after ${k}`).toEqual([]);
+      expect(after.prepare("SELECT slug FROM programs").get(), 'the older rows survive').toEqual({ slug: 'keep' });
+      after.close();
+      const db = openCoordDb(p);                                          // the cause is fixed: boot 2 migrates clean
+      expect(userVersion(db)).toBe(COORD_SCHEMA_VERSION);
+      expect(masterNames(db, 'table')).toEqual(TABLES);
+      db.close();
+    }
+  }, 120_000);
+
+  it('is ADDITIVE: every older table and index is byte-for-byte what the previous version wrote, so an older build’s SQL still works', async () => {
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => { for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!); raw.exec(`PRAGMA user_version = ${SLOT - 1}`); });
+    const schemaOf = (d: DatabaseSync): Record<string, string> => Object.fromEntries(
+      (d.prepare("SELECT name, sql FROM sqlite_master WHERE name NOT LIKE 'delegation\\_%' ESCAPE '\\' AND sql IS NOT NULL").all() as
+        Array<{ name: string; sql: string }>).map((r) => [r.name, r.sql]));
+    const before = schemaOf(raw);
+    raw.close();
+    // Cut at THIS entry, so a migration that lands after it (and may alter older tables) is not blamed on it.
+    await buildAt(SLOT, (older) => {
+      const db = older.openCoordDb(p);
+      expect(schemaOf(db), 'no older table or index changed').toEqual(before);
+      // The statements an older build runs, naming only the columns it knows.
+      db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('old', 'Old', 1, 'active')").run();
+      db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('old', 1, 1, 'demo', 'working', 'c', 1)").run();
+      db.prepare("INSERT INTO dead_claimants (claimantId, firstDeadAt, lastDeadAt) VALUES ('x', 1, 2)").run();
+      db.prepare("UPDATE runs SET state = 'done' WHERE program = 'old'").run();
+      expect(db.prepare("SELECT state FROM runs WHERE program = 'old'").get()).toEqual({ state: 'done' });
+      db.close();
+    });
+  });
+
+  it('an OLDER build, meeting the file at this version, reads and writes its own tables and migrates nothing (rule 3)', async () => {
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    const newer = openCoordDb(p);
+    put(newer, 'delegation_sessions', SESSION);
+    const newerVersion = userVersion(newer);
+    newer.close();
+    // The older build is the REAL db.ts over a schema.ts that stops one entry earlier, not a hand-written imitation.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await buildAt(SLOT - 1, (older) => {
+        expect(older.COORD_SCHEMA_VERSION).toBe(SLOT - 1);
+        const db = older.openCoordDb(p);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0]![0]).toMatch(/this build knows/i);
+        expect(userVersion(db), 'never written DOWN').toBe(newerVersion);
+        db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('old', 'Old', 1, 'active')").run();
+        db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('old', 1, 1, 'demo', 'working', 'c', 1)").run();
+        expect(db.prepare("SELECT claimedBy FROM runs WHERE program = 'old'").get()).toEqual({ claimedBy: 'c' });
+        expect(db.prepare('SELECT count(*) AS n FROM delegation_sessions').get(), 'the newer tables are still there').toEqual({ n: 1 });
+        db.close();
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 
@@ -844,5 +1742,1247 @@ describe('coord.db: migration 10 — the programme knows its home, the feed row 
       .toBe(COORD_SCHEMA_VERSION + 3);
     warnSpy.mockRestore();
     b.close();
+  });
+});
+
+describe('coord.db: migration 12 — runs.coordProject', () => {
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
+  const columnOf = (db: DatabaseSync, table: string, name: string): ColumnInfo | undefined =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnInfo[])
+      .find((c) => c.name === name);
+
+  it('reaches a database ALREADY at user_version 11 — the version just before this one', () => {
+    const dir = mkTmp('ccrc-mig12-');
+    const p = path.join(dir, '.ccrc', 'coord.db');
+    mkdirSync(path.dirname(p), { recursive: true });
+    // Build a db at exactly user_version 11 by applying the first eleven entries
+    // only, so this isolates THIS migration rather than a chain. It planted at
+    // 10 until #108 (review runs) took `user_version 10 -> 11` and moved this
+    // one down a slot; the assertion is unchanged in meaning — a database one
+    // version behind the current build gains `coordProject` on open.
+    //
+    // The reached version is COORD_SCHEMA_VERSION, not a hardcoded 12: task 6
+    // (account-pool membership) appended MIGRATIONS[12] after this one, so
+    // opening now migrates 11 -> 12 -> 13, not 11 -> 12. `coordProject`
+    // appearing is still this migration's own effect; the total is whatever
+    // the build currently ships.
+    const old = new DatabaseSync(p);
+    for (let v = 0; v < 11; v++) old.exec(MIGRATIONS[v]!);
+    old.exec('PRAGMA user_version = 11');
+    old.close();
+
+    const db = openCoordDb(p);                    // must migrate 11 -> current
+    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
+    expect(columnOf(db, 'runs', 'coordProject')).toBeDefined();
+    db.close();
+  });
+
+  it('is NULLABLE — an existing run predates the stamp and must survive', () => {
+    const dir = mkTmp('ccrc-mig12-null-');
+    const db = openCoordDb(path.join(dir, '.ccrc', 'coord.db'));
+    expect(columnOf(db, 'runs', 'coordProject')!.notnull).toBe(0);
+    db.close();
+  });
+
+  it('is ADDITIVE: every runs column migration 1 wrote is still there', () => {
+    const dir = mkTmp('ccrc-mig12-add-');
+    const db = openCoordDb(path.join(dir, '.ccrc', 'coord.db'));
+    const names = (db.prepare("SELECT name FROM pragma_table_info('runs')").all() as { name: string }[])
+      .map((r) => r.name);
+    expect(names).toEqual(expect.arrayContaining(
+      ['id', 'program', 'project', 'wave', 'state', 'claimedBy', 'sessionId', 'dispatchStartedAt']));
+    db.close();
+  });
+
+  it('a database from a NEWER build still READS — rollback is real', () => {
+    const dir = mkTmp('ccrc-mig12-fwd-');
+    const p = path.join(dir, '.ccrc', 'coord.db');
+    const db = openCoordDb(p); db.exec('PRAGMA user_version = 99'); db.close();
+    expect(() => openCoordDb(p).close()).not.toThrow();
+  });
+});
+
+describe('coord.db: migration 14 — the update control plane (design 2026-09-20 §6)', () => {
+  // [name, type, notnull, dflt_value, pk] — PRAGMA table_info's own fields, in
+  // declaration order. The WHOLE list per table, never arrayContaining: the
+  // writer-group scan (`update-writer-groups.test.ts`) binds each store method
+  // to a named column group, so a column that lands here without being placed
+  // in a group is a column no scan knows about — and a column dropped by a
+  // later edit to this entry would be a frozen migration changing under a box
+  // that already ran it.
+  //
+  // `notnull: 1` on the three TEXT PRIMARY KEYs (`releases.tag`,
+  // `nodes.nodeId`, `update_intent.scope`) is explicit (D-3212): SQLite's
+  // rowid-table rule otherwise admits NULL in a non-`INTEGER` primary key —
+  // the same gap `programs.slug` has had since entry 1 — leaving only the
+  // store writers' guards (every tag passes `isReleaseTag`, every nodeId is
+  // measured, every scope is FLEET_SCOPE or a live nodeId) between a NULL key
+  // and a duplicate "row per key". The column itself now refuses it.
+  type Col = [name: string, type: string, notnull: number, dflt: string | null, pk: number];
+  const cols = (db: DatabaseSync, table: string): Col[] =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as
+      { name: string; type: string; notnull: number; dflt_value: string | null; pk: number }[])
+      .map((c) => [c.name, c.type, c.notnull, c.dflt_value, c.pk]);
+  const tableNames = (db: DatabaseSync): string[] =>
+    (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[])
+      .map((r) => r.name);
+  const UPDATE_TABLES = ['node_release_refusals', 'nodes', 'releases', 'update_epoch', 'update_intent'];
+
+  /** A database at EXACTLY user_version 13 — the version just before this
+   *  one — carrying one pool edge and a raised pool epoch, so a case can show
+   *  this migration touched neither. Isolates THIS entry, not a chain. */
+  const plantedAt13 = (prefix: string): string => {
+    const p = dbPathIn(mkTmp(prefix));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 13; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 13');
+      raw.exec('INSERT INTO pool_edges (subjectKind, subjectId, pool, addedAt, addedBy) ' +
+               "VALUES ('account', 'a', 'pool-a', 5, 'op')");
+      raw.exec("UPDATE pool_epoch SET epoch = 3, issuedAt = 7, digest = 'd' WHERE id = 1");
+    });
+    raw.close();
+    return p;
+  };
+
+  it('reaches a database ALREADY at user_version 13 and adds exactly the five tables', () => {
+    const p = plantedAt13('ccrc-mig14-');
+    const before = new DatabaseSync(p);
+    const had = tableNames(before);
+    before.close();
+    expect(had.filter((t) => UPDATE_TABLES.includes(t)), 'the plant already has an update table').toEqual([]);
+
+    const db = openCoordDb(p);                    // must migrate 13 -> current
+    // The reached version is COORD_SCHEMA_VERSION, never a hardcoded 14: the
+    // next entry appended after this one must not have to edit this case.
+    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
+    // Narrowed to this entry's own tables, as the fresh-database case below already is: a later entry's table
+    // (stall_settings, MIGRATIONS[16]) joins the whole diff from 13, and must not have to edit this case.
+    const added = tableNames(db).filter((t) => !had.includes(t) && UPDATE_TABLES.includes(t)).sort();
+    expect(added).toEqual(UPDATE_TABLES);
+    db.close();
+  });
+
+  it('gives each table exactly the columns §6 names, with their nullability, defaults and keys', () => {
+    const db = openCoordDb(plantedAt13('ccrc-mig14-cols-'));
+    expect(cols(db, 'releases')).toEqual([
+      ['tag', 'TEXT', 1, null, 1], ['version', 'TEXT', 1, null, 0], ['channel', 'TEXT', 1, null, 0],
+      ['publishedAt', 'INTEGER', 1, null, 0], ['commitSha', 'TEXT', 0, null, 0],
+      ['tarballUrl', 'TEXT', 1, null, 0], ['bundleListed', 'INTEGER', 1, null, 0], ['notes', 'TEXT', 0, null, 0],
+      // A yanked release is KEPT (§7) — the column defaults to 0 and nothing deletes.
+      ['yanked', 'INTEGER', 1, '0', 0], ['observedAt', 'INTEGER', 1, null, 0],
+      ['notifiedAt', 'INTEGER', 0, null, 0],
+    ]);
+    expect(cols(db, 'node_release_refusals')).toEqual([
+      ['nodeId', 'TEXT', 1, null, 1], ['tag', 'TEXT', 1, null, 2],
+      ['at', 'INTEGER', 1, null, 0], ['detail', 'TEXT', 1, null, 0],
+    ]);
+    expect(cols(db, 'nodes')).toEqual([
+      // the row key, then role and label — which are the measurement group's
+      ['nodeId', 'TEXT', 1, null, 1], ['role', 'TEXT', 1, null, 0], ['label', 'TEXT', 1, null, 0],
+      // measurement group, continued
+      ['currentVersion', 'TEXT', 0, null, 0], ['currentSha', 'TEXT', 0, null, 0],
+      ['currentRef', 'TEXT', 0, null, 0], ['currentBuiltAt', 'TEXT', 0, null, 0],
+      ['currentDirty', 'INTEGER', 0, null, 0],
+      ['stampRead', 'TEXT', 1, null, 0], ['installState', 'TEXT', 1, null, 0],
+      ['provenance', 'TEXT', 1, null, 0], ['caps', 'TEXT', 1, null, 0],
+      ['agentOps', 'TEXT', 0, null, 0], ['highestVersion', 'TEXT', 0, null, 0],
+      ['previousVersion', 'TEXT', 0, null, 0],
+      // fix round 1, D-3213: the read-state beside each tag column.
+      ['floorRead', 'TEXT', 1, null, 0], ['previousRead', 'TEXT', 1, null, 0],
+      ['os', 'TEXT', 1, null, 0], ['measuredAt', 'INTEGER', 0, null, 0],
+      ['reachable', 'INTEGER', 1, null, 0], ['unreachableSince', 'INTEGER', 0, null, 0],
+      // report group
+      ['reportedPhase', 'TEXT', 0, null, 0], ['reportedTarget', 'TEXT', 0, null, 0],
+      ['reportedStartedAt', 'INTEGER', 0, null, 0], ['reportedUpdatedAt', 'INTEGER', 0, null, 0],
+      ['reportedDetail', 'TEXT', 0, null, 0],
+      // lease group — updateState's default is D-3186
+      ['updateState', 'TEXT', 1, "'idle'", 0], ['updateTarget', 'TEXT', 0, null, 0],
+      ['updateStartedAt', 'INTEGER', 0, null, 0], ['updateDetail', 'TEXT', 0, null, 0],
+      // resolved group
+      ['channel', 'TEXT', 0, null, 0], ['desiredTag', 'TEXT', 0, null, 0], ['resolveDetail', 'TEXT', 0, null, 0],
+      // request group
+      ['requestedTag', 'TEXT', 0, null, 0], ['requestedKind', 'TEXT', 0, null, 0],
+      ['requestedAt', 'INTEGER', 0, null, 0],
+      // identity group
+      ['supersededBy', 'TEXT', 0, null, 0],
+      // report group, added by migration 61 (D-8386, residue R37): the update sweep's record
+      ['reportedSweep', 'TEXT', 0, null, 0],
+    ]);
+    expect(cols(db, 'update_intent')).toEqual([
+      ['scope', 'TEXT', 1, null, 1], ['channel', 'TEXT', 1, null, 0], ['pinnedTag', 'TEXT', 0, null, 0],
+      ['auto', 'TEXT', 1, null, 0], ['notify', 'TEXT', 1, null, 0],
+      ['setAt', 'INTEGER', 1, null, 0], ['setBy', 'TEXT', 1, null, 0],
+    ]);
+    // pool_epoch's single-row idiom WITHOUT its digest column (§6): nothing
+    // computes a digest for the projection — its torn-write detectors are the
+    // `end` terminator and the 65536-byte cap (§9).
+    expect(cols(db, 'update_epoch').map((c) => c[0]), 'update_epoch copied pool_epoch\'s digest').not.toContain('digest');
+    expect(cols(db, 'update_epoch')).toEqual([
+      ['id', 'INTEGER', 0, null, 1], ['epoch', 'INTEGER', 1, null, 0], ['issuedAt', 'INTEGER', 1, null, 0],
+    ]);
+    db.close();
+  });
+
+  it('refuses a NULL key on each of the three TEXT PRIMARY KEYs (D-3212)', () => {
+    const db = openCoordDb(plantedAt13('ccrc-mig14-nullkey-'));
+    expect(() => db.exec(
+      "INSERT INTO releases (tag, version, channel, publishedAt, tarballUrl, bundleListed, observedAt) " +
+      "VALUES (NULL, 'v0.0.1', 'stable', 1, 'https://example.invalid/x.tar.gz', 1, 1)",
+    )).toThrow(/NOT NULL constraint failed/);
+    expect(() => db.exec(
+      "INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, os, reachable) " +
+      "VALUES (NULL, 'fleet', 'fleet', 'ok', 'complete', 'unverified', '', 'linux', 1)",
+    )).toThrow(/NOT NULL constraint failed/);
+    expect(() => db.exec(
+      "INSERT INTO update_intent (scope, channel, auto, notify, setAt, setBy) " +
+      "VALUES (NULL, 'stable', 'off', 'channel', 1, 'op')",
+    )).toThrow(/NOT NULL constraint failed/);
+    expect(db.prepare('SELECT count(*) AS c FROM releases').get()).toEqual({ c: 0 });
+    expect(db.prepare('SELECT count(*) AS c FROM nodes').get()).toEqual({ c: 0 });
+    expect(db.prepare('SELECT count(*) AS c FROM update_intent').get()).toEqual({ c: 1 }); // the seed row only
+    db.close();
+  });
+
+  it('seeds exactly two rows — the fleet-default intent and epoch 0 — so no reader handles absence', () => {
+    const db = openCoordDb(plantedAt13('ccrc-mig14-seed-'));
+    expect(db.prepare('SELECT scope, channel, pinnedTag, auto, notify, setAt, setBy FROM update_intent').all())
+      .toEqual([{ scope: '*', channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: 0, setBy: 'migration' }]);
+    expect(db.prepare('SELECT id, epoch, issuedAt FROM update_epoch').all())
+      .toEqual([{ id: 1, epoch: 0, issuedAt: 0 }]);
+    for (const t of ['releases', 'node_release_refusals', 'nodes']) {
+      expect(db.prepare(`SELECT count(*) AS c FROM ${t}`).get(), `${t} is seeded`).toEqual({ c: 0 });
+    }
+    db.close();
+  });
+
+  it('a FRESH database reaches the same five tables and the same two seed rows', () => {
+    // The ordinary boot of a new box: migrations 0 -> current in one open.
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-mig14-fresh-')));
+    expect(tableNames(db).filter((t) => UPDATE_TABLES.includes(t)).sort()).toEqual(UPDATE_TABLES);
+    expect(db.prepare('SELECT count(*) AS c FROM update_intent').get()).toEqual({ c: 1 });
+    expect(db.prepare('SELECT epoch FROM update_epoch WHERE id = 1').get()).toEqual({ epoch: 0 });
+    db.close();
+  });
+
+  it('update_epoch is a singleton — a second row is refused by the CHECK and by nothing else', () => {
+    const db = openCoordDb(plantedAt13('ccrc-mig14-single-'));
+    // Every value well-typed and every NOT NULL satisfied, so the ONLY thing
+    // that can refuse this insert is `CHECK (id = 1)` — the message is
+    // asserted, not just the throw (pool-edges-store.test.ts's "pool_epoch
+    // refuses a second row" passed with its CHECK deleted until it did).
+    expect(() => db.exec('INSERT INTO update_epoch (id, epoch, issuedAt) VALUES (2, 1, 1)'))
+      .toThrow(/CHECK constraint failed/);
+    expect(db.prepare('SELECT count(*) AS c FROM update_epoch').get()).toEqual({ c: 1 });
+    db.close();
+  });
+
+  it('a node row whose INSERT names no lease column reads idle — the measurement writer never names updateState', () => {
+    // D-3186. `upsertNodeMeasurement` (Task 5) names only
+    // identity, measurement and report columns; without the DEFAULT this
+    // INSERT fails NOT NULL and the writer would have to name the lease column
+    // the writer-group scan forbids it.
+    const db = openCoordDb(plantedAt13('ccrc-mig14-idle-'));
+    db.exec(
+      'INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, floorRead, previousRead, os, reachable) ' +
+      "VALUES ('01234567-89ab-cdef-0123-456789abcdef', 'fleet', 'fleet', 'ok', 'complete', 'unverified', '', 'absent', 'absent', 'linux', 1)",
+    );
+    expect(db.prepare('SELECT updateState, updateTarget, measuredAt, requestedTag, supersededBy FROM nodes').get())
+      .toEqual({ updateState: 'idle', updateTarget: null, measuredAt: null, requestedTag: null, supersededBy: null });
+    db.close();
+  });
+
+  it('node_release_refusals holds one row per (node, tag) — a node\'s verdict, never fleet-wide', () => {
+    const db = openCoordDb(plantedAt13('ccrc-mig14-refusal-'));
+    const ins = db.prepare('INSERT INTO node_release_refusals (nodeId, tag, at, detail) VALUES (?, ?, ?, ?)');
+    ins.run('n1', 'v0.0.9', 1, 'provenance: bundle absent');
+    ins.run('n2', 'v0.0.9', 2, 'provenance: bundle absent');   // the same tag, another node: its own row
+    expect(() => ins.run('n1', 'v0.0.9', 3, 'again')).toThrow(/UNIQUE constraint failed/);
+    expect(db.prepare('SELECT count(*) AS c FROM node_release_refusals').get()).toEqual({ c: 2 });
+    db.close();
+  });
+
+  it('is ADDITIVE: migration 13\'s pool edge and pool epoch come through untouched', () => {
+    const db = openCoordDb(plantedAt13('ccrc-mig14-add-'));
+    expect(db.prepare('SELECT subjectKind, subjectId, pool, addedAt, addedBy FROM pool_edges').all())
+      .toEqual([{ subjectKind: 'account', subjectId: 'a', pool: 'pool-a', addedAt: 5, addedBy: 'op' }]);
+    expect(db.prepare('SELECT epoch, issuedAt, digest FROM pool_epoch WHERE id = 1').get())
+      .toEqual({ epoch: 3, issuedAt: 7, digest: 'd' });
+    db.close();
+  });
+
+  it('every entry carries its own banner, numbered 1..N in order — a textual double slot reds here', () => {
+    // `db.ts`'s loop keys on the ARRAY INDEX alone, so two entries both
+    // bannered `14: user_version 13 -> 14` (the shape a rebase of PR #40 onto
+    // this entry would leave if both kept their text) would run as 14 and 15
+    // while every comment in the file said otherwise. This counts the
+    // banners against MIGRATIONS.length and checks the numbering. It cannot
+    // see a slot another BRANCH holds — schema.ts's closing paragraph on
+    // entry 14 carries that re-measurement.
+    const src = readFileSync(path.join(root, 'server/src/coord/schema.ts'), 'utf8');
+    const banners = [...src.matchAll(/^ {2}\/\/ ── (\d+): user_version (\d+) -> (\d+) ─/gm)]
+      .map((m) => [Number(m[1]), Number(m[2]), Number(m[3])]);
+    expect(banners.length, 'one banner per MIGRATIONS entry').toBe(MIGRATIONS.length);
+    banners.forEach(([n, from, to], i) => {
+      expect([n, from, to], `banner ${i + 1}`).toEqual([i + 1, i, i + 1]);
+    });
+  });
+});
+
+describe('coord.db: the stall mail read\'s indexes (worker stall watch wave 5)', () => {
+  // `CoordStore.stallMailFor` runs once per stall candidate per sweep, synchronously on the server's one handle.
+  // Before this entry both of its statements, and `hasMailWithSubject`, planned `SCAN mail`, and both statements
+  // `SCAN mail_deliveries`; `stall-store.test.ts`'s plan rows pin what the read plans now.
+  const INDEXES = ['mail_by_at', 'mail_by_run', 'mail_deliveries_by_mail'];
+  /** This entry's slot, found by its DDL and never hard-coded: schema.ts's rule is that whichever of two branches
+   *  holding one slot merges second moves up, and that renumber must not have to edit a line here. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('mail_deliveries_by_mail')) + 1;
+  const indexNames = (db: DatabaseSync): string[] =>
+    (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'").all() as
+      { name: string }[]).map((r) => r.name);
+  /** A database at exactly the version before this entry, carrying one mail and its delivery. */
+  const plantedBefore = (prefix: string, extra = ''): string => {
+    const p = dbPathIn(mkTmp(prefix));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body) " +
+               "VALUES (5, 'demo-a', 'u', 'demo-b', NULL, 'status', 's', 'x')");
+      raw.exec("INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (1, 'demo-b', 'acked', 'e')");
+      if (extra !== '') raw.exec(extra);
+    });
+    raw.close();
+    return p;
+  };
+
+  it('is its own entry, after every entry main carried when it was written', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates mail_deliveries_by_mail').toBeGreaterThanOrEqual(15);
+    expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => INDEXES.some((n) => m.includes(n))),
+      'an index of this entry was amended into a frozen one').toBe(false);
+  });
+
+  it('reaches a database ALREADY at the version before it, keeps its rows, and adds exactly its three indexes', () => {
+    const p = plantedBefore('ccrc-mig-stallidx-');
+    const before = new DatabaseSync(p);
+    const had = indexNames(before);
+    before.close();
+    expect(had.filter((n) => INDEXES.includes(n)), 'the plant already has one').toEqual([]);
+    const db = openCoordDb(p);
+    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
+    // Narrowed to this entry's own indexes: a later entry's index (run_events_by_at, MIGRATIONS[16]) joins the
+    // whole diff from SLOT - 1, and must not have to edit this case.
+    expect(indexNames(db).filter((n) => !had.includes(n) && INDEXES.includes(n)).sort()).toEqual(INDEXES);
+    expect(db.prepare('SELECT count(*) AS c FROM mail').get()).toEqual({ c: 1 });
+    expect(db.prepare('SELECT count(*) AS c FROM mail_deliveries').get()).toEqual({ c: 1 });
+    db.close();
+  });
+
+  it('a FRESH database reaches the same three', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-mig-stallidx-fresh-')));
+    expect(indexNames(db)).toEqual(expect.arrayContaining(INDEXES));
+    db.close();
+  });
+
+  it('IF NOT EXISTS: an index already made under one of its names does not refuse the start', () => {
+    const p = plantedBefore('ccrc-mig-stallidx-pre-', 'CREATE INDEX mail_by_at ON mail(at)');
+    expect(() => openCoordDb(p).close()).not.toThrow();
+  });
+
+  it('indexes the columns the read filters on, and no other (mail_deliveries.toId is deliberately absent)', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-mig-stallidx-cols-')));
+    const cols = (name: string): string[] =>
+      (db.prepare(`PRAGMA index_info(${name})`).all() as { name: string }[]).map((r) => r.name);
+    expect(INDEXES.map((n) => [n, cols(n)])).toEqual([
+      ['mail_by_at', ['at']], ['mail_by_run', ['runId']], ['mail_deliveries_by_mail', ['mailId']],
+    ]);
+    db.close();
+  });
+});
+
+describe('coord.db: migration 16 — runs.sessionBornAt / runs.sessionBornFor (child-reclamation)', () => {
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
+  const columnOf = (db: DatabaseSync, table: string, name: string): ColumnInfo | undefined =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnInfo[])
+      .find((c) => c.name === name);
+
+  it('reaches a database ALREADY at user_version 15 — the version just before this one', () => {
+    const p = dbPathIn(mkTmp('ccrc-mig16-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 15; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 15');
+    });
+    raw.close();
+
+    const db = openCoordDb(p);                    // must migrate 15 -> current
+    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
+    expect(columnOf(db, 'runs', 'sessionBornAt')).toBeDefined();
+    expect(columnOf(db, 'runs', 'sessionBornFor')).toBeDefined();
+    db.close();
+  });
+
+  it('sessionBornAt is INTEGER, sessionBornFor is TEXT, both nullable with no default — an older row predates the stamp', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-mig16-null-')));
+    const at = columnOf(db, 'runs', 'sessionBornAt')!;
+    expect(at.type).toBe('INTEGER');
+    expect(at.notnull).toBe(0);
+    expect(at.dflt_value).toBeNull();
+    const forCol = columnOf(db, 'runs', 'sessionBornFor')!;
+    expect(forCol.type).toBe('TEXT');
+    expect(forCol.notnull).toBe(0);
+    expect(forCol.dflt_value).toBeNull();
+    db.close();
+  });
+
+  it('is ADDITIVE: every runs column earlier migrations wrote is still there', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-mig16-add-')));
+    const names = (db.prepare("SELECT name FROM pragma_table_info('runs')").all() as { name: string }[])
+      .map((r) => r.name);
+    expect(names).toEqual(expect.arrayContaining(
+      ['id', 'program', 'project', 'wave', 'state', 'claimedBy', 'sessionId', 'dispatchStartedAt', 'coordProject']));
+    db.close();
+  });
+
+  // The backfill: `sessionBornAt = dispatchStartedAt`, `sessionBornFor =
+  // sessionId` for every bound row EXCEPT one whose `run_events` trail
+  // carries a `spawn-adopted:` event — an adopted winner may be an earlier
+  // attempt's workspace, so a backfilled guess would date it wrong. An
+  // unbound row is left NULL by the `WHERE sessionId IS NOT NULL` clause
+  // alone. Edited IN PLACE onto this same slot: this migration has never
+  // shipped, so `sessionBornFor` joins it here rather than opening a slot 17.
+  describe('the backfill', () => {
+    /** A database at exactly user_version 15, carrying three `runs` rows and
+     *  one `run_events` row, built with RAW SQL — never `CoordStore` — so the
+     *  migration under test is the only thing that can move
+     *  `sessionBornAt`/`sessionBornFor`. */
+    const plantedAt15 = (prefix: string): string => {
+      const p = dbPathIn(mkTmp(prefix));
+      mkdirSync(path.dirname(p), { recursive: true });
+      const raw = new DatabaseSync(p);
+      tx(raw, () => {
+        for (let v = 0; v < 15; v++) raw.exec(MIGRATIONS[v]!);
+        raw.exec('PRAGMA user_version = 15');
+        raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+        const insertRun = raw.prepare(
+          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, sessionId, dispatchStartedAt) ' +
+          'VALUES (?, 1, 1, ?, ?, ?, 1, ?, ?)',
+        );
+        // 1: bound, no spawn-adopted event — backfills.
+        insertRun.run('p', 'demo', 'working', 'c', 'demo-bound', 1_000);
+        // 2: unbound — WHERE sessionId IS NOT NULL alone leaves it null.
+        insertRun.run('p', 'demo', 'planned', 'c', null, null);
+        // 3: bound, but its dispatch was an ADOPTION — a `spawn-adopted:`
+        // event on this run's trail excludes it from the backfill.
+        insertRun.run('p', 'demo', 'working', 'c', 'demo-adopted', 2_000);
+        const adoptedId = raw.prepare("SELECT id FROM runs WHERE sessionId = 'demo-adopted'").get() as { id: number };
+        raw.prepare(
+          'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
+        ).run(adoptedId.id, 1, 'working', 'working', 'coordinator', 'spawn-adopted:expired');
+      });
+      raw.close();
+      return p;
+    };
+
+    it('backfills a bound row (both columns), leaves an unbound row null, and leaves a spawn-adopted row null', () => {
+      const db = openCoordDb(plantedAt15('ccrc-mig16-backfill-'));
+      const rows = db.prepare(
+        'SELECT sessionId, dispatchStartedAt, sessionBornAt, sessionBornFor FROM runs ORDER BY id',
+      ).all() as { sessionId: string | null; dispatchStartedAt: number | null;
+                    sessionBornAt: number | null; sessionBornFor: string | null }[];
+      expect(rows).toEqual([
+        { sessionId: 'demo-bound', dispatchStartedAt: 1_000, sessionBornAt: 1_000, sessionBornFor: 'demo-bound' },
+        { sessionId: null, dispatchStartedAt: null, sessionBornAt: null, sessionBornFor: null },
+        { sessionId: 'demo-adopted', dispatchStartedAt: 2_000, sessionBornAt: null, sessionBornFor: null },
+      ]);
+      db.close();
+    });
+
+    it('a spawn-adopted event on ANOTHER run does not exclude this one — the exclusion is per-run', () => {
+      const p = dbPathIn(mkTmp('ccrc-mig16-cross-'));
+      mkdirSync(path.dirname(p), { recursive: true });
+      const raw = new DatabaseSync(p);
+      tx(raw, () => {
+        for (let v = 0; v < 15; v++) raw.exec(MIGRATIONS[v]!);
+        raw.exec('PRAGMA user_version = 15');
+        raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+        const insertRun = raw.prepare(
+          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, sessionId, dispatchStartedAt) ' +
+          "VALUES ('p', 1, 1, 'demo', 'working', 'c', 1, ?, ?)",
+        );
+        insertRun.run('demo-other', 3_000);
+        insertRun.run('demo-adopted-elsewhere', 4_000);
+        const otherId = raw.prepare("SELECT id FROM runs WHERE sessionId = 'demo-other'").get() as { id: number };
+        const adoptedId = raw.prepare("SELECT id FROM runs WHERE sessionId = 'demo-adopted-elsewhere'")
+          .get() as { id: number };
+        // The event names the OTHER run — a real row, but not `otherId`'s.
+        raw.prepare(
+          'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
+        ).run(adoptedId.id, 1, 'working', 'working', 'coordinator', 'spawn-adopted:expired');
+      });
+      raw.close();
+
+      const db = openCoordDb(p);
+      expect(db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE sessionId = ?').get('demo-other'))
+        .toEqual({ sessionBornAt: 3_000, sessionBornFor: 'demo-other' });
+      expect(db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE sessionId = ?')
+        .get('demo-adopted-elsewhere')).toEqual({ sessionBornAt: null, sessionBornFor: null });
+      db.close();
+    });
+  });
+});
+
+describe('coord.db: stall_settings and run_events_by_at (stall watch settings W1, design 2026-10-05 §8)', () => {
+  /** This entry's slot, found by its DDL, `CREATE TABLE stall_settings (` (the first entry that spells it), and never
+   *  hard-coded (the stall mail indexes' rule above): whichever of two branches holding one slot merges second moves
+   *  up, and that renumber must not have to edit a line here. The bare name would not do: a later migration may name
+   *  the table without creating it. The needle stops at the NAME, not at a prefix of it: `_` is a word character, so
+   *  the lookahead names it, and `CREATE TABLE stall_settings_new` (SQLite's table-rebuild idiom, a legitimate later
+   *  migration) is not a second create of this table. */
+  const CREATE = /CREATE TABLE stall_settings(?![A-Za-z0-9_])/;
+  const SLOT = MIGRATIONS.findIndex((m) => CREATE.test(m)) + 1;
+  const NAMES = ['run_events_by_at', 'stall_settings'];
+  const objectNames = (db: DatabaseSync): string[] =>
+    (db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'").all() as
+      { name: string }[]).map((r) => r.name);
+  /** A database at exactly the version before this entry, carrying one run and one run event. */
+  const plantedBefore = (prefix: string): string => {
+    const p = dbPathIn(mkTmp(prefix));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) " +
+               "VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+      raw.exec("INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) " +
+               "VALUES (1, 5, 'working', 'working', 'operator', 'x')");
+    });
+    raw.close();
+    return p;
+  };
+
+  it('is its own entry, after every entry main carried when it was written', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates stall_settings').toBeGreaterThanOrEqual(17);
+    // Exactly one entry CREATEs the table. A later legitimate migration may name it (an ALTER, an index), and that is
+    // no fault; only a second CREATE is, so the count is of the DDL and not of the name.
+    expect(MIGRATIONS.filter((m) => CREATE.test(m)).length,
+      'more than one MIGRATIONS entry carries CREATE TABLE stall_settings: a later migration may name the table (an ALTER is fine), but only one entry may create it').toBe(1);
+    // SLOT is found by the DDL, so this scan is meaningful: a name amended into a frozen entry reds here.
+    expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => m.includes('stall_settings')),
+      'stall_settings was amended into a frozen entry').toBe(false);
+    expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => m.includes('run_events_by_at')),
+      'run_events_by_at was amended into a frozen entry').toBe(false);
+  });
+
+  it('the entry alone adds exactly stall_settings and run_events_by_at, and seeds one follow/NULL row', () => {
+    // The entry's own diff, applied raw, so a later entry never edits this case.
+    const p = plantedBefore('ccrc-mig-stallsettings-');
+    const raw = new DatabaseSync(p);
+    const had = objectNames(raw);
+    raw.exec(MIGRATIONS[SLOT - 1]!);
+    expect(objectNames(raw).filter((n) => !had.includes(n)).sort()).toEqual(NAMES);
+    expect(raw.prepare('SELECT id, level, quietMs, updatedAt FROM stall_settings').all())
+      .toEqual([{ id: 1, level: 'follow', quietMs: null, updatedAt: 0 }]);
+    raw.close();
+  });
+
+  it('openCoordDb reaches a database ALREADY at the version before it, seeds the row and keeps its rows', () => {
+    const db = openCoordDb(plantedBefore('ccrc-mig-stallsettings-open-'));
+    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
+    expect(objectNames(db)).toEqual(expect.arrayContaining(NAMES));
+    expect(db.prepare('SELECT id, level, quietMs, updatedAt FROM stall_settings').all())
+      .toEqual([{ id: 1, level: 'follow', quietMs: null, updatedAt: 0 }]);
+    expect(db.prepare('SELECT runId, at, detail FROM run_events').all()).toEqual([{ runId: 1, at: 5, detail: 'x' }]);
+    db.close();
+  });
+});
+
+describe('coord.db: migration 21 — asks.releaseReason (D-5290, coordinator-first routing §5.2)', () => {
+  it('reaches a database ALREADY at user_version 20 and keeps its asks rows, each with no release reason', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 20; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 20');
+      raw.exec('INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, releasedAt) ' +
+               "VALUES (1, 'project-a-quiet-basin', 'project-a-calm-mesa', NULL, 'k', 1, 'd', 'Which colour?', '[\"Red\"]', 'released', 2)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    const rows = db.prepare('SELECT childId, state, releasedAt, releaseReason FROM asks').all();
+    expect(rows).toEqual([{ childId: 'project-a-quiet-basin', state: 'released', releasedAt: 2, releaseReason: null }]);
+    db.close();
+  });
+});
+
+describe('coord.db: migration 23 — runs.unattributed (D-5298, coordinator-first Task 11b)', () => {
+  it('reaches a database ALREADY at user_version 22 and keeps its runs rows, each not recorded unattributed', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 22; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 22');
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('program-a', 'A', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) " +
+               "VALUES ('program-a', 1, 1, 'project-a', 'planned', 'project-a-calm-mesa', 1)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT program, claimedBy, unattributed FROM runs').all())
+      .toEqual([{ program: 'program-a', claimedBy: 'project-a-calm-mesa', unattributed: 0 }]);
+    db.close();
+  });
+
+  it('openRun journals an unattributed open as 1 and every other open as 0', () => {
+    const coord = new CoordStore(openCoordDb(dbPathIn(mkTmp('ccrc-coord-'))));
+    const a = coord.openRun({ program: 'program-a', title: 'A', project: 'project-a', wave: 1, waveOf: 2,
+      claimedBy: 'project-a-calm-mesa', unattributed: true });
+    const b = coord.openRun({ program: 'program-a', title: 'A', project: 'project-a', wave: 2, waveOf: 2,
+      claimedBy: 'project-a-calm-mesa' });
+    if (!('id' in a) || !('id' in b)) throw new Error('fixture: both opens must succeed');
+    expect(coord.db.prepare('SELECT id, unattributed FROM runs ORDER BY id').all())
+      .toEqual([{ id: a.id, unattributed: 1 }, { id: b.id, unattributed: 0 }]);
+  });
+});
+
+describe('coord.db: migration 24 — the approvals table (D-5298, coordinator-first Task 16)', () => {
+  it('reaches a database ALREADY at user_version 23 and keeps its runs and asks rows; the new table starts empty', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 23; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 23');
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('program-a', 'A', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) " +
+               "VALUES ('program-a', 1, 1, 'project-a', 'planned', 'project-a-calm-mesa', 1)");
+      raw.exec('INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state) ' +
+               "VALUES (1, 'project-a-quiet-basin', 'project-a-calm-mesa', NULL, 'k', 1, 'd', 'Which colour?', '[\"Red\"]', 'held')");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    // The file reaches this build's version (26 since migration 26, D-5516), through 24 and 25.
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT program, claimedBy FROM runs').all())
+      .toEqual([{ program: 'program-a', claimedBy: 'project-a-calm-mesa' }]);
+    expect(db.prepare('SELECT childId, state FROM asks').all())
+      .toEqual([{ childId: 'project-a-quiet-basin', state: 'held' }]);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM approvals').get()).toEqual({ n: 0 });
+    const cols = (db.prepare("SELECT name FROM pragma_table_info('approvals')").all() as { name: string }[]).map((r) => r.name);
+    expect(cols).toEqual(['id', 'childId', 'parentId', 'runId', 'digest', 'nonce', 'agentId', 'tool', 'inputRedacted',
+      'truncated', 'class', 'state', 'releaseReason', 'askAt', 'notifyAt', 'ruledAt', 'verdict', 'reason', 'ruling',
+      'answeredBy', 'toolUseId', 'corrected']);
+    db.close();
+  });
+});
+
+describe('coord.db: migration 25 — the digests table and asks.corrected (D-5300, coordinator-first Task 17)', () => {
+  it('reaches a database ALREADY at user_version 24 and keeps its asks and approvals rows; digests starts empty', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 24; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 24');
+      raw.exec('INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, answeredBy, answer, answeredAt) ' +
+               "VALUES (1, 'project-a-quiet-basin', 'project-a-calm-mesa', NULL, 'k', 1, 'd', 'Which colour?', '[\"Red\"]', 'answered', 'project-a-calm-mesa', 'Red', 2)");
+      raw.exec('INSERT INTO approvals (childId, parentId, runId, digest, nonce, agentId, tool, inputRedacted, class, state, askAt, notifyAt, corrected) ' +
+               `VALUES ('project-a-quiet-basin', 'project-a-calm-mesa', NULL, '${'a'.repeat(64)}', '${'0'.repeat(32)}', '', 'Bash', 'rm -rf build', 'ordinary', 'denied', 1, 60001, 1)`);
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT childId, state, answer, corrected FROM asks').all())
+      .toEqual([{ childId: 'project-a-quiet-basin', state: 'answered', answer: 'Red', corrected: 0 }]);
+    expect(db.prepare('SELECT state, corrected FROM approvals').all()).toEqual([{ state: 'denied', corrected: 1 }]);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM digests').get()).toEqual({ n: 0 });
+    const cols = (db.prepare("SELECT name FROM pragma_table_info('digests')").all() as { name: string }[]).map((r) => r.name);
+    expect(cols).toEqual(['day', 'sentAt', 'count']);
+    db.close();
+  });
+
+  it('the day is the key: a second claim of the same day changes nothing', () => {
+    const coord = new CoordStore(openCoordDb(dbPathIn(mkTmp('ccrc-coord-'))));
+    expect(coord.claimDigestDay('2026-10-18', 10, 3)).toBe(true);
+    expect(coord.claimDigestDay('2026-10-18', 20, 5)).toBe(false);
+    expect(coord.digestDay('2026-10-18')).toEqual({ day: '2026-10-18', sentAt: 10, count: 3 });
+  });
+});
+
+// D-5516 (accounts plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A7). APPENDED. Its slot is found
+// by its DDL, never hard-coded, so a renumber at merge time edits no line here.
+describe('coord.db: account_events, the session-only account audit (D-5516, accounts plan Task A7)', () => {
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE account_events')) + 1;
+  it('is one new table and its index, reached from the slot before it with every earlier row kept', () => {
+    expect(SLOT).toBeGreaterThan(25);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO digests (day, sentAt, count) VALUES ('2026-10-18', 1, 0)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT day FROM digests').all()).toEqual([{ day: '2026-10-18' }]);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM account_events').get()).toEqual({ n: 0 });
+    const cols = (db.prepare("SELECT name FROM pragma_table_info('account_events')").all() as { name: string }[]).map((r) => r.name);
+    expect(cols).toEqual(['id', 'at', 'actor', 'act', 'laneId', 'provider', 'method', 'outcome', 'code', 'keyName', 'fleetIdentity']);
+    const idx = (db.prepare("SELECT name FROM pragma_index_list('account_events')").all() as { name: string }[]).map((r) => r.name);
+    expect(idx).toContain('account_events_by_at');
+    // The outcome is closed in the table too: the one writer refuses first, and the CHECK is the floor under it.
+    expect(() => db.prepare("INSERT INTO account_events (at, actor, act, outcome) VALUES (1, 'a 00000000', 'check', 'maybe')").run())
+      .toThrow(/CHECK/);
+    db.close();
+  });
+});
+
+describe('coord.db: feed_events.dedupe_key, a notice\'s once-only key (D-5860, consolidation W1a Task C1f)', () => {
+  /** This entry's slot, found by its DDL and never hard-coded: a branch that merges first moves it up a slot. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('dedupe_key')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
+  const keyColumn = (db: DatabaseSync): ColumnInfo | undefined =>
+    (db.prepare('PRAGMA table_info(feed_events)').all() as unknown as ColumnInfo[]).find((c) => c.name === 'dedupe_key');
+
+  it('ONE nullable column with no default and no CHECK, and one index: nothing an older build would trip on', () => {
+    expect(SLOT, 'no MIGRATIONS entry adds dedupe_key').toBeGreaterThanOrEqual(29);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const c = keyColumn(db);
+    expect(c).toBeDefined();
+    expect(c!.type).toBe('TEXT');
+    expect(c!.notnull, 'dedupe_key must be nullable (rule 3: an older build inserts without it)').toBe(0);
+    expect(c!.dflt_value).toBeNull();
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration adds one column and one index')
+      .toBe('ALTER TABLE feed_events ADD COLUMN dedupe_key TEXT;\n  CREATE INDEX feed_events_by_dedupe ON feed_events(kind, sessionId, dedupe_key);');
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it, and its rows read back with a NULL key', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body, runId) VALUES ('e', 1, 1, 'queue', 's', 't', 'b', NULL)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT body, dedupe_key FROM feed_events').all()).toEqual([{ body: 'b', dedupe_key: null }]);
+    db.close();
+  });
+
+  it('rollback is real: an older build meeting the file at this version reads it and inserts without naming the key', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    const a = openCoordDb(p);
+    a.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION + 3}`);
+    a.close();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const b = openCoordDb(p);
+    // An older build's insert never names `dedupe_key`.
+    b.prepare("INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body, runId) VALUES ('e', 1, 1, 'nudge', 's', 't', 'b', NULL)").run();
+    expect(b.prepare('SELECT body, dedupe_key FROM feed_events').all()).toEqual([{ body: 'b', dedupe_key: null }]);
+    warnSpy.mockRestore();
+    b.close();
+  });
+});
+
+describe('coord.db: mail_deliveries.revivedFrom, a revived park\'s heir names its parent (D-5914, #125)', () => {
+  /** This entry's slot, found by its DDL and never hard-coded: a branch that merges first moves it up a slot. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('revivedFrom')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
+  const col = (db: DatabaseSync): ColumnInfo | undefined =>
+    (db.prepare('PRAGMA table_info(mail_deliveries)').all() as unknown as ColumnInfo[]).find((c) => c.name === 'revivedFrom');
+
+  it('ONE nullable INTEGER column with no default, and one partial index: nothing an older build would trip on', () => {
+    expect(SLOT, 'no MIGRATIONS entry adds revivedFrom').toBeGreaterThanOrEqual(40);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const c = col(db);
+    expect(c).toBeDefined();
+    expect(c!.type).toBe('INTEGER');
+    expect(c!.notnull, 'revivedFrom must be nullable (rule 3: an older build inserts without it)').toBe(0);
+    expect(c!.dflt_value).toBeNull();
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration adds one column and one index')
+      .toBe('ALTER TABLE mail_deliveries ADD COLUMN revivedFrom INTEGER;\n  CREATE INDEX mail_deliveries_by_revived ON mail_deliveries(revivedFrom) WHERE revivedFrom IS NOT NULL;');
+    const listed = db.prepare("SELECT partial FROM pragma_index_list('mail_deliveries') WHERE name = 'mail_deliveries_by_revived'")
+      .get() as { partial: number } | undefined;
+    expect(listed?.partial).toBe(1);
+    db.close();
+  });
+
+  it('the heir lookup HAS_HEIR_SQL makes is a SEARCH on the partial index, not a scan of the table', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const plan = (db.prepare('EXPLAIN QUERY PLAN SELECT d.id FROM mail_deliveries d WHERE d.state = \'rejected\' ' +
+      'AND EXISTS (SELECT 1 FROM mail_deliveries h WHERE h.revivedFrom = d.id)').all() as { detail: string }[])
+      .map((r) => r.detail).join('\n');
+    expect(plan).toMatch(/SEARCH h (?:EXISTS )?USING (?:COVERING )?INDEX mail_deliveries_by_revived/);
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it, and its deliveries read back with no parent', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts) VALUES (1, 'a', 'u', 'b', NULL, 'status', 's', 'b', '[]')");
+      raw.exec("INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (1, 'b', 'rejected', 'e')");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT state, revivedFrom FROM mail_deliveries').all()).toEqual([{ state: 'rejected', revivedFrom: null }]);
+    db.close();
+  });
+
+  it('rollback is real: an older build meeting the file at this version inserts without naming the column', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    const a = openCoordDb(p);
+    a.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION + 3}`);
+    a.close();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const b = openCoordDb(p);
+    b.exec("INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts) VALUES (1, 'a', 'u', 'b', NULL, 'status', 's', 'b', '[]')");
+    b.prepare("INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (1, 'b', 'queued', 'e')").run();
+    expect(b.prepare('SELECT state, revivedFrom FROM mail_deliveries').all()).toEqual([{ state: 'queued', revivedFrom: null }]);
+    warnSpy.mockRestore();
+    b.close();
+  });
+});
+
+describe('coord.db: review_cap.granted, askHandledAt and review_cap_lifts (D-8125)', () => {
+  /** Found by its DDL, never hard-coded (the dead_claimants case's rule). */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE review_cap_lifts')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: string | null }
+  it('adds two nullable columns with no default and the journal table with its index', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates review_cap_lifts').toBeGreaterThanOrEqual(48);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const cols = db.prepare("SELECT name, type, \"notnull\", dflt_value FROM pragma_table_info('review_cap')").all() as unknown as ColumnInfo[];
+    for (const name of ['granted', 'askHandledAt']) {
+      const c = cols.find((x) => x.name === name);
+      expect(c, `review_cap.${name}`).toMatchObject({ type: 'INTEGER', notnull: 0, dflt_value: null });
+    }
+    expect(db.prepare("SELECT name FROM pragma_table_info('review_cap_lifts') ORDER BY cid").all().map((r) => (r as { name: string }).name))
+      .toEqual(['id', 'workRunId', 'at', 'byId', 'reason', 'rounds', 'capBefore', 'capAfter', 'closedAskAt']);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'review_cap_lifts_by_run'").all()).toHaveLength(1);
+    db.close();
+  });
+
+  it('reaches a file at the version before it and keeps a review_cap row intact, granted NULL', () => {
+    expect(SLOT).toBeGreaterThanOrEqual(48);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+      raw.exec('INSERT INTO review_cap (workRunId, askedAt, liftedAt) VALUES (1, 7, 9)');
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT workRunId, askedAt, liftedAt, granted, askHandledAt FROM review_cap').get())
+      .toEqual({ workRunId: 1, askedAt: 7, liftedAt: 9, granted: null, askHandledAt: null });
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_generations and continuity_cursor, the generations (Overlord §3.3.11, H12)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_generations')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_generations \([^;]*\);\s*CREATE UNIQUE INDEX continuity_generations_live ON continuity_generations\(identity\) WHERE state <> 'ended';\s*CREATE TABLE continuity_cursor \([^;]*\);\s*INSERT INTO lane_arm_settings \(lane, choice, updatedAt\) VALUES \('continuity', 'shadow', 0\);$/;
+  it('NEW TABLES, an index and one seed row, nothing on an existing table, after the start report\'s table', () => {
+    expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_starts')) + 1);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: the seed row lands and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_generations').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT lane, choice, updatedAt FROM lane_arm_settings ORDER BY lane').all())
+      .toEqual([{ lane: 'anchor-slot', choice: 'shadow', updatedAt: 0 }, { lane: 'continuity', choice: 'shadow', updatedAt: 0 },
+        { lane: 'launch-profile', choice: 'shadow', updatedAt: 0 }, { lane: 'roster-card', choice: 'live', updatedAt: 7 }]);
+    db.close();
+  });
+});
+
+describe('coord.db: plain_memory_settings and the launch-profile lane-arm row (Overlord W1a, launch profiles PR B)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE plain_memory_settings')) + 1;
+  const ENTRY = /^CREATE TABLE plain_memory_settings \([^;]*\);\s*INSERT INTO plain_memory_settings \(id, choice, updatedAt\) VALUES \(1, 'off', 0\);\s*INSERT INTO lane_arm_settings \(lane, choice, updatedAt\) VALUES \('launch-profile', 'shadow', 0\);$/;
+  it('A NEW TABLE and one seed row each, nothing on an existing table, after the generations\' entry', () => {
+    expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_generations')) + 1);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('lands after card PR B\'s entry 69 and timers PR A\'s entry 70, the slots that merged first: 71 (review 2024 F8, review 2031 F2)', () => {
+    // A box already at user_version 70 has card B's and the timers' tables; this entry must come after them, or it would be
+    // skipped there.
+    const card = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_snapshots')) + 1;
+    const timers = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_timers')) + 1;
+    expect([card, timers]).toEqual([69, 70]);
+    expect(SLOT).toBe(timers + 1);
+  });
+
+  it('reaches a database ALREADY at the version before it: auto memory for plain reads off, the lane shadow, every row as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT id, choice, updatedAt FROM plain_memory_settings').all()).toEqual([{ id: 1, choice: 'off', updatedAt: 0 }]);
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'launch-profile'").get()).toEqual({ choice: 'shadow', updatedAt: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    expect(() => db.prepare('INSERT INTO plain_memory_settings (id, choice, updatedAt) VALUES (2, \'on\', 1)').run()).toThrow();
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_snapshots and continuity_card_reads, the card door (Overlord §3.3.3, C38)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_snapshots')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_snapshots \([^;]*\);\s*CREATE INDEX continuity_snapshots_by_session ON continuity_snapshots\(sessionId, served\);\s*CREATE TABLE continuity_card_reads \([^;]*\);\s*CREATE INDEX continuity_card_reads_by_conversation ON continuity_card_reads\(sessionId, uuid, id\);\s*CREATE INDEX continuity_card_reads_by_snapshot ON continuity_card_reads\(snapshotId\);$/;
+  it('NEW TABLES and their indexes, nothing on an existing table, after the generations\' tables', () => {
+    expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_generations')) + 1);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: both tables land empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_snapshots').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_card_reads').get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_timers, the timers (Overlord §3.3.12, C61)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_timers')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_timers \([^;]*CHECK \(runId IS NULL OR programme IS NULL\)\s*\);\s*CREATE INDEX continuity_timers_pending ON continuity_timers\(state, dueAt\);\s*CREATE INDEX continuity_timers_by_setter ON continuity_timers\(setter, setAt\);$/;
+  it('a NEW TABLE and its indexes, nothing on an existing table, after the card\'s tables', () => {
+    expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_card_reads')) + 1);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: the table lands empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_timers').get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_notes and continuity_handovers, the note door (Overlord §3.3.2, C37)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_notes')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_notes \([^;]*\);\s*CREATE UNIQUE INDEX continuity_notes_one_revision ON continuity_notes\(revises\) WHERE revises IS NOT NULL;\s*CREATE INDEX continuity_notes_by_identity ON continuity_notes\(identity, id\);\s*CREATE TABLE continuity_handovers \([^;]*\);$/;
+  it('NEW TABLES and their indexes, nothing on an existing table, the entry after launch profiles\' (review 2039 F10, review 2046 F8)', () => {
+    // Pinned against the entry that landed just before it (#2794, launch profiles PR B's plain_memory_settings at 71, after
+    // the timers' 70), not only "after the card's".
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE plain_memory_settings')) + 2);
+    expect(SLOT).toBe(72);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: both tables land empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_notes').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_handovers').get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_probes and continuity_reads, the probe door (Overlord §3.3.5, C41)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_probes')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_probes \([^;]*\);\s*CREATE INDEX continuity_probes_by_generation ON continuity_probes\(generationId, id\);\s*CREATE INDEX continuity_probes_by_session ON continuity_probes\(sessionId, id\);\s*CREATE TABLE continuity_reads \([^;]*\);$/;
+  it('NEW TABLES and their indexes, nothing on an existing table, the entry after the notes\'', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_notes')) + 2);
+    expect(SLOT).toBe(73);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: both tables land empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_notes (identity, sessionId, keyKind, keyRef, kind, waitsOn, next, at) VALUES ('lane-a-project-a', 'lane-a-project-a', 'run', '1', 'thread', 'w', 'n', 7)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_probes').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_reads').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT next, at FROM continuity_notes').get()).toEqual({ next: 'n', at: 7 });
+    db.close();
+  });
+});
+
+describe('coord.db: the anchor-slot lane-arm row (Overlord W1a, the anchor piece; C38)', () => {
+  /** Found by its text, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes("VALUES ('anchor-slot', 'shadow', 0)")) + 1;
+  const ENTRY = /^INSERT INTO lane_arm_settings \(lane, choice, updatedAt\) VALUES \('anchor-slot', 'shadow', 0\);$/;
+  it('ONE SEED ROW, shadow, nothing else, the entry after the probes\' (the coordinator\'s rulings on ask 416 and of 19835: pinned to the entry before it)', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_probes')) + 2);
+    expect(SLOT).toBe(74);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it (73): the row lands shadow, and every existing row is as it was', () => {
+    expect(SLOT - 1).toBe(73);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'roster-card'");
+      raw.exec("INSERT INTO continuity_reads (sessionId, door, at) VALUES ('lane-a-project-a', 'card', 5)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'anchor-slot'").get()).toEqual({ choice: 'shadow', updatedAt: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
+    db.close();
+  });
+});
+
+describe('coord.db: push_outbox and the reach stamps, the push outbox (Overlord §6.7, §6.1 C31)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE push_outbox (')) + 1;
+  it('two new tables and two nullable columns, the entry after the anchor\'s', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes("VALUES ('anchor-slot', 'shadow', 0)")) + 2);
+    expect(SLOT).toBe(75);
+    const body = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '');
+    expect(body.match(/\b(CREATE TABLE|CREATE UNIQUE INDEX|CREATE INDEX|ALTER TABLE) \w+/g)).toEqual([
+      'CREATE TABLE push_outbox', 'CREATE UNIQUE INDEX push_outbox_one_per_source', 'CREATE INDEX push_outbox_due',
+      'CREATE TABLE push_outbox_meta', 'ALTER TABLE asks', 'ALTER TABLE operator_items',
+    ]);
+    expect(body).not.toMatch(/\b(DROP|UPDATE|DELETE|INSERT)\b/);
+  });
+
+  it('reaches a database ALREADY at the version before it: the tables land empty, the stamps NULL, every row as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO asks (at, childId, parentId, askKey, askAt, dialogId, question, options, state, releasedAt) VALUES (7, 'lane-a-project-a', 'lane-b-project-a', 'k', 7, 'd', 'q', '[]', 'released', 8)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM push_outbox').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM push_outbox_meta').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT state, releasedAt, reachedOperatorAt FROM asks').get()).toEqual({ state: 'released', releasedAt: 8, reachedOperatorAt: null });
+    db.close();
+  });
+});
+
+describe('coord.db: portfolio_rank and portfolio_rank_revision, the operator\'s order (Overlord W1, portfolio; H38)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE portfolio_rank (')) + 1;
+  const ENTRY = /^CREATE TABLE portfolio_rank \([^;]*\);\s*CREATE TABLE portfolio_rank_revision \([^;]*\);$/;
+  it('NEW TABLES, nothing on an existing table, the entry after the push outbox\'s (the coordinator\'s word at landing)', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE push_outbox (')) + 2);
+    expect(SLOT).toBe(76);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: both tables land empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_reads (sessionId, door, at) VALUES ('lane-a-project-a', 'card', 5)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM portfolio_rank').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM portfolio_rank_revision').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
+    expect(db.prepare("SELECT choice FROM lane_arm_settings WHERE lane = 'anchor-slot'").get()).toEqual({ choice: 'shadow' });
+    db.close();
+  });
+
+  it('the revision row is one row: a second id is refused', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    db.exec("INSERT INTO portfolio_rank_revision (id, revision, setAt, setBy) VALUES (1, 1, 5, 'flag-off')");
+    expect(() => db.exec("INSERT INTO portfolio_rank_revision (id, revision, setAt, setBy) VALUES (2, 1, 5, 'flag-off')")).toThrow(/CHECK/);
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_quiz_runs, the replay quiz (Overlord W1a; C52, M13)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_quiz_runs (')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_quiz_runs \([^;]*\);$/;
+  it('ONE NEW TABLE, nothing on an existing table, the entry after the portfolio\'s (the coordinator\'s word at landing)', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE portfolio_rank (')) + 2);
+    expect(SLOT).toBe(77);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: the table lands empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_reads (sessionId, door, at) VALUES ('lane-a-project-a', 'card', 5)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_quiz_runs').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
+    expect(db.prepare("SELECT choice FROM lane_arm_settings WHERE lane = 'anchor-slot'").get()).toEqual({ choice: 'shadow' });
+    db.close();
+  });
+});
+
+describe('coord.db: the checkpoint and renew-call tables (Overlord W1a, the renewal act; C37, H12)', () => {
+  /** Found by its text, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_checkpoints')) + 1;
+  const columns = (db: DatabaseSync, table: string): string[] =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string; notnull: number; pk: number }[])
+      .map((c) => `${c.name}${c.notnull === 1 ? '!' : ''}${c.pk > 0 ? `#${c.pk}` : ''}`);
+
+  it('THREE NEW TABLES and an index in one entry, the one after the loads report\'s, and nothing on an existing table', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_start_loads (')) + 2);
+    expect(SLOT).toBe(79);
+    expect(MIGRATIONS[SLOT - 1]).toContain('CREATE TABLE continuity_renew_calls');
+    const sql = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '');
+    expect(sql.match(/\b(?:CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b[^;(]*/g)!.map((x) => x.trim())).toEqual([
+      'CREATE TABLE continuity_checkpoints', 'CREATE TABLE continuity_renew_calls', 'CREATE TABLE continuity_soft_renewals',
+      'CREATE INDEX continuity_soft_renewals_identity ON continuity_soft_renewals']);
+  });
+
+  it('reaches a database ALREADY at the version before it (78): the tables land, empty, and an existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_reads (sessionId, door, at) VALUES ('lane-a-project-a', 'card', 5)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(columns(db, 'continuity_checkpoints')).toEqual(['generationId#1', 'notes!', 'rulings!', 'handover', 'at!']);
+    expect(columns(db, 'continuity_renew_calls')).toEqual(['generationId!#1', 'episode!#2', 'try!#3', 'at!', 'answer']);
+    expect(columns(db, 'continuity_soft_renewals')).toEqual(['id#1', 'identity!', 'term!', 'generationId!', 'observedMs!']);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_checkpoints').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_renew_calls').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
+    db.close();
+  });
+});
+
+describe('coord.db: answer_marks, the operator\'s answer marks (Overlord W1; §9.2.1, C70)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE answer_marks (')) + 1;
+  const ENTRY = /^CREATE TABLE answer_marks \([^;]*\);\s*CREATE INDEX answer_marks_row ON answer_marks \(kind, rowId, mark, id\);$/;
+  it('ONE NEW TABLE and its index, nothing on an existing table, the entry after the renewal act\'s', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_checkpoints')) + 2);
+    expect(SLOT).toBe(80);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: the table lands empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_reads (sessionId, door, at) VALUES ('lane-a-project-a', 'card', 5)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM answer_marks').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
+    db.close();
+  });
+
+  it('refuses a value other than 0 or 1', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    expect(() => db.prepare("INSERT INTO answer_marks (kind, rowId, mark, value, at, actor) VALUES ('item', 1, 'unsure', 2, 1, 'op-a')").run()).toThrow(/CHECK/);
+    db.close();
   });
 });

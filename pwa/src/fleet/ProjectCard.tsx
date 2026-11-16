@@ -12,18 +12,197 @@
 // Fold state is passed IN, never owned here: FleetScreen holds it (foldState.ts)
 // so it survives navigation, and a pure card is what lets a test assert folding
 // without touching localStorage.
-import { Fragment } from 'react';
+//
+// MEMOISED (C9, D-6441): `ProjectCard` is `memo(…, sameCardProps)`, so a list that hands it the same props draws
+// nothing; `placement` compares by value (`lineProps.ts`). It ticks no clock of its own: a spawning dispatch's readout
+// (`PendingSpawn`) and the folded header's "active … ago" (`ProjectCardHead`'s `LastActive`) each tick themselves. A kept
+// worktree's date reads the wall clock once as it is drawn, for its year alone, and never re-draws the card for the time.
+//
+// WORKTREE CONTROLS (delegation broker wave 5, PR10): a worktree row's Keep, Attach and Not delegated are `WorktreeControls`,
+// below. The words module decides which a row offers and spells every word; the leaf asks first where the words say so,
+// calls the door, and says a refusal on the row in one sentence of its own. Nothing is retried, and no control writes storage.
+//
+// PROGRAMME BOXES (Task G2): a coordinator's open work is one box (`ProgrammeBox`), drawn first, most urgent first;
+// the workers of programmes elsewhere and the rows in no programme follow under their sub-headings. The decision is
+// `programmeBoxes.ts`'s; this maps over it with the one row renderer below. A box's movement readout ticks itself.
+import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession, ProjectedHome, ProjectPlacement, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
-import { accountColorVar, accountLabel } from '../lib/accounts';
-import { poolLabelList } from '../lib/pools';
-import { navigate } from '../lib/router';
+import { BareRow, Button, QuickConfirm, toast, useNow } from '@ccrc/ui';
+import type {
+  DelegationActivityWire, FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary,
+} from '../../../shared/api';
+import { orphanNote, type OrphanNote } from './orphanWords';
+import { addWorkspaceLabel, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
 import { formatElapsed } from './formatReset';
-import type { FleetGroup } from './groupFleet';
-import { nestFleet, type FleetRow } from './nestFleet';
-import { CROSSING_GLYPH, DISPATCH_GLYPH, crossingNote, dispatchWindow, runForSession, waveLabel } from './runWords';
-import { SessionLine } from './SessionLine';
+import { releasedByProgramme, type FleetGroup } from './groupFleet';
+import { archivableReleased } from './archiveReleased';
+import { fleetRowKey, nestFleet, type DelegationGroupKind, type FleetRow } from './nestFleet';
+import { childRunContext, workingOnCard, type FleetTreeGroup } from './fleetTree';
+import { ProjectCardHead } from './ProjectCardHead';
+import type { CardRollup, RolledRow } from './rollup';
+import { CROSSING_GLYPH, DISPATCH_GLYPH, boundOpenRun, dispatchWindow, waveLabel } from './runWords';
+import {
+  cardAbroad, cardBoxes, fleetHues, foldedCard, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView, type SummaryRow,
+} from './programmeBoxes';
+import { ProgrammeBox } from './ProgrammeBox';
+import { SessionLine, WorksOnChip } from './SessionLine';
+import { sameCardProps } from './lineProps';
+import { openRunAt } from './openers';
+import { sessionLabel } from './sessionLabel';
+import { WorkLine } from './WorkLine';
+import {
+  ACT_VERB, ACT_WORD, ANSWER_UNREAD_WORD, GROUP_WORDS, actDoneWord, activityLine, confirmFor, controlName, controlsName, creatorChip,
+  inferredChip, leaseParentOf, listedLive, offerOf, offersControl, refusalWord, unownedControls, unownedLine, worktreeControls, worktreeLine,
+  worktreeStateParts,
+  type WorktreeControl, type WorkWords,
+} from './delegationWords';
+import { actionDoor } from '../command/door';
+import { api, failedTo } from '../lib/api';
 import './fleet.css';
+
+/** A worktree row's controls (delegation broker wave 5, PR10). `controls` is the words module's answer for the row (none
+ *  for now while it moves to a run), and `leaseId` the worktree the doors act on; an attach carries its one choice, the
+ *  worktree's own session. Keep acts at once; Attach and Not delegated ask first, and one confirm posts once (review
+ *  1623 F1). A refusal is said in worktree words in an alert region, an accepted act whose answer could not be read in a
+ *  status region, both mounted empty for as long as the row has controls at all, so neither is lost while the row
+ *  offers none (D-1230, D-8097, F3). Nothing is retried. Focus: an act takes it to this row's box, which can hold it
+ *  while the buttons are disabled; when the row's controls fall to none, or the row leaves, while the box holds it, it
+ *  goes to the nearest heading still drawn: for a row in a delegation group (`grouped`), its group's toggle, the nearest
+ *  one before the row (a group's members follow it); else the card's toggle. Every focus the row moves passes
+ *  `preventScroll`, as the sheet's do (D-5610, review 1624 F1). `offer` is what the row offers (`offerOf`): when it
+ *  changes, a refusal sentence is cleared, its region kept (review 1624 F5), and that includes a replaced record (review
+ *  1626 F4): on an unowned row, whose key outlives the record, a late answer for the old one draws nothing (a lease row
+ *  remounts with its record). */
+function WorktreeControls({ leaseId, worktree, controls, offer, nowMs, grouped = false }: {
+  leaseId: string; worktree: string; controls: readonly WorktreeControl[]; offer: string; nowMs: number; grouped?: boolean;
+}): ReactNode {
+  // The confirm asked, and on which worktree's record, kept after it closes so its words and tone hold while it animates
+  // out (F9 (a), F4). A record replaced on the same worktree while it is open is no longer the one asked about (F11 (a)).
+  const [asking, setAsking] = useState<{ control: WorktreeControl; open: boolean; leaseId: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ text: string; polite: boolean }>({ text: '', polite: false });
+  const box = useRef<HTMLSpanElement>(null);
+  // After a confirmed or closed-by-the-row ask: place the focus in the commit that closes the ask.
+  const settle = useRef<'act' | 'dropped' | null>(null);
+  // F1: what the open confirm may post, set at commit, and whether an act is in flight; never read from a render's closure.
+  const confirmable = useRef<WorktreeControl | null>(null);
+  const inFlight = useRef(false);
+  // Review 1626 F4: the record the row acts on now, so an answer for one it has since replaced draws nothing.
+  const current = useRef(leaseId);
+  // F3: whether the focus was in the box when it last moved, for a focused button the row has just removed.
+  const focusIn = useRef(false);
+  const offered = asking !== null && asking.leaseId === leaseId && offersControl(controls, asking.control);
+  const open = asking !== null && asking.open && offered;
+  useLayoutEffect(() => { confirmable.current = open && asking !== null ? asking.control : null; current.current = leaseId; });
+  // F4: an ask whose act or session the row no longer offers closes with its words kept, and never reopens by itself.
+  useEffect(() => {
+    if (asking === null || !asking.open || offered) return;
+    settle.current = 'dropped';
+    setAsking({ ...asking, open: false });
+  }, [asking, offered]);
+  const headingOf = (): HTMLElement | null => {
+    const el = box.current;
+    const card = el?.closest('.proj-card') ?? null;
+    if (el === null || card === null) return null;
+    const before = [...card.querySelectorAll<HTMLElement>('.proj-group-toggle')]
+      .filter((t) => (t.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+    return (grouped ? before.at(-1) : undefined) ?? card.querySelector<HTMLElement>('.proj-card-toggle');
+  };
+  const handOff = (): void => {
+    // Review 1624 F1: the box no longer holds the focus, whether or not a blur said so (a removed element fires none).
+    focusIn.current = false;
+    headingOf()?.focus({ preventScroll: true });
+  };
+  const holdsFocus = (): boolean => {
+    const el = box.current;
+    const active = document.activeElement;
+    return el !== null && (el.contains(active) || (focusIn.current && (active === null || active === document.body)));
+  };
+  // F2: the focus is placed in the commit that closes the ask, while the closing panel still holds it (review 1626 F10):
+  // after a confirmed act the sheet has given it back to its opener, which the act has disabled. A row left with no
+  // controls hands it to its heading (review 1626 F1). Otherwise a dropped ask leaves the focus where the sheet gave it
+  // back only when that is in the box: when its opener has left, the panel holds it (review 1624 F3, measured in the browser).
+  useEffect(() => {
+    const why = settle.current;
+    if (asking === null || asking.open || why === null) return;
+    settle.current = null;
+    if (controls.length === 0) handOff();
+    else if (why !== 'dropped' || box.current?.contains(document.activeElement) !== true) box.current?.focus({ preventScroll: true });
+  }, [asking]);
+  // F3: the row's controls fall to none while the box holds the focus.
+  const none = controls.length === 0;
+  useLayoutEffect(() => { if (none && holdsFocus()) handOff(); }, [none]);
+  // F2: the row leaves holding the focus. The box is read now, as React removes it, not once at mount. The focus inside
+  // this row's own open confirm (a modal: while it is open the focus is in it) counts as the box holding it (review 1626 F2),
+  // and goes to the heading found now once the confirm's focus trap has gone, which would pull it back into the leaving
+  // panel; only if that heading is still drawn and the focus is then on the page or in that panel (review 1628 F1).
+  useLayoutEffect(() => () => {
+    if (holdsFocus()) { handOff(); return; }
+    if (confirmable.current === null || !focusIn.current) return;
+    const to = headingOf();
+    const panel = document.activeElement?.closest('[role="dialog"]') ?? null;
+    setTimeout(() => {
+      const a = document.activeElement;
+      if (to?.isConnected === true && (a === null || a === document.body || panel?.contains(a) === true)) to.focus({ preventScroll: true });
+    }, 0);
+  }, []);
+  // Review 1624 F5: a refusal answers the act it was given; once the row offers something else, it is no longer true.
+  useEffect(() => { setNote((n) => (n.polite || n.text === '' ? n : { text: '', polite: false })); }, [offer]);
+  const send = (c: WorktreeControl): void => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    box.current?.focus({ preventScroll: true });
+    setBusy(true);
+    setNote({ text: '', polite: false });
+    const call = c.act === 'keep' ? api.operatorRetainLease(leaseId)
+      : api.resolveLease(leaseId, c.act === 'attach' ? { action: 'attach', parent: c.parent } : { action: 'foreign' });
+    void call
+      .then((a) => {
+        if (current.current !== leaseId) return;
+        if (a === 'unreadable') setNote({ text: ANSWER_UNREAD_WORD, polite: true });
+        else if (a.ok) toast(actDoneWord(c, a.expiresAt, nowMs));
+        else setNote({ text: refusalWord(a.error), polite: false });
+      }, (err: unknown) => { if (current.current === leaseId) setNote({ text: failedTo(ACT_VERB[c.act], err), polite: false }); })
+      .finally(() => { inFlight.current = false; setBusy(false); });
+  };
+  const words = asking === null ? null : confirmFor(asking.control);
+  // F8: `title=""` keeps the row's tooltip off the controls; the box is a named group, focused by script only.
+  return (
+    <span className="proj-work-controls" ref={box} tabIndex={-1} role="group" aria-label={controlsName(worktree)} title=""
+      onFocus={() => { focusIn.current = true; }}
+      onBlur={(e) => {
+        const to = e.relatedTarget;
+        if ((to instanceof Node && !e.currentTarget.contains(to)) || (to === null && e.target.isConnected)) focusIn.current = false;
+      }}>
+      {controls.map((c) => (
+        <Button key={c.act} variant="quiet" size="fit" disabled={busy} aria-label={controlName(c.act, worktree)}
+          onClick={() => (c.act === 'keep' ? send(c) : setAsking({ control: c, open: true, leaseId }))}>{ACT_WORD[c.act]}</Button>
+      ))}
+      <span role="alert">{note.polite ? '' : note.text}</span>
+      <span role="status">{note.polite ? note.text : ''}</span>
+      <QuickConfirm
+        open={open}
+        onClose={() => {
+          // Review 1626 F3 (b): the sheet leaves with no blur; an opener it gives the focus back to sets the flag again.
+          focusIn.current = false;
+          setAsking((a) => (a === null ? null : { ...a, open: false }));
+        }}
+        title={words?.title ?? ''}
+        consequence={words?.consequence ?? ''}
+        confirmLabel={words?.confirmLabel ?? ''}
+        tone={asking?.control.act === 'foreign' ? 'danger' : 'commit'}
+        defaultFocus={asking?.control.act === 'foreign' ? 'cancel' : 'confirm'}
+        onConfirm={() => {
+          const c = confirmable.current;
+          if (c === null || inFlight.current) return;
+          confirmable.current = null;
+          settle.current = 'act';
+          send(c);
+        }}
+      />
+    </span>
+  );
+}
 
 /** The nesting prefix, spelled ONCE (Task 4). Both branches that can draw a
  *  child — a settled session row and a spawn that has none yet — read it from
@@ -53,71 +232,11 @@ export const NEST_BRACKET = '└─';
  *  Exported so the suite pins the sentence rather than a paraphrase of it. */
 export const POOL_UNAVAILABLE_TEXT = 'fleet ccd predates pools';
 
-/** One project's authoritative placement read. Request state, row absence and
- *  legacy omission stay distinct so the card never turns ignorance into a
- *  per-account claim. */
-export type ProjectPlacementRead =
-  | { kind: 'pending' }
-  | { kind: 'failed' }
-  | { kind: 'missing' }
-  | { kind: 'legacy' }
-  | { kind: 'measured'; pool: ProjectPoolWire; placement: ProjectPlacement };
-
-/** The project's measured route pool as one chip. A non-measured read yields
- *  no pool and therefore no chip. Unrecognised residue means this app is older
- *  than the fleet, not a tag that can be diagnosed as unreadable or malformed. */
-function PoolChip({ pool, project, dim, onTap }: {
-  pool: ProjectPoolWire;
-  project: string;
-  dim: boolean;
-  onTap: ((project: string) => void) | undefined;
-}): ReactNode {
-  const path = `~/.cc-sessions/pools/${project}`;
-  const unrecognised = !['tagged', 'untagged', 'malformed', 'unreadable'].includes(pool.state);
-  const word =
-    pool.state === 'tagged' ? pool.name
-    : pool.state === 'untagged' ? 'no pool'
-    : pool.state === 'malformed' ? 'pool malformed'
-    : pool.state === 'unreadable' ? 'pool unreadable'
-    : 'app older than fleet; reload';
-  const label =
-    pool.state === 'tagged' ? `project pool ${pool.name}`
-    : pool.state === 'untagged' ? 'no project pool — any account may serve this project'
-    : pool.state === 'malformed' ? `project pool tag is malformed — rewrite ${path} as one pool name`
-    : pool.state === 'unreadable' ? `project pool tag could not be read — check permissions on ${path}`
-    : 'app bundle is older than the fleet; reload to understand this project pool';
-  const dataPool = unrecognised ? 'unrecognised' : pool.state;
-  // A span when there is nowhere to go: no handler, a fleet whose ccd would
-  // answer 501, or a newer fleet state this app cannot safely edit.
-  if (dim || onTap === undefined || unrecognised) {
-    return (
-      <span
-        className="proj-card-pool"
-        data-pool={dataPool}
-        data-dim={dim || undefined}
-        aria-label={label}
-        title={dim ? POOL_UNAVAILABLE_TEXT : label}
-      >
-        {word}
-      </span>
-    );
-  }
-  return (
-    <button
-      type="button"
-      className="proj-card-pool"
-      data-pool={dataPool}
-      aria-label={label}
-      title={label}
-      onClick={() => onTap(project)}
-    >
-      {word}
-    </button>
-  );
-}
-
-function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number }): ReactNode {
-  const spawn = dispatchWindow(run, nowMs);
+function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number | undefined }): ReactNode {
+  // The readout's own clock (C9, D-6441), to the second, while it is drawn; a test passes its clock instead. Only this
+  // leaf re-renders each second, never its card or the card's rows.
+  const tick = useNow(1_000, nowMs === undefined);
+  const spawn = dispatchWindow(run, nowMs ?? tick);
   // Unreachable by construction — `nestFleet` emits this row only for a run
   // `dispatchWindow` has already answered non-`none` for, and THAT half of its
   // answer never reads the clock (`isDispatchPending`'s docstring). Handled
@@ -138,7 +257,8 @@ function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number }): React
   );
 }
 
-export function ProjectCard({
+
+function ProjectCardView({
   group,
   onOpen,
   selectedId = null,
@@ -146,20 +266,40 @@ export function ProjectCard({
   projected,
   placement = { kind: 'legacy' },
   adding = false,
-  collapsed = false,
+  collapsed: collapsedProp = false,
   onToggle,
   onActions,
   archivedOpen = false,
+  releasedOpen = false,
+  onArchiveReleased,
+  archivingReleased = false,
   roster = [],
   pools = null,
   onPool,
   runs = [],
   abroad = [],
-  nowMs = Date.now(),
+  poolFor = () => null,
+  nowMs,
+  boxNow,
+  stallQuietMs = null,
+  coordPaused = false,
+  coordOf = () => null,
+  frameSeen = false,
+  rollup,
+  onToggleChildren,
+  offlineOpen = false,
+  unownedOpen = false,
 }: {
   group: FleetGroup;
   onOpen: (id: string) => void;
   selectedId?: string | null;
+  /** The card fires `onAddWorkspace(project)` — nothing about a route lives
+   *  here. Whether the resulting request carries one is FleetScreen's
+   *  decision, made in its class chooser's closure before this callback is
+   *  invoked (routing slice 5, Task 6): with the chooser left on
+   *  "Coordinator row" the request is byte-identical to before this task;
+   *  any other choice seeds `{ class }` on the wire. This card neither knows
+   *  nor needs to know which. */
   onAddWorkspace?: (project: string) => void;
   /** Where a new workspace would land, as the SERVER projects it (limits.ts
    *  `projectHome`, itself a mirror of ccd's `_ws_least_loaded`). Never
@@ -188,6 +328,14 @@ export function ProjectCard({
    *  must start closed — under the composite `<project>::archived` key,
    *  presence means EXPANDED. */
   archivedOpen?: boolean;
+  /** Whether the `Released (n)` sub-fold is expanded — `archivedOpen`'s inversion, under the composite
+   *  `<project>::released` key (workspace lifecycle spec §5.1). */
+  releasedOpen?: boolean;
+  /** "Archive all" in the Released fold. The card only asks: `FleetScreen` confirms, then runs the plain-archive
+   *  loop (`archiveReleased.ts`). Without it the fold renders with no button. */
+  onArchiveReleased?: (project: string) => void;
+  /** That loop is running for this card — the button is disabled rather than queued twice. */
+  archivingReleased?: boolean;
   /** The account roster (`stores/fleet.ts`'s `roster`, read by `FleetScreen`
    *  and threaded down) — defaults to `[]` so a card rendered before the
    *  first poll lands degrades to the same raw-name/neutral-ink fallback
@@ -216,53 +364,68 @@ export function ProjectCard({
    *  answer a question about other projects' runs. Defaults to `[]`, so every
    *  caller and every test that predates this renders exactly as it did. */
   abroad?: readonly RunSummary[];
-  /** The shared tick, in MILLISECONDS, for the pending child's elapsed clock.
-   *  This card is pure and controlled (fold state, roster and projection all
-   *  arrive the same way), so the CADENCE belongs to `FleetScreen`, which runs
-   *  it only while a spawn is actually in flight. The default reads the clock
-   *  at render: honest, and it simply stops advancing until the next render —
-   *  which is the correct degrade for a card nobody is ticking. */
+  /** A row's OWN project's pool (Task 4 fix round 1) — for a row the key flip
+   *  moved onto this card, `s.project` is by construction a DIFFERENT project
+   *  from `group.project`, so this card's own `placement`/`pool` (one
+   *  `/api/projects` read, for `group.project` alone) is the wrong shape to
+   *  judge it against: a false off-pool warning when the destination is
+   *  tagged differently from the row's real project, and a swallowed warning
+   *  when the destination is untagged while the row's own project is tagged.
+   *  Defaults to `() => null` — the same "unmeasured, no account claim"
+   *  degrade `placementFor` itself uses — so a card rendered before `FleetScreen`
+   *  passes this, or a test that predates the fix, keeps every row on the
+   *  card's own project (the common case) rendering exactly as before. */
+  poolFor?: (project: string) => ProjectPoolWire | null;
+  /** A test's clock, in MILLISECONDS, for the pending child's elapsed readout and the folded header's "active … ago".
+   *  Absent in the app (C9, D-6441): each of those leaves then ticks its own clock (`PendingSpawn` each second while a
+   *  spawn is drawn, `LastActive` each half minute), so the card itself never re-renders for the time. */
   nowMs?: number;
+  /** Task G1b (D-7380): the time the programme boxes' states are read at, `FleetCards`' rollup clock as its `next` last
+   *  moved (`nextStallBoundary` wakes it when a box crosses its threshold). Absent, no box reads stalled. */
+  boxNow?: number;
+  /** The stall watch's quiet time, off the runs frame (`stores/fleet.ts`'s one read, D-7376); null, no box stalls. */
+  stallQuietMs?: number | null;
+  /** The operator's pause, off the coord frame (D-7373): a box reads paused, never stalled. */
+  coordPaused?: boolean;
+  /** The coordinator session by id, looked up FLEET-WIDE — it may sit on
+   *  another card, in an archive fold, or nowhere this pass. Feeds
+   *  `coordinatorPresence`, the same read the runs board uses (D-1129, D-7181);
+   *  `null` there reads as `unknown`, never as dead. Default: nothing known. */
+  coordOf?: (id: string) => FleetSession | null;
+  /** `stores/fleet.ts`'s `fleetFrameSeen`: without it a coordinator absent from
+   *  a STALE array would read as gone (D-1138). Default false = unknown. */
+  frameSeen?: boolean;
+  /** D-6088: this card's rollup (`rollup.ts`), the one answer both skins' lists draw. When given, it decides the
+   *  fold and the body's rows (a coordinator's folded workers, drawn as its programme box's tray and footer, Task G2);
+   *  without it the card draws its tree's rows and the `collapsed` it was handed, as before. */
+  rollup?: CardRollup;
+  /** Open or close a coordinator's worker line, by the coordinator's id. */
+  onToggleChildren?: (parentId: string) => void;
+  /** Whether the delegation broker's "Offline coordinator" and "Unowned work" groups are expanded (wave 4). The
+   *  `archivedOpen` inversion: under `<project>::offline-coordinator` and `<project>::unowned`, presence means EXPANDED,
+   *  so both start closed. */
+  offlineOpen?: boolean;
+  unownedOpen?: boolean;
 }): ReactNode {
+  const collapsed = rollup?.collapsed ?? collapsedProp;
   // A measured row carries pool and placement from one `/api/projects` read.
   // Only a legacy row's forecast falls back to the global projection; no row
   // reads a pool value from the independently paced websocket frame.
-  const pool = placement.kind === 'measured' ? placement.pool : null;
-  const poolName = pool !== null && pool.state === 'tagged' ? pool.name : null;
+  const pool = poolOfPlacement(placement);
   const poolDim = pools?.enforcement === 'unavailable';
 
-  // A legacy server's global projection is honest only while no readable tag
-  // narrows the project. Pending/failed/missing reads make no account claim.
-  const legacySafe = pool === null || pool.state === 'untagged';
-  const forecast = placement.kind === 'measured' && placement.placement.kind === 'projected'
-    ? placement.placement
-    : placement.kind === 'legacy' && legacySafe
-      ? projected
-      : undefined;
+  // Task 4 fix round 1: a row belonging to THIS card's own project keeps
+  // today's behaviour byte-for-byte (`pool`, from `group.project`'s own
+  // placement read). A row the key flip moved here belongs to a different
+  // project — its off-pool judgment has to ask `poolFor` about THAT project,
+  // never this card's.
+  const poolOf = (s: FleetSession): ProjectPoolWire | null =>
+    s.project === group.project ? pool : poolFor(s.project);
 
-  // Headroom, not load: "91% free" is the question being asked ("can this
-  // workspace actually run?"), and the answer stays legible when the score is
-  // above the swap ceiling — which ccd's rule permits, since it returns the
-  // least-loaded account even when every account is pinned.
-  const headroom = forecast ? 100 - forecast.score : null;
-  const placeableNames = poolLabelList(roster, pool);
-  const measuredNone = placement.kind === 'measured' && placement.placement.kind === 'none';
-  const legacyNone = placement.kind === 'legacy' && legacySafe && projected === null;
-  const addLabel = forecast
-    ? `New workspace on ${group.project} — ${accountLabel(roster, forecast.wrapper)}, ${headroom}% free`
-    : measuredNone || legacyNone
-      ? poolName === null
-        ? placeableNames === ''
-          ? `New workspace on ${group.project} — all disabled`
-          : `New workspace on ${group.project} — ${placeableNames} all disabled`
-        : placeableNames === ''
-          ? `New workspace on ${group.project} — nothing is in pool ${poolName}`
-          : `New workspace on ${group.project} — nothing in pool ${poolName} is placeable, ${placeableNames} all disabled`
-      : placement.kind === 'failed'
-        ? `New workspace on ${group.project} — placement check failed; reopen ccrc to retry`
-        : placement.kind === 'missing'
-          ? `New workspace on ${group.project} — project absent from the latest placement check; reload ccrc`
-          : `New workspace on ${group.project}`;
+  // The add control's whole sentence — the forecast, the headroom, and every
+  // way a read can have no answer — is `addWorkspaceLabel`'s, beside the type
+  // it branches on (`placementWords.ts`).
+  const addLabel = addWorkspaceLabel(group.project, placement, projected, roster);
 
   // Status never owns the card's perimeter except for attention (the one state
   // that asks the reader to ACT). Busy lost it: on a one-session project the
@@ -273,111 +436,255 @@ export function ProjectCard({
   // Selection is a fact about the reader, not about the project, so it never
   // touches the perimeter — but a fold can hide it exactly as it can hide a
   // pending dialog, so the header carries it (as the slab, at chip scale)
-  // while folded. This is the only place the card itself reads selectedId.
+  // while folded. This is the card's only read of selectedId that decides the CARD's own mark; the Released fold
+  // reads it too (`selectionInReleased`, `releasedShown`, below), and each row compares it to mark itself selected.
+  // A Released row is out of `group.sessions` (it sits in its own fold), so the fold's rows count too.
   const holdsSelection =
-    collapsed && selectedId !== null && group.sessions.some((s) => s.id === selectedId);
+    collapsed && selectedId !== null &&
+    (group.sessions.some((s) => s.id === selectedId) || group.released.some((s) => s.id === selectedId));
 
   // Task 4. The tree's SHAPE is decided once, away from here (`nestFleet`, five
   // rules, one unit suite); this component maps over the answer and draws a
   // depth as a bracket plus an indent. Top-level order is `group.sessions`
   // verbatim — a child is lifted out of it and put back under its parent, and
   // nothing else moves.
-  const rows = nestFleet(group.sessions, runs);
-  const rowKey = (row: FleetRow): string =>
-    row.kind === 'session' ? row.session.id : `spawn:${row.run.id}`;
+  // D-5527: the fleet tree's rows when the caller built them (`fleetTree`, the
+  // one model both skins read); a caller that hands a bare group still gets
+  // `nestFleet` over the same two inputs, which is the identical answer.
+  const tree: readonly FleetRow[] = 'rows' in group ? (group as FleetTreeGroup).rows : nestFleet(group.sessions, runs);
+  const rows: readonly RolledRow[] = rollup?.rows ?? tree;
+  // Task G2: the boxes, over the tree's rows and every open run this card can know of — those whose worker renders
+  // here, and those a session here claims (`fleetTree`'s `claimed`). The fold of each box's tray is the rollup's.
+  const claimed = 'claimed' in group ? (group as FleetTreeGroup).claimed : [];
+  const boxRuns = claimed.length === 0 ? runs : [...runs, ...claimed];
+  // The fleet's hue map, this card's entries (`fleetTree`). A group drawn without the tree has no fleet to read, so its
+  // own runs are the whole of what it knows.
+  const hues = 'hues' in group ? (group as FleetTreeGroup).hues : fleetHues(boxRuns);
+  // Task G1b: the moves (`runLastMove`, the one reader), the stall watch's threshold, the pause and the list's clock, in
+  // the one composition the list's view hold counts too (`cardBoxes`).
+  const { prog, ranked } = cardBoxes(tree, runs, claimed, hues, boxNow ?? null, stallQuietMs, coordPaused);
+  const folded = collapsed ? foldedCard(ranked, prog.elsewhere, prog.lone) : null;
+  const shownAbroad = cardAbroad(abroad, prog.boxes);
+  const rowKey = fleetRowKey;
+  // R9 (delegation broker wave 4): each session row's attached activities, by session id, off the tree's own rows.
+  const delegatedOf = new Map(tree.flatMap((r) =>
+    (r.kind === 'session' && r.delegated !== undefined ? [[r.session.id, r.delegated] as const] : [])));
+  // Delegation broker wave 4: a group's members render only while the operator holds it open; the header always does.
+  const groupOpen: Readonly<Record<DelegationGroupKind, boolean>> = { 'offline-coordinator': offlineOpen, unowned: unownedOpen };
+  const memberOf = (row: RolledRow): DelegationGroupKind | null =>
+    row.kind === 'activity' || row.kind === 'lease' || row.kind === 'unowned' ? row.group : null;
+  const shown = (row: RolledRow): boolean => { const g = memberOf(row); return g === null || groupOpen[g]; };
+  // A row outside a box (a worker of a programme elsewhere, a row in no programme, a delegation group) draws its
+  // children as the rollup folded them (`foldChildren`): its own segment of the rolled rows, a closed group's members
+  // left out. A box's children are its tray (`trayOf`); this is the same read for every other head.
+  const freeRows = (list: readonly FleetRow[]): RolledRow[] => {
+    const out: RolledRow[] = [];
+    for (let i = 0; i < list.length; i += 1) {
+      const head = list[i]!;
+      if (head.depth !== 0) continue;
+      let end = i + 1;
+      while (end < list.length && list[end]!.depth === 1) end += 1;
+      const at = rows.findIndex((r) => r.depth === 0 && fleetRowKey(r) === fleetRowKey(head));
+      const kids: RolledRow[] = [];
+      if (at < 0) kids.push(...list.slice(i + 1, end));
+      else for (let k = at + 1; k < rows.length && rows[k]!.depth === 1; k += 1) kids.push(rows[k]!);
+      out.push(head, ...kids.filter(shown));
+    }
+    return out;
+  };
+  // A session by its display name, or its raw id when the fleet does not carry it: a worktree's `via` worker, and the
+  // session an offline-group row came from (delegation visibility, spec §5). Display only, never a join key.
+  const labelOf = (id: string | null): string | null => {
+    if (id === null) return null;
+    const s = coordOf(id);
+    return s === null ? id : sessionLabel(s);
+  };
+  /** A session by id: this card's live rows first, then the fleet-wide lookup (F4's liveness reads it). */
+  const sessionOf = (id: string): FleetSession | null => group.sessions.find((s) => s.id === id) ?? coordOf(id);
+
+  /** The `from` label of a row in the offline group. A row under its own session names none. */
+  const fromOf = (rowGroup: DelegationGroupKind | null, parentId: string): string | null =>
+    rowGroup === 'offline-coordinator' ? labelOf(parentId) : null;
   // Task 5: the hold reason's door, decided HERE because this is the level that
-  // holds the runs. `runForSession` answers off the run rows — never by reading
-  // the id out of the hold string, which stays display-only (its docstring
-  // carries the measurement). `null` when the board has no row for this
-  // session, and `SessionLine` renders exactly the inert cell it always did for
+  // holds the runs. `boundOpenRun` answers off the wire's binding and the run
+  // rows — never by reading the id out of the hold string, which stays
+  // display-only (its docstring carries the measurement). `null` when the board
+  // has no row for this session's open bound run, and `SessionLine` renders
+  // exactly the inert cell it always did for
   // that, so a hand hold and a hold outliving its run both read as text.
   //
-  // `/runs` unfocused, because there is no per-run route to focus
-  // (`ArchiveConflictSheet`'s own note names that as the first of the three
-  // things such a link would need). The board groups by programme and the cell
-  // names the programme, so the operator lands looking at the right group.
-  const openRunFor = (session: FleetSession): (() => void) | null =>
-    runForSession(runs, session.id) === null ? null : () => navigate('/runs');
-
-  // F4. `nestFleet`'s rule 3 leaves a worker whose coordinator is NOT on this
-  // card at depth 0, unbracketed — right, and until now silent. This is the
-  // sentence that ends the silence, computed HERE (the level that holds the
-  // runs) from the run the card already has, so the tree stays pure and its
-  // five rules stay exactly as they are.
-  //
-  // TWO facts, stated only when measured. The programme and wave come off the
-  // run itself and are always available. The HOME clause is Task 5's own
-  // decision — `crossingNote`, not a second copy of its predicate (D-2575) —
-  // asked against THIS CARD's project, `group.project`, not `run.project`
-  // (D-2576): the two agree today only because `FleetScreen` filters `runs` by
-  // project before handing them down, an invariant enforced in a different
-  // file and not one this component may lean on now that Task 7 adds an
-  // `abroad` list whose whole point is a run naming a DIFFERENT project.
-  // `crossingNote` answers `null` for two distinct reasons — home unknown (the
-  // legacy generation, or an older server) or home genuinely IS this card's
-  // project (measured sameness) — and both read the same way here: nothing to
-  // claim about a home, so nothing is claimed.
-  //
-  // The guard below reads as ONE two-reasons-for-one-silence statement:
-  // `parent === null` (no coordinator at all) and `parent === row.session.id`
-  // (self-claimed) are two different reasons there is no OTHER coordinator to
-  // call off-card, and collapsing either into "coordinator elsewhere" would be
-  // the overloaded silence this repo forbids at a seam. Only the `parent ===
-  // null` clause is independently load-bearing, though (D-2574(c), measured):
-  // a rendered row's own session is, by construction, always a member of
-  // `group.sessions` (rows are built from that exact array), so `parent ===
-  // row.session.id` implies the `group.sessions.some(...)` guard one line
-  // down is already true — dropping the self-claim clause changes nothing for
-  // any reachable row. Kept for what it documents, not for what it guards.
-  //
-  // The `group.sessions.some(...)` guard is what makes this the ORPHAN's marker
-  // and not every worker's: a child whose parent IS on this card is USUALLY
-  // bracketed, and the bracket already says what this sentence would say — but
-  // not always. `nestFleet`'s rule 4 lifts a session that is BOTH a child and
-  // a parent back to depth 0 with no bracket at all (`nestFleet.test.ts:145-157`
-  // pins it), and that row still reaches this guard, still finds its parent on
-  // `group.sessions`, and still returns null here — so this card says nothing
-  // about it either. That silence is acceptable for the same reason rule 4
-  // itself gives: the row IS a parent, rendering its own children beneath it,
-  // and a THIRD sentence ("your parent is also on this card") next to a row
-  // that is already a visible coordinator was judged not worth a marker; it is
-  // not evidence the guard's premise holds for every depth-0 row. It looks only
-  // at `group.sessions`, never `group.archived` — an archived coordinator IS
-  // still a row on this card (`group.archived.map(...)` renders it under the
-  // `Archived (N)` fold), just not among this card's LIVE rows, so a worker
-  // left behind by one still reads as an orphan (and still says nothing about
-  // home when that home is, measured, this card's own project).
-  const orphanNote = (row: FleetRow): { text: string; title: string } | null => {
-    if (row.kind !== 'session' || row.depth !== 0) return null;
-    const run = runForSession(runs, row.session.id);
-    if (run === null) return null;
-    const parent = run.claimedBy;
-    if (parent === null || parent === row.session.id) return null;
-    if (group.sessions.some((s) => s.id === parent)) return null;
-    const crossing = crossingNote({ ...run, project: group.project });
-    const label = `${run.program} ${waveLabel(run)}`;
-    return crossing === null
-      ? { text: label, title: `this worker's coordinator is not among this card's live sessions` }
-      : {
-          text: `${label} · home ${crossing.home}`,
-          title: `this worker's coordinator is not among this card's live sessions; the programme is homed in ${crossing.home}`,
-        };
+  // The door opens the run's page, `/runs/<id>` (the runs rebuild, D-8072). `openRunAt` keeps one function per run, so a
+  // memo'd line is handed the same door on every render.
+  const openRunFor = (session: FleetSession): (() => void) | null => {
+    const bound = boundOpenRun(runs, session);
+    return bound === null ? null : openRunAt(bound.id);
   };
 
-  const rowBody = (row: FleetRow): ReactNode =>
-    row.kind === 'session' ? (
-      <SessionLine
-        session={row.session}
-        onOpen={onOpen}
-        selected={row.session.id === selectedId}
-        onActions={onActions}
-        roster={roster}
-        projectPool={pool}
-        onOpenRun={openRunFor(row.session)}
-      />
+  // The orphaned worker's marker and every ruling about when it stays silent:
+  // `orphanWords.ts`. Bound here to this card's own runs, project and LIVE
+  // rows — never `group.archived`, which is this card's rows too but not its
+  // live ones.
+  const noteFor = (row: FleetRow): OrphanNote | null =>
+    orphanNote(row, runs, group.project, group.sessions, coordOf, frameSeen);
+
+  // Spec §6's repo label left the row in D-5545: a row whose project differs from this card's carries the
+  // cross-project chip (D-5527), which keeps two same-slug rows' accessible names apart, and the session header
+  // names the repository (`SessionScreen`'s `repo`). The card is a glance; the header holds the rest.
+  // "Archive all" sends only folded rows that are not children (`archiveReleased.ts`); the rest are named.
+  const releasedArchivable = group.released.filter(archivableReleased).length;
+  const releasedChildren = group.released.length - releasedArchivable;
+  // A release is not the operator's own act (an archive is), so the row being READ must not vanish into a closed
+  // fold when its run closes. While the fold holds the selection it does two things: it shows itself, and its toggle
+  // is disabled — a tap could not collapse it, only silently invert the stored `<project>::released` key.
+  const selectionInReleased = selectedId !== null && group.released.some((s) => s.id === selectedId);
+  const releasedShown = releasedOpen || selectionInReleased;
+
+  /** ONE spelling of this card's eight-prop `SessionLine` call. It was
+   *  written out three times — here, in the released fold and in the archived
+   *  fold — which is three places that have to agree about what a row on THIS
+   *  card knows: its pool, its run door and whether its repo needs saying. */
+  const line = (
+    s: FleetSession, note: OrphanNote | null = null, delegated?: readonly DelegationActivityWire[],
+  ): ReactNode => (
+    <SessionLine
+      key={s.id}
+      session={s}
+      onOpen={onOpen}
+      selected={s.id === selectedId}
+      onActions={onActions}
+      roster={roster}
+      projectPool={poolOf(s)}
+      onOpenRun={openRunFor(s)}
+      workingOn={workingOnCard(s, group.project)}
+      childRun={childRunContext(s, runs, coordOf)}
+      coordinator={note?.presence ?? null}
+      {...(note === null ? {} : { coordinatorTitle: note.title })}
+      {...(delegated === undefined ? {} : { delegated })}
+    />
+  );
+
+  // Task G2: a coordinator's folded workers are its programme box's footer now (`ProgrammeBox`), so a body row is a
+  // session, a spawn or a delegation row (wave 4); the rollup's summary row is read only as that footer's state
+  // (`trayOf`), or, for a head outside a box, as its own line (`summaryLine`).
+  /** A delegation row's words, each a cell of one line (delegation broker wave 4). `delegationWords.ts` spells them. */
+  const workLine = (line: WorkWords, tail: ReactNode = null): ReactNode => (
+    <WorkLine parts={line.parts} title={line.title} nameAt={line.nameAt}>{tail}</WorkLine>
+  );
+
+  const rowBody = (row: FleetRow): ReactNode => {
+    if (row.kind === 'activity') {
+      const a = activityLine(row.activity, fromOf(row.group, row.activity.parentId));
+      return workLine(a);
+    }
+    if (row.kind === 'lease') {
+      const l = row.lease;
+      const now = nowMs ?? Date.now();
+      const w = worktreeLine(l, labelOf(row.via), workingOnCard({ project: l.project }, group.project), fromOf(row.group, l.parentId));
+      // D-6999: the chips are words, never colour alone, and nothing acts on the row but the operator's own tap (PR10). A row
+      // from an older server (without PR7's fields) adds no word and no control, so it draws exactly as before (W5-U10).
+      const chips = [inferredChip(l), creatorChip(l)];
+      // F4: Attach only while the worktree's own session is listed live (on this card, or anywhere in the fleet).
+      const parent = leaseParentOf(l);
+      const controls = worktreeControls(l, listedLive(sessionOf(parent)) ? labelOf(parent) : null);
+      return workLine({ ...w, parts: [...w.parts, ...worktreeStateParts(l, now)] }, <>
+        {w.sourceProject !== null && <WorksOnChip project={w.sourceProject} />}
+        {chips.map((c, i) => c === null ? null : <span key={i} className="proj-work-chip" title={c.title}>{c.text}</span>)}
+        {controls !== null && <WorktreeControls leaseId={l.leaseId} worktree={l.adminRecord} controls={controls}
+          offer={offerOf(l.leaseId, controls, l)} nowMs={now} grouped={row.group !== null} />}
+      </>);
+    }
+    if (row.kind === 'unowned') {
+      const u = unownedLine(row.item);
+      // O5-8 (c), D-8095: only through the lease the projection hid on the tree; no attach, the wire names no parent for it.
+      const c = unownedControls(row.item);
+      return workLine(u, c === null ? null
+        : <WorktreeControls leaseId={c.leaseId} worktree={row.item.adminRecord} controls={c.controls} offer={offerOf(c.leaseId, c.controls)}
+          nowMs={nowMs ?? Date.now()} grouped />);
+    }
+    if (row.kind === 'delegation-group') {
+      const open = groupOpen[row.group];
+      return (
+        <BareRow
+          className="proj-group-toggle"
+          aria-expanded={open}
+          title={GROUP_WORDS[row.group].title}
+          onClick={() => onToggle?.(`${group.project}::${row.group}`)}
+        >
+          <span className="proj-card-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
+          {`${GROUP_WORDS[row.group].label} (${row.count})`}
+        </BareRow>
+      );
+    }
+    // R9: the chip rides the row `nestFleet` attached it to; a box draws its coordinator's row itself, so that row's
+    // activities are read back off the tree by id.
+    return row.kind === 'session' ? line(row.session, noteFor(row), row.delegated ?? delegatedOf.get(row.session.id))
+      : <PendingSpawn run={row.run} nowMs={nowMs} />;
+  };
+
+  /** D-6088 rule 6 outside a box (delegation broker wave 4): a head's folded children as one line, the Released
+   *  fold's disclosure in the row's place. A box's own fold is its footer (`ProgrammeBox`). */
+  const summaryLine = (row: SummaryRow): ReactNode => (
+    <div key={`workers:${row.parentId}`} className="proj-nest" data-depth={row.depth}>
+      <span className="proj-nest-bracket" aria-hidden="true">{NEST_BRACKET}</span>
+      <BareRow
+        className="proj-children-toggle"
+        aria-expanded={row.expanded}
+        onClick={() => onToggleChildren?.(row.parentId)}
+      >
+        <span className="proj-card-chevron" aria-hidden="true">{row.expanded ? '▾' : '▸'}</span>
+        {/* D-6088: each count unbreakable, so a narrow column wraps only between counts; `needs you` in its ink. */}
+        <span className="proj-children-parts">
+          {row.parts.map((p, i) => (
+            <Fragment key={p.word}>
+              {i > 0 && ' · '}
+              <span className={`proj-children-part${p.word === 'needs you' ? ' proj-children-part--needs-you' : ''}`}>
+                {`${p.n} ${p.word}`}
+              </span>
+            </Fragment>
+          ))}
+        </span>
+      </BareRow>
+    </div>
+  );
+  /** A free row (`freeRows`) as the card draws it: the summary line, or the one body row spelling. */
+  const freeRow = (row: RolledRow, hue?: ProgHue): ReactNode => (row.kind === 'summary' ? summaryLine(row) : nested(row, hue));
+
+  // ONE spelling of a body row: a depth-0 row exactly as it shipped before the tree existed (a Fragment, no wrapper),
+  // a depth-1 row under its bracket, in its programme's hue when it sits in a box's tray.
+  const nested = (row: FleetRow, hue?: ProgHue): ReactNode => (
+    row.depth === 0 ? (
+      // A Fragment, never a wrapper element: the top-level row's DOM stays byte-identical to the one that
+      // shipped before the tree existed, and `.proj-card-body`'s column flex lays out its children directly.
+      <Fragment key={rowKey(row)}>{rowBody(row)}</Fragment>
     ) : (
-      <PendingSpawn run={row.run} nowMs={nowMs} />
-    );
+      <div key={rowKey(row)} className="proj-nest" data-depth={row.depth} data-hue={hue}>
+        <span className="proj-nest-bracket" aria-hidden="true">{NEST_BRACKET}</span>
+        {rowBody(row)}
+      </div>
+    )
+  );
+  const abroadLine = (r: RunSummary): ReactNode => (
+    <span key={r.id} className="proj-abroad-line">
+      <span className="proj-abroad-glyph" aria-hidden="true">{CROSSING_GLYPH}</span>
+      {`${r.program} ${waveLabel(r)} in ${r.project}`}
+    </span>
+  );
+  const hueOf = (row: FleetRow): ProgHue | undefined => prog.hues.get(rowRun(row, boxRuns)?.program ?? '');
+  const box = ({ view, state }: { view: ProgrammeBoxView; state: BoxState }): ReactNode => (
+    <ProgrammeBox
+      key={`box:${view.coordinatorId}`}
+      view={view}
+      state={state}
+      tray={trayOf(rows, view.coordinatorId)}
+      drawRow={nested}
+      drawAbroad={abroadLine}
+      hueOf={hueOf}
+      onToggleChildren={onToggleChildren}
+      nowMs={nowMs}
+    />
+  );
+  // The sub-headings say something only beside a programme: a card with none draws its rows exactly as before.
+  const headed = prog.boxes.length > 0 || prog.elsewhere.length > 0;
 
   return (
     <section
@@ -385,81 +692,21 @@ export function ProjectCard({
       data-collapsed={collapsed || undefined}
       data-holds-selection={holdsSelection || undefined}
     >
-      <div className="proj-card-head">
-        <button
-          type="button"
-          className="proj-card-toggle"
-          aria-expanded={!collapsed}
-          onClick={() => onToggle?.(group.project)}
-        >
-          <span className="proj-card-chevron" aria-hidden="true">
-            {collapsed ? '▸' : '▾'}
-          </span>
-          <span className="proj-card-name">{group.project}</span>
-          {/* A badge that reads `1` on every card carries no information. Every
-              project on the live fleet holds exactly one session. */}
-          {group.sessions.length > 1 && (
-            <span className="proj-card-count">{group.sessions.length}</span>
-          )}
-          {/* The account this project is PINNED to (ccd `home`), which is not
-              necessarily where any of its sessions is running — that is on the
-              line. `mixed` when the sessions disagree: a header asserting one
-              account while two lines show two different ones would be a lie,
-              and divergent pins across one project is worth noticing. */}
-          <span
-            className="proj-card-pin"
-            data-mixed={group.pin === null || undefined}
-            aria-label={group.pin === null ? 'pinned accounts differ' : `pinned to ${accountLabel(roster, group.pin)}`}
-            style={group.pin === null ? undefined : { color: `var(${accountColorVar(roster, group.pin)})` }}
-          >
-            {group.pin === null ? 'mixed' : accountLabel(roster, group.pin)}
-          </span>
-          {/* A fold must not hide a session stranded with no valid destination. */}
-          {group.stranded > 0 && (
-            <span className="proj-card-stranded">{group.stranded} stranded</span>
-          )}
-          {/* Collapsed or not: a fold must never be able to hide a pending
-              dialog, which is the one thing this screen exists to surface. */}
-          {group.attention && (
-            <span className="proj-card-attn" aria-label="waiting on you" role="img">
-              ●
-            </span>
-          )}
-          {/* Attention is an interrupt and shows folded or not; busy is ambient
-              and shows only when the fold has hidden the rows that carry it.
-              A WORD, never a second dot — two ● glyphs differing only in hue
-              sit at 1.06:1 luminance and would make "quietly working, ignore"
-              and "blocked, waiting on you" indistinguishable in greyscale. */}
-          {collapsed && group.busy > 0 && (
-            <span className="proj-card-busy">
-              {group.busy > 1 ? `${group.busy} working` : 'working'}
-            </span>
-          )}
-        </button>
-
-        {/* A sibling, never a descendant of the project fold button: nested
-            controls are invalid and inaccessible to Safari/VoiceOver. */}
-        {pool !== null && (
-          <PoolChip pool={pool} project={group.project} dim={poolDim} onTap={onPool} />
-        )}
-
-        {onAddWorkspace && (
-          <button
-            type="button"
-            className="proj-card-add"
-            /* The project-specific forecast lives in the accessible name and
-               tooltip, not in the layout: its visible form took 41% of this
-               header and clipped in the desktop sidebar. The accounts strip
-               above already shows headroom for every account in more detail. */
-            aria-label={addLabel}
-            title={addLabel}
-            onClick={() => onAddWorkspace(group.project)}
-            disabled={adding}
-          >
-            <span aria-hidden="true">+</span>
-          </button>
-        )}
-      </div>
+        <ProjectCardHead
+          group={group}
+          collapsed={collapsed}
+          onToggle={onToggle}
+          roster={roster}
+          pool={pool}
+          poolDim={poolDim}
+          onPool={onPool}
+          onAddWorkspace={onAddWorkspace}
+          addLabel={addLabel}
+          adding={adding}
+          lastActive={rollup?.lastActive ?? null}
+          now={nowMs}
+          pinnedOpen={rollup?.pinnedOpen ?? false}
+        />
 
       {!collapsed && (
         <div className="proj-card-body">
@@ -469,38 +716,89 @@ export function ProjectCard({
               nothing, which is the whole reason the card can afford one at
               all. `aria-hidden` on the glyph because it is the picture of an
               edge, not a fact the row does not already carry. */}
-          {rows.map((row) => {
-            const note = orphanNote(row);
-            return row.depth === 0 ? (
-              // A Fragment, never a wrapper element: the top-level row's DOM
-              // has to stay byte-identical to the one that shipped before the
-              // tree existed, and `.proj-card-body`'s column flex lays out its
-              // children directly. The marker is a SIBLING line for the same
-              // reason — a wrapper would change the row it explains.
-              <Fragment key={rowKey(row)}>
-                {rowBody(row)}
-                {note !== null && (
-                  <div className="proj-crossing" title={note.title}>
-                    <span className="proj-crossing-glyph" aria-hidden="true">{CROSSING_GLYPH}</span>
-                    {note.text}
-                  </div>
-                )}
-              </Fragment>
-            ) : (
-              <div key={rowKey(row)} className="proj-nest" data-depth={row.depth}>
-                <span className="proj-nest-bracket" aria-hidden="true">{NEST_BRACKET}</span>
-                {rowBody(row)}
+          {/* D-5545: an orphaned worker's marker rides ITS ROW now — "coordinator gone" as the row's one
+              attention marker (`orphanNote`'s presence, `SessionLine`'s `coordinator`) — instead of a second
+              line under it that repeated the row's programme and wave. */}
+          {ranked.map(box)}
+          {prog.elsewhere.length > 0 && (
+            <>
+              <div className="pg-sub">Workers of programmes elsewhere</div>
+              <div className="pg-elsewhere">
+                {freeRows(prog.elsewhere).map((row) => (row.kind === 'summary' ? summaryLine(row) : (
+                  <div key={rowKey(row)} className="pg-far" data-hue={hueOf(row)}>{nested(row)}</div>
+                )))}
               </div>
-            );
-          })}
-          {abroad.length > 0 && (
-            <div className="proj-abroad">
-              {abroad.map((r) => (
-                <span key={r.id} className="proj-abroad-line">
-                  <span className="proj-abroad-glyph" aria-hidden="true">{CROSSING_GLYPH}</span>
-                  {`${r.program} ${waveLabel(r)} in ${r.project}`}
+            </>
+          )}
+          {headed && prog.lone.length > 0 && <div className="pg-sub">Not in a programme</div>}
+          {freeRows(prog.lone).map((row) => freeRow(row))}
+          {shownAbroad.length > 0 && <div className="proj-abroad">{shownAbroad.map(abroadLine)}</div>}
+          {group.elsewhere.length > 0 && (
+            /* Spec §6: an emptied card says where its work went, as PLAIN TEXT —
+               never a link. A tappable route here would be the second access
+               path R2 excludes, the same reason the abroad line above is a bare
+               span with no onClick. */
+            <div className="proj-elsewhere">
+              {group.elsewhere.map((e) => (
+                <span key={e.project} className="proj-elsewhere-line">
+                  {`${e.count} ${e.count === 1 ? 'workspace' : 'workspaces'} under ${e.project}`}
                 </span>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {folded !== null && folded.keep.length > 0 && (
+        /* Spec §2.3: a folded card keeps a box that needs the operator or has stalled, and counts the rest. */
+        <div className="proj-card-body">
+          {folded.keep.map(box)}
+          {folded.more > 0 && <div className="pg-more">{`${folded.more} more in this project`}</div>}
+        </div>
+      )}
+
+      {!collapsed && group.released.length > 0 && (
+        /* Workspace lifecycle spec §5.1: the transition zone. A programme is done with these rows; they wait
+           here to be archived. Folded, never hidden, and above `Archived (N)`, which is where they go next. */
+        <div className="proj-released">
+          <BareRow
+            className="proj-released-toggle"
+            aria-expanded={releasedShown}
+            disabled={selectionInReleased}
+            onClick={() => onToggle?.(`${group.project}::released`)}
+          >
+            <span className="proj-card-chevron" aria-hidden="true">{releasedShown ? '▾' : '▸'}</span>
+            Released ({group.released.length})
+          </BareRow>
+          {releasedShown && (
+            <div className="proj-released-body">
+              {releasedByProgramme(group.released).map((p) => (
+                <div key={p.program} className="proj-released-programme">
+                  <div className="proj-released-heading">
+                    {p.title !== null && p.title !== p.program ? `${p.program} · ${p.title}` : p.program}
+                  </div>
+                  {p.sessions.map((s) => line(s))}
+                </div>
+              ))}
+              {onArchiveReleased !== undefined && releasedArchivable > 0 && (
+                <Button
+                  variant="ghost"
+                  className="proj-released-archive"
+                  disabled={archivingReleased}
+                  // Every card carries this button, so its accessible name says WHICH card's rows it archives.
+                  aria-label={archivingReleased
+                    ? `Archiving released workspaces in ${group.project}`
+                    : `Archive all ${releasedArchivable} released ${releasedArchivable === 1 ? 'workspace' : 'workspaces'} in ${group.project}`}
+                  {...actionDoor('archive-all', () => onArchiveReleased(group.project))}
+                >
+                  {archivingReleased ? 'Archiving…' : `Archive all (${releasedArchivable})`}
+                </Button>
+              )}
+              {releasedChildren > 0 && (
+                <span className="proj-released-note">
+                  {`Archive all skips ${releasedChildren} child ${releasedChildren === 1 ? 'workspace' : 'workspaces'}.`}
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -512,20 +810,17 @@ export function ProjectCard({
               a card that omitted these would leave them reachable only by a
               URL nobody has. Collapsed by default — archived rows are context,
               not the fleet. */}
-          <button
-            type="button"
+          <BareRow
             className="proj-archived-toggle"
             aria-expanded={archivedOpen}
             onClick={() => onToggle?.(`${group.project}::archived`)}
           >
             <span className="proj-card-chevron" aria-hidden="true">{archivedOpen ? '▾' : '▸'}</span>
             Archived ({group.archived.length})
-          </button>
+          </BareRow>
           {archivedOpen && (
             <div className="proj-archived-body">
-              {group.archived.map((s) => (
-                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} projectPool={pool} onOpenRun={openRunFor(s)} />
-              ))}
+              {group.archived.map((s) => line(s))}
             </div>
           )}
         </div>
@@ -533,3 +828,6 @@ export function ProjectCard({
     </section>
   );
 }
+
+/** The card, memo'd (C9, D-6441): every prop by identity but `placement`, by value (`sameCardProps`). */
+export const ProjectCard = memo(ProjectCardView, sameCardProps);

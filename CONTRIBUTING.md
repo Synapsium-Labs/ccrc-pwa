@@ -7,14 +7,19 @@ Read `README.md` for what ccrc is, `CLAUDE.md` for the operational rules that ar
 obvious from the code, and `docs/superpowers/specs/` for why a subsystem has the shape it
 has — before changing it.
 
-## The layout: four directories, three runnable, no root runner
+## The layout: five directories, three runnable, no root runner
 
 There is **no root `package.json`**. Three packages, each `"type": "module"`, each run
 from inside its own directory:
 
     cd server && npm ci && npm test
     cd agent  && npm ci && npm test
+    cd ui     && npm ci                # before pwa, always
     cd pwa    && npm ci && npm test
+
+`ui/` is `@ccrc/ui`, the design system, and pwa builds it from source (`file:../ui`). Its
+imports resolve from `ui/node_modules` alone, so install `ui` before anything typechecks,
+tests or bundles `pwa`; without it every pwa suite fails at import.
 
 `shared/` is not a real package — it carries a bare `"type": "module"` marker, and that
 marker is load-bearing: without it `tsc` emits CommonJS into `dist/shared/` and the server
@@ -32,11 +37,14 @@ concluding a break is real. CI on a quiet runner is the arbiter.
 live service. `ccd`'s suites in particular drive real workspace operations, and `HOME` is
 the one isolation boundary they rely on — pointed at your own, they delete your work. Copy
 the harness idioms from a neighbouring test (`makeCcdHarness`, `ghContainedEnv`) rather
-than assembling one.
+than assembling one. Each server run also keeps every temp write under one
+`$TMPDIR/ccrc-testrun-XXXXXX` parent of its own, removed at teardown or on a signal, and after
+a SIGKILL by a later run under the same `TMPDIR` once quiet; a `TMPDIR` too long for a unix
+socket prints `ccrc-test: per-run temp dir refused (<code>)` and falls back to loose fixtures.
 
-Node floor is `>=22.13.0`, identical across all three engines, and pinned by a test. The
-server imports `node:sqlite` unconditionally — below that floor it does not degrade, it
-fails to boot. If that test goes red, raise the floor; never lower it to make it green.
+Node floor is `>=22.16.0`, identical across all three engines, and pinned by a test. Below
+22.13 the server fails to boot (it imports `node:sqlite` unconditionally); below 22.16 that
+`node:sqlite` has no FTS5, which ccrc history needs. If that test goes red, raise the floor; never lower it.
 
 ## How changes are expected to look
 
@@ -50,7 +58,7 @@ the fact passes for whatever the code happens to do; one that has never been red
 been shown to measure anything.
 
 **A value with one meaning is spelled once.** Runtime lists derive from the type that
-defines them rather than being re-typed beside it, and `server/test/single-definition.test.ts`
+defines them rather than being re-typed beside it, and `server/test/single-definition/*.test.ts`
 text-scans four roots and fails the build when a second copy appears. If you find yourself
 keeping two lists in agreement by hand, that is the defect.
 
@@ -62,6 +70,12 @@ one that asks whether the tool would actually do the thing does not.
 tried, what would break. That is deliberate, and it is why there are no per-file licence
 headers: boilerplate on top would compete with the thing the reader came for. Match the
 density of the file you are editing.
+
+**Do not edit the shared ledgers in a feature pull request.** Existing files under
+`docs/superpowers/programs/` and `docs/superpowers/plans/` belong to the coordinator's `ledger/<programme>`
+pull request. Add a new note, `docs/superpowers/plans/<plan>/<task-or-pr>.md`, and the coordinator folds it in.
+`.github/ci/ledger-guard.mjs` checks it; a `Ledger-Edit: <D-TBD reason>` trailer on the head commit is the escape
+(a trailer on an earlier commit does not count).
 
 **`D-N` markers in comments are the deviation ledger** — a global, monotonic record of
 decisions and the measurements behind them. Read them as history; don't delete them. If
@@ -94,10 +108,18 @@ Small, focused PRs get read quickly. Large mechanical sweeps are fine but say so
 description, and keep the mechanical part separate from the judgement part.
 
 `main` is protected: every change lands by pull request, and there are no direct pushes —
-including by the maintainer.
+including by the maintainer. A pull request needs one approving review; the maintainers
+can merge their own through the ruleset's admin bypass.
 
-CI runs the three suites plus a PWA build on every pull request. Fork PRs run with a
-read-only token and no repository secrets.
+CI runs the agent and PWA suites and a PWA build in full on every pull request. The
+server suite runs only the tests the change can affect, as chosen from a traced
+dependency map, plus a fixed set that always runs. A change to the pipeline, a
+manifest or a lockfile runs the whole server suite. The whole suite also runs daily
+on `main` and before any promotion to `stable`, so a green pull request proves its
+selection, not the whole suite. Fork PRs run with a read-only token and no
+repository secrets. A fork PR's workflow runs wait
+for a maintainer to approve them the first time you contribute — that is GitHub's gate,
+not a judgement about your patch.
 
 Found a security problem? Do not open an issue — see [`SECURITY.md`](SECURITY.md).
 

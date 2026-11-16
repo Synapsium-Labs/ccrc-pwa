@@ -1,0 +1,40 @@
+
+⏺ User answered Claude's questions:
+  ⎿  · Which fruit? → Apple
+     · Which drink? → line one
+     line two
+
+⏺ "Which fruit?"="Apple", "Which drink?"="line one
+  line two"
+
+✻ Cooked for 2s · done 3:23
+
+❯ Call AskUserQuestion exactly once with FOUR single-select questions, each with two options and
+  short descriptions. Q1 header "Database" question "Which database engine?" options Postgres,
+  SQLite. Q2 header "Deployment" question "Which deployment target?" options Docker, Bare metal. Q3
+  header "Monitoring" question "Which monitoring stack?" options Grafana, None. Q4 header
+  "Licensing" question "Which licence?" options MIT, AGPL. Afterwards reply with the raw answers
+  only.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Database  ☒ Deployment  ☒ Monitoring  ☒ Licensing  ✔ Submit  →
+
+Review your answers
+
+ ● Which database engine?
+   → Use Postgres in production but SQLite for local development and tests, because the CI runners
+   have no database service available and we want hermetic test runs; keep the schema portable,
+   avoid Postgres-only types such as jsonb operators and arrays, and add a nightly job that runs the
+   full suite against a real Postgres 16 container so drift is caught early. End of answer
+   1234567890.
+ ● Which deployment target?
+   → Kubernetes 2
+ ● Which monitoring stack?
+   → None
+ ● Which licence?
+   → AGPL
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel

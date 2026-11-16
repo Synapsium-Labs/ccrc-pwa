@@ -12,7 +12,7 @@ killed a healthy test run this morning.
 
 `ccd/ccd-cap-scopes` caps every uncapped `tmux-spawn-*.scope` at
 `MemoryHigh=8G MemoryMax=12G MemorySwapMax=2G TasksMax=4096`. It exists for a
-good reason, recorded in its own header: on 2026-07-28 "a MekWarLive jest run
+good reason, recorded in its own header: on 2026-07-28 "a project-f jest run
 (15 workers) drove one pane scope to a 24G peak, exhausting 30G RAM + 8G swap
 and stalling the whole fleet for ~25 min."
 
@@ -29,7 +29,7 @@ the failure mode.** A scope between `MemoryHigh` and `MemoryMax` is throttled,
 never killed — so `memory.events` reads `oom_kill 0`, no unit fails, nothing is
 logged, and the failure has no signal at any layer.
 
-**Measured, 2026-08-27/28** — MekWarLive wave 2, run 9, frozen **18h51m**:
+**Measured, 2026-08-27/28** — project-f wave 2, run 9, frozen **18h51m**:
 
 - scope `memory.current` **9.07 GiB** against `memory.high` **8 GiB**;
   `memory.events: high=20807511, oom_kill=0`.

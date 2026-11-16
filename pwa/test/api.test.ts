@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ApiError, apiErrorText, clipUrl, createApi, kickoffErrorText, sendErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
+import { ApiError, apiErrorText, clipUrl, createApi, kickoffErrorText, moveSkipText, noBundleRollbackText, sendErrorText, submitErrorText, updateErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
+import { FLEET_SCOPE, type AckAnswer, type CatalogueState, type IntentWriteAnswer, type MoveRequestAnswer, type NodeWire, type UpdateIntentWire, type UpdateRouteError } from '../../shared/api';
 
 const jsonResponse = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), {
     status,
     headers: { 'content-type': 'application/json' },
   });
+
+import { ARCHIVE_REFUSAL_TEXT } from '../src/lib/api';
+import { ARCHIVE_REFUSAL_CODES } from '../../shared/api';
 
 const asError = (status: number, body: unknown): unknown => {
   try { throw new ApiError(status, body); } catch (e) { return e; }
@@ -47,6 +51,18 @@ describe('api client', () => {
 
     const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(init.body as string)).toEqual({ text: 'hello' });
+  });
+
+  it('prompt sends resume: true when asked, and omits it otherwise', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.prompt('x', 'hello', { resume: true });
+    await api.prompt('x', 'hello', { resume: false });
+    await api.prompt('x', 'hello', {});
+
+    const bodies = fetchImpl.mock.calls.map((c) => JSON.parse((c[1] as RequestInit).body as string));
+    expect(bodies).toEqual([{ text: 'hello', resume: true }, { text: 'hello' }, { text: 'hello' }]);
   });
 
   it('prompt throws ApiError with the parsed body on 409', async () => {
@@ -139,8 +155,8 @@ describe('attachments', () => {
   });
 
   it('builds an origin-qualified clip URL — a bare path breaks openExternal', () => {
-    expect(clipUrl('claude2-Proj', 'clip-1-a1b2.png'))
-      .toBe(`${location.origin}/api/sessions/claude2-Proj/clip/clip-1-a1b2.png`);
+    expect(clipUrl('claude9-Proj', 'clip-1-a1b2.png'))
+      .toBe(`${location.origin}/api/sessions/claude9-Proj/clip/clip-1-a1b2.png`);
   });
 });
 
@@ -213,6 +229,32 @@ describe('PR lifecycle (Task 13)', () => {
     expect(calls[0]![1]).toEqual({ method: 'POST' });
   });
 
+  // Workspace lifecycle §5.2: the two other consents, on `force`'s rule — sent only when given, each alone.
+  it.each([
+    [{ interrupt: true }, { interrupt: true }],
+    [{ programme: 'end' as const }, { programme: 'end' }],
+    [{ force: true, interrupt: true, programme: 'end' as const }, { force: true, interrupt: true, programme: 'end' }],
+  ])('archive(id, %j) posts exactly %j', async (opts, body) => {
+    const calls: [string, RequestInit | undefined][] = [];
+    const a = createApi(async (u, init) => { calls.push([String(u), init]); return new Response('', { status: 200 }); });
+    await a.archive('demo-x', opts);
+    expect(JSON.parse(calls[0]![1]!.body as string)).toEqual(body);
+  });
+
+  it('archive(id, {interrupt:false}) is the plain call — a consent that says no is no consent', async () => {
+    const calls: [string, RequestInit | undefined][] = [];
+    const a = createApi(async (u, init) => { calls.push([String(u), init]); return new Response('', { status: 200 }); });
+    await a.archive('demo-x', { force: false, interrupt: false });
+    expect(calls[0]![1]).toEqual({ method: 'POST' });
+  });
+
+  it('archive resolves to the door\'s answer, and to null when a 2xx carried nothing readable', async () => {
+    const answer = { ok: true, archived: false, stopped: true, ended: [], refusal: 'status-unknown', detail: 'ccd: status-unknown' };
+    expect(await createApi(vi.fn().mockResolvedValue(jsonResponse(200, answer)) as unknown as typeof fetch)
+      .archive('demo-x', { interrupt: true })).toEqual(answer);
+    expect(await createApi((async () => new Response('', { status: 200 })) as typeof fetch).archive('demo-x')).toBeNull();
+  });
+
   it('restore POSTs to /api/sessions/:id/restore with no body', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
@@ -274,8 +316,8 @@ describe('coordPause (Task 11, spec §4.2)', () => {
     // The component tests always inject, so without a fetch-level block here a
     // new client method has NO coverage at all — measured for `coordPause`,
     // which is why this describe exists.
-    const view = { caps: { maxConcurrentWorkers: 3, maxSessionsPerDay: 12 },
-                   usage: { running: 1, dispatchedIn24h: 4 } };
+    const view = { caps: { maxConcurrentWorkers: 3 },
+                   usage: { running: 1 } };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, view));
     const api = createApi(fetchImpl as unknown as typeof fetch);
 
@@ -285,9 +327,39 @@ describe('coordPause (Task 11, spec §4.2)', () => {
     expect(init?.method ?? 'GET').toBe('GET');
   });
 
+  // D-6911: the review cap's read and lift. No box token on either: an operator's same-origin call.
+  it('GETs /api/coord/review-cap/:id and returns the parsed view', async () => {
+    const view = { ok: true, askedAt: 5, liftedAt: null, ask: { run: 12, rounds: 3, cap: 3,
+      lastReview: { reviewRunId: 15, summary: 's', report: null, findings: { state: 'unnamed' } } } };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, view));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    expect(await api.reviewCap(12)).toEqual(view);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/coord/review-cap/12');
+    expect(init?.method ?? 'GET').toBe('GET');
+  });
+
+  it('POSTs exactly { run } to /api/coord/review-cap', async () => {
+    const answer = { ok: true, run: 12, rounds: 3, cap: 3, lifted: true };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, answer));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    expect(await api.liftReviewCap(12)).toEqual(answer);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/coord/review-cap');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ run: 12 });
+    expect(new Headers(init.headers).get('x-ccrc-mail-token')).toBeNull();
+  });
+
+  it('a refused lift rejects with ApiError carrying the status', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(404, { ok: false, error: 'not-found' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await expect(api.liftReviewCap(12)).rejects.toMatchObject({ status: 404 });
+  });
+
   it('POSTs only the given fields as JSON to /api/coord/caps', async () => {
-    const view = { caps: { maxConcurrentWorkers: 5, maxSessionsPerDay: 12 },
-                   usage: { running: 1, dispatchedIn24h: 4 } };
+    const view = { caps: { maxConcurrentWorkers: 5 },
+                   usage: { running: 1 } };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, view));
     const api = createApi(fetchImpl as unknown as typeof fetch);
 
@@ -347,6 +419,18 @@ describe('coordPause (Task 11, spec §4.2)', () => {
     );
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(501);
+  });
+
+  it('POSTs {state} as JSON to /api/coord/reclaim-pause — no box token', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, requested: 'on' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.childReclaimPause('on');
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/coord/reclaim-pause');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ state: 'on' });
+    expect(new Headers(init.headers).get('x-ccrc-mail-token')).toBeNull();
   });
 });
 
@@ -763,9 +847,16 @@ describe('apiErrorText and the code translators that compose with it', () => {
     expect(kickoffErrorText(sentence)).toBe(sentence);
   });
 
+  it('says every archive refusal in words — never a bare slug (workspace lifecycle §5.2)', () => {
+    for (const code of ARCHIVE_REFUSAL_CODES) {
+      expect(ARCHIVE_REFUSAL_TEXT[code], code).toMatch(/\w+ \w+/);
+      expect(apiErrorText(asError(409, { ok: false, error: code })), code).toBe(ARCHIVE_REFUSAL_TEXT[code]);
+    }
+  });
+
   it('does not shadow any code the SEND translator owns either', () => {
     for (const code of ['dialog-open', 'enter-ignored', 'verify-failed',
-      'draft-clear-failed', 'not-alive', 'auto-continue-armed']) {
+      'draft-clear-failed', 'not-alive', 'auto-continue-armed', 'turn-running', 'box-unreadable', 'type-failed']) {
       expect(apiErrorText(asError(409, { ok: false, error: code })), code).toBe(code);
       expect(sendErrorText(apiErrorText(asError(409, { ok: false, error: code }))), code)
         .not.toBe(code);
@@ -775,6 +866,19 @@ describe('apiErrorText and the code translators that compose with it', () => {
 
 // TASK 410 — `verify-failed`'s sentence was false twice after this build.
 describe('send-failure copy', () => {
+  it("box-unreadable names the ONE remedy the app cannot perform itself", () => {
+    // Every other send failure is answerable from the PWA — answer the dialog,
+    // replace the draft, tap Send it, retry. This one is not: the box has grown
+    // taller than the capture window, and nothing typed from here can shrink it
+    // (before the server-side refusal, every attempt made it taller). So the
+    // sentence has to carry the terminal, and it is the only one that may.
+    expect(sendErrorText('box-unreadable')).toMatch(/terminal/i);
+    expect(sendErrorText('box-unreadable')).not.toBe('box-unreadable');
+    // `submitEnter`'s own refusal is a different question with the same remedy.
+    expect(submitErrorText('box-unreadable')).toMatch(/terminal/i);
+    expect(submitErrorText('box-unreadable')).not.toBe('box-unreadable');
+  });
+
   it("verify-failed's sentence stops sending the operator to a terminal", () => {
     // The old copy was "The session never showed the text — open the terminal
     // to check." Both halves stopped being right: the ordinary path now
@@ -794,6 +898,30 @@ describe('send-failure copy', () => {
     // echoed back, versus echoed and then not taken), and collapsing them
     // would tell the operator the wrong story about which one happened.
     expect(sendErrorText('verify-failed')).not.toBe(sendErrorText('enter-ignored'));
+  });
+
+  // ONE CODE, TWO OUTCOMES — the paste-chip collapse. The server now sets
+  // `submittable` on a `verify-failed` whose box row is `[Pasted text #N]`,
+  // which means the OPPOSITE of the table's entry: the session did take the
+  // text and rendered it as a chip. Leaving the old sentence there would put
+  // "never echoed it back" directly above a button that sends it.
+  it('a submittable verify-failed gets its own sentence, and it does not deny the echo', () => {
+    const collapsed = sendErrorText('verify-failed', true);
+    expect(collapsed).not.toBe(sendErrorText('verify-failed'));
+    expect(collapsed).not.toMatch(/never/);
+    expect(collapsed).toMatch(/chip/);
+    // The register is its neighbours': it starts by granting that the typing
+    // worked, exactly as both existing sentences do.
+    expect(collapsed.startsWith('Typed it')).toBe(true);
+  });
+
+  it('and every OTHER code ignores the flag — it discriminates one arm, not all of them', () => {
+    for (const code of ['enter-ignored', 'dialog-open', 'not-alive', 'draft-clear-failed']) {
+      expect(sendErrorText(code, true), code).toBe(sendErrorText(code));
+    }
+    // Absent and false are the same answer: an older server sends neither.
+    expect(sendErrorText('verify-failed', false)).toBe(sendErrorText('verify-failed'));
+    expect(sendErrorText('verify-failed', undefined)).toBe(sendErrorText('verify-failed'));
   });
 });
 
@@ -842,27 +970,37 @@ describe('account pools', () => {
   it('swap(id, w) posts the complete ordinary swap request', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
-    await api.swap('s1', 'claude2');
+    await api.swap('s1', 'claude9');
     expect(fetchImpl.mock.calls[0]).toEqual([
       '/api/sessions/s1/swap',
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ wrapper: 'claude2' }),
+        body: JSON.stringify({ wrapper: 'claude9' }),
       },
     ]);
+  });
+
+  it('limitWait(id) posts the operator\'s wait choice to the session\'s limit-wait door with no body (D-8123)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.limitWait('a b');
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/sessions/a%20b/limit-wait');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
   });
 
   it('swap(id, w, {crossPool:false}) is the same complete ordinary request', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
-    await api.swap('s1', 'claude2', { crossPool: false });
+    await api.swap('s1', 'claude9', { crossPool: false });
     expect(fetchImpl.mock.calls[0]).toEqual([
       '/api/sessions/s1/swap',
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ wrapper: 'claude2' }),
+        body: JSON.stringify({ wrapper: 'claude9' }),
       },
     ]);
   });
@@ -870,9 +1008,23 @@ describe('account pools', () => {
   it('swap(id, w, {crossPool:true}) declares the crossing on the wire', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
-    await api.swap('s1', 'claude2', { crossPool: true });
+    await api.swap('s1', 'claude9', { crossPool: true });
     const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2', crossPool: true });
+    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude9', crossPool: true });
+  });
+
+  it('swap(id, w, {interrupt:true}) sends the consent, alone or beside the crossing (D-5240)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.swap('s1', 'claude9', { interrupt: true });
+    await api.swap('s1', 'claude9', { crossPool: true, interrupt: true });
+    await api.swap('s1', 'claude9', { interrupt: false });
+    const bodies = fetchImpl.mock.calls.map((c) => JSON.parse((c as [string, RequestInit])[1].body as string));
+    expect(bodies).toEqual([
+      { wrapper: 'claude9', interrupt: true },
+      { wrapper: 'claude9', crossPool: true, interrupt: true },
+      { wrapper: 'claude9' },
+    ]);
   });
 
   it('createSession omits crossPool entirely unless it is true', async () => {
@@ -890,6 +1042,229 @@ describe('account pools', () => {
     await api.createSession({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', crossPool: true });
     expect(JSON.parse((fetchImpl.mock.calls[2] as [string, RequestInit])[1].body as string))
       .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', crossPool: true });
+  });
+
+  // Fix round 2, finding #3 (routing slice 4, Task 6): `api.projects(cls)` and
+  // `createSession`'s `route` strip shipped with no test of their own — this
+  // pair mutates the same emptiness rule the `crossPool` case above pins.
+  it('projects(cls) appends ?class= only when given (routing slice 4, Task 6)', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async () => jsonResponse(200, { roots: [], projects: [] }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.projects();
+    expect((fetchImpl.mock.calls[0] as [string, RequestInit])[0]).toBe('/api/projects');
+
+    await api.projects('fable');
+    expect((fetchImpl.mock.calls[1] as [string, RequestInit])[0]).toBe('/api/projects?class=fable');
+  });
+
+  it('a 200 /api/projects answer without a projects array rejects with a plain error', async () => {
+    for (const body of [{}, { roots: [] }, { projects: null }, { projects: {} }, null, []]) {
+      const api = createApi(vi.fn().mockResolvedValue(jsonResponse(200, body)) as unknown as typeof fetch);
+      const failure = await api.projects().then(() => null, (err: unknown) => err);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).not.toBeInstanceOf(ApiError);
+      expect((failure as Error).message).toBe("The server's project list could not be read.");
+    }
+  });
+
+  it('createSession omits route entirely unless at least one field is set (routing slice 4, Task 6)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.createSession({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', route: {} });
+    expect(JSON.parse((fetchImpl.mock.calls[0] as [string, RequestInit])[1].body as string))
+      .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo' });
+
+    await api.createSession({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', route: { class: 'opus' } });
+    expect(JSON.parse((fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string))
+      .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', route: { class: 'opus' } });
+  });
+
+  // Fix round 1, finding #1 (routing slice 5, Task 6): `workspaceAdd`'s
+  // `route` wrapper shipped pinned only through the fleet-class-chooser
+  // screen test — this pair pins the api-layer decision directly, the same
+  // shape as the `crossPool`/`route` cases above it.
+  it('workspaceAdd(project) posts with no body and no content-type (routing slice 5, Task 6)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.workspaceAdd('p');
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/projects/p/workspaces');
+    expect('body' in init).toBe(false);
+    expect(new Headers(init.headers).get('content-type')).toBeNull();
+  });
+
+  it('workspaceAdd(project, { route }) posts { route } exactly (routing slice 5, Task 6)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.workspaceAdd('p', { route: { class: 'fable' } });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/projects/p/workspaces');
+    expect(JSON.parse(init.body as string)).toEqual({ route: { class: 'fable' } });
+  });
+
+  // NAMED WORKSPACES (S7). A blank name is today's create, byte for byte: nothing about a name reaches the wire, a
+  // wrapper beside it included (the server ignores it, and an old server has no use for it).
+  it.each([undefined, '', '   '])('workspaceAdd with a blank name (%j) is today\'s request, wrapper dropped', async (name) => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.workspaceAdd('p', { name, wrapper: 'lane-a' });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect('body' in init).toBe(false);
+    expect(new Headers(init.headers).get('content-type')).toBeNull();
+
+    await api.workspaceAdd('p', { name, wrapper: 'lane-a', route: { class: 'fable' } });
+    expect(JSON.parse((fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string)).toEqual({ route: { class: 'fable' } });
+  });
+
+  it('workspaceAdd with a name posts name (trimmed), wrapper and route, and reads the named answer', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 'p-eng-1234', slug: 'eng-1234', title: 'ENG-1234 - Fix the login flow' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const answer = await api.workspaceAdd('p q', { name: '  ENG-1234 ', wrapper: 'lane-a', route: { class: 'opus' } });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/projects/p%20q/workspaces');
+    expect(JSON.parse(init.body as string)).toEqual({ route: { class: 'opus' }, name: 'ENG-1234', wrapper: 'lane-a' });
+    expect(answer).toEqual({ named: true, id: 'p-eng-1234', slug: 'eng-1234', title: 'ENG-1234 - Fix the login flow' });
+  });
+
+  it('workspaceAdd without a wrapper sends no wrapper key (the + door has no account to name)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.workspaceAdd('p', { name: 'Login cleanup' });
+    expect(JSON.parse((fetchImpl.mock.calls[0] as [string, RequestInit])[1].body as string)).toEqual({ name: 'Login cleanup' });
+  });
+
+  it('workspaceAdd answers {named:false} for today\'s {ok:true}, and for a 2xx it cannot read', async () => {
+    const plain = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { ok: true })) as unknown as typeof fetch);
+    expect(await plain.workspaceAdd('p')).toEqual({ named: false });
+    const garbled = createApi(vi.fn().mockResolvedValue(new Response('not json', { status: 200 })) as unknown as typeof fetch);
+    expect(await garbled.workspaceAdd('p', { name: 'ENG-1234' })).toEqual({ named: false });
+    const partial = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 'p-x', slug: 'x' })) as unknown as typeof fetch);
+    expect(await partial.workspaceAdd('p', { name: 'x-1' })).toEqual({ named: false });
+  });
+
+  it('workspaceAdd rejects a refusal with its ApiError body intact', async () => {
+    const api = createApi(vi.fn().mockResolvedValue(jsonResponse(409, { ok: false, error: 'slug-taken' })) as unknown as typeof fetch);
+    await expect(api.workspaceAdd('p', { name: 'ENG-1234' })).rejects.toMatchObject({ status: 409, body: { error: 'slug-taken' } });
+  });
+
+  // ADD A PROJECT (add-project spec 2026-11-04 §4 PWA): the body rides as JSON, exactly as given, and the 2xx is read.
+  it('projectAdd posts the body as JSON to /api/projects and reads the answer', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, name: 'repo', source: 'github' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const answer = await api.projectAdd({ source: 'github', repo: 'example/repo', name: 'repo' });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/projects');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ source: 'github', repo: 'example/repo', name: 'repo' });
+    expect(answer).toEqual({ ok: true, name: 'repo', source: 'github' });
+
+    await api.projectAdd({ source: 'empty', name: 'project-a' });
+    expect(JSON.parse((fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string)).toEqual({ source: 'empty', name: 'project-a' });
+  });
+
+  it('projectAdd answers unreadable for a 2xx it cannot read, and rejects a refusal with its body intact', async () => {
+    const garbled = createApi(vi.fn().mockResolvedValue(new Response('not json', { status: 200 })) as unknown as typeof fetch);
+    expect(await garbled.projectAdd({ source: 'empty', name: 'project-a' })).toBe('unreadable');
+    const partial = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, name: 'project-a', source: 'svn' })) as unknown as typeof fetch);
+    expect(await partial.projectAdd({ source: 'empty', name: 'project-a' })).toBe('unreadable');
+    const refused = createApi(vi.fn().mockResolvedValue(jsonResponse(409, { ok: false, error: 'project-exists' })) as unknown as typeof fetch);
+    await expect(refused.projectAdd({ source: 'empty', name: 'project-a' })).rejects.toMatchObject({ status: 409, body: { error: 'project-exists' } });
+  });
+
+  // NAMED WORKSPACES (S9): the rename. A title is sent trimmed, a clear is its own body, and the id rides the path
+  // percent-encoded. The 2xx is read: the title the box holds, `null` after a clear, `'unreadable'` for an answer this
+  // build cannot read (the exchange completed, so the rename landed).
+  it('workspaceTitle posts { title } (trimmed) to /api/sessions/:id/title and reads the answer', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 'p-x', title: 'ENG-1301 - Fix it' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const answer = await api.workspaceTitle('p x', { title: '  ENG-1301 ' });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/sessions/p%20x/title');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ title: 'ENG-1301' });
+    expect(answer).toEqual({ title: 'ENG-1301 - Fix it' });
+  });
+
+  it('workspaceTitle with { clear: true } posts exactly that, and reads the null title', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 'p-x', title: null }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const answer = await api.workspaceTitle('p-x', { clear: true });
+    expect(JSON.parse((fetchImpl.mock.calls[0] as [string, RequestInit])[1].body as string)).toEqual({ clear: true });
+    expect(answer).toEqual({ title: null });
+  });
+
+  it("workspaceTitle answers 'unreadable' for a 2xx it cannot read, and rejects a refusal with its ApiError body intact", async () => {
+    const garbled = createApi(vi.fn().mockResolvedValue(new Response('not json', { status: 200 })) as unknown as typeof fetch);
+    expect(await garbled.workspaceTitle('p-x', { title: 'x-1' })).toBe('unreadable');
+    const partial = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { ok: true })) as unknown as typeof fetch);
+    expect(await partial.workspaceTitle('p-x', { title: 'x-1' })).toBe('unreadable');
+    const refused = createApi(vi.fn().mockResolvedValue(jsonResponse(409, { ok: false, error: 'not-a-workspace' })) as unknown as typeof fetch);
+    await expect(refused.workspaceTitle('p-x', { clear: true })).rejects.toMatchObject({ status: 409, body: { error: 'not-a-workspace' } });
+  });
+
+  it('linearResolve asks GET /api/linear/resolve with the text percent-encoded, and reads the answer', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, {
+      kind: 'named', slug: 'eng-1234', title: 'ENG-1234 - Fix the login flow', source: 'linear', extra: 'ignored',
+    }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const answer = await api.linearResolve('user-a/ENG-1234 fix?&x');
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`/api/linear/resolve?ref=${encodeURIComponent('user-a/ENG-1234 fix?&x')}`);
+    expect(init.method ?? 'GET').toBe('GET');
+    expect(answer).toEqual({ title: 'ENG-1234 - Fix the login flow', source: 'linear', note: null });
+  });
+
+  it.each([
+    ['a known word', 'not-configured', 'not-configured'],
+    ['another known word', 'unreachable', 'unreachable'],
+    ['the 403 word', 'forbidden', 'forbidden'],
+    ['a word this build lacks', 'from-the-future', 'unrecognised'],
+    ['a client-side note smuggled in as a word', 'call-failed', 'unrecognised'],
+    ['a reason that is not a string', 7, 'unrecognised'],
+  ])('linearResolve reads an offline answer\'s reason: %s', async (_name, reason, note) => {
+    const api = createApi(vi.fn().mockResolvedValue(jsonResponse(200, {
+      kind: 'named', slug: 'eng-1234', title: 'ENG-1234', source: 'offline', reason,
+    })) as unknown as typeof fetch);
+    expect(await api.linearResolve('ENG-1234')).toEqual({ title: 'ENG-1234', source: 'offline', note });
+  });
+
+  it('linearResolve reads a Linear answer as having failed at nothing, whatever reason rides with it', async () => {
+    const api = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { kind: 'named', slug: 'eng-1', title: 'ENG-1 - X', source: 'linear', reason: 'timeout' })) as unknown as typeof fetch);
+    expect(await api.linearResolve('ENG-1')).toEqual({ title: 'ENG-1 - X', source: 'linear', note: null });
+  });
+
+  it('linearResolve reads an offline answer with no reason as having failed at nothing', async () => {
+    const api = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { kind: 'named', slug: 'login-cleanup', title: 'Login cleanup', source: 'offline' })) as unknown as typeof fetch);
+    expect(await api.linearResolve('Login cleanup')).toEqual({ title: 'Login cleanup', source: 'offline', note: null });
+  });
+
+  it.each([
+    ['an auto answer', { kind: 'auto', slug: null, title: null, source: 'offline' }],
+    ['a refused answer', { kind: 'refused', slug: null, title: null, source: 'offline', reason: 'too-short' }],
+    ['a refused answer that carries a title', { kind: 'refused', slug: null, title: 'X', source: 'offline', reason: 'too-short' }],
+    ['no title', { kind: 'named', slug: 'x', title: '', source: 'linear' }],
+    ['an unknown source', { kind: 'named', slug: 'x', title: 'X', source: 'cache' }],
+    ['a body that is not an object', ['named']],
+  ])('linearResolve answers unreadable for %s, never a guessed title', async (_name, body) => {
+    const api = createApi(vi.fn().mockResolvedValue(jsonResponse(200, body)) as unknown as typeof fetch);
+    expect(await api.linearResolve('x')).toBe('unreadable');
+  });
+
+  it('linearResolve rejects a refusal with its ApiError', async () => {
+    const api = createApi(vi.fn().mockResolvedValue(jsonResponse(400, { ok: false, error: 'ref-too-long' })) as unknown as typeof fetch);
+    await expect(api.linearResolve('x')).rejects.toMatchObject({ status: 400, body: { error: 'ref-too-long' } });
   });
 
   it('names both pools in a measured mismatch without promising a control', () => {
@@ -962,5 +1337,519 @@ describe('account pools', () => {
       expect(kickoffErrorText(code), code).toBe(code);
       expect(sendErrorText(code), code).toBe(code);
     }
+  });
+});
+
+// ── Centralised update management W3, Task 5: the update plane's client ─────
+// Design 2026-09-20 §12/§13. Four methods over W2's four session-only routes,
+// and each one's helper is a DECISION (lib/api.ts says why at each call): the
+// two WRITES degrade an unparseable 2xx to `unreadable`, because the write may
+// have landed (D-1150); the refresh does not, because it writes nothing the
+// operator could be unconfirmed about. The two move routes' methods are
+// programme wave 5's (the last describe below); the census counts every literal.
+describe('the update plane client (W3 Task 5)', () => {
+  const INTENT: UpdateIntentWire = {
+    scope: FLEET_SCOPE, channel: 'dev', pinnedTag: null, auto: 'off', notify: 'channel', setAt: 5_000, setBy: 'operator',
+  };
+  const CATALOGUE: CatalogueState = { lastOkAt: 4_000, lastError: null };
+  const NODE: NodeWire = {
+    nodeId: '0f0e0d0c-0b0a-4908-8706-050403020100', role: 'fleet', label: 'fleet', os: 'linux',
+    current: { sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-09-22T00:00:00Z', dirty: false, version: 'v0.0.9' },
+    stampRead: 'ok', installState: 'complete', provenance: 'verified',
+    caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
+    measuredAt: 1_000, reachable: true, unreachableSince: null,
+    channel: 'dev', desiredTag: 'v0.0.9', resolveDetail: null, request: null, report: null,
+    update: { state: 'idle', target: null, startedAt: null, detail: null },
+  };
+  /** A 2xx whose body stops mid-object — the exchange completed, the answer did not. */
+  const truncated = (): Response => new Response('{"ok":true,"inte', {
+    status: 200, headers: { 'content-type': 'application/json' },
+  });
+
+  it('updates() is a bare GET of /api/updates — no method, header or body, only the read limit\'s signal', async () => {
+    const body = { catalogue: CATALOGUE, releases: [], nodes: [NODE], intent: [INTENT] };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, body));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await expect(api.updates()).resolves.toEqual(body);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit | undefined];
+    expect(url).toBe('/api/updates');
+    // Console speed C1: every GET carries its time limit's signal, and nothing else.
+    expect(Object.keys(init ?? {})).toEqual(['signal']);
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('setUpdateIntent POSTs the partial as JSON, asks for JSON back, and resolves the answer', async () => {
+    const answer: IntentWriteAnswer = { ok: true, intent: INTENT, epoch: 7 };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, answer));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await expect(api.setUpdateIntent({ scope: FLEET_SCOPE, channel: 'dev' })).resolves.toEqual(answer);
+
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/updates/intent');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(new Headers(init.headers).get('accept')).toBe('application/json');
+    // EXACTLY the two keys given — W2's parseIntentBody refuses an unknown key,
+    // and an omitted one keeps its stored value (a partial, not a snapshot).
+    expect(JSON.parse(init.body as string)).toEqual({ scope: '*', channel: 'dev' });
+    // Session-gated only (W2 Task 13): no box token rides an operator write.
+    expect(new Headers(init.headers).get('x-ccrc-mail-token')).toBeNull();
+  });
+
+  it('setUpdateIntent resolves `unreadable` on a 2xx it cannot parse — the write may have landed (D-1150)', async () => {
+    const api = createApi(async () => truncated());
+    await expect(api.setUpdateIntent({ scope: FLEET_SCOPE, notify: 'off' })).resolves.toBe('unreadable');
+    const emptied = createApi(async () => new Response('', { status: 200 }));
+    await expect(emptied.setUpdateIntent({ scope: FLEET_SCOPE, notify: 'off' })).resolves.toBe('unreadable');
+  });
+
+  it('setUpdateIntent still rejects a request that never completed, and a refusal keeps its body', async () => {
+    const offline = createApi(async () => { throw new TypeError('Failed to fetch'); });
+    await expect(offline.setUpdateIntent({ scope: FLEET_SCOPE, auto: 'stable' })).rejects.toThrow(/failed to fetch/i);
+
+    const refusal = { ok: false, error: 'auto-needs-rollback-gate', nodes: ['fleet', 'server'] };
+    const refused = createApi(vi.fn().mockResolvedValue(jsonResponse(409, refusal)) as unknown as typeof fetch);
+    const err = await refused.setUpdateIntent({ scope: FLEET_SCOPE, auto: 'stable' }).then(
+      () => { throw new Error('expected setUpdateIntent to reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(409);
+    expect((err as ApiError).body).toEqual(refusal);
+  });
+
+  it('refreshUpdates POSTs nothing, asks for JSON, and resolves the catalogue line', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, CATALOGUE));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await expect(api.refreshUpdates()).resolves.toEqual(CATALOGUE);
+
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/updates/refresh');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('accept')).toBe('application/json');
+    expect(new Headers(init.headers).get('content-type')).toBeNull();
+    expect(init.body).toBeUndefined();
+  });
+
+  it('refreshUpdates REJECTS an unparseable 2xx — it wrote nothing to be unconfirmed about', async () => {
+    const api = createApi(async () => truncated());
+    const r = await api.refreshUpdates().then(() => 'resolved', (e: unknown) => e);
+    expect(r, 'a check whose answer is unreadable is a failed check, not a catalogue line').not.toBe('resolved');
+    expect(r).not.toBe('unreadable');
+    expect(r).not.toBeInstanceOf(ApiError);
+  });
+
+  it('refreshUpdates rejects a 429 with the ApiError the screen reads retryAfterS off', async () => {
+    const body = { ok: false, error: 'rate-limited', retryAfterS: 42 };
+    const api = createApi(vi.fn().mockResolvedValue(jsonResponse(429, body)) as unknown as typeof fetch);
+    const err = await api.refreshUpdates().then(
+      () => { throw new Error('expected refreshUpdates to reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(429);
+    expect((err as ApiError).body).toEqual(body);
+  });
+
+  it('ackUpdateNode POSTs {nodeId} and resolves `unreadable` on an unparseable 2xx', async () => {
+    const answer: AckAnswer = { ok: true, node: NODE };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, answer));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await expect(api.ackUpdateNode(NODE.nodeId)).resolves.toEqual(answer);
+
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/updates/ack');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(new Headers(init.headers).get('accept')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ nodeId: NODE.nodeId });
+
+    const unreadable = createApi(async () => truncated());
+    await expect(unreadable.ackUpdateNode(NODE.nodeId)).resolves.toBe('unreadable');
+  });
+
+  it('spells exactly the six update routes — the four W2 routes plus apply and rollback (programme wave 5; W3 held it to four)', () => {
+    // The route LITERALS, not a method-name guess: every quoted `/api/updates…`
+    // path the client holds. Wave 5 adds the two move routes and nothing else.
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'lib', 'api.ts'), 'utf8');
+    const routes = [...new Set(src.match(/'\/api\/updates[^']*'/g) ?? [])].sort();
+    expect(routes).toEqual([
+      "'/api/updates'", "'/api/updates/ack'", "'/api/updates/apply'",
+      "'/api/updates/intent'", "'/api/updates/refresh'", "'/api/updates/rollback'",
+    ]);
+  });
+
+  it('no file under pwa/src spells the retired disabled-control sentence or its constant — the move controls are live (programme wave 5)', () => {
+    const root = path.join(import.meta.dirname, '..', 'src');
+    const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((f) => /\.(tsx?|css)$/.test(f));
+    // The walk reached the tree: a scan over zero files would pass vacuously.
+    expect(files).toContain(path.join('lib', 'api.ts'));
+    expect(files).toContain(path.join('fleet', 'UpdateIndicator.tsx'));
+    expect(files).toContain(path.join('screens', 'settings', 'UpdatesSection.tsx'));
+    const hits = files.filter((f) => {
+      const text = readFileSync(path.join(root, f), 'utf8');
+      return text.includes('MOVE_DISABLED_TEXT') || text.includes('lands with the next release (W4)');
+    }).sort();
+    expect(hits).toEqual([]);
+  });
+});
+
+// D-3302. `updateErrorText` reads `body.error`
+// against its OWN table before anything else, because two of its words already
+// have owners — `not-configured` is `API_ERROR_TEXT`'s kickoff sentence ("does
+// not run coordination … a kickoff"), false on this surface, and `bad-request`
+// is the upload and kickoff tables' — and it falls to `apiErrorText` only for a
+// code it does not own. It consumes no translator's output and none consumes
+// its output, so the composition hazard the describe above guards does not
+// arise; what can still go wrong is the other direction, a word of its own
+// leaking into another table, and the last case here pins that.
+describe('updateErrorText — the update routes\' refusals, read code-first (W3 Task 5)', () => {
+  // Typed by W2's union: a word W2 adds, or one this list drops, is a compile
+  // error in this file as well as in lib/api.ts — the runtime census and the
+  // type census are the same object.
+  const SENTENCES: Record<Exclude<UpdateRouteError, 'unauthenticated'>, string> = {
+    'not-configured': 'This box has no update control plane — it runs without a coordination database.',
+    'bad-tag': 'That is not a release tag this server accepts — tags look like v0.0.9, with no leading zeros.',
+    'bad-request': 'The server refused the shape of that request — reload the screen and try again.',
+    'unknown-scope': 'That node has no identity yet — it follows the fleet setting until an install gives it one.',
+    'unknown-node': 'That node is no longer in the inventory.',
+    superseded: 'That node was reinstalled under a new identity — reload to see it.',
+    busy: 'That node is in the middle of a move — wait for it to settle, then try again.',
+    'auto-needs-rollback-gate': 'Auto-install needs the rollback gate on every node, and at least one does not carry it yet.',
+    'rate-limited': 'GitHub was asked too recently — try again in a few minutes.',
+    'no-channel': 'A stored channel is one this build cannot read — choose the channel again.',
+    'journal-unreadable': 'The server cannot read its intent journal — nothing was changed.',
+    'journal-unwritable': 'The server cannot write its intent journal — nothing was changed.',
+    'unknown-tag': 'That tag is not a release this node can move to — choose one from the release list.',
+    'not-newer': 'That release is not newer than what that node runs, or than its floor after a rollback — use Roll back to move it there.',
+    'refused-by-node': 'That node refused this release when it failed verification — acknowledge the node to clear the refusal first.',
+    'stamp-unread': 'That node’s build stamp could not be read, so nothing can say whether the release is newer — nothing was requested.',
+    'floor-unread': 'That node’s floor has not been measured yet, so nothing can say whether the release is above it — nothing was requested.',
+    'no-detach-cap': 'That node’s ccrc predates the one-tap — update it once from its own shell — or it is macOS, which cannot be moved from here.',
+    'no-rollback-cap': 'That node cannot roll back on request yet — update it once from its own shell.',
+    // Wave 8 item C: the sentence is `noBundleRollbackText(null)`, not a hand-typed copy — the same text
+    // `UPDATE_ERROR_TEXT['no-bundle']` is (lib/api.ts), so a divergence between the two spellings would show
+    // up as this describe's OWN sentence disagreeing with the composed one, never as a silent pass.
+    'no-bundle': noBundleRollbackText(null),
+    'agent-predates-update-op': 'That node’s agent predates the update op — update the node once by hand, then it can be moved from here.',
+    halted: 'An update failed or was reverted, and nothing moves until that node is acknowledged — tap Ack on it in the halt banner on the fleet screen, or on its row in Settings.',
+    'no-previous': 'That node records no previous release to roll back to — pick a tag from the release list.',
+    'no-desired': 'That node has no resolved release to install — choose a tag, or check its channel and pin.',
+  };
+
+  it('has its sentence for every UpdateRouteError but unauthenticated', () => {
+    const entries = Object.entries(SENTENCES);
+    expect(entries, 'guards the guard — an empty census passes everything').toHaveLength(24);
+    for (const [code, sentence] of entries) {
+      expect(updateErrorText(asError(409, { ok: false, error: code })), code).toBe(sentence);
+    }
+  });
+
+  it('no-bundle names no tag and no HTML (wave 8 item C)', () => {
+    const text = updateErrorText(asError(409, { ok: false, error: 'no-bundle' }));
+    expect(text).toBe(noBundleRollbackText(null));
+    expect(text).toContain('that release');
+    expect(text).not.toContain('<');
+  });
+
+  it('not-configured on an update route is the update sentence, not the kickoff one', () => {
+    const err = asError(501, { ok: false, error: 'not-configured' });
+    expect(updateErrorText(err)).toBe(SENTENCES['not-configured']);
+    expect(updateErrorText(err)).not.toBe(apiErrorText(err));
+    expect(apiErrorText(err), 'the kickoff sentence is untouched').toMatch(/does not run coordination/i);
+  });
+
+  it('bad-request is the update sentence, not the upload or kickoff one', () => {
+    const err = asError(400, { ok: false, error: 'bad-request', field: 'channel' });
+    expect(updateErrorText(err)).toBe(SENTENCES['bad-request']);
+    expect(updateErrorText(err)).not.toBe(uploadErrorText('bad-request'));
+    expect(updateErrorText(err)).not.toBe(kickoffErrorText('bad-request'));
+  });
+
+  it('falls to apiErrorText for anything it does not own', () => {
+    expect(updateErrorText(asError(501, { ok: false, error: 'unsupported' }))).toBe(UNSUPPORTED_VERB_TEXT);
+    expect(updateErrorText(asError(401, { ok: false, error: 'unauthenticated' }))).toBe('unauthenticated');
+    expect(updateErrorText(asError(500, 'plain text body'))).toBe('request failed (500)');
+    expect(updateErrorText(new TypeError('Failed to fetch'))).toBe('Failed to fetch');
+  });
+
+  it('the five existing translators pass every update-only code through unchanged', () => {
+    // The twenty-two words no other table owns (wave 8 item C added `no-bundle`). `not-configured` and
+    // `bad-request` are excluded because they HAVE other owners — which is exactly why the
+    // update table is read first rather than composed after apiErrorText.
+    const updateOnly = Object.keys(SENTENCES).filter((c) => c !== 'not-configured' && c !== 'bad-request');
+    expect(updateOnly, 'guards the guard').toHaveLength(22);
+    for (const code of updateOnly) {
+      expect(apiErrorText(asError(409, { ok: false, error: code })), code).toBe(code);
+      expect(sendErrorText(code), code).toBe(code);
+      expect(submitErrorText(code), code).toBe(code);
+      expect(uploadErrorText(code), code).toBe(code);
+      expect(kickoffErrorText(code), code).toBe(code);
+    }
+  });
+});
+
+// ── Centralised update management, programme wave 5 Task 8: the move client ─
+// The two move routes (wave 5 Task 6), session-gated only. Each is a WRITE
+// whose 2xx means a request row was written — so, like setUpdateIntent and
+// ackUpdateNode, both degrade a 2xx they cannot parse to `unreadable` (D-1150)
+// rather than reporting a failure that did not happen, and a refusal still
+// rejects with its ApiError, whose body updateErrorText reads.
+describe('the move client — applyUpdate / rollbackUpdate (programme wave 5 Task 8)', () => {
+  const NODE_ID = '0f0e0d0c-0b0a-4908-8706-050403020100';
+  const ANSWER: MoveRequestAnswer = { ok: true, requested: [NODE_ID], skipped: [] };
+  /** A fresh Response per call — a body can be read once. */
+  const answering = (status: number, body: unknown) => vi.fn().mockImplementation(async () => jsonResponse(status, body));
+  const headersOf = (init: RequestInit): Headers => new Headers(init.headers);
+
+  it('applyUpdate POSTs {nodeId, tag} or {all: true, tag} as JSON to /api/updates/apply and resolves the answer', async () => {
+    const fetchImpl = answering(202, ANSWER);
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await expect(api.applyUpdate({ nodeId: NODE_ID, tag: 'v0.0.10' })).resolves.toEqual(ANSWER);
+    await expect(api.applyUpdate({ all: true, tag: 'v0.0.10' })).resolves.toEqual(ANSWER);
+    const calls = fetchImpl.mock.calls as [string, RequestInit][];
+    expect(calls).toHaveLength(2);
+    for (const [url, init] of calls) {
+      expect(url).toBe('/api/updates/apply');
+      expect(init.method).toBe('POST');
+      expect(headersOf(init).get('content-type')).toBe('application/json');
+      expect(headersOf(init).get('accept')).toBe('application/json');
+      expect(headersOf(init).get('x-ccrc-mail-token')).toBeNull();   // session-gated only (decision 15)
+    }
+    expect(calls.map(([, init]) => JSON.parse(init.body as string))).toEqual([
+      { nodeId: NODE_ID, tag: 'v0.0.10' },
+      { all: true, tag: 'v0.0.10' },
+    ]);
+  });
+
+  it('rollbackUpdate POSTs {nodeId, to} as JSON to /api/updates/rollback and resolves the answer', async () => {
+    const fetchImpl = answering(202, ANSWER);
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await expect(api.rollbackUpdate({ nodeId: NODE_ID, to: 'v0.0.8' })).resolves.toEqual(ANSWER);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/updates/rollback');
+    expect(init.method).toBe('POST');
+    expect(headersOf(init).get('content-type')).toBe('application/json');
+    expect(headersOf(init).get('x-ccrc-mail-token')).toBeNull();
+    expect(JSON.parse(init.body as string)).toEqual({ nodeId: NODE_ID, to: 'v0.0.8' });
+  });
+
+  it('both resolve `unreadable` on a 2xx whose body cannot be read — the request may have been written (D-1150)', async () => {
+    const api = createApi(async () => new Response('{"ok":true,"requ', {
+      status: 202, headers: { 'content-type': 'application/json' },
+    }));
+    await expect(api.applyUpdate({ all: true, tag: 'v0.0.10' })).resolves.toBe('unreadable');
+    await expect(api.rollbackUpdate({ nodeId: NODE_ID, to: 'v0.0.8' })).resolves.toBe('unreadable');
+  });
+
+  it('a refusal rejects with its ApiError, status and body intact', async () => {
+    const api = createApi(answering(409, { ok: false, error: 'not-newer' }) as unknown as typeof fetch);
+    const err = await api.applyUpdate({ nodeId: NODE_ID, tag: 'v0.0.8' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(409);
+    expect((err as ApiError).body).toEqual({ ok: false, error: 'not-newer' });
+  });
+});
+
+// moveSkipText's OWN-key guard (review MINOR 2). Wire additive discipline means a cached OLDER PWA can face a
+// NEWER server that skips a node for a MoveSkipWhy word this build's union does not carry — `why` arrives as
+// plain JSON, not the narrowed literal type, so both words below are real inputs, not merely type-system
+// gymnastics.
+describe('moveSkipText — an unknown skip word (review MINOR 2)', () => {
+  it('renders every real MoveSkipWhy word as UPDATE_ERROR_TEXT\'s own sentence', () => {
+    expect(moveSkipText('halted')).toBe(updateErrorText(new ApiError(409, { ok: false, error: 'halted' })));
+    expect(moveSkipText('busy')).toBe(updateErrorText(new ApiError(409, { ok: false, error: 'busy' })));
+  });
+
+  it('a word no version of this table has ever owned is made printable, not "undefined"', () => {
+    const said = moveSkipText('quarantined');
+    expect(said).not.toMatch(/undefined/);
+    expect(said).toContain('quarantined');
+  });
+
+  it('an inherited Object.prototype key is refused too — never the prototype method itself', () => {
+    const said = moveSkipText('toString');
+    expect(said).not.toMatch(/function|native code/);
+    expect(said).toContain('toString');
+  });
+});
+
+// ── THE THIN WRAPPERS, called for real (measured: 10 uncovered statements) ──
+//
+// Every one of these is one line — a method, a path, sometimes a body — and
+// every test in the app SPIES over them, so their bodies had never run. A
+// spy proves the call site; it cannot prove the ROUTE. A typo'd path or a
+// renamed body field would reach a real box before anything noticed, which is
+// the one failure a client this thin can still have.
+describe('api client — each door sends exactly its own request', () => {
+  const seen: { url: string; init?: RequestInit }[] = [];
+  const api = createApi(((url: RequestInfo | URL, init?: RequestInit) => {
+    seen.push({ url: String(url), init });
+    return Promise.resolve(jsonResponse(200, { ok: true }));
+  }) as unknown as typeof fetch);
+
+  const sent = (): { url: string; method: string; body: unknown } => {
+    const last = seen[seen.length - 1];
+    if (last === undefined) throw new Error('no request was made');
+    const raw = last.init?.body;
+    return {
+      url: last.url,
+      method: last.init?.method ?? 'GET',
+      body: typeof raw === 'string' ? JSON.parse(raw) : undefined,
+    };
+  };
+
+  const ID = 'claude:Proj F';            // a space, so encoding is proved too
+  const ENC = 'claude%3AProj%20F';
+
+  it('POSTs the fleet reboot with no body at all', async () => {
+    await api.rebootFleet();
+    expect(sent()).toEqual({ url: '/api/fleet/reboot', method: 'POST', body: undefined });
+  });
+
+  it('POSTs an account pool set under the ENCODED account id', async () => {
+    await api.setAccountPools('acct a/b', ['pool-a']);
+    expect(sent()).toEqual({
+      url: '/api/pools/accounts/acct%20a%2Fb', method: 'POST', body: { pools: ['pool-a'] },
+    });
+  });
+
+  it('POSTs a routing write as {field,value} — never a slash command', async () => {
+    // The whole point of this route: the record is written, and ccd types it.
+    // A body shaped `{route}` or `{command}` would be a different contract.
+    await api.route(ID, 'effort', 'high');
+    expect(sent()).toEqual({
+      url: `/api/sessions/${ENC}/route`, method: 'POST', body: { field: 'effort', value: 'high' },
+    });
+  });
+
+  // W7 C7g (D-7185, D-7485): one answer writer, `answerQuestion`. This describe's fetch answers `GET /health` with no
+  // `caps`, a server without `questions-v1`. Until C7p these two rows were the old doors' requests there (`/dialog`
+  // and `/ask`, the skew row); since C7p (D-7194, D-7540) the family's door is the only one, whatever `/health` says.
+  it('POSTs a dialog answer by INDEX, with the dialog it was shown (a server without questions-v1: still the family)', async () => {
+    await api.answerQuestion(ID, { kind: 'dialog', dialogId: 'd7', optionIndex: 2 });
+    expect(sent()).toEqual({
+      url: `/api/questions/session-${ENC}/answer`, method: 'POST', body: { kind: 'dialog', dialogId: 'd7', optionIndex: 2 },
+    });
+  });
+
+  it('POSTs an ask answer with the askKey verbatim (a server without questions-v1: still the family)', async () => {
+    // The key is minted server-side and carried back unchanged: the server
+    // re-reads the CURRENT envelope and refuses unless it still matches, so a
+    // client that reshaped it could answer a question nobody was shown.
+    await api.answerQuestion(ID, { kind: 'ask', askKey: 'k-abc', optionIndexes: [0, 2] });
+    expect(sent()).toEqual({
+      url: `/api/questions/session-${ENC}/answer`, method: 'POST', body: { kind: 'ask', askKey: 'k-abc', optionIndexes: [0, 2] },
+    });
+  });
+
+  it('on a questions-v1 server, both go to POST /api/questions/session-<id>/answer with the family\'s body', async () => {
+    const asked: { url: string; init?: RequestInit }[] = [];
+    const nu = createApi(((url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url) === '/health') return Promise.resolve(jsonResponse(200, { ok: true, caps: ['questions-v1'] }));
+      asked.push({ url: String(url), init });
+      return Promise.resolve(jsonResponse(200, { ok: true }));
+    }) as unknown as typeof fetch);
+    await nu.answerQuestion(ID, { kind: 'dialog', dialogId: 'd7', optionIndex: 2 });
+    await nu.answerQuestion(ID, { kind: 'ask', askKey: 'k-abc', optionIndexes: [0, 2] });
+    expect(asked.map((r) => ({ url: r.url, method: r.init?.method, body: JSON.parse(String(r.init?.body)) }))).toEqual([
+      { url: `/api/questions/session-${ENC}/answer`, method: 'POST', body: { kind: 'dialog', dialogId: 'd7', optionIndex: 2 } },
+      { url: `/api/questions/session-${ENC}/answer`, method: 'POST', body: { kind: 'ask', askKey: 'k-abc', optionIndexes: [0, 2] } },
+    ]);
+  });
+
+  it('POSTs the verified Enter with the box row it expects to find', async () => {
+    await api.submit(ID, 'the text already in the box');
+    expect(sent()).toEqual({
+      url: `/api/sessions/${ENC}/submit`, method: 'POST', body: { expect: 'the text already in the box' },
+    });
+  });
+
+  it('POSTs the interrupt with the source that sent it (D-5237)', async () => {
+    await api.interrupt(ID, 'keycap');
+    expect(sent()).toEqual({ url: `/api/sessions/${ENC}/interrupt`, method: 'POST', body: { source: 'keycap' } });
+  });
+
+  it('GETs the command list under the session', async () => {
+    await api.commands(ID);
+    expect(sent()).toEqual({ url: `/api/sessions/${ENC}/commands`, method: 'GET', body: undefined });
+  });
+
+  it('GETs the notification catch-up with an EMPTY epoch spelled out', async () => {
+    // `epoch ?? ''` — a null epoch is a device that has never heard from this
+    // box, and the server reads the empty string as exactly that. Dropping
+    // the parameter would make it ambiguous with "epoch unknown".
+    await api.catchUp(null, 12);
+    expect(sent()).toEqual({
+      url: '/api/notifications/catchup?epoch=&seq=12', method: 'GET', body: undefined,
+    });
+  });
+
+  it('reads `released` off the abandon door, and defaults it TRUE when absent', async () => {
+    // `body.released !== false` — an older server answers `{}`, and the door
+    // did release the claim. Only an explicit `false` means it did not.
+    const quiet = createApi(((url: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ url: String(url), init });
+      return Promise.resolve(jsonResponse(200, {}));
+    }) as unknown as typeof fetch);
+    expect(await quiet.abandonRun(7)).toEqual({ released: true });
+    expect(sent().url).toBe('/api/runs/7/abandon');
+  });
+
+  it('…and FALSE when the server says so', async () => {
+    const refused = createApi((() =>
+      Promise.resolve(jsonResponse(200, { released: false }))) as unknown as typeof fetch);
+    expect(await refused.abandonRun(7)).toEqual({ released: false });
+  });
+});
+
+describe('api.programmes (D-8075)', () => {
+  it('reads GET /api/programmes with the operator\'s midnight as a whole number of milliseconds', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, programmes: [], closedToday: { operator: 0, sweep: 0, coordinator: 0 } }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    const answer = await api.programmes(1_758_480_000_000.7);
+    expect(fetchImpl.mock.calls[0]![0]).toBe('/api/programmes?since=1758480000000');
+    expect(answer.programmes).toEqual([]);
+  });
+});
+
+describe('the item acts (Task 24, spec 2026-11-04 §10; D-8076)', () => {
+  it('actItem POSTs /api/items/:id/act with no body and reads released like abandonRun', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 7, state: 'failed', released: false, childReclaim: 'queued' }));
+    const a = createApi(fetchImpl as unknown as typeof fetch);
+    expect(await a.actItem(31)).toEqual({ released: false, childReclaim: 'queued' });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/items/31/act');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+    // An older server sends no `released`: absence reads true, as for the run's own route.
+    const older = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { ok: true })) as unknown as typeof fetch);
+    expect(await older.actItem(31)).toEqual({ released: true });
+  });
+
+  it('declineItem POSTs /api/items/:id/decline with no body', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, item: {} }));
+    const a = createApi(fetchImpl as unknown as typeof fetch);
+    await a.declineItem(31);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/items/31/decline');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+  });
+
+  it('releaseReviewItem POSTs /api/items/:id/act with no body (D-8293)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, released: true, item: {} }));
+    const a = createApi(fetchImpl as unknown as typeof fetch);
+    await a.releaseReviewItem(41);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/items/41/act');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
   });
 });

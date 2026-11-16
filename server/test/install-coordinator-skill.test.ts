@@ -12,7 +12,7 @@ import { seedAccountsSh } from './ccdWsHelpers.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-coordinator-skill.sh');
 const SRC = path.resolve(__dirname, '../../ccd/coordinator-skill');
-const HOMES = ['.claude', '.claude-personal', '.claude-corp', '.claude-gpt'];
+const HOMES = ['.claude', '.claude-home', '.claude-acme', '.claude-gpt'];
 
 let home: string;
 const skill = (d: string, ...rest: string[]): string =>
@@ -37,7 +37,22 @@ describe('install-coordinator-skill', () => {
         .toBe(fs.readFileSync(path.join(SRC, 'SKILL.md'), 'utf8'));
       expect(fs.existsSync(skill(d, 'references', 'wave-lifecycle.md'))).toBe(true);
       expect(fs.existsSync(skill(d, 'references', 'ledger-template.md'))).toBe(true);
+      expect(fs.existsSync(skill(d, 'references', 'routing-matrix.md'))).toBe(true);
+      expect(fs.existsSync(skill(d, 'references', 'review-panel.md'))).toBe(true);
     }
+  });
+
+  it('ships clause 17 (coordinator intent) to every home, and an older generation without it is replaced', () => {
+    // Delegation broker wave 3, Task 15. The clause is the only thing that tells a coordinator to declare its intent, and a skill
+    // reaches a home only once this installer has run there, so a home on the old generation is the case that matters.
+    const clause = 'Before delegating, declare coordinator intent for this session with `ccrc-api coordinators intent set --session <id>`;';
+    run();
+    for (const d of HOMES) expect(fs.readFileSync(skill(d, 'SKILL.md'), 'utf8')).toContain(`\n17. ${clause}`);
+    const older = fs.readFileSync(skill('.claude', 'SKILL.md'), 'utf8').replace(/\n1[78]\. [^\n]*/g, '').replace('These eighteen', 'These sixteen');
+    expect(older).not.toContain('coordinators intent');
+    fs.writeFileSync(skill('.claude', 'SKILL.md'), older);
+    run();
+    expect(fs.readFileSync(skill('.claude', 'SKILL.md'), 'utf8')).toContain(`\n17. ${clause}`);
   });
 
   it('re-running converges — the second run does not rewrite a converged home', () => {
@@ -132,7 +147,7 @@ describe('install-coordinator-skill', () => {
   it('reports a failed home in the exit status but still processes the others', () => {
     // Same rule as the hook installer: one bad home must not silently strand
     // the account a swap could move the coordinator onto.
-    const blocked = path.join(home, '.claude-corp', 'skills');
+    const blocked = path.join(home, '.claude-acme', 'skills');
     fs.mkdirSync(blocked, { recursive: true });
     fs.chmodSync(blocked, 0o500);
     let threw = false;
@@ -140,18 +155,18 @@ describe('install-coordinator-skill', () => {
     fs.chmodSync(blocked, 0o700);
     expect(threw).toBe(true);
     expect(fs.existsSync(skill('.claude', 'SKILL.md'))).toBe(true);
-    expect(fs.existsSync(skill('.claude-personal', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(skill('.claude-home', 'SKILL.md'))).toBe(true);
     // Fix-round finding (mutation M1): asserting only the two homes
     // processed BEFORE the blocked one cannot tell "continued past the bad
     // home" from "aborted at it" — a `rc=1; continue` mutated to `exit 1`
     // still passes those two. `.claude-gpt` is the FOURTH home, processed
-    // AFTER `.claude-corp` fails; only the per-home `continue` reaches it.
+    // AFTER `.claude-acme` fails; only the per-home `continue` reaches it.
     expect(fs.existsSync(skill('.claude-gpt', 'SKILL.md'))).toBe(true);
   });
 
   it('never writes outside the homes it was given', () => {
     run(path.join(home, '.claude'));
-    for (const d of ['.claude-personal', '.claude-corp', '.claude-gpt']) {
+    for (const d of ['.claude-home', '.claude-acme', '.claude-gpt']) {
       expect(fs.existsSync(path.join(home, d, 'skills'))).toBe(false);
     }
   });
@@ -199,7 +214,50 @@ describe('install-coordinator-skill.sh default homes are the roster, behavioural
   });
 });
 
-describe('the deploy ships the skill, agent-side — and PR I’s token lane is there', () => {
+/** `text`'s lines, each with its trailing shell comment removed. A `#` opens a comment only outside quotes and at the
+ *  line start or after whitespace (so `$#`, `${#x}` and a `#` inside a quoted string stay). The quote state is carried
+ *  across newlines: a string that spans lines keeps a `#` line inside it as code, which is what the shell does. A
+ *  comment ends at its own newline, with the quote state still `null`. The limit: this is a quote scanner, not a shell
+ *  parser, so a heredoc body is read as shell and an unbalanced quote there (an apostrophe in prose) would flip the
+ *  state for the rest of the file; `deploy/deploy.sh` is measured clean by the real-file row. */
+function stripShellComments(text: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let q: '"' | "'" | null = null;
+  let inComment = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === '\n') { out.push(cur); cur = ''; inComment = false; continue; }
+    if (inComment) continue;
+    const next = text[i + 1];
+    if (q === "'") { cur += c; if (c === "'") q = null; continue; }
+    if (q === '"') {
+      cur += c;
+      if (c === '\\' && next !== undefined && next !== '\n') cur += text[++i]!;
+      else if (c === '"') q = null;
+      continue;
+    }
+    if (c === '\\') { cur += c; if (next !== undefined && next !== '\n') cur += text[++i]!; continue; }
+    if (c === "'" || c === '"') { q = c; cur += c; continue; }
+    if (c === '#' && (i === 0 || /\s/.test(text[i - 1]!))) { inComment = true; continue; }
+    cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
+/** The deploy.sh code lines that name the box token file (`ccrc-mail.token` or `mail.token`), less the two rsync
+ *  excludes (one per arm) that keep a stale checkout copy from riding `deploy/` to a box. Empty is the pass. A count
+ *  other than two excludes is reported as its own line, so a lost exclude is as red as a planted ship. */
+function tokenNamingLines(text: string): string[] {
+  const code = stripShellComments(text).map((l) => l.trimEnd()).filter((l) => /mail\.token/.test(l));
+  const EXCLUDE = /^\s+--exclude 'ccrc-mail\.token' \\$/;
+  const excludes = code.filter((l) => EXCLUDE.test(l));
+  const rest = code.filter((l) => !EXCLUDE.test(l)).map((l) => l.trim());
+  return excludes.length === 2 ? rest : [...rest, `<${excludes.length} rsync token excludes, not 2>`];
+}
+
+describe('the deploy ships the skill, agent-side — and no longer ships the token (its rsync excludes are kept)', () => {
   const repo = (f: string): string => readFileSync(path.resolve(__dirname, '../..', f), 'utf8');
   const deploy = repo('deploy/deploy.sh');
   const agentArm = deploy.slice(deploy.indexOf('if [ "$TARGET" = "agent" ]'), deploy.indexOf('\nelse\n'));
@@ -232,13 +290,57 @@ describe('the deploy ships the skill, agent-side — and PR I’s token lane is 
     expect(line).toContain('--delete');
   });
 
-  // The three below are assertions about PR I's work, deliberately. The skill
-  // is useless without the token, and a silently absent lane would surface as a
-  // coordinator that cannot authenticate — a long way from here. They check
-  // SHAPE and EXISTENCE only: no test in this repo reads a token, and a token
-  // in a fixture is a token in a CI log.
-  it('the agent arm ships the fleet host’s copy of the box token', () => {
-    expect(agentArm).toContain("ship_secret ccrc-mail.token '~/.cc-secrets' ccrc-mail.token");
+  // The three below are assertions about PR I's token lane, deliberately. They
+  // check SHAPE and EXISTENCE only: no test in this repo reads a token, and a
+  // token in a fixture is a token in a CI log.
+  //
+  // Box-token lifecycle wave 1 (spec 4.9): deploy.sh no longer ships the token
+  // at all. The server mints its own at boot and hands the fleet box its copy
+  // over the agent link, so after the first rotation the gitignored
+  // `deploy/ccrc-mail.token` holds the retired value, and shipping it would put
+  // the leaked value back on both boxes. The pin that the agent arm ships it is
+  // flipped to ABSENCE, over the whole file: the function and both of its calls.
+  // The rsync excludes stay, so a stale source file left in a checkout never
+  // rides `deploy/` to either box.
+  it('deploy.sh ships no box token: no ship_secret function and no call, in either arm', () => {
+    expect(deploy, 'deploy.sh still ships the box token').not.toMatch(/\bship_secret\b/);
+    // Review 362 F5: the function's absence is not the property. ANY non-comment line naming the token file, in
+    // either spelling, other than the two rsync excludes is a way to ship it back (a bare scp to either box).
+    expect(tokenNamingLines(deploy), 'a non-comment deploy.sh line names the box token file').toEqual([]);
+    // The two rsync argument lines (one per arm), not the comment that explains them.
+    expect(deploy.match(/^\s+--exclude 'ccrc-mail\.token' \\$/gm) ?? [],
+      'an rsync lost its token exclude: a stale source file would ride deploy/ to the box').toHaveLength(2);
+  });
+
+  // The scan's own rows: planted deploy.sh texts, so a scan that matched nothing could not pass for a clean file.
+  describe('the no-ship scan, on planted texts', () => {
+    const EX = "    --exclude 'ccrc-mail.token' \\\n";
+    const base = `rsync -az \\\n${EX}    deploy/ "$BOX:x/"\nrsync -az \\\n${EX}    deploy/ "$AGENT_BOX:x/"\n`;
+    it('the real file is clean, and the clean base is clean', () => {
+      expect(tokenNamingLines(deploy)).toEqual([]);
+      expect(tokenNamingLines(base)).toEqual([]);
+    });
+    it('refuses the server-arm re-ship spelling', () => {
+      expect(tokenNamingLines(`${base}"\${SCP[@]}" deploy/ccrc-mail.token "$BOX:.ccrc/mail.token"\n`)).toHaveLength(1);
+    });
+    it('refuses the fleet-arm re-ship spelling', () => {
+      expect(tokenNamingLines(`${base}"\${SCP[@]}" deploy/ccrc-mail.token "$AGENT_BOX:.cc-secrets/ccrc-mail.token"\n`)).toHaveLength(1);
+    });
+    it('refuses a bare mail.token line and a line whose trailing comment hides nothing', () => {
+      expect(tokenNamingLines(`${base}cp x ~/.ccrc/mail.token # ship it\n`)).toHaveLength(1);
+      expect(tokenNamingLines(`${base}echo "# not a comment" ; scp a ccrc-mail.token\n`)).toHaveLength(1);
+    });
+    it('refuses a token line inside a quoted string that spans lines, a `#` line in it being no comment', () => {
+      expect(tokenNamingLines(`${base}bash -c "echo start\n  # not a comment inside the quote; scp deploy/ccrc-mail.token \\"$BOX:.ccrc/mail.token\\""\n`)).toHaveLength(1);
+    });
+    it('accepts a commented-out mention, whole-line or trailing', () => {
+      expect(tokenNamingLines(`${base}# "\${SCP[@]}" deploy/ccrc-mail.token "$BOX:.ccrc/mail.token"\n`)).toEqual([]);
+      expect(tokenNamingLines(`${base}echo ok  # ccrc-mail.token is not shipped\n`)).toEqual([]);
+    });
+    it('a lost or extra exclude is red too', () => {
+      expect(tokenNamingLines(base.replace(EX, ''))).toHaveLength(1);
+      expect(tokenNamingLines(`${base}rsync \\\n${EX}`)).toHaveLength(1);
+    });
   });
 
   it('notify.sh presents it under the header the server actually checks', () => {

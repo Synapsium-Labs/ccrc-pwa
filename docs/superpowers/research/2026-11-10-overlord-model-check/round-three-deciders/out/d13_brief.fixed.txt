@@ -1,0 +1,6 @@
+ok  answerExamined: 259 inputs, exactly one word each
+ok  a missing event never moves an answer towards `blind` or `examined` (0 violations)
+ok  briefRevealMode: 192 inputs, one mode each
+note tripwireDue: the text gives no answer for a `reopenIf` predicate that cannot be measured; `reviewBy` bounds the wait
+note fatigueSignals reads five signals and names a line for two of them (the gap, the glanced share)
+== answerExamined, briefRevealMode (with the proposed edits): domain 259 and 192 inputs; counterexamples 0; checks passed 3

@@ -21,7 +21,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-auto-swap-hold-'); });
@@ -49,11 +49,11 @@ const seed = (): void => {
  *  `_avail` are stubbed so the decision is not a function of the fixture
  *  roster's live telemetry. */
 const AFFINITY_STUBS = `
-  tmux() { case "\${1:-}" in
-             capture-pane) printf '%s\\n' "❯ " ;;
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
+             capture-pane) printf '%s\\n' "────────────────────────" "❯ " "────────────────────────" ;;   # the bordered box (D-8116)
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
-  _swap_target() { echo claude2; }; _avail() { return 0; };
+  _swap_target() { echo claude9; }; _avail() { return 0; };
   _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
 `;
 
@@ -61,10 +61,10 @@ const AFFINITY_STUBS = `
  *  `_pane_hard_blocked` (deliberately not stubbed — the classifier IS the
  *  discriminator this test is about). */
 const RESCUE_STUBS = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) echo "API Error: 429 Too Many Requests" ;;
            esac; return 0; };
-  _swap_target() { echo claude2; }; _avail() { return 0; };
+  _swap_target() { echo claude9; }; _avail() { return 0; };
   _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
 `;
 
@@ -85,7 +85,7 @@ describe('_auto_swap_check and a held workspace', () => {
     // vacuous — a fixture that never dispatches proves nothing about a rung.
     seed(); idleStatus();
     h.sh(`${AFFINITY_STUBS} _auto_swap_check ${ID}`);
-    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude2`);
+    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude9`);
   });
 
   it('does NOT relocate a HELD session on the affinity path', () => {
@@ -103,7 +103,7 @@ describe('_auto_swap_check and a held workspace', () => {
     // noticing quickly.
     seed(); hold();
     h.sh(`${RESCUE_STUBS} _auto_swap_check ${ID}`);
-    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude2`);
+    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude9`);
   });
 
   it('defers on a present-but-unreadable hold — `-e` not `-f`', () => {
@@ -121,6 +121,6 @@ describe('_auto_swap_check and a held workspace', () => {
     expect(h.calls().join('\n')).not.toContain('dispatch');
     fs.rmSync(path.join(h.home, '.cc-sessions', `${ID}.hold`));
     h.sh(`${AFFINITY_STUBS} _auto_swap_check ${ID}`);
-    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude2`);
+    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude9`);
   });
 });

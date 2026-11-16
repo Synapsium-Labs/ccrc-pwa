@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# ccd-tool-adj — the CLAUDE_CODE_SHELL_PREFIX `ccd` gives every Linux session
+# (D-5241, spec 2026-10-16 §5.10): a Bash tool command, and everything it
+# starts, runs at oom_score_adj 800 while Claude Code itself stays at 200. When
+# the pane's memory runs out, the kernel then picks the test run that outgrew
+# it, not the session that started it.
+#
+# HOW CLAUDE CODE CALLS IT (measured 2026-10-17 on 2.1.302, the plan's Task 13
+# step 7; the fleet's six installed builds carry the same composition): the
+# whole command arrives as ONE argument. For the Bash tool, Claude Code runs
+# `<shell> -c -l "<prefix> '<snippet>'"`; for a stdio MCP server it spawns the
+# prefix directly with one argument, the server's quoted command line. So this
+# script runs its one string through a shell, never `exec "$@"`: an `exec "$@"`
+# would try to run the whole snippet as a single program name.
+#
+# ONLY THE BASH TOOL IS RAISED. Claude Code also runs hook commands, the
+# statusline command and stdio MCP servers through the prefix. Those run here
+# UNCHANGED, at the score they arrived with. Why: the OOM killer kills the
+# highest-scored process first, and at 800 a 5 MB hook or an MCP server
+# outscores a 2 GB Claude Code process at 200 — so a raised hook, statusline or
+# MCP server would be killed first, freeing almost nothing, before the kill
+# that relieves the pressure (and a pane whose MCP server died lingers
+# half-working). The Bash tool's snippet is recognised by the shape Claude
+# Code builds it in, `… && eval <command> && pwd -P >| <cwd file>`. The test is
+# fail-safe both ways: a future snippet this misses runs at 200 (today's
+# behaviour), and a hook that happened to match would only run at 800.
+#
+# RAISE, NEVER LOWER. A process already above 800 keeps its score. Raising
+# one's own score needs no privilege; a failed write (no /proc, macOS) is
+# ignored and the command runs anyway.
+#
+# AN EXISTING PREFIX IS WRAPPED, NOT REPLACED. `ccd` passes the value the pane
+# would otherwise have had as CCD_TOOL_ADJ_INNER; it gets the same one string.
+# A value naming this script is dropped, so a session spawned from inside a
+# tool shell can never wrap itself.
+#
+# THE INSTALLED PATH MUST NOT CONTAIN " -": Claude Code splits a prefix value at
+# its last " -" (path, then bare flags). `_tool_adj_env` in `ccd` checks it.
+cmd=${1-}
+inner=${CCD_TOOL_ADJ_INNER-}
+unset CCD_TOOL_ADJ_INNER
+case "$inner" in *ccd-tool-adj*) inner= ;; esac
+case "$cmd" in
+  *' && eval '*' && pwd -P >| '*)
+    cur=
+    { read -r cur < /proc/self/oom_score_adj; } 2>/dev/null
+    if [[ "$cur" =~ ^-?[0-9]+$ ]] && (( cur < 800 )); then
+      { echo 800 > /proc/self/oom_score_adj; } 2>/dev/null
+    fi
+    ;;
+esac
+if [[ -n "$inner" ]]; then
+  # The inner value as Claude Code would have used it: its text, then the one
+  # string, quoted.
+  exec bash -c "$inner \"\$1\"" ccd-tool-adj "$cmd"
+fi
+exec bash -c "$cmd"

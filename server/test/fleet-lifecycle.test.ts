@@ -10,11 +10,13 @@ import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { STRANDED_UNREADABLE, SUBSTRATE_UNREADABLE } from '../src/registry.js';
 import { assembleFleet } from '../src/fleet.js';
+import { liveStateReaderOver } from '../src/livestate.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { degradedReadIO } from './ioDoubles.js';
+import { inArchivedFold } from '../../shared/api.js';
 
 const NOW_SEC = 1785300000;
 const ID = 'demo-quiet-basin';
@@ -32,15 +34,15 @@ const fixture = (fields: Record<string, string>, alive: boolean) => {
     writeFileSync(path.join(reg, `${ID}.${k}`), v);
   }
   const run: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: alive ? 0 : 1, stdout: '', stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: alive ? 0 : 1, stdout: '', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { cfg: loadConfig({ CCRC_HOME: home }), tmux: new Tmux(run) };
 };
 
 const one = async (fields: Record<string, string>, alive: boolean) => {
   const { cfg, tmux } = fixture(fields, alive);
-  const fleet = await assembleFleet(localIO, cfg, tmux, NOW_SEC);
+  const fleet = await assembleFleet(localIO, cfg, tmux, liveStateReaderOver(localIO), NOW_SEC);
   return fleet.find((s) => s.id === ID)!;
 };
 
@@ -86,7 +88,7 @@ describe('assembleFleet ships the lifecycle', () => {
     // session nobody managed to look at.
     const { cfg, tmux } = fixture({ stopped: `${NOW_SEC - 90} pwa`, started: '1' }, false);
     const blind = degradedReadIO((p) => p.endsWith(`${ID}.stopped`));
-    const fleet = await assembleFleet(blind, cfg, tmux, NOW_SEC);
+    const fleet = await assembleFleet(blind, cfg, tmux, liveStateReaderOver(blind), NOW_SEC);
     expect(fleet.find((s) => s.id === ID)!.lifecycle).toBe('unmeasurable');
   });
 
@@ -151,7 +153,7 @@ describe('assembleFleet ships the lifecycle', () => {
     // wire contract; a future renderer must not fabricate a 1970 stamp.
     const { cfg, tmux } = fixture({ stranded: `${NOW_SEC - 300} nowhere` }, false);
     const blind = degradedReadIO((p) => p.endsWith(`${ID}.stranded`));
-    const fleet = await assembleFleet(blind, cfg, tmux, NOW_SEC);
+    const fleet = await assembleFleet(blind, cfg, tmux, liveStateReaderOver(blind), NOW_SEC);
     expect(fleet.find((s) => s.id === ID)!.stranded)
       .toEqual({ at: 0, reason: STRANDED_UNREADABLE });
   });
@@ -217,7 +219,7 @@ describe('the substrate axis reaches the wire — projected, not re-read (D-310 
     // text-only instead of a confident "since 1970".
     const { cfg, tmux } = fixture({ started: '1', substrate: `${NOW_SEC - 120} x` }, true);
     const blind = degradedReadIO((p) => p.endsWith(`${ID}.substrate`));
-    const fleet = await assembleFleet(blind, cfg, tmux, NOW_SEC);
+    const fleet = await assembleFleet(blind, cfg, tmux, liveStateReaderOver(blind), NOW_SEC);
     expect(fleet.find((s) => s.id === ID)!.substrate).toEqual({ at: 0, text: SUBSTRATE_UNREADABLE });
   });
 
@@ -230,5 +232,31 @@ describe('the substrate axis reaches the wire — projected, not re-read (D-310 
     expect(s.bucket).toBe('dead');
     expect(s.lifecycle).toBe('stopped');
     expect(s.substrate).toEqual({ at: (NOW_SEC - 60) * 1000, text: 'wedged' });
+  });
+});
+
+// D-5242: a hibernated MAIN CHECKOUT is asleep, not put away. Its row is the stopped-main-checkout shape the archived
+// fold's second clause takes (no workspace, no pane, a stop stamp) — so that clause now excludes a row with
+// `hibernatedAt`, and the sleeper stays at the card's top level, where its Restart wakes it. The first clause (the
+// `archived` bucket) is unchanged: an archived workspace with a stale `.hibernated` stays in the fold.
+describe('the archived fold and a hibernated row (D-5242)', () => {
+  it('a hibernated main checkout is NOT in the archived fold', async () => {
+    const s = await one({ stopped: `${NOW_SEC - 90} ccd`, started: '1', hibernated: `${NOW_SEC - 90} 7` }, false);
+    expect(s.status).toBe('dead');
+    expect(s.workspace).toBeNull();
+    expect(s.hibernatedAt).toBe((NOW_SEC - 90) * 1000);
+    expect(inArchivedFold(s)).toBe(false);
+  });
+
+  it('the same row without .hibernated is a stopped main checkout, in the fold as before', async () => {
+    const s = await one({ stopped: `${NOW_SEC - 90} ccd`, started: '1' }, false);
+    expect(inArchivedFold(s)).toBe(true);
+  });
+
+  it('an archived workspace with a stale .hibernated stays in the fold (its first clause)', async () => {
+    const s = await one({ stopped: `${NOW_SEC - 90} ccd`, started: '1', hibernated: `${NOW_SEC - 90} 7`,
+      workspace: ID, branch: `ws/${ID}`, base: 'origin/main', archived: String(NOW_SEC - 60) }, false);
+    expect(s.bucket).toBe('archived');
+    expect(inArchivedFold(s)).toBe(true);
   });
 });

@@ -1,0 +1,29 @@
+[Unit]
+Description=Capture Claude Code session text into this box's history store (ccrc history)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ccd-history-sweep
+# NO `Environment=PATH=`, deliberately D-4255.
+# The shim needs `bash`, `flock` and `node`, and nothing in ~/.local/bin but
+# itself. A bare `Environment=PATH=` REPLACES the user manager's PATH rather
+# than extending it (ccrc-update-watchdog.service's own comment says so), and
+# ccrc-agent.service finds `node` through exactly that manager PATH, so a
+# spelled-out PATH could only lose the `node` the agent already runs on.
+# CORRECTNESS, NOT HYGIENE: this is the carrier's wall-clock kill (D-4223; history spec
+# §5.1). A syscall blocked on a dead mount cannot be interrupted in-process, and
+# a pass stuck holding the lock turns every later scheduled pass into an exit-0
+# no-op. It equals lib.mjs's CARRIER_KILL_S (600), which planMigration reads so
+# a scheduled pass never starts a copy it cannot finish — pinned equal by
+# history-sweep.test.ts (DM43). Never shorten one without the other.
+TimeoutStartSec=10min
+# MEMORY BOUND, not hygiene: MemoryMax=1G is the carrier's memory bound, the figure the
+# bounds that fix round 1 added (D-4337, D-4345, D-4346 and D-4419) are measured against
+# (O20 asserts a whole pass's peak RSS at half of it, D-4244), and
+# history-sweep.test.ts pins it exactly. The run's 90 s and 512 MiB are its time budget and
+# its READ budget (RUN_BUDGET_MS, RUN_BUDGET_BYTES), not memory bounds: never loosen this
+# cap on their account.
+MemoryMax=1G
+# Idle CPU and idle IO: capture reads transcripts on the disk every live session
+# is working on, and nothing about it is urgent at the scale of a minute.
+Nice=19
+IOSchedulingClass=idle

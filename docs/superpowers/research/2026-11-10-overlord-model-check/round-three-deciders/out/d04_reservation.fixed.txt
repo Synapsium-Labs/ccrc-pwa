@@ -1,0 +1,9 @@
+ok  Table 3.4c row "Seven-day 30, a third of the usage is Fa": Overlord servable, guest servable, guest on Fable unservable
+ok  Table 3.4c row "Seven-day 70, a seventh of the usage is ": Overlord servable, guest unservable, guest on Fable unservable
+ok  Table 3.4c row "Seven-day 70, four sevenths of the usage": Overlord unservable, guest servable, guest on Fable unservable
+ok  Table 3.4c row "Seven-day 30, no fresh share reading": Overlord keeps its class, guest servable, guest on Fable unservable
+ok  guest placement: 3456 inputs, each servable or unservable
+ok  guest placement: a higher or an unmeasured figure never admits a guest that a lower one refused
+ok  the Overlord's Fable: 54 inputs, one answer each
+ok  an unmeasured load has an answer for `mayHold`
+== reservation, serviceability, load lines (with the proposed edits): domain 3456 guest inputs; 54 Overlord inputs; 4 rows of Table 3.4c; counterexamples 0; checks passed 8

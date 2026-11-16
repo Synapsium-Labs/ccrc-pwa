@@ -11,6 +11,23 @@
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "noEmit": true,
+    /* One React, in the types too (vite.config.ts aliases the runtime the same way). ui/src/** is compiled as
+       source, so its imports of react find ui/node_modules/@types/react: a second copy in this program. Once both
+       sides hold the same versions (@types/react 19.3.0, @types/react-dom 19.3.0), TypeScript redirects ui's
+       react-dom (and csstype) to this package's copy but not ui's react index, so ui's files mix the two Reacts and
+       their VoidOrUndefinedOnly unique symbols stop matching (TS2322 on every ref ui hands to an intrinsic). Every
+       react import resolves to this package's copy instead, so the program holds exactly one. */
+    "paths": {
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"],
+      "react-dom": ["./node_modules/@types/react-dom"],
+      "react-dom/*": ["./node_modules/@types/react-dom/*"],
+      /* D-8288. The source-parsing suites import server/test/scan/parse.ts, whose parser `typescript-api` is
+         installed in server/node_modules alone. Server's pinned copy first; this package's own typescript (the same
+         release, test/parser-resolution.test.ts pins it) when server is not installed, so a lane that builds pwa
+         before installing server still typechecks. */
+      "typescript-api": ["../server/node_modules/typescript-api", "./node_modules/typescript"]
+    },
     "jsx": "react-jsx",
 
     /* Strictness (plan: TypeScript strict) */
@@ -21,5 +38,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "test", "vite.config.ts", "../shared"]
+  "include": ["src", "test", "browser", "spike", "vite.config.ts", "vitest.browser.config.ts", "../shared"]
 }

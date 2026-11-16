@@ -55,7 +55,7 @@
 // or lstat through a PARENT the process may not search, so with
 // `~/.cc-sessions` at mode 000 the correctly-paired guard in `_check_pools`
 // read "absent" for a tag that was present and printed the reassuring PASS
-// all over again (measured; `ccrc-doctor.test.ts` now pins both directions).
+// all over again (measured; the `ccrc-doctor-*` test files now pins both directions).
 // The cure is a searchability test on the PARENT, one level up, and this
 // scan deliberately does NOT require one:
 //   - It would be REDUNDANT at every per-tag site there is — each already
@@ -84,7 +84,7 @@
 //     server box, which owns no registry at all. A scan cannot choose
 //     between those; only the caller's contract can.
 // So the parent-guard class is mechanised where it can actually be measured:
-// as BEHAVIOUR, by the two `ccrc-doctor.test.ts` cases that go red when the
+// as BEHAVIOUR, by the two the `ccrc-doctor-*` test files cases that go red when the
 // `$reg` guard is deleted and when it is widened to the reader's own test.
 // This scan keeps the narrower rule it can enforce on text, and says so.
 //
@@ -529,7 +529,7 @@ const DOCTOR_SITES: string[] = [
   '_check_pools: -e f',
 ];
 // EVERY NAME IN `CCD_BLOCKS` BELOW THAT CONTRIBUTES NO ENTRY TO `CCD_SITES` is
-// pools-relevant and holds no existence test of its own: `cmd_ws_add` never
+// pools-relevant and holds no existence test of its own: `_ws_pool_read` never
 // tests a pools path, `cmd_project_pool` decides from `_project_pool_state`
 // instead, and the rest only interpolate `$POOLS_DIR` into an undecidable-tag
 // MESSAGE, with nothing to pair. Naming the SET rather than a cardinal is the
@@ -566,11 +566,31 @@ const DOCTOR_SITES: string[] = [
 // byte-identical, exactly as `_auto_swap_check` did. Read the three together:
 // `_auto_swap_check` moved one list, `_pool_untaggable` moved both, this one
 // moves one again — and no one had to remember which obligation applies.
+// AND WAVE 1 TASK 2'S FIX ROUND SHOWS THE THIRD SHAPE: a MOVE. Four names
+// changed at once and not one of them is a new pools path. The three manual
+// verbs (`cmd_start`, `cmd_swap`, `cmd_prefer`) each spelled the
+// undecidable-tag sentence inline — that `$POOLS_DIR/$project` was their only
+// pools path — and all three now call ONE renderer, `_pool_undecidable_why`,
+// because the sentence had to start telling five conditions apart and three
+// copies of a five-way branch is three chances to drift. So the interpolation
+// left three blocks and arrived in one, `CCD_SITES` stayed byte-identical (a
+// renderer has nothing to test for existence; it is handed the state word),
+// and the net is one name in, three out. Read the four shapes together:
+// `_auto_swap_check` moved one list, `_pool_untaggable` moved both,
+// `_undecidable_cause` moved one again, and this round moved a path BETWEEN
+// blocks — the one shape a cardinal could not have described at all, since
+// the count fell.
+// AND THE NAMED-WORKSPACE WAVE IS THE MOVE SHAPE AGAIN. `cmd_ws_add` spelled the
+// `$POOLS_DIR/<project>` path in its undecidable-tag message; that read now lives
+// in ONE helper, `_ws_pool_read`, which `cmd_ws_add` and `_ws_wrapper_why`
+// share, so the interpolation left one block and arrived in another. Like
+// the renderer above it holds no existence test (`CCD_SITES` is byte-identical),
+// and the net is one name in, one out.
 const CCD_BLOCKS: string[] = [
   '_pool_untaggable',
-  '_project_pool_state', 'cmd_ws_add', 'cmd_project_pool', '_undecidable_cause',
-  '_auto_swap_check', 'cmd_start',
-  '_strand_why', 'cmd_swap', 'cmd_prefer',
+  '_project_pool_state', '_pool_undecidable_why',
+  '_ws_pool_read', 'cmd_project_pool', '_undecidable_cause',
+  '_auto_swap_check', '_strand_why',
 ];
 // One function in the doctor touches a pools path at all. `_check_graphify-path`
 // is now blocked out too (the hyphen fix) but is not pools-relevant, so it

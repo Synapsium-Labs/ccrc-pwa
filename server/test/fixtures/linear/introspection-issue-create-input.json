@@ -1,0 +1,450 @@
+{
+  "name": "introspection-issue-create-input",
+  "documentSource": "fx-introspection",
+  "document": "query IssueCreateInputIntrospection { __type(name: \"IssueCreateInput\") { name kind inputFields { name description type { kind name ofType { kind name ofType { kind name } } } } } }",
+  "variables": {},
+  "requestBody": "{\"query\":\"query IssueCreateInputIntrospection { __type(name: \\\"IssueCreateInput\\\") { name kind inputFields { name description type { kind name ofType { kind name ofType { kind name } } } } } }\",\"variables\":{}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631319625,
+  "receivedAtMs": 1793631319857,
+  "sentAt": "2026-11-02T14:55:19.625+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:55:20 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "10"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999990"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634920226"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634920226"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "__type": {
+        "name": "IssueCreateInput",
+        "kind": "INPUT_OBJECT",
+        "inputFields": [
+          {
+            "name": "id",
+            "description": "The identifier in UUID v4 format. If none is provided, the backend will generate one.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "title",
+            "description": "The title of the issue.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "description",
+            "description": "The issue description in markdown format.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "descriptionData",
+            "description": "[Internal] The issue description as a Prosemirror document.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "JSON",
+              "ofType": null
+            }
+          },
+          {
+            "name": "assigneeId",
+            "description": "The identifier of the user to assign the issue to.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "delegateId",
+            "description": "The identifier of the agent user to delegate the issue to.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "parentId",
+            "description": "The identifier of the parent issue. Can be a UUID or issue identifier (e.g., 'LIN-123').",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "priority",
+            "description": "The priority of the issue. 0 = No priority, 1 = Urgent, 2 = High, 3 = Medium, 4 = Low.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "Int",
+              "ofType": null
+            }
+          },
+          {
+            "name": "estimate",
+            "description": "The estimated complexity of the issue.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "Int",
+              "ofType": null
+            }
+          },
+          {
+            "name": "subscriberIds",
+            "description": "The identifiers of the users subscribing to this ticket.",
+            "type": {
+              "kind": "LIST",
+              "name": null,
+              "ofType": {
+                "kind": "NON_NULL",
+                "name": null,
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "String"
+                }
+              }
+            }
+          },
+          {
+            "name": "labelIds",
+            "description": "The identifiers of the issue labels associated with this ticket.",
+            "type": {
+              "kind": "LIST",
+              "name": null,
+              "ofType": {
+                "kind": "NON_NULL",
+                "name": null,
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "String"
+                }
+              }
+            }
+          },
+          {
+            "name": "teamId",
+            "description": "The identifier of the team associated with the issue.",
+            "type": {
+              "kind": "NON_NULL",
+              "name": null,
+              "ofType": {
+                "kind": "SCALAR",
+                "name": "String",
+                "ofType": null
+              }
+            }
+          },
+          {
+            "name": "cycleId",
+            "description": "The cycle associated with the issue.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "projectId",
+            "description": "The project associated with the issue. Can be a UUID or project identifier (e.g., 'P-LIN-123').",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "projectMilestoneId",
+            "description": "The project milestone associated with the issue.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "lastAppliedTemplateId",
+            "description": "The ID of the last template applied to the issue.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "stateId",
+            "description": "The team state of the issue.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "referenceCommentId",
+            "description": "The comment the issue is referencing.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "sourceCommentId",
+            "description": "The comment the issue is created from.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "sourcePullRequestCommentId",
+            "description": "[Internal] The pull request comment the issue is created from.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "sortOrder",
+            "description": "The position of the issue related to other issues.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "Float",
+              "ofType": null
+            }
+          },
+          {
+            "name": "prioritySortOrder",
+            "description": "The position of the issue related to other issues, when ordered by priority.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "Float",
+              "ofType": null
+            }
+          },
+          {
+            "name": "subIssueSortOrder",
+            "description": "The position of the issue in parent's sub-issue list.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "Float",
+              "ofType": null
+            }
+          },
+          {
+            "name": "dueDate",
+            "description": "The date at which the issue is due.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "TimelessDate",
+              "ofType": null
+            }
+          },
+          {
+            "name": "createAsUser",
+            "description": "Create issue as a user with the provided name. This option is only available to OAuth applications creating issues in `actor=app` mode.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "displayIconUrl",
+            "description": "Provide an external user avatar URL. Can only be used in conjunction with the `createAsUser` options. This option is only available to OAuth applications creating comments in `actor=app` mode.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "preserveSortOrderOnCreate",
+            "description": "Whether the passed sort order should be preserved.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "Boolean",
+              "ofType": null
+            }
+          },
+          {
+            "name": "createdAt",
+            "description": "The time at which the issue was created (e.g. if importing from another system). Must be a time in the past. If none is provided, the backend will generate the time as now.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "DateTime",
+              "ofType": null
+            }
+          },
+          {
+            "name": "slaBreachesAt",
+            "description": "[Internal] The time at which an issue will be considered in breach of SLA.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "DateTime",
+              "ofType": null
+            }
+          },
+          {
+            "name": "slaStartedAt",
+            "description": "[Internal] The time at which the issue's SLA was started.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "DateTime",
+              "ofType": null
+            }
+          },
+          {
+            "name": "templateId",
+            "description": "The identifier of a template the issue should be created from. If other values are provided in the input, they will override template values.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "String",
+              "ofType": null
+            }
+          },
+          {
+            "name": "completedAt",
+            "description": "The time at which the issue was completed (e.g. if importing from another system). Must be a time in the past and after createdAt. Cannot be provided with an incompatible workflow state.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "DateTime",
+              "ofType": null
+            }
+          },
+          {
+            "name": "slaType",
+            "description": "The SLA day count type for the issue. Whether SLA should be business days only or calendar days (default).",
+            "type": {
+              "kind": "ENUM",
+              "name": "SLADayCountType",
+              "ofType": null
+            }
+          },
+          {
+            "name": "useDefaultTemplate",
+            "description": "Whether to use the default template for the team. When set to true, the default template of this team based on user's membership will be applied.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "Boolean",
+              "ofType": null
+            }
+          },
+          {
+            "name": "releaseIds",
+            "description": "The identifiers of the releases to associate with this issue.",
+            "type": {
+              "kind": "LIST",
+              "name": null,
+              "ofType": {
+                "kind": "NON_NULL",
+                "name": null,
+                "ofType": {
+                  "kind": "SCALAR",
+                  "name": "String"
+                }
+              }
+            }
+          },
+          {
+            "name": "inheritsSharedAccess",
+            "description": "[Internal] Whether this issue should inherit shared access from its parent issue. Set to false to opt out of automatic shared access inheritance when creating a sub-issue.",
+            "type": {
+              "kind": "SCALAR",
+              "name": "Boolean",
+              "ofType": null
+            }
+          }
+        ]
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"__type\":{\"name\":\"IssueCreateInput\",\"kind\":\"INPUT_OBJECT\",\"inputFields\":[{\"name\":\"id\",\"description\":\"The identifier in UUID v4 format. If none is provided, the backend will generate one.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"title\",\"description\":\"The title of the issue.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"description\",\"description\":\"The issue description in markdown format.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"descriptionData\",\"description\":\"[Internal] The issue description as a Prosemirror document.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"JSON\",\"ofType\":null}},{\"name\":\"assigneeId\",\"description\":\"The identifier of the user to assign the issue to.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"delegateId\",\"description\":\"The identifier of the agent user to delegate the issue to.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"parentId\",\"description\":\"The identifier of the parent issue. Can be a UUID or issue identifier (e.g., 'LIN-123').\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"priority\",\"description\":\"The priority of the issue. 0 = No priority, 1 = Urgent, 2 = High, 3 = Medium, 4 = Low.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"Int\",\"ofType\":null}},{\"name\":\"estimate\",\"description\":\"The estimated complexity of the issue.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"Int\",\"ofType\":null}},{\"name\":\"subscriberIds\",\"description\":\"The identifiers of the users subscribing to this ticket.\",\"type\":{\"kind\":\"LIST\",\"name\":null,\"ofType\":{\"kind\":\"NON_NULL\",\"name\":null,\"ofType\":{\"kind\":\"SCALAR\",\"name\":\"String\"}}}},{\"name\":\"labelIds\",\"description\":\"The identifiers of the issue labels associated with this ticket.\",\"type\":{\"kind\":\"LIST\",\"name\":null,\"ofType\":{\"kind\":\"NON_NULL\",\"name\":null,\"ofType\":{\"kind\":\"SCALAR\",\"name\":\"String\"}}}},{\"name\":\"teamId\",\"description\":\"The identifier of the team associated with the issue.\",\"type\":{\"kind\":\"NON_NULL\",\"name\":null,\"ofType\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}}},{\"name\":\"cycleId\",\"description\":\"The cycle associated with the issue.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"projectId\",\"description\":\"The project associated with the issue. Can be a UUID or project identifier (e.g., 'P-LIN-123').\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"projectMilestoneId\",\"description\":\"The project milestone associated with the issue.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"lastAppliedTemplateId\",\"description\":\"The ID of the last template applied to the issue.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"stateId\",\"description\":\"The team state of the issue.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"referenceCommentId\",\"description\":\"The comment the issue is referencing.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"sourceCommentId\",\"description\":\"The comment the issue is created from.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"sourcePullRequestCommentId\",\"description\":\"[Internal] The pull request comment the issue is created from.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"sortOrder\",\"description\":\"The position of the issue related to other issues.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"Float\",\"ofType\":null}},{\"name\":\"prioritySortOrder\",\"description\":\"The position of the issue related to other issues, when ordered by priority.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"Float\",\"ofType\":null}},{\"name\":\"subIssueSortOrder\",\"description\":\"The position of the issue in parent's sub-issue list.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"Float\",\"ofType\":null}},{\"name\":\"dueDate\",\"description\":\"The date at which the issue is due.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"TimelessDate\",\"ofType\":null}},{\"name\":\"createAsUser\",\"description\":\"Create issue as a user with the provided name. This option is only available to OAuth applications creating issues in `actor=app` mode.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"displayIconUrl\",\"description\":\"Provide an external user avatar URL. Can only be used in conjunction with the `createAsUser` options. This option is only available to OAuth applications creating comments in `actor=app` mode.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"preserveSortOrderOnCreate\",\"description\":\"Whether the passed sort order should be preserved.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"Boolean\",\"ofType\":null}},{\"name\":\"createdAt\",\"description\":\"The time at which the issue was created (e.g. if importing from another system). Must be a time in the past. If none is provided, the backend will generate the time as now.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"DateTime\",\"ofType\":null}},{\"name\":\"slaBreachesAt\",\"description\":\"[Internal] The time at which an issue will be considered in breach of SLA.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"DateTime\",\"ofType\":null}},{\"name\":\"slaStartedAt\",\"description\":\"[Internal] The time at which the issue's SLA was started.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"DateTime\",\"ofType\":null}},{\"name\":\"templateId\",\"description\":\"The identifier of a template the issue should be created from. If other values are provided in the input, they will override template values.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\",\"ofType\":null}},{\"name\":\"completedAt\",\"description\":\"The time at which the issue was completed (e.g. if importing from another system). Must be a time in the past and after createdAt. Cannot be provided with an incompatible workflow state.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"DateTime\",\"ofType\":null}},{\"name\":\"slaType\",\"description\":\"The SLA day count type for the issue. Whether SLA should be business days only or calendar days (default).\",\"type\":{\"kind\":\"ENUM\",\"name\":\"SLADayCountType\",\"ofType\":null}},{\"name\":\"useDefaultTemplate\",\"description\":\"Whether to use the default template for the team. When set to true, the default template of this team based on user's membership will be applied.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"Boolean\",\"ofType\":null}},{\"name\":\"releaseIds\",\"description\":\"The identifiers of the releases to associate with this issue.\",\"type\":{\"kind\":\"LIST\",\"name\":null,\"ofType\":{\"kind\":\"NON_NULL\",\"name\":null,\"ofType\":{\"kind\":\"SCALAR\",\"name\":\"String\"}}}},{\"name\":\"inheritsSharedAccess\",\"description\":\"[Internal] Whether this issue should inherit shared access from its parent issue. Set to false to opt out of automatic shared access inheritance when creating a sub-issue.\",\"type\":{\"kind\":\"SCALAR\",\"name\":\"Boolean\",\"ofType\":null}}]}}}\n"
+}

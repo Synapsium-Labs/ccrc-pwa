@@ -1,0 +1,135 @@
+{
+  "name": "read-labels",
+  "documentSource": "code",
+  "document": "query Labels($filter: IssueLabelFilter) { issueLabels(filter: $filter, first: 250) { nodes { id name team { key } } } }",
+  "variables": {
+    "filter": {
+      "or": [
+        {
+          "team": {
+            "id": {
+              "eq": "00000000-0001-4000-8000-000000000001"
+            }
+          }
+        },
+        {
+          "team": {
+            "null": true
+          }
+        }
+      ]
+    }
+  },
+  "requestBody": "{\"query\":\"query Labels($filter: IssueLabelFilter) { issueLabels(filter: $filter, first: 250) { nodes { id name team { key } } } }\",\"variables\":{\"filter\":{\"or\":[{\"team\":{\"id\":{\"eq\":\"00000000-0001-4000-8000-000000000001\"}}},{\"team\":{\"null\":true}}]}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631314335,
+  "receivedAtMs": 1793631314561,
+  "sentAt": "2026-11-02T14:55:14.335+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:55:14 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "262"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "575"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999425"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634914922"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2498"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634914922"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "issueLabels": {
+        "nodes": [
+          {
+            "id": "00000000-0003-4000-8000-000000000001",
+            "name": "Bug",
+            "team": null
+          },
+          {
+            "id": "00000000-0003-4000-8000-000000000002",
+            "name": "Feature",
+            "team": null
+          },
+          {
+            "id": "00000000-0003-4000-8000-000000000003",
+            "name": "Improvement",
+            "team": null
+          }
+        ]
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"issueLabels\":{\"nodes\":[{\"id\":\"00000000-0003-4000-8000-000000000001\",\"name\":\"Bug\",\"team\":null},{\"id\":\"00000000-0003-4000-8000-000000000002\",\"name\":\"Feature\",\"team\":null},{\"id\":\"00000000-0003-4000-8000-000000000003\",\"name\":\"Improvement\",\"team\":null}]}}}\n"
+}

@@ -1,0 +1,99 @@
+// The fleet's shared chrome state, lifted above the fleet screen (D-5468).
+//
+// Before W2 `FleetScreen` owned three polls (`/api/fleet/health` every 15 s, `/api/updates` every 60 s, and the
+// `/api/projects` plane) and the open state of its five sheets. In the two skins the fleet list is a skin's part, so
+// it remounts on a skin switch, and more than one part reads the same health and updates (Instrument's status bar,
+// Refined's app bar, either list). Left on the screen, a switch would close an open sheet (spec §5.4) and a second
+// reader would start a second poll. So the provider below calls each plane ONCE for the whole shell, and every
+// reader asks `useFleetChrome()` instead of polling on its own.
+//
+// Outside a provider `useFleetChrome()` THROWS rather than answering a default: a part that forgets the host would
+// otherwise start rendering with no health, no updates and sheets that never open, and say nothing.
+import { createContext, useContext, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
+import type { FleetHealth } from '../../../shared/api';
+import { useFleetHealth } from './useFleetHealth';
+import { useUpdatesView, type UpdatesPoll } from './useUpdatesView';
+import { useProjectRows, type ProjectRowsPlane } from './useProjectRows';
+import { useActionsSheet, type ActionsSheet } from './useActionsSheet';
+import { useArchiveAll, type ArchiveAllPlane } from './ArchiveAllPlane';
+import type { FleetStore } from '../stores/fleet';
+import { useWaitingRefetch } from '../ledgers/waitingStore';
+
+export interface FleetChrome {
+  /** The store the planes and the sheets act on (the app's, or a test's). */
+  store: FleetStore;
+  /** ONE `/api/fleet/health` poll, read by the banners and `BuildLine` (spec §6). */
+  health: FleetHealth | null;
+  /** ONE `/api/updates` poll (centralised-update §13), handed to every reader of the inventory. */
+  updates: UpdatesPoll;
+  /** The `/api/projects` plane: rows, class, placement readers, the `+`'s in-flight set, the pool sheet's selection. */
+  projects: ProjectRowsPlane;
+  /** The ··· sheet's lifecycle: which session it is about, and what it does when that session changes or vanishes. */
+  actions: ActionsSheet;
+  /** "Archive all"'s loop and its in-flight set, which every card reads. */
+  archiveAll: ArchiveAllPlane;
+  /** Which project's "Archive all" confirm is asking, or none. */
+  archiveAllFor: string | null;
+  setArchiveAllFor: (project: string | null) => void;
+  newOpen: boolean;
+  setNewOpen: (open: boolean) => void;
+  /** The project the new-session sheet opens on (picked once an account is), or none: the Add project toast's
+   *  "Start session" sets it. */
+  newProject: string | null;
+  setNewProject: (project: string | null) => void;
+  /** Which project's `+` sheet is open (named workspaces S7), or none. */
+  addWorkspaceFor: string | null;
+  setAddWorkspaceFor: (project: string | null) => void;
+  /** Whether the Add project sheet is open (add-project spec 2026-11-04). */
+  addProjectOpen: boolean;
+  setAddProjectOpen: (open: boolean) => void;
+  /** The guarded reap flow's subject, by id only: the session is looked up fresh from the live list. */
+  reapId: string | null;
+  setReapId: (id: string | null) => void;
+}
+
+const FleetChromeContext = createContext<FleetChrome | null>(null);
+
+export function FleetChromeProvider({ store, children }: { store: FleetStore; children?: ReactNode }): ReactNode {
+  const useStore = store;
+  const sessions = useStore((s) => s.sessions);
+  const pools = useStore((s) => s.pools);
+  const health = useFleetHealth();
+  const updates = useUpdatesView();
+  const projects = useProjectRows(pools, store.getState().setProjects);
+  const actions = useActionsSheet(sessions);
+  const archiveAll = useArchiveAll(store);
+  // ONE refetch of the Waiting on you list for the whole shell, on focus and visibility (desktop-polish PL5a, review 1336).
+  useWaitingRefetch(store);
+  const [archiveAllFor, setArchiveAllFor] = useState<string | null>(null);
+  const [newOpen, setNewOpen] = useState(false);
+  const [newProject, setNewProject] = useState<string | null>(null);
+  const [addWorkspaceFor, setAddWorkspaceFor] = useState<string | null>(null);
+  const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const [reapId, setReapId] = useState<string | null>(null);
+  // Memoised (C6, D-6438). The provider re-renders on every fleet frame that changes a row (it reads `sessions` for
+  // the actions sheet's lifecycle), and an inline object would give each of its consumers a new context value, and
+  // so a render, on every one of them. Each plane is stable between changes of its own (`use*` below), so the value
+  // changes only when something a consumer reads did.
+  const value = useMemo<FleetChrome>(() => ({
+    store, health, updates, projects, actions, archiveAll,
+    archiveAllFor, setArchiveAllFor, newOpen, setNewOpen, newProject, setNewProject, addWorkspaceFor, setAddWorkspaceFor,
+    addProjectOpen, setAddProjectOpen, reapId, setReapId,
+  }), [store, health, updates, projects, actions, archiveAll, archiveAllFor, newOpen, newProject, addWorkspaceFor, addProjectOpen, reapId]);
+  return <FleetChromeContext.Provider value={value}>{children}</FleetChromeContext.Provider>;
+}
+
+export function useFleetChrome(): FleetChrome {
+  const chrome = useContext(FleetChromeContext);
+  if (chrome === null) throw new Error('FleetChrome is not mounted');
+  return chrome;
+}
+
+/** The shell's one health poll for a reader that may render where no provider is mounted (D-7860: Settings' quiet
+ *  Backups line, whose page a test may mount alone). Inside a provider it is `useFleetChrome().health`; outside one it
+ *  is `undefined`, which such a reader says as "not known yet". A part that needs the chrome's planes or sheets asks
+ *  `useFleetChrome()`, which throws instead. */
+export function useChromeHealthIfMounted(): FleetHealth | null | undefined {
+  return useContext(FleetChromeContext)?.health;
+}

@@ -1,10 +1,18 @@
+import fs from 'node:fs';
+import { homedir } from 'node:os';
 import { spawn } from 'node-pty';
+import { readTmuxSocketSetting, tmuxCommand, tmuxTarget, type TmuxSocketSetting } from '../../shared/tmux-target.js';
+
+/** D-8270: the fleet's tmux socket setting, `<home>/.ccrc/tmux-socket`, read at every call, the file `ccd`'s own
+ *  lookup (`_tmx_sock`) reads, so the drawer and every whitelisted tmux exec go where ccd's own calls go. `home`
+ *  defaults to this process's HOME, the one the ccd it spawns inherits. */
+export const fleetTmuxSocket = (home: string = homedir()): TmuxSocketSetting => readTmuxSocketSetting(home, fs);
 
 /**
  * ptyOpen backing implementation — spawns a real node-pty attached to the
  * session's tmux window, mirroring `server/src/pty.ts`'s `attachPty` (same
  * command/args/spawn options): ccrc-agent runs directly on the fleet host
- * that owns the tmux sessions, so `tmux attach -t cc-<sessionId>` here is
+ * that owns the tmux sessions, so `tmux attach -t =cc-<sessionId>:` here is
  * the REMOTE half of the same terminal-drawer bridge `attachPty` serves
  * locally. Wrapped in a small `PtyProcess` shape (rather than exposing the
  * real `IPty` directly) so tests can inject a fake spawn with no native
@@ -25,15 +33,18 @@ const SESSION_ID_RE = /^[A-Za-z0-9_-]+$/;
 /**
  * ptyOpen's `sessionId` arrives over the wire from ccrc-server — it must be
  * restricted to the same charset `ccd`/tmux window names use before it's
- * ever interpolated into a `tmux attach -t cc-<sessionId>` argv, or a
+ * ever interpolated into a `tmux attach -t =cc-<sessionId>:` argv, or a
  * crafted id could target an arbitrary tmux session name on the fleet host.
+ * The charset bars every tmux target sigil, but it cannot bar a PREFIX — which
+ * is why the target is `tmuxTarget`'s exact form, never the bare name (D-3525).
  */
 export function isSessionIdAllowed(sessionId: string): boolean {
   return typeof sessionId === 'string' && SESSION_ID_RE.test(sessionId);
 }
 
 export const spawnFleetPty: PtySpawn = (sessionId, cols, rows) => {
-  const p = spawn('tmux', ['attach', '-t', `cc-${sessionId}`], {
+  const t = tmuxCommand(fleetTmuxSocket(), ['attach', '-t', tmuxTarget(sessionId)]);   // D-8270: on the fleet's socket
+  const p = spawn(t.file, [...t.args], {
     name: 'xterm-256color',
     cols,
     rows,

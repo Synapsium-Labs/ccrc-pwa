@@ -1,0 +1,1538 @@
+{
+ "v": 1,
+ "version": "2.1.296",
+ "scenario": "permission-subagent",
+ "labels": [
+  "fg-sub-allow20-hook-allow",
+  "fg-sub-pane-answer-during-wait",
+  "fg-sub-deny20-hook-deny",
+  "fg-sub-cwd-after-cd"
+ ],
+ "notes": [
+  "FOREGROUND subagent: session started with CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1; on 2.1.296 every Agent call otherwise launches in the background",
+  "allow20: menu painted (from the general-purpose agent) during the wait; hook allow resolved it; subagent transcript permissionDecision {accept, hook, hook}",
+  "pane answer during the wait: won (user_temporary); hook not signalled, exited at 20 s",
+  "deny20: subagent tool_result is_error, content = the hook message verbatim",
+  "cwd: subagent shell cwd resets to the project dir between calls (cd to sibling and to proj/sub alike); PermissionRequest cwd equals that pwd",
+  "background subagents (default launch): menu NOT painted while the hook waits; the allow and deny still resolve (not in this bundle)",
+  "Task 14 (public corpus): every id field re-minted neutral (session, prompt and message ids, agent ids, tool-use ids), one tmp-root spelling (/rig/tmp/claude-1000), every last_assistant_message and every task-notification result stubbed; three rig commands respelt bash-equivalently for the corpus scan (a dirname substitution read through a variable D, and one quoted variable joined to its suffix inside the quotes) and the paste wrapper reduced to a plain tag"
+ ],
+ "events": [
+  {
+   "seq": 1,
+   "dtMs": 0,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Call the Agent tool, subagent_type general-purpose, with this prompt for the subagent: 'You are a cleanup helper. Run exactly this one Bash command, verbatim, as a single Bash tool call, then report its exit status and any error text: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*' . Do not run anything yourself."
+   }
+  },
+  {
+   "seq": 2,
+   "dtMs": 3836,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run one cleanup Bash command",
+     "prompt": "You are a cleanup helper. Run exactly this one Bash command, verbatim, as a single Bash tool call, then report its exit status and any error text: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/* . Do not run anything yourself.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000001"
+   }
+  },
+  {
+   "seq": 3,
+   "dtMs": 3869,
+   "event": "SubagentStart",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 4,
+   "dtMs": 6795,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp dir under sibling path and remove its contents"
+    },
+    "tool_use_id": "toolu_000000000000000000000002"
+   }
+  },
+  {
+   "seq": 5,
+   "dtMs": 6827,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp dir under sibling path and remove its contents"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 6,
+   "dtMs": 12852,
+   "event": "Notification",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission",
+    "notification_type": "permission_prompt"
+   }
+  },
+  {
+   "seq": 7,
+   "dtMs": 26956,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp dir under sibling path and remove its contents"
+    },
+    "tool_response": {
+     "stdout": "",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000002",
+    "duration_ms": 34
+   }
+  },
+  {
+   "seq": 8,
+   "dtMs": 28548,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000001.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 9,
+   "dtMs": 28575,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run one cleanup Bash command",
+     "prompt": "You are a cleanup helper. Run exactly this one Bash command, verbatim, as a single Bash tool call, then report its exit status and any error text: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/* . Do not run anything yourself.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "status": "completed",
+     "prompt": "You are a cleanup helper. Run exactly this one Bash command, verbatim, as a single Bash tool call, then report its exit status and any error text: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/* . Do not run anything yourself.",
+     "agentId": "a0000000000000001",
+     "agentType": "general-purpose",
+     "harnessNoteCount": 0,
+     "harnessTailCount": 0,
+     "harnessSectionHash": "9bb5e489067f4966",
+     "content": [
+      {
+       "type": "text",
+       "text": "The command ran and exited with status 0. It printed no output and no error text."
+      }
+     ],
+     "resolvedModel": "claude-haiku-5-5",
+     "totalDurationMs": 24712,
+     "totalTokens": 32560,
+     "totalToolUseCount": 1,
+     "usage": {
+      "output_tokens_details": {
+       "thinking_tokens": 0
+      },
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 2490,
+      "cache_read_input_tokens": 30044,
+      "output_tokens": 24,
+      "server_tool_use": {
+       "web_search_requests": 0,
+       "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+       "ephemeral_1h_input_tokens": 0,
+       "ephemeral_5m_input_tokens": 2490
+      },
+      "inference_geo": "global",
+      "iterations": [
+       {
+        "input_tokens": 2,
+        "output_tokens": 24,
+        "cache_read_input_tokens": 30044,
+        "cache_creation_input_tokens": 2490,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 2490,
+         "ephemeral_1h_input_tokens": 0
+        },
+        "type": "message"
+       }
+      ],
+      "speed": "standard",
+      "fallback_credit": null
+     },
+     "toolStats": {
+      "readCount": 0,
+      "searchCount": 0,
+      "bashCount": 1,
+      "editFileCount": 0,
+      "linesAdded": 0,
+      "linesRemoved": 0,
+      "otherToolCount": 0
+     },
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000001",
+    "duration_ms": 24712
+   }
+  },
+  {
+   "seq": 10,
+   "dtMs": 30375,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 11,
+   "dtMs": 32191,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000002",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000002.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 12,
+   "dtMs": 41819,
+   "event": "SessionEnd",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "hook_event_name": "SessionEnd",
+    "reason": "clear"
+   }
+  },
+  {
+   "seq": 13,
+   "dtMs": 41851,
+   "event": "SessionStart",
+   "envSid": "00000000-0000-4000-8000-000000000004",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000004.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000004/scratchpad",
+    "hook_event_name": "SessionStart",
+    "source": "clear"
+   }
+  },
+  {
+   "seq": 14,
+   "dtMs": 45357,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000004",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000004.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000004/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Call the Agent tool, subagent_type general-purpose, with this prompt for the subagent: 'You are a cleanup helper. Run exactly this one Bash command, verbatim, as a single Bash tool call, then report its exit status and any error text: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*' . Do not run anything yourself."
+   }
+  },
+  {
+   "seq": 15,
+   "dtMs": 48844,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000004",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000004.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000004/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run one cleanup command",
+     "prompt": "You are a cleanup helper. Run exactly this one Bash command, verbatim, as a single Bash tool call, then report its exit status and any error text: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*\n\nDo not run anything else. Do not modify the command.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000003"
+   }
+  },
+  {
+   "seq": 16,
+   "dtMs": 48872,
+   "event": "SubagentStart",
+   "envSid": "00000000-0000-4000-8000-000000000004",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000004.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000004/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "agent_id": "a0000000000000003",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 17,
+   "dtMs": 51119,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000004",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000004.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000004/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000003",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp directory and remove its contents"
+    },
+    "tool_use_id": "toolu_000000000000000000000004"
+   }
+  },
+  {
+   "seq": 18,
+   "dtMs": 51150,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000004",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000004.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000004/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000003",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp directory and remove its contents"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 19,
+   "dtMs": 55512,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000004",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000004.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000004/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000003",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp directory and remove its contents"
+    },
+    "tool_response": {
+     "stdout": "",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000004",
+    "duration_ms": 37
+   }
+  },
+  {
+   "seq": 20,
+   "dtMs": 56746,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000004",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000004.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000004/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000003",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000004/subagents/agent-a0000000000000003.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 21,
+   "dtMs": 56775,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000004",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000004.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000004/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run one cleanup command",
+     "prompt": "You are a cleanup helper. Run exactly this one Bash command, verbatim, as a single Bash tool call, then report its exit status and any error text: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*\n\nDo not run anything else. Do not modify the command.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "status": "completed",
+     "prompt": "You are a cleanup helper. Run exactly this one Bash command, verbatim, as a single Bash tool call, then report its exit status and any error text: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*\n\nDo not run anything else. Do not modify the command.",
+     "agentId": "a0000000000000003",
+     "agentType": "general-purpose",
+     "harnessNoteCount": 0,
+     "harnessTailCount": 0,
+     "harnessSectionHash": "fe5f874f9266ce00",
+     "content": [
+      {
+       "type": "text",
+       "text": "The cleanup command ran as a single Bash call, unmodified.\n\n- **Exit status:** 0 (the shell reported no output, so no error text was printed).\n- **Error text:** none."
+      }
+     ],
+     "resolvedModel": "claude-haiku-5-5",
+     "totalDurationMs": 7902,
+     "totalTokens": 32596,
+     "totalToolUseCount": 1,
+     "usage": {
+      "output_tokens_details": {
+       "thinking_tokens": 0
+      },
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 2479,
+      "cache_read_input_tokens": 30053,
+      "output_tokens": 62,
+      "server_tool_use": {
+       "web_search_requests": 0,
+       "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+       "ephemeral_1h_input_tokens": 0,
+       "ephemeral_5m_input_tokens": 2479
+      },
+      "inference_geo": "global",
+      "iterations": [
+       {
+        "input_tokens": 2,
+        "output_tokens": 62,
+        "cache_read_input_tokens": 30053,
+        "cache_creation_input_tokens": 2479,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 2479,
+         "ephemeral_1h_input_tokens": 0
+        },
+        "type": "message"
+       }
+      ],
+      "speed": "standard",
+      "fallback_credit": null
+     },
+     "toolStats": {
+      "readCount": 0,
+      "searchCount": 0,
+      "bashCount": 1,
+      "editFileCount": 0,
+      "linesAdded": 0,
+      "linesRemoved": 0,
+      "otherToolCount": 0
+     },
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000003",
+    "duration_ms": 7902
+   }
+  },
+  {
+   "seq": 22,
+   "dtMs": 58180,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000004",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000004.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000004/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 23,
+   "dtMs": 59400,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000004",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000004.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000004/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000004",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000004/subagents/agent-a0000000000000004.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 24,
+   "dtMs": 83309,
+   "event": "SessionEnd",
+   "envSid": "00000000-0000-4000-8000-000000000004",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000004",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000004.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000004/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "hook_event_name": "SessionEnd",
+    "reason": "clear"
+   }
+  },
+  {
+   "seq": 25,
+   "dtMs": 83338,
+   "event": "SessionStart",
+   "envSid": "00000000-0000-4000-8000-000000000007",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000007",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000007.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000007/scratchpad",
+    "hook_event_name": "SessionStart",
+    "source": "clear"
+   }
+  },
+  {
+   "seq": 26,
+   "dtMs": 86833,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000007",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000007",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000007.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000007/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Call the Agent tool, subagent_type general-purpose, with this prompt for the subagent: 'You are a cleanup helper. Run exactly this one Bash command, verbatim, as a single Bash tool call, then report its exit status and quote verbatim any error or message text the tool result gave you: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*' . Do not run anything yourself; quote the subagent's report verbatim."
+   }
+  },
+  {
+   "seq": 27,
+   "dtMs": 90064,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000007",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000007",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000007.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000007/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run cleanup helper command",
+     "prompt": "You are a cleanup helper. Run exactly this one Bash command, verbatim, as a single Bash tool call, then report its exit status and quote verbatim any error or message text the tool result gave you: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000005"
+   }
+  },
+  {
+   "seq": 28,
+   "dtMs": 90091,
+   "event": "SubagentStart",
+   "envSid": "00000000-0000-4000-8000-000000000007",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000007",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000007.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000007/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "agent_id": "a0000000000000005",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 29,
+   "dtMs": 92926,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000007",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000007",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000007.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000007/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000005",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp directory and clear its contents"
+    },
+    "tool_use_id": "toolu_000000000000000000000006"
+   }
+  },
+  {
+   "seq": 30,
+   "dtMs": 92952,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000007",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000007",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000007.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000007/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000005",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "description": "Create temp directory and clear its contents"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 31,
+   "dtMs": 98991,
+   "event": "Notification",
+   "envSid": "00000000-0000-4000-8000-000000000007",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000007",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000007.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000007/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission",
+    "notification_type": "permission_prompt"
+   }
+  },
+  {
+   "seq": 32,
+   "dtMs": 114933,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000007",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000007",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000007.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000007/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000005",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000007/subagents/agent-a0000000000000005.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 33,
+   "dtMs": 114960,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000007",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000007",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000007.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000007/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run cleanup helper command",
+     "prompt": "You are a cleanup helper. Run exactly this one Bash command, verbatim, as a single Bash tool call, then report its exit status and quote verbatim any error or message text the tool result gave you: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "status": "completed",
+     "prompt": "You are a cleanup helper. Run exactly this one Bash command, verbatim, as a single Bash tool call, then report its exit status and quote verbatim any error or message text the tool result gave you: X=$(mktemp -d /rig/work/sibling/tmp.XXXXXX) && rm -rf \"$X\"/*",
+     "agentId": "a0000000000000005",
+     "agentType": "general-purpose",
+     "harnessNoteCount": 0,
+     "harnessTailCount": 0,
+     "harnessSectionHash": "166cfae35d91ceac",
+     "content": [
+      {
+       "type": "text",
+       "text": "The Bash command was not run successfully. The tool returned an error with no exit status, and I did not retry, as the message instructed.\n\nVerbatim error text:\n\n`RIG13-DENY-MSG: the coordinator denied this request; do not retry`"
+      }
+     ],
+     "resolvedModel": "claude-haiku-5-5",
+     "totalDurationMs": 24871,
+     "totalTokens": 32880,
+     "totalToolUseCount": 1,
+     "usage": {
+      "output_tokens_details": {
+       "thinking_tokens": 127
+      },
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 2622,
+      "cache_read_input_tokens": 30049,
+      "output_tokens": 207,
+      "server_tool_use": {
+       "web_search_requests": 0,
+       "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+       "ephemeral_1h_input_tokens": 0,
+       "ephemeral_5m_input_tokens": 2622
+      },
+      "inference_geo": "global",
+      "iterations": [
+       {
+        "input_tokens": 2,
+        "output_tokens": 207,
+        "cache_read_input_tokens": 30049,
+        "cache_creation_input_tokens": 2622,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 2622,
+         "ephemeral_1h_input_tokens": 0
+        },
+        "type": "message"
+       }
+      ],
+      "speed": "standard",
+      "fallback_credit": null
+     },
+     "toolStats": {
+      "readCount": 0,
+      "searchCount": 0,
+      "bashCount": 1,
+      "editFileCount": 0,
+      "linesAdded": 0,
+      "linesRemoved": 0,
+      "otherToolCount": 0
+     },
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000005",
+    "duration_ms": 24871
+   }
+  },
+  {
+   "seq": 34,
+   "dtMs": 116916,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000007",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000007",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000007.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000007/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 35,
+   "dtMs": 118377,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000007",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000007",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000007.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000007/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000006",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000007/subagents/agent-a0000000000000006.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 36,
+   "dtMs": 141721,
+   "event": "SessionEnd",
+   "envSid": "00000000-0000-4000-8000-000000000007",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000007",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000007.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000007/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000009",
+    "hook_event_name": "SessionEnd",
+    "reason": "clear"
+   }
+  },
+  {
+   "seq": 37,
+   "dtMs": 141768,
+   "event": "SessionStart",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "hook_event_name": "SessionStart",
+    "source": "clear"
+   }
+  },
+  {
+   "seq": 38,
+   "dtMs": 145246,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Call the Agent tool, subagent_type general-purpose, with this prompt for the subagent: 'Test rig. Make exactly four separate Bash tool calls, in order, each verbatim, then quote all four tool results verbatim. Call 1: cd /rig/work/sibling   Call 2: pwd && X=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$X\"/* && echo \"made $X\"   Call 3: cd /rig/work/proj/sub   Call 4: pwd && Y=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$Y\"/* && echo \"made $Y\"' . Do not run anything yourself; quote the subagent's report verbatim."
+   }
+  },
+  {
+   "seq": 39,
+   "dtMs": 148475,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run four-call test rig",
+     "prompt": "Test rig. Make exactly four separate Bash tool calls, in order, each verbatim, then quote all four tool results verbatim. Call 1: cd /rig/work/sibling   Call 2: pwd && X=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$X\"/* && echo \"made $X\"   Call 3: cd /rig/work/proj/sub   Call 4: pwd && Y=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$Y\"/* && echo \"made $Y\"",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000007"
+   }
+  },
+  {
+   "seq": 40,
+   "dtMs": 148502,
+   "event": "SubagentStart",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 41,
+   "dtMs": 151441,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd /rig/work/sibling"
+    },
+    "tool_use_id": "toolu_000000000000000000000008"
+   }
+  },
+  {
+   "seq": 42,
+   "dtMs": 151476,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd /rig/work/sibling"
+    },
+    "tool_response": {
+     "stdout": "",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": true
+    },
+    "tool_use_id": "toolu_000000000000000000000008",
+    "duration_ms": 7
+   }
+  },
+  {
+   "seq": 43,
+   "dtMs": 153176,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd && X=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$X\"/* && echo \"made $X\""
+    },
+    "tool_use_id": "toolu_000000000000000000000009"
+   }
+  },
+  {
+   "seq": 44,
+   "dtMs": 153203,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd && X=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$X\"/* && echo \"made $X\""
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 45,
+   "dtMs": 153285,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd && X=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$X\"/* && echo \"made $X\""
+    },
+    "tool_response": {
+     "stdout": "/rig/work/proj\nmade ./tmp.IwnJ5Y",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000009",
+    "duration_ms": 22
+   }
+  },
+  {
+   "seq": 46,
+   "dtMs": 155874,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd /rig/work/proj/sub"
+    },
+    "tool_use_id": "toolu_000000000000000000000010"
+   }
+  },
+  {
+   "seq": 47,
+   "dtMs": 155908,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd /rig/work/proj/sub"
+    },
+    "tool_response": {
+     "stdout": "",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": true
+    },
+    "tool_use_id": "toolu_000000000000000000000010",
+    "duration_ms": 6
+   }
+  },
+  {
+   "seq": 48,
+   "dtMs": 157551,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd && Y=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$Y\"/* && echo \"made $Y\""
+    },
+    "tool_use_id": "toolu_000000000000000000000011"
+   }
+  },
+  {
+   "seq": 49,
+   "dtMs": 157579,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd && Y=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$Y\"/* && echo \"made $Y\""
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 50,
+   "dtMs": 157657,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "pwd && Y=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$Y\"/* && echo \"made $Y\""
+    },
+    "tool_response": {
+     "stdout": "/rig/work/proj\nmade ./tmp.LUHPrq",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000011",
+    "duration_ms": 19
+   }
+  },
+  {
+   "seq": 51,
+   "dtMs": 161559,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010/subagents/agent-a0000000000000007.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 52,
+   "dtMs": 161584,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run four-call test rig",
+     "prompt": "Test rig. Make exactly four separate Bash tool calls, in order, each verbatim, then quote all four tool results verbatim. Call 1: cd /rig/work/sibling   Call 2: pwd && X=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$X\"/* && echo \"made $X\"   Call 3: cd /rig/work/proj/sub   Call 4: pwd && Y=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$Y\"/* && echo \"made $Y\"",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "status": "completed",
+     "prompt": "Test rig. Make exactly four separate Bash tool calls, in order, each verbatim, then quote all four tool results verbatim. Call 1: cd /rig/work/sibling   Call 2: pwd && X=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$X\"/* && echo \"made $X\"   Call 3: cd /rig/work/proj/sub   Call 4: pwd && Y=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$Y\"/* && echo \"made $Y\"",
+     "agentId": "a0000000000000007",
+     "agentType": "general-purpose",
+     "harnessNoteCount": 0,
+     "harnessTailCount": 0,
+     "harnessSectionHash": "f7191ac4f2230c65",
+     "content": [
+      {
+       "type": "text",
+       "text": "All four Bash calls ran in order, each as specified. Results verbatim:\n\n**Call 1:** `cd /rig/work/sibling`\n```\n(Bash completed with no output)\n```\n\n**Call 2:** `pwd && X=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$X\"/* && echo \"made $X\"`\n```\n/rig/work/proj\nmade ./tmp.IwnJ5Y\n```\n\n**Call 3:** `cd /rig/work/proj/sub`\n```\n(Bash completed with no output)\n```\n\n**Call 4:** `pwd && Y=$(mktemp -d ./tmp.XXXXXX) && rm -rf \"$Y\"/* && echo \"made $Y\"`\n```\n/rig/work/proj\nmade ./tmp.LUHPrq\n```\n\nThe `cd` in calls 1 and 3 did not carry over. Both later `pwd` calls reported `/rig/work/proj`, so the two temp directories were created there, not in `sibling` or `proj/sub`. The shell's working directory resets between calls."
+      }
+     ],
+     "resolvedModel": "claude-haiku-5-5",
+     "totalDurationMs": 13086,
+     "totalTokens": 33889,
+     "totalToolUseCount": 4,
+     "usage": {
+      "output_tokens_details": {
+       "thinking_tokens": 216
+      },
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 175,
+      "cache_read_input_tokens": 33028,
+      "output_tokens": 684,
+      "server_tool_use": {
+       "web_search_requests": 0,
+       "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+       "ephemeral_1h_input_tokens": 0,
+       "ephemeral_5m_input_tokens": 175
+      },
+      "inference_geo": "global",
+      "iterations": [
+       {
+        "input_tokens": 2,
+        "output_tokens": 684,
+        "cache_read_input_tokens": 33028,
+        "cache_creation_input_tokens": 175,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 175,
+         "ephemeral_1h_input_tokens": 0
+        },
+        "type": "message"
+       }
+      ],
+      "speed": "standard",
+      "fallback_credit": null
+     },
+     "toolStats": {
+      "readCount": 0,
+      "searchCount": 0,
+      "bashCount": 4,
+      "editFileCount": 0,
+      "linesAdded": 0,
+      "linesRemoved": 0,
+      "otherToolCount": 0
+     },
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000007",
+    "duration_ms": 13086
+   }
+  },
+  {
+   "seq": 53,
+   "dtMs": 164368,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 54,
+   "dtMs": 166135,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "bypassPermissions",
+    "agent_id": "a0000000000000008",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010/subagents/agent-a0000000000000008.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 55,
+   "dtMs": 192896,
+   "event": "SessionEnd",
+   "envSid": "00000000-0000-4000-8000-000000000010",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-work-proj/00000000-0000-4000-8000-000000000010.jsonl",
+    "cwd": "/rig/work/proj",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-proj/00000000-0000-4000-8000-000000000010/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000012",
+    "hook_event_name": "SessionEnd",
+    "reason": "prompt_input_exit"
+   }
+  }
+ ],
+ "disk": {
+  "admin": {},
+  "worktreesLeft": [],
+  "branches": [],
+  "worktreeList": "",
+  "metas": {},
+  "snapshots": {}
+ }
+}

@@ -10,19 +10,25 @@ import type {
   TailData,
   TailReset,
 } from '../../../shared/agent-protocol.js';
+import { UPDATE_OP_DETAIL_MAX } from '../../../shared/agent-protocol.js';
 import { parseBuildInfo } from '../../../shared/buildinfo.js';
+import { validCapWords } from '../../../shared/api.js';
 import type { Runner } from '../exec.js';
-import type { FleetState } from '../fleetstate.js';
+import { FleetIdentityCell } from '../fleetidentity.js';
+import { recordCcdVerbs, type FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
 import type { SpawnPty } from '../pty.js';
 import { createRunner } from './runner.js';
 import { createIo } from './io.js';
 import { createSpawnPty } from './pty.js';
+import { AgentOpError, LinkNotSentError } from './errors.js';
 
 /**
  * Single authenticated WS connection to a `ccrc-agent` on a REMOTE fleet
- * host, wrapped in reconnect-with-backoff + heartbeat so the rest of the
- * server (Runner/FleetIO consumers) never has to think about the transport.
+ * host, wrapped in a deadline from socket to ready, reconnect-with-backoff and
+ * a heartbeat, and logging one line per kind per stretch without a ready
+ * link, so the rest of the server (Runner/FleetIO consumers) never has to
+ * think about the transport.
  * `connectFleet` is the public entry point — it wires this client into the
  * `Runner`/`FleetIO`/`SpawnPty` seams the rest of the server already speaks.
  */
@@ -36,21 +42,35 @@ export interface RemoteFleetConfig {
   token: string;
   /** ms between heartbeat pings while connected. Default 15000. */
   heartbeatMs?: number;
+  /** ms from a new socket's creation to the agent's `ready` before that attempt is terminated and retried: one wall
+   *  clock over TCP connect, the upgrade and the hello (wave 27, D-6514; #1160's name, D-6724). Default 15000. A test
+   *  seam like the fields around it; the composition root passes only `url` and `token`. */
+  connectTimeoutMs?: number;
   /** initial reconnect delay. Default 1000. */
   reconnectMinMs?: number;
   /** reconnect delay ceiling (doubles each failed attempt up to this). Default 30000. */
   reconnectMaxMs?: number;
   /** default per-request local wait timeout when a call site doesn't override it. Default 15000. */
   requestTimeoutMs?: number;
+  /** Called ONCE per settled request (answered, failed, timed out or aborted; never for one not sent), with the op word
+   *  (`exec:<cmd>` for exec, the command word only, never its arguments) and the milliseconds since the send
+   *  (console speed S1). */
+  onRoundTrip?: (op: string, ms: number) => void;
 }
 
-type ResolvedConfig = Required<RemoteFleetConfig>;
+type ResolvedConfig = Required<Omit<RemoteFleetConfig, 'onRoundTrip'>> & Pick<RemoteFleetConfig, 'onRoundTrip'>;
 
 // Re-exported so callers can obtain the connected client and its state type
 // from one remote boundary. `refreshcaps.ts` and its test import `FleetState`
 // here; deleting this export is therefore a TypeScript error.
 export type { FleetState };
 
+/** One request awaiting its answer: the settlement handles and NOTHING of the frame (accounts spec §13.2, D-5513).
+ *  An `account` op's frame carries a secret in `stdinB64`, so `request` serialises it in a frame that creates no
+ *  closure, hands the text to the socket and returns; the entry, the abort listener and the timer are made by
+ *  `register`, whose scope never holds the frame (D-5623). A field here, or a closure, that keeps the frame would
+ *  keep the secret for the request's whole life (up to `accountOpRequestTimeoutMs`); `remote-connect.test.ts`
+ *  reds that with a WeakRef and a real collector run. (Once sent, the text is `ws`'s until its socket writes it.) */
 interface Pending {
   resolve: (v: ResOk) => void;
   reject: (e: Error) => void;
@@ -61,7 +81,19 @@ interface Pending {
 type TailListener = (msg: TailData | TailReset) => void;
 type PtyListener = (msg: PtyData | PtyExit) => void;
 
+/** The kinds of line a stretch without a ready link prints, each at most once per stretch; all but `refused` can
+ *  open one (wave 27, D-6520, D-6527). */
+type LinkLine = 'lost' | 'no-pong' | 'never-ready' | 'no-ready' | 'refused';
+/** One stretch without a ready link that has printed a line: when it opened, which kinds it printed, and how many
+ *  attempts ended without a ready since. Private to the client; never on `state`, never on the wire. */
+interface LinkEpisode { since: number; logged: Set<LinkLine>; failedAttempts: number }
+
 const DEFAULT_HEARTBEAT_MS = 15_000;
+// The heartbeat only starts at `ready`, so without this deadline a socket that never reaches `ready` is unwatched:
+// a peer that accepts TCP and never answers the upgrade (an agent mid-shutdown or mid-reboot behind the listen
+// backlog) stranded the controller on a half-open socket for over an hour. Generous against a slow link — the
+// whole handshake is two small frames — and equal to the default request timeout (wave 27, D-6516).
+const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_RECONNECT_MIN_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
@@ -71,20 +103,69 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
 }
 
+/** The phase a pre-ready attempt is in, named only as far as the socket's own `readyState` proves it (D-6520):
+ *  `ws` holds CONNECTING from the constructor until a validated 101, across the TCP connect and the upgrade. */
+function preReadyPhase(readyState: number): string {
+  if (readyState === WebSocket.CONNECTING) return 'connect or upgrade unanswered';
+  if (readyState === WebSocket.OPEN) return 'ready not sent';
+  if (readyState === WebSocket.CLOSING) return 'closing';
+  return 'closed';
+}
+
+/** A peer's close reason, read as untrusted (D-6527, D-6529). A peer that echoes the hello must not put the token in
+ *  the journal, so a reason repeating any 8 consecutive characters of it (all of a shorter token) is withheld; one
+ *  that breaks the token up on purpose already holds it, so this covers the accidental echo. The check runs on the
+ *  full decoded text. Otherwise: every character outside printable ASCII becomes `?`, cut to 64; empty prints `-`. */
+function refusalReason(reason: Buffer, token: string): string {
+  const full = reason.toString('utf8');
+  const width = Math.min(8, token.length);
+  for (let i = 0; width > 0 && i + width <= token.length; i++) {
+    if (full.includes(token.slice(i, i + width))) return '[withheld: repeats the token]';
+  }
+  const text = full.replace(/[^\x20-\x7e]/g, '?').slice(0, 64);
+  return text === '' ? '-' : text;
+}
+
+/**
+ * THE ONE VALIDATOR of `AgentReady.ops` (design 2026-09-20 §8, §10), called
+ * once per `ready` by `onReady`. The peer may be older, newer or broken, so
+ * the list is validated, not trusted: absent, not an array, or refused by
+ * `validCapWords` (a word off `CAP_WORD`, a non-string, more than
+ * `MAX_CAP_WORDS` words — one bad word drops the whole list, §8) → `[]`.
+ *
+ * `[]` folds "an agent too old to say" with "an agent that said something
+ * unusable", and that fold is deliberate rather than a narrowing: every
+ * consumer treats both the same — the dispatcher never sends an op the link
+ * did not validly name. The distinction that DOES survive is the one
+ * decision 11 names: this reader never answers `undefined`/`null`, which are
+ * "no ready yet" and "no agent at all", so a connected fleet row stores `''`
+ * and the server row `NULL`, and the two never meet.
+ */
+export function readReadyOps(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return validCapWords(raw) ?? [];
+}
+
 /**
  * Owns exactly one logical connection to the agent — a fresh `WebSocket` per
  * attempt, hello/ready handshake, a request table keyed by numeric id
  * (ids are never reused across reconnects; not required to be — every
  * in-flight request is rejected the moment its socket goes away), a
- * heartbeat that force-closes a silently-dead socket, and exponential
- * reconnect backoff. `state`/`onStateChange` surface connectivity to
- * callers; `onTail`/`offTail`/`onConnected` are the internal seam
+ * deadline that ends an attempt with no ready, a heartbeat that force-closes
+ * a silently-dead socket, and exponential reconnect backoff.
+ * `state`/`onStateChange` surface connectivity to callers; `onTail`/`offTail`/`onConnected` are the internal seam
  * `remote/io.ts` (and, from T4, `remote/pty.ts`) build on.
  */
 export class FleetClient {
   readonly state: FleetState = {
     connected: false, downSince: null, ccdVerbs: null, rosterFp: null, build: null,
+    observedEpoch: undefined, agentOps: undefined,
   };
+  /** The connection-bound fleet node identity (path-identity spec 2026-10-12 §5.2). It lives HERE, never on `state`
+   *  (whose whole shape `remote-connect.test.ts` pins) and never in a listener: index.ts registers its listeners after
+   *  `connectFleet` returns, so a ready accepted first would bump nothing. `onReady`, `onClose` and `close()`
+   *  invalidate it synchronously; only the inventory's fleet sweep publishes into it. */
+  readonly identity: FleetIdentityCell = new FleetIdentityCell();
 
   private readonly cfg: ResolvedConfig;
   private socket: WebSocket | null = null;
@@ -95,8 +176,10 @@ export class FleetClient {
   private backoffMs: number;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private connectTimer: NodeJS.Timeout | null = null;
   private awaitingPong = false;
   private missedPongs = 0;
+  private episode: LinkEpisode | null = null;
 
   private readonly pending = new Map<number, Pending>();
   private readonly tailListeners = new Map<number, TailListener>();
@@ -109,9 +192,11 @@ export class FleetClient {
       url: cfg.url,
       token: cfg.token,
       heartbeatMs: cfg.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
+      connectTimeoutMs: cfg.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
       reconnectMinMs: cfg.reconnectMinMs ?? DEFAULT_RECONNECT_MIN_MS,
       reconnectMaxMs: cfg.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS,
       requestTimeoutMs: cfg.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      onRoundTrip: cfg.onRoundTrip,
     };
     this.backoffMs = this.cfg.reconnectMinMs;
   }
@@ -174,12 +259,53 @@ export class FleetClient {
 
   request(payload: AgentReqPayload, timeoutMs?: number, signal?: AbortSignal): Promise<ResOk> {
     if (!this.ready || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error('disconnected'));
+      return Promise.reject(new LinkNotSentError('disconnected'));
     }
-    if (signal?.aborted) return Promise.reject(new Error('aborted'));
+    if (signal?.aborted) return Promise.reject(new LinkNotSentError('aborted'));
     const ws = this.socket;
     const id = this.nextId++;
-    const wait = timeoutMs ?? this.cfg.requestTimeoutMs;
+    // D-5623: no closure is created in THIS frame, so neither `payload` nor its text is context-allocated: both die
+    // when `request` returns. The settlement closures live in `register`, whose scope never sees the frame (an
+    // `account` op's `stdinB64` is a secret; see `Pending`). `remote-connect.test.ts` proves it with a collector run.
+    let text: string;
+    try {
+      text = JSON.stringify({ ...payload, t: 'req', id } as AgentReq);
+    } catch (e) {
+      return Promise.reject(new LinkNotSentError(e instanceof Error ? e.message : String(e)));
+    }
+    const op = payload.op === 'exec' ? `exec:${payload.cmd}` : payload.op;   // the word only: never an argument (console speed S1)
+    const sentAt = performance.now();
+    const answer = this.register(id, timeoutMs ?? this.cfg.requestTimeoutMs, signal);
+    try {
+      ws.send(text);
+    } catch (e) {
+      // D-3555: `ws.send` threw before queuing the frame (ws throws only at CONNECTING, which the OPEN check above
+      // excludes), so undo the registration and say so. After this `send` returns, every rejection is a plain
+      // Error: the frame may already be with the agent.
+      const entry = this.pending.get(id);
+      if (entry !== undefined) {
+        clearTimeout(entry.timer);
+        this.pending.delete(id);
+        entry.dispose();
+        entry.reject(new LinkNotSentError(e instanceof Error ? e.message : String(e)));
+      }
+    }
+    return this.cfg.onRoundTrip === undefined ? answer : this.measured(op, sentAt, answer);
+  }
+
+  /** Reports one settled request's round trip; a request that was never sent (`LinkNotSentError`) reports nothing. Takes
+   *  no part of the frame (D-5623). */
+  private measured(op: string, sentAt: number, answer: Promise<ResOk>): Promise<ResOk> {
+    const report = (e: unknown): void => {
+      if (e instanceof LinkNotSentError) return;
+      try { this.cfg.onRoundTrip?.(op, performance.now() - sentAt); } catch { /* a recorder must not fail a request */ }
+    };
+    return answer.then((v) => { report(null); return v; }, (e: unknown) => { report(e); throw e; });
+  }
+
+  /** The pending entry and its settlement closures for request `id`. Takes no part of the frame, so nothing it
+   *  creates can keep one alive (D-5513, D-5623). */
+  private register(id: number, wait: number, signal: AbortSignal | undefined): Promise<ResOk> {
     return new Promise<ResOk>((resolve, reject) => {
       const abort = (): void => {
         const entry = this.pending.get(id);
@@ -195,15 +321,8 @@ export class FleetClient {
         dispose();
         reject(new Error('timeout'));
       }, wait);
-      this.pending.set(id, {
-        resolve,
-        reject,
-        timer,
-        dispose,
-      });
+      this.pending.set(id, { resolve, reject, timer, dispose });
       signal?.addEventListener('abort', abort, { once: true });
-      const req = { ...payload, t: 'req', id } as AgentReq;
-      ws.send(JSON.stringify(req));
     });
   }
 
@@ -229,6 +348,11 @@ export class FleetClient {
       this.reconnectTimer = null;
     }
     this.stopHeartbeat();
+    this.clearConnectDeadline();
+    // Path-identity spec 2026-10-12 §5.2: this path never reaches `onClose`. The socket is nulled below, so the
+    // 'close' event's handler returns at its stale-socket guard, and this path therefore invalidates on its own.
+    // `state.connected` is left as it was: changing it would change shutdown for every other reader.
+    this.identity.invalidate('link-down');
     this.rejectAllPending(new Error('disconnected'));
     this.tailListeners.clear();
     this.ptyListeners.clear();
@@ -247,17 +371,22 @@ export class FleetClient {
     let ws: WebSocket;
     try {
       ws = new WebSocket(this.cfg.url);
-    } catch {
+    } catch (err) {
+      // A throw here depends only on the URL, so no `ready` can follow: the boot line, once, naming the error and
+      // never its message, which for an unparsable URL carries the URL (D-6526).
+      this.note('never-ready', 'no ready since the server started (socket not created: '
+        + `${err instanceof Error ? err.name : 'a non-Error throw'}); retrying`);
       this.markDown();
       this.scheduleReconnect();
       return;
     }
     this.socket = ws;
+    this.armConnectDeadline(ws);
     ws.on('open', () => {
       ws.send(JSON.stringify({ t: 'hello', token: this.cfg.token }));
     });
     ws.on('message', (raw) => this.onMessage(ws, raw));
-    ws.on('close', () => this.onClose(ws));
+    ws.on('close', (code, reason) => this.onClose(ws, code, reason));
     ws.on('error', () => {
       // 'close' always follows 'error' for a ws socket — reconnect logic lives there.
     });
@@ -291,7 +420,9 @@ export class FleetClient {
       clearTimeout(entry.timer);
       entry.dispose();
       if (msg.ok === false) {
-        entry.reject(new Error(typeof msg.err === 'string' ? msg.err : 'error'));
+        // THE ONE READER of `ResErr.detail` (design 2026-09-20 §10, D-3373): an answer the agent
+        // SENT rejects as an `AgentOpError`. A link failure never reaches this line (`onClose`, the timer, the abort).
+        entry.reject(new AgentOpError(typeof msg.err === 'string' ? msg.err : 'error', typeof msg.detail === 'string' ? msg.detail.slice(0, UPDATE_OP_DETAIL_MAX) : null));
       } else {
         entry.resolve(msg as unknown as ResOk);
       }
@@ -311,13 +442,22 @@ export class FleetClient {
   }
 
   private onReady(frame: Record<string, unknown>): void {
+    // Path-identity spec 2026-10-12 §5.2: FIRST. It comes before every field below and before `setState` and the
+    // connect listeners that run synchronously at the end of this function, so every listener (index.ts's inventory
+    // trigger among them) already reads the new epoch, with nothing measured under it.
+    this.identity.invalidate('awaiting-inventory');
     this.ready = true;
-    // Mutated directly rather than pushed through setState, whose change
-    // detection compares only connected/downSince — a reconnect to an upgraded
-    // agent must still refresh this.
-    this.state.ccdVerbs = Array.isArray(frame.ccdVerbs)
-      && frame.ccdVerbs.every((v) => typeof v === 'string')
-      ? (frame.ccdVerbs as string[]) : null;
+    this.clearConnectDeadline();
+    // Written through `recordCcdVerbs` (its ready rule: as given, null
+    // included) rather than pushed through setState, whose change detection
+    // compares only connected/downSince — a reconnect to an upgraded agent
+    // must still refresh this.
+    recordCcdVerbs(this.state, {
+      from: 'ready',
+      verbs: Array.isArray(frame.ccdVerbs)
+        && frame.ccdVerbs.every((v) => typeof v === 'string')
+        ? (frame.ccdVerbs as string[]) : null,
+    });
     // Same stance, same reason: a frame without a usable `rosterFp` — an older
     // agent, or a fleet host with no readable projection — leaves us with NO
     // evidence, which must not read as disagreement. Reset on every ready so a
@@ -325,6 +465,66 @@ export class FleetClient {
     // digest of the roster it used to have.
     this.state.rosterFp = typeof frame.rosterFp === 'string' && frame.rosterFp.length > 0
       ? frame.rosterFp : null;
+    // THE SINGLE READER of `frame.observedEpoch` — still literally true
+    // (nothing else touches this wire FRAME field) after item 1 (wave-1 fix
+    // round A), but no longer the whole story: this handler populates
+    // `FleetState.observedEpoch` from the HANDSHAKE, and that value is NOT
+    // this server's account of "which pool-membership epoch the fleet host
+    // actually has" any more — it was sampled once when the WS connected and
+    // never refreshes for a link that can live for days. `pools.ts`'s
+    // `readObservedEpochFromRegistry` measures `$REG/pool-epoch` fresh on
+    // every watcher tick / every `GET /api/fleet` request and is what feeds
+    // the `pools` wire's `observedEpoch` now; `FleetState.observedEpoch` as
+    // set below has no reader of its own today (additive-only forbids the
+    // agent from dropping the field, so this parse stays, but nothing
+    // downstream of `FleetClient.state` currently consumes this member —
+    // grep before assuming otherwise, since that is exactly the kind of claim
+    // this wave measured wrong more than once). THREE
+    // conditions, and unlike `rosterFp`/`build` just below, absence is NOT
+    // collapsed into the "no evidence" value the other two use (`null`):
+    // `null` here is itself a MEANING this agent build sends on purpose — "I
+    // have synced never" — so folding it with "the field is missing" would
+    // report a downgraded/older agent as if it were a fleet host still
+    // catching up. `=== undefined`, never `== null`: the latter is true of
+    // both and is exactly the fold `readObservedEpoch`'s own contract (and
+    // this task) forbids.
+    //
+    // VALIDATED, not merely type-checked (review T8-R1, F4) — `build`'s own
+    // comment three lines below states the doctrine this reader follows too:
+    // "the peer may be older, newer, or broken", so a JSON *number* is not
+    // automatically a well-formed epoch. `Number.isSafeInteger(...) && … >= 0`
+    // rejects a negative value and a non-integer — `ccd-pool-sync`'s own
+    // writer rejects both before ever rendering a document
+    // (`ccd-pool-sync:163`, `:186`) — as well as `NaN`/`±Infinity`, though
+    // JSON itself cannot carry those (`JSON.stringify` turns them into `null`
+    // before this code ever sees them, so a real peer can only reach this
+    // branch with a string/boolean/array/object, or a finite non-integer or
+    // negative number).
+    //
+    // Reset on every ready, same reason as `rosterFp`/`build`: a reconnect to
+    // an agent that no longer reports the field (a downgrade) must not keep
+    // answering with a number the box used to have.
+    if (frame.observedEpoch === undefined) {
+      this.state.observedEpoch = undefined;
+    } else if (frame.observedEpoch === null) {
+      this.state.observedEpoch = null;
+    } else if (
+      typeof frame.observedEpoch === 'number'
+      && Number.isSafeInteger(frame.observedEpoch)
+      && frame.observedEpoch >= 0
+    ) {
+      this.state.observedEpoch = frame.observedEpoch;
+    } else {
+      // Off-contract value from a broken or adversarial peer — wrong JS type
+      // entirely, or a number off the epoch grammar (negative, non-integer).
+      // No evidence, not a fabricated one.
+      this.state.observedEpoch = undefined;
+    }
+    // THE SINGLE READER of the ready frame's `ops` (design 2026-09-20 §8) —
+    // `readReadyOps` above is its one validator. Reset on EVERY ready, the
+    // `rosterFp`/`build` reason: a reconnect to a downgraded agent must not
+    // keep advertising an op the new process no longer answers.
+    this.state.agentOps = readReadyOps(frame.ops);
     // THE SINGLE READER of `frame.build` — the fleet host's own stamp, which
     // `buildAgreement` compares against this box's. Reset on every ready for
     // the same reason as `rosterFp`: a stamp kept from the previous connection
@@ -351,15 +551,26 @@ export class FleetClient {
     this.everConnected = true;
     this.backoffMs = this.cfg.reconnectMinMs;
     this.setState({ connected: true, downSince: null });
+    const ep = this.episode;
+    this.episode = null;
+    if (ep) {
+      console.warn(`ccrc-server: agent link: ready again, ${Date.now() - ep.since}ms after this stretch's first line `
+        + `(${ep.failedAttempts} attempts ended without a ready)`);
+    }
     this.startHeartbeat();
     for (const cb of this.connectListeners) cb(isReconnect);
   }
 
-  private onClose(ws: WebSocket): void {
+  private onClose(ws: WebSocket, code: number, reason: Buffer): void {
     if (ws !== this.socket) return; // a stale handler for a socket we already replaced
+    const wasReady = this.ready;
+    // Path-identity spec 2026-10-12 §5.2: right after the guard, before the pending rejections, the synthesized pty
+    // exits and `markDown`'s state listeners, so none of them can read the closed connection's node as known.
+    this.identity.invalidate('link-down');
     this.socket = null;
     this.ready = false;
     this.stopHeartbeat();
+    this.clearConnectDeadline();
     this.rejectAllPending(new Error('disconnected'));
     // The agent kills every open pty on disconnect (per its own connection-
     // close handler) — synthesize the same `exit` locally for anything still
@@ -371,6 +582,18 @@ export class FleetClient {
     }
     this.ptyListeners.clear();
     this.markDown();
+    if (wasReady) {
+      if (!this.episode) this.note('lost', `lost (close ${code}); reconnecting`);
+    } else {
+      // No episode is open here only before the first `ready` since start: every later loss of a ready link has
+      // opened one (D-6520).
+      const ep = this.episode
+        ?? this.note('never-ready', `no ready since the server started (close ${code}); retrying`);
+      ep.failedAttempts++;
+      if (code >= 4400 && code <= 4499) {
+        this.note('refused', `agent refused the hello (close ${code} ${refusalReason(reason, this.cfg.token)}); retrying`);
+      }
+    }
     if (this.closed) return;
     this.scheduleReconnect();
   }
@@ -413,6 +636,28 @@ export class FleetClient {
     this.pending.clear();
   }
 
+  /** One wall-clock bound per attempt, from socket creation to `ready` (wave 27, D-6514; #1160's timer, D-6724).
+   *  `onReady`, `onClose` and `close()` clear it, and it re-checks when it fires (D-6517): a ready link is left alone;
+   *  otherwise the CAPTURED socket is terminated, never `this.socket`. `terminate` on CONNECTING aborts the handshake
+   *  and on OPEN destroys the socket; either way `close` follows and `onClose` reconnects with the existing backoff.
+   *  A deadline whose attempt is no longer current says nothing: its line and count belong to the current attempt. */
+  private armConnectDeadline(ws: WebSocket): void {
+    this.clearConnectDeadline();
+    this.connectTimer = setTimeout(() => {
+      this.connectTimer = null;
+      if (ws !== this.socket || this.ready) return; // a stale timer for a socket we already replaced
+      this.note('no-ready', `no ready within ${this.cfg.connectTimeoutMs}ms (${preReadyPhase(ws.readyState)}); `
+        + 'terminating this attempt and retrying');
+      ws.terminate(); // -> 'close' -> onClose -> reconnect (ws emits it for a CONNECTING socket too)
+    }, this.cfg.connectTimeoutMs);
+    this.connectTimer.unref?.();
+  }
+
+  private clearConnectDeadline(): void {
+    if (this.connectTimer) clearTimeout(this.connectTimer);
+    this.connectTimer = null;
+  }
+
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.awaitingPong = false;
@@ -421,6 +666,8 @@ export class FleetClient {
       if (this.awaitingPong) {
         this.missedPongs++;
         if (this.missedPongs >= HEARTBEAT_MISS_LIMIT) {
+          this.note('no-pong', `no pong to ${HEARTBEAT_MISS_LIMIT} heartbeats ${this.cfg.heartbeatMs}ms apart; `
+            + 'terminating the socket and reconnecting');
           this.socket?.terminate(); // -> 'close' -> reconnect
           return;
         }
@@ -437,6 +684,16 @@ export class FleetClient {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
   }
+
+  /** One `ccrc-server: agent link:` line per kind per episode; opens the episode if none is open, and returns it
+   *  (D-6520). */
+  private note(kind: LinkLine, text: string): LinkEpisode {
+    const ep = this.episode ?? (this.episode = { since: Date.now(), logged: new Set(), failedAttempts: 0 });
+    if (ep.logged.has(kind)) return ep;
+    ep.logged.add(kind);
+    console.warn(`ccrc-server: agent link: ${text}`);
+    return ep;
+  }
 }
 
 export interface ConnectedFleet {
@@ -447,6 +704,9 @@ export interface ConnectedFleet {
   io: FleetIO;
   spawnPty: SpawnPty;
   state: FleetState;
+  /** The client's own identity cell (path-identity spec 2026-10-12 §5.2). The composition root hands it to the
+   *  inventory, which publishes into the very cell this client invalidates, and to the caps refresh. */
+  identity: FleetIdentityCell;
   onStateChange(cb: (s: FleetState) => void): () => void;
   close(): Promise<void>;
 }
@@ -460,6 +720,7 @@ export function connectFleet(cfg: RemoteFleetConfig): ConnectedFleet {
     io: createIo(client),
     spawnPty: createSpawnPty(client),
     state: client.state,
+    identity: client.identity,
     onStateChange: (cb) => client.onStateChange(cb),
     close: () => client.close(),
   };

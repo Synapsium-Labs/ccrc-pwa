@@ -1,0 +1,19 @@
+# ccd-carry-dedupe.timer - fires ccd-carry-dedupe.service: first an hour after the timer is armed, then daily.
+# Its first-run anchor is OnActiveSec= for the reason D-1981 states below.
+[Unit]
+Description=Collect the swap carry's stale copies once a day
+[Timer]
+# `OnActiveSec=`, NOT `OnBootSec=`, for ccd-telemetry-keepalive.timer's reason (D-1981): this timer is first armed by a
+# deploy on a box that has been up for days, where a boot-relative elapse point is already in the past and the first
+# pass would start at once, on top of the deploy's own supervisor sweep. `Persistent=` would do nothing: it only
+# affects OnCalendar= timers.
+OnActiveSec=1h
+# Daily. OnUnitActiveSec=, the one cadence key every shipped timer uses and `_timer_period_s` reads (D-7054): for a
+# oneshot it counts from the pass's start, and a pass is bounded at 4 hours (TimeoutStartSec), so the next one never
+# queues behind it. The verb skips every uuid a swap touched in the last 24 hours, so a shorter period finds nothing new.
+OnUnitActiveSec=24h
+# Spread so the pass does not land at the same minute on every box, or on top of another daily oneshot.
+RandomizedDelaySec=1h
+AccuracySec=10min
+[Install]
+WantedBy=timers.target

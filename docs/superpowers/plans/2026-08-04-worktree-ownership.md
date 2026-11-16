@@ -666,7 +666,7 @@ with `archiveNow`/`restoreNow` copying `restart`'s try/catch shape and toasting 
 
 **Files:** Modify `server/src/lifecycle.ts:28–56`; Test `server/test/lifecycle.test.ts` (the pinned expected array at :200–205 updates).
 
-- [ ] **Step 1: Failing tests**: (a) a dir under the projects root whose `.git` is a FILE (write `gitdir: /x` into it) is skipped; (b) a plain non-git dir (the four legit fixtures' shape: cctest, cab-batch…) is NOT skipped; (c) a registry record whose workdir readdir-probes as a linked worktree is skipped by the union loop; (d) a registry record with a MISSING workdir is still listed (the :213 test's pinned behavior, restated in the new world).
+- [ ] **Step 1: Failing tests**: (a) a dir under the projects root whose `.git` is a FILE (write `gitdir: /x` into it) is skipped; (b) a plain non-git dir (the four legit fixtures' shape: cctest, project-r…) is NOT skipped; (c) a registry record whose workdir readdir-probes as a linked worktree is skipped by the union loop; (d) a registry record with a MISSING workdir is still listed (the :213 test's pinned behavior, restated in the new world).
 - [ ] **Step 2: Run, expect FAIL.**
 - [ ] **Step 3: Implement** — a shared probe inside the module:
 

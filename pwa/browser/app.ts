@@ -1,0 +1,609 @@
+// The real-browser leg's app half (foundations follow-up F-e; D-5570, D-5576): the production PWA, built once per run by
+// the app's own `vite build` (`globalSetup.ts`), served from loopback, and opened in a Chrome context whose `/api` and `/ws` answer from a
+// fixture. No server, no ccd, no tmux: a row-fit measure needs the shipped markup and the shipped stylesheet laid out
+// by a real engine, which jsdom cannot do, and nothing else. `harness.ts` stays the docs rows' three things; this is
+// the second thing a browser row can need, so it is a module of its own.
+import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import path from 'node:path';
+import { performance } from 'node:perf_hooks';
+import type { Browser, BrowserContext, Page, WebSocketRoute } from 'playwright-core';
+import { inject } from 'vitest';
+import { SKIN_STORAGE_KEY, THEME_STORAGE_KEY } from '@ccrc/ui';
+import type { FleetSession } from '../../shared/api';
+import { fleetSession } from '../test/fleetFixture';
+import { DIST_KEY } from './dist';
+
+/** The run's one production build (`browser/globalSetup.ts`, the browser config's global setup), sealed read-only.
+ *  Every browser file serves it; none builds its own or removes it. Throws when the run has none, as under a config
+ *  without that setup: a red file, never one that quietly builds its own. */
+export function sharedDist(): string {
+  const dist = inject(DIST_KEY) as string | undefined;
+  if (typeof dist !== 'string' || !existsSync(path.join(dist, 'index.html'))) {
+    throw new Error(`no shared PWA build for this run (${DIST_KEY} is ${JSON.stringify(dist)}): run the browser files `
+      + 'under vitest.browser.config.ts, whose global setup (browser/globalSetup.ts) builds it once');
+  }
+  return dist;
+}
+
+const TYPES: Readonly<Record<string, string>> = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
+  '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json',
+};
+
+export interface DistServer {
+  /** `http://127.0.0.1:<port>`. */
+  readonly origin: string;
+  close(): Promise<void>;
+}
+
+/** Serve `dist` on an ephemeral loopback port. A path that is not a file answers `index.html`, as the server's own
+ *  SPA fallback does, so a deep link such as `/s/<id>` boots the app. `/api` and `/ws` never reach it: the context
+ *  routes them (`openApp`). */
+export async function serveDist(dist: string): Promise<DistServer> {
+  const root = path.resolve(dist);
+  const server: Server = createServer((req, res) => {
+    const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://dist.invalid').pathname);
+    let file = path.resolve(root, `.${pathname}`);
+    if (!file.startsWith(root + path.sep) || !existsSync(file) || statSync(file).isDirectory()) file = path.join(root, 'index.html');
+    res.writeHead(200, { 'content-type': TYPES[path.extname(file)] ?? 'application/octet-stream' });
+    createReadStream(file).pipe(res);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+  return {
+    origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    close: () => new Promise((resolve) => {
+      server.closeAllConnections();
+      server.close(() => resolve());
+    }),
+  };
+}
+
+/** What a session's timers read (`GET /api/sessions/:id/timers`) answers when the fixture names none: the server's own
+ *  answer for a session with no pending timers. The section reads `{}` as an unread read and says so (Overlord W1a,
+ *  timers PR E), so `{}` would put a "could not read" card under every session page's transcript; this is the answer of
+ *  a real session with no timers, which takes no height (ask 417). A row that wants another answer names the path. */
+export const NO_TIMERS_ANSWER = { ok: true, timers: [] } as const;
+const SESSION_TIMERS_PATH = /^\/api\/sessions\/[^/]+\/timers$/;
+
+/** The answer for a path the fixture does not name: `NO_TIMERS_ANSWER` for a session's timers read, else `{}`. */
+const unroutedAnswer = (pathname: string): unknown => (SESSION_TIMERS_PATH.test(pathname) ? NO_TIMERS_ANSWER : {});
+
+/** What the app's `/api` and `/ws` answer. `api` is keyed by pathname; any other `/api` path answers `{}`, which every
+ *  poller the shell mounts reads as "nothing to say", except a session's timers read (`NO_TIMERS_ANSWER`). `/ws/fleet`
+ *  sends each of `fleetFrames` once it opens; every
+ *  other socket opens and stays silent, unless `socketFrames` names its pathname: each frame listed there is sent once the
+ *  socket opens (a session's backlog, for `/ws/session/<id>`). */
+export interface AppFixture {
+  readonly api: Readonly<Record<string, unknown>>;
+  readonly fleetFrames: readonly unknown[];
+  readonly socketFrames?: Readonly<Record<string, readonly unknown[]>>;
+}
+
+export interface AppView {
+  readonly width: number;
+  readonly skin: string;
+  readonly theme: string;
+  /** A touch screen (a coarse pointer) at a desk width too; below 900 there always is one. */
+  readonly touch?: boolean;
+}
+
+export interface OpenedApp {
+  readonly ctx: BrowserContext;
+  readonly page: Page;
+  /** Every uncaught page error, in order. */
+  readonly errors: string[];
+  /** Send `frame` (as JSON) to the NEWEST socket opened on `path` (a pathname such as `/ws/fleet`) and throw when none
+   *  is open. Test code only: a frame-cost measure drives the app's own socket exactly as the server would. */
+  send(path: string, frame: unknown): void;
+  /** The harness's own order log (R104): every `/api` request's interception and fulfilment, and the meter's reads,
+   *  in one monotonic sequence on the test side. Test code only; the page never sees it. */
+  readonly events: readonly HarnessEvent[];
+  /** Call `listener` with each new event, synchronously as it is logged; returns the unsubscribe. A listener runs
+   *  inside the `/api` handler, so it must not throw: a throw there leaves that request unanswered. */
+  watch(listener: (event: HarnessEvent) => void): () => void;
+  /** Log a meter read, with the number of `/api` fulfilments still in flight at that moment. */
+  mark(kind: 'readA' | 'readB'): void;
+  /** Hold `path`'s fulfilment until `gate` settles: it is in flight (logged `fulfil-start`) from the moment its turn
+   *  comes until then. A self-test's controlled boundary, never a gate case's. */
+  answerAfter(path: string, gate: Promise<void>): void;
+  /** Park every `/api` request intercepted from now on, unanswered, until a flush (R104: `frameCost`'s drains). */
+  holdApi(): void;
+  /** Answer every parked request, in arrival order, and keep parking new ones. Resolves once each released request
+   *  has logged its `fulfil-start`, so the in-flight count is current when it returns. */
+  flushApi(): Promise<void>;
+  /** Wait until no fulfilment is in flight, or throw `drain-inflight-timeout` (naming the paths) after `capMs`. */
+  settleApi(capMs: number): Promise<void>;
+  /** Stop parking and answer whatever is parked. Waits for nothing, so a failed attempt's cleanup cannot hang. */
+  releaseApi(): void;
+  /** Take the network away, as a dropped link does: from now on every `/api` request fails as a disconnected one
+   *  (`internetdisconnected`) and every socket closes, the ones already open now and each new one as it opens. The
+   *  page itself was already served, so the app stays up on what it holds: an offline cell's shape. Test code only. */
+  cut(): void;
+  /** Hold every socket attempt made from now on while the link is cut in CONNECTING, as an attempt to an unreachable
+   *  host stays on a real network: its routed close waits until the returned release is called (Playwright opens a
+   *  routed socket only once its handler has returned). An attempt made before the hold closes at once, as `cut()`'s
+   *  do. Test code only. */
+  holdAttempts(): () => void;
+}
+
+/** One entry of `OpenedApp.events`. `fulfil-start` is logged when a request's answer is due (it then counts as in
+ *  flight), before `route.fulfill` is called; `fulfil-done` once that call has settled. */
+export type HarnessEvent =
+  | { readonly seq: number; readonly kind: 'intercept' | 'fulfil-start' | 'fulfil-done'; readonly path: string }
+  | { readonly seq: number; readonly kind: 'readA' | 'readB' | 'drainWait'; readonly inFlight: number }
+  | { readonly seq: number; readonly kind: 'flush' };
+type Unsequenced<E> = E extends HarnessEvent ? Omit<E, 'seq'> : never;
+
+/** A context at `view.width` (844 tall below 900, as a phone; 900 above), with a touch screen below 900 or when
+ *  `view.touch` asks, the skin and
+ *  the theme stored before the first paint (the keys the app itself reads), service workers blocked, and the fixture
+ *  answering `/api` and `/ws`. The page is not navigated yet. */
+export async function openApp(browser: Browser, view: AppView, fixture: AppFixture): Promise<OpenedApp> {
+  const phone = view.width < 900;
+  const ctx = await browser.newContext({
+    viewport: { width: view.width, height: phone ? 844 : 900 }, hasTouch: phone || view.touch === true, serviceWorkers: 'block',
+  });
+  await ctx.addInitScript(([skinKey, skin, themeKey, theme]) => {
+    try {
+      localStorage.setItem(skinKey, skin);
+      localStorage.setItem(themeKey, theme);
+    } catch { /* a context without storage boots the defaults; the measure then says which skin it drew */ }
+  }, [SKIN_STORAGE_KEY, view.skin, THEME_STORAGE_KEY, view.theme] as const);
+  const events: HarnessEvent[] = [];
+  const listeners = new Set<(event: HarnessEvent) => void>();
+  const log = (entry: Unsequenced<HarnessEvent>): void => {
+    const event = { ...entry, seq: events.length } as HarnessEvent;
+    events.push(event);
+    for (const listener of listeners) listener(event);
+  };
+  const inFlight = new Map<number, string>();
+  const gates = new Map<string, Promise<void>>();
+  // `null` until `holdApi`: then each request waits here for its turn (a flush or the release).
+  let parked: { readonly turn: () => void; readonly started: Promise<void> }[] | null = null;
+  const settled = new Set<() => void>();
+  // `cut()`'s switch: once set, nothing answers again for this context.
+  let offline = false;
+  // `holdAttempts()`'s gate: while set, a socket opened offline waits on it before its close.
+  let attemptGate: Promise<void> | null = null;
+  await ctx.route('**/api/**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    log({ kind: 'intercept', path: pathname });
+    if (offline) { await route.abort('internetdisconnected'); return; }
+    const body = Object.hasOwn(fixture.api, pathname) ? fixture.api[pathname] : unroutedAnswer(pathname);
+    let begun = (): void => undefined;
+    if (parked !== null) {
+      const started = new Promise<void>((done) => { begun = done; });
+      await new Promise<void>((turn) => { parked!.push({ turn, started }); });
+    }
+    const id = events.length;
+    inFlight.set(id, pathname);
+    log({ kind: 'fulfil-start', path: pathname });
+    begun();
+    try {
+      await gates.get(pathname);
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    } finally {
+      inFlight.delete(id);
+      log({ kind: 'fulfil-done', path: pathname });
+      for (const check of [...settled]) check();
+    }
+  });
+  // Every routed socket, per pathname, in the order it opened: `send` talks to the newest one, and a socket that closed
+  // (a reconnect replaced it) leaves the list.
+  const sockets = new Map<string, WebSocketRoute[]>();
+  await ctx.routeWebSocket(/\/ws\//, (ws) => {
+    const pathname = new URL(ws.url()).pathname;
+    if (offline) {
+      if (attemptGate === null) { void ws.close(); return; }
+      return attemptGate.then(() => { void ws.close(); });
+    }
+    sockets.set(pathname, [...(sockets.get(pathname) ?? []), ws]);
+    ws.onClose(() => { sockets.set(pathname, (sockets.get(pathname) ?? []).filter((x) => x !== ws)); });
+    const frames = pathname === '/ws/fleet' ? fixture.fleetFrames : (fixture.socketFrames?.[pathname] ?? []);
+    for (const frame of frames) ws.send(JSON.stringify(frame));
+  });
+  const page = await ctx.newPage();
+  const errors: string[] = [];
+  page.on('pageerror', (e) => { errors.push(e.message); });
+  const send = (path: string, frame: unknown): void => {
+    const open = sockets.get(path) ?? [];
+    const newest = open.at(-1);
+    if (newest === undefined) throw new Error(`no socket is open on ${path} (open: ${[...sockets.keys()].join(', ') || 'none'})`);
+    newest.send(JSON.stringify(frame));
+  };
+  return {
+    ctx, page, errors, send, events,
+    watch: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    mark: (kind) => { log({ kind, inFlight: inFlight.size }); },
+    answerAfter: (path, gate) => { gates.set(path, gate); },
+    holdApi: () => { parked ??= []; },
+    flushApi: async () => {
+      const due = parked?.splice(0) ?? [];
+      log({ kind: 'flush' });
+      for (const entry of due) entry.turn();
+      await Promise.all(due.map((entry) => entry.started));
+    },
+    settleApi: async (capMs) => {
+      if (inFlight.size === 0) return;
+      log({ kind: 'drainWait', inFlight: inFlight.size });
+      await new Promise<void>((done, fail) => {
+        const check = (): void => {
+          if (inFlight.size > 0) return;
+          clearTimeout(timer);
+          settled.delete(check);
+          done();
+        };
+        const timer = setTimeout(() => {
+          settled.delete(check);
+          fail(new Error(`drain-inflight-timeout: ${[...inFlight.values()].join(', ')} still in flight after ${capMs} ms`));
+        }, capMs);
+        settled.add(check);
+        check();
+      });
+    },
+    cut: () => {
+      offline = true;
+      for (const open of sockets.values()) for (const ws of open) void ws.close();
+    },
+    holdAttempts: () => {
+      let release = (): void => undefined;
+      attemptGate = new Promise<void>((done) => { release = done; });
+      return () => { attemptGate = null; release(); };
+    },
+    releaseApi: () => {
+      const due = parked ?? [];
+      parked = null;
+      if (due.length > 0) log({ kind: 'flush' });
+      for (const entry of due) entry.turn();
+    },
+  };
+}
+
+// ---- frame cost: the fleet fixture and the meter (D-6438, C6; C7 and C9 reuse them) --------------------------------
+// Test code only. A fleet frame is the whole session list on every change, so what a frame COSTS is the main thread's
+// time between the socket delivering it and the page being idle again. `fleetFixture` builds a deterministic fleet of
+// C0's shape (15 projects, 17 lanes, neutral names), `fleetFrameAt` returns the frame after `k` steps of about nine
+// rows changing each, and `frameCost` sends frames to the app's own socket and reads Chrome's TaskDuration and
+// ScriptDuration around each one.
+
+/** The page clock the cost and render cases fix, and the base of every time field in the fixture (epoch ms). */
+export const FIXTURE_NOW_MS = 1_792_362_479_000;
+export const FIXTURE_PROJECTS = 15;
+export const FIXTURE_LANES = 17;
+/** How many rows one step of `fleetFrameAt` changes. */
+export const ROWS_PER_STEP = 9;
+
+const letter = (i: number): string => String.fromCharCode(97 + i);
+const HUE_CYCLE = ['cyan', 'violet', 'blue', 'magenta', 'amber', 'green'] as const;
+
+export interface FleetFixtureData {
+  readonly sessions: readonly FleetSession[];
+  /** `/api/accounts`'s `roster`: 17 entries, `lane-a` ... `lane-q`. */
+  readonly roster: readonly object[];
+  /** `/api/accounts`'s `accounts`: one usage reading per lane. */
+  readonly usage: readonly object[];
+  /** `/api/projects`'s rows: `project-a` ... `project-o`. */
+  readonly projects: readonly { readonly name: string; readonly workdir: string }[];
+}
+
+/** `n` workspace rows spread over 15 projects and 17 lanes, in a mix of buckets (working, idle, a few asking). Ids are
+ *  `ws-<i>`; the same `n` always gives the same rows. */
+export function fleetFixture(n: number): FleetFixtureData {
+  const projects = Array.from({ length: FIXTURE_PROJECTS }, (_, i) => ({ name: `project-${letter(i)}`, workdir: `/w/project-${letter(i)}` }));
+  const lanes = Array.from({ length: FIXTURE_LANES }, (_, i) => `lane-${letter(i)}`);
+  const roster = lanes.map((id, i) => ({ id, label: id, hue: HUE_CYCLE[i % HUE_CYCLE.length]!, pool: null, homeAble: true, hidden: false }));
+  const usage = lanes.map((wrapper, i) => ({
+    wrapper, five: 10 + ((i * 7) % 80), seven: 20 + ((i * 11) % 70), ts: FIXTURE_NOW_MS / 1000,
+    fiveResetAt: FIXTURE_NOW_MS / 1000 + 7_800, sevenResetAt: FIXTURE_NOW_MS / 1000 + 259_800,
+    fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false,
+  }));
+  const sessions = Array.from({ length: n }, (_, i): FleetSession => {
+    const project = projects[i % FIXTURE_PROJECTS]!.name;
+    const lane = lanes[i % FIXTURE_LANES]!;
+    const kind = i % 6; // 0,3 working; 1,2,4 idle; 5 asking
+    const working = kind === 0 || kind === 3;
+    return fleetSession({
+      id: `ws-${i}`, wrapper: lane, home: lane, project, workdir: `/w/${project}/ws-${i}`, workspace: `ws-${i}`,
+      name: `task ${i}`, branch: `ws/task-${i}`, status: working ? 'busy' : 'idle', bucket: kind === 5 ? 'attention' : working ? 'working' : 'idle',
+      statusUpdatedAt: FIXTURE_NOW_MS - (60 + i * 37) * 1000, ctxPct: (i * 13) % 90, model: 'Model A (1M context)', effort: 'high',
+    });
+  });
+  return { sessions, roster, usage, projects };
+}
+
+/** The `AppFixture.api` entries a fleet of `data` needs, over any extra the case adds. */
+export function fleetApi(data: FleetFixtureData, extra: Readonly<Record<string, unknown>> = {}): Record<string, unknown> {
+  return {
+    '/api/accounts': { accounts: data.usage, projected: null, roster: data.roster },
+    '/api/projects': { roots: ['/w'], projects: data.projects },
+    '/api/runs': [], '/api/claims': [],
+    ...extra,
+  };
+}
+
+/** The `/ws/fleet` frame that carries `sessions`. */
+export const fleetFrame = (sessions: readonly FleetSession[]): { type: 'fleet'; sessions: readonly FleetSession[] } => ({ type: 'fleet', sessions });
+
+/** The fleet after `k` steps (k = 0 is `base`). Step j changes rows `(j-1)*9 ... (j-1)*9+8` (mod n): a working row goes
+ *  idle and an idle one works, an asking one stays asking, and every touched row moves its `statusUpdatedAt` and its
+ *  `ctxPct`. Cumulative, so each frame differs from the one before it in exactly those nine rows. */
+export function fleetFrameAt(base: readonly FleetSession[], k: number): FleetSession[] {
+  const rows = base.map((s) => ({ ...s }));
+  const n = rows.length;
+  for (let j = 1; j <= k; j += 1) {
+    for (let r = 0; r < ROWS_PER_STEP; r += 1) {
+      const row = rows[((j - 1) * ROWS_PER_STEP + r) % n]!;
+      if (row.bucket === 'working') { row.bucket = 'idle'; row.status = 'idle'; }
+      else if (row.bucket === 'idle') { row.bucket = 'working'; row.status = 'busy'; }
+      row.statusUpdatedAt = FIXTURE_NOW_MS - 30_000 + j * 1000;
+      row.ctxPct = ((row.ctxPct ?? 0) + 7 + j) % 100;
+    }
+  }
+  return rows;
+}
+
+/** About `count` neutral transcript events for a session's backlog: user text, assistant text with a code block, and
+ *  tool calls with their results, in a fixed rotation. */
+export function longTranscript(count: number): object[] {
+  const ts = new Date(FIXTURE_NOW_MS - 3_600_000).toISOString();
+  const events: object[] = [];
+  let t = 0;
+  while (events.length < count) {
+    t += 1;
+    events.push({ kind: 'user', uuid: `q${t}`, ts, text: `Step ${t}: please check the module and report what you find.` });
+    events.push({ kind: 'assistant', uuid: `a${t}`, ts, text:
+      `Looking at step ${t}. The helper returns early when the list is empty:\n\n\`\`\`ts\nexport function pick(items: string[]): string | null {\n  return items.length === 0 ? null : items[0] ?? null;\n}\n\`\`\`\n\nI will read the file, then run the checks.` });
+    events.push({ kind: 'tool_use', uuid: `u${t}`, ts, toolId: `t${t}`, name: t % 2 === 0 ? 'Read' : 'Bash',
+      input: JSON.stringify(t % 2 === 0 ? { file_path: `/w/project-a/src/module-${t}.ts` } : { command: `npm run check -- --filter module-${t}` }) });
+    events.push({ kind: 'tool_result', ts, toolId: `t${t}`, text: `checked module-${t}: 12 passed`, isError: false });
+    events.push({ kind: 'assistant', uuid: `b${t}`, ts, text: `Step ${t} is clean: nothing to change.` });
+  }
+  return events.slice(0, count);
+}
+
+/** The frame a session socket sends on open. */
+export const backlogFrame = (events: readonly object[]): object => ({
+  type: 'backlog', uuid: 'u-1', events, offset: 1, file: '/w/t.jsonl', missing: false, searchComplete: true, fileMeasured: true,
+});
+
+export interface Cost { readonly taskMs: number; readonly scriptMs: number }
+
+/** What React rendered over one window, read from the page's render counter (`countRenders`): `commits` is how many
+ *  times React committed, `rendered` how many component renders those commits performed (function, class, forwardRef
+ *  and simple-memo fibers that did work, the test DevTools itself applies). Counts, not milliseconds, so a slow or
+ *  loaded runner cannot move them: a frame either renders a component or it does not. */
+export interface Renders { readonly commits: number; readonly rendered: number }
+
+/** Install the render counter on `ctx`: a minimal `__REACT_DEVTOOLS_GLOBAL_HOOK__` defined before the app's first
+ *  script, which production React injects into (react-dom reads the hook at module load, and calls
+ *  `onCommitFiberRoot` after every commit in a production build too). On each commit it walks the committed tree the
+ *  way DevTools does: a subtree whose child list is the one the previous commit left is skipped (it bailed out, nothing
+ *  in it rendered), and a component fiber counts as rendered when it is new or carries React's `PerformedWork` flag
+ *  (1). Call it after `openApp` and before `page.goto`; `frameCost` reads it when `options.renders` is set. Test code
+ *  only: the page's own code never reads it. */
+export async function countRenders(ctx: BrowserContext): Promise<void> {
+  await ctx.addInitScript(() => {
+    interface Fiber { tag: number; flags: number; child: Fiber | null; sibling: Fiber | null; alternate: Fiber | null }
+    const tally = { commits: 0, rendered: 0 };
+    // FunctionComponent 0, ClassComponent 1, ForwardRef 11, SimpleMemoComponent 15. MemoComponent (14) is left out: its
+    // inner component is a fiber of its own and counts there.
+    const COMPONENT = new Set([0, 1, 11, 15]);
+    const PERFORMED_WORK = 1;
+    const onCommitFiberRoot = (_id: number, root: { current: Fiber }): void => {
+      tally.commits += 1;
+      const stack: Fiber[] = [root.current];
+      while (stack.length > 0) {
+        const fiber = stack.pop()!;
+        const prev = fiber.alternate;
+        if (COMPONENT.has(fiber.tag) && (prev === null || (fiber.flags & PERFORMED_WORK) === PERFORMED_WORK)) tally.rendered += 1;
+        if (prev !== null && fiber.child === prev.child) continue;
+        for (let child = fiber.child; child !== null; child = child.sibling) stack.push(child);
+      }
+    };
+    Object.assign(window, {
+      __ccrcRenders: tally,
+      __REACT_DEVTOOLS_GLOBAL_HOOK__: {
+        supportsFiber: true, isDisabled: false, renderers: new Map(), inject: (): number => 1,
+        onCommitFiberRoot, onCommitFiberUnmount: (): void => undefined, onPostCommitFiberRoot: (): void => undefined,
+        setStrictMode: (): void => undefined, checkDCE: (): void => undefined,
+      },
+    });
+  });
+}
+export interface FrameCost {
+  /** One window with no frame sent: what the page costs doing nothing. A window runs from its first Chrome read to its
+   *  second (see `frameCost`), so it is at least `gapMs` long and, in a returned result, at most `gapMs + SPAN_SLACK_MS`. */
+  readonly idle: Cost;
+  /** One entry per frame: the main thread's TaskDuration and ScriptDuration over that frame's window, which starts
+   *  at its first Chrome read and lasts at least `gapMs` (`spans` has the measured length). */
+  readonly frames: readonly Cost[];
+  readonly median: Cost;
+  readonly mean: Cost;
+  /** Per window, the idle one first: how many `/api` requests the harness intercepted between its two reads. */
+  readonly deferred: readonly number[];
+  /** Per window, the idle one first: whether the drain before it saw the main thread go quiet. */
+  readonly drainQuiet: readonly boolean[];
+  /** Per window, the idle one first: its wall length in ms on the test side, from just before the first read to just
+   *  after the second. At least `gapMs`, and at most `gapMs + SPAN_SLACK_MS` in a returned result: a longer window fails the
+   *  attempt (`window-overrun`), and is only in `FrameCostRecord`. */
+  readonly spans: readonly number[];
+  /** Per window, the idle one first, when `options.renders` is set: what React rendered between its two reads (the
+   *  counter is read just outside the Chrome reads, so the meter's own evaluate is not in the CDP figures). */
+  readonly renders?: readonly Renders[];
+}
+
+/** What `frameCost` has measured so far, filled in place, one entry per COMPLETED window (the idle one first), so a
+ *  caller still has it when the attempt fails: a window whose drain or reads fail is not in it. When the attempt fails
+ *  with `window-overrun`, the last entry is the overrun window, whose `spanMs` is past `gapMs + SPAN_SLACK_MS`. The caller
+ *  creates it (`{ windows: [] }`). */
+export interface FrameCostRecord {
+  readonly windows: {
+    readonly cost: Cost; readonly spanMs: number; readonly deferred: number; readonly drainQuiet: boolean;
+    /** The wall clock (epoch ms) at the window's start, to line a window up with what the host measured then. */
+    readonly atMs: number;
+    /** What React rendered in the window, when `options.renders` is set. */
+    readonly renders?: Renders;
+  }[];
+}
+
+/** `frameCost`'s options. `during` runs inside each window, after the frame is sent (the idle window sends none) and
+ *  before the wait, with the frame's index, or -1 for the idle window; `quiet: false` skips the drain's quiet wait. Both
+ *  are the self-test's, never a gate case's. `record` is filled window by window (`FrameCostRecord`, whose last entry of
+ *  a `window-overrun` attempt is the overrun window); a gate case passes one and keeps it whether the attempt passes or
+ *  fails. */
+export interface FrameCostOptions {
+  readonly during?: (index: number) => Promise<void>;
+  readonly quiet?: boolean;
+  readonly record?: FrameCostRecord;
+  /** Read the page's render counter (`countRenders`, installed before the page loaded) around each window. */
+  readonly renders?: boolean;
+}
+
+export const medianOf = (xs: readonly number[]): number => {
+  const v = [...xs].sort((a, b) => a - b);
+  if (v.length === 0) return 0;
+  return v.length % 2 === 1 ? v[(v.length - 1) / 2]! : (v[v.length / 2 - 1]! + v[v.length / 2]!) / 2;
+};
+const meanOf = (xs: readonly number[]): number => (xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length);
+
+/** The median and the mean of `costs`, each of the two figures on its own. */
+export function summarize(costs: readonly Cost[]): { readonly median: Cost; readonly mean: Cost } {
+  return {
+    median: { taskMs: medianOf(costs.map((c) => c.taskMs)), scriptMs: medianOf(costs.map((c) => c.scriptMs)) },
+    mean: { taskMs: meanOf(costs.map((c) => c.taskMs)), scriptMs: meanOf(costs.map((c) => c.scriptMs)) },
+  };
+}
+
+/** The drain's caps (R104). An in-flight fulfilment past `INFLIGHT_CAP_MS` fails the attempt; a quiet wait past
+ *  `QUIET_CAP_MS` is only recorded (`FrameCost.drainQuiet`). */
+export const INFLIGHT_CAP_MS = 5000;
+export const QUIET_CAP_MS = 3000;
+/** How far past its `gapMs` a window's measured span may run before the attempt fails (`window-overrun`). A window is
+ *  `gapMs` of waiting plus the first read's round trip, the frame's send, `during` and the second read. The 132 windows
+ *  of two gate runs on a loaded box (C6, 2026-10-27) ran 4 to 56 ms over a 2 s gap; one of those runs had a gate case
+ *  time out.
+ *  TaskDuration and ScriptDuration are wall-clock figures. A window that spans past this slack is refused: its figures
+ *  are not taken as the frame's cost, and the attempt fails with `window-overrun`. */
+export const SPAN_SLACK_MS = 1000;
+const QUIET_STEP_MS = 100;
+const QUIET_STEPS = 3;
+const QUIET_TASK_MS = 1;
+
+/** Send each of `frames` to the newest socket on `path`, `gapMs` apart, and read Chrome's `TaskDuration` and
+ *  `ScriptDuration` (`Performance.getMetrics`, seconds) before and after each window. A window runs from its first
+ *  read to its second: the first read's round trip, the frame's send, `during`, the wait of `gapMs` and the second
+ *  read's round trip. That is at least `gapMs`, with no upper bound of its own (spans of seconds were measured on a
+ *  loaded box), so `FrameCost.spans` records each window's measured length and a window past `gapMs + SPAN_SLACK_MS` fails the attempt (below). One idle window with no frame is
+ *  measured first, on the page as it stands before `frames`: it is not matched to a page that has taken them (an
+ *  identical frame re-sent after many changes is measured against this one idle window). Nothing runs in the page: the meter is a CDP session on the test side.
+ *
+ *  The fixture's `/api` answers are deferred out of the windows (the operator's R104 contract): every request is
+ *  parked from the start, and a DRAIN before each window (the idle one too) answers the parked ones, waits for their
+ *  fulfilments (capped: `drain-inflight-timeout` fails the attempt), then waits for a quiet main thread (capped, and
+ *  only recorded). So no answer of this handler is FULFILLED inside a window (a route a test adds on the context
+ *  itself answers outside it; the frame-cost gates add none). That is a mitigation, not an isolation: the page's
+ *  parsing and rendering of an answer, and its timers, can still run into the next window, and the app's pollers keep
+ *  their own times (a poll's `fetch` call itself lands in whichever window it falls in). The `finally` releases
+ *  whatever is still parked and waits for nothing.
+ *
+ *  The attempt has two named failures of the harness, and neither is a cost red. `drain-inflight-timeout`: a fulfilment
+ *  did not settle within `INFLIGHT_CAP_MS`. `window-overrun`: a window's measured span passed `gapMs + SPAN_SLACK_MS`
+ *  (the window is `idle` or the frame's index, and is in `options.record` before the attempt fails). The cost figures of
+ *  a window that spanned that long are not taken as the frame's cost, so the attempt fails and returns none. A window
+ *  is checked once its second read returns: one that stalls inside its wait or its reads is bounded only by the
+ *  caller's own timeout. */
+export async function frameCost(
+  app: OpenedApp, path: string, frames: readonly unknown[], gapMs: number, options: FrameCostOptions = {},
+): Promise<FrameCost> {
+  const cdp = await app.ctx.newCDPSession(app.page);
+  const deferred: number[] = [];
+  const drainQuiet: boolean[] = [];
+  const spans: number[] = [];
+  const renders: Renders[] = [];
+  app.holdApi();
+  try {
+    await cdp.send('Performance.enable');
+    const read = async (): Promise<Cost> => {
+      const { metrics } = await cdp.send('Performance.getMetrics');
+      const get = (name: string): number => metrics.find((m) => m.name === name)?.value ?? Number.NaN;
+      return { taskMs: get('TaskDuration') * 1000, scriptMs: get('ScriptDuration') * 1000 };
+    };
+    const counted = async (): Promise<Renders | null> => {
+      if (options.renders !== true) return null;
+      const now = await app.page.evaluate(() => (window as { __ccrcRenders?: Renders }).__ccrcRenders);
+      if (now === undefined) throw new Error('renders: the page has no render counter (call countRenders before page.goto)');
+      return { commits: now.commits, rendered: now.rendered };
+    };
+    // The main thread is quiet when TaskDuration grows by less than QUIET_TASK_MS over QUIET_STEPS reads
+    // QUIET_STEP_MS apart; the wait gives up at QUIET_CAP_MS. A disclosure, not a proof that the page is done.
+    const quiet = async (): Promise<boolean> => {
+      const end = Date.now() + QUIET_CAP_MS;
+      let last = (await read()).taskMs;
+      for (let still = 0; Date.now() < end; ) {
+        await app.page.waitForTimeout(QUIET_STEP_MS);
+        const now = (await read()).taskMs;
+        still = now - last < QUIET_TASK_MS ? still + 1 : 0;
+        last = now;
+        if (still === QUIET_STEPS) return true;
+      }
+      return false;
+    };
+    const drain = async (): Promise<boolean> => {
+      await app.flushApi();
+      await app.settleApi(INFLIGHT_CAP_MS);
+      return options.quiet === false ? false : quiet();
+    };
+    const window = async (frame: { readonly frame: unknown; readonly index: number } | null): Promise<Cost> => {
+      const wentQuiet = await drain();
+      drainQuiet.push(wentQuiet);
+      const began = performance.now();
+      const atMs = Date.now();
+      const ra = await counted();
+      const a = await read();
+      app.mark('readA');
+      const from = app.events.length;
+      if (frame !== null) app.send(path, frame.frame);
+      await options.during?.(frame === null ? -1 : frame.index);
+      await app.page.waitForTimeout(gapMs);
+      const b = await read();
+      const rb = await counted();
+      const spanMs = performance.now() - began;
+      app.mark('readB');
+      const intercepted = app.events.slice(from).filter((e) => e.kind === 'intercept').length;
+      deferred.push(intercepted);
+      spans.push(spanMs);
+      const cost = { taskMs: b.taskMs - a.taskMs, scriptMs: b.scriptMs - a.scriptMs };
+      const rendered = ra === null || rb === null ? undefined : { commits: rb.commits - ra.commits, rendered: rb.rendered - ra.rendered };
+      if (rendered !== undefined) renders.push(rendered);
+      options.record?.windows.push({ cost, spanMs, deferred: intercepted, drainQuiet: wentQuiet, atMs, ...(rendered === undefined ? {} : { renders: rendered }) });
+      // The window stays in the record. Past the slack its figures are not taken as the frame's cost, so the attempt
+      // fails here: no retry, no skip, no filter. The finally still releases whatever is parked.
+      if (spanMs > gapMs + SPAN_SLACK_MS) {
+        throw new Error(`window-overrun: window ${frame === null ? 'idle' : frame.index} spanned ${spanMs.toFixed(0)} ms, past ${gapMs} ms + ${SPAN_SLACK_MS} ms`);
+      }
+      return cost;
+    };
+    const idle = await window(null);
+    const costs: Cost[] = [];
+    for (const [index, frame] of frames.entries()) costs.push(await window({ frame, index }));
+    return { idle, frames: costs, ...summarize(costs), deferred, drainQuiet, spans, ...(options.renders === true ? { renders } : {}) };
+  } finally {
+    app.releaseApi();
+    await cdp.detach().catch(() => { /* the context closing first is fine */ });
+  }
+}
+
+/** Store the lanes strip as expanded on this context's device (`ccrc-accounts-strip` = `'expanded'`, the one word
+ *  `stripExpanded.ts` reads as "show every lane"), so a case that counts or places every card keeps seeing all of them
+ *  now that the strip folds by default. Call it after `openApp` and before `page.goto`; each case opens a fresh context,
+ *  so the seed never leaks into the next. */
+export async function seedStripExpanded(ctx: BrowserContext): Promise<void> {
+  await ctx.addInitScript(() => {
+    try { localStorage.setItem('ccrc-accounts-strip', 'expanded'); } catch { /* storage refused: the strip then folds */ }
+  });
+}

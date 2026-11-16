@@ -1,0 +1,313 @@
+// Settings › Automation › Test box (test box plan TB10, D-7412; spec 2026-10-28 §2.7's width table), in a real Chrome
+// over the production build, at phone, laptop and wide widths. `src/fleet/TestBoxSection.test.tsx` holds the card's
+// behaviour in jsdom; this file holds what only an engine can say, row by row of the spec's table:
+//   * phone: one column, the state above the summary, Bring tools up to date as wide as the card, and the versions,
+//     the counts, the pristine installs and the failed keys hidden until the disclosure opens;
+//   * laptop: the switch and the state on one line, the button at the state line's end, three cells in one row, the
+//     versions table open under them;
+//   * wide: the versions and pristine-installs tables open side by side.
+// At every width nothing in the card or on the page overflows sideways, the live probes line (D-8290) sits under the
+// cells inside the card, and the switch posts `{on}` only.
+//
+// The app answers from a fixture (`browser/app.ts`): no server, no ccd, no test box. Run: `( cd pwa &&
+// CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
+// browser/testbox-card.browser.test.ts )`. `CCRC_SHOTS=<a directory>` keeps one picture per width.
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import path from 'node:path';
+import { chromium, type Browser } from 'playwright-core';
+import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
+import { TESTBOX_PROTO, type StatusAnswer } from '../../shared/testbox';
+import { TESTBOX_TEXT } from '../src/fleet/TestBoxSection';
+import { TESTBOX_CONNECT_TEXT } from '../src/fleet/testboxAdminWords';
+import { SETTINGS_CARDS } from '../src/fleet/settingsText';
+import { resolveChrome } from './harness';
+import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
+
+/** Phone, laptop and wide, each in the skin that width boots by default. */
+const VIEWS: readonly (AppView & { readonly band: 'phone' | 'laptop' | 'wide' })[] = [
+  { band: 'phone', skin: REFINED, theme: PHOSPHOR, width: 390 },
+  { band: 'laptop', skin: INSTRUMENT, theme: 'light', width: 1280 },
+  { band: 'wide', skin: INSTRUMENT, theme: PHOSPHOR, width: 1920 },
+];
+const named = (v: (typeof VIEWS)[number]): string => `${v.band}: ${v.skin}, ${v.theme}, ${v.width}px`;
+
+const T = TESTBOX_TEXT;
+const TITLE = SETTINGS_CARDS.automation.testbox.title;
+const TOOLS = { node: '22.11.0', npm: '10.9.0', tmux: '3.4', git: '2.43.0', python3: '3.12.3', chrome: '131.0.6778.85' };
+const STATUS: StatusAnswer = {
+  t: 'status', state: 'ok', reason: null, serviceVersion: '1.0.0', proto: TESTBOX_PROTO, release: 'v0.0.900',
+  tools: { ...TOOLS, node: '22.12.0' }, sync: { state: 'idle', detail: null, at: '2026-10-30T10:00:00Z' },
+  runs: { inProgress: 1, limit: 4 }, queueDepth: 2,
+  pristine: [
+    { repository: 'project-a', package: 'server', key: 'aaaaaaaaaaaaaaaa' },
+    { repository: 'project-a', package: 'pwa', key: 'cccccccccccccccc' },
+  ],
+  failedKeys: [{ repository: 'project-a', package: 'agent', key: 'dddddddddddddddddddd', exit: 1, attempts: 3, nextAttempt: '2026-10-30T13:00:00Z' }],
+  heldRunUsers: [], repositories: [{ name: 'project-a', mirrorPath: '/srv/mirrors/project-a.git' }],
+  // D-8290: long probe names, so the line has to wrap at phone width. The running one is 64 characters with no hyphen
+  // (the longest name the status reader accepts), so it offers the browser no break point and has to wrap anywhere.
+  probes: {
+    enabled: true, refusal: null, running: 'harness_session_continuity_resume_after_swap_with_a_long_tail_xx',
+    waiting: ['harness-permission-prompt-routing-child', 'harness-rate-limit-menu-never-typed-into'], day: '2026-10-30', used: 4, perDay: 10,
+  },
+};
+const BLOCK = {
+  state: 'degraded', reasons: ['tools differ (node 22.11.0 vs 22.12.0)'], summary: 'degraded (tools differ (node 22.11.0 vs 22.12.0))',
+  switch: 'off', at: Date.now(), host: { tools: TOOLS, release: 'v0.0.900', measuredAt: '2026-10-30T11:59:59Z' }, box: STATUS,
+  cells: [], counts: { remote: 7, fallback: 3, refused: 1, unreadable: 0, byReason: { 'queue-full': 2, unreachable: 1, 'unmerged-paths': 1 } },
+};
+
+const FIXTURE: AppFixture = {
+  api: {
+    '/api/accounts': { accounts: [], projected: null, roster: [] },
+    '/api/projects': { roots: ['/w'], projects: [] },
+    '/api/runs': { runs: [] },
+    '/api/claims': [],
+  },
+  fleetFrames: [
+    { type: 'fleet', sessions: [] },
+    { type: 'runs', runs: [] },
+    { type: 'coord', coord: { pause: 'clear' } },
+  ],
+};
+
+let dist: string | undefined;
+let server: DistServer | undefined;
+let browser: Browser | undefined;
+
+beforeAll(async () => {
+  const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
+  dist = sharedDist();
+  server = await serveDist(dist);
+  browser = await chromium.launch({ executablePath, headless: true });
+}, 180_000);
+
+afterAll(async () => {
+  await browser?.close();
+  await server?.close();
+});
+
+interface Box { left: number; right: number; top: number; bottom: number; width: number; height: number }
+interface Measured {
+  viewport: number;
+  pageScrollWidth: number;
+  pageClientWidth: number;
+  band: string | null;
+  card: { scrollWidth: number; clientWidth: number; box: Box };
+  head: Box;
+  stateLine: Box;
+  state: Box;
+  button: Box | null;
+  cells: Box[];
+  probes: Box | null;
+  tables: Record<string, Box | null>;
+  overflowing: string[];
+}
+
+/** The card's geometry, measured in the page. */
+const measure = (el: Element): Measured => {
+  const box = (e: Element): Box => {
+    const r = e.getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+  };
+  const one = (sel: string): Element => {
+    const found = el.querySelector(sel);
+    if (found === null) throw new Error(`the card has no ${sel}`);
+    return found;
+  };
+  // Inside a shut `<details>` an element keeps its boxes but is not rendered (`content-visibility`), so visibility is
+  // the engine's own check.
+  const shown = (e: Element | null): Box | null => (e === null || !e.checkVisibility({ contentVisibilityAuto: true }) ? null : box(e));
+  const card = one(':scope > div:last-child');
+  return {
+    viewport: window.innerWidth,
+    pageScrollWidth: document.documentElement.scrollWidth,
+    pageClientWidth: document.documentElement.clientWidth,
+    band: el.getAttribute('data-band'),
+    card: { scrollWidth: card.scrollWidth, clientWidth: card.clientWidth, box: box(card) },
+    head: box(one('[data-testbox="head"]')),
+    stateLine: box(one('[data-testbox="state-line"]')),
+    state: box(one('[data-testbox="state"]')),
+    button: shown(el.querySelector('[data-testbox="sync"]')),
+    cells: [...el.querySelectorAll('[data-testbox="cells"] [data-cell]')].map(box),
+    probes: shown(el.querySelector('[data-testbox="probes"]')),
+    tables: Object.fromEntries(['versions', 'counts', 'pristine', 'failed']
+      .map((n) => [n, shown(el.querySelector(`[data-table="${n}"]`))])),
+    overflowing: [...el.querySelectorAll('*')]
+      .filter((e) => e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).overflowX !== 'visible')
+      .map((e) => e.tagName.toLowerCase() + (e.getAttribute('data-testbox') ?? e.getAttribute('data-table') ?? '')),
+  };
+};
+
+describe('Settings › Automation › Test box at phone, laptop and wide (D-7412)', () => {
+  for (const view of VIEWS) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      const posts: unknown[] = [];
+      // The card's three doors. A route registered after `openApp`'s runs first (Playwright), so these answer the doors
+      // and every other `/api` path falls through to the fixture.
+      await ctx.route('**/api/testbox', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, testbox: BLOCK }) }));
+      await ctx.route('**/api/testbox/switch', async (r) => {
+        posts.push(r.request().postDataJSON());
+        return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, requested: true }) });
+      });
+      try {
+        await page.goto(server!.origin + '/settings/automation');
+        const section = page.getByRole('region', { name: TITLE });
+        await expect.poll(() => section.locator('[data-testbox="state"]').count(), { timeout: 20_000 }).toBe(1);
+        const m = await section.evaluate(measure);
+        const shots = process.env.CCRC_SHOTS;
+        if (shots) await section.screenshot({ path: path.join(shots, `testbox-${view.band}-${view.width}.png`) });
+
+        expect(m.band).toBe(view.band);
+        // Nothing overflows sideways: the card, any scroller inside it, and the page.
+        expect(m.card.scrollWidth, 'the card overflows sideways').toBeLessThanOrEqual(m.card.clientWidth);
+        expect(m.overflowing, 'an element inside the card scrolls sideways').toEqual([]);
+        expect(m.pageScrollWidth, 'the page scrolls sideways').toBeLessThanOrEqual(m.pageClientWidth);
+        expect(m.card.box.left).toBeGreaterThanOrEqual(0);
+        expect(m.card.box.right).toBeLessThanOrEqual(m.viewport);
+        expect(m.button, 'a differing tool shows Bring tools up to date').not.toBeNull();
+        const button = m.button!;
+        // D-8290: the live probes line under the cells, inside the card, at every width.
+        expect(m.probes, 'the live probes line shows').not.toBeNull();
+        expect(m.probes!.top).toBeGreaterThanOrEqual(m.cells[m.cells.length - 1]!.bottom - 0.5);
+        expect(m.probes!.left).toBeGreaterThanOrEqual(m.card.box.left - 0.5);
+        expect(m.probes!.right, 'the live probes line runs past the card').toBeLessThanOrEqual(m.card.box.right + 0.5);
+        await expect.poll(() => section.locator('[data-testbox="probes"]').textContent()).toBe(T.probes(STATUS.probes!));
+
+        if (view.band === 'phone') {
+          // One column: the state line under the switch, the summary under the state, the button as wide as its line.
+          expect(m.stateLine.top).toBeGreaterThan(m.head.top);
+          expect(m.cells).toHaveLength(2);
+          expect(m.cells[0]!.top).toBeGreaterThanOrEqual(m.stateLine.bottom - 0.5);
+          expect(Math.abs(button.width - m.stateLine.width), 'the button is full-width').toBeLessThanOrEqual(1);
+          expect(button.top).toBeGreaterThanOrEqual(m.state.bottom - 0.5);
+          // Versions, counts, pristine installs and failed keys are behind the disclosure until it opens.
+          expect(Object.values(m.tables)).toEqual([null, null, null, null]);
+          await section.getByText(T.details).click();
+          const opened = await section.evaluate(measure);
+          for (const [name, b] of Object.entries(opened.tables)) {
+            expect(b, `${name} shows once the disclosure opens`).not.toBeNull();
+            expect(b!.right, `${name} runs past the card`).toBeLessThanOrEqual(opened.card.box.right + 0.5);
+          }
+          expect(opened.overflowing).toEqual([]);
+          expect(opened.pageScrollWidth).toBeLessThanOrEqual(opened.pageClientWidth);
+        } else {
+          // The switch and the state on one line; the button at the state line's end, on the state's line.
+          expect(Math.abs(m.stateLine.top - m.head.top), 'the switch and the state share a line').toBeLessThanOrEqual(1);
+          expect(Math.abs(button.right - m.stateLine.right), 'the button ends the state line').toBeLessThanOrEqual(1);
+          expect(button.left).toBeGreaterThan(m.state.left);
+          expect(button.top).toBeLessThan(m.state.bottom);
+          // Three cells in one row.
+          expect(m.cells).toHaveLength(3);
+          expect(new Set(m.cells.map((c) => Math.round(c.top))).size, 'the three cells share a row').toBe(1);
+          expect(m.tables.versions, 'the versions table is open').not.toBeNull();
+          expect(m.tables.versions!.top).toBeGreaterThanOrEqual(m.cells[0]!.bottom - 0.5);
+          if (view.band === 'wide') {
+            const v = m.tables.versions!;
+            const p = m.tables.pristine;
+            expect(p, 'the pristine-installs table is open').not.toBeNull();
+            expect(Math.abs(v.top - p!.top), 'the two tables share a row').toBeLessThanOrEqual(1);
+            expect(v.right, 'the two tables sit side by side').toBeLessThanOrEqual(p!.left);
+          } else {
+            expect(m.tables.pristine, 'the pristine installs are behind the disclosure').toBeNull();
+          }
+        }
+
+        // The switch posts {on} only.
+        await section.getByRole('radio', { name: T.on }).click();
+        await expect.poll(() => posts.length, { timeout: 10_000 }).toBe(1);
+        expect(posts).toEqual([{ on: true }]);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+/** No test box set up: the server's `off` block (empty reasons, no box), with the switch on. */
+const OFF_BLOCK = { ...BLOCK, state: 'off', reasons: [], summary: 'off', switch: 'on', box: null };
+
+describe('Settings › Automation › Test box with no box set up, at phone, laptop and wide', () => {
+  for (const view of VIEWS) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      await ctx.route('**/api/testbox', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, testbox: OFF_BLOCK }) }));
+      try {
+        await page.goto(server!.origin + '/settings/automation');
+        const section = page.getByRole('region', { name: TITLE });
+        await expect.poll(() => section.locator('[data-testbox="off-note"]').count(), { timeout: 20_000 }).toBe(1);
+        const m = await section.evaluate(measure);
+        const note = await section.evaluate((el) => {
+          const r = el.querySelector('[data-testbox="off-note"]')!.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+        });
+        expect(m.band).toBe(view.band);
+        expect(m.card.scrollWidth, 'the card overflows sideways').toBeLessThanOrEqual(m.card.clientWidth);
+        expect(m.overflowing, 'an element inside the card scrolls sideways').toEqual([]);
+        expect(m.pageScrollWidth, 'the page scrolls sideways').toBeLessThanOrEqual(m.pageClientWidth);
+        // The note sits under the state, inside the state line, as wide as the state's column.
+        expect(note.top).toBeGreaterThanOrEqual(m.state.bottom - 0.5);
+        expect(note.bottom).toBeLessThanOrEqual(m.stateLine.bottom + 0.5);
+        expect(Math.abs(note.left - m.state.left)).toBeLessThanOrEqual(1);
+        expect(note.right).toBeLessThanOrEqual(m.stateLine.right + 0.5);
+        expect(m.button).toBeNull();
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
+
+/** A connected box whose parity has not passed (D-8166, TC15): the block's admin says so, and the flow's own read agrees. */
+const WAITING_BLOCK = { ...BLOCK, admin: { connected: true, hostKey: 'pinned', act: null, parity: 'none' } };
+const CONNECTED_STATUS = {
+  v: 1, connected: true, addressSet: true, login: 'root', fingerprint: `SHA256:${'A'.repeat(43)}`, hostKey: 'pinned', boxFileSha256: 'f'.repeat(64),
+  act: null, boxSettings: null, boxSettingsAt: null, installedTag: null, parity: null,
+};
+
+describe('Settings › Automation › Test box: the switch waits for parity, at phone, laptop and wide (D-8166)', () => {
+  for (const view of VIEWS) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      const posts: unknown[] = [];
+      await ctx.route('**/api/testbox', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, testbox: WAITING_BLOCK }) }));
+      await ctx.route('**/api/testbox/admin', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, status: CONNECTED_STATUS, events: [] }) }));
+      await ctx.route('**/api/testbox/switch', async (r) => {
+        posts.push(r.request().postDataJSON());
+        return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, requested: true }) });
+      });
+      try {
+        await page.goto(server!.origin + '/settings/automation');
+        const section = page.getByRole('region', { name: TITLE });
+        await expect.poll(() => section.locator('[data-testbox="switch-waits"]').count(), { timeout: 20_000 }).toBe(1);
+        const m = await section.evaluate(measure);
+        const waits = await section.evaluate((el) => {
+          const n = el.querySelector('[data-testbox="switch-waits"]')!;
+          const r = n.getBoundingClientRect();
+          const sw = el.querySelector('[data-testbox="switch"]')!.getBoundingClientRect();
+          return { text: n.textContent, left: r.left, right: r.right, switchLeft: sw.left, switchRight: sw.right, visible: n.checkVisibility() };
+        });
+        expect(m.band).toBe(view.band);
+        expect(waits.text).toBe(TESTBOX_CONNECT_TEXT.switchWaits);
+        expect(waits.visible).toBe(true);
+        expect(waits.left).toBeGreaterThanOrEqual(waits.switchLeft - 0.5);
+        expect(waits.right).toBeLessThanOrEqual(waits.switchRight + 0.5);
+        expect(m.card.scrollWidth, 'the card overflows sideways').toBeLessThanOrEqual(m.card.clientWidth);
+        expect(m.overflowing, 'an element inside the card scrolls sideways').toEqual([]);
+        expect(m.pageScrollWidth, 'the page scrolls sideways').toBeLessThanOrEqual(m.pageClientWidth);
+        // On is drawn disabled and a tap on it sends nothing; Off is never gated.
+        expect(await section.getByRole('radio', { name: T.on }).isDisabled()).toBe(true);
+        expect(await section.getByRole('radio', { name: T.off }).isEnabled()).toBe(true);
+        await section.getByRole('radio', { name: T.on }).click({ force: true, timeout: 1500 }).catch(() => undefined);
+        await page.waitForTimeout(200);
+        expect(posts).toEqual([]);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});

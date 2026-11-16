@@ -1,0 +1,53 @@
+{
+  "name": "multiselect",
+  "covers": [
+    "W6: the model equals capture-pane -p on an AskUserQuestion multi-select",
+    "re-wrap (a)-(g) and the row count: options with descriptions under them",
+    "menu taps (1b): a checked row and the cursor on the next one; descriptions are no target"
+  ],
+  "prompt": "Ask me which checks to run before project-a is released.",
+  "marker": "Which checks should run before project-a is released?",
+  "keys": [
+    "Space",
+    "Down"
+  ],
+  "entries": [
+    {
+      "match": "tools",
+      "label": "ask",
+      "tool_use": {
+        "name": "AskUserQuestion",
+        "input": {
+          "questions": [
+            {
+              "question": "Which checks should run before project-a is released?",
+              "header": "Checks",
+              "multiSelect": true,
+              "options": [
+                {
+                  "label": "Unit tests",
+                  "description": "Run the unit tests under test/ against src/app.ts"
+                },
+                {
+                  "label": "Type check",
+                  "description": "Run the TypeScript compiler with no emit, so a type error stops the release"
+                },
+                {
+                  "label": "Lint",
+                  "description": "Run the linter over src/ and test/ with the project's own rules"
+                },
+                {
+                  "label": "Build",
+                  "description": "Build project-a into dist/ and keep the build report beside it"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "default": {
+    "text": "Done."
+  }
+}

@@ -1,0 +1,13 @@
+// The test box's one polkit rule (D-7409; spec §2.3 "Static units, one narrow polkit rule"). Installed by
+// deploy/testbox/install.sh, which writes the service user's name for @@SERVICE_USER@@. The service user may start and
+// stop the box's static units and nothing else; reading a unit's state needs no authorisation. The regex is the one
+// agent/src/testbox/systemd.ts#UNIT_NAME checks every name against before it calls systemctl.
+polkit.addRule(function (action, subject) {
+  if (action.id !== "org.freedesktop.systemd1.manage-units" || subject.user !== "@@SERVICE_USER@@") return polkit.Result.NOT_HANDLED;
+  var unit = action.lookup("unit");
+  var verb = action.lookup("verb");
+  if (/^ccrc-testbox-((prepare|run)@[0-9]+|clean@([0-9]+|install)|install|tools)\.service$/.test(unit) && (verb === "start" || verb === "stop")) {
+    return polkit.Result.YES;
+  }
+  return polkit.Result.NOT_HANDLED;
+});

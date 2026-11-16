@@ -4,7 +4,7 @@ import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
-  readRegistry, readRegistryMeasured, readSessionRecord, measuredIdentity,
+  readRegistry, readRegistryMeasured, readSessionRecord, measuredIdentity, isCleanRecord,
   HOLD_UNREADABLE, REGISTRY_UNMEASURED_STUCK_MS, SWAP_BLOCKED_NO_REASON,
   SUBSTRATE_UNREADABLE, SUBSTRATE_NO_REASON,
   STRANDED_NO_REASON, STRANDED_UNREADABLE,
@@ -12,6 +12,7 @@ import {
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { unreadableField, absentField } from './ioDoubles.js';
+import { RESTART_CAUSES, ROUTE_WRITABLE_FIELDS } from '../../shared/api.js';
 
 const seed = (dir: string, id: string, fields: Record<string, string>) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(dir, `${id}.${k}`), v);
@@ -19,6 +20,17 @@ const seed = (dir: string, id: string, fields: Record<string, string>) => {
 
 const REGISTRY_CENSUS_TAG = 'registry-read-census';
 
+/**
+ * One bare `field(`/`fieldMeasured(` call site in `buildRecord`'s `Promise.all` is one registry read that EVERY row
+ * pays. Since desktop polish C1 (D-6388) that is exactly four: the identity triple (`wrapper`, `workdir`, `uuid`) and
+ * `hold`. Every other field is read through `listedField` / `listedMeasured`, which read only a field the listing
+ * names, so they are not part of the cost every row pays: a row pays one read more for each other field it lists, and
+ * `registry-bounded-read.test.ts` measures that with a counting `FleetIO`. The helpers' names carry no bare
+ * `field(` / `fieldMeasured(` token, so this count sees exactly the unconditional reads (it used to subtract the
+ * listed-only ternaries and widen the one `ROUTE_WRITABLE_FIELDS.map` call to its five reads, D-5347). That widening
+ * is dropped because the route map now goes through `listedMeasured`; a bare `field(`/`fieldMeasured(` call inside a
+ * `.map(...)` over N fields would count as 1 here and must be widened again.
+ */
 function buildRecordFieldReadCount(src: string): number {
   const body = src.match(/async function buildRecord\([\s\S]*?await Promise\.all\(\[([\s\S]*?)\n  \]\);/);
   expect(body, '`buildRecord` no longer has the one Promise.all this census measures').not.toBeNull();
@@ -61,7 +73,7 @@ describe('registry read census', () => {
       ['single', 1 + fieldReads],
       ['fleet', 1 + 24 * fieldReads],
     ]);
-    expect(expected).toEqual(new Map([['fields', 23], ['single', 24], ['fleet', 553]]));
+    expect(expected).toEqual(new Map([['fields', 4], ['single', 5], ['fleet', 97]]));
 
     const files = filesUnder(path.join(root, 'server'))
       .filter((file) => /\.(?:ts|js|mjs|cjs)$/.test(file));
@@ -93,8 +105,8 @@ describe('readRegistry', () => {
 
   it('reads sessions enumerated by *.uuid with optional fields', async () => {
     const reg = path.join(home, '.cc-sessions');
-    seed(reg, 'claude-a-MekWarLive', {
-      wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
+    seed(reg, 'claude-a-project-f', {
+      wrapper: 'claude-a', project: 'project-f', workdir: '/data/projects/project-f',
       uuid: 'a0b5791d-0000-0000-0000-000000000001', started: '1',
       pool: 'claude claude-a', lastswap: '1784500000',
     });
@@ -106,7 +118,7 @@ describe('readRegistry', () => {
     writeFileSync(path.join(reg, 'swap.log'), 'x');      // noise
 
     const out = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
-    expect(out.map((s) => s.id)).toEqual(['claude-a-MekWarLive', 'claude-b-demo-app-ts']);
+    expect(out.map((s) => s.id)).toEqual(['claude-a-project-f', 'claude-b-demo-app-ts']);
     const mek = out[0];
     expect(mek.pool).toEqual(['claude', 'claude-a']);
     expect(mek.lastswap).toBe(1784500000);
@@ -313,7 +325,7 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
   describe('held (D-112)', () => {
     it('a LISTED .hold whose measured read is absent reads null directly — no second listing', async () => {
       seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
-      writeFileSync(path.join(reg, 'demo-quiet-basin.hold'), 'program:agent-evals wave:1/4');
+      writeFileSync(path.join(reg, 'demo-quiet-basin.hold'), 'program:prog-j wave:1/4');
       let listings = 0;
       const io: FleetIO = {
         ...absentField('demo-quiet-basin', 'hold'),
@@ -373,7 +385,7 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
     });
 
     it('a LISTED .uuid whose measured read is absent drops the row, and readSessionRecord ' +
-       'reports {found:false, reason:\'absent\'} (B4)', async () => {
+       'reports {kind:\'unmeasurable\'} (B4; ARCH-47)', async () => {
       // `.uuid` is the one identity-triple member `buildRecord`'s own
       // docstring calls TRUE BY CONSTRUCTION — `names.includes(id+'.uuid')`
       // holds for every id either caller ever derives `id` from, so before
@@ -389,7 +401,8 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
       const io = absentField('demo-quiet-basin', 'uuid');
       const out = await readRegistry(io, cfg());
       expect(out.find((r) => r.id === 'demo-quiet-basin')).toBeUndefined();
-      expect(await readSessionRecord(io, cfg(), 'demo-quiet-basin')).toEqual({ found: false, reason: 'absent' });
+      // The listing named the row and the build dropped it: doubt, not a proven absence (D-1145, ARCH-47).
+      expect(await readSessionRecord(io, cfg(), 'demo-quiet-basin')).toEqual({ kind: 'unmeasurable' });
     });
   });
 
@@ -445,7 +458,7 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
         branch: 'ws/quiet-basin', base: 'origin/main', prphase: 'merged', prnumber: '42',
         prcheckedat: '1785300000000', archived: '1785300123',
         archivemanifest: '{"worktreeBytes":123}',
-        hold: 'program:agent-evals wave:1/4',
+        hold: 'program:prog-j wave:1/4',
         stopped: '1785300000 pwa', supervised: '1785300100',
         swapblocked: '1785299000 no transcript found for uuid under claude', spawn: '1785299500 4',
         substrate: '1755620112 protocol version mismatch',
@@ -490,6 +503,14 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
       // also collapse to null, unaffected by Task 5 either way.
       expect(rec.swapBlocked).toBeNull();
       expect(rec.spawn).toBeNull();
+      // Routing slice 6, Task 4 + the whole-branch review's finding #1: the
+      // seven routing files are not seeded above, so this listing does not
+      // name them — and an old-agent-shaped read, which cannot say `absent`
+      // at all, resolves each of them against that listing exactly as
+      // `branchEvidence` does. `route: null`, the answer for a session ccd
+      // has never routed, NOT seven names in `route.unreadable` (which the
+      // PWA reads as UNKNOWN and renders with no active picker row at all).
+      expect(rec.route).toBeNull();
     });
   });
 });
@@ -519,6 +540,62 @@ describe('workspace on the wire', () => {
     });
     const [rec] = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
     expect(rec.workspace).toBeNull();
+  });
+});
+
+describe('title and named (named-workspaces S2)', () => {
+  let home: string;
+  let reg: string;
+  const ID = 'demo-quiet-mesa';
+  const row = {
+    wrapper: 'claude-a', project: 'demo', workdir: '/w/demo/quiet-mesa', uuid: 'a'.repeat(36),
+    workspace: 'quiet-mesa',
+  };
+  const read = async (io: FleetIO = localIO) =>
+    (await readRegistry(io, loadConfig({ CCRC_HOME: home })))[0]!;
+  beforeEach(() => {
+    home = mkTmp('ccrc-');
+    seedRoster(home);
+    reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+  });
+
+  it('a row with neither file reads title null and namedByOperator false, and spends no read on them', async () => {
+    seed(reg, ID, row);
+    const paths: string[] = [];
+    const io: FleetIO = {
+      ...localIO,
+      readFileMeasured: async (p) => { paths.push(p); return localIO.readFileMeasured(p); },
+    };
+    const r = await read(io);
+    expect([r.title, r.namedByOperator]).toEqual([null, false]);
+    expect(paths.filter((p) => /\.(?:title|named)$/.test(p)), 'unlisted fields are not read').toEqual([]);
+  });
+
+  it('reads the title (trimmed) and a present `named` as true', async () => {
+    seed(reg, ID, { ...row, title: 'ENG-1234 - Fix the login flow\n', named: '1' });
+    const r = await read();
+    expect([r.title, r.namedByOperator]).toEqual(['ENG-1234 - Fix the login flow', true]);
+  });
+
+  it('an EMPTY `named` file reads as named — presence is the signal (the `.hold` ruling)', async () => {
+    seed(reg, ID, { ...row, named: '' });
+    expect((await read()).namedByOperator).toBe(true);
+  });
+
+  it('a LISTED but unreadable `named` reads as named — doubt reads as named', async () => {
+    seed(reg, ID, { ...row, named: '1' });
+    expect((await read(unreadableField(ID, 'named'))).namedByOperator).toBe(true);
+  });
+
+  it('a `named` listed but proven gone by its own read is not named', async () => {
+    seed(reg, ID, { ...row, named: '1' });
+    expect((await read(absentField(ID, 'named'))).namedByOperator).toBe(false);
+  });
+
+  it('a blank title reads null, never an empty label', async () => {
+    seed(reg, ID, { ...row, title: '  \n' });
+    expect((await read()).title).toBeNull();
   });
 });
 
@@ -592,8 +669,9 @@ describe('PR and archive fields', () => {
 });
 
 // C0.3: readSessionRecord is the SAME parser (buildRecord) as readRegistry,
-// narrowed to one id — one readdir plus that id's 23
-// [registry-read-census:fields] field reads instead of a whole-fleet sweep.
+// narrowed to one id — one readdir plus that id's 4
+// [registry-read-census:fields] unconditional reads (and one per other listed field)
+// instead of a whole-fleet sweep.
 // These pin that it agrees with readRegistry's own
 // per-record answer, id-by-id, rather than re-testing every field this file
 // already covers above.
@@ -607,8 +685,8 @@ describe('readSessionRecord', () => {
 
   it('reads the same record readRegistry would, for one id among several', async () => {
     const reg = path.join(home, '.cc-sessions');
-    seed(reg, 'claude-a-MekWarLive', {
-      wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
+    seed(reg, 'claude-a-project-f', {
+      wrapper: 'claude-a', project: 'project-f', workdir: '/data/projects/project-f',
       uuid: 'a0b5791d-0000-0000-0000-000000000001', started: '1',
       pool: 'claude claude-a', lastswap: '1784500000',
     });
@@ -619,52 +697,53 @@ describe('readSessionRecord', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
 
     const whole = await readRegistry(localIO, cfg);
-    const single = await readSessionRecord(localIO, cfg, 'claude-a-MekWarLive');
+    const single = await readSessionRecord(localIO, cfg, 'claude-a-project-f');
 
-    expect(single).toEqual({ found: true, record: whole.find((r) => r.id === 'claude-a-MekWarLive') });
-    expect(single.found && single.record.pool).toEqual(['claude', 'claude-a']);
-    expect(single.found && single.record.lastswap).toBe(1784500000);
+    expect(single).toEqual({ kind: 'found', record: whole.find((r) => r.id === 'claude-a-project-f') });
+    expect(single.kind === 'found' && single.record.pool).toEqual(['claude', 'claude-a']);
+    expect(single.kind === 'found' && single.record.lastswap).toBe(1784500000);
   });
 
-  it('answers {found:false, reason:\'absent\'} for an id with no .uuid in the registry, without reading any of its fields', async () => {
+  it('answers {kind:\'absent\'} for an id with no .uuid in the registry, without reading any of its fields', async () => {
     const reg = path.join(home, '.cc-sessions');
     let fieldReads = 0;
     const countingIO: FleetIO = {
       ...localIO,
       readFileMeasured: async (p) => { fieldReads++; return localIO.readFileMeasured(p); },
     };
-    seed(reg, 'claude-a-MekWarLive', {
-      wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
+    seed(reg, 'claude-a-project-f', {
+      wrapper: 'claude-a', project: 'project-f', workdir: '/data/projects/project-f',
       uuid: 'a'.repeat(36),
     });
     const cfg = loadConfig({ CCRC_HOME: home });
 
     const rec = await readSessionRecord(countingIO, cfg, 'nope');
-    expect(rec).toEqual({ found: false, reason: 'absent' });
-    // A miss must not fire the 23-field Promise.all `buildRecord` would — the
-    // whole point of checking the listing FIRST.
+    expect(rec).toEqual({ kind: 'absent' });
+    // A miss must not fire the full-field Promise.all `buildRecord` would —
+    // the whole point of checking the listing FIRST. (F15: untagged, so it
+    // does not hard-code a field count that goes stale as the census grows.)
     expect(fieldReads).toBe(0);
   });
 
-  it('answers {found:false, reason:\'unlistable\'} when the registry dir cannot be listed', async () => {
+  it('answers {kind:\'unlistable\'} when the registry dir cannot be listed', async () => {
     const cfg = loadConfig({
       CCRC_HOME: path.join(home, 'nope'), CCRC_ACCOUNTS: path.join(home, '.ccrc', 'accounts.json'),
     });
-    expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'unlistable' });
+    expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ kind: 'unlistable' });
   });
 
-  it('answers {found:false, reason:\'absent\'} for an incomplete entry (own field never written, not just ' +
-     'unreadable), same as readRegistry dropping it', async () => {
+  it('answers {kind:\'unmeasurable\'} for an incomplete entry (own field never written, not just ' +
+     'unreadable): readRegistry drops it, and the single read says the row was listed (ARCH-47)', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'claude-demo', { uuid: 'c'.repeat(36), wrapper: 'claude' }); // no workdir file at all
     const cfg = loadConfig({ CCRC_HOME: home });
-    expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'absent' });
+    expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ kind: 'unmeasurable' });
   });
 
-  it('costs exactly one readdir plus the one id\'s 23 field reads — never a per-session Promise.all for a sibling', async () => {
+  it('costs exactly one readdir plus the one id\'s buildRecord field reads — never a per-session Promise.all for a sibling', async () => {
     const reg = path.join(home, '.cc-sessions');
-    seed(reg, 'claude-a-MekWarLive', {
-      wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive', uuid: 'a'.repeat(36),
+    seed(reg, 'claude-a-project-f', {
+      wrapper: 'claude-a', project: 'project-f', workdir: '/data/projects/project-f', uuid: 'a'.repeat(36),
     });
     seed(reg, 'claude-b-demo-app-ts', {
       wrapper: 'claude-b', project: 'demo-app-ts',
@@ -679,11 +758,17 @@ describe('readSessionRecord', () => {
     };
     const cfg = loadConfig({ CCRC_HOME: home });
 
-    await readSessionRecord(countingIO, cfg, 'claude-a-MekWarLive');
+    await readSessionRecord(countingIO, cfg, 'claude-a-project-f');
 
     expect(readdirCalls).toBe(1);
-    expect(fieldReads).toHaveLength(23);
-    expect(fieldReads.every((p) => p.includes('claude-a-MekWarLive'))).toBe(true);
+    // DERIVED, not typed: the census's own counter over `buildRecord`'s one
+    // `Promise.all` (child-reclamation wave 2 moved it 30 -> 31 and found this
+    // second hard-coded copy by its red). Since D-6388 that counter is the reads every row pays
+    // (the identity triple and `hold`); the fixture lists one field beyond them (`project`), which is
+    // read once, and nothing else is read.
+    expect(fieldReads).toHaveLength(buildRecordFieldReadCount(
+      readFileSync(path.resolve(import.meta.dirname, '..', 'src', 'registry.ts'), 'utf8')) + 1);
+    expect(fieldReads.every((p) => p.includes('claude-a-project-f'))).toBe(true);
   });
 
   it('re-confirms a still-unreadable hold with one second listing, same as readRegistry', async () => {
@@ -691,14 +776,14 @@ describe('readSessionRecord', () => {
     seed(reg, 'demo-quiet-basin', {
       wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'd'.repeat(36),
     });
-    writeFileSync(path.join(reg, 'demo-quiet-basin.hold'), 'program:agent-evals wave:1/4');
+    writeFileSync(path.join(reg, 'demo-quiet-basin.hold'), 'program:prog-j wave:1/4');
     const holdUnreadableIO: FleetIO = {
       ...localIO,
       readFileMeasured: async (p) => (p.endsWith('.hold') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const rec = await readSessionRecord(holdUnreadableIO, cfg, 'demo-quiet-basin');
-    expect(rec.found && rec.record.held).toBe(HOLD_UNREADABLE);
+    expect(rec.kind === 'found' && rec.record.held).toBe(HOLD_UNREADABLE);
   });
 });
 
@@ -818,7 +903,7 @@ describe('the identity ladder (unmeasured evidence)', () => {
     expect(listings).toBe(2);
   });
 
-  it('readSessionRecord retires a degraded row to {found:false, reason:\'absent\'} on twice-observed absence', async () => {
+  it('readSessionRecord retires a degraded row to {kind:\'absent\'} on twice-observed absence', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
     const cfg = loadConfig({ CCRC_HOME: home });
@@ -834,7 +919,7 @@ describe('the identity ladder (unmeasured evidence)', () => {
       },
       readFileMeasured: async (p) => (p.endsWith('.wrapper') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
     };
-    expect(await readSessionRecord(reapedMidRead, cfg, 'demo-quiet-basin')).toEqual({ found: false, reason: 'absent' });
+    expect(await readSessionRecord(reapedMidRead, cfg, 'demo-quiet-basin')).toEqual({ kind: 'absent' });
   });
 });
 
@@ -1229,6 +1314,155 @@ describe('the lifecycle stamps (D3)', () => {
 
   it('a session with no strand marker reads null', async () => {
     expect((await read()).stranded).toBeNull();
+  });
+});
+
+// D-5237: `$REG/<id>.lastend` — `<epoch> <cause>`, ccd's record of the last
+// process end — is read only when the listing names it, through `parseLastEnd`.
+describe('the last process end (D-5237)', () => {
+  let home: string;
+  let reg: string;
+  beforeEach(() => {
+    home = mkTmp('ccrc-');
+    seedRoster(home);
+    reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    seed(reg, 'lane-a-project-a', {
+      uuid: 'a'.repeat(36), wrapper: 'claude', workdir: '/w', project: 'project-a',
+    });
+  });
+  const lastEndReads: string[] = [];
+  const countingIO: FleetIO = {
+    ...localIO,
+    readFile: async (p) => { if (p.endsWith('.lastend')) lastEndReads.push(p); return localIO.readFile(p); },
+    readFileMeasured: async (p, t, s) => { if (p.endsWith('.lastend')) lastEndReads.push(p); return localIO.readFileMeasured(p, t, s); },
+  };
+  const read = async () => (await readRegistry(countingIO, loadConfig({ CCRC_HOME: home })))[0]!;
+
+  it('parses `<epoch> <cause>` into epoch ms and the cause', async () => {
+    seed(reg, 'lane-a-project-a', { lastend: '1785300000 oom' });
+    expect((await read()).lastEnd).toEqual({ at: 1785300000_000, cause: 'oom' });
+  });
+  it('absent is null, and costs no read', async () => {
+    lastEndReads.length = 0;
+    expect((await read()).lastEnd).toBeNull();
+    expect(lastEndReads).toEqual([]);
+  });
+  it('a malformed line is null, and the row still parses', async () => {
+    for (const bad of ['', 'oom', '1785300000', 'x 1785300000', '1785300000 oom extra', '1785300000 OOM']) {
+      seed(reg, 'lane-a-project-a', { lastend: bad });
+      const r = await read();
+      expect(r.id, JSON.stringify(bad)).toBe('lane-a-project-a');
+      expect(r.lastEnd, JSON.stringify(bad)).toBeNull();
+    }
+  });
+  it('a cause this build does not know degrades to unknown', async () => {
+    seed(reg, 'lane-a-project-a', { lastend: '1785300000 cosmic-ray' });
+    expect((await read()).lastEnd).toEqual({ at: 1785300000_000, cause: 'unknown' });
+  });
+  it('every cause ccd writes parses as itself', async () => {
+    for (const cause of RESTART_CAUSES) {
+      seed(reg, 'lane-a-project-a', { lastend: `1785300000 ${cause}` });
+      expect((await read()).lastEnd).toEqual({ at: 1785300000_000, cause });
+    }
+  });
+});
+
+// D-5242 (plan Task 17a): `$REG/<id>.hibernated` — `<epoch> <idle-hours>`, written by Task 16's `ccd hibernate` — is
+// read only when the listing names it, so a row that never slept pays nothing; its epoch becomes `hibernatedAt` (ms).
+describe('the hibernation marker (D-5242)', () => {
+  let home: string;
+  let reg: string;
+  beforeEach(() => {
+    home = mkTmp('ccrc-');
+    seedRoster(home);
+    reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    seed(reg, 'lane-a-project-a', {
+      uuid: 'a'.repeat(36), wrapper: 'claude', workdir: '/w', project: 'project-a',
+    });
+  });
+  const reads: string[] = [];
+  const countingIO: FleetIO = {
+    ...localIO,
+    readFile: async (p) => { if (p.endsWith('.hibernated')) reads.push(p); return localIO.readFile(p); },
+    readFileMeasured: async (p, t, s) => { if (p.endsWith('.hibernated')) reads.push(p); return localIO.readFileMeasured(p, t, s); },
+  };
+  const read = async () => (await readRegistry(countingIO, loadConfig({ CCRC_HOME: home })))[0]!;
+
+  it('a listed `.hibernated` gives hibernatedAt in epoch ms', async () => {
+    seed(reg, 'lane-a-project-a', { hibernated: '1785300000 7' });
+    expect((await read()).hibernatedAt).toBe(1785300000_000);
+  });
+  it('the idle hours may carry a fraction, and may be missing: the epoch is what is read', async () => {
+    for (const body of ['1785300000 6.5', '1785300000', '1785300000 7\n']) {
+      seed(reg, 'lane-a-project-a', { hibernated: body });
+      expect((await read()).hibernatedAt, JSON.stringify(body)).toBe(1785300000_000);
+    }
+  });
+  it('unlisted is null, and costs no read', async () => {
+    reads.length = 0;
+    expect((await read()).hibernatedAt).toBeNull();
+    expect(reads).toEqual([]);
+  });
+  it('a malformed body is null, and the row still parses', async () => {
+    for (const bad of ['', 'x', 'x 7', '-1 7', '1785300000.5 7', '1785300000 7 extra', '1785300000 seven', '0 7']) {
+      seed(reg, 'lane-a-project-a', { hibernated: bad });
+      const r = await read();
+      expect(r.id, JSON.stringify(bad)).toBe('lane-a-project-a');
+      expect(r.hibernatedAt, JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  // D-8067 (operator ruling 2026-11-06): the marker is LISTED, it gives no time and a stop stamp is readable, so the row
+  // reads asleep at the stop stamp's time, in MS. `.stopped` is in SECONDS, as `.hibernated` is; `buildRecord` decides
+  // this and `parseHibernated` still answers null for all of these bodies.
+  describe('a marker that gives no time, beside a stop stamp (D-8067)', () => {
+    const ID = 'lane-a-project-a';
+    const cfg = () => loadConfig({ CCRC_HOME: home });
+    const readThrough = async (io: FleetIO) => (await readRegistry(io, cfg()))[0]!;
+
+    it('a malformed body reads the stop stamp\'s time, in MS', async () => {
+      for (const bad of ['', 'x', 'x 7', '-1 7', '1785300000.5 7', '1785300000 7 extra', '1785300000 seven', '0 7']) {
+        seed(reg, ID, { hibernated: bad, stopped: '1785300100 ccd' });
+        expect((await read()).hibernatedAt, JSON.stringify(bad)).toBe(1785300100_000);
+      }
+    });
+    it('a failed read reads the stop stamp\'s time, and the record is not cached', async () => {
+      seed(reg, ID, { hibernated: '1785300000 7', stopped: '1785300100 ccd' });
+      const r = await readThrough(unreadableField(ID, 'hibernated'));
+      expect(r.hibernatedAt).toBe(1785300100_000);
+      expect(r.plainFieldUnreadable).toBe(true);
+      expect(isCleanRecord(r)).toBe(false);
+    });
+    it('a marker that gives its time keeps it: the stop stamp is never preferred', async () => {
+      seed(reg, ID, { hibernated: '1785300000 7', stopped: '1785300100 ccd' });
+      expect((await read()).hibernatedAt).toBe(1785300000_000);
+    });
+    it('a stop stamp with no marker listed is an ordinary stop, and costs no marker read', async () => {
+      seed(reg, ID, { stopped: '1785300100 ccd' });
+      reads.length = 0;
+      expect((await read()).hibernatedAt).toBeNull();
+      expect(reads).toEqual([]);
+    });
+    it('a marker the read proves gone is a raced wake or stop, not a sleeper', async () => {
+      seed(reg, ID, { hibernated: '1785300000 7', stopped: '1785300100 ccd' });
+      const r = await readThrough(absentField(ID, 'hibernated'));
+      expect(r.hibernatedAt).toBeNull();
+      expect(r.plainFieldUnreadable).toBeUndefined();
+    });
+    it('no stop stamp to borrow from stays null, for a failed read too', async () => {
+      seed(reg, ID, { hibernated: '1785300000 7' });
+      expect((await readThrough(unreadableField(ID, 'hibernated'))).hibernatedAt).toBeNull();
+    });
+    it('a stop stamp that is not readable lends no time', async () => {
+      seed(reg, ID, { hibernated: 'x', stopped: '1785300100 ccd' });
+      expect((await readThrough(unreadableField(ID, 'stopped'))).hibernatedAt).toBeNull();
+      for (const stamp of ['', 'not-a-stamp', '0 ccd', '-5 ccd', '99999999999999999 ccd']) {
+        seed(reg, ID, { hibernated: 'x', stopped: stamp });
+        expect((await read()).hibernatedAt, JSON.stringify(stamp)).toBeNull();
+      }
+    });
   });
 });
 

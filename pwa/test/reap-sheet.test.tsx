@@ -2,13 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import type { FleetSession, WsAudit } from '../../shared/api';
-import { ToastHost } from '../src/components/Toast';
+import { parseReapCrumb } from '../../shared/reapcrumb';
+import { fleetSession } from './fleetFixture';
+import { ToastHost } from '@ccrc/ui';
 import { ReapSheet } from '../src/session/ReapSheet';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { declValue, ruleIn } from './cssRule';
 
 const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
   id: 'demo-quiet-basin', branch: 'ws/quiet-basin', registryBranch: 'ws/quiet-basin', drift: '',
-  base: 'origin/main', workdir: '/home/u/worktrees/custom-tools/quiet-basin',
-  project: 'custom-tools', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+  base: 'origin/main', workdir: '/home/u/worktrees/project-d/quiet-basin',
+  project: 'project-d', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
   alive: true, started: true, unit: 'enabled',
   dirty: [], ignored: [
     { path: 'node_modules/', bytes: 412_000_000, sensitive: false },
@@ -24,15 +29,7 @@ const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
   transcript: '/t.jsonl', children: [], verdict: 'reapable', detail: '', token: 'a'.repeat(64), sentence: '', ...over,
 });
 
-const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'custom-tools',
-  workdir: '/w', workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: null,
-  limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: 'ws/quiet-basin', ctxPct: null, tasks: null, pr: null, archivedAt: 1, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, ...over,
-});
+const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ project: 'project-d', workspace: 'quiet-basin', branch: 'ws/quiet-basin', archivedAt: 1, ...over }));
 
 let auditBody: unknown;
 let reapBody: unknown;
@@ -118,7 +115,7 @@ describe('the manifest', () => {
     auditBody = audit({
       branch: 'feat/x', registryBranch: 'ws/quiet-basin', headMatchesRegistry: false,
       drift: "the registry recorded ws/quiet-basin; git's worktree record for "
-        + '/home/u/worktrees/custom-tools/quiet-basin says feat/x — feat/x is the branch this '
+        + '/home/u/worktrees/project-d/quiet-basin says feat/x — feat/x is the branch this '
         + 'cleanup evaluates and removes, and ws/quiet-basin is left alone',
       pr: { number: null, url: '', mergeCommit: '', headRefOid: '' },
       merge: { proof: 'contained', fetchedAt: Math.floor(Date.now() / 1000) },
@@ -185,7 +182,7 @@ describe('the manifest', () => {
     // title, the branch row and the button too, and a loose regex would match
     // four nodes and throw.
     open();
-    expect(await screen.findByText('/home/u/worktrees/custom-tools/quiet-basin')).toBeInTheDocument();
+    expect(await screen.findByText('/home/u/worktrees/project-d/quiet-basin')).toBeInTheDocument();
     expect(screen.getByText('1.2 GB')).toBeInTheDocument();
     expect(screen.getByText('uncommitted')).toBeInTheDocument();
     // Two rows legitimately read `none`: uncommitted and stashes.
@@ -422,11 +419,39 @@ describe('refusals', () => {
     expect(screen.queryByText(/failed/i)).not.toBeInTheDocument();
   });
 
+  // ccd's crumb is a string; the server's `reviveWsAudit` makes it a `ReapCrumb` before the PWA sees it.
+  const crumbAudit = (wire: string): unknown => ({
+    ...audit({ exists: false, verdict: 'worktree-missing', token: undefined,
+      sentence: 'The worktree is already gone; the branch and the registry entry are still here. `ccd ws-attic` lists the commits ccrc pinned.' }),
+    reaping: parseReapCrumb(wire),
+  });
+
   it('explains a breadcrumb instead of certifying an empty workspace', async () => {
-    auditBody = audit({ exists: false, reaping: 'branch', verdict: 'worktree-missing', token: undefined,
-      sentence: 'The worktree is already gone; the branch and the registry entry are still here. `ccd ws-attic` lists the commits ccrc pinned.' });
+    auditBody = crumbAudit('branch');
     open();
-    expect(await screen.findByText(/cleanup stopped part-way \(branch\)/i)).toBeInTheDocument();
+    expect(await screen.findByText(/cleanup stopped part-way, while removing its branch/i)).toBeInTheDocument();
+  });
+
+  // ARCH-25 (#531): the sheet never shows a raw token — one render per member of the
+  // vocabulary, and one for a crumb it does not know.
+  const WIRE_CRUMBS = [
+    'children', 'worktree', 'branch', 'clips',
+    'reclaim:children', 'reclaim:worktree', 'reclaim:branch', 'reclaim:artifacts',
+    'expire:children', 'expire:worktree', 'expire:branch', 'expire:artifacts',
+    'sometime-else', 'reclaim:clips', 'wat:branch',
+  ];
+  it.each(WIRE_CRUMBS)('never shows the raw crumb %s', async (wire) => {
+    auditBody = crumbAudit(wire);
+    const { container } = open();
+    await screen.findByText(/cleanup stopped part-way|stopped part-way/i);
+    const text = container.ownerDocument.body.textContent ?? '';
+    expect(text).not.toContain(wire.includes(':') ? wire : `(${wire})`);
+    expect(text).not.toMatch(/\((children|worktree|branch|clips|sometime-else)\)|reclaim:|expire:|wat:/);
+  });
+  it('says plainly that it does not know a crumb it does not know', async () => {
+    auditBody = crumbAudit('sometime-else');
+    open();
+    expect(await screen.findByText(/at a step this screen does not recognise/i)).toBeInTheDocument();
   });
 
   it('never hands control back on a mid-flight refusal', async () => {
@@ -889,9 +914,9 @@ describe('mutation-sweep closures', () => {
   // in this component's props the whole time; nothing about the audit had to
   // change for the sheet to say it first.
   it('an archived-and-held workspace offers no Remove at all, and says which program holds it', async () => {
-    render(<><ToastHost /><ReapSheet session={sess({ held: 'program:agent-evals wave:3/4' })}
+    render(<><ToastHost /><ReapSheet session={sess({ held: 'program:prog-j wave:3/4' })}
                                      open onClose={() => {}} onReaped={() => {}} /></>);
-    expect(await screen.findByText(/program:agent-evals wave:3\/4/)).toBeInTheDocument();
+    expect(await screen.findByText(/program:prog-j wave:3\/4/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Remove / })).toBeNull();
   });
 
@@ -1232,5 +1257,26 @@ describe('the confirmation names what it will actually remove', () => {
     render(<><ToastHost /><ReapSheet session={sess({ workspace: 'quiet-basin', branch: 'ws/fix-the-pr-sheet' })}
                                      open onClose={() => {}} onReaped={() => {}} /></>);
     expect(await screen.findAllByText(/quiet-basin/)).not.toHaveLength(0);
+  });
+});
+
+// The audit rows' notes are their own line (D-5495). A `.reap-note` inside a
+// `<dd>` is a `<span>` that follows the row's figure directly, and it was
+// inline: with nothing ignored, the not-in-git row read "0 entries, 0 BThese
+// are in no commit and cannot be recovered." (the ignored list, a block, is
+// what had kept the two apart whenever there was one). The clips row and the
+// branch row's drift note ran on the same way.
+describe('an audit row\'s note never runs into its figure (D-5495)', () => {
+  const chatCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8');
+
+  it('the note follows the figure with no block between them, so its own rule must make it a line', async () => {
+    auditBody = audit({ ignored: [], ignoredCount: 0, ignoredBytes: 0 });
+    open();
+    const note = await screen.findByText('These are in no commit and cannot be recovered.');
+    const dd = note.closest('dd')!;
+    expect(dd.textContent).toMatch(/^0 entries, 0 B/);
+    // What sits before the note is the figure's text, not a block element.
+    expect(note.previousSibling?.nodeType).toBe(Node.TEXT_NODE);
+    expect(declValue(ruleIn(chatCss, '.reap-note'), 'display')).toBe('block');
   });
 });

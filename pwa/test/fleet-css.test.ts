@@ -2,11 +2,42 @@
 // render. Each one below fixes a defect MEASURED on the live page; reading the
 // stylesheet as text is what stops them regressing silently.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { ts } from '../../server/test/scan/parse';
+import { BARE_ROW, CONTROL_ROW, PAGE_BODY, SELECT, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
+import { cn } from '../../ui/src/lib/cn';
+
+/** The quiet control's shipped class string. FOUR rules in this stylesheet
+ *  declared these eleven declarations; they are one cva variant now, so the
+ *  claims that used to be read off a rule are read off what ships instead.
+ *  `buttonVariants()` rather than the raw variant literal, because what
+ *  reaches an element is base + variant + size composed. */
+const QUIET = buttonVariants({ variant: 'quiet', size: 'fit' });
+/** The floor moved from a rule to a component, exactly as the five back
+ *  chevrons' did. `min-h-tap` resolves through theme.css's
+ *  `--spacing-tap: var(--tap-min)`, which `theme-bridge.test.ts` pins — so a
+ *  utility that silently stopped resolving to the token reds there. */
+function expectQuietIsATarget(): void {
+  expect(QUIET).toContain('min-h-tap');
+  expect(QUIET).not.toContain('44px');
+}
+/** A quiet control is a STATE, not a living pane — the discipline the
+ *  stylesheet used to hold for each copy, held once. */
+function expectQuietIsNotAlive(): void {
+  for (const word of ['glow', 'animate', 'shadow']) expect(QUIET).not.toContain(word);
+}
+/** The three control rows' floor moved the same way their shape did. What is
+ *  left in this stylesheet under `.coord-banner`, `.child-reclaim-banner` and
+ *  `.caps-control` is the GROUND — the two declarations the audit's descendant
+ *  pass needs — so the tap floor is read off `<ControlRow>`. */
+function expectControlRowIsATarget(): void {
+  expect(CONTROL_ROW).toContain('min-h-tap');
+  expect(CONTROL_ROW).not.toContain('44px');
+}
 import { POOL_NAME_RE } from '../../shared/roster';
 import {
-  atBlock, declValue, declaredValues, norm, normSel, ruleIn, selectorsOf, stripComments,
+  atBlock, declValue, declaredValues, norm, normSel, rootBody, ruleIn, rulesFor, selectorsOf, stripComments,
 } from './cssRule';
 
 const css = readFileSync(
@@ -41,13 +72,20 @@ describe('fleet density and alignment', () => {
     expect(rule).not.toContain('align-items: baseline');
   });
 
-  it('keeps the 44px thumb target on the row and on the block that is tapped', () => {
+  it('keeps the thumb target on the row and on the block that is tapped', () => {
     // The fix is centring, NOT shrinking: these are tap surfaces. The floor
     // lives on .sess-body, the block the row's click forwarder is on — NOT on
     // .sess-open, which is only the label line inside it now that the
     // subagent toggle had to become a real, un-nested <button>.
-    expect(ruleFor('.sess-line')).toContain('min-height: 44px');
-    expect(ruleFor('.sess-body')).toContain('min-height: 44px');
+    //
+    // THE TOKEN, NOT THE LITERAL. This test used to require `min-height: 44px`
+    // on both — which is how two of the six hard-coded floors stayed hard
+    // coded: the guard asked for the literal by name. `--tap-min` IS 44px, so
+    // nothing rendered differently and nothing looked wrong; what the literal
+    // cost was the ability to move the floor. See `tap-targets.test.tsx`'s
+    // census, which refuses a literal in any size declaration now.
+    expect(ruleFor('.sess-line')).toContain('min-height: var(--tap-min)');
+    expect(ruleFor('.sess-body')).toContain('min-height: var(--tap-min)');
   });
 
   // Task 7 fix round 2. The row's controls must all be siblings, never
@@ -95,15 +133,79 @@ describe('fleet density and alignment', () => {
     });
   });
 
-  it('has no @container query left — .sess-acct can no longer be hidden or squeezed', () => {
+  it('has no @container query that can hide or squeeze a cell — .sess-acct can no longer be hidden or squeezed', () => {
     // The query this repeatedly guarded (first hiding .sess-acct, then
     // hiding .sess-state, then discovered to compact .sess-acct into a
     // neighbour's track) is gone along with the one-line layout it existed
     // to rescue. .fleet-list's own container-type/-name went with it —
     // nothing else in this file uses them.
-    expect(css).not.toContain('@container');
+    // D-5545 (verifier round 1) brought back exactly ONE query, of a different kind: it reads `.sess-body`'s own
+    // width to pick between the two drawn forms of a long name or programme (`Fit`), and it may touch nothing
+    // but those two forms' `display` — never a cell's track, never `.sess-acct`/`.sess-state`.
+    const queries = css.match(/@container[^{]*\{(?:[^{}]*\{[^{}]*\})*\s*\}/g) ?? [];
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toMatch(/^@container sess-body \(min-width: \d+px\)/);
+    const selectors = [...queries[0]!.replace(/^@container[^{]*\{/, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => [m[1]!.trim(), m[2]!.trim()]);
+    expect(selectors).toEqual([['.fit-full', 'display: inline;'], ['.fit-short', 'display: none;']]);
+    expect(css).toMatch(/\.sess-body \{ container: sess-body \/ inline-size; \}/);
     expect(css).not.toContain('container-type');
     expect(css).not.toContain('container-name');
+  });
+
+  it("the ⋯'s reveal sits inside the fine-pointer media query, and uses opacity only", () => {
+    // D-6332: under a mouse the row's ⋯ is transparent until its row is hovered, holds focus or is the selected row.
+    // The hiding is OPACITY and nothing else: it stays mounted, focusable, in the accessibility tree, with its 44px
+    // ::before overlay. A coarse pointer has no hover, so the transparent rule lives only inside the media query.
+    const fine = atBlock(css, '@media (hover: hover) and (pointer: fine)');
+    expect(declValue(ruleIn(fine, '.sess-actions'), 'opacity')).toBe('0');
+    const outside = css.replace(fine, '');
+    expect(declaredValues(outside, '.sess-actions', 'opacity'), 'no rule outside the query sets an opacity on ⋯').toEqual([]);
+    expect(declValue(ruleIn(css, '.sess-actions'), 'opacity'), 'the unconditional .sess-actions rule sets none').toBeNull();
+    // Every rule inside the query that targets ⋯ declares opacity and nothing else.
+    for (const rule of rulesFor(fine, '.sess-actions')) {
+      expect(stripComments(rule.body).match(/[\w-]+(?=\s*:)/g), `${rule.selectors.join(', ')} declares opacity only`).toEqual(['opacity']);
+    }
+    // And no rule anywhere hides it another way.
+    expect(declaredValues(css, '.sess-actions', 'display')).not.toContain('none');
+    expect(declaredValues(css, '.sess-actions', 'visibility')).not.toContain('hidden');
+    for (const prop of ['width', 'height', 'pointer-events']) {
+      expect(declaredValues(css, '.sess-actions', prop).filter((v) => /^(0(px)?|none)$/.test(v)), `${prop} never shrinks or disables ⋯`).toEqual([]);
+    }
+  });
+
+  it('a hovered, focused or selected row shows ⋯', () => {
+    const fine = atBlock(css, '@media (hover: hover) and (pointer: fine)');
+    for (const sel of ['.sess-line:hover .sess-actions', '.sess-line:has(:focus-visible) .sess-actions', '.sess-line--active .sess-actions']) {
+      expect(declValue(ruleIn(fine, sel), 'opacity'), `${sel} shows the button`).toBe('1');
+    }
+    // A keyboard's focus reveals ⋯, a pointer's does not: a row whose ⋯ took the focus from a click or a closing sheet
+    // must not light a second ⋯ beside the selected row's, so no reveal keys on `:focus-within`.
+    expect(rulesFor(fine, '.sess-actions').flatMap((r) => r.selectors).filter((sel) => sel.includes(':focus-within')),
+      'no ⋯ reveal keys on :focus-within').toEqual([]);
+    // One ⋯ at a time (the plan's acceptance): while any row of the fleet is hovered, every other row's ⋯ goes dark,
+    // the selected row's and a focused row's included, unless that ⋯ itself holds the keyboard's focus.
+    const elsewhere = '.fleet:has(.sess-line:hover) .sess-line:not(:hover) .sess-actions:not(:focus-visible)';
+    expect(declValue(ruleIn(fine, elsewhere), 'opacity'), 'a hover elsewhere darkens the other rows\' ⋯').toBe('0');
+  });
+
+  it('clamps only a name and a branch to two lines, never a programme or its wave (desk-rule-not-container-threshold)', () => {
+    // The desk draws the full form of a name, a branch and a programme (`Fit`) and lets the name, plain or paired,
+    // and the branch wrap on two lines, cut at the second. The programme slug and its wave tail (D-5528) are never
+    // clamped: no rule in the stylesheet may declare a line clamp on anything but those, and none outside the desk
+    // block, or a phone's short form would be clamped too.
+    const desk = atBlock(css, '@media (min-width: 900px)');
+    expect(desk).toContain('.fit-full');
+    const clampSelectors = (text: string): string[] => [...stripComments(text).matchAll(/([^{}]+)\{([^{}]*line-clamp[^{}]*)\}/g)]
+      .flatMap((m) => m[1]!.split(',').map((sel) => normSel(sel)));
+    expect(clampSelectors(css).sort()).toEqual([".sess-context[data-context=branch]", '.sess-label-fit', '.sess-open > .sess-label'].sort());
+    expect(clampSelectors(css.replace(desk, '')), 'no line clamp is declared outside the desk block').toEqual([]);
+    for (const sel of ['.sess-label-fit', '.sess-open > .sess-label', ".sess-context[data-context='branch']"]) {
+      const rule = ruleIn(desk, sel);
+      expect(declValue(rule, '-webkit-line-clamp'), `${sel} clamps to two lines at the desk`).toBe('2');
+      // A name with no CSS break point (`_`- or `.`-joined) wraps inside the box instead of running out of it
+      // sideways with no ellipsis (a clamp box clips at its edge).
+      expect(declValue(rule, 'overflow-wrap'), `${sel} breaks inside a token that alone exceeds the line`).toBe('anywhere');
+    }
   });
 
   it('tightens the card padding and closes the header/body gap', () => {
@@ -116,19 +218,19 @@ describe('fleet density and alignment', () => {
     // .sess-line centres everything on the full two-line ~52px box, but the
     // label is only the TOP line — measured 8.5-9.25px apart live (the
     // user's sharpest complaint). align-self: start + a box the height of
-    // the label's own line (--text-base at --leading-tight) still lands
+    // the label's own line (--fs-base at --lh-tight) still lands
     // 4.125px high, because .sess-open centres its whole two-line content
     // block inside the tap target — margin-top makes up exactly that
     // slack, derived from the same tokens .sess-open's stack uses (CDP-
     // measured 0px gap after this fix, at both 1440 and 390).
     const rule = ruleFor('.sess-lamp');
     expect(rule).toContain('align-self: start');
-    expect(rule).toContain('height: calc(var(--text-base) * var(--leading-tight))');
+    expect(rule).toContain('height: calc(var(--fs-base) * var(--lh-tight))');
     expect(rule).toContain('display: grid');
     expect(rule).toContain('place-items: center');
     expect(rule).toContain('margin-top: calc(');
     expect(rule).toContain('var(--tap-min)');
-    expect(rule).toContain('var(--text-xs)');
+    expect(rule).toContain('var(--fs-xs)');
   });
 
   it('compensates the lamp for EVERY line that can push the stack past the floor', () => {
@@ -152,7 +254,7 @@ describe('fleet density and alignment', () => {
     // rows and for a row carrying both extra lines.
     const rule = ruleFor('.sess-line:has(.sess-subagent-list) .sess-lamp');
     expect(rule).toContain('max(0px');
-    expect(rule).toContain('var(--text-2xs)');
+    expect(rule).toContain('var(--fs-2xs)');
   });
 
   it('gives .proj-card-add and .sess-actions the same real-button treatment', () => {
@@ -267,17 +369,18 @@ describe('fleet density and alignment', () => {
       // `font: inherit` outranks `.sess-held`'s own `font-family` (0,1,1 beats
       // 0,1,0), so the mono face has to be restated after it or the cell
       // silently changes typeface the moment it becomes a door.
-      expect(declaredValues(css, 'button.sess-held', 'font-family')).toContain('var(--font-mono)');
+      expect(declaredValues(css, 'button.sess-held', 'font-family')).toContain('var(--family-mono)');
       // `color` is deliberately NOT restated here — `.sess-held` answers for
-      // it, and `.sess-line--active .sess-held` (0,2,0) still outranks this
-      // rule on the selected slab. A copy would be one more place to forget.
+      // it, on the selected row's tint as everywhere else (D-5101). A copy
+      // would be one more place to forget.
       expect(declaredValues(css, 'button.sess-held', 'color')).toEqual([]);
     });
   });
 
   // The ack control's own floor. `padding: var(--sp-1) 0` around an 11px line
   // measured ~19px — under WCAG 2.2's 24px — on a control whose action cannot
-  // be undone.
+  // be undone. 24px, main's size: the 44px growth (V2) was ruled back out by
+  // the operator (2026-10-15).
   it('gives "Mark all seen" a real 24px box rather than an overhanging overlay', () => {
     const rule = ruleFor('.bucket-head .bucket-head-seen');
     expect(declValue(rule, 'min-height')).toBe('var(--sp-6)');
@@ -285,6 +388,19 @@ describe('fleet density and alignment', () => {
     // chip is inert, so an overhang would turn a near-miss that does nothing
     // into an irreversible ack.
     expect(() => ruleFor('.bucket-head-seen::before')).toThrow();
+  });
+
+  // T3a (D-6331): the Exited and Archived chips are quiet. The quiet marker (`data-quiet`) selects ONE rule that stays
+  // SELF-GROUNDED (its own background and color, so `design/audit.mjs`'s descendant pass measures the chip's text and its
+  // count) and quiets with tokens and weight, never with `opacity`: a faded element composites its whole subtree and
+  // pulls the text under the contrast floor (the note above `.fleet-list` has the measurements).
+  it('draws a quiet chip from tokens, self-grounded, with no opacity', () => {
+    const rule = stripComments(ruleFor('.bucket-head[data-quiet]'));
+    expect(declValue(rule, 'background')).toMatch(/^var\(--bg-[a-z]+\)$/);
+    expect(declValue(rule, 'color')).toMatch(/^var\(--ink-[a-z]+\)$/);
+    expect(declValue(rule, 'font-weight')).toBe('var(--weight-regular)');
+    expect(rule).not.toMatch(/opacity/);
+    expect(rule).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i);
   });
 
   it('right-aligns .sess-actions in its column so it shares an edge with .proj-card-add', () => {
@@ -300,19 +416,52 @@ describe('fleet density and alignment', () => {
   });
 });
 
-describe('selection is polarity, status is hue', () => {
-  // The law: selection is achromatic polarity (fill + ink flip), status keeps
-  // hue. Selection never owns a perimeter; status owns one only for attention.
-  // Forced, not chosen: --accent and --status-busy are the same hex (#45D67E)
-  // and the four account hues own the cool half of the wheel, so on THIS
-  // screen any coloured selection is a status or identity collision.
+describe('selection is tint plus rail, status is hue (D-5101)', () => {
+  // The law: selection is the accent tint with a 2px accent rail on the row's
+  // leading edge, and status keeps hue — on the selected row too. It used to be
+  // reverse video (background --ink-primary, ink --bg-page), which evicted the
+  // status and lane hues from the row and needed an achromatic override for
+  // every coloured meta cell, a lamp plate, a re-grounded ··· and a recoloured
+  // focus ring. Each of those pins is inverted below rather than deleted: the
+  // old rule "is gone", and the claim that replaces it is beside it. The rail,
+  // a shape no status uses, is what keeps selection from reading as a status:
+  // --accent and --status-busy are the same hex (#45D67E), so a hue fill alone
+  // would be a status collision, which is why the slab was chosen in the
+  // first place.
 
-  it('inverts the selected row instead of tinting it', () => {
+  /** The gate's own list of the inks it measures on the selected row. */
+  const gate = readFileSync(
+    path.join(import.meta.dirname, '..', 'design', 'contrast-check.mjs'), 'utf8');
+  const gateList = (name: string): string[] => {
+    const m = gate.match(new RegExp(`const ${name} = \\[([^\\]]*)\\]`));
+    expect(m, `${name} is not declared in contrast-check.mjs`).not.toBeNull();
+    return [...(m![1] ?? '').matchAll(/'(--[a-z0-9-]+)'/g)].map((x) => x[1]!);
+  };
+  /** Every rule in the sheet that names the selected row and sets a colour. */
+  const activeColourRules = (): string[] => {
+    const out: string[] = [];
+    for (const m of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const [, selector, body] = m;
+      // A DESCENDANT of the selected row — the row's own rule is the ground.
+      if (/\.sess-line--active\s+\S/.test(selector!.trim()) && /(^|;)\s*(color|background)\s*:/.test(body!)) {
+        out.push(norm(selector!));
+      }
+    }
+    return out;
+  };
+
+  it('tints the selected row and rails it, instead of inverting it', () => {
     // The old signal was --bg-raised on --bg-surface: 1.10:1 dark / 1.17:1
     // light — less than the hairline that separates one card from the next.
+    // The slab answered that with polarity; the tint answers it with a hue
+    // ground plus a rail, and keeps the row's own ink.
     const rule = ruleFor('.sess-line--active');
-    expect(rule).toContain('background: var(--ink-primary)');
-    expect(rule).toContain('color: var(--bg-page)');
+    expect(rule).not.toContain('background: var(--ink-primary)');
+    expect(rule).not.toContain('color: var(--bg-page)');
+    expect(declValue(rule, 'background')).toBe('var(--accent-tint)');
+    expect(declValue(rule, 'box-shadow')).toBe('inset 2px 0 0 var(--accent)');
+    expect(declValue(ruleFor('.sess-line--active .sess-label'), 'font-weight'))
+      .toBe('var(--weight-semibold)');
   });
 
   it('leaves no busy perimeter, and keeps the amber one byte for byte', () => {
@@ -328,141 +477,69 @@ describe('selection is polarity, status is hue', () => {
       .toBe('var(--status-attention-text)');
   });
 
-  it('strips every status and account hue from the slab', () => {
-    // Every coloured cell on the row must be neutralised by the SAME rule —
-    // this is what catches a STRANDED cell when someone adds a new coloured
-    // element to .sess-meta and forgets it here.
-    //
-    // Fix round 4, controller item 1: the membership check used to slice the
-    // file between the previous `}` and a literal `${last} {`, so it demanded
-    // exactly one space before the brace — the very copy the shared reader
-    // replaced elsewhere in this file, left standing inside one test.
-    // `selectorsOf` returns the rule's own normalised list, so re-indenting or
-    // re-ordering the group is free and dropping a member is not.
-    const last = '.sess-line--active .sess-meta > *:not(:first-child)::before';
-    expect(declValue(ruleFor(last), 'color')).toBe('var(--edge-strong)');
-    const group = selectorsOf(css, last);
-    for (const cell of ['.sess-meta', '.sess-state', '.sess-tally', '.sess-warn',
-                        '.sess-acct', '.sess-acct-away',
-                        // Final review, Minor 3. These four take their OWN
-                        // `color: var(--ink-tertiary)` (one shared rule for
-                        // the first three, its own for .sess-unmeasured), and
-                        // a child's own colour beats the colour it would
-                        // inherit from .sess-meta — so being absent from this
-                        // group left them painting ink-tertiary on the
-                        // --ink-primary slab: 2.72:1 dark / 2.91:1 light,
-                        // against this repo's 4.5:1 body floor. Measured with
-                        // design/audit.mjs's own resolver, the same engine
-                        // the gate uses; --edge-strong gives 9.27 / 9.91.
-                        //
-                        // .sess-held was the original omission and shipped on
-                        // main; .sess-lifecycle and .sess-swapblocked joined
-                        // its rule on this branch and inherited the bug,
-                        // which widened it — .sess-lifecycle renders on every
-                        // non-running row, and the operator this branch
-                        // serves selects the dead row precisely to read
-                        // "stopped by agent, 2d ago".
-                        '.sess-held', '.sess-lifecycle', '.sess-swapblocked',
-                        // `.sess-stranded` and `.sess-offpool` take attention
-                        // ink of their own, so each would strand on the selected
-                        // slab without this achromatic membership.
-                        '.sess-stranded', '.sess-offpool', '.sess-unmeasured',
-                        // The substrate chip (spec §4) joined the same way:
-                        // its own `color: var(--ink-tertiary)` beats the
-                        // slab's inherited ink exactly like .sess-unmeasured
-                        // next to it, so absence here is the same stranding.
-                        '.sess-substrate',
-                        // §1.6b's chip: it sets its own `--status-dead-text`
-                        // (and `--ink-tertiary` on two variants), so it is a
-                        // coloured cell exactly like `.sess-warn` above and
-                        // strands the same way if it is left out of here.
-                        '.sess-spawn',
-                        // The context-pressure chip (D-2011): its own
-                        // `--status-attention-text` (and `--status-dead-text`
-                        // on the wedge variant, D-2016) strands the same way.
-                        '.sess-ctxpressure']) {
-      expect(group).toContain(`.sess-line--active ${cell}`);
+  it('keeps every status and lane hue on the selected row: the achromatic group is gone', () => {
+    // Was: "strips every status and account hue from the slab" — one
+    // `color: var(--edge-strong)` rule naming 43 cells. Gone, and so is every
+    // other selected-row rule that repainted a cell.
+    expect(() => ruleFor('.sess-line--active .sess-meta > *:not(:first-child)::before')).toThrow();
+    expect(() => ruleFor('.sess-line--active .sess-meta')).toThrow();
+    expect(activeColourRules()).toEqual([]);
+    // The replacement: the gate measures every ink the meta draws ON the tint,
+    // the neutral tiers, every status text and every lane hue.
+    const inks = gateList('SELECTED_ROW_INKS');
+    for (const t of ['--ink-primary', '--ink-secondary', '--ink-tertiary',
+      '--status-busy-text', '--status-attention-text', '--status-dead-text',
+      '--acct-cyan', '--acct-blue', '--acct-magenta', '--acct-amber']) {
+      expect(inks, t).toContain(t);
     }
   });
 
-  it('beats the spawn chip\'s own [data-spawn] variants by SPECIFICITY, not by source order', () => {
-    // Membership in the achromatic group (asserted just above) is necessary and
-    // NOT sufficient for this one cell. `.sess-line--active .sess-spawn` is
-    // (0,2,0) — and so is `.sess-spawn[data-spawn='expired']`, which is declared
-    // LATER in this file. On a selected row carrying one of those variants the
-    // tie therefore goes to source order, the variant wins, and the chip paints
-    // --ink-tertiary on the --ink-primary slab: 2.72:1 dark / 2.91:1 light,
-    // against this file's 4.5:1 body floor. The group's
-    // `.sess-line--active .sess-spawn[data-spawn]` member (0,3,0) is what
-    // settles it by specificity instead — which is also what makes moving
-    // either rule free. Nothing tested that member: deleting it left the whole
-    // pwa suite green (measured 2026-08-17), so the one line standing between
-    // the selected row and a sub-floor contrast was a comment, not a mechanism.
-    //
-    // Counting classes + attributes + pseudo-classes is enough for a (0,x,0)
-    // comparison: there is no id and no element name anywhere near .sess-spawn,
-    // and both sides of this tie are pure class/attribute selectors.
-    const spec = (sel: string): number =>
-      (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
-    const group = selectorsOf(css, '.sess-line--active .sess-meta > *:not(:first-child)::before')
-      .filter((s) => s.startsWith('.sess-line--active .sess-spawn'));
-    expect(group, 'the spawn chip left the achromatic group entirely').not.toEqual([]);
-    const scrubbed = stripComments(css);
-    const groupAt = scrubbed.indexOf('.sess-line--active .sess-spawn');
-    for (const variant of ['expired', 'unrecognised']) {
-      const sel = `.sess-spawn[data-spawn=${variant}]`;
-      // The variant really does paint a colour of its own — without that there
-      // is nothing to beat and everything below would be vacuous.
-      expect(declValue(ruleFor(sel), 'color'), `${sel} no longer sets its own colour`)
-        .toBe('var(--ink-tertiary)');
-      // …and it is declared AFTER the achromatic rule, which is precisely why
-      // an equal-specificity member cannot settle this.
-      const variantAt = scrubbed.search(new RegExp(`\\.sess-spawn\\[data-spawn=['"]?${variant}['"]?\\]`));
-      expect(variantAt, `${sel} is not in the stylesheet any more`).toBeGreaterThan(-1);
-      expect(variantAt, `${sel} now precedes the achromatic rule — this test no longer proves anything`)
-        .toBeGreaterThan(groupAt);
-      expect(Math.max(...group.map(spec)),
-        `no member of the achromatic group out-specifies ${sel}, so the selected row loses the tie to it`)
-        .toBeGreaterThan(spec(sel));
+  it('needs no selected-row member to out-specify the spawn and ctx-pressure variants', () => {
+    // Was: the achromatic group had to beat `.sess-spawn[data-spawn=…]` and
+    // `.sess-ctxpressure[data-wedge]` by specificity, or the variants painted
+    // their own ink on the slab. Gone: no selected-row rule names either chip,
+    // because the variants' own inks (--ink-tertiary, --status-dead-text) are
+    // what the row should show, and the gate holds both on the tint.
+    expect(() => ruleFor('.sess-line--active .sess-spawn')).toThrow();
+    expect(() => ruleFor('.sess-line--active .sess-spawn[data-spawn]')).toThrow();
+    expect(() => ruleFor('.sess-line--active .sess-ctxpressure')).toThrow();
+    expect(() => ruleFor('.sess-line--active .sess-ctxpressure[data-wedge]')).toThrow();
+    for (const variant of ['expired', 'unrecognised', 'narrow-widened']) {
+      expect(declValue(ruleFor(`.sess-spawn[data-spawn=${variant}]`), 'color')).toBe('var(--ink-tertiary)');
     }
+    expect(declValue(ruleFor('.sess-ctxpressure[data-wedge]'), 'color')).toBe('var(--status-dead-text)');
+    const inks = gateList('SELECTED_ROW_INKS');
+    expect(inks).toContain('--ink-tertiary');
+    expect(inks).toContain('--status-dead-text');
   });
 
-  it('beats the ctx-pressure chip\'s own [data-wedge] variant by SPECIFICITY, not by source order (Finding 4)', () => {
-    // Same shape as the spawn-chip test above, one cell over. Membership in
-    // the achromatic group (asserted in the earlier list test) is necessary
-    // and NOT sufficient here either: `.sess-line--active .sess-ctxpressure`
-    // is (0,2,0) — and so is `.sess-ctxpressure[data-wedge]` itself, which
-    // paints --status-dead-text and is declared LATER in this file. On a
-    // selected+wedged row the tie would go to source order, the standalone
-    // rule would win, and the chip strands --status-dead-text on the
-    // selected slab instead of the achromatic --edge-strong the group
-    // exists to guarantee. The group's OWN
-    // `.sess-line--active .sess-ctxpressure[data-wedge]` member (0,3,0) is
-    // what settles it by specificity instead. Nothing tested that member:
-    // deleting it left the whole pwa suite green (285 passed) — the bare
-    // `.sess-line--active .sess-ctxpressure` member two lines up only pins
-    // the UNwedged chip's colour, not the wedged one's.
-    const spec = (sel: string): number =>
-      (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
-    const group = selectorsOf(css, '.sess-line--active .sess-meta > *:not(:first-child)::before')
-      .filter((s) => s.startsWith('.sess-line--active .sess-ctxpressure'));
-    expect(group, 'the ctx-pressure chip left the achromatic group entirely').not.toEqual([]);
-    const scrubbed = stripComments(css);
-    const groupAt = scrubbed.indexOf('.sess-line--active .sess-ctxpressure');
-    const sel = '.sess-ctxpressure[data-wedge]';
-    // The variant really does paint a colour of its own — without that there
-    // is nothing to beat and everything below would be vacuous.
-    expect(declValue(ruleFor(sel), 'color'), `${sel} no longer sets its own colour`)
-      .toBe('var(--status-dead-text)');
-    // …and it is declared AFTER the achromatic rule, which is precisely why
-    // an equal-specificity member cannot settle this.
-    const variantAt = scrubbed.search(/\.sess-ctxpressure\[data-wedge\]/);
-    expect(variantAt, `${sel} is not in the stylesheet any more`).toBeGreaterThan(-1);
-    expect(variantAt, `${sel} now precedes the achromatic rule — this test no longer proves anything`)
-      .toBeGreaterThan(groupAt);
-    expect(Math.max(...group.map(spec)),
-      `no member of the achromatic group out-specifies ${sel}, so the selected+wedged row loses the tie to it`)
-      .toBeGreaterThan(spec(sel));
+  it('paints a `narrow` spawn in the chip\'s LOUD default ink, never the quiet "we do not know" one', () => {
+    // rc 6 does not heal on its own: the window stays narrow after the client
+    // that narrowed it leaves, the startup gates it skipped are never revisited,
+    // and the stamp changes only on the next spawn. So it takes `.sess-spawn`'s
+    // default --status-dead-text, like blocked/login/vanished — which it gets by
+    // having NO variant rule of its own.
+    expect(declValue(ruleFor('.sess-spawn'), 'color')).toBe('var(--status-dead-text)');
+    // Every rule that names a `data-spawn` VALUE and sets a colour, however its
+    // selector is spelled (`[data-spawn=narrow].sess-spawn`, `:is(…)`, a second
+    // rule further down) — `narrow` must be in none of them.
+    const painted: string[] = [];
+    for (const m of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const [, selector, body] = m;
+      if (!/data-spawn/.test(selector!) || !/(^|;)\s*color\s*:/.test(body!)) continue;
+      for (const v of selector!.matchAll(/data-spawn\s*=\s*['"]?([\w-]+)/g)) painted.push(v[1]!);
+    }
+    // The control: the scan does find the two quiet variants, so an empty
+    // result below is a finding, not a scan that saw nothing.
+    expect(painted).toEqual(expect.arrayContaining(['expired', 'unrecognised']));
+    expect(painted).not.toContain('narrow');
+  });
+
+  it('paints a narrow spawn whose pane is measured wide again (`narrow-widened`) in the QUIET ink', () => {
+    // History, not a fault: the pane is wide with its prompt up, and ccd's
+    // readers are back on (spawnWords.ts's `narrowSinceWidened`). What stays
+    // loud is a narrow spawn still unmeasured or narrow — the case above.
+    expect(declValue(ruleFor(".sess-spawn[data-spawn='narrow-widened']"), 'color')).toBe('var(--ink-tertiary)');
   });
 
   it('gives the spawn chip a flex: none cell so it cannot steal the hold reason\'s room', () => {
@@ -472,106 +549,120 @@ describe('selection is polarity, status is hue', () => {
     expect(ruleFor('.sess-spawn')).toContain('flex: none');
   });
 
-  // The list above names cells; this names the RULE that keeps producing them.
-  // Three separate cells have now been stranded on the selected slab by the
-  // same move — add a meta cell, give it a colour, forget the achromatic
-  // group — and a hand-written membership list only ever catches the ones
-  // somebody remembered to type into it. contrast-check.mjs does not catch it
-  // either: it prices the group's own pair (--edge-strong on --ink-primary)
-  // and has no way to know a cell is missing FROM the group.
-  //
-  // So the census reads the row's own source. Every `sess-…` class
-  // SessionLine.tsx actually renders, that fleet.css gives a colour of its
-  // own, must be answered by a `.sess-line--active` rule that sets a colour —
-  // the achromatic group for most of them, .sess-actions' own dedicated rule
-  // for the ··· button. `color: inherit` is already an answer (the flip is
-  // what it inherits). A modifier is covered by its base class, and that is
-  // specificity, not hand-waving: `.sess-line--active .sess-state` is (0,2,0)
-  // and `.sess-state--waiting` is (0,1,0), so the ancestor-qualified rule wins
-  // wherever it sits in the file.
-  //
-  // What it cannot see is an INLINE style, which beats every selector short of
-  // !important — .sess-acct's account hue is dropped in the component for
-  // exactly that reason (SessionLine.tsx's `acctStyle`). That one is a TSX
-  // decision and stays pinned there.
-  it('leaves no coloured cell on the row without an answer on the slab', () => {
-    const tsx = readFileSync(
-      path.join(import.meta.dirname, '..', 'src', 'fleet', 'SessionLine.tsx'), 'utf8');
+  it('gives the child-of-run label .sess-substrate\'s shape, in a rule of its own (wave 5, spec §5.9)', () => {
+    // The ruled shape: `color: var(--ink-tertiary); flex: none`, no truncation. Fixed
+    // words beside the hold reason, the row's one shrinkable cell, so the label
+    // never truncates and never steals the hold reason's room. Its OWN rule,
+    // not a second selector on .sess-substrate's: that rule's key is
+    // grandfathered in contrast.test.ts's uncovered census, and renaming it
+    // would read as a new blind spot.
+    const substrate = ruleFor('.sess-substrate');
+    const child = ruleFor('.sess-child');
+    for (const prop of ['color', 'flex']) {
+      expect(declValue(child, prop), prop).not.toBeNull();
+      expect(declValue(child, prop), prop).toBe(declValue(substrate, prop));
+    }
+    const props = stripComments(child).split(';').map((d) => d.split(':')[0]!.trim()).filter((p) => p !== '');
+    expect(props.sort(), 'no truncation, and nothing beyond the ruled shape').toEqual(['color', 'flex']);
+    expect(selectorsOf(css, '.sess-child')).toEqual(['.sess-child']);
+    // No truncation from ANY rule that targets the label — a later rule of the
+    // same name included, not only the one read above.
+    for (const prop of ['text-overflow', 'overflow', 'overflow-x', 'overflow-y', 'white-space']) {
+      expect(declaredValues(css, '.sess-child', prop), prop).toEqual([]);
+    }
+  });
 
-    // `className="a b"` and `` className={`a b--${x}`} `` alike; the
-    // interpolation is stripped, leaving the `sess-state--` PREFIX, which is
-    // expanded below into every modifier the stylesheet declares for it.
+  // The census that replaced the hand-written membership list, inverted with
+  // it. It used to demand that every coloured cell SessionLine renders be
+  // ANSWERED by a `.sess-line--active` rule; on the tint the answer is the
+  // opposite — no cell may be repainted, and every cell's own ink must be one
+  // the gate measures on the tint. A new coloured cell in a token the gate does
+  // not hold on the tint reds here, which is the same stranding the old census
+  // caught, one ground over.
+  it('paints every coloured cell on the row in an ink the gate measures on the tint', () => {
+    // THE ROW'S OWN FILES, followed rather than named: `SessionLine.tsx` plus
+    // the local components it renders (the meta line lives in `SessionMeta.tsx`).
+    const dir = path.join(import.meta.dirname, '..', 'src', 'fleet');
+    const rowFiles = ['SessionLine.tsx'];
+    for (const m of readFileSync(path.join(dir, 'SessionLine.tsx'), 'utf8')
+      .matchAll(/from '\.\/([A-Za-z]+)'/g)) {
+      const f = `${m[1] ?? ''}.tsx`;
+      if (existsSync(path.join(dir, f))) rowFiles.push(f);
+    }
+    expect(rowFiles.length, 'the row is at least SessionLine and its meta').toBeGreaterThan(1);
+    const tsx = rowFiles.map((f) => readFileSync(path.join(dir, f), 'utf8')).join('\n');
+
     const rendered = new Set<string>();
     for (const m of tsx.matchAll(/className=[{]?[`"']([^`"']*)[`"']/g)) {
       for (const c of (m[1] ?? '').replace(/\$\{[^}]*\}/g, '').split(/\s+/)) {
         if (c.startsWith('sess-')) rendered.add(c);
       }
     }
-    // A prefix left by an interpolation stands for every class the stylesheet
-    // actually declares under it, so the three .sess-state--* modifiers are
-    // censused rather than skipped.
     for (const prefix of [...rendered].filter((c) => c.endsWith('--'))) {
       rendered.delete(prefix);
       for (const m of css.matchAll(new RegExp(`\\.(${prefix}[a-z0-9-]+)`, 'g'))) {
         rendered.add(m[1] ?? '');
       }
     }
-    // The row itself is the ground, not a cell on it.
     rendered.delete('sess-line');
     rendered.delete('sess-line--active');
     expect(rendered.size).toBeGreaterThan(15); // the extraction still works
 
-    const colorOf = (sel: string): string | null => {
+    // `.sess-actions` (the ··· button) paints its own --bg-raised chip, so its
+    // ink sits on that, not on the tint (`ink-secondary / raised` is gated).
+    const selfGrounded = new Set(['sess-actions']);
+    const inks = new Set(gateList('SELECTED_ROW_INKS'));
+    const unmeasured: string[] = [];
+    for (const c of [...rendered].sort()) {
+      if (selfGrounded.has(c)) continue;
+      let colours: string[];
       try {
-        return declValue(ruleIn(css, sel), 'color');
+        colours = declaredValues(css, `.${c}`, 'color');
       } catch {
-        return null; // no such rule: nothing to strand
+        continue; // no rule of its own: nothing painted, nothing to measure
       }
-    };
-    const base = (c: string): string => c.slice(0, c.indexOf('--') + 2 || undefined);
-
-    const stranded = [...rendered].sort().filter((c) => {
-      const own = colorOf(`.${c}`);
-      if (own === null || own === 'inherit') return false;
-      const answered = colorOf(`.sess-line--active .${c}`)
-        ?? (c.includes('--') ? colorOf(`.sess-line--active .${base(c).slice(0, -2)}`) : null);
-      return answered === null;
-    });
-    expect(stranded).toEqual([]);
+      for (const v of colours) {
+        const tok = v.match(/^var\((--[a-z0-9-]+)\)$/)?.[1];
+        if (v === 'inherit' || v === 'currentColor') continue;
+        if (!tok || !inks.has(tok)) unmeasured.push(`.${c}: ${v}`);
+      }
+    }
+    expect(unmeasured).toEqual([]);
+    expect(activeColourRules(), 'a cell is repainted on the selected row').toEqual([]);
   });
 
-  it('gives the lamp a --bg-well plate so its dot keeps the hue it was gated on', () => {
-    // Every dot on this row must sit on --bg-well — the one background
-    // design/contrast-check.mjs already verifies all four dots against at 3:1
-    // in BOTH themes. Without it the dark dots die on the near-white slab
-    // (busy 1.63, attention 1.55). Absolutely positioned so the first grid
-    // column does not widen and push this row's label off the shared edge.
-    const plate = ruleFor('.sess-line--active .sess-lamp::before');
-    expect(plate).toContain('position: absolute');
-    expect(plate).toContain('width: var(--lamp-size)');
-    expect(plate).toContain('background: var(--bg-well)');
-    // The plate is positioned; without this it paints over the dot.
-    expect(ruleFor('.sess-line--active .sess-lamp > .dot')).toContain('position: relative');
+  it('needs no lamp plate: the dots are measured on the tint itself', () => {
+    // Was: a --bg-well plate under the lamp, because the dark dots died on the
+    // near-white slab (busy 1.63, attention 1.55). Gone, with its positioning.
+    expect(() => ruleFor('.sess-line--active .sess-lamp::before')).toThrow();
+    expect(() => ruleFor('.sess-line--active .sess-lamp > .dot')).toThrow();
+    expect(() => ruleFor('.sess-line--active .sess-lamp')).toThrow();
+    expect(gateList('SELECTED_ROW_DOTS').sort()).toEqual(
+      ['--status-attention', '--status-busy', '--status-cleanup', '--status-dead', '--status-done', '--status-idle']);
   });
 
-  it('keeps the focus ring visible on the row most likely to hold focus', () => {
-    // base.css draws :focus-visible in --accent, which measures 1.63:1 on the
-    // dark slab — an invisible ring exactly where focus lands.
-    expect(ruleFor('.sess-line--active :focus-visible')).toContain('outline-color: var(--bg-page)');
+  it('keeps base.css\'s accent focus ring on the selected row', () => {
+    // Was: the ring recoloured to --bg-page because the accent measured 1.63:1
+    // on the dark slab. Gone: the accent on the tint is the gated
+    // `ask header chip / accent-tint` pair, at the 4.5 text floor.
+    expect(() => ruleFor('.sess-line--active :focus-visible')).toThrow();
+    expect(gate).toMatch(/T\.accent, T\.accentTint, 4\.5\]/);
   });
 
-  it('flips the ··· with the row without touching its box', () => {
-    // Colour only: the 32×32 box, the hairline and the 44px ::before overlay
-    // stay on the base rule, so the matched pair with .proj-card-add survives.
-    const rule = ruleFor('.sess-line--active .sess-actions');
-    expect(rule).toContain('background: var(--bg-page)');
-    expect(rule).not.toContain('width');
-    expect(rule).not.toContain('height');
+  it('leaves the ··· as it is on every row', () => {
+    // Was: the ··· re-grounded to --bg-page so it did not punch a bright chip
+    // into the slab. Gone: on the tint its own --bg-raised chip is the one it
+    // wears everywhere, and its ink on that is `ink-secondary / raised`.
+    // D-6332: the selected row's ⋯ has a rule again, but only to SHOW it under a mouse (opacity 1, inside the
+    // fine-pointer query): it re-grounds nothing, so the chip is the same one on the tint.
+    const fine = atBlock(css, '@media (hover: hover) and (pointer: fine)');
+    expect(stripComments(ruleIn(fine, '.sess-line--active .sess-actions')).match(/[\w-]+(?=\s*:)/g)).toEqual(['opacity']);
+    expect(declValue(ruleFor('.sess-actions'), 'background')).toBe('var(--bg-raised)');
   });
 
-  it('survives forced colours, where the polarity channel does not exist', () => {
-    // Canvas/CanvasText flatten fill AND ink, leaving font-weight alone. An
-    // inset border is the channel that survives.
+  it('survives forced colours, where neither the tint nor the rail exists', () => {
+    // Canvas/CanvasText flatten fill AND ink and drop the inset box-shadow,
+    // leaving font-weight alone. An inset outline is the channel that survives.
     // Fix round 4, controller item 1: `css.indexOf('@media (forced-colors:
     // active)')` then a slice to END OF FILE would have accepted a
     // `.sess-line--active` rule that had fallen OUT of the block, and pinned
@@ -579,6 +670,15 @@ describe('selection is polarity, status is hue', () => {
     // own body, so both go away at once.
     const forced = atBlock(css, '@media (forced-colors: active)');
     expect(declValue(ruleIn(forced, '.sess-line--active'), 'outline'))
+      .toBe('2px solid CanvasText');
+  });
+
+  it("a folded card's name keeps its selection mark under forced colours (D-5495)", () => {
+    // The fold hides the selected row and the name chip stands in for it with
+    // the same tint and rail, which forced colours drop; every card name is
+    // already semibold, so the row's inset outline is the channel left.
+    const forced = atBlock(css, '@media (forced-colors: active)');
+    expect(declValue(ruleIn(forced, '.proj-card[data-holds-selection] .proj-card-name'), 'outline'))
       .toBe('2px solid CanvasText');
   });
 });
@@ -606,7 +706,13 @@ describe('shell-nav overflow backstop', () => {
 
 describe('archived sub-fold (Task 18)', () => {
   it('keeps the 44px thumb target on the toggle, same as every other tap row', () => {
-    expect(ruleFor('.proj-archived-toggle')).toContain('min-height: var(--tap-min)');
+    // The floor is `<BareRow>`'s now — five rules in this sheet declared the
+    // same six declarations and it is one component.
+    expect(BARE_ROW).toContain('min-h-tap');
+    expect(BARE_ROW).not.toContain('44px');
+    // The render half stays: the hook class is still on the element, which is
+    // what proves the floor reaches real markup rather than only a constant.
+    expect(stripComments(css)).toContain('.proj-archived-toggle');
   });
 });
 
@@ -625,12 +731,27 @@ describe('runs are not living panes', () => {
       // grounded for the contrast gate by the named-ancestor route, so they
       // need no `INHERITED_GROUNDS` entry of their own, but that route is
       // silent about glow — nothing else asserted these rules exist at all.
-      '.run-row .run-project', '.run-row .run-crossing', '.run-row .run-crossing-glyph']) {
+      '.run-row .run-project', '.run-row .run-crossing', '.run-row .run-crossing-glyph',
+      // Child-reclamation wave 5's chip and its refusal line join the list: the
+      // line carries the attention hue, the shape that tends to acquire a glow next.
+      '.run-row .run-child-reclaim', '.run-row .run-child-reclaim-glyph', '.run-row .run-child-reclaim-sentence']) {
       const rule = norm(stripComments(ruleIn(css, sel)));
       expect(rule, sel).not.toContain('--glow');
       expect(rule, sel).not.toContain('animation');
       expect(rule, sel).not.toContain('box-shadow');
     }
+  });
+
+  it('inks the reclaim chip from pairs already priced — no new colour pair (wave 5)', () => {
+    expect(declValue(ruleFor('.run-row .run-child-reclaim'), 'color')).toBe('var(--ink-secondary)');
+    expect(declValue(ruleFor('.run-row .run-child-reclaim-glyph'), 'color')).toBe('var(--ink-tertiary)');
+    expect(declValue(ruleFor('.run-row .run-child-reclaim-sentence'), 'color')).toBe('var(--status-attention-text)');
+    expect(declValue(ruleFor('.run-row .run-child-reclaim-sentence'), 'flex')).toBe('1 0 100%');
+  });
+
+  // Task C16 item 11 (review 1666 F4): the held-rows list's why-line takes its own line in the wrapping row.
+  it('puts the held-by why-line on its own line of the wrapping row (Task C16)', () => {
+    expect(declValue(ruleFor('.held-by-why'), 'flex')).toBe('1 0 100%');
   });
 });
 
@@ -679,20 +800,23 @@ describe('the program-ready badge is not a living pane', () => {
 // the same reason.
 describe('the coord banner is not a living pane, and its toggle is a real target', () => {
   it('no .coord-* rule glows, breathes or animates', () => {
-    for (const sel of ['.coord-banner', '.coord-banner .coord-glyph', '.coord-word', '.coord-toggle', '.coord-banner .coord-error']) {
+    for (const sel of ['.coord-banner', '.coord-banner .coord-glyph', '.coord-word', '.coord-banner .coord-error']) {
       const rule = norm(stripComments(ruleIn(css, sel)));
       expect(rule, sel).not.toContain('--glow');
       expect(rule, sel).not.toContain('animation');
       expect(rule, sel).not.toContain('box-shadow');
     }
+    // `.coord-toggle` left this list when it became `<Button variant="quiet">`.
+    // The claim did not: it is made against the class string that ships.
+    expectQuietIsNotAlive();
   });
 
   it('.coord-toggle is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleFor('.coord-toggle'), 'min-height')).toBe('var(--tap-min)');
+    expectQuietIsATarget();
   });
 
   it('.coord-banner itself clears the floor too — it is a status row, not just a label', () => {
-    expect(declValue(ruleFor('.coord-banner'), 'min-height')).toBe('var(--tap-min)');
+    expectControlRowIsATarget();
   });
 
   // Task 14 gate: same self-grounded proof `.abandon-sheet`/`.program-start-
@@ -706,6 +830,41 @@ describe('the coord banner is not a living pane, and its toggle is a real target
   // nothing left to fail on.
   it('.coord-banner is self-grounded — it declares its own color AND background', () => {
     const rule = ruleFor('.coord-banner');
+    expect(declValue(rule, 'color')).not.toBeNull();
+    expect(declValue(rule, 'background')).not.toBeNull();
+  });
+});
+
+// Child-reclamation wave 4: the reclaim row is the pause banner's shape, and
+// holds its discipline — a switch is a STATE, not a living pane.
+describe('the reclaim row is not a living pane, and its toggle is a real target', () => {
+  // DERIVED from the stylesheet, never hand-listed: every rule whose selector
+  // names a `.child-reclaim-` class, so a rule added later (as
+  // `.child-reclaim-status` once was) is checked the moment it exists.
+  const RULES = [...stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .map((m) => ({ sel: norm(m[1] ?? ''), body: norm(m[2] ?? '') }))
+    .filter((r) => r.sel.includes('.child-reclaim-'));
+  it('no .child-reclaim-* rule glows, breathes or animates', () => {
+    // The derivation is not vacuous: the row's live region and its list items
+    // are among the rules it found.
+    const sels = RULES.map((r) => r.sel);
+    expect(sels).toContain('.child-reclaim-status');
+    expect(sels).toContain('.child-reclaim-banner .child-reclaim-item');
+    expect(sels).toContain('.child-reclaim-word');
+    for (const { sel, body } of RULES) {
+      expect(body, sel).not.toContain('--glow');
+      expect(body, sel).not.toContain('animation');
+      expect(body, sel).not.toContain('box-shadow');
+    }
+    // The toggle is `<Button variant="quiet">` and has no rule here to derive.
+    expectQuietIsNotAlive();
+  });
+  it('.child-reclaim-toggle and the row clear the tap floor, off the shared token', () => {
+    expectQuietIsATarget();
+    expectControlRowIsATarget();
+  });
+  it('.child-reclaim-banner is self-grounded — its own color AND background', () => {
+    const rule = ruleFor('.child-reclaim-banner');
     expect(declValue(rule, 'color')).not.toBeNull();
     expect(declValue(rule, 'background')).not.toBeNull();
   });
@@ -823,9 +982,13 @@ describe('the program-start door and sheet are not living panes, and every real 
   it('no .program-start-* rule glows, breathes or animates', () => {
     const rules = [...stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
       .filter((m) => (m[1] ?? '').includes('.program-start-'));
-    // Ten today: door, door:active, sheet, ledger+note, timeout, warn,
-    // existing+refuse+error, go, go:active, go:disabled.
-    expect(rules.length).toBeGreaterThanOrEqual(10);
+    // Five today. It was ten: the door, the confirm control and their three
+    // state rules left when both became `<Button variant="quiet">` — the
+    // sheet, its ledger+note, its timeout, its warn and its
+    // existing+refuse+error remain.
+    expect(rules.length).toBeGreaterThanOrEqual(5);
+    // The claim the departed five carried, against what ships instead.
+    expectQuietIsNotAlive();
     for (const m of rules) {
       const sel = norm(m[1] ?? '');
       const rule = norm(m[2] ?? '');
@@ -846,19 +1009,29 @@ describe('the program-start door and sheet are not living panes, and every real 
 
   // Whole-branch review, M6: `.program-start-door` was copy-pasted from
   // `.coord-toggle`, which lives in a flex row (`.coord-banner`). The door's
-  // own parent is `.runs-screen`, `display: grid` — `flex: none` there is
-  // inert, a declaration that reads as load-bearing and does nothing.
-  it('.program-start-door declares no flex — its parent .runs-screen is a grid', () => {
-    expect(declValue(ruleFor('.runs-screen'), 'display')).toBe('grid');
-    expect(declValue(ruleFor('.program-start-door'), 'flex')).toBeNull();
+  // own parent is the run board's body, a grid — `flex: none` there is
+  // inert, a declaration that reads as load-bearing and does nothing. Since
+  // the page scaffold (D-5102) that body is PageScaffold's, not `.runs-screen`.
+  it('.program-start-door declares no flex — its parent, the scaffold body, is a grid', () => {
+    expect(PAGE_BODY.split(/\s+/)).toContain('grid');
+    // The claim survived the move to `<Button variant="quiet">`, and it is why
+    // the variant does NOT carry `flex-none`: the other three quiet controls
+    // sit in flex rows and pass it at the call site, this one must not. Both
+    // halves are checked — the variant, and this call site's own className.
+    expect(QUIET).not.toContain('flex-none');
+    const runsScreen = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'screens', 'RunsScreen.tsx'), 'utf8');
+    const door = /className="program-start-door[^"]*"/.exec(runsScreen);
+    expect(door, 'the door still carries its hook class').not.toBeNull();
+    expect(door?.[0]).not.toContain('flex-none');
   });
 
   it('.program-start-door is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleFor('.program-start-door'), 'min-height')).toBe('var(--tap-min)');
+    expectQuietIsATarget();
   });
 
   it('.program-start-go is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleFor('.program-start-go'), 'min-height')).toBe('var(--tap-min)');
+    expectQuietIsATarget();
   });
 
   // The named-ancestor descendant pair itself (Task 12 review lesson, applied
@@ -877,27 +1050,56 @@ describe('the program-start door and sheet are not living panes, and every real 
 });
 
 describe('the hold composer', () => {
-  it('declares its own placeholder colour — the block comment claims .proj-search verbatim', () => {
-    // FIX-WAVE OBSERVATION. The comment above this block says `.sess-hold-input`
-    // "copies .proj-search's declarations verbatim … same tokens, no new pair",
-    // and it omitted `::placeholder`, which .proj-search does declare. Left
+  it('declares its placeholder ink ONCE, in the component the three copies became', () => {
+    // FIX-WAVE OBSERVATION, kept because it is the argument for the component.
+    // This assertion used to compare two rules: `.sess-hold-input::placeholder`
+    // against `.proj-search::placeholder`. The block comment above the first
+    // claimed it copied the second "verbatim … same tokens, no new pair", and
+    // it had omitted `::placeholder` — which the second does declare. Left
     // undeclared the placeholder falls to the UA default in both colour
-    // schemes — and this placeholder is the ONLY place the reason convention
+    // schemes, and this placeholder is the ONLY place the reason convention
     // (`program:name wave:2/4`) is shown to whoever is typing it.
-    expect(declValue(ruleIn(css, '.sess-hold-input::placeholder'), 'color'))
-      .toBe(declValue(ruleIn(css, '.proj-search::placeholder'), 'color'));
-    expect(declValue(ruleIn(css, '.sess-hold-input::placeholder'), 'color')).toBe('var(--ink-tertiary)');
+    //
+    // The defect was that the fix had to be applied TWICE and the second
+    // application was found by reading rather than by a red suite. Both rules
+    // are now @ccrc/ui's `TextInput`, so there is one declaration to assert
+    // and no copy left to drift from it. The pair itself
+    // (--ink-primary on --bg-raised) is measured across all twelve palettes by
+    // utility-pairs.test.ts, which derives it from this same string.
+    // THE EXPORTED CONSTANT, not the source file. Reading the file would let
+    // a comment satisfy these assertions — which is not hypothetical: the
+    // identical guard written for `BackButton` was vacuous for exactly that
+    // reason and the mutation table caught it (see primitives.test.tsx).
+    expect(TEXT_INPUT).toContain('placeholder:text-ink-tertiary');
+
+    // THE INK AND THE GROUND, pinned by name. utility-pairs.test.ts measures
+    // this pair's CONTRAST across twelve palettes, which is a different
+    // question: swapping `text-ink-primary` for `text-ink-tertiary` keeps the
+    // ratio over 4.5 and passed that guard silently (measured). What typed
+    // text is MADE of is a design decision, not a ratio — the placeholder is
+    // deliberately the dimmer token and the value deliberately is not, and a
+    // guard that cannot tell them apart would let the two swap.
+    expect(TEXT_INPUT).toContain('bg-raised text-ink-primary');
+    // And both old classes are gone from this stylesheet, so nothing can
+    // quietly resurrect a third copy under an old name. `ruleIn` THROWS on a
+    // missing rule rather than returning null, so absence is asserted that way
+    // — the names survive in prose above, which a text scan would match.
+    // (`.login-input` was the third copy and lived in shell.css; the component
+    // assertion above is what now covers all three.)
+    for (const dead of ['.sess-hold-input', '.proj-search']) {
+      expect(() => ruleIn(css, dead), `${dead} should have retired into TextInput`).toThrow();
+    }
   });
 });
 
 describe('the pool chip and the strand are real cells, and the chip is a real target', () => {
   it('gives the tappable form a full-width 44px overlay without growing the chip', () => {
     const chip = ruleFor('.proj-card-pool');
-    expect(declValue(chip, 'line-height')).toBe('var(--leading-tight)');
+    expect(declValue(chip, 'line-height')).toBe('var(--lh-tight)');
 
     const rule = ruleFor('button.proj-card-pool::before');
     expect(declValue(rule, 'position')).toBe('absolute');
-    const vertical = norm('calc((var(--text-2xs) * var(--leading-tight) - var(--tap-min)) / 2)');
+    const vertical = norm('calc((var(--fs-2xs) * var(--lh-tight) - var(--tap-min)) / 2)');
     expect(declValue(rule, 'top')).toBe(vertical);
     expect(declValue(rule, 'bottom')).toBe(vertical);
     const horizontal = norm('min(0px, calc((100% - var(--tap-min)) / 2))');
@@ -918,6 +1120,51 @@ describe('the pool chip and the strand are real cells, and the chip is a real ta
     for (const state of ['malformed', 'unreadable', 'unrecognised']) {
       expect(group).toContain(normSel(`.proj-card-pool[data-pool='${state}']`));
     }
+  });
+
+  // Review round 1, C1. The account-pool chip (AccountsScreen) carries BOTH
+  // `.proj-card-pool` and `.acct-pool-chip`, so the shared untagged-attention
+  // rule proven above ALSO matches it — but an untagged ACCOUNT is the
+  // default, unconstrained state, not the worklist fault an untagged PROJECT
+  // is. `.acct-pool-chip[data-pool='untagged']` must win that colour back.
+  // Same shape as the spawn-chip / ctx-pressure cascade-tie tests above this
+  // file's `selection is polarity` describe: membership is necessary and not
+  // sufficient — a render test cannot see this at all (jsdom applies no
+  // stylesheet), so only reading the text can prove the override actually
+  // wins the tie rather than merely existing.
+  it("wins the untagged account chip's colour back from .proj-card-pool by SOURCE ORDER — both tie at (0,2,0)", () => {
+    const spec = (sel: string): number =>
+      (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
+    const sharedSel = ".proj-card-pool[data-pool='untagged']";
+    const acctSel = ".acct-pool-chip[data-pool='untagged']";
+    // The shared rule really does paint attention ink — without that there is
+    // nothing to beat and everything below would be vacuous.
+    expect(declValue(ruleFor(sharedSel), 'color'), `${sharedSel} no longer sets its own colour`)
+      .toBe('var(--status-attention-text)');
+    // …and the account chip's own rule really does win the quiet ink back.
+    expect(declValue(ruleFor(acctSel), 'color'), `${acctSel} no longer sets its own colour`)
+      .toBe('var(--ink-tertiary)');
+    // Equal specificity is why source order is load-bearing here at all — if
+    // one side already out-specified the other, this test would prove nothing
+    // about ORDER.
+    expect(spec(acctSel), 'the two selectors no longer tie at (0,2,0) — this test may be moot')
+      .toBe(spec(sharedSel));
+    const scrubbed = stripComments(css);
+    const sharedAt = scrubbed.indexOf(sharedSel);
+    const acctAt = scrubbed.indexOf(acctSel);
+    expect(sharedAt, `${sharedSel} is not in the stylesheet any more`).toBeGreaterThan(-1);
+    expect(acctAt, `${acctSel} is not in the stylesheet any more`).toBeGreaterThan(-1);
+    expect(acctAt, `${acctSel} now precedes the shared rule — this test no longer proves anything`)
+      .toBeGreaterThan(sharedAt);
+  });
+
+  // `stale` is account-only (AccountPoolWire has no project-side counterpart,
+  // design §5.7), so it is absent from `.proj-card-pool`'s shared list and
+  // would otherwise fall through to the base `--ink-tertiary` instead of the
+  // attention ink `poolRule` treats it the same as malformed/unreadable for.
+  it('gives the stale account chip the same attention ink as malformed/unreadable', () => {
+    expect(declValue(ruleFor(".acct-pool-chip[data-pool='stale']"), 'color'))
+      .toBe('var(--status-attention-text)');
   });
 
   it('keeps unavailable chip text unfaded while its inert form carries the distinction', () => {
@@ -954,30 +1201,53 @@ describe('maximum pool name account-row fit (D-2688)', () => {
     expect(POOL_NAME_RE.test(maximumPool)).toBe(true);
   });
 
-  it('keeps the complete pool identity in both sheet renderers', () => {
-    const swapSheet = readFileSync(
-      path.join(import.meta.dirname, '..', 'src', 'fleet', 'SwapSheet.tsx'), 'utf8');
-    const newSession = readFileSync(
-      path.join(import.meta.dirname, '..', 'src', 'fleet', 'NewSessionSheet.tsx'), 'utf8');
-    const fullIdentity = '<span className="acct-pool" aria-label={poolLabel} title={poolLabel}>';
+  it('keeps the complete pool identity in the ONE renderer both sheets use', () => {
+    // IT USED TO BE TWO. This read named `SwapSheet.tsx` and
+    // `NewSessionSheet.tsx` and asked each for the same four lines of markup —
+    // which was the honest shape while the two really did draw them
+    // separately. They are now one `PoolTag`, so the identity is asserted
+    // where it is written, and the two sheets are asserted to go THROUGH it:
+    // a copy that came back would show up as a second `acct-pool` span.
+    const src = (...rel: string[]): string =>
+      readFileSync(path.join(import.meta.dirname, '..', 'src', ...rel), 'utf8');
+    const tag = src('fleet', 'PoolTag.tsx');
+    expect(tag, 'the pool chip is not in PoolTag.tsx — find it and re-point this read')
+      .toContain('<span className="acct-pool" aria-label={label} title={label}>');
 
-    expect(swapSheet).toContain(fullIdentity);
-    expect(newSession).toContain(fullIdentity);
-    expect(newSession).toContain('<AccountRow');
+    for (const file of [['fleet', 'AccountRow.tsx'], ['fleet', 'NewSessionSheet.tsx']]) {
+      const text = src(...file);
+      expect(text, `${file.join('/')} no longer renders the pool chip at all`)
+        .toContain('<PoolTag pool=');
+      expect(text, `${file.join('/')} draws its own acct-pool span again — one voice, one chip`)
+        .not.toContain('className="acct-pool"');
+    }
+    expect(src('fleet', 'SwapSheet.tsx'), 'the swap sheet left the shared row')
+      .toContain('<AccountRow');
+    expect(src('fleet', 'NewSessionSheet.tsx')).toContain('<AccountRow');
   });
 
   it('makes only the pool label yield room to the fixed gauges at 320px', () => {
-    const primitives = readFileSync(
-      path.join(import.meta.dirname, '..', 'src', 'components', 'primitives.css'), 'utf8');
+    // WAVE 2 CHANGED HOW THIS IS EXPRESSED, NOT WHAT IT IS. The sheet panel's
+    // horizontal padding used to be a `padding` declaration in primitives.css;
+    // it is now the `px-4` utility on the primitive's cva. The chain this
+    // assertion walks is therefore three links instead of one —
+    // `px-4` -> `--spacing-4` -> `--sp-4` -> 16px — and each is pinned below so
+    // breaking any one of them still reds this test.
+    const sheet = readFileSync(
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'primitives', 'sheet.tsx'), 'utf8');
+    const theme = readFileSync(
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'styles', 'theme.css'), 'utf8');
     const tokens = readFileSync(
-      path.join(import.meta.dirname, '..', 'src', 'styles', 'tokens.css'), 'utf8');
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'styles', 'tokens.css'), 'utf8');
     const viewportWidth = 320;
-    const sheetPanel = ruleIn(primitives, '.sheet-panel');
-    const spacingFour = declValue(ruleIn(tokens, ':root'), '--sp-4');
+    const spacingFour = declValue(rootBody(tokens), '--sp-4');
     const rule = ruleFor('.acct-pool');
 
     expect(spacingFour).toBe('16px');
-    expect(declValue(sheetPanel, 'padding')).toContain('var(--sp-4)');
+    // the ordinary (non-full) panel pads by 4; the full variant deliberately
+    // runs to the glass edge with px-0, which is why this names the branch.
+    expect(sheet, 'the ordinary sheet panel no longer pads by 4').toContain('px-4');
+    expect(theme, '--spacing-4 no longer maps to --sp-4').toContain('--spacing-4: var(--sp-4)');
     expect(viewportWidth - 2 * Number.parseInt(spacingFour ?? '', 10)).toBe(288);
     expect(declValue(rule, 'flex')).toBe('1 1 0');
     expect(declValue(rule, 'min-width')).toBe('0');
@@ -986,5 +1256,329 @@ describe('maximum pool name account-row fit (D-2688)', () => {
     expect(declValue(rule, 'white-space')).toBe('nowrap');
     expect(declValue(ruleFor('.acct-gauges'), 'flex')).toBe('none');
     expect(declValue(ruleFor('.acct-gauges'), 'width')).toBe('148px');
+  });
+});
+
+describe('the fleet head holds one row, and the class chooser is not on it', () => {
+  // Measured in Chromium against the rendered component (the real markup, not
+  // a reconstruction) at 320/360/390/430/700/1440px, before this fix:
+  //
+  //   viewport   320   360   390   430   700   1440
+  //   overflow  +280  +240  +225  +225  +219    ok
+  //
+  // Two independent faults produced that, and both are pinned below.
+
+  it('wins the width override by REPLACING it, which needs no cascade at all', () => {
+    // FAULT 1. The chooser reuses the routing field's chrome and must reject
+    // its `width: 100%`, which is right for a field in a grid cell and wrong
+    // for a control sized to its own option list. The rule that shipped said
+    // so as `.fleet-class-select { width: auto }` — one class, (0,1,0),
+    // declared ~650 lines ABOVE `.route-select`, which was also (0,1,0). Equal
+    // specificity, so the tie went to source order and the override never
+    // applied ONCE: the control rendered at 286px at 390px and 528px at 700px
+    // instead of the 167px its options ask for. A comment, not a mechanism.
+    //
+    // The compound selector that fixed it was a cascade trick holding a layout
+    // decision together. There is no cascade in the answer any more: the
+    // chooser is `<Select>` (@ccrc/ui), its width is a UTILITY, and `cn` is
+    // tailwind-merge — so the caller's `w-auto` does not out-rank `w-full`, it
+    // REMOVES it before the class string reaches the DOM. No selector, no
+    // specificity, no source order, and no way to lose a tie.
+    //
+    // Both halves are asserted, because either alone is vacuous: the component
+    // has to be claiming a width for there to be one to drop, and the merge
+    // has to actually drop it.
+    expect(SELECT, 'Select no longer claims the full width — there is nothing to replace')
+      .toContain('w-full');
+    // By UTILITY, not by substring: `max-w-full` contains the four characters
+    // `w-full` and is a different property entirely.
+    const merged = cn(SELECT, 'w-auto flex-none max-w-full').split(/\s+/);
+    expect(merged, 'the caller\'s width lost: two width utilities reach the DOM')
+      .not.toContain('w-full');
+    expect(merged).toContain('w-auto');
+    expect(merged, 'the chooser lost the cap it asks for').toContain('max-w-full');
+
+    // …and no stylesheet rule may quietly take the decision back. A
+    // `.route-select` or a single-class `.fleet-class-select` returning to this
+    // sheet is the exact shape that was dead code for the whole of #116's life
+    // and read as a fix while doing nothing.
+    const scrubbed = stripComments(css);
+    expect(scrubbed, 'a dropdown rule is back in fleet.css — the chooser is a component now')
+      .not.toMatch(/(^|[\s,}])\.route-select\b/);
+    expect(scrubbed, 'a single-class .fleet-class-select rule is back — it cannot win the cascade')
+      .not.toMatch(/(^|[\s,}])\.fleet-class-select\s*\{/);
+  });
+
+  it('seats the chooser on the runs line, beside the one door that always renders', () => {
+    // FAULT 2, and the one no width could have fixed. `.fleet-head-right`'s
+    // four other items — count, accounts door, mail badge, bell — need 244px
+    // of min-content, and the group has 294px at 390px; the chooser's widest
+    // option, then "Coordinator row" (now "Automatic"), measures 167px against the ~38px left once
+    // its gap is paid. A 129px deficit is not closable by a floor, a cap or a
+    // shrink factor, so the control leaves the head. Those figures are browser
+    // measurements and deliberately are NOT recomputed here — an arithmetic
+    // gate over constants this file cannot measure would agree with itself
+    // forever. What IS checkable is the structure that keeps them true.
+    const line = ruleFor('.fleet-runs-line');
+    expect(declValue(line, 'display')).toBe('flex');
+
+    // THE HEAD MOVED AND THIS GUARD WENT VACUOUS — measured, not suspected.
+    // `<header className="fleet-head">` left `FleetScreen.tsx` for its own
+    // component; `indexOf` answered -1 twice, `slice(-1, -1)` answered `''`,
+    // and `expect('').not.toContain(…)` passed for a file that no longer held
+    // the markup it was reading. So the head is read where it LIVES, and the
+    // read asserts it found something before it asserts what is absent — the
+    // non-vacuity floor this file now owes every text scrape it makes.
+    const head = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'FleetHead.tsx'), 'utf8');
+    expect(head, 'the fleet head is not in FleetHead.tsx — find it and re-point this read')
+      .toContain('<header className="fleet-head">');
+    // What the chooser IS now (T2f, D-6371): the shared component, and its select's name. `fleet-class-select` is in no
+    // markup, so a check on that class name could not go red. Read in the CODE, its comments printed away, so a comment
+    // that names the chooser cannot red it, and in either quote (C12 item 18, review 1124 A-8).
+    const code = ts.createPrinter({ removeComments: true })
+      .printFile(ts.createSourceFile('FleetHead.tsx', head, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX));
+    expect(code, 'the printed code still holds the head').toContain('className="fleet-head"');
+    expect(code, 'the chooser component is back in the fleet head, where it never fit')
+      .not.toMatch(/\bClassChooser\b/);
+    expect(code, 'a class select is back inside <header>, where it never fit')
+      .not.toMatch(/aria-label=(?:["']Class["']|\{\s*["']Class["']\s*\})/);
+    const screen = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
+    expect(screen).toContain('<div className="fleet-runs-line">');
+  });
+
+  it('makes the runs door yield the row — now by LAYER, not by specificity', () => {
+    // The same cascade trap as the chooser's own override, one row over, and
+    // worth its own assertion because it is the trap this codebase has walked
+    // into twice. The row is a full-width button; inside the flex line it must
+    // become a flex item that yields.
+    //
+    // THE MECHANISM MOVED WITH THE SHAPE. `.fleet-runs-row` used to declare
+    // `width: 100%` itself, and the override had to be the descendant form —
+    // (0,2,0) against (0,1,0) — because the base rule was declared LATER in
+    // this file. The width is `<BareRow>`'s `w-full` utility now, and this
+    // sheet is UNLAYERED: an unlayered rule beats every layer regardless of
+    // specificity or position, so the override wins by a stronger argument
+    // than the one it used to need. That inversion is the app's override
+    // capability, stated in theme.css's header, and this is the one place in
+    // the suite that exercises it on a real pair.
+    expect(BARE_ROW, 'nothing claims the full width, so there is nothing to override')
+      .toContain('w-full');
+    expect(stripComments(css), 'fleet.css is layered now — the override is no longer guaranteed')
+      .not.toContain('@layer');
+
+    const override = ruleFor('.fleet-runs-line .fleet-runs-row');
+    expect(declValue(override, 'flex')).toBe('1 1 0');
+    expect(declValue(override, 'min-width')).toBe('0');
+    expect(declValue(override, 'width')).toBe('auto');
+  });
+
+  it('pairs the chooser with the runs door and NOT with the hot-files strip', () => {
+    // This pins the REASON, not just the arrangement. `HotFilesStrip` was the
+    // other candidate partner and is the wrong one because it renders itself
+    // or nothing: paired with it, the chooser would sit side by side only
+    // while somebody held a hot file and be orphaned again the moment the last
+    // claim expired. If that guard ever goes away the argument in
+    // `.fleet-runs-line`'s comment stops being true, and this is what says so.
+    const strip = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'HotFilesStrip.tsx'), 'utf8');
+    expect(stripComments(strip),
+      'HotFilesStrip no longer renders nothing when idle — re-argue the chooser\'s partner')
+      .toMatch(/liveClaims\.length === 0\)\s*return null/);
+
+    // …and the chooser really is beside the runs door rather than the strip.
+    const screen = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
+    const lineStart = screen.indexOf('<div className="fleet-runs-line">');
+    const lineEnd = screen.indexOf('<HotFilesStrip />');
+    expect(lineStart).toBeGreaterThan(-1);
+    expect(lineEnd).toBeGreaterThan(lineStart);
+    const row = screen.slice(lineStart, lineEnd);
+    expect(row, 'the runs door left the line the chooser was seated on')
+      .toContain('className="fleet-runs-row"');
+    // The select itself moved into one component (T2f, D-6371); the line places it.
+    expect(row, 'the chooser left the runs line').toContain('<ClassChooser />');
+    const chooser = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'ClassChooser.tsx'), 'utf8');
+    expect(chooser, 'the component lost the measured width utilities')
+      .toContain("cn('w-auto flex-none max-w-full', className)");
+    expect(row, 'HotFilesStrip was pulled inside the runs line — it renders nothing when idle')
+      .not.toContain('<HotFilesStrip');
+  });
+
+  it('seats the predicted-conflict chip beside the hot-files strip, outside the runs line (wave 4b)', () => {
+    const screen = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
+    const lineStart = screen.indexOf('<div className="fleet-runs-line">');
+    const strip = screen.indexOf('<HotFilesStrip />');
+    const chip = screen.indexOf('<ConflictChip sessions={sessions} />');
+    expect(lineStart).toBeGreaterThan(-1);
+    expect(strip).toBeGreaterThan(lineStart);
+    expect(chip, 'the chip left the fleet screen').toBeGreaterThan(-1);
+    expect(chip, 'the chip mounts after the strip').toBeGreaterThan(strip);
+    // Directly after the strip: nothing but the chip's own comment sits between them.
+    expect(screen.slice(strip + '<HotFilesStrip />'.length, chip)).not.toMatch(/<[A-Za-z]/);
+    // The runs line closes before the strip, so the chip, after it, is outside the line.
+    expect(screen.slice(lineStart, strip), 'the chip was pulled inside the runs line').not.toContain('<ConflictChip');
+    // It is a pill in fleet.css, on the strip's own gutters.
+    const rule = ruleFor('.chip--conflict');
+    expect(declValue(rule, 'margin')?.replace(/\s+/g, ''), 'the strip\'s own gutters').toBe('0var(--sp-4)var(--sp-2)');
+  });
+
+  it("lets the sheet's routing row shrink below its four selects, two to a row (D-8121)", () => {
+    // The same bug class as `.proj-card`'s `min-width: 0` above: a grid item's
+    // automatic minimum size is its min-content, so a bare `1fr` track cannot
+    // go narrower than the widest option of the `<select>` inside it and the
+    // row pushes the sheet sideways instead of the options scrolling. Every
+    // other multi-track grid in this file already spells it `minmax(0, 1fr)`;
+    // `.route-row` was the one that did not.
+    const cols = declValue(ruleFor('.route-row'), 'grid-template-columns');
+    // Compared THROUGH `norm`, which is the reader's documented contract:
+    // whitespace next to a comma or paren is never significant, so a
+    // formatter reflowing this value must not red the suite.
+    expect(cols).toBe(norm('repeat(2, minmax(0, 1fr))'));
+  });
+
+  it('leaves no bare repeat(n, 1fr) track anywhere in pwa/src', () => {
+    // The instance above is one of a CLASS, so the guard is written against
+    // the class: a bare `1fr` inside `repeat()` is unbounded below by its
+    // items' min-content and pushes its container sideways. This is not a
+    // vacuous 0-of-0 census — nine multi-track grids exist across these
+    // stylesheets and every one of them already spells it `minmax(0, 1fr)`,
+    // so the population is real and `.route-row` was the single exception.
+    const dir = path.join(import.meta.dirname, '..', 'src');
+    const sheets = readdirSync(dir, { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.css'));
+    expect(sheets.length, 'no stylesheets found — this walk stopped seeing the tree')
+      .toBeGreaterThan(3);
+
+    const offenders: string[] = [];
+    for (const sheet of sheets) {
+      const text = stripComments(readFileSync(path.join(dir, sheet), 'utf8'));
+      for (const m of text.matchAll(/repeat\(\s*[0-9]+\s*,\s*1fr\s*\)/g)) {
+        offenders.push(`${sheet}: ${m[0]}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe('the Accounts screen keeps its voices (the audit\'s quick wins)', () => {
+  it("the Accounts screen's prose is sans and its readouts stay mono", () => {
+    // The rule of voice: a sentence a person reads is set in the UI face, a
+    // value the machine reports is set in mono. "Next workspace lands on … —
+    // least-loaded" and "disabled on the fleet host" are sentences;
+    // "last reported 5m ago" is a readout beside a gauge.
+    for (const sel of ['.accounts-projection', '.accounts-disabled-note']) {
+      expect(declaredValues(css, sel, 'font-family'), `${sel} is prose`).toEqual(['var(--family-ui)']);
+      // A `font` shorthand would restate the family and pass a longhand read.
+      expect(declaredValues(css, sel, 'font'), `${sel} restates its family in a shorthand`).toEqual([]);
+    }
+    expect(declaredValues(css, '.accounts-fresh', 'font-family'), 'the freshness readout is mono')
+      .toEqual(['var(--family-mono)']);
+  });
+});
+
+// D-5545: the card is a glance and NO cell on it ends in an ellipsis — the name and the programme are shortened by
+// whole tokens in `sessionFacts.ts`, and every cell that used to ellipsise wraps at a space instead. jsdom lays
+// nothing out, so the rule is held where it is decided: each cell's LAST declaration of each property.
+describe('no card cell ends in an ellipsis (D-5545)', () => {
+  for (const sel of ['.sess-label', '.sess-meta > .sess-held', '.sess-meta > .sess-context', '.sess-meta > .sess-marker', '.sess-pw-prog']) {
+    it(`${sel} clips nothing and wraps`, () => {
+      expect(declaredValues(css, sel, 'text-overflow').at(-1), sel).toBe('clip');
+      expect(declaredValues(css, sel, 'white-space').at(-1), sel).toBe('normal');
+    });
+  }
+  it('the cross-project chip drops under the name rather than squeezing it', () => {
+    expect(declaredValues(css, '.sess-open', 'flex-wrap').at(-1)).toBe('wrap');
+  });
+});
+
+// D-5528: the programme slug is variable-length and the wave — the fact the
+// operator asked for — stays whole. D-5545: the programme no longer ellipsises
+// either: the model shortens it by whole tokens (`shortenByToken`), and the
+// last rule lets it wrap at a space rather than cut a fragment.
+describe('the programme-and-wave label shrinks by its programme, never its wave (D-5528)', () => {
+  it('the wave half never shrinks', () => {
+    expect(declaredValues(css, '.sess-pw-wave', 'flex')).toEqual(['none']);
+  });
+  it('the programme half never ends in an ellipsis: its last rule clips nothing and wraps (D-5545)', () => {
+    expect(declaredValues(css, '.sess-pw-prog', 'text-overflow').at(-1)).toBe('clip');
+    expect(declaredValues(css, '.sess-pw-prog', 'overflow').at(-1)).toBe('visible');
+    expect(declaredValues(css, '.sess-pw-prog', 'white-space').at(-1)).toBe('normal');
+  });
+  it('the cell that carries it is never narrower than its wave', () => {
+    expect(ruleFor('.sess-held:has(> .sess-pw)')).toMatch(/min-width:\s*calc\(var\(--pw-wave/);
+  });
+});
+
+// Delegation broker wave 4, PR2 Task 2.7 (W4-U32): the delegation rows' rules take every value from a token.
+describe('delegation rows read tokens only (delegation broker wave 4)', () => {
+  const rules = (): { sel: string; body: string }[] => {
+    const out: { sel: string; body: string }[] = [];
+    for (const m of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const sel = norm(m[1]!);
+      if (/\.proj-(work|group)/.test(sel)) out.push({ sel, body: m[2]! });
+    }
+    return out;
+  };
+
+  it('W4-U32: colour, spacing and size come from var(--…) tokens; currentColor is the one keyword; the chip is bordered in it', () => {
+    const found = rules();
+    const listed = found.flatMap((r) => r.sel.split(',').map((x) => x.trim()));
+    expect(listed).toEqual(expect.arrayContaining(['.proj-work', '.proj-work-chip', '.proj-group-toggle']));
+    const VALUED = /^(color|background(-color)?|border(-color)?|padding.*|margin.*|gap|font-size|min-height|height|width|max-width|border-radius|line-height)$/;
+    for (const { sel, body } of found) {
+      for (const decl of body.split(';')) {
+        const i = decl.indexOf(':');
+        if (i < 0) continue;
+        const prop = norm(decl.slice(0, i));
+        const value = norm(decl.slice(i + 1));
+        expect(prop, `${sel} sets no opacity`).not.toBe('opacity');
+        expect(value, `${sel} { ${prop} } has no var() fallback`).not.toMatch(/var\(--[\w-]+\s*,/);
+        if (!VALUED.test(prop)) continue;
+        // What is left once every token is read: only `0`, `currentColor`, the border's hairline and style words, and
+        // the name part's `max-width: max-content` (D-7783, review 1424 F1: a cap at its own length, a layout relation no
+        // token carries, so a short name never stretches its row).
+        const rest = value.replace(/var\(--[\w-]+\)/g, '').replace(/\bcurrentColor\b/g, '')
+          .replace(prop === 'border' ? /\b1px\b|\bsolid\b/g : /$^/g, '')
+          .replace(prop === 'max-width' && sel === '.proj-work-name' ? /^max-content$/g : /$^/g, '').replace(/\b0\b/g, '').trim();
+        expect(rest, `${sel} { ${prop}: ${value} }`).toBe('');
+      }
+    }
+    expect(declValue(ruleFor('.proj-work-chip'), 'border')).toMatch(/currentColor/);
+  });
+
+  // A supplement to the measured pins in browser/delegation-rows.browser.test.ts (review 1435 F2), never instead of them:
+  // the declarations the separator and the name's cut rest on, read from the sheet.
+  it('VIS-CSS3: a part is the separator\'s containing block and clips nothing; only the name\'s inner box clips', () => {
+    expect(declValue(ruleFor('.proj-work-parts'), 'column-gap')).toBe('var(--sp-3)');
+    expect(declValue(ruleFor('.proj-work-part'), 'position')).toBe('relative');
+    for (const sel of ['.proj-work-part', '.proj-work-name']) {
+      expect(declValue(ruleFor(sel), 'overflow'), `${sel} clips nothing`).toBeNull();
+      expect(declValue(ruleFor(sel), 'overflow-clip-margin'), `${sel} needs no clip margin`).toBeNull();
+    }
+    const text = ruleFor('.proj-work-name-text');
+    expect(declValue(text, 'overflow')).toBe('hidden');
+    expect(declValue(text, 'text-overflow')).toBe('ellipsis');
+    expect(declValue(text, 'white-space')).toBe('nowrap');
+  });
+});
+
+// Delegation visibility (the plan's Global Constraints, "CSS"): the two new list surfaces take the floor `.proj-card`
+// takes. Each is an item of a grid or flex container whose automatic minimum is its min-content width, and its rows'
+// words are `white-space: nowrap`, so without `min-width: 0` one long row widens the track and scrolls the pane.
+describe('the fleet foot\'s region and the header\'s entry list shrink below their rows (delegation visibility)', () => {
+  const chatCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8');
+
+  it('VIS-CSS2: the header\'s entry list is a full-width flex item of .chat-facts with a min-width of 0', () => {
+    const rule = ruleIn(chatCss, '.chat-facts .sess-entries');
+    expect(declValue(rule, 'flex-basis')).toBe('100%');
+    expect(declValue(rule, 'min-width')).toBe('0');
+  });
+
+  it('VIS-CSS1: the fleet foot\'s region is a grid item of .fleet-list with the card\'s floor, a min-width of 0', () => {
+    expect(declValue(ruleFor('.fleet-unlisted'), 'min-width')).toBe('0');
   });
 });

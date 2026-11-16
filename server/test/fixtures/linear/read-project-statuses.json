@@ -1,0 +1,85 @@
+{
+  "name": "read-project-statuses",
+  "documentSource": "code",
+  "document": "query ProjectStatuses { projectStatuses(first: 50) { nodes { id name type } } }",
+  "variables": {},
+  "requestBody": "{\"query\":\"query ProjectStatuses { projectStatuses(first: 50) { nodes { id name type } } }\",\"variables\":{}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "111"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999847"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794589999277"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2478"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794589999277"
+    ]
+  ],
+  "body": {
+    "data": {
+      "projectStatuses": {
+        "nodes": [
+          {
+            "id": "00000000-0008-4000-8000-000000000024",
+            "name": "Planned",
+            "type": "planned"
+          },
+          {
+            "id": "00000000-0008-4000-8000-000000000025",
+            "name": "Backlog",
+            "type": "backlog"
+          },
+          {
+            "id": "00000000-0008-4000-8000-000000000026",
+            "name": "Canceled",
+            "type": "canceled"
+          },
+          {
+            "id": "00000000-0008-4000-8000-000000000027",
+            "name": "Completed",
+            "type": "completed"
+          },
+          {
+            "id": "00000000-0008-4000-8000-000000000028",
+            "name": "In Progress",
+            "type": "started"
+          }
+        ]
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"projectStatuses\":{\"nodes\":[{\"id\":\"00000000-0008-4000-8000-000000000024\",\"name\":\"Planned\",\"type\":\"planned\"},{\"id\":\"00000000-0008-4000-8000-000000000025\",\"name\":\"Backlog\",\"type\":\"backlog\"},{\"id\":\"00000000-0008-4000-8000-000000000026\",\"name\":\"Canceled\",\"type\":\"canceled\"},{\"id\":\"00000000-0008-4000-8000-000000000027\",\"name\":\"Completed\",\"type\":\"completed\"},{\"id\":\"00000000-0008-4000-8000-000000000028\",\"name\":\"In Progress\",\"type\":\"started\"}]}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). The workspace's project statuses, Linear's default names."
+}

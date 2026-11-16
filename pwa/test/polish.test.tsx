@@ -5,9 +5,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
+import { fleetSession as baseSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { initTheme, type ThemeMedia } from '../src/lib/theme';
 import { navigate } from '../src/lib/router';
-import { AttachButton } from '../src/session/AttachButton';
+import { AttachButton } from '@ccrc/ui';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';
@@ -30,23 +31,7 @@ const fakeSocket = (): WebSocket =>
     close(): void {},
   }) as unknown as WebSocket;
 
-const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'claude:OpenClawHetzner',
-  wrapper: 'claude',
-  home: '/home/rc',
-  project: 'OpenClawHetzner',
-  workdir: '/root/projects/OpenClawHetzner',
-  workspace: null,
-  name: null,
-  status: 'idle',
-  statusUpdatedAt: null,
-  limits: null,
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null,
-  version: null,
-  ...patch,
-});
+const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => (baseSession({ id: 'claude:ProjectC', home: '/home/u', project: 'ProjectC', workdir: '/root/projects/ProjectC', ...patch }));
 
 const media = (matches: boolean): ThemeMedia & { fire: (matches: boolean) => void } => {
   let cb: ((e: { matches: boolean }) => void) | null = null;
@@ -110,30 +95,30 @@ describe('navigate view transition', () => {
 
 describe('SessionScreen status fallback', () => {
   it('a fleet-dead session shows the read-only banner and disables the composer before any stream status arrives', () => {
-    const store = createSessionStore('claude:OpenClawHetzner', { makeSocket: fakeSocket });
+    const store = createSessionStore('claude:ProjectC', { makeSocket: fakeSocket });
     // Backlog landed (uuid known) but no status frame ever came.
     act(() => {
       store.setState({ uuid: 'u-1', status: null });
     });
     const fleet = createFleetStore({ makeSocket: fakeSocket });
     act(() => {
-      fleet.setState({ conn: 'open', sessions: [fleetSession({ status: 'dead' })] });
+      fleet.setState({ conn: 'open', sessions: [fleetSession({ status: 'dead', lifecycle: DEAD_LIFECYCLE })] });
     });
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     expect(screen.getByText(/chat is read-only/i)).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Message' })).toBeDisabled();
   });
 
   it('a live stream status wins over the fleet snapshot', () => {
-    const store = createSessionStore('claude:OpenClawHetzner', { makeSocket: fakeSocket });
+    const store = createSessionStore('claude:ProjectC', { makeSocket: fakeSocket });
     act(() => {
       store.setState({ uuid: 'u-1', status: 'idle' });
     });
     const fleet = createFleetStore({ makeSocket: fakeSocket });
     act(() => {
-      fleet.setState({ conn: 'open', sessions: [fleetSession({ status: 'dead' })] });
+      fleet.setState({ conn: 'open', sessions: [fleetSession({ status: 'dead', lifecycle: DEAD_LIFECYCLE })] });
     });
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />);
     expect(screen.queryByText(/chat is read-only/i)).not.toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Message' })).toBeEnabled();
   });

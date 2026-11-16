@@ -1,0 +1,85 @@
+/* `@layer components` — NOT unlayered; see typed-label.css for the full
+   argument and ../styles/theme.css for the layer declaration. */
+@layer components {
+  /* ------------------------------------------------------------------ *
+   *  The strip SKIN — the part `CollapsibleStrip` renders the same way    *
+   *  for every strip, written once.                                      *
+   * ------------------------------------------------------------------ */
+  /* THE RULING THAT KEPT THESE TWINNED IS SPENT. `CollapsibleStrip`'s header
+     used to say it owns the shape and not the skin, "because hoisting the
+     identical base rules into a `collapsible-strip.css` rekeys every registry
+     entry naming the old sheet (`<basename> <selector>` is the key)". That
+     key format is gone — `design/audit.mjs`'s `ruleKey` is the selector alone
+     — so a rule may live where it belongs rather than where a test's key
+     format put it. Five clusters were registered in `shape-census` on that
+     reasoning; four of them are these.
+
+     WHAT DID NOT MOVE, and why each one is a decision rather than a leftover:
+
+       * THE ROOTS. `.mail-strip` sets `color` beside its `background` to make
+         itself SELF-GROUNDED (audit.mjs route 1), which is what lets every
+         `.mail-strip .foo` below it be measured through route 2b instead of
+         landing in the uncovered census. `.task-strip` sets no colour and
+         needs none. Grouping the nine declarations they share would split
+         mail's pair across two rules and take that grounding with it — the
+         "shape moves, ground stays" rule, in the one place it bites hardest.
+       * THE SUMMARY'S INK. Same reason one level down: mail's is scoped
+         `.mail-strip .mail-strip-summary` so route 2b reaches it, task's is
+         registered in INHERITED_GROUNDS under its own key. Both keep their
+         `color` in their own sheet; only the layout and the ramp are here.
+       * `.hotfiles`. The app's third strip goes through the same component
+         and has its own skin on purpose — no summary line, a different rows
+         padding, a headline that does not truncate. Nothing here selects it. */
+
+  /* The head's title. Truncates: a strip head is one line, and the headline is
+     the part that can run long. */
+  .mail-strip-headline,
+  .task-headline {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: var(--weight-medium) var(--fs-sm) / var(--lh-tight) var(--family-ui);
+  }
+
+  /* The quiet count pill. SELF-GROUNDED — ground and ink in one rule — so the
+     gate measures it through route 1 from here exactly as it did from the two
+     sheets it used to be written in. Not `CountBadge`: that pill is amber and
+     means "something arrived and nobody has read it", while this one is a
+     readout of what the strip holds. */
+  .mail-strip-count,
+  .task-count {
+    flex: none;
+    font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-secondary);
+    background: var(--bg-raised);
+    border-radius: var(--r-full);
+    padding: var(--sp-1) 9px;
+  }
+
+  /* The line under the head, always visible. Its left padding lines the text
+     up with the headline above it, past the mark's column. INK EXCLUDED — see
+     the header. */
+  .mail-strip .mail-strip-summary,
+  .task-summary {
+    padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-4));
+    font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* The rows region, which exists only while the strip is open. Scrolls inside
+     itself: a strip with many rows must not push the thing it sits above off
+     the screen. */
+  .mail-strip-rows,
+  .task-rows {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 var(--sp-2);
+    border-top: 1px solid var(--edge-subtle);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    min-height: 0;
+  }
+}

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import type { FleetIO } from './io.js';
-import type { SessionUsage } from '../../shared/api.js';
+import { tokenCountOf, type SessionUsage } from '../../shared/api.js';
 import { familyClassOf } from '../../shared/models.js';
 
 /** A sidecar older than this is STALE: carried, but flagged. Thirty minutes,
@@ -41,7 +41,10 @@ export function parseUsageSidecar(content: string, nowS: number): Extract<UsageR
     class: model === null ? null : familyClassOf(model),
     effort: str(o['effort']),
     ctxPct: num(o['ctxPct']),
+    ctxTokens: tokenCountOf(o['ctxTokens']),     // Overlord W0-18: `context_window.total_input_tokens`
+    ctxWindow: tokenCountOf(o['ctxWindow']),     // Overlord W0-18: `context_window.context_window_size`
     cost: num(o['cost']),
+    cacheExpiresAt: num(o['cacheExpiresAt']),   // D-8267: `prompt_cache.expires_at`, epoch seconds
     stale: nowS - ts > USAGE_FRESH_S,
   } };
 }

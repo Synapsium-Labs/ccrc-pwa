@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildServer, type Deps } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
@@ -13,21 +13,29 @@ import { DEFAULT_TEST_ROSTER, seedRoster, testDeps } from './helpers.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import type { FleetSession } from '../../shared/api.js';
+import type { FleetHealth, FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
+import { PerfRecorder } from '../src/perf/recorder.js';
+import { readDiskHealth } from '../../shared/disk.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
 import { genFile } from './lifecycleHelpers.js';
-import { LC_ACT_UNKNOWN, LC_DIR_NAME, LIFECYCLE_ACTS } from '../../shared/api.js';
+import { LC_ACT_UNKNOWN, LC_DIR_NAME, LIFECYCLE_ACTS, delegationCarrierHealthOf, readArchivedHeld } from '../../shared/api.js';
+import { EXPIRE_CAP } from '../src/ccdargv.js';
+import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
+import { DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, buildDelegationJournalRecord, encodeDelegationJournalRecord } from '../src/coord/delegation-journal.js';
+import type { BuildInfo } from '../../shared/buildinfo.js';
+import type { NodeMeasurement } from '../src/coord/store.js';
+import { fakeTime } from './fakeTime.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const deadRunner: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+const deadRunner: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
 
 /** Deps in remote mode against a throwaway fixture home. */
 function remoteDeps(
@@ -38,19 +46,19 @@ function remoteDeps(
   const home = mkTmp('ccrc-');
   seedRoster(home);
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote', ...env });
-  return { cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io: localIO, fleetState, stateCachePath, queue: new KeyedQueue() };
+  return { cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io: localIO, fleetState, stateCachePath, queue: new KeyedQueue(), time: fakeTime().ports };
 }
 
 // A COMPLETE FleetSession — the fixture was eight fields short of the type it
 // claims (server/tsconfig.json does not include test/, so nothing said so).
 const session = (id: string): FleetSession => ({
-  id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
-  workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
+  id, wrapper: 'claude', home: '/home/u', project: id, workdir: `/data/projects/${id}`,
+  workspace: null, name: null, title: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
-  unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null,
+  branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  hookState: null, askSummary: null, subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
+  unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, limitWait: null, substrate: null,
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
 });
 
 /** The digest the SERVER computes for its own roster — derived through the
@@ -70,17 +78,24 @@ describe('GET /api/fleet/health', () => {
     await app.close();
   });
 
+  it('never emits `builds` in local mode — there is no second box to show', async () => {
+    const app = await buildServer(testDeps());
+    const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+    expect('builds' in body).toBe(false);
+    await app.close();
+  });
+
   it('remote mode + connected fleetState reports connected', async () => {
     const app = await buildServer(remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
+    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown', rebootConfigured: false });
     await app.close();
   });
 
   it('remote mode + disconnected fleetState surfaces connected:false and downSince', async () => {
     const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
+    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown', rebootConfigured: false });
     await app.close();
   });
 
@@ -142,6 +157,75 @@ describe('GET /api/fleet/health', () => {
     }
   });});
 
+describe('GET /api/fleet/health — the inventory-derived `build` degrades, never 500s (design 2026-09-20 §14)', () => {
+  const STAMP: BuildInfo = { sha: 'abc1234', ref: 'main', builtAt: '2026-09-21T00:00:00Z', dirty: false, version: 'v0.0.11' };
+  const serverRow = (role: 'server' | 'both'): NodeMeasurement => ({
+    nodeId: 'server', role, label: 'server',
+    currentVersion: STAMP.version ?? null, currentSha: STAMP.sha, currentRef: STAMP.ref,
+    currentBuiltAt: STAMP.builtAt, currentDirty: STAMP.dirty,
+    stampRead: 'ok', installState: 'unknown', provenance: 'unknown', caps: [], agentOps: null,
+    highestVersion: null, previousVersion: null, floorRead: 'absent', previousRead: 'absent',
+    os: 'linux', measuredAt: 1_758_000_000_000, report: null,
+  });
+
+  it('an inventory that cannot be read answers build unknown and no `builds` key — the route stays up', async () => {
+    // `nodes()` is a synchronous sqlite read; a corrupt or locked coord.db throws. Before W2 nothing in this arm
+    // touched coord.db, so a throw here would be a NEW way for the banner route to 500. It degrades the way
+    // `readPoolEpoch` degrades — and it does NOT fall back to the handshake stamp planted below (spec §8).
+    const deps = remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: STAMP });
+    const coord = new CoordStore(openCoordDb(deps.cfg.coordDbPath));
+    const broken = Object.assign(Object.create(coord) as CoordStore, {
+      nodes: (): never => { throw new Error('planted: the inventory cannot be read'); },
+    });
+    const app = await buildServer({ ...deps, build: STAMP, coord: broken });
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ mode: 'remote', connected: true, build: 'unknown' });
+      expect('builds' in res.json()).toBe(false);
+    } finally {
+      await app.close();
+      coord.db.close();
+    }
+  });
+
+  it('two inventory rows on different commits answer build skewed and carry no `builds` key (wave 33)', async () => {
+    // The pair is retired from the wire; the word is still decided from the rows, so a disagreement between them
+    // still reads `skewed`.
+    const deps = remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null });
+    const coord = new CoordStore(openCoordDb(deps.cfg.coordDbPath));
+    expect(coord.upsertNodeMeasurement(serverRow('server'))).toMatchObject({ ok: true });
+    const fleetRow: NodeMeasurement = { ...serverRow('server'), nodeId: 'fleet', role: 'fleet', label: 'fleet', currentSha: 'f00ba12', agentOps: [] };
+    expect(coord.upsertNodeMeasurement(fleetRow)).toMatchObject({ ok: true });
+    const app = await buildServer({ ...deps, coord });
+    try {
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+      expect(body['build']).toBe('skewed');
+      expect('builds' in body).toBe(false);
+    } finally {
+      await app.close();
+      coord.db.close();
+    }
+  });
+
+  it('local mode never emits `builds`, even over an inventory holding this box\'s row', async () => {
+    // The derivation is the remote arm's alone: there is still no second box to show.
+    const home = mkTmp('ccrc-fh-builds-');
+    const deps = testDeps(home);
+    const coord = new CoordStore(openCoordDb(deps.cfg.coordDbPath));
+    expect(coord.upsertNodeMeasurement(serverRow('both'))).toMatchObject({ ok: true });
+    const app = await buildServer({ ...deps, coord });
+    try {
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+      expect('builds' in body).toBe(false);
+      expect(body['build']).toBe('unknown');
+    } finally {
+      await app.close();
+      coord.db.close();
+    }
+  });
+});
+
 describe('GET /api/fleet — degraded mode', () => {
   it('serves the cached snapshot with stale:true + downSince when disconnected', async () => {
     const dir = mkTmp('ccrc-cache-');
@@ -161,15 +245,21 @@ describe('GET /api/fleet — degraded mode', () => {
     const dir = mkTmp('ccrc-cache-');
     const cachePath = path.join(dir, 'never-written.json');
     const deps = remoteDeps({}, { connected: false, downSince: Date.now(), ccdVerbs: null, rosterFp: null, build: null }, cachePath);
+    // The registry root must LIST for this case to reach the live arm: an unlistable registry now serves the stale
+    // arm instead (spec §2.3, path identity W1a), which registry-migrated-callers.test.ts pins.
+    mkdirSync(deps.cfg.registryDir, { recursive: true });
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     // WIDENED, NOT LOOSENED (account pools, wave 3): the LIVE-assemble arm now
     // carries `pools` for first paint, and this stays an exact-shape assertion
     // so the DEGRADED arm's own case — which asserts the key is ABSENT — keeps
-    // its meaning. `listed: false` is the truthful answer for a fixture whose
-    // registry root does not list: nobody decides, and that is not `untagged`.
+    // its meaning. `listed: true, byProject: {}`: the registry root lists (an
+    // empty `.cc-sessions`, seeded above) and holds no `pools/`, so nothing is tagged.
+    // `observedEpoch: null` (item 1, wave-1 fix round A): no `$REG/pool-epoch`
+    // was planted in this fixture's home, a real ENOENT `readObservedEpochFromRegistry`
+    // measures and reports honestly, independent of the root listing above.
     expect(res.json()).toEqual({
-      sessions: [], pools: { listed: false, enforcement: 'unknown' },
+      sessions: [], pools: { listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' },
     });
     await app.close();
   });
@@ -183,7 +273,7 @@ describe('GET /api/fleet — degraded mode', () => {
     writeFileSync(cachePath, JSON.stringify({
       savedAt: 1785300000001,
       sessions: [{
-        id: 'claude-Cached', wrapper: 'claude', home: '/home/rc', project: 'claude-Cached',
+        id: 'claude-Cached', wrapper: 'claude', home: '/home/u', project: 'claude-Cached',
         workdir: '/data/projects/claude-Cached', workspace: null, name: null, status: 'idle',
         statusUpdatedAt: null, limits: null, dialogPending: false, version: null,
         model: null, effort: null, ultracode: false, branch: null,
@@ -202,7 +292,9 @@ describe('GET /api/fleet — degraded mode', () => {
     expect(body.sessions[0]?.subagents).toBeNull();
     expect(body.sessions[0]?.graphQueries).toBeNull();
     expect(body).toEqual({
-      sessions: [session('claude-Cached')],
+      // D-5301: an older cache says nothing about the role, so it revives null —
+      // never re-derived from the defaulted `child` (`reviveSessionRole`).
+      sessions: [{ ...session('claude-Cached'), role: null }],
       stale: true,
       downSince: 1700000000000,
     });
@@ -215,17 +307,61 @@ describe('GET /api/fleet — degraded mode', () => {
     await saveSnapshot([session('claude-Stale')], cachePath);
 
     const deps = remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, cachePath);
+    // The registry root must LIST, or this case would meet the stale arm, which serves this very cache marked
+    // `stale: true` (spec §2.3, path identity W1a). Listing, the cache is ignored, as the title says.
+    mkdirSync(deps.cfg.registryDir, { recursive: true });
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     // WIDENED, NOT LOOSENED (account pools, wave 3): the LIVE-assemble arm now
     // carries `pools` for first paint, and this stays an exact-shape assertion
     // so the DEGRADED arm's own case — which asserts the key is ABSENT — keeps
-    // its meaning. `listed: false` is the truthful answer for a fixture whose
-    // registry root does not list: nobody decides, and that is not `untagged`.
+    // its meaning. `listed: true, byProject: {}`: the registry root lists (seeded
+    // above) and holds no `pools/`, so nothing is tagged.
+    // `observedEpoch: null` (item 1, wave-1 fix round A) — see the sibling
+    // case above.
     expect(res.json()).toEqual({
-      sessions: [], pools: { listed: false, enforcement: 'unknown' },
+      sessions: [], pools: { listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' },
     });
     await app.close();
+  });
+});
+
+// D-8382: the reboot button says it cannot work BEFORE the tap. The health answer carries one boolean, whether both keys
+// the reboot needs are set, and never the token or the id; the route and the answer ask the one function.
+describe('GET /api/fleet/health: rebootConfigured (D-8382)', () => {
+  const down = { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null, build: null } as const;
+  it('remote mode with neither key, or with one of the two, reads false; with both, true', async () => {
+    const cases: ReadonlyArray<readonly [Record<string, string>, boolean]> = [
+      [{}, false],
+      [{ CCRC_HETZNER_TOKEN: 'hetzner-secret' }, false],
+      [{ CCRC_FLEET_SERVER_ID: '12345' }, false],
+      [{ CCRC_HETZNER_TOKEN: 'hetzner-secret', CCRC_FLEET_SERVER_ID: '12345' }, true],
+    ];
+    for (const [env, want] of cases) {
+      const app = await buildServer(remoteDeps({ ...env }, { ...down }));
+      const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
+      expect(res.json().rebootConfigured, JSON.stringify(env)).toBe(want);
+      // A boolean only: neither value reaches the wire.
+      expect(res.body).not.toContain('hetzner-secret');
+      expect(res.body).not.toContain('12345');
+      await app.close();
+    }
+  });
+
+  it('local mode has no reboot, so the field is absent', async () => {
+    const app = await buildServer(testDeps());
+    expect('rebootConfigured' in (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json()).toBe(false);
+    await app.close();
+  });
+
+  it('the route refuses exactly when the health answer says false', async () => {
+    const envs: ReadonlyArray<Record<string, string>> = [{}, { CCRC_HETZNER_TOKEN: 't' }, { CCRC_FLEET_SERVER_ID: '1' }];
+    for (const env of envs) {
+      const app = await buildServer(remoteDeps({ ...env }, { ...down }));
+      expect((await app.inject({ method: 'GET', url: '/api/fleet/health' })).json().rebootConfigured).toBe(false);
+      expect((await app.inject({ method: 'POST', url: '/api/fleet/reboot' })).statusCode, JSON.stringify(env)).toBe(501);
+      await app.close();
+    }
   });
 });
 
@@ -294,6 +430,177 @@ describe('POST /api/fleet/reboot', () => {
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ ok: false, error: 'hetzner-error' });
     await app.close();
+  });
+});
+
+describe('/api/fleet/health: the delegation observation health (wave 3, Task 13)', () => {
+  const DELEGATION_CAPS = ['caps', 'delegation-events-v1'];
+  const INC = '0189abcd-1234-5678-9abc-0123456789ab';
+
+  /** A watcher over a store, with a census pass planted for one live session whose spool directory exists: the lane then has run. */
+  async function lane(env: Record<string, string> = {}, verbs: string[] = DELEGATION_CAPS, plant?: (ccrcDir: string) => void) {
+    const home = mkTmp('ccrc-fh-dg-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home, ...env });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    plant?.(path.join(home, '.ccrc'));
+    mkdirSync(path.join(cfg.registryDir, 'delegation', 'spool', 'demo-a'), { recursive: true });
+    const full = {
+      cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io: localIO, queue: new KeyedQueue(), coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: verbs, rosterFp: null, build: null },
+    } as never as Deps;
+    const bus = new Bus();
+    const watcher = new FleetWatcher(full, bus);
+    const app = await buildServer(full, bus, watcher);
+    const runLane = async (): Promise<void> => {
+      (watcher as unknown as { delegationCensus: unknown }).delegationCensus = {
+        measuredAt: Date.now(), projects: new Map(), incarnations: new Map([['demo-a', { kind: 'measured', incarnation: INC }]]),
+      };
+      await watcher.sweepDelegation([{ id: 'demo-a', project: 'demo', status: 'idle' }] as never, [{ id: 'demo-a', project: 'demo', child: { kind: 'none' } }] as never);
+    };
+    return { app, watcher, runLane };
+  }
+  type Body = Record<string, unknown> & { delegation?: Record<string, unknown> };
+
+  for (const [name, env] of [['local', {}], ['remote', { CCRC_FLEET: 'remote' }]] as const) {
+    it(`${name} mode: the member is ABSENT until the lane has run (absence reads as unknown), then present and report-only`, async () => {
+      const { app, runLane } = await lane(env);
+      try {
+        const before = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        expect('delegation' in before, 'a health that has measured nothing must not render a block').toBe(false);
+        await runLane();
+        const after = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        expect(after.delegation).toMatchObject({ mode: 'report-only', stageGate: 'unmeasured', unmeasuredRate: null, circuitBreaker: 'clear' });
+        // the new member is the only change: nothing else of the response moved
+        const { delegation: _gone, ...rest } = after;
+        const { ...restBefore } = before;
+        expect(rest).toEqual(restBefore);
+      } finally { await app.close(); }
+    });
+  }
+
+  it('W5-K14: the delegation block carries the lane\'s carrier counts as the lane reports them, and nothing else moves', async () => {
+    const { app, watcher, runLane } = await lane();
+    try {
+      await runLane();
+      const before = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+      expect('carriers' in before.delegation!, 'a lane that counted nothing writes no member').toBe(false);
+      expect(delegationCarrierHealthOf(before.delegation! as never)).toBeNull();
+      const counts = { marked: 2, pending: 0, unsupported: 0, mismatched: 1, unmeasured: 0, unowned: 0, refused: 3 };
+      (watcher as unknown as { delegationLane(): { carrierMemory: { health: unknown } } }).delegationLane().carrierMemory.health = counts;
+      const after = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+      expect(delegationCarrierHealthOf(after.delegation! as never), 'read through its one reader (review 1546 F7)').toEqual(counts);
+      const { carriers: _c, ...rest } = after.delegation!;
+      expect(rest).toEqual(before.delegation);
+    } finally { await app.close(); }
+  });
+
+  it('an old fleet (a `ccd caps` list without the token) is unmeasured on the wire, never a zero or an eligible', async () => {
+    const { app, runLane } = await lane({}, ['caps', 'ws-rm']);
+    try {
+      await runLane();
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+      expect(body.delegation).toMatchObject({ stageGate: 'unmeasured', unmeasuredRate: null });
+      expect(body.delegation!['stageGate']).not.toBe('eligible');
+    } finally { await app.close(); }
+  });
+
+  it('a server with a watcher but no coordination database, or no watcher at all, never emits it', async () => {
+    const deps = testDeps(mkTmp('ccrc-fh-dg-'));
+    const bus = new Bus();
+    const watcher = new FleetWatcher(deps, bus);
+    const a = await buildServer(deps, bus, watcher);
+    const b = await buildServer(testDeps(mkTmp('ccrc-fh-dg-')));
+    try {
+      for (const app of [a, b]) {
+        const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        expect('delegation' in body).toBe(false);
+      }
+    } finally { await a.close(); await b.close(); }
+  });
+
+  // D-4655: a torn journal tail the server healed at boot is reported here, additively, and is never a failure.
+  describe('a healed torn journal tail (D-4655): lastTailHeal on the member, never a failure', () => {
+    const record = buildDelegationJournalRecord({
+      sequence: 1, acceptedAt: '2026-10-15T10:00:00.000Z', previousDigest: null,
+      entry: {
+        kind: 'evidence-accepted',
+        event: {
+          v: 1, eventKind: 'SessionStart', source: 'startup', observedAt: '2026-10-15T09:59:00.000Z', sessionId: 'demo-a', parentIncarnation: INC,
+          claudeSessionId: '6350faa0-a1be-4e78-939c-57485268f6fc', eventId: 'e'.repeat(64), bucket: '2026101509', startOffset: 0, endOffset: 120,
+        },
+      },
+    });
+    const torn = (ccrcDir: string): void => {
+      mkdirSync(ccrcDir, { recursive: true });
+      writeFileSync(path.join(ccrcDir, DELEGATION_JOURNAL_FILE), Buffer.concat([Buffer.from(encodeDelegationJournalRecord(record)), Buffer.from('{"acceptedAt":"2026-10-15T1')]));
+    };
+
+    it('the member carries {at, bytes, quarantinePath} after the lane has healed a tail, and the rest of the member is what it was', async () => {
+      const { app, runLane } = await lane({}, DELEGATION_CAPS, torn);
+      try {
+        await runLane();
+        const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        const heal = body.delegation!['lastTailHeal'] as { at: string; bytes: number; quarantinePath: string };
+        expect(heal.bytes).toBe('{"acceptedAt":"2026-10-15T1'.length);
+        expect(heal.at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+        expect(heal.quarantinePath).toMatch(new RegExp(`${DELEGATION_TORN_DIR.replace('.', '\\.')}/\\d+-[0-9a-f]{64}\\.tail$`));
+        expect(readFileSync(heal.quarantinePath, 'utf8')).toBe('{"acceptedAt":"2026-10-15T1');
+        // never a failure, never unhealthy, and not made unmeasured by itself: the gates read what they read without it
+        expect(body.delegation).toMatchObject({ mode: 'report-only', stageGate: 'unmeasured', circuitBreaker: 'clear', unmeasuredRate: null });
+        expect(Object.keys(body.delegation!).sort()).toEqual([
+          'circuitBreaker', 'conflicting', 'lastCheckpointRevision', 'lastIngestedAt', 'lastJournalSequence', 'lastTailHeal', 'measuredSessionHours', 'mode',
+          'stageGate', 'unmeasured', 'unmeasuredRate', 'unresolved', 'unmeasuredSessionHours', 'windowEndedAt', 'windowStartedAt',
+        ].sort());
+        expect(body.delegation!['lastJournalSequence']).toBe(1);
+      } finally { await app.close(); }
+    });
+
+    it('without a heal the member has no lastTailHeal key at all (absence is not "healthy" and not an empty object)', async () => {
+      const { app, runLane } = await lane();
+      try {
+        await runLane();
+        const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+        expect('lastTailHeal' in body.delegation!).toBe(false);
+      } finally { await app.close(); }
+    });
+  });
+
+  // Delegation broker wave 4 (PR2; D-7010, licensed by the coordinator for ask 142): the PWA reads the `delegation` FRAME into
+  // a store slot of that name, so `.delegation` is allowed in wave 4 PR2's frame files only. `W4_PWA_FILES` is a local of the
+  // scope census (`delegation-wave3.integration.test.ts`, PR1's), not exported, so it is mirrored here literally, and the
+  // mirror is checked against the census's own text so the two cannot drift. The health member's type stays named nowhere.
+  const W4_PWA_FILES = [
+    'pwa/src/fleet/delegationWords.ts',
+    'pwa/src/stores/fleet.ts', 'pwa/src/fleet/nestFleet.ts', 'pwa/src/fleet/fleetTree.ts', 'pwa/src/fleet/rollup.ts',
+    'pwa/src/fleet/ProjectCard.tsx', 'pwa/src/fleet/FleetCards.tsx', 'pwa/src/fleet/sessionFacts.ts',
+    'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/fleet/SessionLine.tsx', 'pwa/src/screens/SessionScreen.tsx',
+  ];
+  it('wave 3 Task 13, narrowed in wave 4: the health member adds no PWA state (its type is named nowhere in pwa/src), and `.delegation` (the frame\'s store slot) appears only in wave 4\'s frame files', () => {
+    const fh: FleetHealth = { mode: 'local', connected: true, downSince: null };
+    expect(fh.delegation).toBeUndefined();
+    const repo = path.resolve(__dirname, '../..');
+    const census = readFileSync(path.join(__dirname, 'delegation-wave3.integration.test.ts'), 'utf8');
+    const block = /const W4_PWA_FILES = \[([\s\S]*?)\] as const;/.exec(census);
+    expect(block, 'the scope census still declares W4_PWA_FILES').not.toBeNull();
+    expect([...block![1]!.matchAll(/'([^']+)'/g)].map((m) => m[1]!), 'the mirror equals the census').toEqual(W4_PWA_FILES);
+    const allowed: string[] = [...W4_PWA_FILES];
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      return e.isDirectory() ? walk(p) : /\.(ts|tsx|svelte|js)$/.test(e.name) ? [path.relative(repo, p).split(path.sep).join('/')] : [];
+    });
+    const offenders = (files: readonly string[], text: (f: string) => string): string[] => files.filter((f) => {
+      const src = text(f);
+      return /DelegationObservationHealth/.test(src) || (/\.delegation\b/.test(src) && !allowed.includes(f));
+    });
+    expect(offenders(walk(path.join(repo, 'pwa/src')), (f) => readFileSync(path.join(repo, f), 'utf8'))).toEqual([]);
+    // CONTROL: a file outside the list reading `.delegation` is red, and so is a listed file naming the health's type.
+    const fake: Record<string, string> = {
+      'pwa/src/fleet/Other.tsx': 'export const d = (s: { delegation: null }) => s.delegation;\n',
+      'pwa/src/fleet/FleetCards.tsx': 'type H = DelegationObservationHealth;\n',
+      'pwa/src/stores/fleet.ts': 'export const d = (s: { delegation: null }) => s.delegation;\n',
+    };
+    expect(offenders(Object.keys(fake), (f) => fake[f]!)).toEqual(['pwa/src/fleet/Other.tsx', 'pwa/src/fleet/FleetCards.tsx']);
   });
 });
 
@@ -383,8 +690,11 @@ describe('/api/fleet/health: the lifecycle block (build 9)', () => {
     writeFileSync(path.join(home, '.cc-sessions', 'pools', 'demo'), 'pool-a');
     const app = await buildServer(testDeps(home));
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+    // `observedEpoch: null` (item 1, wave-1 fix round A): no `$REG/pool-epoch`
+    // was planted in this fixture's home.
     expect(res.json().pools).toEqual({
       listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'unknown',
+      observedEpoch: null, accountPools: 'unknown',
     });
     await app.close();
   });
@@ -403,3 +713,321 @@ describe('/api/fleet/health: the lifecycle block (build 9)', () => {
     expect(Object.keys(res.json())).not.toContain('pools');
     await app.close();
   });});
+
+// D-5943 (spec §2.7): the ranked total of bytes archived workspaces hold, composed by the expiry lane once per pass and
+// read by the route ONCE. Absent before the lane's first pass: absence reads as UNKNOWN, never as nothing held.
+describe('/api/fleet/health: the archived-held block (D-5943)', () => {
+  /** Two archived workspaces as the registry reads them — one measured at archive, one whose manifest was absent. */
+  const ARCHIVED = [
+    { id: 'project-a-quiet', workspace: 'quiet', archivedAt: 100, archivedBytes: 2_048, child: { kind: 'none' }, unmeasured: [], held: null },
+    { id: 'project-a-brisk', workspace: 'brisk', archivedAt: 100, archivedBytes: null, child: { kind: 'none' }, unmeasured: [], held: null },
+  ];
+
+  async function lane(env: Record<string, string> = {}) {
+    const home = mkTmp('ccrc-fh-ah-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home, ...env });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const full = {
+      cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io: localIO, queue: new KeyedQueue(), coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-audit', 'ws-expire', EXPIRE_CAP], rosterFp: null, build: null },
+    } as never as Deps;
+    const bus = new Bus();
+    const watcher = new FleetWatcher(full, bus);
+    const app = await buildServer(full, bus, watcher);
+    const health = async (): Promise<Record<string, unknown>> =>
+      (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+    return { app, watcher, health };
+  }
+
+  for (const [name, env] of [['local', {}], ['remote', { CCRC_FLEET: 'remote' }]] as const) {
+    it(`${name} mode: fleet health has no \`archivedHeld\` before the first pass, then the ranked block — and nothing else moves`, async () => {
+      const { app, watcher, health } = await lane(env);
+      try {
+        const before = await health();
+        expect('archivedHeld' in before, 'a lane that has not run must not render a block, not even an empty one').toBe(false);
+        await watcher.sweepArchivedExpiry(ARCHIVED as never, []);
+        const after = await health();
+        // The box answered nothing readable (a dead runner), so each row's audit is a failing report: audited, not unknown.
+        expect(after['archivedHeld']).toEqual({ totalBytes: 2_048, unmeasured: 1, rows: [
+          { sessionId: 'project-a-quiet', bytes: 2_048, verdict: 'failing', kind: 'failing' },
+          { sessionId: 'project-a-brisk', bytes: null, verdict: 'failing', kind: 'failing' },
+        ] });
+        const { archivedHeld: _block, ...rest } = after;
+        expect(rest).toEqual(before);
+      } finally { await app.close(); }
+    });
+  }
+
+  // D-6027: the switch (or a box without the capability) stops the lane's ACTS, never its read model — the operator needs
+  // the held bytes exactly while nothing is being reclaimed. The block is composed from this pass's registry and the
+  // lane's standing memory; it never freezes at the last acting pass.
+  it('the cleanup switch stops the acts, not the block: composed from the registry and the lane\'s memory alone (D-6027)', async () => {
+    const { app, watcher, health } = await lane();
+    try {
+      await watcher.sweepArchivedExpiry(ARCHIVED as never, [RECLAIM_PAUSE_MARKER]);
+      expect((await health())['archivedHeld'], 'a switch raised before any pass still reports, every row unaudited').toEqual({
+        totalBytes: 2_048, unmeasured: 1, rows: [
+          { sessionId: 'project-a-quiet', bytes: 2_048, verdict: 'not-yet-audited', kind: 'not-yet-audited' },
+          { sessionId: 'project-a-brisk', bytes: null, verdict: 'not-yet-audited', kind: 'not-yet-audited' },
+        ] });
+    } finally { await app.close(); }
+  });
+
+  for (const [why, names, verbs] of [
+    ['the cleanup switch is raised', [RECLAIM_PAUSE_MARKER], ['ws-audit', 'ws-expire', EXPIRE_CAP]],
+    ['the box loses the capability', [], ['ws-audit']],
+  ] as const) {
+    it(`after an acting pass, ${why}: the block follows the registry and keeps the lane's verdicts — never the last snapshot (D-6027)`, async () => {
+      const { app, watcher, health } = await lane();
+      try {
+        await watcher.sweepArchivedExpiry(ARCHIVED as never, []);
+        expect(((await health())['archivedHeld'] as { rows: unknown[] }).rows).toHaveLength(2);
+        watcher.kick('archivedExpiry');
+        (watcher as unknown as { deps: { fleetState: { ccdVerbs: readonly string[] } } }).deps.fleetState.ccdVerbs = [...verbs];
+        await watcher.sweepArchivedExpiry([ARCHIVED[1]] as never, [...names]);
+        expect((await health())['archivedHeld']).toEqual({ totalBytes: 0, unmeasured: 1, rows: [
+          { sessionId: 'project-a-brisk', bytes: null, verdict: 'failing', kind: 'failing' },
+        ] });
+      } finally { await app.close(); }
+    });
+  }
+
+  it('a server with no watcher never emits it', async () => {
+    const app = await buildServer(testDeps(mkTmp('ccrc-fh-ah-')));
+    try {
+      expect('archivedHeld' in ((await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as object)).toBe(false);
+    } finally { await app.close(); }
+  });
+
+  it('an older reader ignores the block: the single reader answers null on absence or a malformed block, the rest reads as before', async () => {
+    const { app, watcher, health } = await lane();
+    try {
+      await watcher.sweepArchivedExpiry(ARCHIVED as never, []);
+      const body = await health();
+      expect(readArchivedHeld(body)).toEqual(body['archivedHeld']);
+      expect(readArchivedHeld({ ...body, archivedHeld: undefined })).toBeNull();
+      expect(readArchivedHeld({ archivedHeld: {} })).toBeNull();
+      expect(readArchivedHeld({ archivedHeld: { unmeasured: 0, rows: [] } }), 'a missing total').toBeNull();
+      expect(readArchivedHeld({ archivedHeld: { totalBytes: '1', unmeasured: 0, rows: [] } }), 'a non-numeric total').toBeNull();
+      expect(readArchivedHeld({ archivedHeld: { totalBytes: 1, rows: [] } }), 'a missing unmeasured count').toBeNull();
+      expect(readArchivedHeld({ archivedHeld: { totalBytes: 1, unmeasured: '0', rows: [] } }), 'a non-numeric unmeasured count').toBeNull();
+      expect(readArchivedHeld({ archivedHeld: { totalBytes: 1, unmeasured: 0, rows: [{ sessionId: 'a', bytes: 'x', verdict: 'v', kind: 'k' }] } })).toBeNull();
+      // An older PWA reads `FleetHealth` field by field: every field it knows is byte-identical with the block present.
+      const older = (h: Record<string, unknown>) => ({ mode: h['mode'], connected: h['connected'], downSince: h['downSince'],
+        roster: h['roster'], build: h['build'], projectPools: h['projectPools'], lifecycle: h['lifecycle'] });
+      const { archivedHeld: _b, ...without } = body;
+      expect(older(body)).toEqual(older(without));
+    } finally { await app.close(); }
+  });
+});
+
+// D-6615 (fleet disk retention spec §2.5): the optional `disk` block. Absent before the first sweep, never `null`; a
+// present block round-trips through its single reader; nothing else on the route moves.
+describe('/api/fleet/health: the disk block (D-6615)', () => {
+  async function lane(env: Record<string, string> = {}, census: string | null = null) {
+    const home = mkTmp('ccrc-fh-dk-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home, ...env });
+    const io = {
+      ...localIO,
+      // The tmp sweep census (D-6624) is read through the same io: absent unless a test hands one in.
+      lstatMeasured: async () => (census === null ? { ok: false as const, reason: 'absent' as const } : { ok: true as const, kind: 'regular' as const }),
+      statMeasured: async () => (census === null ? { ok: false as const, reason: 'absent' as const } : { ok: true as const, size: census.length }),
+      readFileMeasured: async () => (census === null ? { ok: false as const, reason: 'absent' as const } : { ok: true as const, content: census }),
+      statfsMeasured: async () => ({
+        ok: true as const,
+        measured: {
+          filesystems: [{
+            dev: '1', mount: '/work', fsType: 'ext4', roots: ['home'], sizeBytes: 100, availBytes: 50, freeBytes: 50,
+            files: 100, filesFree: 90, readOnly: false,
+          }],
+          expectedMounts: [], missing: [],
+        },
+      }),
+    };
+    const full = {
+      cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io, queue: new KeyedQueue(),
+      fleetState: { connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null },
+    } as never as Deps;
+    const bus = new Bus();
+    const watcher = new FleetWatcher(full, bus);
+    const app = await buildServer(full, bus, watcher);
+    const health = async (): Promise<Record<string, unknown>> =>
+      (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+    return { app, watcher, health };
+  }
+
+  for (const [name, env] of [['local', {}], ['remote', { CCRC_FLEET: 'remote' }]] as const) {
+    it(`${name} mode: no \`disk\` key before the first sweep (not null), then the block — and nothing else moves`, async () => {
+      const { app, watcher, health } = await lane(env);
+      try {
+        const before = await health();
+        expect('disk' in before, 'absent, never `null`: absence is UNKNOWN').toBe(false);
+        await watcher.sweepDisk();
+        const after = await health();
+        expect(readDiskHealth(after)?.level).toBe('ok');
+        expect(readDiskHealth(after)?.holders).toEqual([]);
+        const { disk: _block, ...rest } = after;
+        expect(rest).toEqual(before);
+      } finally { await app.close(); }
+    });
+  }
+
+  // D-6624 (plan Task DR-12): `holders` is the census's five largest sessions; a census that cannot be read names none.
+  const GIB = 1024 ** 3;
+  const row = (id: string, g: number): Record<string, unknown> => ({
+    id, uuid: id.padEnd(36, 'x'), bytes: g * GIB,
+    budget: { state: 'ok', overSince: null, enforceAt: null, removedBytes: 0, kept: [] },
+  });
+  const censusText = (g: number[]): string => JSON.stringify({
+    v: 1, at: 1, pressure: false, arm: 'shadow', seq: 0, moved: [], sessions: g.map((x, i) => row(`project-a-s${i}`, x)),
+  });
+
+  it('holders carry the tmp sweep census\'s five largest sessions, largest first', async () => {
+    const { app, watcher, health } = await lane({}, censusText([1, 9, 4, 7, 2, 8, 3]));
+    try {
+      await watcher.sweepDisk();
+      await watcher.sweepTmpSweepCensus();
+      expect(readDiskHealth(await health())?.holders).toEqual([
+        { label: 'project-a-s1', bytes: 9 * GIB }, { label: 'project-a-s5', bytes: 8 * GIB }, { label: 'project-a-s3', bytes: 7 * GIB },
+        { label: 'project-a-s2', bytes: 4 * GIB }, { label: 'project-a-s6', bytes: 3 * GIB },
+      ]);
+    } finally { await app.close(); }
+  });
+
+  it('a malformed census is unmeasured and the holders are empty', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { app, watcher, health } = await lane({}, '{"v":1,"sessions":[');
+    try {
+      await watcher.sweepDisk();
+      await watcher.sweepTmpSweepCensus();
+      expect(readDiskHealth(await health())?.holders).toEqual([]);
+    } finally { await app.close(); warn.mockRestore(); }
+  });
+});
+
+// D-6631 (fleet disk retention DR-19): the orphan-worktree lane's counts, which the `disk` block carries as `orphanTrees`
+// once the block lands (DR-3 spreads it in the route). The watcher is the accessor: null before the lane's first census,
+// then counts by class and outcome.
+describe('the orphan lane\'s counts in the watcher', () => {
+  const HEX = Buffer.from('/p/.claude/worktrees/a').toString('hex');
+  const ok = (stdout: string) => ({ ok: true, stdout, stderr: '', killed: false, signal: null });
+
+  it('is null before the first census, then counts the audited trees by class and outcome', async () => {
+    const home = mkTmp('ccrc-fh-orphan-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    mkdirSync(cfg.registryDir, { recursive: true });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const runCcd = async (argv: readonly string[]) => {
+      if (argv[1] === '--orphans') return ok(JSON.stringify({ mode: 'orphans', truncated: false, rows: [{ pathHex: HEX, class: 'claude' }, { pathHex: '2f78', class: 'other' }] }));
+      return ok(JSON.stringify({ mode: 'orphan', pathHex: HEX, verdict: 'refused', refusal: 'dirty', detail: '1 file' }));
+    };
+    const full = {
+      cfg, runCcd, tmux: new Tmux(deadRunner), io: localIO, queue: new KeyedQueue(), coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['orphan-v1'], rosterFp: null, build: null },
+    } as never as Deps;
+    const bus = new Bus();
+    const watcher = new FleetWatcher(full, bus);
+    try {
+      expect(watcher.orphanTreesHealth()).toBeNull();
+      await watcher.sweepOrphanTrees();
+      expect(watcher.orphanTreesHealth()).toEqual({
+        byClass: { 'ccd-root': 0, claude: 1, superpowers: 0, other: 1, 'not-a-worktree': 0 },
+        byOutcome: { pending: 0, would: 0, left: 1, removed: 0 },
+      });
+    } finally { /* nothing was built that needs closing */ }
+  });
+
+  /** A watcher over a fixture home whose one tree sits inside registry row `lane-a`, seeded by `seed`. */
+  const nested = async (seed: (reg: string) => void, claims: Map<string, string>, io: Deps['io'] = localIO) => {
+    const home = mkTmp('ccrc-fh-orphan-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    mkdirSync(cfg.registryDir, { recursive: true });
+    seed(cfg.registryDir);
+    const real = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const coord = Object.assign(Object.create(real), {
+      childReclaimCoordinatorClaims: () => claims, openCoordinatorIds: () => [],
+    }) as CoordStore;
+    const calls: string[][] = [];
+    const runCcd = async (argv: readonly string[]) => {
+      calls.push([...argv]);
+      if (argv[1] === '--orphans') return ok(JSON.stringify({ mode: 'orphans', truncated: false, rows: [{ pathHex: HEX, class: 'claude', inside: 'lane-a' }] }));
+      return ok(JSON.stringify({ mode: 'orphan', pathHex: HEX, verdict: 'refused', refusal: 'dirty', detail: '1 file' }));
+    };
+    const full = {
+      cfg, runCcd, tmux: new Tmux(deadRunner), io, queue: new KeyedQueue(), coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['orphan-v1'], rosterFp: null, build: null },
+    } as never as Deps;
+    const watcher = new FleetWatcher(full, new Bus());
+    await watcher.sweepOrphanTrees();
+    return { watcher, audited: calls.some((c) => c[1] === '--orphan-hex') };
+  };
+  const row = (reg: string, workspace: string | null) => {
+    for (const [k, v] of Object.entries({ uuid: 'u-1', wrapper: 'claude', workdir: '/p', project: 'p' })) writeFileSync(path.join(reg, `lane-a.${k}`), `${v}\n`);
+    if (workspace !== null) writeFileSync(path.join(reg, 'lane-a.workspace'), `${workspace}\n`);
+  };
+  const unreadableWorkspace: Deps['io'] = {
+    ...localIO,
+    readFileMeasured: async (p, ...rest) => (p.endsWith('lane-a.workspace') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p, ...rest)),
+  };
+
+  it('wires the coordinator set from every claim, so a nested tree of a terminal-run claimant is audited', async () => {
+    const { watcher, audited } = await nested((reg) => row(reg, 'ws-1'), new Map([['lane-a', 'closed']]));
+    expect(audited).toBe(true);
+    expect(watcher.orphanTreesHealth()?.byOutcome.left).toBe(1);
+  });
+
+  it('audits a tree inside a plain row (no .workspace): a main checkout is no nesting', async () => {
+    expect((await nested((reg) => row(reg, null), new Map())).audited).toBe(true);
+  });
+
+  it('does not audit a tree inside a non-coordinator workspace row: it goes with its workspace', async () => {
+    const { watcher, audited } = await nested((reg) => row(reg, 'ws-1'), new Map());
+    expect(audited).toBe(false);
+    expect(watcher.orphanTreesHealth()?.byOutcome.left).toBe(0);
+  });
+
+  it('keeps a tree inside an absent row: no audit', async () => {
+    expect((await nested(() => undefined, new Map())).audited).toBe(false);
+  });
+
+  it('keeps a tree whose containing row\'s .workspace is unreadable: no audit', async () => {
+    expect((await nested((reg) => row(reg, 'ws-1'), new Map(), unreadableWorkspace)).audited).toBe(false);
+  });
+});
+
+describe('GET /api/fleet/health: the console timers (console speed S2, Step 7)', () => {
+  it('perf is present when the recorder is wired, absent otherwise', async () => {
+    const bare = await buildServer(testDeps());
+    const without = (await bare.inject({ method: 'GET', url: '/api/fleet/health' })).json() as FleetHealth;
+    expect('perf' in without).toBe(false);
+    await bare.close();
+
+    const perf = new PerfRecorder();
+    perf.phase('registry', 12);
+    const app = await buildServer({ ...testDeps(), perf });
+    const withPerf = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as FleetHealth;
+    expect(withPerf.perf?.tick.phases.registry?.lastMs).toBe(12);
+    expect(typeof withPerf.perf?.since).toBe('number');
+    await app.close();
+  });
+
+  it('the onResponse hook records the route pattern, never the id in the URL', async () => {
+    const perf = new PerfRecorder();
+    const seen: [string, string, number][] = [];
+    vi.spyOn(perf, 'route').mockImplementation((method, route, ms) => { seen.push([method, route, ms]); });
+    const app = await buildServer({ ...testDeps(), perf });
+    await app.inject({ method: 'GET', url: '/api/sessions/lane-a-project-a/pr' });
+    await app.inject({ method: 'GET', url: '/api/no-such-route/lane-a-project-a' });
+    await vi.waitFor(() => { expect(seen.length).toBe(2); });
+    expect(seen[0]![0]).toBe('GET');
+    expect(seen[0]![1]).toBe('/api/sessions/:id/pr');
+    expect(typeof seen[0]![2]).toBe('number');
+    expect(seen[1]![1], 'a request no route matched').toBe('<unmatched>');
+    expect(JSON.stringify(seen)).not.toContain('lane-a-project-a');
+    await app.close();
+  });
+});

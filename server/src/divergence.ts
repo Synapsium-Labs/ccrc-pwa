@@ -1,11 +1,12 @@
 import {
   corroboration, isActorClass, isDecSurface, SUPERVISED_FRESH_MS, type Divergence,
 } from '../../shared/api.js';
+import { workspaceId } from '../../shared/slug.js';
 
 /**
  * L1: pure, clock-free, `fs`-free, fastify-free — it imports L0 TYPES and
- * three L0 PURE VALUES (`corroboration`, the two guards it needs to call it
- * honestly, and `SUPERVISED_FRESH_MS`) and nothing else. THE CLOCK IS AN INPUT
+ * four L0 PURE VALUES (`corroboration`, the two guards it needs to call it
+ * honestly, `SUPERVISED_FRESH_MS`, and `workspaceId`) and nothing else. THE CLOCK IS AN INPUT
  * (`nowMs`), never read here. Gathering is L4's job
  * (`FleetWatcher.sweepDivergences`), THE CENSUS'S SINGLE PRODUCER.
  *
@@ -115,6 +116,15 @@ export interface DivergenceInput {
   /** Ids of every OPEN run — the same `runs()` read `openRunSessionIds`
    *  already comes from, carried as a set so this module stays pure. */
   readonly openRunIds: ReadonlySet<number>;
+  /**
+   * The ids the tick's registry listing REFUSED (`RegistryRead.refused`, path
+   * identity spec §2.3): listed, but never read or built, so in no `records`.
+   * Rule 3's open-run side leaves them out (slug `tick-lanes-hold-a-refused-id`):
+   * "carries no hold" would be read off a hold this census never measured. A
+   * FACT carried in, decided here. An id with no listed row at all is not in
+   * it, and still reads as carrying no hold.
+   */
+  readonly refusedIds: ReadonlySet<string>;
 }
 
 const key = (project: string, name: string): string => `${project}/${name}`;
@@ -129,13 +139,13 @@ const key = (project: string, name: string): string => `${project}/${name}`;
  * layouts on the box. `<project>/.git/worktrees/<name>/` takes its `<name>` from
  * the LAST SEGMENT OF THE CHECKOUT PATH, so:
  *
- *   ~/worktrees/custom-tools/brisk-ridge   admin name `brisk-ridge`
- *   ~/worktrees/custom-tools-alertwire     admin name `custom-tools-alertwire`
+ *   ~/worktrees/project-d/brisk-ridge   admin name `brisk-ridge`
+ *   ~/worktrees/project-d-alertpipe     admin name `project-d-alertpipe`
  *
  * — both measured live, in one project, on 2026-08-17. Composing
  * `${project}-${name}` is ccd's own `cmd_ws_add` rule (`local id="$project-$slug"`,
  * `local wt="$WORKTREES_ROOT/$project/$slug"`) and holds for the first; for the
- * second it yields `custom-tools-custom-tools-alertwire`, an id no registry row
+ * second it yields `project-d-project-d-alertpipe`, an id no registry row
  * can hold, so the any-field claim below could never match and the census named
  * that worktree on every sweep for ever — on the one kind whose repair deletes
  * worktrees.
@@ -165,19 +175,21 @@ const key = (project: string, name: string): string => `${project}/${name}`;
  * ccd did not create (`ws-gc` calls these `foreign`, lists them, and never
  * prunes them). It is NOT "we could not measure": the path was read, and ccd
  * builds ids only in the two shapes above, so the honest answer is that no
- * registry id can name this checkout. The one caller therefore skips the
+ * registry id can name this checkout. The sweep's caller therefore skips the
  * id half of the claim rule rather than testing an invented id — a worktree
  * with no ccd id cannot have a ccd registry claim, which is a reason to keep
- * looking at the row half, never a reason to fall silent.
+ * looking at the row half, never a reason to fall silent. The delegation frame
+ * (`coord/delegation-projection.ts`, wave 4, D-7006) reads it too: a listed
+ * session whose id this answers owns the tree, and `null` owns nothing.
  */
-function ccdIdForWorktree(project: string, wtPath: string): string | null {
+export function ccdIdForWorktree(project: string, wtPath: string): string | null {
   // Empty segments dropped so a trailing or doubled `/` cannot shift which
   // segment is read as which. git writes an absolute POSIX path here.
   const seg = wtPath.split('/').filter((s) => s !== '');
   const base = seg[seg.length - 1];
   if (base === undefined) return null;
   // NESTED — `$WORKTREES_ROOT/$project/$slug`, the only layout `ws-add` builds.
-  if (seg[seg.length - 2] === project) return `${project}-${base}`;
+  if (seg[seg.length - 2] === project) return workspaceId(project, base);
   // FLAT — the directory IS the id. Read only after the nested reading is out.
   if (base.length > project.length + 1 && base.startsWith(`${project}-`)) return base;
   return null;
@@ -339,7 +351,8 @@ export function divergences(input: DivergenceInput): Divergence[] {
   }
   const heldIds = new Set(live.filter((r) => r.held !== null).map((r) => r.id));
   for (const id of input.openRunSessionIds) {
-    if (heldIds.has(id)) continue;
+    // A refused id was never built, so whether it carries a hold is unmeasured: never a finding.
+    if (heldIds.has(id) || input.refusedIds.has(id)) continue;
     out.push({
       kind: 'claim-divergence', id, path: null,
       detail: 'an open run names this session, which carries no hold',

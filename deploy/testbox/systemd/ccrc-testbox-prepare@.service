@@ -1,0 +1,25 @@
+# Run %i's prepare (D-7406, D-7409; spec §2.2 "Prepare", §2.3 "Static units", "Network"): the checkout, the installs
+# and the build outputs, as the run user, reaching loopback and the registry proxy only (the proxy's address is in
+# ccrc-testbox-prepare@.service.d/50-ccrc-testbox.conf, with User= for a run user prefix and RuntimeMaxSec=). The
+# privileged first step makes `runs/%i/run`, the only writable path. Its output goes to out/%i/, opened by the system
+# manager before it drops to the run user (D-7501). No environment file: every value comes from specs/%i (D-7451).
+[Unit]
+Description=ccrc test box: run %i's prepare
+
+[Service]
+Type=exec
+User=ccrc-tb-%i
+Slice=ccrc-testbox-run-%i.slice
+ExecStartPre=+@@TREE@@/deploy/testbox/bin/prestart @@ROOT@@/specs/%i
+ExecStart=@@TREE@@/deploy/testbox/bin/prepare @@ROOT@@/specs/%i
+StandardOutput=truncate:@@ROOT@@/out/%i/prepare.stdout
+StandardError=truncate:@@ROOT@@/out/%i/prepare.stderr
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/32 ::1/128
+ProtectProc=invisible
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+RemoveIPC=yes
+ProtectSystem=strict
+ReadWritePaths=@@ROOT@@/runs/%i/run

@@ -1,0 +1,586 @@
+#!/usr/bin/env bash
+set +x   # FIRST LINE OF CODE, and it is a SECRETS control — the box token below.
+# ccd-update-sync — pull this node's update intent from the control plane
+# (design 2026-09-20 §9; programme wave 4).
+#
+# A SIBLING OF `ccd-pool-sync`, COPIED DISCIPLINE FOR DISCIPLINE, and a
+# sibling executable for that file's stated reason: `ccd/ccd` makes ZERO
+# outbound network calls, and `ccrc update` reads ONE local file
+# (`~/.ccrc/update-intent`, through `_upd_intent_state`), never the network.
+# This file is the only thing on a fleet node that asks
+# `GET /api/updates/intent/<nodeId>`. On a `server`/`both` node the server
+# process writes the same file itself, which is why `_inst_units` arms this
+# file's timer on the `fleet` role alone.
+#
+# COPIED, rule by rule, from `ccd-pool-sync`'s header and body:
+#   - `set +x` first. agent.env is GREPPED, never sourced (0600; it carries the
+#     agent bearer). The box token is read from its value line, handed to curl
+#     on STDIN through `-K -` — never argv, never environ — and cleared on the
+#     line after the request.
+#   - WRITE NOTHING UNLESS THE WHOLE ANSWER ARRIVED. Every failure arm exits 1
+#     without touching `~/.ccrc/update-intent`; a stale document inside its
+#     lease is better than no document, and a half-written one is worse than
+#     both. The write is tmp-then-rename, the rename python3's `os.rename`
+#     (one rename(2) on every POSIX platform — never `mv -T`, never a bare
+#     `mv -f`, for the reasons `ccd-pool-sync`'s header measures).
+#   - The torn-write detectors are the READER's own — the 65536-byte cap and
+#     the `end` terminator — checked over the WHOLE document, with
+#     `.fullmatch` (never `.match`, which lets one trailing newline through).
+#   - PORTABILITY: no bare `timeout` (curl's `--max-time` is the deadline), no
+#     `stat -c`, no template-less `mktemp`, no GNU `date`. `macos-platform.test.ts`
+#     scans this file WHOLE; it carries no platform-layer region either.
+#   - ALL OF THE ABOVE, ALSO for the server-caps pull (D-5232's mechanism, plan
+#     2026-10-16 Task 9b): its own section, right after the server URL is read,
+#     asks `/health` with NO token, writes nothing unless the whole answer
+#     arrived, installs by `os.rename`, and — unlike every other arm here —
+#     never exits: its failures fall through to the intent pull.
+#
+# DIFFERENT, and why:
+#   - VALIDATE, NEVER RENDER. `/api/pools/epoch` answers JSON that the pool
+#     puller renders into lines; `/api/updates/intent/<nodeId>` answers the
+#     §9 document ITSELF (`200 text/plain`). So this file checks the bytes it
+#     was sent and installs THOSE bytes — there is no second rendering to
+#     drift from the server's.
+#   - THE NODE NAMES ITSELF. The route is keyed by `~/.ccrc/node-id` (minted
+#     once by `ccrc install`'s `_inst_node_id`); it is validated as a
+#     lowercase uuid BEFORE any request, and no id means no request.
+#   - 0600, under `umask 077`: the mode the server-role writer gives the same
+#     path, so the two writers of one file agree on it.
+#   - `LC_ALL=C` for bash's own `[[ =~ ]]` decision below: a bracket range
+#     follows the ambient collation otherwise.
+#   - THE SECONDS RULE (D-3270; the C1 defect — `/api/pools/epoch`'s own
+#     doc comment in `server.ts` names it "review round 1, C1 — CRITICAL,
+#     fixed": `leaseUntil`/`issuedAt` are UNIX SECONDS, not milliseconds).
+#     A 13-digit
+#     `issued`/`lease` is GRAMMATICAL, and a seconds reader reads a
+#     millisecond lease as ~56,700 years away — `ok`, never `stale`. The
+#     reader (`_upd_intent_state`, review 155 fix round 1 item 15) re-checks
+#     this file's own PASS 3 values — its own `SECONDS_DIGITS=11` width
+#     bound first, then the future-clock bound, the lease window and channel
+#     agreement — so a 13-digit value is refused there by WIDTH, before it
+#     ever reaches the window. This file keeps its own checks anyway: it must
+#     never install what the reader refuses (D-3279's principle), and on a
+#     fleet box this file is the only gate in front of the projection — so
+#     this file must: `issued` and `lease` carry at
+#     most 11 digits (unix seconds until the year 5138; W2's
+#     `UNIX_SECONDS_MAX` bound), `issued` is within a day of this node's
+#     clock (a node further out than that cannot judge a 15-minute lease, and
+#     in the FUTURE direction it would read an expired lease as live), and
+#     `lease` falls in the day after `issued`. `desired` must equal the
+#     `desired-<channel>` line, which spec §9 defines it to be. THE ONE-DAY
+#     WINDOW IS NOT THE LEASE (review 155, your Q3, fix round 1): `lease` is
+#     `issued` plus the real 15-minute `PROJECTION_LEASE_S` — the LEASE is
+#     what bounds STALENESS (a document nobody has refreshed in 15 minutes is
+#     no longer trusted), and this day-wide window only TOLERATES CLOCK SKEW
+#     between this node and the server that minted `issued`; it is
+#     deliberately far looser than the lease itself, and it never substitutes
+#     for it.
+#   - THE EPOCH BOUND (D-3279, found reviewing this task). `_upd_intent_state`
+#     (its own per-line grammar over `epoch`/`issued`/`lease`, plan D-3265)
+#     refuses any epoch/issued/lease
+#     wider than 18 digits — `^(0|[1-9][0-9]{0,17})$` — because its own
+#     arithmetic is bash's, which wraps past 2^63-1. The grammar above never
+#     bounded `epoch`'s width (only `issued`/`lease` carried a digit cap, for
+#     the seconds rule), so a wide `epoch` installed cleanly over a good
+#     in-lease projection and the READER then refused every subsequent read
+#     as `malformed` — with a remedy (re-run this puller) that reinstalled
+#     the same unreadable document. The puller must never install what the
+#     reader refuses, so it now shares the reader's own 18-digit bound.
+#   - THE BODY IS A FILE, NEVER A BASH VARIABLE (D-3280, found reviewing this
+#     task). Bash's `$( )` SILENTLY DROPS a NUL byte from a captured command's
+#     stdout (measured: `ep\0och 8…` arrived at the validator as `epoch 8…`)
+#     — a malformed answer was REPAIRED and installed rather than refused.
+#     curl now writes the response straight to a bounded temp file beside the
+#     staging path (`--max-filesize 65536`, curl's own cap), and python reads
+#     that file as BYTES — checking for a NUL byte and the 65536-byte cap
+#     BEFORE it ever decodes UTF-8 or runs pass 1 — so nothing the shell
+#     would mangle reaches the validator's text-processing passes at all.
+#     `ccd-pool-sync` shares both shapes (the `$( )` capture and the
+#     unbounded read); it is out of scope for this task and named here only
+#     so it is not rediscovered as a fresh finding.
+#   - THREE SEPARATE BOUNDS, NEVER ONE (review 155 C20, fix round 1 item 14).
+#     `--max-filesize` is curl's OWN cap, and on curl >= 8.4.0 it stops an
+#     oversized transfer before it finishes downloading (rc 63, below) — but
+#     older curl (Debian 12 ships 7.88) ignores `--max-filesize` for a
+#     response with no advance Content-Length (a chunked body), so the
+#     transfer still runs to completion on disk. What THIS FILE actually
+#     guarantees, on every curl: REFUSAL is guaranteed regardless — pass 0
+#     below refuses any body at or over the cap, whatever wrote it and
+#     however large. DISK is bounded by `--max-time` (the transfer stops at
+#     the timeout, however large `$body_tmp` grew by then — never truly
+#     unbounded, but not the 65536-byte cap either). MEMORY is bounded by the
+#     validator's own read (pass 0), which never reads more than the cap plus
+#     one byte from `$body_tmp` regardless of the file's real size on disk —
+#     so an old curl's unbounded DOWNLOAD never becomes an unbounded READ.
+#
+# THE FOURTH HAND COPY of ccrc-api's URL+token dance (ccd-account-health,
+# ccrc-api, ccd-pool-sync, this file) — deliberately not a shared helper, for
+# the reason `ccd-pool-sync` gives where it calls itself the third: each is a
+# standalone executable installed as a copy, and a sourced helper would be a
+# new file under the same "cannot source a sibling" constraint. A fix to one
+# copy's URL or token handling is owed to all four.
+set -uo pipefail
+umask 077
+export LC_ALL=C
+
+AGENT_ENV="$HOME/.ccrc/agent.env"
+TOKEN_FILE="$HOME/.cc-secrets/ccrc-mail.token"
+NODE_ID_FILE="$HOME/.ccrc/node-id"
+DEST="$HOME/.ccrc/update-intent"
+TIMEOUT="${CCRC_UPDATE_SYNC_TIMEOUT:-20}"
+
+# The one bash log-line redactor, ccd/ccrc's `_upd_redact`, as a generated byte copy (this executable is installed alone
+# and sources nothing). Edit `_upd_redact` in ccd/ccrc, then `ccrc restamp ccd/ccd-update-sync`.
+# ── BEGIN GENERATED LOG-LINE REDACTOR (shared/hook-helpers.mjs; edit it in ccd/ccrc, then regenerate) ──
+# ccrc:generated 1 sha256=aee56c58c2ce988b6d6d0b10511e40dc8dd9d8c8b6281efe0403f9e61482ecb6
+_upd_redact() {
+  local s="${1:-}" mode="${2:-}" LC_ALL=C cut=""
+  # D-7564, the bound: every loop below rescans the whole text once per credential it masks, and the home walk once per
+  # home it finds, so a line of thousands of them took seconds. A text over 4096 bytes keeps only its head: its first
+  # 4001 bytes cut back to their last whitespace, so every token kept is whole, as written, and masks as it would have.
+  # The rest is withheld, never printed, and a note names how many bytes went. Head and note fit in 4096 bytes, so a
+  # second pass over the result (a die's sentence reaching `_upd_phase`) cuts nothing more.
+  if [ "${#s}" -gt 4096 ]; then
+    local head="${s:0:4001}"
+    if [[ "$head" =~ ^(.*)[[:space:]] ]]; then head="${BASH_REMATCH[1]}"; else head=""; fi
+    cut="${head:+ }[cut: $(( ${#s} - ${#head} )) more bytes withheld, over the redactor's 4096-byte cap]"
+    s="$head"
+  fi
+  # The userinfo strip is bounded to characters a URL authority allows
+  # before an '@' — never '/' or whitespace — so an UNRELATED '@' past the
+  # authority (a query's `?email=a@example.com`) is left alone. Review fix
+  # round 1, N2: `?` and `#` end the authority too (measured, `https://h?a@b`
+  # gave `https://b`), so the class stops at the first of '/', '?' or '#'.
+  # D-6748: a base with NO scheme (`user:pass@host/r`, which curl takes as
+  # http) loses every '@'-ended run from a TOKEN's start (the text's, or after
+  # whitespace, '"' or '<') whose host ends at '/', '?' or '#'; prose's
+  # `user@host` stays. Past a run's first character '<' and '"' are the
+  # password's (curl sends both); under LC_ALL=C no invalid UTF-8 byte ends a
+  # run. A scheme's `https://u:p@x@h` (curl refuses it) loses each run in turn, and a userinfo that starts with '@'
+  # loses its leading '@'s with it (D-7564: `https://@tok@host/x` and `https://@@tok@host` read `https://host/x` and
+  # `https://host`). Each '/' may follow a '\', as JSON escapes it, and stays as written (D-7564:
+  # `https:\/\/u:secret@host\/x` reads `https:\/\/host\/x`). Each pass drops at least one '@', so the loop ends.
+  # D-7564: a run after the first may be empty, so `user:secret@@host/x` loses `user:secret@@` (curl's userinfo
+  # runs to the last '@'). Any leading '@'s go with the userinfo (`@tok@host/x` reads `host/x`), and a token may
+  # also start after a backtick, which stays (`` `tok@host/x` `` reads `` `host/x` ``). Bare-host's rule below does
+  # the same.
+  local sre=':((\\?/)+)@*[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do s="${s/"${BASH_REMATCH[0]}"/":${BASH_REMATCH[1]}"}"; done
+  # D-7564: a token that starts `KEY=` or `--flag=` (a letter or '_' first, then letters, digits, '_' or '-') keeps that
+  # prefix when a ':' userinfo follows it, so `CCRC_X=user:secret@host` reads `CCRC_X=host`. The userinfo's first
+  # character may be neither ':' nor '=': a base64 name's padding (`dG9rZW4=:x@h`) then reads as no prefix and goes
+  # whole, by rule 1 below. A token-only userinfo (rule 2) never keeps one, for the same reason.
+  local kre='(^|[[:space:]"'"'"'<(])(-{0,2}[A-Za-z_][A-Za-z0-9_-]*=)([^:=/?#[:space:]"'"'"'<(][^/?#[:space:]]*(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $kre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[2]}"}"; done
+  local re='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+  # D-7564, in both modes: two shapes are a credential whatever ends the host, so no end set is asked of them.
+  #   1. a token's userinfo holding a ':' (`user:secret@`, up to the token's last '@', a leading '@' included), its
+  #      percent-encoded `%3A` or `%3a` too: `server user:secret@host:8443 refused`, `user:secret@host: refused`, a
+  #      quote, a tab, a CR or the text's end after the host. A token starts at the text's start or after whitespace,
+  #      '"', "'", '<' or '('; past its first character the userinfo may hold '"', "'", '<' or '('.
+  #      An email address has no ':' before its '@', so it stays.
+  #   2. any userinfo, after any leading '@'s, before a host that ends in `:digits` and then the text's end, any byte but
+  #      a letter, a digit, '.', '!', '}', '_', '~' or '-' (whitespace, punctuation, '\', a non-ASCII mark or space, an
+  #      invalid byte), or a run of '.', '!' or '}' that one of those follows: `tok@host:8443 refused`,
+  #      `reach tok@host:8443.`, `connecting to tok@host:8443... retrying`, `dial tok@host:8443.) retrying`,
+  #      `"msg":"proxy tok@host:8443\" refused"`, `tok@host:8443… x` (D-7564's fifth round: the end set was a list of
+  #      what may follow a port, and anything off it printed the secret). A token may also start after a backtick,
+  #      which stays (`` `tok@host:8443` `` reads `` `host:8443` ``). The host holds a character other than a digit, so a
+  #      time's `build@10:30` stays, or is a bracketed IPv6 address, a zone id or an IPvFuture literal included
+  #      (`tok@[::1]:8443`, `tok@[fe80::1%25en0]:80`, `tok@[v1.fe80::1]:80`). A version's `x@h:1.2` is no
+  #      port and a terminator, so rule 2 leaves it (bare-host's own rule still masks it at the text's end).
+  # The cost: `mailto:a@example.com` and `npm:pkg@1.2.3` read as shape 1, a logger's `WARNING:root:bob@example.com` too;
+  # `stash@{0}:3`, `claude-session@x.service:12` and `log@[core:io]:2` read as shape 2. The corpus's `blast` rows hold
+  # each. Its `known-limit` rows hold what still prints whole: a userinfo inside a query or a path, a raw '#', '?' or
+  # '/' in a password, a token-only userinfo before a host that no port (or an empty one, `tok@h: refused`) and no
+  # path follows while more text follows (`--proxy=tok@host refused`), a port that a letter, '-', '_' or '~' follows,
+  # or a run of '.', '!' or '}' and then one of those, while more text follows (`tok@host:8443-x retrying`,
+  # `tok@host:8443a x`, `tok@host:8443.x retrying`): a host name holds those, so the text after the ':' is arguably
+  # no port. A host of digits only (`tok@2130706433:80 x`) reads as a time's `build@10:30` and stays too.
+  local cre='(^|[[:space:]"'"'"'<(])(([^/?#[:space:]"'"'"'<(][^/?#[:space:]]*)?(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $cre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}"}"; done
+  local ptre='(^|[[:space:]"'"'"'<(`])((@*[^/@?#[:space:]"'"'"'<(`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)(([^/@?#[:space:]:]*[^/@?#[:space:]:0-9][^/@?#[:space:]:]*|\[[0-9A-Za-z:.%_~-]+\]):[0-9]+([^0-9A-Za-z.!}_~-]|$|[.!}]+([^0-9A-Za-z.!}_~-]|$)))'; while [[ "$s" =~ $ptre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+  # With `bare-host` (ccd-update-sync's `say`, the only caller that passes it) a run whose host ends at ')' or the
+  # text's end is masked too, prose's `user@host` included, which is why no ccd/ccrc caller passes it: a systemd
+  # instance unit's `claude-session@x.service` would lose its prefix (D-7289).
+  if [ "$mode" = bare-host ]; then
+    local bre='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:])]+([/?#)]|$))'
+    while [[ "$s" =~ $bre ]]; do s="${s/"${BASH_REMATCH[0]}"/"${BASH_REMATCH[1]}${BASH_REMATCH[5]}"}"; done
+  fi
+  # D-8342, in both modes: a scheme URL's query and fragment can carry a token (`?token=…`), so what follows its first '?' or
+  # '#' goes, to the token's end (whitespace, '"', '<', '>' or a backtick, none of which a URL holds raw); the '?' or '#' stays
+  # and `[withheld]` follows it, so `https://h/r?token=x#f` reads `https://h/r?[withheld]`. A scheme is a letter, then
+  # letters, digits, '+', '.' or '-', then ':' and one or more '/', each maybe after a '\' (as the userinfo rules read one),
+  # and it starts where no such character stands before it (`KEY=https://…` keeps its `KEY=`). Text that is no scheme URL
+  # keeps every '?' and '#' (prose's `release?`, `#2`, `mailto:a@b?x`, a scheme-less `host/r?x`). The walk passes each mask
+  # once and keeps the text before it, so a second pass over its own output changes nothing.
+  local qre='(^|[^A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]*:(\\?/)+[^?#[:space:]"<>`]*)([?#])[^[:space:]"<>`]*' qout="" qm=""
+  while [[ "$s" =~ $qre ]]; do qm="${BASH_REMATCH[0]}"; qout+="${s%%"$qm"*}${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[4]}[withheld]"; s="${s#*"$qm"}"; done
+  s="$qout$s"
+  # Review fix round 1, M6: the OLD blind substring replace was not anchored
+  # to a path boundary — HOME=`/home/u` turned `/home/user2/f` into
+  # `~ser2/f` (a PREFIX match with no boundary check at all), and a
+  # trailing-slash HOME (`/home/u/`) turned `/home/u/.ccrc` into `~.ccrc`
+  # (the separating `/` consumed along with HOME, never put back). Fixed:
+  # strip ONE trailing slash from HOME first, so a trailing-slash HOME and a
+  # bare one are handled the same way; HOME of `/` (or empty) then strips to
+  # empty and is skipped — never replaced at all, so `https://h/p` is not
+  # turned into `https:~~h~p`. What remains is replaced ONLY where it is
+  # followed by `/` (put back as `~/`, never dropped) or ends a TOKEN —
+  # whitespace, a quote, `:`, `)`, or the end of the string — enumerated
+  # one boundary character at a time because a bash glob substitution has
+  # no lookahead to keep an unknown trailing character while still matching
+  # on it.
+  local home="${HOME:-}"
+  home="${home%/}"
+  if [ -n "$home" ]; then
+    # W6 Task 8A, review 167's F5: the boundary BEFORE home is anchored too.
+    # A HOME of `/home/u` is a real match only where the character before it
+    # is no part of a longer path — the start of the string, whitespace, a
+    # quote or backtick, or one of `= : ( [ { , ; < > |`, or the `//` that
+    # ends a `file://` scheme — never a path character, so `/srv/home/u/x`
+    # is left whole instead of becoming `/srv~/x`. A bash glob has no
+    # lookbehind either, so each occurrence is walked in turn and the
+    # character before it read from the text already passed.
+    local seen="" out="" pre="" post="" before="" after="" left=0 right=0
+    while [[ "$s" == *"$home"* ]]; do
+      pre="${s%%"$home"*}"
+      post="${s#*"$home"}"
+      seen+="$pre"
+      before="${seen: -1}"
+      after="${post:0:1}"
+      left=0; right=0
+      case "$before" in
+        ''|' '|$'\t'|$'\n'|'"'|"'"|'`'|'='|':'|'('|'['|'{'|','|';'|'<'|'>'|'|') left=1 ;;
+        '/') case "$seen" in *://) left=1 ;; esac ;;
+      esac
+      case "$after" in
+        ''|'/'|' '|$'\t'|$'\n'|'"'|"'"|':'|')') right=1 ;;
+      esac
+      if [ "$left" -eq 1 ] && [ "$right" -eq 1 ]; then out+="${pre}~"; else out+="${pre}${home}"; fi
+      seen+="$home"
+      s="$post"
+    done
+    s="${out}${s}"
+  fi
+  s+="$cut"
+  printf '%s' "$s"
+}
+# ── END GENERATED LOG-LINE REDACTOR ──
+# `say` is the ONE place every line this script prints (to stderr, which a `--user` unit's journal carries) is
+# assembled, so no call site here, present or future, redacts its own sentence (review 155 C18). It applies every rule
+# of ccd/ccrc's `_upd_redact`, through `_upd_redact <text> bare-host`: a URL's userinfo with a scheme or without one,
+# and this box's home directory (-> ~). `bare-host` because this script strips the base's trailing '/' and closes its
+# exit-6 clause with ')', so a scheme-less host here may end at ')' or at the text's end (D-7289).
+say() { printf 'ccd-update-sync: %s\n' "$(_upd_redact "$1" bare-host)" >&2; }
+
+# W6 Task 8A, review 167's F7: `TIMEOUT` goes to curl's `--max-time`, and curl
+# reads `--max-time 0` as NO LIMIT AT ALL — so a `0` (or a typo) in the user
+# manager's environment, which a `--user` timer's unit inherits, would turn
+# the one bound on this pull's disk and time into none. Validated exactly as
+# ccd/ccrc's `_upd_validate_timeout` validates the `CCRC_RELEASE_*` knobs: a
+# whole number from 1 to 3600 is used as typed; anything else (`0`, negative,
+# non-numeric, over an hour) WARNs, naming the variable and what it got, and
+# falls back to 20. Unset or empty is the default, silently. A bad value never
+# refuses the pull: a timer that stops syncing over a typo is the worse fault.
+if [[ ! "$TIMEOUT" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$TIMEOUT" -gt 3600 ]; then
+  say "WARN: CCRC_UPDATE_SYNC_TIMEOUT='${TIMEOUT//[![:print:]]/?}' is not a whole number of seconds from 1 to 3600 — using 20"
+  TIMEOUT=20
+fi
+
+command -v curl >/dev/null 2>&1 || { say "curl is not on PATH — nothing was synced"; exit 1; }
+command -v python3 >/dev/null 2>&1 || { say "python3 is not on PATH — nothing was synced"; exit 1; }
+
+# GREP, never source: agent.env is 0600 and carries this box's agent bearer.
+[[ -r "$AGENT_ENV" ]] || { say "cannot read $AGENT_ENV"; exit 1; }
+url=$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$AGENT_ENV" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')
+[[ -n "$url" ]] || { say "CCRC_SERVER_URL is not set in $AGENT_ENV"; exit 1; }
+# `ccd-pool-sync`'s C1 fix, copied: `ccrc install --role fleet`'s prompt offers
+# `ws://…` first, curl refuses that protocol outright, and a trailing `/`
+# would build `…//api/updates/…`, a different route.
+url="${url/#ws:/http:}"; url="${url/#wss:/https:}"
+url="${url%/}"
+
+# ── THE SERVER'S CAPABILITY WORDS: a second, independent pull (D-5232's ────
+# mechanism; plan 2026-10-16 Task 9b; spec §6.1). `GET <CCRC_SERVER_URL>/health`
+# — the same address, NO TOKEN (`/health` is exempt from the auth gate, and the
+# box token is never sent where it is not needed), the same `--max-time` and
+# `--max-filesize` — rendered to the three lines of `~/.ccrc/server-caps`
+# (`SERVER_CAPS_FILE`, shared/api.ts) with THIS node's clock as `at`, which the
+# hook reads to engage an arm that changes an existing field's meaning only
+# behind a server that reads it. PLACED HERE, before the node-id and box-token
+# checks below (each of which exits 1), so a node with neither still records
+# its server's words; and before the intent pull, which it never stops: EVERY
+# FAILURE ARM WRITES NOTHING AND RETURNS, never `exit`s. The copied discipline,
+# applied to this section too: the body goes to a bounded FILE, never a bash
+# variable (D-3280); python reads at most the cap plus one byte, refuses a NUL
+# and anything at or over the cap before decoding; tmp-then-rename by python's
+# `os.rename`; 0600 under this file's `umask 077`; the temps cleaned by the
+# EXIT trap and on every arm. WRITE NOTHING UNLESS THE WHOLE ANSWER ARRIVED:
+# a JSON object, whose `caps` is absent (an older server: written as an empty
+# list, since the whole answer arrived and named nothing) or a list of words
+# on the grammar — anything else refuses the WHOLE answer. The word grammar
+# is the second copy of shared/api.ts's `isServerCapWord`, held equal by
+# `ccd-update-sync.test.ts`'s shared table. A previous file is left as it was:
+# its own `at` ages it out within the hook's 180 s lease.
+caps_dest="$HOME/.ccrc/server-caps"
+caps_body="${caps_dest%/*}/.server-caps.$$.body.tmp"
+caps_tmp="${caps_dest%/*}/.server-caps.$$.tmp"
+trap 'rm -f -- "$caps_body" "$caps_tmp"' EXIT
+_caps_pull() {
+  local code rc cerr
+  mkdir -p -- "${caps_dest%/*}" 2>/dev/null \
+    || { say "server-caps: could not create ~/.ccrc — not recorded"; return 0; }
+  rm -f -- "$caps_body" "$caps_tmp"
+  code="$(curl -sS -o "$caps_body" -w '%{http_code}' --max-filesize 65536 \
+    --max-time "$TIMEOUT" "$url/health" </dev/null 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    rm -f -- "$caps_body"; say "server-caps: unmeasured — curl exited $rc on /health; not recorded"; return 0
+  fi
+  if [ "$code" != 200 ]; then
+    rm -f -- "$caps_body"; say "server-caps: unmeasured — /health answered HTTP $code; not recorded"; return 0
+  fi
+  cerr="$(LC_ALL=C.UTF-8 python3 -c '
+import json, re, sys, time
+CAP = 65536
+WORD = re.compile(r"[a-z0-9-]{1,64}")   # shared/api.ts isServerCapWord, the TypeScript copy
+body_path, dest_path = sys.argv[1], sys.argv[2]
+try:
+    with open(body_path, "rb") as f:
+        raw = f.read(CAP + 1)
+    if b"\x00" in raw:
+        raise ValueError("the /health body contains a NUL byte")
+    if len(raw) >= CAP:
+        raise ValueError("the /health body is at or over the %d-byte cap" % CAP)
+    doc = json.loads(raw.decode("utf-8"))
+    if not isinstance(doc, dict):
+        raise ValueError("the /health body is not a JSON object")
+    caps = doc.get("caps", [])
+    if not isinstance(caps, list) or not all(isinstance(w, str) and WORD.fullmatch(w) for w in caps):
+        raise ValueError("the /health caps is not a list of capability words")
+except Exception as ex:
+    sys.stderr.write((str(ex).splitlines() or ["refused"])[0][:200] + "\n"); sys.exit(1)
+try:
+    with open(dest_path, "w", encoding="ascii", newline="") as f:
+        f.write("at %d\ncaps%s\nend\n" % (int(time.time()), "".join(" " + w for w in caps)))
+except OSError as ex:
+    sys.stderr.write(str(ex) + "\n"); sys.exit(2)
+' "$caps_body" "$caps_tmp" 2>&1 >/dev/null)"; rc=$?
+  rm -f -- "$caps_body"
+  if [ "$rc" -ne 0 ]; then
+    rm -f -- "$caps_tmp"
+    if [ "$rc" -eq 2 ]; then say "server-caps: could not stage ~/.ccrc/server-caps — not recorded"
+    else say "server-caps: unmeasured — ${cerr:-the /health answer was refused}; not recorded"; fi
+    return 0
+  fi
+  if [ ! -L "$caps_dest" ] && [ -d "$caps_dest" ]; then
+    rm -f -- "$caps_tmp"; say "server-caps: a directory sits at ~/.ccrc/server-caps — not recorded"; return 0
+  fi
+  python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$caps_tmp" "$caps_dest" 2>/dev/null \
+    || { rm -f -- "$caps_tmp"; say "server-caps: could not install ~/.ccrc/server-caps — not recorded"; }
+  return 0
+}
+_caps_pull
+
+# THE NODE'S OWN NAME, before any request: the route is keyed by it, and a
+# request for an empty or guessed id is one the control plane can only refuse.
+if [[ ! -e "$NODE_ID_FILE" && ! -L "$NODE_ID_FILE" ]]; then
+  say "no node id at ~/.ccrc/node-id — run ccrc install; nothing was synced"; exit 1
+fi
+[[ -f "$NODE_ID_FILE" && -r "$NODE_ID_FILE" ]] \
+  || { say "~/.ccrc/node-id is not a readable file — nothing was synced"; exit 1; }
+nid=""
+IFS= read -r nid < "$NODE_ID_FILE" || true
+[[ "$nid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+  || { say "~/.ccrc/node-id is not a lowercase uuid — nothing was synced"; exit 1; }
+
+[[ -r "$TOKEN_FILE" ]] || { say "no readable box token at \$HOME/.cc-secrets/ccrc-mail.token"; exit 1; }
+# The value line, never the `#` comment preamble the file wraps it in.
+tok=$(grep -vE '^[[:space:]]*(#|$)' "$TOKEN_FILE" | head -n1 | tr -d '[:space:]')
+[[ -n "$tok" ]] || { say "the box token file has no value line"; exit 1; }
+
+# D-3280: `dir` and the two temp paths land HERE, before the request, so the
+# body can go straight to a FILE — never a bash variable — the moment curl
+# has it. Both `body_tmp` and `tmp` (the staged, VALIDATED projection) are
+# cleaned up on every exit via the trap below (review 155 C19, fix round 1
+# item 13: a kill between python's write to `$tmp` and the rename below —
+# for example a timer stop — used to leave a 0600 copy of the projection
+# named after this run's pid behind forever; nothing else in the tree sweeps
+# `.update-intent.*`), whatever arm this script leaves through; `tmp` ALSO
+# keeps its own explicit `rm -f` on every failure arm it reaches, so an
+# ordinary refusal is reported and cleaned up promptly rather than waiting on
+# the trap, which is then a no-op over an already-absent file.
+# ONE WINDOW REMAINS (fix round 1 review, m6, answer 3): bash runs its EXIT
+# trap as soon as a SIGTERM arrives, WITHOUT waiting for its foreground
+# child to finish (measured) — so a SIGTERM sent to this script's own bash
+# alone, while the python validator below is still mid-write to `$tmp`,
+# lets that write land AFTER the trap has already run and removed it,
+# leaving the just-written copy behind after all. This is unreachable from
+# an ordinary timer stop: the unit sets no `KillMode`, so systemd's default
+# control-group kill signals the python child too, and it dies with this
+# script rather than outliving it. A comment is the fix, per that answer.
+dir="${DEST%/*}"
+mkdir -p -- "$dir" || { say "could not create ~/.ccrc — nothing was synced"; exit 1; }
+body_tmp="$dir/.update-intent.$$.body.tmp"
+tmp="$dir/.update-intent.$$.tmp"
+trap 'rm -f -- "$body_tmp" "$tmp" "$caps_body" "$caps_tmp"' EXIT
+rm -f -- "$body_tmp" "$tmp"
+
+# `-K -` reads the header from stdin: never argv, never environ. The BODY now
+# goes straight to `$body_tmp` via `-o`, never through this script's own
+# variables — D-3280. `--max-filesize 65536` is curl's own bound, matching
+# the reader's cap: on curl >= 8.4.0 an oversized transfer never finishes
+# downloading and curl exits 63 rather than handing this script a half-sized
+# body to judge — but NOT on every curl this file runs on (C20, fix round 1
+# item 14): the validator's own bounded read below is what actually
+# guarantees refusal and a bounded MEMORY footprint whichever curl answers;
+# `--max-time` bounds DISK.
+status="$(printf 'header = "x-ccrc-mail-token: %s"\n' "$tok" \
+  | curl -sS -K - -o "$body_tmp" -w '%{http_code}' --max-filesize 65536 \
+    --max-time "$TIMEOUT" "$url/api/updates/intent/$nid" 2>/dev/null)"; rc=$?
+tok=""
+if [ "$rc" -ne 0 ]; then
+  case "$rc" in
+    1)  say "unmeasured — curl exited 1 (unsupported protocol — check CCRC_SERVER_URL's scheme in $AGENT_ENV)" ;;
+    6)  say "unmeasured — curl exited 6 (could not resolve host in $url)" ;;
+    7)  say "unmeasured — curl exited 7 (could not connect)" ;;
+    28) say "unmeasured — curl exited 28 (timed out after ${TIMEOUT}s)" ;;
+    63) say "unmeasured — curl exited 63 (response exceeded the 65536-byte cap)" ;;
+    *)  say "unmeasured — curl exited $rc" ;;
+  esac
+  exit 1
+fi
+[ "$status" = 200 ] || { say "unmeasured — HTTP $status"; exit 1; }
+
+# FOUR PASSES, EACH WITH ITS OWN JOB — pass 0 is D-3280's, ahead of the other
+# three, which are unchanged in shape from the original three-pass split:
+#   0. THE BYTES, before any decoding: a NUL byte or a body at or over the
+#      65536-byte cap is refused here, on the RAW bytes read from
+#      `$body_tmp` — never on text `$( )` may have already mangled.
+#   1. PER LINE, for the diagnostic: every line that is PRESENT must match the
+#      grammar of the key its position names. `zip` stops at the shorter side
+#      on purpose — pass 1 never counts lines and never looks for `end`, so
+#      a document torn at a line boundary passes it.
+#   2. THE WHOLE DOCUMENT: ONE `DOC.fullmatch` over the text — nine lines, in
+#      order, `end` last, exactly one newline after each. This is the
+#      torn-write detector, and the only one: delete it and a document cut
+#      just before its `end` line is installed.
+#   3. THE VALUES passes 1-2 cannot see: the epoch bound (D-3279), the
+#      seconds rule and `desired`'s agreement with its own channel.
+# On success python writes the validated RAW bytes straight to `$tmp` — never
+# back through this script's own variables — so nothing bash captures can
+# mangle the installed bytes either. A VALIDATION failure (exit 1) and a
+# WRITE failure (exit 2) are told apart, exactly as the two distinct refusal
+# sentences below name them.
+verr="$(LC_ALL=C.UTF-8 python3 -c '
+import re, sys, time
+NUM = r"(?:0|[1-9][0-9]*)"
+TAG = r"(?:v[0-9]+\.[0-9]+\.[0-9]+|none)"
+LINES = [
+    ("epoch", r"epoch (%s)" % NUM),
+    ("issued", r"issued (%s)" % NUM),
+    ("lease", r"lease (%s)" % NUM),
+    ("channel", r"channel (stable|dev)"),
+    ("desired", r"desired (%s)" % TAG),
+    ("desired-stable", r"desired-stable (%s)" % TAG),
+    ("desired-dev", r"desired-dev (%s)" % TAG),
+    ("auto", r"auto (off|stable|channel)"),
+    ("end", r"end"),
+]
+GRAMMAR = [(key, re.compile(pat)) for key, pat in LINES]
+DOC = re.compile("".join(pat + "\n" for _, pat in LINES))
+CAP = 65536
+DAY = 86400          # mirrored in ccd/ccrc _upd_intent_state as its own "local DAY=86400" (fix round 1 review, m3) -- keep both literals identical
+SECONDS_DIGITS = 11  # mirrored in ccd/ccrc _upd_intent_state as its own "local SECONDS_DIGITS=11" (fix round 1 review, I2) -- keep both literals identical
+EPOCH_DIGITS_MAX = 18  # D-3265: `_upd_intent_state` refuses epoch/issued/lease wider than 18 digits
+
+def trunc(v, cap=200):
+    r = repr(v)
+    return r if len(r) <= cap else r[:cap] + "...(truncated, %d chars total)" % len(r)
+
+def seconds(name, s):
+    # Diagnostic first: a 13-digit value is the millisecond mix-up by name,
+    # and int() is never handed more digits than unix seconds carry.
+    if len(s) > SECONDS_DIGITS:
+        raise ValueError("%s carries %d digits: unix seconds carry at most %d until the year 5138, a millisecond value carries 13" % (name, len(s), SECONDS_DIGITS))
+    return int(s)
+
+body_path, dest_path = sys.argv[1], sys.argv[2]
+try:
+    with open(body_path, "rb") as f:
+        # C20 (fix round 1 item 14): never more than the cap plus one byte,
+        # independent of curl own --max-filesize (an older curl does not
+        # enforce that flag on a chunked body — see this file header above).
+        # Bounds MEMORY on every curl; DISK stays bounded by --max-time alone.
+        raw = f.read(CAP + 1)
+    # PASS 0 — the raw bytes, before any decoding (D-3280).
+    if b"\x00" in raw:
+        raise ValueError("the document contains a NUL byte")
+    # Review 155 fix round 1 review, m2: len(raw) can only be a TRUE size up
+    # to CAP (the bounded read above never returns more than CAP + 1 bytes),
+    # so a message naming the read own ceiling (65537) as though it were the
+    # document real size is false -- the real size could be far larger.
+    # "== CAP" still names the real, exact size (the read was not truncated
+    # short of it); "> CAP" (only ever CAP + 1 under this bound) says only
+    # "more", never a specific count it cannot back up.
+    if len(raw) > CAP:
+        raise ValueError("the document is more than %d bytes, at or over the %d-byte cap" % (CAP, CAP))
+    if len(raw) == CAP:
+        raise ValueError("the document is %d bytes, at or over the %d-byte cap" % (CAP, CAP))
+    text = raw.decode("utf-8")
+    # PASS 1 — per line, for the diagnostic.
+    v = {}
+    body = text[:-1] if text.endswith("\n") else text
+    for n, ((key, rx), ln) in enumerate(zip(GRAMMAR, body.split("\n")), 1):
+        m = rx.fullmatch(ln)
+        if m is None:
+            raise ValueError("line %d (%s) is off-grammar: %s" % (n, key, trunc(ln)))
+        v[key] = m.group(1) if rx.groups else None
+    # PASS 2 — the whole document.
+    if DOC.fullmatch(text) is None:
+        raise ValueError("the document is not exactly nine lines, epoch through end, each ending in one newline (torn, truncated, reordered or extended)")
+    # PASS 3 — the values.
+    if len(v["epoch"]) > EPOCH_DIGITS_MAX:
+        raise ValueError("epoch carries %d digits: the reader refuses anything wider than %d digits (D-3265)" % (len(v["epoch"]), EPOCH_DIGITS_MAX))
+    issued = seconds("issued", v["issued"])
+    lease = seconds("lease", v["lease"])
+    now = int(time.time())
+    if abs(issued - now) > DAY:
+        raise ValueError("issued %d is more than a day from this node clock (%d), and a node that far out cannot judge a lease" % (issued, now))
+    if not issued <= lease <= issued + DAY:
+        raise ValueError("lease %d does not fall in the day after issued %d" % (lease, issued))
+    want = v["desired-stable"] if v["channel"] == "stable" else v["desired-dev"]
+    if v["desired"] != want:
+        raise ValueError("desired %s disagrees with desired-%s %s" % (v["desired"], v["channel"], want))
+except Exception as ex:
+    sys.stderr.write(str(ex) + "\n"); sys.exit(1)
+try:
+    with open(dest_path, "wb") as f:
+        f.write(raw)
+except OSError as ex:
+    sys.stderr.write(str(ex) + "\n"); sys.exit(2)
+' "$body_tmp" "$tmp" 2>&1 >/dev/null)"
+prc=$?
+# Review fix round 1, M2: the validator's own diagnostic (a grammar/value
+# complaint — never a path, in the ordinary VALIDATION arm) is worth keeping,
+# but the WRITE-failure arm's `str(OSError)` embeds the absolute staged path
+# (`$tmp`) — so both are captured above (stderr only, `2>&1 >/dev/null`,
+# never bash's own plain `$( )`, which would also eat a NUL the SAME way
+# D-3280 already guards the body against) and routed through `say`, which
+# ALREADY redacts everything it is given (this file's own choke point) — no
+# second `_upd_redact` call is needed here, or every consumer would redact twice.
+[ -n "$verr" ] && say "$verr"
+if [ "$prc" -eq 2 ]; then
+  rm -f -- "$tmp"; say "could not stage the projection — it is UNCHANGED"; exit 1
+elif [ "$prc" -ne 0 ]; then
+  rm -f -- "$tmp"; say "unmeasured — the control plane answered a document this reader does not recognise"; exit 1
+fi
+
+if [ ! -L "$DEST" ] && [ -d "$DEST" ]; then
+  rm -f -- "$tmp"; say "a directory sits at ~/.ccrc/update-intent"; exit 1
+fi
+# Review fix round 1, M2: the rename had no try/except at all — an OSError
+# printed a full python traceback naming both `$tmp` and `$DEST` (absolute
+# paths). Suppressed outright (`2>/dev/null`): nothing else in this file
+# keeps a validator-style diagnostic from a plain `os.rename`, and the
+# refusal below already names the safe, literal destination.
+python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$tmp" "$DEST" 2>/dev/null \
+  || { rm -f -- "$tmp"; say "could not install the projection at ~/.ccrc/update-intent"; exit 1; }
+exit 0

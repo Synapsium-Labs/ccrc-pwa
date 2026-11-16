@@ -1,0 +1,11 @@
+{"session_id":"00000000-0000-4000-8000-000000000001",
+ "transcript_path":"/rig/fixhome/cfg/projects/-rig-repo/00000000-0000-4000-8000-000000000001.jsonl",
+ "cwd":"/rig/repo","prompt_id":"00000000-0000-4000-8000-0000000000a1","permission_mode":"default",
+ "effort":{"level":"medium"},"hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"fixture",
+ "background_tasks":[
+  {"id":"w00000001","type":"workflow","status":"running","description":"fixture workflow","name":"fixwf"},
+  {"id":"a0000000000000001","type":"subagent","status":"running","description":"fixture agent","agent_type":"general-purpose"},
+  {"id":"b0000001","type":"shell","status":"running","description":"fixture shell","command":"sleep 600"},
+  {"id":"m0000001","type":"monitor","status":"running","description":"fixture monitor","server":"fixture-mcp","tool":"watch"},
+  {"id":"t0000001","type":"teammate","status":"running","description":"fixture teammate"}],
+ "session_crons":[]}

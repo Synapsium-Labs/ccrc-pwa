@@ -1,13 +1,23 @@
 // Fleet zustand store: mirrors the `/ws/fleet` stream — full session
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { FLEET_PROTO, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type RosterWire, type RunSummary } from '../../../shared/api';
+import { FLEET_PROTO, isAccountPoolsUnavailableReason, isPoolsEnforcement, type AccountsResponse, type CoordStatus, type DelegationProjectionWire, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
-import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
+import { loadFleetSnapshot, loadWaitingSnapshot, saveFleetSnapshot, saveWaitingSnapshot, snapshotRefused, type WaitingSnapshot } from '../lib/offline';
+import { authLost } from '../lib/auth';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
 import { mergeBySeq, reviveNotifyEvents } from '../lib/feed';
 import { requestUpdate } from '../lib/swupdate';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
+import { isRecord } from '../lib/wire';
+import { warnNonArrayRoster } from '../lib/accounts';
+import type { DivergenceCensus } from '../fleet/integrityWords';
+import { keepRows } from '../fleet/keepRows';
+import type { AccountsConnect, AccountUsage, LaneWire, ProjectedHome } from '../../../shared/api';
+import type { WaitingView } from '../../../shared/ledgers';
+import { isWaitingView } from '../ledgers/waitingView';
+import { sameJson } from '../lib/sameJson';
+import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
 
 export interface FleetNotice {
   id: number;
@@ -17,25 +27,70 @@ export interface FleetNotice {
 export interface FleetState {
   sessions: FleetSession[];
   conn: 'connecting' | 'open' | 'down';
+  /** Whether the link has gone `down` since it was last `open`: set by a `down`, cleared by an `open`, and left as it is
+   *  by each `connecting` attempt between them, so a reader can tell an attempt during an outage from a cold start's
+   *  first one (an empty Fleet pane keeps saying "Reconnecting…" through the former). Initially false. */
+  linkLost: boolean;
   notices: FleetNotice[];
   /**
    * The account roster — `GET /api/accounts`'s `roster` field, id/label/hue/
    * homeAble only (never the server-only config `RosterWire` deliberately
    * omits). `pwa/src/lib/accounts.ts`'s `accountLabel`/`accountHue`/
    * `homeAbleLabelList` are pure projections over whatever array a caller
-   * hands them; THIS is where every consumer but the three screens running
-   * their own `/api/accounts` poll (AccountsStrip, AccountsScreen,
-   * useProjectedHome) gets that array from.
+   * hands them; THIS is where every consumer gets that array from. The store
+   * is the one reader of `GET /api/accounts` (C8, D-6440): the lanes row, the
+   * Accounts screen, `useProjectedHome` and `useAccountUsage` subscribe to
+   * what its read wrote, and none of them polls.
    *
    * Threaded through the FLEET store, not a new one, because this store is
    * the one thing connected APP-WIDE (app.tsx), independent of which route
    * is mounted — SessionHeader, SessionLine, SessionActionsSheet and friends
-   * all need a roster on `/s/:id` deep links that never mount FleetScreen's
-   * own accounts poller. Default `[]`: the same "unarrived roster" state
+   * all need a roster on `/s/:id` deep links that never mount the fleet
+   * screen or its lanes row. Default `[]`: the same "unarrived roster" state
    * `accountLabel`/`accountHue` already degrade gracefully for (raw wrapper
    * name, `--ink-tertiary`) — never a guessed account.
    */
   roster: readonly RosterWire[];
+  /** `GET /api/accounts`'s `lanes` (each lane's state word and what the screen may show about its credential), sent
+   *  for a session reader only (D-5511). Held in memory and NEVER in the offline snapshot, which persists
+   *  `RosterWire` only (G15; accounts plan Task A12): `null` until an answer carries it, and again after one that
+   *  does not (a signed-out session, a dark gate). */
+  lanes: Readonly<Record<string, LaneWire>> | null;
+  /** True once a `GET /api/accounts` answer carrying a roster has landed in this store (never hydrated, memory only). It is
+   *  what tells "not read yet" from "read, and no `lanes` served to this reader" (`lanes` is `null` in both). One writer:
+   *  `landAccounts`. The face's calm moods read it (`face/mood.ts#lanesRead`). */
+  accountsHeard: boolean;
+  /** The lanes a sign-out may have changed that this store has not read since (D-7992). `lanes` still holds each as it was,
+   *  so no sheet may take it at its word: `oldCredentialOf`. A mark goes with the first good read of the lanes that
+   *  started after it, and after `notBefore`; a failed read, or one already in flight, leaves it. Memory only. */
+  lanesUnread: Readonly<Record<string, { readonly afterRead: number; readonly notBefore: number }>>;
+  /** Marks a lane, `holdMs` being how long a read could still find it as it was. */
+  markLaneUnread(id: string, holdMs?: number): void;
+  /** `GET /api/accounts`'s `connect`, on the same terms as `lanes`. */
+  accountsConnect: AccountsConnect | null;
+  /** `GET /api/accounts`'s `accounts`, the usage readings, from the same read (W2 Task S8, D-5474: the inspector's lane
+   *  meter reads a session's lane here, so a session route needs no poll of its own). `null` until an answer carries
+   *  an array; a malformed answer keeps the last good one, as `roster` does. Never in the offline snapshot. */
+  usage: readonly AccountUsage[] | null;
+  /** `GET /api/accounts`'s `projected`, where ccd would land the next workspace (C8, D-6440). Three states that never
+   *  fold: `undefined` until an answer carries an object or `null`; the server's `null` ("nothing is placeable") once
+   *  one does; and a malformed or failed read keeps the last good value, as `roster` and `usage` do. Never in the
+   *  offline snapshot. */
+  projected: ProjectedHome | null | undefined;
+  /** Reads `GET /api/accounts` now, outside the 20 s cadence (after an account act), and resolves once its answer has
+   *  landed in `roster`, `usage`, `lanes`, `accountsConnect` and `projected`. Silent on failure, as the poll is: it
+   *  never rejects and changes nothing. It resolves `'ok'` once an answer carrying a roster has landed, and `'error'`
+   *  for a read that failed or an answer without one, so a caller that must know the roster is fresh can tell a
+   *  failed re-read from a good one (the connect sheet's outcome unknown, D-7740 (5)). */
+  refreshAccounts(): Promise<'ok' | 'error'>;
+  /** When the last `GET /api/accounts` answer landed (epoch ms, this device's clock), or `null` before one has. A
+   *  method, not a field (D-7740): reading the time never writes the store, so an equal answer still writes nothing.
+   *  The Accounts screen's offline read-line ("Read 4 min ago") reads it. */
+  accountsReadAt(): number | null;
+  /** Reads `GET /api/feed?limit=100` now, through the store's one feed reader (C7n, D-7209), and merges the answer
+   *  through `mergeFeed` with its dropped count. Resolves `'ok'` once the answer has landed in `feed`, `'error'` when
+   *  the read failed (and nothing is written). The Inbox calls it on every open and words its empty state from it. */
+  refreshFeed(): Promise<'ok' | 'error'>;
   /** The dormant protocol handshake (shared/api.ts's FLEET_PROTO_MIN): set on
    *  a `hello` this build cannot satisfy, CLEARED on a later compatible one —
    *  a reconnect to a fixed server must unblock, so this is never a one-way
@@ -94,6 +149,11 @@ export interface FleetState {
    *  live frame it should have deferred to says `[]` (fix round 1, task 5,
    *  findings 1 and 3). */
   runsFrameSeen: boolean;
+  /** D-7334: the stall watch's quiet time, off the last `{type:'runs'}` frame, read here once. `null` when that frame
+   *  carried none (an older server, which sends no `lastMoveAt` either, or a server before its first runs frame) or no
+   *  runs frame has arrived: then no programme box reads as stalled. Replaced by every runs frame, never sticky past one
+   *  that omits it. */
+  stallQuietMs: number | null;
   /** Has `/ws/fleet` ever actually sent a `{type:'fleet'}` frame THIS store
    *  instance's lifetime — `runsFrameSeen`'s own sticky idiom just above, for a
    *  sharper version of its own reason. `sessions.length > 0` cannot answer it
@@ -141,6 +201,61 @@ export interface FleetState {
    *  when the value actually changes (`watch.ts`'s byte-equality guard), so
    *  holding the last value between emits is what makes it correct to read. */
   pools: ProjectPoolsWire | null;
+  /** The registry's integrity census (`server/src/divergence.ts`), off the
+   *  fleet-level `divergence` frame, with the time THIS page received it
+   *  (D-5104). `fleet/integrityWords.ts`'s `integrityView` is its reader.
+   *
+   *  `null` means ONE thing: no `divergence` frame since this page loaded. The
+   *  frame has NO COLD START — the server sends it only when the census changes
+   *  (`server.ts`, `onDivergence`) — so a page that connected after the last
+   *  change has received nothing, and an empty census here would be a
+   *  measurement nobody took. `{ items: [] }` is the other thing: measured, and
+   *  none found.
+   *
+   *  Sticky across a reconnect, like `coord`/`pools`: since the server never
+   *  re-sends on connect, the last census received is still the last
+   *  measurement, and `at` says how old it is. Clearing it on reconnect would
+   *  turn every network blip into "unmeasured" until the census next changed.
+   *  NOT hydrated from, or written to, the offline snapshot, for `pools`' own
+   *  reason: a census from an earlier page load is not a frame this page has
+   *  received. Frame-level validation only (`asFleetMsg`'s `Array.isArray`), the
+   *  depth `runs`/`fleet` take: a member this build cannot name is the model's
+   *  to count, never this boundary's to drop. */
+  divergenceCensus: DivergenceCensus | null;
+  /** The delegation broker's projection (wave 4, spec §5.8), off the fleet-level `delegation` frame.
+   *
+   *  `null` means UNAVAILABLE, never "no delegated work" (spec §5.13): no frame on THIS connection yet (an older
+   *  server, or a lane with no projection), or the server withdrew it (`delegation: null`). No `delegationFrameSeen`
+   *  twin, for `pools`' reason: a measured frame is never an empty value that could be mistaken for silence.
+   *
+   *  PER CONNECTION, unlike `pools`/`divergenceCensus`: `onOpen` clears it, so a reconnect to an older server reads
+   *  unavailable rather than the last server's rows. NOT hydrated from, or written to, the offline snapshot, for
+   *  `pools`' reason. Envelope-level validation only; a member word this build cannot name is `readDelegation`'s
+   *  (`fleet/delegationWords.ts`) to re-file, never this boundary's to drop. */
+  delegation: DelegationProjectionWire | null;
+  /** The Waiting on you list (desktop-polish PL5a, spec §2), off the fleet-level `waiting` frame or a `GET /api/waiting`
+   *  read (`ledgers/waitingStore.ts`). `null` means NO LIST YET on this page, never "nothing waits": a reader that must
+   *  tell the two apart reads `null`, not `items.length`. A reconnect keeps the last view (it is replaced by the frame the
+   *  server sends on connect), so a network blip is not an empty list. NOT hydrated from, or written to, the offline
+   *  snapshot, for `pools`' reason: items from an earlier page load are not a fact this page has heard. Envelope-level
+   *  validation only (`asFleetMsg`): a member this build cannot name is the reader's to tolerate. The device's copy of
+   *  the list, from an earlier page load, is `waitingSaved` below and never this field (console speed C4, spec D16). */
+  waiting: WaitingView | null;
+  /** The device's copy of the Waiting on you list (console speed, Task C4; spec §2.6, D16): the last list a page on this
+   *  device heard, as `lib/offline.ts` saved it, or `null` when there is no copy. Set ONCE, when the store is created,
+   *  and never from a frame; NEVER written into `waiting`, so every reader that asks whether this page has heard the list
+   *  answers as before. Read only through `ledgers/savedCopy.ts`, which draws it marked as not current. */
+  waitingSaved: WaitingSnapshot | null;
+  setWaiting(view: WaitingView): void;
+  /** The LAST successful `/api/projects` read, as `FleetScreen` made it —
+   *  lifted here so the session view can label a repo (R3) without a second
+   *  agent round trip per project on every mount. `null` = no read yet on
+   *  this store instance. DELIBERATELY NOT HYDRATED and not written by
+   *  `saveFleetSnapshot`, for `pools`' own reason: a stale repo slug is a
+   *  claim about a checkout this device cannot stand behind. `FleetSnapshot`
+   *  has no field for it (D-3013). */
+  projects: readonly ProjectRow[] | null;
+  setProjects(rows: readonly ProjectRow[]): void;
   connect(): void;
   disconnect(): void;
   dismissNotice(id: number): void;
@@ -177,6 +292,12 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
   if (t === 'runs' && Array.isArray((m as { runs?: unknown }).runs)) {
     return m as FleetMsg;
   }
+  // D-5104. The envelope only, at `runs`' depth: a member whose `kind` this
+  // build cannot name is counted by `integrityView` (`fleet/integrityWords.ts`),
+  // never dropped here.
+  if (t === 'divergence' && Array.isArray((m as { divergences?: unknown }).divergences)) {
+    return m as FleetMsg;
+  }
   // Frame-level only, same depth as `fleet`/`runs` above — per-MEMBER
   // tolerance (a `pause`/`mail` value this build has never heard of) is the
   // renderer's job, via `markerState` (`fleet/coordWords.ts`), exactly as
@@ -193,20 +314,68 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
     // this keeps the neighboring envelope-narrowing idiom explicit. Unlike it,
     // the byProject array guard is load-bearing (stores.test.ts:1087).
     if (typeof pools !== 'object' || pools === null || Array.isArray(pools)) return null;
-    const outer = pools as { listed?: unknown; enforcement?: unknown; byProject?: unknown };
-    const validEnforcement = outer.enforcement === 'enforced'
-      || outer.enforcement === 'unavailable'
-      || outer.enforcement === 'unknown';
+    const outer = pools as {
+      listed?: unknown; enforcement?: unknown; byProject?: unknown;
+      epoch?: unknown; observedEpoch?: unknown; accountPools?: unknown; accountPoolsReason?: unknown;
+    };
+    // D-6048 (ARCH-12): the shared guard, derived from the type, so a new member is accepted here too.
+    const validEnforcement = isPoolsEnforcement(outer.enforcement);
+    // Item 3 (I1, wave-1 fix round A): `accountPools` rides the SAME
+    // `PoolsEnforcement` domain as `enforcement` above and gets the identical
+    // envelope-level gate — it was produced by `poolsWire` (T9-R2/F2) and
+    // shipped on the wire type, but nothing here named it, so a malformed
+    // value would have slipped through unrejected into the first real
+    // consumer (`AccountsScreen`'s account-pool chip, below). Optional, like
+    // `epoch`/`observedEpoch`: an older server simply omits it.
+    const validAccountPools = outer.accountPools === undefined || isPoolsEnforcement(outer.accountPools);
+    // D-8283: the reason beside `accountPools`, gated the same way through its own shared guard.
+    const validAccountPoolsReason = outer.accountPoolsReason === undefined
+      || isAccountPoolsUnavailableReason(outer.accountPoolsReason);
     const validByProject = typeof outer.byProject === 'object'
       && outer.byProject !== null
       && !Array.isArray(outer.byProject);
-    if (validEnforcement && (outer.listed === false || (outer.listed === true && validByProject))) {
+    // T9-R2: `epoch`/`observedEpoch` are FLEET-LEVEL scalars, siblings of
+    // `enforcement` above (not per-project `byProject` members), so they get
+    // the same envelope-level type gate rather than a downstream reader's
+    // tolerance. THIS GATE MUST NOT RECONSTRUCT THE VALUE — the frame is
+    // returned as `m as FleetMsg` below exactly as it arrived, so a key this
+    // gate accepts (including a missing key) reaches the store completely
+    // unchanged. That is what keeps THE THREE-VALUED RULE intact end to end:
+    // absent stays absent, `null` stays `null`, and `0` — a real epoch and a
+    // real observed epoch alike — is accepted here (`typeof === 'number'`),
+    // never treated as falsy-absent. `epoch` has no `null` rung (the control
+    // plane's epoch is a plain number once a coordinator exists); a present
+    // `null` there is rejected, same as any other wrong-typed value.
+    const validEpoch = outer.epoch === undefined || typeof outer.epoch === 'number';
+    const validObservedEpoch = outer.observedEpoch === undefined
+      || outer.observedEpoch === null
+      || typeof outer.observedEpoch === 'number';
+    if (
+      validEnforcement && validEpoch && validObservedEpoch && validAccountPools && validAccountPoolsReason
+      && (outer.listed === false || (outer.listed === true && validByProject))
+    ) {
       return m as FleetMsg;
     }
   }
   // present-but-wrong-typed proto/min is rejected, not coerced — a `hello`
   // this parser cannot trust is exactly the kind of frame absence-permits
   // exists to be safe against, so it is dropped like any other unknown one.
+  // Delegation broker wave 4: the envelope only. `null` is the server's withdrawal and is a frame, not a gap.
+  if (t === 'delegation') {
+    if (!('delegation' in m)) return null;
+    const d = (m as { delegation?: unknown }).delegation;
+    if (d === null) return m as FleetMsg;                                   // the server's withdrawal: unavailable again
+    if (isRecord(d) && typeof d.asOf === 'string'
+      && Array.isArray(d.activities) && Array.isArray(d.leases) && Array.isArray(d.unowned)) return m as FleetMsg;
+    return null;
+  }
+  // Desktop-polish PL5a: the envelope only. A frame with no list, or a list that is not three arrays, is dropped and the
+  // held view stays (there is no withdrawal: an empty list is `{items: [], …}`, a fact).
+  if (t === 'waiting') {
+    const w = (m as { waiting?: unknown }).waiting;
+    if (isWaitingView(w)) return m as FleetMsg;
+    return null;
+  }
   if (
     t === 'hello'
     && typeof (m as { proto?: unknown }).proto === 'number'
@@ -231,26 +400,151 @@ export interface FleetStoreDeps {
 
 export type FleetStore = UseBoundStore<StoreApi<FleetState>>;
 
+/** The snapshot throttle's window (C6, D-6438): frames write the offline snapshot at most once in it, and the
+ *  lifecycle flushes beside the throttle are the exceptions. */
+const SNAPSHOT_WINDOW_MS = 30_000;
+
 export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
   let socket: ReconnectingSocket | null = null;
   let noticeSeq = 0;
   let rosterTimer: ReturnType<typeof setInterval> | null = null;
+  // The snapshot throttle (C6, D-6438): a scheduler, so it lives here in the store (L4), never in `lib/offline.ts`.
+  // A frame is written at once when no 30 s window is open, and that write opens one; a frame inside an open window
+  // only replaces `pending`, and the window's end writes the newest and opens the next, so frames alone write at most
+  // once per window. The exceptions are three lifecycle flushes, which write `pending` whatever the window says: the
+  // page turning hidden (the `visibilitychange` to hidden), `pagehide` and `disconnect()`. So one window can hold
+  // more than one write. The scheduler never reads visibility, so a frame that arrives while the page is ALREADY
+  // hidden is treated like any other: written at once when no window is open, and only `pending` inside an open one,
+  // where it is written when the window's timer fires (which a hidden tab may throttle and a discarded tab never runs)
+  // or at the next lifecycle flush, so a background page closed or discarded without one of those can lose it. A
+  // frame the snapshot would refuse (an empty or degraded one, `snapshotRefused`) is never scheduled, so it neither
+  // opens a window nor displaces a pending frame.
+  let pending: FleetSession[] | null = null;
+  let snapshotTimer: ReturnType<typeof setTimeout> | null = null;
 
   return create<FleetState>()((set, get) => {
     const nudge = (): void => socket?.nudge();
+    // ONE writer of the snapshot. `get().roster`, not the bare sessions: the roster travels independently (the poll
+    // below, not this socket), so the snapshot's own roster is read off current state at WRITE time rather than out
+    // of the `fleet` frame, which carries none.
+    const writeSnapshot = (sessions: FleetSession[]): void => saveFleetSnapshot(sessions, get().roster);
+    // The Waiting list's device copy (console speed C4), written after each `waiting` write, and NEVER while auth is lost
+    // (review 1561 F1): the socket outlives a sign-out, so a later frame, or a read already on the wire, would put back
+    // the copy the sign-out removed. The page still takes the list; only the device's copy is refused.
+    const saveWaiting = (view: WaitingView): void => { if (!authLost().lost) saveWaitingSnapshot(view); };
+    const openWindow = (): void => {
+      snapshotTimer = setTimeout(() => {
+        snapshotTimer = null;
+        if (pending === null) return; // nothing arrived in the window: the next frame writes at once
+        const sessions = pending;
+        pending = null;
+        writeSnapshot(sessions);
+        openWindow();
+      }, SNAPSHOT_WINDOW_MS);
+    };
+    const scheduleSnapshot = (sessions: FleetSession[]): void => {
+      if (snapshotRefused(sessions)) return;
+      if (snapshotTimer === null) {
+        writeSnapshot(sessions);
+        openWindow();
+      } else {
+        pending = sessions; // the newest replaces any older one
+      }
+    };
+    const flushSnapshot = (): void => {
+      if (pending === null) return;
+      const sessions = pending;
+      pending = null;
+      writeSnapshot(sessions);
+    };
     const onVisible = (): void => {
       if (document.visibilityState === 'visible') nudge();
+      else if (document.visibilityState === 'hidden') flushSnapshot();
     };
+    const onPageHide = (): void => flushSnapshot();
+    // The page clock's stops for this connection's three subscriptions (D-7191): visible, hidden and online.
+    let stopPageClock: (() => void)[] = [];
 
     // One read, not two (`sessions` and `roster` below both come off it) —
     // fix round 1, finding 3. Before this, a cold offline start hydrated
     // `sessions` from the snapshot but `roster` stayed at its bare `[]`
     // default, so every account rendered as its raw wrapper id
-    // (`claude2`, `claude-corp`) instead of the jargon-free label this
+    // (`claude9`, `claude-acme`) instead of the jargon-free label this
     // whole module exists to restore — a real regression against the
     // compile-time roster this replaced, which never had an "unarrived"
     // state to begin with.
     const snapshot = loadFleetSnapshot();
+
+    // THE ONE reader of `GET /api/accounts` in the app (C8, D-6440): the 20 s poll below and `refreshAccounts()` both
+    // call it, and every surface that shows an account subscribes to what it writes. `lanes` and `connect` are taken
+    // only as objects and cleared by an answer without them; neither ever reaches `saveFleetSnapshot`, whose roster
+    // argument is `get().roster` alone (G15).
+    //
+    // A field is written only when the answer differs from what the store holds (`sameJson`). Every poll's body is new
+    // objects, so writing them all would hand every subscriber a new reference every 20 s and re-render it for an
+    // unchanged fleet. An equal answer therefore writes nothing at all.
+    const fetchAccounts = deps.fetchAccounts ?? (() => api.accounts());
+    // The last answer's arrival (D-7740): kept here, never in the state, so the time never counts as a write.
+    let readAt: number | null = null;
+    // Reads overlap: a 20 s poll can be in flight when a sheet asks for one. Each has its number, and an answer from a read
+    // older than the newest that landed is dropped, so a sign-out's read is never overwritten by the lanes from before it.
+    let readsStarted = 0;
+    let newestLanded = 0;
+    const landAccounts = (r: Awaited<ReturnType<typeof fetchAccounts>>, read: number, startedAt: number): 'ok' | 'error' => {
+      if (read < newestLanded) return 'ok';
+      newestLanded = read;
+      const held = get();
+      const next: Partial<FleetState> = {};
+      const lanes = isRecord(r.lanes) ? r.lanes! : null;
+      if (!sameJson(lanes, held.lanes)) next.lanes = lanes;
+      if (lanes !== null) {
+        const marks = Object.entries(held.lanesUnread);
+        const standing = marks.filter(([, m]) => read <= m.afterRead || startedAt < m.notBefore);
+        if (standing.length < marks.length) next.lanesUnread = Object.fromEntries(standing);
+      }
+      const connect = isRecord(r.connect) ? r.connect! : null;
+      if (!sameJson(connect, held.accountsConnect)) next.accountsConnect = connect;
+      // `usage` and `projected` keep the last good value on a malformed answer, as `roster` does below. `projected`
+      // takes an object or the server's `null`; anything else (absent included) is not an answer about placement.
+      if (Array.isArray(r.accounts) && !sameJson(r.accounts, held.usage)) next.usage = r.accounts;
+      if ((r.projected === null || isRecord(r.projected)) && !sameJson(r.projected, held.projected)) next.projected = r.projected;
+      // Preserves the last good roster on a malformed response — never
+      // clobbers it with `[]` (fix round 1, finding 5): a transient bad
+      // read must not un-teach every consumer the account labels it
+      // already had.
+      if (Array.isArray(r.roster)) {
+        if (!sameJson(r.roster, held.roster)) next.roster = r.roster;
+      } else {
+        // A genuine protocol break (a route answering the wrong shape) has
+        // no other signal anywhere — every consumer just silently reverts
+        // to raw wrapper ids, which reads as "nothing is wrong" (fix
+        // round 1, finding 6).
+        warnNonArrayRoster(r);
+      }
+      readAt = Date.now();
+      if (Array.isArray(r.roster) && !held.accountsHeard) next.accountsHeard = true;
+      if (Object.keys(next).length > 0) set(next);
+      return Array.isArray(r.roster) ? 'ok' : 'error';
+    };
+    const readAccounts = (): Promise<'ok' | 'error'> => {
+      const read = ++readsStarted;
+      const startedAt = Date.now();
+      return fetchAccounts().then((r) => landAccounts(r, read, startedAt)).catch(() => 'error' as const);
+    };
+
+    // THE ONE reader of `GET /api/feed` in the app (C7n, D-7192, D-7209): the connect-time durable read below and
+    // `refreshFeed()` (the Inbox, on every open) both call it. Revived rather than trusted: a kind from a newer server
+    // reaching an old client is dropped and counted, never typed as one of the kinds it is not.
+    const fetchFeed = deps.fetchFeed ?? ((n: number) => api.feed(n));
+    // `onAnswer` runs first in the answer's own turn, before the merge, so the connect-time read marks itself done in
+    // the same tick its answer lands, as it always has. `.catch`, not a second `.then` argument: a throw while handling
+    // the answer (a `null` body) resolves 'error' too, as both reads did before they were one.
+    const readFeed = (onAnswer?: () => void): Promise<'ok' | 'error'> => fetchFeed(100).then((r) => {
+      onAnswer?.();
+      const { events, dropped } = reviveNotifyEvents(r.events);
+      get().mergeFeed(events, dropped);
+      return 'ok' as const;
+    }).catch(() => 'error' as const);
 
     return {
       // Hydrate from the last persisted snapshot (lib/offline.ts) so a cold
@@ -259,61 +553,68 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       // snapshot replaces this one.
       sessions: snapshot?.sessions ?? [],
       conn: 'connecting',
+      linkLost: false,
       notices: [],
       feed: [],
       feedDropped: 0,
       blocked: false,
       runs: [],
       runsFrameSeen: false,
+      stallQuietMs: null,
       fleetFrameSeen: false,
       coord: null,
       coordFrameSeen: false,
       // NOT `snapshot?.pools` — there is no such field, and there must not be
       // one. See the field's own docstring.
       pools: null,
+      // Not hydrated either, for the same reason — see the field's docstring.
+      divergenceCensus: null,
+      // Unavailable until this connection's first frame, and never hydrated — see the field's docstring.
+      delegation: null,
+      // No list until a frame or a refetch lands, and never hydrated — see the field's docstring.
+      waiting: null,
+      // The device's copy, read once here and never again: see the field's docstring.
+      waitingSaved: loadWaitingSnapshot(),
+      projects: null,
       roster: snapshot?.roster ?? [],
+      // Never hydrated: the snapshot holds no lane, by design (G15).
+      lanes: null,
+      accountsHeard: false,
+      lanesUnread: {},
+      markLaneUnread(id, holdMs = 0) {
+        set({ lanesUnread: { ...get().lanesUnread, [id]: { afterRead: readsStarted, notBefore: Date.now() + holdMs } } });
+      },
+      accountsConnect: null,
+      usage: null,
+      projected: undefined,
+      refreshAccounts: readAccounts,
+      accountsReadAt: () => readAt,
+      refreshFeed: () => readFeed(),
 
       connect() {
         if (socket) return;
 
-        // The roster poll — independent of the `/ws/fleet` socket entirely
-        // (it is a plain `GET /api/accounts` read, same endpoint
-        // AccountsStrip/AccountsScreen/useProjectedHome already poll on
-        // their own 20s cadence for `accounts`/`projected`). Duplicate
-        // polling against a local endpoint reading two small JSON files
-        // beats coupling every roster consumer to one mounted screen — the
-        // same trade those hooks' own comments already make. Silent on
-        // failure, and no state change on failure: an unarrived roster
-        // degrades to `accountLabel`/`accountHue`'s own raw-name/neutral-ink
-        // fallback rather than erroring.
+        // The accounts poll — independent of the `/ws/fleet` socket entirely
+        // (it is a plain `GET /api/accounts` read). It is the app's ONLY poll
+        // of that route (C8, D-6440): the lanes row, the Accounts screen and
+        // the sheets' pickers used to run one each, and every one of them now
+        // reads this store, which is connected app-wide whichever route is
+        // mounted. Silent on failure, and no state change on failure: an
+        // unarrived roster degrades to `accountLabel`/`accountHue`'s own
+        // raw-name/neutral-ink fallback rather than erroring.
         //
         // `Array.isArray`, not a bare `r.roster` trust: every `accountLabel`/
         // `accountHue` call site below does `roster.find(...)` unguarded, on
         // the strength of the store's own `readonly RosterWire[]` type — so
         // this is the one place that type is actually enforced against
         // untrusted JSON. A stub answering an unmatched route with bare `{}`
-        // (AccountsStrip's own sibling comment names the exact shape: several
-        // fixtures across this suite predate Task 7 and do exactly this for
-        // every route they do not explicitly handle) hands back `r.roster ===
+        // (several fixtures across this suite predate Task 7 and do exactly
+        // this for every route they do not explicitly handle) hands back `r.roster ===
         // undefined`, and `set({ roster: undefined })` would corrupt every
         // consumer's next render into a `TypeError` — a shape no server
         // response can legitimately produce (`AccountsResponse.roster` is
         // never optional), but a bad JSON body can.
-        const fetchAccounts = deps.fetchAccounts ?? (() => api.accounts());
-        const pollRoster = (): void => {
-          void fetchAccounts().then((r) => {
-            // Preserves the last good roster on a malformed response — never
-            // clobbers it with `[]` (fix round 1, finding 5): a transient bad
-            // read must not un-teach every consumer the account labels it
-            // already had.
-            if (Array.isArray(r.roster)) { set({ roster: r.roster }); return; }
-            // A genuine protocol break (a route answering the wrong shape) has
-            // no other signal anywhere — every consumer just silently reverts
-            // to raw wrapper ids, which reads as "nothing is wrong" (fix
-            // round 1, finding 6).
-            console.warn('ccrc: GET /api/accounts answered with a non-array roster; keeping the last known one.', r);
-          }).catch(() => {});
-        };
+        const pollRoster = (): void => { void readAccounts(); };
         pollRoster();
         rosterTimer = setInterval(pollRoster, 20_000);
 
@@ -365,14 +666,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
         let durableFeedDone = false;
         const askDurableFeed = (): void => {
           if (durableFeedDone) return;
-          const fetchFeed = deps.fetchFeed ?? ((n: number) => api.feed(n));
-          void fetchFeed(100)
-            .then((r) => {
-              durableFeedDone = true;
-              const { events, dropped } = reviveNotifyEvents(r.events);
-              get().mergeFeed(events, dropped);
-            })
-            .catch(() => { /* offline, or an older server with no such route — retry next reconnect */ });
+          // `'error'` is offline, or an older server with no such route: retry next reconnect.
+          void readFeed(() => { durableFeedDone = true; });
         };
 
         socket = new ReconnectingSocket({
@@ -381,13 +676,16 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
             const msg = asFleetMsg(m);
             if (!msg) return; // unknown frame — ignore
             if (msg.type === 'fleet') {
-              // `get().roster`, not the bare sessions: the roster travels
-              // independently (the poll above, not this socket), so the
-              // snapshot's own roster has to be read off current state
-              // rather than out of `msg` — a `fleet` frame carries none.
-              saveFleetSnapshot(msg.sessions, get().roster); // keep the offline snapshot fresh
-              // ONE `set`, so the array and the flag can never disagree (D-1138).
-              set({ sessions: msg.sessions, fleetFrameSeen: true });
+              // Rows that did not change keep the objects they had (`keepRows`, C6), so an identical frame
+              // is the same array. The offline snapshot is kept fresh on the 30 s throttle above, whether or
+              // not the rows changed.
+              const sessions = keepRows(get().sessions, msg.sessions);
+              scheduleSnapshot(sessions);
+              // An identical array sets nothing once a frame has been seen; the FIRST frame still sets, even
+              // when it equals the hydrated snapshot, for the flag. ONE `set`, so the array and the flag can
+              // never disagree (D-1138).
+              if (sessions === get().sessions && get().fleetFrameSeen) return;
+              set({ sessions, fleetFrameSeen: true });
             } else if (msg.type === 'notice') {
               noticeSeq += 1;
               const notice: FleetNotice = { id: noticeSeq, message: msg.message };
@@ -409,7 +707,9 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               // (`runState`/`runItems`) is where a malformed ROW degrades.
               // `runsFrameSeen` flips once and stays flipped: the frame has
               // now genuinely spoken, even the FIRST time it says `[]`.
-              set({ runs: msg.runs, runsFrameSeen: true });
+              // D-7334: the frame's quiet time, this store's one read of it; anything but a positive finite number is none.
+              const q = msg.stallQuietMs;
+              set({ runs: msg.runs, runsFrameSeen: true, stallQuietMs: typeof q === 'number' && Number.isFinite(q) && q > 0 ? q : null });
             } else if (msg.type === 'coord') {
               // Shape-validated only at the frame level (`asFleetMsg`'s own
               // `typeof … === 'object'` check) — `CoordBanner`'s own
@@ -424,22 +724,42 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               // already distinguishable, and `projectPoolOf` reads exactly
               // that distinction.
               set({ pools: msg.pools });
+            } else if (msg.type === 'divergence') {
+              // ONE `set`, so the members and their receive time can never
+              // disagree. The whole census replaces the last one: the server
+              // sends it entire on every change, never a delta.
+              set({ divergenceCensus: { items: msg.divergences, at: Date.now() } });
+            } else if (msg.type === 'delegation') {
+              set({ delegation: msg.delegation });
+            } else if (msg.type === 'waiting') {
+              set({ waiting: msg.waiting });
+              saveWaiting(msg.waiting);
             }
           },
-          onState: (conn) => set({ conn }),
-          onOpen: () => { askCatchUp(); askDurableFeed(); },
+          onState: (conn) => set(conn === 'connecting' ? { conn } : { conn, linkLost: conn === 'down' }),
+          // `delegation` is per connection: a reconnect reads unavailable until the new server speaks.
+          onOpen: () => { set({ delegation: null }); askCatchUp(); askDurableFeed(); },
           makeSocket: deps.makeSocket,
         });
         socket.start();
-        document.addEventListener('visibilitychange', onVisible);
-        window.addEventListener('online', nudge);
+        stopPageClock = [onPageVisible(onVisible), onPageHidden(onVisible)];
+        window.addEventListener('pagehide', onPageHide);
+        stopPageClock.push(onOnline(nudge));
       },
 
       disconnect() {
-        document.removeEventListener('visibilitychange', onVisible);
-        window.removeEventListener('online', nudge);
+        for (const stop of stopPageClock) stop();
+        stopPageClock = [];
+        window.removeEventListener('pagehide', onPageHide);
         socket?.stop();
         socket = null;
+        // The newest pending frame is written, then the window is closed so nothing fires after this and a later
+        // connect's first frame writes at once.
+        flushSnapshot();
+        if (snapshotTimer !== null) {
+          clearTimeout(snapshotTimer);
+          snapshotTimer = null;
+        }
         if (rosterTimer !== null) {
           clearInterval(rosterTimer);
           rosterTimer = null;
@@ -448,6 +768,15 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
 
       dismissNotice(id) {
         set((s) => ({ notices: s.notices.filter((n) => n.id !== id) }));
+      },
+
+      setProjects(rows) {
+        set({ projects: rows });
+      },
+
+      setWaiting(view) {
+        set({ waiting: view });
+        saveWaiting(view);
       },
 
       mergeFeed(events, dropped) {

@@ -1,0 +1,32 @@
+| machine | mutation | scenario | expected | caught by | states |
+|---|---|---|---|---|---|
+| swap | no_holddown | hover  | HD | FLIP HD | 8214 |
+| swap | stale_reads_unservable | stale  | STALE | STALE | 137576 |
+| swap | no_resumed_trigger | rescue  | C45 | C45 | 305613 |
+| swap | affinity_not_stood_down | rescue  | MOVE | MOVE | 347242 |
+| swap | pick_ignores_soft | rescue  | SOFT | SOFT STORM | 89783 |
+| swap | fable_off_reserve | rescue  | RES | RES | 274005 |
+| swap | soft_ignores_budget | hover  | BUD | BUD | 11977 |
+| swap | rescue_never_retries | blocked  | NOSERVE | NOSERVE | 824 |
+| guest | fable_guest_served | fable  | GF | GF GU | 180 |
+| guest | unmeasured_admits | opus  | GU | GU | 2402 |
+| guest | manual_refused | opus  | GMAN | GMAN | 2170 |
+| guest | pin_holds_past_line | opus  | GL | GL | 1666 |
+| served | start_before_sync | ids  | SV1 | SV1 | 264 |
+| evaldue | replay_ignores_due | release  | EV3 | EV3 | 29 |
+| evaldue | answers_before_replay | release  | EV4 | EV4 | 24 |
+| privacy | no_hard_renewal | withdraw  | PV1 | PV1 PV2 | 205 |
+| privacy | fact_from_inferred | fact-inferred  | PV4 | PV4 PV5 | 10 |
+| privacy | learns_while_paused | controls  | PV6 | PV6 | 226 |
+| privacy | overlord_retires_stated | fact  | PV8 | PV8 | 156 |
+| message | id_from_store | restore-store  | MS2 | MS2 | 279 |
+| message | spent_ignored | crash  | MS1 | MS1 MS5 | 81 |
+| message | wiped_still_cited | wipe  | MS3 | MS3 | 132 |
+| joint | cap_ignored | cap  | J3 | J3 | 66 |
+| joint | restore_keeps_grants | restore-db  | I7 | I7 | 5798 |
+| joint | restore_keeps_holds | restore-db  | I1 | I1 | 5630 |
+| parent | parent_done_early | split  | PA4 | PA4 | 758 |
+| parent | child_fail_silent | split  | PA6 | I12 PA6 | 252 |
+| parent | terminal_moves | split  | PA5 | PA4 PA5 | 1502 |
+
+not caught: 0

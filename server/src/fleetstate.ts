@@ -1,8 +1,13 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { reviveFleetSessions, type BuildAgreement, type FleetSession } from '../../shared/api.js';
+import {
+  RUNS_ATTRIBUTION_SINCE, isRegistryId, isReleaseTag, reviveFleetSessions, type BuildAgreement, type FleetSession, type NodeRole,
+} from '../../shared/api.js';
+import { compareReleaseTags } from '../../shared/semver.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
+import type { CoordStore } from './coord/store.js';
+import { buildInfoOfRow } from './update/inventory.js';
 
 // One vocabulary for "the two boxes' builds", declared in `shared/api.ts`
 // because `FleetHealth` (the wire shape) needs it and L0 may not import from
@@ -58,8 +63,108 @@ export interface FleetState {
    *  honestly; the sites with nothing to say answer `null`, by measurement
    *  rather than by omission. This is what `rosterFp` did before it, and it is
    *  why `server/test/` (typechecked by `typecheck-tests.test.ts`, not by the
-   *  build) is part of the enumeration rather than collateral damage. */
+   *  build) is part of the enumeration rather than collateral damage.
+   *
+   *  NO LONGER THE SOURCE of `FleetHealth.build`'s fleet side when a
+   *  coordination database is wired (design 2026-09-20 §14): a handshake-cadence
+   *  sample cannot stand in for a per-minute fact — the `observedEpoch` lesson
+   *  below — so the route derives both sides from the inventory rows through
+   *  `derivedBuilds`, and `buildAgreement` decides from that pair. This field is
+   *  still populated on every `ready`, and still feeds the route when
+   *  `Deps.coord` is absent (tests and scripts that build `Deps` by hand). */
   build: BuildInfo | null;
+  /** The epoch of the pool projection the fleet host reported it actually has
+   *  (`AgentReady.observedEpoch`), or `undefined` when we have no evidence —
+   *  local mode, an older agent that predates the field, or a link that has
+   *  never gone ready. THREE conditions, not two, and unlike `rosterFp`/
+   *  `build` the absent case is NOT collapsed into `null`: `null` here means
+   *  the fleet host has synced never (a fact about the node), `undefined`
+   *  means this build cannot tell us (a fact about the wire) — folding them
+   *  would report a downgraded fleet host as "still catching up" instead of
+   *  "no longer answering".
+   *
+   *  NO LONGER THE `pools` WIRE'S SOURCE (item 1, wave-1 fix round A): this
+   *  member is still populated by `remote/client.ts`'s `onReady` on every
+   *  handshake, but a handshake-cadence sample cannot stand in for a 60s
+   *  fact, so `server/src/pools.ts`'s `readObservedEpochFromRegistry` — a
+   *  fresh `$REG/pool-epoch` read on every watcher tick / request — feeds the
+   *  wire instead. This field has no consumer of its own today.
+   *
+   *  OPTIONAL here, deliberately unlike `rosterFp`/`build`'s "REQUIRED, not
+   *  optional" stance above — measured before choosing: making this field
+   *  required breaks ~20 pre-existing `FleetState`/`Deps` fixtures across
+   *  server/test/ with no relation to pool membership (`typecheck-tests.test.ts`
+   *  catches every one). Task 8's own scope is the agent's ready handshake,
+   *  not a fleet-wide fixture sweep that belongs to whichever task actually
+   *  consumes this field; an omitted key here reads as `undefined` on access,
+   *  which is the correct, honest answer for every one of those untouched
+   *  fixtures — they truly have no evidence about pool epochs.
+   *
+   *  WHAT THIS GIVES UP (review T8-R1, F6): `build`'s own comment above calls
+   *  being required "the whole mechanism" — turning a new construction site
+   *  that forgets this field into a COMPILE error. This field has no such
+   *  mechanism; the substitute is a RUNTIME one, `remote-connect.test.ts`'s
+   *  whole-object `toEqual` assertion in "reaches connected:true with
+   *  downSince:null after a good handshake" (`connectFleet — connection
+   *  lifecycle` describe block), which fails on any key `onReady` populates
+   *  that the expected literal there omits. That covers the one construction
+   *  site that actually matters — `FleetClient.state`, the object `onReady`
+   *  mutates — but it is a test that can be deleted or narrowed without a
+   *  compiler noticing, unlike a required field. Naming it here so a future
+   *  editor does not delete it without knowing it was carrying that load.
+   *
+   *  `server/src/index.ts`'s local-mode `fleetState` literal (not typed
+   *  against `FleetState` directly, so nothing there forces the question
+   *  either) OMITS this key too — unlike `rosterFp`/`build`, which it sets to
+   *  an explicit `null` "BY MEASUREMENT, not by omission" because in local
+   *  mode there is no second box, so comparing this box against itself would
+   *  be the one answer the banner must not show. `observedEpoch` is not a
+   *  cross-box COMPARISON — it is a fact about what epoch THIS node holds —
+   *  so that argument does not transfer, and nothing in local mode today
+   *  reads this box's own `~/.cc-sessions/pool-epoch` to populate it. The
+   *  omission there is honest (no evidence gathered), but it is an honest gap,
+   *  not a considered "not applicable" the way `rosterFp`/`build`'s explicit
+   *  `null` is — worth knowing before treating local mode's silence here as
+   *  a decision. */
+  observedEpoch?: number | null;
+  /** The ops the fleet host's agent says it answers (`AgentReady.ops`, design
+   *  2026-09-20 §8/§10), validated by `remote/client.ts`'s `readReadyOps` —
+   *  the one reader. THREE answers, and the inventory keeps two of them apart:
+   *  `undefined` = no evidence gathered (local mode, or no `ready` yet — the
+   *  server row's `NULL` is the sweep's decision, never read from here); `[]`
+   *  = a `ready` arrived and named no op this server may send (an older agent
+   *  that omits the field — every agent before W4 — or a list `validCapWords`
+   *  refused whole), stored as `''`; a non-empty list = the words.
+   *
+   *  Handshake cadence is correct for THIS field, unlike `build` and
+   *  `observedEpoch` above: the ops a process answers cannot change without
+   *  that process restarting, which produces a new `ready` (spec §8). It keeps
+   *  the last `ready`'s answer across a drop, so read it only while
+   *  `connected`.
+   *
+   *  OPTIONAL for `observedEpoch`'s measured reason: required would break every
+   *  `FleetState` fixture in server/test with no relation to ops, and an
+   *  omitted key reads `undefined` — the honest "no evidence" for each of them.
+   *  The runtime substitute for the compile error is the same whole-object
+   *  `toEqual` in `remote-connect.test.ts`. */
+  agentOps?: readonly string[];
+}
+
+/** One answer about `ccd caps`, as its source gives it. `'ready'` is the agent's ready frame: what it carries is the
+ *  list for this connection, `null` (no usable `ccdVerbs`) included, so a reconnect to an older agent resets. A
+ *  `'measured'` answer is a refresh (remote mode's `caps` request, or local mode's one read of this box's `ccd`): a
+ *  `null` from it is no evidence and keeps what stands, and an answer asked under one connection epoch is dropped
+ *  once the epoch has moved (path-identity spec 2026-10-12 §5.2). */
+export type CcdVerbsAnswer =
+  | { from: 'ready'; verbs: string[] | null }
+  | { from: 'measured'; verbs: string[] | null; askedEpoch: number; epochNow: () => number };
+
+/** The one writer of `FleetState.ccdVerbs` (D-7079; ARCH-72). It writes by the answer's own rule and returns whether
+ *  it wrote; which answer to ask for, and when, stays with its callers. */
+export function recordCcdVerbs(state: Pick<FleetState, 'ccdVerbs'>, answer: CcdVerbsAnswer): boolean {
+  if (answer.from === 'measured' && (answer.verbs === null || answer.epochNow() !== answer.askedEpoch)) return false;
+  state.ccdVerbs = answer.verbs;
+  return true;
 }
 
 export interface FleetSnapshot { sessions: FleetSession[]; savedAt: number }
@@ -161,6 +266,114 @@ export function buildAgreement(
 }
 
 /**
+ * Whether the fleet box's `ccrc-api` sends `claimedByUuid` on `runs open`
+ * (coordinator-first Task 11a), so `POST /api/runs` may REQUIRE it (D-5298,
+ * spec 2026-10-17 §6.4's switch-over). Pure; the route reads it on every open.
+ *
+ *   - `role === 'both'` → true, BEFORE any stamp is read: one box is both
+ *     ends, so the client and this server are one build — and that build
+ *     carries 11a, because 11b merged after it. Read first because local mode
+ *     has no fleet stamp (`FleetState.build` is null there), so agreement would
+ *     answer `unknown` and a single box would never flip;
+ *   - `buildAgreement` answers `agreed` → true: the fleet runs this server's
+ *     own build;
+ *   - the fleet stamp's `version` is a release tag at or past
+ *     `RUNS_ATTRIBUTION_SINCE` → true. The server tree is a deployed tarball
+ *     with no git history, so "at or past 11a" is answered by these two
+ *     readings, never by ancestry; a tagless dev build relies on agreement;
+ *   - anything else — divergent, unknown, a version below the floor, a stamp
+ *     that is not a release tag → false: the open is accepted unattributed and
+ *     journaled.
+ *
+ * WHICH WAY IT FAILS. A wrong `true` refuses every unattributed open with the
+ * upgrade hint (availability, loud, fixed by the rollout it names); a wrong
+ * `false` accepts and journals one (the journal Task M counts). Neither admits
+ * a STALE claimant: a sent `claimedByUuid` is always checked.
+ */
+export function fleetCarriesRunsAttribution(
+  role: NodeRole, own: BuildInfo | null | undefined, fleet: BuildInfo | null | undefined,
+): boolean {
+  if (role === 'both') return true;
+  if (buildAgreement(fleet, own) === 'agreed') return true;
+  const v = fleet?.version;
+  return isReleaseTag(v) && compareReleaseTags(v, RUNS_ATTRIBUTION_SINCE) >= 0;
+}
+
+/** One inventory row's evidence for `derivedBuilds`: the row's role (`null` =
+ *  a token outside `NodeRole`, which names neither box) and its stamp as a
+ *  full `BuildInfo` (`null` = no readable stamp — `buildInfoOfRow` answers
+ *  `null` unless `stampRead` is `'ok'`). */
+export interface BuildSource { role: NodeRole | null; build: BuildInfo | null }
+
+/**
+ * The `{own, fleet}` pair of stamps `buildAgreement` decides from, as a VIEW of
+ * the node inventory (design 2026-09-20 §14). Once the console read
+ * `NodeWire[]` (W3) no shipped reader needed the pair, so wave 33 retired the
+ * `FleetHealth.builds` wire field that carried it; this function stays as the
+ * input to the `build` agreement word and nothing else.
+ *
+ * `own` is the first source whose role is `server` or `both` — THIS box, in
+ * either install shape; `fleet` is the first whose role is `fleet`. FIRST, and
+ * a later row never backfills a null: the first live fleet-role row IS the
+ * fleet node, and a second one would be a second connection this build has no
+ * label for. Sources arrive in `nodes()`' order with superseded rows already
+ * excluded; excluding them is the store's job, and deciding which row is which
+ * side is this function's — the route composes the two and decides nothing.
+ *
+ * `buildAgreement` above is unchanged: three words, sha + dirty, fed from
+ * here.
+ */
+export function derivedBuilds(sources: readonly BuildSource[]): { own: BuildInfo | null; fleet: BuildInfo | null } {
+  const own = sources.find((s) => s.role === 'server' || s.role === 'both');
+  const fleet = sources.find((s) => s.role === 'fleet');
+  return { own: own?.build ?? null, fleet: fleet?.build ?? null };
+}
+
+/**
+ * The `{own, fleet}` pair of stamps `buildAgreement` decides `FleetHealth.build`
+ * from, derived from the inventory rows (design 2026-09-20 §14): each live
+ * row's role and its five `current*` columns as one `BuildInfo`
+ * (`buildInfoOfRow`, update/inventory.ts), paired by `derivedBuilds`. The pair
+ * is only this input now — the `FleetHealth.builds` wire field that once
+ * carried it was retired in wave 33. Composition only — which row is which
+ * side is decided there. The one reader of the inventory's builds: the health
+ * route and `inventoryBuildAgreement` both read it (moved here from server.ts,
+ * Overlord W1 sandbox, review 2135 F5, slug build-agreement-reader-moved-to-fleetstate).
+ * `oneBox` says the inventory's live box is a `both` row with no `fleet` row
+ * beside it: one box is both ends.
+ *
+ * A THROWING `nodes()` (a corrupt or locked coord.db) answers null on both
+ * sides, the way `readPoolEpoch` (pools.ts) degrades its own read: before W2
+ * nothing in the health route's remote arm touched coord.db, and the banner
+ * route must not gain a new way to 500. It deliberately does NOT fall back to
+ * `fleetState.build` — spec §8: the handshake sample is never read as the
+ * current build where an inventory is wired. The fold of "unreadable" into
+ * "no rows yet" is honest for the one word decided from it (`unknown`);
+ * `GET /api/updates` is where the distinction is shown.
+ */
+export function inventoryBuilds(coord: Pick<CoordStore, 'nodes'>): { own: BuildInfo | null; fleet: BuildInfo | null; oneBox: boolean } {
+  let rows: ReturnType<CoordStore['nodes']>;
+  try {
+    rows = coord.nodes();
+  } catch {
+    return { own: null, fleet: null, oneBox: false };
+  }
+  const sources = rows.map((r) => ({ role: r.role, build: buildInfoOfRow(r) }));
+  return { ...derivedBuilds(sources), oneBox: sources.some((x) => x.role === 'both') && !sources.some((x) => x.role === 'fleet') };
+}
+
+/** `buildAgreement` over `inventoryBuilds`: the launch-profile lane's read of whether the fleet node runs the server's build
+ *  (Overlord W1 sandbox Task 2, question 5). A box that is both ends (`oneBox`, a `both` row with no `fleet` row) agrees with
+ *  itself once its stamp reads, as `fleetCarriesRunsAttribution` treats `both`: the same build by construction (review 2135
+ *  F2, slug a-both-box-agrees-with-itself; the spec keeps today's single box a supported case of every rule). A `both` row
+ *  beside a `fleet` row is compared with that row like a server row. An unreadable stamp, or a throwing `nodes()`, answers
+ *  `unknown`, which the lane reads as unmeasured and holds `profiledigest` at its old value. */
+export function inventoryBuildAgreement(coord: Pick<CoordStore, 'nodes'>): BuildAgreement {
+  const b = inventoryBuilds(coord);
+  return b.oneBox && b.own !== null ? 'agreed' : buildAgreement(b.fleet, b.own);
+}
+
+/**
  * Cache lives on THIS box's disk — the one running ccrc-server — regardless
  * of fleet mode. Same stance as server.ts's dist-pwa existsSync check: this
  * is local-box housekeeping, never proxied through FleetIO/the agent.
@@ -207,4 +420,163 @@ export async function loadSnapshot(cachePath: string): Promise<FleetSnapshot | n
   } catch {
     return null;
   }
+}
+
+/**
+ * The state cache's one writer (console speed S1). It loads the file once (`prime`), keeps the snapshot it last wrote
+ * or loaded in memory, and writes only when the sessions' JSON differs; `last()` answers the shrink rule from memory,
+ * so no tick reads the file. One `stat` a tick (`refresh`) is the guard against the file changing under it (deleted,
+ * or rewritten by another process): a changed signature reloads, so a cache someone removed is rewritten on the next
+ * tick, never left absent for as long as the fleet is quiet. After a skipped tick (`skipped`) the next clean tick
+ * writes even if the sessions equal the last written, as it did before this writer existed.
+ * Failure contract: `prime` and `refresh` never throw (`loadSnapshot` folds a bad file to null, a failed `stat` reads
+ * as a changed file); `writeIfChanged` throws what `saveSnapshot` throws and then leaves its memory as it was, so the
+ * next tick retries.
+ */
+export class SnapshotWriter {
+  private snap: FleetSnapshot | null = null;
+  private json: string | null = null;
+  private sig: string | null = null;
+  private primed = false;
+  constructor(private readonly cachePath: string) {}
+  private async signature(): Promise<string | null> {
+    try { const st = await stat(this.cachePath); return `${st.ino}:${st.size}:${st.mtimeMs}`; } catch { return null; }
+  }
+  async prime(): Promise<FleetSnapshot | null> {
+    if (!this.primed) {
+      this.primed = true;
+      this.sig = await this.signature();
+      this.snap = await loadSnapshot(this.cachePath);
+      this.json = this.snap === null ? null : JSON.stringify(this.snap.sessions);
+    }
+    return this.snap;
+  }
+  /** The tick's one `stat`: reload when the file is no longer the one this writer last wrote or loaded. */
+  async refresh(): Promise<FleetSnapshot | null> {
+    if (this.primed && (await this.signature()) !== this.sig) this.primed = false;
+    return this.prime();
+  }
+  last(): FleetSnapshot | null { return this.snap; }
+  /** A tick skipped its write: forget what was last written, so the next clean tick writes. */
+  skipped(): void { this.json = null; }
+  async writeIfChanged(sessions: FleetSession[], json: string = JSON.stringify(sessions)): Promise<'written' | 'unchanged'> {
+    await this.prime();
+    if (json === this.json) return 'unchanged';
+    await saveSnapshot(sessions, this.cachePath);
+    this.snap = { sessions, savedAt: Date.now() };
+    this.json = json;
+    this.sig = await this.signature();
+    return 'written';
+  }
+}
+
+/** What one tick's snapshot decision did. `degraded` and `shrink-skipped` carry the line to warn once per episode. */
+export type SnapshotOutcome =
+  | { kind: 'written' | 'unchanged' }
+  | { kind: 'degraded'; warn: string }
+  | { kind: 'shrink-skipped'; warn: string };
+
+/** Which skip episodes were already reported (`snapshotNotice` is the latch). */
+export interface SnapshotLatches { degraded: boolean; skipped: boolean }
+
+// The rationale below moved here with the decision from `FleetWatcher.tick` (unchanged text):
+// C0.4: `connected` alone is not "this read was complete" — a
+// wedged-yet-connected agent, a socket hiccup mid-sweep, or a handful of
+// sessions timing out inside `readRegistry`'s 24-generation loop all
+// still leave `fleetState.connected` true while `sessions` comes back
+// short. Without a size check, THAT partial assembly overwrites the
+// fuller last-known-good snapshot on disk — and `/api/fleet`
+// (server.ts) serves exactly this file, unconditionally, as `stale:
+// true` for the whole REST of a subsequent real outage. So a single bad
+// tick during an otherwise-healthy stretch degrades every request after
+// it, not just its own. Guard: never let a smaller (or empty) assembly
+// clobber a fuller one already on disk — implementing the intent this
+// class's own docstring already states above ("a stretch of
+// empty/partial reads never clobbers the last known good snapshot").
+//
+//
+// C0.4-FOLLOWUP (blocking review findings 1/2): a bare length
+// comparison cannot tell "this tick's read was partial" apart from
+// "the fleet is genuinely smaller now" — and the second one is the
+// ROUTINE case, not the rare one: `ccd`'s `_reg_purge` unlinks a
+// session's whole registry entry from `cmd_ws_rm` (session rm),
+// `ws-reap`, and `ws-gc --prune` alike. Comparing lengths ALONE turns
+// every purge into a permanent high-water mark: once the fleet drops
+// below it, `sessions.length < prior.sessions.length` stays true on
+// every later tick FOREVER, even fully healthy ones, and the cache —
+// every field of every surviving session included — freezes at the
+// instant of the purge and never updates again. Silently: nothing
+// failed loudly enough to log.
+//
+// The escape hatch is the same evidence `readRegistry`'s own
+// hold-reconfirm already trusts (registry.ts): `_reg_purge` removes
+// the id's `.uuid` too, so a GENUINE purge is a directory listing that
+// no longer names `<id>.uuid` at all. A FAILED field read, by
+// contrast, leaves `.uuid` (and the id's other files) sitting right
+// there in the listing — only the bytes behind one of them came back
+// null. So: when this tick assembled fewer sessions than the prior
+// snapshot, list the registry directory fresh and check every id that
+// dropped out against it. The write is allowed only when EVERY
+// missing id is confirmed gone from that listing — one still-listed
+// id is enough to treat the whole tick as a partial read and keep the
+// prior snapshot, exactly as the original guard intended for that
+// case. A failed (or absent) confirmation listing itself proves
+// nothing either way, so it fails shut the same way.
+// Task 2: the shrink guard above keys ONLY on `sessions.length`,
+// and a degraded row survives length unchanged — `assembleFleet`
+// still emits one `FleetSession` per readable-or-degraded record,
+// it just carries a non-empty `unmeasured`. So a 24-row assembly
+// with 3 degraded rows sails straight through
+// `sessions.length >= prior.sessions.length` and would be
+// persisted as last-known-good: `status` frozen at a guessed
+// default, `branch`/`workdir` reading stale or empty for reasons
+// that have nothing to do with the session's real state. The
+// snapshot's whole purpose is degraded-mode serving (`/api/fleet`
+// ships it, unconditionally `stale: true`, through a REAL
+// fleet-host outage) — persisting a guess as THAT snapshot defeats
+// the one thing it exists for at the exact moment it matters.
+// Same warn-once-per-episode discipline as the shrink guard below,
+// on its own flag (`snapshotWriteSkippedDegradedWarned`) so the two
+// episodes can each report once without silencing the other.
+// Spec §2.3: a REFUSED id (not a registry id) is never assembled, so a
+// snapshot an older build wrote may still carry it while its `.uuid`
+// stays listed. Its absence from `sessions` is not a partial read and
+// never heals, so it counts as purged — or one stray file would freeze
+// every snapshot write for as long as it stands.
+/**
+ * The tick's snapshot decision (moved from `FleetWatcher.tick`; the rules are unchanged): no write while a row carries
+ * an unmeasured identity field; a snapshot smaller than the last is written only when every missing id is really gone
+ * from the registry listing (`listRegistry`; a refused id, `!isRegistryId`, counts as purged); otherwise written when
+ * the JSON changed.
+ */
+export async function persistFleetSnapshot(
+  writer: SnapshotWriter,
+  sessions: FleetSession[],
+  listRegistry: () => Promise<readonly string[] | null>,
+  json?: string,
+): Promise<SnapshotOutcome> {
+  const degraded = sessions.filter((s) => s.unmeasured.length > 0);
+  if (degraded.length > 0) {
+    writer.skipped();
+    return { kind: 'degraded', warn: `ccrc-server: snapshot write skipped — ${degraded.length}/${sessions.length} assembled sessions carry an unmeasured identity field this tick (${degraded.map((s) => s.id).join(', ')}); the cache would otherwise persist a guess as last-known-good` };
+  }
+  const prior = await writer.refresh();
+  if (prior !== null && sessions.length < prior.sessions.length) {
+    const surviving = new Set(sessions.map((s) => s.id));
+    const missingIds = prior.sessions.map((s) => s.id).filter((id) => !surviving.has(id));
+    const names = await listRegistry();
+    const allGenuinelyPurged = names !== null && missingIds.every((id) => !isRegistryId(id) || !names.includes(`${id}.uuid`));
+    if (!allGenuinelyPurged) {
+      writer.skipped();
+      return { kind: 'shrink-skipped', warn: `ccrc-server: snapshot write skipped — this tick assembled ${sessions.length}/${prior.sessions.length} of the prior snapshot's sessions and at least one missing id is still listed in the registry (a read failure, not a confirmed purge); cache stays at the prior size until that clears` };
+    }
+  }
+  return { kind: await writer.writeIfChanged(sessions, json) };
+}
+
+/** The warn-once-per-episode latches of the two skips, each on its own flag so one cannot silence the other. */
+export function snapshotNotice(prev: SnapshotLatches, o: SnapshotOutcome): { latches: SnapshotLatches; warn: string | null } {
+  if (o.kind === 'degraded') return { latches: { ...prev, degraded: true }, warn: prev.degraded ? null : o.warn };
+  if (o.kind === 'shrink-skipped') return { latches: { degraded: false, skipped: true }, warn: prev.skipped ? null : o.warn };
+  return { latches: { degraded: false, skipped: false }, warn: null };
 }

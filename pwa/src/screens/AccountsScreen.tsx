@@ -1,78 +1,202 @@
 // Accounts screen (route `/accounts`, Task 6 of Build 3 PR G) — every account
-// ccd knows about, not just the ones with headroom to spare. The compact
-// strip (AccountsStrip) hides a switched-off lane and only shows a window
+// ccd knows about, not just the ones with headroom to spare. The lanes row
+// (AccountsStrip) hides a switched-off lane and only shows a window
 // that "exists" for the account type; this screen's brief is the opposite —
 // "show me my accounts" — so a disabled lane still gets a row (greyed, with
-// its reason) and both windows always render, the %/reset/— three-way saying
-// "unknown" rather than the row disappearing.
+// its reason) and both windows always render, each through `windowReading`
+// (laneWords.ts): `n%` measured, `0%` for a window that rolled over (spoken as
+// inferred), and `—` never measured, rather than the row disappearing.
 //
-// Same /api/accounts pipeline the strip and useProjectedHome already poll —
-// a third reader, not a new route. Its own 20s poller rather than sharing
-// theirs: useProjectedHome.ts:9-12 makes the same call for ProjectCard and
-// defends the duplication — one more GET against two small local JSON files
-// beats coupling component trees that must not depend on each other mounting.
-import { useEffect, useState } from 'react';
+// It reads the fleet store's accounts answer (`usage`, `projected`, `roster`, `lanes`), which the store's one
+// `/api/accounts` poll writes (C8, D-6440): the store is connected app-wide whichever route is mounted, so the
+// screen needs no poll of its own.
+//
+// ONE STATE WORD PER LANE (accounts plan Task A2, D-7718; spec 2026-10-18 accounts-connect §4). Each card's head is
+// two lines: the hue chip with the mono id, the label (ellipsised) and the lamp, right-aligned; then the kind chip,
+// the identity line and the pool chip. The word is the server's (`LaneWire.state`, `stateWordFor`); the screen
+// derives none of its own (`laneAnswerOf` falls back to the same function only when the answer carries no lane
+// state). Signed out, Rate-limited, Expiring and Inconclusive lift to the top as trouble cards, and the measured
+// roll-up opens the page. THE POOL CHIP AND `AccountPoolSheet` STAY through the redesign (D-7718's amendment): pool
+// membership is still set here (spec §8.4).
+//
+// CHECK AND THE KILL SWITCH (accounts plan Task A14, D-7732; spec §10): every card whose answer carries `connect` draws
+// the knob row (`fleet/AccountKnob.tsx`), which moves only on the server's ack, and a trouble card whose fix is a check
+// offers Check again on the same route.
+//
+// THE ADD ACCOUNT DOOR (accounts plan Task A18, D-5522, D-7740; spec §5): one per width, mounted, never CSS-hidden. On a
+// phone (both skins) it is the lane list's last row; at ≥900 it is the page header's action, in both skins until
+// Instrument's list column holds this route's list (A4). It narrows in place with its reason, and opens the connect
+// sheet (`accounts/ConnectSheet.tsx`). OFFLINE (spec §12.5) is the store's own reading (`conn === 'down'`), never
+// `navigator.onLine`: every act on the screen (the door, Check, the knob) is refused with one sentence and the read-line.
+//
+// RESUME AND THE METHOD SWITCHES (accounts plan Task A23, D-7871; spec §6.2, §9, §4.2, §4.4). A lane whose sign-in THIS
+// session started waits for its code: its card says so with Continue and Cancel, and `/accounts?resume=<id>` (the
+// app-level banner's Continue) opens the sheet that continues it at the code field: the method switch sheet for a
+// switch, the connect sheet for a lane it added (`resumeSheetFor`). A sign-in lane's fold offers Switch to a long-lived
+// token, which is also a Signed-out sign-in lane's primary fix (Q1); a token lane's fold offers Switch to sign-in. Both
+// run only on a fleet that advertises the sign-in's cap word (`account-auth-v1`).
+//
+// RE-AUTHENTICATE (accounts plan Task A38, D-7872; spec §9 rows 1, 2, §4.2). On the same fleets, a trouble card's acts
+// come in the spec's order (`troubleActs`), the first the primary, each opening the sheet it names: Sign in again and
+// Mint a new token open the re-auth sheet, the switches A23's switch sheet, Paste a token A19's paste sheet. A token
+// lane's Replace token opens the mint first, with the paste its second way. Without the cap word, a token lane keeps
+// A19's paste arm alone.
+//
+// A CODEX LANE (accounts plan Task A25, D-8051; spec §9 row 5): where the fleet runs the ChatGPT sign-in (`account-codex-v1`
+// in `connect.caps`), its fold offers Sign in again, also a Signed-out one's primary fix, and it opens the re-auth sheet
+// with the lane's own method. The resume line and the banner follow that attempt too. An OpenAI lane ccrc only records
+// wears the same kind and is offered neither: the verb would refuse to install what the attempt signed in (D-8051 (9)).
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { AccountUsage, AuthStatus, PasskeyListResponse, ProjectedHome, RosterWire } from '../../../shared/api';
-import { limitBand } from '../components/LimitBar';
-import { Skeleton } from '../components/Skeleton';
-import { formatAge, formatReset } from '../fleet/formatReset';
+import { ACCOUNT_AUTH_CAP, ACCOUNT_CODEX_CAP, isArchivedRow, type AccountPoolsUnavailableReason, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
+import type { AccountStateAnswer } from '../../../shared/accounts';
+import type { AccountPoolWire } from '../../../shared/poolrule';
+import { Button, PageScaffold, Skeleton, toast, useDesk, useNow } from '@ccrc/ui';
+import { AddAccountDoor, ConnectSheet, DoorReason } from '../accounts/ConnectSheet';
+import { RemoveSheet } from '../accounts/RemoveSheet';
+import { ReplaceSheet } from '../accounts/ReplaceSheet';
+import { MethodSwitchSheet } from '../accounts/MethodSwitchSheet';
+import { CREDENTIAL_ACT_LABEL, ReauthSheet, troubleActs, type CredentialAct } from '../accounts/ReauthSheet';
+import { heldAttemptOf, isPastAdding, managedCodex, resumeSheetFor, switchTargetOf, waitsOnOperator, type AnthropicSignIn, type SignInMethod } from '../accounts/connectFlow';
+import { wordOf, type HeldAttempt } from '../accounts/useSignInAttempt';
+import { AccountMeterRow } from '../fleet/AccountMeterRow';
+import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
+import { cardLines, connectBlock, DOOR_NARROWED, doorNarrowing, fiveHourWords, identityLine, isTrouble, kindChipWords, laneAnswerOf, notReadyWords, offAlso, offlineRefusal, REMOVE_ACT, REPLACE_TOKEN, rollUp, SIGN_IN_AGAIN, troubleCopy, troubleFirst, WEEKLY_ONLY } from '../fleet/accountWords';
+import { CANCEL_SIGN_IN, CONTINUE, RESUME_CARD_LINE, RESUME_CARD_LINE_APPROVE, SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, cancelRefused } from '../fleet/accountWords';
+import { StateLamp, TroubleCard } from '../fleet/TroubleCard';
+import { AccountKnob, useLaneActs } from '../fleet/AccountKnob';
+import { AccountHomeAble } from '../fleet/AccountHomeAble';
+import { presenceOf } from '../fleet/presence';
 import { sessionLabel } from '../fleet/sessionLabel';
-import { accountColorVar, accountLabel, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
+import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
-import { authPostureChanged, raiseAuthLost, readAuthStatus } from '../lib/auth';
-import { PasskeyCeremonyError, enrollPasskey, passkeyEnrollSupported } from '../lib/passkey';
-import { navigate } from '../lib/router';
-import { useNow } from '../lib/useNow';
-import { useFleetStore } from '../stores/fleet';
+import { navigate, useLocation } from '../lib/router';
+import { laneParam, resumeParam, sessionPath } from '../lib/routes';
+import { useArrival } from '../lib/useArrival';
+import { backToFleet } from '../command/door';
+import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
+import { poolCleared, poolWriteFailed } from '../fleet/poolWords';
 
-interface AccountsPoll {
-  accounts: AccountUsage[] | null;               // null: no poll has landed yet
-  projected: ProjectedHome | null | undefined;    // undefined: no poll has landed yet; null: landed, nothing placeable
-  roster: RosterWire[];                           // []: no poll has landed yet, same as accounts/projected
+/** The chip's short text, accessible name and `data-pool`/`data-origin` for
+ *  EVERY `AccountPoolWire` state — review round 1, I4. `malformed`,
+ *  `unreadable` and `stale` are just as UNDECIDABLE to `poolRule` as each
+ *  other (a 503, never a crossing offer, design §5.7) — collapsing any of
+ *  them to "no pool" claims the opposite of what the server actually does
+ *  with them: unconstrained, may serve any project. Distinct words for
+ *  `stale` vs `unreadable` on purpose (design §5.7's own words: "one's
+ *  remedy is file permissions, the other's is the control-plane link").
+ *  Not producible by today's server (`resolvedAccountPool` only ever
+ *  returns `tagged`/`untagged` — server/src/poolrule.ts), so this is latent,
+ *  forward-looking coverage, not a reachable-today path.
+ *
+ *  Exhaustive over the current five-member union: the `never` assignment in
+ *  the default arm is what makes a sixth member (a future server) a compile
+ *  error here, rather than a silent "no pool" narrowing — `ProjectCard`'s own
+ *  `PoolChip` makes the identical argument for its `unrecognised` fallback,
+ *  the one condition TypeScript cannot see: a value that arrives at runtime
+ *  off the type this build was compiled against. */
+/** What the account-pool chip discloses when the fleet host's `ccd` has no
+ *  ACCOUNT-pool machinery yet (`accountPools: 'unavailable'`) — the sibling
+ *  fact `ProjectCard.tsx`'s `POOL_UNAVAILABLE_TEXT` states for project pools,
+ *  named separately because the two are independent capabilities
+ *  (`poolsEnforcement` reads `PROJECT_POOL_VERB`; `accountPoolsEnforcement`
+ *  reads `ACCOUNT_POOLS_CAP` — a fleet can have one without the other).
+ *
+ *  UNLIKE the project chip, this one stays a clickable button when dimmed
+ *  (see its `data-dim` usage below) rather than degrading to an inert span:
+ *  a project tag write dispatches a `ccd` verb that a `poolsEnforcement:
+ *  'unavailable'` fleet genuinely cannot run, but an account tag write is a
+ *  central `coord.db` row this SERVER always accepts — `accountPools:
+ *  'unavailable'` means no fleet node reads it YET, not that the write would
+ *  fail. Disabling the control would also be the only way an operator could
+ *  ever see this text, since the chip is the sheet's one entry point.
+ *
+ *  Exported so the suite pins the sentence rather than a paraphrase of it. */
+export const ACCOUNT_POOL_UNAVAILABLE_TEXT = 'fleet ccd predates account pools';
+/** D-8283: the single-box install's chip text (`accountPoolsReason: 'no-pool-sync'`). Its ccd is current, so blaming
+ *  ccd's age would be false: the box has no pool-sync timer, so a central tag never reaches ccd, which places by the
+ *  roster's declared pool. */
+export const ACCOUNT_POOL_NO_SYNC_TEXT = 'not applied on this install — no pool-sync timer';
+/** D-8283: `unavailable` with no reason, from a server older than the field. It names no cause it cannot know. */
+export const ACCOUNT_POOL_UNAPPLIED_TEXT = 'account pools not applied on this fleet';
+
+/** D-8283: the one reader from the measured reason to the chip's text. Exhaustive, so a new reason is a compile error. */
+export function accountPoolUnavailableText(reason: AccountPoolsUnavailableReason | undefined): string {
+  switch (reason) {
+    case undefined: return ACCOUNT_POOL_UNAPPLIED_TEXT;
+    case 'ccd-predates': return ACCOUNT_POOL_UNAVAILABLE_TEXT;
+    case 'no-pool-sync': return ACCOUNT_POOL_NO_SYNC_TEXT;
+    default: {
+      const unreachable: never = reason;
+      return unreachable;
+    }
+  }
 }
 
-function useAccountsPoll(): AccountsPoll {
-  const [state, setState] = useState<AccountsPoll>({ accounts: null, projected: undefined, roster: [] });
-  useEffect(() => {
-    let live = true;
-    const load = (): void => {
-      void api.accounts()
-        .then((r) => {
-          if (!live) return;
-          // `Array.isArray`, not a bare trust: a fetch stub answering an
-          // unmatched route with bare `{}` (several fixtures across this
-          // suite predate Task 7 and do exactly that) hands back `r.roster
-          // === undefined`, and `rowOrder` below does `roster.map(...)`
-          // unguarded — same reasoning as `stores/fleet.ts`'s own roster
-          // poll. `accounts`/`projected` need no equivalent guard: both
-          // already degrade a bare `undefined` to their own "no poll landed"
-          // branch (the falsy `!accounts` check, the three-state `projected`
-          // read) rather than indexing into it.
-          //
-          // Functional update, not a flat object literal (fix round 1,
-          // finding 5): the flat form clobbered an already-good roster with
-          // `[]` the instant one later poll came back malformed, while
-          // `stores/fleet.ts` and `AccountsStrip.tsx` both already preserved
-          // it by simply skipping the write. `prev.roster` is the same
-          // preservation here, where `accounts`/`projected` still need to
-          // update on every read regardless. Warn once on the malformed
-          // branch — a genuine protocol break has no other signal anywhere
-          // (finding 6).
-          setState((prev) => {
-            if (Array.isArray(r.roster)) return { accounts: r.accounts, projected: r.projected, roster: r.roster };
-            console.warn('ccrc: GET /api/accounts answered with a non-array roster; keeping the last known one.', r);
-            return { accounts: r.accounts, projected: r.projected, roster: prev.roster };
-          });
-        })
-        .catch(() => {});
-    };
-    load();
-    const t = setInterval(load, 20_000);
-    return () => { live = false; clearInterval(t); };
-  }, []);
-  return state;
+function acctPoolChip(state: AccountPoolWire): {
+  word: string; ariaLabel: string; dataPool: string; origin?: 'central' | 'declared';
+} {
+  switch (state.state) {
+    case 'tagged':
+      return {
+        word: state.pools[0], dataPool: 'tagged', origin: state.origin,
+        ariaLabel: `pool ${state.pools[0]}, opens the account pool editor`,
+      };
+    case 'untagged':
+      return {
+        word: 'no pool', dataPool: 'untagged', origin: state.origin,
+        ariaLabel: 'no pool, opens the account pool editor',
+      };
+    case 'malformed':
+      return {
+        word: 'pool malformed', dataPool: 'malformed',
+        ariaLabel: "this account's pool tag is malformed — nobody can decide whether it may serve a tagged project, opens the account pool editor",
+      };
+    case 'unreadable':
+      return {
+        word: 'pool unreadable', dataPool: 'unreadable',
+        ariaLabel: "this account's pool tag could not be read — check permissions on the fleet host, opens the account pool editor",
+      };
+    case 'stale':
+      return {
+        word: 'pool stale', dataPool: 'stale',
+        ariaLabel: "this account's pool projection is stale — the control-plane link may be down, opens the account pool editor",
+      };
+    default: {
+      const unhandled: never = state;
+      void unhandled;
+      return {
+        word: 'pool unrecognised', dataPool: 'unrecognised',
+        ariaLabel: 'app bundle is older than the fleet; reload to understand this account pool, opens the account pool editor',
+      };
+    }
+  }
+}
+
+// `accountPoolState(roster, wrapper)` — no edges map (ruling T9-R1). The
+// fleet store's `GET /api/accounts` read (`useAccountsPoll` below) carries the
+// roster, and `RosterWire.resolvedPool` (Task 7's T7-R2 fix round) rides the
+// same response when the server has one to offer — see `lib/accounts.ts`'s
+// own docstring. Every row below renders whatever `accountPoolState` returns
+// without this screen having to know whether that came from a resolved
+// central tag or the declared fallback.
+
+interface AccountsPoll {
+  accounts: readonly AccountUsage[] | null;      // null: no good answer has landed yet
+  projected: ProjectedHome | null | undefined;    // undefined: no answer yet; null: landed, nothing placeable
+  roster: readonly RosterWire[];                  // []: no good answer has landed yet, same as accounts/projected
+}
+
+/** The screen's view of the fleet store's accounts answer. The store is the one reader (C8, D-6440) and keeps the
+ *  last good value of each field across a failed or malformed read, so a bad poll never empties a row the screen
+ *  already drew (the rule this hook used to apply to `roster` alone, fix round 1, finding 5). `store` defaults to the
+ *  app-wide fleet store (`RunsScreen`'s idiom). */
+function useAccountsPoll(store: FleetStore = useFleetStore): AccountsPoll {
+  const accounts = store((s) => s.usage);
+  const projected = store((s) => s.projected);
+  const roster = store((s) => s.roster);
+  return { accounts, projected, roster };
 }
 
 /** The roster's declaration order first, then any wrapper the server has
@@ -97,33 +221,93 @@ function rowOrder(roster: readonly RosterWire[], accounts: readonly AccountUsage
   return order;
 }
 
-function Bar({ label, pct, resetAt, nowSec, rolledOver }: {
-  label: string; pct: number | null; resetAt: number | null; nowSec: number; rolledOver: boolean;
-}): ReactNode {
-  return (
-    <div className="acct-row">
-      <span className="acct-win">{label}</span>
-      <span className="acct-meter" data-band={pct === null ? 'none' : limitBand(pct)}>
-        <span className="acct-fill" style={{ width: `${Math.min(100, Math.max(0, pct ?? 0))}%` }} />
-      </span>
-      {/* The strip's exact three-way (AccountsStrip.tsx), never collapsed:
-          "reset" (inferred zero) ≠ measured "0%" ≠ "—" (never measured). This
-          screen never gates the row on `pct !== null` the way the strip does
-          for gpt's absent 5h window — every account gets both bars, always,
-          so an unmeasured window reads "—" instead of vanishing. */}
-      <span className="acct-pct">{rolledOver ? 'reset' : pct === null ? '—' : `${pct}%`}</span>
-      <span className="acct-reset" title="time until this window resets">↻ {formatReset(resetAt, nowSec)}</span>
-    </div>
-  );
-}
-
 export function AccountsScreen(): ReactNode {
   const { accounts, projected, roster } = useAccountsPoll();
+  // Opening Accounts asks once (D-7180; coordinator call 3): the screen shows the store's answer at once, then a fresh
+  // one, as it did before the store became the one reader. The store's 20 s poll stays the only cadence.
+  const refreshAccounts = useFleetStore((s) => s.refreshAccounts);
+  useEffect(() => { void refreshAccounts(); }, [refreshAccounts]);
   const sessions = useFleetStore((s) => s.sessions);
+  // Item 3 (I1, wave-1 fix round A): the fleet-level `pools` frame's
+  // `accountPools` capability — produced (T9-R2/F2, `server/src/pools.ts`'s
+  // `accountPoolsEnforcement`) and, until this round, read by nothing in
+  // `pwa/`. `null` (no frame yet) and `undefined` (an older server that never
+  // sends the field) both mean "no evidence", the same as `ProjectCard`'s own
+  // `pools?.enforcement` read — only a MEASURED `'unavailable'` dims the chip.
+  const accountPools = useFleetStore((s) => s.pools?.accountPools);
+  // D-8283: why it is `unavailable`, so the chip and the sheet name the right cause.
+  const accountPoolsReason = useFleetStore((s) => s.pools?.accountPoolsReason);
+  const acctPoolDimText = accountPoolUnavailableText(accountPoolsReason);
   const now = useNow(30_000);
   const nowSec = Math.floor(now / 1000);
+  // `GET /api/accounts`'s `lanes`: each lane's word and what the screen may show about its credential, sent only to a
+  // reader with the session verdict (D-5511). `null` before it lands, and on a dark gate's answer.
+  const lanes = useFleetStore((s) => s.lanes);
+  // `connect`, on the same terms (A12): whether the screen may run a lane act, and why not. `null` draws no knob row.
+  const connect = useFleetStore((s) => s.accountsConnect);
+  // Offline (spec §12.5): the store's own reading, with the age of the last accounts answer as the read-line.
+  const conn = useFleetStore((s) => s.conn);
+  const accountsReadAt = useFleetStore((s) => s.accountsReadAt);
+  const offline = conn === 'down' ? offlineRefusal(accountsReadAt(), now) : null;
+  const blocked = offline ?? (connect === null ? null : connectBlock(connect));
+  // Check and the kill switch (accounts plan Task A14, D-7732): the act in flight per lane, and each ack's switch.
+  const acts = useLaneActs(refreshAccounts);
 
-  const order = rowOrder(roster, accounts ?? []);
+  // Each lane's one word, once per render: the order, the roll-up and the card all read the same answer.
+  const answers = new Map<string, AccountStateAnswer>();
+  const answerOf = (wrapper: string): AccountStateAnswer => {
+    let a = answers.get(wrapper);
+    if (a === undefined) {
+      a = laneAnswerOf(
+        lanes?.[wrapper], accounts?.find((x) => x.wrapper === wrapper) ?? null, roster.find((r) => r.id === wrapper), now,
+      );
+      answers.set(wrapper, a);
+    }
+    return a;
+  };
+  // Trouble cards first (spec §4.2), every other lane in roster order.
+  const order = troubleFirst(rowOrder(roster, accounts ?? []), (w) => answerOf(w).word);
+
+  // The arrival at a lane (T2c, D-6329, Q14): a lane card opens `/accounts?lane=<id>`, and the screen scrolls that
+  // lane's row into view, focuses it and marks it with one accent edge, through `useArrival` (extracted from this screen in
+  // chat reading Task L, D-8062; this screen is its one caller). The rows are drawn only once the poll lands (`order` is
+  // empty until then), so the lane's row exists only from then. An unknown lane arrives nowhere.
+  const search = useLocation().search;
+  const lane = laneParam(search);
+  const laneRowExists = lane !== null && accounts != null && order.includes(lane);
+  const rowRefs = useRef(new Map<string, HTMLElement>());
+  const arrived = useArrival(lane, laneRowExists, rowRefs.current);
+
+  // The account-pool editor — one sheet, retargeted per tap, on the exact
+  // terms `PoolSheet`/`FleetScreen`'s own pool sheet already use: the route-
+  // owned subject lives here, not inside the sheet.
+  const [poolSheetAccount, setPoolSheetAccount] = useState<string | null>(null);
+  const [poolSheetOpen, setPoolSheetOpen] = useState(false);
+
+  // `POST /api/pools/accounts/:id` (Task 7) does not echo the account's
+  // resulting tag — only the epoch the write produced — so this toasts off
+  // the REQUEST, not a remeasurement, and leans on the fleet store's 20s
+  // accounts poll (`useAccountsPoll`) to bring the row's next `accountPoolState` read in line
+  // with what the fleet host actually converges to (ccd-pool-sync's pull,
+  // `OnUnitActiveSec=60s` — the same lag the fleet head's epoch/observed
+  // indicator exists to make visible elsewhere).
+  const setAccountPool = (accountId: string, pools: string[]): void => {
+    void api.setAccountPools(accountId, pools).then(
+      (response) => {
+        if (response.warning === 'unknown-account') {
+          toast(
+            `Tagged ${accountId}${pools.length > 0 ? ` into pool ${pools[0]}` : ''}, but this box's roster `
+              + 'does not know that account yet.',
+            'error',
+          );
+        } else {
+          toast(pools.length > 0 ? `${accountId} is now in pool ${pools[0]}.` : poolCleared(accountId));
+        }
+      },
+      (error: unknown) => toast(poolWriteFailed(apiErrorText(error)), 'error'),
+    );
+    setPoolSheetOpen(false);
+  };
 
   // ccd's own rule, restated ("next workspace lands here — least-loaded"),
   // including the Rider B case where nothing is placeable. `undefined`
@@ -140,9 +324,9 @@ export function AccountsScreen(): ReactNode {
   // `homeAbleNames === ''` (fix round 1, finding 7): `projected` and `roster`
   // arrive on the same poll response in the steady state, but a first
   // response that lands with a valid `projected: null` and a malformed
-  // `roster` leaves `roster` at its `[]` default (`useAccountsPoll`
-  // preserves rather than clobbers on a malformed read — see its own
-  // comment) — same degenerate case ProjectCard's `addLabel` guards.
+  // `roster` leaves `roster` at its `[]` default (the store preserves rather
+  // than clobbers on a malformed read — see `useAccountsPoll`'s comment) —
+  // same degenerate case ProjectCard's `addLabel` guards.
   const homeAbleNames = homeAbleLabelList(roster);
   const projectionLine = projected === undefined
     ? null
@@ -152,15 +336,104 @@ export function AccountsScreen(): ReactNode {
         : `Next workspace: ${homeAbleNames} all disabled — nothing can take it`
       : `Next workspace lands on ${accountLabel(roster, projected.wrapper)} — least-loaded`;
 
-  return (
-    <div className="accounts-screen">
-      <header className="accounts-head">
-        <button type="button" className="accounts-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
-          ‹
-        </button>
-        <h1 className="accounts-title">Accounts</h1>
-      </header>
+  // The door (D-5522): its narrowing first (offline, then the server's own `connect`), and the sheet it opens. The sheet
+  // is keyed per opening, so every opening starts at the provider frame with nothing held from the last.
+  const desk = useDesk();
+  const narrowing = offline !== null ? null : doorNarrowing(accounts !== null, connect);
+  const doorReason = offline !== null ? { text: offline } : narrowing === null ? null : DOOR_NARROWED[narrowing];
+  const doorReasonId = 'acct-door-reason';
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [connectGen, setConnectGen] = useState(0);
+  const openConnect = (): void => { setConnectGen((g) => g + 1); setConnectOpen(true); };
+  const door = (
+    <AddAccountDoor desk={desk} narrowedBy={doorReason === null ? null : doorReasonId} onOpen={openConnect} />
+  );
+  const reason = doorReason === null ? null : <DoorReason id={doorReasonId} text={doorReason.text} fix={'fix' in doorReason ? doorReason.fix : undefined} />;
 
+  // Remove and Replace token (accounts plan Task A19, D-7742): the fold's two sheets, hosted here rather than on a card,
+  // because a removed lane's card goes with it and its ledger must stay. Each is keyed per opening.
+  const [removing, setRemoving] = useState<{ id: string; gen: number } | null>(null);
+  const [replacing, setReplacing] = useState<{ id: string; gen: number } | null>(null);
+  const sheetGen = useRef(0);
+  const openRemove = (id: string): void => setRemoving({ id, gen: ++sheetGen.current });
+  const openReplace = (id: string): void => setReplacing({ id, gen: ++sheetGen.current });
+  const readRoster = (): readonly RosterWire[] => useFleetStore.getState().roster;
+
+  // The method switches and resume (accounts plan Task A23, D-7871): the switch sheet, and the connect sheet reopened on
+  // an attempt this session started on a lane it added. Each keyed per opening, as above.
+  const canSwitch = connect?.caps?.includes(ACCOUNT_AUTH_CAP) === true;
+  const canCodex = canSwitch && connect?.caps?.includes(ACCOUNT_CODEX_CAP) === true;
+  const [switching, setSwitching] = useState<{ id: string; to: AnthropicSignIn; gen: number; resume?: HeldAttempt } | null>(null);
+  const [resumingConnect, setResumingConnect] = useState<{ id: string; held: HeldAttempt; gen: number } | null>(null);
+  const openSwitch = (id: string, to: AnthropicSignIn, resume?: HeldAttempt): void =>
+    setSwitching({ id, to, gen: ++sheetGen.current, ...(resume !== undefined ? { resume } : {}) });
+  /** Continue: the sheet that runs this session's attempt on lane `id`, at its code field (spec §6.2). */
+  const openResume = (id: string): void => {
+    const held = heldAttemptOf(lanes?.[id], Date.now());
+    if (held === null) return;
+    const kind = roster.find((r) => r.id === id)?.kind;
+    const sheet = resumeSheetFor(kind, held.method, isPastAdding(lanes?.[id], accounts?.find((x) => x.wrapper === id)));
+    if (sheet === 'switch' && held.method !== 'openai-login') openSwitch(id, held.method, held);
+    else if (sheet === 'reauth') openReauth(id, held.method, held);
+    else setResumingConnect({ id, held, gen: ++sheetGen.current });
+  };
+  // `/accounts?resume=<id>` (the banner's Continue): opens once per value, as soon as the store's answer holds the
+  // attempt; the attempt is read from that answer, never from the URL.
+  const resumeId = resumeParam(search);
+  const resumeHeld = resumeId !== null && heldAttemptOf(lanes?.[resumeId], now) !== null;
+  const resumedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (resumeId === null) { resumedFor.current = null; return; }
+    if (!resumeHeld || resumedFor.current === resumeId) return;
+    resumedFor.current = resumeId;
+    openResume(resumeId);
+  });
+  // Re-authenticate an existing lane (accounts plan Task A38, D-7872; spec §9 rows 1, 2): Sign in again on a sign-in
+  // lane, Mint a new token on a token lane, each with the method the lane already has. One sheet at a time: opening it
+  // closes the paste sheet, so only one step-up challenge is ever live (`useStepUp`'s one-instance rule).
+  const [reauthing, setReauthing] = useState<{ id: string; method: SignInMethod; gen: number; resume?: HeldAttempt } | null>(null);
+  function openReauth(id: string, method: SignInMethod, resume?: HeldAttempt): void {
+    setReplacing(null);
+    setReauthing({ id, method, gen: ++sheetGen.current, ...(resume !== undefined ? { resume } : {}) });
+  }
+  /** A token lane's Replace token: the mint first (with paste as its second way) where the fleet can mint. */
+  const openTokenReplace = (id: string): void => { if (canSwitch) openReauth(id, 'setup-token'); else openReplace(id); };
+  const openAct = (id: string, act: CredentialAct): void => {
+    switch (act) {
+      case 'switch-to-token': openSwitch(id, 'setup-token'); return;
+      case 'sign-in-again': openReauth(id, roster.find((r) => r.id === id)?.kind === 'codex' ? 'openai-login' : 'login'); return;
+      case 'mint-new-token': openReauth(id, 'setup-token'); return;
+      case 'replace-token': openTokenReplace(id); return;
+      case 'paste-token': openReplace(id); return;
+      case 'switch-to-sign-in': openSwitch(id, 'login'); return;
+    }
+  };
+  /** A sheet opened by the resume query, closed: the query goes, so a re-render never reopens it. */
+  const dropResume = (): void => { if (resumeParam(location.search) !== null) navigate('/accounts', { replace: true }); };
+  /** Cancel, from the card: the attempt ends at the box, then the screen reads the lanes again. */
+  const [cancellingAuth, setCancellingAuth] = useState<string | null>(null);
+  const cancelAttempt = async (id: string, attemptId: string): Promise<void> => {
+    if (cancellingAuth !== null) return;
+    setCancellingAuth(id);
+    try {
+      await api.accountAuthCancel(id, { attemptId });
+    } catch (e) {
+      const word = wordOf(e);
+      if (word !== 'no-auth-attempt') toast(cancelRefused(word), 'error');
+    }
+    await refreshAccounts();
+    setCancellingAuth(null);
+  };
+
+  return (
+    // The page scaffold (D-5102). The body's grid keeps the old screen's rhythm, --sp-3 between blocks.
+    <PageScaffold title="Accounts" back={backToFleet('accounts-back')} actions={desk ? door : undefined}>
+      {/* At ≥900 the door is the header's action, and its reason is the body's first line, beneath it. */}
+      {desk && reason}
+
+      {/* The measured roll-up (spec §4.3), zero clauses omitted, and today's projection line under it. The scaffold has
+          no subtitle slot, so it is the body's first line. */}
+      {accounts && <p className="accounts-rollup">{rollUp(order.map((w) => answerOf(w).word))}</p>}
       {projectionLine !== null && <p className="accounts-projection">{projectionLine}</p>}
 
       <div className="accounts-list">
@@ -191,73 +464,269 @@ export function AccountsScreen(): ReactNode {
           </section>
         ) : order.map((wrapper) => {
           const a = accounts.find((x) => x.wrapper === wrapper) ?? null;
-          // TWO facts, ONE affordance. `disabled` is the operator's kill-switch
-          // (`~/.cc-sessions/<w>-disabled`, touched by hand); `authDead` is the
-          // health probe's measurement (`<w>-authdead`). They are never folded
-          // into one boolean upstream — the server keeps them apart for exactly
-          // the reason the note below says both when both are true — but on this
-          // screen they answer the same question, "can this lane take work?", so
-          // they render through the attribute and the note that already exist
-          // rather than a second vocabulary beside them.
-          //
-          // `=== true` on both, never truthiness: a server built before
-          // `authDead` omits it, and absence must read as "not condemned".
+          // TWO facts, ONE affordance. `disabled` is the operator's kill-switch and `authDead` the health probe's
+          // measurement; the lamp below says which one applies (Off outranks Signed out, and both stay in the full
+          // record), and both grey the meters, because on this screen they answer the same question: can this lane
+          // take work? `=== true` on both: a server built before `authDead` omits it, and absence is not condemned.
           const disabled = a?.disabled === true;
           const authDead = a?.authDead === true;
           const off = disabled || authDead;
-          // Both, when both — an operator switch does not hide a measurement,
-          // and a measurement does not explain away a switch. The two are
-          // cleared by different acts.
-          const offNote = disabled && authDead
-            ? 'disabled on the fleet host; sign-in expired'
-            : disabled
-              ? 'disabled on the fleet host'
-              : 'sign-in expired on the fleet host';
-          const ts = a?.ts ?? null;
+          const entry = roster.find((r) => r.id === wrapper);
+          const answer = answerOf(wrapper);
+          const laneWire = lanes?.[wrapper];
+          const lines = cardLines(answer, a?.ts ?? null, nowSec);
+          const kindWords = kindChipWords(entry);
+          const identity = identityLine(laneWire, answer.word, nowSec);
+          const also = offAlso(answer, a, laneWire);
           // "Sessions on this account" means LIVE sessions (Rider A §4): a
-          // workspace that is archived, mid-cleanup, or whose tmux session is
-          // gone (`status: 'dead'`) is not load on this account, even though
-          // it still carries the account's `wrapper` and stays in the fleet
-          // store until reaped. `archivedAt !== null` is `sessionBucket`'s own
-          // first check (shared/api.ts) — it alone covers both 'archived' and
-          // 'cleanup', so this predicate is exactly "neither of those, nor
-          // dead" without re-deriving the bucket ladder here.
+          // workspace that is archived, mid-cleanup, or that the server does
+          // not read alive is not load on this account, even though it still
+          // carries the account's `wrapper` and stays in the fleet store until
+          // reaped. Archived is the server's bucket, `isArchivedRow` (shared/api.ts,
+          // OA-C15 (a), D-7188): it covers both 'archived' and 'cleanup'.
+          // Live is the server's word (`presenceOf`, OA-C15 (a), D-7181): a
+          // doubted, sleeping or old-server row is not counted, as today, and
+          // a pane gone under `restarting` is the session itself, alive.
           const onAccount = sessions.filter(
-            (s) => s.wrapper === wrapper && s.archivedAt === null && s.status !== 'dead',
+            (s) => s.wrapper === wrapper && !isArchivedRow(s) && presenceOf(s) === 'alive',
           );
+          // `accountPoolState`, not `accountPool` — this chip is the one
+          // surface in the app whose whole job is to say WHICH carrier
+          // decided (`data-origin`), so an operator who just cleared a
+          // central tag sees the declared default take over rather than a
+          // chip that looks unchanged. `acctPoolChip` covers all five states,
+          // not just tagged/untagged (I4).
+          //
+          // Review round 1, Minor: `inRoster` gates the chip entirely for a
+          // wrapper `rowOrder` added from LIVE TELEMETRY the roster does not
+          // (yet) have an entry for (`rowOrder`'s own docstring). Without
+          // this, `accountPoolState` still answers `{state:'untagged',
+          // origin:'declared'}` for such a wrapper — a POSITIVE claim ("the
+          // roster declares this untagged") about an account this roster has
+          // no entry to declare anything about, which is a different, worse
+          // claim than the old code's silence. `accountLabel`'s raw-name
+          // fallback is a safe degrade for the SAME condition because it
+          // asserts nothing; an origin claim is not that.
+          const inRoster = roster.some((a) => a.id === wrapper);
+          const poolState = accountPoolState(roster, wrapper);
+          const chip = acctPoolChip(poolState);
+          // Item 3 (I1): measured `'unavailable'` only — `undefined`/`'unknown'`
+          // are no-evidence-either-way, same polarity as `ProjectCard`'s
+          // `poolDim`, so a fleet nobody has measured yet never dims the chip
+          // on a guess.
+          const acctPoolDim = accountPools === 'unavailable';
+          const trouble = isTrouble(answer.word)
+            ? troubleCopy({ id: wrapper, answer, entry, lane: laneWire, usage: a, sessions: onAccount.length, now })
+            : null;
+          // A lane with no 5-hour window says so rather than "—": a Codex lane by its kind (spec §4.1), an Anthropic
+          // lane by the row's own marker (D-8120).
+          const noFiveWords = fiveHourWords(entry?.kind, a);
+          // The kill switch (spec §10): as the last answer has it, or as an ack set it until the next answer lands. An
+          // off lane that is not ready says why it cannot be turned on; an on lane can always be switched off.
+          const switchOn = acts.acked[wrapper] ?? answer.word !== 'off';
+          const notReady = !switchOn && laneWire !== undefined && !laneWire.ready ? notReadyWords(laneWire.notReadyReason) : null;
+          // Whether new sessions start here (D-8195): the roster's `homeAble`, or as a placement ack set it.
+          const homeOn = acts.homeAcked[wrapper] ?? entry?.homeAble ?? true;
+          const canAct = connect !== null && blocked === null && inRoster;
+          // An Anthropic lane on a long-lived token: its credential act is Replace token (spec §4.4, §9).
+          const tokenLane = entry?.provider === 'anthropic' && entry.kind === 'token';
+          // The method switch its fold offers (spec §4.4, §9; Q1), on a fleet that runs a sign-in (Task A23, D-7871).
+          const switchTo = canSwitch ? switchTargetOf(entry) : null;
+          // This session's attempt on the lane, waiting for its code (spec §6.2): the card's resume line.
+          const held = heldAttemptOf(laneWire, now);
+          const waitingCode = held !== null && waitsOnOperator(held.method, laneWire?.authAttempt?.state);
           return (
-            <section key={wrapper} className="accounts-row" data-disabled={off ? 'true' : 'false'}>
+            <section
+              key={wrapper}
+              className={answer.word === 'signed-out' ? 'accounts-row acct-rail' : 'accounts-row'}
+              data-disabled={off ? 'true' : 'false'}
+              data-lane={wrapper}
+              data-state={answer.word}
+              data-trouble={trouble !== null ? 'true' : undefined}
+              data-arrived={arrived === wrapper ? 'true' : undefined}
+              tabIndex={-1}
+              ref={(el) => { if (el === null) rowRefs.current.delete(wrapper); else rowRefs.current.set(wrapper, el); }}
+            >
+              {/* The head, on two lines so it never wraps unpredictably at 360 (spec §4.4). Line 1: the hue chip with
+                  the mono id, the label (ellipsised) and the lamp, right-aligned. */}
               <div className="accounts-row-head">
                 <span
-                  className="account-gauge-label"
+                  className="acct-card-id"
                   style={{ color: off ? 'var(--ink-tertiary)' : `var(${accountColorVar(roster, wrapper)})` }}
                 >
-                  {accountLabel(roster, wrapper)}
+                  {wrapper}
                 </span>
-                {/* Disabled lanes are shown switched off, never hidden — the
-                    strip's compact filter (AccountsStrip.tsx) is right for an
-                    always-on bar, wrong here. A lane whose credential the probe
-                    measured dead is shown for a sharper version of the same
-                    reason: it is the one lane an operator has to go and fix. */}
-                {off && <span className="accounts-disabled-note">{offNote}</span>}
+                {/* The label only when it says more than the id: a lane whose label is its id names itself once. */}
+                {accountLabel(roster, wrapper) !== wrapper && (
+                  <span className="account-gauge-label acct-card-label" title={accountLabel(roster, wrapper)}>
+                    {accountLabel(roster, wrapper)}
+                  </span>
+                )}
+                <StateLamp word={answer.word} />
               </div>
+              {/* Line 2: the kind chip in words, the identity line (only what the lane state recorded), and the pool
+                  chip, which stays through the redesign (D-7718). */}
+              <div className="accounts-row-kind">
+                {kindWords !== null && <span className="acct-kind-chip">{kindWords}</span>}
+                {identity !== null && <span className="acct-identity" title={identity}>{identity}</span>}
+                {inRoster && (
+                  <button
+                    type="button"
+                    className="proj-card-pool acct-pool-chip"
+                    data-testid={`acct-pool-chip-${wrapper}`}
+                    data-pool={chip.dataPool}
+                    data-origin={chip.origin}
+                    data-dim={acctPoolDim || undefined}
+                    aria-label={acctPoolDim ? `${chip.ariaLabel} — ${acctPoolDimText}` : chip.ariaLabel}
+                    title={acctPoolDim ? acctPoolDimText : undefined}
+                    onClick={() => { setPoolSheetAccount(wrapper); setPoolSheetOpen(true); }}
+                  >
+                    {chip.word}
+                  </button>
+                )}
+              </div>
+              {/* The state's source, with its own age: a different measurement from the usage reading's age below. */}
+              <p className="accounts-state-source" title={lines.stateAt === null ? undefined : new Date(lines.stateAt).toISOString()}>
+                {also === null ? lines.state : `${lines.state} · ${also}`}
+              </p>
 
+              {trouble !== null && (
+                <TroubleCard
+                  copy={trouble}
+                  onCheck={canAct ? () => acts.check(wrapper) : undefined}
+                  checking={acts.busy[wrapper] !== undefined}
+                  acts={canAct && (entry?.provider === 'anthropic' || entry?.kind === 'codex')
+                    ? troubleActs(answer.word, entry.kind, canSwitch, canCodex && managedCodex(entry)).map((c) => ({
+                      label: CREDENTIAL_ACT_LABEL[c.act], primary: c.primary, onOpen: () => openAct(wrapper, c.act),
+                    }))
+                    : undefined}
+                />
+              )}
+              {waitingCode && held !== null && (
+                <div className="acct-resume-line" data-resume={wrapper}>
+                  <span>{held.method === 'openai-login' ? RESUME_CARD_LINE_APPROVE : RESUME_CARD_LINE}</span>
+                  <Button variant="primary" size="fit" disabled={blocked !== null} onClick={() => openResume(wrapper)}>{CONTINUE}</Button>
+                  <Button
+                    variant="ghost" size="fit" disabled={blocked !== null || cancellingAuth !== null}
+                    aria-busy={cancellingAuth === wrapper || undefined}
+                    onClick={() => { void cancelAttempt(wrapper, held.attemptId); }}
+                  >
+                    {CANCEL_SIGN_IN}
+                  </Button>
+                </div>
+              )}
+
+              {/* `off` greys the meters' fills while each keeps its frozen
+                  classification on `data-band`: the colour and the reading
+                  stay separate facts (D-5098). It replaced a row-level
+                  fleet.css override. */}
               <div className="acct-rows">
-                <Bar label="5h" pct={a?.five ?? null} resetAt={a?.fiveResetAt ?? null} nowSec={nowSec} rolledOver={a?.fiveRolledOver ?? false} />
-                <Bar label="7d" pct={a?.seven ?? null} resetAt={a?.sevenResetAt ?? null} nowSec={nowSec} rolledOver={a?.sevenRolledOver ?? false} />
+                {noFiveWords !== null ? (
+                  <div className="acct-row" data-five={noFiveWords === WEEKLY_ONLY ? 'weekly-only' : 'none'}>
+                    <span className="acct-win">5h</span>
+                    <span className="acct-weekly-only">{noFiveWords}</span>
+                  </div>
+                ) : (
+                  <AccountMeterRow label="5h" pct={a?.five ?? null} resetAt={a?.fiveResetAt ?? null} nowSec={nowSec} rolledOver={a?.fiveRolledOver ?? false} off={off} />
+                )}
+                <AccountMeterRow label="7d" pct={a?.seven ?? null} resetAt={a?.sevenResetAt ?? null} nowSec={nowSec} rolledOver={a?.sevenRolledOver ?? false} off={off} />
               </div>
 
               {/* Telemetry is a byproduct of a session rendering its
                   statusline — an idle account simply stops reporting. This
                   reads as "last known", never as live: no refresh button,
                   because there is nothing to refresh until a session runs. */}
-              <p className="accounts-fresh">last reported {formatAge(ts === null ? null : nowSec - ts)}</p>
+              <p className="accounts-fresh">{lines.usage}</p>
+
+              {connect !== null && inRoster && (
+                <AccountKnob
+                  id={wrapper}
+                  on={switchOn}
+                  notReady={notReady}
+                  blocked={blocked}
+                  running={onAccount.length}
+                  busy={acts.busy[wrapper]}
+                  onFlip={() => acts.flip(wrapper, !switchOn)}
+                  onCheck={() => acts.check(wrapper)}
+                />
+              )}
+              {/* Start new sessions here (D-8195): its own row under the kill switch's, never inside it. */}
+              {connect !== null && inRoster && (
+                <AccountHomeAble
+                  id={wrapper}
+                  label={accountLabel(roster, wrapper)}
+                  on={homeOn}
+                  blocked={blocked}
+                  busy={acts.busy[wrapper]}
+                  onConfirm={(homeAble) => acts.place(wrapper, homeAble)}
+                />
+              )}
+              {/* The fold's credential act and Remove (spec §4.4; Task A19). Refused, they stay drawn and disabled, named by
+                  the knob row's reason (offline, or the server's own). */}
+              {connect !== null && inRoster && (
+                <div className="acct-fold">
+                  {switchTo === 'setup-token' && (
+                    <Button
+                      variant="ghost" size="fit" disabled={!canAct}
+                      aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                      onClick={() => openSwitch(wrapper, 'setup-token')}
+                    >
+                      {SWITCH_TO_TOKEN}
+                    </Button>
+                  )}
+                  {/* A sign-in lane's Sign in again (spec §4.4; Task A38): where the fleet can run a sign-in. */}
+                  {switchTo === 'setup-token' && (
+                    <Button
+                      variant="ghost" size="fit" disabled={!canAct}
+                      aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                      onClick={() => openReauth(wrapper, 'login')}
+                    >
+                      {SIGN_IN_AGAIN}
+                    </Button>
+                  )}
+                  {/* A Codex lane's Sign in again (spec §9 row 5; Task A25): where the fleet runs the ChatGPT sign-in. */}
+                  {managedCodex(entry) && canCodex && (
+                    <Button
+                      variant="ghost" size="fit" disabled={!canAct}
+                      aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                      onClick={() => openReauth(wrapper, 'openai-login')}
+                    >
+                      {SIGN_IN_AGAIN}
+                    </Button>
+                  )}
+                  {tokenLane && (
+                    <Button
+                      variant="ghost" size="fit" disabled={!canAct}
+                      aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                      onClick={() => openTokenReplace(wrapper)}
+                    >
+                      {REPLACE_TOKEN}
+                    </Button>
+                  )}
+                  {switchTo === 'login' && (
+                    <Button
+                      variant="ghost" size="fit" disabled={!canAct}
+                      aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                      onClick={() => openSwitch(wrapper, 'login')}
+                    >
+                      {SWITCH_TO_SIGN_IN}
+                    </Button>
+                  )}
+                  <Button
+                    variant="danger-ghost" size="fit" disabled={!canAct}
+                    aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                    onClick={() => openRemove(wrapper)}
+                  >
+                    {REMOVE_ACT}
+                  </Button>
+                </div>
+              )}
 
               {onAccount.length > 0 && (
                 <ul className="accounts-sessions">
                   {onAccount.map((s) => (
                     <li key={s.id}>
-                      <button type="button" className="accounts-session" onClick={() => navigate(`/s/${s.id}`)}>
+                      <button type="button" className="accounts-session" onClick={() => navigate(sessionPath(s.id))}>
                         {sessionLabel(s)}
                       </button>
                     </li>
@@ -267,287 +736,111 @@ export function AccountsScreen(): ReactNode {
             </section>
           );
         })}
+        {/* On a phone the door is the list's last row, with its reason beneath it (D-5522). */}
+        {!desk && door}
+        {!desk && reason}
       </div>
 
-      <AuthSection />
-    </div>
-  );
-}
+      <ConnectSheet
+        key={connectGen}
+        open={connectOpen}
+        // Closed mid-sign-in, the attempt keeps running on the box: a fresh read lets the resume banner say so now.
+        onClose={() => { setConnectOpen(false); void refreshAccounts(); }}
+        roster={roster}
+        connect={connect}
+        offline={offline}
+        refresh={refreshAccounts}
+        readRoster={readRoster}
+      />
 
-/**
- * THE TWO SESSION-LEVEL CONTROLS THE GATE NEEDS — enrolling a passkey, and
- * signing out — behind ONE status read.
- *
- * They live HERE rather than on the login screen for the same reason, stated
- * once: both require an existing session. You must already be signed in to
- * enrol (the server gates `register/*`, which is what makes the whole
- * no-attestation design safe) and to sign out (`POST /api/auth/logout` is
- * deliberately NOT exempt — an ungated logout is a way for anyone on the tailnet
- * to revoke a session id they guessed). The login screen is the one place
- * neither could go. This is the closest thing the PWA has to a box-settings
- * surface, one back-tap from the fleet.
- *
- * ONE `readAuthStatus` FOR BOTH. They were nearly two components with two GETs
- * and two copies of the dark-box guard below; a second reader of the same route
- * on the same screen is how the two would come to disagree about whether this
- * box even has a gate.
- *
- * IT RENDERS NOTHING ON A DARK BOX, and that is three independent falsy checks
- * rather than one, each failing closed:
- *   - `mode` absent or `'off'` — `CCRC_AUTH` is off, or this server has no gate
- *     at all (an older build, a proxy answering its own 200). There is nothing
- *     to enrol into.
- *   - `passkeySupported()` — this browser cannot run the ceremony (no WebAuthn,
- *     or a non-secure context). A button that opens a dialog it cannot finish is
- *     worse than no button.
- *   - the status read failed — `status` stays `null` and nothing draws.
- *
- * It costs ONE extra GET on a screen the operator visits rarely, and
- * `readAuthStatus` is deliberately the one call in the app that never raises the
- * auth-lost signal (`lib/auth.ts`), so a failure here cannot put a login screen
- * over a working console.
- */
-function AuthSection(): ReactNode {
-  const [status, setStatus] = useState<Partial<AuthStatus> | null>(null);
-  const [list, setList] = useState<PasskeyListResponse | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-  /** The session block's own failure line. SEPARATE from `note`, which is
-   *  rendered inside the passkey block — a sign-out that failed must not print
-   *  its reason under a list of authenticators it has nothing to do with. */
-  const [signOutNote, setSignOutNote] = useState<string | null>(null);
-  const now = useNow(60_000);
-
-  const refresh = (): void => {
-    void readAuthStatus().then(setStatus).catch(() => { /* no gate, or unreachable — draw nothing */ });
-    // The gated list. It 401s before login and 501s on a dark box, and either
-    // way the catch leaves `list` null — the count from `status` still renders,
-    // so the section degrades to what it showed before revocation existed
-    // rather than disappearing.
-    void api.passkeys().then(setList).catch(() => setList(null));
-  };
-  useEffect(refresh, []);
-
-  if (status === null || status.mode === undefined || status.mode === 'off') return null;
-
-  const enroll = async (): Promise<void> => {
-    setBusy(true);
-    setNote(null);
-    try {
-      await enrollPasskey();
-      setNote('Passkey added. It can sign you in from now on.');
-      refresh();
-      // The box's posture just changed, and something else on screen describes
-      // it: on desktop the fleet sidebar's passphrase-only notice (D-161) is
-      // mounted right beside this pane, and its whole design is that it retires
-      // the instant a passkey exists rather than carrying a dismiss-state.
-      // Announced from the WRITER, not polled by the reader (lib/auth.ts).
-      authPostureChanged();
-    } catch (err) {
-      // The ceremony's own failure and the box's refusal read differently, for
-      // `LoginScreen`'s reason: telling someone their key was rejected when they
-      // tapped Cancel sends them hunting for a problem that is not there.
-      setNote(err instanceof PasskeyCeremonyError
-        ? 'That passkey ceremony was cancelled or could not finish.'
-        : apiErrorText(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const revoke = async (id: string): Promise<void> => {
-    setBusy(true);
-    setNote(null);
-    try {
-      await api.revokePasskey(id);
-      setNote('Passkey revoked. It cannot sign in again.');
-      refresh();
-      // Same announcement as enrolment, and needed in BOTH directions:
-      // revoking the last key puts the box back on the passphrase alone, which
-      // is exactly when the notice has to come back.
-      authPostureChanged();
-    } catch (err) {
-      setNote(apiErrorText(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /**
-   * SIGN OUT — the control that was missing entirely (D-145).
-   *
-   * The server side shipped in Task 5, gated and tested, and nothing called it,
-   * so the only ways back to a login screen were an empty cookie jar, a
-   * `ccrc passwd` rotation, or waiting out the 30-day absolute TTL.
-   *
-   * THE LOCAL HALF GOES THROUGH `raiseAuthLost`, NOT A SECOND PATH. The server
-   * answers 204 with an expiring `Set-Cookie`, which no funnel in `api.ts`
-   * reacts to (only a 401 body carrying a verdict does), so the signal has to be
-   * raised here — and it is raised through the SAME seam a 401 uses, because
-   * that seam already does three things this would otherwise have to reinvent:
-   * it mounts `LoginScreen`, it parks both socket ladders (`ws.ts`'s connect
-   * guard and `TerminalDrawer`'s bare socket) so neither climbs a backoff
-   * against a gate that will not open, and it makes the next successful login's
-   * `clearAuthLost` wake them both.
-   *
-   * `'no-session'` and not `'expired'`: the login screen's sentence for
-   * `'expired'` is "You were signed out. Sign in to pick up where you were",
-   * which is a claim about something that HAPPENED TO the operator. This is a
-   * cold screen after a deliberate act, and `'no-session'` says exactly that.
-   *
-   * A FAILURE STILL ENDS SOMEWHERE SENSIBLE: the route is gated, so a session
-   * that is already dead answers 401, the funnel raises the signal off the body,
-   * and the operator lands on the login screen anyway — which is where they were
-   * trying to go. `signOutNote` is for the genuinely odd failures (offline, 500)
-   * where nothing has changed and they need to know it.
-   */
-  const signOut = async (): Promise<void> => {
-    setBusy(true);
-    setSignOutNote(null);
-    try {
-      await api.logout();
-      raiseAuthLost('no-session');
-    } catch (err) {
-      setSignOutNote(apiErrorText(err));
-    } finally {
-      // Cleared even on the success path, where this component is still MOUNTED
-      // behind the login screen (`LoginScreen` is a sibling of `.app-shell`, not
-      // a replacement for it). Leaving it set would show a permanent "Signing
-      // out…" to anyone who signs back in and returns to this screen.
-      setBusy(false);
-    }
-  };
-
-  /** The session block. Rendered in BOTH passkey branches below — including the
-   *  unreadable-file one, where an operator whose credential store is broken
-   *  still has every right to end their own session.
-   *
-   *  `.auth-block`, not `.accounts-row` (D-161) — see the passkey block's own
-   *  note below; this block had the identical problem, reading as a fleet
-   *  account named "This session". */
-  const sessionBlock = (
-    <section className="auth-block" aria-labelledby="session-title">
-      <div className="auth-block-head">
-        <h2 className="auth-block-title" id="session-title">This session</h2>
-      </div>
-      <p className="accounts-fresh">
-        Signing out ends this browser&rsquo;s session only &mdash; other devices stay signed in, and
-        enrolled passkeys are unaffected. To end every session at once, rotate the passphrase with
-        <code> ccrc passwd</code> on the box.
-      </p>
-      <button type="button" className="btn-primary" disabled={busy} onClick={() => void signOut()}>
-        {busy ? 'Signing out…' : 'Sign out'}
-      </button>
-      {signOutNote !== null && <p className="accounts-fresh" role="status">{signOutNote}</p>}
-    </section>
-  );
-
-  const count = status.passkeysEnrolled ?? 0;
-  /**
-   * THE UNREADABLE-FILE BRANCH, and it is not cosmetic (D-132). When the
-   * credential file exists and cannot be read, the server reports zero
-   * credentials — and the sentence this screen used to render for zero was "No
-   * passkey is enrolled on this box". An operator who believes it enrols, and
-   * the enrolment rewrites the file from an empty in-memory array, destroying
-   * the credentials that were there. The server refuses that enrolment now; this
-   * is the half that stops the operator trying in the first place, and tells
-   * them what to actually fix.
-   */
-  if (list?.storeUnreadable === true) {
-    return (
-      <>
-        <section className="auth-block" aria-labelledby="auth-title">
-          <div className="auth-block-head">
-            <h2 className="auth-block-title" id="auth-title">Your sign-in</h2>
-          </div>
-          <h3 className="auth-block-sub" id="passkeys-title">Passkeys</h3>
-          {/* THE PATH IS HEDGED, NOT ASSERTED (D-153). `CCRC_PASSKEYS_PATH` can
-              redirect this file, and a BROWSER is the one surface in this tree
-              that genuinely cannot resolve it — there is no route that
-              publishes it, and adding one would publish a filesystem path to an
-              anonymous-adjacent screen for the sake of a sentence. So it names
-              the default and says what overrides it, exactly as
-              `deploy/gen-auth-hash.mjs` hedges the session file it likewise
-              cannot resolve. The alternative — dropping the path — would leave
-              an operator with "fix the permissions" and no file to fix. */}
-          <p className="accounts-fresh">
-            This box&rsquo;s passkey file exists but cannot be read, so no passkey can sign in and
-            enrolling is refused &mdash; adding one would overwrite the keys that are already there.
-            Fix the permissions on <code>~/.ccrc/passkeys.json</code> (or wherever
-            <code> CCRC_PASSKEYS_PATH</code> points on this box) and restart the server.
-          </p>
-        </section>
-        {sessionBlock}
-      </>
-    );
-  }
-
-  return (
-    <>
-    {/* THIS BLOCK IS NOT AN ACCOUNT (D-161). It used to be a `.accounts-row`
-        whose label was an `.account-gauge-label` — the same two classes every
-        Claude account row above wears — so "Passkeys" scanned as a fifth fleet
-        account named Passkeys, sitting in the same list as claude2 and gpt. It
-        gets its own class and a heading that says WHOSE it is; "Passkeys"
-        survives one level down, where it belongs, as the label of the list of
-        keys rather than as the block's identity. */}
-    <section className="auth-block" aria-labelledby="auth-title">
-      <div className="auth-block-head">
-        <h2 className="auth-block-title" id="auth-title">Your sign-in</h2>
-      </div>
-      <h3 className="auth-block-sub" id="passkeys-title">Passkeys</h3>
-      <p className="accounts-fresh">
-        {count === 0
-          ? 'No passkey is enrolled on this box — the passphrase is the only way in.'
-          : `${count} passkey${count === 1 ? '' : 's'} enrolled on this box.`}
-      </p>
-
-      {/* One row per key, so REVOKING is a decision the operator can actually
-          make: "the phone I lost, last used three weeks ago" needs the label and
-          the dates, which is why `PasskeySummary` carries them and the anonymous
-          `assert/start` body does not. `label` is the enrolling device's
-          user-agent — attacker-controlled text — and is rendered as TEXT, which
-          React does by default. */}
-      {list !== null && list.credentials.length > 0 && (
-        /* `aria-labelledby` moved DOWN here with the heading (D-161): the
-           section is "Your sign-in" now, and "Passkeys" labels the list it
-           actually describes. */
-        <ul className="accounts-sessions" aria-labelledby="passkeys-title">
-          {list.credentials.map((c) => (
-            <li key={c.credentialIdB64url}>
-              <span className="acct-win">{c.label}</span>
-              <span className="accounts-fresh">
-                {` added ${formatAge(Math.floor(now / 1000) - Math.floor(c.enrolledAt / 1000))} ago`}
-                {c.lastUsedAt > c.enrolledAt
-                  ? `, last used ${formatAge(Math.floor(now / 1000) - Math.floor(c.lastUsedAt / 1000))} ago`
-                  : ', never used'}
-              </span>
-              <button
-                type="button"
-                className="accounts-session"
-                disabled={busy}
-                aria-label={`Revoke passkey ${c.label}`}
-                onClick={() => void revoke(c.credentialIdB64url)}
-              >
-                Revoke
-              </button>
-            </li>
-          ))}
-        </ul>
+      {removing !== null && (
+        <RemoveSheet
+          key={`remove-${removing.gen}`}
+          id={removing.id}
+          open
+          onClose={() => setRemoving(null)}
+          lane={lanes?.[removing.id]}
+          connect={connect}
+          blocked={blocked}
+          refresh={refreshAccounts}
+          readRoster={readRoster}
+        />
+      )}
+      {replacing !== null && (
+        <ReplaceSheet
+          key={`replace-${replacing.gen}`}
+          id={replacing.id}
+          open
+          onClose={() => setReplacing(null)}
+          connect={connect}
+          blocked={blocked}
+          roster={roster}
+          lane={lanes?.[replacing.id]}
+          usage={accounts?.find((x) => x.wrapper === replacing.id) ?? null}
+          refresh={refreshAccounts}
+          {...(canSwitch ? { onMint: () => openReauth(replacing.id, 'setup-token') } : {})}
+        />
+      )}
+      {reauthing !== null && (
+        <ReauthSheet
+          key={`reauth-${reauthing.gen}`}
+          id={reauthing.id}
+          method={reauthing.method}
+          open
+          // Closed mid-attempt, the attempt keeps running on the box: a fresh read lets the resume banner say so now.
+          onClose={() => { setReauthing(null); dropResume(); void refreshAccounts(); }}
+          connect={connect}
+          blocked={blocked}
+          lane={lanes?.[reauthing.id]}
+          usage={accounts?.find((x) => x.wrapper === reauthing.id) ?? null}
+          roster={roster}
+          refresh={refreshAccounts}
+          {...(reauthing.resume !== undefined ? { resume: reauthing.resume } : {})}
+          {...(reauthing.method === 'setup-token'
+            ? { onPaste: () => { const id = reauthing.id; setReauthing(null); openReplace(id); } } : {})}
+        />
       )}
 
-      {/* The ENROL button needs the STRICTER support check — `getPublicKey()` and
-          friends are WebAuthn Level 2 — while the login button on `LoginScreen`
-          needs only Level 1. A browser that can sign in with a key enrolled on a
-          phone but cannot create one gets the list and no Add button. */}
-      {passkeyEnrollSupported() && (
-        <button type="button" className="btn-primary" disabled={busy} onClick={() => void enroll()}>
-          {busy ? 'Waiting for the authenticator…' : 'Add a passkey on this device'}
-        </button>
+      {switching !== null && (
+        <MethodSwitchSheet
+          key={`switch-${switching.gen}`}
+          id={switching.id}
+          to={switching.to}
+          open
+          onClose={() => { setSwitching(null); dropResume(); void refreshAccounts(); }}
+          connect={connect}
+          blocked={blocked}
+          roster={roster}
+          lane={lanes?.[switching.id]}
+          usage={accounts?.find((x) => x.wrapper === switching.id) ?? null}
+          refresh={refreshAccounts}
+          {...(switching.resume !== undefined ? { resume: switching.resume } : {})}
+        />
       )}
-      {note !== null && <p className="accounts-fresh" role="status">{note}</p>}
-    </section>
-    {sessionBlock}
-    </>
+      {resumingConnect !== null && (
+        <ConnectSheet
+          key={`resume-${resumingConnect.gen}`}
+          open
+          onClose={() => { setResumingConnect(null); dropResume(); void refreshAccounts(); }}
+          roster={roster}
+          connect={connect}
+          offline={offline}
+          refresh={refreshAccounts}
+          readRoster={readRoster}
+          resume={{ id: resumingConnect.id, held: resumingConnect.held }}
+        />
+      )}
+
+      <AccountPoolSheet
+        account={poolSheetAccount}
+        roster={roster}
+        current={poolSheetAccount === null ? undefined : accountPoolState(roster, poolSheetAccount)}
+        unenforced={accountPools === 'unavailable'}
+        unenforcedReason={accountPoolsReason}
+        open={poolSheetOpen}
+        onClose={() => setPoolSheetOpen(false)}
+        onSet={setAccountPool}
+      />
+    </PageScaffold>
   );
 }

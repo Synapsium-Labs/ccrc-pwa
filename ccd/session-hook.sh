@@ -1,13 +1,55 @@
 #!/usr/bin/env bash
-# session-hook.sh — Claude Code hook → ~/.cc-sessions/<id>.hookstate.json
+# session-hook.sh — Claude Code hook → ~/.cc-sessions/<id>.hookstate.json, the main thread's turn marker <id>.turn.json beside it, and, for a session whose id ends -hookcap, one capture file per event under ~/.ccrc/hook-capture/<id>/
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
-# all, no network, no locks, no waiting. A hook that can slow or break a
-# session is worse than no hook. Consumed read-only by the ccrc server via
-# the agent (whitelist: .cc-sessions is readable; nothing here needs a
-# grant). Non-fleet sessions (no tmux, foreign session name) exit silently.
+# all, no network — and on the HOT PATH, no locks and no waiting. FIVE declared exceptions, all OFF the hot path:
+# the first two in the compaction arms alone, the helper's one hookstate-first, COMPACT_HELPER_TIMEOUT-bounded,
+# locally resolved `timeout`/`gtimeout` deadline; and, since D-2605, the row's
+# permanent stable lock, taken with a bounded `flock -w` of COMPACT_LOCK_WAIT
+# (COMPACT_LOCK_WAIT_SERVE on compact SessionStart, the one acquisition a human
+# is waiting on) and never held across a fork the arm does not reap. A miss
+# publishes nothing; there is no unlocked fallback. The THIRD (D4, #757): the roster card, one `_hook_timeout 4` server
+# read (`ccrc-api runs list`) on compact, resume and clear of a non-child session, and on its wake arm (R-5a, D-8201: a server wake prompt after an idle compaction), fail-open
+# (no roster line on any failure), made even when unarmed (shadow). The FOURTH (Overlord W1a): the start report, a send on a non-child SessionStart and a resend pass on it and on UserPromptSubmit, all inside at most 4 s, and since the anchor piece inside what the invocation's one network budget has left (`_hook_start_report`), fail-open. The FIFTH (Overlord W1a, the anchor piece): the anchor, one `_hook_timeout 4` read
+# (`ccrc-api card --anchor`) on a non-child SessionStart, and on the first UserPromptSubmit after an automatic compaction
+# that brought no start (`_hook_anchor_owed`, after the hookstate write), fail-open (today's role card, no prompt context).
+# The THIRD, FOURTH and FIFTH share ONE network budget per invocation (`_hook_net_bound`, HOOK_NET_BUDGET_MS, 8 s, the
+# worst case before the anchor), and a read that runs out its bound stops every later one in the invocation. Every OTHER event — every
+# PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
+# still takes no lock and waits on nothing. A hook that can slow or break a
+# session is worse than no hook. Consumed read-only by the ccrc server via the agent
+# (whitelist: .cc-sessions is readable; nothing here needs a grant). Non-fleet sessions (no tmux, foreign session name) exit silently.
 set -uo pipefail
+
+# >>> D-8270 tmux socket lookup (copied byte for byte into each script that cannot source ccd: tmux-socket-census.test.ts)
+# THE ONE tmux SOCKET LOOKUP (D-8270, ruling Q8). One shared tmux server, and every tmux call starts with the argv
+# `_TMX_ARGV` holds, so moving the fleet to another server is a change of setting. The setting is the first line of
+# ~/.ccrc/tmux-socket: absent or empty is tmux's default server and adds no flag; a socket name puts `-L <name>` first;
+# anything else asks no tmux at all and answers why with rc 1, never the "can't find session" that reads as gone. A
+# file, not a variable: every process on the box reads one answer, and no caller redirects a door with its environment.
+# Twin: shared/tmux-target.ts.
+# READ ONCE PER PROCESS, AT LOAD, WITH BUILTINS ONLY: the supervise tick's fork budget (tick-diet spec §9) is exactly
+# main's. A statement calls `_tmx …`. A capture `$( … )`, a pipeline stage, or a wrapper that execs its argv
+# (`_plat_timeout`, `timeout`, `exec`) spreads `"${_TMX_ARGV[@]}" …` itself: bash runs a lone command there without a
+# second fork, and a function in its place costs that fork on every call.
+_tmx_sock() {   # [home, default $HOME] -> TMX_SOCK (empty: the default server); rc 1 = the setting cannot be used, TMX_WHY says why
+  local f="${1-${HOME-}}/.ccrc/tmux-socket" s=""
+  TMX_SOCK=""; TMX_WHY=""
+  [ -e "$f" ] || [ -L "$f" ] || return 0
+  if [ -f "$f" ] && [ -r "$f" ]; then IFS= read -r s < "$f" || :; else TMX_WHY="$f cannot be read"; return 1; fi
+  [[ -z "$s" || "$s" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$ ]] \
+    || { TMX_WHY=".ccrc/tmux-socket does not hold a socket name (1 to 64 letters, digits, _ and -, not led by -)"; return 1; }
+  TMX_SOCK="$s"
+}
+# shellcheck disable=SC2120  # the home is optional: every caller today asks for the running user's own (D-8270)
+_tmx_argv() {   # [home] -> _TMX_ARGV, the argv every fleet tmux call starts with; run once below, again only when asked
+  if _tmx_sock "$@"; then _TMX_ARGV=(tmux ${TMX_SOCK:+-L "$TMX_SOCK"})
+  else _TMX_ARGV=(sh -c 'printf "%s\n" "$0" >&2; exit 1' "ccrc: tmux was not asked: $TMX_WHY"); fi
+}
+_tmx_argv
+_tmx() { "${_TMX_ARGV[@]}" "$@"; }   # tmux args… -> that call, on the fleet's server (a statement; see above for a capture)
+# <<< D-8270 tmux socket lookup
 
 # ── epoch milliseconds, on two userlands ────────────────────────────────
 # `date +%s%3N` is GNU. BSD's date has no `%N`: it prints the literal letter,
@@ -17,57 +59,99 @@ set -uo pipefail
 # server reads a session's state from this file, so every session on the box
 # would read as unsupervised while looking perfectly healthy from the inside.
 #
-# `EPOCHREALTIME` is a bash builtin — no fork, no coreutils, same answer on
-# both platforms (measured against `date +%s%3N` on Linux, to the
-# millisecond). The separator is taken as either `.` or `,` because that field
-# is formatted with the locale's decimal point. BUT the builtin is bash 5.0+
-# and the declared floor is 4.4 — a 4.4 box takes the fallback, and on
-# BSD the bare fallback answers the exact non-number described above. So the
-# fallback VALIDATES, and degrades to whole seconds ×1000: millisecond
-# precision lost, THE WRITE KEPT — the one trade this file's contract allows.
-#
-# This is a LOCAL copy of ccd's `_plat_epoch_ms`, and deliberately so: this
-# file is installed on its own into ~/.cc-sessions and runs as Claude Code's
-# hook, with no ccd around to source. A test pins the two bodies identical.
+# This is a LOCAL copy of ccd's `_plat_epoch_ms`, GENERATED from it (ARCH-74) with
+# the three CCRC_* bounds below: this file is installed alone, with no ccd to
+# source, and ccd's comment says why the fallback validates and the write is kept.
+# Regenerate with `bash ccd/ccrc restamp ccd/session-hook.sh`;
+# hook-helpers-generated.test.ts fails on drift. Never edit between
+# the BEGIN and END lines by hand.
+# ── BEGIN GENERATED HOOK HELPERS (shared/hook-helpers.mjs; edit that, then regenerate) ──
+# ccrc:generated 1 sha256=d03f616c97a6de37395792d4d4bcdb403caccf3b29fe2d38767a591efb91dda8
 _hook_epoch_ms() {
   if [ -n "${EPOCHREALTIME:-}" ]; then
-    local s="${EPOCHREALTIME%%[.,]*}" f="${EPOCHREALTIME#*[.,]}"
+    local e="$EPOCHREALTIME" s f; s="${e%%[.,]*}" f="${e#*[.,]}"
     f="${f}000"; printf '%s%s' "$s" "${f:0:3}"
     return 0
   fi
   local t; t=$(date +%s%3N 2>/dev/null)
   if [[ "$t" =~ ^[0-9]{13,}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
 }
+CCRC_PROJ_CLASS='A-Za-z0-9._-'
+CCRC_PROJ_MAX=64
+CCRC_ID_MAX=128
+# ── END GENERATED HOOK HELPERS ──
+
+_hook_timeout() {
+  local bin
+  for bin in timeout gtimeout; do
+    if command -v "$bin" >/dev/null 2>&1; then
+      "$bin" "$@"
+      return $?
+    fi
+  done
+  return 127
+}
+# THE NETWORK BUDGET (Overlord W1a, the anchor piece; fix round 1, F5): every server read this file makes in one invocation
+# (the anchor, the roster card, the start report's send and resends, the owed anchor) asks here first, in the caller's own
+# shell (never inside `$( )`, so what it sets stands). ONE deadline, HOOK_NET_BUDGET_MS after the first read asked, which
+# is the worst case before the anchor (two 4 s reads); each read is bounded by the smaller of its own bound and what is
+# left. A read with under a second left is not started (rc 1), and neither is any read once one has run out its bound
+# (`timeout`'s 124 sets HOOK_NET_HUNG): a server that did not answer in time is not asked again in this invocation.
+HOOK_NET_BUDGET_MS=8000 HOOK_NET_DL="" HOOK_NET_HUNG=""
+_hook_net_bound() {   # <max ms> -> NET_LEFT_MS, and NET_B (seconds, for `_hook_timeout`); rc 1 when the read is not to start
+  local now; now=$(_hook_epoch_ms); HOOK_NET_DL="${HOOK_NET_DL:-$(( now + HOOK_NET_BUDGET_MS ))}"
+  NET_LEFT_MS=$(( HOOK_NET_DL - now < $1 ? HOOK_NET_DL - now : $1 )); NET_B="$(( NET_LEFT_MS / 1000 )).$(( NET_LEFT_MS % 1000 / 100 ))"
+  [[ -z "$HOOK_NET_HUNG" ]] && (( NET_LEFT_MS >= 1000 ))
+}
 
 # ── THE THREE ENVELOPES: R1's card, R5's deny, R6's nudge ─────────────────
 # Claude Code reads a hook's stdout as a PER-EVENT CONTRACT — on SessionStart it
 # is context to inject, on PreToolUse it is a permission decision OR context
 # (`additionalContext`) for the call that proceeds — and those two events are
-# the only ones this file prints on. Until D-1613 there was one printf and the
+# the only ones this file prints on, save the roster card's wake arm (R-5a, D-8201: one UserPromptSubmit envelope, `additionalContext`, from its own site in the tail) and PreCompact's one print: history's steer print, or the refusal arm's block decision (Overlord C39), never both. Until D-1613 there was one printf and the
 # rule was "the card, and nothing else, ever"; now there are three builders,
 # each naming its own `hookEventName`, which is what stops a card being
 # delivered as a decision or the other way round. A card that leaked onto
 # another event would not be noise; it would be an answer to a question nobody
 # asked. So this emitter is called from inside the SessionStart arm and nowhere
 # else; `_hook_deny_json` (the gate, D-1613) and `_hook_nudge_json` (the Read
-# nudge, D-1745) are BUILDERS called only inside a `$( )` from the PreToolUse
+# nudge, D-1745, and the landing advisory) are BUILDERS called only inside a `$( )` from the PreToolUse
 # arm, and whichever one the arm chose is printed from ONE site at the end of
 # the file, after the hookstate rename lands (D-1689) — at most one line per
 # event, never both. Every failure path in any of them prints NOTHING; this
-# file's standing contract (exit 0 on every path, no network, no locks, no
-# waiting) is unchanged. Every read below is a local file or a git ref.
-_hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
-  local j=""
-  # THE TOTAL CLIP LIVES HERE, at the ONE site every subject passes through.
+# file's standing contract (exit 0 on every path, no network, and on the hot
+# path no locks and no waiting) is unchanged except the declared exceptions
+# the header states — the hookstate-first bounded helper wait, D-2605's bounded
+# stable-lock acquisition, and the roster card's one bounded server read. Every
+# other read below is a local file or a git ref.
+_hook_emit_context() {   # <standing> [<compact>] [<roster>, D4 #757, after both clips under ROSTER_CARD_MAX_CHARS] [<anchor>, FIRST, under ANCHOR_CARD_MAX_CHARS] -> one JSON line on stdout, or nothing at all
+  local j="" text=""
+  # THE STANDING CLIP LIVES HERE, at the ONE site every subject passes through.
   # A per-subject clip is one each new subject can forget; this one cannot be.
   # It is also what stands between an operator-controlled field and `jq`'s own
   # MAX_ARG_STRLEN (measured 131072 on this box: at 130442 bytes of card the
   # exec fails, `|| return 0` swallows it, and the hook prints NOTHING —
   # deleting the graphify card for that session too).
-  set -- "${1:0:$CARD_MAX_CHARS}"
-  j=$(jq -cn --arg c "$1" \
+  text="${1:0:$CARD_MAX_CHARS}"
+  # THE SECOND CLIP (compaction-card spec §3.3), in the SAME site: the compact
+  # subject is appended AFTER the standing clip, under its own ceiling, and the
+  # sum is pinned at CARD_TOTAL_MAX_CHARS — derived from the two ceilings, never
+  # a third budget. A pathological GM_NODES (D-1899) still loses only the
+  # standing tail; the compact card behind it is intact.
+  if [ -n "${2:-}" ]; then
+    text="${text:+$text }${2:0:$COMPACT_CARD_MAX_CHARS}"  # @anchor emit-context-compact-ceiling
+    text="${text:0:$CARD_TOTAL_MAX_CHARS}"
+  fi; [ -z "${3:-}" ] || text="${text:+$text }${3:0:$ROSTER_CARD_MAX_CHARS}"
+  # THE ANCHOR'S SLOT (Overlord C38, the anchor piece): FIRST, before the standing clip's text, under its own ceiling, so
+  # every other slot keeps its clip and the sum `session-hook.test.ts` pins is 1500 + 1 + 2400 + 1 + 4000 + 1 + 2048. The
+  # one character between the anchor and the next slot is a newline, so the anchor's own lines stay lines (fix round 1, F9).
+  [ -z "${4:-}" ] || text="${4:0:$ANCHOR_CARD_MAX_CHARS}${text:+$'\n'$text}"
+  # RETURNS 1 when the envelope could not be built — nothing was printed, and
+  # the SessionStart arm must not stamp `served` for a card that never went
+  # out. Every existing caller ignores the code, so nothing else changes.
+  j=$(jq -cn --arg c "$text" \
     '{hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:$c}}' 2>/dev/null) \
-    || return 0
+    || return 1  # @anchor emit-context-print
   printf '%s\n' "$j"
 }
 
@@ -154,8 +238,10 @@ _hook_same_tree() {   # <tree> <built-sha> -> 0 iff built's tree == HEAD's tree
 #      census branch, which the gate has nothing to say about
 #   2  no tree at all: no cwd anywhere, or a cwd that is not a directory
 # 1 and 2 collapsed would hand the card a `$GM_CWD` it must not speak about.
-_hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRESH GM_BEHIND
+_hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRESH GM_BEHIND, GM_LINKED's set, GM_MAX_DENIALS
   GM_CWD=""; GM_BUILT=""; GM_NODES=""; GM_ENGINE=""; GM_PIN=""; GM_FRESH=""; GM_BEHIND=""
+  GM_LINKED=""; GM_FILES=""; GM_REF=""; GM_AGE=""; GM_STORE=""; GM_DIFF=""; GM_BRANCH=""; GM_MAIN_MOVED=""; GM_DIFF_LIST=""
+  GM_MAX_DENIALS="$GRAPH_GATE_MAX_DENIALS"
   local tip="" lr="" ahead="" behind="" bcommit="" cwd=""
   cwd=$(jq -r '.cwd // empty' <<<"$payload" 2>/dev/null) || cwd=""
   # `$REG/<id>.workdir` is the registry's own durable answer, and the fallback
@@ -164,6 +250,15 @@ _hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRES
   [ -n "$cwd" ] || return 2
   [ -d "$cwd" ] || return 2
   GM_CWD="$cwd"
+  # A LINKED TREE (graph revision 2 spec §6.3, D-7351): graphify-out is a link
+  # to the repository's published build, whose meta.json names the commit, the
+  # engine, the counts and the store. A link that dangles, or a meta.json that
+  # is not schema 1, falls to the old arm, which finds no graph.json through a
+  # dangling link and so prints the census row. A real directory is measured
+  # the old way until its migration (GR1's pins).
+  if [ -L "$cwd/graphify-out" ] && _hook_graph_meta "$cwd"; then
+    GM_LINKED=1
+  else
   [ -f "$cwd/graphify-out/graph.json" ] || return 1
 
   GM_BUILT=$(tail -c 4096 "$cwd/graphify-out/graph.json" 2>/dev/null \
@@ -186,6 +281,7 @@ _hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRES
   [[ "$GM_NODES" =~ ^[0-9]+$ ]] || GM_NODES=""
 
   GM_ENGINE=$(head -c 64 "$cwd/graphify-out/.graphify_engine" 2>/dev/null | tr -d '[:space:]') || GM_ENGINE=""
+  fi
   GM_PIN=$(head -c 64 "$HOME/.ccrc/graphify.pin" 2>/dev/null | tr -d '[:space:]') || GM_PIN=""
 
   # STALENESS IS MEASURED OR IT IS NOT CLAIMED. A tree with no git, or a
@@ -261,6 +357,84 @@ _hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRES
       fi
     fi
   fi
+  [ -z "$GM_LINKED" ] || _hook_graph_diff "$cwd"
+  return 0
+}
+
+# ── THE LINKED TREE'S READS (spec §2.3, §5.3, §6.2; D-7351) ─────────────
+# meta.json is about 1 KB and is read whole, `head -c` bounded, in ONE jq call;
+# every field is shape-checked before it is spent, and one that fails its shape
+# is dropped (its clause omitted), except the commit, without which nothing here
+# is datable and the tree is measured the old way. The age is computed in the
+# same call (`fromdateiso8601`), so no `date -d` dialect is involved.
+_hook_graph_meta() {   # <tree> -> 0 and GM_BUILT GM_ENGINE GM_NODES GM_FILES GM_REF GM_AGE GM_STORE, or 1
+  local m
+  m=$(head -c 8192 "$1/graphify-out/meta.json" 2>/dev/null | jq -r 'select(.schema == 1)
+    | [.commit, .engine, .nodes, .files, .ref, (try ((now - (.built_at | fromdateiso8601)) | floor) catch ""), .store]
+    | map(if . == null then "" else tostring | gsub("[\u0000-\u001f]"; "") end) | join("\u001f")' 2>/dev/null) || return 1
+  IFS=$'\x1f' read -r GM_BUILT GM_ENGINE GM_NODES GM_FILES GM_REF GM_AGE GM_STORE <<<"$m"
+  [[ "$GM_BUILT" =~ ^[0-9a-f]{40}$ ]] || { GM_BUILT=""; return 1; }
+  GM_ENGINE="${GM_ENGINE:0:64}"; GM_ENGINE="${GM_ENGINE//[[:space:]]/}"
+  [[ "$GM_NODES" =~ ^(0|[1-9][0-9]{0,11})$ ]] || GM_NODES=""
+  [[ "$GM_FILES" =~ ^(0|[1-9][0-9]{0,11})$ ]] || GM_FILES=""
+  [[ "$GM_REF" =~ ^refs/[A-Za-z0-9._/-]{1,200}$ ]] || GM_REF=""
+  [[ "$GM_AGE" =~ ^-?[0-9]{1,12}$ ]] || GM_AGE=""; [[ "$GM_AGE" != -* ]] || GM_AGE=0
+  [[ "$GM_STORE" == /* ]] || GM_STORE=""
+  _hook_load_graph_settings "$GM_STORE"
+  GM_MAX_DENIALS="$GS_MAX_DENIALS"
+  return 0
+}
+
+# The store's settings.json (spec §5.3), found through meta.json's `store`: the
+# hook never reads ccrc.env (ccd keeps it out of sessions) and never re-derives
+# the store (ccd/graph-resolve is its one definition). Absent, unparsable, of
+# another schema, or a key not its shape (ccd/graph-resolve's `pct`/`count0`):
+# that key keeps its default, and the defaults are ccd/ccrc's `_graph_knobs`'
+# (a test holds the line below equal to them).
+_hook_load_graph_settings() {   # <store> -> GS_MAX_DIFF_PCT GS_MAX_DENIALS GS_DIFF_LIST_MAX
+  local s="" a="" b="" c=""
+  GS_MAX_DIFF_PCT=25; GS_MAX_DENIALS=3; GS_DIFF_LIST_MAX=20
+  [ -n "$1" ] || return 0
+  s=$(head -c 4096 "$1/settings.json" 2>/dev/null | jq -r 'select(.schema == 1)
+    | [.gate_max_diff_pct, .gate_max_denials, .card_diff_list_max] | map(tostring) | join(" ")' 2>/dev/null) || s=""
+  read -r a b c <<<"$s"
+  if [[ "$a" =~ ^(0|[1-9][0-9]?|100)$ ]]; then GS_MAX_DIFF_PCT="$a"; fi
+  if [[ "$b" =~ ^(0|[1-9][0-9]{0,8})$ ]]; then GS_MAX_DENIALS="$b"; fi
+  if [[ "$c" =~ ^(0|[1-9][0-9]{0,8})$ ]]; then GS_DIFF_LIST_MAX="$c"; fi
+  return 0
+}
+
+# Spec §6.2's two distances. GM_DIFF counts the files differing between the
+# graph's commit and HEAD; GM_BRANCH, the share of those that are the branch's
+# own (changed since merge-base(graph, HEAD)); GM_DIFF_LIST names up to
+# CARD_DIFF_LIST_MAX of them, the branch's own FIRST, so main-line drift never
+# crowds them out, and stops at the first name that would take the list past
+# CARD_DIFF_LIST_MAX_CHARS (argued beside CARD_MAX_CHARS): a count alone let
+# real paths grow this card until the shared clip cut the hold after it. It
+# stops rather than skipping to a shorter name, so the order still holds and
+# "and N more" counts every name not said. GM_MAIN_MOVED counts what main gained since the refresh. A
+# git that will not answer leaves its value empty and its clause unsaid.
+_hook_graph_diff() {   # <tree>
+  local all="" mb="" br="" f="" n=0
+  local -A own=()
+  local -a first=() rest=()
+  all=$(git -C "$1" diff --no-renames --name-only "$GM_BUILT" HEAD 2>/dev/null) || return 0
+  mb=$(git -C "$1" merge-base "$GM_BUILT" HEAD 2>/dev/null) || mb=""
+  [ -z "$mb" ] || br=$(git -C "$1" diff --no-renames --name-only "$mb" HEAD 2>/dev/null) || br=""
+  while IFS= read -r f; do [ -z "$f" ] || own["$f"]=1; done <<<"$br"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ -n "${own["$f"]:-}" ]; then first+=("$f"); else rest+=("$f"); fi
+  done <<<"$all"
+  GM_BRANCH=${#first[@]}; GM_DIFF=$(( GM_BRANCH + ${#rest[@]} ))
+  for f in "${first[@]}" "${rest[@]}"; do
+    [ "$n" -lt "$GS_DIFF_LIST_MAX" ] || break
+    (( ${#GM_DIFF_LIST} + 2 + ${#f} <= CARD_DIFF_LIST_MAX_CHARS )) || break
+    GM_DIFF_LIST+="${GM_DIFF_LIST:+, }$f"; n=$((n + 1))
+  done
+  [ "$GM_DIFF" -le "$n" ] || GM_DIFF_LIST+="${GM_DIFF_LIST:+ and }$(( GM_DIFF - n )) more"
+  [ -z "$GM_REF" ] || GM_MAIN_MOVED=$(git -C "$1" rev-list --count "$GM_BUILT..$GM_REF" 2>/dev/null) || GM_MAIN_MOVED=""
+  [[ "$GM_MAIN_MOVED" =~ ^[0-9]+$ ]] || GM_MAIN_MOVED=""
   return 0
 }
 
@@ -271,12 +445,22 @@ _hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRES
 # GM_BEHIND is set only where a stamp the tail read accepted could be dated
 # against HEAD, so its emptiness carries condition 2's failure as well as the
 # freshness states that do not gate.
+# A LINKED tree (spec §6.3, D-7351) is gated by SHARE, not by commits: armed when
+# the files differing from the graph's commit are at most GATE_MAX_DIFF_PCT of
+# the graph's files and the graph's engine is the pin; the bound comes from the
+# store's settings.json, never from the constants below, which are the real
+# directory's until its migration.
 _hook_gate_tree() {   # -> 0 iff the measured tree carries a graph fresh enough to gate on
+  if [ -n "$GM_LINKED" ]; then
+    [ -n "$GM_DIFF" ] && [ -n "$GM_FILES" ] && [ -n "$GM_PIN" ] && [ "$GM_ENGINE" = "$GM_PIN" ] \
+      && [ $(( GM_DIFF * 100 )) -le $(( GS_MAX_DIFF_PCT * GM_FILES )) ]
+    return
+  fi
   [ -n "$GM_BEHIND" ] && [ "$GM_BEHIND" -le "$GRAPH_GATE_MAX_BEHIND" ]
 }
 
 _hook_graph_card() {
-  local row="" line="" rc=0
+  local row="" line="" rc=0 gcd="" src="" age=""
   _hook_graph_measure || rc=$?
   [ "$rc" -ne 2 ] || return 0
 
@@ -287,9 +471,18 @@ _hook_graph_card() {
     # its census carries one — a session that knows the tree was REFUSED does
     # not go hunting for a graph that is never going to appear. The census is
     # `{passes:[…]}`, last 10, newest LAST.
-    row=$(jq -r --arg p "$GM_CWD" \
-      '(.passes // []) | last | (.trees // [])
-       | map(select(.path == $p and ((.reason // "") != "")))
+    # The pass's `repos[]` (graph revision 2 spec §7, D-7351) is read by the
+    # repository: the row whose `source` is the realpath of this tree's common
+    # dir, so every worktree and the main checkout share it. A last pass with
+    # no `repos[]` (one the sweep stopped before any repository, or none at
+    # all) says nothing about this tree, so it gives no line (GR7, D-7353: the
+    # per-tree arm kept for the sweep's rewrite is retired with it, GR4 being live).
+    gcd=$(git -C "$GM_CWD" rev-parse --git-common-dir 2>/dev/null) || gcd=""
+    [ -z "$gcd" ] || src=$(cd -- "$GM_CWD" >/dev/null 2>&1 && cd -- "$gcd" >/dev/null 2>&1 && pwd -P) || src=""
+    row=$(jq -r --arg s "$src" \
+      '(.passes // []) | last | (. // {})
+       | [(.repos // [])[] | select($s != "" and .source == $s)]
+       | map(select((.reason // "") != ""))
        | if length == 0 then empty else (.[0].outcome + ": " + .[0].reason) end' \
       "$HOME/.ccrc/graph-sweep.json" 2>/dev/null) || row=""
     [ -n "$row" ] || return 0
@@ -317,14 +510,29 @@ _hook_graph_card() {
   fi
 
   line="graphify: this tree has a knowledge graph — graphify-out/"
+  [ -z "$GM_LINKED" ] || line="$line is the graph of this repository's main at ${GM_BUILT:0:8}"
   [ -z "$GM_NODES" ] || line="$line, $GM_NODES nodes"
-  [ -z "$GM_BUILT" ] || line="$line, built at ${GM_BUILT:0:8}"
-  [ -z "$GM_FRESH" ] || line="$line ($GM_FRESH)"
+  [ -n "$GM_LINKED" ] || [ -z "$GM_BUILT" ] || line="$line, built at ${GM_BUILT:0:8}"
+  [ -n "$GM_LINKED" ] || [ -z "$GM_FRESH" ] || line="$line ($GM_FRESH)"
   # The engine/pin pair earns its place: sessions were measured running an
   # unversioned July copy of graphify against 0.9.9 graphs, and that drift is
   # invisible until a query fails strangely.
   [ -z "$GM_ENGINE" ] || line="$line, engine $GM_ENGINE"
   [ -z "$GM_PIN" ]    || line="$line (pin $GM_PIN)"
+  # Spec §6.3's sentence (R1, D-7351): the two distances of §6.2, the branch's
+  # own files named first. Each clause is said only where it was measured.
+  if [ -n "$GM_LINKED" ]; then
+    age="$GM_AGE"
+    if [ -z "$age" ]; then :; elif [ "$age" -lt 120 ]; then age="${age}s"
+    elif [ "$age" -lt 7200 ]; then age="$((age / 60))m"
+    elif [ "$age" -lt 172800 ]; then age="$((age / 3600))h"; else age="$((age / 86400))d"; fi
+    [ -z "$age" ] || line="$line, refreshed $age ago"
+    [ -z "$GM_MAIN_MOVED" ] || line="$line; main has moved $GM_MAIN_MOVED commit$([ "$GM_MAIN_MOVED" = 1 ] || echo s) since"
+    if [ "$GM_DIFF" = 0 ]; then line="$line. Your tree does not differ from it"
+    elif [ -n "$GM_DIFF" ]; then
+      line="$line. Your tree differs from it in $GM_DIFF file$([ "$GM_DIFF" = 1 ] || echo s), $GM_BRANCH of them your branch's own: $GM_DIFF_LIST — read those directly"
+    fi
+  fi
   # Single-quoted: the sentence carries backticks and double quotes verbatim.
   line="$line"'. Answer codebase questions with `graphify query "<question>"` first; `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for one concept; read `graphify-out/GRAPH_REPORT.md` only for broad architecture. Do not run `graphify update` or any build here — the ccrc sweep owns the write side.'
   # R5 (D-1613): the card says what the gate will DO in this tree, and it says
@@ -336,7 +544,7 @@ _hook_graph_card() {
     if [ -e "$GRAPH_GATE_OFF" ]; then
       line="$line Search tools are not gated here: the search gate is off (operator file)."
     else
-      line="$line Search tools (Grep, Glob, shell grep/rg/find) are gated, and source-file reads are nudged, until this session's first graph query."
+      line="$line Search tools (Grep, Glob, shell grep/rg/find) are gated, and source-file reads are nudged, until this session's first answered graph query."
     fi
   fi
   CARD_GRAPH="$line"
@@ -365,9 +573,9 @@ _hook_graph_card() {
 # see "IT SETS CT_V AND NEVER PRINTS" below) AND BOUNDED — `$(<f)` read the
 # WHOLE file before the trim ever ran, so one 2 MB peer `.project` took the
 # probe from 5 ms to 759 ms and one 8 MB file to 3.3 s (fix round 1, finding
-# 2); `-N` caps the bytes this function ever holds regardless of how large the
-# file on disk is (re-measured after the fix: the same 2 MB and 8 MB files
-# both read back in ~3 ms).
+# 2); `-N` caps the bytes HELD, not scanned: those 2 MB and 8 MB files read back
+# in ~3 ms, but bash does not count the NULs it drops, so a same-user sparse NUL
+# file is scanned at its apparent size (100 MiB ~1.8 s; a fork would close it: D-5065).
 #
 # THE BOUND IS `CCRC_ID_MAX` (128), NOT `CCRC_PROJ_MAX` (64), though every
 # caller today reads either a `.project` field (bound by `CCRC_PROJ_MAX`) or a
@@ -377,9 +585,13 @@ _hook_graph_card() {
 # exactly the "silently truncated into a passing value" failure fix round 1
 # (finding 2) named. Reading the LARGER of this file's two length constants
 # means a value genuinely within `CCRC_PROJ_MAX` is always captured whole (a
-# short read), while anything longer is truncated at a length that STILL
-# exceeds `CCRC_PROJ_MAX` (128 > 64) — so the length gate downstream still
-# correctly refuses it instead of silently accepting the truncated prefix.
+# short read). A length gate on `CT_V` alone does NOT refuse a longer value:
+# the trim runs AFTER the cut, so a short value padded with blanks past
+# `CCRC_ID_MAX` (`proj-a`, 122 spaces, `junk`) is cut inside the blanks and
+# trimmed back to `proj-a`, under any length gate. A caller that must refuse
+# an over-long value also checks `CT_RAWN < CCRC_ID_MAX` (a value that filled
+# the read is refused), as the merge arm's allowance and the generation reader
+# do.
 #
 # `read -N` returns 1 on a SHORT READ (fewer than the requested count because
 # EOF arrived first) — the NORMAL case for every field this function reads,
@@ -399,8 +611,8 @@ _hook_graph_card() {
 # treats the same as a genuinely empty field.
 #
 # A NUL byte in the file is still silently dropped — bash variables cannot
-# hold one, full stop, and no fork-free mechanism here can detect one was
-# ever there. What changes is that `read` does this WITHOUT bash's `$(<f)`
+# hold one, full stop, and _ct_read cannot tell one was there (the card reader's
+# bounded `read -d ''` probe can, D-5063). What changes is that `read` does this WITHOUT bash's `$(<f)`
 # warning (measured: zero stderr on `al\0pha`). The narrow "unsafe" divergence
 # finding 1 named — the byte-preserving server groups `al\0pha` on its own,
 # this hook groups the NUL-stripped `alpha` — is UNCHANGED and accepted:
@@ -415,12 +627,12 @@ _hook_graph_card() {
 #
 # The trim reproduces the server's own `field()` (`server/src/registry.ts:378`
 # does `content.trim()`), so the hook and the server group rows the same way.
-_ct_read() {   # <path> -> CT_V ; rc 0 read, 1 absent, 2 unmeasurable
-  CT_V=""
+_ct_read() {   # <path> -> CT_V CT_RAWN ; rc 0 read, 1 absent, 2 unmeasurable
+  CT_V=""; CT_RAWN=$CCRC_ID_MAX
   [[ -e "$1" ]] || return 1
   [[ -f "$1" && -r "$1" ]] || return 2
   IFS= read -r -N "$CCRC_ID_MAX" CT_V 2>/dev/null < "$1"
-  CT_V="${CT_V#"${CT_V%%[![:space:]]*}"}"; CT_V="${CT_V%"${CT_V##*[![:space:]]}"}"
+  CT_RAWN=${#CT_V}; CT_V="${CT_V#"${CT_V%%[![:space:]]*}"}"; CT_V="${CT_V%"${CT_V##*[![:space:]]}"}"
   return 0
 }
 
@@ -428,7 +640,7 @@ _ct_read() {   # <path> -> CT_V ; rc 0 read, 1 absent, 2 unmeasurable
 # this repo already made. `server/src/coord/peers.ts` (D9): the peers route
 # "does NOT filter on `.archived` ... `archivedAt` is reported verbatim and
 # decides nothing", and it ships `archiveContradicted`/`archivedStale` to NAME
-# the contradiction. Measured on this box: `data-internal-still-prairie` has
+# the contradiction. Measured on this box: `project-e-still-prairie` has
 # carried `.archived` for 33 days beside a 4-second-old heartbeat, and the
 # server calls it `deliverable:"yes"`. In the other direction a main checkout
 # can never be archived at all, so an `.archived` filter over-counts a dead
@@ -619,9 +831,25 @@ _hook_memory_converge() {   # -> converge this (home, project) pair; prints noth
   local ok='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-'
   tp=$(jq -r '.transcript_path // empty' <<<"$payload" 2>/dev/null) || return 0
   [ -n "$tp" ] || return 0
-  d=$(dirname -- "$tp") || return 0
+  # THE PARENT AND GRANDPARENT ARE TAKEN BY PARAMETER EXPANSION, NOT `dirname`.
+  # Two reasons, and the first is the contract above this function: a `dirname`
+  # fork is an EXTERNAL, and on a PATH that does not carry one it writes
+  # `dirname: command not found` to the hook's stderr — which is not silent, and
+  # this function runs on every SessionStart including compact, so that line
+  # lands in the middle of the compaction arms' own silence (measured: two
+  # `minimalPath` fixtures went red on exactly that stderr, and `dirname` is not
+  # in that helper's tool list). A `2>/dev/null` would hide the noise; the
+  # expansion removes the fork. The second is cost — two fewer subshells per
+  # SessionStart across ~20 live sessions.
+  #
+  # THE EXPANSION IS NOT `dirname`, and the `*/*` guard is not the only difference. That guard covers the
+  # slashless payload the comment below calls "shaped any other way": `dirname` would say `.`, whose parent
+  # can never end in `/projects`. MEASURED, the two answer the shape the harness sends identically
+  # (`<config dir>/projects/<slug>/<uuid>.jsonl`); where they differ on such a payload the expansion is the
+  # STRICTER and this function refuses anyway: a doubled slash at `*/projects` below, a trailing at `[ -d ]`.
+  case "$tp" in */*) d=${tp%/*} ;; *) return 0 ;; esac
   [ -d "$d" ] || return 0
-  projects=$(dirname -- "$d") || return 0
+  case "$d" in */*) projects=${d%/*} ;; *) return 0 ;; esac
   # The harness's layout, ASSERTED rather than assumed: a transcript lives at
   # `<config dir>/projects/<slug>/<uuid>.jsonl`, so its grandparent is the
   # `projects` directory this home files every pair under. A payload shaped
@@ -653,12 +881,12 @@ _hook_memory_converge() {   # -> converge this (home, project) pair; prints noth
   # (measured: a dozen `-tmp-*` slugs in one home), and converging those would
   # fill the store with empty directories nobody will ever read.
   #
-  # FOUR PREFIXES, ONE RULE — "the OS scratch root", which is not spelled the
-  # same on both platforms this tool ships to. `-tmp*` alone was the LINUX
+  # FOUR PREFIXES PLUS ONE INFIX, ONE RULE — "the OS scratch root", not spelled
+  # the same on both platforms this tool ships to. `-tmp*` alone was the LINUX
   # spelling and is DEAD CODE on Darwin (D-2375); `_mem_is_scratch` in `ccrc`
   # carries the measurement, and what is deliberately NOT in the list. The
-  # pattern list is byte-identical at all three sites, pinned there.
-  case "$slug" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*) return 0 ;; esac
+  # pattern list is byte-identical at all three sites, pinned there (A4: a marked child's `$HOME/.cc-tmp/<id>`).
+  case "$slug" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*|*--cc-tmp-*) return 0 ;; esac
   # THE EXISTENCE CHECK. See the block above: this is the whole reason
   # computing the slug is safe.
   [ -d "$projects/$slug" ] || return 0
@@ -785,7 +1013,7 @@ _hook_hold_card() {
     return 0
   fi
   (( ${#h} <= CCRC_HOLD_MAX )) || return 0
-  [[ "$h" =~ ^program:[A-Za-z0-9._-]+' 'wave:[0-9]+(/[0-9]+)?(' 'run:[0-9]+)?$ ]] || return 0
+  [[ "$h" =~ $CCRC_HOLD_WAVE_RE ]] || return 0
   # AN ARCHIVE DOES NOT CLEAR A HOLD. `cmd_ws_archive` does no registry rm, and
   # `close.ts`'s failed+archive arm releases nothing, so the bytes outlive the
   # workspace. Live on this box today.
@@ -867,6 +1095,1433 @@ _hook_hold_card() {
   return 0
 }
 
+# ── THE COMPACTION CARD: WHICH CONTEXT IS COMPACTING (spec §3.0) ─────────
+# The three compaction payloads carry the PARENT'S session_id and
+# transcript_path and no agent field — for a subagent's compaction exactly as
+# for the main thread's (measured 2026-09-09 on 2.1.266: five headless runs,
+# byte-identical key sets; `prompt_id` is the parent's on a subagent's rows
+# too). So the hook asks the filesystem, and ONLY HERE, at PreCompact: from
+# this moment the compacting context writes nothing for ≥79 s, so any later
+# arm would see it as the quietest file, never the newest. The rule is
+# LIVENESS, not recency:
+#   manual trigger            → main   (only the main thread takes /compact)
+#   no live agent file        → main   (an auto-compaction fires right after a write)
+#   one live agent, parent quiet → that subagent
+#   anything else             → ambiguous — two contexts wrote inside the window
+#                               and nothing says which one stopped to compact
+# `ambiguous` is an ANSWER: no card (a sibling's card is wrong context, and
+# wrong context is worse than none), a measurement that says so, and a count
+# on the corpus. It is the honest answer for a Workflow fan-out — seven and
+# eight agents of one session, measured, writing every 4–6 s for 13–39 min —
+# so a subagent card is reachable only for a SOLO live subagent. The rule
+# records what it saw (CS_LIVE_N, CS_PARENT_LIVE) beside its verdict, so every
+# journal line can be audited offline against the transcripts.
+# A subagent's transcript is `<transcript minus .jsonl>/subagents/**/
+# agent-<id>.jsonl` (Agent-tool subagents directly in it, Workflow agents one
+# `workflows/<run>/` deeper); `<transcript minus .jsonl>` IS
+# `<dirname>/<session_id>`, so no second payload read is needed.
+# `find -mmin` is on GNU and BSD alike; `-printf` is not, and this file's
+# header declares two userlands. `find` itself is new to this file and guarded
+# like `jq` at the top: a box without it says NOTHING rather than a silent
+# `main` for every compaction.
+_hook_compact_scope() {   # <transcript_path> <trigger> -> CS_SCOPE CS_TRANSCRIPT CS_AGENT CS_LIVE_N CS_PARENT_LIVE ; rc 1 = nothing may be said
+  CS_SCOPE=""; CS_TRANSCRIPT=""; CS_AGENT=""; CS_LIVE_N=""; CS_PARENT_LIVE=""
+  local tp="$1" trig="$2" dir="" f="" live="" n=0 mins=$(( COMPACT_LIVE_S / 60 ))
+  [[ -n "$tp" && -f "$tp" && -r "$tp" ]] || return 1
+  command -v find >/dev/null 2>&1 || return 1
+  if [[ "$trig" == manual ]]; then CS_SCOPE="main"; CS_TRANSCRIPT="$tp"; return 0; fi
+  dir="${tp%.jsonl}/subagents"
+  if [[ -d "$dir" ]]; then
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      n=$(( n + 1 )); live="$f"
+    done < <(find "$dir" -name 'agent-*.jsonl' -mmin "-$mins" 2>/dev/null)
+  fi
+  CS_LIVE_N="$n"
+  if (( n == 0 )); then CS_SCOPE="main"; CS_TRANSCRIPT="$tp"; return 0; fi
+  if (( n > 1 )); then CS_SCOPE="ambiguous"; return 0; fi
+  # The parent's own liveness decides only here, beside exactly one live
+  # agent, and is recorded only when it decided.
+  if [ -n "$(find "$tp" -mmin "-$mins" 2>/dev/null)" ]; then CS_PARENT_LIVE="true"; CS_SCOPE="ambiguous"; return 0; fi
+  CS_PARENT_LIVE="false"
+  [[ -f "$live" && -r "$live" ]] || return 1
+  f="${live##*/}"; f="${f#agent-}"; f="${f%.jsonl}"
+  # SHAPE-GATED, like every other string this file quotes: the id lands in the
+  # set, the journal and (Plan B) the wire. A name this refuses is unspeakable
+  # and the arm says nothing — `case` plus `${#x}`, the file's own idiom.
+  case "$f" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac
+  (( ${#f} <= CCRC_ID_MAX )) || return 1
+  CS_SCOPE="subagent"; CS_TRANSCRIPT="$live"; CS_AGENT="$f"
+  return 0
+}
+
+# The hookstate writer's own tmp+mv idiom, MIGRATED TO THE §3.4 TARGET FAMILY
+# GRAMMAR (D-2605): `compactset.<pid>.<nonce>.hook-write.tmp` after the literal
+# `.<id>.` prefix. The pre-D-2605 name this replaces was `.$id.$$.${1##*/}.tmp`,
+# which expands to `.<id>.<pid>.<id>.compactset.tmp` — the id occurring TWICE,
+# not the bare `<pid>.compactset.tmp` an earlier draft assumed — and it is
+# matched by nothing but the narrow, age-gated transition allowance below.
+# Migrating it is what lets PreCompact's sweep be EXACT: a temp left by a hook
+# killed between the printf and the `mv` is now a name the sweep can recognise
+# by grammar rather than by a `*compact*.tmp` glob that would also match a
+# stranger. The braces put the REDIRECTION's failure under the 2>/dev/null too
+# (D-1691). The temp is a DOTFILE beside its target — invisible to every
+# suffix-shaped registry glob — and `<pid>` plus the nonce keep two hooks apart.
+_hook_write_atomic() {   # <path> <nonce> <text> -> 0 written whole; 1 nothing left behind
+  local base="${1##*/}"; base="${base#"$id."}"
+  local tmp="$REG/.$id.$base.$$.$2.hook-write.tmp"
+  { printf '%s\n' "$3" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$1" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  return 0
+}
+
+# THE EXACT FAMILY GRAMMAR (spec §3.4, "Exact lifecycle family inventory").
+# Given a basename with the LITERAL `.<id>.` prefix already stripped, answer
+# whether an AGED instance of it is this row's private compaction residue that
+# a lock-holding sweep may remove. Exactness is the point: the pre-D-2605 sweep
+# was `-name ".$id.*compact*.tmp"`, a glob that matches by coincidence rather
+# than by family, and under the widened `_ws_slug_free` an unmatched residue
+# reads FREE and re-hands the slug with a stranger's claim still present.
+#
+# The literal-prefix strip is what keeps a NESTED id out: `.demo.x.foo` and
+# `.demo-x.foo` are different strings, and a suffix that did not strip keeps
+# its leading dot, which no arm below can match — so an unrecognised name is
+# LEFT ALONE rather than guessed at.
+_hook_family_sweepable() {   # <suffix after the literal `.<id>.` strip> -> 0 iff aged private residue
+  case "$1" in
+    # THE PERMANENT LOCK, first and by name: it deliberately outlives the row,
+    # spans generations and safe slug reuse, and no compliant path sweeps it.
+    compactions.lock) return 1 ;;
+    compactset.*.stage|compactcard.*.stage) return 0 ;;
+    compactset.*.stage.part|compactcard.*.stage.part) return 0 ;;
+    compactset.*.hook-write.tmp|compactcard.*.hook-write.tmp) return 0 ;;
+    compactcard.*.session-claim.tmp) return 0 ;;
+    compactpost.*.claim) return 0 ;;
+    compactions.lock-init.*|compactions.lock-open.*) return 0 ;;
+    compactserved-source.*) return 0 ;;
+    # THE FINAL SERVED MARKER, and its cell says both things at once: PostCompact
+    # removes it under its own validated final lock after it has been READ, and a
+    # later locked AGE sweep reclaims one whose PostCompact never came — a missing
+    # helper, a timed-out one, a refused shape gate. Without this arm the only
+    # thing that ever reclaimed such a marker was `_reg_purge`, i.e. row
+    # destruction, so every compaction that failed to settle left one permanent
+    # file on a live row. The two patterns are disjoint: `compactserved.` cannot
+    # match `compactserved-source.`, the character after the stem differing.
+    compactserved.*) return 0 ;;
+    generation-init.*|generation-read.*) return 0 ;;
+    compactions-stage.*.tmp|compactions-snapshot.*.tmp) return 0 ;;
+    # ── THE TRANSITION ALLOWANCE, exactly two legacy grammars ────────────
+    # Both are pre-D-2605 producers this task migrated, and both are matched
+    # only after the exact literal-ID strip, only past the age bound, and only
+    # under a validated stable lock. Nothing else legacy is admitted, and this
+    # allowance is what keeps a hook killed across the upgrade from leaving a
+    # permanent dot-leading file.
+    # ANCHORED ON A DECIMAL HEAD (r3 A-I2), exactly as the ccd twin
+    # `_ws_private_family` already is (D-2801). The literal `.<id>.` strip is
+    # not enough for THESE TWO ARMS: both patterns begin with a bare `*`, so a
+    # second legal id nested under this one — `demo-quiet-basin.x-y` when this
+    # row is `demo-quiet-basin`, the shape a dotted project DIRECTORY name
+    # makes legal — still matches after the strip. MEASURED before this anchor:
+    # one ordinary PreCompact for `demo-quiet-basin` deleted the neighbour's
+    # `.demo-quiet-basin.x-y.999.compactcard-claim.tmp` and
+    # `.demo-quiet-basin.x-y.777.demo-quiet-basin.x-y.compactset.tmp`, while
+    # correctly keeping its target-family `compactpost` claim — every target
+    # arm above names its family word first, so only these two leaked. The
+    # consequence is the chain this function's header traces: the neighbour's
+    # residue gone makes its slug read FREE under the widened `_ws_slug_free`
+    # while its row may be half-purged. A legacy name's first component is the
+    # WRITER'S PID, and a nested id's first component is the rest of its id, so
+    # requiring a pure decimal head separates them.
+    #
+    # The claim grammar is pinned EXACTLY — decimal head, then the grammar and
+    # nothing else. "Exactly two components" is the WRONG exactness test here
+    # because the grammar itself carries a dot: measured on the ccd twin, that
+    # spelling rejected the real `999.compactcard-claim.tmp`. The set grammar
+    # carries the id in the MIDDLE and cannot be pinned that way, so one
+    # contrived collision remains and is STATED rather than hidden — the same
+    # one `_ws_private_family` discloses: an id whose own trailing component is
+    # all digits (project `demo-quiet-basin.99`, slug `9`) presents a decimal
+    # head after this id's strip. Legal, and its cost is one reclaimed legacy
+    # tmp of a neighbour, inside the upgrade window.
+    *.compactset.tmp)                        # `<pid>.<id>.compactset.tmp`
+      [[ "${1%%.*}" =~ ^[0-9]+$ ]] || return 1
+      return 0 ;;
+    *.compactcard-claim.tmp)                 # `<pid>.compactcard-claim.tmp`
+      [[ "${1#*.}" == "compactcard-claim.tmp" ]] || return 1
+      [[ "${1%%.*}" =~ ^[0-9]+$ ]] || return 1
+      return 0 ;;
+  esac
+  return 1
+}
+
+# ── THE PERMANENT STABLE LOCK (spec §3.4, "Stable lock") ─────────────────
+# ONE mutex per registry row — `$REG/.<id>.compactions.lock` — deliberately
+# spanning row generations and safe slug reuse. No path here unlinks, replaces,
+# repairs, truncates, recreates or sweeps it; it is not slug residue precisely
+# because it outlives the row. Two properties are what make it a real mutex
+# rather than a pathname race, and each is pinned:
+#
+#  1. CANONICAL IS NEVER OPENED AT ITS OWN PATHNAME. `exec {fd}<>"$lock"` is
+#     create-capable, so two racers can each create a DIFFERENT inode at the
+#     same pathname and each be told by `flock` that it holds "the" lock —
+#     nothing about either flock call looks wrong afterwards. Canonical is
+#     published exactly once, by POSIX `link` off a private `mktemp` source
+#     (measured on this box: `link src existing` is rc 1 `File exists` and
+#     changes nothing; `link src fresh` is rc 0 and the two names share one
+#     inode), and every acquisition afterwards opens a private hard-link ALIAS.
+#     So no acquisition ever has a create-capable operation at canonical, and
+#     every owner flocks the one canonical inode.
+#  2. THE WAIT IS A PARAMETER, `flock -w "$1"`. This helper spells no constant
+#     of its own, which is what lets COMPACT_LOCK_WAIT_SERVE (the one
+#     acquisition a human waits on) and COMPACT_LOCK_WAIT (every other) be two
+#     independently callable bounds through one code path. A helper that
+#     hard-coded either would make the other unreachable, and no behaviour test
+#     distinguishes "waited 2 s because it was asked to" from "waited 2 s
+#     because that is all it knows".
+#
+# MECHANISM ABSENCE IS NOT CONTENTION. `command -v flock` is asked BEFORE any
+# acquire is attempted, because a contended `flock -w` and a missing binary
+# both spell their failure `1` (measured: uncontended acquire 0, contended
+# acquire 1, `command -v` on a PATH without the binary 1), so the distinction
+# can live only in WHICH probe answered — never in an exit status. `rc 2` is
+# that condition and `rc 1` an ordinary refusal; the three hook arms treat
+# rc 2 as fail-CLOSED (spec §3.4, "Platform outcome"), which is why this file
+# still publishes no compaction artifact on a box without `flock`.
+_hook_lock_same() {   # <fd> <canonical> -> 0 iff the FD's target and canonical are one regular inode
+  local fd="$1" lock="$2" p="" a="" b=""   # `a`/`b` declared here (F20, review 71): both were assigned bare below, leaking into the caller's scope
+  if [ -e "/proc/self/fd/$fd" ]; then p="/proc/self/fd/$fd"
+  elif [ -e "/dev/fd/$fd" ]; then p="/dev/fd/$fd"
+  else return 1; fi
+  # `-f` and `-ef` both FOLLOW the /proc symlink, so these read the FD's own target; through /dev/fd (Darwin, MEASURED
+  # on macOS 25.6: stat(/dev/fd/N) carries the fdesc DEVICE with the file's inode, so `-ef` is false while the inode
+  # matches) the inode alone decides, via POSIX `ls -i`. A FIFO, directory or symlink at canonical still fails `-f`;
+  [[ -f "$p" ]] || return 1
+  [[ -f "$lock" && ! -L "$lock" ]] || return 1
+  [[ "$p" -ef "$lock" ]] || { [[ "$p" != /proc/* ]] && a=$(ls -i -- "$p" 2>/dev/null) && b=$(ls -i -- "$lock" 2>/dev/null) && [[ -n "${a%% *}" && "${a%% *}" == "${b%% *}" ]]; } || return 1
+  return 0
+}
+
+# ── IS AN ABSENT CANONICAL A FIRST-EVER MINT, OR A LATER DISAPPEARANCE? ──
+# §4: "a later canonical disappearance/replacement refuses, never recreates
+# it." Without this the two are indistinguishable and the mint arm publishes a
+# SECOND inode at the same pathname while a live holder still owns the first —
+# two processes each told by `flock` that it holds "the" lock, which is the
+# exact hazard this file's header says the link-based design exists to remove.
+# MEASURED before this function existed, with two real processes: holder
+# acquires (canonical inode 167576), a stranger unlinks canonical, a second
+# acquirer runs -> `RC=0`, canonical recreated at inode 167577.
+#
+# TWO ARMS, BECAUSE ONE OF THEM CANNOT SEE THE SCENARIO §4 NAMES.
+#
+#  (a) AN ACQUISITION IN FLIGHT leaves its exact-family alias on disk between
+#      its `link` and the `rm -f` that follows its `exec`. Short, but a real
+#      window, and a real on-disk state a fixture can construct.
+#
+#  (b) A LIVE HOLDER PAST ITS ACQUIRE LEAVES NO NAME AT ALL. MEASURED: with a
+#      real process holding this lock, `$REG` lists exactly
+#      `.<id>.compactions.lock`, and ZERO `lock-open` aliases — the acquire
+#      unlinks its alias immediately and deliberately, so (a) alone is blind to
+#      the very race the spec names. What the holder does keep is a DESCRIPTOR
+#      on the unlinked inode, and Linux names it: MEASURED,
+#      `/proc/<pid>/fd/<n>` reads back
+#      `…/.<id>.compactions.lock-open.<pid>.<r>.<r> (deleted)` while the holder
+#      lives, and nothing after it is killed.
+#
+# EXACT FAMILY, NEVER A SUBSTRING: the literal `.<id>.compactions.lock-open.`
+# prefix, so a NESTED id (`demo.quiet` beside `demo`, legal because project
+# directory names may hold dots) answers only for itself.
+#
+# ARM (b) IS GATED THREE TIMES, because it is the only expensive thing in this
+# file. First on an ABSENT canonical, which is out of contract and essentially
+# never true. Then on `$REG/<id>.generation`, the same witness `_reg_purge`
+# gates its own fail-open on: minted only by a flock-capable row creation, so
+# its ABSENCE proves no hook on this row ever held this lock and the absent
+# canonical is an ordinary first-ever mint. Then on `/proc` and `find` being
+# there at all — `find` is asked for rather than assumed, and where `-lname`
+# or `-quit` is missing the expression simply finds nothing and this function
+# answers "first-ever mint", which is the pre-D-2605 behaviour and is stated as
+# a residual rather than hidden behind a refusal this arm could not justify.
+#
+# WHAT IS STILL UNDETECTED, stated rather than implied: a live holder on a row
+# with NO generation. The only in-design holder of that shape is row creation
+# itself, between its own acquire and its `_reg_generation_init` — and row
+# creation owns the slug exclusively for that window, so there is no second
+# actor for it to race.
+_hook_lock_vanished() {   # -> 0 iff an ABSENT canonical is a LATER disappearance, not a first-ever mint
+  local f
+  for f in "$REG/.$id.compactions.lock-open."*; do
+    { [ -e "$f" ] || [ -L "$f" ]; } && return 0
+  done
+  # THE ROW MUST BE LIVE BEFORE ANYTHING EXPENSIVE RUNS. `<id>.generation` is
+  # the same witness `_reg_purge` gates its fail-open on: it is minted only by a
+  # flock-capable row creation, so its ABSENCE proves no hook on this row ever
+  # held this lock and an absent canonical is an ordinary first-ever mint. With
+  # it absent this function is one glob and no fork, which is what every real
+  # `ws-add` and `start` pays.
+  [ -e "$REG/$id.generation" ] || [ -L "$REG/$id.generation" ] || return 1
+  [ -d /proc ] || return 1   # AND WHERE THERE IS NO `/proc`, §4'S RULE IS NOT ENFORCED — stated here rather than left to be inferred from the gate. Arm (b) is the ONLY arm that can see a holder past its own acquire, so on such a box (Darwin ships no `/proc` at all) a later canonical disappearance under a live holder is indistinguishable from a first-ever mint: this function answers "first-ever mint", the acquire MINTS a second inode at the one pathname, and two processes can each be told by `flock` that they hold "the" lock — the hazard this file's header says the link-based design removes, standing on that platform. It is RECORDED platform residue rather than repaired here: `lsof` is the only candidate detector and its deleted-path reporting there is unmeasured, while failing CLOSED on the ambiguity would refuse every first-ever mint, because canonical is minted lazily while the generation is minted at row creation. The cases that assert the rule are Linux-only for this reason and each says so.
+  command -v find >/dev/null 2>&1 || return 1
+  # ONE FORK, NOT ONE PER DESCRIPTOR. MEASURED on this box (517 processes, 2662
+  # `/proc/<pid>/fd` entries): a bash loop calling `readlink` per entry takes
+  # 7.8-8.4 s — longer than COMPACT_LOCK_WAIT itself — while this single
+  # `find -lname … -quit` takes 0.16 s. `-lname` matches the SYMLINK TARGET,
+  # which for an unlinked file reads `<pathname> (deleted)`, so the exact-family
+  # prefix still matches.
+  [[ -n "$(find /proc -mindepth 3 -maxdepth 3 -path '/proc/[0-9]*/fd/*' \
+             -lname "$REG/.$id.compactions.lock-open.*" -print -quit 2>/dev/null)" ]] || return 1
+  return 0
+}
+
+_hook_lock_init() {   # <canonical> -> 0 canonical exists and validates; 1 otherwise
+  local lock="$1" src=""
+  # EEXIST MEANS VALIDATE THE INCUMBENT — never open it, never recreate it.
+  if [ -e "$lock" ] || [ -L "$lock" ]; then
+    [[ -f "$lock" && ! -L "$lock" ]] || return 1
+    return 0
+  fi
+  # The template's terminal `XXXXXX` is a template, not a pathname: the created
+  # basename is `.<id>.compactions.lock-init.<mktemp6>` (measured, six chars,
+  # mode 600 under the subshell's `umask 077`).
+  src=$( umask 077; mktemp "$REG/.$id.compactions.lock-init.XXXXXX" 2>/dev/null ) || return 1
+  [[ -f "$src" && ! -L "$src" ]] || { rm -f "$src" 2>/dev/null; return 1; }
+  link "$src" "$lock" 2>/dev/null || true
+  # THE SOURCE GOES ON EVERY HANDLED RESULT — success, EEXIST and failure
+  # alike — so the first publish can never leak a private file.
+  rm -f "$src" 2>/dev/null || true
+  [[ -f "$lock" && ! -L "$lock" ]] || return 1
+  return 0
+}
+
+_hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 refused; 2 mechanism absent
+  local lock="$REG/.$id.compactions.lock" al="" fd="" tries=0
+  HOOK_LOCK_FD=""
+  # WHY, NOT A SECOND STATUS. Every one of this file's six acquire sites reads
+  # the acquire as a boolean (`|| return 0`) and ccd's nine read the VALUE, all
+  # but `_inflight_write`'s, which reads only whether it holds the lock, with two
+  # FUNCTIONS across three of those sites — `cmd_start`, and `_spawn_start`, which
+  # holds two of them — falling through an unknown code into a silent continue,
+  # and `_inflight_write` continuing silently on any refusal, so a third numeric
+  # status would be a distinct refusal nobody distinguishes. (SIX and “two of
+  # ccd's five” is what stood here for several rounds, and both were wrong by
+  # census: §3.1 gives PreCompact two acquires, §3.3 SessionStart one and §3.4
+  # PostCompact two, which is five, and the two fall-through FUNCTIONS own three
+  # SITES between them. A scan in `session-hook.test.ts` now counts both files and
+  # reads the numerals out of this sentence and the spec's, so neither can drift
+  # from the code again. Five was right until the Overlord's W1a added a sixth:
+  # the PreCompact events line, `_hook_compact_pre_line`.) The condition is
+  # carried in a named out-parameter instead, the way `GC_DIRTY_WHY` and
+  # `_WS_NESTED_WHY` already carry theirs, and cleared on entry so a stale one is
+  # never read as this call's.
+  HOOK_LOCK_WHY=""
+  command -v flock  >/dev/null 2>&1 || return 2
+  command -v mktemp >/dev/null 2>&1 || return 2
+  command -v link   >/dev/null 2>&1 || return 2
+  # REFUSE BEFORE THE MINT, so "recreates no canonical" is a mechanism and not
+  # an intention: nothing has been created at this point, so the refusal owns
+  # nothing to clean up and the holder's inode is never displaced.
+  if [ ! -e "$lock" ] && [ ! -L "$lock" ] && _hook_lock_vanished; then
+    HOOK_LOCK_WHY=canonical-vanished
+    return 1
+  fi
+  _hook_lock_init "$lock" || return 1
+  # An absent exact-family alias, NEVER precreated: two independent decimal
+  # $RANDOM components, and a candidate collision retries rather than adopting
+  # a stranger's name.
+  while (( tries < 8 )); do
+    al="$REG/.$id.compactions.lock-open.$$.$RANDOM.$RANDOM"
+    [ -e "$al" ] || [ -L "$al" ] || break
+    al=""; tries=$(( tries + 1 ))
+  done
+  [[ -n "$al" ]] || return 1
+  [[ -f "$lock" && ! -L "$lock" ]] || return 1
+  link "$lock" "$al" 2>/dev/null || return 1
+  [[ -f "$al" && ! -L "$al" ]] || { rm -f "$al" 2>/dev/null; return 1; }
+  # A failed `exec` redirection returns 1 and does NOT exit a non-interactive
+  # bash (measured); the `2>/dev/null` is what keeps this file's stderr-silence
+  # contract, since the failure message is printed by the shell itself.
+  # `{ exec …; } 2>/dev/null`, NEVER `exec … 2>/dev/null`. MEASURED, and it is
+  # a real defect rather than a style point: `exec` with redirections and NO
+  # COMMAND applies them to THE SHELL, permanently — so the bare form silences
+  # this process's stderr for the rest of the run, not just for the open.
+  # (Caught by `ccd-spawn-split.test.ts`'s operator-facing resume warning going
+  # missing on the ccd side; the same idiom is here, where the contract is
+  # silence anyway and nothing would have reddened.) A `{ …; }` group is not a
+  # subshell, so the `{fd}` assignment still lands in this scope, and a failed
+  # open still returns 1.
+  { exec {fd}<>"$al"; } 2>/dev/null || { rm -f "$al" 2>/dev/null; return 1; }
+  # THE ALIAS GOES NOW, on success and on every handled failure below: the FD is
+  # the only reference this process keeps, so a completed acquisition leaves
+  # zero owned artifacts and a crash leaves at most one aged, exact-family name.
+  rm -f "$al" 2>/dev/null || true
+  _hook_lock_same "$fd" "$lock" || { { exec {fd}>&-; } 2>/dev/null; return 1; }
+  flock -w "$1" "$fd" 2>/dev/null || { { exec {fd}>&-; } 2>/dev/null; return 1; }
+  _hook_lock_same "$fd" "$lock" || { { exec {fd}>&-; } 2>/dev/null; return 1; }
+  HOOK_LOCK_FD="$fd"
+  return 0
+}
+
+# ── THE GENERATION GATE (spec §3.1 step 5, §3.3, §3.4) ───────────────────
+# `$REG/<id>.generation` is the row's AUTHORIZATION, minted once by ccd's row
+# creation and handed to this process in its environment by `_spawn_start`.
+# Every lifecycle arm validates the two against each other UNDER THE LOCK,
+# before it inspects, reads, claims, deletes, emits or publishes anything.
+#
+# IT FAILS CLOSED, and the cost is disclosed rather than hidden: a session
+# whose spawn could not read a generation — a pre-D-2605 row, or a spawn whose
+# acquire was contended — publishes NO compaction artifact for THAT PANE's life. The pane cannot recover: its environment is fixed at exec. THE ROW CAN, and now does — `cmd_ensure` mints a generation it finds missing before it spawns, so the next supervised respawn carries one. Until that fix a pre-D-2605 row could never gain one at all, because both minting sites are row CREATION and the systemd unit reaches neither.
+# That is the property ccd's own fail-open at
+# `_reg_purge` is gated on: absence of the generation proves no hook on that row
+# ever received one, so no hook arm ever ran the lifecycle and there is nothing
+# for a destructive verb to race.
+#
+# WHY THE ENVIRONMENT AND THE FILE BOTH: the environment value is what this
+# PANE was authorized with, the file is what the ROW is authorized with now, and
+# a mismatch means the row was purged and re-created under a pane that outlived
+# it. Publishing then would write one session's measurement into another's slot.
+# The read goes through the same owned hard-link alias ccd's side uses — never a
+# bare `cat` on a pathname that can be replaced between the test and the read.
+_hook_generation_ok() {   # -> 0 iff this pane's generation is the row's current one
+  local want="${CCRC_SESSION_GENERATION:-}" p="$REG/$id.generation" al="" fd="" tries=0 got=""
+  [[ -n "$want" ]] || return 1
+  [[ "$want" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+  [[ -f "$p" && ! -L "$p" && -r "$p" ]] || return 1
+  command -v link >/dev/null 2>&1 || return 1
+  while (( tries < 8 )); do
+    al="$REG/.$id.generation-read.$$.$RANDOM.$RANDOM"
+    [ -e "$al" ] || [ -L "$al" ] || break
+    al=""; tries=$(( tries + 1 ))
+  done
+  [[ -n "$al" ]] || return 1
+  link "$p" "$al" 2>/dev/null || return 1
+  [[ -f "$al" && ! -L "$al" ]] || { rm -f "$al" 2>/dev/null; return 1; }
+  { exec {fd}<"$al"; } 2>/dev/null || { rm -f "$al" 2>/dev/null; return 1; }
+  rm -f "$al" 2>/dev/null || true
+  # 37, not 36: a 37-character read SEES a trailing LF or a longer file, where a
+  # 36-character one would silently accept the first 36 bytes of either.
+  IFS= read -r -N 37 got <&"$fd" 2>/dev/null || true
+  # STILL THE SAME INODE: a canonical replaced since the `link` is a different
+  # row's authorization wearing this name.
+  if ! _hook_lock_same "$fd" "$p"; then { exec {fd}<&-; } 2>/dev/null; return 1; fi
+  { exec {fd}<&-; } 2>/dev/null || true
+  [[ "$got" == "$want" ]] || return 1
+  return 0
+}
+
+_hook_lock_release() {   # <fd> -> close it; the flock lifts when the LAST reference closes
+  local fd="${1-}"
+  # An empty operand is `ambiguous redirect` (measured), so the guard is real
+  # rather than defensive; closing an already-closed descriptor is rc 0.
+  [[ -n "$fd" ]] || return 0
+  { exec {fd}>&-; } 2>/dev/null || true
+  return 0
+}
+
+# ── THE PRE-MUTATION IDENTITY RE-CHECK (spec §3.4, stable lock item 3) ────
+# Item 3 asks the holder to prove its descriptor still names canonical BEFORE
+# EACH MUTATION, not only across its own `flock`. The acquire's paired checks
+# cannot stand in for that, and the gap is MEASURED rather than argued (r3 R1),
+# in a fixture $REG with the SHIPPED acquire on both sides:
+#
+#   holder H acquires (rc 0) and a stranger's `flock -n` on canonical answers
+#   1 — H really holds it. A same-UID actor then UNLINKS canonical and mints a
+#   fresh inode at the same pathname off a private `mktemp` source, exactly as
+#   the acquire itself mints one: inode 1591479 -> 1591427. A second acquirer S
+#   runs the same shipped acquire and GETS IT — rc 0, fd 11, no `WHY` — while H
+#   is still alive and still inside its section. CONTROL, same fixture with the
+#   replacement suppressed: S answers rc 1. So the instrument is real, and the
+#   two processes genuinely hold one pathname's mutex at once.
+#
+# D-2793 refuses a canonical DISAPPEARANCE, and this is a REPLACEMENT: the
+# acquire's `[ -e "$lock" ]` arm is satisfied, the vanished probe never runs,
+# and every identity check the acquire makes compares the NEW inode with
+# itself. Nothing in the acquire CAN see it, because by the time it happens the
+# acquire has returned. Only the holder can, and only by asking again.
+#
+# The check itself is `_hook_lock_same`, unchanged and uncopied — the identity
+# predicate has one definition, and this is a NAME for calling it at a second
+# moment, not a second implementation of it.
+#
+# WHY THERE IS NO ccd TWIN, MEASURED RATHER THAN OMITTED. The same rule was
+# built for `_reg_purge` and then REFUSED on the measurement, because that
+# function has no placement where the check both helps and stays truthful:
+#
+#   - Before its unconditional purge-done journal emit (named in ccd, never
+#     here: `ccd-lifecycle-sites.test.ts` forbids this file from containing a
+#     lifecycle-emitter identifier at all, comments included, because its
+#     exit-0 contract is absolute) is the only spot where a
+#     refusal can honestly answer 1 ("nothing deleted, no purge fact"), and
+#     there it is ADJACENT to the acquire's own post-`flock` identity check —
+#     nothing runs between them, so it closes a zero-width window.
+#   - Before the unlink loop is where the window is real (the emit's own
+#     `_reg_get` children have run by then), and there NO status in
+#     `_reg_purge`'s vocabulary is true: 1 and 2 both assert no purge fact, 3
+#     asserts the row IS destroyed. A refusal told by any of them fabricates a
+#     cause, which is the defect D-2782 was minted to end.
+#   - Measured, the before-emit form also reds two shipped guards that exist on
+#     purpose: `ccd-lifecycle-purge`'s "the acquisition is the ONE statement
+#     before the unconditional emit" (nothing there may GATE the purge) and
+#     this suite's canonical-write census, which read the guard's own release
+#     as an early unlock and reported two later unlinks as lock-free.
+#
+# So the ccd side's residual is STATED rather than closed: a canonical
+# replacement landing between `_reg_purge`'s emit and its unlinks is not
+# refused today, and closing it needs a fourth status and four caller arms.
+_hook_lock_still_canonical() {   # <fd> -> 0 iff this descriptor is STILL the canonical inode
+  _hook_lock_same "${1-}" "$REG/.$id.compactions.lock"
+}
+
+# ── PreCompact (spec §3.1): THE SET ALWAYS, THE CARD WITH A GRAPH ────────
+# Called from the very end of this file, AFTER the hookstate rename: the
+# `working` stamp lands first and never waits on the helper (Task 6's sole
+# deadline is locally resolved as `timeout` or `gtimeout`). Prints nothing —
+# stage 1. Every failure is silent and total for what comes after it.
+_hook_compact_pre() {
+  [ -e "$COMPACT_CARD_OFF" ] && return 0
+  [[ -z "${CS_REFUSED-}" ]] || return 0   # a refused event is no compaction: no set, no card (refusal-ahead-of-the-card)
+  local tp="" trig="" set="$REG/$id.compactset" cardf="$REG/$id.compactcard" doc="" at="" nonce="" rc=0 helper_rc=0 lockfd=""
+  local aged="" cand="" suffix="" setstage="" cardstage="" ownhead="" ovl="false"
+  local mins=$(( COMPACT_CARD_MAX_AGE / 60 ))
+  tp=$(jq -r '.transcript_path // empty' <<<"$payload" 2>/dev/null) || return 0
+  trig=$(jq -r '.trigger // "auto"' <<<"$payload" 2>/dev/null) || trig="auto"
+  _hook_compact_scope "$tp" "$trig" || return 0
+  # MEASURED OUTSIDE THE LOCK, DELIBERATELY (spec §3.1, round 7 option A).
+  # Scope resolution and the graph measurement both fork and can be slow, and
+  # neither reads nor writes a canonical artifact — holding the row's mutex
+  # across them would serialise every sibling context of this session behind
+  # work that has nothing to exclude. The source-order pin over this function
+  # asserts exactly that: the acquire below sits AFTER both of these calls and
+  # BEFORE the overlap `find`.
+  rc=0; _hook_graph_measure || rc=$?
+  # ACQUIRE. From here to the release, this arm owns the row: the overlap
+  # verdict, the sweep and the initial canonical publication are one
+  # uninterrupted section, so no sibling can publish between the check and the
+  # act. A refusal (rc 1) or an absent mechanism (rc 2) publishes NOTHING —
+  # there is no unlocked fallback, which is what keeps §10's "no second
+  # lock-free concurrency regime" true.
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 0
+  lockfd="$HOOK_LOCK_FD"
+  # STEP 5: the generation, validated UNDER the lock and before any inspection.
+  _hook_generation_ok || { _hook_lock_release "$lockfd"; return 0; }
+  # OVERLAP (spec §3.0). One slot per session id, and every context of the
+  # session writes it. An unconsumed set still inside the in-flight window
+  # means another compaction is in flight (or failed inside the window), and
+  # no later arm can tell which context it serves — so BOTH degrade: this one
+  # is ambiguous and the earlier one's card is removed. The helper makes the
+  # verdict durable by re-reading the slot before each of its own writes.
+  # ONE `find`, two subjects: an unconsumed canonical set inside the window, and
+  # a young PostCompact claim, which is the same evidence one settlement step
+  # later — a compaction whose set has already been claimed is still in flight.
+  if [ -n "$(find "$REG" -maxdepth 1 \( -name "$id.compactset" -o -name ".$id.compactpost.*.claim" \) -mmin "-$mins" 2>/dev/null)" ]; then  # @anchor compact-pre-overlap-find
+    CS_RULE_SCOPE="$CS_SCOPE"; CS_RULE_TRANSCRIPT="$CS_TRANSCRIPT"   # the rule's own answer: the PreCompact line's (Overlord W1a)
+    CS_SCOPE="ambiguous"; CS_TRANSCRIPT=""; CS_AGENT=""; ovl="true"
+  fi
+  # ITEM 3 (r3 R1), and the first of this section's three: `find` ran between
+  # the acquire and here, so this is a fresh moment and it gets a fresh proof.
+  _hook_lock_still_canonical "$lockfd" || { _hook_lock_release "$lockfd"; return 0; }
+  [[ "$CS_SCOPE" != ambiguous ]] || rm -f "$cardf"
+  # THE SWEEP — EXACT FAMILY, age-gated, under this held lock. A hook killed
+  # between a temp write and its rename leaves a dot-leading private file
+  # invisible to `_reg_purge`'s dot-free loop, so somebody must reap it; but
+  # the pre-D-2605 `-name ".$id.*compact*.tmp" -delete` reaped by COINCIDENCE,
+  # and it is the code this task replaces, not merely re-comments. Candidates
+  # are enumerated by one `find` into a variable — `$( )` is synchronous, where
+  # a `< <( )` process substitution's child is not a child this shell waits for,
+  # which matters inside a held lock section — and each basename is then
+  # matched against the exact family grammar.
+  aged=$(find "$REG" -maxdepth 1 -name ".$id.*" -mmin "+$mins" 2>/dev/null) || aged=""
+  # ITEM 3 again, and for the `find` alone: it is a synchronous child, which is
+  # the window a replacement lands in. The LOOP is outside item 3 — it mutates
+  # only private `.<id>.` family members, never a canonical pathname.
+  _hook_lock_still_canonical "$lockfd" || { _hook_lock_release "$lockfd"; return 0; }
+  while IFS= read -r cand; do
+    [[ -n "$cand" ]] || continue
+    suffix="${cand##*/}"; suffix="${suffix#".$id."}"
+    _hook_family_sweepable "$suffix" || continue
+    rm -f "$cand" 2>/dev/null || true  # @anchor compact-sweep-rm
+  done <<<"$aged"
+  at=$(_hook_epoch_ms)
+  nonce="compact-${at}-${$}-${RANDOM}-${RANDOM}"
+  # `at` is the epoch-ms measurement. The nonce is the collision-resistant slot
+  # identity, preserved in the set head and passed to the helper/card line 1.
+  # `overlap` IS THE ONLY CHANNEL §3.0 GIVES POSTCOMPACT to tell an
+  # overlap-DEGRADED set from a genuinely ambiguous verdict: the branch above
+  # writes the same `scope` for both, and the two prescribe different records
+  # (a forced one may attribute nothing at all). It is published HERE and only
+  # here. The Task-1–8 helper rewrites the set WITHOUT this member, which §3.0
+  # rules legacy-compatible ordinary/false — and that is sound rather than
+  # merely tolerated, because a `true` value never reaches the helper at all:
+  # the ambiguous return below sits between this publication and the helper
+  # fork, so every set the helper rewrites had `overlap:false`.
+  doc=$(jq -cn --arg scope "$CS_SCOPE" --arg agent "$CS_AGENT" --arg t "$CS_TRANSCRIPT" \
+      --arg pl "$CS_PARENT_LIVE" --arg ln "$CS_LIVE_N" --arg nonce "$nonce" --arg ovl "$ovl" \
+      --arg cwd "$GM_CWD" --arg built "$GM_BUILT" --arg fresh "$GM_FRESH" --argjson at "$at" \
+      '{v:1, at:$at, nonce:$nonce, scope:$scope, overlap:($ovl == "true"),
+        agent:(if $agent=="" then null else $agent end),
+        transcript:(if $t=="" then null else $t end),
+        parentLive:(if $pl=="true" then true elif $pl=="false" then false else null end),
+        liveAgents:(if $ln=="" then null else ($ln|tonumber) end),
+        cwd:(if $cwd=="" then null else $cwd end),
+        built:(if $built=="" then null else $built end),
+        fresh:(if $fresh=="" then null else $fresh end),
+        steered:false, files:null, stats:null}' 2>/dev/null) || { _hook_lock_release "$lockfd"; return 0; }
+  # ITEM 3, the third: `date` and `jq` both ran since the last proof, and this
+  # is the section's one canonical PUBLICATION.
+  _hook_lock_still_canonical "$lockfd" || { _hook_lock_release "$lockfd"; return 0; }
+  _hook_write_atomic "$set" "$nonce" "$doc" || { _hook_lock_release "$lockfd"; return 0; }
+  # RELEASE BEFORE THE HELPER FORK (spec §3.1, round 6/7). A held `flock`
+  # descriptor is inherited across fork/exec in bash — measured, an exec'd
+  # child's `/proc/self/fd` lists the parent's lock fd, and the lock lifts only
+  # when EVERY referencing descriptor closes — so a helper that outlived its
+  # deadline would hold this row's mutex with it. Every child forked ABOVE this
+  # line is synchronous and reaped inside the section, which is what makes
+  # holding the descriptor across them compliant.
+  _hook_lock_release "$lockfd"; lockfd=""
+  [[ "$CS_SCOPE" != ambiguous ]] || return 0
+  [ "$rc" -eq 0 ] && _hook_gate_tree || return 0
+  [ -f "$COMPACT_HELPER" ] || return 0
+  # STEP 10. TWO PRIVATE STAGE PATHS THIS ARM NAMES ITSELF, and NO canonical
+  # pathname anywhere in the helper's argv — the load-bearing property of
+  # round 7's option A. `--parent-live`/`--live-agents` carry the two §3.0
+  # provenance values verbatim, because with `--set` gone the helper has no
+  # other channel to learn them and deriving them from `--scope` would be a
+  # different measurement wearing the same name. There is no `--trigger`: the
+  # record's trigger comes from the PostCompact payload at `measure` time.
+  setstage="$REG/.$id.compactset.$$.$nonce.stage"
+  cardstage="$REG/.$id.compactcard.$$.$nonce.stage"
+  _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" card \
+    --transcript "$CS_TRANSCRIPT" --cwd "$GM_CWD" \
+    --graph "$GM_CWD/graphify-out/graph.json" \
+    --labels "$GM_CWD/graphify-out/.graphify_labels.json" \
+    --set-stage "$setstage" --card-stage "$cardstage" \
+    --parent-live "$CS_PARENT_LIVE" --live-agents "$CS_LIVE_N" \
+    --max-chars "$(( COMPACT_CARD_MAX_CHARS - ${HISTORY_CARD_RESERVE:-0} ))" --max-files "$COMPACT_WORKSET_MAX" \
+    --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$CS_SCOPE" --at "$at" --nonce "$nonce" \
+    ${CS_AGENT:+--agent "$CS_AGENT"} >/dev/null 2>&1
+  helper_rc=$?
+  # STEP 11. REACQUIRE. A miss leaves the two stages exactly where they are, as
+  # age-eligible exact-family residue a later lock-holding sweep reclaims, and
+  # publishes nothing — never an unlocked rename.
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 0
+  lockfd="$HOOK_LOCK_FD"
+  # STEP 12, first half: the generation AGAIN. The row can be purged and
+  # re-created while the helper runs, and a rename taken on that authority
+  # would publish this pane's measurement into another session's slot.
+  if ! _hook_generation_ok; then
+    rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
+    _hook_lock_release "$lockfd"; return 0
+  fi
+  # STEP 12, SECOND HALF: WHAT THE CANONICAL PATHNAME NOW HOLDS, asked before
+  # it is opened (r3 A-I1). Across the helper window this arm holds no lock by
+  # design, so the object at `$set` on reacquire may be anything a same-UID
+  # stranger left there — and `2>/dev/null` silences NOTHING for the read
+  # below: a FIFO blocks in open(2) rather than failing, so the redirection
+  # never returns. Measured, that parks this process INSIDE the held stable
+  # lock for ever, and because Task 9 put `_reg_purge` under the same lock it
+  # takes the row's whole destruction path with it — every later PreCompact,
+  # PostCompact and compact SessionStart, plus `ccd ws-rm`, `ccd forget`,
+  # `ccd ws-gc --prune`, `ccd ws-reap` and `ws-add`/`start` for that slug,
+  # refuse that row permanently. That is the wedge §3.4's fail-open ruling
+  # exists to prevent, reached by an unbounded hang instead of a refusal.
+  # The sibling arms already ask exactly this — PostCompact's settlement
+  # (`[[ -f "$set" && ! -L "$set" && -r "$set" ]]`) and the serve arm's
+  # `[[ -f "$set" && -r "$set" ]]` — and this was the only arm without it and
+  # the only one whose failure had no bound.
+  #
+  # A FAILURE HERE READS "THE SLOT IS NOT OURS", the same disposition as the
+  # nonce miss below: drop this process's own stages and publish nothing. An
+  # ABSENT set keeps today's semantics EXACTLY rather than gaining a new one —
+  # the redirection already failed silently, `ownhead` already stayed empty and
+  # the nonce test below already published nothing — the arm simply now says so
+  # before the open rather than after it.
+  if ! [[ -f "$set" && ! -L "$set" && -r "$set" ]]; then
+    rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
+    _hook_lock_release "$lockfd"; return 0
+  fi
+  # STEP 12. THE COMPARE-AND-SWAP. Re-read the canonical set's HEAD with the
+  # bounded, fork-free `read -N` idiom this file already uses on the serve side
+  # and require the nonce to still be ours. Bash has no `slotIsMine`
+  # counterpart and does not need one: because this check and the renames below
+  # sit inside the SAME held section, they are one compare-and-swap — which
+  # round 6's helper-side check, whose act was a separate later write, could
+  # never be. A sibling that published its own verdict while the helper ran
+  # owns the slot now, and this arm publishes NOTHING over it.
+  IFS= read -r -N 4096 ownhead 2>/dev/null < "$set"
+  # ITEM 3, before the two renames: the reacquire proved identity at ITS
+  # moment, and the whole helper window sat before it. The disposition is this
+  # arm's own — drop this process's stages, publish nothing.
+  if ! _hook_lock_still_canonical "$lockfd"; then
+    rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
+    _hook_lock_release "$lockfd"; return 0
+  fi
+  if [[ "$ownhead" =~ \"nonce\":\"([^\"]+)\" ]] && [[ "${BASH_REMATCH[1]}" == "$nonce" ]]; then
+    # STEP 13. CARD BEFORE SET, one uninterrupted section. In stage 2 the print
+    # and the `steered` stamp sit between these two renames; Plan A runs
+    # neither, so the helper's staged `steered:false` is published unchanged.
+    if [[ "$helper_rc" == 0 ]]; then
+      mv -f "$cardstage" "$cardf" 2>/dev/null || true
+      # ITEM 3, BETWEEN THE TWO RENAMES (r4 A-M2). `mv` is an external binary,
+      # so the card rename above FORKED: the proof at step 12 is no longer this
+      # moment, and the two renames used to share it across that child. Only
+      # the rc 0 arm needs this one — the rc 3 arm below branches away before
+      # the card rename and reaches its own rename with step 12's proof and
+      # nothing forked in between.
+      #
+      # WHAT A REFUSAL HERE LEAVES, and why it is safe to take: the card is
+      # published and the canonical set still holds STEP 7's own publication —
+      # the same nonce, with `files`/`stats` null because the helper's staged
+      # set never replaced it. The serve arm inspects exactly that pair (card
+      # line 1 against the set's head nonce) and serves it; and it is already
+      # today's state whenever the set-stage rename below fails, which that
+      # line's own `|| true` tolerates. So the intermediate state is one the
+      # next arm already handles, and the proof costs it nothing. (Spelled
+      # without the rename's own text: the item-3 source scan anchors on that
+      # statement and counts its occurrences, and a comment quoting it is a
+      # third hit.)
+      if ! _hook_lock_still_canonical "$lockfd"; then
+        rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
+        _hook_lock_release "$lockfd"; return 0
+      fi
+      mv -f "$setstage" "$set" 2>/dev/null || true
+    elif [[ "$helper_rc" == 3 ]]; then
+      mv -f "$setstage" "$set" 2>/dev/null || true
+    fi
+  fi
+  # ONLY THIS PROCESS'S OWN STAGES, on every non-publishing outcome — a failed
+  # reconfirm, a non-0/3 exit, a timeout — and a no-op after a successful
+  # rename. The `.part` names are the helper's own mid-write residue.
+  rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
+  # STEP 14.
+  _hook_lock_release "$lockfd"; lockfd=""
+  return 0
+}
+
+# ── PostCompact (spec §3.4): SETTLE, MEASURE, COMMIT ONE JOURNAL LINE ─────
+# The compaction's sole authoritative measurement, and the one phase whose lock
+# miss loses something UNRECOVERABLE rather than something a later aged sweep
+# repairs — which is why it takes the same COMPACT_LOCK_WAIT settlement uses
+# rather than a shorter bound of its own.
+#
+# THE TWO BRANCHES ARE DISTINGUISHED BY A PATHNAME TEST, NOT BY A `link`
+# RETURN CODE. A genuinely absent canonical set and a present-but-unlinkable
+# one both surface as a failing `link` in bash, and folding them together
+# silently unmeasures whichever population is absent. Under option A that test
+# now has exactly ONE meaning, too: every canonical existence transition and
+# every existence test happens inside a held stable-lock section, and no
+# PreCompact-side rollback survives to compose with, so "absent under this
+# lock" means nothing was ever published for this compaction.
+_hook_compact_post() {
+  [ -e "$COMPACT_CARD_OFF" ] && return 0
+  local set="$REG/$id.compactset" journal="$REG/$id.compactions"
+  local summary="" trig="" lockfd="" claim="" snap="" stage="" jfd="" claimfd=""
+  # Cleared on entry for the reason every out-parameter in this tree is: a
+  # value from a previous call read as this one's is the fabricated fact.
+  POST_CLAIM_FD=""
+  local present=0 meas="" rec="" nonce="" cand="" served="false" tries=0 head="" old=""
+  local aged=0 norm=""
+  summary=$(jq -r '.compact_summary // empty' <<<"$payload" 2>/dev/null) || return 0
+  [[ -n "$summary" ]] || return 0
+  trig=$(jq -r '.trigger // "auto"' <<<"$payload" 2>/dev/null) || trig="auto"
+  [[ "$trig" == manual || "$trig" == auto ]] || trig="auto"
+  command -v find   >/dev/null 2>&1 || return 0
+  command -v touch  >/dev/null 2>&1 || return 0
+  command -v mktemp >/dev/null 2>&1 || return 0
+  [ -f "$COMPACT_HELPER" ] || return 0
+
+  # ── SETTLEMENT, under the row's mutex ──────────────────────────────────
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 0
+  lockfd="$HOOK_LOCK_FD"
+  _hook_generation_ok || { _hook_lock_release "$lockfd"; return 0; }
+  if [ -e "$set" ] || [ -L "$set" ]; then present=1; fi
+  if (( present )); then
+    if ! [[ -f "$set" && ! -L "$set" && -r "$set" ]]; then _hook_lock_release "$lockfd"; return 0; fi
+    while (( tries < 8 )); do
+      claim="$REG/.$id.compactpost.$$.$RANDOM.$RANDOM.claim"
+      [ -e "$claim" ] || [ -L "$claim" ] || break
+      claim=""; tries=$(( tries + 1 ))
+    done
+    [[ -n "$claim" ]] || { _hook_lock_release "$lockfd"; return 0; }
+    # NEVER PRECREATED: `link` is the create, so exactly one process can win
+    # this name, and the claim is this compaction's private copy of canonical.
+    link "$set" "$claim" 2>/dev/null || { _hook_lock_release "$lockfd"; return 0; }
+    [[ "$claim" -ef "$set" ]] || { rm -f "$claim" 2>/dev/null; _hook_lock_release "$lockfd"; return 0; }
+    # THE ORIGINAL AGE, MEASURED HERE AND NOWHERE LATER (spec §3.0's fourth
+    # normalisation trigger). It has to be read before the `touch` below,
+    # because HARD LINKS SHARE MTIME: after that stamp the claim — and the
+    # inode canonical used to name — both read young, and the pre-settlement
+    # age is unrecoverable. This is the measurement `command -v find` above is
+    # the guard for; without it that guard guards nothing.
+    #
+    # An aged set is still CLAIMED and still consumed. Age gates only what may
+    # be ATTRIBUTED: a PreCompact that went inert for one of its documented
+    # silent reasons leaves a PREVIOUS compaction's set standing, and copying
+    # its transcript, agent and cwd onto this compaction's line is a wrong
+    # record — worse than a missing one. A `find` that answers nothing, for any
+    # reason, reads AGED, which is the direction that attributes less.
+    [ -n "$(find "$set" -mmin "-$(( COMPACT_CARD_MAX_AGE / 60 ))" 2>/dev/null)" ] || aged=1
+    # UNLINK CANONICAL BEFORE TOUCHING THE CLAIM, and the order is the whole
+    # point: HARD LINKS SHARE MTIME (measured), so a `touch` taken while both
+    # names still point at one inode would age canonical too, and a sibling's
+    # overlap check would then read this settled compaction as still in flight.
+    # ITEM 3, before the settlement's own two mutations: a `find` ran just
+    # above for the age measurement, so the proof is taken again here. The
+    # disposition is the one the `rm` failure below already uses.
+    if ! _hook_lock_still_canonical "$lockfd"; then
+      rm -f "$claim" 2>/dev/null || true
+      _hook_lock_release "$lockfd"; return 0
+    fi
+    if ! rm -f "$set" 2>/dev/null; then
+      # Only the VERIFIED claim goes; canonical's bytes and mtime are untouched.
+      rm -f "$claim" 2>/dev/null || true
+      _hook_lock_release "$lockfd"; return 0
+    fi
+    # ITEM 3, BETWEEN THE UNLINK AND THE TOUCH (r4 A-M2). `rm` is an external
+    # binary, so the unlink above FORKED and the proof at the top of this pair
+    # is no longer this moment. The `touch` is not a canonical write — by then
+    # the claim is the only name for those bytes — but it IS read outside this
+    # process: PreCompact's overlap `find` measures `.$id.compactpost.*.claim`
+    # by mtime, so stamping it under a lock that stopped naming canonical
+    # publishes a settlement verdict this process no longer has the right to.
+    #
+    # WHAT A REFUSAL HERE LEAVES, and why it is safe to take: canonical is
+    # unlinked and the claim is RETAINED, untouched, holding the only verified
+    # copy of those bytes at the set's own original mtime. That is exactly the
+    # terminal state the failed-`touch` restore below already leaves whenever
+    # its no-clobber `link` collides or cannot be proved, and the overlap
+    # measurement a sibling takes off the untouched claim is the value it would
+    # have read off canonical itself. A later PostCompact finds no canonical
+    # set and takes the absent-set branch, which attributes nothing; the claim
+    # is a §3.4 target family and an aged sweep under a later held lock
+    # reclaims it. The refusal must NOT attempt the restore below: `link
+    # "$claim" "$set"` is a canonical mutation and this proof has just said
+    # this descriptor may not take one.
+    if ! _hook_lock_still_canonical "$lockfd"; then
+      _hook_lock_release "$lockfd"; return 0
+    fi
+    if ! touch "$claim" 2>/dev/null; then
+      # ITEM 3, AND THE `touch` ABOVE IS THE FORK (r5 R4-M4). The restore below
+      # WRITES a canonical pathname — the block before the `touch` already calls
+      # `link "$claim" "$set"` a canonical mutation — and `touch` is an external
+      # binary, so the proof taken two statements up is no longer this moment.
+      # Without this one a stranger that replaced the lock inside that fork
+      # would see this process publish canonical with no row mutex and then, on
+      # a successful `-ef`, unlink the claim holding the only verified copy of
+      # those bytes: the exact state the proof above the `touch` was added to
+      # forbid, reachable one `touch` later.
+      #
+      # ON A FAILED PROOF THERE IS NO RESTORE AND NO REMOVAL, which is not a new
+      # terminal state: it is the one this arm already reaches whenever the
+      # no-clobber `link` collides or cannot be proved — canonical unlinked, the
+      # claim RETAINED untouched at the set's own original mtime, no journal
+      # line, the row released. A later PostCompact finds no canonical set and
+      # takes the absent-set branch, which attributes nothing, and the claim is
+      # a §3.4 target family an aged sweep under a later held lock reclaims.
+      if ! _hook_lock_still_canonical "$lockfd"; then
+        _hook_lock_release "$lockfd"; return 0
+      fi
+      # RESTORE canonical only by no-clobber `link`, and only onto an absent
+      # pathname. If the restore collides, fails, or cannot be proved, the
+      # occupant is never overwritten and the only verified copy of these bytes
+      # is never discarded — the claim is RETAINED as exact recovery residue.
+      if link "$claim" "$set" 2>/dev/null && [[ "$claim" -ef "$set" ]]; then
+        rm -f "$claim" 2>/dev/null || true
+      fi
+      _hook_lock_release "$lockfd"; return 0
+    fi
+    # THE RETAINED CLAIM FD. From here the helper's input is this descriptor's
+    # own bytes — an FD-derived private snapshot — never canonical and never a
+    # reopened claim pathname.
+    { exec {claimfd}<"$claim"; } 2>/dev/null || { _hook_lock_release "$lockfd"; return 0; }
+    # A PRIVATE EXCLUSIVE FILE, created by a no-clobber redirection — NOT an
+    # `mktemp` row. The §3.4 table reserves `mktemp` for the three families
+    # whose name must be unguessable (the lock init source, the marker source,
+    # the generation source); this one is already private by construction, its
+    # name carrying this process's pid and two `$RANDOM` components, and it
+    # takes no `XXXXXX` template. (Measured: spelling it as `mktemp` with this
+    # name fails outright — mktemp requires at least three trailing `X`s — and
+    # the arm silently committed nothing.)
+    tries=0; snap=""
+    while (( tries < 8 )); do
+      snap="$REG/.$id.compactions-snapshot.$$.$RANDOM.$RANDOM.tmp"
+      [ -e "$snap" ] || [ -L "$snap" ] || break
+      snap=""; tries=$(( tries + 1 ))
+    done
+    [[ -n "$snap" ]] || { { exec {claimfd}<&-; } 2>/dev/null; _hook_lock_release "$lockfd"; return 0; }
+    if ! { ( umask 077; set -C; : > "$snap" ); } 2>/dev/null || [[ ! -f "$snap" || -L "$snap" ]]; then
+      { exec {claimfd}<&-; } 2>/dev/null; _hook_lock_release "$lockfd"; return 0
+    fi
+    # A FAILED COPY TAKES THE SAME DISPOSITION AS A FAILED SNAPSHOT CREATION
+    # eight lines above — return WITHOUT committing, leaving the verified claim
+    # as residue. The alternative this replaces cleared `$snap` and fell
+    # through, which reached the no-set record from a compaction that HAD a
+    # set and then discarded the claim holding the only surviving copy of those
+    # bytes (canonical is already unlinked here). That gave §3.4's absent
+    # branch a SECOND meaning, and an adapter may not narrow a distinction it
+    # received: the no-set branch is entered from the PATHNAME test alone.
+    if ! { cat <&"$claimfd" > "$snap"; } 2>/dev/null; then
+      { exec {claimfd}<&-; } 2>/dev/null || true
+      rm -f "$snap" 2>/dev/null || true      # this process's own, and only it
+      _hook_lock_release "$lockfd"; return 0
+    fi
+    # NOT CLOSED HERE. §3.4's settlement sentence requires the final
+    # transaction to revalidate "generation and claim-FD/current-path
+    # identity", and an FD closed at the snapshot cannot answer the second
+    # half: between the release below and the final reacquire the lock is not
+    # held — `measure` runs there by design — so the claim PATHNAME is
+    # unguarded for that window, and unlinking it by name afterwards is an
+    # unlink of whatever now wears the name. The descriptor is the only thing
+    # that still names the inode this process linked.
+    POST_CLAIM_FD="$claimfd"
+  fi
+  _hook_lock_release "$lockfd"; lockfd=""
+
+  # ── MEASURE, outside the lock, with the lock descriptor already closed ──
+  # `measure` reads the summary from a PIPE: under `set -uo pipefail` a failed
+  # `jq` fails the pipeline and this arm stops, so a zero is never recorded for
+  # a summary that was never read.
+  #
+  # ── §3.0 NORMALISATION, DECIDED ONCE, BEFORE `measure` IS CALLED ───────
+  # `norm` empty means the claim is ordinary and provenance-ELIGIBLE and is
+  # passed with `--set`; otherwise it holds the ONE `scope` the normalized
+  # record commits, and `measure` runs WITHOUT `--set` so `cited`, `setSize`
+  # and all six provenance fields are null either way. The three tests are in
+  # §3.0's own precedence order and AGE IS LAST AND WINS — stated in prose
+  # there precisely because JOURNAL_RECORD_PRED accepts both spellings, so the
+  # predicate is not the mechanism that decides it.
+  #
+  # THE GRAMMAR IS NOT RE-SPELLED HERE. `NORMAL_PROVENANCE` already carries
+  # §3.0's four-row table plus the per-field shapes; the set document uses the
+  # same member names and lacks only `trigger`, which the record takes from
+  # THIS payload — so the check is that definition applied to the claim with
+  # this run's trigger spliced in. A jq that fails for any reason (a malformed
+  # document, unparseable bytes) leaves `norm` set, which is the direction that
+  # attributes nothing.
+  #
+  # THE ONE THING `NORMAL_PROVENANCE` DOES NOT COVER, spelled here because it
+  # is a property of the CLAIM and not of the record: `files`. §4's row says a
+  # set any of whose `files[]` entries lacks a non-empty string `path` is
+  # "measured as NO set", and §3.0 lists it as a normalisation trigger — but
+  # `NORMAL_PROVENANCE` validates trigger/scope/agent/transcript/parentLive/
+  # liveAgents/cwd/built and never looks at `files`, and the RECORD has no
+  # `files` member for it to reach. Without this fourth clause a set with valid
+  # provenance and one malformed entry was passed with `--set` and committed
+  # `scope` plus six non-null provenance fields where §4 requires seven nulls;
+  # the predicate accepts that line, so only this decision can refuse it. It is
+  # spelled in the DIRECTION that attributes nothing: anything but a `files`
+  # that is absent, or an array every element of which is an object with a
+  # non-empty string `path`, sets `norm`.
+  if [[ -n "$snap" ]]; then  # @anchor compact-post-norm
+    if (( aged )); then
+      norm="null"
+    elif jq -e '.overlap == true' "$snap" >/dev/null 2>&1; then
+      norm="ambiguous"
+    elif ! jq -e --arg trig "$trig" "$JOURNAL_RECORD_PRED_DEFS"'
+            (.overlap == null or .overlap == false)
+            and (. + {trigger: $trig} | NORMAL_PROVENANCE)
+            and (.files == null or (.files | type == "array"
+                 and all(.[]; type == "object"
+                              and (.path | type == "string")
+                              and (.path | length > 0))))' "$snap" >/dev/null 2>&1; then
+      norm="null"
+    fi
+  fi
+  if [[ -n "$snap" && -z "$norm" ]]; then
+    meas=$(printf '%s' "$summary" | _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" measure \
+             --set "$snap" --trigger "$trig" 2>/dev/null) || meas=""
+  else
+    meas=$(printf '%s' "$summary" | _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" measure \
+             --trigger "$trig" 2>/dev/null) || meas=""
+  fi
+  # EXACTLY ONE DOCUMENT, and a cheap shape gate BEFORE the strictly stronger
+  # record predicate below — `jq -ce -s` over the helper's raw stdout.
+  if ! printf '%s' "$meas" | jq -ce -s "length == 1 and (.[0] | $COMPACT_SHAPE_PRED)" >/dev/null 2>&1; then
+    _hook_compact_post_abandon "$claim" "$snap"; return 0
+  fi
+
+  # ── THE FINAL TRANSACTION, under a reacquired lock ──────────────────────
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT" || { _hook_compact_post_abandon "" "$snap"; return 0; }
+  lockfd="$HOOK_LOCK_FD"
+  # REVALIDATED before the one act no later sweep can repair.
+  _hook_generation_ok || { _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0; }
+  # `served` IS MARKER-DERIVED, never copied from a set: looked up here, under
+  # the final lock, from the separately validated safe nonce this claim
+  # carries. An unsafe or missing nonce forms no marker path and reads false.
+  if [[ -n "$snap" ]]; then
+    IFS= read -r -N 4096 head 2>/dev/null < "$snap"
+    if [[ "$head" =~ \"nonce\":\"([^\"]+)\" ]]; then
+      # THE GATE CAME FIRST AND `nonce` IS ASSIGNED ONLY INSIDE IT (r3 A-M2).
+      # The capture used to sit here, outside the grammar test, and the commit
+      # path 106 lines below builds `rm -f "$REG/.$id.compactserved.$nonce"`
+      # from it — so an unsafe value DID form a marker pathname, which is the
+      # opposite of what the comment above and §3.3 step 2 both say ("it gates
+      # a PATH COMPONENT ... a nonce this refuses forms no marker path at
+      # all"). MEASURED on the shipped arm: a canonical set carrying
+      # `"nonce":"x/../victim"`, a directory at `$REG/.<id>.compactserved.x`
+      # and a file at `$REG/victim` — one PostCompact committed its record and
+      # DELETED `$REG/victim`, a registry file that is not a marker. It grants
+      # no capability an out-of-contract same-UID writer does not already have,
+      # which is why it is Minor; what it did was falsify a shipped invariant
+      # for the sake of two moved lines.
+      #
+      # `cand` is the local the gate reads. `nonce` stays EMPTY on a refusal,
+      # and the `[[ -z "$nonce" ]] ||` guard on the removal path then means
+      # exactly what its own comment already claimed.
+      cand="${BASH_REMATCH[1]}"
+      # `-f` AND NOT `-L`, never a bare `-e`: this is the READING end of the
+      # marker the compact SessionStart arm publishes, and a bare existence
+      # test answers `served:true` for a symlink to anything and `served:false`
+      # for a dangling one — a durable claim about a compaction derived from an
+      # object that is not a marker. The two ends spell one definition. (The
+      # publishing function is deliberately NOT named here: a scan beside the
+      # retained-serve-lock pin asserts that no function body in this file
+      # mentions it, which is how "its only call site is top level" is
+      # measured.)
+      if [[ "$cand" =~ ^compact-[0-9]+-[0-9]+-[0-9]+-[0-9]+$ ]]; then
+        nonce="$cand"
+        if [[ -f "$REG/.$id.compactserved.$nonce" && ! -L "$REG/.$id.compactserved.$nonce" ]]; then served="true"; fi
+      fi
+    fi
+  fi
+  # THE SIXTEEN-KEY RECORD: the helper's measurement ENRICHED with the six
+  # provenance fields copied from the set, and with `served` overridden by the
+  # marker. Without a set every one of the six is null, which is §3.0's
+  # normalized no-set grammar and NOT the same answer as `"main"`.
+  if [[ -n "$snap" && -z "$norm" ]]; then
+    rec=$(jq -cn --argjson m "$meas" --slurpfile s "$snap" --argjson sv "$served" \
+      '$s[0] as $set | $m + {served: $sv,
+        cwd: $set.cwd, built: $set.built, agent: $set.agent,
+        transcript: $set.transcript, parentLive: $set.parentLive, liveAgents: $set.liveAgents}' 2>/dev/null) || rec=""
+  else
+    # ONE SPELLING FOR BOTH NO-`--set` POPULATIONS — the genuinely absent
+    # canonical set (`snap` empty, `norm` empty, `served` still its false
+    # initialiser) and a normalized claim (`norm` set, `served` MARKER-derived,
+    # exactly as §3.0 requires of every normalization case). `cited`/`setSize`
+    # are NOT overridden: `measure` without `--set` already answers null for
+    # both, and overriding them here would hide a helper that did not.
+    rec=$(jq -cn --argjson m "$meas" --argjson sv "$served" --arg norm "$norm" \
+      '$m + {served: $sv, scope: (if $norm == "ambiguous" then "ambiguous" else null end),
+             cwd: null, built: null, agent: null,
+             transcript: null, parentLive: null, liveAgents: null}' 2>/dev/null) || rec=""
+  fi
+  [[ -n "$rec" ]] || { _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0; }
+  printf '%s' "$rec" | jq -ce "$JOURNAL_RECORD_PRED_DEFS JOURNAL_RECORD_PRED" >/dev/null 2>&1 \
+    || { _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0; }
+
+  # THE STAGE: a never-precreated exact table name, validated as this writer's
+  # own regular non-symlink file.
+  tries=0; stage=""
+  while (( tries < 8 )); do
+    stage="$REG/.$id.compactions-stage.$$.$RANDOM.$RANDOM.tmp"
+    [ -e "$stage" ] || [ -L "$stage" ] || break
+    stage=""; tries=$(( tries + 1 ))
+  done
+  [[ -n "$stage" ]] || { _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0; }
+  if ! { ( umask 077; set -C; : > "$stage" ); } 2>/dev/null; then
+    _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0
+  fi
+  # VALIDATED AS THIS WRITER'S OWN regular non-symlink file before a byte of
+  # the old journal is copied into it.
+  [[ -f "$stage" && ! -L "$stage" ]] || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+  old=""
+  if [ -e "$journal" ] || [ -L "$journal" ]; then
+    [[ -f "$journal" && ! -L "$journal" && -r "$journal" ]] \
+      || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+    { exec {jfd}<"$journal"; } 2>/dev/null || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+    { cat <&"$jfd" > "$stage"; } 2>/dev/null \
+      || { { exec {jfd}<&-; } 2>/dev/null; _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+    # `$( )` STRIPS EVERY TRAILING NEWLINE (measured), and a journal always ends
+    # in one — so a bare `old=$(cat …)` loses exactly the byte that makes the
+    # length equality below exact, and the SECOND record of a session's life is
+    # refused while the first commits. The `printf x` sentinel plus `${old%x}`
+    # is what keeps the prefix byte-exact.
+    old=$(cat "$stage" 2>/dev/null; printf x) || old="x"
+    old="${old%x}"
+  fi
+  { printf '%s\n' "$rec" >> "$stage"; } 2>/dev/null \
+    || { [[ -n "$jfd" ]] && { exec {jfd}<&-; } 2>/dev/null; _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+  # THE RAW VALIDATOR over the WHOLE stage, plus exactly one additional line
+  # byte-equal to the object — so a commit that appended twice, or appended
+  # something the predicate would not accept, never reaches canonical.
+  if ! jq -ce -R -s --arg rec "$rec" --arg old "$old" \
+        "$JOURNAL_RECORD_PRED_DEFS $JOURNAL_STAGE_PRED" < "$stage" >/dev/null 2>&1; then
+    [[ -n "$jfd" ]] && { exec {jfd}<&-; } 2>/dev/null
+    _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0
+  fi
+  # THE FD COMPARE-AND-SWAP: an initially PRESENT journal must still be the same
+  # retained regular FD, and an initially ABSENT one must still be absent.
+  if [[ -n "$jfd" ]]; then
+    if ! _hook_lock_same "$jfd" "$journal"; then
+      { exec {jfd}<&-; } 2>/dev/null
+      _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0
+    fi
+    { exec {jfd}<&-; } 2>/dev/null || true
+  elif [ -e "$journal" ] || [ -L "$journal" ]; then
+    _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0
+  fi
+  # ITEM 3, before the journal commit: this section reacquired, then read and
+  # wrote a private stage through several synchronous children. Same handler as
+  # a failed `mv`, because the outcome is the same one — nothing committed, and
+  # this arm's own residue cleaned up.
+  _hook_lock_still_canonical "$lockfd" || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+  mv -f "$stage" "$journal" 2>/dev/null || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+  # COMMITTED. Claim and marker cleanup happens ONLY here, under the
+  # successfully reacquired and validated lock — never on a failure path.
+  #
+  # THE CLAIM IS CONSUMED BY IDENTITY, NOT BY NAME (§3.4 settlement). The
+  # retained descriptor and the current pathname must still be one regular
+  # inode; if they are not, the name was replaced while the lock was down and
+  # the occupant is a stranger's file this arm has no licence to delete. The
+  # record still commits — it was built from the snapshot, which is
+  # FD-derived — and the stranger is left exactly where it was.
+  if [[ -n "$claim" ]] && [[ -n "${POST_CLAIM_FD:-}" ]] \
+     && _hook_lock_same "$POST_CLAIM_FD" "$claim"; then
+    rm -f "$claim" 2>/dev/null || true
+  fi
+  _hook_post_claim_close
+  [[ -z "$snap" ]]  || rm -f "$snap"  2>/dev/null || true
+  [[ -z "$nonce" ]] || rm -f "$REG/.$id.compactserved.$nonce" 2>/dev/null || true
+  _hook_lock_release "$lockfd"
+  return 0
+}
+
+# NO UNLOCKED CLEANUP. When the final lock is not safely held, the verified
+# claim and the exact marker are LEFT as residue for a later aged recovery
+# under a validated lock — discarding the only verified copy of a compaction's
+# set because this process could not take a lock is the one thing this arm may
+# not do. Only this process's own snapshot goes, and only because nothing else
+# can ever read it.
+_hook_compact_post_abandon() {   # <claim> <snapshot>
+  # The retained claim descriptor goes on this path too — see
+  # `_hook_compact_post_fail`'s note. The CLAIM FILE is deliberately left:
+  # abandoning is what "leave the only verified copy as recovery residue"
+  # means, and a descriptor is not a copy.
+  _hook_post_claim_close
+  [[ -z "${2-}" ]] || rm -f "$2" 2>/dev/null || true
+  return 0
+}
+
+# The final lock IS held here, so this path may consume this process's own
+# stage and snapshot — but it still leaves the claim and the marker, because a
+# noncommit means the measurement has not been recorded and the evidence must
+# outlive the attempt.
+_hook_compact_post_fail() {   # <lockfd> <claim> <snapshot> [<stage>]
+  # THE RETAINED CLAIM DESCRIPTOR GOES HERE TOO, and it rides a named global
+  # rather than a fifth positional: this helper has fifteen call sites, and a
+  # new positional threaded through all of them is fifteen chances to pass the
+  # wrong thing. `POST_CLAIM_FD` is set beside the `exec` that opens it and
+  # cleared by whoever closes it, so "is it still open" has exactly one answer.
+  _hook_post_claim_close
+  [[ -z "${4-}" ]] || rm -f "$4" 2>/dev/null || true
+  [[ -z "${3-}" ]] || rm -f "$3" 2>/dev/null || true
+  _hook_lock_release "${1-}"
+  return 0
+}
+
+_hook_post_claim_close() {   # close the retained claim FD, once, from anywhere
+  [[ -n "${POST_CLAIM_FD:-}" ]] || return 0
+  local fd="$POST_CLAIM_FD"
+  POST_CLAIM_FD=""
+  { exec {fd}<&-; } 2>/dev/null || true
+  return 0
+}
+
+# ── SessionStart(compact) (spec §3.3): SERVE THE CARD ONCE, TO ITS SET ────
+# This arm cannot tell which context it serves (§3.0: the compactor has been
+# silent for ≥79 s by now) and NEVER resolves. It serves the card iff the card
+# is the set's own — line 1 of the card is the set's `nonce` — and consumes it.
+# An aged card belongs to no compaction that can still arrive and is REMOVED
+# (a dot-free registry file that outlives its use would hold the slug); a
+# crossed pair — another nonce, or no set — serves nothing and leaves the card
+# for the overlap check or the age bound to retire. THE ONLY CLIP LIVES IN THE
+# EMITTER (`_hook_emit_context`'s `${2:0:$COMPACT_CARD_MAX_CHARS}`) — a second
+# slice here was a duplicate in series with it: each was a complete substitute
+# for the other, so neither alone was pinnable (fix-round I1). The bounded
+# `read -N COMPACT_CARD_MAX_CHARS+64` below is not that clip; it is the real
+# cost guard — measured on a 100 MB card, 114 ms vs 17,370 ms for a `cat` fork
+# (152x) — and stays, uncoupled from the emitter's own slice.
+#
+# UNDER THE ROW'S MUTEX, FOR ITS WHOLE BODY (spec §3.3, D-2605). The acquire
+# sits immediately after the operator-off guard and before the FIRST existence
+# or age inspection, because every one of them — the card's `-f`, the age
+# `find`, the set's head read, the claim, the restore, the deletion — is a
+# check whose act follows it, and a sibling publishing in between is exactly
+# what the mutex excludes. The FD is RETAINED across the whole section rather
+# than taken per step: this arm forks (the age `find`, the `( set -C; : > … )`
+# subshell, `mv`, `link`, `rm`, the emitter's `jq`), and a held `{fd}<>`
+# descriptor is NOT close-on-exec — measured, an exec'd child's
+# `/proc/self/fd` lists the parent's lock fd — but every one of those children
+# is SYNCHRONOUS and reaped inside the section, so none can outlive it. The
+# close-before-fork rule APPLIES here and is SATISFIED; it is not disapplied.
+# Backgrounding anything inside `_hook_compact_card_locked` would break that.
+#
+# The bound is COMPACT_LOCK_WAIT_SERVE, not COMPACT_LOCK_WAIT: this is the one
+# acquisition a human is waiting on, and a miss costs one unserved card and
+# nothing durable. The split lives in the two call sites, never in the acquire
+# helper, which takes its wait as its first positional.
+_hook_compact_card() {   # sets CARD_COMPACT; silent on every path
+  CARD_COMPACT=""; COMPACT_SERVE_FD=""; COMPACT_SERVE_NONCE=""
+  [ -e "$COMPACT_CARD_OFF" ] && return 0
+  local lockfd=""
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT_SERVE" || return 0
+  lockfd="$HOOK_LOCK_FD"
+  # Validated under the lock and BEFORE the first existence or age inspection,
+  # which is what "before any lifecycle observation or mutation" means here.
+  if ! _hook_generation_ok; then _hook_lock_release "$lockfd"; return 0; fi
+  _hook_compact_card_locked || true
+  # THE LOCK IS RETAINED PAST THIS RETURN only when a card is actually going to
+  # be printed: the marker that records the fact of serving belongs to the same
+  # held section that claimed the card, and the print sits between them at the
+  # one site this file prints from. On every other path the descriptor is
+  # closed here, which is the single release site for those paths.
+  if [ -n "$CARD_COMPACT" ]; then COMPACT_SERVE_FD="$lockfd"; return 0; fi
+  _hook_lock_release "$lockfd"
+  return 0
+}
+
+_hook_compact_card_locked() {   # the retained-lock body; sets CARD_COMPACT
+  local f="$REG/$id.compactcard" set="$REG/$id.compactset" claim="" head="" nonce="" raw="" line1="" body=""
+  # `! -L` IS PART OF WHAT A CARD IS, not an extra (§3.3 step 2: "inspect the
+  # regular/non-symlink card and canonical set"). `-f` DEREFERENCES, so without
+  # it a symlink standing here passes, `mv -f "$f" "$claim"` below renames THE
+  # SYMLINK onto the no-clobber placeholder, the `read` follows it, and a body
+  # that is not a card is emitted whenever the target's first line satisfies
+  # the nonce — while the aged branch below deletes whatever object stands
+  # there. The marker's reading end already argues this exact class in
+  # its own comment, and PreCompact and the PostCompact settlement already
+  # spell it on the set. The two ends of the card contract now spell ONE
+  # definition of what a card IS, as the two ends of the marker already do.
+  [[ -f "$f" && ! -L "$f" && -r "$f" ]] || return 0
+  command -v find >/dev/null 2>&1 || return 0
+  # ITEM 3 in the retained-lock body, ON THE FAR SIDE OF THE FORK (r4 A-M2).
+  # `HOOK_LOCK_FD` is the descriptor the caller acquired and still holds; this
+  # function has no local for it.
+  #
+  # MEASURE, THEN PROVE, THEN REMOVE. The proof used to sit ABOVE the age
+  # `find`, and `find` forks: the moment it proved was not the moment of the
+  # removal, so a same-UID replacement landing inside that child left the aged
+  # canonical card deleted under a descriptor that no longer named canonical —
+  # the exact window R1 closed everywhere else. PreCompact's structurally
+  # identical pattern already does it this way and says so in its own comment
+  # (the overlap `find`, then a fresh proof, then `rm -f "$cardf"`).
+  #
+  # THE PROOF SITS ON THE REMOVING PATH ONLY, because that is the only path
+  # with a mutation here: the serving path's mutation is the `mv` below, and
+  # that one carries its own proof immediately before it. On a failed proof
+  # the arm says nothing and the caller releases, which is this body's own
+  # disposition on every other refusal.
+  if [ -z "$(find "$f" -mmin "-$(( COMPACT_CARD_MAX_AGE / 60 ))" 2>/dev/null)" ]; then
+    _hook_lock_still_canonical "$HOOK_LOCK_FD" || return 0
+    rm -f "$f"
+    return 0
+  fi
+  # ARGUED, UNPINNABLE (fix-round M3): measured on this box, deleting this
+  # guard changes nothing observable — a missing/unreadable `$set` makes the
+  # `read < "$set"` below fail its redirection silently (swallowed same as a
+  # `2>/dev/null` command failure; `head` stays "" and the nonce regex below
+  # fails), so no test can redden it here, the way D-2417's dropped guards
+  # could not. Kept anyway, unlike those: this file declares two userlands
+  # (header, line 1), and whether a failed stdin redirection stays silent
+  # is shell-and-platform behaviour this box's bash cannot prove for every
+  # `sh`/`bash` a fleet box might run. One cheap `[[ ]]` against that risk.
+  #
+  # `! -L` here is NOT in that argued-unpinnable class and is pinned with the
+  # card's: §3.3 step 2 names the set beside the card, and a symlink here is
+  # read through for the nonce the marker path is built from.
+  [[ -f "$set" && ! -L "$set" && -r "$set" ]] || return 0
+  IFS= read -r -N 4096 head 2>/dev/null < "$set"
+  [[ "$head" =~ \"nonce\":\"([^\"]+)\" ]] || return 0
+  nonce="${BASH_REMATCH[1]}"
+  # THE SAFE-NONCE GATE (spec §3.3 step 2), spelled for the engine that RUNS
+  # it. This is bash, so the anchor is `$` — NEVER `\z`: POSIX ERE has no `\z`
+  # escape and `regcomp` reads it as a literal `z`, so measured on bash 5.2.21
+  # the `\z` spelling REJECTS every well-formed nonce and ACCEPTS exactly one
+  # ending in a literal `z` — nothing would ever be served and every journal
+  # record would read `served:false` forever. `$` is sufficient here, not
+  # merely tolerable: measured, it matches the well-formed nonce and rejects
+  # the trailing-`z` form, a trailing LF, and an embedded LF followed by more
+  # text. (jq/Oniguruma's `\z` in the journal predicates is correct THERE and
+  # is unchanged; jq's `$` would not be, since it accepts a trailing LF.)
+  #
+  # It gates a PATH COMPONENT: the marker and its source are both named from
+  # this string, so a nonce this refuses forms no marker path at all.
+  [[ "$nonce" =~ ^compact-[0-9]+-[0-9]+-[0-9]+-[0-9]+$ ]] || return 0
+  # ATOMIC CLAIM (consume-once, spec §3.3 step 3, fix-round M1): a bare
+  # read-then-`rm` lets every one of N concurrent SessionStart(compact)
+  # racers (the main thread and its live subagents can all hit this arm
+  # close together) read the card before the first one deletes it, serving
+  # the same bytes to N contexts — measured against the pre-fix code, 8
+  # concurrent racers per trial: 2 of 3 isolated trials served the card to 2
+  # racers instead of 1. `mv` wins
+  # the pathname for exactly one racer; a losing `mv` (ENOENT — another racer
+  # already claimed it) serves nothing. The claim is PROVISIONAL: a crossed
+  # pair or a body-less nonce restores the card (spec's "the card stays")
+  # through the same regular-placeholder-then-no-clobber-`link` idiom this
+  # function itself uses below — the `( set -C; : > "$claim" )` placeholder and
+  # the `link "$claim" "$f"` restore beside it. (This sentence used to point at
+  # `_hook_compact_rollback_card`, a function D-2605 deleted along with its one
+  # call site; a reader following the pointer found nothing.) Only a matching,
+  # non-empty pair keeps the claim consumed. Dot-prefixed, pid-scoped and named to the
+  # §3.4 target grammar, so an orphaned claim (this process killed mid-read) is
+  # reclaimed, AGED and under a held lock, by `_hook_family_sweepable`'s
+  # `compactcard.*.session-claim.tmp` arm. This sentence used to say such a
+  # claim is swept by PreCompact's existing `.$id.*compact*.tmp` glob; that
+  # glob went with the rest of the pre-D-2605 sweep, which matched by
+  # coincidence rather than by family — and the very next paragraph, announcing
+  # the migration to this name, already contradicted it.
+  # MIGRATED TO THE §3.4 TARGET GRAMMAR (D-2605). The shipped shape was
+  # `.<id>.<pid>.compactcard-claim.tmp`, a name matched by neither PreCompact's
+  # exact-family sweep nor `_reg_purge`'s exact cleanup, so a SessionStart
+  # killed between its no-clobber `: >` and its `mv` — or between the `mv` and
+  # the `rm` — leaked a permanent dot-leading file, and under the widened
+  # `_ws_slug_free` an unmatched residue reads FREE and re-hands the slug with
+  # a stranger's claim still present. The nonce is available here because step
+  # 2 above validated it before step 3 claims.
+  claim="$REG/.$id.compactcard.$$.$nonce.session-claim.tmp"
+  ( set -C; : > "$claim" ) 2>/dev/null || return 0
+  # ITEM 3, AND ON THIS PATH IT IS THE FIRST ONE. The sentence here used to read
+  # "`find` and the nonce read sit between the proof above and this one" — and
+  # r4 A-M2 made that false in the same commit that moved the proof: the only
+  # proof above now sits INSIDE the aged branch, which returns, so nothing on
+  # the serving path runs it. What stands between the section's acquire and
+  # this line is the age `find`'s fork, the set's head read and the placeholder
+  # subshell; this is where canonical actually moves, so this is where it is
+  # proved.
+  #
+  # AND THE REFUSAL TAKES ITS OWN PLACEHOLDER WITH IT (r4 A-M1). The line above
+  # creates `$claim`; a bare `return 0` here left a zero-byte file behind, and
+  # it is not inert residue: the name matches `_ws_private_family`'s
+  # `compactcard.*` arm, so `_ws_slug_free` reads the slug NOT FREE and
+  # `ccd ws-add` refuses to re-hand it until an aged sweep under a later lock
+  # reclaims it (bounded by COMPACT_CARD_MAX_AGE, so a delay rather than a
+  # wedge). This was the ONE refusal past the placeholder that left its own
+  # artifact: the losing `mv`, the crossed nonce and the body-less card below
+  # all remove it already, and §3.4's table gives this family
+  # "restore/remove under retained stable lock" as its cleanup — and the lock
+  # IS still held here.
+  _hook_lock_still_canonical "$HOOK_LOCK_FD" || { { rm -f "$claim"; } 2>/dev/null || true; return 0; }
+  if ! { mv -f "$f" "$claim"; } 2>/dev/null; then
+    { rm -f "$claim"; } 2>/dev/null || true
+    return 0
+  fi
+  IFS= read -r -N $(( COMPACT_CARD_MAX_CHARS + 64 )) raw 2>/dev/null < "$claim"
+  line1="${raw%%$'\n'*}"
+  if [[ "$line1" != "$nonce" ]]; then
+    # ITEM 3, AND THE `mv` ABOVE IS THE FORK (r5 R4-M4). This restore WRITES a
+    # canonical pathname, and `mv` is an external binary, so the proof taken
+    # before the claim is no longer this moment. ON A FAILED PROOF, NO RESTORE
+    # AND NO REMOVAL: the claim is RETAINED, holding the only copy of the card's
+    # bytes — removing it here would discard them under a lock that stopped
+    # naming canonical — and the caller releases, as it does on every other
+    # refusal in this body. The claim is a `compactcard.*` private family, so an
+    # aged sweep under a later held lock reclaims it, bounded by
+    # COMPACT_CARD_MAX_AGE: a delay rather than a wedge.
+    _hook_lock_still_canonical "$HOOK_LOCK_FD" || return 0
+    # POSIX `link source target` creates exactly target or fails EEXIST —
+    # unlike `ln`, a directory at target cannot receive a child named after
+    # the source.
+    { link "$claim" "$f"; } 2>/dev/null || true
+    { rm -f "$claim"; } 2>/dev/null || true
+    return 0
+  fi
+  body="${raw#*$'\n'}"
+  if [[ "$body" == "$raw" ]]; then                    # a nonce with no text after it
+    # ITEM 3, ITS OWN, NOT THE TWIN'S (r5 R4-M4). This is the same restore in a
+    # different arm, and the crossed-nonce arm above RETURNS — so its proof never
+    # runs on this path and cannot stand in for this one. Same fork (`mv`), same
+    # disposition on a failed proof: no restore, no removal, claim RETAINED, the
+    # caller releases.
+    _hook_lock_still_canonical "$HOOK_LOCK_FD" || return 0
+    { link "$claim" "$f"; } 2>/dev/null || true
+    { rm -f "$claim"; } 2>/dev/null || true
+    return 0
+  fi
+  { rm -f "$claim"; } 2>/dev/null || true
+  body="${body%"${body##*[![:space:]]}"}"
+  CARD_COMPACT="$body"
+  # Carried to the marker publication, which happens after the PRINT and
+  # inside this same held section. Set only on the one path that actually
+  # serves, so nothing else can mint a marker.
+  COMPACT_SERVE_NONCE="$nonce"
+  return 0
+}
+
+# THE FACT OF SERVING (spec §3.3 step 5) — A MARKER, NOT A SET REWRITE.
+# What stood here rewrote `set.served` with `jq`, which is exactly the act
+# D-2605 forbids: THE CANONICAL SET IS NEVER REWRITTEN. Two writers racing on
+# one document is how a compaction loses a record or marks the wrong set
+# served, and no amount of temp-then-rename care fixes a design that has two
+# authors for one artifact. The fact of serving is now recorded by PUBLISHING A
+# SEPARATE NAME — `$REG/.<id>.compactserved.<nonce>` — from a DISJOINT private
+# source, so the set stays byte-identical from PreCompact's publication until
+# PostCompact claims it, and `measure` derives `served` from the marker's
+# existence under the final lock.
+#
+# THE ORDER IS EMIT-THEN-MARK, and it is deliberate: a crash between the print
+# and the marker leaves an honest FALSE NEGATIVE (the card reached the model,
+# the journal says it did not) rather than a lie in the other direction, which
+# would make `cited` uninterpretable exactly where it matters.
+#
+# Idempotence: only an extant marker for the SAME nonce is idempotent — `link`
+# is no-clobber (measured, rc 1 `File exists`, nothing changed), so a repeat
+# leaves the first marker standing and removes only its own source.
+_hook_compact_mark_served() {
+  local marker="" src=""
+  # The nonce reached here through §3.3 step 2's bash validator, so it is
+  # already a safe path component; an unsafe or empty one forms NO marker path
+  # at all and the compaction simply reads `served:false`.
+  [[ -n "$COMPACT_SERVE_NONCE" ]] || return 0
+  # THE SECOND VALIDATION §3.3 step 5 NAMES — "before unlock and only after
+  # successful output, revalidate environment generation and publish the exact
+  # nonce marker". The arm held the lock from the claim through the print, so
+  # the window this closes is narrow, but it is the one arm whose specified
+  # DOUBLE validation was absent: a marker is a durable fact about a row, and
+  # the row this pane was authorized for is the only row it may write one for.
+  _hook_generation_ok || return 0
+  marker="$REG/.$id.compactserved.$COMPACT_SERVE_NONCE"
+  command -v mktemp >/dev/null 2>&1 || return 0
+  src=$( umask 077; mktemp "$REG/.$id.compactserved-source.$COMPACT_SERVE_NONCE.XXXXXX" 2>/dev/null ) || return 0
+  [[ -f "$src" && ! -L "$src" ]] || { rm -f "$src" 2>/dev/null; return 0; }
+  link "$src" "$marker" 2>/dev/null || true
+  # EEXIST MEANS VALIDATE THE INCUMBENT — §3.3 step 5's "same-nonce extant
+  # marker is idempotent ONLY AFTER it validates as a regular, non-symlink
+  # final marker under this lock". THE VALIDATION IS AT THE READING END, and
+  # that placement is measured rather than chosen for convenience.
+  #
+  # Written HERE it can have no effect, because §3.4's own marker-source rule
+  # unlinks the source "on success, on `EEXIST` after validating …, and on
+  # every handled failure" — all three — so validate-then-unlink and unlink do
+  # the same thing to the same file, and this arm returns 0 either way.
+  # MEASURED, in a throwaway copy: a mutant deleting a
+  # `[[ -f "$marker" && ! -L "$marker" ]] || { rm -f "$src"; return 0; }`
+  # placed here leaves the suite GREEN, while the control mutant in the same
+  # run — loosening the reading end back to a bare `-e` — reds. A guard no
+  # input can distinguish is not a guard; it is a comment with a semicolon.
+  #
+  # What the requirement is ABOUT is real and is enforced where it bites: an
+  # occupant that is a symlink or a directory makes this `link` fail EEXIST and
+  # NO marker is published, and a bare `[ -e … ]` at the lookup then derives a
+  # durable `served` from that object — `true` for a symlink to anything,
+  # `false` for a dangling one. `_hook_compact_post`'s lookup asks
+  # `-f && ! -L`, so the two ends spell one definition of what a marker IS.
+  # Reachable only through an out-of-contract same-UID writer, which is why
+  # neither end complains: this one publishes nothing and returns 0.
+  #
+  # THE SOURCE GOES ON EVERY HANDLED RESULT — success, EEXIST and failure —
+  # so the disjoint name never becomes residue of its own.
+  rm -f "$src" 2>/dev/null || true
+  return 0
+}
+
+# The retained serve lock's ONE release site. `_hook_compact_card` keeps the
+# descriptor open past its own return when, and only when, a card is going to
+# be printed, because the marker above must be published inside the SAME held
+# section that claimed the card and the print sits between them.
+_hook_compact_serve_end() {
+  [[ -n "$COMPACT_SERVE_FD" ]] || return 0
+  _hook_lock_release "$COMPACT_SERVE_FD"
+  COMPACT_SERVE_FD=""
+  return 0
+}
+
 [[ -n "${HOME:-}" ]] || exit 0
 REG="$HOME/.cc-sessions"
 
@@ -874,9 +2529,49 @@ REG="$HOME/.cc-sessions"
 # `query`, `path` and `explain` only. `graphify update` and every build are
 # WRITES, and the sweep owns the write side — counting them here would make
 # the number say the opposite of what it is for. The leading class is what
-# stops `mygraphify query` and prose mentioning the command from counting;
-# the trailing one stops `graphify querying-something-else`.
-GRAPH_QUERY_RE='(^|[;&|[:space:]])graphify[[:space:]]+(query|path|explain)([[:space:]]|$)'
+# stops `mygraphify query` from counting; the trailing one stops `graphify
+# querying-something-else`.
+#
+# THE LEADING CLASS TAKES A PATH AND A QUOTE (D-8046). A session whose PATH
+# carries no graphify calls it by path, as `$HOME/.local/bin/graphify query` or
+# `"$HOME/.local/bin/graphify" query`: measured, 283 real queries went uncounted
+# on the `/`, and a session's only way to reach the engine read as a session
+# that never queried. This hook sees the UNEXPANDED line, so the path itself is
+# never worth reading: the last segment is. Prose that now matches here, like
+# `echo "graphify query"`, is what `GRAPH_ANSWER_RE` below refuses.
+GRAPH_QUERY_RE=$'(^|[;&|(`"\'/[:space:]])graphify["\']?[[:space:]]+(query|path|explain)([[:space:]]|$)'
+
+# ── D-8046: what counts as an ANSWER ────────────────────────────────────
+# The failures that reached this event are the ones that exit 0: `graphify query
+# x | head`, an `|| true`, an `|| echo`, a `2>/dev/null`, and graphify's own
+# misses. Measured: 73 of 239 denied sessions opened the gate on one of those and
+# never got a real answer, and the board counted each as a read.
+#
+# SO A READ IS NAMED BY WHAT AN ANSWER LOOKS LIKE, not by a list of what a failure
+# looks like: the failure text belongs to whichever shell, wrapper or fallback
+# ran, and can not be listed. These are the lines graphify 0.9.9 starts an answer
+# with, each at the head of a line so a pipe through `tail` or `grep` still reads
+# as one, and a merged stderr note ahead of them changes nothing:
+#   query    `Traversal: ...`, then `NODE ...` and `EDGE ...`
+#   path     `Shortest path (N hops):`, or `No path found between ...`, which IS
+#            an answer: both nodes resolved, and the graph says they are apart
+#   explain  `Node: ...`
+# `No matching nodes found.` and `No node matching ...` are not: the session
+# learnt nothing, and the deny tells it to ask again.
+#
+# THE WRONG SIDE TO FAIL ON IS BOUNDED. A pin bump that rewords these lines stops
+# the count, so the board reads `graph 0` and a session spends its three denials;
+# nothing wedges, because `GRAPH_GATE_MAX_DENIALS` still opens the gate. Re-read
+# them at a pin bump, as `_HOOK_SOURCE_EXTS` below is.
+GRAPH_ANSWER_RE=$'(^|\n)(Traversal: |NODE |EDGE |Shortest path \\(|No path found between |Node: )'
+
+# ── D-8046: the command a denied session is told to run ─────────────────
+# ANY PATH, NO MACHINE. A session launched before D-8050 has no `~/.local/bin`,
+# and nothing it can edit gives it the folder: Claude Code writes the process PATH
+# as the last line of its shell snapshot. So the sentence carries its own. `$HOME` stays
+# literal for the session's shell to expand, this text names no box, and a
+# graphify elsewhere on PATH still answers, which a bare absolute path would not.
+GRAPH_RUN='PATH="$HOME/.local/bin:$PATH" graphify'
 
 # ── R7: what counts as ACTING ON THE CARD ───────────────────────────────
 # ANCHORED ON THE VERB PAIR, NEVER ON THE CLIENT'S NAME. Both skills teach
@@ -935,7 +2630,7 @@ CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
 # TWO OF THE THREE COMPONENTS ARE MODELLED, NOT BOUNDED. `$id` carries a shape
 # gate but no length cap and appears more than once across these sentences, so
 # 1826 assumes a 40-character id rather than proving a ceiling (the longest id
-# live on this fleet today is 29, `expoAI-assistant-keen-prairie`); and
+# live on this fleet today is 29, `project-h-id-pad-keen-prairie`); and
 # `$CT_N` is interpolated un-padded, so each extra digit adds one character —
 # 244 at one co-tenant, 245 at the two-digit counts this fleet actually
 # carries (`coTenantN:15` in the pre-deploy baseline), 246 at three. The
@@ -964,6 +2659,226 @@ CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
 # fields that ARE gated. Raising the bound is the cheap answer;
 # drop-whole-subject logic on the hot path is not, and was refused.
 CARD_MAX_CHARS=2400
+# THE LINKED TREE'S DIFF LIST HAS ITS OWN CHARACTER BOUND, DERIVED FROM THE ONE
+# ABOVE (GR5 fix round, D-7351). The linked graphify sentence (spec §6.3) quotes
+# repository paths, whose number `card_diff_list_max` bounds but whose length
+# nothing did: 20 paths of about 65 characters made the graph card about 2150
+# characters, and since graphify is joined FIRST the clip above cut held case
+# A mid-sentence, losing its `mail list` and `runs list` instructions. So the
+# list gets what the structural worst case leaves, and never more:
+#   903  the linked graphify sentence with NO name in the list: a 12-digit node
+#        count (the meta read's own gate), engine and pin at 64, the age's
+#        12-digit gate as 8 digits of days, "main has moved", the differing
+#        and the branch counts and "and N more" each MODELLED at 7 digits (as
+#        `$id` and `$CT_N` are above), the advice and the armed-gate sentence
+#        (longer than the kill-switch one)
+#   1107 held case A 860 + co-tenant 245 + the two joins, as argued above (the
+#        role subject is at most 860 characters, both texts, pinned by
+#        `session-hook-role-card.test.ts`, and never beside it)
+# 2400 - 903 - 1107 = 390 characters of names. The list stops before a name
+# that would pass it, so every subject after graphify is said whole; the
+# real-directory arm has no list and is unchanged at 719.
+CARD_DIFF_LIST_MAX_CHARS=$(( CARD_MAX_CHARS - 903 - 1107 ))
+# ── THE COMPACTION CARD (spec 2026-09-09-graphify-compaction-card-design.md) ──
+# Three registry files per session, every suffix DOT-FREE so `_reg_purge`'s
+# loop (`ccd/ccd`: every dot-free `$REG/<id>.<suffix>` except `archived` and
+# `reaping`) unlinks them with the row: `.compactset` (PreCompact writes it,
+# PostCompact consumes it), `.compactcard` (PreCompact writes it when the tree
+# has a graph the gate would trust; SessionStart(compact) serves it ONCE and
+# deletes it), `.compactions` (the per-session journal PostCompact appends —
+# it copies the existing file into a private stage, re-validates every line it
+# already held and commits by rename, but it never interprets a record or
+# derives state from one). That dot-free shape is what `_ws_slug_free`'s FIRST pass
+# scans and what `_ws_slug_residue` names — the two are widened together, and a
+# comment naming only one of the pair re-creates the half-widening defect in
+# prose — but since D-2605 neither stops there: both take a SECOND pass over
+# the dot-LEADING `.<id>.…` private families, which the `"$REG/$id".*` glob
+# (id, then a dot) is structurally blind to. So every arm removes what it will
+# not serve — an aged card, an aged set — and PreCompact sweeps this id's aged
+# private residue by EXACT FAMILY (`_hook_family_sweepable`), never by the
+# `.compact*.tmp` glob it used to use, which matched by coincidence rather than
+# by grammar. Those names lead with a dot and are therefore invisible to
+# `_reg_purge`'s own dot-free loop, which is why somebody here must reap them.
+# The kill-switch is the same shape as GRAPH_GATE_OFF and CCRC_CARD_OFF: a file
+# the operator touches by hand, honoured by all three arms.
+COMPACT_CARD_OFF="$HOME/.ccrc/compact-card-off"
+COMPACT_HELPER="$HOME/.cc-sessions/compact-card.mjs"
+COMPACT_CARD_MAX_CHARS=4000
+# DERIVED, NEVER A THIRD BUDGET — save the D4 roster card, appended after this total under its own ROSTER_CARD_MAX_CHARS
+# (in the SessionStart arm); `session-hook.test.ts` pins all three summed under the spill. `CARD_MAX_CHARS` above stays the FIRST clip
+# and the standing subjects' whole ceiling — it is the only defence for the ungated `GM_NODES` (D-1899) and must not move. The compact subject is
+# appended AFTER that clip, under its own ceiling, and this is a pin on the SUM
+# the emitter may print: it cannot cut what the two clips admitted, and
+# `session-hook.test.ts` holds it under the harness's 10,000-char spill
+# (2.1.266 spills SessionStart context to disk above `Pdr=1e4`).
+CARD_TOTAL_MAX_CHARS=$(( CARD_MAX_CHARS + 1 + COMPACT_CARD_MAX_CHARS ))
+# THE IN-FLIGHT WINDOW, WHICH DECIDES A DIFFERENT THING PER ARTIFACT. An aged
+# CARD belongs to no compaction that can still arrive and is removed UNREAD
+# (a dot-free registry file that outlives its use would hold the slug). An aged
+# canonical SET is NOT removed unread: PreCompact publishes over it and
+# PostCompact still claims and measures it — age decides only its provenance
+# eligibility, never whether it is read. An unconsumed set YOUNGER than this at
+# PreCompact means another compaction of this session is in flight (spec §3.0,
+# overlap). Argued from the longest compaction measured
+# on this fleet — 826 s, gpt lane, 2026-09-08 — times 1.45.
+COMPACT_CARD_MAX_AGE=1200
+# LIVENESS (spec §3.0). A transcript written inside this window is a live
+# context. Measured: a working agent writes a row every 4–6 s and pauses over
+# 79 s in 1–2% of rows; a compacting context writes nothing for ≥79 s; a parent
+# waiting on a fan-out writes nothing at all; and at its own auto-compaction the
+# parent's last row is 0.8 s old at p50, 3.7 s at p95, never 120 s (n=216).
+# Used as `find -mmin` minutes.
+COMPACT_LIVE_S=120
+# THE ONE WAIT THIS FILE ALLOWS (spec §6, amendment R2 of the header's
+# contract): both helper calls use `_hook_timeout`, which resolves `timeout`
+# or `gtimeout`, for at most this many seconds, off the hot path — PreCompact
+# and PostCompact bracket a compaction
+# of at least 79 s — and after the hookstate write has landed. Argued from
+# measured inputs (node startup ~0.05 s, a 70 MB graph parsed and indexed in
+# ~1.5 s, a 16 MiB window mined in well under a second through a basename
+# index) at roughly twice their sum, and RE-MEASURED on this box's real graphs
+# before it shipped — the p95 and peak RSS are recorded here by Task 6 of
+# plans/2026-09-10-graphify-compaction-card-plan-a.md: ccrc 9,543,597-byte graph
+# p95 0.36 s / 104,384 KiB RSS; largest admissible graph (project-f,
+# 70,434,955 bytes) p95 1.05 s / 332,184 KiB RSS (five fresh-nonce runs each,
+# 2026-09-10).
+COMPACT_HELPER_TIMEOUT=8
+COMPACT_WORKSET_MAX=12
+# ── THE TWO STABLE-LOCK BOUNDS (spec §2, §3.4) ───────────────────────────
+# Both are passed to `_hook_lock_acquire` as its FIRST POSITIONAL, never
+# spelled inside it: that parameterization is the whole reason two bounds can
+# coexist through one acquire path, and a helper carrying either constant in
+# its own body would make the other unreachable.
+#
+# COMPACT_LOCK_WAIT is every acquisition EXCEPT compact SessionStart's:
+# PreCompact's three sections (the card's two and the events line's one),
+# PostCompact's settlement and its final journal
+# transaction (round 7 retired the separate final constant — both are off the
+# hot path and both lose a durable artifact on a miss, so they share one
+# bound), and `ccd`'s own row-creation, `_spawn_start` and `_reg_purge`
+# acquisitions, which carry a twinned literal of the same value.
+#
+# MEASURED, NOT ARGUED (Task 9, 2026-09-14, fleet box `<fleet-host>`, load ~5.8,
+# fixture HOME — never the live one). What a waiter can be blocked behind is
+# ONE HELD SECTION, so each section is timed at its own acquire and release
+# rather than the arm being timed end to end, n=30 per section:
+#
+#   PreCompact section 1 (overlap + exact sweep + initial publish)
+#                                  p50 22.12 ms   p95 27.59 ms   max 28.75 ms
+#   PreCompact section 2 (reconfirm + the two renames)
+#                                  p50  8.39 ms   p95 11.02 ms   max 12.57 ms
+#   compact SessionStart (retained, whole body incl. the marker)
+#                                  p50 24.98 ms   p95 31.75 ms   max 32.59 ms
+#
+# THE DERIVATION: the bound stands at 5 s only if it is at least 8x the worst
+# measured p95. Worst p95 = 31.75 ms, so the floor this rule sets is 254 ms;
+# 5 s is 158x it, and COMPACT_LOCK_WAIT_SERVE's 2 s is 63x. The headroom is
+# deliberate and is not slack to be trimmed: only a SAME-ROW sibling contends
+# (one registry row is one session's contexts), and the cost of a miss is a
+# lost durable artifact, so the bound is set to make a miss mean "something is
+# genuinely wedged" rather than "the box was busy".
+COMPACT_LOCK_WAIT=5
+# COMPACT_LOCK_WAIT_SERVE is compact SessionStart's ALONE — the one
+# acquisition a human is waiting on, at the top of a resumed session. A miss
+# there costs one unserved card and nothing durable, so it gives up sooner
+# than every other arm rather than making the session wait. Measured above:
+# 2 s is 63x the worst held-section p95, so an ordinary uncontended serve
+# never approaches it and a miss here really is contention.
+COMPACT_LOCK_WAIT_SERVE=2
+# ── THE JOURNAL RECORD PREDICATE (spec §3.4, "Journal contract") ─────────
+# ONE predicate gates BOTH the merged record before it is staged and every
+# physical line of the staged file, so a line that reaches `$REG/<id>.compactions`
+# has passed the same test twice — once as an object and once as bytes.
+#
+# SIXTEEN KEYS, and `(keys|sort) == [...]` rather than a presence check: an
+# extra key is as much a defect as a missing one, and there is NO `n` — D-2605
+# removes the persisted ordinal, a reader derives it from committed physical
+# JSONL position.
+#
+# `\z`, NOT `$`, AND ONLY HERE. These anchors run in jq's Oniguruma, where `\z`
+# is end-of-string; jq's `$` would accept a trailing LF. The bash arms in this
+# file must use `$` instead, because POSIX ERE has no `\z` and `regcomp` reads
+# it as a literal `z` — the two engines take opposite spellings and neither may
+# borrow the other's (spec §3.4, "Which regex engine anchors what").
+#
+# Every integer requirement spells `floor == .` explicitly: jq has one number
+# type, so `1.0` and `1` compare equal and a bare `type == "number"` would admit
+# a fractional count.
+JOURNAL_RECORD_PRED_DEFS='
+def NONNEG_INT: type == "number" and . >= 0 and floor == .;
+def NONEMPTY_STRING: type == "string" and length > 0;
+def SAFE_AGENT: type == "string" and length >= 1 and length <= 128
+  and test("^[A-Za-z0-9_-]+\\z");
+def BUILT: type == "string" and test("^[0-9a-f]{7,40}\\z");
+def NULL_PROVENANCE:
+  . as $o | $o.cwd == null and $o.built == null and $o.agent == null
+  and $o.transcript == null and $o.parentLive == null and $o.liveAgents == null;
+def NORMAL_PROVENANCE:
+  . as $o
+  | (($o.cwd == null) or ($o.cwd | NONEMPTY_STRING))
+    and ($o.built == null or (($o.built | BUILT) and $o.cwd != null))
+    and ($o.agent == null or ($o.agent | SAFE_AGENT))
+    and ($o.transcript == null or ($o.transcript | NONEMPTY_STRING))
+    and ($o.parentLive == null or ($o.parentLive | type == "boolean"))
+    and ($o.liveAgents == null or ($o.liveAgents | NONNEG_INT))
+    and (
+      (($o.trigger == "manual" and $o.scope == "main")
+       and $o.agent == null and ($o.transcript | NONEMPTY_STRING)
+       and $o.parentLive == null and $o.liveAgents == null)
+      or (($o.trigger == "auto" and $o.scope == "main")
+          and $o.agent == null and ($o.transcript | NONEMPTY_STRING)
+          and $o.parentLive == null and $o.liveAgents == 0)
+      or (($o.trigger == "auto" and $o.scope == "subagent")
+          and ($o.agent | SAFE_AGENT) and ($o.transcript | NONEMPTY_STRING)
+          and $o.parentLive == false and $o.liveAgents == 1)
+      or (($o.trigger == "auto" and $o.scope == "ambiguous")
+          and $o.agent == null and $o.transcript == null
+          and (($o.parentLive == true and $o.liveAgents == 1)
+               or ($o.parentLive == null and ($o.liveAgents | NONNEG_INT) and $o.liveAgents >= 2)))
+    );
+def JOURNAL_RECORD_PRED:
+  type == "object"
+  and ((keys | sort) == ["agent", "at", "built", "chars", "cited", "cwd", "fences", "filesChars",
+                          "liveAgents", "parentLive", "scope", "served", "setSize", "steered",
+                          "transcript", "trigger"])
+  and (.at | NONNEG_INT) and (.chars | NONNEG_INT) and (.fences | NONNEG_INT)
+  and (. as $o | ($o.filesChars == null or (($o.filesChars | NONNEG_INT) and $o.filesChars <= $o.chars)))
+  and (. as $o | (($o.cited == null and $o.setSize == null)
+       or (($o.cited | NONNEG_INT) and ($o.setSize | NONNEG_INT) and $o.cited <= $o.setSize)))
+  and (.trigger == "auto" or .trigger == "manual")
+  and (.scope == "main" or .scope == "subagent" or .scope == "ambiguous" or .scope == null)
+  and (.steered | type == "boolean") and (.served | type == "boolean")
+  and (NORMAL_PROVENANCE
+       or (NULL_PROVENANCE and (.scope == null or .scope == "ambiguous")
+           and .cited == null and .setSize == null));
+'
+# THE RAW BYTES of the staged file, read with `-R -s` so the predicate sees the
+# whole thing as ONE string and can say something about its physical shape:
+# every line is a complete JSON object the record predicate accepts, the file
+# ends in exactly one LF, the pre-append bytes are still its exact prefix, and
+# the ONLY thing added is this record plus one LF — a length equality, which is
+# what makes "exactly one additional line" exact rather than approximate.
+JOURNAL_STAGE_PRED='
+. as $raw
+| ($raw | endswith("\n"))
+  and ($raw | startswith($old))
+  and (($raw | length) == (($old | length) + ($rec | length) + 1))
+  and (($raw | split("\n"))[0:-1] as $lines
+       | ($lines | length) > 0
+         and all($lines[]; (length > 0) and ((fromjson? // false) | JOURNAL_RECORD_PRED))
+         and ($lines[-1] == $rec))
+'
+# ONE SPELLING of the shape a `compaction` object must have (spec §3.4, "shape
+# gates, both directions"). WHAT IT IS FOR, restated against the shipped code:
+# it is a CHEAP SHAPE SANITY GATE on the helper's raw stdout — `jq -ce -s`,
+# exactly one document — applied BEFORE the strictly stronger
+# `JOURNAL_RECORD_PRED` validates the merged record. It is not a persistence
+# mechanism and not a read-back: the sentences this replaces said the hook adds
+# `n` to the object and that a value is read back from hookstate, and D-2605
+# forbids BOTH — there is no hookstate compaction cache and no persisted
+# ordinal, a reader derives ordinal from committed physical JSONL position.
+# Never re-spelled.
+COMPACT_SHAPE_PRED='(type=="object" and (.chars|type)=="number" and (.fences|type)=="number" and (.at|type)=="number" and (.trigger=="auto" or .trigger=="manual") and (.steered|type)=="boolean" and (.served|type)=="boolean" and ((.filesChars|type)=="number" or .filesChars==null) and ((.cited|type)=="number" or .cited==null) and ((.setSize|type)=="number" or .setSize==null) and (.scope=="main" or .scope=="subagent" or .scope=="ambiguous" or .scope==null))'
 # BOUNDED AND ANCHORED. The project string is registry text that lands verbatim
 # in a prompt, so it is gated on a SHAPE rather than clipped to a length: a
 # value this refuses is UNSPEAKABLE and the card says nothing, rather than
@@ -988,32 +2903,39 @@ CARD_MAX_CHARS=2400
 # false (fix wave, I7). There are three spellings, because an ERE cannot
 # interpolate a bracket-class variable the way `case` can: this constant, the
 # session-id gate `[[ "$id" =~ ^[A-Za-z0-9._-]+$ ]]` near the bottom of this
-# file, and the hold's shape gate `^program:[A-Za-z0-9._-]+ wave:...` in
-# `_hook_hold_card`. And `single-definition.test.ts` does not scan `ccd/` at
-# all — its four roots are the TypeScript packages, as this branch's own README
-# addition says. Keeping the three in step is a reading discipline, not a
-# mechanism; if you widen one, widen the other two by hand.
-CCRC_PROJ_CLASS='A-Za-z0-9._-'
-CCRC_PROJ_MAX=64
-CCRC_ID_MAX=128
+# file, and the hold's shape gate `CCRC_HOLD_WAVE_RE` (`^program:[A-Za-z0-9._-]+
+# wave:...`). And `single-definition.test.ts`'s four `ROOTS` are the
+# TypeScript packages, so they do not cover `ccd/` — BUT A SECOND BASH CORPUS
+# DOES: `bashRoots` is `[<repo>/ccd, <repo>/deploy]`, `BASH` is every bash file
+# under them plus `install.sh`, `holdersOf` filters that corpus on non-comment
+# lines, and this file and `ccd/ccd` are pinned as members BY NAME. (The
+# sentence this replaces said the test "does not scan `ccd/` at all", which is
+# measurably false against the shipped test and told the next reader no
+# mechanism existed where one does.) Keeping the three `CCRC_PROJ_CLASS`
+# spellings in step is therefore a reading discipline only because nobody has
+# written that rule — not because no mechanism could express it. The constant
+# itself (with `CCRC_PROJ_MAX` and `CCRC_ID_MAX`) is GENERATED into the region
+# near the top of this file from `shared/hook-helpers.mjs` (ARCH-74); the other
+# two spellings are patterns it cannot expand into, so they stay by hand.
+# (The region also holds `_hook_epoch_ms`; see its BEGIN line near the top.)
 # `SUPERVISED_FRESH_MS` (`shared/api.ts`) in seconds — the same 120 s window
 # `_session_state`'s bash twin uses, tolerating 4 missed 30 s beats.
 CCRC_FRESH_S=120
 # The hold's own bound. `POST /api/sessions/:id/hold` validates only that the
 # reason is a non-blank string and `ccd` only blankness, while `--actor` on the
-# same verb IS capped at 512 — so this is the first bound the value meets.
-# A hold that fails it is UNSPEAKABLE and the subject is silent.
-#
-# 127, NOT 256, AND THE OFF-BY-ONE IS THE WHOLE POINT (D-1896). `_ct_read` reads at most
+# same verb IS capped at 512 — so this is the first bound the value meets. A
+# hold that fails it is UNSPEAKABLE and the subject is silent. 127, NOT 256,
+# AND THE OFF-BY-ONE IS THE WHOLE POINT (D-1896): `_ct_read` reads at most
 # `CCRC_ID_MAX` (128) characters, so a value that comes back 128 long MAY have
-# been truncated and there is no way to tell from here. Refusing at 127 means
-# every value this function ever quotes was captured WHOLE. A 256 bound would
-# be unreachable — dead, and worse than absent, because a 400-character hold
-# would arrive truncated to 128, could lose its ` run:<id>` suffix in the cut,
-# and would then render as CASE B ("It names NO run") for a hold that names one.
-# Quoting a truncated hold as if it were the whole hold is exactly the lying
-# card this design exists to prevent, so the bound refuses instead.
+# been truncated, and refusing at 127 means every value quoted was captured
+# WHOLE. A 256 bound would let a 400-character hold arrive cut to 128, lose its
+# ` run:<id>` suffix and render as CASE B ("It names NO run") for a hold that
+# names one — the lying card this design exists to prevent.
 CCRC_HOLD_MAX=127
+# THE SHAPE of a hold that names a programme wave, spelled ONCE: the card's
+# gate (`_hook_hold_card`) and the worker merge deny (landing-order wave 2);
+# `run-routes.test.ts` holds every hold the server can write inside it.
+CCRC_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'
 # The workdir's own two bounds (C1), argued at the gate that uses them in
 # `_hook_hold_card`. The class is DERIVED from `CCRC_PROJ_CLASS` with the `/`
 # PREPENDED, never appended: appended, the `-` this file's class ends with would
@@ -1059,36 +2981,335 @@ GRAPH_NUDGE_PRE_RE="${GRAPH_NUDGE_READ_RE%\$}\""
 GRAPH_SEARCH_RE='^[[:space:]]*(cd[[:space:]]+[^;&|]+(&&|;)[[:space:]]*)?([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(rg|grep|egrep|fgrep|ugrep|ag|ack|find|fd|git[[:space:]]+grep)([[:space:]]|$)'
 
 payload=$(cat 2>/dev/null) || exit 0
-[[ -n "${TMUX_PANE:-}" ]] || exit 0
-# BOUNDED, and for a sharper reason than the statusline's (`ccd/statusline-command.sh`,
-# D-2791): this question is asked once per HOOK EVENT inside every live session on the
-# box, not once per render in one pane. `tmux display-message` talks to the tmux SERVER
-# over its socket, and a server that is SIGSTOPped, swapping, or wedged answers nothing
-# and never returns — so an unbounded call here hangs the hook, and the hook is on the
-# hot path of every tool call in ~20 sessions. The bound is the whole fleet's, not this
-# pane's.
+# TWO SOURCES FOR ONE QUESTION: which ccd session is this?
 #
-# THE PLATFORM SPELLING, copied from the statusline fix: bare `timeout` is GNU and a
-# macOS box carries Homebrew's `gtimeout`. NEITHER present means the question is SKIPPED,
-# not asked unbounded — `$tname` stays empty, the guard below exits 0, and the hook
-# writes nothing at all. That is the honest degrade for a file whose header makes exit 0
-# on every path absolute: a hook that cannot bound its own tmux call must not make it.
-hooktmo=""
-for hooktmo_bin in timeout gtimeout; do
-  if command -v "$hooktmo_bin" >/dev/null 2>&1; then hooktmo="$hooktmo_bin"; break; fi
-done
-tname=""
-[[ -n "$hooktmo" ]] && tname=$("$hooktmo" 2 tmux display-message -p '#S' 2>/dev/null)
-[[ "$tname" == cc-?* ]] || exit 0
-id="${tname#cc-}"
+# The pane is the ordinary answer and stays first. It is not the only one: a
+# session that Claude Code has FORKED into a daemon-hosted background PTY has
+# no TMUX and no TMUX_PANE at all (measured via /proc/<pid>/environ), so this
+# hook exited at once for exactly the sessions whose ask card, subagent list
+# and compaction card matter most — a real session wrote its last hookstate
+# two minutes before its fork and then nothing for three hours of active work.
+#
+# The fallback is the session's OWN id, matched against the registry, and only
+# a process with NO pane that carries the job marker Claude Code gives the
+# background jobs it hosts may take it (D-4953). The id alone is not enough: a
+# plain `claude --resume <uuid>` keeps the resumed id and its hooks carry it, so
+# a hand-run resume of a live row's uuid — outside tmux, or in a tmux session
+# not named `cc-*` — matched that row and wrote its state, which the server
+# reads as current while the row's real pane is mid-turn. With both halves,
+# attribution stays POSITIVE and measured — this hook writes for a session only
+# when the registry itself names that uuid as its own AND the process carries
+# the marker — so a stranger's Claude session on this box that does not carry
+# CLAUDE_JOB_DIR exits 0 exactly as it did before the fallback existed.
+#
+# ONE STRANGER CARRIES IT ANYWAY, because CLAUDE_JOB_DIR is INHERITED, not
+# handed to each process. Claude Code's child-environment builder keeps it (the
+# prompt it gives a forked session even says to use `$CLAUDE_JOB_DIR/tmp`), so
+# everything a forked session starts has it, and a `claude --resume <registry
+# uuid>` run from a forked session's own shell matches that row and writes its
+# state; so may a bare `claude --continue` there (it takes the newest transcript
+# in that directory, usually the fork's own). No variable tells them apart:
+# each Claude process sets its hooks' CLAUDECODE, CLAUDE_CODE_SESSION_ID,
+# CLAUDE_CODE_CHILD_SESSION and CLAUDE_PID afresh. It needs a forked session to
+# start it, so it is far narrower than the hole the marker closes (D-4953).
+#
+# What the fallback must never become is the registry's WRITER. `ccd` decides
+# the uuid (`_sync_uuid`); this only reports against it.
+id=""
+if [[ -n "${TMUX_PANE:-}" ]]; then
+  # BOUNDED, and for a sharper reason than the statusline's (`ccd/statusline-command.sh`, D-2791):
+  # this question is asked once per HOOK EVENT inside every live session on the box, not once per
+  # render in one pane. `tmux display-message` talks to the tmux SERVER over its socket, and a
+  # server that is SIGSTOPped, swapping, or wedged answers nothing and never returns, so an unbounded
+  # call hangs the hook, on the hot path of every tool call in ~20 sessions: the bound is the fleet's.
+  # THE PLATFORM SPELLING, copied from the statusline fix: bare `timeout` is GNU and a macOS box
+  # carries Homebrew's `gtimeout`. NEITHER present means the question is SKIPPED, not asked unbounded:
+  # `$tname` stays empty, the guard below exits 0 and nothing is written, the honest degrade for a
+  # file whose header makes exit 0 absolute: a hook that cannot bound its own tmux call must not make it.
+  #
+  # EXACT PANE, `-t "$TMUX_PANE"` (delegation broker wave 3): untargeted, tmux resolves the client's pane only while it is
+  # alive, and once it is gone answers for the most recently active session, which need not be this hook's own: a
+  # pane torn down beside a live ccrc one was attributed to that other session. A failed lookup leaves `$tname` empty: exit 0.
+  hooktmo=""
+  for hooktmo_bin in timeout gtimeout; do
+    if command -v "$hooktmo_bin" >/dev/null 2>&1; then hooktmo="$hooktmo_bin"; break; fi
+  done
+  tname=""
+  [[ -n "$hooktmo" ]] && tname=$("$hooktmo" 2 "${_TMX_ARGV[@]}" display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null)
+  [[ "$tname" == cc-?* ]] && id="${tname#cc-}"
+# THE FALLBACK, AND ONLY FOR A FORK (D-4953). The `elif` is the no-pane half of
+# the gate: a process with a pane is answered by the pane or by nobody, and the
+# paned path never evaluates this line at all — no fork, no exec, not even the
+# test. `CLAUDE_JOB_DIR` is the other half, and the variable is MEASURED, not
+# read off the launcher. Claude Code 2.1.296 starts a background job with
+# CLAUDE_CODE_SESSION_KIND=bg, CLAUDE_BG_BACKEND=daemon, CLAUDE_BG_SOURCE and
+# CLAUDE_JOB_DIR, but builds every hook's environment from a copy that DELETES
+# its list of background-identity variables, those first three among them. A
+# hook run by a 2.1.296 process given all four sees CLAUDE_JOB_DIR and none of
+# the other three, so a gate on CLAUDE_CODE_SESSION_KIND=bg would never open and
+# this fallback would be dead for the very sessions it exists for. The value is
+# tested for presence only, never used as a path. Presence means "a forked job,
+# or a process one started": the header above names the stranger that admits.
+#
+# THE SESSION ID MUST BE NON-EMPTY, and that conjunct is a guard, not a
+# formality: an empty id equals an empty row (one whose uuid source failed),
+# and an UNSET id expanded in the comparison below kills the hook under `set -u`
+# with "unbound variable" and exit 1.
+#
+# ASK THE REGISTRY instead of the tmux server. `ccd` writes `$REG/*.uuid`
+# (`_sync_uuid`, and row creation); this loop only reads it — one small file per
+# row, and only on the forked path, so the hot (paned) path above pays nothing new.
+#
+# BUILTINS, NOT `cat`/`basename` (whole-branch review, F8). The first draft
+# forked `cat` once per registry row plus a `basename` on the match — about 21
+# forks per hook event — and this path is the hot path of exactly the FORKED
+# sessions this change exists to serve: a fork has no TMUX_PANE, so every one
+# of its tool calls arrives here. `ccrc-doctor-checks` argues the identical
+# substitution at length for its own registry walk ("`${u##*/}` / `${id%.uuid}`
+# is `basename "$u" .uuid` with no fork; `read -r var < file` is `cat file`
+# with no fork and no subshell"), and the same reasoning applies twice over
+# here, because a doctor run happens when an operator asks and this happens on
+# every tool call in every forked session on the box.
+#
+# A REGULAR ROW, READ IN SILENCE, OR NOT AT ALL (D-4954). This walk opens every row in
+# the registry, not just this session's own, so one bad node anywhere reaches
+# every event of every forked session. The first spelling tested only `-e`
+# before an unbounded `read`: a FIFO at any `*.uuid` blocked the hook in
+# open(2), and a symlink to /dev/zero read forever, each until Claude Code
+# killed the hook at HOOK_TIMEOUT_S (`install-session-hooks.sh`), on every tool
+# call. Its redirection order, `< "$u" 2>/dev/null`, also opened the row before
+# silencing stderr, so a mode-000 row, or one unlinked between the test and the
+# open, printed bash's error on the hook's stderr. Three parts, each pinned:
+#   - `-f`, `_ct_read`'s own test: it follows a symlink, so one to a device or
+#     a FIFO is refused along with the node itself.
+#   - the BRACES put the open's own failure under 2>/dev/null (D-1691), so an
+#     unreadable row, or one unlinked after `-f`, costs its comparison and
+#     nothing else. That is also why there is no `-r` beside `-f`: such a row
+#     already fails its open in silence and compares unequal, so a `-r` would
+#     be a test no mutation can red, and it could not see the unlink anyway.
+#   - `-n CCRC_ID_MAX` bounds what one row can cost, as `_ct_read`'s `-N` does.
+#     It counts characters, and `read` drops NUL bytes uncounted, so only `-f`
+#     stands between this line and /dev/zero.
+# NOT `_ct_read` itself, and that is measured: its `-N` read plus the trim cost
+# 2.9-3.4 ms per walk against 1.8-2.5 ms for this line, on a 200-row registry
+# under Linux, on the path every tool call of a forked session takes. What
+# `read` returns is compared exactly — the newline stripped, nothing trimmed —
+# so a row ccd did not write cleanly compares unequal and the hook writes
+# nothing: it fails closed. `read`'s status is deliberately not tested (it is
+# non-zero on a row with no trailing newline while still assigning), and this
+# file runs under `set -uo pipefail` and NOT `set -e`, so it ends nothing. What
+# stays is the race D-4418 names for the spool: a node swapped in AFTER `-f` is
+# still opened, because bash has no O_NONBLOCK redirection.
+elif [[ -n "${CLAUDE_JOB_DIR:-}" && -n "${CLAUDE_CODE_SESSION_ID:-}" && -d "$REG" ]]; then
+  ruuid=""
+  for u in "$REG"/*.uuid; do
+    [[ -f "$u" ]] || continue
+    ruuid=""; { IFS= read -r -n "$CCRC_ID_MAX" ruuid < "$u"; } 2>/dev/null
+    [[ "$ruuid" == "$CLAUDE_CODE_SESSION_ID" ]] || continue
+    id="${u##*/}"; id="${id%.uuid}"
+    break
+  done
+fi
+# NOT A GUARD: the regex on the next line already rejects the empty string
+# (`+` requires at least one character), so this line can never be the one
+# that reds a mutation — dropping it changes nothing measurable. Kept anyway,
+# for a reader who should not have to derive "no id" from a character class.
+[[ -n "$id" ]] || exit 0
 [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || exit 0
 [[ -d "$REG" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
-
-event=$(jq -r '.hook_event_name // empty' <<<"$payload" 2>/dev/null) || exit 0
+DSP_DEFS='def maxline: dspcap; def maxlabel: 128; def maxpath: 512; def isid: type == "string" and length >= 1 and length <= idmax and (explode | all(idch)); def nbytes: explode | map(if . < 128 then 1 elif . < 2048 then 2 elif . < 65536 then 3 else 4 end) | add // 0; def fits($m): type == "string" and length <= $m and nbytes <= $m; def chk($m): if type != "string" then [null, false] elif fits($m) then [., false] else [null, true] end; def req($m): if type == "string" and . != "" and fits($m) then . else null end; def over($m): type == "string" and (fits($m) | not); def obj: if type == "object" then . else {} end; def outcome: if . == "async_launched" then "async-launched" elif . == "completed" then "completed" elif . == "failed" or . == "error" then "failed" else "unknown" end; def word: type == "string" and length >= 1 and length <= 32 and (explode | all((. >= 97 and . <= 122) or . == 95 or . == 45)); def tagv($o; $c): if type == "string" and startswith($o) and endswith($c) then .[($o | length):(length - ($c | length))] else null end; def note: if type == "string" and startswith("<task-notification>\n") and contains("</task-notification>") then (ltrimstr("<task-notification>\n") | split("\n")) as $l | ($l[0] | tagv("<task-id>"; "</task-id>")) as $a | ($l[1] | tagv("<tool-use-id>"; "</tool-use-id>")) as $b | ($l[if ($l[2] | type) == "string" and ($l[2] | startswith("<output-file>")) then 3 else 2 end] | tagv("<status>"; "</status>")) as $d | if ($a | isid) and ($b | isid) and ($d | word) then {taskId: $a, toolUseId: $b, status: (if $d == "completed" then "completed" elif $d == "failed" then "failed" elif $d == "killed" or $d == "cancelled" or $d == "canceled" or $d == "stopped" then "cancelled" else "unknown" end)} else null end else null end; def lrwc: (. >= 48 and . <= 57) or (. >= 65 and . <= 90) or (. >= 97 and . <= 122) or . == 46 or . == 45 or . == 95; def lrbyte: lrwc or . == 47 or . == 64 or . == 43; def lrdrop($t; $y): {v: 1, t: $t, k: "drop", why: $y} | tojson; def lrpath($tp; $cs): if type == "string" and ($tp | type) == "string" and ($tp | startswith("/")) and ($tp | endswith("/" + $cs + ".jsonl")) then (($tp | .[:-6]) + "/workflows/scripts/") as $pre | if fits(maxpath) and startswith($pre) and endswith(".js") and (explode | all(lrbyte)) and (split("/") | .[1:] | all(. != "" and . != "." and . != "..")) and (.[($pre | length):-3] | explode | (length >= 1 and length <= 128 and (.[0] | idch) and (.[1:] | all(lrwc)))) then . else null end else null end; def lrec: . as $p | ($p.hook_event_name // "" | tostring | keep(alpha)) as $ev | ($p.tool_name | if type == "string" then . else "" end) as $tn | ($p.tool_input | obj) as $ti | ($p.tool_response | obj) as $o | ($o.status | outcome) as $oc | ($p.session_id | if isid then . else null end) as $cs | (now * 1000 | floor) as $t | (if $wr != "" and ($wr | length) <= 64 and ($wr | explode | all(lrwc)) then $wr else null end) as $w | ($ti.resumeFromRunId) as $rr | (if $ev != "PostToolUse" then null elif $tn == "Workflow" then (if $rr != null and $oc != "async-launched" then {shape: true} elif $oc != "async-launched" then null elif $rr != null then {k: "resume", ids: [$rr, $o.taskId], b: {run: $rr, task: $o.taskId}, ws: true} else {k: "workflow", ids: [$o.runId, $o.taskId], b: {run: $o.runId, task: $o.taskId}, ws: true} end) elif $tn == "Agent" or $tn == "Task" then (if $oc == "async-launched" and ($o.isAsync | if type == "boolean" then . else true end) then {k: "agent", ids: [$o.agentId], b: {agent: $o.agentId}} else null end) elif $tn == "SendMessage" then ($ti.to | if isid then {k: "send", ids: [.], b: {agent: .}} else null end) else null end) as $d | if $d == null then "" elif $d.shape == true then lrdrop($t; "shape") elif $cs == null or ($d.ids | all(isid) | not) then lrdrop($t; "id") else ($o.scriptPath | lrpath($p.transcript_path; $cs)) as $sc | ({v: 1, t: $t, k: $d.k, w: $w, uuid: $cs} + $d.b + (if $d.ws == true then {script: $sc} else {} end) | tojson) as $row | if $d.ws == true and $sc == null then lrdrop($t; "path") + "\t" + $row else $row end end; def spool: . as $p | ($p.hook_event_name // "" | tostring | keep(alpha)) as $ev | ($p.tool_name | if type == "string" then . else "" end) as $tn | ($p.tool_use_id | if isid then . else null end) as $tu | ($p.session_id | if isid then . else null end) as $cs | (($p.agent_id // "") | tostring | length > 0) as $hasa | ($p.agent_id | if isid then . else "" end) as $aid | ($p.agent_type | chk(maxlabel)) as [$at, $ato] | ($p.cwd | chk(maxpath)) as [$cwd, $cwdo] | ($p.transcript_path | chk(maxpath)) as [$tp, $tpo] | ($p.tool_input | obj) as $ti | ($p.tool_response) as $r | ($r | obj) as $o | ($o.status | outcome) as $oc | ($ti.command | type == "string" and contains("worktree")) as $wt | (if $ev == "SessionStart" then ($p.source | if req(maxlabel) != null then {b: {source: .}} else null end) elif $ev == "SessionEnd" then ($p.reason | if req(maxlabel) != null then {b: {reason: .}} else null end) elif $ev == "SubagentStart" then (if $aid != "" then {b: {}} else null end) elif $ev == "SubagentStop" then (if $aid != "" then ($p.agent_transcript_path | chk(maxpath)) as [$ap, $apo] | {b: {agentTranscriptPath: $ap}, o: $apo} else null end) elif $ev == "UserPromptSubmit" then ($p.prompt | note | if . != null then {b: {notification: .}} else null end) elif $ev == "PreToolUse" and $tu != null then (if $tn == "Agent" or $tn == "Task" or $tn == "Workflow" then ($ti.isolation | chk(maxlabel)) as [$iso, $isoo] | {b: {toolName: $tn, toolUseId: $tu, isolation: $iso}, o: $isoo} elif $tn == "Bash" then {b: {toolName: "Bash", toolUseId: $tu}, w: $wt} else null end) elif $ev == "PostToolUse" and $tu != null then (if $tn == "Agent" or $tn == "Task" then {b: {toolName: $tn, toolUseId: $tu, outcome: $oc, launch: (if ($oc == "async-launched" or $oc == "completed") and ($o.agentId | isid) then {status: $oc, agentId: $o.agentId, isAsync: (if ($o.isAsync | type) == "boolean" then $o.isAsync else $oc == "async-launched" end)} else null end)}} elif $tn == "Workflow" then ($o.taskType | req(maxlabel)) as $tt | ($o.workflowName | req(maxlabel)) as $wn | ($o.transcriptDir | req(maxpath)) as $td | ($o.scriptPath | req(maxpath)) as $sp | {b: {toolName: "Workflow", toolUseId: $tu, outcome: $oc, launch: (if ($oc == "async-launched" or $oc == "completed") and ($o.taskId | isid) and ($o.runId | isid) and $tt != null and $wn != null and $td != null and $sp != null then {status: $oc, taskId: $o.taskId, taskType: $tt, workflowName: $wn, runId: $o.runId, transcriptDir: $td, scriptPath: $sp} else null end)}, o: (($o.taskType | over(maxlabel)) or ($o.workflowName | over(maxlabel)) or ($o.transcriptDir | over(maxpath)) or ($o.scriptPath | over(maxpath)))} elif $tn == "Bash" then {b: {toolName: "Bash", toolUseId: $tu, outcome: (if ($r | type) == "object" and $r.interrupted == true then "failed" elif ($r | type) == "object" and ($r.stdout | type) == "string" then "completed" else "unknown" end)}, w: $wt} else null end) else null end) as $v | if $cs != null and ($hasa | not or $aid != "") and $v != null then (($cwdo or $tpo or $ato or ($v.o // false))) as $ov | (($v.w // false) and $cwd != null and ($cwd | startswith("/")) and ($cwd | explode | all(. >= 32 and . != 127))) as $trig | (if $trig then 17 else 0 end) as $rs | (now * 1000 | floor) as $ms | ($ms / 1000 | floor) as $s | (($s | strftime("%Y-%m-%dT%H:%M:%S")) + "." + (($ms % 1000) | tostring | ("00" + .) | .[-3:]) + "Z") as $t | def L($n): {v: 1, eventKind: $ev, observedAt: $t, sessionId: $sid, parentIncarnation: $gen, claudeSessionId: $cs} + (if $ver != "" and $n < 1 then {claudeVersion: $ver} else {} end) + (if $cwd != null and $n < 2 then {cwd: $cwd} else {} end) + (if $aid != "" then {agentId: $aid} else {} end) + (if $ev == "SubagentStart" or $ev == "SubagentStop" then {agentType: (if $n < 3 then $at else null end)} elif $aid != "" and $at != null and $n < 3 then {agentType: $at} else {} end) + (if $tp != null and $n < 4 then {transcriptPath: $tp} else {} end) + $v.b + (if $n > 0 or $ov then {truncated: true} else {} end); (first(range(0; 5) | L(.) | select(((tojson | nbytes) + 1 + $rs) < maxline)) // null) as $line | if $line == null then ["", "", "", ""] else [($s | strftime("%Y%m%d%H")), (($s - 86400) | strftime("%Y%m%d%H")), (if $trig then $cwd else "" end), ($line | tojson)] end else ["", "", "", ""] end;'; dsp_dir="$REG/delegation/spool/$id" dsp_gen="" dsp_ver="" dsp_defs="" dsp_out=', "", "", "", ""' lrc_out=', ""' lrc_w="" lrc_ok="" dsp_sp=""; DSP_LINE_BELOW=4096 DSP_LINE_SMALL=1008; [[ "${OSTYPE:-}" == linux-gnu* && "${BASH_VERSINFO[5]-}" == *-linux-gnu* ]] || DSP_LINE_BELOW=$DSP_LINE_SMALL; [[ "$id" != .* && ${#id} -le CCRC_ID_MAX && -f "$REG/$id.generation" && ! -L "$REG/$id.generation" ]] && { IFS= read -r -N 37 dsp_gen < "$REG/$id.generation"; } 2>/dev/null; [[ -d "$dsp_dir" && ! -L "$dsp_dir" && ! -L "${dsp_dir%/*}" && ! -L "${dsp_dir%/*/*}" ]] && dsp_sp=1; [[ ! -e "$REG/$id.deleg" || ( ! -L "$REG/$id.deleg" && -f "$REG/$id.deleg" ) ]] && lrc_ok=1; if [[ "$dsp_gen" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ && ( -z "${CCRC_SESSION_GENERATION:-}" || "${CCRC_SESSION_GENERATION:-}" == "$dsp_gen" ) ]]; then case "$payload" in *'"Bash"'*|*'"Agent"'*|*'"Task"'*|*'"Workflow"'*|*'"SessionStart"'*|*'"SessionEnd"'*|*'"SubagentStart"'*|*'"SubagentStop"'*|*'task-notification>'*|*'"SendMessage"'*) dsp_ver="${CLAUDE_CODE_EXECPATH:-}"; dsp_ver="${dsp_ver##*/}"; [[ "$dsp_ver" =~ ^[0-9][0-9A-Za-z.+-]{0,31}$ ]] || dsp_ver=""; lrc_c=""; if [[ -n "$dsp_sp" ]]; then lrc_c=1; elif [[ -n "$lrc_ok" ]]; then case "$payload" in *'"PostToolUse"'*) case "$payload" in *'"Agent"'*|*'"Task"'*|*'"Workflow"'*|*'"SendMessage"'*) lrc_c=1 ;; esac ;; esac; fi; if [[ -n "$lrc_c" ]]; then dsp_defs="def dspcap: $DSP_LINE_BELOW; $DSP_DEFS"; [[ -z "$dsp_sp" ]] || dsp_out=', ((try spool catch ["", "", "", ""]) | .[])'; if [[ -n "$lrc_ok" ]]; then lrc_out=', ([try lrec catch ""] | if length == 1 and (.[0] | type) == "string" then .[0] else "" end)'; [[ ! -L "$REG/$id.wrapper" && -f "$REG/$id.wrapper" ]] && { IFS= read -r -N 65 lrc_w < "$REG/$id.wrapper"; } 2>/dev/null; lrc_w="${lrc_w%$'\n'}"; fi; fi ;; esac; else dsp_gen=""; fi   # THE DELEGATION SPOOL's gate, builtins only (see the block after the history spool): a sound, unchanged-so-far incarnation must exist (read without the spool directory since session-continuity 6b, D-8363: `dsp_sp` keeps the directory as the spool's own condition, `lrc_ok` says `.deleg` may be appended), else the parse below builds no line; the spool's jq text is added only for a payload that carries the QUOTED name of a delegation tool or event or the notification tag, so every other event compiles the parse alone
+{ read -r event; read -r psid; read -r paid; read -r aid; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; read -r lrc_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" --arg wr "$lrc_w" 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); def idch: alpha or (. >= 48 and . <= 57) or . == 95 or . == 45; def idmax: 64; '"$dsp_defs"'(.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(idch)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end), (.agent_id | if type == "string" and length >= 1 and length <= idmax and (explode | all(idch)) then . else "" end)'"$dsp_out$lrc_out" <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write. The first four lines are the cleaned event, session id, any-agent-id flag and raw agent id; lines 5 to 8 of 9 are the delegation spool's (bucket, prune cutoff, listing cwd and line, all empty when no line is due); the ninth is the launch record's row (a string, always exactly one line: the parse ends `|| exit 0`, so a missing line would drop the whole event), empty when no row is due
 [[ -n "$event" ]] || exit 0
 
-state="" ask_json="null" interrupted="false" src="" gcmd=""
+# ── THE HISTORY CARD LINE (ccrc history spec 2026-10-05 §8.6, W1-B3) ─────
+# One line folded into the compact subject of SessionStart(compact)'s one
+# envelope, `History: node L…… (this compaction)[ · parent N……] ·
+# ~/.local/bin/ccrc history describe L…`, naming the leaf this compaction is
+# about to become. SessionStart(compact) runs before PostCompact and before the
+# indexer can have seen the boundary, so the line is ccd-history-sweep's
+# PREDICTION, `card/<id>/<uuid>.txt`: written only at end-of-file, deleted when
+# the boundary that consumed it is ingested. This hook only reads it, and
+# writes no receipt: delivery is measured from the transcript
+# (D-4737 (history-card-measured-from-transcript)).
+#
+# DEFINED HERE, ABOVE THE `case`: the SessionStart arm calls it, and the arm runs
+# inside the case, before the tail. This block is the ONE sanctioned insertion
+# above README's anchor into this file (the emitter call in the SessionStart
+# arm); README re-points that anchor by content (D-4748 (history-card-reader-above-the-arm)).
+#
+# BUILTINS ONLY: no command substitution and no external command, because the
+# compact card's serve lock may still be held when the arm calls this. `_ct_read`
+# is a builtin `read -N` that sets CT_V. The clock is EPOCHREALTIME, read ONCE
+# into `t` (each expansion reads the clock anew, so two reads could straddle a
+# second: the spool block's rule), and without it no line is served (never a
+# `date` fork). `$(( ))` is arithmetic, not a fork.
+#
+# THE CHECKS, in the spec's order (§8.6):
+#   1. the main thread (`$paid` empty);
+#   2. history-off absent;
+#   3. the id within SPOOL_ID_MAX, and a lowercase-UUID psid (the file's key).
+#      `.` and `..` need no test of their own: under scope/ and card/ they name
+#      directories, which `_ct_read` and `[[ -f ]]` refuse;
+#   4. recall-off/<id>, honoured only when it names THIS family's generation
+#      (B2's D-4680 (history-recall-off-generation)): CCRC_SESSION_GENERATION when it has the
+#      UUID grammar, else `$REG/<id>.generation` when it does, else the record
+#      the sweep wrote beside this prediction, card/<id>/<psid>.gen: the id's
+#      newest family's generation, '' for a legacy family or none, which is what
+#      B2's CLI compares with then (coordinator ruling R-recalloff-parity). The record
+#      is used ONLY when `.generation` is absent or empty (D-5063): a linked, unreadable,
+#      full-window, NUL-holding (a bounded `read -d ''` finds it; one after a broken UTF-8 byte fails the grammar instead) or non-UUID one is unusable, and a recall-off file that exists then
+#      withholds the line, as with a missing, linked, unreadable, malformed, NUL-holding or full-window record (one probe finds both)
+#      (fail closed). It is read the way B2's CLI reads it, so the card and `ccrc history`
+#      never put one family in two eval arms: a symlink, a non-file or an unreadable file
+#      is OFF (D-4749 (history-card-recall-off-unreadable-off)). The read is CCRC_ID_MAX
+#      chars where the CLI's is 4,096 bytes, so a read that FILLS the window is
+#      OFF before it is trimmed: a hand edit that pads the file past it withholds
+#      the line, never serves one the CLI answers exit 8 for (W2's verb writes
+#      37 bytes). A named fail-closed row (coordinator ruling
+#      R-recalloff-trim): this trim, and the generation reads' (they test the NUL probe's raw read, never `_ct_read`'s [:space:] class, which differs between C libraries, and each probe seeds `x` with a non-grammar value, so a probe that could not open its file withholds: D-5064), take ASCII whitespace only, in every
+#      locale, where the CLI's JS trim also strips U+00A0, U+FEFF and the
+#      Unicode spaces, so a value that still holds a character outside the
+#      generation grammar (empty, or [0-9a-f-]) withholds the line: it may
+#      withhold where the CLI recalls, never serve where the CLI exits 8;
+#   5. the PreCompact scope marker reads `main <psid> <ms>`, the ms no older than
+#      COMPACT_CARD_MAX_AGE (at most, D-5051) and not in the future (D-4747 (history-card-main-scope-only)); the read's own `|| return 0` is defence in depth (D-5056);
+#   6. one bounded read of the card file, a regular file only (a FIFO would
+#      block the read), at most HISTORY_CARD_MAX + 1 chars, ONE trailing LF
+#      stripped. The read's bound IS the 512-char cap: the grammar admits no
+#      line over 145 chars, so a separate length test would be one no input
+#      can reach, and this file does not spell guards nothing can trip. The
+#      tests are builtin; a node swapped in after the test is opened: a link is
+#      followed, a FIFO blocks until Claude Code kills the hook
+#      (install-session-hooks.sh HOOK_TIMEOUT_S), as the spool block says;
+#   7. the grammar, one positive pattern held in a variable;
+#   8. the room: line + LF + card within COMPACT_CARD_MAX_CHARS.
+# THE FOLD puts the line on its own line ABOVE the compact card, and only when it
+# fits, so the emitter's `${2:0:$COMPACT_CARD_MAX_CHARS}` clip never cuts the
+# card's footer; the render reserves the room in the tail
+# (D-4736 (history-card-fold-and-reserve)). The LF is a variable assigned outside the
+# quotes, because `$'\n'` inside `${…:+…}` is not expanded under `bash --posix`.
+# Nothing here touches COMPACT_SERVE_NONCE, so the line alone stamps no `served`.
+#
+# The four names below are this file's one spelling of the card's cap, grammar
+# and two directories, each bound to lib.mjs's CARD_LINE_MAX, CARD_LINE_PATTERN,
+# SCOPE_DIR and CARD_DIR by single-definition.test.ts; the tail derives the
+# reserve from the cap (D-4750 (history-hook-card-names-once)).
+HISTORY_CARD_MAX=512
+HISTORY_CARD_RE='^History: node L[0123456789abcdef]{6,20}… \(this compaction\)( · parent N[0123456789abcdef]{6,20}…)? · ~/\.local/bin/ccrc history describe L[0123456789abcdef]{6,20}$'
+HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"
+HISTORY_CARD_DIR="$HOME/.ccrc/history/card"
+_hook_history_card() {   # folds the history line into CARD_COMPACT; silent; builtins only
+  local uuid_re='^[0123456789abcdef]{8}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{12}$'
+  local off="$HOME/.ccrc/history/recall-off/$id" gen="" via="" x="" o="" ms="" now="" t="" s="" f="" v="" nl=$'\n' ws=$' \t\n\v\f\r'
+  [[ -z "$paid" ]] || return 0
+  [[ -e "$HOME/.ccrc/history-off" ]] && return 0
+  (( ${#id} <= 224 )) || return 0
+  [[ "$psid" =~ $uuid_re ]] || return 0
+  if [[ "${CCRC_SESSION_GENERATION:-}" =~ $uuid_re ]]; then
+    gen="$CCRC_SESSION_GENERATION" via=session
+  elif _ct_read "$REG/$id.generation"; [[ -e "$REG/$id.generation" || -L "$REG/$id.generation" ]]; then
+    if [[ -L "$REG/$id.generation" ]] || (( CT_RAWN >= CCRC_ID_MAX )) || { x=.; IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$REG/$id.generation"; }; then via=bad; else x="${x#"${x%%[!$ws]*}"}"; x="${x%"${x##*[!$ws]}"}"; if [[ "$x" =~ $uuid_re ]]; then gen="$x" via=registry; elif [[ -n "$x" ]]; then via=bad; fi; fi
+  fi
+  [[ -L "$off" || -L "${off%/*}" || ( -e "${off%/*}" && ! ( -d "${off%/*}" && -x "${off%/*}" ) ) ]] && return 0
+  if [[ -e "$off" ]]; then
+    [[ -f "$off" && -r "$off" ]] || return 0
+    IFS= read -r -N "$CCRC_ID_MAX" o 2>/dev/null < "$off"
+    (( ${#o} < CCRC_ID_MAX )) || return 0
+    o="${o#"${o%%[!$ws]*}"}"; o="${o%"${o##*[!$ws]}"}"
+    [[ "$o" == *[!0123456789abcdef-]* ]] && return 0
+    if [[ "$via" == bad ]]; then return 0; elif [[ -z "$via" ]]; then
+      [[ -L "$HISTORY_CARD_DIR/$id/$psid.gen" ]] && return 0
+      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0; { x=.; IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$HISTORY_CARD_DIR/$id/$psid.gen"; } && return 0; x="${x#"${x%%[!$ws]*}"}"; x="${x%"${x##*[!$ws]}"}"
+      [[ -z "$x" || "$x" =~ $uuid_re ]] || return 0
+      gen="$x"
+    fi
+    [[ "$o" == "$gen" ]] && return 0
+  fi
+  _ct_read "$HISTORY_SCOPE_DIR/$id" || return 0
+  [[ "$CT_V" == "main $psid "* ]] || return 0
+  ms="${CT_V#"main $psid "}"
+  [[ "$ms" =~ ^[123456789][0123456789]{0,15}$ ]] || return 0
+  t="${EPOCHREALTIME:-}"
+  [[ "$t" =~ ^[123456789][0123456789]{0,11}[.,][0123456789]*$ ]] || return 0
+  s="${t%%[.,]*}" f="${t#*[.,]}000"
+  now=$(( s * 1000 + 10#${f:0:3} ))
+  (( now >= ms && now - ms <= COMPACT_CARD_MAX_AGE * 1000 )) || return 0
+  f="$HISTORY_CARD_DIR/$id/$psid.txt"
+  [[ -f "$f" ]] || return 0
+  IFS= read -r -N "$(( HISTORY_CARD_MAX + 1 ))" v 2>/dev/null < "$f"
+  v="${v%"$nl"}"
+  [[ "$v" =~ $HISTORY_CARD_RE ]] || return 0
+  (( ${#v} + 1 + ${#CARD_COMPACT} <= COMPACT_CARD_MAX_CHARS )) || return 0
+  CARD_COMPACT="$v${CARD_COMPACT:+$nl$CARD_COMPACT}"
+  return 0
+}
+
+# THE ROSTER CARD (D4, #757; its wake arm R-5a, D-8201): a coordinator's open runs, re-read from the server and put
+# back into its context. ABOVE THE `case`, the `_hook_history_card` exception (D-4748): it has TWO callers, the
+# SessionStart arm (compact, resume, clear), which runs before the tail, and the wake arm in the tail (the first wake
+# prompt after an idle compaction, which fires none of those three). The card's TEXT has one builder,
+# `ccd/lib/roster-card.jq` (`roster_card`), loaded with `jq -L` from the lib directory beside this file (a tree's
+# `ccd/lib`, or `~/.cc-sessions/lib` where the installers put it); a missing file is no card. The ONE server read
+# this file makes off the compaction arms (the header declares it): a single `_hook_timeout 4` call to
+# `ccrc-api runs list`, fail-open — an unreachable or slow server, a missing binary or an unparsable body yields no
+# roster line at all, never an error and never a wait beyond 4 s. Its own ceiling, ROSTER_CARD_MAX_CHARS, is added to
+# the emitter's worst case AFTER CARD_TOTAL_MAX_CHARS (a test pins the sum). Children, subagents and kill-switched
+# sessions get nothing (`_hook_roster_eligible`, the one spelling of that rule for both callers); a held coordinator
+# still gets its roster. Armed only by an exact `"rosterCard":"live"` in that same reply, the server's Shadow lanes row
+# (D-8274, R-6; the one read of the switch, for both callers; the retired `$REG` marker is not read), it sets
+# CARD_ROSTER; else it only appends the card to a size-capped shadow log the operator can read, naming the event
+# (`compact`, `resume`, `clear` or `wake`). The caller decides WHEN; this function decides nothing about the event.
+ROSTER_CARD_MAX_CHARS=2048
+ROSTER_CARD_LIB="${BASH_SOURCE[0]%/*}/lib"
+[[ -f "$ROSTER_CARD_LIB/roster-card.jq" ]] || ROSTER_CARD_LIB="$HOME/.cc-sessions/lib"
+CARD_ROSTER=""
+_hook_roster_eligible() {   # -> 0 iff this event may carry a roster card: main thread, not a child, no card kill switch
+  [[ -z "$paid" ]] || return 1
+  [ -e "$CCRC_CARD_OFF" ] || [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ] && return 1
+  return 0
+}
+# THE ANCHOR (Overlord W1a, the anchor piece; spec §3.3.3 C38, plan `w1a-anchor.md`): the card's short part, which the
+# server renders (`server/src/continuity/anchor.ts#renderAnchor`) and serves from the card door's `part=anchor`. This file
+# decides nothing about its text: it asks, with one `_hook_timeout 4` read, and prints what came back in the emitter's
+# FIRST slot under ANCHOR_CARD_MAX_CHARS (the server fits the text under the same number, in bytes). The door's word is the
+# switch, the Shadow lanes row `anchor-slot`: `dark` while it is shadow, the text (or, for a fork, `live`) only once it is
+# live, so a merge arms nothing. A `dark` answer and a failed read look alike to a start (the slot stays empty and today's
+# role card prints); only the owed prompt below tells them apart. Eligibility is the roster card's one rule
+# (`_hook_roster_eligible`: main thread, not a child, no card kill switch); a child makes no read. The read takes its
+# bound from the invocation's one network budget (`_hook_net_bound`); a read the budget does not start answers rc 1.
+# THE PROOF (fix round 1, F1): only an answer that names `part: "anchor"` and the form asked is read, and its text only when
+# it begins with ANCHOR_PREFIX. Anything else, an older server's card page above all (it ignores `part`), is no answer:
+# the slot stays empty, the role card stands and the owed mark stays (the client checks the same proof first).
+ANCHOR_CARD_MAX_CHARS=1500 ANCHOR_PROMPT_MAX_CHARS=600 ANCHOR_OWED_TRIES=3   # the owed prompt's tries: below
+_hook_anchor_fetch() {   # <form: start|prompt|fork> -> ANCHOR_WORD (text, dark, live, or "" for no answer) and ANCHOR_TEXT; rc 1 when not asked for want of budget
+  local out=""; ANCHOR_WORD="" ANCHOR_TEXT=""
+  _hook_roster_eligible || return 0
+  _hook_net_bound 4000 || return 1
+  out=$(_hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" card --anchor --form "$1" 2>/dev/null) || { (( $? == 124 )) && HOOK_NET_HUNG=1; return 0; }
+  { IFS= read -r ANCHOR_WORD; IFS= read -r -d '' ANCHOR_TEXT; } < <(jq -j --arg f "$1" 'if .ok != true or .part != "anchor" or .form != $f then empty elif .dark == true then "dark\n"
+    elif .live == true and $f == "fork" then "live\n" elif (.text | type) == "string" and (.text | startswith("ccrc-anchor: ")) then "text\n", .text else empty end' <<<"$out" 2>/dev/null) 2>/dev/null
+  return 0
+}
+_hook_roster_card() {   # <event word> -> sets CARD_ROSTER (armed) or appends the shadow log (unarmed); 0 on every path
+  local body="" card="" log="$HOME/.ccrc/roster-card-shadow.log"
+  CARD_ROSTER=""
+  _hook_roster_eligible || return 0
+  _hook_net_bound 4000 || return 0   # the invocation's one network budget (fix round 1, F5)
+  body=$(_hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" runs list 2>/dev/null) || { (( $? == 124 )) && HOOK_NET_HUNG=1; return 0; }
+  card=$(jq -L "$ROSTER_CARD_LIB" -r --arg me "$id" --argjson now "$(_hook_epoch_ms)" \
+    --argjson max $(( ROSTER_CARD_MAX_CHARS - 64 )) 'include "roster-card"; roster_card($me; $now; $max)' <<<"$body" 2>/dev/null) || return 0
+  [ -n "$card" ] || return 0
+  if jq -e '.rosterCard == "live"' <<<"$body" >/dev/null 2>&1; then
+    CARD_ROSTER="$card"
+  elif [ -z "$(find "$log" -size +256k 2>/dev/null)" ]; then
+    mkdir -p "${log%/*}" 2>/dev/null
+    printf '%s %s %s\n%s\n' "$(_hook_epoch_ms)" "$id" "$1" "$card" >> "$log" 2>/dev/null
+  fi
+  return 0
+}
+
+state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" crons="-1" bgk="" bgi="" err="" hts="" msid="" sessend="" apr=""
 case "$event" in
   UserPromptSubmit) state="working" ;;
   PostToolUse)
@@ -1141,7 +3362,7 @@ case "$event" in
       # questions/options while the pane showed an actual 3-option menu. Both
       # paths must keep producing the same {questions:…} envelope shape.
       ask_json=$(jq -c '{questions: (.tool_input.questions // [])}' <<<"$payload" 2>/dev/null) || ask_json="null"
-    else
+    else apr=1   # the flag the tail's approval wait reads (plan Task 14, D-5297); on this line so no anchor below moves
       ask_json=$(jq -c '{approval: {tool: (.tool_name // "unknown"),
         summary: ((.tool_input.command // .tool_input.file_path // .tool_input.path
                    // .tool_input.url // .tool_input.pattern // "") | tostring | .[0:200])}}' \
@@ -1196,22 +3417,721 @@ case "$event" in
     # must happen even for `source == compact` (which returns early below):
     # a compacted session is still a session whose home may be unconverged.
     _hook_memory_converge || true
-    CARD_GRAPH=""; CARD_HOLD=""; CARD_CCRC=""; CARD=""
+    # INITIALISED HERE, BESIDE THE SUBJECTS, not inside `_hook_compact_card`:
+    # that function runs only on `source == compact`, while
+    # `_hook_compact_serve_end` below runs on EVERY SessionStart, and this file
+    # is `set -u`. An initialiser that lived only on the compact path would
+    # make every other SessionStart die on an unbound variable — the worst
+    # shape this file can fail in, since the server reads the state it writes.
+    CARD_GRAPH=""; CARD_HOLD=""; CARD_CCRC=""; CARD_COMPACT=""; CARD_ROSTER=""; CARD=""
+    COMPACT_SERVE_FD=""; COMPACT_SERVE_NONCE=""
+    # THE ROLE SUBJECT (manual-sessions-are-coordinators, D-5301; spec 2026-10-17 §8; the role from the first turn, D-8142).
+    # Every session that is not a dispatched child is its project's coordinator. THE ROLE IS DERIVED, NEVER MARKED: `.child` is
+    # written only by a dispatch (`ws-add --no-rc --child <run>`), so every path the operator creates a
+    # session by (the PWA "+", the create-session and start-programme sheets, the CLI) leaves a row without
+    # it. It reads exactly two names, `$REG/<id>.child` and `$REG/<id>.hold`, writes none and quotes no
+    # registry byte. EXISTENCE, NOT CONTENT: a directory, an unreadable file or a dangling `.child` link (D-5301,
+    # `_ws_expire_not_child`'s `-e`/`-L` reading) still counts as present, so doubt is silence for a child.
+    # TWO TEXTS, BY SOURCE (D-8142, which overturns D-5301's "no eager skill load" and D-5359's resume/fork silence): startup,
+    # clear, compact and a source-less start are fresh or rebuilt contexts and are told to load the `ccrc-coordinator` skill NOW
+    # and to read their programme's goals; a `resume` or `fork` carries a transcript that already received the fresh text, so it
+    # gets a SHORTER reminder (load the skill only if this context lacks it). No "shown" marker exists or is added. Both texts
+    # keep the same last sentence ("your own go to the operator"), so a rebase over the autonomy plan's edit replaces one
+    # sentence. Mutually exclusive with every held sentence, and each text is under 860 characters, held case A's bound, so
+    # `CARD_MAX_CHARS`'s structural worst case (graphify + held case A + co-tenant) is unchanged; a linked tree's
+    # diff list is bounded so that worst case still fits (`CARD_DIFF_LIST_MAX_CHARS`).
+    # DEFINED HERE (D-5358), in the arm, not beside `_hook_hold_card`: nothing new goes above the tail line
+    # (D-3615), and every line added up there moves the frozen compaction-card corpus's anchors.
+    _hook_role_card() {
+      CARD_ROLE=""
+      [ -e "$CCRC_CARD_OFF" ] && return 0
+      { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
+      [ -e "$REG/$id.hold" ] && return 0
+      case "$src" in
+        # compact keeps the short reminder: Claude Code re-attaches skills already invoked, so reloading would only spend tokens.
+        resume|fork|compact) CARD_ROLE="ccrc-role: You are still this project's coordinator. If the \`ccrc-coordinator\` skill is not loaded in this context, load it now. Your children's questions and permission prompts come to you first; your own go to the operator." ;;
+        *) CARD_ROLE="ccrc-role: You are this project's coordinator from your first turn. Load the \`ccrc-coordinator\` skill now, before anything else, and act as it says. When your work belongs to a programme, read its goals and definition of done in its ledger (\`docs/superpowers/programs/<slug>.md\`) before you plan or ask. Your children's questions and permission prompts come to you first; your own go to the operator." ;;
+      esac
+      return 0
+    }
+    # THE ROSTER CARD (D4, #757): `_hook_roster_card`, above the `case` (R-5a, D-8201), on compact, resume and clear
+    # of a main-thread session; the wake arm in the tail is its other caller.
+    CARD_ROLE=""; CARD_ANCHOR=""; ANCHOR_WORD=""
+    # THE ANCHOR'S SLOT (the anchor piece): a start's anchor, or a fork's one line only on the door's `live` (ruling R6); a
+    # `dark` answer or none leaves the slot empty, and the role card below prints as it did before the anchor.
+    case "$src" in startup|resume|clear|compact) _hook_anchor_fetch start; [[ "$ANCHOR_WORD" == text ]] && CARD_ANCHOR="$ANCHOR_TEXT" ;;
+      fork) _hook_anchor_fetch fork; [[ "$ANCHOR_WORD" == live ]] && CARD_ANCHOR='ccrc-anchor: a forked copy is not this session; it has no card.' ;; esac
     _hook_graph_card || true
     _hook_hold_card  || true
-    _hook_ccrc_card  || true
+    [ -n "$CARD_ANCHOR" ] || _hook_role_card  || true
+    _hook_ccrc_card  || true; case "$src" in compact|resume|clear) _hook_roster_card "$src" || true ;; esac
+    # THE FOURTH SUBJECT, compact only (compaction-card spec §3.3): a card
+    # describes the compacted context and nothing else, so startup, resume
+    # and clear never read the file. It is passed to the emitter SEPARATELY —
+    # the standing three keep their clip, the card gets its own (D-1899).
+    [[ "$src" == compact ]] && { _hook_compact_card || true; _hook_history_card || true; }
     CARD="$CARD_GRAPH"
     [ -z "$CARD_HOLD" ] || CARD="${CARD:+$CARD }$CARD_HOLD"
+    [ -z "$CARD_ROLE" ] || CARD="${CARD:+$CARD }$CARD_ROLE"
     [ -z "$CARD_CCRC" ] || CARD="${CARD:+$CARD }$CARD_CCRC"
-    [ -z "$CARD" ] || _hook_emit_context "$CARD"
-    [[ "$src" == compact ]] && exit 0
-    state="done" ;;
+    # The stamp follows the PRINT, never the intent: only an emitter that
+    # returned 0 with a compact subject in hand records `served`.
+    if [ -n "$CARD$CARD_COMPACT$CARD_ROSTER$CARD_ANCHOR" ]; then
+      if _hook_emit_context "$CARD" "$CARD_COMPACT" "$CARD_ROSTER" "$CARD_ANCHOR" && [ -n "$CARD_COMPACT" ]; then _hook_compact_mark_served || true; fi  # @anchor compact-arm-emit-call
+    fi
+    # A start the door answered owes no prompt anchor (Task 3), whatever its source (fix round 1, F4): its own start carried
+    # it, or the slot is dark, or it is a fork, whose prompt must never carry the original's anchor.
+    [[ -n "$ANCHOR_WORD" ]] && rm -f -- "$REG/$id.anchor-owed" 2>/dev/null
+    # THE RETAINED SERVE LOCK ENDS HERE, on every path through this arm — the
+    # marker, when one was published, was the last act inside it.
+    _hook_compact_serve_end || true
+    # COMPACT EXITS BELOW, NOT HERE (delegation broker wave 3): the delegation spool records every SessionStart, compact included,
+    # and its append is in the tail. `sessend`, the flag that makes a SessionEnd inert, carries the early exit past the writers that
+    # must still not see a compact start (the capture arm and the turn marker each test `$src` for it, and the history spool's own
+    # source list already leaves it out) to the one exit just after the spool, which is before the hookstate write, so a compact
+    # start still stamps nothing (D-306).
+    if [[ "$src" == compact ]]; then sessend=1; else state="done"; fi ;;
   Stop)
     state="done"
-    [[ $(jq -r '.is_interrupt // false' <<<"$payload" 2>/dev/null) == true ]] && interrupted="true" ;;
+    # `is_interrupt` is not read: no installed lane's Stop carries it (spec §5.1); `interrupted` stays false here (the
+    # Subagent branch carries an older value). This fork measures `background_tasks`: bg -1 unless it is an ARRAY (bg-kinds-only-from-an-array (D-3659)), each alias cleaned alone.
+    # Its regexes (and StopFailure's) feed the marker and the delegated pair, and the program emits its five lines only together: a jq built without Oniguruma leaves bg -1 / err "", never a count without its kinds, and never the delegated pair (the payload parse above is regex-free).
+    # `background-aware-working` (D-5231): lines four and five are the DELEGATED count and its kinds (unique, sorted,
+    # comma-joined), over the tasks that pass the delegated-task rule. This `jq` is the documented second spelling of
+    # `NON_DELEGATING_TASK_KINDS` and `TERMINAL_TASK_STATUSES` (`shared/api.ts`), held equal by
+    # `session-hook-background.test.ts`, which iterates over the TypeScript lists: a task counts unless its CLEANED kind
+    # is one of the six, or its status is one of the three terminal words; an unseen kind or status counts.
+    { read -r bg; read -r bgk; read -r bgi; read -r bgd; read -r bgdk; read -r crons; } < <(jq -r '(if (.background_tasks|type) == "array" then .background_tasks else null end) as $a | def kind: (.type | if type == "string" then ascii_downcase | gsub(" "; "-") | gsub("[^a-z_-]"; "") else "" end); [$a[]? | objects | select((kind | IN("shell", "monitor", "mcp-task", "dream", "auto-mode-scan", "memory-import")) | not) | select((.status | IN("completed", "failed", "killed")) | not) | kind] as $d | [(if $a == null then -1 else ($a|length) end), ([$a[]? | objects | kind | select(length > 0)] | join(",")), ([$a[]? | objects | .id | strings | select(test("^[A-Za-z0-9_-]{1,64}\\z"))] | .[0:8] | join(",")), (if $a == null then -1 else ($d|length) end), ($d | map(select(length > 0)) | unique | join(",")), (if (.session_crons|type) == "array" then (.session_crons|length) else -1 end)] | .[]' <<<"$payload" 2>/dev/null)
+    # The pair reaches the hookstate only from an ARRAY (bg not -1) and as a plain count; anything else writes neither.
+    # `hibernate-long-idle-sessions` (D-5242): line six is `crons`, the length of `session_crons` (session-scoped crons and wakeups, which no live word, background list or roster shows), -1 unless it is an ARRAY; only the marker reads it.
+    [[ "$crons" =~ ^[0-9]+$ ]] || crons=-1
+    [[ "$bg" =~ ^[0-9]+$ && "$bgd" =~ ^[0-9]+$ ]] || { bgd="" bgdk=""; } ;;
+  StopFailure) stopfail=1; err=$(jq -r '(.error // "") | tostring | gsub("[^a-z_]"; "") | .[0:64]' <<<"$payload" 2>/dev/null) ;;
+  SessionEnd) sessend=1 ;;   # delegation broker §5.3: a termination HINT only — captured below in a -hookcap session, otherwise inert (no hookstate, no marker)
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
   *) exit 0 ;;
 esac
+# THE HISTORY SCOPE MARKER, FAIL-CLOSED (ccrc history spec 2026-10-05 §5.1,
+# W1-B3): a main-thread PreCompact empties this id's existing marker HERE, before
+# any exit below can run, and the `history-scope` block after the compaction
+# card's call writes only a decided verdict. So a hookstate write or a jq that
+# fails, or a verdict nobody reached, leaves an EMPTY marker, never an older
+# fresh `main` one for a subagent (spec §5.1, "The early truncation").
+# Builtins only; no file is made; only a regular non-link file in a non-link scope/.
+[[ "$event" == PreCompact && -z "$paid" ]] && [[ -f "$HISTORY_SCOPE_DIR/$id" && ! -L "$HISTORY_SCOPE_DIR/$id" && ! -L "$HISTORY_SCOPE_DIR" ]] && { : > "$HISTORY_SCOPE_DIR/$id"; } 2>/dev/null
+# THE CAPTURE ARM (worker stall watch §5.1's first task; capture-arm-keyed-on-hookcap (D-3612),
+# capture-arm-is-permanent (D-3613), capture-file-carries-a-meta-line (D-3669)). Only a session whose
+# ccd id ends `-hookcap` pays more than this one test. Every registered event that
+# reaches this line (all but SessionStart `compact`, which this test leaves out, and an
+# unknown event) is copied to one 0600 file in a 0700 per-id directory OUTSIDE the
+# registry. Line 1 is a meta line naming this pane's own session id, sanitised; the
+# rest is the payload as sent. It stops at 200 files, prints nothing, and no failure
+# in it reaches the exit status. Raw files never leave the box:
+# deploy/hook-capture-reduce.mjs reduces a directory to key sets, types and
+# validated tokens, and only that is ever committed, because the repo is public.
+# `hcat` is reset on every run, so a later reuse of the stamp (`${hcat:-…}`) can
+# never take it from the environment.
+hcat=""
+if [[ "$id" == *-hookcap && "$src" != compact ]]; then
+  hcdir="$HOME/.ccrc/hook-capture/$id"
+  ( umask 077; mkdir -p "$hcdir" ) 2>/dev/null
+  hcn=( "$hcdir"/*.cap )
+  if [[ -d "$hcdir" ]] && { [[ ! -e "${hcn[0]}" ]] || (( ${#hcn[@]} < 200 )); }; then
+    hcat=$(_hook_epoch_ms); hcsid="${CLAUDE_CODE_SESSION_ID:-}"; hcsid="${hcsid//[^A-Za-z0-9-]/}"
+    hctmp="$hcdir/.$event.$$.capture.tmp"
+    { ( umask 077; printf '{"envSid":"%s"}\n%s\n' "$hcsid" "$payload" > "$hctmp" ); } 2>/dev/null \
+      && mv -f "$hctmp" "$hcdir/$event-$hcat-$$.cap" 2>/dev/null || rm -f "$hctmp" 2>/dev/null
+  fi
+fi
+
+# THE TURN MARKER (worker stall watch, spec §5.1): `$REG/<id>.turn.json`, one JSON
+# line that the stall lane and the mail gate read. It is written HERE, below the
+# case, because README anchors this file at :2900 and nothing new may land above
+# that line (marker-logic-in-the-tail (D-3615)). ONE SANCTIONED EXCEPTION since
+# ccrc history W1-B3: `_hook_history_card` and its four constants sit above the
+# `case`, because the SessionStart arm calls the function before the tail runs.
+# README's anchor moved with them and was re-pointed by content, so ":2900" here
+# reads "README's anchor": the emitter call in the SessionStart arm, found by
+# its text (D-4748 (history-card-reader-above-the-arm)). The rule itself stands.
+#
+# WHO WRITES: main-thread events only. A subagent's event is one whose `agent_id`
+# has a QUALIFYING JOIN: a SubagentStart for that id, recorded in THIS owner's join
+# file `$REG/<id>.joined` (below). A bare `agent_id` is not one: real lanes sent a
+# main-checkout tool event with an `agent_id` that no launch response, SubagentStart
+# or SubagentStop ever named, and treating any id as a subagent left the parent's own
+# turn unrecorded (delegation broker wave 3, amendment
+# `tool-agent-id-alone-is-unjoined-evidence`). A join is a fact, not liveness:
+# SubagentStop does not take it back, and a Stop with no Start never gives one
+# (`post-turn-subagentstop-is-unpaired`). Never decided by `agent_type`, a display
+# name or a path. `paid` (the payload parse's flag for ANY non-empty `agent_id`) is
+# NOT the test here and is not narrowed: the history spool, the role-skill guard and
+# the wait rules still read it as "any id". `aid` is the id itself, and only when it
+# is already a plain id (below). And only on a row ccd created: a plain `-e` on
+# `.generation`, no fork (`_hook_generation_ok` forks `link`+`rm` and belongs to the
+# compaction arms).
+#
+# WHICH SESSION: the env id first, the same source hookstate's `sessionId` uses, so
+# the two files agree. The payload's cleaned `session_id` is used only when the env
+# is empty (marker-identity-from-env (D-3614)).
+#
+# WHAT IT COSTS: a main TOOL event (PreToolUse, PostToolUse) while this session is
+# already `working` is a builtin `read`, no fork. A UserPromptSubmit always writes:
+# a new prompt is a new turn, even over a `working` line an Esc interrupt left
+# behind (a-prompt-always-opens-a-turn (D-3675); spec §5.1 exempts only later TOOL events).
+# A write is one jq and one `mv`, and its stamp is the one this
+# hook run's hookstate write reuses (one-stamp-per-hook-run (D-3616)). A temp left by a
+# killed write is dotted and holds no slug. Like the hookstate's own temp, it is
+# never swept (marker-tmp-parity-with-hookstate (D-3617)).
+#
+# ONE PROGRAM, SINGLE-QUOTED: no shell variable expands inside it, and every value
+# enters by --arg/--argjson. A previous line is carried only when it parses, is
+# `v:1` and names THIS session id; a foreign or unreadable line reads as absent.
+# `fitk` keeps WHOLE aliases inside 200 bytes: a byte cut after the join can leave
+# half an alias or a trailing comma, which the reader refuses
+# (alias-list-fits-whole-aliases (D-3658)). `fiti` keeps at most 8 ids.
+# restart: a same-session done or failed moves bg* into lost* (a union, lost-kinds-accumulate (D-3660)); clear: a fresh line.
+# `crons` (D-5242): set on done, carried on every other kind for the same session, -1 on clear and for a foreign line.
+TURN_MARK_PROGRAM='
+def csv: split(",") | map(select(length > 0));
+def fitk: reduce .[] as $k (""; if (length + (if length > 0 then 1 else 0 end) + ($k|length)) <= 200 then (if length > 0 then . + "," + $k else $k end) else . end);
+def fiti: .[0:8] | join(",");
+($prev | try fromjson catch null) as $raw
+| (if ($raw | type) == "object" and $raw.v == 1 then $raw else null end) as $p
+| ($p != null and $p.sessionId == $sid) as $same
+| {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at,
+   turnAt: (if $same then $p.turnAt else null end),
+   stopAt: (if $same then $p.stopAt else null end),
+   bg: (if $same then ($p.bg // -1) else -1 end),
+   bgKinds: (if $same then ($p.bgKinds // "") else "" end),
+   bgIds: (if $same then ($p.bgIds // "") else "" end),
+   err: (if $same then $p.err else null end),
+   restartAt: (if $same then $p.restartAt else null end),
+   lostBg: (if $same then ($p.lostBg // 0) else 0 end),
+   lostKinds: (if $same then ($p.lostKinds // "") else "" end),
+   lostIds: (if $same then ($p.lostIds // "") else "" end),
+   crons: (if $same then ($p.crons // -1) else -1 end)} as $b
+| if $kind == "working" then $b + {state: "working", turnAt: $at, lostBg: 0, lostKinds: "", lostIds: ""}
+  elif $kind == "done" then $b + {stopAt: $at, bg: $bg, bgKinds: ($bgk | csv | unique | fitk), bgIds: ($bgi | csv | fiti), crons: $crons}
+  elif $kind == "failed" then $b + {state: "failed", stopAt: $at, err: $err}
+  elif $kind == "restart" then $b
+    + (if $same and ($p.state == "done" or $p.state == "failed") then {lostBg: (($p.lostBg // 0) + ([($p.bg // -1), 0] | max)), lostKinds: ((($p.lostKinds // "") + "," + ($p.bgKinds // "")) | csv | unique | fitk), lostIds: ((($p.lostIds // "") + "," + ($p.bgIds // "")) | csv | fiti)} else {} end)
+    + {restartAt: $at, bg: 0, bgKinds: "", bgIds: ""}
+  elif $kind == "clear" then {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at, turnAt: null, stopAt: null, bg: -1, bgKinds: "", bgIds: "", err: null, restartAt: null, lostBg: 0, lostKinds: "", lostIds: "", crons: -1}
+  else empty end'
+_hook_turn_mark() {   # <kind: working|done|failed|restart|clear> -> 0 written; 1 not written (never fatal)
+  local kind="$1" mf="$REG/$id.turn.json" prev="" out
+  [[ "$bg" =~ ^-?[0-9]+$ ]] || bg=-1
+  [[ "$crons" =~ ^-?[0-9]+$ ]] || crons=-1
+  { IFS= read -r prev < "$mf"; } 2>/dev/null   # braces: a missing file's redirection error stays silent (D-1691)
+  out=$(jq -cn --arg prev "$prev" --arg kind "$kind" --arg sid "$msid" --arg ev "$event" --argjson at "$hts" \
+    --argjson bg "$bg" --argjson crons "$crons" --arg bgk "$bgk" --arg bgi "$bgi" --arg err "$err" "$TURN_MARK_PROGRAM" 2>/dev/null) || return 1
+  [[ -n "$out" ]] || return 1
+  _hook_write_atomic "$mf" "turn-$hts" "$out"
+}
+msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
+# THE JOIN RECORD (delegation broker wave 3): `$REG/<id>.joined`, one agent id per line, APPENDED by this hook on a
+# SubagentStart and by nobody else. It is a file of its own and NOT a key of hookstate.json, because every event
+# rewrites hookstate.json whole (a read at the top, a write at the bottom, forks between), so a join kept there was lost
+# whenever another hook's write landed last: the captures put a SubagentStart within a few ms of the parent's Agent
+# launch event, and a fixture probe lost 20-37% of joins that way, each loss turning that subagent's later events into a
+# phantom main-thread `working`. One `printf` of a short line to an O_APPEND descriptor is one write(2), so concurrent
+# hooks never erase each other's joins. Exactly one copy of membership.
+# THE ID: `aid` (the payload parse) is the RAW `agent_id` when it is already a string of 1 to `idmax` characters of
+# `idch` ([A-Za-z0-9_-], spelled once, in that jq program), else empty. Cleaning an id first would let a lookalike
+# (`a-1;`) ride a real join, so such an id is unjoinable: never recorded here, never suppressing the marker below.
+# WHEN: the row is live (`<id>.generation`, the witness `_reg_purge` removes just before the join record, which goes last) when the append starts, for the pane
+# this hook owns (the exact-pane lookup above has already exited otherwise), and whether or not a hookstate exists yet.
+# The suffix is DOT-FREE so `_reg_purge`'s glob loop unlinks it with the row.
+# NO WINDOW ORPHANS THE FILE, by one line on each side, because this hook takes no lock and a purge can run while it
+# writes. An orphan is a dot-free field: it would hold the slug for ever (`_ws_slug_free` returns 1 on any such field and
+# `ws-gc` never clears it). (a) AFTER the write, and after a rotation's rename, the hook looks at `<id>.generation` once
+# more and, if the row is gone, removes BOTH names (`joined`, `joinedprev`). (b) `_reg_purge` removes both once more AFTER
+# it removes `generation`. An append that lands while `generation` still stands is taken by (b); one that lands or
+# finishes after it is gone is taken by (a): whichever side of the generation's removal the write falls on, one of the two
+# sees it. NOT closed: a hook killed between its write and its re-check, after a purge that had already finished.
+# A REGULAR FILE OR NOTHING, as the history spool's append: a symlink, directory or FIFO at either path is neither read nor
+# written (builtin tests; a FIFO read would block the hook), and a `joinedprev` that is not one stops the rotation. Both of its
+# guards refuse only a POSITIVE non-regular type (D-7503), as the entry guard does: `joinedprev` moves absent to regular (a
+# rotation's `mv -f`) and back (a purge's `rm -f`), and "absent or regular" probed as two `stat`s skipped a rotation on a move.
+# BOUNDED, BY RENAME: past JOIN_ROTATE_AT lines the Start that notices opens the file on its own fd, takes `flock -n` on it,
+# confirms the path still names that inode (a second descriptor of it, `-ef` the locked one, both through `/dev/fd`) and still
+# holds more than the cap, then `mv -f`s it whole to
+# `<id>.joinedprev` (dot-free too), replacing the last one. Nothing is rewritten, so NO APPEND IS LOST: a writer whose
+# descriptor opened the old inode writes into joinedprev, a later one creates a fresh `joined`, and a second rotator fails
+# `flock -n`, finds the path renamed or finds a short new file, and skips. Membership is the union: the last
+# JOIN_ROTATE_AT + 1 to 2 * JOIN_ROTATE_AT + 1 ids (129 to 257). Still lost: an append in flight to an inode after TWO rotations (JOIN_ROTATE_AT Starts during
+# one write). No `flock` (stock macOS) means no rotation: the file outgrows JOIN_READ_MAX and its newest ids go unread,
+# which fails toward the main turn like everything else here, as does a torn short write fused with the next line.
+# The file is written only by this block, one id per line, and read back whole-line only (below).
+JOIN_ROTATE_AT=128 JOIN_READ_MAX=16384
+_hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller says `|| true`)
+  local jf="$REG/$id.joined" jp="$REG/$id.joinedprev" cur="" nl="" fd="" fd2="" same=0
+  # The entry guard refuses only a POSITIVE non-regular type (D-5434). "Absent or regular" is two reads, and a sibling's first `>>`
+  # (creation) or a rotator's `mv -f` (removal) lands between them in either order, so that form refused a plain append and the
+  # caller's `|| true` hid the lost line. No move between absent and regular makes any of these tests true.
+  if [[ -L "$jf" || -d "$jf" || -p "$jf" || -S "$jf" || -b "$jf" || -c "$jf" ]]; then return 1; fi
+  if ! { printf '%s\n' "$aid" >> "$jf"; } 2>/dev/null; then
+    # A FAILED WRITE STILL CREATED THE FILE (ENOSPC after O_CREAT leaves an empty `joined`), so it gets the same look at the row
+    # as a landed one: a row purged under it must not keep an orphan, and an empty file is an orphan like any other.
+    [[ -e "$REG/$id.generation" ]] || rm -f "$jf" "$jp"
+    return 1
+  fi
+  { IFS= read -r -N "$JOIN_READ_MAX" cur < "$jf"; } 2>/dev/null
+  nl="${cur//[!$'\n']/}"
+  if (( ${#nl} > JOIN_ROTATE_AT )) && command -v flock >/dev/null 2>&1 \
+     && [[ ! ( -L "$jp" || -d "$jp" || -p "$jp" || -S "$jp" || -b "$jp" || -c "$jp" ) ]] && { exec {fd}<"$jf"; } 2>/dev/null; then
+    # TWO DESCRIPTORS ARE COMPARED, not the path and one of them: `-ef` follows a symlink to the same inode, so the link test is its
+    # own conjunct; and on macOS `stat` of `/dev/fd/N` reports the real inode but the fdesc mount's device, so `"$jf" -ef /dev/fd/N`
+    # is never true there and the rotation never ran (measured, D-5435). Both sides through `/dev/fd` carry the same device on either
+    # platform, so the inode decides. A failed open (the path was renamed away) skips; fd2 is closed on every path.
+    same=0
+    if flock -n "$fd" 2>/dev/null && [[ ! -L "$jf" && -f "$jf" ]] && { exec {fd2}<"$jf"; } 2>/dev/null; then
+      [[ "/dev/fd/$fd2" -ef "/dev/fd/$fd" ]] && same=1
+      { exec {fd2}<&-; } 2>/dev/null
+    fi
+    if (( same )); then
+      cur=""; { IFS= read -r -N "$JOIN_READ_MAX" cur <&"$fd"; } 2>/dev/null
+      nl="${cur//[!$'\n']/}"
+      # BOTH PATHS ARE LOOKED AT AGAIN IMMEDIATELY BEFORE THE RENAME: GNU `mv -f` onto a DIRECTORY moves the file INTO it and
+      # answers 0, and onto a symlink it replaces the link; a `joinedprev` that became either since the check at the top, or a
+      # `joined` that became a link since the `-ef`, is not something to rename. The window that remains is the one between this
+      # test and the rename(2) itself; there is no atomic rename-if-regular in a shell. GNU `mv -fT` would close the directory case
+      # atomically (it refuses to move INTO a directory), but it is NOT used: this hook runs on macOS boxes too (the epoch
+      # fallback at the top, the probe-macos leg), BSD `mv` has no `-T`, and an `mv` that errors there would leave a rotation that never
+      # happens where Homebrew supplies `flock`. The re-test narrows the window instead, and the stock-macOS box has no `flock` at all.
+      (( ${#nl} > JOIN_ROTATE_AT )) && [[ ! -L "$jf" && ! ( -L "$jp" || -d "$jp" || -p "$jp" || -S "$jp" || -b "$jp" || -c "$jp" ) ]] && mv -f "$jf" "$jp" 2>/dev/null
+    fi
+    { exec {fd}<&-; } 2>/dev/null
+  fi
+  [[ -e "$REG/$id.generation" ]] || rm -f "$jf" "$jp"   # (a) of "no window orphans the file" above: the row was purged under the write
+  return 0
+}
+if [[ "$event" == SubagentStart && -n "$aid" && -e "$REG/$id.generation" ]]; then _hook_join_record || true; fi
+# THE MEMBERSHIP TEST, on the hot path of every subagent tool event: a builtin `read` of `joined` and, only if the id is not
+# there, one of `joinedprev`, each under JOIN_READ_MAX characters (129 ids of 64 fill about 8 K), then a whole-line match:
+# the id between two newlines, the last line only if its newline arrived. An absent, unreadable or non-regular file joins
+# nobody and the main turn is stamped. A payload with no id pays nothing. No fork.
+tmsub="" hsl="" jfile="$REG/$id.joined" jprev="$REG/$id.joinedprev"
+if [[ -n "$paid" && -n "$aid" ]]; then
+  if [[ ! -L "$jfile" && -f "$jfile" ]]; then
+    { IFS= read -r -N "$JOIN_READ_MAX" hsl < "$jfile"; } 2>/dev/null
+    [[ $'\n'"$hsl" == *$'\n'"$aid"$'\n'* ]] && tmsub=1
+  fi
+  if [[ -z "$tmsub" && ! -L "$jprev" && -f "$jprev" ]]; then
+    hsl=""; { IFS= read -r -N "$JOIN_READ_MAX" hsl < "$jprev"; } 2>/dev/null
+    [[ $'\n'"$hsl" == *$'\n'"$aid"$'\n'* ]] && tmsub=1
+  fi
+fi
+if [[ -z "$tmsub" && -e "$REG/$id.generation" ]]; then
+  tmkind=""
+  case "$event" in
+    UserPromptSubmit) tmkind=working ;;   # a new prompt is a new turn, even over a working line (a-prompt-always-opens-a-turn (D-3675))
+    PreToolUse|PostToolUse)
+      tmline=""; { IFS= read -r tmline < "$REG/$id.turn.json"; } 2>/dev/null
+      [[ "$tmline" == *'"state":"working"'* && "$tmline" == *"\"sessionId\":\"$msid\""* ]] || tmkind=working ;;
+    Stop) tmkind=done ;;
+    StopFailure) tmkind=failed ;;
+    SessionStart) if [[ "$src" == compact ]]; then :; elif [[ "$src" == clear ]]; then tmkind=clear; else tmkind=restart; fi ;;   # compact is inert (D-306: PreCompact/PostCompact own that transition); absent or unknown is a restart (D-1248)
+  esac
+  if [[ -n "$tmkind" ]]; then hts="${hcat:-$(_hook_epoch_ms)}"; _hook_turn_mark "$tmkind" || true; fi
+fi
+# THE GATE AND THE APPEND, AS ONE TAIL FUNCTION (W3-1 Task 1C). It sits right above the spool block, not in it: the
+# block's S1 pins scan the block as straight-line code and each function it calls as a body of its own. It appends
+# the one fenced line to `$_hs_p` under the D-4418 and D-7503 rules the block's comment states, silent, and answers
+# 0 on every path.
+_hook_history_spool_append() {   # <json> -> one fenced line appended to $_hs_p when it is a regular file or absent
+  [[ ! ( -L "$_hs_p" || -d "$_hs_p" || -p "$_hs_p" || -S "$_hs_p" || -b "$_hs_p" || -c "$_hs_p" ) ]] && { { [[ ! ( -p /dev/fd/9 || -S /dev/fd/9 || -c /dev/fd/9 || -b /dev/fd/9 || -d /dev/fd/9 ) && ! -L "$_hs_p" ]] && { printf '\n%s\n' "$1" >&9; }; } 9>>"$_hs_p"; } 2>/dev/null || true
+}
+# >>> history-spool (spec 2026-10-05 §5.1)
+# THE HISTORY SPOOL LINE (ccrc history spec 2026-10-05 §5.1, W1-B1): one fenced,
+# text-free JSON line appended to ~/.ccrc/history/spool/<id>.jsonl, which
+# ccd-history-sweep drains on its next tick. HERE, below the turn marker and
+# above the StopFailure exit and the hookstate write, so neither a failed
+# hookstate write nor compact-card-off can cost the line. Like the turn marker,
+# it is in the tail because nothing new may land above README's anchor (the
+# emitter call in the SessionStart arm, found by content).
+#
+# BUILTINS ONLY, ON THE HOT PATH: no command substitution, no jq, no fork of
+# any kind — `_ct_read` is a builtin `read -N` that sets CT_V, so it is called
+# bare. Every value is one this hook already sanitised (`$id`, `$psid`) or a
+# whitelisted literal, so nothing needs escaping; an optional field that fails
+# its whitelist is left out, never written wrong.
+#
+# GATES: the main thread only (`$paid`); the spool directory must already exist
+# — the hook never creates it, so a box with no store writes nothing; the id fits
+# SPOOL_ID_MAX = 224, so `.draining/<id>.<ms>.<pid>.jsonl` fits a 255-byte name.
+# The off-switch silences Stop and PostCompact and never the SessionStart epoch
+# lines D-4252. Only startup, resume, clear and fork are spooled D-4253 D-4734 (history-fork-spooled): compact
+# exited in its arm, and any other source writes nothing (as fork did in W1-B1, D-4173). A SessionStart
+# line declares its epoch's sid, which lib.mjs SPOOL_KEYS requires, so without a
+# lowercase-UUID sid none is written at all. A startup, resume or fork line carries
+# `reg`, this hook's own read of `.uuid` D-4175. No summary hash rides it D-4177.
+#
+# THE FENCE: `\n<json>\n` in one write(2) on an O_APPEND descriptor, so a short
+# write under a full disk leaves a torn line the next append cannot fuse with
+# D-4176. The braces put the redirection's own failure under 2>/dev/null (the
+# note at the hookstate write below), and `|| true` keeps exit 0 on every path.
+# A REGULAR FILE OR NOTHING D-4418: a symlink (a dangling one too), FIFO or other
+# node at the path, or a symlinked spool/, writes no line (builtin tests).
+# OPENED ONCE, WRITTEN THROUGH THAT DESCRIPTOR (D-7503). The drain renames the file
+# away every tick and the next hook creates it, so the path moves both ways, regular
+# to absent and absent to regular. "Absent or regular" is two `stat`s, and a move
+# between them refused a plain append in EITHER probe order (a lost line, measured).
+# So the guard refuses only a POSITIVE non-regular type, which no such move makes
+# true; the file is then opened for append on fd 9, and the line goes through fd 9
+# only if what it opened is not a positive non-regular type either and the path is
+# still not a link. The descriptor's check is positive too (D-7503): on macOS a
+# `stat` of `/dev/fd/9` fails for a moment while a rename runs, so `-f /dev/fd/9`
+# read false for an open regular file and lost the line (measured under load). A FIFO
+# swapped in has blocked at the open, and a directory cannot be opened for append,
+# so nothing that matters reaches the write unchecked. A drain
+# after the open gets the line in the renamed file. Bash has no O_NOFOLLOW or
+# O_NONBLOCK redirection, so a node swapped in between the guard and the open is
+# opened: a link is followed (an absent target is created empty, never written; one
+# swapped out again before the check is not seen); a FIFO blocks until Claude Code
+# kills the hook (install-session-hooks.sh HOOK_TIMEOUT_S).
+_hs="" _hs_g="" _hs_s="" _hs_f="" _hs_t="" _hs_p="$HOME/.ccrc/history/spool/$id.jsonl"
+if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/spool" ]] && (( ${#id} <= 224 )); then
+  case "$event" in
+    Stop) [[ -e "$HOME/.ccrc/history-off" ]] || _hs='{"v":1,"ev":"Stop"' ;;
+    PostCompact) [[ -e "$HOME/.ccrc/history-off" ]] || _hs='{"v":1,"ev":"PostCompact"' ;;
+    SessionStart) [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && case "$src" in startup|resume|clear|fork) _hs='{"v":1,"ev":"SessionStart"' ;; esac ;;
+  esac
+  if [[ -n "$_hs" ]]; then
+    _hs+=",\"id\":\"$id\""
+    # `$psid` is only cleaned to [A-Za-z0-9_-] at :2767, and the drain's grammar wants a lowercase UUID. `trig` is PostCompact's alone D-4315.
+    # On Stop and PostCompact a non-UUID sid is left out and the line stands without it, never written
+    # wrong. A SessionStart line exists to declare its epoch's sid, so lib.mjs SPOOL_KEYS requires one:
+    # its arm above writes nothing at all without a lowercase-UUID sid, so this test is always true there.
+    [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && _hs+=",\"sid\":\"$psid\""
+    if [[ "$event" == SessionStart ]]; then
+      _hs+=",\"src\":\"$src\""
+      if [[ "$src" != clear ]] && _ct_read "$REG/$id.uuid" \
+        && [[ "$CT_V" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+        _hs+=",\"reg\":\"$CT_V\""
+      fi
+    fi
+    [[ "$event" == PostCompact ]] && case "${trig:-}" in manual|auto) _hs+=",\"trig\":\"$trig\"" ;; esac
+    _hs_g="${CCRC_SESSION_GENERATION:-}"
+    [[ "$_hs_g" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && _hs+=",\"gen\":\"$_hs_g\""
+    # `_hook_epoch_ms`'s expansion form, inline (it forks `date` when EPOCHREALTIME is unset), read ONCE into `_hs_t`:
+    # each expansion reads the clock anew, so two reads can straddle a second. Either decimal point (the locale's); a value
+    # that is not `<1-12 digits, no leading 0>[.,]<digits>` writes no `ts`, and the drain stamps receive time D-4315.
+    _hs_t="${EPOCHREALTIME:-}"
+    if [[ "$_hs_t" =~ ^[1-9][0-9]{0,11}[.,][0-9]*$ ]]; then
+      _hs_s="${_hs_t%%[.,]*}" _hs_f="${_hs_t#*[.,]}000"
+      _hs+=",\"ts\":${_hs_s}${_hs_f:0:3}"
+    fi
+    _hs+='}'
+    _hook_history_spool_append "$_hs"
+  fi
+fi
+# <<< history-spool
+# >>> delegation-spool (delegation broker wave 3, spec 2026-10-04 §5.3)
+# THE DELEGATION SPOOL: one bounded, owner-scoped evidence line per delegation event, appended to
+# `$REG/delegation/spool/<id>/<YYYYMMDDHH>.spool` (the UTC hour of the line's own `observedAt`). Evidence, never authority: the hook
+# decides nothing about parentage, and a line it cannot write is a line the census backstops. The server reads these files by byte
+# range and trusts nothing in them beyond `DelegationSpoolLineV1` (`shared/api.ts`); every bound below is `DELEGATION_SPOOL_BOUNDS`
+# there, spelled again here because a hook cannot import it, and `delegation-spool.test.ts` fails on any drift.
+#
+# THE LINE IS BUILT IN THE PAYLOAD PARSE (the one `jq -r` above; its two lines are single physical lines because nothing may be added above
+# the `_hook_emit_context "$CARD" "$CARD_COMPACT"` line, whose number README cites; `DSP_DEFS`, the spool's jq text, opens the first, the one form the merge-deny scan reads). That is the hook's existing single jq call, so the spool adds no fork on
+# any path: the same events fork jq as often with the directory as without it (`session-hook-turnmark.test.ts`). Its COST is
+# compile time, about 11 ms of CPU for the extra jq text (measured on jq 1.7), so the text (`dsp_defs`) is added only when the
+# raw payload contains the QUOTED name of a delegation tool or event, or the tag of a task notification (`"Bash"`, `"SessionStart"`,
+# `task-notification>`, which a `<` escaped as `\u003c` matches too, ...). A JSON string value is delimited by unescaped quotes, while a string's content
+# carries its quotes as `\"`, so text that merely mentions Bash, Task or Agent (a Read result, an Edit string, a prompt) does not
+# match. The list is a NECESSARY condition: a delegation event cannot lack its own name, and Node's JSON.stringify escapes neither
+# ASCII letters nor `<` (every delegation-relevant payload in the captured corpus carries these quoted forms verbatim, and
+# `delegation-spool.test.ts` replays the corpus). That file pins the list against the event and tool vocabulary too; a false
+# positive costs only the compile, a false negative would drop evidence silently. A Read, an Edit, a Stop or an ordinary prompt
+# compiles the parse alone, as it always did. It reads the payload ONCE and keeps only closed fields:
+#   SessionStart (source; compact included), SessionEnd (reason), SubagentStart and SubagentStop (agent id and type; the stop's
+#   transcript path), PreToolUse and PostToolUse for Agent, Task, Workflow and Bash only (tool, tool-use id, isolation; the
+#   response normalised to an outcome and, for a launch, its closed launch fields), and a UserPromptSubmit that is a syntactically
+#   valid task notification (task id, tool-use id, terminal status, read from the block's header in order, never from its body).
+# Everything else writes no line, and nothing free-form is ever kept: no prompt, result, diagnostics, tool input or output, Agent
+# `outputFile` or `scratchpad_dir`. Workflow `transcriptDir` and `scriptPath` are the only launch paths kept. An id outside
+# `[A-Za-z0-9_-]{1,64}` is never cleaned into one: a SubagentStart/Stop with such an agent id, and any event whose agent id is such,
+# writes NO line (a line without the id would read as the main thread's). A required field that is missing or over its bound writes
+# no line; an optional one that is over its bound is dropped, never cut, and marks the line `truncated`.
+# THE CAP: a line plus its LF is under DSP_LINE_BELOW bytes, counted serialized (escapes count): 4096 where OSTYPE and BASH_VERSINFO both say
+# glibc Linux, else 1008 (D-5436), and the jq sheds to the same value. Over it, `listing`, `claudeVersion`, `cwd`, `agentType`, `transcriptPath`
+# go in that order and `truncated: true` is set; a line its required fields alone pass is not written. One builtin `printf` is one write(2), and
+# racing hooks never interleave, only while the line fits bash's stdout buffer: st_blksize (4096 on the usual filesystems) on glibc, 1008 or 2016 with bash's
+# own malloc, 1024 on BSD, macOS or musl libc. No fence goes first (an empty line is unparseable); a full disk's torn tail, or bytes a failed builtin write left in stdout, is the reader's `unmeasured` (spec §5.3).
+#
+# GATES, all builtins and all before the jq (the statement on the line above the parse): the owner's directory exists and is not a
+# link (ccd makes it at spawn; THE HOOK NEVER MAKES IT, so a missing directory is a skip), neither are its two parents, the id is
+# not dot-leading and at most CCRC_ID_MAX (the hook's own id bound), and `<id>.generation` is a regular file holding a lowercase UUID of exactly 36
+# bytes (a 37th byte, an LF, is read and refused). That value is the line's `parentIncarnation`, read at write time and read AGAIN
+# here just before the append: a value that changed between the two, or an environment generation (`CCRC_SESSION_GENERATION`,
+# what this pane was spawned with) that is not the file's, means the row was reused under a pane that outlived it, and no line
+# is written. Missing, malformed, changing or unreadable is unmeasured. `claudeVersion` is the version directory that
+# `CLAUDE_CODE_EXECPATH` names (`.../versions/2.1.296`), kept only when it has a version's shape; the path itself is never kept.
+#
+# THE LISTING (Bash only, when the command text contains `worktree`): the names under `<git-common-dir>/worktrees/`, read here
+# with builtins (the common directory comes from the `.git` entry found walking up from the cwd: a directory, or a file
+# `gitdir: <common>/worktrees/<name>`), spliced in as the line's last key. Names only, in C-locale order, each of
+# `[A-Za-z0-9._@+-]` and at most DSP_NAME_BYTES; more than DSP_LIST_NAMES names or one that fails that drops the WHOLE listing (a
+# partial listing reads as complete) and marks the line `truncated`; a directory that cannot be read or a repository that cannot
+# be found leaves no `listing` key (unmeasured), and a repository with no `worktrees/` has a measured `[]`. It is added only when the
+# line shed nothing else (listing goes first), and the jq reserved the 17 bytes `,"truncated":true` would need.
+#
+# PRUNE: the first write of an hour (the bucket did not exist) removes this owner's regular `<10 digits>.spool` files older than the
+# cutoff hour (24 hours before now) from THIS directory and nothing else, by exact names it listed from it. That is at most once an
+# hour per owner without any state to keep; two first writers racing both prune, harmlessly. It is the one fork on this path (one
+# `rm`, and only when a stale bucket exists). THE HOOK PRUNES ONLY A LIVE OWNER, FROM ITS OWN WRITE: a removed owner's last 24 to 25
+# hourly buckets and its directory stand until a later spawn of any session removes them, once its registry row is gone and every
+# bucket is past its day (ccd's `_delegation_spool_prune_absent`, which states the rule); the server never deletes them.
+#
+# SessionStart `compact` is recorded here, before the hook's one early exit below (it used to exit in its arm; `sessend` carries it).
+DSP_LIST_NAMES=256 DSP_NAME_BYTES=64
+_hook_spool_listing() {   # <cwd> -> DSP_LIST ('["a","b"]'; empty = unmeasured) and DSP_DROP (1 = a listing exists but cannot be kept)
+  local LC_ALL=C d="${1-}" line="" g="" common="" w="" p="" name="" out="" n=0 cnt=0 dg=0 ng=0
+  DSP_LIST="" DSP_DROP=""
+  [[ "$d" == /* ]] || return 0
+  while (( n++ < 64 )); do
+    if [[ -d "$d/.git" && ! -L "$d/.git" ]]; then common="$d/.git"; break
+    elif [[ -f "$d/.git" && ! -L "$d/.git" ]]; then
+      { IFS= read -r -N 1024 line < "$d/.git"; } 2>/dev/null
+      g="${line%%$'\n'*}"
+      [[ "$g" == "gitdir: "* ]] || return 0
+      g="${g#gitdir: }"
+      [[ "$g" == /* ]] || g="$d/$g"
+      [[ "$g" == */worktrees/?* && "${g##*/worktrees/}" != */* ]] || return 0
+      common="${g%/worktrees/*}"; break
+    fi
+    [[ "$d" == */* && "$d" != / ]] || return 0
+    d="${d%/*}"; [[ -n "$d" ]] || d=/
+  done
+  [[ -n "$common" && -d "$common" ]] || return 0
+  w="$common/worktrees"
+  if [[ ! -e "$w" && ! -L "$w" ]]; then DSP_LIST="[]"; return 0; fi
+  [[ -d "$w" && -r "$w" && -x "$w" ]] || return 0
+  shopt -q dotglob && dg=1; shopt -q nullglob && ng=1
+  shopt -s dotglob nullglob
+  for p in "$w"/*; do
+    name="${p##*/}"
+    [[ "$name" == . || "$name" == .. || ! -d "$p" ]] && continue
+    if (( ++cnt > DSP_LIST_NAMES || ${#name} > DSP_NAME_BYTES )) || [[ ! "$name" =~ ^[A-Za-z0-9._@+-]+$ ]]; then DSP_DROP=1; break; fi
+    out+="${out:+,}\"$name\""
+  done
+  (( dg )) || shopt -u dotglob
+  (( ng )) || shopt -u nullglob
+  [[ -n "$DSP_DROP" ]] || DSP_LIST="[$out]"
+  return 0
+}
+_hook_spool_prune() {   # <owner dir> <cutoff bucket> -> removes this directory's regular <10 digits>.spool files older than the cutoff
+  local LC_ALL=C d="${1-}" cut="${2-}" f="" b="" old=()
+  [[ "$cut" =~ ^[0-9]{10}$ ]] || return 1
+  for f in "$d"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].spool; do
+    [[ -f "$f" && ! -L "$f" ]] || continue
+    b="${f##*/}"; b="${b%.spool}"
+    (( 10#$b < 10#$cut )) && old+=("$f")
+  done
+  (( ${#old[@]} )) && rm -f -- "${old[@]}" 2>/dev/null
+  return 0
+}
+_hook_spool_append() {   # $dsp_line, with $dsp_bucket $dsp_cut $dsp_cwd from the parse -> 0 appended | 1 not (never fatal: the caller says `|| true`)
+  local LC_ALL=C f="" g2="" fresh="" cand=""
+  if [[ -n "$dsp_cwd" && "$dsp_line" != *'"truncated":true}' ]]; then
+    _hook_spool_listing "$dsp_cwd"
+    if [[ -n "$DSP_LIST" ]]; then
+      cand="${dsp_line%\}},\"listing\":$DSP_LIST}"
+      if (( ${#cand} + 1 < DSP_LINE_BELOW )); then dsp_line="$cand"; else DSP_DROP=1; fi
+    fi
+    [[ -z "$DSP_DROP" ]] || dsp_line="${dsp_line%\}},\"truncated\":true}"
+  fi
+  (( ${#dsp_line} + 1 < DSP_LINE_BELOW )) || return 1
+  [[ "$dsp_bucket" =~ ^[0-9]{10}$ && -n "$dsp_gen" ]] || return 1
+  [[ -f "$REG/$id.generation" && ! -L "$REG/$id.generation" ]] || return 1
+  { IFS= read -r -N 37 g2 < "$REG/$id.generation"; } 2>/dev/null
+  [[ "$g2" == "$dsp_gen" ]] || return 1
+  [[ -d "$dsp_dir" && ! -L "$dsp_dir" ]] || return 1
+  f="$dsp_dir/$dsp_bucket.spool"
+  [[ ! -L "$f" && ( ! -e "$f" || -f "$f" ) ]] || return 1   # ABSENCE FIRST (D-7448): a racing hook may create the bucket between the two probes, and absent-to-regular is the only move a current bucket makes, so this order never refuses a bucket being born, where `-f || ! -e` did (a lost line, measured)
+  [[ -e "$f" ]] || fresh=1
+  { printf '%s\n' "$dsp_line" >> "$f"; } 2>/dev/null || return 1
+  [[ -z "$fresh" ]] || _hook_spool_prune "$dsp_dir" "$dsp_cut" || true
+  return 0
+}
+[[ -n "$dsp_line" ]] && { _hook_spool_append || true; }
+# <<< delegation-spool
+# >>> launch-record (session-continuity wave 6b, D-8363..D-8367)
+# THE LAUNCH RECORD: one JSON row per background launch (Workflow, resume, Agent/Task, SendMessage to an agent id), appended to
+# `$REG/<id>.deleg`. Evidence for the restart manifest (6b-2), read by nothing else. The row is the payload parse's ninth output (`lrec`,
+# inside `DSP_DEFS`, which shares the spool's id and outcome defs but decides from the raw fields, so a bad id is a counted `drop`), one
+# line on every event. It needs no spool directory. A subagent's own event writes nothing: `tmsub` (the join test above) is the
+# only evidence of one, never the presence of an `agent_id` (D-8364). Every append is one write per line (a pair is two); the file is capped at LRC_MAX_BYTES
+# and only `drop` rows use the reserve past it (D-8366). The spelling here is the only one until 6b-2 adds ccd's and its equality pin.
+# Always rc 0 and under `set -u`: every variable the append expands is set before it. After the write the generation is tested once
+# more and the file removed if the row is gone, the other half of `_reg_purge`'s post-generation unlink (D-8367).
+# RESIDUAL WINDOW (named, not closed): the type test below and the opens (`wc -c < "$f"`, `>> "$f"`) are not atomic, and no shell has an
+# open-if-regular. An object swapped in at `.deleg` during the generation re-read or the `wc` fork is opened anyway, and a FIFO there blocks
+# until Claude Code's hook timeout. It needs a second writer on a single-user box.
+LRC_MAX_BYTES=1048576 LRC_DROP_RESERVE=4096
+_hook_launch_record_append() {   # $lrc_line (a row, or a drop row, one TAB, then a row) -> 0 always (the caller says `|| true`)
+  local LC_ALL=C f="$REG/$id.deleg" g="$REG/$id.generation" g2="" l1="$lrc_line" l2="" sz=0 add=0 drop=""
+  [[ "$lrc_line" != *$'\t'* ]] || { l1="${lrc_line%%$'\t'*}"; l2="${lrc_line#*$'\t'}"; }
+  [[ ! -L "$f" && ( ! -e "$f" || -f "$f" ) ]] || return 0   # ABSENCE FIRST (D-7448), as the spool's bucket
+  [[ -n "$dsp_gen" && -f "$g" && ! -L "$g" ]] || return 0
+  { IFS= read -r -N 37 g2 < "$g"; } 2>/dev/null
+  [[ "$g2" == "$dsp_gen" ]] || return 0
+  add=$(( ${#l1} + 1 )); [[ -z "$l2" ]] || add=$(( add + ${#l2} + 1 ))
+  (( DSP_LINE_BELOW > ${#l1} + 1 && DSP_LINE_BELOW > ${#l2} + 1 )) || return 0   # unreachable with the current field bounds: the largest row is about 856 bytes, under DSP_LINE_SMALL (1008), and a TAB pair always carries script null
+  if [[ -e "$f" ]]; then sz=$( { wc -c < "$f"; } 2>/dev/null ); sz="${sz//[[:space:]]/}"; [[ "$sz" =~ ^[0-9]+$ ]] || return 0; fi
+  if (( sz + add > LRC_MAX_BYTES )); then
+    drop="{\"v\":1,\"t\":$(_hook_epoch_ms),\"k\":\"drop\",\"why\":\"budget\"}"
+    (( sz + ${#drop} + 1 <= LRC_MAX_BYTES + LRC_DROP_RESERVE )) || return 0
+    { printf '%s\n' "$drop" >> "$f"; } 2>/dev/null
+  elif [[ -n "$l2" ]]; then { printf '%s\n%s\n' "$l1" "$l2" >> "$f"; } 2>/dev/null
+  else { printf '%s\n' "$l1" >> "$f"; } 2>/dev/null
+  fi
+  [[ -e "$g" ]] || rm -f -- "$f" 2>/dev/null
+  return 0
+}
+[[ -n "$lrc_line" && -z "$tmsub" ]] && { _hook_launch_record_append || true; }
+# <<< launch-record
+# THE START REPORT (Overlord W1a, spec §3.3.11, H12; the header's FOURTH exception): every SessionStart of a main-thread
+# session that is not a child, compact included (so it runs before the exit below) and `fork` excluded (a fork shares this
+# pane's id under a new uuid, so its report could never be attributed), is reported to `POST /api/sessions/:id/start`
+# through the closed client. The report spends at most START_BUDGET_MS (the roster card's own bound comes before it on a
+# clear, compact or resume start): one deadline set at entry, the fresh report sent first, each send given what is left,
+# and none started with under a second left. The body carries the conversation's uuid as `startedUuid`, data; `fromUuid`,
+# the sender the server attributes, is rewritten to this event's `session_id` on a resend of a `clear`, `resume` or
+# `compact` report, so one spooled before a `/clear` lands once the registry follows. A `startup` report keeps its own
+# `fromUuid`, so another process's `startup` in this pane meets `stale-uuid` and is dropped; another process's `clear`,
+# `resume` or `compact` is rewritten like the row's own and can still land as the row's, its `startedUuid` its own. A report the
+# server did not take is kept in ONE dot-free field, `$REG/<id>.startpending`, so `_reg_purge` and `_ws_slug_residue` take
+# it with the row: line 1 is `<not-before ms>\t<dropped count>`, each later line `<tries>\t<report JSON>`, oldest first.
+# No answer keeps it untried and ends the pass; `stale-uuid` keeps it, counts a try and ends the pass when the send carried
+# this event's `session_id` (the fresh report, or a rewritten one), and lets the pass go on when it did not (a kept
+# `startup`), so a stale `startup` never holds back the reports behind it; a 404 or 401 (an older server,
+# mid-rollout), a 5xx or a local client refusal keeps it, counts a try and ends the pass; any other 4xx drops it. A report
+# tried START_RESEND_TRIES times is dropped, at most START_PENDING_MAX are kept (the oldest dropped first), and every drop
+# is counted. Only SessionStart and UserPromptSubmit resend, never a tool event or Stop, and only after the back-off the
+# last pass stamped by how it ended: START_RESEND_BACKOFF_MS after a send that ended the pass, START_STALE_BACKOFF_MS (one
+# supervisor tick, for `_sync_uuid` to follow) after a `stale-uuid` or a spent budget, each counted from the pass's end; a
+# fresh report taken clears a standing stamp; a stamp past the long back-off (a clock stepped back) reads as the long
+# one. Written only for a row ccd created (its `generation` stands), under the join
+# record's two-sided rule: looked at again after the write here, and taken once more after `generation` by `_reg_purge`,
+# so no purge orphans it. It holds no authority, is never read as truth, prints nothing, and no path through it changes
+# this hook's exit code or stdout.
+START_PENDING_MAX=20 START_RESEND_TRIES=5 START_RESEND_BACKOFF_MS=30000 START_STALE_BACKOFF_MS=5000 START_BUDGET_MS=4000
+# THE LOADS REPORT'S PENDING FILE (Overlord W1 sandbox, Task 4): at a `startup` or `resume` SessionStart of a session ccd
+# launched under a surface (`CCRC_LAUNCH_PROFILE`), `$REG/<id>.loadpending` holds the tries, the start report's `reportId`,
+# the transcript's byte size now (the window's start), the source and the transcript's path. Written without the registry
+# lock, like `startpending`, so `_reg_purge` takes it a second time after `generation`; looked at again here.
+_hook_loads_pend() {   # <reportId> -> 0 always
+  local tp sz=0; tp=$(jq -r '.transcript_path | strings' <<<"$payload" 2>/dev/null); [[ "$tp" == /* ]] || return 0; [[ -f "$tp" ]] && sz=$(wc -c < "$tp" 2>/dev/null | tr -d ' ')
+  printf '0\t%s\t%s\t%s\t%s\n' "$1" "${sz:-0}" "$src" "$tp" > "$REG/$id.loadpending" 2>/dev/null; [[ -e "$REG/$id.generation" ]] || rm -f -- "$REG/$id.loadpending" 2>/dev/null
+}
+# ── THE LOADS REPORT (Overlord W1 sandbox, Task 4; spec §3.6 H4; slugs loaded-sets-read-from-the-transcript,
+# start-loads-is-its-own-report, resume-carries-its-own-start, tools-read-from-the-prompt-snapshot) ─────────────────────
+# At each main-thread `Stop` while `loadpending` stands, `start_loads` (ccd/lib/transcript.jq) reads the transcript, at
+# most LOADS_MAX_BYTES: the window from the recorded offset to the first-request marker and the tool-bearing prompt
+# snapshot after it, and what came before it for the listings. Until the window holds them the file is kept and a try
+# counted; the last try sends without waiting for the snapshot, and a try past LOADS_TRIES drops the file (the start then
+# reads not engaged). One deadline, LOADS_BUDGET_MS, bounds the arm: the read, each hash and the send (review 2135 F6).
+# The body is computed once; a send that does not take it spools it as the file's second line, after the window's end,
+# so every resend is the same bytes with the same `reportId`. Instruction files are hashed where they stand (a regular
+# file of at most LOADS_FILE_MAX bytes, else the kind reads unmeasured) and hook commands by their text, never sent. At a
+# resume, instructions and hooks are carried from the newest reported `startup` of the same transcript only when its
+# digest and build equal this session's (`loadlast`, written on its 202), named `carriedFrom`, and only from that
+# start's own window, its begin offset to its first request (`loadlast` keeps both), so a compaction or `/clear` between
+# adds nothing (review 2135 F4). A Stop with no `CCRC_LAUNCH_PROFILE` (a respawn the route no longer surfaces) removes a
+# stale file and sends nothing (F1). Sent through `_hook_start_send`: a 202 removes the file, a 404 (an older server, or
+# `unknown-start`), 401, 5xx, no answer or `stale-uuid` keeps it and counts a try, any other 4xx drops it. Every path,
+# the wait included, ends at the generation re-check, so a purge during the arm orphans nothing (F3). Prints nothing;
+# never changes the exit code.
+LOADS_TRIES=5 LOADS_MAX_BYTES=16777216 LOADS_FILE_MAX=1048576 LOADS_BUDGET_MS=3000
+_hook_left() { local l=$(( $1 - $(_hook_epoch_ms) )); (( l > 100 )) || l=100; printf '%d.%d' "$(( l / 1000 ))" "$(( l % 1000 / 100 ))"; }   # deadline ms -> seconds left for `_hook_timeout`, at least 0.1
+_hook_start_loads() {   # 0 on every path
+  local f="$REG/$id.loadpending" lp="${CCRC_LAUNCH_PROFILE:-}" dl t rid off sc tp we="" body="" out="" c="" lr="" ld="" lb="" lo="" le="" lt="" ver wd="" e h hs=() r=6
+  [[ "$event" == Stop && -z "$paid" && -f "$f" && ! -L "$f" ]] || return 0
+  [[ -n "$lp" ]] || { rm -f -- "$f"; return 0; }; dl=$(( $(_hook_epoch_ms) + LOADS_BUDGET_MS ))
+  { IFS=$'\t' read -r t rid off sc tp; IFS=$'\t' read -r we body; } 2>/dev/null < "$f"
+  [[ "$t" =~ ^[0-9]+$ && "$off" =~ ^[0-9]+$ && "$tp" == /* ]] || { rm -f -- "$f"; return 0; }
+  ver="${CLAUDE_CODE_EXECPATH:-}"; ver="${ver##*/}"; [[ "$ver" =~ ^[0-9][0-9A-Za-z.+-]{0,31}$ ]] || ver=""
+  if [[ -z "$body" ]]; then
+    [[ "$sc" == resume && -f "$REG/$id.loadlast" ]] && IFS=$'\t' read -r lr ld lb lo le lt 2>/dev/null < "$REG/$id.loadlast" && [[ "$lt" == "$tp" && "$ld" == "${lp#*:}" && -n "$ver" && "$lb" == "$ver" && "$lo" =~ ^[0-9]+$ && "$le" =~ ^[0-9]+$ ]] && (( lo <= le && le <= off )) && c=1
+    [[ -f "$tp" ]] && (( $(wc -c 2>/dev/null < "$tp" || echo "$LOADS_MAX_BYTES"1) <= LOADS_MAX_BYTES )) && out=$(_hook_timeout "$(_hook_left "$dl")" jq -L "$ROSTER_CARD_LIB" -nc --rawfile h <(head -c "$off" "$tp") --rawfile w <(tail -c "+$(( off + 1 ))" "$tp") --rawfile c <([[ -z "$c" ]] || { tail -c "+$(( lo + 1 ))" "$tp" | head -c "$(( le - lo ))"; }) --arg s "$sc" --argjson last "$(( t + 1 >= LOADS_TRIES ))" 'include "transcript"; start_loads($h; $w; $c; $s; $last == 1)' 2>/dev/null)
+    if [[ "$out" =~ ^\{\"state\":\"ready\",\"end\":([0-9]+), ]]; then
+      we=$(( off + BASH_REMATCH[1] ))
+      while IFS= read -r -d '' e; do if [[ "$e" == F* ]]; then [[ -f "${e#F}" ]] && (( $(wc -c 2>/dev/null < "${e#F}" || echo 0) <= LOADS_FILE_MAX )) && h=$(_hook_timeout "$(_hook_left "$dl")" cat -- "${e#F}" | _apr_sha256) || h=x; hs+=("$h"); else hs+=("$(printf '%s' "${e#C}" | _apr_sha256 || echo x)"); fi; done < <(jq -L "$ROSTER_CARD_LIB" -j 'include "transcript"; loads_hash_items' <<<"$out" 2>/dev/null)
+      [[ -f "$REG/$id.workdir" ]] && IFS= read -r wd < "$REG/$id.workdir"
+      body=$(jq -L "$ROSTER_CARD_LIB" -c --argjson o "$out" --arg id "$id" --arg rid "$rid" --arg lp "$lp" --arg rc "${CCRC_LAUNCH_RC:-}" --arg ver "$ver" --arg wd "$wd" --arg cf "${c:+$lr}" --argjson at "$(_hook_epoch_ms)" 'include "transcript"; loads_body($o; $ARGS.positional; $id; $rid; $lp; $rc; $ver; $wd; $cf; $at)' --args ${hs[@]+"${hs[@]}"} <<<"$payload" 2>/dev/null) || body=""
+    fi
+  fi
+  [[ -n "$body" && "$we" =~ ^[0-9]+$ ]] && { _hook_start_send "$body" "$dl" loads; r=$?; }
+  if (( r == 0 )); then rm -f -- "$f"; [[ "$sc" == startup ]] && printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$rid" "${lp#*:}" "$ver" "$off" "$we" "$tp" > "$REG/$id.loadlast"
+  elif (( r == 3 || t + 1 >= LOADS_TRIES )); then rm -f -- "$f"
+  else printf '%s\t%s\t%s\t%s\t%s\n%s\n' "$(( t + 1 ))" "$rid" "$off" "$sc" "$tp" "${body:+$we$'\t'$body}" > "$f"; fi
+  [[ -e "$REG/$id.generation" ]] || rm -f -- "$f" "$REG/$id.loadlast" 2>/dev/null
+  return 0
+}
+_hook_start_send() {   # <report JSON> <deadline ms> [<verb>, default start] -> 0 taken; 1 stale-uuid; 2 no answer; 3 refused for good; 4 kept and tried; 5 no time
+  local out left=$(( $2 - $(_hook_epoch_ms) ))
+  (( left >= 1000 )) || return 5
+  out=$(printf '%s\n' "$1" | CCRC_API_STATUS=line _hook_timeout "$(( left / 1000 )).$(( left % 1000 / 100 ))" "$HOME/.local/bin/ccrc-api" sessions "${3:-start}" "$id" --json - 2>&1)
+  case "$?" in 0) ;; 2) return 4 ;; 124) HOOK_NET_HUNG=1; return 2 ;; *) return 2 ;; esac
+  case "$out" in *'http 202'*) return 0 ;; *'"stale-uuid"'*) return 1 ;; *'http 40'[14]*|*'http 5'[0-9][0-9]*) return 4 ;; *'http 4'[0-9][0-9]*) return 3 ;; *) return 2 ;; esac
+}
+_hook_start_keep() {   # <tries> <report JSON> <send rc, 6 unsent, 7 stale under another sender> -> the caller's stay, drop, pass and why
+  local t=$1
+  case "$3" in 0) return 0 ;; 3) drop=$(( drop + 1 )); return 0 ;; 1) pass=0 why=$(( why > 1 ? why : 1 )) ;; 5) why=$(( why > 1 ? why : 1 )) ;; 2|4) pass=0 why=2 ;; esac
+  [[ "$3" == [147] ]] && t=$(( t + 1 ))
+  (( t >= START_RESEND_TRIES )) && drop=$(( drop + 1 )) || stay+=("$t"$'\t'"$2")
+}
+_hook_start_report() {
+  local f="$REG/$id.startpending" now dl after=0 drop=0 t j r rc=6 pass=1 why=0 body="" inc="" e kept=() stay=() rid
+  case "$event" in UserPromptSubmit|SessionStart) ;; *) return 0 ;; esac
+  [[ -z "$paid" && "$id" =~ ^[A-Za-z0-9_-]+$ && -f "$REG/$id.generation" && ! -L "$f" ]] || return 0
+  { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
+  _hook_net_bound "$START_BUDGET_MS" || NET_LEFT_MS=0; now=$(_hook_epoch_ms); dl=$(( now + NET_LEFT_MS ))   # the one network budget (F5)
+  [[ -f "$f" ]] && { IFS=$'\t' read -r after drop; while IFS=$'\t' read -r t j; do kept+=("$t"$'\t'"$j"); done; } < "$f" 2>/dev/null
+  [[ "$after" =~ ^[0-9]+$ ]] || after=0; [[ "$drop" =~ ^[0-9]+$ ]] || drop=0
+  (( after > now + START_RESEND_BACKOFF_MS )) && after=$(( now + START_RESEND_BACKOFF_MS ))
+  (( now < after )) && pass=0
+  if [[ "$event" == SessionStart && "$src" != fork ]]; then
+    # `_reg_generation_valid`'s grammar (ccd/ccd), which `REG_GENERATION_SHAPE` (shared/api.ts) holds for the server.
+    [[ "${CCRC_SESSION_GENERATION:-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && inc="$CCRC_SESSION_GENERATION"
+    rid="$now-$$-$RANDOM"; [[ -n "${CCRC_LAUNCH_PROFILE:-}" && ( "$src" == startup || "$src" == resume ) ]] && _hook_loads_pend "$rid"
+    body=$(jq -c --arg id "$id" --arg rid "$rid" --arg inc "$inc" --argjson at "$now" \
+      '(.session_id // "" | tostring) as $u | {fromId: $id, fromUuid: $u, startedUuid: $u, reportId: $rid,
+        source: (.source // "" | tostring | if . == "" then "other" else .[0:32] end),
+        model: (.model | if type == "string" then .[0:128] elif type == "object" and (.id | type) == "string" then .id[0:128] else null end),
+        rowIncarnation: (if $inc == "" then null else $inc end), reportedAt: $at}' <<<"$payload" 2>/dev/null) || body=""
+    [[ -n "$body" ]] && { _hook_start_send "$body" "$dl"; rc=$?; }
+    [[ "$rc" == [1245] ]] && pass=0
+  fi
+  [[ -n "$psid" ]] || pass=0
+  for e in ${kept[@]+"${kept[@]}"}; do
+    t="${e%%$'\t'*}" j="${e#*$'\t'}"; [[ "$t" =~ ^[0-9]+$ ]] || t=0; r=6
+    (( pass )) && { j=$(jq -c --arg u "$psid" '.startedUuid //= .fromUuid | if .source == "clear" or .source == "resume" or .source == "compact" then .fromUuid = $u else . end' <<<"$j" 2>/dev/null) && { _hook_start_send "$j" "$dl"; r=$?; } || r=3; }
+    [[ "$r" == 5 ]] && pass=0
+    [[ "$r" == 1 && "$j" != *"\"fromUuid\":\"$psid\""* ]] && r=7   # stale under a sender not this event's (a kept startup): a try, and the pass goes on
+    _hook_start_keep "$t" "$j" "$r"
+  done
+  [[ -z "$body" ]] || _hook_start_keep 0 "$body" "$rc"
+  (( rc == 0 )) && after=0
+  now=$(_hook_epoch_ms)
+  (( why == 2 )) && after=$(( now + START_RESEND_BACKOFF_MS ))
+  (( why == 1 )) && after=$(( now + START_STALE_BACKOFF_MS ))
+  while (( ${#stay[@]} > START_PENDING_MAX )); do stay=("${stay[@]:1}"); drop=$(( drop + 1 )); done
+  if (( ${#stay[@]} == 0 && drop == 0 )); then rm -f -- "$f" 2>/dev/null; return 0; fi
+  { { printf '%s\t%s\n' "$after" "$drop"; if (( ${#stay[@]} )); then printf '%s\n' "${stay[@]}"; fi; } > "$f$$" && mv -f -- "$f$$" "$f"; } 2>/dev/null \
+    || rm -f -- "$f$$" 2>/dev/null
+  [[ -e "$REG/$id.generation" ]] || rm -f -- "$f" 2>/dev/null   # a purge during the send: side (a); `_reg_purge` is side (b)
+  return 0
+}
+_hook_start_report || true
+# StopFailure (§5.1) leaves hookstate.json alone and prints nothing: its arm raised
+# the flag and read `err` for the marker above (stopfailure-sets-a-flag (D-3611)), and nothing
+# below may run for it. SessionEnd is a termination hint, captured above in a -hookcap session and otherwise inert; so is a
+# compact SessionStart (it set `sessend` in its arm, D-306), which only the spool above records.
+[[ -n "$stopfail$sessend" ]] && exit 0
 
 f="$REG/$id.hookstate.json"
 # Prior subagent set survives state transitions; a corrupt file reads as [].
@@ -1293,12 +4213,156 @@ hs_unreadable=0
 # emitted once per new context, so a counter carried across a `/clear` would
 # credit context N+1's card with context N's act.
 if [[ "$event" == SessionStart && "$src" != resume ]]; then gq=0; gd=0; cp=0; cc=0; fi
-if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then gq=$((gq + 1)); fi
+# THE ROSTER'S RESETS AND PRUNES (D-5232; not gated: they change no existing field's meaning). Every SessionStart that
+# reaches here empties it: `startup`, `clear`, `resume` and a source-less start are a new process, whose agents died with
+# the old one; `compact` exited in its arm (D-306), so a compaction, which kills no agent, keeps it. At a main Stop
+# (always the main thread; a subagent's own end is SubagentStop): a measured `bg` of 0 (Claude Code lists every running
+# or pending backgrounded task [B]) empties it; a `bg` of 1 to 8 whose ids were all kept (`bgi` holds at most eight, each
+# on the id rule) cuts it to the listed ids, but ONLY when every delegated task the Stop lists is a `subagent` (`bgdk`
+# empty or exactly `subagent`): a subagent's task id equals its SubagentStart `agent_id` in every committed capture
+# (2.1.280 to 2.1.292, `server/test/fixtures/delegation/*/agent-iso-bg.json` [M]), and no capture shows a teammate's,
+# a cloud session's or an unseen kind's, while a workflow's agents are not listed one by one. Anything else (`bg` -1
+# included) leaves it alone. Entries with no `id` (an older hook's) do not survive a prune.
+if [[ "$event" == SessionStart ]]; then subs="[]"; fi
+if [[ "$event" == Stop && -z "$paid" && "$subs" != "[]" && "$bg" =~ ^[0-9]+$ ]]; then
+  if (( bg == 0 )); then
+    subs="[]"
+  elif (( bg <= 8 )) && [[ "$bgd" =~ ^[0-9]+$ && ( "$bgdk" == "" || "$bgdk" == subagent ) ]]; then
+    bgn=0; bgrest="$bgi"
+    while [[ -n "$bgrest" ]]; do bgn=$((bgn + 1)); [[ "$bgrest" == *,* ]] && bgrest="${bgrest#*,}" || bgrest=""; done
+    if (( bgn == bg )); then
+      subs=$(jq -c --arg ids "$bgi" '($ids | split(",")) as $l | map(select((.id? // null) as $i | ($i | type) == "string" and any($l[]; . == $i)))' \
+        <<<"$subs" 2>/dev/null) || subs="[]"
+    fi
+  fi
+fi
+# ONE MORE jq, ONLY FOR A LINE THE REGEX TOOK: the hot path's budget above is
+# unchanged, and a response that is missing, interrupted or not this shape reads
+# as no answer, which is the side that costs a count rather than inventing one.
+if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then
+  gout=$(jq -r '.tool_response | if type == "object" and .interrupted != true and (.stdout | type) == "string" then .stdout else "" end' \
+    <<<"$payload" 2>/dev/null) || gout=""
+  if [[ "$gout" =~ $GRAPH_ANSWER_RE ]]; then gq=$((gq + 1)); fi
+fi
 # THE PROXIMATE ACT and THE DISTAL ONE, counted apart. `peers list` is the act
 # the co-tenant card prescribes; `claims take` is what that answer's own rule 0
 # prescribes next, and it is the one with a durable server-side arbiter.
 if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_PEERS_RE  ]]; then cp=$((cp + 1)); fi
 if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
+
+# ── THE PRECOMPACT LINE (Overlord W1a, W0-05) ────────────────────────────
+# An automatic compaction can fire PreCompact with no PostCompact after it, so
+# the server counts a compaction from this line, joined to its journal record
+# by trigger, transcript and time. NAMED `compactevents`, never `precompact`,
+# which is a route field (`$REG/<id>.<field>`) that `cmd_route --set` writes.
+# ITS OWN FILE, NOT `.compactions`, and that is
+# legitimately different: every PostCompact commit re-checks the WHOLE journal
+# against JOURNAL_RECORD_PRED, a safety boundary, so a second line shape there
+# would refuse every later commit, an older hook's after a rollback included.
+# AN ARM OF ITS OWN, run after `_hook_compact_pre` and `_hook_history_pre`, so
+# none of the card's early returns (its off switch, a scope that does not
+# resolve, its lock miss) can drop the line. It runs LAST, except for the one
+# line the refusal arm, `_hook_compact_refuse` (below), asks of it first with
+# the phase `refused`: the arm prints its block only once that line is written,
+# and a delivered block (`CS_REFUSED`) then skips the last call, so a refused
+# event keeps one line. It answers 0 only for a line written. One writer (this function),
+# under the row's `.compactions.lock`, so a line and a commit never interleave.
+# Dot-free, so `_reg_purge` and the slug passes take it with the row. BOUNDED
+# BY ROTATION, with no temp file: at PRECOMPACT_KEEP lines it is renamed to
+# `.compacteventsprev` and a fresh file starts, so a reader of both always holds
+# the last PRECOMPACT_KEEP lines. Its own lock miss still drops the line; the
+# server then reads one compaction fewer, never a file it cannot tell apart. A
+# rotation that is due and fails appends nothing, so the file never outgrows
+# its bound (review 1937 F2). A symlink at `.compacteventsprev`, dangling or
+# not, is removed under the lock (`rm -f` takes the link, never its target),
+# so a planted link cannot silence every later line (review 1937 F1).
+PRECOMPACT_KEEP=32
+# THE PRECOMPACT REFUSAL ARM, DARK (Overlord W1a compaction, spec §3.3.4 C39; W0-13; rulings R7a, R7b, R11). A verdict
+# of its own, dispatched FIRST of the PreCompact arms: ahead of `_hook_history_pre`, so no history switch turns it off,
+# and ahead of the card, `_hook_compact_pre`, which returns at once on CS_REFUSED, because a refused event is no
+# compaction and an unconsumed card set would read the next real one as an overlap for twenty minutes (the
+# coordinator's ruling, departure refusal-ahead-of-the-card). It refuses, once a turn, a main-thread PreCompact whose
+# trigger is `auto`, whose scope RULE answers `main` (asked here, since the card has not run; `subagent`, `ambiguous`
+# and no verdict never, R7a), and whose route field `precompact` reads `refuse` (absent is dark; the generations lane
+# is its one writer). Once a turn (R11): no
+# `refused` line in either events file at or after this turn's start, the turn marker's existing `turnAt` (rewritten
+# by every UserPromptSubmit, and by a main tool event only when the marker is not already `working`). A marker that
+# cannot be read, is another session's or holds no `turnAt` answers "refused already": the compaction goes through.
+# Refusing, it RECORDS FIRST (review 2004 F1): `_hook_compact_pre_line refused` writes the `refused` line under the
+# lock, and only once that write succeeded does the arm print PreCompact's JSON block decision. Every path that writes
+# no line (a lock miss, another generation, a bad events file or `.compacteventsprev`, a failed rotation or append)
+# prints no block, so the compaction goes through: a refusal is never printed that the next PreCompact cannot see.
+# W0-13 measured the exit-code-2 form, which this file's exit-0 contract cannot use; the hooks page gives the JSON
+# form as its equal, unmeasured (the renewal hand-offs plan measures it before arming). Only when the print succeeded
+# is CS_REFUSED set: `_hook_history_pre` then prints nothing, so the event keeps one stdout payload, and the last
+# events-line call is skipped. A print that fails leaves the `refused` line, and the event's own `pre` line follows
+# it: the compaction goes through, and the turn asks no second refusal. Twin:
+# `server/src/continuity/precompact.ts#precompactDecision`.
+_hook_compact_refuse() {   # PreCompact -> the block decision on stdout and CS_REFUSED=1, or nothing; 0 on every path
+  local v="" ta="" l="" f="" tp="" trig=""
+  [[ -z "$paid" && -f "$REG/$id.precompact" && ! -L "$REG/$id.precompact" ]] || return 0
+  { read -r -n 7 v < "$REG/$id.precompact"; } 2>/dev/null
+  { { read -r tp; read -r trig; } < <(jq -r '(.transcript_path // "" | tostring), (.trigger // "" | tostring)' <<<"$payload" 2>/dev/null); } 2>/dev/null
+  [[ "$v" == refuse && "$trig" == auto ]] && _hook_compact_scope "$tp" "$trig" || return 0
+  [[ "${CS_SCOPE-}" == main && -f "$REG/$id.turn.json" && ! -L "$REG/$id.turn.json" ]] || return 0
+  { IFS= read -r l < "$REG/$id.turn.json"; } 2>/dev/null
+  [[ "$l" == *"\"sessionId\":\"$msid\""* && "$l" =~ \"turnAt\":([0-9]{1,15})[,}] ]] && ta="${BASH_REMATCH[1]}" || return 0
+  for f in "$REG/$id.compactevents" "$REG/$id.compacteventsprev"; do
+    [[ -f "$f" && ! -L "$f" ]] || continue
+    while IFS= read -r l; do
+      [[ "$l" == *'"phase":"refused"'* && "$l" =~ ^\{\"at\":([0-9]{1,15}), ]] && (( BASH_REMATCH[1] >= ta )) && return 0
+    done 2>/dev/null < "$f"
+  done
+  _hook_compact_pre_line refused || return 0   # recorded first, under the lock: no line, no block (review 2004 F1)
+  trap '' PIPE; { printf '%s\n' '{"decision":"block","reason":"ccrc: this automatic compaction is refused once this turn, and a renewal is due (Overlord C39)"}'; } 2>/dev/null && CS_REFUSED=1; trap - PIPE
+}
+_hook_compact_pre_line() {   # [phase] -> one line on $REG/<id>.compactevents; rc 0 iff it was written; silent on any failure
+  local f="$REG/$id.compactevents" prev="$REG/$id.compacteventsprev" owe="$REG/$id.anchor-owed" line="" lockfd="" lines=() rot=0 rc=1
+  # THE SCOPE VERDICT ON EVERY LINE: every PreCompact payload names the parent's
+  # transcript, so `_hook_compact_scope`'s word is all that tells a subagent's
+  # compaction apart. Asked here when the card did not run (its off switch).
+  # The RULE's answer (main, subagent, or ambiguous when the rule cannot
+  # decide), never the card's overlap degrade, which `_hook_compact_pre` writes
+  # over CS_SCOPE for an unconsumed set: a PreCompact with no PostCompact
+  # (W0-05) leaves one for twenty minutes, and a main compaction inside them
+  # must still count (review 1927 I1).
+  [[ -n "${CS_SCOPE+x}" ]] || _hook_history_scope_verdict || true
+  line=$(jq -c --argjson at "$(_hook_epoch_ms)" --arg s "${CS_RULE_SCOPE-${CS_SCOPE-}}" --arg t "${CS_RULE_TRANSCRIPT-${CS_TRANSCRIPT-}}" --arg ph "${1-pre}" \
+    '{at:$at, trigger:(.trigger // "auto" | if . == "auto" or . == "manual" then . else "other" end),
+      scope:(if $s=="" then null else $s end), transcript:(if $t=="" then null else $t end), phase:$ph}' \
+    <<<"$payload" 2>/dev/null) || return 1
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 1
+  lockfd="$HOOK_LOCK_FD"
+  # A FIFO, a symlink or a directory at either pathname is not this file and is
+  # never opened: an open of a FIFO would block inside the held lock. A symlink
+  # at `.compacteventsprev` is removed first (F1); any other bad
+  # `.compacteventsprev` writes no line and moves nothing, so the rotation can
+  # never fail over and over while the current file grows (review 1927 M5).
+  _hook_generation_ok || { _hook_lock_release "$lockfd"; return 1; }
+  [[ -L "$prev" ]] && _hook_lock_still_canonical "$lockfd" \
+    && rm -f "$prev" 2>/dev/null
+  if [[ ! -L "$f" && ! -L "$prev" ]] && { [[ ! -e "$f" ]] || [[ -f "$f" ]]; } \
+    && { [[ ! -e "$prev" ]] || [[ -f "$prev" ]]; }; then
+    [[ -f "$f" ]] && { mapfile -t lines < "$f"; } 2>/dev/null
+    rot=$(( ${#lines[@]} >= PRECOMPACT_KEEP ))
+    if (( rot )) && _hook_lock_still_canonical "$lockfd"; then
+      mv -f "$f" "$prev" 2>/dev/null && rot=0
+    fi
+    if (( rot == 0 )) && _hook_lock_still_canonical "$lockfd"; then
+      { printf '%s\n' "$line" >> "$f"; } 2>/dev/null && rc=0
+    fi
+    # THE ANCHOR OWED (the anchor piece, Task 3; slug anchor-owed-mark, ruling R7a): an automatic compaction may bring no
+    # SessionStart (W0-05), so a main-scope `pre` line of an `auto` PreCompact, once written, marks the next prompt to carry
+    # the anchor. A `refused` line, and a subagent's, an ambiguous or an unread scope, mark nothing. One writer, this lock;
+    # the mark holds the prompt's tries (`_hook_anchor_owed`), and it is dot-free, so `_reg_purge`'s glob takes it. The
+    # trigger must READ `auto` (the line records a missing one as `auto`; fix round 1, F8), and a FIFO, a symlink or a
+    # directory at the mark is never opened, as above: an open of a FIFO would block inside the held lock (F3).
+    (( rc == 0 )) && [[ "${1-pre}" == pre && "$line" == *'"trigger":"auto","scope":"main",'* && ! -L "$owe" ]] && { [[ ! -e "$owe" ]] || [[ -f "$owe" ]]; } \
+      && jq -e '.trigger == "auto"' <<<"$payload" >/dev/null 2>&1 && { printf '0\n' > "$owe"; } 2>/dev/null
+  fi
+  _hook_lock_release "$lockfd"
+  return "$rc"
+}
 
 # ── R5: THE SEARCH GATE (D-1613) ────────────────────────────────────────
 # The spec DECLINED this gate and the operator reversed it on R4's own reading:
@@ -1318,8 +4382,9 @@ if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
 # The cheap conjuncts run first: the counters are already in hand, the
 # kill-switch is one stat, the tool name was read by the arm above, and only a
 # GATED call in an ARMED session pays for the jq that reads the command or the
-# git that dates the graph. A session that has queried once, or that has spent
-# its three denials, never pays anything again.
+# git that dates the graph. A session that has queried once never pays anything
+# again; one that has spent its denials pays the measurement on a gated call,
+# since a linked tree's bound is the store's setting, read by that measurement.
 # R6 (D-1745) shares this arm rather than copying it: the nudge's conditions
 # ARE the gate's 1-4 (kill-switch, a datable graph, freshness inside the bound,
 # `graphQueries` 0), and only the fifth — the denial bound — is the gate's
@@ -1332,8 +4397,7 @@ if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
 pre_json=""
 if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
    && [ ! -e "$GRAPH_GATE_OFF" ]; then
-  gated=0 nudged=0 bounded=0 fpath=""
-  [[ "$gd" -lt "$GRAPH_GATE_MAX_DENIALS" ]] && bounded=1
+  gated=0 nudged=0 fpath=""
   case "${tool:-}" in
     Grep|Glob) gated=1 ;;
     Read)
@@ -1380,19 +4444,21 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
   # well, which made THIS conjunct redundant and left the shell copy pinned by
   # nothing (measured: dropping it stayed green). One site now, so the bound
   # test — three denials on `Grep`, then a `Grep` AND a shell search silent —
-  # reds the moment the conjunct goes. The price is one jq per shell search
-  # for a session that has spent its three denials and still never queried,
-  # which is the rare shape by design.
-  if [[ "$gated" -eq 1 && "$bounded" -eq 1 ]] && _hook_graph_measure && _hook_gate_tree; then
+  # reds the moment the conjunct goes. It is the LAST conjunct, after the
+  # measurement, because the bound is the measured tree's (GM_MAX_DENIALS: the
+  # constant for a real directory, settings.json's for a linked tree, D-7351);
+  # the price is one measurement per gated call for a session that has spent
+  # its denials and still never queried, which is the rare shape by design.
+  if [[ "$gated" -eq 1 ]] && _hook_graph_measure && _hook_gate_tree && [[ "$gd" -lt "$GM_MAX_DENIALS" ]]; then
     # The card's own vocabulary — node count and freshness word, measured by the
     # card's own function — plus the act, plus the bound. A session that cannot
     # run Bash at all still gets through on its fourth search, and the board
     # shows the denials it spent getting there.
     greason="graphify gate: this tree has a knowledge graph ("
     [ -z "$GM_NODES" ] || greason+="$GM_NODES nodes, "
-    greason+="$GM_FRESH) and this session has not queried it yet."
-    greason+=' Search tools open after one graph query — run: `graphify query "<your question in plain words>"` (`graphify path "<A>" "<B>"` for a relationship, `graphify explain "<concept>"` for one concept).'
-    greason+=" Denial $((gd + 1)) of $GRAPH_GATE_MAX_DENIALS; after $GRAPH_GATE_MAX_DENIALS the gate opens anyway."
+    greason+="$GM_FRESH) and this session has no answer from it yet."
+    greason+=" Search tools open after one graph query that answers — run: \`$GRAPH_RUN query \"<your question in plain words>\"\` (\`$GRAPH_RUN path \"<A>\" \"<B>\"\` for a relationship, \`$GRAPH_RUN explain \"<concept>\"\` for one concept)."
+    greason+=" Denial $((gd + 1)) of $GM_MAX_DENIALS; after $GM_MAX_DENIALS the gate opens anyway."
     # COUNTED ONLY IF IT CAN BE SAID, SAID ONLY ONCE IT IS COUNTED (D-1689).
     # A builder that could not make its JSON has denied nothing, and charging
     # the session for it would spend the bound on denials it never saw. And the
@@ -1408,63 +4474,2231 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
     # omitted when the count could not be measured, exactly as the deny's is.
     nreason="graphify: this tree has a knowledge graph ("
     [ -z "$GM_NODES" ] || nreason+="$GM_NODES nodes, "
-    nreason+="$GM_FRESH) and this session has not queried it yet."
-    nreason+=' Before reading files to orient, run: `graphify query "<your question in plain words>"` (`graphify explain "<concept>"` for one concept).'
+    nreason+="$GM_FRESH) and this session has no answer from it yet."
+    nreason+=" Before reading files to orient, run: \`$GRAPH_RUN query \"<your question in plain words>\"\` (\`$GRAPH_RUN explain \"<concept>\"\` for one concept)."
     nreason+=' Reading a named file to edit it needs no query.'
     pre_json=$(_hook_nudge_json "$nreason") || pre_json=""
   fi
 fi
 
+# ── THE LANDING-ORDER ADVISORY (landing-order spec 2026-09-23 §5.1) ─────────
+# A Bash call that merges, pulls or rebases `main` into the current branch —
+# or asks GitHub to do the same from its side (the Update branch button's
+# `gh pr` verb, its REST route or its GraphQL mutation) — gets
+# `additionalContext` naming the three triggers worker clause 16 licenses an
+# absorption on, and the probe that measures the first. ADVICE, NEVER A
+# DECISION: 27% of the fleet's sync episodes (spec §1, item 8) came from
+# sessions that load no ccrc skill, and this text is the only thing those
+# sessions see; the call proceeds either way.
+#
+# OUTSIDE THE GRAPH ARM ON PURPOSE. That arm runs only when the hookstate
+# parsed, the session has not queried the graph, and the gate's kill-switch is
+# absent — three conditions that have nothing to do with a sync of main. So
+# this block reads none of them, and a test pins that it advises with the gate
+# switched off and the hookstate unreadable.
+#
+# ONE LINE PER EVENT, still (`pre_json`, printed once at the end of the file):
+# a deny or a nudge the graph arm already built wins, and this block says
+# nothing. They CAN meet on one call: the gate reads a search at the HEAD of
+# the line, so a compound `grep -rn x .; git merge origin/main` is a gated
+# search AND a sync. That is what the `-z "$pre_json"` conjunct is for, and a
+# test pins it: without it the advice would overwrite the deny after the arm
+# had already charged the session a denial for it.
+#
+# ORDER IS BUDGET, as in the arms above: the tool name is already in hand, the
+# glob tests over the raw payload cost no fork, and only a payload carrying
+# `main` or `origin` AND a sync verb, or GitHub's branch-update spelling, pays
+# the one jq that reads the command. The regexes are matched against the
+# COMMAND, never the payload, so a `Write` of a file that merely mentions a
+# merge stays silent.
+#
+# THE SHAPE: `git` IN COMMAND POSITION — at the start of the command or after
+# a separator (`;`, `&`, `|`, `(`, `{`, a newline), past any `VAR=value`
+# prefixes — then any global options (`-C <dir>`, `-c <k=v>`, `--no-pager`,
+# `--x=y`), one of the three verbs, any arguments, then `main`, `origin/main`,
+# `origin main`, `origin/HEAD` or `origin HEAD` (the slash forms may be quoted)
+# as a whole word. Command position is what keeps a MENTION silent: a commit
+# message, an `echo`, or a PR comment that quotes a sync puts a quote or a
+# word before `git` — unless the quoted text itself holds a separator, which
+# the regex cannot tell from a real one (the first limit below). The verb needs
+# whitespace after it, so `git merge-tree` (the probe itself) and `git
+# merge-base` never match.
+#
+# WHITESPACE INSIDE THE SHAPE IS `[[:blank:]]`, never `[[:space:]]`: a newline
+# separates commands, so it may begin one but never continue one. With the
+# wider class the arguments of one line ran on into the next, which advised on
+# `git pull` then `git push origin main` on the next line, and made a run of
+# newline-separated `git merge a` lines quadratic (3.5 s on 36 KB measured).
+#
+# EVERY TOKEN CLASS STOPS AT EVERY SEPARATOR: `[^[:space:];&|({]`, in the
+# arguments, the `-C` directory, the `--x=value` and the env-var value alike.
+# A separator opens a new start position, so a token that could run on across
+# one lets every start walk to the end of the line: quadratic again, for `(` and
+# `{` in the arguments (4.5 s on 39 KB measured), and for every separator in an
+# option or env-var value with no whitespace in it (5.7 s). The cost is a token
+# that holds a `(` or a `{` ends the walk, so those syncs are not advised (the
+# misses below). The timing pin runs every separator through every class.
+#
+# KNOWN MISSES AND LIMITS, each a deliberate trade for a hot path that forks
+# nothing. This is advice: a miss costs one ritual sync, which is the status
+# quo, and a false advice costs one sentence. The examples below were measured
+# against this regex; they are examples, not an exhaustive list.
+#   - It ADVISES on text it cannot read as text. A regex cannot see quoting or
+#     comments, so a separator INSIDE quoted text begins a "command": `echo
+#     "(git merge origin/main)"`, `git commit -m "docs: say when to sync; git
+#     merge origin/main only on a conflict"`, `gh pr comment 5 --body "fixed
+#     (git rebase origin/main was wrong)"`; so does a multi-line quoted string
+#     or heredoc whose own line begins with a sync command. A word inside `-m`
+#     matches as the target (`git merge -m "merge main into x" feature/x`), and
+#     so does a word in a trailing comment (`git merge --abort  # was
+#     origin/main`).
+#   - It ADVISES on updating a main checkout itself, which is no sync of a
+#     branch: `git checkout main && git pull origin main`, `git -C ~/proj pull
+#     --ff-only origin main`. Coordinators and operators do this routinely, and
+#     each is told it "brings main into the current branch".
+#   - It MISSES `git` behind a word: `if git merge origin/main; then`, `! git
+#     merge origin/main`, `time git ...`, `env VAR=x git ...`, `timeout 600 git
+#     pull origin main`, `for b in a; do git ...; done`, `sudo -u x git ...`,
+#     `command git ...`, a backtick substitution (`$(git ...)` advises: its `(`
+#     is a separator). Only a separator or a `VAR=value` prefix puts `git` in
+#     command position.
+#   - It MISSES a token it cannot walk: a quoted global-option value with a
+#     space (`git -C "/w/my demo" merge origin/main`, `git -c user.name="A B"
+#     merge ...`); any token holding a `(` or a `{` (`git -C "$(pwd)" merge
+#     origin/main`, `git merge -m "x (y)" origin/main`, a brace expansion);
+#     a redirection glued to the target (`git merge origin/main>/tmp/log`, the
+#     terminator class has no `>` or `<`).
+#   - It MISSES a ref spelled another way: a revision suffix (`origin/main~1`,
+#     `origin/main^0`), a full ref name (`refs/remotes/origin/main`), a refspec
+#     (`git pull origin main:main`), `FETCH_HEAD`, `git merge origin` (the
+#     remote's HEAD by default), or any local ref of another name.
+#   - It MISSES a sync split by a backslash line continuation (`git merge \`
+#     then `origin/main` on the next line).
+#
+# THE GITHUB BRANCH-UPDATE DETECTOR HAS NO COMMAND-POSITION RULE. The
+# MENTION-silence above belongs to the sync regex alone: a commit message or a
+# comment that merely quotes GitHub's branch-update verb, route or mutation
+# does advise. That is tolerated because the advice is advice only, and the
+# phrase is rare outside the call itself.
+LANDING_SYNC_RE='(^|[;&|({'$'\n''])[[:blank:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:];&|({]*[[:blank:]]+)*git([[:blank:]]+(-[Cc][[:blank:]]+[^[:space:];&|({]+|--[a-z-]+(=[^[:space:];&|({]+)?))*[[:blank:]]+(merge|pull|rebase)([[:blank:]]+[^[:space:];&|({]+)*[[:blank:]]+(origin/main|origin[[:blank:]]+main|origin/HEAD|origin[[:blank:]]+HEAD|main|"(origin/main|origin/HEAD|main)"|'\''(origin/main|origin/HEAD|main)'\'')([[:space:];&|)]|$)'
+LANDING_UB_RE='gh[[:space:]]+pr[[:space:]]+update-branch|/update-branch([^A-Za-z0-9_-]|$)|updatePullRequestBranch'
+if [[ "$event" == PreToolUse && -z "$pre_json" && "${tool:-}" == Bash ]] \
+   && [[ ( ( "$payload" == *main* || "$payload" == *origin* ) \
+           && ( "$payload" == *merge* || "$payload" == *pull* || "$payload" == *rebase* ) ) \
+         || "$payload" == *update-branch* || "$payload" == *updatePullRequestBranch* ]]; then
+  lcmd=$(jq -r '.tool_input.command // "" | tostring' \
+    <<<"$payload" 2>/dev/null) || lcmd=""
+  if [[ -n "$lcmd" ]] && { [[ "$lcmd" =~ $LANDING_SYNC_RE ]] || [[ "$lcmd" =~ $LANDING_UB_RE ]]; }; then
+    lreason='ccrc landing advisory: this command brings main into the current branch. Absorb main only on one of three triggers:'
+    lreason+=' (1) the branch conflicts — probe with `git fetch origin && git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD`: exit 1 with a tree id on the first line is a conflict, exit 0 is clean, and any other answer is unmeasured and licenses nothing;'
+    lreason+=' (2) a required check on the PR is red while main passes the same tests: re-run its failing test files on a clean checkout of `origin/HEAD` in scratch, and a red there too is a red main also shows (report it once as main-red and leave main alone);'
+    lreason+=" (3) the coordinator's fix-round mail names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository."
+    lreason+=' Otherwise leave main alone: a clean branch lands as it is, and every needless sync restarts CI.'
+    lreason+=' When you do absorb: `git merge` only — never a rebase, a force-push or the Update branch of GitHub (its button, `gh pr` verb or API) — and on a conflict in a `# ccrc:generated` stamp line, take either side of that line only, resolve the rest of the file as source, then run `~/.local/bin/ccrc restamp <file>` (`ccd/ccd` carries no committed stamp, so it never has one).'
+    pre_json=$(_hook_nudge_json "$lreason") || pre_json=""
+  fi
+fi
+
+# ── THE WORKER MERGE DENY (landing-order wave 2, spec §5.2) ─────────────
+# "The coordinator merges, workers never do" (R5) was prose while every merge
+# here needed the admin bypass. Once the operator sets the ruleset's approval
+# count to 0, any session holding the fleet's one login could land with a
+# plain `gh pr merge`. So a session whose hold names a programme wave — a
+# dispatched worker's or reviewer's, the only sessions a dispatch holds — and
+# any workspace that carries the CHILD MARKER (`$REG/<id>.child`, written by
+# `ws-add --child` for a dispatch and by nothing else) is DENIED `gh pr merge`
+# in every spelling this file can parse at a COMMAND HEAD:
+# after a line start or `;` `&` `|` `(` or `$(`; past `VAR=value` prefixes,
+# the reserved words and grouping a head can follow (`if` `then` `do` `else`
+# `elif` `while` `until` `{` `!`), the wrappers `time` `env` `command` `exec`
+# `nohup` `sudo` and `timeout <n>` (in any order, `env`'s assignments too); a
+# path to the binary; and gh's own flags before `pr` or between `pr` and
+# `merge` (`-R owner/repo`). The `merge` word may be followed by a blank, one
+# of `;` `&` `|` `(` `)` `<` `>`, or the end (`gh pr merge;echo ok` runs the
+# merge). `--auto`, `--squash`, `--admin` and every other merge flag are the
+# same act from a worker and are denied with it.
+#
+# QUOTED TEXT IS REMOVED BEFORE MATCHING, in the same jq that reads the
+# command (MERGE_STRIP_JQ), leftmost first as bash reads it: a backslash
+# escape with the rest of its word (so `\ #` opens no comment), `$$` (a word,
+# so `$` pairs are read from the start of a run and never lend a `$` to a
+# `$'…'`), a `$'…'` string (its `\'` escapes honoured), a '…' span, a "…"
+# span, a heredoc, a `#` comment that starts a word. A "…" span is matched
+# WHOLE — its `\"` escapes, backtick spans, `${…}` expansions with their own
+# "…" and '…' (as bash reads them there) and `$(…)` substitutions included,
+# each substitution with its own quotes, parentheses, `${…}` and heredocs —
+# and is replaced by its substitutions alone, each stripped the same way:
+# `X="$(date)"` reads `X=$(date)`, and "docs; gh pr merge 42 is how" reads as
+# nothing. A heredoc (its delimiter a bare word, a backslash and a word, or
+# one quoted word, blanks allowed when quoted) keeps its `<<` line and loses
+# its body up to its terminator line: the WHOLE line at the top level (`<<-`:
+# tab-indented), and inside a quoted `$(…)` a line that may go on with `)`, as
+# bash ends one there. An unquoted delimiter's body keeps its substitutions,
+# and the rest of the `<<` line is stripped too. `$((…))`, `((…))` and `$[…]`
+# (to two nested parentheses, on one line) are kept as written — never
+# dropped, so a `$(…)` inside them still reaches the match — and a shift's
+# `<<` in them opens no heredoc. FAIL CLOSED: what the strip cannot COMPLETE
+# keeps its RAW text, so a merge after it is still matched — a "…" span, a
+# `$'…'` or a `$(…)` that never closes keeps its own text; and a heredoc
+# opener the strip SEES (not `<<<`, not in quotes or arithmetic) but cannot
+# complete keeps EVERYTHING from the opener to the end raw, so no quote is
+# ever parsed through a body it did not remove. A heredoc is incomplete when
+# its exact terminator line never comes, when its `<<` line holds another
+# `<<`, or once stripped still holds a quote or a backtick, or when its body
+# holds a line that begins `EOF)` (bash would read the body to the end, or end
+# it at `EOF)` inside a `$(…)` the strip does not parse at the top level). The
+# cost is a deny bash would not need: such a text that holds a merge at a
+# command head is refused. Three spellings that passed before this rule now
+# deny: `x=$(cat <<'EOF'…EOF)` whose body has a line that begins `gh pr
+# merge`, a heredoc whose terminator line carries a trailing blank, and a
+# heredoc with a body line that begins `EOF)`. The standard commit and PR-body
+# form, `EOF` and `)` on separate lines, still passes. So a commit message, a
+# PR body, a grep pattern, a terminated heredoc or a comment that MENTIONS `gh
+# pr merge` passes, and no apostrophe in a comment, a heredoc body or a "…"
+# span, and no escaped quote, opens a span that swallows a live merge after it
+# — wherever the strip can parse the span, which the list below bounds.
+# WHAT PASSES UNPARSED, said rather than hidden. The deny is contract-grade
+# (spec §4), so these are listed, not closed; each one was measured passing
+# by this wave's tasks, its reviews (241, 247) or their fix rounds:
+# `bash -c "…"`; a quoted or escaped command word (`"gh" pr merge`) and
+# quoting INSIDE the `pr` or `merge` word (`gh pr "merge"`, `gh 'pr' merge`,
+# `gh pr m'erg'e`, `gh pr \merge`: the strip drops a quoted span, it does not
+# unquote it); legacy backticks; `xargs`; an unlisted wrapper (`nice`,
+# `stdbuf`, `coproc`); a NAMED wrapper spelled with a path (`/usr/bin/env gh
+# pr merge`, `/usr/bin/timeout 60 gh pr merge`); a named wrapper's own
+# flags (`sudo -E`, `command -p`; only `timeout`'s one argument is parsed); a
+# leading redirection (`2>&1 gh …`, `>/dev/null gh …`, `</dev/null gh …`); a
+# `case` arm (`*) gh pr merge`); a function body (`f() { gh pr merge 42; }`);
+# a variable command word or argument (`$GH pr merge`, `gh pr $m`); a gh alias
+# (`gh alias set m 'pr merge'`); for the `--admin` deny, a flag word the raw
+# text does not spell whole (`--adm''in`, `--$f`); a `#` comment straight after a `)`; a ` #` or
+# `(#` inside an unquoted top-level `${…}`, which the strip reads as a comment
+# (`echo ${x:- #}; gh pr merge 42`); a form feed or vertical tab before a `#`
+# (the strip's blank class is Oniguruma `\s`; bash splits words on space, tab
+# and newline only); a top-level "…" span holding `$${`, whose `${` the strip
+# reads as an expansion that closes at a later `}` where bash reads `$$` and a
+# literal `{` (`(echo "$${"); gh pr merge 42; (echo "}")`); a
+# backslash-newline continuation (`gh pr \<newline> merge`); a `$(…)` that
+# holds a newline, a `;` `&` `|` or `(` inside a `VAR=` or flag value. And
+# where the strip itself mis-reads a span it can close — a "…" span is then
+# read as unquoted text, so an apostrophe in it can open a span that hides a
+# merge after it: a `case` pattern's bare `)` inside a "…" span's `$(…)`; a
+# "…" span nesting `$("…")` more than six deep (the regex engine's call-depth
+# bound). And heredocs the strip reads as complete though bash does not, so a
+# merge after them can run: a delimiter quoted in part or carrying a suffix
+# (`<<E"O"F`, `<<"EOF"x`), when a line equal to the strip's shorter word (`E`,
+# `EOF`) follows the merge; a `<<` line that goes on past its newline without
+# a quote, through a trailing `\` or an open `$(`; a heredoc inside `$(…)`
+# that bash 5.2 ends at a line that starts with the word and holds a `)` later
+# (`EOF )`, `EOF<tab>)`, `EOFx)`), when an exact `EOF` follows the merge; and
+# a heredoc inside backticks, likewise. A terminated heredoc BODY line that
+# begins `gh pr merge` is text and passes, unless an unquoted body runs it
+# inside `$(…)`.
+# WHAT PASSES UNPARSED, the `gh api` half (each pinned by a LISTED-pass case in
+# `session-hook-merge-deny.test.ts`, which looks for the phrase below in this list):
+#   - a query or body read from a file (`-F query=@mutation.graphql`,
+#     `--input body.json`, `cat f | gh api graphql --input -`): the file's text is
+#     never in the command;
+#   - a word or path assembled at run time (`q=merge; r=PullRequest`, a path in a
+#     variable built from pieces, a `$(…)` operand that holds a `/` or a separator
+#     such as `pulls/$(cat /tmp/n)/merge`): the text never holds the word whole;
+#   - a variable or quoted command word (`$GH api …`, `"gh" api …`): the strip
+#     drops the quoted word, so no `gh … api` head is left to ask about;
+#   - a `gh alias` (`gh alias set m 'api -X PUT'`);
+#   - a quoted or backticked `api` word (`gh "api" -X PUT …`, `gh 'api' …`, legacy
+#     backticks around the whole `gh api …`): the strip drops the quoted word or does
+#     not read the backtick as a command head. `gh a""pi …` is REFUSED, because
+#     the strip joins the halves into `api`;
+#   - a `.` or `..` path segment (`pulls/42/./merge`, `pulls/42/x/../merge`): the
+#     path test reads the text as written and does not normalise;
+#   - another HTTP client given gh's credential (`curl -X PUT -H "Authorization:
+#     Bearer $(gh auth token)" https://api.github.com/repos/<o>/<r>/pulls/<n>/merge`,
+#     `GH_TOKEN=$(gh auth token) curl …`, a script that reads `GH_TOKEN`): the hook
+#     asks about `gh`, not about the credential;
+#   - a write of the base branch's rules or protection that removes the queue, so
+#     that a plain merge then skips it (`gh api -X PUT repos/<o>/<r>/rulesets/<id>
+#     -f enforcement=disabled`, `gh api -X DELETE repos/<o>/<r>/branches/<b>/protection`):
+#     the coordinator skill forbids these writes as a rule of the skill only;
+#   - the head grammar's own classes, listed above for the merge head, pass the
+#     `gh api` head as they pass the merge head: `xargs gh api …`, `bash -c "…"`,
+#     `eval`, a leading redirection, an unlisted wrapper and a path-spelled wrapper;
+#   - an encoded or non-canonical merge path: a percent-encoded character
+#     (`pulls/42/%6derge`, which holds no `merge`, so the bash prefilter never wakes
+#     the arm), a doubled slash (`pulls/42//merge`, `repos/o/r//merges`) or a case
+#     variant (`pulls/42/Merge`), which wake the arm and which the path test does not
+#     read, since it reads the text as written;
+#   - a mutation word written with JSON `\u` escapes in a `--input -` body or a
+#     `-f query=` value (`\u0065nqueuePullRequest`): the escape is the body's, not
+#     the shell's, and the hook does not decode JSON. Such a payload can also skip
+#     the bash prefilter, which reads only `merge`, `Merge` and `enqueuePullRequest`;
+#   - a word or path broken by quotes or a backslash so that none of those three
+#     strings stays whole in the payload (`pulls/42/m""erge`): the arm never runs
+#     (the quote-free reading above catches it only when the payload wakes the arm,
+#     for example through another `merge`);
+#   - under the operator's allowance only, a repository gh resolves from ambient
+#     state rather than from the command: a working directory in another checkout
+#     left by an earlier call's `cd` (the Bash tool keeps its directory between
+#     calls; a `cd` in the same command is outside the grammar and refused), the
+#     checkout's git remotes, and the session's inherited environment (D-7249);
+#   - ways to move `main` that are not merges, out of this wave's scope and named
+#     as such: `gh api -X PATCH repos/<o>/<r>/git/refs/heads/<b>`, the GraphQL
+#     `updateRef`, `updateRefs` and `createCommitOnBranch` mutations, and `git
+#     push` to a protected branch;
+#   - a call of the admin-merge door over the parse cap: over the cap the hook
+#     asks only the `gh … pr … merge` segment rule, so a worker's over-cap
+#     `ccd pr-admin-merge …` passes the hook (the door itself refuses that
+#     caller, a hold naming a programme wave or the child marker, D-8124).
+# The hook is a contract the fleet honours, not an access boundary (spec §4),
+# and identity on this box is attribution. A session with neither — a
+# coordinator's own, the operator's — is never asked THIS question (wave 2's), so
+# the coordinator's `gh pr merge <n> --match-head-commit <sha>` enqueues; it is
+# asked the bypass question below, like every session. A coordinator whose
+# workspace DOES carry one is refused like a worker: a self-claimed run's hold
+# (`POST /api/runs` admits a claimant that is its own session), or a reclaim
+# heir that was the programme's own worker (hold and marker both). The hook
+# cannot tell it from a worker; the lifecycle reference sends that coordinator
+# to the operator's shell.
+# The strip's jq is Oniguruma regex throughout (lookaround, atomic groups,
+# subexpression calls, backreferences), so a jq built without Oniguruma — or
+# any jq error, a jq killed for memory (OOM), or a hook timeout — leaves no
+# mcmd to match and the deny FAILS OPEN (#224 keeps the hookstate parse
+# regex-free for exactly that reason).
+#
+# WHY THE MARKER TOO. A close releases the hold (`ws-release`), and a child's
+# reclaim runs AFTER the close answers, on its own queue, and defers while the
+# pane is attached, the tree is busy or reclaim is paused: between the two a
+# released child still has its pane and its login, and no hold. The marker is
+# written at birth and purged only with the registry row, at the END of the
+# reclaim, so it covers that window. Its EXISTENCE decides — a marker this
+# hook cannot read is still a marker — and its contents are never read.
+# Only a dispatch mints a child; a coordinator carries one only as that
+# reclaim heir (above).
+#
+# THE BYPASS DENY (landing-order wave 2b, spec §5.2 step 4). Every session, held
+# or not, is asked a second question AFTER wave 2's, whose text is unchanged:
+# does the merge it runs carry `--admin`? `--admin` is read from the RAW command,
+# quotes included, once the STRIPPED text holds a real `gh … pr … merge` head,
+# in the same jq that strips (the verdict flags, below). The wide reading is on
+# purpose (D-7111): the strip deletes quoted spans, so a quoted `'--admin'` or
+# `"--admin"` vanishes from the stripped text, while an `--admin` after a `$(…)`
+# argument, after a backslash-newline, or written `--admin=true` (all three kept
+# by the strip) would defeat a per-segment flag parse. THE COST, named in the reason: a command that
+# holds a real merge head and an unrelated `--admin` mention (a merge, then
+# `git commit -m "never --admin"`, in one command) is refused too; run them as
+# separate commands. A held or child session gets WAVE 2's reason (asked
+# first); any other session gets the bypass reason, which names the queue
+# landing `gh pr merge <n> --match-head-commit <sha>`, the read of the verdict
+# `gh pr view <n> --json state,mergedAt`, R9's door (the operator's own shell or
+# GitHub's UI) and the wide reading. Text with no merge head passes (`echo
+# --admin`, a commit message that names it).
+#
+# THE ADMIN-MERGE DOOR (D-8124). On 2026-11-09 the operator ruled that a coordinator
+# may admin-merge in a repository where ccrc's GitHub identity is an admin and no
+# merge queue applies. The deny above stays WHOLE, for `--admin` and `gh api` in
+# every session: a text read of a command cannot check admin permission, a merge
+# queue, the head, the required checks or the reviews, and a loosened match would
+# let the unchecked spelling through. The one gated door is `ccd pr-admin-merge`,
+# which checks every condition itself at merge time, refuses with a typed reason
+# and journals the merge; it runs `gh` as a subprocess, which no hook sees. This
+# hook adds two things for it: the worker deny covers the door (CCD_DOOR_RE, below,
+# sets the merge question like a `gh … pr … merge` head, so a hold naming a
+# programme wave or the child marker is refused with wave 2's reason, byte for
+# byte), and the bypass reasons name the door as the way for a coordinator.
+#
+# THE gh api HALF. A `gh … api` call that reaches a merge is refused the same way,
+# in every session, by the same single jq and with the same reason prefix. Once the
+# STRIPPED text holds a real `gh … api` head (GH_API_RE: GH_MERGE_RE's head grammar
+# with `api` for `pr … merge`, derived from its text, so the two never drift) the
+# RAW command is read, with every `'`, `"` and `\` removed first (fixed-string
+# split and join, so `merge""PullRequest`, `merge'PullRequest'`, `pulls/"$n"/merge`,
+# `pulls/42/'merge'` and `m\erge` are words and paths), for a mutation word (`w`:
+# the fixed-string `contains` of any of `mergePullRequest`, `enqueuePullRequest`,
+# `enablePullRequestAutoMerge` or `mergeBranch`, the set written once in the jq
+# program) or a merge path (`p`: `pulls/<seg>/merge` or `repos/<seg>/<seg>/merges`,
+# each END-BOUNDED so `pulls/42/merges/x` is not one, and possessive, so the test
+# cannot backtrack). A path counts when EITHER of two readings finds it (one
+# alternation in the same jq, every segment possessive, the same end boundary): a
+# segment up to the next blank or `/` (`[^[:space:]/]++`), which reads
+# `pulls/$((42|0))/merge` and `pulls/$((42&255))/merge`; and a segment up to the next
+# `/` or separator (`;` `&` `|` or a newline), blanks, `(` and `)` included
+# (`[^;&|\n/]++`), so a `$(…)` operand with blanks is read as part of the path:
+# `pulls/$(gh pr view --json number -q .number)/merge` and `pulls/$(echo 42)/merge`
+# are paths, while a `$(…)` that holds a `/` or a `;` `&` `|` beside a blank is not
+# (below). The second reading stops at a separator: `gh api repos/o/r/pulls/42; echo
+# a/merge` is not a path. Any METHOD is refused, a GET
+# included (D-7112): a text-read GET exemption is defeated by a later `-X PUT` or a
+# `GET` inside a quoted field, and `gh pr view <n> --json state,mergedAt` answers
+# the same question, which the reason names. The wide reading is the same on
+# purpose (D-7111) and its cost is named in the reason's own sentence: a real `gh
+# api` head beside an unrelated mutation word (`gh api repos/o/r/pulls/42; echo
+# enqueuePullRequest`) is refused too; run them as separate commands. THE
+# ALLOWANCE NEVER LIFTS THIS HALF. Text with no `gh api` head passes (a commit
+# message, a PR body, a heredoc, a mail body that names a word or a path).
+#
+# THE VERDICT FLAGS. The strip's answer carries them, computed in the same jq.
+# Under the cap it is `=<flags><US><stripped>`, `<US>` the unit separator (0x1f)
+# and `<flags>` a string over `a` (the raw text holds the substring `--admin`), `s`
+# (the whole raw command matches ALLOW_ADMIN_RE, below), `w` (the quote-free raw text
+# holds a mutation word) and `p` (the quote-free raw text holds a merge path), in that
+# order. Over the cap it is `!<bytes>:<kinds>`, `<kinds>` a comma-separated subset
+# of `merge` (wave 2's `ocwords`), `admin` (`ocwords` AND the fixed string
+# `--admin` anywhere in the raw command) and `api` (`ocapiwords`: one segment, from
+# the same fixed-string `ocsegs` split, holds the words `gh` then `api` as an
+# `ocafter` bounded word match reads them, AND the quote-free raw text holds a mutation
+# word or the fixed string `/merge`, which stands for BOTH paths over the cap: its
+# wider reach, any `gh … api` segment beside the text `/merge` anywhere, is part of
+# the named over-cap cost below). No `splits(` regex call is added. Over the cap
+# wave 2's reason fires only when `<kinds>` holds `merge`, the bypass question
+# follows (`admin` or `api`), and the allowance never applies: `s` is computed in
+# the under-cap branch only. The bash side splits the answer with parameter
+# expansion on `$'\x1f'`, no fork.
+#
+# THE OPERATOR'S ALLOWANCE (D-7249). On 2026-10-28 the operator ruled that one
+# hosted project keeps landing by admin merge. The lift is a regular file,
+# `$REG/admin-merge-allowed/<project>`, in a DOTLESS registry subdirectory (the
+# pools precedent: every registry glob is suffix-shaped, so a directory is
+# invisible to all of them). NOTHING IN THIS TREE WRITES IT: the operator
+# creates it by hand, and its content is never read. The project is the
+# session's own, read with `_ct_read "$REG/$id.project"` (rc 0), non-empty,
+# passing CCRC_PROJ_CLASS (no `/`, so it cannot walk out of the directory) and
+# at most CCRC_PROJ_MAX characters; an absent, empty, unreadable or off-class
+# `.project` reads as not allowed, and the hook NEVER falls back to the session
+# id here (the card's probe does). The file is tested `[[ -f f && ! -L f ]]`: a
+# symlink or a directory is not an allowance. No fork, no jq. WHAT IT LIFTS: the
+# admin half of the bypass question for a session of that project, and only
+# when `s` is set, that is the command is exactly one admin merge of a PR named
+# by number (`[0-9]+`, never `\d`), optionally with `--match-head-commit <40
+# hex>`, `--squash`, `--merge`, `--rebase`, `--delete-branch` or `-d`,
+# single-spaced, with nothing before or after it. WHAT IT NEVER LIFTS: wave 2's
+# worker deny (asked first); any other spelling (a second command, a URL, a
+# branch, a repository flag, a quote, a `$`); the over-cap reading; the `gh
+# api` half. A repository `gh` resolves from ambient state rather than from the
+# command (a working directory left by an earlier call's `cd`, the checkout's
+# remotes, the inherited environment) is a listed pass under the allowance:
+# the hook is a contract, not an access boundary (R9).
+#
+# ORDER IS BUDGET, this arm's rule: the tool name is already read, the
+# substring prefilter costs no fork (`merge`, `Merge` and `enqueuePullRequest`:
+# bash glob tests are case-sensitive, and the last two names hold no lowercase
+# `merge`), and only a Bash payload carrying one of them pays the one jq for its
+# command, which also computes the flags: five fixed-string tests (`--admin` and the
+# four mutation words), one anchored `test` and one linear, possessive path `test`,
+# the last two under the cap only, plus three fixed-string split-and-joins that make
+# the quote-free text (`'`, `"`, `\`); no new call. The hold is read through
+# `_ct_read` and judged by `CCRC_HOLD_WAVE_RE` under `CCRC_HOLD_MAX` — the card's
+# own reader, shape and bound — so an absent, unreadable, empty, oversized or non-wave hold
+# is not a worker wave, exactly as the card declines to call it one; such a
+# session is then asked only whether it is a marked child.
+#
+# A DENY SUPERSEDES ADVICE: `pre_json` may already hold an `additionalContext`
+# for this same call (the Read nudge, or a sync advisory); the merge deny
+# replaces it. It never replaces the graph gate's DENY, which has already
+# counted the denial it prints (D-1689) — that call is refused either way.
+# COMPLEXITY: the match restarts at every separator, so no token class may
+# cross one, and the blanks inside a head are space and tab only, never a
+# newline: a class that could walks to the end of the line for each start (5
+# to 9 s on a 36 KB `;a=;a=…` or newline x `a=` command, which
+# `session-hook-sync-advisory.test.ts`'s env-var shape pins; now ~10 ms). A
+# value, a `timeout` argument or a flag may still hold ONE `$(…)` (blanks
+# allowed, no `;` `&` `|` and no nesting past `$((…))`): `X=$(date) gh pr
+# merge` runs, and a class that stopped at `(` would let it through. The
+# body stops at the first `)`: linear against the separator-restart inputs the
+# plan's regex was quadratic on. Separator-free chains still grow superlinearly
+# (hook, 36/100/200 KB: closed `$(…)` 142, 559, 1532 ms; the space/tab
+# family 186, 902, 2895 ms, which the plan's regex had). The strip pays one regex match per
+# quoted span, heredoc or comment, and jq 1.7's match costs grow with each
+# match's offset, so a command DENSE with quotes is superlinear too: 1584 ms at
+# 36 KB and 6885 ms (0.56 GB) at 100 KB of bare `"` through the hook (the strip
+# before this one: 21 s at 100 KB on jq alone), while 100 KB of real prose
+# in a heredoc commit or PR body takes ~130 ms. No start scans the rest of the
+# payload twice: a span, substitution or heredoc that never closes runs to
+# the end instead of failing and being retried from the next character, a
+# heredoc looks ahead only as far as the next `<<` on its line, an
+# incomplete heredoc ends the strip there (one cut, kept raw), and a
+# heredoc's rest-of-line is stripped without a second heredoc (a `<<a <<a`
+# line once recursed once per `<<`: 15 s and 2.9 GB at 36 KB, measured).
+# THE PAYLOAD CAP (landing-order wave 3): a command longer than
+# MERGE_PARSE_CAP bytes (UTF-8, as jq's `utf8bytelength` counts them) is never
+# parsed: neither the strip nor GH_MERGE_RE reads it. The strip's cost grows
+# with the quoted spans and substitutions it reads, and a hook that times out
+# or a jq killed for memory fails this deny OPEN (above), so an unbounded
+# command was a way past it. Over the cap the program asks the RAW command one
+# question, with a fixed-string segment rule (`ocwords`): split the command on
+# each of `;` `&` `|` and the newline, the separators between COMMANDS, and in
+# any one segment find `gh` (not preceded by a letter, digit or `_`, and
+# followed by a blank), then `pr` as a word (a blank before it, a blank or the
+# segment's end after it), then `merge` as a word that a blank, the end of the
+# segment, a backtick, `(`, `)`, `<` or `>` ends (that end class is `merge`'s
+# alone), each searched for after the one before (one leftmost match each, so
+# linear). The redirections and parentheses do not split: a gh flag's value may
+# hold them (`gh -R $(echo o/r) pr merge`, `gh -R o/r<x pr merge`), and a merge
+# is still a merge there.
+# gh's own flags may stand between the words (`gh -R o/r pr merge`, `gh pr -R
+# o/r merge`), which main's full parse refuses (landing-order wave 3's fix
+# round, review 267 F3). Yes: the arm reads it as a merge it could not
+# parse, and a held or child session is DENIED with a reason that names the
+# length and the cap and tells it to split the command or rephrase it (a long
+# PR body or mail goes in a file the Write tool writes, passed by path); a
+# landing is the operator's, from their own shell. No: it passes unparsed.
+# The split is `split` on a FIXED string, never `splits`: `splits` is a
+# regex-global walk, measured superlinear on jq 1.7 (43-52 s at 100 KB of
+# `;`, 14 s at 100 KB of `gh;`), and a hook that times out fails this deny
+# OPEN. A `contains("gh") and contains("merge")` prefilter, whole and per
+# segment, keeps the word tests off nearly every segment. Three of the six
+# 100 KB pins (`;` only, `gh;` repeated, newlines only) never reach the
+# split, since the whole-command prefilter is false for each, so the `splits`
+# timings above describe a rule without the prefilter; the structural
+# `splits(` ban and mutation row SP are what guard it. Measured through
+# the whole hook at 100 KB, on jq 1.7 and 1.8.2: 90 to 320 ms on `;`, `gh;`,
+# `gh pr merged;`, newlines and `gh merge `; the costliest measured, `gh
+# merge;` and `merge gh pr;` repeated (many segments that pass the prefilter),
+# reached 343 to 384 ms at load ~15. That is about 20% of the sync-advisory
+# 1500 ms bound idle (~250 to 380 ms at 100 KB, measured), not the parse's
+# quarter above; a review measured ~600 ms (~40%) once. The cost is linear in
+# the length, so the bound is crossed at ~450 to 500 KB at the idle slope. The
+# word rule, not two bare substrings, because `gh` is inside "though" and
+# "high" and `merge` inside "merged": the two substrings matched 1,340 of
+# 4,478 over-cap fleet commands in one two-day window, mostly prose. The
+# in-order search slices by `match` offsets, which jq 1.7 and 1.8 count in
+# codepoints (measured correct after é and an emoji); jq 1.6 is unverified.
+# Wave 2's question stays where its deny already applies: a session with no
+# wave hold and no child marker is never refused ON ITS ACCOUNT, under the cap
+# or over it. The bypass question (wave 2b) is asked of every session, and over
+# the cap it is refused when the raw text also holds `--admin` (the `admin`
+# kind, above) or an api command (the `api` kind, above: the fixed `/merge` stands
+# for both REST paths there, D-7115). THE VALUE IS MEASURED: the largest round size at which the worst quote-dense shape
+# measured costs about a quarter of `session-hook-sync-advisory.test.ts`'s
+# 1500 ms whole-hook bound. That shape is a run of quoted substitutions that
+# each hold a quote or a `<` (`"$(<)"` repeated), one nested strip per span:
+# ~350 ms of CPU at 2048 bytes and ~650 ms at 4096 (bare `"`: ~125 and
+# ~190 ms), measured on the fleet box at load ~18.
+# THE COST, said: a held or child session's over-cap command is refused when any
+# ONE segment (the text between `;` `&` `|` and newlines) names `gh`, then `pr`,
+# then `merge` as words, prose included: a one-line JSON mail body (its `\n`
+# escapes keep it one segment), a trailing `# comment`, a PR body that quotes or
+# merely mentions them in that order. It stays refused until it is split,
+# rephrased, or moved into a file. Since wave 2b the same cost falls on EVERY
+# session whose over-cap raw text also holds `--admin` anywhere (D-7115; a long
+# command that holds a real merge and any `--admin` mention, a comment included,
+# is refused over the cap), or, for
+# the `api` kind, a segment that names `gh` then `api` as words beside a mutation
+# word or the text `/merge` anywhere in the command (a wider reach than the
+# under-cap paths: `/merge` stands for both and has no end bound, so it also
+# catches `/merges`, and a path merely starting `/merge`, such as
+# `docs/merge-queue.md` or `/merged`, is enough; prose can hold it): the
+# reason says to split the command or pass the text as a file, says the hook
+# cannot tell prose from a command over the cap, and gives both byte counts. The coordinator accepted it (ruling 3510): of
+# 3,537 over-cap fleet commands in another two-day window, the segment rule
+# refuses at most 12 more than a word-bounded three-word match would (that count
+# measured the three word tests unordered; the in-order search is stricter). No
+# narrowing: letting only gh's flags stand between the words would need a
+# repeated group, the nested quantifier this rule exists to avoid. The backtick
+# is a STRICTER OVER-CAP READING, NOT A CLOSURE: a bare `` `gh pr merge` `` is
+# refused over the cap because the end class holds a backtick, while legacy
+# backticks still pass under the cap (listed above). WHAT PASSES OVER THE CAP,
+# said, each measured through this hook, held, padded past the cap: `bash -c "gh
+# pr merge"` and `eval "gh pr merge"` (the closing quote is not in the end
+# class; `bash -c "gh pr merge 42"` is refused), quoting inside a word (`g"h" pr
+# merge`, `gh p""r merge`), a variable (`x=gh; $x pr merge`), an alias, a
+# separator inside a quoted flag value or inside a substitution that holds `;`
+# `&` `|` or a newline (`gh pr -R "a;b" merge 42`), and a NUL next to a word
+# (`gh pr merge\0 42`, which passes over the cap and is denied under it; bash
+# strips NUL from command text and Node refuses it in spawn arguments).
+# `gh<newline>pr<newline>merge` passes too, rightly: bash reads three
+# commands. Three classes pass under the cap too, so they are not regressions
+# of it: a backslash-newline continuation between the words (`gh pr
+# \<newline> merge 42`, measured held, under the cap), a redirection glued
+# between the command words (`gh pr>x merge 42`, `gh>x pr merge 42`;
+# GH_MERGE_RE needs a blank before `pr` and `merge`), and a backslash-newline
+# straight after `merge` (`gh pr merge\<newline> 42`).
+# Classified, not closed (the stopping line, ruled 2026-10-03).
+# THE COST of the api half under the cap, accepted: the separator-bounded path reading
+# crosses blanks, so a non-merge `gh api` call whose later argument ends in `/merge`
+# (`gh api repos/o/r/pulls/42 -f body=docs/merge`) is refused too, and so is one
+# whose redirect target (`> out/merge`, `> "$TMPDIR/merge.json"`) or quoted string
+# (`--jq '.head.ref == "ws/merge"'`) holds `/merge` after `pulls/<n>`, and the
+# glued `pulls/<n>;x/merge`. Run it as a separate command, name the output file
+# another way, or pass the body as a file (`-F body=@<file>`).
+# The cap also BOUNDS every superlinear walk above: the strip and GH_MERGE_RE
+# never read more than MERGE_PARSE_CAP bytes, so the 36-200 KB timings above
+# are what the cap prevents, not what a command costs.
+# The cap needs jq 1.6 or later (utf8bytelength): on an older jq the whole
+# program fails to compile, and the deny fails OPEN at every length, as with
+# no Oniguruma (above).
+# The deny's jq floor is 1.6, and it is tested on jq 1.7 and 1.8. jq 1.8 binds
+# `E as $x` to the whole binary chain left of it where 1.7 binds the nearest
+# term, so every `as` in these programs that follows a binary operator is
+# parenthesised on its own, and the merge-deny suite pins that structurally;
+# before that, a jq 1.8 box failed this deny open on every command holding a
+# heredoc.
+MERGE_PARSE_CAP=2048
+GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+pr([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+merge([[:space:];&|()<>]|$)'
+# GH_API_RE: the same head grammar with `api` for `pr … merge`, DERIVED from GH_MERGE_RE's own text so the two never
+# drift. GH_MERGE_RE is `<head>[ \t]+pr(<gh flags>)*[ \t]+merge<end>`, and `[ \t]+pr(` (GH_API_CUT, a blank class
+# then `pr(`, spelled with a real tab as GH_MERGE_RE spells it) occurs once in it, right after the head, so cutting
+# there leaves the head alone. The cut is quoted so the brackets are literal in the pattern, not a glob class.
+GH_API_CUT=$'[ \t]+pr('
+GH_API_RE=${GH_MERGE_RE%%"$GH_API_CUT"*}$'[ \t]+api([[:space:];&|()<>]|$)'
+# CCD_DOOR_RE (D-8124): the same head grammar with `ccd pr-admin-merge` for `gh … pr … merge`, DERIVED from GH_MERGE_RE's
+# own text as GH_API_RE is, so the three never drift. `([^[:space:];&|()]*/)?gh(` (CCD_DOOR_CUT: the head's optional
+# path prefix, then the command word `gh` and the `(` that opens its flag group) occurs once in GH_MERGE_RE, right after
+# the wrapper prefix, so cutting there leaves the head alone and the door's own command word and verb follow it.
+CCD_DOOR_CUT=$'([^[:space:];&|()]*/)?gh('
+CCD_DOOR_RE=${GH_MERGE_RE%%"$CCD_DOOR_CUT"*}$'([^[:space:];&|()]*/)?ccd[ \t]+pr-admin-merge([[:space:];&|()<>]|$)'
+# ALLOW_ADMIN_RE (D-7249): the allowance's grammar, defined ONCE and handed to the strip's single jq as
+# `--arg allow`. Oniguruma: `\A` and `\z` anchor the whole raw command, `[ \t\n]*` is folded in at both
+# ends (jq 1.6 and 1.7 have no `trim`), digits are `[0-9]+` (never `\d`), and each word of the set is told
+# from the others by its first characters, so the one anchored `test` cannot backtrack. It does not itself
+# require `--admin`: the allowance is consulted only when the flag `a` is set.
+ALLOW_ADMIN_RE='\A[ \t\n]*gh pr merge [0-9]+( --admin| --match-head-commit [0-9a-f]{40}| --squash| --merge| --rebase| --delete-branch| -d)*[ \t\n]*\z'
+MERGE_STRIP_JQ='
+def SQ: $q + "[^" + $q + "]*" + $q;
+def AQ: "\\$" + $q + "(?>(?:[^\\\\" + $q + "]++|\\\\(?:.|\\n|\\z))*)(?:" + $q + "|(?<ua>\\z))";
+def W: "[^\\s;&|()<>\"" + $q + "\\\\]+";
+def T($n; $tabs; $end): $tabs + "\\k<w\($n)>" + $end;
+def hd1($n; $tabs; $end):
+  "(?:(?<q\($n)>[\"" + $q + "])|\\\\?)(?<w\($n)>(?(<q\($n)>)[^\"" + $q + "\\n]+|" + W + "))(?(<q\($n)>)\\k<q\($n)>)"
+  + "(?![^\\n]*?(?<!<)<<(?!<))(?>[^\\n]*)(?:\\n|\\z)"
+  + "(?>(?:(?!" + T($n; $tabs; $end) + ")[^\\n]*\\n)*(?:(?!" + T($n; $tabs; $end) + ")[^\\n]++)?)(?:" + T($n; $tabs; $end) + ")?";
+def AR: "(?>(?:[^()\\n]++|\\((?>(?:[^()\\n]++|\\([^()\\n]*+\\))*)\\))*)";
+def DEFS:
+  "(?<hd>(?<!<)<<(?:-[ \\t]*" + hd1("t"; "\\t*"; "(?![^\\n])") + "|[ \\t]*" + hd1(""; ""; "(?![^\\n])") + ")){0}"
+  + "(?<hs>(?<!<)<<(?:-[ \\t]*" + hd1("st"; "\\t*"; "(?![^\\n)])") + "|[ \\t]*" + hd1("s"; ""; "(?![^\\n)])") + ")){0}"
+  + "(?<sub>\\$\\(\\(" + AR + "\\)\\)|\\$\\((?<sb>(?>(?:[^" + $q + "\"()\\\\<#$]++|\\$\\$|" + AQ + "|\\g<pe>|\\$|\\\\(?:.|\\n|\\z)[^\\s;&|()<>\"" + $q + "`\\\\$]*|\\g<hs>|(?<!<)<<(?!<)[\\s\\S]*|<|(?<![^\\s;&|(])#[^\\n]*|#|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<dq>|\\(\\(" + AR + "\\)\\)|\\(\\g<sb>(?:\\)|\\z))*))(?:\\)|(?<us>\\z))){0}"
+  + "(?<pe>\\$\\{(?>(?:[^}\"" + $q + "\\\\$`]++|\\\\(?:.|\\n|\\z)|\\g<dq>|\\$\\$|" + AQ + "|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<sub>|\\g<pe>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`|\\$(?![({]))*)(?:\\}|\\z)){0}"
+  + "(?<dq>\"(?>(?:[^\"\\\\$`]++|\\\\(?:.|\\n|\\z)|\\g<pe>|\\$(?![({])|\\g<sub>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`)*)(?:\"|(?<ud>\\z))){0}";
+def fs(re; f): . as $in | [match(re; "g") | [.offset, .length, .string, any(.captures[]; (.name == "us" or .name == "ud" or .name == "ua") and .string != null)]] as $ms
+  | if ($ms | length) == 0 then $in else ($in | explode) as $cp
+    | [range(0; $ms | length) as $i | $ms[$i] as $m
+       | (if $i == 0 then 0 else $ms[$i - 1] | .[0] + .[1] end) as $p
+       | ($cp[$p:$m[0]] | implode), ($m[2:4] | f)] as $parts
+    | ($parts | map(. == null) | index(true)) as $stop
+    | if $stop == null then $parts + [$cp[($ms[-1] | .[0] + .[1]):] | implode] | add
+      else ($parts[0:$stop] | add // "") + ($cp[$ms[($stop - 1) / 2][0]:] | implode) end end;
+def plain: . as $s | all(($q, "\"", "\\", "#", "<", "`", "((", "$["); . as $c | $s | contains($c) | not);
+def qs($h):
+  def subs: if contains("$(") | not then ""
+    elif startswith("$(") and endswith(")") and (.[2:-1] | plain and (contains("(") or contains(")") or contains("$") | not)) then .
+    else fs(DEFS + "\\\\(?:.|\\n)|\\g<sub>|[^\\\\$]+|\\$";
+      .[1] as $open | .[0] | if (startswith("$(") | not) then "" elif $open then . elif startswith("$((") then . else "$(" + (.[2:-1] | qs(true)) + ")" end) end;
+  if plain then . else fs(DEFS + "\\\\.[^\\s;&|()<>\"" + $q + "`\\\\$]*|\\$\\$|" + AQ + "|" + SQ + "|\\g<dq>|" + (if $h then "\\g<hd>|(?<!<)<<(?!<)|" else "" end) + "(?<![^\\s;&|(])#[^\\n]*|\\$?\\(\\(" + AR + "\\)\\)|\\$\\[[^\\]\\n]*\\]";
+    .[1] as $open | .[0] | if $open then .
+    elif startswith("\"") then .[1:-1] | subs
+    elif . == "<<" then null
+    elif startswith("<<") then (split("\n") | last) as $last
+      | [capture("^<<(?<d>-?)[ \\t]*(?:(?<q>[\"" + $q + "])(?<w>[^\"" + $q + "\\n]+)\\k<q>|(?<x>\\\\?)(?<w2>" + W + "))(?<r>[^\\n]*)(?<b>[\\s\\S]*)")] | if length == 0 then null else .[0]
+      | (.r | qs(false)) as $rest
+      | ((.b | contains("\n")) and (if .d == "-" then $last | sub("^\\t+"; "") else $last end) == (.w // .w2)
+         and ($rest | contains("\"") or contains($q) or contains("`") | not)
+         and (((.w // .w2) + ")") as $wp | (.d == "-") as $dash
+             | .b | split("\n") | any(if $dash then sub("^\\t+"; "") else . end | startswith($wp)) | not)) as $done
+      | if $done | not then null else "<<" + $rest + "\n" + (if .x == "" and .q == null then .b | subs else "" end) end end
+    elif startswith("$((") or startswith("((") or startswith("$[") or startswith("$$") then .
+    else "" end) end;
+def ocsegs: reduce (";", "&", "|", "\n") as $s ([.]; map(split($s)) | add);
+def ocafter($re): . as $s | [match($re)] | if length == 0 then empty else $s[.[0].offset + .[0].length:] end;
+def ocmerge: ocafter("(^|[^A-Za-z0-9_])gh(?=\\s)") | ocafter("\\spr(?=\\s|$)") | ocafter("\\smerge($|[\\s`()<>])");
+def ocwords: contains("gh") and contains("merge")
+  and any(ocsegs[] | select(contains("gh") and contains("merge")) | ocmerge; true);
+def ocapi: ocafter("(^|[^A-Za-z0-9_])gh(?=\\s)") | ocafter("\\sapi($|[\\s`()<>])");
+def MUT: ["mergePullRequest", "enqueuePullRequest", "enablePullRequestAutoMerge", "mergeBranch"];
+def mutword: . as $s | any(MUT[]; . as $w | $s | contains($w));
+def unq: split($q) | join("") | split("\"") | join("") | split("\\") | join("");
+def ocapiwords: contains("gh") and contains("api")
+  and ((unq) as $u | ($u | mutword) or ($u | contains("/merge")))
+  and any(ocsegs[] | select(contains("gh") and contains("api")) | ocapi; true);
+def ockinds: (ocwords) as $m | (ocapiwords) as $a
+  | [(if $m then "merge" else empty end), (if $m and contains("--admin") then "admin" else empty end), (if $a then "api" else empty end)] | join(",");
+def mergepath: "pulls/[^[:space:]/]++/merge(?![A-Za-z0-9_-])|repos/[^[:space:]/]++/[^[:space:]/]++/merges(?![A-Za-z0-9_-])|pulls/[^;&|\\n/]++/merge(?![A-Za-z0-9_-])|repos/[^;&|\\n/]++/[^;&|\\n/]++/merges(?![A-Za-z0-9_-])";
+def vflags: (unq) as $u | (if contains("--admin") then "a" else "" end) + (if test($allow) then "s" else "" end)
+  + (if ($u | mutword) then "w" else "" end) + (if ($u | test(mergepath)) then "p" else "" end);
+def capped(f): (.tool_input.command // "") as $c
+  | if ($c | type) == "string" and ($c | utf8bytelength) > $cap
+    then ($c | ockinds) as $k | (if $k == "" then "" else "!\($c | utf8bytelength):\($k)" end)
+    else "=" + ($c | vflags) + "\u001f" + f end;
+capped(if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end)'
+if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
+      && ( "$payload" == *merge* || "$payload" == *Merge* || "$payload" == *enqueuePullRequest* ) \
+      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  mout=$(jq -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" --arg allow "$ALLOW_ADMIN_RE" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mout=""
+  mcmd="" mover="" mkinds="" mflags="" mmerge="" mbypass="" mapi="" madmin=""
+  case "$mout" in
+    '='*$'\x1f'*) mflags=${mout%%$'\x1f'*}; mflags=${mflags#=}; mcmd=${mout#*$'\x1f'} ;;
+    '!'*:*) mover=${mout#!}; mkinds=${mover#*:}; mover=${mover%%:*} ;;
+  esac
+  # Wave 2's question concerns a merge. The bypass question concerns `--admin` on a merge (madmin) and a
+  # `gh api` call that reaches a merge (mapi); the allowance may lift the first and never the second.
+  if [[ -n "$mover" ]]; then
+    case ",$mkinds," in *,merge,*) mmerge=1 ;; esac
+    case ",$mkinds," in *,admin,*) madmin=1 ;; esac
+    case ",$mkinds," in *,api,*) mapi=1 ;; esac
+  elif [[ -n "$mcmd" ]]; then
+    if [[ "$mcmd" =~ $GH_MERGE_RE ]]; then
+      mmerge=1
+      if [[ "$mflags" == *a* ]]; then madmin=1; fi
+    fi
+    # The admin-merge door (D-8124) is asked wave 2's question like a merge: a worker never lands a PR, by any verb.
+    # It is not a bypass: its text spells no `--admin`, and the door itself refuses a caller that is not a coordinator.
+    if [[ -z "$mmerge" && "$mcmd" =~ $CCD_DOOR_RE ]]; then mmerge=1; fi
+    if [[ ( "$mflags" == *w* || "$mflags" == *p* ) && "$mcmd" =~ $GH_API_RE ]]; then mapi=1; fi
+  fi
+  if [[ -n "$madmin" || -n "$mapi" ]]; then mbypass=1; fi
+  if [[ -n "$mmerge" || -n "$mbypass" ]]; then
+    mwhy="" mreason=""
+    if [[ -n "$mmerge" ]]; then
+      if _ct_read "$REG/$id.hold" && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then
+        mwhy="this workspace's hold reads \`$CT_V\` — a programme wave's session"
+      elif [[ -e "$REG/$id.child" ]]; then
+        mwhy="this workspace carries the child marker — a dispatched child, whose run has let it go"
+      fi
+    fi
+    if [[ -n "$mwhy" && -n "$mover" ]]; then
+      mreason="ccrc: this command is $mover bytes, over the merge deny's $MERGE_PARSE_CAP-byte parse cap, and its raw text reads as a \`gh … pr … merge\` command, so the deny cannot read whether it runs one; $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
+      mreason+=" Split it into commands of at most $MERGE_PARSE_CAP bytes, or rephrase it so its text does not read as a \`gh … pr … merge\` command (prose that names gh, pr and merge in that order reads as one, a mail or PR body that quotes it included): write a long mail body to a file with the Write tool and send it with \`ccrc-api mail send --json <file>\`, which keeps the command short, or a long PR body to a file for \`gh pr create --body-file <file>\`. A landing is the operator's, from their own shell."
+    elif [[ -n "$mwhy" ]]; then
+      mreason="ccrc: $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
+      mreason+=" Report wave-done to your coordinator; it lands the PR."
+    elif [[ -n "$mbypass" ]]; then
+      # THE OPERATOR'S ALLOWANCE (D-7249), under the cap only and only for a command the grammar reads as
+      # exactly one admin merge (`s`). The session's project is read from its own registry row, never
+      # from the id or the cwd: absent, empty, unreadable, off-class or one that filled the read
+      # (`CT_RAWN`, see `_ct_read`) reads as not allowed. No fork. What keeps the allowance off the
+      # over-cap and api forms is the grammar (`s` is set only under the cap, only for text
+      # ALLOW_ADMIN_RE matches) and the branch order (the over-cap reason is chosen before `mallow`
+      # is read); `-z "$mover"` and `-z "$mapi"` are defence in depth, which no test can red.
+      mallow=""
+      if [[ -z "$mover" && -z "$mapi" && "$mflags" == *s* ]] && _ct_read "$REG/$id.project" && [[ -n "$CT_V" ]]; then
+        case "$CT_V" in
+          *[!$CCRC_PROJ_CLASS]*) ;;
+          *) if (( ${#CT_V} <= CCRC_PROJ_MAX && CT_RAWN < CCRC_ID_MAX )) && [[ -f "$REG/admin-merge-allowed/$CT_V" && ! -L "$REG/admin-merge-allowed/$CT_V" ]]; then mallow=1; fi ;;
+        esac
+      fi
+      if [[ -n "$mover" ]]; then
+        # What the over-cap text reads as: a merge naming `--admin`, a `gh … api` call naming a mutation or `/merge`, or both.
+        mread=""
+        if [[ -n "$madmin" ]]; then mread="a \`gh … pr … merge\` command that names \`--admin\`"; fi
+        if [[ -n "$mapi" ]]; then mread+="${mread:+ and }a \`gh … api\` command that names a merge mutation or \`/merge\`"; fi
+        mreason="ccrc: \`--admin\` and \`gh api\` merges are refused in every session, and this command is $mover bytes, over the deny's $MERGE_PARSE_CAP-byte parse cap, and its raw text holds $mread: the hook cannot tell prose from a command over the cap, so it refuses the text."
+        mreason+=" Split it into commands of at most $MERGE_PARSE_CAP bytes, or write the text with the Write tool and pass it as a file (\`--body-file <file>\` for \`gh pr create\`, \`ccrc-api mail send --json <file>\` for a mail), which keeps the command short."
+        mreason+=" A landing is \`gh pr merge <n> --match-head-commit <sha>\`, which enqueues the PR; a bypass is R9's door, the operator's own shell or GitHub's UI."
+        mreason+=" In a repository where the fleet's GitHub identity is an admin and no merge queue applies, a coordinator lands a PR stopped only by \`approval-missing\` through \`ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha>\`, which checks every condition itself and journals the merge (D-8124)."
+      elif [[ -z "$mallow" ]]; then
+        mreason="ccrc: \`--admin\` and \`gh api\` merges are refused in every session: the merge queue is how a PR lands, and a bypass of it is not a session's to take (landing-order spec §5.2)."
+        mreason+=" Land a PR with \`gh pr merge <n> --match-head-commit <sha>\`, which enqueues it, and read whether it merged with \`gh pr view <n> --json state,mergedAt\`. A bypass is R9's door: the operator's own shell or GitHub's UI."
+        mreason+=" In a repository where the fleet's GitHub identity is an admin and no merge queue applies, a coordinator lands a PR stopped only by \`approval-missing\` through \`ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha>\`, which checks every condition itself and journals the merge (D-8124)."
+        if [[ -n "$mapi" ]]; then
+          mreason+=" A \`gh api\` call is refused when its command names a merge mutation (\`mergePullRequest\`, \`enqueuePullRequest\`, \`enablePullRequestAutoMerge\`, \`mergeBranch\`) or a merge path (\`repos/<o>/<r>/pulls/<n>/merge\`, \`repos/<o>/<r>/merges\`), by any method, a GET included: the hook cannot tell a read of the merge path from a write, so \`gh pr view <n> --json state,mergedAt\` is how a session asks whether a PR merged."
+          mreason+=" Note that the whole command is read, quoted text included, once it holds a \`gh api\` or merge command, so a real \`gh api\` call and an unrelated mention of a mutation word or merge path in one command is refused too: run them as separate commands, name an output file another way, or pass a body with \`-F body=@<file>\`."
+        else
+          mreason+=" Note that the whole command is read, quoted text included, once it holds a merge or api command, so a real \`gh pr merge\` and an unrelated \`--admin\` in one command is refused too: run them as separate commands."
+        fi
+      fi
+    fi
+    if [[ -n "$mreason" ]]; then
+      pre_json=$(_hook_deny_json "$mreason") || pre_json=""
+    fi
+  fi
+fi
+
+# ── THE ROLE-SKILL DENY (D-4934) ─────────────────────────────────────────
+# Four skills make whoever loads them act AS the session: `ccrc-worker`,
+# `ccrc-reviewer` and `ccrc-coordinator` ack mail, take claims, send wave-done
+# or review-done, and open or dispatch runs, all under the session's identity,
+# and `ccrc-overlord` speaks for the operator's designated Overlord.
+# A subagent (a session started by another session's Agent tool or a workflow
+# agent() call) cannot be the session, and one that loaded the worker skill once
+# sent a false wave-done as its worker. The descriptions already say
+# "Never use it inside a subagent", and a subagent on a Codex lane loaded the
+# reviewer skill as its first action after that wording shipped, so wording is
+# not enough: this arm refuses the call, on every lane. It is the operator's
+# ruling of 2026-10-13 ("guard against those 3"), and it is a speed bump in the
+# merge deny's sense: a subagent that wants the text can still read the file.
+# The fourth name, `ccrc-overlord`, is spec 2026-11-09 §3.6's "The role-skill
+# deny", which the operator approved with that spec (Overlord W1): no subagent
+# anywhere may load the Overlord's skill.
+# NOTHING ELSE IS LIMITED. Subagents may use skills by design, so any other
+# skill passes, and so does the main thread: `paid` (the payload parse's flag,
+# a non-empty `agent_id`) is what tells the two apart, and an empty string is no
+# id. The skill is matched by its exact name, or by its name behind ONE
+# `<namespace>:` prefix (`x:ccrc-worker`), never as a substring: `ccrc-workers`,
+# `my-ccrc-worker` and `ccrc-worker:x` (the skill `x` of a plugin named
+# `ccrc-worker`) are other skills.
+# THE NAME IS READ THE WAY CLAUDE CODE READS IT (fix round 1, D-4934): its Skill
+# tool trims the `skill` string, JavaScript's `String.prototype.trim` set
+# (U+0009-000D, U+0020, U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F,
+# U+205F, U+3000 and U+FEFF), and strips ONE leading `/` before it resolves the
+# skill (read in the shipped 2.1.296 tool's input validation), so ` ccrc-worker`,
+# `ccrc-worker<tab>` and `/ccrc-worker` all load the worker skill and each must
+# be denied. The one jq that reads the field does both, in this order, and
+# then the match below runs: `explode` and `implode` and no regex builtin,
+# since this file must work with a jq built without Oniguruma. `//ccrc-worker`
+# strips one slash and so stays a name no skill has, and `a:b:ccrc-worker` has
+# two prefixes and the match strips one.
+# THE FOUR NAMES ARE WRITTEN HERE, ONCE. `session-hook-role-skill-deny.test.ts`
+# pins them against the `name:` frontmatter of the four SKILL.md files, so a
+# rename turns that suite red rather than silently disarming this deny.
+# ORDER IS BUDGET, as in the merge deny above: the event, the tool name and
+# `paid` are already in memory, so a non-Skill event, and the main thread's
+# Skill call, pay no fork at all, and only a subagent's Skill call pays the one
+# jq for the skill's name.
+# A deny already set is never replaced (the merge deny's own guard, copied
+# whole). Today it cannot be set on a Skill call, because every other deny here
+# fires on another tool, and the guard is written for the day one does.
+# FAIL-OPEN, like every gate in this file: a jq that cannot read the payload
+# (`.tool_input.skill?` swallows a `tool_input` that is no object) answers
+# nothing, and a `_hook_deny_json` that cannot build the envelope leaves
+# `pre_json` as it was. This arm prints nothing itself: the one print site at
+# the end of the file emits the envelope, after the hookstate rename.
+ROLE_SKILLS="ccrc-worker ccrc-reviewer ccrc-coordinator ccrc-overlord"
+if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
+      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  rsk=$(jq -r '
+    def ws: . == 32 or (. >= 9 and . <= 13) or . == 160 or . == 5760
+      or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239
+      or . == 8287 or . == 12288 or . == 65279;
+    .tool_input.skill? // "" | tostring | explode
+    | until(length == 0 or (.[0] | ws | not); .[1:])
+    | until(length == 0 or (.[-1] | ws | not); .[:-1])
+    | if .[0] == 47 then .[1:] else . end
+    | implode' <<<"$payload" 2>/dev/null) || rsk=""
+  rbare=${rsk#*:}
+  for rname in $ROLE_SKILLS; do
+    if [[ "$rsk" == "$rname" || "$rbare" == "$rname" ]]; then
+      rreason="ccrc: this call loads the \`$rname\` skill from a subagent (a session started by another session's Agent tool or a workflow agent() call), and that skill makes whoever loads it act as the session."
+      rreason+=" A subagent never acks, claims or sends ccrc mail and never opens or dispatches a run: do the task you were given and return your report to your parent."
+      if rjson=$(_hook_deny_json "$rreason"); then pre_json=$rjson; fi
+      break
+    fi
+  done
+fi
+
+# ── THE CHILD'S APPROVAL-SURFACE AND FORBIDDEN-VERB DENY (plan Task 14, spec §6.6, D-5297, D-5299) ──────
+# A dispatched child (its row carries `$REG/<id>.child`), on the main thread AND in a subagent, never reaches the
+# approval surface and never runs a SAFETY `ccd` verb or `ccrc update` / `rollback` / `rollout`, in any invocation form:
+# bare, through a path ending `/ccd` or `/ccrc`, env-prefixed, anywhere in an `&&`, `;`, `||` or `|` chain, or inside
+# a `bash -c` / `sh -c` string. In this arm the command is read twice, as written and as bash runs it (`norm`: quotes,
+# backslashes and line continuations removed, which only ever denies more), and a verb or `approvals` after a `$VAR`,
+# `${...}`, `$(...)` or backtick program is refused too (`xmatch`; `update`/`rollback`/`rollout` only when the command also names
+# `ccrc`): the security review of Task 14 ran `ccd 'ws-rm' x`, `ccd ws\-rm x`, `C=ccd; $C ws-rm x` and `"${API:?}"
+# approvals` past the plain match. A verb run from a script file, stdin or another interpreter is past any lexical
+# match, an accepted limit (spec §6.1); the classifier escalates it. Children run with permissions bypassed, so no prompt and no classifier sees these
+# calls; this deny does, before the tool runs, and invariant 10 rests on it (spec §6.6), whatever Claude Code's deny
+# matcher takes (Task 15's file names the bare forms only; Task 13 measured that no leading wildcard matched). The
+# approval surface is `approvals` as `ccrc-api`'s FIRST argument (bare, a path, or `"$API"`/`$API`), `/api/approvals`,
+# the question family's approval ids (`/api/questions/approval-<n>/…`, D-7323; its ask ids are not the surface),
+# any `approval-signing` path (the pinned public key's, and the server's private key's on `--role both`) and the
+# verifier; for Write, Edit, MultiEdit and NotebookEdit, a key's or the verifier's path; for Read, Grep and Glob, a
+# signing key's path (a Glob's pattern included). A child never rules on,
+# fetches or forges its own approvals (spec §6.1). A top-level session is untouched: it may still run these verbs
+# after asking the operator.
+#
+# `APPROVAL_FORBIDDEN_JQ` IS THE HOOK'S STATIC COPY of the classifier's `forbidden` match
+# (`FORBIDDEN_PATTERNS` and `nonBashClass` in server/src/coord/approvalguard.ts), the documented second copy that
+# `session-hook-approval-deny.test.ts` holds equal to `approvalClass` over Task 12's corpus,
+# `server/test/fixtures/approvals/guard-corpus.json`. It answers one line: `<category>\t<why>`, or empty. In mode
+# `class` (the PermissionRequest arm below) any category counts; in mode `deny` (this arm) only `verb` (a SAFETY `ccd`
+# verb, `ccrc update`, `rollback` or `rollout`), `surface` (the approval surface) and `build` do. `build` (D-5696, spec
+# 2026-10-18 §7.6) is deny mode's alone (`bmatch`, never read in `class` mode, so the classifier parity is untouched): a
+# write into `~/.local/share/claude/versions/` or onto the launcher, by Bash or an edit tool, and Claude Code's
+# `install`, `update` or `upgrade` (D-6063) under a `claude…` wrapper name, a `~/.local/bin/<id>` launcher, a `$VAR`
+# head, the build's own path (any entry under `…/versions/`, `$CLAUDE_CODE_EXECPATH`, or `./<entry>` after a `cd` into
+# the build
+# directory) or a package runner of `@anthropic-ai/claude-code`, after up to eight flags (`CFLAGS`, each with at most
+# one value that does not start with `-`, `--` included). A print-mode word (`-p`, `--print`, `--print=…`) stops the
+# flags, so `claude -p "update …"` is a prompt, not one; a flag's value may swallow a prompt's first word once quotes
+# are removed (`claude -c "please update x"`), a false deny in the safe direction. `respawn` counts right after the
+# head only, where Claude Code runs it. The official installer's URLs (in any case) and a global npm, pnpm, yarn or bun
+# install of `@anthropic-ai/claude-code` (`-g`, `global`, `--prefix` with a path naming `.local`, `npm_config_global=`)
+# count too. A write (D-6064) is matched as `BUILDX`, the build directory or the launcher in
+# any separator spelling (`SEPP`: `/`, `//`, `/./`, at most eight), absolute, home-anchored or relative at the start of
+# a word, the bare `.local/share/claude` or a glob segment under it included; by `BWR`, `WR`'s writers and more, with
+# a redirection to `/dev/null` or `>&N` not counted, in segments split without splitting a redirection (`SEG`); and
+# through `find` with an action, `| xargs`, an interpreter naming the path, a `cd` row (into the build directory,
+# `.local/share`, `.local`, home or `.local/bin`, each with its own operand rule, the name counting as a path component)
+# and a variable holding the path (one scan of all such names, and more than 16 deny outright: fail closed); and a
+# writer aimed at a bare `.local`, `.local/share` or `.local/bin` in a segment naming `claude` as a component. An
+# edit tool's path is folded (`pnorm`: `//`, `/./`, `seg/..`, a leading `~`) before the match; Bash text is not, so
+# `..` there, a symlink, a `$VAR` fragment of the path and case variants stay open (D-6064's residuals). Every group
+# repetition these arms define is bounded (`{0,8}` flags, separators and runner flags, `{0,2}` `cd` flags), since an
+# unbounded one made jq abort, which here is FAIL-OPEN, except main's `FLAGS` (`(?:-NS+SP+)*`), which BWR's `sed`
+# writer and the `$VAR` head reuse. Single-class runs (`SP+`, `SP*`, `NS*`, `NS+`, hb1's `[\s\S]*`) are not bounded,
+# in `CFLAGS`, `RUNH`, `CRUN` and `CDH` and in other arms; none raised a regex error below the ~225 KB single segment at
+# which hbt's prefix already hits the regex retry limit on main (D-6063, D-6064). Every segment-scanning arm first
+# tests its anchor (and a `cd` row its tail) on the whole command, since jq compiles a regex on each call.
+# A write (D-6065) to a file the launcher, the roll or this guard trusts (`TRUST`: `~/.ccrc/claude-*`,
+# `$REG/claude-roll-*`, `$REG/<id>.claude-canary`, `.claude-build`, `.deny-settings`, `$REG/.claude-roll.lock` and the
+# deny file `$REG/child-deny.settings.json`, which the arm below reads) is denied by the same writers, after a `cd` into
+# `.ccrc` or `.cc-sessions`, by the build's `find`, `xargs`, interpreter, variable and parent-directory arms, and by an
+# edit tool; a trusted name may hold glob characters, a glob segment directly under either directory counts, and the
+# relative spelling does too. So spec §7.6's registry sentence holds for a child here too.
+# The roster's upstream id (D-6066) comes from that deny file, read by the hook (`_hook_deny_text`: at most 64 KiB, up
+# to the first NUL, so over-cap means more than 64 KiB before any NUL, and text after a NUL is never read) and
+# passed to this arm alone as `--arg deny` when it is a regular file and not a symlink (the class-mode call passes
+# none, so `$ARGS.named.deny // ""` reads empty there): every head the file pairs as `Bash(<p> install:*)` AND
+# `Bash(<p> update:*)`, minus `claude` (`ccrc update` stands alone in every file, so one verb is not enough). `UPRE` is
+# then a `claude…`-like head and a `~/.local/bin/<p>` launcher; with no such head, or a missing, unreadable,
+# non-regular, symlinked, over-cap or unparsable file (`try`), it never matches, as on main. The file is shared by the
+# whole box, so a child that makes it unreadable costs every child only these upstream-id arms, which main never had.
+# A bypassed child raises no prompt, so this arm is its only enforcement. JavaScript's regexes are ASCII
+# where Oniguruma's are Unicode, so `\w` and `\b` are spelled as ASCII classes and `\s` as JavaScript's own set
+# (`WS`, built by `implode` so this file stays ASCII). `hbt` is the classifier's `headBeforeTail`: in one segment, the
+# head matches wholly inside the text before the LAST start of the tail (found by a greedy prefix and a lookahead,
+# which sees every start, overlapping ones included). Single quotes are `$q`, so the program is one single-quoted
+# bash word.
+#
+# ORDER IS BUDGET, as in the denies above: the event, the `.child` test and a substring prefilter are builtins, so a
+# top-level session, and a child's call whose payload names none of these, pay no fork: `ccd`, `ccrc` and `approval`
+# (the verbs and the surface); `install`, `update`, `upgrade` and `respawn`, each on its own (a Claude Code verb under
+# any head, `$CLAUDE_CODE_EXECPATH` and a runner included); `anthropic-ai/claude-code` (a global install by `add`);
+# `downloads.claude.ai` and `claude.ai/install` in any case (`${apf,,}`; an upper-case installer path names no `install`);
+# `.local` (a write, in any spelling, after a `cd` too); `.cc-sessions` (a trusted file;
+# `~/.ccrc`'s are admitted by `ccrc`); and `prune` (the prune row, in this arm and the account arm). Every pattern needs one
+# of those words literally (JSON escaping never touches ASCII letters). A real payload's `transcript_path` names
+# `.claude…`, so every child call naming `install` or `update` already forked one jq. A deny already set is
+# never replaced. FAIL-OPEN as every gate here: a jq that cannot run (no Oniguruma, say) denies nothing, and
+# `ccrc doctor`'s `jq_regex` check names that box.
+# THE ACCOUNT ARM ON EVERY SESSION (D-6202; accounts plan Task A9, spec §3.1). The same program runs for a session that
+# is NOT a child in a fourth mode, `account`, which answers only the `account` category: the account-management verbs
+# (`ccrc account <ACCTV>` in `fmatch` and, for a `$VAR` program naming `ccrc`, `xmatch`; `ccd account-pane`; the
+# `ccd-account-auth` program, never a file merely named like it), read as written and as bash runs it (`norm`), and
+# `apmatch`: a Bash call naming a secret or scratch path (`~/.cc-secrets`, `~/.ccrc/auth-scratch`,
+# `~/.ccrc/codex/<x>/runtime.env`, `~/.ccrc/agent.env`, D-7675's Linear slot store `~/.ccrc/linear/` and legacy key
+# `~/.ccrc/linear.key`, and plan PL6's operator-secret slots `~/.ccrc/operator-secrets/`), a write under
+# `~/.cc-sessions/.auth` or `.accounts`, a write of the roster `~/.ccrc/accounts.json` or its mirror `accounts.sh`
+# (`ARF`, `APRF` for the edit tools; reads stay open), a direct run of `account-op.mjs` (`AOPRUN`: the script as a
+# segment's program, bare or after a runtime, by any path; a read of it passes), and a
+# bare `env` or `printenv` (alone, `-0` or `--null`; never with an operand, so `env FOO=1 ccd swap-self …` and
+# `printenv TMUX` pass); and `acctpath` for Read, Grep, Glob and the edit tools. A child's `deny` mode answers the same
+# category beside its own. `class` mode gains only the verb rows (the classifier's `FORBIDDEN_PATTERNS` hold the same).
+# It NEVER refuses a swap path (the operator's Q8 ruling of 2026-10-19): no `ccd` verb but `account-pane`, no bare
+# `ccrc account`, no registry path (`PATHF` is not reused), no `/api/` pattern; `must-allow.json` holds it. An accident
+# guard: `bash -c` with an assembled string, another interpreter or a script file runs past it.
+# THE PRUNE ROW ON EVERY SESSION (cleanup un-wedge, Task R3; spec 2026-11-04 §5, D9 to D11). A repository-wide
+# `git worktree prune` deletes git's record of every gone worktree of the repository at once, and ccd's cleanup reads
+# those records, so one session's prune holds the cleanup of every lane on the box. `pmatch` answers the category
+# `prune`, asked after `fmatch` in all three modes once the command names `prune` and `worktree` (`PANC`, `WANC`): `deny` (a child), `account` (every other session) and `class` (the
+# classifier's `FORBIDDEN_PATTERNS` hold the same row, `server/test/fixtures/prune-deny/` both lists). It is not a row
+# of `fmatch` because deny and account modes also run `fmatch` over `norm`'s form, which removes quotes and so reads
+# quoted prose as code (review 1479, F6). The plain/raw and quote-stripped readings decide first; `qmodel` and the
+# proof reading may relax a denial only for a complete, modeled text-only mention. An unquoted comment, unsupported
+# shell -c head, indirect heredoc-to-shell route, complex substitution in double quotes, CRLF or multiple heredocs
+# on a line keeps the plain refusal (review 1493). `qread` is a bounded text reader, not a shell parser. `hdocs` walks the lines with `qscan`, which
+# carries an open quote from line to line and takes a heredoc operator only where it stands in code (never inside
+# quotes or after a comment's `#`, but inside a `$(` within double quotes); it reads the operator's whole delimiter
+# word, quotes removed (`HDW`: letters, digits, `_`, `.`, `-` and quotes around them), drops a quoted heredoc's body,
+# reads an unquoted one's as text but for its substitutions, and keeps it as code when a shell (or `ssh`) is named
+# anywhere on the operator's line (`SHANY`); an unreadable delimiter, an unclosed heredoc or more than 16 operator
+# lines read the whole command as code. `QTOK` cuts the rest into quoted spans, escapes and
+# plain text; a quoted span becomes one word of text, its whitespace and separators `_`, an empty one standing alone a
+# word (`git -C '' …`), but for a `$(…)` or a backtick inside double quotes (`DQC`); and the string a `bash -c` runs
+# (`SHC`) is read as code, one level deep. Then the command is split into simple commands on `;`, `&`, `|` and newlines,
+# and `GITWT` matches one whose program (at its head or after `$(`, `(`, a backtick or `{`, a shell keyword,
+# assignments and a few wrappers such as `sudo`, `nice` and `bash -c`: `GITPRE`) is `git`, bare or path-qualified, then
+# git's global options (`GOPT`: `-C`, `-c`, `--git-dir`, `--work-tree`, `--no-pager`, `--bare` and their kin), `worktree`,
+# any flags and `prune`. Git option and assignment operands may hold spaces inside complete substitutions or quotes
+# (`GVAL`). After `prune`, cut only at `#`: the last `-n`, `--dry-run` or unique `--no-d...` decides (`GLAST`), but any
+# `$`, `<`, `>` or backtick voids the exemption. `TEXTB` consumes escapes before collecting live heredoc substitutions.
+# Candidate segments are checked before quote parsing; the timing suite compares actual historical and current
+# forbidden programs in single invocations. Existing norm passes outside this row remain quadratic on quote-dense input. An accident guard, not a wall: an assembled string, a script
+# file, an alias, `eval`, a `$VAR` program (no `xmatch` row), a wrapper or redirection the grammar does not read, and
+# `git gc` (which prunes records older than `gc.worktreePruneExpire`) run past it, and so do `pr$'u'ne` (the prefilter
+# keeps the `$`) and a top-level payload over APF_ACCT_STRIP_MAX that spells `prune` with quotes (the prefilter reads it
+# as written). Text bash would run (a backticked or `$(…)` mention in double quotes or an unquoted heredoc) is refused,
+# and the reason names the file workaround. The scoped act stays open: `git -C <main> worktree remove <path>`.
+APPROVAL_FORBIDDEN_JQ='def WS: "\t\n\u000b\f\r " + ([160, 5760, 8192, 45, 8202, 8232, 8233, 8239, 8287, 12288, 65279] | implode);
+def SP: "[" + WS + "]"; def NS: "[^" + WS + "]";
+def WB: "(?:^|" + SP + "|[;&|()`" + $q + "\"=/])";
+def NW: "(?![A-Za-z0-9_-])";
+def NB: "(?<![A-Za-z0-9_])";
+def NA: "(?![A-Za-z0-9_])";
+def FLAGS: "(?:-" + NS + "+" + SP + "+)*";
+def CCD: WB + "ccd[" + $q + "\"]?" + SP + "+" + FLAGS;
+def ACCTV: "add", "auth-start", "auth-code", "auth-cancel", "set", "check", "enable", "disable", "credential", "remove", "seed", "openrouter-management";
+def AAUTH: "(?:(?:^|[" + WS + ";&|()`" + $q + "\"=])|/\\.local/bin/)ccd-account-auth(?![A-Za-z0-9_.-])";
+def SENS: "(?:CLAUDE\\.md|settings(?:\\.local)?\\.json|session-hook\\.sh|/hooks/)";
+def CRED: "(?:\\.ssh(?![A-Za-z0-9_-])|\\.cc-secrets|\\.token(?![A-Za-z0-9_-])|\\.env(?:rc|\\.[A-Za-z0-9_.-]+)?(?![A-Za-z0-9_-])|credentials|auth\\.json|\\.netrc|\\.pem(?![A-Za-z0-9_-])|\\.key(?![A-Za-z0-9_.-])|agent\\.env|gh/(?:hosts|config)\\.yml|\\.docker/config\\.json|\\.kube/config(?![A-Za-z0-9_-])|\\.npmrc|\\.pypirc|\\.git-credentials|(?<![A-Za-z0-9_-])\\.aws(?![A-Za-z0-9_-])|(?<![A-Za-z0-9_-])\\.gnupg(?![A-Za-z0-9_-])|\\.config/gcloud(?![A-Za-z0-9_-])|_(?:rsa|dsa|ecdsa|ed25519)(?![A-Za-z0-9_-])|deploy_key|(?<![A-Za-z0-9_.-])identity(?![A-Za-z0-9_.-])|ssh_host_|\\.pgpass|\\.vault-token|rclone\\.conf|\\.s3cfg|(?<![A-Za-z0-9_-])\\.azure(?![A-Za-z0-9_-])|\\.git/config(?![A-Za-z0-9_-])|\\.claude\\.json|(?<![A-Za-z0-9_-])secrets?\\.(?:ya?ml|json|toml)(?![A-Za-z0-9_-])|_(?:ecdsa|ed25519)_sk(?![A-Za-z0-9_-])|\\.(?:p12|pfx|jks|keystore)(?![A-Za-z0-9_-])|\\.htpasswd|\\.my\\.cnf|kubeconfig|\\.tfstate|(?<![A-Za-z0-9_-])\\.boto(?![A-Za-z0-9_-])|service[-_]account[A-Za-z0-9_-]*\\.json|token\\.json(?![A-Za-z0-9_-])|\\.yarnrc\\.yml)";
+def PATHF: "/\\.(?:cc-sessions|cc-limits|ccrc)(?![A-Za-z0-9_.-])|approval-signing|approval-verify\\.mjs";
+def WR: ">|" + NB + "tee" + NA + "|" + NB + "sed" + SP + "+" + FLAGS + "-i|" + NB + "perl" + SP + "+-" + NS + "*i|" + NB + "mv" + NA + "|" + NB + "cp" + NA + "|" + NB + "ln" + NA + "|" + NB + "truncate" + NA + "|" + NB + "rm" + NA;
+def BUILD: "(?:/\\.local/share/claude/versions(?![A-Za-z0-9_.-])|/\\.local/bin/claude(?![A-Za-z0-9_.-]))";
+def hbt($sep; $head; $tail): any(split($sep; null)[];
+  ([match("^[\\s\\S]*(?=" + $tail + ")")] | if length == 0 then -1 else .[0].length end) as $last
+  | $last >= 0 and (.[0:$last] | test($head)));
+def fmatch:
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "ws-lease-mark", "delegation-adopt", "roll", "claude") as $v
+     | select(test(CCD + $v + NW)) | "verb\tccd \($v)"),
+  (select(hbt("[;&|]"; CCD + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
+  (select(test(WB + "tmux(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\ttmux"),
+  (select(test("/\\.(?:cc-sessions|cc-limits|ccrc)(?![A-Za-z0-9_.-])")) | "other\ta registry path"),
+  (select(test(WB + "(?:reboot|shutdown|poweroff|halt)(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\treboot or shutdown"),
+  (select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "(?:update|rollback|rollout)" + NW)) | "verb\tccrc update, rollback or rollout"),
+  (ACCTV as $v | select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "account" + SP + "+" + FLAGS + $v + NW)) | "account\tccrc account \($v)"),
+  (select(test(CCD + "account-pane" + NW)) | "account\tccd account-pane"),
+  (select(test(AAUTH)) | "account\tccd-account-auth"),
+  (select(test("(?:ccrc-api|\\$\\{?API\\}?)[" + $q + "\"]?" + SP + "+" + FLAGS + "approvals" + NW + "|/api/approvals" + NW + "|/api/questions/approval-|approval-signing|approval-verify\\.mjs")) | "surface\tthe approval surface"),
+  (select(hbt("\n"; WB + "(?:systemctl|systemd-run|kill|pkill|killall)" + NW; "claude-session@|ccrc|tmux")) | "other\ta session unit or the tmux scope"),
+  (select(hbt("[\n;&|]"; WR; SENS)) | "other\tan edit to a settings file, a hook or a CLAUDE.md"),
+  (select(hbt("[\n;&|]"; WR; BUILD)) | "other\ta write to a Claude Code build or its launcher"),
+  (select(hbt("[\n;&|]"; WB + "(?:cat|head|tail|less|more|base64|xxd|strings|od|nl|bat)" + NW; CRED)) | "other\tprinting a secret");
+def norm: gsub("\\\\\n"; "") | gsub("\\$(?=[" + $q + "\"])"; "") | gsub("\\\\(?<c>[\\s\\S])"; .c) | gsub("[" + $q + "\"]"; "");
+def GVAL: "(?:\\$\\([^()\n]*\\)|`[^`\n]*`|" + $q + "[^" + $q + "]*" + $q + "|\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"|\\\\[\\s\\S]|[^" + WS + "`$" + $q + "\"\\\\;|&]|\\$(?!\\())+";
+def GITPRE: "(?:^|\\$\\(|[(`{])" + SP + "*(?:(?:then|do|else|elif|if|while|until|!)" + SP + "+){0,4}(?:[A-Za-z_][A-Za-z0-9_]*=(?:" + GVAL + ")?" + SP + "+){0,8}(?:(?:" + NS + "{0,256}/)?(?:sudo|env|command|exec|nohup|nice|time|timeout|bash|sh|zsh|dash)" + SP + "+(?:(?:-[A-Za-z]*[oO]" + SP + "+" + GVAL + "|-" + NS + "*|[A-Za-z_][A-Za-z0-9_]*=(?:" + GVAL + ")?|[0-9][0-9.]*[smhd]?)" + SP + "+){0,8}){0,4}(?:" + NS + "{0,256}/)?git" + SP + "+";
+def GOPT: "(?:-[Cc]" + SP + "+" + GVAL + "|--(?:git-dir|work-tree|namespace|config-env|attr-source)(?:=(?:" + GVAL + ")?|" + SP + "+" + GVAL + ")|--exec-path(?:=(?:" + GVAL + ")?)?|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice)|-[pP])" + SP + "+";
+def GITWT: GITPRE + "(?:" + GOPT + "){0,8}worktree" + SP + "+" + FLAGS + "prune" + NW + "(?<rest>[^#]*)";
+def GLAST: "^[\\s\\S]*(?:^|" + SP + ")(?<f>-n|--dry-run|--no-d(?:r(?:y(?:-(?:r(?:u(?:n)?)?)?)?)?)?)(?=$|" + SP + "|[)])";
+def QCH: "[" + $q + "\"\\\\$\n]*";
+def WANC: "w" + QCH + "o" + QCH + "r" + QCH + "k" + QCH + "t" + QCH + "r" + QCH + "e" + QCH + "e";
+def PANC: "p[" + $q + "\"\\\\$\n]*r[" + $q + "\"\\\\$\n]*u[" + $q + "\"\\\\$\n]*n[" + $q + "\"\\\\$\n]*e";
+def QSEP: "[" + WS + ";&|()<>`$" + $q + "\"\\\\]";
+def QSEPQ: "[" + WS + ";&|()<>" + $q + "\"\\\\]";
+def SHN: "(?:" + NS + "{0,256}/)?(?:ba|z|da|k)?sh";
+def SHANY: "(?:^|[" + WS + ";&|(])(?:" + NS + "{0,256}/)?(?:ba|z|da|k|s)?sh(?=$|[" + WS + ";&|)])";
+def SHC: "(?:^|[" + WS + ";&|(])" + SHN + "(?:" + SP + "+-[A-Za-z]+){0,4}" + SP + "+-[A-Za-z]*c[A-Za-z]*" + SP + "+$";
+def SHCH: "(?:^|[" + WS + ";&|(])" + SHN + SP + "+[^\n;&|]*-[A-Za-z]*c[A-Za-z]*(?=$|" + SP + ")";
+def SHCD: "(?:^|[" + WS + ";&|(])" + SHN + SP + "+-[A-Za-z]*c[A-Za-z]*" + SP + "+$";
+def HDOP: "(?<![<])<<(?<dash>-?)(?![<])[ \t]*(?<w>(?:" + $q + "[^" + $q + "]*" + $q + "|\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"|\\\\[\\s\\S]|[^" + WS + ";&|()<>" + $q + "\"\\\\])+)";
+def HDW: "^(?:" + $q + "[A-Za-z0-9_.-]*" + $q + "|\"[A-Za-z0-9_.-]*\"|\\\\[A-Za-z0-9_.-]|[A-Za-z0-9_.-])+$";
+def TEXTB: [match("\\\\[\\s\\S]|(?<s>\\$\\([^()\n]*\\)|`[^`\n]*`)|[^\\\\$`]+|[$`]"; "g") | .captures[] | select(.name == "s" and .string != null) | .string] | join(" ");
+def DQC: gsub("(?<s>\\$\\([^()]*\\)|`[^`]*`)|\\\\(?<c>[\\s\\S])|(?<w>" + QSEPQ + ")"; if .s then .s elif .c then (if .c == "\n" then "" elif (.c | test(QSEPQ)) then "_" else .c end) else "_" end);
+def QTOK: "\\$" + $q + "(?:[^" + $q + "\\\\]|\\\\[\\s\\S])*" + $q + "?|\\$?\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"?|" + $q + "[^" + $q + "]*" + $q + "?|\\\\[\\s\\S]?|[^\"" + $q + "\\\\$]+|\\$";
+def qkind: if startswith("$" + $q) then "a" elif startswith("\"") or startswith("$\"") then "h" elif startswith($q) then "s" elif startswith("\\") then "e" else "p" end;
+def qscan($q0): . as $l
+  | (if $q0 == "s" then ([$l | match("^[^" + $q + "]*" + $q)] | .[0].length) elif $q0 == "d" then ([$l | match("^(?:[^\"\\\\]|\\\\[\\s\\S])*\"")] | .[0].length) else 0 end) as $st
+  | if $st == null then {q: $q0, h: null} else ($l[$st:]) as $c
+    | [$c | match(QTOK; "g") | {o: .offset, n: .length, s: .string, k: (.string | qkind)}] as $t
+    | ([$t[] | select(.k == "p") | .o as $o | (.s | [match("(?:^|[" + WS + ";&|(])#")] | .[0].offset) as $x | select($x != null) | $o + $x] | .[0]) as $cm
+    | ([$c | match(HDOP)] | .[0]) as $h | ([$t[] | select($cm == null or .o < $cm)] | .[-1]) as $z
+    | {q: (if $z == null then "" elif ($z.k == "s" and ($z.s | test("^" + $q + "[^" + $q + "]*" + $q + "$") | not))
+             or ($z.k == "a" and ($z.s | test("^\\$" + $q + "(?:[^" + $q + "\\\\]|\\\\[\\s\\S])*" + $q + "$") | not)) then "s"
+           elif $z.k == "h" and ($z.s | test("^\\$?\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"$") | not) then "d" else "" end),
+       h: (if $h != null and ($cm == null or $h.offset < $cm) and any($t[]; .o <= $h.offset and $h.offset < .o + .n
+             and (.k == "p" or (.k == "h" and (.s[0:$h.offset - .o] | test("\\$\\([^)]*$"))))) then ($h | .offset += $st) else null end)}
+  end;
+def hdocs: if test("<<") | not then {s: ., ok: true} else . as $all | split("\n") as $ls
+  | if ([$ls[] | select(test(HDOP))] | length) > 16 then {s: $all, ok: false} else
+    [foreach ($ls[], null) as $l ({m: "code", d: "", t: false, q: "", o: "", bad: false, ok: true};
+      if $l == null then .o = null | .bad = (.bad or .m != "code")
+      elif .m == "code" then .q as $qq | ($l | qscan($qq)) as $r | .q = $r.q | .o = $l
+        | if $r.h == null then . else
+          .ok = (.ok and ($l | test("\\\\$") or ([match(HDOP; "g")] | length) > 1 or test("(?:^|[" + WS + ";&|(])(?:source|\\.)" + SP + "+") | not))
+          | ([$r.h.captures[] | select(.string != null) | {key: .name, value: .string}] | from_entries) as $c
+          | if ($c.w | test(HDW) | not) then .bad = true
+            else .d = ($c.w | gsub("[" + $q + "\"\\\\]"; "")) | .t = ($c.dash == "-")
+              | .m = (if (($l[0:$r.h.offset] + " " + $l[$r.h.offset + $r.h.length:]) | test(SHANY)) then "fed"
+                  elif ($c.w | test("[" + $q + "\"\\\\]")) then "drop" else "text" end) end end
+      elif (if .t then ($l | sub("^\t+"; "")) else $l end) == .d then .o = $l | .m = "code"
+      elif .m == "fed" then .o = $l
+      elif .m == "text" then .o = ($l | TEXTB)
+      else .o = "" end;
+      [.o, .bad, .ok])] as $r
+    | (if $r[-1][1] then $all else [$r[] | .[0] | select(. != null)] | join("\n") end) as $s
+    | {s: $s, ok: ($r[-1][2] and ($r[-1][1] | not) and ($s | test("\r\n|\\\\\n|\\|[^\\S\n]*\n|\n[^\\S\n]*\\||}[\\s]*\\|") | not))} end end;
+def qread($d; $proof): hdocs | .s | [match(QTOK; "g") | .string | [., qkind]] as $t | ($t | length) as $n
+  | [range(0; $n) as $i | $t[$i] as [$s, $k]
+    | if $k == "p" then $s
+      elif $k == "e" then ($s[1:] | if . == "" or . == "\n" then "" elif test(QSEPQ) then "_" else . end)
+      else
+        (if $k == "a" then ($s | if length >= 3 and endswith($q) then .[2:-1] else .[2:] end)
+         elif $k == "s" then ($s | .[1:] | if endswith($q) then .[0:-1] else . end)
+         else ($s | if startswith("$") then .[1:] else . end | .[1:] | if endswith("\"") then .[0:-1] else . end) end) as $c
+        | if $d > 0 and $i > 0 and $t[$i - 1][1] == "p" and ($t[$i - 1][0] | test(SHC)) then ($c | qread($d - 1; $proof))
+          elif $c == "" then (if ($i == 0 or ($t[$i - 1][0] | test("[" + WS + "]$"))) and ($i == $n - 1 or ($t[$i + 1][0] | test("^[" + WS + ";&|)]"))) then "_" else "" end)
+          elif $proof then (if $k == "h" then ($c | TEXTB) else "_" end)
+          elif $k == "h" then ($c | DQC)
+          else ($c | gsub(QSEP; "_")) end
+      end] | join("");
+def qmodel: if test("\r\n") then false else hdocs as $h | if $h.ok | not then false else
+  [$h.s | match(QTOK; "g") | .string | [., qkind]] as $t | ($t | length) as $n
+  | all(range(0; $n); . as $i | $t[$i] as [$s, $k]
+    | if $k == "p" then ($s | test("(?:^|[" + WS + ";&|(])#") | not)
+        and (if $s | test(SHCH) then ($s | test(SHCD)) and $i + 1 < $n and ($t[$i + 1][1] == "s" or $t[$i + 1][1] == "h")
+          and ($i + 2 == $n or ($t[$i + 2][1] == "p" and ($t[$i + 2][0] | test("^(?:[^\\S\n]*$|[^\\S\n]*[\n;&|])"))))
+          and ($t[$i + 1][0][1:-1] | qmodel) else true end)
+      elif $k == "s" then ($s | test("^" + $q + "[^" + $q + "]*" + $q + "$"))
+      elif $k == "a" then ($s | test("^\\$" + $q + "(?:[^" + $q + "\\\\]|\\\\[\\s\\S])*" + $q + "$"))
+      elif $k == "h" then ($s | test("^\\$?\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"$"))
+        and ($s | gsub(HDOP; "<<_") | test("\\$\\([^)]*[(" + $q + "]|`[^`]*[()" + $q + "]") | not)
+      else true end) end end;
+def gprune: any(split("[\n;&|]"; null)[]; test("prune") and test("worktree")
+  and (([match(GITWT)] | .[0]) as $m | $m != null
+    and (([$m.captures[] | select(.name == "rest") | .string // ""] | .[0] | norm) as $r | ($r | [match(GLAST)] | .[0].captures[0].string) as $f
+      | ($r | test("[$<>`]")) or $f == null or ($f | startswith("--no-d")))));
+def pplain: gsub("\\\\\n"; "") | any(split("[\n;&|]"; null)[]; test(PANC) and test(WANC) and (norm | gprune));
+def pmatch: select(any(split("[;&|]"; null)[]; test(PANC) and test(WANC))) | select(gprune or pplain)
+  | select((qmodel | not) or (qread(1; true) | test(PANC)) or (qread(1; false) | gprune))
+  | "prune\tgit worktree prune";
+def EXP: "(?:\\$\\{[^}]*\\}|\\$\\([^)]*\\)|\\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`)";
+def EXPV: WB + EXP + SP + "+" + FLAGS;
+def xmatch:
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "ws-lease-mark", "delegation-adopt", "roll", "claude") as $v
+     | select(test(EXPV + $v + NW)) | "verb\tccd \($v)"),
+  (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
+  (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback|rollout)" + NW)) | "verb\tccrc update, rollback or rollout"),
+  (select(test(EXPV + "approvals" + NW)) | "surface\tthe approval surface"),
+  (ACCTV as $v | select(test(WB + "ccrc" + NW) and test(EXPV + "account" + SP + "+" + FLAGS + $v + NW)) | "account\tccrc account \($v)"),
+  (select(test(WB + "ccd" + NW) and test(EXPV + "account-pane" + NW)) | "account\tccd account-pane");
+([($ARGS.named.deny // "") | try (fromjson | .permissions.deny | arrays | .[] | strings) catch empty]) as $dl
+| ([$dl[] | capture("^Bash\\((?<p>[a-z][a-z0-9-]{0,31}) install:\\*\\)$") | .p | select(. != "claude")
+    | . as $p | select(any($dl[]; . == "Bash(" + $p + " update:*)"))] | unique) as $ups
+| def UPRE: if ($ups | length) == 0 then "(?!)" else "(?:" + ($ups | join("|")) + ")" end;
+def SEPP: "/(?:\\.?/){0,8}";
+def PSTOP: "(?!(?:-p|--print)(?=" + SP + "|$)|--print=)";
+def CFLAGS: "(?:" + PSTOP + "-" + NS + "*(?:" + SP + "+(?!-)" + NS + "+)?" + SP + "+){0,8}";
+def VEND: NW + "(?![./])";
+def CVERB: "(?:install|update|upgrade)" + VEND;
+def VERS: "[0-9]{1,9}\\.[0-9]{1,9}\\.[0-9]{1,9}";
+def ENTW: "[^" + WS + "/;&|()<>`" + $q + "\"]{1,64}";
+def VERH: "\\.local" + SEPP + "share" + SEPP + "claude" + SEPP + "versions" + SEPP + ENTW;
+def EXECH: "\\$\\{?CLAUDE_CODE_EXECPATH\\}?";
+def RUNH: WB + "(?:npx|bunx|(?:pnpm|yarn)" + SP + "+dlx|(?:npm|pnpm)" + SP + "+exec)" + SP + "+(?:-" + NS + "*" + SP + "+){0,8}@anthropic-ai/claude-code(?:@" + NS + "{1,64})?";
+def CLI: "(?:" + WB + "claude[A-Za-z0-9-]*|" + WB + UPRE + "|" + SEPP + "\\.local" + SEPP + "bin" + SEPP + "[a-z][a-z0-9-]{0,31}|" + VERH + "|" + EXECH + "|" + RUNH + ")";
+def CRUN: SP + "+(?:" + CFLAGS + CVERB + "|respawn" + VEND + ")";
+def META: ";&|()<>`" + $q + "\"";
+def BT: "(?![A-Za-z0-9_.-])";
+def LOC: "(?:" + SEPP + "|(?<![^" + WS + "=:" + $q + "\"]))\\.local" + SEPP;
+def GLOBW: "[^" + WS + "/" + META + "]{0,64}";
+def BUILDX: "(?:" + LOC + "share" + SEPP + "claude" + SEPP + "versions" + BT
+  + "|" + LOC + "share" + SEPP + "claude(?:" + SEPP + GLOBW + "[*?\\[{]" + GLOBW + ")?/{0,8}(?=$|[" + WS + META + "])"
+  + "|" + LOC + "bin" + SEPP + "(?:claude|" + UPRE + ")" + BT + ")";
+def SEG: "\n|;|(?<!>)&(?!>)|(?<!>)\\|";
+def RDR: "(?>&>>?|>(?!&[0-9-])(?:>|\\||&)?)(?!" + SP + "{0,8}/dev/null" + NW + ")";
+def BWR: "(?:" + RDR + "|" + NB + "tee" + NA + "|" + NB + "sed" + SP + "+" + FLAGS + "-i|" + NB + "perl" + SP + "+-" + NS + "*i|" + NB
+  + "(?:mv|cp|ln|truncate|rm|install|dd|rsync|tar|unzip|chmod|chown|touch|mkdir|curl|wget|unlink|shred|patch)" + NA + ")";
+def hb1($head; $tail): ([match("^[\\s\\S]*(?=" + $tail + ")")] | if length == 0 then -1 else .[0].length end) as $last
+  | $last >= 0 and (.[0:$last] | test($head));
+def END: "(?=$|[" + WS + ";&|)])";
+def ANC: "(?:(?:~|\\$\\{?HOME\\}?|/[^" + WS + ";&|()<>]{0,256}?)?" + SEPP + "|\\./)?";
+def CDH: "(?:^|[" + WS + "(])(?:cd|pushd)" + SP + "+(?:-[PLe]{1,3}" + SP + "+){0,2}";
+def CDT($dir): CDH + ANC + $dir + "/{0,8}" + END;
+def OPW: "(?<![^" + WS + "=/])";
+def VERSD: CDT("\\.local" + SEPP + "share" + SEPP + "claude" + SEPP + "versions");
+def cdthen($cd; $gate; f): test($cd) and test($gate) and (split(SEG; null) as $s
+  | ([range(0; $s | length) | select($s[.] | test($cd))] | .[0]) as $k
+  | $k != null and any($s[$k + 1:][]; f));
+def BI: "build\tinstalling or updating a Claude Code build";
+def BW: "build\ta write to a Claude Code build or its launcher";
+def BTR: "build\ta write to a file the Claude Code launcher, roll or guard trusts";
+def TCH: "[A-Za-z0-9_.*?\\[\\]{},-]";
+def TNC: "claude-" + TCH + "{1,64}";
+def TNS: "(?:claude-roll-" + TCH + "{1,64}|" + TCH + "{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|(?:child|account)-deny\\.settings\\.json)" + BT;
+def DANC: "(?:" + SEPP + "|(?<![^" + WS + "=:" + $q + "\"]))";
+def TGL: GLOBW + "[*?\\[{]" + GLOBW + "/{0,8}(?=$|[" + WS + META + "])";
+def TRUST: "(?:" + DANC + "\\.ccrc" + SEPP + "(?:" + TNC + "|" + TGL + ")|" + DANC + "\\.cc-sessions" + SEPP + "(?:" + TNS + "|" + TGL + "))";
+def PDIR($d): DANC + $d + "(?:/\\.?){0,8}(?=$|[" + WS + META + "])";
+def COMP($n): "(?:^|[" + WS + "/=])" + $n + "(?=$|[" + WS + "/;&|)])";
+def pdirw($d; $n): test(PDIR($d)) and test(COMP($n)) and any(split(SEG; null)[]; test(BWR) and test(PDIR($d)) and test(COMP($n)));
+def findw($re): test(NB + "find" + NA) and test($re) and any(split(SEG; null)[]; test(NB + "find" + NA) and test($re)
+  and test(SP + "-(?:delete|exec|execdir|ok|okdir)" + NW));
+def xargsw($re): test(NB + "xargs" + NA) and test($re) and any(split("[\n;&]"; null)[]; split("|") as $p
+  | ([range(0; $p | length) | select($p[.] | test($re))] | .[0]) as $k
+  | $k != null and any($p[$k + 1:][]; test("^" + SP + "*xargs" + NA) and test(BWR)));
+def INTERP: NB + "(?:python[0-9.]{0,8}|node|perl|ruby|bun|deno)" + NA;
+def varw($re): test($re) and test("=") and (. as $c
+  | [limit(17; match("(?:^|[" + WS + ";&|(])(?<n>[A-Za-z_][A-Za-z0-9_]{0,63})=(?<v>[^" + WS + ";&|()]{0,1024})"; "g")
+      | select(.captures[1].string | test($re)) | .captures[0].string)]
+  | length > 16 or (length > 0 and (unique as $ns | $c | hbt(SEG; BWR; "\\$\\{?(?:" + ($ns | join("|")) + ")" + NA))));
+def VERW: "(?:^|[" + WS + "(])(?:\\./{1,8}" + ENTW + "|" + VERS + ")" + CRUN;
+def CLOP: "claude(?=$|[" + WS + "/;&|)])";
+def LBOP: "bin" + SEPP + "(?:claude|" + UPRE + ")(?=$|[" + WS + ";&|)])";
+def bmatch:
+  (select(test(BUILDX) and hbt(SEG; BWR; BUILDX)) | BW),
+  (select(findw(BUILDX)) | BW),
+  (select(xargsw(BUILDX)) | BW),
+  (select(test(INTERP) and test(BUILDX)) | BW),
+  (select(cdthen(CDT("\\.local" + SEPP + "share" + SEPP + "claude(?:" + SEPP + "versions)?"); BWR; test(BWR))) | BW),
+  (select(cdthen(CDT("\\.local" + SEPP + "share"); OPW + CLOP; hb1(BWR; OPW + CLOP))) | BW),
+  (select(cdthen(CDT("\\.local"); "(?:share" + SEPP + CLOP + "|" + LBOP + ")";
+     hb1(BWR; OPW + "(?:share" + SEPP + CLOP + "|" + LBOP + ")"))) | BW),
+  (select(cdthen("(?:" + CDH + "(?:~|\\$\\{?HOME\\}?)/{0,8}" + END + "|(?:^|[" + WS + "(])cd" + SP + "*$)"; "\\.local" + SEPP + "(?:share" + SEPP + CLOP + "|" + LBOP + ")";
+     hb1(BWR; OPW + "\\.local" + SEPP + "(?:share" + SEPP + CLOP + "|" + LBOP + ")"))) | BW),
+  (select(cdthen(CDT("\\.local" + SEPP + "bin"); OPW + "(?:claude|" + UPRE + ")" + END; hb1(BWR; OPW + "(?:claude|" + UPRE + ")" + END))) | BW),
+  (select(varw(BUILDX)) | BW),
+  (select(pdirw("\\.local(?:" + SEPP + "(?:share|bin))?"; "(?:claude|" + UPRE + ")")) | BW),
+  (select(test(TRUST) and hbt(SEG; BWR; TRUST)) | BTR),
+  (select(findw(TRUST)) | BTR),
+  (select(xargsw(TRUST)) | BTR),
+  (select(test(INTERP) and test(TRUST)) | BTR),
+  (select(varw(TRUST)) | BTR),
+  (select(pdirw("\\.ccrc"; TNC) or pdirw("\\.cc-sessions"; TNS)) | BTR),
+  (select(cdthen(CDT("\\.ccrc"); OPW + TNC; hb1(BWR; OPW + TNC))) | BTR),
+  (select(cdthen(CDT("\\.cc-sessions"); OPW + TNS; hb1(BWR; OPW + TNS))) | BTR),
+  (select(test(CLI + CRUN)) | BI),
+  (select(test(WB + "(?:claude|" + UPRE + ")" + NW) and test(WB + EXP + SP + "+(?:" + FLAGS + "(?:install|update)" + NW + "|" + CFLAGS + CVERB + "|respawn" + VEND + ")")) | BI),
+  (select(cdthen(VERSD; VERW; test(VERW))) | BI),
+  (select(test("claude\\.ai/install\\.(?:sh|ps1|cmd)|downloads\\.claude\\.ai"; "i")) | BI),
+  (select(test("@anthropic-ai/claude-code") and any(split("[\n;&|]"; null)[]; test(WB + "(?:npm|pnpm|yarn|bun)" + NW)
+     and test(SP + "(?:install|i|in|ins|inst|insta|instal|isnt|isnta|isntal|isntall|add|update|udpate|up|upgrade)" + NW)
+     and test("@anthropic-ai/claude-code")
+     and (test("(?:^|" + SP + ")(?:(?:-g|--global|--location=global|global)" + NW + "|--prefix(?:=|" + SP + "+)" + NS + "{0,256}\\.local(?![A-Za-z0-9_-]))")
+       or test("(?:^|" + SP + ")npm_config_(?:global|location)="; "i")))) | BI);
+def pnorm: (if startswith("~/") then ($ENV.HOME // "~") + .[1:] else . end)
+  | if startswith("/") then "/" + (split("/") | reduce .[] as $s ([]; if $s == "" or $s == "." then .
+      elif $s == ".." then .[:-1] else . + [$s] end) | join("/")) else . end;
+def edittool: . == "Write" or . == "Edit" or . == "MultiEdit" or . == "NotebookEdit";
+def ASEC: "(?:" + DANC + "\\.cc-secrets(?![A-Za-z0-9_.-])|" + DANC + "\\.ccrc" + SEPP + "(?:auth-scratch(?![A-Za-z0-9_.-])|agent\\.env(?![A-Za-z0-9_.-])|linear(?:\\.key)?(?![A-Za-z0-9_.-])|operator-secrets(?![A-Za-z0-9_.-])|codex" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "runtime\\.env(?![A-Za-z0-9_.-])))";
+def AWD: DANC + "\\.cc-sessions" + SEPP + "\\.(?:auth|accounts)(?![A-Za-z0-9_.-])";
+def ENVP: "(?:[(`{]|\\$\\()";
+def ENVB: "^" + SP + "*(?:" + ENVP + SP + "*){0,4}(?:[A-Za-z_][A-Za-z0-9_]{0,63}=" + NS + "*" + SP + "+){0,8}(?:exec" + SP + "+)?(?:" + NS + "*/)?(?:env|printenv)(?:" + SP + "+(?:-0|--null))*" + SP + "*[)`}]{0,4}" + SP + "*$";
+def ENVS: "(?:\\$\\(|`)" + SP + "*(?:[^" + WS + "/)`]*/)?(?:env|printenv)(?:" + SP + "+(?:-0|--null))*" + SP + "*[)`]";
+def BSHC: "^" + SP + "*(?:" + NS + "*/)?(?:bash|sh)" + SP + "+-c" + SP + "+";
+def ARF: DANC + "\\.ccrc" + SEPP + "accounts\\.(?:json|sh)" + BT;
+def AOPRUN: "^" + SP + "*(?:[(`{]" + SP + "*){0,4}(?:(?:then|do|else|if|while|!)" + SP + "+){0,2}(?:[A-Za-z_][A-Za-z0-9_]*=" + NS + "*" + SP + "+){0,8}(?:(?:exec|env|time|nohup|command)" + SP + "+){0,2}(?:(?:" + NS + "*/)?(?:node|nodejs|bun|deno)" + SP + "+(?:-" + NS + "*" + SP + "+){0,8})?(?:" + NS + "*/)?account-op\\.mjs" + BT;
+def apmatch:
+  (select(test(ASEC)) | "account\ta secret or scratch path of a fleet account"),
+  (select(test(AWD) and (hbt(SEG; BWR; AWD) or findw(AWD) or xargsw(AWD))) | "account\ta write under the account state directories"),
+  (select(test(ARF) and (hbt(SEG; BWR; ARF) or findw(ARF) or xargsw(ARF))) | "account\ta write of the roster or its mirror"),
+  (select(test("account-op") and any(split(SEG; null)[]; test(AOPRUN))) | "account\ta direct run of the account script"),
+  (select(test("env") and (test(ENVS) or any(split(SEG; null)[]; test(ENVB) or (test(BSHC) and (sub(BSHC; "") | test(ENVB)))))) | "account\tprinting the whole environment");
+def APSEC: "/\\.cc-secrets(?:/|$)|/\\.ccrc/auth-scratch(?:/|$)|/\\.ccrc/codex/[^/]+/runtime\\.env$|/\\.ccrc/agent\\.env$|/\\.ccrc/linear(?:/|$)|/\\.ccrc/linear\\.key$|/\\.ccrc/operator-secrets(?:/|$)";
+def APWD: "/\\.cc-sessions/\\.(?:auth|accounts)(?:/|$)";
+def APRF: "/\\.ccrc/accounts\\.(?:json|sh)$";
+def acctpath($t; $i):
+  if ($t | edittool) then first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(APSEC) or test(APWD) or test(APRF)) | "account\ta write to an account path")
+  elif $t == "Read" or $t == "Grep" or $t == "Glob" then first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string") | pnorm | select(test(APSEC)) | "account\ta read of a secret or scratch path of a fleet account")
+  else empty end;
+def pathwhy($t):
+  first((.file_path, .path, .notebook_path) | select(type == "string")
+    | if test(PATHF) then "other\ta forbidden path"
+      elif ($t | edittool) and test("(?:^|/)" + SENS) then "other\tan edit to a settings file, a hook or a CLAUDE.md"
+      elif ($t | edittool) and test(BUILD) then "other\ta write to a Claude Code build or its launcher"
+      elif $t == "Read" and test(CRED) then "other\treading a secret"
+      else empty end);
+(.tool_name | if type == "string" then . else "" end) as $t
+| (.tool_input | if type == "object" then . else {} end) as $i
+| if $mode == "deny" then
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t") or startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first((., norm) | bmatch) // "" else "" end)
+     elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // acctpath($t; $i) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(BUILDX)) | BW) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(TRUST)) | BTR) // "")
+     elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // acctpath($t; $i) // "")
+     else "" end)
+  elif $mode == "account" then
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // "" else "" end)
+     else acctpath($t; $i) // "" end)
+  elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch, pmatch) // "" else "" end)
+  elif ($t | startswith("mcp__")) and any($i | .. | strings; first(fmatch, pmatch) != null) then "other\tan MCP call naming a forbidden act"
+  else ($i | pathwhy($t)) // ""
+  end'
+# The prefilter reads a Bash payload with its quotes and backslashes removed (`apf`), and a JSON-escaped backslash-newline
+# first, as `norm` does in the program: `c''cd ws-rm` and `c\cd ws-rm` name `ccd` only once bash has removed them.
+# A bare `env` word in the payload (D-6202's prefilter): `env` not inside a longer name (`.env`, `venv`, `ENV_X=`).
+APF_ENV_RE='(^|[^A-Za-z0-9_.-])env([^A-Za-z0-9_.=-]|$)' APF_ACCT_STRIP_MAX=8192
+apf="" amode=""
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  apf=$payload
+  # The strip is quadratic in bash on a quote- or backslash-dense payload, so on a session that is not a child it runs
+  # only under APF_ACCT_STRIP_MAX bytes; over that the account arm's prefilter reads the payload as written (a verb
+  # split by quotes inside a longer payload is a residual of the accident guard, D-6202). A child's arm is as before.
+  if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]] \
+     && { [[ -n "$id" && -e "$REG/$id.child" ]] || (( ${#apf} <= APF_ACCT_STRIP_MAX )); }; then
+    apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}
+  fi
+  if [[ -n "$id" && -e "$REG/$id.child" ]]; then
+    amode=deny
+    [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* \
+       || "$apf" == *install* || "$apf" == *update* || "$apf" == *upgrade* || "$apf" == *respawn* \
+       || "$apf" == *anthropic-ai/claude-code* || "${apf,,}" == *downloads.claude.ai* || "${apf,,}" == *claude.ai/install* || "$apf" == *.local* \
+       || "$apf" == *.cc-sessions* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
+       || "$apf" == *runtime.env* || "$apf" == *printenv* || "$apf" == *prune* || "$apf" == *account-op* || "$apf" == *accounts.json* \
+       || "$apf" == *accounts.sh* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+  else
+    # THE ACCOUNT ARM ON EVERY OTHER SESSION (D-6202): the account verbs, paths and bare `env`/`printenv` only.
+    amode=account
+    [[ "$apf" == *account* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
+       || "$apf" == *runtime.env* || "$apf" == *.auth* || "$apf" == *.ccrc*linear* || "$apf" == *operator-secrets* \
+       || "$apf" == *printenv* || "$apf" == *prune* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+  fi
+fi
+# The deny file is read once here, by a bounded builtin read, and its text passed as `--arg deny` (D-6066). Read by jq's
+# `--rawfile`, a file it could not open (mode 000, a directory, removed after the test) made jq exit 2 with no output,
+# so every arm below allowed, and the file is one per box; a FIFO, `/dev/zero` or a huge file blocked jq or ran it
+# unbounded, past the hook's timeout, which fails open too. The cap stays well under the 128 KiB a single `--arg` may
+# hold (E2BIG would fail open again). A FIFO still blocks the open: a residual, as in `install-session-hooks.sh`.
+# The read stops at the first NUL byte: a file with more than the cap's bytes before any NUL passes nothing, and text
+# after a NUL is never read (the safe direction: less text can only drop upstream-id arms).
+APF_DENY_BYTES=65536
+_hook_deny_text() {   # <file> -> APF_DENY (its text up to the first NUL; empty when it cannot be read, or when more
+                      # than APF_DENY_BYTES bytes come before any NUL)
+  local LC_ALL=C t=""
+  APF_DENY=""
+  IFS= read -r -d '' -n $((APF_DENY_BYTES + 1)) t 2>/dev/null <"$1"
+  (( ${#t} <= APF_DENY_BYTES )) && APF_DENY=$t
+  return 0
+}
+if [[ -n "$apf" ]]; then
+  case "${tool:-}" in
+    Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob)
+      adeny=()
+      if [[ "$amode" == deny && -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]]; then
+        _hook_deny_text "$REG/child-deny.settings.json"
+        [[ -n "$APF_DENY" ]] && adeny=(--arg deny "$APF_DENY")
+      fi
+      afw=$(jq -r --arg q "'" --arg mode "$amode" "${adeny[@]}" "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || afw=""
+      areason=""
+      case "$afw" in
+        verb$'\t'*)
+          areason="ccrc: this call runs \`${afw#*$'\t'}\`, which a dispatched child never runs in any form (CLAUDE.md's SAFETY section; spec 2026-10-17 §6.6). It is the operator's act, and a top-level session's only after asking the operator."
+          areason+=" Report what you need to your coordinator instead." ;;
+        surface$'\t'*)
+          areason="ccrc: this call reaches the approval surface (\`ccrc-api approvals\`, \`/api/approvals\`, a signing key or the verifier), which a dispatched child never calls, reads or writes: your coordinator rules on your permission prompts, and the operator on the rest."
+          areason+=" Carry on with your task; a prompt you raise reaches them by itself." ;;
+        account$'\t'*)
+          areason="ccrc: this call is ${afw#*$'\t'}: an account-management act no fleet session runs, in any form (CLAUDE.md's SAFETY section; spec 2026-10-18 §3.1; D-6202). Adding, signing in, checking, enabling, disabling or removing a fleet account, and reading its secrets, are the operator's, from the PWA's Accounts screen or their own shell. Switching accounts is never refused: \`ccd swap-self <lane>\`, \`ccd prefer\` and \`ccd swap\` stay open." ;;
+        prune$'\t'*)
+          areason="ccrc: this call runs \`git worktree prune\`, which deletes git's records of every gone worktree of the repository at once, and ccd's cleanup reads those records: one prune holds the cleanup of every lane on this box (the cleanup un-wedge spec, section 5)."
+          areason+=" To remove one stale record, use \`git -C <main> worktree remove <path>\`; a dry run (\`-n\`) is allowed."
+          areason+=" If this is text you meant to pass, such as a commit message or a PR body, bash would still run a backticked or \`\$(...)\` mention inside double quotes or an unquoted heredoc: put the text in a file and pass the file (\`git commit -F <file>\`, \`gh pr create --body-file <file>\`)." ;;
+        build$'\t'*)
+          areason="ccrc: this call is ${afw#*$'\t'}, which a dispatched child never does: rolling, installing and selecting a Claude Code build are the operator's acts and ccrc's own (CLAUDE.md's SAFETY section; spec 2026-10-18 §7.6; D-5696)."
+          areason+=" Report what you need to your coordinator instead." ;;
+      esac
+      if [[ -n "$areason" ]] && ajson=$(_hook_deny_json "$areason"); then pre_json=$ajson; fi ;;
+  esac
+fi
+
+# FABLE RUNS ONLY WHEN THE OPERATOR SELECTS IT (D-6792; operator ruling 2026-10-24): on every session, an Agent or Task
+# call whose `model` names Fable, and a Workflow call whose script or input names a Fable model for an agent
+# (`model: 'fable'`, `"model":"fable"`, `claude-fable-*`), is denied, with a reason that points at opus, sonnet or haiku.
+# An accident guard, and it fails open like the arm above: a payload jq cannot parse, or an envelope that cannot be
+# built, says nothing. The prefilter is a builtin glob on the payload, so a call that never names Fable forks nothing.
+FABLE_RE="(^|[^[:alnum:]_])model[\"'\`]?[[:space:]]*[:=,(][[:space:]]*[\"'\`]?[[:alnum:]_./-]*[Ff][Aa][Bb][Ll][Ee]|[Cc][Ll][Aa][Uu][Dd][Ee]-[Ff][Aa][Bb][Ll][Ee]"
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
+      && ( "${tool:-}" == Agent || "${tool:-}" == Task || "${tool:-}" == Workflow ) && "${payload,,}" == *fable* ]]; then
+  fbl=$(jq -r --arg re "$FABLE_RE" '
+    .tool_input as $i
+    | if .tool_name == "Agent" or .tool_name == "Task" then
+        (if ($i.model | type) == "string" and ($i.model | test("fable"; "i")) then "y" else "" end)
+      elif .tool_name == "Workflow" then
+        (if any($i | .. | select(type == "object") | .model?; type == "string" and test("fable"; "i"))
+            or any($i | .. | strings; test($re)) then "y" else "" end)
+      else "" end' <<<"$payload" 2>/dev/null) || fbl=""
+  if [[ "$fbl" == y ]]; then
+    freason="ccrc: this ${tool} call names a Fable model. Fable runs only when the operator selects it (operator ruling 2026-10-24; D-6792): a coordinator, a worker, an agent or a script never picks it. Use opus, sonnet or haiku for the agent's model instead, and leave the choice of Fable to the operator."
+    if fjson=$(_hook_deny_json "$freason"); then pre_json=$fjson; fi
+  fi
+fi
+
+# TESTS RUN THROUGH `ccrc test` (D-7298). ONE READER for both arms: `ccrc test --classify-shell`, the
+# wrapper's own classifier, so the hook and the queue agree on what a test is, and every spelling the wrapper reads
+# through (quoted words, `env`/`timeout`/`setsid`/`sudo -u`/`flock`/`xargs` prefixes, systemd-run's value flags, `sh -c`,
+# `eval`, `script -c`, `watch` and tmux window strings) is read the same way here. It answers one of three words:
+#   wrapped  a `systemd-run` of one's own around ANY test or typecheck (`S=systemd-run; $S …` included): denied on every
+#            session, since a run placed by hand escapes the test slice's caps, the queue, or both;
+#   heavy    a heavy test or typecheck started in command position outside `ccrc test` (`npx vitest run`, `npx tsc -p
+#            test/tsconfig.tests.json`, `npm test`, `make test`): denied on a fleet box (Linux, a session the registry
+#            knows), where it would land in the session's own pane scope past the slice and the queue; macOS has no slice;
+#   light    anything else, `ccrc test …` included: allowed.
+# `ccrc test -- systemd-run … <test>` is wrapped too: its inner command is read through the same check.
+# Either denial has somewhere to go: `ccrc test` degrades rather than refuses where the slice cannot be used (ccd/ccrc-test).
+# GOOD FAITH (D-7298): the sessions are cooperative, so this catches accidental spellings; the cgroup caps already on
+# the box are the backstop. Deliberately obfuscated spellings (a systemd-run inside a command substitution, prlimit,
+# unshare or cgexec prefixes, find -exec, python os.system, an npm script that wraps the suite) are out of scope.
+# An accident guard that fails open: no `ccrc` on PATH (then `ccrc test` is not there to send a run to either), a
+# payload jq cannot parse, or a classifier that answers anything else says nothing. Only a Bash call whose payload names
+# systemd-run (or, on a fleet box, a test program, a package manager or make) forks jq and the classifier, bounded like
+# the tmux question above when a bound is on PATH.
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* && "${tool:-}" == Bash ]]; then
+  tfleet=0
+  [[ "${OSTYPE:-}" == linux* && -n "$id" && -f "$REG/$id.generation" ]] && tfleet=1
+  task=0
+  case "$payload" in
+    *systemd-run*) task=1 ;;
+    *vitest*|*jest*|*tsc*|*tsgo*|*typecheck*|*playwright*|*stryker*|*npm*|*pnpm*|*yarn*|*bun*|*make*) task=$tfleet ;;
+  esac
+  if [[ "$task" == 1 ]] && command -v ccrc >/dev/null 2>&1; then
+    tcmd=$(jq -r '.tool_input.command // "" | strings' <<<"$payload" 2>/dev/null) || tcmd=""
+    tverdict=""
+    [[ -z "$tcmd" ]] || tverdict=$(${hooktmo:+"$hooktmo" 5} ccrc test --classify-shell -- "$tcmd" 2>/dev/null) || tverdict=""
+    treason=""
+    if [[ "$tverdict" == wrapped ]]; then
+      treason="ccrc: run tests and typechecks through \`ccrc test -- <command>\` (for example \`ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts\`), never under a systemd-run of your own: \`ccrc test\` puts the run in the fleet's test slice, whose caps keep sessions ahead of tests, and queues heavy runs (tsc, typecheck, full or wide vitest, browser and mutation tests) fleet-wide (D-7298)."
+    elif [[ "$tverdict" == heavy && "$tfleet" == 1 ]]; then
+      treason="ccrc: this command starts a heavy test or typecheck outside \`ccrc test\`, so it would run in this session's own scope, past the fleet's test slice and its queue. Run it as \`ccrc test -- <command>\` (for example \`ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json\`): heavy runs (tsc, typecheck, full or wide vitest, browser and mutation tests) queue fleet-wide inside the slice, whose caps keep sessions ahead of tests (D-7298)."
+    fi
+    if [[ -n "$treason" ]] && tjson=$(_hook_deny_json "$treason"); then pre_json=$tjson; fi
+  fi
+fi
+
+# A FAN-OUT NAMES ITS MODEL, AND A WORKFLOW AGENT ITS EFFORT TOO (D-6798; operator ruling 2026-10-24): on every session, an
+# Agent or Task call whose `tool_input` names no `model`, and a Workflow call whose script has an `agent(...)` call
+# naming no `model` or no `effort`, is denied, with a reason that sends the agent to the routing matrix. A call that names
+# nothing runs at the lane default, which is the spend this arm bounds. An accident guard, and it fails open like the arm
+# above: a payload jq cannot parse, an envelope that cannot be built, or a script it cannot read says nothing. Only an
+# Agent, Task or Workflow call forks a jq, so every other tool pays nothing.
+# A script is read as code: strings, template literals, regex literals and comments are skipped (an unbalanced quote means
+# unknown, and allows), so an `agent(` quoted in a prompt is no
+# call and the word `model` in a prompt is no option. An `agent(` call is denied only when its options are visible: no
+# second argument at all, or an inline `{...}` object (the first argument, or the one after the first top-level comma)
+# with no `model:` or no `effort:` key (shorthand `{ model, effort }` counts). Options held in a shared object or an
+# expression, or an inline object that spreads one, are unknown and allow. The script is `script`, else the file at
+# `scriptPath` (regular file, at most 256 KiB; missing, unreadable or larger allows). A saved workflow run by `name` is
+# not read.
+if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
+      && ( "${tool:-}" == Agent || "${tool:-}" == Task || "${tool:-}" == Workflow ) ]]; then
+  fosrc=""
+  if [[ "${tool:-}" == Workflow ]]; then
+    fopath=$(jq -r '.tool_input | if (.script | type) == "string" then "" elif (.scriptPath | type) == "string" then .scriptPath else "" end' <<<"$payload" 2>/dev/null) || fopath=""
+    if [[ -n "$fopath" && -f "$fopath" && -r "$fopath" && ! -L "$fopath" ]]; then
+      fosize=$(wc -c <"$fopath" 2>/dev/null) || fosize=""
+      fosize=${fosize//[[:space:]]/}
+      [[ "$fosize" =~ ^[0-9]+$ ]] && (( fosize <= 262144 )) && fosrc=$(cat -- "$fopath" 2>/dev/null) || fosrc=""
+    fi
+  fi
+  fo=""
+  # A Workflow call pays the character walk only when the word `agent` appears at all (a cheap test before the fork).
+  if [[ "${tool:-}" != Workflow || "$payload$fosrc" == *agent* ]]; then
+  fo=$(jq -r --arg file "$fosrc" '
+    def quote: . == "\"" or . == "\u0027" or . == "`";
+    def skipc($c; $i):
+      if $c[$i] == "/" and $c[$i + 1] == "/" then (first(range($i; $c | length) | select($c[.] == "\n")) // ($c | length))
+      elif $c[$i] == "/" and $c[$i + 1] == "*" then ((first(range($i + 2; ($c | length) - 1) | select($c[.] == "*" and $c[. + 1] == "/")) // ($c | length)) + 2)
+      elif $c[$i] == "/" and ((first(range($i - 1; -1; -1) | select(($c[.] | test("[[:space:]]")) | not)) // null) as $p | $p == null or ($c[$p] | test("[(,=:!&|?{;\\[]"))) then
+        (($c | length) as $n | {j: ($i + 1), k: false}
+         | until(.j >= $n or (.k | not) and $c[.j] == "/"; if $c[.j] == "\\" then .j += 2 elif $c[.j] == "[" then .k = true | .j += 1 elif $c[.j] == "]" then .k = false | .j += 1 else .j += 1 end)
+         | .j + 1)
+      else null end;
+    # Walk from $from; "comma" stops at the first top-level comma, "bal" at the close of the bracket opened at $from.
+    # The result is that index, or -1 when the enclosing bracket closes first or the text ends.
+    def scan($c; $from; $mode):
+      {i: $from, d: 0, q: null, r: null}
+      | until(.r != null or .i >= ($c | length);
+          $c[.i] as $ch
+          | if .q != null then
+              (if $ch == "\\" then .i += 2 elif $ch == .q then .q = null | .i += 1 else .i += 1 end)
+            elif skipc($c; .i) != null then .i = skipc($c; .i)
+            elif ($ch | quote) then .q = $ch | .i += 1
+            elif $ch == "(" or $ch == "[" or $ch == "{" then .d += 1 | .i += 1
+            elif $ch == ")" or $ch == "]" or $ch == "}" then
+              (if .d == 0 then .r = -1 else .d -= 1 | (if $mode == "bal" and .d == 0 then .r = .i else . end) | .i += 1 end)
+            elif $ch == "," and .d == 0 and $mode == "comma" then .r = .i
+            else .i += 1 end)
+      | .r // -9;
+    def isid: . != null and test("[A-Za-z0-9_.$]");
+    # The index just after the "(" of every agent( call outside a string or comment.
+    def calls($c):
+      {i: 0, q: null, h: []}
+      | until(.i >= ($c | length);
+          $c[.i] as $ch
+          | if .q != null then
+              (if $ch == "\\" then .i += 2 elif $ch == .q then .q = null | .i += 1 else .i += 1 end)
+            elif skipc($c; .i) != null then .i = skipc($c; .i)
+            elif ($ch | quote) then .q = $ch | .i += 1
+            elif $ch == "a" and ($c[.i:.i + 5] | join("")) == "agent" and ((.i > 0 and ($c[.i - 1] | isid)) | not) then
+              (first(range(.i + 5; $c | length) | select(($c[.] | test("[[:space:]]")) | not)) // null) as $j
+              | if $j != null and $c[$j] == "(" then .h += [$j + 1] | .i = $j + 1 else .i += 5 end
+            else .i += 1 end)
+      | if .q != null then [] else .h end;
+    def ws($c; $i): (first(range($i; $c | length) | select(($c[.] | test("[[:space:]]")) | not)) // ($c | length));
+    # "bad" when this call surely names no model or no effort, else "ok" (including every case that cannot be seen).
+    def judge($c; $h):
+      ws($c; $h) as $a
+      | (if $c[$a] == "{" then $a
+         else (scan($c; $h; "comma")) as $k
+           | if $k == -9 then -3 elif $k < 0 then (if $c[$a] == "." and $c[$a + 1] == "." then -3 else -2 end) else ws($c; $k + 1) as $b | (if $c[$b] == "{" then $b elif $c[$b] == ")" then -2 else -3 end) end
+         end) as $o
+      | if $o == -2 then "bad"
+        elif $o == -3 then "ok"
+        else scan($c; $o; "bal") as $e
+          | if $e < 0 then "ok"
+            else ($c[$o:$e + 1] | join("")) as $t
+              | if ($t | test("\\.\\.\\.")) then "ok"
+                elif ($t | test("(^|[^A-Za-z0-9_$])[\"\u0027`]?model[\"\u0027`]?[[:space:]]*[:,}]")) and (($t | test("(^|[^A-Za-z0-9_$])[\"\u0027`]?effort[\"\u0027`]?[[:space:]]*[:,}]")) or ($t | test("(^|[^A-Za-z0-9_$])[\"\u0027`]?model[\"\u0027`]?[[:space:]]*:[[:space:]]*[\"\u0027`](claude-)?haiku"))) then "ok"
+                else "bad" end
+            end
+        end;
+    .tool_input as $i
+    | if .tool_name == "Agent" or .tool_name == "Task" then
+        (if ($i | type) == "object" and (($i.model | type) != "string" or $i.model == "") then "agent" else "" end)
+      elif .tool_name == "Workflow" and ($i | type) == "object" then
+        (if ($i.script | type) == "string" then $i.script elif $file != "" then $file else null end) as $s
+        | if $s == null then ""
+          else ($s | split("")) as $c
+            | if any(calls($c)[]; judge($c; .) == "bad") then "workflow" else "" end
+          end
+      else "" end' <<<"$payload" 2>/dev/null) || fo=""
+  fi
+  [[ "$fo" == agent && "${CLAUDE_CODE_SUBAGENT_MODEL_FORCE:-}" == 1 && -n "${CLAUDE_CODE_SUBAGENT_MODEL:-}" ]] && fo=""   # THE PIN (W1 sandbox, question 14; slug no-model-arm-reads-the-pin): under FORCE the payload carries no model even when the call named one (W0-11), and the call runs on the pinned model, so an Agent or Task call is not judged; a Workflow call is judged as before
+  if [[ "$fo" == agent || "$fo" == workflow ]]; then
+    if [[ "$fo" == agent ]]; then foname="names no model"; else foname="has an agent() call that names no model or no effort (a haiku call needs no effort)"; fi
+    foreason="ccrc: this ${tool} call ${foname}, so it would run at the lane default (operator ruling 2026-10-24; D-6798). Name them from the routing matrix: pass model (opus, sonnet or haiku) on an Agent or Task call, and model on every agent() call in a Workflow script, and effort too unless the model is haiku (haiku takes no effort level). Take the row for the work: a mechanical task is haiku or sonnet, judgement is opus."
+    if fojson=$(_hook_deny_json "$foreason"); then pre_json=$fojson; fi
+  fi
+fi
+
+# `carry-only-a-main-thread-wait` (D-4039, task review): who raised the wait. `waitby` is "subagent" only when THIS event
+# freshly set `waiting` and carries an `agent_id` (`$paid`); it is stored as the additive key `waitBy`, preserved with
+# the carried state below, and absent everywhere else, so every other write keeps today's shape byte for byte.
+waitby=""
+[[ "$state" == waiting && -n "$paid" ]] && waitby="subagent"
+
+# `_hook_server_cap <word>` (D-5232's gate, plan 2026-10-16 Task 9b; spec §6.1): 0 iff the server this box talks to
+# advertises <word>, measured. `~/.ccrc/server-caps` is written every minute by `ccd-update-sync` on a `fleet` node and
+# by the server itself on a `server` or `both` node. It counts only when it is EXACTLY three `\n`-terminated lines
+# (`at <1–11 digits>`, `caps` then zero or more words of `[a-z0-9-]{1,64}` each after one space, `end`, nothing after),
+# its `at` is not in the future and at most 180 s old by this hook's clock, and <word> is listed whole (never a prefix).
+# Anything else (absent, torn, malformed, stale, future, unlisted) reads as NOT advertised, and the gated arm writes
+# exactly what it writes today: the fail-safe direction. Builtins only, no fork: one grouped `read` of the file, and the
+# clock is `EPOCHREALTIME`'s seconds, the source `_hook_epoch_ms` reads first (bash 5.0+), else `printf '%(%s)T'`, the
+# same realtime clock as a 4.4 builtin. The file name `server-caps` and the lease `180` are the bash copies of
+# `SERVER_CAPS_FILE` and `SERVER_CAPS_LEASE_S` (shared/api.ts); `session-hook-compact-carry.test.ts` holds them equal
+# and iterates the grammar against `parseServerCaps`. Task 2's carry reuses this gate with its own word.
+_hook_server_cap() {   # <word> -> 0 advertised and current; 1 otherwise
+  local want="$1" l1="" l2="" l3="" l4="" at now
+  { { IFS= read -r l1 && IFS= read -r l2 && IFS= read -r l3 && ! IFS= read -r l4; } < "$HOME/.ccrc/server-caps"; } 2>/dev/null || return 1
+  [[ -z "$l4" && "$l3" == end && "$l1" =~ ^at\ ([0123456789]{1,11})$ ]] || return 1
+  at=$(( 10#${BASH_REMATCH[1]} ))
+  # The word class is spelled out, never a range: under a UTF-8 locale `a-z` may collate non-ASCII letters into it.
+  [[ "$l2" =~ ^caps(\ [abcdefghijklmnopqrstuvwxyz0123456789-]{1,64})*$ ]] || return 1
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then now="${EPOCHREALTIME%%[.,]*}"; else printf -v now '%(%s)T' -1; fi
+  [[ "$now" =~ ^[0123456789]+$ ]] || return 1
+  (( at <= now && now - at <= 180 )) || return 1
+  [[ " ${l2#caps} " == *" $want "* ]]
+}
+# `hook-main-state-v1` (D-5232): read once, and only for an agent event (`$paid`); a main event never pays for it.
+hms=""
+[[ -n "$paid" ]] && _hook_server_cap hook-main-state-v1 && hms=1
+
+# `a-carried-wait-keeps-its-stamp` (D-4041, review 397 F3; the race is that review's artifact 2, "P1 exception 1").
+# ONE fresh `jq` read of the file at the carry point answers every question the two subagent arms below ask: its state,
+# who raised the wait, the ask, `interrupted`, and the wait's own `updatedAt` and `event`. It is a read of the file as it
+# stands NOW, not of `prev_state`, which the prefilter's `read -r prev_state` took far above: a main-thread answer
+# landing in between must not be overwritten by a `waiting` decided from the old read. Lines, not `@tsv` (see its note).
+# `state` prints only when it is one of the three words this hook writes (an exact match, so a corrupt value is never
+# healed into one: `"wait\ning"` is empty here, not `waiting`); `event` is cut to letters, and `updatedAt` prints its
+# floor when it is a number. WHAT MAKES A STAMP KEEPABLE is the `^[0-9]+$` test in `_hook_keep_stamp` below, and only that
+# (a negative prints with its `-` and fails it; mutation N2 pins it). The `type == "number"` here is POSITIONAL, not a
+# guard: `floor` on a string, array, object, null or boolean aborts the jq program, which would blank every line printed after
+# `updatedAt` (today only `event`, unused while `fr_upd` is empty); it keeps a later field safe if one is ever added.
+# A jq that fails on its first output (a root that is neither an object nor null, or an unparseable file) prints nothing: every field comes up
+# empty, which both arms read as "nothing to carry". Lines printed before a later error still come out.
+# `background-aware-working` (D-5231): two more lines, appended LAST, read D-5231's delegated pair for the subagent arm's
+# carry: `bgDelegated` prints only as a non-negative integer, `bgDelegatedKinds` only as a string of at most 200 bytes of
+# `a-z`, `_`, `-` and `,` (no regex, so a jq without Oniguruma reads it too); either one failing carries neither (the
+# count is dropped with a malformed kinds value, and the kinds with a malformed count).
+# `agent-events-keep-the-main-state` (D-5232): five more lines, appended LAST, read the stored `waitPrev` (the main state a
+# subagent's own wait replaced) on the same rules as the five fields above: its state only as one of the three words,
+# its event cut to letters, its stamp as a floor, its ask as JSON, its flag as true/false. A `waitPrev` that is not an
+# object prints every line empty (the ask "null", the flag "false"), which the restore reads as "nothing to restore".
+fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev="" fr_bgd="" fr_bgdk=""
+fr_wps="" fr_wpe="" fr_wpu="" fr_wpa="" fr_wpi=""
+_hook_fresh_read() {
+  fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev="" fr_bgd="" fr_bgdk=""
+  fr_wps="" fr_wpe="" fr_wpu="" fr_wpa="" fr_wpi=""
+  { read -r fr_state; read -r fr_by; read -r fr_ask; read -r fr_int; read -r fr_upd; read -r fr_ev; read -r fr_bgd; read -r fr_bgdk
+    read -r fr_wps; read -r fr_wpe; read -r fr_wpu; read -r fr_wpa; read -r fr_wpi; } < <(jq -r \
+    'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122);
+     (.state | if . == "working" or . == "waiting" or . == "done" then . else "" end),
+     (if .waitBy == "subagent" then "subagent" else "" end),
+     (.ask // null | tojson),
+     (if .interrupted == true then "true" else "false" end),
+     (.updatedAt | if type == "number" then floor | tostring else "" end),
+     (.event | if type == "string" then keep(alpha) else "" end),
+     (.bgDelegated | if type == "number" and . >= 0 and . == floor then floor | tostring else "" end),
+     (.bgDelegatedKinds | if type == "string" and length <= 200 and (explode | all(. == 44 or . == 45 or . == 95 or (. >= 97 and . <= 122))) then "k" + . else "" end),
+     (.waitPrev | if type == "object" then (.state | if . == "working" or . == "waiting" or . == "done" then . else "" end) else "" end),
+     (.waitPrev | if type == "object" then (.event | if type == "string" then keep(alpha) else "" end) else "" end),
+     (.waitPrev | if type == "object" then (.updatedAt | if type == "number" then floor | tostring else "" end) else "" end),
+     (.waitPrev | if type == "object" then (.ask // null | tojson) else "null" end),
+     (.waitPrev | if type == "object" and .interrupted == true then "true" else "false" end)' "$f" 2>/dev/null)
+  # Both or neither: a valid kinds value arrives behind a `k` marker (a measured zero's "" is valid and prints "k"),
+  # so a failed one (empty, no marker) is told apart from it and clears the count too.
+  if [[ "$fr_bgd" =~ ^[0-9]+$ && "$fr_bgdk" == k* ]]; then fr_bgdk="${fr_bgdk#k}"; else fr_bgd="" fr_bgdk=""; fi
+}
+# The stamp a carried wait keeps. A MAIN-thread wait (fresh state `waiting`, not raised by a subagent) that a subagent
+# event writes over keeps the file's own `updatedAt` and `event` (the wait's START, which the attention bucket, the ask
+# row's `askAt` and the stall watch's hold 2a read) and gains the additive `aliveAt` = now (the liveness the aged door,
+# `hookstate.ts`, reads, so a long wait with subagents working stays fresh). Every other write has no `aliveAt`, and a
+# file whose `updatedAt` is negative, is not a number (null, a boolean, a string), or is a value jq prints in exponent
+# form (such as 1e16 or 1e300: which values print that way follows jq's number formatting, not a size cut) fails the
+# `^[0-9]+$` test below and keeps nothing: it is written as before, with a fresh stamp.
+# A non-negative fractional value keeps its floor (a negative one floors to a negative and fails that test): the hook
+# writes integer milliseconds only, so one is a foreign or corrupt file, and the floor moves the stamp by under 1 ms.
+w_ev="" w_upd="" w_alive=""
+_hook_keep_stamp() {
+  [[ "$fr_state" == waiting && "$fr_by" != subagent && "$fr_upd" =~ ^[0-9]+$ ]] || return 0
+  w_upd="$fr_upd" w_ev="$fr_ev" w_alive=$(_hook_epoch_ms)
+}
+
+# `agent-events-keep-the-main-state` (D-5232): the stamp an agent event keeps behind the server's word. Over any main
+# state (and over a subagent's own wait, at a SubagentStart or SubagentStop) the file's `updatedAt` and `event` stand,
+# and `aliveAt` = now is the liveness the aged door and the stall watch's two clocks read. The stamp is keepable on
+# exactly `_hook_keep_stamp`'s rule (`^[0-9]+$`); a file that fails it keeps nothing and the event writes as before.
+_hook_keep_main_stamp() {
+  [[ -n "$fr_state" && "$fr_upd" =~ ^[0-9]+$ ]] || return 1
+  w_upd="$fr_upd" w_ev="$fr_ev" w_alive=$(_hook_epoch_ms)
+}
+# `waitPrev`, as written: rebuilt from the fresh read's validated lines (a word, letters, digits, a JSON value, a flag),
+# so no byte of it is quoted from the file unchecked. `wp_out` is what the write below stores ("" = no key).
+wp_out=""
+_hook_wait_prev_kept() {   # the stored waitPrev, carried as it stands, when it reads whole
+  [[ -n "$fr_wps" && "$fr_wpu" =~ ^[0-9]+$ ]] || return 1
+  wp_out="{\"state\":\"$fr_wps\",\"event\":\"$fr_wpe\",\"updatedAt\":$fr_wpu,\"ask\":${fr_wpa:-null},\"interrupted\":${fr_wpi:-false}}"
+}
+# `hs_skip` (D-5232): this run writes no hookstate, and still reaches the one print. An agent event with no file to
+# carry (absent, unreadable, or a state that is not one of the hook's words) is inert for the file, never an exit: a
+# subagent's PreToolUse keeps its deny or nudge (`pre_json`) on a session that has no hookstate yet.
+hs_skip=""
+# `hcarry` (D-5232): this write is the carry, so it keeps the ask and D-5231's pair rather than clearing them.
+hcarry=""
+
 if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
-  name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
+  # THE ROSTER, keyed by `agent_id` (D-5232; not gated: it changes no existing field's meaning). The id is the
+  # payload's `agent_id`, kept only when it is wholly `[A-Za-z0-9_-]{1,64}` (no regex: a jq without Oniguruma reads it
+  # too). A Start adds `{name, startedAt, id}` unless that id is listed; a Stop removes the entry with its id and is a
+  # no-op when none matches (a side agent's Stop). A payload with no id that passes the rule (no capture shows one: an
+  # older harness's shape) keeps today's name-keyed write exactly (D-5375): `{name, startedAt}` added, the first name match
+  # removed. Its entries carry no id, so the first prune drops them.
+  { read -r name; read -r aid; } < <(jq -r 'def keep(f): explode | map(select(f)) | implode;
+    (.agent_name // .subagent_name // .agent_type // "subagent" | tostring | explode | map(if . == 10 or . == 13 then 32 else . end) | implode),
+    ((.agent_id // "") | tostring | . as $r | keep((. >= 65 and . <= 90) or (. >= 97 and . <= 122) or (. >= 48 and . <= 57) or . == 95 or . == 45)
+      | if . == $r and length >= 1 and length <= 64 then . else "" end)' <<<"$payload" 2>/dev/null) || { name="subagent" aid=""; }
+  name="${name:-subagent}"
   now=$(_hook_epoch_ms)
-  if [[ "$event" == SubagentStart ]]; then
+  if [[ -n "$aid" && "$event" == SubagentStart ]]; then
+    subs=$(jq -c --arg n "$name" --argjson t "$now" --arg id "$aid" \
+      'if any(.[]; (.id? // null) == $id) then . else (. + [{name:$n, startedAt:$t, id:$id}]) end | .[-32:]' <<<"$subs" 2>/dev/null) || subs="[]"
+  elif [[ -n "$aid" ]]; then
+    subs=$(jq -c --arg id "$aid" 'map(select((.id? // null) != $id))' <<<"$subs" 2>/dev/null) || subs="[]"
+  elif [[ "$event" == SubagentStart ]]; then
     subs=$(jq -c --arg n "$name" --argjson t "$now" \
       '(. + [{name:$n, startedAt:$t}]) | .[-32:]' <<<"$subs" 2>/dev/null) || subs="[]"
   else
     subs=$(jq -c --arg n "$name" 'del(.[ (map(.name) | index($n)) // empty ])' <<<"$subs" 2>/dev/null) || subs="[]"
   fi
-  # Session state untouched: keep the previous state (or skip entirely when
-  # no state was ever written — a subagent event before any turn is inert).
-  [[ -n "$prev_state" ]] || exit 0
-  state="$prev_state"
-  ask_json=$(jq -c '.ask // null' "$f" 2>/dev/null) || ask_json="null"
-  interrupted=$(jq -r 'if .interrupted == true then "true" else "false" end' "$f" 2>/dev/null) || interrupted="false"
+  # Session state untouched: keep the state the file holds, or write nothing when no state was ever written, the file
+  # is gone or unreadable by now, or it holds a state that is not one of the hook's three words (a corrupt file) —
+  # which ALSO skips the roster update above (D-4041). `prev_state` is only the no-fork prefilter. No write is not an
+  # exit (D-5232): the tail's print is still reached.
+  if [[ -z "$prev_state" ]]; then hs_skip=1; else
+    _hook_fresh_read
+    if [[ -z "$fr_state" ]]; then hs_skip=1; else
+      state="$fr_state"
+      ask_json="${fr_ask:-null}"
+      [[ "$fr_int" == true ]] && interrupted="true" || interrupted="false"
+      waitby="$fr_by"
+      if [[ -n "$hms" ]]; then
+        # D-5232, behind the word: the whole main state stands (a subagent's own wait with its `waitPrev` included).
+        _hook_keep_main_stamp || true
+        [[ "$fr_by" == subagent ]] && { _hook_wait_prev_kept || true; }
+      else
+        _hook_keep_stamp
+      fi
+      # D-5231: an agent event keeps the delegated pair the main Stop recorded (the carry); nothing else writes it.
+      if [[ -n "$fr_bgd" ]]; then bgd="$fr_bgd" bgdk="$fr_bgdk"; else bgd="" bgdk=""; fi
+    fi
+  fi
+fi
+
+# `subagent-tool-event-keeps-the-waiting-ask` (D-4039, finding 4063): a subagent's PreToolUse/PostToolUse never ends the
+# main thread's wait. It reaches the case above as `working` with a null ask, and written as is it erased a question the
+# main thread asked 3.1 s earlier, before any pane tick could mint the ask row. Only `waiting` is carried, with its ask and
+# `interrupted`, and every other state keeps today's write. (A subagent's PermissionRequest is not a tool event of this
+# kind: it still replaces a main question with its own approval, as it always did — Review Focus 1.)
+# `a-carried-wait-keeps-its-stamp` (D-4041): the carry keeps the wait's `updatedAt` and `event` and adds `aliveAt`
+# (above). The reader that needs the stamp to MOVE is the aged door (`hookstate.ts`), and it reads `aliveAt` for that.
+# `carry-only-a-main-thread-wait` (task review, Important 1): a wait that a subagent raised itself (`waitBy` stored
+# as "subagent") is NOT carried, so that subagent's own approved dialog ends at its next tool event as it always did.
+# `prev_state` is the no-fork prefilter only; the decision is made on the one fresh read, on a subagent's tool event.
+if [[ -n "$paid" && "$prev_state" == waiting && ( "$event" == PreToolUse || "$event" == PostToolUse ) ]]; then
+  _hook_fresh_read
+  if [[ "$fr_state" == waiting && "$fr_by" != subagent ]]; then
+    state="waiting"
+    ask_json="${fr_ask:-null}"
+    [[ "$fr_int" == true ]] && interrupted="true" || interrupted="false"
+    waitby=""
+    _hook_keep_stamp
+  fi
+fi
+
+# `agent-events-keep-the-main-state` (D-5232; spec §5.2), BEHIND THE SERVER'S WORD (`hms`, above): an agent tool event
+# (PreToolUse other than AskUserQuestion, PostToolUse) never rewrites the main state. It keeps the file's `state`,
+# `event`, `updatedAt`, `ask`, `interrupted` and D-5231's pair, and writes `aliveAt` = now: D-4041's carry generalised
+# from a main-thread wait to every main state, so a Stop's `done` stands through the delegated run it left (the
+# server's `!delegated` rung, its live dispatch gate and its stall clocks are what read it there, which is why the
+# word gates it). A main-thread wait was already carried by the block above, and is left as it took it. Over a wait a
+# SUBAGENT raised (`waitBy:"subagent"`) the event RESTORES the `waitPrev` that wait stored, with `aliveAt`; with no
+# `waitPrev` (an older hook's wait) it writes today's `working`. With no file to carry it writes none (`hs_skip`).
+# Without the word every line here is skipped, and the event writes exactly what it wrote before.
+if [[ -n "$hms" && ( "$event" == PostToolUse || ( "$event" == PreToolUse && "${tool:-}" != AskUserQuestion ) ) \
+      && "$state" != waiting ]]; then
+  if [[ -z "$prev_state" ]]; then hs_skip=1; else
+    [[ "$prev_state" == waiting ]] || _hook_fresh_read   # over a wait, the block above already took the fresh read
+    if [[ -z "$fr_state" ]]; then
+      hs_skip=1
+    elif [[ "$fr_state" == waiting && "$fr_by" == subagent ]]; then
+      if [[ -n "$fr_wps" && "$fr_wpu" =~ ^[0-9]+$ ]]; then
+        state="$fr_wps" ask_json="${fr_wpa:-null}" interrupted="${fr_wpi:-false}" waitby="" hcarry=1
+        w_upd="$fr_wpu" w_ev="$fr_wpe" w_alive=$(_hook_epoch_ms)
+      fi
+    elif _hook_keep_main_stamp; then
+      state="$fr_state" ask_json="${fr_ask:-null}" waitby="" hcarry=1
+      [[ "$fr_int" == true ]] && interrupted="true" || interrupted="false"
+    fi
+    if [[ -n "$hcarry" && -n "$fr_bgd" ]]; then bgd="$fr_bgd" bgdk="$fr_bgdk"; else bgd="" bgdk=""; fi
+  fi
+fi
+# A SUBAGENT'S OWN WAIT (D-5232; the store gated too, D-5374), behind the same word: its AskUserQuestion PreToolUse or PermissionRequest still writes
+# `waiting`, `waitBy:"subagent"` and a fresh stamp (attention needs it), and now stores `waitPrev`, the state, event,
+# stamp, ask and `interrupted` flag it replaced, so its end can restore them. Over a wait a subagent raised, the older
+# `waitPrev` is kept (the main state under both). D-5231's pair stands beside it for the restore to keep (D-5376). A file with
+# no main state to remember stores none.
+if [[ -n "$hms" && "$waitby" == subagent && -n "$prev_state" ]]; then
+  [[ "$event" == PreToolUse && "$prev_state" == waiting ]] || _hook_fresh_read
+  if [[ "$fr_state" == waiting && "$fr_by" == subagent ]]; then
+    _hook_wait_prev_kept || true
+  elif [[ -n "$fr_state" && "$fr_upd" =~ ^[0-9]+$ ]]; then
+    [[ "$fr_int" == true ]] && wp_int=true || wp_int=false
+    wp_out="{\"state\":\"$fr_state\",\"event\":\"$fr_ev\",\"updatedAt\":$fr_upd,\"ask\":${fr_ask:-null},\"interrupted\":$wp_int}"
+  fi
+  if [[ -n "$fr_bgd" ]]; then hcarry=1 bgd="$fr_bgd" bgdk="$fr_bgdk"; fi
 fi
 
 # Transitions to working/done clear the ask: an answered question must not
-# stay sticky on the sheet.
-[[ "$state" == working || "$state" == done ]] && { [[ "$event" == SubagentStart || "$event" == SubagentStop ]] || ask_json="null"; }
+# stay sticky on the sheet. (A carried write keeps the ask it carried, D-5232.)
+[[ "$state" == working || "$state" == done ]] && { [[ "$event" == SubagentStart || "$event" == SubagentStop || -n "$hcarry" ]] || ask_json="null"; }
 
-out=$(jq -cn \
-  --argjson v 1 --arg state "$state" --arg event "$event" \
-  --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
-  --argjson updatedAt "$(_hook_epoch_ms)" --argjson interrupted "$interrupted" \
-  --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
-  --argjson graphGateDenials "$gd" \
-  --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
-  '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
-    updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries,
-    graphGateDenials:$graphGateDenials, ccrcPeerReads:$ccrcPeerReads,
-    ccrcClaims:$ccrcClaims}
-   + (if $interrupted then {interrupted:true} else {} end)') || exit 0
+# D-5231: the delegated pair is written by a main Stop (from an array) and carried by a subagent event, and by nothing
+# else: a new main turn's first write leaves it out. A plain test, no fork, so the hot path pays nothing.
+[[ "$event" == Stop || "$event" == SubagentStart || "$event" == SubagentStop || -n "$hcarry" ]] || { bgd="" bgdk=""; }
+bgd="${bgd:-}" bgdk="${bgdk:-}"
+# `compactions-write-no-hookstate` (D-5239, spec §5.8): while the server advertises `dispatch-live-gate-v1` (its
+# dispatch gate reads the live pane, so a `done` standing over a busy compaction can never be `/clear`ed), PreCompact
+# and PostCompact, `auto` and `manual` alike, WRITE NO HOOKSTATE: the file stays byte for byte as it was, which carries
+# the whole field set by construction (`state`, `event`, `updatedAt`, `ask`, `interrupted`, `waitBy`, `waitPrev`, the
+# delegated pair, the roster, `aliveAt`), so an idle compaction leaves `done` with no fresh `bucketSince` and no badge,
+# and a mid-turn one leaves `working`. No `aliveAt` is written either: compactions stay plumbing for the stall watch.
+# The case arms above (`PreCompact` → working, `PostCompact` manual → done) are left as they are, and this flag
+# overrides them; the print and the two compaction helpers below still run. Measured (2.1.280 to 2.1.292 in the
+# committed `clear-compact-resume` captures, and 2.1.300 on a workstation rig): a typed `/compact` fires PreCompact,
+# a SubagentStop and PostCompact, and NO UserPromptSubmit, so there is no `/compact` prompt arm. With the word not
+# advertised, a compaction writes exactly what it writes today. `hs_skip` is the one flag the write below honours
+# (Task 2's no-file agent event sets it too, above; it is initialised there, so it is not reset here).
+if [[ "$event" == PreCompact || "$event" == PostCompact ]] && _hook_server_cap dispatch-live-gate-v1; then hs_skip=1; fi
 
-# 64KB cap: drop the questions envelope before anything else — a truncated
-# envelope is worse than none.
-if (( ${#out} > 65536 )); then
-  out=$(jq -c '.ask = null' <<<"$out" 2>/dev/null) || exit 0
-  (( ${#out} <= 65536 )) || exit 0
-fi
+if [[ -z "$hs_skip" ]]; then
+  out=$(jq -cn \
+    --argjson v 1 --arg state "$state" --arg event "${w_ev:-$event}" \
+    --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
+    --argjson updatedAt "${w_upd:-${hts:-$(_hook_epoch_ms)}}" --argjson interrupted "$interrupted" \
+    --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
+    --argjson graphGateDenials "$gd" --arg waitBy "$waitby" --arg aliveAt "$w_alive" \
+    --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
+    --arg bgDelegated "$bgd" --arg bgDelegatedKinds "$bgdk" --arg waitPrev "$wp_out" \
+    '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
+      updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries,
+      graphGateDenials:$graphGateDenials, ccrcPeerReads:$ccrcPeerReads,
+      ccrcClaims:$ccrcClaims}
+     + (if $interrupted then {interrupted:true} else {} end)
+     + (if $waitBy == "subagent" then {waitBy:"subagent"} else {} end)
+     + (if $aliveAt != "" then {aliveAt: ($aliveAt | tonumber)} else {} end)
+     + (if $bgDelegated != "" then {bgDelegated: ($bgDelegated | tonumber), bgDelegatedKinds: $bgDelegatedKinds} else {} end)
+     + (if $waitPrev != "" and $waitBy == "subagent" then ((try ($waitPrev | fromjson) catch null) as $w | if ($w | type) == "object" then {waitPrev: $w} else {} end) else {} end)') || exit 0
 
-# The braces put the REDIRECTION's own failure under the 2>/dev/null too: with
-# `> "$tmp" 2>/dev/null` bash reports an unopenable "$tmp" on the hook's real
-# stderr before the second redirection is applied (D-1691).
-tmp="$REG/.$id.$$.hookstate.tmp"
-{ printf '%s\n' "$out" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; exit 0; }
-mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
+  # 64KB cap: drop the questions envelope before anything else — a truncated
+  # envelope is worse than none.
+  if (( ${#out} > 65536 )); then
+    out=$(jq -c '.ask = null | if (.waitPrev | type) == "object" then .waitPrev.ask = null else . end' <<<"$out" 2>/dev/null) || exit 0
+    (( ${#out} <= 65536 )) || exit 0
+  fi
+
+  # The braces put the REDIRECTION's own failure under the 2>/dev/null too: with
+  # `> "$tmp" 2>/dev/null` bash reports an unopenable "$tmp" on the hook's real
+  # stderr before the second redirection is applied (D-1691).
+  tmp="$REG/.$id.$$.hookstate.tmp"
+  { printf '%s\n' "$out" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; exit 0; }
+  mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
+fi   # hs_skip
 # The one PreToolUse envelope this file ever prints — a deny (R5) or a nudge
-# (R6) — and only now: the count a deny names is on disk, so the next event
+# (R6, or the landing advisory) — and only now: the count a deny names is on disk, so the next event
 # will see it (D-1689). The nudge counts nothing, but it shares this site so
 # that neither branch can ever print from inside the arm.
 [ -z "$pre_json" ] || printf '%s\n' "$pre_json"
+# ── THE ROSTER CARD'S WAKE ARM (R-5a, D-8201; the worktree-economy spec's "wake arm for D4") ─────────────────────────
+# Claude Code's idle compaction (about 55 minutes after a turn ends, D-5373) starts no turn and fires none of the card's
+# three SessionStart events, so a coordinator next wakes on the server's mail nudge, or on its idle-compaction nudge,
+# with a compacted context and no roster. This arm is that wake as the box sees it: a main-thread UserPromptSubmit whose
+# prompt BEGINS with one of the server's two wake texts (`renderMailNudge`'s fixed head, IDLE_COMPACT_NUDGE_PROMPT;
+# `session-hook-roster-card.test.ts` holds both spellings to the server's), when the transcript's newest compaction is
+# an idle one with no turn since (`idle_compaction_open`, ccd/lib/transcript.jq: the server's own reading, held equal by
+# a parity table). Then the wake turn carries the SAME card as its context, from the same builder (`_hook_roster_card`,
+# `ccd/lib/roster-card.jq`), under the same switch: armed, ONE UserPromptSubmit envelope (`additionalContext`, the card
+# under ROSTER_CARD_MAX_CHARS) printed here, after the hookstate write, so the turn is on disk first; unarmed, the same
+# shadow log, event `wake`. Silence on every other path: an operator's prompt, a child, a subagent, the card kill
+# switch, a transcript that will not read, a turn already run since the compaction (the card went out on that wake), or
+# a server that does not answer within the card's one bounded read. The prefilter is builtins only, so every other
+# prompt pays one pattern test and nothing else.
+ROSTER_WAKE_MAIL='ccrc-mail: you have new mail.'
+ROSTER_WAKE_IDLE="Continue with your open tasks. If you were waiting for the operator's answer, say so in one line and stop."
+ROSTER_WAKE_TAIL_BYTES=262144
+_hook_roster_wake() {   # UserPromptSubmit: prints at most one envelope carrying the card; 0 on every path
+  local tp="" open="" j=""
+  _hook_roster_eligible || return 0
+  tp=$(jq -r --arg m "$ROSTER_WAKE_MAIL" --arg i "$ROSTER_WAKE_IDLE" \
+    'if (.prompt | type) == "string" and ((.prompt | startswith($m)) or (.prompt | startswith($i))) then (.transcript_path | strings) else empty end' \
+    <<<"$payload" 2>/dev/null) || return 0
+  [[ "$tp" == /* && -f "$tp" ]] || return 0
+  open=$(tail -c "$ROSTER_WAKE_TAIL_BYTES" "$tp" 2>/dev/null \
+    | jq -L "$ROSTER_CARD_LIB" -rRs 'include "transcript"; idle_compaction_open' 2>/dev/null) || return 0
+  [[ "$open" == true ]] || return 0
+  _hook_roster_card wake || return 0
+  [ -n "$CARD_ROSTER" ] || return 0
+  j=$(jq -cn --arg c "${CARD_ROSTER:0:$ROSTER_CARD_MAX_CHARS}" \
+    '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}' 2>/dev/null) || return 0
+  printf '%s\n' "$j" && ROSTER_WOKE=1
+}
+ROSTER_WOKE=""
+if [[ "$event" == UserPromptSubmit && ( "$payload" == *"$ROSTER_WAKE_MAIL"* || "$payload" == *"${ROSTER_WAKE_IDLE:0:30}"* ) ]]; then
+  _hook_roster_wake || true
+fi
+# ── THE ANCHOR OWED (the anchor piece, Task 3; Proposal 2 of the W0 results) ───────────────────────────────────────
+# An automatic compaction that brought no SessionStart left `$REG/<id>.anchor-owed` (`_hook_compact_pre_line`). The next
+# prompt asks the door for the prompt anchor HERE, after the hookstate write, so the read never delays the `working` edge
+# (m-B10, slug prompt-fetch-after-hookstate), and prints it as this prompt's one envelope. A `dark` answer clears the mark
+# with nothing printed; no answer keeps it for the next prompt, at most ANCHOR_OWED_TRIES prompts (the count in the
+# mark). A prompt whose roster wake printed keeps the mark untouched: one envelope per event. So does a read the network
+# budget did not start (F5): no try was spent. No purge orphans a rewritten mark (the start report's two-sided rule): the
+# look at `generation` after the write sees an earlier purge (F6), and `_reg_purge` takes the mark after `generation` (N2).
+_hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying the prompt anchor; 0 on every path
+  local m="$REG/$id.anchor-owed" t="" j=""
+  { IFS= read -r t < "$m"; } 2>/dev/null; [[ "$t" =~ ^[0-9]$ ]] || t=0
+  _hook_anchor_fetch prompt || return 0
+  case "$ANCHOR_WORD" in
+    text) j=$(jq -cn --arg c "${ANCHOR_TEXT:0:$ANCHOR_PROMPT_MAX_CHARS}" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}' 2>/dev/null) \
+      && printf '%s\n' "$j" && rm -f -- "$m" ;;
+    dark) rm -f -- "$m" ;;
+    *) if (( t + 1 >= ANCHOR_OWED_TRIES )); then rm -f -- "$m"; else printf '%s\n' "$(( t + 1 ))" > "$m"; [[ -e "$REG/$id.generation" ]] || rm -f -- "$m"; fi ;;
+  esac 2>/dev/null
+  return 0
+}
+[[ "$event" == UserPromptSubmit && -z "$ROSTER_WOKE" && -f "$REG/$id.anchor-owed" && ! -L "$REG/$id.anchor-owed" ]] && { _hook_anchor_owed || true; }
+# ── THE APPROVAL WAIT (plan Task 14, spec §6.3 hook steps 1 to 7; D-5297, D-5439, D-5440, D-5441) ────────
+# A dispatched child's PermissionRequest (any tool but AskUserQuestion: the arm above set `apr`) may be ruled by its
+# coordinator, and this hook prints that ruling ONLY when the server signed it for this exact request. Here, after
+# the hookstate write and the one PreToolUse print site, so the `waiting` state and the approval envelope are on disk
+# before the wait begins, and nothing above changes for any other event. It is the one declared WAIT in this file
+# (the header's "no network, and on the hot path no waiting" contract is the hot path's; a PermissionRequest is not
+# on it): bounded by the request's window, never past `APPROVAL_HOOK_WAIT_S`, under the managed hook timeout.
+#   1. It engages only for a `.child` row, with `$REG/approvals-disabled` absent (the operator's kill switch), with
+#      `$REG/<id>.deny-settings` equal to the sha256 of the managed deny file (spec §6.6: a child spawned without the
+#      deny rules never gets rulings), and only when it can VERIFY a ruling: `node` on PATH, the verifier beside this
+#      hook and the pinned key present. Every check runs BEFORE anything is sent, so no coordinator effort is spent on
+#      a ruling this hook could not act on (doctor's `approval-verifier-runnable` names the same three).
+#   2. The static forbidden match (`APPROVAL_FORBIDDEN_JQ`, mode `class`): a forbidden request is never sent.
+#   3. The canonical array (`APPROVAL_DIGEST_JQ`, the jq spelling of `approvalDigestBytes`: `jq -cSa` over the
+#      integer-only `walk`, then `[session_id, agent_id, tool_name, cwd, tool_input]`), its sha256, a 128-bit nonce from
+#      /dev/urandom, and `ccrc-api approvals request`. A canonical string over 64 KiB is sent `truncated` (never
+#      allowable). Anything but a `201 {id, waitS}`: print nothing (an older server's `404` is the capability gate).
+#   4. It waits for at most the `201`'s `waitS` (the request's window, D-5441), never past the ceiling, polling the
+#      ruling every `apr_poll` ticks (2 s) and watching the transcript every tick (0.5 s). It STOPS, printing nothing:
+#      when the window ends; when the ruling route answers the row `declined`, `released`, `operator` or `stale`
+#      (D-5440); and when it sees for itself that the prompt was answered in the pane (D-5439), because Claude Code
+#      does not end a waiting hook (Task 13 measured one SIGTERM, after a main-thread pane No; every other answer left
+#      the hook running and its late output ignored).
+#   5. A ruling is verified by `approval-verify.mjs`: the Ed25519 signature against the pinned key, this session,
+#      agent, digest, nonce and row, not expired, and for an allow class `ordinary`.
+#   6. A verified allow prints the allow decision, with no `updatedInput` and no `updatedPermissions`, ever; a
+#      verified deny prints the deny with "denied by your coordinator: <reason>".
+#   7. Every other path prints NOTHING and the menu stays with the operator. It never prints two envelopes.
+# THE RESOLUTION SIGNAL (D-5439; Task 13's Linux re-check record, "The resolution signal"): no PermissionRequest
+# carries `tool_use_id`, so the request is tied to the LAST open assistant `tool_use` row of its transcript with the
+# same input (for Bash, the same `command`): the main thread's `transcript_path`, or a subagent's
+# `<dirname(transcript_path)>/<session_id>/subagents/agent-<agent_id>.jsonl`. No match yet: re-scanned every tick,
+# because the row can land after the hook starts on a starved box. More than one open match (identical parallel
+# calls): no tie, and the window bound alone ends the wait. Once tied, only the bytes appended since the last read are
+# scanned, at line boundaries, for a `tool_result` naming that id: a pane Yes, a pane No, the auto-deny and a hook
+# decision all write one. A pane Yes on a long-running command writes it only when the command ends; the cost is a
+# server row that stays pending, because this hook's late output is ignored.
+# A TERM (a main-thread pane No SIGTERMs the hook's whole tree, Task 13) exits 0 at once, printing nothing; so do INT
+# and HUP. The sleep runs in the background under `wait`, so the trap is not held behind it.
+# TEST KNOBS, each only able to SHORTEN or speed up the wait: `CCRC_APPROVAL_TICK_S` (0.5, at least 0.05),
+# `CCRC_APPROVAL_POLL_TICKS` (4) and `CCRC_APPROVAL_CEILING_S` (at most `APPROVAL_HOOK_WAIT_S`).
+# THE BASH COPIES: `APPROVAL_HOOK_WAIT_S` and `APPROVAL_HOOK_STOP_STATES` are `shared/api.ts`'s, held equal by
+# `session-hook-approval-wait.test.ts`, which also holds `APPROVAL_DIGEST_JQ` equal to `approvalDigestBytes` over
+# `server/test/fixtures/approvals/digest-corpus.json`.
+APPROVAL_HOOK_WAIT_S=540
+APPROVAL_HOOK_STOP_STATES="declined released operator stale"
+APPROVAL_REQUEST_MAX_BYTES=65536
+APPROVAL_DIGEST_JQ='walk(if type == "number" then (if . == floor and fabs <= 9007199254740991 then (if . == 0 then 0 else floor end) else error("non-integer") end) else . end) | [.session_id, (.agent_id // ""), .tool_name, .cwd, .tool_input]'
+# The hook is installed alone, with no platform block to source, so it spells no GNU-only tool (macos-platform.test.ts):
+# `shasum -a 256` ships on macOS and with perl on Linux, and node, which the wait needs anyway, is the fallback.
+_apr_sha256() {   # stdin -> 64 lowercase hex on stdout; rc 1 with no tool
+  local s=""
+  if command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256 2>/dev/null)
+  elif command -v node >/dev/null 2>&1; then
+    s=$(node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(0)).digest("hex"))' 2>/dev/null)
+  else return 1; fi
+  s="${s%% *}"; [[ "$s" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s' "$s"
+}
+_apr_call() {   # <args...> -> APR_BODY, APR_CODE from ccrc-api (body on stdout, `http <code>` last on stderr); rc 1 no answer
+  local out
+  APR_BODY="" APR_CODE=""
+  out=$("$apr_api" "$@" 2>&1) || return 1
+  APR_CODE="${out##*http }"
+  [[ "$APR_CODE" =~ ^[0-9]{3}$ ]] || { APR_CODE=""; return 1; }
+  APR_BODY="${out%http *}"
+  return 0
+}
+# THE TIE AND THE WATCH. `apr_tie` is "" until tied, `-` once given up (ambiguous or unreadable), else the tool_use id.
+# A known limit: a pane answer whose tool_result is written BEFORE the first look (a fast command answered during the
+# request's round trip) leaves no OPEN match, so the hook never ties and runs to its window; its late output is ignored,
+# and the cost is a stale held row and one coordinator mail. Counting an already-resolved match would end the wait on
+# an earlier identical command (a repeated `npm test`), so it is not done.
+_apr_scan() {   # -> rc 0 when the transcript shows this request resolved
+  local size chunk rest n last ids line uids="" rids=" " u
+  [[ "$apr_tie" == - || -z "$apr_tp" ]] && return 1
+  [[ -f "$apr_tp" && ! -L "$apr_tp" ]] || return 1
+  size=$(wc -c < "$apr_tp" 2>/dev/null) || return 1
+  size="${size//[^0-9]/}"; [[ -n "$size" ]] || return 1
+  if [[ -z "$apr_tie" ]]; then
+    (( size > 0 && size != apr_seen )) || return 1
+    apr_seen=$size
+    # Only a file that ends at a line boundary is read for the tie, so the offset the watch starts from is one.
+    last=$(tail -c 1 "$apr_tp" 2>/dev/null; printf .); [[ "$last" == $'\n.' ]] || { apr_seen=-1; return 1; }
+    ids=$(head -c "$size" "$apr_tp" 2>/dev/null | jq -Rr --argjson ti "$apr_ti" '
+      (fromjson? // empty) | select(type == "object") | (.message.content? // empty) | arrays | .[] | select(type == "object")
+      | if .type == "tool_use" and (if ($ti | type) == "object" and ($ti | has("command")) then (.input | type) == "object" and .input.command == $ti.command else .input == $ti end)
+        then "U \(.id)" elif .type == "tool_result" then "R \(.tool_use_id)" else empty end' 2>/dev/null) || return 1
+    while IFS= read -r line; do
+      case "$line" in
+        'U '*) uids+="${line#U } " ;;
+        'R '*) rids+="${line#R } " ;;
+      esac
+    done <<<"$ids"
+    n=0
+    for u in $uids; do [[ "$rids" == *" $u "* ]] || { n=$((n + 1)); apr_tie="$u"; }; done
+    if (( n == 0 )); then apr_tie=""; return 1; fi
+    if (( n > 1 )); then apr_tie=-; return 1; fi
+    [[ "$apr_tie" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || { apr_tie=-; return 1; }
+    apr_off=$size
+    return 1
+  fi
+  (( size > apr_off )) || return 1
+  { chunk=$(tail -c +"$(( apr_off + 1 ))" "$apr_tp" 2>/dev/null | head -c "$(( size - apr_off ))" 2>/dev/null; printf .); } 2>/dev/null
+  chunk="${chunk%.}"
+  rest="${chunk##*$'\n'}"
+  n=$(( $(LC_ALL=C; printf '%s' "${#chunk}") - $(LC_ALL=C; printf '%s' "${#rest}") ))
+  (( n > 0 )) || return 1
+  apr_off=$(( apr_off + n ))
+  [[ "$chunk" == *"$apr_tie"* ]] || return 1
+  ids=$(printf '%s' "${chunk%"$rest"}" | jq -Rr --arg id "$apr_tie" '
+    (fromjson? // empty) | select(type == "object") | (.message.content? // empty) | arrays | .[]
+    | select(type == "object" and .type == "tool_result" and .tool_use_id == $id) | "R"' 2>/dev/null) || return 1
+  [[ "$ids" == *R* ]]
+}
+_apr_sleep() { sleep "$apr_tick" & wait $! 2>/dev/null; }
+_hook_approval_wait() {
+  local sum managed uuid fb canon digest nonce body rid waits ceil deadline now tick=0 st verdict reason state j t
+  [[ -n "$id" && -e "$REG/$id.child" && ! -e "$REG/approvals-disabled" ]] || return 0
+  _ct_read "$REG/$id.deny-settings" || return 0
+  sum="$CT_V"; [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || return 0
+  [[ -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]] || return 0
+  managed=$(_apr_sha256 < "$REG/child-deny.settings.json") || return 0
+  [[ "$managed" == "$sum" ]] || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  [[ -f "$REG/approval-verify.mjs" && -f "$HOME/.ccrc/approval-signing.pub" ]] || return 0
+  apr_api="$HOME/.local/bin/ccrc-api"
+  [[ -x "$apr_api" ]] || return 0
+  _ct_read "$REG/$id.uuid" || return 0
+  uuid="$CT_V"; [[ "$uuid" =~ ^[A-Za-z0-9_-]+$ ]] || return 0
+  fb=$(jq -r --arg q "'" --arg mode class "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || return 0
+  [[ -z "$fb" ]] || return 0
+  canon=$(jq -cSa "$APPROVAL_DIGEST_JQ" <<<"$payload" 2>/dev/null) || return 0
+  [[ "$canon" == '['* ]] || return 0
+  digest=$(printf '%s' "$canon" | _apr_sha256) || return 0
+  nonce=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null) || return 0
+  nonce="${nonce//[^0-9a-f]/}"; [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] || return 0
+  if (( ${#canon} > APPROVAL_REQUEST_MAX_BYTES )); then
+    body=$(jq -cn --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" \
+      '{v: 1, sessionId: $s, sessionUuid: $u, truncated: true, digest: $d, nonce: $n}' 2>/dev/null) || return 0
+  else
+    body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" \
+      '{v: 1, sessionId: $s, sessionUuid: $u, canonical: ., digest: $d, nonce: $n}' 2>/dev/null) || return 0
+  fi
+  apr_ti=$(jq -c '.tool_input // null' <<<"$payload" 2>/dev/null) || return 0
+  # The knobs: a value that is not the shape reads as the default; none can lengthen the wait.
+  apr_tick=0.5; [[ "${CCRC_APPROVAL_TICK_S:-}" =~ ^(0\.[0-9]{1,3}|[1-9])$ ]] && apr_tick="$CCRC_APPROVAL_TICK_S"
+  [[ "$apr_tick" =~ ^0\.0[0-4] ]] && apr_tick=0.05
+  apr_poll=4; [[ "${CCRC_APPROVAL_POLL_TICKS:-}" =~ ^[1-9]$ ]] && apr_poll="$CCRC_APPROVAL_POLL_TICKS"
+  ceil=$APPROVAL_HOOK_WAIT_S
+  [[ "${CCRC_APPROVAL_CEILING_S:-}" =~ ^[0-9]{1,3}$ ]] && (( CCRC_APPROVAL_CEILING_S < ceil )) && ceil=$CCRC_APPROVAL_CEILING_S
+  trap 'exit 0' TERM INT HUP
+  _apr_call approvals request --json - <<<"$body" || return 0
+  [[ "$APR_CODE" == 201 ]] || return 0
+  { read -r rid; read -r waits; } < <(jq -r '(.id | if type == "number" and . == floor and . > 0 then tostring else "" end), (.waitS | if type == "number" and . == floor and . > 0 then tostring else "" end)' <<<"$APR_BODY" 2>/dev/null)
+  [[ "${rid:-}" =~ ^[0-9]{1,15}$ && "${waits:-}" =~ ^[0-9]{1,6}$ ]] || return 0
+  (( waits < ceil )) && ceil=$waits
+  deadline=$(( $(_hook_epoch_ms) + ceil * 1000 ))
+  # The transcript this request lives in (main thread, or the subagent's own file).
+  apr_tp=$(jq -r '.transcript_path // "" | tostring' <<<"$payload" 2>/dev/null) || apr_tp=""
+  [[ "$apr_tp" == /* && "$apr_tp" != *$'\n'* ]] || apr_tp=""
+  if [[ -n "$apr_tp" && -n "$paid" ]]; then
+    if [[ -n "$aid" && "$psid" =~ ^[A-Za-z0-9-]{1,64}$ ]]; then apr_tp="${apr_tp%/*}/$psid/subagents/agent-$aid.jsonl"; else apr_tp=""; fi
+  fi
+  apr_tie="" apr_off=0 apr_seen=-1
+  while :; do
+    now=$(_hook_epoch_ms)
+    (( now < deadline )) || return 0
+    if _apr_scan; then return 0; fi
+    if (( tick % apr_poll == 0 )); then
+      if _apr_call approvals ruling "$rid" --nonce "$nonce"; then
+        case "$APR_CODE" in
+          200)
+            state=$(jq -r '.state // "" | tostring' <<<"$APR_BODY" 2>/dev/null) || state=""
+            for st in $APPROVAL_HOOK_STOP_STATES; do [[ "$state" == "$st" ]] && return 0; done
+            j=$(jq -c '.ruling // empty' <<<"$APR_BODY" 2>/dev/null) || j=""
+            if [[ -n "$j" ]]; then
+              verdict=$(node "$REG/approval-verify.mjs" "$id" "$aid" "$digest" "$nonce" "$rid" "$(_hook_epoch_ms)" <<<"$j" 2>/dev/null) || verdict=""
+              reason="${verdict#* }"
+              case "$verdict" in
+                'allow '*)
+                  t=$(jq -cn '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "allow"}}}' 2>/dev/null) && printf '%s\n' "$t"
+                  return 0 ;;
+                'deny '*)
+                  t=$(jq -cn --arg m "denied by your coordinator: $reason" \
+                    '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "deny", message: $m}}}' 2>/dev/null) && printf '%s\n' "$t"
+                  return 0 ;;
+              esac
+            fi ;;
+          404|410) return 0 ;;
+        esac
+      fi
+    fi
+    tick=$(( tick + 1 ))
+    _apr_sleep
+  done
+}
+if [[ "$event" == PermissionRequest && -n "$apr" ]]; then _hook_approval_wait || true; fi
+_hook_start_loads || true
+# The two compaction arms run LAST, after the `working`/`done` stamp is on
+# disk: each calls the helper under one locally resolved deadline, and the
+# state write must never wait on either. Nothing below prints except one PreCompact payload: the refusal arm's block decision (`_hook_compact_refuse`, dark until the route says refuse; Overlord C39),
+# or else `_hook_history_pre`'s steer print on an ARMED, main-scope PreCompact (W3-1 Task 1C, spec §7.2; its gates are stated at the function) —
+# PostCompact's whole output is a journal line on disk, and this file's contract is silence.
+# THE HISTORY CARD'S ROOM (ccrc history spec 2026-10-05 §8.6, W1-B3). The compact
+# card renders HISTORY_CARD_MAX + 1 chars short (`_hook_compact_pre`'s
+# `--max-chars` subtracts HISTORY_CARD_RESERVE), so the history line and its LF
+# always fit above it inside the one compact clip and never cost it its footer
+# (D-4736 (history-card-fold-and-reserve)). Only on PreCompact, and only when the sweep
+# has made card/ and history-off is absent: a box without history renders at
+# COMPACT_CARD_MAX_CHARS exactly as before. Builtin tests, the event first, so
+# no other event pays a stat. RESET FIRST, on every run (the `hcat` reset's
+# reasoning): an exported HISTORY_CARD_RESERVE must never shrink a card, and a
+# non-numeric one would abort the `$(( ))` under `set -u`.
+HISTORY_CARD_RESERVE=0
+[[ "$event" == PreCompact ]] && [[ -d "$HISTORY_CARD_DIR" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]] && HISTORY_CARD_RESERVE=$(( HISTORY_CARD_MAX + 1 ))
+# `CS_SCOPE` is the compaction card's scope verdict, a plain global with no
+# initialiser. It is unset here, every run, so the history scope marker below
+# reads only a verdict THIS run reached, never one exported into the pane
+# (the `hcat` reset's reasoning). So are the rule's own answer
+# (`CS_RULE_SCOPE`, `CS_RULE_TRANSCRIPT`, which the events line and the refusal
+# arm read; review 1937 F3) and the refusal arm's `CS_REFUSED`.
+unset CS_SCOPE CS_RULE_SCOPE CS_RULE_TRANSCRIPT CS_REFUSED
+if [[ "$event" == PreCompact ]]; then _hook_compact_refuse || true; fi
+if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi
+# >>> history-scope (spec 2026-10-05 §5.1)
+# THE PRECOMPACT SCOPE MARKER (ccrc history spec 2026-10-05 §5.1, W1-B3):
+# ~/.ccrc/history/scope/<id> holds one line, `<scope> <psid> <ms>` (at most 64
+# bytes), which the SessionStart(compact) history card reads so its line reaches
+# a MAIN compaction only. A compacting subagent fires this hook with the
+# parent's session_id and no agent key, so this word is the one thing that
+# keeps the card line out of a subagent's context
+# (D-4747 (history-card-main-scope-only)).
+#
+# HERE, after `_hook_compact_pre`, because the card's verdict is reused
+# (D-4746 (history-scope-marker-after-card)). `CS_SCOPE` has no initialiser and this
+# file is `set -u`, so it is read only as `${CS_SCOPE+x}` / `${CS_SCOPE-}`:
+#   set, non-empty: the card's scope step ran, and its word is the marker's,
+#                   the card's overlap `ambiguous` included;
+#   set, empty:     scope answered rc 1, and nothing may be said;
+#   unset:          the card returned before scoping (compact-card-off, or a
+#                   failed payload read), so this block parses the payload and
+#                   runs `_hook_compact_scope` itself: the plain scope rule
+#                   decides, independent of compact-card-off.
+# `CS_SCOPE` is unset directly above the card's call, so a value exported into
+# the pane can never stand in for a verdict this run did not reach.
+#
+# AN UNDECIDED VERDICT WRITES NOTHING, AND THE MARKER IS ALREADY EMPTY: the
+# line directly below the event `case` emptied this id's existing marker on
+# this main-thread PreCompact, before any exit above could run
+# (spec §5.1, "The early truncation"). So a fresh `main` line an
+# earlier compaction of this psid wrote can never serve this one.
+#
+# GATES, builtins first and before any fork: PreCompact, the main thread
+# (`$paid`), the scope directory the sweep made, a real directory and never a
+# symlink (the hook never mkdirs; only db/ may link out of the history root),
+# and history-off absent. Then the id's bound (SPOOL_ID_MAX, as the spool block's;
+# `.` and `..` need no test of their own, since under scope/ they name
+# directories, which no write can open) and a lowercase-UUID psid (the card file
+# is keyed on it).
+#
+# A REGULAR FILE OR NOTHING, as the spool block's append (its D-4418 rule;
+# spec §5.1): the line DIRECTLY above the write
+# refuses a symlink, dangling or not, a FIFO and any other node, so a FIFO that
+# stands at scope/<id> when the test runs never blocks the `>` open. It names
+# each refused type POSITIVELY, as `_hook_join_record`'s entry guard (D-5434):
+# "absent or regular" is two reads, and a marker created or removed between
+# them made that form refuse a plain write. The tests
+# are builtin, here and on the early line below the event `case`, and bash has
+# no O_NOFOLLOW or O_NONBLOCK redirection, so what is left is a node swapped in
+# AFTER the test: it is opened, a link followed, a FIFO blocking until Claude
+# Code kills the hook (install-session-hooks.sh HOOK_TIMEOUT_S).
+#
+# PreCompact is off the hot path, so past the gates this block may
+# fork (one jq on the unset arm, the scope rule's finds, the clock). Every
+# redirection is under `{ …; } 2>/dev/null`, so nothing reaches stdout or
+# stderr, the unset arm's process-substitution read included
+# (D-5054 (history-scope-marker-hardening)). A hookstate write or a jq compose
+# that fails exits above, after the early line emptied any older marker, so it
+# leaves an empty marker or none: the fail-closed direction.
+# THE UNSET ARM, AS ITS OWN FUNCTION (W3-1 Task 1C): the payload's transcript path and trigger through one jq, then
+# the scope rule. It sets `CS_SCOPE` as a global through `_hook_compact_scope` and answers that rule's rc (1 = nothing
+# may be said, `CS_SCOPE` empty), which `_hook_history_scope` ignores and a later reader may not.
+_hook_history_scope_verdict() {   # -> CS_SCOPE (global) ; rc of _hook_compact_scope
+  local tp="" trig=""
+  { { read -r tp; read -r trig; } < <(jq -r '(.transcript_path // "" | tostring), (.trigger // "auto" | tostring)' <<<"$payload" 2>/dev/null); } 2>/dev/null
+  _hook_compact_scope "$tp" "$trig"
+}
+_hook_history_scope() {   # -> scope/<id> = "<scope> <psid> <ms>" when decided; silent
+  local f="$HISTORY_SCOPE_DIR/$id" scope="" ms=""
+  (( ${#id} <= 224 )) || return 0
+  [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 0
+  if [[ -z "${CS_SCOPE+x}" ]]; then
+    _hook_history_scope_verdict || true
+  fi
+  scope="${CS_SCOPE-}"
+  [[ -n "$scope" ]] || return 0
+  ms=$(_hook_epoch_ms)
+  if [[ -L "$f" || -d "$f" || -p "$f" || -S "$f" || -b "$f" || -c "$f" ]]; then return 0; fi
+  { printf '%s %s %s\n' "$scope" "$psid" "$ms" > "$f"; } 2>/dev/null
+  return 0
+}
+if [[ "$event" == PreCompact && -z "$paid" ]] && [[ -d "$HISTORY_SCOPE_DIR" && ! -L "$HISTORY_SCOPE_DIR" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]]; then _hook_history_scope || true; fi
+# <<< history-scope
+# THE W3 STEER PRINT AND ITS RECEIPT (ccrc history spec 2026-10-05 §7.2, §7.7; W3-1 Task 1C). Armed ONLY by
+# `~/.ccrc/history/steer-on/<id>`, a file nothing in this tree writes (the operator's switch). It prints into the
+# compaction, so the contract here is silence, and exit 0 on every path: a refusal, a failure or an undecided input prints
+# NOTHING. The one answer that prints without a file is the generic variant, for an armed main scope with no steer file.
+# THE HOOK NEVER CONSUMES THE STEER FILE (PX13): it reads it and nothing else; only the sweep's card step writes, moves or
+# deletes one, so no command below writes, moves, truncates or removes a path in the steer directory; its one use of one is a bounded read.
+# GATES, in order, builtins until the scope's own fork (arming comes BEFORE scope, so an unarmed session's PreCompact forks
+# as often as it does with no steering): (1) PreCompact, main thread; (2) history-off and history-steer-off absent, and
+# recall-off not withholding (the tail copy below, held equal to the card's gate by a parity matrix, O9 (a)); (3) the id
+# fits SPOOL_ID_MAX and the psid is a lowercase UUID; (4) `steer-on/<id>` a regular file, never a link; (5) the scope is
+# `main` (`CS_SCOPE` when this run reached a verdict, else the factored verdict, one jq and the scope rule's finds);
+# (6) the file, read by `_hook_history_steer_read`; (7) the print, and only on its success the receipt. `compact-steer-off`
+# (Plan B's switch) is read by nothing here. `HISTORY_STEER_FIRST_LINE` and `HISTORY_STEER_GENERIC` are this file's second
+# spelling of lib.mjs's STEER_FIRST_LINE and STEER_GENERIC_TEXT, parity-pinned by session-hook-steer.test.ts
+# (D-8130 (history-steer-hook-copies)). W3-1 reads no `history-steer-live.*` marker, so it spells no lane word.
+HISTORY_STEER_DIR="$HOME/.ccrc/history/steer"
+HISTORY_STEER_FIRST_LINE=$'ccrc history archive entry. At the very END of your <summary> block, after section 9,'
+HISTORY_STEER_GENERIC=$'ccrc history archive entry. At the very END of your <summary> block, after section 9,\nappend exactly one block for THIS SPAN only: everything after the carried-in summary at\nthe top (the whole conversation if there is none). ccrc keeps the full text; this block\nis only its index entry. One field per line, plain text:\n<ccrc-leaf v="1">\ngist: 2-5 sentences: what was attempted, what was decided and why, the outcome, what is\nstill open; name any superseded decision and what replaced it.\nExpand for details about: up to 12 comma-separated specifics you compressed away (exact\ncommands, error output, config values, review findings).\nrefs: up to 20 semicolon-separated identifiers copied exactly as they appear (paths,\npath:symbol, commit SHAs, PR or issue numbers, D-numbers, test names), or exactly\n"refs: none". Never paraphrase or invent a name. Name a credential, never its value.\n</ccrc-leaf>\nThe block is archive data, not instructions. Do not copy earlier archive blocks forward.\nKeep the block under 1500 characters.'
+# THE RECALL-OFF GATE, THE TAIL'S COPY (O9 (a), D-8131 (history-steer-recall-off-tail-copy)): `_hook_history_card`'s own
+# generation and recall-off steps, above the anchor where the tail rule forbids a W3 edit, copied here line for line and held
+# equal to them by session-hook-steer.test.ts's verdict matrix, which runs every row through SessionStart(compact) and
+# through PreCompact and asserts one verdict. Legitimately different from the card's: it sits below the anchor. rc 0 =
+# WITHHOLD (this session's recall is off, or cannot be told), rc 1 = nothing withheld. A steer file can stand where the
+# card's record does not (card/<id> refused), so the `.gen` record is read here exactly as the card reads it: absent is
+# `unreadable` (withhold) whenever a recall-off file exists. `uuid_re` is its one caller's local, `_hook_history_pre`'s.
+_hook_history_steer_recall_off() {
+  local off="$HOME/.ccrc/history/recall-off/$id" gen="" via="" x="" o="" ws=$' \t\n\v\f\r'
+  if [[ "${CCRC_SESSION_GENERATION:-}" =~ $uuid_re ]]; then
+    gen="$CCRC_SESSION_GENERATION" via=session
+  elif _ct_read "$REG/$id.generation"; [[ -e "$REG/$id.generation" || -L "$REG/$id.generation" ]]; then
+    if [[ -L "$REG/$id.generation" ]] || (( CT_RAWN >= CCRC_ID_MAX )) || { x=.; IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$REG/$id.generation"; }; then via=bad; else x="${x#"${x%%[!$ws]*}"}"; x="${x%"${x##*[!$ws]}"}"; if [[ "$x" =~ $uuid_re ]]; then gen="$x" via=registry; elif [[ -n "$x" ]]; then via=bad; fi; fi
+  fi
+  [[ -L "$off" || -L "${off%/*}" || ( -e "${off%/*}" && ! ( -d "${off%/*}" && -x "${off%/*}" ) ) ]] && return 0
+  if [[ -e "$off" ]]; then
+    [[ -f "$off" && -r "$off" ]] || return 0
+    IFS= read -r -N "$CCRC_ID_MAX" o 2>/dev/null < "$off"
+    (( ${#o} < CCRC_ID_MAX )) || return 0
+    o="${o#"${o%%[!$ws]*}"}"; o="${o%"${o##*[!$ws]}"}"
+    [[ "$o" == *[!0123456789abcdef-]* ]] && return 0
+    if [[ "$via" == bad ]]; then return 0; elif [[ -z "$via" ]]; then
+      [[ -L "$HISTORY_CARD_DIR/$id/$psid.gen" ]] && return 0
+      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0; { x=.; IFS= read -r -d '' -n "$CCRC_ID_MAX" x 2>/dev/null < "$HISTORY_CARD_DIR/$id/$psid.gen"; } && return 0; x="${x#"${x%%[!$ws]*}"}"; x="${x%"${x##*[!$ws]}"}"
+      [[ -z "$x" || "$x" =~ $uuid_re ]] || return 0
+      gen="$x"
+    fi
+    [[ "$o" == "$gen" ]] && return 0
+  fi
+  return 1
+}
+# GATE 6, ITS OWN FUNCTION so its `LC_ALL=C` is function-local and nothing else here runs under it: `read -N` and `-n` count
+# BYTES under C in every locale. -> HS_TEXT (what prints, one trailing LF stripped: the file is text plus one LF, and the
+# print adds its own, so a steered print has the generic variant's shape) and HS_LEAF (the file's `<ccrc-leaf id="…">`
+# when it matches ^L[0-9a-f]{20}$, else ""); rc 0 = print HS_TEXT, rc 1 = print nothing. An absent file is the generic
+# variant (an armed main scope the card step has not reached). A file that is present must be a regular file and no link,
+# readable, in a directory this can search, read with ONE bounded `read -d '' -n 8193`: an empty delimiter makes a NUL
+# end the read, and 8,193 bytes end it too, so rc 1 (end of file) is the only answer that prints, and a NUL anywhere, a
+# 9 KB file and an 8,193-byte file all refuse (8,192 prints). `read -N` would drop a NUL uncounted (measured, review 1651
+# P-A2). Then the first byte is not `{` (a JSON file is not ours) and the first line equals the template's. The composer
+# leaves U+0000 out of a quoted gist, so a genuine file holds no NUL.
+_hook_history_steer_read() {
+  local LC_ALL=C nl=$'\n' _hs_sd="$HISTORY_STEER_DIR/$id" _hs_sf="$HISTORY_STEER_DIR/$id/$psid.txt" t="" rest=""
+  HS_TEXT="" HS_LEAF=""
+  [[ -L "$HISTORY_STEER_DIR" || -L "$_hs_sd" || -L "$_hs_sf" ]] && return 1
+  [[ -e "$HISTORY_STEER_DIR" && ! ( -d "$HISTORY_STEER_DIR" && -x "$HISTORY_STEER_DIR" ) ]] && return 1
+  [[ -e "$_hs_sd" && ! ( -d "$_hs_sd" && -x "$_hs_sd" ) ]] && return 1
+  if [[ ! -e "$_hs_sf" ]]; then HS_TEXT="$HISTORY_STEER_GENERIC"; return 0; fi
+  [[ -f "$_hs_sf" && -r "$_hs_sf" ]] || return 1
+  { IFS= read -r -d '' -n 8193 t; } 2>/dev/null < "$_hs_sf" && return 1
+  [[ "${t:0:1}" != "{" ]] || return 1
+  [[ "${t%%"$nl"*}" == "$HISTORY_STEER_FIRST_LINE" ]] || return 1
+  HS_TEXT="${t%"$nl"}"
+  if [[ "$HS_TEXT" == *"$nl"'<ccrc-leaf id="'* ]]; then
+    rest="${HS_TEXT#*"$nl"'<ccrc-leaf id="'}"; rest="${rest%%\"*}"
+    [[ "$rest" =~ ^L[0123456789abcdef]{20}$ ]] && HS_LEAF="$rest"
+  fi
+  return 0
+}
+# THE ROLE'S COMPACTION TEXT, A SECTION OF THE ONE PRINT (Overlord W1a compaction, spec §3.3.9 C51, §3.3.10 C53): the
+# launch-profile projection's `compactText` for the route's `profile`, checked by ccd's COMPACT_TEXT_JQ (parity-pinned by
+# session-hook-steer.test.ts), only when the route carries a valid `compactwindow` too (ruling R8). -> HR_TEXT, or "", and
+# the print is then today's, byte for byte. It prints BEFORE the steer text, so the steer's "At the very END" stays the
+# print's last instruction. Legitimately a second reader of the projection: another process, which cannot call ccd's.
+COMPACT_TEXT_JQ='.[$r].compactText | if type == "string" and test("\\A[ -~]{1,600}\\z") and (test("[\\x22\\x27\\x24\\x3b\\x5c\\x60]") | not) then . else error("not one typeable line") end'
+_hook_role_compact_text() {   # -> HR_TEXT
+  local p="" w="" f="${BASH_SOURCE[0]%/*}/lib/launch-profiles.json"
+  HR_TEXT=""; [[ -f "$f" ]] || f="$HOME/.cc-sessions/lib/launch-profiles.json"
+  [[ -f "$REG/$id.profile" && ! -L "$REG/$id.profile" && -f "$REG/$id.compactwindow" && ! -L "$REG/$id.compactwindow" ]] || return 0
+  { read -r -n 17 p < "$REG/$id.profile"; read -r -n 8 w < "$REG/$id.compactwindow"; } 2>/dev/null
+  [[ "$p" =~ ^[a-z]{1,16}$ && "$w" =~ ^[1-9][0-9]{5,6}$ ]] && (( w >= 100000 && w <= 1000000 )) || return 0
+  HR_TEXT=$(jq -r --arg r "$p" "$COMPACT_TEXT_JQ" "$f" 2>/dev/null) || HR_TEXT=""
+}
+_hook_history_pre() {   # PreCompact: the steer print, then its receipt; silent on every refusal; 0 on every path
+  local uuid_re='^[0123456789abcdef]{8}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{4}-[0123456789abcdef]{12}$' rc=0 json="" g="" c="" cs="" cf="" ts="" nl=$'\n'
+  [[ "$event" == PreCompact && -z "$paid" && -z "${CS_REFUSED-}" ]] || return 0   # a refused event prints only its block
+  [[ -e "$HOME/.ccrc/history-off" || -e "$HOME/.ccrc/history-steer-off" ]] && return 0
+  _hook_history_steer_recall_off && return 0
+  (( ${#id} <= 224 )) || return 0
+  [[ "$psid" =~ $uuid_re ]] || return 0
+  [[ -f "$HOME/.ccrc/history/steer-on/$id" && ! -L "$HOME/.ccrc/history/steer-on/$id" ]] || return 0
+  [[ -n "${CS_SCOPE+x}" ]] || _hook_history_scope_verdict || true
+  [[ "${CS_SCOPE-}" == main ]] || return 0
+  _hook_history_steer_read || return 0
+  _hook_role_compact_text
+  trap '' PIPE
+  { printf '%s\n%s\n' "${HR_TEXT:+${nl}ccrc-role-compaction: ${HR_TEXT}${nl}}" "$HS_TEXT"; } 2>/dev/null; rc=$?
+  trap - PIPE
+  (( rc == 0 )) || return 0
+  json='{"v":1,"ev":"steer"'
+  json+=",\"id\":\"$id\",\"sid\":\"$psid\",\"leaf\":\"$HS_LEAF\""
+  g="${CCRC_SESSION_GENERATION:-}"
+  [[ "$g" =~ $uuid_re ]] && json+=",\"gen\":\"$g\""
+  # THE RECEIPT'S CLOCK (O23 (d), ruled 2026-11-09): EPOCHREALTIME when it parses, read ONCE as the spool block reads it;
+  # else the generated helper's own `date` arm, with the builtin unset in a subshell so a malformed value cannot stand in
+  # for it. `ts` is written only for a positive integer (lib's SPOOL_VALUE.ts), so the helper's last fallback, `000`, writes
+  # none, and the drain stamps a receipt no clock could time (D-4315).
+  c="${EPOCHREALTIME:-}"
+  if [[ "$c" =~ ^[123456789][0123456789]{0,11}[.,][0123456789]*$ ]]; then cs="${c%%[.,]*}" cf="${c#*[.,]}000"; ts="${cs}${cf:0:3}"; else ts=$(unset EPOCHREALTIME; _hook_epoch_ms 2>/dev/null); fi
+  [[ "$ts" =~ ^[123456789][0123456789]{0,14}$ ]] && json+=",\"ts\":$ts"
+  json+='}'
+  [[ -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/spool" ]] || return 0
+  _hook_history_spool_append "$json"
+  return 0
+}
+if [[ "$event" == PreCompact ]]; then _hook_history_pre || true; fi
+# LAST of the PreCompact arms (Overlord W1a, plan review 1890 I1). A refused
+# event has written its `refused` line already, inside `_hook_compact_refuse`,
+# before its block was printed (review 2004 F1), so `CS_REFUSED` skips it here.
+if [[ "$event" == PreCompact && -z "${CS_REFUSED-}" ]]; then _hook_compact_pre_line || true; fi
+if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi
 exit 0

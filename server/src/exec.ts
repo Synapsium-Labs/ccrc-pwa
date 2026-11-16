@@ -1,28 +1,13 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import { homedir } from 'node:os';
 import type { PaneProbe } from '../../shared/api.js';
+import { readTmuxSocketSetting, tmuxRoute, tmuxTarget, type TmuxSocketSetting } from '../../shared/tmux-target.js';
 
-/**
- * THE VOCABULARY FOR "WE DID NOT MEASURE THIS", stated once here and used
- * unchanged at every seam that needed it (§1.7). Two shapes, and which one a
- * field gets is decided by whether the field can be absent at all:
- *
- *   • OPTIONAL field on a record that crosses a version boundary — ABSENCE is
- *     the unmeasured answer, presence is a measurement. `ExecResult.killed` and
- *     `ExecResult.signal` below: an older agent omits them, and absence-permits
- *     is the wire rule (`shared/api.ts`, additive-only). A present `null` on
- *     `signal` is a MEASUREMENT — "it died of no signal" — and is not the same
- *     fact as the key being missing.
- *   • REQUIRED field, where absence is not spellable — unmeasured gets its OWN
- *     TOKEN, `UNMEASURED`, which is never a member of the measured domain.
- *     `CcdResult.killed`/`.signal` (`lifecycle.ts`) take this shape.
- *
- * The rule both shapes serve: a caller that handles "false" differently from "we
- * do not know" must never receive the same value for both. The third face of the
- * same rule lives at the render seam — a value this build cannot NAME is shown
- * as itself, never as a member it is not (`SessionLine.tsx`'s spawn chip).
- */
-export const UNMEASURED = 'unmeasured';
-export type Unmeasured = typeof UNMEASURED;
+/** The unmeasured vocabulary lives in `./unmeasured.js` (D-5896): it is a word, not an exec, and `lifecycle.ts`
+ *  reached `node:child_process` only to read it. Re-exported so every other import keeps working. */
+export { UNMEASURED, type Unmeasured, type NotRan, type NotRanReason } from './unmeasured.js';
+import type { NotRan } from './unmeasured.js';
 
 /** `killed` is OPTIONAL and that is not a style choice: 249 bare
  *  `{code, stdout, stderr}` literals across 32 test files make a required field
@@ -36,11 +21,21 @@ export type Unmeasured = typeof UNMEASURED;
  *  `signal` that is the only evidence it was cut short at all. Same optional
  *  discipline: absent = the peer did not tell us; `null` = it did, and there was
  *  no signal. */
-export interface ExecResult {
+interface ExecAnswer {
   code: number; stdout: string; stderr: string;
   killed?: boolean;
   signal?: string | null;
 }
+
+/** D-6034, D-6840: the `ran` discriminant; it is required on both arms, `ran: true` on the ran arm and `ran: false` on the not-ran arm.
+ *  `ran: true` is a command that ran and exited; `ran: false` is a runner's own answer that it never ran (or may not have); `code: 1` and `stderr`
+ *  stay forged on that arm exactly as before, so a reader of `code` alone is unchanged. A reader that classifies a
+ *  refusal must narrow on `ran === false` FIRST: no refusal, die or composition error is ever read off a forged code.
+ *  An agent older than the arm answers no `ran` key; `asExecResult` (`remote/runner.ts`) reads that as `ran: true`,
+ *  the answer it always was. */
+export type ExecResult =
+  | (ExecAnswer & { ran: true })
+  | (ExecAnswer & NotRan);
 export type Runner = (cmd: string, args: string[]) => Promise<ExecResult>;
 
 /** §1.7: `local` mode is a PRODUCER of the cut-short measurement too, and it used
@@ -57,21 +52,31 @@ export type Runner = (cmd: string, args: string[]) => Promise<ExecResult>;
  *  in `error.signal`, and `error.killed` stays FALSE because node did not do it.
  *  Dropping `signal` here is what made that case indistinguishable from a clean
  *  `ccd` refusal. */
+/** D-8270: the tmux socket setting of THIS box, read under the HOME its `ccd` reads (`$HOME/.ccrc/tmux-socket`), at
+ *  every call, so the local Tmux adapter and the local drawer follow ccd's own lookup (`_tmx_sock`). */
+export const hostTmuxSocket = (): TmuxSocketSetting => readTmuxSocketSetting(homedir(), fs);
+
 export const realRunner: Runner = (cmd, args) =>
   new Promise((resolve) => {
-    execFile(cmd, args, { maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+    // D-8270: a tmux call runs on the socket this box's setting names (`tmuxRoute`); anything else passes untouched.
+    const routed = tmuxRoute(cmd, args, hostTmuxSocket);
+    execFile(routed.file, [...routed.args], { maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
       const e = err as (NodeJS.ErrnoException & { code?: number; killed?: boolean; signal?: string }) | null;
       const code = err ? (e?.code as number | undefined ?? 1) : 0;
-      resolve({
+      const measured = {
+        ran: true as const,
         code: typeof code === 'number' ? code : 1,
         stdout: String(stdout), stderr: String(stderr),
         killed: e?.killed === true,
         signal: e?.signal ?? null,
-      });
+      };
+      // D-6034: a SPAWN error (node names the syscall `spawn <cmd>`: ENOENT, EACCES) means no child ever existed, so
+      // the forged 1 is said to be one. Any other string code (a maxBuffer overflow) had a child, and stays as it was.
+      const spawnFailed = e !== null && typeof e.code === 'string' && typeof e.syscall === 'string'
+        && e.syscall.startsWith('spawn');
+      resolve(spawnFailed ? { ...measured, ran: false, reason: 'spawn', detail: e.message } : measured);
     });
   });
-
-const target = (id: string) => `cc-${id}`;
 
 /** D-309 (was D-B8-13): the server twin of ccd's `_session_verdict` (D-308 (was D-B8-12)). `tmux
  *  has-session` answers three different questions with one exit status —
@@ -129,10 +134,80 @@ export const PANE_PROBE_FORMAT =
 /** One row of `PANE_PROBE_FORMAT`: active flag, four counts, alt flag. */
 const PANE_PROBE_ROW = /^([01]) (\d+) (\d+) (\d+) (\d+) ([01])$/;
 
+/** Console speed S1: the format of the ONE `tmux list-panes -a` a watcher tick runs instead of a `has-session` and a
+ *  `list-panes` per row. Four per-pane formats under a verb the agent already grants (no new door). Exported because
+ *  the test pins the string: a reordering would swap two numbers for each other and `parsePaneListing` would go on
+ *  believing them. */
+export const PANE_LISTING_FORMAT = '#{session_name} #{window_active} #{pane_index} #{pane_pid}';
+
+/** The longest a watcher tick waits for the listing: the remote agent's exec deadline, so a local tmux that hangs is
+ *  bounded as a remote one is. Past it the answer is a failed listing and the tick asks each row the old way. */
+export const PANE_LISTING_DEADLINE_MS = 10_000;
+
+// The pure readers of a decoded listing (`PaneListing`, `verdictFromListing`, `pidFromListing`) live in `tickPlan.ts`
+// (L1) so no policy file loads this adapter; re-exported here so every import of them keeps resolving. The decoder of
+// tmux's own text stays here, beside the format it reads.
+export { verdictFromListing, pidFromListing, type PaneListing } from './tickPlan.js';
+import type { PaneListing } from './tickPlan.js';
+
+/** The name is greedy and anchored on the three numeric fields, so a session named with a space still parses. */
+const PANE_LISTING_ROW = /^(.+) ([01]) (\d+) (\d+)$/;
+
+/** Pure. `at` is the instant the exec STARTED (stamped by the caller). Per session: the pid of the lowest
+ *  `pane_index` whose window is active; a session listed with no active window answers `pid: null`. Empty stdout on
+ *  exit 0 is NOT a listing of zero sessions: a running tmux server always has a session (with none it exits 1, "no
+ *  server running"), so an empty answer proves nothing and reads `ok: false`, and the tick falls back per row. */
+export function parsePaneListing(r: ExecResult, at: number): PaneListing {
+  if (r.ran === false) return { ok: false, at, detail: `tmux list-panes did not run (${r.reason}: ${r.detail})` };
+  if (typeof r.signal === 'string') {
+    return { ok: false, at, detail: `tmux list-panes got ${r.signal} before it answered (exit ${r.code})` };
+  }
+  if (r.code !== 0) {
+    const msg = r.stderr.trim();
+    return { ok: false, at, detail: msg !== '' ? msg : `tmux list-panes exited ${r.code} with no message` };
+  }
+  const best = new Map<string, { index: number; pid: number } | null>();
+  for (const line of r.stdout.split('\n')) {
+    if (line.trim() === '') continue;
+    const m = PANE_LISTING_ROW.exec(line);
+    if (m === null) return { ok: false, at, detail: `tmux list-panes printed a line this parser does not know: ${line.slice(0, 80)}` };
+    const name = m[1]!;
+    if (!best.has(name)) best.set(name, null);
+    if (m[2] !== '1') continue;
+    const index = Number(m[3]);
+    const cur = best.get(name) ?? null;
+    if (cur === null || index < cur.index) best.set(name, { index, pid: Number(m[4]) });
+  }
+  if (best.size === 0) return { ok: false, at, detail: 'tmux listed no panes' };
+  const panes = new Map<string, { pid: number | null }>();
+  for (const [name, v] of best) panes.set(name, { pid: v === null ? null : v.pid });
+  return { ok: true, at, panes };
+}
+
 export class Tmux {
   constructor(private run: Runner) {}
   async sessionVerdict(id: string): Promise<SessionVerdict> {
-    return classifyHasSession(await this.run('tmux', ['has-session', '-t', target(id)]));
+    return classifyHasSession(await this.run('tmux', ['has-session', '-t', tmuxTarget(id)]));
+  }
+  /** Console speed S1: every session's panes in one exec. Failure contract: `ok: false` for a listing that did not
+   *  run, failed, did not parse or did not answer within `PANE_LISTING_DEADLINE_MS`, and never an empty `panes`
+   *  standing for it. `at` is taken before the exec. The deadline is a timer local to this call (cleared when the
+   *  call settles): the local runner has none, and the registry read waits on this listing. */
+  async listPanes(): Promise<PaneListing> {
+    const at = Date.now();
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<PaneListing>((resolve) => {
+      timer = setTimeout(
+        () => resolve({ ok: false, at, detail: `tmux list-panes did not answer within ${PANE_LISTING_DEADLINE_MS / 1000} s` }),
+        PANE_LISTING_DEADLINE_MS,
+      );
+    });
+    try {
+      return await Promise.race([
+        this.run('tmux', ['list-panes', '-a', '-F', PANE_LISTING_FORMAT]).then((r) => parsePaneListing(r, at)),
+        late,
+      ]);
+    } finally { clearTimeout(timer); }
   }
   /** Derived, exactly like bash `_alive`: true only for `live`. A caller that
    *  handles `gone` differently from `unknown` must use `sessionVerdict`
@@ -142,19 +217,19 @@ export class Tmux {
     return (await this.sessionVerdict(id)).verdict === 'live';
   }
   async panePid(id: string): Promise<number | null> {
-    const r = await this.run('tmux', ['list-panes', '-t', target(id), '-F', '#{pane_pid}']);
+    const r = await this.run('tmux', ['list-panes', '-t', tmuxTarget(id), '-F', '#{pane_pid}']);
     if (r.code !== 0) return null;
     const pid = parseInt(r.stdout.trim().split('\n')[0] ?? '', 10);
     return Number.isFinite(pid) ? pid : null;
   }
   async capture(id: string): Promise<string | null> {
-    const r = await this.run('tmux', ['capture-pane', '-t', target(id), '-p']);
+    const r = await this.run('tmux', ['capture-pane', '-t', tmuxTarget(id), '-p']);
     return r.code === 0 ? r.stdout : null;
   }
   /** Capture WITH escape sequences (`-e`) — needed to tell Claude Code's dim
    *  ghost-suggestion placeholder (`\e[2m…\e[0m`) apart from a real typed draft. */
   async captureAnsi(id: string): Promise<string | null> {
-    const r = await this.run('tmux', ['capture-pane', '-t', target(id), '-p', '-e']);
+    const r = await this.run('tmux', ['capture-pane', '-t', tmuxTarget(id), '-p', '-e']);
     return r.code === 0 ? r.stdout : null;
   }
   /**
@@ -169,14 +244,18 @@ export class Tmux {
    * `1 5 2000 220 24 1`, and the capture returned pane 1. This is the exact
    * defect PR #96 shipped.
    *
-   * THE `gone` LITERAL IS `list-panes`' OWN, and it is NOT `capture-pane`'s.
-   * Measured, tmux 3.4: `list-panes -t cc-nope` answers `can't find window:
-   * cc-nope` where `capture-pane` answers `can't find pane: cc-nope`. Matching
-   * on the wrong one would make a dead session read as `unreadable` forever.
-   * The polarity is `classifyHasSession`'s (D-308/D-309): recognise the ONE
-   * message that means gone and call everything else unknown, so an
-   * unrecognised future tmux error reads as "we could not look" rather than as
-   * death.
+   * THE `gone` LITERAL IS THE EXACT TARGET'S (D-3525). Against `=cc-nope:` —
+   * what `tmuxTarget` builds — a missing session answers `can't find session:
+   * cc-nope` for `list-panes` and `capture-pane` alike (measured, tmux 3.4,
+   * private socket). The per-verb words measured with a BARE target —
+   * `list-panes` said `can't find window: cc-nope`, `capture-pane` said
+   * `can't find pane: cc-nope` — stay recognised, each on its own verb; they
+   * are the only other message either arm reads as death. Missing the session
+   * message made a dead session read as `unreadable` (measured against the real
+   * adapter before this arm). The polarity is `classifyHasSession`'s
+   * (D-308/D-309): recognise the messages that mean gone and call everything
+   * else unknown, so an unrecognised future tmux error reads as "we could not
+   * look" rather than as death.
    *
    * AND `unparseable` IS ITS OWN ARM, not a flavour of `unreadable`. tmux
    * answering rc 0 with no active row is a different fact from tmux refusing:
@@ -185,9 +264,11 @@ export class Tmux {
    * be an adapter narrowing a distinction it received.
    */
   async paneProbe(id: string): Promise<PaneProbe> {
-    const r = await this.run('tmux', ['list-panes', '-t', target(id), '-F', PANE_PROBE_FORMAT]);
+    const r = await this.run('tmux', ['list-panes', '-t', tmuxTarget(id), '-F', PANE_PROBE_FORMAT]);
     if (r.code !== 0) {
-      if (r.stderr.includes("can't find window")) return { ok: false, reason: 'gone' };
+      if (r.stderr.includes("can't find session") || r.stderr.includes("can't find window")) {
+        return { ok: false, reason: 'gone' };
+      }
       const msg = r.stderr.trim();
       return {
         ok: false,
@@ -236,9 +317,11 @@ export class Tmux {
    * them and the drawer reports a dead session for a tmux server that was busy.
    * The polarity is `classifyHasSession`'s (D-308/D-309): recognise the ONE
    * message that means gone, call everything else unknown, so an unrecognised
-   * future tmux error reads as "unmeasured" rather than as death. The message
-   * is `capture-pane`'s own and differs from `has-session`'s — measured
-   * against tmux 3.4: `can't find pane: cc-nope`.
+   * future tmux error reads as "unmeasured" rather than as death. Against the
+   * exact target the message is `can't find session: cc-nope` — the same words
+   * `has-session` uses (D-3525, measured, tmux 3.4); `can't find pane:
+   * cc-nope` is what a bare target drew, and stays recognised. See
+   * `paneProbe`'s note.
    */
   async captureHistory(id: string, lines: number): Promise<CaptureHistory> {
     // `-J` JOINS WHAT TMUX ALREADY WRAPPED, and it is here because the reader
@@ -279,9 +362,11 @@ export class Tmux {
     // what is left is content, not padding. It would also be this adapter
     // narrowing a distinction tmux handed it.
     const r = await this.run('tmux',
-      ['capture-pane', '-t', target(id), '-p', '-e', '-J', '-S', `-${lines}`]);
+      ['capture-pane', '-t', tmuxTarget(id), '-p', '-e', '-J', '-S', `-${lines}`]);
     if (r.code === 0) return { ok: true, text: r.stdout };
-    if (r.stderr.includes("can't find pane")) return { ok: false, reason: 'gone' };
+    if (r.stderr.includes("can't find session") || r.stderr.includes("can't find pane")) {
+      return { ok: false, reason: 'gone' };
+    }
     const msg = r.stderr.trim();
     return {
       ok: false,
@@ -289,17 +374,26 @@ export class Tmux {
       detail: msg !== '' ? msg : `tmux exited ${r.code} with no message`,
     };
   }
+  /** D-5046: `--` before the text, always. tmux parses a text token that starts
+   *  with `-` as FLAGS. Measured on tmux 3.7c, private `-L` socket, 2026-10-15:
+   *  `-l '-x probe'` exits 1 (`unknown flag -x`) and `-l '- item'` exits 1
+   *  (`invalid flag -`), typing nothing; and `-l '--'` exits 0 having typed
+   *  NOTHING, since the parser takes it as the end of the flags, so no caller's
+   *  return check could see that drop. After `--` every dash shape measured
+   *  was typed verbatim, an empty text still exits 0, and a missing session
+   *  still exits 1. The text stays ONE argv token, so the agent's `send-keys`
+   *  prefix grant admits it and nothing on the wire adds a token of its own. */
   async sendLiteral(id: string, text: string): Promise<boolean> {
-    return (await this.run('tmux', ['send-keys', '-t', target(id), '-l', text])).code === 0;
+    return (await this.run('tmux', ['send-keys', '-t', tmuxTarget(id), '-l', '--', text])).code === 0;
   }
   async sendKey(id: string, key: string): Promise<boolean> {
-    return (await this.run('tmux', ['send-keys', '-t', target(id), key])).code === 0;
+    return (await this.run('tmux', ['send-keys', '-t', tmuxTarget(id), key])).code === 0;
   }
   /** Restore the canonical size ccd spawned with. Lived inline at
    *  server.ts:227 as a `void deps.run(...)` — so a `forbidden` there was
    *  swallowed in silence, which is the exact failure the argv enumeration
    *  exists to prevent. */
   async resizeWindow(id: string, cols: number, rows: number): Promise<boolean> {
-    return (await this.run('tmux', ['resize-window', '-t', target(id), '-x', String(cols), '-y', String(rows)])).code === 0;
+    return (await this.run('tmux', ['resize-window', '-t', tmuxTarget(id), '-x', String(cols), '-y', String(rows)])).code === 0;
   }
 }

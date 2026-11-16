@@ -6,27 +6,32 @@
 // DEVIATION from the brief's Test: list (which names only
 // server/test/fleet.test.ts and pwa/test/archive-screen.test.tsx); see
 // task-19-report.md.
-import { afterEach, describe, expect, it } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { FleetSession } from '../../shared/api';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import type { AccountUsage, FleetSession } from '../../shared/api';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { App } from '../src/app';
+import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { navigate } from '../src/lib/router';
+import { setSkin } from '../src/lib/skin';
+import { matchRoute, ROUTES } from '../src/lib/routes';
 import { useFleetStore } from '../src/stores/fleet';
+import { api } from '../src/lib/api';
+import { TEST_ROSTER } from './rosterFixture';
+import { seventeenLanes } from './seventeenLanes';
+import { itemView, waitingView } from './ledgersFixture';
 
-const s = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'demo', workdir: '/w',
-  workspace: 'quiet-basin', name: null, status: 'dead', statusUpdatedAt: null, limits: null,
-  dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: 'ws/quiet-basin', ctxPct: null, tasks: null, pr: null, archivedAt: 1785300123,
-  archivedBytes: 1_200_000_000, hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, ...over,
-});
+/** A lazy screen's first load (console speed C1): the wait, and its case's own ceiling a few seconds above it, so a
+ *  hang reports the wait's own failure, with the DOM, before the case's timeout (reviews 1464 F8 and 1473 A9). */
+const LAZY_WAIT_MS = 30_000;
+const LAZY_CEILING_MS = LAZY_WAIT_MS + 5_000;
+
+const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', status: 'dead', lifecycle: DEAD_LIFECYCLE, branch: 'ws/quiet-basin', archivedAt: 1785300123, archivedBytes: 1_200_000_000, ...over }));
 
 afterEach(() => {
   cleanup();
   navigate('/');
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null }));
 });
 
 describe('App /archive route', () => {
@@ -69,14 +74,54 @@ describe('App /archive route', () => {
 });
 
 describe('App /accounts route (Task 6, Build 3 PR G)', () => {
-  it('renders AccountsScreen and joins [data-view="session"] like /s/:id and /archive do', () => {
+  it('renders AccountsScreen and joins [data-view="session"] like /s/:id and /archive do', { timeout: LAZY_CEILING_MS }, async () => {
     // app.test.tsx's own warning (this file, Task 19 above) is real here too:
     // /accounts has to ride the SAME data-view OR every other non-fleet route
     // does, or a phone hides the very screen it just navigated to.
     navigate('/accounts');
     render(<App />);
-    expect(screen.getByRole('heading', { name: /accounts/i })).toBeInTheDocument();
+    // Accounts loads on demand (console speed C1): its chunk resolves after the first render.
+    expect(await screen.findByRole('heading', { name: /accounts/i }, { timeout: LAZY_WAIT_MS })).toBeInTheDocument();
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
+  });
+});
+
+// T2c (D-6329, Q14): a card opens /accounts?lane=<id>, and the screen scrolls the lane's row into view. The shell's
+// reset of the detail pane runs on every path or search change, as a LAYOUT effect, and layout effects run child before
+// parent: an arrival made in a layout effect (the screen is the child) would be undone by the reset that follows it.
+describe('App /accounts?lane= (T2c, D-6329)', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("a second lane on /accounts scrolls after the shell's pane reset", { timeout: LAZY_CEILING_MS }, async () => {
+    const at = Math.floor(Date.now() / 1000);
+    const usage = (wrapper: string): AccountUsage => ({
+      wrapper, five: 10, seven: 5, ts: at - 60, fiveResetAt: null, sevenResetAt: null,
+      fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false,
+    });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [usage('claude'), usage('claude9')], projected: null, roster: TEST_ROSTER });
+    // One array for the pane's scrollTop writes and the arrival's scrollIntoView calls: their ORDER is the property.
+    const log: string[] = [];
+    vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(function (this: HTMLElement) {
+      const lane = this.matches('.accounts-row[data-lane]') ? this.getAttribute('data-lane') : null;
+      if (lane !== null) log.push(`scroll:${lane}`);
+    });
+    navigate('/accounts?lane=claude');
+    render(<App />);
+    await screen.findByRole('heading', { name: /accounts/i }, { timeout: LAZY_WAIT_MS }); // the lazy screen has loaded (console speed C1)
+    await screen.findAllByText('team·alt');
+    await act(async () => {});
+    expect(log, 'the first lane arrived once the poll landed').toEqual(['scroll:claude']);
+    const pane = document.querySelector('.shell-detail');
+    expect(pane).not.toBeNull();
+    let top = 300;
+    Object.defineProperty(pane!, 'scrollTop', {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => { top = v; log.push(`reset:${v}`); },
+    });
+    log.length = 0;
+    act(() => { navigate('/accounts?lane=claude9'); });
+    expect(log).toEqual(['reset:0', 'scroll:claude9']);
   });
 });
 
@@ -114,11 +159,62 @@ describe('App /mail route', () => {
 });
 
 describe('App /runs route', () => {
-  it('renders RunsScreen and joins [data-view="session"] like every other non-fleet route', () => {
+  it('renders RunsScreen and joins [data-view="session"] like every other non-fleet route', { timeout: LAZY_CEILING_MS }, async () => {
     navigate('/runs');
     render(<App />);
-    expect(screen.getByRole('heading', { name: /^runs$/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /^runs$/i }, { timeout: LAZY_WAIT_MS })).toBeInTheDocument(); // loads on demand (C1)
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
+  });
+});
+
+describe('App /settings route', () => {
+  it('renders SettingsScreen and joins [data-view="session"] like every other non-fleet route', { timeout: LAZY_CEILING_MS }, async () => {
+    // Spec §13 names this pin, and this file's /archive warning is why it has
+    // two halves: a route left out of the data-view chain still renders on a
+    // desktop (.shell-detail is always shown there) and is HIDDEN behind the
+    // fleet sidebar on a phone. The heading catches a missing ternary rung;
+    // the attribute catches a missing `|| settings`.
+    navigate('/settings');
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: /^settings$/i }, { timeout: LAZY_WAIT_MS })).toBeInTheDocument(); // loads on demand (C1)
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
+  });
+});
+
+// T9-R2 (coordinator ruling closing a Task 9 review gap): FleetScreen's
+// `epoch`/`observedEpoch` props were fully tested but had no real producer —
+// app.tsx is the ONLY place `<FleetScreen>` is rendered, and it passed
+// neither. This proves the wiring off the fleet store's `pools` frame (the
+// one carrier — no second poll), not the indicator's own render logic
+// (fleet-screen.test.tsx already covers that).
+describe('App wires the pools frame\'s epoch/observedEpoch into FleetScreen (T9-R2)', () => {
+  it('renders the staleness chip once the store has a pools frame naming both, and they differ', () => {
+    act(() => useFleetStore.setState({
+      pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 3 },
+    }));
+    render(<App />);
+    expect(screen.getByTestId('pool-epoch-lag')).toHaveTextContent('epoch 5 / observed 3');
+  });
+
+  it('renders nothing before any pools frame has arrived — pools stays null', () => {
+    render(<App />);
+    expect(screen.queryByTestId('pool-epoch-lag')).not.toBeInTheDocument();
+  });
+
+  it('renders "never synced" for observedEpoch:null, never a fabricated number', () => {
+    act(() => useFleetStore.setState({
+      pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: null },
+    }));
+    render(<App />);
+    expect(screen.getByTestId('pool-epoch-lag')).toHaveTextContent('epoch 5 / observed never synced');
+  });
+
+  it('renders nothing when epoch is absent, even though observedEpoch is a real number', () => {
+    act(() => useFleetStore.setState({
+      pools: { listed: false, enforcement: 'unknown', observedEpoch: 9 },
+    }));
+    render(<App />);
+    expect(screen.queryByTestId('pool-epoch-lag')).not.toBeInTheDocument();
   });
 });
 
@@ -186,5 +282,415 @@ describe('a route change puts the detail pane back at the top (D-161)', () => {
     const scroll = track(nav, 900);
     act(() => { navigate('/mail'); });
     expect(scroll.top).toBe(900);
+  });
+});
+
+// Docs W5 part 1, Task 9 (M4.R2; design 2026-10-01 section 4.2): `/docs` and every page under it mount the Docs
+// screen in the detail pane and join the data-view chain, `/docsearch` does not (the pattern is `/docs` then a slash
+// or the end, never a bare prefix), and the screen is not keyed, so one mount spans a visit. The screen's default
+// loaders call `fetch`; it is stubbed offline here, so every load is the `unreachable` slot and nothing leaves the test.
+describe('App /docs route (M4.R2)', () => {
+  const offline = (): void => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each(['/docs', '/docs/demo/specs/x.md'])('%s renders the Docs screen in the detail pane and joins [data-view="session"]', async (url) => {
+    offline();
+    navigate(url);
+    render(<App />);
+    expect(document.querySelector('.shell-detail .docs-screen')).not.toBeNull();
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
+    expect(await screen.findByText('The server could not be reached; Docs needs a connection.')).toBeInTheDocument();
+  });
+
+  it('/docsearch is not Docs: the placeholder renders and data-view stays fleet', () => {
+    offline();
+    navigate('/docsearch');
+    render(<App />);
+    expect(document.querySelector('.docs-screen')).toBeNull();
+    expect(screen.getByText('Select a session')).toBeInTheDocument();
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'fleet');
+  });
+
+  it('the Docs screen is not keyed: the same mount spans a page, ref and section change', () => {
+    offline();
+    navigate('/docs/demo');
+    render(<App />);
+    const first = document.querySelector('.docs-screen');
+    expect(first).not.toBeNull();
+    act(() => { navigate('/docs/demo/specs?ref=ws/a'); });
+    expect(document.querySelector('.docs-screen')).toBe(first);
+  });
+});
+
+// Docs W5.1 review 5-2: the pattern is `/docs` then a slash or the end. A word boundary would also take `/docs-x` and
+// `/docs.md`, which are not Docs pages; `/docsearch` alone was tested.
+describe('T13 review 5-2: /docs-x and /docs.md are not Docs', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each(['/docs-x', '/docs.md'])('%s renders the placeholder and data-view stays fleet', (url) => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    navigate(url);
+    render(<App />);
+    expect(document.querySelector('.docs-screen')).toBeNull();
+    expect(screen.getByText('Select a session')).toBeInTheDocument();
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'fleet');
+  });
+});
+
+// W2 S2a review: the fleet's five sheets render from `FleetFlows`, which `app.tsx` mounts beside `.app-shell`
+// (D-5468). The fleet suites mount it themselves through test/fleetHost.tsx, so only the real App proves the
+// production mount: drop `<FleetFlows />` from app.tsx and the fleet's doors open nothing, and this goes red.
+describe('App mounts the fleet sheets (D-5468)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("the fleet's New session door and a session's ··· door each open their sheet", () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    act(() => useFleetStore.setState({ conn: 'open', sessions: [fleetSession({ id: 'a', project: 'alpha', workspace: 'quiet-mesa',
+      // A change just now keeps its project open (D-6088 rolls up a quiet one).
+      statusUpdatedAt: Date.now() })] }));
+    navigate('/');
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }));
+    expect(screen.getByRole('dialog', { name: /start a session/i })).toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
+    expect(screen.getByRole('button', { name: /restart session/i })).toBeInTheDocument();
+  });
+});
+
+// ── the route table and the ladder are one table (D-5466, W2 Task S2b) ─────────
+
+describe('ROUTES and the ladder, both ways', () => {
+  // Every path the ladder has ever routed, plus near misses. A probe that a
+  // ROUTES row matches must render that row's own screen; a probe no row
+  // matches must render the fleet's placeholder. So a row dropped while the
+  // ladder kept its own test, or a ladder rung the table never named, reds.
+  const PROBES = [
+    '/', `/s/${encodeURIComponent('demo-quiet-basin')}`, '/archive', '/accounts', '/mail', '/runs', '/settings',
+    '/digest', '/docs', '/docs/notes/a.md', '/nope', '/docsearch', '/docs-x', '/s/', '/runsx', '/mail/x',
+    // Waiting on you (desktop-polish PL5a): the list, an item, and near misses that name no route.
+    '/waiting', '/waiting/7', '/waiting/x', '/waiting/7/y', '/waitingx',
+    // The programme view (desktop-polish PL5b): a programme by slug, and near misses that name no route.
+    '/programmes/prog-a', '/programmes/prog-a/', '/programmes', '/programmes/Prog-A', '/programmes/Build_4', '/programmes/a/b', '/programmesx',
+    // A slug the owner refuses and a malformed escape are no route (carry C, D-7951; review 1388 F1 and F3): the fleet.
+    '/programmes/a.b', '/programmes/%zz', '/s/%zz', '/settings/%zz',
+    // Settings' five pages and the catch-all (D-5504).
+    '/settings/updates', '/settings/appearance', '/settings/notifications', '/settings/automation',
+    '/settings/security', '/settings/bogus', '/settings/a/b', '/settings/measure-highlighting',
+    // The reader lab (the reader lab plan, Task 10).
+    '/settings/reader-lab',
+    // One run's page (the runs rebuild, D-8072): a canonical number, its slash form, and the addresses that are no run page.
+    '/runs/410', '/runs/410/', '/runs/advanced', '/runs/advanced/', '/runs/0', '/runs/007', '/runs/99999999999999999999', '/runs/x',
+  ];
+  const placeholder = (): Element | null => document.querySelector('.shell-placeholder');
+
+  // The probes the table must place outside itself, named here rather than read back from `matchRoute`, so a row that starts
+  // taking one (the programme row without its `accepts`, M12) is red here too, not only in its own case (review 1437 A3).
+  const OUTSIDE = new Set([
+    '/nope', '/docsearch', '/docs-x', '/s/', '/runsx', '/mail/x', '/waiting/x', '/waiting/7/y', '/waitingx',
+    '/programmes', '/programmes/a/b', '/programmesx', '/programmes/a.b', '/programmes/%zz', '/s/%zz', '/settings/%zz', '/settings/a/b',
+    '/runs/0', '/runs/007', '/runs/99999999999999999999', '/runs/x',
+  ]);
+
+  it('every ROUTES row is reached by a probe, and every probe renders what the table says', () => {
+    for (const r of ROUTES) expect(PROBES.some((p) => r.pattern.test(p)), `no probe for ${r.id}`).toBe(true);
+    for (const p of PROBES) expect(matchRoute(p) === null, `${p} is ${OUTSIDE.has(p) ? '' : 'not '}outside the table`).toBe(OUTSIDE.has(p));
+    for (const p of PROBES) {
+      navigate(p);
+      const view = render(<App />);
+      const at = matchRoute(p);
+      if (at === null || at.route.id === 'fleet') {
+        expect(placeholder(), `${p} is the fleet`).not.toBeNull();
+        expect(document.querySelector('.app-shell'), p).toHaveAttribute('data-view', 'fleet');
+      } else {
+        expect(placeholder(), `${p} renders its own screen (${at.route.id})`).toBeNull();
+        expect(document.querySelector('.app-shell'), p).toHaveAttribute('data-view', 'session');
+      }
+      view.unmount();
+    }
+  });
+
+  it('`/settings/measure-highlighting` renders R19\'s measurement page, not the Settings frame (W5h-a)', { timeout: LAZY_CEILING_MS }, async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    try {
+      navigate('/settings/measure-highlighting');
+      render(<App />);
+      const detail = document.querySelector('.shell-detail')!;
+      // The page loads on demand (console speed C1): its chunk resolves after the first render.
+      expect(await within(detail as HTMLElement).findByRole('heading', { level: 1, name: 'Measure highlighting' }, { timeout: LAZY_WAIT_MS }))
+        .toBeInTheDocument();
+      expect(within(detail as HTMLElement).queryByRole('navigation', { name: 'Settings sections' })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('`/settings/reader-lab` renders the reader lab, not the Settings frame (the reader lab plan, Task 10)', { timeout: LAZY_CEILING_MS }, async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    try {
+      navigate('/settings/reader-lab');
+      render(<App />);
+      const detail = document.querySelector('.shell-detail')!;
+      expect(await within(detail as HTMLElement).findByRole('heading', { level: 1, name: 'Reader lab' }, { timeout: LAZY_WAIT_MS })).toBeInTheDocument();
+      expect(within(detail as HTMLElement).queryByRole('navigation', { name: 'Settings sections' })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('`/settings/bogus` renders Settings with the not-found line, never ScreenFallback (D-5504)', { timeout: LAZY_CEILING_MS }, async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    try {
+      navigate('/settings/bogus');
+      render(<App />);
+      const detail = document.querySelector('.shell-detail')!;
+      // Settings loads on demand (console speed C1): its chunk resolves after the first render.
+      expect(await within(detail as HTMLElement).findByRole('heading', { level: 1, name: 'Settings' }, { timeout: LAZY_WAIT_MS })).toBeInTheDocument();
+      expect(within(detail as HTMLElement).getByText('That section does not exist.')).toBeInTheDocument();
+      expect(within(detail as HTMLElement).getByRole('navigation', { name: 'Settings sections' })).toBeInTheDocument();
+      expect(within(detail as HTMLElement).queryByText(/could not be (shown|loaded)/i)).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // Desktop-polish PL5a: the two Waiting on you arms of the ladder.
+  describe('Waiting on you', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      act(() => useFleetStore.setState({ waiting: null, fleetFrameSeen: false, sessions: [] }));
+    });
+
+    it('`/waiting` renders the list in the detail pane, and the item path opens one item', () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+      act(() => useFleetStore.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({ items: [itemView({ id: 7, title: 'Pick the order' })] }) }));
+      navigate('/waiting');
+      const list = render(<App />);
+      const detail = document.querySelector('.shell-detail') as HTMLElement;
+      expect(within(detail).getByRole('heading', { level: 1, name: 'Waiting on you' })).toBeInTheDocument();
+      fireEvent.click(within(detail).getByRole('button', { name: /Pick the order/ }));
+      expect(location.pathname).toBe('/waiting/7');
+      expect(within(document.querySelector('.shell-detail') as HTMLElement).getByRole('heading', { level: 1, name: 'Pick the order' })).toBeInTheDocument();
+      list.unmount();
+    });
+
+    it('`/programmes/<slug>` renders that programme\'s Goals page in the detail pane, linking the one list filtered to it (PL11)', () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+      act(() => useFleetStore.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({ items: [itemView({ id: 7, title: 'Pick the order' })] }) }));
+      navigate('/programmes/prog-a');
+      render(<App />);
+      const detail = document.querySelector('.shell-detail') as HTMLElement;
+      expect(within(detail).getByRole('heading', { level: 1, name: 'prog-a' })).toBeInTheDocument();
+      expect(within(detail).getByRole('region', { name: 'Goals' })).toBeInTheDocument();
+      expect(within(detail).queryByRole('button', { name: /Pick the order/ })).toBeNull();
+      fireEvent.click(within(detail).getByRole('link', { name: '1 waiting on you' }));
+      expect(location.pathname + location.search).toBe('/waiting?programme=prog-a');
+    });
+
+    it.each(['Build_4', 'pA', '-a'])('`/programmes/%s`, a slug the server accepts, renders that programme\'s view', (slug) => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+      act(() => useFleetStore.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView() }));
+      navigate(`/programmes/${slug}`);
+      render(<App />);
+      const detail = document.querySelector('.shell-detail') as HTMLElement;
+      expect(within(detail).getByRole('heading', { level: 1, name: slug })).toBeInTheDocument();
+    });
+
+    it('`/programmes/<a name the owner refuses>` is no route: the fleet\'s view, never a view of a programme that cannot exist', () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+      navigate('/programmes/a.b');
+      render(<App />);
+      expect(document.querySelector('.shell-placeholder')).not.toBeNull();
+      expect(document.querySelector('.pv')).toBeNull();
+      // On a phone `[data-view='session']` hides the fleet column and the placeholder alike: the view must be the fleet's
+      // (carry C, D-7951; review 1388 F1).
+      expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'fleet');
+    });
+
+    it('an item the list does not hold says so, and so does a number past the safe integers', () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+      act(() => useFleetStore.setState({ waiting: waitingView() }));
+      navigate('/waiting/12');
+      const gone = render(<App />);
+      expect(within(document.querySelector('.shell-detail') as HTMLElement).getByText('That item is not on the list any more.')).toBeInTheDocument();
+      gone.unmount();
+      navigate('/waiting/99999999999999999999');
+      render(<App />);
+      expect(within(document.querySelector('.shell-detail') as HTMLElement).getByText('That item is not on the list any more.')).toBeInTheDocument();
+    });
+  });
+});
+
+// ── Settings' reads sit above the frame, on every route (D-5504) ──────────────
+
+describe("Settings' provider keeps the frame (D-5504, D-161, D-5466)", () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('`/` → `/settings/updates` → `/` keeps the same .app-shell and sidebar nodes and the sidebar\'s scrollTop', { timeout: LAZY_CEILING_MS }, async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    navigate('/');
+    render(<App />);
+    const shell = document.querySelector('.app-shell');
+    const nav = document.querySelector('.shell-nav')!;
+    let top = 900;
+    Object.defineProperty(nav, 'scrollTop', { configurable: true, get: () => top, set: (v: number) => { top = v; } });
+    act(() => { navigate('/settings/updates'); });
+    // Settings loads on demand (console speed C1): its chunk resolves after the navigation's commit.
+    expect(await screen.findByRole('heading', { level: 2, name: 'Updates' }, { timeout: LAZY_WAIT_MS })).toBeInTheDocument();
+    expect(document.querySelector('.app-shell')).toBe(shell);
+    expect(document.querySelector('.shell-nav')).toBe(nav);
+    act(() => { navigate('/'); });
+    expect(document.querySelector('.app-shell')).toBe(shell);
+    expect(document.querySelector('.shell-nav')).toBe(nav);
+    expect(nav.scrollTop).toBe(900);
+  });
+
+  it('the detail section is the same DOM node across an entry to Settings and out', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    navigate('/runs');
+    render(<App />);
+    const detail = document.querySelector('.shell-detail');
+    expect(detail).not.toBeNull();
+    act(() => { navigate('/settings'); });
+    expect(document.querySelector('.shell-detail')).toBe(detail);
+    act(() => { navigate('/settings/automation'); });
+    expect(document.querySelector('.shell-detail')).toBe(detail);
+    act(() => { navigate('/runs'); });
+    expect(document.querySelector('.shell-detail')).toBe(detail);
+  });
+});
+
+describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
+  it('exactly one main landmark, #content, holding the detail; the fleet column is a section named Fleet', () => {
+    navigate('/runs');
+    render(<App />);
+    const mains = screen.getAllByRole('main');
+    expect(mains).toHaveLength(1);
+    expect(mains[0]).toHaveAttribute('id', 'content');
+    expect(mains[0]).toHaveClass('shell-detail');
+    expect(within(mains[0]!).getByRole('heading', { name: /^runs$/i })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Fleet' })).toHaveClass('fleet');
+  });
+
+  it('the skip link is the first focusable element, before the desk bar, and moves focus to #content', () => {
+    // On a desk, so the bar (and its doors) is mounted ahead of everything but the skip link.
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q.includes('min-width: 900px'), media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    navigate('/runs');
+    render(<App />);
+    expect(document.querySelector('header.shell-accounts'), 'the desk bar is mounted').not.toBeNull();
+    const focusable = document.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    const skip = screen.getByRole('link', { name: 'Skip to content' });
+    expect(focusable[0]).toBe(skip);
+    expect(document.querySelector('.app-shell')!.firstElementChild).toBe(skip);
+    fireEvent.click(skip);
+    expect(document.activeElement).toBe(document.getElementById('content'));
+    vi.unstubAllGlobals();
+  });
+
+  // ONE ACCOUNTS STRIP PER WIDTH (W2 Global constraints, D-5678): the gate is split between `ShellFrame`'s
+  // `desk &&` and `FleetColumn`'s `showAccounts={!desktop}`, so it is counted through App, in both skins.
+  // The full strip is the only lane readout (T2c, D-6329): both desk bars mount it under their line, in the header.
+  for (const skin of [REFINED, INSTRUMENT]) {
+    for (const desk of [true, false]) {
+      it(`${skin}, ${desk ? 'desk' : 'phone'}: exactly one accounts strip, in ${desk ? 'the header' : 'the fleet column'}`, () => {
+        vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+        vi.stubGlobal('matchMedia', (q: string) => ({
+          matches: desk && q.includes('min-width: 900px'), media: q, onchange: null,
+          addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+        }));
+        try {
+          setSkin(skin);
+          navigate('/');
+          render(<App />);
+          const strips = document.querySelectorAll('.accounts-strip');
+          expect(strips).toHaveLength(1);
+          const bar = document.querySelector('header.shell-accounts');
+          const fleet = screen.getByRole('region', { name: 'Fleet' });
+          if (desk) {
+            expect(bar?.contains(strips[0]!)).toBe(true);
+            expect(fleet.contains(strips[0]!)).toBe(false);
+          } else {
+            expect(bar).toBeNull();
+            expect(fleet.contains(strips[0]!)).toBe(true);
+          }
+        } finally {
+          setSkin(REFINED);
+          vi.unstubAllGlobals();
+        }
+      });
+    }
+  }
+
+  // ONE FOLD CONTROL PER WIDTH (S5b, D-6530): the strip folds wherever it mounts, so with 17 lanes each width holds one
+  // control, in the place that width's one strip sits. The desk's row is measured, so its arm stubs a 1248 px group.
+  for (const skin of [REFINED, INSTRUMENT]) {
+    for (const desk of [true, false]) {
+      it(`one fold control per width, in both skins: ${skin}, ${desk ? 'desk, in the header\'s lanes row' : 'phone, in the fleet column'}`, async () => {
+        const f = seventeenLanes(Math.floor(Date.now() / 1000));
+        vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+        vi.stubGlobal('matchMedia', (q: string) => ({
+          matches: desk && q.includes('min-width: 900px'), media: q, onchange: null,
+          addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+        }));
+        vi.stubGlobal('ResizeObserver', class {
+          private readonly cb: ResizeObserverCallback;
+          constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+          observe(target: Element): void {
+            this.cb([{ target, contentRect: { width: 1248 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+          }
+          unobserve(): void {}
+          disconnect(): void {}
+        });
+        try {
+          setSkin(skin);
+          navigate('/');
+          render(<App />);
+          const strip = await screen.findByRole('group', { name: /^account usage/ });
+          // The fold's control, not a card: `lane-a` shows before the fold does (the row is measured a render or two after
+          // the poll lands), so a wait on it can read the strip at 17 cards with no control.
+          await within(strip).findByRole('button', { name: /more/ });
+          const controls = [...document.querySelectorAll('[aria-expanded][aria-controls]')]
+            .filter((el) => /^(\+\d+ more|Show fewer)/.test(el.textContent ?? ''));
+          expect(controls).toHaveLength(1);
+          expect(strip.contains(controls[0]!)).toBe(true);
+          // At the desk it names the cards' group it pins open; on a phone it names the panel it opens (phone-strip-tap-panel).
+          if (desk) expect(controls[0]).toHaveAttribute('aria-controls', strip.id);
+          else {
+            const names = controls[0]!.getAttribute('aria-controls');
+            expect(names).toMatch(/\S/);
+            expect(names).not.toBe(strip.id);
+          }
+          const bar = document.querySelector('header.shell-accounts');
+          if (desk) expect(bar?.contains(strip)).toBe(true);
+          else expect(screen.getByRole('region', { name: 'Fleet' }).contains(strip)).toBe(true);
+          // Four on a phone; at the desk three of the 1248 px row's four tracks, the last the end cell's.
+          expect(strip.querySelectorAll('.account-gauge')).toHaveLength(desk ? 3 : 4);
+        } finally {
+          setSkin(REFINED);
+          vi.unstubAllGlobals();
+        }
+      });
+    }
+  }
+
+  it("Settings' Theme and Layout fieldsets are the doors of Switch theme and Switch layout (doorMark)", () => {
+    // On the page the W2 door table names for both (settings Task R2b1's C1).
+    navigate('/settings/appearance');
+    render(<App />);
+    expect(screen.getByRole('group', { name: 'Theme' })).toHaveAttribute('data-command', 'switch-theme');
+    expect(screen.getByRole('group', { name: 'Layout' })).toHaveAttribute('data-command', 'switch-layout');
   });
 });

@@ -5,10 +5,10 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { AttachTray } from '../src/session/AttachTray';
-import type { StagedImage } from '../src/session/useAttachImage';
+import { AttachTray, type StagedImage } from '@ccrc/ui';
 // Shared rule reader (test/cssRule.ts), not two more hand-rolled copies — fix
-// round 4, controller item 1. Both scrapes below read src/session/chat.css,
+// round 4, controller item 1. Both scrapes below read the tray's own
+// stylesheet, which travelled with the component into @ccrc/ui,
 // which the ui-css lane owns and is editing in parallel: they must break on a
 // changed declaration and never on a changed indent, a regrouped selector or
 // prettier flipping `[data-state='failed']` to double quotes.
@@ -21,6 +21,13 @@ afterEach(() => {
 const img = (over: Partial<StagedImage> = {}): StagedImage => ({
   key: 'k1', file: new File(['x'], 'shot.png', { type: 'image/png' }),
   previewUrl: 'blob:mock/1', state: 'staged', width: 2788, height: 442, ...over,
+});
+
+/** A staged DOCUMENT: no previewUrl (the hook mints none) and no dimensions.
+ *  The absent URL is the whole signal — there is nothing to draw. */
+const docChip = (over: Partial<StagedImage> = {}): StagedImage => ({
+  key: 'k2', file: new File(['# hi'], 'design-notes.md', { type: '' }),
+  state: 'staged', ...over,
 });
 
 describe('AttachTray', () => {
@@ -75,7 +82,7 @@ describe('AttachTray', () => {
   // retry button. Guard the source directly: whatever the rule contains, it
   // must not reset `all`.
   it('does not reset `all` on the retry button (that silently strips outline/:focus-visible)', () => {
-    const cssPath = path.resolve(process.cwd(), 'src/session/chat.css');
+    const cssPath = path.resolve(process.cwd(), '../ui/src/components/attach-tray.css');
     const css = readFileSync(cssPath, 'utf8');
     // Stricter than the regex this replaces, deliberately: `all: revert` and
     // `all: initial` strip the outline just as `unset` did, so the assertion
@@ -137,12 +144,51 @@ describe('AttachTray', () => {
   // the scoped selector must exist, so a later "simplify this CSS" pass
   // can't quietly flatten it back to one unscoped rule.
   it('scopes the shrunk remove hit-area to failed chips only', () => {
-    const cssPath = path.resolve(process.cwd(), 'src/session/chat.css');
+    const cssPath = path.resolve(process.cwd(), '../ui/src/components/attach-tray.css');
     const css = readFileSync(cssPath, 'utf8');
     // `ruleIn` throws when the scoped rule is gone — a flattened-back
     // stylesheet fails here rather than passing on a missing match — and the
     // hit-area it exists to set must still be set.
     const scoped = ruleIn(css, `.attach-chip[data-state='failed'] .attach-remove::after`);
     expect(declValue(scoped, 'inset')).not.toBeNull();
+  });
+
+  // — Documents. An <img> pointed at a .md would render as a broken-image box
+  //   and, worse, hit the same onError fallback the bubble uses for a clip
+  //   DELETED off disk — so a perfectly good file would read as "gone". —
+
+  it('draws a document as its extension and its name, never as an image', () => {
+    const { container } = render(<AttachTray images={[docChip()]} onRemove={vi.fn()} onRetry={vi.fn()} />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(screen.getByText('MD')).toBeInTheDocument();
+    // The name, because for a document it is the only thing that says which of
+    // four staged files this one is.
+    expect(screen.getByText('design-notes.md')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove design-notes.md' })).toBeInTheDocument();
+  });
+
+  it('says a document is uploading in the same place an image does', () => {
+    render(<AttachTray images={[docChip({ state: 'uploading' })]} onRemove={vi.fn()} onRetry={vi.fn()} />);
+    expect(screen.getByText('uploading…')).toBeInTheDocument();
+    expect(screen.queryByText('design-notes.md')).not.toBeInTheDocument();
+  });
+
+  // The strip can only show the name truncated (72px of chip), so the full one
+  // has to survive somewhere a long name is still recoverable.
+  it('carries a document\'s full name on the chip, without displacing a failure reason', () => {
+    const { container, rerender } = render(
+      <AttachTray images={[docChip()]} onRemove={vi.fn()} onRetry={vi.fn()} />);
+    expect(container.querySelector('.attach-chip')).toHaveAttribute('title', 'design-notes.md');
+
+    rerender(<AttachTray images={[docChip({ state: 'failed', error: 'That file is too large — 12 MB is the limit.' })]}
+                         onRemove={vi.fn()} onRetry={vi.fn()} />);
+    expect(container.querySelector('.attach-chip'))
+      .toHaveAttribute('title', 'That file is too large — 12 MB is the limit.');
+  });
+
+  it('still keeps an image chip an image', () => {
+    render(<AttachTray images={[img()]} onRemove={vi.fn()} onRetry={vi.fn()} />);
+    expect(screen.getByAltText('shot.png')).toBeInTheDocument();
+    expect(screen.queryByText('PNG')).not.toBeInTheDocument();
   });
 });

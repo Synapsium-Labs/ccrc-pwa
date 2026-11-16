@@ -15,7 +15,7 @@
  * the bash twin; the TypeScript twin and the shared fixture land later.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
@@ -31,7 +31,7 @@ const REGDIR = (): string => path.join(h.home, '.cc-sessions');
 /** Captures stderr on a SUCCESSFUL run too (the harness's `sh` pipes it to the
  *  parent), and times out so an argv-parse bug hangs one case, not the suite. */
 const run = (snippet: string): { code: number; stdout: string; stderr: string } => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
     env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
   });
@@ -128,7 +128,7 @@ describe('_ws_unsupervise records a deliberate stop', () => {
       _reg_set ${ID} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199`);
     h.sh(`systemctl() { :; }; _ws_unsupervise ${ID} agent`);
     expect(h.reg(ID, 'stopped')).not.toBeNull();
-    h.sh(`_accept_first_run_prompts() { return 0; }; _inject_spawn_effort() { :; };
+    h.sh(`_accept_first_run_prompts() { return 0; };
       tmux() { :; }; _spawn ${ID} resume`);
     expect(h.reg(ID, 'stopped')).toBeNull();
   });
@@ -194,7 +194,8 @@ describe('cmd_stop', () => {
       // `_reg_purge`'s call sites.
       `tmux list-panes -a -F #{session_name} #{pane_pid}`,
       `systemctl --user disable --now claude-session@${ID}`,
-      `tmux kill-session -t cc-${ID}`,
+      `tmux list-panes -t =cc-${ID}: -F #{pane_pid}`,   // D-7902: the pane's scope, read after the disable and before the kill
+      `tmux kill-session -t =cc-${ID}:`,
     ]);
     expect(h.reg(ID, 'stopped')).toMatch(/^\d{10} pwa$/);
   });
@@ -316,7 +317,10 @@ describe('the supervisor heartbeat', () => {
       mkdir -p "$HOME/.claude-d/projects/$mdir"
       printf '{"type":"message"}\\n' > "$HOME/.claude-d/projects/$mdir/b7001948-0000-4c2f-9a1b-0cfc0dc3d199.jsonl"`);
     run(`CCD_SWAP_DETACHED=1
-      _alive() { return 1; }; tmux() { :; }; cmd_ensure() { :; }; sleep() { :; };
+      _alive() { return 1; }; cmd_ensure() { :; }; sleep() { :; };
+      # GONE on has-session (D-5350): D-5240's manual gate (it runs in the detached re-run
+      # too) reads \`_ws_status\`, and an alive pane with no pid is unreadable.
+      tmux() { case "\${1:-}" in has-session) echo "can't find session: x" >&2; return 1 ;; esac; };
       _swap_carry_jsonl() { echo "mid-carry:$(_session_state ${ID})" >> "$HOME/ccd-calls"; return 0; };
       systemctl() { [[ "$*" == *"start claude-session@"* ]] \
         && echo "start:$(_session_state ${ID})" >> "$HOME/ccd-calls"; return 0; };

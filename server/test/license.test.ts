@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PRIVATE_NAMES, matchLine } from './private-names.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
@@ -127,12 +128,13 @@ describe('README states the notice, since no source file does', () => {
 });
 
 describe('the release owner (S1)', () => {
-  // BASE64, the same residue idiom `topology-clean.test.ts` uses and for the
-  // same reason: this assertion has to NAME the org it forbids, so spelling it
-  // verbatim would make the enforcing test the tree's last plaintext copy —
-  // and `topology-clean`'s operator-residue class, which bans exactly this
-  // token everywhere, would red on the file enforcing its absence.
-  const OLD_ORG = Buffer.from('RXhwb1BsYXRmb3JtLUx0ZA==', 'base64').toString('utf8');
+  // The previous org's name is one of `topology-clean`'s hashed entries
+  // (`PRIVATE_NAMES`, private-names.mjs), looked up here by their `#h8`: this
+  // assertion has to name the org it forbids, and the base64 literal it used to
+  // carry decoded to the name itself. A failure prints `file:line #h8`, never
+  // the name.
+  const OLD_ORG_H8S = ['a4277cd1', 'fc353e41', 'eaa169b5'];
+  const OLD_ORG = PRIVATE_NAMES.filter((e) => OLD_ORG_H8S.includes(e.h.slice(0, 8)));
   const OWNER = /^CCRC_RELEASE_OWNER="([^"]+)"$/m;
 
   it.each(['install.sh', 'ccd/ccrc'])('%s builds its release URL from the ruled owner', (f) => {
@@ -147,10 +149,219 @@ describe('the release owner (S1)', () => {
     // that lives only as long as GitHub's post-transfer redirect — which ends
     // the moment anyone recreates the old name. docs/ is excluded: the design
     // record legitimately describes the history, and the S2 sweep owns it.
+    expect(OLD_ORG, 'the previous org is no longer three PRIVATE_NAMES entries (split, merged, run together)')
+      .toHaveLength(OLD_ORG_H8S.length);
     const shipped = ['install.sh', 'ccd/ccrc', 'ccd/ccd', 'deploy/deploy.sh', 'README.md'];
     for (const f of shipped) {
       if (!existsSync(join(REPO, f))) continue;
-      expect(read(f), `${f} still names ${OLD_ORG}`).not.toContain(OLD_ORG);
+      const hits = read(f).split('\n').flatMap((line, i) => matchLine(line, OLD_ORG).map((h) => `${f}:${i + 1} #${h}`));
+      expect(hits, `${f} still names the previous org`).toEqual([]);
+    }
+  });
+});
+
+// ── third-party code: lossless-claw (ccrc history spec 2026-10-05 §12) ──────
+// MIT material may be combined into this AGPL-3.0-only tree, but its notice
+// must travel with EVERY copy, and the release tarball ships `install.sh
+// shared ccd deploy` without the root README or LICENSE
+// (deploy/build-release.sh's PATHSPEC). So the upstream LICENSE sits byte for
+// byte beside the copied code, in every directory that holds some, and
+// `ccd/history/PROVENANCE` says what was copied from where.
+
+/** sha256 of lossless-claw's LICENSE at commit e05d8d3 (1,090 bytes, MIT,
+ *  "Copyright (c) 2026 Josh Lehman / Martian Engineering"), measured against
+ *  the upstream file. Pinned as a hash for the reason AGPL_SHA256 is: a
+ *  licence is only the licence while it is verbatim. Changing this constant
+ *  is a deliberate legal act, not a test fix. */
+const LOSSLESS_CLAW_MIT_SHA256 = 'b88a085e19252796c5ba424a8bfe8eb0d4a0af3b89e4460a0dc334a634a995c0';
+const SIDECAR = 'LICENSE.lossless-claw';
+/** The rationale comment every copied function carries (§12), with the
+ *  upstream path and commit it names. Backticks around the path are allowed. */
+const DERIVED = /derived from lossless-claw `?([^\s`,]+)`? @ ([0-9a-f]{7,40})/g;
+
+/** Every regular file under ccd/, repo-relative, minus the two legal files
+ *  themselves (they describe the marker; they are not marked material). */
+const ccdFiles = (): string[] => {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const e of readdirSync(join(REPO, dir), { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name === '__pycache__' || e.name === '.git') continue;
+      const rel = `${dir}/${e.name}`;
+      if (e.isDirectory()) walk(rel);
+      else if (e.isFile() && e.name !== SIDECAR && e.name !== 'PROVENANCE') out.push(rel);
+    }
+  };
+  walk('ccd');
+  return out;
+};
+
+/** The release PATHSPEC, read from the one `PATHSPEC=(…)` assignment in
+ *  deploy/build-release.sh (the conditional `PATHSPEC+=` arm is not a root). */
+const pathspec = (): string[] => {
+  const code = read('deploy/build-release.sh').split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
+  const all = [...code.matchAll(/^PATHSPEC=\(([^)]*)\)/gm)];
+  expect(all, 'deploy/build-release.sh must hold exactly one PATHSPEC=(…)').toHaveLength(1);
+  return all[0]![1]!.trim().split(/\s+/);
+};
+
+/** Every sidecar under ccd/, repo-relative and sorted: ccd/history/'s since W1-B1 and ccd/history-skill/'s since
+ *  W1-B2 (spec §12: one in every directory that holds copied material). The two cases below read every one, not
+ *  a hard-coded path. D-4731 (history-license-sidecars-generalised) */
+const sidecarFiles = (): string[] => {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const e of readdirSync(join(REPO, dir), { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name === '.git') continue;
+      if (e.isDirectory()) walk(`${dir}/${e.name}`);
+      else if (e.name === SIDECAR) out.push(`${dir}/${e.name}`);
+    }
+  };
+  walk('ccd');
+  return out.sort();
+};
+
+interface ProvenanceEntry { item: string; ours: string; upstream: string; commit: string; sha: string; changed: string }
+/** `ccd/history/PROVENANCE`'s entries: blank-line-separated blocks that open
+ *  with `item:`, six `key: value` fields each. */
+const provenance = (): ProvenanceEntry[] => read('ccd/history/PROVENANCE').split(/\n\s*\n/)
+  .filter((b) => b.startsWith('item: '))
+  .map((b) => {
+    const f = Object.fromEntries(b.split('\n').map((l) => /^([a-z0-9-]+): (.+)$/.exec(l)).filter((m) => m !== null)
+      .map((m) => [m![1]!, m![2]!.trim()]));
+    return { item: f['item'] ?? '', ours: f['ours'] ?? '', upstream: f['upstream'] ?? '', commit: f['commit'] ?? '',
+      sha: f['upstream-sha256'] ?? '', changed: f['changed'] ?? '' };
+  });
+
+describe('third-party code: the lossless-claw MIT notice travels with the copied material', () => {
+  it('every LICENSE.lossless-claw under ccd/ is the upstream LICENSE, byte for byte', () => {
+    const all = sidecarFiles();
+    // The two directories §12 names, which is also the walk's liveness: a walk that found nothing would pass the
+    // loop below vacuously.
+    expect(all).toEqual(expect.arrayContaining([`ccd/history/${SIDECAR}`, `ccd/history-skill/${SIDECAR}`]));
+    for (const rel of all) {
+      const bytes = readFileSync(join(REPO, rel));
+      expect(bytes.length, `${rel}: size`).toBe(1090);
+      // Hashed over the BYTES, never a decoded string: a re-encoding that
+      // survives a utf8 round trip is still a different file.
+      expect(createHash('sha256').update(bytes).digest('hex'),
+        `${rel} no longer matches lossless-claw's LICENSE at e05d8d3`).toBe(LOSSLESS_CLAW_MIT_SHA256);
+    }
+  });
+
+  it('every directory holding marked material has the sidecar, and every sidecar covers marked material', () => {
+    const marked = new Set(ccdFiles().filter((f) => /derived from lossless-claw/.test(read(f))).map((f) => path.dirname(f)));
+    // Liveness: a walk that marked nothing would pass both directions.
+    expect(marked.size, 'no file under ccd/ carries a "derived from lossless-claw" comment').toBeGreaterThan(0);
+    for (const d of marked) expect(existsSync(join(REPO, d, SIDECAR)), `${d}/ holds copied material and no ${SIDECAR}`).toBe(true);
+    // The same walk as the cases above (H-128): a skip rule added to it reaches this direction too.
+    const sidecars = sidecarFiles().map((f) => path.dirname(f));
+    for (const d of sidecars) expect(marked.has(d), `${d}/${SIDECAR} covers nothing marked as copied`).toBe(true);
+  });
+
+  it('every sidecar lies under a release PATHSPEC root, so the notice ships with the code', () => {
+    const roots = pathspec();
+    expect(roots, 'the PATHSPEC read nothing').toContain('ccd');
+    const all = sidecarFiles();
+    expect(all.length, 'the walk found one sidecar or none; spec §12 names two directories').toBeGreaterThan(1);
+    for (const rel of all) {
+      expect(roots.some((r) => rel === r || rel.startsWith(`${r}/`)), `${rel} is outside every PATHSPEC root`).toBe(true);
+    }
+  });
+
+  it('server/test/ pins shipped skill text and holds no sidecar; the pin\'s header names the notice and V7 (spec §12, rev 3.3)', () => {
+    // §12's one exception: history-skill.test.ts quotes the skill's sentences, some adapted from lossless-claw, as
+    // pins. A pin is not a copy that ships or runs from the placed tree, so the notice stays beside the shipped copy
+    // and the test's header points at it.
+    expect(existsSync(join(REPO, 'server', 'test', SIDECAR)), `server/test/ holds a ${SIDECAR}: a pin is not shipped material`).toBe(false);
+    const pin = read('server/test/history-skill.test.ts');
+    const header = pin.slice(0, pin.indexOf('\nimport '));
+    expect(header.length, 'history-skill.test.ts has no header above its imports').toBeGreaterThan(200);
+    for (const s of [`ccd/history-skill/${SIDECAR}`, 'V7', 'ccd/history/PROVENANCE']) {
+      expect(header, `history-skill.test.ts's header does not name ${s}`).toContain(s);
+    }
+    // The header never reads as one of §12's rationale comments, so the bijection above counts no server/test/ file.
+    expect(header, 'history-skill.test.ts\'s header carries the rationale-comment phrase').not.toMatch(/derived from lossless-claw/);
+  });
+
+  it('V4 records what became of upstream\'s refusals of a missing, non-regular or unopenable database path (review 316 F41)', () => {
+    const v4 = provenance().find((e) => /\(V4\)/.test(e.item));
+    expect(v4).toBeDefined();
+    expect(v4!.changed).toMatch(/non-regular/);
+    expect(v4!.changed).toMatch(/\bRETAINED\b/);
+    expect(v4!.changed).toMatch(/\bREPLACED\b/);
+    expect(v4!.changed).toMatch(/DATABASE_OPEN_FAILED[^;]*\bREPLACED\b/);
+    expect(v4!.changed).toContain('store-read-failed');
+  });
+
+  it('every PROVENANCE entry is complete, names an existing file, and that file carries the matching comment', () => {
+    const entries = provenance();
+    expect(entries.length, 'ccd/history/PROVENANCE lists no entry').toBeGreaterThan(0);
+    for (const e of entries) {
+      expect(e.commit, `${e.item}: commit`).toBe('e05d8d3');
+      expect(e.sha, `${e.item}: upstream-sha256`).toMatch(/^[0-9a-f]{64}$/);
+      expect(e.upstream, `${e.item}: upstream`).toMatch(/^[\w./-]+$/);
+      expect(e.changed.length, `${e.item}: changed`).toBeGreaterThan(0);
+      expect(existsSync(join(REPO, e.ours)), `${e.item}: ${e.ours} does not exist`).toBe(true);
+      expect(read(e.ours), `${e.ours} carries no rationale comment for ${e.upstream}`)
+        .toContain(`derived from lossless-claw ${e.upstream} @ ${e.commit}`);
+    }
+  });
+
+  it('every rationale comment under ccd/ has its PROVENANCE entry', () => {
+    const entries = provenance();
+    let seen = 0;
+    for (const f of ccdFiles()) {
+      for (const m of read(f).matchAll(DERIVED)) {
+        seen += 1;
+        expect(entries.some((e) => e.ours === f && e.upstream === m[1] && e.commit === m[2]),
+          `${f} copies ${m[1]} @ ${m[2]} and ccd/history/PROVENANCE does not say so`).toBe(true);
+      }
+    }
+    expect(seen, 'the comment scan matched nothing').toBeGreaterThan(0);
+  });
+
+  it('README\'s License section names the third-party code and where its notice is', () => {
+    const readme = read('README.md');
+    const lic = readme.slice(readme.indexOf('\n## License\n'));
+    expect(lic).toContain('**Third-party code.**');
+    for (const s of ['lossless-claw', 'MIT', 'e05d8d3', 'Copyright (c) 2026 Josh Lehman / Martian Engineering',
+      '`ccd/history/LICENSE.lossless-claw`', '`ccd/history/PROVENANCE`', '`ccd/history-skill/LICENSE.lossless-claw`']) {
+      expect(lic, `README's License section does not name ${s}`).toContain(s);
+    }
+  });
+});
+
+// ── third-party code: Tailwind CSS's preflight (PR #346 review) ─────────────
+// `ui/src/styles/reset.css` is a modified copy of tailwindcss's preflight.css,
+// MIT, and it shipped with no notice: the licence travelled only inside
+// node_modules, which is not a copy anyone receives from this repository. Same
+// arrangement as lossless-claw's: the upstream LICENSE byte for byte beside the
+// file, the file's opening comment pointing at it, and README saying where.
+// (The BUILT css needs nothing from here: Tailwind's compiler prepends its own
+// `/*! tailwindcss v… | MIT License | … */` banner, and the minifier keeps it —
+// measured 2026-10-15 in the Storybook production build's css, beside the
+// reset's own rules.)
+
+/** sha256 of tailwindcss's LICENSE as published in its npm package at 4.3.3
+ *  (1,071 bytes, MIT, "Copyright (c) Tailwind Labs, Inc."). Changing this
+ *  constant is a deliberate legal act, not a test fix. */
+const TAILWIND_MIT_SHA256 = '60e0b68c0f35c078eef3a5d29419d0b03ff84ec1df9c3f9d6e39a519a5ae7985';
+
+describe('third-party code: the Tailwind MIT notice travels with the vendored preflight', () => {
+  it('ui/src/styles/LICENSE.tailwindcss is the upstream LICENSE, byte for byte', () => {
+    const bytes = readFileSync(join(REPO, 'ui', 'src', 'styles', 'LICENSE.tailwindcss'));
+    expect(bytes.length).toBe(1071);
+    expect(createHash('sha256').update(bytes).digest('hex'),
+      'LICENSE.tailwindcss no longer matches tailwindcss\'s LICENSE').toBe(TAILWIND_MIT_SHA256);
+  });
+
+  it('reset.css says where it came from, and README\'s License section says where the notice is', () => {
+    expect(read('ui/src/styles/reset.css').slice(0, 600))
+      .toMatch(/Derived from tailwindcss preflight\.css @ v\d+\.\d+\.\d+, MIT,\s+see LICENSE\.tailwindcss/);
+    const readme = read('README.md');
+    const lic = readme.slice(readme.indexOf('\n## License\n'));
+    for (const s of ['`ui/src/styles/reset.css`', 'Copyright (c) Tailwind Labs, Inc.', '`ui/src/styles/LICENSE.tailwindcss`']) {
+      expect(lic, `README's License section does not name ${s}`).toContain(s);
     }
   });
 });

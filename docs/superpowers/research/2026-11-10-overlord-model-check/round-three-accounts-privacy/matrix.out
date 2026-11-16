@@ -1,0 +1,91 @@
+| machine | scenario | reading | states | transitions | secs | violated |
+|---|---|---|---|---|---|---|
+| swap | guests | safe | 124 | 321 | 0.0 | - |
+| swap | load | safe | 2067 | 5075 | 0.0 | - |
+| swap | hover | safe | 7674 | 20608 | 0.1 | - |
+| swap | return | safe | 995 | 2557 | 0.0 | - |
+| swap | rescue | safe | 313542 | 1154064 | 3.5 | - |
+| swap | stale | safe | 81053 | 344352 | 0.9 | - |
+| swap | skew | safe | 673 | 1355 | 0.0 | - |
+| swap | blocked | safe | 824 | 2224 | 0.0 | - |
+| swap | guests | GUEST_REACH=2 | 919 | 2791 | 0.0 | OWN |
+| swap | guests | GUEST_REACH=1 | 498 | 1554 | 0.0 | OWN |
+| swap | load | HARD85_TARGET=False | 2127 | 5227 | 0.0 | STORM |
+| swap | load | HARD85_TARGET=False PICK_ALL_PAST=stranded | 2171 | 4955 | 0.0 | NOSERVE STRAND |
+| swap | load | PICK_ALL_PAST=stranded | 2101 | 4986 | 0.0 | STRAND |
+| swap | return | PICK_ORDER=listed | 2485 | 6238 | 0.0 | OWN RETURN |
+| swap | hover | HOLD_MIN=30 | 7630 | 20366 | 0.1 | FLIP |
+| swap | skew | STAMP_CLAMP=False | 341 | 706 | 0.0 | HD OWN |
+| guest | opus | safe | 2454 | 8295 | 0.0 | - |
+| guest | opus-nowhere | safe | 624 | 1916 | 0.0 | - |
+| guest | default | safe | 465 | 1302 | 0.0 | - |
+| guest | fable | safe | 414 | 1383 | 0.0 | - |
+| guest | fable-nowhere | safe | 72 | 186 | 0.0 | - |
+| guest | stale | safe | 102 | 247 | 0.0 | - |
+| guest | opus | REASON_ALL=False | 2915 | 9529 | 0.0 | GW |
+| guest | default | REASON_ALL=False | 495 | 1360 | 0.0 | GW |
+| guest | opus-nowhere | REASON_ALL=False | 624 | 1916 | 0.0 | GW |
+| guest | stale | STALE_SECOND=True BASE=text | 96 | 236 | 0.0 | GSTALE |
+| guest | stale | STALE_SECOND=True | 96 | 236 | 0.0 | GSTALE |
+| guest | opus | BASE=text | 1304 | 4396 | 0.0 | - |
+| served | ids | safe | 132 | 242 | 0.0 | - |
+| served | ids | START=at-once | 440 | 958 | 0.0 | SV1 SV2 |
+| served | ids | START=at-once SERVE_PENDING=False | 240 | 522 | 0.0 | SV1 SV2 |
+| evaldue | release | safe | 24 | 34 | 0.0 | - |
+| evaldue | release-budget-spent | safe | 34 | 57 | 0.0 | - |
+| evaldue | release | EVAL_DUE=gate | 29 | 36 | 0.0 | EV1 EV2 |
+| privacy | withdraw | safe | 207 | 333 | 0.0 | - |
+| privacy | fact | safe | 132 | 282 | 0.0 | - |
+| privacy | fact-inferred | safe | 10 | 12 | 0.0 | - |
+| privacy | staged | safe | 41 | 52 | 0.0 | - |
+| privacy | restore | safe | 403 | 647 | 0.0 | - |
+| privacy | restore-learned | safe | 233 | 401 | 0.0 | - |
+| privacy | restore-volume | safe | 113 | 154 | 0.0 | - |
+| privacy | controls | safe | 174 | 221 | 0.0 | - |
+| privacy | withdraw | CARD_CARRIES=rendered | 203 | 337 | 0.0 | PV1 PV2 |
+| privacy | withdraw | WIPE_RULES=False | 190 | 325 | 0.0 | PV2 |
+| privacy | fact | EDIT_SOURCES=kept | 132 | 282 | 0.0 | PV2 |
+| privacy | fact | ACTIVE_ONLY=False | 132 | 314 | 0.0 | PV2 |
+| privacy | fact | FACT_SEEN=False | 132 | 282 | 0.0 | PV5 |
+| privacy | staged | COMMIT_RECHECK=False | 37 | 47 | 0.0 | PV2 |
+| privacy | restore | TOMBSTONE=False | 441 | 689 | 0.0 | PV1 PV3 |
+| privacy | restore | WIPE_CURSORS=rewind | 648 | 1017 | 0.0 | PV1 PV3 |
+| privacy | restore-learned | WIPE_CURSORS=wiped | 792 | 1361 | 0.0 | PV1 PV3 |
+| privacy | restore-learned | EDIT_JOURNAL=False | 239 | 414 | 0.0 | PV1 PV3 |
+| privacy | restore | ENTRY_IDS=store | 407 | 649 | 0.0 | PV7 |
+| privacy | restore-volume | WITNESS=False | 97 | 134 | 0.0 | PV1 PV3 |
+| message | crash | safe | 87 | 144 | 0.0 | - |
+| message | restore-volume | safe | 297 | 430 | 0.0 | - |
+| message | restore-db | safe | 222 | 348 | 0.0 | - |
+| message | restore-store | safe | 279 | 431 | 0.0 | - |
+| message | wipe | safe | 87 | 102 | 0.0 | - |
+| message | wipe-volume | safe | 72 | 98 | 0.0 | - |
+| message | crash | SPENT_READ=state BOOT_SPENT=False | 101 | 158 | 0.0 | MS1 |
+| message | restore-volume | RESTORE_SPENDS=False | 399 | 536 | 0.0 | MS1 |
+| message | restore-store | RESTORE_SPENDS=False SPENT_READ=state | 313 | 470 | 0.0 | MS1 |
+| message | restore-db | REDERIVE=adds-only | 222 | 332 | 0.0 | MS4 |
+| message | wipe | WIPE_REQUESTS=stay | 123 | 193 | 0.0 | MS3 |
+| message | restore-volume | WITNESS_IDS=False | 297 | 430 | 0.0 | MS2 |
+| message | wipe-volume | WITNESS_IDS=False | 88 | 107 | 0.0 | MS6 |
+| joint | veto | safe | 9 | 8 | 0.0 | - |
+| joint | cap | safe | 38 | 49 | 0.0 | - |
+| joint | restore-db | safe | 5798 | 9671 | 0.0 | - |
+| joint | restore-volume | safe | 5148 | 7929 | 0.0 | - |
+| joint | veto | LATE_VETO=superseded | 8 | 7 | 0.0 | J1 |
+| joint | veto | LATE_VETO=ignored | 8 | 7 | 0.0 | J1 |
+| joint | cap | COUNTS=effects | 76 | 104 | 0.0 | - |
+| joint | cap | COUNTS=effects COMMIT_RECOUNT=False | 72 | 100 | 0.0 | J3 |
+| joint | restore-db | RECONCILE=lacks | 5798 | 9671 | 0.0 | I3 |
+| joint | restore-db | REQ_JOURNAL=False | 7352 | 11502 | 0.0 | J5 |
+| joint | restore-volume | REQ_JOURNAL=False | 5550 | 8586 | 0.0 | J5 |
+| joint | restore-db | REQ_IDS=table | 6096 | 9885 | 0.0 | J8 |
+| joint | restore-volume | REQ_IDS=table | 5388 | 8013 | 0.0 | J8 |
+| parent | split | safe | 728 | 1368 | 0.0 | - |
+| parent | split-unnamed | safe | 126 | 222 | 0.0 | - |
+| parent | withdraw | safe | 77 | 183 | 0.0 | - |
+| parent | split | PARENT_CLOSE=after | 946 | 1704 | 0.0 | I12 PA1 PA4 |
+| parent | split | PARENT_ANSWER=stays | 696 | 1346 | 0.0 | PA2 |
+| parent | withdraw | WITHDRAW_CASCADE=False | 130 | 291 | 0.0 | PA3 |
+| parent | split-unnamed | I12_READ=literal | 126 | 222 | 0.0 | I12 |
+
+total states 487304, 5.7s

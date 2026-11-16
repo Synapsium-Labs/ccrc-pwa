@@ -161,7 +161,7 @@ imports/calls `prompt` for kickoff.
 rewrites it (no `UPDATE runs SET claimedBy` in server/src or ccd); a dead coordinator whose id
 cannot be re-landed wedges the program `claimed-by-another` permanently
 (`server/src/coord/store.ts:363-371`; `SKILL.md:15-25` admits it). StartProgramSheet can mint a
-DIFFERENT id for a dead coordinator (its own docstring's `claude2-ccrc-pwa` example,
+DIFFERENT id for a dead coordinator (its own docstring's `claude9-ccrc-pwa` example,
 `StartProgramSheet.tsx:154-164`). The only escape is the hand-run reconstruct drill (rebuilds
 runs `claimedBy` NULL, "lives HERE and ships nowhere").
 
@@ -274,7 +274,7 @@ frame-omission tolerance test; terminality: a writer-by-writer mutation table.
   (`ws/brisk-meadow`, pushed) until close; each wave's worker commits its own plan on its
   workspace branch (registry-durability precedent). Briefs name this spec by its in-repo path and
   the fetchable ref.
-- TWO programs are active concurrently (battlescape-operational is live on MekWarLive): every
+- TWO programs are active concurrently (prog-c is live on project-f): every
   `toId:'coordinator'` mail in this program MUST carry the `runId` (the runId-less form requires
   exactly one active program). Briefs restate this beside the branch-discipline sentence.
 - Wave order is the leverage order: drift (1) → onboarding (2–3) → triggers (4–5) → throughput

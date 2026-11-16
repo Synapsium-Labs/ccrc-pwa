@@ -1,0 +1,18 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_fx1","object":"response","status":"in_progress","output":[]},"sequence_number":0}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_fx0","summary":[],"encrypted_content":"ENC-0"},"sequence_number":1}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"msg_fx1","role":"assistant","status":"in_progress","content":[]},"sequence_number":2}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_fx1","output_index":1,"content_index":0,"delta":"Hello there","sequence_number":3}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_fx1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Goodbye now","annotations":[]}]},"sequence_number":4}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_fx1","object":"response","status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":3,"total_tokens":6}},"sequence_number":5}
+

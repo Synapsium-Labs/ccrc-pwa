@@ -21,10 +21,23 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, twenty-two rows, and nothing else.
+#   * The route comes from ROUTES below, eighty-four rows, and nothing else; the
+#     four claimant rows name the question door family's template, their only
+#     door since the old ones were retired (D-7324), refused here, unsent, when a
+#     current cap file says the server lacks `questions-v1` (D-7328); `runs
+#     review-rounds` is refused the same way for `review-rounds-v1` (D-8125),
+#     `goals show` for `goals-read-v1` (D-8126), and `calls record` for `calls-v1`;
+#     the seven `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181), and the three
+#     `timer` rows `capability-missing` for `timers-v1` (Overlord W1a, the timers piece).
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
+#
+# OUTPUT. stdout is the response body and exactly one newline. stderr ends in
+# `http <code>` today; set `CCRC_API_STATUS=line` to keep it once a later release
+# stops writing it by default. Exit 0 whenever a response arrived, 3 when none did.
+# ONE VERB PRINTS PLAIN TEXT: `mail inbox` (D-6780) prints each unacked mail and
+# what it did with it, not a JSON body, writes no status line, and needs `jq`.
 #
 # `server/test/ccrc-api-closed.test.ts` pins those as standing tests, because a
 # property this load-bearing must be a mechanism and not a docstring.
@@ -53,8 +66,11 @@
 #
 # SELF-CONTAINED. This file `source`s nothing. The moment it does it needs the
 # shim treatment `ccrc` has (deploy/deploy.sh argues that at length) and a lone
-# copy at ~/.local/bin would be dead on every box.
-set -uo pipefail
+# copy at ~/.local/bin would be dead on every box. The GENERATED SERVER-CAP
+# READER region below is a byte copy of the hook's `_hook_server_cap`, renamed
+# `_api_server_cap` (D-7321), never a `source`; regenerate it with
+# `ccrc restamp ccd/ccrc-api`.
+set +x; set -uo pipefail   # `set +x` FIRST, a SECRETS control as in ccd-pool-sync: an inherited xtrace would print the box token (R16, D-4096)
 
 # `~/.local/bin` is NOT on the `claude-session@` unit PATH (measured 2026-08-26),
 # so the corpora invoke this by explicit path. That is a caller's problem, not
@@ -73,7 +89,11 @@ REG="$HOME/.cc-sessions"
 SAFE_RE='^[A-Za-z0-9_-]+$'
 
 # METHOD|path|needs-id|comma-separated query keys this row accepts (or `-`).
-# Twenty-two rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# The four claimant rows' path is the question door family's template
+# (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
+# fifth field, sent only while the server advertised `questions-v1` (D-7325), and
+# since the old doors were retired it is their path (D-7324). Every row has four.
+# Eighty-four rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -92,6 +112,25 @@ declare -A ROUTES=(
   # coordinator reached the settle call with four titles and no ids, guessed 1,
   # and was refused `unknown-item`.
   [runs.items-list]='GET|/api/runs/{id}/items|yes|-'
+  # A session ASKS the operator to end a run it cannot close (D-8076, spec 2026-11-04 §10): box-token gated and attributed,
+  # body `{byId, byUuid, why}`. The coordinator is asked first and the answer comes back by mail. It is a request only; the
+  # act itself has no row here.
+  [runs.end-request]='POST|/api/runs/{id}/end-request|yes|-'
+  # Speed/quality signals re-measured off this run's own rows (paired holds,
+  # swap count, wave-done mail count, the two signal lines off the last of
+  # them) — a measurement, never a dial (D-2842's carry). Read-only, like the
+  # row above.
+  [runs.signals]='GET|/api/runs/{id}/signals|yes|-'
+  # The coordinator's escalation/demotion/manual-override door (routing spec
+  # 2026-09-14 §5.3, slice 5) — never `ccd route` directly (coordinator
+  # skill clause 1). Body rides `--json`, the same shape every other POST
+  # row here uses.
+  [runs.route]='POST|/api/runs/{id}/route|yes|-'
+  # The coordinator's bounded cap extension (D-8125): when a work run has reached its review-round cap, the run's claiming
+  # coordinator asks for REVIEW_ROUND_CAP more rounds, with a reason. The body rides `--json -` as
+  # `{"reason":"…"}` alone: the client fills `byId`/`byUuid` from the pane (`derive_identity`) and refuses a body that names
+  # either, so the pair cannot be typed by another pane. The operator's removal of the cap has no row here and never will.
+  [runs.review-rounds]='POST|/api/runs/{id}/review-rounds|yes|-'
   # `--program` joins through `runs.program`; `--to` and `--program` are
   # MUTUALLY EXCLUSIVE — exactly one, both or neither is a 400 (D-2057;
   # routes.ts's own `(to === null) === (program === null)` guard, not
@@ -106,6 +145,9 @@ declare -A ROUTES=(
   # corpora at every call site instead.
   [mail.fetch]='GET|/api/mail/{id}|yes|-'
   [mail.ack]='POST|/api/mail/{id}/ack|yes|-'
+  # `mail inbox` (D-6780): the caller's own unacked deliveries, read with the pane's pair in the query, then one
+  # `mail.ack` request per printed entry, through the row above. It takes no argument; see `cmd_inbox`.
+  [mail.inbox]='GET|/api/mail/inbox|no|-'
   [peers.list]='GET|/api/peers|no|of,project'
   [lifecycle.list]='GET|/api/lifecycle|no|session'
   [claims.list]='GET|/api/claims|no|project,all'
@@ -113,6 +155,12 @@ declare -A ROUTES=(
   [claims.release]='POST|/api/claims/{id}/release|yes|-'
   [ledger.list]='GET|/api/ledger|no|project'
   [ledger.allocate]='POST|/api/ledger/deviations|no|-'
+  # The landing line's read (landing order wave 5e, D-7625): one project's entries, flags and order.
+  [landing.show]='GET|/api/landing|no|project,pr'
+  # The landing line's two attributed writes (landing order wave 5f): the caller's own body, byId/byUuid included, rides
+  # unchanged; nothing fills identity here.
+  [landing.entries]='POST|/api/landing/entries|no|-'
+  [landing.order]='POST|/api/landing/order|no|-'
   # A token-authenticated session may list only its own children's asks. The
   # client derives both identity fields below; `--parent` is accepted only as a
   # compatibility assertion and may never select somebody else.
@@ -126,13 +174,187 @@ declare -A ROUTES=(
   # IS the ask's parent. Deriving here would read as a security boundary this
   # client cannot be — identity on this fleet is attribution, not authentication,
   # and every `.uuid` is readable by the one UNIX user these sessions share.
-  [asks.answer]='POST|/api/asks/{id}/answer|yes|-'
-  [asks.release]='POST|/api/asks/{id}/release|yes|-'
+  [asks.answer]='POST|/api/questions/ask-{id}/rule|yes|-'
+  [asks.release]='POST|/api/questions/ask-{id}/release|yes|-'
   # The durable feed. `--program` filters through `feed_events.runId` and answers
   # one programme's events; without it the read is the whole box's, oldest-first.
   # An event that names no run is programless and appears only unfiltered.
   [feed.list]='GET|/api/feed|no|program,limit'
+  # The coordinator's explicit intent declaration (delegation broker wave 3, Task 15). The ONE row whose grammar is not the generic
+  # one: `coordinators intent <set|clear> --session <id>`, parsed by `parse_intent` below BEFORE the generic id and flag parser, which
+  # then sees no arguments at all. The path id and the body's `byId`/`byUuid` are DERIVED from this pane; `--session` is only an
+  # assertion that must equal the derived id, so it can never select another session. The row declares an id because the route
+  # template has one, not because a caller supplies it.
+  [coordinators.intent]='POST|/api/coordinators/{id}/intent|yes|-'
+  # A lease's retain door (delegation broker wave 5, PR8): the lease's parent, or that parent's coordinator, asks the server to keep a
+  # delegated worktree. The `{id}` is the lease id (`SAFE_RE`, like every id); the caller sends exactly `{"byId":…,"byUuid":…}` on
+  # `--json -`, and nothing here fills identity.
+  [leases.retain]='POST|/api/leases/{id}/retain|yes|-'
+  # The child's PermissionRequest hook (coordinator-first routing, plan Task 14, spec §6.3, D-5297). `request` sends
+  # the canonical request on `--json -` and is answered `201 {id, waitS}`; `ruling` polls one row with the hook's
+  # per-request nonce (`SAFE_RE`, like every id); `key` reads the server's public key, which the install spine pins
+  # once into `~/.ccrc/approval-signing.pub`. A child's own TOOL CALL to any of them is refused by its PreToolUse
+  # deny (`approvals` as this client's first argument); the hook's calls are not tool calls.
+  [approvals.request]='POST|/api/approvals|no|-'
+  [approvals.ruling]='GET|/api/approvals/{id}/ruling|yes|nonce'
+  [approvals.key]='GET|/api/approvals/key|no|-'
+  # The CLAIMANT's three rows (plan Task 16, D-5298): rule, hand over, and read one row it holds. `rule` and `release`
+  # take the attribution pair in the `--json` body, as `asks answer`/`asks release` do, and the verdict and reason ride
+  # there too: this grammar takes no positional word after the id (D-5489). `show` derives identity from the pane, as
+  # `asks list` does, so a session reads only a row held for it. A CHILD's own tool call to any `approvals` row is
+  # refused by its PreToolUse deny (plan Task 14), before this client runs.
+  [approvals.rule]='POST|/api/questions/approval-{id}/rule|yes|-'
+  [approvals.release]='POST|/api/questions/approval-{id}/release|yes|-'
+  [approvals.show]='GET|/api/approvals/{id}|yes|-'
+  # The test box (test box plan TB9, D-7411, D-7554): its status block, and the tools sync the update lane signals
+  # once a roll ends (spec §2.10). Both routes take a session OR the box token; neither takes a body or a query, and the
+  # sync sends the box only the fleet host's own release and measured versions. The switch has NO row, on purpose:
+  # arming remote runs is the operator's act, from the Settings card.
+  [testbox.status]='GET|/api/testbox|no|-'
+  [testbox.tools-sync]='POST|/api/testbox/tools-sync|no|-'
+  # The programme ledgers (plan PL3): the coordinator's side of the Waiting-on-you list and the Goals pin. All nine
+  # are box-token gated and attribution-checked, and a coordinator may act only on its own programme's items and pin. The
+  # `{id}` of the first, second and last three is the programme's slug (a `SAFE_RE` shape); of the four item-move rows, the
+  # item's id. `items list` is a read that names its caller in the query: `byId` and `byUuid` are the caller's own,
+  # supplied as flags.
+  [items.raise]='POST|/api/programmes/{id}/items|yes|-'
+  [items.list]='GET|/api/programmes/{id}/items|yes|byId,byUuid'
+  [items.confirm]='POST|/api/items/{id}/confirm|yes|-'
+  [items.return]='POST|/api/items/{id}/return|yes|-'
+  [items.withdraw]='POST|/api/items/{id}/withdraw|yes|-'
+  [items.block]='POST|/api/items/{id}/blocking|yes|-'
+  [goals.pin]='POST|/api/programmes/{id}/spec|yes|-'
+  [goals.modify]='POST|/api/programmes/{id}/modifications|yes|-'
+  [goals.merged]='POST|/api/programmes/{id}/modifications/merged|yes|-'
+  # The READ of the pin, `doneWhen` and the open items (autonomy-default wave A2, D-8126): a GET by programme slug, answered to the
+  # box token or a session alike. Sent unless a CURRENT cap file omits `goals-read-v1` (the gate beside the claimant rows' below).
+  [goals.show]='GET|/api/programmes/{id}/goals|yes|-'
+  # The coordinator's call record (autonomy-default wave A3, D-8126): a POST by programme slug that the box token, the
+  # attribution pair and ownership all gate on the server. Identity is the PANE's: this client splices `byId` and `byUuid` into the
+  # body and REFUSES a body that names either, so a caller cannot attribute a call to another coordinator. Sent unless a CURRENT cap
+  # file omits `calls-v1` (the gate beside the goals read's, below).
+  [calls.record]='POST|/api/coord/programmes/{id}/calls|yes|-'
+  # Linear, through the server's proxy and the key ccrc holds for each workspace (D-7669, #1444): sessions never sign
+  # in to Linear and never hold a key. Thirteen rows, nine reads and four writes; the SERVER decides each row's class,
+  # never the method, which is why `search`, a read, is a POST: its text is free text, and free text never rides a URL
+  # (SAFE_RE refuses it as a query value), so it goes in the `--json` body. `search` has its own path so no issue
+  # route's `{id}` can match it. The `{id}` on the five issue rows is an issue identifier (`AAA-12`), held to
+  # LINEAR_REF_RE below before anything is sent. `workspace` is a declared query key on every row that acts in one
+  # workspace, the POSTs included, and never a body field; only `workspaces`, which lists them all, takes none. Every
+  # row carries the pane's identity in its QUERY, appended after the declared keys (the Linear block in `main`).
+  [linear.workspaces]='GET|/api/linear/proxy/workspaces|no|-'
+  [linear.teams]='GET|/api/linear/proxy/teams|no|workspace'
+  [linear.issue]='GET|/api/linear/proxy/issues/{id}|yes|workspace'
+  [linear.search]='POST|/api/linear/proxy/search|no|workspace'
+  [linear.comments]='GET|/api/linear/proxy/issues/{id}/comments|yes|workspace,limit,after'
+  [linear.statuses]='GET|/api/linear/proxy/statuses|no|team,workspace'
+  [linear.projects]='GET|/api/linear/proxy/projects|no|team,workspace,limit,after'
+  [linear.labels]='GET|/api/linear/proxy/labels|no|team,workspace'
+  [linear.users]='GET|/api/linear/proxy/users|no|workspace,limit,after'
+  [linear.create]='POST|/api/linear/proxy/issues|no|workspace'
+  [linear.update]='POST|/api/linear/proxy/issues/{id}|yes|workspace'
+  [linear.comment]='POST|/api/linear/proxy/issues/{id}/comments|yes|workspace'
+  [linear.link]='POST|/api/linear/proxy/issues/{id}/links|yes|workspace'
+  # The linking standard (D-8147): the pane's own project's Linear team key, visibility override and measured repository
+  # visibility, and the mode they give. One read, no id and no query key: the project is the caller's registry record's, and the
+  # identity rides the query like every Linear row's (the block in `main` that appends it).
+  [linking.show]='GET|/api/linking|no|-'
+  # The start report (Overlord W1a, spec §3.3.11): the session hook reports one SessionStart of its own session. `{id}` is the
+  # session's id; the body (`fromId`, `fromUuid`, `startedUuid`, `reportId`, `source`, `model`, `rowIncarnation`, `reportedAt`) is
+  # one JSON report, as the hook builds it or keeps it on one line of its spool.
+  [sessions.start]='POST|/api/sessions/{id}/start|yes|-'
+  [sessions.loads]='POST|/api/sessions/{id}/start/loads|yes|-'
+  # The card (Overlord W1a, the card piece; spec §3.3.3 C38): a session reads its OWN card, one page per request. `{id}` is the
+  # session's id; the declared query keys are the page and, after the first, the card's hash, and the pane's pair (`byId`,
+  # `byUuid`) is filled from `derive_identity` after them, never typed (review 2023 F13, the `runs review-rounds` rule of
+  # D-8125). `ccrc-api card` (`cmd_card`) reads one page through this row and prints its text; this row is the raw read.
+  [sessions.card]='GET|/api/sessions/{id}/card|yes|page,hash'
+  # The note door (Overlord W1a, the notes piece; spec §3.3.2 C37): a session's OWN working notes. `{id}` is the session's id.
+  # `note add` appends one (`{"key":{"kind":"run","id":12},"kind":"thread","waitsOn":"…","next":"…"}`, `"revises":<id>` to
+  # supersede one), `note close` ends one (`{"revises":<id>,"closes":true}`), `note list` reads the live ones, newest first,
+  # and `note handover` writes the handover note while the generation is checkpointed. The pane's pair (`byId`, `byUuid`)
+  # is filled from `derive_identity`, into the body of the three POSTs and the query of the list, and never typed (the
+  # `calls.record` rule: a body that names either is refused, unsent).
+  [note.add]='POST|/api/sessions/{id}/notes|yes|-'
+  [note.close]='POST|/api/sessions/{id}/notes|yes|-'
+  [note.list]='GET|/api/sessions/{id}/notes|yes|before,limit'
+  [note.handover]='POST|/api/sessions/{id}/handover|yes|-'
+  # The probe door (Overlord, the probes piece): a session reads and answers only its OWN open probe round. `ccrc-api probe`
+  # (`cmd_probe`) reads ONE PAGE per call through `sessions.probe`; the pane's pair (`byId`, `byUuid`) rides its query, filled
+  # from `derive_identity`, never typed. `probe answer --json -` posts every answer of the round in one call through
+  # `probe.answer`: its `{id}` is the PANE's, derived (no positional id), and the pair is appended LAST to the body (the note
+  # door's rule: a body that names either is refused, unsent; a bodyless call too).
+  [sessions.probe]='GET|/api/sessions/{id}/probe|yes|page'
+  [probe.answer]='POST|/api/sessions/{id}/probe|yes|-'
+  # The plan verbs (Linear hierarchy design, D-8181): `{id}` is the programme's slug. Every one but `plan.show` carries the pane's
+  # identity in the QUERY (the `linear.*` block's rule, never the body); `plan.show` is a session-or-token read and sends none. All
+  # are refused locally `no-plan-door` when a CURRENT cap file omits `plan-v1`. The second operand of a verb (a checkpoint, a
+  # ticket) rides the JSON body.
+  [plan.put]='POST|/api/programmes/{id}/plan|yes|-'
+  [plan.show]='GET|/api/programmes/{id}/plan|yes|-'
+  [plan.met]='POST|/api/programmes/{id}/plan/met|yes|-'
+  [plan.ticket-add]='POST|/api/programmes/{id}/plan/tickets|yes|-'
+  [plan.ticket-move]='POST|/api/programmes/{id}/plan/tickets/move|yes|-'
+  [plan.epic-drop]='POST|/api/programmes/{id}/plan/epics/drop|yes|-'
+  [plan.close]='POST|/api/programmes/{id}/plan/close|yes|-'
+  # The timers (Overlord W1a, the timers piece; spec §3.3.12 C61, C64): a session sets, lists and cancels its OWN timers. All
+  # three are parsed whole by `parse_timer`, which derives the pane's pair and refuses a typed one; `{id}` is the timer's id. All
+  # are refused locally `capability-missing` when a CURRENT cap file omits `timers-v1`.
+  [timer.set]='POST|/api/timers|no|-'
+  [timer.list]='GET|/api/timers|no|-'
+  [timer.cancel]='POST|/api/timers/{id}/cancel|yes|-'
 )
+
+# A Linear issue identifier, the `<REF>` of the five issue rows (D-7669): a team key that starts with a letter, a hyphen,
+# then one to nine digits. Every match also matches SAFE_RE; this is the narrower check on those rows, so `AAA12`,
+# `AAA-` and `search` are refused here, locally, as `bad-ref` (D-7685), and never sent. The server checks it again. The classes are spelled
+# out, never ranges, for the reason `_api_server_cap` gives: under a UTF-8 locale a range may collate non-ASCII letters.
+LINEAR_REF_RE='^[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz][ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_]*-[0123456789]{1,9}$'
+
+# >>> D-8270 tmux socket lookup (copied byte for byte into each script that cannot source ccd: tmux-socket-census.test.ts)
+# THE ONE tmux SOCKET LOOKUP (D-8270, ruling Q8). One shared tmux server, and every tmux call starts with the argv
+# `_TMX_ARGV` holds, so moving the fleet to another server is a change of setting. The setting is the first line of
+# ~/.ccrc/tmux-socket: absent or empty is tmux's default server and adds no flag; a socket name puts `-L <name>` first;
+# anything else asks no tmux at all and answers why with rc 1, never the "can't find session" that reads as gone. A
+# file, not a variable: every process on the box reads one answer, and no caller redirects a door with its environment.
+# Twin: shared/tmux-target.ts.
+# READ ONCE PER PROCESS, AT LOAD, WITH BUILTINS ONLY: the supervise tick's fork budget (tick-diet spec §9) is exactly
+# main's. A statement calls `_tmx …`. A capture `$( … )`, a pipeline stage, or a wrapper that execs its argv
+# (`_plat_timeout`, `timeout`, `exec`) spreads `"${_TMX_ARGV[@]}" …` itself: bash runs a lone command there without a
+# second fork, and a function in its place costs that fork on every call.
+_tmx_sock() {   # [home, default $HOME] -> TMX_SOCK (empty: the default server); rc 1 = the setting cannot be used, TMX_WHY says why
+  local f="${1-${HOME-}}/.ccrc/tmux-socket" s=""
+  TMX_SOCK=""; TMX_WHY=""
+  [ -e "$f" ] || [ -L "$f" ] || return 0
+  if [ -f "$f" ] && [ -r "$f" ]; then IFS= read -r s < "$f" || :; else TMX_WHY="$f cannot be read"; return 1; fi
+  [[ -z "$s" || "$s" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$ ]] \
+    || { TMX_WHY=".ccrc/tmux-socket does not hold a socket name (1 to 64 letters, digits, _ and -, not led by -)"; return 1; }
+  TMX_SOCK="$s"
+}
+# shellcheck disable=SC2120  # the home is optional: every caller today asks for the running user's own (D-8270)
+_tmx_argv() {   # [home] -> _TMX_ARGV, the argv every fleet tmux call starts with; run once below, again only when asked
+  if _tmx_sock "$@"; then _TMX_ARGV=(tmux ${TMX_SOCK:+-L "$TMX_SOCK"})
+  else _TMX_ARGV=(sh -c 'printf "%s\n" "$0" >&2; exit 1' "ccrc: tmux was not asked: $TMX_WHY"); fi
+}
+_tmx_argv
+_tmx() { "${_TMX_ARGV[@]}" "$@"; }   # tmux args… -> that call, on the fleet's server (a statement; see above for a capture)
+# <<< D-8270 tmux socket lookup
+
+# ── BEGIN GENERATED SERVER-CAP READER (shared/hook-helpers.mjs; edit _hook_server_cap in ccd/session-hook.sh, then regenerate) ──
+# ccrc:generated 1 sha256=b13a129bd7002352be7dfc797c104d07461cf4b34ab6bc1d6cb6e2dde47e177a
+_api_server_cap() {
+  local want="$1" l1="" l2="" l3="" l4="" at now
+  { { IFS= read -r l1 && IFS= read -r l2 && IFS= read -r l3 && ! IFS= read -r l4; } < "$HOME/.ccrc/server-caps"; } 2>/dev/null || return 1
+  [[ -z "$l4" && "$l3" == end && "$l1" =~ ^at\ ([0123456789]{1,11})$ ]] || return 1
+  at=$(( 10#${BASH_REMATCH[1]} ))
+  # The word class is spelled out, never a range: under a UTF-8 locale `a-z` may collate non-ASCII letters into it.
+  [[ "$l2" =~ ^caps(\ [abcdefghijklmnopqrstuvwxyz0123456789-]{1,64})*$ ]] || return 1
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then now="${EPOCHREALTIME%%[.,]*}"; else printf -v now '%(%s)T' -1; fi
+  [[ "$now" =~ ^[0123456789]+$ ]] || return 1
+  (( at <= now && now - at <= 180 )) || return 1
+  [[ " ${l2#caps} " == *" $want "* ]]
+}
+# ── END GENERATED SERVER-CAP READER ──
 
 # Every refusal leaves by this door, in the SAME JSON envelope the routes
 # themselves use, so a caller never parses two shapes. The human sentence goes to
@@ -166,13 +388,24 @@ refuse() {  # code, detail
 usage() {
   {
     printf '%s <group> <verb> [<id>] [--json <file|->] [--<key> <value>]\n\n' "$SELF"
+    printf 'stdout is the body and one newline. CCRC_API_STATUS=line keeps the `http <code>` line on stderr,\n'
+    printf 'which a later release stops writing by default.\n\n'
     printf 'Closed table — no URL, host or path is an argument.\n\n'
     for k in $(printf '%s\n' "${!ROUTES[@]}" | sort); do
-      IFS='|' read -r m p _ q <<< "${ROUTES[$k]}"
+      IFS='|' read -r m p _ q _ <<< "${ROUTES[$k]}"
       [[ "$q" == '-' ]] && q='' || q="  [--${q//,/ | --}]"
       printf '  %-18s %-5s %s%s\n' "${k/./ }" "$m" "$p" "$q"
     done
+    printf '  %-18s %s\n' '' 'coordinators intent takes set|clear --session <this session'"'"'s id> and nothing else'
     printf '  %-18s %s\n' 'whoami' 'this session'"'"'s {id,uuid}, from tmux + the registry'
+    printf '  %-18s %s\n' 'card' 'this session'"'"'s card, one page per call (--page N --hash H), as plain text'
+    printf '  %-18s %s\n' 'card --anchor' 'its short part for the session hook (--form start|prompt|fork): an anchor answer as it came, else exit 3'
+    printf '  %-18s %s\n' '' 'timer set takes <90m|2h|3d> <note> [--run <id> | --programme <slug>]; timer cancel takes <id>;'
+    printf '  %-18s %s\n' '' 'every timer verb fills this pane'"'"'s identity and takes no --json'
+    printf '  %-18s %s\n' 'probe' 'this session'"'"'s open probe round, one page per call (--page N), as plain text;'
+    printf '  %-18s %s\n' '' '`probe answer --json -` answers every question of the round in one call (no id: the pane'"'"'s)'
+    printf '  %-18s %s\n' '' 'mail inbox takes nothing: it prints this pane'"'"'s unacked mail as plain text, not JSON,'
+    printf '  %-18s %s\n' '' 'and acks each entry it printed. Run it bare: no pipe, no redirect, no head or tail.'
     printf '  %-18s %s\n' '' '(ledger allocate fills "byId" from this pane; --by <id> for a caller with none)'
   } >&2
 }
@@ -241,7 +474,9 @@ read_token() {   # sets TOKEN, or refuses (D-2724). Never call it in $( ).
 # auth/gate.ts's EXEMPT entry keeps the door open. It is refused on every other
 # row, and a session in a pane is filled from its pane. What is still
 # deliberately absent is any way to answer AS another session on a route that
-# checks attribution.
+# checks attribution. `coordinators intent` takes a second word of the same kind,
+# `--session`, and it is an ASSERTION, never a selector: `parse_intent` refuses
+# unless it equals the pane-derived id, exactly as `asks list --parent` does.
 DERIVED_ID=''
 DERIVED_UUID=''
 derive_identity() {   # sets DERIVED_ID / DERIVED_UUID, or refuses. NEVER call it
@@ -257,7 +492,7 @@ derive_identity() {   # sets DERIVED_ID / DERIVED_UUID, or refuses. NEVER call i
     || refuse 'no-pane' 'not inside a tmux pane (TMUX_PANE unset); identity cannot be derived'
   [[ "$pane" =~ ^%[0-9]+$ ]] \
     || refuse 'bad-pane' 'TMUX_PANE is not a pane id'
-  tname=$(tmux display-message -p -t "$pane" '#S' 2>/dev/null) \
+  tname=$("${_TMX_ARGV[@]}" display-message -p -t "$pane" '#S' 2>/dev/null) \
     || refuse 'no-tmux' 'tmux could not answer for this pane'
   [[ -n "$tname" ]] || refuse 'no-tmux' 'tmux named no session for this pane'
   DERIVED_ID="${tname#cc-}"
@@ -268,15 +503,464 @@ derive_identity() {   # sets DERIVED_ID / DERIVED_UUID, or refuses. NEVER call i
   [[ "$DERIVED_UUID" =~ $SAFE_RE ]] || refuse 'bad-uuid' 'session uuid is not a usable value'
 }
 
+# Adds `"<field>":"<value>"` as the FIRST key of the JSON object in `$body`
+# (main's local, read and rewritten here). Used by both body fills below.
+# `<value>` is always SAFE_RE-checked before it reaches this function (a `--by`
+# value, a derived id or a derived uuid), so it admits no quote and no backslash
+# and cannot escape the string it lands in. The third argument is the
+# `bad-body` detail for a body that is not an object.
+splice_body_field() {   # field, value, not-an-object detail
+  local lead rest restnb
+  lead="${body%%[![:space:]]*}"
+  rest="${body#"$lead"}"
+  [[ "$rest" == '{'* ]] || refuse 'bad-body' "$3"
+  rest="${rest#\{}"
+  restnb="${rest//[[:space:]]/}"
+  if [[ "$restnb" == '}' ]]; then body="{\"$1\":\"$2\"}"
+  else body="{\"$1\":\"$2\",$rest"; fi
+}
+
+append_body_field() {   # field, value, not-an-object detail: the field goes LAST, so a parser that keeps the later of two
+  # duplicate keys keeps this one (review 2039, F7). Same safety as splice_body_field: SAFE_RE admits no quote in the value.
+  local lead rest trail inner
+  lead="${body%%[![:space:]]*}"
+  rest="${body#"$lead"}"
+  trail="${rest##*[![:space:]]}"
+  rest="${rest%"$trail"}"
+  [[ "$rest" == '{'* && "$rest" == *'}' ]] || refuse 'bad-body' "$3"
+  inner="${rest#\{}"
+  inner="${inner%\}}"
+  if [[ -z "${inner//[[:space:]]/}" ]]; then body="{\"$1\":\"$2\"}"
+  else body="{$inner,\"$1\":\"$2\"}"; fi
+}
+
 cmd_whoami() {
   derive_identity
   printf '{"id":"%s","uuid":"%s"}\n' "$DERIVED_ID" "$DERIVED_UUID"
+}
+
+# `coordinators intent <set|clear> --session <id>`, and NOTHING ELSE (delegation broker wave 3, Task 15). A focused special case
+# that runs before the generic parser, so the generic one needs no flag, body file or query key for this row and gains none:
+# exactly one action word, then exactly one `--session`, nothing after it. The id and uuid are the PANE's (`derive_identity`);
+# `--session` must equal the derived id or the call is refused, so it asserts and never selects. The body is synthesized here from
+# those two values, which `derive_identity` has already held to SAFE_RE (no quote, no backslash), so it cannot break out of its
+# JSON strings. Sets INTENT_ID and INTENT_BODY, or refuses. NEVER call it inside $( ): `refuse` prints on stdout.
+INTENT_ID=''
+INTENT_BODY=''
+parse_intent() {
+  local action='' session='' have_session=0
+  (( $# >= 1 )) || refuse 'bad-args' 'coordinators intent needs set or clear'
+  action="$1"; shift
+  [[ "$action" == 'set' || "$action" == 'clear' ]] \
+    || refuse 'bad-args' "coordinators intent takes set or clear, not: $action"
+  while (( $# )); do
+    case "$1" in
+      --session)
+        (( have_session == 0 )) || refuse 'bad-args' '--session was given twice'
+        [[ $# -ge 2 ]] || refuse 'bad-args' '--session needs a value'
+        [[ "$2" =~ $SAFE_RE ]] || refuse 'bad-id' '--session value is not a plain session id'
+        session="$2"; have_session=1; shift 2 ;;
+      *) refuse 'bad-args' "unexpected argument: $1" ;;
+    esac
+  done
+  (( have_session == 1 )) || refuse 'bad-args' 'coordinators intent needs --session <id>'
+  derive_identity
+  [[ "$session" == "$DERIVED_ID" ]] \
+    || refuse 'session-mismatch' '--session must name this pane-derived session'
+  INTENT_ID="$DERIVED_ID"
+  INTENT_BODY="{\"action\":\"$action\",\"byId\":\"$DERIVED_ID\",\"byUuid\":\"$DERIVED_UUID\"}"
+}
+
+# `timer set <duration> <note> [--run <id> | --programme <slug>]`, `timer list` and `timer cancel <id>` (Overlord W1a, the timers
+# piece, plan `w1a-timers.md` Task 11): a grammar of their own, parsed whole before the generic parser, as `parse_intent` is.
+# THE IDENTITY IS THE PANE'S on all three (slug timer-verbs-derive-identity): `derive_identity` fills the pair and the caller
+# types none, so `--json`, `--by` and every flag but `set`'s two are refused, and a session cannot send another session's pair.
+# Flags are read with `if`/`elif`, never `case` labels: `ccrc-api-closed.test.ts` reads every `--flag)` label as an identity flag.
+# `set` builds its body whole with `jq --arg`, which escapes every control character where `json_escape` escapes five (slug
+# timer-body-built-by-jq), and refuses `no-jq` without jq, as `cmd_card` does. The duration is `<n>m`, `<n>h` or `<n>d`, turned
+# into `durationMs` here; its bounds, and the cancel id's integer check, are the server's. `cancel`'s body is the pane's pair
+# alone, built whole (never through `splice_body_field`). Sets TIMER_ID and TIMER_BODY, or refuses. NEVER call it inside $( ).
+TIMER_ID=''
+TIMER_BODY=''
+parse_timer() {   # verb, then the verb's arguments
+  local verb="$1" duration note run='' programme='' ms flag
+  shift
+  # A binding flag in the first place is a legitimate flag in the wrong position, not a typed identity (review 2064 F7).
+  if [[ "$verb" == 'set' && "${1:-}" =~ ^--(run|programme)(=|$) ]]; then
+    refuse 'bad-args' "timer set takes the duration and the note first, then $1: timer set <duration> <note> [--run <id> | --programme <slug>]"
+  fi
+  if [[ "${1:-}" == --* ]]; then
+    refuse 'bad-args' "timer $verb takes no $1 here: the identity is this pane's, and the client fills it"
+  fi
+  if [[ "$verb" == 'list' ]]; then
+    (( $# == 0 )) || refuse 'bad-args' "timer list takes no argument: $1"
+  elif [[ "$verb" == 'cancel' ]]; then
+    (( $# >= 1 )) || refuse 'no-id' 'timer cancel needs an id'
+    (( $# == 1 )) || refuse 'bad-args' "timer cancel takes one id and nothing else: $2"
+    TIMER_ID="$1"
+  else
+    (( $# >= 2 )) || refuse 'bad-args' 'timer set needs a duration (90m, 2h or 3d) and a note'
+    duration="$1"; note="$2"; shift 2
+    [[ "$duration" =~ ^([123456789][0123456789]{0,8})([mhd])$ ]] \
+      || refuse 'bad-duration' "timer set takes a duration of minutes, hours or days (90m, 2h, 3d): $duration"
+    if [[ "${BASH_REMATCH[2]}" == 'm' ]]; then ms=60000; elif [[ "${BASH_REMATCH[2]}" == 'h' ]]; then ms=3600000; else ms=86400000; fi
+    ms=$(( 10#${BASH_REMATCH[1]} * ms ))
+    while (( $# > 0 )); do
+      flag="$1"
+      (( $# >= 2 )) || refuse 'bad-args' "timer set: $flag needs a value"
+      if [[ "$flag" == '--run' ]]; then
+        [[ -z "$run" ]] || refuse 'bad-args' 'timer set: --run was given twice'
+        [[ "$2" =~ ^[123456789][0123456789]{0,14}$ ]] || refuse 'bad-args' "timer set: --run is a run id: $2"
+        run="$2"
+      elif [[ "$flag" == '--programme' ]]; then
+        [[ -z "$programme" ]] || refuse 'bad-args' 'timer set: --programme was given twice'
+        [[ "$2" =~ $SAFE_RE ]] || refuse 'bad-args' "timer set: --programme is a programme slug: $2"
+        programme="$2"
+      else
+        refuse 'bad-args' "timer set takes --run or --programme only: $flag (the identity is this pane's, and the client fills it)"
+      fi
+      shift 2
+    done
+    [[ -z "$run" || -z "$programme" ]] || refuse 'bad-args' 'timer set: a timer binds a run or a programme, not both'
+    command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'timer set builds its body with jq, and jq is not on PATH; no timer was set'
+  fi
+  derive_identity
+  if [[ "$verb" == 'cancel' ]]; then
+    TIMER_BODY="{\"fromId\":\"$DERIVED_ID\",\"fromUuid\":\"$DERIVED_UUID\"}"
+  elif [[ "$verb" == 'set' ]]; then
+    TIMER_BODY=$(jq -cn --arg fromId "$DERIVED_ID" --arg fromUuid "$DERIVED_UUID" --argjson durationMs "$ms" --arg note "$note" \
+      --arg run "$run" --arg programme "$programme" '{fromId: $fromId, fromUuid: $fromUuid, durationMs: $durationMs, note: $note}
+        + (if $run == "" then {} else {runId: ($run | tonumber)} end) + (if $programme == "" then {} else {programme: $programme} end)') \
+      || refuse 'bad-args' 'timer set: jq could not build the body; no timer was set'
+  fi
+}
+
+# ONE RUN, MANY REQUESTS (D-6780). Every request this client sends goes through `send_request`: the one-request rows
+# send one, and `mail inbox` sends its read and then one ack per printed entry. So the function NEVER EXITS, NEVER
+# CLEARS `TOKEN` and NEVER SETS A TRAP: `main` owns the run's one temp file (`REQ_OUT`), its one EXIT trap and the one
+# token clear after the verb's last request. A per-request trap would replace the last one and leave every earlier
+# file behind, a cleared token would send every later ack unauthenticated, and an exit would end an inbox run at the
+# first ack that got no response, with every later printed entry unreported.
+#
+# It answers with `REQ_CODE` (the HTTP status), `REQ_RC` (curl's exit status) and the body in `$REQ_OUT`, which is
+# emptied first because curl creates no output for an empty body and the last request's would still be there. It
+# returns 0 for an answer and 3 for none; a one-request row turns the 3 into `transport_exit`.
+REQ_OUT=''
+REQ_CODE=''
+REQ_RC=0
+send_request() {   # method, url, body -> REQ_CODE / REQ_RC / $REQ_OUT; 0 = an answer, 3 = no response
+  local method="$1" url="$2" body="$3" code
+  : > "$REQ_OUT"
+  # `-f` is never used, on purpose and for the same reason both corpora say so:
+  # it prints nothing on a 4xx and exits 22, and the body is the whole protocol —
+  # every refusal these routes send arrives as a 4xx JSON body.
+  local -a args=(-sS -K - -m 30 -o "$REQ_OUT" -w '%{http_code}' -X "$method")
+  [[ -n "$body" ]] && args+=(-H 'content-type: application/json' --data-binary "$body")
+
+  # THE TOKEN RIDES CURL'S STDIN, NEVER ITS ARGV (R16): a `-H` value is readable
+  # in every process listing on the box (`ps`, /proc/<pid>/cmdline) for the life
+  # of the call. `-K -` reads the header from a config line on stdin, the
+  # spelling ccd-pool-sync and ccd-update-sync ship. stdin is free here because
+  # `--json -` was read into $body in `main`, before the first request.
+  code=$(printf 'header = "x-ccrc-mail-token: %s"\n' "$TOKEN" \
+    | curl "${args[@]}" "$url" 2>/dev/null)
+  REQ_RC=$?
+  REQ_CODE="$code"
+  (( REQ_RC == 0 )) && [[ -n "$code" && "$code" != '000' ]] && return 0
+  return 3
+}
+
+# NOT an answer. The one case that exits non-zero — and it still speaks the
+# same envelope, so a caller never has to parse a second shape to find out.
+transport_exit() {
+  printf '{"ok":false,"error":"transport","detail":"no response from the server (curl rc %s)"}\n' "$REQ_RC"
+  printf '%s: no response from the server\n' "$SELF" >&2
+  exit 3
+}
+
+# The body ends in exactly one newline: a session's shell tool shows both
+# streams together, and a body with none ran into the status line (`}http 200`).
+# Empty prints nothing; one already ending in a newline gets no second.
+print_body() {
+  cat "$REQ_OUT"
+  [[ -s "$REQ_OUT" && -n "$(tail -c 1 "$REQ_OUT")" ]] && printf '\n'
+  return 0
+}
+
+INBOX_BARE='inbox: stdout is a pipe or /dev/null, so nothing was acked; run ~/.local/bin/ccrc-api mail inbox bare (no pipe, no redirect, no head or tail)'
+INBOX_LINE=''
+INBOX_DONE=0
+
+# One ack of the inbox loop, through the `mail.ack` row's own template and today's attribution: the body is the pane's
+# pair, both held to SAFE_RE by `derive_identity`, so no quote can break out of it. Sets INBOX_LINE (the outcome line)
+# and INBOX_DONE (1 when this request acked the delivery). A transport failure is that entry's line, never an exit.
+inbox_ack() {   # delivery id
+  local id="$1" tmpl ans
+  INBOX_DONE=0
+  IFS='|' read -r _ tmpl _ _ <<< "${ROUTES[mail.ack]}"
+  if ! send_request POST "$SERVER_URL${tmpl/\{id\}/$id}" "{\"fromId\":\"$DERIVED_ID\",\"fromUuid\":\"$DERIVED_UUID\"}"; then
+    INBOX_LINE="inbox: delivery $id is NOT acked (transport); it will be shown again"
+    return 0
+  fi
+  ans=$(jq -r 'def one: tostring | gsub("[\\r\\n\\t]"; " ");
+    if .ok == true and .parked == true then "parked \(.lastError // "no reason given" | one)"
+    elif .ok == true and .already == true then "already"
+    elif .ok == true then "acked"
+    else "no \(.error // "" | one)" end' "$REQ_OUT" 2>/dev/null) || ans='no '
+  [[ "$REQ_CODE" == '200' ]] || ans="no ${ans#no }"
+  [[ "$ans" == 'no ' ]] && ans="no http $REQ_CODE"
+  case "$ans" in
+    acked) INBOX_DONE=1; INBOX_LINE="inbox: acked delivery $id" ;;
+    already) INBOX_LINE="inbox: delivery $id was already acked" ;;
+    parked\ *) INBOX_LINE="inbox: delivery $id was closed before this ack (${ans#parked }); nothing is owed" ;;
+    *) INBOX_LINE="inbox: delivery $id is NOT acked (${ans#no }); it will be shown again" ;;
+  esac
+}
+
+# `mail inbox` (D-6780, spec 2026-10-24 §3.5): read this pane's inbox once, print each entry, and ack each one only
+# after its write succeeded. Identity is the pane's (`main` ran `derive_identity` and put the pair in the read's query);
+# no flag selects another session. NEVER call it inside $( ): it prints, refuses and exits.
+#
+# WHERE STDOUT GOES IS DECIDED BEFORE THE READ. fd 1 on `/dev/null` or on a pipe (`| tail`, `| jq`, `$( )`) makes the
+# run SHOW-ONLY: every entry is printed and none is acked, and the first and last lines say to run it bare, so `| head`
+# keeps one and `| tail` the other. The Claude Code Bash tool's own capture is a regular file shared with fd 2, never
+# a FIFO (measured, spec §1.2), so a bare run there acks; a socket (Node's piped stdio) is no shell pipeline and acks.
+# A redirect to a file acks too: it looks exactly like the tool's capture. That is the residual spec §4 names, and
+# the footer lists every acked delivery for `mail fetch`.
+#
+# NOTHING IS ACKED WHOSE WRITE FAILED: a failed write (`>&-`, a full disk) stops the loop, that entry and every later
+# one stay unacked, and the failure is named on stderr. A failed ack is that entry's line and the loop goes on. Exit 0
+# when the read answered, whatever happened to the acks; 3 when the read got no response.
+cmd_inbox() {   # url of the read
+  local show_only=0 shape remaining abandoned n i id printed=0 nacked=0 acked=''
+  [[ /dev/stdout -ef /dev/null || -p /dev/stdout ]] && show_only=1
+
+  if ! send_request GET "$1" ''; then TOKEN=""; transport_exit; fi
+  (( show_only )) && printf '%s\n' "$INBOX_BARE"
+  if [[ "$REQ_CODE" != '200' ]]; then
+    TOKEN=""
+    print_body
+    printf 'inbox: the server did not serve the inbox (http %s); if it predates mail inbox, read with mail list, fetch and ack\n' "$REQ_CODE"
+    (( show_only )) && printf '%s\n' "$INBOX_BARE"
+    exit 0
+  fi
+
+  # The answer's shape, checked whole before anything is printed or acked: ids are positive integers and every text
+  # is a string with no NUL, so the NUL-separated read below splits exactly where the entries do.
+  shape=$(jq -r 'if (.ok == true and (.deliveries | type) == "array"
+        and (.remaining | type) == "number" and (.abandoned | type) == "number"
+        and all(.deliveries[]; type == "object" and (.deliveryId | type) == "number" and .deliveryId >= 1
+          and .deliveryId == (.deliveryId | floor) and (.text | type) == "string" and (.text | contains("\u0000") | not)))
+      then "\(.remaining) \(.abandoned) \(.deliveries | length)" else "bad" end' "$REQ_OUT" 2>/dev/null) || shape='bad'
+  local -a ids=() texts=()
+  if [[ "$shape" =~ ^([0123456789]+)\ ([0123456789]+)\ ([0123456789]+)$ ]]; then
+    remaining="${BASH_REMATCH[1]}"; abandoned="${BASH_REMATCH[2]}"; n="${BASH_REMATCH[3]}"
+    # Read whole before the first ack: each ack's answer is written over this same temp file.
+    mapfile -t ids < <(jq -r '.deliveries[].deliveryId' "$REQ_OUT" 2>/dev/null)
+    mapfile -d '' texts < <(jq -j '.deliveries[] | .text, "\u0000"' "$REQ_OUT" 2>/dev/null)
+  fi
+  if [[ "$shape" == 'bad' || "${#ids[@]}" != "${n:-x}" || "${#texts[@]}" != "${n:-x}" ]]; then
+    TOKEN=""
+    print_body
+    printf 'inbox: the answer is not an inbox; nothing was acked\n'
+    (( show_only )) && printf '%s\n' "$INBOX_BARE"
+    exit 0
+  fi
+
+  for (( i = 0; i < n; i++ )); do
+    id="${ids[i]}"
+    [[ "$id" =~ ^[0123456789]+$ ]] || break
+    if ! printf '%s\n' "${texts[i]}"; then
+      printf '%s: inbox: could not write delivery %s to stdout; it and every later delivery stay unacked\n' "$SELF" "$id" >&2
+      break
+    fi
+    printed=$(( printed + 1 ))
+    (( show_only )) && continue
+    inbox_ack "$id"
+    (( INBOX_DONE )) && { nacked=$(( nacked + 1 )); acked+=" $id"; }
+    if ! printf '%s\n' "$INBOX_LINE"; then
+      printf '%s: inbox: could not write after delivery %s; every later delivery stays unacked\n' "$SELF" "$id" >&2
+      break
+    fi
+  done
+  TOKEN=""
+
+  if (( printed < n )); then
+    # The loop stopped on a failed write: stdout cannot be trusted with the footer, so the acked list goes to stderr.
+    [[ -z "$acked" ]] || printf '%s: inbox: acked deliveries%s; read them again with ~/.local/bin/ccrc-api mail fetch <delivery>\n' "$SELF" "$acked" >&2
+    exit 0
+  fi
+  if (( n == 0 )); then
+    printf 'inbox: no unacked mail\n'
+  else
+    printf 'inbox: %s printed, %s acked\n' "$printed" "$nacked"
+    [[ -z "$acked" ]] || printf 'inbox: acked deliveries%s; if any of their text did not reach you, read it again with ~/.local/bin/ccrc-api mail fetch <delivery>\n' "$acked"
+  fi
+  (( remaining == 0 )) || printf 'inbox: %s more unacked; run mail inbox again\n' "$remaining"
+  (( abandoned == 0 )) || printf 'inbox: %s abandoned deliveries are not shown; mail list --to %s lists them\n' "$abandoned" "$DERIVED_ID"
+  (( show_only == 0 )) || printf '%s\n' "$INBOX_BARE"
+  exit 0
+}
+
+# AN EXPLICIT TEMPLATE, because BSD `mktemp` IGNORES `$TMPDIR` when given
+# none (measured in install.sh) — and this file cannot source ccd's
+# platform block, so the template is spelled locally, unconditionally, the
+# same shape install.sh uses. GNU mktemp honours the template identically.
+# ONE file and ONE trap for the whole run, armed before the first request (D-6780): curl's `-o` rewrites it on
+# each request, and `send_request` never arms one of its own. `main` arms it for a row, and `cmd_card` for its page.
+arm_req_out() {
+  REQ_OUT=$(mktemp "${TMPDIR:-/tmp}/ccrc-api.XXXXXXXXXX") || refuse 'no-tmp' 'cannot create a temp file'
+  # shellcheck disable=SC2064
+  trap "rm -f '$REQ_OUT'" EXIT
+}
+
+# `card` (Overlord W1a, the card piece, plan `w1a-card.md` Task 5; review 2023 F1): this pane's own card, ONE PAGE PER
+# CALL, through the `sessions.card` row. A whole card can pass the size at which Claude Code stops showing a tool result
+# (`TOOL_RESULT_CUT_BYTES`, `shared/continuity-card.ts`), so each call prints one page (`CARD_PAGE_CHARS`, under it) and a
+# last line naming the page, the page count, the hash and the exact command for the next page. `--page N --hash H` reads a
+# later page of the card page 1 named; page 1 takes no hash. The server records the read once every page of one hash was
+# served to this conversation, and the last line says whether it did: a page whose answer did not record it (a server
+# restart forgets a half-read card) says so, with the command that reads the card again. A `card-changed` (409) means the
+# card was rendered anew since page 1: nothing is printed but that line and the command to start again. Any other answer is
+# printed as it came, with its status on stderr. Exit 0 for an answer, 3 for none. A session reads its own card, the pane's.
+# `card --anchor [--form start|prompt|fork]` (Overlord W1a, the anchor piece): the card door's `part=anchor`, the card's
+# short part, which the session hook asks for at a start and on the prompt after an automatic compaction. It asks for
+# page 0, which an older server refuses before it reads anything. An answer that names `part: "anchor"` and the form asked
+# (`{dark}`, `{live}` or `{hash, text}`, each beside `ok`, `part` and `form`) is printed as it came, exit 0; any other
+# answer, an older server's card page or a refusal, prints nothing on stdout and exits 3, as no answer does (fix round 1,
+# F1). Its status goes to stderr either way: the hook reads the answer with jq. It takes no page or hash.
+# NEVER call it inside $( ): it prints, refuses and exits.
+cmd_card() {
+  local page=1 hash='' flag anchor='' form=''
+  while (( $# > 0 )); do
+    flag="$1"
+    if [[ "$flag" == '--anchor' ]]; then anchor=1; shift; continue; fi
+    (( $# >= 2 )) || refuse 'bad-args' "card: $flag needs a value"
+    # Neither is an identity flag (`ccrc-api-closed.test.ts` reads the client's case labels for those): the page and its card.
+    if [[ "$flag" == '--page' ]]; then
+      [[ "$2" =~ ^[1-9][0-9]{0,5}$ ]] || refuse 'bad-args' "card: --page is a positive integer: $2"
+      page="$2"
+    elif [[ "$flag" == '--hash' ]]; then
+      [[ "$2" =~ ^[0-9a-f]{64}$ ]] || refuse 'bad-args' "card: --hash is a card hash (64 hex characters): $2"
+      hash="$2"
+    elif [[ "$flag" == '--form' ]]; then
+      [[ "$2" =~ ^(start|prompt|fork)$ ]] || refuse 'bad-args' "card: --form is start, prompt or fork: $2"
+      form="$2"
+    else
+      refuse 'bad-args' "card takes --page N and --hash H, or --anchor and --form F, only: $flag"
+    fi
+    shift 2
+  done
+  [[ -z "$form" || -n "$anchor" ]] || refuse 'bad-args' 'card: --form is --anchor'"'"'s'
+  [[ -z "$anchor" ]] || { (( page == 1 )) && [[ -z "$hash" ]]; } || refuse 'bad-args' 'card: --anchor takes no --page or --hash'
+  (( page == 1 )) || [[ -n "$hash" ]] || refuse 'bad-args' 'card: a page after the first names its card hash (--hash), from page 1'"'"'s last line'
+  command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'card reads the page with jq, and jq is not on PATH; nothing was read'
+  derive_identity
+  local method tmpl _needs _qkeys
+  IFS='|' read -r method tmpl _needs _qkeys <<< "${ROUTES[sessions.card]}"
+  server_url
+  read_token
+  arm_req_out
+  local url="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID&page=$page${hash:+&hash=$hash}"
+  [[ -z "$anchor" ]] || url="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID&part=anchor&form=${form:-start}&page=0"
+  if ! send_request "$method" "$url" ''; then TOKEN=""; transport_exit; fi
+  TOKEN=""
+  if [[ -n "$anchor" ]]; then
+    printf 'http %s\n' "$REQ_CODE" >&2
+    [[ "$REQ_CODE" == 200 ]] && jq -e --arg f "${form:-start}" '.part == "anchor" and .form == $f' "$REQ_OUT" >/dev/null 2>&1 || exit 3
+    print_body; exit 0
+  fi
+  if [[ "$REQ_CODE" == '409' ]] && [[ "$(jq -r '.error // empty' "$REQ_OUT" 2>/dev/null)" == 'card-changed' ]]; then
+    printf 'card: the card changed since page 1 was read; read it again from page 1: ccrc-api card\n'
+    exit 0
+  fi
+  local shape got
+  shape=$(jq -r 'if (.ok == true and (.hash | type) == "string" and (.hash | test("^[0-9a-f]{64}$"))
+        and (.pages | type) == "number" and .pages >= 1 and .pages == (.pages | floor)
+        and (.page | type) == "number" and .page >= 1 and .page <= .pages and .page == (.page | floor)
+        and (.text | type) == "string" and (.recorded | type) == "boolean")
+      then "\(.hash) \(.page) \(.pages) \(.recorded)" else "bad" end' "$REQ_OUT" 2>/dev/null) || shape='bad'
+  if [[ "$REQ_CODE" != '200' || ! "$shape" =~ ^([0-9a-f]{64})\ ([0-9]+)\ ([0-9]+)\ (true|false)$ ]]; then
+    print_body
+    printf 'http %s\n' "$REQ_CODE" >&2
+    exit 0
+  fi
+  local h="${BASH_REMATCH[1]}" p="${BASH_REMATCH[2]}" n="${BASH_REMATCH[3]}" recorded="${BASH_REMATCH[4]}"
+  # A page's text may end in a newline, which `$( )` would strip: a sentinel byte keeps it, and is cut after.
+  got=$(jq -j '.text, "."' "$REQ_OUT" 2>/dev/null) || got='.'
+  printf '%s\n' "${got%.}"
+  if [[ "$recorded" == 'true' ]]; then
+    printf 'card: page %s of %s, hash %s; every page of this card is read, and the read is recorded\n' "$p" "$n" "$h"
+  elif (( p < n )); then
+    printf 'card: page %s of %s, hash %s; next: ccrc-api card --page %s --hash %s\n' "$p" "$n" "$h" "$(( p + 1 ))" "$h"
+  else
+    printf 'card: page %s of %s, hash %s; the read is NOT recorded: the server did not see every page of this card served to this conversation (a restart forgets a half-read card); read it again from page 1: ccrc-api card\n' "$p" "$n" "$h"
+  fi
+  exit 0
+}
+
+# `probe` (Overlord, the probes piece): this pane's own open probe round, ONE PAGE PER CALL, through the `sessions.probe` row.
+# `--page N` reads a later page (default 1). It prints the page's text and one last line naming the page, the page count and the
+# round, with the exact command for the next page, or, on the last page, the command that answers the round. `probe-none-open`
+# (409) prints one line and exits 0. Any other answer is printed as it came, with its status on stderr; exit 0 for an answer, 3
+# for none. The pair is the pane's (`derive_identity`), never typed. `probe answer` is a generic row (`probe.answer`), not this.
+# NEVER call it inside $( ): it prints, refuses and exits.
+cmd_probe() {
+  local page=1
+  while (( $# > 0 )); do
+    (( $# >= 2 )) || refuse 'bad-args' "probe: $1 needs a value"
+    if [[ "$1" == '--page' ]]; then
+      [[ "$2" =~ ^[1-9][0-9]{0,5}$ ]] || refuse 'bad-args' "probe: --page is a positive integer: $2"
+      page="$2"
+    else
+      refuse 'bad-args' "probe takes --page N only (or the verb answer): $1"
+    fi
+    shift 2
+  done
+  command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'probe reads the page with jq, and jq is not on PATH; nothing was read'
+  derive_identity
+  local method tmpl _needs _qkeys
+  IFS='|' read -r method tmpl _needs _qkeys <<< "${ROUTES[sessions.probe]}"
+  server_url
+  read_token
+  arm_req_out
+  local url="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID&page=$page"
+  if ! send_request "$method" "$url" ''; then TOKEN=""; transport_exit; fi
+  TOKEN=""
+  if [[ "$REQ_CODE" == '409' ]] && [[ "$(jq -r '.error // empty' "$REQ_OUT" 2>/dev/null)" == 'probe-none-open' ]]; then
+    printf 'probe: no probe round of yours is open\n'
+    exit 0
+  fi
+  local shape got
+  shape=$(jq -r 'if (.ok == true and (.roundId | type) == "string" and (.roundId | test("^[A-Za-z0-9._:-]+$"))
+        and (.pages | type) == "number" and .pages >= 1 and .pages == (.pages | floor)
+        and (.page | type) == "number" and .page >= 1 and .page <= .pages and .page == (.page | floor)
+        and (.text | type) == "string")
+      then "\(.roundId) \(.page) \(.pages)" else "bad" end' "$REQ_OUT" 2>/dev/null) || shape='bad'
+  if [[ "$REQ_CODE" != '200' || ! "$shape" =~ ^([A-Za-z0-9._:-]+)\ ([0-9]+)\ ([0-9]+)$ ]]; then
+    print_body
+    printf 'http %s\n' "$REQ_CODE" >&2
+    exit 0
+  fi
+  local r="${BASH_REMATCH[1]}" p="${BASH_REMATCH[2]}" n="${BASH_REMATCH[3]}"
+  # A page's text may end in a newline, which `$( )` would strip: a sentinel byte keeps it, and is cut after.
+  got=$(jq -j '.text, "."' "$REQ_OUT" 2>/dev/null) || got='.'
+  printf '%s\n' "${got%.}"
+  if (( p < n )); then
+    printf 'probe: page %s of %s, round %s; next: ccrc-api probe --page %s\n' "$p" "$n" "$r" "$(( p + 1 ))"
+  else
+    printf 'probe: page %s of %s, round %s; answer every question in one call: ccrc-api probe answer --json -\n' "$p" "$n" "$r"
+  fi
+  exit 0
 }
 
 main() {
   (( $# >= 1 )) || { usage; refuse 'no-verb' 'no group given'; }
 
   [[ "$1" == 'whoami' ]] && { cmd_whoami; exit 0; }
+  [[ "$1" == 'card' ]] && { shift; cmd_card "$@"; }
+  # `probe answer` is the generic row `probe.answer`; any other `probe` is the page read.
+  [[ "$1" == 'probe' && "${2:-}" != 'answer' ]] && { shift; cmd_probe "$@"; }
   [[ "$1" == '-h' || "$1" == '--help' ]] && { usage; exit 0; }
 
   (( $# >= 2 )) || { usage; refuse 'no-verb' "group '$1' needs a verb"; }
@@ -289,13 +973,37 @@ main() {
   IFS='|' read -r method tmpl needs qkeys <<< "${ROUTES[$key]}"
 
   # A positional id, if this row declares one. It is read before the flags so an
-  # id can never be mistaken for a flag value.
-  local id=''
-  if [[ $# -gt 0 && "$1" != --* ]]; then id="$1"; shift; fi
+  # id can never be mistaken for a flag value. The ONE row with a grammar of its own,
+  # `coordinators intent`, is parsed whole by `parse_intent` instead; it derives the id
+  # from the pane and consumes every argument, so the generic parser below sees none.
+  local id='' intent_body=''
+  if [[ "$key" == 'coordinators.intent' ]]; then
+    parse_intent "$@"
+    id="$INTENT_ID"; intent_body="$INTENT_BODY"
+    set --
+  elif [[ "$key" == timer.* ]]; then
+    parse_timer "$verb" "$@"
+    id="$TIMER_ID"; intent_body="$TIMER_BODY"
+    set --
+  elif [[ "$key" == 'mail.inbox' ]]; then
+    # `mail inbox` takes NOTHING (D-6780): no id, no flag, no `--to`. A session reads its own inbox, the pane's.
+    (( $# == 0 )) || refuse 'bad-args' "mail inbox takes no argument: $1"
+    command -v jq >/dev/null 2>&1 \
+      || refuse 'no-jq' 'mail inbox reads the inbox answer with jq, and jq is not on PATH; nothing was read or acked'
+    derive_identity
+  elif [[ "$key" == 'probe.answer' ]]; then
+    # The id is the PANE's, derived: a session answers only its own round, so no positional id is taken (one typed is
+    # `unexpected argument`, below).
+    derive_identity
+    id="$DERIVED_ID"
+  elif [[ $# -gt 0 && "$1" != --* ]]; then id="$1"; shift; fi
 
   if [[ "$needs" == 'yes' ]]; then
     [[ -n "$id" ]] || refuse 'no-id' "$group $verb needs an id"
     [[ "$id" =~ $SAFE_RE ]] || refuse 'bad-id' 'id is not a plain id'
+    if [[ "$group" == 'linear' ]]; then
+      [[ "$id" =~ $LINEAR_REF_RE ]] || refuse 'bad-ref' 'the issue reference is not an identifier such as AAA-12'
+    fi
   else
     # Not ignored: a caller who passed one believes it is going somewhere.
     [[ -z "$id" ]] || refuse 'unexpected-id' "$group $verb takes no id"
@@ -345,7 +1053,13 @@ main() {
     fi
   fi
 
-  # THE ONE BODY THIS CLIENT REWRITES, and the first in its history. Measured
+  # The intent row's body is the body `parse_intent` synthesized, and a timer row's the one `parse_timer` built: never read
+  # from a file or stdin.
+  [[ -z "$intent_body" ]] || body="$intent_body"
+
+  # THE FIRST BODY THIS CLIENT REWRITES. It now rewrites three more: the intent
+  # row's (above, replaced whole), `runs.open`'s (below) and the claimant rows'
+  # `kind` (below, D-7322). Measured
   # 2026-09-02: at least 101 of this project's allocations already carry an empty
   # holder, because the documented body omits `byId` and the route stores
   # `byId ?? ''` — an omitted field and an explicit empty string reaching one
@@ -390,18 +1104,140 @@ main() {
     case "$nb" in
       *'"byId":'*) : ;;                      # the caller has spoken
       *)
-        local who lead rest restnb
+        local who
         if [[ -n "$by" ]]; then who="$by"; else derive_identity; who="$DERIVED_ID"; fi
-        lead="${body%%[![:space:]]*}"
-        rest="${body#"$lead"}"
-        [[ "$rest" == '{'* ]] \
-          || refuse 'bad-body' 'the allocate body is not a JSON object; byId cannot be added'
-        rest="${rest#\{}"
-        restnb="${rest//[[:space:]]/}"
-        if [[ "$restnb" == '}' ]]; then body="{\"byId\":\"$who\"}"
-        else body="{\"byId\":\"$who\",$rest"; fi ;;
+        splice_body_field 'byId' "$who" \
+          'the allocate body is not a JSON object; byId cannot be added' ;;
     esac
   fi
+
+  # THE SECOND BODY THIS CLIENT FILLS: a run's claimant sends its own identity
+  # (D-5298; coordinator-first routing, spec §6.4). `POST /api/runs` is where a
+  # coordinator becomes a child's parent, and the server checks the claimant with
+  # `requireAttribution` against `claimedByUuid`. The coordinator skill's body
+  # names `claimedBy` and no uuid, and it stays that way: the uuid is read here,
+  # from the caller's own `$REG/<id>.uuid` through `derive_identity` (the pane,
+  # then the registry, as `whoami` and `asks list` read it), so no caller can get
+  # it wrong one call at a time. `runs.open` is the only row that sets a claimant:
+  # dispatch, advance, close, items and route take a run id and leave
+  # `claimedBy` and `sessionId` alone, and the reclaim door that does change them
+  # is one of the four that never have a row here (above).
+  #
+  # SAME RULES AS THE `byId` FILL, for the same reasons: a body that already
+  # names `claimedByUuid` is left alone (the route re-measures it, so the caller
+  # who spoke owns the answer, and it needs no pane); a blank one is refused; a
+  # body with no derivable identity is refused and nothing is sent; a bodyless
+  # call is untouched. The textual test's limits stated for `byId` hold here
+  # too. Freshness, not identity: every `.uuid` is readable by the one UNIX user
+  # these sessions share, so this stops a confused session, not a hostile one.
+  if [[ "$key" == 'runs.open' && -n "$body" ]]; then
+    local ob="${body//[[:space:]]/}"
+    case "$ob" in
+      *'"claimedByUuid":""'*)
+        refuse 'bad-body' 'the body names an EMPTY claimedByUuid; the claimant would be unattributed' ;;
+    esac
+    case "$ob" in
+      *'"claimedByUuid":'*) : ;;             # the caller has spoken
+      *)
+        derive_identity
+        splice_body_field 'claimedByUuid' "$DERIVED_UUID" \
+          'the runs open body is not a JSON object; claimedByUuid cannot be added' ;;
+    esac
+  fi
+
+  # THE FOURTH BODY THIS CLIENT FILLS, and the first it never lets the caller speak for (D-8126): a call's attribution pair is the
+  # PANE's, through `derive_identity`, as `runs.open` derives its uuid, but here the opposite of the `byId` fill's rule: a body that
+  # names `byId` or `byUuid` is REFUSED, unsent, because the call record is the coordinator's account of its own decision and
+  # the route stores `madeBy` from this pair. The textual test is the `byId` fill's, over a whitespace-stripped copy, with the
+  # same stated limits (a nested or `\u`-escaped key is the server's to refuse after parsing, `bad-field`, as the Linear rows').
+  # A bodyless call is refused (`no-body`), a body that is not a JSON object is refused, and a pane with no identity is refused;
+  # nothing is sent in any of the three. The splice is safe for the reason the `byId` fill's is: SAFE_RE admits no quote.
+  if [[ "$key" == 'calls.record' ]]; then
+    [[ -n "$body" ]] || refuse 'no-body' 'the call record needs a body on --json'
+    local cb="${body//[[:space:]]/}"
+    case "$cb" in
+      *'"byId":'*|*'"byUuid":'*)
+        refuse 'bad-body' 'the body names byId or byUuid; a call is attributed to this pane, and the client fills both' ;;
+    esac
+    derive_identity
+    splice_body_field 'byUuid' "$DERIVED_UUID" 'the call body is not a JSON object; byUuid cannot be added'
+    splice_body_field 'byId' "$DERIVED_ID" 'the call body is not a JSON object; byId cannot be added'
+  fi
+
+  # THE NOTE DOOR'S IDENTITY (Overlord W1a, the notes piece), the `calls.record` rule: a note is attributed to this pane, so a
+  # body that names `byId` or `byUuid` is REFUSED, unsent, and both are spliced from `derive_identity`; a bodyless POST, a
+  # body that is not a JSON object and a pane with no identity are refused and nothing is sent. `note list` carries the pair
+  # in the query. `note close` and `note add` are one route: the body says which (`"closes":true`), and the server refuses a
+  # body that is neither a whole note nor a close. The pair goes LAST (review 2039, F7): the server's JSON parse keeps the later
+  # of two duplicate keys, so a spelling of `byId` the textual test misses can never outrank the pane's. `note list` pages with
+  # `--before <id>` and `--limit <n>`, so every page stays under the tool result cut.
+  if [[ "$key" == 'note.add' || "$key" == 'note.close' || "$key" == 'note.handover' ]]; then
+    [[ -n "$body" ]] || refuse 'no-body' "${key/./ } needs a body on --json"
+    local notebody="${body//[[:space:]]/}"
+    case "$notebody" in
+      *'"byId":'*|*'"byUuid":'*)
+        refuse 'bad-body' 'the body names byId or byUuid; a note is attributed to this pane, and the client fills both' ;;
+    esac
+    derive_identity
+    append_body_field 'byId' "$DERIVED_ID" 'the note body is not a JSON object; byId cannot be added'
+    append_body_field 'byUuid' "$DERIVED_UUID" 'the note body is not a JSON object; byUuid cannot be added'
+  fi
+  # THE PROBE ANSWER'S IDENTITY, the note door's rule above, word for word: a body that names `byId` or `byUuid` is refused
+  # unsent, a bodyless call is refused, and the pane's pair is appended LAST.
+  if [[ "$key" == 'probe.answer' ]]; then
+    [[ -n "$body" ]] || refuse 'no-body' 'probe answer needs a body on --json'
+    local probebody="${body//[[:space:]]/}"
+    case "$probebody" in
+      *'"byId":'*|*'"byUuid":'*)
+        refuse 'bad-body' 'the body names byId or byUuid; a probe is answered as this pane, and the client fills both' ;;
+    esac
+    derive_identity
+    append_body_field 'byId' "$DERIVED_ID" 'the probe body is not a JSON object; byId cannot be added'
+    append_body_field 'byUuid' "$DERIVED_UUID" 'the probe body is not a JSON object; byUuid cannot be added'
+  fi
+  if [[ "$key" == 'note.list' ]]; then
+    derive_identity
+    query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
+  fi
+
+  # `approvals show` reads one row as the claimant it was held for (plan Task 16): the identity pair is the pane's,
+  # never the caller's, exactly as `asks list` below derives its own.
+  if [[ "$key" == 'approvals.show' ]]; then
+    derive_identity
+    query="fromId=$DERIVED_ID&fromUuid=$DERIVED_UUID"
+  fi
+  # `mail inbox` reads with the pair its argument check derived (D-6780), the `approvals show` shape.
+  [[ "$key" != 'mail.inbox' ]] || query="fromId=$DERIVED_ID&fromUuid=$DERIVED_UUID"
+
+  # Every Linear row (D-7669, #1444) carries the pane's identity, GETs and POSTs alike, and it rides the QUERY, after
+  # the declared keys, the way `approvals show` builds `fromId`/`fromUuid`. THIS BLOCK NEVER READS OR EDITS THE BODY:
+  # no splice and no textual test, so a POST's body goes on the wire byte for byte as the caller gave it. That is the
+  # opposite of the `byId` fill above, on purpose: here the caller may not choose whom a write is attributed to through
+  # this client. `byId` and `byUuid` are not declared query keys, so `--byId` is `unknown-query`, and no declared key's
+  # value can add one, because SAFE_RE refuses `&` and `=`. A body that names either (however it spells the key) is the
+  # server's to refuse, after parsing, as `bad-field`; the server reads identity from the query only. A pane with no
+  # identity is refused here and nothing is sent.
+  if [[ "$key" == linear.* || "$key" == linking.show ]]; then
+    derive_identity
+    query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
+  fi
+
+  # The plan verbs' identity (D-8181), the Linear block's rule for the same reason: the query, after the declared keys, and never
+  # the body, which goes on the wire byte for byte. `plan show` is the one row that sends none (a session-or-token read).
+  if [[ "$key" == plan.* && "$key" != 'plan.show' ]]; then
+    derive_identity
+    query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
+  fi
+
+  # The card's identity (review 2023 F13), the Linear block's rule: the pane's pair rides the query after the declared keys,
+  # so this client reads the pane's own card and no other's (`--byId` is `unknown-query`; the server refuses a path id that is
+  # not `byId`, `not-owner`).
+  if [[ "$key" == 'sessions.card' || "$key" == 'sessions.probe' ]]; then
+    derive_identity
+    query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
+  fi
+  # `timer list` reads with the pair `parse_timer` derived, the `approvals show` shape: the query holds nothing else.
+  [[ "$key" != 'timer.list' ]] || query="byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
 
   if [[ "$key" == 'asks.list' ]]; then
     derive_identity
@@ -413,41 +1249,140 @@ main() {
     query="parent=$DERIVED_ID&fromUuid=$DERIVED_UUID&state=held"
   fi
 
+  # THE THIRD BODY FILL: the question door family's `kind` (D-7322), on the four claimant rows, whose template is the
+  # family's and their only door: the old doors were retired (D-7324), so nothing falls back. The kind is the ROW's,
+  # read from the template's `ask-` or `approval-` prefix, never from the caller; `$claimant` holds it, and is empty on
+  # every other row.
+  #
+  # THE ONE LOCAL REFUSAL (D-7328), and the fail direction inverted on purpose: a CURRENT, well-formed
+  # `~/.ccrc/server-caps` that omits `questions-v1` says the server this box talks to is older than the family, so
+  # `no-questions-door` is answered and nothing is sent. An absent, stale, torn or future file sends the family, the
+  # only door left. The file is read by `_api_server_cap`, the generated copy of the hook's reader, and only for a
+  # claimant row: the test of `$claimant` comes first on the one line that calls the reader. That line asks it twice,
+  # for `questions-v1` and then for the empty word, which the reader answers 0 for every current, well-formed file
+  # (its last test looks for `" $want "` in the caps line with a space added at each end, and that padded line always
+  # holds two spaces), whether it lists the other words or none (a server older than the caps answer is recorded as
+  # none). A 404 is never read as "no family": `unknown-ask` and `unknown-approval` are 404s too.
+  #
+  # The `byId` fill's rules hold for the splice: a body that already names `"kind":` (the same textual test over a
+  # whitespace-stripped copy, with the same stated limits) is left alone, so a contrary kind reaches the server and is
+  # answered there; a bodyless call is sent as the kind alone, which both doors refuse alike; a body that is not a JSON
+  # object is refused here and nothing is sent.
+  # THE SECOND LOCAL REFUSAL, `runs review-rounds` (D-8125), on the same rule as above and a single call line: a CURRENT,
+  # well-formed cap file that omits `review-rounds-v1` says this box's server predates the door, so `no-review-rounds-door`
+  # is answered and nothing is sent; an absent, stale or torn file sends, and the server's 404 is then the answer.
+  if [[ "$key" == 'runs.review-rounds' ]]; then
+    local rwant rserved='door'
+    for rwant in review-rounds-v1 ''; do
+      if _api_server_cap "$rwant"; then
+        [[ -n "$rwant" ]] || rserved=''
+        break
+      fi
+    done
+    [[ -n "$rserved" ]] || refuse 'no-review-rounds-door' \
+      "this box's server predates the coordinator's review-rounds door; the cap is the operator's to lift"
+  fi
+
+  # THE DOOR'S IDENTITY IS THE PANE'S, NEVER THE CALLER'S (D-8125): `byId` and `byUuid` are filled from `derive_identity` and a
+  # body that speaks for itself is refused, so a worker pane cannot type its coordinator's pair (it would read the
+  # coordinator's `<id>.uuid` off the shared registry). The test is STRUCTURAL: jq parses the body (so an escaped spelling such
+  # as `\u0062yId` is already the key it spells) and every object key at any depth, case-folded and with whitespace removed, is
+  # compared whole with `byid` and `byuuid`. Prose is never scanned, so a reason that says "lookup by id" or holds a
+  # backslash is sent. A duplicate key still shows as the key, so no spelling survives to last-win over the spliced first
+  # keys. A body that is not valid JSON, or not an object, is refused `bad-body`; without jq the call is refused too (every
+  # box the client runs on carries it for `ccrc`), never guessed at.
+  if [[ "$key" == 'runs.review-rounds' ]]; then
+    local rb="${body//[[:space:]]/}" rnamed
+    [[ -n "$rb" ]] || body='{}'             # a bodyless call goes on as the identity alone; the server asks for the reason
+    command -v jq >/dev/null 2>&1 \
+      || refuse 'bad-body' 'the review-rounds body cannot be checked here: jq is not installed'
+    rnamed=$(printf '%s' "$body" | jq -r '[.. | objects | keys_unsorted[] | ascii_downcase | gsub("\\s"; "")] | any(. == "byid" or . == "byuuid")' 2>/dev/null) \
+      || refuse 'bad-body' 'the review-rounds body is not valid JSON'
+    [[ "$rnamed" == 'false' ]] \
+      || refuse 'bad-body' 'the review-rounds body names no identity: byId and byUuid are this pane, filled here'
+    derive_identity
+    splice_body_field 'byUuid' "$DERIVED_UUID" 'the review-rounds body is not a JSON object; the identity cannot be added'
+    splice_body_field 'byId' "$DERIVED_ID" 'the review-rounds body is not a JSON object; the identity cannot be added'
+  fi
+
+  local claimant=''
+  if [[ "$tmpl" == '/api/questions/'* ]]; then
+    claimant="${tmpl#/api/questions/}"
+    claimant="${claimant%%-*}"
+  fi
+  if [[ -n "$claimant" ]]; then
+    local want served='family'
+    for want in questions-v1 ''; do
+      if [[ -n "$claimant" ]] && _api_server_cap "$want"; then
+        [[ -n "$want" ]] || served=''
+        break
+      fi
+    done
+    [[ -n "$served" ]] || refuse 'no-questions-door' \
+      'the server this box talks to does not answer the question door family; update it before answering'
+    if [[ -z "$body" ]]; then
+      body="{\"kind\":\"$claimant\"}"
+    else
+      local kb="${body//[[:space:]]/}"
+      [[ "$kb" == '{'* ]] || refuse 'bad-body' 'the body is not a JSON object; kind cannot be added'
+      case "$kb" in
+        *'"kind":'*) : ;;                    # the caller has spoken
+        *)
+          splice_body_field 'kind' "$claimant" \
+            'the body is not a JSON object; kind cannot be added' ;;
+      esac
+    fi
+  fi
+
+  # THE GOALS READ'S GATE (D-8126), the claimant gate's fail direction: a CURRENT, well-formed `~/.ccrc/server-caps` that omits
+  # `goals-read-v1` says the server is older than the read, so `unsupported` is answered and nothing is sent; an absent, stale,
+  # torn or future file sends. The empty word is the "is the file current and well-formed" probe, as above.
+  if [[ "$key" == 'goals.show' ]] && ! _api_server_cap goals-read-v1 && _api_server_cap ''; then
+    refuse 'unsupported' 'the server this box talks to does not answer the goals read; update it before reading goals'
+  fi
+
+  # THE CALL RECORD'S GATE (D-8126), the goals read's rule for `calls-v1`: a current cap file that omits it refuses `unsupported`,
+  # unsent; an absent, stale, torn or future file sends.
+  if [[ "$key" == 'calls.record' ]] && ! _api_server_cap calls-v1 && _api_server_cap ''; then
+    refuse 'unsupported' 'the server this box talks to does not answer the call record; update it before recording a call'
+  fi
+
+  # THE PLAN DOOR'S GATE (D-8181), the goals read's fail direction: a CURRENT, well-formed cap file that omits `plan-v1` says the
+  # server is older than the plan verbs, so `no-plan-door` is answered and nothing is sent; an absent, stale, torn or future file
+  # sends. The empty word is the "is the file current and well-formed" probe, as above.
+  if [[ "$key" == plan.* ]] && ! _api_server_cap plan-v1 && _api_server_cap ''; then
+    refuse 'no-plan-door' 'the server this box talks to does not answer the plan verbs; update it before using them'
+  fi
+
+  # THE TIMERS' GATE (Overlord W1a, the timers piece, plan Task 11), the plan door's fail direction: a CURRENT, well-formed cap file
+  # that omits `timers-v1` says the server keeps no timers yet, so `capability-missing` is answered, naming the word, and nothing
+  # is sent. An absent, stale, torn or future file sends, as every gate here does (slug timer-gate-fails-open-like-every-gate):
+  # a server without the doors then answers its own 404, which accepts no timer either.
+  if [[ "$key" == timer.* ]] && ! _api_server_cap timers-v1 && _api_server_cap ''; then
+    refuse 'capability-missing' 'the server this box talks to does not keep timers yet (it does not advertise timers-v1); no timer was set'
+  fi
+
   local path url
   server_url
   read_token
   path="${tmpl/\{id\}/$id}"
   url="$SERVER_URL$path${query:+?$query}"
 
-  local out code
-  # AN EXPLICIT TEMPLATE, because BSD `mktemp` IGNORES `$TMPDIR` when given
-  # none (install.sh:54 measured it) — and this file cannot source ccd's
-  # platform block, so the template is spelled locally, unconditionally, the
-  # same shape install.sh uses. GNU mktemp honours the template identically.
-  out=$(mktemp "${TMPDIR:-/tmp}/ccrc-api.XXXXXXXXXX") || refuse 'no-tmp' 'cannot create a temp file'
-  # shellcheck disable=SC2064
-  trap "rm -f '$out'" EXIT
+  arm_req_out
 
-  # `-f` is never used, on purpose and for the same reason both corpora say so:
-  # it prints nothing on a 4xx and exits 22, and the body is the whole protocol —
-  # every refusal these routes send arrives as a 4xx JSON body.
-  local -a args=(-sS -m 30 -o "$out" -w '%{http_code}'
-                 -X "$method" -H "x-ccrc-mail-token: $TOKEN")
-  [[ -n "$body" ]] && args+=(-H 'content-type: application/json' --data-binary "$body")
+  [[ "$key" != 'mail.inbox' ]] || cmd_inbox "$url"
 
-  code=$(curl "${args[@]}" "$url" 2>/dev/null)
-  local rc=$?
+  local rc=0
+  send_request "$method" "$url" "$body" || rc=$?
+  TOKEN=""
+  (( rc == 0 )) || transport_exit
 
-  if (( rc != 0 )) || [[ -z "$code" || "$code" == '000' ]]; then
-    # NOT an answer. The one case that exits non-zero — and it still speaks the
-    # same envelope, so a caller never has to parse a second shape to find out.
-    printf '{"ok":false,"error":"transport","detail":"no response from the server (curl rc %s)"}\n' "$rc"
-    printf '%s: no response from the server\n' "$SELF" >&2
-    exit 3
-  fi
-
-  cat "$out"
-  printf 'http %s\n' "$code" >&2
+  print_body
+  # `CCRC_API_STATUS=line` is the caller's spelling for "keep this line". It is
+  # an environment variable, not a flag, because an older client refuses an
+  # unknown flag and ignores an unknown variable. Today the line is written
+  # whatever it says; a later release stops writing it by default.
+  printf 'http %s\n' "$REQ_CODE" >&2
   # An HTTP response happened, so this succeeded — whatever the status says. A
   # 4xx is an ANSWER here, and a client that exited non-zero on one would rebuild
   # the `curl -f` trap for its callers.

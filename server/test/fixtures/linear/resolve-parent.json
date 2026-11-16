@@ -1,0 +1,109 @@
+{
+  "name": "resolve-parent",
+  "documentSource": "code",
+  "document": "query ResolveParent($parent: String!) { parent: issue(id: $parent) { id identifier team { id key } } }",
+  "variables": {
+    "parent": "AAA-6"
+  },
+  "requestBody": "{\"query\":\"query ResolveParent($parent: String!) { parent: issue(id: $parent) { id identifier team { id key } } }\",\"variables\":{\"parent\":\"AAA-6\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631363339,
+  "receivedAtMs": 1793631363932,
+  "sentAt": "2026-11-02T14:56:03.339+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:04 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "152"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "3"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999997"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634964031"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634964031"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "parent": {
+        "id": "00000000-0006-4000-8000-000000000001",
+        "identifier": "AAA-6",
+        "team": {
+          "id": "00000000-0001-4000-8000-000000000001",
+          "key": "AAA"
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"parent\":{\"id\":\"00000000-0006-4000-8000-000000000001\",\"identifier\":\"AAA-6\",\"team\":{\"id\":\"00000000-0001-4000-8000-000000000001\",\"key\":\"AAA\"}}}}\n"
+}

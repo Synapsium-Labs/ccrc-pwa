@@ -29,13 +29,16 @@ export async function bootAgent(fixture: RemoteFixture, extra: Partial<AgentOpts
     home: fixture.home,
     projectsRoot: fixture.projectsRoot,
     helloTimeoutMs: 300,
+    // Overlord W1 (R10): the ready frame's `overlord-history` check reads the platform; Linux here, so every runner's real-agent
+    // `ops` pins see one list.
+    historySeams: { platform: 'linux' },
     ...extra,
   });
 }
 
-/** `reconnectMinMs`/`reconnectMaxMs`/`heartbeatMs` default fast — real
- *  values (1s/30s/15s) would make the test suite glacial. Override
- *  `heartbeatMs` up when a test doesn't want heartbeat misses interfering. */
+/** `reconnectMinMs`/`reconnectMaxMs` default fast, so a reconnect row is quick; `heartbeatMs` defaults SLOW
+ *  (60 s), so no row sees a heartbeat miss it did not ask for. Pass `heartbeatMs` down to test the heartbeat
+ *  (remote-liveness.test.ts's W27-L8) and `connectTimeoutMs` to test the deadline before ready. */
 export function connectToAgent(port: number, extra: Partial<RemoteFleetConfig> = {}): ConnectedFleet {
   return connectFleet({
     url: `ws://127.0.0.1:${port}`,

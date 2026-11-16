@@ -14,24 +14,259 @@ export interface LifecycleClass {
 }
 
 export const LIFECYCLE: readonly LifecycleClass[] = [
-  { name: 'workspace-graph-store', root: '<workdir>/graphify-out/', pattern: 'W',
-    creators: ['ccd-graph-sweep'],
-    collector: 'git worktree remove via cmd_ws_rm / reap tail / ws-gc orphan arm (ccd:4225-4232, :9298, :9989)',
-    bound: 'workspace lifetime', tier: '~11 MB/tree measured (ccrc, 763 files)', ruling: null },
-  { name: 'project-graph-store', root: '<projects-root>/<repo>/graphify-out/', pattern: 'O',
-    creators: ['ccd-graph-sweep'], collector: null, bound: 'repo lifetime',
-    tier: '~11 MB/repo, AST-only, backups disabled',
-    ruling: '~11 MB per repo, AST-only, backups disabled, regenerable at any time; persists for the repo\'s lifetime; reclaim manually (rm -rf <repo>/graphify-out) if ever needed.' },
-  { name: 'graph-corpus-filter', root: '<tree>/.graphifyignore', pattern: 'E',
-    creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep (trap EXIT INT TERM + stray sweep)',
-    bound: 'one build', tier: '<1 KB', ruling: null },
-  { name: 'graph-build-lock', root: '<tree>/graphify-out/.rebuild.lock', pattern: 'E',
-    creators: ['graphify'], collector: 'graphify', bound: 'one build', tier: 'negligible', ruling: null },
+  // Graph revision 2 (D-7354; spec 2026-10-28 §10): one graph per repository in the store (`CCRC_GRAPH_STORE`, default
+  // ~/.ccrc/graphs, marked by `.ccrc-graph-store`), and one ignored link per tree. These six rows replace the per-tree
+  // classes (`workspace-graph-store`, `project-graph-store`, `graph-corpus-filter`, `graph-build-lock`), whose paths
+  // nothing writes any more. No class is permanent, so none carries a ruling. `ccrc uninstall` removes a marked store.
+  { name: 'graph-repo-build', root: '<store>/<repo-key>/builds/', pattern: 'E',
+    creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep (pass end: beyond CCRC_GRAPH_KEEP_BUILDS and older than CCRC_GRAPH_BUILD_GRACE_SECS)',
+    bound: 'CCRC_GRAPH_KEEP_BUILDS published builds per repository', tier: 'one AST graph per build', ruling: null },
+  // The checkout sits under <key>/checkout/, never <key>/<name>, so a repository named builds, memory or staging
+  // cannot collide with its siblings (D-7664; ccd-graph-sweep writes this layout).
+  { name: 'graph-repo-checkout', root: '<store>/<repo-key>/checkout/<repo-name>/', pattern: 'O',
+    creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep, when the repository is gone or excluded (after CCRC_GRAPH_BUILD_GRACE_SECS)',
+    bound: 'one per repository', tier: 'one checkout of the main line per repository', ruling: null },
+  { name: 'graph-repo-memory', root: '<store>/<repo-key>/memory/', pattern: 'O',
+    creators: ['graphify save-result'], collector: 'ccd-graph-sweep, with its repository',
+    bound: 'repository lifetime', tier: 'saved query results; small', ruling: null },
+  { name: 'graph-staging', root: '<store>/<repo-key>/staging/', pattern: 'E',
+    creators: ['ccd-graph-sweep'], collector: 'the build\'s trap, and ccd-graph-sweep at the next pass after a crash',
+    bound: 'one build', tier: 'one build in progress', ruling: null },
+  { name: 'graph-tree-link', root: '<tree>/graphify-out (a symlink to <store>/<repo-key>/current)', pattern: 'W',
+    creators: ['ccd-graph-sweep'], collector: 'the worktree\'s own collectors (git worktree remove, ws-rm, reap, ws-gc; the link is ignored)',
+    bound: 'tree lifetime', tier: 'one symlink', ruling: null },
   { name: 'graph-sweep-census', root: '~/.ccrc/graph-sweep.json', pattern: 'R',
     creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep (last 10 passes kept)',
-    bound: 'rolling', tier: 'bounded by pass count', ruling: null },
+    bound: 'rolling', tier: 'bounded by pass count; one row per repository a pass', ruling: null },
+  // Policy row #9: "a root we declare to agents in their own system prompt and
+  // then never collect". Session-bound (S), collected by age PLUS the absence of
+  // a live owner — the live-session, open-fd and newest-mtime checks the
+  // collector's own header states.
+  { name: 'claude-tmp-session-dirs', root: '${TMPDIR:-/tmp}/claude-<uid>/<project>/<session-uuid>/ + loose top-level entries; also /tmp/claude-<uid>/ when it differs, and a witnessed child leaf\'s ~/.cc-tmp/<id>/claude-<uid>/ (DR-8)', pattern: 'S',
+    creators: ['claude (Claude Code: scratchpad, background-task output)', 'agents writing into the root'],
+    collector: 'ccd-tmp-sweep (hourly; dead units: not live, not in use, nothing newer than CCD_TMP_SWEEP_MAX_AGE_DAYS=7, 2 days under pressure). Its live arm (DR-8, D-6620, shadow unless ~/.ccrc/tmp-sweep-live-arm exists) takes a live unit\'s scratchpad/tasks entry untouched for 14 days (3 under pressure), or, over the size budget, the oldest entries untouched 48 hours, into <root>/.ccd-tmp-quarantine/<uuid>/ and deletes them a 24-hour grace later after a fresh holder ask',
+    bound: 'session lifetime + 7 days; a live session\'s scratch: each entry 14 days untouched, and a size budget of 20 GiB per session (taken down to 15 GiB, 48-hour floor, 24 hours after the notice)', tier: '138G uncollected on the fleet host 2026-09-22; single task .output files 1-4G; 194 GiB of live scratch under one root (2026-10-23)', ruling: null },
+  // DR-8 (D-6620): the live arm's record, the one reader of which is the server (DR-12). Rolling (R): replaced whole
+  // by a rename at the end of every pass, shadow or live, so it holds the last scan\'s sessions and the moved rows of
+  // the last 7 days or 1,000, whichever is fewer.
+  { name: 'tmp-sweep-census', root: '~/.ccrc/tmp-sweep.json', pattern: 'R',
+    creators: ['ccd-tmp-sweep'], collector: 'ccd-tmp-sweep (replaced whole every pass; moved rows kept 7 days or 1,000)',
+    bound: 'rolling', tier: 'at most 1,000 moved rows plus one row per live session', ruling: null },
+  // D-5888 (#298): a `--child` workspace's temp root, the policy's ruling 4. Only the per-id leaf: loose
+  // top-level entries in ~/.cc-tmp are a separate class, and this row does not claim them. D-5888 declined them because
+  // nothing identified them; that is REVERSED by D-6627 (fleet disk retention spec 2026-10-23 section 2.4): the loose
+  // arm of ws-collect binds an entry's own identity in a token, and the class has its own row, `cc-tmp-loose-entries`.
+  { name: 'child-tmp-roots', root: '~/.cc-tmp/<id>/', pattern: 'S',
+    creators: ['ccd (_child_tmpdir: a --child workspace spawns with TMPDIR here)', 'everything that follows TMPDIR in that session, Claude Code\'s scratch included'],
+    collector: 'the reclaim tail (_ws_tmproot_remove, kept while in use); ws-collect for a root that outlived its row (server-composed, witness-gated)',
+    bound: 'the child\'s lifetime; a root kept in use, until ws-collect takes it on a server-minted audit token (witness-gated)', tier: 'per child; the scratch ccd-tmp-sweep would otherwise hold under claude-<uid>', ruling: null },
+  // Fleet disk retention DR-19 (D-6631; spec 2026-10-23 section 2.3; resolves policy Open Question 6, option (a)): linked
+  // worktrees no registry row names. W: each is a checkout of a project repository. The server's orphan-tree lane is
+  // the collector, in shadow until `orphan-tree-live` stands; it removes only a clean tree whose HEAD is on a remote (or a
+  // rescued one), never with --force.
+  { name: 'ccd-orphan-worktrees', root: '~/worktrees/<project>/<slug> with no registry row (a ws-gc orphan)', pattern: 'W',
+    creators: ['git worktree add outside ccd ws-add', 'a registry row removed by hand'],
+    collector: 'the orphan-tree lane (server; ccd ws-audit --orphans, ws-audit --orphan-hex, ws-orphan): two unchanged audit tokens at least 1 hour apart, shadow unless orphan-tree-live stands; ws-gc --prune stays the operator\'s',
+    bound: 'until the lane removes it: clean, HEAD on a remote (or pinned into the attic under the rescue arm), unregistered, unheld, quiet for 7 days',
+    tier: '5 trees / 5.16G on the fleet host in the 2026-08 audit', ruling: null },
+  { name: 'agent-worktrees', root: '<main>/.claude/worktrees/<name> and <main>/.superpowers/worktrees/<name> of any checkout', pattern: 'W',
+    creators: ['Claude Code (subagent and workflow checkouts)', 'the superpowers worktree skill'],
+    collector: 'the orphan-tree lane (server), the same ladder as ccd-orphan-worktrees; their branches are left, because the owner is Claude Code or the skill',
+    bound: 'until the lane removes it: clean, HEAD on a remote (or rescued), unregistered, unheld, quiet for 7 days',
+    tier: '~28G across ~94 worktrees measured 2026-08 (the policy\'s largest unassigned class)', ruling: null },
+  // D-6627: a top-level entry of ~/.cc-tmp that no witness and no registry row names. The loose arm of ws-collect owns it
+  // (the same lane, quarantine, re-proof and switch as the witnessed arm), shadowed until $REG/collect-loose-live stands.
+  { name: 'cc-tmp-loose-entries', root: '~/.cc-tmp/<name>', pattern: 'S',
+    creators: ['everything that writes into ~/.cc-tmp outside a witnessed child leaf (a tool run with TMPDIR set by hand, a human)'],
+    collector: 'ws-collect loose arm (server-composed; a regular file or directory of this uid, quiet for 48 hours (24 under disk pressure), unheld, no registry row at, inside or through it, bound by a token over its own identity)',
+    bound: '48 hours untouched (24 under disk pressure), then taken on a server-minted audit token; links and special files stay the operator\'s',
+    tier: '18 directories and 105 loose files, about 6.7 GiB, measured 2026-10-06', ruling: null },
+  // D-6639 (fleet disk retention DR-27, spec 2026-10-23 §2.7.3): a `--child` workspace itself, whose collectors the
+  // retention design names. Collected on its run's close; by the sweep once the run is done; by the stale arm after
+  // seven idle days when a hold, an absent run, a review report or a terminal refusal kept it; and by expiry seven
+  // days after an archive. A child that coordinated is never taken automatically. D-8612 (consolidation spec C4): the
+  // collector names the table that holds those verbs' refusal edges as text, since L0 imports nothing.
+  { name: 'child-workspaces', root: '<worktrees-root>/<project>/<slug> (a --child workspace)', pattern: 'W',
+    creators: ['ccd (ws-add --child, minted for a coordinated run)'],
+    collector: 'ws-reclaim on the run\'s close and by the sweep; its stale arm at 7 idle days (behind its live switch in shared/switches.ts); ws-expire once archived; their refusal edges: WORKSPACE_TRANSITIONS (shared/workspaceTransitions.ts)',
+    bound: 'the run\'s close, or 7 idle days when kept, or 7 days after an archive; never while it coordinated',
+    tier: 'a worktree plus its pinned attic refs; the work is kept under refs/ccrc/attic/<id>/ before the tree goes', ruling: null },
+  // D-7278 (the operator's A1 ruling of 2026-10-28, extended to coordinators; design note 2026-10-28 §4): the one class
+  // inside a workspace that has a collector of its own. Policy row 2 gave `node_modules` its workspace's lifetime, and a
+  // finished worker's or a coordinator's workspace outlives its use; while the session sleeps past the age, the deps-shed
+  // arm removes the git-ignored, untracked directories git lists, and keeps every git fact.
+  { name: 'workspace-dependency-dirs', root: '<workdir>/**/node_modules (git-ignored and untracked; CCD_DEPS_SHED_NAMES may only narrow the names)', pattern: 'W',
+    creators: ['package managers (npm ci, npm install), at agent runtime'],
+    collector: 'ws-shed-deps, composed by the server\'s deps-shed arm of the run-done row (shadow unless its live switch in shared/switches.ts stands), re-proved on the box; otherwise the workspace\'s own collectors',
+    bound: 'the workspace\'s lifetime; in a sleeping worker\'s or coordinator\'s worktree, CCRC_DEPS_SHED_AFTER_HOURS after its work finished (and CCD_DEPS_SHED_MIN_ASLEEP_S asleep), once a sleep',
+    tier: 'about 1.1 GB per worktree of this repository, most of it node_modules (measured 2026-10-28)', ruling: null },
+  // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
+  // rewritten whole by rename every tick, so it holds only the scopes dead NOW;
+  // it lives in the runtime dir, so a reboot empties it — the safe direction for
+  // the first-seen clocks it keeps.
+  { name: 'scope-sweep-verdicts', root: '$XDG_RUNTIME_DIR/ccd-scope-sweep.state', pattern: 'R',
+    creators: ['ccd-scope-sweep'], collector: 'ccd-scope-sweep (rewritten whole each minute; emptied by a reboot)',
+    bound: 'the scopes dead at the last tick', tier: 'one line per dead pane scope and per process older than a day in a live one',
+    ruling: null },
   { name: 'project-pool-tag', root: '~/.cc-sessions/pools/<project>', pattern: 'O',
     creators: ['ccd project-pool', 'operator shell'], collector: null,
     bound: 'until cleared', tier: '<64 bytes per tagged project, one file per project',
     ruling: 'Operator intent on the record: persists until `ccd project-pool --project <p> --clear` or `rm`. A tag whose project directory and registry rows are both gone is inert — no lane reads it — and `ccrc doctor` lists it as WARN `pools-stale`.' },
+  // ccrc history, W1-B1 (spec 2026-10-05 §9.4): six of the thirteen classes that table names; each later PR adds
+  // its own (`lifecycle.test.ts`'s HISTORY_ROWS_BY_PR says which). The store is operator-collected (`prune`), the
+  // spool and the migration snapshot are the sweep's, and the id, journal and switch files go only with the store.
+  { name: 'history-store', root: '~/.ccrc/history/db/history.db{,-wal,-shm,-journal}, and the writer\'s temps history.db.new.<pid> (first creation) and .history.db.restore.<pid> (restore), each with its -wal, -shm and -journal, while one is written', pattern: 'O',
+    creators: ['ccd/history/sweep.mjs (through store.mjs)'],
+    collector: 'ccrc history prune (operator; dry run by default; tombstones content, never rows); a stale temp is removed, with its sidecars, by the pass that takes the lock, and is never opened',
+    bound: 'until pruned; a temp until the next pass', tier: '~4-5.5 GB/month in W1, main JSONL plus sidecars (inferred); cap ~/.ccrc/history-max-gb, default 50; the free-space floor; a temp is one store size until the next pass', ruling: null },
+  { name: 'history-migration-snapshot', root: '~/.ccrc/history/db/backups/pre-v<N>.db, its .tmp while one is written, and the attempt marker .pre-v<N>.attempt until the migration commits', pattern: 'R',
+    creators: ['ccd/history/sweep.mjs'],
+    collector: 'ccd-history-sweep (keeps the newest: an older pre-v*.db is removed once a newer one is renamed into place; a stale .tmp is removed before the next try; the marker is removed when its migration commits, or by any pass at version >= N)',
+    bound: 'the newest snapshot', tier: 'one store size, from the first migration on; the marker <64 B', ruling: null },
+  { name: 'history-store-id', root: '~/.ccrc/history/store.id, store.writer, store.id.pending while a binding is in flight, op while an --op pass runs, pass while a scheduled pass runs (B2, D-5016), and pass-died while a recorded death stands, until a pass commits a tick (B2, D-5026)', pattern: 'O',
+    creators: ['ccd/history/sweep.mjs'], collector: null, bound: 'store lifetime', tier: '<64 B each, but op (a marker line of about 77 B, at most 119 B), pass (a marker line of about 70 B, at most 86 B) and pass-died (one JSON line of about 76 B, at most 100 B): <128 B each',
+    ruling: 'kept with the store; removed only with it (the writer renames or removes a pending marker itself; an --op pass removes op on exit, and the next pass removes an op that names no live pass, a dead or reused pid\'s (D-5748); a scheduled pass removes its own pass in its finally, the next pass records a killed pass\'s leftover in pass-died and overwrites the marker, and the first pass that commits a tick removes pass-died)' },
+  { name: 'history-spool', root: '~/.ccrc/history/spool/, with .draining/ holding each draining file and its .obs observation sidecar', pattern: 'R',
+    creators: ['ccd/session-hook.sh', 'ccd/history/cli.mjs', 'ccd/history/sweep.mjs'],
+    collector: 'ccd-history-sweep (two-phase drain; each drained file\'s lines and verdicts journaled and fsynced before it and its sidecar are unlinked; held, journaled once, while the DB cannot be written)',
+    bound: 'one tick, or as long as a hold lasts', tier: '~0.6 MB/day if the sweep is down or holding (inferred); epoch lines only while capture is switched off; doctor FAILs a stale tick and every cause of a hold but a recovery step, which WARNs', ruling: null },
+  { name: 'history-journal', root: '~/.ccrc/history/journal/<store_id>/<YYYY-MM>.<writer>.jsonl', pattern: 'O',
+    creators: ['ccd/history/sweep.mjs'], collector: null, bound: 'store lifetime',
+    tier: '~0.2-0.25 GB/year (inferred); one file per UTC month and writer, never rewritten; doctor WARNs journal-growth above 40 MB in a trailing 30 days',
+    ruling: 'kept with the store; removed only with it (uninstall --purge --purge-history)' },
+  // W2-2b (W2-D49; D-5768): headless-on joins the switches. It is the one with content, a store line and one line per
+  // listed family, so its tier is its own. L0 imports nothing, so the tier names HEADLESS_LIST_MAX_BYTES as text and
+  // carries its KiB figure; lifecycle.test.ts holds the figure to lib's constant and to the marker grammar. W4-1 (D-8151): agents-on
+  // joins it, the subagent ingest's arming marker, read only as a regular non-link file (its content is never read).
+  { name: 'history-switches', root: '~/.ccrc/history-off, ~/.ccrc/history-max-gb, ~/.ccrc/history/headless-on, ~/.ccrc/history/agents-on', pattern: 'O',
+    creators: ['operator shell'], collector: null, bound: 'until removed',
+    tier: '<64 B each; `headless-on` bounded at 64 KiB (HEADLESS_LIST_MAX_BYTES), one store line plus one line per listed family',
+    ruling: 'touched by hand; persists until removed (no writer in the tree, pinned by single-definition.test.ts)' },
+  // ccrc history, W1-B2 (spec 2026-10-05 §9.4): the operator's own snapshots (`doctor --backup`).
+  { name: 'history-backups', root: '~/.ccrc/history/db/backups/<ts>.db, and its .<ts>.db.tmp while one is written', pattern: 'O',
+    creators: ['ccd/history/sweep.mjs (--op backup)'], collector: null,
+    bound: 'until removed by hand', tier: 'one store size per backup',
+    ruling: 'operator-made by `ccrc history doctor --backup`; remove by hand (the next --backup removes a stale .tmp first)' },
+  // ccrc history, W1-B4 (spec 2026-10-05 §9.4, §9.15): the sole-copy export, one immutable segment per pass on the home
+  // filesystem, never under db/; kept with the store like the journal.
+  { name: 'history-export', root: '~/.ccrc/history/export/<store_id>/<seq>.<writer>.db, and its .<seq>.<writer>.db.tmp while one is written', pattern: 'O',
+    creators: ['ccd/history/sweep.mjs (through store.mjs)'], collector: null,
+    bound: 'store lifetime', tier: 'about the store\'s growth rate once text nears its retention (inferred); at most one segment of about 256 MiB an hour; paused below the home filesystem\'s floor',
+    ruling: 'kept with the store; removed only with it, or by hand by segment (the writer removes a stale .tmp itself)' },
+  // ccrc history, W1-B3 (spec 2026-10-05 §9.4): the card line's two rolling classes. The hook rewrites a session's
+  // scope marker on every PreCompact; the sweep writes one card prediction per session id through card.mjs, deletes
+  // it once the boundary that consumed it is ingested, and withdraws them all on a pass that runs no card step; both
+  // are collected 7 days after their session is purged from the registry.
+  { name: 'history-scope-markers', root: '~/.ccrc/history/scope/<id>', pattern: 'R',
+    creators: ['ccd/session-hook.sh'],
+    collector: 'ccd-history-sweep (the files of purged sessions after 7 days)',
+    bound: 'one per session id, overwritten on each PreCompact; collected 7 days after its session is purged', tier: '<=64 B per session', ruling: null },
+  { name: 'history-card-files', root: '~/.ccrc/history/card/<id>/<uuid>.txt; beside it, its generation record <uuid>.gen (at most 37 B, coordinator ruling R-recalloff-parity), replaced with the id\'s next prediction', pattern: 'R',
+    creators: ['ccd/history/sweep.mjs (through card.mjs)'],
+    collector: 'ccd-history-sweep (deleted on consumption: when the boundary that consumed the prediction is ingested, or when the id\'s next prediction names another uuid; withdrawn by a pass that runs no card step; the files of purged sessions after 7 days, the record included)',
+    bound: 'one prediction per session id, until consumed or withdrawn, or 7 days after its session is purged', tier: '<=512 B per session', ruling: null },
+  // ccrc history, W3-1 (spec 2026-10-05 §7.1, §9.4): the steer file, a second artifact of the card's per-session step. The sweep
+  // writes one per session id through card.mjs on the card's own lifecycle (decided by the same lib deciders), deletes it once
+  // the boundary that consumed it is ingested, withdraws it on a pass that runs no card step, and collects it with its purged
+  // session. The hook only reads it. `steer/.lanes/<wrapper>` is the lane map, written by a later W3 task (W3-3), and a lane file
+  // whose account left the roster is removed on the next tick (spec §9.4); this pass never enters `steer/.lanes/`.
+  { name: 'history-steer-files', root: '~/.ccrc/history/steer/<id>/, and the lane map steer/.lanes/<wrapper>', pattern: 'R',
+    creators: ['ccd/history/sweep.mjs (through card.mjs)'],
+    collector: 'ccd-history-sweep (deleted on consumption: when the boundary that consumed the file is ingested, or when the id\'s next prediction names another leaf; withdrawn by a pass that runs no card step; the files of purged sessions after 7 days; a lane file whose account left the roster is removed on the next tick)',
+    bound: 'one steer file per session id, until consumed or withdrawn, or 7 days after its session is purged', tier: '<=8 KB per session; one word per rostered account', ruling: null },
+  // ccrc history, W2-4 (spec 2026-10-05 §9.4, §10.2; W2-D9, W2-D53): the replay driver's --out. The operator names it;
+  // the driver creates it 0700 under umask 077 with its marker, or reuses one that still passes every check, so a
+  // stopped batch resumes. Nothing in the tree removes it: it holds one W2 run's evidence until the decision is recorded.
+  { name: 'history-replay-out', root: 'the W2 driver\'s --out directory, operator-chosen outside any git tree, mode 0700, marked by .ccrc-history-replay', pattern: 'O',
+    creators: ['deploy/history-replay.mjs'], collector: null,
+    bound: 'one W2 run, until the W2 decision is recorded', tier: 'one W2 run\'s transcripts and scores',
+    ruling: 'operator-made; removed by hand once the W2 decision is recorded' },
+  // ccrc history, W2-1 (spec 2026-10-05 §9.4; W2-D9, W2-D28): the replay eval's control arm. sweep.mjs's --op recall-off is its
+  // one writer (O13), through its temp recall-off/~tmp.<pid>, which the next recall-off pass removes; the operator verbs clear
+  // it, `recall-off --clear-all` at W2 close, and an entry that verb skips is removed by hand.
+  { name: 'history-recall-off', root: '~/.ccrc/history/recall-off/<id>, and the writer\'s temp recall-off/~tmp.<pid> while one is written', pattern: 'O',
+    creators: ['ccd/history/sweep.mjs (--op recall-off)'],
+    collector: 'ccrc history recall-off <id> --clear, and recall-off --clear-all at W2 close (operator verbs through the shim, spec §10.6), or rm for an entry --clear-all skips; a stale ~tmp.<pid> is removed by the next recall-off pass',
+    bound: 'until cleared; every file by W2 close', tier: 'one generation per file: at most 37 B (a UUID and one LF), empty for a legacy family', ruling: null },
+  // #316: the server suite's one temp parent per vitest run, every fixture inside it; the agent suite runs the same
+  // module, so its runs are rows of this class too. Ephemeral (E): its creator
+  // collects it, and a later run collects one whose owner was SIGKILLed, once its socket refuses and it is quiet.
+  // The window is named, not numbered: RUN_QUIET_S lives once, in the .mjs, which L0 cannot import.
+  { name: 'server-test-run-dirs', root: '${TMPDIR:-/tmp}/ccrc-testrun-<6>/ (+ .dead mid-removal)', pattern: 'E',
+    creators: ['server vitest globalSetup (server/test/run-tmp.globalsetup.mjs)', 'agent vitest globalSetup (the same module, wired by agent/vitest.config.ts)'],
+    collector: 'server/test/run-tmp.globalsetup.mjs (teardown; SIGTERM/SIGINT/SIGHUP/exit arm; a later run\'s reap at setup and teardown: owner socket refuses AND ctime-quiet for RUN_QUIET_S); ccd/ccd-tmp-sweep\'s test-run arm (DR-10, D-6622) for a root no later run visits: no socket bound at live.sock, ctime-quiet 6 h (1 h under pressure), unheld, in the box\'s TMPDIR and each witnessed child leaf with a row; shadow unless the live arm\'s marker exists',
+    bound: 'one test run; after a SIGKILL, until a later run under the same TMPDIR finds it quiet, or the sweep\'s test-run arm does (6 h quiet)',
+    tier: '1,551 dirs / 5.74 GiB from five timed-out shards in one morning (#316, 2026-10-07)', ruling: null },
+  // Fleet disk retention, DR-29 (spec 2026-10-23 §Docs and registry): an archived workspace nobody claims, children
+  // included (a child only under its own marker, in shadow until armed). ccd's ws-expire removes it; the server asks.
+  { name: 'archived-workspaces', root: '<workdir> of an archived registry row (worktree, clips, tmp root)', pattern: 'W',
+    creators: ['ccd ws-archive'],
+    collector: 'ccd ws-expire, asked by the server\'s expiry lane (children included, a child only under its own capability and marker)',
+    bound: '7 days after the archive', tier: 'one worktree per archived row', ruling: null },
+  // Test box TB11 (D-7413; spec 2026-10-28 §2.5, §2.10, §4): the fleet host's test box files. The token and the push key
+  // are the operator's (placed when the box is installed, Part B); the durations file and its rows are the daily
+  // timer's and the operator's; the runs log is the wrapper's alone (D-7445), its one writer and its collector.
+  { name: 'testbox-token', root: '~/.ccrc/testbox.token (CCRC_TESTBOX_TOKEN_FILE)', pattern: 'O',
+    creators: ['ccrc testbox-admin connect (its pair phase; the fleet host\'s copy of the pairing token)'],
+    collector: 'ccrc testbox-admin disconnect (removes it on the fleet host, after the switch goes off)',
+    bound: 'the test box\'s connection', tier: 'one token line', ruling: null },
+  { name: 'testbox-push-key', root: '~/.ccrc/testbox-push.key (CCRC_TESTBOX_GIT_KEY)', pattern: 'O',
+    creators: ['ccrc testbox-admin connect (its pair phase; the private half never leaves the fleet host)'],
+    collector: 'ccrc testbox-admin disconnect (removes it on the fleet host)',
+    bound: 'the test box\'s connection', tier: 'one ssh private key', ruling: null },
+  // Test box connect (D-8166; spec 2026-11-07 §2.5, §6): the files `ccrc testbox-admin` owns under ~/.ccrc/, each
+  // written by a temp file in the same directory and a rename. Disconnect removes the connection's files and keeps
+  // the access key pair, so the next Connect shows the same line (C3).
+  { name: 'testbox-admin-key', root: '~/.ccrc/testbox-admin.key and testbox-admin.pub', pattern: 'O',
+    creators: ['ccrc testbox-admin key (create-only)'], collector: null,
+    bound: 'one key pair for the fleet host', tier: 'one ssh key pair',
+    ruling: 'the access key the verb signs in to the test box with; Disconnect keeps it so the next Connect shows the same line, and the operator removes it with the box\'s retirement.' },
+  { name: 'testbox-known-hosts', root: '~/.ccrc/testbox-known-hosts', pattern: 'O',
+    creators: ['ccrc testbox-admin pin (the operator-confirmed host key)'],
+    collector: 'ccrc testbox-admin disconnect (removes it with the connection)',
+    bound: 'one pinned key for the connected box', tier: 'one host key line', ruling: null },
+  { name: 'testbox-overlay', root: '~/.ccrc/testbox.env, and the settings phase\'s backup testbox.env.bak.<random> while one edit runs', pattern: 'O',
+    creators: ['ccrc testbox-admin connect (its pair phase)', 'ccrc testbox-admin settings-fleet'],
+    collector: 'ccrc testbox-admin disconnect (removes the overlay; a failed edit puts the old file back and removes its backup)',
+    bound: 'the test box\'s connection', tier: 'a few dozen short lines', ruling: null },
+  { name: 'testbox-admin-state', root: '~/.ccrc/testbox-admin.state, with the act\'s argument file testbox-admin.args.<id> while its unit starts', pattern: 'O',
+    creators: ['ccrc testbox-admin (every sub that records the connection or an act)'],
+    collector: 'ccrc testbox-admin disconnect (clears the connection fields; the unit removes its argument file when it reads it)',
+    bound: 'one file', tier: 'under 4 KB of KEY=VALUE lines (the six acts that ended before the current one are kept in it)', ruling: null },
+  { name: 'testbox-box-settings', root: '~/.ccrc/testbox-box-settings.json', pattern: 'O',
+    creators: ['ccrc testbox-admin settings-box and read'],
+    collector: 'ccrc testbox-admin disconnect (removes it with the connection)',
+    bound: 'one snapshot of the box\'s settings', tier: 'about 28 short rows', ruling: null },
+  // The rows ccrc sent the box (name, fetch URL, package, command head), one line each: what parity runs on this host, read from
+  // here and never from the box, whose root can edit its own files (spec §2.11). Written whole, by a temp and a rename.
+  { name: 'testbox-rows', root: '~/.ccrc/testbox-rows, and the writer\'s temp <file>.tmp.<pid> while it is written', pattern: 'O',
+    creators: ['ccrc testbox-admin connect and settings-box (the rows they install)'],
+    collector: 'ccrc testbox-admin disconnect (removes it with the connection)',
+    bound: 'at most four rows for the connected box', tier: 'four short lines', ruling: null },
+  { name: 'testbox-parity', root: '~/.ccrc/testbox-parity.json', pattern: 'O',
+    creators: ['ccrc testbox-admin parity'],
+    collector: 'ccrc testbox-admin disconnect (removes it with the connection)',
+    bound: 'one record', tier: 'one small JSON record', ruling: null },
+  { name: 'testbox-admin-lock', root: '~/.ccrc/testbox-admin.lock, and the cancel marker testbox-admin.cancel while a cancel is pending', pattern: 'O',
+    creators: ['ccrc testbox-admin (held for an act\'s whole life)', 'ccrc testbox-admin cancel'], collector: null,
+    bound: 'one empty file', tier: 'zero bytes',
+    ruling: 'the verb\'s one lock file, held while an act runs; an empty file the next act reuses, so there is nothing to collect. The cancel marker is removed by Disconnect and by the act that sees it.' },
+  { name: 'testbox-admin-log', root: '~/.ccrc/testbox-admin.log, and the writer\'s temp <file>.tmp.<pid> while it is trimmed', pattern: 'R',
+    creators: ['ccrc testbox-admin (a line of at most 300 bytes for each act\'s begin, outcome and refusal, and for each line a parity run prints)'],
+    collector: 'ccrc testbox-admin (the append that takes the file past 64 KiB rewrites it by a rename to its last 200 lines)',
+    bound: 'about 64 KiB: 200 lines kept, trimmed whenever an append passes 64 KiB', tier: 'under 300 bytes a line; at most about 64 KiB in all', ruling: null },
+  { name: 'testbox-times', root: '~/.ccrc/testbox-times.json (CCRC_TESTBOX_TIMES), its rows in testbox-times.sources beside it, and the writer\'s temp <file>.tmp.<pid> while one is written', pattern: 'R',
+    creators: ['ccd-testbox-times (the daily timer)', 'the operator (the .sources rows)'],
+    collector: 'ccd-testbox-times (replaced whole by a rename each day; a failed pass keeps the previous file and removes its temp)',
+    bound: 'one file: the newest trusted testtimes artifact per row', tier: 'about 70 KB per repository row', ruling: null },
+  { name: 'testbox-runs-log', root: '$REG/testbox-runs/<UTC date>.log', pattern: 'R',
+    creators: ['ccd/ccrc-test (the wrapper, the runs log\'s one writer, D-7445)'],
+    collector: 'ccd/ccrc-test (the append that creates today\'s file removes the day files older than two days, by name)',
+    bound: 'two day files (today\'s and yesterday\'s), the 24 hours the card counts', tier: 'at most 128 B per test run', ruling: null },
+  // D-7857: the daily carry dedupe sweep's record. Rolling (R): one line appended per pass, and the file rewritten by
+  // rename to its last 400 lines, so it holds about a year of daily passes. `ccrc doctor`'s carry-copies check reads
+  // its latest line.
+  { name: 'carry-dedupe-record', root: '~/.cc-sessions/carry-dedupe-record', pattern: 'R',
+    creators: ['ccd-carry-dedupe-sweep'], collector: 'ccd-carry-dedupe-sweep (its last 400 lines kept, rewritten by rename each pass)',
+    bound: 'the last 400 passes', tier: 'one line of under 200 bytes per daily pass', ruling: null },
 ];

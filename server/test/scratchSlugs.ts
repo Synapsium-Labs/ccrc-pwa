@@ -18,16 +18,29 @@
  *  shipped globs: `-tmp` also covers `-tmp` bare and `-tmpfs-…`. */
 export const SCRATCH_PREFIXES = ['-tmp', '-private-tmp', '-var-folders', '-private-var-folders'];
 
+/** A4: a marked child's own temp root, `$HOME/.cc-tmp/<id>` (wave 1's
+ *  `_child_tmpdir`), whose slug carries `--cc-tmp-` in the MIDDLE — the `/.`
+ *  of `/.cc-tmp` becomes two dashes once slugified. A prefix cannot express
+ *  that, so it is its own list, matched by `.includes` rather than
+ *  `.startsWith`, WITHOUT the shipped leading and trailing `*`. */
+export const SCRATCH_INFIXES = ['--cc-tmp-'];
+
 /** The predicate itself, for a precondition that has to ask about a slug it
  *  derived from a real path rather than one it wrote. */
 export const isScratchSlug = (s: string): boolean =>
-  SCRATCH_PREFIXES.some((p) => s.startsWith(p));
+  SCRATCH_PREFIXES.some((p) => s.startsWith(p)) || SCRATCH_INFIXES.some((p) => s.includes(p));
 
 /** One seeded fixture slug PER PREFIX, derived rather than written out, so a
  *  prefix added to the list without a test row is impossible. A real Darwin
  *  scratch slug carries its `/<x>/<y>/T` segments too; those are more
- *  `-`-separated tokens and change nothing about which arm matches. */
-export const SCRATCH_SLUGS = SCRATCH_PREFIXES.map((p) => `${p}-ccrc-scratch-fixture`);
+ *  `-`-separated tokens and change nothing about which arm matches. Plus ONE
+ *  more for the infix (A4), rooted under `/var/tmp` per that amendment: under
+ *  `/tmp` the `-tmp*` prefix arm already matches, and the census/doctor rows
+ *  below would stay green with the infix arm deleted. */
+export const SCRATCH_SLUGS = [
+  ...SCRATCH_PREFIXES.map((p) => `${p}-ccrc-scratch-fixture`),
+  '-var-tmp-ccrc-scratch-fixture--cc-tmp-7-proj',
+];
 
 /** THE NEGATIVE CONTROLS — the widening's upper bound, in BOTH spellings.
  *  `/var/tmp` is POSIX *persistent* scratch: it survives a reboot, unlike

@@ -1,6 +1,11 @@
-// The operator's dial on the two coordination caps (spec §8, D-1209). Before it
+// The operator's dial on the coordination cap (spec §8, D-1209). Before it
 // there was no door at all: `CoordStore.setCaps` had no caller in `server/src`
 // and the caps changed by hand-editing `coord.db`.
+//
+// ONE DIAL, `workers`. The `per day` row and its rolling-24 h usage line are
+// gone with the daily dispatch brake they drove (D-7068,
+// operator ruling 2026-10-26): the server no longer refuses on a daily count
+// and no longer reports one.
 //
 // It sits beside `CoordBanner` on `/runs` and copies that component's shape —
 // injectable props defaulting to the `api` singleton, and a render gate that
@@ -12,7 +17,7 @@
 // ONE DELIBERATE DEPARTURE from the pause toggle. That toggle refuses to be
 // optimistic and settles only when a later `{type:'coord'}` frame reports the
 // value it asked for. No frame carries caps — deliberately, because `emitCoord`
-// touches no `node:sqlite` and `dispatchedIn24h` moves with the clock — so this
+// touches no `node:sqlite` — so this
 // control settles on the RESPONSE BODY, which is the stored value re-read by the
 // route. It still never settles on what was TYPED: the server is the authority
 // on what it stored, and a request for 9 answered with 4 renders 4.
@@ -28,15 +33,16 @@
 // renders `null`.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { Button, ControlRow, CONTROL_ROW_NOTE } from '@ccrc/ui';
 import type { CoordCaps, CoordCapsView } from '../../../shared/api';
 import { ApiError, api, apiErrorText } from '../lib/api';
 import './fleet.css';
 
 /** What the operator has typed but not yet saved, per field. `null` means
- *  untouched — distinct from `''` (cleared) and from a number, so a save can
- *  send ONLY the dials that were actually moved and cannot clobber the other
- *  with a value the operator never chose. */
-type Draft = { workers: string | null; perDay: string | null };
+ *  untouched — distinct from `''` (cleared) and from a number, so a save sends
+ *  a dial only when it was actually moved, never a value the operator did not
+ *  choose. */
+type Draft = { workers: string | null };
 
 /** The three things the strip can be saying, kept apart on purpose. `saved` is
  *  not a state here — a successful write simply re-renders the new numbers,
@@ -71,7 +77,6 @@ const readDraft = (draft: Draft, caps: CoordCaps): SaveIntent => {
   const body: Partial<CoordCaps> = {};
   const fields: [label: string, typed: string | null, stored: number, key: keyof CoordCaps][] = [
     ['workers', draft.workers, caps.maxConcurrentWorkers, 'maxConcurrentWorkers'],
-    ['per day', draft.perDay, caps.maxSessionsPerDay, 'maxSessionsPerDay'],
   ];
   for (const [label, typed, stored, key] of fields) {
     if (typed === null) continue;                       // untouched — not an ask
@@ -104,7 +109,7 @@ export function CapsControl({
   setCoordCaps?: (next: Partial<CoordCaps>) => Promise<CoordCapsView | 'unreadable'>;
 } = {}): ReactNode {
   const [view, setView] = useState<CoordCapsView | null>(null);
-  const [draft, setDraft] = useState<Draft>({ workers: null, perDay: null });
+  const [draft, setDraft] = useState<Draft>({ workers: null });
   const [note, setNote] = useState<Note>({ kind: 'none' });
   const [busy, setBusy] = useState(false);
 
@@ -150,7 +155,7 @@ export function CapsControl({
         setBusy(false);
         if (answer === 'unreadable') { setNote({ kind: 'unconfirmed' }); return; }
         setView(answer);
-        setDraft({ workers: null, perDay: null });
+        setDraft({ workers: null });
       },
       (err: unknown) => { setBusy(false); setNote({ kind: 'refused', text: refusalText(err) }); },
     );
@@ -173,18 +178,24 @@ export function CapsControl({
   );
 
   return (
-    <div className="caps-control" role="group" aria-label="coordination caps">
+    <ControlRow className="caps-control" role="group" aria-label="coordination caps">
       {field('workers', 'caps-workers',
         draft.workers ?? String(view.caps.maxConcurrentWorkers),
         view.usage.running, view.caps.maxConcurrentWorkers,
         (v) => setDraft((d) => ({ ...d, workers: v })))}
-      {field('per day', 'caps-per-day',
-        draft.perDay ?? String(view.caps.maxSessionsPerDay),
-        view.usage.dispatchedIn24h, view.caps.maxSessionsPerDay,
-        (v) => setDraft((d) => ({ ...d, perDay: v })))}
-      <button type="button" className="caps-save" disabled={busy} onClick={onSave}>
+      <Button
+        variant="quiet"
+        size="fit"
+        /* `enabled:active:scale-[0.97]` is not decoration: `.caps-save` was the
+           one of the four quiet controls that pressed to 0.97 rather than 0.96.
+           Kept at the call site so the variant can carry the majority figure
+           and nothing moves. */
+        className="caps-save flex-none enabled:active:scale-[0.97]"
+        disabled={busy}
+        onClick={onSave}
+      >
         {busy ? 'saving…' : 'save'}
-      </button>
+      </Button>
       {/* ONE note element, ALWAYS mounted, and it is the live region (D-1222).
           Always mounted because a `role="status"` inserted at the same moment its
           text appears is announced unreliably; the region has to exist first and
@@ -197,12 +208,12 @@ export function CapsControl({
           control's feedback — no toast, no banner, and a successful write just
           re-renders numbers — so outside a live region a screen-reader user
           learns nothing at the one moment they have just committed to a save. */}
-      <p className="caps-note" role="status">
+      <p className={`caps-note ${CONTROL_ROW_NOTE}`} role="status">
         {note.kind === 'refused' ? note.text
           : note.kind === 'unconfirmed'
             ? 'unconfirmed — the answer could not be read; reload to see what was stored'
             : ''}
       </p>
-    </div>
+    </ControlRow>
   );
 }

@@ -1,5 +1,9 @@
-import { realpath } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { CCRC_DIR_NAME, HISTORY_STEER_ON_DIR, LANE_STATE_DIR_NAME, NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
+import { isRegistryId } from '../../shared/api.js';
+import { CCRC_SWITCH_FILES } from '../../shared/switches.js';
+import { MODELS_DIR_NAME, isLaneModelsReadName } from '../../shared/models.mjs';
 
 /**
  * Everything a connection needs to evaluate the path/exec whitelists — the
@@ -55,8 +59,89 @@ function underClaudeGlob(canonicalHome: string, canonicalTarget: string): boolea
 export type PathMode = 'read' | 'write';
 
 /**
+ * The eleven `~/.ccrc` NODE FILES (design 2026-09-20 §8; the ninth,
+ * `box-token-generation`, is box-token lifecycle wave 1's and holds an id,
+ * never a value; the tenth, `tmp-sweep.json`, is the tmp sweep's census, D-6624; the eleventh, `box-settings.json`, is the box
+ * settings record, D-6916, redacted and ASCII by its writer) — the one read grant
+ * in this file that is not a prefix. `~/.ccrc` also holds `agent.env` (this
+ * agent's own bearer), `auth.scrypt`, `coord.db`, `deploy.env` and every other
+ * secret-bearing file `ccd/ccrc` writes, so an `isUnder(…/.ccrc)` arm would
+ * hand every one of them to the wire. The grant is canonical-path EQUALITY
+ * against the names `NODE_FILES` declares (`shared/agent-protocol.ts`), in a
+ * Set built once per check.
+ *
+ * TWO conditions. `canonicalTarget` must BE one of `NODE_FILES`' names, AND it must be
+ * the path the caller literally named — canonical === `<canonical
+ * ~/.ccrc>/<the literal basename>`. Without the second: `~/.ccrc/floor` as a
+ * live symlink to `~/.ccrc/installed` canonicalises onto a member, and this
+ * function would admit `floor` for `read`/`stat`, returning `installed`'s own
+ * content under `floor`'s name. The second condition is what keeps THOSE ops
+ * honest; it is independent of `lstat`, which has its own guard (D-3195,
+ * F12/fix round 1, below).
+ *
+ * What this function refuses: a live symlink carrying one of the `NODE_FILES` names
+ * whose FULLY RESOLVED target — following any chain to its end — lies
+ * outside every admitted prefix, or is another of them; both fail the
+ * second condition, and — in the common case, `~/.ccrc` itself not being a
+ * symlink into an admitted prefix (N-1, fix round 1 dispatch C re-review) —
+ * no other `checkPath` arm admits a `~/.ccrc`-rooted
+ * path either. A chain classifies by where it finally lands, not by its
+ * first hop: `previous → installed → ~/.cc-sessions/x` resolves to
+ * `.cc-sessions/x`, not to `installed`.
+ *
+ * What this function alone CANNOT refuse: a live symlink carrying one of the
+ * `NODE_FILES` names whose fully resolved target lies in a *different* admitted
+ * prefix (`.cc-sessions`, `.cc-clips`, a `.claude*` dir, the projects root) —
+ * that target is a regular file the OTHER prefix's own arm in `checkPath`
+ * admits independently, so the request is granted, just not through this
+ * function. Nothing is disclosed by that grant (the target was already
+ * readable on its own path). The remaining INTEGRITY question belongs to
+ * `lstat`: for exactly this request, its subject is the literal `~/.ccrc`
+ * directory entry, never `checkPath`'s canonical (already-resolved) answer
+ * (F12/D-3195, fix round 1 dispatch C, `server.ts`'s `lstat` case) — so it
+ * still reports `symlink`, which the server's inventory sweep refuses to
+ * trust as the node file. A DANGLING symlink carrying one of the `NODE_FILES` names
+ * canonicalises onto its own literal path and IS admitted by this function;
+ * `lstat` reports it as `symlink` too, which the sweep also refuses.
+ *
+ * `canonicalCcrc` is `canonicalize(<home>/.ccrc)`, not `<canonical home>/.ccrc`,
+ * so a `~/.ccrc` that is itself a symlink admits its own `NODE_FILES` names and nothing else —
+ * in the common case (N-1): if that symlink's target is ITSELF under an
+ * admitted prefix, the prefix arm admits all of `~/.ccrc`, not just those names.
+ */
+function isCcrcNodeFile(canonicalCcrc: string, targetPath: string, canonicalTarget: string): boolean {
+  const admitted = new Set(NODE_FILE_BASENAMES.map((b) => path.join(canonicalCcrc, b)));
+  return admitted.has(canonicalTarget)
+    && canonicalTarget === path.join(canonicalCcrc, path.basename(path.resolve(targetPath)));
+}
+
+/**
+ * D-8406: a lane's class registry and catalogue in `~/.ccrc/models` (`registryFileName`, `catalogueFileName`), the two
+ * files the session's model picker names a class's model from (`server/src/laneModels.ts`). READ mode only, and exact
+ * names only: `isLaneModelsReadName` (`shared/models.mjs`) admits those two shapes for a lane id and nothing else, so
+ * the directory stays unlistable and its other files (effort, windows, advance, the classes TSV) unread. Neither file
+ * holds a secret: model ids, labels, efforts and prices, the class map and the lane's endpoint, which the endpoint gate
+ * keeps free of a user name or password (`BASE_URL_OK`).
+ *
+ * `isCcrcNodeFile`'s two conditions, one directory down: the canonical target must be `<canonical ~/.ccrc>/models/<the
+ * literal basename>`, so a live symlink at either name (onto `agent.env`, say) or a `models` directory that is a
+ * symlink is refused, never answered with its target's bytes. A dangling symlink canonicalises onto its own literal
+ * path and is admitted, and the read then fails on it, as it does for a node file.
+ *
+ * This is the approved models design's first read path (auto-advance spec §2.7, before D14 moved its panel onto the
+ * planned `models` op): the op is unbuilt, and the picker needs only these two reads. When the op lands, its `show`
+ * carries the same facts and this grant is retired with the reader that uses it.
+ */
+function isLaneModelsFile(canonicalCcrc: string, targetPath: string, canonicalTarget: string): boolean {
+  const base = path.basename(path.resolve(targetPath));
+  return isLaneModelsReadName(base) && canonicalTarget === path.join(canonicalCcrc, MODELS_DIR_NAME, base);
+}
+
+/**
  * Whitelist check for ALL file ops. Reads: `.cc-sessions/`, `.cc-limits/`,
- * `.cc-clips/`, `.claude*` (glob) under $HOME, plus the fleet projects root.
+ * `.cc-clips/`, `.claude*` (glob) under $HOME, plus the fleet projects root,
+ * plus exactly the `~/.ccrc` node files `NODE_FILES` names by name (`isCcrcNodeFile`), and a lane's two model files
+ * (`isLaneModelsFile`, D-8406).
  * Writes: `.cc-clips/` under $HOME only. Returns the canonical path to operate on when
  * allowed, `null` otherwise — canonicalizing here means every downstream fs
  * call in fileops.ts/tail.ts already has symlink-escapes resolved.
@@ -70,10 +155,11 @@ export async function checkPath(
   // missing/wrong-typed `path` field reach a node:path call unchecked.
   if (typeof targetPath !== 'string' || targetPath.length === 0) return null;
 
-  const [canonicalHome, canonicalRoot, canonicalTarget] = await Promise.all([
+  const [canonicalHome, canonicalRoot, canonicalTarget, canonicalCcrc] = await Promise.all([
     canonicalize(cfg.home),
     canonicalize(cfg.projectsRoot),
     canonicalize(targetPath),
+    canonicalize(path.join(cfg.home, CCRC_DIR_NAME)),
   ]);
 
   if (mode === 'write') {
@@ -85,9 +171,100 @@ export async function checkPath(
     isUnder(canonicalTarget, path.join(canonicalHome, '.cc-limits')) ||
     isUnder(canonicalTarget, path.join(canonicalHome, '.cc-clips')) ||
     isUnder(canonicalTarget, canonicalRoot) ||
-    underClaudeGlob(canonicalHome, canonicalTarget);
+    underClaudeGlob(canonicalHome, canonicalTarget) ||
+    isCcrcNodeFile(canonicalCcrc, targetPath, canonicalTarget) ||
+    isLaneModelsFile(canonicalCcrc, targetPath, canonicalTarget);
 
   return readAllowed ? canonicalTarget : null;
+}
+
+/**
+ * D-8382: the `stat` op's one grant beyond `checkPath`: the operator's `~/.ccrc` switch files (`CCRC_SWITCH_FILES`,
+ * derived from the switchboard's `~/.ccrc` rows), so the server can say which of them stands on this box (Settings ›
+ * Overrides in force). Empty touch files the session hook tests with `[ -e ]`; `stat` discloses only that one exists, its
+ * size and its time. It is NOT part of `checkPath`, so `read`, `readFrom`, `readB64`, `readdir` and `lstat` admit none
+ * of them, and `~/.ccrc` stays unlistable.
+ *
+ * The grant is the literal path `<canonical ~/.ccrc>/<one of the names>`, and its canonical form must be that same
+ * path: a live symlink at a switch name (onto `agent.env`, say) is refused, never answered with its target's size and
+ * time; a dangling one canonicalises onto itself and answers absent, as the hook's `[ -e ]` does.
+ */
+export async function checkCcrcSwitchStat(targetPath: string, cfg: WhitelistConfig): Promise<string | null> {
+  if (typeof targetPath !== 'string' || targetPath.length === 0) return null;
+  const literal = path.resolve(targetPath);
+  const base = path.basename(literal);
+  if (!CCRC_SWITCH_FILES.includes(base)) return null;
+  const [canonicalCcrc, canonicalParent, canonicalTarget] = await Promise.all([
+    canonicalize(path.join(cfg.home, CCRC_DIR_NAME)),
+    canonicalize(path.dirname(literal)),
+    canonicalize(literal),
+  ]);
+  const admitted = path.join(canonicalCcrc, base);
+  return canonicalParent === canonicalCcrc && canonicalTarget === admitted ? admitted : null;
+}
+
+/**
+ * The `stat` op's second grant beyond `checkPath` (Overlord W1a launch profiles PR B, review 2024 F1): one history W3 steer
+ * marker, `<canonical ~/.ccrc>/history/steer-on/<registry id>`, so the server's launch-profile lane can tell a steered session
+ * from one it may write on a remote fleet. LEGITIMATELY DIFFERENT from `checkPath`'s roots, and kept out of them: another
+ * host's file read by the server across the link, and only `stat` of one marker path (existence, size, time); `read`,
+ * `readdir` and `lstat` admit none of it, and the directory stays unlistable.
+ *
+ * The name must be a registry id (`isRegistryId`). `~/.ccrc` itself may be a link, followed as the sibling grants follow it;
+ * under it, `history` and `steer-on` must each be a real directory or absent, never a symlink (`lstat`, review 2031 F1), so
+ * the grant cannot be pointed at another directory; the requested path's directory must be that one, and the marker's
+ * canonical form must be the marker's own path: a live symlink at the marker is refused (the server then reads the marker
+ * unreadable and skips the session, the safe direction), and a dangling one answers absent. A HARD link at a marker's name
+ * cannot be told from a file: the same user who could make one can read its target anyway, and `stat` answers only its
+ * existence, size and time.
+ */
+export async function checkSteerOnStat(targetPath: string, cfg: WhitelistConfig): Promise<string | null> {
+  if (typeof targetPath !== 'string' || targetPath.length === 0) return null;
+  const literal = path.resolve(targetPath);
+  const base = path.basename(literal);
+  if (!isRegistryId(base)) return null;
+  const [canonicalCcrc, canonicalParent, canonicalTarget] = await Promise.all([
+    canonicalize(path.join(cfg.home, CCRC_DIR_NAME)),
+    canonicalize(path.dirname(literal)),
+    canonicalize(literal),
+  ]);
+  let canonicalDir = canonicalCcrc;
+  for (const level of HISTORY_STEER_ON_DIR.split('/')) {
+    canonicalDir = path.join(canonicalDir, level);
+    try {
+      if (!(await lstat(canonicalDir)).isDirectory()) return null;   // a symlink, or not a directory: refused
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return null;   // absent is fine: the stat answers absent
+    }
+  }
+  const admitted = path.join(canonicalDir, base);
+  return canonicalParent === canonicalDir && canonicalTarget === admitted ? admitted : null;
+}
+
+/** What a read op opens: a path and whether its last component may be a symlink, or `forbidden` (outside every read
+ *  root), or `unreadable` (a lane-state name whose directory is not the real lane-state directory). */
+export type ReadTarget = { kind: 'open'; path: string; noFollow: boolean } | { kind: 'forbidden' } | { kind: 'unreadable' };
+
+/**
+ * The read ops' target (`read`, `readFrom`, `readB64`; accounts plan Task A12, D-5755 (13d)). Every path goes through
+ * {@link checkPath}, which follows symlinks to the canonical target and checks THAT against the read roots, except a
+ * file named directly in `~/.cc-sessions/.accounts` (`LANE_STATE_DIR_NAME`), the lane-state files: any fleet-user
+ * process can plant a symlink at a lane's name (spec §3.4), and following it would answer its target's bytes, a
+ * `~/.claude*` credential among the things a read root admits. So for that name the DIRECTORY is canonicalized and
+ * must be the real `<home>/.cc-sessions/.accounts` (a symlinked `.accounts` is `unreadable`), and the file is opened
+ * by its own name in it with `O_NOFOLLOW`: a symlink there is `unreadable`, never followed (D-6058 (2)).
+ */
+export async function checkReadTarget(targetPath: string, cfg: WhitelistConfig): Promise<ReadTarget> {
+  if (typeof targetPath !== 'string' || targetPath.length === 0) return { kind: 'forbidden' };
+  const literal = path.resolve(targetPath);
+  const laneStateDir = path.join(path.resolve(cfg.home), '.cc-sessions', LANE_STATE_DIR_NAME);
+  if (path.dirname(literal) === laneStateDir) {
+    const [canonicalDir, canonicalHome] = await Promise.all([canonicalize(laneStateDir), canonicalize(cfg.home)]);
+    if (canonicalDir !== path.join(canonicalHome, '.cc-sessions', LANE_STATE_DIR_NAME)) return { kind: 'unreadable' };
+    return { kind: 'open', path: path.join(canonicalDir, path.basename(literal)), noFollow: true };
+  }
+  const p = await checkPath(targetPath, cfg, 'read');
+  return p === null ? { kind: 'forbidden' } : { kind: 'open', path: p, noFollow: false };
 }
 
 /**
@@ -245,6 +422,19 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
  * ever grow, reached (wave 3) from a route the PWA will hit with no box token
  * of any kind.
  *
+ * The four docs verbs (native Docs reader, spec 2026-10-01 section 2 (a)) are
+ * the next family, enrolled for `coord-pause`'s reason rather than
+ * `ws-reap`'s. `docs-index`, `docs-tree` and `docs-show` read and write
+ * nothing; `docs-fetch` writes one remote-tracking ref and ccd's own fetch
+ * stamp. None takes a confirmation token, so the flag — `--all` for the
+ * index, `--project` for the other three — is each verb's whole argument
+ * surface. They are reached from session-gated routes (three GETs and one
+ * POST) that carry no box token of any kind, and a bare grant would admit
+ * every positional form a verb might grow while staying green in
+ * `whitelist-subset.test.ts`'s layers 2 and 3, because the bare verb is a
+ * genuine prefix of every argv the server builds. `g16`-`g19` are the other
+ * side.
+ *
  * Kept as data rather than a hardcoded `if` so the type below and the runtime
  * audit read the SAME source — the P2 failure mode (auditor and lookup asking
  * different questions) is the one to avoid while fixing P1.
@@ -252,6 +442,21 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
 export const REQUIRED_VERB_FLAG = {
   'ws-reap': '--expect', 'ws-rename': '--session', 'coord-pause': '--state',
   'project-pool': '--project', 'route': '--session',
+  'win-size': '--session', 'ws-reclaim': '--expect',
+  'reclaim-pause': '--state', 'ws-expire': '--expect',
+  'docs-index': '--all', 'docs-tree': '--project', 'docs-show': '--project', 'docs-fetch': '--project', 'docs-log': '--project',
+  'ws-collect': '--expect',
+  'ws-orphan': '--expect',
+  'ws-title': '--session',
+  'ws-shed-deps': '--session',
+  'ws-lease-mark': '--lease',
+  'ws-lease-audit': '--lease',
+  'testbox-remote': '--state',
+  'scope-sweep-busy': '--state',
+  'delegation-adopt': '--state',
+  'project-add': '--name',
+  'pane-scope-stop': '--state',
+  'pool-answer': '--session',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -342,13 +547,47 @@ export const EXEC_WHITELIST = {
     // down a WORKSPACE (worktree + branch), which is exactly what forget
     // refuses to touch.
     ['forget'],
+    // `hibernate` (D-5242) stops a long-idle session cleanly, journalled as deliberate; `ensure` wakes it. One token
+    // wide for `forget`'s reason: the verb takes the id and a dec, and every gate that decides it (live idle, no
+    // draft, the turn marker's `bg` and `crons` both 0, no hold, no opt-out, no fresh swap, nobody attached) is ccd's
+    // own, re-measured on the box at the act.
+    ['hibernate'],
+    // `limit-wait` (D-8123) is the operator's "Wait until reset" choice on a session the limit watchdog found no room for:
+    // one registry-line append to an OPEN `$REG/<id>.limitwait`, refused `not-waiting` otherwise. One token wide for `forget`'s
+    // reason: the verb takes the id and nothing else, ccd re-asserts exact arity and the id grammar, and it moves no session
+    // and sends no key. The server sends it only behind `ccd caps`' `limit-wait`.
+    ['limit-wait'],
     ['pr-state', '--session'],
     ['pr-state', '--project'],
+    // D-6784: the checks lane's read-only PR read; the verb takes only --project and --sessions.
+    ['pr-landing', '--project'],
+    // D-7378: the bounded train prover; it takes only --project (and ccd's own --max default), reads GitHub and keeps
+    // train proofs in the registry, nothing else.
+    ['pr-train-prove', '--project'],
     ['pr-open',  '--session'],
+    // D-8147: the visibility reader; one `gh api` read of a project's repository, nothing written.
+    ['repo-visibility', '--project'],
+    // D-8147: the template PR; a branch and a pull request adding one file, never a push to the default branch.
+    ['pr-template', '--project'],
     ['ws-archive', '--session'],
     ['ws-restore', '--session'],
     ['ws-audit', '--session'],
     ['ws-reap',  '--expect'],   // load-bearing: no reap without a confirmation token
+    // CHILD-WORKSPACE RECLAMATION (spec 2026-09-22 §5.5): the one destructive
+    // verb the SERVER sends with no human in the path. Granted on its
+    // confirmation token for ws-reap's own reason — a bare `['ws-reclaim']` is
+    // not a narrower grant, it permits an UNCONFIRMED reclaim of any id — and
+    // ENROLLED in `REQUIRED_VERB_FLAG` above, so that narrowing is a TS2322
+    // and a boot refusal (g13). ccd re-proves the token inside the reap lock,
+    // and refuses `not-a-child` unless the box's `.child` marker equals the
+    // `--child-of` the server composed. `ws-audit --reclaim` needs NO grant of
+    // its own: it rides `['ws-audit','--session']`, and it destroys nothing.
+    ['ws-reclaim', '--expect'],
+    // ARCHIVED-WORKSPACE EXPIRY (workspace lifecycle spec 2026-09-24 §5.3): ws-reclaim's sibling, the second
+    // destructive verb the SERVER sends with no human in the path. Granted on its confirmation token for the same
+    // reason, ENROLLED in `REQUIRED_VERB_FLAG` above (g15), and its audit rides `['ws-audit','--session']`. ccd
+    // re-proves the token — which binds the archive's epoch — inside the reap lock.
+    ['ws-expire', '--expect'],
     ['ws-attic', '--session'],
     // The workspace-hold pair. The spec's "zero new agent whitelist grants"
     // bullet is about KEYS — no `gh`, no new command — and its own next clause
@@ -374,6 +613,39 @@ export const EXEC_WHITELIST = {
     // every positional form it might ever grow — reached from a route that
     // carries no token of any kind (D-282).
     ['coord-pause', '--state'],
+    // The reclaim kill-switch's writer (child-reclamation wave 4, spec §5.8),
+    // granted on `coord-pause`'s argument exactly: `$REG/reclaim-paused` is a
+    // registry-file write/unlink, non-destructive, and granting it widens
+    // nothing that deletes — the file can only STOP a deletion. The server may
+    // write only `~/.cc-clips` here and `FleetIO` has no unlink, so the marker
+    // is raised through this verb or not at all.
+    //
+    // ENROLLED in `REQUIRED_VERB_FLAG` above: `--state` is the verb's whole
+    // argument surface, reached from `POST /api/coord/reclaim-pause`, which
+    // carries no box token. A bare `['reclaim-pause']` would admit every
+    // positional form the verb might grow and stay green in
+    // `whitelist-subset.test.ts`'s layers 2 and 3 (g14 is the other side).
+    ['reclaim-pause', '--state'],
+    // The test box switch's writer (test box plan TB9, D-7411; spec 2026-10-28 §2.7), granted on `coord-pause`'s
+    // argument exactly: `$REG/testbox-remote-live` is a registry-file write/unlink, non-destructive, and the server
+    // may write only `~/.cc-clips` here, so the marker is raised through this verb or not at all. ENROLLED in
+    // `REQUIRED_VERB_FLAG` above: `--state` is the verb's whole argument surface, and a bare `['testbox-remote']`
+    // would admit every positional form it might grow (g24 is the other side).
+    ['testbox-remote', '--state'],
+    // The pane-scope stop's switch writer (D-7902), granted on `coord-pause`'s argument exactly:
+    // `$REG/pane-scope-stop-live` is a registry-file write/unlink, non-destructive (it arms a stop the next deliberate
+    // stop makes, never one now), and the server may write only `~/.cc-clips` here, so the marker is raised through
+    // this verb or not at all. ENROLLED in `REQUIRED_VERB_FLAG` above: `--state` is the verb's whole argument surface,
+    // and a bare `['pane-scope-stop']` would admit every positional form it might grow (g27 is the other side).
+    ['pane-scope-stop', '--state'],
+    // The sweep's busy arm switch (D-7994), granted on `testbox-remote`'s argument exactly: `$REG/scope-sweep-busy-live` is
+    // a registry-file write/unlink, and the verb stops nothing itself. ENROLLED in `REQUIRED_VERB_FLAG` above (g27 is the
+    // other side).
+    ['scope-sweep-busy', '--state'],
+    // The delegation lane's adoption switch (D-8112), granted on `scope-sweep-busy`'s argument exactly: `$REG/delegation-adopt`
+    // is a registry-file write/unlink, and the verb keeps or removes nothing itself; the server sends it only after its door's
+    // refusal rule (D-8113). ENROLLED in `REQUIRED_VERB_FLAG` above (g28 is the other side).
+    ['delegation-adopt', '--state'],
     // The project pool tag's writer (account pools, spec §5.4.2), granted on
     // `coord-pause`'s own argument: `$REG/pools/<project>` is a registry-file
     // write/unlink, non-destructive, and granting it widens nothing that
@@ -402,6 +674,139 @@ export const EXEC_WHITELIST = {
     // this grant two tokens wide instead of one, and REQUIRED_VERB_FLAG is what
     // makes losing it a boot refusal rather than a widening nobody notices.
     ['ws-rename',  '--session'],
+    // The terminal drawer's un-pin (wave 2, spec §6.1). `tmux set-option` is
+    // NOT granted and must never be: prefix matching leaves every token after
+    // a granted prefix unconstrained, so `['tmux','set-option']` would permit
+    // setting ANY option on ANY target of the shared server — and `set` is that
+    // command's own alias (`tmux list-commands` on tmux 3.4 prints `set-option
+    // (set)` and `set-window-option (setw)`), which is why
+    // `whitelist-subset.test.ts` pins the granted tmux verbs EXACTLY rather
+    // than refusing one spelling of one of them.
+    //
+    // WHAT THIS TABLE ENFORCES IS THE SPELLING AT `args[0]`, NOT THE
+    // CAPABILITY, and the sentence that stood here claimed the stronger thing.
+    // `isExecAllowed` compares a granted PREFIX and leaves every later token
+    // free, and tmux treats a bare `;` ARGV ELEMENT as its own command
+    // separator with no shell involved. Measured 2026-09-16:
+    // `isExecAllowed('tmux', ['has-session','-t','x',';','set-option','-g',
+    // 'window-size','manual'])` returns TRUE, and on a private `-L` socket
+    // that argv really runs both commands — `show-options -g window-size`
+    // went `latest` -> `manual`.
+    //
+    // WHAT KEEPS IT UNREACHABLE IS THE CALL CONVENTION, not this table. Every
+    // tmux argv in `server/src/exec.ts` is a literal token array, and each
+    // wire-supplied value lands as a SINGLE token (`tmuxTarget(id)`, and
+    // `sendLiteral`'s text in the one slot after `-l`), so nothing on the wire
+    // can contribute a `;` of its own: measured on the same socket, both
+    // `send-keys -t <s> -l ';'` and `send-keys -t <s> -l '; set-option -g
+    // window-size manual'` leave the global at `latest`, and a `;` inside a
+    // `resize-window -x` value is refused `width invalid`. Hardening
+    // `isExecAllowed` is OUT of this wave's scope by ruling — it is the single
+    // function gating the whole PWA→fleet path, and changing it after the
+    // reviews had run would ship an unreviewed change to it. Wrapping the
+    // one option this program needs in a ccd verb keeps the mutation two tokens
+    // wide and puts the validation on the box, where `cmd_win_size` re-states
+    // `shared/roster.ts`'s ID_RE as a bash class and enforces it BEFORE any
+    // target is built — and then anchors that target with tmux's exact-match
+    // `=`, because `-t` is an fnmatch PATTERN and a well-formed id that names
+    // no session would otherwise resolve to a DIFFERENT live one (D-2780).
+    //
+    // This is a FLEET-CONTROL verb, which is why it is outside CLAUDE.md's
+    // "zero new ccd verbs for coordination mutation" — that rule is about the
+    // coord surface (mail, runs, claims), and this touches none of it.
+    //
+    // ENROLLED in `REQUIRED_VERB_FLAG` above, for `coord-pause`'s reason and
+    // then some: `--session` is not a confirmation token, it is half the verb's
+    // whole argument surface, and the door it is reached from is as open as
+    // `coord-pause`'s with one more hazard on top. `GET /ws/pty/:id` (wave 3)
+    // carries no box token at all, as `coord-pause`'s route does not (D-282);
+    // and its `:id` is a PATH PARAM THAT HANDLER VALIDATES NOWHERE — measured
+    // over the whole handler body in `server/src/server.ts`, which destructures
+    // `req.params` and hands the id straight to `resizeWindow` and `spawnPty`,
+    // with no id-class test, no roster lookup and no 400 in it. So ccd's own
+    // `cmd_win_size` gate is the whole of what stands behind this grant, which
+    // is exactly why the grant stops at the flag. (An earlier draft of this
+    // sentence said the id "arrives off a JSON-parsed websocket frame": that is
+    // false — the only frame that handler parses carries `type`/`data`/`cols`/
+    // `rows` and no id — and it understated the hazard. Wave 3's own plan lists
+    // validating `:id` as work it will do, not as something already done.) A bare `['win-size']`
+    // would admit every positional form the verb might grow, and is invisible
+    // to layer 2 and to layer 3's reachability check in
+    // `whitelist-subset.test.ts` — `['win-size']` is a genuine prefix of the
+    // argv the server builds — which is why that file also carries an explicit
+    // `win-size is grantable ONLY with --session` case, and why the enrolment
+    // above exists: one of the two is in a different package from the other.
+    ['win-size',   '--session'],
+    // The read-only pool answer for one session's account (Overlord W1 pool set, plan Task 6): it writes nothing and
+    // reads the session's registry fields only. ENROLLED in `REQUIRED_VERB_FLAG` above on `--session`, which is its
+    // whole argument surface (g29 is the other side), so the wire cannot widen it to another form; an older agent
+    // without this row refuses it `forbidden`, which the server reads as `ran: false`, never as an answer.
+    ['pool-answer', '--session'],
+    // NATIVE DOCS READER (spec 2026-10-01 section 2 (a), docs W2): the four
+    // verbs `docs-v1` names, each ENROLLED in `REQUIRED_VERB_FLAG` above on the
+    // flag that is its whole argument surface (g16-g19 are the other side).
+    // Every token after the flag is unconstrained here; the exact argv is
+    // ccd's (a usage die on any other shape) and the server's layer-2c table.
+    // The fleet-wide listing: `--all` is its only argument.
+    ['docs-index', '--all'],
+    // One project's listing, at the origin default or at `--ref R`.
+    ['docs-tree',  '--project'],
+    // One file's bytes. ONE grant reaches BOTH argv shapes: committed (12
+    // tokens after the verb) and draft (14).
+    ['docs-show',  '--project'],
+    // The one docs verb that writes: a fetch of one branch from origin.
+    ['docs-fetch', '--project'],
+    // One doc's history (rich-docs spec G4; the server sends it behind its own cap token): read-only, 8 tokens, ENROLLED above on
+    // `--project` like the four; ccd dies with usage on any other shape.
+    ['docs-log',   '--project'],
+    // THE CHILD TEMP-ROOT COLLECTOR (child reclamation spec 2026-09-22 §5.10): the fourth destructive verb, and the third
+    // the SERVER sends with no human in the path — on a witnessed child temp root whose workspace is gone. Granted on its
+    // confirmation token for ws-reclaim's reason, ENROLLED in `REQUIRED_VERB_FLAG` above (g20), and its audit rides
+    // `['ws-audit','--session']`. ccd recomputes the token and compares it inside the reap lock before anything moves.
+    ['ws-collect', '--expect'],
+    // THE ORPHAN LANE (fleet disk retention spec 2026-10-23 §2.3, D-6630). `ws-audit --orphans` is the read-only census of
+    // linked worktrees no registry row names; `ws-audit --orphan-hex` answers one tree's ladder and mints the token the act
+    // re-proves. Neither destroys anything, and neither is gated in `REQUIRED_VERB_FLAG` (`ws-audit` is not). `ws-orphan`
+    // IS destructive, so it is ENROLLED there on `--expect` (its confirmation token leads); `--rescue` and the dec trail.
+    // `ws-orphan` is not in `UNGRANTABLE_VERBS`: its only lawful form is the token-led one.
+    ['ws-audit', '--orphans'],
+    ['ws-audit', '--orphan-hex'],
+    ['ws-orphan', '--expect'],
+    // THE DEPS-SHED ARM (D-7278; design note 2026-10-28 §4). `ws-shed-deps` removes a sleeping session's git-ignored,
+    // untracked dependency directories after the box re-proves the sleep, the class, its floor and git's own list, so it
+    // is ENROLLED in `REQUIRED_VERB_FLAG` on `--session`: no bare form is grantable. It carries no token (what it removes
+    // is rebuildable, and every rung is re-read at the act); `--class`, `--dry-run` and the dec trail.
+    ['ws-shed-deps', '--session'],
+    // THE LEASE CARRIER (delegation broker wave 5, PR1). `ws-lease-mark --lease <id> ...` writes one delegation lease's
+    // carrier file on the box, the server's mark of a generation it has journalled. It is ENROLLED in
+    // `REQUIRED_VERB_FLAG` on `--lease`, the flag that names the one lease it may write, so no bare form is grantable.
+    ['ws-lease-mark', '--lease'],
+    // THE LEASE AUDIT (delegation broker wave 5, PR2). `ws-lease-audit --lease <id> --generation <n> [--holders]` is the
+    // read-only measure of one leased tree: it writes nothing to any durable path (its residuals, scratch files under
+    // $TMPDIR and a configured clean filter, are named in `ccd/lib/delegation-lease.sh`). It is ENROLLED in
+    // `REQUIRED_VERB_FLAG` on `--lease` all the same, so a bare grant cannot admit an audit of any lease the server was
+    // talked into naming.
+    ['ws-lease-audit', '--lease'],
+    // THE COLLECTOR'S LOOSE ARM (fleet disk retention spec 2026-10-23 §2.4, D-6626). Two read-only `ws-audit` modes: the
+    // census of the entries directly under the scratch root (names as hex) and one such entry's audit, which mints the
+    // token. Neither destroys anything, and neither is gated in `REQUIRED_VERB_FLAG` (`ws-audit` is not). The loose VERB
+    // rides `['ws-collect','--expect']` above (its token leads), so it takes no prefix of its own.
+    ['ws-audit', '--collect-census'],
+    ['ws-audit', '--loose-hex'],
+    // RENAME AN EXISTING WORKSPACE (named workspaces S9, design 2026-10-20 §6): `ws-title --session <id> (--title <text>
+    // | --clear)` writes a workspace's operator title and its `named` marker, or removes both, and nothing else — no
+    // worktree, branch, transcript or session is touched. Granted on `--session` and ENROLLED in `REQUIRED_VERB_FLAG`
+    // above for `route`'s and `win-size`'s reason: the flag is the verb's whole argument surface, a bare grant would
+    // admit every positional form it might grow, and the id it names is the PWA's. ccd re-proves every gate on the box
+    // (a real session, a workspace and not a main checkout, a clean title).
+    ['ws-title', '--session'],
+    // ADD A PROJECT (add-project spec 2026-11-04 §4): `project-add --name <n> (--url <github-url> | --empty)` clones a
+    // GitHub repository, or `git init`s an empty one, into a NEW directory under the projects root, and nothing else:
+    // it refuses an existing name, and its failure removes only its own temp directory. Granted on `--name` and
+    // ENROLLED in `REQUIRED_VERB_FLAG` above for `ws-title`'s reason: the flag is the verb's whole argument surface. ccd
+    // re-proves the name and the url (two exact github.com shapes) on the box; the clone is the agent's only way to a
+    // `git clone`, since `git` is a forbidden exec command.
+    ['project-add', '--name'],
   ],
 } as const satisfies ExecWhitelist;
 

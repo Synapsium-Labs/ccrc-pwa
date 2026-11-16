@@ -1,0 +1,61 @@
+{
+  "name": "read-initiatives-by-name-near-miss",
+  "documentSource": "code",
+  "document": "query InitiativesByName($name: String!) { initiatives(filter: { name: { eq: $name } }, first: 10) { nodes { id name createdAt creator { id } } } }",
+  "variables": {
+    "name": "Capture initiative tem"
+  },
+  "requestBody": "{\"query\":\"query InitiativesByName($name: String!) { initiatives(filter: { name: { eq: $name } }, first: 10) { nodes { id name createdAt creator { id } } } }\",\"variables\":{\"name\":\"Capture initiative tem\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "15"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999731"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794590004499"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2455"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794590004499"
+    ]
+  ],
+  "body": {
+    "data": {
+      "initiatives": {
+        "nodes": []
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"initiatives\":{\"nodes\":[]}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). The initiative's name less its last character: the exact-name filter finds none."
+}

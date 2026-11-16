@@ -6,9 +6,13 @@
 //
 // Two cues per row, always: the word is the fact and the glyph is the shape, so
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
-import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isRunState,
-  type RunHealth, type RunItemTally, type RunState, type RunSummary } from '../../../shared/api';
-import { formatAge } from './formatReset';
+import { WARN_GLYPH } from '@ccrc/ui';
+import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildReclaimWord, isRunState, sessionRunOf,
+  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type FleetSession, type RunHealth, type RunItemTally, type ProgrammePendingClose, type RunKind, type RunState, type RunSummary, type SessionRun } from '../../../shared/api';
+import { formatAge, formatElapsed } from './formatReset';
+import { closeWords } from './closeWords';
+import { STUCK_HEADING, closeWhen } from './stuckWords';
+import type { CoordinatorPresence } from './presence';
 
 export const RUN_WORD: Record<RunState, string> = {
   planned: 'planned',
@@ -43,6 +47,18 @@ export const RUN_GLYPH: Record<RunState, string> = {
 export const runState = (run: { state: RunState }): RunState =>
   isRunState(run.state) ? run.state : 'unknown';
 
+/** THE ONE STATE WORD a run's row draws (D-8071; spec §11.3, A16). A closed run's words come from `closeWords` first, so
+ *  an abandoned run never reads "failed"; then "stuck" when the server set a verdict, then "reviewed" when the run awaits
+ *  review and its next move is the coordinator's; otherwise `RUN_WORD`. It has no input from the PWA's own liveness, and an
+ *  older server sends neither field, so every run then reads exactly as before. */
+export const runStateWord = (run: RunSummary): string => {
+  const closed = closeWords(run);
+  if (closed !== null) return closed;
+  if (run.stuck !== undefined && run.stuck !== null) return 'stuck';
+  if (run.state === 'awaiting-review' && run.waitsOn === 'coordinator') return 'reviewed';
+  return RUN_WORD[runState(run)];
+};
+
 /** Tolerant read of `RunSummary.items`, same idiom as `unmeasuredFields`
  *  (`shared/api.ts`) for the identical reason: the parameter type says
  *  optional even though `RunSummary.items` itself is not, because a row that
@@ -65,7 +81,34 @@ export const runItems = (run: { items?: RunItemTally }): RunItemTally =>
  *  ledger nothing has settled yet, which is a real and useful fact, and only
  *  a ledger that does not exist gets the dash. */
 export const itemTallyLabel = (items: RunItemTally): string =>
-  items.total === 0 ? '—' : `${items.done}/${items.total}`;
+  items.total === 0 ? '—' : `${items.done}/${items.total} settled`;
+
+/** D-8292 (#119): what the tally counts, for its `title`; null beside the dash, which counts nothing. "settled" rides
+ *  the label because `done` is the coordinator's ack count (D-5914, `RunSummary.items`): a wave in progress reads `0/5`
+ *  however far its branch has moved, and a bare `0/5` beside a busy branch was read as a run with no work. */
+export const itemTallyTitle = (items: RunItemTally): string | null =>
+  items.total === 0 ? null
+    : `${items.done} of the ${items.total} items this wave declared that the coordinator has settled. ` +
+      'An item is settled after a verified advance, so this is not commits and not branch progress.';
+
+/** The worker branch's commit count beside the tally (D-8292). */
+export interface BranchCommitsNote { readonly word: string; readonly title: string }
+
+/** The ONE reader of the worker's `pr.ahead` on a run row. It draws only a positive count from the worker session's own
+ *  PR read, on an open run whose session names the run's branch: `ahead` coerces an unmeasured branch to 0 (`phaseFor`),
+ *  so 0 says nothing, and another branch's count, or a live count on a closed run's record, would be a claim about
+ *  something else. A derived fact, and the title says where it came from; it never moves the tally. */
+export function branchCommitsNote(run: RunSummary, session: FleetSession | null): BranchCommitsNote | null {
+  if (session === null || session.pr === null || runClosedAt(run) !== null) return null;
+  if (run.branch !== null && session.branch !== run.branch) return null;
+  const n = session.pr.ahead;
+  if (!Number.isSafeInteger(n) || n <= 0) return null;
+  return {
+    word: `${n} ${n === 1 ? 'commit' : 'commits'}`,
+    title: `${n} ${n === 1 ? 'commit' : 'commits'} on the worker's branch past its base, from the latest pull request read. ` +
+      'These are commits, not settled items: the count beside them is what the coordinator has settled.',
+  };
+}
 
 /** Tolerant read of `RunSummary.closedAt`. `undefined` degrades to `null`
  *  (never-finished, i.e. active) rather than surviving as a value that is
@@ -77,11 +120,58 @@ export const itemTallyLabel = (items: RunItemTally): string =>
 export const runClosedAt = (run: { closedAt?: number | null }): number | null =>
   run.closedAt ?? null;
 
+/** The one reader of `RunSummary.lastMoveAt` (D-7334, D-7338). ABSENT is an older server and reads null, so an older server
+ *  shows no movement (programme-boxes spec §5). NULL is a server that measured no move on the run yet, and falls back to its
+ *  dispatch time, then its open time. A number is the move. */
+export const runLastMove = (run: RunSummary): number | null =>
+  run.lastMoveAt === undefined ? null : run.lastMoveAt ?? run.dispatchedAt ?? run.openedAt;
+
+/** D-8285 (#119): the worker heartbeat as a row and its page header draw it. */
+export interface WorkerSeenNote {
+  readonly word: string;
+  /** Past the stall watch's quiet time with no turn open: the word says "quiet", and the row's ink says it a second time. */
+  readonly quiet: boolean;
+  readonly title: string;
+}
+
+const WORKER_TURN_WORD: Record<'working' | 'failed', string> = { working: 'in a turn', failed: 'turn failed' };
+
+/** The first instant (epoch ms) at which `workerSeenNote` reads the run quiet, or null when it never will: no finite
+ *  heartbeat, a turn still open, or no `quietMs`. The ONE place "quiet" is defined: quiet iff `nowMs - at > quietMs`,
+ *  that is, from `at + quietMs + 1` (whole milliseconds). */
+export function workerQuietAt(run: RunSummary, quietMs: number | null): number | null {
+  const at = run.workerLastSeen;
+  if (typeof at !== 'number' || !Number.isFinite(at)) return null;
+  if (run.workerLastTurn?.state === 'working' || quietMs === null) return null;
+  return at + quietMs + 1;
+}
+
+/** The ONE reader of `RunSummary.workerLastSeen` and `.workerLastTurn` (D-8285). Absent or not a finite number (an older
+ *  server, a marker the sweep could not read, no sweep yet) draws nothing: "not measured" is never "dead". `quietMs` is the
+ *  runs frame's `stallQuietMs`, the threshold `lastMoveAt`'s stalled word uses; null (no frame yet, an older server) is never
+ *  quiet. A turn still open is never quiet either: the marker does not move inside a turn, so its age is the turn's. */
+export function workerSeenNote(run: RunSummary, nowMs: number, quietMs: number | null): WorkerSeenNote | null {
+  const at = run.workerLastSeen;
+  if (typeof at !== 'number' || !Number.isFinite(at)) return null;
+  const state = run.workerLastTurn?.state;
+  const open = state === 'working';
+  const quietAt = workerQuietAt(run, quietMs);
+  const quiet = quietAt !== null && nowMs >= quietAt;
+  const ago = formatAge(Math.floor((nowMs - at) / 1000));
+  const tail = state === 'working' || state === 'failed' ? ` · ${WORKER_TURN_WORD[state]}` : quiet ? ' · quiet' : '';
+  const when = new Date(at).toISOString().replace('T', ' ').slice(0, 16);
+  const title = `The worker's turn marker last moved at ${when} UTC.`
+    + (open ? ' A turn is open, and the marker does not move inside one.' : '')
+    + (quiet ? ' That is longer ago than the stall watch\'s quiet time.' : '');
+  return { word: `last seen ${ago}${tail}`, quiet, title };
+}
+
 /** The active/finished SPLIT (fix, review findings 3/22): `state`, never
  *  `closedAt` — `CoordStore.runs()` itself (the live `{type:'runs'}` frame's
- *  own source, `watch.ts`'s `emitRuns`) draws the SAME line on `state NOT IN
- *  ('done','failed')`, so this is not a new definition, it is the existing
- *  one restated where the client can use it. `closedAt` is written by
+ *  own source, `watch.ts`'s `emitRuns`) draws the SAME line by excluding
+ *  `TERMINAL_RUN_STATES` (`shared/api.ts`'s `done`/`failed` pair), so this is
+ *  not a new definition, it is the existing one restated where the client
+ *  can use it. `closedAt` is written by
  *  exactly one path (`advanceInner`, `store.ts`) and `CoordStore.reconstruct`
  *  — the disaster-recovery rebuild `server/test/reconstruction-drill.test.ts`
  *  pins as one of the twelve facts the drill CANNOT recover — never sets it,
@@ -186,6 +276,11 @@ export function dispatchWindow(
     : { phase: 'in-flight', elapsedMs };
 }
 
+/** The stalled dispatch's sentence, and its long form: said by the run row and by the run page's header (D-8072), so one spelling. */
+export const DISPATCH_STALLED_WORDS = 'dispatch never completed — a workspace may exist';
+export const dispatchStalledTitle = (elapsedMs: number): string =>
+  `the dispatch began ${formatElapsed(elapsedMs)} ago and the run is still planned`;
+
 /** The two phases that RENDER, as a glyph each — the board's standing
  *  two-cue rule (a word AND a glyph, so no state is read out of colour
  *  alone), single-sourced now that two surfaces draw the same window: the run
@@ -195,7 +290,7 @@ export function dispatchWindow(
  *  instead of a cell that silently renders nothing. */
 export const DISPATCH_GLYPH: Record<Exclude<DispatchWindow['phase'], 'none'>, string> = {
   'in-flight': '⟳',
-  stalled: '⚠',
+  stalled: WARN_GLYPH,
 };
 
 /** Is THIS row inside a dispatch window at all — i.e. is there a spawn to
@@ -228,39 +323,134 @@ export function anyDispatchPending(
   return runs.some(isDispatchPending);
 }
 
-/** The run — if any — that this list says is being worked in that session
- *  (Task 5). One reader, so the fleet card's hold-reason door and anything that
- *  follows it ask the same question the same way.
+/**
+ * Which card a run's rows belong on: the card the session it is ABOUT renders
+ * on. Wave 2 of board placement moves a coordinated workspace to its
+ * coordinator's card, and `nestFleet` can only draw the edge when the run
+ * reaches THAT card — a run left on `run.project`'s card is spec §1's pure
+ * regression (no edge, no marker, no `/runs` door).
  *
- *  THE ANSWER COMES FROM THE RUN ROWS, NEVER FROM THE HOLD STRING. The hold
- *  text on a session already spells `program:<slug> wave:N/M run:<id>` and it is
- *  tempting to read the id back out of it — `rundefs.ts`'s `holdReason` calls
- *  that out as DISPLAY-ONLY and `run-routes.test.ts` scans both `server/src` and
- *  `pwa/src` for a parser and fails the build on one — including one written in
- *  a COMMENT, which is why this note describes the regex instead of spelling it
- *  (measured on this branch: a helper that read the id out of the reason with a
- *  digit capture, dropped into `pwa/src`, reds that pin, and so did the first
- *  draft of this very docstring). The `runs` frame is the
- *  same `coord.db` the server itself answers from, so this is the cheaper source
- *  as well as the sanctioned one — and it is strictly more honest, because a
- *  hold left behind by a closed run parses to a run id the board cannot show,
- *  while this answers `null` for it.
+ * A BOUND run asks its WORKER: `boardHome` of `run.sessionId`, which is where
+ * that row now renders.
  *
- *  Callers pass the ACTIVE runs they already hold, so `null` means "the board
- *  has no row for this session" — exactly the question a door needs answered,
- *  and not the same as "this session has never had a run".
+ * A PENDING SPAWN HAS NO WORKER, AND ASKS ITS COORDINATOR (D-3029).
+ * It used to take `run.project`, which is right only while the wave works in
+ * the coordinator's own repo: on a cross-repo wave the phantom landed on the
+ * WAVE's card as a depth-0 orphan spawn, then jumped to the coordinator's card
+ * the moment the worker bound — a row moving between cards as a side effect of
+ * a dispatch completing. The phantom now follows its coordinator, which is
+ * exactly where the bound worker is about to render, so nothing moves.
  *
- *  During the required open-successor-before-close-producer boundary, two rows
- *  can name the same session. The API orders rows oldest-first, so the last
- *  matching id is the current wave; first-match would render the outgoing one. */
-export function runForSession(
-  runs: readonly RunSummary[], sessionId: string,
-): RunSummary | null {
-  let current: RunSummary | null = null;
-  for (const run of runs) {
-    if (run.sessionId === sessionId && (current === null || run.id > current.id)) current = run;
+ * `run.project` is the LAST answer, never the first: taken only when there is
+ * nothing routable — no session and no claimant (a reconstructed, ownerless
+ * row), or a session/claimant the fleet list does not carry this pass (reaped,
+ * unmeasured, an older snapshot). Without it an orphaned run would render on
+ * no card at all.
+ *
+ * `cardOf` is built ONCE per render by the caller from `boardHome` over the
+ * whole session list — never inside a card, which sees only its own rows.
+ *
+ * A BY-ID CARD LOOKUP, NAMED (D-7205). Its two `cardOf.get` calls are keyed on a
+ * run's `sessionId` and `claimedBy`, and they stay by id: the question is which
+ * CARD a run renders on (a session id to a card), not which session is the
+ * run's worker, and a run whose worker the wire does not bind still renders on
+ * its project's card. With `workerOf`'s closed-run arm and `coordinatorOf`
+ * (D-7207) they are the PWA's named by-id run lookups, counted and may only
+ * shrink (`server/test/rings/pwa-one-owner.test.ts`).
+ */
+export function runCard(
+  run: { sessionId: string | null; claimedBy: string | null; project: string },
+  cardOf: ReadonlyMap<string, string>,
+): string {
+  if (run.sessionId === null) {
+    return run.claimedBy === null ? run.project : cardOf.get(run.claimedBy) ?? run.project;
   }
-  return current;
+  return cardOf.get(run.sessionId) ?? run.project;
+}
+
+// ─── The run binding, read from the wire (D-7182; ARCH-61's PWA half, GitHub #796; spec K10) ──────────────────────
+//
+// The server decides which run is a session's (`FleetSession.run`, `.openRun`, through `shared/api.ts#sessionRunOf`,
+// computed once per assembly by `server/src/coord/runBinding.ts#bindingOf`, keyed on the session's INCARNATION), so a
+// recycled workspace name does not inherit a run opened for the occupant before it (#746). These are the PWA's only
+// run-to-session readers: no other `pwa/src` file compares a run's `sessionId` or `claimedBy` with a session id or keys
+// a session map on one (`server/test/rings/pwa-one-owner.test.ts`'s run-binding block counts them).
+
+/** A session as the run readers see it: its id and its wire binding (both binding keys optional, an older server's). */
+export interface BoundSession {
+  readonly id: string;
+  readonly run?: SessionRun | null;
+  readonly openRun?: SessionRun | null;
+}
+
+/** The session's OPEN bound run, as the row the runs list carries (`sessionRunOf(s, 'open')`, matched to `runs` by the
+ *  run's own id), or `null`: no open run binds this incarnation, the server did not or could not decide (an older
+ *  server: no key at all), or `runs` has no row for it. Callers pass the ACTIVE runs they already hold, so `null` also
+ *  means "this list has no row for that run", exactly the question a door needs answered.
+ *
+ *  THE ANSWER COMES FROM THE WIRE'S BINDING AND THE RUN ROWS, NEVER FROM THE HOLD STRING. The hold text on a session
+ *  already spells the programme, wave and run id, and it is tempting to read the id back out of it; `rundefs.ts`'s
+ *  `holdReason` calls that out as DISPLAY-ONLY and `run-routes.test.ts` scans `server/src` and `pwa/src` for such a
+ *  parser and fails the build on one, a comment included, which is why this note describes it instead of spelling it.
+ *
+ *  The OPEN run, not the newest: the fleet's questions (the card's parent, the child's label, the header's run, the
+ *  hold-reason door, the orphan marker) are about the run being worked now, and `openRun` is the server's named answer
+ *  to that, so a newer run that closed while an older one is open does not hide the open one (`sessionRunOf`'s note). */
+export function boundOpenRun<R extends { readonly id: number }>(runs: readonly R[], session: BoundSession): R | null {
+  const bound = sessionRunOf(session, 'open');
+  return bound === null ? null : runs.find((r) => r.id === bound.id) ?? null;
+}
+
+/** THE COORDINATOR-SIDE READER (D-7182): the OPEN runs this session claims, in list order. The wire answers "whose
+ *  children are these" per run (`RunSummary.childIds`, `server/src/coord/runBinding.ts#childrenOf`), not per session,
+ *  so "which open runs does this session hold" is asked here once, by the claimant's id. A closed run is never one: the
+ *  archive door's programme question and the palette's programme terms are about work that can still move. */
+export function claimedRunsOf<R extends { readonly claimedBy: string | null; readonly state: RunState }>(
+  runs: readonly R[], sessionId: string,
+): R[] {
+  return runs.filter((r) => r.claimedBy === sessionId && !isRunClosed(r));
+}
+
+/** THE SESSION'S PROGRAMME, one reader (desktop-polish PL11, D-7986): the programme of its OPEN bound run (a worker), else of
+ *  the first open run it claims (a coordinator), else `null`, a session in no programme. Read off the fleet row's binding and the
+ *  runs the store holds, never a field of its own: the Waiting on you list files a session's question under it
+ *  (`questionRows`), and the session's chrome opens its Goals page with it, so the two never name different programmes. */
+export function sessionProgramme<R extends { readonly id: number; readonly program: string; readonly claimedBy: string | null; readonly state: RunState }>(
+  session: BoundSession & { readonly id: string }, runs: readonly R[],
+): string | null {
+  return boundOpenRun(runs, session)?.program ?? claimedRunsOf(runs, session.id)[0]?.program ?? null;
+}
+
+/** THE WORKER READER (D-7182, D-7205): the listed session that is this run's worker, or `null`.
+ *
+ *  OPEN RUN: the session carrying the run's `sessionId` counts only when its own wire binding names this run
+ *  (`sessionRunOf(s, 'open')` or `sessionRunOf(s)`), so a recycled worker id, whose binding names another run or none,
+ *  finds no worker (#746). An older server sends no binding at all, so there an open run finds no worker (the skew row).
+ *
+ *  CLOSED RUN (`isRunClosed`): no wire fact tells a recycled id from the same incarnation (`run` is only the newest bound
+ *  run, `openRun` and `childIds` hold open runs only), so a finished run's worker is the listed session carrying its id,
+ *  today's lookup, the named by-id arm (D-7205): a finished row keeps its session, its chips and its open link.
+ *
+ *  ONE lookup for both arms: the open arm confirms the same session by its binding. */
+export function workerOf<S extends BoundSession>(
+  run: { readonly id: number; readonly state: RunState; readonly sessionId: string | null },
+  sessionsById: ReadonlyMap<string, S>,
+): S | null {
+  if (run.sessionId === null) return null;
+  const s = sessionsById.get(run.sessionId) ?? null;
+  if (s === null || isRunClosed(run)) return s;
+  return sessionRunOf(s, 'open')?.id === run.id || sessionRunOf(s)?.id === run.id ? s : null;
+}
+
+/** THE COORDINATOR READER (D-7207): the listed session carrying this run's claimant id, for every run, open or closed,
+ *  or `null`. A named by-id lookup, today's, because no wire field binds a run's claimant to an incarnation:
+ *  `RunSummary.childIds` is a fact about the WORKER's binding, and keying the coordinator on it would take the
+ *  coordinator, and with it the Resume door, off a planned run (`sessionId: null`), an undecidable binding, an
+ *  unlistable tick and every run without `childIds`, none of them #746 rows. A recycled coordinator id is answered as
+ *  today: the hazard no wire fact closes, named (a field binding the claimant's incarnation would be a server
+ *  prerequisite of its own). */
+export function coordinatorOf<S>(run: { readonly claimedBy: string | null }, sessionsById: ReadonlyMap<string, S>): S | null {
+  return run.claimedBy === null ? null : sessionsById.get(run.claimedBy) ?? null;
 }
 
 /** What the board says about a wave that RESUMED its session rather than
@@ -311,9 +501,61 @@ export function resumeNote(
       };
 }
 
+/** D-6442: how many finished runs the Runs board mounts, and how many each Show
+ *  more adds. The cold read returns up to 500 closed runs, and each one is a
+ *  `RunRow`; the newest 20 are what an operator reads, the rest are one door
+ *  away. A fold, not a removal: nothing is dropped from the archive. */
+export const FINISHED_FOLD = 20;
+
+/** The one reader of the row's "what it waits on" line (the runs rebuild, D-8072; spec 2026-11-04 §7, A29). Null means
+ *  today's line: the fact is absent (an older server sends no `waitsOn`), the case is not one §7 words, or the run is stuck,
+ *  which `stuckLine` words. A planned run behind a stuck run names that run (`blockedBy`; the row links it); "No move in N
+ *  days." is for a run at `dispatched` or `working` whose last move is over a day old, in whole days rounded down. */
+export function runWaitLine(run: RunSummary, nowMs: number): string | null {
+  if (run.stuck != null) return null;
+  const waits = run.waitsOn;
+  const state = runState(run);
+  if (state === 'planned') {
+    if (run.blockedBy != null) return 'Waits behind a stuck run.';
+    return waits === 'coordinator' ? 'Waits for its coordinator to start it.' : null;
+  }
+  if (state === 'awaiting-review') {
+    if (waits === 'coordinator') return 'Reviews done. Waits on its coordinator.';
+    return waits === 'reviewer' ? 'Waits on a reviewer.' : null;
+  }
+  if ((state === 'dispatched' || state === 'working') && run.lastMoveAt != null) {
+    const days = Math.floor((nowMs - run.lastMoveAt) / 86_400_000);
+    if (days >= 1) return `No move in ${days} ${days === 1 ? 'day' : 'days'}.`;
+  }
+  return null;
+}
+
+/** The step of the clock a FINISHED row reads, in ms (D-6442). Every readout on
+ *  a closed row (`formatAge` over `dispatchedAt`, `resumeNote`'s title,
+ *  `childReclaimTitle`) is minute-grained. The step's lag ADDS to the board's own:
+ *  `useNow(30_000)` is not aligned to the step and `finishedClock` floors its
+ *  value again, so at the slow cadence a finished row's clock can trail real time
+ *  by almost 60 s, where it trailed by at most 30 s before. `formatAge`'s minute
+ *  grain (`just now` under 2 min) hides almost all of that. */
+export const FINISHED_CLOCK_MS = 30_000;
+
+/** The board's one tick, floored to `FINISHED_CLOCK_MS`: the `nowMs` a finished
+ *  row is handed. It stays equal across the board's 1 s ticks, so a `memo`'d row
+ *  does not re-render on them. Derived from that tick, never a second timer. */
+export const finishedClock = (nowMs: number): number =>
+  Math.floor(nowMs / FINISHED_CLOCK_MS) * FINISHED_CLOCK_MS;
+
+/** The Show more door's words. `next` is what the click adds, `hidden` what is not
+ *  shown now (so `hidden > next` while more would stay hidden after the click).
+ *  The last batch says no count: nothing stays hidden. */
+export const finishedMoreLabel = (next: number, hidden: number): string => {
+  const head = `Show ${next} more finished run${next === 1 ? '' : 's'}`;
+  return hidden > next ? `${head}, ${hidden} not shown` : head;
+};
+
 /** Board order: the ones that can move first, the ones that are over last.
  *  One constant, shared by the grouping and the sort, so the two cannot drift —
- *  the same shape `sortFleet.ts`'s RANK/BUCKET_ORDER pair has. */
+ *  the same shape `shared/api.ts`'s BUCKET_RANK/BUCKET_ORDER pair has. */
 export const RUN_ORDER: readonly RunState[] = [
   'awaiting-review', 'failed', 'working', 'dispatched', 'merging', 'closing', 'planned', 'done', 'unknown',
 ];
@@ -433,6 +675,34 @@ export function crossingNote(
   };
 }
 
+/* ── design 2026-09-14 §8: the kind chip ──────────────────────────────────── */
+
+export const REVIEW_GLYPH = '⌕';
+
+export interface RunKindChip { readonly glyph: string; readonly word: string; readonly title: string }
+
+/**
+ * THE ONE READER of `RunSummary.kind` and `RunSummary.reviews` on this side
+ * of the wire (CLAUDE.md "Wire discipline": a newer peer tolerates an older
+ * peer omitting a field, through a SINGLE reader per field). Both are declared
+ * optional here though the wire type requires them, `runWarnings`'s idiom: an
+ * older SERVER omits them, and absence means a work run — the only kind that
+ * server knew. `null` = render nothing, which is what every work row does.
+ */
+export const runKindChip = (run: { kind?: RunKind; reviews?: number | null }): RunKindChip | null => {
+  if (run.kind === undefined || run.kind === 'work') return null;
+  if (run.kind === 'review') {
+    return {
+      glyph: REVIEW_GLYPH,
+      word: run.reviews === null || run.reviews === undefined ? 'review' : `reviews #${run.reviews}`,
+      title: run.reviews === null || run.reviews === undefined
+        ? 'a review run: reads one work run at one measured tip and reports; the coordinator rules'
+        : `a review run: reads run #${run.reviews} at one measured tip and reports; the coordinator rules`,
+    };
+  }
+  return { glyph: '·', word: 'unknown kind', title: 'a run of a kind this build cannot name' };
+};
+
 /* ── F7: the compact warn row ──────────────────────────────────────────────── */
 
 /** One thing worth saying about a run, as the board says everything: a WORD and
@@ -493,6 +763,15 @@ export function runWarnings(
       title: `${h.mailParked} mail deliver${h.mailParked === 1 ? 'y' : 'ies'} to this run gave up ` +
         `and parked unread (${h.mailOutstanding} still outstanding) — a run-closed or reclaimed ` +
         'cancel is not counted here, so these are messages nobody received' });
+  }
+  // D-5838/D-5839: PARKED and alive — not the "parked" above, which is the older word
+  // for a delivery the lane gave up on. `?? 0`: an older server omits it.
+  const parkedLive = h.mailParkedLive ?? 0;
+  if (parkedLive > 0) {
+    out.push({ glyph: '⏸', word: `${parkedLive} waiting`,
+      title: `${parkedLive} mail deliver${parkedLive === 1 ? 'y' : 'ies'} to this run ` +
+        `${parkedLive === 1 ? 'is' : 'are'} parked: the recipient is alive but its input box would not take ` +
+        'the message. It is delivered the moment that box is submitted or cleared, and rejected only after 24 h' });
   }
   if (h.mailReplayMax >= MAIL_REPLAY_WARN_COUNT) {
     out.push({ glyph: '↻', word: `replayed ${h.mailReplayMax}×`,
@@ -555,3 +834,284 @@ export function runWarnings(
   return out;
 }
 
+/* ── child-workspace reclamation (child-reclamation wave 5, spec §5.9) ────── */
+
+/**
+ * One glyph per word, TOTAL over `ChildReclaimWord`: a word the server gains is
+ * a TS2741 here before it is a blank cell anywhere. The glyph is the SHAPE and
+ * the word is the FACT, the board's standing two-cue rule. `⊘` is the
+ * journal's own refusal glyph (`OUTCOME_GLYPH.refused`), so one mark means one
+ * thing across both surfaces.
+ */
+export const CHILD_RECLAIM_CHIP_GLYPH: Record<ChildReclaimWord, string> = {
+  reclaimed: '∅', pending: '…', deferred: '⧖', paused: '‖', refused: '⊘',
+};
+
+export interface ChildReclaimChip {
+  /** The server's word, or `unknown` for one this build was never compiled to know. */
+  readonly word: ChildReclaimWord | 'unknown';
+  readonly glyph: string;
+  /** The visible text. */
+  readonly label: string;
+  /** The server's sentence, verbatim, or null. Never composed here. */
+  readonly sentence: string | null;
+  /** The sentence again when the word is a refusal, the one word the operator
+   *  may need to read in full, so it gets its own wrapped line. Null otherwise;
+   *  the other words carry their sentence in the title. */
+  readonly line: string | null;
+  /** Epoch ms of the moment the word describes, or null. */
+  readonly at: number | null;
+}
+
+/**
+ * THE ONE READER of `RunSummary.childReclaim` in `pwa/src` (CLAUDE.md "Wire
+ * discipline": a newer peer tolerates an older peer omitting a field, through a
+ * SINGLE reader per field). The field is optional here although the wire type
+ * requires it: `api.runs()` is a bare cast, and a server that predates wave 5
+ * omits the key. Every member is checked, not trusted. `null` means render
+ * nothing, which is what every non-child row and every open row does.
+ *
+ * It MAPS NOTHING. The word is the server's, the sentence is the server's, and
+ * the only vocabulary here is `CHILD_RECLAIM_CHIP_GLYPH`, keyed on the word.
+ */
+export const childReclaimChip = (run: { childReclaim?: ChildReclaimStatus | null }): ChildReclaimChip | null => {
+  const s: unknown = run.childReclaim;
+  if (s === undefined || s === null || typeof s !== 'object') return null;
+  const o = s as { word?: unknown; sentence?: unknown; at?: unknown };
+  const sentence = typeof o.sentence === 'string' && o.sentence !== '' ? o.sentence : null;
+  const at = typeof o.at === 'number' && Number.isFinite(o.at) ? o.at : null;
+  if (!isChildReclaimWord(o.word)) {
+    return { word: 'unknown', glyph: '·', label: 'workspace: unknown state', sentence, line: null, at };
+  }
+  return {
+    word: o.word,
+    glyph: CHILD_RECLAIM_CHIP_GLYPH[o.word],
+    label: `workspace ${o.word}`,
+    sentence,
+    line: o.word === 'refused' ? sentence : null,
+    at,
+  };
+};
+
+/** The chip's `title`: the server's sentence, or the label when it sent none,
+ *  and the age of the chip's moment when it has one. */
+export const childReclaimTitle = (chip: ChildReclaimChip, nowSec: number): string => {
+  const head = chip.sentence ?? chip.label;
+  return chip.at === null ? head : `${head} · ${formatAge(nowSec - Math.floor(chip.at / 1000))}`;
+};
+
+/** Is the session this row names GONE? Only a reclaimed child's is, and then
+ *  the row must stop offering to open it (spec §5.9). Every other word leaves
+ *  a workspace behind. */
+export const childReclaimGone = (chip: ChildReclaimChip | null): boolean =>
+  chip !== null && chip.word === 'reclaimed';
+
+const CHILD_RECLAIM_UNSETTLED: ReadonlySet<string> = new Set<ChildReclaimWord>(['pending', 'deferred', 'paused']);
+
+/**
+ * Should the board re-read its archive? Yes exactly when a FINISHED row whose
+ * chip is still unsettled names a session that was in the previous fleet frame
+ * and is not in this one. A child's reclaim purges its registry row, so this is
+ * the socket carrying the moment the chip goes stale. The board refuses a poll
+ * (RunsScreen's header) and needs none.
+ *
+ * `reclaimed` and `refused` are settled: the first has nothing left to vanish,
+ * and the second is the attention item's to keep live. A session never listed
+ * cannot vanish.
+ */
+export function childReclaimRefreshDue(
+  finished: readonly RunSummary[], before: ReadonlySet<string>, after: ReadonlySet<string>,
+): boolean {
+  for (const run of finished) {
+    const sid = run.sessionId;
+    if (sid === null || !before.has(sid) || after.has(sid)) continue;
+    const chip = childReclaimChip(run);
+    if (chip !== null && CHILD_RECLAIM_UNSETTLED.has(chip.word)) return true;
+  }
+  return false;
+}
+
+/** THE ONE READER of `RunSummary.hadChild` (D-8068). Only a literal `true` counts: the wire is cast, never revived, and
+ *  an older server omits the key, which then asks for no read the chip triggers do not. */
+export const runHadChild = (run: { hadChild?: unknown }): boolean => run.hadChild === true;
+
+/**
+ * Should the board re-read its archive because the server's newest reclaim end
+ * moved (child-reclamation wave 6, spec §5.9)? The vanish trigger above
+ * races the server's journal mirror: ccd purges the child's row before it
+ * journals the end, so that read can come back with no chip. This is the
+ * second trigger, on the fact the race was waiting for.
+ *
+ * Due exactly when `after` is a value, it differs from `before` (a CHANGE,
+ * never only an increase, because a restarted server reads null first), and
+ * some FINISHED row is unsettled:
+ *   • its chip is pending, deferred or paused; or
+ *   • it has no chip and the server says it had a child (`runHadChild`), which
+ *     is the race's own row, on any board, a reloaded one included (D-8068).
+ * An open row is never counted: its chip is blank by design.
+ */
+export function childReclaimDoneRefreshDue(
+  runs: readonly RunSummary[], before: number | null, after: number | null,
+): boolean {
+  if (after === null || after === before) return false;
+  for (const run of runs) {
+    if (!isRunClosed(run)) continue;
+    const chip = childReclaimChip(run);
+    if (chip === null ? runHadChild(run) : CHILD_RECLAIM_UNSETTLED.has(chip.word)) return true;
+  }
+  return false;
+}
+
+export { childMarkOf, type ChildMarkRead } from '../../../shared/runBelongs';
+import { childMarkOf } from '../../../shared/runBelongs';
+
+export interface ChildOfRunLabel {
+  readonly text: string;
+  readonly data: 'child' | 'unreadable';
+  readonly title: string;
+}
+
+/** What a child's label is told about its run: the OPEN run the wire binds to the
+ *  session (`boundOpenRun` — the current wave, so a workspace resumed for wave 5
+ *  answers wave 5, never the run its `.child` mark names), and its coordinator's
+ *  display name when the fleet carries it. `fleetTree.ts`'s `coordinationOf`
+ *  builds it; the default says nothing is known. */
+export interface ChildRunContext {
+  /** `id` is the run's number when the context was built from a run row (a `RunSummary` always has one), so a door can open its page. */
+  readonly run: { id?: number; program: string; programTitle: string; runTitle?: string | null; wave: number; waveOf: number | null; kind?: RunKind } | null;
+  readonly coordinator: string | null;
+}
+
+const NO_RUN: ChildRunContext = { run: null, coordinator: null };
+
+/** `<programme> · wave 5 of 7`, or `<programme> · review of wave 5` on a review
+ *  run (which carries the wave it reviews). THE one spelling, read by the fleet
+ *  row's child label and the session header's coordination line. */
+export const programmeWave = (r: NonNullable<ChildRunContext['run']>): string =>
+  `${r.program}${programmeWaveTail(r)}`;
+
+/** The wave half of `programmeWave`, separator included (` · wave 5 of 7`) —
+ *  split out so the fleet row can ellipsise a long programme slug and keep the
+ *  wave, the fact the operator asked for, whole (D-5528). */
+export const programmeWaveTail = (r: NonNullable<ChildRunContext['run']>): string =>
+  ` · ${r.kind === 'review' ? `review of wave ${r.wave}` : waveOfWords(r)}`;
+
+/** `wave 5 of 7`, or `wave 5` with no planned count: the tail's work-wave words, which a programme's head and its group on
+ *  the Waiting on you list say alone (carry C, D-7951; review 1386 F12: one spelling of the template). */
+export const waveOfWords = (r: { wave: number; waveOf: number | null }): string =>
+  r.waveOf === null ? `wave ${r.wave}` : `wave ${r.wave} of ${r.waveOf}`;
+
+/** A programme's title in words (D-6170): the first non-blank `programTitle`
+ *  any of `runs` carries for `program`, else the slug. A whitespace-only title
+ *  is no title. The one reader: the ledger's group head, `runRowName` and
+ *  the programme card (`openCards`) all ask it. */
+export const programmeTitle = (
+  program: string,
+  runs: readonly { program: string; programTitle?: string | null }[],
+): string => {
+  for (const r of runs) {
+    if (r.program === program && typeof r.programTitle === 'string' && r.programTitle.trim() !== '') return r.programTitle;
+  }
+  return program;
+};
+
+/** A ledger row's name (D-6170, spec §5 W0; D-8071): the run's own title when it has one, else the programme's title,
+ *  and the wave in words — `Programme A · wave 3 of 5`, or `Programme A · review of
+ *  wave 5` on a review run, the review said once by `programmeWaveTail`. Never
+ *  a workspace, a branch or a run number: those stay in the row's title and the
+ *  controls' accessible names (D-5589). */
+export const runRowName = (run: NonNullable<ChildRunContext['run']>): string =>
+  `${typeof run.runTitle === 'string' && run.runTitle.trim() !== '' ? run.runTitle : programmeTitle(run.program, [run])}${programmeWaveTail(run)}`;
+
+/** The plain-language sentence for a row an active run names (the label's and
+ *  the run-board door's title). `reclaimed` adds the lifecycle clause, true only
+ *  for a workspace the run minted. */
+export const runSentence = (
+  r: NonNullable<ChildRunContext['run']>, coordinator: string | null, reclaimed: boolean, whose: string | null = null,
+): string => {
+  const programme = r.programTitle !== '' ? r.programTitle : r.program;
+  const verb = r.kind === 'review' ? 'reviews' : 'does';
+  // `whose`: the session header names whose code the wave is done on (D-5527). ONE sentence for the fleet
+  // row's title and the header's (D-5545), so a review reads "reviews one wave" on both.
+  return `this workspace ${verb} one wave of ${programme}${whose === null ? '' : ` on ${whose} code`} for ${coordinator ?? 'its coordinator'}`
+    + (reclaimed ? '; it is stopped or reclaimed when the wave is done' : '');
+};
+
+/**
+ * The fleet line's label, projected from `childMarkOf` (the one reader of
+ * `FleetSession.child`). THREE answers and no boolean (spec §5.1), worded by the
+ * operator's ruling of 2026-10-18: a child names its PROGRAMME and WAVE —
+ * `<programme> · wave 5 of 7`, or `<programme> · review of wave 5` for a review
+ * run (a review run carries the wave it reviews, `openRun`'s target) — because
+ * "child of run #N" was a number every worker had a different one of. The run
+ * number moves to the session header's details and the reclaim banner. A child
+ * no active run names says so in words ("run not on the board"; the run may have
+ * closed), and keeps its minting run's number in the title. An unreadable marker
+ * says so, because the server treats it as neither "a child" nor "not a child":
+ * it refuses a second run and defers a reclaim. No marker, or a shape this build
+ * cannot read, says nothing.
+ */
+export const childOfRunLabel = (
+  session: { child?: ChildMark }, ctx: ChildRunContext = NO_RUN,
+): ChildOfRunLabel | null => {
+  const m = childMarkOf(session);
+  if (m.kind === 'child') {
+    const r = ctx.run;
+    if (r === null) {
+      return {
+        text: 'run not on the board',
+        data: 'child',
+        title: `minted by run #${m.runId}; no open run on the board names this workspace — the run may have closed, and the server reclaims the workspace when nothing keeps it`,
+      };
+    }
+    return { text: programmeWave(r), data: 'child', title: runSentence(r, ctx.coordinator, true) };
+  }
+  if (m.kind === 'unreadable') {
+    return {
+      text: 'child marker unreadable',
+      data: 'unreadable',
+      title: 'this workspace’s child marker could not be read: it takes no second run, and is not reclaimed until it can be read',
+    };
+  }
+  return null;
+};
+
+/** The one reader of `RunSummary.coordinatorGone` (spec 9.1, A46, A60): the server's verdict decides, true and false alike,
+ *  and only an absent field (an older server) falls back to what the board sees of the coordinator. */
+export function coordinatorGoneOf(run: { coordinatorGone?: boolean }, presence: CoordinatorPresence): boolean {
+  return run.coordinatorGone ?? presence === 'dead';
+}
+
+/** Whether the Resume door is drawn for a run, or for a programme's head standing in for one (spec §9.5, A46, A55, A56, A60):
+ *  the coordinator reads gone by `coordinatorGoneOf`, and the run is open or its programme has no open run (D-1146). `null`
+ *  for `programHasOpenRun` is the runs frame not yet heard, which hides the door: a programme that may have a wave that can
+ *  move is not one to hand over. */
+export function resumeShown(
+  run: Pick<RunSummary, 'state' | 'coordinatorGone'>,
+  presence: CoordinatorPresence,
+  programHasOpenRun: boolean | null,
+): boolean {
+  if (programHasOpenRun === null) return false;
+  return coordinatorGoneOf(run, presence) && (!isRunClosed(run) || !programHasOpenRun);
+}
+
+/** One reason's pending close on a programme's head (spec §8.5, A37): "Owner gone: 3 · ccrc closes them in 2 h". Armed clocks
+ *  say "closes" and shadow ones "would close"; a clock at zero or past reads "soon" when armed and "now" in shadow. */
+export function pendingCloseLine(p: ProgrammePendingClose, nowMs: number): string {
+  const when = closeWhen(p.soonestAt, nowMs) ?? (p.armed ? 'soon' : 'now');
+  return `${STUCK_HEADING[p.reason]}: ${p.count} · ccrc ${p.armed ? 'closes' : 'would close'} ${p.count === 1 ? 'it' : 'them'} ${when}`;
+}
+
+/** A programme's open runs as its page lists them (spec §8.5): one entry per wave, newest wave first, each work run with the
+ *  reviews that name it nested beneath. A review whose work run is not open stands as an entry of its own, at its wave. */
+export function openWaves(open: readonly RunSummary[]): { run: RunSummary; reviews: RunSummary[] }[] {
+  const reviews = open.filter((r) => r.kind === 'review');
+  const used = new Set<number>();
+  const entries = open.filter((r) => r.kind !== 'review').map((run) => {
+    const mine = reviews.filter((x) => x.reviews === run.id).sort((a, b) => b.id - a.id);
+    for (const x of mine) used.add(x.id);
+    return { run, reviews: mine };
+  });
+  for (const x of reviews) if (!used.has(x.id)) entries.push({ run: x, reviews: [] });
+  return entries.sort((a, b) => b.run.wave - a.run.wave || b.run.id - a.run.id);
+}

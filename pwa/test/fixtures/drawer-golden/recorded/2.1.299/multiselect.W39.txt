@@ -1,0 +1,36 @@
+
+  ▐▛███▛█   Claude Code v2.1.299
+ ▝▜██████▀  Opus 5.5 · API Usage Billing
+  ▝▝   ▝▝   /rig/project-a
+
+ ❯ Ask me which checks to run before
+   project-a is released.
+──
+ ←  ☒ Checks  ✔ Submit  →
+
+ Which checks should run before
+ project-a is released?
+
+   1. [✔] Unit tests
+          Run the unit tests under test/
+          against src/app.ts
+ ❯ 2. [ ] Type check
+          Run the TypeScript compiler
+          with no emit, so a type error
+          stops the release
+   3. [ ] Lint
+          Run the linter over src/ and
+          test/ with the project's own
+          rules
+   4. [ ] Build
+          Build project-a into dist/ and
+          keep the build report beside
+          it
+   5. [ ] Type something
+      Submit
+──
+   6. Chat about this
+
+ Enter to select · ↑/↓ to navigate · Esc
+ to cancel
+

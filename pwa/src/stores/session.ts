@@ -5,7 +5,9 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import {
   composePrompt,
-  PRESENCE_REFRESH_MS,
+  VIEWER_REFRESH_MS,
+  SECRET_MASK,
+  type AskPairing,
   type ChatEvent,
   type Dialog,
   type HookAsk,
@@ -14,8 +16,11 @@ import {
   type SessionStreamMsg,
   type TaskItem,
 } from '../../../shared/api';
+import type { WorkflowView } from '../../../shared/workflows';
 import { api, ApiError, sendErrorText, type Api } from '../lib/api';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
+import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
+import { isLocalDivider } from '../session/localDivider';
 
 /** A staged image handed to send(). The path is what the server/dispatch see;
  *  the preview URL is carried only so the optimistic bubble can render the
@@ -60,6 +65,38 @@ export interface PendingSend {
   /** Staged images sent alongside text. Object-URL ownership lives here from
    *  send() until this pending is confirmed or explicitly abandoned (discard). */
   attachments?: PendingAttachment[];
+  /** The API accepted this send and the session has not echoed it back yet —
+   *  which is the ordinary fate of a message typed while the session is busy:
+   *  the pane QUEUES it ("Press up to edit queued messages") and echoes it only
+   *  when it gets to it.
+   *
+   *  A FLAG, NOT A STATE, deliberately. `ChatList`'s `PendingBubble` branches
+   *  `state === 'sending'` against everything else, and everything else renders
+   *  as the red "not sent" failure — so a third state token would paint a
+   *  perfectly healthy queued message as an error. The renderer needs no change
+   *  to stay correct today, and showing "queued" instead of "sending" is one
+   *  line in it whenever that file is next open. */
+  queued?: boolean;
+  /** D-4952. The newest TRANSCRIPT timestamp this store held when the operator
+   *  pressed send, in epoch ms: the BOX's clock, read off the events already
+   *  on screen, never the phone's. Only an event strictly newer than this can
+   *  be this message's echo (`isFresh`).
+   *
+   *  Stamped at `send()`, and RAISED at each re-send (`retry`/`resolve`) to the
+   *  newest event on screen then, never lowered (`reSendBar`). What this
+   *  excludes is history the operator had already been shown when they sent —
+   *  which is what a backlog replays.
+   *
+   *  It is what THIS STORE had seen, not what the box had written: a screen
+   *  that was stale at the send (the socket down, the backlog not yet in)
+   *  admits a same-text message written in the gap, and that clears the bubble
+   *  early — `main`'s behaviour, and the message itself still shows once it is
+   *  delivered.
+   *
+   *  ABSENT when nothing from the transcript was on screen yet (before the
+   *  first backlog, or right after a `rotated`): then there is no bar, and any
+   *  matching event clears the bubble, exactly as before the field existed. */
+  sentAfter?: number;
 }
 
 export interface SessionState {
@@ -74,7 +111,49 @@ export interface SessionState {
    *  rationale and how it relates to (and takes display priority over)
    *  `dialog` above. */
   ask: HookAsk | null;
+  /** D-6325: has an `ask` or `ask_cleared` frame arrived on THIS connection? `ask` above survives a dropped socket
+   *  (the automatic reconnect never calls `disconnect()`), so by itself it cannot tell "no envelope" from "not yet
+   *  told": an ask surface treats the stream as `none` until this reads true (`askLive.ts`'s `askSource`). It is the
+   *  surface's LIVENESS: false when the store is created, the moment the socket is anything but open (the drop, and
+   *  every reconnect attempt, so before any open) and on `disconnect()`; a dialog frame never sets it. `dialog` falls
+   *  with it at the drop, so a menu kept from before it is never read as current. While it is false the sheet that was
+   *  showing stays up, read-only, and sends nothing (`the-ask-holds-through-a-reconnect`). Per connection, never
+   *  persisted. */
+  askFrameSeen: boolean;
+  /** D-7184 (W7 Task C7f; ARCH-58's PWA half): which of the shown questions the pane is painting, as the server paired
+   *  it (`AskPairing`), read off the frames and never computed here. ONE rule, the server's own
+   *  (`server/src/sessionws.ts#paired`): every `ask`, `dialog` and `ask_cleared` frame replaces it with its own `pairing`,
+   *  a frame without the field clearing it (D-7211: an `ask_cleared` carries the transcript copy's); a `dialog_cleared`
+   *  frame and the socket leaving `open` clear it. So it is only ever the pairing the last frame carried, for the dialog
+   *  the store holds, never an older frame's beside a newer dialog. The one writer that is not a frame is
+   *  `applyAnswered` (D-7220), which clears it with every new dialog it writes (D-7367: not the one it holds). Null: no
+   *  pairing (the sheet's unpaired view with a dialog, its constant unplaced view without one, D-7213). */
+  pairing: AskPairing | null;
+  /** R69: the client-side LIFECYCLE generation of the ask: a count, starting at 0, that the reducer raises one frame at a
+   *  time (so a clear inside a batch of frames is counted whatever React batches) in exactly two cases:
+   *  - an `ask_cleared` frame while the store HOLDS an envelope (`ask` not null): the hook ended its ask. With none held it
+   *    clears nothing: it is a connection's first statement, which the server sends whenever there is no envelope;
+   *  - a `dialog_cleared` frame while NO envelope is held: without the hook's envelope the pane's menu is all there is of
+   *    the ask, so its vanishing ends it. For a hooked ask the hook is the lifecycle authority, and a poll that sees no
+   *    menu for one tick does not end it.
+   *  Nothing else moves it: not `ask`, `dialog` or `rotated`, and not the socket leaving `open` (`onState` lowers `dialog`
+   *  with no frame). So a reconnect keeps the count, except when the store held an envelope that the new connection's
+   *  first `ask_cleared` then clears. That frame, with an envelope held, means the server stated no envelope at that
+   *  moment: the ask ended during the drop, OR the server flapped (a failed hook-state read, or an aged-envelope keep
+   *  decision restarting). Either releases the keys, the safe direction. It is a lifecycle count, not a content
+   *  identity and not an ask id: the keyboard's engagement (`DialogSheet`'s `askIdentity`) joins it to the envelope's
+   *  content, so a clear plus a byte-identical ask is a new ask. Nothing persists it: no stored or offline state carries it,
+   *  though the in-memory `SessionSnapshot` the reducer works on does, and a new store starts at 0. */
+  askEpoch: number;
   tasks: TaskItem[]; // the session's task list, as the TUI's widget shows it
+  /** D-5372: the tasks frame's `touchedAt` (newest task file mtime, epoch ms);
+   *  absent when the frame carried none. Replaced with every tasks frame. */
+  tasksTouchedAt?: number;
+  /** D-5560: the workflows frame's rows — running, and finished inside Claude
+   *  Code's 30 s — replaced wholesale like `tasks`. */
+  workflows: WorkflowView[];
+  /** The workflows frame said its rows could not be re-read (`unreadable`). */
+  workflowsUnreadable: boolean;
   /** Outstanding mail for THIS session — queued or delivered, never acked or
    *  rejected (the server filters, `sessionws.ts`'s `checkMail`). Replaced
    *  wholesale like `tasks`, because the frame is a statement about the
@@ -115,6 +194,16 @@ export interface SessionState {
   pending: PendingSend[]; // optimistic sends
   conn: 'connecting' | 'open' | 'down';
   apply(msg: SessionStreamMsg): void;
+  /** Decision `ask-answer-returns-next-screen`: the screen an answer route says the pane moved to (`DialogAnswered`'s
+   *  `next`), applied by the sheet that sent the answer. It replaces `dialog` only while the store still holds the
+   *  screen that was answered (`answeredId`), or no screen at all: a frame the stream delivered since is newer, and
+   *  wins. A no-menu poll that cleared `dialog` before the answer came back is exactly what it overrides (the
+   *  2026-10-16 report). `next: null` clears it, as `dialog_cleared` would.
+   *  D-7220: whenever it writes a dialog it clears `pairing` in the same `set`, since the reply carries none and the
+   *  `dialog` frame that pairs `next` travels on the socket, unordered with the reply; when it writes nothing (a frame
+   *  delivered a newer dialog first) the pairing stays, the frame's. D-7367: a `next` with the id of the dialog the
+   *  store holds is the same screen, which the stream sends no frame for, so its pairing stays too. */
+  applyAnswered(answeredId: string, next: Dialog | null): void;
   connect(): void;
   disconnect(): void;
   send(text: string, opts?: { replaceDraft?: boolean; attachments?: PendingAttachment[] }): Promise<void>;
@@ -127,8 +216,20 @@ export interface SessionState {
 
 export type SessionSnapshot = Pick<
   SessionState,
-  'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog' | 'ask' | 'tasks' | 'mail'
+  'events' | 'offset' | 'uuid' | 'status' | 'statusUpdatedAt' | 'dialog' | 'ask' | 'tasks' | 'tasksTouchedAt' | 'mail'
 > & {
+  /** D-6325. Optional HERE only, like `workflows`: `snapshotOf` always carries it, and a snapshot built without it (the
+   *  reducer's own suites) reads as false. */
+  askFrameSeen?: boolean;
+  /** R69. Optional HERE only, as `askFrameSeen`: `snapshotOf` always carries it, and a snapshot built without it reads 0. */
+  askEpoch?: number;
+  /** D-7184. Optional HERE only, as `askFrameSeen`: `snapshotOf` always carries it, and a snapshot built without it
+   *  reads as none. */
+  pairing?: AskPairing | null;
+  /** D-5560. Optional HERE only: `snapshotOf` always carries both, and a
+   *  snapshot built without them (the reducer's own suites) reads as no rows. */
+  workflows?: WorkflowView[];
+  workflowsUnreadable?: boolean;
   missingFile: string | null;
   strandedAccount: string | null;
   searchComplete: boolean;
@@ -143,8 +244,6 @@ const localDivider = (text: string): ChatEvent => {
   localSeq += 1;
   return { kind: 'system', uuid: `local-${localSeq}`, ts: new Date().toISOString(), text };
 };
-const isLocalDivider = (e: ChatEvent): boolean =>
-  e.kind === 'system' && e.uuid.startsWith('local-');
 
 /** Append `incoming` to `existing`, skipping events already present. */
 function dedupeAppend(existing: ChatEvent[], incoming: ChatEvent[]): ChatEvent[] {
@@ -168,6 +267,10 @@ function dedupeAppend(existing: ChatEvent[], incoming: ChatEvent[]): ChatEvent[]
   return fresh.length === 0 ? existing : [...existing, ...fresh];
 }
 
+/** Both files known and equal: the same session dir (D-5560). */
+const sameTranscript = (was: string | null | undefined, now: string | null | undefined): boolean =>
+  typeof was === 'string' && was !== '' && was === now;
+
 /** Pure reducer over the session stream — one message in, next snapshot out. */
 export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): SessionSnapshot {
   switch (msg.type) {
@@ -183,6 +286,13 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
         events: [...keep, ...msg.events],
         uuid: msg.uuid,
         offset: msg.offset,
+        // D-5560: the rows belong to the session dir — the transcript path
+        // minus `.jsonl` — so a backlog onto ANOTHER transcript drops them. A
+        // reconnect (or a rotation in place) onto the same one keeps them
+        // until the server's restated frame replaces them: clearing there
+        // unmounted the strip, collapsed it and jumped the conversation on
+        // every foregrounding of the PWA.
+        ...(sameTranscript(s.file, msg.file) ? {} : { workflows: [], workflowsUnreadable: false }),
         missingFile: msg.missing ? msg.file : null,
         // Unconditional, where `missingFile` above is gated: the file is the
         // address this `offset` is measured in, and a reconnect has to echo
@@ -208,26 +318,36 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
       };
     case 'status':
       return { ...s, status: msg.status, statusUpdatedAt: msg.statusUpdatedAt };
+    // D-7184: `pairing` follows the server's attach rule (`sessionws.ts#paired`): each of `dialog`, `ask` and
+    // `ask_cleared` replaces it with its own, absent clearing it; `dialog_cleared` carries none.
     case 'dialog':
-      return { ...s, dialog: msg.dialog };
+      return { ...s, dialog: msg.dialog, pairing: msg.pairing ?? null };
     case 'dialog_cleared':
-      return { ...s, dialog: null };
+      return { ...s, dialog: null, pairing: null, askEpoch: (s.askEpoch ?? 0) + (s.ask === null ? 1 : 0) };
     case 'tasks':
-      return { ...s, tasks: msg.tasks };
+      return { ...s, tasks: msg.tasks, tasksTouchedAt: msg.touchedAt };
+    case 'workflows':
+      return { ...s, workflows: msg.workflows, workflowsUnreadable: msg.unreadable === true };
     // Build 7 Task 6: the session's own outstanding mail, one row above the
-    // plan (`session/MailStrip.tsx`). Same replace-wholesale rule as `tasks`
+    // plan (`@ccrc/ui` mail-strip.tsx). Same replace-wholesale rule as `tasks`
     // just above.
     case 'mail':
       return { ...s, mail: msg.mail };
-    // The hook-sourced envelope (Task 8, PR C). It resets the exact same way
-    // `dialog` does above: only its own `_cleared` message (and the store's
-    // initial state) null it out — `rotated` below touches events/uuid/offset
-    // only, because a transcript switch does not itself mean a live menu (or
-    // the hook's envelope for one) went away.
+    // The hook-sourced envelope (Task 8, PR C). Its own `_cleared` message
+    // (and the store's initial state) null it out, as `dialog_cleared` does
+    // `dialog` above — `rotated` below touches events/uuid/offset only,
+    // because a transcript switch does not itself mean a live menu (or the
+    // hook's envelope for one) went away. One difference since D-6325: the
+    // socket leaving `open` also lowers `dialog` (`onState`), and never `ask`,
+    // which stays for the held surface while `askFrameSeen` says this
+    // connection has not spoken about it.
+    // Either frame is this connection's statement about the envelope, so either sets `askFrameSeen` (D-6325).
     case 'ask':
-      return { ...s, ask: msg.ask };
+      return { ...s, ask: msg.ask, askFrameSeen: true, pairing: msg.pairing ?? null };
     case 'ask_cleared':
-      return { ...s, ask: null };
+      return {
+        ...s, ask: null, askFrameSeen: true, pairing: msg.pairing ?? null, askEpoch: (s.askEpoch ?? 0) + (s.ask === null ? 0 : 1),
+      };
     case 'rotated':
       // FIVE transcript facts die with the transcript (final review, Minor 6;
       // `fileMeasured` joined them with the measured-read completion) — only
@@ -255,6 +375,9 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
       };
     case 'notice':
       return { ...s, events: [...s.events, localDivider(msg.message)] };
+    // The heartbeat belongs to the socket (the watchdog in `lib/ws.ts` reads it); the store keeps its state.
+    case 'beat':
+      return s;
     default:
       // Two guarantees, not one. `satisfies never` keeps the compile-time
       // exhaustiveness this switch had before this arm existed: add a
@@ -278,7 +401,13 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   statusUpdatedAt: s.statusUpdatedAt,
   dialog: s.dialog,
   ask: s.ask,
+  askFrameSeen: s.askFrameSeen,
+  askEpoch: s.askEpoch,
+  pairing: s.pairing,
   tasks: s.tasks,
+  tasksTouchedAt: s.tasksTouchedAt,
+  workflows: s.workflows,
+  workflowsUnreadable: s.workflowsUnreadable,
   mail: s.mail,
   missingFile: s.missingFile,
   strandedAccount: s.strandedAccount,
@@ -294,28 +423,208 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
 const pathsOf = (p: { attachments?: PendingAttachment[] }): string[] | undefined =>
   p.attachments?.length ? p.attachments.map((a) => a.path) : undefined;
 
+/** D-6367, R38, R43: Retry sends `resume` (the server presses Enter on the box whole instead of typing again) when the
+ *  refusal may have left OUR text in the box. Every `enter-ignored` resumes, drafted or not: a landed send can still
+ *  be answered enter-ignored with a blind final read (no draft), and Retry must never type a second copy. The
+ *  server's resume answers `nothing-to-submit` over an empty box (types nothing), presses one Enter over our own
+ *  text, and answers `draft-present` over anything else. `verify-failed` resumes only with a non-empty draft. Every
+ *  other code retries as today, `type-failed` included: the server's `type-failed` refusal carries no draft, so it
+ *  retries without `resume` (R43 F3). */
+const retryResumes = (code: string | undefined, draft: string | undefined): boolean =>
+  code === 'enter-ignored' || (code === 'verify-failed' && typeof draft === 'string' && draft !== '');
+
 /** Object URLs die with the pending that owned them. */
 const revoke = (p: PendingSend | undefined): void => {
   for (const a of p?.attachments ?? []) if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
 };
 
-/** Drop 'sending' pendings whose composed text just arrived back as a real
- *  user event. The server injects composePrompt(text, paths), so matching on
- *  p.text alone would never fire for an attachment send. */
-function clearConfirmed(pending: PendingSend[], msg: SessionStreamMsg): PendingSend[] {
-  if (msg.type !== 'events' && msg.type !== 'backlog') return pending;
+/** D-4952. The newest timestamp among the TRANSCRIPT events in `events`, epoch
+ *  ms — the bar a pending's echo has to clear (`PendingSend.sentAfter`).
+ *
+ *  WHY THE BOX'S CLOCK, and not a `Date.now()` stamped at send. A backlog is a
+ *  replay: it re-sends up to the last fifty events of history (a reconnect, a
+ *  swap repoint, a fork follow, the registry catch-up), and with a pending now
+ *  living ten minutes, an old "yes" in that window used to clear a new,
+ *  undelivered "yes". Telling the replay from the echo needs a statement of
+ *  "after the send", and the two candidates fail differently:
+ *  - a phone-clock stamp compares the phone's clock with timestamps Claude
+ *    Code wrote on the box. Any skew lands straight in the answer: a phone a
+ *    few seconds AHEAD refuses an idle session's echo, which arrives about a
+ *    second after the send, and a phone BEHIND re-admits the very history this
+ *    exists to refuse. Phone clocks are user-settable, and a skew allowance
+ *    wide enough to be safe is a window of replayed history let back in.
+ *  - a uuid seen-set is skew-free but answers a different question ("has this
+ *    store seen this record?"): a store holds only what its last backlog's
+ *    window showed it plus what it tailed since, so history it missed while
+ *    disconnected reads as new, and a copy under fresh uuids would pass it.
+ *  Both operands here come from ONE clock: the bar is the newest event on
+ *  screen when the operator pressed send, the echo's time is the record Claude
+ *  Code writes after it, and both were written by Claude Code on the same box
+ *  (a swap moves a session between accounts on its box; a fork stays on it).
+ *  A copy keeps its timestamps. Read in the 2.1.296 binary, not measured: no
+ *  fork pair survives in the fleet's transcripts. A `[bg]` fork copies the old
+ *  transcript byte for byte into a snapshot, and the successor resumes from it
+ *  with `--fork-session`. The successor then records that history through
+ *  Claude Code's ordinary transcript writer, which spreads each record
+ *  (`{...record, sessionId: <new>, cwd, version, …}`). Neither that writer nor
+ *  its metadata helper sets `timestamp`, so the original `uuid` and `timestamp`
+ *  carry over. (`/branch` is a different copy path, the one that adds
+ *  `forkedFrom`; the `[bg]` successor writes no `forkedFrom`.)
+ *
+ *  It errs two ways, in opposite directions:
+ *  - the box's clock stepping BACKWARDS between the bar and the echo refuses
+ *    the echo, and the bubble waits for the ten-minute fallback;
+ *  - the bar is the newest event THIS STORE had seen, not the box's state at
+ *    the send. A screen that was stale when the operator pressed send (the
+ *    socket down, a reconnect's backlog not yet in) has a low bar, and a
+ *    same-text message written in that gap passes it and clears the bubble
+ *    early. That is what `main` did for every replay; the message itself still
+ *    shows once it is delivered. A uuid seen-set has the same hole (above).
+ *
+ *  The bar is the MAX over the events on screen, never the first or the last:
+ *  transcript order is not time order, because that same writer appends a
+ *  resumed or copied record under the time it was first stamped.
+ *
+ *  Local dividers are skipped: they are minted here with the PHONE's clock
+ *  (`localDivider`), and one on screen would raise the bar to phone time. An
+ *  event whose `ts` does not parse is skipped too — a NaN in the running max
+ *  would make every later comparison false and no echo could ever clear. */
+function newestTranscriptTs(events: ChatEvent[]): number | undefined {
+  let newest: number | undefined;
+  for (const e of events) {
+    if (isLocalDivider(e)) continue;
+    const t = Date.parse(e.ts);
+    if (Number.isNaN(t)) continue;
+    if (newest === undefined || t > newest) newest = t;
+  }
+  return newest;
+}
+
+/** D-4952. Whether `e` can be `p`'s echo at all: newer than the bar `p` was
+ *  sent over. Strictly newer — the bar IS an event the operator had already
+ *  seen. An event whose own time does not parse cannot be shown to be newer,
+ *  so against a bar it never clears; with no bar it is accepted as before. */
+const isFresh = (e: ChatEvent, p: PendingSend): boolean =>
+  p.sentAfter === undefined || Date.parse(e.ts) > p.sentAfter;
+
+/** D-4952. The bar a RE-send (`retry`, `resolve`) carries: the newest event on
+ *  screen at the re-send, and never lower than the bar `p` already had.
+ *
+ *  RAISED, because everything the store has shown by the time the operator
+ *  presses Retry or Send it is history to this message, exactly as it is to a
+ *  first send: a same-text message that landed while the pending sat failed (a
+ *  "yes" typed in the terminal) would otherwise pass the first send's bar on a
+ *  later replay and clear a re-send that has not been delivered.
+ *
+ *  NEVER LOWERED, because "the newest event now" can be no bar at all — right
+ *  after a `rotated`, before its backlog, nothing from a transcript is on
+ *  screen — and dropping the first send's bar would re-admit the history it
+ *  refused.
+ *
+ *  The cost: an echo of an EARLIER attempt that was delivered after all (a
+ *  failure reported on a send that landed) and is no newer than the re-send's
+ *  bar no longer clears it. The re-send is delivered too and its own echo
+ *  clears it; an error toward the ten-minute fallback, never toward clearing. */
+function reSendBar(p: PendingSend, events: ChatEvent[]): number | undefined {
+  const now = newestTranscriptTs(events);
+  if (now === undefined) return p.sentAfter;
+  return p.sentAfter === undefined ? now : Math.max(p.sentAfter, now);
+}
+
+/** D-4951. The command a pending would run, when it is one: the first word of
+ *  the composed text if that text starts with `/` (`/effort ultracode` ->
+ *  `/effort`), else null.
+ *
+ *  A slash command's echo is a `system` row whose text is the command NAME
+ *  alone (`transcript/parse.ts`'s `harnessEnvelope` reads `<command-name>`;
+ *  the arguments ride a separate `<command-args>` member and never come back
+ *  in the text). Measured over the fleet's 60 most recent transcripts, every
+ *  command an operator typed carries its slash in that member (`/effort`,
+ *  `/compact`, `/model`, `/clear`, …); the slashless ones are skills the model
+ *  loaded itself, which no pending sent.
+ *
+ *  Prose is null on purpose. A command's own stdout is a `system` row too and
+ *  can be a single word, so "a system row equal to the text" would let one
+ *  clear an operator's "ok". Read off the COMPOSED text, so a send with
+ *  attachments — whose composed text leads with a clip path, and which the
+ *  pane therefore never ran as a command — names a path no echo carries. */
+const slashCommandOf = (p: PendingSend): string | null => {
+  const composed = composePrompt(p.text, pathsOf(p) ?? []);
+  return composed.startsWith('/') ? composed.split(/\s/, 1)[0]! : null;
+};
+
+/** Drop 'sending' pendings whose echo just arrived. Two echo shapes:
+ *  - a `user` event whose text is the pending's composed text — the server
+ *    injects composePrompt(text, paths), so matching on p.text alone would
+ *    never fire for an attachment send. Since D-4950 this includes a message
+ *    the session absorbed mid-turn, which the parser now reads as a user event.
+ *  - a `system` event naming the pending's slash command (D-4951). Before it,
+ *    the long fallback timer was the only thing that ever cleared a command's
+ *    bubble — five seconds once, ten minutes since the queued stage, which left
+ *    a "sending /compact" under the compaction it had visibly run. The timer
+ *    stays as the fallback for a command that echoes nothing.
+ *  Either way the event must be newer than the send (D-4952, `isFresh`).
+ *
+ *  Returns the KEYS it dropped alongside the next list — this function is pure
+ *  and outside the store closure, so it cannot cancel a pending's own timer
+ *  itself; the call site does that with `cleared`. */
+/** The transcript's wrapper around a message Claude Code collapsed into a paste
+ *  chip: `<pasted_content id="…">` and its closing tag (measured on Claude Code
+ *  2.1.300, with blank lines added around it). */
+const PASTED_WRAPPER = /<\/?pasted_content id="[^"]*">/g;
+
+/** Is `echoed` the transcript's record of `sent`? Exactly, or (D-5087) once the
+ *  paste-chip wrapper and ALL whitespace are removed from both: the server now
+ *  submits our own chip, and the transcript gives the text back wrapped, with
+ *  blank lines around it. Every visible character must still match. */
+function sameSent(sent: string, echoed: string): boolean {
+  if (sent === echoed || maskedEcho(sent, echoed)) return true;
+  if (!echoed.includes('<pasted_content id="')) return false;
+  const bare = (t: string): string => t.replace(PASTED_WRAPPER, '').replace(/\s+/g, '');
+  return bare(sent) === bare(echoed) || maskedEcho(bare(sent), echoed, bare);
+}
+
+/** Is `echoed` `sent` with credential shapes masked (D-5995)? The server masks every frame, so a prompt holding a
+ *  key echoes with `SECRET_MASK` in its place: the echo's literal parts must match the sent text in order, anchored
+ *  at both ends, and each mask must stand for one or more characters with no blank among them (a masked span is a
+ *  credential's run, never prose). `norm`: the paste-chip arm's normalization,
+ *  already applied to `sent`. */
+function maskedEcho(sent: string, echoed: string, norm: (t: string) => string = (t) => t): boolean {
+  if (!echoed.includes(SECRET_MASK)) return false;
+  const parts = echoed.split(SECRET_MASK).map(norm);   // the mask itself holds a space: split before normalizing
+  const head = parts[0]!;
+  const tail = parts[parts.length - 1]!;
+  if (!sent.startsWith(head) || !sent.endsWith(tail)) return false;
+  const end = sent.length - tail.length;
+  let at = head.length;
+  const masked = (a: number, b: number): boolean => b > a && !/\s/.test(sent.slice(a, b));
+  for (const part of parts.slice(1, -1)) {
+    const i = sent.indexOf(part, at + 1);   // the leftmost place, after a non-empty gap, leaves the most room
+    if (i < 0 || !masked(at, i)) return false;
+    at = i + part.length;
+  }
+  return masked(at, end);
+}
+
+function clearConfirmed(
+  pending: PendingSend[], msg: SessionStreamMsg,
+): { pending: PendingSend[]; cleared: string[] } {
+  if (msg.type !== 'events' && msg.type !== 'backlog') return { pending, cleared: [] };
   let next = pending;
+  const cleared: string[] = [];
   for (const e of msg.events) {
-    if (e.kind !== 'user') continue;
-    const i = next.findIndex(
-      (p) => p.state === 'sending' && composePrompt(p.text, pathsOf(p) ?? []) === e.text,
-    );
+    let echoes: (p: PendingSend) => boolean;
+    if (e.kind === 'user') echoes = (p) => sameSent(composePrompt(p.text, pathsOf(p) ?? []), e.text);
+    else if (e.kind === 'system') echoes = (p) => slashCommandOf(p) === e.text;
+    else continue;
+    const i = next.findIndex((p) => p.state === 'sending' && isFresh(e, p) && echoes(p));
     if (i >= 0) {
       revoke(next[i]);
+      cleared.push(next[i]!.key);
       next = [...next.slice(0, i), ...next.slice(i + 1)];
     }
   }
-  return next;
+  return { pending: next, cleared };
 }
 
 const failureOf = (e: unknown): { error: string; code?: string; draft?: string; submittable?: boolean } => {
@@ -345,7 +654,10 @@ const failureOf = (e: unknown): { error: string; code?: string; draft?: string; 
     // failure arms and this is the only thing that tells the one the rescue
     // may act on from the one it must not.
     return {
-      error: sendErrorText(e.message), code: e.message,
+      // The flag is read BEFORE the sentence, because `verify-failed` has two
+      // outcomes under one code and only the flag separates them.
+      error: sendErrorText(e.message, typeof b.submittable === 'boolean' ? b.submittable : undefined),
+      code: e.message,
       ...(typeof b.draft === 'string' ? { draft: b.draft } : {}),
       ...(typeof b.submittable === 'boolean' ? { submittable: b.submittable } : {}),
     };
@@ -356,8 +668,34 @@ const failureOf = (e: unknown): { error: string; code?: string; draft?: string; 
 export interface SessionStoreDeps {
   api?: Pick<Api, 'prompt'>;
   makeSocket?: (url: string) => WebSocket;
-  /** How long a confirmed-by-api pending lingers waiting for its echo event. */
+  /** How long a confirmed-by-api pending lingers waiting for its echo event
+   *  before it is marked QUEUED (stage one — see `queuedTimeoutMs` below). */
   confirmTimeoutMs?: number;
+  /** How long a QUEUED pending survives before it is retired. The five-second
+   *  `confirmTimeoutMs` used to delete it, which is the defect: a busy session
+   *  cannot echo inside five seconds, so the operator watched their own message
+   *  vanish. The deletion is not removed — it is the terminal condition for
+   *  every pending whose echo never comes (a command that writes no
+   *  `<command-name>` row, a box clock that stepped back — `isFresh` — and an
+   *  echo this store never receives) — it is moved to a horizon where a bubble
+   *  quietly retiring is no longer a surprise.
+   *
+   *  THE BACKLOG WINDOW IS ONE OF THOSE (D-4952). Every backlog the server
+   *  sends after the file on screen changed — a reconnect whose `sinceFile`
+   *  no longer matches, a fork follow, a repoint, a registry catch-up, even
+   *  one delayed by the resolver's back-off — replays only the newest fifty
+   *  events (`BACKLOG_N` in `server/src/sessionws.ts`). An echo written while
+   *  this store was not receiving, and pushed out of that window by fifty
+   *  later events, is never seen: the bubble stays `sending`, truthfully, and
+   *  retires here. The fix is server-side and not built: widen a backlog back
+   *  to the first event newer than the client's oldest pending `sentAfter`
+   *  (within a cap), after which `isFresh` and the echo match clear it with
+   *  no change here.
+   *
+   *  When this landed, a slash command's `system` echo was not matched at all
+   *  and this timer was the only way its bubble ever cleared; D-4951 made it
+   *  the fallback. */
+  queuedTimeoutMs?: number;
 }
 
 export type SessionStore = UseBoundStore<StoreApi<SessionState>>;
@@ -365,36 +703,66 @@ export type SessionStore = UseBoundStore<StoreApi<SessionState>>;
 export function createSessionStore(id: string, deps: SessionStoreDeps = {}): SessionStore {
   const apiImpl = deps.api ?? api;
   const confirmTimeoutMs = deps.confirmTimeoutMs ?? 5_000;
+  const queuedTimeoutMs = deps.queuedTimeoutMs ?? 10 * 60_000;
   let socket: ReconnectingSocket | null = null;
   /** The presence heartbeat's timer — see `beat` below. */
   let heartbeat: ReturnType<typeof setInterval> | null = null;
+  // The page clock's stops for this connection's subscriptions (D-7191): visible, hidden and online.
+  let stopPageClock: (() => void)[] = [];
   let keySeq = 0;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
+  /** Arm a deadline for `key`, disarming whatever this key had before.
+   *
+   *  A bare `timers.set` replaces the MAP ENTRY and leaves the old
+   *  `setTimeout` running — and that stray timer still holds this key, so when
+   *  it fires it deletes a pending that a re-send has since put back in
+   *  flight. That is the "my message vanished while waiting" defect arriving
+   *  through the rescue path, which is why both arming sites go through here
+   *  rather than remembering to clear first. */
+  const arm = (key: string, ms: number, fn: () => void): void => {
+    const prev = timers.get(key);
+    if (prev !== undefined) clearTimeout(prev);
+    timers.set(key, setTimeout(fn, ms));
+  };
+
   const store = create<SessionState>()((set, get) => {
-    // Api accepted the prompt but no echo event arrived: clear after a grace
-    // period so a text-mismatched echo can't strand the pending bubble.
+    // Api accepted the prompt but no echo event arrived, even after the long
+    // QUEUED horizon: retire it. Abandoning the pending abandons its object
+    // URLs with it — the same rule clearConfirmed and discard follow.
     const expireConfirmed = (key: string): void => {
       timers.delete(key);
       set((s) => {
         const p = s.pending.find((x) => x.key === key);
         if (!p || p.state !== 'sending') return {};
-        // Abandoning the pending abandons its object URLs with it — the same
-        // rule clearConfirmed and discard follow. Without this the echo-mismatch
-        // fallback leaked up to four full-size images every time it fired.
         revoke(p);
         return { pending: s.pending.filter((x) => x.key !== key) };
       });
     };
 
+    // Api accepted the prompt and the echo has not arrived. STAGE ONE: say so
+    // — mark the pending queued rather than deleting it (a busy session cannot
+    // possibly echo inside `confirmTimeoutMs`) — then arm STAGE TWO, the long
+    // retirement deadline above.
+    const markQueued = (key: string): void => {
+      set((s) => {
+        const p = s.pending.find((x) => x.key === key);
+        if (!p || p.state !== 'sending') return {};
+        return { pending: s.pending.map((x) => (x.key === key ? { ...x, queued: true } : x)) };
+      });
+      if (get().pending.some((x) => x.key === key && x.state === 'sending')) {
+        arm(key, queuedTimeoutMs, () => expireConfirmed(key));
+      }
+    };
+
     const dispatch = async (
       key: string,
       text: string,
-      opts: { replaceDraft?: boolean; attachments?: string[] } = {},
+      opts: { replaceDraft?: boolean; attachments?: string[]; resume?: boolean } = {},
     ): Promise<void> => {
       try {
         await apiImpl.prompt(id, text, opts);
-        timers.set(key, setTimeout(() => expireConfirmed(key), confirmTimeoutMs));
+        arm(key, confirmTimeoutMs, () => markQueued(key));
       } catch (e) {
         const { error, code, draft, submittable } = failureOf(e);
         set((s) => ({
@@ -409,7 +777,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
 
     /**
      * Tell the server whether this session is on the operator's screen, so it
-     * can suppress notifications for it (`server/src/presence.ts`, read by the
+     * can suppress notifications for it (`server/src/viewer.ts`, read by the
      * watcher's `pushOne`). A notification for the pane you are looking at
      * teaches you to dismiss notifications.
      *
@@ -432,15 +800,19 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
      * whenever no close frame arrives — a phone in a lift or a tunnel sends no
      * FIN — and every notification for this session would then be suppressed
      * for a viewer who is long gone, indefinitely. So the server expires a
-     * claim it has not heard for `PRESENCE_TTL_MS` and this re-states it every
-     * `PRESENCE_REFRESH_MS` (three refreshes of slack, both defined together
+     * claim it has not heard for `VIEWER_TTL_MS` and this re-states it every
+     * `VIEWER_REFRESH_MS` (three refreshes of slack, both defined together
      * in `shared/api.ts`).
      *
-     * Only while visible: a hidden tab's claim is a DELETE on the server, and
-     * a deletion does not need repeating.
+     * WHATEVER the visibility (D-5242's presence contract): the server also
+     * keeps an OPEN claim per connection, re-stamped by every frame, and it is
+     * what holds this session awake while the screen is open — so a hidden tab
+     * repeats `visible:false` on the same beat, and an open claim that needs a
+     * beat gets one. A hidden frame still deletes only the VISIBLE claim, so
+     * notifications behave exactly as before.
      */
     const beat = (): void => {
-      if (document.visibilityState === 'visible') reportVisible(true);
+      reportVisible();
     };
 
     return {
@@ -451,7 +823,12 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       statusUpdatedAt: null,
       dialog: null,
       ask: null,
+      askFrameSeen: false,
+      askEpoch: 0,
+      pairing: null,
       tasks: [],
+      workflows: [],
+      workflowsUnreadable: false,
       mail: [],
       missingFile: null,
       strandedAccount: null,
@@ -461,11 +838,27 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       pending: [],
       conn: 'connecting',
 
+      applyAnswered(answeredId, next) {
+        // D-7220: a dialog written here clears the pairing (the reply carries none; `next`'s `dialog` frame pairs it).
+        // D-7367: except `next` the store already holds (the same dialog id): the stream sends no frame for an unchanged
+        // screen (`sessionws.ts#nextDialogFrame`), so the pairing the last frame carried is still the one for it.
+        set((s) => (s.dialog === null || s.dialog.id === answeredId
+          ? { dialog: next, pairing: next !== null && s.dialog !== null && next.id === s.dialog.id ? s.pairing : null }
+          : {}));
+      },
+
       apply(msg) {
-        set((s) => ({
-          ...applySessionMsg(snapshotOf(s), msg),
-          pending: clearConfirmed(s.pending, msg),
-        }));
+        set((s) => {
+          const confirmed = clearConfirmed(s.pending, msg);
+          for (const key of confirmed.cleared) {
+            const t = timers.get(key);
+            if (t !== undefined) { clearTimeout(t); timers.delete(key); }
+          }
+          return {
+            ...applySessionMsg(snapshotOf(s), msg),
+            pending: confirmed.pending,
+          };
+        });
       },
 
       connect() {
@@ -503,7 +896,19 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
             return file === null ? since : `${since}&sinceFile=${encodeURIComponent(file)}`;
           },
           onMessage: (m) => get().apply(m as SessionStreamMsg),
-          onState: (conn) => set({ conn }),
+          // D-6325 (`the-ask-holds-through-a-reconnect`): the flag is the surface's LIVENESS, so it falls the moment the
+          // socket is anything but open, not only when the next one opens. A new connection has said nothing about the
+          // envelope yet: the `ask` the store holds is the last connection's, and it is not current until this one's
+          // first `ask` or `ask_cleared` frame sets the flag again. Every connect passes through a non-open state first
+          // (`ReconnectingSocket.connect` reports `connecting`, and a drop reports `down`), so the flag is already down
+          // before any open and `onOpen` below needs no reset of its own. From the drop to that first frame nothing is
+          // live: the sheet keeps what it showed, read-only (`DialogSheet`).
+          // `dialog` falls with it (review 843's F1): a new stream frames the menu it sees before its first `ask` frame,
+          // but never the absence of one, so a menu kept from before the drop would be read as current once that frame
+          // arrived, and offered live. The sheet's hold keeps its own copy. A connect whose first pane read fails shows no
+          // menu until the next tick frames one.
+          // D-7184: the pairing falls with the dialog it was for; the new stream's first frames send their own.
+          onState: (conn) => set(conn === 'open' ? { conn } : { conn, askFrameSeen: false, dialog: null, pairing: null }),
           // Re-stated on EVERY open, automatic reconnects included: the
           // server's presence registry is keyed per connection, so a reconnect
           // starts with no claim at all and a session the operator is still
@@ -512,14 +917,13 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           makeSocket: deps.makeSocket,
         });
         socket.start();
-        document.addEventListener('visibilitychange', onVisible);
-        window.addEventListener('online', nudge);
-        heartbeat ??= setInterval(beat, PRESENCE_REFRESH_MS);
+        stopPageClock = [onPageVisible(onVisible), onPageHidden(onVisible), onOnline(nudge)];
+        heartbeat ??= setInterval(beat, VIEWER_REFRESH_MS);
       },
 
       disconnect() {
-        document.removeEventListener('visibilitychange', onVisible);
-        window.removeEventListener('online', nudge);
+        for (const stop of stopPageClock) stop();
+        stopPageClock = [];
         if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; }
         // Say so before the socket goes: leaving the session screen means the
         // operator is no longer looking at it, and a close alone would let the
@@ -536,9 +940,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // function — only an explicit teardown (leaving the session screen,
         // a swap/compact cycle) does. This is the belt to that fix's braces:
         // whatever the next connect delivers is authoritative, never a
-        // leftover from before the drop. `dialog` is untouched — the scraped
-        // channel has no analogous "was this fleet host still writing while
-        // we were gone" gap, since the pane is re-scraped fresh every poll.
+        // leftover from before the drop. `dialog` is not cleared here: a drop
+        // lowers it through the socket's own state (`onState`, D-6325),
+        // because a new stream frames the menu it sees but never the absence
+        // of one; after this explicit teardown nothing renders it.
         //
         // `mail` gets the identical belt-and-braces (fix round 1, finding 3's
         // named residual): `sessionws.ts`'s own per-connection sentinel now
@@ -572,7 +977,15 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // have nothing to state (a resolve that could not measure the
         // registry), where silence is the honest answer and a stale word
         // would be the lie.
-        set({ ask: null, mail: [], status: null, statusUpdatedAt: null });
+        //
+        // `workflows` too (D-5560): its server half states the first read on
+        // every connect (`lastWorkflowsJson`), and an explicit teardown clears
+        // the rows here so a finished workflow is never left on screen as running.
+        //
+        // `askFrameSeen` (D-6325) goes with the `ask` it qualifies: the next connection has not spoken yet.
+        set({
+          ask: null, askFrameSeen: false, pairing: null, mail: [], status: null, statusUpdatedAt: null, workflows: [], workflowsUnreadable: false,
+        });
       },
 
       async send(text, opts = {}) {
@@ -581,6 +994,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         set((s) => ({ pending: [...s.pending, {
           key, text, state: 'sending',
           replaceDraft: opts.replaceDraft, attachments: opts.attachments,
+          // D-4952: the bar this message's echo has to clear, on the box's clock.
+          sentAfter: newestTranscriptTs(s.events),
         }] }));
         await dispatch(key, text, { replaceDraft: opts.replaceDraft, attachments: pathsOf(opts) });
       },
@@ -588,15 +1003,17 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       retry(key) {
         const p = get().pending.find((x) => x.key === key);
         if (!p || p.state !== 'failed') return;
+        const resume = retryResumes(p.code, p.draft); // before the set below clears both
         // Spread, never re-list: an object literal here is exactly why
         // `attachments` used to vanish on retry, and it would swallow every
         // field added after it too.
         set((s) => ({
           pending: s.pending.map((x) =>
             x.key === key ? { ...x, state: 'sending' as const, error: undefined, code: undefined, draft: undefined,
-                              submittable: undefined } : x),
+                              submittable: undefined, queued: undefined,
+                              sentAfter: reSendBar(x, s.events) } : x),
         }));
-        void dispatch(key, p.text, { replaceDraft: p.replaceDraft, attachments: pathsOf(p) });
+        void dispatch(key, p.text, { replaceDraft: p.replaceDraft, attachments: pathsOf(p), ...(resume ? { resume } : {}) });
       },
 
       /** Re-send a pending in place after a draft conflict — same record, so the
@@ -609,7 +1026,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           pending: s.pending.map((x) =>
             x.key === key
               ? { ...x, text, state: 'sending' as const, error: undefined, code: undefined, draft: undefined,
-                  submittable: undefined, replaceDraft: opts.replaceDraft }
+                  submittable: undefined, queued: undefined, replaceDraft: opts.replaceDraft,
+                  sentAfter: reSendBar(x, s.events) }
               : x),
         }));
         void dispatch(key, text, { replaceDraft: opts.replaceDraft, attachments: pathsOf(p) });
@@ -644,12 +1062,9 @@ export function getSessionStore(id: string): SessionStore {
   return s;
 }
 
-export function useSessionStore(id: string): SessionState;
-export function useSessionStore<T>(id: string, selector: (s: SessionState) => T): T;
-export function useSessionStore<T>(
-  id: string,
-  selector?: (s: SessionState) => T,
-): SessionState | T {
-  const store = getSessionStore(id);
-  return selector ? store(selector) : store();
+/** True while any session's send is unresolved: in flight, or failed and showing Retry (console speed, Task C3:
+ *  a release's full-page reload waits for it). A queued send was accepted, so it does not hold. */
+export function anySendUnresolved(): boolean {
+  for (const s of stores.values()) if (s.getState().pending.some((p) => p.state === 'failed' || !p.queued)) return true;
+  return false;
 }

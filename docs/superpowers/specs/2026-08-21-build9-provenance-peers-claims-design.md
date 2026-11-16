@@ -4,7 +4,7 @@ Three operator requirements arrived together and turned out to share one substra
 
 1. **Same-project sessions conflict and cannot coordinate.** A live session wrote: *"I can't reach it
    directly — the addressable peer list only shows sessions on other projects, so quiet-river (running
-   under claude2) isn't visible from here. Coordination goes through you."*
+   under claude9) isn't visible from here. Coordination goes through you."*
 2. **"Who spawned it — not recoverable from the registry.** We should be able to recover who has spawned
    and stopped what sessions and why."
 3. **"We also need record of destruction/cleanup."**
@@ -42,8 +42,8 @@ and `swap.log`. The consequences compound:
   survives across 24 rows** — and that one was written by `ws-archive` about itself.
 - `.archived`/`.archivedreason` are cleared only by `ws-restore` (`ccd:3082`) and `_reg_purge`
   (`ccd:555`), never by `start`/`ensure`. **Measured: 4 of 8 `.archived` rows are live and heartbeating
-  right now** while stamped `merged:#N` — `ccrc-pwa-calm-mesa`, `custom-tools-brisk-ridge`,
-  `data-internal-plain-harbor`, `data-internal-still-prairie`. The one field in the registry carrying a
+  right now** while stamped `merged:#N` — `ccrc-pwa-calm-mesa`, `project-d-brisk-ridge`,
+  `project-e-plain-harbor`, `project-e-still-prairie`. The one field in the registry carrying a
   *why* is false on half the rows that have it. **A field that is silently false reads as authoritative,
   which is worse than absence.**
 - `_reg_purge` (`ccd:458-556`) unlinks **every** `$REG/<id>.<field>` behind a deliberately future-proof
@@ -323,7 +323,10 @@ already read: holder measured running ⇒ renew; measured gone ⇒ lapse at the 
 `endedBy:'session-gone'`; **registry unmeasurable ⇒ doubt reads as HELD** (matching ccd's four `-e` hold
 readers and `registry.ts`'s `HOLD_UNREADABLE`) so a fleet-box hiccup cannot mass-expire every claim;
 `hardExpiresAt` (8 h) is **never renewed**, so doubt cannot hold forever and every claim must be
-periodically re-declared. Run close releases that run's claims in the close transaction. Expiry is also
+periodically re-declared. *(Amended by D-8395, operator ruling 2026-11-12: a holder measured running that
+re-declares inside the last lease before the cap starts a new 8 h window as a new row chained to the old
+one, `chainedFrom`, the old row ending `released` with `endedBy:'rechained'`; no renewal moves a row's own
+cap, and a holder that is not running still lapses at it.)* Run close releases that run's claims in the close transaction. Expiry is also
 applied in the same transaction as every claim attempt — the `feed_events` prune-on-write idiom — so a
 claim route never sees a stale row even if the watcher is wedged.
 

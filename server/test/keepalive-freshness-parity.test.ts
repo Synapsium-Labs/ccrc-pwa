@@ -13,16 +13,18 @@
  * on accounts the swap lane already trusts, or trusting readings the keepalive
  * had given up on.
  *
- * The keepalive's is a DEFAULT, not a constant: `CCRC_KEEPALIVE_FRESH=7200` in
- * a systemd drop-in is the supported way to widen the interval on a box. What
- * is pinned is the shipped default, which is what an unconfigured box runs.
+ * The keepalive's is a DEFAULT, not a constant: a `CCRC_KEEPALIVE_FRESH=7200`
+ * line in `~/.ccrc/ccrc.env` is the supported way to widen the interval on a
+ * box (wave 29: the keepalive reads it through ccrc's own reader, `_ccrc_knob`).
+ * What is pinned is the shipped default, which is what an unconfigured box runs.
  *
  * TWO-TIER, NOT A SINGLE `^`-ANCHORED SCAN. A count taken only over the
  * canonical, unindented spelling answers "exactly one" by finding zero of a
  * shadowing duplicate AND zero of the canonical line it thinks it is
  * counting when a duplicate is spelled differently — measured: an indented
  * `  SWAP_FRESH=999` in `ccd/ccd`, or an indented
- * `  : "${CCRC_KEEPALIVE_FRESH:=555}"` in the keepalive, was invisible to a
+ * `  : "${CCRC_KEEPALIVE_FRESH:=555}"` in the keepalive (today's spelling:
+ * `  _ccrc_knob CCRC_KEEPALIVE_FRESH 555 && …`), was invisible to a
  * bare `^NAME=`/`^: "..."` count while bash honours the LAST assignment at
  * runtime — a shadowing duplicate that a naive scan cannot see. So each side
  * is counted BROADLY first — tolerating indentation, and for `ccd`'s plain
@@ -46,11 +48,11 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
-const CCD_CONTENT = readFileSync(CCD, 'utf8');
+const CCD_CONTENT = ccdSource();
 const KEEPALIVE = readFileSync(path.join(ROOT, 'ccd', 'ccd-telemetry-keepalive'), 'utf8');
 
 /**
@@ -82,11 +84,12 @@ const CCD_BROAD =
  *  end at whitespace or end-of-line — not just digits at the front. */
 const CCD_NARROW = /^SWAP_FRESH=([0-9]+)(?=[ \t]|$)/;
 
-/** Any indentation, either quote style, any value inside the braces — the
- *  broad half of the keepalive's parameter-expansion idiom. */
-const KEEPALIVE_BROAD = /^[ \t]*:[ \t]+(["'])\$\{CCRC_KEEPALIVE_FRESH:=[^}]*\}\1$/;
-/** The canonical shape: column zero, double-quoted, bare integer default. */
-const KEEPALIVE_NARROW = /^: "\$\{CCRC_KEEPALIVE_FRESH:=([0-9]+)\}"/;
+/** Any indentation, any default word — the broad half of the keepalive's
+ *  setting read through ccrc's reader (wave 29). */
+const KEEPALIVE_BROAD = /^[ \t]*_ccrc_knob[ \t]+CCRC_KEEPALIVE_FRESH[ \t]+[^ \t]+.*$/;
+/** The canonical shape: column zero, a bare integer default that ends where
+ *  its digits end, then the write-back. */
+const KEEPALIVE_NARROW = /^_ccrc_knob CCRC_KEEPALIVE_FRESH ([0-9]+) && /;
 
 describe('the keepalive spends on the tree’s own definition of stale', () => {
   it('ccd still declares SWAP_FRESH as a bare integer, in exactly one spelling', () => {
@@ -166,7 +169,8 @@ describe('the keepalive borrows _session_state’s own notion of a live supervis
  * every deploy day (F7). Asking tmux means re-spelling three things `ccd/ccd`
  * already owns, and each is pinned here for a different reason:
  *
- *   • THE SESSION NAME (`_tmux()`, `id -> tmux name`). This is the copy a
+ *   • THE SESSION NAME (`_tmux()`, `id -> tmux name`, created already
+ *     sanitised since wave 9 M8). This is the copy a
  *     typo DISARMS rather than breaks: a prefix ccd never created makes every
  *     probe answer `can't find session`, which classifies as `gone`, which
  *     reads as "idle, go ahead and spend a turn" — silently restoring the
@@ -189,7 +193,7 @@ describe('the keepalive borrows _session_state’s own notion of a live supervis
  * per-side tests earns nothing where the value is not a tunable number.
  */
 const CCD_TMUX_BROAD = /^[ \t]*_tmux\(\)[ \t]*\{.*$/;
-const CCD_TMUX_NARROW = /^_tmux\(\)[ \t]+\{ echo "([a-z][a-z0-9-]*)\$1"; \}/;
+const CCD_TMUX_NARROW = /^_tmux\(\)[ \t]+\{ local n="([a-z][a-z0-9-]*)\$1"; echo "\$\{n\/\/\[\.:\]\/_\}"; \}/;
 
 const KA_TMUX_BROAD =
   /^[ \t]*(?:(?:export|declare|local|readonly|typeset)(?:[ \t]+-[A-Za-z]+)*[ \t]+)?KA_TMUX_PREFIX=.*$/;

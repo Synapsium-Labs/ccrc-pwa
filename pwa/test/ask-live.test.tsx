@@ -17,17 +17,26 @@
 // mechanical justification: `ChatList` is virtualized, so a row owning an
 // in-flight answer could be unmounted mid-send by an ordinary scroll. The
 // `does not POST` test below is the pin on that.
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ChatEvent, Dialog, HookAsk } from '../../shared/api';
 import { api } from '../src/lib/api';
 import { ChatListInner } from '../src/session/ChatList';
-import { ASK_GLYPH, ASK_WORD, askState, type ToolResultEvent } from '../src/session/ToolCard';
+import { ASK_GLYPH, ASK_WORD, askState, type ToolResultEvent } from '@ccrc/ui';
 import { DialogSheet } from '../src/session/DialogSheet';
+import { answerSeam, type AnswerSeamMocks } from './answerSeam';
+import { SUBMIT_ANSWERS, answerControlLabel } from '../src/session/askLive';
+import { pane } from './askPanes';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { declValue, norm, ruleIn, stripComments } from './cssRule';
+
+// D-7183: the sheet's answers go through its injected seam; each test gets fresh writers (`answerSeam.ts`).
+let answers: AnswerSeamMocks = answerSeam();
+beforeEach(() => {
+  answers = answerSeam();
+});
 
 afterEach(() => {
   cleanup();
@@ -38,6 +47,15 @@ const NOW = '2026-08-13T10:00:00.000Z';
 const chatCss = readFileSync(
   path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8',
 );
+/** The ask card's own stylesheet, which travelled with `ToolCard` into
+ *  @ccrc/ui. The no-glow scan below reads BOTH sheets, not just this one: the
+ *  `.ask-state` family moved out, but `.ask-envelope*` (DialogSheet's) did not,
+ *  and a governance scan that followed only one half would stop seeing the
+ *  other the moment the split happened. */
+const toolCardCss = readFileSync(
+  path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'components', 'tool-card.css'), 'utf8',
+);
+const askCss = `${chatCss}\n${toolCardCss}`;
 
 const askUse = (question = 'Which colour?'): ChatEvent => ({
   kind: 'tool_use', uuid: 'a1', ts: NOW, toolId: 't1', name: 'AskUserQuestion',
@@ -140,8 +158,8 @@ describe('Answer opens the one answer path, and does nothing else', () => {
   it('Answer does not POST anything — it raises the sheet', () => {
     // Negative pin. Every send path this could have reached is spied; the
     // control must touch none of them.
-    const answerAsk = vi.spyOn(api, 'answerAsk').mockResolvedValue(undefined as never);
-    const answerDialog = vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined as never);
+    const answerQuestion = vi.spyOn(api, 'answerQuestion').mockResolvedValue({ ok: true });
+    const answerDialog = answers.answerDialog.mockReset().mockResolvedValue({ ok: true });
     const prompt = vi.spyOn(api, 'prompt').mockResolvedValue(undefined as never);
     const onAnswer = vi.fn();
 
@@ -149,7 +167,7 @@ describe('Answer opens the one answer path, and does nothing else', () => {
     fireEvent.click(answerBtn() as HTMLElement);
 
     expect(onAnswer).toHaveBeenCalledTimes(1);
-    expect(answerAsk).not.toHaveBeenCalled();
+    expect(answerQuestion).not.toHaveBeenCalled();
     expect(answerDialog).not.toHaveBeenCalled();
     expect(prompt).not.toHaveBeenCalled();
   });
@@ -178,9 +196,9 @@ describe('Answer opens the one answer path, and does nothing else', () => {
       options: [{ index: 1, label: 'Yes' }, { index: 2, label: 'No' }],
       selectedIndex: 1, parsed: true, raw: '❯ 1. Yes\n  2. No',
     };
-    act(() => { store.setState({ dialog }); });
+    act(() => { store.setState({ dialog, askFrameSeen: true }); });
 
-    const { rerender } = render(<DialogSheet id="s" store={store} raise={0} />);
+    const { rerender } = render(<DialogSheet answers={answers} id="s" store={store} raise={0} />);
     expect(screen.getByText('Allow Bash?')).toBeInTheDocument();
 
     // Wave it away.
@@ -188,7 +206,7 @@ describe('Answer opens the one answer path, and does nothing else', () => {
     expect(screen.queryByText('Allow Bash?')).toBeNull();
 
     // The transcript control bumps the nonce; the same dialog comes back.
-    rerender(<DialogSheet id="s" store={store} raise={1} />);
+    rerender(<DialogSheet answers={answers} id="s" store={store} raise={1} />);
     expect(screen.getByText('Allow Bash?')).toBeInTheDocument();
   });
 
@@ -201,9 +219,9 @@ describe('Answer opens the one answer path, and does nothing else', () => {
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
     });
     const ask: HookAsk = { questions: [{ question: 'Which colour?', options: [{ label: 'Red' }] }] };
-    act(() => { store.setState({ ask }); });
+    act(() => { store.setState({ ask, askFrameSeen: true }); });
 
-    render(<DialogSheet id="s" store={store} raise={0} />);
+    render(<DialogSheet answers={answers} id="s" store={store} raise={0} />);
     fireEvent.click(document.querySelector('.sheet-scrim') as HTMLElement);
     expect(screen.queryByText('Which colour?')).toBeNull();
   });
@@ -216,7 +234,7 @@ describe('the live cue is governed', () => {
     // selector mentions `.ask-` is scanned; `.ask-live` is excluded BY NAME,
     // and the exclusion is asserted to be real so it cannot quietly become a
     // rule that no longer carries a cue.
-    const rules = [...stripComments(chatCss).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    const rules = [...stripComments(askCss).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
       .filter((m) => (m[1] ?? '').includes('.ask-'));
     expect(rules.length).toBeGreaterThanOrEqual(4);
 
@@ -234,17 +252,17 @@ describe('the live cue is governed', () => {
     // The exception is REAL: `.ask-live` actually carries the cue. Without
     // this, deleting the cue would leave the exclusion above passing over a
     // rule that no longer needs it.
-    const live = norm(stripComments(ruleIn(chatCss, '.ask-state.ask-live')));
+    const live = norm(stripComments(ruleIn(toolCardCss, '.ask-state.ask-live')));
     expect(live).toContain('--glow');
 
     // And it is the ONLY one: the unanswered arm goes still.
-    const dead = norm(stripComments(ruleIn(chatCss, '.ask-state.ask-unanswered')));
+    const dead = norm(stripComments(ruleIn(toolCardCss, '.ask-state.ask-unanswered')));
     expect(dead).not.toContain('--glow');
     expect(dead).not.toContain('animation');
   });
 
   it('the control clears var(--tap-min)', () => {
-    expect(declValue(ruleIn(chatCss, '.ask-answer'), 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(toolCardCss, '.ask-answer'), 'min-height')).toBe('var(--tap-min)');
   });
 
   it('dialogs stay screen-hosted — no dialog control is rendered in the transcript', () => {
@@ -258,5 +276,34 @@ describe('the live cue is governed', () => {
     const buttons = screen.getAllByRole('button');
     expect(buttons).toHaveLength(1);
     expect(buttons[0]?.getAttribute('title') ?? '').toMatch(/sheet/i);
+  });
+});
+
+// Decision `ask-answer-control-says-submit` (the 2026-10-16 report): while the pane is on an ask's review screen the
+// transcript's control says what the sheet it raises is waiting on. It still only raises the sheet.
+describe('the Answer control on the review says Submit answers', () => {
+  it('the label rule: Submit answers on the recorded review, the default elsewhere', () => {
+    expect(answerControlLabel(pane('cc296-ask-2q-long-review'))).toBe('Submit answers');
+    expect(answerControlLabel(pane('cc296-ask-2q-long-q2'))).toBeUndefined();
+    expect(answerControlLabel(null)).toBeUndefined();
+  });
+
+  it('the label is the fixed word, never the pane\'s own spelling of it (D-6325)', () => {
+    const review = pane('cc296-ask-2q-long-review');
+    const shouted = { ...review, options: review.options.map((o) => (o.index === 1 ? { ...o, label: ' SUBMIT ANSWERS ' } : o)) };
+    expect(answerControlLabel(shouted)).toBe(SUBMIT_ANSWERS);
+  });
+
+  it('the card renders the label it is given, and Answer without one; either only raises the sheet', () => {
+    const onAnswer = vi.fn();
+    const { unmount } = render(
+      <ChatListInner id="s" events={[askUse()]} pending={[]} askPending answerLabel="Submit answers" onAnswer={onAnswer} />,
+    );
+    expect(answerBtn()?.textContent).toBe('Submit answers');
+    fireEvent.click(answerBtn() as HTMLElement);
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+    unmount();
+    render(<ChatListInner id="s" events={[askUse()]} pending={[]} askPending onAnswer={vi.fn()} />);
+    expect(answerBtn()?.textContent).toBe('Answer');
   });
 });

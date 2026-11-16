@@ -1,12 +1,18 @@
 // Task 12 — TerminalDrawer: a full-height sheet holding an xterm bound to
 // `/ws/pty/:id?cols=&rows=` — raw frames flow into term.write, typed data and
-// the mobile quick-keys flow back as {type:'input'} frames, refits that change
-// the grid send {type:'resize'}, a connection overlay narrates attach/loss,
-// and closing the drawer closes the socket (the server then restores the
-// session's canonical window size).
+// the mobile quick-keys flow back as {type:'input'} frames, the attach dials
+// the window's own size and a refit sends nothing (D-5005), a connection
+// overlay narrates attach/loss, and closing the drawer closes the socket (the
+// server then restores the session's canonical window size).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { TerminalDrawer, type DrawerTerm } from '../src/session/TerminalDrawer';
+import { TerminalDrawer } from '../src/session/TerminalDrawer';
+import { reattachVerdict } from '../src/session/typedFrame';
+import type { DrawerTerm } from '../src/session/terminalFactory';
+import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, PTY_EXIT_CLOSE, TMUX_STATUS_ROWS } from '../../shared/api';
+
+/** What every attach dials: the window's own size plus tmux's status row. */
+const WINDOW_URL = `cols=${PINNED_WINDOW_COLS}&rows=${PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS}`;
 
 afterEach(() => {
   cleanup();
@@ -14,7 +20,7 @@ afterEach(() => {
   FakeSocket.instances.length = 0;
 });
 
-const ID = 'claude:OpenClawHetzner';
+const ID = 'lane-a:project-a';
 
 // — fakes —
 
@@ -25,7 +31,7 @@ class FakeSocket {
   closed = false;
   onopen: (() => void) | null = null;
   onmessage: ((ev: { data: unknown }) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((ev?: { code?: number }) => void) | null = null;
   onerror: (() => void) | null = null;
   constructor(url: string) {
     this.url = url;
@@ -44,22 +50,33 @@ class FakeSocket {
 }
 const makeSocket = (url: string): WebSocket => new FakeSocket(url) as unknown as WebSocket;
 
-/** Scripted DrawerTerm — the measured grid is settable so fits are provable. */
+/** Scripted DrawerTerm — the measured grid is settable, so a test can show
+ *  that what the glass measures never reaches the socket. */
 const fakeTermFactory = (cols = 48, rows = 20) => {
   const write = vi.fn<(data: string) => void>();
   const dispose = vi.fn<() => void>();
   let grid = { cols, rows };
   let dataCb: ((data: string) => void) | null = null;
   const hosts: HTMLElement[] = [];
-  const makeTerm = (host: HTMLElement): DrawerTerm => {
-    hosts.push(host);
+  const makeTerm = (): DrawerTerm => {
+    let opened = false;
     return {
       write: (d) => write(d),
       onData: (cb) => {
         dataCb = cb;
       },
       onWheel: () => {},
-      fit: () => ({ ...grid }),
+      pin: () => {},
+      propose: () => ({ ...grid }),
+      setFontSize: () => {},
+      open: (host) => {
+        hosts.push(host);
+        opened = true;
+      },
+      isOpen: () => opened,
+      model: () => [],
+      statusRow: () => [],
+      onParsed: () => () => {},
       focus: () => {},
       dispose,
     };
@@ -96,10 +113,12 @@ const opened = () => {
 // — wiring —
 
 describe('TerminalDrawer wiring', () => {
-  it('opening measures the terminal and dials /ws/pty/:id with the fitted cols/rows', () => {
+  // INVERTED, NOT DELETED (D-5005): the attach dialled the measured grid; it
+  // now dials the window's own size, whatever the glass measures.
+  it('opening attaches the terminal and dials /ws/pty/:id at the window\'s own size, never the measured grid', () => {
     const { ws, t } = renderDrawer();
     expect(t.hosts).toHaveLength(1); // xterm attached to the drawer host
-    expect(ws.url).toContain(`/ws/pty/${encodeURIComponent(ID)}?cols=48&rows=20`);
+    expect(ws.url).toContain(`/ws/pty/${encodeURIComponent(ID)}?${WINDOW_URL}`);
   });
 
   it('incoming raw frames reach term.write', () => {
@@ -114,13 +133,16 @@ describe('TerminalDrawer wiring', () => {
     expect(ws.lastFrame()).toEqual({ type: 'input', data: 'ls\r' });
   });
 
-  it('a refit that changes the grid sends {type:"resize"}', () => {
+  // INVERTED, NOT DELETED (D-5005): this was "a refit that changes the grid
+  // sends {type:"resize"}". The client is the window's size, so a glass that
+  // measures differently changes the type and sends the pane nothing.
+  it('a refit sends no frame', () => {
     const { ws, t } = opened();
     t.setGrid(60, 18);
     act(() => {
       window.dispatchEvent(new Event('resize'));
     });
-    expect(ws.lastFrame()).toEqual({ type: 'resize', cols: 60, rows: 18 });
+    expect(ws.sent, 'a refit sent the pane a frame').toEqual([]);
   });
 
   it('closing the drawer closes the socket and disposes the term', () => {
@@ -144,12 +166,14 @@ describe('TerminalDrawer wiring', () => {
 describe('TerminalDrawer quick keys', () => {
   it('the Esc keycap sends {type:"input",data:"\\x1b"}', () => {
     const { ws } = opened();
-    fireEvent.click(screen.getByRole('button', { name: 'Escape' }));
+    // The cap's name now leads with its legend, "esc" (label in name, D-7897).
+    fireEvent.click(screen.getByRole('button', { name: 'Esc (Escape)' }));
     expect(ws.lastFrame()).toEqual({ type: 'input', data: '\x1b' });
   });
 
   it.each([
-    ['Escape', '\x1b'],
+    // The cap's name now leads with its legend, "esc" (label in name, D-7897).
+    ['Esc (Escape)', '\x1b'],
     ['Arrow up', '\x1b[A'],
     ['Arrow down', '\x1b[B'],
     ['Arrow left', '\x1b[D'],
@@ -172,6 +196,81 @@ describe('TerminalDrawer quick keys', () => {
 
 // — connection overlay —
 
+// D-6368: a drawer never sits open on a dead pty. The server closes the socket
+// with PTY_EXIT_CLOSE when the pty exits; the drawer re-attaches once, and a
+// second such close inside the bound (a link still down answers the re-dial with
+// a failed open) ends at the connection-lost state and its Reconnect.
+describe('reattachVerdict (D-6368)', () => {
+  it('allows only a first pty-exit close or one strictly after the reattach bound', () => {
+    expect(reattachVerdict(PTY_EXIT_CLOSE, null, 1_000_000)).toBe(true);
+    expect(reattachVerdict(PTY_EXIT_CLOSE, 999_999, 1_000_000)).toBe(false);
+    expect(reattachVerdict(PTY_EXIT_CLOSE, 969_999, 1_000_000)).toBe(true);
+    expect(reattachVerdict(PTY_EXIT_CLOSE, 970_000, 1_000_000)).toBe(false);
+    expect(reattachVerdict(1006, null, 1_000_000)).toBe(false);
+    expect(reattachVerdict(undefined, null, 1_000_000)).toBe(false);
+  });
+});
+
+// D-6368: a drawer never sits open on a dead pty. The server closes the socket
+// with PTY_EXIT_CLOSE when the pty exits; the drawer re-attaches once, and a
+// second such close inside the bound (a link still down answers the re-dial with
+// a failed open) ends at the connection-lost state and its Reconnect.
+describe('TerminalDrawer follows its pty (D-6368)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a 4000 close re-attaches once', () => {
+    const { ws } = opened();
+    act(() => ws.onclose?.({ code: PTY_EXIT_CLOSE }));
+
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(FakeSocket.instances.at(-1)?.url).toContain(
+      `/ws/pty/${encodeURIComponent(ID)}?${WINDOW_URL}`,
+    );
+    expect(screen.getByText('attaching…')).toBeInTheDocument();
+    expect(screen.queryByText('connection lost')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument();
+  });
+
+  it('a second 4000 within the bound shows Reconnect', () => {
+    const { ws } = opened();
+    act(() => ws.onclose?.({ code: PTY_EXIT_CLOSE }));
+    const second = FakeSocket.instances.at(-1);
+    act(() => second?.onopen?.());
+    act(() => second?.onclose?.({ code: PTY_EXIT_CLOSE }));
+
+    expect(FakeSocket.instances).toHaveLength(2); // no third dial
+    expect(screen.getByText('connection lost')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
+  });
+
+  it('any other close shows Reconnect', () => {
+    const { ws } = opened();
+    act(() => ws.onclose?.({ code: 1006 }));
+
+    expect(FakeSocket.instances).toHaveLength(1); // no new socket
+    expect(screen.getByText('connection lost')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
+  });
+
+  it('a 4000 after the bound re-attaches again', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_000_000);
+    const { ws } = opened();
+    act(() => ws.onclose?.({ code: PTY_EXIT_CLOSE }));
+    const second = FakeSocket.instances.at(-1);
+    act(() => second?.onopen?.());
+
+    vi.setSystemTime(1_000_000 + 30_001);
+    act(() => second?.onclose?.({ code: PTY_EXIT_CLOSE }));
+
+    expect(FakeSocket.instances).toHaveLength(3);
+    expect(screen.getByText('attaching…')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument();
+  });
+});
+
 describe('TerminalDrawer connection overlay', () => {
   it('narrates attaching, clears on open, reports loss with a Reconnect', () => {
     const { ws } = renderDrawer();
@@ -185,7 +284,9 @@ describe('TerminalDrawer connection overlay', () => {
     expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
   });
 
-  it('Reconnect dials a fresh socket with freshly measured cols/rows', () => {
+  // INVERTED, NOT DELETED (D-5005): the re-attach dialled a fresh
+  // measurement; it dials the window's own size again, whatever the glass is now.
+  it('Reconnect dials a fresh socket at the window\'s own size, whatever the glass now measures', () => {
     const { ws, t } = opened();
     act(() => ws.onclose?.());
 
@@ -194,6 +295,6 @@ describe('TerminalDrawer connection overlay', () => {
 
     expect(FakeSocket.instances).toHaveLength(2);
     const next = FakeSocket.instances.at(-1);
-    expect(next?.url).toContain(`/ws/pty/${encodeURIComponent(ID)}?cols=100&rows=30`);
+    expect(next?.url).toContain(`/ws/pty/${encodeURIComponent(ID)}?${WINDOW_URL}`);
   });
 });

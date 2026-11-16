@@ -1189,7 +1189,7 @@ describe('PasskeyStore', () => {
       const added = await store.add(cred);
       expect(added).toEqual({ ok: false, reason: 'write-failed' });
       expect(warn.mock.calls.flat().join(' ')).toContain('could not write');
-      // …AND THE ANSWER IS TRUE (D-136): the row is rolled back out of memory,
+      // …AND THE ANSWER IS TRUE (D-8609): the row is rolled back out of memory,
       // not left live until the next restart. Otherwise "enrolment failed" and
       // "this key can sign in" were the same outcome — the worse polarity, since
       // an operator told it failed will try again while a credential they do not
@@ -2288,7 +2288,9 @@ describe('GET /api/runs takes EITHER credential, and never neither', () => {
     // against consumers OUTSIDE `server/`. A route's "who calls this" is not a
     // fact the server package can see about itself, so this reads the skills.
     const root = path.resolve(here, '..', '..', 'ccd');
-    const corpora = [path.join(root, 'coordinator-skill'), path.join(root, 'worker-skill')];
+    const corpora = [path.join(root, 'coordinator-skill'), path.join(root, 'worker-skill'),
+      path.join(root, 'reviewer-skill'), path.join(root, 'history-skill'), path.join(root, 'linear-skill'),
+      path.join(root, 'overlord-skill')];
     const files: string[] = [];
     const walk = (dir: string): void => {
       for (const e of readdirSync(dir)) {
@@ -2364,7 +2366,7 @@ describe('GET /api/runs takes EITHER credential, and never neither', () => {
       // refusal envelope as its own code and both callers name the gate; doctor
       // SKIPs rather than WARNs, and says out loud that build skew and roster
       // divergence are consequently not being measured. Pinned in
-      // `ccrc-doctor.test.ts`. Still no exemption — that remains the wrong fix.
+      // the `ccrc-doctor-*` test files. Still no exemption — that remains the wrong fix.
       '/api/fleet/health': 'ccrc doctor — gated on purpose; degraded, and D-150 made it say so',
     };
     const unaccounted = [...called]

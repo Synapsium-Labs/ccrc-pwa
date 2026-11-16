@@ -1,0 +1,5710 @@
+// Delegation broker wave 3, Task 8A: the durable journal, the atomic checkpoint, recovery, retention planning and the serialized
+// durable applier.
+//
+// The journal (`delegation-events.log`) and the checkpoint (`delegation-checkpoint.json`) are AUTHORITY; `coord.db` is repairable
+// output. These rows hold the modules to O1 to O5 under crash injection, and to the plan's mutation rows W3-M12 to M18A, M38, M62
+// and M71 (the grammar rows M20 to M24 are in `coordination-snapshot.test.ts`). Every hash is computed independently of the
+// implementation (Python's hashlib and json, or Node's crypto over a preimage spelled out in the test), and every file is in a
+// FIXTURE directory: nothing here reads or writes the live `~/.ccrc`.
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { DatabaseSync } from 'node:sqlite';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { mkTmp } from './tmpHelpers.js';
+import type { DelegationEventEnvelopeV1 } from '../../shared/api.js';
+import {
+  DelegationModelError,
+  assertDelegationCheckpointIdentity,
+  canonicalDelegationJson,
+  delegationSha256Hex,
+  delegationIntentKey,
+  deriveDelegationActivityId,
+  deriveDelegationLineageId,
+  emptyDelegationCheckpoint,
+  encodeDelegationNaturalKey,
+  formatDelegationInstant,
+  projectionViewOfDelegationCheckpoint,
+  type DelegationActivityRow,
+  type DelegationCheckpointV1,
+  type DelegationJournalEntryV1,
+  type DelegationJournalRecordV1,
+  type DelegationLeaseCreationRequest,
+  type DelegationLeaseRow,
+  type DelegationLineageRow,
+} from '../src/coord/delegation-model.js';
+import {
+  DELEGATION_JOURNAL_FILE,
+  DELEGATION_TORN_DIR,
+  DelegationJournalError,
+  DelegationJournalWriter,
+  buildDelegationJournalRecord,
+  decodeDelegationJournalLine,
+  delegationJournalDigest,
+  delegationJournalId,
+  delegationRetentionViewOf,
+  delegationTailHealPlan,
+  encodeDelegationJournalRecord,
+  findDelegationJsonDefect,
+  parseDelegationJournal,
+  planDelegationJournalAppend,
+  planDelegationPruning,
+  readDelegationJournalRecords,
+  type DelegationFileHandle,
+  type DelegationFilePort,
+  type DelegationJournalTail,
+} from '../src/coord/delegation-journal.js';
+import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
+import {
+  DELEGATION_CHECKPOINT_FILE,
+  DELEGATION_RECOVERY_PHASES,
+  DelegationCheckpointBuilder,
+  DelegationCheckpointError,
+  COORDINATION_RESTORE_MARKER_FILE,
+  DELEGATION_RESTORE_IN_PROGRESS,
+  DelegationEvidenceIndex,
+  assertDelegationCheckpointProjectable,
+  decodeDelegationCheckpoint,
+  encodeDelegationCheckpoint,
+  recoverDelegation,
+  recoverDelegationState,
+} from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_REPAIR_FULL_MS, repairDelegationProjection, type DelegationProjectionPort, type DelegationProjectionRepairReport } from '../src/coord/delegation-db-projection.js';
+import { DELEGATION_DURABILITY_EDGES, DelegationDurability, isDelegationCheckpointKebab, recoverDelegationFromFiles, type DelegationDurabilityDeps, type DelegationDurabilityEdge, type DelegationDurableBatch } from '../src/coord/delegation-durability.js';
+import { unreadableDelegationBucketResult } from '../src/coord/delegation-ingest.js';
+import type { DelegationApplyOutcome } from '../src/coord/delegation-durability.js';
+import * as modelNs from '../src/coord/delegation-model.js';
+import { oldRuleCheckpoint } from './delegationOldRuleFixture.js';
+import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
+import { declaringFile, programMembers, programSource, programTexts } from './scan/programView.js';
+import { mulberry32 } from './fakeTime.js';
+
+/** D-8641 (the large-file pilot): the source scans below read this file's PROGRAM (`scan/programView.ts`), the file plus
+ *  the modules its code moves to, so a pure move neither reds a scan nor lets one read less code. */
+const CHECKPOINT_SOURCE = 'server/src/coord/delegation-checkpoint.ts';
+
+// A pass-through of the journal's append planner that a test can switch to "skip everything". `createLease` calls the planner after its
+// own checks, so no real input makes the planner skip the entry it was handed; this is the only way to reach that branch (fix round 1, M6).
+const planControl = vi.hoisted(() => ({ skipEverything: false }));
+vi.mock('../src/coord/delegation-journal.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/coord/delegation-journal.js')>();
+  return {
+    ...actual,
+    planDelegationJournalAppend: (input: Parameters<typeof actual.planDelegationJournalAppend>[0]) =>
+      planControl.skipEverything
+        ? { records: [], skipped: input.items.map((_, index) => ({ index, reason: 'duplicate-lease' as const, leaseId: 'phantom' })) }
+        : actual.planDelegationJournalAppend(input),
+  };
+});
+
+// ── fixtures ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The projection port over the store: four one-line adapters. `projectDelegationCheckpoint`, `projectDelegationCheckpointChanges` (the
+ * rows that changed, or the full projection inside the same call), `insertDelegationEvents` (ONE transaction, a conflict reported and never
+ * thrown) and `delegationEventStats` are the production methods of the store, so this is the same port production uses and the SQLite
+ * differential below runs against the real thing.
+ */
+function delegationProjectionPortOfStore(store: CoordStore): DelegationProjectionPort {
+  return {
+    project: (cp) => store.projectDelegationCheckpoint(cp),
+    projectChanged: (prior, next) => store.projectDelegationCheckpointChanges(prior, next),
+    insertEvents: (rows) => store.insertDelegationEvents(rows),
+    eventStats: () => store.delegationEventStats(),
+    countEventsAtOrBelow: (s) => store.countDelegationEventsAtOrBelow(s),
+    deleteEventsBetween: (a, b, n) => store.deleteDelegationEventsBetween(a, b, n),
+  };
+}
+
+const PARENT = 'lane-a-demo';
+const INC = 'g1';
+const CLAUDE = '11111111-2222-3333-4444-555555555555';
+const X = 'agent-abc123';
+const Y = 'agent-def456';
+const T = (s: number): string => formatDelegationInstant(Date.UTC(2026, 9, 14) + s * 1000);
+const eid = (n: number): string => delegationSha256Hex(`fixture-event-${n}`);
+const sha = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
+
+const base = (n: number, over: { sessionId?: string; parentIncarnation?: string } = {}) => ({
+  v: 1 as const, observedAt: T(n), sessionId: over.sessionId ?? PARENT, parentIncarnation: over.parentIncarnation ?? INC, claudeSessionId: CLAUDE,
+  eventId: eid(n), bucket: '2026101400', startOffset: n * 100, endOffset: n * 100 + 99,
+});
+type Over = { sessionId?: string; parentIncarnation?: string };
+const sessionStart = (n: number, over: Over = {}): DelegationEventEnvelopeV1 => ({ ...base(n, over), eventKind: 'SessionStart', source: 'startup' });
+/** A tool event inside a subagent: it names the agent only through the common `agentId` field. NOT a qualifying join. */
+const bareTool = (n: number, agentId: string, over: Over = {}): DelegationEventEnvelopeV1 =>
+  ({ ...base(n, over), eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: `toolu_${n}`, outcome: 'completed', agentId });
+const subagentStart = (n: number, agentId: string, over: Over = {}): DelegationEventEnvelopeV1 =>
+  ({ ...base(n, over), eventKind: 'SubagentStart', agentId, agentType: null });
+const subagentStop = (n: number, agentId: string, over: Over = {}): DelegationEventEnvelopeV1 =>
+  ({ ...base(n, over), eventKind: 'SubagentStop', agentId, agentType: null, agentTranscriptPath: null });
+const agentLaunch = (n: number, agentId: string, status: 'async-launched' | 'completed' = 'async-launched', over: Over = {}): DelegationEventEnvelopeV1 =>
+  ({ ...base(n, over), eventKind: 'PostToolUse', toolName: 'Agent', toolUseId: `toolu_${n}`, outcome: status, launch: { status, agentId, isAsync: status === 'async-launched' } });
+
+const evidence = (event: DelegationEventEnvelopeV1): DelegationJournalEntryV1 => ({ kind: 'evidence-accepted', event });
+/** A chain of records from `first`, each accepted at an instant that is NOT its event's observation time. */
+function chainOf(entries: readonly DelegationJournalEntryV1[], first = 1, previous: string | null = null): DelegationJournalRecordV1[] {
+  const out: DelegationJournalRecordV1[] = [];
+  let prev = previous;
+  entries.forEach((entry, i) => {
+    const r = buildDelegationJournalRecord({ sequence: first + i, acceptedAt: T(100000 + first + i), previousDigest: prev, entry });
+    out.push(r);
+    prev = r.digest;
+  });
+  return out;
+}
+const evidenceChain = (events: readonly DelegationEventEnvelopeV1[], first = 1, previous: string | null = null): DelegationJournalRecordV1[] =>
+  chainOf(events.map(evidence), first, previous);
+
+const keyOf = (agentId: string, over: Over = {}) => ({ parentId: over.sessionId ?? PARENT, parentIncarnation: over.parentIncarnation ?? INC, sourceKind: 'agent' as const, upstreamId: agentId });
+const activityOf = (cp: DelegationCheckpointV1, agentId: string): DelegationActivityRow | undefined => cp.activities.find((a) => a.upstreamId === agentId);
+const failureCode = (fn: () => unknown): string => {
+  try { fn(); } catch (err) { if (err instanceof DelegationJournalError || err instanceof DelegationCheckpointError || err instanceof DelegationModelError) return err.code; throw err; }
+  return 'accepted';
+};
+const bytesOf = (records: readonly DelegationJournalRecordV1[]): Uint8Array => {
+  const parts = records.map(encodeDelegationJournalRecord);
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
+};
+const withoutRevision = (cp: DelegationCheckpointV1): string => canonicalDelegationJson({ ...cp, revision: 0 });
+/** Replaces the LAST occurrence: the record's own trailing key, not the identical text nested inside its event. */
+const replaceLast = (s: string, from: string, to: string): string => {
+  const at = s.lastIndexOf(from);
+  if (at < 0) throw new Error(`${from} not found`);
+  return s.slice(0, at) + to + s.slice(at + from.length);
+};
+/** Valid JSON for the same value that is NOT the canonical encoding: the keys written in reverse order. */
+const uncanonical = (canonicalText: string): string => {
+  const reversed = (v: unknown): unknown => (Array.isArray(v) ? v.map(reversed) : v !== null && typeof v === 'object'
+    ? Object.fromEntries(Object.entries(v).reverse().map(([k, x]) => [k, reversed(x)])) : v);
+  return JSON.stringify(reversed(JSON.parse(canonicalText)));
+};
+/** A retention cutoff so late that every record is older than the floor: the plan is bounded by holds and the anchor alone. */
+const NO_FLOOR = Date.UTC(2100, 0, 1);
+
+/** A ready recovery of a journal of events, from no checkpoint. */
+function ready(events: readonly DelegationEventEnvelopeV1[]) {
+  const records = evidenceChain(events);
+  const report = recoverDelegation(null, records);
+  expect(report.failure).toBeNull();
+  return { records, report, cp: report.state.checkpoint };
+}
+
+// ── W3-M71: the canonical preimage vectors ──────────────────────────────────────────────────────────────────────────
+
+describe('canonical-preimage vectors (W3-M71): the two journal preimages are nonrecursive, canonical and exact', () => {
+  // Python: canon = json.dumps(v, sort_keys=True, separators=(',', ':'), ensure_ascii=False); sha256 of its UTF-8 bytes.
+  const EVENT_A: DelegationEventEnvelopeV1 = {
+    v: 1, eventKind: 'SessionStart', source: 'startup', observedAt: '2026-10-14T00:00:00.000Z', sessionId: PARENT, parentIncarnation: INC,
+    claudeSessionId: CLAUDE, eventId: 'a'.repeat(64), bucket: '2026101400', startOffset: 0, endOffset: 100,
+  };
+  const A_ID_PREIMAGE = '{"acceptedAt":"2026-10-14T00:00:01.000Z","entry":{"event":{"bucket":"2026101400","claudeSessionId":"11111111-2222-3333-4444-555555555555","endOffset":100,"eventId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","eventKind":"SessionStart","observedAt":"2026-10-14T00:00:00.000Z","parentIncarnation":"g1","sessionId":"lane-a-demo","source":"startup","startOffset":0,"v":1},"kind":"evidence-accepted"},"previousDigest":null,"sequence":1,"v":1}';
+  const A_JOURNAL_ID = '93d36739e183fae9d71b701295ab4f8aee14ae2765c5433fc9cc607230942939';
+  const A_DIGEST = '03649ebf24741fdb6777644873afddc4e49dd975b035e1762b1a663f8ee30d96';
+  const recordA = { sequence: 1, acceptedAt: '2026-10-14T00:00:01.000Z', previousDigest: null, entry: evidence(EVENT_A) };
+
+  it('journalId is SHA-256 of the canonical {v, sequence, acceptedAt, previousDigest, entry} and of nothing else', () => {
+    expect(sha(A_ID_PREIMAGE)).toBe(A_JOURNAL_ID);
+    expect(delegationJournalId(recordA)).toBe(A_JOURNAL_ID);
+    expect(A_ID_PREIMAGE).not.toContain('journalId');
+    expect(A_ID_PREIMAGE).not.toContain('digest"');
+  });
+
+  it('digest is SHA-256 of the canonical {v, sequence, journalId, acceptedAt, previousDigest, entry}, without itself', () => {
+    const pre = A_ID_PREIMAGE.replace('{"acceptedAt"', `{"acceptedAt"`).replace('"previousDigest":null', `"journalId":"${A_JOURNAL_ID}","previousDigest":null`);
+    // canonical order puts journalId between entry and previousDigest
+    expect(pre).toContain(`"entry":{`);
+    expect(sha(pre)).toBe(A_DIGEST);
+    expect(delegationJournalDigest({ ...recordA, journalId: A_JOURNAL_ID })).toBe(A_DIGEST);
+  });
+
+  it('a built record carries exactly those two hashes, and the text it is written as is canonical JSON plus one LF', () => {
+    const r = buildDelegationJournalRecord(recordA);
+    expect([r.journalId, r.digest]).toEqual([A_JOURNAL_ID, A_DIGEST]);
+    const written = new TextDecoder().decode(encodeDelegationJournalRecord(r));
+    expect(written.endsWith('\n')).toBe(true);
+    expect(written.slice(0, -1)).toBe(canonicalDelegationJson(r));
+    expect(written.slice(0, -1).includes('\n')).toBe(false);
+    // Properties are sorted at EVERY depth, not in construction order.
+    expect(written.startsWith('{"acceptedAt":"2026-10-14T00:00:01.000Z","digest":"')).toBe(true);
+  });
+
+  it('changing journalId changes the digest and does not change the journalId preimage', () => {
+    const a = delegationJournalDigest({ ...recordA, journalId: A_JOURNAL_ID });
+    const b = delegationJournalDigest({ ...recordA, journalId: 'b'.repeat(64) });
+    expect(a).not.toBe(b);
+    expect(delegationJournalId({ ...recordA })).toBe(A_JOURNAL_ID);
+  });
+
+  it('pins a multibyte record (UTF-8 bytes are hashed, not UTF-16 units) and a lease-created record with a derived lineage ID', () => {
+    const multibyte = buildDelegationJournalRecord({
+      sequence: 3, acceptedAt: '2026-10-14T00:00:04.000Z', previousDigest: '1ba0da46e7757b7d45e8e912f765bbeb1258df03e17b2662d528cdb92da5e4c2',
+      entry: evidence({ ...EVENT_A, eventId: 'c'.repeat(64), source: 'résumé 日本語 é', cwd: '/work/café/日本', startOffset: 230, endOffset: 400 }),
+    });
+    expect([multibyte.journalId, multibyte.digest]).toEqual(['aa15ed8ba8f002daee0c3f2a195d422996e116a542f3a1cddb4fb279bebacf2c', 'cac1b79e215955a8aef5b1894462c958108aa33d0021ea7f50f4885b536d9186']);
+    const lease = buildDelegationJournalRecord({
+      sequence: 7, acceptedAt: '2026-10-14T00:15:00.000Z', previousDigest: 'f1a9e9b86dd342f3dcba4e0c6e667cf21f3cb6dc7773dca8aa10778a1f9fa366',
+      entry: {
+        kind: 'lease-created', leaseId: '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f', generation: 0,
+        activityId: '9239bd0ac5b8d4af700cd38ae205546b428bc6b605ef1d9adcd09c1796afcbfc', parentId: PARENT, parentIncarnation: INC, project: 'project-a',
+        adminRecord: 'wt-1', canonicalPath: '/work/project-a/.claude/worktrees/wt-1', creationBase: null, sourceKind: 'agent',
+        correlationJournalIds: ['842563601695ebb48c8fbb35e752df0c7c36923d6c8dea27f0602367d17add3b'], firstObservedAt: '2026-10-14T00:14:59.000Z',
+        lineageId: '047ea347b1d2689ce34424088dd6e9af1f13eb8d0302b609a205d230322478e6',
+      },
+    });
+    expect([lease.journalId, lease.digest]).toEqual(['864b5eba5127ed8f21b78c5ef0772331343e968bd43bc9371ae46061b2befe3e', '835325d84c9e328473d5240633999dd86b2136e64c7f317e8147d1787b8626fc']);
+    // Round trip through the strict decoder.
+    expect(decodeDelegationJournalLine(encodeDelegationJournalRecord(lease).subarray(0, -1))).toEqual(lease);
+  });
+
+  it('the lease lineage ID is the Python-derived domain-separated, length-prefixed tuple hash', () => {
+    // Python: sha256(lp('ccrc-delegation-lineage-v1') + lp(leaseId) + lp(parentId) + lp(parentIncarnation) + lp(activityId))
+    expect(deriveDelegationLineageId({
+      leaseId: '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f', parentId: PARENT, parentIncarnation: INC, activityId: '9239bd0ac5b8d4af700cd38ae205546b428bc6b605ef1d9adcd09c1796afcbfc',
+    })).toBe('047ea347b1d2689ce34424088dd6e9af1f13eb8d0302b609a205d230322478e6');
+    const lp = (s: string): string => `${Buffer.byteLength(s, 'utf8')}:${s}`;
+    expect(sha(lp('ccrc-delegation-lineage-v1') + lp('5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f') + lp(PARENT) + lp(INC) + lp('9239bd0ac5b8d4af700cd38ae205546b428bc6b605ef1d9adcd09c1796afcbfc'))).toBe('047ea347b1d2689ce34424088dd6e9af1f13eb8d0302b609a205d230322478e6');
+    // Domain-separated and field-separated: moving a character between two fields is a different ID.
+    const parts = { leaseId: 'ab', parentId: 'c', parentIncarnation: 'g1', activityId: 'd' };
+    expect(deriveDelegationLineageId(parts)).not.toBe(deriveDelegationLineageId({ ...parts, leaseId: 'a', parentId: 'bc' }));
+  });
+
+  it('refuses a value outside the canonical JSON domain, before any hash exists', () => {
+    const bad: Array<[string, unknown]> = [
+      ['a lone surrogate', { ...EVENT_A, cwd: 'a\ud800b' }],
+      ['an undefined member', { ...EVENT_A, cwd: undefined }],
+      ['a Date', { ...EVENT_A, cwd: new Date(0) }],
+      ['a class instance', { ...EVENT_A, cwd: new (class Odd { x = 1; })() }],
+      ['a sparse array', { ...EVENT_A, listing: [1, , 3] }],
+      ['NaN', { ...EVENT_A, listing: [Number.NaN] }],
+      ['an unsafe integer', { ...EVENT_A, listing: [2 ** 53] }],
+      ['a bigint', { ...EVENT_A, listing: [1n] }],
+    ];
+    for (const [name, event] of bad) {
+      expect(() => buildDelegationJournalRecord({ ...recordA, entry: { kind: 'evidence-accepted', event: event as DelegationEventEnvelopeV1 } }), name).toThrow();
+    }
+  });
+
+  it('refuses, on decode, a record whose text is valid JSON but not the canonical encoding of its value, and a lone-surrogate escape', () => {
+    const line = new TextDecoder().decode(encodeDelegationJournalRecord(buildDelegationJournalRecord(recordA))).trimEnd();
+    const reorder = uncanonical(line);
+    expect(reorder).not.toBe(line);
+    expect(failureCode(() => decodeDelegationJournalLine(new TextEncoder().encode(reorder)))).toBe('noncanonical');
+    expect(failureCode(() => decodeDelegationJournalLine(new TextEncoder().encode(line.replace('"source":"startup"', '"source":"\\ud800"'))))).toBe('invalid-domain');
+    expect(failureCode(() => decodeDelegationJournalLine(new TextEncoder().encode(line.replace('"source":"startup"', '"source":"start\\u0075p"'))))).toBe('noncanonical');
+  });
+});
+
+// ── the closed grammar ───────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('the canonical journal grammar: what is accepted and what is refused', () => {
+  const [r1] = evidenceChain([sessionStart(1)]);
+  const good = new TextDecoder().decode(encodeDelegationJournalRecord(r1)).trimEnd();
+  const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
+  const code = (line: string | Uint8Array): string => failureCode(() => decodeDelegationJournalLine(typeof line === 'string' ? enc(line) : line));
+
+  it('accepts a canonical evidence record and a canonical lease-created record', () => {
+    expect(code(good)).toBe('accepted');
+  });
+
+  const table: Array<[string, string | Uint8Array, string]> = [
+    ['a BOM', new Uint8Array([0xef, 0xbb, 0xbf, ...enc(good)]), 'bom'],
+    ['a trailing CR (CRLF)', `${good}\r`, 'crlf'],
+    ['a blank line', '', 'blank-line'],
+    ['invalid UTF-8', new Uint8Array([...enc(good.slice(0, 10)), 0xc3, 0x28, ...enc(good.slice(10))]), 'invalid-utf8'],
+    ['text that is not JSON', '{"a":', 'malformed-json'],
+    ['trailing garbage after the value', `${good} x`, 'malformed-json'],
+    ['a duplicate top-level key', replaceLast(good, '"v":1}', '"v":1,"v":1}'), 'duplicate-key'],
+    ['a duplicate key inside the entry', good.replace('"kind":"evidence-accepted"', '"kind":"evidence-accepted","kind":"evidence-accepted"'), 'duplicate-key'],
+    ['a duplicate key inside the event', good.replace('"source":"startup"', '"source":"startup","source":"startup"'), 'duplicate-key'],
+    ['an unknown record key', replaceLast(good, '"v":1}', '"v":1,"zzz":1}'), 'unknown-key'],
+    ['an unknown entry key', good.replace('"kind":"evidence-accepted"', '"kind":"evidence-accepted","zzz":1'), 'unknown-key'],
+    ['a missing record key', good.replace(/"acceptedAt":"[^"]+",/, ''), 'bad-field'],
+    ['v other than 1', replaceLast(good, '"v":1}', '"v":2}'), 'bad-field'],
+    ['an acceptedAt without milliseconds', good.replace(/"acceptedAt":"[^"]+"/, '"acceptedAt":"2026-10-14T00:00:01Z"'), 'bad-field'],
+    ['an uppercase previousDigest', good.replace('"previousDigest":null', `"previousDigest":"${'A'.repeat(64)}"`), 'bad-field'],
+    ['a short journalId', good.replace(/"journalId":"[0-9a-f]{64}"/, '"journalId":"abc"'), 'bad-field'],
+    // `lease-released` joined the grammar in wave 5 (PR5a); a kind no wave plans (D-7002 dropped the cleaner) stays unknown.
+    ['an unknown entry kind', good.replace('"kind":"evidence-accepted"', '"kind":"lease-cleaned"'), 'bad-field'],
+    ['an event with no eventId', good.replace(/"eventId":"[0-9a-f]{64}",/, ''), 'bad-field'],
+    ['an event whose endOffset is not past its startOffset', good.replace('"endOffset":199', '"endOffset":100'), 'bad-field'],
+    ['whitespace between tokens', replaceLast(good, '"v":1}', '"v": 1}'), 'noncanonical'],
+    ['a number written 1.0', good.replace('"sequence":1', '"sequence":1.0'), 'noncanonical'],
+    ['an escape where a plain character is canonical', good.replace('lane-a-demo', 'lane\\u002da-demo'), 'noncanonical'],
+    ['a journalId that is not the hash of its preimage', good.replace(/"journalId":"[0-9a-f]{64}"/, `"journalId":"${'0'.repeat(64)}"`), 'journal-id-mismatch'],
+    ['a digest that is not the hash of its preimage', good.replace(/"digest":"[0-9a-f]{64}"/, `"digest":"${'0'.repeat(64)}"`), 'digest-mismatch'],
+  ];
+  for (const [name, line, expected] of table) it(`refuses ${name}`, () => { expect(code(line)).toBe(expected); });
+
+  it('refuses a lease-created entry with a nonzero generation, an unknown source, a non-hex correlation ID and an empty base', () => {
+    const lease = (over: Record<string, unknown>) => buildDelegationJournalRecord({
+      sequence: 1, acceptedAt: T(1), previousDigest: null,
+      entry: { kind: 'lease-created', leaseId: 'lease-1', generation: 0, activityId: 'a'.repeat(64), parentId: PARENT, parentIncarnation: INC, project: 'project-a', adminRecord: 'wt-1', canonicalPath: '/work/p/wt-1', creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: T(1), lineageId: 'b'.repeat(64), ...over } as DelegationJournalEntryV1,
+    });
+    expect(failureCode(() => lease({ generation: 1 }))).toBe('bad-field');
+    expect(failureCode(() => lease({ sourceKind: 'carrier' }))).toBe('bad-field');
+    expect(failureCode(() => lease({ correlationJournalIds: ['xyz'] }))).toBe('bad-field');
+    expect(failureCode(() => lease({ creationBase: '' }))).toBe('bad-field');
+    expect(failureCode(() => lease({ extra: 1 }))).toBe('unknown-key');
+    expect(failureCode(() => lease({}))).toBe('accepted');
+  });
+
+  it('parses a whole journal and refuses every line that is wrong, naming the line', () => {
+    const records = evidenceChain([sessionStart(1), sessionStart(2), sessionStart(3)]);
+    expect(parseDelegationJournal(bytesOf(records), { completeFromStart: true })).toEqual(records);
+    const lines = new TextDecoder().decode(bytesOf(records)).split('\n').slice(0, 3);
+    try {
+      parseDelegationJournal(enc(`${lines[0]}\n\n${lines[1]}\n`));
+      throw new Error('accepted');
+    } catch (err) {
+      expect(err).toBeInstanceOf(DelegationJournalError);
+      expect((err as DelegationJournalError).code).toBe('blank-line');
+      expect((err as DelegationJournalError).where?.line).toBe(2);
+    }
+  });
+});
+
+describe('findDelegationJsonDefect: the scanner that names what JSON.parse hides', () => {
+  const table: Array<[string, string, 'duplicate-key' | 'malformed-json' | null]> = [
+    ['a clean object', '{"a":1,"b":[1,2,{"c":null}],"d":"x"}', null],
+    ['the same key in two different objects', '{"a":{"k":1},"b":{"k":2}}', null],
+    ['a repeated key at the top level', '{"a":1,"a":2}', 'duplicate-key'],
+    ['a repeated key inside a nested object', '{"a":{"k":1,"k":2}}', 'duplicate-key'],
+    ['a repeated key inside an object in an array', '{"a":[{"k":1},{"k":1,"k":2}]}', 'duplicate-key'],
+    ['a repeated key spelled with an escape', '{"a":1,"\\u0061":2}', 'duplicate-key'],
+    ['key-like text inside a string value', '{"a":"\\"b\\":1,\\"b\\":2"}', null],
+    ['numbers in every form', '[0,-1,1.5,1e5,-2.5E-3,true,false,null]', null],
+    ['a trailing comma', '{"a":1,}', 'malformed-json'],
+    ['a missing value', '{"a":}', 'malformed-json'],
+    ['trailing garbage', '{"a":1} x', 'malformed-json'],
+    ['an unterminated string', '{"a":"x', 'malformed-json'],
+    ['nothing at all', '', 'malformed-json'],
+    ['nesting past the bound', `${'['.repeat(70)}${']'.repeat(70)}`, 'malformed-json'],
+    ['a bare word', 'nope', 'malformed-json'],
+  ];
+  for (const [name, text, expected] of table) it(`${name}: ${String(expected)}`, () => { expect(findDelegationJsonDefect(text)).toBe(expected); });
+});
+
+// ── the checkpoint codec and its invariants ──────────────────────────────────────────────────────────────────────────
+
+describe('the canonical checkpoint codec', () => {
+  const { cp } = ready([sessionStart(1), bareTool(2, X), subagentStart(3, X), sessionStart(4)]);
+  const bytes = encodeDelegationCheckpoint(cp);
+  const text = new TextDecoder().decode(bytes);
+  const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
+
+  it('writes its canonical JSON and one LF, and decodes to exactly the checkpoint', () => {
+    expect(text.endsWith('}\n')).toBe(true);
+    expect(text.slice(0, -1)).toBe(canonicalDelegationJson(cp));
+    expect(decodeDelegationCheckpoint(bytes)).toEqual(cp);
+    expect(encodeDelegationCheckpoint(decodeDelegationCheckpoint(bytes))).toEqual(bytes);
+  });
+  it('refuses a BOM, invalid UTF-8, a missing or doubled LF, a CR, a duplicate key, an unknown key and a non-canonical encoding', () => {
+    const body = text.slice(0, -1);
+    expect(failureCode(() => decodeDelegationCheckpoint(new Uint8Array([0xef, 0xbb, 0xbf, ...bytes])))).toBe('bom');
+    expect(failureCode(() => decodeDelegationCheckpoint(new Uint8Array([...bytes.subarray(0, 20), 0xc3, 0x28, ...bytes.subarray(20)])))).toBe('invalid-utf8');
+    expect(failureCode(() => decodeDelegationCheckpoint(enc(body)))).toBe('missing-final-lf');
+    expect(failureCode(() => decodeDelegationCheckpoint(enc(`${body}\n\n`)))).toBe('crlf');
+    expect(failureCode(() => decodeDelegationCheckpoint(enc(`${body}\r\n`)))).toBe('crlf');
+    expect(failureCode(() => decodeDelegationCheckpoint(enc(`${body.slice(0, -1)},"v":1}\n`)))).toBe('duplicate-key');
+    expect(failureCode(() => decodeDelegationCheckpoint(enc(`${body.slice(0, -1)},"zzz":1}\n`)))).toBe('bad-shape');
+    expect(failureCode(() => decodeDelegationCheckpoint(enc(`${uncanonical(body)}\n`)))).toBe('noncanonical');
+    expect(failureCode(() => decodeDelegationCheckpoint(enc(`${body.replace('"v":1', '"v":2')}\n`)))).toBe('bad-version');
+    expect(failureCode(() => decodeDelegationCheckpoint(enc('')))).toBe('missing-final-lf');
+  });
+  it('refuses an anchor whose sequence, journalId and digest do not come together, and a wrong word or instant in a row', () => {
+    const mutate = (f: (c: Record<string, unknown>) => void): Uint8Array => {
+      const c = JSON.parse(text) as Record<string, unknown>;
+      f(c);
+      return enc(`${canonicalDelegationJson(c)}\n`);
+    };
+    expect(failureCode(() => decodeDelegationCheckpoint(mutate((c) => { c['appliedJournalId'] = null; })))).toBe('bad-anchor');
+    expect(failureCode(() => decodeDelegationCheckpoint(mutate((c) => { c['appliedJournalSequence'] = 0; })))).toBe('bad-anchor');
+    expect(failureCode(() => decodeDelegationCheckpoint(mutate((c) => { (c['activities'] as Array<Record<string, unknown>>)[0]!['executionState'] = 'finished'; })))).toBe('bad-shape');
+    expect(failureCode(() => decodeDelegationCheckpoint(mutate((c) => { (c['sessions'] as Array<Record<string, unknown>>)[0]!['firstObservedAt'] = '2026-10-14'; })))).toBe('bad-shape');
+    expect(failureCode(() => decodeDelegationCheckpoint(mutate((c) => { (c['sessions'] as Array<Record<string, unknown>>)[0]!['extra'] = 1; })))).toBe('bad-shape');
+    expect(failureCode(() => decodeDelegationCheckpoint(mutate((c) => { c['revision'] = -1; })))).toBe('bad-shape');
+  });
+  it('the empty checkpoint round-trips', () => {
+    const empty = emptyDelegationCheckpoint();
+    expect(decodeDelegationCheckpoint(encodeDelegationCheckpoint(empty))).toEqual(empty);
+  });
+});
+
+describe('the checkpoint identity invariants (one pure helper, at build and at recovery)', () => {
+  const { cp } = ready([sessionStart(1), bareTool(2, X), subagentStart(3, X)]);
+  const act = cp.activities[0]!;
+
+  it('a built checkpoint satisfies them', () => { expect(() => assertDelegationCheckpointIdentity(cp)).not.toThrow(); });
+
+  it('refuses an activity whose ID is not the derivation from its natural key and identity journalId', () => {
+    const wrong = { ...cp, activities: [{ ...act, identityJournalId: eid(99) }] };
+    expect(failureCode(() => assertDelegationCheckpointIdentity(wrong))).toBe('activity-id-mismatch');
+  });
+  it('refuses a natural-key map that disagrees with the activity rows in either direction', () => {
+    const enc = encodeDelegationNaturalKey(act);
+    expect(failureCode(() => assertDelegationCheckpointIdentity({ ...cp, activityIdsByNaturalKey: {} }))).toBe('natural-key-map');
+    expect(failureCode(() => assertDelegationCheckpointIdentity({ ...cp, activityIdsByNaturalKey: { [enc]: '0'.repeat(64) } }))).toBe('natural-key-map');
+    expect(failureCode(() => assertDelegationCheckpointIdentity({ ...cp, activityIdsByNaturalKey: { ...cp.activityIdsByNaturalKey, [encodeDelegationNaturalKey(keyOf(Y))]: '1'.repeat(64) } }))).toBe('natural-key-map');
+    expect(failureCode(() => assertDelegationCheckpointIdentity({ ...cp, activities: [act, act] }))).toBe('natural-key-map');
+  });
+  it('refuses an intent map that disagrees with the session rows\' explicitIntentAt', () => {
+    expect(failureCode(() => assertDelegationCheckpointIdentity({ ...cp, coordinatorIntentByParent: { [delegationIntentKey(PARENT, INC)]: T(5) } }))).toBe('intent-map');
+    const withIntent = { ...cp, sessions: cp.sessions.map((s) => ({ ...s, explicitIntentAt: T(5) })) };
+    expect(failureCode(() => assertDelegationCheckpointIdentity(withIntent))).toBe('intent-map');
+    expect(failureCode(() => assertDelegationCheckpointIdentity({ ...withIntent, coordinatorIntentByParent: { [delegationIntentKey(PARENT, INC)]: T(5) } }))).toBe('accepted');
+    // The map is keyed by (session, incarnation): the bare session id is no key at all, so the old spelling is refused.
+    expect(failureCode(() => assertDelegationCheckpointIdentity({ ...withIntent, coordinatorIntentByParent: { [PARENT]: T(5) } }))).toBe('intent-map');
+  });
+
+  describe('each lease\'s opening lineage row (hand-off 1 from the Task 7 re-review)', () => {
+    const lease: DelegationLeaseRow = {
+      leaseId: 'lease-1', generation: 0, creatingJournalSequence: 3, currentJournalSequence: 3, activityId: act.activityId, parentId: PARENT, parentIncarnation: INC,
+      project: 'project-a', adminRecord: 'wt-1', canonicalPath: '/work/p/wt-1', creationBase: null, sourceKind: 'agent', parentageState: 'linked',
+      workspaceState: 'unmeasured', disposition: 'ephemeral', cleanupState: 'not-due', cleanupPopulation: 'ephemeral-lease', firstObservedAt: T(7), lastObservedAt: T(7),
+      terminalEvidenceAt: null, adoptedAt: null, retainedAt: null, promotedAt: null, cleanupDueAt: null, cleanupStartedAt: null, cleanupFinishedAt: null,
+      cleanupEvidenceJson: null, carrierGenerationSeen: null, releasedAt: null,
+    };
+    const lineageId = deriveDelegationLineageId(lease);
+    const opening: DelegationLineageRow = { lineageId, parentId: PARENT, parentIncarnation: INC, activityId: null, leaseId: 'lease-1', runId: null, openedAt: T(7), closedAt: null, closeReason: null };
+    const withLease = (over: Partial<DelegationLineageRow> | null): DelegationCheckpointV1 =>
+      ({ ...cp, leases: [lease], lineage: over === null ? [] : [{ ...opening, ...over }] });
+    it('accepts the derived, lease-owned, same-parent row opened at the lease\'s firstObservedAt', () => {
+      expect(failureCode(() => assertDelegationCheckpointIdentity(withLease({})))).toBe('accepted');
+    });
+    const table: Array<[string, Partial<DelegationLineageRow> | null]> = [
+      ['no opening row at all', null],
+      ['a row whose lineageId is not the derivation', { lineageId: 'c'.repeat(64) }],
+      ['a row for another parent session', { parentId: 'lane-b-demo' }],
+      ['a row for another incarnation', { parentIncarnation: 'g2' }],
+      ['a row that also names an activity', { activityId: act.activityId }],
+      ['a row opened at another instant', { openedAt: T(8) }],
+      ['a row owned by another lease', { leaseId: 'lease-2' }],
+    ];
+    for (const [name, over] of table) {
+      it(`refuses ${name}`, () => { expect(failureCode(() => assertDelegationCheckpointIdentity(withLease(over)))).toBe('lease-lineage'); });
+    }
+    it('refuses a lease-owned lineage row whose lease has no row, and one whose parent is not its lease\'s', () => {
+      expect(failureCode(() => assertDelegationCheckpointIdentity({ ...cp, lineage: [opening] }))).toBe('lease-lineage');
+      const stray: DelegationLineageRow = { ...opening, lineageId: 'd'.repeat(64), parentId: 'lane-b-demo' };
+      expect(failureCode(() => assertDelegationCheckpointIdentity({ ...cp, leases: [lease], lineage: [opening, stray] }))).toBe('lease-lineage');
+    });
+  });
+});
+
+describe('projectability: a checkpoint no projection could accept is refused before it is durable', () => {
+  const { cp } = ready([sessionStart(1), bareTool(2, X), subagentStart(3, X)]);
+  const act = cp.activities[0]!;
+  const lease: DelegationLeaseRow = {
+    leaseId: 'lease-1', generation: 0, creatingJournalSequence: 3, currentJournalSequence: 3, activityId: act.activityId, parentId: PARENT, parentIncarnation: INC,
+    project: 'project-a', adminRecord: 'wt-1', canonicalPath: '/work/p/wt-1', creationBase: null, sourceKind: 'agent', parentageState: 'linked',
+    workspaceState: 'unmeasured', disposition: 'ephemeral', cleanupState: 'not-due', cleanupPopulation: 'ephemeral-lease', firstObservedAt: T(7), lastObservedAt: T(7),
+    terminalEvidenceAt: null, adoptedAt: null, retainedAt: null, promotedAt: null, cleanupDueAt: null, cleanupStartedAt: null, cleanupFinishedAt: null,
+    cleanupEvidenceJson: null, carrierGenerationSeen: null, releasedAt: null,
+  };
+  const lineage = (l: DelegationLeaseRow): DelegationLineageRow => ({ lineageId: deriveDelegationLineageId(l), parentId: l.parentId, parentIncarnation: l.parentIncarnation, activityId: null, leaseId: l.leaseId, runId: null, openedAt: l.firstObservedAt, closedAt: null, closeReason: null });
+  const sess = cp.sessions[0]!;
+  const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-deleg-proj-'), 'coord.db')));
+
+  const table: Array<[string, DelegationCheckpointV1]> = [
+    ['two sessions with one key', { ...cp, sessions: [sess, sess] }],
+    ['a session last observed before it was first', { ...cp, sessions: [{ ...sess, lastObservedAt: T(0) }] }],
+    ['an activity for a session that has no row', { ...cp, sessions: [] }],
+    ['an activity that ended before it opened', { ...cp, activities: [{ ...act, executionState: 'ended', endedAt: T(0) }] }],
+    ['an activity whose last event precedes its opening', { ...cp, activities: [{ ...act, lastEventAt: T(0) }] }],
+    ['a lease for an activity with no row', { ...cp, activities: [], activityIdsByNaturalKey: {}, leases: [lease], lineage: [lineage(lease)] }],
+    ['two unreleased leases on one canonical path', { ...cp, leases: [lease, { ...lease, leaseId: 'lease-2', creatingJournalSequence: 4, currentJournalSequence: 4, adminRecord: 'wt-2' }], lineage: [lineage(lease), lineage({ ...lease, leaseId: 'lease-2', adminRecord: 'wt-2' })] }],
+    ['two unreleased leases on one identity tuple (and so one path)', { ...cp, leases: [lease, { ...lease, leaseId: 'lease-2', creatingJournalSequence: 4, currentJournalSequence: 4 }], lineage: [lineage(lease), lineage({ ...lease, leaseId: 'lease-2' })] }],
+    ['two leases created at one journal sequence', { ...cp, leases: [lease, { ...lease, leaseId: 'lease-2', adminRecord: 'wt-2', canonicalPath: '/work/p/wt-2' }], lineage: [lineage(lease), lineage({ ...lease, leaseId: 'lease-2', adminRecord: 'wt-2', canonicalPath: '/work/p/wt-2' })] }],
+    ['a lineage row owned by two things', { ...cp, leases: [lease], lineage: [lineage(lease), { ...lineage(lease), lineageId: 'e'.repeat(64), activityId: act.activityId }] }],
+    ['a lineage row closed before it opened', { ...cp, leases: [lease], lineage: [{ ...lineage(lease), closedAt: T(1), closeReason: 'x' }] }],
+    ['a lineage row with a closedAt and no reason', { ...cp, leases: [lease], lineage: [{ ...lineage(lease), closedAt: T(9), closeReason: null }] }],
+    ['a linked attempt with no path', { ...cp, attempts: [{ attemptId: 'a1', parentId: PARENT, parentIncarnation: INC, project: 'p', adminRecord: 'w', canonicalPath: null, attemptedAt: T(1), rung: 2, verdict: 'linked', evidenceJournalIds: [], detail: null }] }],
+  ];
+  it('accepts the valid checkpoint, and the real store accepts it too', () => {
+    expect(() => assertDelegationCheckpointProjectable({ ...cp, leases: [lease], lineage: [lineage(lease)] })).not.toThrow();
+    store().projectDelegationCheckpoint({ ...cp, appliedJournalSequence: 3, leases: [lease], lineage: [lineage(lease)] });
+  });
+  for (const [name, bad] of table) {
+    it(`refuses ${name}, exactly as SQLite would`, () => {
+      expect(failureCode(() => assertDelegationCheckpointProjectable(bad))).toBe('unprojectable');
+      // The differential, with no exception: wherever the pure check refuses, the real store refuses too (a SQLite error, or its
+      // own pre-flight; a repeated session key is the store's `bad-checkpoint`, refused before BEGIN).
+      expect(() => store().projectDelegationCheckpoint({ ...bad, appliedJournalSequence: Math.max(bad.appliedJournalSequence, 4) })).toThrow();
+    });
+  }
+});
+
+// ── the writer, deduplication ────────────────────────────────────────────────────────────────────────────────────────
+
+/** Every descriptor a test's port has opened and not yet closed: after each test none may remain. */
+const liveHandles = new Set<string>();
+let handleSerial = 0;
+
+/** A port that logs every operation and can be told to short-write or fail. */
+function spyPort(log: string[], inner: DelegationFilePort = nodeDelegationFilePort, opts: { shortWrite?: boolean } = {}): DelegationFilePort {
+  const track = (label: string): (() => void) => {
+    const id = `${label}#${++handleSerial}`;
+    liveHandles.add(id);
+    return () => { liveHandles.delete(id); };
+  };
+  const wrap = (kind: 'journal' | 'checkpoint' | 'quarantine', h: DelegationFileHandle): DelegationFileHandle => {
+    const release = track(kind);
+    return {
+      write: async (b) => {
+        log.push(`${kind}.write:${b.length}:${b[b.length - 1]}`);
+        if (opts.shortWrite === true && kind === 'journal') return h.write(b.subarray(0, Math.max(1, b.length - 3)));
+        return h.write(b);
+      },
+      sync: async () => { log.push(`${kind}.sync`); await h.sync(); },
+      close: async () => { release(); await h.close(); },
+    };
+  };
+  return {
+    openAppend: async (p) => wrap('journal', await inner.openAppend(p)),
+    // The tail heal's quarantine copy goes through `createTemp` too (D-4655): it is logged under its own name.
+    createTemp: async (p) => wrap(p.includes(DELEGATION_TORN_DIR) ? 'quarantine' : 'checkpoint', await inner.createTemp(p)),
+    rename: async (a, b) => { log.push(`rename:${path.basename(a)}->${path.basename(b)}`); await inner.rename(a, b); },
+    fsyncDir: async (d) => { log.push('dir.sync'); await inner.fsyncDir(d); },
+    // The heal's two journal operations (D-4655): the cut, and the fsync of what is left.
+    truncate: async (p, length) => { log.push(`${path.basename(p) === DELEGATION_JOURNAL_FILE ? 'journal' : 'file'}.truncate:${length}`); await inner.truncate(p, length); },
+    fsyncFile: async (p) => { log.push(`file.sync:${path.basename(p)}`); await inner.fsyncFile(p); },
+    readFile: (p) => inner.readFile(p),
+    // MUST 1's boot report: two reads of the tail quarantine, not logged (no read is), so every write-order row is unchanged
+    listDir: (d) => inner.listDir(d),
+    statFile: (p) => inner.statFile(p),
+    removeTemp: async (p) => { log.push(`removeTemp:${path.basename(p)}`); await inner.removeTemp(p); },
+    openRead: async (p) => {
+      const h = await inner.openRead(p);
+      if (h === null) return null;
+      const release = track('read');
+      return { size: () => h.size(), read: (pos, len) => h.read(pos, len), close: async () => { release(); await h.close(); } };
+    },
+    mkdirp: (d) => inner.mkdirp(d),
+  };
+}
+
+describe('the serialized journal writer: O_APPEND, one complete write of record plus LF, then fsync', () => {
+  const dirOf = (): string => mkTmp('ccrc-deleg-journal-');
+
+  it('one append is exactly one write of the whole record plus its LF, and then one fsync, in that order', async () => {
+    const dir = dirOf();
+    const log: string[] = [];
+    const writer = new DelegationJournalWriter(spyPort(log), path.join(dir, DELEGATION_JOURNAL_FILE), dir);
+    const [r1] = evidenceChain([sessionStart(1)]);
+    await writer.write(r1!);
+    await writer.sync();
+    await writer.close();
+    const bytes = encodeDelegationJournalRecord(r1!);
+    expect(log).toEqual([`journal.write:${bytes.length}:10`, 'journal.sync', 'dir.sync']);     // the directory entry of a NEW file is made durable once
+    expect(new Uint8Array(readFileSync(path.join(dir, DELEGATION_JOURNAL_FILE)))).toEqual(bytes);
+  });
+
+  it('opens with O_APPEND: another descriptor\'s bytes are never overwritten', async () => {
+    const dir = dirOf();
+    const file = path.join(dir, DELEGATION_JOURNAL_FILE);
+    const writer = new DelegationJournalWriter(nodeDelegationFilePort, file, dir);
+    const [r1, r2] = evidenceChain([sessionStart(1), sessionStart(2)]);
+    await writer.write(r1!);
+    appendFileSync(file, 'x'.repeat(0));                  // a second descriptor appending behind the writer's back
+    const middle = Buffer.from('EXTERNAL\n');
+    appendFileSync(file, middle);
+    // The writer's next write lands at the CURRENT end of the file, not at its own remembered offset.
+    await writer.write(r2!);
+    await writer.close();
+    const all = readFileSync(file);
+    expect(all.subarray(0, encodeDelegationJournalRecord(r1!).length)).toEqual(Buffer.from(encodeDelegationJournalRecord(r1!)));
+    expect(all.indexOf(middle)).toBe(encodeDelegationJournalRecord(r1!).length);
+    expect(all.subarray(all.length - encodeDelegationJournalRecord(r2!).length)).toEqual(Buffer.from(encodeDelegationJournalRecord(r2!)));
+  });
+
+  it('a short write is refused as short-write, and the writer is then unusable: nothing is appended behind a fragment', async () => {
+    const dir = dirOf();
+    const log: string[] = [];
+    const writer = new DelegationJournalWriter(spyPort(log, nodeDelegationFilePort, { shortWrite: true }), path.join(dir, DELEGATION_JOURNAL_FILE), dir);
+    const [r1] = evidenceChain([sessionStart(1)]);
+    await expect(writer.write(r1!)).rejects.toMatchObject({ code: 'short-write' });
+    await expect(writer.write(r1!)).rejects.toMatchObject({ code: 'writer-unusable' });
+    await expect(writer.sync()).rejects.toMatchObject({ code: 'writer-unusable' });
+    await writer.close();
+  });
+
+  it('refuses to open behind a torn tail, and leaves the file exactly as it was', async () => {
+    const dir = dirOf();
+    const file = path.join(dir, DELEGATION_JOURNAL_FILE);
+    const [r1, r2] = evidenceChain([sessionStart(1), sessionStart(2)]);
+    const torn = Buffer.concat([Buffer.from(encodeDelegationJournalRecord(r1!)), Buffer.from(encodeDelegationJournalRecord(r2!)).subarray(0, 40)]);
+    writeFileSync(file, torn);
+    const writer = new DelegationJournalWriter(nodeDelegationFilePort, file, dir);
+    await expect(writer.write(r2!)).rejects.toMatchObject({ code: 'torn-tail' });
+    await writer.close();
+    expect(readFileSync(file)).toEqual(torn);
+  });
+
+  describe('deduplication plans (nothing renumbered, nothing appended for a duplicate)', () => {
+    const noLeases = { byIdentity: () => undefined, byPath: () => undefined };
+    const item = (e: DelegationEventEnvelopeV1) => ({ entry: evidence(e), acceptedAt: T(500) });
+
+    it('a duplicate evidence eventId (already journaled, or earlier in the batch) is skipped and the chain closes over the survivors', () => {
+      const [r1] = evidenceChain([sessionStart(1)]);
+      const plan = planDelegationJournalAppend({
+        head: { sequence: 1, journalId: r1!.journalId, digest: r1!.digest }, eventIds: new Set([eid(1)]), leases: noLeases,
+        items: [item(sessionStart(1)), item(sessionStart(2)), item(sessionStart(2)), item(sessionStart(3))],
+      });
+      expect(plan.skipped).toEqual([{ index: 0, reason: 'duplicate-event' }, { index: 2, reason: 'duplicate-event' }]);
+      expect(plan.records.map((r) => r.sequence)).toEqual([2, 3]);
+      expect(plan.records[0]!.previousDigest).toBe(r1!.digest);
+      expect(plan.records[1]!.previousDigest).toBe(plan.records[0]!.digest);
+      expect(() => parseDelegationJournal(bytesOf([r1!, ...plan.records]), { completeFromStart: true })).not.toThrow();
+    });
+
+    const leaseEntry = (over: Record<string, unknown>): DelegationJournalEntryV1 => ({
+      kind: 'lease-created', leaseId: 'lease-1', generation: 0, activityId: 'a'.repeat(64), parentId: PARENT, parentIncarnation: INC, project: 'project-a',
+      adminRecord: 'wt-1', canonicalPath: '/work/p/wt-1', creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: T(1), lineageId: 'b'.repeat(64), ...over,
+    } as DelegationJournalEntryV1);
+    it('a duplicate unreleased lease identity, and a canonical path another lease holds, are skipped; a null base is not a string base', () => {
+      const held = { byIdentity: (k: string) => (k === canonicalDelegationJson(['project-a', 'wt-1', null, '/work/p/wt-1']) ? 'lease-1' : undefined), byPath: (p: string) => (p === '/work/p/wt-1' ? 'lease-1' : undefined) };
+      const plan = planDelegationJournalAppend({
+        head: null, eventIds: new Set(), leases: held,
+        items: [
+          { entry: leaseEntry({ leaseId: 'lease-2' }), acceptedAt: T(5) },                                              // same identity
+          { entry: leaseEntry({ leaseId: 'lease-3', creationBase: 'base-1' }), acceptedAt: T(5) },                       // other identity, same path
+          { entry: leaseEntry({ leaseId: 'lease-4', canonicalPath: '/work/p/wt-4', adminRecord: 'wt-4' }), acceptedAt: T(5) },
+          { entry: leaseEntry({ leaseId: 'lease-5', canonicalPath: '/work/p/wt-5', adminRecord: 'wt-4' }), acceptedAt: T(5) },   // same identity? no: other path
+        ],
+      });
+      expect(plan.skipped).toEqual([{ index: 0, reason: 'duplicate-lease', leaseId: 'lease-1' }, { index: 1, reason: 'lease-path-held', leaseId: 'lease-1' }]);
+      expect(plan.records.map((r) => r.entry.kind === 'lease-created' ? r.entry.leaseId : '')).toEqual(['lease-4', 'lease-5']);
+    });
+    it('two leases in ONE batch that collide are caught against each other', () => {
+      const plan = planDelegationJournalAppend({
+        head: null, eventIds: new Set(), leases: noLeases,
+        items: [{ entry: leaseEntry({ leaseId: 'lease-1' }), acceptedAt: T(5) }, { entry: leaseEntry({ leaseId: 'lease-2' }), acceptedAt: T(5) }, { entry: leaseEntry({ leaseId: 'lease-3', creationBase: 'b' }), acceptedAt: T(5) }],
+      });
+      expect(plan.skipped).toEqual([{ index: 1, reason: 'duplicate-lease', leaseId: 'lease-1' }, { index: 2, reason: 'lease-path-held', leaseId: 'lease-1' }]);
+    });
+  });
+});
+
+// ── recovery ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('recoverDelegationState: reconstruction phases (O2)', () => {
+  it('no checkpoint and no journal is a ready, empty state with every phase completed and pruning enabled', () => {
+    const report = recoverDelegation(null, []);
+    expect(report.failure).toBeNull();
+    expect(report.state).toEqual({ checkpoint: emptyDelegationCheckpoint(), phase: 'ready' });
+    expect(report.completedPhases).toEqual([...DELEGATION_RECOVERY_PHASES]);
+    expect(report.pruning).toBe('enabled');
+  });
+
+  it('rebuilds sessions and an activity from the journal alone, with the ID derived from the accepted journalId of the earliest naming record', () => {
+    const { records, cp } = ready([sessionStart(1), bareTool(2, X), subagentStart(3, X), bareTool(4, X)]);
+    expect(cp.sessions).toHaveLength(1);
+    expect(cp.sessions[0]).toMatchObject({ sessionId: PARENT, parentIncarnation: INC, claudeSessionIds: [CLAUDE], firstObservedAt: T(1), lastObservedAt: T(4), explicitIntentAt: null, effective: false });
+    const act = activityOf(cp, X)!;
+    expect(act.identityJournalId).toBe(records[1]!.journalId);                                  // the bare occurrence at sequence 2, not the join at 3
+    expect(act.activityId).toBe(deriveDelegationActivityId(keyOf(X), records[1]!.journalId));
+    expect(act).toMatchObject({ openedAt: T(2), lastEventAt: T(4), executionState: 'active', endedAt: null, displayName: null });
+    expect(cp.activityIdsByNaturalKey).toEqual({ [encodeDelegationNaturalKey(keyOf(X))]: act.activityId });
+    expect(cp.appliedJournalSequence).toBe(4);
+    expect(cp.appliedJournalId).toBe(records[3]!.journalId);
+  });
+
+  it('only a qualifying join opens an activity: a bare agent_id and an unpaired stop do not', () => {
+    const { cp } = ready([sessionStart(1), bareTool(2, X), subagentStop(3, Y)]);
+    expect(cp.activities).toEqual([]);
+    expect(cp.pruningHolds.filter((h) => h.reason === 'identity-candidate')).toHaveLength(2);
+  });
+
+  it('a launch response and a SubagentStart each qualify; a completed launch opens it already ended; a stop ends it', () => {
+    const { cp } = ready([sessionStart(1), agentLaunch(2, X, 'completed'), agentLaunch(3, Y), subagentStop(4, Y)]);
+    expect(activityOf(cp, X)).toMatchObject({ executionState: 'ended', endedAt: T(2), openedAt: T(2) });
+    expect(activityOf(cp, Y)).toMatchObject({ executionState: 'ended', endedAt: T(4), openedAt: T(3) });
+  });
+
+  it('clamps endedAt and lastEventAt so no SQLite CHECK can fail on out-of-order observation times', () => {
+    const early = { ...subagentStop(5, X), observedAt: T(1) } as DelegationEventEnvelopeV1;
+    const { cp } = ready([sessionStart(2), subagentStart(3, X), early]);
+    const act = activityOf(cp, X)!;
+    expect(act.endedAt! >= act.openedAt).toBe(true);
+    expect(act.lastEventAt >= act.openedAt).toBe(true);
+    expect(() => assertDelegationCheckpointProjectable(cp)).not.toThrow();
+  });
+
+  it('events from two incarnations of one parent stay two sessions and two activities', () => {
+    const { cp } = ready([sessionStart(1), subagentStart(2, X), sessionStart(3, { parentIncarnation: 'g2' }), subagentStart(4, X, { parentIncarnation: 'g2' })]);
+    expect(cp.sessions.map((s) => s.parentIncarnation)).toEqual(['g1', 'g2']);
+    expect(cp.activities).toHaveLength(2);
+    expect(new Set(cp.activities.map((a) => a.activityId)).size).toBe(2);
+  });
+
+  describe('every recovery failure leaves the phase reconstructing and pruning disabled', () => {
+    const events = [sessionStart(1), bareTool(2, X), sessionStart(3), subagentStart(4, X), sessionStart(5)];
+    const records = evidenceChain(events);
+    const good = recoverDelegation(null, records).state.checkpoint;
+    const goodBytes = encodeDelegationCheckpoint(good);
+    const at3 = recoverDelegation(null, records.slice(0, 3)).state.checkpoint;
+    const at3Bytes = encodeDelegationCheckpoint(at3);
+    const corrupt = (f: (c: Record<string, unknown>) => void): Uint8Array => {
+      const c = JSON.parse(new TextDecoder().decode(goodBytes)) as Record<string, unknown>;
+      f(c);
+      return new TextEncoder().encode(`${canonicalDelegationJson(c)}\n`);
+    };
+
+    const failures: Array<[string, Uint8Array | null, readonly DelegationJournalRecordV1[], string]> = [
+      ['a BOM on the checkpoint', new Uint8Array([0xef, 0xbb, 0xbf, ...goodBytes]), records, 'checkpoint-decode'],
+      ['a non-canonical checkpoint', new TextEncoder().encode(`${uncanonical(new TextDecoder().decode(goodBytes).trimEnd())}\n`), records, 'checkpoint-decode'],
+      ['an activity whose ID is not the derivation from its identity journalId', corrupt((c) => { (c['activities'] as Array<Record<string, unknown>>)[0]!['identityJournalId'] = eid(99); }), records, 'checkpoint-validate'],
+      ['a natural-key map with an orphan mapping', corrupt((c) => { (c['activityIdsByNaturalKey'] as Record<string, string>)[encodeDelegationNaturalKey(keyOf(Y))] = '1'.repeat(64); }), records, 'checkpoint-validate'],
+      ['an intent map the session rows do not say', corrupt((c) => { c['coordinatorIntentByParent'] = { [delegationIntentKey(PARENT, INC)]: T(9) }; }), records, 'checkpoint-validate'],
+      ['a journal with a sequence gap', null, [records[0]!, records[1]!, records[3]!, records[4]!], 'journal-validate'],
+      ['a journal with a broken chain (a record from another history)', null, [records[0]!, ...evidenceChain([sessionStart(2)], 2, 'd'.repeat(64)), records[2]!], 'journal-validate'],
+      ['a checkpoint ahead of its journal (the journal was lost)', goodBytes, [], 'journal-validate'],
+      ['a checkpoint ahead of a shorter journal', goodBytes, records.slice(0, 3), 'journal-validate'],
+      ['an anchor whose digest the journal does not hold', corrupt((c) => { c['appliedJournalDigest'] = 'f'.repeat(64); }), records, 'journal-validate'],
+      ['a retained journal that begins past the checkpoint', at3Bytes, records.slice(4), 'journal-validate'],
+      ['a held identity record the journal no longer retains', at3Bytes, records.slice(2), 'holds'],
+      ['a join inside the applied journal for an agent the checkpoint does not hold', encodeDelegationCheckpoint({ ...good, activities: [], activityIdsByNaturalKey: {}, pruningHolds: good.pruningHolds.filter((h) => h.reason === 'checkpoint-anchor') }), records, 'identity-evidence'],
+      ['a lease in the checkpoint that no journal entry created', encodeDelegationCheckpoint(withLeaseRow(good)), records, 'final-validate'],
+      ['a journal record the fold refuses (a lease for an activity nothing holds)', null, chainOf([evidence(sessionStart(1)), leaseEntryFor('a'.repeat(64))]), 'suffix-replay'],
+    ];
+    for (const [name, checkpointBytes, journal, phase] of failures) {
+      it(`${name}: fails in ${phase}`, () => {
+        const report = recoverDelegation(checkpointBytes, journal);
+        expect(report.failure?.phase, JSON.stringify(report.failure)).toBe(phase);
+        expect(report.state.phase).toBe('reconstructing');
+        expect(report.pruning).toBe('disabled');
+        expect(report.facts).toBeNull();
+        expect(report.completedPhases).not.toContain('final-validate');
+        // Pruning is a function of the state: the plan refuses on every one of them.
+        const plan = planDelegationPruning({ state: report.state, view: delegationRetentionViewOf(journal, new Set(), NO_FLOOR) });
+        expect(plan.enabled).toBe(false);
+        expect(plan.prunableThroughSequence).toBe(0);
+        // The plan's entry point agrees.
+        expect(recoverDelegationState(checkpointBytes, journal).phase).toBe('reconstructing');
+      });
+    }
+    it('a failed recovery keeps the best checkpoint it decoded; one that could not decode keeps the empty one', () => {
+      expect(recoverDelegation(goodBytes, []).state.checkpoint).toEqual(good);
+      expect(recoverDelegation(new Uint8Array([1, 2, 3]), records).state.checkpoint).toEqual(emptyDelegationCheckpoint());
+    });
+    it('a complete recovery enables pruning, and only a complete one', () => {
+      const report = recoverDelegation(goodBytes, records);
+      expect(report.failure).toBeNull();
+      expect(report.pruning).toBe('enabled');
+      expect(report.state.phase).toBe('ready');
+    });
+  });
+});
+
+function leaseEntryFor(activityId: string, over: Record<string, unknown> = {}): DelegationJournalEntryV1 {
+  const leaseId = typeof over['leaseId'] === 'string' ? over['leaseId'] : 'lease-1';
+  const lineageId = deriveDelegationLineageId({ leaseId, parentId: PARENT, parentIncarnation: INC, activityId });
+  return {
+    kind: 'lease-created', leaseId, generation: 0, activityId, parentId: PARENT, parentIncarnation: INC, project: 'project-a', adminRecord: 'wt-1',
+    canonicalPath: '/work/project-a/wt-1', creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: T(7), lineageId, ...over,
+  } as DelegationJournalEntryV1;
+}
+
+function withLeaseRow(cp: DelegationCheckpointV1): DelegationCheckpointV1 {
+  const act = cp.activities[0]!;
+  const lease: DelegationLeaseRow = {
+    leaseId: 'lease-9', generation: 0, creatingJournalSequence: 2, currentJournalSequence: 2, activityId: act.activityId, parentId: PARENT, parentIncarnation: INC,
+    project: 'project-a', adminRecord: 'wt-9', canonicalPath: '/work/project-a/wt-9', creationBase: null, sourceKind: 'agent', parentageState: 'linked',
+    workspaceState: 'unmeasured', disposition: 'ephemeral', cleanupState: 'not-due', cleanupPopulation: 'ephemeral-lease', firstObservedAt: T(7), lastObservedAt: T(7),
+    terminalEvidenceAt: null, adoptedAt: null, retainedAt: null, promotedAt: null, cleanupDueAt: null, cleanupStartedAt: null, cleanupFinishedAt: null,
+    cleanupEvidenceJson: null, carrierGenerationSeen: null, releasedAt: null,
+  };
+  const lineage: DelegationLineageRow = { lineageId: deriveDelegationLineageId(lease), parentId: PARENT, parentIncarnation: INC, activityId: null, leaseId: 'lease-9', runId: null, openedAt: T(7), closedAt: null, closeReason: null };
+  return { ...cp, leases: [lease], lineage: [lineage] };
+}
+
+// ── W3-M16, W3-M17, W3-M14, W3-M18: identity across the checkpoint boundary ─────────────────────────────────────────────
+
+describe('sequence-10 / position-20 row (W3-M16): retained pre-checkpoint evidence for an activity absent from the checkpoint', () => {
+  // 20 records; the bare occurrence of X is sequence 10; the checkpoint covers all 20 and holds no activity for X; the join is 21.
+  const filler = (n: number): DelegationEventEnvelopeV1 => sessionStart(n);
+  const events20 = Array.from({ length: 20 }, (_, i) => (i + 1 === 10 ? bareTool(10, X) : filler(i + 1)));
+  const records20 = evidenceChain(events20);
+  const at20 = recoverDelegation(null, records20);
+  const bytes20 = encodeDelegationCheckpoint(at20.state.checkpoint);
+  const join = evidenceChain([subagentStart(21, X)], 21, records20[19]!.digest);
+  const records21 = [...records20, ...join];
+  const E1 = records20[9]!;
+
+  it('the checkpoint at position 20 holds no activity for X, but holds the identity record: position is not coverage', () => {
+    expect(at20.state.checkpoint.appliedJournalSequence).toBe(20);
+    expect(activityOf(at20.state.checkpoint, X)).toBeUndefined();
+    expect(at20.state.checkpoint.pruningHolds).toContainEqual({ journalId: E1.journalId, reason: 'identity-candidate', ownerId: encodeDelegationNaturalKey(keyOf(X)) });
+  });
+
+  it('the join at 21 opens the activity from the RETAINED record at 10, selected by its accepted journalId, not the join\'s and never the envelope eventId', () => {
+    const report = recoverDelegation(bytes20, records21);
+    expect(report.failure).toBeNull();
+    const act = activityOf(report.state.checkpoint, X)!;
+    expect(act.identityJournalId).toBe(E1.journalId);
+    expect(act.activityId).toBe(deriveDelegationActivityId(keyOf(X), E1.journalId));
+    expect(act.activityId).not.toBe(deriveDelegationActivityId(keyOf(X), join[0]!.journalId));            // what ignoring the pre-checkpoint record would pick
+    const rawEventId = (E1.entry as { event: { eventId: string } }).event.eventId;
+    expect(act.activityId).not.toBe(deriveDelegationActivityId(keyOf(X), rawEventId));                     // the raw envelope eventId is a different, rejected value
+    expect(act.openedAt).toBe(T(10));
+    expect(report.replayed).toBe(1);
+    // A recovery from the journal alone reaches the same ID: replay and the live path are one fold.
+    expect(activityOf(recoverDelegation(null, records21).state.checkpoint, X)!.activityId).toBe(act.activityId);
+  });
+
+  it('the candidate\'s hold is released once the checkpoint holds the ID, and not before', () => {
+    const after = recoverDelegation(bytes20, records21).state.checkpoint;
+    expect(after.pruningHolds.filter((h) => h.reason === 'identity-candidate')).toEqual([]);
+    expect(Object.keys(after.activityIdsByNaturalKey)).toHaveLength(1);
+  });
+});
+
+describe('identity-hold row (W3-M17): positional checkpoint coverage does not substitute for selected-ID coverage', () => {
+  const events = [sessionStart(1), bareTool(2, X), sessionStart(3), sessionStart(4), sessionStart(5), sessionStart(6)];
+  const records = evidenceChain(events);
+  const state = recoverDelegation(null, records).state;
+  const ownerId = encodeDelegationNaturalKey(keyOf(X));
+  const view = delegationRetentionViewOf(records, new Set(state.checkpoint.pruningHolds.map((h) => h.journalId)), NO_FLOOR);
+
+  it('the record at 2 is held although the checkpoint\'s position (6) is past it', () => {
+    expect(state.checkpoint.appliedJournalSequence).toBe(6);
+    expect(state.checkpoint.pruningHolds).toContainEqual({ journalId: records[1]!.journalId, reason: 'identity-candidate', ownerId });
+  });
+  it('so the plan may prune nothing from sequence 2 on, however far the checkpoint has applied', () => {
+    const plan = planDelegationPruning({ state, view });
+    expect(plan.enabled).toBe(true);
+    expect(plan.prunableThroughSequence).toBe(1);                       // the identity record at 2 is held; only sequence 1 may go
+  });
+  it('once a checkpoint holds the selected ID, the hold is released and the plan is bounded by the anchor alone', () => {
+    const joined = evidenceChain([...events, subagentStart(7, X)]);
+    const after = recoverDelegation(null, joined).state;
+    expect(after.checkpoint.pruningHolds.map((h) => h.reason)).toEqual(['checkpoint-anchor']);
+    const plan = planDelegationPruning({ state: after, view: delegationRetentionViewOf(joined, new Set(after.checkpoint.pruningHolds.map((h) => h.journalId)), NO_FLOOR) });
+    expect(plan.prunableThroughSequence).toBe(6);                       // strictly before the anchor at 7
+  });
+});
+
+describe('O4 immutable natural-key row (W3-M14): a mapped activity keeps its ID though its identity record has been pruned', () => {
+  // The identity record is sequence 3; the checkpoint covers through 8; the retained journal begins at 5 (3 was pruned).
+  const events = [sessionStart(1), sessionStart(2), subagentStart(3, X), sessionStart(4), sessionStart(5), bareTool(6, X), sessionStart(7), sessionStart(8)];
+  const all = evidenceChain(events);
+  const original = recoverDelegation(null, all);
+  const act = activityOf(original.state.checkpoint, X)!;
+  const bytes = encodeDelegationCheckpoint(original.state.checkpoint);
+  const retained = [...all.slice(4), ...evidenceChain([subagentStart(9, X), bareTool(10, X)], 9, all[7]!.digest)];
+
+  it('the checkpoint holds the mapping, so no hold keeps the pruned identity record', () => {
+    expect(act.identityJournalId).toBe(all[2]!.journalId);
+    expect(original.state.checkpoint.pruningHolds.map((h) => h.reason)).toEqual(['checkpoint-anchor']);
+  });
+  it('recovery over the pruned journal restores the ID verbatim, never rehashing from what is still retained', () => {
+    const report = recoverDelegation(bytes, retained);
+    expect(report.failure).toBeNull();
+    const after = activityOf(report.state.checkpoint, X)!;
+    expect(after.activityId).toBe(act.activityId);
+    expect(after.identityJournalId).toBe(all[2]!.journalId);
+    expect(after.openedAt).toBe(act.openedAt);
+    expect(report.state.checkpoint.activities).toHaveLength(1);
+    expect(report.state.checkpoint.activityIdsByNaturalKey).toEqual(original.state.checkpoint.activityIdsByNaturalKey);
+    // What a rehash would have produced: the earliest RETAINED naming record is sequence 6.
+    expect(after.activityId).not.toBe(deriveDelegationActivityId(keyOf(X), all[5]!.journalId));
+    expect(after.lastEventAt).toBe(T(10));              // later evidence still touches the mapped activity
+  });
+  it('a retained journal that begins past the original identity record is not a recovery failure for a mapped activity', () => {
+    expect(recoverDelegation(bytes, retained).state.phase).toBe('ready');
+  });
+});
+
+describe('replay-preserves-projection row (W3-M18): replay never changes a projected ID or generation', () => {
+  const events = [sessionStart(1), bareTool(2, X), subagentStart(3, X), subagentStart(4, Y)];
+  const base4 = evidenceChain(events);
+  const baseState = recoverDelegation(null, base4).state.checkpoint;
+  const leaseRecords = chainOf([leaseEntryFor(activityOf(baseState, X)!.activityId)], 5, base4[3]!.digest);
+  const all5 = [...base4, ...leaseRecords];
+
+  it('a checkpoint plus the retained suffix equals the journal replayed from nothing: same IDs, same generation, same rows', () => {
+    const viaCheckpoint = recoverDelegation(encodeDelegationCheckpoint(baseState), all5);
+    const viaJournal = recoverDelegation(null, all5);
+    expect(viaCheckpoint.failure).toBeNull();
+    expect(withoutRevision(viaCheckpoint.state.checkpoint)).toBe(withoutRevision(viaJournal.state.checkpoint));
+    expect(viaCheckpoint.state.checkpoint.leases.map((l) => [l.leaseId, l.generation])).toEqual([['lease-1', 0]]);
+    expect(viaCheckpoint.state.checkpoint.activities.map((a) => a.activityId)).toEqual(baseState.activities.map((a) => a.activityId));
+    // Independently of the fold: X's ID is the derivation from the bare occurrence at 2, and Y's from its own SubagentStart at 4.
+    expect(activityOf(viaCheckpoint.state.checkpoint, X)!.activityId).toBe(deriveDelegationActivityId(keyOf(X), base4[1]!.journalId));
+    expect(activityOf(viaCheckpoint.state.checkpoint, Y)!.activityId).toBe(deriveDelegationActivityId(keyOf(Y), base4[3]!.journalId));
+    expect(activityOf(viaJournal.state.checkpoint, X)!.activityId).toBe(activityOf(viaCheckpoint.state.checkpoint, X)!.activityId);
+  });
+  it('replaying a record already covered, over a checkpoint that holds it, changes nothing', () => {
+    const full = recoverDelegation(null, all5).state.checkpoint;
+    const again = recoverDelegation(encodeDelegationCheckpoint(full), all5);
+    expect(withoutRevision(again.state.checkpoint)).toBe(withoutRevision(full));
+    expect(again.replayed).toBe(0);
+  });
+  it('the replayed state projects to exactly the rows the checkpoint stands for', () => {
+    const store = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-deleg-replay-'), 'coord.db')));
+    const cp = recoverDelegation(null, all5).state.checkpoint;
+    store.projectDelegationCheckpoint(cp);
+    expect(canonicalDelegationJson(store.readDelegationProjection())).toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(cp)));
+  });
+  it('a record out of the chain, or a second creation of the same lease, is refused by the fold', () => {
+    const dup = chainOf([leaseEntryFor(activityOf(baseState, X)!.activityId), leaseEntryFor(activityOf(baseState, X)!.activityId)], 5, base4[3]!.digest);
+    expect(recoverDelegation(null, [...base4, ...dup]).failure?.phase).toBe('suffix-replay');
+    const builder = DelegationCheckpointBuilder.from(emptyDelegationCheckpoint());
+    expect(failureCode(() => builder.foldRecord(base4[1]!))).toBe('fold-refused');
+  });
+});
+
+// ── lease-created: the journal alone creates leases ──────────────────────────────────────────────────────────────────
+
+describe('lease replay: first and last observation and the lineage opening come from the entry, never from replay time or acceptedAt', () => {
+  const events = [sessionStart(1), subagentStart(2, X)];
+  const base2 = evidenceChain(events);
+  const act = activityOf(recoverDelegation(null, base2).state.checkpoint, X)!;
+  const lease = chainOf([leaseEntryFor(act.activityId, { firstObservedAt: T(40) })], 3, base2[1]!.digest);
+  const cp = recoverDelegation(null, [...base2, ...lease]).state.checkpoint;
+
+  it('sets firstObservedAt, lastObservedAt and the lineage openedAt to the entry\'s firstObservedAt', () => {
+    expect(lease[0]!.acceptedAt).not.toBe(T(40));                      // acceptedAt is deliberately another instant
+    expect(cp.leases[0]).toMatchObject({ leaseId: 'lease-1', generation: 0, creatingJournalSequence: 3, currentJournalSequence: 3, firstObservedAt: T(40), lastObservedAt: T(40) });
+    expect(cp.lineage).toHaveLength(1);
+    expect(cp.lineage[0]).toMatchObject({ leaseId: 'lease-1', activityId: null, runId: null, openedAt: T(40), closedAt: null, parentId: PARENT, parentIncarnation: INC });
+    expect(cp.lineage[0]!.lineageId).toBe(deriveDelegationLineageId({ leaseId: 'lease-1', parentId: PARENT, parentIncarnation: INC, activityId: act.activityId }));
+  });
+  it('writes only the wave-3 constants: parentage linked, workspace unmeasured, ephemeral, not-due, every transition field null', () => {
+    expect(cp.leases[0]).toMatchObject({
+      parentageState: 'linked', workspaceState: 'unmeasured', disposition: 'ephemeral', cleanupState: 'not-due', cleanupPopulation: 'ephemeral-lease',
+      terminalEvidenceAt: null, adoptedAt: null, retainedAt: null, promotedAt: null, cleanupDueAt: null, cleanupStartedAt: null, cleanupFinishedAt: null,
+      cleanupEvidenceJson: null, carrierGenerationSeen: null, releasedAt: null,
+    });
+  });
+  it('holds the creating record and its correlation evidence, for the lease and for its open lineage', () => {
+    const evidenceId = base2[1]!.journalId;
+    const withEvidence = chainOf([leaseEntryFor(act.activityId, { correlationJournalIds: [evidenceId] })], 3, base2[1]!.digest);
+    const held = recoverDelegation(null, [...base2, ...withEvidence]).state.checkpoint.pruningHolds;
+    const reasons = (r: string) => held.filter((h) => h.reason === r).map((h) => h.journalId).sort();
+    expect(reasons('open-lease')).toEqual([evidenceId, withEvidence[0]!.journalId].sort());
+    expect(reasons('open-lineage')).toEqual([evidenceId, withEvidence[0]!.journalId].sort());
+  });
+  it('a checkpoint lease whose entry differs from the journal\'s in any identity column fails the proof', () => {
+    const goodBytes = encodeDelegationCheckpoint(cp);
+    expect(recoverDelegation(goodBytes, [...base2, ...lease]).failure).toBeNull();
+    for (const field of ['project', 'adminRecord', 'canonicalPath', 'sourceKind', 'creationBase', 'firstObservedAt'] as const) {
+      const changed: Record<string, unknown> = { project: 'project-z', adminRecord: 'wt-z', canonicalPath: '/work/z', sourceKind: 'workflow', creationBase: 'base-z', firstObservedAt: T(41) };
+      const tampered = { ...cp, leases: [{ ...cp.leases[0]!, [field]: changed[field], ...(field === 'firstObservedAt' ? { lastObservedAt: T(41) } : {}) }] };
+      const bad = field === 'firstObservedAt' ? { ...tampered, lineage: [{ ...cp.lineage[0]!, openedAt: T(41) }] } : tampered;
+      const report = recoverDelegation(encodeDelegationCheckpoint(bad), [...base2, ...lease]);
+      expect(report.failure?.phase, field).toMatch(/checkpoint-validate|final-validate/);
+      expect(report.state.phase).toBe('reconstructing');
+    }
+  });
+  it('a lease whose creatingJournalSequence names an evidence record, not a lease-created one, fails the proof', () => {
+    const moved = { ...cp, leases: [{ ...cp.leases[0]!, creatingJournalSequence: 2, currentJournalSequence: 2 }] };
+    const report = recoverDelegation(encodeDelegationCheckpoint(moved), [...base2, ...lease]);
+    expect(report.failure?.phase).toBe('final-validate');
+    expect(report.failure?.code).toBe('lease-proof');
+  });
+  it('a retained lease-created entry the checkpoint has applied but has no row for fails the proof', () => {
+    const without = { ...cp, leases: [], lineage: [] };
+    const report = recoverDelegation(encodeDelegationCheckpoint(without), [...base2, ...lease]);
+    expect(report.failure?.code).toBe('lease-proof');
+  });
+});
+
+// ── wave 5, PR5a (D-7809): the reader-only lease kinds ──────────────────────────────────────────────────────────────────
+
+/** A `lease-transition` entry as PR5b's and PR8's doors would journal it: every field present, the unused ones null. */
+function transitionEntry(over: Partial<Extract<DelegationJournalEntryV1, { kind: 'lease-transition' }>> & { generation: number; reason: string; to: string; at: string }): DelegationJournalEntryV1 {
+  return {
+    kind: 'lease-transition', leaseId: 'lease-1', expiresAt: null, terminalEvidenceAt: null, runId: null, promotedSession: null, auditEvidence: null,
+    lineageClose: null, lineageOpenRun: null, resolvesThrough: null, ...over,
+  } as DelegationJournalEntryV1;
+}
+const seenEntry = (generation: number, at: string, leaseId = 'lease-1'): DelegationJournalEntryV1 => ({ kind: 'lease-carrier-seen', leaseId, generation, at });
+const releasedEntry = (over: Partial<Extract<DelegationJournalEntryV1, { kind: 'lease-released' }>> & { generation: number }): DelegationJournalEntryV1 =>
+  ({ kind: 'lease-released', leaseId: 'lease-1', releaseReason: 'native-removed', at: T(90), lastHeadSha: null, resolvesThrough: null, ...over } as DelegationJournalEntryV1);
+const DAY_MS = 86_400_000;
+const plus7d = (at: string): string => formatDelegationInstant(Date.parse(at) + 7 * DAY_MS);
+
+describe('W5-J7: lease transitions replay through the one decision, and a bad one keeps recovery reconstructing', () => {
+  const events = [sessionStart(1), subagentStart(2, X)];
+  const base2 = evidenceChain(events);
+  const act = activityOf(recoverDelegation(null, base2).state.checkpoint, X)!;
+  const created = leaseEntryFor(act.activityId, { firstObservedAt: T(40) });
+  const transitions = [
+    transitionEntry({ generation: 1, reason: 'carrier', to: 'ephemeral', at: T(41) }),
+    transitionEntry({ generation: 2, reason: 'adopt', to: 'adopted', at: T(50), terminalEvidenceAt: T(45), expiresAt: plus7d(T(50)) }),
+    seenEntry(2, T(51)),
+    transitionEntry({ generation: 3, reason: 'retain', to: 'retained', at: T(60), expiresAt: plus7d(T(60)) }),
+  ];
+  // Built on first use, not at collection: a grammar that refuses a kind (mutants W5-JM11, W5-JM11b) reds these rows, not the file.
+  let built: { records: DelegationJournalRecordV1[]; all: DelegationJournalRecordV1[] } | null = null;
+  const fx = () => (built ??= (() => { const records = chainOf([created, ...transitions], 3, base2[1]!.digest); return { records, all: [...base2, ...records] }; })());
+
+  it('created, carrier, adopt, seen and retain recover to a retained lease at generation 3, seen at 2', () => {
+    const report = recoverDelegation(null, fx().all);
+    expect(report.failure).toBeNull();
+    expect(report.state.phase).toBe('ready');
+    const lease = report.state.checkpoint.leases[0]!;
+    expect(lease).toMatchObject({
+      leaseId: 'lease-1', generation: 3, disposition: 'retained', carrierGenerationSeen: 2, creatingJournalSequence: 3,
+      currentJournalSequence: fx().records[4]!.sequence, adoptedAt: T(50), terminalEvidenceAt: T(45), retainedAt: T(60), cleanupDueAt: plus7d(T(60)),
+      cleanupState: 'not-due', cleanupStartedAt: null, cleanupFinishedAt: null, cleanupEvidenceJson: null, releasedAt: null, lastObservedAt: T(40),
+    });
+    // The seen record moved neither the generation nor the current sequence (D-7851): the sequence names the retain.
+    expect(lease.currentJournalSequence).not.toBe(fx().records[3]!.sequence);
+    // Nothing left in a carrier row: the member is absent, so the checkpoint keeps wave 4's shape.
+    expect(report.state.checkpoint.leaseCarriers).toBeUndefined();
+    expect(Object.keys(report.state.checkpoint)).not.toContain('leaseCarriers');
+  });
+
+  it('D-7973: a replayed adopt adds retained-lineage to the parent row\'s effective basis and makes it effective; nothing removes it', () => {
+    const parentOf = (cp: DelegationCheckpointV1) => cp.sessions.find((s) => s.sessionId === PARENT && s.parentIncarnation === INC)!;
+    const beforeAdopt = recoverDelegation(null, fx().all.slice(0, 4)).state.checkpoint;          // through the carrier
+    expect(parentOf(beforeAdopt)).toMatchObject({ effective: false, effectiveBasis: [] });
+    const atAdopt = recoverDelegation(null, fx().all.slice(0, 5)).state.checkpoint;
+    expect(parentOf(atAdopt)).toMatchObject({ effective: true, effectiveBasis: ['retained-lineage'], explicitIntentAt: null });
+    // the later seen and retain leave it as it is
+    expect(parentOf(recoverDelegation(null, fx().all).state.checkpoint)).toMatchObject({ effective: true, effectiveBasis: ['retained-lineage'] });
+    // and it joins an existing basis in the vocabulary's order (the intent door's rule), the declaration kept
+    const declared = modelNs.declareCoordinatorIntent(recoverDelegation(null, fx().all.slice(0, 4)).state.checkpoint,
+      { action: 'set', sessionId: PARENT, parentIncarnation: INC, declaredAt: T(42) });
+    const report = recoverDelegation(encodeDelegationCheckpoint({ ...declared, revision: declared.revision + 1 }), fx().all);
+    expect(report.failure).toBeNull();
+    expect(parentOf(report.state.checkpoint)).toMatchObject({ effective: true, effectiveBasis: ['explicit', 'retained-lineage'], explicitIntentAt: T(42) });
+  });
+
+  it('the same journal recovered from a checkpoint covering part of it (observed, then folded) is the same checkpoint', () => {
+    const at4 = recoverDelegation(null, fx().all.slice(0, 5)).state.checkpoint;          // through the adopt
+    const report = recoverDelegation(encodeDelegationCheckpoint(at4), fx().all);
+    expect(report.failure).toBeNull();
+    expect(withoutRevision(report.state.checkpoint)).toBe(withoutRevision(recoverDelegation(null, fx().all).state.checkpoint));
+    const covered = recoverDelegation(encodeDelegationCheckpoint(recoverDelegation(null, fx().all).state.checkpoint), fx().all);
+    expect(covered.failure).toBeNull();
+  });
+
+  it('a transition whose generation skips one refuses recovery: the lane stays reconstructing', () => {
+    const skipping = chainOf([created, transitionEntry({ generation: 1, reason: 'carrier', to: 'ephemeral', at: T(41) }),
+      transitionEntry({ generation: 3, reason: 'adopt', to: 'adopted', at: T(50), expiresAt: plus7d(T(50)) })], 3, base2[1]!.digest);
+    const report = recoverDelegation(null, [...base2, ...skipping]);
+    expect(report.state.phase).toBe('reconstructing');
+    expect(report.failure).toMatchObject({ code: 'fold-refused' });
+    expect(report.failure?.detail).toMatch(/stale-generation/);
+  });
+
+  it('a transition naming an unknown lease refuses recovery', () => {
+    const unknown = chainOf([created, transitionEntry({ leaseId: 'lease-404', generation: 1, reason: 'carrier', to: 'ephemeral', at: T(41) })], 3, base2[1]!.digest);
+    const report = recoverDelegation(null, [...base2, ...unknown]);
+    expect(report.state.phase).toBe('reconstructing');
+    expect(report.failure?.detail).toMatch(/lease-unknown/);
+  });
+
+  it('a transition the table does not allow, or whose target contradicts the decision, refuses recovery', () => {
+    for (const bad of [
+      transitionEntry({ generation: 1, reason: 'promote', to: 'promoted', at: T(41), runId: 4 }),                  // promote from ephemeral
+      transitionEntry({ generation: 1, reason: 'carrier', to: 'adopted', at: T(41) }),                            // carrier goes to ephemeral
+      transitionEntry({ generation: 1, reason: 'adopt', to: 'adopted', at: T(41), terminalEvidenceAt: T(40) }),    // adopt without its expiry
+      // D-7968: adopt's terminal evidence is required, bounded by the first observation and the adoption, and adopt's alone.
+      transitionEntry({ generation: 1, reason: 'adopt', to: 'adopted', at: T(41), expiresAt: plus7d(T(41)) }),
+      transitionEntry({ generation: 1, reason: 'adopt', to: 'adopted', at: T(41), terminalEvidenceAt: T(42), expiresAt: plus7d(T(41)) }),
+      transitionEntry({ generation: 1, reason: 'adopt', to: 'adopted', at: T(41), terminalEvidenceAt: T(39), expiresAt: plus7d(T(41)) }),
+      transitionEntry({ generation: 1, reason: 'retain', to: 'retained', at: T(41), terminalEvidenceAt: T(40), expiresAt: plus7d(T(41)) }),
+    ]) {
+      const report = recoverDelegation(null, [...base2, ...chainOf([created, bad], 3, base2[1]!.digest)]);
+      expect(report.state.phase, JSON.stringify(bad)).toBe('reconstructing');
+      expect(report.failure?.code, JSON.stringify(bad)).toBe('fold-refused');
+    }
+    // and the same adopt with its evidence inside the bounds folds (the control)
+    const good = transitionEntry({ generation: 1, reason: 'adopt', to: 'adopted', at: T(41), terminalEvidenceAt: T(40), expiresAt: plus7d(T(41)) });
+    expect(recoverDelegation(null, [...base2, ...chainOf([created, good], 3, base2[1]!.digest)]).failure).toBeNull();
+  });
+
+  it('a checkpoint lease that lags its covered transition records fails the proof', () => {
+    const cp = recoverDelegation(null, fx().all).state.checkpoint;
+    const tampered = { ...cp, leases: [{ ...cp.leases[0]!, generation: 2, currentJournalSequence: fx().records[2]!.sequence, retainedAt: null, disposition: 'adopted' as const, cleanupDueAt: plus7d(T(50)) }] };
+    const report = recoverDelegation(encodeDelegationCheckpoint(tampered), fx().all);
+    expect(report.state.phase).toBe('reconstructing');
+    expect(report.failure?.code).toBe('lease-proof');
+  });
+});
+
+describe('W5-J7b: the PR5a build recovers a journal holding every lease kind and field a later writer journals', () => {
+  // Written by the rig's raw appender, as PR5b's doors and PR8's resolve would write them: an `attach` and a `foreign` release,
+  // each with `resolvesThrough` set, beside a transfer, its refusal, a promotion and a `transferred` release.
+  const events = [sessionStart(1), subagentStart(2, X), subagentStart(3, Y)];
+  const base3 = evidenceChain(events);
+  const cp0 = recoverDelegation(null, base3).state.checkpoint;
+  const actX = activityOf(cp0, X)!;
+  const actY = activityOf(cp0, Y)!;
+  const markA = { attemptedAt: T(70), attemptId: 'attempt-7' };
+  const markB = { attemptedAt: T(80), attemptId: 'attempt-9' };
+  const entries: DelegationJournalEntryV1[] = [
+    leaseEntryFor(actX.activityId, { leaseId: 'lease-1', firstObservedAt: T(40), sourceKind: 'raw' }),
+    leaseEntryFor(actY.activityId, { leaseId: 'lease-2', firstObservedAt: T(41), adminRecord: 'wt-2', canonicalPath: '/work/project-a/wt-2' }),
+    // lease-1: a raw lease, attached by the operator's resolve, then released foreign by a second resolve.
+    transitionEntry({ leaseId: 'lease-1', generation: 1, reason: 'carrier', to: 'ephemeral', at: T(42) }),
+    seenEntry(1, T(43), 'lease-1'),
+    transitionEntry({ leaseId: 'lease-1', generation: 2, reason: 'attach', to: 'retained', at: T(72), expiresAt: plus7d(T(72)), resolvesThrough: markA }),
+    releasedEntry({ leaseId: 'lease-1', generation: 3, releaseReason: 'foreign', at: T(82), lastHeadSha: 'a'.repeat(40), resolvesThrough: markB }),
+    // lease-2: adopted on its terminal evidence (D-7968), kept, a transfer refused, a second transfer promoted, then released transferred.
+    transitionEntry({ leaseId: 'lease-2', generation: 1, reason: 'carrier', to: 'ephemeral', at: T(44) }),
+    seenEntry(1, T(45), 'lease-2'),
+    transitionEntry({ leaseId: 'lease-2', generation: 2, reason: 'adopt', to: 'adopted', at: T(49), terminalEvidenceAt: T(46), expiresAt: plus7d(T(49)) }),
+    transitionEntry({ leaseId: 'lease-2', generation: 3, reason: 'operator-retain', to: 'retained', at: T(50), expiresAt: plus7d(T(50)) }),
+    transitionEntry({ leaseId: 'lease-2', generation: 4, reason: 'transfer', to: 'transferring', at: T(55), runId: 11 }),
+    transitionEntry({ leaseId: 'lease-2', generation: 5, reason: 'transfer-refused', to: 'retained', at: T(56), auditEvidence: 'dirty' }),
+    transitionEntry({ leaseId: 'lease-2', generation: 6, reason: 'transfer', to: 'transferring', at: T(57), runId: 12 }),
+    transitionEntry({ leaseId: 'lease-2', generation: 7, reason: 'promote', to: 'promoted', at: T(58), runId: 12, promotedSession: 'lane-a-demo-child',
+      auditEvidence: 'token-1', lineageClose: 'transfer', lineageOpenRun: 12 }),
+    releasedEntry({ leaseId: 'lease-2', generation: 8, releaseReason: 'transferred', at: T(95) }),
+  ];
+  // Built on first use, not at collection: a grammar that refuses a kind (mutants W5-JM11, W5-JM11b) reds these rows, not the file.
+  let built: { records: DelegationJournalRecordV1[]; all: DelegationJournalRecordV1[] } | null = null;
+  const fx = () => (built ??= (() => { const records = chainOf(entries, 4, base3[2]!.digest); return { records, all: [...base3, ...records] }; })());
+
+  it('recovers to ready and folds each kind: the carrier row\'s resolvedThrough and releaseReason read back', () => {
+    const report = recoverDelegation(null, fx().all);
+    expect(report.failure).toBeNull();
+    expect(report.state.phase).toBe('ready');
+    const cp = report.state.checkpoint;
+    const l1 = cp.leases.find((l) => l.leaseId === 'lease-1')!;
+    const l2 = cp.leases.find((l) => l.leaseId === 'lease-2')!;
+    expect(l1).toMatchObject({ generation: 3, disposition: 'retained', retainedAt: T(72), releasedAt: T(82), carrierGenerationSeen: 1 });
+    expect(l2).toMatchObject({ generation: 8, disposition: 'promoted', adoptedAt: T(49), terminalEvidenceAt: T(46), retainedAt: T(50), promotedAt: T(58),
+      releasedAt: T(95), carrierGenerationSeen: 1 });
+    expect(cp.leaseCarriers).toEqual([
+      { leaseId: 'lease-1', transferringSince: null, transferRun: null, promotedRun: null, promotedSession: null, releaseReason: 'foreign', resolvedThrough: markB },
+      { leaseId: 'lease-2', transferringSince: null, transferRun: null, promotedRun: 12, promotedSession: 'lane-a-demo-child', releaseReason: 'transferred', resolvedThrough: null },
+    ]);
+    // The lineage: lease-1's opening edge closed foreign at its release; lease-2's closed `transfer` at the promotion, and a
+    // run-owned edge for run 12 opened under the same parent.
+    const own = (leaseId: string) => cp.lineage.find((n) => n.leaseId === leaseId)!;
+    expect(own('lease-1')).toMatchObject({ closedAt: T(82), closeReason: 'foreign' });
+    expect(own('lease-2')).toMatchObject({ closedAt: T(58), closeReason: 'transfer' });
+    expect(cp.lineage.filter((n) => n.runId !== null)).toEqual([{
+      lineageId: modelNs.deriveDelegationRunLineageId({ leaseId: 'lease-2', parentId: PARENT, parentIncarnation: INC, runId: 12 }),
+      parentId: PARENT, parentIncarnation: INC, activityId: null, leaseId: null, runId: 12, openedAt: T(58), closedAt: null, closeReason: null,
+    }]);
+    // Released, so nothing of either lease is held any longer.
+    expect(cp.pruningHolds.filter((h) => h.reason === 'open-lease' || h.reason === 'open-lineage')).toEqual([]);
+  });
+
+  it('F5: the attach folds its resolvesThrough, read back before the release rebuilds the row', () => {
+    // created x2, lease-1's carrier, seen and attach: the prefix ends at the attach
+    const prefix = chainOf(entries.slice(0, 5), 4, base3[2]!.digest);
+    const report = recoverDelegation(null, [...base3, ...prefix]);
+    expect(report.failure).toBeNull();
+    expect(report.state.checkpoint.leaseCarriers).toEqual([
+      { leaseId: 'lease-1', transferringSince: null, transferRun: null, promotedRun: null, promotedSession: null, releaseReason: null, resolvedThrough: markA },
+    ]);
+    expect(report.state.checkpoint.leases.find((l) => l.leaseId === 'lease-1')).toMatchObject({ disposition: 'retained', generation: 2, releasedAt: null });
+  });
+
+  it('F5: resolvedThrough only rises: a later mark ordered below it leaves it where it was', () => {
+    const lower = { attemptedAt: T(60), attemptId: 'attempt-3' };
+    const sameInstantLower = { attemptedAt: T(70), attemptId: 'attempt-6' };
+    for (const mark of [lower, sameInstantLower]) {
+      const journal = chainOf([...entries.slice(0, 5),
+        releasedEntry({ leaseId: 'lease-1', generation: 3, releaseReason: 'foreign', at: T(82), resolvesThrough: mark })], 4, base3[2]!.digest);
+      const report = recoverDelegation(null, [...base3, ...journal]);
+      expect(report.failure, JSON.stringify(mark)).toBeNull();
+      expect(report.state.checkpoint.leaseCarriers?.[0], JSON.stringify(mark)).toMatchObject({ leaseId: 'lease-1', releaseReason: 'foreign', resolvedThrough: markA });
+    }
+  });
+
+  it('the grammar reads each lease kind\'s exact shape: a missing or extra key, or a word outside its vocabulary, is refused', () => {
+    const build = (entry: unknown) => () => buildDelegationJournalRecord({ sequence: 1, acceptedAt: T(1), previousDigest: null, entry: entry as DelegationJournalEntryV1 });
+    const t = transitionEntry({ generation: 1, reason: 'carrier', to: 'ephemeral', at: T(41) }) as unknown as Record<string, unknown>;
+    expect(build(t)).not.toThrow();
+    const { resolvesThrough: _r, ...missing } = t;
+    expect(failureCode(build(missing))).toBe('bad-field');
+    expect(failureCode(build({ ...t, extra: 1 }))).toBe('unknown-key');
+    expect(failureCode(build({ ...t, reason: 'repair' }))).toBe('bad-field');
+    expect(failureCode(build({ ...t, to: 'unknown' }))).toBe('bad-field');
+    expect(failureCode(build({ ...t, lineageClose: 'reaped' }))).toBe('bad-field');
+    expect(failureCode(build({ ...t, generation: 0 }))).toBe('bad-field');
+    expect(failureCode(build({ ...t, resolvesThrough: { attemptedAt: T(1) } }))).toBe('bad-field');
+    expect(failureCode(build(releasedEntry({ generation: 1, releaseReason: 'reaped' as never })))).toBe('bad-field');
+    expect(failureCode(build({ kind: 'lease-carrier-seen', leaseId: 'lease-1', generation: 1 }))).toBe('bad-field');
+  });
+
+  it('the checkpoint round-trips through its codec, and recovery from it over the same journal is ready and equal', () => {
+    const cp = recoverDelegation(null, fx().all).state.checkpoint;
+    expect(decodeDelegationCheckpoint(encodeDelegationCheckpoint(cp))).toEqual(cp);
+    const again = recoverDelegation(encodeDelegationCheckpoint(cp), fx().all);
+    expect(again.failure).toBeNull();
+    expect(withoutRevision(again.state.checkpoint)).toBe(withoutRevision(cp));
+  });
+
+  it('a released lease whose records a later compaction cut still recovers (it holds nothing, so its row stands alone)', () => {
+    const cp = recoverDelegation(null, fx().all).state.checkpoint;
+    // The checkpoint covers everything; keep only the anchor's record, as a compaction that cut every unheld record would.
+    const report = recoverDelegation(encodeDelegationCheckpoint(cp), fx().all.slice(-1));
+    expect(report.failure).toBeNull();
+    expect(report.state.phase).toBe('ready');
+  });
+
+  it('opens ready on the durable applier and projects the lease kinds to SQLite (no run row: lease-1 only)', async () => {
+    // The attach-and-foreign half, projected on its own (the whole journal, run-owned lineage included, is the D-7972 row below).
+    const head = chainOf(entries.slice(0, 6), 4, base3[2]!.digest);
+    const dir = mkTmp('ccrc-deleg-pr5a-');
+    writeFileSync(path.join(dir, DELEGATION_JOURNAL_FILE), bytesOf([...base3, ...head]));
+    const h = harness({ dir });
+    const dur = await h.open();
+    expect(dur.failure()).toBeNull();
+    expect(dur.state().phase).toBe('ready');
+    const lease = h.store.readDelegationProjection().leases.find((l) => l.leaseId === 'lease-1')!;
+    expect(lease).toMatchObject({ generation: 3, disposition: 'retained', releasedAt: T(82), retainedAt: T(72), cleanupDueAt: plus7d(T(72)) });
+    expect(h.store.readDelegationProjection().lineage.find((n) => n.leaseId === 'lease-1')).toMatchObject({ closeReason: 'foreign', closedAt: T(82) });
+    expect(dur.state().checkpoint.leaseCarriers?.[0]).toMatchObject({ leaseId: 'lease-1', releaseReason: 'foreign', resolvedThrough: markB });
+  });
+
+  it('D-7972: a run-owned lineage row whose run coord.db lacks is left out visibly, the rest projects, and it projects once the run is there', async () => {
+    const dir = mkTmp('ccrc-deleg-pr5a-run-');
+    writeFileSync(path.join(dir, DELEGATION_JOURNAL_FILE), bytesOf(fx().all));
+    const h = harness({ dir });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const repairFailures: string[] = [];
+      const dur = await h.open({ warn: (m) => repairFailures.push(m) });
+      expect(dur.failure()).toBeNull();
+      expect(dur.state().phase).toBe('ready');
+      const runRow = (cp: DelegationCheckpointV1) => cp.lineage.find((n) => n.runId === 12);
+      expect(runRow(dur.state().checkpoint)).toBeDefined();                     // authority keeps it
+      const sqlite = () => h.store.readDelegationProjection();
+      // the full projection (recovery's repair): every other row, both leases and their own lineage, the run-owned row left out
+      expect(sqlite().leases.map((l) => l.leaseId).sort()).toEqual(['lease-1', 'lease-2']);
+      expect(sqlite().lineage.filter((n) => n.leaseId !== null).map((n) => n.closeReason).sort()).toEqual(['foreign', 'transfer']);
+      expect(runRow(sqlite())).toBeUndefined();
+      const said = () => warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('D-7972'));
+      expect(said()).toHaveLength(1);
+      expect(said()[0]).toMatch(/^ccrc-server: delegation lineage \S+ names run 12, which coord\.db does not hold/);
+      expect(repairFailures).toEqual([]);                                          // never a failed repair, so never stale
+      // the delta arm: an application while the run is still absent goes to the full projection, which leaves it out again
+      const intent = (action: 'set' | 'clear', at: string) => (cp: DelegationCheckpointV1) =>
+        modelNs.declareCoordinatorIntent(cp, { action, sessionId: PARENT, parentIncarnation: INC, declaredAt: at });
+      expect((await dur.applyCheckpointChange(intent('set', T(96)))).projection).toEqual({ status: 'projected' });
+      expect(runRow(sqlite())).toBeUndefined();
+      expect(said()).toHaveLength(1);                                              // one line per run id per process
+      // the run row arrives; the next application projects the row
+      h.store.db.prepare('INSERT INTO programs (slug, title, createdAt, state) VALUES (?, ?, ?, ?)').run('demo', 'demo', Date.now(), 'active');
+      h.store.db.prepare('INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(12, 'demo', 1, 1, 'project-a', 'planned', 'lane-a-coordinator', Date.now());
+      expect((await dur.applyCheckpointChange(intent('clear', T(97)))).projection).toEqual({ status: 'projected' });
+      expect(runRow(sqlite())).toEqual(runRow(dur.state().checkpoint));
+      expect(repairFailures).toEqual([]);
+      // and from there on the delta holds it
+      expect((await dur.applyCheckpointChange(intent('set', T(98)))).projection).toEqual({ status: 'projected' });
+      expect(sqlite().lineage).toEqual(modelNs.projectionViewOfDelegationCheckpoint(dur.state().checkpoint as DelegationCheckpointV1).lineage);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+// ── the durable applier ──────────────────────────────────────────────────────────────────────────────────────────────
+
+interface Harness {
+  dir: string;
+  store: CoordStore;
+  log: string[];
+  clock: { ms: number };
+  uuids: string[];
+  uuidCalls: { n: number };
+  deps: (over?: Partial<DelegationDurabilityDeps>) => DelegationDurabilityDeps;
+  open: (over?: Partial<DelegationDurabilityDeps>) => Promise<DelegationDurability>;
+}
+
+/** Every applier a test opens, closed after the test so no descriptor is left to the garbage collector. */
+const opened: DelegationDurability[] = [];
+const track = (d: DelegationDurability): DelegationDurability => { opened.push(d); return d; };
+afterEach(async () => {
+  await Promise.all(opened.splice(0).map((d) => d.close().catch(() => undefined)));
+  const leaked = [...liveHandles];
+  liveHandles.clear();
+  expect(leaked, 'descriptors left open by the test').toEqual([]);
+});
+
+function harness(opts: { dir?: string; store?: CoordStore } = {}): Harness {
+  const dir = opts.dir ?? mkTmp('ccrc-deleg-dur-');
+  const store = opts.store ?? new CoordStore(openCoordDb(path.join(dir, 'coord.db')));
+  const log: string[] = [];
+  const clock = { ms: Date.UTC(2026, 9, 15) };
+  const uuids = ['5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f', '6c1e0eaf-7e4d-4e3f-8a8b-1b2c3d4e5f60', '7d2f1fb0-8f5e-4f40-9b9c-2c3d4e5f6071'];
+  const uuidCalls = { n: 0 };
+  const real = delegationProjectionPortOfStore(store);
+  const projection: DelegationProjectionPort = {
+    project: (cp) => { log.push('project'); real.project(cp); },
+    projectChanged: (prior, next) => { log.push('projectChanged'); return real.projectChanged(prior, next); },
+    insertEvents: (rows) => { log.push(`insertEvents:${rows.length}`); return real.insertEvents(rows); },
+    eventStats: () => real.eventStats(),
+    countEventsAtOrBelow: (s) => real.countEventsAtOrBelow(s),
+    deleteEventsBetween: (a, b, n) => real.deleteEventsBetween(a, b, n),
+  };
+  const deps = (over: Partial<DelegationDurabilityDeps> = {}): DelegationDurabilityDeps => ({
+    dir, projection, port: spyPort(log), now: () => clock.ms, randomUUID: () => { uuidCalls.n++; return uuids.shift() ?? `generated-${uuidCalls.n}`; }, ...over,
+  });
+  return { dir, store, log, clock, uuids, uuidCalls, deps, open: async (over) => track(await DelegationDurability.open(deps(over))) };
+}
+
+const batch = (events: readonly DelegationEventEnvelopeV1[], extra: { cursor?: Parameters<DelegationDurability['applyAccepted']>[0]['cursor']; interval?: Parameters<DelegationDurability['applyAccepted']>[0]['interval'] } = {}) =>
+  ({ accepted: events.map((event) => ({ event })), cursor: extra.cursor ?? null, interval: extra.interval ?? null });
+const cursorFor = (bucket: string, cursor: number) => ({ sessionId: PARENT, parentIncarnation: INC, bucket, cursor, lastSize: cursor, lastCompleteAt: T(9), intervalState: 'measured' as const, detail: null, anchor: cursor > 0 ? { start: 0, sha256: 'a'.repeat(64) } : null, replaced: false });
+const intervalFor = (utcHour: string, state: 'measured' | 'unmeasured', recordedAt: string) => ({ sessionId: PARENT, parentIncarnation: INC, utcHour, state, detail: null, recordedAt });
+const readDisk = (dir: string): { journal: Buffer | null; checkpoint: Buffer | null } => ({
+  journal: existsSync(path.join(dir, DELEGATION_JOURNAL_FILE)) ? readFileSync(path.join(dir, DELEGATION_JOURNAL_FILE)) : null,
+  checkpoint: existsSync(path.join(dir, DELEGATION_CHECKPOINT_FILE)) ? readFileSync(path.join(dir, DELEGATION_CHECKPOINT_FILE)) : null,
+});
+
+describe('the durable applier: O5 ordering, the entry point Task 9 calls', () => {
+  it('opens on an empty directory ready, writes nothing, and enables pruning', async () => {
+    const h = harness();
+    const dur = await h.open();
+    expect(dur.failure()).toBeNull();
+    expect(dur.state().phase).toBe('ready');
+    expect(dur.pruningEnabled()).toBe(true);
+    expect(readDisk(h.dir)).toEqual({ journal: null, checkpoint: null });
+    expect(h.log).toEqual(['project']);                      // the (empty) projection is made at open
+  });
+
+  it('applies a batch in O5 order: append, fsync, (build), temp write, temp fsync, rename, directory fsync, and only then SQLite', async () => {
+    const h = harness();
+    const dur = await h.open();
+    h.log.length = 0;
+    const edges: string[] = [];
+    const out = await h.open({ onEdge: (edge, when) => { edges.push(`${edge}:${when}`); } }).then(async (d) => {
+      h.log.length = 0;
+      edges.length = 0;
+      return d.applyAccepted(batch([sessionStart(1)]));
+    });
+    expect(h.log).toEqual([
+      expect.stringMatching(/^journal\.write:\d+:10$/), 'journal.sync', 'dir.sync',                        // the new journal's entry is made durable once
+      expect.stringMatching(/^checkpoint\.write:\d+:10$/), 'checkpoint.sync', 'rename:delegation-checkpoint.json.tmp->delegation-checkpoint.json', 'dir.sync',
+      'projectChanged', 'insertEvents:1',
+    ]);
+    expect(edges).toEqual(DELEGATION_DURABILITY_EDGES.flatMap((e) => [`${e}:before`, `${e}:after`]));
+    expect(out.durable).toBe(true);
+    expect(out.projection.status).toBe('projected');
+    expect(dur.state().phase).toBe('ready');
+    expect(existsSync(path.join(h.dir, `${DELEGATION_CHECKPOINT_FILE}.tmp`))).toBe(false);          // the temp file was renamed away
+  });
+
+  it('writes records and a checkpoint that recovery reads back to the same state', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1), bareTool(2, X), subagentStart(3, X)], { cursor: cursorFor('2026101400', 300), interval: intervalFor('2026101400', 'measured', T(3)) }));
+    const disk = readDisk(h.dir);
+    const records = parseDelegationJournal(new Uint8Array(disk.journal!), { completeFromStart: true });
+    expect(records.map((r) => r.sequence)).toEqual([1, 2, 3]);
+    expect(records.every((r) => r.acceptedAt === formatDelegationInstant(h.clock.ms))).toBe(true);      // the INJECTED clock stamped them
+    const cp = decodeDelegationCheckpoint(new Uint8Array(disk.checkpoint!));
+    expect(cp).toEqual(dur.state().checkpoint);
+    expect(cp.revision).toBe(1);
+    expect(cp.bucketCursors).toHaveLength(1);
+    expect(cp.observationIntervals).toHaveLength(1);
+    const fresh = await harness({ dir: h.dir }).open();
+    expect(fresh.state().checkpoint).toEqual(cp);
+  });
+
+  it('a duplicate evidence eventId is not appended again, in the same batch or a later one', async () => {
+    const h = harness();
+    const dur = await h.open();
+    const first = await dur.applyAccepted(batch([sessionStart(1), sessionStart(1), sessionStart(2)]));
+    expect(first.appended.map((r) => r.sequence)).toEqual([1, 2]);
+    expect(first.skipped).toEqual([{ index: 1, reason: 'duplicate-event' }]);
+    const again = await dur.applyAccepted(batch([sessionStart(2)]));
+    expect(again.appended).toEqual([]);
+    expect(again.durable).toBe(false);
+    expect(parseDelegationJournal(new Uint8Array(readDisk(h.dir).journal!)).length).toBe(2);
+  });
+
+  it('a re-read of bytes that were journaled before their cursor advanced appends nothing and still advances the cursor', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)]));
+    const out = await dur.applyAccepted(batch([sessionStart(1)], { cursor: cursorFor('2026101400', 100) }));
+    expect(out.appended).toEqual([]);
+    expect(out.durable).toBe(true);                                // a checkpoint-only replacement: the cursor moved
+    expect(dur.state().checkpoint.revision).toBe(2);
+    expect(dur.state().checkpoint.appliedJournalSequence).toBe(1);     // no journal sequence was invented
+    expect(dur.state().checkpoint.bucketCursors).toHaveLength(1);
+  });
+
+  it('an application that changes nothing writes nothing and keeps the revision', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)], { cursor: cursorFor('2026101400', 100) }));
+    h.log.length = 0;
+    const out = await dur.applyAccepted(batch([], { cursor: cursorFor('2026101400', 100) }));
+    expect(out.durable).toBe(false);
+    expect(h.log).toEqual([]);
+    expect(dur.state().checkpoint.revision).toBe(1);
+  });
+
+  it('an unmeasured hour stays unmeasured when a later read of it is measured', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([], { interval: intervalFor('2026101400', 'unmeasured', T(5)) }));
+    await dur.applyAccepted(batch([], { interval: intervalFor('2026101400', 'measured', T(9)) }));
+    expect(dur.state().checkpoint.observationIntervals.map((i) => i.state)).toEqual(['unmeasured']);
+  });
+
+  it('projects ONCE per application and inserts the batch\'s events in ONE call', async () => {
+    const h = harness();
+    const dur = await h.open();
+    h.log.length = 0;
+    await dur.applyAccepted(batch([sessionStart(1), sessionStart(2), sessionStart(3), sessionStart(4)]));
+    expect(h.log.filter((l) => l === 'project' || l === 'projectChanged'), 'one projection of either kind, and on the flush it is the delta').toEqual(['projectChanged']);
+    expect(h.log.filter((l) => l.startsWith('insertEvents'))).toEqual(['insertEvents:4']);
+    expect(h.log.indexOf('projectChanged')).toBeGreaterThan(h.log.lastIndexOf('dir.sync'));
+  });
+
+  it('rejects a cursor that recovery could not read, before anything is written', async () => {
+    const h = harness();
+    const dur = await h.open();
+    h.log.length = 0;
+    await expect(dur.applyAccepted(batch([sessionStart(1)], { cursor: { ...cursorFor('b', 1), lastCompleteAt: 'yesterday' } }))).rejects.toThrow();
+    expect(h.log).toEqual([]);
+    expect(readDisk(h.dir)).toEqual({ journal: null, checkpoint: null });
+    expect(dur.failure()).toBeNull();                                  // a refusal before step 1 is not a failed application
+    await dur.applyAccepted(batch([sessionStart(1)]));
+  });
+
+  it('a checkpoint-only change whose rows recovery could not read is refused before anything is written', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)]));
+    const before = readDisk(h.dir);
+    h.log.length = 0;
+    await expect(dur.applyCheckpointChange((cp) => ({ ...cp, bucketCursors: [{ ...cursorFor('b', 1), lastCompleteAt: 'yesterday' }] }))).rejects.toMatchObject({ code: 'bad-shape' });
+    await expect(dur.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: [{ ...intervalFor('h', 'measured', T(1)), state: 'maybe' as 'measured' }] }))).rejects.toMatchObject({ code: 'bad-shape' });
+    expect(h.log).toEqual([]);
+    expect(readDisk(h.dir)).toEqual(before);
+    expect(dur.failure()).toBeNull();
+  });
+
+  it('keeps applications serialized: concurrent calls get contiguous sequences and a single chain', async () => {
+    const h = harness();
+    const dur = await h.open();
+    const outs = await Promise.all([1, 2, 3, 4, 5, 6].map((n) => dur.applyAccepted(batch([sessionStart(n)]))));
+    expect(outs.map((o) => o.appended[0]!.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(() => parseDelegationJournal(new Uint8Array(readDisk(h.dir).journal!), { completeFromStart: true })).not.toThrow();
+    expect(dur.state().checkpoint.revision).toBe(6);
+  });
+});
+
+// ── the fault matrix (W3-M15) ────────────────────────────────────────────────────────────────────────────────────────
+
+class SimulatedCrash extends Error {}
+
+/** Copies a directory, optionally reverting what a power loss would lose: a journal tail that was never fsynced and a rename
+ *  whose directory entry was never fsynced. */
+function copyDisk(from: string, opts: { journalSyncedSize?: number; checkpointBytes?: Buffer | null }): string {
+  const to = mkTmp('ccrc-deleg-crash-');
+  for (const f of readdirSync(from)) if (f === DELEGATION_JOURNAL_FILE || f === DELEGATION_CHECKPOINT_FILE) cpSync(path.join(from, f), path.join(to, f));
+  if (opts.journalSyncedSize !== undefined && existsSync(path.join(to, DELEGATION_JOURNAL_FILE))) truncateSync(path.join(to, DELEGATION_JOURNAL_FILE), opts.journalSyncedSize);
+  if (opts.checkpointBytes !== undefined) {
+    if (opts.checkpointBytes === null) { try { writeFileSync(path.join(to, DELEGATION_CHECKPOINT_FILE), ''); } catch { /* none */ } }
+    else writeFileSync(path.join(to, DELEGATION_CHECKPOINT_FILE), opts.checkpointBytes);
+  }
+  return to;
+}
+
+// THE TWO DISK MODELS, AND THE THIRD OUTCOME. Each crash below is recovered under a process crash (every issued write survives) and a
+// power loss (only fsynced bytes survive). Both models treat an unfsynced journal tail as vanishing WHOLE, which is the clean case.
+// A real power loss in the middle of an append can instead leave a PARTIAL last record, and that is the honest third result: not the
+// old state and not the new one but a torn tail. Under D-4655 (the operator's ruling of 2026-10-15) a torn tail HEALS ITSELF: it is
+// healable when every complete record validates with an intact chain and the checkpoint names a complete record or none, and then
+// recovery cuts it off (keeping the bytes) so the next pass re-mints what it held; anything else is corruption and stays a recovery
+// FAILURE. It is pinned by "every position of a torn tail on disk" and "a torn journal tail the checkpoint names" below and by the
+// D-4655 describe; this matrix is the "old or new" half of the guarantee, and those rows are the third.
+describe('O5 fault matrix (W3-M15): a crash injected at EVERY edge, before and after, leaves the old state or the new one', () => {
+  const EDGES = DELEGATION_DURABILITY_EDGES.filter((e) => e !== 'project');
+  /** After these (edge, when) pairs the checkpoint replacement has completed in the process-crash model. */
+  const checkpointDurable = (edge: DelegationDurabilityEdge, when: 'before' | 'after'): boolean =>
+    edge === 'project' || (edge === 'directory-fsync' && when === 'after');
+  /** After these pairs the journal record is in the file (process-crash model). */
+  const journalWritten = (edge: DelegationDurabilityEdge, when: 'before' | 'after'): boolean =>
+    !(edge === 'journal-write' && when === 'before');
+  /** After these pairs the journal record has been fsynced (the power-loss model keeps only that much). */
+  const journalSynced = (edge: DelegationDurabilityEdge, when: 'before' | 'after'): boolean =>
+    !(edge === 'journal-write' || (edge === 'journal-fsync' && when === 'before'));
+
+  const rowsOf = (cp: DelegationCheckpointV1): string => withoutRevision({ ...cp, pruningHolds: [] });
+  /** The old state (X named, no join) and the new one (X's join applied), from an uncrashed run on the same injected clock. */
+  let referenceRows: Promise<{ oldRows: string; newRows: string }> | null = null;
+  const reference = (): Promise<{ oldRows: string; newRows: string }> => (referenceRows ??= (async () => {
+    const dur = await harness().open();
+    await dur.applyAccepted(batch([sessionStart(1), bareTool(2, X)]));
+    const oldRows = rowsOf(dur.state().checkpoint);
+    await dur.applyAccepted(batch([subagentStart(3, X)]));
+    return { oldRows, newRows: rowsOf(dur.state().checkpoint) };
+  })());
+
+  /** The application under test: X's join, alone, or carrying the bucket cursor and the observation interval a Task 9 batch carries. */
+  const joinBatch = (withBucket: boolean) => batch([subagentStart(3, X)], withBucket
+    ? { cursor: cursorFor('2026101400', 300), interval: intervalFor('2026101400', 'measured', T(3)) } : {});
+
+  async function crashRun(edge: DelegationDurabilityEdge, when: 'before' | 'after', withBucket = false) {
+    const h = harness();
+    // Old state: X's bare occurrence is journaled and checkpointed. The application under test is X's join, which opens the activity.
+    const old = await h.open();
+    await old.applyAccepted(batch([sessionStart(1), bareTool(2, X)]));
+    const oldDisk = readDisk(h.dir);
+    await old.close();
+
+    const store2 = new CoordStore(openCoordDb(path.join(h.dir, 'coord.db')));
+    const h2 = harness({ dir: h.dir, store: store2 });
+    let hits = 0;
+    const crashing = await h2.open({ onEdge: (e, w) => { if (e === edge && w === when) { hits++; throw new SimulatedCrash(`${edge}:${when}`); } } });
+    h2.log.length = 0;
+    const idsExposed: string[] = [];
+    await expect(crashing.applyAccepted(joinBatch(withBucket)).then((o) => { idsExposed.push(...o.openedActivities.map((a) => a.activityId)); return o; })).rejects.toThrow(SimulatedCrash);
+    expect(hits).toBe(1);
+    expect(idsExposed).toEqual([]);                                  // no ID escaped
+    // The crashed applier is poisoned: reconstructing, pruning off, and it refuses everything until it re-recovers.
+    expect(crashing.state().phase).toBe('reconstructing');
+    expect(crashing.pruningEnabled()).toBe(false);
+    // Nothing of the failed application is visible in the applier's own state either: the activity the join would have opened
+    // is not there (O1: an ID is not exposed before the checkpoint replacement completed).
+    expect(crashing.state().checkpoint.activities).toEqual([]);
+    expect(crashing.state().checkpoint.appliedJournalSequence).toBe(2);
+    await expect(crashing.applyAccepted(batch([sessionStart(9)]))).rejects.toMatchObject({ code: 'not-ready' });
+    return { h2, oldDisk, projectionLog: [...h2.log] };
+  }
+
+  for (const edge of EDGES) {
+    for (const when of ['before', 'after'] as const) {
+      it(`crash ${when} ${edge}`, async () => {
+        const { oldRows, newRows } = await reference();
+        const { h2, oldDisk } = await crashRun(edge, when);
+        // Process crash: every issued write is on disk. Power loss: only what was fsynced is (a journal tail never fsynced is lost,
+        // and a rename whose directory entry was never fsynced is lost).
+        const powerDisk = copyDisk(h2.dir, {
+          journalSyncedSize: journalSynced(edge, when) ? undefined : oldDisk.journal!.length,
+          checkpointBytes: checkpointDurable(edge, when) ? undefined : oldDisk.checkpoint,
+        });
+        for (const [variant, source] of [['process crash', h2.dir], ['power loss', powerDisk]] as const) {
+          const dir = copyDisk(source, {});
+          const fresh = await harness({ dir }).open();
+          expect(fresh.failure(), `${variant}: ${JSON.stringify(fresh.failure())}`).toBeNull();
+          const got = rowsOf(fresh.state().checkpoint);
+          // Whatever disk survived, the answer is the old state or the new one: never a third.
+          expect([oldRows, newRows], `${variant} recovered a third state`).toContain(got);
+          if (variant === 'process crash') {
+            expect(got, `${variant} at ${when} ${edge}`).toBe(journalWritten(edge, when) || checkpointDurable(edge, when) ? newRows : oldRows);
+          } else {
+            expect(got, `${variant} at ${when} ${edge}`).toBe(journalSynced(edge, when) ? newRows : oldRows);
+          }
+          // The journal is never BEHIND the checkpoint: the applied position names a retained record.
+          const records = parseDelegationJournal(new Uint8Array(readDisk(dir).journal ?? Buffer.alloc(0)), {});
+          expect(records.length).toBeGreaterThanOrEqual(fresh.state().checkpoint.appliedJournalSequence);
+          // Recovery SAVES what it replayed, through the same atomic replacement: the file on disk is the recovered state.
+          if (fresh.state().checkpoint.appliedJournalSequence > 0) {
+            expect(decodeDelegationCheckpoint(new Uint8Array(readDisk(dir).checkpoint!)), `${variant}: the recovered state was not saved`).toEqual(fresh.state().checkpoint);
+          }
+          // And what recovery saves is what the next recovery reads.
+          const again = await harness({ dir }).open();
+          expect(rowsOf(again.state().checkpoint)).toBe(got);
+        }
+      });
+    }
+  }
+
+  it('SQLite is untouched at every edge before the directory fsync completes', async () => {
+    for (const edge of EDGES) {
+      for (const when of ['before', 'after'] as const) {
+        if (checkpointDurable(edge, when)) continue;
+        const { projectionLog } = await crashRun(edge, when);
+        expect(projectionLog.filter((l) => l === 'project' || l === 'projectChanged' || l.startsWith('insertEvents')), `${when} ${edge}`).toEqual([]);
+      }
+    }
+  });
+
+  describe('a batch that carries a cursor and an interval, as Task 9\'s batches will (fix round 1, M4)', () => {
+    // The checkpoint-owned cursor and interval are NOT in the journal, so a crash that leaves the journal ahead of the checkpoint
+    // recovers the NEW ROWS with the OLD cursor and interval: a legitimate fourth state, REPLAYED. It converges: the bucket is
+    // re-read, its event is a duplicate (nothing appended), and the cursor-only application brings the state to FULL.
+    let fullRows: Promise<string> | null = null;
+    const full = (): Promise<string> => (fullRows ??= (async () => {
+      const dur = await harness().open();
+      await dur.applyAccepted(batch([sessionStart(1), bareTool(2, X)]));
+      await dur.applyAccepted(joinBatch(true));
+      return rowsOf(dur.state().checkpoint);
+    })());
+    /** Process-crash model: the rename has happened. */
+    const renamed = (edge: DelegationDurabilityEdge, when: 'before' | 'after'): boolean =>
+      edge === 'directory-fsync' || (edge === 'checkpoint-rename' && when === 'after');
+
+    for (const edge of EDGES) {
+      for (const when of ['before', 'after'] as const) {
+        it(`crash ${when} ${edge}: old rows, new rows with the old bucket state, or everything, and a re-read converges`, async () => {
+          const { oldRows, newRows: replayedRows } = await reference();
+          const fullRowsNow = await full();
+          // Independently of the code that built it: the FULL state carries exactly this cursor and this interval.
+          const fullState = JSON.parse(fullRowsNow) as { bucketCursors: unknown; observationIntervals: unknown };
+          expect(fullState.bucketCursors).toEqual([cursorFor('2026101400', 300)]);
+          expect(fullState.observationIntervals).toEqual([intervalFor('2026101400', 'measured', T(3))]);
+          const { h2, oldDisk } = await crashRun(edge, when, true);
+          const powerDisk = copyDisk(h2.dir, {
+            journalSyncedSize: journalSynced(edge, when) ? undefined : oldDisk.journal!.length,
+            checkpointBytes: checkpointDurable(edge, when) ? undefined : oldDisk.checkpoint,
+          });
+          const expectations = [
+            ['process crash', h2.dir, renamed(edge, when) ? 'full' : journalWritten(edge, when) ? 'replayed' : 'old'],
+            ['power loss', powerDisk, checkpointDurable(edge, when) ? 'full' : journalSynced(edge, when) ? 'replayed' : 'old'],
+          ] as const;
+          for (const [variant, source, expected] of expectations) {
+            const dir = copyDisk(source, {});
+            const fresh = await harness({ dir }).open();
+            expect(fresh.failure(), `${variant}: ${JSON.stringify(fresh.failure())}`).toBeNull();
+            const got = rowsOf(fresh.state().checkpoint);
+            const byName = { old: oldRows, replayed: replayedRows, full: fullRowsNow };
+            expect(got, `${variant} at ${when} ${edge}: expected the ${expected} state`).toBe(byName[expected]);
+            if (expected === 'replayed') {
+              expect(fresh.state().checkpoint.bucketCursors, 'the journal carries no cursor').toEqual([]);
+              expect(fresh.state().checkpoint.observationIntervals).toEqual([]);
+            }
+            // The bucket is re-read: whichever state recovery reached, the same batch converges on the full one.
+            const reread = await fresh.applyAccepted(joinBatch(true));
+            expect(reread.appended.length, `${variant}: the re-read appends only what the journal lacks`).toBe(expected === 'old' ? 1 : 0);
+            expect(rowsOf(fresh.state().checkpoint), `${variant}: the re-read did not converge`).toBe(fullRowsNow);
+          }
+        });
+      }
+    }
+  });
+
+  describe('createLease: a crash before the checkpoint replacement exposes neither the UUID nor the ID mapping (fix round 1, M4; brief Step 3)', () => {
+    const UUID0 = '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f';
+    const renamedAt = (edge: DelegationDurabilityEdge, when: 'before' | 'after'): boolean =>
+      edge === 'directory-fsync' || (edge === 'checkpoint-rename' && when === 'after');
+
+    for (const edge of EDGES) {
+      for (const when of ['before', 'after'] as const) {
+        it(`crash ${when} ${edge}`, async () => {
+          const h = harness();
+          let crashAt: { edge: DelegationDurabilityEdge; when: 'before' | 'after' } | null = null;
+          const dur = await h.open({ onEdge: (e, w) => { if (crashAt !== null && e === crashAt.edge && w === crashAt.when) throw new SimulatedCrash(`${e}:${w}`); } });
+          const built = await dur.applyAccepted(batch([sessionStart(1), bareTool(2, X), subagentStart(3, X)]));
+          const act = built.openedActivities[0]!;
+          const oldDisk = readDisk(h.dir);
+          const lineageId = deriveDelegationLineageId({ leaseId: UUID0, parentId: PARENT, parentIncarnation: INC, activityId: act.activityId });
+          h.log.length = 0;
+          crashAt = { edge, when };
+          const returned: unknown[] = [];
+          const request: DelegationLeaseCreationRequest = {
+            activityId: act.activityId, parentId: PARENT, parentIncarnation: INC, project: 'project-a', adminRecord: 'wt-1', canonicalPath: '/work/project-a/wt-1',
+            creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: T(40),
+          };
+          await expect(dur.createLease(request).then((o) => { returned.push(o); return o; })).rejects.toThrow(SimulatedCrash);
+          expect(returned, 'no lease ID was handed back').toEqual([]);
+          expect(h.uuidCalls.n, 'the UUID was minted once, after deduplication').toBe(1);
+          // The UUID and the lineage mapping are in none of the applier's views...
+          const seenInState = JSON.stringify(dur.state().checkpoint);
+          expect(seenInState).not.toContain(UUID0);
+          expect(seenInState).not.toContain(lineageId);
+          expect(dur.state().checkpoint.leases).toEqual([]);
+          expect(dur.state().checkpoint.lineage).toEqual([]);
+          // ...not in SQLite (nothing was projected before the directory fsync)...
+          expect(h.log.filter((l) => l === 'project' || l === 'projectChanged' || l.startsWith('insertEvents'))).toEqual([]);
+          expect(h.store.readDelegationProjection().leases).toEqual([]);
+          expect(h.store.readDelegationProjection().lineage).toEqual([]);
+          // ...and not in the checkpoint file unless the rename completed (the journal MAY hold the entry: it is authority, not exposure).
+          const onDisk = readDisk(h.dir).checkpoint!.toString('utf8');
+          expect(onDisk.includes(UUID0), 'the checkpoint file on disk').toBe(renamedAt(edge, when));
+          expect(onDisk.includes(lineageId)).toBe(renamedAt(edge, when));
+          expect(decodeDelegationCheckpoint(new Uint8Array(oldDisk.checkpoint!)).leases).toEqual([]);
+          // Recovery under both disk models: the lease exists only if its journal entry survived, and then with the SAME UUID and lineage.
+          const journalHasIt = !(edge === 'journal-write' && when === 'before');
+          const powerDisk = copyDisk(h.dir, {
+            journalSyncedSize: journalSynced(edge, when) ? undefined : oldDisk.journal!.length,
+            checkpointBytes: checkpointDurable(edge, when) ? undefined : oldDisk.checkpoint,
+          });
+          for (const [variant, source, hasLease] of [['process crash', h.dir, journalHasIt], ['power loss', powerDisk, journalSynced(edge, when)]] as const) {
+            const fresh = await harness({ dir: copyDisk(source, {}) }).open();
+            expect(fresh.failure(), variant).toBeNull();
+            const leases = fresh.state().checkpoint.leases;
+            expect(leases.map((l) => l.leaseId), `${variant} at ${when} ${edge}`).toEqual(hasLease ? [UUID0] : []);
+            expect(fresh.state().checkpoint.lineage.map((n) => n.lineageId)).toEqual(hasLease ? [lineageId] : []);
+          }
+        });
+      }
+    }
+  });
+
+  it('a crash at the project edge leaves the checkpoint durable and SQLite stale; the next start repairs it', async () => {
+    const h = harness();
+    const dur = await h.open({ onEdge: (e, w) => { if (e === 'project' && w === 'before') throw new SimulatedCrash('project'); } });
+    const out = await dur.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    // The projection edge never throws out of the applier: SQLite is repairable output.
+    expect(out.durable).toBe(true);
+    expect(out.projection.status).toBe('failed');
+    expect(dur.state().phase).toBe('ready');
+    expect(h.store.readDelegationProjection().sessions).toEqual([]);
+    const fresh = await harness({ dir: h.dir, store: h.store }).open();
+    expect(h.store.readDelegationProjection().sessions).toHaveLength(1);
+    expect(fresh.failure()).toBeNull();
+  });
+
+  it('the stale projection is also repaired by the NEXT application, with the missed events replayed from the journal', async () => {
+    const h = harness();
+    let fail = true;
+    const dur = await h.open({ onEdge: (e, w) => { if (fail && e === 'project' && w === 'before') throw new SimulatedCrash('project'); } });
+    await dur.applyAccepted(batch([sessionStart(1), sessionStart(2)]));
+    fail = false;
+    const out = await dur.applyAccepted(batch([sessionStart(3)]));
+    expect(out.projection.status).toBe('projected');
+    expect(delegationProjectionPortOfStore(h.store).eventStats()).toEqual({ count: 3, maxSequence: 3 });
+  });
+
+  it('a crash between two records of one batch leaves the journal with a prefix, and recovery replays that prefix', async () => {
+    const h = harness();
+    let writes = 0;
+    const crashing = await h.open({ onEdge: (e, w) => { if (e === 'journal-fsync' && w === 'after' && ++writes === 1) throw new SimulatedCrash('mid-batch'); } });
+    await expect(crashing.applyAccepted(batch([sessionStart(1), sessionStart(2), sessionStart(3)]))).rejects.toThrow(SimulatedCrash);
+    expect(parseDelegationJournal(new Uint8Array(readDisk(h.dir).journal!)).map((r) => r.sequence)).toEqual([1]);
+    expect(readDisk(h.dir).checkpoint).toBeNull();
+    const fresh = await harness({ dir: h.dir }).open();
+    expect(fresh.state().checkpoint.appliedJournalSequence).toBe(1);
+    expect(fresh.state().checkpoint.sessions).toHaveLength(1);
+    // The batch is then re-read: the journaled record is a duplicate, the other two are appended.
+    const redo = await fresh.applyAccepted(batch([sessionStart(1), sessionStart(2), sessionStart(3)]));
+    expect(redo.appended.map((r) => r.sequence)).toEqual([2, 3]);
+  });
+
+  it('a stale checkpoint temp file from a crash is ignored, and the next application replaces it', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)]));
+    writeFileSync(path.join(h.dir, `${DELEGATION_CHECKPOINT_FILE}.tmp`), 'garbage that is not a checkpoint');
+    const fresh = await harness({ dir: h.dir }).open();
+    expect(fresh.failure()).toBeNull();
+    await fresh.applyAccepted(batch([sessionStart(2)]));
+    expect(existsSync(path.join(h.dir, `${DELEGATION_CHECKPOINT_FILE}.tmp`))).toBe(false);
+  });
+
+  it('every position of a torn tail on disk is a HEALABLE recovery when no checkpoint names it (D-4655): ready, a plan for the tail, the disk untouched', async () => {
+    const [r1, r2] = evidenceChain([sessionStart(1), sessionStart(2)]);
+    const first = Buffer.from(encodeDelegationJournalRecord(r1!));
+    const second = Buffer.from(encodeDelegationJournalRecord(r2!));
+    const lineLen = second.length - 1;
+    for (const k of [1, 2, 7, 100, Math.floor(lineLen / 2), lineLen - 2, lineLen - 1, lineLen]) {
+      const dir = mkTmp('ccrc-deleg-torn-');
+      const bytes = Buffer.concat([first, second.subarray(0, k)]);
+      writeFileSync(path.join(dir, DELEGATION_JOURNAL_FILE), bytes);
+      const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+      expect(report.failure, `cut ${k}`).toBeNull();
+      expect(report.tailHeal, `cut ${k}`).toMatchObject({ offset: first.length, bytes: k, code: k === lineLen ? 'missing-final-lf' : 'torn-tail' });
+      expect(report.state.phase).toBe('ready');
+      expect(report.pruning).toBe('enabled');
+      expect(readFileSync(path.join(dir, DELEGATION_JOURNAL_FILE)), 'recovery itself never writes').toEqual(bytes);
+    }
+  });
+
+  it('re-recovery clears a poisoned applier: it reads the disk and is ready again', async () => {
+    const h = harness();
+    let armed = true;
+    const dur = await h.open({ onEdge: (e, w) => { if (armed && e === 'checkpoint-rename' && w === 'before') throw new SimulatedCrash('rename'); } });
+    await expect(dur.applyAccepted(batch([sessionStart(1)]))).rejects.toThrow(SimulatedCrash);
+    expect(dur.pruningEnabled()).toBe(false);
+    armed = false;
+    const report = await dur.recover();
+    expect(report.failure).toBeNull();
+    expect(dur.pruningEnabled()).toBe(true);
+    expect(dur.state().checkpoint.appliedJournalSequence).toBe(1);        // the journaled record was replayed
+    await dur.applyAccepted(batch([sessionStart(2)]));
+  });
+
+  it('a torn journal tail the checkpoint names is still a recovery failure: reconstructing, pruning off, and nothing is appended behind it', async () => {
+    // The checkpoint's applied position is record 2, and the journal holds record 1 and a FRAGMENT of record 2: the fragment is not a
+    // crash artefact (a checkpoint is replaced only after its record is durable), so it is corruption and nothing is cut.
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1), sessionStart(2)]));
+    await dur.close();
+    const file = path.join(h.dir, DELEGATION_JOURNAL_FILE);
+    const whole = readFileSync(file);
+    const firstLen = Buffer.from(encodeDelegationJournalRecord(parseDelegationJournal(new Uint8Array(whole))[0]!)).length;
+    const torn = whole.subarray(0, firstLen + 25);
+    writeFileSync(file, torn);
+    const fresh = await harness({ dir: h.dir }).open();
+    expect(fresh.failure()).toMatchObject({ phase: 'journal-validate', code: 'torn-tail' });
+    expect(fresh.state().phase).toBe('reconstructing');
+    expect(fresh.pruningEnabled()).toBe(false);
+    await expect(fresh.applyAccepted(batch([sessionStart(3)]))).rejects.toMatchObject({ code: 'not-ready' });
+    expect(readFileSync(file)).toEqual(torn);                           // not truncated, not repaired, not appended to
+    expect(existsSync(path.join(h.dir, DELEGATION_TORN_DIR))).toBe(false);
+  });
+});
+
+// ── D-4655: a torn journal tail heals itself ─────────────────────────────────────────────────────────────────────────
+//
+// THE SAFETY ARGUMENT THESE ROWS PROVE. Under O5 a record is applied only after the journal fsync, and the checkpoint is replaced only
+// after that. So a crash or a failed write in the middle of an append leaves at most ONE partial line after the last LF, and no
+// checkpoint, cursor, ID or interval refers to it: the bucket cursor still points before its spool line. The next pass reads that line
+// again and mints the same eventId, so cutting the partial line loses nothing the spool does not still hold (and a bucket that has
+// gone meanwhile is already an unmeasured hour, spec 5.3). That argument holds ONLY when the journal's complete records validate with
+// an intact chain and the checkpoint names a complete record (or none). Everything else is corruption and stays fail-closed.
+//
+// THE ONE NAMED EXCEPTION. Task 8 Step 4's "no production caller truncates the journal" pin, W3-M22 (every torn position is refused) and
+// W3-M38 (no rewrite, truncate or rename of the journal) each carry exactly one exception: the server's tail heal, which cuts only to
+// the end of the last complete validated record after the cut bytes are durable somewhere else. Every other truncate, rewrite or
+// rename path stays red (the pin rows below, and the mutation table in the task report).
+describe('D-4655: a torn journal tail heals itself (the one named exception to the no-truncate pin)', () => {
+  const chain = evidenceChain([sessionStart(1), sessionStart(2), sessionStart(3), sessionStart(4)]);
+  const line = (i: number): Buffer => Buffer.from(encodeDelegationJournalRecord(chain[i]!));
+  const sha256 = (b: Uint8Array): string => createHash('sha256').update(b).digest('hex');
+  const tornDirOf = (dir: string): string => path.join(dir, DELEGATION_TORN_DIR);
+  const tornFiles = (dir: string): string[] => (existsSync(tornDirOf(dir)) ? readdirSync(tornDirOf(dir)).sort() : []);
+  const journalOf = (dir: string): Buffer => readFileSync(path.join(dir, DELEGATION_JOURNAL_FILE));
+  /** A checkpoint at the first `n` records (revision 1: every persisted checkpoint has one). */
+  const checkpointAt = (n: number): Buffer => Buffer.from(encodeDelegationCheckpoint({ ...recoverDelegation(null, chain.slice(0, n)).state.checkpoint, revision: 1 }));
+  /** A fixture directory: `complete` records, then `tail` (bytes with no LF after the last one), and a checkpoint at `applied` records. */
+  function plant(opts: { complete: number; tail?: Uint8Array; applied?: number; journal?: Buffer }): { dir: string; whole: Buffer; prefixLen: number } {
+    const dir = mkTmp('ccrc-deleg-heal-');
+    const prefix = Buffer.concat(Array.from({ length: opts.complete }, (_, i) => line(i)));
+    const whole = opts.journal ?? Buffer.concat([prefix, opts.tail ?? Buffer.alloc(0)]);
+    writeFileSync(path.join(dir, DELEGATION_JOURNAL_FILE), whole);
+    if (opts.applied !== undefined) writeFileSync(path.join(dir, DELEGATION_CHECKPOINT_FILE), checkpointAt(opts.applied));
+    return { dir, whole, prefixLen: prefix.length };
+  }
+  const nameOf = (offset: number, tail: Uint8Array): string => `${offset}-${sha256(tail)}.tail`;
+  /** The cut points of the next record: a few bytes, the middle, all but its LF (a complete record with no LF after it). */
+  const cuts = (): number[] => { const n = line(2).length - 1; return [1, 2, 7, 100, Math.floor(n / 2), n - 2, n - 1, n]; };
+
+  describe('the rule, once (delegation-journal.ts): healable only when a tail exists AND the complete records and the checkpoint are sound', () => {
+    const tail = (bytes: Uint8Array, offset = 500, code: 'torn-tail' | 'missing-final-lf' = 'torn-tail'): DelegationJournalTail => ({ offset, bytes, sha256: sha256(bytes), code });
+
+    it('a tail on a sound prefix is a plan whose name is content-addressed: <offset>-<sha256>.tail', () => {
+      const bytes = new TextEncoder().encode('{"acceptedAt":"2026-10-1');
+      expect(delegationTailHealPlan(tail(bytes), true)).toEqual({ offset: 500, bytes: bytes.length, sha256: sha256(bytes), code: 'torn-tail', name: `500-${sha256(bytes)}.tail` });
+      expect(delegationTailHealPlan(tail(bytes, 0), true)!.name).toBe(`0-${sha256(bytes)}.tail`);
+    });
+    it('no tail is no plan, and an unsound prefix is no plan, whatever the tail looks like', () => {
+      const bytes = new Uint8Array([0x7b, 0x22]);
+      expect(delegationTailHealPlan(null, true)).toBeNull();
+      expect(delegationTailHealPlan(null, false)).toBeNull();
+      expect(delegationTailHealPlan(tail(bytes), false)).toBeNull();
+    });
+    it('the plan is a pure function of the tail: no clock, no randomness, so the same bytes at the same offset always get the same name', () => {
+      const bytes = new TextEncoder().encode('xyz');
+      const a = delegationTailHealPlan(tail(bytes, 77), true)!;
+      const b = delegationTailHealPlan(tail(new Uint8Array(bytes), 77), true)!;
+      expect(a).toEqual(b);
+      expect(delegationTailHealPlan(tail(bytes, 78), true)!.name).not.toBe(a.name);
+      expect(delegationTailHealPlan(tail(new TextEncoder().encode('xyZ'), 77), true)!.name).not.toBe(a.name);
+    });
+  });
+
+  describe('the strict reader reports a tail to a sink and still throws without one', () => {
+    it('with a sink: every complete record is yielded, then the sink gets {offset, bytes, sha256, code}, and nothing throws', async () => {
+      for (const k of cuts()) {
+        const { dir, prefixLen } = plant({ complete: 2, tail: line(2).subarray(0, k) });
+        const seen: DelegationJournalTail[] = [];
+        const got: number[] = [];
+        for await (const r of readDelegationJournalRecords(nodeDelegationFilePort, path.join(dir, DELEGATION_JOURNAL_FILE), undefined, (t) => seen.push(t))) got.push(r.sequence);
+        expect(got, `cut ${k}`).toEqual([1, 2]);
+        expect(seen, `cut ${k}`).toHaveLength(1);
+        expect(seen[0]).toMatchObject({ offset: prefixLen, sha256: sha256(line(2).subarray(0, k)), code: k === line(2).length - 1 ? 'missing-final-lf' : 'torn-tail' });
+        expect(Buffer.from(seen[0]!.bytes)).toEqual(line(2).subarray(0, k));
+      }
+    });
+    it('a chunk size that splits the tail does not change the answer', async () => {
+      const { dir, prefixLen } = plant({ complete: 2, tail: line(2).subarray(0, 90) });
+      for (const chunk of [1, 7, 64, 4096]) {
+        const seen: DelegationJournalTail[] = [];
+        for await (const r of readDelegationJournalRecords(nodeDelegationFilePort, path.join(dir, DELEGATION_JOURNAL_FILE), chunk, (t) => seen.push(t))) void r;
+        expect(seen[0], `chunk ${chunk}`).toMatchObject({ offset: prefixLen, sha256: sha256(line(2).subarray(0, 90)) });
+      }
+    });
+    it('without a sink the reader throws exactly as before: torn-tail, or missing-final-lf for a whole record with no LF', async () => {
+      for (const [k, code] of [[40, 'torn-tail'], [line(2).length - 1, 'missing-final-lf']] as const) {
+        const { dir } = plant({ complete: 2, tail: line(2).subarray(0, k) });
+        const drain = async (): Promise<void> => { for await (const r of readDelegationJournalRecords(nodeDelegationFilePort, path.join(dir, DELEGATION_JOURNAL_FILE))) void r; };
+        await expect(drain()).rejects.toMatchObject({ code });
+      }
+    });
+    it('a journal with no tail never calls the sink', async () => {
+      const { dir } = plant({ complete: 2 });
+      const seen: DelegationJournalTail[] = [];
+      for await (const r of readDelegationJournalRecords(nodeDelegationFilePort, path.join(dir, DELEGATION_JOURNAL_FILE), undefined, (t) => seen.push(t))) void r;
+      expect(seen).toEqual([]);
+    });
+  });
+
+  describe('recovery classifies a tail: healable, or the same refusal as before', () => {
+    it('HEALABLE: no checkpoint, a checkpoint at the last complete record, and a checkpoint BEHIND it (the journal is ahead), at every cut', async () => {
+      for (const applied of [undefined, 2, 1] as const) {
+        for (const k of cuts()) {
+          const tail = line(2).subarray(0, k);
+          const { dir, prefixLen } = plant({ complete: 2, tail, ...(applied === undefined ? {} : { applied }) });
+          const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+          const what = `applied ${applied}, cut ${k}`;
+          expect(report.failure, what).toBeNull();
+          expect(report.tailHeal, what).toEqual({ offset: prefixLen, bytes: k, sha256: sha256(tail), code: k === line(2).length - 1 ? 'missing-final-lf' : 'torn-tail', name: nameOf(prefixLen, tail) });
+          expect(report.state.phase).toBe('ready');
+          expect(report.facts!.head!.sequence, what).toBe(2);
+        }
+      }
+    });
+
+    it('NOT healable: the checkpoint names the record that is the LF-less one (a durable, applied record with no LF is corruption)', async () => {
+      const { dir, whole } = plant({ complete: 2, tail: line(2).subarray(0, line(2).length - 1), applied: 3 });
+      // The checkpoint at 3 needs record 3 to exist; build it from the real chain.
+      const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+      expect(report.tailHeal).toBeNull();
+      expect(report.failure).toMatchObject({ phase: 'journal-validate', code: 'missing-final-lf' });
+      expect(report.failure!.detail).toMatch(/anchor-missing/);
+      expect(report.state.phase).toBe('reconstructing');
+      expect(journalOf(dir)).toEqual(whole);
+    });
+
+    it('NOT healable: the checkpoint names a record that is torn, or one past the last complete record', async () => {
+      for (const applied of [3, 4]) {
+        const { dir, whole } = plant({ complete: 2, tail: line(2).subarray(0, 60), applied });
+        const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+        expect(report.tailHeal, `applied ${applied}`).toBeNull();
+        expect(report.failure, `applied ${applied}`).toMatchObject({ phase: 'journal-validate', code: 'torn-tail' });
+        expect(report.state.phase).toBe('reconstructing');
+        expect(journalOf(dir)).toEqual(whole);
+      }
+    });
+
+    it('NOT healable: a held record the tail would have to carry (a checkpoint hold on the LF-less record)', async () => {
+      const { dir } = plant({ complete: 2, tail: line(2).subarray(0, line(2).length - 1) });
+      const cp = recoverDelegation(null, chain.slice(0, 2)).state.checkpoint;
+      const held = { ...cp, revision: 1, pruningHolds: [...cp.pruningHolds, { journalId: chain[2]!.journalId, reason: 'identity-candidate' as const, ownerId: 'agent-1' }] };
+      writeFileSync(path.join(dir, DELEGATION_CHECKPOINT_FILE), encodeDelegationCheckpoint(held));
+      const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+      expect(report.tailHeal).toBeNull();
+      expect(report.failure).toMatchObject({ phase: 'journal-validate', code: 'missing-final-lf' });
+    });
+
+    it('CORRUPTION is never healable, with or without a tail: an invalid complete record, a chain break, a gap, a duplicate', async () => {
+      const text = (i: number): string => line(i).toString('utf8');
+      const rows: Array<[string, Buffer, string]> = [
+        ['a digest that is not the hash of its preimage', Buffer.concat([line(0), Buffer.from(text(1).replace(/"digest":"[0-9a-f]{64}"/, `"digest":"${'0'.repeat(64)}"`)), line(2).subarray(0, 50)]), 'digest-mismatch'],
+        ['an invalid complete record that is the LAST complete one', Buffer.concat([line(0), Buffer.from(text(1).replace(/"journalId":"[0-9a-f]{64}"/, `"journalId":"${'0'.repeat(64)}"`)), line(2).subarray(0, 50)]), 'journal-id-mismatch'],
+        ['a record whose previousDigest is not the prior digest', Buffer.concat([line(0), Buffer.from(encodeDelegationJournalRecord(buildDelegationJournalRecord({ sequence: 2, acceptedAt: T(5), previousDigest: 'd'.repeat(64), entry: evidence(sessionStart(2)) }))), line(2).subarray(0, 50)]), 'previous-digest'],
+        ['a sequence gap', Buffer.concat([line(0), line(2), line(3).subarray(0, 50)]), 'sequence-gap'],
+        ['a duplicated record', Buffer.concat([line(0), line(0), line(1).subarray(0, 50)]), 'sequence-duplicate'],
+        ['a record that is not canonical JSON', Buffer.concat([line(0), Buffer.from('{"a":1}\n'), line(2).subarray(0, 50)]), 'unknown-key'],
+        ['a blank line', Buffer.concat([line(0), Buffer.from('\n'), line(1).subarray(0, 50)]), 'blank-line'],
+      ];
+      for (const [name, journal, code] of rows) {
+        const { dir } = plant({ complete: 0, journal });
+        const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+        expect(report.tailHeal, name).toBeNull();
+        expect(report.failure, name).toMatchObject({ phase: 'journal-validate', code });
+        expect(report.state.phase, name).toBe('reconstructing');
+      }
+    });
+
+    it('a journal with no tail has no plan', async () => {
+      const { dir } = plant({ complete: 3, applied: 3 });
+      const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+      expect(report.failure).toBeNull();
+      expect(report.tailHeal).toBeNull();
+    });
+  });
+
+  describe('the applier heals the live journal, and stays its only writer', () => {
+    /** Every operation of one port, mutating ones numbered, with a way to die (or fail once) at the k-th. */
+    function faultPort(inner: DelegationFilePort, opts: { dieAt?: number; failAt?: number } = {}): { port: DelegationFilePort; ops: string[]; count: () => number } {
+      const ops: string[] = [];
+      let n = 0;
+      let dead = false;
+      const read = (what: string): void => { if (dead) throw new Error('process is dead'); ops.push(what); };
+      const mutate = (what: string): void => {
+        if (dead) throw new Error('process is dead');
+        const i = n++;
+        ops.push(`${i}:${what}`);
+        if (opts.dieAt !== undefined && i >= opts.dieAt) { dead = true; throw new Error(`crash at op ${i}`); }
+        if (opts.failAt === i) throw new Error(`fault at op ${i}`);
+      };
+      const wrapHandle = (label: string, h: DelegationFileHandle): DelegationFileHandle => ({
+        write: async (b) => { mutate(`${label}.write`); return h.write(b); },
+        sync: async () => { mutate(`${label}.sync`); await h.sync(); },
+        close: async () => { await h.close(); },
+      });
+      const port: DelegationFilePort = {
+        openAppend: async (p) => { mutate('journal.open'); return wrapHandle('journal', await inner.openAppend(p)); },
+        createTemp: async (p) => { mutate(`create:${path.basename(p)}`); return wrapHandle(p.includes(DELEGATION_TORN_DIR) ? 'quarantine' : 'checkpoint', await inner.createTemp(p)); },
+        rename: async (a, b) => { mutate(`rename:${path.basename(a)}->${path.basename(b)}`); await inner.rename(a, b); },
+        fsyncDir: async (d) => { mutate(`dirsync:${path.basename(d)}`); await inner.fsyncDir(d); },
+        truncate: async (p, len) => { mutate(`truncate:${path.basename(p)}:${len}`); await inner.truncate(p, len); },
+        fsyncFile: async (p) => { mutate(`filesync:${path.basename(p)}`); await inner.fsyncFile(p); },
+        mkdirp: async (d) => { mutate(`mkdirp:${path.basename(d)}`); await inner.mkdirp(d); },
+        readFile: async (p) => { read(`readFile:${path.basename(p)}`); return inner.readFile(p); },
+        openRead: async (p) => { read(`openRead:${path.basename(p)}`); return inner.openRead(p); },
+        listDir: async (d) => { read(`listDir:${path.basename(d)}`); return inner.listDir(d); },
+        statFile: async (p) => { read(`statFile:${path.basename(p)}`); return inner.statFile(p); },
+        removeTemp: async (p) => { mutate(`removeTemp:${path.basename(p)}`); await inner.removeTemp(p); },
+      };
+      return { port, ops, count: () => n };
+    }
+
+    it('heals: the tail is kept under a content-addressed name, the journal is cut to the last complete record, and the applier opens READY', async () => {
+      const tail = line(2).subarray(0, 61);
+      const { dir, prefixLen } = plant({ complete: 2, tail, applied: 2 });
+      const h = harness({ dir });
+      const warned: string[] = [];
+      const dur = await h.open({ warn: (m) => warned.push(m) });
+      expect(dur.failure()).toBeNull();
+      expect(dur.state().phase).toBe('ready');
+      expect(dur.pruningEnabled()).toBe(true);
+      expect(journalOf(dir)).toEqual(Buffer.concat([line(0), line(1)]));
+      expect(journalOf(dir).length).toBe(prefixLen);
+      expect(tornFiles(dir)).toEqual([nameOf(prefixLen, tail)]);
+      expect(readFileSync(path.join(tornDirOf(dir), nameOf(prefixLen, tail)))).toEqual(tail);
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toMatch(/^ccrc-server: /);
+      expect(warned[0]).toContain(`${tail.length} byte`);
+      expect(warned[0]).toContain(path.join(tornDirOf(dir), nameOf(prefixLen, tail)));
+      expect(warned[0]).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/);
+      // and the next application appends behind the cut, continuing the chain
+      const out = await dur.applyAccepted(batch([sessionStart(3)]));
+      expect(out.appended.map((r) => r.sequence)).toEqual([3]);
+      expect(parseDelegationJournal(new Uint8Array(journalOf(dir)), { completeFromStart: true }).map((r) => r.sequence)).toEqual([1, 2, 3]);
+    });
+
+    it('a LF-less COMPLETE record that no checkpoint names is cut and kept too', async () => {
+      const tail = line(2).subarray(0, line(2).length - 1);
+      const { dir, prefixLen } = plant({ complete: 2, tail, applied: 2 });
+      const dur = await harness({ dir }).open();
+      expect(dur.failure()).toBeNull();
+      expect(journalOf(dir)).toEqual(Buffer.concat([line(0), line(1)]));
+      expect(readFileSync(path.join(tornDirOf(dir), nameOf(prefixLen, tail)))).toEqual(tail);
+    });
+
+    it('with no checkpoint and nothing but a fragment, the journal is cut to empty and the applier is ready', async () => {
+      const tail = Buffer.from('{"acceptedAt":"2026-10-1');
+      const { dir } = plant({ complete: 0, tail });
+      const dur = await harness({ dir }).open();
+      expect(dur.failure()).toBeNull();
+      expect(journalOf(dir)).toEqual(Buffer.alloc(0));
+      expect(tornFiles(dir)).toEqual([nameOf(0, tail)]);
+      expect((await dur.applyAccepted(batch([sessionStart(1)]))).appended.map((r) => r.sequence)).toEqual([1]);
+    });
+
+    it('a journal with no tail is never touched: no quarantine directory, no truncate, no extra fsync of the journal file', async () => {
+      const { dir, whole } = plant({ complete: 2, applied: 2 });
+      const h = harness({ dir });
+      await h.open();
+      expect(journalOf(dir)).toEqual(whole);
+      expect(existsSync(tornDirOf(dir))).toBe(false);
+      expect(h.log.filter((l) => /truncate|file\.sync/.test(l))).toEqual([]);
+    });
+
+    it('the order is quarantine (temp write, fsync, rename, directory fsyncs), THEN the cut, THEN the journal fsync and its directory (W3-M38 mutant c)', async () => {
+      const tail = line(2).subarray(0, 61);
+      const { dir, prefixLen } = plant({ complete: 2, tail, applied: 2 });
+      const h = harness({ dir });
+      await h.open();
+      const name = nameOf(prefixLen, tail);
+      const heal = h.log.filter((l) => l !== 'project' && !l.startsWith('insertEvents'));
+      expect(heal).toEqual([
+        `quarantine.write:${tail.length}:${tail[tail.length - 1]}`, 'quarantine.sync', `rename:${name}.tmp->${name}`, 'dir.sync', 'dir.sync',
+        `journal.truncate:${prefixLen}`, `file.sync:${DELEGATION_JOURNAL_FILE}`, 'dir.sync',
+      ]);
+      expect(existsSync(path.join(tornDirOf(dir), `${name}.tmp`))).toBe(false);
+    });
+
+    it('recover() on a LIVE applier heals too: a failed append that left a fragment is cut by the retry, and the next application appends', async () => {
+      const h = harness();
+      const dur = await h.open();
+      await dur.applyAccepted(batch([sessionStart(1)]));
+      appendFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE), '{"acceptedAt":"2026-10-1');
+      const report = await dur.recover();
+      expect(report.failure).toBeNull();
+      expect(report.tailHeal).not.toBeNull();
+      expect(dur.state().phase).toBe('ready');
+      expect(tornFiles(h.dir)).toHaveLength(1);
+      expect((await dur.applyAccepted(batch([sessionStart(2)]))).appended.map((r) => r.sequence)).toEqual([2]);
+    });
+
+    it('the applier appends NOTHING until the heal is durable: an application queued behind a held heal writes after the cut, never before', async () => {
+      const h = harness();
+      const journal = path.join(h.dir, DELEGATION_JOURNAL_FILE);
+      let armed = false;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const inner = spyPort(h.log);
+      const port: DelegationFilePort = { ...inner, truncate: async (p, len) => { if (armed) await gate; return inner.truncate(p, len); } };
+      const dur = await h.open({ port });
+      await dur.applyAccepted(batch([sessionStart(1)]));
+      const clean = readFileSync(journal);
+      appendFileSync(journal, '{"acceptedAt":"2026-10-1');
+      armed = true;
+      h.log.length = 0;
+      const recovering = dur.recover();
+      const applying = dur.applyAccepted(batch([sessionStart(2)]));
+      await new Promise((r) => setTimeout(r, 40));
+      expect(h.log.filter((l) => l.startsWith('journal.write')), 'nothing is appended while the heal is held').toEqual([]);
+      expect(readFileSync(journal).length, 'and nothing is cut before the gate opens').toBe(clean.length + '{"acceptedAt":"2026-10-1'.length);
+      release();
+      await recovering;
+      await applying;
+      const cut = h.log.findIndex((l) => l.startsWith('journal.truncate'));
+      const wrote = h.log.findIndex((l) => l.startsWith('journal.write'));
+      expect(cut).toBeGreaterThan(-1);
+      expect(wrote, 'the first append comes after the cut').toBeGreaterThan(cut);
+      expect(parseDelegationJournal(new Uint8Array(readFileSync(journal)), { completeFromStart: true }).map((r) => r.sequence)).toEqual([1, 2]);
+    });
+
+    it('a defect that is NOT a crash artefact is never cut: the journal is byte-identical, nothing is kept, no truncate is issued (W3-M38 mutants b)', async () => {
+      const text = (i: number): string => line(i).toString('utf8');
+      const rows: Array<[string, Buffer, number | undefined, string]> = [
+        ['a chain break before the tail', Buffer.concat([line(0), Buffer.from(encodeDelegationJournalRecord(buildDelegationJournalRecord({ sequence: 2, acceptedAt: T(5), previousDigest: 'd'.repeat(64), entry: evidence(sessionStart(2)) }))), line(2).subarray(0, 50)]), undefined, 'previous-digest'],
+        ['an invalid complete record that is the last complete one', Buffer.concat([line(0), Buffer.from(text(1).replace(/"digest":"[0-9a-f]{64}"/, `"digest":"${'0'.repeat(64)}"`)), line(2).subarray(0, 50)]), undefined, 'digest-mismatch'],
+        ['a sequence gap', Buffer.concat([line(0), line(2), line(3).subarray(0, 50)]), undefined, 'sequence-gap'],
+        ['a checkpoint that names the LF-less record', Buffer.concat([line(0), line(1), line(2).subarray(0, line(2).length - 1)]), 3, 'missing-final-lf'],
+        ['a checkpoint that names a torn record', Buffer.concat([line(0), line(1), line(2).subarray(0, 60)]), 3, 'torn-tail'],
+        ['a checkpoint past the last complete record', Buffer.concat([line(0), line(1), line(2).subarray(0, 60)]), 4, 'torn-tail'],
+      ];
+      for (const [name, journal, applied, code] of rows) {
+        const { dir } = plant({ complete: 0, journal, ...(applied === undefined ? {} : { applied }) });
+        const h = harness({ dir });
+        const dur = await h.open();
+        expect(dur.failure(), name).toMatchObject({ phase: 'journal-validate', code });
+        expect(dur.state().phase, name).toBe('reconstructing');
+        expect(dur.pruningEnabled(), name).toBe(false);
+        expect(journalOf(dir), name).toEqual(journal);
+        expect(existsSync(tornDirOf(dir)), `${name}: nothing is kept`).toBe(false);
+        expect(h.log.filter((l) => /truncate|quarantine|file\.sync/.test(l)), name).toEqual([]);
+        await expect(dur.applyAccepted(batch([sessionStart(9)])), name).rejects.toMatchObject({ code: 'not-ready' });
+        expect(journalOf(dir), `${name}: nothing was appended behind it`).toEqual(journal);
+      }
+    });
+
+    it('the name is DETERMINISTIC: the same tail at the same offset gets the same name in another directory, under another clock', async () => {
+      const tail = line(2).subarray(0, 77);
+      const names: string[] = [];
+      for (const ms of [Date.UTC(2026, 9, 15), Date.UTC(2031, 1, 2)]) {
+        const { dir } = plant({ complete: 2, tail, applied: 2 });
+        const h = harness({ dir });
+        h.clock.ms = ms;
+        await h.open();
+        names.push(...tornFiles(dir));
+      }
+      expect(names).toEqual([nameOf(line(0).length + line(1).length, tail), nameOf(line(0).length + line(1).length, tail)]);
+      expect(names[0]).toMatch(/^\d+-[0-9a-f]{64}\.tail$/);
+    });
+
+    it('lastTailHeal() reports the heal for /api/fleet/health: when (the injected clock), how many bytes, and where they are kept', async () => {
+      const tail = line(2).subarray(0, 45);
+      const { dir, prefixLen } = plant({ complete: 2, tail, applied: 2 });
+      const h = harness({ dir });
+      const dur = await h.open();
+      expect(dur.lastTailHeal()).toEqual({ at: formatDelegationInstant(h.clock.ms), bytes: 45, quarantinePath: path.join(tornDirOf(dir), nameOf(prefixLen, tail)) });
+      const clean = await harness({ dir: plant({ complete: 2, applied: 2 }).dir }).open();
+      expect(clean.lastTailHeal()).toBeNull();
+    });
+
+    it('a quarantine file that is already there with the SAME bytes (an earlier heal that died after its rename) is reused: nothing is rewritten, nothing duplicated', async () => {
+      const tail = line(2).subarray(0, 52);
+      const { dir, prefixLen } = plant({ complete: 2, tail, applied: 2 });
+      mkdirSync(tornDirOf(dir), { recursive: true });
+      writeFileSync(path.join(tornDirOf(dir), nameOf(prefixLen, tail)), tail);
+      const h = harness({ dir });
+      const dur = await h.open();
+      expect(dur.failure()).toBeNull();
+      expect(h.log.filter((l) => l.startsWith('quarantine.write')), 'no second copy is written').toEqual([]);
+      expect(tornFiles(dir)).toEqual([nameOf(prefixLen, tail)]);
+      expect(journalOf(dir).length).toBe(prefixLen);
+    });
+
+    it('a quarantine file of that name with DIFFERENT bytes is never overwritten and never trusted: the heal fails closed and the journal is untouched', async () => {
+      const tail = line(2).subarray(0, 52);
+      const { dir, prefixLen, whole } = plant({ complete: 2, tail, applied: 2 });
+      mkdirSync(tornDirOf(dir), { recursive: true });
+      writeFileSync(path.join(tornDirOf(dir), nameOf(prefixLen, tail)), 'something else entirely');
+      const dur = await harness({ dir }).open();
+      expect(dur.failure()).toMatchObject({ code: 'tail-heal-failed' });
+      expect(dur.state().phase).toBe('reconstructing');
+      expect(journalOf(dir)).toEqual(whole);
+      expect(readFileSync(path.join(tornDirOf(dir), nameOf(prefixLen, tail)), 'utf8')).toBe('something else entirely');
+    });
+
+    it('the tail is re-measured at the cut: bytes that changed between recovery\'s read and the heal are not cut, and are not kept as if they were the tail', async () => {
+      const tail = line(2).subarray(0, 52);
+      const { dir, whole } = plant({ complete: 2, tail, applied: 2 });
+      let opens = 0;
+      const inner = nodeDelegationFilePort;
+      const port: DelegationFilePort = {
+        ...inner,
+        openRead: async (p) => {
+          if (p.endsWith(DELEGATION_JOURNAL_FILE) && ++opens === 2) appendFileSync(p, 'more bytes behind the tail');
+          return inner.openRead(p);
+        },
+      };
+      const dur = await harness({ dir }).open({ port });
+      expect(dur.failure()).toMatchObject({ code: 'tail-heal-failed' });
+      expect(journalOf(dir)).toEqual(Buffer.concat([whole, Buffer.from('more bytes behind the tail')]));
+      expect(existsSync(tornDirOf(dir))).toBe(false);
+    });
+
+    describe('a crash or a fault at EVERY operation of the heal (W3-M38 mutant c): the tail is always in the journal or in quarantine, and the next recovery heals the same way', () => {
+      const TAIL = line(2).subarray(0, 61);
+      const fixture = (): { dir: string; prefixLen: number; whole: Buffer } => plant({ complete: 2, tail: TAIL, applied: 2 });
+      let total = 0;
+      it('a recording run counts the heal\'s mutating operations (ten: the directory, the temp file, its write and fsync, the rename, two directory fsyncs, the cut, the file fsync, the directory fsync)', async () => {
+        const { dir } = fixture();
+        const rec = faultPort(nodeDelegationFilePort);
+        await harness({ dir }).open({ port: rec.port });
+        total = rec.count();
+        expect(rec.ops.filter((o) => /^\d+:/.test(o)).map((o) => o.replace(/^\d+:/, '').replace(/[0-9a-f]{64}/g, '<sha>').replace(/\d+-<sha>/g, '<name>'))).toEqual([
+          'mkdirp:delegation-events.torn', 'create:<name>.tail.tmp', 'quarantine.write', 'quarantine.sync', 'rename:<name>.tail.tmp-><name>.tail',
+          'dirsync:delegation-events.torn', expect.stringMatching(/^dirsync:/), expect.stringMatching(/^truncate:delegation-events\.log:\d+$/),
+          'filesync:delegation-events.log', expect.stringMatching(/^dirsync:/),
+        ]);
+        expect(total).toBe(10);
+      });
+
+      for (let k = 0; k < 10; k++) {
+        it(`the process dies at operation ${k}: nothing is lost, and a fresh open heals it with no duplicate`, async () => {
+          const { dir, prefixLen, whole } = fixture();
+          const dying = faultPort(nodeDelegationFilePort, { dieAt: k });
+          const dur = await harness({ dir }).open({ port: dying.port });
+          expect(dur.failure(), `op ${k}`).toMatchObject({ code: 'tail-heal-failed' });
+          expect(dur.state().phase).toBe('reconstructing');
+          await expect(dur.applyAccepted(batch([sessionStart(9)]))).rejects.toMatchObject({ code: 'not-ready' });
+          // THE INVARIANT: the tail's bytes are in the journal, or whole in quarantine, at every instant.
+          const inJournal = journalOf(dir).length === whole.length;
+          const keptAs = path.join(tornDirOf(dir), nameOf(prefixLen, TAIL));
+          const inQuarantine = existsSync(keptAs) && readFileSync(keptAs).equals(TAIL);
+          expect(inJournal || inQuarantine, `op ${k}: the tail is nowhere`).toBe(true);
+          if (!inJournal) expect(journalOf(dir), `op ${k}`).toEqual(whole.subarray(0, prefixLen));
+          // The next recovery (a restart) heals it the same way.
+          const fresh = await harness({ dir }).open();
+          expect(fresh.failure(), `op ${k}`).toBeNull();
+          expect(journalOf(dir), `op ${k}`).toEqual(whole.subarray(0, prefixLen));
+          expect(tornFiles(dir), `op ${k}: one copy, no temp file`).toEqual([nameOf(prefixLen, TAIL)]);
+          expect(readFileSync(keptAs)).toEqual(TAIL);
+          expect((await fresh.applyAccepted(batch([sessionStart(3)]))).appended.map((r) => r.sequence)).toEqual([3]);
+        });
+
+        it(`one transient fault at operation ${k}: the applier is not ready, and its own recover() heals it`, async () => {
+          const { dir, prefixLen, whole } = fixture();
+          const flaky = faultPort(nodeDelegationFilePort, { failAt: k });
+          const dur = await harness({ dir }).open({ port: flaky.port });
+          expect(dur.failure(), `op ${k}`).toMatchObject({ code: 'tail-heal-failed' });
+          const again = await dur.recover();
+          expect(again.failure, `op ${k}`).toBeNull();
+          expect(dur.state().phase).toBe('ready');
+          expect(journalOf(dir)).toEqual(whole.subarray(0, prefixLen));
+          expect(tornFiles(dir)).toEqual([nameOf(prefixLen, TAIL)]);
+        });
+      }
+      it('the count is the one the rows above visit', () => { expect(total).toBe(10); });
+    });
+
+    it('a failed append that leaves a fragment is healed by the retry and LOSES NOTHING: the next application reproduces the run that never tore (the lossless row)', async () => {
+      const tear = { on: false };
+      const tearing = (inner: DelegationFilePort): DelegationFilePort => ({
+        ...inner,
+        openAppend: async (p) => {
+          const handle = await inner.openAppend(p);
+          return { ...handle, write: async (b) => (tear.on ? handle.write(b.subarray(0, Math.max(1, b.length - 3))) : handle.write(b)) };
+        },
+      });
+      const first = batch([sessionStart(1)]);
+      const second = batch([bareTool(2, X), subagentStart(3, X)], { cursor: cursorFor('2026101400', 300), interval: intervalFor('2026101400', 'measured', T(3)) });
+      const a = harness();
+      const never = await a.open();
+      await never.applyAccepted(first);
+      await never.applyAccepted(second);
+
+      const b = harness();
+      const torn = await b.open({ port: tearing(spyPort(b.log)) });
+      await torn.applyAccepted(first);
+      tear.on = true;
+      await expect(torn.applyAccepted(second)).rejects.toMatchObject({ code: 'short-write' });
+      tear.on = false;
+      expect(torn.failure()).toMatchObject({ phase: 'durable-application' });
+      const fragment = readFileSync(path.join(b.dir, DELEGATION_JOURNAL_FILE));
+      expect(fragment[fragment.length - 1], 'the failed append really left a fragment').not.toBe(0x0a);
+      const report = await torn.recover();
+      expect(report.failure).toBeNull();
+      expect(torn.lastTailHeal()).not.toBeNull();
+      await torn.applyAccepted(second);                                   // the bucket is read again: the same events mint the same eventIds
+
+      expect(canonicalDelegationJson(torn.state().checkpoint)).toBe(canonicalDelegationJson(never.state().checkpoint));
+      expect(torn.state().checkpoint.activityIdsByNaturalKey).toEqual(never.state().checkpoint.activityIdsByNaturalKey);
+      expect(torn.state().checkpoint.bucketCursors).toEqual(never.state().checkpoint.bucketCursors);
+      expect(torn.state().checkpoint.observationIntervals).toEqual(never.state().checkpoint.observationIntervals);
+      expect(readFileSync(path.join(b.dir, DELEGATION_JOURNAL_FILE))).toEqual(readFileSync(path.join(a.dir, DELEGATION_JOURNAL_FILE)));
+      expect(tornFiles(b.dir)).toHaveLength(1);
+    });
+
+    // ── MUST 1 (coordinator 5424, R76 M1): a heal is reported as soon as its cut returns, and the boot reports any heal nobody did ──
+    /** A port whose `truncate` cuts and then DIES: the kill between the cut and the report. From then on every operation of the dead
+     *  process fails, so nothing after the cut (no report, no listing) can happen in it. */
+    const dyingAfterCut = (inner: DelegationFilePort): DelegationFilePort => {
+      let dead = false;
+      const alive = <A extends unknown[], R>(f: (...a: A) => Promise<R>) => async (...a: A): Promise<R> => { if (dead) throw new SimulatedCrash('the process is dead'); return f(...a); };
+      return {
+        openAppend: alive(inner.openAppend), createTemp: alive(inner.createTemp), rename: alive(inner.rename), fsyncDir: alive(inner.fsyncDir),
+        readFile: alive(inner.readFile), openRead: alive(inner.openRead), mkdirp: alive(inner.mkdirp), fsyncFile: alive(inner.fsyncFile),
+        listDir: alive(inner.listDir), statFile: alive(inner.statFile), removeTemp: alive(inner.removeTemp),
+        truncate: alive(async (p: string, len: number) => { await inner.truncate(p, len); dead = true; throw new SimulatedCrash('killed after the cut'); }),
+      };
+    };
+
+    it('MUST 1: killed between the cut and the report, the NEXT boot reports the heal from the quarantine: its time, bytes and path', async () => {
+      const tail = line(2).subarray(0, 61);
+      const { dir, prefixLen } = plant({ complete: 2, tail, applied: 2 });
+      const dying = await harness({ dir }).open({ port: dyingAfterCut(nodeDelegationFilePort), warn: () => undefined });
+      expect(dying.failure()).toMatchObject({ code: 'tail-heal-failed' });
+      expect(dying.lastTailHeal(), 'the dead process reported nothing').toBeNull();
+      await dying.close();
+      expect(journalOf(dir).length, 'the cut happened').toBe(prefixLen);
+      const kept = path.join(tornDirOf(dir), nameOf(prefixLen, tail));
+      const warned: string[] = [];
+      const booted = await harness({ dir, store: new CoordStore(openCoordDb(path.join(dir, 'coord.db'))) }).open({ warn: (m) => warned.push(m) });
+      expect(booted.failure()).toBeNull();
+      const mtime = formatDelegationInstant(Math.trunc(statSync(kept).mtimeMs));
+      expect(booted.lastTailHeal()).toEqual({ at: mtime, bytes: tail.length, quarantinePath: kept, foundAtBoot: true });
+      const line0 = warned.filter((m) => m.includes(kept));
+      expect(line0).toHaveLength(1);
+      expect(line0[0]).toMatch(/^ccrc-server: /);
+      expect(line0[0]).toContain(`${tail.length} byte`);
+      expect(line0[0]).toContain(mtime);
+      expect(booted.tailQuarantineUnmeasured()).toBe(false);
+    });
+
+    it('R76 M1: the heal is recorded and told as soon as the cut returns: a fsync failing after it still leaves the heal reported', async () => {
+      const tail = line(2).subarray(0, 61);
+      const { dir, prefixLen } = plant({ complete: 2, tail, applied: 2 });
+      const warned: string[] = [];
+      const failingSync: DelegationFilePort = { ...nodeDelegationFilePort, fsyncFile: async () => { throw new Error('EIO: the journal fsync failed'); } };
+      const dur = await harness({ dir }).open({ port: failingSync, warn: (m) => warned.push(m) });
+      expect(dur.failure()).toMatchObject({ code: 'tail-heal-failed' });
+      const kept = path.join(tornDirOf(dir), nameOf(prefixLen, tail));
+      expect(dur.lastTailHeal()).toMatchObject({ bytes: tail.length, quarantinePath: kept });
+      expect(dur.lastTailHeal()!.foundAtBoot).toBeUndefined();
+      expect(warned.some((m) => m.includes('healed a torn tail') && m.includes(kept))).toBe(true);
+    });
+
+    it('MUST 1: every boot reports the newest quarantined tail again until it is removed; a leftover *.tail.tmp is ignored; no marker is written', async () => {
+      const { dir } = plant({ complete: 2, applied: 2 });
+      mkdirSync(tornDirOf(dir), { recursive: true });
+      const older = path.join(tornDirOf(dir), `10-${'a'.repeat(64)}.tail`);
+      const newer = path.join(tornDirOf(dir), `20-${'b'.repeat(64)}.tail`);
+      writeFileSync(older, 'abc');
+      writeFileSync(newer, 'defgh');
+      writeFileSync(path.join(tornDirOf(dir), `30-${'c'.repeat(64)}.tail.tmp`), 'ignored');
+      utimesSync(older, new Date(Date.UTC(2026, 9, 14, 1)), new Date(Date.UTC(2026, 9, 14, 1)));
+      utimesSync(newer, new Date(Date.UTC(2026, 9, 14, 2)), new Date(Date.UTC(2026, 9, 14, 2)));
+      const before = tornFiles(dir);
+      for (let boot = 0; boot < 2; boot++) {
+        const warned: string[] = [];
+        const dur = await harness({ dir, store: new CoordStore(openCoordDb(path.join(dir, 'coord.db'))) }).open({ warn: (m) => warned.push(m) });
+        expect(dur.lastTailHeal(), `boot ${boot}: the newest`).toEqual({ at: '2026-10-14T02:00:00.000Z', bytes: 5, quarantinePath: newer, foundAtBoot: true });
+        expect(warned.filter((m) => m.includes('quarantined torn tail')), `boot ${boot}: each one once`).toHaveLength(2);
+        expect(warned.some((m) => m.includes('.tail.tmp'))).toBe(false);
+        await dur.recover();
+        expect(warned.filter((m) => m.includes('quarantined torn tail')), `boot ${boot}: a recovery of the SAME process does not repeat them`).toHaveLength(2);
+        await dur.close();
+      }
+      expect(tornFiles(dir), 'the report wrote nothing').toEqual(before);
+      rmSync(older);
+      rmSync(newer);
+      const after = await harness({ dir, store: new CoordStore(openCoordDb(path.join(dir, 'coord.db'))) }).open({ warn: () => undefined });
+      expect(after.lastTailHeal(), 'removed by the operator: nothing to report').toBeNull();
+    });
+
+    it('MUST 1: a quarantine that cannot be listed is UNMEASURED, never "no heal"', async () => {
+      const { dir } = plant({ complete: 2, applied: 2 });
+      const warned: string[] = [];
+      const unlistable: DelegationFilePort = { ...nodeDelegationFilePort, listDir: async () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); } };
+      const dur = await harness({ dir }).open({ port: unlistable, warn: (m) => warned.push(m) });
+      expect(dur.failure()).toBeNull();
+      expect(dur.tailQuarantineUnmeasured()).toBe(true);
+      expect(dur.lastTailHeal()).toBeNull();
+      expect(warned.some((m) => m.startsWith('ccrc-server: ') && m.includes('could not be listed') && m.includes('unmeasured'))).toBe(true);
+      const absent = await harness({ dir: plant({ complete: 2, applied: 2 }).dir }).open();
+      expect(absent.tailQuarantineUnmeasured(), 'no quarantine directory at all is a measured "none"').toBe(false);
+    });
+
+    it('R85 (A-F1): a quarantined tail whose time cannot be an instant (stamped 1960) is UNMEASURED for that file and never stops recovery; the other tails are still reported', async () => {
+      const { dir } = plant({ complete: 2, applied: 2 });
+      mkdirSync(tornDirOf(dir), { recursive: true });
+      const bogus = path.join(tornDirOf(dir), `10-${'a'.repeat(64)}.tail`);
+      const good = path.join(tornDirOf(dir), `20-${'b'.repeat(64)}.tail`);
+      writeFileSync(bogus, 'abc');
+      writeFileSync(good, 'defgh');
+      utimesSync(bogus, new Date(Date.UTC(1960, 0, 1)), new Date(Date.UTC(1960, 0, 1)));
+      utimesSync(good, new Date(Date.UTC(2026, 9, 14, 2)), new Date(Date.UTC(2026, 9, 14, 2)));
+      const warned: string[] = [];
+      const dur = await harness({ dir, store: new CoordStore(openCoordDb(path.join(dir, 'coord.db'))) }).open({ warn: (m) => warned.push(m) });
+      expect(dur.failure(), 'recovery is ready').toBeNull();
+      expect(dur.tailQuarantineUnmeasured(), 'that file\'s report is unmeasured').toBe(true);
+      expect(dur.lastTailHeal(), 'the other tail is still reported').toEqual({ at: '2026-10-14T02:00:00.000Z', bytes: 5, quarantinePath: good, foundAtBoot: true });
+      expect(warned.some((m) => m.startsWith('ccrc-server: ') && m.includes(bogus) && m.includes('unmeasured'))).toBe(true);
+      await dur.close();
+    });
+  });
+});
+
+
+// ── O1: a meta-opened ID is not exposed before the checkpoint replacement (W3-M12) ──────────────────────────────────────
+
+describe('O1 crash-window row (W3-M12): a meta-opened activity ID escapes only after an atomic checkpoint holds it', () => {
+  let expectedId = '';
+  async function metaRun(edge: DelegationDurabilityEdge | null, when: 'before' | 'after') {
+    const h = harness();
+    const first = await h.open();
+    const named = await first.applyAccepted(batch([sessionStart(1), bareTool(2, X)]));          // X is named, no qualifying join: a candidate
+    // The identity record is the bare occurrence's ACCEPTED journalId (sequence 2); the ID is derived from it.
+    expectedId = deriveDelegationActivityId(keyOf(X), named.appended[1]!.journalId);
+    await first.close();
+    const store2 = new CoordStore(openCoordDb(path.join(h.dir, 'coord.db')));
+    const h2 = harness({ dir: h.dir, store: store2 });
+    const dur = await h2.open({ onEdge: edge === null ? undefined : (e, w) => { if (e === edge && w === when) throw new SimulatedCrash(`${e}:${w}`); } });
+    h2.log.length = 0;
+    return { h2, dur, store2 };
+  }
+
+  it('a meta read opens the activity from the earliest retained naming record, without a journal event, and advances only the revision', async () => {
+    const { h2, dur } = await metaRun(null, 'before');
+    const before = dur.state().checkpoint;
+    const out = await dur.applyPositiveAgentMeta({ parentId: PARENT, parentIncarnation: INC, agentId: X });
+    expect(out).toMatchObject({ kind: 'opened', activityId: expectedId });
+    const after = dur.state().checkpoint;
+    expect(after.revision).toBe(before.revision + 1);
+    expect(after.appliedJournalSequence).toBe(before.appliedJournalSequence);       // no journal sequence invented
+    expect(after.appliedJournalId).toBe(before.appliedJournalId);
+    expect(h2.log.some((l) => l.startsWith('journal.'))).toBe(false);
+    expect(after.activityIdsByNaturalKey[encodeDelegationNaturalKey(keyOf(X))]).toBe(expectedId);
+    expect(after.pruningHolds.filter((h) => h.reason === 'identity-candidate')).toEqual([]);
+  });
+
+  it('opening waits for at least one retained event naming the agent; a mapped agent answers already-open', async () => {
+    const { dur } = await metaRun(null, 'before');
+    expect(await dur.applyPositiveAgentMeta({ parentId: PARENT, parentIncarnation: INC, agentId: Y })).toEqual({ kind: 'waiting-for-evidence' });
+    await dur.applyPositiveAgentMeta({ parentId: PARENT, parentIncarnation: INC, agentId: X });
+    expect(await dur.applyPositiveAgentMeta({ parentId: PARENT, parentIncarnation: INC, agentId: X })).toEqual({ kind: 'already-open', activityId: expectedId });
+  });
+
+  const EDGES = ['build', 'checkpoint-write', 'checkpoint-fsync', 'checkpoint-rename', 'directory-fsync'] as const;
+  for (const edge of EDGES) {
+    for (const when of ['before', 'after'] as const) {
+      it(`crash ${when} ${edge}: the call rejects, no ID is returned, SQLite is untouched, and the ID is in no durable place unless the rename completed`, async () => {
+        const { h2, dur, store2 } = await metaRun(edge, when);
+        const returned: string[] = [];
+        await expect(dur.applyPositiveAgentMeta({ parentId: PARENT, parentIncarnation: INC, agentId: X }).then((o) => { if (o.kind === 'opened') returned.push(o.activityId); return o; })).rejects.toThrow(SimulatedCrash);
+        expect(returned).toEqual([]);
+        expect(dur.state().checkpoint.activities).toEqual([]);                  // not even the applier's own state shows it
+        expect(dur.state().checkpoint.activityIdsByNaturalKey).toEqual({});
+        expect(h2.log.filter((l) => l === 'project' || l === 'projectChanged' || l.startsWith('insertEvents'))).toEqual([]);
+        expect(store2.readDelegationProjection().activities).toEqual([]);
+        const onDisk = decodeDelegationCheckpoint(new Uint8Array(readDisk(h2.dir).checkpoint!));
+        const renamed = edge === 'directory-fsync' || (edge === 'checkpoint-rename' && when === 'after');
+        expect(onDisk.activities.map((a) => a.activityId)).toEqual(renamed ? [expectedId] : []);
+        // A restart never invents it either; the same meta later yields the same, deterministic ID.
+        const fresh = await harness({ dir: h2.dir }).open();
+        const out = await fresh.applyPositiveAgentMeta({ parentId: PARENT, parentIncarnation: INC, agentId: X });
+        expect(out.kind === 'opened' || out.kind === 'already-open' ? out.activityId : 'none').toBe(expectedId);
+      });
+    }
+  }
+});
+
+// ── lease creation by the serialized adapter (W3-M18A, W3-M62) ───────────────────────────────────────────────────────
+
+describe('journal-alone-creates-lease table (W3-M18A)', () => {
+  async function withActivity() {
+    const h = harness();
+    const dur = await h.open();
+    const out = await dur.applyAccepted(batch([sessionStart(1), bareTool(2, X), subagentStart(3, X)]));
+    const act = out.openedActivities[0]!;
+    const request = (over: Partial<DelegationLeaseCreationRequest> = {}): DelegationLeaseCreationRequest => ({
+      activityId: act.activityId, parentId: PARENT, parentIncarnation: INC, project: 'project-a', adminRecord: 'wt-1', canonicalPath: '/work/project-a/wt-1',
+      creationBase: null, sourceKind: 'agent', correlationJournalIds: [out.appended[2]!.journalId], firstObservedAt: T(40), ...over,
+    });
+    return { h, dur, act, request, out };
+  }
+
+  it('creates a lease only by appending a lease-created entry: generation 0, equal sequences, the injected UUID, the derived lineage ID', async () => {
+    const { h, dur, act, request } = await withActivity();
+    const out = await dur.createLease(request());
+    expect(out).toMatchObject({ kind: 'created', leaseId: '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f', sequence: 4 });
+    const records = parseDelegationJournal(new Uint8Array(readDisk(h.dir).journal!), { completeFromStart: true });
+    const entry = records[3]!.entry;
+    expect(entry.kind).toBe('lease-created');
+    if (entry.kind !== 'lease-created') return;
+    expect(entry).toMatchObject({ leaseId: '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f', generation: 0, activityId: act.activityId, firstObservedAt: T(40) });
+    expect(entry.lineageId).toBe(deriveDelegationLineageId({ leaseId: entry.leaseId, parentId: PARENT, parentIncarnation: INC, activityId: act.activityId }));
+    const cp = dur.state().checkpoint;
+    expect(cp.leases).toHaveLength(1);
+    expect(cp.leases[0]).toMatchObject({ generation: 0, creatingJournalSequence: 4, currentJournalSequence: 4, leaseId: entry.leaseId });
+    expect(cp.appliedJournalSequence).toBe(4);
+    // and SQLite says the same
+    expect(h.store.readDelegationProjection().leases.map((l) => l.leaseId)).toEqual([entry.leaseId]);
+  });
+
+  it('the lease ID is exactly what the injected randomUUID returned: not derived from the request, the activity or any report data', async () => {
+    const { h, dur, request } = await withActivity();
+    h.uuids.length = 0;
+    h.uuids.push('00000000-0000-4000-8000-000000000001');
+    const a = await dur.createLease(request());
+    h.uuids.push('00000000-0000-4000-8000-000000000002');
+    const b = await dur.createLease(request({ adminRecord: 'wt-2', canonicalPath: '/work/project-a/wt-2' }));
+    expect([a, b].map((o) => (o.kind === 'created' ? o.leaseId : o.kind))).toEqual(['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002']);
+  });
+
+  it('refuses a checkpoint-only change that adds a lease row, or alters one: only the journal creates leases', async () => {
+    const { dur, act, request } = await withActivity();
+    const add = (cp: DelegationCheckpointV1): DelegationCheckpointV1 => {
+      const lease: DelegationLeaseRow = {
+        leaseId: 'lease-forged', generation: 0, creatingJournalSequence: 3, currentJournalSequence: 3, activityId: act.activityId, parentId: PARENT, parentIncarnation: INC,
+        project: 'project-a', adminRecord: 'wt-f', canonicalPath: '/work/f', creationBase: null, sourceKind: 'agent', parentageState: 'linked', workspaceState: 'unmeasured',
+        disposition: 'ephemeral', cleanupState: 'not-due', cleanupPopulation: 'ephemeral-lease', firstObservedAt: T(7), lastObservedAt: T(7), terminalEvidenceAt: null,
+        adoptedAt: null, retainedAt: null, promotedAt: null, cleanupDueAt: null, cleanupStartedAt: null, cleanupFinishedAt: null, cleanupEvidenceJson: null,
+        carrierGenerationSeen: null, releasedAt: null,
+      };
+      return { ...cp, leases: [lease], lineage: [{ lineageId: deriveDelegationLineageId(lease), parentId: PARENT, parentIncarnation: INC, activityId: null, leaseId: 'lease-forged', runId: null, openedAt: T(7), closedAt: null, closeReason: null }] };
+    };
+    await expect(dur.applyCheckpointChange(add)).rejects.toMatchObject({ code: 'change-refused' });
+    expect(dur.state().checkpoint.leases).toEqual([]);
+    await dur.createLease(request());
+    await expect(dur.applyCheckpointChange((cp) => ({ ...cp, leases: cp.leases.map((l) => ({ ...l, generation: 1 })) }))).rejects.toMatchObject({ code: 'change-refused' });
+    await expect(dur.applyCheckpointChange((cp) => ({ ...cp, leases: [] }))).rejects.toMatchObject({ code: 'change-refused' });
+    expect(dur.failure()).toBeNull();                                    // refused before any write: not a failed application
+  });
+
+  const leased = async () => {
+    const { dur, request } = await withActivity();
+    const created = await dur.createLease(request());
+    return { dur, leaseId: created.kind === 'created' ? created.leaseId : '', before: dur.state().checkpoint };
+  };
+
+  it('F3: refuses a checkpoint-only change to a carrier row: every lease fact is journal-first', async () => {
+    const { dur, leaseId, before } = await leased();
+    const mark = (cp: DelegationCheckpointV1): DelegationCheckpointV1 => ({ ...cp, leaseCarriers: [{ leaseId, transferringSince: null, transferRun: null,
+      promotedRun: null, promotedSession: null, releaseReason: null, resolvedThrough: { attemptedAt: T(8), attemptId: 'attempt-forged' } }] });
+    // the shape alone is legal (a resolution mark on an ephemeral lease), so only the journal-first guard refuses it
+    expect(() => modelNs.assertLeases(mark(before))).not.toThrow();
+    await expect(dur.applyCheckpointChange(mark)).rejects.toMatchObject({ code: 'change-refused', message: expect.stringContaining('carrier row') });
+    expect(dur.state().checkpoint).toEqual(before);
+    expect(dur.failure()).toBeNull();
+  });
+
+  it('F3: refuses a checkpoint-only change adding a run-owned lineage row', async () => {
+    const { dur, leaseId, before } = await leased();
+    const runRow = (cp: DelegationCheckpointV1): DelegationCheckpointV1 => ({ ...cp, lineage: [...cp.lineage, {
+      lineageId: modelNs.deriveDelegationRunLineageId({ leaseId, parentId: PARENT, parentIncarnation: INC, runId: 41 }), parentId: PARENT, parentIncarnation: INC,
+      activityId: null, leaseId: null, runId: 41, openedAt: T(8), closedAt: null, closeReason: null }] });
+    await expect(dur.applyCheckpointChange(runRow)).rejects.toMatchObject({ code: 'change-refused', message: expect.stringContaining('a run owns') });
+    expect(dur.state().checkpoint).toEqual(before);
+    expect(dur.failure()).toBeNull();
+  });
+
+  it('recovery refuses a checkpoint that carries a lease no journal entry created, and one with a nonzero generation', async () => {
+    const { h, dur, request } = await withActivity();
+    await dur.createLease(request());
+    await dur.close();
+    const cp = decodeDelegationCheckpoint(new Uint8Array(readDisk(h.dir).checkpoint!));
+    const journal = new Uint8Array(readDisk(h.dir).journal!);
+    const records = parseDelegationJournal(journal, { completeFromStart: true });
+    expect(recoverDelegation(encodeDelegationCheckpoint(cp), records).failure).toBeNull();
+    expect(recoverDelegation(encodeDelegationCheckpoint({ ...cp, leases: cp.leases.map((l) => ({ ...l, generation: 1 })) }), records).failure?.phase).toBe('checkpoint-validate');
+    expect(recoverDelegation(encodeDelegationCheckpoint(cp), records.slice(0, 3)).failure).not.toBeNull();   // the entry is gone: the lease has no authority
+  });
+
+  it('recovery refuses a lease row whose creating sequence names an evidence record: the proof needs a lease-created entry, not just a record', () => {
+    const { cp, records } = ready([sessionStart(1), subagentStart(2, X), sessionStart(3)]);
+    const forged = withLeaseRow(cp);                                    // lease-9, creatingJournalSequence 2: an evidence record
+    expect(forged.leases[0]!.creatingJournalSequence).toBe(2);
+    const report = recoverDelegation(encodeDelegationCheckpoint(forged), records);
+    expect(report.failure).toMatchObject({ phase: 'final-validate', code: 'lease-proof' });
+    expect(report.state.phase).toBe('reconstructing');
+    // The same lease with a real lease-created entry behind it is accepted: the proof is exactly what separates the two.
+    const act = activityOf(cp, X)!;
+    const withEntry = chainOf([evidence(sessionStart(1)), evidence(subagentStart(2, X)), leaseEntryFor(act.activityId, { leaseId: 'lease-9', adminRecord: 'wt-9', canonicalPath: '/work/project-a/wt-9' })]);
+    expect(recoverDelegation(null, withEntry).failure).toBeNull();
+  });
+
+  it('no entry kind but the two wave-3 ones can be journaled, and a lease-created decoded with generation 1 is refused', () => {
+    const [r] = chainOf([leaseEntryFor('a'.repeat(64))]);
+    const line = new TextDecoder().decode(encodeDelegationJournalRecord(r!)).trimEnd();
+    expect(failureCode(() => decodeDelegationJournalLine(new TextEncoder().encode(line.replace('"generation":0', '"generation":1'))))).toBe('bad-field');
+    expect(failureCode(() => decodeDelegationJournalLine(new TextEncoder().encode(line.replace('"kind":"lease-created"', '"kind":"lease-transitioned"'))))).toBe('bad-field');
+  });
+});
+
+describe('adapter-owned UUID and replay-stable lineage table (W3-M62)', () => {
+  async function ready2() {
+    const h = harness();
+    const dur = await h.open();
+    const out = await dur.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    const act = out.openedActivities[0]!;
+    const req = (over: Partial<DelegationLeaseCreationRequest> = {}): DelegationLeaseCreationRequest => ({
+      activityId: act.activityId, parentId: PARENT, parentIncarnation: INC, project: 'project-a', adminRecord: 'wt-1', canonicalPath: '/work/project-a/wt-1',
+      creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: T(40), ...over,
+    });
+    return { h, dur, act, req };
+  }
+
+  it('calls the injected randomUUID exactly once for a new identity', async () => {
+    const { h, dur, req } = await ready2();
+    await dur.createLease(req());
+    expect(h.uuidCalls.n).toBe(1);
+  });
+
+  it('calls it ZERO times after deduplication for a duplicate identity, a held path, an unmeasured request and an unmeasured activity', async () => {
+    const { h, dur, act, req } = await ready2();
+    await dur.createLease(req());
+    const before = h.uuidCalls.n;
+    const calls: Array<[string, DelegationLeaseCreationRequest, string]> = [
+      ['a duplicate unreleased identity', req(), 'duplicate'],
+      ['a path another identity holds', req({ creationBase: 'base-1' }), 'refused'],
+      ['a request with no canonical path', req({ canonicalPath: '' }), 'refused'],
+      ['a request with an unmeasured instant', req({ firstObservedAt: 'later' }), 'refused'],
+      ['a source kind no wave-3 writer has', req({ sourceKind: 'attached' }), 'refused'],
+      ['a source kind that is not the activity\'s', req({ adminRecord: 'wt-3', canonicalPath: '/w/3', sourceKind: 'workflow' }), 'refused'],
+      ['an activity the checkpoint does not hold', req({ activityId: 'f'.repeat(64), adminRecord: 'wt-4', canonicalPath: '/w/4' }), 'refused'],
+      ['an activity of another parent', req({ parentId: 'lane-b-demo', adminRecord: 'wt-5', canonicalPath: '/w/5' }), 'refused'],
+    ];
+    for (const [name, request, kind] of calls) {
+      const out = await dur.createLease(request);
+      expect(out.kind, name).toBe(kind);
+      // `attached` has no wave-3 writer: it is refused as an unmeasured REQUEST, before any activity check could refuse it for another reason.
+      if (request.sourceKind === 'attached') expect(out).toMatchObject({ kind: 'refused', reason: 'unmeasured-request', detail: expect.stringContaining('agent, workflow, raw') });
+    }
+    expect(h.uuidCalls.n).toBe(before);
+    expect(dur.state().checkpoint.leases).toHaveLength(1);
+  });
+
+  it('refuses a lease whose canonical path an unreleased lease holds, with the holder named, and journals nothing', async () => {
+    const { h, dur, req } = await ready2();
+    const first = await dur.createLease(req());
+    const journalBefore = readDisk(h.dir).journal!;
+    const out = await dur.createLease(req({ creationBase: 'base-1' }));
+    expect(out).toMatchObject({ kind: 'refused', reason: 'canonical-path-held', heldBy: first.kind === 'created' ? first.leaseId : '?' });
+    expect(readDisk(h.dir).journal).toEqual(journalBefore);
+    // The projection cannot have been poisoned by the refused lease.
+    expect(h.store.readDelegationProjection().leases).toHaveLength(1);
+  });
+
+  it('the same identity with a null base and with a string base are two identities (on two paths)', async () => {
+    const { dur, req } = await ready2();
+    expect((await dur.createLease(req())).kind).toBe('created');
+    expect((await dur.createLease(req({ creationBase: 'main', canonicalPath: '/work/project-a/wt-2' }))).kind).toBe('created');
+    expect((await dur.createLease(req({ creationBase: 'main', canonicalPath: '/work/project-a/wt-2' }))).kind).toBe('duplicate');
+  });
+
+  it('replay reconstructs the lease and its lineage from the entry\'s firstObservedAt, whatever the clock says at replay', async () => {
+    const { h, dur, req } = await ready2();
+    await dur.createLease(req({ firstObservedAt: T(40) }));
+    await dur.close();
+    const live = decodeDelegationCheckpoint(new Uint8Array(readDisk(h.dir).checkpoint!));
+    // Lose the checkpoint; replay the journal alone, years later.
+    const dir = copyDisk(h.dir, {});
+    rmSync(path.join(dir, DELEGATION_CHECKPOINT_FILE));
+    const later = harness({ dir });
+    later.clock.ms = Date.UTC(2031, 0, 1);
+    const replayed = await later.open();
+    const cp = replayed.state().checkpoint;
+    expect(replayed.failure()).toBeNull();
+    expect(cp.leases[0]).toMatchObject({ firstObservedAt: T(40), lastObservedAt: T(40), generation: 0, creatingJournalSequence: 3 });
+    expect(cp.lineage[0]).toMatchObject({ openedAt: T(40) });
+    const record = parseDelegationJournal(new Uint8Array(readDisk(h.dir).journal!))[2]!;
+    expect(record.acceptedAt).not.toBe(T(40));                            // the entry's instant is neither the acceptance time...
+    expect(cp.leases[0]!.firstObservedAt).not.toBe(record.acceptedAt);
+    expect(cp.leases[0]!.firstObservedAt).not.toBe(formatDelegationInstant(later.clock.ms));        // ...nor the replay clock
+    expect(withoutRevision({ ...cp, pruningHolds: [] })).toBe(withoutRevision({ ...live, pruningHolds: [] }));
+    expect(cp.lineage[0]!.lineageId).toBe(live.lineage[0]!.lineageId);
+  });
+});
+
+// ── checkpoint-only changes and the sessions that never leave ────────────────────────────────────────────────────────
+
+describe('checkpoint-only changes, and wave 3 never removes a session (hand-off 2 from the Task 7 re-review)', () => {
+  it('a change that records coordinator intent goes through the same replacement; the identity invariants hold', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)]));
+    const out = await dur.applyCheckpointChange((cp) => ({
+      ...cp, coordinatorIntentByParent: { [delegationIntentKey(PARENT, INC)]: T(5) },
+      sessions: cp.sessions.map((s) => ({ ...s, explicitIntentAt: T(5), effective: true, effectiveBasis: ['explicit' as const] })),
+    }));
+    expect(out.durable).toBe(true);
+    expect(dur.state().checkpoint.revision).toBe(2);
+    expect(dur.state().checkpoint.appliedJournalSequence).toBe(1);
+    const fresh = await harness({ dir: h.dir }).open();
+    expect(fresh.state().checkpoint.coordinatorIntentByParent).toEqual({ [delegationIntentKey(PARENT, INC)]: T(5) });
+    await expect(dur.applyCheckpointChange((cp) => ({ ...cp, coordinatorIntentByParent: {} }))).rejects.toMatchObject({ code: 'intent-map' });
+  });
+
+  it('refuses a change that moves the applied journal position', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)]));
+    await expect(dur.applyCheckpointChange((cp) => ({ ...cp, appliedJournalSequence: 0, appliedJournalId: null, appliedJournalDigest: null }))).rejects.toMatchObject({ code: 'change-refused' });
+  });
+
+  it('REFUSES a change that removes a session: nothing in wave 3 lets a session leave the checkpoint', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1), sessionStart(2, { sessionId: 'lane-b-demo' })]));
+    const before = readDisk(h.dir);
+    await expect(dur.applyCheckpointChange((cp) => ({
+      ...cp, sessions: cp.sessions.filter((s) => s.sessionId !== 'lane-b-demo'),
+    }))).rejects.toMatchObject({ code: 'change-refused', message: expect.stringContaining('never removes a session') });
+    expect(readDisk(h.dir)).toEqual(before);
+    expect(dur.state().checkpoint.sessions.map((s) => s.sessionId)).toEqual([PARENT, 'lane-b-demo']);
+  });
+
+  it('every durable state, live or recovered, holds every session any earlier state held (the fold and recovery only add or update)', async () => {
+    const h = harness();
+    const dur = await h.open();
+    let seen = new Set<string>();
+    for (const n of [1, 2, 3, 4, 5]) {
+      await dur.applyAccepted(batch([sessionStart(n, { sessionId: `lane-${n}-demo` }), subagentStart(n + 10, `agent-${n}`, { sessionId: `lane-${n}-demo` })]));
+      const now = new Set(dur.state().checkpoint.sessions.map((s) => `${s.sessionId}/${s.parentIncarnation}`));
+      for (const k of seen) expect(now.has(k), k).toBe(true);
+      seen = now;
+      const recovered = recoverDelegation(readDisk(h.dir).checkpoint, parseDelegationJournal(new Uint8Array(readDisk(h.dir).journal!)));
+      expect(recovered.state.checkpoint.sessions.length).toBe(now.size);
+    }
+    expect(seen.size).toBe(5);
+  });
+
+  it('the projection repair removes a session\'s SQLite events only for drift, one session at a time, touching no other session\'s rows', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1), sessionStart(2), sessionStart(3, { sessionId: 'lane-b-demo' }), sessionStart(4, { sessionId: 'lane-b-demo' })]));
+    const db: DatabaseSync = h.store.db;
+    const idsOf = (session: string): unknown[] => db.prepare('SELECT id FROM delegation_events WHERE sessionId = ? ORDER BY id').all(session).map((r) => r['id']);
+    const bBefore = idsOf('lane-b-demo');
+    // Drift: one of lane-a's stored rows no longer says what the journal says, and another is missing (so SQLite's count disagrees
+    // with the journal's and the replay covers the whole journal, where the tampered row is met).
+    db.prepare("UPDATE delegation_events SET payloadJson = '{}' WHERE sessionId = ? AND journalSequence = 1").run(PARENT);
+    db.prepare('DELETE FROM delegation_events WHERE journalSequence = 2').run();
+    const report = await dur.repairProjection();
+    expect(report).toMatchObject({ healedSessions: 1, wipedAll: false, fullReplay: true });
+    expect(idsOf('lane-b-demo')).toEqual(bBefore);                       // the other session's rows were not touched
+    const row = db.prepare('SELECT payloadJson FROM delegation_events WHERE journalSequence = 1').get();
+    expect(row?.['payloadJson']).not.toBe('{}');                          // the journal won over SQLite
+    expect(h.store.readDelegationProjection().sessions).toHaveLength(2);
+  });
+});
+
+// ── fix round 1, I1: O4's immutable mapping on the checkpoint-only door ──────────────────────────────────────────────
+
+describe('O4 guard on the checkpoint-only door (fix round 1, I1): a change cannot drop, re-map or add an activity', () => {
+  async function withX() {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1), bareTool(2, X), subagentStart(3, X)]));
+    const act = activityOf(dur.state().checkpoint, X)!;
+    return { h, dur, act, enc: encodeDelegationNaturalKey(keyOf(X)) };
+  }
+  const otherJournalId = eid(99);
+  const otherId = deriveDelegationActivityId(keyOf(X), otherJournalId);
+
+  type Change = (cp: DelegationCheckpointV1, act: DelegationActivityRow, enc: string) => DelegationCheckpointV1;
+  const table: Array<[string, Change]> = [
+    ['drops an activity and its mapping', (cp) => ({ ...cp, activities: [], activityIdsByNaturalKey: {} })],
+    ['re-maps an activity to another identity journalId, rows and map consistent', (cp, act, enc) => ({
+      ...cp, activities: [{ ...act, activityId: otherId, identityJournalId: otherJournalId }], activityIdsByNaturalKey: { [enc]: otherId },
+    })],
+    ['re-maps the natural-key map alone', (cp, _act, enc) => ({ ...cp, activityIdsByNaturalKey: { [enc]: otherId } })],
+    ['adds an activity and its mapping (only the fold and the meta door open activities)', (cp, act) => {
+      const y = { ...act, activityId: deriveDelegationActivityId(keyOf(Y), eid(98)), upstreamId: Y, identityJournalId: eid(98), openedAt: T(5), lastEventAt: T(5) };
+      return { ...cp, activities: [act, y], activityIdsByNaturalKey: { ...cp.activityIdsByNaturalKey, [encodeDelegationNaturalKey(keyOf(Y))]: y.activityId } };
+    }],
+    ['changes an identity column of a kept activity (openedAt)', (cp, act) => ({ ...cp, activities: [{ ...act, openedAt: T(3) }] })],
+  ];
+  for (const [name, change] of table) {
+    it(`refuses a change that ${name}, writes nothing and does not poison the applier`, async () => {
+      const { h, dur, act, enc } = await withX();
+      const before = readDisk(h.dir);
+      const stateBefore = dur.state();
+      h.log.length = 0;
+      await expect(dur.applyCheckpointChange((cp) => change(cp, act, enc))).rejects.toMatchObject({ code: 'change-refused' });
+      expect(h.log, 'nothing was written').toEqual([]);
+      expect(readDisk(h.dir)).toEqual(before);
+      expect(dur.state()).toBe(stateBefore);
+      expect(dur.failure()).toBeNull();
+      expect(dur.pruningEnabled()).toBe(true);
+      // The activity is still there under the same ID, and the applier still applies.
+      expect(activityOf(dur.state().checkpoint, X)!.activityId).toBe(act.activityId);
+      await dur.applyAccepted(batch([sessionStart(9)]));
+    });
+  }
+
+  it('accepts a change that updates the activity\'s non-identity columns, with the ID and the mapping unchanged', async () => {
+    const { dur, act, enc } = await withX();
+    const out = await dur.applyCheckpointChange((cp) => ({
+      ...cp, activities: cp.activities.map((a) => ({ ...a, displayName: 'reviewer', executionState: 'ended' as const, endedAt: T(6), lastEventAt: T(6) })),
+    }));
+    expect(out.durable).toBe(true);
+    const after = activityOf(dur.state().checkpoint, X)!;
+    expect(after).toMatchObject({ activityId: act.activityId, identityJournalId: act.identityJournalId, openedAt: act.openedAt, displayName: 'reviewer', executionState: 'ended' });
+    expect(dur.state().checkpoint.activityIdsByNaturalKey).toEqual({ [enc]: act.activityId });
+  });
+
+  it('and a recovery after those refusals still finds the one original ID', async () => {
+    const { h, dur, act } = await withX();
+    await expect(dur.applyCheckpointChange((cp) => ({ ...cp, activities: [], activityIdsByNaturalKey: {} }))).rejects.toMatchObject({ code: 'change-refused' });
+    await dur.close();
+    const fresh = await harness({ dir: h.dir }).open();
+    expect(fresh.failure()).toBeNull();
+    expect(fresh.state().checkpoint.activities.map((a) => a.activityId)).toEqual([act.activityId]);
+  });
+});
+
+// ── fix round 2, N1: a change is handed a copy ───────────────────────────────────────────────────────────────────────
+
+describe('a checkpoint-only change is handed a COPY, so editing its argument in place cannot get past the guards (fix round 2, N1)', () => {
+  async function withXAndLease() {
+    const h = harness();
+    const dur = await h.open();
+    const built = await dur.applyAccepted(batch([sessionStart(1), bareTool(2, X), subagentStart(3, X), sessionStart(4, { sessionId: 'lane-b-demo' })]));
+    const act = built.openedActivities[0]!;
+    await dur.createLease({
+      activityId: act.activityId, parentId: PARENT, parentIncarnation: INC, project: 'project-a', adminRecord: 'wt-1', canonicalPath: '/work/project-a/wt-1',
+      creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: T(40),
+    });
+    return { h, dur, enc: encodeDelegationNaturalKey(keyOf(X)) };
+  }
+  type InPlace = (cp: DelegationCheckpointV1, enc: string) => DelegationCheckpointV1;
+  const otherId = deriveDelegationActivityId(keyOf(X), eid(99));
+  // Each change edits its ARGUMENT and returns it. Against a change handed the very object the guards compare it with, the before/after
+  // comparison is the object against itself and every guard passes.
+  const table: Array<[string, InPlace]> = [
+    ['drops the activities and their map, in place', (cp) => { Object.assign(cp, { activities: [], activityIdsByNaturalKey: {} }); return cp; }],
+    ['edits an activity\'s identity column (openedAt), in place', (cp) => { Object.assign(cp.activities[0]!, { openedAt: T(3) }); return cp; }],
+    ['re-maps the natural-key map, in place', (cp, enc) => { (cp.activityIdsByNaturalKey as Record<string, string>)[enc] = otherId; return cp; }],
+    ['removes a session by splicing the list, in place', (cp) => { (cp.sessions as unknown as unknown[]).splice(1); return cp; }],
+    ['alters a lease (parentageState), in place', (cp) => { Object.assign(cp.leases[0]!, { parentageState: 'unmeasured' }); return cp; }],
+  ];
+  for (const [name, change] of table) {
+    it(`refuses a change that ${name}; nothing is written and the live state is untouched`, async () => {
+      const { h, dur, enc } = await withXAndLease();
+      const disk = readDisk(h.dir);
+      const live = dur.state().checkpoint;
+      const snapshot = JSON.stringify({ a: live.activities, m: live.activityIdsByNaturalKey, s: live.sessions.map((x) => x.sessionId), l: live.leases, n: live.lineage });
+      h.log.length = 0;
+      await expect(dur.applyCheckpointChange((cp) => change(cp, enc))).rejects.toMatchObject({ code: 'change-refused' });
+      expect(h.log, 'nothing was written').toEqual([]);
+      expect(readDisk(h.dir)).toEqual(disk);
+      expect(dur.failure()).toBeNull();
+      // A refused change must not have reached the applier's own rows through the argument: the next application builds from them.
+      await dur.applyAccepted(batch([sessionStart(9)]));
+      const after = dur.state().checkpoint;
+      expect(JSON.stringify({ a: after.activities, m: after.activityIdsByNaturalKey, s: after.sessions.map((x) => x.sessionId), l: after.leases, n: after.lineage })).toBe(snapshot);
+    });
+  }
+
+  it('still accepts a change that edits a non-identity column of its argument in place and returns it', async () => {
+    const { dur, enc } = await withXAndLease();
+    const out = await dur.applyCheckpointChange((cp) => { Object.assign(cp.activities[0]!, { displayName: 'reviewer' }); return cp; });
+    expect(out.durable).toBe(true);
+    expect(activityOf(dur.state().checkpoint, X)).toMatchObject({ displayName: 'reviewer' });
+    expect(Object.keys(dur.state().checkpoint.activityIdsByNaturalKey)).toEqual([enc]);
+  });
+});
+
+// ── fix round 2, N2: the evidence count is proved before step 1 and adopted without a throw ─────────────────────────────
+
+describe('the evidence count cannot reject an application that is already durable (fix round 2, N2)', () => {
+  it('assertExtendedBy refuses a batch that does not extend the index strictly upward; extend adopts one that does', () => {
+    const index = new DelegationEvidenceIndex();
+    index.add(2);
+    index.add(5);
+    for (const bad of [[5], [4], [1], [6, 6], [6, 7, 7], [7, 6]]) {
+      expect(failureCode(() => index.assertExtendedBy(bad)), JSON.stringify(bad)).toBe('fold-refused');
+    }
+    expect(index.total).toBe(2);                                 // a refused batch changed nothing
+    expect(failureCode(() => index.assertExtendedBy([]))).toBe('accepted');
+    expect(failureCode(() => index.assertExtendedBy([6, 9, 10]))).toBe('accepted');
+    index.extend([6, 9, 10]);
+    expect(index.total).toBe(5);
+    expect(index.countAtOrBelow(9)).toBe(4);
+    expect(failureCode(() => index.add(10))).toBe('fold-refused');          // recovery's one-at-a-time add keeps its refusal
+  });
+
+  it('an index that runs ahead of the journal refuses the application BEFORE step 1 and FAILS the applier, and recovery rebuilds it (8A re-review 2)', async () => {
+    const h = harness();
+    const dur = await h.open({ warn: () => undefined });
+    await dur.applyAccepted(batch([sessionStart(1)]));
+    const disk = readDisk(h.dir);
+    // The bug this invariant exists to catch: the applier's count of the journal is ahead of the journal.
+    (dur as unknown as { evidence: DelegationEvidenceIndex }).evidence.add(500);
+    h.log.length = 0;
+    await expect(dur.applyAccepted(batch([sessionStart(2)]))).rejects.toMatchObject({ code: 'fold-refused' });
+    expect(h.log, 'nothing was written').toEqual([]);
+    expect(readDisk(h.dir)).toEqual(disk);
+    // the applier's own state is wrong: it is failed (reconstructing, pruning off), never left refusing every later application
+    expect(dur.failure()).toMatchObject({ phase: 'durable-application' });
+    expect(dur.pruningEnabled()).toBe(false);
+    await dur.recover();
+    expect(dur.failure()).toBeNull();
+    expect(dur.state().checkpoint.appliedJournalSequence).toBe(1);
+    expect((await dur.applyAccepted(batch([sessionStart(2)]))).appended.map((r) => r.sequence), 'the rebuilt index takes the next record').toEqual([2]);
+  });
+});
+
+// ── SQLite as repairable output (R20) ────────────────────────────────────────────────────────────────────────────────
+
+describe('SQLite is repaired from the checkpoint and the journal (ruling R20)', () => {
+  const evs = [sessionStart(1), bareTool(2, X), subagentStart(3, X), sessionStart(4), sessionStart(5), sessionStart(6, { sessionId: 'lane-b-demo' })];
+  const statsOf = (store: CoordStore) => delegationProjectionPortOfStore(store).eventStats();
+
+  it('a lost coord.db is rebuilt: the checkpoint is projected and every event is replayed from the journal', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch(evs));
+    await dur.close();
+    const fresh = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-deleg-lost-'), 'coord.db')));
+    const again = await harness({ dir: h.dir, store: fresh }).open();
+    expect(statsOf(fresh)).toEqual({ count: 6, maxSequence: 6 });
+    expect(canonicalDelegationJson(fresh.readDelegationProjection())).toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(again.state().checkpoint)));
+  });
+
+  it('a rolled-back coord.db resumes from SQLite\'s MAX(journalSequence), not from the start', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch(evs.slice(0, 3)));
+    const rolled = path.join(mkTmp('ccrc-deleg-roll-'), 'coord.db');
+    await (async () => { h.store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); cpSync(path.join(h.dir, 'coord.db'), rolled); })();
+    await dur.applyAccepted(batch(evs.slice(3)));
+    await dur.close();
+    const rolledStore = new CoordStore(openCoordDb(rolled));
+    expect(statsOf(rolledStore)).toEqual({ count: 3, maxSequence: 3 });
+    const port = delegationProjectionPortOfStore(rolledStore);
+    const inserted: number[] = [];
+    const spy: DelegationProjectionPort = { project: (cp) => port.project(cp), projectChanged: (prior, next) => port.projectChanged(prior, next), eventStats: () => port.eventStats(), countEventsAtOrBelow: (s) => port.countEventsAtOrBelow(s), deleteEventsBetween: (a, b, n) => port.deleteEventsBetween(a, b, n), insertEvents: (rows) => { inserted.push(rows.length); return port.insertEvents(rows); } };
+    const report = await repairDelegationProjection({
+      projection: spy, checkpoint: (await harness({ dir: h.dir }).open()).state().checkpoint,
+      journal: () => (async function* () { for (const r of parseDelegationJournal(new Uint8Array(readFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE))))) yield r; })(),
+    });
+    expect(report).toMatchObject({ resumedAfter: 3, inserted: 3, fullReplay: false, healedSessions: 0, wipedAll: false });
+    expect(inserted).toEqual([3]);
+    expect(statsOf(rolledStore)).toEqual({ count: 6, maxSequence: 6 });
+  });
+
+  it('replays in bounded chunks and yields the event loop between them', async () => {
+    const h = harness();
+    const dur = await h.open();
+    const many = Array.from({ length: 25 }, (_, i) => sessionStart(i + 1));
+    await dur.applyAccepted(batch(many));
+    const empty = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-deleg-chunk-'), 'coord.db')));
+    const port = delegationProjectionPortOfStore(empty);
+    const sizes: number[] = [];
+    let ticks = 0;
+    const timer = setInterval(() => { ticks++; }, 0);
+    await repairDelegationProjection({
+      projection: { project: (cp) => port.project(cp), projectChanged: (prior, next) => port.projectChanged(prior, next), eventStats: () => port.eventStats(), countEventsAtOrBelow: (s) => port.countEventsAtOrBelow(s), deleteEventsBetween: (a, b, n) => port.deleteEventsBetween(a, b, n), insertEvents: (rows) => { sizes.push(rows.length); return port.insertEvents(rows); } },
+      checkpoint: dur.state().checkpoint, chunkSize: 10,
+      journal: () => (async function* () { for (const r of parseDelegationJournal(new Uint8Array(readFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE))))) yield r; })(),
+    });
+    clearInterval(timer);
+    expect(sizes).toEqual([10, 10, 5]);
+    expect(ticks).toBeGreaterThan(0);
+  });
+
+  it('an event-conflict is SQLite drift: that session\'s events are deleted and replayed, and SQLite never wins', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch(evs));
+    h.store.db.prepare("UPDATE delegation_events SET eventKind = 'SessionEnd' WHERE journalSequence = 4").run();
+    h.store.db.prepare('DELETE FROM delegation_events WHERE journalSequence = 1').run();       // the count now disagrees: the replay covers sequence 4
+    const report = await dur.repairProjection();
+    expect(report?.healedSessions).toBe(1);
+    const row = h.store.db.prepare('SELECT eventKind FROM delegation_events WHERE journalSequence = 4').get();
+    expect(row?.['eventKind']).toBe('SessionStart');
+    expect(statsOf(h.store)).toEqual({ count: 6, maxSequence: 6 });
+  });
+
+  it('a conflict found WHILE healing is never declared repaired: it falls through to the last resort (fix round 1, M1)', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1), sessionStart(2), sessionStart(3, { sessionId: 'lane-b-demo' }), sessionStart(4, { sessionId: 'lane-b-demo' })]));
+    const db: DatabaseSync = h.store.db;
+    // lane-a's event at sequence 1 is missing, and lane-b owns a STRAY row on sequence 2 (lane-a's slot). After the replay the counts
+    // agree with the journal's, so only the conflict itself says anything is wrong; healing lane-a deletes lane-a's rows and never
+    // lane-b's stray one, so the conflict is found again while healing.
+    db.prepare('DELETE FROM delegation_events WHERE journalSequence = 1').run();
+    db.prepare("UPDATE delegation_events SET eventId = 'stray', sessionId = 'lane-b-demo' WHERE journalSequence = 2").run();
+    const report = await dur.repairProjection();
+    expect(report).toMatchObject({ fullReplay: true, wipedAll: true });
+    const rows = db.prepare('SELECT journalSequence AS s, eventId AS e, sessionId AS sid FROM delegation_events ORDER BY journalSequence').all();
+    expect(rows.map((r) => [r['s'], r['e'], r['sid']])).toEqual([
+      [1, eid(1), PARENT], [2, eid(2), PARENT], [3, eid(3), 'lane-b-demo'], [4, eid(4), 'lane-b-demo'],
+    ]);
+    expect(dur.failure()).toBeNull();
+  });
+
+  it('an application that meets a conflicting SQLite row reports the projection stale, and the next one heals it from the journal', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)]));
+    // A row SQLite holds for the event that is about to be journaled, but with another kind: drift the journal must win over.
+    h.store.db.prepare(`INSERT INTO delegation_events (eventId, journalSequence, journalDigest, acceptedAt, sessionId, parentIncarnation, claudeSessionId, eventKind, observedAt, payloadJson)
+      VALUES (?, 2, ?, 1, ?, ?, 'c', 'SessionEnd', 1, '{}')`).run(eid(2), '0'.repeat(64), PARENT, INC);
+    const out = await dur.applyAccepted(batch([sessionStart(2)]));
+    expect(out.durable).toBe(true);                                     // the journal and checkpoint are authoritative and are done
+    expect(out.projection.status).toBe('failed');
+    const next = await dur.applyAccepted(batch([sessionStart(3)]));
+    expect(next.projection.status).toBe('projected');                   // the stale projection was repaired first
+    const row = h.store.db.prepare('SELECT eventKind FROM delegation_events WHERE eventId = ?').get(eid(2));
+    expect(row?.['eventKind']).toBe('SessionStart');
+    expect(statsOf(h.store)).toEqual({ count: 3, maxSequence: 3 });
+  });
+
+  it('stray rows the journal does not hold are cleared (the last resort), and the events end up exactly the journal\'s', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch(evs.slice(0, 3)));
+    h.store.db.prepare(`INSERT INTO delegation_events (eventId, journalSequence, journalDigest, acceptedAt, sessionId, parentIncarnation, claudeSessionId, eventKind, observedAt, payloadJson)
+      VALUES ('stray', 2000, ?, 1, ?, ?, 'c', 'SessionStart', 1, '{}')`).run('0'.repeat(64), PARENT, INC);
+    const report = await dur.repairProjection();
+    expect(report?.wipedAll).toBe(true);
+    expect(statsOf(h.store)).toEqual({ count: 3, maxSequence: 3 });
+  });
+
+  it('a projection over a large events table touches no staying session\'s event row', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch(Array.from({ length: 40 }, (_, i) => sessionStart(i + 1))));
+    const before = h.store.db.prepare('SELECT id, eventId FROM delegation_events ORDER BY id').all().map((r) => [r['id'], r['eventId']]);
+    await dur.applyAccepted(batch([sessionStart(41)]));
+    const after = h.store.db.prepare('SELECT id, eventId FROM delegation_events ORDER BY id').all().map((r) => [r['id'], r['eventId']]);
+    expect(after.slice(0, 40)).toEqual(before);
+    expect(after).toHaveLength(41);
+  });
+});
+
+// ── fix round 1, M3: the repair's passes over the journal ────────────────────────────────────────────────────────────
+
+describe('the repair reads the journal as few times as it can (fix round 1, M3)', () => {
+  const records = evidenceChain([1, 2, 3, 4, 5, 6].map((n) => sessionStart(n)));
+  const checkpoint = recoverDelegation(null, records).state.checkpoint;
+  /** Recovery's count of the evidence records, built inside the test that uses it. */
+  const countsOf = (over: readonly DelegationJournalRecordV1[] = records): DelegationEvidenceIndex => {
+    const evidence = new DelegationEvidenceIndex();
+    for (const r of over) if (r.entry.kind === 'evidence-accepted') evidence.add(r.sequence);
+    return evidence;
+  };
+
+  /** A projection port over a set of sequences SQLite "has"; counts what the repair does to it. */
+  function fakeProjection(have: readonly number[]) {
+    const held = new Set(have);
+    const calls = { project: 0, inserts: [] as number[] };
+    const port: DelegationProjectionPort = {
+      // a checkpoint that holds no session is the wipe (the projection deletes the events of a LEAVING session): it clears what is held
+      project: (cp) => { calls.project++; if (cp.sessions.length === 0) held.clear(); },
+      // the repair never calls it (it is full); a fake that did would write the whole checkpoint, as its own `project` does
+      projectChanged: (_prior, next) => { port.project(next); return { mode: 'full' }; },
+      insertEvents: (rows) => {
+        calls.inserts.push(rows.length);
+        let inserted = 0;
+        for (const r of rows) if (!held.has(r.journalSequence)) { held.add(r.journalSequence); inserted++; }
+        return { inserted, duplicate: rows.length - inserted, conflicts: [] };
+      },
+      eventStats: () => ({ count: held.size, maxSequence: held.size === 0 ? null : Math.max(...held) }),
+      countEventsAtOrBelow: (s) => [...held].filter((n) => n <= s).length,
+      deleteEventsBetween: (a, b, limit) => {
+        const cut = [...held].filter((s) => s > a && s <= b).sort((x, y) => x - y).slice(0, limit);
+        for (const s of cut) held.delete(s);
+        return cut.length;
+      },
+    };
+    return { port, calls, sequences: () => [...held].sort((a, b) => a - b) };
+  }
+  function journalOf(over: readonly DelegationJournalRecordV1[] = records) {
+    const seen = { passes: 0 };
+    return { seen, journal: () => { seen.passes++; return (async function* () { for (const r of over) yield r; })(); } };
+  }
+
+  it('skips the whole-journal pass when SQLite\'s (count, max) matches what recovery counted', async () => {
+    const { port, calls } = fakeProjection([1, 2, 3, 4, 5, 6]);
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal, evidence: countsOf() });
+    expect(j.seen.passes).toBe(0);
+    expect(report).toMatchObject({ journalPasses: 0, inserted: 0, fullReplay: false, wipedAll: false, healedSessions: 0 });
+    expect(calls.inserts).toEqual([]);
+  });
+
+  it('reads once, from the resume point, when SQLite is merely behind', async () => {
+    const { port } = fakeProjection([1, 2, 3]);
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal, evidence: countsOf() });
+    expect(j.seen.passes).toBe(1);
+    expect(report).toMatchObject({ journalPasses: 1, inserted: 3, fullReplay: false, resumedAfter: 3 });
+  });
+
+  it('reads ONCE, in full, when the counts disagree below the resume point (no counting pass first)', async () => {
+    const { port } = fakeProjection([1, 2, 3, 5]);                      // count 4 but the journal has 5 evidence records up to sequence 5
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal, evidence: countsOf() });
+    expect(j.seen.passes).toBe(1);
+    expect(report).toMatchObject({ journalPasses: 1, fullReplay: true, inserted: 2, wipedAll: false });
+  });
+
+  it('without recovery\'s counts it still counts as it reads: two passes when the counts disagree (the old behaviour, kept as the fallback)', async () => {
+    const { port } = fakeProjection([1, 2, 3, 5]);
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal });
+    expect(j.seen.passes).toBe(2);
+    expect(report).toMatchObject({ journalPasses: 2, fullReplay: true });
+  });
+
+  it('review 705 F1: an equal count whose max is a sequence the journal holds no evidence at reads the journal in full, with recovery\'s counts', async () => {
+    const control = fakeProjection([1, 2, 3, 4, 5, 6]);
+    const c = journalOf();
+    expect(await repairDelegationProjection({ projection: control.port, checkpoint, journal: c.journal, evidence: countsOf() }), 'the control, SQLite in sync, reads nothing').toMatchObject({ journalPasses: 0, fullReplay: false });
+    const { port } = fakeProjection([1, 2, 3, 4, 5, 99]);                // count 6 as the journal's, max 99: the journal has no evidence there
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal, evidence: countsOf() });
+    // the full pass inserts the sixth and 99 stays, so SQLite holds seven against the journal's six and the last resort wipes it
+    expect(j.seen.passes).toBe(2);
+    expect(report).toMatchObject({ journalPasses: 2, fullReplay: true, wipedAll: true });
+    expect(port.eventStats(), 'SQLite ends holding exactly the journal\'s sequences').toEqual({ count: 6, maxSequence: 6 });
+  });
+
+  it('review 705 F1: the same disagreement without recovery\'s counts — the counting pass sees no evidence at the max, so the full pass runs', async () => {
+    const control = fakeProjection([1, 2, 3, 4, 5, 6]);
+    const c = journalOf();
+    expect(await repairDelegationProjection({ projection: control.port, checkpoint, journal: c.journal }), 'the control, SQLite in sync, only counts').toMatchObject({ journalPasses: 1, fullReplay: false });
+    const { port } = fakeProjection([1, 2, 3, 4, 5, 99]);
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal });
+    expect(j.seen.passes).toBe(3);                                       // the counting pass, the full pass, the wipe's replay
+    expect(report).toMatchObject({ journalPasses: 3, fullReplay: true, wipedAll: true });
+    expect(port.eventStats(), 'SQLite ends holding exactly the journal\'s sequences').toEqual({ count: 6, maxSequence: 6 });
+  });
+
+  it('review 716 G2: a foreign max BELOW the journal\'s last (SQLite {1,2,4}, journal evidence {1,2,3,5}) reads in full, wipes, and ends equal to the journal, with recovery\'s counts', async () => {
+    const base = evidenceChain([sessionStart(1), subagentStart(2, X), sessionStart(3)]);
+    const act = activityOf(recoverDelegation(null, base).state.checkpoint, X)!;
+    const lease = chainOf([leaseEntryFor(act.activityId)], 4, base[2]!.digest);                // a real lease-created record at 4: the journal holds no evidence there
+    const journalRecords = [...base, ...lease, ...evidenceChain([sessionStart(5)], 5, lease[0]!.digest)];
+    const cp = recoverDelegation(null, journalRecords).state.checkpoint;
+    const counts = countsOf(journalRecords);
+    expect([counts.total, counts.last], 'the journal\'s evidence is 1, 2, 3 and 5').toEqual([4, 5]);
+    const control = fakeProjection([1, 2, 3, 5]);
+    const c = journalOf(journalRecords);
+    expect(await repairDelegationProjection({ projection: control.port, checkpoint: cp, journal: c.journal, evidence: countsOf(journalRecords) }), 'the control, SQLite in sync, reads nothing').toMatchObject({ journalPasses: 0, fullReplay: false });
+    const { port, sequences } = fakeProjection([1, 2, 4]);               // count 3 as the journal's up to 4, max 4: below the journal's last, and no evidence there
+    const j = journalOf(journalRecords);
+    const report = await repairDelegationProjection({ projection: port, checkpoint: cp, journal: j.journal, evidence: countsOf(journalRecords) });
+    // the full pass inserts 3 and 5 and the foreign 4 stays, so SQLite holds five against the journal's four and the last resort wipes it
+    expect(j.seen.passes).toBe(2);
+    expect(report).toMatchObject({ journalPasses: 2, fullReplay: true, wipedAll: true });
+    expect(sequences(), 'SQLite ends holding exactly the journal\'s evidence sequences').toEqual([1, 2, 3, 5]);
+    expect(port.eventStats(), 'the per-pass short check passes: SQLite\'s (count, max) is the journal\'s').toEqual({ count: counts.total, maxSequence: counts.last });
+  });
+
+  it('review 716 G2: a foreign max at the journal\'s last + 1 (SQLite {1,2,3,4,5,7}, journal evidence 1 to 6) reads in full, wipes, and ends equal to the journal, with recovery\'s counts', async () => {
+    const counts = countsOf();
+    expect([counts.total, counts.last], 'the journal\'s evidence is 1 to 6').toEqual([6, 6]);
+    const control = fakeProjection([1, 2, 3, 4, 5, 6]);
+    const c = journalOf();
+    expect(await repairDelegationProjection({ projection: control.port, checkpoint, journal: c.journal, evidence: countsOf() }), 'the control, SQLite in sync, reads nothing').toMatchObject({ journalPasses: 0, fullReplay: false });
+    const { port, sequences } = fakeProjection([1, 2, 3, 4, 5, 7]);       // count 6 as the journal's, max 7: one past the journal's last, and no evidence there
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal, evidence: countsOf() });
+    // the full pass inserts the sixth and 7 stays, so SQLite holds seven against the journal's six and the last resort wipes it
+    expect(j.seen.passes).toBe(2);
+    expect(report).toMatchObject({ journalPasses: 2, fullReplay: true, wipedAll: true });
+    expect(sequences(), 'SQLite ends holding exactly the journal\'s evidence sequences').toEqual([1, 2, 3, 4, 5, 6]);
+    expect(port.eventStats(), 'the per-pass short check passes: SQLite\'s (count, max) is the journal\'s').toEqual({ count: counts.total, maxSequence: counts.last });
+  });
+
+  it('heals every drifted session in ONE journal pass, deleting them one session at a time with the loop yielded between', async () => {
+    // Three sessions, so "without one session" is visible in what the projection is handed.
+    const three = evidenceChain([sessionStart(1, { sessionId: 's1' }), sessionStart(2, { sessionId: 's2' }), sessionStart(3, { sessionId: 's3' })]);
+    const threeCp = recoverDelegation(null, three).state.checkpoint;
+    const threeCounts = (): DelegationEvidenceIndex => { const e = new DelegationEvidenceIndex(); for (const r of three) e.add(r.sequence); return e; };
+    const threeJournal = () => { const seen = { passes: 0 }; return { seen, journal: () => { seen.passes++; return (async function* () { for (const r of three) yield r; })(); } }; };
+    const keys = [{ sessionId: 's1', incarnation: 'g1' }, { sessionId: 's2', incarnation: 'g1' }, { sessionId: 's3', incarnation: 'g1' }];
+    const sessionsSeen = (held: number[]) => {
+      const seenSessions: number[] = [];
+      const f = fakeProjection(held);
+      return { seenSessions, port: { ...f.port, project: (cp: DelegationCheckpointV1) => { seenSessions.push(cp.sessions.length); f.port.project(cp); } } satisfies DelegationProjectionPort };
+    };
+
+    const withCounts = sessionsSeen([1, 2, 3]);
+    const j1 = threeJournal();
+    const a = await repairDelegationProjection({ projection: withCounts.port, checkpoint: threeCp, journal: j1.journal, evidence: threeCounts(), heal: keys });
+    expect(j1.seen.passes).toBe(1);                                      // the main pass was skipped; the heal is the only pass
+    expect(a).toMatchObject({ healedSessions: 3, journalPasses: 1, wipedAll: false });
+    // the checkpoint, then (without one session, the whole checkpoint) three times: never two sessions gone at once
+    expect(withCounts.seenSessions).toEqual([3, 2, 3, 2, 3, 2, 3]);
+
+    const without = sessionsSeen([1, 2, 3]);
+    const j2 = threeJournal();
+    const b = await repairDelegationProjection({ projection: without.port, checkpoint: threeCp, journal: j2.journal, heal: keys });
+    expect(j2.seen.passes).toBe(2);                                      // one counting pass, one heal pass: never one pass per session
+    expect(b).toMatchObject({ healedSessions: 3, journalPasses: 2 });
+    expect(without.seenSessions).toEqual([3, 2, 3, 2, 3, 2, 3]);
+  });
+
+  it('recovery hands over its per-sequence evidence count, leases excluded, and the applier keeps it current', async () => {
+    const base = evidenceChain([sessionStart(1), subagentStart(2, X), sessionStart(3)]);
+    const act = activityOf(recoverDelegation(null, base).state.checkpoint, X)!;
+    const mixed = [...base, ...chainOf([leaseEntryFor(act.activityId)], 4, base[2]!.digest)];
+    const more = [...mixed, ...evidenceChain([sessionStart(5), sessionStart(6)], 5, mixed[3]!.digest)];
+    const facts = recoverDelegation(null, more).facts!;
+    expect(facts.evidence.total).toBe(5);                                // 1,2,3,5,6: the lease at 4 is not evidence
+    expect([0, 1, 2, 3, 4, 5, 6, 7, 100].map((n) => facts.evidence.countAtOrBelow(n))).toEqual([0, 1, 2, 3, 3, 4, 5, 5, 5]);
+    // The applier's live copy of the counts is kept current by every application (a lease is not evidence): with SQLite in sync, its
+    // own repair finds nothing to read.
+    const h = harness();
+    const dur = await h.open();
+    const built = await dur.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    await dur.createLease({ activityId: built.openedActivities[0]!.activityId, parentId: PARENT, parentIncarnation: INC, project: 'p', adminRecord: 'wt', canonicalPath: '/w/1', creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: T(9) });
+    await dur.applyAccepted(batch([sessionStart(5)]));
+    expect(await dur.repairProjection()).toMatchObject({ journalPasses: 0, inserted: 0, fullReplay: false, wipedAll: false });
+  });
+
+  it('open() against an SQLite that is in sync reads the journal ONCE (recovery\'s own pass), not twice', async () => {
+    const h = harness();
+    const first = await h.open();
+    await first.applyAccepted(batch([sessionStart(1), bareTool(2, X), subagentStart(3, X), sessionStart(4)]));
+    await first.close();
+    let journalReads = 0;
+    const inner = spyPort(h.log);
+    const counting: DelegationFilePort = { ...inner, openRead: async (p) => { if (p.endsWith(DELEGATION_JOURNAL_FILE)) journalReads++; return inner.openRead(p); } };
+    const again = await h.open({ port: counting });
+    expect(again.failure()).toBeNull();
+    expect(journalReads).toBe(1);
+    // A lost SQLite is still rebuilt (the pass is skipped only when nothing needs inserting).
+    const lost = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-deleg-lost2-'), 'coord.db')));
+    journalReads = 0;
+    const rebuilt = await harness({ dir: h.dir, store: lost }).open({ port: counting });
+    expect(rebuilt.failure()).toBeNull();
+    expect(journalReads).toBe(2);
+    expect(delegationProjectionPortOfStore(lost).eventStats()).toEqual({ count: 4, maxSequence: 4 });
+  });
+});
+
+// ── fix round 1, M5 / M6: two small guards ───────────────────────────────────────────────────────────────────────────
+
+describe('the recovery save and the lease adapter fail loudly (fix round 1, M5 and M6)', () => {
+  it('M5: a throw BEFORE step 1 of the recovery save marks the applier failed; it is never reported ready', async () => {
+    const h = harness();
+    // Leave the journal ahead of the checkpoint: a crash before the rename of the second batch.
+    let armed = false;
+    const crashing = await h.open({ onEdge: (e, w) => { if (armed && e === 'checkpoint-rename' && w === 'before') throw new SimulatedCrash('rename'); } });
+    await crashing.applyAccepted(batch([sessionStart(1)]));
+    armed = true;
+    await expect(crashing.applyAccepted(batch([sessionStart(2)]))).rejects.toThrow(SimulatedCrash);
+    const before = readDisk(h.dir);
+    // Recovery replays record 2 and must save it. The save's own build throws before anything is written (the first build is
+    // recovery's final validation; the second is the save's).
+    const realBuild = DelegationCheckpointBuilder.prototype.build;
+    let builds = 0;
+    const spy = vi.spyOn(DelegationCheckpointBuilder.prototype, 'build').mockImplementation(function (this: DelegationCheckpointBuilder, revision: number) {
+      builds++;
+      if (builds === 2) throw new Error('injected: a throw before step 1');
+      return realBuild.call(this, revision);
+    });
+    let dur: DelegationDurability;
+    try { dur = await harness({ dir: h.dir }).open(); } finally { spy.mockRestore(); }
+    expect(builds).toBe(2);
+    expect(dur.failure()).toMatchObject({ phase: 'durable-application', detail: expect.stringContaining('injected') });
+    expect(dur.state().phase).toBe('reconstructing');
+    expect(dur.pruningEnabled()).toBe(false);
+    await expect(dur.applyAccepted(batch([sessionStart(3)]))).rejects.toMatchObject({ code: 'not-ready' });
+    expect(readDisk(h.dir)).toEqual(before);                             // nothing was written
+    // A later recovery, without the injected throw, is ready and saves.
+    const report = await dur.recover();
+    expect(report.failure).toBeNull();
+    expect(dur.pruningEnabled()).toBe(true);
+    expect(dur.state().checkpoint.appliedJournalSequence).toBe(2);
+  });
+
+  it('M6: if the planner skips the lease entry it was handed, createLease throws; it does not answer "duplicate" with a UUID that names no lease', async () => {
+    const h = harness();
+    const dur = await h.open();
+    const built = await dur.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    const request: DelegationLeaseCreationRequest = {
+      activityId: built.openedActivities[0]!.activityId, parentId: PARENT, parentIncarnation: INC, project: 'project-a', adminRecord: 'wt-1',
+      canonicalPath: '/work/project-a/wt-1', creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: T(40),
+    };
+    planControl.skipEverything = true;
+    try {
+      await expect(dur.createLease(request)).rejects.toThrow(/skipped the lease-created entry/);
+    } finally {
+      planControl.skipEverything = false;
+    }
+    expect(dur.failure()).toBeNull();                                    // nothing was written, so nothing is poisoned
+    expect(dur.state().checkpoint.leases).toEqual([]);
+    expect((await dur.createLease(request)).kind).toBe('created');
+  });
+});
+
+// ── retention planning, and no compaction (W3-M38) ───────────────────────────────────────────────────────────────────
+
+describe('no-compaction / hold table (W3-M38): holds are computed and tested, and nothing rewrites the journal', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const lease = (act: DelegationActivityRow): DelegationJournalEntryV1 => leaseEntryFor(act.activityId, { firstObservedAt: T(40), correlationJournalIds: [] });
+
+  it('holds the checkpoint anchor', () => {
+    const { cp, records } = ready([sessionStart(1), sessionStart(2), sessionStart(3)]);
+    expect(cp.pruningHolds).toEqual([{ journalId: records[2]!.journalId, reason: 'checkpoint-anchor', ownerId: 'checkpoint' }]);
+    expect(planDelegationPruning({ state: { checkpoint: cp, phase: 'ready' }, view: delegationRetentionViewOf(records, new Set([records[2]!.journalId]), NO_FLOOR) }).prunableThroughSequence).toBe(2);
+  });
+
+  it('holds an open lease\'s creating record and an open lineage edge\'s, and an identity candidate\'s, each for its own reason', () => {
+    const base2 = evidenceChain([sessionStart(1), subagentStart(2, X)]);
+    const act = activityOf(recoverDelegation(null, base2).state.checkpoint, X)!;
+    const bare = evidenceChain([bareTool(3, Y)], 3, base2[1]!.digest);
+    const leaseRec = chainOf([lease(act)], 4, bare[0]!.digest);
+    const all = [...base2, ...bare, ...leaseRec];
+    const cp = recoverDelegation(null, all).state.checkpoint;
+    const reasons = (r: string): string[] => cp.pruningHolds.filter((h) => h.reason === r).map((h) => h.journalId);
+    expect(reasons('checkpoint-anchor')).toEqual([all[3]!.journalId]);
+    expect(reasons('open-lease')).toEqual([all[3]!.journalId]);
+    expect(reasons('open-lineage')).toEqual([all[3]!.journalId]);
+    expect(reasons('identity-candidate')).toEqual([all[2]!.journalId]);
+    const plan = planDelegationPruning({ state: { checkpoint: cp, phase: 'ready' }, view: delegationRetentionViewOf(all, new Set(cp.pruningHolds.map((h) => h.journalId)), NO_FLOOR) });
+    expect(plan.prunableThroughSequence).toBe(2);                         // the candidate at 3 is the first held record
+  });
+
+  it('open-lease and open-lineage each hold a lease\'s evidence on their own: dropping either leaves the plan unchanged, dropping both frees it', () => {
+    const base2 = evidenceChain([sessionStart(1), subagentStart(2, X)]);
+    const act = activityOf(recoverDelegation(null, base2).state.checkpoint, X)!;
+    const evidenceId = base2[0]!.journalId;
+    const leaseRec = chainOf([leaseEntryFor(act.activityId, { firstObservedAt: T(40), correlationJournalIds: [evidenceId] })], 3, base2[1]!.digest);
+    const all = [...base2, ...leaseRec, ...evidenceChain([sessionStart(4), sessionStart(5), sessionStart(6)], 4, leaseRec[0]!.digest)];
+    const cp = recoverDelegation(null, all).state.checkpoint;
+    const plan = (holds: typeof cp.pruningHolds) => planDelegationPruning({
+      state: { checkpoint: { ...cp, pruningHolds: holds }, phase: 'ready' }, view: delegationRetentionViewOf(all, new Set(cp.pruningHolds.map((h) => h.journalId)), NO_FLOOR),
+    }).prunableThroughSequence;
+    expect(plan(cp.pruningHolds)).toBe(0);                                // sequence 1 is held by the lease's evidence
+    for (const reason of ['open-lease', 'open-lineage'] as const) {
+      const without = cp.pruningHolds.filter((h) => h.reason !== reason);
+      expect(plan(without), `without ${reason}`).toBe(0);                  // the other reason still holds it: a record can have two reasons
+    }
+    expect(plan(cp.pruningHolds.filter((h) => h.reason === 'checkpoint-anchor'))).toBe(5);
+    expect(plan(cp.pruningHolds.filter((h) => h.reason !== 'open-lease' && h.reason !== 'open-lineage'))).toBe(5);
+  });
+
+  it('the retention floor holds back records accepted inside it', () => {
+    const { cp, records } = ready([sessionStart(1), sessionStart(2), sessionStart(3), sessionStart(4)]);
+    const accepted = (i: number) => Date.parse(records[i]!.acceptedAt);
+    const cutoff = accepted(1) + 1;                                       // records 3 and 4 were accepted inside the floor
+    const plan = planDelegationPruning({ state: { checkpoint: cp, phase: 'ready' }, view: delegationRetentionViewOf(records, new Set(cp.pruningHolds.map((h) => h.journalId)), cutoff) });
+    expect(plan.prunableThroughSequence).toBe(2);
+    expect(DAY).toBeGreaterThan(0);
+  });
+
+  it('disables pruning during reconstruction, after a failed one, and while the applier is poisoned', async () => {
+    const records = evidenceChain([sessionStart(1), sessionStart(2)]);
+    const reconstructing = { checkpoint: emptyDelegationCheckpoint(), phase: 'reconstructing' as const };
+    expect(planDelegationPruning({ state: reconstructing, view: delegationRetentionViewOf(records, new Set(), NO_FLOOR) })).toMatchObject({ enabled: false, prunableThroughSequence: 0 });
+    const h = harness();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const port = spyPort(h.log);
+    const slow: DelegationFilePort = { ...port, readFile: async (p) => { await gate; return port.readFile(p); } };
+    const opening = DelegationDurability.open(h.deps({ port: slow })).then(track);
+    await new Promise((r) => setTimeout(r, 20));
+    release();
+    const dur = await opening;
+    expect(dur.pruningEnabled()).toBe(true);
+    const crashing = await h.open({ onEdge: (e, w) => { if (e === 'journal-fsync' && w === 'before') throw new SimulatedCrash('x'); } });
+    await expect(crashing.applyAccepted(batch([sessionStart(1)]))).rejects.toThrow(SimulatedCrash);
+    expect(crashing.pruningEnabled()).toBe(false);
+    expect((await crashing.planPruning(Date.now(), 0)).enabled).toBe(false);
+  });
+
+  it('pruning is off from the moment recovery starts until it succeeds (observed from inside an in-flight recovery)', async () => {
+    const h = harness();
+    const first = await h.open();
+    await first.applyAccepted(batch([sessionStart(1)]));
+    await first.close();
+    const seen: string[] = [];
+    let durRef: DelegationDurability | null = null;
+    let recording = false;
+    const port = spyPort(h.log);
+    const probe = (what: string): void => { if (recording && durRef !== null) seen.push(`${what}:${durRef.pruningEnabled()}`); };
+    const probing: DelegationFilePort = {
+      ...port,
+      readFile: async (p) => { probe('checkpoint-read'); return port.readFile(p); },
+      openRead: async (p) => { probe('journal-read'); return port.openRead(p); },
+    };
+    const dur = track(await DelegationDurability.open(h.deps({ port: probing })));
+    durRef = dur;
+    expect(dur.pruningEnabled()).toBe(true);
+    recording = true;
+    const recovering = dur.recover();
+    await recovering;
+    recording = false;
+    // The first three reads are recovery's own (the restore marker, whose read is a `readFile` too (8B), then the checkpoint, then the
+    // journal): pruning was off for all of them.
+    expect(seen.slice(0, 3)).toEqual(['checkpoint-read:false', 'checkpoint-read:false', 'journal-read:false']);
+    expect(dur.pruningEnabled()).toBe(true);
+  });
+
+  describe('no production call path opens a rewrite, truncate, rename or delete target for delegation-events.log', () => {
+    const srcDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+    const stripComments = (src: string): string => src.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
+    const code = (file: string): string => stripComments(readFileSync(path.join(srcDir, 'coord', file), 'utf8'));
+
+    // THE ONE NAMED EXCEPTION (D-4655, the operator's ruling of 2026-10-15): the server's tail heal. It is the ONLY production path that
+    // cuts the journal, it cuts only to the end of the last complete validated record, and only after the cut bytes are durable in
+    // `delegation-events.torn/`. The two rows below pin its exact shape, so a second truncate, a truncate to any other offset, a truncate
+    // outside the heal, or a rename of anything but the two temp files each turn them red.
+    it('the journal module has no method that could rewrite it: its ONLY truncate is the port member the tail heal calls, and the writer has none', () => {
+      const j = code('delegation-journal.ts');
+      const parsedPort = parsedFile('server/src/coord/delegation-file-port.ts');
+      const p = stripComments(parsedPort.text);
+      const port = parsedPort.bindings.find((b) => b.name === 'nodeDelegationFilePort')!.init;
+      // wave 4 (D-7021): exempt exactly this whole named method, not the adapter. Its exact body pins the .tmp refusal BEFORE unlink,
+      // absence tolerance and propagation of every other error; the caller's two-name closed list is pinned below (W4-CM16).
+      const removeTemp = [
+        '',
+        '  removeTemp: async (p) => {',
+        "    if (!p.endsWith('.tmp')) throw new Error(`removeTemp removes a compaction temp file only, not ${p}`);",
+        '    try { await fsp.unlink(p); } catch (err) { if (!isEnoent(err)) throw err; }',
+        '  },',
+        '',
+      ].join('\n');
+      expect(port.match(/^  removeTemp:/gm), 'exactly one named method').toHaveLength(1);
+      expect(port.split(removeTemp), 'exactly one whole method with the guarded failure contract').toHaveLength(2);
+      expect(p.split(removeTemp), 'exactly one exemption in the whole source').toHaveLength(2);
+      expect(j).not.toMatch(/ftruncate|\bunlink\(|\brm\(|\.writeFile\(|\bcreateWriteStream\(|O_TRUNC\b.*journal/i);
+      expect(p.replace(removeTemp, ''), 'every byte outside that one method keeps the original prohibition').not.toMatch(/ftruncate|\bunlink\(|\brm\(|\.writeFile\(|\bcreateWriteStream\(|O_TRUNC\b.*journal/i);
+      expect(parsedPort.calls.filter((c) => c.name === 'unlink').map((c) => `${c.callee}(${c.args.map((a) => a.text).join(', ')})`), 'one unlink: removeTemp\'s node adapter').toEqual(['fsp.unlink(p)']);
+      expect(parsedPort.calls.filter((c) => c.callee === 'p.endsWith').map((c) => c.args.map((a) => a.text)), 'and its guard').toEqual([['.tmp']]);
+      expect(`${j}\n${p}`.match(/\btruncate\b/g), 'the port member, its node adapter and the adapter\'s fsp call: three words, no more').toHaveLength(3);
+      expect(j.match(/\btruncate\b/g), 'the port member: one word in the journal').toHaveLength(1);
+      expect(p.match(/\btruncate\b/g), "its node adapter and the adapter's fsp call: two words in the port file").toHaveLength(2);
+      expect(j).toMatch(/^  truncate\(path: string, length: number\): Promise<void>;$/m);
+      expect(port).toMatch(/^  truncate: \(p, length\) => fsp\.truncate\(p, length\),$/m);
+      expect(j.slice(j.indexOf('export class DelegationJournalWriter')), 'the writer cannot cut').not.toMatch(/truncate/);
+      expect(j.match(/O_TRUNC/g)?.length ?? 0).toBe(0);
+      expect(p.match(/O_TRUNC/g)?.length ?? 0).toBe(1);                      // only createTemp (the checkpoint's and the quarantine copy's temp file) truncates
+      expect(port).toMatch(/createTemp:[^\n]*O_TRUNC/);
+      expect(j.match(/O_APPEND/g)?.length ?? 0).toBe(0);
+      expect(p.match(/O_APPEND/g)?.length ?? 0).toBe(1);
+    });
+    it('the checkpoint module cuts the journal in ONE place (the heal, at the plan\'s offset), renames only its two temp files, and opens the journal only for append or read', () => {
+      const c = stripComments(programSource(CHECKPOINT_SOURCE));
+      // wave 4 (D-7021): the compaction's two renames join the checkpoint's and the quarantine's, each of a temp onto its own file, the carried
+      // file's FIRST (a crash between them leaves a valid retained set)
+      expect(c.match(/\.rename\(/g), 'the checkpoint, quarantine, carried and journal temp files').toEqual(['.rename(', '.rename(', '.rename(', '.rename(']);
+      expect(c).toMatch(/this\.port\.rename\(this\.tempPath, this\.checkpointPath\)/);
+      expect(c).toMatch(/this\.port\.rename\(temp, kept\)/);
+      // the compaction's renames and temp removals, read from the parse by symbol (ARCH-06): the carried file's rename comes first, and
+      // `removeTemp` names the two temps and nothing else (W4-CM16)
+      const CHECKPOINT_TS = declaringFile(CHECKPOINT_SOURCE, 'DelegationDurability');
+      const compact = symbolOf(CHECKPOINT_TS, 'DelegationDurability.compactJournal');
+      const argsOf = (callee: string): string[] => callsIn(compact).filter((x) => x.callee === callee).map((x) => x.args.map((a) => a.text).join(', '));
+      expect(argsOf('this.port.rename'), 'the carried file, then the journal').toEqual(['carriedTemp, this.carriedPath', 'journalTemp, this.journalPath']);
+      expect(argsOf('this.port.removeTemp')).toEqual(['carriedTemp', 'journalTemp']);
+      expect(parsedFile(CHECKPOINT_TS).bindings.filter((b) => b.start >= compact.start && b.end <= compact.end && /Temp$/.test(b.name)).map((b) => `${b.name} = ${b.init}`))
+        .toEqual(['carriedTemp = `${this.carriedPath}.tmp`', 'journalTemp = `${this.journalPath}.tmp`']);
+      expect(c).toMatch(/const temp = `\$\{kept\}\.tmp`;/);
+      expect(c).toMatch(/const kept = path\.join\(this\.deps\.dir, DELEGATION_TORN_DIR, plan\.name\);/);
+      expect(c).not.toMatch(/unlink|\.writeFile\(|rmSync/);
+      expect(c.match(/truncate/g), 'exactly one truncate in the module').toEqual(['truncate']);
+      expect(c).toMatch(/await this\.port\.truncate\(this\.journalPath, plan\.offset\);/);
+      const heal = c.slice(c.indexOf('private async healTailLocked'), c.indexOf('private async remeasureTail'));
+      expect(heal, 'the cut is inside the heal').toMatch(/await this\.port\.truncate\(this\.journalPath, plan\.offset\);/);
+      expect(c.match(/healTailLocked\(/g), 'the heal is declared once and called once').toHaveLength(2);
+      expect(c).toMatch(/if \(report\.tailHeal !== null\) \{\s*try \{\s*await this\.healTailLocked\(report\.tailHeal\);/);
+      // the cut comes after the copy is durable: the copy's fsyncs precede the truncate in the heal's text
+      expect(heal.indexOf('await handle.sync();')).toBeGreaterThan(-1);
+      expect(heal.indexOf('await handle.sync();')).toBeLessThan(heal.indexOf('this.port.truncate('));
+      expect(heal.indexOf('this.port.rename(temp, kept)')).toBeLessThan(heal.indexOf('await this.port.fsyncDir(path.dirname(kept))'));
+      expect(heal.indexOf('await this.port.fsyncDir(path.dirname(kept))')).toBeLessThan(heal.indexOf('this.port.truncate('));
+      expect(heal.indexOf('this.port.truncate(')).toBeLessThan(heal.indexOf('this.port.fsyncFile(this.journalPath)'));
+      expect(c).not.toMatch(/createTemp\([^)]*journalPath/);
+    });
+    it('a full run of every application kind renames exactly one file name, never the journal', async () => {
+      const h = harness();
+      const dur = await h.open();
+      await dur.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+      const act = dur.state().checkpoint.activities[0]!;
+      await dur.createLease({ activityId: act.activityId, parentId: PARENT, parentIncarnation: INC, project: 'p', adminRecord: 'wt', canonicalPath: '/w/1', creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: T(9) });
+      await dur.applyCheckpointChange((cp) => cp);
+      await dur.recover();
+      await dur.repairProjection();
+      expect([...new Set(h.log.filter((l) => l.startsWith('rename')))]).toEqual(['rename:delegation-checkpoint.json.tmp->delegation-checkpoint.json']);
+      const journal = readFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE));
+      expect(parseDelegationJournal(new Uint8Array(journal), { completeFromStart: true }).map((r) => r.sequence)).toEqual([1, 2, 3]);
+    });
+    it('no other production source names the journal file at all', () => {
+      const hits: string[] = [];
+      const walk = (dir: string): void => {
+        for (const f of readdirSync(dir)) {
+          const p = path.join(dir, f);
+          if (statSync(p).isDirectory()) walk(p);
+          else if (/\.(ts|mjs|js)$/.test(f) && /delegation-events\.log|DELEGATION_JOURNAL_FILE/.test(stripComments(readFileSync(p, 'utf8')))) hits.push(path.relative(srcDir, p));
+        }
+      };
+      walk(srcDir);
+      // the applier's file and the file side of recovery's, wherever the pilot's moves put them (D-8641), and the journal module
+      const homes = ['DelegationDurability', 'recoverDelegationFromFiles']
+        .map((n) => path.relative('server/src', declaringFile(CHECKPOINT_SOURCE, n)).split(path.sep).join('/'));
+      expect(hits.sort()).toEqual([...new Set([...homes, 'coord/delegation-journal.ts'])].sort());
+    });
+  });
+});
+
+// ── the pure/impure split ────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('the pure/impure split is explicit, and nothing pure mints an ID or reads a clock', () => {
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord');
+  const strip = (s: string): string => s.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
+  const BANNER = /^\/\/ IMPURE SHELL:/m;
+  const NAMES_IO = /node:fs|fsp\.|fsConstants|node:sqlite|\.\/db\.js|\.\/store\.js|CoordStore|process\.|readFileSync|writeFileSync|openSync/;
+  const importsOf = (code: string): string[] => [...code.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1]!);
+  /** The module's text; for the checkpoint, its program (D-8641), so a pure move keeps every scan below on the same code. */
+  const textOf = (file: string): string => (file === 'delegation-checkpoint.ts' ? programSource(CHECKPOINT_SOURCE) : readFileSync(path.join(dir, file), 'utf8'));
+
+  it('delegation-journal.ts: above the IMPURE SHELL banner the code names no filesystem, no SQLite and no store', () => {
+    const src = readFileSync(path.join(dir, 'delegation-journal.ts'), 'utf8');
+    const at = src.search(BANNER);
+    expect(at).toBeGreaterThan(0);
+    const pure = strip(src.slice(0, at));
+    expect(pure).not.toMatch(NAMES_IO);
+    expect(importsOf(pure).sort()).toEqual(['../../../shared/api.js', '../chainedJournal.js', './delegation-lease-state.js', './delegation-model.js']);
+  });
+  // D-8641: over the checkpoint's program. The banner stands in the impure shell's file alone; the homes of the codec, the builder and
+  // the pure recovery name no filesystem, SQLite or store above it (or anywhere, in a file without it); and the program imports from
+  // outside itself exactly what the one file imported on the day of the pin.
+  it('delegation-checkpoint.ts: above the IMPURE SHELL banner the code names no filesystem, no SQLite and no store', () => {
+    const texts = programTexts(CHECKPOINT_SOURCE);
+    const shell = declaringFile(CHECKPOINT_SOURCE, 'recoverDelegationFromFiles');
+    expect(texts.filter((t) => BANNER.test(t.text)).map((t) => t.file), 'the banner, in the impure shell\'s file and no other').toEqual([shell]);
+    const pureHomes = [...new Set(['encodeDelegationCheckpoint', 'DelegationCheckpointBuilder', 'DelegationRecovery'].map((n) => declaringFile(CHECKPOINT_SOURCE, n)))];
+    for (const home of pureHomes) {
+      const src = texts.find((t) => t.file === home)!.text;
+      const at = src.search(BANNER);
+      if (home === shell) expect(at, home).toBeGreaterThan(0);
+      expect(strip(at >= 0 ? src.slice(0, at) : src), home).not.toMatch(NAMES_IO);
+    }
+    const own = new Set(programMembers(CHECKPOINT_SOURCE).map((f) => `./${path.basename(f, '.ts')}.js`));
+    const imports = [...new Set(texts.flatMap((t) => importsOf(strip(t.text))).filter((s) => !own.has(s)))];
+    expect(imports.sort()).toEqual(['../../../shared/api.js', './delegation-compaction.js', './delegation-journal.js', './delegation-lease-state.js', './delegation-model.js', 'node:path']);
+  });
+  for (const file of ['delegation-journal.ts', 'delegation-checkpoint.ts']) {
+    it(`${file}: no randomness and no clock anywhere in the module (they are injected)`, () => {
+      const src = strip(textOf(file));
+      expect(src).not.toMatch(/(?<!deps\.)\brandomUUID\(|\brandomBytes\b|Math\.random|Date\.now|new Date\(|performance\.now|node:crypto/);
+      // R76 M2: Web Crypto's randomness too (the heal names its quarantine file from a digest, and a digest is the ONLY Web Crypto use)
+      expect(src).not.toMatch(/getRandomValues|crypto\.randomUUID|webcrypto/);
+      expect(src.match(/globalThis\.crypto\b[^\n]*/g) ?? [], 'every Web Crypto use').toEqual(file === 'delegation-journal.ts'
+        ? ["globalThis.crypto.subtle.digest('SHA-256', new Uint8Array(bytes)));"] : []);
+      expect(src.match(/\bcrypto\./g)?.length ?? 0, 'no other crypto handle').toBe(file === 'delegation-journal.ts' ? 1 : 0);
+    });
+  }
+  it('the lease adapter calls the INJECTED randomUUID in one place only, after the identity and path checks', () => {
+    const src = strip(programSource(CHECKPOINT_SOURCE));
+    expect(src.match(/this\.deps\.randomUUID\(\)/g)).toHaveLength(1);
+    const at = src.indexOf('this.deps.randomUUID()');
+    expect(src.lastIndexOf('byIdentity(identity)', at)).toBeGreaterThan(0);
+    expect(src.lastIndexOf('byPath(request.canonicalPath)', at)).toBeGreaterThan(src.lastIndexOf('byIdentity(identity)', at));
+  });
+  it('the delegation modules import the one RFC 8785 writer: neither defines a second canonical writer', () => {
+    for (const file of ['delegation-journal.ts', 'delegation-checkpoint.ts']) {
+      const src = strip(textOf(file));
+      expect(src).not.toMatch(/JSON\.stringify\([^)]*\)\s*\+\s*'\\n'|function canonical|const canonical[A-Z]\w* =/);
+    }
+  });
+});
+
+// ── a sanity row for the harness itself ──────────────────────────────────────────────────────────────────────────────
+
+describe('growth (the numbers the report quotes)', () => {
+  it('a record and a checkpoint row are measured, so the growth estimate rests on bytes and not on a guess', () => {
+    const records = evidenceChain([sessionStart(1), bareTool(2, X), subagentStart(3, X)]);
+    const sizes = records.map((r) => encodeDelegationJournalRecord(r).length);
+    // A minimal envelope is a few hundred bytes; Task 9's real envelopes (cwd, transcript paths, listings) add to it.
+    expect(sizes.every((n) => n > 300 && n < 1200)).toBe(true);
+  });
+});
+
+// ── 8B: startup refuses an active coordination restore marker (brief Step 7; `deploy/coordination-snapshot.mjs` publishes it) ──
+
+describe('8B: an active restore marker refuses recovery, and only the marker\'s removal lets it proceed', () => {
+  const markerPath = (dir: string): string => path.join(dir, COORDINATION_RESTORE_MARKER_FILE);
+  const tree = (dir: string): string[] => readdirSync(dir).sort();
+
+  it('the marker is a closed failure: reconstructing, pruning off, the closed code, and every apply refused', async () => {
+    const h = harness();
+    writeFileSync(markerPath(h.dir), '{"format":"ccrc-coordination-restore","state":"replacing","version":1}\n');
+    const dur = await h.open();
+    expect(dur.failure()).toMatchObject({ phase: 'checkpoint-decode', code: DELEGATION_RESTORE_IN_PROGRESS });
+    expect(DELEGATION_RESTORE_IN_PROGRESS).toBe('restore-in-progress');
+    expect(dur.state().phase).toBe('reconstructing');
+    expect(dur.pruningEnabled()).toBe(false);
+    await expect(dur.applyAccepted(batch([sessionStart(1)]))).rejects.toMatchObject({ code: 'not-ready' });
+    expect(readDisk(h.dir)).toEqual({ journal: null, checkpoint: null });
+  });
+
+  it('it comes BEFORE any other reading: a healthy journal and checkpoint beside the marker are neither read nor changed, and recovery reports the marker, not them', async () => {
+    const h = harness();
+    const first = await h.open();
+    await first.applyAccepted(batch([sessionStart(1), bareTool(2, X)]));
+    await first.close();
+    const before = readDisk(h.dir);
+    expect(before.journal).not.toBeNull();
+    writeFileSync(markerPath(h.dir), 'a marker of any shape: its presence is the fact\n');
+    // Corrupt the checkpoint too: a recovery that read it first would name THAT failure.
+    writeFileSync(path.join(h.dir, DELEGATION_CHECKPOINT_FILE), 'not a checkpoint\n');
+    const dur = await h.open();
+    expect(dur.failure()).toMatchObject({ code: DELEGATION_RESTORE_IN_PROGRESS });
+    expect(dur.pruningEnabled()).toBe(false);
+    expect(readFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE))).toEqual(before.journal);
+    expect(readFileSync(path.join(h.dir, DELEGATION_CHECKPOINT_FILE), 'utf8')).toBe('not a checkpoint\n');
+    const report = await recoverDelegationFromFiles(nodeDelegationFilePort, h.dir);
+    expect(report).toMatchObject({ failure: { code: DELEGATION_RESTORE_IN_PROGRESS }, pruning: 'disabled', state: { phase: 'reconstructing' }, facts: null });
+  });
+
+  it('it never deletes the marker: recover() on the same applier still refuses, and a fixture that removes the marker then recovers ready', async () => {
+    const h = harness();
+    const first = await h.open();
+    await first.applyAccepted(batch([sessionStart(1)]));
+    await first.close();
+    writeFileSync(markerPath(h.dir), 'x\n');
+    const dur = await h.open();
+    const filesBefore = tree(h.dir);
+    expect((await dur.recover()).failure).toMatchObject({ code: DELEGATION_RESTORE_IN_PROGRESS });
+    expect(existsSync(markerPath(h.dir))).toBe(true);
+    expect(tree(h.dir)).toEqual(filesBefore);
+    rmSync(markerPath(h.dir));
+    const report = await dur.recover();
+    expect(report.failure).toBeNull();
+    expect(dur.state().phase).toBe('ready');
+    expect(dur.pruningEnabled()).toBe(true);
+    await expect(dur.applyAccepted(batch([sessionStart(2)]))).resolves.toBeDefined();
+  });
+
+  it('the failure appears in the server log line the applier warns with', async () => {
+    const h = harness();
+    writeFileSync(markerPath(h.dir), 'x\n');
+    const warned: string[] = [];
+    await h.open({ warn: (m) => warned.push(m) });
+    expect(warned).toEqual(['ccrc-server: delegation recovery failed at checkpoint-decode: restore-in-progress']);
+  });
+});
+
+// ── Task 9 fix round 2 (R36): the applier never clears a cursor row's `replaced` flag ──
+
+describe('Task 9 R36: a stale result can never write replaced:false over a durable replaced:true', () => {
+  const replacedRow = (cursor: number) => ({ ...cursorFor('2026101412', cursor), intervalState: 'unmeasured' as const, detail: 'bucket-replaced: size 3 is below the cursor 40', replaced: true });
+
+  it('a replaced row, then a stale result for the same bucket with replaced:false: the durable row is still replaced', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)], { cursor: replacedRow(40) }));
+    expect(dur.state().checkpoint.bucketCursors[0]).toMatchObject({ replaced: true });
+    const stale = { ...cursorFor('2026101412', 10), replaced: false };       // computed from a state older than the replacement
+    await dur.applyAccepted(batch([sessionStart(2)], { cursor: stale }));
+    const row = dur.state().checkpoint.bucketCursors.find((r) => r.bucket === '2026101412');
+    expect(row).toMatchObject({ replaced: true, cursor: 10 });                // only the flag is monotonic here; where the cursor goes is Task 13's (M6)
+    await dur.close();
+    const reopened = await h.open();
+    expect(reopened.state().checkpoint.bucketCursors.find((r) => r.bucket === '2026101412')).toMatchObject({ replaced: true });
+  });
+
+  it('the OR keeps the durable replaced words and the unmeasured state: a stale torn-tail row, a reader gap, then a clean tick still answer bucket-replaced', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)], { cursor: replacedRow(40) }));
+    const stale = { ...cursorFor('2026101412', 10), replaced: false, intervalState: 'measured' as const, detail: 'torn-tail: 3 unframed bytes after offset 10' };
+    await dur.applyAccepted(batch([sessionStart(2)], { cursor: stale }));
+    const row = dur.state().checkpoint.bucketCursors.find((r) => r.bucket === '2026101412')!;
+    expect(row).toMatchObject({ replaced: true, intervalState: 'unmeasured' });
+    expect(row.detail).toMatch(/^bucket-replaced/);
+    const id = { sessionId: row.sessionId, parentIncarnation: row.parentIncarnation, bucket: row.bucket };
+    const reader = unreadableDelegationBucketResult(id, dur.state(), { reason: 'capability-unmeasured', detail: 'x' });
+    expect(reader.cursor.detail).toMatch(/^bucket-replaced/);
+    await dur.applyAccepted({ accepted: [], cursor: reader.cursor, interval: null });
+    expect(dur.state().checkpoint.bucketCursors.find((r) => r.bucket === '2026101412')!.detail).toMatch(/^bucket-replaced/);
+    await dur.close();
+  });
+
+  it('another bucket is unaffected, and a row that was never replaced stays false', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)], { cursor: replacedRow(40) }));
+    await dur.applyAccepted(batch([sessionStart(2)], { cursor: cursorFor('2026101413', 5) }));
+    const rows = new Map(dur.state().checkpoint.bucketCursors.map((r) => [r.bucket, r.replaced] as const));
+    expect(rows.get('2026101412')).toBe(true);
+    expect(rows.get('2026101413')).toBe(false);
+  });
+});
+
+// ── Task 13, hand-off 6 (D-4648): a Workflow WORKER's positive meta is durable only after the checkpoint replacement (O1, W3-M12) ──
+
+describe('Task 13: applyPositiveWorkflowMeta opens a workflow worker exactly as applyPositiveAgentMeta opens an agent (O1)', () => {
+  const RUN = 'wf_run1';
+  const workflowLaunch = (n: number, runId = RUN): DelegationEventEnvelopeV1 => ({
+    ...base(n), eventKind: 'PostToolUse', toolName: 'Workflow', toolUseId: `toolu_wf${n}`, outcome: 'async-launched',
+    launch: { status: 'async-launched', taskId: `task_${n}`, taskType: 'local_workflow', workflowName: 'review-pass', runId, transcriptDir: `/work/t/${runId}`, scriptPath: '/work/s.js' },
+  });
+  const workerKey = (index: number) => ({ parentId: PARENT, parentIncarnation: INC, sourceKind: 'workflow' as const, upstreamId: `${RUN}-${index}` });
+  const meta = (index: number, over: { parentId?: string } = {}) => ({ parentId: over.parentId ?? PARENT, parentIncarnation: INC, runId: RUN, workerIndex: index });
+  let launchJournalId = '';
+
+  /** The run's launch response is its qualifying join (R44): it opens the RUN row and the mapping, so the worker takes the run's identity record. */
+  async function metaRun(edge: DelegationDurabilityEdge | null, when: 'before' | 'after') {
+    const h = harness();
+    const first = await h.open();
+    const named = await first.applyAccepted(batch([sessionStart(1), workflowLaunch(2)]));
+    launchJournalId = named.appended[1]!.journalId;
+    await first.close();
+    const store2 = new CoordStore(openCoordDb(path.join(h.dir, 'coord.db')));
+    const h2 = harness({ dir: h.dir, store: store2 });
+    const dur = await h2.open({ onEdge: edge === null ? undefined : (e, w) => { if (e === edge && w === when) throw new SimulatedCrash(`${e}:${w}`); } });
+    h2.log.length = 0;
+    return { h2, dur, store2 };
+  }
+  const expectedId = (index: number): string => deriveDelegationActivityId(workerKey(index), launchJournalId);
+
+  it('opens the worker from the RUN\'s record, without a journal event, advancing only the revision, and returns the ID only after the replacement', async () => {
+    const { h2, dur } = await metaRun(null, 'before');
+    const before = dur.state().checkpoint;
+    const out = await dur.applyPositiveWorkflowMeta(meta(1));
+    expect(out).toMatchObject({ kind: 'opened', activityId: expectedId(1) });
+    const after = dur.state().checkpoint;
+    expect(after.revision).toBe(before.revision + 1);
+    expect(after.appliedJournalSequence).toBe(before.appliedJournalSequence);          // no journal sequence invented
+    expect(h2.log.some((l) => l.startsWith('journal.'))).toBe(false);
+    expect(after.activityIdsByNaturalKey[encodeDelegationNaturalKey(workerKey(1))]).toBe(expectedId(1));
+    const row = after.activities.find((a) => a.upstreamId === `${RUN}-1`)!;
+    expect(row).toMatchObject({ sourceKind: 'workflow', identityJournalId: launchJournalId, parentId: PARENT });
+    if (out.kind === 'opened') expect(out.applied.durable).toBe(true);
+    expect(out.kind === 'opened' && after.activities.some((a) => a.activityId === out.activityId)).toBe(true);
+  });
+
+  it('waits when no run is open, answers already-open for a mapped worker, and a second worker takes the same identity record', async () => {
+    const { dur } = await metaRun(null, 'before');
+    expect(await dur.applyPositiveWorkflowMeta({ ...meta(0), runId: 'wf_unknown' })).toEqual({ kind: 'waiting-for-evidence' });
+    expect(dur.state().checkpoint.revision).toBe(1);                                    // a wait writes nothing
+    await dur.applyPositiveWorkflowMeta(meta(0));
+    await dur.applyPositiveWorkflowMeta(meta(1));
+    expect(await dur.applyPositiveWorkflowMeta(meta(0))).toEqual({ kind: 'already-open', activityId: expectedId(0) });
+    const workers = dur.state().checkpoint.activities.filter((a) => /-\d+$/.test(a.upstreamId));
+    expect(workers.map((a) => a.upstreamId).sort()).toEqual([`${RUN}-0`, `${RUN}-1`]);
+    expect(new Set(workers.map((a) => a.identityJournalId))).toEqual(new Set([launchJournalId]));
+  });
+
+  it('refuses an index that is not a non-negative safe integer, writes nothing, and mints nothing', async () => {
+    const { h2, dur } = await metaRun(null, 'before');
+    const before = readDisk(h2.dir);
+    for (const index of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53, '1' as unknown as number]) {
+      await expect(dur.applyPositiveWorkflowMeta(meta(index)), String(index)).rejects.toMatchObject({ code: 'bad-shape' });
+    }
+    expect(readDisk(h2.dir)).toEqual(before);
+    expect(dur.state().checkpoint.activities.map((a) => a.upstreamId)).toEqual([RUN]);
+    expect(dur.state().phase).toBe('ready');                                            // a refused index is not a failed application
+    expect(dur.failure()).toBeNull();
+  });
+
+  const EDGES = ['build', 'checkpoint-write', 'checkpoint-fsync', 'checkpoint-rename', 'directory-fsync'] as const;
+  for (const edge of EDGES) {
+    for (const when of ['before', 'after'] as const) {
+      it(`O1 crash ${when} ${edge}: the call rejects, no ID is returned, SQLite is untouched, and the ID is on disk only if the rename completed`, async () => {
+        const { h2, dur, store2 } = await metaRun(edge, when);
+        const returned: string[] = [];
+        await expect(dur.applyPositiveWorkflowMeta(meta(1)).then((o) => { if (o.kind === 'opened') returned.push(o.activityId); return o; })).rejects.toThrow(SimulatedCrash);
+        expect(returned).toEqual([]);
+        expect(dur.state().checkpoint.activities.map((a) => a.upstreamId)).toEqual([RUN]);   // not even the applier's own state shows the worker
+        expect(Object.keys(dur.state().checkpoint.activityIdsByNaturalKey)).toHaveLength(1);
+        expect(h2.log.filter((l) => l === 'project' || l === 'projectChanged' || l.startsWith('insertEvents'))).toEqual([]);
+        expect(store2.readDelegationProjection().activities.map((a) => a.upstreamId)).toEqual([RUN]);
+        const onDisk = decodeDelegationCheckpoint(new Uint8Array(readDisk(h2.dir).checkpoint!));
+        const renamed = edge === 'directory-fsync' || (edge === 'checkpoint-rename' && when === 'after');
+        expect(onDisk.activities.map((a) => a.upstreamId).sort()).toEqual(renamed ? [RUN, `${RUN}-1`] : [RUN]);
+        // A restart never invents it either; the same meta later yields the same, deterministic ID.
+        const fresh = await harness({ dir: h2.dir }).open();
+        const out = await fresh.applyPositiveWorkflowMeta(meta(1));
+        expect(out.kind === 'opened' || out.kind === 'already-open' ? out.activityId : 'none').toBe(expectedId(1));
+      });
+    }
+  }
+
+  it('the new ID cannot escape through the applier\'s serialized queue: a rejected application leaves it reconstructing, and a later call refuses', async () => {
+    const { dur } = await metaRun('checkpoint-rename', 'before');
+    await expect(dur.applyPositiveWorkflowMeta(meta(1))).rejects.toThrow(SimulatedCrash);
+    expect(dur.state().phase).toBe('reconstructing');
+    await expect(dur.applyPositiveWorkflowMeta(meta(1))).rejects.toMatchObject({ code: 'not-ready' });
+  });
+});
+
+// ── Task 13 fix round 1, R58 (D-4654): bucket cursors retire through the one application path ──────────────────────────
+
+describe('Task 13 fix 1 (R58, D-4654): pruneBucketCursors drops a cursor only under the applier\'s lock, only where its hour is on file, only past the read horizon', () => {
+  const NOW_MS = Date.UTC(2026, 9, 15, 10, 30);
+  const NOW_HOUR_MS = Date.UTC(2026, 9, 15, 10);
+  const HOUR = 3_600_000;
+  const bucketBack = (back: number): string => formatDelegationInstant(NOW_HOUR_MS - back * HOUR).replace(/[-:T]/g, '').slice(0, 10);
+  const hourBack = (back: number): string => formatDelegationInstant(NOW_HOUR_MS - back * HOUR);
+  const cursorBack = (back: number, over: Record<string, unknown> = {}) => ({ ...cursorFor(bucketBack(back), 10), ...over });
+  /** A cursor and (when asked) its interval row, through the ingestion door. */
+  async function put(dur: DelegationDurability, back: number, o: { interval?: 'measured' | 'unmeasured' | null; replaced?: boolean } = {}) {
+    await dur.applyAccepted(batch([], {
+      cursor: cursorBack(back, o.replaced === true ? { replaced: true, intervalState: 'unmeasured', detail: 'bucket-replaced: x' } : {}),
+      interval: o.interval === null ? null : intervalFor(hourBack(back), o.interval ?? 'measured', T(1)),
+    }));
+  }
+  const buckets = (dur: DelegationDurability): string[] => dur.state().checkpoint.bucketCursors.map((c) => c.bucket).sort();
+
+  it('47 h is kept, 49 h is dropped, and an old cursor with NO interval row is kept: the drop is conditional on the hour being on file', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await put(dur, 47);
+    await put(dur, 49);
+    await put(dur, 100, { interval: null });
+    await put(dur, 90, { interval: 'unmeasured' });
+    const before = dur.state().checkpoint.revision;
+    const out = await dur.pruneBucketCursors(NOW_MS);
+    expect(out.dropped).toBe(2);
+    expect(buckets(dur)).toEqual([bucketBack(47), bucketBack(100)].sort());
+    expect(dur.state().checkpoint.revision).toBe(before + 1);
+    expect(out.applied.durable).toBe(true);
+    // the intervals are exactly what they were
+    expect(dur.state().checkpoint.observationIntervals.map((r) => [r.utcHour, r.state]).sort()).toEqual([[hourBack(47), 'measured'], [hourBack(49), 'measured'], [hourBack(90), 'unmeasured']].sort());
+  });
+
+  it('it goes through the ONE application path: the O5 edges in order, the journal untouched, SQLite projected after the rename', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await put(dur, 49);
+    const journalBefore = readDisk(h.dir).journal;
+    h.log.length = 0;
+    const edges: string[] = [];
+    const dur2 = await h.open({ onEdge: (edge, when) => { edges.push(`${edge}:${when}`); } });
+    h.log.length = 0;
+    edges.length = 0;
+    const out = await dur2.pruneBucketCursors(NOW_MS);
+    expect(out.dropped).toBe(1);
+    // a checkpoint-only application: O5's steps 3 to 8, with no journal record (so no journal-write and no journal-fsync edge)
+    expect(edges).toEqual(DELEGATION_DURABILITY_EDGES.filter((e) => e !== 'journal-write' && e !== 'journal-fsync').flatMap((e) => [`${e}:before`, `${e}:after`]));
+    expect(h.log.filter((l) => l.startsWith('journal.'))).toEqual([]);             // no journal write, fsync or open for append
+    expect(h.log).toContain('rename:delegation-checkpoint.json.tmp->delegation-checkpoint.json');
+    expect(h.log.indexOf('projectChanged'), 'the prune is projected as a delta, after the rename').toBeGreaterThan(h.log.indexOf('rename:delegation-checkpoint.json.tmp->delegation-checkpoint.json'));
+    expect(h.log.indexOf('project')).toBe(-1);
+    expect(readDisk(h.dir).journal).toEqual(journalBefore);
+  });
+
+  it('a no-op prune costs no write: nothing droppable changes neither the file, the revision nor SQLite', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await put(dur, 47);
+    await put(dur, 100, { interval: null });
+    const before = readDisk(h.dir);
+    const revision = dur.state().checkpoint.revision;
+    h.log.length = 0;
+    const out = await dur.pruneBucketCursors(NOW_MS);
+    expect(out.dropped).toBe(0);
+    expect(out.applied.durable).toBe(false);
+    expect(dur.state().checkpoint.revision).toBe(revision);
+    expect(readDisk(h.dir)).toEqual(before);
+    expect(h.log).toEqual([]);
+  });
+
+  it('a kept row\'s replaced:true survives the prune and a restart; a dropped row stays dropped', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await put(dur, 47, { replaced: true });
+    await put(dur, 49, { replaced: true });
+    await dur.pruneBucketCursors(NOW_MS);
+    await dur.close();
+    const again = await h.open();
+    expect(again.state().checkpoint.bucketCursors.map((c) => [c.bucket, c.replaced])).toEqual([[bucketBack(47), true]]);
+  });
+
+  it('it refuses to run unless the applier is ready, and writes nothing', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await put(dur, 49);
+    writeFileSync(path.join(h.dir, COORDINATION_RESTORE_MARKER_FILE), 'x\n');
+    await dur.recover();
+    expect(dur.state().phase).toBe('reconstructing');
+    const before = readDisk(h.dir);
+    await expect(dur.pruneBucketCursors(NOW_MS)).rejects.toMatchObject({ code: 'not-ready' });
+    expect(readDisk(h.dir)).toEqual(before);
+  });
+
+  it('the decision is the applier\'s, on its OWN rows, inside the lock: an ingestion queued while a prune is pending marks a kept bucket replaced, and the prune does not undo it', async () => {
+    const h = harness();
+    let hold: Promise<void> | null = null;
+    let release!: () => void;
+    const dur = await h.open({ onEdge: async (edge, when) => { if (edge === 'build' && when === 'before' && hold !== null) { const g = hold; hold = null; await g; } } });
+    await put(dur, 47);                                                                // the kept bucket, not replaced yet
+    await put(dur, 49);                                                                // the droppable one
+    hold = new Promise<void>((resolve) => { release = resolve; });
+    const ingestion = dur.applyAccepted(batch([], { cursor: cursorBack(47, { replaced: true, intervalState: 'unmeasured', detail: 'bucket-replaced: x' }), interval: null }));
+    const prune = dur.pruneBucketCursors(NOW_MS);                                      // a copy taken NOW would still show 47 as not replaced
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    release();
+    await Promise.all([ingestion, prune]);
+    expect(dur.state().checkpoint.bucketCursors.map((c) => [c.bucket, c.replaced])).toEqual([[bucketBack(47), true]]);
+    await dur.close();
+    expect((await h.open()).state().checkpoint.bucketCursors.map((c) => [c.bucket, c.replaced])).toEqual([[bucketBack(47), true]]);
+  });
+
+  it('a bucket whose hour does not parse is kept, and the drop reports it', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([], { cursor: { ...cursorFor('garbage', 10) }, interval: null }));
+    await put(dur, 49);
+    const out = await dur.pruneBucketCursors(NOW_MS);
+    expect(out.dropped).toBe(1);
+    expect(out.unparseable).toBe(1);
+    expect(buckets(dur)).toEqual(['garbage']);
+  });
+});
+
+// ── Task 13 fix round 1, M1 (D-4652): the lane reads retained evidence through the applier, read-only and on its queue ──
+
+describe('Task 13 fix 1 (M1, D-4652): visitRetainedRecords is read-only, serialized with every application, and only ever runs ready', () => {
+  /** A port whose journal READS wait on a gate: the visit is then held open mid-stream. */
+  function gatedPort(inner: DelegationFilePort, gate: { wait: Promise<void> | null }): DelegationFilePort {
+    return {
+      ...inner,
+      openRead: async (p) => {
+        const handle = await inner.openRead(p);
+        if (handle === null) return null;
+        // The gate holds the FIRST read after it is armed and then disarms: the visit's first read waits, while an application's own reads
+        // (the journal writer checks the tail it appends behind) go straight through, so only a queue can keep the two apart.
+        return { size: () => handle.size(), close: () => handle.close(), read: async (pos, len) => { const held = gate.wait; if (held !== null) { gate.wait = null; await held; } return handle.read(pos, len); } };
+      },
+    };
+  }
+
+  it('an application enqueued during a held visit completes only after the visit', async () => {
+    const h = harness();
+    const first = await h.open();
+    await first.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    await first.close();
+    const gate: { wait: Promise<void> | null } = { wait: null };
+    const dur = await h.open({ port: gatedPort(spyPort(h.log), gate) });
+    let release!: () => void;
+    gate.wait = new Promise<void>((resolve) => { release = resolve; });
+    const order: string[] = [];
+    const seen: number[] = [];
+    const visit = dur.visitRetainedRecords((r) => { seen.push(r.sequence); }).then(() => { order.push('visit'); });
+    const apply = dur.applyAccepted(batch([sessionStart(3)])).then(() => { order.push('apply'); });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(order, 'the application ran beside the visit').toEqual([]);
+    } finally {
+      release();                                                    // a failed assertion must not leave the gate shut: the test's cleanup awaits the queue
+    }
+    await Promise.all([visit, apply]);
+    expect(order).toEqual(['visit', 'apply']);
+    expect(seen).toEqual([1, 2]);                                   // the visit saw the journal as it stood when it began, not the application's record
+  });
+
+  it('it refuses unless the applier is ready (a reconstructing applier streams nothing), and visits nothing', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(batch([sessionStart(1)]));
+    writeFileSync(path.join(h.dir, COORDINATION_RESTORE_MARKER_FILE), 'x\n');
+    await dur.recover();
+    const seen: number[] = [];
+    await expect(dur.visitRetainedRecords((r) => { seen.push(r.sequence); })).rejects.toMatchObject({ code: 'not-ready' });
+    expect(seen).toEqual([]);
+  });
+
+  it('it is read-only: no file, no revision, no SQLite row and no log entry changes, and it opens no write, rename or truncate target', async () => {
+    const h = harness();
+    const first = await h.open();
+    await first.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    await first.close();
+    const dur = await h.open();
+    const before = { disk: readDisk(h.dir), revision: dur.state().checkpoint.revision, stats: h.store.delegationEventStats() };
+    h.log.length = 0;
+    const seen: number[] = [];
+    await dur.visitRetainedRecords((r) => { seen.push(r.sequence); });
+    expect(seen).toEqual([1, 2]);
+    expect(readDisk(h.dir)).toEqual(before.disk);
+    expect(dur.state().checkpoint.revision).toBe(before.revision);
+    expect(h.store.delegationEventStats()).toEqual(before.stats);
+    expect(h.log.filter((l) => /^(journal|checkpoint)\.|^rename|^dir\.sync|^project|^insertEvents/.test(l))).toEqual([]);
+  });
+
+  it('retained records before the applied position change nothing: an activity the checkpoint already maps keeps its ID verbatim', async () => {
+    const h = harness();
+    const first = await h.open();
+    const named = await first.applyAccepted(batch([sessionStart(1), bareTool(2, X), subagentStart(3, X)]));
+    const idBefore = activityOf(first.state().checkpoint, X)!.activityId;
+    expect(idBefore).toBe(deriveDelegationActivityId(keyOf(X), named.appended[1]!.journalId));
+    await first.close();
+    const dur = await h.open();
+    const mapped = { ...dur.state().checkpoint.activityIdsByNaturalKey };
+    const seen: Array<[number, string]> = [];
+    await dur.visitRetainedRecords((r) => { seen.push([r.sequence, r.entry.kind]); });
+    expect(seen.map(([n]) => n)).toEqual([1, 2, 3]);                                // every retained record, including those before the applied position
+    expect(activityOf(dur.state().checkpoint, X)!.activityId).toBe(idBefore);
+    expect(dur.state().checkpoint.activityIdsByNaturalKey).toEqual(mapped);
+    expect(dur.state().checkpoint.activities.map((a) => a.activityId)).toEqual([idBefore]);
+  });
+
+  it('a failure DURING a visit rejects, leaves the applier ready and unchanged, and a later application still works', async () => {
+    const h = harness();
+    const first = await h.open();
+    await first.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    await first.close();
+    const dur = await h.open();
+    const before = readDisk(h.dir);
+    await expect(dur.visitRetainedRecords((r) => { if (r.sequence === 2) throw new Error('visit failed midway'); })).rejects.toThrow('visit failed midway');
+    expect(dur.state().phase).toBe('ready');
+    expect(dur.failure()).toBeNull();
+    expect(readDisk(h.dir)).toEqual(before);
+    await expect(dur.applyAccepted(batch([sessionStart(3)]))).resolves.toBeDefined();
+  });
+});
+
+// ── D-4658 (ruling R79): one durable application per pass, `applyAcceptedBatch` ─────────────────────────────────────────
+
+describe('D-4658: applyAcceptedBatch applies several buckets as ONE durable application, in O5 order, equal to one application each', () => {
+  const OTHER = 'lane-b-demo';
+  const cursorOf = (sessionId: string, bucket: string, cursor: number, over: { replaced?: boolean; intervalState?: 'measured' | 'unmeasured'; detail?: string | null } = {}) =>
+    ({ ...cursorFor(bucket, cursor), sessionId, ...over });
+  const intervalOf = (sessionId: string, utcHour: string, recordedAt: string) => ({ ...intervalFor(utcHour, 'measured', recordedAt), sessionId });
+  const HOUR0 = '2026-10-14T00:00:00.000Z';
+  const HOUR1 = '2026-10-14T01:00:00.000Z';
+  /** Three buckets of a pass: two owners, one with two hours; seven records in all, one opening an activity. */
+  const passBatches = (): DelegationDurableBatch[] => [
+    batch([sessionStart(1), subagentStart(2, X), bareTool(3, X)], { cursor: cursorOf(PARENT, '2026101400', 300), interval: intervalOf(PARENT, HOUR0, T(10)) }),
+    batch([sessionStart(4, { sessionId: OTHER }), bareTool(5, Y, { sessionId: OTHER })], { cursor: cursorOf(OTHER, '2026101400', 200), interval: intervalOf(OTHER, HOUR0, T(10)) }),
+    batch([bareTool(6, X), subagentStop(7, X)], { cursor: cursorOf(PARENT, '2026101401', 200), interval: intervalOf(PARENT, HOUR1, T(10)) }),
+  ];
+  /** SQLite's events, without the table's own autoincrement `id` (a repair that re-inserts renumbers it; nothing reads it). */
+  const eventsOf = (store: CoordStore) => (store as unknown as { db: DatabaseSync }).db.prepare('SELECT * FROM delegation_events ORDER BY journalSequence').all()
+    .map((r) => { const { id: _id, ...rest } = r as Record<string, unknown>; return rest; });
+  /** Everything an application can leave: the journal's bytes, the checkpoint's rows (its revision aside) and SQLite. */
+  const outcomeOf = (h: Harness, dur: DelegationDurability) => ({
+    journal: readFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE)).toString('base64'),
+    rows: withoutRevision(dur.state().checkpoint),
+    projection: canonicalDelegationJson(h.store.readDelegationProjection()),
+    events: JSON.stringify(eventsOf(h.store)),
+  });
+  /** THE REFERENCE: the same input, unbatched (one `applyAccepted` per bucket, as the lane applied before D-4658). */
+  async function unbatched() {
+    const h = harness();
+    const dur = await h.open();
+    for (const b of passBatches()) await dur.applyAccepted(b);
+    return outcomeOf(h, dur);
+  }
+  /** Reopens a crashed directory with a fresh applier (recovery), as a restart does. */
+  async function reopen(dir: string) {
+    const h = harness({ dir, store: new CoordStore(openCoordDb(path.join(dir, 'coord.db'))) });
+    return { h, dur: await h.open() };
+  }
+
+  it('O5 in order: every record written then fsynced before the next, then ONE checkpoint replacement and ONE projection', async () => {
+    const h = harness();
+    const edges: string[] = [];
+    const dur = await h.open({ onEdge: (e, w) => { if (w === 'before') edges.push(e); } });
+    edges.length = 0;
+    const out = await dur.applyAcceptedBatch(passBatches());
+    expect(out.appended).toHaveLength(7);
+    expect(edges).toEqual([
+      ...Array.from({ length: 7 }, () => ['journal-write', 'journal-fsync']).flat(),
+      'build', 'checkpoint-write', 'checkpoint-fsync', 'checkpoint-rename', 'directory-fsync', 'project',
+    ]);
+    expect(dur.state().checkpoint.bucketCursors.map((c) => [c.sessionId, c.bucket, c.cursor])).toEqual([
+      [PARENT, '2026101400', 300], [OTHER, '2026101400', 200], [PARENT, '2026101401', 200],
+    ].sort((a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1)));
+  });
+
+  it('the same input unbatched leaves the SAME journal bytes, checkpoint rows and SQLite', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAcceptedBatch(passBatches());
+    expect(outcomeOf(h, dur)).toEqual(await unbatched());
+  });
+
+  it('a batch\'s members are validated before the first byte: one unreadable cursor refuses the WHOLE application, and nothing is written', async () => {
+    const h = harness();
+    const dur = await h.open();
+    const before = readDisk(h.dir);
+    const bad = passBatches();
+    bad[1] = { ...bad[1]!, cursor: { ...bad[1]!.cursor!, cursor: -1 } };
+    await expect(dur.applyAcceptedBatch(bad)).rejects.toThrow();
+    expect(readDisk(h.dir)).toEqual(before);
+    expect(dur.failure()).toBeNull();
+    expect(dur.state().checkpoint.appliedJournalSequence).toBe(0);
+  });
+
+  it('replaced stays sticky across a batch: a later member of the same application cannot un-replace a bucket', async () => {
+    const h = harness();
+    const dur = await h.open();
+    const replaced = cursorOf(PARENT, '2026101400', 40, { replaced: true, intervalState: 'unmeasured', detail: 'bucket-replaced: size 3 is below the cursor 40' });
+    await dur.applyAcceptedBatch([batch([sessionStart(1)], { cursor: replaced }), batch([sessionStart(2)], { cursor: cursorOf(PARENT, '2026101400', 10) })]);
+    expect(dur.state().checkpoint.bucketCursors[0]).toMatchObject({ replaced: true, intervalState: 'unmeasured' });
+    expect(dur.state().checkpoint.bucketCursors[0]!.detail).toMatch(/^bucket-replaced/);
+  });
+
+  // Coordinator 5443 condition 1: batching widens the window past the checkpoint from one record to k.
+  const crashes: ReadonlyArray<readonly [string, (e: DelegationDurabilityEdge, w: 'before' | 'after', n: { writes: number }) => boolean, number]> = [
+    ['after all seven records are appended and fsynced, before the checkpoint rename', (e, w) => e === 'checkpoint-rename' && w === 'before', 7],
+    ['between two of the batch\'s record fsyncs (two records durable, the third not yet written)', (e, w, n) => e === 'journal-write' && w === 'before' && ++n.writes === 3, 2],
+  ];
+  for (const [label, at, durable] of crashes) {
+    it(`a crash ${label}: recovery replays every record, and the next pass completes to the unbatched state`, async () => {
+      const h = harness();
+      const n = { writes: 0 };
+      const dur = await h.open({ onEdge: (e, w) => { if (at(e, w, n)) throw new SimulatedCrash(`${e}:${w}`); } });
+      await expect(dur.applyAcceptedBatch(passBatches())).rejects.toThrow(SimulatedCrash);
+      expect(dur.state().checkpoint.appliedJournalSequence, 'nothing of the application is visible').toBe(0);
+      await dur.close();
+      const again = await reopen(h.dir);
+      expect(again.dur.failure()).toBeNull();
+      expect(again.dur.state().checkpoint.appliedJournalSequence, `${durable} record(s) past the checkpoint, all replayed`).toBe(durable);
+      expect(again.dur.state().checkpoint.bucketCursors, 'cursors are checkpoint-only: the crash lost them, so the next pass re-reads').toEqual([]);
+      await again.dur.applyAcceptedBatch(passBatches());                   // the next pass: the same buckets from the same cursors
+      expect(outcomeOf(again.h, again.dur)).toEqual(await unbatched());
+    });
+  }
+
+  it('condition 3, the heal: a torn LAST record of a batch heals at recovery, and the next pass completes to the unbatched state', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAcceptedBatch(passBatches());
+    await dur.close();
+    const jp = path.join(h.dir, DELEGATION_JOURNAL_FILE);
+    const bytes = readFileSync(jp);
+    const lines = bytes.toString('utf8').split('\n').filter((l) => l !== '');
+    const keep = lines.slice(0, 6).join('\n') + '\n';                      // six whole records, then half of the seventh: a torn tail
+    writeFileSync(jp, keep + lines[6]!.slice(0, Math.floor(lines[6]!.length / 2)));
+    writeFileSync(path.join(h.dir, DELEGATION_CHECKPOINT_FILE), '');        // the checkpoint of the batch never landed
+    rmSync(path.join(h.dir, DELEGATION_CHECKPOINT_FILE));
+    const again = await reopen(h.dir);
+    expect(again.dur.failure()).toBeNull();
+    expect(again.dur.lastTailHeal()).not.toBeNull();
+    expect(again.dur.state().checkpoint.appliedJournalSequence).toBe(6);
+    await again.dur.applyAcceptedBatch(passBatches());
+    expect(outcomeOf(again.h, again.dur)).toEqual(await unbatched());
+  });
+
+  it('condition 3, corruption: a batch with a damaged record BEFORE its last is not a torn tail; recovery fails closed and cuts nothing', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAcceptedBatch(passBatches());
+    await dur.close();
+    const jp = path.join(h.dir, DELEGATION_JOURNAL_FILE);
+    const lines = readFileSync(jp, 'utf8').split('\n').filter((l) => l !== '');
+    const damaged = [...lines.slice(0, 3), lines[3]!.slice(0, Math.floor(lines[3]!.length / 2)), ...lines.slice(4)].join('\n') + '\n';
+    writeFileSync(jp, damaged);
+    rmSync(path.join(h.dir, DELEGATION_CHECKPOINT_FILE));
+    const again = await reopen(h.dir);
+    expect(again.dur.failure(), 'a damaged record that is not the last one is corruption').not.toBeNull();
+    expect(again.dur.lastTailHeal()).toBeNull();
+    expect(readFileSync(jp, 'utf8'), 'nothing is cut').toBe(damaged);
+  });
+
+  it('O1 (the batch door\'s own crash row): a crash at any edge exposes no activity ID and poisons the applier; recovery replays a PREFIX of the records, and the next pass completes to the unbatched state', async () => {
+    const reference = await unbatched();
+    for (const edge of DELEGATION_DURABILITY_EDGES.filter((e) => e !== 'project')) {
+      for (const when of ['before', 'after'] as const) {
+        const h = harness();
+        let hit = false;
+        const dur = await h.open({ onEdge: (e, w) => { if (!hit && e === edge && w === when) { hit = true; throw new SimulatedCrash(`${e}:${w}`); } } });
+        const exposed: string[] = [];
+        await expect(dur.applyAcceptedBatch(passBatches()).then((o) => { exposed.push(...o.openedActivities.map((a) => a.activityId)); })).rejects.toThrow(SimulatedCrash);
+        expect(exposed, `${when} ${edge}`).toEqual([]);
+        expect(dur.state().checkpoint.activities, `${when} ${edge}: nothing visible`).toEqual([]);
+        await expect(dur.applyAcceptedBatch(passBatches())).rejects.toMatchObject({ code: 'not-ready' });
+        await dur.close();
+        const again = await reopen(h.dir);
+        expect(again.dur.failure(), `${when} ${edge}`).toBeNull();
+        const k = again.dur.state().checkpoint.appliedJournalSequence;
+        expect(k >= 0 && k <= 7, `${when} ${edge}: a prefix of the batch (${k})`).toBe(true);
+        await again.dur.applyAcceptedBatch(passBatches());
+        expect(outcomeOf(again.h, again.dur), `${when} ${edge}`).toEqual(reference);
+      }
+    }
+  });
+
+  it('condition 4, the compare: a re-applied pass whose records all dedupe and whose rows are unchanged writes NOTHING; a change that removes rows without appending is written', async () => {
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAcceptedBatch(passBatches());
+    const revision = dur.state().checkpoint.revision;
+    const before = readDisk(h.dir);
+    const again = await dur.applyAcceptedBatch(passBatches());              // the caller hands seven records; the measured plan appends none
+    expect(again.durable).toBe(false);
+    expect(dur.state().checkpoint.revision).toBe(revision);
+    expect(readDisk(h.dir)).toEqual(before);
+    // a checkpoint-only change that REMOVES rows (no record appended) runs the compare and is written
+    const removed = await dur.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: cp.observationIntervals.slice(1) }));
+    expect(removed.durable).toBe(true);
+    expect(dur.state().checkpoint.observationIntervals).toHaveLength(2);
+    // and a deduped re-application that changes a cursor is written too
+    const moved = passBatches().map((b, i) => (i === 0 ? { ...b, cursor: cursorOf(PARENT, '2026101400', 400) } : b));
+    expect((await dur.applyAcceptedBatch(moved)).durable).toBe(true);
+  });
+});
+
+// ── D-5836 (run 645): the lane's per-pass repair skips the rewrite when the projection is known current ───────────────────
+
+describe('D-5836 R2: every case where the per-pass repair must still take the FULL path', () => {
+  type PerPassReport = (DelegationProjectionRepairReport & { skipped?: boolean }) | null;
+  /** `repairProjection({ perPass: true })`, reached through a cast so this file is type-clean before the option exists. */
+  const perPassOf = (d: DelegationDurability): Promise<PerPassReport> =>
+    (d as unknown as { repairProjection(o?: { perPass?: boolean }): Promise<PerPassReport> }).repairProjection({ perPass: true });
+  /** The forced-full interval, the export itself (a named import since D-8641, so the pilot's move repoints it). */
+  const FULL_MS: number = DELEGATION_REPAIR_FULL_MS;
+
+  interface Lane {
+    h: Harness;
+    dur: DelegationDurability;
+    /** The virtual clock the lane hands the applier as `monotonicMs` (the forced-full clock). */
+    vclock: { ms: number };
+    ctl: { failProject: number; failStats: boolean; failEdge: string | null };
+  }
+
+  /** A lane over a fixture directory: an applier opened with a controllable projection port (the port's `project` can be made to throw
+   *  once, its `eventStats` to throw) and a virtual `monotonicMs`, and one batch applied (a session and an agent's activity). */
+  async function lane(): Promise<Lane> {
+    const h = harness();
+    const vclock = { ms: 1_000_000 };
+    const ctl = { failProject: 0, failStats: false, failEdge: null as string | null };
+    const real = delegationProjectionPortOfStore(h.store);
+    const projection: DelegationProjectionPort = {
+      project: (cp) => {
+        h.log.push('project');
+        if (ctl.failProject > 0) { ctl.failProject--; throw new Error('the projection port failed (fixture)'); }
+        real.project(cp);
+      },
+      projectChanged: (prior, next) => {
+        h.log.push('projectChanged');
+        if (ctl.failProject > 0) { ctl.failProject--; throw new Error('the projection port failed (fixture)'); }
+        return real.projectChanged(prior, next);
+      },
+      insertEvents: (rows) => { h.log.push(`insertEvents:${rows.length}`); return real.insertEvents(rows); },
+      eventStats: () => { if (ctl.failStats) throw new Error('eventStats failed (fixture)'); return real.eventStats(); },
+      countEventsAtOrBelow: (s) => real.countEventsAtOrBelow(s),
+      deleteEventsBetween: (a, b, n) => real.deleteEventsBetween(a, b, n),
+    };
+    const over = {
+      projection, monotonicMs: () => vclock.ms,
+      onEdge: (e: DelegationDurabilityEdge, w: 'before' | 'after') => { if (ctl.failEdge === `${e}:${w}`) { ctl.failEdge = null; throw new SimulatedCrash(`${e}:${w}`); } },
+    } as unknown as Partial<DelegationDurabilityDeps>;
+    const dur = await h.open(over);
+    await dur.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    return { h, dur, vclock, ctl };
+  }
+
+  /** One per-pass repair, with the port calls it made. */
+  async function pass(l: Lane): Promise<{ report: PerPassReport; projected: boolean }> {
+    l.h.log.length = 0;
+    const report = await perPassOf(l.dur);
+    return { report, projected: l.h.log.some((x) => x === 'project' || x === 'projectChanged') };
+  }
+  /** The CONTROL: a per-pass repair that takes the short path. It runs immediately before each case's perturbation, so a case cannot
+   *  pass for the reason that the short path never exists. */
+  async function expectShort(l: Lane, label: string): Promise<void> {
+    const r = await pass(l);
+    expect(r.projected, `${label}: a short per-pass repair makes no port project call`).toBe(false);
+    expect(r.report, `${label}: a short per-pass repair reports skipped`).toMatchObject({
+      skipped: true, inserted: 0, duplicate: 0, healedSessions: 0, fullReplay: false, wipedAll: false, journalPasses: 0,
+      resumedAfter: Number(l.h.store.delegationEventStats().maxSequence ?? 0),
+    });
+  }
+  /** The FULL path: the port's `project` is called by the repair, and the report says it was not skipped. */
+  async function expectFull(l: Lane, label: string): Promise<PerPassReport> {
+    const r = await pass(l);
+    expect(r.projected, `${label}: the full path calls the port's project`).toBe(true);
+    expect(r.report, `${label}: the repair completed`).not.toBeNull();
+    expect(r.report?.skipped, `${label}: the full path reports skipped:false`).toBe(false);
+    return r.report;
+  }
+  /** The lane's first per-pass repair after `open` is FULL; the second is the first control. */
+  async function settle(l: Lane): Promise<void> {
+    const first = await pass(l);
+    expect(first.projected, 'the lane\'s first per-pass repair after open takes the full path').toBe(true);
+    await expectShort(l, 'control (the second per-pass repair)');
+    expect(first.report?.skipped, 'the first per-pass repair reports skipped:false').toBe(false);
+  }
+  const stray = (l: Lane): void => {
+    l.h.store.db.prepare(`INSERT INTO delegation_events (eventId, journalSequence, journalDigest, acceptedAt, sessionId, parentIncarnation, claudeSessionId, eventKind, observedAt, payloadJson)
+      VALUES ('stray', 2000, ?, 1, ?, ?, 'c', 'SessionStart', 1, '{}')`).run('0'.repeat(64), PARENT, INC);
+  };
+  const count = (l: Lane, table: string): number => Number(l.h.store.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.['n']);
+
+  it('D-5836 R2: the lane\'s first per-pass repair after open is full, and the second takes the short path', async () => {
+    const l = await lane();
+    await settle(l);
+  });
+
+  it('D-5836 R2: projectionStale with no revision change — a per-pass repair whose port project throws once returns null and marks the projection stale; the next takes the full path', async () => {
+    const l = await lane();
+    await settle(l);
+    const revision = l.dur.state().checkpoint.revision;
+    // the full path is reached by a count disagreement (a stray row); the port's project then throws once
+    stray(l);
+    l.ctl.failProject = 1;
+    const failed = await pass(l);
+    expect(failed.report, 'the failed repair returns null').toBeNull();
+    expect(l.dur.state().checkpoint.revision, 'the revision did not move').toBe(revision);
+    // the counts agree again, nothing drifted and no clock is due: what is left is the failed repair's own invalidation, the stale mark AND
+    // the projected revision its catch cleared beside it (D-5836's M14: either alone refuses the short path, so this row reds M10, not one term)
+    l.h.store.db.prepare("DELETE FROM delegation_events WHERE eventId = 'stray'").run();
+    await expectFull(l, 'the next per-pass repair, port healthy');
+    await expectShort(l, 'after the full repair');
+  });
+
+  it('D-5836 R2: a failed application\'s projection — the next per-pass repair takes the full path', async () => {
+    const l = await lane();
+    await settle(l);
+    l.ctl.failEdge = 'project:before';
+    const out = await l.dur.applyAccepted(batch([sessionStart(3)]));
+    expect(out.durable).toBe(true);
+    expect(out.projection.status).toBe('failed');
+    await expectFull(l, 'after a failed application');
+    expect(count(l, 'delegation_events')).toBe(3);
+    await expectShort(l, 'after the full repair');
+  });
+
+  it('D-5836 R2: a conflicting application\'s projection — the next per-pass repair takes the full path and the journal wins', async () => {
+    const l = await lane();
+    await settle(l);
+    l.h.store.db.prepare(`INSERT INTO delegation_events (eventId, journalSequence, journalDigest, acceptedAt, sessionId, parentIncarnation, claudeSessionId, eventKind, observedAt, payloadJson)
+      VALUES (?, 3, ?, 1, ?, ?, 'c', 'SessionEnd', 1, '{}')`).run(eid(3), '0'.repeat(64), PARENT, INC);
+    const out = await l.dur.applyAccepted(batch([sessionStart(3)]));
+    expect(out.projection.status).toBe('failed');
+    const report = await expectFull(l, 'after a conflicting application');
+    expect(report?.healedSessions).toBe(1);
+    expect(l.h.store.db.prepare('SELECT eventKind FROM delegation_events WHERE eventId = ?').get(eid(3))?.['eventKind']).toBe('SessionStart');
+    await expectShort(l, 'after the full repair');
+  });
+
+  it('D-5836 R2: eventStats count disagreeing with the evidence index — the full path, which replays the missing row', async () => {
+    const l = await lane();
+    await settle(l);
+    l.h.store.db.prepare('DELETE FROM delegation_events WHERE journalSequence = 1').run();       // count 1, max 2: only the count disagrees
+    const report = await expectFull(l, 'count disagreeing');
+    expect(report?.fullReplay).toBe(true);
+    expect(count(l, 'delegation_events')).toBe(2);
+    await expectShort(l, 'after the full repair');
+  });
+
+  it('D-5836 R2: eventStats max disagreeing with an equal count — the full path, which heals it (review 705 F1)', async () => {
+    const l = await lane();
+    await settle(l);
+    const movedId = l.h.store.db.prepare('SELECT eventId FROM delegation_events WHERE journalSequence = 2').get()?.['eventId'];
+    l.h.store.db.prepare('UPDATE delegation_events SET journalSequence = 102 WHERE journalSequence = 2').run();       // count 2 as before, max 102
+    expect(l.h.store.delegationEventStats()).toEqual({ count: 2, maxSequence: 102 });
+    const report = await expectFull(l, 'max disagreeing with an equal count');
+    // the journal holds no evidence at 102: the full replay meets the moved row's eventId on another sequence, a conflict, and heals its session
+    expect(report, 'the repair read the journal in full and healed the one session').toMatchObject({ fullReplay: true, healedSessions: 1, wipedAll: false });
+    expect(l.h.store.delegationEventStats(), 'the heal leaves the journal\'s sequences').toEqual({ count: 2, maxSequence: 2 });
+    expect(l.h.store.db.prepare('SELECT journalSequence FROM delegation_events WHERE eventId = ?').get(String(movedId))?.['journalSequence'], 'the moved row is back on its sequence').toBe(2);
+    await expectShort(l, 'after the full repair');
+  });
+
+  it('D-5836 R2: the lane\'s first per-pass repair after a recover() is full (recovery\'s own repair does not count), and the next takes the short path', async () => {
+    const l = await lane();
+    await settle(l);
+    const recovered = await l.dur.recover();
+    expect(recovered.failure).toBeNull();
+    await expectFull(l, 'the first per-pass repair after recover()');
+    await expectShort(l, 'the second per-pass repair after recover()');
+  });
+
+  it('D-5836 R2: a recover() after a failure before the first byte (journal-write before) — the first per-pass repair after it is full', async () => {
+    const l = await lane();
+    await settle(l);
+    l.ctl.failEdge = 'journal-write:before';
+    await expect(l.dur.applyAccepted(batch([sessionStart(3)]))).rejects.toThrow(SimulatedCrash);
+    expect(l.dur.state().phase).toBe('reconstructing');
+    const recovered = await l.dur.recover();
+    expect(recovered.failure).toBeNull();
+    expect(l.dur.state().checkpoint.appliedJournalSequence, 'nothing was journaled').toBe(2);
+    await expectFull(l, 'the first per-pass repair after the recover()');
+    await expectShort(l, 'the second per-pass repair after the recover()');
+  });
+
+  it('D-5836 R2: the forced-full period is the exported DELEGATION_REPAIR_FULL_MS, one hour', () => {
+    // A missing or renamed export fails the typecheck now (a named import, D-8641); this row pins its value.
+    const exported: unknown = DELEGATION_REPAIR_FULL_MS;
+    expect(typeof exported, 'delegation-checkpoint.ts exports DELEGATION_REPAIR_FULL_MS').toBe('number');
+    expect(exported).toBe(3_600_000);
+  });
+
+  it('D-5836 R2: recover() restarts the forced-full clock — measured from the recover, not from the earlier full repair', async () => {
+    const l = await lane();
+    await settle(l);
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'just inside the interval of the earlier full repair');
+    const recovered = await l.dur.recover();
+    expect(recovered.failure).toBeNull();
+    // Not due measured from the recover (FULL_MS-1000 on). The clock restarts at recover()'s start and again at every successful full repair
+    // (recovery's own, then the first per-pass repair after it), so the restart at recover()'s start alone is equivalent (MrecClock survives).
+    l.vclock.ms += FULL_MS - 1000;
+    await expectFull(l, 'the first per-pass repair after the recover, FULL_MS-1000 on');
+    await expectShort(l, 'the second per-pass repair at that point');
+  });
+
+  it('D-5836 R2: recover() restarts the forced-full clock — a per-pass repair just past FULL_MS from the recover is a forced full', async () => {
+    const l = await lane();
+    await settle(l);
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'just inside the interval of the earlier full repair');
+    const recovered = await l.dur.recover();
+    expect(recovered.failure).toBeNull();
+    await expectFull(l, 'the first per-pass repair right after the recover');
+    await expectShort(l, 'the second, right after the recover');
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'just inside the interval counted from the recover and its full repairs (the restart at recover()\'s start is backed by the full repairs\' own)');
+    l.vclock.ms += 2000;
+    await expectFull(l, 'just past DELEGATION_REPAIR_FULL_MS counted from the recover');
+  });
+
+  it('D-5836 R2: the forced full after DELEGATION_REPAIR_FULL_MS on the virtual clock, and a full repair restarts the clock', async () => {
+    const l = await lane();
+    await settle(l);
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'just inside the interval');
+    l.vclock.ms += 2000;
+    await expectFull(l, 'just past DELEGATION_REPAIR_FULL_MS');
+    await expectShort(l, 'right after the forced full');
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'inside the interval, counted from the forced full');
+    l.vclock.ms += 2000;
+    await expectFull(l, 'past the interval again');
+  });
+
+  it('D-5836 R2: out-of-band deletion of delegation_activities rows stays until the forced full, which heals it', async () => {
+    const l = await lane();
+    await settle(l);
+    expect(count(l, 'delegation_activities')).toBe(1);
+    l.h.store.db.prepare('DELETE FROM delegation_activities').run();
+    // the residual: a pass before the forced full is short and does not heal it
+    await expectShort(l, 'a pass after the out-of-band deletion, before the forced full');
+    expect(count(l, 'delegation_activities')).toBe(0);
+    l.vclock.ms += FULL_MS + 1000;
+    await expectFull(l, 'the forced full');
+    expect(count(l, 'delegation_activities'), 'the forced full restored the rows').toBe(1);
+  });
+
+  it('D-5836 R2: after the lane\'s first per-pass repair, a bare repairProjection() after an out-of-band delete of delegation_sessions restores it', async () => {
+    const l = await lane();
+    await settle(l);
+    expect(count(l, 'delegation_sessions')).toBe(1);
+    const db = l.h.store.db;
+    db.exec('PRAGMA foreign_keys = OFF');                       // the activity and event rows name the session; the delete is the out-of-band damage
+    db.prepare('DELETE FROM delegation_sessions').run();
+    db.exec('PRAGMA foreign_keys = ON');
+    expect(count(l, 'delegation_sessions')).toBe(0);
+    l.h.log.length = 0;
+    const report = await l.dur.repairProjection();
+    expect(l.h.log.includes('project'), 'a bare repair is always the full path').toBe(true);
+    expect(report).not.toBeNull();
+    expect((report as PerPassReport)?.skipped, 'a bare repair reports skipped:false').toBe(false);
+    expect(count(l, 'delegation_sessions'), 'the session row is back').toBe(1);
+  });
+
+  it('D-5836 R2: eventStats throwing on the per-pass call returns null and marks the projection stale', async () => {
+    const l = await lane();
+    await settle(l);
+    l.ctl.failStats = true;
+    const failed = await pass(l);
+    expect(failed.report, 'a throwing eventStats is a repair failure, never a rejection').toBeNull();
+    l.ctl.failStats = false;
+    await expectFull(l, 'the next per-pass repair, eventStats healthy');
+    await expectShort(l, 'after the full repair');
+  });
+});
+
+// ── run 762 (D-6267 to D-6271): shared fixtures of the retirement rows, the workflow-end rows and the stop-ageing rows below ──────────
+
+/** The ruled bound, through the model's namespace only, never restated, so a renamed export fails to compile. */
+const BOUND = modelNs.DELEGATION_BASH_PENDING_MS;
+/** Journal time. Every fixture record is accepted from here on, within BOUND of the first; no clock is read anywhere in this section. */
+const T0 = Date.UTC(2026, 9, 14, 12);
+const LANE_B = 'lane-b-demo';
+const K1 = 'toolu_k1';   // zero-delta: Pre [a,b], Post [b,a]; ended
+const K2 = 'toolu_k2';   // delta: Pre [a], Post [a,c]; ended
+const K3 = 'toolu_k3';   // Pre [a], no Post; active (an old-rule row)
+const K5 = 'toolu_k5';   // a truncated Pre, then Post [a]: identity = the Post
+const K6 = 'toolu_k6';   // Post [a] before Pre [a]: identity = the Post
+
+type Ev = DelegationEventEnvelopeV1;
+/** One event and the instant (epoch ms, journal time) its record is accepted at. */
+type Timed = readonly [event: Ev, acceptedAtMs: number];
+
+const bashPre = (n: number, id: string, listing?: readonly string[], over: Over = {}, truncated = false): Ev =>
+  ({ ...base(n, over), eventKind: 'PreToolUse', toolName: 'Bash', toolUseId: id, ...(listing === undefined ? {} : { listing }), ...(truncated ? { truncated: true as const } : {}) });
+const bashPost = (n: number, id: string, listing?: readonly string[], over: Over = {}, truncated = false): Ev =>
+  ({ ...base(n, over), eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: id, outcome: 'completed', ...(listing === undefined ? {} : { listing }), ...(truncated ? { truncated: true as const } : {}) });
+const workflowLaunch = (n: number, runId: string, over: Over = {}): Ev =>
+  ({ ...base(n, over), eventKind: 'PostToolUse', toolName: 'Workflow', toolUseId: `toolu_${n}`, outcome: 'async-launched',
+    launch: { status: 'async-launched', taskId: 'task_1', taskType: 'local_workflow', workflowName: 'review-pass', runId, transcriptDir: `transcripts/${runId}`, scriptPath: 'scripts/review-pass.js' } });
+
+/** The ONE chain shape of this section: records over `buildDelegationJournalRecord`, each accepted at its own journal instant. */
+function chainAt(entries: readonly Timed[], first = 1, previous: string | null = null): DelegationJournalRecordV1[] {
+  const out: DelegationJournalRecordV1[] = [];
+  let prev = previous;
+  entries.forEach(([event, ms], i) => {
+    const r = buildDelegationJournalRecord({ sequence: first + i, acceptedAt: formatDelegationInstant(ms), previousDigest: prev, entry: evidence(event) });
+    out.push(r);
+    prev = r.digest;
+  });
+  return out;
+}
+/** A durable batch whose records carry their own journal instants (the applier's injected clock is then not read for them). */
+const timedBatch = (entries: readonly Timed[]): DelegationDurableBatch =>
+  ({ accepted: entries.map(([event, ms]) => ({ event, acceptedAt: formatDelegationInstant(ms) })), cursor: null, interval: null });
+const sequenceAt = (events: readonly Ev[], from: number, stepMs = 1000): Timed[] => events.map((e, i) => [e, from + i * stepMs] as const);
+
+const bashKeyOf = (id: string, over: Over = {}) =>
+  ({ parentId: over.sessionId ?? PARENT, parentIncarnation: over.parentIncarnation ?? INC, sourceKind: 'bash-worktree' as const, upstreamId: id });
+const encOf = (id: string, over: Over = {}): string => encodeDelegationNaturalKey(bashKeyOf(id, over));
+const rowOf = (cp: DelegationCheckpointV1, id: string, over: Over = {}): DelegationActivityRow | undefined =>
+  cp.activities.find((a) => a.sourceKind === 'bash-worktree' && a.upstreamId === id && a.parentId === (over.sessionId ?? PARENT));
+const mapped = (cp: DelegationCheckpointV1, id: string, over: Over = {}): boolean => Object.hasOwn(cp.activityIdsByNaturalKey, encOf(id, over));
+const bashIds = (cp: DelegationCheckpointV1): string[] => cp.activities.filter((a) => a.sourceKind === 'bash-worktree').map((a) => a.upstreamId).sort();
+const canon = (cp: DelegationCheckpointV1): string => canonicalDelegationJson(cp);
+const journalIdOf = (records: readonly DelegationJournalRecordV1[], event: Ev): string => {
+  const r = records.find((x) => x.entry.kind === 'evidence-accepted' && x.entry.event.eventId === event.eventId);
+  if (r === undefined) throw new Error(`no record for ${event.eventId}`);
+  return r.journalId;
+};
+const sqlHas = (store: CoordStore, id: string): boolean => store.readDelegationProjection().activities.some((a) => a.sourceKind === 'bash-worktree' && a.upstreamId === id);
+
+// ── the door and the builder's accessor, through casts ──────────────────────────────────────────────────────────────
+
+type DoorResult = { retired: number; applied: DelegationApplyOutcome | null };
+/** `retireZeroDeltaBashActivities`, which does not exist at the base: its absence is a plain assertion, never a TypeError. */
+function doorOf(dur: DelegationDurability): () => Promise<DoorResult> {
+  const fn = (dur as unknown as { retireZeroDeltaBashActivities?: () => Promise<DoorResult> }).retireZeroDeltaBashActivities;
+  expect(typeof fn, 'DelegationDurability.retireZeroDeltaBashActivities is the D-6268 door and exists').toBe('function');
+  return () => fn!.call(dur);
+}
+type Fact = { kind: 'pre'; journalId: string; sequence: number; listing: readonly string[] } | { kind: 'equal'; preJournalId: string };
+/** The builder's `bashCallFactOf(encoded)` (read only), reached through the applier's private builder. */
+function factOf(dur: DelegationDurability, id: string, over: Over = {}): Fact | undefined {
+  const builder = (dur as unknown as { builder: { bashCallFactOf?: (encoded: string) => Fact | undefined } }).builder;
+  expect(typeof builder.bashCallFactOf, 'DelegationCheckpointBuilder.bashCallFactOf exists').toBe('function');
+  return builder.bashCallFactOf!(encOf(id, over));
+}
+const kindOf = (dur: DelegationDurability, id: string, over: Over = {}): string | undefined => factOf(dur, id, over)?.kind;
+
+// ── the B fixture: a generated, neutral journal for `lane-a-demo`, covered by a legacy checkpoint ──────────────────────
+
+/** `withLaneB` adds a second session whose ONLY activity is one retirable call (Pre [a], Post [a]). */
+function bFixture(opts: { withLaneB?: boolean } = {}) {
+  const e = {
+    start: sessionStart(1),
+    k1Pre: bashPre(2, K1, ['a', 'b']),
+    k3Pre: bashPre(3, K3, ['a']),
+    k2Pre: bashPre(4, K2, ['a']),
+    k6Post: bashPost(5, K6, ['a']),
+    k5Pre: bashPre(6, K5, undefined, {}, true),
+    k1Post: bashPost(7, K1, ['b', 'a']),
+    k2Post: bashPost(8, K2, ['a', 'c']),
+    k5Post: bashPost(9, K5, ['a']),
+    k6Pre: bashPre(10, K6, ['a']),
+    agentStart: subagentStart(11, X),
+    agentStop: subagentStop(12, X),
+    run: workflowLaunch(13, 'run-1'),
+  };
+  const events: Ev[] = Object.values(e);
+  if (opts.withLaneB === true) {
+    events.push(bashPre(50, 'toolu_lb1', ['a'], { sessionId: LANE_B }), bashPost(51, 'toolu_lb1', ['a'], { sessionId: LANE_B }));
+  }
+  const timed = sequenceAt(events, T0);
+  const records = chainAt(timed);
+  const legacy = oldRuleCheckpoint(records);
+  return { e, timed, records, legacy };
+}
+type Fixture = ReturnType<typeof bFixture>;
+
+/** A fixture directory: the journal, then a checkpoint (the legacy one unless `cp` is given, written at revision 1) covering `covered`. */
+function writeDir(records: readonly DelegationJournalRecordV1[], cp: DelegationCheckpointV1 | null): string {
+  const dir = mkTmp('ccrc-deleg-ret-');
+  writeFileSync(path.join(dir, DELEGATION_JOURNAL_FILE), bytesOf(records));
+  if (cp !== null) writeFileSync(path.join(dir, DELEGATION_CHECKPOINT_FILE), encodeDelegationCheckpoint({ ...cp, revision: 1 }));
+  return dir;
+}
+const writeFixture = (f: Fixture, cp: DelegationCheckpointV1 = f.legacy): string => writeDir(f.records, cp);
+/** A legacy checkpoint with some activity rows (and mapping entries) edited; rows re-sorted, the mapping rebuilt from them. */
+function fabricate(cp: DelegationCheckpointV1, edit: (rows: DelegationActivityRow[], mapping: Record<string, string>) => void): DelegationCheckpointV1 {
+  const rows = cp.activities.map((a) => ({ ...a }));
+  const mapping = { ...cp.activityIdsByNaturalKey };
+  edit(rows, mapping);
+  const sorted = modelNs.sortedProjectionRows({ sessions: cp.sessions, attempts: cp.attempts, activities: rows, leases: cp.leases, lineage: cp.lineage });
+  return { ...cp, activityIdsByNaturalKey: mapping, activities: sorted.activities };
+}
+
+/** The B fixture opened ready, with the door in hand. */
+async function openB(opts: { withLaneB?: boolean } = {}) {
+  const f = bFixture(opts);
+  const dir = writeFixture(f);
+  const h = harness({ dir });
+  const dur = await h.open();
+  expect(dur.failure(), 'the legacy fixture recovers ready').toBeNull();
+  // `door` resolves the method on its first call, so a row that never retires (RB17) runs at the base, where the door does not exist.
+  return { f, dir, h, dur, door: () => doorOf(dur)() };
+}
+const k1Of = (cp: DelegationCheckpointV1): DelegationActivityRow => {
+  const r = rowOf(cp, K1);
+  if (r === undefined) throw new Error('the fixture holds no K1 row');
+  return r;
+};
+
+/** RE0's fixed, neutral journal for `lane-a-demo`: three equal Bash calls (e1, e2, e3: the retirable stock), one call that added a name (d1), one
+ *  Pre with no Post (p1: an old-rule active row) and one SubagentStart/Stop pair. `withPending: false` leaves p1 out (RE5's own fixture). */
+const re0Events = (opts: { withPending?: boolean } = {}): Ev[] => [
+  sessionStart(1),
+  bashPre(2, 'toolu_e1', ['a']), bashPost(3, 'toolu_e1', ['a']),
+  bashPre(4, 'toolu_e2', ['a', 'b']), bashPost(5, 'toolu_e2', ['b', 'a']),
+  bashPre(6, 'toolu_e3', ['a', 'a']), bashPost(7, 'toolu_e3', ['a']),
+  bashPre(8, 'toolu_d1', ['a']), bashPost(9, 'toolu_d1', ['a', 'c']),
+  ...(opts.withPending === false ? [] : [bashPre(10, 'toolu_p1', ['a'])]),
+  subagentStart(11, X), subagentStop(12, X),
+];
+
+// Rule A (D-6267) opens a Bash call only on a changed listing, so a box that ran the old rule carries one ended, unleased row per
+// zero-delta call (one measured PreToolUse, then one measured PostToolUse naming the same records). The door
+// `retireZeroDeltaBashActivities` (D-6268) retires those rows and their natural-key mapping together, under the applier's lock, and
+// nothing else may. Every legacy stock below comes from `oldRuleCheckpoint(journal)` (`delegationOldRuleFixture.ts`), never from the
+// fold at hand. The door, the constants and the builder's `bashCallFactOf` are reached through casts and namespace imports, so each row
+// is red at the base on its own assertion (the first thing a door row does is assert the door exists) and never on a type error.
+// RB11, RB12, RB12b, RB12c, RB13, RB-CLONE and RB-COST are in `delegation-fold-alloc.test.ts`; RB16 and RB24 in the correlation test;
+// RB21 and RB22 in the watch test; RB25 in the model test.
+describe('run 762: the zero-delta Bash retirement door, its lease guard and its recovery parity (D-6268)', () => {
+
+  // ── RE0: the pin of the old rule ────────────────────────────────────────────────────────────────────────────────────
+
+  it('RE0: oldRuleCheckpoint reproduces the old rule\'s checkpoint, pinned by two digests computed at the base (green by design; reds if the helper drifts)', () => {
+    // The journal: three equal Bash calls (one with the same names in another order), one call that added a name, one Pre with no Post
+    // and one SubagentStart/Stop pair, for `lane-a-demo`, each record accepted a second after the one before. The two literals were
+    // computed at the BASE (run 740's merged tip, where the fold IS the old rule) from `recoverDelegation(null, journal)`: the sha-256 of
+    // the canonical checkpoint bytes (`encodeDelegationCheckpoint`), and the sha-256 of the activity IDs sorted by code unit and joined
+    // with LF, no trailing LF: sha256(ids.sort().join('\n')). The helper must reproduce both at the base and at every later tip.
+    // Mutant: a helper that drifts from the old rule (identity, opening, end, mapping or holds).
+    const events: Ev[] = re0Events();
+    const journal = chainAt(sequenceAt(events, T0));
+    const cp = oldRuleCheckpoint(journal);
+    const digests = (c: DelegationCheckpointV1): { bytes: string; ids: string } => ({
+      bytes: createHash('sha256').update(encodeDelegationCheckpoint(c)).digest('hex'),
+      ids: sha(c.activities.map((a) => a.activityId).sort().join('\n')),
+    });
+    expect(digests(cp)).toEqual({ bytes: '380a6ce031f1145709d0d3d4063bbfed0ffc057607d910175047ad30d1b06017', ids: 'baa2f3a84b663f5f5bfdb102560f700bd792cff5923e21ed2186a87a3c508e73' });
+  });
+
+  // ── RB1 to RB10: the door's effect, the predicate's conjuncts ───────────────────────────────────────────────────────
+
+  it('RB1: the door retires K1, the one zero-delta call, and only K1: row and map entry together, nothing else moves, SQLite follows', async () => {
+    const { dir, h, dur, door } = await openB();
+    const before = dur.state().checkpoint;
+    const k1 = k1Of(before);
+    const journalBefore = readDisk(dir).journal;
+    const statsBefore = h.store.delegationEventStats();
+    const out = await door();
+    expect(out.retired, 'K1 is the only ended, unleased, zero-delta call of the fixture').toBe(1);
+    const after = dur.state().checkpoint;
+    expect(rowOf(after, K1), 'K1\'s row is gone').toBeUndefined();
+    expect(mapped(after, K1), 'K1\'s map entry is gone').toBe(false);
+    expect(after.activities, 'every other row is present, unchanged, under its unchanged ID').toEqual(before.activities.filter((a) => a.activityId !== k1.activityId));
+    expect(after.activityIdsByNaturalKey, 'every other entry is present').toEqual(
+      Object.fromEntries(Object.entries(before.activityIdsByNaturalKey).filter(([, id]) => id !== k1.activityId)));
+    expect(after.appliedJournalSequence, 'no journal record is appended').toBe(before.appliedJournalSequence);
+    expect(readDisk(dir).journal, 'the journal bytes are unchanged').toEqual(journalBefore);
+    expect(after.revision, 'one checkpoint replacement').toBe(before.revision + 1);
+    expect(after.sessions, 'the lane-a-demo session row is present').toEqual(before.sessions);
+    expect(after.sessions.map((s) => s.sessionId)).toEqual([PARENT]);
+    expect(h.store.delegationEventStats(), 'no event row moves').toEqual(statsBefore);
+    expect(sqlHas(h.store, K1), 'SQLite lacks K1').toBe(false);
+    expect(canon(h.store.readDelegationProjection()), 'and holds the rest').toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(after)));
+    expect(out.applied?.projection.status, 'the outcome is projected').toBe('projected');
+    expect(decodeDelegationCheckpoint(new Uint8Array(readDisk(dir).checkpoint!)), 'the file on disk is the new state').toEqual(after);
+    // MB-hold-mapped: K3's pending Pre is a fact on a MAPPED key, and a mapped key needs no hold.
+    expect(after.pruningHolds.filter((x) => Object.hasOwn(after.activityIdsByNaturalKey, x.ownerId)), 'no hold names a mapped key').toEqual([]);
+  });
+
+  it('RB1b: a session whose only activity is retired keeps its session row, in the checkpoint and in SQLite, and its event rows', async () => {
+    const { h, dur, door } = await openB({ withLaneB: true });
+    const before = dur.state().checkpoint;
+    expect(rowOf(before, 'toolu_lb1', { sessionId: LANE_B }), 'the fixture\'s second session holds its one legacy row').toBeDefined();
+    const eventsOf = (): unknown => h.store.db.prepare('SELECT COUNT(*) AS n FROM delegation_events WHERE sessionId = ?').get(LANE_B)?.['n'];
+    const statsBefore = h.store.delegationEventStats();
+    expect(eventsOf()).toBe(2);
+    const out = await door();
+    expect(out.retired, 'K1 and lane-b-demo\'s call').toBe(2);
+    const after = dur.state().checkpoint;
+    expect(rowOf(after, 'toolu_lb1', { sessionId: LANE_B }), 'its call is retired').toBeUndefined();
+    expect(after.sessions.map((s) => s.sessionId).sort(), 'the door never removes a session').toEqual([PARENT, LANE_B]);
+    expect(h.store.readDelegationProjection().sessions.map((s) => s.sessionId).sort(), 'nor does SQLite lose it').toEqual([PARENT, LANE_B]);
+    expect(eventsOf(), 'its delegation_events rows are unchanged').toBe(2);
+    expect(h.store.delegationEventStats()).toEqual(statsBefore);
+  });
+
+  it('RB2: a fresh applier on the same directory recovers the retired state exactly, its facts agree with the live ones, and a second door finds nothing and writes nothing', async () => {
+    const { dir, dur, door } = await openB();
+    await door();
+    const live = dur.state().checkpoint;
+    const again = await harness({ dir }).open();
+    expect(again.failure(), 'recovery of the retired checkpoint is ready').toBeNull();
+    expect(canon(again.state().checkpoint), 'canonically equal to the live checkpoint, revision included').toBe(canon(live));
+    for (const id of [K1, K2, K3, K5, K6]) expect(factOf(again, id), `the fact of ${id}, recovered vs live`).toEqual(factOf(dur, id));
+    const disk = readDisk(dir);
+    const second = await doorOf(again)();
+    expect(second, 'nothing retirable: nothing written').toEqual({ retired: 0, applied: null });
+    expect(readDisk(dir), 'the file bytes are unchanged').toEqual(disk);
+  });
+
+  it('RB3: B needs A: recovery of the retired checkpoint passes the identity-evidence and final-validate phases with no failure', async () => {
+    // Green at the tip by design (red at the base only because it needs the door). Mutant MB-noA (rule A reverted: a listing Bash record is
+    // a join again): the covered Post of the retired K1 then refuses `fold-refused` at the identity-evidence phase.
+    const { dir, door } = await openB();
+    expect((await door()).retired).toBe(1);
+    const report = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+    expect(report.failure, 'recovery over the retired checkpoint').toBeNull();
+    expect(report.completedPhases).toContain('identity-evidence');
+    expect(report.completedPhases).toContain('final-validate');
+  });
+
+  it('RB4: recovery from nothing, after the door, derives no K1 row, derives the same IDs, and differs on bash keys only by K3 (an old-rule active row)', async () => {
+    const { dir, dur, door } = await openB();
+    expect((await door()).retired).toBe(1);
+    const live = dur.state().checkpoint;
+    const bare = mkTmp('ccrc-deleg-ret-');
+    cpSync(path.join(dir, DELEGATION_JOURNAL_FILE), path.join(bare, DELEGATION_JOURNAL_FILE));        // the journal alone: no checkpoint file
+    const report = await recoverDelegationFromFiles(nodeDelegationFilePort, bare);
+    expect(report.failure, 'the journal alone recovers').toBeNull();
+    const fresh = report.state.checkpoint;
+    expect(rowOf(fresh, K1), 'no K1 row').toBeUndefined();
+    expect(rowOf(fresh, K2)?.activityId, 'K2 has the same activityId').toBe(rowOf(live, K2)!.activityId);
+    for (const id of [K5, K6]) expect(rowOf(fresh, id)?.activityId, `${id} has the same activityId`).toBe(rowOf(live, id)!.activityId);
+    expect(bashIds(live).filter((id) => !bashIds(fresh).includes(id)), 'only K3, the old-rule active row, is absent from the fresh fold').toEqual([K3]);
+    expect(bashIds(fresh).filter((id) => !bashIds(live).includes(id)), 'and the fresh fold has nothing the live state lacks').toEqual([]);
+    expect(fresh.activities.filter((a) => a.sourceKind !== 'bash-worktree'), 'the agent and workflow rows agree').toEqual(live.activities.filter((a) => a.sourceKind !== 'bash-worktree'));
+  });
+
+  it('RB5: after the door, an old-rule row\'s late equal Post makes a fact and retires on the next door; rule-A calls leave no row and no fact; recovery equals live', async () => {
+    const { dur, door } = await openB();
+    expect((await door()).retired).toBe(1);
+    expect(kindOf(dur, K3), 'K3 is an active old-rule row with its identity Pre pending').toBe('pre');
+    await dur.applyAccepted(timedBatch(sequenceAt([
+      bashPost(30, K3, ['a']),                                                       // K3's equal Post, within BOUND of its Pre
+      bashPre(31, 'toolu_n1', ['a']), bashPost(32, 'toolu_n1', ['a']),               // N1: a rule-A equal call
+      bashPre(33, 'toolu_n2', ['a']), bashPost(34, 'toolu_n2', ['a', 'd']),          // N2: a rule-A delta call
+    ], T0 + 20_000)));
+    const mid = dur.state().checkpoint;
+    expect(rowOf(mid, K3)?.executionState, 'K3 ended').toBe('ended');
+    expect(kindOf(dur, K3), 'with a fact').toBe('equal');
+    expect(rowOf(mid, 'toolu_n1'), 'N1 never has a row').toBeUndefined();
+    expect(kindOf(dur, 'toolu_n1'), 'nor a fact').toBeUndefined();
+    expect(rowOf(mid, 'toolu_n2')?.executionState, 'N2 has a row, opened at its Post with the Pre\'s identity').toBe('ended');
+    expect(kindOf(dur, 'toolu_n2'), 'and no fact').toBeUndefined();
+    expect((await door()).retired, 'K3 retires; N2 is not retired').toBe(1);
+    const live = dur.state().checkpoint;
+    expect(rowOf(live, K3)).toBeUndefined();
+    expect(rowOf(live, 'toolu_n2'), 'N2 stays').toBeDefined();
+    const report = await dur.recover();
+    expect(report.failure, 'recovery after the second retirement').toBeNull();
+    expect(canon(dur.state().checkpoint), 'recovered equals live').toBe(canon(live));
+    expect(rowOf(dur.state().checkpoint, K3)).toBeUndefined();
+  });
+
+  it('RB6: a legacy K1 row that is still active although its equal Post is covered is not retired (the ended conjunct; mutant MB5)', async () => {
+    const f = bFixture();
+    const k1 = k1Of(f.legacy);
+    const cp = fabricate(f.legacy, (rows) => {
+      const i = rows.findIndex((a) => a.activityId === k1.activityId);
+      rows[i] = { ...rows[i]!, executionState: 'active', endedAt: null };
+    });
+    const dur = await harness({ dir: writeFixture(f, cp) }).open();
+    expect(dur.failure()).toBeNull();
+    expect(rowOf(dur.state().checkpoint, K1)?.executionState, 'recovery observes; it never touches the row').toBe('active');
+    expect(kindOf(dur, K1), 'the equal fact forms all the same: only the ended conjunct keeps the row').toBe('equal');
+    const out = await doorOf(dur)();
+    expect(out.retired).toBe(0);
+    expect(rowOf(dur.state().checkpoint, K1), 'K1 is present').toBeDefined();
+    expect(mapped(dur.state().checkpoint, K1)).toBe(true);
+  });
+
+  it('RB7: a K1 row named by a journal-written lease is never retired; the door does not throw; row, lease and lineage stay (the lease conjunct; mutant MB3)', async () => {
+    const f = bFixture();
+    const k1 = k1Of(f.legacy);
+    // The lease is written AFTER the legacy checkpoint's applied position, straight into the journal (createLease now refuses a zero-delta
+    // call), and the fixture's recovery replays it onto the old-rule row and saves, with its lease and opening lineage.
+    const entry = leaseEntryFor(k1.activityId, { leaseId: 'lease-k1', sourceKind: 'raw', adminRecord: 'wt-k1', canonicalPath: '/work/project-a/wt-k1' });
+    const leaseRecord = buildDelegationJournalRecord({
+      sequence: f.records.length + 1, acceptedAt: formatDelegationInstant(T0 + 20_000), previousDigest: f.records[f.records.length - 1]!.digest, entry,
+    });
+    const dur = await harness({ dir: writeDir([...f.records, leaseRecord], f.legacy) }).open();
+    expect(dur.failure(), 'the suffix lease replays onto the legacy row').toBeNull();
+    expect(dur.state().checkpoint.leases.map((l) => l.activityId), 'the replayed lease names K1').toEqual([k1.activityId]);
+    const out = await doorOf(dur)();
+    expect(out.retired, 'a leased row is never retired').toBe(0);
+    const cp = dur.state().checkpoint;
+    expect(rowOf(cp, K1), 'K1 is intact').toEqual(k1);
+    expect(cp.leases.map((l) => l.leaseId), 'its lease is intact').toEqual(['lease-k1']);
+    expect(cp.lineage.filter((n) => n.leaseId === 'lease-k1'), 'and its opening lineage').toHaveLength(1);
+    expect(dur.failure(), 'the applier is ready').toBeNull();
+    expect(dur.pruningEnabled()).toBe(true);
+  });
+
+  it.each([['open', null], ['closed', { closedAt: T(20), closeReason: 'closed-fixture' }]] as const)(
+    'RB8: an activity-owned lineage row naming K1, %s, keeps it from retirement (the lineage conjunct; mutant MB4)', async (_state, closed) => {
+      const { dur, door } = await openB();
+      const k1 = k1Of(dur.state().checkpoint);
+      const lineage: DelegationLineageRow = {
+        lineageId: sha('lineage-of-k1'), parentId: PARENT, parentIncarnation: INC, activityId: k1.activityId, leaseId: null, runId: null,
+        openedAt: T(10), closedAt: closed?.closedAt ?? null, closeReason: closed?.closeReason ?? null,
+      };
+      const change = await dur.applyCheckpointChange((cp) => ({ ...cp, lineage: [...cp.lineage, lineage] }));
+      expect(change.durable, 'the lineage row landed through the change door').toBe(true);
+      const out = await door();
+      expect(out.retired, 'a row a lineage row names is kept, whether the lineage is open or closed').toBe(0);
+      const cp = dur.state().checkpoint;
+      expect(rowOf(cp, K1)).toEqual(k1);
+      expect(cp.lineage.map((n) => n.lineageId)).toEqual([lineage.lineageId]);
+    });
+
+  it('RB9: a legacy row whose identity is the equal Post, not the Pre, gets no fact and is never retired', async () => {
+    // MB7 (the identity conjunct) is declared equivalent under the start rule; this row shows a Post-identity row never retires.
+    const f = bFixture();
+    const postJournalId = journalIdOf(f.records, f.e.k1Post);
+    const newId = deriveDelegationActivityId(bashKeyOf(K1), postJournalId);
+    const cp = fabricate(f.legacy, (rows, mapping) => {
+      const i = rows.findIndex((a) => a.activityId === k1Of(f.legacy).activityId);
+      rows[i] = { ...rows[i]!, activityId: newId, identityJournalId: postJournalId, openedAt: f.e.k1Post.observedAt };
+      mapping[encOf(K1)] = newId;
+    });
+    const dur = await harness({ dir: writeFixture(f, cp) }).open();
+    expect(dur.failure()).toBeNull();
+    expect(kindOf(dur, K1), 'a Pre that is not the row\'s identity starts no fact').toBeUndefined();
+    const out = await doorOf(dur)();
+    expect(out.retired).toBe(0);
+    expect(rowOf(dur.state().checkpoint, K1)?.activityId).toBe(newId);
+  });
+
+  /** The applier's live builder's Bash-call facts, for the fabricated-state rows below: a state no fold reaches, set by cast before the door. */
+  const factsOf = (dur: DelegationDurability): Map<string, Fact> => (dur as unknown as { builder: { bashCalls: Map<string, Fact> } }).builder.bashCalls;
+
+  it('RB9b: a fabricated \'equal\' fact whose preJournalId is not the row\'s identity retires nothing (the identity conjunct; mutant MB7)', async () => {
+    // Unreachable today (a fact starts only on the row's own identity Pre, RB9), so the state is fabricated: K1 meets every other conjunct.
+    const { f, dur, door } = await openB();
+    const k1 = k1Of(dur.state().checkpoint);
+    expect(k1.executionState, 'K1 is ended').toBe('ended');
+    expect(factOf(dur, K1), 'K1 holds the equal fact on its own identity').toEqual({ kind: 'equal', preJournalId: k1.identityJournalId });
+    const other = journalIdOf(f.records, f.e.k2Pre);
+    expect(other, 'the fabricated preJournalId is another record').not.toBe(k1.identityJournalId);
+    factsOf(dur).set(encOf(K1), { kind: 'equal', preJournalId: other });
+    const out = await door();
+    expect(out.retired, 'an equal fact on a record that is not the row\'s identity retires nothing').toBe(0);
+    expect(out.applied, 'and the door writes nothing').toBeNull();
+    expect(rowOf(dur.state().checkpoint, K1), 'K1 is present').toEqual(k1);
+    expect(mapped(dur.state().checkpoint, K1)).toBe(true);
+  });
+
+  it('RB9c: a fabricated \'equal\' fact under a key whose mapped row is not bash-worktree retires nothing (the sourceKind conjunct; mutant MB8)', async () => {
+    // Unreachable today (facts live only under keys encoded with bash-worktree), so the state is fabricated: the ended agent row X meets
+    // every other conjunct. K1 is retired first, so the second door's only candidate is the fabricated one.
+    const { dur, door } = await openB();
+    expect((await door()).retired, 'K1 retires first').toBe(1);
+    const cp = dur.state().checkpoint;
+    const agent = cp.activities.find((a) => a.sourceKind === 'agent' && a.upstreamId === X);
+    expect(agent?.executionState, 'the agent row X is ended').toBe('ended');
+    expect(cp.leases.some((l) => l.activityId === agent!.activityId) || cp.lineage.some((n) => n.activityId === agent!.activityId), 'and unleased').toBe(false);
+    const encoded = Object.keys(cp.activityIdsByNaturalKey).find((k) => cp.activityIdsByNaturalKey[k] === agent!.activityId);
+    expect(encoded, 'X is mapped').toBeDefined();
+    factsOf(dur).set(encoded!, { kind: 'equal', preJournalId: agent!.identityJournalId });
+    const out = await door();
+    expect(out.retired, 'an equal fact under an agent key retires nothing').toBe(0);
+    expect(out.applied, 'and the door writes nothing').toBeNull();
+    expect(dur.state().checkpoint.activities.find((a) => a.activityId === agent!.activityId), 'X is present').toEqual(agent);
+    expect(dur.state().checkpoint.activityIdsByNaturalKey[encoded!], 'and still mapped').toBe(agent!.activityId);
+  });
+
+  it('RB10: legacy ended calls that REMOVED a name (R1) or ADDED one (A1) are not retired, hold no fact, and recovery stays ready (mutant MB10)', async () => {
+    const records = chainAt(sequenceAt([
+      sessionStart(1), bashPre(2, 'toolu_r1', ['a', 'b']), bashPost(3, 'toolu_r1', ['a']), bashPre(4, 'toolu_a1', ['a']), bashPost(5, 'toolu_a1', ['a', 'b']), sessionStart(6),
+    ], T0));
+    const legacy = oldRuleCheckpoint(records);
+    expect(['toolu_r1', 'toolu_a1'].map((id) => rowOf(legacy, id)?.executionState), 'the legacy stock holds both, ended').toEqual(['ended', 'ended']);
+    const dur = await harness({ dir: writeDir(records, legacy) }).open();
+    expect(dur.failure(), 'recovery stays ready').toBeNull();
+    expect(kindOf(dur, 'toolu_r1'), 'R1 holds no fact').toBeUndefined();
+    expect(kindOf(dur, 'toolu_a1'), 'A1 holds no fact').toBeUndefined();
+    const out = await doorOf(dur)();
+    expect(out.retired, 'neither is retired').toBe(0);
+    expect(['toolu_r1', 'toolu_a1'].map((id) => rowOf(dur.state().checkpoint, id) !== undefined)).toEqual([true, true]);
+  });
+
+  // ── RB14, RB15, RB17, RB19: the other doors around it ───────────────────────────────────────────────────────────────
+
+  it('RB14: an interval-only checkpoint change between the recovery and the door keeps the facts: the door still retires K1 (mutant MB15)', async () => {
+    const { dur, door } = await openB();
+    const change = await dur.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: [...cp.observationIntervals, intervalFor('2026101400', 'measured', T(3))] }));
+    expect(change.durable, 'the interval landed').toBe(true);
+    expect(dur.state().checkpoint.observationIntervals).toHaveLength(1);
+    expect(kindOf(dur, K1), '`replaceRows` keeps the journal-derived facts').toBe('equal');
+    const out = await door();
+    expect(out.retired).toBe(1);
+    expect(rowOf(dur.state().checkpoint, K1)).toBeUndefined();
+  });
+
+  it('RB15: before the door has run, createLease refuses a zero-delta call (zero-delta-call) before minting a UUID and writes nothing; a delta call is still leased (mutants MB17, MB18)', async () => {
+    const { f, dir, h, dur } = await openB();
+    const cp0 = dur.state().checkpoint;
+    const request = (id: string, adminRecord: string): DelegationLeaseCreationRequest => ({
+      activityId: rowOf(cp0, id)!.activityId, parentId: PARENT, parentIncarnation: INC, project: 'project-a', adminRecord, canonicalPath: `/work/project-a/${adminRecord}`,
+      creationBase: null, sourceKind: 'raw', correlationJournalIds: [f.records[1]!.journalId], firstObservedAt: T(40),
+    });
+    expect(modelNs.leaseSourceKindOfActivity('bash-worktree'), 'a bash-worktree activity\'s lease is a raw one').toBe('raw');
+    const disk = readDisk(dir);
+    const uuidsBefore = h.uuidCalls.n;
+    const refused = await dur.createLease(request(K1, 'wt-k1'));
+    expect(refused, 'K1 is a zero-delta call: never a lease activity').toMatchObject({ kind: 'refused', reason: 'zero-delta-call' });
+    expect(h.uuidCalls.n, 'no UUID was minted').toBe(uuidsBefore);
+    expect(readDisk(dir), 'the journal and the checkpoint are unchanged').toEqual(disk);
+    expect(dur.state().checkpoint).toBe(cp0);
+    expect(isDelegationCheckpointKebab('zero-delta-call'), 'the refusal word is admitted to the kebab scan').toBe(true);
+    const control = await dur.createLease(request(K2, 'wt-k2'));
+    expect(control.kind, 'the control: K2 changed its listing and is leased').toBe('created');
+    expect(h.uuidCalls.n, 'one UUID, for the control').toBe(uuidsBefore + 1);
+  });
+
+  it('RB17: a checkpoint-only change cannot drop K1\'s row and its map entry together; the O4 guard stands (green by design; mutant MB22)', async () => {
+    const { dir, dur } = await openB();
+    const k1 = k1Of(dur.state().checkpoint);
+    const disk = readDisk(dir);
+    const stateBefore = dur.state();
+    await expect(dur.applyCheckpointChange((cp) => ({
+      ...cp, activities: cp.activities.filter((a) => a.activityId !== k1.activityId),
+      activityIdsByNaturalKey: Object.fromEntries(Object.entries(cp.activityIdsByNaturalKey).filter(([, id]) => id !== k1.activityId)),
+    }))).rejects.toMatchObject({ code: 'change-refused' });
+    expect(readDisk(dir), 'nothing was written').toEqual(disk);
+    expect(dur.state(), 'the state is the same object').toBe(stateBefore);
+    expect(rowOf(dur.state().checkpoint, K1)).toBeDefined();
+    expect(dur.failure(), 'a refusal does not poison the applier').toBeNull();
+  });
+
+  it('RB19: after the door, a re-read of K1\'s records (the same eventIds) is skipped as a duplicate: no record, row, mapping or fact for K1, revision unchanged', async () => {
+    const { f, dir, dur, door } = await openB();
+    expect((await door()).retired).toBe(1);
+    const after = dur.state().checkpoint;
+    const disk = readDisk(dir);
+    const out = await dur.applyAccepted(timedBatch([[f.e.k1Pre, T0 + 5000], [f.e.k1Post, T0 + 6000]]));
+    expect(out.appended, 'nothing is appended').toEqual([]);
+    expect(out.skipped.map((s) => s.reason)).toEqual(['duplicate-event', 'duplicate-event']);
+    expect(out.durable).toBe(false);
+    const cp = dur.state().checkpoint;
+    expect(cp.revision, 'the revision is unchanged').toBe(after.revision);
+    expect(rowOf(cp, K1), 'no row').toBeUndefined();
+    expect(mapped(cp, K1), 'no mapping').toBe(false);
+    expect(kindOf(dur, K1), 'no fact').toBeUndefined();
+    expect(readDisk(dir), 'no byte written').toEqual(disk);
+  });
+
+  // ── RB18: the one code that deletes ─────────────────────────────────────────────────────────────────────────────────
+
+  it('RB18: the builder\'s only code that deletes a mapping entry or an activity row is retireZeroDeltaBash, and since wave 4 retireBehindCut (C1, D-7001) (a census of code lines, by enclosing method)', () => {
+    // D-8641: over the checkpoint's program, each member read from its own start (no method carries across a file boundary)
+    let method = '(file)';
+    let inClass = false;
+    const hits: string[] = [];
+    for (const raw of programTexts(CHECKPOINT_SOURCE).flatMap((t) => [null, ...t.text.split('\n')])) {
+      if (raw === null) { method = '(file)'; inClass = false; continue; }
+      if (/^\s*(\*|\/\/|\/\*)/.test(raw)) continue;                         // a comment line is not code
+      const l = raw.replace(/\s\/\/.*$/, '');                               // nor is a trailing comment
+      if (/^(?:export )?(?:abstract )?class [A-Za-z_]\w*/.test(l)) { inClass = true; method = '(class)'; }
+      const top = /^(?:export )?(?:async )?function\*? ([A-Za-z_]\w*)/.exec(l);
+      if (top !== null) { inClass = false; method = top[1]!; }
+      const m = inClass ? /^ {2}(?:(?:private|public|protected|static|async|readonly|get|set)\s+)*(constructor|[A-Za-z_]\w*)\(/.exec(l) : null;
+      if (m !== null && !/^(?:if|for|while|switch|return|catch)$/.test(m[1]!)) method = m[1]!;
+      if (/delete this\.mapping\[|this\.activities\.delete\(/.test(l)) hits.push(method);
+      if (/^}/.test(l)) { inClass = false; method = '(file)'; }
+    }
+    expect([...new Set(hits)], 'the methods whose code deletes from the mapping or the activities').toEqual(['retireZeroDeltaBash', 'retireBehindCut']);
+  });
+
+  // ── RB20: the fault matrix ──────────────────────────────────────────────────────────────────────────────────────────
+
+  describe('RB20: a fault injected at every edge of the door\'s application leaves the old state or the new one', () => {
+    // The door appends no journal record, so its edges are build, the checkpoint write, its fsync, the rename, the directory fsync and
+    // project. Before the rename (build, the write, its fsync, the rename's `before`) the old checkpoint stays on disk; from the rename's
+    // `after` on, the new one is. A project fault leaves the checkpoint durable and the projection stale (never a failed door).
+    const CASES = (['build', 'checkpoint-write', 'checkpoint-fsync', 'checkpoint-rename', 'directory-fsync', 'project'] as const)
+      .flatMap((edge) => (['before', 'after'] as const).map((when) => [edge, when] as const));
+    it.each(CASES)('RB20: a fault at %s:%s during the door', async (edge, when) => {
+      const f = bFixture();
+      const dir = writeFixture(f);
+      const h = harness({ dir });
+      const fault = { armed: false, hits: 0 };
+      const dur = await h.open({ onEdge: (e, w) => { if (fault.armed && e === edge && w === when) { fault.hits++; throw new SimulatedCrash(`${e}:${w}`); } } });
+      expect(dur.failure()).toBeNull();
+      const door = doorOf(dur);
+      const preRename = edge === 'build' || edge === 'checkpoint-write' || edge === 'checkpoint-fsync' || (edge === 'checkpoint-rename' && when === 'before');
+      const onDisk = (): DelegationCheckpointV1 => decodeDelegationCheckpoint(new Uint8Array(readDisk(dir).checkpoint!));
+      const old = dur.state().checkpoint;
+      fault.armed = true;
+      if (edge === 'project') {
+        const out = await door();
+        fault.armed = false;
+        expect(fault.hits).toBe(1);
+        expect(out.retired, 'the checkpoint replacement completed').toBe(1);
+        expect(out.applied?.projection.status, 'the projection did not').toBe('failed');
+        expect(rowOf(onDisk(), K1), 'K1 is gone from the durable checkpoint').toBeUndefined();
+        if (when === 'before') expect(sqlHas(h.store, K1), 'the projection never ran: SQLite still holds K1').toBe(true);
+        await dur.repairProjection();
+        expect(sqlHas(h.store, K1), 'the next repair leaves SQLite without K1').toBe(false);
+        expect(canon(h.store.readDelegationProjection())).toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(dur.state().checkpoint)));
+        expect(dur.failure(), 'a projection fault never fails the applier').toBeNull();
+        return;
+      }
+      await expect(door()).rejects.toThrow(SimulatedCrash);
+      fault.armed = false;
+      expect(fault.hits).toBe(1);
+      expect(dur.state().phase, 'the applier is poisoned: reconstructing').toBe('reconstructing');
+      if (preRename) {
+        // MB23: a door that mutated the applier's own builder (not the clone it commits) would leave the poisoned applier's state ahead of its disk.
+        expect(canon(dur.state().checkpoint), 'the applier\'s checkpoint is the on-disk one, before recover()').toBe(canon(onDisk()));
+        expect(canon(onDisk()), 'and the old one').toBe(canon(old));
+        const builder = (dur as unknown as { builder: { build(revision: number): DelegationCheckpointV1 } }).builder;
+        expect(canon(builder.build(old.revision)), 'the builder still says what the disk says').toBe(canon(old));
+      }
+      const report = await dur.recover();
+      expect(report.failure, 'recover() is ready every time').toBeNull();
+      expect(dur.failure()).toBeNull();
+      expect(rowOf(dur.state().checkpoint, K1) !== undefined, preRename ? 'a fault before the rename leaves K1' : 'a fault from the rename on leaves K1 gone').toBe(preRename);
+      const next = await door();
+      expect(next.retired, preRename ? 'the next door retires K1' : 'nothing is left to retire').toBe(preRename ? 1 : 0);
+      expect(rowOf(dur.state().checkpoint, K1)).toBeUndefined();
+      const fresh = await harness({ dir }).open();
+      expect(fresh.failure(), 'and a fresh applier recovers the result').toBeNull();
+      expect(canon(fresh.state().checkpoint)).toBe(canon(dur.state().checkpoint));
+    });
+  });
+
+  // ── RB23: the projection of the door's commit ───────────────────────────────────────────────────────────────────────
+
+  it('RB23: the door\'s commit projects as a FULL rewrite (keys left), the next ordinary application as a delta, and the five tables equal the checkpoint\'s view', async () => {
+    const f = bFixture();
+    const h = harness({ dir: writeFixture(f) });
+    const modes: string[] = [];
+    const real = delegationProjectionPortOfStore(h.store);
+    const projection: DelegationProjectionPort = {
+      project: (cp) => { modes.push('project'); real.project(cp); },
+      projectChanged: (prior, next) => { const r = real.projectChanged(prior, next); modes.push(`projectChanged:${r.mode}`); return r; },
+      insertEvents: (rows) => real.insertEvents(rows),
+      eventStats: () => real.eventStats(),
+      countEventsAtOrBelow: (s) => real.countEventsAtOrBelow(s),
+      deleteEventsBetween: (a, b, n) => real.deleteEventsBetween(a, b, n),
+    };
+    const dur = await h.open({ projection });
+    expect(dur.failure()).toBeNull();
+    const door = doorOf(dur);
+    modes.length = 0;
+    expect((await door()).retired).toBe(1);
+    expect(modes, 'the door\'s commit: one projectChanged, which answered full').toEqual(['projectChanged:full']);
+    expect(canon(h.store.readDelegationProjection()), 'the five tables equal the checkpoint\'s view').toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(dur.state().checkpoint)));
+    modes.length = 0;
+    await dur.applyAccepted(timedBatch([[subagentStart(60, Y), T0 + 30_000]]));
+    expect(modes, 'the next application deltas again').toEqual(['projectChanged:delta']);
+    expect(canon(h.store.readDelegationProjection())).toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(dur.state().checkpoint)));
+  });
+
+  // ── RB26: an idle door costs nothing ────────────────────────────────────────────────────────────────────────────────
+
+  it('RB26: with nothing retirable (a journal folded by rule A alone), the door answers {retired: 0, applied: null} with zero whole-checkpoint encodes, no write, no revision', async () => {
+    const records = chainAt(sequenceAt([
+      sessionStart(1), bashPre(2, 'toolu_z1', ['a']), bashPost(3, 'toolu_z1', ['a']),                 // an equal call: rule A opens nothing
+      bashPre(4, 'toolu_d1', ['a']), bashPost(5, 'toolu_d1', ['a', 'c']),                             // a delta call: one row, not retirable
+      bashPre(6, 'toolu_p1', ['a']),                                                                  // a pending call
+      subagentStart(7, X), subagentStop(8, X),
+    ], T0));
+    const dir = writeDir(records, null);
+    const h = harness({ dir });
+    const dur = await h.open();
+    expect(dur.failure()).toBeNull();
+    const door = doorOf(dur);
+    const whole = (x: unknown): boolean => {
+      if (typeof x !== 'object' || x === null) return false;
+      const o = x as Record<string, unknown>;
+      return o['v'] === 1 && ['sessions', 'activities', 'attempts', 'leases', 'lineage', 'bucketCursors'].every((k) => Array.isArray(o[k]));
+    };
+    const disk = readDisk(dir);
+    const revision = dur.state().checkpoint.revision;
+    const measures = dur.commitMeasures();
+    // `canonicalDelegationJson` is reached through the model's namespace, as the pass-timing rows do: the applier calls it through its own import.
+    const spy = vi.spyOn(modelNs, 'canonicalDelegationJson');
+    try {
+      const out = await door();
+      expect(out, 'idle: nothing retired, nothing applied').toEqual({ retired: 0, applied: null });
+      expect(spy.mock.calls.filter(([x]) => whole(x)), 'zero whole-checkpoint encodes').toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(dur.commitMeasures(), 'the applier\'s own encode and write counters did not move').toEqual(measures);
+    expect(dur.state().checkpoint.revision).toBe(revision);
+    expect(readDisk(dir), 'the bytes are unchanged').toEqual(disk);
+  });
+
+  // ── RB-gap: a call whose Pre aged out before its Post is never retired ──────────────────────────────────────────────
+
+  describe('RB-gap: the Pre of an old-rule active row ages at the bound, and the door retires only a call that was not aged before its Post', () => {
+    // The legacy checkpoint holds an old-rule ACTIVE row (Pre [a] accepted at T0 + 1 s) and a session start. A filler from another
+    // session, then the row's equal Post, are accepted afterwards. A filler at exactly the bound ages the Pre (its fact is forgotten, so the
+    // Post is no 'equal' fact); a filler one millisecond short does not, and the Post (accepted past the bound, but AFTER the naming
+    // that consumes its Pre) makes the fact. The same function of the records runs live and in recovery (ageing reads `acceptedAt` only).
+    const GAP = 'toolu_gap';
+    async function gapRun(fillerAfterPreMs: number) {
+      const pre = bashPre(2, GAP, ['a']);
+      const records = chainAt([[sessionStart(1), T0], [pre, T0 + 1000]]);
+      const dir = writeDir(records, oldRuleCheckpoint(records));
+      const h = harness({ dir });
+      const dur = await h.open();
+      expect(dur.failure()).toBeNull();
+      expect(rowOf(dur.state().checkpoint, GAP)?.executionState, 'the legacy row is active').toBe('active');
+      expect(kindOf(dur, GAP), 'its Pre is a pending fact').toBe('pre');
+      const tPre = T0 + 1000;
+      await dur.applyAccepted(timedBatch([
+        [sessionStart(10, { sessionId: LANE_B }), tPre + fillerAfterPreMs],
+        [bashPost(11, GAP, ['a']), tPre + BOUND + 1000],
+      ]));
+      expect(rowOf(dur.state().checkpoint, GAP)?.executionState, 'the late Post ended the row').toBe('ended');
+      return { dur, door: doorOf(dur) };
+    }
+
+    it('RB-gap: a filler accepted AT the bound ages the Pre: no fact, the door retires 0, and recovery stays ready with K ended and mapped (mutants MB-gap, MA11)', async () => {
+      const { dur, door } = await gapRun(BOUND);
+      expect(kindOf(dur, GAP), 'the Pre aged before its Post: the Post forms no fact').toBeUndefined();
+      const out = await door();
+      expect(out.retired, 'a call whose Pre aged before its Post is not retired').toBe(0);
+      const report = await dur.recover();
+      expect(report.failure, 'recovery, which ages the covered Pre the same way, stays ready').toBeNull();
+      expect(dur.failure()).toBeNull();
+      const cp = dur.state().checkpoint;
+      expect(rowOf(cp, GAP)?.executionState, 'K is ended').toBe('ended');
+      expect(mapped(cp, GAP), 'and mapped').toBe(true);
+    });
+
+    it('RB-gap-b: the same with the filler one millisecond short of the bound: the Pre is still pending at the Post, the door retires 1, and recovery is ready', async () => {
+      const { dur, door } = await gapRun(BOUND - 1);
+      expect(kindOf(dur, GAP), 'the Post consumed its own Pre').toBe('equal');
+      const out = await door();
+      expect(out.retired).toBe(1);
+      const report = await dur.recover();
+      expect(report.failure, 'recovery over the retired checkpoint').toBeNull();
+      expect(dur.failure()).toBeNull();
+      expect(rowOf(dur.state().checkpoint, GAP), 'K is gone').toBeUndefined();
+    });
+  });
+
+  // ── RB-PAR: recovery parity, twin appliers over a seeded generator ─────────────────────────────────────────────────
+
+  describe('RB-PAR: an applier re-opened through recover() after every step equals the live one (N = 6 seeds, 16 steps each)', () => {
+    const STEPS = 16;
+    const POOL = 6;
+    const KINDS = ['equal', 'differing', 'truncated', 'unmeasured', 'post-first', 'late-post', 'gap', 'interval', 'door'] as const;
+    type Step = { kind: (typeof KINDS)[number]; timed: Timed[]; hour?: string };
+
+    /** The legacy stock all six seeds start from: three retirable equal calls, one delta call and POOL old-rule active rows (Pre only). */
+    function parFixture() {
+      const events: Ev[] = [sessionStart(1)];
+      for (const [i, id] of ['toolu_e0', 'toolu_e1', 'toolu_e2'].entries()) events.push(bashPre(2 + 2 * i, id, ['a']), bashPost(3 + 2 * i, id, ['a']));
+      events.push(bashPre(8, 'toolu_d0', ['a']), bashPost(9, 'toolu_d0', ['a', 'b']));
+      const poolIds = Array.from({ length: POOL }, (_, i) => `toolu_old${i}`);
+      poolIds.forEach((id, i) => events.push(bashPre(10 + i, id, ['a'])));
+      const timed = sequenceAt(events, T0);
+      const records = chainAt(timed);
+      const tPre = (id: string): number => timed.find(([e]) => e.eventKind === 'PreToolUse' && e.toolUseId === id)![1];
+      return { records, legacy: oldRuleCheckpoint(records), poolIds, tPre, named: ['toolu_e0', 'toolu_e1', 'toolu_e2', 'toolu_d0', ...poolIds] };
+    }
+
+    /** The steps of one seed: a function of the seed and the fixture alone. */
+    function stepsOf(seed: number, fx: ReturnType<typeof parFixture>): Step[] {
+      const rng = mulberry32(seed);
+      let t = T0 + 60_000;
+      let n = 100;
+      let c = 0;
+      let pool = 0;
+      const out: Step[] = [];
+      for (let i = 0; i < STEPS; i++) {
+        let kind: Step['kind'] = i === STEPS - 1 ? 'door' : KINDS[Math.floor(rng() * KINDS.length)]!;
+        if ((kind === 'late-post' || kind === 'gap') && pool >= POOL) kind = 'equal';
+        const id = `toolu_s${++c}`;
+        switch (kind) {
+          case 'equal': out.push({ kind, timed: [[bashPre(n++, id, ['a', 'b']), t], [bashPost(n++, id, ['b', 'a', 'a']), t + 1000]] }); t += 2000; break;
+          case 'differing': out.push({ kind, timed: [[bashPre(n++, id, ['a']), t], [bashPost(n++, id, ['a', 'c']), t + 1000]] }); t += 2000; break;
+          case 'truncated': out.push({ kind, timed: [[bashPre(n++, id, undefined, {}, true), t], [bashPost(n++, id, ['a']), t + 1000]] }); t += 2000; break;
+          case 'unmeasured': out.push({ kind, timed: [[bashPre(n++, id, ['a']), t], [bashPost(n++, id), t + 1000]] }); t += 2000; break;
+          case 'post-first': out.push({ kind, timed: [[bashPost(n++, id, ['a']), t], [bashPre(n++, id, ['a']), t + 1000]] }); t += 2000; break;
+          case 'late-post': out.push({ kind, timed: [[bashPost(n++, fx.poolIds[pool++]!, ['a']), t]] }); t += 1000; break;
+          case 'gap': {
+            const old = fx.poolIds[pool++]!;
+            t = Math.max(t, fx.tPre(old) + BOUND + (rng() < 0.5 ? 0 : 7));       // a filler AT or past the bound, between the old Pre and its Post
+            out.push({ kind, timed: [[sessionStart(n++, { sessionId: LANE_B }), t], [bashPost(n++, old, ['a']), t + 1000]] }); t += 2000; break;
+          }
+          case 'interval': out.push({ kind, timed: [], hour: `20261014${String(i % 24).padStart(2, '0')}` }); break;
+          case 'door': out.push({ kind, timed: [] }); break;
+        }
+      }
+      return out;
+    }
+
+    it.each([101, 202, 303, 404, 505, 606])('RB-PAR: seed %i: 16 generated steps; after each, the re-opened applier equals the live one (checkpoint, door counts, facts) (mutants MB6, MB12, MB-gap, MB-noA)', async (seed) => {
+      const fx = parFixture();
+      const live = await harness({ dir: writeDir(fx.records, fx.legacy) }).open();
+      const twin = await harness({ dir: writeDir(fx.records, fx.legacy) }).open();
+      expect(live.failure()).toBeNull();
+      expect(twin.failure()).toBeNull();
+      const liveDoor = doorOf(live);
+      const twinDoor = doorOf(twin);
+      const named = [...fx.named];
+      const steps = stepsOf(seed, fx);
+      for (const [i, step] of steps.entries()) {
+        const ctx = `seed ${seed} step ${i} (${step.kind})`;
+        try {
+          for (const [e] of step.timed) if (e.eventKind === 'PreToolUse' || e.eventKind === 'PostToolUse') named.push(e.toolUseId);
+          if (step.kind === 'door') {
+            const a = await liveDoor();
+            const b = await twinDoor();
+            expect(b.retired, `${ctx}: the door's retired counts agree`).toBe(a.retired);
+          } else if (step.kind === 'interval') {
+            for (const d of [live, twin]) {
+              await d.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: [...cp.observationIntervals.filter((x) => x.utcHour !== step.hour), intervalFor(step.hour!, 'measured', T(i))] }));
+            }
+          } else {
+            await live.applyAccepted(timedBatch(step.timed));
+            await twin.applyAccepted(timedBatch(step.timed));
+          }
+          const report = await twin.recover();                                                     // the twin is re-opened after every step
+          expect(report.failure, `${ctx}: recovery is ready`).toBeNull();
+          expect(canon(twin.state().checkpoint), `${ctx}: the recovered checkpoint equals the live one`).toBe(canon(live.state().checkpoint));
+          for (const id of new Set(named)) expect(factOf(twin, id), `${ctx}: the fact of ${id}, recovered vs live`).toEqual(factOf(live, id));
+        } catch (err) {
+          throw new Error(`${ctx}: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+        }
+      }
+    }, 120_000);
+  });
+});
+
+// Run 762, the second half: the Workflow run's end on its task notification (D-6269), the start-less stop's ageing (D-6270) and the
+// retirement door's wiring (D-6268). It reuses the first section's fixtures above (`chainAt`, `Timed`, the B fixture's helpers, `re0Events`,
+// the door's cast) and adds none of its own beyond the notification envelope. The new report field `coveredEnds` and the horizon constant
+// are reached through casts and the model's namespace, so every row that needs them fails on its own assertion at the base.
+// D-WF1 to D-WF9, D-WF14, D-WF15 and D-SC1 to D-SC5 are in the correlation test; D-SC-COST in the fold-alloc test; D-WF-E2E in the
+// integration test; RE1 to RE3 and RE8 in the pass-timing test; RE9 in the watch test.
+describe('run 762: workflow runs end on their task notification, start-less stops age out, and the retirement door is wired (D-6268, D-6269, D-6270)', () => {
+  /** The ruled horizon, through the model's namespace only, never restated, so a renamed export fails to compile. Journal time
+   *  throughout: no clock is read. */
+  const H = modelNs.DELEGATION_STOP_CANDIDATE_HORIZON_MS;
+  const A0 = Date.UTC(2026, 9, 10);
+  const RUN = 'wf_run1';
+  const Y1 = 'agent-y1';
+  const Y2 = 'agent-y2';
+
+  /** A task notification as the hook journals it: a UserPromptSubmit carrying `notification` (copied from the correlation test's helper). */
+  const notification = (n: number, toolUseId: string, taskId: string, status: 'completed' | 'failed' | 'cancelled' | 'unknown' = 'completed', over: Over = {}): Ev =>
+    ({ ...base(n, over), eventKind: 'UserPromptSubmit', notification: { taskId, toolUseId, status } });
+
+  /** `report.coveredEnds`, which does not exist at the base. */
+  const coveredEndsOf = (report: unknown): number | undefined => (report as { coveredEnds?: number }).coveredEnds;
+  /** The strict reading: the field exists and is a number (D-6269's recovery report). */
+  const coveredEndsStrict = (report: unknown): number => {
+    const n = coveredEndsOf(report);
+    expect(typeof n, 'DelegationRecoveryReport.coveredEnds exists and is a number (D-6269)').toBe('number');
+    return n as number;
+  };
+  const encoded = (cp: DelegationCheckpointV1, revision = 1): Uint8Array => encodeDelegationCheckpoint({ ...cp, revision });
+  const wfRun = (cp: DelegationCheckpointV1): DelegationActivityRow | undefined => cp.activities.find((a) => a.sourceKind === 'workflow' && a.upstreamId === RUN);
+  const wfWorker = (cp: DelegationCheckpointV1): DelegationActivityRow | undefined => cp.activities.find((a) => a.sourceKind === 'workflow' && a.upstreamId === `${RUN}-0`);
+  const wfRows = (cp: DelegationCheckpointV1): (DelegationActivityRow | undefined)[] => [wfRun(cp), wfWorker(cp)];
+  const candidateHolds = (cp: DelegationCheckpointV1) => cp.pruningHolds.filter((h) => h.reason === 'identity-candidate');
+  const onDisk = (dir: string): DelegationCheckpointV1 => decodeDelegationCheckpoint(new Uint8Array(readDisk(dir).checkpoint!));
+
+  // ── the workflow world: session start, the Workflow launch (toolu_2, task_1), its task notification ───────────────────
+
+  /** r = [sessionStart(1), launch(2), notification(3)] and the four checkpoints of D-WF10 (a), (b), (c); the builder's own worker opening is
+   *  `openWorkflowWorkerFromMeta`. Every checkpoint is written at revision 1. */
+  function wfWorld(status: 'completed' | 'failed' | 'cancelled' | 'unknown' = 'completed') {
+    const records = chainAt(sequenceAt([sessionStart(1), workflowLaunch(2, RUN), notification(3, 'toolu_2', 'task_1', status)], T0));
+    const [r1, r2, r3] = records as [DelegationJournalRecordV1, DelegationJournalRecordV1, DelegationJournalRecordV1];
+    const recA = recoverDelegation(null, [r1, r2]);
+    expect(recA.failure, 'the launch alone recovers').toBeNull();
+    const bA = recA.facts!.builder;
+    const opened = bA.openWorkflowWorkerFromMeta(PARENT, INC, RUN, 0);
+    expect(opened.kind, 'worker 0 opens from the run').toBe('opened');
+    const cpA = bA.build(1);
+    const bC = bA.clone();
+    bC.foldRecord(r3);
+    const cpC = bC.build(1);
+    const recB = recoverDelegation(null, [r1]);
+    expect(recB.failure).toBeNull();
+    const cpB: DelegationCheckpointV1 = { ...recB.state.checkpoint, revision: 1 };
+    return { records, r1, r2, r3, cpA, cpB, cpC };
+  }
+  /** cpC with the run and the worker set back to active, as a checkpoint built before the rule existed would hold them. */
+  const staleOf = (cp: DelegationCheckpointV1): DelegationCheckpointV1 => ({
+    ...cp,
+    activities: cp.activities.map((a) => (a.sourceKind === 'workflow' ? { ...a, executionState: 'active' as const, endedAt: null, lastEventAt: T(2) } : a)),
+  });
+
+  it('D-WF10: a task notification ends its run and worker on every route: recovered from a checkpoint before the launch, after it, folded live, and across the replaceRows path', async () => {
+    // Mutants: MW9 reds (a); MW11 and MW12 red (d) (the launch index or the folded rows lost across `replaceRows`).
+    const w = wfWorld();
+    const ended = { executionState: 'ended', endedAt: T(3), lastEventAt: T(3) };
+    // (c) the live fold of the notification onto a builder that holds the worker.
+    expect(wfRun(w.cpC), '(c) the run row exists').toBeDefined();
+    expect(wfWorker(w.cpC), '(c) the worker row exists').toBeDefined();
+    expect(wfRun(w.cpC), '(c) the notification ends the run at its observation time').toMatchObject(ended);
+    expect(wfWorker(w.cpC), '(c) and its worker').toMatchObject(ended);
+    // (a) a checkpoint covering the launch and the worker, recovered over the whole journal: the notification is replayed.
+    const a = recoverDelegation(encoded(w.cpA), w.records);
+    expect(a.failure, '(a) recovery from the checkpoint after the launch').toBeNull();
+    expect(a.replayed, '(a) the notification is the one replayed record').toBe(1);
+    expect(wfRows(a.state.checkpoint), '(a) run and worker rows equal the live fold\'s').toEqual(wfRows(w.cpC));
+    // (b) a checkpoint covering the session start only: the launch and the notification are both replayed (no worker: it opens by meta).
+    const b = recoverDelegation(encoded(w.cpB), w.records);
+    expect(b.failure, '(b) recovery from the checkpoint before the launch').toBeNull();
+    expect(wfRun(b.state.checkpoint), '(b) the run row equals the live fold\'s').toEqual(wfRun(w.cpC));
+    // (c) the live fold's own checkpoint covers everything: recovery changes nothing and ends nothing.
+    const c = recoverDelegation(encoded(w.cpC), w.records);
+    expect(c.failure).toBeNull();
+    expect(canon(c.state.checkpoint), '(c) nothing changes').toBe(canon({ ...w.cpC, revision: 1 }));
+    expect(coveredEndsStrict(c), '(c) no covered notification ended a row').toBe(0);
+    // (d) the applier: the launch, the worker by meta, an interval-only change (replaceRows), and only then the notification.
+    const h = harness();
+    const dur = await h.open();
+    await dur.applyAccepted(timedBatch(sequenceAt([sessionStart(1), workflowLaunch(2, RUN)], T0)));
+    const meta = await dur.applyPositiveWorkflowMeta({ parentId: PARENT, parentIncarnation: INC, runId: RUN, workerIndex: 0 });
+    expect(meta.kind).toBe('opened');
+    const change = await dur.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: [...cp.observationIntervals, intervalFor('2026101400', 'measured', T(3))] }));
+    expect(change.durable, 'the interval-only change landed').toBe(true);
+    await dur.applyAccepted(timedBatch([[notification(3, 'toolu_2', 'task_1'), T0 + 2000]]));
+    const d = dur.state().checkpoint;
+    expect(wfRun(d), '(d) the run is ended after the replaceRows path').toMatchObject(ended);
+    expect(wfWorker(d), '(d) and its worker').toMatchObject(ended);
+    expect(wfRows(d), '(d) equal to the live fold\'s rows').toEqual(wfRows(w.cpC));
+  });
+
+  it('D-WF11: a checkpoint built before the rule holds an active run and worker whose notification is covered: recovery ends both, replays nothing and reports coveredEnds 2', () => {
+    // Mutants: MW1 and MW10.
+    const w = wfWorld();
+    const stale = staleOf(w.cpC);
+    expect(wfRows(stale).map((r) => r?.executionState), 'the premise: both are active in the stale checkpoint').toEqual(['active', 'active']);
+    const report = recoverDelegation(encoded(stale), w.records);
+    expect(report.failure, 'recovery is ready').toBeNull();
+    expect(report.replayed, 'the notification is covered, not replayed').toBe(0);
+    expect(coveredEndsStrict(report), 'the covered notification changed the run and the worker').toBe(2);
+    expect(wfRows(report.state.checkpoint), 'rows equal the live fold\'s, field for field').toEqual(wfRows(w.cpC));
+  });
+
+  it('D-WF12: the applier saves what covered notifications ended: the disk checkpoint, the SQLite projection and one warn line all show 2 rows', async () => {
+    // Mutant: MW13 (needsSave ignores coveredEnds: the disk assertion).
+    const w = wfWorld();
+    const dir = writeDir(w.records, staleOf(w.cpC));
+    const lines: string[] = [];
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation((m: unknown) => { lines.push(String(m)); });
+    let dur: DelegationDurability;
+    const h = harness({ dir });
+    try {
+      dur = await h.open({ warn: (m) => { lines.push(m); } });
+    } finally {
+      consoleWarn.mockRestore();
+    }
+    expect(dur.failure(), 'the applier is ready').toBeNull();
+    const disk = onDisk(dir);
+    expect(wfRows(disk).map((r) => r?.executionState), 'the disk checkpoint has both ended (needsSave)').toEqual(['ended', 'ended']);
+    const projected = h.store.readDelegationProjection().activities.filter((a) => a.sourceKind === 'workflow');
+    expect(projected.map((a) => a.executionState), 'SQLite shows both ended').toEqual(['ended', 'ended']);
+    const ours = lines.filter((l) => l.includes('delegation recovery changed'));
+    expect(ours, 'one warn line, naming 2 rows').toHaveLength(1);
+    expect(ours[0]).toContain('ccrc-server: delegation recovery changed 2 activity row(s) from covered task notifications');
+  });
+
+  it('D-WF13: a covered SubagentStop never edits a row: an agent hand-set back to active stays active, and coveredEnds is 0 (green by design; mutant MW14)', () => {
+    // Green at the base, where `coveredEnds` is absent: the count is read as `?? 0`, and at the tip it must exist and be 0.
+    const records = chainAt(sequenceAt([sessionStart(1), subagentStart(2, X), subagentStop(3, X)], T0));
+    const full = recoverDelegation(null, records);
+    expect(full.failure).toBeNull();
+    expect(activityOf(full.state.checkpoint, X)?.executionState, 'the premise: the stop ended X').toBe('ended');
+    const handSet: DelegationCheckpointV1 = {
+      ...full.state.checkpoint, revision: 1,
+      activities: full.state.checkpoint.activities.map((a) => (a.upstreamId === X ? { ...a, executionState: 'active' as const, endedAt: null } : a)),
+    };
+    const report = recoverDelegation(encoded(handSet), records);
+    expect(report.failure).toBeNull();
+    expect(report.replayed).toBe(0);
+    expect(activityOf(report.state.checkpoint, X), 'X stays exactly as the checkpoint held it').toMatchObject({ executionState: 'active', endedAt: null });
+    expect(coveredEndsOf(report) ?? 0, 'no row was changed by a covered record').toBe(0);
+  });
+
+  // ── D-6270: start-less stop ageing, recovery and the applier ─────────────────────────────────────────────────────────────
+
+  it('D-SC7: a join after the horizon opens from its OWN record whichever checkpoint recovery starts from: the same Y activityId and mapping from nothing, from r1 and from r1-r2', () => {
+    // Mutant: MS7 (covered records do not age: reds the third route).
+    const records = chainAt([[subagentStop(1, Y), A0], [sessionStart(2), A0 + H], [subagentStart(3, Y), A0 + H + 1000]]);
+    const expectedId = deriveDelegationActivityId(keyOf(Y), records[2]!.journalId);
+    const expectedMap = { [encodeDelegationNaturalKey(keyOf(Y))]: expectedId };
+    const routes: [string, Uint8Array | null][] = [
+      ['(i) from no checkpoint', null],
+      ['(ii) from the checkpoint after r1', encoded(recoverDelegation(null, records.slice(0, 1)).state.checkpoint)],
+      ['(iii) from the checkpoint after r1-r2', encoded(recoverDelegation(null, records.slice(0, 2)).state.checkpoint)],
+    ];
+    for (const [name, bytes] of routes) {
+      const report = recoverDelegation(bytes, records);
+      expect(report.failure, `${name}: recovery is ready`).toBeNull();
+      const y = activityOf(report.state.checkpoint, Y);
+      expect(y?.identityJournalId, `${name}: Y\'s identity is the SubagentStart past the horizon, not the stale stop`).toBe(records[2]!.journalId);
+      expect(y?.activityId, `${name}: Y\'s ID is derived from that record`).toBe(expectedId);
+      expect(report.state.checkpoint.activityIdsByNaturalKey, `${name}: the mapping`).toEqual(expectedMap);
+    }
+    // (iii) again, over r1-r2 alone: nothing is replayed, so only the COVERED record at A0 + H can age the stop (a replayed join would
+    // age it itself, before naming, whatever the observe pass did).
+    const covered = recoverDelegation(routes[2]![1], records.slice(0, 2));
+    expect(covered.failure, '(iii) over r1-r2: recovery is ready').toBeNull();
+    expect(covered.state.checkpoint.pruningHolds.filter((x) => x.reason === 'identity-candidate'), '(iii) over r1-r2: the covered record aged the stale stop').toEqual([]);
+  });
+
+  it('D-SC8: the applier ages a start-less stop at the horizon: one identity-candidate hold on disk after the first application, none after the one at A0 + H', async () => {
+    // Mutants: MS1 and MS9. The applier\'s injected clock supplies each record\'s acceptedAt.
+    const h = harness();
+    const dur = await h.open();
+    h.clock.ms = A0;
+    await dur.applyAccepted(batch([sessionStart(1), subagentStop(2, Y)]));
+    expect(candidateHolds(onDisk(h.dir)).map((x) => x.ownerId), 'the stop-only candidate is held').toEqual([encodeDelegationNaturalKey(keyOf(Y))]);
+    h.clock.ms = A0 + H;
+    await dur.applyAccepted(batch([sessionStart(3)]));
+    expect(candidateHolds(onDisk(h.dir)), 'a record accepted H after the stop ages its candidate out').toEqual([]);
+    expect(dur.state().checkpoint.activities, 'and nothing was opened').toEqual([]);
+  });
+
+  it('D-SC9: a checkpoint holding two stop-only candidates, recovered over a journal whose last record is accepted H past them, holds none and opens nothing', () => {
+    // Red at the base: both holds survive. The suffix record is the only one that ages them (the first two are covered).
+    const first = chainAt([[subagentStop(1, Y1), A0], [subagentStop(2, Y2), A0 + 1000], [sessionStart(3), A0 + 2000]]);
+    const pre = recoverDelegation(null, first);
+    expect(pre.failure).toBeNull();
+    expect(candidateHolds(pre.state.checkpoint), 'the premise: two holds before the horizon').toHaveLength(2);
+    const last = chainAt([[sessionStart(4), A0 + H + 2000]], 4, first[2]!.digest);
+    const report = recoverDelegation(encoded(pre.state.checkpoint), [...first, ...last]);
+    expect(report.failure, 'recovery is ready').toBeNull();
+    expect(report.replayed).toBe(1);
+    expect(candidateHolds(report.state.checkpoint), 'both stops are past the horizon at the suffix record').toEqual([]);
+    expect(report.state.checkpoint.activities, 'no activity').toEqual([]);
+  });
+
+  // ── D-6268's wiring: RE0's stock through the door, the real store, the codec and the not-ready door ────────────────────────
+
+  /** RE0's stock as a fixture directory: the journal, then the legacy checkpoint covering it. `leased` adds a fourth equal call (l1) and a
+   *  JOURNAL-written lease for it AFTER the checkpoint's applied position (never `createLease`, which now refuses a zero-delta call). */
+  function re0Stock(opts: { leased?: boolean; withPending?: boolean } = {}) {
+    const events = [...re0Events({ withPending: opts.withPending }), ...(opts.leased === true ? [bashPre(20, 'toolu_l1', ['a']), bashPost(21, 'toolu_l1', ['a'])] : [])];
+    const records = chainAt(sequenceAt(events, T0));
+    const legacy = oldRuleCheckpoint(records);
+    let journal: DelegationJournalRecordV1[] = records;
+    if (opts.leased === true) {
+      const entry = leaseEntryFor(rowOf(legacy, 'toolu_l1')!.activityId, { leaseId: 'lease-l1', sourceKind: 'raw', adminRecord: 'wt-l1', canonicalPath: '/work/project-a/wt-l1' });
+      journal = [...records, buildDelegationJournalRecord({
+        sequence: records.length + 1, acceptedAt: formatDelegationInstant(T0 + 60_000), previousDigest: records[records.length - 1]!.digest, entry,
+      })];
+    }
+    return { records, legacy, journal, dir: (): string => writeDir(journal, legacy) };
+  }
+  const RETIRABLE = ['toolu_e1', 'toolu_e2', 'toolu_e3'];
+
+  /** A port over the real store that records each `projectChanged`: its mode, the rows it touched, and how many full projections it nested. */
+  function loggingPort(store: CoordStore) {
+    const real = delegationProjectionPortOfStore(store);
+    const full = vi.spyOn(store, 'projectDelegationCheckpoint');
+    const calls: { mode: string; nested: number; rows: number | null }[] = [];
+    const projection: DelegationProjectionPort = {
+      project: (cp) => real.project(cp),
+      projectChanged: (prior, next) => {
+        const before = full.mock.calls.length;
+        const r = real.projectChanged(prior, next);
+        calls.push({ mode: r.mode, nested: full.mock.calls.length - before, rows: r.mode === 'delta' ? r.rows : null });
+        return r;
+      },
+      insertEvents: (rows) => real.insertEvents(rows),
+      eventStats: () => real.eventStats(),
+      countEventsAtOrBelow: (s) => real.countEventsAtOrBelow(s),
+      deleteEventsBetween: (a, b, n) => real.deleteEventsBetween(a, b, n),
+    };
+    return { projection, calls, restore: (): void => full.mockRestore() };
+  }
+  const eventsOf = (store: CoordStore): unknown[] =>
+    store.db.prepare('SELECT * FROM delegation_events ORDER BY journalSequence').all().map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'id')));
+
+  it('RE4: over RE0\'s stock the door retires exactly the three equal calls, as one FULL projection with one nested full call; the next application deltas; the leased row survives (mutants ME3, ME14; 728\'s MD14, MD21)', async () => {
+    const stock = re0Stock({ leased: true });
+    const dir = stock.dir();
+    const h = harness({ dir });
+    const log = loggingPort(h.store);
+    try {
+      const dur = await h.open({ projection: log.projection });
+      expect(dur.failure(), 'the stock recovers ready, the suffix lease replayed').toBeNull();
+      const before = dur.state().checkpoint;
+      expect(before.leases.map((l) => l.leaseId), 'the premise: the fourth equal call is leased').toEqual(['lease-l1']);
+      const door = doorOf(dur);
+      const stats = h.store.delegationEventStats();
+      log.calls.length = 0;
+      const out = await door();
+      const after = dur.state().checkpoint;
+      // (i) three retired, and exactly those keys leave.
+      expect(out.retired, '(i) the three equal calls; the leased one is kept').toBe(3);
+      const gone = before.activities.filter((a) => !after.activities.some((x) => x.activityId === a.activityId));
+      expect(gone.map((a) => a.upstreamId).sort(), '(i) the rows that left').toEqual(RETIRABLE);
+      expect(Object.keys(before.activityIdsByNaturalKey).filter((k) => !Object.hasOwn(after.activityIdsByNaturalKey, k)).sort(), '(i) the map entries that left')
+        .toEqual(RETIRABLE.map((id) => encOf(id)).sort());
+      // (ii) one projectChanged, which answered full through one nested full projection.
+      expect(log.calls, '(ii) the door\'s commit: one projectChanged, full, one nested full call').toEqual([{ mode: 'full', nested: 1, rows: null }]);
+      // (iii) the five tables equal the checkpoint's view; (iv) no event row moved.
+      expect(canon(h.store.readDelegationProjection()), '(iii) SQLite equals the checkpoint\'s view').toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(after)));
+      expect(h.store.delegationEventStats(), '(iv) delegation_events is unchanged').toEqual(stats);
+      // (vi) the leased row and its lineage survive.
+      expect(rowOf(after, 'toolu_l1'), '(vi) the leased row').toBeDefined();
+      expect(after.leases.map((l) => l.leaseId), '(vi) its lease').toEqual(['lease-l1']);
+      expect(after.lineage.filter((n) => n.leaseId === 'lease-l1'), '(vi) its lineage').toHaveLength(1);
+      // (v) an ordinary application next: a delta, with the rows it touched.
+      await dur.applyAccepted(timedBatch([[subagentStart(40, Y), T0 + 70_000]]));
+      expect(log.calls.length, '(v) one more projectChanged').toBe(2);
+      expect(log.calls[1], '(v) it deltas again').toMatchObject({ mode: 'delta', nested: 0 });
+      expect(log.calls[1]!.rows, '(v) with the rows it touched').toBeGreaterThan(0);
+      expect(canon(h.store.readDelegationProjection()), '(iii) and the tables still equal the view').toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(dur.state().checkpoint)));
+      expect(h.store.delegationEventStats().count, '(iv) the new event is the only addition').toBe(stats.count + 1);
+    } finally {
+      log.restore();
+    }
+  });
+
+  it('RE5: over its own fixture (no active Pre-without-Post row, no gap at the bound) the retired checkpoint recovers ready from the files and equals a recovery from nothing (mutant MB-noA)', async () => {
+    const stock = re0Stock({ withPending: false });
+    const dir = stock.dir();
+    const dur = await harness({ dir }).open();
+    expect(dur.failure()).toBeNull();
+    expect((await doorOf(dur)()).retired, 'the three equal calls').toBe(3);
+    const live = dur.state().checkpoint;
+    // (a) from the files: ready, no failure, equal to the live state except the revision.
+    const files = await recoverDelegationFromFiles(nodeDelegationFilePort, dir);
+    expect(files.failure, '(a) recovery over the retired checkpoint').toBeNull();
+    expect(withoutRevision(files.state.checkpoint), '(a) equal to live').toBe(withoutRevision(live));
+    // (b) from nothing over the whole journal (rule A): the same activities, mapping and IDs.
+    const fresh = recoverDelegation(null, stock.records);
+    expect(fresh.failure, '(b) the journal alone recovers').toBeNull();
+    expect(fresh.state.checkpoint.activities, '(b) the same activities, with the same IDs').toEqual(live.activities);
+    expect(fresh.state.checkpoint.activityIdsByNaturalKey, '(b) the same mapping').toEqual(live.activityIdsByNaturalKey);
+  });
+
+  it('RE5b: twin stores, one projecting always in full and one through the delta, agree table by table after the open, the retirement and two flushes (mutant ME3)', async () => {
+    const stock = re0Stock({ leased: true });
+    const mk = (alwaysFull: boolean) => {
+      const h = harness({ dir: stock.dir() });
+      const real = delegationProjectionPortOfStore(h.store);
+      const projection: DelegationProjectionPort = alwaysFull
+        ? { ...real, projectChanged: (_prior, next) => { real.project(next); return { mode: 'full' }; } }
+        : real;
+      return { h, open: () => h.open({ projection }) };
+    };
+    const a = mk(true);
+    const b = mk(false);
+    const full = await a.open();
+    const delta = await b.open();
+    expect(full.failure()).toBeNull();
+    expect(delta.failure()).toBeNull();
+    const same = (step: string): void => {
+      expect(b.h.store.readDelegationProjection(), `${step}: the five tables, by primary key`).toEqual(a.h.store.readDelegationProjection());
+      expect(eventsOf(b.h.store), `${step}: delegation_events without id`).toEqual(eventsOf(a.h.store));
+      expect(canon(delta.state().checkpoint), `${step}: the checkpoints`).toBe(canon(full.state().checkpoint));
+      // Each twin against its OWN checkpoint too: a mutant that skips the projection runs in both twins, so their agreement alone is
+      // blind to it (ME3).
+      expect(canon(b.h.store.readDelegationProjection()), `${step}: the delta store equals its checkpoint's view`)
+        .toBe(canonicalDelegationJson(projectionViewOfDelegationCheckpoint(delta.state().checkpoint as DelegationCheckpointV1)));
+    };
+    same('after the open');
+    expect((await doorOf(full)()).retired).toBe(3);
+    expect((await doorOf(delta)()).retired).toBe(3);
+    same('after the retirement');
+    const flush1 = timedBatch([[subagentStart(40, Y), T0 + 70_000]]);
+    await full.applyAccepted(flush1);
+    await delta.applyAccepted(flush1);
+    same('after flush 1');
+    const flush2 = timedBatch([[bashPre(41, 'toolu_n2', ['a']), T0 + 71_000], [bashPost(42, 'toolu_n2', ['a', 'z']), T0 + 72_000]]);
+    await full.applyAccepted(flush2);
+    await delta.applyAccepted(flush2);
+    same('after flush 2');
+    expect(b.h.store.readDelegationProjection().activities.some((x) => RETIRABLE.includes(x.upstreamId)), 'the retired calls are gone from the delta store').toBe(false);
+  });
+
+  it('RE6: the retired checkpoint, with a pending Bash call and an agent candidate in the builder, still decodes with main\'s 15 keys, v 1 and the four hold reasons (green by design; mutants ME10, ME10b)', async () => {
+    // Green at the base too: with no door the stock is simply not retired, and the closed shape is the same.
+    const MAIN_KEYS = [
+      'v', 'revision', 'appliedJournalSequence', 'appliedJournalId', 'appliedJournalDigest', 'activityIdsByNaturalKey', 'coordinatorIntentByParent',
+      'sessions', 'attempts', 'activities', 'leases', 'lineage', 'bucketCursors', 'observationIntervals', 'pruningHolds',
+    ];
+    const FOUR_REASONS = ['checkpoint-anchor', 'identity-candidate', 'open-lease', 'open-lineage'];
+    const stock = re0Stock();
+    const dir = stock.dir();
+    const dur = await harness({ dir }).open();
+    expect(dur.failure()).toBeNull();
+    const door = (dur as unknown as { retireZeroDeltaBashActivities?: () => Promise<unknown> }).retireZeroDeltaBashActivities;
+    if (typeof door === 'function') await door.call(dur);                       // absent at the base: the row does not assert it here
+    await dur.applyAccepted(timedBatch([[bashPre(30, 'toolu_q1', ['a']), T0 + 80_000], [bareTool(31, 'agent-q1'), T0 + 81_000]]));
+    const bytes = new Uint8Array(readDisk(dir).checkpoint!);
+    const cp = decodeDelegationCheckpoint(bytes);                              // accepts: the strict decoder reads the closed shape
+    expect(Object.keys(cp).sort(), 'the decoded checkpoint\'s keys are main\'s 15').toEqual([...MAIN_KEYS].sort());
+    expect(Object.keys(JSON.parse(Buffer.from(bytes).toString('utf8')) as object).sort(), 'and so are the file\'s').toEqual([...MAIN_KEYS].sort());
+    expect(cp.v).toBe(1);
+    expect(candidateHolds(cp).length, 'the agent candidate is held').toBeGreaterThan(0);
+    for (const h of cp.pruningHolds) expect(FOUR_REASONS, `hold reason ${h.reason}`).toContain(h.reason);
+    expect(Object.keys(modelNs.DELEGATION_PRUNING_HOLD_REASONS).sort(), 'the closed hold vocabulary is the same four').toEqual(FOUR_REASONS);
+  });
+
+  describe('RE7: a crash at each edge of the retirement commit (but project), then a fresh recover()', () => {
+    // The door appends no journal record, so the journal edges never fire in it; its edges are the checkpoint's. Before the rename the
+    // stock is held; from it on the stock is gone. Either way recovery is ready and the next hourly slot lands on the same result.
+    const CASES = (['build', 'checkpoint-write', 'checkpoint-fsync', 'checkpoint-rename', 'directory-fsync'] as const)
+      .flatMap((edge) => (['before', 'after'] as const).map((when) => [edge, when] as const));
+    it.each(CASES)('RE7: a fault at %s:%s during the retirement of RE0\'s stock (mutant MB-noA reds the after-rename arm)', async (edge, when) => {
+      const stock = re0Stock();
+      const dir = stock.dir();
+      const fault = { armed: false, hits: 0 };
+      const dur = await harness({ dir }).open({ onEdge: (e, w) => { if (fault.armed && e === edge && w === when) { fault.hits++; throw new SimulatedCrash(`${e}:${w}`); } } });
+      expect(dur.failure()).toBeNull();
+      const door = doorOf(dur);
+      const preRename = edge === 'build' || edge === 'checkpoint-write' || edge === 'checkpoint-fsync' || (edge === 'checkpoint-rename' && when === 'before');
+      fault.armed = true;
+      await expect(door()).rejects.toThrow(SimulatedCrash);
+      fault.armed = false;
+      expect(fault.hits).toBe(1);
+      const fresh = await harness({ dir }).open();
+      expect(fresh.failure(), 'a fresh recover() does not refuse').toBeNull();
+      expect(RETIRABLE.map((id) => rowOf(fresh.state().checkpoint, id) !== undefined), preRename ? 'before the rename the stock is held' : 'from the rename on the stock is gone')
+        .toEqual([preRename, preRename, preRename]);
+      const next = await doorOf(fresh)();
+      expect(next.retired, preRename ? 'the next slot retires all three' : 'nothing is left to retire').toBe(preRename ? 3 : 0);
+      const ref = await harness({ dir: stock.dir() }).open();
+      expect((await doorOf(ref)()).retired).toBe(3);
+      expect(withoutRevision(fresh.state().checkpoint), 'the same result as an uncrashed retirement').toBe(withoutRevision(ref.state().checkpoint));
+    });
+  });
+
+  it('RE10: a not-ready applier (a restore marker refused its recovery) rejects the door with not-ready and writes nothing', async () => {
+    const stock = re0Stock();
+    const dir = stock.dir();
+    const dur = await harness({ dir }).open();
+    expect(dur.failure()).toBeNull();
+    writeFileSync(path.join(dir, COORDINATION_RESTORE_MARKER_FILE), 'x\n');
+    await dur.recover();
+    expect(dur.state().phase, 'the applier is reconstructing').toBe('reconstructing');
+    const before = readDisk(dir);
+    await expect(doorOf(dur)()).rejects.toMatchObject({ code: 'not-ready' });
+    expect(readDisk(dir), 'nothing was written').toEqual(before);
+  });
+});

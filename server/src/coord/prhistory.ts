@@ -9,11 +9,11 @@ export type PrHistoryRead =
 /**
  * `$REG/<id>.prhistory` — the FIRST server-side reader of this file. It is
  * appended by ccd at exactly one chokepoint, the `prnumber` replacement inside
- * `_pr_py` (`ccd/ccd:2379`), which is the only line in ccd that ever
+ * `_pr_py` in `ccd/ccd`, which is the only line in ccd that ever
  * replaces a persisted `prnumber` and therefore the only place PR lineage can
  * be recorded at all.
  *
- * ONLY THE OUTER TWO RUNGS OF THE LADDER ARE ccd'S OWN (`ccd/ccd:4455-4458`):
+ * ONLY THE OUTER TWO RUNGS OF THE LADDER ARE ccd'S OWN (`_ws_archive_manifest`'s PR-ledger read):
  *   - ABSENT      -> `[]`, and it is a MEASURED answer: this workspace has
  *                    retired no PR.
  *   - UNREADABLE  -> REFUSAL. A `chmod 000` ledger answering `[]` would put
@@ -21,7 +21,7 @@ export type PrHistoryRead =
  *                    closes a run — the SIXTEENTH FORGERY's exact shape.
  *
  * THE MIDDLE RUNG IS A DELIBERATE DIVERGENCE, not a port. ccd's own MALFORMED
- * handling (`ccd/ccd:4460`, `:4245-4246`, `:4248-4249`) is WHOLE-FILE: one line
+ * handling (the same read in `_ws_archive_manifest`) is WHOLE-FILE: one line
  * `json.loads` cannot parse raises inside a single list comprehension over
  * every line, which the one `try` around it catches, discarding EVERY row —
  * good ones included — down to `[]`; this repo's own `ccd-prhistory.test.ts:126`
@@ -38,9 +38,10 @@ export type PrHistoryRead =
  * shape), this reader and ccd's OWN `ws-archive` fold can disagree — for the
  * same file, at the same moment — about whether a workspace retired any PRs.
  * ccd also performs no shape validation at all; a line that parses as JSON but
- * fails the four field guards below (`pr`/`branch`/`phase`/`recordedAt` typed
- * wrong) is dropped here exactly like an unparseable one, silently, with
- * nothing on `PrHistoryRead` distinguishing "this ledger is genuinely empty"
+ * fails the five field guards below (`pr`/`branch`/`phase`/`recordedAt` typed
+ * wrong, or an optional `prbranch` that is not a string) is dropped here
+ * exactly like an unparseable one, silently, with nothing on `PrHistoryRead`
+ * distinguishing "this ledger is genuinely empty"
  * from "a line was rejected" — a second, narrower divergence in the same
  * direction. Left unsignalled deliberately for now: the one prospective reader
  * of that signal is the run-close route, which does not exist in this tree yet
@@ -120,7 +121,10 @@ function parseLedger(raw: string): PrHistoryRead {
       if (typeof o['pr'] !== 'number' || !Number.isInteger(o['pr'])) continue;
       if (typeof o['branch'] !== 'string' || typeof o['phase'] !== 'string') continue;
       if (typeof o['recordedAt'] !== 'number') continue;
-      entries.push({ pr: o['pr'], branch: o['branch'], phase: o['phase'], recordedAt: o['recordedAt'] });
+      const prbranch = o['prbranch'];
+      if (prbranch !== undefined && typeof prbranch !== 'string') continue;
+      entries.push({ pr: o['pr'], branch: o['branch'], ...(prbranch === undefined ? {} : { prbranch }),
+        phase: o['phase'], recordedAt: o['recordedAt'] });
     } catch { /* a torn or hand-edited line is one lost record, never a lost history */ }
   }
   return { ok: true, entries };

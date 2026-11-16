@@ -1,0 +1,90 @@
+{
+  "name": "extra-issue-create-in-milestone-a",
+  "documentSource": "code document (LINEAR_DOCUMENTS.create); variables add projectId and projectMilestoneId",
+  "document": "mutation IssueCreate($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title description priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } } }",
+  "variables": {
+    "input": {
+      "teamId": "00000000-0001-4000-8000-000000000001",
+      "title": "Capture issue a temp",
+      "projectId": "00000000-0004-4000-8000-000000000020",
+      "projectMilestoneId": "00000000-0008-4000-8000-000000000021"
+    }
+  },
+  "requestBody": "{\"query\":\"mutation IssueCreate($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title description priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } } }\",\"variables\":{\"input\":{\"teamId\":\"00000000-0001-4000-8000-000000000001\",\"title\":\"Capture issue a temp\",\"projectId\":\"00000000-0004-4000-8000-000000000020\",\"projectMilestoneId\":\"00000000-0008-4000-8000-000000000021\"}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "11"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999821"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794590002762"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2468"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794590002762"
+    ]
+  ],
+  "body": {
+    "data": {
+      "issueCreate": {
+        "success": true,
+        "issue": {
+          "id": "00000000-0006-4000-8000-000000000020",
+          "identifier": "AAA-101",
+          "title": "Capture issue a temp",
+          "description": null,
+          "priority": 0,
+          "createdAt": "2026-11-13T16:13:22.788Z",
+          "updatedAt": "2026-11-13T16:13:22.788Z",
+          "team": {
+            "key": "AAA"
+          },
+          "state": {
+            "name": "Backlog",
+            "type": "backlog"
+          },
+          "assignee": null,
+          "labels": {
+            "nodes": []
+          },
+          "project": {
+            "name": "Capture project temp"
+          },
+          "parent": null
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"issueCreate\":{\"success\":true,\"issue\":{\"id\":\"00000000-0006-4000-8000-000000000020\",\"identifier\":\"AAA-101\",\"title\":\"Capture issue a temp\",\"description\":null,\"priority\":0,\"createdAt\":\"2026-11-13T16:13:22.788Z\",\"updatedAt\":\"2026-11-13T16:13:22.788Z\",\"team\":{\"key\":\"AAA\"},\"state\":{\"name\":\"Backlog\",\"type\":\"backlog\"},\"assignee\":null,\"labels\":{\"nodes\":[]},\"project\":{\"name\":\"Capture project temp\"},\"parent\":null}}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). An issue in the capture's project and milestone; its number is a fixture number, not Linear's."
+}

@@ -8,8 +8,9 @@ import type { CoordStatus } from '../../shared/api';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { COORD_CONFIRM_MS, MARKER_GLYPH, MARKER_WORD } from '../src/fleet/coordWords';
 import { ApiError } from '../src/lib/api';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { renderFleet } from './fleetHost';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -23,7 +24,8 @@ const makeStore = (): FleetStore => createFleetStore({
     close(): void {} }) as unknown as WebSocket,
 });
 
-const coord = (over: Partial<CoordStatus> = {}): CoordStatus => ({ pause: 'clear', mail: 'clear', ...over });
+const coord = (over: Partial<CoordStatus> = {}): CoordStatus =>
+  ({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], ...over });
 
 describe('the coord banner', () => {
   it('renders NOTHING before any coord frame — absence is not "not paused"', () => {
@@ -91,6 +93,13 @@ describe('the coord banner', () => {
     // A frame that arrives but still disagrees changes nothing — the tap is
     // still outstanding.
     act(() => { store.setState({ coord: coord({ pause: 'clear' }) }); });
+    expect(screen.getByText('pausing…')).toBeInTheDocument();
+
+    // The settle effect keys on `coord?.pause` alone,
+    // so a frame whose `pause` value CHANGES but still is not the
+    // value the tap asked for ('set') must not settle either — the guard is
+    // `coord?.pause === wantedRef.current`, never merely "pause changed".
+    act(() => { store.setState({ coord: coord({ pause: 'unmeasurable' }) }); });
     expect(screen.getByText('pausing…')).toBeInTheDocument();
 
     // The CONFIRMING frame lands.
@@ -172,6 +181,20 @@ describe('the coord banner', () => {
     expect(document.querySelector('.toast')).toBeNull();
   });
 
+  // D-5971 (#549, ARCH-11b): `registry-unmeasurable` is the table's 502 everywhere now, and the banner reads the
+  // WORD: an older server's 503 of it still renders inline, in the registry's own sentence.
+  it.each([502, 503])('renders registry-unmeasurable at %i inline, in the registry sentence', async (status) => {
+    const store = makeStore();
+    act(() => { store.setState({ coord: coord({ pause: 'clear' }), coordFrameSeen: true }); });
+    const coordPause = vi.fn().mockRejectedValue(new ApiError(status, { ok: false, error: 'registry-unmeasurable' }));
+    render(<><CoordBanner store={store} coordPause={coordPause} /><ToastHost /></>);
+
+    fireEvent.click(screen.getByRole('button'));
+    expect(await screen.findByText(/registry could not be read/i)).toBeInTheDocument();
+    expect(document.querySelector('.coord-error')).not.toBeNull();
+    expect(document.querySelector('.toast')).toBeNull();
+  });
+
   // Whole-branch review, M1: the 502 arm used to extract `body.stderr` itself
   // and fall back to `apiErrorText(err)` — but `apiErrorText` is ALREADY
   // stderr-first (`lib/api.ts:153-164`), so the whole branch was byte-
@@ -215,6 +238,27 @@ describe('the coord banner', () => {
     expect(screen.getByText(MARKER_WORD.set)).toBeInTheDocument();
   });
 
+  // This row's own direction: the
+  // frame now also carries `reclaim`/`childReclaimAttention` (child-reclamation
+  // wave 4). A frame that changes only the RECLAIM row's fields must not clear
+  // THIS banner's inline refusal — `pause` itself never moved.
+  it("an inline refusal survives a frame that changes only the reclaim row's fields — pause did not move", async () => {
+    const store = makeStore();
+    act(() => { store.setState({ coord: coord({ pause: 'clear' }), coordFrameSeen: true }); });
+    const coordPause = vi.fn().mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
+    render(<CoordBanner store={store} coordPause={coordPause} />);
+
+    fireEvent.click(screen.getByRole('button'));
+    expect(await screen.findByText('the fleet host needs the newer ccd')).toBeInTheDocument();
+
+    // A frame lands that differs ONLY in `reclaim` — this banner's own field,
+    // `pause`, is unchanged.
+    act(() => { store.setState({ coord: coord({ pause: 'clear', reclaim: 'set' }) }); });
+
+    expect(screen.getByText('the fleet host needs the newer ccd')).toBeInTheDocument();
+    expect(document.querySelector('.coord-error')).not.toBeNull();
+  });
+
   it('a generic (non-501/502) failure falls through to the ordinary toast, not the inline banner', async () => {
     const store = makeStore();
     act(() => { store.setState({ coord: coord({ pause: 'clear' }), coordFrameSeen: true }); });
@@ -231,7 +275,7 @@ describe('the coord banner', () => {
     act(() => {
       store.setState({ conn: 'open', sessions: [], coord: coord({ pause: 'set' }), coordFrameSeen: true });
     });
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     expect(document.querySelector('.coord-banner')).toBeNull();
   });
 

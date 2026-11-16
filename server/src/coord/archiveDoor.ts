@@ -1,0 +1,467 @@
+/**
+ * The archive door's decision (workspace lifecycle spec §5.2): `POST /api/sessions/:id/archive` is ONE "Archive" for
+ * both kinds of row. `server.ts` measures (the registry row, the live row, the worktree, the verb) and acts (the stop
+ * argv, `ws-archive`); everything that DECIDES lives here, so the route stays a wiring of measurements to acts.
+ *
+ * L1 in close.ts's sense, not pure: the coordination half reads the store and ends a programme through a declared
+ * port (`ArchiveCoordPort`, declared by this consumer), and `server.ts` runs `decideArchive` on the coordination
+ * serialiser (`CoordRoutesHandle.withAbandon`). No fs, no fastify, no clock.
+ *
+ * THE ORDER IS THE CONTRACT: every check that can refuse runs before any act that cannot be undone (spec §5.2, §8).
+ * `decideArchive` refuses, in order: a turn nobody could MEASURE (`status-unknown`, whatever the consents); a turn
+ * measured in progress without `interrupt` (`session-busy`); a workspace whose worktree this box
+ * PROVED gone; a run naming the session as its WORKER, without `force` (the existing door, unchanged); a
+ * non-terminal run naming it as CLAIMANT, without `programme:'end'`, or an unreadable store either way (fail-shut,
+ * `runs: []` — a store read that THROWS is unreadable too, never a 500); a box whose ccd predates `ws-archive`; and,
+ * with `programme:'end'`, any run the abandon arm could not move from its row alone (`abandonRefusal` — a run already
+ * `closing`, the spec's own example), found before the first run is ended. Only then does it act, and its one act is
+ * ending the programme (each run through the abandon door's own decision); an abandon that still refuses — or throws
+ * — stops the door there, naming what it closed, with nothing stopped or archived. What remains for `server.ts` —
+ * the stop argv, then `ws-archive` — is decided here too (`stop`, `wsArchive`), and `archiveOutcome` maps
+ * `ws-archive`'s answer to the wire.
+ *
+ * The worker check sits ABOVE the verb gate on purpose, as it always has: a claimed workspace is refused as CLAIMED
+ * even on a host whose ccd predates the verb — the claim is the more specific fact, and a 501 would send the operator
+ * chasing a fleet upgrade that was never the obstacle.
+ *
+ * What no check here can see is what only ccd can measure — its own status read, the archive manifest and, on a
+ * box that cannot read the worktree, the worktree itself (`worktreeOf`). ccd refuses those before ITS act, so an
+ * archive refused there has stopped nothing unless `stop` was asked; when it was, the answer is the partial outcome
+ * (`archived:false, stopped:true`), and when a programme was ended first, every answer after it says so (`ended`).
+ * Spec §5.2 asks for EVERY refusable check before any act; these are the ones the server cannot run, by measurement.
+ */
+import {
+  ARCHIVE_REFUSALS, archiveInterrupts, isRegistryId, type ArchiveBody, type ArchiveRefusal, type ClaimsChoiceBody,
+  type ClaimsMoved, type FleetSession, type StopBody,
+} from '../../../shared/api.js';
+import { REFUSAL_STATUS } from '../../../shared/refusal.js';
+import { workspaceEdge } from '../../../shared/workspaceTransitions.js';
+import type { MeasuredStat } from '../io.js';
+import { turnSays, turnWordOf } from '../sessionReading.js';
+import type { CloseOutcome } from './close.js';
+import type { OpenSibling, OpenSiblingsResult } from './store.js';
+import type { SessionBindings } from './bindingReads.js';
+import type { ClaimsChoice, ClaimsMoveOutcome } from './reclaim.js';
+
+/** The consents a request carries, read once. `force` and `interrupt` are honoured only as `true` (anything else is
+ *  absent, as `force` always was); `programme` is `'end'` or absent — a consent to end a programme is exact or it is
+ *  refused (`archiveFlags` answers `null` → 400). */
+export interface ArchiveFlags {
+  readonly force: boolean;
+  readonly interrupt: boolean;
+  readonly programmeEnd: boolean;
+  /** D-8199: what happens to the runs the session claims — absent when not given. */
+  readonly claims?: ClaimsChoice;
+}
+
+/**
+ * D-8199: the claims choice off a body (`ClaimsChoiceBody`) — `undefined` when none was given, `null` when it is
+ * malformed: a `runs` word that is not one of the two, a hand-over whose `heir` is not a registry id, or an `heir`
+ * without a hand-over. Exact or refused, like `programme`.
+ */
+export function claimsChoiceOf(b: { readonly [K in keyof ClaimsChoiceBody]?: unknown }): ClaimsChoice | undefined | null {
+  if (b.runs === undefined) return b.heir === undefined ? undefined : null;
+  if (b.runs === 'release') return b.heir === undefined ? { kind: 'release' } : null;
+  if (b.runs === 'handover') return isRegistryId(b.heir) ? { kind: 'handover', heir: b.heir } : null;
+  return null;
+}
+
+export function archiveFlags(raw: unknown): ArchiveFlags | null {
+  if (raw === undefined || raw === null) return { force: false, interrupt: false, programmeEnd: false };
+  if (typeof raw !== 'object' || Array.isArray(raw)) return null;
+  // Keyed by L0's `ArchiveBody`, the wire shape the PWA builds: a renamed consent is a compile error here.
+  const b = raw as { readonly [K in keyof ArchiveBody]?: unknown };
+  if (b.programme !== undefined && b.programme !== 'end') return null;
+  const claims = claimsChoiceOf(b);
+  // Ending the programme and moving its claims are two answers to one question: both at once is no answer.
+  if (claims === null || (claims !== undefined && b.programme === 'end')) return null;
+  return { force: b.force === true, interrupt: b.interrupt === true, programmeEnd: b.programme === 'end',
+    ...(claims !== undefined ? { claims } : {}) };
+}
+
+/** `POST /api/sessions/:id/stop`'s consents (D-8199): `restart` (the id is kept, so nothing is asked) or a claims
+ *  choice, never both. `null` refuses the body (400). */
+export interface StopFlags {
+  readonly restart: boolean;
+  readonly claims?: ClaimsChoice;
+}
+
+export function stopFlags(raw: unknown): StopFlags | null {
+  if (raw === undefined || raw === null) return { restart: false };
+  if (typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const b = raw as { readonly [K in keyof StopBody]?: unknown };
+  if (b.restart !== undefined && b.restart !== true) return null;
+  const claims = claimsChoiceOf(b);
+  if (claims === null || (claims !== undefined && b.restart === true)) return null;
+  return { restart: b.restart === true, ...(claims !== undefined ? { claims } : {}) };
+}
+
+/** What `server.ts` measured before deciding. `turn` is the turn verdict (`TurnVerdict`): from the fail-closed read
+ *  (`stopVerdict`) where `busyReadFailsClosed` says so — a main checkout, a programme to end, or an `interrupt` — else
+ *  `frameRowVerdict` of the row assembled on the request (`busy` or `idle`, and `unmeasured` for a row whose status
+ *  was not measured, D-5274; `ws-archive`'s own `_ws_status` is behind it). `worktree` and `verbSupported` are read
+ *  for a workspace only (a main checkout never reaches `ws-archive`).
+ *  `worktree: 'unmeasured'` is NOT a refusal: in remote mode — the live deployment — the fleet agent's read roots
+ *  (`checkPath`) exclude `~/worktrees`, so this box can never stat a workspace's worktree there, and refusing on
+ *  that would refuse every archive. ccd's own `[[ -d $workdir ]]` refusal, which precedes its act, measures it. */
+export interface ArchiveMeasure {
+  readonly workspace: boolean;
+  readonly turn: TurnVerdict;
+  readonly worktree: 'present' | 'absent' | 'unmeasured';
+  readonly verbSupported: boolean;
+}
+
+/**
+ * What `server.ts` read to answer "would a STOP nobody consented to interrupt lose a turn?" — every condition its own
+ * word, never a null, because the rule below treats each as it must, and a reading that could not be made (`'none'`,
+ * `'unknown'`, `'unread'`, `'unmeasured'`) is not one that came back empty (`'no-state'`, `'missing'`). The wrapper's
+ * CONFIG DIR is the first discriminant, because ccd's `_ws_status` looks it up before it asks tmux anything (F2, review
+ * 243): a wrapper with no config dir has no `pane` to carry, so "gone without a config dir" cannot be said. `server.ts`
+ * skips only the reads a verdict makes impossible — no tmux verdict without a config dir, no pid unless the pane is
+ * `live`, no live file without a pid — and decides nothing about which reads matter.
+ */
+export type StopReadings =
+  /** The wrapper has no config dir (`configDirFor` answered `undefined`): nothing else is read. */
+  | { readonly configDir: 'none' }
+  /** `tmux has-session` proved there is no pane — the one reading that needs nothing further. */
+  | { readonly configDir: 'present'; readonly pane: 'gone' }
+  /** tmux could not be asked (D-308: a server it cannot reach is not a dead session). */
+  | { readonly configDir: 'present'; readonly pane: 'unknown' }
+  | { readonly configDir: 'present'; readonly pane: 'live'; readonly pid: 'unread' }
+  | {
+    readonly configDir: 'present'; readonly pane: 'live'; readonly pid: number;
+    readonly liveFile: LiveFileReading; readonly row: StopRowReading;
+  };
+
+/** `<configDir>/sessions/<pid>.json`, as `readLiveStateMeasured` answers it, with the status word kept as read. */
+export type LiveFileReading =
+  | { readonly read: 'ok'; readonly status: string }
+  | { readonly read: 'no-state' }
+  | { readonly read: 'unmeasured' };
+
+/** The fleet frame's row for this session (`assembleFleet`, on the request): the two fields `archiveInterrupts` reads
+ *  and whether its status was measured at all (D-5274: a row `busy` only because a read failed is `unmeasured`), or
+ *  `'missing'` when the frame produced no row. */
+export type StopRowReading =
+  | (Pick<FleetSession, 'status' | 'bucket'> & { readonly statusUnmeasured?: boolean })
+  | 'missing';
+
+/** The turn verdict — THREE words, because the PWA answers two of them oppositely (D-3881). `idle`: nothing to lose.
+ *  `busy`: a turn or a question was MEASURED in progress — `session-busy`, which the operator may consent to lose
+ *  (`interrupt`). `unmeasured`: nobody could read the state — `status-unknown`, which no consent covers. */
+export type TurnVerdict = 'idle' | 'busy' | 'unmeasured';
+
+/**
+ * The turn verdict a STOP would face — `_ws_status`'s own fail-closed rule (ccd/ccd), decided over what `server.ts`
+ * measured (D-3878: it was `idleForStop`'s body in L4; 3881 made its answer three-valued, replacing `stopIsIdle`).
+ * It is read this way because `cmd_stop` refuses nothing: for a main checkout this is the only guard there is, and for
+ * a workspace under `programme:'end'` or `interrupt` it is the only read that can refuse BEFORE the programme ends or
+ * the pane is stopped (`busyReadFailsClosed`, D-3877). The frame's own row cannot answer it alone: it folds what it
+ * could not measure towards rest — tmux `unknown` reads dead (D-309), an absent live file leaves `idle` (an unread pane
+ * pid did too before D-5234).
+ *
+ * The arms run in ccd's order. A wrapper with no config dir is `unmeasured` FIRST, before the tmux verdict: ccd does
+ * `cfg=$(_cfg_dir "$wrapper"); [[ -n "$cfg" ]] || return 1` ahead of `case "$(_session_verdict "$id")"`, so a pane that
+ * is gone under such a wrapper is not idle (F2). Then `gone` is the one `idle` without a further reading (no pane,
+ * nothing running). A live pane is `idle` only when ALL hold: its pid was read; its live file affirmatively reads
+ * `idle` (an allowlist, as ccd's: a status word other than `idle` — `busy`, `waiting`, one this build has never seen —
+ * is `busy`); and the frame's row exists and reports no turn and no question (`archiveInterrupts` — else `busy`).
+ *
+ * Whatever could not be READ is `unmeasured`, never `busy`, and these arms follow ccd's `_ws_status`, which is non-zero
+ * "when it cannot be read" and which `ws-archive` turns into `status-unknown`: no config dir (above), tmux `unknown`,
+ * an unread pid, an absent or unread live file (`[[ -f $sf ]] || return 1`), and a status word ccd could not EXTRACT
+ * (F1: `st=$(grep -oE '"status":"[a-z_-]+"' ... | cut -d'"' -f4)` then `[[ -n "$st" ]] || return 1` — a word that does
+ * not match `[a-z_-]+`, an empty one included, is a state ccd could not read, where only a matching word other than
+ * `idle` is `busy`). The word is the PARSED file's top-level `status`, and only a string is a word: a `status` that is
+ * not one is `''` (`readLiveStateMeasured`), which ccd's grep cannot extract either (review 244, F1). That is ccd's
+ * answer only for compact JSON: a spaced `"status": "idle"` reads `idle` here and nothing to ccd's grep, and a nested
+ * `"status"` ahead of the top-level key is the one ccd's `head -1` takes — shapes no observed writer produces. Two arms
+ * are the SERVER'S OWN and stricter than ccd: a missing frame row is `unmeasured` (no row is no measurement; ccd reads
+ * none), and so is a live file that is PRESENT but malformed — not JSON (`unmeasured` there since D-5234), or no
+ * string `sessionId` (`no-state`) — from which ccd's grep may still read a word (review 244, F3). And the
+ * config dir is read first for BOTH kinds of row: a main checkout whose wrapper the roster does not know is unmeasured
+ * even with its pane proven gone, though `cmd_stop` reads no status at all (review 244, F2, ruled: it fails closed, and
+ * "Stop only" remains). Folding these into `busy` told an operator "it is working",
+ * whose consent (`interrupt`) then skipped the read and ended a programme that ccd refused `status-unknown` afterwards.
+ */
+export function stopVerdict(r: StopReadings): TurnVerdict {
+  if (r.configDir === 'none') return 'unmeasured';
+  if (r.pane === 'gone') return 'idle';
+  if (r.pane === 'unknown') return 'unmeasured';
+  if (r.pid === 'unread') return 'unmeasured';
+  if (r.liveFile.read !== 'ok') return 'unmeasured';
+  if (!STATUS_WORD.test(r.liveFile.status)) return 'unmeasured';
+  if (turnSays('keystroke', turnWordOf(r.liveFile.status)) !== 'rest') return 'busy';
+  if (r.row === 'missing') return 'unmeasured';
+  // D-5274: a row whose `busy` is only a failed read's display (`statusUnmeasured`, D-115 / D-5234) measured no turn,
+  // so `interrupt` — consent to lose a MEASURED one — cannot cover it.
+  if (r.row.statusUnmeasured === true) return 'unmeasured';
+  return archiveInterrupts(r.row) ? 'busy' : 'idle';
+}
+
+/**
+ * The turn verdict from the fleet frame's row alone — the read for an ordinary workspace archive (no `interrupt`, no
+ * programme end: `busyReadFailsClosed` is false), with `ws-archive`'s own `_ws_status` behind it. No row would be no
+ * measurement, read as `busy` (unreachable by construction: `assembleFleet` maps its records 1:1). D-5274: a row that
+ * is `busy` only because a read failed (`statusUnmeasured` — an unread pane pid since D-5234, an unreadable live file
+ * since D-115) measured nothing, so it is `unmeasured` — `409 status-unknown`, which no consent covers — never
+ * `session-busy`, which would invite an `interrupt` retry the fail-closed read then refuses anyway.
+ */
+export function frameRowVerdict(row: Pick<FleetSession, 'status' | 'bucket' | 'statusUnmeasured'> | null): TurnVerdict {
+  if (row === null) return 'busy';
+  if (row.statusUnmeasured) return 'unmeasured';
+  return archiveInterrupts(row) ? 'busy' : 'idle';
+}
+
+/** The words ccd's `_ws_status` can extract from a live file: `grep -oE '"status":"[a-z_-]+"'`. */
+const STATUS_WORD = /^[a-z_-]+$/;
+
+/**
+ * Which read answers `ArchiveMeasure.turn` — a DECISION, so it is made here and `server.ts` obeys it (D-3877). A
+ * `true` is the fail-closed read, `stopVerdict` over `StopReadings`; a `false` is the fleet frame's own row
+ * (`archiveInterrupts`), with ccd's `_ws_status` behind it at `ws-archive`.
+ *
+ * - A main checkout: always fail-closed. Its stop refuses nothing, so this read is the only guard it has.
+ * - A workspace that is to END its programme: fail-closed too, with or without `interrupt` (3881). The end is the one
+ *   act that cannot be undone, and the frame's row folds what it could not measure towards rest — tmux `unknown`, an
+ *   absent live file (an unread pid did too before D-5234) — so reading it here would end the programme and THEN have `ws-archive`'s
+ *   fail-closed status refuse `status-unknown`. `interrupt` consents to losing a turn that was MEASURED, so a `busy`
+ *   verdict proceeds with it; an `unmeasured` one is refused whatever the consents, before anything ends.
+ * - A workspace archived with `interrupt`: fail-closed too, programme or not (F7, ruled by the coordinator). The stop
+ *   `interrupt` brings runs BEFORE `ws-archive`'s `_ws_status`, so ccd cannot catch afterwards a pane the frame row
+ *   folded towards rest — it would have been stopped though nobody could read it.
+ * - Any other workspace archive — no `interrupt`, no programme end: the frame's row, as before (`busy` or `idle`);
+ *   nothing runs ahead of ccd's own read at `ws-archive`, which decides.
+ */
+export function busyReadFailsClosed(workspace: boolean, flags: ArchiveFlags): boolean {
+  // D-8199: a claims choice moves the programme's chair before `ws-archive` reads anything, so it is read as the end is.
+  return !workspace || flags.programmeEnd || flags.interrupt || flags.claims !== undefined;
+}
+
+/** A worktree's measured presence (D-114: absent and unreadable are two facts, and only the first is "gone"). A
+ *  stat the agent refused as outside its read roots arrives as `unreadable` (`remote/io.ts`), so it is `unmeasured`. */
+export function worktreeOf(s: MeasuredStat): ArchiveMeasure['worktree'] {
+  return s.ok ? 'present' : s.reason === 'absent' ? 'absent' : 'unmeasured';
+}
+
+/** The coordination reads and the one act — DECLARED BY THIS CONSUMER (L2). `server.ts` wires it over `CoordStore`
+ *  and the two functions `CoordRoutesHandle.withAbandon` hands it; `null` on a box with no coordination database,
+ *  which archives exactly as it did before coordination existed. */
+export interface ArchiveCoordPort {
+  /** The session's open binding, asked through the one query (`CoordStore.bindingsOf`, ARCH-42): its open runs as worker
+   *  and as claimant. */
+  bindingsOf(sessionId: string): Pick<SessionBindings, 'worker' | 'claimant'>;
+  /** What the abandon arm would refuse for this run from its row alone, read without acting (close.ts's
+   *  `abandonRefusal`); `null` when it can move it. */
+  abandonRefusal(runId: number): Extract<CloseOutcome, { ok: false }> | null;
+  abandon(runId: number): Promise<CloseOutcome>;
+  /** D-8199: move the claims on `claimed` as chosen (`reclaim.ts#moveClaims`), inside the same serialiser. */
+  moveClaims(choice: ClaimsChoice, claimed: readonly OpenSibling[]): Promise<ClaimsMoveOutcome>;
+}
+
+/** The two reads and the one act the STOP door's claims step needs (D-8199) — `ArchiveCoordPort`'s, narrowed. */
+export type ClaimsCoordPort = Pick<ArchiveCoordPort, 'bindingsOf' | 'moveClaims'>;
+
+/** An answer the route sends as it stands. */
+export interface ArchiveReply { readonly status: number; readonly body: Readonly<Record<string, unknown>> }
+
+export type ArchiveDecision =
+  | { readonly ok: false; readonly reply: ArchiveReply }
+  | { readonly ok: true; readonly stop: boolean; readonly wsArchive: boolean; readonly ended: readonly OpenSibling[];
+      /** D-8199: the claims a choice moved, `null` when none was asked or none was open. */
+      readonly moved: ClaimsMoved | null };
+
+type Refused = Extract<ArchiveDecision, { ok: false }>;
+const reply = (status: number, error: ArchiveRefusal | 'unsupported', extra: Record<string, unknown>): Refused =>
+  ({ ok: false, reply: { status, body: { ok: false, error, ...extra } } });
+
+/** A refusal is an edge of `WORKSPACE_TRANSITIONS` (ARCH-41, #776) and its status is `REFUSAL_STATUS`'s, the one table
+ *  the wire reads (ARCH-36): a word with no row throws rather than being sent, and no status is spelled here. */
+export const edgeStatus = (code: ArchiveRefusal): number => REFUSAL_STATUS[workspaceEdge('archive', code).refusal];
+const refuseEdge = (code: ArchiveRefusal, extra: Record<string, unknown> = {}): Refused =>
+  reply(edgeStatus(code), code, extra);
+
+/** A box whose ccd predates the verb: a route-shape word (no state of the workspace causes it), so no table row. */
+const unsupported = (): ArchiveDecision => reply(501, 'unsupported', {});
+
+const thrown = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** A store read that THROWS — a `node:sqlite` error; `CoordMutex.run` is `try`/`finally` with no catch and there is no
+ *  error handler, so it would leave as a bare 500 — is a store this box could not read, and refuses fail-shut exactly
+ *  as one does (`runs: []`), never as a 500 the sheet cannot answer. */
+const measured = (read: () => OpenSiblingsResult): OpenSiblingsResult => {
+  try { return read(); } catch (e) { return { ok: false, kind: 'run-unreadable', detail: thrown(e) }; }
+};
+
+/** Why one abandon refused, in words a sheet can show: `closeRun`'s refusal kind, and its detail where it has one. */
+export function closeRefusalOf(id: number, r: Extract<CloseOutcome, { ok: false }>):
+  { readonly id: number; readonly kind: string; readonly detail?: string } {
+  switch (r.kind) {
+    case 'bad-transition': return { id, kind: r.kind, detail: `${r.from} → ${r.to}` };
+    case 'refused': return { id, kind: r.kind, detail: r.code };
+    case 'doneVerdict': return { id, kind: r.kind, detail: r.code };
+    case 'hold-oversize': case 'hold-invalid': return { id, kind: r.kind, detail: r.detail };
+    case 'fleetFailed': return { id, kind: r.kind, detail: r.stderr.trim() };
+    default: return { id, kind: r.kind };
+  }
+}
+
+export async function decideArchive(
+  port: ArchiveCoordPort | null, id: string, flags: ArchiveFlags, m: ArchiveMeasure,
+): Promise<ArchiveDecision> {
+  // `unmeasured` first, and blind to the consents: `interrupt` is the consent to lose a turn that was READ in progress,
+  // never to act on a state nobody could read (D-3881). Then a measured busy, which `interrupt` lets through.
+  if (m.turn === 'unmeasured') return refuseEdge(ARCHIVE_REFUSALS.statusUnknown);
+  if (m.turn === 'busy' && !flags.interrupt) return refuseEdge(ARCHIVE_REFUSALS.sessionBusy);
+  // A PROVEN absence only. `unmeasured` proceeds: see `ArchiveMeasure.worktree`.
+  if (m.workspace && m.worktree === 'absent') return refuseEdge(ARCHIVE_REFUSALS.worktreeGone);
+  let claimed: readonly OpenSibling[] = [];
+  if (port !== null) {
+    if (!flags.force) {
+      const worker = measured(() => port.bindingsOf(id).worker());
+      // D-2545: refused as CLAIMED with an EMPTY `runs` — the field's shape does not change with the condition — and
+      // the store's own `detail`, which this answer used to drop (workspace lifecycle wave 3b, the carried follow-up).
+      if (!worker.ok) return refuseEdge(ARCHIVE_REFUSALS.runOpen, { runs: [], detail: worker.detail });
+      if (worker.siblings.length > 0) return refuseEdge(ARCHIVE_REFUSALS.runOpen, { runs: worker.siblings });
+    }
+    const coordinates = measured(() => port.bindingsOf(id).claimant());
+    // Fail-shut, with or without `programme:'end'`: a programme this box cannot enumerate cannot be ended.
+    if (!coordinates.ok) return refuseEdge(ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: [], detail: coordinates.detail });
+    claimed = coordinates.siblings;
+    // D-8199: the programme is never ended by itself — the operator answers what happens to its runs, or nothing moves.
+    if (claimed.length > 0 && !flags.programmeEnd && flags.claims === undefined) {
+      return refuseEdge(ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: claimed });
+    }
+  }
+  if (m.workspace && !m.verbSupported) return unsupported();
+  // D-8199: the claims move, the act a choice brings, after every check above and before the stop and the archive.
+  if (flags.claims !== undefined) {
+    const moved = await moveOrRefuse(port, flags.claims, claimed);
+    if (!moved.ok) return moved;
+    return { ok: true, stop: flags.interrupt || !m.workspace, wsArchive: m.workspace, ended: [], moved: moved.moved };
+  }
+  // The last check: every run the abandon arm could not move from its row alone, found BEFORE the first is ended —
+  // otherwise whether a programme is left partly ended would depend on run id order. Nothing is ended here.
+  for (const run of claimed) {
+    let why: Extract<CloseOutcome, { ok: false }> | null;
+    try { why = port!.abandonRefusal(run.id); } catch (e) {
+      return refuseEdge(ARCHIVE_REFUSALS.programmePartlyEnded,
+        { closed: [], notClosed: claimed, refusal: { id: run.id, kind: 'threw', detail: thrown(e) } });
+    }
+    if (why !== null) {
+      return refuseEdge(ARCHIVE_REFUSALS.programmePartlyEnded,
+        { closed: [], notClosed: claimed, refusal: closeRefusalOf(run.id, why) });
+    }
+  }
+  // THE ONE ACT THIS FUNCTION TAKES, and the last thing it does. In id order; the first refusal stops the door, so a
+  // partly ended programme is never followed by a stop or an archive. An abandon that THROWS after an earlier one
+  // ended its run answers the same way, naming what was closed, rather than leaving as a 500 that names nothing.
+  const ended: OpenSibling[] = [];
+  for (const [i, run] of claimed.entries()) {
+    let out: CloseOutcome;
+    try { out = await port!.abandon(run.id); } catch (e) {
+      return refuseEdge(ARCHIVE_REFUSALS.programmePartlyEnded,
+        { closed: ended, notClosed: claimed.slice(i), refusal: { id: run.id, kind: 'threw', detail: thrown(e) } });
+    }
+    if (!out.ok) {
+      return refuseEdge(ARCHIVE_REFUSALS.programmePartlyEnded,
+        { closed: ended, notClosed: claimed.slice(i), refusal: closeRefusalOf(run.id, out) });
+    }
+    ended.push(run);
+  }
+  return { ok: true, stop: flags.interrupt || !m.workspace, wsArchive: m.workspace, ended, moved: null };
+}
+
+/** The move and its refusal word (D-8199): `null` when nothing was claimed, the moved runs when all moved, else
+ *  `claims-not-moved` naming what moved, what did not and why. */
+async function moveOrRefuse(
+  port: Pick<ArchiveCoordPort, 'moveClaims'> | null, choice: ClaimsChoice, claimed: readonly OpenSibling[],
+): Promise<{ ok: true; moved: ClaimsMoved | null } | Refused> {
+  if (port === null || claimed.length === 0) return { ok: true, moved: null };
+  let out: ClaimsMoveOutcome;
+  try { out = await port.moveClaims(choice, claimed); } catch (e) {
+    out = { ok: false, moved: [], notMoved: claimed, refusal: { kind: 'threw', detail: thrown(e) } };
+  }
+  if (!out.ok) {
+    return refuseEdge(ARCHIVE_REFUSALS.claimsNotMoved, { moved: out.moved, notMoved: out.notMoved, refusal: out.refusal });
+  }
+  return { ok: true, moved: { to: choice.kind === 'handover' ? choice.heir : null, runs: out.moved } };
+}
+
+/**
+ * The STOP door's claims step (D-8199): `POST /api/sessions/:id/stop` asks the archive door's question of a session that
+ * claims open runs — the same refusal (`coordinator-has-open-runs`, naming them) and the same move — before its stop. A
+ * `restart` stop keeps the session id, so it asks nothing and moves nothing; no coordination store, nothing to ask either.
+ * Runs on the coordination serialiser.
+ *
+ * NEVER FAIL-SHUT, unlike the archive door: the stop is the escape hatch — "Stop only" is what the sheet offers after the
+ * archive door refused on a store it could not read — so a live session is never left without a way to put it down. A
+ * store this box cannot read (or whose read throws) has nothing it can move: the stop goes through, moving nothing,
+ * whatever choice was given, and its answer says the claims went unread (`claimsUnreadable`, the store's detail).
+ */
+export async function decideStopClaims(
+  port: ClaimsCoordPort | null, id: string, flags: StopFlags,
+): Promise<{ ok: true; moved: ClaimsMoved | null; claimsUnreadable?: string } | Refused> {
+  if (port === null || flags.restart) return { ok: true, moved: null };
+  const coordinates = measured(() => port.bindingsOf(id).claimant());
+  if (!coordinates.ok) return { ok: true, moved: null, claimsUnreadable: coordinates.detail };
+  const claimed = coordinates.siblings;
+  if (claimed.length > 0 && flags.claims === undefined) {
+    return refuseEdge(ARCHIVE_REFUSALS.coordinatorHasOpenRuns, { runs: claimed });
+  }
+  return flags.claims === undefined ? { ok: true, moved: null } : moveOrRefuse(port, flags.claims, claimed);
+}
+
+/**
+ * The stop's own re-read refused (`server.ts`: a stop nobody consented to interrupt — a main checkout's — re-reads the
+ * turn fail-closed at the act, because `cmd_stop` refuses nothing). Something changed after the door's first read:
+ * during the claim reads, the mutex wait or the programme end, a turn began (`busy` → `409 session-busy`) or the
+ * state became unreadable (`unmeasured` → `409 status-unknown`, D-3881). The word is chosen HERE, from the verdict.
+ * Carries the runs already ended, so the question that follows never reads as "nothing happened".
+ */
+export function refusedAtStop(
+  verdict: 'busy' | 'unmeasured', ended: readonly OpenSibling[], moved: ClaimsMoved | null = null,
+): ArchiveReply {
+  const error = verdict === 'busy' ? ARCHIVE_REFUSALS.sessionBusy : ARCHIVE_REFUSALS.statusUnknown;
+  return { status: edgeStatus(error), body: { ok: false, error, ...(ended.length > 0 ? { ended } : {}),
+    ...(moved !== null ? { moved } : {}) } };
+}
+
+/**
+ * ccd's refusal of `ws-archive`, as the door's word for it — or `null` for one this build has no word for. Read off
+ * `cmd_ws_archive`'s own `die` lines (`ccd: <message>`), which `archive-ccd-words.test.ts` produces by running the
+ * real verb in a fixture HOME, so a reworded ccd reds there rather than silently losing its word here.
+ */
+export function ccdArchiveRefusal(stderr: string): ArchiveRefusal | null {
+  const lines = stderr.split('\n').map((l) => l.trim());
+  if (lines.includes('ccd: session-busy')) return ARCHIVE_REFUSALS.sessionBusy;
+  if (lines.includes('ccd: status-unknown')) return ARCHIVE_REFUSALS.statusUnknown;
+  if (lines.some((l) => l.startsWith('ccd: worktree is gone: '))) return ARCHIVE_REFUSALS.worktreeGone;
+  if (lines.some((l) => /^ccd: (cannot describe \S+ truthfully|empty archive manifest for \S+|archive manifest for \S+ is not valid JSON) — nothing was touched$/.test(l))) {
+    return ARCHIVE_REFUSALS.manifestUnbuildable;
+  }
+  return null;
+}
+
+/**
+ * `ws-archive`'s answer on the wire, once the door has acted. Success is `archived:true`. A refusal AFTER the door
+ * stopped the session is the partial outcome — `200 {archived:false, stopped:true, refusal}`: the row is a stopped,
+ * unarchived workspace, visible at the top level with Archive offered again. A refusal with nothing stopped is a 409
+ * with ccd's word (`detail` carries its sentence), or today's 502 `{stderr}` when this build has no word for it.
+ * `ended` rides every answer once a programme was ended, so the operator is never told only half of what happened.
+ */
+export function archiveOutcome(
+  stopped: boolean, ended: readonly OpenSibling[], res: { ok: boolean; stderr: string; ran?: boolean },
+  moved: ClaimsMoved | null = null,
+): ArchiveReply {
+  // D-8199: the claims a choice moved ride every answer after the move, as `ended` does after an end.
+  const movedSpread = moved !== null ? { moved } : {};
+  if (res.ok) return { status: 200, body: { ok: true, archived: true, stopped, ended, ...movedSpread } };
+  // D-6840: a call that never ran has no refusal word to read, only the runner's own words.
+  const refusal = res.ran === false ? null : ccdArchiveRefusal(res.stderr);
+  const detail = res.stderr.trim();
+  if (stopped) return { status: 200, body: { ok: true, archived: false, stopped: true, ended, refusal, detail, ...movedSpread } };
+  const endedSpread = { ...(ended.length > 0 ? { ended } : {}), ...movedSpread };
+  if (refusal !== null) return { status: edgeStatus(refusal), body: { ok: false, error: refusal, detail, ...endedSpread } };
+  return { status: 502, body: { ok: false, stderr: res.stderr, ...endedSpread } };
+}

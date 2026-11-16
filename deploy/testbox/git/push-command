@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# push-command — the push user's forced command (D-7405; spec §2.1 "The push user and the create-only rule").
+#
+#   authorized_keys: restrict,command="<release>/deploy/testbox/git/push-command <repository table directory>" <key>
+#
+# Runs `git-receive-pack '<path>'` only when SSH_ORIGINAL_COMMAND is exactly that and <path> is the mirrorPath of a
+# row of the repository table (CCRC_TESTBOX_REPOS: one shared/testbox.ts parseRepoRow-shaped JSON file per
+# repository, `<name>.json`). Anything else, a fetch included, exits non-zero and runs nothing. The mirror's
+# pre-receive hook then decides which refs the push may create.
+set -uo pipefail
+
+deny() { printf 'test box push: refused: %s\n' "$1" >&2; exit 1; }
+
+(($# == 1)) || deny 'the forced command takes the repository table directory'
+table=$1
+[[ -n ${SSH_ORIGINAL_COMMAND+x} ]] || deny 'no command'
+cmd=$SSH_ORIGINAL_COMMAND
+re="^git-receive-pack '(/[^']+)'\$"
+[[ $cmd =~ $re ]] || deny "only git-receive-pack '<mirror>' is accepted"
+want=${BASH_REMATCH[1]}
+
+# A row's mirrorPath: the one "mirrorPath" member, an absolute path with no escape in it.
+row_mirror() {
+  local text rest
+  text=$(< "$1") || return 1
+  rest=${text#*\"mirrorPath\"}
+  [[ $rest != "$text" && $rest != *\"mirrorPath\"* ]] || return 1
+  [[ $rest =~ ^[[:space:]]*:[[:space:]]*\"(/[^\"\\]*)\" ]] || return 1
+  printf '%s' "${BASH_REMATCH[1]}"
+}
+
+found=''
+for row in "$table"/*.json; do
+  [[ -f $row && ! -L $row ]] || continue
+  m=$(row_mirror "$row") || continue
+  if [[ $m == "$want" ]]; then found=$m; break; fi
+done
+[[ -n $found ]] || deny 'not a mirror the repository table lists'
+# The mirror is the service's and the push user only a member of its group: without the exception git refuses the
+# repository as of dubious ownership. The exception names the listed mirror only, on this one command line.
+exec env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+  git -c "safe.directory=$found" receive-pack "$found"

@@ -1,12 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+import { mkTmp } from './tmpHelpers.js';
 import { parseAudit, parseReap, refusalSentence, SENTENCES } from '../src/wsaudit.js';
 import { reviveWsAudit } from '../../shared/api.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
+import { refuseWords } from './census-w5/ccdHelpers.js';
 
 /**
  * The refusal-token <-> copy linkage, required by Task 13. `ccd` answers
- * refusals as TOKENS (`_reap_refuse dirty-tree …`, `printf '{"refused":"…"}'`,
+ * refusals as TOKENS (`_ws_refuse dirty-tree …`, `printf '{"refused":"…"}'`,
  * `printf '"verdict":"…"'`, and the two `!token` lines the embedded python
  * writes for `_pr_py pick`) and `refusalSentence` turns each into copy a
  * person reads. NOTHING before this test linked the two, so renaming a token
@@ -19,7 +23,7 @@ import { CCD } from './ccdWsHelpers.js';
  * could itself drift from either side.
  *
  * Four emission shapes, each a literal-token grep over ccd's source text:
- *   - `_reap_refuse <token> "…"` — every guard in `_ws_reap_eval` (Phase A-D1),
+ *   - `_ws_refuse <token> "…"` — every guard in `_ws_reap_eval` (Phase A-D1),
  *     which backs BOTH `cmd_ws_audit`'s non-reapable verdict and
  *     `cmd_ws_reap`'s "evaluated" refusal (`$REAP_VERDICT`, dynamic on the wire
  *     but drawn from exactly this literal set).
@@ -39,7 +43,7 @@ import { CCD } from './ccdWsHelpers.js';
  *     non-`reapable` verdict through `refusalSentence`).
  *   - `'!<token>` — `_pr_py pick`'s two bare `sys.stdout.write` literals
  *     (`!pr-head-not-ours`, `!not-merged`); `_ws_reap_eval`'s
- *     `_reap_refuse "${row#!}"` re-emits whichever of the two python chose, so
+ *     `_ws_refuse "${row#!}"` re-emits whichever of the two python chose, so
  *     the token itself only exists as a python string literal, not as a bash
  *     one.
  *
@@ -51,14 +55,18 @@ import { CCD } from './ccdWsHelpers.js';
  * reason `wsaudit.ts` never sees them.
  */
 describe('refusal-token <-> sentence linkage (ccd source <-> wsaudit.ts SENTENCES)', () => {
-  const ccdSrc = readFileSync(CCD, 'utf8');
+  const ccdSrc = ccdSource();
 
   const tokens = new Set<string>();
-  for (const m of ccdSrc.matchAll(/_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) tokens.add(m[1]!);
+  for (const w of refuseWords('reap')) tokens.add(w);
   for (const m of ccdSrc.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);
   for (const m of ccdSrc.matchAll(/'!([a-zA-Z0-9-]+)/g)) tokens.add(m[1]!);
+  // D-6633: rung 9's rescue words ride a `failed` document, not a refusal: the pin names them in `RECLAIM_PIN_WORD=<word>`.
+  for (const m of ccdSrc.matchAll(/^[^#\n]*RECLAIM_PIN_WORD=(nested-rescue-[a-z-]+)/gm)) tokens.add(m[1]!);
   for (const m of ccdSrc.matchAll(/"verdict":"([a-zA-Z0-9-]+)"/g)) {
-    if (m[1] !== 'reapable') tokens.add(m[1]!);
+    // `reapable` and `reclaimable` are the two SUCCESS verdicts — each means "a
+    // token follows" — not refusals, so neither has (or may have) a sentence.
+    if (m[1] !== 'reapable' && m[1] !== 'reclaimable') tokens.add(m[1]!);
   }
   const ccdTokens = [...tokens].sort();
 
@@ -121,6 +129,30 @@ describe('refusalSentence', () => {
     expect(s).toMatch(/nothing was removed/i);
   });
 
+  it('child-dirty names every cause ccd refuses it for — ignored files included — and the read that shows them all', () => {
+    // `ReapSheet` renders the sentence, never `detail`, and ccd's one
+    // `child-dirty` rung has two details: `N uncommitted file(s)` (tracked
+    // changes and untracked files) and `N ignored file(s)`. An ignored file is
+    // invisible to a plain `git status`, so a sentence that says only
+    // "uncommitted" points the operator at a read that shows nothing.
+    const s = refusalSentence('child-dirty');
+    expect(s).toMatch(/ignored files/);
+    expect(s).toContain('git -C <child path> status --ignored --untracked-files=all');
+    expect(s).toMatch(/changed tracked files/);
+    expect(s).toMatch(/untracked files/);
+    expect(s).toMatch(/commit, move or delete them in that checkout, then reap again/);
+    expect(s, 'the remedy is the operator’s own act, not another verb').not.toMatch(/reclaim/i);
+  });
+
+  it('the advice names the scoped removal and never git worktree prune', () => {
+    // Cleanup un-wedge, Task R3: a repository-wide prune deletes git's record of every gone worktree at once, and
+    // ccd's cleanup reads those records, so the remedy for one stale record is that record's own removal. The session
+    // hook refuses the prune on every session.
+    const s = refusalSentence('child-record-stale');
+    expect(s).toContain('`git -C <main> worktree remove <path>`');
+    expect(s).not.toMatch(/worktree\s+prune/);
+  });
+
   it('maps reaping-phase-unknown — the Task 7 token this task was holding open for', () => {
     // Deviation 35: fires when a `reaping` breadcrumb names a phase ccd never
     // wrote. The run refuses and destroys nothing — the sentence must say so,
@@ -164,6 +196,17 @@ describe('parseAudit', () => {
   it('gives the reapable verdict an EMPTY sentence — it is not a refusal', () => {
     const audit = parseAudit(JSON.stringify(FULL_AUDIT_INPUT));
     expect(audit?.sentence).toBe('');
+  });
+
+  it('revives the train proof — a PR closed as landed in a merge train — and no unknown word', () => {
+    // A train-landed member is proven by its train record (`train`); an audit
+    // that carried it and then failed to revive would leave the cleanup offer
+    // a dead end. The word the reap no longer produces revives as nothing.
+    const pr = { number: 42, url: 'https://github.com/o/r/pull/42', mergeCommit: 'a'.repeat(40), headRefOid: 'b'.repeat(40) };
+    const audit = parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, pr, merge: { proof: 'train', fetchedAt: 1 } }));
+    expect(audit?.merge.proof).toBe('train');
+    expect(parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, merge: { proof: 'merge-tree', fetchedAt: 1 } }))).toBeNull();
+    expect(parseAudit(JSON.stringify({ ...FULL_AUDIT_INPUT, merge: { proof: 'landed', fetchedAt: 1 } }))).toBeNull();
   });
 
   it('gives every non-reapable verdict a sentence, reap-interrupted included', () => {
@@ -291,5 +334,54 @@ describe('the session fields an older ccd does not send', () => {
 
   it('rejects a `unit` word this build does not know, rather than laundering it', () => {
     expect(() => reviveWsAudit(doc({ unit: 'masked' }), 's')).toThrow();
+  });
+});
+
+describe('parseReap strips the refusal-v1 machine line (#560)', () => {
+  it('keeps the operator-facing sentence free of it', () => {
+    const r = parseReap('', 1, 'ccd-refusal: ws-reap held\nccd: held: x\n');
+    expect(r).toMatchObject({ refused: 'error', detail: 'ccd: held: x', sentence: 'ccd: held: x' });
+  });
+});
+
+// Cleanup un-wedge, Task R3: the `child-record-stale` advice is measured on this machine's git, not assumed. In a
+// fixture repository with two linked worktrees whose directories are both gone, the scoped removal of one exits 0 and
+// leaves the other's record in place, `prunable`, which is what a repository-wide prune would have deleted. If this
+// fails on a CI git, report that git's version: the advice is not changed to fit it.
+describe('the scoped removal the advice names, measured on this git', () => {
+  it('git -C <main> worktree remove <one gone tree> exits 0 and leaves the other gone tree prunable', () => {
+    const root = mkTmp('ccrc-r3-wtremove-');
+    try {
+      const main = path.join(root, 'main');
+      mkdirSync(main);
+      const env = { ...process.env, HOME: root, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+        GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+        GIT_COMMITTER_NAME: 'fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' };
+      const git = (...args: string[]): { status: number | null; out: string } => {
+        const r = spawnSync('git', ['-C', main, ...args], { env, encoding: 'utf8' });
+        return { status: r.status, out: `${r.stdout}${r.stderr}` };
+      };
+      expect(git('init', '-q', '-b', 'main').status).toBe(0);
+      writeFileSync(path.join(main, 'a.txt'), 'a\n');
+      expect(git('add', 'a.txt').status).toBe(0);
+      expect(git('commit', '-q', '-m', 'one').status).toBe(0);
+      const rowA = path.join(root, 'row-a');
+      const rowB = path.join(root, 'row-b');
+      expect(git('worktree', 'add', '-q', rowA, '-b', 'row-a').status).toBe(0);
+      expect(git('worktree', 'add', '-q', rowB, '-b', 'row-b').status).toBe(0);
+      rmSync(rowA, { recursive: true, force: true });
+      rmSync(rowB, { recursive: true, force: true });
+      expect(existsSync(rowA) || existsSync(rowB)).toBe(false);
+      const removed = git('worktree', 'remove', rowA);
+      expect(removed.status, `${git('--version').out.trim()}: ${removed.out}`).toBe(0);
+      const list = git('worktree', 'list', '--porcelain').out;
+      const stanzas = list.split('\n\n').filter((x) => x.trim() !== '');
+      expect(stanzas.some((x) => x.includes(`worktree ${rowA}\n`)), 'the removed record is gone').toBe(false);
+      const b = stanzas.find((x) => x.includes(`worktree ${rowB}\n`));
+      expect(b, `the other record stands:\n${list}`).toBeDefined();
+      expect(b, 'and git still calls it prunable').toMatch(/^prunable/m);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

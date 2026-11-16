@@ -2,16 +2,23 @@
 // this task does not depend on Task 10's markup or Task 11's composer wiring.
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { ToastHost } from '../src/components/Toast';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { useStagedImages } from '../src/session/useAttachImage';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-const ID = 'claude2-Proj';
-const CLIP = { path: '/home/u/.cc-clips/claude2-Proj/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 };
+const ID = 'claude9-Proj';
+const CLIP = { path: '/home/u/.cc-clips/claude9-Proj/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 };
 const shot = (name = 'shot.png') => new File(['tiny'], name, { type: 'image/png' });
+const DOC_CLIP = {
+  path: '/home/u/.cc-clips/claude9-Proj/clip-1-a1b2-notes.md',
+  name: 'clip-1-a1b2-notes.md',
+  bytes: 4,
+};
+/** A picked document: the type is whatever the OS felt like, including nothing. */
+const doc = (name = 'notes.md', type = '') => new File(['# hi'], name, { type });
 
 /** Renders the hook's state as plain text, so assertions read the hook and not
  *  a component's styling choices. `second`, when given, wires up an
@@ -45,6 +52,7 @@ function Harness({
         {s.images.map((i) => (
           <li key={i.key} data-testid={`img-${i.file.name}`}>
             <span data-testid={`state-${i.file.name}`}>{i.state}</span>
+            <span data-testid={`preview-${i.file.name}`}>{i.previewUrl ?? ''}</span>
             <span data-testid={`dims-${i.file.name}`}>
               {i.width && i.height ? `${i.width}×${i.height}` : ''}
             </span>
@@ -142,7 +150,7 @@ describe('useStagedImages', () => {
     render(<><Harness files={five} /><ToastHost /></>);
     fireEvent.click(screen.getByText('add'));
 
-    expect(await screen.findByText(/Four images per message/)).toBeInTheDocument();
+    expect(await screen.findByText(/Four attachments per message/)).toBeInTheDocument();
     expect(screen.queryByTestId('img-s4.png')).not.toBeInTheDocument();
   });
 
@@ -203,7 +211,7 @@ describe('useStagedImages', () => {
     render(<><Harness files={[shot()]} /><ToastHost /></>);
     fireEvent.click(screen.getByText('add'));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/PNG, JPEG or WebP only/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/images, text, PDF and RTF only/i);
   });
 
   // — Object-URL lifetime. `release()` hands the URLs to the PendingSend, which
@@ -245,5 +253,172 @@ describe('useStagedImages', () => {
       expect(screen.getByTestId('state-x.png')).not.toHaveTextContent('uploading');
       expect(screen.getByTestId('state-y.png')).not.toHaveTextContent('uploading');
     });
+  });
+});
+
+// THE REJECTIONS THAT HAPPEN BEFORE ANY UPLOAD, and the two no-op doors.
+// `add` refuses by NAME (and, for a nameless clipboard image, by type) before
+// it stages anything, so a file the server would refuse never costs a request
+// — and the refusal has to be said in the one place the reader is looking,
+// since there is no chip to carry it. None of these arms had a case when this
+// block was written (measured by coverage of `useAttachImage.ts`).
+//
+// The refused file is a ZIP container. A PDF used to stand in here, and since
+// documents attach (#152) a PDF is STAGED — the document cases below pin that
+// — so the stand-in is one the admitted list deliberately leaves out.
+describe('a file the tray will not stage at all', () => {
+  const zip = (): File => new File(['PK'], 'bundle.zip', { type: 'application/zip' });
+  const typeless = (): File => new File(['??'], 'mystery', { type: '' });
+
+  it('names the type it refused, and makes no request', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
+    render(<><Harness files={[zip()]} /><ToastHost /></>);
+    fireEvent.click(screen.getByText('add'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('application/zip');
+    expect(screen.getByRole('alert')).toHaveTextContent(/images, text, PDF and RTF only/);
+    expect(upload, 'a type the server refuses must not cost a request').not.toHaveBeenCalled();
+    expect(screen.queryByTestId('img-bundle.zip'), 'a refused file was staged anyway').toBeNull();
+  });
+
+  it('a file whose type the OS did not report says "that", never an empty gap', async () => {
+    // A drop from some file managers carries no MIME type at all, and
+    // `Can't attach  — PNG…` reads as a bug rather than a refusal.
+    render(<><Harness files={[typeless()]} /><ToastHost /></>);
+    fireEvent.click(screen.getByText('add'));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Can't attach that —");
+  });
+
+  it('a batch of only refused files stages nothing and commits nothing', async () => {
+    // The early return. Without it the hook commits the list it already had,
+    // which re-renders the tray and — under the same tick's second `add` —
+    // was how an upload went missing before the `listRef` fix.
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
+    render(<><Harness files={[zip(), typeless()]} /><ToastHost /></>);
+    fireEvent.click(screen.getByText('add'));
+    // TWO toasts, one per refused file — each names its own type, which is
+    // the point: a batch refusal that said "some files" would not tell the
+    // reader which to convert.
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2));
+    expect(upload).not.toHaveBeenCalled();
+    expect(screen.queryAllByTestId(/^state-/), 'something was staged').toEqual([]);
+  });
+
+  it('a MIXED batch stages the image and refuses the rest', async () => {
+    // The `continue`, which is the arm that matters: a drop of a folder's
+    // worth of files must not be all-or-nothing.
+    vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
+    render(<><Harness files={[zip(), shot('kept.png')]} /><ToastHost /></>);
+    fireEvent.click(screen.getByText('add'));
+
+    await waitFor(() => expect(screen.getByTestId('state-kept.png')).toHaveTextContent('staged'));
+    expect(screen.getByRole('alert')).toHaveTextContent('application/zip');
+  });
+});
+
+describe('the two doors that answer for a key the tray no longer has', () => {
+  it('remove on a key already gone revokes nothing and throws nothing', async () => {
+    // A double tap on the chip's ✕, or a remove racing an unmount. Revoking
+    // an object URL twice is harmless; reading `.previewUrl` off `undefined`
+    // is a TypeError out of an onClick.
+    vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
+    render(<Harness files={[shot()]} />);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(screen.getByTestId('state-shot.png')).toHaveTextContent('staged'));
+
+    vi.mocked(URL.revokeObjectURL).mockClear();
+    const remove = screen.getByText('remove shot.png');
+    fireEvent.click(remove);
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
+    // The chip is gone, so its button is too — fire the stale node again,
+    // which is exactly what a second tap on a disappearing chip does.
+    fireEvent.click(remove);
+    expect(URL.revokeObjectURL, 'a key that is gone revoked something').toHaveBeenCalledTimes(1);
+  });
+
+  it('retry on a chip that is NOT failed sends nothing', async () => {
+    // Two conditions, one answer: a key the tray no longer has, and a chip
+    // that is `staged` or `uploading`. Either would re-POST an image the box
+    // already has, or one it is still receiving.
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(CLIP);
+    render(<Harness files={[shot()]} />);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(screen.getByTestId('state-shot.png')).toHaveTextContent('staged'));
+    expect(upload).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText('retry shot.png'));
+    // FLUSHED, deliberately: the hook's `upload` awaits the dimensions read
+    // before it reaches `api.upload`, so a synchronous assertion here passes
+    // whether the guard is there or not — measured, and the reason this is
+    // two lines rather than one.
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(upload, 'a staged chip was uploaded twice').toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('state-shot.png'),
+      'the chip was knocked back to uploading for a request nobody made')
+      .toHaveTextContent('staged');
+  });
+});
+
+// — Documents. The other half of the tray: staged for what READS them, not for
+// what renders them, so they take a lane with no canvas, no decoder and no
+// object URL anywhere on it. —
+
+describe('useStagedImages with a document', () => {
+  it('uploads it byte-identical, never through the downscale', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(DOC_CLIP);
+    const downscale = vi.fn();
+    const file = doc();
+    render(<Harness files={[file]} downscale={downscale} />);
+    fireEvent.click(screen.getByText('add'));
+
+    await waitFor(() => expect(screen.getByTestId('state-notes.md')).toHaveTextContent('staged'));
+    expect(downscale).not.toHaveBeenCalled();
+    // The FILE that was picked, not a re-encode of it: a canvas pass over a
+    // document either throws or uploads a picture of nothing.
+    expect(upload).toHaveBeenCalledWith(ID, file);
+    expect(screen.getByTestId('path-notes.md')).toHaveTextContent(DOC_CLIP.path);
+  });
+
+  // `createImageBitmap` throws on text. Before the document branch it ran on
+  // every upload, so a perfectly good .md landed in `failed` with a decoder
+  // error as its reason — and the chip offered a retry that could never work.
+  it('never asks a decoder to measure it, so it cannot fail as one', async () => {
+    vi.spyOn(api, 'upload').mockResolvedValue(DOC_CLIP);
+    const bitmap = vi.fn().mockRejectedValue(new Error('unsupported image type'));
+    vi.stubGlobal('createImageBitmap', bitmap);
+    render(<Harness files={[doc('report.pdf', 'application/pdf')]} />);
+    fireEvent.click(screen.getByText('add'));
+
+    await waitFor(() => expect(screen.getByTestId('state-report.pdf')).toHaveTextContent('staged'));
+    expect(bitmap).not.toHaveBeenCalled();
+    expect(screen.getByTestId('error-report.pdf')).toHaveTextContent('');
+    vi.unstubAllGlobals();
+  });
+
+  // There is nothing to preview, so no URL is minted — an object URL nobody
+  // renders is a leak waiting for someone to forget the matching revoke, and
+  // its ABSENCE is what tells the tray and both bubbles to draw a name chip.
+  it('mints no object URL for it, and reports no dimensions', async () => {
+    vi.spyOn(api, 'upload').mockResolvedValue(DOC_CLIP);
+    vi.mocked(URL.createObjectURL).mockClear();
+    render(<Harness files={[doc()]} />);
+    fireEvent.click(screen.getByText('add'));
+
+    await waitFor(() => expect(screen.getByTestId('state-notes.md')).toHaveTextContent('staged'));
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(screen.getByTestId('preview-notes.md')).toHaveTextContent('');
+    expect(screen.getByTestId('dims-notes.md')).toHaveTextContent('');
+  });
+
+  it('removes cleanly although there is no URL to revoke', async () => {
+    vi.spyOn(api, 'upload').mockResolvedValue(DOC_CLIP);
+    vi.mocked(URL.revokeObjectURL).mockClear();
+    render(<Harness files={[doc()]} />);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(screen.getByTestId('state-notes.md')).toHaveTextContent('staged'));
+
+    fireEvent.click(screen.getByText('remove notes.md'));
+    expect(screen.queryByTestId('img-notes.md')).not.toBeInTheDocument();
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
   });
 });

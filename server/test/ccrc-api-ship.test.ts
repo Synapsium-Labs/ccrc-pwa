@@ -35,8 +35,10 @@ describe('ccrc-api ships', () => {
     // the file names — it is the block that installs ccd. If ccd moves, this
     // follows it; if ccrc-api drifts into the server lane, the two stop being
     // neighbours and this reds.
+    // ccd itself lands through `install_ccd_pair` since D-3696 (a launcher/body
+    // pair rendered on the box), so that call is the anchor now.
     const lines = code();
-    const ccd = lines.findIndex((l) => l.startsWith('install_atomic ccd/ccd '));
+    const ccd = lines.findIndex((l) => l === 'install_ccd_pair');
     const api = lines.findIndex((l) => l.startsWith('install_atomic ccd/ccrc-api '));
     expect(ccd, 'deploy.sh still installs ccd').toBeGreaterThan(-1);
     expect(api, 'deploy.sh installs ccrc-api').toBeGreaterThan(-1);

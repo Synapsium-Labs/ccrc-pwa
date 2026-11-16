@@ -53,10 +53,10 @@ const binDir = (home: string): string => path.join(home, '.local', 'bin');
 /**
  * The MEASURED real-world shape (task-11 report / recon on the fleet host):
  * a non-script `claude` binary (deliberately a few bytes here — the real one
- * is 300+ MB and adopt must never read it whole), `claude2`/`claude-dev0`
+ * is 300+ MB and adopt must never read it whole), `claude9`/`claude-lab0`
  * generated wrappers each carrying a secrets-sourcing guard preceded by an
  * explanatory comment (the exact shape on disk), a secrets-free
- * `claude-corp`, and `gpt`, a bespoke script that sets CLAUDE_CONFIG_DIR but
+ * `claude-acme`, and `gpt`, a bespoke script that sets CLAUDE_CONFIG_DIR but
  * manages its own proxy rather than `exec`ing the upstream binary.
  */
 function buildMeasuredBox(home: string): void {
@@ -68,27 +68,27 @@ function buildMeasuredBox(home: string): void {
   // "never reads the upstream binary as text" test below.
   writeExec(path.join(bin, 'claude'), '\x7fELF\x02\x01\x01\x00not-a-real-binary-just-a-fixture-marker');
 
-  writeExec(path.join(bin, 'claude2'), [
+  writeExec(path.join(bin, 'claude9'), [
     '#!/usr/bin/env bash',
-    'export CLAUDE_CONFIG_DIR="$HOME/.claude-personal"',
+    'export CLAUDE_CONFIG_DIR="$HOME/.claude-home"',
     "# Long-lived setup token (see the file's own header for why). Sourced, not",
     '# inlined, so the token never sits in this world-readable wrapper.',
-    '[ -r "$HOME/.cc-secrets/claude2-oauth.env" ] && . "$HOME/.cc-secrets/claude2-oauth.env"',
+    '[ -r "$HOME/.cc-secrets/claude9-oauth.env" ] && . "$HOME/.cc-secrets/claude9-oauth.env"',
     'exec "$HOME/.local/bin/claude" "$@"',
     '',
   ].join('\n'));
 
-  writeExec(path.join(bin, 'claude-corp'), [
+  writeExec(path.join(bin, 'claude-acme'), [
     '#!/usr/bin/env bash',
-    'export CLAUDE_CONFIG_DIR="$HOME/.claude-corp"',
+    'export CLAUDE_CONFIG_DIR="$HOME/.claude-acme"',
     'exec "$HOME/.local/bin/claude" "$@"',
     '',
   ].join('\n'));
 
-  writeExec(path.join(bin, 'claude-dev0'), [
+  writeExec(path.join(bin, 'claude-lab0'), [
     '#!/usr/bin/env bash',
-    'export CLAUDE_CONFIG_DIR="$HOME/.claude-dev0"',
-    '[ -r "$HOME/.cc-secrets/claude-dev0-oauth.env" ] && . "$HOME/.cc-secrets/claude-dev0-oauth.env"',
+    'export CLAUDE_CONFIG_DIR="$HOME/.claude-lab0"',
+    '[ -r "$HOME/.cc-secrets/claude-lab0-oauth.env" ] && . "$HOME/.cc-secrets/claude-lab0-oauth.env"',
     'exec "$HOME/.local/bin/claude" "$@"',
     '',
   ].join('\n'));
@@ -105,7 +105,7 @@ function buildMeasuredBox(home: string): void {
     '',
   ].join('\n'));
 
-  for (const d of ['.claude', '.claude-personal', '.claude-corp', '.claude-dev0', '.claude-gpt']) {
+  for (const d of ['.claude', '.claude-home', '.claude-acme', '.claude-lab0', '.claude-gpt']) {
     mkdirSync(path.join(home, d), { recursive: true });
   }
 }
@@ -126,15 +126,15 @@ describe('ccrc-adopt: the measured five-account box', () => {
     // by wrapper SHAPE and has no way to know what a launcher talks to. The
     // roster it produces is legal and parses; `parseRoster` warns once per boot
     // naming the accounts, which is the operator's cue to state the provider.
-    expect(roster.byId.get('claude2')!.exec).toEqual(
-      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude2-oauth.env' });
+    expect(roster.byId.get('claude9')!.exec).toEqual(
+      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude9-oauth.env' });
     expect(roster.byId.get('gpt')!.exec.kind).toBe('external');
   });
 
   it('writes id-as-label, since it cannot invent a friendly name', () => {
     const home = freshBox();
     const roster = parseRoster(JSON.parse(runAdopt(home)));
-    expect(roster.byId.get('claude2')!.label).toBe('claude2');
+    expect(roster.byId.get('claude9')!.label).toBe('claude9');
   });
 
   it('says on stderr that labels are id-as-written and names the file to edit', () => {
@@ -156,22 +156,22 @@ describe('ccrc-adopt: the measured five-account box', () => {
     expect(r.stderr).toMatch(/policy default/i);
   });
 
-  it('recognizes claude-corp (no secretsFile) and claude-dev0 (with one), matching every account on disk', () => {
+  it('recognizes claude-acme (no secretsFile) and claude-lab0 (with one), matching every account on disk', () => {
     const home = freshBox();
     const roster = parseRoster(JSON.parse(runAdopt(home)));
     expect(roster.accounts.map((a) => a.id).sort()).toEqual(
-      ['claude', 'claude-corp', 'claude-dev0', 'claude2', 'gpt'].sort(),
+      ['claude', 'claude-acme', 'claude-lab0', 'claude9', 'gpt'].sort(),
     );
-    expect(roster.byId.get('claude-corp')!.exec).toEqual({ kind: 'generated', provider: 'anthropic' });
-    expect(roster.byId.get('claude-dev0')!.exec).toEqual({
-      kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude-dev0-oauth.env',
+    expect(roster.byId.get('claude-acme')!.exec).toEqual({ kind: 'generated', provider: 'anthropic' });
+    expect(roster.byId.get('claude-lab0')!.exec).toEqual({
+      kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude-lab0-oauth.env',
     });
   });
 
   it('assigns homeAble and telemetry by exec kind: upstream/generated are homeAble+anthropic, external is homeAble:false+none', () => {
     const home = freshBox();
     const roster = parseRoster(JSON.parse(runAdopt(home)));
-    for (const id of ['claude', 'claude2', 'claude-corp', 'claude-dev0']) {
+    for (const id of ['claude', 'claude9', 'claude-acme', 'claude-lab0']) {
       const a = roster.byId.get(id)!;
       expect(a.homeAble, id).toBe(true);
       expect(a.telemetry, id).toBe('anthropic');
@@ -185,9 +185,9 @@ describe('ccrc-adopt: the measured five-account box', () => {
     const home = freshBox();
     const roster = parseRoster(JSON.parse(runAdopt(home)));
     // Declaration order is upstream first, then the remaining ids sorted
-    // byte-wise (LC_ALL=C) — "claude-corp" < "claude-dev0" < "claude2" < "gpt".
+    // byte-wise (LC_ALL=C) — "claude-acme" < "claude-lab0" < "claude9" < "gpt".
     expect(roster.accounts.map((a) => a.id)).toEqual(
-      ['claude', 'claude-corp', 'claude-dev0', 'claude2', 'gpt'],
+      ['claude', 'claude-acme', 'claude-lab0', 'claude9', 'gpt'],
     );
     expect(roster.accounts.map((a) => a.hue)).toEqual(
       ['cyan', 'violet', 'blue', 'magenta', 'amber'],
@@ -288,9 +288,9 @@ describe('ccrc-adopt: never mis-classifies a bespoke launcher as generated', () 
     const bin = binDir(home);
     mkdirSync(bin, { recursive: true });
     writeExec(path.join(bin, 'claude'), '\x7fELF-fixture');
-    writeExec(path.join(bin, 'claude2'), [
+    writeExec(path.join(bin, 'claude9'), [
       '#!/usr/bin/env bash',
-      'export CLAUDE_CONFIG_DIR="$HOME/.claude-personal"',
+      'export CLAUDE_CONFIG_DIR="$HOME/.claude-home"',
       'exec "$HOME/.local/bin/claude" "$@"',
       '',
     ].join('\n'));
@@ -317,7 +317,7 @@ describe('ccrc-adopt: never mis-classifies a bespoke launcher as generated', () 
     mkdirSync(bin, { recursive: true });
     writeExec(path.join(bin, 'claude'), '\x7fELF-fixture');
     writeExec(path.join(bin, 'opus'), '\x7fELF-fixture-2'); // a second non-script binary, never voted for
-    for (const id of ['claude2', 'claude-corp']) {
+    for (const id of ['claude9', 'claude-acme']) {
       writeExec(path.join(bin, id), [
         '#!/usr/bin/env bash',
         `export CLAUDE_CONFIG_DIR="$HOME/.${id}"`,
@@ -332,14 +332,14 @@ describe('ccrc-adopt: never mis-classifies a bespoke launcher as generated', () 
       'exec "$HOME/.local/bin/opus" "$@"',
       '',
     ].join('\n'));
-    for (const d of ['.claude', '.claude2', '.claude-corp', '.stray']) {
+    for (const d of ['.claude', '.claude9', '.claude-acme', '.stray']) {
       mkdirSync(path.join(home, d), { recursive: true });
     }
 
     const roster = parseRoster(JSON.parse(runAdopt(home)));
     expect(roster.upstreamId).toBe('claude');
     expect(roster.byId.get('stray')!.exec.kind).toBe('external');
-    expect(roster.byId.get('claude2')!.exec.kind).toBe('generated');
+    expect(roster.byId.get('claude9')!.exec.kind).toBe('generated');
   });
 
   it('refuses to guess when wrapper scripts are evenly split between two different upstream binaries', () => {
@@ -348,8 +348,8 @@ describe('ccrc-adopt: never mis-classifies a bespoke launcher as generated', () 
     mkdirSync(bin, { recursive: true });
     writeExec(path.join(bin, 'claude'), '\x7fELF-a');
     writeExec(path.join(bin, 'opus'), '\x7fELF-b');
-    writeExec(path.join(bin, 'claude2'), [
-      '#!/usr/bin/env bash', 'export CLAUDE_CONFIG_DIR="$HOME/.claude2"',
+    writeExec(path.join(bin, 'claude9'), [
+      '#!/usr/bin/env bash', 'export CLAUDE_CONFIG_DIR="$HOME/.claude9"',
       'exec "$HOME/.local/bin/claude" "$@"', '',
     ].join('\n'));
     writeExec(path.join(bin, 'opus2'), [
@@ -370,8 +370,8 @@ describe('ccrc-adopt: disk noise this box actually has', () => {
     const bin = binDir(home);
     mkdirSync(bin, { recursive: true });
     writeExec(path.join(bin, 'claude'), '\x7fELF-fixture');
-    writeExec(path.join(bin, 'claude2'), [
-      '#!/usr/bin/env bash', 'export CLAUDE_CONFIG_DIR="$HOME/.claude-personal"',
+    writeExec(path.join(bin, 'claude9'), [
+      '#!/usr/bin/env bash', 'export CLAUDE_CONFIG_DIR="$HOME/.claude-home"',
       'exec "$HOME/.local/bin/claude" "$@"', '',
     ].join('\n'));
     // Measured shape: gpt -> ccgpt, both live in $HOME/.local/bin, identical
@@ -387,7 +387,7 @@ describe('ccrc-adopt: disk noise this box actually has', () => {
     mkdirSync(path.join(home, '.claude'), { recursive: true });
 
     const roster = parseRoster(JSON.parse(runAdopt(home)));
-    expect(roster.accounts.map((a) => a.id).sort()).toEqual(['claude', 'claude2', 'gpt']);
+    expect(roster.accounts.map((a) => a.id).sort()).toEqual(['claude', 'claude9', 'gpt']);
     expect(roster.byId.has('ccgpt')).toBe(false);
   });
 
@@ -414,8 +414,8 @@ describe('ccrc-adopt: disk noise this box actually has', () => {
     chmodSync(realBinary, 0o755);
     symlinkSync(realBinary, path.join(bin, 'claude'));
 
-    writeExec(path.join(bin, 'claude2'), [
-      '#!/usr/bin/env bash', 'export CLAUDE_CONFIG_DIR="$HOME/.claude-personal"',
+    writeExec(path.join(bin, 'claude9'), [
+      '#!/usr/bin/env bash', 'export CLAUDE_CONFIG_DIR="$HOME/.claude-home"',
       'exec "$HOME/.local/bin/claude" "$@"', '',
     ].join('\n'));
     mkdirSync(path.join(home, '.claude'), { recursive: true });
@@ -425,7 +425,7 @@ describe('ccrc-adopt: disk noise this box actually has', () => {
     expect(Date.now() - start).toBeLessThan(10_000);
     expect(roster.upstreamId).toBe('claude');
     expect(roster.byId.get('claude')!.exec.kind).toBe('upstream');
-    expect(roster.byId.get('claude2')!.exec.kind).toBe('generated');
+    expect(roster.byId.get('claude9')!.exec.kind).toBe('generated');
   });
 
   it('ignores ccd.bak-<date>-shaped and <id>.bak-<date>-shaped files: a "." never appears in a real account id', () => {
@@ -433,15 +433,15 @@ describe('ccrc-adopt: disk noise this box actually has', () => {
     buildMeasuredBox(home);
     const bin = binDir(home);
     // Verbatim copies of real files, under backup-style names — exactly the
-    // measured shape (ccd.bak-20260729-090937, claude2.bak-20260805-181306).
-    writeExec(path.join(bin, 'claude2.bak-20260805-181306'), readFileSync(path.join(bin, 'claude2'), 'utf8'));
+    // measured shape (ccd.bak-20260729-090937, claude9.bak-20260805-181306).
+    writeExec(path.join(bin, 'claude9.bak-20260805-181306'), readFileSync(path.join(bin, 'claude9'), 'utf8'));
     writeExec(path.join(bin, 'ccd.pre-flip'), '#!/usr/bin/env bash\necho not a real ccd\n');
 
     const roster = parseRoster(JSON.parse(runAdopt(home)));
-    expect(roster.accounts.map((a) => a.id)).not.toContain('claude2.bak-20260805-181306');
+    expect(roster.accounts.map((a) => a.id)).not.toContain('claude9.bak-20260805-181306');
     expect(roster.accounts.map((a) => a.id)).not.toContain('ccd.pre-flip');
-    // the real claude2 is still there, unaffected by its own backup existing
-    expect(roster.byId.get('claude2')!.exec.kind).toBe('generated');
+    // the real claude9 is still there, unaffected by its own backup existing
+    expect(roster.byId.get('claude9')!.exec.kind).toBe('generated');
   });
 
   it('refuses cleanly when $HOME/.local/bin has nothing that sets CLAUDE_CONFIG_DIR', () => {
@@ -503,12 +503,12 @@ describe('ccrc-adopt: cross-check reports disagreement, never silently prefers a
     const home = mkTmp('ccrc-adopt-crosscheck2-');
     buildMeasuredBox(home);
     // Unrelated tool config dir that merely starts with ".claude" — measured
-    // on the real box as ~/.claude-docserver.
-    mkdirSync(path.join(home, '.claude-docserver'), { recursive: true });
+    // on the real box as ~/.claude-docs-preview.
+    mkdirSync(path.join(home, '.claude-docs-preview'), { recursive: true });
 
     const r = runAdoptRaw(home);
     expect(r.code).toBe(0);
-    expect(r.stderr).toContain('.claude-docserver');
+    expect(r.stderr).toContain('.claude-docs-preview');
   });
 
   it('does not let cross-check mismatches change which accounts get written', () => {
@@ -593,8 +593,8 @@ describe('ccrc-adopt: an upstream that is a launcher script, not the binary itse
     expect(roster.byId.get('claude')!.exec.kind).toBe('upstream');
     // The rest of the box still classifies exactly as it did with a binary
     // there — the gate is the only thing that changed.
-    expect(roster.byId.get('claude2')!.exec).toEqual(
-      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude2-oauth.env' });
+    expect(roster.byId.get('claude9')!.exec).toEqual(
+      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude9-oauth.env' });
     expect(roster.byId.get('gpt')!.exec.kind).toBe('external');
   });
 
@@ -606,7 +606,7 @@ describe('ccrc-adopt: an upstream that is a launcher script, not the binary itse
   });
 
   it('still refuses when the elected upstream is itself an account wrapper — the exec cycle the old gate was a proxy for', () => {
-    // `claude2` and `claude-corp` both exec `claude`, so `claude` wins the
+    // `claude9` and `claude-acme` both exec `claude`, so `claude` wins the
     // vote — but `claude` here sets its own CLAUDE_CONFIG_DIR and execs
     // onward, which makes it an account wrapper. Adopting it would write a
     // roster whose generated wrappers exec a wrapper.

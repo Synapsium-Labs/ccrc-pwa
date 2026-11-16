@@ -1,0 +1,29 @@
+  line 64 of a long reply that fills the screen
+  line 65 of a long reply that fills the screen
+  line 66 of a long reply that fills the screen
+  line 67 of a long reply that fills the screen
+  line 68 of a long reply that fills the screen
+  line 69 of a long reply that fills the screen
+
+✻ Worked for 5s · done 1:07 PM
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Switch model?
+  Your next response will be slower and use more tokens
+
+  This conversation is cached for the current model. Switching to Opus 5.5 (default) means the full history gets
+  re-read on your next message.
+
+  ❯ 1. Yes, switch to Opus 5.5 (default)
+    2. No, go back
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  👤 cfg │ 🤖 Fable 5.1 · high │ 🎯 repo │ ▓ ctx ░░░░░░░░ 0% │ 💲 $0.0533
+  ⏸ manual mode on · ← for agents
+                  tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and reattach for focus tracking
+
+
+

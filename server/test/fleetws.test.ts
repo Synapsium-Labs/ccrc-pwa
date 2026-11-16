@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { performance } from 'node:perf_hooks';
-import { FLEET_PROTO, FLEET_PROTO_MIN, type Divergence } from '../../shared/api.js';
+import { FLEET_PROTO, FLEET_PROTO_MIN, type DelegationProjectionWire, type Divergence } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
 import type { Runner } from '../src/exec.js';
 import { Bus } from '../src/bus.js';
@@ -12,13 +13,17 @@ import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { loadSnapshot } from '../src/fleetstate.js';
+import { ACCOUNT_POOLS_CAP, POOL_SYNC_ABSENT_CAP, POOL_SYNC_INSTALLED_CAP } from '../src/ccdargv.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { seedRoster, testDeps } from './helpers.js';
+import { plantPoolEpoch } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { watcherTeardown } from './watcherTeardown.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { okRuns } from './coordReadHelpers.js';
+import { readRegistry } from '../src/registry.js';
 
 const seedSession = (home: string, id: string, wrapper: string) => {
   const reg = path.join(home, '.cc-sessions');
@@ -53,6 +58,8 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 // case at the bottom of this file is what closes that, and it can only exist
 // because the drop is opt-in.
 const collect = (ws: WebSocket, opts: { dropDivergence?: boolean; keepPools?: boolean } = {}) => {
+  // The programme ledgers' `waiting` frame (plan PL4) rides every cold start on a box with a coordination database and is the
+  // subject of `ledgers-frame.test.ts` alone: dropped here, as `pools` is, so the order cases below stay about their own frames.
   const queue: unknown[] = [];
   const waiters: Array<(m: unknown) => void> = [];
   ws.on('message', (d) => {
@@ -65,6 +72,7 @@ const collect = (ws: WebSocket, opts: { dropDivergence?: boolean; keepPools?: bo
     // edits today, and a silent break for the eleventh case somebody writes
     // tomorrow. The one describe that is ABOUT this frame passes `keepPools`.
     if (opts.keepPools !== true && (m as { type?: unknown }).type === 'pools') return;
+    if ((m as { type?: unknown }).type === 'waiting') return;
     const w = waiters.shift();
     if (w) w(m);
     else queue.push(m);
@@ -80,17 +88,21 @@ const collect = (ws: WebSocket, opts: { dropDivergence?: boolean; keepPools?: bo
 describe('fleet REST + WS', () => {
   let home: string;
   let app: FastifyInstance | undefined;
+  // Every watcher a case builds goes through `mkWatcher`, so the teardown can await its in-flight writes before it
+  // removes the home (D-6179).
+  const teardown = watcherTeardown();
+  const mkWatcher = (...a: ConstructorParameters<typeof FleetWatcher>) => teardown.track(new FleetWatcher(...a));
 
   beforeEach(() => {
     home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    seedSession(home, 'claude-a-project-f', 'claude-a');
   });
 
   afterEach(async () => {
-    if (app) await app.close();
+    const closing = app;
     app = undefined;
-    rmSync(home, { recursive: true, force: true });
+    await teardown.remove(home, closing);
     vi.restoreAllMocks();
   });
 
@@ -99,14 +111,14 @@ describe('fleet REST + WS', () => {
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { sessions: Array<{ id: string; status: string }> };
-    expect(body.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
+    expect(body.sessions.map((s) => s.id)).toEqual(['claude-a-project-f']);
     expect(body.sessions[0]!.status).toBe('dead');
   });
 
   it('WS /ws/fleet sends a snapshot on connect, then pushes fleet changes and notices', async () => {
     const deps = testDeps(home);
     const bus = new Bus();
-    const watcher = new FleetWatcher(deps, bus);
+    const watcher = mkWatcher(deps, bus);
     app = await buildServer(deps, bus, watcher);
     await watcher.tick(); // prime the watcher's diff state before any client connects
 
@@ -128,7 +140,7 @@ describe('fleet REST + WS', () => {
 
     const snapshot = await next();
     expect(snapshot.type).toBe('fleet');
-    expect(snapshot.sessions.map((s: { id: string }) => s.id)).toEqual(['claude-a-MekWarLive']);
+    expect(snapshot.sessions.map((s: { id: string }) => s.id)).toEqual(['claude-a-project-f']);
 
     // Build 4: the cold start's LAST frame — this watcher has ticked, so it has
     // measured the markers and says so. Consumed here rather than ignored,
@@ -140,14 +152,92 @@ describe('fleet REST + WS', () => {
     const pushed = await next();
     expect(pushed.type).toBe('fleet');
     expect(pushed.sessions.map((s: { id: string }) => s.id)).toEqual([
-      'claude-a-MekWarLive',
+      'claude-a-project-f',
       'claude-b-demo-app-ts',
     ]);
 
     await watcher.tick(); // no change -> must NOT emit; next message must be the notice below
-    bus.emit('notice', { message: 'cc swap: claude-a-MekWarLive moved claude-a -> claude' });
+    bus.emit('notice', { message: 'cc swap: claude-a-project-f moved claude-a -> claude' });
     const notice = await next();
-    expect(notice).toEqual({ type: 'notice', message: 'cc swap: claude-a-MekWarLive moved claude-a -> claude' });
+    expect(notice).toEqual({ type: 'notice', message: 'cc swap: claude-a-project-f moved claude-a -> claude' });
+
+    ws.close();
+  });
+
+  // The cold-start snapshot is assembled ASYNCHRONOUSLY (tmux, registry reads),
+  // but this socket is subscribed to `fleet` broadcasts from the moment it
+  // connects. A broadcast that lands while the snapshot is still assembling
+  // reaches the client first; the snapshot, built from watcher state captured
+  // at CONNECT time, then arrived after it and replaced it. And because the
+  // watcher re-emits only on change (`lastJson`), nothing corrected the client
+  // until some other fleet field moved.
+  it('a broadcast that lands while the cold snapshot is still assembling is not overwritten by it', async () => {
+    let hold = false;
+    let held = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    // A real coord store, so the handler sends its cold `runs` frame in the same
+    // `.then` straight after the fleet decision: the frame after release is
+    // `runs` exactly when no second `fleet` was sent, with no timing involved.
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const deps = { ...testDeps(home, async () => {
+      if (hold) { held++; await gate; }
+      return { ran: true, code: 1, stdout: '', stderr: '' };
+    }), coord };
+    const bus = new Bus();
+    app = await buildServer(deps, bus);
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const addr = app.server.address();
+    const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+
+    hold = true;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+    const next = collect(ws);
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', () => resolve());
+      ws.on('error', reject);
+    });
+    expect((await next()).type).toBe('hello');
+    // The snapshot is parked inside its tmux read, not finished.
+    await vi.waitFor(() => expect(held).toBeGreaterThan(0));
+
+    const newer = [{ id: 'from-the-broadcast' }];
+    bus.emit('fleet', newer as never);
+    expect(await next()).toEqual({ type: 'fleet', sessions: newer });
+
+    hold = false;
+    release();
+    expect((await next()).type).toBe('runs');
+
+    ws.close();
+  });
+
+  // The other half of the same rule, measured by review: a cold frame that
+  // lands FIRST but differs from the watcher's last broadcast was never
+  // corrected either. A registry listing that fails once at connect made the
+  // assembled snapshot `fleet: []`, and the watcher — whose own tick still
+  // matched `lastJson` — never broadcast again to repair it.
+  it("once the watcher has broadcast, a new socket's first fleet is that broadcast — not a cold read that failed", async () => {
+    let failListing = false;
+    const io: FleetIO = { ...localIO, readdir: async (p) => (failListing ? null : localIO.readdir(p)) };
+    const deps: Deps = { ...testDeps(home), io };
+    const bus = new Bus();
+    const watcher = mkWatcher(deps, bus);
+    app = await buildServer(deps, bus, watcher);
+    await watcher.tick();   // broadcasts the one-session fleet
+
+    failListing = true;     // the registry cannot be listed at the moment of connect
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const addr = app.server.address();
+    const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+    const next = collect(ws, { dropDivergence: true });
+    await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+
+    expect((await next()).type).toBe('hello');
+    const cold = await next();
+    expect(cold.type).toBe('fleet');
+    expect(cold.sessions.map((s: { id: string }) => s.id)).toEqual(['claude-a-project-f']);
 
     ws.close();
   });
@@ -161,14 +251,14 @@ describe('fleet REST + WS', () => {
       'Enter to select · ↑/↓ to navigate · Esc to cancel',
     ].join('\n');
     const run: Runner = async (_cmd, args) => {
-      if (args.includes('has-session')) return { code: 0, stdout: '', stderr: '' };
-      if (args.includes('list-panes')) return { code: 0, stdout: '4242\n', stderr: '' };
-      if (args.includes('capture-pane')) return { code: 0, stdout: menuPane, stderr: '' };
-      return { code: 1, stdout: '', stderr: '' };
+      if (args.includes('has-session')) return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args.includes('list-panes')) return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+      if (args.includes('capture-pane')) return { ran: true, code: 0, stdout: menuPane, stderr: '' };
+      return { ran: true, code: 1, stdout: '', stderr: '' };
     };
     const deps = testDeps(home, run);
     const bus = new Bus();
-    const watcher = new FleetWatcher(deps, bus);
+    const watcher = mkWatcher(deps, bus);
     app = await buildServer(deps, bus, watcher);
     await watcher.tick(); // watcher detects the dialog BEFORE any client connects
 
@@ -184,9 +274,11 @@ describe('fleet REST + WS', () => {
 
     const snapshot = await next();
     expect(snapshot.type).toBe('fleet');
-    const s = snapshot.sessions.find((x: { id: string }) => x.id === 'claude-a-MekWarLive');
+    const s = snapshot.sessions.find((x: { id: string }) => x.id === 'claude-a-project-f');
     // The bug: this was `false` — the initial push omitted pendingDialogs, so the
     // "needs you" marker never showed on the fleet overview for a pre-existing dialog.
+    // The watcher has ticked, so this cold frame is its last broadcast
+    // (`currentFleet`); `currentPending()` now feeds only a connect before it.
     expect(s.dialogPending).toBe(true);
     ws.close();
   });
@@ -196,12 +288,12 @@ describe('fleet REST + WS', () => {
     const cachePath = path.join(cacheDir, 'state-cache.json');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
     const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-    const watcher = new FleetWatcher(deps, new Bus());
+    const watcher = mkWatcher(deps, new Bus());
 
     await watcher.tick();
 
     const snap = await loadSnapshot(cachePath);
-    expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
+    expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-project-f']);
     rmSync(cacheDir, { recursive: true, force: true });
   });
 
@@ -212,7 +304,7 @@ describe('fleet REST + WS', () => {
     const deps: Deps = {
       ...testDeps(home), cfg, fleetState: { connected: false, downSince: Date.now(), ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath,
     };
-    const watcher = new FleetWatcher(deps, new Bus());
+    const watcher = mkWatcher(deps, new Bus());
 
     await watcher.tick();
 
@@ -233,12 +325,12 @@ describe('fleet REST + WS', () => {
     seedSession(home, 'claude-b-demo-app-ts', 'claude-b');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
     const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-    const watcher = new FleetWatcher(deps, new Bus());
+    const watcher = mkWatcher(deps, new Bus());
 
     await watcher.tick(); // both sessions readable — writes a 2-row cache
     let snap = await loadSnapshot(cachePath);
     expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
-      ['claude-b-demo-app-ts', 'claude-a-MekWarLive'].sort(),
+      ['claude-b-demo-app-ts', 'claude-a-project-f'].sort(),
     );
 
     // One session's own `workdir` field goes unreadable — the exact shape a
@@ -252,7 +344,7 @@ describe('fleet REST + WS', () => {
     // The fuller 2-row snapshot survives; a 1-row assembly must never
     // clobber it.
     expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
-      ['claude-b-demo-app-ts', 'claude-a-MekWarLive'].sort(),
+      ['claude-b-demo-app-ts', 'claude-a-project-f'].sort(),
     );
     rmSync(cacheDir, { recursive: true, force: true });
   });
@@ -262,7 +354,7 @@ describe('fleet REST + WS', () => {
     const cachePath = path.join(cacheDir, 'state-cache.json');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
     const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-    const watcher = new FleetWatcher(deps, new Bus());
+    const watcher = mkWatcher(deps, new Bus());
 
     await watcher.tick(); // 1 row
     expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(1);
@@ -292,7 +384,7 @@ describe('fleet REST + WS', () => {
     mkdirSync(path.join(emptyHome, '.cc-sessions'), { recursive: true });
     const cfg = loadConfig({ CCRC_HOME: emptyHome, CCRC_FLEET: 'remote' });
     const deps: Deps = { ...testDeps(emptyHome), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-    const watcher = new FleetWatcher(deps, new Bus());
+    const watcher = mkWatcher(deps, new Bus());
 
     await watcher.tick();
 
@@ -326,12 +418,12 @@ describe('fleet REST + WS', () => {
       seedSession(home, 'claude-b-demo-app-ts', 'claude-b');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
       const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-      const watcher = new FleetWatcher(deps, new Bus());
+      const watcher = mkWatcher(deps, new Bus());
 
       await watcher.tick(); // both sessions readable — writes a 2-row cache
       let snap = await loadSnapshot(cachePath);
       expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
-        ['claude-b-demo-app-ts', 'claude-a-MekWarLive'].sort(),
+        ['claude-b-demo-app-ts', 'claude-a-project-f'].sort(),
       );
       const firstSavedAt = snap!.savedAt;
 
@@ -340,17 +432,19 @@ describe('fleet REST + WS', () => {
 
       await watcher.tick(); // 1 row now — confirmed absent from the listing, not just unreadable
       snap = await loadSnapshot(cachePath);
-      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
+      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-project-f']);
       expect(snap!.savedAt).toBeGreaterThan(firstSavedAt);
       const secondSavedAt = snap!.savedAt;
 
-      // Not a one-tick exception — the survivor keeps getting a fresh
-      // snapshot on every subsequent healthy tick, exactly as an unshrunk
-      // fleet would.
+      // Not a one-tick exception — the survivor's cache stays live exactly as an unshrunk fleet's: it is rewritten when
+      // the survivor changes and, since console speed S1 (the cache is written only on change), left alone when it does not.
       await new Promise((r) => setTimeout(r, 3));
       await watcher.tick();
-      const laterSnap = await loadSnapshot(cachePath);
-      expect(laterSnap!.savedAt).toBeGreaterThan(secondSavedAt);
+      expect((await loadSnapshot(cachePath))!.savedAt).toBe(secondSavedAt);
+      writeFileSync(path.join(home, '.cc-sessions', 'claude-a-project-f.branch'), 'ws/changed');
+      await new Promise((r) => setTimeout(r, 3));
+      await watcher.tick();
+      expect((await loadSnapshot(cachePath))!.savedAt).toBeGreaterThan(secondSavedAt);
 
       rmSync(cacheDir, { recursive: true, force: true });
     });
@@ -361,7 +455,7 @@ describe('fleet REST + WS', () => {
       seedSession(home, 'claude-b-demo-app-ts', 'claude-b');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
       const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-      const watcher = new FleetWatcher(deps, new Bus());
+      const watcher = mkWatcher(deps, new Bus());
 
       await watcher.tick();
       expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(2);
@@ -376,7 +470,7 @@ describe('fleet REST + WS', () => {
       for (let i = 0; i < 5; i++) {
         await watcher.tick();
         const snap = await loadSnapshot(cachePath);
-        expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
+        expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-project-f']);
       }
 
       rmSync(cacheDir, { recursive: true, force: true });
@@ -389,7 +483,7 @@ describe('fleet REST + WS', () => {
       seedSession(home, 'claude-b-demo-app-ts', 'claude-b');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
       const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-      const watcher = new FleetWatcher(deps, new Bus());
+      const watcher = mkWatcher(deps, new Bus());
 
       await watcher.tick();
       expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(2);
@@ -405,7 +499,7 @@ describe('fleet REST + WS', () => {
 
       const snap = await loadSnapshot(cachePath);
       expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
-        ['claude-b-demo-app-ts', 'claude-a-MekWarLive'].sort(),
+        ['claude-b-demo-app-ts', 'claude-a-project-f'].sort(),
       );
       // Warned once across all three refused ticks, not once per tick — the
       // freeze must be visible in the logs, but not spammed forever.
@@ -445,13 +539,13 @@ describe('fleet REST + WS', () => {
       const cacheDir = mkTmp('ccrc-cache-');
       const cachePath = path.join(cacheDir, 'state-cache.json');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-      const { io, setDegraded } = degradableIO('claude-a-MekWarLive', 'workdir');
+      const { io, setDegraded } = degradableIO('claude-a-project-f', 'workdir');
       const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-      const watcher = new FleetWatcher(deps, new Bus());
+      const watcher = mkWatcher(deps, new Bus());
 
       await watcher.tick(); // clean read — writes a 1-row cache
       let snap = await loadSnapshot(cachePath);
-      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
+      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-project-f']);
       expect(snap?.sessions[0]?.unmeasured).toEqual([]);
       const firstSavedAt = snap!.savedAt;
 
@@ -464,7 +558,7 @@ describe('fleet REST + WS', () => {
       // The write was SKIPPED: the cache is still the pre-degrade snapshot,
       // byte for byte (same savedAt), never a fresh write of the guess.
       expect(snap?.savedAt).toBe(firstSavedAt);
-      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
+      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-project-f']);
 
       const skipWarnings = warnSpy.mock.calls.filter(
         ([msg]) => typeof msg === 'string' && msg.includes('snapshot write skipped') && msg.includes('unmeasured identity field'),
@@ -480,9 +574,9 @@ describe('fleet REST + WS', () => {
       const cacheDir = mkTmp('ccrc-cache-');
       const cachePath = path.join(cacheDir, 'state-cache.json');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-      const { io, setDegraded } = degradableIO('claude-a-MekWarLive', 'workdir');
+      const { io, setDegraded } = degradableIO('claude-a-project-f', 'workdir');
       const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-      const watcher = new FleetWatcher(deps, new Bus());
+      const watcher = mkWatcher(deps, new Bus());
 
       await watcher.tick();
       const firstSavedAt = (await loadSnapshot(cachePath))!.savedAt;
@@ -516,10 +610,10 @@ describe('fleet REST + WS', () => {
       const cacheDir = mkTmp('ccrc-cache-');
       const cachePath = path.join(cacheDir, 'state-cache.json');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-      const { io, setDegraded } = degradableIO('claude-a-MekWarLive', 'workdir');
+      const { io, setDegraded } = degradableIO('claude-a-project-f', 'workdir');
       setDegraded(true);
       const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
-      const watcher = new FleetWatcher(deps, new Bus());
+      const watcher = mkWatcher(deps, new Bus());
 
       await watcher.tick();
 
@@ -545,7 +639,7 @@ describe('fleet REST + WS', () => {
         },
       };
       const deps: Deps = { ...testDeps(home), io: gatedIO };
-      const watcher = new FleetWatcher(deps, new Bus(), 10_000);
+      const watcher = mkWatcher(deps, new Bus(), 10_000);
       const tick = (): Promise<void> => (watcher as unknown as { tick: () => Promise<void> }).tick();
 
       const p1 = tick();
@@ -576,13 +670,16 @@ describe('fleet REST + WS', () => {
   describe('the `runs` frame', () => {
     it('a connecting client receives hello, then fleet, then runs — and a later transition re-emits it', async () => {
       const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      // The claimant is a registered session (workspace lifecycle wave 4): an open run's claimant with NO registry row
+      // and no journal history is listed by the dead-coordinator lane, and that list rides the coord frame.
+      seedSession(home, 'ccrc-pwa-coordinator', 'claude-a');
       const opened = coord.openRun({
         program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
         wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
       }) as { id: number };
       const deps = { ...testDeps(home), coord };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = mkWatcher(deps, bus);
       app = await buildServer(deps, bus, watcher);
       await watcher.tick();
 
@@ -619,6 +716,9 @@ describe('fleet REST + WS', () => {
     // correctly against what was last actually broadcast.
     it('skips the frame when a run row is UNREADABLE, and resumes once it is not', async () => {
       const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      // The claimant is a registered session (workspace lifecycle wave 4): an open run's claimant with NO registry row
+      // and no journal history is listed by the dead-coordinator lane, and that list rides the coord frame.
+      seedSession(home, 'ccrc-pwa-coordinator', 'claude-a');
       const opened = coord.openRun({
         program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
         wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
@@ -628,7 +728,7 @@ describe('fleet REST + WS', () => {
         .run(BigInt(Number.MAX_SAFE_INTEGER) + 1n, opened.id);
       const deps = { ...testDeps(home), coord };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = mkWatcher(deps, bus);
       app = await buildServer(deps, bus, watcher);
       await watcher.tick();
 
@@ -670,7 +770,7 @@ describe('fleet REST + WS', () => {
       }) as { id: number };
       const deps = { ...testDeps(home), coord };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = mkWatcher(deps, bus);
       app = await buildServer(deps, bus, watcher);
       await watcher.tick();
 
@@ -691,15 +791,57 @@ describe('fleet REST + WS', () => {
       ws.close();
     });
 
+    // ARCH-61 (#796): `childIds` is `childrenOf` the run's coordinator, decided on the socket's own frame AND on the watcher's
+    // broadcast from the same tick's reading of the fleet's marks, so a recycled workspace name's stale run is no child.
+    it('carries childIds — the cold-start frame and the watcher broadcast agree, and a ghost of a recycled name is no child', async () => {
+      const BORN = 1_700_000_000_000;
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      const openRun = (program: string, claimedBy: string): number =>
+        (coord.openRun({ program, title: program, project: 'ccrc-pwa', wave: 1, waveOf: 3, claimedBy }) as { id: number }).id;
+      const stale = openRun('old', 'ccrc-pwa-gone');
+      coord.setSession(stale, 'ccrc-pwa-worker');
+      coord.db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(BORN - 1000, stale);
+      const fresh = openRun('new', 'ccrc-pwa-coordinator');
+      coord.setSession(fresh, 'ccrc-pwa-worker', BORN);
+      coord.db.prepare('UPDATE runs SET dispatchStartedAt = ? WHERE id = ?').run(BORN, fresh);
+      seedSession(home, 'ccrc-pwa-coordinator', 'claude-a');
+      seedSession(home, 'ccrc-pwa-worker', 'claude-a');
+      writeFileSync(path.join(home, '.cc-sessions', 'ccrc-pwa-worker.child'), String(fresh));
+      const deps = { ...testDeps(home), coord };
+      const bus = new Bus();
+      const broadcast: Array<Array<{ id: number; childIds?: number[] }>> = [];
+      bus.on('runs', (runs) => broadcast.push(runs as never));
+      const watcher = mkWatcher(deps, bus);
+      app = await buildServer(deps, bus, watcher);
+      await watcher.tick();
+      expect(broadcast.at(-1)?.map((r) => [r.id, r.childIds])).toEqual([[stale, []], [fresh, [fresh]]]);
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws, { dropDivergence: true });
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      const runs = await next();
+      expect(runs.type).toBe('runs');
+      expect(runs.runs.map((r: { id: number; childIds?: number[] }) => [r.id, r.childIds])).toEqual([[stale, []], [fresh, [fresh]]]);
+      ws.close();
+    });
+
     it('drops the frame from the broadcast when the JSON is unchanged', async () => {
       const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      // The claimant is a registered session (workspace lifecycle wave 4): an open run's claimant with NO registry row
+      // and no journal history is listed by the dead-coordinator lane, and that list rides the coord frame.
+      seedSession(home, 'ccrc-pwa-coordinator', 'claude-a');
       coord.openRun({
         program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
         wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
       });
       const deps = { ...testDeps(home), coord };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = mkWatcher(deps, bus);
       app = await buildServer(deps, bus, watcher);
       await watcher.tick();
 
@@ -729,7 +871,7 @@ describe('fleet REST + WS', () => {
     it('a server with no coord sends no runs frame at all', async () => {
       const deps = testDeps(home);
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = mkWatcher(deps, bus);
       app = await buildServer(deps, bus, watcher);
       await watcher.tick();
 
@@ -770,7 +912,7 @@ describe('fleet REST + WS', () => {
       coord.db.close();
       const deps = { ...testDeps(home), coord };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = mkWatcher(deps, bus);
       app = await buildServer(deps, bus, watcher);
       // Deliberately NOT ticked — this isolates the `/ws/fleet` connect
       // handler's own guard from `FleetWatcher`'s (which has its own tests).
@@ -807,7 +949,7 @@ describe('fleet REST + WS', () => {
     const connect = async (over: Partial<Deps> = {}, opts: { tick?: boolean } = {}) => {
       const deps = { ...testDeps(home), ...over };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = mkWatcher(deps, bus);
       app = await buildServer(deps, bus, watcher);
       if (opts.tick !== false) await watcher.tick();
       await app.listen({ host: '127.0.0.1', port: 0 });
@@ -834,7 +976,7 @@ describe('fleet REST + WS', () => {
       // the wire order every client relies on is hello, fleet, runs, coord.
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'clear', mail: 'clear' });
+      expect(frame.coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
       ws.close();
     });
 
@@ -864,7 +1006,7 @@ describe('fleet REST + WS', () => {
       await watcher.tick();
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'set', mail: 'clear' });
+      expect(frame.coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
       ws.close();
     });
 
@@ -873,11 +1015,40 @@ describe('fleet REST + WS', () => {
       const { ws, next, watcher } = await connect();
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
-      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'set' });
+      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'set', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
 
       marker('coordinator-paused');
       await watcher.tick();
-      expect((await next()).coord).toEqual({ pause: 'set', mail: 'set' });
+      expect((await next()).coord).toEqual({ pause: 'set', mail: 'set', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
+      ws.close();
+    });
+
+    it('reports set for pane-scope-stop-live off the same listing, independently of the other markers (D-7902)', async () => {
+      // The switch's one read for the PWA: armed is `set`, and arming it reads as no pause of any kind.
+      marker('pane-scope-stop-live');
+      const { ws, next } = await connect();
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).coord).toEqual(
+        { pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'set' });
+      ws.close();
+    });
+
+    it('reports set for reclaim-paused, independently of the other two markers', async () => {
+      // Child-reclamation wave 4 (spec §5.8): the third marker off the SAME
+      // listing. Independence is the property — a reclaim pause is not a
+      // dispatch pause, and the phone must not read one as the other.
+      marker('reclaim-paused');
+      const { ws, next, watcher } = await connect();
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).coord).toEqual(
+        { pause: 'clear', mail: 'clear', reclaim: 'set', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
+
+      marker('coordinator-paused');
+      await watcher.tick();
+      expect((await next()).coord).toEqual(
+        { pause: 'set', mail: 'clear', reclaim: 'set', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
       ws.close();
     });
 
@@ -888,11 +1059,12 @@ describe('fleet REST + WS', () => {
       const unlistable: FleetIO = { ...localIO, readdir: async () => null };
       const { ws, next, watcher } = await connect({ io: unlistable }, { tick: false });
       expect((await next()).type).toBe('hello');
-      expect((await next()).type).toBe('fleet');
+      // No cold `fleet` frame: on an unlistable registry the cold start sends none rather than an empty fleet
+      // (spec §2.3, path identity W1a). The tick's `coord` frame is the next one.
       await watcher.tick();
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable' });
+      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'unmeasurable' });
       ws.close();
     });
 
@@ -907,20 +1079,20 @@ describe('fleet REST + WS', () => {
       const { ws, next, watcher } = await connect({ io: flaky });
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
-      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'clear' });
+      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
 
       listable = false;
       await watcher.tick();     // this tick returns early — and still reports
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable' });
+      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'unmeasurable' });
 
       // And nothing ELSE was broadcast on that tick: the fail-shut return still
       // skips the fleet snapshot, exactly as it did before this frame existed.
       listable = true;
       marker('coordinator-paused');
       await watcher.tick();
-      expect((await next()).coord).toEqual({ pause: 'set', mail: 'clear' });
+      expect((await next()).coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
       ws.close();
     });
 
@@ -951,6 +1123,107 @@ describe('fleet REST + WS', () => {
     });
   });
 
+  // Delegation broker wave 4 (spec §5.8, §8.4): the `{type:'delegation'}` frame. FLEET-LEVEL like `pools`; the watcher decides it
+  // (`currentDelegation`, Task 1.3), so these rows stub that value and drive the bus, and pin only the socket's half: the cold-start
+  // order, an absent value sending nothing, the broadcast, masking, an old client, and the withdrawal.
+  describe('the `delegation` frame', () => {
+    const KEY = ['sk', 'ant', 'api03', createHash('sha256').update('w4-f4').digest('base64url').repeat(3).slice(0, 95)].join('-');
+    const wire = (displayName: string | null = 'explore'): DelegationProjectionWire => ({
+      asOf: '2026-10-15T10:30:00.000Z',
+      activities: [{
+        activityId: 'a1', parentId: 'lane-a-demo', group: 'parent', placement: 'row', sourceKind: 'agent', upstreamId: 'agent-1',
+        displayName, liveness: 'live', openedAt: '2026-10-15T10:01:00.000Z', lastEventAt: '2026-10-15T10:02:00.000Z',
+      }],
+      leases: [],
+      unowned: [],
+    });
+    const connect = async (over: Partial<Deps> = {}, current: DelegationProjectionWire | null = null) => {
+      const deps = { ...testDeps(home), ...over };
+      const bus = new Bus();
+      const watcher = mkWatcher(deps, bus);
+      vi.spyOn(watcher, 'currentDelegation').mockReturnValue(current);
+      app = await buildServer(deps, bus, watcher);
+      await watcher.tick();
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const raw: string[] = [];
+      ws.on('message', (d) => { raw.push(String(d)); });
+      const next = collect(ws, { dropDivergence: true, keepPools: true });
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+      return { ws, next, watcher, bus, raw };
+    };
+
+    it('W4-F1: cold-starts last, after pools: hello, fleet, runs, coord, pools, delegation', async () => {
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      const WIRE = wire();
+      const { ws, next } = await connect({ coord }, WIRE);
+      const types: string[] = [];
+      let last: any = null;
+      for (let i = 0; i < 6; i++) { last = await next(); types.push(last.type); }
+      expect(types).toEqual(['hello', 'fleet', 'runs', 'coord', 'pools', 'delegation']);
+      expect(last).toEqual({ type: 'delegation', delegation: WIRE });
+      ws.close();
+    });
+
+    it('W4-F2: an absent value sends NOTHING on connect, never a fabricated empty frame', async () => {
+      const { ws, next, bus } = await connect();
+      expect((await next()).type).toBe('hello');
+      bus.emit('notice', { message: 'unrelated' });
+      const seen: string[] = [];
+      for (let m = await next(); m.type !== 'notice'; m = await next()) seen.push(m.type);
+      expect(seen).not.toContain('delegation');
+      ws.close();
+    });
+
+    it('W4-F3: a broadcast reaches a connected socket, and the listener leaves with the socket', async () => {
+      const { ws, next, bus } = await connect();
+      for (let m = await next(); m.type !== 'pools'; m = await next()) { /* the cold start */ }
+      const listening = bus.listenerCount('delegation');
+      const WIRE2 = wire('second');
+      bus.emit('delegation', WIRE2);
+      expect(await next()).toEqual({ type: 'delegation', delegation: WIRE2 });
+      ws.close();
+      await vi.waitFor(() => { expect(bus.listenerCount('delegation')).toBe(listening - 1); });
+    });
+
+    it('W4-F4: the frame is masked: an API-key-shaped display name never reaches the socket', async () => {
+      const { ws, next, bus, raw } = await connect({}, wire(`run ${KEY}`));
+      for (let m = await next(); m.type !== 'delegation'; m = await next()) { /* the cold start, masked */ }
+      bus.emit('delegation', wire(`again ${KEY}`));
+      const frame = await next();
+      expect(frame.type).toBe('delegation');
+      expect(raw.join('\n')).not.toContain(KEY);
+      expect(raw.join('\n')).toContain('"displayName":"run ');
+      ws.close();
+    });
+
+    it('W4-F5: an old client that knows only hello and fleet receives a plain object it can ignore, and the socket stays usable', async () => {
+      const { ws, next, bus } = await connect({}, wire());
+      const known = new Set(['hello', 'fleet']);
+      const unknown: Array<Record<string, unknown>> = [];
+      for (let m = await next(); ; m = await next()) {
+        if (!known.has(m.type)) unknown.push(m);
+        if (m.type === 'delegation') break;
+      }
+      expect(Object.keys(unknown.find((m) => m.type === 'delegation')!).sort()).toEqual(['delegation', 'type']);
+      bus.emit('notice', { message: 'still here' });
+      expect(await next()).toEqual({ type: 'notice', message: 'still here' });
+      expect(FLEET_PROTO).toBe(1);
+      ws.close();
+    });
+
+    it('W4-F6: a withdrawal reaches the socket as exactly a null delegation', async () => {
+      const { ws, next, bus, raw } = await connect();
+      for (let m = await next(); m.type !== 'pools'; m = await next()) { /* the cold start */ }
+      bus.emit('delegation', null);
+      expect(await next()).toEqual({ type: 'delegation', delegation: null });
+      expect(raw.at(-1)).toBe('{"type":"delegation","delegation":null}');
+      ws.close();
+    });
+  });
+
   // Account pools, spec §5.4.5 / §11 row 22 — the `{type:'pools'}` frame. A
   // FLEET-LEVEL fact: a project's tag is not a property of any session, and
   // riding it on `FleetSession` would make `reviveFleetSession` a second
@@ -961,7 +1234,7 @@ describe('fleet REST + WS', () => {
     ) => {
       const deps = { ...testDeps(home), ...over };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus, opts.intervalMs);
+      const watcher = mkWatcher(deps, bus, opts.intervalMs);
       app = await buildServer(deps, bus, watcher);
       if (opts.tick !== false) await watcher.tick();
       await app.listen({ host: '127.0.0.1', port: 0 });
@@ -1015,8 +1288,12 @@ describe('fleet REST + WS', () => {
       expect((await next()).type).toBe('coord');
       const frame = await next();
       expect(frame.type).toBe('pools');
+      // No `$REG/pool-epoch` planted here — the observedEpoch reader (item 1)
+      // runs independently of the tag sweep above and honestly proves this
+      // node has never synced.
       expect(frame.pools).toEqual({
         listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'unknown',
+        observedEpoch: null, accountPools: 'unknown',
       });
       ws.close();
     });
@@ -1071,7 +1348,10 @@ describe('fleet REST + WS', () => {
       expect(coordFrame.type).toBe('coord');
       const frame = await next();
       expect(frame.type).toBe('pools');
-      expect(frame.pools).toEqual({ listed: false, enforcement: 'unknown' });
+      // `flaky` only degrades `readdir` (the tag sweep's own root listing);
+      // `readObservedEpochFromRegistry` reads `$REG/pool-epoch` directly via
+      // `readFileMeasured`, unaffected, and honestly proves absence here too.
+      expect(frame.pools).toEqual({ listed: false, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' });
       ws.close();
     });
 
@@ -1085,6 +1365,236 @@ describe('fleet REST + WS', () => {
       expect(FLEET_PROTO).toBe(1);
       expect(FLEET_PROTO_MIN).toBe(1);
       ws.close();
+    });
+
+    // T9-R2, updated by item 1 (wave-1 fix round A): the epoch/observedEpoch
+    // producer. `epoch` comes off `deps.coord.poolEpoch()` (CoordStore);
+    // `observedEpoch` used to come off `deps.fleetState.observedEpoch` (Task
+    // 8's agent-ready handshake, sampled once and never refreshed) and now
+    // comes off a fresh MEASURED read of `$REG/pool-epoch`
+    // (`readObservedEpochFromRegistry`, `server/src/pools.ts`) — real bytes
+    // through the real `localIO`, planted with `plantPoolEpoch`
+    // (`ccdWsHelpers.ts`), the same grammar `ccd-pool-sync` writes.
+    // `fleetState.observedEpoch` is no longer read by this frame at all; the
+    // fixtures below stop setting it.
+    //
+    // No coord and no planted file at all is the DEFAULT `connect()` here —
+    // covered already by the "old client still shrugs" case above, which pins
+    // the frame's keys to exactly `['pools', 'type']`... except it no longer
+    // can, now that an unplanted file measures as a real `observedEpoch:
+    // null` ("this node has never synced") rather than absence. That case is
+    // pinned directly below instead.
+    describe('the epoch/observedEpoch staleness fields', () => {
+      it('carries the coordinator\'s epoch once a coord store is wired, even the seeded 0 — and observedEpoch:null when nothing has ever synced', async () => {
+        const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+        expect(coord.poolEpoch().epoch).toBe(0);   // the migration-seeded default — a real, falsy value
+        const { ws, next } = await connect({ coord });
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('runs');   // a wired coord adds this frame to the cold start
+        expect((await next()).type).toBe('coord');
+        const frame = await next();
+        expect(frame.type).toBe('pools');
+        // No `$REG/pool-epoch` was planted in this test's home, so the new
+        // reader proves a real ENOENT and answers `null` ("never synced") —
+        // not absence, and not the `epoch: 0` next to it collapsing with it.
+        expect(frame.pools).toEqual({
+          listed: true, byProject: {}, enforcement: 'unknown', epoch: 0, observedEpoch: null, accountPools: 'unknown',
+        });
+        ws.close();
+      });
+
+      it('carries observedEpoch measured off a real $REG/pool-epoch document, distinguishing a number from never-synced null', async () => {
+        plantPoolEpoch(home, {}, { epoch: 12 });
+        const { ws, next } = await connect();
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('coord');
+        const frame = await next();
+        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: 12, accountPools: 'unknown' });
+        ws.close();
+      });
+
+      it('THE REGRESSION ITEM 1 FIXES: a SECOND tick reports a CHANGED $REG/pool-epoch — the value refreshes instead of freezing at its first read forever', async () => {
+        // Before item 1, `observedEpoch` rode `deps.fleetState.observedEpoch`,
+        // sampled once at WS handshake and never re-read for the connection's
+        // whole life — `ccd-pool-sync` rewriting the real file underneath it
+        // every 60s changed nothing on the wire. This drives the watcher's
+        // OWN tick twice, rewriting the file between them, against the real
+        // reader and real bytes (no `fleetState` override at all — nothing to
+        // freeze), and requires the SECOND frame to disagree with the first.
+        plantPoolEpoch(home, {}, { epoch: 1 });
+        const { ws, next, watcher } = await connect();
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('coord');
+        const first = await next();
+        expect(first.pools).toMatchObject({ observedEpoch: 1 });
+
+        plantPoolEpoch(home, {}, { epoch: 2 });
+        await watcher.tick();
+        // Nothing about the coordinator-pause/mail-disabled markers moved, so
+        // `emitCoord`'s own byte-equality guard stays quiet (same pattern as
+        // the "re-emits only on CHANGE" case above) — `pools` is the very
+        // next frame, carrying the refreshed value.
+        const second = await next();
+        expect(second.type).toBe('pools');
+        expect(second.pools).toMatchObject({ observedEpoch: 2 });
+        ws.close();
+      });
+
+      it('carries observedEpoch:null (never synced) when $REG/pool-epoch is absent, rather than dropping it or fabricating a number', async () => {
+        // No `plantPoolEpoch` call: the home fixture's `.cc-sessions/pool-epoch`
+        // genuinely does not exist, the same real ENOENT `_acct_pool_state`
+        // itself would measure on a cold node.
+        const { ws, next } = await connect();
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('coord');
+        const frame = await next();
+        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' });
+        expect(Object.hasOwn(frame.pools, 'observedEpoch')).toBe(true);
+        ws.close();
+      });
+
+      it('omits observedEpoch entirely when the registry root itself is unreadable — no evidence, not a fabricated null', async () => {
+        // Unlike a proven-absent FILE (the case above, `null`), a file this
+        // box cannot READ is a MEASUREMENT failure — this box does not know
+        // whether the fleet host has synced, which must not collapse into
+        // "it never has" (no overloaded null at a seam).
+        const { ws, next } = await connect({ io: degradedReadIO((p) => p.endsWith('pool-epoch')) });
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('coord');
+        const frame = await next();
+        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', accountPools: 'unknown' });
+        expect(Object.hasOwn(frame.pools, 'observedEpoch')).toBe(false);
+        ws.close();
+      });
+
+      it('GET /api/fleet carries the same epoch/observedEpoch the WS pools frame does', async () => {
+        plantPoolEpoch(home, {}, { epoch: 0 });
+        const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+        const deps = { ...testDeps(home), coord };
+        const bus = new Bus();
+        app = await buildServer(deps, bus, mkWatcher(deps, bus));
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        expect(res.statusCode).toBe(200);
+        const body = res.json() as { pools: { epoch?: number; observedEpoch?: number | null } };
+        expect(body.pools.epoch).toBe(0);
+        expect(body.pools.observedEpoch).toBe(0);   // 0 is a real observed epoch, not absence
+      });
+
+      // F1 (pre-merge gate): `?.` on `deps.coord?.poolEpoch().epoch` only
+      // guards `coord` being ABSENT, not `poolEpoch()` THROWING — a broken or
+      // locked coord.db must degrade this READ the same way
+      // `readAccountPoolEdges()` degrades (epoch off the wire), never 500 the
+      // whole `/api/fleet` response over one stale-freshness field nobody
+      // asked to place anything against.
+      it('a broken coord.db leaves epoch off GET /api/fleet\'s pools wire instead of 500ing the whole response', async () => {
+        const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+        coord.db.close();
+        const deps = { ...testDeps(home), coord };
+        const bus = new Bus();
+        app = await buildServer(deps, bus, mkWatcher(deps, bus));
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        expect(res.statusCode).toBe(200);
+        const body = res.json() as { pools: { epoch?: number } };
+        expect(Object.hasOwn(body.pools, 'epoch')).toBe(false);
+      });
+    });
+
+    // F2 (pre-merge gate): `accountPools` was declared on `ProjectPoolsWire`
+    // (spec §5.9) with no producer anywhere in `server/src` — Task 10's gate
+    // found the wire field, but nothing read the `account-pools` capability
+    // token Task 2 added to `cmd_caps` to fill it. `accountPoolsEnforcement`
+    // (pools.ts) is that producer, wired into both `poolsWire` call sites the
+    // same way `poolsEnforcement`/`enforcement` already are.
+    describe('the accountPools field', () => {
+      it('reads enforced/unavailable off the account-pools capability token, on both GET /api/fleet and the WS pools frame', async () => {
+        const enforcedDeps = {
+          ...testDeps(home),
+          fleetState: { connected: true, downSince: null, ccdVerbs: [ACCOUNT_POOLS_CAP, POOL_SYNC_INSTALLED_CAP], rosterFp: null, build: null },
+        };
+        const bus = new Bus();
+        const watcher = mkWatcher(enforcedDeps, bus);
+        app = await buildServer(enforcedDeps, bus, watcher);
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        expect(res.statusCode).toBe(200);
+        const body = res.json() as { pools: { accountPools?: string } };
+        expect(body.pools.accountPools).toBe('enforced');
+
+        await watcher.tick();
+        expect(watcher.currentPools()?.accountPools).toBe('enforced');
+        await app.close();
+        app = undefined;
+
+        const unavailableDeps = {
+          ...testDeps(home),
+          fleetState: { connected: true, downSince: null, ccdVerbs: ['swap'], rosterFp: null, build: null },
+        };
+        app = await buildServer(unavailableDeps);
+        const res2 = await app.inject({ method: 'GET', url: '/api/fleet' });
+        const body2 = res2.json() as { pools: { accountPools?: string } };
+        expect(body2.pools.accountPools).toBe('unavailable');
+      });
+
+      // D-8015: the case a box without the pool-sync timer is, on both of the field's call sites.
+      it('reads unavailable when the ccd has the token and the box has no pool-sync timer, on both GET /api/fleet and the WS pools frame', async () => {
+        const deps = {
+          ...testDeps(home),
+          fleetState: { connected: true, downSince: null, ccdVerbs: [ACCOUNT_POOLS_CAP, POOL_SYNC_ABSENT_CAP], rosterFp: null, build: null },
+        };
+        const bus = new Bus();
+        const watcher = mkWatcher(deps, bus);
+        app = await buildServer(deps, bus, watcher);
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        const body = res.json() as { pools: { accountPools?: string; accountPoolsReason?: string } };
+        expect(body.pools.accountPools).toBe('unavailable');
+        // D-8283: the single-box install shape names the missing timer, not an older ccd, on both call sites.
+        expect(body.pools.accountPoolsReason).toBe('no-pool-sync');
+
+        await watcher.tick();
+        expect(watcher.currentPools()?.accountPools).toBe('unavailable');
+        expect(watcher.currentPools()?.accountPoolsReason).toBe('no-pool-sync');
+      });
+
+      // D-8283: the fleet install shape carries no reason, and a ccd with no account side names its age.
+      it('carries no reason when enforced, and ccd-predates for a ccd with no account-pools token, on both call sites', async () => {
+        const fleetDeps = {
+          ...testDeps(home),
+          fleetState: { connected: true, downSince: null, ccdVerbs: [ACCOUNT_POOLS_CAP, POOL_SYNC_INSTALLED_CAP], rosterFp: null, build: null },
+        };
+        const bus = new Bus();
+        const watcher = mkWatcher(fleetDeps, bus);
+        app = await buildServer(fleetDeps, bus, watcher);
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        const body = res.json() as { pools: Record<string, unknown> };
+        expect(Object.hasOwn(body.pools, 'accountPoolsReason')).toBe(false);
+        await watcher.tick();
+        expect(Object.hasOwn(watcher.currentPools() ?? {}, 'accountPoolsReason')).toBe(false);
+        await app.close();
+        app = undefined;
+
+        const oldDeps = {
+          ...testDeps(home),
+          fleetState: { connected: true, downSince: null, ccdVerbs: ['swap'], rosterFp: null, build: null },
+        };
+        const bus2 = new Bus();
+        const watcher2 = mkWatcher(oldDeps, bus2);
+        app = await buildServer(oldDeps, bus2, watcher2);
+        const res2 = await app.inject({ method: 'GET', url: '/api/fleet' });
+        expect((res2.json() as { pools: { accountPoolsReason?: string } }).pools.accountPoolsReason).toBe('ccd-predates');
+        await watcher2.tick();
+        expect(watcher2.currentPools()?.accountPoolsReason).toBe('ccd-predates');
+      });
+
+      it('is absent-reads-unknown when there is no ccdVerbs evidence at all', async () => {
+        app = await buildServer(testDeps(home));
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        const body = res.json() as { pools: { accountPools?: string } };
+        expect(body.pools.accountPools).toBe('unknown');
+      });
     });
   });
 
@@ -1182,7 +1692,7 @@ describe('fleet REST + WS', () => {
       // arrival is ordered by this test instead of by a lane's own clock.
       const deps = testDeps(home);
       const bus = new Bus();
-      app = await buildServer(deps, bus, new FleetWatcher(deps, bus));
+      app = await buildServer(deps, bus, mkWatcher(deps, bus));
 
       await app.listen({ host: '127.0.0.1', port: 0 });
       const addr = app.server.address();
@@ -1217,7 +1727,7 @@ describe('fleet REST + WS', () => {
       // clean census and a server that has not looked.
       const deps = testDeps(home);
       const bus = new Bus();
-      app = await buildServer(deps, bus, new FleetWatcher(deps, bus));
+      app = await buildServer(deps, bus, mkWatcher(deps, bus));
 
       await app.listen({ host: '127.0.0.1', port: 0 });
       const addr = app.server.address();
@@ -1236,7 +1746,7 @@ describe('fleet REST + WS', () => {
   });
 
   describe('the ask chip on the two cold paths', () => {
-    const CHILD = 'claude-a-MekWarLive';
+    const CHILD = 'claude-a-project-f';
     const CHIP = { state: 'held', parentId: 'coord-1', answeredBy: null };
 
     const heldAsk = (): CoordStore => {
@@ -1275,6 +1785,48 @@ describe('fleet REST + WS', () => {
       const row = snapshot.sessions.find((session: { id: string }) => session.id === CHILD);
       expect(row, 'the seeded session must reach the cold-start snapshot').toBeDefined();
       expect(row.ask).toEqual(CHIP);
+      ws.close();
+    });
+  });
+
+  // Landing order wave 4b: the cold frame (assembled from the lane's map at connect) and the tick's broadcast (the same map,
+  // handed to the same assembly) are two builders of one field, and a client must not see it change between them.
+  describe('the radar landing on the cold frame and the broadcast', () => {
+    const CHILD = 'claude-a-project-f';
+
+    it('the cold snapshot and the tick\'s fleet broadcast carry the same landing', async () => {
+      const reg = path.join(home, '.cc-sessions');
+      writeFileSync(path.join(reg, `${CHILD}.branch`), 'ws/alpha');
+      mkdirSync(path.join(reg, 'landing', CHILD), { recursive: true });
+      const sha = (n: number): string => n.toString(16).padStart(40, '0');
+      writeFileSync(path.join(reg, 'landing', CHILD, 'probe'), JSON.stringify({
+        v: 1, project: CHILD, at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'), state: 'measured',
+        base: { ref: 'main', sha: sha(9) },
+        heads: [{ pr: 12, head: sha(12), branch: 'ws/alpha', id: CHILD, base: { state: 'clean' } }],
+        headsCut: false, pairs: [], pairHeads: [12], pairsCut: false,
+      }));
+      const deps = testDeps(home);
+      const bus = new Bus();
+      const watcher = mkWatcher(deps, bus);
+      app = await buildServer(deps, bus, watcher);
+      await watcher.sweepRadar(await readRegistry(deps.io, deps.cfg));   // the lane has run; nothing has broadcast yet
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws, { dropDivergence: true });
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+      expect((await next()).type).toBe('hello');
+      const cold = await next();
+      expect(cold.type).toBe('fleet');
+      const coldLanding = cold.sessions.find((s: { id: string }) => s.id === CHILD)?.landing;
+      expect(coldLanding, 'the cold snapshot carried no landing').toMatchObject({ pr: 12, head: sha(12), paired: true });
+
+      await watcher.tick();   // the first broadcast
+      let pushed = await next();
+      while (pushed.type !== 'fleet') pushed = await next();
+      expect(pushed.sessions.find((s: { id: string }) => s.id === CHILD)?.landing).toEqual(coldLanding);
       ws.close();
     });
   });

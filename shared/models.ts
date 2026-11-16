@@ -22,7 +22,8 @@
 // hand-written `.d.mts`. This file now carries only what genuinely needs to
 // exist twice — `CLASSES` and `PROBE_KINDS`, whose `as const` literal is what
 // derives `ModelClass`/`ProbeKind` as TYPES, a job `shared/models.mjs` cannot
-// do for it — and the plain TypeScript interfaces (`Registry`, `Catalogue`,
+// do for it (since D-8620 also two unexported literals that only derive
+// `CatalogueVerbosity` and `TruncationMode`) — and the plain TypeScript interfaces (`Registry`, `Catalogue`,
 // `CatalogueModel`, `DerivedModels`), which are erased at compile time and so
 // were never really "duplicated" even before this fix. Every function,
 // `RegistryInvalid`, `CatalogueInvalid`, `MODEL_ID_RE` and the sentinel prefix
@@ -111,10 +112,30 @@ export interface Registry {
   baseUrl?: string;
 }
 
+/** A Codex model's default `text.verbosity` (D-8620), derived as a TYPE from an `as const` literal the way
+ *  `ModelClass` is from `CLASSES`, so it is no hand-spelled literal union (wire totality, D-6048). The literal is NOT
+ *  exported: the runtime list every reader validates with is `CATALOGUE_VERBOSITIES` (`shared/models.mjs`, re-exported
+ *  below), and `server/test/models.test.ts` pins that list to this type through a `Record<CatalogueVerbosity, true>`. */
+const CATALOGUE_VERBOSITY_LITERAL = ['low', 'medium', 'high'] as const;
+export type CatalogueVerbosity = (typeof CATALOGUE_VERBOSITY_LITERAL)[number];
+/** The unit of a Codex truncation policy's `limit` (D-8620), derived the same way; `CATALOGUE_TRUNCATION_MODES`
+ *  (`shared/models.mjs`) is its runtime list, pinned to this type by the same test. */
+const TRUNCATION_MODE_LITERAL = ['tokens', 'bytes'] as const;
+export type TruncationMode = (typeof TRUNCATION_MODE_LITERAL)[number];
+/** Codex's cap on one tool output (D-8620): `limit` is an integer in `1..CATALOGUE_TRUNCATION_LIMIT_MAX`. */
+export interface TruncationPolicy {
+  mode: TruncationMode;
+  limit: number;
+}
+
 /** One model as a probe recorded it. Everything but `id` is best effort: an
  *  OpenRouter row has prices and no efforts, a Codex row has efforts and no
  *  prices, and a `compatible` `/v1/models` row has neither. `null` is
- *  "unknown", never "zero". */
+ *  "unknown", never "zero".
+ *
+ *  The five optional keys after `priceOut` are the Codex catalogue's request-shape fields (D-8620), kept on a Codex
+ *  row only. Each is ABSENT when the reply did not carry a valid value, never null and never a default, so a row
+ *  without them reads exactly as before and a genuine `false` stays a fact. */
 export interface CatalogueModel {
   id: string;
   label: string;
@@ -124,6 +145,18 @@ export interface CatalogueModel {
   hidden: boolean;
   priceIn: number | null;
   priceOut: number | null;
+  /** `use_responses_lite`: native Codex sends `reasoning.context: "all_turns"`, `parallel_tool_calls: false` and
+   *  the Lite header when it is true. */
+  useResponsesLite?: boolean;
+  /** `support_verbosity`: whether Codex sends `text.verbosity` for this model at all. */
+  supportVerbosity?: boolean;
+  /** `default_verbosity`: the `text.verbosity` Codex sends when the user configured none. */
+  defaultVerbosity?: CatalogueVerbosity;
+  /** `default_reasoning_level`: the effort Codex sends when the user configured none. A non-empty string, valid
+   *  whether or not `efforts` lists it. */
+  defaultReasoningLevel?: string;
+  /** `truncation_policy`: Codex's cap on tool output. */
+  truncationPolicy?: TruncationPolicy;
 }
 
 /** `~/.ccrc/models/<accountId>.json`. An ABSENT file is "never probed" and is
@@ -153,6 +186,37 @@ export interface DerivedModels {
   available: ModelClass[];
 }
 
+/** A lane's MEASURED context windows (codex-bridge spec §2.7): model id →
+ *  tokens, as `parseWindows` reads them from the lane's sibling windows file.
+ *  Frozen and null-prototype at runtime. Never a field of `Registry`: see
+ *  `shared/models.mjs`'s `parseWindows` for why. */
+export type ModelWindows = Readonly<Record<string, number>>;
+
+/** D-8406: one class on one lane, as the lane's own files say it: the model its registry slot names (`null`: the class
+ *  is unavailable on this lane by nature) and the catalogue's label for that model (`null`: no catalogue, or no row
+ *  for it). `laneClassModels` derives it. */
+export interface LaneClassModel {
+  readonly model: string | null;
+  readonly label: string | null;
+}
+export type LaneClassModels = Readonly<Record<ModelClass, LaneClassModel>>;
+
+/** D-8406: `GET /api/models/:lane`'s reading of a lane's model files. The non-readings stay two: `absent` is a lane
+ *  with no class registry (an Anthropic lane, or one `ccrc models <id> init` never ran on), `unreadable` one whose
+ *  registry exists and could not be read or parsed, or a fleet that would not answer. A reader shows class names
+ *  for both, and never a model name this tree spells. */
+export type LaneModelsRead =
+  | { readonly kind: 'read'; readonly classes: LaneClassModels }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable' };
+
+/** D-8406: `GET /api/models/:lane`'s 200. */
+export interface LaneModelsAnswer {
+  readonly ok: true;
+  readonly lane: string;
+  readonly models: LaneModelsRead;
+}
+
 // ── EVERYTHING BELOW IS THE SINGLE IMPLEMENTATION IN `shared/models.mjs` ──
 // `MODEL_ID_RE`, the two error classes, and every function are defined
 // exactly once, over there — see that file for their behaviour, their
@@ -176,4 +240,26 @@ export {
   FAMILY_TOKENS,
   UNAVAILABLE_PREFIX,
   SUBAGENT_CLASSES,
+  parseWindows,
+  WINDOW_MIN,
+  WINDOW_MAX,
+  CATALOGUE_VERBOSITIES,
+  CATALOGUE_TRUNCATION_MODES,
+  CATALOGUE_TRUNCATION_LIMIT_MAX,
+  MODELS_LANE_ID_RE,
+  MODELS_RESERVED_IDS,
+  MODELS_DIR_NAME,
+  registryFileName,
+  catalogueFileName,
+  isLaneModelsReadName,
+  laneClassModels,
+  MODELS_PUSH_MAX,
+  modelsPushOf,
+  modelsPushDecision,
+  // The policy's own types, declared in `shared/models.d.mts` and erased at runtime. They sit in this one block, not in
+  // a second type-only re-export statement: a test pins that this file names `./models.mjs` exactly once.
+  type ModelsPushDecision,
+  type ModelsPushKind,
+  type ModelsPushRefusal,
+  type ModelsPushRoster,
 } from './models.mjs';

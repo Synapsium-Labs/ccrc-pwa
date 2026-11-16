@@ -13,8 +13,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, DEAD_PANE, ccdSource } from './ccdWsHelpers.js';
 import { asManagerCalls, itLinux, itDarwin } from './platformFixtures.js';
+import { refuseCalls, refuseWords } from './census-w5/ccdHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-swap-refuse-'); });
@@ -25,11 +26,14 @@ const UUID_B = '22222222-2222-4222-8222-222222222222';
 
 /** Everything cmd_swap reaches that must not leave the fixture: systemd, tmux,
  *  the flush sleep, and the ensure fallback. Each one LOGS, because half of
- *  these tests are assertions about which of them ran and which did not. */
+ *  these tests are assertions about which of them ran and which did not.
+ *  `has-session` answers GONE: D-5240's manual gate reads `_ws_status` before
+ *  anything else, and an alive pane with no pid is unreadable there; a gone
+ *  pane reads idle, so these cases reach the carry they are about. */
 const SWAP_STUBS = `
   systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
   launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} case "\${1:-}" in has-session) echo "can't find session: x" >&2; return 1 ;; esac; return 0; };
   sleep() { :; };
   cmd_ensure() { echo "cmd_ensure $*" >> "$HOME/ccd-calls"; return 0; };
 `;
@@ -42,7 +46,7 @@ const SWAP_STUBS = `
 const REAL_ENSURE_STUBS = `
   systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
   launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "\${1:-}" in has-session) return 1;; esac; return 0; };
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${DEAD_PANE} case "\${1:-}" in has-session) return 1;; esac; return 0; };
   sleep() { :; };
   _spawn() { echo "_spawn $*" >> "$HOME/ccd-calls"; return 0; };
   _spawn_start() { echo "_spawn_start $*" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };
@@ -53,17 +57,26 @@ const REAL_ENSURE_STUBS = `
  *  gate alone: a hard-blocked pane (matched by the REAL `_pane_hard_blocked`),
  *  a target, headroom, and a dispatch that LOGS instead of running systemd-run. */
 const AUTO_TICK_STUBS = `
-  tmux() { case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
+  tmux() { ${WIDE_PANE} case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
   _swap_target() { echo claude-a; }; _avail() { return 0; };
   _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
 `;
+
+/** D-5240's manual gate, answered idle at its own seam. The fixtures below
+ *  model a dead pane whose `has-session` fails WITHOUT tmux's words, which
+ *  `_ws_status` reads as unreadable (status-unknown) — and they also drive
+ *  `cmd_ensure`, whose verdict those exact words decide, so the probe stays
+ *  as it is and the gate is stubbed instead. The gate's own cases live in
+ *  `ccd-swap-guards.test.ts`. */
+const GATE_IDLE = '_ws_status() { echo idle; };';
 
 /** The tmux a refusal fixture needs: the pane is DEAD — `cmd_swap` killed it
  *  before the carry — and a `kill-session` rotates the registry uuid exactly as
  *  `_sync_uuid` does after a /clear, which is what makes the post-flush look
  *  find nothing. */
 const deadRotate = (id: string): string =>
-  `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"
+  `${GATE_IDLE} tmux() { echo "tmux $*" >> "$HOME/ccd-calls"
+     ${DEAD_PANE}
      case "\${1:-}" in
        kill-session) _reg_set ${id} uuid ${UUID_B} ;;
        has-session)  return 1 ;;
@@ -179,7 +192,7 @@ describe('a swap that cannot carry the conversation', () => {
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
     plantNotify();
-    const rotate = `tmux() { [[ "\${1:-}" == kill-session ]] && _reg_set ${id} uuid ${UUID_B};
+    const rotate = `${GATE_IDLE} tmux() { ${WIDE_PANE} [[ "\${1:-}" == kill-session ]] && _reg_set ${id} uuid ${UUID_B};
       echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };`;
     const r = shFail(`${SWAP_STUBS} ${rotate} cmd_swap ${id} claude-a`);
     expect(r.code).not.toBe(0);
@@ -459,7 +472,7 @@ describe('the refusal vocabulary', () => {
     // codebase is one of those four shapes, and reaching for it here would
     // fail wsaudit.test.ts for a reason its author would not expect — so the
     // choice is PINNED here rather than remembered.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('_swap_refuse() {');
     const to = src.indexOf('cmd_swap_self() {');
     expect(from, '_swap_refuse was not found in ccd').toBeGreaterThan(-1);
@@ -467,14 +480,18 @@ describe('the refusal vocabulary', () => {
     const slice = src.slice(from, to);
     expect(slice.length, 'the refusal slice collapsed — this test would pass vacuously')
       .toBeGreaterThan(500);
-    for (const shape of [/_reap_refuse\s/, /"refused":"/, /"verdict":"/, /'!/]) {
+    // D-7072: the one refusal helper's family is its region's, so the old name's shape is a census query over the
+    // slice's offsets, comment-line calls included (as the shape matched raw text).
+    expect(refuseCalls(src).filter((c) => c.regionFamily === 'reap' && c.offset >= from && c.offset < to)
+      .map((c) => c.text.trim()), 'no reap-family call in the swap slice').toEqual([]);
+    for (const shape of [/"refused":"/, /"verdict":"/, /'!/]) {
       expect(slice, `the swap refusal is written in a harvested shape: ${shape}`)
         .not.toMatch(shape);
     }
 
     // And nothing anywhere in ccd emits a swap-flavoured token into that map.
     const tokens = new Set<string>();
-    for (const m of src.matchAll(/_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) tokens.add(m[1]!);
+    for (const w of refuseWords('reap')) tokens.add(w);
     for (const m of src.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);
     for (const m of src.matchAll(/'!([a-zA-Z0-9-]+)/g)) tokens.add(m[1]!);
     for (const m of src.matchAll(/"verdict":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);

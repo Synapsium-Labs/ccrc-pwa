@@ -1,0 +1,59 @@
+{
+  "name": "read-initiatives-probe",
+  "documentSource": "code",
+  "document": "query InitiativesProbe { initiatives(first: 1) { nodes { id } } }",
+  "variables": {},
+  "requestBody": "{\"query\":\"query InitiativesProbe { initiatives(first: 1) { nodes { id } } }\",\"variables\":{}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "1"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999846"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794589999369"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2477"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794589999369"
+    ]
+  ],
+  "body": {
+    "data": {
+      "initiatives": {
+        "nodes": []
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"initiatives\":{\"nodes\":[]}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407). A workspace with initiatives on and none made yet: an empty list. A workspace with initiatives off was not measured."
+}

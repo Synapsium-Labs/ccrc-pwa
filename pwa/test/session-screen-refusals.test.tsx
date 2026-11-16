@@ -1,0 +1,558 @@
+// THE THREE REFUSALS THE SESSION SCREEN CAN SPEAK, and none of them had a
+// test — measured: `SessionScreen.tsx` was the largest remaining coverage gap
+// in the package (27 uncovered statements at 83.63%), and every one of them is
+// an error arm. A refusal nobody has asked is a sentence nobody has read.
+//
+// The harness is `session-pickers.test.tsx`'s own, down to the Virtuoso
+// stand-in jsdom needs and the `vi.hoisted` spies its factory closes over.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import type { FleetSession } from '../../shared/api';
+import { fleetSession as baseSession, DEAD_LIFECYCLE } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
+import { SessionScreen } from '../src/screens/SessionScreen';
+// W2 Task S2d: the session menu's items and the model/effort chips are command doors, run by the one layer
+// `app.tsx` mounts above the screen; a case that drives them mounts it beside, as the app does.
+import { CommandLayer } from '../src/command/CommandLayer';
+import { ToastHost } from '@ccrc/ui';
+import { createSessionStore } from '../src/stores/session';
+import * as apiModule from '../src/lib/api';
+import { ApiError } from '../src/lib/api';
+import { createFleetStore } from '../src/stores/fleet';
+import { TEST_ROSTER } from './rosterFixture';
+
+vi.mock('react-virtuoso', async () => {
+  const React = await import('react');
+  return {
+    Virtuoso: (props: { totalCount: number; itemContent: (i: number) => ReactNode }) =>
+      React.createElement('div', { 'data-testid': 'virtuoso' },
+        Array.from({ length: props.totalCount }, (_, i) =>
+          React.createElement('div', { key: i }, props.itemContent(i)))),
+  };
+});
+
+const { ensure, route, restore, prompt } = vi.hoisted(() => ({
+  ensure: vi.fn().mockResolvedValue(undefined),
+  route: vi.fn().mockResolvedValue(undefined),
+  restore: vi.fn().mockResolvedValue(undefined),
+  prompt: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../src/lib/api', async () => {
+  const actual = await vi.importActual<typeof import('../src/lib/api')>('../src/lib/api');
+  return { ...actual, api: { ...actual.api, ensure, route, restore, prompt } };
+});
+
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+  for (const spy of [ensure, route, restore, prompt]) { spy.mockClear(); spy.mockResolvedValue(undefined); }
+});
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+const ID = 'claude:project-a';
+const fakeSocket = (): WebSocket =>
+  ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket;
+
+const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => (baseSession({ id: ID, project: 'project-a', workdir: '/w/project-a', model: 'Sonnet 5', effort: 'medium', ...patch }));
+
+/** The last render's stores, so a case can drive the session's own status —
+ *  the Stop control is gated on `busy`, which is the session stream's fact,
+ *  not the fleet frame's. */
+const stores: { store: ReturnType<typeof createSessionStore> } = { store: null as never };
+
+const renderScreen = (patch: Partial<FleetSession> = {}, status: 'idle' | 'dead' = 'idle') => {
+  const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt } });
+  stores.store = store;
+  const fleet = createFleetStore();
+  act(() => { fleet.setState({ roster: TEST_ROSTER, conn: 'open', sessions: [fleetSession(patch)] }); });
+  render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={ID} store={store} fleet={fleet} /><ToastHost /></>);
+  act(() => { store.setState({ uuid: 'u1', status }); });
+  return { store, fleet };
+};
+
+describe('Restart session — the one control a dead row offers', () => {
+  it('says why it could not restart, as an alert, and re-arms the button', async () => {
+    // `finally { setRestarting(false) }` is the half that matters: a refusal
+    // that left the button saying "Restarting…" for ever would make a
+    // recoverable failure look terminal.
+    ensure.mockRejectedValue(new Error('tmux: no server running'));
+    renderScreen({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }, 'dead');
+    const btn = await screen.findByRole('button', { name: 'Restart session' });
+    fireEvent.click(btn);
+    const t = await screen.findByText("Couldn't restart — tmux: no server running");
+    expect(t.closest('[role="alert"]'), 'a refusal is an alert, not a status').not.toBeNull();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Restart session' })).not.toBeDisabled());
+  });
+
+  it('stringifies a thrown non-Error rather than printing [object Object]', async () => {
+    // The `String(err)` arm. ccd's own failures arrive as Errors; a rejected
+    // fetch in a stale browser does not.
+    ensure.mockRejectedValue('offline');
+    renderScreen({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }, 'dead');
+    fireEvent.click(await screen.findByRole('button', { name: 'Restart session' }));
+    expect(await screen.findByText("Couldn't restart — offline")).toBeInTheDocument();
+  });
+
+  it('refuses a second tap while the first is still in flight', async () => {
+    // `if (restarting) return;` — two `/ensure` posts for one row is a race
+    // between two spawns, and the second would report a failure that is not
+    // one.
+    let release!: () => void;
+    ensure.mockReturnValue(new Promise<void>((res) => { release = () => res(); }));
+    renderScreen({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }, 'dead');
+    const btn = await screen.findByRole('button', { name: 'Restart session' });
+    fireEvent.click(btn);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Restarting…' })).toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Restarting…' }));
+    expect(ensure).toHaveBeenCalledTimes(1);
+    release();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Restart session' })).not.toBeDisabled());
+  });
+});
+
+describe('a routing write that fails', () => {
+  it("says it could not apply, and drops the queued badge it had just armed", async () => {
+    // BOTH halves, and the second is the one a reader would notice: the badge
+    // promises "the pane has not confirmed it yet", which is a lie once the
+    // write itself has been refused. `useQueuedRoute`'s `clear()` in the catch
+    // is what retires it.
+    route.mockRejectedValue(new Error('ccd: route refused'));
+    renderScreen();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('button', { name: /Change effort/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /High/ }));
+    expect(await screen.findByText(/Couldn't apply that/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('queued')).toBeNull());
+  });
+});
+
+describe('Restore, on a session already put away', () => {
+  it('says why it could not restore', async () => {
+    // A main checkout's Restore reaches `/ensure` (`restoreReachesEnsure`),
+    // which is the same request Restart makes — so this arm is about the
+    // SENTENCE, which is its own ("restore", not "restart").
+    ensure.mockRejectedValue(new Error('registry row is gone'));
+    renderScreen({ archivedAt: 1785300000, bucket: 'archived' });
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Restore/ }));
+    expect(await screen.findByText(/Couldn't restore — registry row is gone/)).toBeInTheDocument();
+  });
+});
+
+describe('Stop — two sentences, because 409 is not a failure', () => {
+  // The header's keycap, by its place: since W2 Task S7b the composer's send slot is a Stop too, and both reach the
+  // same `interrupt` (D-5471).
+  const headerStop = async (): Promise<HTMLElement> =>
+    within(await waitFor(() => {
+      const head = document.querySelector<HTMLElement>('.chat-head');
+      if (head === null) throw new Error('no session header yet');
+      return head;
+    })).findByRole('button', { name: 'Esc (Stop)' });
+  it('a 409 says there was nothing to stop, and says it QUIETLY', async () => {
+    // `/interrupt` answers 409 when the pane is idle, which is not an error:
+    // the reader asked for a stop and got one, in the sense that nothing is
+    // running. A red toast there would teach them to distrust the button.
+    const interrupt = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'not-busy' }));
+    vi.spyOn(apiModule.api, 'interrupt').mockImplementation(interrupt);
+    renderScreen();
+    act(() => { stores.store.setState({ status: 'busy' }); });
+    fireEvent.click(await headerStop());
+    const said = await screen.findByText(/nothing to stop/);
+    expect(said.closest('[role="status"]'), 'an idle pane is a status, not an alert').not.toBeNull();
+  });
+
+  // ARCH-13b: the stop toast reads a table now; every 409 body must still say this one sentence, byte for byte.
+  it.each([
+    [{ ok: false, error: 'not-busy' }], [{ ok: false, error: 'not-alive' }],
+    [{ ok: false, error: 'background-only' }], [{ ok: false, error: 'a-code-nobody-knows' }],
+  ])('a 409 %j toasts exactly the one nothing-to-stop sentence', async (body) => {
+    vi.spyOn(apiModule.api, 'interrupt').mockRejectedValue(new ApiError(409, body));
+    renderScreen();
+    act(() => { stores.store.setState({ status: 'busy' }); });
+    fireEvent.click(await headerStop());
+    expect(await screen.findByText("Claude isn't working right now — nothing to stop")).toBeTruthy();
+  });
+
+  // D-5236: an idle main loop over background work is refused with zero keys,
+  // and the toast says why — Escape there would stop none of it.
+  it('a 409 background-only names the count and kinds still running, quietly', async () => {
+    vi.spyOn(apiModule.api, 'interrupt').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'background-only', count: 2, kinds: ['workflow'] }));
+    renderScreen();
+    act(() => { stores.store.setState({ status: 'busy' }); });
+    fireEvent.click(await headerStop());
+    const said = await screen.findByText(
+      'The main turn has finished; 2 background tasks (workflow) are still running. Escape would not stop them.');
+    expect(said.closest('[role="status"]')).not.toBeNull();
+  });
+
+  it('a 409 background-only with one task agrees in number', async () => {
+    vi.spyOn(apiModule.api, 'interrupt').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'background-only', count: 1, kinds: [] }));
+    renderScreen();
+    act(() => { stores.store.setState({ status: 'busy' }); });
+    fireEvent.click(await headerStop());
+    await screen.findByText(
+      'The main turn has finished; 1 background task is still running. Escape would not stop it.');
+  });
+
+  it('a 409 background-only with no count says a background shell or monitor runs', async () => {
+    vi.spyOn(apiModule.api, 'interrupt').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'background-only', count: null, kinds: [] }));
+    renderScreen();
+    act(() => { stores.store.setState({ status: 'busy' }); });
+    fireEvent.click(await headerStop());
+    const said = await screen.findByText(
+      'The main turn has finished; a background shell or monitor is still running. Escape would not stop it.');
+    expect(said.closest('[role="status"]')).not.toBeNull();
+  });
+
+  it('anything else IS a failure, and names what ccd said', async () => {
+    vi.spyOn(apiModule.api, 'interrupt')
+      .mockRejectedValue(new Error('tmux: no server running'));
+    renderScreen();
+    act(() => { stores.store.setState({ status: 'busy' }); });
+    fireEvent.click(await headerStop());
+    const said = await screen.findByText("Couldn't stop — tmux: no server running");
+    expect(said.closest('[role="alert"]')).not.toBeNull();
+  });
+});
+
+describe('the screen\'s own wiring — each prop is the store\'s act, not a copy of it', () => {
+  it('Back leaves for the fleet, which is the only way out of a session on a phone', () => {
+    renderScreen();
+    fireEvent.click(screen.getByRole('button', { name: /back/i }));
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('Retry on a failed send calls the STORE\'s retry, with that send\'s own key', async () => {
+    // `useStore.getState().retry(key)` — the screen holds no retry of its
+    // own, because a second implementation would have to re-derive which call
+    // to repeat (`PendingSend` remembers it, deliberately).
+    renderScreen();
+    const retry = vi.spyOn(stores.store.getState(), 'retry');
+    act(() => {
+      stores.store.setState({
+        pending: [{ key: 'p1', text: 'hello', state: 'failed', error: 'tmux: no server running' }],
+      });
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(retry).toHaveBeenCalledWith('p1');
+  });
+
+  it('Discard calls the store\'s discard, with the same key', async () => {
+    renderScreen();
+    const discard = vi.spyOn(stores.store.getState(), 'discard');
+    act(() => {
+      stores.store.setState({
+        pending: [{ key: 'p2', text: 'hello', state: 'failed', error: 'refused' }],
+      });
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+    expect(discard).toHaveBeenCalledWith('p2');
+  });
+
+  it('publishes the composer height on :root, where the toast host can read it', () => {
+    // NOT on `.chat`: `ToastHost` is not inside this subtree and custom
+    // properties only inherit downward, which is the whole reason this
+    // observer exists. jsdom's `ResizeObserver` stub never fires, so this
+    // installs one that does — the only way the callback is reachable at all.
+    const observers: (() => void)[] = [];
+    // A plain field, not a parameter property: this tsconfig sets
+    // `erasableSyntaxOnly`, which refuses the shorthand outright.
+    vi.stubGlobal('ResizeObserver', class {
+      cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) {
+        this.cb = cb;
+        observers.push(() => this.cb(
+          [{ contentRect: { height: 84.4 } } as ResizeObserverEntry], this as never));
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    });
+    const { unmount } = (() => {
+      const r = renderScreen();
+      return { ...r, unmount: () => cleanup() };
+    })();
+    expect(observers.length, 'the composer is observed').toBeGreaterThan(0);
+    act(() => { for (const fire of observers) fire(); });
+    expect(document.documentElement.style.getPropertyValue('--composer-h'),
+      'rounded, because a fractional pixel in a custom property is noise').toBe('84px');
+    unmount();
+    expect(document.documentElement.style.getPropertyValue('--composer-h'),
+      'cleared on unmount, so the fleet screen keeps the plain offset').toBe('');
+  });
+});
+
+// EVERY DOOR THIS SCREEN OPENS, IT CAN ALSO CLOSE.
+//
+// Six sheets hang off `SessionScreen`, each with its own `open` flag and its
+// own `onClose`, and the suite opened none of them: the six close callbacks
+// were uncovered functions (measured: 521, 551, 569, 592, 597, 598 and
+// `openTerminal` at 331, with this file 11/11 green). A sheet whose `onClose`
+// does not clear its flag cannot be dismissed at all — the scrim fades, vaul
+// unmounts the content, and the next render puts it straight back up, which
+// is the one failure a reader cannot work around.
+describe('the screen’s six sheets each close the flag that opened them', () => {
+  const openMenu = (): void => {
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+  };
+  /** vaul's dismissal is not always synchronous with the click, so the
+   *  assertion waits for the content to actually go (the same jsdom/vaul
+   *  timing note `abandon-sheet.test.tsx` carries). */
+  const dismiss = async (): Promise<void> => {
+    const scrims = screen.getAllByTestId('sheet-overlay');
+    fireEvent.click(scrims[scrims.length - 1]!);
+    await waitFor(() => expect(screen.queryAllByTestId('sheet-overlay').length)
+      .toBeLessThan(scrims.length));
+  };
+
+  it('the model picker opens from the menu and closes on the scrim', async () => {
+    renderScreen();
+    openMenu();
+    fireEvent.click(await screen.findByText('Change model'));
+    expect(await screen.findByText('Choose a model')).toBeInTheDocument();
+    await dismiss();
+    await waitFor(() => expect(screen.queryByText('Choose a model')).toBeNull());
+  });
+
+  it('the effort picker is a SECOND sheet on the same flag, and closes the same way', async () => {
+    // One `picker` state, two sheets — so a close that cleared only the model
+    // arm would leave the effort sheet permanently up.
+    renderScreen();
+    openMenu();
+    fireEvent.click(await screen.findByText('Change effort'));
+    expect(await screen.findByText('Reasoning effort')).toBeInTheDocument();
+    await dismiss();
+    await waitFor(() => expect(screen.queryByText('Reasoning effort')).toBeNull());
+  });
+
+  it('the swap sheet opens from the menu and closes', async () => {
+    renderScreen();
+    openMenu();
+    fireEvent.click(await screen.findByText('Move to another account'));
+    const swap = await screen.findByText(/another account/i, { selector: '.sheet-title, h2, p' });
+    expect(swap).toBeInTheDocument();
+    await dismiss();
+  });
+
+  it('the archive sheet opens from the menu and closes', async () => {
+    renderScreen();
+    openMenu();
+    fireEvent.click(await screen.findByText('Archive'));
+    await waitFor(() => expect(screen.queryByText('Change model')).toBeNull());
+    await dismiss();
+  });
+
+  it('the history tab opens from the menu and closes', async () => {
+    // Its own body, because this sheet FETCHES on open and the suite's
+    // blanket `{}` is a shape it refuses (see the case below).
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, events: [], gaps: [] }), { status: 200 })));
+    renderScreen();
+    openMenu();
+    fireEvent.click(await screen.findByText('History'));
+    // Its own title, not a scrim count: the menu and the tab are two sheets
+    // on one stack, and the menu's dismissal races the tab's mount — so the
+    // claim is that the TAB is up, and then that it is gone.
+    expect(await screen.findByText('What happened here')).toBeInTheDocument();
+    const scrims = screen.getAllByTestId('sheet-overlay');
+    fireEvent.click(scrims[scrims.length - 1]!);
+    await waitFor(() => expect(screen.queryByText('What happened here')).toBeNull());
+  });
+
+  it('the terminal drawer opens from its OWN keycap, not the menu, and closes', async () => {
+    // `openTerminal` is passed twice — to the header's keycap and to
+    // `DialogSheet`, which raises the terminal when a dialog needs the pane.
+    // One function, two call sites, and neither had a case.
+    renderScreen();
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal' }));
+    await waitFor(() => expect(screen.getAllByTestId('sheet-overlay').length).toBeGreaterThan(0));
+    await dismiss();
+  });
+});
+
+// A FOUND DEFECT, and the fix measured here. `api.lifecycle` is a bare
+// `getJson<LifecycleQueryResult>` — a CAST, not a revive — so what reaches
+// `HistoryTab` is whatever the box sent. A build whose journal predates
+// `gaps`, or a proxy answering `{}` with a 200, arrives without the arrays
+// every render branch reads `.length` off, and the throw comes out of a
+// `.then` nothing catches: a white screen inside the sheet. (Measured: before
+// the guard, the close case above failed with "An error occurred in the
+// <HistoryTab> component".)
+//
+// The answer is the ERROR arm rather than an empty result, because this
+// component's own rule — SessionScreen's `searchComplete` rule applied to the
+// journal — is that an unmeasured absence is not an empty history: rendering
+// "No journal rows for this session" would state a fact nothing measured.
+it('a lifecycle body with no arrays is reported, not rendered as an empty journal', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+  renderScreen();
+  fireEvent.click(screen.getByRole('button', { name: 'More' }));
+  fireEvent.click(await screen.findByText('History'));
+
+  expect(await screen.findByText(/shape this build cannot read/)).toBeInTheDocument();
+  expect(screen.queryByText(/No journal rows for this session/),
+    'an unmeasured absence was rendered as an empty history').toBeNull();
+});
+
+// — the screen before any frame, and the facts it derives from the id alone —
+describe('a deep link whose session the fleet has not reported yet', () => {
+  /** No fleet row at all: the store is live, the board is not. */
+  const deepLink = (id: string) => {
+    const store = createSessionStore(id, { makeSocket: fakeSocket, api: { prompt } });
+    const fleet = createFleetStore();
+    act(() => { fleet.setState({ roster: TEST_ROSTER, conn: 'open', sessions: [] }); });
+    render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={id} store={store} fleet={fleet} /><ToastHost /></>);
+    act(() => { store.setState({ uuid: 'u1', status: 'idle' }); });
+    return { store, fleet };
+  };
+
+  it('names the project out of the id, past the account prefix', () => {
+    // `live?.project ?? id.slice(wrapperFromId.length + 1)`. The composer's
+    // placeholder says "Message <project>", and before the first frame the id
+    // is the only thing that knows what that is.
+    deepLink('claude:project-a');
+    expect(screen.getByPlaceholderText('Message project-a')).toBeInTheDocument();
+  });
+
+  it('falls back to the whole id when there is no prefix to strip', () => {
+    // A workspace id is `<project>-<slug>` with no colon, so slicing past a
+    // prefix that is not there would leave an empty string — and a composer
+    // reading "Message " is the shape this `|| id` prevents.
+    deepLink('demo-quiet-basin');
+    expect(screen.getByPlaceholderText('Message demo-quiet-basin')).toBeInTheDocument();
+  });
+
+  it('Restore does nothing without a row to restore', () => {
+    // `restoreNow` reads the LIVE row to decide which verb a restore is — a
+    // workspace is `ws-restore`, a main checkout is `/ensure`. With no row
+    // there is nothing to decide from, so it must not guess.
+    //
+    // A PROPERTY, not a killer, and measured as such: the header renders no
+    // Restore control without a row, so deleting the handler's own guard
+    // leaves this green. What it pins is the outcome the two share.
+    deepLink('demo-quiet-basin');
+    expect(restore).not.toHaveBeenCalled();
+    expect(ensure).not.toHaveBeenCalled();
+  });
+});
+
+describe('the keyboard, and the transcript banner with no path', () => {
+  it('pads the chat by the keyboard overlap and stamps it for the stylesheet', () => {
+    // `data-kb` is what the sheet reads; the padding is what keeps the
+    // composer above the keys. Both arms are one condition, and neither had
+    // a case.
+    const vv = Object.assign(new EventTarget(), { height: window.innerHeight, offsetTop: 0 });
+    Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
+    try {
+      renderScreen();
+      const chat = document.querySelector('.chat');
+      if (!(chat instanceof HTMLElement)) throw new Error('no .chat');
+      expect(chat.getAttribute('data-kb'), 'a closed keyboard stamps nothing').toBeNull();
+
+      act(() => {
+        vv.height = window.innerHeight - 280;
+        vv.dispatchEvent(new Event('resize'));
+      });
+      expect(chat.getAttribute('data-kb')).toBe('true');
+      expect(chat.style.paddingBottom).toBe('280px');
+    } finally {
+      Reflect.deleteProperty(window, 'visualViewport');
+    }
+  });
+
+  it('a transcript nobody could MEASURE says so, and names no path it does not have', () => {
+    // The fourth combination the banner's own comment enumerates: no
+    // `missingFile`, `missing: false`, and `fileMeasured: false` — a present
+    // transcript whose bytes could not be read. There is no path to print,
+    // and printing `undefined` or `null` there is the failure the `?? ''` ends.
+    const { store } = renderScreen();
+    act(() => {
+      store.setState({ missingFile: null, file: null, fileMeasured: false, searchComplete: true });
+    });
+    expect(screen.getByText("Can't read the fleet host right now")).toBeInTheDocument();
+    const path = document.querySelector('.banner-path');
+    expect(path?.textContent, 'a path was invented for a transcript nothing measured').toBe('');
+  });
+});
+
+// D-5545 (verifier round 1, mutation V7): the header's facts are wired at THIS screen — the run, its claimant and
+// the claimant's presence — so only a screen-level case catches a header that never learns its coordinator is gone.
+describe('the session header knows what the card knows (D-5545)', () => {
+  it('an orphan whose coordinator is gone reads "coordinator gone" in the header, with the reclaim guidance', () => {
+    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt } });
+    const fleet = createFleetStore();
+    const run = {
+      id: 44, program: 'tidy-docs', programTitle: 'Tidy the docs', wave: 3, waveOf: 5,
+      project: 'project-a', homeProject: null, sessionId: ID, workspace: null, branch: null,
+      state: 'dispatched', kind: 'work', reviews: null, claimedBy: 'claude:project-b', resumed: false, clearedAt: null,
+      openedAt: 1, dispatchStartedAt: null, dispatchedAt: null, closedAt: null, handoffCommit: null,
+      items: { done: 0, total: 0 }, unreadMail: 0,
+      health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
+        briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null,
+    };
+    act(() => {
+      fleet.setState({
+        roster: TEST_ROSTER, conn: 'open', fleetFrameSeen: true, runsFrameSeen: true,
+        // A frame as a current server sends it (D-7182, C7d): each session carries the run binding over these runs.
+        sessions: withRunBinding([
+          fleetSession({ held: 'program:tidy-docs wave:3/5 run:44', child: { kind: 'child', runId: 44 }, role: 'child' }),
+          baseSession({ id: 'claude:project-b', project: 'project-b', status: 'dead', bucket: 'dead', lifecycle: 'orphan' }),
+        ], [run as never]),
+        runs: [run],
+      } as never);
+    });
+    render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={ID} store={store} fleet={fleet} /><ToastHost /></>);
+    act(() => { store.setState({ uuid: 'u1', status: 'idle' }); });
+    const toggle = screen.queryByRole('button', { name: /details/i });
+    if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
+    const marker = document.querySelector('.chat-head [data-marker="coordinator-gone"]');
+    expect(marker?.textContent).toContain('coordinator gone');
+    expect(marker?.getAttribute('title')).toContain('reclaim');
+  });
+
+  /** The same screen over a claimant `coord`: the header's orphan marker, or null when it shows none. */
+  const headerMarker = (coord: FleetSession): Element | null => {
+    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt } });
+    const fleet = createFleetStore();
+    const run = {
+      id: 44, program: 'tidy-docs', programTitle: 'Tidy the docs', wave: 3, waveOf: 5,
+      project: 'project-a', homeProject: null, sessionId: ID, workspace: null, branch: null,
+      state: 'dispatched', kind: 'work', reviews: null, claimedBy: 'claude:project-b', resumed: false, clearedAt: null,
+      openedAt: 1, dispatchStartedAt: null, dispatchedAt: null, closedAt: null, handoffCommit: null,
+      items: { done: 0, total: 0 }, unreadMail: 0,
+      health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
+        briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null,
+    };
+    act(() => {
+      fleet.setState({
+        roster: TEST_ROSTER, conn: 'open', fleetFrameSeen: true, runsFrameSeen: true,
+        sessions: withRunBinding([fleetSession({ held: 'program:tidy-docs wave:3/5 run:44', child: { kind: 'child', runId: 44 }, role: 'child' }), coord], [run as never]),
+        runs: [run],
+      } as never);
+    });
+    render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={ID} store={store} fleet={fleet} /><ToastHost /></>);
+    act(() => { store.setState({ uuid: 'u1', status: 'idle' }); });
+    const toggle = screen.queryByRole('button', { name: /details/i });
+    if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
+    return document.querySelector('.chat-head [data-marker]');
+  };
+
+  // D-7371: a hibernated orphan coordinator is asleep, never gone (D-5430): the header fact is `hibernated`.
+  it('an orphan whose coordinator is a hibernated orphan reads "coordinator hibernated", never "coordinator gone"', () => {
+    const marker = headerMarker(baseSession({ id: 'claude:project-b', project: 'project-b', status: 'dead', bucket: 'dead',
+      lifecycle: 'orphan', hibernatedAt: 1_784_500_000_000 }));
+    expect(marker?.getAttribute('data-marker')).toBe('coordinator-hibernated');
+    expect(document.querySelector('.chat-head [data-marker="coordinator-gone"]')).toBeNull();
+  });
+
+  // D-7370: a substrate stamp over a pane tmux called gone is doubt (D-309): the header says nothing of a gone coordinator.
+  it('a coordinator whose gone pane carries a substrate stamp reads no orphan marker', () => {
+    const marker = headerMarker(baseSession({ id: 'claude:project-b', project: 'project-b', status: 'dead', bucket: 'dead',
+      lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' } }));
+    expect(marker).toBeNull();
+  });
+});

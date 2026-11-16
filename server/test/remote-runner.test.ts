@@ -79,15 +79,31 @@ describe('per-verb timeouts', () => {
   } as unknown as FleetClient;
 
   it.each([
-    [['pr-state', '--session', 'x'], 20_000],
-    // Same reach and same number as pr-state: it shells out to `git
-    // ls-remote` before it will rename. Without this row, deleting or
-    // changing the entry in CCD_VERB_TIMEOUT_MS cannot fail a single test.
+    // 25 since landing-order wave 2 — three gh calls, summed against this by
+    // pr-timeout-budget.test.ts.
+    [['pr-state', '--session', 'x'], 25_000],
+    // Same reach as pr-state: it shells out to `git ls-remote` before it will
+    // rename. Without this row, deleting or changing the entry in
+    // CCD_VERB_TIMEOUT_MS cannot fail a single test.
     [['ws-rename', '--session', 'x', '--branch', 'ws/x'], 20_000],
     [['ws-archive', '--session', 'x'], 60_000],
     [['ws-restore', '--session', 'x'], 60_000],
     [['ws-audit', '--session', 'x'], 90_000],
     [['ws-reap', '--expect', 'a'.repeat(64), '--session', 'x'], 240_000],
+    // Child reclamation: ws-reap's destruction plus a pin phase and a settle.
+    [['ws-reclaim', '--expect', 'a'.repeat(64), '--child-of', '7', '--session', 'x'], 240_000],
+    // Archived-workspace expiry: the same machinery, so the same budget.
+    [['ws-expire', '--expect', 'a'.repeat(64), '--session', 'x'], 240_000],
+    // The child temp-root collector: a bounded idle walk, a quarantine move and a tree removal under the reap lock.
+    [['ws-collect', '--expect', 'a'.repeat(64), '--session', 'x'], 240_000],
+    // The deps-shed act (D-7278) has ws-reap's row; its shadow, the dry run, a shorter one of its own (166 s of bounds),
+    // because it runs inside the run-done lane's single flight. `deps-shed-budget.test.ts` holds both sums.
+    [['ws-shed-deps', '--session', 'x', '--class', 'child'], 240_000],
+    // The project create (add-project spec 2026-11-04 §4): a whole `git clone` of an operator-named repository.
+    [['project-add', '--name', 'demo', '--url', 'https://github.com/o/r.git'], 240_000],
+    [['project-add', '--name', 'demo', '--empty'], 240_000],
+    [['ws-shed-deps', '--session', 'x', '--class', 'child', '--dry-run'], 180_000],
+    [['ws-shed-deps', '--session', 'x', '--class', 'coordinator', '--dry-run', '--surface', 'server', '--actor', 'deps-shed'], 180_000],
     // The two SPAWNING verbs (F8, 2026-08-12). Both run `_spawn`, which blocks
     // in `_accept_first_run_prompts` until the new pane renders a ready banner
     // — a COLD Claude Code start in a fresh workspace HOME, which on the live
@@ -108,6 +124,20 @@ describe('per-verb timeouts', () => {
     // cover. A verb whose worst case exceeds its budget should say so here.
     [['start', 'demo-quiet-basin'], 300_000],
     [['enable', 'demo-quiet-basin'], 300_000],
+    // D-7458: `ccd hibernate --roll` runs `cmd_ensure` inside the same verb, so it carries ensure's budget. At the flat
+    // 90 s a cold wake would be killed after the sleep, leaving the coordinator hibernated and the answer a failure.
+    [['hibernate', '--roll', 'project-a-quiet-basin', '--surface', 'agent', '--actor', 'sweep:roll'], 300_000],
+    // D-7541: only the roll carries that bound. A plain hibernate (the two sleep lanes) is a re-measure and a kill, and
+    // its lanes hold the coordination serialiser across the call, so it keeps the flat 90 s.
+    [['hibernate', 'project-a-quiet-basin', '--surface', 'agent', '--actor', 'sweep:hibernate'], 90_000],
+    [['hibernate', '--hold-ok', 'wave 3', 'project-a-quiet-basin'], 90_000],
+    // The four Docs verbs (spec 2026-10-01 section 2 (a), Budgets): each outlasts ccd's own helper deadline plus
+    // its 2 s kill grace plus 5 s, which `docs-budget.test.ts` holds against ccd's source. Without these rows a
+    // missing entry silently inherits the flat 90 s and nothing here reds.
+    [['docs-index', '--all'], 20_000],
+    [['docs-tree', '--project', 'x'], 20_000],
+    [['docs-show', '--project', 'x', '--commit', 'c'], 15_000],
+    [['docs-fetch', '--project', 'x'], 60_000],
   ])('sends %j with a %i ms budget', async (args, ms) => {
     seen.length = 0;
     await createRunner(client)('/home/u/.local/bin/ccd', args as string[]);
@@ -193,16 +223,20 @@ describe('§1.4 — asExecResult stops narrowing a distinction it received', () 
     expect(r.killed).toBeUndefined();
   });
 
-  it('THE CATCH PATH NEVER CLAIMS A KILL — three facts sit on code 1, not two', () => {
+  it('THE CATCH PATH NEVER CLAIMS A KILL — three facts sit on code 1, not two', async () => {
     // ccd refused, we killed ccd, and WE DO NOT KNOW BECAUSE THE LINK FAILED.
     // `createRunner`'s catch returns `{code:1, stderr: e.message}` for any
     // transport failure — a dropped socket, a client-side wait expiry — and §1.5
-    // must not adopt on it. Pinned as SOURCE because the arm is unreachable
-    // through a client stub that resolves.
+    // must not adopt on it. D-6034: driven through a client stub that REJECTS
+    // (the arm a resolving stub cannot reach), and it now also says `ran: false`;
+    // neither kill half is sent.
+    const client = { request: async () => { throw new Error('disconnected'); } } as unknown as FleetClient;
+    const res = await createRunner(client)('ccd', ['ls']);
+    expect(res).toMatchObject({ code: 1, stdout: '', stderr: 'disconnected', ran: false });
+    expect(res).not.toHaveProperty('killed');
+    expect(res).not.toHaveProperty('signal');
     const src = readFileSync(
       path.join(ccrcRoot, 'server/src/remote/runner.ts'), 'utf8');
-    expect(src).toContain(
-      "return { code: 1, stdout: '', stderr: e instanceof Error ? e.message : String(e) };");
     expect(src).not.toMatch(/catch[\s\S]{0,200}killed:\s*true/);
   });
 });

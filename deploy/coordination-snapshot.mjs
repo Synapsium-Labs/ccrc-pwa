@@ -1,0 +1,1918 @@
+// Coordination snapshot: capture, classify, restore and recover the authoritative delegation sidecars
+// (`~/.ccrc/delegation-events.log`, `~/.ccrc/delegation-carried.log`, `~/.ccrc/delegation-checkpoint.json`) beside the SQLite snapshot that
+// `backup-coord.mjs` takes (delegation broker wave 3, Task 8B; O3 of the plan's implementation decisions).
+//
+// SELF-CONTAINED ON PURPOSE. This file imports `node:*` and nothing else: no `server/`, no `shared/`. `ccrc backup`,
+// `ccrc update` and `deploy.sh` run it from the INSTALLED tree, where the server's TypeScript is compiled and not importable, and
+// a snapshot tool that needs the code it is protecting is a tool that fails with it. The cost is a second implementation of the
+// journal's validation rules (canonical JSON, both hash preimages, the chain, the anchor triple, torn tails, coverage); the
+// ONE-MEANING guarantee is a differential test (`server/test/coordination-snapshot.test.ts`) that feeds the same corpus to this
+// file and to the server's `validateDelegationJournalBytes` and requires the same verdict, the same refusal code and the same
+// coverage. It does NOT know the closed event-kind and lease-source vocabularies (those live in `shared/api.ts`, and a copy here
+// would be a second spelling of them): it checks the record GRAMMAR and the hashes, which is what makes bytes a faithful copy;
+// whether an event is one the server understands is the server's recovery, which runs again when the server starts.
+// `suffixAfter` is reachable for compacted sets: the first journal record must sit at or below the checkpoint's applied sequence
+// plus one. The whole-set differential compares this refusal with actual recovery; successful coverage still comes from the
+// journal-only byte validator, never from sparse carried evidence.
+//
+// THE TORN TAIL (D-4655, the operator's ruling of 2026-10-15). The SERVER heals its own journal; capture NEVER writes it. A journal that
+// ends in bytes after its last LF is retried like a checkpoint that moved (a writer may be mid-append), through the same five
+// attempts. When they are spent and the ONLY defect is a healable tail, the last attempt captures the complete prefix instead: the
+// journal bytes up to and including the last LF, never past it, with the checkpoint, and writes the additive manifest field
+// `delegation.journalTailOmitted: {bytes, sha256}` (version 1 still; absence means nothing was left out). The rule is the server's
+// (`delegationTailHealPlan` in `server/src/coord/delegation-journal.ts`), restated once here because this file imports nothing:
+// healable iff the journal ends in bytes after its last LF AND every complete record validates with an intact chain AND the checkpoint's
+// applied position names a complete record (or none) and every record it holds is retained. A tail the checkpoint names, a defect
+// inside a complete record, a chain break: all are corruption, not a crash artefact, and refuse capture exactly as before. A differential
+// row in `coordination-snapshot.test.ts` feeds both sides the same files.
+//
+// WHAT IT NEVER DOES. It never opens `coord.db` for writing, never follows a symlink for a member or a marker, and never touches a
+// service: restore asks whether the server is running and refuses unless it MEASURES it inactive, and asks again once its marker is durable.
+// It writes only the directory it is given (capture), `~/.ccrc` (restore and recover) and, for `thin`, each backup directory it is told to thin.
+// What it deletes: capture, on failure, only files that run created (its partials, the members it placed and its own manifest); restore and recover, only inside `~/.ccrc`; `thin`, inside a backup directory it is told to
+// thin, only the five snapshot files (`SNAPSHOT_NAMES`, after writing that directory's record, `THINNED_FILE`), a stale thinning record and its own
+// `.partial` temp. In the `--verified` directory it removes only a stale thinning record, never the snapshot files, and it refuses that directory
+// when it reads as anything but whole, stale or empty. Nothing else there, and nothing outside such a directory.
+// While the marker stands,
+// delegation recovery (`recoverDelegationFromFiles`) refuses to run, and the server's boot refuses too (it exits 1 before opening coord.db, naming `recover`). `backup-coord.mjs` stays the SQLite-only snapshot; this file
+// reads the DB snapshot it made and describes it.
+//
+// VERBS (exit codes). `capture --dir <timestamp dir>`: 0 manifest durable (a tail it left out is one warning line on stderr), 1 refused or exhausted (no manifest, no partials).
+// `classify --from <dir>` prints `v1`, `legacy`, `none`, `thinned` or `invalid` and exits 0, 0, 1, 1, 2 (`thinned`: the data set was dropped by design, D-6349). `validate --from <dir>` is `classify`
+// with its reasons: line 1 is `<word>: <reason>`, line 2 is `data: yes|no` (a v1 snapshot with any member present, or a legacy
+// one, holds data; the retention keeps the newest such snapshot beside the newest valid one, D-4641). `restore --from <dir>`: 0 done, 1 failed (the live set is the old one, or `recover` finishes it), 2 refused
+// before any live mutation (a `thinned` source is refused as `source-thinned`). `recover`: finishes an interrupted restore, 0 / 1 / 2 the same way. `thin --keep <n> --by <update|backup> ...`: drops the
+// data set of the backup directories past the newest `n` valid ones, writing each directory's record before it deletes the five snapshot files (D-6346, D-6348): 0 every directory was handled,
+// 3 one or more was refused or the verification budget stopped the walk (the others were still handled; 3, not 1, because node itself exits 1 when it cannot load this file). 70: usage, or the helper itself
+// failed (an exception it did not name). `--until <unix seconds>` is the update path's time budget (D-6464): a walk that reaches it ends
+// there, its untouched dirs left for the next update, and exits 0 unless a dir was refused, one behind the stop included.
+import { createHash, randomBytes } from 'node:crypto';
+import nodeFs from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+// ── Names ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export const JOURNAL_FILE = 'delegation-events.log';
+export const CARRIED_FILE = 'delegation-carried.log';
+export const CHECKPOINT_FILE = 'delegation-checkpoint.json';
+export const DB_FILE = 'coord.db';
+export const MANIFEST_FILE = 'coordination-snapshot.json';
+/** The record a thinning writes BEFORE it deletes the snapshot files below (D-6348): it says the data set was dropped by design. */
+export const THINNED_FILE = 'coordination-thinned.json';
+/** The five names a thinning may remove. Also the order in which a leftover is named. */
+export const SNAPSHOT_NAMES = Object.freeze([MANIFEST_FILE, JOURNAL_FILE, CHECKPOINT_FILE, DB_FILE, CARRIED_FILE]);
+/** Live restore bookkeeping, in the coordination directory itself. Delegation recovery refuses to run while the marker exists, and so does the server's boot (it exits 1 before opening coord.db). */
+export const RESTORE_MARKER_FILE = 'coordination-restore.json';
+export const RESTORE_STAGE_DIR = 'coordination-restore.stage';
+/** Where a rollback MOVES (never deletes) a file at a member path that is neither the restore's own placed member nor an old one:
+ *  `<this>/<restore id>/<member name>`, never overwriting (a second file of one name gets `.1`, `.2`, ...). */
+export const RESTORE_FOREIGN_DIR = 'coordination-restore.foreign';
+/** The files a restore replaces as one set. WAL and SHM are not manifest members: a restored DB must never meet an old WAL. */
+export const RESTORE_SET = Object.freeze([JOURNAL_FILE, CHECKPOINT_FILE, `${DB_FILE}-wal`, `${DB_FILE}-shm`, DB_FILE, CARRIED_FILE]);
+/** Exactly five attempts, with these pauses between them. */
+export const CAPTURE_RETRY_DELAYS_MS = Object.freeze([10, 25, 50, 100]);
+export const SERVICE_UNIT = 'ccrc.service';
+
+const MANIFEST_FORMAT = 'ccrc-coordination-snapshot';
+const MARKER_FORMAT = 'ccrc-coordination-restore';
+const THINNED_FORMAT = 'ccrc-coordination-thinned';
+
+/** The helper itself cannot do its job (as opposed to a snapshot being bad): exit 70, never an answer about a snapshot. It has no
+ *  string `code`, so `classify` does not mistake it for a system error on a snapshot's files. */
+export class HelperFailure extends Error {
+  constructor(detail) { super(detail); this.name = 'HelperFailure'; }
+}
+
+/** Test seam: how SQLite is loaded. A test replaces `requireSqlite` to prove that "node cannot load SQLite" is a helper failure. */
+export const seams = {
+  requireSqlite: () => createRequire(import.meta.url)('node:sqlite'),
+};
+
+export class SnapError extends Error {
+  /** @param {string} code @param {string} detail @param {{retryable?: boolean, exit?: number}} [opts] */
+  constructor(code, detail, opts = {}) {
+    super(`${code}: ${detail}`);
+    this.name = 'SnapError';
+    this.code = code;
+    this.retryable = opts.retryable === true;
+    this.exit = opts.exit ?? 1;
+  }
+}
+const refuse = (code, detail, opts) => { throw new SnapError(code, detail, opts); };
+
+// ── Canonical JSON (RFC 8785 over the closed domain the journal uses) ──────────────────────────────────────────────────
+
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+
+/** Canonical text of a value that came out of `JSON.parse` or was built here (so: plain objects, arrays, strings, finite numbers,
+ *  booleans, null). Refuses an unsafe integer, a non-finite number and a lone surrogate, in a value or in a key. */
+export function canonicalJson(value) {
+  if (value === null) return 'null';
+  switch (typeof value) {
+    case 'boolean': return value ? 'true' : 'false';
+    case 'string':
+      if (LONE_SURROGATE.test(value)) refuse('invalid-domain', 'a string holds a lone surrogate');
+      return JSON.stringify(value);
+    case 'number':
+      if (!Number.isFinite(value)) refuse('invalid-domain', 'a number is not finite');
+      if (Number.isInteger(value) && !Number.isSafeInteger(value)) refuse('invalid-domain', 'an integer is outside the safe range');
+      return JSON.stringify(value);
+    case 'object': break;
+    default: refuse('invalid-domain', `a ${typeof value} is outside the JSON domain`);
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const names = Object.keys(value).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${names.map((k) => {
+    if (LONE_SURROGATE.test(k)) refuse('invalid-domain', 'a key holds a lone surrogate');
+    return `${JSON.stringify(k)}:${canonicalJson(value[k])}`;
+  }).join(',')}}`;
+}
+
+/** Whether a JSON text repeats a key in any one object, at any depth (`JSON.parse` keeps the last of two equal keys). */
+export function findJsonDefect(text) {
+  let i = 0;
+  let defect = null;
+  const ws = () => { while (i < text.length && (text[i] === ' ' || text[i] === '\t' || text[i] === '\n' || text[i] === '\r')) i++; };
+  const bad = () => { defect ??= 'malformed-json'; throw new Error('stop'); };
+  const string = () => {
+    const start = i;
+    if (text[i] !== '"') bad();
+    i++;
+    while (i < text.length && text[i] !== '"') { if (text[i] === '\\') i += text[i + 1] === 'u' ? 6 : 2; else i++; }
+    if (i >= text.length) bad();
+    i++;
+    try { return JSON.parse(text.slice(start, i)); } catch { return bad(); }
+  };
+  const value = (depth) => {
+    if (depth > 64) bad();
+    ws();
+    const c = text[i];
+    if (c === '{') {
+      i++;
+      const keys = new Set();
+      ws();
+      if (text[i] === '}') { i++; return; }
+      for (;;) {
+        ws();
+        const k = string();
+        if (keys.has(k)) { defect ??= 'duplicate-key'; throw new Error('stop'); }
+        keys.add(k);
+        ws();
+        if (text[i] !== ':') bad();
+        i++;
+        value(depth + 1);
+        ws();
+        if (text[i] === ',') { i++; continue; }
+        if (text[i] === '}') { i++; return; }
+        bad();
+      }
+    } else if (c === '[') {
+      i++;
+      ws();
+      if (text[i] === ']') { i++; return; }
+      for (;;) {
+        value(depth + 1);
+        ws();
+        if (text[i] === ',') { i++; continue; }
+        if (text[i] === ']') { i++; return; }
+        bad();
+      }
+    } else if (c === '"') {
+      string();
+    } else {
+      const m = /^(?:-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/.exec(text.slice(i, i + 64));
+      if (m === null) bad(); else i += m[0].length;
+    }
+  };
+  try { value(0); ws(); if (i !== text.length) bad(); } catch { return defect ?? 'malformed-json'; }
+  return defect;
+}
+
+/** A reason is ONE line: CR and LF in anything interpolated from input become a space. */
+const oneLine = (t) => String(t).replace(/[\r\n]+/g, ' ');
+const sha256Hex = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
+const isHex64 = (v) => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
+const isRecord = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+const CANONICAL_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const isInstant = (v) => {
+  if (typeof v !== 'string' || !CANONICAL_INSTANT.test(v)) return false;
+  const ms = Date.parse(v);
+  return Number.isFinite(ms) && ms >= 0 && new Date(ms).toISOString() === v;
+};
+const isSeq = (v) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 1;
+
+// ── The journal record grammar (the same rules, codes and order as the server's decoder; no vocabularies) ────────────────
+
+const RECORD_KEYS = ['v', 'sequence', 'journalId', 'acceptedAt', 'previousDigest', 'entry', 'digest'];
+const LEASE_ENTRY_KEYS = [
+  'kind', 'leaseId', 'generation', 'activityId', 'parentId', 'parentIncarnation', 'project', 'adminRecord', 'canonicalPath',
+  'creationBase', 'sourceKind', 'correlationJournalIds', 'firstObservedAt', 'lineageId',
+];
+
+function exactKeys(o, keys, what, codes = ['unknown-key', 'bad-field']) {
+  for (const k of Object.keys(o)) if (!keys.includes(k)) refuse(codes[0], `${what} has the unknown key ${JSON.stringify(k)}`);
+  for (const k of keys) if (!Object.hasOwn(o, k)) refuse(codes[1], `${what} is missing ${JSON.stringify(k)}`);
+}
+const nonEmpty = (v, what) => (typeof v === 'string' && v !== '' ? v : refuse('bad-field', `${what} is not a non-empty string`));
+const hex64 = (v, what) => (isHex64(v) ? v : refuse('bad-field', `${what} is not a lowercase 64-hex SHA-256`));
+
+// Wave 5, PR5a (D-7809): the three lease kinds, by SHAPE alone, in the server's order (`validateLeaseKind` in
+// `server/src/coord/delegation-journal.ts`). Their words (`reason`, `to`, `releaseReason`, `lineageClose`) are vocabularies, so here they
+// are only non-empty strings, as `sourceKind` is above; whether a kind applies is the server's recovery.
+const LEASE_TRANSITION_KEYS = [
+  'kind', 'leaseId', 'generation', 'reason', 'to', 'at', 'expiresAt', 'terminalEvidenceAt', 'runId', 'promotedSession', 'auditEvidence',
+  'lineageClose', 'lineageOpenRun', 'resolvesThrough',
+];
+const LEASE_RELEASED_KEYS = ['kind', 'leaseId', 'generation', 'releaseReason', 'at', 'lastHeadSha', 'resolvesThrough'];
+const LEASE_CARRIER_SEEN_KEYS = ['kind', 'leaseId', 'generation', 'at'];
+const positiveInt = (v, what) => (isSeq(v) ? v : refuse('bad-field', `${what} is not a positive safe integer`));
+const positiveIntOrNull = (v, what) => (v === null ? null : positiveInt(v, what));
+const nonEmptyOrNull = (v, what) => (v === null ? null : nonEmpty(v, what));
+const instant = (v, what) => (isInstant(v) ? v : refuse('bad-field', `${what} is not a canonical UTC millisecond instant`));
+const instantOrNull = (v, what) => (v === null ? null : instant(v, what));
+function attemptMarkOrNull(v) {
+  if (v === null) return null;
+  if (!isRecord(v)) return refuse('bad-field', 'resolvesThrough is neither null nor an object');
+  exactKeys(v, ['attemptedAt', 'attemptId'], 'resolvesThrough');
+  return { attemptedAt: instant(v.attemptedAt, 'resolvesThrough.attemptedAt'), attemptId: nonEmpty(v.attemptId, 'resolvesThrough.attemptId') };
+}
+function validateLeaseKind(entry) {
+  switch (entry.kind) {
+    case 'lease-transition':
+      exactKeys(entry, LEASE_TRANSITION_KEYS, 'a lease-transition entry');
+      return {
+        kind: 'lease-transition', leaseId: nonEmpty(entry.leaseId, 'leaseId'), generation: positiveInt(entry.generation, 'generation'),
+        reason: nonEmpty(entry.reason, 'reason'), to: nonEmpty(entry.to, 'to'), at: instant(entry.at, 'at'),
+        expiresAt: instantOrNull(entry.expiresAt, 'expiresAt'), terminalEvidenceAt: instantOrNull(entry.terminalEvidenceAt, 'terminalEvidenceAt'),
+        runId: positiveIntOrNull(entry.runId, 'runId'), promotedSession: nonEmptyOrNull(entry.promotedSession, 'promotedSession'),
+        auditEvidence: entry.auditEvidence === null || typeof entry.auditEvidence === 'string' ? entry.auditEvidence : refuse('bad-field', 'auditEvidence is neither null nor a string'),
+        lineageClose: nonEmptyOrNull(entry.lineageClose, 'lineageClose'), lineageOpenRun: positiveIntOrNull(entry.lineageOpenRun, 'lineageOpenRun'),
+        resolvesThrough: attemptMarkOrNull(entry.resolvesThrough),
+      };
+    case 'lease-released':
+      exactKeys(entry, LEASE_RELEASED_KEYS, 'a lease-released entry');
+      return {
+        kind: 'lease-released', leaseId: nonEmpty(entry.leaseId, 'leaseId'), generation: positiveInt(entry.generation, 'generation'),
+        releaseReason: nonEmpty(entry.releaseReason, 'releaseReason'), at: instant(entry.at, 'at'),
+        lastHeadSha: nonEmptyOrNull(entry.lastHeadSha, 'lastHeadSha'), resolvesThrough: attemptMarkOrNull(entry.resolvesThrough),
+      };
+    case 'lease-carrier-seen':
+      exactKeys(entry, LEASE_CARRIER_SEEN_KEYS, 'a lease-carrier-seen entry');
+      return { kind: 'lease-carrier-seen', leaseId: nonEmpty(entry.leaseId, 'leaseId'), generation: positiveInt(entry.generation, 'generation'), at: instant(entry.at, 'at') };
+    default:
+      return null;
+  }
+}
+
+function isEventEnvelope(v) {
+  if (!isRecord(v) || v.v !== 1 || typeof v.eventKind !== 'string' || v.eventKind === '') return false;
+  for (const k of ['sessionId', 'parentIncarnation', 'claudeSessionId', 'eventId', 'bucket']) if (typeof v[k] !== 'string' || v[k] === '') return false;
+  const { startOffset, endOffset } = v;
+  if (typeof startOffset !== 'number' || typeof endOffset !== 'number' || !Number.isSafeInteger(startOffset)
+      || !Number.isSafeInteger(endOffset) || startOffset < 0 || endOffset <= startOffset) return false;
+  if (!isInstant(v.observedAt)) return false;
+  return v.agentId === undefined || typeof v.agentId === 'string';
+}
+
+/** The closed grammar's kinds, the server's `DELEGATION_JOURNAL_ENTRY_KINDS` restated (this file imports nothing): the differential holds
+ *  the two lists equal in both directions, and every kind here has its reader below (review 1451 F11). */
+export const JOURNAL_ENTRY_KINDS = ['evidence-accepted', 'lease-created', 'lease-transition', 'lease-released', 'lease-carrier-seen'];
+
+function validateEntry(entry) {
+  if (!isRecord(entry)) return refuse('bad-field', 'entry is not an object');
+  if (!JOURNAL_ENTRY_KINDS.includes(entry.kind)) return refuse('bad-field', `entry kind ${JSON.stringify(entry.kind)} is not in the closed grammar`);
+  if (entry.kind === 'evidence-accepted') {
+    exactKeys(entry, ['kind', 'event'], 'an evidence-accepted entry');
+    if (!isEventEnvelope(entry.event)) return refuse('bad-field', 'an evidence-accepted entry\'s event is not an envelope with the keys the journal reads');
+    return { kind: 'evidence-accepted', event: entry.event };
+  }
+  if (entry.kind === 'lease-created') {
+    exactKeys(entry, LEASE_ENTRY_KEYS, 'a lease-created entry');
+    if (entry.generation !== 0) refuse('bad-field', 'a lease-created entry is generation 0');
+    nonEmpty(entry.sourceKind, 'sourceKind');
+    const ids = entry.correlationJournalIds;
+    if (!Array.isArray(ids)) return refuse('bad-field', 'correlationJournalIds is not a list');
+    if (!ids.every(isHex64)) refuse('bad-field', 'correlationJournalIds is not a list of lowercase 64-hex SHA-256 values');
+    const base = entry.creationBase;
+    if (base !== null && (typeof base !== 'string' || base === '')) return refuse('bad-field', 'creationBase is neither null nor a non-empty string');
+    if (!isInstant(entry.firstObservedAt)) refuse('bad-field', 'firstObservedAt is not a canonical UTC millisecond instant');
+    return {
+      kind: 'lease-created', leaseId: nonEmpty(entry.leaseId, 'leaseId'), generation: 0, activityId: hex64(entry.activityId, 'activityId'),
+      parentId: nonEmpty(entry.parentId, 'parentId'), parentIncarnation: nonEmpty(entry.parentIncarnation, 'parentIncarnation'),
+      project: nonEmpty(entry.project, 'project'), adminRecord: nonEmpty(entry.adminRecord, 'adminRecord'),
+      canonicalPath: nonEmpty(entry.canonicalPath, 'canonicalPath'), creationBase: base, sourceKind: entry.sourceKind,
+      correlationJournalIds: [...ids], firstObservedAt: entry.firstObservedAt, lineageId: hex64(entry.lineageId, 'lineageId'),
+    };
+  }
+  return validateLeaseKind(entry) ?? refuse('bad-field', `entry kind ${JSON.stringify(entry.kind)} has no reader`);
+}
+
+/** `journalId = SHA256(canon({v, sequence, acceptedAt, previousDigest, entry}))`: nonrecursive. */
+export const journalIdOf = (r) => sha256Hex(canonicalJson({ v: 1, sequence: r.sequence, acceptedAt: r.acceptedAt, previousDigest: r.previousDigest, entry: r.entry }));
+/** `digest = SHA256(canon({v, sequence, journalId, acceptedAt, previousDigest, entry}))`: carries `previousDigest`, never itself. */
+export const digestOf = (r) => sha256Hex(canonicalJson({ v: 1, sequence: r.sequence, journalId: r.journalId, acceptedAt: r.acceptedAt, previousDigest: r.previousDigest, entry: r.entry }));
+
+/** One journal line (LF removed) into a record, strictly. */
+export function decodeJournalLine(line) {
+  if (line.length >= 3 && line[0] === 0xef && line[1] === 0xbb && line[2] === 0xbf) refuse('bom', 'a byte-order mark');
+  if (line.length === 0) refuse('blank-line', 'an empty line');
+  if (line[line.length - 1] === 0x0d) refuse('crlf', 'a line ends in CR before its LF');
+  let text;
+  try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(line); } catch { return refuse('invalid-utf8', 'the line is not valid UTF-8'); }
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { return refuse('malformed-json', 'the line is not JSON'); }
+  if (!isRecord(parsed)) return refuse('bad-field', 'the line is not a JSON object');
+  exactKeys(parsed, RECORD_KEYS, 'a record');
+  if (parsed.v !== 1) refuse('bad-field', 'v is not 1');
+  if (!isSeq(parsed.sequence)) refuse('sequence-domain', `${String(parsed.sequence)} is not a positive safe integer`);
+  if (!isInstant(parsed.acceptedAt)) refuse('bad-field', 'acceptedAt is not a canonical UTC millisecond instant');
+  const previousDigest = parsed.previousDigest;
+  if (previousDigest !== null && !isHex64(previousDigest)) refuse('bad-field', 'previousDigest is neither null nor a lowercase 64-hex SHA-256');
+  const journalId = hex64(parsed.journalId, 'journalId');
+  const digest = hex64(parsed.digest, 'digest');
+  const entry = validateEntry(parsed.entry);
+  const record = { v: 1, sequence: parsed.sequence, journalId, acceptedAt: parsed.acceptedAt, previousDigest, entry, digest };
+  const canonical = canonicalJson(record);
+  if (canonical !== text) {
+    if (findJsonDefect(text) === 'duplicate-key') refuse('duplicate-key', 'an object repeats a key');
+    refuse('noncanonical', 'the line is not the canonical encoding of its own value');
+  }
+  if (journalIdOf(record) !== journalId) refuse('journal-id-mismatch', 'journalId is not SHA-256 of its preimage');
+  if (digestOf(record) !== digest) refuse('digest-mismatch', 'digest is not SHA-256 of its preimage');
+  return record;
+}
+
+/** The error for bytes after the last LF: `missing-final-lf` when they are one complete valid record, `torn-tail` otherwise. */
+function tornTailError(leftover) {
+  try {
+    decodeJournalLine(leftover);
+    return new SnapError('missing-final-lf', 'the last record has no LF after it', { retryable: true });
+  } catch {
+    return new SnapError('torn-tail', `${leftover.length} bytes follow the last LF and are not a complete record`, { retryable: true });
+  }
+}
+
+/** The incremental hash-chain verifier: contiguous sequences, `previousDigest` chaining, and the anchor triple. */
+export class JournalChain {
+  constructor(opts = {}) {
+    this.opts = opts;
+    this.count = 0;
+    this.first = null;
+    this.last = null;
+    this.anchorSeen = false;
+  }
+
+  accept(record) {
+    const anchor = this.opts.anchor ?? null;
+    if (this.last === null) {
+      if (this.opts.completeFromStart === true) {
+        if (record.sequence !== 1) refuse('sequence-start', `a complete journal begins at sequence 1, not ${record.sequence}`);
+        if (record.previousDigest !== null) refuse('previous-digest', 'the first record of a complete journal has previousDigest null');
+      }
+      this.first = { sequence: record.sequence, previousDigest: record.previousDigest };
+    } else {
+      if (record.sequence === this.last.sequence) refuse('sequence-duplicate', `sequence ${record.sequence} appears twice`);
+      if (record.sequence < this.last.sequence) refuse('sequence-descent', `sequence ${record.sequence} follows ${this.last.sequence}`);
+      if (record.sequence !== this.last.sequence + 1) refuse('sequence-gap', `sequence ${record.sequence} follows ${this.last.sequence}`);
+      if (record.previousDigest !== this.last.digest) refuse('previous-digest', `record ${record.sequence}'s previousDigest is not record ${this.last.sequence}'s digest`);
+    }
+    if (anchor !== null) {
+      if (record.sequence === anchor.sequence) {
+        if (record.journalId !== anchor.journalId) refuse('anchor-journal-id', `the record at sequence ${anchor.sequence} has another journalId`);
+        if (record.digest !== anchor.digest) refuse('anchor-digest', `the record at sequence ${anchor.sequence} has another digest`);
+        this.anchorSeen = true;
+      } else if (record.journalId === anchor.journalId) {
+        refuse('anchor-sequence', `the anchor's journalId is at sequence ${record.sequence}, not ${anchor.sequence}`);
+      }
+    }
+    this.count++;
+    this.last = { sequence: record.sequence, journalId: record.journalId, digest: record.digest };
+  }
+
+  finish() {
+    const anchor = this.opts.anchor ?? null;
+    if (anchor !== null && !this.anchorSeen) refuse('anchor-missing', `no retained record at the anchor's sequence ${anchor.sequence}`);
+    return {
+      firstSequence: this.first?.sequence ?? null,
+      lastSequence: this.last?.sequence ?? null,
+      recordCount: this.count,
+      firstPreviousDigest: this.first?.previousDigest ?? null,
+      copiedEof: this.last,
+    };
+  }
+}
+
+/** A streaming whole-journal validator: `push` chunks in file order, then `finish`. One meaning for a buffer and for a file. */
+export class JournalValidator {
+  constructor(expect = {}, acceptRecord = null) {
+    this.acceptRecord = acceptRecord;
+    this.chain = new JournalChain(expect);
+    this.held = new Set(expect.heldJournalIds ?? []);
+    this.pending = new Uint8Array(0);
+    this.line = 0;
+    this.bytes = 0;
+    this.firstChecked = false;
+    this.expect = expect;
+  }
+
+  push(chunk) {
+    this.bytes += chunk.length;
+    const buf = new Uint8Array(this.pending.length + chunk.length);
+    buf.set(this.pending, 0);
+    buf.set(chunk, this.pending.length);
+    let start = 0;
+    for (let i = 0; i < buf.length; i++) {
+      if (buf[i] !== 0x0a) continue;
+      this.line++;
+      const record = decodeJournalLine(buf.subarray(start, i));
+      if (this.acceptRecord === null) this.accept(record);
+      else this.acceptRecord(record, buf.subarray(start, i + 1));
+      start = i + 1;
+    }
+    this.pending = buf.subarray(start);
+  }
+
+  accept(record) {
+    this.chain.accept(record);
+    if (!this.firstChecked) {
+      this.firstChecked = true;
+      const after = this.expect.suffixAfter;
+      if (typeof after === 'number' && record.sequence > after + 1) {
+        refuse('sequence-gap', `the retained journal begins at ${record.sequence}, past the sequence after the checkpoint's ${after}`);
+      }
+    }
+    this.held.delete(record.journalId);
+  }
+
+  finish() {
+    if (this.pending.length > 0) throw tornTailError(this.pending);
+    const coverage = this.chain.finish();
+    if (this.held.size > 0) refuse('held-evidence-missing', `${this.held.size} held journal ID(s) are not retained, first ${[...this.held][0]}`);
+    return coverage;
+  }
+}
+
+/** Validates a whole journal held as bytes. Same rules, same codes, same coverage as the streaming form. */
+export function validateJournalBytes(bytes, expect = {}) {
+  const v = new JournalValidator(expect);
+  v.push(bytes);
+  return v.finish();
+}
+
+// ── The checkpoint: canonical shape of what a snapshot must agree with ───────────────────────────────────────────────────
+
+const CHECKPOINT_KEYS = [
+  'v', 'revision', 'appliedJournalSequence', 'appliedJournalId', 'appliedJournalDigest', 'activityIdsByNaturalKey', 'coordinatorIntentByParent',
+  'sessions', 'attempts', 'activities', 'leases', 'lineage', 'bucketCursors', 'observationIntervals', 'pruningHolds',
+];
+const CHECKPOINT_LISTS = ['sessions', 'attempts', 'activities', 'leases', 'lineage', 'bucketCursors', 'observationIntervals', 'pruningHolds'];
+// Wave 5, PR5a (D-7969): the one OPTIONAL top-level member, absent when empty (so a checkpoint with no carrier row keeps wave 4's
+// bytes). Each row is read by SHAPE, in the server's order (`readLeaseCarrier` in `server/src/coord/delegation-checkpoint.ts`):
+// `releaseReason` is a vocabulary, so here it is only a non-empty string.
+const CHECKPOINT_OPTIONAL_KEYS = ['leaseCarriers'];
+const LEASE_CARRIER_KEYS = ['leaseId', 'transferringSince', 'transferRun', 'promotedRun', 'promotedSession', 'releaseReason', 'resolvedThrough'];
+function readLeaseCarriers(list) {
+  // A list, as the server's decoder reads it; that an empty member is absent is the server's recovery (`assertLeases`), not the shape.
+  if (!Array.isArray(list)) refuse('bad-shape', 'checkpoint.leaseCarriers is not a list');
+  const shape = (ok, what) => { if (!ok) refuse('bad-shape', `a lease carrier row's ${what}`); };
+  for (const c of list) {
+    if (!isRecord(c)) refuse('bad-shape', 'a lease carrier row is not an object');
+    exactKeys(c, LEASE_CARRIER_KEYS, 'a lease carrier row', ['bad-shape', 'bad-shape']);
+    shape(typeof c.leaseId === 'string' && c.leaseId !== '', 'leaseId is not a non-empty string');
+    shape(c.transferringSince === null || isInstant(c.transferringSince), 'transferringSince is neither null nor an instant');
+    for (const k of ['transferRun', 'promotedRun']) shape(c[k] === null || isSeq(c[k]), `${k} is neither null nor a positive safe integer`);
+    for (const k of ['promotedSession', 'releaseReason']) shape(c[k] === null || (typeof c[k] === 'string' && c[k] !== ''), `${k} is neither null nor a non-empty string`);
+    const m = c.resolvedThrough;
+    if (m !== null) {
+      shape(isRecord(m), 'resolvedThrough is neither null nor an object');
+      exactKeys(m, ['attemptedAt', 'attemptId'], 'a lease carrier row\'s resolvedThrough', ['bad-shape', 'bad-shape']);
+      shape(isInstant(m.attemptedAt) && typeof m.attemptId === 'string' && m.attemptId !== '', 'resolvedThrough is not {attemptedAt, attemptId}');
+    }
+  }
+}
+
+/**
+ * The checkpoint file's bytes, strictly, as far as a snapshot needs: canonical JSON plus one LF, the closed top-level key set, its
+ * revision, the applied position and the pruning holds that name journal records. Row-level semantics (identity, projectability,
+ * leases) are the server's recovery, which runs again when it starts.
+ */
+export function readCheckpointHeader(bytes) {
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) refuse('bom', 'a byte-order mark');
+  let text;
+  try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { return refuse('invalid-utf8', 'not valid UTF-8'); }
+  if (!text.endsWith('\n')) refuse('missing-final-lf', 'the checkpoint does not end in LF');
+  const body = text.slice(0, -1);
+  if (body.endsWith('\r') || body.includes('\n')) refuse('crlf', 'the checkpoint is one line with one LF');
+  let parsed;
+  try { parsed = JSON.parse(body); } catch { return refuse('malformed-json', 'not JSON'); }
+  if (!isRecord(parsed)) return refuse('bad-shape', 'checkpoint is not an object');
+  exactKeys(parsed, [...CHECKPOINT_KEYS, ...CHECKPOINT_OPTIONAL_KEYS.filter((k) => Object.hasOwn(parsed, k))], 'checkpoint', ['bad-shape', 'bad-shape']);
+  if (parsed.v !== 1) refuse('bad-version', 'checkpoint v is not 1');
+  const int0 = (v, what) => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : refuse('bad-shape', `${what} is not a safe integer >= 0`));
+  const revision = int0(parsed.revision, 'revision');
+  const applied = int0(parsed.appliedJournalSequence, 'appliedJournalSequence');
+  const id = parsed.appliedJournalId;
+  const dg = parsed.appliedJournalDigest;
+  if ((id !== null && !isHex64(id)) || (dg !== null && !isHex64(dg))) refuse('bad-shape', 'the applied journalId and digest are null or lowercase 64-hex');
+  if ((applied === 0) !== (id === null) || (id === null) !== (dg === null)) refuse('bad-anchor', 'the applied position, journalId and digest are all zero/null or all set');
+  for (const k of CHECKPOINT_LISTS) if (!Array.isArray(parsed[k])) refuse('bad-shape', `checkpoint.${k} is not a list`);
+  for (const k of ['activityIdsByNaturalKey', 'coordinatorIntentByParent']) if (!isRecord(parsed[k])) refuse('bad-shape', `checkpoint.${k} is not an object`);
+  if (Object.hasOwn(parsed, 'leaseCarriers')) readLeaseCarriers(parsed.leaseCarriers);
+  const held = [];
+  for (const h of parsed.pruningHolds) {
+    if (!isRecord(h) || !isHex64(h.journalId) || typeof h.reason !== 'string') refuse('bad-shape', 'a pruning hold is not {journalId, reason, ownerId}');
+    if (h.reason === 'checkpoint-anchor' || h.reason === 'identity-candidate') held.push(h.journalId);
+  }
+  let canonical;
+  try { canonical = canonicalJson(parsed); } catch (err) {
+    if (err instanceof SnapError) return refuse('noncanonical', err.message);
+    throw err;
+  }
+  if (canonical !== body) {
+    if (findJsonDefect(body) === 'duplicate-key') refuse('duplicate-key', 'an object repeats a key');
+    refuse('noncanonical', 'the checkpoint is not the canonical encoding of its own value');
+  }
+  return {
+    revision,
+    appliedJournalSequence: applied,
+    anchor: applied === 0 ? null : { sequence: applied, journalId: id, digest: dg },
+    heldJournalIds: [...new Set(held)],
+  };
+}
+
+// ── The file port (every operation the helper performs; a test faults any one of them) ───────────────────────────────────
+
+const C = nodeFs.constants;
+const isEnoent = (err) => typeof err === 'object' && err !== null && err.code === 'ENOENT';
+
+/** The real filesystem. Absence is `null` from `lstat`, `readFile`, `openRead` and `readdir`, for ENOENT only. */
+export const realFs = {
+  lstat(p) { try { return nodeFs.lstatSync(p); } catch (err) { if (isEnoent(err)) return null; throw err; } },
+  readFile(p) {
+    let fd;
+    try { fd = nodeFs.openSync(p, C.O_RDONLY | C.O_NOFOLLOW); } catch (err) { if (isEnoent(err)) return null; throw err; }
+    try { return new Uint8Array(nodeFs.readFileSync(fd)); } finally { nodeFs.closeSync(fd); }
+  },
+  openRead(p) {
+    let fd;
+    try { fd = nodeFs.openSync(p, C.O_RDONLY | C.O_NOFOLLOW); } catch (err) { if (isEnoent(err)) return null; throw err; }
+    let size;
+    try { size = nodeFs.fstatSync(fd).size; } catch (err) { nodeFs.closeSync(fd); throw err; }
+    return {
+      size,
+      read(position, length) {
+        const buf = new Uint8Array(length);
+        const n = nodeFs.readSync(fd, buf, 0, length, position);
+        return buf.subarray(0, n);
+      },
+      close() { nodeFs.closeSync(fd); },
+    };
+  },
+  create(p) {
+    const fd = nodeFs.openSync(p, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, 0o600);
+    return {
+      write(bytes) {
+        let at = 0;
+        while (at < bytes.length) at += nodeFs.writeSync(fd, bytes, at, bytes.length - at);
+      },
+      fsync() { nodeFs.fsyncSync(fd); },
+      close() { nodeFs.closeSync(fd); },
+    };
+  },
+  rename(from, to) { nodeFs.renameSync(from, to); },
+  /** Removes a file; false when it was already absent. */
+  unlink(p) { try { nodeFs.unlinkSync(p); return true; } catch (err) { if (isEnoent(err)) return false; throw err; } },
+  mkdir(p) { nodeFs.mkdirSync(p, { mode: 0o700 }); },
+  rmdir(p) { nodeFs.rmdirSync(p); },
+  readdir(p) { try { return nodeFs.readdirSync(p); } catch (err) { if (isEnoent(err)) return null; throw err; } },
+  fsyncDir(p) {
+    const fd = nodeFs.openSync(p, C.O_RDONLY);
+    try { nodeFs.fsyncSync(fd); } finally { nodeFs.closeSync(fd); }
+  },
+  fsyncFile(p) {
+    const fd = nodeFs.openSync(p, C.O_RDONLY | C.O_NOFOLLOW);
+    try { nodeFs.fsyncSync(fd); } finally { nodeFs.closeSync(fd); }
+  },
+};
+
+const CHUNK = 1 << 18;
+
+function sleepSync(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+
+/** Hash and size of a regular file, read in chunks and never followed through a symlink. */
+function measureFile(fs, p) {
+  const h = fs.openRead(p);
+  if (h === null) return null;
+  try {
+    const hash = createHash('sha256');
+    for (let at = 0; at < h.size;) {
+      const chunk = h.read(at, Math.min(CHUNK, h.size - at));
+      if (chunk.length === 0) refuse('short-read', `${path.basename(p)} ended before its ${h.size} bytes`);
+      hash.update(chunk);
+      at += chunk.length;
+    }
+    return { bytes: h.size, sha256: hash.digest('hex') };
+  } finally { h.close(); }
+}
+
+/** Streams a regular file through a validator. */
+function feedFile(fs, p, validator) {
+  const h = fs.openRead(p);
+  if (h === null) return false;
+  try {
+    for (let at = 0; at < h.size;) {
+      const chunk = h.read(at, Math.min(CHUNK, h.size - at));
+      if (chunk.length === 0) refuse('short-read', `${path.basename(p)} ended before its ${h.size} bytes`);
+      validator.push(chunk);
+      at += chunk.length;
+    }
+  } finally { h.close(); }
+  return true;
+}
+
+/** Writes bytes to `final` through a helper-owned `.partial` sibling: create, write, fsync, close, rename, fsync the directory. */
+function writeAtomic(fs, final, bytes) {
+  const tmp = `${final}.partial`;
+  fs.unlink(tmp);
+  const h = fs.create(tmp);
+  try { h.write(bytes); h.fsync(); } finally { h.close(); }
+  fs.rename(tmp, final);
+  fs.fsyncDir(path.dirname(final));
+}
+
+const asBytes = (text) => new TextEncoder().encode(text);
+
+// ── SQLite: read-only checks of a snapshot ──────────────────────────────────────────────────────────────────────────────
+
+const SQLITE_MAGIC = 'SQLite format 3\u0000';
+/** The estimate of one full verification before a run has timed one (D-6464): Step 7's largest per-set figure, 750 s weighted by the
+ *  journal's record count over five sets, at the server box's sizes. */
+const VERIFY_ESTIMATE_S = 150;
+
+/**
+ * Whether a file is a readable SQLite database, and whether it holds a `delegation_*` table. A header check first (a text
+ * placeholder is not a database), then a read-only open, `quick_check`, and the table list. Never writes. `quickCheck: false` leaves
+ * out the one step that scans the whole database (the thin walk's reading of a legacy dir, D-6364); the header and the table list stay.
+ * @returns {{ok: true, delegationTables: string[]} | {ok: false, why: string}}
+ */
+export function inspectDb(p, { quickCheck = true } = {}) {
+  let head;
+  try {
+    const fd = nodeFs.openSync(p, C.O_RDONLY | C.O_NOFOLLOW);
+    try { head = Buffer.alloc(16); nodeFs.readSync(fd, head, 0, 16, 0); } finally { nodeFs.closeSync(fd); }
+  } catch (err) { return { ok: false, why: `unreadable (${err.code ?? 'error'})` }; }
+  if (head.toString('latin1') !== SQLITE_MAGIC) return { ok: false, why: 'not a SQLite database (bad header)' };
+  // A node that cannot LOAD SQLite is a classifier that cannot run: a helper failure (70), not an answer that the database is bad.
+  let sqlite;
+  try { sqlite = seams.requireSqlite(); } catch (err) {
+    throw new HelperFailure(`node cannot load node:sqlite, so no coord.db can be checked (${oneLine(err instanceof Error ? err.message : String(err))})`);
+  }
+  let db;
+  try {
+    db = new sqlite.DatabaseSync(p, { readOnly: true });
+    if (quickCheck) {
+      const check = db.prepare('PRAGMA quick_check').all();
+      if (check.length !== 1 || check[0].quick_check !== 'ok') return { ok: false, why: 'quick_check failed' };
+    }
+    const names = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
+    return { ok: true, delegationTables: names.filter((n) => n.startsWith('delegation_')) };
+  } catch (err) {
+    return { ok: false, why: `cannot be opened read-only (${err.code ?? err.message})` };
+  } finally {
+    try { db?.close(); } catch { /* the check is over */ }
+  }
+}
+
+// ── Sidecar validation: one meaning for capture, classify and restore ──────────────────────────────────────────────────
+
+/**
+ * Validates sparse carried evidence separately from the contiguous journal suffix. Matching carried copies at/above J are
+ * suppressed only after their journal bytes match. Holds see the logical retained set; coverage and the anchor see the suffix.
+ * Both streams use the same strict line decoder. A carried tail is never eligible for the journal's prefix-capture exception.
+ */
+export function validateSidecars(fs, { checkpointBytes, journalPath, carriedPath = path.join(path.dirname(journalPath), CARRIED_FILE) }) {
+  const header = checkpointBytes === null ? null : readCheckpointHeader(checkpointBytes);
+  const applied = header?.appliedJournalSequence ?? 0;
+  const held = new Set(header?.heldJournalIds ?? []);
+  const pending = new Map();
+  let started = false;
+  let carriedPresent = false;
+  const readCarried = (J) => {
+    let last = null;
+    const carried = new JournalValidator({}, (record, bytes) => {
+      const seq = record.sequence;
+      if (last !== null && seq <= last) refuse('carried-order', `carried sequence ${seq} follows ${last}`);
+      last = seq;
+      if (J === null || seq < J) {
+        if (seq > applied) refuse('carried-past-applied', `carried sequence ${seq} is past the checkpoint's applied ${applied}`);
+        held.delete(record.journalId);
+      } else pending.set(seq, new Uint8Array(bytes));
+    });
+    carriedPresent = feedFile(fs, carriedPath, carried);
+    try { carried.finish(); } catch (err) {
+      if (err instanceof SnapError) err.retryable = false;
+      throw err;
+    }
+  };
+  const validator = new JournalValidator({
+    completeFromStart: applied === 0, anchor: header?.anchor ?? null, suffixAfter: applied,
+  }, (record, bytes) => {
+    if (!started) { started = true; readCarried(record.sequence); }
+    const copy = pending.get(record.sequence);
+    if (copy !== undefined) {
+      if (Buffer.compare(Buffer.from(copy), Buffer.from(bytes)) !== 0) {
+        refuse('carried-past-journal', `the carried line at sequence ${record.sequence} is not the journal's line there`);
+      }
+      pending.delete(record.sequence);
+    }
+    held.delete(record.journalId);
+    validator.accept(record);
+  });
+  const present = feedFile(fs, journalPath, validator);
+  if (!started) readCarried(null);
+  if (pending.size > 0) refuse('carried-past-journal', `${pending.size} carried line(s) at or above the journal's first sequence are not in the journal`);
+  if (!present && header?.anchor != null) refuse('anchor-missing', 'the checkpoint is anchored in a journal that is absent');
+  const coverage = validator.finish();
+  if (held.size > 0) refuse('held-evidence-missing', `${held.size} held journal ID(s) are not retained, first ${[...held][0]}`);
+  return { revision: header?.revision ?? 0, anchor: header?.anchor ?? null, coverage, journalPresent: present, carriedPresent, checkpointPresent: header !== null };
+}
+
+/** The manifest's `delegation` section for a validated pair. `tailOmitted` is `{bytes, sha256}` of the torn tail a capture left out, or null; the
+ *  field exists only then (absence means nothing was left out), so a manifest of an untorn journal is exactly what 8B wrote. */
+function delegationOf(v, tailOmitted = null) {
+  if (!v.journalPresent && !v.carriedPresent && !v.checkpointPresent) return { state: 'absent', checkpointRevision: null, anchor: null, journal: null };
+  const section = { state: 'initialized', checkpointRevision: v.revision, anchor: v.anchor, journal: v.coverage };
+  return tailOmitted === null ? section : { ...section, journalTailOmitted: tailOmitted };
+}
+
+// ── Capture ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+const memberOf = (filename, m) => (m === null ? { filename, present: false } : { filename, present: true, bytes: m.bytes, sha256: m.sha256 });
+
+/**
+ * Takes a coordination snapshot into `dir` (a fresh timestamp directory that already holds the SQLite snapshot
+ * `backup-coord.mjs` made, when the live DB exists), and writes the manifest LAST.
+ *
+ * Up to FIVE attempts, pausing 10, 25, 50 and 100 ms between them. One attempt: read checkpoint A; open the journal WITHOUT
+ * following a symlink and copy exactly the byte count `fstat` reports on that opened inode; read checkpoint B and require it
+ * byte-equal to A (else the checkpoint moved: retry); validate the checkpoint, the whole copied journal (pre-anchor records,
+ * anchor, suffix, copied EOF); validate and hash the expected SQLite snapshot; make every member durable; and only then write
+ * the manifest. A torn tail or a moved checkpoint is retryable (a writer was mid-append); a refusal is not. The LAST attempt differs
+ * in one way (D-4655): it copies the complete records alone, so a journal that still ends in a healable tail is captured up to its
+ * last LF and the manifest names what was left out; a tail the checkpoint names, or any defect of a complete record, is refused as
+ * before. Exhaustion, or any failure, removes the files this run created and writes no manifest.
+ *
+ * @param {{home: string, dir: string, fs?: typeof realFs, sleep?: (ms: number) => void, now?: () => Date,
+ *          hooks?: {afterJournalCopy?: (attempt: number) => void}}} opts
+ */
+export function capture(opts) {
+  const fs = opts.fs ?? realFs;
+  const sleep = opts.sleep ?? sleepSync;
+  const now = opts.now ?? (() => new Date());
+  const ccrcDir = path.join(opts.home, '.ccrc');
+  const dir = opts.dir;
+  const names = {
+    journal: path.join(dir, JOURNAL_FILE), carried: path.join(dir, CARRIED_FILE), checkpoint: path.join(dir, CHECKPOINT_FILE), db: path.join(dir, DB_FILE), manifest: path.join(dir, MANIFEST_FILE),
+  };
+  const owned = [];     // files this run created (finals), removed on failure
+  const partials = [`${names.journal}.partial`, `${names.checkpoint}.partial`, `${names.manifest}.partial`, `${names.carried}.partial`];
+  const cleanup = () => {
+    // The manifest first: if the run died after naming it, no member may be removed while it still describes them.
+    for (const p of [names.manifest, ...partials, ...owned]) { try { fs.unlink(p); } catch { /* best effort: a dead filesystem cannot be cleaned */ } }
+    owned.length = 0;
+  };
+  if (fs.lstat(dir)?.isDirectory() !== true) refuse('bad-dir', 'the snapshot directory does not exist');
+  if (fs.lstat(names.manifest) !== null) refuse('manifest-exists', 'the snapshot directory already holds a manifest');
+  const delays = CAPTURE_RETRY_DELAYS_MS;
+  const attempts = delays.length + 1;
+  let last = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const manifest = attemptOnce(attempt);
+      return manifest;
+    } catch (err) {
+      cleanup();
+      if (!(err instanceof SnapError) || !err.retryable) throw err;
+      last = err;
+      if (attempt < attempts) sleep(delays[attempt - 1]);
+    }
+  }
+  throw new SnapError('capture-exhausted', `the sidecars kept moving or tearing for ${attempts} attempts (last: ${last?.message ?? 'unknown'})`);
+
+  /**
+   * Copies the journal's `fstat` size into the backup directory's own partial file. In PREFIX mode (the last attempt only) it copies
+   * the complete records alone: every byte up to and including the last LF, and holds back whatever follows it, which is returned as
+   * `tail` (the bytes themselves, so the caller can name them in the manifest; they are never written anywhere). Reading only: the live
+   * journal is opened for read and never followed through a symlink.
+   */
+  function copyJournal(prefixMode) {
+    const h = fs.openRead(path.join(ccrcDir, JOURNAL_FILE));
+    if (h === null) return null;
+    try {
+      const out = fs.create(partials[0]);
+      try {
+        const hash = createHash('sha256');
+        let written = 0;
+        let held = [];          // prefix mode: the chunks after the last LF seen so far
+        for (let at = 0; at < h.size;) {
+          const chunk = h.read(at, Math.min(CHUNK, h.size - at));
+          if (chunk.length === 0) refuse('journal-shrank', 'the journal ended before the size fstat reported', { retryable: true });
+          at += chunk.length;
+          const lf = prefixMode ? chunk.lastIndexOf(0x0a) : chunk.length - 1;
+          if (prefixMode && lf === -1) { held.push(chunk); continue; }
+          for (const part of [...held, chunk.subarray(0, lf + 1)]) { out.write(part); hash.update(part); written += part.length; }
+          held = prefixMode && lf + 1 < chunk.length ? [chunk.subarray(lf + 1)] : [];
+        }
+        out.fsync();
+        const tail = held.length === 0 ? null : Buffer.concat(held);
+        return { bytes: written, sha256: hash.digest('hex'), tail };
+      } finally { out.close(); }
+    } finally { h.close(); }
+  }
+
+  function attemptOnce(attempt) {
+    const liveCheckpoint = path.join(ccrcDir, CHECKPOINT_FILE);
+    const a = fs.readFile(liveCheckpoint);
+    const liveCarried = path.join(ccrcDir, CARRIED_FILE);
+    const carriedA = fs.readFile(liveCarried);
+    // Only the LAST attempt may leave a tail out: the first four see a tail as a writer mid-append and retry it.
+    const journal = copyJournal(attempt === attempts);
+    opts.hooks?.afterJournalCopy?.(attempt);
+    const carriedB = fs.readFile(liveCarried);
+    const b = fs.readFile(liveCheckpoint);
+    if ((a === null) !== (b === null) || (a !== null && b !== null && Buffer.compare(Buffer.from(a), Buffer.from(b)) !== 0)) {
+      refuse('checkpoint-moved', 'the checkpoint changed while the journal was copied', { retryable: true });
+    }
+    if ((carriedA === null) !== (carriedB === null) || (carriedA !== null && carriedB !== null && Buffer.compare(Buffer.from(carriedA), Buffer.from(carriedB)) !== 0)) {
+      refuse('carried-moved', 'the carried file changed while the journal was copied', { retryable: true });
+    }
+    let carried = null;
+    if (carriedA !== null) {
+      const out = fs.create(partials[3]);
+      try { out.write(carriedA); out.fsync(); } finally { out.close(); }
+      carried = { bytes: carriedA.length, sha256: createHash('sha256').update(carriedA).digest('hex') };
+    }
+    // A checkpoint with no journal is a sound state only at sequence 0; validateSidecars refuses the anchored case. What it validates is
+    // the COPY, which in prefix mode holds the complete records alone: any defect of those is a refusal of its own, and a checkpoint that
+    // names, or holds, a record the prefix lacks (the LF-less one, or one past the last complete) leaves the tail NOT left out: the refusal
+    // is the tail's, retryable and exhausted, as it was before the heal existed. Only these two refusals: validating without the fold, they
+    // are the only ones this helper can meet after a clean scan. The server's recovery folds and can also refuse at its final validation;
+    // it reports ANY refusal after a clean scan under the tail's code (`recoverDelegationFromFiles`; R76 M4), so the two agree on these two.
+    let verdict;
+    try {
+      verdict = validateSidecars(fs, { checkpointBytes: a, journalPath: journal === null ? names.journal : partials[0], carriedPath: carried === null ? names.carried : partials[3] });
+    } catch (err) {
+      if (journal?.tail != null && err instanceof SnapError && (err.code === 'anchor-missing' || err.code === 'held-evidence-missing')) {
+        const refusal = tornTailError(journal.tail);
+        throw new SnapError(refusal.code, `${refusal.message.slice(refusal.code.length + 2)}; the checkpoint does not leave it out: ${err.message}`, { retryable: true });
+      }
+      throw err;
+    }
+    const tailOmitted = journal?.tail != null ? { bytes: journal.tail.length, sha256: createHash('sha256').update(journal.tail).digest('hex') } : null;
+    let checkpoint = null;
+    if (a !== null) {
+      const out = fs.create(partials[1]);
+      try { out.write(a); out.fsync(); } finally { out.close(); }
+      checkpoint = { bytes: a.length, sha256: createHash('sha256').update(a).digest('hex') };
+    }
+    // The SQLite snapshot: expected exactly when the live DB exists.
+    const liveDb = fs.lstat(path.join(ccrcDir, DB_FILE));
+    const snap = fs.lstat(names.db);
+    let db = null;
+    if (liveDb !== null) {
+      if (snap === null || !snap.isFile()) refuse('db-snapshot-missing', 'coord.db exists but its snapshot was not taken');
+      const state = inspectDb(names.db);
+      if (!state.ok) refuse('db-snapshot-invalid', `the coord.db snapshot ${state.why}`);
+      db = measureFile(fs, names.db);
+    } else if (snap !== null) {
+      refuse('db-snapshot-unexpected', 'there is a coord.db snapshot but no live coord.db');
+    }
+    // Make every member durable, THEN name them, THEN write the manifest last.
+    if (carried !== null) { fs.rename(partials[3], names.carried); owned.push(names.carried); }
+    if (journal !== null) { fs.rename(partials[0], names.journal); owned.push(names.journal); }
+    if (checkpoint !== null) { fs.rename(partials[1], names.checkpoint); owned.push(names.checkpoint); }
+    if (db !== null) fs.fsyncFile(names.db);
+    fs.fsyncDir(dir);
+    fs.fsyncDir(path.dirname(dir));
+    const manifest = {
+      format: MANIFEST_FORMAT,
+      version: 1,
+      capturedAt: now().toISOString(),
+      members: {
+        delegationJournal: memberOf(JOURNAL_FILE, journal),
+        ...(carried === null ? {} : { delegationCarried: memberOf(CARRIED_FILE, carried) }),
+        delegationCheckpoint: memberOf(CHECKPOINT_FILE, checkpoint),
+        coordDb: memberOf(DB_FILE, db),
+      },
+      delegation: delegationOf(verdict, tailOmitted),
+    };
+    writeAtomic(fs, names.manifest, asBytes(`${canonicalJson(manifest)}\n`));
+    owned.length = 0;
+    return manifest;
+  }
+}
+
+// ── Classify ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+const MEMBER_KEYS = { delegationJournal: JOURNAL_FILE, delegationCheckpoint: CHECKPOINT_FILE, coordDb: DB_FILE, delegationCarried: CARRIED_FILE };
+
+function readManifest(fs, p) {
+  const bytes = fs.readFile(p);
+  if (bytes === null) refuse('manifest-missing', 'no manifest');
+  let text;
+  try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { return refuse('manifest-invalid', 'the manifest is not UTF-8'); }
+  if (!text.endsWith('\n') || text.slice(0, -1).includes('\n')) refuse('manifest-invalid', 'the manifest is not one line and one LF');
+  const body = text.slice(0, -1);
+  let m;
+  try { m = JSON.parse(body); } catch { return refuse('manifest-invalid', 'the manifest is not JSON'); }
+  if (!isRecord(m)) refuse('manifest-invalid', 'the manifest is not an object');
+  exactKeys2(m, ['format', 'version', 'capturedAt', 'members', 'delegation'], 'the manifest');
+  if (m.format !== MANIFEST_FORMAT || m.version !== 1) refuse('manifest-invalid', 'the manifest is not a ccrc-coordination-snapshot version 1');
+  if (typeof m.capturedAt !== 'string' || Number.isNaN(Date.parse(m.capturedAt))) refuse('manifest-invalid', 'capturedAt is not an instant');
+  if (!isRecord(m.members)) refuse('manifest-invalid', 'members is not an object');
+  // ADDITIVE: old version-1 manifests omit carried evidence; the original three members remain required.
+  exactKeys2(m.members, Object.keys(MEMBER_KEYS).filter((key) => key !== 'delegationCarried' || Object.hasOwn(m.members, key)), 'members');
+  for (const [key, filename] of Object.entries(MEMBER_KEYS)) {
+    if (!Object.hasOwn(m.members, key)) continue;
+    const mem = m.members[key];
+    if (!isRecord(mem) || mem.filename !== filename) refuse('manifest-invalid', `members.${key} does not name ${filename}`);
+    if (mem.present === false) exactKeys2(mem, ['filename', 'present'], `members.${key}`);
+    else if (mem.present === true) {
+      exactKeys2(mem, ['filename', 'present', 'bytes', 'sha256'], `members.${key}`);
+      if (!Number.isSafeInteger(mem.bytes) || mem.bytes < 0 || !isHex64(mem.sha256)) refuse('manifest-invalid', `members.${key} bytes or sha256 is malformed`);
+    } else refuse('manifest-invalid', `members.${key}.present is not a boolean`);
+  }
+  const d = m.delegation;
+  if (!isRecord(d)) refuse('manifest-invalid', 'delegation is not an object');
+  exactKeys2(d, Object.hasOwn(d, 'journalTailOmitted') ? ['state', 'checkpointRevision', 'anchor', 'journal', 'journalTailOmitted'] : ['state', 'checkpointRevision', 'anchor', 'journal'], 'delegation');
+  if (Object.hasOwn(d, 'journalTailOmitted')) {
+    // ADDITIVE (D-4655): the length and SHA-256 of the torn tail a capture left out. Informational (the tail is in no snapshot), so only its shape is checked.
+    const t = d.journalTailOmitted;
+    if (d.state !== 'initialized' || !isRecord(t)) refuse('manifest-invalid', 'journalTailOmitted is only a description of a torn tail, on an initialized delegation');
+    exactKeys2(t, ['bytes', 'sha256'], 'journalTailOmitted');
+    if (!Number.isSafeInteger(t.bytes) || t.bytes < 1 || !isHex64(t.sha256)) refuse('manifest-invalid', 'journalTailOmitted bytes or sha256 is malformed');
+  }
+  if (d.state === 'absent') {
+    if (d.checkpointRevision !== null || d.anchor !== null || d.journal !== null) refuse('manifest-invalid', 'an absent delegation carries no revision, anchor or journal');
+  } else if (d.state === 'initialized') {
+    if (!Number.isSafeInteger(d.checkpointRevision) || d.checkpointRevision < 0) refuse('manifest-invalid', 'checkpointRevision is not a safe integer');
+    if (d.anchor !== null) {
+      if (!isRecord(d.anchor)) refuse('manifest-invalid', 'anchor is not a position');
+      exactKeys2(d.anchor, ['sequence', 'journalId', 'digest'], 'anchor');
+      if (!isSeq(d.anchor.sequence) || !isHex64(d.anchor.journalId) || !isHex64(d.anchor.digest)) refuse('manifest-invalid', 'anchor is malformed');
+    }
+    if (!isRecord(d.journal)) refuse('manifest-invalid', 'journal coverage is not an object');
+    exactKeys2(d.journal, ['firstSequence', 'lastSequence', 'recordCount', 'firstPreviousDigest', 'copiedEof'], 'journal coverage');
+  } else refuse('manifest-invalid', 'delegation.state is neither absent nor initialized');
+  let canonical;
+  try { canonical = canonicalJson(m); } catch { return refuse('manifest-invalid', 'the manifest is outside the canonical domain'); }
+  if (canonical !== body) refuse('manifest-invalid', 'the manifest is not the canonical encoding of its own value');
+  return m;
+}
+
+function exactKeys2(o, keys, what, code = 'manifest-invalid') {
+  for (const k of Object.keys(o)) if (!keys.includes(k)) refuse(code, `${what} has the unknown key ${JSON.stringify(k)}`);
+  for (const k of keys) if (!Object.hasOwn(o, k)) refuse(code, `${what} is missing ${JSON.stringify(k)}`);
+}
+
+/** The members a v1 manifest can hold, in the order a record lists them (the manifest file itself follows them). */
+const THIN_MEMBERS = [['coordDb', DB_FILE], ['delegationJournal', JOURNAL_FILE], ['delegationCheckpoint', CHECKPOINT_FILE], ['delegationCarried', CARRIED_FILE]];
+/** The order a thinning deletes its files in, and so the only order a record's `dropped` may list them in (D-6348): the manifest goes last.
+ *  Derived from `THIN_MEMBERS`, so the two cannot disagree. */
+const DROP_ORDER = Object.freeze([...THIN_MEMBERS.map(([, f]) => f), MANIFEST_FILE]);
+
+/**
+ * Reads the thinning record (D-6348): one line of canonical JSON and an LF, exactly
+ * `{format, version: 1, thinnedAt, by, rule: {knob, keep}, source, capturedAt, dropped}`. Throws a `thinned-invalid` SnapError on any defect.
+ * @returns {{format: string, version: number, thinnedAt: string, by: 'update' | 'backup', rule: {knob: string, keep: number}, source: 'v1' | 'legacy', capturedAt: string | null, dropped: Array<{filename: string, bytes: number, sha256: string}>}}
+ */
+function readThinned(fs, p) {
+  const bad = (why) => refuse('thinned-invalid', why);
+  const st = fs.lstat(p);
+  if (st === null) bad('no record');
+  if (!st.isFile()) bad('the record is not a regular file');
+  const bytes = fs.readFile(p);
+  if (bytes === null) bad('no record');
+  let text;
+  try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { return bad('the record is not UTF-8'); }
+  if (!text.endsWith('\n') || text.slice(0, -1).includes('\n')) bad('the record is not one line and one LF');
+  const body = text.slice(0, -1);
+  let t;
+  try { t = JSON.parse(body); } catch { return bad('the record is not JSON'); }
+  const defect = findJsonDefect(body);
+  if (defect !== null) bad(`the record is not clean JSON (${defect})`);
+  if (!isRecord(t)) bad('the record is not an object');
+  exactKeys2(t, ['format', 'version', 'thinnedAt', 'by', 'rule', 'source', 'capturedAt', 'dropped'], 'the record', 'thinned-invalid');
+  if (t.format !== THINNED_FORMAT || t.version !== 1) bad('the record is not a ccrc-coordination-thinned version 1');
+  if (!isInstant(t.thinnedAt)) bad('thinnedAt is not an instant');
+  if (t.by !== 'update' && t.by !== 'backup') bad('by is neither update nor backup');
+  if (!isRecord(t.rule)) bad('rule is not an object');
+  exactKeys2(t.rule, ['knob', 'keep'], 'rule', 'thinned-invalid');
+  if (t.rule.knob !== 'CCRC_BACKUP_DATA_KEEP') bad('rule.knob is not CCRC_BACKUP_DATA_KEEP');
+  if (!Number.isSafeInteger(t.rule.keep) || t.rule.keep < 2 || t.rule.keep > 9999) bad('rule.keep is not a whole number from 2 to 9999');
+  if (t.source !== 'v1' && t.source !== 'legacy') bad('source is neither v1 nor legacy');
+  if (t.source === 'v1' ? (typeof t.capturedAt !== 'string' || Number.isNaN(Date.parse(t.capturedAt))) : t.capturedAt !== null) bad('capturedAt does not fit source');
+  if (!Array.isArray(t.dropped) || t.dropped.length === 0) bad('dropped is not a non-empty array');
+  const seen = new Set();
+  let at = -1;
+  for (const d of t.dropped) {
+    if (!isRecord(d)) bad('a dropped entry is not an object');
+    exactKeys2(d, ['filename', 'bytes', 'sha256'], 'a dropped entry', 'thinned-invalid');
+    if (!SNAPSHOT_NAMES.includes(d.filename)) bad(`dropped names ${JSON.stringify(d.filename)}, which is not one of the five snapshot files`);
+    if (seen.has(d.filename)) bad(`dropped names ${d.filename} twice`);
+    seen.add(d.filename);
+    const rank = DROP_ORDER.indexOf(d.filename);
+    if (rank < at) bad(`dropped lists ${d.filename} out of the drop order (${DROP_ORDER.join(', ')})`);
+    at = rank;
+    if (!Number.isSafeInteger(d.bytes) || d.bytes < 0 || !isHex64(d.sha256)) bad(`dropped ${d.filename} bytes or sha256 is malformed`);
+  }
+  if (t.source === 'legacy' && (t.dropped.length !== 1 || t.dropped[0].filename !== DB_FILE)) bad('a legacy record drops coord.db alone');
+  if (t.source === 'v1' && t.dropped[t.dropped.length - 1].filename !== MANIFEST_FILE) bad(`a v1 record ends with ${MANIFEST_FILE}, the last file a thinning deletes`);
+  let canonical;
+  try { canonical = canonicalJson(t); } catch { return bad('the record is outside the canonical domain'); }
+  if (canonical !== body) bad('the record is not the canonical encoding of its own value');
+  return t;
+}
+
+/** Checks a v1 snapshot directory against its manifest, member by member and as a delegation pair. Throws a SnapError when it does not agree. */
+function verifyV1(fs, from) {
+  const manifest = readManifest(fs, path.join(from, MANIFEST_FILE));
+  for (const [key, filename] of Object.entries(MEMBER_KEYS)) {
+    const mem = manifest.members[key];
+    const p = path.join(from, filename);
+    const st = fs.lstat(p);
+    if (!mem?.present) {
+      if (st !== null) refuse('member-undeclared', `${filename} is in the directory but the manifest says it is absent`);
+      continue;
+    }
+    if (st === null) refuse('member-missing', `${filename} is in the manifest and not in the directory`);
+    if (!st.isFile()) refuse('member-not-file', `${filename} is not a regular file`);
+    const got = measureFile(fs, p);
+    if (got === null || got.bytes !== mem.bytes) refuse('member-size', `${filename} is ${got?.bytes ?? 'absent'} bytes, the manifest says ${mem.bytes}`);
+    if (got.sha256 !== mem.sha256) refuse('member-hash', `${filename} does not match the manifest's SHA-256`);
+  }
+  if (manifest.members.coordDb.present) {
+    const state = inspectDb(path.join(from, DB_FILE));
+    if (!state.ok) refuse('db-invalid', `coord.db ${state.why}`);
+  }
+  const cp = manifest.members.delegationCheckpoint.present ? fs.readFile(path.join(from, CHECKPOINT_FILE)) : null;
+  const verdict = validateSidecars(fs, { checkpointBytes: cp, journalPath: path.join(from, JOURNAL_FILE) });
+  if (verdict.journalPresent !== manifest.members.delegationJournal.present) refuse('member-undeclared', 'the journal member disagrees with the manifest');
+  if (canonicalJson(delegationOf(verdict, manifest.delegation.journalTailOmitted ?? null)) !== canonicalJson(manifest.delegation)) refuse('delegation-mismatch', 'the manifest\'s delegation section does not describe the copied sidecars');
+  return manifest;
+}
+
+/**
+ * Classifies a timestamp directory. `v1`: a valid manifest and everything it names. `legacy`: no manifest and no sidecars, a valid
+ * coord.db with no `delegation_*` table. `none`: no coordination snapshot at all. `thinned`: a valid thinning record and none of the
+ * five snapshot files, by design (D-6349). `invalid`: anything else that claims to be one. A PRESENT manifest that is invalid is
+ * `invalid` and never falls back to the DB beside it. A thinning record is read FIRST: an unreadable one is `invalid`, one beside the
+ * whole set it lists is a thinning that never started (the dir classifies as it would without it), one beside part of that set is
+ * a thinning that did not finish (`invalid`).
+ * `data` is true for a v1 snapshot with any member present and for a legacy one (validated, never inferred from file presence).
+ * @returns {{kind: 'v1' | 'legacy' | 'none' | 'thinned' | 'invalid', reason: string, manifest: object | null, data?: boolean, thinned?: object}}
+ */
+export function classify(opts) {
+  const v = classifyRaw(opts);
+  return { ...v, reason: oneLine(v.reason) };
+}
+
+function classifyRaw({ from, fs = realFs }) {
+  const st = fs.lstat(from);
+  if (st === null || !st.isDirectory()) return { kind: 'invalid', reason: 'the path is not a directory', manifest: null };
+  if (fs.lstat(path.join(from, THINNED_FILE)) !== null) {
+    let t;
+    try { t = readThinned(fs, path.join(from, THINNED_FILE)); } catch (err) {
+      if (err instanceof SnapError) return { kind: 'invalid', reason: `the thinning record is unreadable: ${err.message}`, manifest: null };
+      if (typeof err === 'object' && err !== null && typeof err.code === 'string') return { kind: 'invalid', reason: `unreadable (${err.code})`, manifest: null };
+      throw err;
+    }
+    if (t.dropped.every((d) => fs.lstat(path.join(from, d.filename)) !== null)) {
+      // Every name the record lists is still here: no delete happened, the data set is whole. The record is stale.
+      const v = classifyBody({ from, fs });
+      return { ...v, reason: `${v.reason} (${THINNED_FILE} beside it is a thinning that never started; the next thin removes it)` };
+    }
+    const present = SNAPSHOT_NAMES.filter((n) => fs.lstat(path.join(from, n)) !== null);
+    if (present.length > 0) {
+      // The promise that a later run finishes this dir is made only when `finishOne` would: every leftover is its `dropped` entry (D-6349).
+      let foreign;
+      try { foreign = present.find((n) => !isDroppedLeftover(fs, from, t, n)); } catch (err) {
+        if (err instanceof SnapError) foreign = present[0];
+        else if (hasCode(err)) return { kind: 'invalid', reason: `unreadable (${err.code})`, manifest: null };
+        else throw err;
+      }
+      if (foreign !== undefined) {
+        return { kind: 'invalid', reason: `a thinning did not finish and cannot be finished: ${foreign} beside ${THINNED_FILE} differs from what the record says was dropped (thin refuses it as thin-foreign, and it stays as evidence)`, manifest: null };
+      }
+      return { kind: 'invalid', reason: `a thinning did not finish: ${present[0]} is still beside ${THINNED_FILE} (the next completed update or ccrc backup finishes it)`, manifest: null };
+    }
+    return { kind: 'thinned', reason: `thinned ${t.thinnedAt} by ccrc ${t.by} (CCRC_BACKUP_DATA_KEEP=${t.rule.keep}): its coordination data set was dropped by design`, manifest: null, data: false, thinned: t };
+  }
+  return classifyBody({ from, fs });
+}
+
+function classifyBody({ from, fs }) {
+  if (fs.lstat(path.join(from, MANIFEST_FILE)) !== null) {
+    try {
+      const manifest = verifyV1(fs, from);
+      const data = Object.values(manifest.members).some((m) => m.present);
+      return { kind: 'v1', reason: `a valid manifest, ${manifest.delegation.state} delegation, coord.db ${manifest.members.coordDb.present ? 'present' : 'absent'}`, manifest, data };
+    } catch (err) {
+      if (err instanceof SnapError) return { kind: 'invalid', reason: err.message, manifest: null };
+      // A symlink where a member should be, a directory, a permission error: the snapshot cannot be read as one, which is not "none".
+      if (typeof err === 'object' && err !== null && typeof err.code === 'string') return { kind: 'invalid', reason: `unreadable (${err.code})`, manifest: null };
+      throw err;
+    }
+  }
+  for (const f of [JOURNAL_FILE, CHECKPOINT_FILE, CARRIED_FILE]) {
+    if (fs.lstat(path.join(from, f)) !== null) return { kind: 'invalid', reason: `${f} is present without a manifest`, manifest: null };
+  }
+  const db = fs.lstat(path.join(from, DB_FILE));
+  if (db === null) return { kind: 'none', reason: 'no manifest, no sidecars and no coord.db', manifest: null };
+  if (!db.isFile()) return { kind: 'invalid', reason: 'coord.db is not a regular file', manifest: null };
+  const state = inspectDb(path.join(from, DB_FILE));
+  if (!state.ok) return { kind: 'invalid', reason: `coord.db ${state.why}`, manifest: null };
+  if (state.delegationTables.length > 0) return { kind: 'invalid', reason: `coord.db holds ${state.delegationTables[0]} and has no manifest`, manifest: null };
+  return { kind: 'legacy', reason: 'a valid coord.db from before the coordination sidecars', manifest: null, data: true };
+}
+
+// ── Thin: keep the newest N verified data sets, drop the rest, record first (D-6346, D-6348, D-6350, D-6358) ────────────────
+
+const hasCode = (err) => typeof err === 'object' && err !== null && typeof err.code === 'string';
+
+/** `quickState` without the record: the manifest and each member's presence and size, no hashing. */
+function quickBody(fs, dir) {
+  const bad = (detail) => ({ word: 'damaged', detail });
+  const mp = path.join(dir, MANIFEST_FILE);
+  if (fs.lstat(mp) !== null) {
+    let manifest;
+    try { manifest = readManifest(fs, mp); } catch (err) {
+      if (err instanceof SnapError) return bad(err.message);
+      if (hasCode(err)) return bad(`unreadable (${err.code})`);
+      throw err;
+    }
+    for (const [key, filename] of Object.entries(MEMBER_KEYS)) {
+      const mem = manifest.members[key];
+      const st = fs.lstat(path.join(dir, filename));
+      if (!mem?.present) {
+        if (st !== null) return bad(`${filename} is in the directory but the manifest says it is absent`);
+        continue;
+      }
+      if (st === null) return bad(`${filename} is in the manifest and not in the directory`);
+      if (!st.isFile()) return bad(`${filename} is not a regular file`);
+      if (st.size !== mem.bytes) return bad(`${filename} is ${st.size} bytes, the manifest says ${mem.bytes}`);
+    }
+    const any = Object.values(manifest.members).some((m) => m.present);
+    return { word: any ? 'full' : 'none', source: 'v1', manifest, detail: any ? 'a manifest and every member it names, by presence and size' : 'a manifest that names no member' };
+  }
+  for (const f of [JOURNAL_FILE, CHECKPOINT_FILE, CARRIED_FILE]) {
+    if (fs.lstat(path.join(dir, f)) !== null) return bad(`${f} is present without a manifest`);
+  }
+  const db = fs.lstat(path.join(dir, DB_FILE));
+  if (db === null) return { word: 'none', detail: 'no manifest, no sidecars and no coord.db' };
+  if (!db.isFile()) return bad('coord.db is not a regular file');
+  // Thinning cannot be undone and a damaged dir is never thinned (D-6364), so a coord.db that is not SQLite, cannot be opened or holds a
+  // delegation_ table (a refused capture's remains) is damage and stays as it is, never a data set dropped "by design". The same check
+  // classify makes, minus quick_check, which scans the whole database (past the count presence and size decide, D-6350).
+  const state = inspectDb(path.join(dir, DB_FILE), { quickCheck: false });
+  if (!state.ok) return bad(`coord.db ${state.why}`);
+  if (state.delegationTables.length > 0) return bad(`coord.db holds ${state.delegationTables[0]} and has no manifest`);
+  return { word: 'full', source: 'legacy', detail: 'a coord.db with no manifest that opens read-only and holds no delegation_ table' };
+}
+
+/**
+ * What a backup directory holds, by presence and size: no hashing, no `quick_check`, no journal read (D-6350). A manifest-less coord.db
+ * is opened read-only for its header and table list (D-6364), outside the `fs` seam, as `classify`'s own legacy reading is.
+ * `full` (a v1 manifest with a member, or a legacy coord.db; `source` says which), `none` (nothing to thin), `thinned` (a valid record and
+ * none of the five names), `stale` (a record beside every name it lists), `interrupted` (a record beside some of them) and `damaged`.
+ * A record that cannot be read is `damaged` with the `error` that said so, which a walk refuses the dir with. `record` rides the three record words.
+ * @returns {{word: 'full' | 'none' | 'thinned' | 'interrupted' | 'stale' | 'damaged', source?: 'v1' | 'legacy', manifest?: object, record?: object, error?: Error, detail: string}}
+ */
+export function quickState(fs, dir) {
+  const rp = path.join(dir, THINNED_FILE);
+  if (fs.lstat(rp) === null) return quickBody(fs, dir);
+  let t;
+  try { t = readThinned(fs, rp); } catch (err) {
+    if (err instanceof SnapError) return { word: 'damaged', error: err, detail: `the thinning record is unreadable: ${err.message}` };
+    if (hasCode(err)) return { word: 'damaged', error: err, detail: `the thinning record is unreadable (${err.code})` };
+    throw err;
+  }
+  if (t.dropped.every((d) => fs.lstat(path.join(dir, d.filename)) !== null)) return { word: 'stale', record: t, detail: 'a thinning record beside the whole set it lists' };
+  const left = SNAPSHOT_NAMES.find((n) => fs.lstat(path.join(dir, n)) !== null);
+  if (left !== undefined) return { word: 'interrupted', record: t, detail: `${left} is still beside ${THINNED_FILE}` };
+  return { word: 'thinned', record: t, detail: 'thinned by design' };
+}
+
+/** The `user_version` in a SQLite header (bytes 60 to 63, big-endian, after the 16-byte magic), read without opening the database.
+ *  `null` for a file that is absent, shorter than 100 bytes or not SQLite: its one caller treats all three alike. */
+function dbUserVersion(fs, p) {
+  const h = fs.openRead(p);
+  if (h === null) return null;
+  try {
+    if (h.size < 100) return null;
+    const head = h.read(0, 100);
+    if (head.length < 100 || Buffer.from(head.subarray(0, 16)).toString('latin1') !== SQLITE_MAGIC) return null;
+    return new DataView(head.buffer, head.byteOffset, head.byteLength).getUint32(60, false);
+  } finally { h.close(); }
+}
+
+/** Writes the record FIRST, then deletes the names it lists in its own order, then syncs the directory. Never removes a directory or any other name. */
+function thinOne(fs, dir, q, { keep, by, now }) {
+  let dropped;
+  if (q.source === 'legacy') {
+    const m = measureFile(fs, path.join(dir, DB_FILE));
+    if (m === null) refuse('thin-vanished', 'coord.db is gone');
+    dropped = [{ filename: DB_FILE, bytes: m.bytes, sha256: m.sha256 }];
+  } else {
+    dropped = [];
+    for (const [key, filename] of THIN_MEMBERS) {
+      const mem = q.manifest.members[key];
+      if (mem?.present) dropped.push({ filename, bytes: mem.bytes, sha256: mem.sha256 });
+    }
+    const mf = measureFile(fs, path.join(dir, MANIFEST_FILE));
+    if (mf === null) refuse('thin-vanished', `${MANIFEST_FILE} is gone`);
+    dropped.push({ filename: MANIFEST_FILE, bytes: mf.bytes, sha256: mf.sha256 });
+  }
+  const record = {
+    format: THINNED_FORMAT, version: 1, thinnedAt: now().toISOString(), by, rule: { knob: 'CCRC_BACKUP_DATA_KEEP', keep },
+    source: q.source, capturedAt: q.source === 'v1' ? q.manifest.capturedAt : null, dropped,
+  };
+  writeAtomic(fs, path.join(dir, THINNED_FILE), asBytes(`${canonicalJson(record)}\n`));
+  for (const d of dropped) fs.unlink(path.join(dir, d.filename));
+  fs.fsyncDir(dir);
+  return dropped;
+}
+
+/** Whether the leftover `n` of an interrupted thinning is the file the record says was dropped: a regular file that the record lists, with
+ *  that entry's bytes and SHA-256. The one spelling of the rule, so `classify`'s promise that a run finishes a dir is `finishOne`'s own test. */
+function isDroppedLeftover(fs, dir, t, n) {
+  const p = path.join(dir, n);
+  const st = fs.lstat(p);
+  const d = t.dropped.find((x) => x.filename === n);
+  if (st === null || d === undefined || !st.isFile()) return false;
+  const got = measureFile(fs, p);
+  return got !== null && got.bytes === d.bytes && got.sha256 === d.sha256;
+}
+
+/** Finishes an interrupted thinning: each leftover is deleted only when it is its `dropped` entry (`isDroppedLeftover`),
+ *  and any other leftover refuses the dir before anything is deleted. Returns the figure the record gives for the whole set. */
+function finishOne(fs, dir, t) {
+  const todo = [];
+  for (const n of SNAPSHOT_NAMES) {
+    if (fs.lstat(path.join(dir, n)) === null) continue;
+    if (!isDroppedLeftover(fs, dir, t, n)) refuse('thin-foreign', `${n} beside ${THINNED_FILE} is not the file the record lists, so it is left in place`);
+    todo.push(n);
+  }
+  for (const d of t.dropped) if (todo.includes(d.filename)) fs.unlink(path.join(dir, d.filename));
+  fs.fsyncDir(dir);
+  return t.dropped.reduce((s, d) => s + d.bytes, 0);
+}
+
+/**
+ * Keeps the newest `keep` backup directories that carry a verified coordination data set and thins the rest (D-6350):
+ * `own` first and never thinned, then `dirs` newest first. `verified` (one of `dirs`) was verified by the caller in this same run.
+ * A dir is verified in full only when it is about to be counted, within a budget of `keep + 2` verifications; past the count a dir is
+ * read by presence and size, and one pre-migration data set is kept (D-6358). When no more dirs can be counted than `keep`, nothing can be
+ * thinned and nothing is verified (D-6350's amendment). `out(line)` is called once per line, as it happens.
+ * It throws a SnapError only for a call that is wrong in itself (a `dirs` list not strictly newest first by name, D-6362, included), and anything else
+ * only for a helper failure. The `verified` dir is never thinned (D-6362). `left` counts the dirs that still hold a data set and were left
+ * as they are (damaged, invalid, refused, untouched past a stop); a thinned dir, a dir with no data set and a path that is not a directory are not counted (D-6363).
+ * A `verified` dir that reads as anything but whole, stale or empty (an interrupted thinning, a thinned dir, a damaged one) is refused, never finished (D-6362).
+ * `until` (unix seconds, `null` for none) is the time budget on the update path (D-6464): a full verification is started only when `now` plus
+ * the longest one this run has measured (VERIFY_ESTIMATE_S until one has run) is not past it. Otherwise the walk ends there, every dir it did not
+ * reach that holds a data set is left, one line says so, and `stopped` stays false: it is not a refusal. Nothing else waits on the budget:
+ * an interrupted thinning is finished whatever the budget, past a time stop too, and a record is never written without its deletes. A dir
+ * behind a time stop is read as the walk reads it, so what the walk refuses there (a failed reading, a `verified` dir that is not whole) is
+ * refused with its WARN, and counts in `refused` (review 817 F6).
+ * @returns {{kept: number, thinned: number, left: number, refused: number, stopped: boolean}}
+ */
+export function thinBackups({ own = null, verified = null, dirs, keep, by, until = null, fs = realFs, now = () => new Date(), out }) {
+  if (!Number.isSafeInteger(keep) || keep < 2 || keep > 9999) refuse('thin-usage', 'keep is not a whole number from 2 to 9999');
+  if (by !== 'update' && by !== 'backup') refuse('thin-usage', 'by is neither update nor backup');
+  const ownP = own === null ? null : path.resolve(own);
+  const verP = verified === null ? null : path.resolve(verified);
+  const all = dirs.map((d) => path.resolve(d));
+  if (verP !== null && !all.includes(verP)) refuse('thin-usage', 'the verified directory is not one of the directories to walk');
+  // The count means "the newest N", so the order is part of the call (D-6362): strictly newest first by name, never sorted here.
+  for (let i = 1; i < all.length; i++) if (!(path.basename(all[i - 1]) > path.basename(all[i]))) refuse('thin-usage', 'the directories are not strictly newest first by name');
+  const walk = all.filter((d) => d !== ownP);
+  const budget = keep + 2;
+  const mib = (bytes) => Math.floor(bytes / 1048576);
+  const sum = (dropped) => dropped.reduce((s, d) => s + d.bytes, 0);
+  let counted = 0; let preMigration = 0; let thinned = 0; let left = 0; let refused = 0; let spent = 0;
+  let stopped = false; let timedOut = false; let refUv = null; let lowUv = null; let ownQ = null; let longest = null;
+  const result = () => ({ kept: counted + preMigration, thinned, left, refused, stopped });
+  const summary = () => {
+    if (thinned > 0 || refused > 0 || stopped || timedOut) out(`coordination data sets: ${counted + preMigration} kept, ${thinned} thinned this run, ${left} left as they are`);
+  };
+  const warn = (dir, why) => { out(`WARN: could not thin ${path.basename(dir)}: ${why} — it is left as it is`); refused++; };
+  /** A node error's message already begins with its code (`EIO: i/o error, …`), so the code is added only when the message lacks it. */
+  const whyOf = (err) => {
+    if (err instanceof SnapError) return err.message;
+    const m = oneLine(err.message);
+    return m.startsWith(`${err.code}: `) ? m : `${err.code}: ${m}`;
+  };
+  const hasDb = (q) => q.source === 'legacy' || q.manifest.members.coordDb.present;
+  /** The schema version the pre-migration check compares against: the first counted set that has a coord.db. And the lowest
+   *  version among the counted sets whose header reads (wave 29, R46, D-6985): when one already predates `refUv`, the count keeps a
+   *  set from before the migration, so the pre-migration keep's purpose is met. A header that does not read gives no credit. */
+  const noteCounted = (dir, q) => {
+    if (!hasDb(q)) return;
+    const uv = dbUserVersion(fs, path.join(dir, DB_FILE));
+    if (refUv === null) refUv = uv;
+    if (uv !== null && (lowUv === null || uv < lowUv)) lowUv = uv;
+  };
+  const secs = () => now().getTime() / 1000;
+  /** Whether a full verification started now could pass `until` (D-6464). */
+  const late = () => until !== null && secs() + (longest ?? VERIFY_ESTIMATE_S) > until;
+  /** One full verification, timed: the longest so far is the next one's estimate. */
+  const verify = (dir) => {
+    if (dir === verP) return true;
+    spent++;
+    const t0 = secs();
+    const v = classify({ from: dir, fs });
+    longest = Math.max(longest ?? 0, secs() - t0);
+    return (v.kind === 'v1' && v.data === true) || v.kind === 'legacy';
+  };
+  /** Whether a dir still holds something of a data set; a `none` or a `thinned` dir does not. */
+  const holdsData = (q) => q.word !== 'none' && q.word !== 'thinned';
+  /** The walk ends here: `rest` (this dir and every older one) is untouched, and each that still holds a data set is left as it is; how many. */
+  const leaveRest = (rest) => {
+    const before = left;
+    for (const d of rest) {
+      try {
+        const st = fs.lstat(d);
+        if (st === null || !st.isDirectory()) continue;
+        if (holdsData(reads.get(d) ?? quickState(fs, d))) left++;
+      } catch (err) {
+        if (!(err instanceof SnapError) && !hasCode(err)) throw err;
+        left++;
+      }
+    }
+    return left - before;
+  };
+  const stop = (rest) => {
+    stopped = true;
+    leaveRest(rest);
+    out(`thinning stopped: ${spent} full verifications spent before the walk ended — every older backup is untouched until a later run`);
+  };
+  /** Finishes an interrupted thinning: the record already says what goes, so nothing is verified. */
+  const finish = (dir, q) => {
+    const bytes = finishOne(fs, dir, q.record);
+    out(`thinned ${path.basename(dir)}: finished an interrupted thinning (${mib(bytes)}M); ${THINNED_FILE} records when and why`);
+    thinned++;
+  };
+  /** A dir as the walk reads it before deciding anything, refusing what it refuses (D-6362): not a directory, a quick reading that
+   *  failed, and a verified dir that reads as something a verification does not leave behind. The time stop reads through it too. */
+  const enter = (dir) => {
+    const st = fs.lstat(dir);
+    if (st === null || !st.isDirectory()) refuse('thin-not-a-dir', `${path.basename(dir)} is not a directory`);
+    const q = reads.get(dir) ?? quickState(fs, dir);
+    if (q.error !== undefined) throw q.error;
+    if (dir === verP && q.word !== 'full' && q.word !== 'stale' && q.word !== 'none') {
+      refuse('thin-verified-not-whole', `the verified directory reads as ${q.word} (${q.detail}), which a verification does not leave behind, so it is not touched`);
+    }
+    return q;
+  };
+  /** The time budget's end (D-6464): not a refusal in itself, so it leaves the exit at 0. Past it an interrupted thinning is still
+   *  finished, whatever the budget, because that verifies nothing; every other dir of `rest` that holds a data set is left as it is.
+   *  A dir there is read as the walk reads it, so what the walk would refuse is refused there too, with its WARN and exit 3 (review 817 F6). */
+  const timeUp = (rest) => {
+    timedOut = true;
+    const before = left;
+    for (const d of rest) {
+      try {
+        const q = enter(d);
+        if (q.word === 'interrupted') finish(d, q);
+        else if (holdsData(q)) left++;
+      } catch (err) {
+        if (!(err instanceof SnapError) && !hasCode(err)) throw err;
+        warn(d, whyOf(err));
+        if (err.code !== 'thin-not-a-dir') left++;
+      }
+    }
+    out(`thinning stopped at its time budget; ${left - before} left as they are; the next update continues`);
+  };
+
+  const reads = new Map();
+  if (ownP !== null) {
+    try {
+      const st = fs.lstat(ownP);
+      if (st === null || !st.isDirectory()) refuse('thin-not-a-dir', `${path.basename(ownP)} is not a directory`);
+    } catch (err) {
+      if (!(err instanceof SnapError) && !hasCode(err)) throw err;
+      // The run ends before the walk, so own (unless it is not a directory) and every walked dir that holds a data set are left (D-6363).
+      warn(ownP, whyOf(err));
+      if (err.code !== 'thin-not-a-dir') left++;
+      leaveRest(walk);
+      summary();
+      return result();
+    }
+    try {
+      ownQ = quickState(fs, ownP);
+    } catch (err) {
+      if (!(err instanceof SnapError) && !hasCode(err)) throw err;
+      warn(ownP, whyOf(err));
+      left++;
+    }
+  }
+
+  // When the dirs that can be counted number at most `keep`, nothing can be thinned, so nothing is verified (D-6350, review 794 F6):
+  // each is counted on presence and size, no `user_version` is read and no budget is spent. A reading that throws or is not `full` or `stale` does not count.
+  let countable = ownQ?.word === 'full' ? 1 : 0;
+  for (const dir of walk) {
+    try {
+      const st = fs.lstat(dir);
+      if (st === null || !st.isDirectory()) continue;
+      const q = quickState(fs, dir);
+      reads.set(dir, q);
+      if (q.error === undefined && (q.word === 'full' || q.word === 'stale')) countable++;
+    } catch (err) {
+      if (!(err instanceof SnapError) && !hasCode(err)) throw err;
+    }
+  }
+  const sparse = countable <= keep;
+
+  // Own is kept, or left as it is: a refused own, and one that reads as anything else but still holds a data set, count as left (D-6363, review 806 F2).
+  if (ownQ?.word === 'full') {
+    try {
+      if (!sparse) noteCounted(ownP, ownQ);
+      counted++;
+    } catch (err) {
+      if (!(err instanceof SnapError) && !hasCode(err)) throw err;
+      warn(ownP, whyOf(err));
+      left++;
+    }
+  } else if (ownQ !== null && holdsData(ownQ)) left++;
+
+  for (const [at, dir] of walk.entries()) {
+    const name = path.basename(dir);
+    try {
+      let q = enter(dir);
+      if (q.word === 'interrupted') { finish(dir, q); continue; }
+      if (q.word === 'stale') {
+        fs.unlink(path.join(dir, THINNED_FILE));
+        fs.fsyncDir(dir);
+        out(`${name}: removed a thinning record that never started; the backup is whole`);
+        q = quickBody(fs, dir);
+      }
+      if (q.word !== 'full') { if (holdsData(q)) left++; continue; }
+      if (counted < keep) {
+        if (sparse) { counted++; continue; }
+        if (dir !== verP && spent >= budget) { stop(walk.slice(at)); break; }
+        if (dir !== verP && late()) { timeUp(walk.slice(at)); break; }
+        // Counted only after everything the count reads has been read, so a dir is never both counted and left (D-6363).
+        if (verify(dir)) { noteCounted(dir, q); counted++; } else left++;
+        continue;
+      }
+      // Sparse means the quick pass saw nothing past the count. The walk reads again only a dir the pass could not read (its quick
+      // reading threw, or its lstat did not show a directory) and a stale dir once its record goes (which can only lower the count), so a
+      // dir that reaches here is one the pass could not read. It was never verified, nor were the dirs counted before it, so it is left as it is, never thinned. Outside sparse mode a
+      // dir past the count is thinned on the reading the pass took, before the count's verifications ran (minutes, under the lock):
+      // harmless, because nothing else of ccrc's writes a backup dir while the lock is held (review 806 F8).
+      if (sparse) { left++; continue; }
+      if (preMigration === 0 && refUv !== null && !(lowUv !== null && lowUv < refUv) && hasDb(q)) {
+        const uv = dbUserVersion(fs, path.join(dir, DB_FILE));
+        if (uv !== null && uv < refUv) {
+          if (dir !== verP && spent >= budget) { stop(walk.slice(at)); break; }
+          if (dir !== verP && late()) { timeUp(walk.slice(at)); break; }
+          if (verify(dir)) {
+            preMigration++;
+            out(`kept ${name}: its coord.db predates a schema migration (user_version ${uv} < ${refUv}), so it is the one data set kept from before it`);
+          } else left++;
+          continue;
+        }
+      }
+      if (dir === verP) { left++; continue; }
+      const dropped = thinOne(fs, dir, q, { keep, by, now });
+      out(`thinned ${name}: dropped its coordination data set (${mib(sum(dropped))}M: ${dropped.map((d) => d.filename).join(', ')}); its code is kept, and ${THINNED_FILE} records when and why (CCRC_BACKUP_DATA_KEEP=${keep})`);
+      thinned++;
+    } catch (err) {
+      if (!(err instanceof SnapError) && !hasCode(err)) throw err;
+      warn(dir, whyOf(err));
+      if (err.code !== 'thin-not-a-dir') left++;
+    }
+  }
+  summary();
+  return result();
+}
+
+// ── The service probe ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `inactive` only when the service manager says so. "Active", "activating", "deactivating", a missing `systemctl`, a timeout and
+ * any answer it does not recognise are all NOT inactive: restore refuses on each, because it replaces the files a running
+ * server holds open.
+ * @returns {'inactive' | 'active' | 'unmeasured'}
+ */
+export function probeService(env = process.env) {
+  const r = spawnSync('systemctl', ['--user', 'is-active', SERVICE_UNIT], { encoding: 'utf8', env, timeout: 10_000 });
+  if (r.error || r.status === null) return 'unmeasured';
+  const word = (r.stdout ?? '').trim();
+  if (word === 'inactive' || word === 'failed') return 'inactive';
+  if (['active', 'activating', 'deactivating', 'reloading', 'refreshing'].includes(word)) return 'active';
+  return 'unmeasured';
+}
+
+// ── Restore and its recovery ──────────────────────────────────────────────────────────────────────────────────────────────
+
+const stageOf = (ccrcDir) => path.join(ccrcDir, RESTORE_STAGE_DIR);
+const markerOf = (ccrcDir) => path.join(ccrcDir, RESTORE_MARKER_FILE);
+
+function readMarker(fs, ccrcDir) {
+  const bytes = fs.readFile(markerOf(ccrcDir));
+  if (bytes === null) return null;
+  let m;
+  try {
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    if (!text.endsWith('\n')) throw new Error('no LF');
+    m = JSON.parse(text.slice(0, -1));
+    if (canonicalJson(m) !== text.slice(0, -1)) throw new Error('noncanonical');
+  } catch { return refuse('marker-invalid', 'the restore marker cannot be read; nothing can say which set is live', { exit: 2 }); }
+  if (!isRecord(m) || m.format !== MARKER_FORMAT || m.version !== 1 || (m.state !== 'replacing' && m.state !== 'committed')
+      || !isRecord(m.old) || !RESTORE_SET.every((n) => (n === CARRIED_FILE && !Object.hasOwn(m.old, n)) || typeof m.old[n] === 'boolean') || !isRecord(m.placed) || typeof m.id !== 'string' || !/^[0-9a-f]{16}$/.test(m.id)) {
+    refuse('marker-invalid', 'the restore marker is not a version-1 marker', { exit: 2 });
+  }
+  return m;
+}
+
+function writeMarker(fs, ccrcDir, marker) {
+  writeAtomic(fs, markerOf(ccrcDir), asBytes(`${canonicalJson(marker)}\n`));
+}
+
+/** Preserves carried bytes omitted by a committed restore, then removes its stage and marker. Idempotent, including after the rename. */
+function finalizeRestore(fs, ccrcDir, marker = null) {
+  const stage = stageOf(ccrcDir);
+  if (marker?.state === 'committed' && marker.old[CARRIED_FILE] && marker.placed[CARRIED_FILE] === undefined) {
+    const oldDir = path.join(stage, 'old');
+    const aside = path.join(oldDir, CARRIED_FILE);
+    if (fs.lstat(aside) !== null) quarantine(fs, ccrcDir, marker.id, CARRIED_FILE, aside);
+    // A previous pass may have renamed it and died before either directory was synced.
+    const foreign = path.join(foreignRootOf(ccrcDir), marker.id);
+    if (fs.lstat(foreign) !== null) {
+      fs.fsyncDir(foreign);
+      fs.fsyncDir(foreignRootOf(ccrcDir));
+      if (fs.lstat(oldDir) !== null) fs.fsyncDir(oldDir);
+      fs.fsyncDir(ccrcDir);
+    }
+  }
+  for (const sub of ['old', 'new']) {
+    const d = path.join(stage, sub);
+    for (const f of fs.readdir(d) ?? []) fs.unlink(path.join(d, f));
+    if (fs.lstat(d) !== null) fs.rmdir(d);
+  }
+  for (const f of fs.readdir(stage) ?? []) fs.unlink(path.join(stage, f));
+  if (fs.lstat(stage) !== null) fs.rmdir(stage);
+  fs.fsyncDir(ccrcDir);
+  fs.unlink(markerOf(ccrcDir));
+  fs.unlink(`${markerOf(ccrcDir)}.partial`);
+  fs.fsyncDir(ccrcDir);
+}
+
+/** Whether the live file at `live` is the member THIS restore placed: a regular file with the size and SHA-256 the marker recorded. */
+function isPlacedMember(fs, live, placed) {
+  if (placed === undefined) return false;
+  const st = fs.lstat(live);
+  if (st === null || !st.isFile()) return false;
+  const got = measureFile(fs, live);
+  return got !== null && got.bytes === placed.bytes && got.sha256 === placed.sha256;
+}
+
+const foreignRootOf = (ccrcDir) => path.join(ccrcDir, RESTORE_FOREIGN_DIR);
+
+/**
+ * Moves a live member, or omitted carried evidence from the stage, into `<ccrcDir>/coordination-restore.foreign/<id>/<name>` (R35). Never deletes, never
+ * overwrites: a name already taken by an earlier, interrupted pass gets `.1`, `.2`, ... The directories and the rename are made
+ * durable (the quarantine directory, its parent, then `~/.ccrc`) before the caller puts anything back at the member path.
+ */
+function quarantine(fs, ccrcDir, id, name, source = path.join(ccrcDir, name)) {
+  const root = foreignRootOf(ccrcDir);
+  const dir = path.join(root, id);
+  if (fs.lstat(root) === null) fs.mkdir(root);
+  if (fs.lstat(dir) === null) fs.mkdir(dir);
+  let dest = path.join(dir, name);
+  for (let n = 1; fs.lstat(dest) !== null; n++) dest = path.join(dir, `${name}.${n}`);
+  fs.rename(source, dest);
+  fs.fsyncDir(dir);
+  fs.fsyncDir(root);
+  if (path.dirname(source) !== ccrcDir) fs.fsyncDir(path.dirname(source));
+  fs.fsyncDir(ccrcDir);
+}
+
+/** The order a rollback puts the asides back in: the database BEFORE its WAL and SHM (8B N9), then the delegation pair. */
+const PUT_BACK_ORDER = Object.freeze([DB_FILE, `${DB_FILE}-wal`, `${DB_FILE}-shm`, JOURNAL_FILE, CHECKPOINT_FILE, CARRIED_FILE]);
+
+/**
+ * Puts the OLD set back from what the marker recorded, so that afterwards the five members are exactly the old set: whole, never mixed
+ * (a SQLite database is never left beside a WAL that belongs to another one). Safe to run again from any point. TWO PASSES (8B N9):
+ *   1. CLEAR every member path that is to be put back or that the restore placed: a live file is DELETED only when it is provably the
+ *      member this restore placed (the marker holds each placed member's size and SHA-256); any other file there, one that is neither
+ *      ours nor old, is QUARANTINED by rename (see `quarantine`). Nothing is put back in this pass, so a rename that fails here leaves
+ *      no old member beside a foreign one (the old hot WAL never meets a foreign DB).
+ *   2. PUT BACK every aside from the stage, the DB before its WAL and SHM (`PUT_BACK_ORDER`): renames on one filesystem, and a failure
+ *      among them leaves at worst the old DB without its old WAL, which is consistent.
+ * A rename that fails throws, and the marker and stage stay (`restore` and `recover` both say so).
+ */
+function rollbackRestore(fs, ccrcDir, marker) {
+  const stage = stageOf(ccrcDir);
+  const asides = [];
+  for (const name of RESTORE_SET) {
+    // An older marker did not stage or place carried evidence; it has no authority over that live path.
+    if (!Object.hasOwn(marker.old, name)) continue;
+    const live = path.join(ccrcDir, name);
+    const aside = path.join(stage, 'old', name);
+    const asideThere = marker.old[name] && fs.lstat(aside) !== null;
+    if (marker.old[name] && !asideThere) continue;      // never set aside: the live file IS the old one
+    if (fs.lstat(live) !== null) {
+      if (isPlacedMember(fs, live, marker.placed[name])) fs.unlink(live);   // the member this restore placed
+      else quarantine(fs, ccrcDir, marker.id, name);                        // not ours, not old: moved aside, never deleted
+    }
+    if (asideThere) asides.push(name);
+  }
+  for (const name of PUT_BACK_ORDER) if (asides.includes(name)) fs.rename(path.join(stage, 'old', name), path.join(ccrcDir, name));
+  fs.fsyncDir(ccrcDir);
+}
+
+/** What `restore` and `recover` add when the rollback itself failed (8B N9): it is unfinished, and `recover` finishes it. */
+const ROLLBACK_UNFINISHED = 'the rollback did not finish; the restore marker and stage stay, so delegation recovery refuses to run: run `recover`';
+
+/** What a rollback moved into quarantine, as one sentence (empty when nothing). Read from the directory, so a re-run reports it too. */
+function quarantineReport(fs, ccrcDir, id) {
+  const names = fs.readdir(path.join(foreignRootOf(ccrcDir), id)) ?? [];
+  if (names.length === 0) return '';
+  return `the old set is restored; ${names.length} file(s) that this restore did not place were moved, not deleted, to ~/.ccrc/${RESTORE_FOREIGN_DIR}/${id}/: ${[...names].sort().join(', ')}`;
+}
+
+function requireInactive(probe) {
+  const state = probe();
+  if (state !== 'inactive') {
+    refuse('service-not-inactive', state === 'active'
+      ? `${SERVICE_UNIT} is running; stop it first`
+      : `${SERVICE_UNIT} could not be measured as inactive; nothing was changed`, { exit: 2 });
+  }
+}
+
+/**
+ * Replaces the live coordination set (journal, checkpoint, coord.db, its WAL and SHM) with a validated snapshot, as one unit.
+ * Order: validate the source; require the service measured inactive; stage the new files beside the live ones; publish the
+ * restore marker (from here delegation recovery refuses to run), probe the service again; set the old files aside and place the new; verify what was placed;
+ * make `committed` durable; clean up and remove the marker. A failure before `committed` puts the old set back; one after
+ * it finishes forward. An explicit manifest `coordDb.present:false` is the ONLY thing that removes the DB, WAL and SHM without
+ * replacing them.
+ * @param {{home: string, from: string, fs?: typeof realFs, probe?: () => string, now?: () => Date}} opts
+ */
+export function restore(opts) {
+  const fs = opts.fs ?? realFs;
+  const probe = opts.probe ?? (() => probeService());
+  const now = opts.now ?? (() => new Date());
+  const ccrcDir = path.join(opts.home, '.ccrc');
+  // 1. The source is validated BEFORE anything live is touched, and must be a v1 snapshot.
+  const verdict = classify({ from: opts.from, fs });
+  if (verdict.kind === 'thinned') refuse('source-thinned', `the snapshot was thinned by design: ${verdict.reason}`, { exit: 2 });
+  if (verdict.kind !== 'v1') refuse('source-invalid', `the snapshot is ${verdict.kind}: ${verdict.reason}`, { exit: 2 });
+  const manifest = verdict.manifest;
+  // 2. The service must be MEASURED inactive. Active and unmeasurable both refuse.
+  requireInactive(probe);
+  // 3. An earlier restore that did not finish must be recovered first.
+  if (fs.lstat(markerOf(ccrcDir)) !== null || fs.lstat(stageOf(ccrcDir)) !== null) {
+    refuse('restore-pending', 'an earlier restore did not finish; run `recover` first', { exit: 2 });
+  }
+  if (fs.lstat(ccrcDir)?.isDirectory() !== true) refuse('no-ccrc-dir', 'the coordination directory does not exist', { exit: 2 });
+  const stage = stageOf(ccrcDir);
+  const newDir = path.join(stage, 'new');
+  const oldDir = path.join(stage, 'old');
+  const wanted = {};          // member filename -> manifest member, for those the snapshot has
+  for (const [key, filename] of Object.entries(MEMBER_KEYS)) if (manifest.members[key]?.present) wanted[filename] = manifest.members[key];
+  const old = {};
+  for (const name of RESTORE_SET) old[name] = fs.lstat(path.join(ccrcDir, name)) !== null;
+  const restoreId = randomBytes(8).toString('hex');   // names this restore's quarantine directory; recorded in the FIRST marker write
+  let published = false;
+  let moved = false;     // set immediately before the first live member is renamed into the stage
+  try {
+    // 4. Stage the new files beside the live ones (same filesystem, so placement is a rename), hashing as they are written.
+    fs.mkdir(stage);
+    fs.mkdir(newDir);
+    fs.mkdir(oldDir);
+    for (const [filename, mem] of Object.entries(wanted)) {
+      const src = fs.openRead(path.join(opts.from, filename));
+      if (src === null) refuse('member-missing', `${filename} vanished from the snapshot`);
+      try {
+        const out = fs.create(path.join(newDir, filename));
+        try {
+          const hash = createHash('sha256');
+          for (let at = 0; at < src.size;) {
+            const chunk = src.read(at, Math.min(CHUNK, src.size - at));
+            if (chunk.length === 0) refuse('short-read', `${filename} ended early`);
+            out.write(chunk);
+            hash.update(chunk);
+            at += chunk.length;
+          }
+          out.fsync();
+          if (hash.digest('hex') !== mem.sha256 || src.size !== mem.bytes) refuse('member-hash', `${filename} changed while it was staged`);
+        } finally { out.close(); }
+      } finally { src.close(); }
+    }
+    fs.fsyncDir(newDir);
+    fs.fsyncDir(oldDir);
+    fs.fsyncDir(stage);
+    fs.fsyncDir(ccrcDir);
+    // 5. Publish the active marker. From here on, delegation recovery refuses to run until it is gone.
+    const marker = { format: MARKER_FORMAT, version: 1, state: 'replacing', startedAt: now().toISOString(), id: restoreId, old, placed: wanted };
+    published = true;       // set BEFORE the write: a write that fails after its rename has still published the marker
+    writeMarker(fs, ccrcDir, marker);
+    // 5b. Ask again, now the marker is durable: a unit that started between the first probe and here would keep writing to inodes
+    // about to be set aside. Not inactive: the catch below rolls back (nothing has moved yet), clears the marker and re-throws this.
+    requireInactive(probe);
+    // 6. Set the old files aside, then place the new ones.
+    for (const name of RESTORE_SET) {
+      if (old[name]) {
+        moved = true;
+        fs.rename(path.join(ccrcDir, name), path.join(oldDir, name));
+      }
+    }
+    fs.fsyncDir(oldDir);
+    fs.fsyncDir(ccrcDir);
+    for (const name of RESTORE_SET) {
+      if (wanted[name] !== undefined) fs.rename(path.join(newDir, name), path.join(ccrcDir, name));
+    }
+    fs.fsyncDir(ccrcDir);
+    // 7. Verify the placed set against the manifest: the five members, and the WAL/SHM absent.
+    for (const name of RESTORE_SET) {
+      const st = fs.lstat(path.join(ccrcDir, name));
+      const mem = wanted[name];
+      if (mem === undefined) {
+        if (st !== null) refuse('verify-failed', `${name} is present and the snapshot has none`);
+        continue;
+      }
+      const got = st !== null && st.isFile() ? measureFile(fs, path.join(ccrcDir, name)) : null;
+      if (got === null || got.bytes !== mem.bytes || got.sha256 !== mem.sha256) refuse('verify-failed', `${name} does not match the snapshot after it was placed`);
+    }
+    // 8. COMMITTED, durably. After this line recovery goes forward; before it, backward.
+    writeMarker(fs, ccrcDir, { ...marker, state: 'committed' });
+  } catch (err) {
+    if (!published) {
+      try { finalizeRestoreStageOnly(fs, ccrcDir); } catch { /* the stage is helper-owned garbage; the live set was never touched */ }
+      throw err;
+    }
+    try {
+      const m = readMarker(fs, ccrcDir);
+      // A marker already `committed` goes FORWARD, and that is `recover`'s: the new set is whole and in place.
+      if (m === null || m.state === 'replacing') {
+        if (!moved) {
+          // Nothing live was touched, so there is nothing to put back and NOTHING may be deleted (a unit that started in the
+          // meantime may have created files at old-absent paths): clear the stage and the marker, that is all.
+          finalizeRestore(fs, ccrcDir);
+        } else {
+          const mk = m ?? { old, placed: wanted, id: restoreId };
+          rollbackRestore(fs, ccrcDir, mk);
+          const q = quarantineReport(fs, ccrcDir, mk.id);
+          if (q !== '' && err instanceof Error) err.message = `${err.message} — ${q}`;
+          finalizeRestore(fs, ccrcDir);
+        }
+      }
+    } catch (rollbackErr) {
+      // the marker stays: delegation recovery refuses to run and `recover` finishes it. Said, never swallowed (8B N9).
+      if (err instanceof Error) err.message = `${err.message} — ${ROLLBACK_UNFINISHED} (${oneLine(rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr))})`;
+    }
+    throw err;
+  }
+  // 9. Clean up. A failure here leaves a committed marker that `recover` finalizes.
+  finalizeRestore(fs, ccrcDir, readMarker(fs, ccrcDir));
+  return { restored: Object.keys(wanted), removed: RESTORE_SET.filter((n) => old[n] && wanted[n] === undefined) };
+}
+
+/** A restore that failed before it published its marker never touched the live set: remove its stage. */
+function finalizeRestoreStageOnly(fs, ccrcDir) {
+  const stage = stageOf(ccrcDir);
+  fs.unlink(`${markerOf(ccrcDir)}.partial`);
+  for (const sub of ['old', 'new']) {
+    const d = path.join(stage, sub);
+    for (const f of fs.readdir(d) ?? []) fs.unlink(path.join(d, f));
+    if (fs.lstat(d) !== null) fs.rmdir(d);
+  }
+  if (fs.lstat(stage) !== null) fs.rmdir(stage);
+}
+
+/**
+ * Finishes an interrupted restore from its marker: `replacing` goes BACK to the old set, `committed` goes FORWARD (the new set
+ * is already in place; only the cleanup is left). No marker and no stage is "nothing to do"; a stage without a marker is a restore
+ * that died before it touched anything, and its stage is removed.
+ * @returns {'none' | 'rolled-back' | 'finalized' | 'cleaned'}
+ */
+export function recover(opts) {
+  const fs = opts.fs ?? realFs;
+  const probe = opts.probe ?? (() => probeService());
+  const ccrcDir = path.join(opts.home, '.ccrc');
+  const marker = readMarker(fs, ccrcDir);
+  const hasStage = fs.lstat(stageOf(ccrcDir)) !== null;
+  if (marker === null && !hasStage) return 'none';
+  requireInactive(probe);
+  if (marker === null) { finalizeRestoreStageOnly(fs, ccrcDir); return 'cleaned'; }
+  if (marker.state === 'committed') { finalizeRestore(fs, ccrcDir, marker); return 'finalized'; }
+  try { rollbackRestore(fs, ccrcDir, marker); } catch (err) {
+    // A named refusal (exit 1), never a helper failure (8B N9): the fault is the filesystem's, and running `recover` again finishes it.
+    throw new SnapError('rollback-unfinished', `${ROLLBACK_UNFINISHED} again once the fault is gone: ${oneLine(err instanceof Error ? err.message : String(err))}`);
+  }
+  // The report is read from the quarantine directory BEFORE the marker goes (8B N12): a kill after the finalize and before the throw
+  // loses only this sentence; the files stay in `coordination-restore.foreign/<id>/`, which README names, and nothing else is lost.
+  const q = quarantineReport(fs, ccrcDir, marker.id);
+  finalizeRestore(fs, ccrcDir);
+  if (q !== '') throw new SnapError('rollback-quarantined', q);
+  return 'rolled-back';
+}
+
+// ── The command line ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+const USAGE = 'usage: node coordination-snapshot.mjs capture --dir <timestamp dir> | classify --from <timestamp-directory> | validate --from <timestamp-directory> | restore --from <timestamp-directory> | recover | thin --keep <n> --by <update|backup> [--prefix <text>] [--own <dir>] [--verified <dir>] [--until <unix seconds>] --dir <dir> [--dir <dir> ...]';
+
+function argValue(argv, flag) {
+  const i = argv.indexOf(flag);
+  if (i === -1 || i + 1 >= argv.length || argv[i + 1] === '' || argv[i + 1].startsWith('--')) return null;
+  return argv[i + 1];
+}
+
+/** The `thin` command line: `--keep` and `--by` once each, `--dir` one or more times, `--own`, `--verified`, `--prefix` and `--until` at most once.
+ *  `null` for anything else (an unknown flag, a missing value, a repeat, a stray word, a `--keep` that is not 2 to 9999, an `--until` that is
+ *  not a whole number of seconds). */
+function parseThinArgs(rest) {
+  const o = { keep: null, by: null, prefix: null, own: null, verified: null, until: null, dirs: [] };
+  if (rest.length % 2 !== 0) return null;
+  for (let i = 0; i < rest.length; i += 2) {
+    const flag = rest[i];
+    const v = rest[i + 1];
+    if (!['--keep', '--by', '--prefix', '--own', '--verified', '--until', '--dir'].includes(flag) || v.startsWith('--') || (v === '' && flag !== '--prefix')) return null;
+    if (flag === '--dir') { o.dirs.push(v); continue; }
+    const key = flag.slice(2);
+    if (o[key] !== null) return null;
+    o[key] = v;
+  }
+  if (o.keep === null || !/^[0123456789]{1,4}$/.test(o.keep) || Number(o.keep) < 2) return null;
+  if (o.by !== 'update' && o.by !== 'backup') return null;
+  if (o.until !== null && !(/^[123456789][0123456789]{0,15}$/.test(o.until) && Number.isSafeInteger(Number(o.until)))) return null;
+  return o.dirs.length === 0 ? null : o;
+}
+
+/** Runs one verb; returns the exit code. `io` is injectable for tests. */
+export function main(argv, env = process.env, io = { out: (s) => process.stdout.write(s), err: (s) => process.stderr.write(s) }) {
+  const [verb, ...rest] = argv;
+  const home = env.HOME;
+  try {
+    if (verb === 'classify' || verb === 'validate') {
+      const from = argValue(rest, '--from');
+      if (from === null || rest.length !== 2) { io.err(`${USAGE}\n`); return 70; }
+      const v = classify({ from: path.resolve(from) });
+      if (verb === 'classify') io.out(`${v.kind}\n`);
+      else io.out(`${v.kind}: ${v.reason}\ndata: ${v.data === true ? 'yes' : 'no'}\n`);
+      return v.kind === 'v1' || v.kind === 'legacy' ? 0 : v.kind === 'none' || v.kind === 'thinned' ? 1 : 2;
+    }
+    if (verb === 'thin') {
+      const o = parseThinArgs(rest);
+      if (o === null) { io.err(`${USAGE}\n`); return 70; }
+      const lead = o.prefix === null || o.prefix === '' ? '' : `${o.prefix} `;
+      const r = thinBackups({
+        own: o.own === null ? null : path.resolve(o.own), verified: o.verified === null ? null : path.resolve(o.verified),
+        dirs: o.dirs.map((d) => path.resolve(d)), keep: Number(o.keep), by: o.by, until: o.until === null ? null : Number(o.until),
+        out: (line) => io.out(`${lead}${line}\n`),
+      });
+      return r.refused > 0 || r.stopped ? 3 : 0;
+    }
+    if (typeof home !== 'string' || home === '' || !path.isAbsolute(home)) { io.err('coordination snapshot: HOME is not an absolute path\n'); return 70; }
+    if (verb === 'capture') {
+      const dir = argValue(rest, '--dir');
+      if (dir === null || rest.length !== 2) { io.err(`${USAGE}\n`); return 70; }
+      const m = capture({ home, dir: path.resolve(dir) });
+      io.out(`coordination snapshot: ${m.delegation.state} delegation, coord.db ${m.members.coordDb.present ? 'present' : 'absent'}, manifest written\n`);
+      const left = m.delegation.journalTailOmitted;
+      // ONE warning line, on stderr, and still exit 0: `ccrc backup`, `ccrc update` and the fallback deploy show it to the operator.
+      if (left !== undefined) io.err(`coordination snapshot: warning: left out ${left.bytes} bytes (sha256 ${left.sha256}) that follow the last complete record of the delegation journal; ${path.resolve(dir)} holds the journal up to that record, which is a valid snapshot\n`);
+      return 0;
+    }
+    if (verb === 'restore') {
+      const from = argValue(rest, '--from');
+      if (from === null || rest.length !== 2) { io.err(`${USAGE}\n`); return 70; }
+      const r = restore({ home, from: path.resolve(from) });
+      io.out(`coordination snapshot restored: ${r.restored.length} member(s) placed, ${r.removed.length} removed\n`);
+      return 0;
+    }
+    if (verb === 'recover') {
+      if (rest.length !== 0) { io.err(`${USAGE}\n`); return 70; }
+      const r = recover({ home });
+      io.out(`coordination restore recovery: ${r}\n`);
+      return 0;
+    }
+    io.err(`${USAGE}\n`);
+    return 70;
+  } catch (err) {
+    if (err instanceof SnapError) { io.err(`coordination snapshot: ${err.message}\n`); return verb === 'classify' || verb === 'validate' || verb === 'thin' ? 70 : err.exit; }
+    io.err(`coordination snapshot: helper failure: ${oneLine(err instanceof Error ? err.message : String(err))}\n`);
+    return 70;
+  }
+}
+
+const invokedDirectly = (() => {
+  try { return process.argv[1] !== undefined && nodeFs.realpathSync(process.argv[1]) === nodeFs.realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
+})();
+if (invokedDirectly) process.exitCode = main(process.argv.slice(2));

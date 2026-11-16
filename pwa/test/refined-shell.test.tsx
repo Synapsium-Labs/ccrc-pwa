@@ -1,0 +1,386 @@
+// Refined's shell at laptop and wide (W2 Task S4b, D-5471): the app bar, the sidebar and the banners.
+//
+// What a person at a desk sees first, held through `App` in the Refined skin: the bar's controls in their order, each
+// one a door to its registry command (§The door table), one current tab, the Inbox badge counted by the one function
+// the fleet's mail door reads, and one accounts readout and one banner stack at any width (the plan's "one instance
+// per width"). jsdom applies no media queries and no layout, so a width is a `matchMedia` stub that answers every
+// `min-width` and `max-width` query against one number, and what this file counts is what is MOUNTED; what is
+// visible at each width is the per-width render pass.
+//
+// THE ROUTE TABLE IS PLANTED. `lib/routes` is mocked with Inbox moved from `/mail` to `/letters`, for the whole
+// file: a tab that hard-codes its path instead of reading `ROUTES` is current on the wrong page and goes red.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { REFINED } from '@ccrc/ui';
+import { declaredValues } from './cssRule';
+import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
+import type { AccountUsage, NotifyEvent, RunSummary } from '../../shared/api';
+import { itemView, waitingView } from './ledgersFixture';
+import { labelInName, shownText } from './labelInName';
+
+vi.mock('../src/lib/routes', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/lib/routes')>();
+  const ROUTES = real.ROUTES.map((r) => (r.id === 'inbox' ? { ...r, pattern: /^\/letters\/?$/, path: '/letters' } : r));
+  const matchRoute = (p: string): ReturnType<typeof real.matchRoute> => {
+    for (const route of ROUTES) {
+      const m = route.pattern.exec(p);
+      if (m !== null) return { route, param: m[1] === undefined ? null : decodeURIComponent(m[1]) };
+    }
+    return null;
+  };
+  return { ...real, ROUTES, matchRoute };
+});
+
+// The bell renders only where the browser can push; this one can, so the bar's full order is on screen.
+vi.mock('../src/lib/push', () => ({
+  pushSupported: () => true,
+  pushEnabled: async () => false,
+  enablePush: async () => ({ status: 'enabled' }),
+  disablePush: async () => {},
+}));
+
+const { App } = await import('../src/app');
+const { api } = await import('../src/lib/api');
+const { navigate } = await import('../src/lib/router');
+const { ROUTES } = await import('../src/lib/routes');
+const { setSkin } = await import('../src/lib/skin');
+const { useFleetStore } = await import('../src/stores/fleet');
+const { ack, FEED_ACK_KEY } = await import('../src/lib/seen');
+
+/** Every width query answered against one viewport width. */
+function atWidth(width: number): void {
+  vi.stubGlobal('matchMedia', (q: string) => {
+    const min = /min-width:\s*([\d.]+)px/.exec(q);
+    const max = /max-width:\s*([\d.]+)px/.exec(q);
+    const matches = (min === null || width >= Number(min[1])) && (max === null || width <= Number(max[1]))
+      && (min !== null || max !== null);
+    return {
+      matches, media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    };
+  });
+}
+
+// The desk's places: no fleet place, since the sessions are in the column beside every page (desktop-polish PL10, D-7952; D25).
+const TAB_IDS = ['waiting', 'inbox', 'runs', 'accounts', 'docs'] as const;
+const tabTitle = (id: string): string => ROUTES.find((r) => r.id === id)!.title;
+
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+  setSkin(REFINED);
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  // The `api.accounts` spies the lanes-row cases add must not leak into the next case.
+  vi.restoreAllMocks();
+  act(() => { navigate('/'); });
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false, fleetFrameSeen: false, waiting: null }));
+});
+
+const bar = (): HTMLElement => document.querySelector<HTMLElement>('header.shell-accounts')!;
+const primary = (): HTMLElement => within(bar()).getByRole('navigation', { name: 'Primary' });
+const tabs = (): HTMLElement[] => [...primary().querySelectorAll<HTMLElement>('[data-command^="go-"]')];
+
+describe('the app bar (W2 Task S4b)', () => {
+  it('the app bar renders the wordmark, the five tabs from ROUTES (no fleet place), the bell, search, settings and New session, in that order', () => {
+    atWidth(1280);
+    render(<App />);
+    const b = bar();
+    expect(b).not.toBeNull();
+    // The tabs say what ROUTES calls each place, in the order the bar draws them.
+    expect(tabs().map((t) => t.textContent?.trim())).toEqual(TAB_IDS.map(tabTitle));
+    const order = [
+      b.querySelector('[data-wordmark]'),
+      ...tabs(),
+      within(b).getByRole('button', { name: /^Notifications/ }),
+      within(b).getByRole('button', { name: 'Search and commands' }),
+      within(b).getByRole('button', { name: /^Settings/ }),
+      within(b).getByRole('button', { name: /New session/ }),
+    ];
+    for (const el of order) expect(el, 'every control is in the bar').not.toBeNull();
+    for (let i = 1; i < order.length; i += 1) {
+      // eslint-disable-next-line no-bitwise
+      expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING, `control ${i}`).toBeTruthy();
+    }
+  });
+
+  it('every tab, search, settings and New session carry their data-command', () => {
+    atWidth(1280);
+    render(<App />);
+    expect(tabs().map((t) => t.getAttribute('data-command'))).toEqual(TAB_IDS.map((id) => `go-${id}`));
+    const b = bar();
+    expect(within(b).getByRole('button', { name: 'Search and commands' })).toHaveAttribute('data-command', 'open-palette');
+    expect(within(b).getByRole('button', { name: /^Settings/ })).toHaveAttribute('data-command', 'go-settings');
+    expect(within(b).getByRole('button', { name: /New session/ })).toHaveAttribute('data-command', 'new-session');
+    // A tab runs its command: the layer navigates to the route's own path.
+    fireEvent.click(within(primary()).getByRole('button', { name: /^Runs/ }));
+    expect(location.pathname).toBe('/runs');
+    fireEvent.click(within(primary()).getByRole('button', { name: /^Inbox/ }));
+    expect(location.pathname).toBe('/letters');
+  });
+
+  it('the active tab carries aria-current=page, and only one does', () => {
+    atWidth(1280);
+    const current = (): string[] => tabs().filter((t) => t.getAttribute('aria-current') === 'page').map((t) => t.getAttribute('data-command')!);
+    render(<App />);
+    // The fleet is the column beside every page at a desk, and no tab (PL10, D25): on it, no tab is current.
+    expect(current()).toEqual([]);
+    act(() => { navigate('/runs'); });
+    expect(current()).toEqual(['go-runs']);
+    act(() => { navigate('/letters'); });
+    expect(current()).toEqual(['go-inbox']);
+    act(() => { navigate('/s/a'); });
+    expect(current()).toEqual([]);
+    for (const t of tabs()) if (t.getAttribute('aria-current') !== 'page') expect(t).not.toHaveAttribute('aria-current');
+  });
+
+  it("no badge at zero; the Inbox door's name says 'waiting for you' with the count", () => {
+    // Unread mail is the Inbox's own rows' mark, never the door's count (T2d, D-6330): two records past the ack.
+    const stamp = Date.now();
+    act(() => { ack(FEED_ACK_KEY, stamp); });
+    const feed: NotifyEvent[] = [
+      { seq: 1, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null },
+      { seq: 2, at: stamp + 60_001, kind: 'mail', sessionId: 'x', title: 'unread too', body: '', runId: null },
+    ];
+    // Two sessions wait on the operator; a child whose question its coordinator holds reads `working` and is not counted.
+    const sessions = [
+      fleetSession({ id: 'ask-a', bucket: 'attention' }),
+      fleetSession({ id: 'ask-b', bucket: 'attention' }),
+      fleetSession({ id: 'held-child', bucket: 'working' }),
+    ];
+    // The same count through the phone header's Inbox door (W2 Task S5) and the desk's Inbox tab.
+    atWidth(899);
+    render(<App />);
+    // The offline snapshot's rows before the first fleet frame are not a fact: no badge yet.
+    act(() => useFleetStore.setState({ conn: 'open', feed, sessions }));
+    expect(screen.getByRole('button', { name: 'Inbox' })).toBeInTheDocument();
+    act(() => useFleetStore.setState({ fleetFrameSeen: true }));
+    expect(screen.getByRole('button', { name: 'Inbox, 2 waiting for you' })).toHaveTextContent(/2$/);
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    atWidth(900);
+    render(<App />);
+    expect(within(primary()).getByRole('button', { name: 'Inbox, 2 waiting for you' })).toHaveTextContent(/2$/);
+    // At zero the tab is its word alone, with no badge printed.
+    act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'held-child', bucket: 'working' })] }));
+    expect(within(primary()).getByRole('button', { name: 'Inbox' })).toHaveTextContent(/^Inbox$/);
+  });
+
+  // Desktop-polish PL5a (D-7712): the Waiting on you tab counts open items plus the sessions' questions, never an item
+  // being checked, and prints nothing before the waiting frame has landed.
+  it("the Waiting on you tab's name says 'waiting on you' with the count of open items and questions, not checking", () => {
+    atWidth(900);
+    render(<App />);
+    const tab = (name: string) => within(primary()).getByRole('button', { name });
+    act(() => useFleetStore.setState({ conn: 'open', fleetFrameSeen: true, sessions: [fleetSession({ id: 'ask-a', bucket: 'attention' })] }));
+    // Before the waiting frame: not heard, so no badge.
+    expect(tab('Waiting on you')).toHaveTextContent(/^Waiting on you$/);
+    act(() => useFleetStore.setState({
+      waiting: waitingView({ items: [itemView({ id: 1 }), itemView({ id: 2 }), itemView({ id: 3, state: 'checking' })] }),
+    }));
+    expect(tab('Waiting on you, 3 waiting on you')).toHaveTextContent(/3$/); // 2 open items + 1 question
+    act(() => useFleetStore.setState({ waiting: waitingView({ items: [itemView({ id: 3, state: 'checking' })] }), sessions: [] }));
+    expect(tab('Waiting on you')).toHaveTextContent(/^Waiting on you$/);
+    act(() => useFleetStore.setState({ waiting: null }));
+  });
+
+  it("the Runs badge counts the open runs whose worker or coordinator needs you, and says nothing before the first runs frame", () => {
+    atWidth(1280);
+    render(<App />);
+    const sessions = [fleetSession({ id: 'ask', bucket: 'attention' }), fleetSession({ id: 'calm', bucket: 'idle' })];
+    act(() => useFleetStore.setState({ conn: 'open', sessions, fleetFrameSeen: true }));
+    // Before any runs frame "no runs" is not yet known: the tab is plain.
+    expect(within(primary()).getByRole('button', { name: 'Runs' })).toBeInTheDocument();
+    const run = (id: number, state: string, sessionId: string, claimedBy: string): RunSummary =>
+      ({ id, program: 'p', state, closedAt: null, sessionId, claimedBy }) as unknown as RunSummary;
+    // Its worker waits on you; its coordinator does; neither does; closed, though its worker waits.
+    const runs = [run(1, 'working', 'ask', 'calm'), run(2, 'planned', 'calm', 'ask'), run(3, 'working', 'calm', 'calm'), run(4, 'done', 'ask', 'calm')];
+    act(() => useFleetStore.setState({ runs, runsFrameSeen: true, sessions: withRunBinding(sessions, runs) }));
+    expect(within(primary()).getByRole('button', { name: 'Runs, 2 needs you' })).toBeInTheDocument();
+  });
+
+  it('a badge prints at most 99+, while the tab\'s name carries the real count', () => {
+    atWidth(1280);
+    render(<App />);
+    const runs = Array.from({ length: 120 }, (_, i) => ({ id: i + 1, program: 'p', state: 'working', closedAt: null, sessionId: null, claimedBy: 'ask' }) as unknown as RunSummary);
+    act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'ask', bucket: 'attention' })], fleetFrameSeen: true, runs, runsFrameSeen: true }));
+    const tab = within(primary()).getByRole('button', { name: 'Runs, 120 needs you' });
+    expect(tab).toHaveTextContent(/99\+$/);
+    // Review 1643 F5 (desktop-polish Task C14, D-8110): no contract change. At such counts label in name is read on the tab's
+    // word, not on its pill: the word is in the name, and the printed "99" is not, by design (`badgePrint`).
+    const name = tab.getAttribute('aria-label')!;
+    expect(labelInName(tab.textContent!.replace(/99\+$/, ''), name)).toBe(true);
+    // The whole shown text at a capped count ("Runs 99+") is not pinned: the name carries "120", so the pill's "99+" never
+    // matches it by design. The low-count case below holds the word-then-count space.
+  });
+
+  // Review 1689 F9: the tab's word and its pill are separated by a space, so the tab's whole shown text ("Runs 2") is in its name.
+  it("a tab's whole shown text is in its name at a low count (review 1689 F9)", () => {
+    atWidth(1280);
+    render(<App />);
+    const runs = [1, 2].map((id) => ({ id, program: 'p', state: 'working', closedAt: null, sessionId: null, claimedBy: 'ask' }) as unknown as RunSummary);
+    act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'ask', bucket: 'attention' })], fleetFrameSeen: true, runs, runsFrameSeen: true }));
+    const tab = within(primary()).getByRole('button', { name: 'Runs, 2 needs you' });
+    expect(shownText(tab)).toMatch(/^Runs\s+2$/);
+    expect(labelInName(shownText(tab), tab.getAttribute('aria-label')!)).toBe(true);
+  });
+
+  // Under a coarse pointer the bar's icon doors were narrower than a finger (Settings 32 wide, the bell 28 square)
+  // where main's head door they replace was 73 x 44 (W2 Task S4b review). The floor is refined.css's (below); this
+  // half proves the floored classes are on the bar's real doors.
+  it('search and Settings carry the bar door class, and the bell sits in the doors row the floor reaches', () => {
+    atWidth(1280);
+    render(<App />);
+    const b = bar();
+    expect(within(b).getByRole('button', { name: 'Search and commands' })).toHaveClass('ref-bar-door');
+    expect(within(b).getByRole('button', { name: /^Settings/ })).toHaveClass('ref-bar-door');
+    expect(within(b).getByRole('button', { name: /^Notifications/ }).parentElement).toHaveClass('ref-bar-doors');
+  });
+
+  it('New session opens the fleet flow\'s sheet; search opens the palette', () => {
+    atWidth(1280);
+    render(<App />);
+    act(() => useFleetStore.setState({ conn: 'open' }));
+    fireEvent.click(within(bar()).getByRole('button', { name: /New session/ }));
+    expect(screen.getByRole('dialog', { name: /start a session/i })).toBeInTheDocument();
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    atWidth(1280);
+    render(<App />);
+    // The palette's field (the fleet's own `<select>` is a combobox too).
+    const palette = (): Element | null => document.querySelector('input[role="combobox"]');
+    expect(palette()).toBeNull();
+    fireEvent.click(within(bar()).getByRole('button', { name: 'Search and commands' }));
+    expect(palette()).not.toBeNull();
+  });
+
+  it("at ≥900 the bar's line holds no gauges, and the header's second line is the lanes row, every lane's card", async () => {
+    const lane = (wrapper: string, five: number): AccountUsage => ({
+      wrapper, five, seven: five, ts: 1, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
+      disabled: false, authDead: false,
+    });
+    const lanes = ['lane-a', 'lane-b', 'lane-c', 'lane-d', 'lane-e', 'lane-f', 'lane-g'].map((w, i) => lane(w, 10 + i));
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
+    atWidth(1280);
+    render(<App />);
+    const line = bar().querySelector<HTMLElement>('.ref-bar')!;
+    await within(bar()).findByText('lane-g');
+    expect(line.querySelector('.accounts-strip, .account-gauge, .meter')).toBeNull();
+    // The header holds two lines, in order: the bar's, then the lanes row, with a card for every lane.
+    expect([...bar().children]).toEqual([line, bar().querySelector('.accounts-strip')]);
+    expect(bar().querySelectorAll('.accounts-strip > .account-gauge')).toHaveLength(lanes.length);
+  });
+
+  for (const width of [899, 900]) {
+    it(`one accounts strip and one banner stack at any width (${width})`, () => {
+      atWidth(width);
+      render(<App />);
+      const fleet = screen.getByRole('region', { name: 'Fleet' });
+      // The full strip at every width: at the desk it sits in the header under the bar's line, below 900 in the column.
+      const readouts = document.querySelectorAll('.accounts-strip');
+      expect(readouts).toHaveLength(1);
+      // Every banner keeps a slot while it is mounted, shown or not, so one slot per id is one stack.
+      for (const id of ['fleet-host', 'halt', 'substrate', 'offline', 'connecting', 'passkey']) {
+        expect(document.querySelectorAll(`.banner-slot[data-banner="${id}"]`), id).toHaveLength(1);
+      }
+      const slot = document.querySelector('.banner-slot[data-banner="fleet-host"]')!;
+      if (width >= 900) {
+        expect(bar().contains(readouts[0]!), 'the lanes row is the header\'s').toBe(true);
+        expect(bar().querySelector('.ref-bar')!.contains(readouts[0]!), 'and not the bar line\'s').toBe(false);
+        expect(fleet.contains(slot), 'the banners span the frame, not the sidebar').toBe(false);
+        expect(slot.closest('.shell-banners')).not.toBeNull();
+        // The sidebar's head keeps its readouts and gives its wordmark and doors to the bar: one identity mark.
+        expect(document.querySelectorAll('[data-wordmark], .wordmark')).toHaveLength(1);
+        // Any mail door, named or not yet: before the first frame the door is plain "Mail" (C12 item 4).
+        expect(within(fleet).queryByRole('button', { name: /^Mail\b/ })).toBeNull();
+        expect(within(fleet).queryByRole('button', { name: /^Settings/ })).toBeNull();
+      } else {
+        expect(document.querySelector('header.shell-accounts')).toBeNull();
+        expect(fleet.contains(readouts[0]!)).toBe(true);
+        expect(fleet.contains(slot)).toBe(true);
+        // Below 900 the column holds the chrome: Refined's phone header and its Settings door (W2 Task S5); the places are the
+        // bottom bar's, outside the column (desktop-polish PL10, D-7952).
+        expect(within(fleet).getByRole('button', { name: /^Settings/ })).toHaveAttribute('data-command', 'go-settings');
+        expect(within(fleet).queryByRole('button', { name: /^Inbox/ })).toBeNull();
+        expect(within(document.querySelector<HTMLElement>('nav.shell-phone-nav')!).getByRole('button', { name: /^Inbox/ }))
+          .toHaveAttribute('data-command', 'go-inbox');
+      }
+    });
+  }
+
+  // The case above runs an empty fleet, whose sidebar head draws nothing, so it cannot see a door in that head
+  // (C12 item 4). With a row the head draws its count line, and the doors stay the bar's, before the first frame
+  // (the door would be plain "Mail") and after it.
+  for (const seen of [false, true]) {
+    it(`at the desk the sidebar's head draws its count line and none of the bar's doors (frame seen: ${seen})`, () => {
+      atWidth(1280);
+      act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'ask', bucket: 'attention' })], fleetFrameSeen: seen }));
+      render(<App />);
+      const fleet = screen.getByRole('region', { name: 'Fleet' });
+      expect(fleet.querySelector('.fleet-head .fleet-count'), 'the head is drawn').not.toBeNull();
+      expect(within(fleet).queryByRole('button', { name: /^Mail\b/ })).toBeNull();
+      expect(within(fleet).queryByRole('button', { name: /^Settings/ })).toBeNull();
+    });
+  }
+});
+
+describe("Refined's frame (refined.css)", () => {
+  const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'skins', 'refined', 'refined.css'), 'utf8');
+  /** The bodies of every `@media` block whose query is exactly `query`, joined (S8's inspector rail has its own
+   *  1600 block beside the frame's). */
+  const block = (query: string): string => {
+    const bodies: string[] = [];
+    for (let at = css.indexOf(`@media ${query} {`); at >= 0; at = css.indexOf(`@media ${query} {`, at + 1)) {
+      let depth = 0;
+      for (let i = css.indexOf('{', at); i < css.length; i += 1) {
+        if (css[i] === '{') depth += 1;
+        if (css[i] === '}') { depth -= 1; if (depth === 0) { bodies.push(css.slice(at, i)); break; } }
+      }
+    }
+    expect(bodies.length, query).toBeGreaterThan(0);
+    return bodies.join('\n');
+  };
+
+  it('the sidebar is clamp(320px, 24vw, 400px), and 400 at ≥1600', () => {
+    expect(block('(min-width: 900px)')).toMatch(/grid-template-columns:\s*clamp\(320px, 24vw, 400px\) minmax\(0, 1fr\);/);
+    expect(block('(min-width: 900px)')).toMatch(/grid-template-rows:\s*auto auto minmax\(0, 1fr\);/);
+    expect(block('(min-width: 1600px)')).toMatch(/grid-template-columns:\s*400px minmax\(0, 1fr\);/);
+  });
+  // The tab is the bar's full height, so a ring drawn OUTSIDE it (Door's FOCUS_RING, offset 2px) loses its top edge
+  // off the top of the page and its bottom edge under the banners and the sidebar row: a keyboard user sees two side
+  // lines and no box. The ring is drawn inside the tab instead (the inset-ring precedent in fleet.css).
+  it("the frame's first row is auto, and the bar's line keeps 56 px", () => {
+    expect(declaredValues(block('(min-width: 900px)'), '.app-shell.ref-frame', 'grid-template-rows')).toEqual(['auto auto minmax(0,1fr)']);
+    expect(declaredValues(css, '.ref-bar', 'height')).toEqual(['56px']);
+    // Two lines in the header, the bar's over the lanes row.
+    expect(declaredValues(block('(min-width: 900px)'), '.ref-frame > .shell-accounts', 'flex-direction')).toEqual(['column']);
+  });
+  it("the banner stack spans the frame in the row under the bar; the sidebar and the detail sit below it", () => {
+    const desk = block('(min-width: 900px)');
+    expect(declaredValues(desk, '.ref-frame > .shell-banners', 'grid-row')).toEqual(['2']);
+    expect(declaredValues(desk, '.ref-frame > .shell-banners', 'grid-column')).toEqual(['1 / -1']);
+    expect(declaredValues(desk, '.ref-frame > .shell-nav', 'grid-row')).toEqual(['3']);
+    expect(declaredValues(desk, '.ref-frame > .shell-detail', 'grid-row')).toEqual(['3']);
+  });
+  it("the bar's icon doors and its bell are at least one tap square, off the shared token", () => {
+    expect(declaredValues(css, '.ref-bar-door', 'min-width')).toEqual(['var(--tap-min)']);
+    expect(declaredValues(css, '.ref-bar-doors > .bell', 'min-width')).toEqual(['var(--tap-min)']);
+    expect(declaredValues(css, '.ref-bar-doors > .bell', 'min-height')).toEqual(['var(--tap-min)']);
+  });
+  it("a focused tab's ring is drawn inside the tab, so the bar's edges cannot cut it", () => {
+    const offsets = declaredValues(css, '.ref-tab:focus-visible', 'outline-offset');
+    expect(offsets.length, 'refined.css sets the tab ring\'s offset').toBeGreaterThan(0);
+    for (const v of offsets) {
+      const px = /^(-?[\d.]+)px$/.exec(v);
+      expect(px, v).not.toBeNull();
+      expect(Number(px![1]), 'the offset takes the 2px ring wholly inside the tab').toBeLessThanOrEqual(-2);
+    }
+  });
+});

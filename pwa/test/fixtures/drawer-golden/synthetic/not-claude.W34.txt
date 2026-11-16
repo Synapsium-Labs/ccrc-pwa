@@ -1,0 +1,55 @@
+ import { sum } from './lib/sum';
+ import { Cache } from
+ './lib/cache';
+
+ export const cache = new
+ Cache(128);
+
+ export function total(xs:
+ number[]): number {
+   const hit =
+   cache.get(xs.join(","));
+   if (hit !== undefined) return
+   hit;
+   const value = sum(xs);
+   cache.set(xs.join(","), value);
+   return value;
+ }
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ ~
+ "src/app.ts" 12L, 240B

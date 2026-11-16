@@ -4,7 +4,10 @@
 //
 //  - UNREACHABLE (red): the agent WS is down (server/src/remote/). Names how
 //    long, and offers a Hetzner reboot behind a QuickConfirm whose copy names
-//    the collateral. The dialog says what is true of ANY fleet host — a reboot
+//    the collateral. D-8382: when the server says the reboot is not configured
+//    (`rebootConfigured: false`), the button is disabled and the banner says so
+//    and names the remedy, before any tap; absent (an older server) changes
+//    nothing. The dialog says what is true of ANY fleet host — a reboot
 //    takes down every service on the box, not only the fleet — because it used
 //    to name the reference fleet's OWN co-tenant stack by product name, which
 //    on anybody else's box was simply a false statement about their machine.
@@ -14,44 +17,87 @@
 //    is a deploy or an edit on one of the two boxes, neither of which the PWA
 //    can or should do. `'unknown'` renders nothing — an older agent reports no
 //    digest, and a banner that fires when nothing is wrong stops being read.
+//  - BUILD SKEWED (amber): the host is up, but the two boxes' `build.json`
+//    stamps disagree (`buildAgreement`, server/src/fleetstate.ts — the TRIGGER
+//    stays that server-side word, D-3312). Names
+//    both versions (or shas, for an unversioned deploy.sh stamp) from the node
+//    inventory (`nodes`, FleetScreen's one /api/updates poll — centralised-
+//    update §14; the same `remoteSides` BuildLine reads), and says nothing of
+//    versions until that answer is in. The REMEDY it names is
+//    `skewRemedy`'s (updateHalt.ts; programme wave 14, R15(c)): while a node
+//    halts the fleet, the halt and its Ack (the halt banner), then what happens
+//    after the ack; while the fleet's auto-install is on and auto would move
+//    every lagging node, so that every node ends on one tag (D-4271), the
+//    console's own move, followed in Settings; otherwise — and whenever the
+//    inventory has not answered, or a lease could not be read — `ccrc rollout`/
+//    `ccrc update` from a terminal. While a later poll's failure stands
+//    (`stale`, wave 19, R24(b)) it never advises auto, and it ends with the
+//    update plane's own sentence for the last answer that landed. D-7680: before
+//    the terminal verbs, `queued` says the lagging box already has a request or a
+//    lease for the leading tag (no button), and `move` — the fleet box ahead, the
+//    server idle with no request, the release listed with its bundle — offers the
+//    arm's ONE action button, "Update the server to <tag>", which opens the shared
+//    UpdateMoveSheet over a single-node apply. The terminal sentence stands only
+//    when neither applies, the poll is stale or a lease is unreadable.
+//    `'unknown'` remains silent, same rule as the two above.
 //  - POOLS UNAVAILABLE (amber): the host is up, but its ccd has no project-pool
 //    capability. No action button: the remedy is an agent-lane deploy.
 //    `'unknown'` remains silent.
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetHealth } from '../../../shared/api';
-import { api, apiErrorText } from '../lib/api';
-import { toast } from '../components/Toast';
-import { QuickConfirm } from '../components/QuickConfirm';
-import { useNow } from '../lib/useNow';
-import { elapsedWords } from '../lib/elapsed';
+import {
+  FLEET_REBOOT_NOT_CONFIGURED_TEXT, FLEET_REBOOT_REMEDY_TEXT, type FleetHealth, type NodeWire, type ReleaseWire, type UpdateIntentWire,
+} from '../../../shared/api';
+import { api, failedTo } from '../lib/api';
+import { Banner, Button, elapsedWords, QuickConfirm, toast, useNow } from '@ccrc/ui';
+import { useFleetHealth } from './useFleetHealth';
+import { remoteSides, statedOf } from '../../../shared/update-summary';
+import {
+  SKEW_AUTO_TEXT, SKEW_HALT_THEN_AUTO_TAIL, skewHaltLead, skewMoveLabel, skewMoveText, skewQueuedText, skewRemedy,
+} from './updateHalt';
+import { planMove, type PlannedMove } from './movePlan';
+import { UpdateMoveSheet } from './UpdateMoveSheet';
+import { UPDATES_STALE_TEXT } from './useUpdatesView';
 import './fleet.css';
 
 const POLL_MS = 15_000;
 
 /** "5m ago" / "2h 10m ago" / "moments ago" — elapsed time since `downSince`.
  *  The span comes from `elapsedWords`; the preposition is this banner's own,
- *  which is the whole reason the split is where it is (lib/elapsed.ts). */
+ *  which is the whole reason the split is where it is (@ccrc/ui lib/elapsed.ts). */
 const elapsedSince = (downSince: number, nowMs: number): string =>
   `${elapsedWords(nowMs - downSince)} ago`;
 
-export function FleetHostBanner(): ReactNode {
-  const [health, setHealth] = useState<FleetHealth | null>(null);
+/** Does the banner show for this health answer? Exactly the union of its arms below: on a remote fleet, the host
+ *  unreachable, or reachable with a divergent roster, a skewed build or project pools unavailable. The banner stack
+ *  asks it (W2 Task S2c, BannerStack.tsx); the render below reads it first, so the two cannot disagree. */
+export function fleetHostBannerShows(health: FleetHealth | null | undefined): boolean {
+  if (!health || health.mode !== 'remote') return false;
+  return !health.connected || health.roster === 'divergent' || health.build === 'skewed' || health.projectPools === 'unavailable';
+}
+
+export function FleetHostBanner(
+  { health: injected, nodes, intent, stale = false, releases, onMoved }: {
+    health?: FleetHealth | null; nodes?: readonly NodeWire[] | null; intent?: readonly UpdateIntentWire[] | null;
+    stale?: boolean;
+    /** D-7680: the catalogue the same /api/updates poll carries — the skew arm's `move` needs the leading release's row. */
+    releases?: readonly ReleaseWire[] | null;
+    /** D-7680: re-polls /api/updates after the skew arm's own move sheet wrote a request. */
+    onMoved?: () => void;
+  } = {},
+): ReactNode {
+  // Polls only when nothing was injected: FleetScreen polls once for this
+  // banner and BuildLine together; the standalone shape (tests, other
+  // screens) still self-polls the HEALTH route. It never polls /api/updates:
+  // without `nodes` the skew arm names no versions, which is also what it
+  // says while FleetScreen's inventory poll has not answered.
+  const polled = useFleetHealth(injected === undefined ? POLL_MS : 0);
+  const health = injected === undefined ? polled : injected;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [rebooting, setRebooting] = useState(false);
+  const [movePlanned, setMovePlanned] = useState<PlannedMove | null>(null);
   const now = useNow(30_000);
-
-  useEffect(() => {
-    let live = true;
-    let issued = 0;
-    const load = (): void => {
-      const mine = ++issued;
-      void api.fleetHealth().then((h) => { if (live && mine === issued) setHealth(h); }).catch(() => {});
-    };
-    load();
-    const t = setInterval(load, POLL_MS);
-    return () => { live = false; clearInterval(t); };
-  }, []);
+  if (!fleetHostBannerShows(health)) return null;
 
   // Roster divergence is orthogonal to reachability and is checked FIRST: a
   // fleet host that is up and answering is exactly the state in which the two
@@ -61,12 +107,80 @@ export function FleetHostBanner(): ReactNode {
   // the box is back, so the two never render together.
   if (health && health.mode === 'remote' && health.connected && health.roster === 'divergent') {
     return (
-      <div className="fleet-host-banner fleet-host-banner--warn" role="status">
-        <span className="fleet-host-banner-msg">
+      <Banner tone="attention" sticky>
           This server and the fleet host are projecting different account rosters. Redeploy both
           boxes; if it persists, reconcile <code>~/.ccrc/accounts.json</code> on each.
-        </span>
-      </div>
+      </Banner>
+    );
+  }
+
+  // A build skew ranks below roster divergence (silent damage already
+  // happening beats a version mismatch) and above the pools-unavailable arm
+  // (a feature absent from the host is a smaller worry than two boxes
+  // running different code).
+  if (health && health.mode === 'remote' && health.connected && health.build === 'skewed') {
+    // Fix round 2 (review of d5aefc4a, item 6): a row that fails `statedOf`
+    // (unmeasured, unread stamp, or D-3316 unreachable) does not lend this
+    // arm its cached `current` either — the same rule BuildLine's `side()`
+    // applies, so a skewed-build warning never names a version off a stale
+    // reading nobody just measured.
+    const name = (row: NodeWire | null): string => {
+      const b = row && statedOf(row) ? row.current : null;
+      return b ? `${b.version ?? 'unversioned'} (${b.sha.slice(0, 8)})` : '—';
+    };
+    const sides = Array.isArray(nodes) ? remoteSides(nodes) : null;
+    const fleet = sides ? ` fleet ${name(sides.fleet)} · server ${name(sides.server)}.` : '';
+    // Wave 19, R24(b): `stale` — a later poll failed, so the versions and the remedy are the last answer that
+    // landed. The remedy never vouches for auto then, and the arm ends with the update plane's own sentence,
+    // shown but not announced (the fleet screen's status region says it once, D-5124).
+    const remedy = skewRemedy(nodes, intent, stale, releases);
+    // D-7680: the `move` arm's one control — the shared confirm sheet over a single-node apply to the fleet box's tag,
+    // planned through the one planner over the inventory this banner was handed.
+    const move = remedy.kind === 'move' && Array.isArray(nodes) ? remedy : null;
+    const openMove = (): void => {
+      if (move === null || !Array.isArray(nodes)) return;
+      setMovePlanned(planMove({ nodes: [...nodes] }, { scope: 'node', direction: 'update', nodeId: move.nodeId, tag: move.tag }));
+    };
+    return (
+      <>
+      <Banner
+        tone="attention"
+        sticky
+        action={move === null ? undefined : (
+          <Button variant="ghost" size="fit" className="flex-none" onClick={openMove}>
+            {skewMoveLabel(move)}
+          </Button>
+        )}
+      >
+          The two boxes run different builds.{fleet}{' '}
+          {remedy.kind === 'queued' ? (
+            skewQueuedText(remedy)
+          ) : remedy.kind === 'move' ? (
+            skewMoveText(remedy)
+          ) : remedy.kind === 'halt' && remedy.then === 'auto' ? (
+            `${skewHaltLead(remedy.halting)}${SKEW_HALT_THEN_AUTO_TAIL}`
+          ) : remedy.kind === 'halt' ? (
+            <>
+              {skewHaltLead(remedy.halting)}, then run <code>ccrc rollout</code> from the deploying machine, or{' '}
+              <code>ccrc update</code> on the lagging box, fleet box first.
+            </>
+          ) : remedy.kind === 'auto' ? (
+            SKEW_AUTO_TEXT
+          ) : (
+            <>
+              Run <code>ccrc rollout</code> from the deploying machine, or <code>ccrc update</code> on the lagging
+              box, fleet box first.
+            </>
+          )}
+          {stale && <span aria-hidden="true">{` ${UPDATES_STALE_TEXT}`}</span>}
+      </Banner>
+      <UpdateMoveSheet
+        open={movePlanned !== null}
+        plan={movePlanned}
+        onClose={() => setMovePlanned(null)}
+        onDone={() => onMoved?.()}
+      />
+      </>
     );
   }
 
@@ -74,38 +188,77 @@ export function FleetHostBanner(): ReactNode {
   // while an unavailable pool capability is a feature absent from the host.
   if (health && health.mode === 'remote' && health.connected && health.projectPools === 'unavailable') {
     return (
-      <div className="fleet-host-banner fleet-host-banner--warn" role="status">
-        <span className="fleet-host-banner-msg">
+      <Banner tone="attention" sticky>
           The fleet host's ccd does not honour project pools yet. Redeploy the agent lane.
-        </span>
-      </div>
+      </Banner>
     );
   }
 
   if (!health || health.mode !== 'remote' || health.connected) return null;
 
+  // D-8382: `false` only, never absent, disables the button: an older server omits the field and its 501 still answers.
+  const rebootOff = health.rebootConfigured === false;
   const reboot = (): void => {
     setRebooting(true);
     void api
       .rebootFleet()
       .then(() => toast('Reboot requested — the fleet host is restarting.'))
-      .catch((err: unknown) => toast(`Couldn't reboot — ${apiErrorText(err)}`, 'error'))
+      .catch((err: unknown) => toast(failedTo('reboot', err), 'error'))
       .finally(() => setRebooting(false));
   };
 
   return (
-    <div className="fleet-host-banner" role="status">
-      <span className="fleet-host-banner-msg">
-        Fleet host unreachable{health.downSince !== null ? ` since ${elapsedSince(health.downSince, now)}` : ''}
-      </span>
-      <button
-        type="button"
-        className="btn-primary"
-        disabled={rebooting}
-        onClick={() => setConfirmOpen(true)}
+    <>
+      <Banner
+        tone="dead"
+        sticky
+        action={(
+          <Button
+            // `danger-ghost` (D-5099): the most destructive control in the
+            // app, on a banner already painted in the dead tint, so a red
+            // hairline in the dead-text ink rather than a red fill on red.
+            // The commit is its confirm's, below: `tone="danger"`.
+            variant="danger-ghost"
+            // Its lift and press are the dead banner's own grounds, not the
+            // card's, which barely register on this tint (D-5574, D-5688).
+            ground="dead"
+            // `size="fit"` IS THE FIX, and it is the axis the design system
+            // already had. `Button`'s default size is `full` (`w-full`), so
+            // `flex-none` alone kept this button at the row's full width: it
+            // claimed the row and collapsed the message to its `min-width:
+            // 0`. The sibling banners — halt, coord, child-reclaim — all
+            // write `size="fit" className="flex-none"`, which is the same
+            // shape the retired update banner's action row reached for
+            // with `flex: none` and `width: auto`. This one had the first
+            // half and not the second.
+            //
+            // Flagged for a wave, then fixed: it IS a visual change, which is
+            // why it waited for the operator rather than slipping in under a
+            // refactor. `fit` brings `px-3` with it, which a fitted button
+            // needs and a full-width one did not.
+            size="fit"
+            className="flex-none"
+            disabled={rebooting || rebootOff}
+            onClick={() => setConfirmOpen(true)}
+          >
+            Reboot
+          </Button>
+        )}
       >
-        Reboot
-      </button>
+        Fleet host unreachable{health.downSince !== null ? ` since ${elapsedSince(health.downSince, now)}` : ''}
+        {rebootOff && (
+          <>
+            {'. '}
+            <span data-reboot="not-configured">{FLEET_REBOOT_NOT_CONFIGURED_TEXT}</span>{' '}
+            <span data-reboot="remedy">{FLEET_REBOOT_REMEDY_TEXT}</span>
+          </>
+        )}
+      </Banner>
+      {/* A SIBLING of the banner, not a child. It was nested in the old div
+          because that div was the whole return; the dialog portals out of its
+          parent either way, but keeping it inside `Banner`'s message region
+          would put a dialog inside the `flex-1 min-w-0` span that exists to
+          wrap a sentence. */}
       <QuickConfirm
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
@@ -113,7 +266,8 @@ export function FleetHostBanner(): ReactNode {
         consequence="Reboots the whole fleet box — everything else running on it goes down too, not just the fleet."
         confirmLabel="Reboot the fleet host"
         onConfirm={reboot}
+        tone="danger"
       />
-    </div>
+    </>
   );
 }

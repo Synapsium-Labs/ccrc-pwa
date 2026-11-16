@@ -174,11 +174,11 @@ describe('ws-rename', () => {
   });
 
   it('refuses a session that is not a workspace', () => {
-    h.sh(`_reg_set claude2-demo wrapper claude2
-          _reg_set claude2-demo project demo
-          _reg_set claude2-demo workdir ${path.join(h.home, 'projects', 'demo')}
-          _reg_set claude2-demo uuid abc`);
-    expect(refusal('claude2-demo', 'feat/real-name')).toBe('not-a-workspace');
+    h.sh(`_reg_set claude9-demo wrapper claude9
+          _reg_set claude9-demo project demo
+          _reg_set claude9-demo workdir ${path.join(h.home, 'projects', 'demo')}
+          _reg_set claude9-demo uuid abc`);
+    expect(refusal('claude9-demo', 'feat/real-name')).toBe('not-a-workspace');
   });
 
   it('refuses a registry row with no project or workdir', () => {
@@ -2101,7 +2101,7 @@ A survivor is a finding, not a pass.
 
 The definition of done is behavioural and must be demonstrated, not inferred.
 
-1. On openclaw, with the branch deployed and the new `ccd` copied to `~/.local/bin/ccd`: confirm `ccd caps` lists `ws-rename`, and confirm `GET /api/fleet` stops reporting it `unsupported` within 60 s **without restarting the agent** — that is spec 1's caps lane doing the job this spec depends on.
+1. On the fleet box, with the branch deployed and the new `ccd` copied to `~/.local/bin/ccd`: confirm `ccd caps` lists `ws-rename`, and confirm `GET /api/fleet` stops reporting it `unsupported` within 60 s **without restarting the agent** — that is spec 1's caps lane doing the job this spec depends on.
 2. Create a workspace with `+`, give it one prompt, and watch the fleet line: within one `NAME_SWEEP_MS` of Claude Code writing the `ai-title`, the branch becomes the slugified title and the new name types itself in.
 3. The negative that matters most: `git push -u origin ws/<slug>` on a fresh workspace, then give it a prompt. The branch must keep its born name **permanently**, `has-upstream` must appear once in the server log, and nothing must surface in the PWA.
 4. The retry budget: confirm the refused workspace is not retried on the following sweeps, and that restarting ccrc-server buys it exactly one more attempt.

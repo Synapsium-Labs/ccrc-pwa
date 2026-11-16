@@ -1,10 +1,16 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
+import { mapBounded } from './bounded.js';
 import type { ProjectedHome } from '../../shared/api.js';
-import { inRoster, type Roster } from '../../shared/roster.js';
+import { inRoster, type AccountDef, type Roster } from '../../shared/roster.js';
 import { poolEligible, poolUndecidable } from './poolrule.js';
 import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
+import { serviceability, type LaneFacts, type ShareReading } from '../../shared/serviceability.js';
+import type { ModelClass } from '../../shared/models.js';
+import { shareFor, type SharesRead } from './shares.js';
+import { LANE_STATE_DIR_NAME } from '../../shared/agent-protocol.js';
+import { laneStateOf, type LaneStateRead } from '../../shared/accounts.js';
 
 export interface AccountLimits {
   five: number | null; seven: number | null; ts: number | null;
@@ -22,14 +28,20 @@ export interface AccountLimits {
    *  `measured()` reads this: an inferred 0 is not a score. */
   fiveRolledOver: boolean; sevenRolledOver: boolean;
   /** The WIDTH of the 5h window, straight from the producer
-   *  (`x-codex-secondary-window-minutes`, carried by infra/handoff/ccgpt-usage).
+   *  (`x-codex-secondary-window-minutes`, carried by `ccd/ccgpt-usage.py`).
    *  `0` means THE PLAN HAS NO 5h WINDOW AT ALL — which is a different fact from
    *  "nobody has measured the 5h window yet", though both look like `five: null`
    *  in the row. `measured()` needs the difference: with no 5h window the weekly
    *  figure is not half the truth, it is the whole of it, so the row ranks.
    *
+   *  ANTHROPIC ROWS CARRY IT TOO (D-8120), stated by `ccd/statusline-command.sh`
+   *  — the one writer that sees every reading land — once a whole 5h window of an
+   *  account's readings carried a weekly figure and no 5h one. That writer is the
+   *  fact's only owner; this reader, ccd and the PWA read the marker and never
+   *  re-derive it from a single `five: null`.
+   *
    *  OPTIONAL, AND ABSENT MEANS APPLICABLE. Only a producer that KNOWS the width
-   *  states it; every Anthropic row omits it, and so does ccd's own 429 exclusion
+   *  states it; an Anthropic row that reports a 5h window omits it, and so does ccd's own 429 exclusion
    *  row (`{"five":100,"seven":0,"ts":N}`) — which must keep scoring 100 rather
    *  than collapsing to `seven` = 0, the emptiest account on the fleet. The key is
    *  therefore emitted only when the raw row carried it, so a row that says
@@ -74,7 +86,18 @@ const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : nu
  *  FILENAME alone here would make the server MORE CREDULOUS than bash —
  *  `touch $REG/<w>-authdead` would condemn the account here while
  *  `_account_ok`'s own reader still calls it healthy — and an adapter may not
- *  narrow OR WIDEN a distinction it received. */
+ *  narrow OR WIDEN a distinction it received.
+ *
+ *  CONTENT IS HALF THE MIRROR; THE PATH'S TYPE IS THE OTHER HALF, and it lives
+ *  in `readLimits` because only a reader holding the path can ask it. Both bash
+ *  bodies of this contract — `_authdead` in `ccd/ccd` and in
+ *  `ccd/ccd-telemetry-keepalive` — refuse a SYMLINKED marker outright
+ *  (`[[ -f "$f" && ! -L "$f" ]]`). Until this wave all three bodies followed
+ *  the link and were consistently wrong; closing the two bash ones alone would
+ *  have left this one condemning an account the fleet's own gate calls healthy,
+ *  which is the widening the paragraph above forbids, arrived at from the other
+ *  side. A class closed in one body of a three-body contract is closed
+ *  nowhere. */
 const authDeadMarkerOk = (raw: string): boolean => {
   const trimmed = raw.replace(/\n+$/, '');
   const sp = trimmed.indexOf(' ');
@@ -141,6 +164,35 @@ export const measured = (l: AccountLimits | undefined): number | null => {
     : Math.max(l.five, l.seven);
 };
 
+/** The seven-day figure the serviceability clause reads — MEASURED or null,
+ *  the `measured()` rule's seven-day half: a rolled-over window is null, not
+ *  its inferred 0. ccd's `_limit_field w seven` is the twin (it retracts on
+ *  rollover the same way). */
+export const sevenOf = (l: AccountLimits | undefined): number | null =>
+  (!l || l.seven === null || l.sevenRolledOver ? null : l.seven);
+
+/** Whether a lane's telemetry has a `~/.cc-limits` writer (D-5754): `projectHome`'s `scorable`. */
+function reportsLimits(t: AccountDef['telemetry']): boolean {
+  switch (t) {
+    case 'anthropic':
+    case 'codex':
+      return true;
+    case 'none':
+    case 'openrouter':
+      return false;
+    default:
+      return t satisfies never;
+  }
+}
+
+/** One lane's facts for `serviceability()`: the roster's two operator facts are read as `unset`/`none` when absent. */
+function laneFactsOf(a: AccountDef, limits: Record<string, AccountLimits>, shares: SharesRead): LaneFacts {
+  return {
+    anthropic: a.telemetry === 'anthropic', seven: sevenOf(limits[a.id]), share: shareFor(shares, a.id),
+    fableBilling: a.fableBilling ?? 'unset', continuity: a.continuity !== null ? 'recorded' : 'none',
+  };
+}
+
 /**
  * The account a new workspace would land on, and its pressure score.
  *
@@ -157,16 +209,18 @@ export const measured = (l: AccountLimits | undefined): number | null => {
  * UNKNOWN IS NOT ZERO, and that is this function's one real defect fixed
  * (Stage 2a, Task 6). It used to score `max(five ?? 0, seven ?? 0)`, so an
  * account no telemetry had ever mentioned scored 0 and beat every measured
- * account on the box: against the live tree, `{claude: 5, claude2: 6,
- * 'claude-corp': 7}` projected onto `claude-dev0` at score 0 — the emptiest
- * account was simply the one nobody could see. Latent only because dev0
+ * account on the box: against the live tree, `{claude: 5, claude9: 6,
+ * 'claude-acme': 7}` projected onto `claude-lab0` at score 0 — the emptiest
+ * account was simply the one nobody could see. Latent only because lab0
  * reports honestly and gpt is held out by `homeAble`. An unmeasured account now
  * ranks BELOW every measured one instead of above them.
  *
  * Three accounts are excluded from scoring for two different reasons, and
  * conflating them is what produced the bug:
  *   - `telemetry: 'none'` (`shared/roster.ts`) — this account will NEVER report,
- *     so its permanent unknown must not be read as permanent emptiness.
+ *     so its permanent unknown must not be read as permanent emptiness. An
+ *     OpenRouter lane's `telemetry: 'openrouter'` (D-5521) is the same answer
+ *     here: no `~/.cc-limits` writer (`reportsLimits`, D-5754).
  *   - `disabled` — ccd's per-lane kill switch, since `_account_ok` (ccd:252)
  *     gates `_ws_least_loaded` on exactly that marker.
  *   - `authDead` — the health probe measured this credential dead, so its
@@ -194,19 +248,50 @@ export const measured = (l: AccountLimits | undefined): number | null => {
  * condemned, the first condemned one. `null` stays reserved for the case a
  * human declared — every home-able lane disabled — exactly as ccd's `""` does.
  *
- * Note what is deliberately NOT here: `_ws_least_loaded` applies no `_avail` /
- * SWAP_CEILING filter, so it returns the minimum even when every account is
- * pinned. Mirroring that faithfully is the point — a projection of 99 is
- * precisely the warning the user needs, and inventing "none available" here
- * would describe an outcome ccd never produces.
+ * WITHOUT A CLASS, no `_avail` / SWAP_CEILING filter applies on either side, so
+ * this returns the minimum even when every account is pinned. Mirroring that
+ * faithfully is the point — a projection of 99 is precisely the warning the
+ * user needs, and inventing "none available" here would describe an outcome ccd
+ * never produces. WITH `cls` set to any rung BELOW `fable` it no longer holds,
+ * and the sentence that stood here said it unconditionally (final review
+ * finding 3): `serviceability()` tests every one of those rungs against
+ * `SEVEN_DAY_CEILING_PCT`, which IS ccd's `SWAP_CEILING`, on the lane's own
+ * seven-day figure — the identical test `_avail` makes — so an all-pinned fleet
+ * empties `live` and this returns `null` for a HEALTH reason. `classBelow` does
+ * not relieve it either: every rung below the top one reads the same figure
+ * against the same ceiling, so they answer unservable together. Only `fable`
+ * behaves the way the old paragraph described, because its ceiling is the
+ * sweep's share estimate and its refusal can also be the roster's `backend`
+ * word. ccd's `_ws_least_loaded` carries the same admission in its own header;
+ * the narrowness is the mitigation — no shipped caller passes a class until
+ * slice 4's `ws-add --route`.
  *
  * The honest delta against the bash: the server has no filesystem authority
  * over `~/.local/bin`, so it cannot see a missing wrapper the way
  * `_account_ok`'s `-x` check does — a projection can still name an account
  * whose binary is gone. ccd's refusal at ws-add is the authority; this is a
- * best-effort forecast of it. `null` iff every home-able lane is disabled,
- * mirroring `_ws_least_loaded`'s empty-stdout "" for the same case — nothing is
- * placeable, and inventing a target would lie.
+ * best-effort forecast of it.
+ *
+ * `null` HAS THREE MEANINGS, not two, and the third arrived with the class
+ * positional (final review finding 3; the deferred minor at the `live.length`
+ * guard below). They are: every home-able lane DISABLED; the pool tag
+ * UNDECIDABLE, so nobody may decide; and — only when `cls` is not `default` —
+ * every eligible lane MEASURED UNSERVABLE for that class. `_ws_least_loaded`'s
+ * empty stdout is overloaded in exactly the same three ways and says so in its
+ * own header, so the two sides still agree; what neither side has is a second
+ * channel on this seam, so the CALLER re-reads and names which it was.
+ * `projectPlacement` below is the caller that does this for the wire, and as
+ * of slice 4 it tells all three apart: it answers `unmeasurable` for the
+ * undecidable tag, and on `home === null` it passes the class it was asked
+ * through to `projectHome` and then re-calls `projectHome` CLASS-BLIND
+ * (default class, no shares) to tell the third meaning from the other two —
+ * a non-null class-blind re-call means the class is what emptied the pool, so
+ * the `none` arm names it; a null re-call means the pool is empty for a
+ * reason the class did not cause, so `none` carries no `class` key (the
+ * caller-side arm this paragraph asked for, controller ruling S3-R3's named
+ * obligation, D-2854, landed in this commit). That obligation was recorded
+ * for the bash side only; this paragraph is the server side of it, and it is
+ * recorded HERE because a plan document is a snapshot and this seam is not.
  *
  * THE POOL IS AN ARGUMENT, REQUIRED (account pools, spec §5.6). `poolEligible`
  * replaces the bare `roster.homeAble`, mirroring `_ws_least_loaded`'s
@@ -220,14 +305,56 @@ export const measured = (l: AccountLimits | undefined): number | null => {
  * answer this function can give. `GET /api/accounts`'s global `projected` says
  * `{state:'untagged'}` out loud, and that is what that field now MEANS.
  *
+ * `edges` IS ALSO REQUIRED, and also positioned before the optional trailing
+ * trio for the same reason `pool` is (ruling T7-R3, account-pool-membership
+ * wave 1 — reversing the T7-R1 deferral once the reviewer showed the
+ * divergence is LIVE, not merely theoretical: an account untagged in the
+ * roster but centrally tagged elsewhere would have `GET /api/projects`
+ * forecast it eligible while `POST /api/sessions`'s `refusePool` refused the
+ * very placement, the moment an operator uses the feature this wave ships).
+ * `poolEligible` folds central-beats-declared through `resolvedAccountPool`
+ * — see that function's own docstring. Every production caller now passes a
+ * live `deps.coord?.accountPoolEdges() ?? new Map()` read (`server.ts`);
+ * `test/projected-home.test.ts`'s fixture-driven parity suite against
+ * `_ws_least_loaded` deliberately keeps passing `NO_EDGES` — that harness
+ * tests the DECLARED-roster rule against bash's own declared-only positional,
+ * not the central-edge precedence, which `pools.test.ts` and
+ * `pool-accounts-route.test.ts`'s closure test cover instead.
+ *
  * Kept honest against the bash by shared fixtures: test/fixtures/leastLoaded.ts.
  */
 export function projectHome(
   roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+  edges: ReadonlyMap<string, readonly string[]>,
+  cls: ModelClass | 'default' = 'default', shares: SharesRead = { kind: 'absent' },
+  nowS: number = Math.floor(Date.now() / 1000),
 ): ProjectedHome | null {
-  const live = poolEligible(roster, pool).filter((a) => limits[a.id]?.disabled !== true);
+  const eligible = poolEligible(roster, pool, edges).filter((a) => limits[a.id]?.disabled !== true);
+  // POOL FIRST, THEN SERVICEABILITY (routing spec §5.4), and the clause is a
+  // FILTER on eligibility exactly as `_pool_ok` is: a lane measured at the
+  // class's ceiling drops out here, before scoring and before the condemned
+  // tier; an UNMEASURED lane stays — unmeasured never becomes ineligible, the
+  // rule the three unknown-handling sites share — and ranks by its own score.
+  // `default` skips the clause, so every caller that passes no class gets the
+  // pre-slice-3 answer byte for byte. ccd's `_ws_least_loaded project [class]`
+  // is the twin; `projected-home.test.ts` drives both over one fixture table.
+  const live = cls === 'default' ? eligible : eligible.filter((a) =>
+    // `anthropic` is `telemetry === 'anthropic'`: an `openrouter` lane and a `none` compatible lane (D-5521)
+    // are not Anthropic backends, so `fable` is `unservable` (`backend`) there.
+    serviceability(cls, laneFactsOf(a, limits, shares), 'other', nowS)
+      .kind !== 'unservable');
+  // THE THIRD MEANING OF `null` IS BORN HERE (the docstring's own paragraph, and
+  // the deferred minor that named this line). A class-emptied pool and an
+  // all-disabled pool leave through the same `return`, which is the overloaded
+  // seam ccd's `""` already has — kept identical on purpose rather than split,
+  // because a second value here would make this function disagree with the
+  // authority it forecasts. The caller is where they are told apart.
   if (live.length === 0) return null;
-  const scorable = live.filter((a) => a.telemetry !== 'none');
+  // WHO COULD REPORT (D-5754): the lanes with a `~/.cc-limits` writer, `anthropic` (the statusline, through
+  // CCRC_MEASURED) and `codex` (its own publisher). `none` never reports, and neither does `openrouter`
+  // (D-5521; its meter is the key's credit), which `_account_measured` already skips for `firstm`. Spelled as
+  // a switch so a fifth telemetry value is a compile error here, not a lane that silently counts as reporting.
+  const scorable = live.filter((a) => reportsLimits(a.telemetry));
   // ONE PREDICATE, TWO CONSUMERS, AND THAT IS THE MIRROR. `_ws_least_loaded`
   // reads `_authdead` once per candidate and spends the answer twice: a
   // condemned lane never enters the scored comparison, and it lands in the
@@ -269,25 +396,88 @@ export function projectHome(
  * COMPOSES `projectHome`; decides nothing new. The pool DECISION is
  * `poolrule.ts`'s (L1) and is reached through `poolUndecidable`/`poolEligible`
  * rather than by testing state tokens here.
+ *
+ * `edges` is REQUIRED and threaded straight through to both `projectHome`
+ * calls below, including the class-blind re-call (ruling T7-R3) — a
+ * central edge must decide the SAME way whichever arm answers, or the
+ * class-blind re-call could silently reintroduce the declared-only
+ * divergence this ruling closes.
  */
 export function projectPlacement(
   roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+  edges: ReadonlyMap<string, readonly string[]>,
+  cls: ModelClass | 'default' = 'default', shares: SharesRead = { kind: 'absent' },
+  nowS: number = Math.floor(Date.now() / 1000),
 ): ProjectPlacement {
   if (poolUndecidable(pool)) return { kind: 'unmeasurable' };
-  const home = projectHome(roster, limits, pool);
-  if (home === null) return { kind: 'none', pool: pool.state === 'tagged' ? pool.name : null };
+  const home = projectHome(roster, limits, pool, edges, cls, shares, nowS);
+  if (home === null) {
+    const notPlaceable = { kind: 'none' as const, pool: pool.state === 'tagged' ? pool.name : null };
+    // The trailing three parameters default so a caller that never passes a
+    // class gets the pre-slice-4 answer byte for byte (`projectHome`'s own
+    // rule, mirrored here): `class` only rides the wire when a caller asked
+    // for one AND the class is the reason the pool is empty (controller
+    // ruling S4-R12). A class-blind re-call (default class, no shares) tells
+    // the two apart: if it still comes back null, every home-able lane is
+    // disabled or the pool tag is undecidable — a fact the class did not
+    // cause — so `none` stays plain; only when the class-blind call finds a
+    // home does the class-scoped emptiness become the fact worth naming.
+    if (cls !== 'default' && projectHome(roster, limits, pool, edges) !== null) {
+      return { ...notPlaceable, class: cls };
+    }
+    return notPlaceable;
+  }
   return { kind: 'projected', wrapper: home.wrapper, score: home.score };
 }
 
+/** Each lane's state file as read, and the lanes the registry marks off, for `GET /api/accounts`'s `lanes`. */
+export interface LaneStatesRead {
+  readonly lanes: Readonly<Record<string, LaneStateRead>>;
+  /** `<id>-disabled` in the registry: the kill switch, for a lane that has no telemetry row to carry it. */
+  readonly disabled: ReadonlySet<string>;
+}
+
+/**
+ * The lane-state files (`~/.cc-sessions/.accounts/<id>.json`, spec §3.4; D-5517), one per rostered lane, read over the
+ * fleet's own `read` op (accounts plan Task A12), which opens a file there with `O_NOFOLLOW` and takes it only when it
+ * is a regular file (D-5755 (13d); the agent's `checkReadTarget`, and `localIO` on a one-box fleet, D-6058). The two
+ * non-readings stay two: an absent file is `absent`; a file that exists and cannot be read (a symlink, a FIFO, bytes
+ * that are not a JSON object) is `unreadable`. Its own read, called only for a session reader (D-6057 (4)). Every field is held to its grammar by `laneStateOf` (D-5755 (11)); the
+ * route masks what it shows. Never rejects.
+ */
+export async function readLaneStates(io: FleetIO, cfg: CcrcConfig): Promise<LaneStatesRead> {
+  const dir = path.join(cfg.registryDir, LANE_STATE_DIR_NAME);
+  // Measured (the plain `readdir` ratchet, D-5969): a listing that fails marks no lane off here; the telemetry row's
+  // own `disabled` still does.
+  const reg = await io.readdirMeasured(cfg.registryDir);
+  const regNames = reg.ok ? reg.entries : [];
+  const disabled = new Set(regNames.filter((n) => n.endsWith('-disabled')).map((n) => n.slice(0, -'-disabled'.length)));
+  const lanes: Record<string, LaneStateRead> = {};
+  await Promise.all(cfg.roster.accounts.map(async ({ id }) => {
+    const r = await io.readFileMeasured(path.join(dir, `${id}.json`));
+    if (!r.ok) { lanes[id] = { kind: r.reason === 'absent' ? 'absent' : 'unreadable' }; return; }
+    let state: ReturnType<typeof laneStateOf> = null;
+    try { state = laneStateOf(JSON.parse(r.content)); } catch { state = null; }
+    lanes[id] = state === null ? { kind: 'unreadable' } : { kind: 'read', state };
+  }));
+  return { lanes, disabled };
+}
+
+/** `readLimits`' file reads in flight at once (D-6436), through `bounded.ts`'s pool. */
+export const LIMITS_READ_CONCURRENCY = 8;
+
+/** `registryNames` is a registry listing the caller already holds, and absent means list here (D-8069). The tick hands
+ *  its own, so a listed tick lists once. A request-time caller passes none: it has no tick's listing to trust, and a
+ *  marker raised a moment ago must count for the answer it gives now. */
 export async function readLimits(
   io: FleetIO,
   cfg: CcrcConfig,
   now = Math.floor(Date.now() / 1000),
+  registryNames?: readonly string[],
 ): Promise<Record<string, AccountLimits>> {
   const names = (await io.readdir(cfg.limitsDir)) ?? [];
-  // One readdir, not one stat per account: the registry dir is already being
-  // read on every fleet poll and this rides the same trip.
-  const regNames = (await io.readdir(cfg.registryDir)) ?? [];
+  // One listing, not one stat per account.
+  const regNames = registryNames ?? (await io.readdir(cfg.registryDir)) ?? [];
   const disabledLanes = new Set(
     regNames.filter((n) => n.endsWith('-disabled')).map((n) => n.slice(0, -'-disabled'.length)),
   );
@@ -299,15 +489,41 @@ export async function readLimits(
     .map((n) => n.slice(0, -'-authdead'.length));
   const authDeadLanes = new Set(
     (await Promise.all(authDeadCandidates.map(async (wrapper) => {
-      const content = await io.readFile(path.join(cfg.registryDir, `${wrapper}-authdead`));
+      const markerPath = path.join(cfg.registryDir, `${wrapper}-authdead`);
+      // TYPE FIRST, THEN CONTENT — the same order, and the same two questions,
+      // as `[[ -f "$f" && ! -L "$f" ]]` followed by the read in both bash
+      // bodies. `regular` is the ONLY kind that may condemn: a `symlink` is
+      // what bash refuses, `other` is a directory or socket nothing should
+      // read, and every `ok: false` — absent, unreadable, or `unmeasured`
+      // from an agent too old to answer the question — is a lane this box
+      // cannot prove anything about. All of them fall through to healthy,
+      // which is the direction this file's own rescue argument requires: a
+      // condemned lane loses its place in the preferred fallback tier, so a
+      // wrong `true` costs an account that could have taken the work, while a
+      // wrong `false` costs only the scoring penalty it would have carried.
+      //
+      // The window between this call and the read below is the same one bash
+      // has between its test and its `cat`, and it is not closed here either:
+      // this is a mirror of that gate, not an improvement on it.
+      const kind = await io.lstatMeasured(markerPath);
+      if (!kind.ok || kind.kind !== 'regular') return null;
+      const content = await io.readFile(markerPath);
       return content !== null && authDeadMarkerOk(content) ? wrapper : null;
     }))).filter((w): w is string => w !== null),
   );
   const out: Record<string, AccountLimits> = {};
-  for (const n of names.filter((n) => n.endsWith('.json') && !n.startsWith('.'))) {
+  // D-6436 (desktop polish C4): the files are read through the one bounded pool, not one round trip after another;
+  // the loop below still settles them in listing order. A read that rejects is handed to its own row's `catch`,
+  // exactly where the serial read's rejection landed, never to the whole map.
+  const jsonNames = names.filter((n) => n.endsWith('.json') && !n.startsWith('.'));
+  const reads = await mapBounded(jsonNames, LIMITS_READ_CONCURRENCY, (n) => io.readFile(path.join(cfg.limitsDir, n))
+    .then((content) => ({ content }), (err: unknown) => ({ err })));
+  for (const [i, n] of jsonNames.entries()) {
     const wrapper = n.slice(0, -'.json'.length);
     try {
-      const content = await io.readFile(path.join(cfg.limitsDir, n));
+      const read = reads[i]!;
+      if ('err' in read) throw read.err;
+      const content = read.content;
       if (content === null) throw new Error('missing');
       const raw = JSON.parse(content) as Record<string, unknown>;
       const ts = numOrNull(raw.ts);

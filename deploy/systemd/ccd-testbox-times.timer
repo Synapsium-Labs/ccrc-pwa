@@ -1,0 +1,16 @@
+# ccd-testbox-times.timer - fires ccd-testbox-times.service: first ten minutes after the timer is armed, then daily.
+# Its first-run anchor is OnActiveSec= for the reason D-1981 states below.
+[Unit]
+Description=Fetch the test box's per-file test durations from CI once a day
+[Timer]
+# `OnActiveSec=`, NOT `OnBootSec=`, for ccd-telemetry-keepalive.timer's reason (D-1981): this timer is first armed by
+# a deploy on a box that has been up for days, where a boot-relative elapse point is already in the past and the first
+# pass would start at once, on top of deploy.sh's supervisor sweep. `Persistent=` would do nothing: it only affects
+# OnCalendar= timers.
+OnActiveSec=10min
+# Daily: the artifact it reads is the daily CI run's (`testtimes`, spec 2026-10-28 §2.5), and a per-file duration a
+# day old moves a budget estimate by seconds.
+OnUnitActiveSec=24h
+AccuracySec=1h
+[Install]
+WantedBy=timers.target

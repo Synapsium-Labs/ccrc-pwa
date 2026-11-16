@@ -14,10 +14,8 @@
 // hands it, so they stay synchronous and safe to call during render.
 //
 // The roster itself lives in the fleet store (`stores/fleet.ts`'s `roster`
-// field, polled from `GET /api/accounts` and connected app-wide) or, for the
-// three screens that already run their own `/api/accounts` poll
-// (AccountsStrip, AccountsScreen, useProjectedHome's siblings), the same
-// response's `roster` field read locally. Nothing here fetches anything.
+// field, polled from `GET /api/accounts` and connected app-wide), the one
+// reader of that route (C8, D-6440). Nothing here fetches anything.
 //
 // `PRODUCTION_ROSTER`, the hand-typed transitional copy of the five
 // production accounts Task 6 left behind for exactly this task to delete, is
@@ -27,6 +25,8 @@
 // guessed hue.
 import type { RosterWire } from '../../../shared/api';
 import { POOL_NAME_RE, type Hue } from '../../../shared/roster';
+import type { AccountPoolWire } from '../../../shared/poolrule';
+import { isProviderId, type ProviderId } from '../../../shared/providers';
 
 /** This account's roster entry, or `undefined` for a wrapper the roster does
  *  not (yet) have — an unarrived poll, or a genuinely unrostered wrapper (a
@@ -37,7 +37,26 @@ function entryFor(roster: readonly RosterWire[], wrapper: string): RosterWire | 
   return roster.find((a) => a.id === wrapper);
 }
 
-/** Human label for an account, e.g. 'claude2' → 'team·alt'. Unknown wrappers
+/** The phrase every PWA surface prints for a lane whose sign-in lapsed (the state word `signed-out`'s plain form). */
+export const SIGN_IN_EXPIRED = 'sign-in expired';
+
+/** The one warning for a roster route that answered the wrong SHAPE.
+ *
+ *  ONE SENTENCE. `AccountsStrip`, `AccountsScreen` and the fleet store each
+ *  polled `GET /api/accounts` once, and each spelled this warning for itself —
+ *  the literal census is what found that, since a `console.warn` string is
+ *  neither markup nor a rule. The store is now the one reader (C8, D-6440) and
+ *  this warning's one caller. It is the ONLY signal a genuine protocol break
+ *  has: every consumer silently reverts to raw wrapper ids, which reads as
+ *  "nothing is wrong".
+ *
+ *  A function rather than a constant so the offending body rides along at
+ *  every site, as it already did. */
+export function warnNonArrayRoster(body: unknown): void {
+  console.warn('ccrc: GET /api/accounts answered with a non-array roster; keeping the last known one.', body);
+}
+
+/** Human label for an account, e.g. 'claude9' → 'team·alt'. Unknown wrappers
  *  fall back to the raw name — never hide an account the server reports,
  *  including in the window before the roster has arrived at all. */
 export function accountLabel(roster: readonly RosterWire[], wrapper: string): string {
@@ -52,24 +71,121 @@ export function accountHue(roster: readonly RosterWire[], wrapper: string): Hue 
   return entryFor(roster, wrapper)?.hue;
 }
 
+/** The provider this lane runs on — THE ONE READER of `RosterWire.provider` in this app. Absent (an older server, an
+ *  undeclared lane), a value this build does not know (`isProviderId` false: a newer server's provider), an unrostered
+ *  wrapper and a roster not yet arrived all answer `null`, which means NOT MEASURABLE — every caller treats those
+ *  alike, so one null is not an overloaded one. */
+export function accountProvider(roster: readonly RosterWire[], wrapper: string): ProviderId | null {
+  const p = entryFor(roster, wrapper)?.provider;
+  return isProviderId(p) ? p : null;
+}
+
+/** Ruling T9-R1 (2026-09-18, mid-Task-9): the PWA CANNOT fold the
+ *  central/declared/untagged precedence itself — the central `pool_edges`
+ *  rows live only in `~/.ccrc/coord.db`, and nothing puts them on this wire.
+ *  A client-side fold (this file's first cut at `accountPoolState`, which
+ *  took an `edges` map that no caller could ever actually populate) would
+ *  silently resolve to "declared, always" while the server enforces a
+ *  central tag it never told this app about — precisely the
+ *  `NewSessionSheet.tsx:186-188` hazard the ruling measured already live.
+ *
+ *  So the SERVER folds the precedence, and this app only reads the answer.
+ *  Task 7's fix round (T7-R2, landed while this task was mid-flight) added
+ *  `RosterWire.resolvedPool?: AccountPoolWire` to `shared/api.ts` — the
+ *  `{ state, pools, origin }` shape `shared/poolrule.ts` declares, precedence
+ *  already folded server-side by `resolvedAccountPool` (`server/src/poolrule.ts`).
+ *  This reads that field directly off the real, now-shipped type; no local
+ *  widening is needed. */
+
+/** A `tagged` answer whose every name actually parses as `POOL_NAME_RE`, or
+ *  `untagged` (on the SAME `origin`) when even one does not.
+ *
+ *  Review round 1, I3: the docstring below used to claim the malformed-value
+ *  courtesy was "preserved verbatim under the richer wire" while the code
+ *  only ever applied it to the DECLARED arm — a `resolvedPool` carrying an
+ *  off-grammar name (this client's own fetch is a cast; nothing between the
+ *  wire and this function re-validates a union's string payload) returned
+ *  early, untested, before `POOL_NAME_RE` was ever consulted. The distrust
+ *  this client owes an unvalidated string does not depend on which carrier
+ *  supplied it, so both arms of `accountPoolState` now route a `tagged`
+ *  candidate through here before trusting it. */
+function grammarChecked(state: AccountPoolWire): AccountPoolWire {
+  if (state.state !== 'tagged') return state;
+  return state.pools.every((p) => POOL_NAME_RE.test(p))
+    ? state
+    : { state: 'untagged', origin: state.origin };
+}
+
+/** This account's pool, as the FULL wire the rule understands — `tagged`
+ *  (with which pools and WHICH CARRIER decided) or `untagged` (also carrying
+ *  its carrier, so a reader can tell "nobody has tagged this yet" from
+ *  "the central edge was just cleared and the roster default took over").
+ *
+ *  THE ONLY READER of `RosterWire.pool`/`resolvedPool` in this app (spec
+ *  §5.3, §5.9). It does NOT fold the central/declared PRECEDENCE (see T9-R1
+ *  above) — when the server's `resolvedPool` is present, its `state` and
+ *  `origin` are taken VERBATIM, whatever the server measured; this function
+ *  never second-guesses WHICH carrier decided or recomputes an ordering the
+ *  server already applied. When `resolvedPool` is absent (a server built
+ *  before Task 7's fix round), this falls back to the declared-only read
+ *  `accountPool` has always made, `origin: 'declared'` because that is the
+ *  only carrier this path can possibly be reading.
+ *
+ *  What it DOES still check, on both arms: a `tagged` name must parse as
+ *  `POOL_NAME_RE`, or the answer folds to `untagged` on the same origin
+ *  (`grammarChecked` above) — the canonical server parser refuses an
+ *  off-grammar value before it is ever written to `accounts.json`, and
+ *  neither `declaredAccountPool` nor `resolvedAccountPool`
+ *  (`shared/poolrule.ts`, `server/src/poolrule.ts`) re-validates the
+ *  grammar of a string they are handed, so a malformed value can still
+ *  arrive on EITHER field despite trusted canonical output never carrying
+ *  one. `poolRule`'s permissive forecast is for an absent account tag, not
+ *  a tag this client cannot validate.
+ *
+ *  Every pool question the PWA asks — the swap split, the new-session split,
+ *  the option list in `PoolSheet`, the off-pool marker on a row, the
+ *  account-pool chip — must come from here (directly, or through
+ *  `accountPool` below) so no surface can invent a precedence answer the
+ *  server did not actually measure. */
+export function accountPoolState(roster: readonly RosterWire[], wrapper: string): AccountPoolWire {
+  const resolved = entryFor(roster, wrapper)?.resolvedPool;
+  if (resolved !== undefined) return grammarChecked(resolved);
+  const p = entryFor(roster, wrapper)?.pool;
+  return grammarChecked(
+    typeof p === 'string'
+      ? { state: 'tagged', pools: [p], origin: 'declared' }
+      : { state: 'untagged', origin: 'declared' },
+  );
+}
+
 /** This account's POOL NAME, or `null` for an untagged account, an account
  *  this roster does not have, or a server built before pools existed (the key
- *  is simply absent on that wire, and absence-permits means untagged).
+ *  is simply absent on that wire, and absence-permits means untagged) — FOUR
+ *  reasons, and this function names only two of them.
  *
- *  THE ONLY READER of `RosterWire.pool` in this app (spec §5.3). Every pool
- *  question the PWA asks — the swap split, the new-session split, the option
- *  list in `PoolSheet`, the off-pool marker on a row — goes through here, so
- *  "what pool is this account in" is answered in exactly one place and an
- *  older server's omission degrades once rather than five times.
+ *  OVERLOADED, DISCLOSED RATHER THAN FIXED HERE (item 6, I4, wave-1 fix
+ *  round A): `null` also covers an `unreadable`, `malformed` or `stale`
+ *  account — `accountPoolState`'s other three states — collapsing "nobody
+ *  tagged this" with "nobody could tell" into one permissive answer. Latent
+ *  only because `resolvedAccountPool` (`server/src/poolrule.ts`) cannot yet
+ *  produce those three states for a real fleet; real the day it does. Every
+ *  ELIGIBILITY decision (anything that feeds `poolSide`/`splitByPool`,
+ *  `lib/pools.ts`) now reads `accountPoolState` directly instead of this
+ *  function, specifically so that fold cannot reach a placement choice — see
+ *  `poolSide`'s own docstring. What is still EXPOSED to this narrowed value:
+ *  every caller that only ever wanted a NAME to display and never a
+ *  decision to make — `NewSessionSheet`/`SwapSheet`'s `poolChip` text,
+ *  `SessionLine`'s account-pool label, `poolOptions`' distinct-name list —
+ *  each of which already renders nothing for a bare `null`, so the display
+ *  degrades honestly even though the REASON is not shown.
  *
- *  The canonical server parser refuses off-grammar values, but its API client
- *  is a cast and the same-origin offline cache validates only roster shape. A
- *  malformed value can therefore arrive here despite trusted canonical output
- *  never carrying one. Treat it as untagged: `poolRule`'s permissive forecast
- *  is for an absent account tag, not a tag this client cannot validate. */
+ *  A one-line derivation over `accountPoolState` above, kept for exactly
+ *  those callers, which have no use for `origin` either. `accountPoolState`
+ *  stays the ONE place `RosterWire.pool`/`resolvedPool` is read; this never
+ *  re-reads either on its own. */
 export function accountPool(roster: readonly RosterWire[], wrapper: string): string | null {
-  const p = entryFor(roster, wrapper)?.pool;
-  return typeof p === 'string' && POOL_NAME_RE.test(p) ? p : null;
+  const state = accountPoolState(roster, wrapper);
+  return state.state === 'tagged' ? state.pools[0] : null;
 }
 
 /** Token custom-property name for the account's chip colour, e.g. 'claude' →
@@ -110,12 +226,21 @@ export function joinLabels(labels: readonly string[]): string {
  *  must name these accounts individually rather than claim "all accounts":
  *  an enabled gpt sitting in the same list would make that claim false on
  *  its face. Same discipline ccd's own placement refusal already uses
- *  (ccd/ccd's `cmd_ws_add`: `claude:disabled claude2:disabled
- *  claude-corp:disabled`, never "all accounts"). Its pool-aware sibling is
+ *  (ccd/ccd's `cmd_ws_add`: `claude:disabled claude9:disabled
+ *  claude-acme:disabled`, never "all accounts"). Its pool-aware sibling is
  *  `poolLabelList` (lib/pools.ts), which answers the same question for a
  *  TAGGED project. */
 export function homeAbleLabelList(roster: readonly RosterWire[]): string {
   return joinLabels(roster.filter((a) => a.homeAble).map((a) => a.label));
+}
+
+/** Whether a workspace may START on this account (`homeAble`), for a door that must say so before the operator
+ *  commits to one (the new-session sheet's name field, named workspaces S8). ABSENCE PERMITS: a wrapper this roster
+ *  has no entry for (a live session reports it, or the roster has not arrived) is `true`, because this build cannot
+ *  tell, and ccd answers with its own reason (`<lane>:not-home-able`) if the lane is not one. Only a roster entry
+ *  that says `homeAble: false` closes the door here. */
+export function accountIsHomeAble(roster: readonly RosterWire[], wrapper: string): boolean {
+  return entryFor(roster, wrapper)?.homeAble ?? true;
 }
 
 /** The roster's ids, in declaration order — the base list `AccountsScreen`'s

@@ -29,22 +29,26 @@ function parseShape(text: string): { ok: string; target: string; suffix: string;
 // with and without a secrets file, ids that are strict prefixes of one another,
 // and a suffix that is not derived from the id.
 const ACCOUNTS = [
-  { id: 'claude2', configDirSuffix: '.claude-personal', execKind: 'generated',
-    secretsFile: '.cc-secrets/claude2-oauth.env' },
-  { id: 'claude-corp', configDirSuffix: '.claude-corp', execKind: 'generated',
-    secretsFile: '.cc-secrets/claude-corp-oauth.env' },
-  { id: 'claude-dev0', configDirSuffix: '.claude-dev0', execKind: 'generated',
-    secretsFile: '.cc-secrets/claude-dev0-oauth.env' },
+  { id: 'claude9', configDirSuffix: '.claude-home', execKind: 'generated',
+    secretsFile: '.cc-secrets/claude9-oauth.env' },
+  { id: 'claude-acme', configDirSuffix: '.claude-acme', execKind: 'generated',
+    secretsFile: '.cc-secrets/claude-acme-oauth.env' },
+  { id: 'claude-lab0', configDirSuffix: '.claude-lab0', execKind: 'generated',
+    secretsFile: '.cc-secrets/claude-lab0-oauth.env' },
   { id: 'plain', configDirSuffix: '.claude-plain', execKind: 'generated' },
   { id: 'x', configDirSuffix: '.x_1-2.3', execKind: 'generated', secretsFile: 'a/b/c.env' },
+  { id: 'codex-a', configDirSuffix: '.claude-codex-a', execKind: 'codex',
+    secretsFile: '.cc-secrets/codex-a.env' },
 ] as const;
+
+const UPSTREAM_ID = 'claude';
 
 describe('the wrapper the writer writes is the wrapper the reader reads', () => {
   for (const a of ACCOUNTS) {
     it(`round-trips ${a.id} unmarked`, () => {
-      const r = parseShape(generateWrapperBody(a, 'claude'));
+      const r = parseShape(generateWrapperBody(a, UPSTREAM_ID));
       expect(r.ok).toBe('ok');
-      expect(r.target).toBe('claude');
+      expect(r.target).toBe(a.execKind === 'codex' ? 'ccrc-codex' : UPSTREAM_ID);
       expect(r.suffix).toBe(a.configDirSuffix);
       expect(r.secrets).toBe((a as { secretsFile?: string }).secretsFile ?? '');
     });
@@ -53,9 +57,9 @@ describe('the wrapper the writer writes is the wrapper the reader reads', () => 
       // The marker is a comment line inserted at line 2, and the reader strips
       // comment lines before counting significant ones. If that ever stops
       // being true, every wrapper ccrc installs becomes foreign to ccrc.
-      const r = parseShape(markGenerated(generateWrapperBody(a, 'claude')));
+      const r = parseShape(markGenerated(generateWrapperBody(a, UPSTREAM_ID)));
       expect(r.ok).toBe('ok');
-      expect(r.target).toBe('claude');
+      expect(r.target).toBe(a.execKind === 'codex' ? 'ccrc-codex' : UPSTREAM_ID);
       expect(r.suffix).toBe(a.configDirSuffix);
       expect(r.secrets).toBe((a as { secretsFile?: string }).secretsFile ?? '');
     });

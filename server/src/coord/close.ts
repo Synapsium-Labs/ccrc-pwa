@@ -1,43 +1,85 @@
+/**
+ * L4 delivery executor (declared, landing order wave 4): the close ACTS. It re-measures a done claim through
+ * `fingerprint.ts` (a declared L3 reader, which since this wave reads the radar's files too), runs the fleet verbs and
+ * commits the transition. Its imports alone read as L1, which was true while it reached nothing declared outward; a
+ * runtime import of an L3 adapter makes it the executor `CLAUDE.md` names L4, so the declaration says so rather than
+ * widening the outward-edge exemptions. Every DECISION it acts on is `closeDecide.ts`'s (L1).
+ */
+import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { Deps } from '../server.js';
-import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
-import { readPrHistory } from './prhistory.js';
-import { verifyDone, type DoneClaim } from './fingerprint.js';
+import type { RunCcd, WatcherCoordPort } from './ports.js';
+import type { RunVerdict } from './runVerdicts.js';
 import {
-  type AdvanceResult, type CoordStore, type OpenSibling, type OpenSiblingsResult,
+  abandonMove, decideClose, doneRejectionMail, recordedHandoff, type CloseHalt, type CloseStop, type FleetAct,
+  type RequestPlan,
+} from './closeDecide.js';
+import { CCD_ARGV, ccdCan, sweepDec, type CcdArgv } from '../ccdargv.js';
+import { readPrHistory } from './prhistory.js';
+import { verifyDone, verifyReviewDone, type DoneVerdict } from './fingerprint.js';
+import {
+  type AdvanceResult, type CoordStore, type LandingLandResult, type OpenSiblingsResult, type RunRow,
 } from './store.js';
 import {
   HANDOFF_SHA,
   holdReasonVerdict,
-  queueSystemMail,
   releaseIsSafe,
+  survivorOf,
   type HoldReasonVerdict,
 } from './rundefs.js';
-import { RUN_TRANSITIONS, type DoneRejectCode, type RunRefuseCode, type RunState } from '../../../shared/api.js';
+import { queueSystemMail } from './rundefsTx.js';
+import { readSessionRecord } from '../registry.js';
+import { childBirthOf, childSpent, childSpentLive, childSpentLiveFrom } from './childSpent.js';
+import { mergedFactsOf, type CcdPrLine } from '../prstate.js';
+import type { NoticeSink } from '../notice.js';
+import { closeLandingOf } from './landed.js';
+import { raiseLandedNotice } from './landedLane.js';
+import type { DeadCoordinatorStop, SweepFleetAct } from '../deadCoordinator.js';
+import {
+  CHILD_RECLAIM_FEED_QUIET_NONE, CHILD_RECLAIM_LICENCE_NONE, childReclaimDecision, childReclaimHasCoordinated, childReclaimRowListing,
+  childReclaimRowUuid,
+  type ChildReclaimDecision, type ChildReclaimMinting, type ChildReclaimNotWhy, type ChildReclaimRequest,
+  type ChildReclaimReviewed,
+} from './childReclaim.js';
+import {
+  transitionsFor, type ChildMark, type DoneRejectCode, type RunRefuseCode, type RunState,
+} from '../../../shared/api.js';
 
 /**
- * L1 decision function (architecture doc increment 4). Same model as
- * `dispatch.ts`'s `dispatchRun`: narrowed deps, no `reply`, a typed result
- * union out, and the precondition -> irreversible fleet act -> commit ORDER
- * owned in one place rather than split across a Fastify closure. See that
- * file's own docstring for why "L1" here does not mean "pure" — it means
- * every side effect is reached through a declared port and the decision is
- * nameable, testable and callable without a running Fastify instance.
+ * `closeRun`'s executor (architecture doc increment 4; ARCH-35, GitHub #556). Same model as `dispatch.ts`'s
+ * `dispatchRun`: narrowed deps, no `reply`, a typed result union out, and the precondition -> irreversible fleet act ->
+ * commit ORDER owned in one place. Every precondition is DATA in `closeDecide.ts` (L1, pure): `decideClose` answers
+ * what each read means, this file reads, acts and writes. Every side effect here is reached through a declared port,
+ * so a close is nameable, testable and callable without a Fastify instance.
  */
 export interface CloseRunDeps {
   coord: CoordStore;
-  io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState;
+  io: FleetIO; cfg: CcrcConfig; runCcd: RunCcd; fleetState?: FleetState;
+  /** Child reclamation (spec 2026-09-22 §5.7): hand a reclaim to THE ONE
+   *  executor. Called only AFTER the close's transaction has committed — a
+   *  reclaim that fails can never un-close a run — and NEVER awaited: the
+   *  coordinator's API client gives up after a flat 30 s, `ws-reclaim`'s remote
+   *  budget is 240 s, and a close the caller saw time out but the server
+   *  committed is worse than one that answered `queued`. OPTIONAL: absent, an
+   *  eligible child is answered `not-queued` with no reason, and wave 4's sweep
+   *  reaches it. `coord/routes.ts` wires it to the session's own queue. */
+  childReclaim?: (req: ChildReclaimRequest) => void;
+  /** The notice funnel (landing order wave 5h): a close that marks its entry landed raises the session's one merged
+   *  record through it. OPTIONAL: absent, the mark is still written but no record is raised here: a `landed` entry is terminal
+   *  and never a candidate for the landed reader again (`isLandable`), so only the merged sweep can raise it, and only
+   *  for a live workspace row. */
+  notice?: NoticeSink;
 }
 
 export type CloseOutcome =
   | { ok: true; id: number; state: 'done' | 'failed';
       /** Is the workspace's claim GONE as a result of this close? `true` only
-       *  after a `ws-release` that actually succeeded.
+       *  after a `ws-release` that actually succeeded, or one not sent because
+       *  the registry positively listed the session as absent (D-8664).
        *
        *  `false` IS NOT ONE FACT — it is the negation of one, and a reader
-       *  that renders a single sentence from it alone will be wrong. All four
+       *  that renders a single sentence from it alone will be wrong. All five
        *  ways to get it, so nobody has to rediscover them (review finding,
        *  W2b):
        *    1. a SIBLING open run still names this session, so the claim was
@@ -51,11 +93,32 @@ export type CloseOutcome =
        *       the hold outlives it — literally not released, nothing like (1);
        *    4. an ABANDON of a `planned` run with `sessionId === null`: NO
        *       fleet act at all, and no workspace to claim. Nothing happened.
+       *    5. an ABANDON of a run whose stored `sessionId` is not a registry
+       *       id: NO fleet act, the same as (4), but the run HAD a session id
+       *       (spec §2.3). One `fleet-act-omitted:bad-session` run event
+       *       records it.
        *  A client that wants a sentence must branch on `state`/`archive` and
        *  on whether the run had a session — `pwa/src/fleet/AbandonSheet.tsx`
-       *  does exactly that, and only speaks for case (1). */
-      released: boolean }
+       *  does exactly that, and only speaks for case (1). It cannot yet tell
+       *  (5) from (1), and would read (5) as a hand-over. */
+      released: boolean;
+      /** Child reclamation (spec 2026-09-22 §5.7), ADDITIVE. `queued`: the
+       *  workspace is a child this close found FINISHED — released, never
+       *  re-held — and its reclaim was handed to the executor, which runs
+       *  AFTER this answer; its outcome is a feed row, never this response.
+       *  `not-queued` otherwise. */
+      childReclaim: 'queued' | 'not-queued';
+      /** Why not, whenever the answer was a DECISION (`childReclaimDecision`).
+       *  ABSENT on `not-queued` means the child WAS eligible and nothing took
+       *  the hand-off — no executor wired, or wiring it threw. Both have one
+       *  remedy, the sweep, so they are one shape; neither is ever spelled as
+       *  a reason the decision did not give. */
+      childReclaimWhy?: ChildReclaimNotWhy }
   | { ok: false; kind: 'unknown-run' }
+  /** Spec §2.3: the run's STORED `sessionId` is not a registry id. Every close but the abandon refuses it, review
+   *  closes included, before any read or argv names it. The abandon arm closes such a run `failed` with no fleet act
+   *  instead (`released`, case 5). */
+  | { ok: false; kind: 'bad-session' }
   | { ok: false; kind: 'bad-transition'; from: RunState; to: RunState }
   | { ok: false; kind: 'bad-request' }
   | { ok: false; kind: 'refused'; code: Extract<RunRefuseCode, 'not-dispatched' | 'prhistory-unreadable'> }
@@ -63,7 +126,43 @@ export type CloseOutcome =
   | Extract<HoldReasonVerdict, { ok: false }>
   | { ok: false; kind: 'unsupported' }
   | { ok: false; kind: 'fleetFailed'; stderr: string }
-  | { ok: false; kind: 'advanceFailed'; adv: Extract<AdvanceResult, { ok: false }> };
+  | { ok: false; kind: 'advanceFailed'; adv: Extract<AdvanceResult, { ok: false }> }
+  /** The sweep's compare-and-set refused (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): the run's
+   *  claimant is no longer the crashed id the dead-coordinator lane named. `claimedBy` is who holds it now. */
+  | { ok: false; kind: 'claimant-changed'; claimedBy: string | null }
+  /** The sweep's in-arm re-measure stopped it (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): the claimant
+   *  is no longer crashed, or that cannot be told, or the operator raised `reclaim-paused` or disarmed the lane.
+   *  `fleetAct`: WHICH fleet act ran before the stop — `released` (nothing else claimed the workspace: it is unheld
+   *  until its coordinator re-holds it) or `re-held` (a surviving run's reason now holds it: it stays claimed) — and
+   *  `null` when the stop came before any fleet act. Two acts, two words: a boolean folded them (review 339, F3). */
+  | { ok: false; kind: 'sweep-stopped'; stop: DeadCoordinatorStop; fleetAct: SweepFleetAct | null };
+
+/** What the dead-coordinator lane hands `closeRun` with its word (`'sweep'`): the crashed id the compare-and-set
+ *  checks, and its re-measure, which the abandon arm runs IMMEDIATELY BEFORE the fleet act and again AFTER it, before
+ *  the commit (the departure `the-sweep-re-measures-inside-the-arm`). A `claimedBy` compare-and-set cannot see a
+ *  revive of the SAME id (`ccd ensure` takes no mutex and rewrites nothing in `coord.db`); only a re-measure can. */
+export interface SweepCloseGuard {
+  readonly claimedBy: string;
+  /** The lane's re-measure (D-8077: `stillCrashed` became `stillStuck` when the run-close lane's rows joined the crash row).
+   *  It also re-reads the row's own switch, the pauses and the store facts that made the run a candidate. */
+  readonly stillStuck: () => Promise<DeadCoordinatorStop | null>;
+  /** R1 (D-8077): `none` closes the run with NO `ccd` call and no child hand-off (a run with no session, a marker naming
+   *  another run, a `none` marker); absent or `release` is the abandon arm as it always was. */
+  readonly fleetAct?: 'release' | 'none';
+  /** The lane row, and the close's detail (`expired:<row>` plus the measured fact), stored on the run event and the run.
+   *  Absent, the close records no detail, which is the crash row's today. */
+  readonly detail?: string;
+}
+
+/**
+ * WHO closed a run, as `run_events.causedBy` records it. THREE words, each with its own door: the coordinator's own
+ * close (`POST /api/runs/:id/close`), the operator's abandon (`POST /api/runs/:id/abandon` and the archive door's
+ * `{programme:'end'}`), and the dead-coordinator lane's — `'sweep'` (workspace lifecycle spec 2026-09-24 §5.4), a third
+ * word so the run event, the feed row and the audit never read as the operator's act. ADDITIVE on the wire, with no
+ * `FLEET_PROTO` bump: the column is free text, and every reader (`runEvents`, `RoutingEvent.causedBy`, the stall
+ * watch's notices, the landing lane) takes it as a string or ignores it.
+ */
+export type CloseCause = 'coordinator' | 'operator' | 'sweep';
 
 /** The untrusted wire shape `POST /api/runs/:id/close` accepts — validated
  *  inside `closeRun` itself, in the SAME order the route used to (after the
@@ -74,8 +173,36 @@ export interface CloseRunBody {
    *  shape below — an abandon that also carries close fields is refused rather
    *  than half-honoured. */
   intent?: unknown;
-  fingerprint?: { branchTip?: unknown; prNumber?: unknown; prPhase?: unknown; handoffCommit?: unknown };
+  /** The work claim's four fields and the review claim's two, in ONE optional
+   *  bag: which pair is required is decided by the run's KIND, in `closeRun`
+   *  and `closeReviewRun` respectively, never by this type. Declared here so
+   *  the accepted wire shape is readable without reading both validators
+   *  (Task 7 review m8). */
+  fingerprint?: { branchTip?: unknown; prNumber?: unknown; prPhase?: unknown; handoffCommit?: unknown;
+                  reviewedTip?: unknown; report?: unknown };
   final?: unknown; state?: unknown; archive?: unknown;
+}
+
+/** The operator abandon's one move (D-2807) lives in `closeDecide.ts` with the rest of the close's decisions; this
+ *  re-export keeps its readers (`abandonRefusal` below, the archive door) where they were. */
+export { abandonMove };
+
+/**
+ * What `closeRun`'s abandon arm would refuse for this run from the ROW ALONE — its read, then `abandonMove` — asked
+ * without acting. `null`: the arm can move it. The archive door reads it for every run inside the same `coordMutex`
+ * hold that then runs the abandons (`CoordRoutesHandle.withAbandon`), so nothing moves between this read and the act.
+ * What only the act measures — the sibling read, a hand-over hold, the verb, ccd's own answer — can still refuse after
+ * an earlier run was ended, and the door says which runs it ended (`programme-partly-ended`).
+ * A run whose stored `sessionId` is not a registry id is not refused here, and the arm does not refuse it either: the
+ * arm closes it `failed` with no fleet act (spec §2.3), so the door ends such a programme whole.
+ */
+export function abandonRefusal(coord: Pick<CoordStore, 'run'>, id: number): Extract<CloseOutcome, { ok: false }> | null {
+  const read = coord.run(id);
+  // `closeRun`'s own two answers for a row it cannot use (D-2545; an absent run).
+  if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
+  if (read.run === null) return { ok: false, kind: 'unknown-run' };
+  const move = abandonMove(read.run);
+  return move.ok ? null : move;
 }
 
 /**
@@ -93,299 +220,607 @@ export interface CloseRunBody {
  * close records `'coordinator'` and the operator's abandon records
  * `'operator'`, and a default is exactly how the second would silently record
  * the first. Both call sites pass it explicitly.
+ *
+ * THE THIRD WORD, `'sweep'` (workspace lifecycle spec 2026-09-24 §5.4), has a signature of its own: it comes WITH its
+ * guard (`SweepCloseGuard`: the crashed claimant's id and its re-measure), so the dead-coordinator lane cannot reach
+ * this arm without its compare-and-set and its re-measure, and it only ever abandons.
  */
+export function closeRun(
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, body: unknown, causedBy: 'coordinator' | 'operator',
+  detail?: string | null,
+): Promise<CloseOutcome>;
+export function closeRun(
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, body: unknown, causedBy: 'sweep', sweep: SweepCloseGuard,
+): Promise<CloseOutcome>;
 export async function closeRun(
-  deps: CloseRunDeps, id: number, body: unknown,
-  causedBy: 'coordinator' | 'operator',
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, body: unknown,
+  causedBy: CloseCause, sweepOrDetail?: SweepCloseGuard | string | null,
+): Promise<CloseOutcome> {
+  // The fifth argument is the sweep's guard, or, on the other two words, the detail the final advance stores (D-8071).
+  const sweep = typeof sweepOrDetail === 'object' && sweepOrDetail !== null ? sweepOrDetail : undefined;
+  const detail = typeof sweepOrDetail === 'string' ? sweepOrDetail : sweep?.detail ?? null;
+  // Everything the request says, ahead of any fleet act: `decideClose` names the arm and refuses what that arm cannot
+  // take. The three arms are separate executors by construction (D-290): what an arm skips is ABSENT from it, not
+  // skipped by a flag threaded through a shared path.
+  const req = decideClose({ step: 'request', read: deps.coord.run(id), body, causedBy });
+  if (req.kind !== 'go') return stopped(deps, req);
+  const plan = req.plan;
+  switch (plan.arm) {
+    case 'abandon': return abandonRun(deps, id, plan, causedBy, sweep, detail);
+    case 'review': return closeReviewRun(deps, plan.run, plan.body, causedBy);
+    case 'work': return closeWorkRun(deps, id, plan, causedBy);
+    default: return plan satisfies never;
+  }
+}
+
+/** The one place a decider's non-`go` answer becomes a `CloseOutcome`. The `switch` is exhaustive: a fourth arm in
+ *  `closeDecide.ts` is a compile error here until it is answered. A refused done-claim is recorded against the run
+ *  and mailed back to its worker first, as the inline code did; the run state is unchanged. */
+function stopped(deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, d: CloseStop, run?: RunRow): CloseHalt {
+  switch (d.kind) {
+    case 'refused':
+      if (d.rejection !== undefined && run !== undefined && run.sessionId !== null) {
+        deps.coord.recordRejection({ ...d.rejection, runId: run.id, toId: run.sessionId });
+        queueSystemMail(deps.coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: run.id,
+          kind: 'status', ...doneRejectionMail('work', d.rejection) });
+      }
+      return d.outcome;
+    case 'stale':
+      return d.outcome;
+    default:
+      return d satisfies never;
+  }
+}
+
+interface FleetVerb { readonly argv: CcdArgv; readonly can: boolean }
+/** The fleet verb a decision composed, as the argv ccd takes (every close names its actor by the run, `close`), and
+ *  D-5866's verb question asked of the very row that argv was built from, beside it: the argv first, then `ccdCan`,
+ *  as the inline code did. */
+function fleetArgv(deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, sessionId: string, act: FleetAct): FleetVerb {
+  const dec = sweepDec(deps.fleetState, `run:${id} close`);
+  switch (act.verb) {
+    case 'wsArchive':
+      return { argv: CCD_ARGV.wsArchive(sessionId, dec), can: ccdCan(deps.fleetState, 'wsArchive') };
+    case 'wsRelease':
+      return { argv: CCD_ARGV.wsRelease(sessionId, dec), can: ccdCan(deps.fleetState, 'wsRelease') };
+    case 'wsHold':
+      return { argv: CCD_ARGV.wsHold(sessionId, act.reason, dec), can: ccdCan(deps.fleetState, 'wsHold') };
+    default: return act satisfies never;
+  }
+}
+
+/** A fleet step that let the close go on: `gone` when the act was a release of a session the registry positively
+ *  lists as absent, so nothing was sent (D-8664). */
+interface FleetDone { readonly ok: true; readonly gone: boolean }
+
+/** The check, (the caller's last look,) the registry's answer for a release, the act and ccd's answer for one composed
+ *  fleet verb, in that order. */
+async function actOnFleet(
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, sessionId: string, act: FleetAct,
+  /** Run between the check and the act: the sweep's gate, which must read the world right before ccd is asked. */
+  before: () => Promise<CloseHalt | null> = async () => null,
+): Promise<CloseHalt | FleetDone> {
+  const verb = fleetArgv(deps, id, sessionId, act);
+  const can = decideClose({ step: 'verb', verb: act.verb, can: verb.can });
+  if (can.kind !== 'go') return stopped(deps, can);
+  const held = await before();
+  if (held !== null) return held;
+  const gone = await decideClose({ step: 'gone', verb: act.verb,
+    read: async () => (await readSessionRecord(deps.io, deps.cfg, sessionId)).kind });
+  if (gone.kind !== 'go') return stopped(deps, gone);
+  if (gone.plan.gone) return { ok: true, gone: true };
+  const done = decideClose({ step: 'fleet', res: await deps.runCcd(verb.argv) });
+  return done.kind === 'go' ? { ok: true, gone: false } : stopped(deps, done);
+}
+
+/** D-8664: the trail of a release that was not sent because the session was already gone, written only after the
+ *  store's close committed (the `fleet-act-omitted:bad-session` convention). */
+function noteGone(deps: { coord: WatcherCoordPort }, id: number, causedBy: CloseCause, fleet: FleetDone): void {
+  if (fleet.gone) deps.coord.recordRunEvent(id, causedBy, 'fleet-act-omitted:session-absent');
+}
+
+/** The sweep's gate (`decideClose`'s `sweep` step), or nothing for a door that has no guard. */
+async function sweepGateOf(
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, sweep: SweepCloseGuard | undefined,
+): Promise<CloseHalt | null> {
+  if (sweep === undefined) return null;
+  const d = decideClose({ step: 'sweep', stop: await sweep.stillStuck(), fresh: () => deps.coord.run(id), claimedBy: sweep.claimedBy });
+  return d.kind === 'go' ? null : stopped(deps, d);
+}
+
+/** The detail an operator abandon stores (D-8071; spec §9.3): `abandon:<reason>` from the verdict the reader holds, or null
+ *  with no verdict, so a run ended while the reader is empty reads "closed by you". */
+export function abandonDetail(verdict: RunVerdict | null): string | null {
+  return verdict === null || verdict.stuck === null ? null : `abandon:${verdict.stuck.reason}`;
+}
+
+/** The abandon's commit: the store's close of the run `failed`, and what its answer means (`commit` step). */
+function commitAbandon(
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, plan: Extract<RequestPlan, { arm: 'abandon' }>,
+  causedBy: CloseCause, sweep: SweepCloseGuard | undefined, acted: boolean, detail: string | null,
+): CloseHalt | null {
+  const closed = deps.coord.closeRun({
+    runId: id, finalState: 'failed', causedBy, handoffCommit: null,
+    ...(detail === null ? {} : { detail }),
+    program: plan.run.program, viaClosing: plan.target === 'closing',
+    ...(sweep === undefined ? {} : { expectClaimedBy: sweep.claimedBy }),
+  });
+  const d = decideClose({ step: 'commit', closed, acted });
+  return d.kind === 'go' ? null : stopped(deps, d);
+}
+
+/**
+ * THE OPERATOR ABANDON, as ONE contiguous arm (D-290 (was D-B4-17)). It returns; it never falls through into the
+ * ordinary close. No `not-dispatched` refusal (a `planned` run with no session is the `ambiguous-dispatch` wedge this
+ * route exists for), no fingerprint, no `verifyDone` (D-49: there is no done-claim to re-measure), no `.prhistory` fold
+ * (D-275: an unreadable ledger must not disable the control that exists for a broken box) and no `wsArchive` (D-280).
+ * Each is pinned by a negative test in `coord-abandon.test.ts`, and each is true because the call is ABSENT.
+ *
+ * THE SWEEP'S GATE runs IMMEDIATELY BEFORE the fleet act and the claimant is re-measured once more AFTER it
+ * (workspace lifecycle spec §5.4): a revive of the SAME id is the race a compare-and-set cannot see.
+ *
+ * A STORED ID NO VERB MAY NAME (spec §2.3): the run is still CLOSED, with no sibling read, child gate, hold or release,
+ * and one `fleet-act-omitted:bad-session` run event, so the trail tells this close from an ordinary `failed`.
+ */
+async function abandonRun(
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, plan: Extract<RequestPlan, { arm: 'abandon' }>,
+  causedBy: CloseCause, sweep: SweepCloseGuard | undefined, detail: string | null,
+): Promise<CloseOutcome> {
+  const { run } = plan;
+  if (plan.unnamed) {
+    const halt = await sweepGateOf(deps, id, sweep) ?? commitAbandon(deps, id, plan, causedBy, sweep, false, detail);
+    if (halt !== null) return halt;
+    deps.coord.recordRunEvent(id, causedBy, 'fleet-act-omitted:bad-session');
+    return { ok: true, id, state: 'failed', released: false, childReclaim: 'not-queued', childReclaimWhy: 'marker-unreadable' };
+  }
+  // The fleet act, AHEAD of the commit (D-48), and only when there is something to act on: a `planned` run that never
+  // dispatched holds no workspace, and a run with no session names no child.
+  const sessionId = run.sessionId;
+  if (sessionId === null) {
+    const halt = await sweepGateOf(deps, id, sweep) ?? commitAbandon(deps, id, plan, causedBy, sweep, false, detail);
+    return halt ?? { ok: true, id, state: 'failed', released: false, ...handOffChildReclaim(deps, NO_CHILD_GATE) };
+  }
+  // R1 (D-8077): the lane found no workspace this run may release (a marker naming another run, or none): the run closes with
+  // no sibling read, no `ccd` call and no child hand-off. The sweep's gate still runs, once, before the commit.
+  if (sweep?.fleetAct === 'none') {
+    const halt = await sweepGateOf(deps, id, sweep) ?? commitAbandon(deps, id, plan, causedBy, sweep, false, detail);
+    return halt ?? { ok: true, id, state: 'failed', released: false, ...handOffChildReclaim(deps, NO_CHILD_GATE) };
+  }
+  const sibRead = deps.coord.bindingsOf(sessionId).worker({ excludeRunId: id });
+  // An abandon never runs `verifyDone`, so there is no measured line to reuse: `null` is what "it did not run" IS.
+  const act = await decideClose({ step: 'abandon', run, siblings: sibRead,
+    gate: () => childGateAtClose(deps, run, sessionId, sibRead, false, 'failed', null) });
+  if (act.kind !== 'go') return stopped(deps, act);
+  const fleet = await actOnFleet(deps, id, sessionId, act.plan.fleet, () => sweepGateOf(deps, id, sweep));
+  if (!fleet.ok) return fleet;
+  if (sweep !== undefined) {
+    const after = decideClose({ step: 'recheck', stop: await sweep.stillStuck(), release: act.plan.released });
+    if (after.kind !== 'go') return stopped(deps, after);
+  }
+  const late = commitAbandon(deps, id, plan, causedBy, sweep, true, detail);
+  if (late !== null) return late;
+  noteGone(deps, id, causedBy, fleet);
+  return { ok: true, id, state: 'failed', released: act.plan.released, ...handOffChildReclaim(deps, act.plan.gate) };
+}
+
+/**
+ * The ordinary close of a work run: re-measure the done claim (never believe it) — unless the close is an explicit
+ * ABANDON of the claim (`state: 'failed'`, D-49) — then fold `.prhistory` (refusing to close on an unreadable ledger),
+ * then the FLEET ACT, then, only once it has succeeded, the transition (D-48: a failed `ws-release` leaves the run
+ * exactly where it was, never wedged terminal). The act is a RELEASE (D-5), never an autonomous archive, with ONE
+ * explicit `wsArchive` in the whole coordination lane, gated on the same sibling check as the release. Which verb, and
+ * why, is `decideClose`'s `close` step; this function reads, acts and writes.
+ */
+async function closeWorkRun(
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, plan: Extract<RequestPlan, { arm: 'work' }>, causedBy: CloseCause,
+): Promise<CloseOutcome> {
+  const { coord } = deps;
+  const { run, sessionId, final, state } = plan;
+  // Spec §5.7: `verifyDone`'s own measured `pr-state` row is carried past this block so the child-spent redate reuses
+  // it instead of asking a second time inside the same mutex section.
+  let line: CcdPrLine | null = null;
+  // The verdict `verifyDone` gave, kept past this block: the head the close RECORDS is the one it measured (D-7102).
+  let verified: DoneVerdict | null = null;
+  if (plan.verify) {
+    const measured = await verifyDone(
+      { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
+      { sessionId, project: run.project, branch: run.branch ?? '' }, plan.claim);
+    const verdict = decideClose({ step: 'verified', verdict: measured });
+    if (verdict.kind !== 'go') return stopped(deps, verdict, run);
+    line = verdict.plan.line;
+    verified = measured;
+  }
+  // Decide and validate the hold before any close-path write: `foldPrLineage` persists measured history.
+  const sibRead = coord.bindingsOf(sessionId).worker({ excludeRunId: id });
+  const act = await decideClose({ step: 'close', run, siblings: sibRead, final, state, archive: plan.archive,
+    gate: () => childGateAtClose(deps, run, sessionId, sibRead, final, state, line) });
+  if (act.kind !== 'go') return stopped(deps, act);
+  const ledger = decideClose({ step: 'ledger', history: await readPrHistory(deps.io, deps.cfg.registryDir, sessionId),
+    branch: run.branch });
+  if (ledger.kind !== 'go') return stopped(deps, ledger);
+  coord.foldPrLineage(id, ledger.plan.entries);
+  const fleet = await actOnFleet(deps, id, sessionId, act.plan.fleet);
+  if (!fleet.ok) return fleet;
+  // The transition, the handoff commit, the delivery cancellation and the program-retirement check, as ONE
+  // transaction (review finding 25). The ordinary close always takes the `closing` hop (D-281).
+  const closed = coord.closeRun({ runId: id, finalState: state, causedBy, handoffCommit: recordedHandoff(plan, verified),
+    program: run.program, viaClosing: true });
+  const committed = decideClose({ step: 'commit', closed, acted: true });
+  if (committed.kind !== 'go') return stopped(deps, committed);
+  noteGone(deps, id, causedBy, fleet);
+  if (line !== null) landOnClose(deps, run, state, line, Date.now());
+  return { ok: true, id, state, released: act.plan.released, ...handOffChildReclaim(deps, act.plan.gate) };
+}
+
+/**
+ * The landing line's mark (landing order wave 5h), AFTER `coord.closeRun` committed a `done` work close: the line the
+ * close's own `verifyDone` measured, read for a MERGED bound row, marks the project's entry for that PR landed, by the
+ * close, in its own call (a transaction does not nest). It never changes the close's answer: a refusal or a throw is one
+ * `console.warn` line and the landed reader marks the entry later. A `landed` mark raises the session's merged record
+ * once, through the same funnel the merged sweep and the reader use, when the route wired one.
+ */
+function landOnClose(
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, run: RunRow, state: 'done' | 'failed', line: CcdPrLine, at: number,
+): void {
+  const facts = mergedFactsOf(line);
+  const land = closeLandingOf({ state, facts, project: run.project, at });
+  if (land === null) return;
+  let mark: LandingLandResult;
+  try {
+    mark = deps.coord.advanceLanding(land);
+  } catch (err) {
+    console.warn(`ccrc-server: close of run ${run.id} could not mark ${land.project} #${land.pr} landed (${err instanceof Error ? err.message : String(err)})`);
+    return;
+  }
+  if (!mark.ok) {
+    console.warn(`ccrc-server: close of run ${run.id} could not mark ${land.project} #${land.pr} landed (${mark.error})`);
+    return;
+  }
+  if (mark.landing.kind !== 'landed' || deps.notice === undefined) return;
+  try {
+    raiseLandedNotice({ coord: deps.coord, notice: deps.notice, entry: mark.landing.entry,
+      mergedAt: land.outcome.word === 'merged' ? land.outcome.mergedAt : null, now: at });
+  } catch (err) {
+    // The mark committed; only the feed record failed, and the merged sweep may still write it.
+    console.warn(`ccrc-server: close of run ${run.id} marked ${land.project} #${land.pr} landed but its merged record was not written (${err instanceof Error ? err.message : String(err)})`);
+  }
+}
+
+/** The review-kind close (design 2026-09-14 §5.3–5.4, D-2796). Body:
+ *  `{ fingerprint: { reviewedTip, report }, state?: 'done'|'failed' }`. `final`
+ *  and `archive` are REFUSED: a review run is always final (its workspace is its
+ *  own and is released here), and archive stays a human act. `state:'failed'`
+ *  is the coordinator's "the reviewer died" — nothing is re-measured, exactly
+ *  as the work path's abandon arm (D-49). On `state:'failed'` the fingerprint
+ *  is optional — a dead reviewer has none, and an abandon asserts no claim
+ *  (D-2812); a fingerprint that IS present on a `failed` close is still
+ *  shape-checked — malformed is refused, never silently ignored. */
+async function closeReviewRun(
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, run: RunRow, b: CloseRunBody, causedBy: CloseCause,
 ): Promise<CloseOutcome> {
   const coord = deps.coord;
-  const read = coord.run(id);
-  // D-2545. THE ROW IS THERE AND THIS PROCESS CANNOT REPRESENT ITS INTEGERS —
-  // a different condition from "no such run", answered before any fleet act
-  // and in words, never by throwing: `CoordMutex.run` is `try`/`finally` with
-  // no catch and there is no `app.setErrorHandler` anywhere in `server/src`,
-  // so a throw here became a bare Fastify 500 with no `CloseOutcome` shape at
-  // all. `hold-invalid` is the right existing code rather than a new one: the
-  // refusal is that a persisted number in the hold's own domain cannot be
-  // accepted, which is exactly what that code names — and it carries `detail`,
-  // which names the COLUMN and never the value.
-  if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
-  const run = read.run;
-  if (!run) return { ok: false, kind: 'unknown-run' };
-
-  /** The OTHER open runs on this workspace. Read fresh at the decision point,
-   *  never cached: a snapshot consulted at a destructive decision point is
-   *  the shape `watch.ts` already had to fix once. The closing run excludes
-   *  itself — it has not transitioned yet (D-48 puts the fleet act first).
-   *
-   *  Returns the RESULT, not the list (D-2545): every caller below is one step
-   *  from an irreversible fleet act, and "the sibling rows could not be read"
-   *  must never arrive at one of them spelled `[]` — that is precisely how
-   *  "nothing else claims this workspace" gets asserted about a workspace
-   *  something else claims. */
-  const siblingsOf = (sessionId: string): OpenSiblingsResult => coord.openRunsForSession(sessionId, id);
-  /** The claim that survives this close: the MOST RECENTLY opened run, because
-   *  the coordinator protocol opens wave N+1 before closing wave N. With the
-   *  ordinary one-sibling case this is a distinction without a difference; it
-   *  is written down so two siblings produce a DETERMINISTIC reason rather
-   *  than a coin toss (`openRunsForSession` is `ORDER BY id`). */
-  const survivorOf = (s: readonly OpenSibling[]): OpenSibling | null => s[s.length - 1] ?? null;
-
-  // The body is read HERE, above every precondition, because the abandon arm
-  // below branches on it — and the ordinary path's own validation is left
-  // exactly where it was, one `const b` shorter.
-  const b = (body ?? {}) as CloseRunBody;
-  const abandon = b.intent === 'abandon';
-  if (abandon && (b.fingerprint !== undefined || b.final !== undefined ||
-                  b.state !== undefined || b.archive !== undefined)) {
-    // A mixed shape is not a shape. An abandon asserts nothing about a branch,
-    // a PR or a wave boundary, so a body carrying those fields is a caller
-    // that has confused two acts — answered as `bad-request` rather than
-    // silently ignoring half of it.
+  /** The OTHER open runs on this workspace, read fresh at the decision point and never cached; the closing run
+   *  excludes itself. Returns the RESULT, not the list (D-2545): "unreadable" must never arrive as `[]`. */
+  const siblingsOf = (sessionId: string): OpenSiblingsResult => coord.bindingsOf(sessionId).worker({ excludeRunId: run.id });
+  if (b.final !== undefined || b.archive !== undefined ||
+      (b.state !== undefined && b.state !== 'done' && b.state !== 'failed')) {
     return { ok: false, kind: 'bad-request' };
   }
-
-  if (abandon) {
-    /**
-     * THE OPERATOR ABANDON, as ONE contiguous arm (D-290 (was D-B4-17)). It returns; it
-     * never falls through into the ordinary close below.
-     *
-     * What is skipped is skipped BY CONSTRUCTION, not by four flags threaded
-     * through a hundred lines:
-     *   - the `not-dispatched` refusal below: a `planned` run with no session
-     *     is precisely the `ambiguous-dispatch` wedge this route exists for,
-     *     so there is nothing to refuse;
-     *   - the fingerprint validation and its derivations: an abandon carries
-     *     no claim, so `handoffCommit`/`final`/`state`/`archive` are
-     *     `null`/`false`/`'failed'`/`false` here and are not read from a body
-     *     at all (D-274);
-     *   - `verifyDone` (step 1): D-49's own reasoning, reached from a second
-     *     door — there is no done-claim to re-measure;
-     *   - the `.prhistory` fold (step 2, D-275 (was D-B4-2)): an unreadable ledger must
-     *     not disable the control that exists for a broken box;
-     *   - `wsArchive` (step 3): a release destroys nothing and this arm has no
-     *     archive branch to reach (D-280 (was D-B4-7) closes the other half at the route).
-     * Each of those is pinned by a negative test in `coord-abandon.test.ts`,
-     * and each is true because the call is ABSENT, not because a guard skipped
-     * it.
-     *
-     * Cost, named: ~14 lines of transition/fleet-act/commit shape appear twice
-     * inside one function. That is the price of the property.
-     */
-    const target: RunState = run.state === 'planned' ? 'failed' : 'closing';
-    if (!RUN_TRANSITIONS[run.state].includes(target)) {
-      return { ok: false, kind: 'bad-transition', from: run.state, to: target };
-    }
-    // The fleet act, AHEAD of the commit (D-48), and only when there is
-    // something to act on: a `planned` run that never dispatched holds no
-    // workspace. RELEASE ONLY WHEN NOTHING ELSE CLAIMS IT — otherwise HAND
-    // THE CLAIM OVER by re-holding with the surviving run's own reason. The
-    // abandoned run still transitions either way; the workspace stays
-    // claimed. Never `wsArchive` on this arm (D-280).
-    let released = false;
-    if (run.sessionId !== null) {
-      const sibRead = siblingsOf(run.sessionId);
-      // Fail-shut ahead of the fleet act, for the reason `siblingsOf` states.
-      if (!sibRead.ok) return { ok: false, kind: 'hold-invalid', detail: sibRead.detail };
-      const siblings = sibRead.siblings;
-      const survivor = survivorOf(siblings);
-      // DECIDED ONCE, USED TWICE (review finding, W2b). The act and the
-      // reported field used to come from two independent expressions —
-      // `releaseIsSafe(siblings) || survivor === null` chose the argv while
-      // `releaseIsSafe(siblings)` alone set the field. Today the disjunct is
-      // dead (`releaseIsSafe(s) === (s.length === 0) === (survivorOf(s) ===
-      // null)`), but the whole point of giving `releaseIsSafe` one home is
-      // that it may grow a condition — and the moment it does, the route
-      // would report `released:false` for a close that actually ran
-      // `ws-release`, the response contradicting the fleet act. The main
-      // path below already decides once, via `safe`.
-      const release = releaseIsSafe(siblings) || survivor === null;
-      // Spelled hand-over-first so the compiler narrows `survivor` on the arm
-      // that reads it; `survivor !== null && !release` is exactly `!release`
-      // (`release` already absorbs `survivor === null`).
-      let handoff: HoldReasonVerdict | null = null;
-      if (survivor !== null && !release) {
-        handoff = holdReasonVerdict(
-          survivor.program, survivor.wave, survivor.waveOf, survivor.id,
-        );
-        if (!handoff.ok) return handoff;
-      }
-      const argv = handoff !== null && handoff.ok
-        ? CCD_ARGV.wsHold(run.sessionId, handoff.reason,
-            sweepDec(deps.fleetState, `run:${id} close`))
-        : CCD_ARGV.wsRelease(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
-      if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
-      const res = await deps.runCcd(argv);
-      if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
-      released = release;
-    }
-    const closed = coord.closeRun({
-      runId: id, finalState: 'failed', causedBy, handoffCommit: null,
-      program: run.program, viaClosing: target === 'closing',
-    });
-    if (!closed.ok) return { ok: false, kind: 'advanceFailed', adv: closed };
-    return { ok: true, id, state: 'failed', released };
-  }
-
-  if (run.sessionId === null) {
-    // Never dispatched: there is no worker session for `verifyDone` to
-    // re-measure against and no worker to mail a rejection back to.
-    return { ok: false, kind: 'refused', code: 'not-dispatched' };
-  }
-  // A second precondition, read-only, checked BEFORE the fleet act (fix,
-  // found in Task 9 review — D-48, the close-route half of D-46's same
-  // ordering fix for dispatch): a run that cannot legally reach `closing`
-  // from its CURRENT state — already `done`/`failed` (a second close), or
-  // still `planned` (sessionId set at OPEN time for a wave N>=2 reclaim,
-  // but never actually dispatched) — must never reach the fleet act at
-  // all. Without this, moving the fleet act ahead of the transition commit
-  // below would have made a double-close run `ws-release`/`ws-hold`/
-  // `ws-archive` a SECOND time before discovering the transition was
-  // always going to be refused — trading one wedge for another.
-  // `advance()` below still re-checks the live row and is still the only
-  // WRITER of `state`.
-  if (!RUN_TRANSITIONS[run.state].includes('closing')) {
-    return { ok: false, kind: 'bad-transition', from: run.state, to: 'closing' };
-  }
-
-  const fp = b.fingerprint;
-  if (typeof fp !== 'object' || fp === null ||
-      typeof fp.branchTip !== 'string' || typeof fp.handoffCommit !== 'string' ||
-      typeof fp.prPhase !== 'string' || !(fp.prNumber === null || typeof fp.prNumber === 'number') ||
-      typeof b.final !== 'boolean' ||
-      (b.state !== undefined && b.state !== 'done' && b.state !== 'failed') ||
-      (b.archive !== undefined && typeof b.archive !== 'boolean')) {
-    return { ok: false, kind: 'bad-request' };
-  }
-  // The claim is UNTRUSTED off the wire: `verifyDone` re-validates
-  // `branchTip`/`handoffCommit`/`prPhase`/`prNumber` itself, when it runs at
-  // all (see D-49, step 1 below).
-  const claim: DoneClaim = { branchTip: fp.branchTip, prNumber: fp.prNumber as number | null,
-    prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
-  const final = b.final;
   const state: 'done' | 'failed' = b.state === 'failed' ? 'failed' : 'done';
-  const archive = b.archive === true;
+  // `state:'done'` (the default) always requires the fingerprint, shape-checked
+  // exactly as before D-2812. `state:'failed'` makes it OPTIONAL: an absent one
+  // (the reviewer never wrote one) skips the shape check entirely; a
+  // fingerprint PRESENT on a `failed` close is still shape-checked — malformed
+  // is refused, never silently ignored. `validFp` is computed ONCE, here,
+  // rather than re-derived at its one read site below (D-2812) — the
+  // non-null assertion there is justified by `fpRequired`'s own condition
+  // repeating `state !== 'failed'`, never by trusting the wire shape twice.
+  const fp = b.fingerprint;
+  const fpRequired = state === 'done' || fp !== undefined;
+  const validFp: { reviewedTip: string; report: string } | null = fpRequired
+    ? (typeof fp === 'object' && fp !== null &&
+       typeof fp.reviewedTip === 'string' && HANDOFF_SHA.test(fp.reviewedTip) &&
+       typeof fp.report === 'string' && path.isAbsolute(fp.report))
+      ? { reviewedTip: fp.reviewedTip, report: fp.report }
+      : null
+    : null;
+  if (fpRequired && validFp === null) {
+    return { ok: false, kind: 'bad-request' };
+  }
+  if (!transitionsFor(run.kind)[run.state].includes(state)) {
+    return { ok: false, kind: 'bad-transition', from: run.state, to: state };
+  }
+  // `run.sessionId` is non-null here: `closeRun`'s own `not-dispatched` check
+  // runs before this arm is entered. The type still says `string | null`, so
+  // narrow it once for the reads below rather than re-check a fact already decided.
+  const sessionId = run.sessionId as string;
 
-  // 1: verifyDone re-measures a DONE CLAIM. `state:'failed'` is an explicit
-  // operator ABANDON, not a claim of doneness (deviation D-49) — it skips
-  // this step entirely.
   if (state !== 'failed') {
-    const verdict = await verifyDone(
+    if (run.reviews === null) {
+      return { ok: false, kind: 'doneVerdict', code: 'tip-unmeasurable', detail: 'this review run names no reviewed run' };
+    }
+    const workRead = coord.run(run.reviews);
+    if (!workRead.ok) return { ok: false, kind: 'hold-invalid', detail: workRead.detail };
+    if (workRead.run === null) {
+      return { ok: false, kind: 'doneVerdict', code: 'tip-unmeasurable', detail: `reviewed run ${run.reviews} no longer exists` };
+    }
+    const work = workRead.run;
+    if (work.sessionId === null) {
+      return { ok: false, kind: 'doneVerdict', code: 'tip-unmeasurable', detail: `reviewed run ${work.id} has no session to measure` };
+    }
+    const verdict = await verifyReviewDone(
       { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
-      { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
-      claim,
+      { sessionId: work.sessionId, project: work.project, branch: work.branch ?? '' },
+      // Non-null: `state !== 'failed'` here means `state === 'done'`, and
+      // `fpRequired` above was true in exactly that case — the guard already
+      // refused a null `validFp` on that path.
+      validFp!,
     );
     if (!verdict.ok) {
-      // The run state is UNCHANGED. The rejection is recorded, and a
-      // `status` mail carrying the code and detail is mailed back to the
-      // worker.
-      coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
-      queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
-        kind: 'status', subject: 'wave-done-rejected', body: `${verdict.code}: ${verdict.detail}` });
+      coord.recordRejection({ code: verdict.code, runId: run.id, toId: sessionId, detail: verdict.detail });
+      queueSystemMail(coord, run, { fromId: 'coordinator', toId: sessionId, runId: run.id,
+        kind: 'status', ...doneRejectionMail('review', verdict) });
       return { ok: false, kind: 'doneVerdict', code: verdict.code, detail: verdict.detail };
     }
   }
 
-  // Decide and validate the hold before any close-path write. In particular,
-  // `foldPrLineage` persists measured history, so it must not run when the
-  // subsequent hold boundary is already known to be unrepresentable.
-  const sibRead = siblingsOf(run.sessionId);
-  // Fail-shut ahead of `foldPrLineage` and the fleet act alike, for the reason
-  // `siblingsOf` states. Placed exactly where the hold verdict already is: this
-  // block's own comment says the hold must be decided before any close-path
-  // write, and an unreadable sibling list is the same class of answer.
+  // The fleet act, AHEAD of the commit (D-48). A review workspace hosts one
+  // run, so the ordinary answer is a release; the sibling check is kept
+  // because it is a re-measurement, not an assumption.
+  const sibRead = siblingsOf(sessionId);
   if (!sibRead.ok) return { ok: false, kind: 'hold-invalid', detail: sibRead.detail };
-  const siblings = sibRead.siblings;
-  const survivor = survivorOf(siblings);
-  const safe = releaseIsSafe(siblings);
-  const needsHold = !((state === 'failed' && archive && safe) || (final && safe));
-  const nextHold: HoldReasonVerdict | null = needsHold
-    ? survivor === null
-      ? holdReasonVerdict(run.program, run.wave + 1, run.waveOf, null)
-      : holdReasonVerdict(survivor.program, survivor.wave, survivor.waveOf, survivor.id)
-    : null;
-  if (nextHold !== null && !nextHold.ok) return nextHold;
-
-  // 2: `.prhistory` — refuse to close on an unreadable ledger; nothing
-  // closes.
-  const history = await readPrHistory(deps.io, deps.cfg.registryDir, run.sessionId);
-  if (!history.ok) {
-    return { ok: false, kind: 'refused', code: 'prhistory-unreadable' };
+  // A review run is always final (§5.3) and the release below is already the
+  // act — but its reviewer child is NOT finished while the run it reviews is
+  // open (spec §5.7): the decision answers `review-report-live`, and
+  // the sweep reclaims the reviewer once the reviewed run is terminal.
+  // `null`: this arm re-measures through `verifyReviewDone`, never `verifyDone`
+  // (design 2026-09-14 §5.3-5.4 — a review run has no PR-bearing done-claim to
+  // reuse a `pr-state` line from), so there is nothing to hand in — the fast
+  // path, when reached, fetches `pr-state` itself exactly as `childGateAtClose`
+  // already does whenever no line is given.
+  const childGate = await childGateAtClose(deps, run, sessionId, sibRead, true, state, null);
+  const survivor = survivorOf(sibRead.siblings);
+  const release = releaseIsSafe(sibRead.siblings) || survivor === null;
+  // Spelled hand-over-first so the compiler narrows `survivor` on the arm that
+  // reads it, and so `argv` is a `const` carrying the `CcdArgv` brand rather
+  // than an evolving `let` (the abandon arm's own shape — Task 7 review m7).
+  let handoff: HoldReasonVerdict | null = null;
+  if (!release && survivor !== null) {
+    handoff = holdReasonVerdict(survivor.program, survivor.wave, survivor.waveOf, survivor.id);
+    if (!handoff.ok) return handoff;
   }
-  coord.foldPrLineage(id, history.entries);
-
-  // 3: the fleet act — AHEAD of the transition commit (deviation D-48). It
-  // is a RELEASE (D-5), never an autonomous archive. `state:'failed'` with
-  // `archive:true` is the ONE explicit `wsArchive` call in the whole
-  // coordination lane — and, Wave 2, IT IS GATED ON THE SAME SIBLING CHECK
-  // as the release. `ws-archive` has no hold rung in ccd (deliberately: a
-  // by-hand archive of a held workspace must still work), so an ungated arm
-  // here archives a SIBLING run's workspace and leaves that sibling's
-  // `.hold` standing over it — F9's harm through a different door. When a
-  // sibling is open the archive does not happen, the claim is handed to the
-  // survivor by the `else` arm below, the run still transitions to `failed`,
-  // and `released:false` is the signal. The cost is stated rather than
-  // hidden: the operator asked for an archive and did not get one. It is
-  // recoverable by the same hands — `POST /api/sessions/:id/archive` with
-  // `{force:true}` — and the corrective act is the one every other arm
-  // implies anyway: close the sibling first.
-  let released = false;
-  if (state === 'failed' && archive && safe) {
-    const argv = CCD_ARGV.wsArchive(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
-    if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
-    const res = await deps.runCcd(argv);
-    if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
-  } else if (final && safe) {
-    const argv = CCD_ARGV.wsRelease(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
-    if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
-    const res = await deps.runCcd(argv);
-    if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
-    released = true;
-  } else {
-    // TWO cases land here, and the reason they share an arm is that they need
-    // the same act with a different reason string:
-    //   - the ordinary NON-FINAL close, no sibling: claim the workspace for
-    //     wave N+1, whose run does not exist yet — hence `null` for the run
-    //     id, and the string is byte-identical to what shipped;
-    //   - ANY close, final or not, with a SIBLING still open: the surviving
-    //     run's own reason wins. Before Wave 2 the non-final arm wrote its
-    //     OWN row's `wave + 1` unconditionally, silently rewriting the live
-    //     run's claim whenever the two rows disagree.
-    if (nextHold === null || !nextHold.ok) {
-      throw new Error('closeRun invariant: hold verdict was not available');
-    }
-    const argv = CCD_ARGV.wsHold(
-      run.sessionId, nextHold.reason,
-      sweepDec(deps.fleetState, `run:${id} close`),
-    );
-    if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
-    const res = await deps.runCcd(argv);
-    if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
+  const argv = handoff !== null && handoff.ok
+    ? CCD_ARGV.wsHold(sessionId, handoff.reason, sweepDec(deps.fleetState, `run:${run.id} close`))
+    : CCD_ARGV.wsRelease(sessionId, sweepDec(deps.fleetState, `run:${run.id} close`));
+  // D-5866: the row the argv above was built from — the hold when a survivor takes the claim, else the release.
+  if (!ccdCan(deps.fleetState, handoff !== null && handoff.ok ? 'wsHold' : 'wsRelease')) {
+    return { ok: false, kind: 'unsupported' };
   }
+  const res = await deps.runCcd(argv);
+  if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
 
-  // 4: the transition, the handoff commit, the outstanding-delivery
-  // cancellation and the program-retirement check — as ONE transaction
-  // now (fix, review finding 25: `closeRun` below replaces two
-  // INDEPENDENT `advance()` calls that used to let a crash, a full-disk
-  // write failure, or a SIGTERM landing between them wedge the run in
-  // `closing` PERMANENTLY — see `CoordStore.closeRun`'s own docstring for
-  // the full reasoning, including why it also folds in review findings
-  // 8/14's delivery cancellation and D-51's program retirement). Only a
-  // SHAPE-VALID handoff commit is ever passed through to be written (fix,
-  // review findings 6/18): `verifyDone` is skipped entirely on an
-  // abandon (`state:'failed'`, D-49), so its own 40-hex `SHA` check never
-  // ran over `claim.handoffCommit` on that path — checking it again here,
-  // independent of whether `verifyDone` ran, closes the gap without
-  // reintroducing a re-measurement an abandon has nothing left to
-  // re-measure against.
-  const handoffCommit = HANDOFF_SHA.test(claim.handoffCommit) ? claim.handoffCommit : null;
   const closed = coord.closeRun({
-    runId: id, finalState: state, causedBy, handoffCommit, program: run.program,
-    // The ordinary close always takes the `closing` hop it always took — the
-    // only path that skips it is the abandon arm above (D-281 (was D-B4-8)).
-    viaClosing: true,
+    runId: run.id, finalState: state, causedBy, handoffCommit: null, program: run.program,
+    viaClosing: false,   // REVIEW_RUN_TRANSITIONS has no `closing` (§5.2)
   });
   if (!closed.ok) return { ok: false, kind: 'advanceFailed', adv: closed };
+  return { ok: true, id: run.id, state, released: release, ...handOffChildReclaim(deps, childGate) };
+}
 
-  return { ok: true, id, state, released };
+// ── child reclamation: close decides, it does not wait (spec 2026-09-22 §5.7) ──
+
+/** What a close decided about the child, and the request it would hand off. */
+export interface ChildGate { readonly decision: ChildReclaimDecision; readonly request: ChildReclaimRequest | null }
+
+const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child' }, request: null };
+
+/**
+ * Read both authorities and ask `childReclaimDecision`, inside the mutex and
+ * before the fleet act. The box's: the registry's `ChildMark`, re-read now
+ * (`readSessionRecord`). An `absent` read is not folded straight to `none`
+ * (amendment A6, controller ruling P5): `readSessionRecord`'s `absent` covers
+ * two populations — no `.uuid` in a listing that succeeded, and a row
+ * `buildRecord` DROPPED though the workspace is still live and marked — and a
+ * live marked child answered `not-a-child` would hand it a remedy it is not
+ * entitled to. So an `absent` read is re-listed once through the executor's
+ * own `childReclaimRowListing`: `none` iff that second listing SUCCEEDS and
+ * `.child` is NOT listed, `unreadable` when `.child` IS listed (a row that
+ * exists and could not be built) or the second listing itself fails. Close is
+ * the SECOND caller of that export — the first is the executor's own
+ * gone-check, which folds `.uuid`-OR-`.child` for its own different question.
+ * An `unlistable` read (the registry directory itself could not be listed) is
+ * `unreadable` directly, with no second listing to take.
+ *
+ * The server's authority: the MINTING run's row, by the id the marker names —
+ * which is not this run whenever the child handed over across waves — and,
+ * when that row is a review run's, the row of the run it reviews (spec
+ * §5.7), read here beside the caller's sibling read, in the same mutex
+ * section. The spent verdict is asked LAST and only when it is the one
+ * conjunct left: its live half is a gh round trip, and every other answer is
+ * already final without it.
+ *
+ * A2/P6: the fast path (`childSpent`'s registry `.prnumber`/`.prhistory`
+ * rungs) answers `spent` with `incarnation:'unplaced'` — it carries no date,
+ * and a child's branch name is a recycled slug (spec §5.5), so unplaced
+ * evidence may belong to an earlier workspace. The close never reclaims on
+ * that alone: it re-dates the same PR through the live rung and decides on
+ * the LIVE answer ONLY — `spent`/`this` finishes the child, anything else
+ * (unspent, unmeasured, or still `unplaced`) holds it.
+ *
+ * COST (spec §5.7 — measured, not the ~50 s an earlier wave accepted by
+ * design): `verifiedLine` is `verifyDone`'s own measured `pr-state` row for
+ * this SAME session, taken moments earlier inside this same mutex section
+ * (`state !== 'failed'` is exactly when `verifyDone` ran at all). When its
+ * `.id` names `sessionId`, every live rung below — the initial `childSpent`
+ * call and, when the fast path answers spent, the redate — runs the PURE
+ * `childSpentLiveFrom` over that one line instead of asking `pr-state` again,
+ * so a non-final `done` close makes AT MOST ONE `pr-state` call in total
+ * (`verifyDone`'s own), never two. A line that names a different session, or
+ * no line at all (the abandon and review-close arms, which never run
+ * `verifyDone`), falls back to fetching fresh, exactly as before this task —
+ * the fetch is still a live read taken inside this same mutex section, so a
+ * PR opened in the gap can only HOLD the child, never make one vanish.
+ *
+ * A NON-REGISTRY ID (path identity, spec §2.3) reads `unreadable`, never
+ * `none`. `readSessionRecord` answers `bad-id` before any listing. The
+ * `absent` arm's re-listing would find nothing for an id nothing lists, and
+ * would answer `not-a-child`, a verdict nobody measured. No second listing is
+ * taken, and the coordination fence gets a `null` uuid. `closeRun` checks the
+ * stored id on every arm before it gets here, so no close reaches this arm
+ * today.
+ *
+ * EXPORTED FOR ITS PIN, and for nothing else: no file outside `close.ts`
+ * calls it. Spec §2.3 asks for a pin at each absence-acting caller, and with
+ * the arm masked no flow can reach it, so the pin calls this function directly
+ * (`single-read-bad-id.test.ts`).
+ */
+export async function childGateAtClose(
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, run: RunRow, sessionId: string, siblings: OpenSiblingsResult,
+  final: boolean, state: 'done' | 'failed', verifiedLine: CcdPrLine | null,
+): Promise<ChildGate> {
+  const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
+  let mark: ChildMark;
+  switch (read.kind) {
+    case 'found':
+      mark = read.record.child;
+      break;
+    case 'unlistable':
+      mark = { kind: 'unreadable' };
+      break;
+    case 'absent': case 'unmeasurable': {
+      // A6/P5: `absent` is re-listed once, folding ONLY `.child` (never
+      // `.uuid`) — the close's own question, distinct from the executor's.
+      const listing = await childReclaimRowListing(deps, sessionId);
+      mark = listing.kind === 'unlistable' || listing.child ? { kind: 'unreadable' } : { kind: 'none' };
+      break;
+    }
+    // Masked by `closeRun`'s stored-id checks; see the docstring.
+    case 'bad-id':
+      mark = { kind: 'unreadable' };
+      break;
+    default: {
+      const _x: never = read;
+      return _x;
+    }
+  }
+  const minting: ChildReclaimMinting = mark.kind === 'child' ? mintingRowOf(deps.coord, mark.runId) : { kind: 'absent' };
+  const reviewed = reviewedRowOf(deps.coord, minting);
+  // Whether this session has coordinated in its own generation
+  // (`childReclaimHasCoordinated`; spec §1 rule 4, spec §5.6: slugs recycle):
+  // read beside the sibling list, through the same fence the executor reads
+  // for the same question (`childReclaim.ts`'s own step 2a). `Date.now()` is
+  // the generation pick's clock: `CloseRunDeps` carries none, and `closeRun`
+  // stamps `closedAt` from it too. An unreadable read is
+  // not "never coordinated" — but it is also NOT folded into
+  // `siblings-unreadable` HERE: doing so ahead of calling the decision would
+  // outrank `not-a-child` and `marker-unreadable` for every close, coordinated
+  // or not, whenever one bad `run_events` row makes the read throw. It is
+  // carried into the pure decision as a THIRD value instead
+  // (`hasCoordinated: 'unreadable'`), which `childReclaimDecision` folds into
+  // `siblings-unreadable` at the exact place the sibling check itself ranks —
+  // after the mark/minting checks, never ahead of them.
+  let hasCoordinated: boolean | 'unreadable';
+  try {
+    // The birth is told the row that this close read (spec §5.7): its own unfinished purge never unplaces it.
+    // An unplaced birth with an earlier claim declines `has-coordinated` here. That is fail-safe: the sweep
+    // judges the child again on its next pass.
+    hasCoordinated = childReclaimHasCoordinated(deps.coord, sessionId, Date.now(), read.kind === 'found' ? childReclaimRowUuid(read.record) : null);
+  } catch (err) {
+    console.warn(`ccrc-server: the coordination fence (childReclaimHasCoordinated) failed at close `
+      + `(${err instanceof Error ? err.message : String(err)}) — ${sessionId}'s coordination history unreadable`);
+    hasCoordinated = 'unreadable';
+  }
+  const input = {
+    mark, minting, sessionId, siblings, reviewed, final, state, spent: { kind: 'unasked' } as const,
+    spentFastPath: false, hasCoordinated,
+    // D-51's predicate with THIS run set aside — the retirement check
+    // `CoordStore.closeRun` runs after the commit, asked before it.
+    retiresProgram: deps.coord.programOpenRunCount(run.program, run.id) === 0,
+  };
+  let decision = childReclaimDecision(input);
+  if (!decision.reclaim && decision.why === 'not-finished' && read.kind === 'found' && minting.kind === 'row') {
+    // The minting row is guaranteed present here — `childReclaimDecision`
+    // only answers `not-finished` past its own `minting.kind==='row'` check —
+    // so `minting.sessionBornAt`/`minting.sessionBornFor`/
+    // `minting.dispatchStartedAt` are this child's birth, read once, never a
+    // second `coord.run` query.
+    const birth = childBirthOf(
+      { ok: true, run: { sessionId: minting.sessionId, sessionBornAt: minting.sessionBornAt,
+                          sessionBornFor: minting.sessionBornFor,
+                          dispatchStartedAt: minting.dispatchStartedAt } },
+      sessionId);
+    // Spec §5.7: reuse `verifyDone`'s own measured line for THIS session —
+    // the same argv, the same parser — rather than fetch a second time.
+    // `undefined` (never fetched, and `childSpent`/the redate below fetch
+    // fresh) whenever `verifyDone` did not run or answered for a different
+    // session — `verifyDone`'s own `.find(isFullLine)` is NOT filtered by
+    // session id the way `childSpentLive`'s fetch is (`fingerprint.ts`), so
+    // this check is the fail-closed guard: a line proven to belong to
+    // ANOTHER session must never be trusted for this one's spent verdict.
+    const line = verifiedLine !== null && verifiedLine.id === sessionId ? verifiedLine : undefined;
+    let spent = await childSpent(deps, read.record, birth, line);
+    // A2/P6: a fast-path spent (registry `.prnumber` or `.prhistory`, always
+    // `incarnation:'unplaced'`) is never trusted alone — it is re-dated
+    // through the live rung, and the close decides on THAT answer only. A
+    // `spent`/`'live'` verdict already IS that live answer (childSpent's own
+    // rung 3), so it is not asked twice. `spentFastPath` carries WHICH case
+    // this was (spec §5.3), so a re-dated `unspent` answer can still say why
+    // it is not finished (`not-finished-merge-commit`) rather than the
+    // ordinary unspent hand-over.
+    const spentFastPath = spent.kind === 'spent' && spent.source !== 'live';
+    if (spentFastPath) {
+      spent = line !== undefined ? childSpentLiveFrom(line, read.record, birth) : await childSpentLive(deps, read.record, birth);
+    }
+    decision = childReclaimDecision({ ...input, spent, spentFastPath });
+  }
+  return {
+    decision,
+    // `deferredSinceMs: null`: close is always a first attempt (spec §5.7), and
+    // so the feed says nothing about it yet (`feedQuiet`, spec §5.9).
+    // `mark.runId` is the MINTING run — never `run.id`, the run being closed,
+    // which differ exactly when the child handed over across waves or was
+    // minted by a review run this close is not.
+    request: decision.reclaim && mark.kind === 'child'
+      ? { sessionId, runId: mark.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+          feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: CHILD_RECLAIM_LICENCE_NONE } : null,
+  };
+}
+
+function mintingRowOf(coord: WatcherCoordPort, runId: number): ChildReclaimMinting {
+  const r = coord.run(runId);
+  if (!r.ok) return { kind: 'unreadable' };
+  return r.run === null ? { kind: 'absent' }
+    : { kind: 'row', sessionId: r.run.sessionId, reviews: r.run.reviews,
+        sessionBornAt: r.run.sessionBornAt, sessionBornFor: r.run.sessionBornFor,
+        dispatchStartedAt: r.run.dispatchStartedAt };
+}
+
+/** The run a REVIEW child's minting run reviews (spec §5.7) — `none` when the
+ *  minting row is a work run's (or is no row at all: the decision has already
+ *  answered on the minting read). Four answers, never folded; the row carries
+ *  its STATE, and the pure decision alone asks whether it is terminal. */
+function reviewedRowOf(coord: WatcherCoordPort, minting: ChildReclaimMinting): ChildReclaimReviewed {
+  if (minting.kind !== 'row' || minting.reviews === null) return { kind: 'none' };
+  const r = coord.run(minting.reviews);
+  if (!r.ok) return { kind: 'unreadable' };
+  return r.run === null ? { kind: 'absent' } : { kind: 'row', state: r.run.state };
+}
+
+/** AFTER the commit, and never awaited. A port that throws is logged and
+ *  answered `not-queued` with no reason — the close has committed, and a
+ *  throw out of here would reach `CoordMutex.run`'s `finally` as a bare 500
+ *  about a close that happened. */
+function handOffChildReclaim(
+  deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, gate: ChildGate,
+): { childReclaim: 'queued' | 'not-queued'; childReclaimWhy?: ChildReclaimNotWhy } {
+  if (!gate.decision.reclaim) return { childReclaim: 'not-queued', childReclaimWhy: gate.decision.why };
+  if (deps.childReclaim === undefined || gate.request === null) return { childReclaim: 'not-queued' };
+  try {
+    deps.childReclaim(gate.request);
+  } catch (err) {
+    console.warn(`ccrc-server: handing the reclaim of ${gate.request.sessionId} off threw `
+      + `(${err instanceof Error ? err.message : String(err)}) — the close committed; the sweep reaches it`);
+    return { childReclaim: 'not-queued' };
+  }
+  return { childReclaim: 'queued' };
 }

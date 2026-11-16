@@ -1,0 +1,20 @@
+❯ perm4
+
+● Bash(touch rigfile.txt)
+  ⎿  Waiting…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+
+   touch rigfile.txt
+   Create rigfile
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and always allow access to /tmp/claude-1000/-home-rigoperatr-worktrees-ccrc-pwa-soft-basi
+      n/00000000-0000-4000-8000-000000000000/scratchpad/rig2/runs/menus/repo from this project
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you
+   4. No
+
+ Esc to cancel · Tab to amend

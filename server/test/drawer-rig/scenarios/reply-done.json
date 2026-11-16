@@ -1,0 +1,25 @@
+{
+  "name": "reply-done",
+  "covers": [
+    "W6: the model equals capture-pane -p on an idle box after a reply",
+    "W11: a two-line draft typed as the field frames it (bracketed paste, a carriage return between the lines) lands as two lines, unsubmitted",
+    "re-wrap (a)-(g) and the row count: prose wrapped at 220 and a list"
+  ],
+  "model": "claude-sonnet-4-5",
+  "prompt": "Summarise what project-a does, and what it should do next.",
+  "marker": "Both functions stay pure.",
+  "paste": [
+    "Next, add a farewell function beside greet in src/app.ts.",
+    "Then cover both functions with one small test file."
+  ],
+  "entries": [
+    {
+      "match": "tools",
+      "label": "reply",
+      "text": "project-a is a small TypeScript module with one export: the greet function in src/app.ts takes a name and returns a greeting string built from it, with no state and no side effects, so it is safe to call from anywhere and trivial to test. The next step is a farewell function beside it that mirrors greet exactly, followed by one test file that covers the pair, so the module keeps a single shape that any reader can take in at a glance.\n\n- greet: returns a greeting for a name\n- farewell: will return a farewell for a name\n\nBoth functions stay pure."
+    }
+  ],
+  "default": {
+    "text": "Done."
+  }
+}

@@ -11,7 +11,7 @@ import { archiveContradicted, peerDeliverable, type PeerProbe } from '../src/coo
 import { DEAD_LIFECYCLES, SESSION_LIFECYCLES, lifecycleIsDead } from '../../shared/api.js';
 
 const probe = (over: Partial<PeerProbe> = {}): PeerProbe => ({
-  registry: 'measured', tmux: 'live', panePid: 4242, lifecycle: 'running', ...over,
+  registry: 'measured', tmux: 'live', panePid: 4242, lifecycle: 'running', hibernated: false, ...over,
 });
 
 describe('peerDeliverable: the ladder, rung by rung', () => {
@@ -33,6 +33,21 @@ describe('peerDeliverable: the ladder, rung by rung', () => {
 
   it("rung 2 — tmux NOT ANSWERING is 'unknown', never 'no' — the substrate-unreachable stance", () => {
     expect(peerDeliverable(probe({ tmux: 'unknown' }))).toBe('unknown');
+  });
+
+  // D-5242: a hibernated peer is ASLEEP — the mail lane wakes it and then delivers — so it is `yes`, answered after the
+  // registry rungs and before the tmux rung, which would otherwise answer `no:session-gone` before LIFECYCLE_RUNG is read.
+  it('a hibernated peer (registry measured, tmux gone, no pane pid, lifecycle stopped) is yes', () => {
+    expect(peerDeliverable(probe({ hibernated: true, tmux: 'gone', panePid: null, lifecycle: 'stopped' }))).toBe('yes');
+  });
+
+  it('the same peer, not hibernated, is no:session-gone as before', () => {
+    expect(peerDeliverable(probe({ tmux: 'gone', panePid: null, lifecycle: 'stopped' }))).toBe('no:session-gone');
+  });
+
+  it('the registry rungs still come first: an absent or unmeasurable row is never yes for being hibernated', () => {
+    expect(peerDeliverable(probe({ hibernated: true, registry: 'absent' }))).toBe('no:not-in-registry');
+    expect(peerDeliverable(probe({ hibernated: true, registry: 'unmeasurable' }))).toBe('unknown');
   });
 
   it('rung 3 — a live session with no pane pid is no:no-pane (nothing to inject into)', () => {

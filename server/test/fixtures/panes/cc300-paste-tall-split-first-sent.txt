@@ -1,0 +1,50 @@
+  and tablets, but they have not eliminated the physical keyboard, in part because touch typing depends on the feedback that a physical key provides.
+
+  Looking back, the keyboard's history is a story of inherited habits. Its layout reflects a jam that was solved long ago, its mechanisms reflect decades of engineering refinement, and its basic promise, that a person
+  can press a key and produce a precise symbol, has held steady since the first typewriter. Few tools have carried so much of their past forward so faithfully.
+
+[38;5;246m✻[39m [38;5;246mBrewed for 10s · done 10:22[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231me2ebusy2 Reply with only the word OK and use no tools. alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee [39m
+  [38;5;231mzulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf [39m
+  [38;5;231mhotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa[39m
+  [38;5;231mquebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey [39m
+  [38;5;231mxray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo s END-e2ebusy2[39m
+
+[38;5;231m[49m⏺[39m OK
+
+[38;5;246m✻[39m [38;5;246mBaked for 1s · done 10:22[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mchiptopP0 Reply with only the word OK and use no tools. alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee [39m
+  [38;5;231mzulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf [39m
+  [38;5;231mhotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa[39m
+  [38;5;231mquebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey [39m
+  [38;5;231mxray yankee zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo END-chiptopP0[39m
+
+[38;5;231m[49m⏺[39m OK
+
+
+                                                                                                                                                                                                     [38;5;246mctrl+g to edit in Vim[39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m❯ 
+  chiptopP4 Reply with only the word OK and use no tools. alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee
+  zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf
+  hotel india juliet kilo lima mike november oscar papa queb END-chiptopP4
+
+  chiptopP5 Reply with only the word OK and use no tools. alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee
+  zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf
+  hotel india juliet kilo lima mike november oscar papa queb END-chiptopP5
+
+  chiptopP6 Reply with only the word OK and use no tools. alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee
+  zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf
+  hotel india juliet kilo lima mike november oscar papa queb END-chiptopP6
+
+  chiptopP7 Reply with only the word OK and use no tools. alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee
+  zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf
+  hotel india juliet kilo lima mike november oscar papa queb END-chiptopP7
+
+  chiptopP8 Reply with only the word OK and use no tools. alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee
+  zulu alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtrot golf
+  hotel india juliet kilo lima mike november oscar papa queb END-chiptopP8
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;246mpaste again to expand[39m

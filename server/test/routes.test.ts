@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -12,7 +12,7 @@ import { parseDialog } from '../src/pane/dialog.js';
 import { Bus } from '../src/bus.js';
 import {
   HOLD_ROUTE_REASON_MAX_BYTES,
-  parseCanonicalPositiveSafeInteger,
+  parseCanonicalPositiveSafeInteger, parseQuestionId, formatQuestionId,
   type SessionStreamMsg,
 } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -22,8 +22,15 @@ import { askKey } from '../src/askkey.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { fakeTime } from './fakeTime.js';
 
-const ID = 'claude-a-MekWarLive';
+const ID = 'claude-a-project-f';
+
+/** The operator's answer door, W3 Q3f's `POST /api/questions/session-<id>/answer`. W7 C7p (D-7194) retired the session
+ *  doors it replaced (`/ask`, `/dialog`, `/dialog/text`, `/dialog/multi`); their rows below run through it, with the
+ *  family's body (`kind`, and `multi: true` for a multiSelect set), and answer what the old door answered, byte for byte
+ *  (`question-doors.test.ts`'s pairs proved it before the retirement). */
+const answerDoor = (id: string): string => `/api/questions/session-${id}/answer`;
 
 const seedSession = (home: string, id: string, wrapper: string) => {
   const reg = path.join(home, '.cc-sessions');
@@ -38,7 +45,7 @@ const seedSession = (home: string, id: string, wrapper: string) => {
  *  mkdtemp dir created inside this call, so it can't be known before calling. */
 async function makeApp(
   panes: (string | null)[] | ((home: string) => (string | null)[]),
-  opts: { status?: 'busy' | 'idle'; io?: FleetIO } = {},
+  opts: { status?: 'busy' | 'idle' | 'shell'; io?: FleetIO; mailToken?: string } = {},
 ): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus; home: string }> {
   const home = mkTmp('ccrc-');
   seedRoster(home);
@@ -60,15 +67,16 @@ async function makeApp(
     if (args[0] === 'capture-pane') {
       const pane = resolvedPanes[Math.min(capIdx, resolvedPanes.length - 1)] ?? null;
       capIdx++;
-      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      return pane === null ? { ran: true, code: 1, stdout: '', stderr: '' } : { ran: true, code: 0, stdout: pane, stderr: '' };
     }
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const bus = new Bus();
   const cfg = loadConfig({ CCRC_HOME: home });
   const app = await buildServer(
-    { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: new KeyedQueue() },
+    { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: new KeyedQueue(), time: fakeTime().ports,
+      ...(opts.mailToken !== undefined ? { mailToken: opts.mailToken } : {}) },
     bus,
   );
   return { app, calls, bus, home };
@@ -133,17 +141,34 @@ function coordIdPathRoutes(): Omit<RouteSource, 'code'>[] {
     : []));
 }
 
+/** The canonical parsers of a `:id` seam: `parseCanonicalPositiveSafeInteger` everywhere, and (W3 Q3f, D-7030)
+ *  `parseQuestionId` on a `/api/questions/` path only, whose numeric arms parse `<n>` with the former. */
 function canonicalCoordIdRoutes(): Omit<RouteSource, 'code'>[] {
   const src = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
   const starts = [...src.matchAll(/^  app\.(get|post)\(\s*'([^']+)'/gm)];
   return starts.flatMap((start, i) => {
     const code = withoutComments(src.slice(start.index, starts[i + 1]?.index));
-    return /\bparseCanonicalPositiveSafeInteger\s*\(/.test(code)
+    const canonical = /\bparseCanonicalPositiveSafeInteger\s*\(/.test(code)
+      || (start[2]!.startsWith('/api/questions/') && /\bparseQuestionId\s*\(/.test(code));
+    return canonical
       ? [{
           method: start[1]!.toUpperCase() as 'GET' | 'POST',
           routePath: start[2]!,
         }]
       : [];
+  });
+}
+
+/** W3 Q3f (D-7030): the `knownId` gates registered in `coord/routes.ts`, the operator's door of the question family,
+ *  which gates its session id with `buildServer`'s `knownId` exactly as the session routes do. */
+function coordKnownIdCalls(): KnownIdCall[] {
+  const src = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
+  const starts = [...src.matchAll(/^  app\.(get|post)\(\s*'([^']+)'/gm)];
+  return starts.flatMap((start, i) => {
+    const code = withoutComments(src.slice(start.index, starts[i + 1]?.index));
+    return [...code.matchAll(/\bknownId\(\s*([^\n)]*?)\s*\)/g)].map((call) => ({
+      method: start[1]!.toUpperCase() as 'GET' | 'POST', routePath: start[2]!, args: call[1]!.replace(/\s+/g, ' ').trim(),
+    }));
   });
 }
 
@@ -206,8 +231,36 @@ describe('canonical positive-safe decimal parser', () => {
   });
 });
 
+describe('the question id parser (W3 Q3f, D-7030)', () => {
+  it.each([
+    ['ask-1', { kind: 'ask', id: 1 }],
+    ['approval-42', { kind: 'approval', id: 42 }],
+    [`ask-${Number.MAX_SAFE_INTEGER}`, { kind: 'ask', id: Number.MAX_SAFE_INTEGER }],
+    ['session-project-a-quiet-basin', { kind: 'session', sessionId: 'project-a-quiet-basin' }],
+  ] as const)('accepts %s', (text, want) => {
+    expect(parseQuestionId(text)).toEqual(want);
+    expect(formatQuestionId(parseQuestionId(text)!)).toBe(text);
+  });
+
+  it.each([
+    'ask-01', 'ask-+1', 'ask-1.0', 'ask-', 'ask-0', 'ask- 1', `ask-${Number.MAX_SAFE_INTEGER + 1}`, 'approval-1e0',
+    'session-', 'session--actor', 'session-.hidden', 'session-a/b', 'session- x',
+    'question-1', 'asks-1', '-1', 'ask1', '', 1,
+  ])('refuses %j', (text) => {
+    expect(parseQuestionId(text)).toBeNull();
+  });
+});
+
+/** Console speed S2: routes that carry a resource id in the QUERY, not in a `:id` path segment, and parse it with the
+ *  canonical parser. `GET /api/runs?closed=1&limit=&before=` pages the run archive, and `before` is a run id (the
+ *  cursor), so it must not be coerced either: ` 1`, `01`, `1e0` and the rest are refused. The path scan cannot see such a
+ *  seam, so it is named here; the positive census expects it and the inverse scan adds it to the `:id` paths. */
+const QUERY_ID_SEAMS: Omit<RouteSource, 'code'>[] = [{ method: 'GET', routePath: '/api/runs' }];
+
+const seamKey = (r: Omit<RouteSource, 'code'>): string => `${r.method} ${r.routePath}`;
+
 describe('canonical coordination id route census', () => {
-  it('keeps all fourteen textual resource-id seams on the shared parser', () => {
+  it('keeps all twenty-six textual resource-id seams on a shared parser (twenty-three, plus the question family\'s three)', () => {
     expect(canonicalCoordIdRoutes()).toEqual([
       { method: 'POST', routePath: '/api/mail/:id/ack' },
       { method: 'GET', routePath: '/api/mail/:id' },
@@ -216,21 +269,49 @@ describe('canonical coordination id route census', () => {
       { method: 'POST', routePath: '/api/runs/:id/abandon' },
       { method: 'POST', routePath: '/api/runs/:id/reclaim' },
       { method: 'POST', routePath: '/api/runs/:id/advance' },
+      // routing slice 5, Task 2: the coordinator's escalation/demotion door,
+      // registered right after `advance` in coord/routes.ts.
+      { method: 'POST', routePath: '/api/runs/:id/route' },
       { method: 'POST', routePath: '/api/runs/:id/items' },
+      // D-8076: a session asks the operator to end a run it cannot close, registered right after `items`.
+      { method: 'POST', routePath: '/api/runs/:id/end-request' },
+      // D-6910: the operator's read of a review cap's ask, registered beside the lift.
+      { method: 'GET', routePath: '/api/coord/review-cap/:id' },
+      // Console speed S2: the archive's cursor `before` is a run id in the query (`QUERY_ID_SEAMS`).
+      { method: 'GET', routePath: '/api/runs' },
       { method: 'GET', routePath: '/api/runs/:id/signals' },
+      // D-6799: the run plus its spend.
+      { method: 'GET', routePath: '/api/runs/:id' },
+      // D-8071: the run's lasting record, registered beside it.
+      { method: 'GET', routePath: '/api/runs/:id/record' },
       { method: 'GET', routePath: '/api/runs/:id/items' },
       { method: 'POST', routePath: '/api/claims/:id/release' },
       { method: 'POST', routePath: '/api/claims/:id/break' },
-      { method: 'POST', routePath: '/api/asks/:id/answer' },
-      { method: 'POST', routePath: '/api/asks/:id/release' },
+      // coordinator-first routing, plan Task 16 (D-5298): the approvals lane's four id routes.
+      { method: 'GET', routePath: '/api/approvals/:id/ruling' },
+      { method: 'GET', routePath: '/api/approvals/:id' },
+      // W3 Q3f (D-7030): the question door family, on `parseQuestionId`, registered after the approvals lane.
+      { method: 'POST', routePath: '/api/questions/:id/answer' },
+      { method: 'POST', routePath: '/api/questions/:id/rule' },
+      { method: 'POST', routePath: '/api/questions/:id/release' },
     ]);
+  });
+
+  it('W5-R13 (delegation wave 5 PR8): the lease doors name their parameter `:lease`, never `:id` (a lease id is a UUID, not an integer)', () => {
+    const src = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
+    const paths = [...src.matchAll(/^  app\.(get|post)\(\s*'([^']+)'/gm)].map((m) => m[2]!);
+    expect(paths.filter((p) => p.startsWith('/api/leases/'))).toEqual(
+      ['/api/leases/:lease/retain', '/api/leases/:lease/operator-retain', '/api/leases/:lease/resolve']);
+    expect(coordIdPathRoutes().filter((r) => r.routePath.startsWith('/api/leases/')), 'no lease route under the integer `:id`').toEqual([]);
   });
 
   it('leaves no `:id` route off the parser, and no second spelling in the file', () => {
     // The inverse scan. Positive census ∩ every `:id` registration must be the
     // whole of the latter — so a route added tomorrow with its own coercion
     // reds HERE, naming itself, rather than silently sitting outside the census.
-    expect(canonicalCoordIdRoutes()).toEqual(coordIdPathRoutes());
+    // `QUERY_ID_SEAMS` joins the `:id` paths: a seam that carries its id in the query is named, never silent.
+    const expected = [...coordIdPathRoutes(), ...QUERY_ID_SEAMS];
+    expect(canonicalCoordIdRoutes().map(seamKey).sort()).toEqual(expected.map(seamKey).sort());
 
     // And the old idiom is gone from the file entirely. `Number(q.limit)` and
     // friends are deliberately untouched — a limit is not a resource id — so
@@ -252,8 +333,9 @@ describe('knownId route census', () => {
 
     expect(requestGates).toEqual([
       { method: 'POST', routePath: '/api/sessions/:id/prompt', args: 'id' },
-      { method: 'POST', routePath: '/api/sessions/:id/dialog', args: 'id' },
-      { method: 'POST', routePath: '/api/sessions/:id/ask', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/route', args: 'id' },
+      // Decision `ask-dialog-tab-route`: moving the pane between an ask's tabs, arrows only, never Enter.
+      { method: 'POST', routePath: '/api/sessions/:id/dialog/tab', args: 'id' },
       { method: 'GET', routePath: '/api/sessions/:id/commands', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/interrupt', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/submit', args: 'id' },
@@ -264,13 +346,20 @@ describe('knownId route census', () => {
       { method: 'POST', routePath: '/api/sessions/:id/archive', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/restore', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/forget', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/limit-wait', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/hold', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/release', args: 'id' },
+      // Named workspaces S9: the rename route, behind the same gate as every other write to a named session.
+      { method: 'POST', routePath: '/api/sessions/:id/title', args: 'id' },
       { method: 'GET', routePath: '/api/sessions/:id/workspace/audit', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/workspace/reap', args: 'id' },
     ]);
-    expect(requestGates).toHaveLength(17);
-    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(13);
+    // W7 C7p (D-7194): 22 -> 21 and 18 -> 17 POST with `POST /api/sessions/:id/ask` retired, 20 and 16 with
+    // `/dialog/multi`, 19 and 15 with `/dialog/text`, 18 and 14 with `/dialog`; the operator's answers are gated by the
+    // same `knownId` inside the family's door (`coord/routes.ts`, through its wiring).
+    // D-8123: 18 -> 19 and 14 -> 15 POST with `POST /api/sessions/:id/limit-wait`, gated by `knownId` as `/forget` is.
+    expect(requestGates).toHaveLength(19);
+    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(15);
     expect(requestGates.filter(({ method }) => method === 'GET')).toHaveLength(4);
 
     const revivalProbes = calls.filter(({ args }) => args !== 'id');
@@ -292,6 +381,12 @@ describe('knownId route census', () => {
       requestGates.filter(({ method }) => method === 'GET').length,
     ]);
   });
+
+  it('gates the question family\'s operator door in coord/routes.ts, and nothing else there (W3 Q3f, D-7030)', () => {
+    expect(coordKnownIdCalls()).toEqual([
+      { method: 'POST', routePath: '/api/questions/:id/answer', args: 'qid.sessionId' },
+    ]);
+  });
 });
 
 describe('write routes', () => {
@@ -303,8 +398,8 @@ describe('write routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', 'hello'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', '--', 'hello'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -314,6 +409,95 @@ describe('write routes', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hi' } });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'draft-present', draft: 'half-typed thought' });
+    await app.close();
+  });
+
+  // D-6367: Retry's whole-box resume rides the body's one optional `resume` field (`=== true`, one reader).
+  const RULE = '─'.repeat(60);
+  const boxPane = (text: string): string => `earlier turn\n${RULE}\n❯ ${text}\n${RULE}\n  👤 team·max\n`;
+
+  it('a /prompt body with resume: true resumes the box whole: one Enter, nothing typed', async () => {
+    const { app, calls } = await makeApp([boxPane('hello'), boxPane('')]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
+    await app.close();
+  });
+
+  it('a /prompt body with resume: true over an empty box is 409 nothing-to-submit, nothing typed', async () => {
+    const { app, calls } = await makeApp([boxPane('')]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'nothing-to-submit' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  // R38: Retry now resumes after every enter-ignored, drafted or not; the server never sees the draft, so this pins its half.
+  it('a Retry after an enter-ignored with no draft: resume over an empty box is nothing-to-submit and over our own text one Enter', async () => {
+    const empty = await makeApp([boxPane('')]);
+    const emptyRes = await empty.app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(emptyRes.statusCode).toBe(409);
+    expect(emptyRes.json()).toEqual({ ok: false, error: 'nothing-to-submit' });
+    expect(sendKeysCalls(empty.calls)).toEqual([]);
+    await empty.app.close();
+
+    const own = await makeApp([boxPane('hello'), boxPane('')]);
+    const ownRes = await own.app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true } });
+    expect(ownRes.statusCode).toBe(200);
+    expect(ownRes.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(own.calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
+    await own.app.close();
+  });
+
+  it("a /prompt body with resume: 'yes' (not true) behaves as today", async () => {
+    const { app, calls } = await makeApp([boxPane('hello')]);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: 'yes' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'draft-present', draft: 'hello' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it('a /prompt body with resume: true and replaceDraft: true over a foreign box is draft-present and clears nothing', async () => {
+    const { app, calls } = await makeApp([boxPane('somebody else was typing')]);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hello', resume: true, replaceDraft: true },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'draft-present', draft: 'somebody else was typing' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  // D-6366: a refused send leaves one countable line, naming the outcome and the box's shape and never the text.
+  it('a refused send writes one warn line naming its outcome, without the text', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { app } = await makeApp(['❯ half-typed thought\n']);
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'zebra-crossing-text' } });
+      expect(res.statusCode).toBe(409);
+      const lines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('ccrc-server: prompt'));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain(`prompt ${ID}: draft-present`);
+      expect(lines[0]).toContain('rows=1 no-chip');
+      expect(lines[0]).not.toContain('zebra-crossing-text');
+      expect(lines[0]).not.toContain('half-typed');
+      await app.close();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("POST prompt maps `replaceDraft: true` to `onDraft: 'replace'`: it clears, and never stashes (D-5911)", async () => {
+    const { app, calls } = await makeApp(['❯ half-typed thought\n', '❯ \n', '❯ hi\n', '❯ \n']);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hi', replaceDraft: true } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    const keys = sendKeysCalls(calls).map((c) => c.at(-1));
+    expect(keys[0]).toBe('C-u');
+    expect(keys).not.toContain('C-s');
     await app.close();
   });
 
@@ -335,13 +519,13 @@ describe('write routes', () => {
       if (args[0] === 'capture-pane') {
         const pane = panes[Math.min(capIdx, panes.length - 1)];
         capIdx++;
-        return { code: 0, stdout: pane!, stderr: '' };
+        return { ran: true, code: 0, stdout: pane!, stderr: '' };
       }
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
-    // The shape `remote/io.ts` produces when one of the 23
-    // [registry-read-census:fields] field reads a session's `readRegistry` fires
+    // The shape `remote/io.ts` produces when one of the 4
+    // [registry-read-census:fields] unconditional reads (or another listed field's) a session's `readRegistry` fires
     // in parallel fails or times out: null, indistinguishable
     // at field() from a file that is not there (same idiom as hold-gate.test.ts's
     // `holdUnreadableIO`) — here on `workdir`, one of readRegistry's three
@@ -350,7 +534,7 @@ describe('write routes', () => {
     const workdirUnreadableIO = unreadableField(ID, 'workdir');
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: workdirUnreadableIO, queue: new KeyedQueue() },
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: workdirUnreadableIO, queue: new KeyedQueue(), time: fakeTime().ports },
       new Bus(),
     );
 
@@ -366,9 +550,9 @@ describe('write routes', () => {
     seedSession(home, ID, 'claude-a');
     const workdirUnreadableIO = unreadableField(ID, 'workdir');
     const cfg = loadConfig({ CCRC_HOME: home });
-    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
     const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: workdirUnreadableIO, queue: new KeyedQueue() },
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: workdirUnreadableIO, queue: new KeyedQueue(), time: fakeTime().ports },
       new Bus(),
     );
 
@@ -381,14 +565,14 @@ describe('write routes', () => {
     const { app, calls } = await makeApp([menuPane(1), menuPane(2)]);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/dialog`,
-      payload: { dialogId: DIALOG_ID, optionIndex: 2 },
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', dialogId: DIALOG_ID, optionIndex: 2 },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Down'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Down'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -397,11 +581,238 @@ describe('write routes', () => {
     const { app, calls } = await makeApp([menuPane(1)]);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/dialog`,
-      payload: { dialogId: 'deadbeef', optionIndex: 2 },
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', dialogId: 'deadbeef', optionIndex: 2 },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'stale-dialog' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it('POST dialog onto an AskUserQuestion\'s empty free-text row returns 409 free-text-row and sends no key (D-5045)', async () => {
+    // A recorded Claude Code 2.1.300 screen: "3. Type something." under Yes / No. Enter there would reject the whole ask.
+    const pane = readFileSync(path.join(import.meta.dirname, 'fixtures', 'panes', 'cc300-ask-same-labels-q2.txt'), 'utf8');
+    const { app, calls } = await makeApp([pane]);
+    const res = await app.inject({
+      method: 'POST',
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', dialogId: parseDialog(pane)!.id, optionIndex: 3 },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'free-text-row' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  // D-5047. Recorded Claude Code 2.1.300 screens: "Enable tracing?" with the cursor on "1. Yes", the same screen with the
+  // cursor on the empty "3. Type something." row (the footer gains "ctrl+g to edit in Vim"), and the row holding the text.
+  const askPane = (name: string): string =>
+    readFileSync(path.join(import.meta.dirname, 'fixtures', 'panes', name), 'utf8');
+  const ASK_OPEN = askPane('cc300-ask-same-labels-q2.txt');
+  const ASK_TEXT = '- only in staging, sampled 10%';
+
+  it('POST dialog/text walks onto the empty free-text row, types after --, proves the echo, then presses Enter (D-5047)', async () => {
+    const { app, calls } = await makeApp([
+      ASK_OPEN, askPane('cc300-ask-freetext-walk-2-focused.txt'), askPane('cc300-ask-freetext-walk-3-typed.txt'),
+    ]);
+    const res = await app.inject({
+      method: 'POST',
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 3, text: ASK_TEXT },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Down'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Down'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', '--', ASK_TEXT],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
+    ]);
+    await app.close();
+  });
+
+  it('POST dialog/text answers 400 bad-text for a text it will not type, before any capture or key (D-5047)', async () => {
+    const { app, calls } = await makeApp([ASK_OPEN]);
+    for (const text of ['', '   ', 'a\nb', '\x1b[31mred', 'x'.repeat(1001)]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: answerDoor(ID),
+        payload: { kind: 'dialog', dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 3, text },
+      });
+      expect(res.statusCode, JSON.stringify(text.slice(0, 12))).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-text' });
+    }
+    expect(calls.filter((c) => c[1] === 'capture-pane' || c[1] === 'send-keys')).toEqual([]);
+    await app.close();
+  });
+
+  it('POST dialog/text answers 400 bad-request for a missing or mistyped field (D-5047)', async () => {
+    const { app, calls } = await makeApp([ASK_OPEN]);
+    const id = parseDialog(ASK_OPEN)!.id;
+    // W7 C7p (D-7194): through the family's door, where a dialog body with no `text` is the option row's answer (the
+    // first element here was `{ dialogId, optionIndex }` on the retired `/dialog/text`); its missing text is a `null`.
+    for (const payload of [
+      { dialogId: id, optionIndex: 3, text: null },
+      { dialogId: id, optionIndex: 3, text: 42 },
+      { dialogId: id, optionIndex: '3', text: ASK_TEXT },
+      { optionIndex: 3, text: ASK_TEXT },
+    ]) {
+      const res = await app.inject({ method: 'POST', url: answerDoor(ID), payload: { kind: 'dialog', ...payload } });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it('POST dialog/text answers a refusal as 409 with its code, and sends no key (D-5047)', async () => {
+    const { app, calls } = await makeApp([ASK_OPEN]);
+    const res = await app.inject({
+      method: 'POST',
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', dialogId: parseDialog(ASK_OPEN)!.id, optionIndex: 2, text: ASK_TEXT },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'not-free-text' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  // Decision `ask-answer-returns-next-screen` (the 2026-10-16 report). A recorded Claude Code 2.1.296 ask in unrelated made-up content:
+  // its last question answered, the pane moves to the review, and the route answers with that screen and hands it to
+  // every open stream of the session (`answered:<id>`).
+  it('POST dialog answers with the screen the pane moved to, and hands it to the session\'s streams', async () => {
+    const q2 = askPane('cc296-ask-2q-long-q2.txt');
+    const review = askPane('cc296-ask-2q-long-review.txt');
+    const { app, bus } = await makeApp([q2, q2, review]);
+    const seen: unknown[] = [];
+    bus.on(`answered:${ID}`, (next) => seen.push(next));
+    const res = await app.inject({
+      method: 'POST', url: answerDoor(ID), payload: { kind: 'dialog', dialogId: parseDialog(q2)!.id, optionIndex: 1 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, next: parseDialog(review) });
+    expect(seen).toEqual([parseDialog(review)]);
+    // A refusal hands nothing on.
+    const stale = await app.inject({
+      method: 'POST', url: answerDoor(ID), payload: { kind: 'dialog', dialogId: 'deadbeef', optionIndex: 1 },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(seen).toHaveLength(1);
+    await app.close();
+  });
+
+  // D-5048. Recorded Claude Code 2.1.300 screens: "Which features do you want?" with Logging ticked, then with Logging
+  // and Tracing ticked (the cursor on row 1 both times), then the next question, "Which tools?", once Tab committed it.
+  const MULTI_1 = askPane('cc300-ask-multiselect-digit1.txt');
+
+  it('POST dialog/multi ticks the boxes that differ, proves the ticks, then Tab (D-5048)', async () => {
+    const { app, calls } = await makeApp([
+      MULTI_1, askPane('cc300-ask-multiselect-digit1-3.txt'), askPane('cc300-ask-multiselect-submit-open.txt'),
+    ]);
+    const res = await app.inject({
+      method: 'POST',
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', multi: true, dialogId: parseDialog(MULTI_1)!.id, optionIndexes: [1, 3] },
+    });
+    expect(res.statusCode).toBe(200);
+    // Decision `ask-answer-returns-next-screen`: the 200 carries the screen the commit moved to.
+    expect(res.json()).toEqual({ ok: true, next: parseDialog(askPane('cc300-ask-multiselect-submit-open.txt')) });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '3'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Tab'],
+    ]);
+    await app.close();
+  });
+
+  it('POST dialog/multi answers 400 bad-indexes for a set it will not send, before any capture or key (D-5048)', async () => {
+    const { app, calls } = await makeApp([MULTI_1]);
+    for (const optionIndexes of [[], [1, 1], [0], [10], [1.5]]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: answerDoor(ID),
+        payload: { kind: 'dialog', multi: true, dialogId: parseDialog(MULTI_1)!.id, optionIndexes },
+      });
+      expect(res.statusCode, JSON.stringify(optionIndexes)).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-indexes' });
+    }
+    expect(calls.filter((c) => c[1] === 'capture-pane' || c[1] === 'send-keys')).toEqual([]);
+    await app.close();
+  });
+
+  it('POST dialog/multi answers 400 bad-request for a missing or mistyped field (D-5048)', async () => {
+    const { app, calls } = await makeApp([MULTI_1]);
+    const id = parseDialog(MULTI_1)!.id;
+    for (const payload of [
+      { dialogId: id },
+      { dialogId: id, optionIndexes: 1 },
+      { dialogId: id, optionIndexes: ['1'] },
+      { optionIndexes: [1] },
+      { dialogId: id, optionIndex: 1 },
+    ]) {
+      const res = await app.inject({ method: 'POST', url: answerDoor(ID), payload: { kind: 'dialog', multi: true, ...payload } });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it('POST dialog/multi answers a refusal as 409 with its code, and sends no key (D-5048)', async () => {
+    // The cursor sits on "4. [ ] Type something": a digit there is typed into the row, not a tick.
+    const onText = askPane('cc300-ask-multiselect-on-freetext.txt');
+    const { app, calls } = await makeApp([onText]);
+    const res = await app.inject({
+      method: 'POST',
+      url: answerDoor(ID),
+      payload: { kind: 'dialog', multi: true, dialogId: parseDialog(onText)!.id, optionIndexes: [1, 3] },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'cursor-not-on-option' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  // Decision `ask-dialog-tab-route`. The recorded 2.1.296 ask (neutral text): → on the last question lands on the
+  // review, which comes back as `next` and goes to every open stream of the session, as an answer's screen does.
+  it('POST dialog/tab presses Right, answers with the review, and hands it to the session\'s streams', async () => {
+    const q2 = askPane('cc296-ask-2q-long-q2.txt');
+    const review = askPane('cc296-ask-2q-long-review.txt');
+    const { app, bus, calls } = await makeApp([q2, review]);
+    const seen: unknown[] = [];
+    bus.on(`answered:${ID}`, (next) => seen.push(next));
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/dialog/tab`, payload: { dialogId: parseDialog(q2)!.id, to: 'next' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, next: parseDialog(review) });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Right']]);
+    expect(seen).toEqual([parseDialog(review)]);
+    await app.close();
+  });
+
+  it('POST dialog/tab answers 400 bad-request for a body it will not act on, before any capture or key', async () => {
+    const q2 = askPane('cc296-ask-2q-long-q2.txt');
+    const { app, calls } = await makeApp([q2]);
+    const id = parseDialog(q2)!.id;
+    for (const payload of [{ dialogId: id }, { dialogId: id, to: 'up' }, { dialogId: id, to: 0 }, { to: 'next' }]) {
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/dialog/tab`, payload });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
+    expect(calls.filter((c) => c[1] === 'capture-pane' || c[1] === 'send-keys')).toEqual([]);
+    await app.close();
+  });
+
+  it('POST dialog/tab answers a refusal as 409 with its code, and sends no key', async () => {
+    const one = askPane('cc300-ask-1q-open.txt');
+    const { app, calls } = await makeApp([one]);
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/dialog/tab`, payload: { dialogId: parseDialog(one)!.id, to: 'next' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'no-tabs' });
     expect(sendKeysCalls(calls)).toEqual([]);
     await app.close();
   });
@@ -411,7 +822,7 @@ describe('write routes', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: {} });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Escape']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Escape']]);
     await app.close();
   });
 
@@ -423,13 +834,31 @@ describe('write routes', () => {
     await app.close();
   });
 
-  it('unknown session id returns 404 on all five routes', async () => {
+  // D-5236: the raw word `shell` is an idle main loop over a background shell
+  // or monitor — Escape interrupts nothing there, so no key is pressed.
+  it('POST interrupt on a shell session returns 409 background-only, no keys', async () => {
+    const { app, calls } = await makeApp(['❯ \n'], { status: 'shell' });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: {} });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'background-only', count: null, kinds: [] });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    await app.close();
+  });
+
+  it('unknown session id returns 404 on all seven routes', async () => {
     const { app } = await makeApp(['❯ \n']);
     for (const [url, payload] of [
       ['/api/sessions/nope/prompt', { text: 'hi' }],
-      ['/api/sessions/nope/dialog', { dialogId: 'x', optionIndex: 1 }],
+      // W7 C7p: an option row, through the family's door since `/dialog` was retired.
+      [answerDoor('nope'), { kind: 'dialog', dialogId: 'x', optionIndex: 1 }],
+      // W7 C7p: the own words, through the family's door since `/dialog/text` was retired.
+      [answerDoor('nope'), { kind: 'dialog', dialogId: 'x', optionIndex: 1, text: 'hi' }],
+      // W7 C7p: a multiSelect set, through the family's door since `/dialog/multi` was retired.
+      [answerDoor('nope'), { kind: 'dialog', multi: true, dialogId: 'x', optionIndexes: [1] }],
+      ['/api/sessions/nope/dialog/tab', { dialogId: 'x', to: 'next' }],
       ['/api/sessions/nope/interrupt', {}],
-      ['/api/sessions/nope/ask', { askKey: 'k', optionIndexes: [0] }],
+      // W7 C7p: the operator's ask, through the family's door since `/ask` was retired.
+      [answerDoor('nope'), { kind: 'ask', askKey: 'k', optionIndexes: [0] }],
       ['/api/sessions/nope/submit', {}],
     ] as const) {
       const res = await app.inject({ method: 'POST', url, payload });
@@ -450,7 +879,7 @@ describe('POST /api/sessions/:id/submit', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'half-typed' } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
     await app.close();
   });
 
@@ -484,7 +913,7 @@ describe('POST /api/sessions/:id/submit', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'half-typed' } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
     await app.close();
   });
 
@@ -498,7 +927,7 @@ describe('POST /api/sessions/:id/submit', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'stuck words' } });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'enter-ignored' });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
     await app.close();
   }, 10_000);
 
@@ -551,8 +980,10 @@ describe('POST /api/sessions/:id/submit', () => {
 // `server.ts` actually wires them together: the registry lookup for the
 // session's uuid, `readHookState`'s freshness/identity gate, and the
 // askDeps/sendDeps shared queue. Same convention as the `/dialog` suite
-// above: 404 covered there, so this adds 400 / 409 / 200.
-describe('POST /api/sessions/:id/ask', () => {
+// above: 404 covered there, so this adds 400 / 409 / 200. W7 C7p (D-7194):
+// the operator's ask through the family's door (`answerDoor`, `{kind:'ask'}`),
+// the retired `/api/sessions/:id/ask`'s rows unchanged in what they answer.
+describe('POST /api/questions/session-<id>/answer {kind:\'ask\'} (was POST /api/sessions/:id/ask)', () => {
   const QUESTION = { question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] };
   const ASK_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\nEnter to select\n';
 
@@ -573,13 +1004,13 @@ describe('POST /api/sessions/:id/ask', () => {
     seedAsk(home);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/ask`,
-      payload: { askKey: askKey({ questions: [QUESTION] }), optionIndexes: [1] },
+      url: answerDoor(ID),
+      payload: { kind: 'ask', askKey: askKey({ questions: [QUESTION] }), optionIndexes: [1] },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     // Single-select: the digit alone, no Enter — see ask.ts's own comment.
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, '2']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, '2']]);
     await app.close();
   });
 
@@ -588,8 +1019,8 @@ describe('POST /api/sessions/:id/ask', () => {
     seedAsk(home);
     const res = await app.inject({
       method: 'POST',
-      url: `/api/sessions/${ID}/ask`,
-      payload: { askKey: 'deadbeefdeadbeef', optionIndexes: [0] },
+      url: answerDoor(ID),
+      payload: { kind: 'ask', askKey: 'deadbeefdeadbeef', optionIndexes: [0] },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'ask-mismatch' });
@@ -607,7 +1038,7 @@ describe('POST /api/sessions/:id/ask', () => {
       { askKey: 'k', optionIndexes: [0, '1'] },         // one entry not a number
       { askKey: 'k' },                                  // optionIndexes missing
     ]) {
-      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/ask`, payload });
+      const res = await app.inject({ method: 'POST', url: answerDoor(ID), payload: { kind: 'ask', ...payload } });
       expect(res.statusCode).toBe(400);
       expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
     }
@@ -664,10 +1095,10 @@ describe('prompt route attachment handling', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', clip],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'M-Enter'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', 'what is this'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', '--', clip],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'M-Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', '--', 'what is this'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -686,8 +1117,8 @@ describe('prompt route attachment handling', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', clip],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', '--', clip],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -709,6 +1140,13 @@ describe('upload route id handling', () => {
     form.append('file', new Blob([new Uint8Array(8)], { type: 'image/png' }), name);
     return form;
   };
+  /** A document part, with the type field set to whatever an OS felt like —
+   *  `''` included, which is what a phone hands over for a .md. */
+  const doc = (name: string, type = '', bytes = 'hello') => {
+    const form = new FormData();
+    form.append('file', new Blob([bytes], { type }), name);
+    return form;
+  };
 
   it('stages a picked image and returns where it landed', async () => {
     const { app } = await makeApp([null]);
@@ -717,8 +1155,50 @@ describe('upload route id handling', () => {
     });
     expect(res.statusCode).toBe(200);
     const clip = res.json().clip as { path: string; name: string; bytes: number };
-    expect(clip.name).toMatch(/^clip-\d{8}-\d{6}-[0-9a-f]{8}\.png$/);
+    expect(clip.name).toMatch(/^clip-\d{8}-\d{6}-[0-9a-f]{8}-shot\.png$/);
     expect(clip.path).toContain(`/.cc-clips/${ID}/`);
+  });
+
+  // The whole point of the document half: the path is typed into the session
+  // and Claude Code opens the file itself, so anything `Read` can open belongs
+  // here. The type field is deliberately wrong or blank on these — the
+  // EXTENSION decides, because a phone's idea of a .md's MIME type is not
+  // something the store can be built on.
+  it('stages a document whatever the client called its type', async () => {
+    const { app } = await makeApp([null]);
+    for (const [name, type] of [
+      ['design-notes.md', ''],
+      ['notes.txt', 'application/octet-stream'],
+      ['report.pdf', 'application/pdf'],
+      ['letter.rtf', 'text/rtf'],
+      ['rows.csv', 'text/csv'],
+    ] as const) {
+      const res = await app.inject({
+        method: 'POST', url: `/api/sessions/${ID}/upload`, payload: doc(name, type),
+      });
+      expect(res.statusCode, name).toBe(200);
+      const clip = res.json().clip as { name: string };
+      // The uploader's own name rides along: four documents in one prompt are
+      // otherwise four paths differing only by a random suffix.
+      expect(clip.name, name).toMatch(
+        new RegExp(`^clip-\\d{8}-\\d{6}-[0-9a-f]{8}-${name.replace('.', '\\.')}$`),
+      );
+    }
+  });
+
+  // Absent by decision, not by oversight: a .docx is a ZIP container `Read`
+  // cannot open, so staging one would put a file in the prompt that reaches
+  // Claude as noise. Widening the list is only ever safe for a format the
+  // reader on the far end already understands.
+  it('refuses what the reader on the far end could not open', async () => {
+    const { app } = await makeApp([null]);
+    for (const name of ['deck.pptx', 'book.xlsx', 'memo.docx', 'bundle.zip', 'run.sh', 'page.html']) {
+      const res = await app.inject({
+        method: 'POST', url: `/api/sessions/${ID}/upload`, payload: doc(name),
+      });
+      expect(res.statusCode, name).toBe(415);
+      expect(res.json().error, name).toBe('unsupported-type');
+    }
   });
 
   // A bare '..' is deliberately absent: the router normalises
@@ -757,6 +1237,28 @@ describe('clip route', () => {
     form.append('file', new Blob([CLIP_BYTES], { type: 'image/png' }), name);
     return form;
   };
+
+  // A document is staged for a reader, so what comes back off the wire must be
+  // what went up — and it must come back as something a browser will not decide
+  // for itself is HTML. `nosniff` is the second half of that: `CLIP_MIME` names
+  // no script type, but without the header a browser may promote a text/plain
+  // clip to markup and run it in the app's own origin.
+  it('serves a document with its own type, nosniff, and its bytes untouched', async () => {
+    const { app } = await makeApp([null]);
+    const body = '# heading\n\n<script>alert(1)</script>\n';
+    const form = new FormData();
+    form.append('file', new Blob([body], { type: '' }), 'notes.md');
+    const up = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/upload`, payload: form });
+    expect(up.statusCode).toBe(200);
+    const { name } = up.json().clip as { name: string };
+
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/clip/${name}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/markdown');
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.rawPayload.toString('utf8')).toBe(body);
+    await app.close();
+  });
 
   it('serves a staged clip with an immutable cache header, bytes intact on the wire', async () => {
     const { app } = await makeApp([null]);
@@ -828,15 +1330,20 @@ describe('clip route', () => {
   });
 });
 
+// `/api/notify` fails shut since the box-token lifecycle (spec 4.3), so ingestion is
+// exercised with the token a fleet box's notify.sh presents.
+const NOTIFY_TOKEN = 'f'.repeat(64);
+
 describe('notify ingestion', () => {
   it('POST /api/notify with a swap message emits notice and the session event', async () => {
-    const { app, bus } = await makeApp(['❯ \n']);
+    const { app, bus } = await makeApp(['❯ \n'], { mailToken: NOTIFY_TOKEN });
     const notices: string[] = [];
     const sessionMsgs: SessionStreamMsg[] = [];
     bus.on('notice', (n) => notices.push(n.message));
     bus.on(`session:${ID}`, (m) => sessionMsgs.push(m));
     const message = `cc swap: ${ID} moved claude-a -> claude (limits) — reopen it on claude.ai under the claude account`;
-    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message } });
+    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message },
+      headers: { 'x-ccrc-mail-token': NOTIFY_TOKEN } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(notices).toEqual([message]);
@@ -845,13 +1352,14 @@ describe('notify ingestion', () => {
   });
 
   it('POST /api/notify with a non-swap message emits only notice', async () => {
-    const { app, bus } = await makeApp(['❯ \n']);
+    const { app, bus } = await makeApp(['❯ \n'], { mailToken: NOTIFY_TOKEN });
     const notices: string[] = [];
     const sessionMsgs: SessionStreamMsg[] = [];
     bus.on('notice', (n) => notices.push(n.message));
     bus.on(`session:${ID}`, (m) => sessionMsgs.push(m));
     const message = 'deploy finished on the server box';
-    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message } });
+    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message },
+      headers: { 'x-ccrc-mail-token': NOTIFY_TOKEN } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(notices).toEqual([message]);
@@ -878,22 +1386,53 @@ describe('notify ingestion', () => {
 // this route at all — no test here even named `/stop` until now). Written
 // FIRST and confirmed red against the pre-gate code, which would have
 // answered 404 unknown-session (a LIE: the row is right there, just
-// unmeasured) rather than 503.
+// unmeasured) rather than 502.
 describe('POST /api/sessions/:id/stop', () => {
-  it('refuses 503 registry-unmeasurable, NOT 404 unknown-session, when the row is listed but its ' +
+  // A well-formed legacy row, shared by the three `/stop` cases below: `seedSession` writes `project: id`, which the
+  // stop pair clause refuses 502 on its own, so it would neither isolate the identity arm nor stop normally.
+  const seedWellFormed = (home: string, id: string) => {
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields = { wrapper: 'demo-a', project: 'demo', workdir: '/w/demo', uuid: '1'.repeat(36), started: '1' };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
+  };
+
+  it('refuses 502 registry-unmeasurable, NOT 404 unknown-session, when the row is listed but its ' +
      'identity could not be measured', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude-a');
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    seedWellFormed(home, 'demo-a-demo');
+    const calls: string[][] = [];
+    const run: Runner = async (_c, args) => { calls.push(args); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField(ID, 'wrapper'), queue: new KeyedQueue() },
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField('demo-a-demo', 'wrapper'),
+        queue: new KeyedQueue(), time: fakeTime().ports },
       new Bus(),
     );
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
-    expect(res.statusCode).toBe(503);
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-a-demo/stop' });
+    expect(res.statusCode).toBe(502);
     expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    expect(calls.filter((c) => c[0] === 'stop')).toEqual([]);
+    await app.close();
+  });
+
+  it('the archive door refuses 502 registry-unmeasurable too, and runs no ccd verb (workspace lifecycle §5.2)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedWellFormed(home, 'demo-a-demo');
+    const calls: string[][] = [];
+    const run: Runner = async (_c, args) => { calls.push(args); return { ran: true, code: 0, stdout: '', stderr: '' }; };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer(
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField('demo-a-demo', 'wrapper'),
+        queue: new KeyedQueue(), time: fakeTime().ports },
+      new Bus(),
+    );
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-a-demo/archive' });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    expect(calls.filter((c) => c[0] === 'ws-archive' || c[0] === 'stop')).toEqual([]);
     await app.close();
   });
 
@@ -908,10 +1447,10 @@ describe('POST /api/sessions/:id/stop', () => {
     // the directory present but no `<ID>.uuid` file in it, the listing
     // genuinely names this id absent.
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports }, new Bus(),
     );
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
     expect(res.statusCode).toBe(404);
@@ -920,27 +1459,27 @@ describe('POST /api/sessions/:id/stop', () => {
   });
 
   // Blocking review finding 3: the whole-fleet cousin of the field-degraded
-  // case above must get the SAME 503, never the 404 this route exists to
+  // case above must get the SAME 502, never the 404 this route exists to
   // avoid for exactly this reason — an unlistable registry proves nothing
   // about whether THIS id exists, the identical fact `readSessionRecord`'s
   // own `reason: 'unlistable'` already distinguishes from `reason: 'absent'`.
   // Written FIRST and confirmed red against the pre-fix code, which
   // collapsed both reasons into one bare `!read.found` check and answered
   // 404 unknown-session for a registry it could not even list.
-  it('refuses 503 registry-unmeasurable, NOT 404 unknown-session, when the whole registry directory ' +
+  it('refuses 502 registry-unmeasurable, NOT 404 unknown-session, when the whole registry directory ' +
      'cannot be listed at all', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, ID, 'claude-a');
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const run: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const unlistable: FleetIO = { ...localIO, readdir: async () => null };
     const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unlistable, queue: new KeyedQueue() },
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unlistable, queue: new KeyedQueue(), time: fakeTime().ports },
       new Bus(),
     );
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
-    expect(res.statusCode).toBe(503);
+    expect(res.statusCode).toBe(502);
     expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
     await app.close();
   });
@@ -948,14 +1487,18 @@ describe('POST /api/sessions/:id/stop', () => {
   it('stops normally (200) when the row is fully measured', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude-a');
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const id = 'demo-a-demo';
+    seedWellFormed(home, id);
+    const calls: string[][] = [];
+    const run: Runner = async (_c, args) => { calls.push([...args]); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
-      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: fakeTime().ports }, new Bus(),
     );
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${id}/stop` });
     expect(res.statusCode).toBe(200);
+    // No capability evidence, so the bare pair form: ccd recomputes `demo-a-demo`, the row that was tapped.
+    expect(calls).toEqual([['stop', 'demo-a', 'demo']]);
     await app.close();
   });
 });
@@ -988,7 +1531,7 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     seedRoster(home);
     seedSession(home, ID, 'claude-a');
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const deps = { ...testDeps(home, run), fleetState: { connected: true, downSince: null, ccdVerbs: ['start'], rosterFp: null, build: null } };
     const app = await buildServer(deps);
     const resHold = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason: 'w' } });
@@ -1008,18 +1551,18 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => {
       calls.push([cmd, ...args]);
-      if (args[0] === 'ws-hold') return { code: 0, stdout: `held ${ID}`, stderr: '' };
-      if (args[0] === 'ws-release') return { code: 0, stdout: `released ${ID}`, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'ws-hold') return { ran: true, code: 0, stdout: `held ${ID}`, stderr: '' };
+      if (args[0] === 'ws-release') return { ran: true, code: 0, stdout: `released ${ID}`, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const app = await buildServer(testDeps(home, run));
 
     const resHold = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`,
-      payload: { reason: 'program:agent-evals wave:1/4' } });
+      payload: { reason: 'program:prog-j wave:1/4' } });
     expect(resHold.statusCode).toBe(200);
     expect(resHold.json()).toEqual({ ok: true });
     expect(calls.find((c) => c[1] === 'ws-hold')?.slice(1))
-      .toEqual(['ws-hold', '--session', ID, '--reason', 'program:agent-evals wave:1/4']);
+      .toEqual(['ws-hold', '--session', ID, '--reason', 'program:prog-j wave:1/4']);
 
     const resRelease = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/release` });
     expect(resRelease.statusCode).toBe(200);
@@ -1039,7 +1582,7 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     seedRoster(home);
     seedSession(home, ID, 'claude-a');
     const calls: string[][] = [];
-    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { ran: true, code: 0, stdout: '', stderr: '' }; };
     const app = await buildServer(testDeps(home, run));
     const reason = 'x'.repeat(HOLD_ROUTE_REASON_MAX_BYTES);
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason } });
@@ -1150,16 +1693,16 @@ describe('layer 1 — the guard runner', () => {
     // Free on every existing route test: testDeps wraps its runner, so a route
     // that starts emitting a non-whitelisted argv fails HERE rather than on
     // the fleet.
-    const inner: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const inner: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
     await expect(guardRunner(inner)('/home/u/.local/bin/ccd', ['ws-rm', 'x']))
       .rejects.toThrow(/argv not in the agent EXEC_WHITELIST: ccd ws-rm x/);
   });
 
   it('lets a whitelisted argv through untouched — the guard is not a blanket refusal', async () => {
     // Without this, "rejects everything" would satisfy the test above.
-    const inner: Runner = async () => ({ code: 0, stdout: 'ok', stderr: '' });
+    const inner: Runner = async () => ({ ran: true, code: 0, stdout: 'ok', stderr: '' });
     await expect(guardRunner(inner)('/home/u/.local/bin/ccd', ['ensure', 'demo-quiet-basin']))
-      .resolves.toEqual({ code: 0, stdout: 'ok', stderr: '' });
+      .resolves.toEqual({ ran: true, code: 0, stdout: 'ok', stderr: '' });
   });
 
   // MUTATION-SWEEP FINDING (Task 11): replacing `ccdRunner(guarded, cfg)` with
@@ -1173,7 +1716,7 @@ describe('layer 1 — the guard runner', () => {
   // there is no raw runner on Deps any more) to `deps.runCcd`; it observes the
   // same composition, one link further down the same chain.
   it('testDeps wires the guard onto deps.runCcd, not just reachable via a direct guardRunner call', async () => {
-    const deps = testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' }));
+    const deps = testDeps(undefined, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
     // The cast is deliberate and is the point: since task 13S no route CAN
     // build this argv — that half is the brand, pinned in
     // ccdargv-brand.test.ts. This half is that a whitelist check still stands
@@ -1193,9 +1736,9 @@ describe('layer 1 — the guard runner', () => {
   // guard is actually load-bearing on this path rather than one refactor away
   // from being deleted as dead code.
   it('testDeps wires the guard onto deps.tmux as well, not just onto deps.runCcd', async () => {
-    const deps = testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' }));
+    const deps = testDeps(undefined, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
     const tmuxRunner = (deps.tmux as unknown as { run: Runner }).run;
-    await expect(tmuxRunner('tmux', ['kill-session', '-t', 'cc-x']))
+    await expect(tmuxRunner('tmux', ['kill-session', '-t', '=cc-x:']))
       .rejects.toThrow(/argv not in the agent EXEC_WHITELIST/);
   });
 });
@@ -1231,11 +1774,20 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, id, 'claude-a');
+    // Workspace lifecycle wave 2: the one Archive archives a WORKSPACE whose worktree it measured present; a row with
+    // no `workspace` is a main checkout, which it stops instead (`archive-door.test.ts`).
+    const worktree = path.join(home, 'worktrees', id);
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.workspace`), id);
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.workdir`), worktree);
     return home;
   };
+  // A real pane pid for `list-panes`, as `makeApp`'s runner gives: since D-5234 a null pid on an alive pane is an
+  // UNMEASURED row (`status-unknown`, D-5274), and these tests are about the coordination checks behind it.
   const recording = (calls: string[][]): Runner => async (_cmd, args) => {
     calls.push(args);
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '4242\n', stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
 
   // D-2545 REGRESSION PIN, and the reason it is called out by name: the
@@ -1274,8 +1826,9 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
     const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-claimed/archive' });
     expect(res.statusCode).toBe(409);
     // The SHAPE does not change with the condition — `runs` is present and
-    // empty, because no row was read. Fail-shut at a destructive act.
-    expect(res.json()).toEqual({ ok: false, error: 'run-open', runs: [] });
+    // empty, because no row was read. Fail-shut at a destructive act. And the
+    // store's own words ride it (workspace lifecycle wave 3b).
+    expect(res.json()).toEqual({ ok: false, error: 'run-open', runs: [], detail: expect.stringMatching(/\S/) });
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     await app.close();
   });

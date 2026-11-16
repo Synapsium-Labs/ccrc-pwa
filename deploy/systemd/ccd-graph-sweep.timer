@@ -1,8 +1,11 @@
 [Unit]
-Description=Run the graph sweep every 15 minutes (O3)
+Description=Refresh each repository's code graph from its main line (graph revision 2; period from CCRC_GRAPH_REFRESH_SECS)
 [Timer]
 OnBootSec=5min
-OnUnitActiveSec=15min
+# Counted from the END of the previous pass (D-7876): under OnUnitActiveSec= a pass that ran longer than the period
+# was followed by the next in the same second, 27 times in one day, so the box never had an idle gap. Rendered from
+# CCRC_GRAPH_REFRESH_SECS by ccrc install/update and deploy.sh agent; this is the default.
+OnUnitInactiveSec=15min
 AccuracySec=1min
 [Install]
 WantedBy=timers.target

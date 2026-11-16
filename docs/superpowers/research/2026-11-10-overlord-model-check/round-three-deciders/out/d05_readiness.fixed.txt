@@ -1,0 +1,19 @@
+ok  total: 92160 inputs, each gets one word
+ok  generation degraded:card-unread -> `degraded`
+ok  generation degraded:probes-failed -> `degraded`
+ok  monotonic by what Table 6.7c does to holds: no single input made worse keeps more holds
+ok  a third restart in the hour with the generation in `carded` -> `dead`
+note no account can serve it while a renewal drains -> `renewing` (kept if the deadline is later than the bound); Table 3.4b says `stranded` releases all. The word reaches `stranded` when the renewal fails back to `active`.
+ok  retention: the event "readiness" has a row
+ok  retention: the event "the ladder" has a row
+ok  retention: the event "arming" has a row
+ok  retention: the event "a grant revoked" has a row
+ok  retention: the event "suspended or expired" has a row
+ok  retention: the event "a class raised" has a row
+ok  retention: the event "the breaker" has a row
+ok  retention: the event "engagement" has a row
+ok  retention: the event "a load line" has a row
+ok  retention: the event "a bypass" has a row
+ok  retention: "the operator is at that programme" has a row
+ok  breaker: every one of the 28 hold outcomes moves a half-open breaker
+== overlordReadiness, retention, breaker (with the proposed edits): domain 92160 readiness inputs; 11 retention events; 28 trial outcomes; counterexamples 0; checks passed 17

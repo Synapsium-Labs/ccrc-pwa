@@ -1,0 +1,67 @@
+{
+  "name": "mutation-project-milestone-update",
+  "documentSource": "code",
+  "document": "mutation ProjectMilestoneUpdate($id: String!, $input: ProjectMilestoneUpdateInput!) { projectMilestoneUpdate(id: $id, input: $input) { success projectMilestone { id } } }",
+  "variables": {
+    "id": "00000000-0008-4000-8000-000000000021",
+    "input": {
+      "description": "Capture, updated."
+    }
+  },
+  "requestBody": "{\"query\":\"mutation ProjectMilestoneUpdate($id: String!, $input: ProjectMilestoneUpdateInput!) { projectMilestoneUpdate(id: $id, input: $input) { success projectMilestone { id } } }\",\"variables\":{\"id\":\"00000000-0008-4000-8000-000000000021\",\"input\":{\"description\":\"Capture, updated.\"}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "2"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999998"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794590002388"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2471"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794590002388"
+    ]
+  ],
+  "body": {
+    "data": {
+      "projectMilestoneUpdate": {
+        "success": true,
+        "projectMilestone": {
+          "id": "00000000-0008-4000-8000-000000000021"
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"projectMilestoneUpdate\":{\"success\":true,\"projectMilestone\":{\"id\":\"00000000-0008-4000-8000-000000000021\"}}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407)."
+}

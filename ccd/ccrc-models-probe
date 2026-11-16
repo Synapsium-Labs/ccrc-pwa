@@ -10,12 +10,12 @@
 # catalogue nothing here can parse.
 #
 # ONE EXECUTABLE, ONE ARM PER KIND, because the three fetches have nothing in
-# common but their answer: Codex needs the lane's OAuth through LiteLLM's own
-# `Authenticator` (the token refresh lives there, and `ccgpt-usage` already
-# reaches it exactly this way — read that file, it is the model this arm
-# copies); OpenRouter's list needs no credential at all; a `compatible`
-# endpoint needs the lane's token and may not answer at all. What they share is
-# the NORMALISER and the WRITE, and those are single here.
+# common but their answer: Codex needs the lane's OAuth credential, READ
+# through ccrc's auth library (`ccd/ccgpt-auth.py`; `ccgpt-usage` reads it
+# exactly this way — read that file, it is the model this arm copies);
+# OpenRouter's list needs no credential at all; a `compatible` endpoint needs
+# the lane's token and may not answer at all. What they share is the
+# NORMALISER and the WRITE, and those are single here.
 #
 # ── THE WRITE IS ATOMIC AND THE FAILURE IS NOT DESTRUCTIVE ────────────────
 # The catalogue is read by another process (the server's fleet poll, ccd, the
@@ -39,6 +39,22 @@
 # path is driven. It is read in ONE place, and `server/test/models-probe.test.ts`
 # asserts that: a seam in two branches would be a second implementation of
 # "fetch" and the network arm would stop being the thing under test.
+#
+# ── `--check`: THE SAME RUN, AND AN EXIT STATUS THAT SAYS HOW FAR IT GOT ──
+# Every other caller reads any failure as exit 1, and the suite pins that. `ccrc
+# account set --method openai-login` asks this arm one more question, because it
+# must tell an operator why a sign-in they just approved was not installed
+# (accounts plan Task A24, D-8016): did a request go, and what came back. Only the
+# Codex arm answers it. `--check` changes the exit status and nothing else:
+#   0  the provider answered with a catalogue;
+#   3  NOTHING WAS SENT, and the credential is why: absent, expired, barred,
+#      incomplete or unreadable;
+#   4  a request was made and no usable answer came back: refused, unreachable or
+#      timed out. Nothing here separates those, so no caller may claim which;
+#   5  the provider answered, with a body the normaliser refused;
+#   1  anything else: the check did not finish, which says nothing of the
+#      credential (no runtime or library, a write here that failed, a crash);
+#   2  usage, as for every caller.
 set -uo pipefail
 
 PROG="ccrc-models-probe"
@@ -52,7 +68,7 @@ ID_RE='^[a-z][a-z0-9-]{0,31}$'
 
 die() { echo "$PROG: $*" >&2; exit 1; }
 usage() {
-  echo "usage: $PROG <accountId> <probe> [--base-url <url>] [--endpoints <modelId>] [--out <path>]" >&2
+  echo "usage: $PROG <accountId> <probe> [--base-url <url>] [--endpoints <modelId>] [--out <path>] [--check]" >&2
   echo "       <probe> is codex, openrouter or compatible — the registry file's own probe kind" >&2
 }
 usage_die() { echo "$PROG: $*" >&2; usage; exit 2; }
@@ -86,7 +102,7 @@ _probe_mv_notdir() {
   python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$1" "$2"
 }
 
-ACCOUNT=""; PROBE_KIND=""; BASE_URL=""; OUT=""; ENDPOINTS=""
+ACCOUNT=""; PROBE_KIND=""; BASE_URL=""; OUT=""; ENDPOINTS=""; CHECK=0
 [ $# -ge 1 ] || usage_die "an account id is required"
 ACCOUNT="$1"; shift
 [ $# -ge 1 ] || usage_die "a probe kind is required"
@@ -96,6 +112,7 @@ while [ $# -gt 0 ]; do
     --base-url) [ $# -ge 2 ] || usage_die "--base-url needs a value"; BASE_URL="$2"; shift 2 ;;
     --out)      [ $# -ge 2 ] || usage_die "--out needs a value";      OUT="$2";      shift 2 ;;
     --endpoints) [ $# -ge 2 ] || usage_die "--endpoints needs a model id"; ENDPOINTS="$2"; shift 2 ;;
+    --check)    CHECK=1; shift ;;
     -h|--help)  usage; exit 0 ;;
     *) usage_die "unknown argument: $1" ;;
   esac
@@ -110,6 +127,9 @@ case "$PROBE_KIND" in
   anthropic) usage_die "anthropic lanes have no catalogue to probe — their four classes are Claude Code's own defaults and they carry no registry file (spec §5). Nothing was written." ;;
   *) usage_die "unknown probe kind \"$PROBE_KIND\": it must be one of codex, openrouter, compatible" ;;
 esac
+
+[ "$CHECK" -eq 0 ] || [ "$PROBE_KIND" = codex ] \
+  || usage_die "--check is the codex arm's: only it tells a credential it never sent from a request that failed"
 
 # `compatible` ships NO default endpoint — only the operator can know one, which
 # is why the registry file carries `baseUrl` for it (round-2 ruling 10) — so an
@@ -150,40 +170,166 @@ trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 # Each arm writes the provider's RAW body to $RAW and returns non-zero when it
 # could not. Nothing here interprets the body; that is the normaliser's job, in
 # one place, for all three.
-_fetch_codex() {
-  # `ccgpt-usage`'s own preamble, verbatim in intent: the venv python beside the
-  # litellm binary, falling back to the system one, and the token directory the
-  # wrapper exports. `Authenticator().get_access_token()` REFRESHES an expired
-  # token, which is the whole reason this arm goes through LiteLLM rather than
-  # reading auth.json itself.
-  local venv_py token_dir
-  venv_py="$(dirname "$(readlink -f "$(command -v litellm)" 2>/dev/null)")/python"
-  [ -x "$venv_py" ] || venv_py="python3"
-  token_dir="${CHATGPT_TOKEN_DIR:-$HOME/.handoff/chatgpt-auth}"
-  [ -f "$token_dir/auth.json" ] || { echo "$PROG: not logged in ($token_dir)" >&2; return 1; }
-  CHATGPT_TOKEN_DIR="$token_dir" CODEX_CLIENT_VERSION="$CODEX_CLIENT_VERSION" \
-    "$venv_py" - > "$RAW" <<'PY'
-import json, os, sys, urllib.request
-from litellm.llms.chatgpt.authenticator import Authenticator
+# THE CODEX FETCH (spec §9.1; Plan 3a Task 1, D-3706), the ONLY codex arm
+# (Plan 4). `_fetch` takes it for every caller. It was one of two: an
+# exec.kind "codex" row's was marked by a lane-kind marker, and every other
+# caller's carried a default token directory and read an `auth.json` itself.
+# That arm served another repository's lane and left with it, and the marker
+# with it. A row that is not codex-kind is handed no interpreter by `ccrc`'s
+# `_models_run_probe`, and no directory unless its secrets file sets
+# CHATGPT_TOKEN_DIR, so it refuses here: `no-token-dir`, or `runtime-absent`
+# when its secrets file set one.
+# This arm is handed three values and reads nothing else:
+#   CHATGPT_TOKEN_DIR     the row's own exec.authDir, under $HOME;
+#   CCRC_CODEX_PYTHON     the interpreter the lane library resolved: the
+#                         isolated runtime's (`ccgpt-runtime python`) for a
+#                         `litellm` lane, empty when none resolves; the system
+#                         python3 for a `direct` lane (codex-bridge Stage 4),
+#                         which is refused by the lane library itself when it
+#                         has none, before this arm runs;
+#   CCRC_MODELS_AUTH_LIB  the placed auth library (`ccrc`'s `_codex_auth_lib`),
+#                         a probe-specific name, so the runtime interpreter's
+#                         LiteLLM patch, which arms on CCRC_CODEX_AUTH_LIB, is
+#                         never armed by it (codex-bridge Stage 1, Task 7).
+# It has NO default for any of them. A codex row carries an authDir and no
+# secrets file, so a default here would have probed every codex lane with
+# one other lane's OAuth, through a runtime nobody built for it.
+#
+# Each missing input is its own one-line refusal, checked before any
+# interpreter runs. The credential itself is the library's to read (spec
+# 2026-10-15 §2.6: "exactly one ccrc library reads and writes them"): this arm
+# never tests for the file or opens it, and the library decides absence. The
+# program only READS: in litellm mode the lane's tier is the only refresher,
+# so an expired token is `token-expired` here, never refreshed, and a dead one
+# is never answered with a sign-in. Every refusal names its remedy FIRST,
+# because the stale path below keeps only the first 300 characters of this
+# arm's stderr.
+_fetch_codex_lane() {
+  local token_dir="${CHATGPT_TOKEN_DIR:-}" py="${CCRC_CODEX_PYTHON:-}" lib="${CCRC_MODELS_AUTH_LIB:-}"
+  if [ -z "$token_dir" ]; then
+    echo "$PROG: no-token-dir: run it through 'ccrc models refresh $ACCOUNT' — this codex-lane fetch was handed no CHATGPT_TOKEN_DIR, and it has no default: a codex lane's OAuth directory is its roster row's exec.authDir (spec §9.1)" >&2
+    return 1
+  fi
+  if [ -z "$py" ] || [ ! -x "$py" ]; then
+    echo "$PROG: runtime-absent: run ccrc install (it builds the Codex runtime), then ccrc models refresh $ACCOUNT — this fetch was handed no runnable runtime interpreter (${py:-none}), so nothing ran and nothing was sent" >&2
+    return 1
+  fi
+  if [ -z "$lib" ] || [ ! -f "$lib" ] || [ ! -r "$lib" ]; then
+    echo "$PROG: auth-library-absent: run ccrc update — this fetch was handed no readable auth library (${lib:-none}), so the credential of \"$ACCOUNT\" cannot be read; nothing was sent" >&2
+    return 1
+  fi
+  # How the interpreter runs:
+  #   - under -I: no PYTHONPATH, PYTHONHOME or user site, and no script
+  #     directory on sys.path, which is why the program loads the library by
+  #     the path it is handed;
+  #   - with the cost map local (D-3484), for a runtime whose interpreter
+  #     still reaches litellm at startup;
+  #   - with every CHATGPT_*/LITELLM_*/OPENAI_* variable the caller carried
+  #     removed first. This is `ccrc codex login`'s own scrub, for its own
+  #     reason: no ambient value may move the credential this lane reads.
+  (
+    for v in ${!CHATGPT_@} ${!LITELLM_@} ${!OPENAI_@}; do unset "$v"; done
+    unset CCRC_CODEX_PYTHON
+    export CHATGPT_TOKEN_DIR="$token_dir" LITELLM_LOCAL_MODEL_COST_MAP=True CCRC_MODELS_AUTH_LIB="$lib" \
+      CODEX_CLIENT_VERSION="$CODEX_CLIENT_VERSION" CCRC_PROBE_ACCOUNT="$ACCOUNT" CCRC_PROBE_PROG="$PROG"
+    exec "$py" -I -
+  ) > "$RAW" <<'PY'
+import os, sys, traceback, urllib.request
 
-token_dir = os.environ["CHATGPT_TOKEN_DIR"]
-account_id = json.load(open(os.path.join(token_dir, "auth.json"))).get("account_id", "")
-token = Authenticator().get_access_token()
-# The header block is `ccgpt-usage`'s, verbatim (read-only reference; never
-# run it): originator/user-agent/session_id are what the backend expects from
-# a real Codex CLI caller, alongside Authorization and ChatGPT-Account-Id.
+PROG = os.environ["CCRC_PROBE_PROG"]
+ACCOUNT = os.environ["CCRC_PROBE_ACCOUNT"]
+TOKEN_DIR = os.environ["CHATGPT_TOKEN_DIR"]
+AUTH_LIB = os.environ["CCRC_MODELS_AUTH_LIB"]
+# `--check`'s statuses this program answers (the file header's table); 1 is every other way it stops.
+CREDENTIAL_NOT_SENT = 3
+NO_ANSWER = 4
+
+
+def refuse(code, sentence, status=1):
+    sys.stderr.write(f"{PROG}: {code}: {sentence}\n")
+    raise SystemExit(status)
+
+
+def load_auth_library():
+    """ccrc's auth library, loaded from the path the bash half checked, or the auth-library-absent refusal (naming
+    the exception's class, never its arguments). Bytecode is not written beside it."""
+    import importlib.util
+    was = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec = importlib.util.spec_from_file_location("ccgpt_auth", AUTH_LIB)
+        if spec is None or spec.loader is None:
+            raise ImportError("no loader")
+        lib = importlib.util.module_from_spec(spec)
+        sys.modules["ccgpt_auth"] = lib
+        spec.loader.exec_module(lib)
+        for name in ("read", "read_status", "expired", "bars"):
+            getattr(lib, name)
+        return lib
+    except (Exception, SystemExit) as e:
+        sys.modules.pop("ccgpt_auth", None)
+        refuse("auth-library-absent", f"run ccrc update — ccrc's auth library {AUTH_LIB} could not be loaded "
+               f"({type(e).__name__}), so the credential of \"{ACCOUNT}\" cannot be read; nothing was sent")
+    finally:
+        sys.dont_write_bytecode = was
+
+
+# The credential is READ, never refreshed and never signed in (codex-bridge
+# Stage 1, Task 7): `read` never writes, locks or touches the network; the
+# status the lane's tier recorded is current only for the credential it was
+# measured on, so a fresh sign-in clears it; a needs-signin bars before the
+# expiry, and a config-error bars only under the library's current OAuth
+# configuration: the library refresher's own rule, asked through `bars`
+# (D-6692). ChatGPT-Account-Id is the
+# reading's `account_id`, the value LiteLLM's tier sends for the same header,
+# so this program never opens the credential itself.
+lib = load_auth_library()
+r = lib.read(TOKEN_DIR)
+login = f"run ccrc codex login {ACCOUNT}"
+if r.credential == "absent":
+    refuse("not-logged-in", f"{login} — the auth library reads no credential for \"{ACCOUNT}\" ({r.detail})",
+           CREDENTIAL_NOT_SENT)
+if r.credential in ("unreadable", "foreign-family"):
+    refuse("credential-unusable", f"run ccrc doctor — {r.detail}", CREDENTIAL_NOT_SENT)
+if r.credential != "present":
+    refuse("login-required", f"{login} — \"{ACCOUNT}\" holds no usable token ({r.detail}), and this unattended "
+           "probe never starts a sign-in", CREDENTIAL_NOT_SENT)
+status = lib.read_status(TOKEN_DIR)
+# Whether the status bars is the library's one rule (`bars`, D-6692); this
+# probe only picks the refusal's words.
+if lib.bars(status) and status.get("state") == "needs-signin":
+    refuse("login-required", f"{login} — the tier of \"{ACCOUNT}\" recorded that its credential needs a sign-in, "
+           "and this unattended probe never starts one", CREDENTIAL_NOT_SENT)
+if lib.bars(status):
+    refuse("credential-unusable", f"run ccrc update, then ccrc codex login {ACCOUNT} — the token endpoint refused "
+           "ccrc's OAuth client when the lane's tier last refreshed, and a sign-in alone does not cure it",
+           CREDENTIAL_NOT_SENT)
+if lib.expired(r):
+    refuse("token-expired", "none needed — the lane's tier refreshes it on its next request; if its refresh token "
+           "is dead, that request records needs-signin; nothing was sent", CREDENTIAL_NOT_SENT)
+
+# The Authorization/originator/user-agent/session_id headers match
+# ccd/ccgpt-usage.py's own request (task-10-fix-rulings.md C-2): what the
+# backend expects from a real Codex CLI caller. Both readers send
+# ChatGPT-Account-Id when the reading has one.
 headers = {
-    "Authorization": f"Bearer {token}",
+    "Authorization": f"Bearer {r.access_token}",
     "originator": "codex_cli_rs",
     "user-agent": "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown",
     "session_id": "00000000-0000-0000-0000-000000000000",
 }
-if account_id:
-    headers["ChatGPT-Account-Id"] = account_id
+if r.account_id:
+    headers["ChatGPT-Account-Id"] = r.account_id
 url = ("https://chatgpt.com/backend-api/codex/models?client_version="
        + os.environ["CODEX_CLIENT_VERSION"])
 req = urllib.request.Request(url, headers=headers)
-sys.stdout.write(urllib.request.urlopen(req, timeout=30).read().decode("utf-8"))
+try:
+    body = urllib.request.urlopen(req, timeout=30).read()
+except Exception:
+    traceback.print_exc()
+    raise SystemExit(NO_ANSWER)
+# Undecodable bytes are the normaliser's to refuse, as an answer: past this line the provider has answered.
+sys.stdout.write(body.decode("utf-8", "replace"))
 PY
 }
 
@@ -222,9 +368,12 @@ _models_probe_base_is_loopback() {   # <baseUrl> -> 0 iff its host is loopback
 
 _fetch() {
   # THE ONE READ OF THE SEAM. Everything below it is the real network.
-  if [ -n "${CCRC_MODELS_PROBE_FIXTURE:-}" ]; then cat "$CCRC_MODELS_PROBE_FIXTURE" > "$RAW"; return; fi
+  # A file it cannot read is a fetch that got no answer: `--check`'s 4.
+  if [ -n "${CCRC_MODELS_PROBE_FIXTURE:-}" ]; then cat "$CCRC_MODELS_PROBE_FIXTURE" > "$RAW" || return 4; return 0; fi
   case "$PROBE_KIND" in
-    codex) _fetch_codex ;;
+    # ONE arm for every caller (Plan 4): there is no marker to pick between
+    # two, and the arm refuses `no-token-dir` for a caller handed no directory.
+    codex) _fetch_codex_lane ;;
     openrouter)
       # The whole-catalogue LIST needs no credential (§5) — it is public. The
       # ENDPOINTS route is different: "which providers serve this model" is
@@ -242,10 +391,10 @@ _fetch() {
         [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ] \
           || { echo "$PROG: the endpoints question needs the lane's key: set ANTHROPIC_AUTH_TOKEN" >&2; return 1; }
         printf 'header = "Authorization: Bearer %s"\n' "$ANTHROPIC_AUTH_TOKEN" \
-          | curl -sS -K - --fail --max-time 30 --proto '=https' \
+          | curl -sS -K - --fail --max-time 30 --proto '=https' --max-redirs 0 \
               "https://openrouter.ai/api/v1/models/$ENDPOINTS/endpoints" > "$RAW"
       else
-        curl -sS --fail --max-time 30 --proto '=https' 'https://openrouter.ai/api/v1/models' > "$RAW"
+        curl -sS --fail --max-time 30 --proto '=https' --max-redirs 0 'https://openrouter.ai/api/v1/models' > "$RAW"
       fi
       ;;
     compatible)
@@ -299,6 +448,48 @@ except ValueError as e:
 def num(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
+def effort_name(v):
+    # The one bound this arm puts on an effort level: a non-empty string. Each
+    # `supported_reasoning_levels` name and `default_reasoning_level` (D-8620)
+    # pass through it; shared/models.mjs's `isEffortName` is its JavaScript twin.
+    return v if isinstance(v, str) and v else None
+
+# D-8620: the bounds of the Codex catalogue's request-shape fields. Python
+# cannot import shared/models.mjs's CATALOGUE_VERBOSITIES,
+# CATALOGUE_TRUNCATION_MODES and CATALOGUE_TRUNCATION_LIMIT_MAX, so it spells
+# them here, once; server/test/models-probe.test.ts runs every candidate value
+# through this arm and through parseCatalogue and reds on any disagreement.
+VERBOSITIES = ("low", "medium", "high")
+TRUNCATION_MODES = ("tokens", "bytes")
+TRUNCATION_LIMIT_MAX = 10000000
+
+def codex_request_shape(m):
+    # D-8620: five scalars native Codex shapes each request with, each kept only
+    # when valid and otherwise OMITTED, never null and never a default: a model
+    # without them must read exactly as before, and a genuine false (gpt-5.5's
+    # use_responses_lite) is a fact a reader acts on. Scalars only: never
+    # model_messages, instructions_template, base_instructions or any other text
+    # block, which would grow this file fifty-fold for every reader.
+    shape = {}
+    for src, key in (("use_responses_lite", "useResponsesLite"),
+                     ("support_verbosity", "supportVerbosity")):
+        if isinstance(m.get(src), bool):
+            shape[key] = m[src]
+    verbosity = m.get("default_verbosity")
+    if isinstance(verbosity, str) and verbosity in VERBOSITIES:
+        shape["defaultVerbosity"] = verbosity
+    level = effort_name(m.get("default_reasoning_level"))
+    if level is not None:
+        shape["defaultReasoningLevel"] = level
+    policy = m.get("truncation_policy")
+    if isinstance(policy, dict):
+        mode, limit = policy.get("mode"), policy.get("limit")
+        if (isinstance(mode, str) and mode in TRUNCATION_MODES
+                and isinstance(limit, int) and not isinstance(limit, bool)
+                and 1 <= limit <= TRUNCATION_LIMIT_MAX):
+            shape["truncationPolicy"] = {"mode": mode, "limit": limit}
+    return shape
+
 def codex_models(raw):
     if not isinstance(raw, dict) or not isinstance(raw.get("models"), list):
         fail("the Codex catalogue has no `models` array — the endpoint's shape has drifted")
@@ -312,18 +503,20 @@ def codex_models(raw):
         levels = m.get("supported_reasoning_levels") or m.get("reasoning_levels") or []
         efforts = []
         for e in levels if isinstance(levels, list) else []:
-            name = e.get("effort") if isinstance(e, dict) else e
-            if isinstance(name, str) and name:
+            name = effort_name(e.get("effort") if isinstance(e, dict) else e)
+            if name is not None:
                 efforts.append(name)
         label = m.get("display_name") or m.get("name") or mid
-        out.append({
+        row = {
             "id": mid, "label": label,
             "context": num(m.get("context_window")),
             "maxContext": num(m.get("max_context_window")),
             "efforts": efforts,
             "hidden": m.get("visibility") == "hide",
             "priceIn": None, "priceOut": None,
-        })
+        }
+        row.update(codex_request_shape(m))
+        out.append(row)
     return out
 
 def _price(v):
@@ -377,7 +570,9 @@ def compatible_models(raw):
         # A bare /v1/models says the id and nothing more. Everything else is
         # null rather than guessed: a fabricated context window would be sized
         # against by Claude Code's auto-compaction, which is exactly the class
-        # of lie the [1m] suffix incident was (infra/handoff/ccgpt:108-113).
+        # of lie the [1m] suffix incident was (spec §8's "No `[1m]`-suffixed
+        # context-window alias" bullet, in
+        # docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md).
         out.append({
             "id": mid, "label": mid, "context": None, "maxContext": None,
             "efforts": [], "hidden": False, "priceIn": None, "priceOut": None,
@@ -483,6 +678,11 @@ PY
   return 1
 }
 
+_probe_failed() {   # <--check's status> — every other caller's failure is exit 1
+  [ "$CHECK" -eq 0 ] || exit "$1"
+  exit 1
+}
+
 mkdir -p "$(dirname "$OUT")" || die "could not create $(dirname "$OUT")"
 # the staging-mode fix: $NORM used to come into existence via
 # whichever writer got to it first — the normaliser's `> "$NORM"` redirect, or
@@ -496,7 +696,9 @@ mkdir -p "$(dirname "$OUT")" || die "could not create $(dirname "$OUT")"
 # is readable by anyone but its owner.
 install -m 600 /dev/null "$NORM" || die "could not stage $NORM"
 
-if ! _fetch 2>"$TMPD/fetch.err"; then
+FETCH_RC=0
+_fetch 2>"$TMPD/fetch.err" || FETCH_RC=$?
+if [ "$FETCH_RC" -ne 0 ]; then
   # `--endpoints` NEVER marks a catalogue stale: it did not ask about the
   # catalogue, and a whitelist question that could not be answered must not
   # change what the surfaces say about a lane's models.
@@ -505,7 +707,7 @@ if ! _fetch 2>"$TMPD/fetch.err"; then
     exit 1
   fi
   _mark_stale "the $PROBE_KIND catalogue fetch for \"$ACCOUNT\" failed: $(tr '\n' ' ' < "$TMPD/fetch.err" | cut -c1-300)"
-  exit 1
+  _probe_failed "$FETCH_RC"
 fi
 
 if [ -n "$ENDPOINTS" ]; then
@@ -533,7 +735,7 @@ fi
 
 if ! _normalise 2>"$TMPD/norm.err"; then
   _mark_stale "the $PROBE_KIND response for \"$ACCOUNT\" was refused: $(tr '\n' ' ' < "$TMPD/norm.err" | cut -c1-300)"
-  exit 1
+  _probe_failed 5
 fi
 
 # $NORM has been 0600 since it was pre-created above, and the normaliser's

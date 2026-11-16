@@ -79,16 +79,20 @@
 //     `process.exitCode` on import BY DESIGN as a one-shot CLI. A shared
 //     module a second caller merely imports must not inherit that exit
 //     status.
-//  3. `secretsFile` is validated on ALL THREE exec kinds, not only
-//     `generated` — and `provider`, `baseUrl` and `models` are validated and
-//     deliberately NOT returned. The two gates used to be conjoined with
-//     `kind === 'generated'` while the return spread the field unconditionally,
-//     which made this file LAXER than `parseRoster` on the exact direction its
-//     header above says cannot be tolerated (D-1855). The new fields are not
-//     returned because nothing downstream reads them: `generateAccountsSh`
+//  3. `secretsFile` is validated on ALL FOUR exec kinds, not only
+//     `generated` — including Codex, whose ccrc-owned launcher may source its
+//     optional file. `provider`, `baseUrl` and `models` are validated and
+//     deliberately NOT returned where they are legal. The two gates used to be
+//     conjoined with `kind === 'generated'` while the return spread the field
+//     unconditionally, which made this file LAXER than `parseRoster` on the
+//     exact direction its header above says cannot be tolerated (D-1855). The
+//     new fields are not returned because nothing downstream reads them:
+//     `generateAccountsSh`
 //     emits ids, home-ability, `CCRC_MEASURED`, the upstream id, config dirs,
 //     labels and hues, and `generateWrapperBody` reads `id`,
 //     `configDirSuffix`, `execKind` and `secretsFile`.
+//     `provider` became the exception with D-8098: the emitter reads it
+//     for `CCRC_PAY_PER_USE`, so it is now returned.
 //
 // One import, and only one: `./base-url.mjs`, the endpoint gate, which
 // imports nothing itself. Everything else here is a hand-kept copy, for the
@@ -142,8 +146,8 @@ export const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
  *  TypeScript — and its agreement with `PROVIDER_IDS` is asserted element for
  *  element by `gen-accounts.test.ts`, which is a stronger mechanism than the
  *  one `HUES` above has: hues reach bash through `_ccrc_hue` and a divergent
- *  order changes generated stdout, while `provider` reaches no bash at all
- *  (§4.3 puts it in the lane's own `settings.json`). */
+ *  order changes generated stdout, while `provider` reaches bash only as
+ *  `CCRC_PAY_PER_USE` membership (D-8098; §4.3 puts it in the lane's own `settings.json`). */
 const PROVIDER_IDS = new Set(['anthropic', 'openrouter', 'compatible', 'openai']);
 
 /** The providers whose lanes may carry `exec.models` — `PROVIDERS[p].apiKeyModels`.
@@ -210,7 +214,26 @@ export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
  *  a real subprocess. Read both; neither alone is the census. */
 const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
-const EXEC_KINDS = new Set(['upstream', 'generated', 'external']);
+// Mirrors `shared/roster.ts`'s `EXEC_KINDS`, the one definition of `exec.kind`'s closed set, IN ORDER: this
+// validator runs under bare Node and cannot import TypeScript, so it keeps this one copy, and
+// `roster-exec-parity.test.ts` pins it equal to the definition (D-8192). The refusal below is built from it.
+const EXEC_KINDS = ['upstream', 'generated', 'external', 'codex'];
+const EXEC_KINDS_SAID =
+  `${EXEC_KINDS.slice(0, -1).map((k) => JSON.stringify(k)).join(', ')} or ${JSON.stringify(EXEC_KINDS[EXEC_KINDS.length - 1])}`;
+// Mirror `shared/roster.ts`'s two codex word sets, IN ORDER: the first word is the default an absent key reads, and
+// `roster-exec-parity.test.ts` compares both declarations and both resolved defaults (codex-bridge spec D20).
+// EXPORTED for `deploy/account-op.mjs`'s `codex-mode` op (codex-bridge Stage 2, Task 12), which writes the word and so
+// must know which one is the default an absent key reads: imported, never re-spelled.
+export const CODEX_BRIDGE_MODES = ['litellm', 'direct'];
+const CODEX_UPSTREAMS = ['backend', 'siwc'];
+// Mirrors `shared/rosterFacts.ts`'s `FABLE_BILLINGS`, IN ORDER; `roster-exec-parity.test.ts` pins both declarations.
+const FABLE_BILLINGS = ['included', 'credits'];
+// Mirrors `shared/roster.ts`'s `TELEMETRY_VALUES`; `roster-exec-parity.test.ts` compares the two declarations.
+// `openrouter` is D-5521's OpenRouter key lane (D-5753).
+const TELEMETRY_VALUES = Object.freeze({ anthropic: true, codex: true, none: true, openrouter: true });
+// Mirrors `shared/roster.ts`: dotless GPT-lane names, not account ids — ccrc's `ccrc-codex` and
+// `ccgpt-runtime`, and `ccgpt`, which a box may still carry as another repository's (D-3478). Refused before any wrapper.
+const GPT_TOOLCHAIN_ACCOUNT_IDS = new Set(['ccrc-codex', 'ccgpt-runtime', 'ccgpt']);
 export const HUES = new Set(['cyan', 'violet', 'blue', 'magenta', 'amber', 'green']);
 
 export class RosterInvalid extends Error {}
@@ -249,6 +272,11 @@ function checkAccount(raw, index) {
       `Rename it to match ^[a-z][a-z0-9-]{0,31}$ — lowercase letters, digits and hyphens only.`);
   }
 
+  if (GPT_TOOLCHAIN_ACCOUNT_IDS.has(id)) {
+    bad(`account id "${id}" collides with the GPT-lane toolchain executable of the same name.`,
+      `Choose another account ID; "${id}" is reserved for the GPT-lane toolchain.`);
+  }
+
   const label = raw['label'];
   if (typeof label !== 'string' || label.length === 0) {
     bad(`account "${id}" has no label.`, `Add a non-empty "label" for account "${id}".`);
@@ -279,9 +307,9 @@ function checkAccount(raw, index) {
   }
 
   const exec = raw['exec'];
-  if (!isPlainObject(exec) || typeof exec['kind'] !== 'string' || !EXEC_KINDS.has(exec['kind'])) {
+  if (!isPlainObject(exec) || typeof exec['kind'] !== 'string' || !EXEC_KINDS.includes(exec['kind'])) {
     bad(`account "${id}" has a missing or invalid exec.kind.`,
-      `Set exec.kind for account "${id}" to "upstream", "generated" or "external".`);
+      `Set exec.kind for account "${id}" to ${EXEC_KINDS_SAID}.`);
   }
   // HOISTED (D-1855). These two gates were conjoined with
   // `exec['kind'] === 'generated'` while the return below spread
@@ -289,7 +317,8 @@ function checkAccount(raw, index) {
   // entry carrying `'/etc/shadow'` or `'../.ssh/id_ed25519'` passed validation
   // untouched and reached `deploy/gen-wrappers.mjs`'s manifest. Latent while no
   // roster put the field on a non-generated entry; `parseRoster` now makes it
-  // legal on all three kinds, which is what created the callers.
+  // legal on all four kinds, including the ccrc-owned Codex launcher, which is
+  // what created the callers.
   if (exec['secretsFile'] !== undefined && typeof exec['secretsFile'] !== 'string') {
     bad(`account "${id}" has a non-string exec.secretsFile.`,
       `Set exec.secretsFile for account "${id}" to a string path relative to $HOME, or remove it.`);
@@ -307,18 +336,70 @@ function checkAccount(raw, index) {
       + 'using only letters, digits, ".", "-", "_" and "/" — never absolute, never containing "..", never ending in "/".');
   }
 
-  // `provider`, `baseUrl` and `models` — validated here, returned by nothing.
-  // The emitter reads none of them (`shared/generate.mjs:206-238`) and neither
+  // Codex has its own provider contract and topology. It must not fall through
+  // to the generic non-upstream block: baseUrl and models are not legal on this kind.
+  if (exec['kind'] === 'codex') {
+    if (exec['provider'] !== 'openai') {
+      bad(`account "${id}" has exec.kind "codex" and exec.provider ${JSON.stringify(exec['provider'])}.`,
+        `Set exec.provider for account "${id}" to "openai".`);
+    }
+    for (const field of ['proxyPort', 'litellmPort']) {
+      const port = exec[field];
+      if (typeof port !== 'number' || !Number.isInteger(port)) {
+        bad(`account "${id}" has a missing or invalid exec.${field}: it must be a whole number.`,
+          `Set exec.${field} for account "${id}" to a free TCP port between 1024 and 65535.`);
+      }
+      if (port < 1024 || port > 65535) {
+        bad(`account "${id}" has an exec.${field} of ${port}, which is out of range.`,
+          `Set exec.${field} for account "${id}" to a free TCP port between 1024 and 65535.`);
+      }
+    }
+    if (exec['proxyPort'] === exec['litellmPort']) {
+      bad(`account "${id}"'s exec.proxyPort and exec.litellmPort are both ${exec['proxyPort']}.`,
+        `Give account "${id}" two different ports: the shim and the LiteLLM behind it are two listeners.`);
+    }
+    const dir = exec['authDir'];
+    if (typeof dir !== 'string') {
+      bad(`account "${id}" has a missing or non-string exec.authDir.`,
+        `Set exec.authDir for account "${id}" to the directory holding that lane's ChatGPT OAuth, relative to $HOME.`);
+    }
+    if (
+      dir === '' || dir === '.' || dir.startsWith('./') || dir.includes('/./')
+      || dir.startsWith('/') || dir.endsWith('/') || dir.includes('..') || !SECRETS_SAFE_RE.test(dir)
+    ) {
+      bad(`account "${id}" has an invalid exec.authDir ${JSON.stringify(dir)}.`,
+        `Set exec.authDir for account "${id}" to a path relative to $HOME using only letters, digits, ".", "-", "_" and "/".`);
+    }
+    if (dir === '.ccrc' || dir.startsWith('.ccrc/')) {
+      bad(`account "${id}" has an exec.authDir under $HOME/.ccrc (${JSON.stringify(dir)}).`,
+        `Move account "${id}"'s OAuth directory outside $HOME/.ccrc - 'ccrc uninstall --purge' empties that tree.`);
+    }
+    // `parseRoster`'s `parseCodexWord`, rule for rule: absent is the default, a present value must be one of the
+    // set's words by strict equality (so a written null, a number or an inherited name is refused like a typo).
+    for (const [field, words] of [['bridge', CODEX_BRIDGE_MODES], ['upstream', CODEX_UPSTREAMS]]) {
+      if (exec[field] !== undefined && !words.includes(exec[field])) {
+        const said = words.map((w) => JSON.stringify(w)).join(' or ');
+        bad(`account "${id}" has an invalid exec.${field} ${JSON.stringify(exec[field])}: it must be ${said}.`,
+          `Set exec.${field} for account "${id}" to ${said}, or remove it.`);
+      }
+    }
+  }
+
+  // `baseUrl` and `models` — validated here, returned by nothing. The emitter
+  // (`generateAccountsSh` in `shared/generate.mjs`) reads neither, nor
   // does the wrapper writer, so returning them would be dead code in the one
   // file in this tree no typechecker checks (`server/tsconfig.json` sets no
-  // `checkJs`). They are validated because the SERVER refuses to boot on them,
-  // and that is this file's whole job.
+  // `checkJs`). `provider` is validated AND returned since D-8098: the emitter
+  // reads it for `CCRC_PAY_PER_USE`. All three are
+  // validated because the SERVER refuses to boot on them, and that is this
+  // file's whole job.
   //
   // These three gates are INVISIBLE to `gen-accounts.test.ts`'s byte-agreement
-  // direction, because none of the fields reaches `accounts.sh`. The REJECT
+  // direction: `baseUrl` and `models` never reach `accounts.sh`, and a refused
+  // `provider` never produces one to compare. The REJECT
   // table is the only half of that harness that covers them (D-1861), and it
   // carries a row for each.
-  if (exec['kind'] !== 'upstream') {
+  if (exec['kind'] !== 'upstream' && exec['kind'] !== 'codex') {
     if (exec['provider'] !== undefined && !PROVIDER_IDS.has(exec['provider'])) {
       bad(`account "${id}" has an unknown exec.provider ${JSON.stringify(exec['provider'])}.`,
         `Set exec.provider for account "${id}" to one of ${[...PROVIDER_IDS].join(', ')}, or remove it.`);
@@ -434,10 +515,31 @@ function checkAccount(raw, index) {
       + 'letters, digits and hyphens only — or remove the key to leave the account untagged.');
   }
 
+  // Mirrors `parseRoster`'s two Overlord-fact gates (H16), written `null` refused as `pool`'s is. Both are RETURNED,
+  // because `generateAccountsSh` emits them into `_ccrc_fable_billing` and `_ccrc_continuity`.
+  const fableBilling = raw['fableBilling'];
+  if (fableBilling !== undefined && (typeof fableBilling !== 'string' || !FABLE_BILLINGS.includes(fableBilling))) {
+    bad(`account "${id}" has an invalid fableBilling ${JSON.stringify(fableBilling)}.`,
+      `Set "fableBilling" for account "${id}" to ${FABLE_BILLINGS.map((w) => JSON.stringify(w)).join(' or ')}, `
+      + 'or remove the key to leave the fact unset.');
+  }
+  const continuity = raw['continuity'];
+  let continuityAt;
+  if (continuity !== undefined) {
+    const keys = typeof continuity === 'object' && continuity !== null && !Array.isArray(continuity)
+      ? Object.keys(continuity) : null;
+    const at = keys !== null && keys.length === 1 && keys[0] === 'recordedAt' ? continuity['recordedAt'] : undefined;
+    if (typeof at !== 'number' || !Number.isSafeInteger(at) || at < 0) {
+      bad(`account "${id}" has an invalid continuity ${JSON.stringify(continuity)}.`,
+        `Set "continuity" for account "${id}" to {"recordedAt": <epoch seconds>}, or remove the key to leave the fact unset.`);
+    }
+    continuityAt = at;
+  }
+
   const telemetry = raw['telemetry'];
-  if (telemetry !== 'anthropic' && telemetry !== 'codex' && telemetry !== 'none') {
+  if (typeof telemetry !== 'string' || !Object.hasOwn(TELEMETRY_VALUES, telemetry)) {
     bad(`account "${id}" has an invalid telemetry ${JSON.stringify(telemetry)}.`,
-      `Set "telemetry" for account "${id}" to "anthropic", "codex" or "none".`);
+      `Set "telemetry" for account "${id}" to "anthropic", "codex", "openrouter" or "none".`);
   }
 
   // Optional — `parseRoster` auto-assigns one when it is absent, and the
@@ -466,10 +568,24 @@ function checkAccount(raw, index) {
   // generated from it — which is the whole reason the field is emitted at all:
   // a roster field that never reaches `accounts.sh` is a field whose cross-box
   // drift nobody can see.
+  // `bridge` and `upstream` come back RESOLVED (codex-bridge spec D20): this is the bare-Node layer's one reader of
+  // the two fields, so `deploy/models-op.mjs`'s `laneManifest` copies these values and never the raw row's.
+  const codexTopology = exec['kind'] === 'codex'
+    ? {
+      proxyPort: exec['proxyPort'],
+      litellmPort: exec['litellmPort'],
+      authDir: exec['authDir'],
+      bridge: exec['bridge'] === undefined ? CODEX_BRIDGE_MODES[0] : exec['bridge'],
+      upstream: exec['upstream'] === undefined ? CODEX_UPSTREAMS[0] : exec['upstream'],
+    }
+    : {};
   return {
     id, label, configDirSuffix: suffix, homeAble, telemetry, hue,
-    execKind: exec['kind'], secretsFile: exec['secretsFile'],
+    execKind: exec['kind'], secretsFile: exec['secretsFile'], provider: exec['provider'],
     pool: pool === undefined ? null : pool,
+    fableBilling: fableBilling === undefined ? null : fableBilling,
+    continuity: continuityAt === undefined ? null : { recordedAt: continuityAt },
+    ...codexTopology,
   };
 }
 
@@ -545,6 +661,21 @@ export function rosterFromJson(json) {
     seenDirs.set(a.configDirSuffix, a.id);
   }
 
+  // Both topology fields share one map: a shim port colliding with another
+  // lane's LiteLLM port is as unsafe as a same-field collision.
+  const seenPorts = new Map();
+  for (const a of accounts) {
+    if (a.execKind !== 'codex') continue;
+    for (const port of [a.proxyPort, a.litellmPort]) {
+      const owner = seenPorts.get(port);
+      if (owner !== undefined && owner !== a.id) {
+        bad(`accounts "${owner}" and "${a.id}" both use port ${port}.`,
+          'Give each codex lane its own two ports.');
+      }
+      seenPorts.set(port, a.id);
+    }
+  }
+
   const upstreams = accounts.filter((a) => a.execKind === 'upstream');
   if (upstreams.length !== 1) {
     bad(`the roster has ${upstreams.length} upstream accounts: exactly one account must have exec.kind "upstream".`,
@@ -562,7 +693,7 @@ export function rosterFromJson(json) {
     accounts,
     homeAble: accounts.filter((a) => a.homeAble),
     // Longest id first, id ascending as the tie-break — `parseRoster`'s
-    // comparator, restated. `claude-corp` and `claude-dev0` tie at 11
+    // comparator, restated. `claude-acme` and `claude-lab0` tie at 11
     // characters today, so the second key is not decorative: without it the
     // arm order is whatever the engine's sort happened to leave behind.
     byIdLengthDesc: accounts.slice()

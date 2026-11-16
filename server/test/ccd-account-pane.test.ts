@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-pane-'); });
@@ -39,9 +39,13 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
   // make `expect(r.stderr).toBe('')` below unsatisfiable for a reason that
   // has nothing to do with this verb. The scope-placement half is
   // `ccd-tmux-server.test.ts`'s subject and is asserted there.
+  // THE LANE'S PRIVATE SOCKET (accounts plan Task A20): every call this verb
+  // makes leads with `-L ccrc-auth-<id> -f /dev/null`, and the recorder logs the
+  // whole argv, then reads the subcommand after those server options.
   fs.writeFileSync(path.join(stub, 'tmux'),
     '#!/bin/sh\n'
     + 'echo "tmux $*" >> "$HOME/ccd-calls"\n'
+    + 'while [ "$1" = -L ] || [ "$1" = -f ]; do shift 2; done\n'
     + 'case "$1" in\n'
     + '  new-session)   : > "$HOME/pane-up" ;;\n'
     + '  kill-session)  [ -e "$HOME/pane-up" ] || exit 1; rm -f "$HOME/pane-up" ;;\n'
@@ -92,7 +96,7 @@ describe('ccd account-pane — the argv contract', () => {
     // rather than on an empty call log, because ccd's own source-time preamble
     // is free to shell out and this test is not about that.
     expect(h.calls().join('\n')).not.toContain('cc-auth-');
-    expect(h.calls().filter((c) => c.startsWith('tmux new-session'))).toEqual([]);
+    expect(h.calls().filter((c) => c.includes(' new-session '))).toEqual([]);
   });
 
   it('refuses a method it does not implement', () => {
@@ -108,10 +112,14 @@ describe('ccd account-pane — the pane', () => {
     expect(r.stderr).toBe('');
     expect(r.code).toBe(0);
     expect(JSON.parse(r.stdout)).toEqual({ pane: 'cc-auth-claude-a', method: 'setup-token' });
-    const newSession = h.calls().filter((c) => c.startsWith('tmux new-session'));
+    const newSession = h.calls().filter((c) => c.includes(' new-session '));
     expect(newSession).toHaveLength(1);
+    // On the lane's OWN server, never the fleet's shared one (D-5515), and the
+    // helper told it is the pane's copy.
     expect(newSession[0]).toBe(
-      `tmux new-session -d -s cc-auth-claude-a -x 120 -y 40 exec '${h.home}/.local/bin/ccd-account-auth' 'claude-a' 'setup-token'`);
+      `tmux -L ccrc-auth-claude-a -f /dev/null new-session -d -s cc-auth-claude-a -x 120 -y 40 exec env CCRC_AUTH_IN_PANE=1 '${h.home}/.local/bin/ccd-account-auth' 'claude-a' 'setup-token'`);
+    // Every tmux call this verb made names the private socket.
+    expect(h.calls().filter((c) => c.startsWith('tmux ') && !c.startsWith('tmux -L ccrc-auth-claude-a '))).toEqual([]);
   });
 
   it('presses NO key into the pane it just made', () => {
@@ -128,7 +136,7 @@ describe('ccd account-pane — the pane', () => {
     const again = runCcd('account-pane', '--id', 'claude-a', '--method', 'setup-token');
     expect(again.code).toBe(1);
     expect(again.stderr).toContain('auth-in-progress: cc-auth-claude-a');
-    expect(h.calls().filter((c) => c.startsWith('tmux new-session'))).toHaveLength(1);
+    expect(h.calls().filter((c) => c.includes(' new-session '))).toHaveLength(1);
   });
 
   it('--cancel kills the pane, and says so when there was none', () => {
@@ -136,7 +144,7 @@ describe('ccd account-pane — the pane', () => {
     const killed = runCcd('account-pane', '--id', 'claude-a', '--cancel');
     expect(killed.code).toBe(0);
     expect(JSON.parse(killed.stdout)).toEqual({ cancelled: 'cc-auth-claude-a' });
-    expect(h.calls()).toContain('tmux kill-session -t cc-auth-claude-a');
+    expect(h.calls()).toContain('tmux -L ccrc-auth-claude-a -f /dev/null kill-session -t =cc-auth-claude-a:');
     const none = runCcd('account-pane', '--id', 'claude-a', '--cancel');
     expect(none.code).toBe(0);
     expect(JSON.parse(none.stdout)).toEqual({ cancelled: null });
@@ -144,7 +152,7 @@ describe('ccd account-pane — the pane', () => {
 });
 
 describe('ccd account-pane — the structural guards', () => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
 
   /** The function's EXECUTABLE text: whole-line comments dropped, exactly the
    *  cut `macos-platform.test.ts`'s `executableText` makes. Without it the
@@ -156,30 +164,40 @@ describe('ccd account-pane — the structural guards', () => {
   const executable = (body: string): string =>
     body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 
-  it('goes through _tmux_new_session and never through _spawn', () => {
+  it('makes its pane on the lane\'s private server, never the shared one and never through _spawn', () => {
     const body = /\ncmd_account_pane\(\) \{[\s\S]*?\n\}\n/.exec(src);
     expect(body, 'ccd/ccd has no cmd_account_pane').toBeTruthy();
-    expect(body![0]).toContain('_tmux_new_session -d -s "$pane" -x 120 -y 40');
+    expect(body![0]).toContain('tmux -L "$sock" -f /dev/null new-session -d -s "$pane" -x 120 -y 40');
+    expect(body![0]).toContain('sock="ccrc-auth-$id"');
+    // `_tmux_new_session` places the fleet's SHARED server; this pane is not on it (accounts plan Task A20).
+    expect(executable(body![0])).not.toContain('_tmux_new_session');
+    // No tmux call in the verb on the default socket.
+    for (const l of executable(body![0]).split('\n').filter((x) => /\btmux /.test(x))) {
+      expect(l, `a tmux call on the shared server: ${l.trim()}`).toContain('tmux -L "$sock"');
+    }
     expect(executable(body![0]), 'the auth pane must never be a _spawn — see the header')
       .not.toMatch(/_spawn(_start|_settle)?\b/);
     expect(executable(body![0]), 'this verb sends no keys').not.toContain('send-keys');
   });
 
   it('EVERY tmux send-keys in ccd targets a REGISTRY id, so no typer can reach cc-auth-*', () => {
-    // The auth pane's name is `cc-auth-<id>`, and `_tmux` turns a registry id
-    // into `cc-<id>` — so the only way a ccd typer could reach an auth pane is
-    // a send-keys with a literal target. RE-MEASURED 2026-09-11 on this
+    // The auth pane's name is `cc-auth-<id>`, and `_tmux_t` turns a registry
+    // id into `=cc-<id>:` — so the only way a ccd typer could reach an auth
+    // pane is a send-keys with a literal target. RE-MEASURED 2026-09-11 on this
     // branch: `grep -n 'tmux send-keys' ccd/ccd` returns NINE lines (11547,
     // 11699, 11702, 11707, 11710, 11713, 12114, 12118, 13651) carrying
     // FOURTEEN occurrences, because five of those lines send twice. Every one
-    // names `$t` or `$(_tmux "$id")`; this is the assertion that keeps the
-    // fifteenth honest. The floor is asserted on LINES, which is what the loop
-    // iterates.
-    const lines = src.split('\n').filter((l) => l.includes('tmux send-keys'));
+    // names `$t` or `$(_tmux_t "$id")` (D-3525 moved the builder from `_tmux`;
+    // `ccd-tmux-anchor.test.ts` proves every `$t` a target uses is bound from
+    // it). `$(_tmux_at …)` is NOT admitted here: it anchors a NAME, and a name
+    // can be `cc-auth-*`. This is the assertion that keeps the fifteenth
+    // honest. The floor is asserted on LINES, which is what the loop iterates.
+    // D-8270: every fleet call is `_tmx …`, the socket lookup's wrapper, so the scan reads that spelling.
+    const lines = src.split('\n').filter((l) => l.includes('_tmx send-keys'));
     expect(lines.length, 'the scan matched no send-keys at all').toBeGreaterThanOrEqual(9);
     for (const l of lines) {
       expect(l, `send-keys with a target ccd did not derive from a registry id: ${l.trim()}`)
-        .toMatch(/tmux send-keys -t "(\$t|\$\(_tmux "\$id"\))"/);
+        .toMatch(/_tmx send-keys -t "(\$t|\$\(_tmux_t "\$id"\))"/);
     }
   });
 

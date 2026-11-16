@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { localIO } from '../src/io.js';
 import { resolveTranscript, transcriptPath, type TranscriptResolution } from '../src/transcript/resolve.js';
 import { parseTranscriptLine } from '../src/transcript/parse.js';
-import type { ChatEvent } from '../../shared/api.js';
+import { IDLE_COMPACT_NUDGE_PROMPT, type ChatEvent } from '../../shared/api.js';
+import { ROW as NUDGE_ROW } from './idleNudgeFixtures.js';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'transcript-sample.jsonl');
 
@@ -57,7 +58,7 @@ describe('resolveTranscript — the symlink-munge mismatch it was born fixing', 
       const real = transcriptPath(cfg, realDir, 'u-1');
       plant(real);
       expect(await at(cfg, linkDir, 'u-1')).toEqual(
-        { kind: 'found', path: real, rung: 'live-resolved', account: null });
+        { kind: 'found', path: real, rung: 'live-resolved', account: null, uuid: 'u-1' });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -245,9 +246,19 @@ describe('the harness resume pair is system, not a conversation (D-2228)', () =>
       { kind: 'system', uuid: 'a1', ts: '2026-09-09T11:25:31.906Z', text: 'No response requested.', origin: 'no-response' },
     ]);
   });
-  it('a META user message with other content is still a user event (unchanged)', () => {
+  // WAS `a META user message with other content is still a user event
+  // (unchanged)`. That title fenced D-2228's scope rather than ruling on this,
+  // and the text it reached for to stand in for "other content" turns out to be
+  // the FIRST LINE of a 17,141-byte SKILL.md body the harness injects into the
+  // user channel — 5 occurrences here, beside 7 more at 92,395-92,401 bytes. So
+  // the assertion in force was that an injected reference document is the
+  // operator's speech. It is not, and `isMeta` is what says so: 99 of 99
+  // non-sidechain user records carrying the flag are harness-written, 0 human.
+  it('a META user message with other content is the HARNESS, not the operator', () => {
     const other = metaPrompt.replace('Continue from where you left off. Note: ccd restarted this session.', '# Workflow authoring reference');
-    expect(parseTranscriptLine(other).map((e) => e.kind)).toEqual(['user']);
+    expect(parseTranscriptLine(other)).toEqual([
+      { kind: 'system', uuid: 'm1', ts: '2026-09-09T11:25:31.906Z', text: '# Workflow authoring reference' },
+    ]);
   });
   it('a real model saying the same words is still an assistant event (unchanged)', () => {
     const real = synthetic.replace('"model":"<synthetic>"', '"model":"claude-fable-5-1"');
@@ -256,6 +267,84 @@ describe('the harness resume pair is system, not a conversation (D-2228)', () =>
   it('a human typing the sentence is a user event — isMeta decides, not the words', () => {
     const human = metaPrompt.replace('"isMeta":true', '"isMeta":false');
     expect(parseTranscriptLine(human).map((e) => e.kind)).toEqual(['user']);
+  });
+});
+
+// D-5371: Claude Code's idle ("sleep") compaction runs on a session whose turn
+// had already ended and starts no turn. The one row that says so is its own
+// `informational` notice after the summary; the separator before "turn off" is
+// a NO-BREAK SPACE in the binary (`M8n="\xA0"`). Shapes from a fleet transcript,
+// neutral content.
+describe('the idle-compaction notice is a system event, not dropped (D-5371)', () => {
+  const T0 = '2026-10-17T17:43:12.000Z';
+  const rows = [
+    { type: 'assistant', uuid: 'a1', timestamp: T0, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Here is the third question.' }] } },
+    { type: 'system', subtype: 'turn_duration', isMeta: false, uuid: 'd1', timestamp: '2026-10-17T17:43:13.000Z' },
+    { type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', level: 'info', uuid: 'b1',
+      compactMetadata: { trigger: 'auto', preTokens: 201796, postTokens: 38994, durationMs: 68059 }, timestamp: '2026-10-17T18:37:58.000Z' },
+    { type: 'user', isCompactSummary: true, uuid: 's1', timestamp: '2026-10-17T18:37:58.500Z',
+      message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context. Continue the conversation from where it left off without asking the user any further questions.' } },
+    { type: 'system', subtype: 'informational', isMeta: false, level: 'notice', uuid: 'n1', timestamp: '2026-10-17T18:37:59.980Z',
+      content: 'Compacted while idle, before the prompt cache expired · turn off with "idleCompaction": false in settings.json' },
+  ];
+  const parse = (o: object): ChatEvent[] => parseTranscriptLine(JSON.stringify(o));
+
+  it('the notice after an idle compaction is the last event, origin idle-compact, CC\'s sentence as the text', () => {
+    const events = rows.flatMap(parse);
+    expect(events.at(-1)).toEqual({
+      kind: 'system', uuid: 'n1', ts: '2026-10-17T18:37:59.980Z', text: rows[4]!.content, origin: 'idle-compact',
+    });
+  });
+  it('the "after an hour idle" notice stays dropped: Claude Code yields it inside the turn the operator just started (compact_on_return), so "nothing was running" would be false (D-5371)', () => {
+    const variant = { ...rows[4]!, content: 'Compacted after an hour idle, using a summary written while you were away · turn off with "idleCompaction": false in settings.json' };
+    expect(parse(variant)).toEqual([]);
+  });
+  it('every other system row stays dropped: the boundary, the turn duration, another informational row', () => {
+    expect(parse(rows[1]!)).toEqual([]);
+    expect(parse(rows[2]!)).toEqual([]);
+    expect(parse({ ...rows[4]!, content: 'Some other notice' })).toEqual([]);
+    expect(parse({ ...rows[4]!, subtype: 'local_command' })).toEqual([]);
+    expect(parse({ ...rows[4]!, content: undefined, message: { content: rows[4]!.content } })).toEqual([]);
+  });
+  it('a user row that starts with the same words is still the operator speaking — the type decides', () => {
+    const typed = { type: 'user', uuid: 'u9', timestamp: T0, message: { role: 'user', content: 'Compacted while idle, before the prompt cache expired' } };
+    expect(parse(typed).map((e) => e.kind)).toEqual(['user']);
+  });
+  it('a sidechain notice is dropped like every sidechain row', () => {
+    expect(parse({ ...rows[4]!, isSidechain: true })).toEqual([]);
+  });
+  it('a compaction in the middle of a turn has no notice and yields no idle-compact event', () => {
+    const midTurn = [
+      { type: 'user', uuid: 'r1', timestamp: T0, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } },
+      rows[2]!, rows[3]!,
+      { type: 'assistant', uuid: 'a2', timestamp: '2026-10-17T18:38:00.500Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'true' } }] } },
+    ];
+    expect(midTurn.flatMap(parse).some((e) => e.kind === 'system' && e.origin === 'idle-compact')).toBe(false);
+  });
+});
+
+// D-5373: the server's own nudge after an idle compaction is a plain user row
+// (sendPrompt writes no isMeta); the chat shows it as a pill so the operator
+// sees why a turn started. Matched on the WHOLE trimmed text, never a prefix.
+describe('the idle-compaction nudge is a system pill, not the operator speaking (D-5373)', () => {
+  const parse = (o: object): ChatEvent[] => parseTranscriptLine(JSON.stringify(o));
+  it('a user row whose whole text is the nudge prompt is a system event, origin idle-compact-nudge', () => {
+    expect(parse(NUDGE_ROW.nudge)).toEqual([{
+      kind: 'system', uuid: 'u3', ts: NUDGE_ROW.nudge.timestamp, text: IDLE_COMPACT_NUDGE_PROMPT, origin: 'idle-compact-nudge',
+    }]);
+  });
+  it('the same text in a text block, or with surrounding whitespace, is still the nudge', () => {
+    const blocks = { ...NUDGE_ROW.nudge, message: { role: 'user', content: [{ type: 'text', text: `  ${IDLE_COMPACT_NUDGE_PROMPT}\n` }] } };
+    expect(parse(blocks).map((e) => e.kind === 'system' ? e.origin : e.kind)).toEqual(['idle-compact-nudge']);
+  });
+  it('the operator typing a sentence that merely starts with the nudge stays the operator', () => {
+    const longer = { ...NUDGE_ROW.nudge, message: { role: 'user', content: `${IDLE_COMPACT_NUDGE_PROMPT} Also run the tests.` } };
+    expect(parse(longer).map((e) => e.kind)).toEqual(['user']);
+    const shorter = { ...NUDGE_ROW.nudge, message: { role: 'user', content: 'Continue with your open tasks.' } };
+    expect(parse(shorter).map((e) => e.kind)).toEqual(['user']);
+  });
+  it('a sidechain copy is dropped like every sidechain row', () => {
+    expect(parse({ ...NUDGE_ROW.nudge, isSidechain: true })).toEqual([]);
   });
 });
 
@@ -289,5 +378,507 @@ describe('the limit banner is a system event, not the model speaking (D-2365)', 
   });
   it('a rate_limit error with no isApiErrorMessage flag stays an assistant event — both fields decide', () => {
     expect(parseTranscriptLine(banner({ isApiErrorMessage: undefined })).map((e) => e.kind)).toEqual(['assistant']);
+  });
+});
+
+// — the harness stops wearing the operator's face —
+//
+// Measured 2026-09-11 over this box's 18 session transcripts under
+// `~/.claude/projects` (1892 `type:"user"`, `isSidechain!==true` records whose
+// `message.content` is a string or an array; the other 310 `.jsonl` files there
+// are subagent sidechains, every record `isSidechain:true`, dropped at
+// `parse.ts:68` and never rendered).
+//
+//   family                             n     bytes   renders today   isMeta
+//   injected SKILL body (array)       13   746,871   USER BUBBLE     yes
+//   <task-notification>               12   166,976   USER BUBBLE     no
+//   <local-command-stdout>            64    10,440   USER BUBBLE     no
+//   [Image: original NxN …] note      14     1,490   USER BUBBLE     yes
+//   command envelope, MESSAGE-first    7     1,380   USER BUBBLE     no
+//   command envelope, MESSAGE-first    5       675   USER BUBBLE     yes
+//   -------------------------------------------------------------------
+//   leaking                          115   927,832
+//   genuine human turns              129   169,217   (6 of them /compact
+//                                                     recaps the PWA folds;
+//                                                     largest TYPED is 4,034 B)
+//
+// TWO signals, because neither alone closes it. `isMeta` is Claude Code's own
+// marker and is decisive where it appears — 99 of 99 non-sidechain user records
+// carrying it are harness-written, ZERO are human — but 83 of the 115 leaks do
+// not carry it. Those are ENVELOPES, and the envelope read is anchored to the
+// WHOLE record: a record that is nothing but `<tag>…</tag>` blocks, one of them
+// named. Measured: no human turn in the corpus so much as BEGINS with `<`, and
+// the one human record that quotes `<command-name>` at itself — a 26,861-byte
+// /compact recap — carries prose outside the blocks and stays a user turn.
+describe('a harness-written user record is not the operator speaking', () => {
+  const TS = '2026-09-11T09:14:02.113Z';
+  const rec = (content: unknown, over: Record<string, unknown> = {}): string => JSON.stringify({
+    parentUuid: 'p', isSidechain: false, type: 'user', uuid: 'h1', timestamp: TS,
+    message: { role: 'user', content }, ...over,
+  });
+  const kinds = (line: string): string[] => parseTranscriptLine(line).map((e) => e.kind);
+  const sys = (line: string): Extract<ChatEvent, { kind: 'system' }> => {
+    const [e] = parseTranscriptLine(line);
+    expect(e?.kind).toBe('system');
+    return e as Extract<ChatEvent, { kind: 'system' }>;
+  };
+
+  // — isMeta: the flag the harness writes and nobody else does —
+
+  it('an injected SKILL body is a system row carrying its text verbatim, byte for byte', () => {
+    // The largest single record in the corpus is 92,401 bytes and this shape
+    // recurs 7 times. It RE-ATTRIBUTES, it never drops: `isMeta` belongs to a
+    // harness this tree does not version, so a record it ever mis-stamps still
+    // renders IN FULL under the wrong label, which a reader can see through.
+    const body = `Base directory for this skill: /home/x/.claude/skills/review-pr\n\n# Review PR\n${'x'.repeat(4000)}`;
+    expect(parseTranscriptLine(rec([{ type: 'text', text: body }], { isMeta: true }))).toEqual([
+      { kind: 'system', uuid: 'h1', ts: TS, text: body },
+    ]);
+  });
+
+  it('an image-scaling note is a system row — STRING content, which an array-only rule would miss', () => {
+    const note = '[Image: original 3122x1532, displayed at 2000x981. Multiply coordinates by 1.56 to map to original image.]';
+    expect(parseTranscriptLine(rec(note, { isMeta: true }))).toEqual([
+      { kind: 'system', uuid: 'h1', ts: TS, text: note },
+    ]);
+  });
+
+  it('an isMeta record carrying a tool_result still emits its tool_result — the arm relabels per BLOCK', () => {
+    // The relabel lives inside the array loop, beside the push it replaces, so
+    // it cannot swallow a block it does not understand. A guard hoisted above
+    // that loop and fed through `flattenContent` would: that helper reads
+    // `b.text`, and a tool_result block carries `.content`.
+    const line = rec([
+      { type: 'tool_result', tool_use_id: 'toolu_9', content: 'exit 0\nok' },
+      { type: 'text', text: 'and a note' },
+    ], { isMeta: true });
+    expect(kinds(line)).toEqual(['tool_result', 'system']);
+    expect(parseTranscriptLine(line)[0]).toMatchObject({ kind: 'tool_result', toolId: 'toolu_9', text: 'exit 0\nok' });
+  });
+
+  it('only the literal true relabels — a truthy flag is not the harness flag', () => {
+    for (const over of [{}, { isMeta: false }, { isMeta: 'true' }, { isMeta: 1 }]) {
+      expect(kinds(rec('ship it', over)), JSON.stringify(over)).toEqual(['user']);
+      expect(kinds(rec([{ type: 'text', text: 'ship it' }], over)), JSON.stringify(over)).toEqual(['user']);
+    }
+  });
+
+  it('NOTHING without the flag becomes a system row, however much it reads like an injection', () => {
+    for (const body of [
+      '# Workflow authoring reference',
+      'Base directory for this skill: /home/x/.claude/skills/review-pr',
+      '[Image: original 2044x1636, displayed at 1092x874]',
+      'Continue from where you left off.',
+    ]) {
+      expect(kinds(rec(body)), body).toEqual(['user']);
+      expect(kinds(rec([{ type: 'text', text: body }])), body).toEqual(['user']);
+    }
+  });
+
+  // — the command envelope: same record, two tag orders —
+
+  const NAME_FIRST = '<command-name>/effort</command-name>\n<command-message>effort</command-message>\n<command-args>ultracode</command-args>';
+  const MSG_FIRST = '<command-message>review-pr</command-message>\n<command-name>/review-pr</command-name>\n<command-args>https://example.test/pr/1</command-args>';
+  const MSG_FIRST_META = '<command-message>workflow-authoring</command-message>\n<command-name>workflow-authoring</command-name>\n<skill-format>true</skill-format>';
+
+  it('reads a MESSAGE-first envelope as the same row as a NAME-first one — 12 of 76 are that order', () => {
+    expect(parseTranscriptLine(rec(MSG_FIRST))).toEqual([{ kind: 'system', uuid: 'h1', ts: TS, text: '/review-pr' }]);
+    expect(parseTranscriptLine(rec(NAME_FIRST))).toEqual([{ kind: 'system', uuid: 'h1', ts: TS, text: '/effort' }]);
+  });
+
+  it('and reads the isMeta half of that pair the same way — the envelope is read BEFORE the flag', () => {
+    // 5 of the 12 MESSAGE-first records carry `isMeta`. Reading the flag first
+    // would render the same operator action two ways: 64 siblings as a clean
+    // `/name` pill and these 5 as a fold of raw XML.
+    expect(parseTranscriptLine(rec(MSG_FIRST_META, { isMeta: true })))
+      .toEqual([{ kind: 'system', uuid: 'h1', ts: TS, text: 'workflow-authoring' }]);
+  });
+
+  it('a human who QUOTES an envelope keeps every word — prose outside the blocks is the tell', () => {
+    // The one human record in the corpus that contains `<command-name>` is a
+    // 26,861-byte /compact recap quoting the whole exchange. It must stay a
+    // user turn, and `startsWith` could not have told it from the real thing.
+    const quoting = '<command-name>/clear</command-name>\nwhat does this render as? I never typed it';
+    expect(parseTranscriptLine(rec(quoting))).toEqual([{ kind: 'user', uuid: 'h1', ts: TS, text: quoting }]);
+  });
+
+  it('a human pasting markup keeps every word — the MEMBER NAME decides, not the shape', () => {
+    // A purely structural "entirely tag blocks" rule has zero false positives
+    // on this corpus and still silences every one of these, because no human
+    // turn measured here so much as begins with `<`. The corpus never exercised
+    // the predicate; the named member is what makes it safe, not the corpus.
+    for (const paste of [
+      '<p>one</p>\n<p>two</p>',
+      '<div>the thing I want changed</div>',
+      '<details><summary>the failing run</summary>stack trace</details>',
+      '<config>\n  <name>prod</name>\n  <port>8080</port>\n</config>',
+      '<svg><circle></circle></svg>',
+    ]) {
+      expect(kinds(rec(paste)), paste).toEqual(['user']);
+      expect(parseTranscriptLine(rec(paste))[0], paste).toMatchObject({ text: paste });
+    }
+  });
+
+  it('an envelope whose command-name is empty keeps the raw record — nothing vanishes', () => {
+    const empty = '<command-name></command-name>\n<command-message>x</command-message>';
+    expect(parseTranscriptLine(rec(empty))).toEqual([{ kind: 'system', uuid: 'h1', ts: TS, text: empty }]);
+  });
+
+  // — a slash command's own stdout: the ANSWER to the row above it —
+
+  const EFFORT = 'Set effort level to ultracode (this session only): xhigh + dynamic workflow orchestration';
+
+  it('renders a command\'s stdout as a system row rather than as the operator', () => {
+    expect(parseTranscriptLine(rec(`<local-command-stdout>${EFFORT}</local-command-stdout>`)))
+      .toEqual([{ kind: 'system', uuid: 'h1', ts: TS, text: EFFORT }]);
+  });
+
+  it('strips the ANSI it arrives wrapped in, and keeps the line structure', () => {
+    // Verbatim: 6 of the 64 stdout records are `/compact`'s hook chatter wrapped
+    // in dim/reset runs. Measured across all 64, the ONLY control codepoints
+    // present are ESC (x36, every one of them `\e[2m` or `\e[22m`) and LF (x12)
+    // — no cursor moves, no erase, no OSC, no CR — which is why SGR is stripped
+    // and nothing else is.
+    const raw = '<local-command-stdout>\x1b[2mCompacted (ctrl+o to see full summary)\x1b[22m\n'
+      + '\x1b[2mPreCompact [bash "$HOME/.cc-sessions/session-hook.sh"] completed successfully\x1b[22m</local-command-stdout>';
+    expect(sys(rec(raw)).text).toBe(
+      'Compacted (ctrl+o to see full summary)\n'
+      + 'PreCompact [bash "$HOME/.cc-sessions/session-hook.sh"] completed successfully',
+    );
+    expect(sys(rec(raw)).text).not.toContain('\x1b');
+  });
+
+  it('a human who leads with the stdout tag and then types keeps the whole message', () => {
+    // The likeliest shape this tag will ever take in a human turn: pasting the
+    // offending row to ask about it. The read is anchored to the whole record
+    // (`^…$`), so anything after the closing tag disqualifies it — measured,
+    // all 64 real records are the envelope whole and entire.
+    const paste = `<local-command-stdout>${EFFORT}</local-command-stdout>\n\nwhy does this render as me? I never typed it.`;
+    expect(parseTranscriptLine(rec(paste))).toEqual([{ kind: 'user', uuid: 'h1', ts: TS, text: paste }]);
+  });
+
+  it('an unterminated stdout tag is a user turn, not a pill — it is a human mid-paste', () => {
+    expect(kinds(rec('<local-command-stdout>half a li'))).toEqual(['user']);
+  });
+
+  it('stdout that printed nothing still emits a row — a record never disappears', () => {
+    expect(parseTranscriptLine(rec('<local-command-stdout></local-command-stdout>')))
+      .toEqual([{ kind: 'system', uuid: 'h1', ts: TS, text: '' }]);
+  });
+
+  // — the harness reporting a background task it finished —
+
+  const NOTIF = '<task-notification>\n<task-id>w0s3mcrji</task-id>\n'
+    + '<tool-use-id>toolu_01Qj6Dyd</tool-use-id>\n<status>completed</status>\n'
+    + '<summary>Dynamic workflow "resolve the six design forks" completed</summary>\n'
+    + '<result>{"verdict":"shippable"}</result>\n</task-notification>';
+
+  it('a task notification is a system row carrying the record VERBATIM', () => {
+    // The parser says WHAT the record is. What it SAYS is read by
+    // `parseTaskNotification` in `shared/` and rendered by the delivery layer,
+    // the same three-part split mail already has — so no reformatting happens
+    // here, and a reader that cannot render the card still gets every byte.
+    expect(parseTranscriptLine(rec(NOTIF))).toEqual([{ kind: 'system', uuid: 'h1', ts: TS, text: NOTIF }]);
+  });
+
+  it('reads it WITHOUT the harness flag — 12 of 13 carry no isMeta at all', () => {
+    // The envelope is the whole signal here. `isMeta` would have caught one of
+    // the thirteen, which is why the member name is what decides.
+    expect(kinds(rec(NOTIF))).toEqual(['system']);
+    expect(kinds(rec(NOTIF, { isMeta: true }))).toEqual(['system']);
+  });
+
+  it('a human who quotes one keeps every word — prose outside the block is the tell', () => {
+    const asking = NOTIF + '\n\nwhy is this whole wall attributed to me?';
+    expect(parseTranscriptLine(rec(asking))).toEqual([{ kind: 'user', uuid: 'h1', ts: TS, text: asking }]);
+  });
+
+  it('an unterminated notification is a user turn — a human mid-paste is not a record', () => {
+    expect(kinds(rec('<task-notification>\n<task-id>w0s3</task-id>'))).toEqual(['user']);
+  });
+
+  // — and the families that already read correctly, unchanged —
+
+  it('the caveat is still DROPPED, not relabelled', () => {
+    // All 64 in the corpus carry `isMeta`, but the fixture's own caveat row
+    // (`transcript-sample.jsonl` line 4) does NOT, so this check is load-bearing
+    // and stays ahead of both new reads.
+    expect(parseTranscriptLine(rec('<local-command-caveat>Caveat: …</local-command-caveat>'))).toEqual([]);
+    expect(parseTranscriptLine(rec('<local-command-caveat>Caveat: …</local-command-caveat>', { isMeta: true }))).toEqual([]);
+  });
+
+  it('an empty record still produces nothing', () => {
+    expect(parseTranscriptLine(rec('   ', { isMeta: true }))).toEqual([]);
+    expect(parseTranscriptLine(rec([{ type: 'text', text: '  ' }], { isMeta: true }))).toEqual([]);
+  });
+});
+
+/**
+ * D-4950. A message the operator sends while the session is busy is, on current
+ * Claude Code, usually ABSORBED MID-TURN: the transcript gets a
+ * `queue-operation` enqueue, a `queue-operation` remove with
+ * `reason:"absorbed_mid_turn"`, and this `attachment` record — and never a
+ * `type:"user"` record at all. The record below is the measured shape (every
+ * key, in Claude Code's own order) with neutral text and ids.
+ */
+describe('an absorbed mid-turn message is the operator speaking (D-4950)', () => {
+  const PROMPT = 'also check the retention policy';
+  const TS_Q = '2026-10-01T02:47:23.054Z';
+  const queued = (attachment: Record<string, unknown>, extra: Record<string, unknown> = {}): string => JSON.stringify({
+    parentUuid: 'p-1', isSidechain: false,
+    attachment: {
+      type: 'queued_command', prompt: PROMPT, source_uuid: 's-1', commandMode: 'prompt',
+      origin: { kind: 'human' }, timestamp: TS_Q, humanTurn: true, ...attachment,
+    },
+    type: 'attachment', uuid: 'q-1', timestamp: TS_Q,
+    rendered: [{ content: `<system-reminder>\nThe user sent a new message while you were working:\n${PROMPT}\n\n</system-reminder>` }],
+    renderedRole: 'system', session_id: 'sess-a', userType: 'external', entrypoint: 'cli',
+    cwd: '/work/project-a', sessionId: 'sess-a', version: '2.1.285', gitBranch: 'ws/lane-a',
+    ...extra,
+  });
+
+  it('parses to ONE user event carrying the prompt verbatim, the record\'s own uuid and timestamp', () => {
+    expect(parseTranscriptLine(queued({}))).toEqual([{ kind: 'user', uuid: 'q-1', ts: TS_Q, text: PROMPT }]);
+  });
+
+  it('reads the record without `humanTurn` the same way — older builds never wrote it', () => {
+    expect(parseTranscriptLine(queued({ humanTurn: undefined }))).toEqual([
+      { kind: 'user', uuid: 'q-1', ts: TS_Q, text: PROMPT },
+    ]);
+  });
+
+  it('a queued task notification is not the operator — it stays dropped, in both measured shapes', () => {
+    const notif = '<task-notification>\n<task-id>t1</task-id>\n<status>completed</status>\n</task-notification>';
+    expect(parseTranscriptLine(queued({ prompt: notif, commandMode: 'task-notification', origin: undefined }))).toEqual([]);
+    expect(parseTranscriptLine(queued({
+      prompt: notif, commandMode: 'task-notification', origin: { kind: 'task-notification', producer: 'session-task' },
+    }))).toEqual([]);
+  });
+
+  it('a message from a PEER agent is not the operator, though its mode is `prompt`', () => {
+    expect(parseTranscriptLine(queued({ origin: { kind: 'peer', from: 'agent-a', body: PROMPT } }))).toEqual([]);
+  });
+
+  it('a human\'s queued item in another mode (`bash`) is not prose the operator sent', () => {
+    expect(parseTranscriptLine(queued({ prompt: 'ls -la', commandMode: 'bash' }))).toEqual([]);
+  });
+
+  it('an empty or non-string prompt produces nothing, and never throws', () => {
+    expect(parseTranscriptLine(queued({ prompt: '   ' }))).toEqual([]);
+    expect(parseTranscriptLine(queued({ prompt: 42 }))).toEqual([]);
+    expect(parseTranscriptLine(queued({ origin: null }))).toEqual([]);
+    expect(parseTranscriptLine(JSON.stringify({ type: 'attachment', uuid: 'q-2', timestamp: TS_Q, attachment: null }))).toEqual([]);
+  });
+
+  it('every other attachment, and the queue-operation records around it, stay dropped', () => {
+    // The TYPE decides first: the same speaker and mode fields under another
+    // attachment type are not this record, however much they look like it.
+    expect(parseTranscriptLine(queued({ type: 'queued_command_preview' }))).toEqual([]);
+    expect(parseTranscriptLine(JSON.stringify({
+      type: 'attachment', uuid: 'q-3', timestamp: TS_Q, attachment: { type: 'edited_text_file', filename: 'a.ts' },
+    }))).toEqual([]);
+    expect(parseTranscriptLine(JSON.stringify({
+      type: 'queue-operation', operation: 'remove', reason: 'absorbed_mid_turn', timestamp: TS_Q, sessionId: 'sess-a',
+    }))).toEqual([]);
+  });
+
+  it('a sidechain\'s absorbed message is a subagent\'s, not the operator\'s', () => {
+    expect(parseTranscriptLine(queued({}, { isSidechain: true }))).toEqual([]);
+  });
+
+  it('the text is byte for byte what a user record of the same message reads as — nothing trimmed', () => {
+    // The PWA matches this text against `composePrompt`'s output byte for
+    // byte, and a string user record's text is its content verbatim. The two
+    // paths describe the same kind of message and have to agree: a trim here
+    // would leave an indented or newline-ended message's bubble unmatched.
+    const raw = '  indented first line\n\n- a bullet\n';
+    expect(parseTranscriptLine(JSON.stringify({
+      type: 'user', uuid: 'u-1', timestamp: TS_Q, message: { role: 'user', content: raw },
+    }))).toEqual([{ kind: 'user', uuid: 'u-1', ts: TS_Q, text: raw }]);
+    expect(parseTranscriptLine(queued({ prompt: raw }))).toEqual([{ kind: 'user', uuid: 'q-1', ts: TS_Q, text: raw }]);
+  });
+});
+import { continuationOf, continuationInTail, finishedTurnDecides, tailRecordOf, CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
+
+const OLD = 'a'.repeat(36);
+const NEW = 'b'.repeat(36);
+
+describe('continuationOf', () => {
+  const marker = (from: string, to: string): string =>
+    JSON.stringify({ type: 'continued-in', sessionId: from, continuedInSessionId: to });
+
+  it('answers the successor uuid for the session that wrote the line', () => {
+    expect(continuationOf(marker(OLD, NEW), OLD)).toBe(NEW);
+  });
+
+  it('answers null for every other record type', () => {
+    expect(continuationOf(JSON.stringify({ type: 'user', message: {} }), OLD)).toBeNull();
+  });
+
+  // Review Focus 1: a line caught mid-write is not a marker and is not a throw.
+  it('answers null for a half-written line rather than throwing', () => {
+    expect(continuationOf(marker(OLD, NEW).slice(0, 40), OLD)).toBeNull();
+    expect(continuationOf('', OLD)).toBeNull();
+    expect(continuationOf('{', OLD)).toBeNull();
+  });
+
+  it('refuses a marker another session wrote', () => {
+    expect(continuationOf(marker('c'.repeat(36), NEW), OLD)).toBeNull();
+  });
+
+  // absence-permits: a record with no sessionId is still that file's marker.
+  it('accepts a marker that names no sessionId', () => {
+    expect(continuationOf(JSON.stringify({ type: 'continued-in', continuedInSessionId: NEW }), OLD))
+      .toBe(NEW);
+  });
+
+  it('refuses a successor that is not a uuid, and refuses itself', () => {
+    expect(continuationOf(marker(OLD, 'nope'), OLD)).toBeNull();
+    expect(continuationOf(marker(OLD, OLD), OLD)).toBeNull();
+  });
+
+  // Review Focus 4: the window is the contract, so the constant is the contract.
+  it('declares a tail window big enough for a marker line', () => {
+    expect(CONTINUATION_TAIL_BYTES).toBeGreaterThanOrEqual(marker(OLD, NEW).length * 4);
+  });
+});
+
+// D-4940. The whole fixture table lives in `continued-in-parity.test.ts`, run
+// by all three readers; these pin the three answers of the per-line classifier
+// the TypeScript reader is built from.
+describe('tailRecordOf / continuationInTail (D-4940)', () => {
+  const line = (o: unknown): string => JSON.stringify(o);
+  const marker = line({ type: 'continued-in', sessionId: OLD, continuedInSessionId: NEW });
+
+  it('classifies a line three ways: a successor, a deciding stop, or a skip', () => {
+    expect(tailRecordOf(marker, OLD)).toEqual({ kind: 'successor', to: NEW });
+    expect(tailRecordOf(line({ type: 'user', message: { content: 'x' } }), OLD)).toEqual({ kind: 'stop' });
+    expect(tailRecordOf(line({ type: 'assistant', message: { content: [], stop_reason: 'end_turn' } }), OLD)).toEqual({ kind: 'stop' });
+    expect(tailRecordOf(line({ type: 'continued-in', sessionId: 'c'.repeat(36), continuedInSessionId: NEW }), OLD)).toEqual({ kind: 'stop' });
+    expect(tailRecordOf(line({ type: 'last-prompt', lastPrompt: 'x' }), OLD)).toEqual({ kind: 'skip' });
+    expect(tailRecordOf(marker.slice(0, 30), OLD)).toEqual({ kind: 'skip' });
+  });
+
+  it('a top-level record decides; a marker-shaped object nested inside one never does', () => {
+    const nested = line({ message: { content: [{ type: 'tool_use', input: { type: 'continued-in', continuedInSessionId: NEW } }], stop_reason: 'tool_use' }, type: 'assistant', sessionId: OLD });
+    expect(tailRecordOf(nested, OLD)).toEqual({ kind: 'stop' });
+    const inMeta = line({ type: 'attachment', attachment: { type: 'continued-in', continuedInSessionId: NEW }, sessionId: OLD });
+    expect(tailRecordOf(inMeta, OLD)).toEqual({ kind: 'skip' });
+  });
+
+  it('a user/assistant record decides only when Claude Code calls it a finished turn (D-4940)', () => {
+    // Claude Code 2.1.296's own reader steps over the rest, so stopping at
+    // them declined a follow it makes. Its assistant test, then its prompt test.
+    const skip = { kind: 'skip' }, stop = { kind: 'stop' };
+    expect(tailRecordOf(line({ type: 'assistant', message: { content: [], stop_reason: null } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'assistant', message: { content: [] } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'assistant', isApiErrorMessage: true, message: { stop_reason: 'end_turn' } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'assistant', isApiErrorMessage: false, message: { stop_reason: 'end_turn' } }), OLD)).toEqual(stop);
+    expect(tailRecordOf(line({ type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }, { type: 'text', text: 'and this' }] } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', isMeta: true, message: { content: 'x' } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', message: { content: '<local-command-stdout>done</local-command-stdout>' } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', message: { content: '[Request interrupted by user] <bash-input>ls</bash-input>' } }), OLD)).toEqual(stop);
+  });
+
+  it('presence of a sessionId must be this file\'s own: null refuses, absence permits', () => {
+    expect(continuationOf(line({ type: 'continued-in', sessionId: null, continuedInSessionId: NEW }), OLD)).toBeNull();
+    expect(continuationOf(line({ type: 'continued-in', continuedInSessionId: NEW }), OLD)).toBe(NEW);
+  });
+
+  it('scans newest first, stepping over metadata and stopping at a conversational record', () => {
+    const meta = line({ type: 'ai-title', aiTitle: 't' });
+    const turn = line({ type: 'user', message: { content: 'x' } });
+    expect(continuationInTail(`${turn}\n${marker}\n${meta}\n`, OLD)).toBe(NEW);
+    expect(continuationInTail(`${marker}\n${turn}\n${meta}\n`, OLD)).toBeNull();
+    expect(continuationInTail('', OLD)).toBeNull();
+  });
+
+  it('finishedTurnDecides: only a FINISHED TURN as the newest deciding line says "resumed" — never a window ' +
+     'with no deciding line, never a marker the rule refuses (D-4946, #189 re-review)', () => {
+    // `continuationInTail` answers null for all three; only the first is what
+    // Claude Code's own reader stops at with "not continued". The stream
+    // un-follows a fork on this answer, not on that null.
+    const meta = line({ type: 'ai-title', aiTitle: 't' });
+    const turn = line({ type: 'user', message: { content: 'x' } });
+    const done = line({ type: 'assistant', message: { content: [], stop_reason: 'end_turn' } });
+    const streaming = line({ type: 'assistant', message: { content: [], stop_reason: null } });
+    const foreign = line({ type: 'continued-in', sessionId: 'c'.repeat(36), continuedInSessionId: NEW });
+    const toSelf = line({ type: 'continued-in', sessionId: OLD, continuedInSessionId: OLD });
+    const nested = line({ message: { content: [{ type: 'tool_use', input: { type: 'continued-in', continuedInSessionId: NEW } }], stop_reason: 'tool_use' }, type: 'assistant', sessionId: OLD });
+    // A finished turn after the marker, metadata or not after it.
+    expect(finishedTurnDecides(`${marker}\n${turn}\n${meta}\n`, OLD)).toBe(true);
+    expect(finishedTurnDecides(`${marker}\n${streaming}\n${done}\n${streaming}\n`, OLD)).toBe(true);
+    // F1: an assistant record carrying a marker-shaped tool input is a turn.
+    expect(finishedTurnDecides(`${marker}\n${nested}\n`, OLD)).toBe(true);
+    // The marker itself is newest: continued.
+    expect(finishedTurnDecides(`${turn}\n${marker}\n${meta}\n`, OLD)).toBe(false);
+    // A marker the rule refuses decides "no successor" — but it is no turn.
+    expect(finishedTurnDecides(`${turn}\n${foreign}\n`, OLD)).toBe(false);
+    expect(finishedTurnDecides(`${turn}\n${toSelf}\n`, OLD)).toBe(false);
+    // Nothing decides: metadata only, a cut line, a turn still streaming, empty.
+    expect(finishedTurnDecides(`${meta}\n${meta}\n`, OLD)).toBe(false);
+    expect(finishedTurnDecides(`${turn.slice(5)}\n${meta}\n`, OLD)).toBe(false);
+    expect(finishedTurnDecides(`${streaming}\n`, OLD)).toBe(false);
+    expect(finishedTurnDecides('', OLD)).toBe(false);
+  });
+});
+
+// D-7186 (Task C7h, the server half): `ChatEvent`'s user and assistant arms carry an optional `compaction: true` on a
+// /compact recap. Two sources, each its own row: Claude Code's `isCompactSummary` marker, and the recap pattern the PWA
+// folds by today (moved here unchanged, both forms: bare and after a bracketed tag). Absent, never `false`.
+describe('the compaction flag on user and assistant events (D-7186)', () => {
+  const RECAP = 'This session is being continued from a previous conversation that ran out of context.';
+  const T = '2026-10-29T00:00:00.000Z';
+  const parse = (o: object): ChatEvent[] => parseTranscriptLine(JSON.stringify(o));
+  const user = (content: unknown, extra: object = {}): ChatEvent[] =>
+    parse({ type: 'user', uuid: 'u1', timestamp: T, ...extra, message: { role: 'user', content } });
+  const assistant = (content: unknown): ChatEvent[] =>
+    parse({ type: 'assistant', uuid: 'a1', timestamp: T, message: { role: 'assistant', content } });
+
+  it('the marker: an isCompactSummary user record carries the flag, whatever its words', () => {
+    expect(user(RECAP, { isCompactSummary: true })).toEqual([{ kind: 'user', uuid: 'u1', ts: T, text: RECAP, compaction: true }]);
+    expect(user('Summary of the work so far.', { isCompactSummary: true }))
+      .toEqual([{ kind: 'user', uuid: 'u1', ts: T, text: 'Summary of the work so far.', compaction: true }]);
+    expect(user([{ type: 'text', text: 'Summary in a block.' }], { isCompactSummary: true }))
+      .toEqual([{ kind: 'user', uuid: 'u1', ts: T, text: 'Summary in a block.', compaction: true }]);
+  });
+
+  it('the pattern: a user- or assistant-kind text that opens with the recap carries the flag, bare or after a bracketed tag', () => {
+    expect(user(RECAP)).toEqual([{ kind: 'user', uuid: 'u1', ts: T, text: RECAP, compaction: true }]);
+    expect(user(`  [summary] ${RECAP}`)).toEqual([{ kind: 'user', uuid: 'u1', ts: T, text: `  [summary] ${RECAP}`, compaction: true }]);
+    expect(user([{ type: 'text', text: RECAP }])).toEqual([{ kind: 'user', uuid: 'u1', ts: T, text: RECAP, compaction: true }]);
+    expect(assistant(RECAP)).toEqual([{ kind: 'assistant', uuid: 'a1', ts: T, text: RECAP, compaction: true }]);
+    expect(assistant([{ type: 'text', text: RECAP }, { type: 'text', text: 'more' }]))
+      .toEqual([{ kind: 'assistant', uuid: 'a1', ts: T, text: `${RECAP}\nmore`, compaction: true }]);
+  });
+
+  it('no flag, and no key: the recap quoted mid-text, another case, an ordinary turn', () => {
+    for (const events of [user(`Earlier it said: ${RECAP}`), user(RECAP.toLowerCase()), assistant(`As the note says: ${RECAP}`),
+      user('hello'), assistant([{ type: 'text', text: 'a reply' }])]) {
+      expect(events).toHaveLength(1);
+      expect('compaction' in events[0]!).toBe(false);
+    }
+  });
+
+  it('only the user and assistant arms carry it: a meta summary is a system row, a tool block is its own event', () => {
+    const meta = user(RECAP, { isCompactSummary: true, isMeta: true });
+    expect(meta).toEqual([{ kind: 'system', uuid: 'u1', ts: T, text: RECAP }]);
+    const mixed = assistant([{ type: 'text', text: RECAP }, { type: 'tool_use', id: 't1', name: 'Read', input: {} }]);
+    expect(mixed.map((e) => [e.kind, 'compaction' in e])).toEqual([['assistant', true], ['tool_use', false]]);
+  });
+
+  it('over the transcript fixtures: no event carries the flag (neither file holds a recap)', () => {
+    const dir = path.dirname(fixture);
+    const events = ['transcript-sample.jsonl', 'transcript-ask-2col.jsonl'].flatMap((f) =>
+      readFileSync(path.join(dir, f), 'utf8').split('\n').filter((l) => l.trim() !== '').flatMap(parseTranscriptLine));
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.filter((e) => 'compaction' in e)).toEqual([]);
+  });
+
+  it('a fleet-shaped summary (the recap and its closing sentence) carries the flag', () => {
+    const summary = { type: 'user', isCompactSummary: true, uuid: 's1', timestamp: T,
+      message: { role: 'user', content: `${RECAP} Continue the conversation from where it left off without asking the user any further questions.` } };
+    expect(parse(summary).map((e) => [e.kind, (e as { compaction?: true }).compaction])).toEqual([['user', true]]);
   });
 });

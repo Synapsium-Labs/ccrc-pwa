@@ -4,7 +4,7 @@
 // already enumerates; that suite (run unchanged, Step 4) is the proof this
 // task added none.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
@@ -19,7 +19,8 @@ import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO, unreadableField } from './ioDoubles.js';
 import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
 import { HOLD_REASON_MAX_CHARS, holdReason, holdReasonVerdict } from '../src/coord/rundefs.js';
-import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
+import { REVIEWER_KICKOFF_PREFIX, WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
+import { REVIEW_ROUND_CAP } from '../src/coord/reviewcap.js';
 import {
   MAIL_BODY_MAX_BYTES,
   PROGRAM_SLUG_MAX_CHARS,
@@ -28,8 +29,12 @@ import {
   WORK_ITEM_MAX,
   WORK_ITEM_TITLE_MAX,
   isSkillState,
+  type RunSummary,
 } from '../../shared/api.js';
-import { okRun, okRuns } from './coordReadHelpers.js';
+import { okRun, okRuns, parentOfSession } from './coordReadHelpers.js';
+import { KeyedQueue } from '../src/inject/queue.js';
+import { NotifyLog } from '../src/notifylog.js';
+import { landingStoreOver } from './landingFixture.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -57,7 +62,7 @@ const CLAIMED_BY = 'ccrc-pwa-coordinator';
 const TOKEN = 'f'.repeat(64);
 
 const OPEN_BODY = { program: 'build4', title: 'Transcript surface', project: PROJECT,
-  wave: 1, waveOf: 3, claimedBy: CLAIMED_BY };
+  wave: 1, waveOf: 3, claimedBy: CLAIMED_BY, homeProject: PROJECT };
 
 /** A full registry row — same field set `hold-gate.test.ts`'s own `seed`
  *  writes, so a fixture session reads exactly like a real ccd one. */
@@ -66,9 +71,31 @@ const seed = (home: string, id: string, over: Partial<Record<string, string>> = 
   mkdirSync(reg, { recursive: true });
   const fields: Record<string, string> = {
     wrapper: 'claude', project: PROJECT, workdir: `/w/${id}`, uuid: `u-${id}`, started: '1',
-    workspace: id, branch: `ws/${id}`, base: 'origin/main', ...over,
+    workspace: id, branch: `ws/${id}`, base: 'origin/main',
+    // D-5298: every session here other than the coordinator is a dispatched
+    // child, as `ws-add --child <run>` makes one — `POST /api/runs` binds only
+    // children (`409 not-a-child`). The marker names a run no case opens, so
+    // rule 3's child gate reads an unplaceable birth and asks `pr-state`, which
+    // `makeRunner` answers with no PR for a child. `child: ''` opts a row out.
+    ...(id === CLAIMED_BY ? {} : { child: '999' }), ...over,
   };
-  for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
+  for (const [k, v] of Object.entries(fields)) {
+    if (k === 'child' && v === '') continue;
+    writeFileSync(path.join(reg, `${id}.${k}`), v);
+  }
+};
+/** `child-reclaim-refusals.test.ts`'s `noPrLine`: a child that has had no PR. */
+const noPrLine = (id: string): string =>
+  JSON.stringify({ id, rows: [], baseShort: 'main', branch: `ws/${id}`, ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 });
+
+/** D-5238: the pane pid `makeRunner` answers, and the idle live file it names under the `claude` wrapper's config
+ *  dir — what the resume arm's live `/clear` gate reads as a measured-idle pane. */
+const LIVE_PANE = 4242;
+const seedIdleLive = (home: string): void => {
+  const dir = path.join(home, '.claude', 'sessions');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, `${LIVE_PANE}.json`),
+    JSON.stringify({ pid: LIVE_PANE, sessionId: 'u-live', status: 'idle', statusUpdatedAt: 1 }));
 };
 
 /** The scripted `capture-pane` sequence a happy `sendPrompt('/clear')` needs
@@ -80,9 +107,14 @@ interface RunnerConfig {
   /** ids `ws-add` fabricates in the registry, simulating what ccd's own
    *  `cmd_ws_add` does — default one, for the ordinary wave-1 case. */
   wsAddCreates?: string[];
+  /** Per-call override: the n-th `ws-add` seeds the n-th list here, falling
+   *  back to `wsAddCreates` once exhausted — for a fixture that dispatches
+   *  TWO fresh spawns (a work run then its reviewer) and needs the registry
+   *  diff to see exactly one NEW row on each `ws-add`, not the same id twice. */
+  wsAddCreatesPerCall?: string[][];
   /** Verbs that fail (`code: 1`) rather than succeed. */
   fail?: ReadonlySet<string>;
-  prState?: { code: number; stdout: string; stderr: string };
+  prState?: { ran: true, code: number; stdout: string; stderr: string };
   panes?: string[];
 }
 
@@ -95,25 +127,38 @@ interface RunnerConfig {
 function makeRunner(home: string, cfg: RunnerConfig = {}): { run: Runner; calls: string[][] } {
   const calls: string[][] = [];
   let capIdx = 0;
+  let wsAddCalls = 0;
   const panes = cfg.panes ?? CLEAR_PANES;
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (cfg.fail?.has(verb)) return { code: 1, stdout: '', stderr: `${verb} failed` };
+    if (cfg.fail?.has(verb)) return { ran: true as const, code: 1, stdout: '', stderr: `${verb} failed` };
     if (verb === 'ws-add') {
-      const ids = cfg.wsAddCreates ?? [`${PROJECT}-fresh`];
+      const ids = cfg.wsAddCreatesPerCall?.[wsAddCalls++] ?? cfg.wsAddCreates ?? [`${PROJECT}-fresh`];
       for (const id of ids) seed(home, id);
       // A DECOY sentence, deliberately wrong: proves the route learns the id
       // from the registry diff, never from parsing this text.
-      return { code: 0, stdout: 'workspace demo-decoy-sentence on claude — /w/x (branch ws/decoy)', stderr: '' };
+      return { ran: true as const, code: 0, stdout: 'workspace demo-decoy-sentence on claude — /w/x (branch ws/decoy)', stderr: '' };
     }
-    if (verb === 'pr-state') return cfg.prState ?? { code: 0, stdout: '', stderr: '' };
+    if (verb === 'pr-state') {
+      if (cfg.prState) return cfg.prState;
+      // D-5298: rule 3's child gate asks about a CHILD it is binding; a
+      // child here has had no PR. Anything else answers as before.
+      const id = args[1] === '--session' ? args[2] ?? '' : '';
+      const child = id !== '' && existsSync(path.join(home, '.cc-sessions', `${id}.child`));
+      return { ran: true as const, code: 0, stdout: child ? `${noPrLine(id)}\n` : '', stderr: '' };
+    }
     if (verb === 'capture-pane') {
       const p = panes[Math.min(capIdx, panes.length - 1)]!;
       capIdx++;
-      return { code: 0, stdout: p, stderr: '' };
+      return { ran: true as const, code: 0, stdout: p, stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };   // ensure, ws-hold, ws-release, ws-archive, send-keys, has-session…
+    // D-5238: the resume arm's live `/clear` gate reads the pane. `ensure` finds it already alive (`cmd_ensure`'s
+    // `alive: <id>`), and its pid names the idle live file `openApp` writes — the measured-idle pane every resume
+    // case below assumes. A case about the gate itself lives in `dispatch-live-gate.test.ts`.
+    if (verb === 'ensure') return { ran: true as const, code: 0, stdout: `alive: ${args[1] ?? ''}\n`, stderr: '' };
+    if (verb === 'list-panes' && args.includes('#{pane_pid}')) return { ran: true as const, code: 0, stdout: `${LIVE_PANE}\n`, stderr: '' };
+    return { ran: true as const, code: 0, stdout: '', stderr: '' };   // ws-hold, ws-release, ws-archive, send-keys, has-session…
   };
   return { run, calls };
 }
@@ -133,18 +178,33 @@ const openApp = async (
   // same way `seed()` already creates it as a side effect of writing a real
   // session's fields.
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  seedIdleLive(home);
+  // D-5298: the claimant every open names is a registry row of the run's
+  // project — unless the case already seeded it its own way.
+  if (!existsSync(path.join(home, '.cc-sessions', `${CLAIMED_BY}.uuid`))) seed(home, CLAIMED_BY);
+  // Landing order wave 5f: an advance into or out of `merging` that names a PR goes through the landing line's guarded
+  // entrances, which need a configured journal and its boot replay: a fixture journal beside the fixture database.
+  const dbPath = path.join(home, '.ccrc', 'coord.db');
+  const coord = landingStoreOver(openCoordDb(dbPath), dbPath);
   const base = testDeps(home, run);
-  const app = await buildServer({ ...base, mailToken: TOKEN, coord, ...over, cfg: { ...base.cfg, ...(over.cfg ?? {}) } });
+  const app = legacyOpens(await buildServer({ ...base, mailToken: TOKEN, coord, ...over, cfg: { ...base.cfg, ...(over.cfg ?? {}) } }), coord.db);
   return { app, coord };
 };
 
 const tokenHeaders = (token: string | null): Record<string, string> =>
   token === null ? {} : { 'x-ccrc-mail-token': token };
 
+/** D-5298 (coordinator-first Task 11b): an open is attributed against the
+ *  claimant's own registry row. Every open here sends the claimant's uuid —
+ *  `seed`'s `u-<id>` — unless the body names `claimedByUuid` itself (a case
+ *  about attribution passes the key, `undefined` included). */
+const attributed = (body: unknown): Record<string, unknown> => {
+  const b = body as Record<string, unknown>;
+  return typeof b?.claimedBy === 'string' && !('claimedByUuid' in b) ? { ...b, claimedByUuid: `u-${b.claimedBy}` } : b;
+};
 const postOpen = (app: FastifyInstance, body: unknown = OPEN_BODY, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: '/api/runs', headers: tokenHeaders(token),
-    payload: body as Record<string, unknown> });
+    payload: attributed(body) });
 
 /** A `toId:'worker'` brief queued to `to` on `runId`, the shape a wave brief
  *  takes in the store — the mail row keeps the ROLE, the delivery the
@@ -199,6 +259,85 @@ describe('POST /api/runs', () => {
     expect(okRun(w.coord.run(id))?.state).toBe('planned');
   });
 
+  it('stamps the coordinator project read from the registry — of any project since D-5523', async () => {
+    // `claimedBy`'s registry record names a DIFFERENT project than the run's
+    // own `project` field and its home, deliberately: the stamp proves the
+    // route read the registry, not the run's column. D-5298 refused this open;
+    // since D-5523 (the operator's ruling of 2026-10-18, #601) a coordinator
+    // may sit in any project, so it is admitted and stamped with the REGISTRY
+    // value. An admitted open's stamp is the MEASURED (trimmed) registry value.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, CLAIMED_BY, { project: 'project-n' });
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY });
+    expect(res.statusCode).toBe(200);
+    expect(okRun(w.coord.run((res.json() as { id: number }).id))?.coordProject).toBe('project-n');
+    seed(home, CLAIMED_BY, { project: `${PROJECT}\n` });
+    const ok = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: CLAIMED_BY });
+    expect(ok.statusCode).toBe(200);
+    expect(okRun(w.coord.run((ok.json() as { id: number }).id))?.coordProject).toBe(PROJECT);
+  });
+
+  it('admits a crossing — a claimant of the programme\'s HOME opening a run elsewhere — and stamps the home (D-5388)', async () => {
+    // The cross-repo ruling: a programme's waves may run in ANY project, and
+    // the coordinator sits in the home. A fresh-spawn crossing is admitted and
+    // its stamp is the claimant's measured project, which is what the board's
+    // crossing marking reads. Binding an EXISTING child of the run's project
+    // from outside it is refused: a crossing spawns fresh.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, CLAIMED_BY, { project: 'project-n' });
+    seed(home, 'demo-existing-child');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY, homeProject: 'project-n' });
+    expect(res.statusCode).toBe(200);
+    const id = (res.json() as { id: number }).id;
+    expect(okRun(w.coord.run(id))?.coordProject).toBe('project-n');
+    expect(okRun(w.coord.run(id))?.project).toBe(PROJECT);
+    const bound = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: CLAIMED_BY, homeProject: 'project-n',
+      sessionId: 'demo-existing-child' });
+    expect([bound.statusCode, bound.json()]).toEqual([409, { ok: false, refused: 'project-mismatch', by: 'project-n',
+      detail: `demo-existing-child is an existing session of ${PROJECT} and the claimant is of project-n — a crossing wave opens without sessionId and spawns fresh` }]);
+  });
+
+  it('refuses a coordinator with no registry record — 403 unknown-sender, where the stamp once read "absence permits" (D-5298)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, claimedBy: 'never-seeded-coordinator' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-sender' });
+    expect(okRuns(w.coord.runs())).toHaveLength(0);
+  });
+
+  it('refuses — never stamps the session id or the empty string — when .project is ' +
+     'unreadable or present-but-empty (fix round 1, Important finding; D-5298)', async () => {
+    // `SessionRecord.project`'s `project ?? id` default (`registry.ts`'s
+    // `buildRecord`) would otherwise reach this PERMANENT, never-backfilled
+    // stamp as if it were a measurement (D-2342). Before D-5298 both failure
+    // shapes left the stamp null; since coordinator-first Task 11b the
+    // claimant's project must be MEASURED and the run's, so an unreadable one
+    // is the transient 502 and an empty one is `project-mismatch`.
+    const home = mkTmp('ccrc-runs-');
+    const EMPTY_PROJECT_COORD = 'ccrc-pwa-coordinator-empty';
+    seed(home, CLAIMED_BY, { project: 'project-n' });   // present, but reads UNREADABLE below
+    seed(home, EMPTY_PROJECT_COORD, { project: '', child: '' });   // present, zero bytes
+    const io = unreadableField(CLAIMED_BY, 'project');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run, { io }); app = w.app;
+
+    const unreadableRes = await postOpen(app, { ...OPEN_BODY, program: 'unreadable-project', claimedBy: CLAIMED_BY });
+    expect(unreadableRes.statusCode).toBe(502);
+    expect(unreadableRes.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+
+    const emptyRes = await postOpen(
+      app, { ...OPEN_BODY, program: 'empty-project', claimedBy: EMPTY_PROJECT_COORD });
+    expect([emptyRes.statusCode, emptyRes.json()]).toEqual([409, { ok: false, refused: 'project-mismatch',
+      detail: "the claimant's registry row records no project, so its project cannot be stamped" }]);
+    expect(okRuns(w.coord.runs())).toHaveLength(0);
+  });
+
   it('maps the store seam\'s oversized open hold to 413 without narrowing its detail', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home);
@@ -214,7 +353,8 @@ describe('POST /api/runs', () => {
     expect(res.json()).toEqual({
       ok: false, error: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS, detail,
     });
-    expect(w.coord.programs()).toEqual([]);
+    // Only the legacy programme the open's incidental seed made (D-8181): the refused open added no run.
+    expect(w.coord.programs().map((p) => p.slug)).toEqual(['build4']);
     expect(okRuns(w.coord.runs({ includeClosed: true }))).toEqual([]);
     expect(calls).toEqual([]);
   });
@@ -233,7 +373,8 @@ describe('POST /api/runs', () => {
       error: 'hold-invalid',
       detail: 'generated run id is not a positive safe integer',
     });
-    expect(w.coord.programs()).toEqual([]);
+    // Only the legacy programme the open's incidental seed made (D-8181): the refused open added no run.
+    expect(w.coord.programs().map((p) => p.slug)).toEqual(['unsafe-id']);
     expect(okRuns(w.coord.runs({ includeClosed: true }))).toEqual([]);
     expect(calls).toEqual([]);
   });
@@ -241,6 +382,7 @@ describe('POST /api/runs', () => {
   it('refuses a second coordinator rather than arbitrating', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
+    seed(home, 'ccrc-pwa-other', { child: '' });   // D-5298: an attributed second coordinator
     const w = await openApp(home, run); app = w.app;
     await postOpen(app);
     const res = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: 'ccrc-pwa-other' });
@@ -254,6 +396,9 @@ describe('POST /api/runs', () => {
     // this workspace lives in `demo`, and until this check nothing read it.
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
+    // D-5298: the second coordinator is attributed and of the run's project,
+    // so F1's history check is the one that answers.
+    seed(home, 'ccrc-pwa-coordinator-two', { project: 'other-project', child: '' });
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' });
@@ -270,6 +415,136 @@ describe('POST /api/runs', () => {
     expect(okRuns(w.coord.runs()).length, 'a refused open left a planned orphan behind').toBe(runsBefore);
     // …and no hold was placed on a workspace this run was never going to get.
     expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsBefore);
+  });
+
+  it('refuses a claimedBy that is currently a WORKER of an open run — before anything is opened (spec §12)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    // wave 1 binds demo-existing as CLAIMED_BY's worker; the run is `planned` — non-terminal.
+    expect((await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' })).statusCode).toBe(200);
+    const runsBefore = okRuns(w.coord.runs()).length;
+    const holdsBefore = calls.filter((c) => c[0] === 'ws-hold').length;
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'A worker coordinating',
+      claimedBy: 'demo-existing' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'claimant-is-a-worker', by: CLAIMED_BY });
+    expect(okRuns(w.coord.runs()).length, 'a refused open left a planned orphan behind').toBe(runsBefore);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsBefore);
+  });
+
+  it('admits that same session once its run is TERMINAL — a finished worker is not a worker', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' });
+    tx(w.coord.db, () => { w.coord.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(first.json().id); });
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Later', claimedBy: 'demo-existing' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  // ARCH-62 slice 2, ruling (a): the gate reads the worker rows as `openClaimantsOf` did, proving no integers, so a done
+  // worker run beyond 2^53 is no reason to answer 500 there. Red on b05c06373 (500 from claimantsOfSession). Past the
+  // gate, minting an id after that row is refused on its own terms, which is not this pin's business.
+  it('a coordinator that is the worker of a done run beyond 2^53 gets past the worker gate, never a 500', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' });
+    tx(w.coord.db, () => {
+      w.coord.db.prepare("UPDATE runs SET state = 'done', id = ? WHERE id = ?").run(2n ** 53n + 1n, first.json().id);
+    });
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Later', claimedBy: 'demo-existing' });
+    expect(res.statusCode).not.toBe(500);
+    expect(JSON.stringify(res.json())).not.toContain('claimantsOfSession');
+  });
+
+  it('admits a SELF-claimed run\'s session — it is its own worker, not somebody\'s', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-self');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app, { ...OPEN_BODY, claimedBy: 'demo-self', sessionId: 'demo-self' })).statusCode).toBe(200);
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Self', claimedBy: 'demo-self' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('admits the session of an OWNERLESS open run — there is no `by` to name (D-3012)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-orphaned');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-orphaned' });
+    // A reconstructed row's shape: `claimedBy` NULL stays NULL (D-12).
+    tx(w.coord.db, () => { w.coord.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(first.json().id); });
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Orphan', claimedBy: 'demo-orphaned' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('refuses a session SELF-CLAIMED on its newest run while still somebody\'s worker on an OLDER open one ' +
+     '(second fix round: the door reads every open claimant, not the newest)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    // Both rows store-level, because neither can be built through the route:
+    // the OLDER one is the binding this door is about, and an open of the
+    // NEWER self-claimed one would itself be refused by this very rung.
+    const older = w.coord.openRun({ program: 'build5-other', title: 'Other programme',
+      project: PROJECT, wave: 1, waveOf: 1, claimedBy: 'other-coordinator' }) as { id: number };
+    w.coord.bindSession(older.id, 'demo-existing');
+    const newer = w.coord.openRun({ program: 'build5-self', title: 'Its own programme',
+      project: PROJECT, wave: 1, waveOf: 1, claimedBy: 'demo-existing' }) as { id: number };
+    w.coord.bindSession(newer.id, 'demo-existing');
+    expect(older.id).toBeLessThan(newer.id);
+    // THE FIXTURE'S POINT, measured rather than argued: the newest-only read
+    // this door used to make answers the session's OWN id here, which the
+    // self-claim admission then waves through — `demo-existing` is still
+    // `other-coordinator`'s worker on the older open run the whole time.
+    expect(parentOfSession(w.coord, 'demo-existing')).toBe('demo-existing');
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5-third', title: 'A worker coordinating',
+      claimedBy: 'demo-existing' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'claimant-is-a-worker', by: 'other-coordinator' });
+  });
+
+  it('CONTROL: a claimant that was never any run\'s worker opens as it always did', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app)).statusCode).toBe(200);
+  });
+
+  it('refuses a REVIEW open too — the door sits below the review arm\'s own project/wave/waveOf ' +
+     'overrides, so nothing there exempts it (spec §12, fix round 1 finding 2)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-review-worker'] });
+    const w = await openApp(home, run); app = w.app;
+    // `CLAIMED_BY` is this work run's coordinator — get it to `awaiting-
+    // review` the same way `workAtReview` (the `kind:review` describe
+    // block, below) does: open, dispatch, advance twice.
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
+    expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
+
+    // Now bind `CLAIMED_BY` as a LIVE (planned, non-terminal) worker of a
+    // run belonging to a DIFFERENT coordinator — store-level, bypassing the
+    // route entirely (the brief's own second option for this setup).
+    const other = w.coord.openRun({ program: 'build5-other', title: 'Other programme',
+      project: PROJECT, wave: 1, waveOf: 1, claimedBy: 'other-coordinator' }) as { id: number };
+    w.coord.bindSession(other.id, CLAIMED_BY);
+
+    // The review arm FORCES `claimedBy` to equal the reviewed run's own
+    // (400 otherwise) — that is already `CLAIMED_BY`, so this reaches the
+    // door with exactly the claimant it means to catch.
+    const res = await postOpen(app, { program: OPEN_BODY.program, title: 'Review wave 1',
+      kind: 'review', reviews: opened.id, claimedBy: CLAIMED_BY, homeProject: PROJECT });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'claimant-is-a-worker', by: 'other-coordinator' });
   });
 
   it('stores a TRIMMED home — an open sending "demo\\n" homes the programme at "demo", and a later "demo" agrees', async () => {
@@ -435,7 +710,7 @@ describe('POST /api/runs', () => {
     let holds = 0;
     // The second `ws-hold` fails, the way `:656`'s runner fails a verb.
     const failSecondHold: Runner = async (cmd, argv) => {
-      if (argv[0] === 'ws-hold' && ++holds === 2) return { code: 1, stdout: '', stderr: 'ws-hold failed' };
+      if (argv[0] === 'ws-hold' && ++holds === 2) return { ran: true as const, code: 1, stdout: '', stderr: 'ws-hold failed' };
       return run(cmd, argv);
     };
     const w = await openApp(home, failSecondHold); app = w.app;
@@ -471,6 +746,7 @@ describe('POST /api/runs', () => {
     // registry backstop at dispatch (Task 2) is the other rung.
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
+    seed(home, CLAIMED_BY, { project: 'other-project' });   // D-5298: the claimant is of the run's project
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(app, { ...OPEN_BODY, project: 'other-project',
@@ -606,8 +882,12 @@ describe('POST /api/runs', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    const first = await postOpen(app);                       // legacy: no homeProject
-    expect(first.statusCode).toBe(200);
+    // Seeded on the STORE, not through the route: after the flip a route open
+    // with no `homeProject` is refused outright, so the route itself can no
+    // longer produce "a known programme whose home is still NULL" — only the
+    // store's own `openRun`, whose `homeProject` stays optional, still can.
+    w.coord.openRun({ program: 'build4', title: 'Transcript surface', project: PROJECT,
+      wave: 1, waveOf: 3, claimedBy: CLAIMED_BY });
     expect(w.coord.programHome('build4')).toBeNull();
     const second = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
     expect(second.statusCode).toBe(200);
@@ -620,7 +900,11 @@ describe('POST /api/runs', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    expect((await postOpen(app)).statusCode).toBe(200);
+    // Seeded on the STORE for the same reason as the backfill case above: the
+    // route can no longer open a programme whose home is NULL, and this case's
+    // whole subject is the backfill branch that such a programme makes reachable.
+    w.coord.openRun({ program: 'build4', title: 'Transcript surface', project: PROJECT,
+      wave: 1, waveOf: 3, claimedBy: CLAIMED_BY });
     expect(w.coord.programHome('build4')).toBeNull();
 
     w.coord.db.exec(`
@@ -659,20 +943,6 @@ describe('POST /api/runs', () => {
     // A SECOND code, not `project-mismatch`: the two conditions are handled
     // differently by the caller, and a seam may not collapse them.
     expect(okRuns(w.coord.runs()).length, 'a refused open left a planned orphan behind').toBe(runsBefore);
-  });
-
-  it('accepts an absent homeProject during the legacy generation, records it, and leaves the column NULL', async () => {
-    const home = mkTmp('ccrc-runs-');
-    const { run } = makeRunner(home);
-    const w = await openApp(home, run); app = w.app;
-    const res = await postOpen(app);
-    expect(res.statusCode).toBe(200);
-    // NOTHING IS GUESSED INTO THE COLUMN — that is what makes the backfill above
-    // possible instead of a collision.
-    expect(w.coord.programHome('build4')).toBeNull();
-    expect(res.json()).toMatchObject({ ledgerRepo: null, ledgerAbsPath: null });
-    const id = (res.json() as { id: number }).id;
-    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('legacy-home-project');
   });
 
   it('refuses a present-but-empty homeProject as a malformed body, before anything is opened or homed', async () => {
@@ -790,7 +1060,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    w.coord.setCaps({ maxConcurrentWorkers: 0, maxSessionsPerDay: 0 });
+    w.coord.setCaps({ maxConcurrentWorkers: 0 });
     const opened = (await postOpen(app)).json() as { id: number };
     writeFileSync(path.join(home, '.cc-sessions', 'coordinator-paused'), '');
     const res = await postDispatch(app, opened.id);
@@ -804,7 +1074,10 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run, { io: unlistableIO }); app = w.app;
-    const opened = (await postOpen(app)).json() as { id: number };
+    // Opened through the store: since D-5298 the open route attributes its
+    // claimant against the registry, which this io cannot list.
+    const opened = w.coord.openRun({ program: OPEN_BODY.program, title: OPEN_BODY.title, project: PROJECT,
+      wave: OPEN_BODY.wave, waveOf: OPEN_BODY.waveOf, claimedBy: CLAIMED_BY }) as { id: number };
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, refused: 'paused' });
@@ -816,11 +1089,15 @@ describe('POST /api/runs/:id/dispatch', () => {
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     // A run already counted as running — `dispatchedAt` set directly, the
-    // same bypass `coord-store.test.ts` uses for `capsUsage` fixtures.
+    // same bypass `coord-store.test.ts` uses for `capsUsage` fixtures. Since
+    // design 2026-09-14 §7.1 the cap reads `state`, not just `dispatchedAt`,
+    // so the blocker must also be advanced to `dispatched` — mirroring
+    // `dispatchRun`'s real pairing of the two writes in one transaction.
     const blocker = w.coord.openRun({ program: 'other', title: 'Other', project: PROJECT,
       wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-other' }) as { id: number };
     w.coord.markDispatched(blocker.id, 'demo-blocker', 'blocker', 'ws/blocker', false);
-    w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    expect(w.coord.advance(blocker.id, 'dispatched', 'coordinator').ok).toBe(true);
+    w.coord.setCaps({ maxConcurrentWorkers: 1 });
 
     const opened = (await postOpen(app)).json() as { id: number };
     const res = await postDispatch(app, opened.id);
@@ -829,38 +1106,8 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(calls).toEqual([]);
   });
 
-  it('refuses at maxSessionsPerDay over a rolling 24h, not a calendar day', async () => {
-    // D-59 (Task 11 review): the original fixture used a bare `Date.now() -
-    // 23h` — a calendar-day count agrees with the rolling-24h answer
-    // whenever the real wall clock is within the last hour of the local
-    // day, so the mutant this case exists to kill only died 23 hours out of
-    // every 24. Fake timers pin `now` at a fixed local NOON, so `now - 23h`
-    // lands on the PREVIOUS calendar date deterministically, regardless of
-    // when this suite actually runs (assumes a UTC/UTC-like test host, the
-    // same assumption `mail-sweep.test.ts`/`pr-sweep.test.ts` already make
-    // with their own fixed `vi.setSystemTime` epochs).
-    const NOW = new Date('2024-06-15T12:00:00.000Z').getTime();
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(NOW);
-    try {
-      const home = mkTmp('ccrc-runs-');
-      const { run } = makeRunner(home);
-      const w = await openApp(home, run); app = w.app;
-      const blocker = w.coord.openRun({ program: 'other', title: 'Other', project: PROJECT,
-        wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-other' }) as { id: number };
-      // Dispatched 23h ago — inside the rolling 24h window (counts), but on
-      // the PREVIOUS calendar date (a calendar-day count would not).
-      w.coord.markDispatched(blocker.id, 'demo-blocker', 'blocker', 'ws/blocker', false, NOW - 23 * 3600_000);
-      w.coord.setCaps({ maxConcurrentWorkers: 12, maxSessionsPerDay: 1 });
-
-      const opened = (await postOpen(app)).json() as { id: number };
-      const res = await postDispatch(app, opened.id);
-      expect(res.statusCode).toBe(409);
-      expect(res.json()).toMatchObject({ ok: false, refused: 'cap-daily', limit: 1, used: 1 });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+  // The daily brake's rolling-24h case lived here; the brake is retired (D-7068) and
+  // `retire-daily-brake.test.ts` pins that a dispatch past the old count is admitted.
 
   it('runs ws-add for wave 1 and learns the id from the registry, not from ccd\'s sentence', async () => {
     const home = mkTmp('ccrc-runs-');
@@ -894,6 +1141,60 @@ describe('POST /api/runs/:id/dispatch', () => {
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(200);
     expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT]]);
+  });
+
+  // A coordinator may NAME the child it dispatches. `cmd_ws_add` already binds
+  // `<project> [slug]`, so the slug rides as the positional straight after the
+  // project — the worktree, branch and session id then carry the name the
+  // coordinator chose (tooling that keys work on the workspace name, e.g. a
+  // ticket id, reads it from the start; a held child can never be renamed).
+  describe('slug — the coordinator names the child', () => {
+    it('rides as the positional after the project, and binds exactly <project>-<slug>', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-task-42-login'] });
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id, { brief: 'do the thing', slug: 'task-42-login' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, sessionId: 'demo-task-42-login' });
+      expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT, 'task-42-login']]);
+      expect(okRun(w.coord.run(opened.id))).toMatchObject({ sessionId: 'demo-task-42-login', state: 'dispatched' });
+    });
+
+    it.each([
+      ['uppercase', 'Task-42'],
+      ['leading dash', '-task-42'],
+      ['too long', 'a'.repeat(32)],
+      ['one character', 'a'],
+      ['a dot', 'task.42'],
+      ['empty', ''],
+      ['not a string', 42],
+      ['null', null],
+    ] as const)('refuses a %s slug with 400 before any fleet work', async (_label, slug) => {
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh1'] });
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id, { brief: 'do the thing', slug });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'bad-request', detail: expect.stringMatching(/^slug: must match /) });
+      expect(calls.some((c) => c[0] === 'ws-add')).toBe(false);
+      expect(okRun(w.coord.run(opened.id))).toMatchObject({ state: 'planned', sessionId: null });
+    });
+
+    it('binds nothing when the new workspace is not <project>-<slug>', async () => {
+      // ws-add answered 0 but the only new row carries another name: the slug is
+      // the identity the coordinator asked for, so a stranger is never bound.
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-someone-else'] });
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id, { brief: 'do the thing', slug: 'task-42-login' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, refused: 'ambiguous-dispatch', candidates: 0 });
+      expect(calls.some((c) => c[0] === 'ws-hold')).toBe(false);
+      expect(okRun(w.coord.run(opened.id))).toMatchObject({ state: 'planned', sessionId: null });
+    });
   });
 
   // T2's attribution half, inverted by its review round (D-410) and RE-LANDED
@@ -1081,9 +1382,9 @@ describe('POST /api/runs/:id/dispatch', () => {
           // cut-short shape, which is why this arm is reachable at all.
           seed(home, 'demo-fresh1');
           spawned = true;
-          return { code: 1, stdout: '', stderr: 'ccd: no wrapper has capacity', killed: true };
+          return { ran: true as const, code: 1, stdout: '', stderr: 'ccd: no wrapper has capacity', killed: true };
         }
-        return { code: 0, stdout: '', stderr: '' };
+        return { ran: true as const, code: 0, stdout: '', stderr: '' };
       };
       const io: FleetIO = { ...localIO, readdir: async (p) => (spawned ? null : localIO.readdir(p)) };
       const w = await openApp(home, run, { io }); app = w.app;
@@ -1152,22 +1453,28 @@ describe('POST /api/runs/:id/dispatch', () => {
   // gate entirely: `/clear` would have been injected into a possibly
   // mid-turn worker. Written FIRST and confirmed red against the pre-fix
   // code, which answered 200 here (an injected `/clear`) instead of 502.
-  it('refuses registry-unmeasurable on wave N>=2 when the SECOND directory read (the resumed ' +
+  it('refuses registry-unmeasurable on wave N>=2 when the FOURTH directory read (the resumed ' +
      'session\'s own registry listing) fails, even though the pause-marker\'s own read moments ' +
      'earlier succeeded — the busy gate must fail shut here exactly as hard as the AFTER read does',
      async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
-    // Succeeds on the pause-marker's own read (call 1), fails on the very
-    // next one — this route's own registry read for the resumed session
-    // (call 2) — never a third: nothing else in this branch touches
-    // `io.readdir` before either of those two.
-    let n = 0;
-    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 2 ? null : localIO.readdir(p); } };
+    // Counted only once the OPEN is done (D-5298: the open's attribution,
+    // not-a-child and child gates each list the registry, and how many times
+    // is the open's business, not this case's). Then: succeeds on the
+    // pause-marker's own read (call 1) and on dispatch's own child bind gate,
+    // which lists twice for a CHILD (calls 2 and 3, ahead of `ensure`), fails
+    // on the very next one — this route's own registry read for the resumed
+    // session (call 4) — never a fifth: nothing else touches `io.readdir`
+    // before those.
+    let n = 0, armed = false;
+    const io: FleetIO = { ...localIO,
+      readdir: async (p) => { if (armed) n += 1; return armed && n === 4 ? null : localIO.readdir(p); } };
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run, { io }); app = w.app;
     const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' }))
       .json() as { id: number };
+    armed = true;
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(502);
     expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
@@ -1272,36 +1579,52 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(okRun(w.coord.run(id))?.state).toBe('dispatched');
   });
 
-  it('leaves the honest-stale case exactly as it was — a listable registry with no row for the session', async () => {
-    // `record === undefined` on a LISTABLE registry is the tolerated case
-    // (`DoneRun`'s own docstring): the run falls back to its own workspace and
-    // branch, as it always has. Refusing on a fact not measured would be the
-    // same error in the other direction.
+  it('the honest-stale case — a listable registry with no row for the session — is refused by the live gate, untouched (D-5273)', async () => {
+    // `record === undefined` on a LISTABLE registry is still tolerated by the
+    // project and child gates (`DoneRun`'s own docstring: refusing on a project
+    // not measured would be the same error in the other direction). But D-5238's
+    // live `/clear` gate asks a different question — what turn would the
+    // `/clear` lose? — and with no row there is no wrapper, so no config dir to
+    // read the live file under: `stopVerdict` answers `unmeasured`, and the
+    // gate refuses `status-unmeasurable` before the hold, the route write, the
+    // transition and the `/clear`. (On the fleet this arm is reached only by a
+    // race: `cmd_ensure` itself dies on an id with no registry row.)
     const home = mkTmp('ccrc-runs-');
-    const { run } = makeRunner(home);
+    const { run, calls } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-ghost' });
     expect(opened.statusCode).toBe(200);
     const id = (opened.json() as { id: number }).id;
+    const before = calls.length;   // the OPEN's own hold on the named session is not the dispatch's act
     const res = await postDispatch(app, id);
-    expect(res.statusCode).toBe(200);
-    expect(okRun(w.coord.run(id))?.state).toBe('dispatched');
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'status-unmeasurable' });
+    expect(okRun(w.coord.run(id))?.state).toBe('planned');
+    expect(calls.slice(before).some((c) => c[0] === 'ws-hold' || (c[0] === 'send-keys' && c.includes('/clear')))).toBe(false);
   });
 
   it('still answers registry-unmeasurable when the registry cannot be listed at all', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing', { project: 'other-project' });
     const { run } = makeRunner(home);
-    // A blanket `unlistableIO` fails the PAUSE check (dispatch's own first
-    // readdir, before anything is counted) and answers `paused`, never
-    // reaching this arm at all — so this scopes the failure to the SECOND
-    // read, the resumed session's own registry listing, the same idiom the
-    // wave-N>=2 `registry-unmeasurable` case above this one already uses.
-    let n = 0;
-    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 2 ? null : localIO.readdir(p); } };
+    // A blanket `unlistableIO` is now refused `spent-unmeasured` at the OPEN's
+    // own child bind gate (child-reclamation wave 2, Task 5), before a run row
+    // even exists — never reaching dispatch, and never `paused`, at all. This
+    // fixture instead degrades only the LATER reads, so the open still
+    // succeeds and the failure scopes to dispatch's own resumed-session
+    // listing, the same idiom the wave-N>=2 `registry-unmeasurable` case above
+    // this one already uses.
+    // Counted only once the OPEN is done (D-5298: the open's own registry
+    // gates list the registry, and how often is not this case's business):
+    // dispatch's pause check, dispatch's gate ahead of `ensure` (two listings
+    // for a CHILD), then the resumed session's own listing — the FOURTH.
+    let n = 0, armed = false;
+    const io: FleetIO = { ...localIO,
+      readdir: async (p) => { if (armed) n += 1; return armed && n === 4 ? null : localIO.readdir(p); } };
     const w = await openApp(home, run, { io }); app = w.app;
     const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
     expect(opened.statusCode).toBe(200);
+    armed = true;
     const id = (opened.json() as { id: number }).id;
     const res = await postDispatch(app, id);
     expect(res.statusCode).toBe(502);
@@ -1413,9 +1736,11 @@ describe('POST /api/runs/:id/dispatch', () => {
     const menuPane = '❯ 1. Yes\n  2. No\n  ──────────────\nEnter to select\n';
     const { run, calls } = makeRunner(home, { panes: [menuPane] });
     const w = await openApp(home, run); app = w.app;
-    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
-    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
-    // break the exact `runEvents()` array asserted below (Task 4, §3 F2).
+    // Explicit `homeProject` kept from fix round 1, finding 1; `OPEN_BODY` now
+    // carries it too and the route's legacy accept arm is unreachable with the
+    // constant `false`, so no open can record a `legacy-home-project` row and
+    // this override is belt-and-braces, not load-bearing (the exact
+    // `runEvents()` assertion below is what it once protected).
     const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing2', homeProject: 'demo' }))
       .json() as { id: number };
     const res = await postDispatch(app, opened.id);
@@ -1535,12 +1860,27 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: ['demo-fresh4'] });
     const w = await openApp(home, run); app = w.app;
-    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
-    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
-    // break the exact `runEvents()` array asserted below (Task 4, §3 F2).
+    // Explicit `homeProject` kept from fix round 1, finding 1; `OPEN_BODY` now
+    // carries it too and the route's legacy accept arm is unreachable with the
+    // constant `false`, so no open can record a `legacy-home-project` row and
+    // this override is belt-and-braces, not load-bearing (the exact
+    // `runEvents()` assertion below is what it once protected).
     const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     await postDispatch(app, opened.id);
     expect(w.coord.runEvents(opened.id)).toEqual([
+      // D-6794: no route passed, so the work row is filled in and journaled; this fixture's fleet advertises no
+      // `route-argv-v1`, so the fresh spawn omits `--route` and says so.
+      { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
+        detail: 'route-omitted:no-route-argv-cap' },
+      // Child-workspace reclamation wave 1: this fixture's fleet advertises no
+      // `child-argv-v1`, so the fresh spawn omits `--child` and says so on the
+      // run, BEFORE the transition — recorded while the run still rests at
+      // `planned`, which is why both states read `planned`.
+      { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
+        detail: 'child-omitted:no-child-argv-cap' },
+      // ...and the default row, journaled once the spawn has not refused.
+      { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
+        detail: 'route-defaulted:work' },
       { at: expect.any(Number), fromState: 'planned', toState: 'dispatched', causedBy: 'coordinator', detail: null },
       // wave 2, F2: every successful dispatch also records its skill preflight,
       // after the commit — so the row rests in the state the transition just
@@ -1555,9 +1895,11 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh5'] });
     const w = await openApp(home, run); app = w.app;
-    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
-    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
-    // inflate the exact `runEvents().length` assertion below (Task 4, §3 F2).
+    // Explicit `homeProject` kept from fix round 1, finding 1; `OPEN_BODY` now
+    // carries it too and the route's legacy accept arm is unreachable with the
+    // constant `false`, so no open can record a `legacy-home-project` row and
+    // this override is belt-and-braces, not load-bearing (the exact
+    // `runEvents()` assertion below is what it once protected).
     const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     const first = await postDispatch(app, opened.id);
     expect(first.statusCode).toBe(200);
@@ -1568,9 +1910,22 @@ describe('POST /api/runs/:id/dispatch', () => {
     // Nothing ran on the retry — no second `ws-add`/`ensure`/`ws-hold`, and
     // no second `run_events` row (still exactly the first dispatch's).
     expect(calls.length).toBe(callsAfterFirst);
-    // Two rows from the FIRST dispatch (its transition plus its skill
-    // preflight, wave 2 F2), and none from the refused second.
-    expect(w.coord.runEvents(opened.id).length).toBe(2);
+    // Five rows from the FIRST dispatch (its `route-defaulted` row, D-6794, and the `route-omitted` row this
+    // fixture's missing `route-argv-v1` earns it; its `child-omitted` row — no `child-argv-v1` either — its
+    // transition, and its skill preflight, wave 2 F2), and none from the refused second.
+    expect(w.coord.runEvents(opened.id).length).toBe(5);
+  });
+
+  it('refuses to dispatch a run whose kind this build cannot name — before any fleet act (D-2795)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    w.coord.db.prepare("UPDATE runs SET kind = 'x-newer' WHERE id = ?").run(opened.id);
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-transition', from: 'planned', to: 'dispatched' });
+    expect(calls).toEqual([]);
   });
 
   it('a wave-2 double dispatch never re-injects /clear into a live, already-resumed worker (D-46)', async () => {
@@ -1623,13 +1978,19 @@ const gitRoot = (project: string, branch: string, tip: string): string => {
   return root;
 };
 
-const prRow = (branch: string, state: 'OPEN' | 'CLOSED' | 'MERGED'): Record<string, unknown> => ({
+const prRow = (branch: string, state: 'OPEN' | 'CLOSED' | 'MERGED',
+  extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   number: 7, state, headRefName: branch, baseRefName: 'main',
   isCrossRepository: false, ours: true, isDraft: false,
   ...(state === 'MERGED' ? { mergedAt: '2020-01-01T00:00:00Z', mergeCommit: { oid: 'f'.repeat(40) } } : {}),
+  ...extra,
 });
-const ccdLine = (sessionId: string, branch: string, rows: Record<string, unknown>[]): string =>
-  JSON.stringify({ id: sessionId, rows, baseShort: 'main', branch, ahead: 1, checkedAt: Date.now() });
+// `tip` is optional and OMITTED by default (as it always was here), so every
+// existing call site is unaffected; a caller that needs a genuinely MEASURED
+// branch — the childless-PR fixtures below, which must read as `unspent`
+// rather than "tip unmeasured" (spec §5.3) — passes one explicitly.
+const ccdLine = (sessionId: string, branch: string, rows: Record<string, unknown>[], tip?: string): string =>
+  JSON.stringify({ id: sessionId, rows, baseShort: 'main', branch, ahead: 1, tip, checkedAt: Date.now() });
 
 const TIP = 'a'.repeat(40);
 const OTHER_TIP = 'b'.repeat(40);
@@ -1664,7 +2025,7 @@ describe('POST /api/runs/:id/close', () => {
    *  tests build their delivery through a real send rather than poking rows
    *  in directly. */
   const dispatchedRun = async (
-    sessionId: string, projectsRoot: string, prState: { code: number; stdout: string; stderr: string },
+    sessionId: string, projectsRoot: string, prState: { ran: true, code: number; stdout: string; stderr: string },
     over: Partial<Deps> = {},
   ) => {
     const home = mkTmp('ccrc-runs-');
@@ -1682,7 +2043,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close1`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);   // the REAL tip has moved
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const before = okRun(coord.run(id))!.state;
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(409);
@@ -1713,7 +2074,7 @@ describe('POST /api/runs/:id/close', () => {
     writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.prhistory`), '');
     const unreadablePrhistory = degradedReadIO((p) => p.endsWith('.prhistory'));
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { io: unreadablePrhistory, cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -1729,7 +2090,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close3`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     // No `.prhistory` file at all: ABSENT is a MEASURED [].
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(200);
@@ -1740,7 +2101,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close4`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ released: true });
@@ -1754,7 +2115,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close5`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: false });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ released: false });
@@ -1765,6 +2126,193 @@ describe('POST /api/runs/:id/close', () => {
     expect(calls).toContainEqual(
       ['ws-hold', '--session', sessionId, '--reason', 'program:build4 wave:2/3']);
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
+  });
+
+  // ---- child reclamation, wave 3 (spec 2026-09-22 §5.7): close decides, it does not wait ----
+
+  /** A dispatched run whose workspace is a CHILD of it — the `.child` marker
+   *  planted exactly as `ws-add --child <runId>` writes it (wave 1) — with the
+   *  process's one queue and a feed log wired into the app, so a case can wait
+   *  for the queued reclaim and read its one feed row back. `testDeps`' box
+   *  advertises no capability, so the executor always ends at `unsupported`:
+   *  that row is the proof the hand-off reached it, on this session's queue. */
+  const dispatchedChild = async (sessionId: string, prState: { ran: true, code: number; stdout: string; stderr: string },
+    over: Partial<Deps> = {}) => {
+    const home = mkTmp('ccrc-runs-');
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { run, calls } = makeRunner(home, { wsAddCreates: [sessionId], prState });
+    const queue = new KeyedQueue();
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const w = await openApp(home, run, { cfg: { projectsRoot: root }, queue, notifyLog, ...over });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.child`), String(opened.id));
+    return {
+      id: opened.id, coord: w.coord, calls, home,
+      settled: () => queue.run(sessionId, async () => undefined),
+      feed: () => w.coord.feedEvents(50).filter((e) => e.sessionId === sessionId).map((e) => e.title),
+    };
+  };
+  /** A2/P6: `childSpent`'s fast path never dates its evidence, so the close
+   *  re-dates it through the LIVE rung before deciding — this row's own
+   *  `createdAt` must be safely AFTER the minting run's `dispatchStartedAt`
+   *  (a real clock read, stamped by `dispatchRun` moments before this row is
+   *  built) for that redate to answer `this`. A one-hour margin swallows any
+   *  test-execution jitter between the two reads.
+   *
+   *  Departure `pr-open-fixture-real-clock` (review m5): P8 says a fixture
+   *  needing a placeable birth calls `markDispatchStarted` "under a fixed
+   *  clock" — this fixture uses the REAL clock (`Date.now() + 1h`), not a
+   *  mocked one, because the birth here is stamped by the real `dispatchRun`
+   *  through a genuine `POST /api/runs/:id/dispatch` (`postDispatch` below),
+   *  not by a direct `coord.markDispatchStarted` call under a caller-chosen
+   *  timestamp the way `child-reclaim-close.test.ts`'s own A2 cases do it.
+   *  Freezing `Date.now()` for the whole route-level dispatch path (which
+   *  also stamps `checkedAt`/`openedAt` and the notify log's own clock)
+   *  would reach well past this one fixture; the 1 h margin is sound because
+   *  it swallows every real-world test-execution delay this suite has ever
+   *  measured, so it is declared rather than forced onto a fixed clock. */
+  const PR_OPEN = (s: string) =>
+    ({ ran: true as const, code: 0, stdout: `${ccdLine(s, `ws/${s}`,
+      [prRow(`ws/${s}`, 'OPEN', { createdAt: new Date(Date.now() + 3_600_000).toISOString() })])}\n`, stderr: '' });
+  const PR_NONE = (s: string) =>
+    ({ ran: true as const, code: 0, stdout: `${ccdLine(s, `ws/${s}`, [], TIP)}\n`, stderr: '' });
+  const NONE_CLAIM = { branchTip: TIP, prNumber: null, prPhase: 'none', handoffCommit: TIP };
+  const fleetActs = (calls: string[][]) => calls.map((c) => c[0]).filter((v) => v === 'ws-hold' || v === 'ws-release'
+    || v === 'ws-archive' || v === 'ws-audit' || v === 'ws-reclaim');
+
+  it('a FINAL close of a child releases it and queues its reclaim — the answer does not wait on the act', async () => {
+    const sessionId = `${PROJECT}-child1`;
+    const c = await dispatchedChild(sessionId, PR_OPEN(sessionId));
+    c.calls.length = 0;
+    const res = await postClose(app!, c.id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(res.json()).toEqual({ ok: true, id: c.id, state: 'done', released: true, childReclaim: 'queued' });
+    await c.settled();
+    expect(fleetActs(c.calls), 'released, and nothing sent to a box with no reclaim-v1').toEqual(['ws-release']);
+    expect(c.feed()).toEqual(['child reclaim deferred']);
+  });
+
+  it('a NON-final close of a SPENT child releases it too — one PR per child (rule 3)', async () => {
+    const sessionId = `${PROJECT}-child2`;
+    const c = await dispatchedChild(sessionId, PR_OPEN(sessionId));
+    await postOpen(app!, { ...OPEN_BODY, wave: 2 });            // the program stays open: wave 2 gets a FRESH child
+    c.calls.length = 0;
+    const res = await postClose(app!, c.id, { fingerprint: GOOD_CLAIM, final: false });
+    expect(res.json()).toMatchObject({ ok: true, released: true, childReclaim: 'queued' });
+    expect(fleetActs(c.calls)).toEqual(['ws-release']);
+  });
+
+  it('a non-final close of an UNSPENT child with its program still open holds it for wave N+1, as ever', async () => {
+    const sessionId = `${PROJECT}-child3`;
+    const c = await dispatchedChild(sessionId, PR_NONE(sessionId));
+    await postOpen(app!, { ...OPEN_BODY, wave: 2 });
+    c.calls.length = 0;
+    const res = await postClose(app!, c.id, { fingerprint: NONE_CLAIM, final: false });
+    expect(res.json()).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished' });
+    expect(c.calls).toContainEqual(['ws-hold', '--session', sessionId, '--reason', 'program:build4 wave:2/3']);
+    expect(fleetActs(c.calls)).toEqual(['ws-hold']);
+  });
+
+  it('a non-final close that RETIRES its program releases the child — never a hold for a wave that cannot open', async () => {
+    const sessionId = `${PROJECT}-child4`;
+    const c = await dispatchedChild(sessionId, PR_NONE(sessionId));
+    c.calls.length = 0;
+    const res = await postClose(app!, c.id, { fingerprint: NONE_CLAIM, final: false });
+    expect(res.json()).toMatchObject({ ok: true, released: true, childReclaim: 'queued' });
+    expect(fleetActs(c.calls)).toEqual(['ws-release']);
+    const program = c.coord.db.prepare("SELECT state FROM programs WHERE slug = 'build4'").get() as { state: string };
+    expect(program.state, 'D-51 retired it in the same close').toBe('done');
+  });
+
+  it('an unreadable marker never authorises a reclaim — the close still does exactly what it did before', async () => {
+    const sessionId = `${PROJECT}-child5`;
+    const c = await dispatchedChild(sessionId, PR_OPEN(sessionId));
+    writeFileSync(path.join(c.home, '.cc-sessions', `${sessionId}.child`), 'seven');
+    c.calls.length = 0;
+    const res = await postClose(app!, c.id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(res.json()).toMatchObject({ ok: true, released: true, childReclaim: 'not-queued', childReclaimWhy: 'marker-unreadable' });
+    await c.settled();
+    expect(c.feed()).toEqual([]);
+  });
+
+  it('the operator abandon of a child queues its reclaim — an abandon is finished', async () => {
+    const sessionId = `${PROJECT}-child6`;
+    const c = await dispatchedChild(sessionId, PR_OPEN(sessionId));
+    c.calls.length = 0;
+    const res = await app!.inject({ method: 'POST', url: `/api/runs/${c.id}/abandon` });
+    expect(res.json()).toEqual({ ok: true, id: c.id, state: 'failed', released: true, childReclaim: 'queued' });
+    await c.settled();
+    expect(c.feed()).toEqual(['child reclaim deferred']);
+  });
+
+  it('the reclaim port wires every port reclaimChild declares — presence included (Task 8 review)', async () => {
+    // A route-level proof, not merely a type check: `ChildReclaimDeps.viewers`
+    // is OPTIONAL, so an omission at the route's wiring is not a compile
+    // error. If `childReclaimPort` (`routes.ts`) failed to pass `viewers`
+    // through, `isVisible` below would never be called and the executor would
+    // run straight past step 3 to `unsupported` — this proves it does not.
+    const sessionId = `${PROJECT}-child7`;
+    const seen: string[] = [];
+    const viewers = { isVisible: (id: string): boolean => { seen.push(id); return id === sessionId; } };
+    const c = await dispatchedChild(sessionId, PR_OPEN(sessionId), { viewers: viewers as Deps['viewers'] });
+    c.calls.length = 0;
+    const res = await postClose(app!, c.id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(res.json()).toEqual({ ok: true, id: c.id, state: 'done', released: true, childReclaim: 'queued' });
+    await c.settled();
+    expect(seen).toContain(sessionId);
+    expect(c.feed()).toEqual(['child reclaim deferred']);
+  });
+
+  it('an abandoned child’s reclaim reaches ws-audit --reclaim and ws-reclaim through the REAL agent whitelist (review m2)', async () => {
+    // Every other child-reclaim case in this file ends at `unsupported` —
+    // `testDeps`'s box advertises no capability, so `capSupported` refuses
+    // before any argv naming `ws-reclaim` is ever built, and the whitelist
+    // rule (`server/test/helpers.ts`'s `guardRunner`, which wraps every
+    // runner here) is satisfied only because the destructive verb is never
+    // ATTEMPTED. This case advertises `reclaim-v1` (plus `ws-audit` and
+    // `ws-reclaim` themselves) so the executor runs the whole ladder for
+    // real — `CCD_ARGV.wsReclaimAudit`/`wsReclaim` cross `guardRunner`'s
+    // `isExecAllowed` call for real, proving the whitelist actually admits
+    // the argv shapes the server composes, not merely that nothing tried.
+    const sessionId = `${PROJECT}-child8`;
+    const home = mkTmp('ccrc-runs-');
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { run: baseRun, calls } = makeRunner(home, { wsAddCreates: [sessionId] });
+    let childRunId = 0;
+    const seenVerbs: string[] = [];
+    const run: Runner = async (cmd, args) => {
+      const verb = args[0] ?? '';
+      if (verb === 'ws-audit' && args.includes('--reclaim')) {
+        seenVerbs.push('ws-audit --reclaim');
+        return { ran: true as const, code: 0, stdout: `${JSON.stringify({ id: sessionId, mode: 'reclaim', verdict: 'reclaimable',
+          token: 'a'.repeat(64), childOf: childRunId })}\n`, stderr: '' };
+      }
+      if (verb === 'ws-reclaim') {
+        seenVerbs.push('ws-reclaim');
+        return { ran: true as const, code: 0, stdout: `${JSON.stringify({ reclaimed: sessionId, wip: null })}\n`, stderr: '' };
+      }
+      return baseRun(cmd, args);
+    };
+    const fleetState = { connected: true, downSince: null,
+      ccdVerbs: ['reclaim-v1', 'ws-audit', 'ws-reclaim', 'ws-release', 'ws-hold'], rosterFp: null, build: null };
+    const queue = new KeyedQueue();
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const w = await openApp(home, run, { cfg: { projectsRoot: root }, queue, notifyLog, fleetState });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    childRunId = opened.id;
+    writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.child`), String(opened.id));
+    calls.length = 0;
+    const res = await app!.inject({ method: 'POST', url: `/api/runs/${opened.id}/abandon` });
+    expect(res.json()).toMatchObject({ ok: true, childReclaim: 'queued' });
+    await queue.run(sessionId, async () => undefined);
+    const feed = w.coord.feedEvents(50).filter((e) => e.sessionId === sessionId).map((e) => e.title);
+    expect(feed).toEqual(['child reclaimed']);
+    expect(seenVerbs).toEqual(['ws-audit --reclaim', 'ws-reclaim']);
   });
 
   it('refuses an oversized next-wave hold before changing the fleet or closing the run', async () => {
@@ -1841,7 +2389,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 2, waveOf: 3,
       claimedBy: CLAIMED_BY });
     if (!('id' in next)) throw new Error('fixture openRun refused');
@@ -1860,7 +2408,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-invalid-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const [survivor] = coord.reconstruct({
       ledger: { slug: 'bad program', title: 'Recovered', waves: [
         { wave: 2, of: 3, handoffCommit: null },
@@ -1889,7 +2437,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-oversize-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const overhead = holdReason('', 22, 333, 1).length;
     const program = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
     const [survivor] = coord.reconstruct({
@@ -1925,7 +2473,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-nonfinal-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 4, waveOf: 3,
       claimedBy: CLAIMED_BY });
     if (!('id' in next)) throw new Error('fixture openRun refused');
@@ -1944,7 +2492,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close6`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed', archive: true });
     expect(res.statusCode).toBe(200);
     expect(okRun(coord.run(id))!.state).toBe('failed');
@@ -1960,7 +2508,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-arch-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 2, waveOf: 3,
       claimedBy: CLAIMED_BY });
     if (!('id' in next)) throw new Error('fixture openRun refused');
@@ -1982,7 +2530,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close-arch-lone`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id,
       { fingerprint: GOOD_CLAIM, final: true, state: 'failed', archive: true });
     expect(res.statusCode).toBe(200);
@@ -1994,7 +2542,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close7`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' },
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' },
       // `pr-state` stays supported — `verifyDone` has its OWN `verbSupported`
       // gate (`fingerprint.ts`) and must succeed here, so the 501 this test
       // proves is close's own fleet-act gate, not a verifyDone side effect.
@@ -2013,7 +2561,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close8`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord, calls } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const first = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(first.statusCode).toBe(200);
     const releasesAfterFirst = calls.filter((c) => c[0] === 'ws-release').length;
@@ -2034,7 +2582,7 @@ describe('POST /api/runs/:id/close', () => {
     // doneness here to re-measure.
     const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed' });
     expect(res.statusCode).toBe(200);
     expect(okRun(coord.run(id))!.state).toBe('failed');
@@ -2053,7 +2601,7 @@ describe('POST /api/runs/:id/close', () => {
     const sessionId = `${PROJECT}-close12`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { id, coord } = await dispatchedRun(sessionId, root,
-      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     await postAdvance(app!, id,
       { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
     const toReview = await postAdvance(app!, id,
@@ -2075,7 +2623,7 @@ describe('POST /api/runs/:id/close', () => {
     const line = JSON.stringify({ pr: 42, branch: `ws/${sessionId}`, phase: 'merged', recordedAt: 12345 });
     writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.prhistory`), `${line}\n`);
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -2092,12 +2640,58 @@ describe('POST /api/runs/:id/close', () => {
     ]);
   });
 
+  describe('the fold counts a placed row only for this run’s branch', () => {
+    /** A run closed over `rows`, with `nullBranch` writing the column the way a run
+     *  dispatched without one reads. Only `state: 'failed'` closes such a run, since
+     *  `verifyDone` has no branch to measure. */
+    const foldedLineage = async (sessionId: string, rows: Record<string, unknown>[], nullBranch = false) => {
+      const home = mkTmp('ccrc-runs-');
+      const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+      mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+      writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.prhistory`),
+        rows.map((r) => `${JSON.stringify(r)}\n`).join(''));
+      const { run } = makeRunner(home, { wsAddCreates: [sessionId],
+        prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      const base = testDeps(home, run);
+      const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
+      app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      await postDispatch(app, opened.id);
+      if (nullBranch) w.coord.db.prepare('UPDATE runs SET branch = NULL WHERE id = ?').run(opened.id);
+      const res = await postClose(app, opened.id,
+        { fingerprint: GOOD_CLAIM, final: true, ...(nullBranch ? { state: 'failed' } : {}) });
+      expect(res.statusCode).toBe(200);
+      const closed = okRun(w.coord.run(opened.id))!;
+      expect(closed.branch).toBe(nullBranch ? null : `ws/${sessionId}`);
+      return closed.prLineage;
+    };
+    const row = (pr: number, branch: string, prbranch?: string) =>
+      ({ pr, branch, phase: 'merged', recordedAt: pr, ...(prbranch === undefined ? {} : { prbranch }) });
+
+    it('close folds placed rows only for this run’s branch', async () => {
+      const b = `ws/${PROJECT}-fold1`;
+      expect(await foldedLineage(`${PROJECT}-fold1`, [row(1, b, b), row(2, b, 'ws/another'), row(3, 'ws/another', b)]))
+        .toEqual([row(1, b, b), row(3, 'ws/another', b)]);
+    });
+
+    it('legacy rows still fold', async () => {
+      const b = `ws/${PROJECT}-fold2`;
+      expect(await foldedLineage(`${PROJECT}-fold2`, [row(1, b), row(2, 'ws/another'), row(3, b, 'ws/another')]))
+        .toEqual([row(1, b), row(2, 'ws/another')]);
+    });
+
+    it('a null-branch run folds every row', async () => {
+      const rows = [row(1, 'ws/a', 'ws/a'), row(2, 'ws/a', 'ws/b'), row(3, 'ws/a')];
+      expect(await foldedLineage(`${PROJECT}-fold3`, rows, true)).toEqual(rows);
+    });
+  });
+
   it('retires the program only once ALL its runs are terminal, mirroring whichever run ' +
      'closes it out (D-51)', async () => {
     const sessionA = `${PROJECT}-close11`;
     const root = gitRoot(PROJECT, `ws/${sessionA}`, TIP);
     const { id: idA, coord } = await dispatchedRun(sessionA, root,
-      { code: 0, stdout: `${ccdLine(sessionA, `ws/${sessionA}`, [prRow(`ws/${sessionA}`, 'MERGED')])}\n`, stderr: '' });
+      { ran: true as const, code: 0, stdout: `${ccdLine(sessionA, `ws/${sessionA}`, [prRow(`ws/${sessionA}`, 'MERGED')])}\n`, stderr: '' });
 
     // A sibling run under the SAME program, seeded directly at the store
     // level — the identical bypass `maxConcurrentWorkers`'s own fixture
@@ -2107,11 +2701,11 @@ describe('POST /api/runs/:id/close', () => {
     coord.markDispatched(sibling.id, `${sessionA}-sib`, 'sib-ws', 'ws/sib', false);
     coord.advance(sibling.id, 'dispatched', 'coordinator');
 
-    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Transcript surface', state: 'active' }]);
+    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Build4', state: 'active' }]);
     const resA = await postClose(app!, idA, { fingerprint: GOOD_CLAIM, final: true });
     expect(resA.statusCode).toBe(200);
     // The SIBLING is still non-terminal — the program must stay `active`.
-    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Transcript surface', state: 'active' }]);
+    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Build4', state: 'active' }]);
 
     // Close the sibling too, as an explicit abandon — D-49 lets this route
     // skip verifyDone, so a fabricated sessionId with no real git root still
@@ -2119,7 +2713,7 @@ describe('POST /api/runs/:id/close', () => {
     // `abandoned`, mirroring the run that closed it out.
     const resB = await postClose(app!, sibling.id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed' });
     expect(resB.statusCode).toBe(200);
-    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Transcript surface', state: 'abandoned' }]);
+    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Build4', state: 'abandoned' }]);
   });
 
   it('answers 404 unknown-run for a run id that does not exist', async () => {
@@ -2145,17 +2739,24 @@ describe('GET /api/runs', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
-  it('lists open runs by default, and never leaks prLineage onto the wire', async () => {
+  it('lists open runs by default, and never leaks prLineage or coordProject onto the wire', async () => {
     const home = mkTmp('ccrc-runs-');
+    // D-5298: the claimant is of the run's project (`openApp`'s own seed), so
+    // the stamp it carries is that measured project.
     const { run } = makeRunner(home, { wsAddCreates: ['demo-list1'] });
     const w = await openApp(home, run); app = w.app;
-    const opened = (await postOpen(app)).json() as { id: number };
+    const opened = (await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY })).json() as { id: number };
     await postDispatch(app, opened.id);
     const res = await getRuns(app);
     expect(res.statusCode).toBe(200);
     const { runs } = res.json() as { runs: Record<string, unknown>[] };
     expect(runs.length).toBe(1);
     expect(runs[0]).not.toHaveProperty('prLineage');
+    // The stamp IS set on this row (proven directly against the store below),
+    // so a passing `not.toHaveProperty` here proves the strip, not merely
+    // that the field was never populated.
+    expect(okRun(w.coord.run(opened.id))?.coordProject).toBe(PROJECT);
+    expect(runs[0]).not.toHaveProperty('coordProject');
     expect(runs[0]).toMatchObject({ id: opened.id, state: 'dispatched' });
   });
 
@@ -2164,7 +2765,7 @@ describe('GET /api/runs', () => {
     const sessionId = 'demo-list2';
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -2173,7 +2774,8 @@ describe('GET /api/runs', () => {
     await postClose(app, opened.id, {
       fingerprint: { branchTip: TIP, prNumber: 7, prPhase: 'open', handoffCommit: TIP }, final: true,
     });
-    expect((await getRuns(app)).json()).toEqual({ runs: [] });
+    // D-8274: the reply also carries the roster card's switch for the session hook (`rosterCard`, seeded shadow).
+    expect((await getRuns(app)).json()).toEqual({ runs: [], rosterCard: 'shadow' });
     const withClosed = (await getRuns(app, true)).json() as { runs: { id: number }[] };
     expect(withClosed.runs.map((r) => r.id)).toContain(opened.id);
   });
@@ -2530,12 +3132,12 @@ describe('dispatch/close serialise concurrent requests for the same run (review 
       calls.push(args);
       if (args[0] === 'ws-add') {
         seed(home, ids[spawnIdx]!); spawnIdx++;
-        return { code: 0, stdout: '', stderr: '' };
+        return { ran: true as const, code: 0, stdout: '', stderr: '' };
       }
-      return { code: 0, stdout: '', stderr: '' };
+      return { ran: true as const, code: 0, stdout: '', stderr: '' };
     };
     const w = await openApp(home, run); app = w.app;
-    w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    w.coord.setCaps({ maxConcurrentWorkers: 1 });
     const a = (await postOpen(app, OPEN_BODY)).json() as { id: number };
     const b = (await postOpen(app, { ...OPEN_BODY, wave: 2 })).json() as { id: number };
 
@@ -2555,7 +3157,7 @@ describe('close cancels the run\'s own outstanding mail (review findings 8/14/26
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -2625,7 +3227,7 @@ describe('a retried close does not spam wave-done-rejected mail (review finding 
     const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);   // the REAL tip has moved
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -2690,6 +3292,44 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     expect(res.json()).toMatchObject({ ok: false, reject: { code: 'bad-transition' } });
   });
 
+  it('re-entering `working` from awaiting-review takes the cap check — a send-back on a full fleet is refused honestly (spec §7.2)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-reentry'] });
+    const w = await openApp(home, run); app = w.app;
+    w.coord.setCaps({ maxConcurrentWorkers: 1 });
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);                       // running = 1 (dispatched)
+    expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
+    expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
+    expect(w.coord.capsUsage().running).toBe(0);              // Task 1: idle leaves the count
+    // Another programme takes the one slot.
+    const blocker = w.coord.openRun({ program: 'other', title: 'Other', project: PROJECT,
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-other' }) as { id: number };
+    w.coord.markDispatched(blocker.id, 'demo-blocker', 'blocker', 'ws/blocker', false);
+    expect(w.coord.advance(blocker.id, 'dispatched', 'test').ok).toBe(true);
+    expect(w.coord.capsUsage().running).toBe(1);
+
+    const res = await postAdvance(app, opened.id,
+      { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1 } });
+    // The run did not move.
+    expect(okRun(w.coord.run(opened.id))!.state).toBe('awaiting-review');
+  });
+
+  it('does NOT cap-check dispatched -> working: a run already counted may always start working', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-start'] });
+    const w = await openApp(home, run); app = w.app;
+    w.coord.setCaps({ maxConcurrentWorkers: 1 });
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);                       // running = 1 = the cap, and it is THIS run
+    const res = await postAdvance(app, opened.id,
+      { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+    expect(res.statusCode).toBe(200);
+    expect(okRun(w.coord.run(opened.id))!.state).toBe('working');
+  });
+
   it('dispatched -> working never re-measures (no pr-state call) and needs no real fingerprint', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-adv2'] });
@@ -2710,7 +3350,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
-      prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);
     const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
     app = w.app;
@@ -2955,9 +3595,11 @@ describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () 
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
-    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
-    // break the exact `runEvents()` === [] assertion below (Task 4, §3 F2).
+    // Explicit `homeProject` kept from fix round 1, finding 1; `OPEN_BODY` now
+    // carries it too and the route's legacy accept arm is unreachable with the
+    // constant `false`, so no open can record a `legacy-home-project` row and
+    // this override is belt-and-braces, not load-bearing (the exact
+    // `runEvents()` assertion below is what it once protected).
     const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     const real = w.coord.addWorkItem.bind(w.coord);
     let n = 0;
@@ -3117,9 +3759,13 @@ describe('the hold reason', () => {
     const match = hook.match(/^CCRC_HOLD_MAX=(\d+)$/m);
     if (!match) throw new Error('session-hook.sh no longer assigns CCRC_HOLD_MAX as a decimal literal');
     expect(Number(match[1])).toBe(HOLD_REASON_MAX_CHARS);
+    // ONE spelling since landing-order wave 2: the card's gate and the worker
+    // merge deny both read `CCRC_HOLD_WAVE_RE`, so the grammar is pinned where
+    // it is assigned, and the card is pinned to read it.
     expect(hook).toContain(
-      '[[ "$h" =~ ^program:[A-Za-z0-9._-]+\' \'wave:[0-9]+(/[0-9]+)?(\' \'run:[0-9]+)?$ ]] || return 0',
+      "CCRC_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'",
     );
+    expect(hook).toContain('[[ "$h" =~ $CCRC_HOLD_WAVE_RE ]] || return 0');
 
     // SUBSET, NOT EQUALITY, and the asymmetry is deliberate rather than a gap.
     // The hook is a DISPLAY gate over strings already on disk — holds written by
@@ -3171,13 +3817,26 @@ describe('the hold reason', () => {
     // too; and `'program:'` as a whole quoted token is caught, while
     // `"program:name wave:2/4"` (the composer's placeholder, a prose example)
     // is not, because the quote must close immediately after the colon.
+    //
+    // ONE SANCTIONED READER since D-6091 (fleet capacity W1-1): `programmeHoldOf` in `coord/rundefs.ts` reads the
+    // text back through `HOLD_REASON_PATTERN`, so the run-done policy can tell a programme's hold from an operator's.
+    // It is cut out of its file before the scan, and nothing else in either ring may parse one. Run-awareness still
+    // comes from coord.db: a `run:` id is only looked up there (its state), never trusted as state itself.
+    const sanctioned = /^export const programmeHoldOf = [\s\S]*?^};$/m;
+    let cut = 0;
     for (const dir of [path.join(repoRoot, 'server', 'src'), path.join(repoRoot, 'pwa', 'src')]) {
       for (const f of sourcesUnder(dir)) {
-        const src = readFileSync(f, 'utf8');
+        let src = readFileSync(f, 'utf8');
+        if (f === path.join(repoRoot, 'server', 'src', 'coord', 'rundefs.ts')) {
+          expect(sanctioned.test(src), 'programmeHoldOf is where the exemption says').toBe(true);
+          src = src.replace(sanctioned, '');
+          cut++;
+        }
         expect(/['"`](?:run|program):['"`]|run:\\?\(/.test(src.replace(/^\s*\/\/.*$/gm, '')),
           `${f} looks like it parses a hold reason`).toBe(false);
       }
     }
+    expect(cut, 'the exemption cut exactly one file').toBe(1);
   });
 });
 
@@ -3463,5 +4122,1057 @@ describe('the run routes refuse an unreadable run rather than acting on it (D-25
       payload: { claimedBy: 'demo-new-coord' } });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable' });
+  });
+
+  // D-6912: the review cap's read says a failed store read as 503, never the 404 that would say "not a work run".
+  it('GET /api/coord/review-cap/:id answers 503, and the absent run still answers 404', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const id = plantWideWave(w.coord, 13);
+    const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${id}` });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable' });
+    const absent = await app.inject({ method: 'GET', url: '/api/coord/review-cap/4242' });
+    expect(absent.statusCode).toBe(404);
+    expect(absent.json()).toMatchObject({ ok: false, error: 'not-found' });
+  });
+});
+
+describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
+  let app: FastifyInstance;
+  afterEach(async () => { await app.close(); });
+
+  /** A work run positioned at awaiting-review through the store — the route's
+   *  verifyDone is Task 7's concern, not this describe's. */
+  const workAtReview = async (home: string) => {
+    const { run } = makeRunner(home, { wsAddCreatesPerCall: [['demo-w1'], ['demo-r1']] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
+    expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
+    return { w, workId: opened.id };
+  };
+  // The SECOND body literal in this file — it does not spread `OPEN_BODY`, so
+  // the `homeProject` added there does not reach it, and a review open is an
+  // open like any other: `homeProjectVerdict` decides an absent home by the
+  // constant ALONE, never by whether the programme is already known and homed
+  // (`home-project.test.ts`, "decided by the constant ALONE"). Once the
+  // constant reads `false` a review open without this field is refused 400.
+  const REVIEW = (workId: number, over: Record<string, unknown> = {}) =>
+    ({ program: OPEN_BODY.program, title: 'Review wave 1', kind: 'review', reviews: workId,
+       claimedBy: CLAIMED_BY, homeProject: PROJECT, ...over });
+
+  it('dispatches a review run with the REVIEWER kickoff prefix, and a work run with the worker one', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId } = await workAtReview(home);
+    const r = (await postOpen(app, REVIEW(workId))).json() as { id: number };
+    const before = w.coord.dueDeliveries(Date.now(), 60_000).length;
+    const res = await postDispatch(app, r.id, { brief: 'review wave 1 of build4' });
+    expect(res.statusCode).toBe(200);
+    const due = w.coord.dueDeliveries(Date.now(), 60_000);
+    expect(due.length).toBe(before + 1);
+    const env = due[due.length - 1]!.envelope;
+    expect(env).toContain(`\n--\n${REVIEWER_KICKOFF_PREFIX}review wave 1 of build4\n`);
+    expect(env).not.toContain(WORKER_KICKOFF_PREFIX);
+    // The work run's own brief (from workAtReview's dispatch) still carries the worker prefix.
+    expect(due[0]!.envelope).toContain(WORKER_KICKOFF_PREFIX);
+    // The preflight asked about the REVIEWER skill: the event names it.
+    const ev = w.coord.db.prepare("SELECT detail FROM run_events WHERE runId = ? AND detail LIKE 'skill-preflight:%'").all(r.id) as { detail: string }[];
+    expect(ev.length).toBe(1);
+  });
+
+  it('opens a review run that derives project, wave and waveOf from the run it reviews', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId } = await workAtReview(home);
+    const res = await postOpen(app, REVIEW(workId));
+    expect(res.statusCode).toBe(200);
+    const { id } = res.json() as { id: number };
+    const row = okRun(w.coord.run(id))!;
+    expect(row).toMatchObject({ kind: 'review', reviews: workId, project: PROJECT, wave: 1, waveOf: 3,
+      claimedBy: CLAIMED_BY, state: 'planned', sessionId: null });
+    // Its hold reason is the worker's wave and its OWN id (spec §5.4) — the existing grammar.
+    expect(holdReasonVerdict(row.program, row.wave, row.waveOf, row.id)).toMatchObject({ ok: true,
+      reason: `program:${OPEN_BODY.program} wave:1/3 run:${id}` });
+  });
+
+  it('opens a review run whose program agrees with the reviewed run only after shaping (Task 5 review I2)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId } = await workAtReview(home);
+    const res = await postOpen(app, REVIEW(workId, { program: ` ${OPEN_BODY.program} ` }));
+    expect(res.statusCode).toBe(200);
+    const { id } = res.json() as { id: number };
+    expect(okRun(w.coord.run(id))!.program).toBe(OPEN_BODY.program);
+  });
+
+  it('is idempotent for a retry while the review is still planned, then refuses review-in-flight once dispatched (Task 5 review m10)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId } = await workAtReview(home);
+    const first = (await postOpen(app, REVIEW(workId))).json() as { id: number };
+    // The identical retry reuses the SAME planned row — `openRun`'s dup arm
+    // runs before the review-in-flight check (m10), so an HTTP retry of a
+    // successful review open stays idempotent rather than 409ing itself.
+    const retry = await postOpen(app, REVIEW(workId));
+    expect(retry.statusCode).toBe(200);
+    expect((retry.json() as { id: number }).id).toBe(first.id);
+    w.coord.markDispatched(first.id, 'demo-r1', 'r1', 'ws/r1', false);
+    expect(w.coord.advance(first.id, 'dispatched', 'test').ok).toBe(true);
+    // No longer `planned`, so the dup arm no longer matches — the
+    // review-in-flight check is what refuses a genuinely second reviewer.
+    const res = await postOpen(app, REVIEW(workId, { title: 'Again' }));
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'review-in-flight', by: String(first.id) });
+  });
+
+  it('allows a new review run once the previous one is terminal', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId } = await workAtReview(home);
+    const first = (await postOpen(app, REVIEW(workId))).json() as { id: number };
+    expect(w.coord.advance(first.id, 'failed', 'test').ok).toBe(true);
+    expect((await postOpen(app, REVIEW(workId, { title: 'R2' }))).statusCode).toBe(200);
+  });
+
+  // D-6795: the review-round cap. A round is a review run that names the work run; the 4th open is refused.
+  describe('review-round cap (D-6795)', () => {
+    const capApp = async (home: string) => {
+      const { run } = makeRunner(home, { wsAddCreatesPerCall: [['demo-w1'], ['demo-r1']] });
+      const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+      await notifyLog.load();
+      const w = await openApp(home, run, { notifyLog }); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      await postDispatch(app, opened.id);
+      expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
+      expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
+      return { w, workId: opened.id, notifyLog };
+    };
+    /** Open one round and finish it (failed), so the next is not review-in-flight. */
+    const round = async (w: { coord: CoordStore }, workId: number, n: number) => {
+      const res = await postOpen(app, REVIEW(workId, { title: `R${n}` }));
+      expect(res.statusCode, `round ${n} opens`).toBe(200);
+      const id = (res.json() as { id: number }).id;
+      expect(w.coord.advance(id, 'failed', 'test').ok).toBe(true);
+      return id;
+    };
+    const capNotices = (nl: NotifyLog) => nl.catchUp(nl.epoch, 0).events.filter((e) => e.title.startsWith('Review cap reached'));
+
+    it('opens rounds 1 to 3; the 4th is refused cap-review-rounds with the structured ask, raised exactly once', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId, notifyLog } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      expect(w.coord.reviewRounds(workId)).toBe(REVIEW_ROUND_CAP);
+      // The last review reported: its summary and report path ride the ask.
+      const reportPath = path.join(home, 'review-3.md');
+      writeFileSync(reportPath, '# Review\n\n## Findings\n- **F1 (security, important)** `a.ts#leak` — leaks. needs a ruling: keep or drop?\n'
+        + '- **F2 (tests, minor)** `b.ts#case` — no case.\n\n## Whole-branch pass\n- not a finding\n');
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
+        kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\n2 findings, 1 needs a ruling',
+        artifacts: [reportPath] });
+      const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json()).toEqual({ ok: false, refused: 'cap-review-rounds', by: '3', ask: {
+        run: workId, rounds: 3, cap: 3,
+        lastReview: { reviewRunId: ids[2], summary: '2 findings, 1 needs a ruling', report: reportPath,
+          findings: { state: 'read', lines: [
+            '**F1 (security, important)** `a.ts#leak` — leaks. needs a ruling: keep or drop?',
+            '**F2 (tests, minor)** `b.ts#case` — no case.'] } } } });
+      expect(w.coord.reviewRounds(workId)).toBe(3);
+      expect(capNotices(notifyLog)).toHaveLength(1);
+      expect(capNotices(notifyLog)[0]).toMatchObject({ kind: 'run', runId: workId });
+      expect(capNotices(notifyLog)[0]!.body).toContain('2 findings, 1 needs a ruling');
+      // The fixture report's findings reach the notice too, not only the count.
+      expect(capNotices(notifyLog)[0]!.body).toContain('needs a ruling: keep or drop?');
+      expect(capNotices(notifyLog)[0]!.body).toContain('`b.ts#case` — no case.');
+      // A second refusal answers the same and raises nothing more.
+      expect((await postOpen(app, REVIEW(workId, { title: 'R4 again' }))).statusCode).toBe(409);
+      expect(capNotices(notifyLog)).toHaveLength(1);
+    });
+
+    it('keeps an absent report and an unreadable one apart, and falls back to the summary for both', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId, notifyLog } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const gone = path.join(home, 'gone.md');
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
+        kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\n3 findings', artifacts: [gone] });
+      const absent = (await postOpen(app, REVIEW(workId, { title: 'R4' }))).json() as { ask: { lastReview: { findings: unknown } } };
+      expect(absent.ask.lastReview.findings).toEqual({ state: 'absent' });
+      mkdirSync(gone); // a directory is not a readable file
+      const unreadable = (await postOpen(app, REVIEW(workId, { title: 'R4' }))).json() as { ask: { lastReview: { findings: unknown } } };
+      expect(unreadable.ask.lastReview.findings).toEqual({ state: 'unreadable' });
+      expect(capNotices(notifyLog)[0]!.body).toContain('3 findings');
+    });
+
+    it('opens the 4th once the operator lifts the cap for that run, and only for that run', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      await round(w, workId, 1); await round(w, workId, 2); await round(w, workId, 3);
+      expect((await postOpen(app, REVIEW(workId, { title: 'R4' }))).statusCode).toBe(409);
+      const lift = await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: workId } });
+      expect(lift.statusCode).toBe(200);
+      expect(lift.json()).toEqual({ ok: true, run: workId, rounds: 3, cap: 3, lifted: true });
+      expect(w.coord.reviewCapGate(workId).liftedAt !== null).toBe(true);
+      expect((await postOpen(app, REVIEW(workId, { title: 'R4' }))).statusCode).toBe(200);
+      expect(w.coord.reviewRounds(workId)).toBe(4);
+    });
+
+    // Review 960 F1: the refusal's `ask` takes the same cut as the GET, so a key the summary's cut falls inside goes
+    // out as no part of itself (the cut drops the whole token), even with no masker that knows the key.
+    it("the 409's ask sends no part of a key that the summary's 600-character cut falls inside", async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const key = ['cmp', '0a1b2c3d4e', '5f6a7b8c9d', 'e0f1a2b3c4'].join('.');
+      const words = 'word '.repeat(118); // 590 characters, so the key spans character 600
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
+        kind: 'status', subject: 'review-done', body: `{"reviewedTip":"x"}\n${words}${key} tail`, artifacts: [] });
+      const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
+      expect(refused.statusCode).toBe(409);
+      for (let i = 0; i + 8 <= key.length; i++) expect(refused.body, key.slice(i, i + 8)).not.toContain(key.slice(i, i + 8));
+      expect((refused.json() as { ask: { lastReview: { summary: string } } }).ask.lastReview.summary).toBe(words.trimEnd());
+    });
+
+    // Review 960 V1: `REVIEW_CAP_REFUSAL_TEXT`'s `not-configured` word has a route row behind it, one per cap route.
+    it.each([['GET', '/api/coord/review-cap/7'], ['POST', '/api/coord/review-cap']] as const)(
+      '%s %s answers 501 not-configured without a coordination store', async (method, url) => {
+        const home = mkTmp('ccrc-runs-');
+        app = await buildServer(testDeps(home));   // no `coord` key at all
+        const res = await app.inject({ method, url, ...(method === 'POST' ? { payload: { run: 7 } } : {}) });
+        expect(res.statusCode).toBe(501);
+        expect(res.json()).toMatchObject({ ok: false, error: 'not-configured' });
+      });
+
+    it('the lift refuses a body with no run, and an id that is not a work run', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const r1 = await round(w, workId, 1);
+      expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: {} })).statusCode).toBe(400);
+      expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: r1 } })).statusCode).toBe(404);
+      expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: 9999 } })).statusCode).toBe(404);
+    });
+
+    // D-6909: every run row carries the cap's state, so the console can show it without a second read.
+    it("GET /api/runs carries the cap's state: rounds, the cap, and when its ask was raised and lifted", async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const capOf = async (id: number) => {
+        // `closed=1`: the three rounds are failed, so only the archive half lists them.
+        const res = await app.inject({ method: 'GET', url: '/api/runs?closed=1', headers: tokenHeaders(TOKEN) });
+        expect(res.statusCode).toBe(200);
+        return ((res.json() as { runs: RunSummary[] }).runs.find((r) => r.id === id))!.reviewCap;
+      };
+      expect(await capOf(workId)).toEqual({ rounds: 3, cap: 3, askedAt: null, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null });
+      for (const id of ids) expect(await capOf(id)).toBeNull();
+      const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
+      expect(refused.statusCode).toBe(409);
+      // One round predicate (D-6909): the refusal's `by` is the row's `reviewCap.rounds` for the same run.
+      expect((refused.json() as { by: string }).by).toBe(String((await capOf(workId))!.rounds));
+      const asked = await capOf(workId);
+      expect(asked).toMatchObject({ rounds: 3, cap: 3, liftedAt: null });
+      expect(typeof asked!.askedAt).toBe('number');
+      expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: workId } })).statusCode).toBe(200);
+      const lifted = await capOf(workId);
+      expect(lifted!.askedAt).toBe(asked!.askedAt);
+      expect(typeof lifted!.liftedAt).toBe('number');
+      // `coord.runs()` is what the live `runs` frame ships, and `coord.run()` the advance echo: the same object.
+      expect(okRuns(w.coord.runs()).find((r) => r.id === workId)!.reviewCap).toEqual(lifted);
+      expect(okRun(w.coord.run(workId))!.reviewCap).toEqual(lifted);
+    });
+
+    // D-6910: the operator's sheet reads the refusal's own ask, through the one helper both compose it with.
+    it("GET /api/coord/review-cap/:id answers the refusal's own ask, with when it was raised and lifted", async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const ids = [await round(w, workId, 1), await round(w, workId, 2), await round(w, workId, 3)];
+      const reportPath = path.join(home, 'review-3.md');
+      writeFileSync(reportPath, '# Review\n\n## Findings\n- **F1 (tests, minor)** `b.ts#case` — no case.\n');
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: ids[2]!,
+        kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\n1 finding', artifacts: [reportPath] });
+      const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
+      expect(refused.statusCode).toBe(409);
+      const { ask } = refused.json() as { ask: unknown };
+      const read = async () => app.inject({ method: 'GET', url: `/api/coord/review-cap/${workId}` });
+      const before = await read();
+      expect(before.statusCode).toBe(200);
+      const view = before.json() as { ok: boolean; ask: unknown; askedAt: unknown; liftedAt: unknown };
+      expect(view.ok).toBe(true);
+      expect(view.ask).toEqual(ask);
+      expect((view.ask as { lastReview: { findings: unknown } }).lastReview.findings)
+        .toEqual({ state: 'read', lines: ['**F1 (tests, minor)** `b.ts#case` — no case.'] });
+      expect(typeof view.askedAt).toBe('number');
+      expect(view.liftedAt).toBeNull();
+      expect((await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: workId } })).statusCode).toBe(200);
+      const after = (await read()).json() as { askedAt: unknown; liftedAt: unknown };
+      expect(after.askedAt).toBe(view.askedAt);
+      expect(typeof after.liftedAt).toBe('number');
+      // The report deleted: the same read says so, in the findings' own word.
+      rmSync(reportPath);
+      expect(((await read()).json() as { ask: { lastReview: { findings: unknown } } }).ask.lastReview.findings)
+        .toEqual({ state: 'absent' });
+    });
+
+    it('GET /api/coord/review-cap/:id says unnamed when no review has reported, and nulls before any ask', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { workId } = await capApp(home);
+      const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${workId}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true, askedAt: null, liftedAt: null, ask: {
+        run: workId, rounds: 0, cap: 3,
+        lastReview: { reviewRunId: null, summary: null, report: null, findings: { state: 'unnamed' } } } });
+    });
+
+    it('GET /api/coord/review-cap/:id says unnamed for a review that reported with no report artifact on its mail', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const r1 = await round(w, workId, 1);
+      w.coord.insertMail({ fromId: 'demo-r1', fromUuid: 'a'.repeat(36), toId: 'coordinator', runId: r1,
+        kind: 'status', subject: 'review-done', body: '{"reviewedTip":"x"}\nno findings', artifacts: [] });
+      const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${workId}` });
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { ask: unknown }).ask).toEqual({ run: workId, rounds: 1, cap: 3,
+        lastReview: { reviewRunId: r1, summary: 'no findings', report: null, findings: { state: 'unnamed' } } });
+    });
+
+    it('GET /api/coord/review-cap/:id answers 404 for a review run or no run, and 400 for a bad id', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const r1 = await round(w, workId, 1);
+      for (const id of [String(r1), '999999']) {
+        const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${id}` });
+        expect(res.statusCode, id).toBe(404);
+        expect(res.json()).toMatchObject({ ok: false, error: 'not-found' });
+      }
+      for (const id of ['0', '01', 'abc']) {
+        const res = await app.inject({ method: 'GET', url: `/api/coord/review-cap/${id}` });
+        expect(res.statusCode, id).toBe(400);
+        expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+      }
+    });
+
+    it('counts every state: a failed or abandoned round still spent one', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { w, workId } = await capApp(home);
+      const a = await round(w, workId, 1);
+      expect(w.coord.reviewRounds(workId)).toBe(1);
+      expect(a).toBeGreaterThan(workId);
+      expect(w.coord.reviewRounds(a)).toBe(0);
+    });
+  });
+
+  it.each([
+    ['reviews absent', (id: number) => ({ ...REVIEW(id), reviews: undefined }), 'reviews'],
+    ['reviews on a work run', (id: number) => ({ ...OPEN_BODY, wave: 2, reviews: id }), 'reviews'],
+    ['kind unknown', (id: number) => REVIEW(id, { kind: 'unknown' }), 'kind'],
+    ['a sessionId', (id: number) => REVIEW(id, { sessionId: 'demo-w1' }), 'sessionId'],
+    // Task 5 review m7: these five assert the exact "must be the reviewed
+    // run's" wording, not merely that the field name appears somewhere.
+    ['a different project', (id: number) => REVIEW(id, { project: 'elsewhere' }), "project must be the reviewed run's"],
+    ['a different wave', (id: number) => REVIEW(id, { wave: 2 }), "wave must be the reviewed run's"],
+    ['a different waveOf', (id: number) => REVIEW(id, { waveOf: 9 }), "waveOf must be the reviewed run's"],
+    ['a different program', (id: number) => REVIEW(id, { program: 'other' }), "program must be the reviewed run's"],
+    ['a different claimedBy', (id: number) => REVIEW(id, { claimedBy: 'ccrc-pwa-other' }), "claimedBy must be the reviewed run's coordinator"],
+    ['a run that does not exist', () => REVIEW(999_999), 'reviews'],
+  ])('refuses %s as bad-request, naming the field', async (_what, body, detailSubstring) => {
+    const home = mkTmp('ccrc-runs-');
+    const { workId } = await workAtReview(home);
+    // D-5298: the other coordinator is an attributed registry row, so the
+    // review arm's own refusal is the one that answers.
+    seed(home, 'ccrc-pwa-other', { child: '' });
+    const res = await postOpen(app, body(workId));
+    expect(res.statusCode).toBe(400);
+    const j = res.json() as { ok: boolean; error: string; detail: string };
+    expect(j).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(j.detail).toContain(detailSubstring);
+  });
+
+  it('refuses to review a run that is not at awaiting-review, naming its state', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-w1'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);                       // dispatched, not awaiting-review
+    const res = await postOpen(app, REVIEW(opened.id));
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { detail: string }).detail).toContain('dispatched');
+  });
+
+  it('refuses to review a review run', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { workId } = await workAtReview(home);
+    const r = (await postOpen(app, REVIEW(workId))).json() as { id: number };
+    const res = await postOpen(app, REVIEW(r.id, { title: 'meta' }));
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { detail: string }).detail).toContain('kind');
+  });
+
+  it('a review run does not count against the cap until it is dispatched, and does once it is', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId } = await workAtReview(home);
+    expect(w.coord.capsUsage().running).toBe(0);              // the idle worker (Task 1)
+    const r = (await postOpen(app, REVIEW(workId))).json() as { id: number };
+    expect(w.coord.capsUsage().running).toBe(0);              // planned
+    w.coord.markDispatched(r.id, 'demo-r1', 'r1', 'ws/r1', false);
+    expect(w.coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+    expect(w.coord.capsUsage().running).toBe(1);              // the reviewer REPLACES the worker's slot (§5.4)
+  });
+
+  it('refuses to send the worker back while its review run is open: review-in-flight (spec §9 inv. 3)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId } = await workAtReview(home);
+    const r = (await postOpen(app, REVIEW(workId))).json() as { id: number };
+    const back = () => postAdvance(app, workId,
+      { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+    let res = await back();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, reject: { code: 'review-in-flight', reviewRunId: r.id } });
+    expect(okRun(w.coord.run(workId))!.state).toBe('awaiting-review');
+    // Once the review run is terminal the same send-back goes through.
+    expect(w.coord.advance(r.id, 'failed', 'test').ok).toBe(true);
+    res = await back();
+    expect(res.statusCode).toBe(200);
+    expect(okRun(w.coord.run(workId))!.state).toBe('working');
+  });
+
+  // ---- Task 7: closing a review run (design 2026-09-14 §5.3) --------------
+
+  /** W dispatched into a fixture repo whose `ws/demo-w1` is at TIPW, positioned
+   *  at awaiting-review; R opened and dispatched against it.
+   *
+   *  The git fixture is this file's OWN `gitRoot` (`:1632`), not a second copy
+   *  of `coord-fingerprint.test.ts`'s `project()`: the two build the identical
+   *  loose ref (`<root>/<project>/.git/refs/heads/<branch>`), and the only
+   *  thing `project()` adds is a packed-refs arm nothing here needs. */
+  const TIPW = 'c'.repeat(40);
+  const reviewInFlight = async (home: string, tipNow: string = TIPW) => {
+    const root = gitRoot(PROJECT, 'ws/demo-w1', tipNow);
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w1'] });
+    const w = await openApp(home, run, { cfg: { projectsRoot: root } }); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);                       // ws-add seeds demo-w1; the registry diff sees ONE new row
+    seed(home, 'demo-r1');                                    // R's row, planted AFTER W's dispatch so that diff stays unambiguous
+    expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
+    expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
+    const r = (await postOpen(app, REVIEW(opened.id))).json() as { id: number };
+    w.coord.markDispatched(r.id, 'demo-r1', 'r1', 'ws/r1', false);
+    // `markDispatched` binds the session and writes four columns; it is not a
+    // transition. REVIEW_RUN_TRANSITIONS has no planned->working edge, so R
+    // takes the `dispatched` hop the store's own machine requires.
+    expect(w.coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+    expect(w.coord.advance(r.id, 'working', 'test').ok).toBe(true);
+    const report = path.join(root, 'report.md'); writeFileSync(report, '# findings\n');
+    calls.length = 0;
+    return { w, workId: opened.id, reviewId: r.id, report, calls };
+  };
+
+  /** The review close's ONE irreversible act, pinned by WHOSE workspace it
+   *  names — not merely by its verb (Task 7 review I1). `calls.map(c => c[0])`
+   *  alone stays green when the arm releases the REVIEWED run's session by
+   *  mistake, which is a worker evicted mid-wave; the argv is where that shows.
+   *  Same idiom as `:1756`. */
+  const expectReleasedReviewerOnly = (calls: string[][]): void => {
+    expect(calls.map((c) => c[0])).toEqual(['ws-release']);        // exactly one act, and it is a release
+    expect(calls[0]!.includes('demo-r1')).toBe(true);              // the REVIEWER's own workspace
+    expect(calls.some((c) => c.includes('demo-w1'))).toBe(false);  // never the worker's
+  };
+
+  it('closes a review run done when the reviewed tip is unchanged: released, no closing hop, worker untouched', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId, reviewId, report, calls } = await reviewInFlight(home);
+    const res = await postClose(app, reviewId, { fingerprint: { reviewedTip: TIPW, report } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, id: reviewId, state: 'done', released: true,
+      childReclaim: 'not-queued', childReclaimWhy: 'not-a-child' });
+    expect(okRun(w.coord.run(reviewId))!.state).toBe('done');
+    expect(okRun(w.coord.run(workId))!.state).toBe('awaiting-review');   // the coordinator rules next
+    expectReleasedReviewerOnly(calls);
+    const events = w.coord.db.prepare('SELECT toState FROM run_events WHERE runId = ? ORDER BY id').all(reviewId) as { toState: string }[];
+    expect(events.map((e) => e.toState)).not.toContain('closing');
+  });
+
+  it('refuses stale-review when the worker pushed after wave-done, and the run stays working', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, reviewId, report, calls } = await reviewInFlight(home, 'd'.repeat(40));
+    const res = await postClose(app, reviewId, { fingerprint: { reviewedTip: TIPW, report } });
+    expect(res.statusCode).toBe(409);
+    // `sendCloseOutcome` spells a `doneVerdict` `{error: <code>, detail}`
+    // (`coord/routes.ts`, unchanged by this task) — `reject: {code}` is the
+    // ADVANCE route's shape, which this route has never used.
+    expect(res.json()).toMatchObject({ ok: false, error: 'stale-review' });
+    expect(okRun(w.coord.run(reviewId))!.state).toBe('working');
+    expect(calls).toEqual([]);                                            // no fleet act on a refusal
+    // The refusal is RECORDED and MAILED BACK, the same two acts the work
+    // path's `stale-tip` close makes (`:1707-1709`) — audited once, told once.
+    expect(w.coord.rejections().filter((r) => r.runId === reviewId).map((r) => r.code))
+      .toEqual(['stale-review']);
+    const due = w.coord.dueDeliveries(Date.now(), 60_000);
+    expect(due.some((d) => d.toId === 'demo-r1'
+      && d.envelope.includes('review-done-rejected') && d.envelope.includes('stale-review'))).toBe(true);
+  });
+
+  it('refuses report-unreadable when the report is not there', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { reviewId, report } = await reviewInFlight(home);
+    const res = await postClose(app, reviewId, { fingerprint: { reviewedTip: TIPW, report: report + '.missing' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, error: 'report-unreadable' });
+  });
+
+  it('closes a review run failed without any re-measurement (the reviewer died)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, reviewId, calls } = await reviewInFlight(home, 'd'.repeat(40));   // tip moved, report absent — irrelevant
+    const res = await postClose(app, reviewId, { fingerprint: { reviewedTip: TIPW, report: '/nowhere' }, state: 'failed' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'failed', released: true });
+    expect(okRun(w.coord.run(reviewId))!.state).toBe('failed');
+    expectReleasedReviewerOnly(calls);
+  });
+
+  it('closes a review run failed with NO fingerprint at all — a dead reviewer wrote none (D-2812)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, reviewId, calls } = await reviewInFlight(home);
+    const res = await postClose(app, reviewId, { state: 'failed' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'failed', released: true });
+    expect(okRun(w.coord.run(reviewId))!.state).toBe('failed');
+    expectReleasedReviewerOnly(calls);
+  });
+
+  it('still refuses a PRESENT but malformed fingerprint on a failed review close (D-2812)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { reviewId } = await reviewInFlight(home);
+    const res = await postClose(app, reviewId,
+      { state: 'failed', fingerprint: { reviewedTip: 'abc', report: '/r' } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+  });
+
+  it.each([
+    ['final', { fingerprint: { reviewedTip: TIPW, report: '/r' }, final: true }],
+    ['archive', { fingerprint: { reviewedTip: TIPW, report: '/r' }, archive: true }],
+    ['a work fingerprint', { fingerprint: { branchTip: TIPW, handoffCommit: TIPW, prNumber: null, prPhase: 'none' } }],
+    ['a relative report path', { fingerprint: { reviewedTip: TIPW, report: 'report.md' } }],
+    ['a short tip', { fingerprint: { reviewedTip: 'abc', report: '/r' } }],
+  ])('refuses %s on a review close as bad-request', async (_what, body) => {
+    const home = mkTmp('ccrc-runs-');
+    const { reviewId } = await reviewInFlight(home);
+    const res = await postClose(app, reviewId, body);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+  });
+
+  it('a review close of a reviewer CHILD releases it and KEEPS it — the report is live while the reviewed run is open (child reclamation, wave 3; spec §5.7)', async () => {
+    // The coordinator rules on the report NEXT, citing it by path in any
+    // send-back `fix-round` mail; the work run is `awaiting-review` here, so
+    // the reviewer's clips — the report's directory — must outlive this close.
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId, reviewId, report, calls } = await reviewInFlight(home);
+    writeFileSync(path.join(home, '.cc-sessions', 'demo-r1.child'), String(reviewId));
+    const res = await postClose(app, reviewId, { fingerprint: { reviewedTip: TIPW, report } });
+    expect(res.json()).toEqual({ ok: true, id: reviewId, state: 'done', released: true,
+      childReclaim: 'not-queued', childReclaimWhy: 'review-report-live' });
+    expect(okRun(w.coord.run(workId))!.state).toBe('awaiting-review');
+    expectReleasedReviewerOnly(calls);
+  });
+
+  it('the UNGATED abandon valve reaches a working review run: failed directly, no closing hop (D-2807)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, reviewId, calls } = await reviewInFlight(home);
+    // No token and no payload: `POST /api/runs/:id/abandon` is ungated (D-282)
+    // and constructs `{intent:'abandon'}` itself (D-280).
+    const res = await app.inject({ method: 'POST', url: `/api/runs/${reviewId}/abandon` });
+    // BODY FIRST, then the status: without D-2807 this route answers
+    // `bad-transition` working->closing, and asserting the body first is what
+    // puts that refusal in the failure output rather than a bare status diff.
+    expect(res.json()).toEqual({ ok: true, id: reviewId, state: 'failed', released: true,
+      childReclaim: 'not-queued', childReclaimWhy: 'not-a-child' });
+    expect(res.statusCode).toBe(200);
+    expect(okRun(w.coord.run(reviewId))!.state).toBe('failed');
+    expectReleasedReviewerOnly(calls);
+    const events = w.coord.db.prepare('SELECT toState FROM run_events WHERE runId = ? ORDER BY id').all(reviewId) as { toState: string }[];
+    expect(events.map((e) => e.toState)).not.toContain('closing');
+  });
+});
+
+// ── landing order wave 4: an opted-in project's clean main merge, through the run routes ───────────────────────────
+//
+// A claim T whose branch now sits at L (T plus one clean merge of the base) is ACCEPTED when the radar's lineage says
+// so; the server then binds L, the head it verified, wherever it records or compares a landing head. When the radar
+// has not measured L yet the answer is `lineage-unmeasured`, mailed under its own subject to whoever sent the claim.
+// Everything is a fixture HOME; the existing rows of this file are untouched, and a project with no `enabled` marker
+// answers exactly as they say.
+import { landingLineAct, landingVerdict, renderDequeueBrief, renderMergedBrief, landingAsk } from '../src/coord/landing.js';
+import type { PrLandingLine } from '../src/prstate.js';
+import { DONE_REFUSAL_CODES } from '../../shared/api.js';
+import { legacyOpens } from './helpers/plan.js';
+
+describe('an opted-in project: the lineage through the run routes (landing order wave 4)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const LIVE = OTHER_TIP;                       // the branch now; the claim (TIP) is the first parent of its merge
+  const BASE = 'c'.repeat(40);
+  const SID = 'demo-lin1';
+  const BRANCH = `ws/${SID}`;
+  const nowIso = (offS = 0): string => new Date(Date.now() + offS * 1000).toISOString();
+  const doc = (id: string, branch: string, over: Record<string, unknown> = {}): string => JSON.stringify({
+    v: 1, project: PROJECT, id, at: nowIso(-5), state: 'measured', branch, tip: LIVE, base: BASE,
+    chain: [{ merge: LIVE, p1: TIP, p2: BASE }], stop: 'not-a-merge', ...over });
+  /** Wave 3b's two files, as the radar writes them. `lineage: null` writes none (not yet measured). */
+  const optIn = (home: string, id: string, branch: string, o: { marker?: boolean; lineage?: string | null } = {}): void => {
+    const dir = path.join(home, '.cc-sessions', 'landing', PROJECT);
+    mkdirSync(dir, { recursive: true });
+    if (o.marker !== false) writeFileSync(path.join(dir, 'enabled'), JSON.stringify({ v: 1, project: PROJECT, at: nowIso(-5) }));
+    const l = o.lineage === undefined ? doc(id, branch) : o.lineage;
+    if (l !== null) writeFileSync(path.join(dir, `${id}.lineage`), l);
+  };
+  const CLAIM = { branchTip: TIP, prNumber: 7, prPhase: 'open', handoffCommit: TIP };
+  const openPr = (id: string, branch: string) => ({ ran: true as const, code: 0,
+    stdout: `${ccdLine(id, branch, [prRow(branch, 'OPEN')])}\n`, stderr: '' });
+
+  /** A work run dispatched and `working` on a branch at LIVE, in an opted-in project (unless `marker: false`). */
+  const workRun = async (o: { marker?: boolean; lineage?: string | null; io?: (io: FleetIO) => FleetIO; over?: Partial<Omit<Deps, 'cfg'>> } = {}) => {
+    const home = mkTmp('ccrc-runs-');
+    const root = gitRoot(PROJECT, BRANCH, LIVE);
+    const { run, calls } = makeRunner(home, { wsAddCreates: [SID], prState: openPr(SID, BRANCH) });
+    const base = testDeps(home, run);
+    const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root }, ...(o.over ?? {}),
+      ...(o.io === undefined ? {} : { io: o.io(base.io) }) });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    optIn(home, SID, BRANCH, o);
+    expect((await postAdvance(app, opened.id, { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } })).statusCode).toBe(200);
+    return { ...w, home, root, id: opened.id, calls,
+      advance: (to: string) => postAdvance(app!, opened.id, { to, fingerprint: CLAIM }) };
+  };
+  /** Every mail of a run: its subject, recipient and delivery state. */
+  const mailOf = (coord: CoordStore, runId: number): { subject: string; toId: string; state: string }[] =>
+    coord.db.prepare('SELECT m.subject AS subject, d.toId AS toId, d.state AS state FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
+      'WHERE m.runId = ? ORDER BY m.id').all(runId) as { subject: string; toId: string; state: string }[];
+  const unmeasuredMail = (coord: CoordStore, runId: number) =>
+    mailOf(coord, runId).filter((m) => /-(unmeasured|rejected)$/.test(m.subject));
+
+  describe('an accepted advance binds the head it verified', () => {
+    it('to awaiting-review answers verifiedHead: the live tip', async () => {
+      const f = await workRun();
+      const res = await f.advance('awaiting-review');
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, run: { state: 'awaiting-review' }, verifiedHead: LIVE });
+    });
+
+    it('to merging writes merging-at:<LIVE>:…, answers verifiedHead, and the landing reads edge for a PR head of LIVE', async () => {
+      const f = await workRun();
+      expect((await f.advance('awaiting-review')).statusCode).toBe(200);
+      const res = await f.advance('merging');
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, run: { state: 'merging' }, verifiedHead: LIVE });
+      const ep = f.coord.currentEpisode(f.id)!;
+      expect(ep.head).toBe(LIVE);
+      expect(ep.pr).toBe(7);
+      const detail = f.coord.db.prepare("SELECT detail FROM run_events WHERE runId = ? AND toState = 'merging' AND fromState <> 'merging'")
+        .get(f.id) as { detail: string };
+      expect(detail.detail.startsWith(`merging-at:${LIVE}:7:`)).toBe(true);
+
+      const line = (head: string): PrLandingLine => ({
+        id: SID, bound: true, number: 7, state: 'OPEN', isDraft: false, landedInTrain: false, base: 'main', head,
+        required: [], requiredCut: false, rulesNamed: [], protectionNamed: [], pinnedNames: [], unmeasured: [] });
+      expect(landingLineAct({ pr: ep.pr!, head: ep.head }, line(LIVE))).toEqual({ act: 'edge' });
+      expect(landingLineAct({ pr: ep.pr!, head: ep.head }, line(TIP))).toEqual({ act: 'moved', head: TIP });
+    });
+
+    it('the dequeue brief and the merged brief each print the recorded head, which is LIVE and not the claim', async () => {
+      const f = await workRun();
+      await f.advance('awaiting-review');
+      await f.advance('merging');
+      const head = f.coord.currentEpisode(f.id)!.head;
+      // The run IS at merging (advanced above), so both arms read its episode head; a dequeue reads the state first (D-7470).
+      const base = { runs: { ok: true as const, run: { id: f.id } }, coordinator: CLAIMED_BY,
+        runState: { ok: true as const, state: 'merging' }, told: false, head };
+      const dq = landingVerdict(landingAsk({ sessionId: SID, workspace: SID, number: 7, phase: 'open',
+        queue: { state: 'dequeued', at: null } }, new Set())!, base);
+      const mg = landingVerdict(landingAsk({ sessionId: SID, workspace: SID, number: 7, phase: 'merged',
+        queue: { state: 'landed', at: null } }, new Set())!, base);
+      expect(dq).toMatchObject({ step: 'deliver', mail: { body: renderDequeueBrief(SID, 7, LIVE) } });
+      expect(mg).toMatchObject({ step: 'deliver', mail: { body: renderMergedBrief(SID, 7, LIVE) } });
+      for (const v of [dq, mg]) {
+        const body = v.step === 'deliver' ? v.mail?.body ?? '' : '';
+        expect(body).toContain(LIVE);
+        expect(body).not.toContain(TIP);
+      }
+    });
+
+    it('an ordinary advance carries no verifiedHead, and its episode head is the claim', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const root = gitRoot(PROJECT, BRANCH, TIP);
+      const { run } = makeRunner(home, { wsAddCreates: [SID], prState: openPr(SID, BRANCH) });
+      const base = testDeps(home, run);
+      const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } }); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      await postDispatch(app, opened.id);
+      await postAdvance(app, opened.id, { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+      expect((await postAdvance(app, opened.id, { to: 'awaiting-review', fingerprint: CLAIM })).json()).not.toHaveProperty('verifiedHead');
+      const res = await postAdvance(app, opened.id, { to: 'merging', fingerprint: CLAIM });
+      expect(res.json()).not.toHaveProperty('verifiedHead');
+      expect(w.coord.currentEpisode(opened.id)!.head).toBe(TIP);
+    });
+  });
+
+  describe('an accepted close records the head it verified', () => {
+    it('handoffCommit is the live tip, not the claim', async () => {
+      const f = await workRun();
+      const res = await postClose(app!, f.id, { fingerprint: CLAIM, final: true });
+      expect(res.statusCode).toBe(200);
+      expect(okRun(f.coord.run(f.id))!.state).toBe('done');
+      expect(okRun(f.coord.run(f.id))!.handoffCommit).toBe(LIVE);
+    });
+
+    it('F-A: after an accepted advance, a close submitting the verifiedHead as branchTip and handoffCommit succeeds with the marker gone, and records it', async () => {
+      const f = await workRun();
+      const adv = await f.advance('awaiting-review');
+      expect(adv.statusCode).toBe(200);
+      const verifiedHead = (adv.json() as { verifiedHead: string }).verifiedHead;
+      expect(verifiedHead).toBe(LIVE);
+      // The radar is paused, off or stale between the advance and the close: the marker (and the lineage) are gone.
+      rmSync(path.join(f.home, '.cc-sessions', 'landing', PROJECT, 'enabled'));
+      rmSync(path.join(f.home, '.cc-sessions', 'landing', PROJECT, `${SID}.lineage`));
+      const res = await postClose(app!, f.id, { fingerprint: { ...CLAIM, branchTip: verifiedHead, handoffCommit: verifiedHead }, final: true });
+      expect(res.statusCode).toBe(200);
+      expect(okRun(f.coord.run(f.id))!.state).toBe('done');
+      expect(okRun(f.coord.run(f.id))!.handoffCommit).toBe(LIVE);
+    });
+
+    it('an ordinary close still records the claim (the abandon of a claim is pinned above, unchanged)', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const root = gitRoot(PROJECT, BRANCH, TIP);
+      const { run } = makeRunner(home, { wsAddCreates: [SID], prState: openPr(SID, BRANCH) });
+      const base = testDeps(home, run);
+      const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } }); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      await postDispatch(app, opened.id);
+      expect((await postClose(app, opened.id, { fingerprint: CLAIM, final: true })).statusCode).toBe(200);
+      expect(okRun(w.coord.run(opened.id))!.handoffCommit).toBe(TIP);
+    });
+  });
+
+  describe('the tip is read once more after an accept', () => {
+    /** The branch's loose ref answers LIVE the first time and `then` after. */
+    const twice = (then: 'absent' | string) => (io: FleetIO): FleetIO => {
+      let reads = 0;
+      return { ...io, readFileMeasured: async (p, ...rest) => {
+        if (!p.endsWith(path.join('refs', 'heads', 'ws', SID))) return io.readFileMeasured(p, ...rest);
+        reads += 1;
+        if (reads === 1) return { ok: true, content: `${LIVE}\n` };
+        return then === 'absent' ? { ok: false, reason: 'absent' } : { ok: true, content: `${then}\n` };
+      } };
+    };
+
+    it('a null on the re-read answers today\'s tip-unmeasurable, never an accept, and the run does not move', async () => {
+      const f = await workRun({ io: twice('absent') });
+      const res = await f.advance('awaiting-review');
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, reject: { code: 'tip-unmeasurable' } });
+      expect(okRun(f.coord.run(f.id))!.state).toBe('working');
+    });
+
+    it('a tip that moved between the reads is stale-tip with the moved detail', async () => {
+      const f = await workRun({ io: twice('f'.repeat(40)) });
+      const res = await f.advance('awaiting-review');
+      expect(res.json()).toMatchObject({ ok: false, reject: { code: 'stale-tip', detail: 'the tip moved between reads' } });
+    });
+  });
+
+  describe('lineage-unmeasured: recorded, mailed under its own subject, and never a refusal', () => {
+    it('an advance answers 409 reject.code, and queues one wave-advance-unmeasured mail to the worker', async () => {
+      const f = await workRun({ lineage: null });
+      const res = await f.advance('awaiting-review');
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ ok: false, reject: { code: 'lineage-unmeasured', detail: 'not-yet-measured' } });
+      expect(okRun(f.coord.run(f.id))!.state).toBe('working');
+      const mail = unmeasuredMail(f.coord, f.id);
+      expect(mail).toEqual([{ subject: 'wave-advance-unmeasured', toId: SID, state: expect.any(String) }]);
+      const body = (f.coord.db.prepare("SELECT body FROM mail WHERE subject = 'wave-advance-unmeasured'").get() as { body: string }).body;
+      expect(body).toBe('lineage-unmeasured: not-yet-measured — re-send the same claim, unchanged, after the radar\'s next tick ' +
+        '(usually within 5 minutes), at most twice; if it is still answered this way, report it to your coordinator');
+      expect(f.coord.rejections().map((r) => r.code)).toEqual(['lineage-unmeasured']);
+    });
+
+    it('a work close answers error: lineage-unmeasured, mails wave-done-unmeasured to the worker, and fleet acts nothing', async () => {
+      const f = await workRun({ lineage: null });
+      f.calls.length = 0;
+      const res = await postClose(app!, f.id, { fingerprint: CLAIM, final: true });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, error: 'lineage-unmeasured', detail: 'not-yet-measured' });
+      expect(unmeasuredMail(f.coord, f.id)).toEqual([{ subject: 'wave-done-unmeasured', toId: SID, state: expect.any(String) }]);
+      expect(okRun(f.coord.run(f.id))!.state).toBe('working');
+      expect(f.calls.map((c) => c[0])).not.toContain('ws-release');
+    });
+
+    it('two identical retries queue ONE mail', async () => {
+      const f = await workRun({ lineage: null });
+      await f.advance('awaiting-review');
+      await f.advance('awaiting-review');
+      await postClose(app!, f.id, { fingerprint: CLAIM, final: true });
+      await postClose(app!, f.id, { fingerprint: CLAIM, final: true });
+      const subjects = unmeasuredMail(f.coord, f.id).map((m) => m.subject).sort();
+      expect(subjects).toEqual(['wave-advance-unmeasured', 'wave-done-unmeasured']);
+    });
+
+    it('an outstanding wave-done-rejected does not swallow the unmeasured one (and the reverse)', async () => {
+      // Not opted in yet: the stale claim is a plain refusal and queues wave-done-rejected.
+      const f = await workRun({ marker: false, lineage: null });
+      expect((await postClose(app!, f.id, { fingerprint: CLAIM, final: true })).json()).toMatchObject({ error: 'stale-tip' });
+      expect(unmeasuredMail(f.coord, f.id).map((m) => m.subject)).toEqual(['wave-done-rejected']);
+      // The operator opts in; the radar has not measured L yet.
+      optIn(f.home, SID, BRANCH, { lineage: null });
+      expect((await postClose(app!, f.id, { fingerprint: CLAIM, final: true })).json()).toMatchObject({ error: 'lineage-unmeasured' });
+      expect(unmeasuredMail(f.coord, f.id).map((m) => m.subject)).toEqual(['wave-done-rejected', 'wave-done-unmeasured']);
+    });
+
+    it('a stale lineage is lineage-unmeasured too, detail lineage-stale', async () => {
+      const f = await workRun({ lineage: doc(SID, BRANCH, { at: nowIso(-2500) }) });
+      expect((await f.advance('awaiting-review')).json()).toMatchObject({ reject: { code: 'lineage-unmeasured', detail: 'lineage-stale' } });
+    });
+  });
+
+  describe('a project with no enabled marker answers exactly today', () => {
+    it('the advance is a plain stale-tip with wave-advance-rejected mail, whatever a lineage file says', async () => {
+      const f = await workRun({ marker: false });
+      const res = await f.advance('awaiting-review');
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, reject: { code: 'stale-tip' } });
+      expect((res.json() as { reject: { detail: string } }).reject.detail).not.toMatch(/\((landing|lineage)/);
+      expect(unmeasuredMail(f.coord, f.id).map((m) => m.subject)).toEqual(['wave-advance-rejected']);
+      expect(f.coord.rejections().map((r) => r.code)).toEqual(['stale-tip']);
+    });
+
+    it('the close is a plain stale-tip with wave-done-rejected mail', async () => {
+      const f = await workRun({ marker: false });
+      const res = await postClose(app!, f.id, { fingerprint: CLAIM, final: true });
+      expect(res.json()).toMatchObject({ ok: false, error: 'stale-tip' });
+      expect(unmeasuredMail(f.coord, f.id).map((m) => m.subject)).toEqual(['wave-done-rejected']);
+    });
+  });
+
+  describe('the review close', () => {
+    const TIPW = 'c'.repeat(40);
+    const WID = 'demo-w1';
+    /** The review fixture of the review-run describe above, with the radar's files for the reviewed run and its branch at
+     *  LIVE: the reviewer read TIPW, the first parent of the one clean merge of the base since. */
+    const reviewRun = async (o: { lineage?: string | null; marker?: boolean } = {}) => {
+      const home = mkTmp('ccrc-runs-');
+      const root = gitRoot(PROJECT, `ws/${WID}`, LIVE);
+      const { run, calls } = makeRunner(home, { wsAddCreates: [WID] });
+      const w = await openApp(home, run, { cfg: { projectsRoot: root } }); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      await postDispatch(app, opened.id);
+      seed(home, 'demo-r1');
+      expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
+      expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
+      const r = (await postOpen(app, { program: OPEN_BODY.program, title: 'Review wave 1', kind: 'review', reviews: opened.id,
+        claimedBy: CLAIMED_BY, homeProject: PROJECT })).json() as { id: number };
+      w.coord.markDispatched(r.id, 'demo-r1', 'r1', 'ws/r1', false);
+      expect(w.coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+      expect(w.coord.advance(r.id, 'working', 'test').ok).toBe(true);
+      const report = path.join(root, 'report.md'); writeFileSync(report, '# findings\n');
+      const lineage = o.lineage === undefined
+        ? JSON.stringify({ v: 1, project: PROJECT, id: WID, at: nowIso(-5), state: 'measured', branch: `ws/${WID}`, tip: LIVE,
+          // p2 is not TIPW: here TIPW and BASE are one sha, and a merge whose two parents agree is no radar shape (D-7469).
+          base: BASE, chain: [{ merge: LIVE, p1: TIPW, p2: 'e'.repeat(40) }], stop: 'not-a-merge' })
+        : o.lineage;
+      optIn(home, WID, `ws/${WID}`, { ...(o.marker === undefined ? {} : { marker: o.marker }), lineage });
+      calls.length = 0;
+      return { w, workId: opened.id, reviewId: r.id, report, calls };
+    };
+
+    it('a review of the claimed tip is accepted across the clean merge, and the review run closes done', async () => {
+      const f = await reviewRun();
+      const res = await postClose(app!, f.reviewId, { fingerprint: { reviewedTip: TIPW, report: f.report } });
+      expect(res.statusCode).toBe(200);
+      expect(okRun(f.w.coord.run(f.reviewId))!.state).toBe('done');
+      expect(okRun(f.w.coord.run(f.workId))!.state).toBe('awaiting-review');
+    });
+
+    it('an unmeasured lineage is error: lineage-unmeasured, mailed to the REVIEWER as review-done-unmeasured, with no fleet act', async () => {
+      const f = await reviewRun({ lineage: null });
+      const res = await postClose(app!, f.reviewId, { fingerprint: { reviewedTip: TIPW, report: f.report } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, error: 'lineage-unmeasured', detail: 'not-yet-measured' });
+      expect(okRun(f.w.coord.run(f.reviewId))!.state).toBe('working');
+      expect(f.calls).toEqual([]);
+      expect(unmeasuredMail(f.w.coord, f.reviewId)).toEqual([{ subject: 'review-done-unmeasured', toId: 'demo-r1', state: expect.any(String) }]);
+      expect(f.w.coord.rejections().filter((r) => r.runId === f.reviewId).map((r) => r.code)).toEqual(['lineage-unmeasured']);
+    });
+
+    it('with no enabled marker it is today\'s stale-review and review-done-rejected', async () => {
+      const f = await reviewRun({ marker: false });
+      const res = await postClose(app!, f.reviewId, { fingerprint: { reviewedTip: TIPW, report: f.report } });
+      expect(res.json()).toMatchObject({ ok: false, error: 'stale-review' });
+      expect(unmeasuredMail(f.w.coord, f.reviewId).map((m) => m.subject)).toEqual(['review-done-rejected']);
+    });
+  });
+
+  describe('lineage-unmeasured is never counted as a refusal (D-7107)', () => {
+    it('two unmeasured answers and then an accepted close: closeRefusals 0, firstSubmission true, doneRejects 0', async () => {
+      const f = await workRun({ lineage: null });
+      await f.advance('awaiting-review');
+      await postClose(app!, f.id, { fingerprint: CLAIM, final: true });
+      optIn(f.home, SID, BRANCH);                                    // the radar's next tick measured L
+      expect((await postClose(app!, f.id, { fingerprint: CLAIM, final: true })).statusCode).toBe(200);
+      const signals = f.coord.runSignals(f.id);
+      expect(signals).toMatchObject({ closeRefusals: 0, firstSubmission: true });
+      const health = f.coord.runHealth([f.id], [CLAIMED_BY]).get(f.id)!;
+      expect(health).toMatchObject({ doneRejects: 0, lastRejectCode: null });
+      expect(f.coord.rejections().map((r) => r.code)).toEqual(['lineage-unmeasured', 'lineage-unmeasured']);
+    });
+
+    it('the refusal list is the done-authority list less that one word', () => {
+      expect(DONE_REFUSAL_CODES).not.toContain('lineage-unmeasured');
+      expect(DONE_REFUSAL_CODES).toContain('stale-tip');
+    });
+  });
+});
+
+// ── landing order wave 5h: a done close that re-measures its PR merged marks the entry ────────────────────────────
+describe('POST /api/runs/:id/close marks the landing entry (landing order wave 5h)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { vi.restoreAllMocks(); if (app) await app.close(); app = undefined; });
+
+  const HEAD40 = 'a'.repeat(40);
+  const MERGE40 = 'e'.repeat(40);
+  const GOOD = { branchTip: TIP, prNumber: 7, prPhase: 'open', handoffCommit: TIP };
+  const mergedRow = (branch: string, extra: Record<string, unknown> = {}) =>
+    prRow(branch, 'MERGED', { headRefOid: HEAD40, mergeCommit: { oid: MERGE40 }, ...extra });
+  const lineOf = (sessionId: string, rows: Record<string, unknown>[]) =>
+    ({ ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, rows)}\n`, stderr: '' });
+
+  /** A dispatched run driven to `merging` with a pin of PR 7 through the store, as the landing line's guarded door does. */
+  const pinnedRun = async (sessionId: string, rows: Record<string, unknown>[]) => {
+    const home = mkTmp('ccrc-runs-');
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { run, calls } = makeRunner(home, { wsAddCreates: [sessionId], prState: lineOf(sessionId, rows) });
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const w = await openApp(home, run, { cfg: { projectsRoot: root }, notifyLog });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    for (const to of ['working', 'awaiting-review'] as const) {
+      if (!w.coord.advance(opened.id, to, 'test').ok) throw new Error(`fixture advance to ${to} refused`);
+    }
+    const pinned = w.coord.advanceLanding({ runId: opened.id, to: 'merging', causedBy: 'coordinator',
+      landing: { kind: 'pin', head: HEAD40, pr: 7, mode: 'off', handoffCommit: TIP } });
+    if (!pinned.ok) throw new Error(`fixture pin refused: ${pinned.error}`);
+    return { id: opened.id, coord: w.coord, calls };
+  };
+  const stateOf = (coord: CoordStore): string => {
+    const read = coord.readLanding(PROJECT);
+    if (!read.ok) throw new Error(read.error);
+    return read.facts.entries.find((e) => e.pr === 7)!.state;
+  };
+  const mergedRecords = (coord: CoordStore) => coord.feedEvents(200).filter((e) => e.kind === 'merged');
+
+  it('a done close that re-measures the PR merged marks its entry landed, by the close, and raises one merged record', async () => {
+    const s = `${PROJECT}-land1`;
+    const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(stateOf(coord)).toBe('landed');
+    const detail = JSON.parse((coord.db.prepare('SELECT detail FROM landing_entries WHERE pr = 7').get() as { detail: string }).detail);
+    expect(detail).toMatchObject({ by: 'close', word: 'merged', mergeCommit: MERGE40 });
+    expect(mergedRecords(coord)).toHaveLength(1);
+  });
+
+  it('a claim of open that measures merged still marks it', async () => {
+    const s = `${PROJECT}-land2`;
+    const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const res = await postClose(app!, id, { fingerprint: { ...GOOD, prPhase: 'open' }, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(stateOf(coord)).toBe('landed');
+  });
+
+  it('a done close that measures the PR open leaves the entry pinned', async () => {
+    const s = `${PROJECT}-land3`;
+    const { id, coord } = await pinnedRun(s, [prRow(`ws/${s}`, 'OPEN', { headRefOid: HEAD40 })]);
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(stateOf(coord)).toBe('pinned');
+    expect(mergedRecords(coord)).toHaveLength(0);
+  });
+
+  it('an abandon of the claim (state failed) asks no pr-state and leaves the entry pinned', async () => {
+    const s = `${PROJECT}-land4`;
+    const { id, coord, calls } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const before = calls.filter((c) => c[0] === 'pr-state').length;
+    const res = await postClose(app!, id, { fingerprint: GOOD, state: 'failed', final: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ state: 'failed' });
+    expect(calls.filter((c) => c[0] === 'pr-state').length).toBe(before);
+    expect(stateOf(coord)).toBe('pinned');
+  });
+
+  it('a train-landed row leaves the entry to the reader', async () => {
+    const s = `${PROJECT}-land5`;
+    const train = prRow(`ws/${s}`, 'CLOSED', { headRefOid: HEAD40, landedInTrain: true, closedAt: '2020-01-01T00:00:00Z' });
+    const { id, coord } = await pinnedRun(s, [train]);
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(stateOf(coord)).toBe('pinned');
+  });
+
+  it('a fenced landing store still answers 200 done and leaves the entry pinned, with one warning line', async () => {
+    const s = `${PROJECT}-land6`;
+    const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(coord, 'advanceLanding').mockReturnValue({ ok: false, error: 'landing-recovery-unresolved' });
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'done' });
+    expect(okRun(coord.run(id))!.state).toBe('done');
+    expect(stateOf(coord)).toBe('pinned');
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      `ccrc-server: close of run ${id} could not mark ${PROJECT} #7 landed (landing-recovery-unresolved)`,
+    ]);
+  });
+
+  it('a mark that throws leaves the close answering 200 done, with one warning that names the failed mark', async () => {
+    const s = `${PROJECT}-land8`;
+    const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(coord, 'advanceLanding').mockImplementation(() => { throw new Error('boom'); });
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'done' });
+    expect(okRun(coord.run(id))!.state).toBe('done');
+    expect(stateOf(coord)).toBe('pinned');
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      `ccrc-server: close of run ${id} could not mark ${PROJECT} #7 landed (boom)`,
+    ]);
+  });
+
+  it('a notice step that throws after the mark committed leaves the close answering 200, and the warning says the mark was written but the record was not', async () => {
+    const s = `${PROJECT}-land9`;
+    const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(coord, 'hasNotice').mockImplementation(() => { throw new Error('notice boom'); });
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'done' });
+    expect(stateOf(coord)).toBe('landed');
+    expect(mergedRecords(coord)).toHaveLength(0);
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      `ccrc-server: close of run ${id} marked ${PROJECT} #7 landed but its merged record was not written (notice boom)`,
+    ]);
+  });
+
+  it('a session whose merged record sweepMerged already wrote gets no second one', async () => {
+    const s = `${PROJECT}-land7`;
+    const { id, coord } = await pinnedRun(s, [mergedRow(`ws/${s}`)]);
+    const rec = { kind: 'merged' as const, sessionId: s, title: 'x', body: 'PR #7 merged; nothing archived.', runId: null };
+    coord.recordFeedEvent('e', { ...rec, seq: 1, at: 1 }, `${s}#7`);
+    const res = await postClose(app!, id, { fingerprint: GOOD, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(stateOf(coord)).toBe('landed');
+    expect(mergedRecords(coord)).toHaveLength(1);
   });
 });

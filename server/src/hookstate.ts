@@ -2,14 +2,14 @@ import path from 'node:path';
 import type { FleetIO } from './io.js';
 import type { HookAsk, HookAskQuestion } from '../../shared/api.js';
 
-/** A hookstate file older than this is presumed stale: the writing hook
+/** A hookstate file whose `updatedAt` and `aliveAt` are both older than this is presumed stale: the writing hook
  *  process may be dead, wedged, or the session may have moved on without a
  *  terminal event (a killed pane, a box reboot). Orca's own constant,
  *  carried over rather than re-derived. */
 export const HOOKSTATE_FRESH_MS = 30 * 60 * 1000;
 
 /** Mirrors `session-hook.sh`'s own 64KB write cap — see
- *  `readHookStateMeasured`'s length check for why the reader enforces it independently rather than
+ *  `readHookStateRawMeasured`'s length check for why the reader enforces it independently rather than
  *  trusting the writer never to have skewed. */
 const HOOKSTATE_MAX_BYTES = 65536;
 
@@ -21,7 +21,7 @@ export interface HookState {
   state: 'working' | 'waiting' | 'done';
   updatedAt: number;
   /** The hook event that produced this write — `session-hook.sh` has always
-   *  written it (`ccd/session-hook.sh:96,100`) and this reader has always
+   *  written it (the hookstate write in `session-hook.sh`'s tail) and this reader has always
    *  thrown it away. Build 7 spends it on exactly one thing: a
    *  `UserPromptSubmit` newer than a delivery's `deliveredAt` is the cheapest
    *  available proof that the injected turn actually STARTED, as opposed to
@@ -33,7 +33,10 @@ export interface HookState {
    *  `null`, not a union: the set of hook event names is Claude Code's, it
    *  grows between harness versions, and narrowing it here would make a new
    *  event name reject a whole hookstate read. A string this build does not
-   *  recognise is simply not the edge it was looking for. */
+   *  recognise is simply not the edge it was looking for. The names a consumer
+   *  looks for are `HookEvent` (`shared/hook-events.ts`, D-8613): it tests this
+   *  field through `hookEventIs` or a list typed by that union, never a bare
+   *  literal, so a misspelt name fails to compile. */
   event: string | null;
   ask: HookAsk | null;
   subagents: { name: string; startedAt: number }[];
@@ -69,7 +72,27 @@ export interface HookState {
    *  that has never met the gate as a fleet the gate never had to stop. */
   graphGateDenials: number | null;
   interrupted: boolean;
+  /** `background-aware-working` (D-5231): the hook's `bgDelegated` and
+   *  `bgDelegatedKinds` — the delegated background work a main Stop listed and
+   *  left running (the hook writes the pair on a main Stop whose
+   *  `background_tasks` is an array, and a subagent event carries it). Absent
+   *  when the file has no pair, or a malformed one: a bad pair never condemns a
+   *  file whose `updatedAt` is good (`aliveAt`'s rule). `fleet.ts` is the one
+   *  reader that turns it into `FleetSession.background`. */
+  background?: { count: number; kinds: string[] };
 }
+
+/** D-5231: the kinds string the hook writes — unique cleaned kinds, comma-joined, or empty. */
+const BG_KINDS_RE = /^(?:[a-z_-]+(?:,[a-z_-]+)*)?$/;
+const BG_KINDS_MAX_BYTES = 200;
+/** D-5231: the pair, or undefined for an absent or malformed one. */
+const reviveBackground = (raw: Record<string, unknown>): { count: number; kinds: string[] } | undefined => {
+  const count = raw['bgDelegated'];
+  const kinds = raw['bgDelegatedKinds'];
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) return undefined;
+  if (typeof kinds !== 'string' || kinds.length > BG_KINDS_MAX_BYTES || !BG_KINDS_RE.test(kinds)) return undefined;
+  return { count, kinds: kinds === '' ? [] : kinds.split(',') };
+};
 
 // Typed `readonly string[]`, not `readonly HookState['state'][]`, on purpose —
 // same reasoning as shared/api.ts's `STATUSES`/`CHECKS`: validating an
@@ -83,7 +106,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** Thrown by the revive helpers below, caught once at
- *  `readHookStateMeasured`'s own boundary — same discipline as `shared/api.ts`'s `reviveFleetSession` /
+ *  `readHookStateRawMeasured`'s own boundary — same discipline as `shared/api.ts`'s `reviveFleetSession` /
  *  `reviveWsAudit`: one bad field anywhere in `ask` or `subagents`
  *  invalidates the WHOLE read, never a partial `HookState` with a field
  *  silently defaulted or dropped. */
@@ -228,61 +251,100 @@ export async function readHookStateMeasured(
   currentUuid: string | null,
   now: number,
 ): Promise<HookStateRead> {
+  return foldHookStateRead(await readHookStateRawMeasured(io, registryDir, id, currentUuid), now);
+}
+
+/**
+ * `~/.cc-sessions/<id>.hookstate.json`, parsed and NOT gated (worker stall watch wave 2, spec 2026-09-29 §5.1;
+ * slug `raw-read-replaces-the-private-parse` (D-3620)). Every parse gate runs here. The identity and age cuts do not:
+ * the file's identity is REPORTED instead, and the age is left to the caller. The stall watch's frozen and
+ * delegates arms need `updatedAt` and `event` from a file the aged read has already dropped, and need to know
+ * whose file it is.
+ *
+ * The three `false` arms are three conditions, never folded together:
+ * - `absent` is a proven ENOENT;
+ * - `unmeasured` means the READ failed (EACCES, a dropped agent round trip), and the file may say `working`
+ *   (D-115);
+ * - `malformed` means the file was read and this build cannot parse it: oversize, not JSON, version skew, an
+ *   unknown state word, a non-string `sessionId`, or a bad field anywhere.
+ *
+ * `identity` keeps the aged read's own gate exactly: `unregistered` when the registry names no uuid
+ * (`currentUuid === null`), `current` when `sessionId === currentUuid` (including the `'' === ''` case that
+ * read has always passed), and `foreign` otherwise. `empty-uuid-is-foreign` (D-3619) is the turn marker's rule, not
+ * this file's.
+ *
+ * `aliveAt` (D-4041, `a-carried-wait-keeps-its-stamp`) is the hook's additive liveness stamp. A subagent's tool event
+ * over a main-thread wait keeps that wait's `updatedAt` (its start) and writes `aliveAt` = now. Since D-5232
+ * (`agent-events-keep-the-main-state`) it is no longer only a carried wait's: behind the server's word
+ * `hook-main-state-v1`, EVERY agent event (a subagent's tool event, SubagentStart, SubagentStop) keeps the main
+ * thread's `updatedAt` and `event`, whatever its state, and writes `aliveAt` = now. It is present only when the
+ * file's value is a finite number; an absent or malformed one is ABSENT here, never `malformed`. It is not on
+ * `HookState`: its readers are the age cut (`foldHookStateRead`), which reads the later of the two, and the stall
+ * watch's raw fact (`stallHookFactOf` in `watch.ts`, read by `stallHookActivityAt` in `coord/stall.ts`).
+ */
+export type HookStateRawRead =
+  | { ok: true; state: HookState; sessionId: string; identity: 'current' | 'foreign' | 'unregistered'; aliveAt?: number }
+  | { ok: false; reason: 'absent' | 'unmeasured' | 'malformed' };
+
+/** The raw read's one parse-failure answer, spelled once: each rejection below is a file this reader DID look at (the
+ *  aged fold then answers `NO_STATE`), and one constant stops a later edit quietly promoting one to `unmeasured`. */
+const MALFORMED: HookStateRawRead = { ok: false, reason: 'malformed' };
+
+/** THE ONE PARSE in this module. `readHookStateMeasured` is a fold over it (`foldHookStateRead`, below), never a
+ *  copy: `io.ts`'s own rule, that two hand-kept ladders over the same gates drift. The stall watch reads it whole:
+ *  hold 2a correlates an ask by time, so it needs one the age cut drops, and it makes its own identity cut. */
+export async function readHookStateRawMeasured(io: FleetIO, registryDir: string, id: string, currentUuid: string | null): Promise<HookStateRawRead> {
   // `readFileMeasured`, not `readFile`: this seam is the ONLY place the
   // absent-vs-unreadable line still exists as evidence (`io.ts`'s
-  // `MeasuredRead`), and folding it here is what D-115 named. A proven
-  // ENOENT is the ordinary shape for a workspace whose harness has not
-  // written a hookstate yet; anything else is a file this box could not
-  // read, which proves nothing about the session and must say so.
+  // `MeasuredRead`). A proven ENOENT is the ordinary shape for a workspace
+  // whose harness has not written a hookstate yet; anything else is a file
+  // this box could not read, which proves nothing about the session.
   const read = await io.readFileMeasured(path.join(registryDir, `${id}.hookstate.json`));
-  if (!read.ok) {
-    return { ok: false, reason: read.reason === 'absent' ? 'no-state' : 'unmeasured' };
-  }
+  if (!read.ok) return { ok: false, reason: read.reason === 'absent' ? 'absent' : 'unmeasured' };
   const content = read.content;
-  // Defense-in-depth against the writer's own cap: check length BEFORE
-  // parsing, so a file that somehow grew past it (a skewed writer, a
-  // hand-edit) can never reach JSON.parse at all. Measured in actual UTF-8
-  // bytes, not `content.length` (UTF-16 code units) — the writer's own bash
-  // `${#out}` cap shares that same char-vs-byte imprecision on its side, but
-  // this reader is the layer where the constant's name (`_BYTES`) has to
-  // tell the truth.
-  // Every rejection from here down is NO_STATE, one constant rather than
-  // twelve object literals: each is a file this reader successfully looked
-  // at and found says nothing about the current turn, and spelling that
-  // conclusion once is what stops a later edit from quietly promoting one of
-  // them to `unmeasured` — the direction that would refuse dispatches on an
-  // ordinary stale file.
-  if (Buffer.byteLength(content, 'utf8') > HOOKSTATE_MAX_BYTES) return NO_STATE;
+  // Defense-in-depth against the writer's own cap: length BEFORE parsing,
+  // so a file that somehow grew past it (a skewed writer, a hand-edit) never
+  // reaches the parse at all. Measured in UTF-8 bytes, not `content.length`
+  // (UTF-16 code units): this reader is where the constant's name (`_BYTES`)
+  // has to tell the truth.
+  if (Buffer.byteLength(content, 'utf8') > HOOKSTATE_MAX_BYTES) return MALFORMED;
 
   let raw: unknown;
   try {
     raw = JSON.parse(content);
   } catch {
-    return NO_STATE;
+    return MALFORMED;
   }
-  if (!isRecord(raw)) return NO_STATE;
-  if (raw['v'] !== 1) return NO_STATE;
+  if (!isRecord(raw)) return MALFORMED;
+  if (raw['v'] !== 1) return MALFORMED;
 
   const stateRaw = raw['state'];
-  if (typeof stateRaw !== 'string' || !STATES.includes(stateRaw)) return NO_STATE;
+  if (typeof stateRaw !== 'string' || !STATES.includes(stateRaw)) return MALFORMED;
 
-  if (currentUuid === null) return NO_STATE;
-  if (typeof raw['sessionId'] !== 'string' || raw['sessionId'] !== currentUuid) return NO_STATE;
+  // A non-string `sessionId` names nobody, so it is a parse failure and never
+  // an identity. The aged read folded it to `no-state` beside a mismatch, and
+  // `malformed` folds to that same answer (the gated-door FOLD PARITY row pins it).
+  const sessionId = raw['sessionId'];
+  if (typeof sessionId !== 'string') return MALFORMED;
 
   const updatedAt = raw['updatedAt'];
-  if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) return NO_STATE;
-  if (now - updatedAt > HOOKSTATE_FRESH_MS) return NO_STATE;
+  if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) return MALFORMED;
+
+  // D-4041: ignored unless a finite number (a bad one must not condemn a file whose `updatedAt` is good).
+  const aliveRaw = raw['aliveAt'];
+  const aliveAt = typeof aliveRaw === 'number' && Number.isFinite(aliveRaw) ? aliveRaw : undefined;
 
   const interruptedRaw = raw['interrupted'];
-  if (interruptedRaw !== undefined && typeof interruptedRaw !== 'boolean') return NO_STATE;
+  if (interruptedRaw !== undefined && typeof interruptedRaw !== 'boolean') return MALFORMED;
 
   const eventRaw = raw['event'];
-  if (eventRaw !== undefined && eventRaw !== null && typeof eventRaw !== 'string') return NO_STATE;
+  if (eventRaw !== undefined && eventRaw !== null && typeof eventRaw !== 'string') return MALFORMED;
 
   try {
     const askRaw = raw['ask'];
     const ask = askRaw === null || askRaw === undefined ? null : reviveAsk(askRaw);
     const subagents = reviveSubagents(raw['subagents']);
+    const background = reviveBackground(raw);
     return {
       ok: true,
       state: {
@@ -294,20 +356,46 @@ export async function readHookStateMeasured(
         graphQueries: reviveGraphCount(raw, 'graphQueries'),
         graphGateDenials: reviveGraphCount(raw, 'graphGateDenials'),
         interrupted: interruptedRaw === true,
+        ...(background === undefined ? {} : { background }),
       },
+      sessionId,
+      identity: currentUuid === null ? 'unregistered' : sessionId === currentUuid ? 'current' : 'foreign',
+      ...(aliveAt === undefined ? {} : { aliveAt }),
     };
   } catch (err) {
-    if (err instanceof Malformed) return NO_STATE;
+    if (err instanceof Malformed) return MALFORMED;
     throw err; // a real bug in here must not read as a corrupt file
   }
+}
+
+/** The aged fold's answer for each raw failure, TOTAL over the reasons: a reason added to `HookStateRawRead` without
+ *  its row here is a compile error, never a silent `NO_STATE`. `unmeasured` stays `unmeasured` (D-115). */
+const RAW_FAILURE_FOLD: Record<Extract<HookStateRawRead, { ok: false }>['reason'], HookStateRead> = {
+  absent: NO_STATE,
+  unmeasured: { ok: false, reason: 'unmeasured' },
+  malformed: NO_STATE,
+};
+
+/** The aged door's ONE decision over the raw read (`readHookStateMeasured`): the identity cut, the age cut, and the
+ *  fold of `absent`/`malformed` into `no-state` (`RAW_FAILURE_FOLD`). The unaged door that once
+ *  shared it is gone (worker stall watch wave 2): the lane reads the raw read and makes its own cut. The session stream
+ *  folds its own raw read through it too (D-6324), so it can keep the raw read for `keepAgedAsk`. */
+export function foldHookStateRead(raw: HookStateRawRead, now: number): HookStateRead {
+  if (!raw.ok) return RAW_FAILURE_FOLD[raw.reason];
+  if (raw.identity !== 'current') return NO_STATE;
+  // The age cut's clock is the later of the file's `updatedAt` and its `aliveAt` (D-4041): a main-thread wait that a
+  // subagent keeps touching holds its start in `updatedAt`, and the touches are what say the session is alive.
+  if (now - Math.max(raw.state.updatedAt, raw.aliveAt ?? raw.state.updatedAt) > HOOKSTATE_FRESH_MS) return NO_STATE;
+  return { ok: true, state: raw.state };
 }
 
 /**
  * The folded form, unchanged in signature and in every answer it gives: null
  * for all nine conditions the measured read tells apart. Its callers
- * (`watch.ts`'s dialog sweep and mail gate, `sessionws.ts`'s stream,
- * `server.ts`'s ask route) all want the same thing from a `null` — there is
- * no fresh turn to report — and widening them to carry a distinction they do
+ * (`watch.ts`'s dialog sweep and mail gate, `server.ts`'s ask route,
+ * `registry.ts`'s `freshAskAt`, `turnverdict.ts`; the session stream folds its
+ * own raw read through `foldHookStateRead`, D-6324) all want the same thing
+ * from a `null` — there is no fresh turn to report — and widening them to carry a distinction they do
  * not act on is the defect this task removes, one type over.
  *
  * Derived, not duplicated, for the reason `io.ts`'s own `readFile` states

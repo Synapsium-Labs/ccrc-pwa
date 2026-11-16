@@ -12,7 +12,7 @@
 // pins them as standing tests. THIS file pins the behaviour: the table's rows, the
 // three-part output contract, and the refusals.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { AddressInfo } from 'node:net';
 import fs from 'node:fs';
@@ -23,8 +23,12 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { hashLine } from '../src/auth/secret.js';
 import { CCRC_API, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
+import { clientRoutes } from './ccrcApiTable.js';
+import { renderServerCaps, SERVER_CAPS, SERVER_CAPS_FILE } from '../../shared/api.js';
+import { runClient, writeClientHome, type Run } from './ccrcApiClient.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { loopbackCurlFront } from './containedTools.js';
 
 let home: string;
 let server: Server;
@@ -33,17 +37,6 @@ let seen: { method: string; url: string; auth: string | undefined; body: string 
 let reply: { code: number; body: string };
 
 const TOKEN = 'z'.repeat(64);
-
-/** The token file as it really ships: a `#`-comment preamble above ONE value
- *  line. Measured on the fleet host 2026-08-26 — 23 preamble lines above a
- *  64-char value — and reproduced here because a fixture holding a bare token
- *  would let a `cat`-shaped read pass this whole file. */
-const tokenDoc = (): string =>
-  ['# ccrc box token — do not commit, do not print.',
-   '# The server reads this with coord/token.ts\'s extractToken:',
-   '# first non-blank, non-# line, whitespace stripped.',
-   '',
-   TOKEN, ''].join('\n');
 
 beforeEach(async () => {
   home = mkTmp('ccrc-api-home-');
@@ -64,11 +57,7 @@ beforeEach(async () => {
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const port = (server.address() as AddressInfo).port;
 
-  fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
-  fs.mkdirSync(path.join(home, '.cc-secrets'), { recursive: true });
-  fs.writeFileSync(path.join(home, '.ccrc', 'agent.env'),
-    `CCRC_AGENT_TOKEN=irrelevant\nCCRC_SERVER_URL=http://127.0.0.1:${port}\n`);
-  fs.writeFileSync(path.join(home, '.cc-secrets', 'ccrc-mail.token'), tokenDoc(), { mode: 0o600 });
+  writeClientHome(home, `http://127.0.0.1:${port}`, TOKEN);
 });
 
 afterEach(async () => {
@@ -76,39 +65,9 @@ afterEach(async () => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-type Run = { stdout: string; stderr: string; status: number };
-
-/** Runs the client. ASYNC, and that is not a style choice: the fake server above
- *  listens in THIS process, so a synchronous `execFileSync` would block the event
- *  loop for as long as the child runs — the server could never accept the
- *  connection, and every call would sit until curl's own `-m` bound expired.
- *  Measured while writing this file: 30047ms per case, `seen` empty, which reads
- *  exactly like a broken client and is not one.
- *
- *  Never rejects on a non-zero exit: the exit status is part of what these tests
- *  measure, so turning it into an exception would hide it. */
-function run(args: string[], input?: string,
-             overrides?: Record<string, string | undefined>): Promise<Run> {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true });
-  // EXPLICIT, NEVER INHERITED. `process.env` is spread above, so a developer
-  // running this suite inside a tmux pane hands the child a real TMUX_PANE and
-  // the "no pane" case would measure their terminal instead of the fixture.
-  // `undefined` DELETES — the state cron and CI are actually in.
-  for (const [k, v] of Object.entries(overrides ?? {})) {
-    if (v === undefined) delete env[k]; else env[k] = v;
-  }
-  return new Promise<Run>((resolve) => {
-    const child = spawn(CCRC_API, args, { env });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', (c) => { stdout += c; });
-    child.stderr.on('data', (c) => { stderr += c; });
-    // stdin is CLOSED unless a test supplies input. Left open, `--json -` would
-    // block in `cat` forever — the client is right to wait, so the harness must
-    // be explicit about there being nothing to read.
-    if (input !== undefined) child.stdin.end(input); else child.stdin.end();
-    child.on('close', (code) => resolve({ stdout, stderr, status: code ?? -1 }));
-  });
-}
+/** Runs the client in this file's fixture HOME (`ccrcApiClient.ts#runClient`, moved there, D-7320). */
+const run = (args: string[], input?: string, overrides?: Record<string, string | undefined>): Promise<Run> =>
+  runClient(home, args, input, overrides);
 
 /** The two names this file used to have for one thing. `run` already captures
  *  both streams, so `runBoth` is the same call — kept as an alias only until the
@@ -116,14 +75,15 @@ function run(args: string[], input?: string,
 const runBoth = run;
 
 /** A tmux that ANSWERS, planted where `ghContainedEnv`'s poison cannot displace
- *  it: `ccdWsHelpers.ts:233` is `if (fs.existsSync(p)) continue;`, so the stub
+ *  it: `ghContainedEnv` has `if (fs.existsSync(p)) continue;`, so the stub
  *  loop SKIPS a file already there, and `harnessBin` is the first PATH entry
- *  (`ccdWsHelpers.ts:109-122, :245`). Every test plants before it calls `run`,
- *  so this is the tmux the client meets — NOT a vacuous fixture.
+ *  (`ghContainedEnv` prepends it to `PATH`). Every test plants before it
+ *  calls `run`, so this is the tmux the client meets — NOT a vacuous fixture.
  *
  *  It logs argv to the SAME `$HOME/tmux-calls` the poison stub uses
- *  (`ccdWsHelpers.ts:229`), so `tmuxArgv()` reads one file whichever stub is in
- *  place, and a test can prove the pane was passed as an explicit target. */
+ *  (`ghContainedEnv`'s `tmux` row), so `tmuxArgv()` reads one file whichever
+ *  stub is in place, and a test can prove the pane was passed as an explicit
+ *  target. */
 const plantPane = (id: string, uuid = 'u-1234'): void => {
   fs.writeFileSync(path.join(harnessBin(home), 'tmux'),
     `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/tmux-calls"\nprintf 'cc-${id}\\n'\n`,
@@ -172,6 +132,7 @@ const sh = (script: string, input: string): Promise<string> =>
     const child = spawn('bash', ['-c', script]);
     let out = '';
     child.stdout.on('data', (c) => { out += c; });
+    child.stdin.on('error', (e: NodeJS.ErrnoException) => { if (e.code !== 'EPIPE') throw e; });
     child.stdin.end(input);
     child.on('close', () => resolve(out));
   });
@@ -181,20 +142,21 @@ const sh = (script: string, input: string): Promise<string> =>
  *  second copy of this slice is exactly how the two would come to disagree,
  *  which is the fault the pin exists to catch one level up.
  *
- *  The class allows a HYPHEN: `runs items-list` is the first two-word verb, and
- *  a `[a-z.]+` class silently DROPPED it (D-843) — that is the whole reason this
- *  reads the client instead of counting the `ROWS` table below. */
-const routeKeys = (): string[] => {
-  const src = fs.readFileSync(CCRC_API, 'utf8');
-  const table = src.slice(src.indexOf('declare -A ROUTES=('));
-  return [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.-]+)\]=/gm)].map((m) => m[1]!);
-};
+ *  Read through `ccrcApiTable.ts#clientRoutes`, the one reader of the table
+ *  (D-7320), whose key class allows a HYPHEN: `runs items-list` is the first
+ *  two-word verb, and a `[a-z.]+` class silently DROPPED it (D-843) — that is
+ *  the whole reason this reads the client instead of counting the `ROWS` table
+ *  below. */
+const routeKeys = (): string[] => clientRoutes().map((r) => r.key);
 
 describe('the closed route table', () => {
   // One case per row of the table, method AND path, because a table is only a
   // table if every row is reachable and lands where it says. The ids here are
   // deliberately plain: the id-validation cases live in their own describe.
-  const ROWS: [string[], string, string][] = [
+  // The four claimant rows carry a fourth element, the question door family's path the row names (D-7325), sent in
+  // place of the third only while the server advertises `questions-v1` (the describe below); with no cap file, as
+  // every row here runs, each row sends its own path.
+  const ROWS: [string[], string, string, string?][] = [
     [['runs', 'list'], 'GET', '/api/runs'],
     [['runs', 'open'], 'POST', '/api/runs'],
     [['runs', 'dispatch', '12'], 'POST', '/api/runs/12/dispatch'],
@@ -202,10 +164,19 @@ describe('the closed route table', () => {
     [['runs', 'close', '12'], 'POST', '/api/runs/12/close'],
     [['runs', 'items', '12'], 'POST', '/api/runs/12/items'],
     [['runs', 'items-list', '12'], 'GET', '/api/runs/12/items'],
+    [['runs', 'end-request', '12'], 'POST', '/api/runs/12/end-request'],
+    [['runs', 'signals', '12'], 'GET', '/api/runs/12/signals'],
+    // The coordinator's escalation/demotion/manual-override door (routing
+    // spec 2026-09-14 §5.3, slice 5, Task 4) — never `ccd route` directly.
+    [['runs', 'route', '12'], 'POST', '/api/runs/12/route'],
+    [['runs', 'review-rounds', '12'], 'POST', '/api/runs/12/review-rounds'],
     [['mail', 'list'], 'GET', '/api/mail'],
     [['mail', 'send'], 'POST', '/api/mail'],
     [['mail', 'fetch', '7'], 'GET', '/api/mail/7'],
     [['mail', 'ack', '7'], 'POST', '/api/mail/7/ack'],
+    // The inbox read (D-6780): the pane's pair in the query, so it runs in a pane. The fixture's `{"ok":true}` is not an
+    // inbox answer, so the run reads once and acks nothing (`ccrc-api-inbox.test.ts` drives the acks).
+    [['mail', 'inbox'], 'GET', '/api/mail/inbox'],
     [['peers', 'list'], 'GET', '/api/peers'],
     [['lifecycle', 'list'], 'GET', '/api/lifecycle'],
     [['claims', 'list'], 'GET', '/api/claims'],
@@ -213,24 +184,107 @@ describe('the closed route table', () => {
     [['claims', 'release', '3'], 'POST', '/api/claims/3/release'],
     [['ledger', 'list'], 'GET', '/api/ledger'],
     [['ledger', 'allocate'], 'POST', '/api/ledger/deviations'],
+    // The landing line's read (landing order wave 5e, D-7625).
+    [['landing', 'show'], 'GET', '/api/landing'],
+    [['landing', 'entries'], 'POST', '/api/landing/entries'],
+    [['landing', 'order'], 'POST', '/api/landing/order'],
     [['asks', 'list'], 'GET', '/api/asks'],
-    [['asks', 'answer', '7'], 'POST', '/api/asks/7/answer'],
-    [['asks', 'release', '7'], 'POST', '/api/asks/7/release'],
+    // The claimant's two ask rows: the question door family's path since the old doors retired (K5 Q3l, D-7324).
+    [['asks', 'answer', '7'], 'POST', '/api/questions/ask-7/rule'],
+    [['asks', 'release', '7'], 'POST', '/api/questions/ask-7/release'],
     // The durable feed, filterable by programme (cross-repo programmes §4). A
     // NEW ROW rather than a `--program` on some existing one: the table is the
     // client's own contract and grows by a row, never by a URL argument.
     [['feed', 'list'], 'GET', '/api/feed'],
+    // The coordinator's explicit intent declaration (delegation broker wave 3, Task 15). The one row with a grammar of its
+    // own, `coordinators intent <set|clear> --session <id>`; the id in the path is derived from the pane, never from the flag.
+    [['coordinators', 'intent', 'set', '--session', 'demo-ws'], 'POST', '/api/coordinators/demo-ws/intent'],
+    // The lease's retain door (delegation broker wave 5, PR8, W5-R15): the id in the path is the lease id, the body rides `--json`.
+    [['leases', 'retain', 'lease-7'], 'POST', '/api/leases/lease-7/retain'],
+    // The child's PermissionRequest hook's three rows (coordinator-first routing, plan Task 14, D-5297).
+    [['approvals', 'request'], 'POST', '/api/approvals'],
+    [['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], 'GET', '/api/approvals/41/ruling'],
+    [['approvals', 'key'], 'GET', '/api/approvals/key'],
+    // The claimant's three rows (coordinator-first routing, plan Task 16, D-5298).
+    [['approvals', 'rule', '41'], 'POST', '/api/questions/approval-41/rule'],
+    [['approvals', 'release', '41'], 'POST', '/api/questions/approval-41/release'],
+    [['approvals', 'show', '41'], 'GET', '/api/approvals/41'],
+    // The test box's two rows (test box plan TB9, D-7411, D-7554): its status block and the update lane's tools sync.
+    [['testbox', 'status'], 'GET', '/api/testbox'],
+    [['testbox', 'tools-sync'], 'POST', '/api/testbox/tools-sync'],
+    // The programme ledgers' nine rows (plan PL3): items by programme slug, item moves by item id, Goals by slug.
+    [['items', 'raise', 'prog-a'], 'POST', '/api/programmes/prog-a/items'],
+    [['items', 'list', 'prog-a'], 'GET', '/api/programmes/prog-a/items'],
+    [['items', 'confirm', '7'], 'POST', '/api/items/7/confirm'],
+    [['items', 'return', '7'], 'POST', '/api/items/7/return'],
+    [['items', 'withdraw', '7'], 'POST', '/api/items/7/withdraw'],
+    [['items', 'block', '7'], 'POST', '/api/items/7/blocking'],
+    [['goals', 'pin', 'prog-a'], 'POST', '/api/programmes/prog-a/spec'],
+    [['goals', 'modify', 'prog-a'], 'POST', '/api/programmes/prog-a/modifications'],
+    [['goals', 'merged', 'prog-a'], 'POST', '/api/programmes/prog-a/modifications/merged'],
+    // The goals read (autonomy-default wave A2, D-8126): the pin, `doneWhen` and the open items, behind `goals-read-v1`.
+    [['goals', 'show', 'prog-a'], 'GET', '/api/programmes/prog-a/goals'],
+    // The thirteen Linear rows (D-7669, #1444; `link` since D-8141): every one derives the pane's identity into its query, so each runs in a pane.
+    // The coordinator's call record (autonomy-default wave A3, D-8126), behind `calls-v1`; it fills identity from the pane, so it runs in a pane.
+    [['calls', 'record', 'prog-a', '--json', '-'], 'POST', '/api/coord/programmes/prog-a/calls'],
+    [['linear', 'workspaces'], 'GET', '/api/linear/proxy/workspaces'],
+    [['linear', 'teams'], 'GET', '/api/linear/proxy/teams'],
+    [['linear', 'issue', 'AAA-12'], 'GET', '/api/linear/proxy/issues/AAA-12'],
+    [['linear', 'search'], 'POST', '/api/linear/proxy/search'],
+    [['linear', 'comments', 'AAA-12'], 'GET', '/api/linear/proxy/issues/AAA-12/comments'],
+    [['linear', 'statuses'], 'GET', '/api/linear/proxy/statuses'],
+    [['linear', 'projects'], 'GET', '/api/linear/proxy/projects'],
+    [['linear', 'labels'], 'GET', '/api/linear/proxy/labels'],
+    [['linear', 'users'], 'GET', '/api/linear/proxy/users'],
+    [['linear', 'create'], 'POST', '/api/linear/proxy/issues'],
+    [['linear', 'update', 'AAA-12'], 'POST', '/api/linear/proxy/issues/AAA-12'],
+    [['linear', 'comment', 'AAA-12'], 'POST', '/api/linear/proxy/issues/AAA-12/comments'],
+    [['linear', 'link', 'AAA-12'], 'POST', '/api/linear/proxy/issues/AAA-12/links'],
+    // The linking standard's read (D-8147): the pane's own project's team key, override and measured visibility. The identity
+    // rides the query, as the Linear rows' does, so it runs in a pane.
+    [['linking', 'show'], 'GET', '/api/linking'],
+    // The start report (Overlord W1a): the session hook's report of its own SessionStart.
+    [['sessions', 'start', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start'],
+    [['sessions', 'loads', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start/loads'],
+    [['sessions', 'card', 'lane-a-project-a'], 'GET', '/api/sessions/lane-a-project-a/card'],
+    // The note door (Overlord W1a, the notes piece): a session's own notes; every row fills the pane's pair, so each runs in a pane.
+    [['note', 'add', 'lane-a-project-a', '--json', '-'], 'POST', '/api/sessions/lane-a-project-a/notes'],
+    [['note', 'close', 'lane-a-project-a', '--json', '-'], 'POST', '/api/sessions/lane-a-project-a/notes'],
+    [['note', 'list', 'lane-a-project-a'], 'GET', '/api/sessions/lane-a-project-a/notes'],
+    [['note', 'handover', 'lane-a-project-a', '--json', '-'], 'POST', '/api/sessions/lane-a-project-a/handover'],
+    // The probe door (Overlord, the probes piece): the raw page read takes the session id; `probe answer` takes none, its id is the
+    // pane's, derived (`demo-ws` here). Both fill the pane's pair, so both run in a pane.
+    [['sessions', 'probe', 'lane-a-project-a'], 'GET', '/api/sessions/lane-a-project-a/probe'],
+    [['probe', 'answer', '--json', '-'], 'POST', '/api/sessions/demo-ws/probe'],
+    // The plan verbs (D-8181): by programme slug; every one but `show` carries the pane's identity in the query, so runs in a pane.
+    [['plan', 'put', 'prog-a'], 'POST', '/api/programmes/prog-a/plan'],
+    [['plan', 'show', 'prog-a'], 'GET', '/api/programmes/prog-a/plan'],
+    [['plan', 'met', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/met'],
+    [['plan', 'ticket-add', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/tickets'],
+    [['plan', 'ticket-move', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/tickets/move'],
+    [['plan', 'epic-drop', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/epics/drop'],
+    [['plan', 'close', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/close'],
+    // The timers (Overlord W1a, the timers piece): parsed whole by `parse_timer`, every one fills the pane's pair, so each runs in a pane.
+    [['timer', 'set', '2h', 'check the checks'], 'POST', '/api/timers'],
+    [['timer', 'list'], 'GET', '/api/timers'],
+    [['timer', 'cancel', '12'], 'POST', '/api/timers/12/cancel'],
   ];
 
-  it.each(ROWS)('%s -> %s %s', async (args, method, url) => {
-    if (args[0] === 'asks' && args[1] === 'list') plantPane('demo-ws');
-    await run(args as string[], undefined,
-      args[0] === 'asks' && args[1] === 'list' ? { TMUX_PANE: '%7' } : undefined);
+  it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
+    const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
+      || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear' || args[0] === 'linking' || (args[0] === 'plan' && args[1] !== 'show') || (args[0] === 'runs' && args[1] === 'review-rounds')
+      || args[0] === 'calls' || (args[0] === 'mail' && args[1] === 'inbox') || (args[0] === 'sessions' && (args[1] === 'card' || args[1] === 'probe')) || args[0] === 'note' || args[0] === 'probe' || args[0] === 'timer';
+    if (paned) plantPane('demo-ws');
+    await run(args as string[], args.includes('--json') ? '{"class":"routine","text":"q"}' : undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
     expect(seen[0]!.method).toBe(method);
     // Query strings are the caller's (`mail list --to x` appends one); the path
     // is the table's, so compare the path half exactly.
     expect(seen[0]!.url.split('?')[0]).toBe(url);
+    // The row's fifth field, read through the one reader of the table (D-7320): the family's template on the four
+    // claimant rows from Q3j; none on any row since Q3l (D-7324), whose path is the family's own.
+    const row = clientRoutes().find((r) => r.key === `${args[0]}.${args[1]}`)!;
+    expect(row.family === null ? null : row.family.replace('{id}', args[2]!)).toBe(family ?? null);
   });
 
   it('has exactly the rows exercised above — the table is read from the client, not from here', () => {
@@ -246,8 +300,32 @@ describe('the closed route table', () => {
     // measured from the callers, and coordinator clause 4 forbids a session
     // from touching that file at all. Its absence is a decision.
     //
-    // Twenty-two since the bounded ask list/answer/release operations landed.
-    expect(keys).toHaveLength(22);
+    // Twenty-four since `runs.route` (routing slice 5, Task 4's escalation
+    // door) landed.
+    // Twenty-five since `coordinators.intent` (delegation broker wave 3, Task 15).
+    // Twenty-eight since the approvals rows (coordinator-first routing, plan Task 14).
+    // Thirty-one since the claimant's approvals rows (plan Task 16).
+    // Thirty-three since the test box's status and tools-sync rows (test box plan TB9, D-7411).
+    // Thirty-four since the landing line's read (landing order wave 5e, D-7625).
+    // Forty-six since the twelve Linear rows (D-7669, #1444).
+    // Fifty-five since the programme ledgers' nine (plan PL3).
+    // Fifty-seven since the landing line's two attributed writes (landing order wave 5f).
+    // Fifty-eight since `leases.retain` (delegation broker wave 5, PR8, W5-R15).
+    // Fifty-nine since `runs.review-rounds` (the coordinator's review-cap extension, D-8125).
+    // Sixty since `linear.link` (D-8141).
+    // Sixty-one since `runs.end-request` (D-8076, the runs rebuild's wave B6).
+    // Sixty-two since `linking.show` (D-8147).
+    // Sixty-three since `goals.show` (autonomy-default wave A2, D-8126).
+    // Sixty-four since `calls.record` (autonomy-default wave A3, D-8126).
+    // Sixty-five since `mail.inbox` (mail inbox, D-6780).
+    // Seventy-two since the seven `plan` rows (D-8181).
+    // Seventy-three since `sessions.start` (Overlord W1a, the start report).
+    // Seventy-four since `sessions.card` (Overlord W1a, the card piece).
+    // Seventy-eight since the note door's four (Overlord W1a, the notes piece).
+    // Eighty-one since the three `timer` rows (Overlord W1a, the timers piece); eighty-three since the probe door's two (Overlord,
+    // the probes piece): `sessions.probe` and `probe.answer`.
+    // Eighty-four since `sessions.loads` (Overlord W1 sandbox, the loads report).
+    expect(keys).toHaveLength(84);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -255,6 +333,14 @@ describe('the closed route table', () => {
     const WORDS: Record<number, string> = {
       15: 'fifteen', 16: 'sixteen', 17: 'seventeen', 18: 'eighteen',
       19: 'nineteen', 20: 'twenty', 21: 'twenty-one', 22: 'twenty-two',
+      23: 'twenty-three', 24: 'twenty-four', 25: 'twenty-five', 26: 'twenty-six',
+      27: 'twenty-seven', 28: 'twenty-eight', 29: 'twenty-nine', 30: 'thirty', 31: 'thirty-one',
+      32: 'thirty-two', 33: 'thirty-three', 34: 'thirty-four', 35: 'thirty-five', 36: 'thirty-six',
+      37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
+      43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
+      49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
+      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -282,10 +368,344 @@ describe('the closed route table', () => {
       'the ROUTES-table header anchor is no longer unique in ccd/ccrc-api').toBe(1);
   });
 
+  it('W5-R15: leases.retain is a POST row with a path id the client checks against SAFE_RE, and sends nothing for a bad one', async () => {
+    const row = clientRoutes().find((r) => r.key === 'leases.retain');
+    expect(row, 'the table has no [leases.retain] row').toBeDefined();
+    expect(row!.method).toBe('POST');
+    expect(row!.path).toBe('/api/leases/{id}/retain');
+    await run(['leases', 'retain', '../x', '--json', '-'], '{"byId":"coord-a-demo","byUuid":"u"}');
+    expect(seen, 'a lease id that is not SAFE_RE-plain was sent').toHaveLength(0);
+    await run(['leases', 'retain', 'lease-7', '--json', '-'], '{"byId":"coord-a-demo","byUuid":"u"}');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toBe('{"byId":"coord-a-demo","byUuid":"u"}');
+  });
+
   it('has no verb that reaches the pause door', async () => {
     const r = await run(['coord', 'pause']);
     expect(r.status).not.toBe(0);
     expect(seen).toHaveLength(0);
+  });
+});
+
+describe('the four claimant rows send the question door family, and refuse locally only a current cap file without questions-v1 (D-7322, D-7324, D-7328)', () => {
+  // `~/.ccrc/server-caps`, as `ccd-update-sync` writes it on a fleet node: `at`, the words, `end`. Only the four
+  // claimant rows read it, through the one guarded call `census-w3/claimant.ts#capReaderCalls()` counts; no row here
+  // puts a FIFO or any other blocking file at the path, because the reader's `<` open blocks on one (D-7339).
+  const capFile = (): string => path.join(home, '.ccrc', SERVER_CAPS_FILE);
+  const nowS = (): number => Math.floor(Date.now() / 1000);
+  const writeCaps = (words: readonly string[] = SERVER_CAPS, at = nowS()): void => {
+    fs.writeFileSync(capFile(), renderServerCaps(words, at));
+  };
+  const CLAIMANT: ReadonlyArray<readonly [string, string, string, 'ask' | 'approval', string]> = [
+    ['asks', 'answer', '/api/questions/ask-7/rule', 'ask', '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}'],
+    ['asks', 'release', '/api/questions/ask-7/release', 'ask', '{"fromId":"parent","fromUuid":"u"}'],
+    ['approvals', 'rule', '/api/questions/approval-7/rule', 'approval', '{"fromId":"parent","fromUuid":"u","verdict":"allow","reason":"r"}'],
+    ['approvals', 'release', '/api/questions/approval-7/release', 'approval', '{"fromId":"parent","fromUuid":"u"}'],
+  ];
+
+  it('the family rows are exactly the four claimant rows, read through clientRoutes(), the family their only path', () => {
+    expect(clientRoutes().filter((r) => r.path.startsWith('/api/questions/')).map((r) => [r.key, r.path])).toEqual([
+      ['asks.answer', '/api/questions/ask-{id}/rule'], ['asks.release', '/api/questions/ask-{id}/release'],
+      ['approvals.rule', '/api/questions/approval-{id}/rule'], ['approvals.release', '/api/questions/approval-{id}/release'],
+    ]);
+    expect(clientRoutes().filter((r) => r.family !== null).map((r) => r.key), 'no row carries a second template').toEqual([]);
+  });
+
+  it.each(CLAIMANT)('%s %s, with a current cap file listing questions-v1, sends POST %s with the row\'s kind (%s) spliced first', async (group, verb, url, kind, body) => {
+    writeCaps();
+    const r = await run([group, verb, '7', '--json', '-'], body);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen).toEqual([{ method: 'POST', url, auth: TOKEN, body: `{"kind":"${kind}",${body.slice(1)}` }]);
+  });
+
+  it('the spliced kind is the row\'s: the same body is spliced ask on an asks row and approval on an approvals row', async () => {
+    writeCaps();
+    const body = '{"fromId":"parent","fromUuid":"u"}';
+    await run(['asks', 'release', '7', '--json', '-'], body);
+    await run(['approvals', 'release', '7', '--json', '-'], body);
+    expect(seen.map((s) => [s.url, s.body])).toEqual([
+      ['/api/questions/ask-7/release', '{"kind":"ask","fromId":"parent","fromUuid":"u"}'],
+      ['/api/questions/approval-7/release', '{"kind":"approval","fromId":"parent","fromUuid":"u"}'],
+    ]);
+  });
+
+  it('a body naming kind is left alone, so a contrary kind reaches the server (the byId fill\'s textual rule)', async () => {
+    writeCaps();
+    const bodies = ['{"fromId":"parent","fromUuid":"u","kind":"approval"}', '{ "kind" : "ask", "fromId":"parent","fromUuid":"u"}'];
+    for (const b of bodies) await run(['asks', 'release', '7', '--json', '-'], b);
+    expect(seen.map((s) => [s.url, s.body])).toEqual(bodies.map((b) => ['/api/questions/ask-7/release', b]));
+  });
+
+  it('a bodyless call is sent as the row\'s kind alone, and {} as the kind alone', async () => {
+    writeCaps();
+    await run(['approvals', 'rule', '7']);
+    await run(['asks', 'answer', '7', '--json', '-'], ' { } ');
+    expect(seen.map((s) => [s.url, s.body])).toEqual([
+      ['/api/questions/approval-7/rule', '{"kind":"approval"}'], ['/api/questions/ask-7/rule', '{"kind":"ask"}'],
+    ]);
+  });
+
+  it('a body that is not a JSON object is refused bad-body, exit 2, and nothing is sent', async () => {
+    writeCaps();
+    for (const b of ['[]', '"x"', '[{"kind":"ask"}]']) {
+      const r = await run(['asks', 'answer', '7', '--json', '-'], b);
+      expect([r.status, (JSON.parse(r.stdout) as { error: string }).error], b).toEqual([2, 'bad-body']);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  // D-7328: the old doors are gone (K5 Q3l), so the fail direction is inverted on purpose. An absent, stale, torn or
+  // future cap file sends the family, the only door left; only a current, well-formed file that omits questions-v1
+  // is refused here, `no-questions-door`, and nothing is sent.
+  it('an absent cap file sends the family, the kind spliced', async () => {
+    const body = '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}';
+    await run(['asks', 'answer', '7', '--json', '-'], body);
+    expect(seen).toEqual([{ method: 'POST', url: '/api/questions/ask-7/rule', auth: TOKEN, body: `{"kind":"ask",${body.slice(1)}` }]);
+  });
+
+  it('a cap file 181 s old sends the family, the kind spliced', async () => {
+    writeCaps(SERVER_CAPS, nowS() - 181);
+    const body = '{"fromId":"parent","fromUuid":"u","verdict":"allow","reason":"r"}';
+    await run(['approvals', 'rule', '7', '--json', '-'], body);
+    expect(seen).toEqual([{ method: 'POST', url: '/api/questions/approval-7/rule', auth: TOKEN, body: `{"kind":"approval",${body.slice(1)}` }]);
+  });
+
+  it('a server that lists words without questions-v1 is refused locally, nothing sent', async () => {
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'questions-v1'));
+    for (const [g, v, , , body] of CLAIMANT) {
+      for (const b of [body, '[]']) {
+        const r = await run([g, v, '7', '--json', '-'], b);
+        expect([r.status, JSON.parse(r.stdout)], `${g} ${v} ${b}`).toEqual([2, { ok: false, error: 'no-questions-door',
+          detail: 'the server this box talks to does not answer the question door family; update it before answering' }]);
+      }
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it('a current cap file listing no words, as a server older than the caps answer is recorded, is refused locally too', async () => {
+    writeCaps([]);
+    const r = await run(['asks', 'release', '7', '--json', '-'], '{"fromId":"parent","fromUuid":"u"}');
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'no-questions-door']);
+    expect(seen).toEqual([]);
+  });
+
+  it('with that same current file, every non-claimant row sends a request byte-identical to its no-file request', async () => {
+    const keys = new Set(CLAIMANT.map(([g, v]) => `${g}.${v}`));
+    const rows: string[][] = [
+      ['runs', 'list', '--closed', '1'], ['runs', 'open', '--json', '-'], ['runs', 'dispatch', '12'], ['runs', 'advance', '12'],
+      ['runs', 'close', '12'], ['runs', 'items', '12'], ['runs', 'items-list', '12'], ['runs', 'end-request', '12'], ['runs', 'signals', '12'],
+      ['runs', 'route', '12'], ['runs', 'review-rounds', '12', '--json', '-'], ['mail', 'list', '--to', 'x'], ['mail', 'send', '--json', '-'], ['mail', 'fetch', '7'],
+      ['mail', 'ack', '7'], ['mail', 'inbox'], ['peers', 'list'], ['lifecycle', 'list'], ['claims', 'list'], ['claims', 'take', '--json', '-'],
+      ['claims', 'release', '3'], ['ledger', 'list'], ['ledger', 'allocate', '--json', '-'], ['landing', 'show', '--project', 'project-a'],
+      ['landing', 'entries', '--json', '-'], ['landing', 'order', '--json', '-'], ['asks', 'list'], ['feed', 'list'],
+      ['coordinators', 'intent', 'set', '--session', 'demo-ws'], ['approvals', 'request', '--json', '-'],
+      ['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], ['approvals', 'key'], ['approvals', 'show', '41'],
+      ['testbox', 'status'], ['testbox', 'tools-sync'], ['leases', 'retain', 'lease-7', '--json', '-'],
+      ['items', 'raise', 'prog-a', '--json', '-'], ['items', 'list', 'prog-a', '--byId', 'demo-ws', '--byUuid', 'u-demo-ws'],
+      ['items', 'confirm', '7', '--json', '-'], ['items', 'return', '7', '--json', '-'], ['items', 'withdraw', '7', '--json', '-'],
+      ['items', 'block', '7', '--json', '-'], ['goals', 'pin', 'prog-a', '--json', '-'], ['goals', 'modify', 'prog-a', '--json', '-'],
+      ['goals', 'merged', 'prog-a', '--json', '-'], ['goals', 'show', 'prog-a'],
+      ['calls', 'record', 'prog-a', '--json', '-'],
+      ['linear', 'workspaces'], ['linear', 'teams', '--workspace', 'ws-a'], ['linear', 'issue', 'AAA-12'],
+      ['linear', 'search', '--json', '-'], ['linear', 'comments', 'AAA-12', '--limit', '5'], ['linear', 'statuses', '--team', 'AAA'],
+      ['linear', 'projects'], ['linear', 'labels'], ['linear', 'users'], ['linear', 'create', '--json', '-'],
+      ['linear', 'update', 'AAA-12', '--json', '-'], ['linear', 'comment', 'AAA-12', '--json', '-'],
+      ['linear', 'link', 'AAA-12', '--json', '-'], ['linking', 'show'],
+      ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'show', 'prog-a'], ['plan', 'met', 'prog-a', '--json', '-'],
+      ['plan', 'ticket-add', 'prog-a', '--json', '-'], ['plan', 'ticket-move', 'prog-a', '--json', '-'],
+      ['plan', 'epic-drop', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
+      ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'loads', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
+      ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
+      ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
+      ['timer', 'set', '2h', 'check the checks'], ['timer', 'list'], ['timer', 'cancel', '12'],
+      ['sessions', 'probe', 'lane-a-project-a'], ['probe', 'answer', '--json', '-'],
+    ];
+    expect(rows.map((a) => `${a[0]}.${a[1]}`).sort(), 'every non-claimant row, once').toEqual(routeKeys().filter((k) => !keys.has(k)).sort());
+    plantPane('demo-ws');
+    const pane = { TMUX_PANE: '%7' };
+    const sendAll = async (): Promise<typeof seen> => {
+      seen = [];
+      for (const a of rows) await run(a, a.includes('--json') ? '{"title":"t","program":"p"}' : undefined, pane);
+      return seen;
+    };
+    fs.rmSync(capFile(), { force: true });
+    const without = await sendAll();
+    writeCaps();
+    const withFile = await sendAll();
+    expect(without).toHaveLength(rows.length);
+    expect(withFile).toEqual(without);
+  });
+});
+
+describe('goals show is gated on goals-read-v1 the way the claimant rows are gated on questions-v1 (D-8126)', () => {
+  const capFile = (): string => path.join(home, '.ccrc', SERVER_CAPS_FILE);
+  const nowS = (): number => Math.floor(Date.now() / 1000);
+  const writeCaps = (words: readonly string[] = SERVER_CAPS, at = nowS()): void => {
+    fs.writeFileSync(capFile(), renderServerCaps(words, at));
+  };
+
+  it('the row is a GET of the programme\'s goals that takes an id and no query key', () => {
+    const row = clientRoutes().find((r) => r.key === 'goals.show');
+    expect(row).toBeDefined();
+    expect([row!.method, row!.path, row!.needsId, row!.query, row!.family]).toEqual(['GET', '/api/programmes/{id}/goals', true, [], null]);
+  });
+
+  it('the server advertises goals-read-v1', () => {
+    expect(SERVER_CAPS).toContain('goals-read-v1');
+  });
+
+  it('sends GET with the box token header and prints the body, with a current file listing the word', async () => {
+    writeCaps();
+    reply = { code: 200, body: '{"ok":true,"goals":null,"openItems":[]}' };
+    const r = await run(['goals', 'show', 'prog-a']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout.trim()).toBe('{"ok":true,"goals":null,"openItems":[]}');
+    expect(seen).toEqual([{ method: 'GET', url: '/api/programmes/prog-a/goals', auth: TOKEN, body: '' }]);
+  });
+
+  it('a current cap file without goals-read-v1 refuses unsupported, exit 2, and sends nothing', async () => {
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'goals-read-v1'));
+    const r = await run(['goals', 'show', 'prog-a']);
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'unsupported']);
+    expect(seen).toEqual([]);
+  });
+
+  it('a current cap file listing no words refuses unsupported too', async () => {
+    writeCaps([]);
+    const r = await run(['goals', 'show', 'prog-a']);
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'unsupported']);
+    expect(seen).toEqual([]);
+  });
+
+  it('an absent cap file sends', async () => {
+    await run(['goals', 'show', 'prog-a']);
+    expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/goals']);
+  });
+
+  it('a stale cap file (181 s) sends, even one that omits the word', async () => {
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'goals-read-v1'), nowS() - 181);
+    await run(['goals', 'show', 'prog-a']);
+    expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/goals']);
+  });
+
+  it('the other goals rows are not gated by the goals word', async () => {
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'goals-read-v1'));
+    await run(['goals', 'pin', 'prog-a', '--json', '-'], '{"byId":"coord-a-demo","byUuid":"u"}');
+    expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/spec']);
+  });
+
+  it('an id that is not SAFE_RE-plain is refused bad-id and nothing is sent', async () => {
+    writeCaps();
+    const r = await run(['goals', 'show', '../x']);
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'bad-id']);
+    expect(seen).toEqual([]);
+  });
+});
+
+describe('calls record fills identity from the pane, refuses a caller-named identity, and is gated on calls-v1 (D-8126)', () => {
+  const capFile = (): string => path.join(home, '.ccrc', SERVER_CAPS_FILE);
+  const nowS = (): number => Math.floor(Date.now() / 1000);
+  const writeCaps = (words: readonly string[] = SERVER_CAPS, at = nowS()): void => {
+    fs.writeFileSync(capFile(), renderServerCaps(words, at));
+  };
+  const pane = { TMUX_PANE: '%7' };
+  const BODY = '{"class":"big","text":"which door?","options":["a","b"],"chosen":0,"why":"cheaper"}';
+  const record = (body: string, env: Record<string, string | undefined> = pane): Promise<Run> =>
+    run(['calls', 'record', 'prog-a', '--json', '-'], body, env);
+  const errorOf = (r: Run): string => (JSON.parse(r.stdout) as { error: string }).error;
+
+  it('the row is a POST by programme slug that takes an id and no query key', () => {
+    const row = clientRoutes().find((r) => r.key === 'calls.record');
+    expect(row).toBeDefined();
+    expect([row!.method, row!.path, row!.needsId, row!.query, row!.family])
+      .toEqual(['POST', '/api/coord/programmes/{id}/calls', true, [], null]);
+  });
+
+  it('the server advertises calls-v1', () => {
+    expect(SERVER_CAPS).toContain('calls-v1');
+  });
+
+  it('sends the body with the pane\'s pair added and the box token header', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await record(BODY);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect([seen[0]!.method, seen[0]!.url, seen[0]!.auth]).toEqual(['POST', '/api/coord/programmes/prog-a/calls', TOKEN]);
+    expect(JSON.parse(seen[0]!.body)).toEqual({ byId: 'demo-ws', byUuid: 'uuid-7', ...JSON.parse(BODY) });
+  });
+
+  it('refuses a body that names byId, whitespace and all, bad-body, unsent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    for (const b of ['{"byId":"someone-else","class":"routine"}', '{"class":"routine","byId" : ""}']) {
+      const r = await record(b);
+      expect([r.status, errorOf(r)], b).toEqual([2, 'bad-body']);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it('refuses a body that names byUuid, bad-body, unsent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await record('{"class":"routine","byUuid":"forged"}');
+    expect([r.status, errorOf(r)]).toEqual([2, 'bad-body']);
+    expect(seen).toEqual([]);
+  });
+
+  it('a call whose prose merely mentions byId is not refused', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await record('{"class":"routine","text":"does byId matter"}');
+    expect(r.status, r.stdout).toBe(0);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('refuses no body, a non-object body, and a pane with no identity, each unsent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const none = await run(['calls', 'record', 'prog-a'], undefined, pane);
+    expect([none.status, errorOf(none)]).toEqual([2, 'no-body']);
+    for (const b of ['[]', '"x"']) {
+      const r = await record(b);
+      expect([r.status, errorOf(r)], b).toEqual([2, 'bad-body']);
+    }
+    const noPane = await record(BODY, { TMUX_PANE: undefined, TMUX: undefined });
+    expect(noPane.status).not.toBe(0);
+    expect(noPane.stdout).toContain('no-pane');
+    expect(seen).toEqual([]);
+  });
+
+  it('a current cap file without calls-v1 refuses unsupported, exit 2, and sends nothing', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'calls-v1'));
+    const r = await record(BODY);
+    expect([r.status, errorOf(r)]).toEqual([2, 'unsupported']);
+    writeCaps([]);
+    expect(errorOf(await record(BODY))).toBe('unsupported');
+    expect(seen).toEqual([]);
+  });
+
+  it('a current file listing the word, an absent file and a stale file all send', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    writeCaps();
+    await record(BODY);
+    fs.rmSync(capFile(), { force: true });
+    await record(BODY);
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'calls-v1'), nowS() - 181);
+    await record(BODY);
+    expect(seen.map((s) => s.url)).toEqual(Array(3).fill('/api/coord/programmes/prog-a/calls'));
+  });
+
+  it('the goals read\'s gate does not gate the call record, nor the call record\'s the goals read', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'goals-read-v1'));
+    await record(BODY);
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'calls-v1'));
+    await run(['goals', 'show', 'prog-a']);
+    expect(seen.map((s) => s.url)).toEqual(['/api/coord/programmes/prog-a/calls', '/api/programmes/prog-a/goals']);
+  });
+
+  it('an id that is not SAFE_RE-plain is refused bad-id and nothing is sent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(['calls', 'record', '../x', '--json', '-'], BODY, pane);
+    expect([r.status, errorOf(r)]).toEqual([2, 'bad-id']);
+    expect(seen).toEqual([]);
   });
 });
 
@@ -377,6 +797,73 @@ describe('the output contract', () => {
     const body = JSON.parse(r.stdout.trim());
     expect(body).toMatchObject({ ok: false, error: 'transport' });
     expect(typeof body.detail).toBe('string');
+    expect(r.stdout + r.stderr, 'the transport refusal echoed the token (R16)').not.toContain(TOKEN);
+  });
+});
+
+describe('the body ends in exactly one newline, and the status line stays', () => {
+  it('prints a 2xx body with no trailing newline with exactly one', async () => {
+    reply = { code: 200, body: '{"ok":true}' };
+    expect((await run(['runs', 'list'])).stdout).toBe('{"ok":true}\n');
+  });
+
+  it('gives a body that already ends in a newline no second one', async () => {
+    reply = { code: 200, body: '{"ok":true}\n' };
+    expect((await run(['runs', 'list'])).stdout).toBe('{"ok":true}\n');
+  });
+
+  it('prints nothing on stdout for an empty body', async () => {
+    reply = { code: 200, body: '' };
+    expect((await run(['runs', 'list'])).stdout).toBe('');
+  });
+
+  it('parses stdout as JSON with no cleanup, for a 200 and for a 409', async () => {
+    reply = { code: 200, body: '{"ok":true}' };
+    expect(JSON.parse((await run(['runs', 'list'])).stdout)).toEqual({ ok: true });
+    reply = { code: 409, body: '{"ok":false,"refused":"x"}' };
+    const r = await run(['runs', 'open']);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ ok: false, refused: 'x' });
+  });
+
+  it('ends stderr with `http <code>`, with and without CCRC_API_STATUS=line', async () => {
+    for (const [code, body] of [[200, '{"ok":true}'], [409, '{"ok":false}']] as const) {
+      reply = { code, body };
+      for (const overrides of [{}, { CCRC_API_STATUS: 'line' }]) {
+        const r = await run(['runs', 'list'], undefined, overrides);
+        expect(r.stderr.trimEnd().split('\n').pop()).toBe(`http ${code}`);
+      }
+    }
+  });
+
+  it('still yields the code and a body jq reads from the merged output, as the approval hook parses it', async () => {
+    reply = { code: 201, body: '{"id":7}' };
+    const merged = await new Promise<string>((resolve) => {
+      // The binary rides the environment, not argv: CodeQL reads every argv element of a `bash -c` as part of the
+      // command (js/shell-command-injection-from-environment), so the script text stays constant.
+      const child = spawn('bash', ['-c', '"$CCRC_API_UNDER_TEST" runs list 2>&1'],
+        { env: { ...ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true }), CCRC_API_UNDER_TEST: CCRC_API } });
+      let out = '';
+      child.stdout.on('data', (c) => { out += c; });
+      child.stdin.on('error', (e: NodeJS.ErrnoException) => { if (e.code !== 'EPIPE') throw e; });
+      child.stdin.end();
+      child.on('close', () => resolve(out));
+    });
+    const parsed = await sh('out=$(cat); code="${out##*http }"; body="${out%http *}"; printf "%s|" "$code"; jq -r .id <<<"$body"', merged.replace(/\n$/, ''));
+    expect(parsed.trim()).toBe('201|7');
+  });
+
+  it('leaves the transport failure as it was: exit 3 and the transport envelope', async () => {
+    await new Promise<void>((r) => { server.close(() => r()); });
+    const r = await run(['runs', 'list']);
+    expect(r.status).toBe(3);
+    expect(JSON.parse(r.stdout)).toMatchObject({ ok: false, error: 'transport' });
+  });
+
+  it('never prints the token on either stream, on a 200 with the line on', async () => {
+    reply = { code: 200, body: '{"ok":true}' };
+    const r = await run(['runs', 'list'], undefined, { CCRC_API_STATUS: 'line' });
+    expect(r.stdout + r.stderr).not.toContain(TOKEN);
   });
 });
 
@@ -401,11 +888,130 @@ describe('the token', () => {
     expect(seen).toHaveLength(0);
   });
 
+  it('resolves with status and stderr when a refusal never reads a large stdin (EPIPE is the child leaving, not a failure)', async () => {
+    fs.rmSync(path.join(home, '.cc-secrets', 'ccrc-mail.token'));
+    const r = await run(['runs', 'list'], 'x'.repeat(1024 * 1024));
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/token/i);
+    expect(typeof r.stdinEpipe).toBe('boolean');
+  });
+
   it('refuses when the token file is all preamble and no value', async () => {
     fs.writeFileSync(path.join(home, '.cc-secrets', 'ccrc-mail.token'), '# only a comment\n\n');
     const r = await runBoth(['runs', 'list']);
     expect(r.status).not.toBe(0);
     expect(seen).toHaveLength(0);
+  });
+});
+
+// R16 (centralised-update wave 13). A `-H` header value is readable in every
+// process listing on the box (`ps`, /proc/<pid>/cmdline) for the life of the
+// call, and the box token is one shared secret. So the client hands it to curl
+// on STDIN as a `-K -` config line. A curl that RECORDS what it was given, one
+// argv word per line plus its stdin, then execs the real curl with that stdin,
+// so the listener above still measures what arrived. Asserting `-K -` in argv
+// as well as the config on stdin is what tells "sent on stdin" from "a recorder
+// that always captures stdin" (ccd-pool-sync.test.ts's warning about its stub).
+describe('the token never rides curl\'s argv (R16)', () => {
+  const REAL_CURL = spawnSync('/bin/sh', ['-c', 'command -v curl'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/curl';
+  const plantRecorder = (): void => {
+    fs.writeFileSync(path.join(harnessBin(home), 'curl'),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > "$HOME/curl.argv"\ncat > "$HOME/curl.stdin"\n`
+      + `exec '${REAL_CURL}' "$@" < "$HOME/curl.stdin"\n`, { mode: 0o755 });
+  };
+  const argv = (): string[] => fs.readFileSync(path.join(home, 'curl.argv'), 'utf8').split('\n');
+  const stdin = (): string => fs.readFileSync(path.join(home, 'curl.stdin'), 'utf8');
+  const CONFIG = `header = "x-ccrc-mail-token: ${TOKEN}"\n`;
+
+  it.each([
+    ['a GET', ['runs', 'list'], undefined, ''],
+    // `claims take`, not `runs open`: the client fills `runs open`'s body
+    // (`claimedByUuid`, D-5298), and this case measures a body sent as written.
+    ['a POST whose body is a --json file', ['claims', 'take', '--json', 'BODYFILE'], undefined, '{"program":"p","wave":1}'],
+    // THE COLLISION CASE: stdin is the body (read by `body=$(cat)`) AND curl's
+    // config (the printf pipe). The mail envelope's own ack line is this shape. Since K5 Q3l (D-7324) the claimant row
+    // always sends the family, so the body arrives with the row's kind spliced first.
+    ['a POST whose body is --json - (stdin twice: the body, then curl\'s config)', ['asks', 'answer', '7', '--json', '-'],
+      '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}', '{"kind":"ask","fromId":"parent","fromUuid":"u","optionIndexes":[0]}'],
+  ])('%s: argv holds neither the token nor its header, stdin carries the config, and both arrive', async (_what, args, input, body) => {
+    plantRecorder();
+    if (args.includes('BODYFILE')) fs.writeFileSync(path.join(home, 'body.json'), body);
+    const r = await run(args.map((a) => (a === 'BODYFILE' ? path.join(home, 'body.json') : a)), input);
+    expect(r.status, r.stderr).toBe(0);
+    const words = argv();
+    expect(words.filter((w) => w.includes(TOKEN)), 'the token is on curl\'s argv').toEqual([]);
+    expect(words.filter((w) => /x-ccrc-mail-token/i.test(w)), 'the token header is on curl\'s argv').toEqual([]);
+    expect(words.some((w, i) => w === '-K' && words[i + 1] === '-'), `no \`-K -\` in argv: ${words.join(' ')}`).toBe(true);
+    expect(stdin()).toBe(CONFIG);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.auth).toBe(TOKEN);
+    expect(seen[0]!.body).toBe(body);
+  });
+
+  it('drives the client through the loopback curl front: the front admits its exact calls, and the header arrives', async () => {
+    fs.writeFileSync(path.join(harnessBin(home), 'curl'), loopbackCurlFront(REAL_CURL), { mode: 0o755 });
+    fs.writeFileSync(path.join(home, 'curl-allow-ports'), `${(server.address() as AddressInfo).port}\n`);
+    const body = '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}';
+    const a = await run(['asks', 'answer', '7', '--json', '-'], body);
+    const b = await run(['runs', 'list']);
+    expect([a.status, b.status], `${a.stderr}\n${b.stderr}`).toEqual([0, 0]);
+    expect(fs.existsSync(path.join(home, 'curl-poison')), 'the front refused a call the client makes').toBe(false);
+    expect(seen.map((x) => [x.method, x.url, x.auth, x.body])).toEqual([
+      ['POST', '/api/questions/ask-7/rule', TOKEN, `{"kind":"ask",${body.slice(1)}`],
+      ['GET', '/api/runs', TOKEN, ''],
+    ]);
+  });
+
+  // THE OTHER DIRECTION OF THE COLLISION (wave 13, R16): the CALLER's stdin must
+  // never reach curl's `-K -` parser. If it could, any caller could add a `url`,
+  // `output` or `proxy` line, and the box token header would follow it. `runs
+  // list` reads no stdin, so a hostile stdin is still there when curl starts.
+  it('a caller\'s stdin never reaches curl\'s config: hostile config lines on stdin send nothing anywhere else', async () => {
+    const elsewhere: string[] = [];
+    const other = createServer((req: IncomingMessage, res: ServerResponse) => {
+      elsewhere.push(`${req.method} ${req.url} ${String(req.headers['x-ccrc-mail-token'] ?? '')}`);
+      res.writeHead(200); res.end('{}');
+    });
+    await new Promise<void>((r) => other.listen(0, '127.0.0.1', r));
+    try {
+      plantRecorder();
+      const pwn = path.join(home, 'pwn');
+      const hostile = `url = "http://127.0.0.1:${(other.address() as AddressInfo).port}/stolen"\n`
+        + `output = "${pwn}"\nheader = "x-evil: 1"\n`;
+      const r = await run(['runs', 'list'], hostile);
+      expect(r.status, r.stderr).toBe(0);
+      expect(stdin(), 'curl was handed something besides the client\'s one config line').toBe(CONFIG);
+      expect(elsewhere, 'a URL from the caller\'s stdin was fetched').toEqual([]);
+      expect(fs.existsSync(pwn), 'an output path from the caller\'s stdin was written').toBe(false);
+      expect(seen.map((x) => [x.method, x.url, x.auth])).toEqual([['GET', '/api/runs', TOKEN]]);
+    } finally {
+      await new Promise<void>((r) => { other.close(() => r()); });
+    }
+  });
+
+  // An error path is scanned too: with the server gone, curl fails (rc 7) and
+  // the client answers its `transport` envelope. The token is on no argv, and on
+  // no output.
+  it('the transport refusal: argv holds no token, and neither stream echoes it', async () => {
+    plantRecorder();
+    await new Promise<void>((r) => { server.close(() => r()); });
+    const r = await run(['runs', 'list']);
+    expect(r.status).toBe(3);
+    expect(JSON.parse(r.stdout.trim())).toMatchObject({ ok: false, error: 'transport' });
+    const words = argv();
+    expect(words.filter((w) => w.includes(TOKEN) || /x-ccrc-mail-token/i.test(w)), 'the token is on curl\'s argv').toEqual([]);
+    expect(stdin()).toBe(CONFIG);
+    expect(r.stdout + r.stderr, 'the transport refusal echoed the token').not.toContain(TOKEN);
+  });
+
+  // `set +x` (R16): an inherited xtrace — `bash -x`, or an exported
+  // SHELLOPTS=xtrace — would trace `read_token` and the printf line to stderr,
+  // which the calling session reads into its transcript.
+  it('an inherited xtrace prints no token: SHELLOPTS=xtrace leaves stderr clean', async () => {
+    const r = await run(['runs', 'list'], undefined, { SHELLOPTS: 'xtrace' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr, 'an inherited xtrace printed the token').not.toContain(TOKEN);
+    expect(seen.map((x) => x.auth)).toEqual([TOKEN]);
   });
 });
 
@@ -531,6 +1137,19 @@ describe('an id reaches a path template only if the table declared one', () => {
     }
   });
 
+  it('refuses an approvals ruling id or nonce that is not SAFE_RE-plain, and sends nothing (plan Task 14)', async () => {
+    for (const [id, nonce] of [['../key', 'abc'], ['41', '../x'], ['41', 'a b'], ['41', 'ab?c=1'], ['41', '']]) {
+      seen = [];
+      const r = await runBoth(['approvals', 'ruling', id as string, '--nonce', nonce as string]);
+      expect(r.status, `${id} --nonce ${JSON.stringify(nonce)} must be refused`).not.toBe(0);
+      expect(seen, `${id} --nonce ${JSON.stringify(nonce)} must not reach the wire`).toHaveLength(0);
+    }
+    seen = [];
+    await runBoth(['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef']);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toBe('/api/approvals/41/ruling?nonce=0123456789abcdef0123456789abcdef');
+  });
+
   it('refuses an id on a verb that declares none, rather than ignoring it', async () => {
     const r = await runBoth(['runs', 'list', '12']);
     expect(r.status).not.toBe(0);
@@ -544,6 +1163,28 @@ describe('a query key rides only if its row declared it', () => {
   // Anything else is refused rather than appended, for the same reason the path
   // is a template and not an argument — a client that forwarded arbitrary query
   // keys would be a URL builder with extra steps.
+  it('the landing read carries its project', async () => {
+    await run(['landing', 'show', '--project', 'project-a']);
+    expect(seen[0]!.url).toBe('/api/landing?project=project-a');
+  });
+
+  it('the landing read carries its pr', async () => {
+    await run(['landing', 'show', '--project', 'project-a', '--pr', '41']);
+    expect(seen[0]!.url).toBe('/api/landing?project=project-a&pr=41');
+  });
+
+  // Landing order wave 5f: the two attributed writes send the caller's own body, identity included, and never fill one.
+  it.each([['entries', '/api/landing/entries'], ['order', '/api/landing/order']] as const)(
+    'landing %s passes an explicit attributed body unchanged', async (verb, url) => {
+      const body = '{"byId":"lane-b","byUuid":"u-lane-b","project":"project-a","pr":11,"afterIds":[]}';
+      plantPane('demo-ws');
+      await run(['landing', verb, '--json', '-'], body, { TMUX_PANE: '%7' });
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.method).toBe('POST');
+      expect(seen[0]!.url).toBe(url);
+      expect(seen[0]!.body).toBe(body);
+    });
+
   it('appends a declared key', async () => {
     await run(['mail', 'list', '--to', 'a-workspace']);
     expect(seen[0]!.url).toBe('/api/mail?to=a-workspace');
@@ -654,15 +1295,18 @@ describe('a query key rides only if its row declared it', () => {
 });
 
 describe('the body comes from --json, and only from there', () => {
+  // `claims take` is the plain POST here: `runs open` and `ledger allocate` are
+  // the two rows whose body the client fills (their own describes below), so a
+  // "sent verbatim" case on either would measure the fill, not the transport.
   it('sends a file body verbatim', async () => {
     const f = path.join(home, 'body.json');
     fs.writeFileSync(f, '{"program":"p","wave":1}');
-    await run(['runs', 'open', '--json', f]);
+    await run(['claims', 'take', '--json', f]);
     expect(seen[0]!.body).toBe('{"program":"p","wave":1}');
   });
 
   it('reads stdin for --json -', async () => {
-    await run(['runs', 'open', '--json', '-'], '{"program":"from-stdin"}');
+    await run(['claims', 'take', '--json', '-'], '{"program":"from-stdin"}');
     expect(seen[0]!.body).toBe('{"program":"from-stdin"}');
   });
 
@@ -675,20 +1319,20 @@ describe('the body comes from --json, and only from there', () => {
   it('sets content-type on a POST that carries a body', async () => {
     const f = path.join(home, 'body.json');
     fs.writeFileSync(f, '{}');
-    await run(['runs', 'open', '--json', f]);
+    await run(['claims', 'take', '--json', f]);
     expect(seen).toHaveLength(1);
   });
 
   it.each([
-    ['answer', '/api/asks/7/answer'],
-    ['release', '/api/asks/7/release'],
-  ])('carries only the declared ask %s id and JSON body', async (verb, url) => {
+    ['answer', '/api/questions/ask-7/rule'],
+    ['release', '/api/questions/ask-7/release'],
+  ])('carries only the declared ask %s id and JSON body (the row\'s kind spliced first)', async (verb, url) => {
     const body = verb === 'answer'
       ? '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}'
       : '{"fromId":"parent","fromUuid":"u"}';
     await run(['asks', verb, '7', '--json', '-'], body);
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toMatchObject({ method: 'POST', url, body });
+    expect(seen[0]).toMatchObject({ method: 'POST', url, body: `{"kind":"ask",${body.slice(1)}` });
   });
 });
 
@@ -738,7 +1382,8 @@ describe('whoami: the pane is the proof', () => {
 
   it('says tmux could not answer FOR THIS PANE, not that there is no session', async () => {
     // No plantPane: the harness's own poisoned tmux answers rc 97 and prints
-    // nothing (`ccdWsHelpers.ts:229,235-239`), which is the "tmux refused" case.
+    // nothing (`ghContainedEnv`'s `tmux` row and the stub loop that writes it),
+    // which is the "tmux refused" case.
     const r = await run(['whoami'], undefined, { TMUX_PANE: '%7' });
     expect(r.status).not.toBe(0);
     expect(r.stdout).toContain('could not answer for this pane');
@@ -771,6 +1416,99 @@ describe('whoami: the pane is the proof', () => {
     const got = await sh(`who=$(cat)\n${fence}\nprintf '%s|%s' "$id" "$uuid"`, r.stdout);
     expect(got, 'the corpora slice this stdout into a malformed identity')
       .toBe('demo-ws|u-1234');
+  });
+});
+
+// Delegation broker wave 3, Task 15 (plan steps 2 and 7). `coordinators intent <set|clear> --session <id>` is the one row whose grammar
+// is not the generic `<group> <verb> [<id>] [--json] [--key value]` one: a focused special case, run before the generic parser, that
+// accepts EXACTLY those words. The session and its uuid come from the PANE (`derive_identity`); `--session` is only an assertion that
+// must equal the derived id, so it can never select another session. The body is synthesized here, never read from a file or stdin.
+describe('coordinators intent: a focused grammar, identity from the pane', () => {
+  const INTENT = '/api/coordinators/demo-ws/intent';
+  const pane = { TMUX_PANE: '%7' };
+
+  it.each(['set', 'clear'])('%s posts {action, byId, byUuid} for THIS pane, to the path derived from it', async (action) => {
+    plantPane('demo-ws', 'u-1234');
+    const r = await run(['coordinators', 'intent', action, '--session', 'demo-ws'], undefined, pane);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.method).toBe('POST');
+    expect(seen[0]!.url).toBe(INTENT);
+    expect(seen[0]!.body).toBe(`{"action":"${action}","byId":"demo-ws","byUuid":"u-1234"}`);
+    expect(seen[0]!.auth, 'the box token still rides curl\'s stdin config').toBe(TOKEN);
+    expect(tmuxArgv()[0], 'the pane was passed as an explicit tmux target').toContain('-t %7');
+  });
+
+  it('prints the server\'s answer verbatim and never the token', async () => {
+    plantPane('demo-ws');
+    reply = { code: 200, body: '{"ok":true,"changed":true}' };
+    const r = await run(['coordinators', 'intent', 'set', '--session', 'demo-ws'], undefined, pane);
+    expect(r.stdout.trim()).toBe('{"ok":true,"changed":true}');
+    expect(r.stderr).toMatch(/^http 200$/m);
+    expect(r.stdout + r.stderr, 'the token reached an output stream').not.toContain(TOKEN);
+  });
+
+  it('refuses --session that is not the pane-derived session, and sends nothing (it asserts; it never selects)', async () => {
+    plantPane('demo-ws');
+    const r = await run(['coordinators', 'intent', 'set', '--session', 'someone-else'], undefined, pane);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('session-mismatch');
+    expect(JSON.parse(r.stdout)).toMatchObject({ ok: false, error: 'session-mismatch' });
+    expect(seen, 'a declaration for another session reached the wire').toHaveLength(0);
+    expect(r.stdout + r.stderr).not.toContain('someone-else"');
+  });
+
+  it('refuses with no pane even when tmux would answer, and sends nothing', async () => {
+    plantPane('someone-else');
+    const r = await run(['coordinators', 'intent', 'set', '--session', 'someone-else'], undefined, { TMUX_PANE: undefined, TMUX: undefined });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('no-pane');
+    expect(seen).toHaveLength(0);
+    expect(tmuxArgv(), 'tmux was shelled before the gate decided').toEqual([]);
+  });
+
+  it.each<[string, string[]]>([
+    ['no action', ['coordinators', 'intent']],
+    ['an unknown action', ['coordinators', 'intent', 'toggle', '--session', 'demo-ws']],
+    ['an upper-case action', ['coordinators', 'intent', 'SET', '--session', 'demo-ws']],
+    ['the action after the flag', ['coordinators', 'intent', '--session', 'demo-ws', 'set']],
+    ['a missing --session', ['coordinators', 'intent', 'set']],
+    ['a --session without a value', ['coordinators', 'intent', 'set', '--session']],
+    ['a DUPLICATE --session', ['coordinators', 'intent', 'set', '--session', 'demo-ws', '--session', 'demo-ws']],
+    ['an extra flag', ['coordinators', 'intent', 'set', '--session', 'demo-ws', '--by', 'demo-ws']],
+    ['--json', ['coordinators', 'intent', 'set', '--session', 'demo-ws', '--json', '-']],
+    ['a query key', ['coordinators', 'intent', 'set', '--session', 'demo-ws', '--all', '1']],
+    ['a trailing word', ['coordinators', 'intent', 'set', '--session', 'demo-ws', 'extra']],
+    ['a positional id', ['coordinators', 'intent', 'demo-ws', 'set', '--session', 'demo-ws']],
+    ['a --session that is not a plain id', ['coordinators', 'intent', 'set', '--session', 'demo/../ws']],
+  ])('refuses %s, with one parseable envelope, and sends nothing', async (_name, args) => {
+    plantPane('demo-ws');
+    const r = await run(args, '{"action":"set"}', pane);
+    expect(r.status).not.toBe(0);
+    expect(JSON.parse(r.stdout.trim().split('\n')[0]!)).toMatchObject({ ok: false });
+    expect(seen, 'a malformed intent command reached the wire').toHaveLength(0);
+  });
+
+  it('is the only row that takes --session: every other row refuses it by name', async () => {
+    plantPane('demo-ws');
+    const r = await run(['runs', 'list', '--session', 'demo-ws'], undefined, pane);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('unknown-query');
+    expect(seen).toHaveLength(0);
+    // …and the generic rows are untouched by the special case: no action word, no derived body.
+    seen.length = 0;
+    await run(['runs', 'list'], undefined, pane);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toBe('');
+  });
+
+  it('the usage text names the grammar, and `coordinators` alone says what is missing', async () => {
+    const r = await run(['coordinators']);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('no-verb');
+    const h = await run(['--help']);
+    expect(h.stderr).toContain('coordinators intent');
+    expect(h.stderr).toContain('--session');
   });
 });
 
@@ -906,5 +1644,252 @@ describe('ledger allocate carries an identity, or refuses', () => {
     expect(r.status).toBe(0);
     expect(seen).toHaveLength(1);
     expect(seen[0]!.body).toBe('');
+  });
+});
+
+// D-5298 (coordinator-first routing, spec §6.4; plan Task 11a). `POST /api/runs`
+// is where a coordinator becomes a child's parent, and the server half (Task 11b)
+// will refuse a claimant it cannot attribute. This half ships first, on the fleet
+// box: the client fills `claimedByUuid` from the caller's own `$REG/<id>.uuid`
+// (the pane, then the registry, exactly as `whoami` and `asks list` derive it),
+// so no coordinator's documented body has to change. An older server reads the
+// extra field as nothing. The fixture body is the coordinator skill's executable
+// `runs open` example and its review-run form, with neutral ids.
+describe('runs open carries its claimant\'s identity (D-5298)', () => {
+  const CLAIMANT = 'project-a-calm-mesa';
+  const CLAIMANT_UUID = 'u-calm-mesa-0001';
+  const WAVE = {
+    program: 'program-a', title: 'Wave 1', project: 'project-a', homeProject: 'project-a',
+    wave: 1, waveOf: null, claimedBy: CLAIMANT,
+  };
+  const REVIEW = {
+    program: 'program-a', title: 'Review wave 1', kind: 'review', reviews: 12,
+    claimedBy: CLAIMANT, homeProject: 'project-a',
+  };
+
+  it.each([
+    ['a wave run', WAVE],
+    ['a review run', REVIEW],
+  ])('fills claimedByUuid from this pane\'s own .uuid on %s', async (_what, body) => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    // Another session's .uuid beside it: the fill reads the PANE's, not any row.
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'project-a-open-dune.uuid'), 'u-open-dune-0002\n');
+    const r = await run(['runs', 'open', '--json', '-'], JSON.stringify(body), { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.method).toBe('POST');
+    expect(seen[0]!.url).toBe('/api/runs');
+    expect(JSON.parse(seen[0]!.body)).toEqual({ ...body, claimedByUuid: CLAIMANT_UUID });
+    expect(tmuxArgv().some((a) => a.includes('-t %7')), 'the pane was not the tmux target').toBe(true);
+  });
+
+  it('an EMPTY object body gets a whole object back, not a trailing comma', async () => {
+    for (const body of ['{}', '{ }']) {
+      seen.length = 0;
+      plantPane(CLAIMANT, CLAIMANT_UUID);
+      const r = await run(['runs', 'open', '--json', '-'], body, { TMUX_PANE: '%7' });
+      expect(r.status, `an empty object body (${body}) refused`).toBe(0);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.body).toBe(`{"claimedByUuid":"${CLAIMANT_UUID}"}`);
+    }
+  });
+
+  it('leading whitespace (a heredoc, a pretty-printer) is still an object', async () => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    const r = await run(['runs', 'open', '--json', '-'], `\n  ${JSON.stringify(WAVE)}`, { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout).toBe(0);
+    expect(JSON.parse(seen[0]!.body)).toEqual({ ...WAVE, claimedByUuid: CLAIMANT_UUID });
+  });
+
+  it('sends NOTHING when there is a body and no derivable identity', async () => {
+    plantPane('project-b-far-ridge', 'u-far-ridge-0003');   // tmux WOULD answer
+    const r = await run(['runs', 'open', '--json', '-'], JSON.stringify(WAVE),
+      { TMUX_PANE: undefined, TMUX: undefined });
+    expect(seen, 'an unattributed runs open reached the wire').toHaveLength(0);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('no-pane');
+  });
+
+  it('sends NOTHING when the pane\'s session has no .uuid', async () => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    fs.rmSync(path.join(home, '.cc-sessions', `${CLAIMANT}.uuid`));
+    const r = await run(['runs', 'open', '--json', '-'], JSON.stringify(WAVE), { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(0);
+    expect(r.stdout).toContain('no-uuid');
+  });
+
+  it.each([
+    ['a blank claimedByUuid', '{"claimedByUuid":"","claimedBy":"project-a-calm-mesa"}'],
+    ['its spaced spelling', '{"claimedByUuid" : "","claimedBy":"project-a-calm-mesa"}'],
+    ['a body that is not a JSON object', '[1,2]'],
+  ])('refuses %s rather than sending it', async (_what, body) => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    const r = await run(['runs', 'open', '--json', '-'], body, { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(0);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('bad-body');
+  });
+
+  it('leaves a caller-supplied claimedByUuid exactly as written, and needs no pane for it', async () => {
+    // Never an override: the server re-measures it against the registry
+    // (`requireAttribution`), so the caller who spoke owns the answer.
+    const body = '{"claimedBy":"project-a-calm-mesa","claimedByUuid":"u-chosen"}';
+    const r = await run(['runs', 'open', '--json', '-'], body, { TMUX_PANE: undefined, TMUX: undefined });
+    expect(r.status, r.stdout).toBe(0);
+    expect(seen[0]!.body).toBe(body);
+  });
+
+  it('a BODYLESS runs open is untouched — there is nothing to attribute', async () => {
+    const r = await run(['runs', 'open'], undefined, { TMUX_PANE: undefined, TMUX: undefined });
+    expect(r.status).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toBe('');
+  });
+
+  it.each([
+    ['dispatch', '{"brief":"b"}'],
+    ['advance', '{"to":"running","fingerprint":"f"}'],
+    ['close', '{"state":"failed"}'],
+    ['route', '{"target":"worker"}'],
+  ])('runs %s sets no claimant, so its body is sent as written', async (verb, body) => {
+    plantPane(CLAIMANT, CLAIMANT_UUID);
+    await run(['runs', verb, '12', '--json', '-'], body, { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toBe(body);
+  });
+});
+
+describe('runs review-rounds: the coordinator\'s cap extension refuses locally only on a current cap file without review-rounds-v1 (D-8125)', () => {
+  const capFile = (): string => path.join(home, '.ccrc', SERVER_CAPS_FILE);
+  const nowS = (): number => Math.floor(Date.now() / 1000);
+  const writeCaps = (words: readonly string[] = SERVER_CAPS, at = nowS()): void => {
+    fs.writeFileSync(capFile(), renderServerCaps(words, at));
+  };
+  const REASON = 'two real majors open, down from four';
+  const BODY = `{"reason":"${REASON}"}`;
+  const PANE = { TMUX_PANE: '%7' };
+  const sent = { method: 'POST', url: '/api/runs/7/review-rounds', auth: TOKEN,
+    body: `{"byId":"demo-ws","byUuid":"u-1234",\"reason\":\"${REASON}\"}` };
+  beforeEach(() => { plantPane('demo-ws'); });
+
+  it('is a POST row on /api/runs/{id}/review-rounds that takes the id', () => {
+    const row = clientRoutes().find((r) => r.key === 'runs.review-rounds');
+    expect(row, 'the table has no [runs.review-rounds] row').toBeDefined();
+    expect([row!.method, row!.path]).toEqual(['POST', '/api/runs/{id}/review-rounds']);
+  });
+
+  it('fills byId and byUuid from the pane and posts with no cap file', async () => {
+    fs.rmSync(capFile(), { force: true });
+    await run(['runs', 'review-rounds', '7', '--json', '-'], BODY, PANE);
+    expect(seen).toEqual([sent]);
+  });
+
+  it('fills the pane identity with a current cap file listing review-rounds-v1', async () => {
+    writeCaps();
+    await run(['runs', 'review-rounds', '7', '--json', '-'], BODY, PANE);
+    expect(seen).toEqual([sent]);
+  });
+
+  it.each([
+    ['a typed byId', '{"byId":"coord-a","reason":"x"}'],
+    ['a typed byUuid', '{"byUuid":"u","reason":"x"}'],
+    ['a padded key', '{"byId ":"coord-a","reason":"x"}'],
+    ['a nested key', '{"reason":"x","meta":{"byId":"coord-a"}}'],
+    ['an escaped key', '{"\\u0062yId":"coord-a","reason":"x"}'],
+    ['a differently-cased key', '{"BYID":"coord-a","reason":"x"}'],
+  ])('refuses %s as bad-body and sends nothing', async (_n, body) => {
+    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], body, PANE);
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'bad-body']);
+    expect(seen).toEqual([]);
+  });
+
+  it.each([
+    ['by id in prose', '2 majors open: lookup by id returns a stale row'],
+    ['nearby identifiers', 'two majors open in nearby identifiers handling'],
+    ['standby identity', 'one major open: standby identity is wrong'],
+    ['a backslash before a u', 'major open in C:\\\\users\\\\x path handling'],
+  ])('sends a reason with %s, since only object keys are checked, not prose', async (_n, reason) => {
+    const body = JSON.stringify({ reason });
+    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], body, PANE);
+    expect(r.status).toBe(0);
+    expect(seen).toEqual([{ method: 'POST', url: '/api/runs/7/review-rounds', auth: TOKEN,
+      body: `{"byId":"demo-ws","byUuid":"u-1234",${body.slice(1)}` }]);
+  });
+
+  it('refuses a body that is not an object, sending nothing', async () => {
+    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], '["x"]', PANE);
+    expect((JSON.parse(r.stdout) as { error: string }).error).toBe('bad-body');
+    expect(seen).toEqual([]);
+  });
+
+  it('refuses outside a tmux pane (no identity to derive), sending nothing', async () => {
+    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], BODY, { TMUX_PANE: undefined, TMUX: undefined });
+    expect((JSON.parse(r.stdout) as { error: string }).error).toBe('no-pane');
+    expect(seen).toEqual([]);
+  });
+
+  it('a current cap file with questions-v1 only is refused no-review-rounds-door, nothing sent', async () => {
+    writeCaps(['questions-v1']);
+    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], BODY, PANE);
+    expect([r.status, JSON.parse(r.stdout)]).toEqual([2, { ok: false, error: 'no-review-rounds-door',
+      detail: "this box's server predates the coordinator's review-rounds door; the cap is the operator's to lift" }]);
+    expect(seen).toEqual([]);
+  });
+
+  it('a current cap file listing no words is refused too', async () => {
+    writeCaps([]);
+    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], BODY, PANE);
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'no-review-rounds-door']);
+    expect(seen).toEqual([]);
+  });
+
+  it('a cap file older than the lease sends (the server\'s 404 is then the answer)', async () => {
+    writeCaps(['questions-v1'], nowS() - 181);
+    await run(['runs', 'review-rounds', '7', '--json', '-'], BODY, PANE);
+    expect(seen).toEqual([sent]);
+  });
+});
+
+describe('the plan rows: identity in the query, the body as the caller gave it, gated on plan-v1 (D-8181)', () => {
+  const capFile = (): string => path.join(home, '.ccrc', SERVER_CAPS_FILE);
+  const nowS = (): number => Math.floor(Date.now() / 1000);
+  const writeCaps = (words: readonly string[] = SERVER_CAPS, at = nowS()): void => {
+    fs.writeFileSync(capFile(), renderServerCaps(words, at));
+  };
+  const ID = 'byId=demo-ws&byUuid=u-1234';
+
+  it('the server advertises plan-v1', () => {
+    expect(SERVER_CAPS).toContain('plan-v1');
+  });
+
+  it('plan put sends byId and byUuid in the query and the body unchanged', async () => {
+    plantPane('demo-ws');
+    const b = '{"home":"project-a","epics":[]}';
+    const r = await run(['plan', 'put', 'prog-a', '--json', '-'], b, { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen.map((s) => [s.method, s.url, s.body])).toEqual([['POST', `/api/programmes/prog-a/plan?${ID}`, b]]);
+  });
+
+  it('plan show sends no identity', async () => {
+    const r = await run(['plan', 'show', 'prog-a']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen.map((s) => [s.method, s.url])).toEqual([['GET', '/api/programmes/prog-a/plan']]);
+  });
+
+  it('a current cap file without plan-v1 refuses no-plan-door and sends nothing', async () => {
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-v1'));
+    plantPane('demo-ws');
+    for (const args of [['plan', 'show', 'prog-a'], ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-']]) {
+      const r = await run(args, '{}', { TMUX_PANE: '%7' });
+      expect([r.status, (JSON.parse(r.stdout) as { error: string }).error], args.join(' ')).toEqual([2, 'no-plan-door']);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it('an absent or stale cap file sends', async () => {
+    await run(['plan', 'show', 'prog-a']);
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-v1'), nowS() - 181);
+    await run(['plan', 'show', 'prog-a']);
+    expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/plan', '/api/programmes/prog-a/plan']);
   });
 });

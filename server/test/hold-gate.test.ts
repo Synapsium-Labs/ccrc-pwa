@@ -16,6 +16,7 @@ import type { Runner } from '../src/exec.js';
 import { FleetWatcher } from '../src/watch.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { quietAtTestEnd } from './laneQuiet.js';   // D-8140: nothing a watcher fires outlives its test
 import { readRegistry, HOLD_NO_REASON, HOLD_UNREADABLE } from '../src/registry.js';
 import type { SessionRecord } from '../src/registry.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -64,11 +65,11 @@ const mergedLine = (id: string, number = 42): string => JSON.stringify({
 function runnerFor(prOut: string | (() => string), calls: string[][], pid = '4242'): Runner {
   return async (_cmd, args) => {
     calls.push(args);
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${pid}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'pr-state') return { code: 0, stdout: typeof prOut === 'function' ? prOut() : prOut, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${pid}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'pr-state') return { ran: true, code: 0, stdout: typeof prOut === 'function' ? prOut() : prOut, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
 }
 
@@ -79,14 +80,14 @@ const liveIdle = (home: string, pid = '4242'): void => {
     JSON.stringify({ pid: Number(pid), sessionId: '1'.repeat(36), cwd: '/d', status: 'idle', statusUpdatedAt: 1 }));
 };
 
-/** `prSweepStartedAt` returns to 0 in `sweepPr`'s own `finally` — the one
+/** The PR flight clears when the sweep settles — the one
  *  signal that a whole sweep (`sweepMerged` included) has actually finished,
  *  same reasoning as `pr-sweep.test.ts`'s own waits. */
 const sweepSettled = (w: FleetWatcher): Promise<void> =>
-  vi.waitFor(() => { expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0); });
+  vi.waitFor(() => { expect(w.inFlight('pr')).toBeNull(); });
 
 const forceDue = (w: FleetWatcher): void => {
-  (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+  w.kick('pr');
 };
 
 /** THIS lane's pushes only. A watcher built with a `coord` also raises the run
@@ -107,9 +108,9 @@ const mergedPushes = (
   notify.mock.calls.map(([p]) => p).filter((p) => p.tag?.startsWith(`merged-${id}#`) === true);
 
 /** `localIO` with every `<id>.hold` read failing and everything else real —
- *  the shape `remote/io.ts` produces when one of the 23
- *  [registry-read-census:fields] reads a session's `readRegistry` fires in
- *  parallel times out: null, indistinguishable at `field()` from a file that
+ *  the shape `remote/io.ts` produces when one of the 4
+ *  [registry-read-census:fields] unconditional reads (or another listed field's) a
+ *  session's `readRegistry` fires in parallel times out: null, indistinguishable at `field()` from a file that
  *  is not there. */
 const holdUnreadableIO: FleetIO = {
   ...localIO,
@@ -125,11 +126,11 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     // exactly ONE notification, whose reason clause is the hold verbatim.
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:1/4');
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     for (let i = 0; i < 3; i++) {
       forceDue(w);
       await w.tick();
@@ -138,7 +139,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify.mock.calls[0]![0].body)
-      .toBe('PR #42 merged — program:agent-evals wave:1/4; nothing archived.');
+      .toBe('PR #42 merged — program:prog-j wave:1/4; nothing archived.');
     w.stop();
   });
 
@@ -151,15 +152,15 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     // that has since gone; the alternative is saying the same merge twice.
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:3/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:3/4');
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick();
     await sweepSettled(w);
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
-    expect(notify.mock.calls[0]![0].body).toContain('program:agent-evals wave:3/4');
+    expect(notify.mock.calls[0]![0].body).toContain('program:prog-j wave:3/4');
 
     release(home, 'demo-quiet-basin');
     forceDue(w);
@@ -175,11 +176,11 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
   it('the merged push says WHAT is in the way, verbatim, and collapses on the session', async () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:1/4');
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalled());
 
@@ -189,7 +190,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     // body says plainly that nothing was destroyed. This wording is DELIBERATELY
     // unchanged from when the held branch was the only one that could produce
     // it: what changed underneath is that every merge now reads this way.
-    expect(payload.body).toContain('program:agent-evals wave:1/4');
+    expect(payload.body).toContain('program:prog-j wave:1/4');
     expect(payload.body).toContain('nothing archived');
     // `pushOne`'s default `${kind}-${sessionId}` collapse key, deliberately not
     // overridden: a later statement about this workspace REPLACES this one on
@@ -201,7 +202,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
   it('the merged push latch resets when the PR number changes', async () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:1/4');
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
     let prNumber = 591;
@@ -209,7 +210,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
       ...testDeps(home, runnerFor(() => mergedLine('demo-quiet-basin', prNumber), calls)),
       push: { notify } as never,
     };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     expect(notify.mock.calls[0]![0].body).toContain('PR #591');
@@ -244,14 +245,16 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     const home = seed(['demo-quiet-basin']);
     const notify = vi.fn(async (_p: PushPayload) => {});
     const deps = { ...testDeps(home), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     const degraded: SessionRecord = {
-      id: 'demo-quiet-basin', wrapper: '', project: 'demo', workdir: '/w/demo-quiet-basin', uuid: 'u-demo-quiet-basin',
+      hibernatedAt: null,
+      namedByOperator: false, title: null,
+      id: 'demo-quiet-basin', wrapper: '', project: 'demo', projectEvidence: 'measured', workdir: '/w/demo-quiet-basin', uuid: 'u-demo-quiet-basin',
       started: true, home: null, pool: null, lastswap: null,
       workspace: 'quiet-basin', branch: 'ws/quiet-basin', branchEvidence: 'named', base: 'origin/main',
       prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
-      substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, stranded: null, spawn: null, lifecycleUnmeasured: [],
-      unmeasured: ['wrapper'],
+      substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, stranded: null, spawn: null, lastEnd: null, lifecycleUnmeasured: [],
+      unmeasured: ['wrapper'], route: null, child: { kind: 'none' },
     };
     const merged: PrState = { phase: 'merged', number: 42, url: null, title: null, checks: null,
       checkNames: null, ahead: 3, reason: null, checkedAt: 1785300000000, mergedAt: null, retryAt: null };
@@ -279,7 +282,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
     // a workspace this box could not read the hold of.
     const home = seed(['demo-quiet-basin', 'demo-still-cove']);
     liveIdle(home);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:2/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:2/4');
     const cfg = loadConfig({ CCRC_HOME: home });
 
     const records = await readRegistry(holdUnreadableIO, cfg);
@@ -296,7 +299,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
       io: holdUnreadableIO,
       push: { notify } as never,
     };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick();
     await sweepSettled(w);
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
@@ -329,11 +332,11 @@ describe("sweepMerged — the reason comes from the sweep's own snapshot", () =>
     const inner = runnerFor(mergedLine('demo-quiet-basin'), calls);
     const run: Runner = async (cmd, args) => {
       const res = await inner(cmd, args);
-      if (args[0] === 'pr-state') hold(home, 'demo-quiet-basin', 'program:agent-evals wave:2/4');
+      if (args[0] === 'pr-state') hold(home, 'demo-quiet-basin', 'program:prog-j wave:2/4');
       return res;
     };
     const deps = { ...testDeps(home, run), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick();
     await sweepSettled(w);
 
@@ -366,8 +369,9 @@ describe('SessionRecord.held', () => {
   });
 
   it('an ordinary release landing inside readRegistry\'s own read window is NOT corruption', async () => {
-    // `readRegistry` lists the directory, then fires 23
-    // [registry-read-census:fields] reads per session. A `ccd ws-release`
+    // `readRegistry` lists the directory, then fires 4
+    // [registry-read-census:fields] unconditional reads (and one per other listed
+    // field) per session. A `ccd ws-release`
     // anywhere in that window leaves the name in
     // the listing with no bytes behind it — indistinguishable at `field()`
     // from a read that failed, so a perfectly ordinary release was reported as
@@ -375,7 +379,7 @@ describe('SessionRecord.held', () => {
     // announced corruption seconds after the operator tapped Release. One
     // second listing tells them apart.
     const home = seed(['demo-quiet-basin']);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:1/4');
     const cfg = loadConfig({ CCRC_HOME: home });
     let listings = 0;
     const releasedMidReadIO: FleetIO = {
@@ -400,7 +404,7 @@ describe('SessionRecord.held', () => {
     // The confirmation must not become an escape hatch: when the second
     // listing still names the file, the fail-shut answer is unchanged.
     const home = seed(['demo-quiet-basin']);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:1/4');
     const cfg = loadConfig({ CCRC_HOME: home });
     const records = await readRegistry(holdUnreadableIO, cfg);
     expect(records.find((r) => r.id === 'demo-quiet-basin')?.held).toBe(HOLD_UNREADABLE);
@@ -408,10 +412,10 @@ describe('SessionRecord.held', () => {
 
   it('carries the reason verbatim, null when absent', async () => {
     const home = seed(['demo-quiet-basin', 'demo-still-cove']);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
+    hold(home, 'demo-quiet-basin', 'program:prog-j wave:1/4');
     const cfg = loadConfig({ CCRC_HOME: home });
     const records = await readRegistry(localIO, cfg);
-    expect(records.find((r) => r.id === 'demo-quiet-basin')?.held).toBe('program:agent-evals wave:1/4');
+    expect(records.find((r) => r.id === 'demo-quiet-basin')?.held).toBe('program:prog-j wave:1/4');
     expect(records.find((r) => r.id === 'demo-still-cove')?.held).toBeNull();
   });
 });
@@ -444,7 +448,7 @@ describe('sweepMerged — an OPEN RUN names the reason when no hold does', () =>
       push: { notify } as never,
       coord,
     };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     for (let i = 0; i < 3; i++) { forceDue(w); await w.tick(); await sweepSettled(w); }
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     // The whole clause, verbatim — id, program, wave and waveOf. A silent skip
@@ -476,7 +480,7 @@ describe('sweepMerged — an OPEN RUN names the reason when no hold does', () =>
       push: { notify } as never,
       coord,
     };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     for (let i = 0; i < 3; i++) { forceDue(w); await w.tick(); await sweepSettled(w); }
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     expect(notify).toHaveBeenCalledTimes(1);
@@ -506,7 +510,7 @@ describe('sweepMerged — an OPEN RUN names the reason when no hold does', () =>
       push: { notify } as never,
       coord,
     };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick(); await sweepSettled(w);
     const runId = okRuns(coord.runs())[0]!.id;
     await vi.waitFor(() => expect(mergedPushes(notify)).toHaveLength(1));
@@ -544,7 +548,7 @@ describe('sweepMerged — an OPEN RUN names the reason when no hold does', () =>
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    const w = quietAtTestEnd(new FleetWatcher(deps, new Bus(), 10_000));
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     expect(notify.mock.calls[0]![0].body).toBe('PR #42 merged; nothing archived.');

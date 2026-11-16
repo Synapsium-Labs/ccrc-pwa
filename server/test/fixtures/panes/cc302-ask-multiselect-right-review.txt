@@ -1,0 +1,50 @@
+ ▐▛███▛█   Claude Code v2.1.302
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   <projects-root>/project-a
+
+  Updated to latest. Got 8 features, 37 bugfixes, and 6 other changes.
+  code.claude.com/docs/en/changelog for details
+
+
+❯ Call the AskUserQuestion tool once with exactly these 3 questions (single-select, multiSelect false). Q1 header "Color", question "Which color?", options Red, Green, Blue. Q2 header "Size", question "Which size?",
+  options Small, Medium, Large. Q3 header "Shape", question "Which shape?", options Circle, Square, Triangle. Give each option a short description. After the answers come back, reply with just the word DONE.
+
+⏺ User answered Claude's questions:
+  ⎿  · Which color? → Blue
+     · Which size? → Medium
+     · Which shape? → Triangle
+
+⏺ DONE
+
+✻ Worked for 3s · done 22:19
+
+❯ Call the AskUserQuestion tool once with exactly these 2 single-select questions. Q1 header "Fruit", question "Which fruit?", options Apple, Pear. Q2 header "Drink", question "Which drink?", options Tea, Coffee. Short
+  descriptions. After the answers come back, reply with just the word DONE.
+
+⏺ User answered Claude's questions:
+  ⎿  · Which fruit? → Apple
+     · Which drink? → hot water with lemon
+
+⏺ DONE
+
+✻ Cooked for 3s · done 22:19
+
+❯ Call the AskUserQuestion tool once with exactly these 2 questions. Q1 header "Pet", question "Which pet?", single-select, options Cat, Dog. Q2 header "Toppings", question "Which toppings?", multiSelect true, options
+  Cheese, Olives, Basil. Short descriptions. After the answers come back, reply with just the word DONE.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Pet  ☒ Toppings  ✔ Submit  →
+
+Review your answers
+
+ ● Which pet?
+   → Dog
+ ● Which toppings?
+   → Cheese, Basil
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel
+
+

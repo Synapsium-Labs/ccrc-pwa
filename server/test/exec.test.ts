@@ -4,31 +4,100 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Tmux, classifyHasSession, realRunner, type Runner, type ExecResult } from '../src/exec.js';
 import { VERDICT_MESSAGE_ROWS } from './sessionVerdictFixture.js';
+import { isExecAllowed } from '../../agent/src/whitelist.js';
+import { tmuxTarget } from '../../shared/tmux-target.js';
 
 const fake = (responses: Record<string, ExecResult>): { run: Runner; calls: string[][] } => {
   const calls: string[][] = [];
   const run: Runner = async (cmd, args) => {
     calls.push([cmd, ...args]);
-    return responses[args[0]] ?? { code: 0, stdout: '', stderr: '' };
+    return responses[args[0]] ?? { ran: true, code: 0, stdout: '', stderr: '' };
   };
   return { run, calls };
 };
 
 describe('Tmux', () => {
   it('hasSession true on code 0, false otherwise', async () => {
-    const ok = new Tmux(fake({ 'has-session': { code: 0, stdout: '', stderr: '' } }).run);
-    expect(await ok.hasSession('claude2-MekWarLive')).toBe(true);
-    const no = new Tmux(fake({ 'has-session': { code: 1, stdout: '', stderr: '' } }).run);
-    expect(await no.hasSession('claude2-MekWarLive')).toBe(false);
+    const ok = new Tmux(fake({ 'has-session': { ran: true, code: 0, stdout: '', stderr: '' } }).run);
+    expect(await ok.hasSession('claude9-project-f')).toBe(true);
+    const no = new Tmux(fake({ 'has-session': { ran: true, code: 1, stdout: '', stderr: '' } }).run);
+    expect(await no.hasSession('claude9-project-f')).toBe(false);
   });
   it('panePid parses first pane pid', async () => {
-    const t = new Tmux(fake({ 'list-panes': { code: 0, stdout: '40613\n', stderr: '' } }).run);
+    const t = new Tmux(fake({ 'list-panes': { ran: true, code: 0, stdout: '40613\n', stderr: '' } }).run);
     expect(await t.panePid('x')).toBe(40613);
   });
-  it('targets cc-<id> and sends literals with -l', async () => {
+  it('targets EXACTLY =cc-<id>: and sends literals with -l', async () => {
     const f = fake({});
     await new Tmux(f.run).sendLiteral('myid', 'hello');
-    expect(f.calls[0]).toEqual(['tmux', 'send-keys', '-t', 'cc-myid', '-l', 'hello']);
+    expect(f.calls[0]).toEqual(['tmux', 'send-keys', '-t', '=cc-myid:', '-l', '--', 'hello']);
+  });
+
+  // D-5046. tmux parses a text token that starts with `-` as FLAGS. Measured on
+  // tmux 3.7c, private `-L` socket, 2026-10-15: `send-keys -l '-x probe'` exits 1
+  // (`unknown flag -x`) and `-l '- item'` exits 1 (`invalid flag -`), typing
+  // nothing; and `-l '--'` exits 0 having typed NOTHING, because the parser
+  // takes it as the end of the flags and finds no key after it. A return check
+  // can see the first two and never the third. With `--` first, all eight dash
+  // shapes measured typed verbatim, and an empty text still exits 0.
+  it('sendLiteral puts -- before text that starts with a dash (D-5046)', async () => {
+    const f = fake({});
+    const t = new Tmux(f.run);
+    await t.sendLiteral('x', '-x');
+    await t.sendLiteral('x', '- item');
+    await t.sendLiteral('x', '--');
+    expect(f.calls).toEqual([
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', '-x'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', '- item'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', '--', '--'],
+    ]);
+    // Remote mode runs it through the agent, whose `send-keys` grant is a
+    // one-token prefix: the extra token must cross it.
+    for (const c of f.calls) expect(isExecAllowed(c[0]!, c.slice(1)), c.join(' ')).toBe(true);
+  });
+
+  // D-3525. A bare `cc-<id>` is a tmux SEARCH — exact name, then unique prefix,
+  // then fnmatch, and for a pane/window command first a window NAME in the
+  // most recent session — so every method below read, typed into, resized or
+  // reported live the WRONG session whenever `cc-<id>` was gone and a
+  // `cc-<id>-…` sibling was not (measured, tmux 3.4). EVERY method, because
+  // the adapter's nine argv are nine chances to spell it bare again.
+  it('EVERY method targets =cc-<id>: — and every one of those argv crosses the agent whitelist', async () => {
+    const f = fake({});
+    const t = new Tmux(f.run);
+    await t.sessionVerdict('myid');
+    await t.panePid('myid');
+    await t.capture('myid');
+    await t.captureAnsi('myid');
+    await t.paneProbe('myid');
+    await t.captureHistory('myid', 100);
+    await t.sendLiteral('myid', 'x');
+    await t.sendKey('myid', 'Enter');
+    await t.resizeWindow('myid', 220, 50);
+    expect(f.calls).toHaveLength(9);
+    for (const c of f.calls) {
+      const i = c.indexOf('-t');
+      expect(i, c.join(' ')).toBeGreaterThan(0);
+      expect(c[i + 1], c.join(' ')).toBe('=cc-myid:');
+      // Remote mode runs these through the agent: an anchored target the
+      // whitelist refused would turn every read into `forbidden`.
+      expect(isExecAllowed(c[0]!, c.slice(1)), c.join(' ')).toBe(true);
+    }
+  });
+
+  it('tmuxTarget applies tmux\'s own `.`/`:` -> `_` rewrite, so a dotted id still finds its session', async () => {
+    // `tmuxName` now creates the sanitised name and `tmuxTarget` anchors it, so
+    // the rewrite happens once, at creation; the unrewritten anchor would answer
+    // `can't find session` for a LIVE session — `gone`.
+    expect(tmuxTarget('w-my.site')).toBe('=cc-w-my_site:');
+    const f = fake({});
+    await new Tmux(f.run).sessionVerdict('w-my.site');
+    expect(f.calls[0]).toEqual(['tmux', 'has-session', '-t', '=cc-w-my_site:']);
+  });
+
+  it('tmuxTarget on a colon id and a plain id (wave 9 M8 controls)', () => {
+    expect(tmuxTarget('a:b')).toBe('=cc-a_b:');
+    expect(tmuxTarget('demo')).toBe('=cc-demo:');
   });
 });
 
@@ -41,12 +110,12 @@ describe('Tmux', () => {
  *  (`ccd-session-verdict.test.ts`) so the twins cannot drift apart. */
 describe('classifyHasSession — three answers, not one boolean (D-309)', () => {
   it('live: has-session succeeded', () => {
-    expect(classifyHasSession({ code: 0, stdout: '', stderr: '' })).toEqual({ verdict: 'live' });
+    expect(classifyHasSession({ ran: true, code: 0, stdout: '', stderr: '' })).toEqual({ verdict: 'live' });
   });
 
   for (const row of VERDICT_MESSAGE_ROWS) {
     it(row.name, () => {
-      const v = classifyHasSession({ code: 1, stdout: '', stderr: `${row.message}\n` });
+      const v = classifyHasSession({ ran: true, code: 1, stdout: '', stderr: `${row.message}\n` });
       expect(v.verdict).toBe(row.expected);
       // The message IS the diagnosis (substrate-unreachable spec §2): an
       // unknown must carry it verbatim, because narrowing it here would repeat
@@ -61,7 +130,7 @@ describe('classifyHasSession — three answers, not one boolean (D-309)', () => 
     // SIGSTOPped tmux server blocks `has-session` indefinitely. The child dies
     // by signal having printed nothing; an empty detail is the blank marker
     // reason the spec forbids.
-    const v = classifyHasSession({ code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' });
+    const v = classifyHasSession({ ran: true, code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' });
     expect(v.verdict).toBe('unknown');
     if (v.verdict === 'unknown') {
       expect(v.detail).toContain('SIGTERM');
@@ -70,24 +139,24 @@ describe('classifyHasSession — three answers, not one boolean (D-309)', () => 
   });
 
   it('unknown with a NON-EMPTY detail when NOTHING was measured — the older-agent / dropped-link shape', () => {
-    // `remote/runner.ts` synthesizes `{code:1, stdout:'', stderr:<message>}` on
+    // `remote/runner.ts` synthesizes `{ran: true, code:1, stdout:'', stderr:<message>}` on
     // a transport failure, but an older agent frame can arrive with all three
     // fields defaulted. Absence of evidence is still not evidence of absence.
-    const v = classifyHasSession({ code: 1, stdout: '', stderr: '' });
+    const v = classifyHasSession({ ran: true, code: 1, stdout: '', stderr: '' });
     expect(v.verdict).toBe('unknown');
     if (v.verdict === 'unknown') expect(v.detail.trim()).not.toBe('');
   });
 
   it('sessionVerdict wires the classifier to the has-session argv; hasSession derives, true only for live', async () => {
-    const wedged = fake({ 'has-session': { code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default\n' } });
+    const wedged = fake({ 'has-session': { ran: true, code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default\n' } });
     const t = new Tmux(wedged.run);
     expect((await t.sessionVerdict('myid')).verdict).toBe('unknown');
-    expect(wedged.calls[0]).toEqual(['tmux', 'has-session', '-t', 'cc-myid']);
+    expect(wedged.calls[0]).toEqual(['tmux', 'has-session', '-t', '=cc-myid:']);
     // Derived, exactly like bash `_alive`: unknown and gone BOTH read false to
     // the callers that kept the boolean — their deliberate collapses are
     // documented at each site, not here.
     expect(await t.hasSession('myid')).toBe(false);
-    const gone = new Tmux(fake({ 'has-session': { code: 1, stdout: '', stderr: "can't find session: cc-myid\n" } }).run);
+    const gone = new Tmux(fake({ 'has-session': { ran: true, code: 1, stdout: '', stderr: "can't find session: cc-myid\n" } }).run);
     expect((await gone.sessionVerdict('myid')).verdict).toBe('gone');
     expect(await gone.hasSession('myid')).toBe(false);
   });
@@ -97,8 +166,8 @@ describe('§1.4/§1.7 — ExecResult.killed is OPTIONAL, and realRunner MEASURES
   const here = path.dirname(fileURLToPath(import.meta.url));
   const ccrcRoot = path.resolve(here, '..', '..');
 
-  it('accepts a bare {code,stdout,stderr} literal — 249 of them exist across 32 files', () => {
-    const r: ExecResult = { code: 0, stdout: '', stderr: '' };
+  it('accepts a bare {ran: true, code,stdout,stderr} literal — 249 of them exist across 32 files', () => {
+    const r: ExecResult = { ran: true, code: 0, stdout: '', stderr: '' };
     expect(r.killed).toBeUndefined();
     expect(r.signal).toBeUndefined();
   });

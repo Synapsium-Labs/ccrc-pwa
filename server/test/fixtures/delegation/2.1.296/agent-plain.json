@@ -1,0 +1,292 @@
+{
+ "v": 1,
+ "version": "2.1.296",
+ "scenario": "agent-plain",
+ "labels": [
+  "main-call",
+  "sub-bash",
+  "sub-done",
+  "main-done"
+ ],
+ "notes": [],
+ "events": [
+  {
+   "seq": 1,
+   "dtMs": 0,
+   "event": "SessionStart",
+   "envSid": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+   "payload": {
+    "session_id": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b.jsonl",
+    "cwd": "/rig/repo",
+    "hook_event_name": "SessionStart",
+    "source": "startup",
+    "model": "claude-opus-5-5"
+   }
+  },
+  {
+   "seq": 2,
+   "dtMs": 293,
+   "event": "UserPromptSubmit",
+   "envSid": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+   "payload": {
+    "session_id": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "4be86016-4aa5-4d08-852d-a51b3c9b41a4",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "dlg agent-plain"
+   }
+  },
+  {
+   "seq": 3,
+   "dtMs": 759,
+   "event": "PreToolUse",
+   "envSid": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+   "payload": {
+    "session_id": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "4be86016-4aa5-4d08-852d-a51b3c9b41a4",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "dlg plain",
+     "prompt": "dlg-sub-plain",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_rig000001"
+   }
+  },
+  {
+   "seq": 4,
+   "dtMs": 975,
+   "event": "SubagentStart",
+   "envSid": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+   "payload": {
+    "session_id": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "4be86016-4aa5-4d08-852d-a51b3c9b41a4",
+    "agent_id": "a43971c63f60cd08a",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 5,
+   "dtMs": 981,
+   "event": "PostToolUse",
+   "envSid": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+   "payload": {
+    "session_id": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "4be86016-4aa5-4d08-852d-a51b3c9b41a4",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "dlg plain",
+     "prompt": "dlg-sub-plain",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "isAsync": true,
+     "status": "async_launched",
+     "agentId": "a43971c63f60cd08a",
+     "description": "dlg plain",
+     "resolvedModel": "claude-opus-5-5",
+     "prompt": "dlg-sub-plain",
+     "outputFile": "/rig/tmp/claude-1000/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b/tasks/a43971c63f60cd08a.output",
+     "canReadOutputFile": true,
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_rig000001",
+    "duration_ms": 47
+   }
+  },
+  {
+   "seq": 6,
+   "dtMs": 1166,
+   "event": "Stop",
+   "envSid": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+   "payload": {
+    "session_id": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "4be86016-4aa5-4d08-852d-a51b3c9b41a4",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "DLG-WAIT",
+    "background_tasks": [
+     {
+      "id": "a43971c63f60cd08a",
+      "type": "subagent",
+      "status": "running",
+      "description": "dlg plain",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 7,
+   "dtMs": 1223,
+   "event": "PreToolUse",
+   "envSid": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+   "payload": {
+    "session_id": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "4be86016-4aa5-4d08-852d-a51b3c9b41a4",
+    "permission_mode": "default",
+    "agent_id": "a43971c63f60cd08a",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo DLG-ACK-plain",
+     "description": "ack"
+    },
+    "tool_use_id": "toolu_rig000002"
+   }
+  },
+  {
+   "seq": 8,
+   "dtMs": 1371,
+   "event": "PostToolUse",
+   "envSid": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+   "payload": {
+    "session_id": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "4be86016-4aa5-4d08-852d-a51b3c9b41a4",
+    "permission_mode": "default",
+    "agent_id": "a43971c63f60cd08a",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo DLG-ACK-plain",
+     "description": "ack"
+    },
+    "tool_response": {
+     "stdout": "DLG-ACK-plain",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_rig000002",
+    "duration_ms": 55
+   }
+  },
+  {
+   "seq": 9,
+   "dtMs": 1569,
+   "event": "SubagentStop",
+   "envSid": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+   "payload": {
+    "session_id": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "4be86016-4aa5-4d08-852d-a51b3c9b41a4",
+    "permission_mode": "default",
+    "agent_id": "a43971c63f60cd08a",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b/subagents/agent-a43971c63f60cd08a.jsonl",
+    "last_assistant_message": "DLG-SUB-DONE-plain",
+    "background_tasks": [
+     {
+      "id": "a43971c63f60cd08a",
+      "type": "subagent",
+      "status": "running",
+      "description": "dlg plain",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 10,
+   "dtMs": 1780,
+   "event": "UserPromptSubmit",
+   "envSid": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+   "payload": {
+    "session_id": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "69b2450a-ef99-4c37-96a1-a59a47a63d84",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "<task-notification>\n<task-id>a43971c63f60cd08a</task-id>\n<tool-use-id>toolu_rig000001</tool-use-id>\n<output-file>/rig/tmp/claude-1000/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b/tasks/a43971c63f60cd08a.output</output-file>\n<status>completed</status>\n<summary>Agent \"dlg plain\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>DLG-SUB-DONE-plain</result>\n<usage><subagent_tokens>1211</subagent_tokens><tool_uses>1</tool_uses><duration_ms>831</duration_ms></usage>\n</task-notification>"
+   }
+  },
+  {
+   "seq": 11,
+   "dtMs": 1918,
+   "event": "Stop",
+   "envSid": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+   "payload": {
+    "session_id": "7914fc22-b802-45c9-b716-63bb7b04b93b",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "69b2450a-ef99-4c37-96a1-a59a47a63d84",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "DLG-DONE",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  }
+ ],
+ "disk": {
+  "admin": {},
+  "worktreesLeft": [],
+  "branches": [
+   "main"
+  ],
+  "worktreeList": "worktree /rig/repo\nHEAD e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd\nbranch refs/heads/main",
+  "metas": {
+   "cfg/-rig-repo/7914fc22-b802-45c9-b716-63bb7b04b93b/subagents/agent-a43971c63f60cd08a.meta.json": {
+    "agentType": "general-purpose",
+    "description": "dlg plain",
+    "toolUseId": "toolu_rig000001",
+    "spawnDepth": 1,
+    "requestShape": "background",
+    "requestNonInteractive": true
+   }
+  },
+  "snapshots": {}
+ }
+}

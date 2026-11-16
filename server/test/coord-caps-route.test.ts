@@ -1,6 +1,8 @@
 // The caps door. Before it, `CoordStore.setCaps` had NO caller anywhere in
-// `server/src` (D-1164): the only way to change `maxConcurrentWorkers` or
-// `maxSessionsPerDay` was to edit `coord.db` by hand.
+// `server/src` (D-1164): the only way to change a cap was to edit `coord.db` by
+// hand. One cap is left, `maxConcurrentWorkers`: the daily brake is retired
+// (D-7068), and `retire-daily-brake.test.ts` pins how this
+// door treats its field from an older PWA.
 //
 // Its POSTURE is the part worth reading twice. NOT box-token — the box token
 // gates MACHINE lanes, callers on the fleet host with no cookie jar, and an
@@ -10,7 +12,7 @@
 // (D-1240). Session-gated when armed, open dark, like every other same-origin
 // PWA write. `coord-pause-route.test.ts` holds both halves of that.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
@@ -22,6 +24,7 @@ import type { CcdResult } from '../src/lifecycle.js';
 import { CAP_MAX, CAP_MIN } from '../src/coord/caps.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { seedLegacyProgramme } from './helpers/plan.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const srcRoot = path.resolve(here, '..', 'src');
@@ -29,7 +32,7 @@ const srcRoot = path.resolve(here, '..', 'src');
 /** The shipped defaults, seeded by migration 1 — every partial-write assertion
  *  below is stated against these rather than re-reading them, so a changed
  *  default is a failing test rather than a silently-rebased expectation. */
-const DEFAULTS = { maxConcurrentWorkers: 3, maxSessionsPerDay: 12 };
+const DEFAULTS = { maxConcurrentWorkers: 3 };
 
 const apps: FastifyInstance[] = [];
 afterEach(async () => { while (apps.length) await apps.pop()!.close(); });
@@ -46,7 +49,7 @@ const withCoord = async (over: Partial<Deps> = {}) => {
   // `db` is handed back for ONE test: the singleton `coordinator_state` row is
   // reachable through no public method, and D-1164's disagreement between
   // `setCaps` (silent no-op) and `caps()` (throws) is only observable without it.
-  return { app, coord, notifyLog, db };
+  return { app, coord, notifyLog, db, home };
 };
 
 /** A box with no coordination database — no `coord` key at all, the same shape
@@ -57,6 +60,11 @@ const withoutCoord = async () => {
   return { app };
 };
 
+/** The `caps changed` feed records, oldest first, by their bodies. */
+const capsBodies = (coord: CoordStore): string[] =>
+  coord.feedEvents(50).filter((e) => e.title === 'caps changed').map((e) => e.body)
+    .sort((a, b) => (a < b ? -1 : 1));
+
 const getCaps = (app: FastifyInstance) => app.inject({ method: 'GET', url: '/api/coord/caps' });
 const postCaps = (app: FastifyInstance, payload: unknown) =>
   app.inject({ method: 'POST', url: '/api/coord/caps', payload: payload as Record<string, unknown> });
@@ -66,12 +74,12 @@ describe('GET /api/coord/caps', () => {
     const { app, coord } = await withCoord();
     // D-1169: the caller owns the moment now, so a fixture can finally pin it —
     // which is the concrete cost the old internal `Date.now()` carried.
-    coord.setCaps({ maxConcurrentWorkers: 4, maxSessionsPerDay: 16 }, 1_700_000_000_000);
+    coord.setCaps({ maxConcurrentWorkers: 4 }, 1_700_000_000_000);
     const res = await getCaps(app);
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true,
-      caps: { maxConcurrentWorkers: 4, maxSessionsPerDay: 16 },
-      usage: { running: 0, dispatchedIn24h: 0 },
+      caps: { maxConcurrentWorkers: 4 },
+      usage: { running: 0 },
       updatedAt: 1_700_000_000_000 });
   });
 
@@ -100,7 +108,8 @@ describe('GET /api/coord/caps', () => {
     const r = coord.openRun({ program: 'p', title: 'P', project: 'demo',
       wave: 1, waveOf: 8, claimedBy: 'the-coordinator' }) as { id: number };
     coord.markDispatched(r.id, 'the-worker', 'ws', 'ws/ws', false);
-    expect((await getCaps(app)).json().usage).toEqual({ running: 1, dispatchedIn24h: 1 });
+    expect(coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+    expect((await getCaps(app)).json().usage).toEqual({ running: 1 });
   });
 });
 
@@ -110,19 +119,14 @@ describe('POST /api/coord/caps', () => {
     const res = await postCaps(app, { maxConcurrentWorkers: 5 });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true,
-      caps: { maxConcurrentWorkers: 5, maxSessionsPerDay: DEFAULTS.maxSessionsPerDay },
-      usage: { running: 0, dispatchedIn24h: 0 },
+      caps: { maxConcurrentWorkers: 5 },
+      usage: { running: 0 },
       // A write stamps it; the route reads the STORED value back, so this is the
       // server's own clock and not the caller's assertion about it.
       updatedAt: expect.any(Number) });
     // …and it really landed in the store, not merely in the reply.
-    expect(coord.caps()).toEqual({ maxConcurrentWorkers: 5, maxSessionsPerDay: 12 });
-  });
-
-  it('takes the other field alone, leaving the first untouched', async () => {
-    const { app, coord } = await withCoord();
-    await postCaps(app, { maxSessionsPerDay: 20 });
-    expect(coord.caps()).toEqual({ maxConcurrentWorkers: 3, maxSessionsPerDay: 20 });
+    expect(coord.caps()).toEqual({ maxConcurrentWorkers: 5 });
+    expect(DEFAULTS.maxConcurrentWorkers, 'the seeded default moved').toBe(3);
   });
 
   it('refuses a bad body with the policy detail, and writes NOTHING', async () => {
@@ -190,9 +194,9 @@ describe('POST /api/coord/caps', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const { app, coord } = await withCoord({ notifyLog: undefined });
-      const res = await postCaps(app, { maxSessionsPerDay: 20 });
+      const res = await postCaps(app, { maxConcurrentWorkers: 5 });
       expect(res.statusCode).toBe(200);
-      expect(coord.caps().maxSessionsPerDay).toBe(20);
+      expect(coord.caps().maxConcurrentWorkers).toBe(5);
       expect(warn.mock.calls.flat().join(' '), 'a box with no feed warned as though a write had failed')
         .not.toContain('recordFeedEvent');
     } finally { warn.mockRestore(); }
@@ -205,7 +209,7 @@ describe('POST /api/coord/caps', () => {
     // because fastify keeps the first reply; only the store can.
     const { app, coord } = await withCoord();
     const before = coord.caps();
-    await postCaps(app, { maxSessionsPerDay: CAP_MAX + 1 });
+    await postCaps(app, { maxConcurrentWorkers: CAP_MAX + 1 });
     expect(coord.caps()).toEqual(before);
     expect(coord.feedEvents(10)).toEqual([]);
   });
@@ -284,11 +288,15 @@ describe('POST /api/coord/caps', () => {
     } finally { warn.mockRestore(); }
   });
 
-  it('two concurrent partial writes both land', async () => {
+  it('two concurrent writes each report the transition that actually happened', async () => {
     // WHAT THIS PINS, AND WHAT IT DOES NOT — measured, not assumed.
     //
-    // It pins the end-to-end property: two disjoint dials written together both
-    // survive, in either order. That is worth having.
+    // There were two disjoint dials when this was written, and it pinned that
+    // both survived a concurrent pair. The daily dial is retired
+    // (D-7068), so the pair now moves the ONE dial twice, and
+    // the property is the feed's: each write's `before` is the value the other
+    // left, so the two records chain from the seed rather than both starting at
+    // it.
     //
     // It does NOT witness the self-review's MAJOR (the merge base being read
     // outside `coordMutex.run`). Measured: reverting the fix — capturing
@@ -309,9 +317,10 @@ describe('POST /api/coord/caps', () => {
     const { app, coord } = await withCoord();
     await Promise.all([
       postCaps(app, { maxConcurrentWorkers: 5 }),
-      postCaps(app, { maxSessionsPerDay: 20 }),
+      postCaps(app, { maxConcurrentWorkers: 7 }),
     ]);
-    expect(coord.caps()).toEqual({ maxConcurrentWorkers: 5, maxSessionsPerDay: 20 });
+    expect(capsBodies(coord)).toEqual(['workers 3 → 5', 'workers 5 → 7']);
+    expect(coord.caps()).toEqual({ maxConcurrentWorkers: 7 });
   });
 
   it('holds the merge base under the lock while a THIRD actor keeps it across a real await', async () => {
@@ -327,6 +336,8 @@ describe('POST /api/coord/caps', () => {
     // With the merge base read OUTSIDE the lock, both saves read `{3, 12}`
     // while the hold is in flight and the second writes the first's field back
     // unchanged. With it read inside, the second reads what the first stored.
+    // One dial is left since D-7068, so the witness is now the
+    // feed: a `before` read outside the lock makes both records say `3 → …`.
     const TOKEN = 'f'.repeat(64);
     let signalHeld = (): void => {};
     const held = new Promise<void>((r) => { signalHeld = () => r(); });
@@ -335,10 +346,15 @@ describe('POST /api/coord/caps', () => {
     const runCcd = async (): Promise<CcdResult> => {
       signalHeld();
       await gate;
-      return { ok: true, stdout: '', stderr: '', killed: false, signal: null };
+      return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null };
     };
 
-    const { app, coord } = await withCoord({ mailToken: TOKEN, runCcd });
+    const { app, coord, home } = await withCoord({ mailToken: TOKEN, runCcd });
+    // D-5298: the open attributes its claimant against its own registry row, of
+    // the run's project (`run-routes.test.ts`'s `seed` field set).
+    for (const [k, v] of Object.entries({ wrapper: 'claude', project: 'demo', workdir: '/w/the-coordinator',
+      uuid: 'u-the-coordinator', started: '1', workspace: 'the-coordinator', branch: 'ws/the-coordinator',
+      base: 'origin/main' })) writeFileSync(path.join(home, '.cc-sessions', `the-coordinator.${k}`), v);
     // The instrument for "both prologues have run". Counting `caps()` reads is
     // deterministic under BOTH spellings — the shape probe outside the lock is
     // one per request either way — so this wait cannot pass for one variant and
@@ -352,10 +368,11 @@ describe('POST /api/coord/caps', () => {
       throw new Error(`timed out waiting for ${what}`);
     };
 
+    seedLegacyProgramme(coord.db, 'p', 'demo');
     const opening = app.inject({ method: 'POST', url: '/api/runs',
       headers: { 'x-ccrc-mail-token': TOKEN },
       payload: { program: 'p', title: 'P', project: 'demo', wave: 1, waveOf: 8,
-                 claimedBy: 'the-coordinator', sessionId: 'the-worker' } });
+                 claimedBy: 'the-coordinator', claimedByUuid: 'u-the-coordinator', sessionId: 'the-worker', homeProject: 'demo' } });
 
     // PREMISE 1 — THE HOLD IS REACHED AT ALL, and it fails FAST if it is not
     // (D-1228). `POST /api/runs` has three early returns before `runCcd` — a 400
@@ -375,7 +392,7 @@ describe('POST /api/coord/caps', () => {
 
     const settled: number[] = [];
     const saves = [postCaps(app, { maxConcurrentWorkers: 5 }),
-                   postCaps(app, { maxSessionsPerDay: 20 })]
+                   postCaps(app, { maxConcurrentWorkers: 7 })]
       .map((p) => p.then((r) => { settled.push(r.statusCode); return r; }));
     await waitUntil(() => reads.mock.calls.length >= 2, 'both caps prologues to run');
 
@@ -401,9 +418,10 @@ describe('POST /api/coord/caps', () => {
     const [openRes, ...capRes] = await Promise.all([opening, ...saves]);
     expect(openRes.statusCode).toBe(200);
     for (const r of capRes) expect(r.statusCode).toBe(200);
-    expect(coord.caps(),
-      'one save read its merge base before the other wrote — a lost update')
-      .toEqual({ maxConcurrentWorkers: 5, maxSessionsPerDay: 20 });
+    expect(capsBodies(coord),
+      'one save read its `before` before the other wrote — the feed reports a transition that never happened')
+      .toEqual(['workers 3 → 5', 'workers 5 → 7']);
+    expect(coord.caps()).toEqual({ maxConcurrentWorkers: 7 });
   });
 
   it('accepts the boundary values the policy allows', async () => {

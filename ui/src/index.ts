@@ -1,0 +1,158 @@
+// @ccrc/ui — the Phosphor & Ink design system. The APP consumes source: the
+// consuming app's vite compiles these files, and `exports['.']` points here, so
+// there is no dist for pwa to stale.
+//
+// `npm run build` does emit `dist/`, for one reader only — the /design-sync
+// converter, which bundles a built entry and reads its `.d.ts` tree. Nothing in
+// pwa resolves it. See `.design-sync/NOTES.md`.
+//
+// Styles are one entry point, styles/theme.css, which pulls tokens.css in
+// itself. Import that and nothing else — see the header of that file for why
+// the order is load-bearing.
+export { Button, buttonVariants, type ButtonProps } from './primitives/button';
+export { StatusDot, dotVariants, type StatusDotProps, statusLabel } from './primitives/status-dot';
+export { LimitBar, limitBand, fillVariants, TRACK as LIMIT_TRACK, type LimitBand, type LimitBarProps } from './primitives/limit-bar';
+// The ONE usage meter (D-5098): LimitBar's rows, the accounts strip and screen,
+// and the pickers' gauges all draw through it.
+export { Meter, type MeterProps } from './primitives/meter';
+export { Skeleton, type SkeletonProps } from './primitives/skeleton';
+export { Sheet, type SheetProps } from './primitives/sheet';
+export { CloseButton, type CloseButtonProps } from './primitives/close-button';
+// The popover (D-5934): Radix's, on the layers the Sheet already runs on.
+export { Popover, PopoverTrigger, PopoverClose, PopoverContent, type PopoverContentProps } from './primitives/popover';
+export { OptionRow, type OptionRowProps } from './primitives/option-row';
+export { CollapsibleStrip, type CollapsibleStripProps } from './primitives/collapsible-strip';
+export { Banner, bannerVariants, type BannerProps } from './primitives/banner';
+export {
+  TextInput, TEXT_INPUT, TEXT_INPUT_INLINE, TEXT_INPUT_STACKED, type TextInputProps,
+} from './primitives/text-input';
+export { Select, SELECT, type SelectProps } from './primitives/select';
+export {
+  Radio, RadioFieldset, RADIO_OPTION, RADIO_INPUT, RADIO_SENTENCE, RADIO_FIELDSET, RADIO_LEGEND,
+  type RadioProps, type RadioFieldsetProps,
+} from './primitives/radio';
+export { BackButton, BACK_BUTTON, type BackButtonProps } from './primitives/back-button';
+export { Door, DOOR, DOOR_GLYPH, type DoorProps } from './primitives/door';
+export { Character, type CharacterProps } from './characters/character';
+export { ART, type Tone } from './characters/art';
+export { Icon, type IconName, type IconProps, type IconSize } from './primitives/icon';
+export { Well, WELL, type WellProps } from './primitives/well';
+// The page scaffold (D-5102; the C3 slots D-5666).
+export {
+  PageScaffold, PAGE_HEAD, PAGE_HEAD_ROW, PAGE_CARET, PAGE_TITLE, PAGE_ACTIONS, PAGE_BODY, PAGE_FOCUS_CLEAR, PAGE_NAV_MIN_PX,
+  type PageScaffoldProps,
+} from './primitives/page-scaffold';
+export {
+  Section, SECTION, SECTION_HEAD, SECTION_TITLE, SECTION_SCOPE, SECTION_PURPOSE, SECTION_CARD, type SectionProps,
+} from './primitives/section';
+export { EmptyState, EMPTY_STATE, type EmptyStateProps } from './primitives/empty-state';
+export { Chip, CHIP, CHIP_DOT, type ChipProps } from './primitives/chip';
+export {
+  ControlRow, CONTROL_ROW, CONTROL_ROW_NOTE, type ControlRowProps,
+} from './primitives/control-row';
+export { ListRow, LIST_ROW, type ListRowProps } from './primitives/list-row';
+export { CoverScreen, COVER_SCREEN, type CoverScreenProps } from './primitives/cover-screen';
+export { BareRow, BARE_ROW, type BareRowProps } from './primitives/bare-row';
+export { CountBadge, COUNT_BADGE, type CountBadgeProps } from './primitives/count-badge';
+export { Keycap, KEYCAP, type KeycapProps } from './primitives/keycap';
+// A link inside a line of text, opening another site (D-5550).
+export { TextLink, TEXT_LINK, type TextLinkProps } from './primitives/text-link';
+// The `❯ ccrc` mark, the identity core's first item (D-5094, D-5470).
+export { Wordmark, WORDMARK, type WordmarkProps } from './primitives/wordmark';
+// The ⌘K palette (D-5103): the overlay and its key hint. The commands are the
+// app's registry; this draws them.
+export {
+  CommandPalette, KeyHint, COMMAND_KEY, type CommandPaletteProps, type CommandPaletteOption,
+} from './primitives/command-palette';
+// Two constants with no component of their own: each is a handful of
+// utilities that two or three app rules spelled identically, and wrapping
+// either in a `<span>` would add an element nobody asked for.
+export {
+  MONO_PATH, ATTENTION_DOT, EYEBROW, RESET_LIST,
+  MAIL_GLYPH, WARN_GLYPH, SETTINGS_GLYPH,
+} from './lib/text';
+export { PRESS_FEEDBACK, PRESS_TRANSFORM } from './lib/press';
+export { QuickConfirm, QC_CONSEQUENCE, QC_ACTIONS, useCancelFirst, type QuickConfirmProps } from './primitives/confirm';
+export {
+  toast,
+  ToastHost,
+  setToastSuppressor,
+  type ToastKind,
+  type ToastAction,
+} from './primitives/toast';
+
+// — composites —
+// Built FROM the primitives above, and the line between the two groups is not
+// size: a primitive has no opinion about what it is showing, a composite does.
+// `TypedLabel` knows that a label which CHANGED is the event worth marking.
+export { TypedLabel, TYPE_MS } from './components/typed-label';
+export { AttachButton, type AttachButtonProps } from './components/attach-button';
+export { AttachTray, type AttachTrayProps, type StagedImage } from './components/attach-tray';
+export { MailCard, runLabel } from './components/mail-card';
+export { TaskCard } from './components/task-card';
+export { MailStrip, summarizeMail, heldGate } from './components/mail-strip';
+export {
+  ToolCard,
+  askCardLines,
+  askState,
+  ASK_WORD,
+  ASK_GLYPH,
+  type AskState,
+  type ToolUseEvent,
+  type ToolResultEvent,
+} from './components/tool-card';
+export { TaskStrip, orderTasks, summarize } from './components/task-strip';
+export { WorkflowStrip, formatElapsed, formatTokens, workflowFacts, workflowHeadline } from './components/workflow-strip';
+// `BuildLine` knows that a box whose version it cannot vouch for is the thing
+// to say loudly; it reads a `NodeWire[]` and nothing else.
+export { BuildLine } from './components/build-line';
+// `Prose` is the one composite that renders no tree of its own: what makes
+// prose prose is rules (the seventy-six that moved, and the list markers
+// since), and the app still owns the react-markdown map that decides which
+// element each token becomes.
+export { Prose, PROSE } from './components/prose';
+// — the workbench shell —
+// The desk's five pieces: the session tree, the tab strip, the terminal pane
+// with its phone dock, the account fold and the status line. Each takes plain
+// data and callbacks; every sentence that states app behaviour (state words,
+// reasons, reset and build text) arrives as a prop, and the width of the
+// sidebar column belongs to the shell that places it.
+export { WorkbenchSidebar, type WorkbenchSidebarProps, type WorkbenchSidebarMode, type WorkbenchSection,
+  type WorkbenchSessionItem, type WorkbenchAgentItem, type WorkbenchAccountTag, type WorkbenchStatus } from './components/workbench-sidebar';
+export { WorkbenchTabs, nextAfterClose, type WorkbenchTabsProps, type WorkbenchTabItem, type WorkbenchTabLead } from './components/workbench-tabs';
+export { WorkbenchTerminal, type WorkbenchTerminalProps, type WorkbenchTerminalView, type WorkbenchKey } from './components/workbench-terminal';
+export { WorkbenchAccountRow, hottestWindows, type WorkbenchAccountRowProps, type WorkbenchAccountItem,
+  type WorkbenchUsageWindow } from './components/workbench-account-row';
+export { WorkbenchStatusBar, type WorkbenchStatusBarProps } from './components/workbench-status-bar';
+
+// — themes —
+// The palettes themselves live in styles/tokens.css and are DISCOVERED by the
+// gates; this exports only the labels and the stamping helpers.
+export {
+  THEMES, THEME_STORAGE_KEY, PHOSPHOR, SYSTEM, resolveTheme, applyTheme, type ThemeChoice,
+} from './styles/themes';
+
+// — skins — the third axis (D-5093). The token values live in styles/skins.css;
+// this exports the catalogue, the closed token list and the stamping helpers.
+export {
+  SKINS, SKIN_STORAGE_KEY, SKIN_TOKENS, REFINED, INSTRUMENT, resolveSkin, applySkin,
+  type SkinChoice, type SkinId, type SkinToken, type SkinTokenClass,
+} from './styles/skins';
+// The per-device default (D-5096): the stored "Match this device" choice, the
+// device query, and what a stored value asks for. Exported here because
+// `pwa/src/lib/skin.ts` reads the catalogue through `@ccrc/ui`, and in a
+// statement of its own, leaving the line above as Task 1 wrote it (D-5245).
+export { AUTO, DEVICE_QUERY, skinPreference, type SkinPreference } from './styles/skins';
+
+export { cn } from './lib/cn';
+export { FOCUS_RING } from './lib/focus';
+// Pure utilities the composites above brought with them. `useNow` is the one
+// shared re-render tick for live readouts, and `elapsedWords` the one spelling
+// of "how long has this been going on" — both had app consumers before the
+// migration and keep them, because a second copy of either is the drift
+// `single-definition.test.ts` exists to stop.
+export { useNow } from './lib/use-now';
+export { elapsedWords, elapsedShort } from './lib/elapsed';
+export { prefersReducedMotion, usePrefersReducedMotion } from './lib/use-reduced-motion';
+// The desk width, written once (D-5933): the Sheet's desktop arm and the app's shell read the same reading.
+export { DESK_QUERY, useDesk, useMediaQuery } from './lib/use-media-query';

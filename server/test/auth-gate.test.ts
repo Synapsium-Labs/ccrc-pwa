@@ -27,6 +27,9 @@ import { SESSION_COOKIE, serializeCookie } from '../src/auth/cookie.js';
 import { SessionStore } from '../src/auth/sessions.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import type { PtyLike } from '../src/pty.js';
+import type { FleetWatcher } from '../src/watch.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -61,8 +64,29 @@ const tokenHeader = { 'x-ccrc-mail-token': BOX_TOKEN };
  * were refusing, presenting a token would change nothing.
  */
 const EXEMPT_BUT_AUTHENTICATED = new Set(
-  ['GET /api/feed', 'GET /api/lifecycle', 'GET /api/runs', 'GET /api/runs/:id/items',
-   'GET /api/runs/:id/signals', 'GET /api/peers', 'GET /api/claims', 'GET /api/asks']);
+  ['GET /api/feed', 'GET /api/lifecycle', 'GET /api/runs', 'GET /api/runs/:id', 'GET /api/runs/:id/items',
+   'GET /api/runs/:id/record', 'GET /api/runs/:id/signals', 'GET /api/peers', 'GET /api/claims', 'GET /api/asks',
+   'GET /api/pools/epoch', 'GET /api/updates/intent/:nodeId',
+   // D-7554: the test box's read and its tools sync, `ccrc-api testbox status|tools-sync` cookieless, the PWA with a session.
+   'GET /api/testbox', 'POST /api/testbox/tools-sync',
+   // D-8126: the goals read, `ccrc-api goals show` cookieless from the fleet host, the console with a session.
+   'GET /api/programmes/:slug/goals',
+   // D-8181: the plan read, `ccrc-api plan show` cookieless from the fleet host, the console with a session.
+   'GET /api/programmes/:slug/plan']);
+
+/** DERIVED from `EXEMPT`'s own reason strings, and asserted equal to the
+ *  hand-written set above (review round 1, I3+I4): a NINTH entry — `GET
+ *  /api/pools/epoch` — joined `gate.ts`'s table without this file's own
+ *  hand-kept copy being updated to match, which is exactly why the
+ *  session-cookie arm of its dual credential went unmeasured by the property
+ *  sweep below (it fell into the plain `EXEMPT` branch instead of the
+ *  stronger `EXEMPT_BUT_AUTHENTICATED` one). Pinning the two together here
+ *  means the NEXT entry cannot repeat that silently — either this set is
+ *  updated in the same change, or this test reds and says so by name. */
+const EXEMPT_BUT_AUTHENTICATED_DERIVED = new Set(
+  [...EXEMPT.entries()]
+    .filter(([, reason]) => reason.includes('EXEMPT-BUT-AUTHENTICATED'))
+    .map(([k]) => k));
 
 // ── the scanner ──────────────────────────────────────────────────────────
 
@@ -77,7 +101,38 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-const ROUTES: ScannedRoute[] = [...scanRoutes('server.ts'), ...scanRoutes('coord/routes.ts')];
+/** THIRTEEN files register routes since the test box connect routes (`server/src/testboxAdmin.ts`, plan TC12, D-8166: its two session-only routes); TWELVE since the coordinator call record's door (`server/src/coord/coordCallsRoute.ts`, D-8126: its one box-token route, registered from
+ *  `registerCoordRoutes` and written in a file of its own); ELEVEN since the review-rounds door (`server/src/coord/reviewRoundsRoute.ts`, D-8125); TEN since the reader lab's door (`server/src/readerLab/routes.ts`, the reader lab plan Task 3: its three run routes and the probe pair); NINE since the programme ledgers' PL3 (`server/src/coord/ledgersRoutes.ts`, the coordinator's nine, registered from
+ *  `registerCoordRoutes` but written in a file of their own); EIGHT since the Linear proxy (`server/src/linear/proxyRoutes.ts`, #1444 plan task LK9: its
+ *  thirteen box-token routes since `link`, D-8141); SEVEN since the accounts lane routes (`server/src/accounts/routes.ts`, accounts plan Task A14:
+ *  Check and the kill switch); SIX since named workspaces S4 (`server/src/linear/routes.ts`, its one preview read); FIVE files registered them since the native Docs reader's W3 (design
+ *  2026-10-01 §3.13): `server/src/docs/routes.ts` registers its five on the docs
+ *  plugin's own instance, whose parameter is named `app` so this literal scan
+ *  reads them like any other. FOUR since the box-token lifecycle (spec 4.6):
+ *  `server/src/token/routes.ts` joined the three, after update-management W2
+ *  (design 2026-09-20 §12, D-3179) had put `server/src/update/routes.ts` beside
+ *  the first two.
+ *  The COMPLETE describe below is what says so — it reds the moment a route
+ *  registers from a file this list does not read. */
+const ROUTES: ScannedRoute[] = [
+  ...scanRoutes('server.ts'), ...scanRoutes('coord/routes.ts'), ...scanRoutes('update/routes.ts'),
+  ...scanRoutes('token/routes.ts'),
+  ...scanRoutes('docs/routes.ts'),
+  ...scanRoutes('linear/routes.ts'),
+  ...scanRoutes('coord/ledgersRoutes.ts'),
+  ...scanRoutes('coord/reviewRoundsRoute.ts'),
+  ...scanRoutes('coord/coordCallsRoute.ts'),
+  ...scanRoutes('accounts/routes.ts'),
+  ...scanRoutes('linear/proxyRoutes.ts'),
+  ...scanRoutes('readerLab/routes.ts'),
+  ...scanRoutes('face/routes.ts'),
+  ...scanRoutes('responses/routes.ts'),
+  ...scanRoutes('linking/routes.ts'),
+  ...scanRoutes('testboxAdmin.ts'),
+  ...scanRoutes('coord/planRoutes.ts'),
+  ...scanRoutes('coord/hierarchyRoutes.ts'),
+  ...scanRoutes('continuity/routes.ts'),
+];
 
 /** The three websocket upgrades — the same registrations, told apart by their
  *  `{ websocket: true }` option. They are swept through `injectWS`, not
@@ -103,7 +158,7 @@ const HAS_PWA = existsSync(path.resolve(here, '..', 'dist-pwa', 'index.html'));
 // ── fixtures ─────────────────────────────────────────────────────────────
 
 /** A pty that never touches tmux. REQUIRED, not tidiness: the real `attachPty`
- *  runs `tmux attach -t cc-<id>` on this box, and `/ws/pty/:id` is one of the
+ *  runs `tmux attach -t =cc-<id>:` on this box, and `/ws/pty/:id` is one of the
  *  three sockets swept below. The gate refuses the upgrade before the handler
  *  runs — but the mutation runs that measure this suite DELETE the gate, and a
  *  suite whose mutant spawns tmux against the live box is not a suite anyone can
@@ -121,6 +176,10 @@ interface AppOpts {
   secretText?: string;
   generation?: number;
   cookieSecure?: boolean;
+  /** Give the server a coordination database (in the fixture home) — the routes that answer 501 without one then run their own gates. */
+  coord?: boolean;
+  /** A stand-in watcher, as `buildServer`'s third argument. */
+  watcher?: unknown;
 }
 
 const openApp = async (opts: AppOpts = {}): Promise<{ app: FastifyInstance; home: string }> => {
@@ -145,8 +204,9 @@ const openApp = async (opts: AppOpts = {}): Promise<{ app: FastifyInstance; home
     // the thing this file wants to measure.
     mailToken: BOX_TOKEN,
     spawnPty: stubPty,
+    ...(opts.coord === true ? { coord: new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db'))) } : {}),
   };
-  const app = await buildServer(deps);
+  const app = await buildServer(deps, undefined, opts.watcher as FleetWatcher | undefined);
   await app.ready();
   return { app, home };
 };
@@ -184,7 +244,7 @@ describe('the scanner is looking at something', () => {
   // A scanner that matched zero registrations would make every `it.each` in this
   // file iterate an empty array and report green — the exact failure mode that
   // makes a source-scanning suite worse than no suite. This one fails first.
-  it('found both files, and EXACTLY the route count the surface has', () => {
+  it('found all thirteen files, and EXACTLY the route count the surface has', () => {
     // EXACT, not a floor (review fold-in). A `toBeGreaterThanOrEqual` catches a
     // scanner that broke outright but not one that quietly stops matching SOME
     // registrations — a changed quote style in one file, a verb the regex does
@@ -192,7 +252,32 @@ describe('the scanner is looking at something', () => {
     // precisely the state this whole file exists to make impossible. Adding a
     // route is now a deliberate act that edits these three numbers, with a
     // reviewer looking at them.
-    expect(scanRoutes('server.ts').length).toBe(48);
+    // 52 since D-5047's `POST /api/sessions/:id/dialog/text`, the free-text row's own route beside `/dialog`.
+    // 53 since D-5048's `POST /api/sessions/:id/dialog/multi`, a multiSelect question's own route beside it.
+    // 54 since decision `ask-dialog-tab-route`'s `POST /api/sessions/:id/dialog/tab`, an ask's tab move beside them.
+    // 56 since the daily digest's `GET /api/digest` and `POST /api/digest/correct` (D-5300, plan Task 17): session-gated
+    // when armed, NOT EXEMPT, no box token.
+    // 59 since step-up's three (D-5512, accounts plan Task A5): `POST /api/auth/step-up/start|finish|passphrase`,
+    // session-gated when armed, NOT EXEMPT, no box token, `auth-off` dark (so in `FLAG_AWARE`).
+    // 60 since named workspaces S9's `POST /api/sessions/:id/title` (the workspace rename): session-gated when armed,
+    // NOT EXEMPT, no box token — a rename is as human-driven as a typed prompt.
+    // 59 since W7 C7p (D-7194) retired the operator answer alias `POST /api/sessions/:id/ask`: the question family's
+    // `POST /api/questions/:id/answer` answers it.
+    // 58 since W7 C7p (D-7194) retired the operator answer alias `POST /api/sessions/:id/dialog/multi`: the question family's
+    // `POST /api/questions/:id/answer` answers it.
+    // 57 since W7 C7p (D-7194) retired the operator answer alias `POST /api/sessions/:id/dialog/text`: the question family's
+    // `POST /api/questions/:id/answer` answers it.
+    // 56 since W7 C7p (D-7194) retired the operator answer alias `POST /api/sessions/:id/dialog`: the question family's
+    // `POST /api/questions/:id/answer` answers it.
+    // 57 since the project add's `POST /api/projects` (add-project spec 2026-11-04 §4): session-gated when armed, NOT
+    // EXEMPT, no box token.
+    // 58 since `POST /api/sessions/:id/limit-wait` (D-8123, the operator's "Wait until reset" on a limit the watchdog found no room
+    // for): session-gated like the swap route, NOT EXEMPT, no box token.
+    // 59 since `GET /api/fleet/overrides` (D-8382, Overrides in force and the approvals line): session-gated, NOT EXEMPT,
+    // no box token.
+    // 60 since `GET /api/models/:lane` (D-8406, the session model picker's lane registry read): session-gated, NOT
+    // EXEMPT, no box token.
+    expect(scanRoutes('server.ts').length).toBe(60);
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
     // 23 since `POST /api/runs/:id/reclaim` — the fourth ungated operator door,
@@ -212,7 +297,133 @@ describe('the scanner is looking at something', () => {
     // 29 since `GET /api/runs/:id/signals` (routing slice 0, Task 5) — the
     // run's speed/quality signals, EXEMPT-BUT-AUTHENTICATED same shape as
     // `GET /api/runs`.
-    expect(scanRoutes('coord/routes.ts').length).toBe(29);
+    // 30 since `POST /api/runs/:id/route` (routing spec 2026-09-14 §5.3,
+    // slice 5, Task 2) — the coordinator's door onto the escalation/demotion
+    // ladders, box-token gated like its dispatch/close/advance/items siblings.
+    // 31 since `POST /api/coord/reclaim-pause` (child-reclamation wave 4) — the
+    // operator's switch on automatic child reclamation: `SESSION_ONLY` like the
+    // caps dial, NOT EXEMPT, carrying no box token.
+    // 33 since `GET`/`POST /api/coord/stall-watch` (stall-watch settings W1):
+    // SESSION_ONLY like the caps dial, NOT EXEMPT, no box token.
+    // 35 since `GET`/`POST /api/coord/collect-lane` (child-reclamation wave 10):
+    // SESSION_ONLY like the caps dial, NOT EXEMPT, no box token.
+    // 36 since `POST /api/coordinators/:session/intent` (delegation broker wave 3, Task 15):
+    // a box-token machine lane, EXEMPT like the claim lanes, attribution checked.
+    // 42 since the approvals lane's six (coordinator-first routing, plan Task 16, D-5298): box-token machine lanes,
+    // EXEMPT, the request attributed by the child's own uuid and the claimant's three by theirs.
+    // 43 since `POST /api/coord/review-cap` (D-6795): SESSION_ONLY like the caps dial, NOT EXEMPT, no box token.
+    // 44 since `GET /api/mail/inbox` (mail inbox MI-5, D-6778): box-token gated and attribution-checked, EXEMPT.
+    // 45 on the merge with `GET /api/runs/:id` (D-6799, the run plus its spend): box-token or session, EXEMPT.
+    // 46 since `GET /api/coord/shadow-journal` (D-6861, the unarmed disk lanes' shadow journal): a read, session-gated,
+    // NOT EXEMPT, no box token, its rows masked.
+    // 47 on the merge with `GET /api/coord/review-cap/:id` (D-6910): the operator's read of the review cap's ask,
+    // session-gated like the lift, NOT EXEMPT, no box token.
+    // 50 since the question door family (W3 Q3f, D-7030): 47 + 3. `POST /api/questions/:id/answer`, the operator's,
+    // session-gated, NOT EXEMPT, no box token; `POST /api/questions/:id/rule` and `/release`, the claimant's, box-token
+    // machine lanes, EXEMPT, attribution checked.
+    // 52 since `GET`/`POST /api/coord/dispatch-abandon` (D-7319, the dead-dispatch switch): session-gated, NOT EXEMPT,
+    // no box token.
+    // 54 since `GET`/`POST /api/coord/roll-idle` (D-7453, Settings › Automation › Roll idle sessions): the operator's,
+    // session-gated, NOT EXEMPT, no box token.
+    // 57 since the test box's three doors (test box plan TB9, D-7411, D-7554): `GET /api/testbox` and `POST
+    // /api/testbox/tools-sync`, EXEMPT-BUT-AUTHENTICATED (a session OR the box token); `POST /api/testbox/switch`, the
+    // operator's, session-gated, NOT EXEMPT, no box token.
+    // 58 since landing order wave 5e's `GET /api/landing` (a box-token lane IN EXEMPT, the `GET /api/ledger` convention).
+    // 57 since K5 Q3l (D-7324) retired `POST /api/asks/:id/answer` (a box-token lane IN EXEMPT).
+    // 56 since K5 Q3l (D-7324) retired `POST /api/asks/:id/release` (a box-token lane IN EXEMPT).
+    // 55 since K5 Q3l (D-7324) retired `POST /api/approvals/:id/rule` (a box-token lane IN EXEMPT).
+    // 54 since K5 Q3l (D-7324) retired `POST /api/approvals/:id/release` (a box-token lane IN EXEMPT).
+    // 56 since landing order wave 5f: `POST /api/landing/entries` and `POST /api/landing/order`, two box-token lanes IN EXEMPT.
+    // 57 since `POST /api/coord/pane-scope-stop` (D-7902, Settings › Automation's pane-scope stop switch): the
+    // operator's, session-gated, NOT EXEMPT, no box token.
+    // 59 since `GET`/`POST /api/coord/scope-sweep` (D-7994, the sweep's busy arm switch): session-gated, NOT EXEMPT, no box token.
+    // 62 since delegation wave 5 PR8's lease doors: `POST /api/leases/:lease/retain` (a box-token lane IN EXEMPT) and the
+    // operator's `operator-retain` and `resolve` (session-gated, NOT EXEMPT, no box token).
+    // 63 since D-8071's `GET /api/runs/find` (spec 2026-11-04 §11.4): session-gated, NOT EXEMPT, no box token.
+    // 64 since D-8071's `GET /api/runs/:id/record` (spec §11.5): box-token or session, EXEMPT-BUT-AUTHENTICATED.
+    // 66 since `GET`/`POST /api/coord/delegation-adopt` (D-8112, the delegation lane's adoption switch): session-gated, NOT EXEMPT,
+    // no box token.
+    // 67 since D-8075's `GET /api/programmes` (spec 2026-11-04 §11.6): session-gated, NOT EXEMPT, no box token.
+    // 68 since D-8076's `POST /api/runs/:id/end-request`: a box-token machine lane IN EXEMPT (box token and attribution, no cookie).
+    // 70 since `GET`/`POST /api/coord/run-close` (D-8077, the run-close lanes' three-state control): session-gated, NOT EXEMPT, no box token.
+    // 72 since `GET`/`POST /api/coord/lane-arm` (D-8274, Settings › Automation › Shadow lanes): session-gated, NOT EXEMPT, no box token.
+    // 74 since `GET /api/testbox/builds` and `POST /api/testbox/builds/capture` (D-8289, the trusted Claude Code builds): session-gated,
+    // NOT EXEMPT, no box token.
+    // 76 since `GET`/`POST /api/coord/plain-auto-memory` (Overlord W1a launch profiles PR B, Settings › Automation › Auto memory for
+    // plain sessions): session-gated, NOT EXEMPT, no box token.
+    expect(scanRoutes('coord/routes.ts').length).toBe(76);
+    // 5 in `update/routes.ts` (update-management W2, design 2026-09-20 §12):
+    // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
+    // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
+    // projection read `GET /api/updates/intent/:nodeId`, EXEMPT-BUT-AUTHENTICATED.
+    // 7 since update-management wave 5 (design 2026-09-20 §12) registered the two
+    // moves, `POST /api/updates/apply` and `POST /api/updates/rollback`, beside
+    // them — session-only and NOT EXEMPT like W2's four, no box token at all.
+    expect(scanRoutes('update/routes.ts').length).toBe(7);
+    // 2 in `token/routes.ts` (box-token lifecycle, spec 4.6): `POST /api/token/claim`,
+    // EXEMPT by reason 7 (a door that authenticates by a single-use code it issued
+    // itself), and `POST /api/token/rotate`, session-only and NOT EXEMPT. Neither
+    // consults the box token.
+    expect(scanRoutes('token/routes.ts').length).toBe(2);
+    // 4 in `docs/routes.ts` (the native Docs reader's W3, design 2026-10-01 §3.4
+    // and §3.13): `GET /api/docs/projects`, `GET /api/docs/:project/tree`,
+    // `GET /api/docs/:project/file` and `POST /api/docs/:project/refresh`, on the
+    // docs plugin's own instance. Session-gated and NOT EXEMPT, no box token, not
+    // FLAG_AWARE: with no marker header they answer 403 `foreign-request` dark and
+    // armed-with-a-session alike, so the property loop below compares them as it
+    // compares every other route, and the armed no-cookie sweep sees the gate's 401
+    // first.
+    // 5 since the history route (docs W5b-1, rich-docs spec G4): `GET /api/docs/:project/history`, the same class.
+    expect(scanRoutes('docs/routes.ts').length).toBe(5);
+    // 1 in `linear/routes.ts` (named workspaces S4, design 2026-10-20 §4.2): `GET /api/linear/resolve`, the
+    // ticket-title preview read. Session-gated and NOT EXEMPT, no box token, `Cache-Control: no-store`.
+    // 5 since S4b (design §5.1): the connection's `GET`, `PUT`, `POST …/check` and `DELETE /api/linear/connection`, all
+    // session-gated and NOT EXEMPT, no box token; the PUT and DELETE also take the account gate with a step-up.
+    // 9 since the Settings routes for workspace keys (#1444, plan task LK11, spec §10.1): `GET /api/linear/workspaces`,
+    // `POST /api/linear/workspaces`, `POST …/:id/check` and `DELETE …/:id`, all session-gated and NOT EXEMPT, no box
+    // token; the three acts take the account gate with `cap: null`, the add and the remove with a step-up too.
+    expect(scanRoutes('linear/routes.ts').length).toBe(9);
+    // 9 in `coord/ledgersRoutes.ts` (programme ledgers PL3): the coordinator's item and goals routes, each registered from
+    // `registerCoordRoutes` and each IN EXEMPT as a box-token machine lane (box token and attribution, no cookie). They add nine to the exempt-HTTP count.
+    // 13 since PL4: the operator's four, `GET /api/waiting`, `GET /api/programmes/:slug/goals`, `POST /api/items/:id/tick`
+    // and `POST /api/items/:id/dismiss`, registered from `server.ts` by `registerLedgerOperatorRoutes`, session-gated and NOT EXEMPT, no box token.
+    // 14 since PL6: `PUT /api/items/:id/secret`, the same registration, session-gated and NOT EXEMPT, no box token; it also takes
+    // the account gate with a step-up (a credential act).
+    // 16 since the PL6 follow-up: `GET /api/programmes/:slug/secrets` (the stored-secrets read) and `DELETE
+    // /api/programmes/:slug/secrets/:slot` (the Remove door, the account gate with a step-up), the same registration,
+    // session-gated and NOT EXEMPT, no box token.
+    // 18 since D-8076: `POST /api/items/:id/act` and `POST /api/items/:id/decline`, the same registration, session-gated and NOT EXEMPT,
+    // no box token (the operator's Abandon run and Keep the run on an end-request item).
+    // 19 since D-8194: `GET /api/items/:id`, one item by its id, the same registration, session-gated and NOT EXEMPT, no box token.
+    // 20 since D-8126 (wave A3): `POST /api/calls/:id/seen`, the operator's Seen on a big call, the same registration, session-gated
+    // and NOT EXEMPT, no box token.
+    // 22 since the portfolio (Overlord W1): `GET /api/portfolio` and `POST /api/portfolio/rank`, the same registration,
+    // session-gated and NOT EXEMPT, no box token; the rank door works dark (`flag-off`), so it is not in FLAG_AWARE.
+    // 23 since the answer marks (Overlord W1): `POST /api/answer-marks`, the same registration, session-gated and NOT EXEMPT, no
+    // box token; it works dark (`flag-off`) and answers a bodiless request the same dark or signed in, so it is not in FLAG_AWARE.
+    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(23);
+    // 1 in `coord/coordCallsRoute.ts` (D-8126, wave A3): `POST /api/coord/programmes/:slug/calls`, a box-token machine lane IN EXEMPT.
+    expect(scanRoutes('coord/coordCallsRoute.ts').length).toBe(1);
+    // 3 in `accounts/routes.ts` (accounts plan Task A14, D-7732): `POST /api/accounts/:id/check`, `/enable` and
+    // `/disable`, session-gated and NOT EXEMPT, no box token; each takes the account gate on the `account-v2` cap.
+    // 8 since the write routes (accounts plan Task A17, D-7739): `POST /api/accounts`, `/:id/credential`, `/:id/set`,
+    // `/:id/remove` and `/api/accounts/revoke-ack` (N6, D-7738), session-gated and NOT EXEMPT, no box token.
+    // 12 since the sign-in routes (accounts plan Task A21, D-7793): `POST /api/accounts/:id/auth/start`, `GET …/auth`,
+    // `POST …/auth/code` and `POST …/auth/cancel`, session-gated and NOT EXEMPT, no box token; each takes the account
+    // gate on the `account-auth-v1` cap.
+    expect(scanRoutes('accounts/routes.ts').length).toBe(12);
+    // 12 in `linear/proxyRoutes.ts` (#1444, plan task LK9, spec §6): one per `ccrc-api linear` verb, every one a
+    // box-token lane IN EXEMPT whose own `onRequest` refuses every token verdict but `ok` whatever the flag says.
+    // 13 since `link` (D-8141), `POST /api/linear/proxy/issues/:id/links`.
+    expect(scanRoutes('linear/proxyRoutes.ts').length).toBe(13);
+    // 5 in `readerLab/routes.ts` (the reader lab plan, Task 3): `POST /api/reader-lab/runs`, `GET …/runs/:nonce` and
+    // `POST …/runs/:nonce/close`, session-gated and NOT EXEMPT; `GET` and `POST /api/reader-lab/probe/:nonce/:name`, IN
+    // EXEMPT under reason 8. None consults the box token.
+    expect(scanRoutes('readerLab/routes.ts').length).toBe(5);
+    // 2 in `face/routes.ts` (the Overlord face plan, Task 6): `GET` and `POST /api/face`, session-gated and NOT EXEMPT, no box token.
+    expect(scanRoutes('face/routes.ts').length).toBe(2);
+    // 1 in `responses/routes.ts` (Overlord W1 responses A): `POST /api/responses/receipts`, session-gated and NOT EXEMPT, no box token.
+    expect(scanRoutes('responses/routes.ts').length).toBe(1);
     // The `server.ts` half moved too, and NOT on that ladder: 47 since
     // `POST /api/projects/:project/pool` (account pools wave 3, task 9) — the
     // project-pool tag write, registered in `server.ts` rather than in
@@ -228,17 +439,235 @@ describe('the scanner is looking at something', () => {
     // thing it must not be is liftable by a caller who never signed in. Its
     // own docstring argues the absent `knownId` gate, which is a different
     // question from this one.
+    // 49 since `POST /api/sessions/:id/route` (routing spec 2026-09-14 §5.3,
+    // slice 4, Task 5) — the PWA pickers' write: the SAME shape a third time,
+    // registered in `server.ts`, NOT EXEMPT (its own docstring says so, and
+    // `sessions-route-route.test.ts` pins the absence) and carrying NO box
+    // token — a picker tap is as human-driven as a typed prompt, so it is
+    // session-gated like `POST /api/sessions/:id/prompt` beside it.
     //
     // THE TWO HALVES MOVED ON DIFFERENT BRANCHES, and this line is why the
-    // arithmetic is spelled out rather than carried. This wave took the
+    // arithmetic is spelled out rather than carried. The drawer wave took the
     // `server.ts` half 47 -> 48 and left `coord/routes.ts` where it was;
     // routing slice 0 took `coord/routes.ts` 28 -> 29 and left `server.ts`
     // where it was. Each branch read 76 and neither was wrong. Git saw the same
-    // 75 -> 76 edit on both sides and auto-merged this assertion to 76 with no
+    // 75 -> 76 edit on both sides and auto-merged that assertion to 76 with no
     // marker on it — the one line that is false on the merged tree is the one
-    // line the merge would not have shown. 48 + 29 = 77, a number no parent
-    // ever measured. Re-derived here, not chosen from a side.
-    expect(ROUTES.length).toBe(77);
+    // line the merge would not have shown.
+    //
+    // IT HAPPENED AGAIN, on the 2026-09-16 merge of `origin/main` into routing
+    // slice 4, and the same way: routing slice 4 took `server.ts` 47 -> 48 with
+    // `POST /api/sessions/:id/route` while main took the SAME half 47 -> 48
+    // with `GET /api/sessions/:id/pane/history`. Both sides read 48 and 76, so
+    // nothing conflicted and the merge carried a number neither parent's tree
+    // has: the merged `server.ts` registers BOTH routes, 49. Re-derived here on
+    // the merged tree, not taken from a side — 49 + 29 = 78, and routing
+    // slice 5's own `POST /api/runs/:id/route` took `coord/routes.ts` 29 -> 30,
+    // so the merged tree now reads 49 + 30 = 79.
+    //
+    // 51 since account-pool-membership wave 1 task 7 added TWO to `server.ts`:
+    // `POST /api/pools/accounts/:id`, NOT EXEMPT and carrying no box token —
+    // the same "fleet control, not a coordination write" stance as
+    // `POST /api/projects/:project/pool` above — and `GET /api/pools/epoch`,
+    // EXEMPT-BUT-AUTHENTICATED (the `GET /api/feed` shape: a session for the
+    // PWA, the box token for `ccd-pool-sync.timer`). `coord/routes.ts` is
+    // untouched by this task, so 49 -> 51 and 79 -> 81.
+    // 86 since update-management W2 put the third file's five beside the two
+    // files' 51 + 30: 81 -> 86.
+    //
+    // 87 since child-reclamation wave 4's `POST /api/coord/reclaim-pause`
+    // (the route whose own comment sits above): registered in `coord/routes.ts`, so that half
+    // moved 30 -> 31 and `server.ts` stayed at 51 — 51 + 31 + 5 = 87. Its home is
+    // not taste: in `server.ts` it would sit outside the literal
+    // `coord-pause-route.test.ts`'s `SESSION_ONLY` census scans.
+    // 88 since update-management wave 5's two moves joined the third file:
+    // 51 + 30 + 7, 86 -> 88 on main.
+    //
+    // 89 on the merge of that main into child-reclamation wave 4, re-derived on
+    // the merged tree, not taken from a side: wave 4 took `coord/routes.ts`
+    // 30 -> 31 and main took the third file 5 -> 7, so 51 + 31 + 7 = 89.
+    //
+    // 91 since `GET`/`POST /api/coord/stall-watch` (stall-watch settings W1):
+    // SESSION_ONLY like the caps dial, NOT EXEMPT, no box token — `coord/routes.ts`
+    // 31 -> 33, so 51 + 33 + 7 = 91.
+    //
+    // 95 since the native Docs reader's W3 put its four beside the first three files'
+    // routes, re-derived on the tree that registered them: 51 + 33 + 7 + 4 = 95.
+    // 93 since the box-token lifecycle registered its claim door and "Rotate now"
+    // from `token/routes.ts`: 51 + 33 + 7 + 2 = 93, the HTTP half 88 -> 90.
+    // 97 with both, re-derived on the merge of the two: 51 + 33 + 7 + 2 + 4 = 97.
+    // The docs four are HTTP routes and none is EXEMPT, so the HTTP count moves
+    // 90 -> 94, the gated count 57 -> 61, and the exempt-HTTP count stays 33.
+    // 99 since `GET`/`POST /api/coord/collect-lane` (child-reclamation wave 10) put
+    // two more in `coord/routes.ts`: 51 + 35 + 7 + 2 + 4 = 99. Both are HTTP routes
+    // and neither is EXEMPT, so the HTTP count is now 96, the gated count 63, and
+    // the exempt-HTTP count stays 33.
+    // 98 since D-5047's `POST /api/sessions/:id/dialog/text` (session-gated like `/dialog`, NOT EXEMPT, no box token):
+    // 52 + 33 + 7 + 2 + 4 = 98, the HTTP half 94 -> 95, the gated count 61 -> 62, the exempt-HTTP count still 33.
+    // 99 since D-5048's `POST /api/sessions/:id/dialog/multi` (session-gated like `/dialog`, NOT EXEMPT, no box token):
+    // 53 + 33 + 7 + 2 + 4 = 99, the HTTP half 95 -> 96, the gated count 62 -> 63, the exempt-HTTP count still 33.
+    // 101 on the merge of main into child-reclamation wave 10, re-derived on the merged tree:
+    // 53 + 35 + 7 + 2 + 4 = 101, the HTTP half 98, the gated count 65, the exempt-HTTP count still 33.
+    // 102 since `POST /api/coordinators/:session/intent` (delegation broker wave 3, Task 15), a box-token machine lane that IS
+    // in EXEMPT, re-derived on the merge of that wave with main's 101: 53 + 36 + 7 + 2 + 4 = 102, the HTTP half 98 -> 99,
+    // the gated count stays 65, the exempt-HTTP count 33 -> 34.
+    // 102 since decision `ask-dialog-tab-route`'s `POST /api/sessions/:id/dialog/tab` (session-gated like `/dialog`,
+    // NOT EXEMPT, no box token): 54 + 35 + 7 + 2 + 4 = 102, the HTTP half 99, the gated count 66, exempt still 33.
+    // 103 on the merge of that wave with main's 102, re-derived on the merged tree: 54 + 36 + 7 + 2 + 4 = 103, the HTTP half 100,
+    // the gated count 66, the exempt-HTTP count 34.
+    // 109 since the approvals lane's six (plan Task 16, D-5298), each a box-token machine lane IN EXEMPT:
+    // 54 + 42 + 7 + 2 + 4 = 109, the HTTP half 106, the gated count stays 66, the exempt-HTTP count 34 -> 40.
+    // 111 since the daily digest's two (plan Task 17, D-5300), session-gated and NOT EXEMPT:
+    // 56 + 42 + 7 + 2 + 4 = 111, the HTTP half 108, the gated count 66 -> 68, the exempt-HTTP count stays 40.
+    // 114 since step-up's three (D-5512, accounts plan Task A5), session-gated and NOT EXEMPT:
+    // 59 + 42 + 7 + 2 + 4 = 114, the HTTP half 111, the gated count 68 -> 71, the exempt-HTTP count stays 40.
+    // 115 since named workspaces S4's `GET /api/linear/resolve` (session-gated, NOT EXEMPT, no box token):
+    // 59 + 42 + 7 + 2 + 4 + 1 = 115, the HTTP half 112, the gated count 71 -> 72, the exempt-HTTP count stays 40.
+    // 119 since named workspaces S4b's four connection routes (session-gated, NOT EXEMPT, no box token):
+    // 59 + 42 + 7 + 2 + 4 + 5 = 119, the HTTP half 116, the gated count 72 -> 76, the exempt-HTTP count stays 40.
+    // 120 since named workspaces S9's `POST /api/sessions/:id/title` (session-gated, NOT EXEMPT, no box token):
+    // 60 + 42 + 7 + 2 + 4 + 5 = 120, the HTTP half 117, the gated count 76 -> 77, the exempt-HTTP count stays 40.
+    // 121 since `POST /api/coord/review-cap` (D-6795), session-gated, NOT EXEMPT, no box token:
+    // 60 + 43 + 7 + 2 + 4 + 5 = 121, the HTTP half 118, the gated count 77 -> 78, the exempt-HTTP count stays 40.
+    // 122 since `GET /api/mail/inbox` (mail inbox MI-5, D-6778): 60 + 44 + 7 + 2 + 4 + 5 = 122,
+    // the HTTP half 119, the exempt-HTTP count 40 -> 41.
+    // 123 since `GET /api/runs/:id` (D-6799, the run plus its spend; box-token or session, EXEMPT-BUT-AUTHENTICATED):
+    // 60 + 45 + 7 + 2 + 4 + 5 = 123, the HTTP half 120, the gated count stays 78, the exempt-HTTP count 41 -> 42.
+    // 124 since `GET /api/coord/shadow-journal` (D-6861), session-gated, NOT EXEMPT, no box token:
+    // 60 + 46 + 7 + 2 + 4 + 5 = 124, the HTTP half 121, the gated count 78 -> 79, the exempt-HTTP count stays 42.
+    // 125 on the merge with `GET /api/coord/review-cap/:id` (D-6910, session-gated, NOT EXEMPT, no box token):
+    // 60 + 47 + 7 + 2 + 4 + 5 = 125, the HTTP half 122, the gated count 79 -> 80, the exempt-HTTP count stays 42.
+    // 128 since the question door family (W3 Q3f, D-7030): 60 + 50 + 7 + 2 + 4 + 5 = 128, the HTTP half 122 -> 125, the
+    // gated count 80 -> 81 (the operator's `/answer`), the exempt-HTTP count 42 -> 44 (the claimant's `/rule`, `/release`).
+    // 130 since `GET`/`POST /api/coord/dispatch-abandon` (D-7319): 60 + 52 + 7 + 2 + 4 + 5 = 130, the HTTP half 125 -> 127,
+    // the gated count 81 -> 83, the exempt-HTTP count stays 44.
+    // 132 since `GET`/`POST /api/coord/roll-idle` (D-7453): 60 + 54 + 7 + 2 + 4 + 5 = 132, the HTTP half 127 -> 129, the
+    // gated count 83 -> 85, the exempt-HTTP count stays 44.
+    // 131 since W7 C7p (D-7194) retired `POST /api/sessions/:id/ask` (session-gated, NOT EXEMPT, no box token): 59 in `server.ts`, the HTTP
+    // half 129 -> 128, the gated count 85 -> 84, the exempt-HTTP count stays 44.
+    // 130 since W7 C7p (D-7194) retired `POST /api/sessions/:id/dialog/multi` (session-gated, NOT EXEMPT, no box token): 58 in `server.ts`, the HTTP
+    // half 128 -> 127, the gated count 84 -> 83, the exempt-HTTP count stays 44.
+    // 129 since W7 C7p (D-7194) retired `POST /api/sessions/:id/dialog/text` (session-gated, NOT EXEMPT, no box token): 57 in `server.ts`, the HTTP
+    // half 127 -> 126, the gated count 83 -> 82, the exempt-HTTP count stays 44.
+    // 128 since W7 C7p (D-7194) retired `POST /api/sessions/:id/dialog` (session-gated, NOT EXEMPT, no box token): 56 in `server.ts`, the HTTP
+    // half 126 -> 125, the gated count 82 -> 81, the exempt-HTTP count stays 44.
+    // 131 since the test box's three doors (D-7411, D-7554): 56 + 57 + 7 + 2 + 4 + 5 = 131, the HTTP half 125 -> 128, the
+    // gated count 81 -> 82 (the switch), the exempt-HTTP count 44 -> 46 (the read and the sync).
+    // 132 since landing order wave 5e's `GET /api/landing` (a box-token lane IN EXEMPT): 56 + 58 + 7 + 2 + 4 + 5 = 132, the HTTP half 128 -> 129, the gated count stays 82, the exempt-HTTP count 46 -> 47.
+    // 131 since K5 Q3l (D-7324) retired `POST /api/asks/:id/answer` (a box-token lane IN EXEMPT): the HTTP half 129 -> 128,
+    // the gated count stays 82, the exempt-HTTP count 47 -> 46.
+    // 130 since K5 Q3l (D-7324) retired `POST /api/asks/:id/release` (a box-token lane IN EXEMPT): the HTTP half 128 -> 127,
+    // the gated count stays 82, the exempt-HTTP count 46 -> 45.
+    // 129 since K5 Q3l (D-7324) retired `POST /api/approvals/:id/rule` (a box-token lane IN EXEMPT): the HTTP half 127 -> 126,
+    // the gated count stays 82, the exempt-HTTP count 45 -> 44.
+    // 128 since K5 Q3l (D-7324) retired `POST /api/approvals/:id/release` (a box-token lane IN EXEMPT): the HTTP half 126 -> 125,
+    // the gated count stays 82, the exempt-HTTP count 44 -> 43.
+    // 131 since the accounts lane routes' three (accounts plan Task A14, D-7732), session-gated and NOT EXEMPT, no box
+    // token: the HTTP half 125 -> 128, the gated count 82 -> 85, the exempt-HTTP count stays 43.
+    // 143 since the Linear proxy's twelve (#1444, plan task LK9), box-token lanes IN EXEMPT: the HTTP half 128 -> 140,
+    // the gated count stays 85, the exempt-HTTP count 43 -> 55.
+    // 148 since the accounts write routes' five (accounts plan Task A17, D-7739), session-gated and NOT EXEMPT, no box
+    // token: the HTTP half 140 -> 145, the gated count 85 -> 90, the exempt-HTTP count stays 55.
+    // 157 since the programme ledgers' PL3 on top: nine box-token lanes in a ninth file, `coord/ledgersRoutes.ts`, each IN EXEMPT; the
+    // other files' counts are unchanged, the total 148 -> 157, the HTTP half 145 -> 154, the gated count stays 90, the exempt-HTTP count 55 -> 64.
+    // 161 since the Settings routes for workspace keys' four (#1444, plan task LK11), session-gated and NOT EXEMPT, no box
+    // token: the HTTP half 154 -> 158, the gated count 90 -> 94, the exempt-HTTP count stays 64.
+    // 165 since PL4 on top: the operator's four routes in `coord/ledgersRoutes.ts`, session-gated and NOT EXEMPT, no box token: the
+    // total 161 -> 165, the HTTP half 158 -> 162, the gated count 94 -> 98, the exempt-HTTP count stays 64.
+    // 169 since the accounts sign-in routes' four (accounts plan Task A21, D-7793), session-gated and NOT EXEMPT, no box
+    // token: the HTTP half 162 -> 166, the gated count 98 -> 102, the exempt-HTTP count stays 64.
+    // 170 since programme ledgers PL6's `PUT /api/items/:id/secret`, session-gated and NOT EXEMPT, no box token: the HTTP half
+    // 166 -> 167, the gated count 102 -> 103, the exempt-HTTP count stays 64.
+    // 172 since the PL6 follow-up's two, the stored-secrets read and the Remove door, session-gated and NOT EXEMPT, no
+    // box token: the HTTP half 167 -> 169, the gated count 103 -> 105, the exempt-HTTP count stays 64.
+    // 174 since landing order wave 5f on top: the two box-token landing writes, the HTTP half 169 -> 171, the gated count stays 105, the exempt-HTTP count 64 -> 66.
+    // 175 since the project add's `POST /api/projects` (add-project spec 2026-11-04 §4), session-gated and NOT EXEMPT, no
+    // box token: the HTTP half 171 -> 172, the gated count 105 -> 106, the exempt-HTTP count stays 66.
+    // 177 since `GET`/`POST /api/coord/scope-sweep` (D-7994), session-gated and NOT EXEMPT, no box token: the HTTP half
+    // 172 -> 174, the gated count 106 -> 108, the exempt-HTTP count stays 66.
+    // 182 since the reader lab's door (the reader lab plan, Task 3), in a tenth file: three session-gated routes, NOT EXEMPT,
+    // and the probe pair, IN EXEMPT (gate.ts reason 8), no box token: the HTTP half 174 -> 179, the gated count 108 -> 111,
+    // the exempt-HTTP count 66 -> 68.
+    // 183 since `POST /api/coord/pane-scope-stop` (D-7902), session-gated and NOT EXEMPT, no box token: the HTTP half
+    // 179 -> 180, the gated count 111 -> 112, the exempt-HTTP count stays 68.
+    // 186 since delegation wave 5 PR8's three lease doors: retain IN EXEMPT (a box-token lane), operator-retain and resolve
+    // session-gated and NOT EXEMPT, no box token: the HTTP half 180 -> 183, the gated count 112 -> 114, the exempt-HTTP count 68 -> 69.
+    // 187 since D-8071's `GET /api/runs/find`: session-gated, NOT EXEMPT: the HTTP half 183 -> 184.
+    // 188 since D-8071's `GET /api/runs/:id/record`: box-token or session, EXEMPT-BUT-AUTHENTICATED: the HTTP half 184 -> 185, the exempt-HTTP count 69 -> 70.
+    // 190 since `GET`/`POST /api/coord/delegation-adopt` (D-8112), session-gated and NOT EXEMPT, no box token: the HTTP half
+    // 185 -> 187, the gated count 115 -> 117, the exempt-HTTP count stays 70.
+    // 191 since D-8075's `GET /api/programmes`: session-gated, NOT EXEMPT: the HTTP half 187 -> 188.
+    // 192 since `POST /api/sessions/:id/limit-wait` (D-8123), session-gated and NOT EXEMPT, no box token: the HTTP half
+    // 188 -> 189, the gated count 117 -> 118, the exempt-HTTP count stays 70.
+    // 193 since `POST /api/runs/:id/review-rounds` (D-8125): a box-token machine lane, EXEMPT like the claim lanes, attribution
+    // checked; the HTTP half 189 -> 190, the gated count stays 118, the exempt-HTTP count 70 -> 71.
+    // 194 since `POST /api/linear/proxy/issues/:id/links` (D-8141): a box-token lane IN EXEMPT; the HTTP half 190 -> 191, the gated
+    // count stays 118, the exempt-HTTP count 71 -> 72.
+    // 195 since D-8076's `POST /api/runs/:id/end-request`: a box-token lane IN EXEMPT: the HTTP half 191 -> 192, the exempt-HTTP count 72 -> 73.
+    // 197 since D-8076's `POST /api/items/:id/act` and `/decline`: the operator's two, session-gated and NOT EXEMPT: the HTTP half 192 -> 194, the gated count 118 -> 120, the exempt count stays 73.
+    // 199 since `GET`/`POST /api/coord/run-close` (D-8077), session-gated and NOT EXEMPT, no box token: the HTTP half 194 -> 196, the
+    // gated count 120 -> 122, the exempt-HTTP count stays 73.
+    // 200 since `POST /api/projects/:project/linking` (D-8147), in `linking/routes.ts`: session-gated, NOT EXEMPT, no box token: the
+    // HTTP half 196 -> 197, the gated count 122 -> 123, the exempt-HTTP count stays 73.
+    // 201 since `GET /api/linking` (D-8147): a box-token lane IN EXEMPT; the HTTP half 197 -> 198, the gated count stays 123, the
+    // exempt-HTTP count 73 -> 74.
+    // 202 since `POST /api/projects/:project/pr-template` (D-8147), in `linking/routes.ts`: session-gated, NOT EXEMPT, no box token: the
+    // HTTP half 198 -> 199, the gated count 123 -> 124, the exempt-HTTP count stays 74.
+    // D-8126's goals read (registered already) joins EXEMPT-BUT-AUTHENTICATED (a session or the box token): the route count stays 202,
+    // the gated count 124 -> 123 and the exempt-HTTP count 74 -> 75.
+    // 203 since `GET /api/items/:id` (D-8194), one item by its id: session-gated, NOT EXEMPT, no box token: the HTTP half 199 -> 200,
+    // the gated count 123 -> 124, the exempt-HTTP count stays 75.
+    // 204 since D-8126's `POST /api/coord/programmes/:slug/calls` (`coord/coordCallsRoute.ts`), a box-token machine lane IN EXEMPT: the HTTP half
+    // 200 -> 201, the gated count stays 124, the exempt-HTTP count 75 -> 76.
+    // 205 since D-8126's `POST /api/calls/:id/seen` (`coord/ledgersRoutes.ts`), session-gated and NOT EXEMPT, no box token: the HTTP half
+    // 201 -> 202, the gated count 124 -> 125, the exempt-HTTP count stays 76.
+    // 207 since `GET`/`POST /api/coord/lane-arm` (D-8274, Settings › Automation › Shadow lanes), session-gated and NOT EXEMPT, no box
+    // token: the HTTP half 202 -> 204, the gated count 125 -> 127, the exempt-HTTP count stays 76.
+    // 209 since `GET /api/testbox/admin` and `POST /api/testbox/admin/:sub` (D-8166, plan TC12), in `testboxAdmin.ts`: session-only and
+    // NOT EXEMPT, no box token; each takes the account gate on the `testbox-admin-v1` cap, the POST with a step-up on four subs: the HTTP
+    // half 204 -> 206, the gated count 127 -> 129, the exempt-HTTP count stays 76.
+    // 216 since the plan verbs' seven (D-8181), in `coord/planRoutes.ts`: `GET /api/programmes/:slug/plan` is EXEMPT-BUT-AUTHENTICATED
+    // and the six POSTs are box-token machine lanes IN EXEMPT: the HTTP half 206 -> 213, the gated count stays 129, the exempt-HTTP
+    // count 76 -> 83.
+    // 219 since the hierarchy settings' three (D-8181), in `coord/hierarchyRoutes.ts`: `GET /api/hierarchy` and the two POSTs are
+    // session-gated and NOT EXEMPT, no box token: the HTTP half 213 -> 216, the gated count 129 -> 132, the exempt-HTTP count stays 83.
+    // 221 since `GET /api/testbox/builds` and `POST /api/testbox/builds/capture` (D-8289), session-gated and NOT EXEMPT, no box token:
+    // the HTTP half 216 -> 218, the gated count 132 -> 134, the exempt-HTTP count stays 83.
+    // 222 since `GET /api/fleet/overrides` (D-8382), session-gated and NOT EXEMPT, no box token: the HTTP half 218 -> 219, the
+    // gated count 134 -> 135, the exempt-HTTP count stays 83.
+    // 223 since `GET /api/models/:lane` (D-8406), session-gated and NOT EXEMPT, no box token: the HTTP half 219 -> 220, the
+    // gated count 135 -> 136, the exempt-HTTP count stays 83.
+    // 224 since `POST /api/sessions/:id/start` (Overlord W1a, the start report), in `continuity/routes.ts`: a box-token machine
+    // lane IN EXEMPT: the HTTP half 220 -> 221, the gated count stays 136, the exempt-HTTP count 83 -> 84.
+    // 226 since `GET /api/face` and `POST /api/face` (the Overlord face plan, Task 6), session-gated and NOT EXEMPT, no box token:
+    // the HTTP half 221 -> 223, the gated count 136 -> 138, the exempt-HTTP count stays 84.
+    // 227 since `GET /api/sessions/:id/card` (Overlord W1a, the card piece), in `continuity/routes.ts`: a box-token machine
+    // lane IN EXEMPT: the HTTP half 223 -> 224, the gated count stays 138, the exempt-HTTP count 84 -> 85.
+    // 229 since `GET`/`POST /api/coord/plain-auto-memory` (Overlord W1a launch profiles PR B), session-gated and NOT EXEMPT, no box
+    // token: the HTTP half 224 -> 226, the gated count 138 -> 140, the exempt-HTTP count stays 85.
+    // 232 since the note door (Overlord W1a, the notes piece), in `continuity/routes.ts`: `POST` and `GET
+    // /api/sessions/:id/notes` and `POST /api/sessions/:id/handover`, three box-token machine lanes IN EXEMPT: the HTTP half
+    // 226 -> 229, the gated count stays 140, the exempt-HTTP count 85 -> 88.
+    // 237 since the timer doors (Overlord W1a, the timers piece), in `continuity/routes.ts`: the session's three box-token
+    // lanes IN EXEMPT and the operator's two, session-gated and NOT EXEMPT: the HTTP half 229 -> 234, the gated count
+    // 140 -> 142, the exempt-HTTP count 88 -> 91.
+    // 239 since the probe door (Overlord W1a, the probes piece), in `continuity/routes.ts`: `GET` and `POST
+    // /api/sessions/:id/probe`, two box-token machine lanes IN EXEMPT: the HTTP half 234 -> 236, the gated count stays 142, the
+    // exempt-HTTP count 91 -> 93.
+    // 241 since the portfolio (Overlord W1, 2026-11-15), in `coord/ledgersRoutes.ts`: `GET /api/portfolio` and `POST
+    // /api/portfolio/rank`, session-gated and NOT EXEMPT, no box token: the HTTP half 236 -> 238, the gated count 142 -> 144,
+    // the exempt-HTTP count stays 93.
+    // 242 since `GET /api/docs/:project/history` (docs W5b-1), session-gated and NOT EXEMPT, no box token: the HTTP half
+    // 238 -> 239, the gated count 144 -> 145, the exempt-HTTP count stays 93.
+    // 243 since the loads door (Overlord W1 sandbox), in `continuity/routes.ts`: `POST /api/sessions/:id/start/loads`, one
+    // box-token machine lane IN EXEMPT: the HTTP half 239 -> 240, the gated count stays 145, the exempt-HTTP count 93 -> 94.
+    // 244 since the answer marks (Overlord W1, 2026-11-16), in `coord/ledgersRoutes.ts`: `POST /api/answer-marks`, session-gated
+    // and NOT EXEMPT, no box token: the HTTP half 240 -> 241, the gated count 145 -> 146, the exempt-HTTP count stays 94.
+    // 245 since the receipts door (Overlord W1 responses A), in `responses/routes.ts`: `POST /api/responses/receipts`,
+    // session-gated and NOT EXEMPT, no box token: the HTTP half 241 -> 242, the gated count 146 -> 147, the exempt-HTTP count
+    // stays 94.
+    expect(ROUTES.length).toBe(245);
+    expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -260,6 +689,14 @@ describe('the scanner is looking at something', () => {
     for (const k of [
       'GET /health', 'POST /api/notify', 'POST /api/mail', 'GET /api/mail/:id',
       'POST /api/runs', 'GET /api/runs', 'GET /api/feed', 'POST /api/coord/pause',
+      'POST /api/coord/reclaim-pause',
+      'GET /api/coord/stall-watch', 'POST /api/coord/stall-watch',
+      'GET /api/coord/collect-lane', 'POST /api/coord/collect-lane',
+      'GET /api/coord/shadow-journal',
+      'GET /api/coord/dispatch-abandon', 'POST /api/coord/dispatch-abandon',
+      'GET /api/coord/scope-sweep', 'POST /api/coord/scope-sweep',
+      'GET /api/coord/delegation-adopt', 'POST /api/coord/delegation-adopt',
+      'GET /api/coord/run-close', 'POST /api/coord/run-close',
       'POST /api/sessions/:id/prompt', 'GET /ws/fleet', 'GET /ws/pty/:id',
       'POST /api/auth/login', 'POST /api/auth/logout', 'GET /api/auth/status',
       // Task 8's four, which split TWO ways under the gate: the register pair is
@@ -272,6 +709,44 @@ describe('the scanner is looking at something', () => {
       // server, which is exactly why `scanRoutes`' regex has always matched all
       // five shorthands rather than the two in use.
       'GET /api/auth/passkeys', 'DELETE /api/auth/passkey/:id',
+      // The third file's five (update-management W2): a scanner that stopped
+      // reading `update/routes.ts` would lose all of them at once.
+      'GET /api/updates', 'POST /api/updates/intent', 'POST /api/updates/refresh',
+      'POST /api/updates/ack', 'GET /api/updates/intent/:nodeId',
+      // …and wave 5's two moves, which the same lost-file failure would drop with them.
+      'POST /api/updates/apply', 'POST /api/updates/rollback',
+      // …and the fourth file's two (box-token lifecycle), lost together if `token/routes.ts` stopped being read.
+      'POST /api/token/claim', 'POST /api/token/rotate',
+      // The fifth file's four (the native Docs reader's W3): a scanner that stopped
+      // reading `docs/routes.ts` would lose all of them at once, the refresh POST too.
+      'GET /api/docs/projects', 'GET /api/docs/:project/tree', 'GET /api/docs/:project/file',
+      'POST /api/docs/:project/refresh',
+      'GET /api/docs/:project/history',
+      // The sixth file's one (named workspaces S4): a scanner that stopped reading `linear/routes.ts` would lose it.
+      'GET /api/linear/resolve',
+      // …and its four Settings routes for workspace keys (#1444, plan task LK11), lost with it.
+      'GET /api/linear/workspaces', 'POST /api/linear/workspaces', 'POST /api/linear/workspaces/:id/check',
+      'DELETE /api/linear/workspaces/:id',
+      // The eighth file's thirteen (the Linear proxy, #1444): lost together if `linear/proxyRoutes.ts` stopped being read.
+      'GET /api/linear/proxy/workspaces', 'GET /api/linear/proxy/teams', 'GET /api/linear/proxy/issues/:id',
+      'POST /api/linear/proxy/search', 'GET /api/linear/proxy/issues/:id/comments', 'GET /api/linear/proxy/statuses',
+      'GET /api/linear/proxy/projects', 'GET /api/linear/proxy/labels', 'GET /api/linear/proxy/users',
+      'POST /api/linear/proxy/issues', 'POST /api/linear/proxy/issues/:id', 'POST /api/linear/proxy/issues/:id/comments',
+      'POST /api/linear/proxy/issues/:id/links',
+      // The ninth file's nine (programme ledgers PL3): a scanner that stopped reading `coord/ledgersRoutes.ts` would lose them all.
+      'POST /api/programmes/:slug/items', 'GET /api/programmes/:slug/items', 'POST /api/items/:id/confirm',
+      'POST /api/items/:id/return', 'POST /api/items/:id/withdraw', 'POST /api/items/:id/blocking',
+      'POST /api/programmes/:slug/spec', 'POST /api/programmes/:slug/modifications',
+      'POST /api/programmes/:slug/modifications/merged',
+      // The eleventh file's one (the coordinator call record, D-8126): lost if `coord/coordCallsRoute.ts` stopped being read.
+      'POST /api/coord/programmes/:slug/calls',
+      // The tenth file's five (the reader lab's door): a scanner that stopped reading `readerLab/routes.ts` would lose them all.
+      'POST /api/reader-lab/runs', 'GET /api/reader-lab/runs/:nonce', 'POST /api/reader-lab/runs/:nonce/close',
+      'GET /api/reader-lab/probe/:nonce/:name', 'POST /api/reader-lab/probe/:nonce/:name',
+      // The face door's two (the Overlord face plan, Task 6): a scanner that stopped reading `face/routes.ts` would lose both.
+      'GET /api/face', 'POST /api/face',
+      // The receipts door (Overlord W1 responses A): lost if `responses/routes.ts` stopped being read.
+      'POST /api/responses/receipts',
     ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
     // Both a GET and a POST on the same path, which is the case a path-only
     // exempt table would get wrong (the POST is a box-token machine lane, the
@@ -369,7 +844,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 77 scanned + the static wildcard when the bundle is built.
+    // 245 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -410,7 +885,7 @@ describe('EXEMPT is complete in both directions', () => {
     }
   });
 
-  it('exempts exactly the six classes the plan names — nothing has crept in', () => {
+  it('exempts exactly the eight classes the plan names — nothing has crept in', () => {
     // The whole set, spelled out, so that adding an exemption is a deliberate act
     // that edits this list with a reviewer looking at it. 30 = /health + the 15
     // hard-token coordination lanes + /api/notify + login + status + the SPA shell
@@ -432,41 +907,132 @@ describe('EXEMPT is complete in both directions', () => {
     // exactly one wave, the same hand-kept-count defect one paragraph up. A
     // breakdown beside the list it describes is the one place a reader checks
     // the list against, so it being wrong is worse than it being absent.
+    // 31 since `POST /api/runs/:id/route` (routing spec 2026-09-14 §5.3,
+    // slice 5, Task 2) joined the plain box-token lanes.
+    // 32 since `GET /api/pools/epoch` (account-pool-membership wave 1 task 7)
+    // joined the exempt-but-authenticated class, the ninth member — the same
+    // dual-credential shape as `GET /api/feed`: `ccd-pool-sync.timer` reads it
+    // cookieless from the fleet host, the PWA reads it with a session.
+    // `POST /api/pools/accounts/:id`, task 7's other new route, is
+    // DELIBERATELY NOT here — same stance as `POST /api/projects/:project/pool`
+    // above: session-gated when armed, no box token, fleet control rather
+    // than a coordination write.
+    // 33 since `GET /api/updates/intent/:nodeId` (update-management W2, design
+    // 2026-09-20 §12) joined the exempt-but-authenticated class, the tenth
+    // member and the `GET /api/pools/epoch` shape again: from W4 a fleet node's
+    // `ccd-update-sync.timer` pulls it cookieless, the PWA reads it with a
+    // session. The four other update routes are DELIBERATELY NOT here —
+    // session-gated when armed, no box token at all (decision 15).
+    // The Linear proxy's twelve (#1444, plan task LK9) joined the plain box-token lanes, reason 2: a fleet-host session's
+    // `ccrc-api linear` verbs, no cookie jar, the token refused in each route's own onRequest whatever the flag says.
+    // 34 since `POST /api/token/claim` (box-token lifecycle, spec 4.6) opened the
+    // SEVENTH class: a door that authenticates by a single-use code it issued
+    // itself. Its sibling `POST /api/token/rotate` is DELIBERATELY NOT here —
+    // session-only, the console's "Rotate now", like every update write.
+    // The reader lab's probe pair (the reader lab plan, Task 3) opened the EIGHTH class: a probe that authenticates nobody
+    // and grants nothing, answering one empty 204 and counting arrivals for a run a session opened (gate.ts reason 8).
+    // The three run routes beside it are DELIBERATELY NOT here: opening, reading and closing a run need a session.
     expect([...EXEMPT.keys()].sort()).toEqual([
       'GET /*',
+      'GET /api/approvals/:id',
+      'GET /api/approvals/:id/ruling',
+      'GET /api/approvals/key',
       'GET /api/asks',
       'GET /api/auth/status',
       'GET /api/claims',
       'GET /api/feed',
+      'GET /api/landing',
       'GET /api/ledger',
       'GET /api/lifecycle',
+      'GET /api/linear/proxy/issues/:id',
+      'GET /api/linear/proxy/issues/:id/comments',
+      'GET /api/linear/proxy/labels',
+      'GET /api/linear/proxy/projects',
+      'GET /api/linear/proxy/statuses',
+      'GET /api/linear/proxy/teams',
+      'GET /api/linear/proxy/users',
+      'GET /api/linear/proxy/workspaces',
+      'GET /api/linking',
       'GET /api/mail',
       'GET /api/mail/:id',
+      'GET /api/mail/inbox',
       'GET /api/peers',
+      'GET /api/pools/epoch',
+      'GET /api/programmes/:slug/goals',
+      'GET /api/programmes/:slug/items',
+      'GET /api/programmes/:slug/plan',
+      'GET /api/reader-lab/probe/:nonce/:name',
       'GET /api/runs',
+      'GET /api/runs/:id',
       'GET /api/runs/:id/items',
+      'GET /api/runs/:id/record',
       'GET /api/runs/:id/signals',
+      'GET /api/sessions/:id/card',
+      'GET /api/sessions/:id/notes',
+      'GET /api/sessions/:id/probe',
+      'GET /api/testbox',
+      'GET /api/timers',
+      'GET /api/updates/intent/:nodeId',
       'GET /health',
-      'POST /api/asks/:id/answer',
-      'POST /api/asks/:id/release',
+      'POST /api/approvals',
       'POST /api/auth/login',
       'POST /api/auth/passkey/assert/finish',
       'POST /api/auth/passkey/assert/start',
       'POST /api/claims',
       'POST /api/claims/:id/release',
+      'POST /api/coord/programmes/:slug/calls',
+      'POST /api/coordinators/:session/intent',
+      'POST /api/items/:id/blocking',
+      'POST /api/items/:id/confirm',
+      'POST /api/items/:id/return',
+      'POST /api/items/:id/withdraw',
+      'POST /api/landing/entries', 'POST /api/landing/order',
+      // Delegation wave 5 PR8: a lease parent's Retain, box-token gated, cookieless through `ccrc-api` (gate.ts reason 2).
+      'POST /api/leases/:lease/retain',
       'POST /api/ledger/deviations',
+      'POST /api/linear/proxy/issues',
+      'POST /api/linear/proxy/issues/:id',
+      'POST /api/linear/proxy/issues/:id/comments',
+      'POST /api/linear/proxy/issues/:id/links',
+      'POST /api/linear/proxy/search',
       'POST /api/mail',
       'POST /api/mail/:id/ack',
       'POST /api/notify',
+      'POST /api/programmes/:slug/items',
+      'POST /api/programmes/:slug/modifications',
+      'POST /api/programmes/:slug/modifications/merged',
+      'POST /api/programmes/:slug/plan',
+      'POST /api/programmes/:slug/plan/close',
+      'POST /api/programmes/:slug/plan/epics/drop',
+      'POST /api/programmes/:slug/plan/met',
+      'POST /api/programmes/:slug/plan/tickets',
+      'POST /api/programmes/:slug/plan/tickets/move',
+      'POST /api/programmes/:slug/spec',
+      'POST /api/questions/:id/release',
+      'POST /api/questions/:id/rule',
+      'POST /api/reader-lab/probe/:nonce/:name',
       'POST /api/runs',
       'POST /api/runs/:id/advance',
       'POST /api/runs/:id/close',
       'POST /api/runs/:id/dispatch',
+      'POST /api/runs/:id/end-request',
       'POST /api/runs/:id/items',
+      'POST /api/runs/:id/review-rounds',
+      'POST /api/runs/:id/route',
+      'POST /api/sessions/:id/handover',
+      'POST /api/sessions/:id/notes',
+      'POST /api/sessions/:id/probe',
+      'POST /api/sessions/:id/start',
+      'POST /api/sessions/:id/start/loads',
+      'POST /api/testbox/tools-sync',
+      'POST /api/timers',
+      'POST /api/timers/:id/cancel',
+      'POST /api/token/claim',
     ]);
     // `/api/auth/logout` is the auth route that is NOT here — logging out is
     // something only a logged-in caller can do.
     expect(EXEMPT.has('POST /api/auth/logout')).toBe(false);
+    expect(EXEMPT.has('POST /api/token/rotate')).toBe(false);
     // AND THE TASK 8 SPLIT, asserted as its own clause rather than left implicit
     // in the list above: ENROLLING A KEY IS GATED. An exempt register route
     // would let anyone on the tailnet register their own authenticator and log
@@ -477,7 +1043,19 @@ describe('EXEMPT is complete in both directions', () => {
     expect(EXEMPT.has('POST /api/auth/passkey/register/finish')).toBe(false);
   });
 
-  it('the twenty-three box-token lanes in EXEMPT are those coord routes, and twenty-four with notify', () => {
+  it('EXEMPT_BUT_AUTHENTICATED (the property sweep\'s hand-kept set) equals what gate.ts actually declares', () => {
+    // Review round 1, I3+I4: `gate.ts` grew a NINTH exempt-but-authenticated
+    // entry (`GET /api/pools/epoch`) and this file's own hand-kept set stayed
+    // at eight — nothing pinned the two together, so the property sweep below
+    // silently fell back to treating the new route as a PLAIN exempt route
+    // (dark-vs-anonymous only) instead of the stronger class (anonymous MUST
+    // be 401), and the session-cookie arm of its dual credential went
+    // untested. Comparing SETS, not sizes: a size-only check would pass if
+    // one name were swapped for another.
+    expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
+  });
+
+  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and eighty-five with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the call record, the plan lanes, the start report, the loads report, the card door, the note door, the timer doors and the probe door', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -495,6 +1073,12 @@ describe('EXEMPT is complete in both directions', () => {
       const body = coord.slice(at, end);
       return /requireMailToken\(req/.test(body) || /checkMailToken\(/.test(body);
     }).map((h) => h.k);
+    // TWENTY-FIVE since `POST /api/coordinators/:session/intent` (delegation broker wave 3, Task 15) joined the plain box-token
+    // lanes: a session declares its own coordinator intent through `ccrc-api`, attribution checked, never session-only.
+    // TWENTY-FOUR since `POST /api/runs/:id/route` (routing spec 2026-09-14
+    // §5.3, slice 5, Task 2) joined the plain box-token lanes: the
+    // coordinator's door onto the escalation/demotion ladders, never a
+    // session-only write.
     // TWENTY-THREE since `GET /api/runs/:id/signals` (routing slice 0, Task 5)
     // joined the same dual-credential class: the coordinator skill reads a
     // run's speed/quality signals cookieless from the fleet host, same shape
@@ -525,23 +1109,148 @@ describe('EXEMPT is complete in both directions', () => {
     // stated justification is a gate the route does not actually have is the
     // worst kind of hole.
     expect(gated.sort()).toEqual([
-      'GET /api/asks', 'GET /api/claims', 'GET /api/feed', 'GET /api/ledger', 'GET /api/lifecycle', 'GET /api/mail',
-      'GET /api/mail/:id', 'GET /api/peers', 'GET /api/runs', 'GET /api/runs/:id/items', 'GET /api/runs/:id/signals',
-      'POST /api/asks/:id/answer', 'POST /api/asks/:id/release',
-      'POST /api/claims', 'POST /api/claims/:id/release', 'POST /api/ledger/deviations',
+      'GET /api/approvals/:id', 'GET /api/approvals/:id/ruling', 'GET /api/approvals/key',
+      'GET /api/asks', 'GET /api/claims', 'GET /api/feed', 'GET /api/landing', 'GET /api/ledger', 'GET /api/lifecycle', 'GET /api/mail',
+      'GET /api/mail/:id', 'GET /api/mail/inbox', 'GET /api/peers', 'GET /api/runs', 'GET /api/runs/:id', 'GET /api/runs/:id/items', 'GET /api/runs/:id/record', 'GET /api/runs/:id/signals',
+      'GET /api/testbox',
+      'POST /api/approvals',
+      'POST /api/claims', 'POST /api/claims/:id/release', 'POST /api/coordinators/:session/intent', 'POST /api/landing/entries',
+      'POST /api/landing/order', 'POST /api/leases/:lease/retain', 'POST /api/ledger/deviations',
       'POST /api/mail', 'POST /api/mail/:id/ack',
+      // W3 Q3f (D-7030): the question family's claimant pair, box-token lanes like the four doors they share cores with.
+      'POST /api/questions/:id/release', 'POST /api/questions/:id/rule',
       'POST /api/runs', 'POST /api/runs/:id/advance', 'POST /api/runs/:id/close',
-      'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/items',
+      'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/end-request', 'POST /api/runs/:id/items', 'POST /api/runs/:id/route',
+      // TB9 (D-7554): the test box's sync takes the box token as the fallback, the `GET /api/runs` shape (its read is above).
+      'POST /api/testbox/tools-sync',
     ]);
     for (const k of gated) expect(EXEMPT.has(k), `${k} is box-token gated but not EXEMPT`).toBe(true);
-    // …and `/api/notify`, the twenty-third lane, which lives in server.ts
+    // …and `/api/notify`, the twenty-fourth lane, which lives in server.ts
     // (D-1242: this comment used to call it the eighteenth, double-counting
     // the coord routes' own eighteen — since corrected once already for
     // `POST /api/asks/:id/answer` joining the nineteen, again for `POST
     // /api/asks/:id/release` joining the twenty, again for `GET /api/asks`
-    // joining the twenty-one, and now for `GET /api/feed` joining the twenty-two).
+    // joining the twenty-one, again for `GET /api/feed` joining the
+    // twenty-two, again for `GET /api/runs/:id/signals` joining the
+    // twenty-three, and now for `POST /api/runs/:id/route` joining the
+    // twenty-four).
     expect(server).toContain('checkMailToken(deps.mailToken');
     expect(EXEMPT.has('POST /api/notify')).toBe(true);
+    // …and the update projection read, which lives in `update/routes.ts` — the
+    // third file this sweep reads since update-management W2: session first, the
+    // box token as the fallback, exactly the `GET /api/pools/epoch` shape.
+    const update = readFileSync(path.join(srcRoot, 'update/routes.ts'), 'utf8');
+    expect(update).toContain('checkMailToken(deps.mailToken');
+    expect(EXEMPT.has('GET /api/updates/intent/:nodeId')).toBe(true);
+    // …and the Linear proxy's thirteen, in `linear/proxyRoutes.ts` (#1444): each registration passes its own token verdict
+    // to the route's onRequest, and every one is EXEMPT.
+    const proxy = readFileSync(path.join(srcRoot, 'linear/proxyRoutes.ts'), 'utf8');
+    const proxyRoutes = [...proxy.matchAll(/app\.(get|post)\('([^']+)'/g)].map((m, i, all) => ({
+      k: `${m[1]!.toUpperCase()} ${m[2]!}`, body: proxy.slice(m.index!, all[i + 1]?.index ?? proxy.length),
+    }));
+    expect(proxyRoutes).toHaveLength(13);
+    for (const { k, body } of proxyRoutes) {
+      expect(body, `${k} consults no box token`).toMatch(/checkMailToken\(/);
+      expect(EXEMPT.has(k), `${k} is box-token gated but not EXEMPT`).toBe(true);
+    }
+  });
+});
+
+// ── the coordinator intent door (delegation broker wave 3, Task 15) ───────────────────────────────────────────────────
+
+describe('the coordinator intent door: exempt from the session gate, and not for lack of a lock', () => {
+  const KEY = 'POST /api/coordinators/:session/intent';
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('is in EXEMPT, with a reason that names the box token and the registry attribution it stands on', () => {
+    expect(EXEMPT.has(KEY), 'a fleet session with no cookie jar calls it; unexempted it is dead the moment the flag arms').toBe(true);
+    const reason = EXEMPT.get(KEY)!;
+    expect(reason).toContain('box-token gated');
+    expect(reason).toContain('attribution');
+    expect(reason, 'it hard-requires the token; it is not the dual-credential class').not.toContain('EXEMPT-BUT-AUTHENTICATED');
+    expect(EXEMPT_BUT_AUTHENTICATED.has(KEY)).toBe(false);
+  });
+
+  it('is not one of the ungated release valves, and not a session-only write either', () => {
+    const pause = readFileSync(path.join(here, 'coord-pause-route.test.ts'), 'utf8');
+    for (const name of ['UNGATED', 'SESSION_ONLY']) {
+      const m = new RegExp(`const ${name} = new Set\\(\\[([^\\]]*)\\]\\)`).exec(pause);
+      expect(m, `the ${name} literal moved`).not.toBeNull();
+      expect(m![1]).not.toContain('/api/coordinators/');
+    }
+  });
+
+  it('with the gate ARMED and the lane configured, a missing or wrong token gets the ROUTE\'s own 401 (no gate verdict), and nothing is touched', async () => {
+    let applierCalls = 0;
+    const watcher = { stop: () => undefined, serverCapsSettled: async () => {}, delegationApplier: () => { applierCalls++; return Promise.resolve(null); } };
+    const w = await openApp({ coord: true, watcher }); app = w.app;
+    mkdirSync(path.join(w.home, '.cc-sessions'), { recursive: true });         // an EMPTY registry: a sender with no row is unknown
+    const payload = { action: 'set', byId: 'demo-ws', byUuid: 'u' };
+    for (const headers of [{}, { 'x-ccrc-mail-token': 'not-the-box-token' }] as Array<Record<string, string>>) {
+      const res = await app.inject({ method: 'POST', url: '/api/coordinators/demo-ws/intent', headers, payload });
+      expect(res.statusCode, JSON.stringify(headers)).toBe(401);
+      const body = JSON.parse(res.body) as Record<string, unknown>;
+      expect(body.error).toBe('unauthenticated');
+      expect(body, 'the SESSION gate answered a route that is EXEMPT from it').not.toHaveProperty('verdict');
+      expect(gateRefused(res)).toBe(false);
+    }
+    expect(applierCalls, 'a refused token reached the lane').toBe(0);
+    // With the box token and no cookie the gate lets the call through to the route's own checks (this fixture home has no registry
+    // row for the sender, so attribution refuses it before the lane is reached).
+    const ok = await app.inject({ method: 'POST', url: '/api/coordinators/demo-ws/intent', headers: { 'x-ccrc-mail-token': BOX_TOKEN }, payload });
+    expect(gateRefused(ok)).toBe(false);
+    expect(ok.statusCode).toBe(403);
+    expect(JSON.parse(ok.body)).toMatchObject({ ok: false, error: 'unknown-sender' });
+    expect(applierCalls).toBe(0);
+  });
+});
+
+// ── the attributed landing writes (landing order wave 5f) ─────────────────────────────────────────────────────────────
+
+describe('the landing write doors: exempt from the session gate, and the route still requires the box token', () => {
+  const KEYS = ['POST /api/landing/entries', 'POST /api/landing/order'] as const;
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('are plain EXEMPT box-token lanes: not dual-credential, not session-only, not ungated', () => {
+    const pause = readFileSync(path.join(here, 'coord-pause-route.test.ts'), 'utf8');
+    for (const k of KEYS) {
+      expect(EXEMPT.has(k), k).toBe(true);
+      expect(EXEMPT.get(k)).toContain('box-token gated');
+      expect(EXEMPT.get(k), k).not.toContain('EXEMPT-BUT-AUTHENTICATED');
+      expect(EXEMPT_BUT_AUTHENTICATED.has(k), k).toBe(false);
+    }
+    for (const name of ['UNGATED', 'SESSION_ONLY']) {
+      const m = new RegExp(`const ${name} = new Set\\(\\[([^\\]]*)\\]\\)`).exec(pause);
+      expect(m, `the ${name} literal moved`).not.toBeNull();
+      expect(m![1]).not.toContain('/api/landing/');
+    }
+  });
+
+  it('with the gate ARMED: no token is the route\'s own 401, a session cookie alone does not stand in for it, and the token without a cookie reaches attribution', async () => {
+    const w = await openApp({ coord: true }); app = w.app;
+    const cookie = await login(app);
+    mkdirSync(path.join(w.home, '.cc-sessions'), { recursive: true });          // an EMPTY registry: a sender with no row is unknown
+    const payloads = {
+      'POST /api/landing/entries': { byId: 'lane-a', byUuid: 'u', project: 'project-a', pr: 11, pinnedSha: 'a'.repeat(40), handoffCommit: 'b'.repeat(40) },
+      'POST /api/landing/order': { byId: 'lane-a', byUuid: 'u', project: 'project-a', pr: 11, fixesMain: true },
+    };
+    for (const k of KEYS) {
+      const url = k.slice('POST '.length);
+      const payload = payloads[k];
+      for (const headers of [{}, { cookie }, { 'x-ccrc-mail-token': 'not-the-box-token' }, { cookie, 'x-ccrc-mail-token': 'not-the-box-token' }] as Array<Record<string, string>>) {
+        const res = await app.inject({ method: 'POST', url, headers, payload });
+        expect(res.statusCode, `${k} ${Object.keys(headers).join('+') || 'bare'}`).toBe(401);
+        expect(res.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
+        expect(res.json(), 'the SESSION gate answered a route that is EXEMPT from it').not.toHaveProperty('verdict');
+        expect(gateRefused(res)).toBe(false);
+      }
+      const ok = await app.inject({ method: 'POST', url, headers: { 'x-ccrc-mail-token': BOX_TOKEN }, payload });
+      expect(gateRefused(ok), k).toBe(false);
+      expect(ok.statusCode, k).toBe(403);
+      expect(ok.json()).toMatchObject({ ok: false, error: 'unknown-sender' });
+    }
   });
 });
 
@@ -610,6 +1319,18 @@ describe('with the gate ARMED and no cookie', () => {
       expect(verdictOf(res)).toBe('no-session');
     });
 
+  // D-6910: the box token never reaches either review-cap route. A gated route ignores the header, so the token alone
+  // is refused exactly as no credential is: no machine lane composes the ask or lifts a cap. The cap's counts and times
+  // do reach a token holder, as `reviewCap` on `GET /api/runs` and `GET /api/runs/:id`; they hold no secret, so this
+  // gate is posture, not confidentiality.
+  it.each([['GET', '/api/coord/review-cap/7'], ['POST', '/api/coord/review-cap']] as const)(
+    '%s %s refuses the box token alone', async (method, url) => {
+      const w = await openApp(); app = w.app;
+      const res = await app.inject({ method, url, headers: tokenHeader, ...(method === 'POST' ? { payload: { run: 7 } } : {}) });
+      expect(gateRefused(res), `${method} ${url} answered ${res.statusCode}`).toBe(true);
+      expect(verdictOf(res)).toBe('no-session');
+    });
+
   it.each(WS_ROUTES)('the %s upgrade is refused before any socket exists', async (route) => {
     const w = await openApp(); app = w.app;
     // `injectWS` resolves only on a `101`; a non-101 rejects with the status in
@@ -664,7 +1385,10 @@ describe('with the gate ARMED and no cookie', () => {
       expect(gateRefused(res)).toBe(true);
       return;
     }
-    for (const url of ['/', '/index.html', '/sessions/deep/link']) {
+    // A Docs page URL (design 2026-10-01 §3.13) is a shell URL too: `/docs/...` is a
+    // page the SPA routes, never a server route, so a signed-out hard load of a shared
+    // link must reach the login screen rather than the gate's refusal.
+    for (const url of ['/', '/index.html', '/sessions/deep/link', '/docs/example-project/specs/x.md?ref=ws/example']) {
       const res = await app.inject({ method: 'GET', url });
       expect(gateRefused(res), `${url} was refused — the login screen cannot load`).toBe(false);
       expect(res.statusCode, url).toBe(200);
@@ -718,6 +1442,34 @@ describe('the exempt check is set membership on the MATCHED ROUTE, not the raw u
   });
 });
 
+// D-5936 (spec 2026-10-20 §4.5): the workflow control verb is the operator's door, so it is never exempt. The row is
+// written before the route (D-5937) registers it: a key that names it, or a pattern that would match it, reds here.
+describe('the workflow control verb is never exempt (D-5936)', () => {
+  const ROUTE = 'POST /api/sessions/:id/workflows/:runId/control';
+  const URL = '/api/sessions/project-a/workflows/wf_fixture01/control';
+  /** A Fastify route pattern as a whole-path matcher: `:param` is one segment, `*` is any tail. */
+  const patternRe = (url: string): RegExp => new RegExp(
+    `^${url.split(/(:[A-Za-z_]\w*|\*)/).map((p) => (p === '*' ? '.*' : p.startsWith(':') ? '[^/]+' : p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('')}$`);
+
+  it('no `EXEMPT` key matches `POST /api/sessions/:id/workflows/:runId/control`', () => {
+    expect(exemptKey('POST', '/api/sessions/:id/workflows/:runId/control')).toBe(ROUTE);
+    expect(EXEMPT.has(ROUTE)).toBe(false);
+    const hits = [...EXEMPT.keys()].filter((k) => {
+      const [method, url] = [k.slice(0, k.indexOf(' ')), k.slice(k.indexOf(' ') + 1)];
+      return method === 'POST' && (patternRe(url).test(URL) || patternRe(url).test(ROUTE.slice(5)));
+    });
+    expect(hits, 'an EXEMPT key reaches the workflow control verb').toEqual([]);
+  });
+
+  it('the matcher above sees a key that would exempt it, so the row cannot pass for want of looking', () => {
+    for (const k of [ROUTE, 'POST /api/sessions/:sid/workflows/:run/control', 'POST /api/sessions/*']) {
+      const url = k.slice(k.indexOf(' ') + 1);
+      expect(patternRe(url).test(URL), k).toBe(true);
+    }
+    expect(patternRe('/api/sessions/:id/workflows').test(URL)).toBe(false);
+  });
+});
+
 // ── the flag: dark by default ────────────────────────────────────────────
 
 describe('with CCRC_AUTH off — the shipped default', () => {
@@ -742,9 +1494,31 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // The revocation pair, same reasoning: with no session gate there is nothing
     // to enrol into, so there is nothing to list or revoke either.
     'GET /api/auth/passkeys', 'DELETE /api/auth/passkey/:id',
+    // Step-up's three (D-5512, accounts plan Task A5): with no session gate there is
+    // no session to step up, so all three answer `501 auth-off` dark.
+    'POST /api/auth/step-up/start', 'POST /api/auth/step-up/finish', 'POST /api/auth/step-up/passphrase',
+    // The Linear connection's two credential writes (named workspaces S4b): they take the account gate, whose first
+    // refusal is `auth-off` (501) dark and whose step-up refusal is `step-up-required` (403) armed with a session
+    // that has not stepped up, so dark and authenticated differ BY DESIGN, as they do for the step-up routes.
+    'PUT /api/linear/connection', 'DELETE /api/linear/connection',
+    // The revoke checklist's tick (N6, D-7738; accounts plan Task A17): it takes the account gate with `cap: null`, as it
+    // runs no ccd verb, so dark it answers `auth-off` (501) and armed with a session it reads its body (400 for none),
+    // which differ BY DESIGN. The other write routes ask the `account-v2` cap, which the sweep's fixture fleet does not
+    // advertise, so they answer `unsupported` (501) armed, as they do dark, and stay in the comparison.
+    'POST /api/accounts/revoke-ack',
+    // The Settings routes' three key acts (#1444, plan task LK11, spec §10.1): each takes the account gate with
+    // `cap: null`, whose first refusal is `auth-off` (501) dark. Armed with a session that has not stepped up, the add
+    // and the remove answer `step-up-required` (403); the check asks for no step-up and reaches its handler, which, with
+    // no journal in the sweep's deps, answers `linear-unavailable` (503). Dark and authenticated differ BY DESIGN.
+    'POST /api/linear/workspaces', 'POST /api/linear/workspaces/:id/check', 'DELETE /api/linear/workspaces/:id',
+    // The secret's route (programme ledgers plan PL6): it takes the account gate with `cap: null` and a step-up, so dark it
+    // answers `auth-off` (501) and armed with a session that has not stepped up `step-up-required` (403): BY DESIGN.
+    'PUT /api/items/:id/secret',
+    // The stored secret's Remove door (the PL6 follow-up): the same gate and step-up, so the same two answers: BY DESIGN.
+    'DELETE /api/programmes/:slug/secrets/:slot',
   ]);
 
-  it('FLAG_AWARE is exactly those eight — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those nineteen — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -760,13 +1534,24 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // prevent, arrived at by automation.
     expect([...FLAG_AWARE].sort()).toEqual([
       'DELETE /api/auth/passkey/:id',
+      'DELETE /api/linear/connection',
+      'DELETE /api/linear/workspaces/:id',
+      'DELETE /api/programmes/:slug/secrets/:slot',
       'GET /api/auth/passkeys',
+      'POST /api/accounts/revoke-ack',
       'POST /api/auth/login',
       'POST /api/auth/logout',
       'POST /api/auth/passkey/assert/finish',
       'POST /api/auth/passkey/assert/start',
       'POST /api/auth/passkey/register/finish',
       'POST /api/auth/passkey/register/start',
+      'POST /api/auth/step-up/finish',
+      'POST /api/auth/step-up/passphrase',
+      'POST /api/auth/step-up/start',
+      'POST /api/linear/workspaces',
+      'POST /api/linear/workspaces/:id/check',
+      'PUT /api/items/:id/secret',
+      'PUT /api/linear/connection',
     ]);
     // …and both really are exempt-or-gated as the loop below assumes: login is
     // EXEMPT (the door), logout is GATED (only a logged-in caller can log out).
@@ -775,7 +1560,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 74 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 242 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -839,7 +1624,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 74 HTTP routes, not the 29 exempt.
+          //    is not itself flag-aware — the assertion that covers all 242 HTTP routes, not the 94 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

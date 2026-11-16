@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta http-equiv="Content-Security-Policy" content="frame-src 'none'" />
     <meta name="description" content="Drive your Claude Code fleet from anywhere." />
     <!-- --bg-page (tokens.css) for both themes; lib/theme.ts keeps the plain
          meta in sync with the applied theme after boot.
@@ -22,6 +23,17 @@
          the bundle loads and paint the page background immediately. Values
          mirror --bg-page in tokens.css (which can't be loaded yet). -->
     <style>
+      /* The cascade-layer order, stated before any built stylesheet loads: the
+         first @layer the document meets fixes it. A chunk shared by the entry
+         and a lazily loaded one (Export's builder) carries @ccrc/ui's component
+         rules in a sheet Vite links ahead of index.css, and would open
+         `@layer components` first, ranking it below base and utilities. The
+         order is Tailwind 4's `properties` layer (the first block its built
+         sheet emits, the --tw-* defaults, so it must stay lowest) followed by
+         ui/src/styles/theme.css's own @layer statement. test/layer-order.test.ts
+         holds the rest equal to theme.css, and test/fonts-built.test.ts holds
+         the first name equal to the built entry sheet's first layer (D-7891). */
+      @layer properties, theme, base, components, utilities;
       html {
         background: #0b0d0c;
       }
@@ -30,15 +42,79 @@
       }
     </style>
     <script>
+      // Pre-paint theme stamp. A STORED choice wins; with none, follow the OS
+      // between the two Phosphor palettes — which is what this did before
+      // themes became selectable.
+      //
+      // Deliberately NOT validated against the theme catalogue: that list
+      // lives in the bundle, which has not loaded yet, and duplicating it here
+      // is the second copy `single-definition` forbids. An unknown value
+      // stamps an attribute no block answers, every token falls through to
+      // :root, and `initTheme` corrects it the moment the bundle runs — one
+      // frame, no wrong-palette persistence. The ONE thing this must not do is
+      // throw: storage is unreadable in a private window, and an exception
+      // here is a blank app.
+      //
+      // The <style> above only knows the two Phosphor backgrounds, so a pinned
+      // third-party palette shows one frame of Phosphor's ground before its
+      // own stylesheet lands. Accepted: the alternative is eleven more bound
+      // literals in this file for a single frame.
       try {
-        if (matchMedia('(prefers-color-scheme: light)').matches)
-          document.documentElement.setAttribute('data-theme', 'light');
+        var t = null;
+        try { t = localStorage.getItem('ccrc-theme'); } catch {}
+        if (t === null || t === '' || t === 'system') {
+          if (matchMedia('(prefers-color-scheme: light)').matches)
+            document.documentElement.setAttribute('data-theme', 'light');
+        } else if (t !== 'phosphor') {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+      } catch {}
+    </script>
+    <script>
+      // Pre-paint skin stamp (D-5093), on the theme snippet's terms above.
+      // The skin is ALWAYS stamped, Refined included: the stored value
+      // verbatim, or the device's default when nothing is stored, the value is
+      // empty, or it is "Match this device".
+      //
+      // Deliberately NOT validated against the skin catalogue, for the theme
+      // snippet's reason: the list is in the bundle, and a copy here is the
+      // second copy `single-definition` forbids. An unknown value matches no
+      // block in skins.css, so the first frame renders :root — which IS
+      // Refined — and `initSkin` stamps its resolution when the bundle runs.
+      // On a desk that resolution is Instrument (an unknown id asks for "Match
+      // this device"), so there an unknown stored value paints Refined for one
+      // frame before Instrument (D-6721). Rare (a hand edit, or a move back
+      // from a build with a newer skin) and accepted: a fix needs the
+      // catalogue in this snippet, the copy `single-definition` forbids.
+      //
+      // The device's default (D-5096): Instrument on a pointer that can hover
+      // and is fine, Refined on everything else — by primary input, never by
+      // width, and read once, here and in initSkin, never subscribed to. The
+      // flag below mirrors Instrument's `preview` in skins.ts (it is the
+      // negation): Instrument is no longer a preview (S18), so it is true; were
+      // Instrument a preview again, the rule would answer Refined on every device.
+      // A commit that changes `preview` must change it too, and the test reds
+      // until it does.
+      // A missing or throwing matchMedia means not a desk. This never throws.
+      // The key, the choice, the query, both results and the flag are bound
+      // to skins.ts by test/skin-boot.test.tsx, which also runs this script.
+      try {
+        var AUTO_DESK = true;
+        var s = null;
+        var desk = false;
+        try { s = localStorage.getItem('ccrc-skin'); } catch {}
+        if (s === null || s === '' || s === 'auto') {
+          try { desk = AUTO_DESK && matchMedia('(hover: hover) and (pointer: fine)').matches === true; } catch {}
+          s = desk ? 'instrument' : 'refined';
+        }
+        document.documentElement.setAttribute('data-skin', s);
       } catch {}
     </script>
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="ccrc" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
     <title>ccrc</title>

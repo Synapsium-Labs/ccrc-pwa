@@ -1,0 +1,329 @@
+// The route table (D-5466, W2 Task S2b): every path the shell routes, once.
+//
+// `app.tsx`'s ladder matches a path against this table and nothing else, the palette's "Go to" commands are derived
+// from its `top` rows (`command/commands.ts`), Instrument's top bar doors read its titles, and the parity test walks it.
+// A route added later is added here, once; `app.test.tsx` holds the table and the ladder to each other both ways.
+//
+// Pure: no store, no DOM.
+import { shapeProgramSlug } from '../../../shared/api';
+
+export interface Route {
+  /** Stable, and the suffix of the route's "Go to" command (`go-${id}`). */
+  readonly id: string;
+  readonly pattern: RegExp;
+  /** The route's name as a person reads it: a "Go to" title, a door's word. */
+  readonly title: string;
+  /** Offered directly by a phone navigation and by "Go to": a place, not a page reached from one. */
+  readonly top: boolean;
+  /** The one path a door navigates to. Null for a route whose path carries a parameter (a session) or a query. */
+  readonly path: string | null;
+  /** Whether the row takes the decoded parameter its pattern captured. Absent: any. A parameter the row refuses is no match
+   *  for the row, so the path is matched as if the row were not there (carry C, D-7951). */
+  readonly accepts?: (param: string) => boolean;
+}
+
+/** Settings' five sections, in the index's order (D-5503): each is its own route, `/settings/<id>` (D-5504). The one
+ *  list: the route entries below, the index rows and the section pages all read it. */
+export const SETTINGS_SECTIONS = [
+  { id: 'updates', title: 'Updates' },
+  { id: 'appearance', title: 'Appearance' },
+  { id: 'notifications', title: 'Notifications' },
+  { id: 'automation', title: 'Automation' },
+  { id: 'security', title: 'Security' },
+] as const;
+
+export type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]['id'];
+
+export const ROUTES: readonly Route[] = [
+  { id: 'fleet', pattern: /^\/$/, title: 'Fleet', top: true, path: '/' },
+  { id: 'session', pattern: /^\/s\/([^/]+)\/?$/, title: 'Session', top: false, path: null },
+  { id: 'inbox', pattern: /^\/mail\/?$/, title: 'Inbox', top: true, path: '/mail' },
+  { id: 'runs', pattern: /^\/runs\/?$/, title: 'Runs', top: true, path: '/runs' },
+  // One run's page (the runs rebuild, D-8072; spec 2026-11-04 §8.4): any run, open or closed, by its number. `accepts` keeps
+  // the grammar to canonical positive safe integers (`isRunId`), so `/runs/0`, `/runs/007` and a number past the safe
+  // integers are outside the table and send no read. Not `top`: a page reached from the board, a search or a link, and
+  // `topRouteOf` still places it under Runs.
+  { id: 'run', pattern: /^\/runs\/(\d+)\/?$/, title: 'Run', top: false, path: null, accepts: isRunId },
+  // The runs ledger (the runs rebuild, Task 11, D-8073; spec 2026-11-04 §8.6): every run, the switches and the lanes. A page
+  // under Runs, reached from the board's foot; it sits before `run` only for reading order, `/runs/advanced` is no run number.
+  { id: 'runs-advanced', pattern: /^\/runs\/advanced\/?$/, title: 'Advanced', top: false, path: null },
+  { id: 'accounts', pattern: /^\/accounts\/?$/, title: 'Accounts', top: true, path: '/accounts' },
+  // `/docs` and every page under it, never `/docsearch` (design 2026-10-01 section 4.2).
+  { id: 'docs', pattern: /^\/docs(?:\/|$)/, title: 'Docs', top: true, path: '/docs' },
+  { id: 'archive', pattern: /^\/archive\/?$/, title: 'Archive', top: true, path: '/archive' },
+  { id: 'settings', pattern: /^\/settings\/?$/, title: 'Settings', top: true, path: '/settings' },
+  // The five section pages (D-5504): pages under Settings, so not `top`; each has its own path, so "Go to" offers
+  // "Go to Settings › Updates" and the others (`command/commands.ts`).
+  ...SETTINGS_SECTIONS.map((s): Route => ({
+    id: `settings-${s.id}`, pattern: new RegExp(`^/settings/${s.id}/?$`), title: s.title, top: false, path: `/settings/${s.id}`,
+  })),
+  // R19's measurement page (W5h-a; base spec 2026-10-01 section 7.8): under Settings so the palette offers it ("Go to
+  // Settings › Measure highlighting") on a phone; its id is not `settings-…`, so the ladder renders the page itself.
+  { id: 'measure-highlighting', pattern: /^\/settings\/measure-highlighting\/?$/, title: 'Measure highlighting', top: false, path: '/settings/measure-highlighting' },
+  // The reader lab (the reader lab plan of 2026-11-03, Task 10): beside R19's page and of its shape; the palette offers it
+  // as "Go to Settings › Reader lab". Its id is not `settings-…`, so the ladder renders the page itself.
+  { id: 'reader-lab', pattern: /^\/settings\/reader-lab\/?$/, title: 'Reader lab', top: false, path: '/settings/reader-lab' },
+  // Any other id under Settings (D-5504): still Settings, which says "That section does not exist." above its index,
+  // never the fallback, except a malformed escape (`/settings/%zz`), which is outside the table (`matchRoute`). No path, so
+  // "Go to" leaves it out.
+  { id: 'settings-section', pattern: /^\/settings\/([^/]+)\/?$/, title: 'Settings', top: false, path: null },
+  // `/digest?day=YYYY-MM-DD` (D-5300): the daily digest push's deep link.
+  { id: 'digest', pattern: /^\/digest\/?$/, title: 'Digest', top: false, path: null },
+  // Waiting on you (desktop-polish PL5a, D-7712): the combined list, and one item under it by its numeric id.
+  { id: 'waiting', pattern: /^\/waiting\/?$/, title: 'Waiting on you', top: true, path: '/waiting' },
+  { id: 'item', pattern: /^\/waiting\/(\d+)\/?$/, title: 'Item', top: false, path: null },
+  // The programme view (desktop-polish PL5b, D-7713), its Goals page since PL11 (D-7986): one programme by slug, opened from the
+  // title of its box and from a session in it. It takes one path
+  // segment, as the session row does, and the slug's GRAMMAR is the owner's (`shapeProgramSlug`, asked by `isProgrammeSlug`
+  // below): a second copy of its pattern here would be one more place to be wrong (`pl5b-route-owner-grammar`). A segment the
+  // owner refuses is no match (`accepts`), so it is a path outside the table: the fleet on a phone, the placeholder on a desk,
+  // never a blank pane (carry C, D-7951; review 1388 F1). `top: false` and `path: null`: no current door (only `session` is
+  // carried under Fleet, `topRouteOf`), no "Go to" row.
+  { id: 'programme', pattern: /^\/programmes\/([^/]+)\/?$/, title: 'Programme', top: false, path: null, accepts: isProgrammeSlug },
+];
+
+/** Whether a string is a run's number as a path carries it: plain decimal digits, no leading zero, a positive safe
+ *  integer. What the `run` row's `accepts` asks, and what the page asks before it reads. */
+export function isRunId(param: string): boolean {
+  return /^[1-9][0-9]*$/.test(param) && Number.isSafeInteger(Number(param));
+}
+
+/** Advanced's filter chips (spec §8.6): the runs still open, or the closed ones by who closed them. No chip is every run. */
+export type RunsFilter = 'open' | 'by-you' | 'by-ccrc' | 'by-coordinators';
+export const RUNS_FILTERS: readonly RunsFilter[] = ['open', 'by-you', 'by-ccrc', 'by-coordinators'];
+const RUNS_FILTER_QUERY = 'filter';
+const RUNS_CLOSED_SINCE_QUERY = 'closedSince';
+/** The query that opens a run in Advanced's broad pane (A51). */
+export const RUNS_OPEN_QUERY = 'open';
+
+/** The one builder of Advanced's address: the chip and `closedSince` ride the URL, so a reload or a link keeps both. */
+export function runsAdvancedPath(filter?: RunsFilter, closedSince?: number): string {
+  const p = new URLSearchParams();
+  if (filter !== undefined) p.set(RUNS_FILTER_QUERY, filter);
+  if (closedSince !== undefined) p.set(RUNS_CLOSED_SINCE_QUERY, String(closedSince));
+  const qs = p.toString();
+  return qs === '' ? '/runs/advanced' : `/runs/advanced?${qs}`;
+}
+
+/** The chip in a `location.search`-shaped string, or null when absent or not one of the four. */
+export function runsFilterOf(search: string): RunsFilter | null {
+  const v = new URLSearchParams(search).get(RUNS_FILTER_QUERY);
+  return RUNS_FILTERS.find((f) => f === v) ?? null;
+}
+
+/** `closedSince` in the query: whole milliseconds, plain digits, else null. */
+export function runsClosedSinceOf(search: string): number | null {
+  const v = new URLSearchParams(search).get(RUNS_CLOSED_SINCE_QUERY);
+  if (v === null || !/^[0-9]+$/.test(v)) return null;
+  const n = Number(v);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+/** The run open beside Advanced's list in a broad column (`?open=<id>`, A51), or null. */
+export function runsOpenOf(search: string): number | null {
+  const v = new URLSearchParams(search).get(RUNS_OPEN_QUERY);
+  return v !== null && isRunId(v) ? Number(v) : null;
+}
+
+/** The run page's one query (spec §8.4, A42): the search a result was opened from, so the way-back strip can say "Search
+ *  results" and keep the query across a reload or a shared link. `navigate` writes null history state, so it rides the URL. */
+export const RUN_FROM_SEARCH_QUERY = 'q';
+
+/** The one builder of a run's path, `/runs/<id>`, with the search it was opened from when there is one. */
+export function runPath(id: number, q?: string): string {
+  const path = `/runs/${id}`;
+  return q === undefined || q === '' ? path : `${path}?${new URLSearchParams({ [RUN_FROM_SEARCH_QUERY]: q })}`;
+}
+
+/** The search a run page was opened from, in a `location.search`-shaped string, or null when it is absent or empty. */
+export function runQueryOf(search: string): string | null {
+  const q = new URLSearchParams(search).get(RUN_FROM_SEARCH_QUERY);
+  return q === null || q === '' ? null : q;
+}
+
+/** The runs board's search address, `/runs?q=<query>`: where "Search results" goes back to. The search itself is the board's
+ *  (spec §8.3); this is only the address a run page's strip names. */
+export function runsSearchPath(q: string): string {
+  return `/runs?${new URLSearchParams({ [RUN_FROM_SEARCH_QUERY]: q })}`;
+}
+
+/** The one builder of a session's path, `/s/<id>`, which the `session` row above parses (D-7189). It encodes every
+ *  id; over `isSessionIdShape`'s charset, every id the wire carries, `encodeURIComponent` is the identity, so the
+ *  path is the id itself (`w7-session-path.test.ts`). */
+export function sessionPath(id: string): string {
+  return `/s/${encodeURIComponent(id)}`;
+}
+
+/** The one builder of a programme's path, `/programmes/<slug>`, which the `programme` row above parses. It encodes the slug,
+ *  and over the owner's grammar (letters, digits, `_` and `-`) `encodeURIComponent` is the identity. */
+export function programmePath(slug: string): string {
+  return `/programmes/${encodeURIComponent(slug)}`;
+}
+
+/** The Waiting on you list's one query, its side rail's filter (`?programme=`): a programme's slug, empty for the sessions in
+ *  no programme, or absent for every programme. It rides the URL, so a reload, a shared link and the way back from an item keep it. */
+export const PROGRAMME_FILTER_QUERY = 'programme';
+
+/** The one builder of the Waiting on you list's path, `/waiting`, read off the `waiting` row above, with its side rail's filter
+ *  as its query (`null`: every programme). THERE IS ONE WAITING ON YOU PAGE (desktop-polish PL11, D-7986; spec §2, D29): the
+ *  navigation, a programme box's chip and the programme's Goals page all open it, the last two filtered to the programme. */
+export function waitingPath(programme: string | null = null): string {
+  const path = ROUTES.find((r) => r.id === 'waiting')?.path ?? '/';
+  return programme === null ? path : `${path}?${new URLSearchParams({ [PROGRAMME_FILTER_QUERY]: programme })}`;
+}
+
+/** Whether a string is a programme slug the server accepts: `shapeProgramSlug`'s grammar and length, the one owner of both,
+ *  and the slug as it stands (the owner trims, a path segment must not change under it). This is what the programme row's
+ *  `accepts` asks, and what the chip asks before it offers a door (`programmeIsOpenable`). */
+export function isProgrammeSlug(slug: string): boolean {
+  const shaped = shapeProgramSlug(slug);
+  return shaped.ok && shaped.slug === slug;
+}
+
+/** Whether the programme's path leads to its view: the slug is a programme's, and the route resolves to it. A slug the view
+ *  would refuse is not offered a door. The grammar is asked first, so a string the encoder refuses (a lone surrogate) is
+ *  refused here, never thrown during a render (carry C, D-7951; review 1388's advisory). */
+export function programmeIsOpenable(slug: string): boolean {
+  if (!isProgrammeSlug(slug)) return false;
+  const at = matchRoute(programmePath(slug));
+  return at !== null && at.route.id === 'programme' && at.param === slug;
+}
+
+/** The accounts route's one query (T2c, D-6329): a lane card is a per-row door to its lane, so it rides a query on the
+ *  existing `accounts` route, as the digest's `?day=` does, with no new route and no registry command. */
+export const ACCOUNTS_LANE_QUERY = 'lane';
+
+/** The one builder of `/accounts?lane=<id>`. `URLSearchParams` encodes the id; `laneParam` is its one reader. */
+export function accountsLaneHref(wrapper: string): string {
+  return `/accounts?${new URLSearchParams({ [ACCOUNTS_LANE_QUERY]: wrapper }).toString()}`;
+}
+
+/** The one reader of the lane query: the lane id in a `location.search`-shaped string (`useLocation().search` carries
+ *  its leading `?`, and the parser accepts it with or without), or null when it is absent or empty. */
+export function laneParam(search: string): string | null {
+  const id = new URLSearchParams(search).get(ACCOUNTS_LANE_QUERY);
+  return id === null || id === '' ? null : id;
+}
+
+/** The legacy runs query (chat reading Task L, D-8062): `/runs?run=<id>` stays only in old chat text and old links. The board
+ *  replaces it with the run's page (`runPath`, A50), so it never meets `?q=`; `runParam` is its one reader. */
+export const RUNS_RUN_QUERY = 'run';
+
+/** The one builder of a link to a run: its page, `/runs/<id>` (A50). A name in chat, a session's header, the hold cell and
+ *  the inbox all use it. */
+export function runsRunHref(id: number): string {
+  return runPath(id);
+}
+
+/** The run id in a `location.search`-shaped string, with or without its leading `?`: a positive integer written in plain
+ *  decimal digits, else null (absent, empty, zero, signed, fractional, an exponent, or anything else). */
+export function runParam(search: string): number | null {
+  const raw = new URLSearchParams(search).get(RUNS_RUN_QUERY);
+  if (raw === null || !/^[0-9]+$/.test(raw)) return null;
+  const id = Number(raw);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+/** The accounts route's resume query (accounts plan Task A23, D-7871; spec §6.2): `/accounts?resume=<id>` opens the
+ *  sheet of the sign-in this session started on lane `<id>`, at its code field. Only a shortcut: the attempt itself is
+ *  read from `GET /api/accounts`, never from the URL or storage. */
+export const ACCOUNTS_RESUME_QUERY = 'resume';
+
+/** The one builder of `/accounts?resume=<id>`; `resumeParam` is its one reader. */
+export function accountsResumeHref(wrapper: string): string {
+  return `/accounts?${new URLSearchParams({ [ACCOUNTS_RESUME_QUERY]: wrapper }).toString()}`;
+}
+
+/** The lane id in the resume query, or null when it is absent or empty. */
+export function resumeParam(search: string): string | null {
+  const id = new URLSearchParams(search).get(ACCOUNTS_RESUME_QUERY);
+  return id === null || id === '' ? null : id;
+}
+
+export interface RouteMatch {
+  readonly route: Route;
+  /** The pattern's first capture, decoded: the session id on `/s/:id`; null where the pattern captures nothing. */
+  readonly param: string | null;
+}
+
+/** The decoded capture, or `undefined` for a malformed percent escape (`/s/%zz`), which `decodeURIComponent` throws on. */
+function decodeParam(raw: string): string | undefined {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The route a path is on, or null for a path outside the table. A path whose captured segment is not a well-formed escape is
+ *  outside the table too: `App` calls this in its own body, outside every boundary but the root's, so it never throws
+ *  (carry C, D-7951; review 1388 F3). A row's `accepts` refusing the parameter is no match for that row. */
+export function matchRoute(path: string): RouteMatch | null {
+  for (const route of ROUTES) {
+    const m = route.pattern.exec(path);
+    if (m === null) continue;
+    if (m[1] === undefined) return { route, param: null };
+    const param = decodeParam(m[1]);
+    if (param === undefined) return null;
+    if (route.accepts !== undefined && !route.accepts(param)) continue;
+    return { route, param };
+  }
+  return null;
+}
+
+/** A console path: segments of unreserved and percent-escaped characters, then an optional query or fragment. */
+const CONSOLE_PATH = /^(\/[A-Za-z0-9._~%/-]*)([?#][^\s]*)?$/;
+
+/** A console path as the browser resolves it (dot-segments, `%2e` ones too), or null when it resolves to another origin's
+ *  shape (`//host/…`) or the URL parser refuses it: the path a tap opens, which is the one `matchRoute` must judge (review 1466
+ *  F8). Never throws (review 1586 F2). */
+function resolvedPath(path: string): string | null {
+  let resolved: string;
+  try {
+    resolved = new URL(path, 'https://console.invalid').pathname;
+  } catch {
+    return null;
+  }
+  return resolved.startsWith('//') ? null : resolved;
+}
+
+/** A protocol-relative address (`//host…`, or `/\host…`, which a browser reads the same way): another origin's, never a console
+ *  path, refused before it is resolved, because it resolves to its host's path (`//host/runs` to `/runs`; review 1586 F3). */
+const PROTOCOL_RELATIVE = /^\/[/\\]/;
+
+/** The in-app address a console path is, or null (moved here from `ledgers/ledgerLinks.ts`, its console-path arm, so the ledgers
+ *  and chat ask one decision: chat reading Task L, D-8062). A path the console routes (`matchRoute`, asked of the path as the
+ *  browser resolves it) becomes that resolved path plus its query or fragment. Null for anything else: not a console path, the
+ *  bare root, a protocol-relative address (`//host…` or `/\host…`, refused before it is resolved, whatever path it would
+ *  resolve to), a dot-segment escape that resolves to another origin's shape, a path the URL parser refuses, or a path the
+ *  table does not route. Never throws: chat's `a` arm asks it of every Markdown link (review 1586 F2). */
+export function routedHref(text: string): string | null {
+  if (PROTOCOL_RELATIVE.test(text)) return null;
+  const m = CONSOLE_PATH.exec(text);
+  if (m === null || m[1] === undefined || m[1] === '/') return null;
+  const path = resolvedPath(m[1]);
+  if (path === null || path === '/' || matchRoute(path) === null) return null;
+  return `${path}${m[2] ?? ''}`;
+}
+
+/** The frame's view for a path (the phone swap, `shell.css`): `fleet` on the fleet route and on a path outside the
+ *  table (its placeholder), `session` for anything the detail pane shows. `app.tsx` hands it to the frame, and the
+ *  resume banner reads it to place its one instance (accounts plan Task A23, D-7871 (3)). */
+export function shellViewOf(path: string): 'fleet' | 'session' {
+  const id = matchRoute(path)?.route.id ?? null;
+  return id === null || id === 'fleet' ? 'fleet' : 'session';
+}
+
+/** The top route a path is on or under: `/settings/updates` is under Settings, `/docs/a/b` is Docs, a session is
+ *  under Fleet (Instrument's wordmark door is current there). Null for a path outside the table and for a route that is no
+ *  place's page (the digest). Read by the current door of Instrument's top bar doors and by the phone's bottom bar (W2 Task
+ *  S9, D-5472; desk-nav Task A, D-8100), so they never disagree about where a page sits. A path outside the table is under
+ *  no place, whatever it starts with (`/waiting/abc`, `/runs/x`), and so is one with a malformed escape, which `matchRoute` places outside it: the pane
+ *  draws the placeholder there, and no door says the page is there (review 1437 F2, review 1466 F14). */
+export function topRouteOf(path: string): Route | null {
+  const at = matchRoute(path);
+  if (at?.route.top === true) return at.route;
+  if (at?.route.id === 'session') return ROUTES.find((r) => r.id === 'fleet') ?? null;
+  if (at === null) return null;
+  return ROUTES.find((r) => r.top && r.path !== null && r.path !== '/' && path.startsWith(`${r.path}/`)) ?? null;
+}

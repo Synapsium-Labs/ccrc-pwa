@@ -10,12 +10,20 @@
  * surrender that property for nothing.
  */
 
+// `slugifyWords`/`fitSlug` live in `shared/slug.ts`, not here: the PWA needs
+// them too (the sheet previews the slug the server will derive), and a
+// server-only copy is exactly the drift `single-definition.test.ts` exists to
+// fail the build over. The cut rule's two details (a cut that already lands on
+// a word boundary drops nothing back; one long word hard-cuts) are written
+// down, and pinned, at `fitSlug`.
+import { slugifyWords, fitSlug } from '../../shared/slug.js';
+
 /** The slug budget, EXCLUDING the three characters of `ws/`. */
 export const SLUG_MAX = 40;
 
 /**
  * `null` when the title has nothing alphanumeric in it — not an empty string.
- * `ws/${''}` is `ws/`, and ccd's own `_ws_branch_valid` (`ccd/ccd:3186-3194`)
+ * `ws/${''}` is `ws/`, and ccd's own `_ws_branch_valid` in `ccd/ccd`
  * DOES refuse a name that starts or ends with a slash, so the box would answer
  * `bad-branch` rather than ever create that ref — but sending the call anyway
  * would still burn the one-attempt-per-(id, derived-branch) retry budget on a
@@ -24,26 +32,13 @@ export const SLUG_MAX = 40;
  * slugifies to the empty string ... is not a rename — no call is made."
  *
  * The character class is a subset of what ccd's `_ws_branch_valid`
- * (`ccd/ccd:3186-3194`) permits, on purpose — but this is NOT a second copy of
+ * in `ccd/ccd` permits, on purpose — but this is NOT a second copy of
  * that rule. The rule has one definition, on the box; this only avoids sending
  * names that are certain to be refused, and the verdict still comes back as
  * `bad-branch`.
  */
 export function deriveBranch(title: string): string | null {
-  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const slug = slugifyWords(title);
   if (slug === '') return null;
-  if (slug.length <= SLUG_MAX) return `ws/${slug}`;
-
-  // Cut at SLUG_MAX, then drop back to the last `-` at or before the cut. Two
-  // details the naive form gets wrong:
-  //   * `slug[SLUG_MAX] === '-'` means the cut ALREADY landed on a word
-  //     boundary, so there is nothing to drop back over — a blind
-  //     `lastIndexOf` would throw the last whole word away.
-  //   * no `-` at all in the first SLUG_MAX characters (one long word) means
-  //     there is no boundary to find, and the rule hard-cuts rather than
-  //     emitting nothing.
-  const cut = slug.slice(0, SLUG_MAX);
-  if (slug[SLUG_MAX] === '-') return `ws/${cut}`;
-  const at = cut.lastIndexOf('-');
-  return `ws/${at === -1 ? cut : cut.slice(0, at)}`;
+  return `ws/${fitSlug(slug, SLUG_MAX).slug}`;
 }

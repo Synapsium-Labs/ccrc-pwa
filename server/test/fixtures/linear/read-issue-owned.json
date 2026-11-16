@@ -1,0 +1,81 @@
+{
+  "name": "read-issue-owned",
+  "documentSource": "code",
+  "document": "query IssueOwned($id: String!) { issue(id: $id) { id identifier title description updatedAt team { key } state { type } project { id } projectMilestone { id } parent { id } labels(first: 50) { nodes { id } } } }",
+  "variables": {
+    "id": "00000000-0006-4000-8000-000000000020"
+  },
+  "requestBody": "{\"query\":\"query IssueOwned($id: String!) { issue(id: $id) { id identifier title description updatedAt team { key } state { type } project { id } projectMilestone { id } parent { id } labels(first: 50) { nodes { id } } } }\",\"variables\":{\"id\":\"00000000-0006-4000-8000-000000000020\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": null,
+  "receivedAtMs": null,
+  "sentAt": null,
+  "status": 200,
+  "statusLine": null,
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "x-complexity",
+      "6"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999992"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1794590003348"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2466"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1794590003348"
+    ]
+  ],
+  "body": {
+    "data": {
+      "issue": {
+        "id": "00000000-0006-4000-8000-000000000020",
+        "identifier": "AAA-101",
+        "title": "Capture issue a temp",
+        "description": null,
+        "updatedAt": "2026-11-13T16:13:22.788Z",
+        "team": {
+          "key": "AAA"
+        },
+        "state": {
+          "type": "backlog"
+        },
+        "project": {
+          "id": "00000000-0004-4000-8000-000000000020"
+        },
+        "projectMilestone": {
+          "id": "00000000-0008-4000-8000-000000000021"
+        },
+        "parent": null,
+        "labels": {
+          "nodes": []
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"issue\":{\"id\":\"00000000-0006-4000-8000-000000000020\",\"identifier\":\"AAA-101\",\"title\":\"Capture issue a temp\",\"description\":null,\"updatedAt\":\"2026-11-13T16:13:22.788Z\",\"team\":{\"key\":\"AAA\"},\"state\":{\"type\":\"backlog\"},\"project\":{\"id\":\"00000000-0004-4000-8000-000000000020\"},\"projectMilestone\":{\"id\":\"00000000-0008-4000-8000-000000000021\"},\"parent\":null,\"labels\":{\"nodes\":[]}}}}\n",
+  "note": "Recorded by the hierarchy capture (FX2, D-8407)."
+}

@@ -23,10 +23,28 @@ set -euo pipefail
 # the fleet host; $HOME is left unexpanded (single-quoted) so it resolves
 # per-session at hook-run time, not to this installer's own $HOME.
 HOOK_CMD='bash "$HOME/.cc-sessions/session-hook.sh"'
+# HOOK_TIMEOUT_S bounds every managed hook run but SessionEnd's (D-4418, review 316 F24).
+# One open(2) no builtin can make non-blocking remains in the hook: the history spool
+# append, if a FIFO is swapped in between its regular-file test and its `>>`. Claude Code
+# kills a command hook at its entry's `timeout`; 600 s is its own default (measured, history
+# spec §4.1), so writing it changes nothing today and keeps the bound this tree's. A shorter
+# bound would move every managed path's fail-open point (the merge deny, the compaction
+# card): an operator decision, not this fix's. SessionEnd's entry carries NONE: Claude Code
+# runs SessionEnd hooks under its own 1.5 s budget (CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS,
+# measured on 2.1.292), which a configured `timeout` RAISES, to min(timeout, 60 s), on every
+# exit and /clear; and the history spool append never runs on SessionEnd. The delegation spool's append does (delegation broker
+# wave 3): one `printf` to a regular file the hook has just tested, in builtins, so it fits that budget, and the FIFO hazard
+# above applies to it the same way (a SessionEnd killed at 1.5 s loses one hint, which the census backstops).
+HOOK_TIMEOUT_S=600
 # Same discipline as HOOK_CMD: $HOME left unexpanded, resolved per-session.
 STATUSLINE_CMD='bash "$HOME/.claude/statusline-command.sh"'
 # Events that get a matcher-less managed entry. PreToolUse is handled
-# separately below because it alone carries matcher "*".
+# separately below because it alone carries matcher "*", which reaches every tool: Agent, Task, Workflow and Bash for the
+# delegation spool (the hook decides what to record; ToolSearch is a tool name, not an event, and records nothing).
+# The delegation spool records SessionStart, PreToolUse, PostToolUse, SubagentStart, SubagentStop, UserPromptSubmit and
+# SessionEnd, every one of which is below. WorktreeCreate and WorktreeRemove are NEVER registered: a registered hook for
+# either REPLACES Claude Code's own worktree handling (spec 2026-10-04 §3.1), and creation and removal are measured by the
+# census instead. `install-session-hooks.test.ts` pins both halves.
 #
 # This list and session-hook.sh's `case "$event"` arms are the same set written
 # twice, and they DRIFTED: the hook grew a SessionStart arm (F1) that was never
@@ -34,7 +52,7 @@ STATUSLINE_CMD='bash "$HOME/.claude/statusline-command.sh"'
 # independently as this branch's Task 5). The pairing is now a mechanism, not a
 # convention — install-session-hooks.test.ts derives the expected set from the
 # hook's own case block and fails on any divergence.
-EVENTS_JSON='["UserPromptSubmit","PostToolUse","PermissionRequest","Stop","SubagentStart","SubagentStop","PreCompact","PostCompact","SessionStart"]'
+EVENTS_JSON='["UserPromptSubmit","PostToolUse","PermissionRequest","Stop","StopFailure","SubagentStart","SubagentStop","PreCompact","PostCompact","SessionStart","SessionEnd"]'
 TS=$(date +%Y%m%d-%H%M%S)
 BACKUPS="$HOME/ccrc-backups/$TS"
 
@@ -82,13 +100,22 @@ fi
 # check below intact (a single "next" computed per run, compared once).
 # The predicate is spelled ONCE and shared by both modes — `ccrc uninstall`
 # rides `--remove` precisely so that this line stays the single definition of
-# a managed entry.
-JQ_UNMANAGED='def unmanaged: map(select((.hooks // []) | any(.command | tostring | contains("/session-hook.sh")) | not));'
+# ccrc's entry.
+#
+# PER HOOK, NOT PER ENTRY (option B, 2026-10-15): `own` is ccrc's hook command
+# (filename match). A group holding one is rewritten without it, keeping its
+# `matcher`, its other keys and every foreign hook in order, and dropped only
+# when the sweep emptied it; a group holding none (a foreign group with an empty
+# `hooks` list included) is untouched. A non-object hook is foreign and kept.
+JQ_UNMANAGED='def own: type == "object" and ((.command // "") | tostring | contains("/session-hook.sh"));
+def unmanaged: map(if type == "object" and any((.hooks // [])[]?; own)
+                   then (.hooks |= map(select(own | not))) | select((.hooks | length) > 0)
+                   else . end);'
 JQ_PROGRAM="$JQ_UNMANAGED"'
 .hooks = ((.hooks // {})
   | with_entries(.value |= unmanaged)
-  | reduce $events[] as $ev (.; .[$ev] = ((.[$ev] // []) + [{hooks:[{type:"command", command:$cmd}]}]))
-  | .PreToolUse = ((.PreToolUse // []) + [{matcher:"*", hooks:[{type:"command", command:$cmd}]}])
+  | reduce $events[] as $ev (.; .[$ev] = ((.[$ev] // []) + [{hooks:[{type:"command", command:$cmd} + (if $ev == "SessionEnd" then {} else {timeout:$tmo} end)]}]))
+  | .PreToolUse = ((.PreToolUse // []) + [{matcher:"*", hooks:[{type:"command", command:$cmd, timeout:$tmo}]}])
   | with_entries(select(.value != [])))
 | if has("statusLine") then . else .statusLine = {type:"command", command:$sl} end
 '
@@ -117,7 +144,7 @@ for dir in "${homes[@]}"; do
 
   prog="$JQ_PROGRAM"
   [[ "$MODE" == remove ]] && prog="$JQ_REMOVE"
-  next=$(jq --arg cmd "$HOOK_CMD" --argjson events "$EVENTS_JSON" --arg sl "$STATUSLINE_CMD" "$prog" <<<"$cur") \
+  next=$(jq --arg cmd "$HOOK_CMD" --argjson events "$EVENTS_JSON" --argjson tmo "$HOOK_TIMEOUT_S" --arg sl "$STATUSLINE_CMD" "$prog" <<<"$cur") \
     || { echo "install-session-hooks: merge failed for $f" >&2; rc=1; continue; }
 
   # Converged already? Do not touch the file (idempotence is byte-level: the
@@ -130,4 +157,103 @@ for dir in "${homes[@]}"; do
   tmp="$f.tmp.$$"
   jq . <<<"$next" > "$tmp" && mv -f "$tmp" "$f" || { rm -f "$tmp"; rc=1; }
 done
+
+# THE CHILDREN'S DENY FILE (spec §6.6, plan Task 15, D-5299). ONE managed file per box,
+# `~/.cc-sessions/child-deny.settings.json`, whose `permissions.deny` is `CHILD_DENY_RULES`
+# (`shared/api.ts`); `ccd` passes it with `--settings` only when it spawns a row with
+# `.child`, so no home's own settings.json is touched and top-level sessions keep today's
+# settings ("Children only"). This is the documented second copy, held equal to the
+# TypeScript list by iteration in `install-session-hooks.test.ts`. The path-qualified
+# forms (`Bash(*/ccd ws-rm:*)` and the like) wait on plan Task 13's rig result:
+# CHILD_DENY_PATH_QUALIFIED is the bash twin of the TypeScript constant: turning them on is
+# two flips (the iteration test holds them equal) and one test update (the `false` pin).
+CHILD_DENY_PATH_QUALIFIED=0
+CHILD_DENY_FILE="$HOME/.cc-sessions/child-deny.settings.json"
+# D-5696 (spec §7.6): Claude Code's own `install` and `update` are denied under its name and, when the roster names
+# its upstream account otherwise, under that id too (`childDenyRules` in shared/api.ts). The id is read from the
+# generated roster in a subshell, on `--homes` runs as on roster-wide ones, and admitted only in the roster id's shape
+# (`ID_RE`, shared/roster.ts); no roster, or an id that is not one, is the `claude` name alone.
+_child_deny_upstream() {
+  local u=""
+  [[ -f "$HOME/.ccrc/accounts.sh" ]] \
+    && u=$( source "$HOME/.ccrc/accounts.sh" >/dev/null 2>&1; printf '%s' "${CCRC_UPSTREAM:-}" )
+  if [[ "$u" =~ ^[a-z][a-z0-9-]{0,31}$ && "$u" != claude ]]; then printf '%s' "$u"; fi
+  return 0
+}
+_child_deny_json() {
+  local heads_ccd=(ccd) heads_ccrc=(ccrc) claudes=(claude) up v h p rules=()
+  if (( CHILD_DENY_PATH_QUALIFIED )); then
+    heads_ccd+=('*/ccd' '~/.local/bin/ccd'); heads_ccrc+=('*/ccrc' '~/.local/bin/ccrc')
+  fi
+  up=$(_child_deny_upstream); [[ -z "$up" ]] || claudes+=("$up")
+  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect ws-orphan scratch-rescue ws-shed-deps ws-lease-mark delegation-adopt roll claude; do
+    for h in "${heads_ccd[@]}"; do rules+=("Bash($h $v:*)"); done
+  done
+  for v in update rollback rollout; do
+    for h in "${heads_ccrc[@]}"; do rules+=("Bash($h $v:*)"); done
+  done
+  for p in "${claudes[@]}"; do
+    for v in install update; do
+      rules+=("Bash($p $v:*)")
+      if (( CHILD_DENY_PATH_QUALIFIED )); then rules+=("Bash(*/$p $v:*)" "Bash(~/.local/bin/$p $v:*)"); fi
+    done
+  done
+  printf '%s\n' "${rules[@]}" | jq -R . | jq -s '{permissions:{deny:.}}'
+}
+# --remove leaves the file alone (D-5392): it is the BOX's, and `ccrc account remove`
+# runs `--remove --homes <one home>`, so deleting it here stripped every other account's
+# children of the deny layer. `ccrc uninstall`'s `_uninst_cc_sessions` is its one remover.
+if [[ "$MODE" != remove ]]; then
+  # The parent by expansion, never `dirname`: `ccrc doctor --fix` re-runs this script on the
+  # doctor's own PATH, which carries no `dirname` (its delegation-hooks --fix fixture holds it).
+  mkdir -p -- "${CHILD_DENY_FILE%/*}" 2>/dev/null || :
+  if ! deny_next=$(_child_deny_json) || ! jq empty <<<"$deny_next"; then
+    echo "install-session-hooks: could not build $CHILD_DENY_FILE" >&2; rc=1
+  # Byte-level converge, as the homes above: an unchanged file keeps its bytes (and so
+  # its digest, which every child's `.deny-settings` was recorded against).
+  elif [[ -L "$CHILD_DENY_FILE" || ! -f "$CHILD_DENY_FILE" || "$(cat "$CHILD_DENY_FILE")" != "$deny_next" ]]; then
+    deny_tmp="$CHILD_DENY_FILE.tmp.$$"
+    printf '%s\n' "$deny_next" > "$deny_tmp" && mv -f "$deny_tmp" "$CHILD_DENY_FILE" \
+      || { rm -f "$deny_tmp"; echo "install-session-hooks: could not write $CHILD_DENY_FILE" >&2; rc=1; }
+  fi
+fi
+
+# THE ACCOUNT DENY FILE (D-6202; accounts plan Task A9, spec §3.1). The box's second managed file,
+# `~/.cc-sessions/account-deny.settings.json`, whose `permissions.deny` is `ACCOUNT_DENY_RULES`
+# (`shared/api.ts`): the mutating `ccrc account` subs, `seed`, `openrouter-management` with every sub,
+# `ccd-account-auth`, `ccd account-pane`, Read of the secret and scratch paths and `agent.env`, and
+# writes under `.auth/` and `.accounts/`, writes of the roster and its mirror, direct runs of `deploy/account-op.mjs`, and the claude.ai Linear connector's tools (`LINEAR_MCP_DENY`). `ccd` passes it to EVERY session's spawn in its one
+# `--settings`. It never names a swap path (the operator's Q8 ruling of 2026-10-19): no other `ccd`
+# rule, no bare `ccrc account`, no `env`/`printenv` rule (the hook refuses only their bare forms).
+# The documented second copy, held equal to the TypeScript list by iteration in `account-deny.test.ts`.
+# Written as the children's file is (byte-level converge; `--remove` leaves it, as D-5392 rules).
+ACCOUNT_DENY_FILE="$HOME/.cc-sessions/account-deny.settings.json"
+_account_deny_json() {
+  local w p rules=()
+  for w in add auth-start auth-code auth-cancel set check enable disable credential remove seed \
+           openrouter-management 'openrouter-management ceiling'; do
+    rules+=("Bash(ccrc account $w:*)")
+  done
+  rules+=('Bash(ccd-account-auth:*)' 'Bash(ccd account-pane:*)')
+  for p in '~/.cc-secrets/**' '~/.ccrc/auth-scratch/**' '~/.ccrc/codex/*/runtime.env' '~/.ccrc/agent.env' \
+           '~/.ccrc/linear/**' '~/.ccrc/linear.key' '~/.ccrc/operator-secrets/**'; do
+    rules+=("Read($p)")
+  done
+  for p in '~/.cc-sessions/.auth/**' '~/.cc-sessions/.accounts/**'; do rules+=("Edit($p)"); done
+  # shellcheck disable=SC2088  # a deny rule's path keeps its literal tilde: Claude Code expands it, not bash
+  for p in '~/.ccrc/accounts.json' '~/.ccrc/accounts.sh'; do rules+=("Edit($p)"); done   # ACCOUNT_ROSTER_FILES
+  for p in 'node deploy/account-op.mjs' 'node ./deploy/account-op.mjs' './deploy/account-op.mjs'; do rules+=("Bash($p:*)"); done   # ACCOUNT_OP_RUNS
+  rules+=('mcp__claude_ai_Linear')   # LINEAR_MCP_DENY (D-7674): the claude.ai Linear connector's tools
+  printf '%s\n' "${rules[@]}" | jq -R . | jq -s '{permissions:{deny:.}}'
+}
+if [[ "$MODE" != remove ]]; then
+  mkdir -p -- "${ACCOUNT_DENY_FILE%/*}" 2>/dev/null || :
+  if ! acct_next=$(_account_deny_json) || ! jq empty <<<"$acct_next"; then
+    echo "install-session-hooks: could not build $ACCOUNT_DENY_FILE" >&2; rc=1
+  elif [[ -L "$ACCOUNT_DENY_FILE" || ! -f "$ACCOUNT_DENY_FILE" || "$(cat "$ACCOUNT_DENY_FILE")" != "$acct_next" ]]; then
+    acct_tmp="$ACCOUNT_DENY_FILE.tmp.$$"
+    printf '%s\n' "$acct_next" > "$acct_tmp" && mv -f "$acct_tmp" "$ACCOUNT_DENY_FILE" \
+      || { rm -f "$acct_tmp"; echo "install-session-hooks: could not write $ACCOUNT_DENY_FILE" >&2; rc=1; }
+  fi
+fi
 exit "$rc"

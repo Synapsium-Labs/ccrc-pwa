@@ -57,8 +57,10 @@
 // `_lc_obs`.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, mkdirSync } from 'node:fs';
-import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
+import { refuseWords } from './census-w5/ccdHelpers.js';
 import { readJournal } from './lifecycleHelpers.js';
+import { stubFn } from './ccdStub.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-actorflags-'); });
@@ -192,7 +194,7 @@ describe('the closed set is spelled exactly twice in ccd', () => {
     // the drift shape `wsaudit.test.ts` exists to catch, one language over: a
     // fifth surface word added to `_ws_unsupervise` and to four of the five
     // verbs is green everywhere and wrong on one verb forever.
-    const hits = readFileSync(CCD, 'utf8').split('\n')
+    const hits = ccdSource().split('\n')
       .filter((l) => l.includes('cli|pwa|agent|ccd'));
     expect(hits, `the closed set is spelled ${hits.length} times:\n${hits.join('\n')}`)
       .toHaveLength(2);
@@ -204,8 +206,10 @@ describe('the closed set is spelled exactly twice in ccd', () => {
  *  (HEAD AUDIT w23 M-A) — without it these snippets shell the live tmux.
  *  `seedWorkspace` itself now creates `workdir` on disk (fix-round-1 finding
  *  1), so no task-local `mkdir -p` belongs here any more. */
-const ARCHIVE_STUBS = `tmux() { return 1; }; _ws_unsupervise() { :; };
-  _ws_idle_ok() { return 0; }; _ws_status() { echo idle; }; _ws_archive_manifest() { echo '{}'; };`;
+// Through `stubFn` (D-6051): each override exits 97 if ccd no longer defines the function it replaces. The
+// `_ws_idle_ok` stub that stood here named a function ccd never had, so it stubbed nothing.
+const ARCHIVE_STUBS = `tmux() { return 1; }; ${stubFn('_ws_unsupervise', ':')}
+  ${stubFn('_ws_status', 'echo idle')} ${stubFn('_ws_archive_manifest', "echo '{}'")}`;
 
 describe('ws-archive accepts the dec flags in any position', () => {
   it.each([
@@ -349,7 +353,7 @@ describe('ws-restore takes the same three flags, and refuses through _lc_refuse'
     // `_lc_refuse`, so that a destroyed-or-refused act leaves a record. This
     // assertion is the local half, so the failure names THIS task's block
     // rather than arriving as a scanner red four files away.
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('\ncmd_ws_restore() {');
     const to = src.indexOf('\ncmd_ws_attic() {', from);
     expect(from, 'cmd_ws_restore was not found').toBeGreaterThan(-1);
@@ -436,16 +440,16 @@ describe('ws-hold keeps ONE reason — its own', () => {
   it('does NOT strip --reason: the hold reason is still positional and still mandatory', () => {
     // Fix round 1 on this task's review: the brief's own sample call here
     // never passed `--reason` at all, so this test refused identically with
-    // or without a `--reason` case arm in the strip loop — vacuous against
-    // the exact mutant it is paired with (reviewer measurement: 7 of 11
-    // sibling tests in this block went red under that mutant, this one did
-    // not). Fixed by making the call an actually-valid hold that INCLUDES
-    // `--reason`: if the loop had a `--reason` arm, it would strip both
-    // `--surface` and `--reason`+its value, leaving residue `--session <id>`
-    // alone — arity 2 — and the exact-arity guard would refuse a call that
-    // is really correct, making it impossible to hold a workspace with any
-    // wave-5 flag present at all. Under real code this call succeeds; under
-    // that mutant it refuses.
+    // or without a `--reason` strip — vacuous against the exact mutant it is
+    // paired with (reviewer measurement: 7 of 11 sibling tests in this block
+    // went red under that mutant, this one did not). Fixed by making the call
+    // an actually-valid hold that INCLUDES `--reason`. Since path-identity W1b
+    // the loop HAS a `--reason` arm, but it keeps the pair IN the residue as
+    // the positional key and value (path-identity spec §2.4). The mutant is
+    // an arm that STRIPS it as a decision reason (`lc_reason="$2"; shift 2`):
+    // the residue is then `--session <id>` alone, arity 2, and the exact-arity
+    // guard refuses a correct call, so no workspace could be held at all.
+    // Under real code this call succeeds; under that mutant it refuses.
     const id = seedWorkspace();
     const out = h.sh(`${HOLD_STUBS} cmd_ws_hold --session ${id} --reason 'program:x wave:1/4' --surface pwa`);
     expect(out).toBe(`held ${id}: program:x wave:1/4`);
@@ -643,9 +647,9 @@ describe('ws-rename answers flag refusals the way it answers every other refusal
     // reusing `bad-args` needs nothing. ccd's own note above the verb
     // (`THE TOKENS ARE INLINE LITERALS`) records the same rule for the
     // helper-vs-literal question.
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const tokens = new Set<string>();
-    for (const m of src.matchAll(/_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) tokens.add(m[1]!);
+    for (const w of refuseWords('reap')) tokens.add(w);
     for (const m of src.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);
     for (const m of src.matchAll(/'!([a-zA-Z0-9-]+)/g)) tokens.add(m[1]!);
     for (const m of src.matchAll(/"verdict":"([a-zA-Z0-9-]+)"/g)) {

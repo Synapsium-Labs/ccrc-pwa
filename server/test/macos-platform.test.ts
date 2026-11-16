@@ -8,25 +8,32 @@
 //   • the Linux arms are unchanged — the port is not allowed to rewrite the
 //     platform both production fleet boxes run on, and "unchanged" is a claim
 //     a test can hold rather than a promise a comment makes;
-//   • the two copies of the platform block stay identical, because ccd must
-//     stay self-contained (it is installed as a COPY on PATH, where a sourced
-//     sibling would not be there) and a drifting copy is the failure mode that
-//     shape invites;
+//   • the two copies of the platform block stay identical, because the
+//     generated Bash BODY (`ccd/ccd`, which the installed launcher starts from
+//     `~/.local/libexec/ccrc/ccd`) must stay self-contained — it is installed as
+//     a COPY, where a sourced sibling would not be there — and a drifting copy is
+//     the failure mode that shape invites. The Python launcher template
+//     (`ccd/ccd-entry.py`) is NOT a third copy: it carries none of the block, and
+//     a test below holds that rather than a comment;
 //   • the policy systemd enforces declaratively and launchd cannot — the start
 //     limit — is the SAME policy on both, read from the unit file rather than
 //     restated here.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process'; import { randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync, lstatSync, existsSync, readlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js'; import { mkTmp } from './tmpHelpers.js';
+import { itLinux } from './platformFixtures.js';
 
 const IS_DARWIN = process.platform === 'darwin';
 const ccdRoot = path.dirname(CCD);
-const ccd = readFileSync(CCD, 'utf8');
+const ccd = ccdSource();
 const ccrc = readFileSync(path.join(ccdRoot, 'ccrc'), 'utf8');
+/** The launcher TEMPLATE — rendered into `~/.local/bin/ccd` on the box. Python,
+ *  not Bash: the platform block is Bash and has no business here. */
+const ccdEntry = readFileSync(path.join(ccdRoot, 'ccd-entry.py'), 'utf8');
 const unitFile = readFileSync(path.join(ccdRoot, 'claude-session@.service'), 'utf8');
 
 /** The shared block, sliced out of a file by its two anchors. Both files
@@ -51,13 +58,32 @@ function platformBlock(src: string): string {
 
 describe('the platform block is one definition, spelled in two files', () => {
   it('is byte-identical in ccd and ccrc', () => {
-    // ccd is installed as a COPY into ~/.local/bin (see `_inst_bins`, which
-    // explains why it is a copy and ccrc is a launcher), so it cannot source a
-    // sibling: on a box whose tree has moved, a sourced ccd would stop
-    // working where today it keeps running. Two copies plus this test is the
-    // same trade `_inst_shim` and deploy.sh already make for the launcher's
-    // bytes.
+    // `ccd` here is the generated Bash BODY, `ccd/ccd`. It is installed as a
+    // COPY (to `~/.local/libexec/ccrc/ccd`, behind the rendered launcher in
+    // `~/.local/bin/ccd`), so it cannot source a sibling: on a box whose tree
+    // has moved, a sourced body would stop working where today it keeps
+    // running. Two copies plus this test is the same trade `_inst_shim` and
+    // deploy.sh already make for the launcher's bytes.
     expect(platformBlock(ccd)).toBe(platformBlock(ccrc));
+  });
+
+  it('is NOT duplicated into the Python launcher template — two copies, not three', () => {
+    // The launcher decides the protected argv shapes before Bash exists and
+    // then starts the body; it needs no platform shim, and a Python file holding
+    // a third spelling of a Bash block would be a copy nothing above compares.
+    // Measured three ways, so deleting any one reds a different one: neither
+    // sentinel is present; no `_plat_`/`_svc_` DEFINITION line is present; and
+    // none of the NAMES the block defines (derived from the block, not listed
+    // here) appears in the launcher's code — its comments may talk about them.
+    expect(ccdEntry, 'the launcher carries the block\'s opening sentinel').not.toContain('# ── THE PLATFORM LAYER');
+    expect(ccdEntry, 'the launcher carries the block\'s closing sentinel').not.toContain('# ── END PLATFORM LAYER');
+    expect(ccdEntry.match(/^(?:_plat_|_svc_)[a-z0-9_]+\(\)/gm) ?? [], 'the launcher defines a platform helper').toEqual([]);
+    const names = [...platformBlock(ccd).matchAll(/^((?:_plat_|_svc_)[a-z0-9_]+)\(\)/gm)].map((m) => m[1]!);
+    expect(names.length, 'the block defines no helper — the derivation above went blind').toBeGreaterThan(5);
+    const code = ccdEntry.split('\n').filter((l) => !l.trimStart().startsWith('#')).join('\n');
+    for (const name of names) {
+      expect(code, `the launcher's code mentions ${name}, a platform-block helper`).not.toContain(name);
+    }
   });
 
   it('spells the registry path identically to ccd\'s own $REG', () => {
@@ -67,6 +93,15 @@ describe('the platform block is one definition, spelled in two files', () => {
     expect(ccd).toMatch(/^_SVC_REG="\$HOME\/\.cc-sessions"$/m);
     expect(ccd).toMatch(/^REG="\$HOME\/\.cc-sessions"$/m);
   });
+
+  // NO EXEMPTION SET, and that is the point (controller ruling S3-R1). Routing
+  // slice 3 briefly shipped `_svc_gate` — the serviceability keep-or-take gate
+  // — outside the sentinels, and paid for it with a name-only entry here. An
+  // exemption set is a hole the width of whatever is in it: the guard exists
+  // to make a genuine platform helper appended below the END sentinel a red
+  // suite, and every name it is told to ignore is one that cannot red. The
+  // helper was renamed `_class_gate` instead, which is what it is named for
+  // anyway — the CLASS it gates, not launchd/systemd's "service".
 
   it('holds every _plat_/_svc_ definition INSIDE the sentinels, in both files', () => {
     // The pin above compares only the sliced region, so it is exactly as
@@ -86,6 +121,41 @@ describe('the platform block is one definition, spelled in two files', () => {
       }
     }
   });
+
+  it('holds the strict deadline question in the owner: two neighbours of _plat_timeout, no second detector (plan W2 Task 11)', () => {
+    // `_plat_timeout_capability` and `_plat_timeout_strict` are the advance step's way to ask whether the selected
+    // utility escalates, and to refuse to run automatic work where it does not. They are NEIGHBOURS in the block
+    // (the body of `_plat_timeout` is byte-pinned against two more copies), so the question stays with its owner by
+    // construction, and this is where that is held: the one `-k` probe's bytes are spelled once per file, the
+    // neighbours name neither `timeout` nor `gtimeout`, nor run a probe of their own, and the strict one hands the
+    // program to `_plat_timeout` itself. No kill-by-pid watcher can join them either.
+    const code = (fn: string, src: string): string => {
+      const at = src.indexOf(`\n${fn}() {`);
+      expect(at, `${fn} is missing`).toBeGreaterThan(-1);
+      const body = src.slice(at + 1, src.indexOf('\n}\n', at) + 2);
+      return body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    };
+    for (const [name, src] of [['ccd', ccd], ['ccrc', ccrc]] as const) {
+      const start = src.indexOf('# ── THE PLATFORM LAYER');
+      const end = src.indexOf('# ── END PLATFORM LAYER');
+      const block = src.slice(start, end);
+      // Code lines only: the probe's comments quote its bytes too.
+      const blockCode = block.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+      expect(blockCode.split('\n').filter((l) => l.includes('ccd-k-ok')).length,
+        `${name}: the -k probe is spelled on more than one line`).toBe(1);
+      const cap = code('_plat_timeout_capability', src);
+      const strict = code('_plat_timeout_strict', src);
+      for (const fn of [cap, strict]) {
+        expect(fn, `${name}: a strict neighbour names a deadline binary`).not.toMatch(/\b(?:g?timeout)\s/);
+        expect(fn, `${name}: a strict neighbour signals by pid`).not.toMatch(/\bkill\b/);
+        expect(fn, `${name}: a strict neighbour runs a probe of its own`).not.toMatch(/\b-k\s+\d/);
+      }
+      expect(cap, `${name}: the capability is not re-proved through _plat_timeout`).toMatch(/\bunset _CCD_TIMEOUT_K\b[\s\S]*\b_plat_timeout 1 true\b/);
+      expect(strict, `${name}: the strict call does not hand the program to _plat_timeout`).toMatch(/^\s*_plat_timeout "\$@"$/m);
+      expect(block, `${name}: an inherited capability is not discarded at source time`)
+        .toMatch(/^unset CCD_TIMEOUT_CAPABILITY _CCD_TIMEOUT_PROVED_PATH$/m);
+    }
+  });
 });
 
 describe('no call site outside the platform block runs a GNU-only command bare', () => {
@@ -99,8 +169,11 @@ describe('no call site outside the platform block runs a GNU-only command bare',
   // ccrc (the shims legitimately spell both arms), and refuse the GNU-only
   // spellings the block exists to wrap.
   //
-  // `readlink -f` is deliberately NOT in the table: the tree's one live call
-  // site (cmd_swap) predates the port on both sides, and macOS ships
+  // `readlink -f` is deliberately NOT in the table: its live call sites (ccd's
+  // cmd_swap, which predates the port, and ccrc's own `_mem_apply`, the
+  // graphify-engine reads, `_inst_graph_always_on_off` and — since versioned
+  // installs — `_ver_running_names`, the GC's running-unit check, where an
+  // empty answer is read as unmeasured) all run on a macOS that ships
   // `readlink -f` from 12.3 — a floor the port accepts rather than shims.
   // `systemctl`/`journalctl` are not here either: the `_svc_` layer and the
   // doctor's remedy STRINGS spell them legitimately, and the doctor's
@@ -185,7 +258,10 @@ describe('no call site outside the platform block runs a GNU-only command bare',
    *  name kept here after its GNU-only calls are gone. */
   const unowned: Record<string, string> = {
     'ccclip': 'a template-less `mktemp -t ccclip`',
-    'ccd-graph-sweep': '`stat -c %Y`/`stat -c %s`, `date +%s%3N`, a bare `timeout` and a template-less `mktemp`',
+    // Graph revision 2 (D-7350): the repository sweep sources ccd/ccrc and uses its platform shims for stat, the
+    // clock, the rename and the link swap; what it still spells is GNU `timeout` (`--kill-after`), which spec §3.4
+    // fixes for the build's two bounds and the fetch's.
+    'ccd-graph-sweep': 'a bare `timeout`',
     // The telemetry keepalive (spec 2026-09-07 §C). Linux-only by PRODUCT
     // shape as well as userland — its timer never installs on the Darwin arm,
     // the same carve-out the sweep has — and its two GNU spellings are both
@@ -198,11 +274,70 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     'ccrc-adopt': 'a template-less `mktemp`',
   };
 
+  /** `ccd`'s ONE EXEMPTED GNU spelling outside the platform block, the only one
+   *  there that a row of the table above matches: the temp-root collector's
+   *  rename, `_ws_collect_mv` (its COLLECT region), `mv -T -n --no-copy` — one
+   *  renameat2(RENAME_NOREPLACE) that never falls back to a copy (spec 2026-09-22
+   *  §5.10). It stays out of the platform block by design (that block is
+   *  byte-identical in `ccd` and `ccrc`, and the rename is the collector's alone),
+   *  and it is LINUX-ONLY by construction: the function's first line answers 2 on
+   *  Darwin before `mv` is reached. Cut exactly as the hook's epoch copy is — ONE
+   *  function, pinned below — so a renamed function makes the cut MISS, which
+   *  surfaces as an `mv -T` hit, never a silently wider exemption.
+   *
+   *  THE COLLECTOR'S OTHER GNU SPELLINGS outside the block match no row of the
+   *  table, so they need no cut, and none is exempted here. Each is safe on Darwin
+   *  for its own stated reason (review 369's F16):
+   *  - UNREACHABLE there: the idle walk's `find -P <leaf> -xdev -printf '%C@\n'`
+   *    (`_ws_collect_idle`). The function refuses Darwin at its top (`walk-failed`),
+   *    before `find` is reached.
+   *  - VALIDATED there, each failing closed:
+   *    - `date +%s%N` (`_ws_collect_now_ns`). BSD `date` prints `<seconds>N`, and
+   *      both callers hold the print to `^[1-9][0-9]{9,18}$` (the slot's name and
+   *      the idle floor's clock), so Darwin reads no clock (rc 2), never a wrong one.
+   *    - The resume's slot listing, `find -P <slot> -mindepth 1 -maxdepth 1
+   *      -printf '%f/'` (`_ws_collect_resume_eval`). BSD `find` refuses `-printf`
+   *      with a non-zero exit, and the listing fails closed on that exit code
+   *      (unmeasured `slot`).
+   *    - `flock` (the reap lock, at the audit and at the verb). Each asks
+   *      `command -v flock` first, so a box without util-linux answers unmeasured
+   *      `flock` at the audit and refuses `flock-unavailable` at the verb: the
+   *      verb never runs unserialised.
+   *  (The audit also answers unmeasured `platform` on Darwin before any of these.) */
+  const COLLECT_MV = /^_ws_collect_mv\(\) \{[^\n]*\n[\s\S]*?\n\}\n/m;
+
+  /** `ccd`'s SECOND exemption outside the platform block: the library loader's
+   *  hashing-tool fallback (D-6913). `_ccd_lib_load` checks
+   *  ccd/lib/disk-retention.sh by digest before evaluating it, and when the tool
+   *  `_plat_sha256` selects is not on PATH it falls back to fixed ABSOLUTE
+   *  locations (`__CCD_HASH_TOOLS`), never to the environment: that is the
+   *  library's integrity model (#1525), so the fallback cannot route through the
+   *  shim, which resolves its tool from PATH. Every `sha256sum` it spells is a
+   *  tool NAME in a platform dispatch, not a bare GNU call: `tool=sha256sum` is
+   *  the Linux arm of a `command -v` probe (Darwin overrides it to `shasum`), and
+   *  the table's case arm pairs each basename with its own flags (GNU, perl's
+   *  shasum, BSD sha256). Cut as `_ws_collect_mv` is — ONE function plus its ONE
+   *  table line, pinned below to exactly those three spellings — so a new GNU
+   *  call in the loader surfaces as a hit, never a silently wider exemption. */
+  const LIB_LOAD = /^_ccd_lib_load\(\) \{[^\n]*\n[\s\S]*?\n\}\n/m;
+  const LIB_HASH_TOOLS = /^__CCD_HASH_TOOLS=\([^\n]*\)\n/m;
+
+  /** `ccd/ccrc-testbox-admin`'s box-side commands (D-8166): three GNU spellings (`sha256sum`, `timeout`) that run on the test
+   *  box over ssh, a Linux machine of the fleet host's own distribution release (the preflight's `os` check), never on the
+   *  userland this file runs on. They sit in one marked region, cut here as the hook's epoch copy is, and the region is pinned
+   *  below to exactly those functions and exactly those four GNU lines, so a new GNU call anywhere else in the file is a
+   *  hit and the region cannot grow quietly. */
+  const BOX_SIDE = /^# ── BOX-SIDE COMMANDS \(begin\)[^\n]*\n[\s\S]*?^# ── BOX-SIDE COMMANDS \(end\)[^\n]*\n/m;
+
   /** One file's scanned text: the platform block cut where the file carries
-   *  one, and the pinned epoch copy cut out of the hook. */
+   *  one, the pinned epoch copy cut out of the hook, and the pinned rename cut
+   *  out of ccd. */
   function scannedText(name: string): string {
-    const src = readFileSync(path.join(ccdRoot, name), 'utf8');
-    return executableText(name === HOOK ? src.replace(HOOK_EPOCH_COPY, '') : src);
+    // `ccd` is scanned WITH its library (D-6913): the moved disk-retention code is still ccd's.
+    const src = name === 'ccd' ? ccdSource() : readFileSync(path.join(ccdRoot, name), 'utf8');
+    if (name === HOOK) return executableText(src.replace(HOOK_EPOCH_COPY, ''));
+    if (name === 'ccrc-testbox-admin') return executableText(src.replace(BOX_SIDE, ''));
+    return executableText(name === 'ccd' ? src.replace(COLLECT_MV, '').replace(LIB_LOAD, '').replace(LIB_HASH_TOOLS, '') : src);
   }
 
   function gnuHits(text: string): string[] {
@@ -237,6 +372,15 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     });
   }
 
+  it('ccd/ccrc-testbox-admin\'s box-side region holds exactly three functions and exactly four GNU lines, and the cut leaves none outside it', () => {
+    const src = readFileSync(path.join(ccdRoot, 'ccrc-testbox-admin'), 'utf8');
+    const region = BOX_SIDE.exec(src)?.[0] ?? '';
+    expect(region, 'the BOX-SIDE COMMANDS region is not in ccd/ccrc-testbox-admin').not.toBe('');
+    expect([...region.matchAll(/^(_tba_[a-z_]+)\(\) \{/gm)].map((m) => m[1])).toEqual(['_tba_box_manifest_ok', '_tba_box_file_sha', '_tba_box_tcp']);
+    expect(gnuHits(executableText(region)).map((h) => h.split(':')[0]).sort()).toEqual(['bare timeout', 'sha256sum', 'sha256sum']);
+    expect(gnuHits(executableText(src.replace(BOX_SIDE, '')))).toEqual([]);
+  });
+
   for (const [name, spells] of Object.entries(unowned)) {
     it(`ccd/${name} is exempt on the record, and still needs to be`, () => {
       // A ratchet, not a permanent pass. The day this file's GNU-only calls
@@ -267,6 +411,53 @@ describe('no call site outside the platform block runs a GNU-only command bare',
       expect(text, `the cut swallowed the hook's body around \`${anchor}\``).toContain(anchor);
     }
   });
+
+  it('ccd/ccd’s exemption is the collector’s rename, and nothing else', () => {
+    // The anti-widening half, as the hook's: ONE function, ONE spelling, and
+    // its first executable line refuses Darwin before `mv` is reached.
+    const src = ccdSource();
+    const m = COLLECT_MV.exec(src);
+    expect(m, '_ws_collect_mv must be findable — the exemption is meant to be exact').not.toBeNull();
+    const cut = m![0]!;
+    expect(cut.match(/^[A-Za-z_][A-Za-z0-9_]*\(\) \{/gm),
+      'the exemption must be ONE function, not a region that grew').toEqual(['_ws_collect_mv() {']);
+    expect(gnuHits(executableText(cut)), 'the exemption buys exactly one spelling: the no-copy rename')
+      .toEqual(['mv -T: mv -T -n --no-copy -- "$1" "$2"']);
+    expect(executableText(cut).split('\n')[1]?.trim(), 'its first line refuses Darwin')
+      .toBe('[[ "$CCD_OS" != darwin ]] || return 2');
+    // … and the rest of ccd really is scanned: the cut ends at the function.
+    const text = scannedText('ccd');
+    for (const anchor of ['_ws_collect_mv_ok() {', '_ws_collect_move() {']) {
+      expect(text, `the cut swallowed ccd around \`${anchor}\``).toContain(anchor);
+    }
+  });
+
+  it('ccd/ccd’s other exemption is the library loader’s hashing-tool fallback, and nothing else (D-6913)', () => {
+    // The anti-widening half, as the rename's: ONE function and ONE table line,
+    // and the only spellings they buy are the three tool names of the fallback.
+    const src = ccdSource();
+    const fn = LIB_LOAD.exec(src);
+    const table = LIB_HASH_TOOLS.exec(src);
+    expect(fn, '_ccd_lib_load must be findable — the exemption is meant to be exact').not.toBeNull();
+    expect(table, '__CCD_HASH_TOOLS must be findable — the exemption is meant to be exact').not.toBeNull();
+    expect(fn![0]!.match(/^[A-Za-z_][A-Za-z0-9_]*\(\) \{/gm),
+      'the exemption must be ONE function, not a region that grew').toEqual(['_ccd_lib_load() {']);
+    expect(src.match(new RegExp(LIB_HASH_TOOLS.source, 'gm'))?.length, 'ONE table line').toBe(1);
+    expect(gnuHits(executableText(table![0]! + fn![0]!)),
+      'the exemption buys exactly the fallback\'s tool names: the absolute table, the Linux probe name, the GNU case arm')
+      .toEqual([
+        'sha256sum: __CCD_HASH_TOOLS=(/usr/bin/sha256sum /bin/sha256sum /usr/local/bin/sha256sum /usr/bin/shasum /bin/shasum /usr/local/bin/shasum /sbin/sha256 /usr/bin/sha256)',
+        'sha256sum: local tool=sha256sum t',
+        'sha256sum: sha256sum) hash=("$t") ;;',
+      ]);
+    expect(fn![0]!, 'the probe name is overridden on Darwin').toContain('[ "$CCD_OS" = darwin ] && tool=shasum');
+    expect(fn![0]!, 'on PATH, the load hashes through the shim').toContain('hash=(_plat_sha256)');
+    // … and the rest of ccd really is scanned: the cut ends at the function.
+    const text = scannedText('ccd');
+    for (const anchor of ['__CCD_LIB_SHA256=', '_ccd_lib_load ||']) {
+      expect(text, `the cut swallowed ccd around \`${anchor}\``).toContain(anchor);
+    }
+  });
 });
 
 describe('the Linux arms are the original GNU commands', () => {
@@ -276,6 +467,7 @@ describe('the Linux arms are the original GNU commands', () => {
   // to touch.
   const arms: Array<[string, RegExp]> = [
     ['_plat_mv_notdir', /else\s*\n\s*mv -fT -- "\$1" "\$2"/],
+    ['_plat_ln_swap', /else\s*\n\s*mv -fT -- "\$2\.new" "\$2"/],
     ['_plat_mtime', /else stat -c %Y "\$@"; fi/],
     ['_plat_size', /else stat -c %s "\$@"; fi/],
     ['_plat_devino', /else stat -c '%d:%i' "\$@"; fi/],
@@ -285,8 +477,23 @@ describe('the Linux arms are the original GNU commands', () => {
     ['_plat_ppid', /sed -n 's\/\^PPid:\[\[:space:\]\]\*\/\/p' "\/proc\/\$\{1-\}\/status"/],
     ['_plat_cgroup', /sed -n 's\/\^0::\/\/p' "\/proc\/\$\$\/cgroup"/],
     ['_plat_mode', /else stat -c%a "\$@"; fi/],
+    // D-3524's ctime, the one timestamp a credential restore cannot backdate.
+    // New rather than ported, so the row binds the NAME as well as the arm.
+    ['_plat_ctime', /^_plat_ctime\(\) \{ if \[ "\$CCD_OS" = darwin \]; then stat -f %c "\$@"; else stat -c %Z "\$@"; fi; \}/m],
+    // The temp-root witness's birth time (child-reclamation wave 6). New rather
+    // than ported, so the row binds the NAME as well as the arm.
+    ['_plat_btime', /^_plat_btime\(\) \{ if \[ "\$CCD_OS" = darwin \]; then stat -f %B "\$@"; else stat -c %W "\$@"; fi; \}/m],
     ['_plat_bytes', /du -sb "\$1" \| head -n1 \| cut -f1/],
     ['_svc_run_detached', /systemd-run --user --collect --quiet "\$@"/],
+    ['_svc_have_user_manager', /command -v systemd-run >\/dev\/null 2>&1 && systemctl --user show-environment >\/dev\/null 2>&1/],
+    ['_svc_run_supervised', /local -a sr=\(--user --collect --quiet "--unit=\$unit" --slice=app\.slice "--working-directory=\$HOME"\n\s+-p Restart=always -p RestartSec=3 -p StartLimitIntervalSec=300 -p StartLimitBurst=20\n\s+-p "StandardOutput=append:\$log" -p "StandardError=append:\$log"\)/],
+    ['_svc_run_supervised (the call)', /systemctl --user reset-failed "\$unit" >\/dev\/null 2>&1\n\s+systemd-run "\$\{sr\[@\]\}" -- "\$@" \|\| return \$\?/],
+    // Wave 15: the boot-persistence enable links the unit WITHOUT reloading the
+    // user manager (every restarted supervisor runs it, so a sweep reloaded once
+    // per unit), and `enable --now` keeps its reload. Each row binds the NAME,
+    // so the flag cannot move from one function to the other unseen.
+    ['_svc_enable', /^_svc_enable\(\) \{[^\n]*\n {2}if \[ "\$CCD_OS" != darwin \]; then systemctl --user enable --no-reload "\$1" 2>\/dev\/null; return \$\?; fi$/m],
+    ['_svc_enable_now', /^_svc_enable_now\(\) \{[^\n]*\n {2}if \[ "\$CCD_OS" != darwin \]; then systemctl --user enable --now "\$1" 2>\/dev\/null; return \$\?; fi$/m],
   ];
   for (const [name, re] of arms) {
     it(`${name} still runs the GNU command on Linux`, () => {
@@ -300,7 +507,7 @@ describe('the Linux arms are the original GNU commands', () => {
     // without one gets noticed.
     const verbs = [
       'systemctl --user enable --now "$1"',
-      'systemctl --user enable "$1"',
+      'systemctl --user enable --no-reload "$1"',
       'systemctl --user disable --now "$1"',
       'systemctl --user start "$1"',
       'systemctl --user stop "$1"',
@@ -396,6 +603,868 @@ describe('the start limit is one policy, not two', () => {
   });
 });
 
+// UNCONDITIONAL — runs on every box, including the Linux CI box that is the
+// only one that ever executes this suite. `CCD_OS` is computed ONCE, from
+// `$OSTYPE`, at the moment the platform block is sourced (ccd/ccd's own
+// comment above `_plat_mv_notdir`); an env var of that name handed to the
+// child process is overwritten before any function exists to read it, so it
+// does nothing. The only assignment that survives is one made AFTER the
+// source, in the SAME bash payload — exactly the rule
+// `ccd-account-auth.test.ts:794-796` states and `:806` uses
+// (`fn('CCD_OS=linux; _auth_script_argv …')`). That is how the Darwin arm of
+// `_plat_mv_notdir` (D-2187) gets driven here without a real Darwin
+// userland, rather than inside the `describe.skipIf(!IS_DARWIN)` block below,
+// which never executes on this box (D-2188).
+describe('_plat_mv_notdir\'s Darwin arm, forced from Linux (D-2187)', () => {
+  function darwinBlock(expr: string): string {
+    const script = `${platformBlock(ccd)}\nCCD_OS=darwin\n${expr}\n`;
+    return execFileSync('bash', ['-c', script], { encoding: 'utf8' }).trim();
+  }
+
+  it('answers 0 only if src is now AT a dest that was a symlink to a directory', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-'));
+    try {
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload-9d3f');
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'the call must report an exit code').toBe('0');
+      // The postcondition, not just the exit status: <src> must now be AT
+      // <dest>. Before the fix, GNU `mv -f` (no `-T`) follows the symlink and
+      // moves `src` INSIDE the linked directory, leaving `dest` the same
+      // symlink it always was — rc 0 with the postcondition false.
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must no longer be the symlink it was — the contract is 0 iff src is now AT dest').toBe(false);
+      expect(lstatSync(dst).isFile(), 'dest must now be a regular file').toBe(true);
+      expect(readFileSync(dst, 'utf8')).toBe('payload-9d3f');
+      expect(readdirSync(real), 'nothing may have been moved inside the linked directory').toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a real directory destination and leaves it untouched', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-dir-'));
+    try {
+      const dst = path.join(d, 'dst');
+      mkdirSync(dst);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload');
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a real directory destination must be refused').toBe('1');
+      expect(lstatSync(dst).isDirectory()).toBe(true);
+      expect(readdirSync(dst), 'the destination directory must stay empty').toEqual([]);
+      expect(readdirSync(d)).toContain('src');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  // R1 (fix round 2): the narrowed ccd-reg-set-atomic scan cannot prove the
+  // `rm` is CONTAINED in its guard — it only sees that the tokens exist
+  // somewhere in the body, and the pre-existing, untouched refusal guard
+  // supplies both of them unconditionally. These two cases are the
+  // behavioural replacement: neither dest shape below is a directory (the
+  // refusal guard never fires for them), so whether the `rm` actually ran —
+  // and whether it ran on a shape it was never meant to touch — is visible
+  // ONLY in whether the destination survives a `mv` that then fails.
+  it('refuses when src is missing and leaves a plain-file dest untouched, byte-for-byte', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-plainfile-'));
+    try {
+      const dst = path.join(d, 'dst');
+      writeFileSync(dst, 'original-bytes-7a2c');
+      const src = path.join(d, 'src'); // deliberately never created
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a missing src must not report success').not.toBe('0');
+      // A plain file is neither `-L` nor `-d`, so the guarded `rm` must never
+      // fire here. An UNCONDITIONAL `rm` (the mutant the narrowed scan
+      // cannot see, because the untouched refusal guard supplies both
+      // `-L "$2"` and `-d "$2"` tokens elsewhere in the body) removes `dst`
+      // before the doomed `mv` runs, so this is the case that reds it.
+      expect(lstatSync(dst).isFile(), 'dest must still be a plain file').toBe(true);
+      expect(readFileSync(dst, 'utf8'), 'dest bytes must be exactly what they were').toBe('original-bytes-7a2c');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses when src is missing and leaves a symlink-to-file dest resolvable', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-symfile-'));
+    try {
+      const real = path.join(d, 'real-file');
+      writeFileSync(real, 'target-bytes-4e1b');
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src'); // deliberately never created
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a missing src must not report success').not.toBe('0');
+      // A symlink-to-FILE is `-L` but not `-d`, so a guard narrowed to `-L`
+      // alone (dropping the `-d` half) fires here where the real guard would
+      // not — that is exactly the mutation this case reds.
+      expect(existsSync(dst), 'the name must still be resolvable — nothing may unlink it out from under a failed mv').toBe(true);
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must still be the same symlink').toBe(true);
+      expect(readFileSync(dst, 'utf8'), 'the link target must be unchanged').toBe('target-bytes-4e1b');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  // Final-round item 4 — the two disclosed prices this wave's own fix and
+  // header carry, pinned so neither can silently change in either direction.
+  // `chmod` is what makes the unlink FAIL below, and root defeats chmod.
+  it.skipIf(process.getuid?.() === 0)(
+    'when the guarded rm FAILS, the function does not answer 0 — the rm-fails price', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-rmfail-'));
+    const parent = path.join(d, 'parent');
+    try {
+      mkdirSync(parent);
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(parent, 'dst');
+      symlinkSync(real, dst);
+      // No write permission on the PARENT: unlink(2) needs it on the
+      // directory that holds the name, not on the symlink itself, so this
+      // makes `rm -f -- "$2"` fail without touching the symlink at all.
+      chmodSync(parent, 0o555);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload-rmfail-6c2a');
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a failing unlink must not report success — this is the fix for D-2187\'s recurrence').not.toBe('0');
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must still be the untouched symlink — the rm never removed it').toBe(true);
+      expect(readdirSync(dst), 'nothing was moved into the linked directory').toEqual([]);
+      expect(readFileSync(src, 'utf8'), 'src must be untouched — the mv this rm gates was never reached').toBe('payload-rmfail-6c2a');
+    } finally {
+      chmodSync(parent, 0o755);
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  // F10 (review run 69): the case ABOVE is the only pin on MUST-FIX 1's
+  // `|| return 1`, and it is `skipIf(uid === 0)` — so on a root runner the
+  // thing this fix's own header calls "a mechanism rather than a comment" is
+  // held by nothing. A skipped case is not a pin. The conjunct is about a
+  // FAILING `rm`; chmod is merely one way to cause that, and it is the way
+  // root defeats. Shadowing the binary causes the same condition for every
+  // uid, so this case runs everywhere and the guarantee is never unheld.
+  it('when the guarded rm fails for a reason chmod cannot cause, the function still does not answer 0 — the rm-fails price, pinned at every uid', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-rmstub-'));
+    try {
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload-rmstub-1f9e');
+      const stubDir = path.join(d, 'bin');
+      mkdirSync(stubDir);
+      writeFileSync(path.join(stubDir, 'rm'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      const rc = darwinBlock(
+        `export PATH='${stubDir}':"$PATH"\n_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a failing unlink must not report success, whoever is running').not.toBe('0');
+      // Without `|| return 1` the failing `rm` falls through to the unchanged
+      // `mv`, which moves `src` INSIDE the linked directory and answers 0 —
+      // D-2187's recurrence exactly. Both assertions below red on that mutant.
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must still be the untouched symlink').toBe(true);
+      expect(readdirSync(real), 'nothing may be moved INTO the linked directory').toEqual([]);
+      expect(readFileSync(src, 'utf8'), 'src must be untouched — the mv this rm gates was never reached').toBe('payload-rmstub-1f9e');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('when src is absent, a symlink-to-directory dest is left GONE — the destination-gone price, disclosed', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-gone-'));
+    try {
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src'); // deliberately never created
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a missing src must not report success').not.toBe('0');
+      // Unlike the symlink-to-FILE case above, which stays resolvable: the
+      // guarded `rm` fires for THIS shape (symlink-to-directory) whether or
+      // not `src` exists, so a missing `src` leaves `dest` gone rather than
+      // intact — the pre-fix code left the symlink alone here. Disclosed in
+      // the header above `_plat_mv_notdir`; pinned here so it cannot drift
+      // in either direction without this case moving.
+      expect(existsSync(dst), 'the destination is GONE — the guarded rm ran before the doomed mv').toBe(false);
+      expect(readdirSync(real), 'the linked directory itself is untouched').toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
+// W6 Task 1 — `_plat_ln_swap`, the flip of `$HOME/ccrc` (spec 2026-09-20 §11
+// Pins: "the flip is `mv -T` (argv pinned)"; §18 "the flip is a rename").
+// Every case runs the REAL platform block, sliced out of ccd, under `bash -c`
+// with `CCD_OS` assigned AFTER the source (the rule the describe above
+// states), and with RECORDING `ln`/`mv`/`rm`/`python3` wrappers first on PATH
+// that `exec` the real tool — so what is pinned is the argv the helper
+// issued AND what the filesystem looks like afterwards, never one without
+// the other. The argv alone would pass a wrapper that lied; the
+// postcondition alone would pass a non-atomic unlink-then-symlink.
+describe('_plat_ln_swap: one rename, both arms (W6 Task 1)', () => {
+  type Os = 'linux' | 'darwin';
+  const PY = 'import os, sys; os.replace(sys.argv[1], sys.argv[2])';
+
+  interface Fx { d: string; bin: string; log: string; old: string; next: string; link: string }
+
+  /** Whether a NAME exists — a dangling link included, which `existsSync`
+   *  (it follows links) would call absent. */
+  const lexists = (p: string): boolean => {
+    try { lstatSync(p); return true; } catch { return false; }
+  };
+
+  // The real tools, resolved ONCE and BEFORE any wrapper is on PATH (a
+  // wrapper that `exec`d the bare name would find itself) — and WITHOUT a
+  // throw: `execFileSync` throws on `command -v`'s rc 1, so a runner with no
+  // python3 would red all fourteen cases, the GNU-arm ones that never call it
+  // included (the rule the Global Constraints set for the harness stubs).
+  const REAL: Record<string, string> = Object.fromEntries(['ln', 'mv', 'rm', 'python3'].map((t) => [
+    t, spawnSync('bash', ['-c', `command -v ${t}`], { encoding: 'utf8' }).stdout.trim(),
+  ]));
+  /** The forced-Darwin cases whose rename runs the REAL `os.replace` skip on
+   *  a runner with no python3; every other case, on both arms, still runs. */
+  const itPy = it.skipIf(REAL.python3 === '');
+
+  /** A scratch dir holding two version-shaped directories (`old` carries a
+   *  marker file, so "its listing is unchanged" has something to compare),
+   *  `link` → `old` (absolute, as the tree's link is), and the recording
+   *  wrappers. `fail` names tools whose wrapper exits 1 WITHOUT running the
+   *  real one — how a failing rename is caused on either arm, so that case
+   *  needs no real python3 either. */
+  function fixture(fail: string[] = []): Fx {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-ln-swap-'));
+    const bin = path.join(d, 'bin');
+    mkdirSync(bin);
+    const log = path.join(d, 'calls.log');
+    for (const tool of ['ln', 'mv', 'rm', 'python3']) {
+      const real = REAL[tool]!;
+      // Nothing to `exec`: plant no wrapper (only python3 can be missing).
+      if (real === '' && !fail.includes(tool)) continue;
+      writeFileSync(path.join(bin, tool), [
+        '#!/bin/sh',
+        // One line per call, argv TAB-separated: the python3 program text
+        // has spaces in it, and no path here has a tab.
+        `printf '%s' '${tool}' >> '${log}'`,
+        `for a in "$@"; do printf '\\t%s' "$a" >> '${log}'; done`,
+        `printf '\\n' >> '${log}'`,
+        fail.includes(tool) ? 'exit 1' : `exec '${real}' "$@"`,
+      ].join('\n') + '\n', { mode: 0o755 });
+    }
+    const old = path.join(d, 'versions', 'v0.0.1');
+    const next = path.join(d, 'versions', 'v0.0.2');
+    mkdirSync(old, { recursive: true });
+    mkdirSync(next);
+    writeFileSync(path.join(old, 'OLD-MARKER'), 'old');
+    writeFileSync(path.join(next, 'NEW-MARKER'), 'new');
+    const link = path.join(d, 'ccrc');
+    symlinkSync(old, link);
+    return { d, bin, log, old, next, link };
+  }
+
+  function swap(os: Os, f: Fx, target: string = f.next, link: string = f.link):
+    { rc: number | null; out: string; calls: string[][] } {
+    const script = `${platformBlock(ccd)}\nCCD_OS=${os}\nexport PATH='${f.bin}':"$PATH"\n`
+      + `_plat_ln_swap '${target}' '${link}'\n`;
+    const r = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
+    const calls = existsSync(f.log)
+      ? readFileSync(f.log, 'utf8').split('\n').filter(Boolean).map((l) => l.split('\t'))
+      : [];
+    return { rc: r.status, out: `${r.stdout}${r.stderr}`, calls };
+  }
+
+  /** The postcondition both arms owe on success. */
+  function flipped(f: Fx, target: string = f.next): void {
+    expect(lstatSync(f.link).isSymbolicLink(), 'the link must still be a symlink — never a copied tree').toBe(true);
+    expect(readlinkSync(f.link), 'the link\'s value must be the target, verbatim').toBe(target);
+    expect(readdirSync(f.old), 'nothing may be moved INSIDE the old version (D-2187\'s shape)').toEqual(['OLD-MARKER']);
+    expect(lexists(`${f.link}.new`), 'the staged <link>.new must be gone').toBe(false);
+  }
+
+  // PLATFORM-ONLY: this arm's rename is GNU `mv -fT`, and BSD `mv` has no `-T`
+  // — on the macOS runner there is no binary for it to run. Its pair is the
+  // forced-Darwin case below, which runs on BOTH runners.
+  itLinux('the Linux arm is the spec\'s argv — ln -sfn to <link>.new, then mv -fT over <link>', () => {
+    const f = fixture();
+    try {
+      const r = swap('linux', f);
+      expect(r.rc, r.out).toBe(0);
+      expect(r.out, 'the helper prints nothing — the caller owns the sentence').toBe('');
+      expect(r.calls).toEqual([
+        ['ln', '-sfn', '--', f.next, `${f.link}.new`],
+        ['mv', '-fT', '--', `${f.link}.new`, f.link],
+      ]);
+      flipped(f);
+    } finally {
+      rmSync(f.d, { recursive: true, force: true });
+    }
+  });
+
+  itPy('the Darwin arm stages the same link and renames it with os.replace — no mv, no rm of <link>', () => {
+    const f = fixture();
+    try {
+      const r = swap('darwin', f);
+      expect(r.rc, r.out).toBe(0);
+      expect(r.out).toBe('');
+      // `_plat_mv_notdir`'s Darwin arm would show here as an `rm` of <link>
+      // followed by a `mv -f` — the window this helper exists to close.
+      expect(r.calls).toEqual([
+        ['ln', '-sfn', '--', f.next, `${f.link}.new`],
+        ['python3', '-c', PY, `${f.link}.new`, f.link],
+      ]);
+      flipped(f);
+    } finally {
+      rmSync(f.d, { recursive: true, force: true });
+    }
+  });
+
+  for (const os of ['linux', 'darwin'] as const) {
+    for (const kind of ['directory', 'file'] as const) {
+      it(`refuses a real ${kind} at <link> and touches nothing (${os} arm)`, () => {
+        const f = fixture();
+        try {
+          rmSync(f.link);
+          if (kind === 'directory') {
+            mkdirSync(f.link);
+            writeFileSync(path.join(f.link, 'LIVE'), 'pre-versioned tree');
+          } else {
+            writeFileSync(f.link, 'not a tree');
+          }
+          const before = statSync(f.link).mtimeMs;
+          const r = swap(os, f);
+          expect(r.rc, 'a real directory is the migration\'s case, and a file nobody\'s — never the flip\'s').toBe(1);
+          expect(r.out).toBe('');
+          expect(r.calls, 'refused BEFORE anything is staged').toEqual([]);
+          if (kind === 'directory') {
+            expect(lstatSync(f.link).isDirectory()).toBe(true);
+            expect(readdirSync(f.link)).toEqual(['LIVE']);
+          } else {
+            expect(lstatSync(f.link).isFile()).toBe(true);
+            expect(readFileSync(f.link, 'utf8')).toBe('not a tree');
+          }
+          expect(statSync(f.link).mtimeMs).toBe(before);
+          expect(lexists(`${f.link}.new`), 'nothing may be left staged').toBe(false);
+        } finally {
+          rmSync(f.d, { recursive: true, force: true });
+        }
+      });
+    }
+
+    for (const kind of ['file', 'directory'] as const) {
+      it(`refuses a ${kind} at <link>.new, and leaves both names alone (${os} arm)`, () => {
+        // `ln -sfn`'s `-f` would delete a file here and a directory would take
+        // the new link inside it — neither is this function's to touch.
+        const f = fixture();
+        try {
+          const staged = `${f.link}.new`;
+          if (kind === 'file') writeFileSync(staged, 'not ours');
+          else { mkdirSync(staged); writeFileSync(path.join(staged, 'THEIRS'), 'not ours'); }
+          const r = swap(os, f);
+          expect(r.rc).toBe(1);
+          expect(r.out).toBe('');
+          expect(r.calls, 'refused BEFORE `ln` runs').toEqual([]);
+          if (kind === 'file') expect(readFileSync(staged, 'utf8')).toBe('not ours');
+          else expect(readdirSync(staged), 'nothing may be linked inside it').toEqual(['THEIRS']);
+          expect(readlinkSync(f.link), 'the running version is still the one pointed at').toBe(f.old);
+        } finally {
+          rmSync(f.d, { recursive: true, force: true });
+        }
+      });
+    }
+
+    it(`a failed rename leaves <link> where it was and removes the staged name (${os} arm)`, () => {
+      // The rename tool's wrapper exits 1 without running it, so this case
+      // needs no GNU `mv` and runs on both runners for both arms.
+      const f = fixture([os === 'darwin' ? 'python3' : 'mv']);
+      try {
+        const r = swap(os, f);
+        expect(r.rc).toBe(1);
+        expect(readlinkSync(f.link), 'the running version is still the one pointed at').toBe(f.old);
+        expect(lexists(`${f.link}.new`), 'the staged link must be cleaned up').toBe(false);
+        expect(r.calls.at(-1), 'the clean-up is the last act').toEqual(['rm', '-f', '--', `${f.link}.new`]);
+      } finally {
+        rmSync(f.d, { recursive: true, force: true });
+      }
+    });
+  }
+
+  itPy('replaces a stale symlink left at <link>.new (Darwin arm)', () => {
+    const f = fixture();
+    try {
+      symlinkSync(f.old, `${f.link}.new`);
+      const r = swap('darwin', f);
+      expect(r.rc, r.out).toBe(0);
+      // `ln -sfn` replaces the stale link itself; nothing else is called.
+      expect(r.calls).toEqual([
+        ['ln', '-sfn', '--', f.next, `${f.link}.new`],
+        ['python3', '-c', PY, `${f.link}.new`, f.link],
+      ]);
+      flipped(f);
+    } finally {
+      rmSync(f.d, { recursive: true, force: true });
+    }
+  });
+
+  // PLATFORM-ONLY: the rename is GNU `mv -fT` (see the first case's marker);
+  // the Darwin twin is the case directly above.
+  itLinux('replaces a stale symlink left at <link>.new (Linux arm)', () => {
+    const f = fixture();
+    try {
+      symlinkSync(f.old, `${f.link}.new`);
+      const r = swap('linux', f);
+      expect(r.rc, r.out).toBe(0);
+      expect(r.calls).toEqual([
+        ['ln', '-sfn', '--', f.next, `${f.link}.new`],
+        ['mv', '-fT', '--', `${f.link}.new`, f.link],
+      ]);
+      flipped(f);
+    } finally {
+      rmSync(f.d, { recursive: true, force: true });
+    }
+  });
+
+  itPy('places the link when nothing stands at <link> yet (Darwin arm)', () => {
+    const f = fixture();
+    try {
+      rmSync(f.link);
+      const r = swap('darwin', f);
+      expect(r.rc, r.out).toBe(0);
+      flipped(f);
+    } finally {
+      rmSync(f.d, { recursive: true, force: true });
+    }
+  });
+
+  // PLATFORM-ONLY: GNU `mv -fT`, as above; the Darwin twin is directly above.
+  itLinux('places the link when nothing stands at <link> yet (Linux arm)', () => {
+    const f = fixture();
+    try {
+      rmSync(f.link);
+      const r = swap('linux', f);
+      expect(r.rc, r.out).toBe(0);
+      flipped(f);
+    } finally {
+      rmSync(f.d, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── _svc_have_user_manager / _svc_run_supervised: both arms, on whichever box runs this ──
+// UNCONDITIONAL. Every behavioural case sources the REAL block and FORCES
+// `CCD_OS` in the same payload — the idiom the describe above uses — so the
+// Linux arms run on the macOS leg and the Darwin arm runs here. Nothing below
+// is platform-gated. The one case that sources nothing is the PF-3 literal
+// pin, a text match over ccd's bytes like the `arms` rows above.
+//
+// CONTAINMENT, THREE LAYERS, because a leaked call would start a real transient
+// unit on the developer's own user manager: recording `systemd-run` and
+// `systemctl` first on PATH in EVERY case, including the ones whose subject
+// never reaches them (a mutant that does must meet a recorder); a preamble that
+// exits 99 unless `command -v` resolves each name to its stub; and a bus address
+// that points at nothing. No fixture unit carries a real lane's unit prefix.
+describe('_svc_run_supervised and _svc_have_user_manager — both arms, forced, on whichever box runs this', () => {
+  type Fx = { home: string; bin: string; runLog: string; ctlLog: string };
+
+  /** A fixture HOME with RECORDING `systemd-run` and `systemctl` in `stub-bin/`. */
+  function svcFixture(opts: { withSystemdRun?: boolean } = {}): Fx {
+    const home = mkTmp('ccrc-svc-sup-');
+    const bin = path.join(home, 'stub-bin');
+    mkdirSync(bin);
+    const runLog = path.join(home, 'systemd-run.argv');
+    const ctlLog = path.join(home, 'systemctl.calls');
+    if (opts.withSystemdRun !== false) {
+      // ONE ARGV ELEMENT PER LINE and a terminator per call: an element that
+      // carries a space stays one element, and `toEqual` sees the order.
+      writeFileSync(path.join(bin, 'systemd-run'), [
+        '#!/bin/sh',
+        `for a in "$@"; do printf '%s\\n' "$a"; done >> '${runLog}'`,
+        `printf '%s\\n' '--end-of-call--' >> '${runLog}'`,
+        'exit "${SVC_RUN_RC:-0}"',
+      ].join('\n') + '\n', { mode: 0o755 });
+    }
+    writeFileSync(path.join(bin, 'systemctl'), [
+      '#!/bin/sh',
+      `printf '%s\\n' "$*" >> '${ctlLog}'`,
+      'case "$*" in "--user show-environment") exit "${SVC_SHOWENV_RC:-0}" ;; esac',
+      'exit 0',
+    ].join('\n') + '\n', { mode: 0o755 });
+    return { home, bin, runLog, ctlLog };
+  }
+
+  const lines = (f: string): string[] =>
+    (existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter((l) => l !== '') : []);
+  /** Every `systemd-run` call, each as its own argv. */
+  const runCalls = (fx: Fx): string[][] => {
+    const calls: string[][] = [];
+    let cur: string[] = [];
+    for (const l of lines(fx.runLog)) {
+      if (l === '--end-of-call--') { calls.push(cur); cur = []; } else cur.push(l);
+    }
+    return calls;
+  };
+  /** Everything either manager binary was asked, in one list — empty means "never asked". */
+  const managerCalls = (fx: Fx): string[] =>
+    [...lines(fx.ctlLog), ...runCalls(fx).map((a) => `systemd-run ${a.join(' ')}`)];
+  const pause = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+  /** Bounded wait; the caller asserts afterwards, so a timeout reds with the caller's message. */
+  const until = (pred: () => boolean, ms = 10_000): void => {
+    const end = Date.now() + ms;
+    while (!pred() && Date.now() < end) pause(50);
+  };
+  const argsOf = (pid: number): string =>
+    (spawnSync('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf8' }).stdout ?? '').trim();
+  const reap = (pid: number): void => { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } };
+
+  /** Source the block, force the platform, put the stubs first on PATH, and
+   *  refuse (99) unless every manager name resolves to its stub. `stubsOnly`
+   *  replaces PATH with the stub directory alone — the one way to model "no
+   *  systemd-run on this box" on a box that has one. */
+  function svc(fx: Fx, os: 'linux' | 'darwin', expr: string,
+    opts: { env?: NodeJS.ProcessEnv; stubsOnly?: boolean; cwd?: string } = {}):
+    { status: number | null; stdout: string; stderr: string } {
+    const run = path.join(fx.bin, 'systemd-run');
+    const ctl = path.join(fx.bin, 'systemctl');
+    const script = [
+      'set -uo pipefail',
+      platformBlock(ccd),
+      `CCD_OS=${os}`,
+      opts.stubsOnly ? `export PATH='${fx.bin}'` : `export PATH='${fx.bin}':"$PATH"`,
+      `[ "$(command -v systemctl)" = '${ctl}' ] || { echo 'containment: systemctl is not the stub' >&2; exit 99; }`,
+      opts.stubsOnly
+        ? `[ -z "$(command -v systemd-run)" ] || { echo 'containment: a systemd-run is reachable' >&2; exit 99; }`
+        : `[ "$(command -v systemd-run)" = '${run}' ] || { echo 'containment: systemd-run is not the stub' >&2; exit 99; }`,
+      expr,
+    ].join('\n') + '\n';
+    const r = spawnSync('bash', ['-c', script], {
+      encoding: 'utf8', timeout: 15_000, cwd: opts.cwd ?? fx.home,
+      env: {
+        ...process.env,
+        HOME: fx.home,
+        XDG_RUNTIME_DIR: path.join(fx.home, 'no-runtime-dir'),
+        DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(fx.home, 'no-bus')}`,
+        ...opts.env,
+      },
+    });
+    expect(r.status, `the payload's containment preamble refused: ${r.stderr}`).not.toBe(99);
+    return { status: r.status, stdout: (r.stdout ?? '').trim(), stderr: (r.stderr ?? '').trim() };
+  }
+
+  it('_svc_have_user_manager answers 0 only off Darwin, with systemd-run on PATH AND a manager that answers', () => {
+    // The probe the live launcher runs, and the one `_svc_run_detached` never
+    // had: "systemctl installed, no user bus" must answer NO, which is the row
+    // PATH presence alone gets wrong.
+    const rows: Array<{ os: 'linux' | 'darwin'; sr: boolean; showEnvRc: number; want: string; asked: string[] }> = [
+      { os: 'linux', sr: true, showEnvRc: 0, want: 'rc=0', asked: ['--user show-environment'] },
+      { os: 'linux', sr: true, showEnvRc: 1, want: 'rc=1', asked: ['--user show-environment'] },
+      { os: 'linux', sr: false, showEnvRc: 0, want: 'rc=1', asked: [] },
+      { os: 'darwin', sr: true, showEnvRc: 0, want: 'rc=1', asked: [] },
+    ];
+    for (const row of rows) {
+      const fx = svcFixture({ withSystemdRun: row.sr });
+      const r = svc(fx, row.os, '_svc_have_user_manager; echo "rc=$?"',
+        { stubsOnly: !row.sr, env: { SVC_SHOWENV_RC: String(row.showEnvRc) } });
+      const label = JSON.stringify(row);
+      expect(r.stdout, label).toBe(row.want);
+      expect(lines(fx.ctlLog), `${label}: what the probe asked the manager`).toEqual(row.asked);
+    }
+  });
+
+  it('the systemd arm: one transient unit, its whole argv in order, and no key material anywhere', () => {
+    const fx = svcFixture();
+    // GENERATED, never asserted by value — only its ABSENCE is asserted, and
+    // with a boolean so a failure does not print it either.
+    const key = `sk-${randomBytes(24).toString('hex')}`;
+    const envfile = path.join(fx.home, 'runtime.env');
+    writeFileSync(envfile, `LITELLM_MASTER_KEY=${key}\n`, { mode: 0o600 });
+    const log = path.join(fx.home, 'logs', 'litellm.log');
+    mkdirSync(path.dirname(log));
+    const tokDir = path.join(fx.home, '.local/share/ccrc/codex/codex-a');
+    const cfg = path.join(fx.home, 'a dir', 'litellm.yaml');
+    const r = svc(fx, 'linux', [
+      `_svc_run_supervised fixture-codex-a-litellm.service '${log}' '${envfile}' \\`,
+      `  CCGPT_ACCOUNT_ID=codex-a 'CHATGPT_TOKEN_DIR=${tokDir}' LITELLM_LOCAL_MODEL_COST_MAP=True 'HOME=${fx.home}' \\`,
+      `  -- /fixture/runtime/bin/python -m litellm.proxy.proxy_cli --config '${cfg}'`,
+      'echo "rc=$?"',
+    ].join('\n'));
+    // KEY ABSENCE FIRST, as booleans, before anything that prints what it
+    // compared: a key that leaked into the argv must red HERE, not on the
+    // census `toEqual` below, whose failure would print the argv — key
+    // included (final-review residue).
+    for (const [where, text] of [
+      ['the systemd-run argv', readFileSync(fx.runLog, 'utf8')],
+      ['the systemctl calls', readFileSync(fx.ctlLog, 'utf8')],
+      ['stdout', r.stdout], ['stderr', r.stderr],
+    ] as const) {
+      expect(text.includes(key), `the gateway key reached ${where}`).toBe(false);
+    }
+    expect(r.stdout, r.stderr).toBe('systemd fixture-codex-a-litellm.service\nrc=0');
+    // THE ARGV IS THE PIN, not a `systemctl show` listing (D-3491):
+    // a planted property answer would prove only what this file typed into it.
+    expect(runCalls(fx)).toEqual([[
+      '--user', '--collect', '--quiet',
+      '--unit=fixture-codex-a-litellm.service', '--slice=app.slice', `--working-directory=${fx.home}`,
+      '-p', 'Restart=always', '-p', 'RestartSec=3',
+      '-p', 'StartLimitIntervalSec=300', '-p', 'StartLimitBurst=20',
+      '-p', `StandardOutput=append:${log}`, '-p', `StandardError=append:${log}`,
+      '-p', `EnvironmentFile=${envfile}`,
+      '--setenv=CCGPT_ACCOUNT_ID=codex-a', `--setenv=CHATGPT_TOKEN_DIR=${tokDir}`,
+      '--setenv=LITELLM_LOCAL_MODEL_COST_MAP=True', `--setenv=HOME=${fx.home}`,
+      '--',
+      '/fixture/runtime/bin/python', '-m', 'litellm.proxy.proxy_cli', '--config', cfg,
+    ]]);
+    expect(lines(fx.ctlLog), 'the probe first, then clear a failed unit of the same name, then nothing')
+      .toEqual(['--user show-environment', '--user reset-failed fixture-codex-a-litellm.service']);
+  });
+
+  it('the systemd arm with envfile `-` and no pairs carries neither, and relays a refused start as its own rc with no `systemd` line', () => {
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'shim.log');
+    const ok = svc(fx, 'linux',
+      `_svc_run_supervised fixture-codex-a-shim.service '${log}' - -- /fixture/python -I /fixture/proxy.py; echo "rc=$?"`);
+    expect(ok.stdout, ok.stderr).toBe('systemd fixture-codex-a-shim.service\nrc=0');
+    const [argv] = runCalls(fx);
+    expect(argv!.slice(argv!.indexOf(`StandardError=append:${log}`) + 1),
+      'nothing between the log and `--`: no EnvironmentFile, no --setenv')
+      .toEqual(['--', '/fixture/python', '-I', '/fixture/proxy.py']);
+    const refused = svc(fx, 'linux',
+      `_svc_run_supervised fixture-codex-a-shim.service '${log}' - -- /fixture/python; echo "rc=$?"`,
+      { env: { SVC_RUN_RC: '5' } });
+    expect(refused.stdout, 'systemd-run\'s refusal is the rc, and nothing claims a start').toBe('rc=5');
+  });
+
+  it('Linux with no user manager takes the nohup arm: the log is APPENDED, `nohup <pid>` is the COMMAND, env and cwd agree with the systemd arm', () => {
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'shim.log');
+    writeFileSync(log, 'an-earlier-line\n');
+    const envfile = path.join(fx.home, 'runtime.env');
+    writeFileSync(envfile, 'FROM_ENVFILE=file-value\nSHARED=from-file\n', { mode: 0o600 });
+    const elsewhere = mkTmp('ccrc-svc-cwd-');
+    const r = svc(fx, 'linux', [
+      '_svc_have_user_manager() { return 1; }',
+      `_svc_run_supervised fixture-codex-a-shim.service '${log}' '${envfile}' SVC_PAIR=pair-value SHARED=from-pair \\`,
+      `  -- sh -c 'echo "pair=$SVC_PAIR file=$FROM_ENVFILE shared=$SHARED cwd=$(pwd -P)"; exec sleep 30'`,
+      'echo "rc=$?"',
+    ].join('\n'), { cwd: elsewhere });
+    const m = /^nohup (\d+)\nrc=0$/.exec(r.stdout);
+    expect(m, `stdout: ${r.stdout} / stderr: ${r.stderr}`).not.toBeNull();
+    const pid = Number(m![1]);
+    try {
+      until(() => readFileSync(log, 'utf8').includes('pair='));
+      // THE ENVFILE BEATS A PAIR — systemd documents EnvironmentFile= over
+      // Environment=, and the two arms must agree. The cwd is $HOME, as
+      // --working-directory is, and NOT the caller's.
+      expect(readFileSync(log, 'utf8'))
+        .toBe(`an-earlier-line\npair=pair-value file=file-value shared=from-file cwd=${fx.home}\n`);
+      // EXACT, not a substring: every shell in the chain carries `sleep 30` in
+      // its own argv (the payload's text, the wrapper's "$@"), so only the
+      // whole line tells the command from a shell that forgot to `exec`.
+      until(() => argsOf(pid) === 'sleep 30');
+      expect(argsOf(pid), 'the printed pid IS the command — the exec chain kept it').toBe('sleep 30');
+      expect(runCalls(fx), 'the nohup arm never reaches systemd-run').toEqual([]);
+    } finally {
+      reap(pid);
+    }
+  });
+
+  it('the nohup arm starts from a SCRUBBED environment: a variable the caller exported never reaches the child; HOME, PATH, the pairs and a set LANG do', () => {
+    // A unit's environment is the manager's, never the caller's, so the nohup
+    // child starts from `env -i` too. The sentinel belongs to NO family on
+    // purpose: `env -i` names none, and a sentinel named `CLAUDE_…` would also
+    // pass a mutant that scrubbed only `CLAUDE_*`. The child prints NAMED
+    // variables only, never `env`, so a mutant that leaks the caller's whole
+    // environment cannot copy a developer's own token into this log or a diff.
+    const fx = svcFixture();
+    const rows: Array<{ lang: string | undefined; want: string }> = [
+      { lang: 'C', want: 'lang=C' },
+      // `${LANG:+…}`: a caller with no LANG gives the child no LANG, not an empty one.
+      { lang: undefined, want: 'lang=absent' },
+    ];
+    for (const row of rows) {
+      const log = path.join(fx.home, `scrub-${row.lang ?? 'unset'}.log`);
+      const r = svc(fx, 'linux', [
+        '_svc_have_user_manager() { return 1; }',
+        // THE CONTROL: the plant reached the caller, or the absence below is vacuous.
+        'echo "caller=${SVC_CALLER_SENTINEL-absent}"',
+        `_svc_run_supervised fixture-scrub.service '${log}' - SVC_PAIR=pair-value \\`,
+        `  -- sh -c 'echo "sentinel=\${SVC_CALLER_SENTINEL-absent} pair=\${SVC_PAIR-absent} home=\${HOME-absent} path-head=\${PATH%%:*} lang=\${LANG-absent}"'`,
+        'echo "rc=$?"',
+      ].join('\n'), { env: { SVC_CALLER_SENTINEL: 'planted-by-the-caller', LANG: row.lang } });
+      const m = /^caller=planted-by-the-caller\nnohup (\d+)\nrc=0$/.exec(r.stdout);
+      expect(m, `${row.want}: stdout: ${r.stdout} / stderr: ${r.stderr}`).not.toBeNull();
+      const pid = Number(m![1]);
+      try {
+        until(() => readFileSync(log, 'utf8').includes('sentinel='));
+        expect(readFileSync(log, 'utf8'), row.want)
+          .toBe(`sentinel=absent pair=pair-value home=${fx.home} path-head=${fx.bin} ${row.want}\n`);
+      } finally {
+        reap(pid);
+      }
+    }
+    expect(runCalls(fx), 'the nohup arm never reaches systemd-run').toEqual([]);
+  });
+
+  it('the nohup arm SOURCES the envfile inside its own `sh`, never lists the file\'s lines as `env` argv — a literal pin (PF-3)', () => {
+    // NO BEHAVIOURAL CASE CAN SEE THIS. Listed as `env` arguments after the
+    // pairs, the file's lines give the child the SAME environment, file after
+    // pairs, so every case in this describe stays green on that mutant — but
+    // the gateway key would then sit in `env`'s argv, which `ps` shows to every
+    // user on the box for the life of that process. That is the one channel the
+    // secret refusal exists to close, so the sourcing line is pinned by its
+    // TEXT, together with the argument line that makes its `$1` the envfile's
+    // PATH. The price is a red on a pure reformat of those two lines; a red
+    // beats a disclosure.
+    expect(ccd, 'the nohup arm no longer sources the envfile by path inside its `sh -c`').toContain(
+      `      sh -c 'if [ "$1" != - ]; then set -a; . "$1" || exit 1; set +a; fi; shift; exec nohup "$@"' \\\n      sh "$envfile" "$@"\n`);
+  });
+
+  it('forced Darwin: a missing command answers 1 and backgrounds NOTHING — probed before the `&`', () => {
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'never.log');
+    const r = svc(fx, 'darwin', [
+      `_svc_run_supervised fixture-x.service '${log}' - -- ccrc-fixture-no-such-command-7c1e --flag`,
+      'rc=$?; echo "rc=$rc jobs=$(jobs -p | wc -l | tr -d \' \')"',
+    ].join('\n'));
+    // A bare `nohup … &` answers 0 and leaves a job in the table: both are
+    // read in the SAME shell, immediately, so neither waits on a race.
+    expect(r.stdout).toBe('rc=1 jobs=0');
+    expect(r.stderr.split('\n'), 'one line').toHaveLength(1);
+    expect(r.stderr).toContain('ccrc-fixture-no-such-command-7c1e');
+    expect(existsSync(log) ? readFileSync(log, 'utf8') : '', 'nothing ran, so nothing wrote').toBe('');
+    expect(managerCalls(fx), 'Darwin never asks systemd').toEqual([]);
+  });
+
+  it('forced Darwin: a real command takes the nohup arm even with systemd-run on PATH, and asks systemd nothing', () => {
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'darwin.log');
+    const r = svc(fx, 'darwin',
+      `_svc_run_supervised fixture-x.service '${log}' - -- sh -c 'echo darwin-arm-ran'; echo "rc=$?"`);
+    const m = /^nohup (\d+)\nrc=0$/.exec(r.stdout);
+    expect(m, `stdout: ${r.stdout} / stderr: ${r.stderr}`).not.toBeNull();
+    const pid = Number(m![1]);
+    try {
+      until(() => readFileSync(log, 'utf8').includes('darwin-arm-ran'));
+      expect(readFileSync(log, 'utf8')).toBe('darwin-arm-ran\n');
+      expect(managerCalls(fx), 'the Darwin answer is decided before the manager is asked').toEqual([]);
+    } finally {
+      reap(pid);
+    }
+  });
+
+  it('refuses a NAME whose last _-segment ends with a secret word, in any case — 64, one stderr line naming it, its value never echoed, nothing asked', () => {
+    // ALL FIVE ALTERNATIVES, each named by at least one row, so deleting any
+    // one of them reds a row here: KEY (`LITELLM_MASTER_KEY`, `OPENAI_APIKEY`),
+    // TOKEN (`ANTHROPIC_AUTH_TOKEN`), SECRET (`CLIENT_SECRET`), PASSWORD
+    // (`DB_PASSWORD`) and PASSWD (`DB_PASSWD`). The name that PASSES is the
+    // next case. Each is spelled as written AND lowercased: the rule is
+    // case-insensitive, and only the lowercase spelling makes that a pinned
+    // fact rather than a comment.
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'refused.log');
+    const value = `sk-${randomBytes(24).toString('hex')}`;
+    for (const written of ['LITELLM_MASTER_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_APIKEY', 'CLIENT_SECRET', 'DB_PASSWORD', 'DB_PASSWD']) {
+      for (const name of [written, written.toLowerCase()]) {
+        const r = svc(fx, 'linux',
+          `_svc_run_supervised fixture-x.service '${log}' - FIXTURE_OK=1 '${name}=${value}' -- /fixture/py; echo "rc=$?"`);
+        expect(r.stdout, name).toBe('rc=64');
+        expect(r.stderr.split('\n'), `${name}: one line`).toHaveLength(1);
+        expect(r.stderr, name).toContain(name);
+        expect(r.stderr.includes(value), `${name}: the value was echoed`).toBe(false);
+      }
+    }
+    expect(managerCalls(fx), 'a refusal asks and starts nothing').toEqual([]);
+    expect(existsSync(log), 'a refusal is decided before the log is touched').toBe(false);
+  });
+
+  it('passes CHATGPT_TOKEN_DIR, in any case — its last segment is DIR, so there is nothing to refuse and nothing to exempt', () => {
+    // The lane's own litellm start passes this name. It is LiteLLM's variable
+    // and says WHERE a credential lives; the rule reads the tail, and the
+    // `TOKEN` inside it is not the tail. The fifth of the plan's five names.
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'dir.log');
+    for (const name of ['CHATGPT_TOKEN_DIR', 'chatgpt_token_dir']) {
+      const r = svc(fx, 'linux',
+        `_svc_run_supervised fixture-x.service '${log}' - ${name}=/fixture/tok -- /fixture/py; echo "rc=$?"`);
+      expect(r.stdout, `${name}: ${r.stderr}`).toBe('systemd fixture-x.service\nrc=0');
+    }
+    expect(runCalls(fx).map((argv) => argv.filter((a) => a.startsWith('--setenv='))),
+      'each spelling reached its unit as a pair, and nothing else did')
+      .toEqual([['--setenv=CHATGPT_TOKEN_DIR=/fixture/tok'], ['--setenv=chatgpt_token_dir=/fixture/tok']]);
+  });
+
+  it('refuses a malformed argv — 64, one stderr line naming what is wrong, never an argument, nothing asked or started', () => {
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'shape.log');
+    const stray = `sk-${randomBytes(24).toString('hex')}`;
+    const rows: Array<[string, string, string]> = [
+      ['no arguments at all', '', 'fewer than three arguments'],
+      ['two arguments', `u.service '${log}'`, 'fewer than three arguments'],
+      ['an empty unit', `'' '${log}' - -- /fixture/py`, 'the unit name is empty'],
+      ['an empty log', `u.service '' - -- /fixture/py`, 'the log must be an absolute path'],
+      ['a relative log', `u.service logs/x.log - -- /fixture/py`, 'the log must be an absolute path'],
+      ['an empty envfile', `u.service '${log}' '' -- /fixture/py`, 'the envfile must be - or an absolute path'],
+      ['a relative envfile', `u.service '${log}' runtime.env -- /fixture/py`, 'the envfile must be - or an absolute path'],
+      ["systemd's ignore-if-missing envfile form", `u.service '${log}' '-${fx.home}/runtime.env' -- /fixture/py`,
+        'the envfile must be - or an absolute path'],
+      ['no -- (the command read as a pair)', `u.service '${log}' - A=1 /fixture/py`, 'argument 5 is not NAME=value'],
+      ['no -- and no command', `u.service '${log}' - A=1`, 'no -- before the command'],
+      ['nothing after --', `u.service '${log}' - --`, 'nothing to run after --'],
+      ['a stray value with no NAME=', `u.service '${log}' - '${stray}' -- /fixture/py`, 'argument 4 is not NAME=value'],
+      ['a NAME starting with a digit', `u.service '${log}' - 1BAD=x -- /fixture/py`, 'argument 4 is not NAME=value'],
+      ['a NAME with a dash', `u.service '${log}' - BAD-NAME=x -- /fixture/py`, 'argument 4 is not NAME=value'],
+      ['an empty NAME', `u.service '${log}' - =x -- /fixture/py`, 'argument 4 is not NAME=value'],
+      ['a non-ASCII NAME', `u.service '${log}' - NAMÉ=x -- /fixture/py`, 'argument 4 is not NAME=value'],
+    ];
+    for (const [label, args, why] of rows) {
+      const r = svc(fx, 'linux', `_svc_run_supervised ${args}; echo "rc=$?"`);
+      expect(r.stdout, label).toBe('rc=64');
+      expect(r.stderr.split('\n'), `${label}: one line`).toHaveLength(1);
+      expect(r.stderr, label).toContain(why);
+      expect(r.stderr.includes(stray), `${label}: an argument was echoed`).toBe(false);
+    }
+    expect(managerCalls(fx), 'a malformed argv asks and starts nothing').toEqual([]);
+    expect(existsSync(log), 'and touches no log').toBe(false);
+  });
+
+  it('probes the states neither arm can report later — 1, one stderr line, before the manager is asked or anything backgrounds', () => {
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'state.log');
+    const envDir = path.join(fx.home, 'env-is-a-dir');
+    mkdirSync(envDir);
+    // A REGULAR FILE THE CALLER CANNOT READ. The two rows above are refused by
+    // `-f` alone, so this is the row that makes the `-r` conjunct a pinned fact:
+    // without it, a mode-000 key file reaches the manager and starts a unit
+    // that cannot read its own environment. ROOT READS MODE 000, so under root
+    // the row would be a false red and is left out; CI's runners are not root.
+    const unreadable = path.join(fx.home, 'unreadable.env');
+    writeFileSync(unreadable, 'FIXTURE_OK=1\n');
+    chmodSync(unreadable, 0o000);
+    const asRoot = process.getuid?.() === 0;
+    const rows: Array<[string, 'linux' | 'darwin', string, string]> = [
+      ['an absent envfile', 'linux', `fixture-x.service '${log}' '${fx.home}/absent.env' -- /fixture/py`, 'absent.env'],
+      ['an envfile that is a directory', 'linux', `fixture-x.service '${log}' '${envDir}' -- /fixture/py`, 'env-is-a-dir'],
+      ...(asRoot ? [] : [['an envfile with mode 000', 'linux',
+        `fixture-x.service '${log}' '${unreadable}' -- /fixture/py`, 'unreadable.env'] as [string, 'linux' | 'darwin', string, string]]),
+      ['a log whose directory is missing (systemd arm)', 'linux',
+        `fixture-x.service '${fx.home}/no-such-dir/x.log' - -- /fixture/py`, 'no-such-dir'],
+      ['a log whose directory is missing (nohup arm)', 'darwin',
+        `fixture-x.service '${fx.home}/no-such-dir/x.log' - -- sh -c true`, 'no-such-dir'],
+    ];
+    for (const [label, os, args, names] of rows) {
+      const r = svc(fx, os,
+        `_svc_run_supervised ${args}\nrc=$?; echo "rc=$rc jobs=$(jobs -p | wc -l | tr -d ' ')"`);
+      expect(r.stdout, label).toBe('rc=1 jobs=0');
+      expect(r.stderr.split('\n'), `${label}: one line`).toHaveLength(1);
+      expect(r.stderr, label).toContain(names);
+    }
+    expect(managerCalls(fx), 'every state is decided before the manager is asked').toEqual([]);
+  });
+});
+
 // ── Everything below needs a real Darwin userland ────────────────────────
 describe.skipIf(!IS_DARWIN)('the Darwin arms, run for real', () => {
   /** Source just the platform block into a bash and run one expression
@@ -433,6 +1502,29 @@ describe.skipIf(!IS_DARWIN)('the Darwin arms, run for real', () => {
       expect(rc, 'a directory destination must be refused').toBe('1');
       const ok = inBlock(`_plat_mv_notdir '${d}/src' '${d}/plain'; echo $?`);
       expect(ok, 'an ordinary rename must still succeed').toBe('0');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('_plat_ln_swap repoints a symlink-to-directory in one rename, with CCD_OS as the block computed it', () => {
+    // The forced-Darwin cases above prove the argv and the postcondition on
+    // Linux's rename(2); this is the same postcondition on APFS, through the
+    // python3 the runner really has.
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-ln-swap-real-'));
+    try {
+      const old = path.join(d, 'v0.0.1');
+      const next = path.join(d, 'v0.0.2');
+      mkdirSync(old);
+      mkdirSync(next);
+      writeFileSync(path.join(old, 'OLD-MARKER'), 'old');
+      const link = path.join(d, 'ccrc');
+      symlinkSync(old, link);
+      expect(inBlock(`_plat_ln_swap '${next}' '${link}'; echo $?`)).toBe('0');
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(link)).toBe(next);
+      expect(readdirSync(old), 'nothing may be moved inside the old version').toEqual(['OLD-MARKER']);
+      expect(readdirSync(d).sort(), 'no staged <link>.new may be left').toEqual(['ccrc', 'v0.0.1', 'v0.0.2']);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
@@ -618,5 +1710,79 @@ describe('a platform-asserting test title owes the other platform an answer (D-2
       + 'has no counterpart, put a `PLATFORM-ONLY: <why>` comment within 8 lines above it.\n\n'
       + offenders.join('\n'),
     ).toEqual([]);
+  });
+});
+
+// Accounts plan Task A11 (D-5513's backups row; G33; D-5755). APPENDED. On darwin, the verb that creates
+// `~/.cc-secrets` excludes it from Time Machine with `tmutil addexclusion`; on Linux it calls nothing. The darwin arm
+// runs anywhere: `ccrc` is sourced and `CCD_OS` set after the source (this file's rule above), with a stub `tmutil`
+// first on PATH that records its argv. HOME is a throwaway directory and the credential a fixed non-secret string.
+describe('backups: creating ~/.cc-secrets excludes it from Time Machine on darwin (G33)', () => {
+  function writeTwice(os: 'darwin' | 'linux', opts: { preexisting?: boolean } = {}):
+  { home: string; calls: string[]; status: number | null; stderr: string } {
+    const home = mkTmp(`ccrc-a11-tmutil-${os}-`);
+    if (opts.preexisting) mkdirSync(path.join(home, '.cc-secrets'), { mode: 0o700 });
+    const bin = path.join(home, '.stub-bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'tmutil'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/tmutil-calls"\nexit 0\n',
+      { mode: 0o755 });
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}` };
+    for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+    // A constant script: the source and the platform arrive in the environment, never in the command or its argv.
+    env['A11_CCRC_SRC'] = path.join(ccdRoot, 'ccrc');
+    env['A11_OS'] = os;
+    const r = spawnSync('bash', ['-c', '. "$A11_CCRC_SRC"; CCD_OS="$A11_OS"; '
+      + 'ACCT_CREDENTIAL=not-a-secret; _acct_write_secret lane-c compatible ANTHROPIC_AUTH_TOKEN; '
+      + 'ACCT_CREDENTIAL=not-a-secret; _acct_write_secret lane-c compatible ANTHROPIC_AUTH_TOKEN'],
+    { env, encoding: 'utf8' });
+    const log = path.join(home, 'tmutil-calls');
+    return { home, calls: existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [], status: r.status, stderr: r.stderr };
+  }
+
+  it('creating `~/.cc-secrets` calls `tmutil addexclusion` on it', () => {
+    const r = writeTwice('darwin');
+    expect(r.status, r.stderr).toBe(0);
+    // Every write that ensures the directory excludes it (D-5756): `addexclusion` is sticky and idempotent, so the
+    // second call is harmless, and it is what covers a directory some other path created first.
+    const dir = path.join(r.home, '.cc-secrets');
+    expect(r.calls).toEqual([`addexclusion ${dir}`, `addexclusion ${dir}`]);
+  });
+
+  // D-5756. On an upgraded node `~/.cc-secrets` is already there: an older ccrc, `ccrc token sync` or the
+  // setup-token sign-in made it, and none of those excludes it. The next write must still exclude it.
+  it('an existing, unexcluded `~/.cc-secrets` is excluded by the next write', () => {
+    const r = writeTwice('darwin', { preexisting: true });
+    expect(r.status, r.stderr).toBe(0);
+    const dir = path.join(r.home, '.cc-secrets');
+    expect(r.calls[0]).toBe(`addexclusion ${dir}`);
+  });
+
+  // D-5756. The install spine's backfill step excludes an existing `~/.cc-secrets` on darwin, so a node that
+  // takes an update but runs no account verb afterwards stops backing its lane secrets up too.
+  it('the install backfill excludes an existing `~/.cc-secrets` on darwin, and calls nothing on Linux', () => {
+    for (const os of ['darwin', 'linux'] as const) {
+      const home = mkTmp(`ccrc-a11-tmutil-inst-${os}-`);
+      const bin = path.join(home, '.stub-bin');
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(path.join(home, '.cc-secrets'), { mode: 0o700 });
+      writeFileSync(path.join(bin, 'tmutil'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/tmutil-calls"\nexit 0\n',
+        { mode: 0o755 });
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}` };
+      for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+      env['A11_CCRC_SRC'] = path.join(ccdRoot, 'ccrc');
+      env['A11_OS'] = os;
+      const r = spawnSync('bash', ['-c', '. "$A11_CCRC_SRC"; CCD_OS="$A11_OS"; _inst_lane_state'],
+        { env, encoding: 'utf8', timeout: 60_000 });
+      expect(r.status, r.stderr).toBe(0);
+      const log = path.join(home, 'tmutil-calls');
+      const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [];
+      expect(calls, os).toEqual(os === 'darwin' ? [`addexclusion ${path.join(home, '.cc-secrets')}`] : []);
+    }
+  });
+
+  it('on Linux it calls nothing', () => {
+    const r = writeTwice('linux');
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.calls).toEqual([]);
   });
 });

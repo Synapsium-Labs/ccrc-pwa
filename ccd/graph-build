@@ -1,0 +1,328 @@
+#!/usr/bin/env python3
+# graph-build — the engine wrapper (graph revision 2, D-7349; spec §3.4). The ONLY way ccrc calls the graph engine.
+#
+# Run by the pinned venv's interpreter, never by a bare python3 on PATH:
+#
+#   cd <checkout realpath> && GRAPHIFY_OUT=<staging realpath>/graphify-out \
+#     "$VENV/bin/python" -s -P "$GRAPH_LIB/graph-build" --root <checkout realpath> --out <staging>/graphify-out \
+#       --commit <tip> --pin <pin> --memory <store>/<repo-key>/memory --launched <epoch s> --slot-wait <secs> \
+#       [--changed <staging>/changed.z]
+#
+# `-s -P` keep user site-packages and this file's directory off sys.path, so a module at a repository's root can
+# never shadow an import (PYTHONPATH is still honoured; the tests put their stub engine there).
+#
+# In this order, each step before the engine call refusing with ONE stderr line `graph-build: <class>: <detail>`:
+#   1. slot wait: started later after --launched than --slot-wait allows -> exit 3 (class slot-wait); nothing else
+#      runs, the engine is not imported and no .started is written (the plan's outcome table, finding 2);
+#   2. /proc/self/oom_score_adj := 1000 where the file exists, BEFORE the engine is imported, so the engine's forked
+#      extraction workers inherit it and the kernel's OOM kill in the tests slice picks the build, never a test run;
+#   3. spec §3.4's checks -> exit 2 (class setup), one line naming the check;
+#   4. <dirname of --out>/.started, immediately before the call (the sweep tells "timed out" from "never started");
+#   5. _rebuild_code(Path('.'), changed_paths=<absolute paths or None>, force=True, acquire_lock=False);
+#   6. the saved-result spelling: every source_file whose realpath lies under realpath(--memory) becomes
+#      graphify-out/memory/<path under memory/>, which resolves from any tree through its link (finding 4);
+#   7. the last stdout line `graph-build: peak_kb=<n|null> cpu_ms=<n|null>`: memory.peak and cpu.stat usage_usec of
+#      this process's own cgroup (the `0::` line of /proc/self/cgroup, under CCRC_CGROUP_ROOT, default
+#      /sys/fs/cgroup), read after the engine's workers have exited (D-7357);
+#   8. exit 0 when the engine returned True; else 1 with `graph-build: engine: _rebuild_code returned False`.
+# Every non-zero exit ends with exactly one `graph-build: <class>: <detail>` stderr line, class one of setup,
+# slot-wait, engine, publish. An exception the engine raises is printed, then named as `engine: _rebuild_code
+# raised ...` (exit 1), which the sweep does not read as the engine's False (spec §3.3, D-7366).
+#
+# --probe runs the checks of step 3 that its arguments allow (the engine's version and signature always), imports
+# the engine without calling it, and exits 0 or 2. No numeric bound is written here: the slot wait is an argument,
+# and every other bound a build obeys is a CCRC_GRAPH_* setting the sweep passes in (graph-knobs.test.ts scans this
+# file for a literal compared against a quantity).
+import argparse
+import os
+import sys
+import time
+
+PREFIX = 'graph-build: '
+REQUIRED = ('changed_paths', 'force', 'acquire_lock')
+STATE = {'started': False}
+
+
+class Refusal(Exception):
+    def __init__(self, cls, detail, code):
+        super().__init__(detail)
+        self.cls = cls
+        self.detail = detail
+        self.code = code
+
+
+def refuse(cls, detail, code):
+    raise Refusal(cls, detail, code)
+
+
+class Parser(argparse.ArgumentParser):
+    # A bad argument is a setup failure with the contract's one line, not argparse's usage text and its own exit.
+    def error(self, message):
+        refuse('setup', 'arguments: ' + message, 2)
+
+
+def parse(argv):
+    p = Parser(prog='graph-build', add_help=False)
+    p.add_argument('--root')
+    p.add_argument('--out')
+    p.add_argument('--commit')
+    p.add_argument('--pin')
+    p.add_argument('--memory')
+    p.add_argument('--launched', type=int)
+    p.add_argument('--slot-wait', dest='slot_wait', type=int)
+    p.add_argument('--changed')
+    p.add_argument('--probe', action='store_true')
+    a = p.parse_args(argv)
+    need = ['pin'] if a.probe else ['root', 'out', 'commit', 'pin', 'memory', 'launched', 'slot_wait']
+    missing = ['--' + n.replace('_', '-') for n in need if getattr(a, n) is None]
+    if missing:
+        refuse('setup', 'arguments: missing ' + ' '.join(missing), 2)
+    return a
+
+
+def slot_wait(a):
+    late = int(time.time()) - a.launched
+    if late > a.slot_wait:
+        refuse('slot-wait', 'started %ds after launch, above CCRC_GRAPH_SLOT_WAIT_SECS=%d' % (late, a.slot_wait), 3)
+
+
+def oom_victim():
+    path = '/proc/self/oom_score_adj'
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, 'w', encoding='ascii') as f:
+            f.write('1000\n')
+    except OSError as e:
+        refuse('setup', 'oom_score_adj: cannot write %s: %s' % (path, e.strerror or e), 2)
+
+
+def git_head():
+    import subprocess
+    env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    env['GIT_TERMINAL_PROMPT'] = '0'
+    r = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True, env=env)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def unwritable(out):
+    # The engine rewrites the report, labels and manifest in place; a read-only copy makes it return False with no
+    # reason. The memory link (and any link) is not followed: it is the one member that is not the build's.
+    for dirpath, dirnames, filenames in os.walk(out):
+        for name in dirnames + filenames:
+            p = os.path.join(dirpath, name)
+            if not os.path.islink(p) and not os.access(p, os.W_OK):
+                return p
+    return None
+
+
+def pre_import_checks(a, out_env):
+    if a.root is not None and os.path.realpath(os.getcwd()) != a.root:
+        refuse('setup', 'cwd: the working directory %s is not --root %s' % (os.path.realpath(os.getcwd()), a.root), 2)
+    if a.out is not None:
+        if not os.path.isabs(a.out):
+            refuse('setup', 'out: --out %s is not an absolute path' % a.out, 2)
+        if os.path.basename(a.out) != 'graphify-out':
+            refuse('setup', 'out-name: --out is named %s, not graphify-out (the engine skips a directory of that '
+                   'name everywhere in the scan)' % os.path.basename(a.out), 2)
+        if out_env != a.out:
+            refuse('setup', 'GRAPHIFY_OUT: %s in the environment before the engine is imported, not --out %s'
+                   % ('unset' if out_env is None else repr(out_env), a.out), 2)
+        if not os.path.isdir(a.out):
+            refuse('setup', 'out: --out %s is not a directory' % a.out, 2)
+        bad = unwritable(a.out)
+        if bad is not None:
+            refuse('setup', 'writable: %s is not writable' % bad, 2)
+    from importlib import metadata
+    try:
+        have = metadata.version('graphifyy')
+    except metadata.PackageNotFoundError:
+        have = None
+    if have != a.pin:
+        refuse('setup', 'pin: the engine is graphifyy %s, not the pinned %s' % (have or '(not installed)', a.pin), 2)
+    if a.commit is not None:
+        head = git_head()
+        if head != a.commit:
+            refuse('setup', 'commit: HEAD in the working directory is %s, not --commit %s' % (head or '(none)', a.commit), 2)
+
+
+def changed_paths(a):
+    if a.changed is None:
+        return None
+    try:
+        with open(a.changed, 'rb') as f:
+            raw = f.read()
+    except OSError as e:
+        refuse('setup', 'changed: cannot read --changed %s: %s' % (a.changed, e.strerror or e), 2)
+    from pathlib import Path
+    return [Path(os.path.join(a.root, os.fsdecode(p))) for p in raw.split(b'\0') if p]
+
+
+def engine(a):
+    # Imported only now: GRAPHIFY_OUT was checked in the environment above, and paths.py reads it once, here.
+    import inspect
+    try:
+        import graphify.paths
+        import graphify.watch
+    except ImportError as e:
+        refuse('setup', 'import: the engine cannot be imported: %s' % e, 2)
+    if a.out is not None and graphify.paths.GRAPHIFY_OUT != a.out:
+        refuse('setup', 'GRAPHIFY_OUT: the engine read %r at import, not --out %s' % (graphify.paths.GRAPHIFY_OUT, a.out), 2)
+    fn = getattr(graphify.watch, '_rebuild_code', None)
+    if fn is None:
+        refuse('setup', 'signature: graphify.watch has no _rebuild_code', 2)
+    params = inspect.signature(fn).parameters
+    lacking = [n for n in REQUIRED if n not in params]
+    if lacking:
+        refuse('setup', 'signature: _rebuild_code has no %s' % ', '.join(lacking), 2)
+    return fn
+
+
+def saved_result_spelling(a):
+    # Finding 4: a saved result's node is published as graphify-out/memory/<path under memory/>. Exactly the
+    # source_file values whose realpath lies under realpath(--memory) are rewritten; every other value is untouched.
+    import json
+    graph = os.path.join(a.out, 'graph.json')
+    if not os.path.exists(graph):
+        return
+    mem = os.path.realpath(a.memory)
+
+    def spelled(v):
+        real = os.path.realpath(v if os.path.isabs(v) else os.path.join(a.root, v))
+        if os.path.commonpath([real, mem]) != mem or real == mem:
+            return v
+        return 'graphify-out/memory/' + os.path.relpath(real, mem).replace(os.sep, '/')
+
+    def walk(x):
+        changed = False
+        if isinstance(x, dict):
+            for k, v in x.items():
+                if k == 'source_file' and isinstance(v, str) and v:
+                    w = spelled(v)
+                    if w != v:
+                        x[k] = w
+                        changed = True
+                else:
+                    changed = walk(v) or changed
+        elif isinstance(x, list):
+            for v in x:
+                changed = walk(v) or changed
+        return changed
+
+    try:
+        with open(graph, encoding='utf-8') as f:
+            data = json.load(f)
+        if not walk(data):
+            return
+        tmp = graph + '.graph-build.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+        os.chmod(tmp, os.stat(graph).st_mode & 0o7777)
+        os.replace(tmp, graph)
+    except (OSError, ValueError) as e:
+        refuse('publish', 'saved results: cannot rewrite their source_file in %s: %s' % (graph, e), 1)
+
+
+def own_cgroup_figures():
+    # memory.peak counts the interpreter and every worker together (ru_maxrss cannot); the scope is collected when
+    # `ccrc test` returns, so it is read here. Unreadable -> null.
+    def read(name):
+        try:
+            rel = None
+            with open('/proc/self/cgroup', encoding='ascii') as f:
+                for line in f:
+                    if line.startswith('0::'):
+                        rel = line[3:].strip()
+            if rel is None:
+                return None
+            base = os.environ.get('CCRC_CGROUP_ROOT') or '/sys/fs/cgroup'
+            with open(os.path.join(base, rel.lstrip('/'), name), encoding='ascii') as f:
+                return f.read()
+        except (OSError, ValueError):
+            return None
+
+    peak = read('memory.peak')
+    stat = read('cpu.stat')
+    peak_kb = int(peak.split()[0]) // 1024 if peak and peak.split() and peak.split()[0].isdigit() else None
+    cpu_ms = None
+    for line in (stat or '').splitlines():
+        f = line.split()
+        if len(f) == 2 and f[0] == 'usage_usec' and f[1].isdigit():
+            cpu_ms = int(f[1]) // 1000
+    return peak_kb, cpu_ms
+
+
+def reap_workers():
+    # The engine's pool joins its workers before it returns; join any multiprocessing child still alive, so the
+    # cgroup figures are read after the last worker has exited. Only a module the engine already loaded is asked.
+    mp = sys.modules.get('multiprocessing')
+    if mp is not None:
+        for child in mp.active_children():
+            child.join()
+
+
+def main(argv):
+    a = parse(argv)
+    if not a.probe:
+        slot_wait(a)
+        oom_victim()
+    out_env = os.environ.get('GRAPHIFY_OUT')
+    pre_import_checks(a, out_env)
+    targets = None if a.probe else changed_paths(a)
+    fn = engine(a)
+    if a.probe:
+        return 0
+    started = os.path.join(os.path.dirname(a.out), '.started')
+    try:
+        with open(started, 'w', encoding='ascii') as f:
+            f.write('%d %d\n' % (int(time.time()), os.getpid()))
+    except OSError as e:
+        refuse('setup', 'started: cannot write %s: %s' % (started, e.strerror or e), 2)
+    STATE['started'] = True
+    from pathlib import Path
+    failure = None
+    try:
+        ok = fn(Path('.'), changed_paths=targets, force=True, acquire_lock=False)
+    except Exception as e:  # the engine's own failure: printed whole, then named in the contract's one line
+        import traceback
+        traceback.print_exc()
+        sys.stderr.flush()
+        ok = None
+        failure = Refusal('engine', '_rebuild_code raised %s: %s' % (type(e).__name__, e), 1)
+    reap_workers()
+    if ok is True:
+        try:
+            saved_result_spelling(a)
+        except Refusal as r:
+            failure = r
+    elif failure is None:
+        failure = Refusal('engine', '_rebuild_code returned False', 1)
+    report_figures()
+    if failure is not None:
+        raise failure
+    return 0
+
+
+def report_figures():
+    peak_kb, cpu_ms = own_cgroup_figures()
+    sys.stdout.write('%speak_kb=%s cpu_ms=%s\n' % (PREFIX, 'null' if peak_kb is None else peak_kb,
+                                                 'null' if cpu_ms is None else cpu_ms))
+    sys.stdout.flush()
+
+
+if __name__ == '__main__':
+    try:
+        code = main(sys.argv[1:])
+    except Refusal as r:
+        sys.stdout.flush()
+        sys.stderr.write('%s%s: %s\n' % (PREFIX, r.cls, r.detail))
+        sys.stderr.flush()
+        code = r.code
+    except Exception as e:  # never a bare traceback as the last line: before .started it is setup, after it engine
+        import traceback
+        traceback.print_exc()
+        cls, code = ('engine', 1) if STATE['started'] else ('setup', 2)
+        sys.stdout.flush()
+        sys.stderr.write('%s%s: unexpected %s: %s\n' % (PREFIX, cls, type(e).__name__, e))
+        sys.stderr.flush()
+    sys.exit(code)

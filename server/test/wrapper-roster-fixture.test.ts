@@ -254,15 +254,15 @@ describe('ccd _id_wrapper agrees with CCD_MIRROR.idPrefix, for the wrappers ccd 
   // guards against. `claude-d-` is a strict extension of `claude-`, and a
   // bash `case` takes the FIRST arm that matches, not the longest — so the
   // `claude-d-*)` arm only works while it sits ABOVE `claude-*)`. Move it
-  // below and every dev0 id silently comes back `claude`, re-attributing a
+  // below and every claude-d id silently comes back `claude`, re-attributing a
   // whole account's sessions with no error anywhere.
   //
   // This case used to assert the opposite (ccd was silent on claude-d, and
   // an id under that prefix resolved to `claude`) and was written to go red
-  // the day ccd learned the account. That day has come: dev0 is home-able and
+  // the day ccd learned the account. That day has come: claude-d is home-able and
   // ccd-valid, so ccd mints `claude-d-*` ids for real and this pins the
   // ARM ORDER that keeps them attributed correctly.
-  it('matches claude-d-* before the shorter claude-*, never attributing a dev0 id to claude', () => {
+  it('matches claude-d-* before the shorter claude-*, never attributing a claude-d id to claude', () => {
     expect(CCD_MIRROR['claude-d']!.ccdValid).toBe(true);
     const id = `${CCD_MIRROR['claude-d']!.idPrefix}fixture-slug`;
     expect(h.sh(`_id_wrapper '${id}'`)).toBe('claude-d');
@@ -387,7 +387,7 @@ describe('accounts.sh round-trip: the generated bash agrees with the server Type
 // PROJECTION of something real that a future change can silently drift away
 // from, and "a comment asking a future author to keep them in sync" is not a
 // mechanism. Here the real thing is not the roster but the filesystem itself:
-// `REQUIRED_REFS` names the `references/*.md` files a partial rsync (the
+// `REQUIRED_REFS` names the `references/` files a partial rsync (the
 // specific hazard its own script comment names — SKILL.md sorts before
 // `references/`, so an interrupted `rsync -az --delete` can land SKILL.md
 // with an incomplete or absent `references/`) must NOT be allowed to ship
@@ -396,16 +396,35 @@ describe('accounts.sh round-trip: the generated bash agrees with the server Type
 // it — exactly the half-installed shape the guard exists to refuse — and
 // nothing before this test would have noticed.
 describe('install-coordinator-skill.sh REQUIRED_REFS agrees with the real references/ directory (I8)', () => {
-  it('names exactly the .md files that live under ccd/coordinator-skill/references/ today', () => {
+  it('names exactly the files that live under ccd/coordinator-skill/references/ today', () => {
     const src = readFileSync(path.join(ccrcRoot, 'ccd', 'install-coordinator-skill.sh'), 'utf8');
     const m = /REQUIRED_REFS=\(([^)]*)\)/.exec(src);
     expect(m, "install-coordinator-skill.sh's REQUIRED_REFS=(...) line").not.toBeNull();
     const declared = sortedSet((m as RegExpExecArray)[1].trim().split(/\s+/).filter(Boolean));
     const actual = sortedSet(
-      readdirSync(path.join(ccrcRoot, 'ccd', 'coordinator-skill', 'references'))
-        .filter((n) => n.endsWith('.md')),
+      // every file, not just the .md ones: a helper script shipped beside them
+      // (mutation-run.py) is as much a part of the unit as the prose
+      readdirSync(path.join(ccrcRoot, 'ccd', 'coordinator-skill', 'references'), { withFileTypes: true })
+        .filter((d) => d.isFile()).map((d) => d.name),
     );
     expect(actual.length).toBeGreaterThan(0); // the parse itself must find something, or this vacuously passes
+    expect(declared).toEqual(actual);
+  });
+});
+
+// The same projection, for the Overlord's staging installer (Overlord W1): its four references carry every procedure
+// SKILL.md points at, so a fifth reference with no REQUIRED_REFS entry would be the half-staged shape it refuses.
+describe('install-overlord-skill.sh REQUIRED_REFS agrees with the real references/ directory (I8, Overlord W1)', () => {
+  it('names exactly the files that live under ccd/overlord-skill/references/ today', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'ccd', 'install-overlord-skill.sh'), 'utf8');
+    const m = /REQUIRED_REFS=\(([^)]*)\)/.exec(src);
+    expect(m, "install-overlord-skill.sh's REQUIRED_REFS=(...) line").not.toBeNull();
+    const declared = sortedSet((m as RegExpExecArray)[1].trim().split(/\s+/).filter(Boolean));
+    const actual = sortedSet(
+      readdirSync(path.join(ccrcRoot, 'ccd', 'overlord-skill', 'references'), { withFileTypes: true })
+        .filter((d) => d.isFile()).map((d) => d.name),
+    );
+    expect(actual.length).toBeGreaterThan(0);
     expect(declared).toEqual(actual);
   });
 });

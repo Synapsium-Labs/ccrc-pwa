@@ -24,7 +24,7 @@ This design adds that vocabulary, then builds the verb on it.
 
 | slice | deliverable |
 |---|---|
-| **A** | the roster learns providers and credentials; the three hand-written wrappers are described honestly; `cck3` becomes generated and proves the api-key template. **§3.6 grew this from two commits to five** — the migration mechanism, the shape validator and the equivalence triple are all prerequisites that do not exist yet |
+| **A** | the roster learns providers and credentials; the three hand-written wrappers are described honestly; `ccx3` becomes generated and proves the api-key template. **§3.6 grew this from two commits to five** — the migration mechanism, the shape validator and the equivalence triple are all prerequisites that do not exist yet |
 | **A2** | credential *health*: a dead account becomes nameable instead of silently routed around |
 | **B1** | `ccrc account add` for api-key providers — CLI verb plus a PWA form |
 | **B2** | the OAuth pane flow, shared by `account add` and a new `account reauth` |
@@ -142,7 +142,7 @@ fleet, or read from the shipped source. Claims that could not be evidenced are i
 25. Doctor's 19-entry check table probes GitHub credential validity *and scope* (`gh_auth`) but has no
     check of any kind for a Claude Code account token. **The cold path already accepts one network
     round-trip to prove a credential**, and the timeout constant and FAIL/WARN vocabulary are in place.
-26. The `claude-corp` drift is an **un-applied migration**, not a model defect:
+26. The `claude-acme` drift is an **un-applied migration**, not a model defect:
     `deploy/accounts.migration.json:26` already declares its `secretsFile`; the live
     `~/.ccrc/accounts.json` is simply stale against it.
 27. The `claude` drift is **not reportable at all**. Its secrets file exists and is sourced but is
@@ -161,9 +161,9 @@ fleet, or read from the shipped source. Claims that could not be evidenced are i
 
 ### 3.5 The three hand-written wrappers
 
-29. `cck3` is **single-provider**: OpenRouter only, one model map, no runtime switch. Losslessly
+29. `ccx3` is **single-provider**: OpenRouter only, one model map, no runtime switch. Losslessly
     templatable.
-30. `claude-glm` is **two-provider**: `case "${HANDOFF_PROVIDER:-cortecs}"` selects Cortecs direct
+30. `claude-alt1` is **two-provider**: `case "${HANDOFF_PROVIDER:-cortecs}"` selects Cortecs direct
     (`https://api.cortecs.ai`, `CORTECS_API_KEY`, `glm-5.2`) or OpenRouter via the whitelist proxy
     (`OPENROUTER_API_KEY`, `z-ai/glm-5.2`) — different model names per branch.
 31. `gpt` is a program, not a wrapper: a LiteLLM venv, a second home-grown system-folding shim on :4000
@@ -223,7 +223,7 @@ first written.
 42. **Tightening `ExecSpec` produces ZERO compile errors and breaks ~18 fixtures at runtime.** Every
     fixture roster enters through `parseRoster(json: unknown)` or `seedRoster(roster: unknown)`, so
     §5.3's derived-union safety does not reach them. The highest-leverage single object is
-    `server/test/helpers.ts`'s `DEFAULT_TEST_ROSTER`, whose `claude-corp` is `generated` with no
+    `server/test/helpers.ts`'s `DEFAULT_TEST_ROSTER`, whose `claude-acme` is `generated` with no
     `secretsFile`: requiring it breaks nearly every server test at `loadConfig` until that one literal
     is fixed, and `server/test/fixtures/ccdMirror.ts` throws at import on disagreement with it.
 43. **Doctor's `wrappers` check is already four buckets with pinned order and pinned remedy strings.**
@@ -311,8 +311,8 @@ single-source values are enumerated once and derived (`PR_REASONS = Object.keys(
 ### 5.1 `external` is a destination, not a waypoint
 
 `external` means: **a human owns this wrapper's body; ccrc records that the account exists, what config
-dir it claims and what credential it needs, and never writes the file.** `claude-glm` and `gpt` are
-`external` permanently. Templating them would mean either dropping real behaviour (`claude-glm`'s
+dir it claims and what credential it needs, and never writes the file.** `claude-alt1` and `gpt` are
+`external` permanently. Templating them would mean either dropping real behaviour (`claude-alt1`'s
 runtime provider switch) or expressing a venv, two chained proxies, an OAuth subcommand and a
 config-sync in JSON — which is a shell script with extra steps, not a data model.
 
@@ -342,7 +342,7 @@ export type ModelMap = {
 ```
 
 Because the *shape* of the requirement differs by who owns the body. `external` takes a **list**:
-`claude-glm` genuinely needs either `CORTECS_API_KEY` or `OPENROUTER_API_KEY` depending on
+`claude-alt1` genuinely needs either `CORTECS_API_KEY` or `OPENROUTER_API_KEY` depending on
 `HANDOFF_PROVIDER`, and declaring one would narrow a distinction we received. This is not speculative
 generality — there is one real user today.
 
@@ -662,16 +662,16 @@ an explicit home — that is what "pinning" is — and `_ws_seed_home` seeds one
 deliberate choice**.
 
 Measured on the live fleet: **22 sessions carry an explicit `home` file, and the id prefix routinely
-disagrees with it.** `claude2-expoAI-assistant` is homed on `claude`; `claude-corp-acme-platform-ts`
-is homed on `claude`; `claude-rp-llm` is homed on `claude2`. A session's home therefore cannot be
+disagrees with it.** `claude9-project-h` is homed on `claude`; `claude-acme-acme-platform-ts`
+is homed on `claude`; `claude-project-j` is homed on `claude9`. A session's home therefore cannot be
 inferred from its id, and removal splits into two sets that fail differently:
 
 1. **Sessions whose `home` file names the account.** After removal `_home_for` returns a wrapper that no
    longer exists. `cmd_prefer` validates against `CCRC_ACCOUNTS` **on write**, and nothing re-validates
    on read — so the session sits permanently away-from-home, with a home that can never recover.
 2. **Sessions with no `home` file whose id prefix encoded the account.** These do **not** fall to the
-   default arm. They fall to whichever *remaining* arm now matches: remove `claude2` while `claude`
-   remains, and `claude2-*` matches `claude-*`, silently rehoming to **a sibling account nobody chose**.
+   default arm. They fall to whichever *remaining* arm now matches: remove `claude9` while `claude`
+   remains, and `claude9-*` matches `claude-*`, silently rehoming to **a sibling account nobody chose**.
    The generator emits arms longest-id-first precisely so prefixes disambiguate — which means deleting
    an arm changes what the *surviving* arms match.
 
@@ -733,7 +733,7 @@ removed id, no session runs on it, no `_ccrc_id_wrapper` arm mentions it, the wr
 declared external, and `ccrc doctor` is clean.
 
 1. Remove an account while a session's `home` names it, without rehoming -> red.
-2. Remove `claude2` with a `claude2-*` session carrying **no** `home` file; assert its home is the
+2. Remove `claude9` with a `claude9-*` session carrying **no** `home` file; assert its home is the
    explicitly-written destination and **not** `claude` -> red if the arm-rematch stays implicit.
 3. Remove the upstream account -> must refuse.
 4. Remove the last home-able account -> must refuse.
@@ -761,17 +761,17 @@ uses `{ version: 2 }` as its *unknown-version refusal* fixture.
 | account | change |
 |---|---|
 | `claude` | declare the `secretsFile` that exists and is sourced but was never declared (§3.4 item 27) |
-| `claude-corp` | **apply the shipped migration** — `deploy/accounts.migration.json:26` already declares it |
-| `claude2`, `claude-dev0` | provider/auth added; `secretsFile` unchanged |
-| `cck3` | adopted `external`, `providers: ['openrouter']` |
-| `claude-glm` | adopted `external`, `providers: ['cortecs', 'openrouter']` |
+| `claude-acme` | **apply the shipped migration** — `deploy/accounts.migration.json:26` already declares it |
+| `claude9`, `claude-lab0` | provider/auth added; `secretsFile` unchanged |
+| `ccx3` | adopted `external`, `providers: ['openrouter']` |
+| `claude-alt1` | adopted `external`, `providers: ['cortecs', 'openrouter']` |
 | `gpt` | adopted `external`, `providers: ['openai']` |
 
 **A migration mechanism has to be built; there is none today.** Both writers of
 `~/.ccrc/accounts.json` are create-if-missing — `_inst_roster` (`ccd/ccrc:2102-2105`) and `deploy.sh`'s
 `ship_roster` (`deploy.sh:264-270`) — and `deploy/accounts.migration.json` is only ever a **seed for a
 box that has no roster**. Nothing applies it to a box that already has one. *That is precisely why
-`claude-corp`'s `secretsFile` has been stale since stage 2b (D-69) and why §11.1's second row exists at
+`claude-acme`'s `secretsFile` has been stale since stage 2b (D-69) and why §11.1's second row exists at
 all.* So "apply the shipped migration" is not a step; it is a feature.
 
 The migration derives what it safely can — an entry with `upstream`/`generated` exec and an
@@ -787,7 +787,7 @@ fixtures and is where it is proved.
 
 **The doctor rule that makes the slice worth doing: converge owns files, doctor owns viability.**
 `ccrc wrappers` makes the file match the roster; `ccrc doctor` reports whether the account can actually
-work *here*. So the server box's missing `claude-dev0` wrapper gets written — that is drift — while its
+work *here*. So the server box's missing `claude-lab0` wrapper gets written — that is drift — while its
 absent credentials become **WARN: unavailable on this box**, not FAIL, and not roster drift. An
 account's definition is fleet-wide; its availability is per-box and **measured, never declared**.
 
@@ -813,7 +813,7 @@ Mutation tests, each measured red before and after:
 5. Drop a `secretsFile` whose wrapper sources it -> doctor FAIL.
 6. Remove `telemetry` from the emitted `accounts.sh` -> `projected-home.test.ts` red.
 
-### 11.2 Commit 2 — the api-key template, proved against `cck3`
+### 11.2 Commit 2 — the api-key template, proved against `ccx3`
 
 `gen-wrappers.mjs` learns to emit an api-key body: credential precondition, proxy bootstrap when the
 endpoint is `local-proxy`, config dir, base URL, auth token, the six-variable model map, the whitelist
@@ -822,7 +822,7 @@ wrappers carry: the `case "${HANDOFF_PROVIDER}"` runtime switch (one provider pe
 the `${HANDOFF_CLAUDE_MODEL:-…}` env overrides — with the roster owning the model map, the place you
 change a model is the roster, not an env var that shadows it.
 
-Then `cck3` flips to `generated`, and it is the **proof** rather than a beneficiary. Equivalence is
+Then `ccx3` flips to `generated`, and it is the **proof** rather than a beneficiary. Equivalence is
 behavioural, not byte-identity. In a fixture HOME: shim a fake `~/.local/bin/claude` that dumps `env`
 and exits, bind an ephemeral port and set `HANDOFF_PROXY_PORT` to it so the bootstrap short-circuits
 without spawning python, run both wrappers, and assert
@@ -833,12 +833,12 @@ without spawning python, run both wrappers, and assert
 - with the key unset, both refuse with the same exit status
 - with the port closed, both attempt the bootstrap (asserted via a stub `python3` on PATH)
 
-The hand-written body is snapshotted to `server/test/fixtures/cck3.reference.sh` as the contract.
+The hand-written body is snapshotted to `server/test/fixtures/ccx3.reference.sh` as the contract.
 Deleting a model-map line from the template turns the env-set diff red — the mutation test and the proof
-in one mechanism. If the template cannot reproduce `cck3`, that is learned now against a reference
+in one mechanism. If the template cannot reproduce `ccx3`, that is learned now against a reference
 instead of later against an account that has none.
 
-`claude-glm` and `gpt` stay untouched. The generator already emits `protected\t<id>` for every
+`claude-alt1` and `gpt` stay untouched. The generator already emits `protected\t<id>` for every
 non-generated account, so that path exists.
 
 ### 11.3 Deploy
@@ -859,7 +859,7 @@ designing around a broken one.
 
 - **Managed LiteLLM.** OpenAI stays `external`. Taking on the config yaml, the venv, the folding shim,
   device-code login and teardown is a slice at least the size of A and B together, and nothing needs it.
-- **Templating `claude-glm` or `gpt`.** §5.1.
+- **Templating `claude-alt1` or `gpt`.** §5.1.
 - **A proxy registry.** There is one proxy; it is inlined on the endpoint and generalises when a second
   appears.
 - **A `posture: 'orchestrator' | 'worker'` field.** It governs what goes *inside* the config dir and has

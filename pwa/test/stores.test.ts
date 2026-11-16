@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { AccountsResponse, ChatEvent, Dialog, FleetSession, HookAsk, MailSummary, SessionStreamMsg } from '../../shared/api';
-import { FLEET_PROTO } from '../../shared/api';
-import { ApiError } from '../src/lib/api';
-import { applySessionMsg, createSessionStore, type SessionSnapshot } from '../src/stores/session';
-import { createFleetStore } from '../src/stores/fleet';
+import type { AccountsResponse, ChatEvent, Dialog, FleetSession, HookAsk, LaneWire, MailSummary, SessionStreamMsg } from '../../shared/api';
+import { fleetSession as baseSession } from './fleetFixture';
+import { FLEET_PROTO, SECRET_MASK } from '../../shared/api';
+import { ApiError, sendErrorText } from '../src/lib/api';
+import { applySessionMsg, createSessionStore, getSessionStore, type SessionSnapshot } from '../src/stores/session';
+import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { setUpdater } from '../src/lib/swupdate';
-import { saveFleetSnapshot } from '../src/lib/offline';
+import { WAITING_SNAPSHOT_KEY, saveFleetSnapshot, saveWaitingSnapshot } from '../src/lib/offline';
+import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { TEST_ROSTER } from './rosterFixture';
+import { frame as delegationFrame, lease as delegationLease, unowned as delegationUnowned } from './delegationFixture';
 
 // — fixtures —
 
@@ -33,21 +36,12 @@ const dialogFixture: Dialog = {
   raw: '❯ 1. Yes\n  2. No',
 };
 
-const fleetSession = (id: string, wrapper: string): FleetSession => ({
-  id,
-  wrapper,
-  home: '/home/rc',
-  project: 'OpenClawHetzner',
-  workdir: '/home/rc/projects/OpenClawHetzner',
-  workspace: null,
-  name: null,
-  status: 'idle',
-  statusUpdatedAt: null,
-  limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  version: '2.1.0', hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null,
-});
+const fleetSession = (id: string, wrapper: string): FleetSession =>
+  baseSession({
+    id, wrapper, home: '/home/u', project: 'ProjectC',
+    workdir: '/home/u/projects/ProjectC',
+    limits: { five: 10, seven: 40 }, version: '2.1.0',
+  });
 
 const emptySnap = (): SessionSnapshot => ({
   events: [],
@@ -200,14 +194,14 @@ describe('applySessionMsg', () => {
   it('rotated drops every statement about the transcript it just left', () => {
     let s = applySessionMsg(emptySnap(), {
       type: 'backlog', uuid: 'u1', events: [user('a', 'hi')], offset: 90,
-      file: '/t/claude2/u1.jsonl', missing: true,
-      foreignAccount: 'claude2', searchComplete: false, fileMeasured: false,
+      file: '/t/claude9/u1.jsonl', missing: true,
+      foreignAccount: 'claude9', searchComplete: false, fileMeasured: false,
     });
-    expect(s.strandedAccount).toBe('claude2');
+    expect(s.strandedAccount).toBe('claude9');
     expect(s.searchComplete).toBe(false);
     expect(s.fileMeasured).toBe(false);            // NEW
-    expect(s.missingFile).toBe('/t/claude2/u1.jsonl');
-    expect(s.file).toBe('/t/claude2/u1.jsonl');
+    expect(s.missingFile).toBe('/t/claude9/u1.jsonl');
+    expect(s.file).toBe('/t/claude9/u1.jsonl');
 
     s = applySessionMsg(s, { type: 'rotated', uuid: 'u2' });
 
@@ -286,11 +280,11 @@ describe('applySessionMsg', () => {
   });
 
   it('notice appends a system divider carrying the message', () => {
-    const s = applySessionMsg(emptySnap(), { type: 'notice', message: 'cc swap: s1 moved claude -> claude2' });
+    const s = applySessionMsg(emptySnap(), { type: 'notice', message: 'cc swap: s1 moved claude -> claude9' });
     expect(s.events).toHaveLength(1);
     const e = s.events[0];
     expect(e?.kind).toBe('system');
-    expect(e && 'text' in e ? e.text : '').toBe('cc swap: s1 moved claude -> claude2');
+    expect(e && 'text' in e ? e.text : '').toBe('cc swap: s1 moved claude -> claude9');
   });
 
   // The new `default` arm (Rider E): an old client must shrug at a frame type
@@ -325,6 +319,22 @@ describe('session store optimistic send', () => {
 
     store.getState().disconnect();
     expect(store.getState().ask).toBeNull();
+  });
+
+  it('disconnect() resets askFrameSeen with the ask it clears', () => {
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() } });
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().askFrameSeen).toBe(true);
+    store.getState().disconnect();
+    expect(store.getState().askFrameSeen).toBe(false);
+  });
+
+  it('the reducer sets askFrameSeen on an ask or ask_cleared frame and leaves it alone otherwise', () => {
+    const base = { ...emptySnap(), askFrameSeen: false };
+    expect(applySessionMsg(base, { type: 'ask', ask: askFixture, key: 'k1' }).askFrameSeen).toBe(true);
+    expect(applySessionMsg(base, { type: 'ask_cleared' }).askFrameSeen).toBe(true);
+    expect(applySessionMsg(base, { type: 'dialog', dialog: dialogFixture }).askFrameSeen).toBe(false);
+    expect(applySessionMsg({ ...base, askFrameSeen: true }, { type: 'dialog_cleared' }).askFrameSeen).toBe(true);
   });
 
   // Fix round 1, finding 3's named residual: `sessionws.ts`'s own
@@ -390,7 +400,11 @@ describe('session store optimistic send', () => {
     expect(store.getState().events).toEqual([user('a', 'ship it')]);
   });
 
-  it('clears a confirmed-by-api pending after the 5 s fallback when no event matches', async () => {
+  // Was "clears ... after the 5 s fallback" — that was the defect (task 5):
+  // a busy session cannot echo inside 5s, so the operator's own bubble
+  // vanished. The 5s mark now flips `queued`, not deletion; see the "a queued
+  // send" describe below for the retirement stage.
+  it('marks a confirmed-by-api pending queued after the 5 s fallback when no event matches', async () => {
     vi.useFakeTimers();
     const prompt = vi.fn().mockResolvedValue(undefined);
     const store = createSessionStore('s1', { api: { prompt } });
@@ -399,9 +413,10 @@ describe('session store optimistic send', () => {
     expect(store.getState().pending).toHaveLength(1);
 
     vi.advanceTimersByTime(4_999);
-    expect(store.getState().pending).toHaveLength(1);
+    expect(store.getState().pending[0]?.state).toBe('sending');
+    expect(store.getState().pending[0]?.queued).toBeUndefined();
     vi.advanceTimersByTime(1);
-    expect(store.getState().pending).toEqual([]);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
   });
 
   it('a 409 draft-present rejection marks the pending failed and captures the draft', async () => {
@@ -444,6 +459,38 @@ describe('session store optimistic send', () => {
     expect(store.getState().pending[0]!.submittable).toBeUndefined();
   });
 
+  // THE SENTENCE FOLLOWS THE FLAG, not the code. A `verify-failed` the server
+  // marked submittable is the paste-chip collapse — the session DID take the
+  // text — so the pending must not carry the table's "never echoed it back"
+  // above a button that sends it.
+  it('a submittable verify-failed gets the collapsed sentence, not the table entry', async () => {
+    const chip = '[Pasted text #1]';
+    const prompt = vi.fn().mockRejectedValue(new ApiError(409, {
+      ok: false, error: 'verify-failed', draft: chip, submittable: true,
+    }));
+    const store = createSessionStore('s1', { api: { prompt } });
+
+    await store.getState().send('a long paragraph the box folded up');
+    const p = store.getState().pending[0]!;
+    expect(p.code).toBe('verify-failed');
+    expect(p.submittable).toBe(true);
+    expect(p.draft).toBe(chip);
+    expect(p.error).not.toMatch(/never echoed/);
+    expect(p.error).toMatch(/chip/);
+  });
+
+  it('and the same code WITHOUT the flag keeps the table entry', async () => {
+    const prompt = vi.fn().mockRejectedValue(new ApiError(409, {
+      ok: false, error: 'verify-failed', draft: 'somebody else was typing',
+    }));
+    const store = createSessionStore('s1', { api: { prompt } });
+
+    await store.getState().send('my message');
+    const p = store.getState().pending[0]!;
+    expect(p.submittable).toBeUndefined();
+    expect(p.error).toMatch(/never echoed/);
+  });
+
   it('resolve() clears the flag too — the same box, re-measured or not', async () => {
     const prompt = vi.fn().mockRejectedValueOnce(new ApiError(409, {
       ok: false, error: 'enter-ignored', draft: 'x', submittable: true,
@@ -478,6 +525,68 @@ describe('session store optimistic send', () => {
     const store = createSessionStore('s1', { api: { prompt } });
     await store.getState().send('x');
     expect(store.getState().pending[0]!.submittable).toBeUndefined();
+  });
+
+  // D-6367: Retry says the text is ours only when the refusal left OUR text in the box.
+  it('Retry after verify-failed with text left sends resume: true; Retry after other refusals does not', async () => {
+    const refusal = (code: string, draft?: string) =>
+      new ApiError(409, { ok: false, error: code, ...(draft === undefined ? {} : { draft }) });
+    vi.useFakeTimers(); // restored by the file's afterEach
+    const cases: Array<[string, unknown, boolean]> = [
+      ['verify-failed + draft', refusal('verify-failed', 'my message'), true],
+      ['enter-ignored + draft', refusal('enter-ignored', 'my message'), true],
+      ['verify-failed, no draft', refusal('verify-failed'), false],
+      ['type-failed', refusal('type-failed'), false],
+      ['type-failed + draft', refusal('type-failed', 'my message'), false],
+      ['draft-present', refusal('draft-present', 'someone else'), false],
+      ['not-alive', refusal('not-alive'), false],
+      ['box-unreadable', refusal('box-unreadable'), false],
+      ['dialog-open', refusal('dialog-open'), false],
+      ['a non-ApiError failure', new Error('network down'), false],
+    ];
+    for (const [name, failure, resumes] of cases) {
+      const prompt = vi.fn().mockRejectedValueOnce(failure);
+      prompt.mockResolvedValue(undefined);
+      const store = createSessionStore('s1', { api: { prompt } });
+      await store.getState().send('my message');
+      store.getState().retry(store.getState().pending[0]!.key);
+      expect(prompt, name).toHaveBeenCalledTimes(2);
+      const retried = prompt.mock.calls[1]![2] as { resume?: boolean };
+      if (resumes) expect(retried.resume, name).toBe(true);
+      else expect(retried, name).not.toHaveProperty('resume');
+    }
+  });
+
+  // D-6367, R38: a landed send can still be answered enter-ignored with a blind final read (no draft), and Retry
+  // must never type a second copy; the server's whole-box resume types nothing over an empty box.
+  it('Retry after enter-ignored with no draft sends resume: true', async () => {
+    vi.useFakeTimers(); // restored by the file's afterEach
+    const cases: Array<[string, ApiError]> = [
+      ['enter-ignored, no draft field', new ApiError(409, { ok: false, error: 'enter-ignored' })],
+      ["enter-ignored, draft ''", new ApiError(409, { ok: false, error: 'enter-ignored', draft: '' })],
+    ];
+    for (const [name, failure] of cases) {
+      const prompt = vi.fn().mockRejectedValueOnce(failure);
+      prompt.mockResolvedValue(undefined);
+      const store = createSessionStore('s1', { api: { prompt } });
+      await store.getState().send('my message');
+      store.getState().retry(store.getState().pending[0]!.key);
+      expect(prompt, name).toHaveBeenCalledTimes(2);
+      expect(prompt.mock.calls[1]![2], name).toMatchObject({ resume: true });
+    }
+  });
+
+  it('a resumed Retry answered nothing-to-submit shows the check-the-transcript sentence', async () => {
+    const prompt = vi.fn()
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'enter-ignored', draft: 'my message' }))
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'nothing-to-submit' }));
+    const store = createSessionStore('s1', { api: { prompt } });
+    await store.getState().send('my message');
+    store.getState().retry(store.getState().pending[0]!.key);
+    await vi.waitFor(() => expect(store.getState().pending[0]?.code).toBe('nothing-to-submit'));
+    expect(prompt.mock.calls[1]![2]).toMatchObject({ resume: true });
+    expect(store.getState().pending[0]!.error).toBe(sendErrorText('nothing-to-submit'));
+    expect(store.getState().pending[0]!.error).toMatch(/Check the transcript/);
   });
 
   it('retry() re-sends a failed pending; discard() drops it', async () => {
@@ -550,12 +659,512 @@ describe('session store optimistic send', () => {
   it('revokes the object URLs when a confirmed send expires without its echo', async () => {
     vi.mocked(URL.revokeObjectURL).mockClear();
     const prompt = vi.fn().mockResolvedValue(undefined);
-    const store = createSessionStore(ID, { api: { prompt }, confirmTimeoutMs: 5 });
+    // Both stages shortened to real-timer-friendly durations: the 5s stage
+    // that used to do this alone now only flips `queued`, so the retirement
+    // (and the URL revoke that rides with it) needs the second deadline too.
+    const store = createSessionStore(ID, { api: { prompt }, confirmTimeoutMs: 5, queuedTimeoutMs: 5 });
     await store.getState().send('hi', { attachments: [CLIP] });
 
     await vi.waitFor(() => expect(store.getState().pending).toHaveLength(0));
     expect(URL.revokeObjectURL).toHaveBeenCalledWith(CLIP.previewUrl);
   });
+});
+
+// — session store: queued sends —
+
+describe('a queued send', () => {
+  it('marks the pending queued instead of deleting it', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s1', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+
+    expect(store.getState().pending).toHaveLength(1);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
+  });
+
+  it('still retires the bubble at the long deadline, revoking its object URLs', async () => {
+    vi.useFakeTimers();
+    vi.mocked(URL.revokeObjectURL).mockClear();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s2', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hi', { attachments: [{ path: '/tmp/a.png', previewUrl: 'blob:a' }] });
+    vi.advanceTimersByTime(60);
+    expect(store.getState().pending).toHaveLength(1);
+
+    vi.advanceTimersByTime(5_000);
+    expect(store.getState().pending).toHaveLength(0);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:a');
+  });
+
+  it('clears a queued pending when its echo arrives in a fresh backlog', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s3', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+
+    store.getState().apply({
+      type: 'backlog', uuid: 'u1', events: [user('a', 'hello')], offset: 40,
+      file: '/t/u1.jsonl', missing: false,
+    });
+    expect(store.getState().pending).toHaveLength(0);
+  });
+
+  it('cancels the long deadline when the echo lands', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s4', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+
+    store.getState().apply({ type: 'events', uuid: 'u1', events: [user('a', 'hello')], offset: 40 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Review Focus 5. `resolve()` is the reachable route: it is the one re-send
+  // with no state guard, so it can act on a pending that is still `sending`.
+  // `retry()` guards `state !== 'failed'` and a queued pending is `sending`, so
+  // it is reached only after a re-send has failed — see the next test, and its
+  // own comment, for what that route actually measures.
+  it('clears the queued flag when the pending is re-sent', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s5', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+    const key = store.getState().pending[0]!.key;
+    expect(store.getState().pending[0]?.queued).toBe(true);
+
+    store.getState().resolve(key, 'hello again', { replaceDraft: true });
+    expect(store.getState().pending[0]?.queued).toBeUndefined();
+  });
+
+  it('a failed pending never carries the queued flag', async () => {
+    // WHY THIS EXISTS INSTEAD OF A MUTATION ROW. `retry` resets `queued`
+    // alongside the failure fields, and that reset is UNREACHABLE: `resolve`
+    // clears the flag synchronously before its dispatch can fail, and `send`
+    // arms no timer until the api has accepted, so nothing produces a pending
+    // that is both `failed` and `queued`. Measured: deleting the reset reds
+    // nothing. So the invariant that makes the reset unnecessary is pinned
+    // here instead — if a later change makes `failed` + `queued` reachable,
+    // this goes red and the reset earns its place back.
+    vi.useFakeTimers();
+    const prompt = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new ApiError(500, { ok: false, error: 'tmux-error' }));
+    const store = createSessionStore('s6', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    // Arrange: send, advance past confirmTimeoutMs so the pending is queued,
+    // then resolve() it against an api call that rejects.
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+    const key = store.getState().pending[0]!.key;
+    expect(store.getState().pending[0]?.queued).toBe(true);
+
+    store.getState().resolve(key, 'hello', { replaceDraft: true }); // this one fails
+    // `vi.waitFor`'s own internal polling assumes real timers, which this test
+    // cannot use once `vi.useFakeTimers()` is active — flush the rejection's
+    // microtask instead.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(store.getState().pending[0]).toMatchObject({ state: 'failed' });
+    expect(store.getState().pending[0]?.queued).toBeUndefined();
+    expect(store.getState().pending.every((p) => !(p.state === 'failed' && p.queued === true))).toBe(true);
+  });
+
+  // Review finding (Critical, reproduced): a bare `timers.set` replaces the
+  // MAP ENTRY but leaves the previous cycle's `setTimeout` running. A re-send
+  // through `resolve()`/`retry()` used to arm a fresh deadline without
+  // disarming the superseded one — so the OLD deadline still fired, found the
+  // freshly re-sent pending back in `state: 'sending'`, and deleted it. The
+  // operator's message vanishes while waiting — the defect this task exists
+  // to remove, arriving through the rescue path. `arm()` fixes it by clearing
+  // whatever timer a key already held before installing the new one.
+  it('a re-send disarms the deadline its previous attempt left behind', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s8', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 100 });
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);                    // queued; the long deadline is armed
+    const key = store.getState().pending[0]!.key;
+    store.getState().resolve(key, 'hello again', { replaceDraft: true });
+    await Promise.resolve();                       // let the re-dispatch settle
+    vi.advanceTimersByTime(120);                   // past the SUPERSEDED deadline
+    // The old cycle's timer must not delete a pending that is legitimately in
+    // flight again — that is the very defect this task exists to remove,
+    // arriving through the rescue path.
+    expect(store.getState().pending).toHaveLength(1);
+  });
+});
+
+// — session store: what counts as a pending's echo —
+
+describe('the echo that clears a pending', () => {
+  const userAt = (uuid: string, text: string, ts: string): ChatEvent => ({ kind: 'user', uuid, ts, text });
+  const systemAt = (uuid: string, text: string, ts: string): ChatEvent => ({ kind: 'system', uuid, ts, text });
+  const assistantAt = (uuid: string, text: string, ts: string): ChatEvent => ({ kind: 'assistant', uuid, ts, text });
+  // The BOX's clock: every transcript timestamp is written by Claude Code on
+  // the fleet box, never by the phone.
+  const T0 = '2026-07-20T10:00:00.000Z';
+  const T1 = '2026-07-20T10:00:03.000Z';
+  const backlog = (file: string, events: ChatEvent[], uuid = 'u1'): SessionStreamMsg =>
+    ({ type: 'backlog', uuid, events, offset: 40, file, missing: false });
+  const make = (id: string) => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    return createSessionStore(id, { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 600_000 });
+  };
+
+  // — D-4950: the absorbed message, end to end —
+
+  it('a message absorbed mid-turn clears its bubble and shows once, where the model took it', async () => {
+    // The server now reads Claude Code's `queued_command` attachment as a user
+    // event (`transcript/parse.ts`'s `absorbedPrompt`); this is that event
+    // meeting the store, inside the busy turn it was absorbed into.
+    const store = make('e0');
+    store.getState().apply(backlog('/t/a.jsonl', [userAt('a0', 'run the suite', T0), toolUse('a1', 't1')]));
+    await store.getState().send('also check the retention policy');
+    vi.advanceTimersByTime(60);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
+
+    store.getState().apply({
+      type: 'events', uuid: 'u1', offset: 90,
+      events: [toolResult('t1', 'ok'), userAt('q1', 'also check the retention policy', T1), assistantAt('a2', 'Checked.', T1)],
+    });
+    expect(store.getState().pending).toEqual([]);
+    expect(store.getState().events.filter((e) => e.kind === 'user').map((e) => e.uuid)).toEqual(['a0', 'q1']);
+  });
+
+  // — D-4951: a slash command echoes as a SYSTEM row —
+
+  it('a slash command is cleared by its own system echo, not by the ten-minute fallback', async () => {
+    const store = make('e1');
+    await store.getState().send('/compact');
+    vi.advanceTimersByTime(60);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
+
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/compact', T1)] });
+    expect(store.getState().pending).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('the echo names the COMMAND, not the line — arguments never come back', async () => {
+    const store = make('e2');
+    await store.getState().send('/effort ultracode');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/effort', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('/clear is cleared by the echo in the fresh transcript the rotation hands over', async () => {
+    const store = make('e3');
+    store.getState().apply(backlog('/t/a.jsonl', [userAt('a1', 'earlier', T0)]));
+    await store.getState().send('/clear');
+    vi.advanceTimersByTime(60);
+    store.getState().apply({ type: 'rotated', uuid: 'u2' });
+    store.getState().apply(backlog('/t/b.jsonl', [systemAt('c1', '/clear', T1)], 'u2'));
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('a different command does not clear it', async () => {
+    const store = make('e4');
+    await store.getState().send('/compact');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/clear', T1)] });
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  it('prose is never cleared by a system row, even one that says the same words', async () => {
+    // A command's stdout is a system row too, and can be one word.
+    const store = make('e5');
+    await store.getState().send('ok');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', 'ok', T1)] });
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  // The command is read off the text the pane was GIVEN — `composePrompt`'s
+  // output, which the server injects — not off what the composer held.
+  it('a send with an attachment is not that command, even when its text starts with a slash', async () => {
+    // The pane is given `<clip path>\n/compact`: `/compact` is not the first
+    // word of what it received, so a `/compact` row is somebody else's.
+    const store = make('e5a');
+    await store.getState().send('/compact', { attachments: [{ path: '/p/clip-1-a1b2.png' }] });
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/compact', T1)] });
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  it('a command typed under a blank line is the command the pane ran', async () => {
+    // `composePrompt` drops leading blank lines before the text is injected,
+    // so the pane ran `/compact` and its echo is this row.
+    const store = make('e5b');
+    await store.getState().send('\n/compact');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/compact', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  // — D-5087: a message Claude Code collapsed into a paste chip echoes WRAPPED —
+  // The transcript records a chip-submitted message inside `<pasted_content id="…">` tags, with blank lines around it
+  // (measured on Claude Code 2.1.300: 1058 characters back for a 1000-character send). Now that the server submits our
+  // own chip, the send answers ok, and an exact-only comparison kept its bubble "sending" for ten minutes beside the
+  // real turn.
+  it('a paste-chip echo, wrapped in <pasted_content> with blank lines around it, clears the pending', async () => {
+    const store = make('e5c');
+    const long = 'alpha bravo charlie '.repeat(50).trim();
+    await store.getState().send(long);
+    const echo = `\n\n<pasted_content id="adc2">\n${long}\n</pasted_content id="adc2">\n`;
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('c1', echo, T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('a wrapped echo of DIFFERENT text does not clear it: only whitespace and the wrapper are forgiven', async () => {
+    const store = make('e5d');
+    const long = 'alpha bravo charlie '.repeat(50).trim();
+    await store.getState().send(long);
+    const echo = `<pasted_content id="adc2">\n${long}X\n</pasted_content id="adc2">`;
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('c1', echo, T1)] });
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  // — D-5995: the server masks every frame, so a prompt holding a credential shape echoes MASKED —
+  it('a prompt holding a credential shape is cleared by its masked echo, plain or paste-wrapped, and a masked echo of other text is not', async () => {
+    const jwt = ['eyJhbGciOiJub25lIn0', 'eyJzdWIiOiJkZW1vIn0', 'c2lnbmF0dXJl'].join('.');
+    const sent = `why does this token fail: ${jwt} and also ${jwt}?`;
+    const echo = `why does this token fail: ${SECRET_MASK} and also ${SECRET_MASK}?`;
+    const s1 = make('e5e');
+    await s1.getState().send(sent);
+    s1.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('c1', echo, T1)] });
+    expect(s1.getState().pending).toEqual([]);
+
+    const s2 = make('e5f');
+    const long = `${'alpha bravo charlie '.repeat(50)}${jwt}`;
+    await s2.getState().send(long);
+    const wrapped = `\n\n<pasted_content id="adc2">\n${'alpha bravo charlie '.repeat(50)}${SECRET_MASK}\n</pasted_content id="adc2">\n`;
+    s2.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('c1', wrapped, T1)] });
+    expect(s2.getState().pending).toEqual([]);
+
+    for (const [key, other] of [
+      ['e5g', `why does this token fail: ${SECRET_MASK} and also ${SECRET_MASK}!`],
+      ['e5h', `why does this token fail: ${SECRET_MASK}`],
+      ['e5i', `${SECRET_MASK}`],
+    ] as const) {
+      const s = make(key);
+      await s.getState().send(sent);
+      s.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('c1', other, T1)] });
+      expect(s.getState().pending, other).toHaveLength(1);
+    }
+  });
+
+  // — D-4952: a replay is not an echo —
+
+  it('a backlog that replays history the operator already saw does not clear the message they just sent', async () => {
+    const store = make('e6');
+    const history = [userAt('old-1', 'yes', T0), assistantAt('old-2', 'done', T0)];
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    await store.getState().send('yes');
+    vi.advanceTimersByTime(60);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
+
+    // A reconnect re-sends the same file's window: same uuids, same times.
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    expect(store.getState().pending).toHaveLength(1);
+    // The stream follows a fork to its successor, which carries the history
+    // forward. Even under NEW uuids the copy keeps its timestamps, so it is
+    // still not newer than what was on screen when the operator sent.
+    store.getState().apply(backlog('/t/b.jsonl', [userAt('new-1', 'yes', T0), assistantAt('new-2', 'done', T0)]));
+    expect(store.getState().pending).toHaveLength(1);
+
+    // The real echo lands in the successor, after the send.
+    store.getState().apply(backlog('/t/b.jsonl', [userAt('new-1', 'yes', T0), userAt('new-3', 'yes', T1)]));
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('a replayed slash command is not its echo either', async () => {
+    const store = make('e7');
+    store.getState().apply(backlog('/t/a.jsonl', [systemAt('c0', '/compact', T0)]));
+    await store.getState().send('/compact');
+    store.getState().apply(backlog('/t/b.jsonl', [systemAt('c0', '/compact', T0)]));
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  it('the bar is the NEWEST event on screen, not the first one or the last one', async () => {
+    // Transcript order is not time order. Claude Code writes a record with the
+    // timestamp its message already carries (the 2.1.296 chain writer spreads
+    // the record's own `timestamp`), so a resumed or copied record is appended
+    // after records stamped later than it. Here the newest time on screen sits
+    // in the middle of the window, and a replayed "yes" stamped between the
+    // first event and the newest is still history.
+    const store = make('e7a');
+    const T3 = '2026-07-20T10:00:09.000Z';
+    const T9 = '2026-07-20T10:00:27.000Z';
+    const T10 = '2026-07-20T10:00:30.000Z';
+    const history = [
+      assistantAt('h0', 'ready', T0), userAt('h1', 'yes', T3),
+      assistantAt('h2', 'done', T9), assistantAt('h3', 'resumed', T1),
+    ];
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    await store.getState().send('yes');
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    expect(store.getState().pending).toHaveLength(1);
+
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 90, events: [userAt('n1', 'yes', T10)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  // The comparison is box clock against box clock. The phone's clock never
+  // enters it, so a phone set far ahead of the box or far behind it changes
+  // nothing — a sent-at stamp taken from `Date.now()` would fail one of these
+  // two in each direction.
+  it('a phone clock far AHEAD of the box still lets a fresh echo clear', async () => {
+    const store = make('e8');
+    vi.setSystemTime(new Date('2027-03-01T00:00:00.000Z'));
+    store.getState().apply(backlog('/t/a.jsonl', [assistantAt('a1', 'ready', T0)]));
+    await store.getState().send('hello');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('n1', 'hello', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('a phone clock far BEHIND the box still refuses a replay', async () => {
+    const store = make('e9');
+    vi.setSystemTime(new Date('2025-01-01T00:00:00.000Z'));
+    const history = [userAt('old-1', 'yes', T0)];
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    await store.getState().send('yes');
+    store.getState().apply(backlog('/t/b.jsonl', history));
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  it('a local divider is the PHONE\'s clock and never sets the bar', async () => {
+    const store = make('e10');
+    vi.setSystemTime(new Date('2027-03-01T00:00:00.000Z'));
+    store.getState().apply(backlog('/t/a.jsonl', [assistantAt('a1', 'ready', T0)]));
+    store.getState().apply({ type: 'notice', message: 'Reconnected' });
+    await store.getState().send('hello');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('n1', 'hello', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('an event whose time does not parse never sets the bar', async () => {
+    const store = make('e11');
+    store.getState().apply(backlog('/t/a.jsonl', [userAt('x1', 'first', ''), assistantAt('a1', 'ready', T0)]));
+    await store.getState().send('hello');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('n1', 'hello', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  // — D-4952 through the re-send paths: `retry` and `resolve` —
+  //
+  // A re-send carries a bar too, and it is the newest event on screen AT THE
+  // RE-SEND, never lower than the bar the pending already had. Everything the
+  // store had seen when the operator pressed Retry or Send it is history to
+  // this message, exactly as it is to a first send.
+  const T5 = '2026-07-20T10:05:00.000Z';
+  const T5b = '2026-07-20T10:05:02.000Z';
+  const T6 = '2026-07-20T10:06:00.000Z';
+  const failingOnce = (id: string, err: ApiError) => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockRejectedValueOnce(err).mockResolvedValue(undefined);
+    return createSessionStore(id, { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 600_000 });
+  };
+  const reSend = {
+    retry: async (store: ReturnType<typeof createSessionStore>, key: string) => {
+      store.getState().retry(key);
+      await Promise.resolve();
+    },
+    resolve: async (store: ReturnType<typeof createSessionStore>, key: string) => {
+      store.getState().resolve(key, 'yes', { replaceDraft: true });
+      await Promise.resolve();
+    },
+  };
+  const failures = {
+    retry: () => new ApiError(500, { ok: false, error: 'tmux-error' }),
+    resolve: () => new ApiError(409, { ok: false, error: 'draft-present', draft: 'half-typed thought' }),
+  };
+
+  for (const via of ['retry', 'resolve'] as const) {
+    it(`a ${via}() keeps a bar: a replay of history from before the FIRST send still does not clear it`, async () => {
+      const store = failingOnce(`r-${via}-1`, failures[via]());
+      const history = [userAt('old-1', 'yes', T0), assistantAt('old-2', 'done', T0)];
+      store.getState().apply(backlog('/t/a.jsonl', history));
+      await store.getState().send('yes');
+      const key = store.getState().pending[0]!.key;
+      expect(store.getState().pending[0]!.state).toBe('failed');
+
+      await reSend[via](store, key);
+      expect(store.getState().pending[0]!.state).toBe('sending');
+      store.getState().apply(backlog('/t/a.jsonl', history));
+      expect(store.getState().pending).toHaveLength(1);
+
+      store.getState().apply({ type: 'events', uuid: 'u1', offset: 90, events: [userAt('n1', 'yes', T6)] });
+      expect(store.getState().pending).toEqual([]);
+    });
+
+    it(`a ${via}() RAISES the bar to what is on screen then: a same-text message the operator saw before re-sending is history`, async () => {
+      // The re-review's reproduction. The first attempt fails; while it sits
+      // failed, a "yes" typed in the terminal lands and is shown (a failed
+      // pending clears on nothing). The operator then re-sends. A later
+      // backlog — a fork follow, a swap repoint — replays that "yes": it is
+      // older than the re-send, so it is not this message's echo.
+      const store = failingOnce(`r-${via}-2`, failures[via]());
+      store.getState().apply(backlog('/t/a.jsonl', [assistantAt('h0', 'ready', T0)]));
+      await store.getState().send('yes');
+      const key = store.getState().pending[0]!.key;
+      store.getState().apply({
+        type: 'events', uuid: 'u1', offset: 90,
+        events: [userAt('typed', 'yes', T5), assistantAt('h1', 'ok', T5b)],
+      });
+      expect(store.getState().pending).toHaveLength(1);
+
+      await reSend[via](store, key);
+      store.getState().apply(backlog('/t/b.jsonl', [
+        assistantAt('h0', 'ready', T0), userAt('typed', 'yes', T5), assistantAt('h1', 'ok', T5b),
+      ]));
+      expect(store.getState().pending).toHaveLength(1);
+
+      store.getState().apply({ type: 'events', uuid: 'u1', offset: 120, events: [userAt('n1', 'yes', T6)] });
+      expect(store.getState().pending).toEqual([]);
+    });
+
+    it(`a ${via}() never LOWERS the bar: pressed between a rotation and its backlog, it keeps the one it had`, async () => {
+      // Right after `rotated` nothing from a transcript is on screen, so
+      // "the newest event now" is no bar at all. Taking it would drop the
+      // first send's bar and let replayed history clear the message.
+      const store = failingOnce(`r-${via}-3`, failures[via]());
+      store.getState().apply(backlog('/t/a.jsonl', [userAt('old-1', 'yes', T0), assistantAt('old-2', 'done', T1)]));
+      await store.getState().send('yes');
+      const key = store.getState().pending[0]!.key;
+      store.getState().apply({ type: 'rotated', uuid: 'u2' });
+
+      await reSend[via](store, key);
+      store.getState().apply(backlog('/t/b.jsonl', [userAt('copy-1', 'yes', T0)], 'u2'));
+      expect(store.getState().pending).toHaveLength(1);
+    });
+
+    it(`a ${via}() never LOWERS the bar onto OLDER events: a screen now holding only history below the first bar keeps that bar`, async () => {
+      // Review round 3 (RR2-PWA-2). The case above takes the "nothing from a
+      // transcript on screen" arm; this one takes the `Math.max` arm. The first
+      // send's bar is 10:06; the screen is then replaced by another file whose
+      // newest event is 10:00 (a repoint onto another copy, a rotation onto
+      // older history) and the operator re-sends. A bar REPLACED rather than
+      // raised would fall to 10:00, and a replayed "yes" stamped 10:05 —
+      // history from before the first send — would clear a re-send that has
+      // not been delivered.
+      const store = failingOnce(`r-${via}-4`, failures[via]());
+      store.getState().apply(backlog('/t/a.jsonl', [assistantAt('hi-0', 'ready', T6)]));
+      await store.getState().send('yes');
+      const key = store.getState().pending[0]!.key;
+      expect(store.getState().pending[0]!.state).toBe('failed');
+      store.getState().apply(backlog('/t/b.jsonl', [assistantAt('lo-0', 'older', T0)], 'u2'));
+
+      await reSend[via](store, key);
+      store.getState().apply(backlog('/t/b.jsonl', [assistantAt('lo-0', 'older', T0), userAt('mid-1', 'yes', T5)], 'u2'));
+      expect(store.getState().pending).toHaveLength(1);
+    });
+  }
 });
 
 // — session store: connection —
@@ -599,15 +1208,15 @@ describe('session store connect()', () => {
 
     store.getState().apply({
       type: 'backlog', uuid: 'b7001948', events: [user('a', 'hi')], offset: 6620,
-      file: '/home/rc/.claude2/projects/-data-projects-x/b7001948.jsonl', missing: false,
-      foreignAccount: 'claude2', searchComplete: true,
+      file: '/home/u/.claude9/projects/-data-projects-x/b7001948.jsonl', missing: false,
+      foreignAccount: 'claude9', searchComplete: true,
     });
     store.getState().connect();
 
     const q = new URL(lastSocket().url).searchParams;
     expect(q.get('since')).toBe('b7001948:6620');
     expect(q.get('sinceFile'))
-      .toBe('/home/rc/.claude2/projects/-data-projects-x/b7001948.jsonl');
+      .toBe('/home/u/.claude9/projects/-data-projects-x/b7001948.jsonl');
     store.getState().disconnect();
   });
 
@@ -663,6 +1272,106 @@ describe('session store connect()', () => {
     expect(store.getState().status).toBe('busy');
     store.getState().disconnect();
   });
+
+  // D-6325: `askFrameSeen` is per CONNECTION, not per tab. The surface treats a scraped dialog as `none` until THIS
+  // connection's first `ask` or `ask_cleared` frame, because an `ask` the store holds from before a drop is exactly
+  // what a reconnect must not present as current. `ReconnectingSocket`'s automatic reconnects never call
+  // `disconnect()`, so the reset lives in the socket's state (`onState`: down, connecting; every open follows one of
+  // them): a drop and a backoff reconnect, driven here through the socket's own close event and its timer.
+  it('an automatic reconnect resets askFrameSeen until that connection\'s first ask or ask_cleared frame', () => {
+    vi.useFakeTimers();
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() }, makeSocket });
+    expect(store.getState().askFrameSeen).toBe(false);
+
+    store.getState().connect();
+    lastSocket().open();
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().apply({ type: 'dialog', dialog: dialogFixture });
+    expect(store.getState().askFrameSeen).toBe(false);   // a dialog frame says nothing about the envelope
+    store.getState().apply({ type: 'ask', ask: askFixture, key: 'k1' });
+    expect(store.getState().askFrameSeen).toBe(true);
+
+    // The network drops; the socket schedules its own reconnect (no disconnect(), no new store).
+    const first = lastSocket();
+    first.onclose?.(new Event('close') as CloseEvent);
+    vi.advanceTimersByTime(60_000);
+    expect(lastSocket()).not.toBe(first);
+    expect(store.getState().askFrameSeen).toBe(false);   // the drop itself took it down (the-ask-holds-through-a-reconnect)
+    lastSocket().open();
+    expect(store.getState().askFrameSeen).toBe(false);
+    expect(store.getState().ask).toEqual(askFixture);    // the held envelope is untouched; only the flag says it is old
+
+    // A frame that is not an ask or an ask_cleared does not set it; an ask_cleared does.
+    store.getState().apply({ type: 'dialog_cleared' });
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().askFrameSeen).toBe(true);
+    expect(store.getState().ask).toBeNull();
+
+    // A second reconnect resets it again.
+    const second = lastSocket();
+    second.onclose?.(new Event('close') as CloseEvent);
+    vi.advanceTimersByTime(60_000);
+    lastSocket().open();
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().disconnect();
+  });
+
+  // D-6325, `the-ask-holds-through-a-reconnect`: the flag is also what says a surface is LIVE (the sheet holds what it
+  // showed, read-only, while it is false). It therefore falls the moment the socket drops, not only when the next
+  // connection opens: from the drop until that connection's first ask or ask_cleared frame, no answer may go on the old
+  // connection's evidence.
+  it('the socket dropping resets askFrameSeen at once, before the next connection opens', () => {
+    vi.useFakeTimers();
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() }, makeSocket });
+    store.getState().connect();
+    lastSocket().open();
+    store.getState().apply({ type: 'ask', ask: askFixture, key: 'k1' });
+    expect(store.getState().askFrameSeen).toBe(true);
+
+    lastSocket().onclose?.(new Event('close') as CloseEvent);
+    expect(store.getState().conn).toBe('down');
+    expect(store.getState().askFrameSeen, 'down: nothing is live').toBe(false);
+    expect(store.getState().ask, 'the held envelope itself is untouched').toEqual(askFixture);
+
+    // And through the reconnect's own states: the flag stays down until a frame of the new connection sets it.
+    vi.advanceTimersByTime(60_000);
+    expect(store.getState().conn).toBe('connecting');
+    expect(store.getState().askFrameSeen).toBe(false);
+    lastSocket().open();
+    expect(store.getState().conn).toBe('open');
+    expect(store.getState().askFrameSeen).toBe(false);
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().askFrameSeen).toBe(true);
+    store.getState().disconnect();
+  });
+
+  // D-6325 (review 843's F1): a new stream frames the menu it sees, but never the ABSENCE of one (`nextDialogFrame` sends
+  // nothing for a stream that has seen no menu), so a `dialog` kept from before the drop would be read as current once the
+  // new connection's `ask_cleared` arrives. The drop lowers `dialog` with `askFrameSeen`; the sheet's hold keeps what it
+  // showed in its own ref, and the new connection's `dialog` frame, sent before its `ask` frame, brings the menu back.
+  it('the socket dropping lowers dialog with askFrameSeen, and the new connection\'s dialog frame brings it back', () => {
+    vi.useFakeTimers();
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() }, makeSocket });
+    store.getState().connect();
+    lastSocket().open();
+    store.getState().apply({ type: 'dialog', dialog: dialogFixture });
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().dialog).toEqual(dialogFixture);
+
+    lastSocket().onclose?.(new Event('close') as CloseEvent);
+    expect(store.getState().dialog, 'down: the pre-drop menu is not current').toBeNull();
+    expect(store.getState().askFrameSeen).toBe(false);
+
+    vi.advanceTimersByTime(60_000);
+    lastSocket().open();
+    expect(store.getState().dialog).toBeNull();
+    store.getState().apply({ type: 'dialog', dialog: dialogFixture });
+    store.getState().apply({ type: 'ask_cleared' });
+    expect(store.getState().dialog).toEqual(dialogFixture);
+    expect(store.getState().askFrameSeen).toBe(true);
+    store.getState().disconnect();
+  });
 });
 
 // — fleet store —
@@ -681,13 +1390,13 @@ describe('fleet store', () => {
     lastSocket().open();
     expect(store.getState().conn).toBe('open');
 
-    lastSocket().message(JSON.stringify({ type: 'fleet', sessions: [fleetSession('s1', 'claude'), fleetSession('s2', 'claude2')] }));
+    lastSocket().message(JSON.stringify({ type: 'fleet', sessions: [fleetSession('s1', 'claude'), fleetSession('s2', 'claude9')] }));
     expect(store.getState().sessions.map((s) => s.id)).toEqual(['s1', 's2']);
 
-    lastSocket().message(JSON.stringify({ type: 'notice', message: 'cc swap: s1 moved claude -> claude2' }));
+    lastSocket().message(JSON.stringify({ type: 'notice', message: 'cc swap: s1 moved claude -> claude9' }));
     lastSocket().message(JSON.stringify({ type: 'notice', message: 'second notice' }));
     const notices = store.getState().notices;
-    expect(notices.map((n) => n.message)).toEqual(['cc swap: s1 moved claude -> claude2', 'second notice']);
+    expect(notices.map((n) => n.message)).toEqual(['cc swap: s1 moved claude -> claude9', 'second notice']);
 
     const first = notices[0];
     if (!first) throw new Error('expected a notice');
@@ -724,6 +1433,100 @@ describe('fleet store', () => {
 
       await vi.waitFor(() => expect(store.getState().roster).toEqual(TEST_ROSTER));
       store.getState().disconnect();
+    });
+
+    describe('a lane a sign-out may have changed (D-7992)', () => {
+      const KEPT: LaneWire = { state: { word: 'signed-in', source: 'checked 1h ago' }, ready: true, credential: 'held' };
+      const GONE: LaneWire = {
+        state: { word: 'signed-out', source: 'signed out on the fleet host' }, ready: false, notReadyReason: 'no-credential', credential: 'none',
+      };
+      const answer = (lane: LaneWire): AccountsResponse => ({ ...accountsResponse(TEST_ROSTER), lanes: { 'lane-a': lane } });
+      /** A store whose reads are answered only when the test says, in any order. */
+      function heldReads(): { store: FleetStore; reads: Array<{ ok: (r: AccountsResponse) => void; fail: () => void }> } {
+        const reads: Array<{ ok: (r: AccountsResponse) => void; fail: () => void }> = [];
+        const fetchAccounts = vi.fn(() => new Promise<AccountsResponse>((ok, no) => { reads.push({ ok, fail: () => no(new Error('offline')) }); }));
+        return { store: createFleetStore({ makeSocket, fetchAccounts }), reads };
+      }
+      const marked = (store: FleetStore): boolean => store.getState().lanesUnread['lane-a'] !== undefined;
+
+      it('a mark goes with the first good read that started after it', async () => {
+        const { store, reads } = heldReads();
+        store.getState().markLaneUnread('lane-a');
+        expect(marked(store)).toBe(true);
+        const read = store.getState().refreshAccounts();
+        reads[0]!.ok(answer(GONE));
+        await expect(read).resolves.toBe('ok');
+        expect(marked(store)).toBe(false);
+        expect(store.getState().lanes?.['lane-a']).toEqual(GONE);
+      });
+
+      it('a failed read leaves it, and so does an answer with no lanes', async () => {
+        const { store, reads } = heldReads();
+        store.getState().markLaneUnread('lane-a');
+        const failed = store.getState().refreshAccounts();
+        reads[0]!.fail();
+        await expect(failed).resolves.toBe('error');
+        expect(marked(store)).toBe(true);
+        const bare = store.getState().refreshAccounts();
+        reads[1]!.ok(accountsResponse(TEST_ROSTER));
+        await bare;
+        expect(marked(store)).toBe(true);
+      });
+
+      it('a read already in flight when the mark went on leaves it: its lanes are from before', async () => {
+        const { store, reads } = heldReads();
+        const poll = store.getState().refreshAccounts();
+        store.getState().markLaneUnread('lane-a');
+        reads[0]!.ok(answer(KEPT));
+        await poll;
+        expect(store.getState().lanes?.['lane-a']).toEqual(KEPT);
+        expect(marked(store)).toBe(true);
+      });
+
+      it('a poll that lands after the read a sign-out asked for is dropped: it cannot write the lanes from before back', async () => {
+        const { store, reads } = heldReads();
+        const poll = store.getState().refreshAccounts();
+        store.getState().markLaneUnread('lane-a');
+        const read = store.getState().refreshAccounts();
+        reads[1]!.ok(answer(GONE));
+        await read;
+        expect(marked(store)).toBe(false);
+        reads[0]!.ok(answer(KEPT));
+        await expect(poll).resolves.toBe('ok');
+        expect(store.getState().lanes?.['lane-a']).toEqual(GONE);
+      });
+
+      it('that read failing leaves the poll its answer, and the mark', async () => {
+        const { store, reads } = heldReads();
+        const poll = store.getState().refreshAccounts();
+        store.getState().markLaneUnread('lane-a');
+        const read = store.getState().refreshAccounts();
+        reads[1]!.fail();
+        await read;
+        reads[0]!.ok(answer(KEPT));
+        await poll;
+        expect(store.getState().lanes?.['lane-a']).toEqual(KEPT);
+        expect(marked(store)).toBe(true);
+      });
+
+      it('held for a sign-out with no answer: a read that starts while the verb may still run leaves the mark', async () => {
+        vi.useFakeTimers();
+        try {
+          const { store, reads } = heldReads();
+          store.getState().markLaneUnread('lane-a', 60_000);
+          const early = store.getState().refreshAccounts();
+          reads[0]!.ok(answer(KEPT));
+          await early;
+          expect(marked(store)).toBe(true);
+          vi.advanceTimersByTime(60_000);
+          const late = store.getState().refreshAccounts();
+          reads[1]!.ok(answer(GONE));
+          await late;
+          expect(marked(store)).toBe(false);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
     });
 
     it('a later malformed response does NOT clobber an already-good roster', async () => {
@@ -782,6 +1585,161 @@ describe('fleet store', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    // C8 (D-6440): the store is the one `/api/accounts` reader, so an answer equal to the last one must leave every
+    // field it writes at the same reference, or every subscriber re-renders every 20 s for nothing.
+    const fullAnswer = (five: number): AccountsResponse => ({
+      accounts: [{
+        wrapper: 'claude', five, seven: 40, ts: 1_700_000_000, fiveResetAt: null, sevenResetAt: null,
+        fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false,
+      }],
+      projected: { wrapper: 'claude', score: five },
+      roster: TEST_ROSTER.map((r) => ({ ...r })),
+      lanes: { claude: { state: 'ok' } } as unknown as AccountsResponse['lanes'],
+      connect: { enabled: true } as unknown as AccountsResponse['connect'],
+    });
+    const ACCOUNT_FIELDS = ['roster', 'usage', 'lanes', 'accountsConnect', 'projected'] as const;
+
+    it('an equal answer leaves roster, usage, lanes, accountsConnect and projected unchanged (===)', async () => {
+      // A NEW object on every call, structurally equal: what a JSON body is on every poll.
+      const fetchAccounts = vi.fn().mockImplementation(async () => fullAnswer(10));
+      const store = createFleetStore({ makeSocket, fetchAccounts });
+      await store.getState().refreshAccounts();
+      const before = store.getState();
+      for (const f of ACCOUNT_FIELDS) { expect(before[f], f).toBeDefined(); expect(before[f], f).not.toBeNull(); }
+      let writes = 0;
+      const unsubscribe = store.subscribe(() => { writes += 1; });
+      await store.getState().refreshAccounts();
+      unsubscribe();
+      const after = store.getState();
+      for (const f of ACCOUNT_FIELDS) expect(after[f], f).toBe(before[f]);
+      expect(writes, 'an equal answer writes nothing at all').toBe(0);
+    });
+
+    it('a changed answer replaces only the field that changed', async () => {
+      let five = 10;
+      const fetchAccounts = vi.fn().mockImplementation(async () => {
+        const r = fullAnswer(10);
+        r.accounts[0]!.five = five;
+        return r;
+      });
+      const store = createFleetStore({ makeSocket, fetchAccounts });
+      await store.getState().refreshAccounts();
+      const before = store.getState();
+      five = 70;
+      await store.getState().refreshAccounts();
+      const after = store.getState();
+      expect(after.usage).not.toBe(before.usage);
+      expect(after.usage![0]!.five).toBe(70);
+      for (const f of ['roster', 'lanes', 'accountsConnect', 'projected'] as const) expect(after[f], f).toBe(before[f]);
+    });
+
+    it('projected is undefined before an answer, the server\'s null after one, and kept across a failed or malformed poll', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const answers: Array<() => Promise<AccountsResponse>> = [
+        async () => accountsResponse(TEST_ROSTER),                                       // projected: null
+        async () => fullAnswer(10),                                                      // projected: an object
+        async () => { throw new Error('offline'); },                                     // a failed poll
+        async () => ({ accounts: 'x', roster: 'x', projected: 'x' }) as unknown as AccountsResponse, // malformed
+        async () => ({ accounts: [], roster: TEST_ROSTER }) as unknown as AccountsResponse,          // no projected
+      ];
+      let call = 0;
+      const fetchAccounts = vi.fn().mockImplementation(() => answers[call++]!());
+      const store = createFleetStore({ makeSocket, fetchAccounts });
+      expect(store.getState().projected).toBeUndefined();
+      await store.getState().refreshAccounts();
+      expect(store.getState().projected).toBeNull();
+      await store.getState().refreshAccounts();
+      const landed = store.getState().projected;
+      expect(landed).toEqual({ wrapper: 'claude', score: 10 });
+      await store.getState().refreshAccounts();
+      expect(store.getState().projected).toBe(landed);
+      await store.getState().refreshAccounts();
+      expect(store.getState().projected).toBe(landed);
+      await store.getState().refreshAccounts();
+      expect(store.getState().projected).toBe(landed);
+    });
+  });
+
+  // Console speed, Task C4 (spec §2.6, D16): the device's copy of the Waiting list is its own field, hydrated once and
+  // never written into `waiting`, so every reader that asks whether this page has heard the list answers as before.
+  describe('the saved Waiting list (waitingSaved)', () => {
+    const list = { items: [], cleared: [], goals: [] };
+    const saved = (): unknown => JSON.parse(window.localStorage.getItem(WAITING_SNAPSHOT_KEY) ?? 'null');
+
+    it('a cold store hydrates waitingSaved and leaves waiting null', () => {
+      expect(saveWaitingSnapshot(list, 1234)).toBe(true);
+      const store = createFleetStore({ makeSocket });
+      expect(store.getState().waitingSaved).toEqual({ savedAt: 1234, view: list });
+      expect(store.getState().waiting).toBeNull();
+    });
+
+    it('a store with nothing saved starts with waitingSaved null', () => {
+      expect(createFleetStore({ makeSocket }).getState().waitingSaved).toBeNull();
+    });
+
+    it('a waiting frame saves the list on the device', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      const view = { ...list, cleared: [] };
+      lastSocket().message(JSON.stringify({ type: 'waiting', waiting: view }));
+      expect(store.getState().waiting).toEqual(view);
+      expect(saved()).toEqual({ savedAt: expect.any(Number), view });
+      // The field is the copy this page STARTED with: a frame never rewrites it.
+      expect(store.getState().waitingSaved).toBeNull();
+      store.getState().disconnect();
+    });
+
+    it('a waiting read (setWaiting) saves it too', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().setWaiting(list);
+      expect(saved()).toEqual({ savedAt: expect.any(Number), view: list });
+    });
+
+    it('a frame the envelope check drops saves nothing', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      lastSocket().message(JSON.stringify({ type: 'waiting', waiting: { items: 'not-a-list', cleared: [], goals: [] } }));
+      expect(store.getState().waiting).toBeNull();
+      expect(window.localStorage.getItem(WAITING_SNAPSHOT_KEY)).toBeNull();
+      store.getState().disconnect();
+    });
+
+    // Review 1561 F1: the socket outlives a sign-out, so a frame (or a read already on the wire) after it must not write the
+    // copy back. The page still takes the list; only the device's copy is refused.
+    it('after a sign-out, a waiting frame and a read on the open store save nothing', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      raiseAuthLost('no-session');
+      try {
+        lastSocket().message(JSON.stringify({ type: 'waiting', waiting: list }));
+        store.getState().setWaiting(list);
+        expect(store.getState().waiting).toEqual(list);
+        expect(window.localStorage.getItem(WAITING_SNAPSHOT_KEY)).toBeNull();
+      } finally {
+        clearAuthLost();
+        store.getState().disconnect();
+      }
+      // Signed in again, the next list is saved as before.
+      store.getState().setWaiting(list);
+      expect(saved()).toEqual({ savedAt: expect.any(Number), view: list });
+    });
+
+    it('a store whose storage throws still starts, with waitingSaved null', () => {
+      saveWaitingSnapshot(list, 1234);
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('storage refused'); });
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+      const store = createFleetStore({ makeSocket });
+      expect(store.getState().waitingSaved).toBeNull();
+      expect(store.getState().waiting).toBeNull();
+      // A write the store refuses changes nothing the page draws.
+      store.getState().setWaiting(list);
+      expect(store.getState().waiting).toEqual(list);
+      vi.restoreAllMocks();
     });
   });
 
@@ -1090,6 +2048,149 @@ describe('fleet store', () => {
       ]) expectPriorWireToSurvive(pools);
     });
 
+    // T9-R2: the epoch/observedEpoch producer's PWA half. Both are
+    // FLEET-LEVEL scalars, siblings of `enforcement` above (not per-project
+    // `byProject` members), so they get the same envelope-level type gate.
+    // `observedEpoch` is THREE-VALUED and every case below is a value the
+    // gate must accept unmodified — absent, `null` ("never synced") and a
+    // number all have to survive the round trip exactly as they arrived,
+    // never folded into one another.
+    describe('the epoch/observedEpoch staleness fields (T9-R2)', () => {
+      it('carries a real epoch and observedEpoch straight through, unmodified', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', epoch: 7, observedEpoch: 3 };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        expect(store.getState().pools).toEqual(pools);
+        store.getState().disconnect();
+      });
+
+      it('keeps observedEpoch:null distinct from an absent key — never synced is a real answer', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', epoch: 7, observedEpoch: null };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        const got = store.getState().pools;
+        expect(got).toEqual(pools);
+        expect(got !== null && Object.hasOwn(got, 'observedEpoch')).toBe(true);
+        expect((got as typeof pools | null)?.observedEpoch).toBeNull();
+        store.getState().disconnect();
+      });
+
+      it('leaves observedEpoch absent as a MISSING key, not coerced to null, when the frame omits it', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', epoch: 7 };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        const got = store.getState().pools;
+        expect(got).toEqual(pools);
+        expect(got !== null && Object.hasOwn(got, 'observedEpoch')).toBe(false);
+        store.getState().disconnect();
+      });
+
+      it('leaves epoch absent as a missing key when the producer has no coordinator wired', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', observedEpoch: 4 };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        const got = store.getState().pools;
+        expect(got).toEqual(pools);
+        expect(got !== null && Object.hasOwn(got, 'epoch')).toBe(false);
+        store.getState().disconnect();
+      });
+
+      it('treats epoch 0 and observedEpoch 0 as real values, never as absence', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', epoch: 0, observedEpoch: 0 };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        expect(store.getState().pools).toEqual(pools);
+        store.getState().disconnect();
+      });
+
+      it('silently retains the exact prior valid state for a malformed epoch or observedEpoch', () => {
+        for (const pools of [
+          { listed: false, enforcement: 'unknown', epoch: 'seven' },
+          { listed: false, enforcement: 'unknown', epoch: null },
+          { listed: false, enforcement: 'unknown', epoch: true },
+          { listed: false, enforcement: 'unknown', observedEpoch: 'seven' },
+          { listed: false, enforcement: 'unknown', observedEpoch: true },
+        ]) expectPriorWireToSurvive(pools);
+      });
+    });
+
+    // Item 3 (I1, wave-1 fix round A): `accountPools` shares `enforcement`'s
+    // own `PoolsEnforcement` domain and, before this round, the ONLY gate on
+    // it anywhere was `poolsWire`'s producer-side type — nothing at this
+    // envelope named it, so a malformed value from a broken or adversarial
+    // peer would have reached the first real consumer (`AccountsScreen`'s
+    // account-pool chip) unrejected. Same shape as the `enforcement` cases
+    // just above, one level down.
+    describe('the accountPools field (item 1, corrected item 3)', () => {
+      it('carries every valid accountPools value straight through, unmodified', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        for (const accountPools of ['enforced', 'unavailable', 'unknown']) {
+          const pools = { listed: false, enforcement: 'unknown', accountPools };
+          lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+          expect(store.getState().pools).toEqual(pools);
+        }
+        store.getState().disconnect();
+      });
+
+      it('leaves accountPools absent as a missing key when an older server omits it', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown' };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        const got = store.getState().pools;
+        expect(got).toEqual(pools);
+        expect(got !== null && Object.hasOwn(got, 'accountPools')).toBe(false);
+        store.getState().disconnect();
+      });
+
+      it('silently retains the exact prior valid state for a malformed accountPools', () => {
+        for (const pools of [
+          { listed: false, enforcement: 'unknown', accountPools: 'nope' },
+          { listed: false, enforcement: 'unknown', accountPools: null },
+          { listed: false, enforcement: 'unknown', accountPools: true },
+        ]) expectPriorWireToSurvive(pools);
+      });
+
+      // D-8283: the reason rides beside accountPools and gets the same envelope gate.
+      it('carries every valid accountPoolsReason straight through, and an absent one stays absent', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        for (const accountPoolsReason of ['ccd-predates', 'no-pool-sync']) {
+          const pools = { listed: false, enforcement: 'unknown', accountPools: 'unavailable', accountPoolsReason };
+          lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+          expect(store.getState().pools).toEqual(pools);
+        }
+        const bare = { listed: false, enforcement: 'unknown', accountPools: 'unavailable' };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools: bare }));
+        const got = store.getState().pools;
+        expect(got).toEqual(bare);
+        expect(got !== null && Object.hasOwn(got, 'accountPoolsReason')).toBe(false);
+        store.getState().disconnect();
+      });
+
+      it('silently retains the exact prior valid state for a malformed accountPoolsReason', () => {
+        for (const pools of [
+          { listed: false, enforcement: 'unknown', accountPools: 'unavailable', accountPoolsReason: 'nope' },
+          { listed: false, enforcement: 'unknown', accountPools: 'unavailable', accountPoolsReason: null },
+          { listed: false, enforcement: 'unknown', accountPools: 'unavailable', accountPoolsReason: 3 },
+        ]) expectPriorWireToSurvive(pools);
+      });
+    });
+
     it('keeps the exact prior policy across a genuine disconnect and fresh-socket reconnect', () => {
       const store = createFleetStore({ makeSocket });
       store.getState().connect();
@@ -1116,7 +2217,8 @@ describe('fleet store', () => {
     });
 
     it('is NOT persisted, and a fresh store starts null even with a snapshot on disk', () => {
-      // The offline snapshot is written on every `fleet` frame. Nothing pooled
+      // The offline snapshot is written on the first `fleet` frame at once; frames then write it at
+      // most once per 30 s window, plus the hidden/pagehide/disconnect flushes (C6). Nothing pooled
       // may ride it: `FleetSnapshot` has no field for it, and this asserts
       // that in the two directions that matter — the bytes on disk, and what a
       // cold store reads back.
@@ -1301,6 +2403,343 @@ describe('fleet store', () => {
       store.getState().disconnect();
     });
   });
+
+  // C6 (D-6438): a `fleet` frame arrives as fresh objects, so the store keeps the rows (and the array) that did not
+  // change, and frames write the offline snapshot at most once per 30 s window (the hidden, pagehide and disconnect
+  // flushes write as well) — a scheduler in the store (L4).
+  describe('the row keeper and the snapshot throttle (C6)', () => {
+    const SNAPSHOT_KEY = 'ccrc.fleet-snapshot.v1';
+    // Neutral stubs so no case reaches the network: the roster poll, the catch-up and the durable feed read.
+    const quiet = {
+      makeSocket,
+      fetchAccounts: (): Promise<AccountsResponse> => Promise.resolve({ accounts: [], projected: null, roster: [] }),
+      catchUp: () => Promise.reject(new Error('offline')),
+      fetchFeed: () => Promise.reject(new Error('offline')),
+    };
+    // A FRESH object graph on every call (a JSON round trip), so identity can only be kept by the store. `tag` is the
+    // one field that differs between distinct frames.
+    const frameOf = (tag: string): string => JSON.stringify(JSON.parse(JSON.stringify({
+      type: 'fleet',
+      sessions: [fleetSession('ws-a', 'lane-a'), { ...fleetSession('ws-b', 'lane-a'), title: tag }],
+    })));
+    // Counts the writes. A no-op, not a pass-through: jsdom's `setItem` arms a timer of its own, which would stand in
+    // the timer count `disconnect` is pinned to. What was written is read off the call, not off storage.
+    type WriteSpy = { readonly mock: { readonly calls: readonly (readonly unknown[])[] } };
+    const setItem = (): WriteSpy => vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {});
+    /** The tags of every snapshot written so far (the `title` of ws-b), in write order. */
+    const written = (spy: WriteSpy): string[] =>
+      spy.mock.calls
+        .filter((c) => c[0] === SNAPSHOT_KEY)
+        .map((c) => (JSON.parse(String(c[1])) as { sessions: FleetSession[] }).sessions[1]?.title ?? '');
+    const open = (store: ReturnType<typeof createFleetStore>): void => {
+      store.getState().connect();
+      lastSocket().open();
+    };
+    // Every store a case makes is disconnected after it, even when an assertion failed first: a case's own
+    // `disconnect()` sits on its success path, so a failing case (a mutant's) would otherwise leave its listeners,
+    // its window timer and its pending frame running into the next case. Disconnecting twice is harmless.
+    const made: Array<ReturnType<typeof createFleetStore>> = [];
+    const make = (): ReturnType<typeof createFleetStore> => {
+      const store = createFleetStore(quiet);
+      made.push(store);
+      return store;
+    };
+    afterEach(() => {
+      for (const store of made.splice(0)) store.getState().disconnect();
+    });
+
+    it('an identical frame keeps the array', () => {
+      const store = make();
+      open(store);
+      lastSocket().message(frameOf('one'));
+      const first = store.getState().sessions;
+      expect(first).toHaveLength(2);
+
+      const listener = vi.fn();
+      const unsubscribe = store.subscribe(listener);
+      lastSocket().message(frameOf('one'));
+      expect(store.getState().sessions).toBe(first);
+      expect(listener).not.toHaveBeenCalled();
+
+      // A frame changing one row: a new array, and the row that did not change is the object it was.
+      lastSocket().message(frameOf('two'));
+      const next = store.getState().sessions;
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(next).not.toBe(first);
+      expect(next[0]).toBe(first[0]);
+      expect(next[1]).not.toBe(first[1]);
+      expect(next[1]?.title).toBe('two');
+      unsubscribe();
+      store.getState().disconnect();
+    });
+
+    it('ten frames write the snapshot at most once in 30 s', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      for (let i = 0; i < 10; i++) {
+        lastSocket().message(frameOf(`f${i}`));
+        vi.advanceTimersByTime(2_900); // the last frame lands at 26 s, and the loop ends at 29 s
+      }
+      expect(written(spy)).toEqual(['f0']);
+      store.getState().disconnect();
+    });
+
+    it('the newest frame is written when the window closes', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      lastSocket().message(frameOf('A'));
+      expect(written(spy)).toEqual(['A']); // the first frame, at once
+      vi.advanceTimersByTime(5_000);
+      lastSocket().message(frameOf('B'));
+      vi.advanceTimersByTime(5_000);
+      lastSocket().message(frameOf('C'));
+      expect(written(spy)).toEqual(['A']);
+
+      vi.advanceTimersByTime(20_000); // 30 s since the first write
+      expect(written(spy)).toEqual(['A', 'C']); // the newest, not B
+
+      vi.advanceTimersByTime(30_000); // nothing pending: nothing more
+      expect(written(spy)).toEqual(['A', 'C']);
+      store.getState().disconnect();
+    });
+
+    it('the window reopens after its timed write', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      lastSocket().message(frameOf('A')); // 0 s: written at once, and opens the window
+      vi.advanceTimersByTime(10_000);
+      lastSocket().message(frameOf('C')); // 10 s: pending
+      vi.advanceTimersByTime(20_000); // 30 s: the window's end writes C, and must open the next window
+      expect(written(spy)).toEqual(['A', 'C']);
+
+      vi.advanceTimersByTime(1_000);
+      lastSocket().message(frameOf('D')); // 31 s: one second after a write, so it waits
+      vi.advanceTimersByTime(28_000); // 59 s
+      expect(written(spy)).toEqual(['A', 'C']);
+      vi.advanceTimersByTime(1_000); // 60 s
+      expect(written(spy)).toEqual(['A', 'C', 'D']);
+      store.getState().disconnect();
+    });
+
+    // A frame `saveFleetSnapshot` refuses (here: a row with an unmeasured field) is never scheduled.
+    const degradedFrameOf = (tag: string): string => JSON.stringify({
+      type: 'fleet',
+      sessions: [
+        { ...fleetSession('ws-a', 'lane-a'), unmeasured: ['workdir'] },
+        { ...fleetSession('ws-b', 'lane-a'), title: tag },
+      ],
+    });
+
+    it('a refused frame opens no window', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      lastSocket().message(degradedFrameOf('X')); // refused: nothing written, and no window opened
+      expect(written(spy)).toEqual([]);
+      vi.advanceTimersByTime(1_000);
+      lastSocket().message(frameOf('A')); // the first good frame is written at once
+      expect(written(spy)).toEqual(['A']);
+      store.getState().disconnect();
+    });
+
+    it('a refused frame does not displace the pending one', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      lastSocket().message(frameOf('A')); // 0 s: written
+      vi.advanceTimersByTime(5_000);
+      lastSocket().message(frameOf('B')); // 5 s: pending
+      vi.advanceTimersByTime(5_000);
+      lastSocket().message(degradedFrameOf('C')); // 10 s: refused, so B stays pending
+      vi.advanceTimersByTime(20_000); // 30 s
+      expect(written(spy)).toEqual(['A', 'B']);
+      store.getState().disconnect();
+    });
+
+    it('a hidden page writes the pending snapshot at once', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      lastSocket().message(frameOf('A'));
+      vi.advanceTimersByTime(1_000);
+      lastSocket().message(frameOf('B'));
+      expect(written(spy)).toEqual(['A']);
+
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+      try {
+        document.dispatchEvent(new Event('visibilitychange'));
+        expect(written(spy)).toEqual(['A', 'B']);
+      } finally {
+        // The own property shadows the prototype's getter; deleting it restores jsdom's.
+        delete (document as unknown as Record<string, unknown>)['visibilityState'];
+        store.getState().disconnect();
+      }
+    });
+
+    it('pagehide writes the pending snapshot at once', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      lastSocket().message(frameOf('A'));
+      vi.advanceTimersByTime(1_000);
+      lastSocket().message(frameOf('B'));
+      expect(written(spy)).toEqual(['A']);
+
+      window.dispatchEvent(new Event('pagehide'));
+      expect(written(spy)).toEqual(['A', 'B']);
+      store.getState().disconnect();
+    });
+
+    it('disconnect writes the pending snapshot and stops the window', () => {
+      vi.useFakeTimers();
+      const spy = setItem();
+      const store = make();
+      open(store);
+      lastSocket().message(frameOf('A'));
+      vi.advanceTimersByTime(1_000);
+      lastSocket().message(frameOf('B'));
+      expect(written(spy)).toEqual(['A']);
+
+      store.getState().disconnect();
+      expect(written(spy)).toEqual(['A', 'B']);
+      // The roster interval and the socket's timers are gone with it, so nothing at all is left to fire.
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(60_000);
+      expect(written(spy)).toEqual(['A', 'B']);
+
+      // A later connect starts clean: its first frame is written at once, not held behind the old window.
+      open(store);
+      lastSocket().message(frameOf('C'));
+      expect(written(spy)).toEqual(['A', 'B', 'C']);
+      store.getState().disconnect();
+    });
+
+    it('a first live frame equal to the hydrated snapshot still marks the fleet frame seen', () => {
+      // Hydrated through the production writer. The frame is a JSON clone of the hydrated rows themselves, so it is
+      // equal to them by construction (a revived row can carry a key the live wire does not, and keepRows would
+      // then rightly take the live object; that is not what this case pins).
+      saveFleetSnapshot([fleetSession('ws-a', 'lane-a'), fleetSession('ws-b', 'lane-a')]);
+      const store = make();
+      const hydrated = store.getState().sessions;
+      expect(hydrated, 'the snapshot did not hydrate: this case would pin nothing').toHaveLength(2);
+      expect(store.getState().fleetFrameSeen).toBe(false);
+
+      open(store);
+      lastSocket().message(JSON.stringify({ type: 'fleet', sessions: JSON.parse(JSON.stringify(hydrated)) }));
+      expect(store.getState().fleetFrameSeen).toBe(true);
+      // Nothing changed, so the array is the hydrated one: the flag was set without replacing it.
+      expect(store.getState().sessions).toBe(hydrated);
+      store.getState().disconnect();
+    });
+  });
+
+  // Delegation broker wave 4, PR2 (Task 2.1). The `delegation` frame, held per connection: `null` is the not-seen
+  // state AND the withdrawn one, and a reconnect clears it, so an older server (or a lane with no value yet) reads
+  // "unavailable", never the last connection's rows. Envelope only here; members are `readDelegation`'s to tolerate.
+  describe('the `delegation` frame', () => {
+    const connected = () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      return store;
+    };
+    const wire = delegationFrame({ leases: [delegationLease({ sourceKind: 'raw' })], unowned: [delegationUnowned()] });
+
+    it('W4-U1: starts null, and a well-formed frame is held whole', () => {
+      // Before `connect()` too: a cold start renders from the initial state before any socket opens.
+      expect(createFleetStore({ makeSocket }).getState().delegation).toBeNull();
+      const store = connected();
+      expect(store.getState().delegation).toBeNull();
+      lastSocket().message(JSON.stringify({ type: 'delegation', delegation: wire }));
+      expect(store.getState().delegation).toEqual(wire);
+      store.getState().disconnect();
+    });
+
+    it('W4-U2: a malformed envelope is dropped silently and leaves the slot null', () => {
+      const store = connected();
+      const bad: unknown[] = [
+        { type: 'delegation' },
+        { type: 'delegation', delegation: [] },
+        { type: 'delegation', delegation: { asOf: wire.asOf, leases: [], unowned: [] } },
+        { type: 'delegation', delegation: { asOf: wire.asOf, activities: [], unowned: [] } },
+        { type: 'delegation', delegation: { asOf: wire.asOf, activities: [], leases: [] } },
+        { type: 'delegation', delegation: { asOf: wire.asOf, activities: {}, leases: [], unowned: [] } },
+        { type: 'delegation', delegation: { asOf: wire.asOf, activities: [], leases: 'x', unowned: [] } },
+        { type: 'delegation', delegation: { asOf: wire.asOf, activities: [], leases: [], unowned: {} } },
+        { type: 'delegation', delegation: { asOf: 7, activities: [], leases: [], unowned: [] } },
+        { type: 'delegation', delegation: { activities: [], leases: [], unowned: [] } },
+      ];
+      for (const m of bad) {
+        expect(() => lastSocket().message(JSON.stringify(m))).not.toThrow();
+        expect(store.getState().delegation, JSON.stringify(m)).toBeNull();
+      }
+      store.getState().disconnect();
+    });
+
+    it('W4-U2b: a `delegation: null` frame withdraws the held frame', () => {
+      const store = connected();
+      lastSocket().message(JSON.stringify({ type: 'delegation', delegation: wire }));
+      expect(store.getState().delegation).toEqual(wire);
+      lastSocket().message(JSON.stringify({ type: 'delegation', delegation: null }));
+      expect(store.getState().delegation).toBeNull();
+      store.getState().disconnect();
+    });
+
+    it('W4-U3: a reconnect clears the slot before any new frame', () => {
+      vi.useFakeTimers();
+      const store = connected();
+      lastSocket().message(JSON.stringify({ type: 'delegation', delegation: wire }));
+      expect(store.getState().delegation).toEqual(wire);
+      const first = lastSocket();
+      first.onclose?.(new Event('close') as CloseEvent);
+      vi.advanceTimersByTime(60_000);
+      expect(lastSocket()).not.toBe(first);
+      lastSocket().open();
+      expect(store.getState().delegation).toBeNull();
+      store.getState().disconnect();
+    });
+
+    it("W4-U4: origin/main's server sequence leaves the slot null, and the offline snapshot names no delegation key", () => {
+      saveFleetSnapshot([fleetSession('s0', 'claude')]);
+      const cold = createFleetStore({ makeSocket });
+      expect(cold.getState().sessions.map((x) => x.id)).toEqual(['s0']);   // hydrated from the snapshot ...
+      expect(cold.getState().delegation).toBeNull();                       // ... which never carries this slot
+      const store = connected();
+      const s = lastSocket();
+      s.message(JSON.stringify({ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO }));
+      s.message(JSON.stringify({ type: 'fleet', sessions: [fleetSession('s1', 'claude')] }));
+      s.message(JSON.stringify({ type: 'runs', runs: [] }));
+      s.message(JSON.stringify({ type: 'coord', coord: { pause: 'clear', mail: 'clear' } }));
+      s.message(JSON.stringify({ type: 'pools', pools: { listed: false, enforcement: 'enforced' } }));
+      s.message(JSON.stringify({ type: 'divergence', divergences: [] }));
+      expect(store.getState().sessions.map((x) => x.id)).toEqual(['s1']);
+      expect(store.getState().delegation).toBeNull();
+      lastSocket().message(JSON.stringify({ type: 'delegation', delegation: wire }));
+      s.message(JSON.stringify({ type: 'fleet', sessions: [fleetSession('s1', 'claude')] }));
+      const raw = window.localStorage.getItem('ccrc.fleet-snapshot.v1');
+      expect(raw).not.toBeNull();
+      expect(raw).not.toMatch(/delegation/);
+      store.getState().disconnect();
+    });
+
+    it('W4-U5: an unknown top-level key and an unknown member word are accepted whole at the envelope', () => {
+      const store = connected();
+      const odd = { ...wire, futureMember: { n: 1 }, leases: [{ ...wire.leases[0], group: 'future-word' }] };
+      lastSocket().message(JSON.stringify({ type: 'delegation', delegation: odd }));
+      expect(store.getState().delegation).toEqual(odd);
+      store.getState().disconnect();
+    });
+  });
 });
 
 // — Build 4 wave 4 gates: what this build did NOT add to the wire —
@@ -1351,9 +2790,184 @@ describe('Build 4 wave 4 — the wire additions that were refused', () => {
 
   it("the mail ChatItem is a RENDER-MODEL member, not a ChatEvent one", () => {
     // The distinction the whole design rests on: `{kind:'mail'}` exists in
-    // `ChatList.tsx`'s `ChatItem`, which is PWA-local and derived per render,
-    // and nowhere in `shared/api.ts`, which is the wire.
-    expect(sourceOf('pwa', 'src', 'session', 'ChatList.tsx')).toContain("kind: 'mail'");
+    // `ChatItem`, which is PWA-local and derived per render, and nowhere in
+    // `shared/api.ts`, which is the wire. `ChatItem` left `ChatList.tsx` for
+    // `chatItems.ts` — the renderer and the model it renders — so this reads
+    // the model's own file; a read of the list would now pass over markup.
+    expect(sourceOf('pwa', 'src', 'session', 'chatItems.ts')).toContain("kind: 'mail'");
     expect(sourceOf('shared', 'api.ts')).not.toContain("kind: 'mail'");
+  });
+});
+
+// THE GUARDS EVERY HAPPY-PATH CASE WALKS PAST. Each one answers a question
+// about a key or a socket that is no longer what the caller remembers, and
+// each had no case at all (measured: statements 309, 356, 384, 475, 593, 610
+// and branches 192#1, 299#1, 322#1, 324#1, 328#1, 356#1, 405#1, 643#1 of
+// `stores/session.ts` uncovered with the pwa suite green).
+describe('the session store’s guards against a stale key, a second socket and a body it cannot read', () => {
+  /** `api.prompt`'s own signature, not a bare `vi.fn()`: the loose form is
+   *  assignable to nothing the store asks for, and the project-wide
+   *  typecheck (not the per-file one) is where that shows. */
+  type Prompt = (id: string, text: string,
+                 opts?: { replaceDraft?: boolean; attachments?: string[] }) => Promise<void>;
+  const prompt = () => vi.fn<Prompt>().mockResolvedValue(undefined);
+
+  it('the 5 s echo fallback does nothing for a pending that already left', async () => {
+    // `clearConfirmed` removed it when the echo landed, so the timer fires
+    // against a key with no record. Returning `{}` rather than indexing is
+    // what keeps a late timer from resurrecting a cleared bubble.
+    vi.useFakeTimers();
+    const store = createSessionStore('s1', { api: { prompt: prompt() } });
+    await store.getState().send('ship it');
+    store.getState().apply({ type: 'events', uuid: 'u1', events: [user('a', 'ship it')], offset: 50 });
+    expect(store.getState().pending).toEqual([]);
+
+    vi.advanceTimersByTime(6_000);
+    expect(store.getState().pending, 'a fired timer cannot re-add what the echo cleared').toEqual([]);
+  });
+
+  it('a non-user event in the same frame is skipped, not matched against the pending text', async () => {
+    // `clearConfirmed` walks EVERY event in the frame. An assistant message
+    // whose text happens to equal the operator's own — an echo in a summary,
+    // a quoted instruction — must not clear the bubble: only the session's
+    // own `user` event proves the prompt landed.
+    const store = createSessionStore('s1', { api: { prompt: prompt() } });
+    await store.getState().send('ship it');
+    store.getState().apply({ type: 'events', uuid: 'u1',
+      events: [assistant('b', 'ship it'), toolUse('c', 't1')], offset: 50 });
+    expect(store.getState().pending, 'only a user event confirms a send').toHaveLength(1);
+
+    store.getState().apply({ type: 'events', uuid: 'u1', events: [user('a', 'ship it')], offset: 60 });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('a rejection that is not an ApiError still marks the pending failed, with its message', async () => {
+    // `fetch` rejecting with a `TypeError` when the box goes away is the
+    // ordinary producer. Without the arm the bubble would stay `sending`
+    // forever — and the 5 s fallback would then DELETE it, so the operator's
+    // text disappears with no refusal and no retry.
+    const store = createSessionStore('s1', { api: { prompt: vi.fn().mockRejectedValue(new TypeError('Failed to fetch')) } });
+    await store.getState().send('ship it');
+    const p = store.getState().pending[0]!;
+    expect(p.state).toBe('failed');
+    expect(p.error).toBe('Failed to fetch');
+    expect(p.code, 'no ApiError means no server token to branch on').toBeUndefined();
+  });
+
+  it('a rejection that is not an Error at all still says something', async () => {
+    const store = createSessionStore('s1', { api: { prompt: vi.fn().mockRejectedValue('nope') } });
+    await store.getState().send('ship it');
+    expect(store.getState().pending[0]!.error).toBe('send failed');
+  });
+
+  it('an ApiError whose body is not an object reads no draft and no flag', async () => {
+    // A proxy answering `text/html` is how a 409 arrives as a string.
+    // `(body as {draft?: unknown}).draft` on it is `undefined`, so the
+    // `typeof` guard is what keeps the rescue from offering a button for a
+    // box nothing measured.
+    const store = createSessionStore('s1', { api: { prompt: vi.fn().mockRejectedValue(new ApiError(409, 'Conflict')) } });
+    await store.getState().send('ship it');
+    const p = store.getState().pending[0]!;
+    expect(p.state).toBe('failed');
+    expect(p.draft).toBeUndefined();
+    expect(p.submittable).toBeUndefined();
+  });
+
+  it('a draft-present whose `draft` is not a string carries the empty box, never the token', async () => {
+    // The conflict sheet renders this straight into a textarea. A number or
+    // an object there would read as the operator's own half-typed thought.
+    const store = createSessionStore('s1', {
+      api: { prompt: vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'draft-present', draft: 7 })) },
+    });
+    await store.getState().send('new text');
+    expect(store.getState().pending[0]!.draft).toBe('');
+  });
+
+  it('retry on a key that is not failed does nothing — and sends nothing', async () => {
+    // Two conditions, one answer: a key the store never had (a second tap
+    // after a discard) and a key whose pending is still `sending` (a double
+    // tap on Retry). Either would otherwise re-POST text the box is already
+    // processing.
+    const call = prompt();
+    const store = createSessionStore('s1', { api: { prompt: call } });
+    await store.getState().send('ship it');
+    const key = store.getState().pending[0]!.key;
+    expect(call).toHaveBeenCalledTimes(1);
+
+    store.getState().retry(key);                       // still `sending`
+    store.getState().retry('a-key-that-never-existed');
+    expect(call, 'neither tap sends a second prompt').toHaveBeenCalledTimes(1);
+    expect(store.getState().pending[0]!.state).toBe('sending');
+  });
+
+  it('resolve on a key the store does not have sends nothing', async () => {
+    const call = prompt();
+    const store = createSessionStore('s1', { api: { prompt: call } });
+    store.getState().resolve('gone', 'the replacement text', { replaceDraft: true });
+    expect(call).not.toHaveBeenCalled();
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('connect() twice opens ONE socket — two would mean two `since` cursors', () => {
+    // The guard that makes `connect()` idempotent. A second socket replays
+    // the transcript from its own cursor, so the screen renders every event
+    // twice and acks two streams. Counted through `makeSocket`, the store's
+    // own injection point: asserting on `conn` cannot see a second socket at
+    // all, since both read `connecting`.
+    const made: string[] = [];
+    const makeSocket = (u: string): WebSocket => {
+      made.push(u);
+      return { readyState: 0, close: () => {}, send: () => {},
+               addEventListener: () => {}, removeEventListener: () => {} } as unknown as WebSocket;
+    };
+    const store = createSessionStore('s1', { api: { prompt: prompt() }, makeSocket });
+    store.getState().connect();
+    store.getState().connect();
+    expect(made, 'the second connect() is a no-op').toHaveLength(1);
+    store.getState().disconnect();
+  });
+
+  it('a backlog that names no file clears the address rather than keeping the old one', () => {
+    // `file` is the address `offset` is measured IN, and the frame is CAST,
+    // not revived — an older server omits it. Keeping the previous file
+    // would have the reconnect ask for an offset inside a different
+    // transcript.
+    // CAST, not revived — which is the whole reason the `?? null` is there.
+    // `file` is REQUIRED on the frame type, so an older server omitting it is
+    // not expressible in TypeScript; it arrives through
+    // `ReconnectingSocket`'s `onMessage`, which casts. The cast here is the
+    // same lie the wire tells, written down.
+    const after = applySessionMsg(
+      { ...emptySnap(), file: '/t/u-old.jsonl', offset: 7 },
+      { type: 'backlog', uuid: 'u1', events: [user('a', 'hi')], offset: 120,
+        missing: false } as unknown as SessionStreamMsg,
+    );
+    expect(after.file).toBeNull();
+  });
+
+  it('discarding a pending revokes its preview URLs — the images die with it', async () => {
+    // Up to four full-size images per send. The leak this closes was measured
+    // on the echo-mismatch path; `discard` follows the same rule, and the spy
+    // is the only way to see it at all.
+    const revoke = vi.fn();
+    const create = vi.fn(() => 'blob:preview-1');
+    vi.stubGlobal('URL', { ...URL, createObjectURL: create, revokeObjectURL: revoke });
+    const store = createSessionStore('s1', { api: { prompt: prompt() } });
+    await store.getState().send('look at this', {
+      attachments: [{ path: '/tmp/a.png', previewUrl: 'blob:preview-1' }],
+    });
+    store.getState().discard(store.getState().pending[0]!.key);
+    expect(revoke).toHaveBeenCalledWith('blob:preview-1');
+    vi.unstubAllGlobals();
+  });
+
+  it('getSessionStore hands the SAME store back for an id it already made', () => {
+    // Two screens for one session share state — that is the whole point of
+    // the map. A second `createSessionStore` would give the second screen an
+    // empty transcript and its own socket.
+    const a = getSessionStore('shared-id');
+    const b = getSessionStore('shared-id');
+    expect(b).toBe(a);
+    expect(getSessionStore('another-id')).not.toBe(a);
   });
 });

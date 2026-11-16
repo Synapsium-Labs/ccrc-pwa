@@ -1,0 +1,876 @@
+// The command layer (D-5103): the ⌘K palette, the single keys and chords, and
+// the two ways Escape could reach through the palette to the session header.
+import type { ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { INSTRUMENT, SKINS, Sheet } from '@ccrc/ui';
+import { AUTH_VERDICTS, type RunSummary } from '../../shared/api';
+import { CommandLayer } from '../src/command/CommandLayer';
+import { fleetOrder } from '../src/command/commands';
+import { COMMAND_FIELD_WORDS, SEARCH_EMPTY } from '../src/command/registry';
+import { actionDoor, commandDoor, doorMark } from '../src/command/door';
+import { CHORD_MS } from '../src/command/useShortcuts';
+import { clearAuthLost, raiseAuthLost, useAuthLost } from '../src/lib/auth';
+import { useLocation } from '../src/lib/router';
+import { setSkin } from '../src/lib/skin';
+import { Composer } from '../src/session/Composer';
+import { SettingsDataProvider } from '../src/screens/settings/SettingsDataProvider';
+import { SettingsScreen } from '../src/screens/settings/SettingsFrame';
+import { CONTENT_ID, FLEET_ID, focusShownLandmark } from '../src/skins/frame';
+import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
+import { useFleetStore } from '../src/stores/fleet';
+import { PALETTE_MOTION_VARS, VAUL_MOTION } from '../../ui/src/lib/motion';
+import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
+import { TEST_ROSTER } from './rosterFixture';
+import { labelInName, shownText } from './labelInName';
+
+// (pointer: fine), as header.test.tsx stubs it: the header binds the physical
+// Escape key only where a fine pointer says a keyboard is likely.
+const stubPointer = (fine: boolean): void => {
+  vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: q.includes('pointer: fine') ? fine : false,
+    media: q, addEventListener: () => {}, removeEventListener: () => {},
+    addListener: () => {}, removeListener: () => {}, onchange: null,
+    dispatchEvent: () => false,
+  }));
+};
+
+const A = fleetSession({ id: 'project-a-one', project: 'project-a', name: 'first', bucket: 'attention', statusUpdatedAt: 3 });
+const B = fleetSession({ id: 'project-a-two', project: 'project-a', name: 'second', bucket: 'idle', statusUpdatedAt: 2 });
+
+const headerProps = (over: Partial<HeaderHostProps> = {}): HeaderHostProps => ({
+  session: A,
+  status: 'busy',
+  statusUpdatedAt: null,
+  onInterrupt: vi.fn(),
+  onOpenTerminal: vi.fn(),
+  onBack: vi.fn(),
+  onChangeModel: vi.fn(),
+  onChangeEffort: vi.fn(),
+  onMoveAccount: vi.fn(),
+  onArchive: vi.fn(),
+  onRestore: vi.fn(),
+  onOpenHistory: vi.fn(),
+  onReapWorkspace: vi.fn(),
+  roster: TEST_ROSTER,
+  ...over,
+});
+
+const palette = (): HTMLElement | null => screen.queryByRole('combobox');
+const openPalette = (): HTMLElement => {
+  fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
+  return screen.getByRole('combobox');
+};
+const shortcutsSheet = (): HTMLElement | null => screen.queryByRole('dialog', { name: 'Keyboard shortcuts' });
+
+beforeEach(() => {
+  window.history.replaceState(null, '', '/');
+  useFleetStore.setState({ sessions: [A, B], runs: [], blocked: false });
+});
+
+afterEach(() => {
+  cleanup();
+  clearAuthLost();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  setSkin('refined');
+  try { localStorage.clear(); } catch { /* jsdom always has it */ }
+});
+
+describe('opening the palette', () => {
+  it('⌘K opens; Ctrl+K opens', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    expect(palette()).toBeNull();
+    fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
+    expect(palette(), '⌘K').not.toBeNull();
+    fireEvent.keyDown(palette()!, { key: 'Escape' });
+    expect(palette()).toBeNull();
+    fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true });
+    expect(palette(), 'Ctrl+K').not.toBeNull();
+  });
+
+  it('⌘K opens from inside a text field too', () => {
+    render(<><Composer onSend={vi.fn()} pending={[]} /><CommandLayer openNewSession={vi.fn()} /></>);
+    const box = screen.getByRole('textbox');
+    act(() => box.focus());
+    fireEvent.keyDown(box, { key: 'k', metaKey: true });
+    expect(palette()).not.toBeNull();
+  });
+
+  it("typing 'runs' then Enter navigates to /runs and closes", () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    const input = openPalette();
+    expect(document.activeElement, 'the input takes focus').toBe(input);
+    fireEvent.change(input, { target: { value: 'runs' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(window.location.pathname).toBe('/runs');
+    expect(palette()).toBeNull();
+  });
+
+  it('an option runs on click, without taking focus first', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    const input = openPalette();
+    fireEvent.change(input, { target: { value: 'go to accounts' } });
+    const option = screen.getByRole('option', { name: /Go to Accounts/ });
+    const down = fireEvent.mouseDown(option);
+    expect(down, 'mousedown is prevented, so focus stays in the input').toBe(false);
+    fireEvent.click(option);
+    expect(window.location.pathname).toBe('/accounts');
+  });
+
+  it('says so when nothing matches', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    const input = openPalette();
+    // One character: from SEARCH_MIN on, any text offers "Find runs matching" (D-8072).
+    fireEvent.change(input, { target: { value: 'z' } });
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+    expect(screen.getByText(SEARCH_EMPTY)).toBeTruthy();
+  });
+});
+
+describe('Escape in the palette never reaches the session header', () => {
+  it('Escape inside the palette closes it and does not interrupt a busy session', () => {
+    stubPointer(true);
+    const p = headerProps();
+    render(<><SessionHeaderHost {...p} layer={false} /><CommandLayer openNewSession={vi.fn()} /></>);
+    const input = openPalette();
+    fireEvent.keyDown(input, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    expect(palette(), 'the palette closed').toBeNull();
+    expect(p.onInterrupt).not.toHaveBeenCalled();
+  });
+
+  it('Escape with focus on an option does not interrupt', () => {
+    stubPointer(true);
+    const p = headerProps();
+    render(<><SessionHeaderHost {...p} layer={false} /><CommandLayer openNewSession={vi.fn()} /></>);
+    openPalette();
+    // D-5456: the header's own guard (D-5235) already skips an Escape Radix
+    // prevented, so the interrupt alone cannot see the palette's stop. A plain
+    // window listener, as any app key handler is, can.
+    const reached = vi.fn();
+    window.addEventListener('keydown', reached);
+    try {
+      const option = screen.getAllByRole('option')[0]!;
+      act(() => option.focus());
+      expect(document.activeElement, 'an option is focusable at tabIndex -1').toBe(option);
+      fireEvent.keyDown(option, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    } finally {
+      window.removeEventListener('keydown', reached);
+    }
+    expect(palette(), 'the palette closed').toBeNull();
+    expect(p.onInterrupt).not.toHaveBeenCalled();
+    expect(reached, 'the Escape went on past the palette to the window').not.toHaveBeenCalled();
+  });
+
+  it('the control: with the palette shut, Escape still interrupts the busy session', () => {
+    stubPointer(true);
+    const p = headerProps();
+    render(<><SessionHeaderHost {...p} layer={false} /><CommandLayer openNewSession={vi.fn()} /></>);
+    fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    expect(p.onInterrupt).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('focus stays in the input', () => {
+  it('the options are not in the tab order, and ↓ moves aria-activedescendant while focus stays in the input', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    const input = openPalette();
+    const options = screen.getAllByRole('option');
+    expect(options.length).toBeGreaterThan(2);
+    for (const o of options) {
+      expect(o.tagName, 'an option is not a button').not.toBe('BUTTON');
+      expect(o.tabIndex, 'an option is out of the tab order').toBe(-1);
+      expect(o.querySelector('button, a[href], input, [tabindex="0"]'), 'nothing tabbable inside').toBeNull();
+    }
+    expect(input.getAttribute('aria-controls')).toBe(screen.getByRole('listbox').id);
+    expect(input.getAttribute('aria-activedescendant')).toBe(options[0]!.id);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(input.getAttribute('aria-activedescendant')).toBe(options[1]!.id);
+    expect(options[1]!.getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(input, { key: 'ArrowUp' });
+    fireEvent.keyDown(input, { key: 'ArrowUp' });
+    expect(input.getAttribute('aria-activedescendant'), '↑ from the top wraps to the end')
+      .toBe(options[options.length - 1]!.id);
+    expect(document.activeElement).toBe(input);
+  });
+});
+
+describe('the single keys', () => {
+  it("'?' with shiftKey opens the shortcuts sheet", () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    fireEvent.keyDown(document.body, { key: '?', shiftKey: true });
+    expect(shortcutsSheet()).not.toBeNull();
+    expect(screen.getByText('Next session')).toBeTruthy();
+  });
+
+  it('a single key with Ctrl, Alt or Meta held fires nothing', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    for (const mod of ['ctrlKey', 'altKey', 'metaKey'] as const) {
+      fireEvent.keyDown(document.body, { key: '?', shiftKey: true, [mod]: true });
+      expect(shortcutsSheet(), `? with ${mod}`).toBeNull();
+      fireEvent.keyDown(document.body, { key: ']', [mod]: true });
+      expect(window.location.pathname, `] with ${mod}`).toBe('/');
+      fireEvent.keyDown(document.body, { key: 'g', [mod]: true });
+      fireEvent.keyDown(document.body, { key: 'r' });
+      expect(window.location.pathname, `g with ${mod}, then r`).toBe('/');
+    }
+  });
+
+  it('`]` typed in the composer\'s textarea stays text; on the page body it moves to the next session', () => {
+    render(<><Composer onSend={vi.fn()} pending={[]} /><CommandLayer openNewSession={vi.fn()} /></>);
+    const box = screen.getByRole('textbox');
+    act(() => box.focus());
+    // A composer holding text keeps every key (D-5457): only an EMPTY one
+    // passes `[`, `]` and `?` to the page, and that is the next describe's.
+    fireEvent.change(box, { target: { value: 'see' } });
+    const typed = fireEvent.keyDown(box, { key: ']' });
+    expect(typed, 'the key is not prevented, so the text field takes it').toBe(true);
+    expect(window.location.pathname).toBe('/');
+    fireEvent.keyDown(document.body, { key: ']' });
+    expect(window.location.pathname, 'from no session, ] opens the first').toBe(`/s/${A.id}`);
+    fireEvent.keyDown(document.body, { key: ']' });
+    expect(window.location.pathname).toBe(`/s/${B.id}`);
+    fireEvent.keyDown(document.body, { key: '[' });
+    expect(window.location.pathname).toBe(`/s/${A.id}`);
+  });
+
+  it('the g chords go to a screen, and match on the key, not the physical code', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    fireEvent.keyDown(document.body, { key: 'g', code: 'KeyX' });
+    fireEvent.keyDown(document.body, { key: 'i', code: 'KeyY' });
+    expect(window.location.pathname).toBe('/mail');
+    fireEvent.keyDown(document.body, { key: 'r', code: 'KeyG' });
+    expect(window.location.pathname, 'r alone is not a chord').toBe('/mail');
+  });
+
+  it('no shortcut fires while auth is lost', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    act(() => raiseAuthLost(AUTH_VERDICTS[0]!));
+    fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
+    expect(palette(), '⌘K').toBeNull();
+    fireEvent.keyDown(document.body, { key: ']' });
+    expect(window.location.pathname, ']').toBe('/');
+    fireEvent.keyDown(document.body, { key: '?', shiftKey: true });
+    expect(shortcutsSheet(), '?').toBeNull();
+  });
+
+  it('no shortcut fires while the build is blocked', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    act(() => useFleetStore.setState({ blocked: true }));
+    fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true });
+    expect(palette()).toBeNull();
+    fireEvent.keyDown(document.body, { key: ']' });
+    expect(window.location.pathname).toBe('/');
+  });
+});
+
+describe('the base commands, through the palette', () => {
+  it('Switch layout → Instrument stamps data-skin instrument', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    const input = openPalette();
+    fireEvent.change(input, { target: { value: 'switch layout' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    const page = screen.getByRole('combobox');
+    expect(page.getAttribute('value') ?? (page as HTMLInputElement).value, 'a page starts empty').toBe('');
+    // jsdom names the option its title then its group run together ("InstrumentLayout"), so the pattern needs no word
+    // boundary after the title; Chrome names the same option "Instrument Layout".
+    expect(screen.getByRole('option', { name: /^Instrument/ })).toBeTruthy();
+    for (const o of screen.getAllByRole('option')) expect(o.textContent ?? '', 'Instrument is no longer a preview').not.toContain('(preview)');
+    expect(screen.getByRole('option', { name: /Match this device/ })).toBeTruthy();
+    fireEvent.change(page, { target: { value: 'instrument' } });
+    fireEvent.keyDown(page, { key: 'Enter' });
+    expect(document.documentElement.getAttribute('data-skin')).toBe('instrument');
+    expect(palette()).toBeNull();
+  });
+
+  it('Switch layout marks a skin that is a preview as one, by injection', () => {
+    // The shipped catalogue has no preview (above), so this is the only guard
+    // on the palette's "(preview)" arm in commands.ts. The entry is flipped on
+    // the catalogue itself, as skin-picker's injected case does; the command
+    // builds its options when the page opens, so the flip is read.
+    const entry = SKINS.find((s) => s.id === INSTRUMENT) as { preview: boolean } | undefined;
+    expect(entry).toBeDefined();
+    const was = entry!.preview;
+    entry!.preview = true;
+    try {
+      render(<CommandLayer openNewSession={vi.fn()} />);
+      const input = openPalette();
+      fireEvent.change(input, { target: { value: 'switch layout' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(screen.getByRole('option', { name: /^Instrument \(preview\)/ })).toBeTruthy();
+    } finally {
+      entry!.preview = was;
+    }
+  });
+
+  it('Backspace on an empty page goes back to the commands', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    const input = openPalette();
+    fireEvent.change(input, { target: { value: 'switch theme' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByRole('option', { name: /Dracula/ })).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Backspace' });
+    expect(screen.getByRole('option', { name: /Go to Fleet/ })).toBeTruthy();
+  });
+
+  it('Open session… lists the fleet in its own order and opens one', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    const input = openPalette();
+    fireEvent.change(input, { target: { value: 'open session' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual([
+      expect.stringContaining('first'), expect.stringContaining('second'),
+    ]);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'second' } });
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
+    expect(window.location.pathname).toBe(`/s/${B.id}`);
+  });
+});
+
+// THE DESKTOP SESSION SCREEN (D-5457). On a fine pointer the composer takes
+// focus every time the session changes, so after one `]` the next key lands in
+// a textarea. A browser fires each key at `document.activeElement`; so does
+// `press`. The route below keys the composer on the session, as SessionScreen
+// does, so each arrival re-fires its autofocus.
+function SessionRoute(): ReactNode {
+  const { path } = useLocation();
+  const m = /^\/s\/([^/]+)$/.exec(path);
+  return m === null ? null : <Composer key={m[1]} id={decodeURIComponent(m[1]!)} onSend={vi.fn()} pending={[]} />;
+}
+/** The composer's autofocus is deferred a tick (`setTimeout(…, 0)`). */
+const settle = (): Promise<void> => act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+const press = (init: Parameters<typeof fireEvent.keyDown>[1]): boolean =>
+  fireEvent.keyDown(document.activeElement ?? document.body, init);
+
+describe('the keys on a desktop session screen', () => {
+  it('`]` and `[` walk the fleet from the autofocused, empty composer', async () => {
+    stubPointer(true);
+    render(<><SessionRoute /><CommandLayer openNewSession={vi.fn()} /></>);
+    press({ key: ']' });
+    expect(window.location.pathname).toBe(`/s/${A.id}`);
+    await settle();
+    expect(document.activeElement?.tagName, 'the composer took focus, as it does on a desk').toBe('TEXTAREA');
+    expect(press({ key: ']' }), 'the step is prevented, so no `]` lands in the box').toBe(false);
+    expect(window.location.pathname, 'the second `]` from inside the composer').toBe(`/s/${B.id}`);
+    await settle();
+    press({ key: ']' });
+    expect(window.location.pathname, 'the third wraps to the first').toBe(`/s/${A.id}`);
+    await settle();
+    press({ key: '[' });
+    expect(window.location.pathname).toBe(`/s/${B.id}`);
+  });
+
+  it('`?` opens the shortcuts from the empty composer', async () => {
+    stubPointer(true);
+    window.history.replaceState(null, '', `/s/${A.id}`);
+    render(<><SessionRoute /><CommandLayer openNewSession={vi.fn()} /></>);
+    await settle();
+    expect(document.activeElement?.tagName).toBe('TEXTAREA');
+    press({ key: '?', shiftKey: true });
+    expect(shortcutsSheet()).not.toBeNull();
+  });
+
+  it('the g chords stay text in the composer, empty or not: "gr" starts a word', async () => {
+    stubPointer(true);
+    window.history.replaceState(null, '', `/s/${A.id}`);
+    render(<><SessionRoute /><CommandLayer openNewSession={vi.fn()} /></>);
+    await settle();
+    expect(press({ key: 'g' })).toBe(true);
+    expect(press({ key: 'r' })).toBe(true);
+    expect(window.location.pathname).toBe(`/s/${A.id}`);
+  });
+
+  it('an input that is not the composer keeps `]` even when empty', () => {
+    render(<><input aria-label="Search" /><CommandLayer openNewSession={vi.fn()} /></>);
+    const box = screen.getByRole('textbox', { name: 'Search' });
+    act(() => box.focus());
+    expect(press({ key: ']' })).toBe(true);
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('a composer arriving behind a CLOSING dialog still takes focus', async () => {
+    // A palette that ran a command stays mounted while it animates out,
+    // `role="dialog"` at `data-state="closed"`. Only an OPEN one holds focus.
+    stubPointer(true);
+    render(<><div role="dialog" data-state="closed" /><Composer id="x" onSend={vi.fn()} pending={[]} /></>);
+    await settle();
+    expect(document.activeElement?.tagName).toBe('TEXTAREA');
+  });
+});
+
+describe('the Settings index doors to the two diagnostics', () => {
+  const mount = (): void => {
+    window.history.replaceState(null, '', '/settings');
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    render(
+      <>
+        <SettingsDataProvider active><SettingsScreen /></SettingsDataProvider>
+        <CommandLayer openNewSession={vi.fn()} />
+      </>,
+    );
+  };
+  const link = (name: RegExp): HTMLElement =>
+    within(screen.getByRole('navigation', { name: 'Settings sections' })).getByRole('link', { name });
+
+  it.each([
+    ['Reader lab', /^Reader lab/, '/settings/reader-lab'],
+    ['Measure highlighting', /^Measure highlighting/, '/settings/measure-highlighting'],
+  ] as const)('%s: a click runs its command and lands on its route', (_label, name, href) => {
+    mount();
+    const a = link(name);
+    expect(a).toHaveAttribute('href', href);
+    act(() => { fireEvent.click(a); });
+    expect(window.location.pathname).toBe(href);
+  });
+
+  it.each([
+    ['Reader lab', /^Reader lab/],
+    ['Measure highlighting', /^Measure highlighting/],
+  ] as const)('%s: a meta, ctrl, shift or alt click each leaves the page where it is', (_label, name) => {
+    for (const mod of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey'] as const) {
+      mount();
+      const a = link(name);
+      let notPrevented = false;
+      act(() => { notPrevented = fireEvent.click(a, { [mod]: true }); });
+      expect(notPrevented, `${mod}: default left alone`).toBe(true);
+      expect(window.location.pathname, mod).toBe('/settings');
+      cleanup();
+    }
+  });
+});
+
+describe('the guards on a single key', () => {
+  it('`]` and `?` do nothing while a sheet is open', () => {
+    render(<><Sheet open onClose={() => {}} title="Busy"><p>held</p></Sheet><CommandLayer openNewSession={vi.fn()} /></>);
+    fireEvent.keyDown(document.body, { key: ']' });
+    expect(window.location.pathname).toBe('/');
+    fireEvent.keyDown(document.body, { key: '?', shiftKey: true });
+    expect(shortcutsSheet()).toBeNull();
+  });
+
+  it('a `]` some surface already prevented does nothing', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    const claim = (e: Event): void => e.preventDefault();
+    document.addEventListener('keydown', claim);
+    try {
+      fireEvent.keyDown(document.body, { key: ']' });
+    } finally {
+      document.removeEventListener('keydown', claim);
+    }
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('`]` in a SELECT stays put', () => {
+    render(<><select aria-label="Pick"><option>a</option></select><CommandLayer openNewSession={vi.fn()} /></>);
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Pick' }), { key: ']' });
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('`]` in a contenteditable stays put', () => {
+    render(<><div data-testid="ed" contentEditable suppressContentEditableWarning>x</div><CommandLayer openNewSession={vi.fn()} /></>);
+    const ed = screen.getByTestId('ed');
+    // jsdom does not implement isContentEditable; a browser reports true here.
+    Object.defineProperty(ed, 'isContentEditable', { value: true });
+    fireEvent.keyDown(ed, { key: ']' });
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('a held `]` (auto-repeat) steps once', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    fireEvent.keyDown(document.body, { key: ']' });
+    fireEvent.keyDown(document.body, { key: ']', repeat: true });
+    expect(window.location.pathname).toBe(`/s/${A.id}`);
+  });
+
+  it('`g`, then a wait past the chord window, then `r` does not navigate', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValue(10_000);
+    fireEvent.keyDown(document.body, { key: 'g' });
+    now.mockReturnValue(10_000 + CHORD_MS + 1);
+    fireEvent.keyDown(document.body, { key: 'r' });
+    expect(window.location.pathname).toBe('/');
+    // The control: inside the window it is a chord.
+    now.mockReturnValue(20_000);
+    fireEvent.keyDown(document.body, { key: 'g' });
+    now.mockReturnValue(20_000 + CHORD_MS);
+    fireEvent.keyDown(document.body, { key: 'r' });
+    expect(window.location.pathname).toBe('/runs');
+  });
+});
+
+describe('the palette as drawn', () => {
+  it('the active option wears the tint and the rail; the others wear neither', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    const [first, second] = screen.getAllByRole('option');
+    for (const c of ['bg-phosphor-tint', 'shadow-[inset_2px_0_0_var(--accent)]']) {
+      expect(first!.className.split(/\s+/), `the active option: ${c}`).toContain(c);
+      expect(second!.className.split(/\s+/), `an idle option: ${c}`).not.toContain(c);
+    }
+  });
+
+  it("its motion retimes vaul's keyframes with the tokens, content and overlay alike", () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    const dialog = openPalette().closest('[role="dialog"]')!;
+    const overlay = document.querySelector('[data-vaul-overlay]')!;
+    for (const [name, el] of [['content', dialog], ['overlay', overlay]] as const) {
+      // The shared retime and the palette's pace (D-5930), read off the helper:
+      // a class spelled whole in a test keeps its CSS in the build
+      // (`sheet-motion.test.tsx`). The pace Chrome computes is the browser leg's.
+      const cls = el.className.split(/\s+/);
+      for (const c of [...VAUL_MOTION.split(' '), ...PALETTE_MOTION_VARS.split(' ')]) expect(cls, `${name}: ${c}`).toContain(c);
+    }
+  });
+});
+
+// ── a door runs its command (D-5469, W2 Task S2b) ─────────────────────────────
+
+describe('a door runs its command, through this layer', () => {
+  function Doors({ ids }: { ids: readonly string[] }): ReactNode {
+    return <>{ids.map((id) => <button key={id} type="button" {...commandDoor(id)}>{id}</button>)}</>;
+  }
+
+  it("the palette's Go-to list offers Settings › Updates and the others, and not settings-section (D-5504)", () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    fireEvent.change(openPalette(), { target: { value: 'go to settings' } });
+    for (const name of ['Updates', 'Appearance', 'Notifications', 'Automation', 'Security']) {
+      expect(screen.getByRole('option', { name: new RegExp(`^Go to Settings › ${name}`) })).toBeTruthy();
+    }
+    expect(screen.getByRole('option', { name: /^Go to Settings › Measure highlighting/ })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /^Go to Settings › Reader lab/ })).toBeTruthy();
+    // Settings itself, its five pages, R19's measurement page and the reader lab: nothing for the catch-all row.
+    expect(screen.getAllByRole('option', { name: /^Go to Settings/ })).toHaveLength(8);
+  });
+
+  it('a Go to door navigates as the palette would, and carries its id as data-command', () => {
+    render(<><Doors ids={['go-runs', 'go-docs']} /><CommandLayer openNewSession={vi.fn()} /></>);
+    const runs = screen.getByRole('button', { name: 'go-runs' });
+    expect(runs).toHaveAttribute('data-command', 'go-runs');
+    fireEvent.click(runs);
+    expect(window.location.pathname).toBe('/runs');
+    fireEvent.click(screen.getByRole('button', { name: 'go-docs' }));
+    expect(window.location.pathname).toBe('/docs');
+  });
+
+  it("New session runs the fleet flows' own door, from a door and from the palette", () => {
+    const openNewSession = vi.fn();
+    render(<><Doors ids={['new-session']} /><CommandLayer openNewSession={openNewSession} /></>);
+    fireEvent.click(screen.getByRole('button', { name: 'new-session' }));
+    expect(openNewSession).toHaveBeenCalledTimes(1);
+    const input = openPalette();
+    fireEvent.change(input, { target: { value: 'new session' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(openNewSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('the search door opens the palette, and the palette never offers itself', () => {
+    render(<><Doors ids={['open-palette']} /><CommandLayer openNewSession={vi.fn()} /></>);
+    fireEvent.click(screen.getByRole('button', { name: 'open-palette' }));
+    expect(palette()).not.toBeNull();
+    expect(screen.queryByRole('option', { name: /open the command palette/i })).toBeNull();
+  });
+
+  it('a door to a command that answers a page opens the palette on that page', () => {
+    render(<><Doors ids={['switch-theme']} /><CommandLayer openNewSession={vi.fn()} /></>);
+    fireEvent.click(screen.getByRole('button', { name: 'switch-theme' }));
+    expect(screen.getByRole('combobox', { name: 'Switch theme' })).toBeInTheDocument();
+  });
+
+  it('no door acts while the login screen covers the app', () => {
+    render(<><Doors ids={['go-runs']} /><CommandLayer openNewSession={vi.fn()} /></>);
+    act(() => raiseAuthLost(AUTH_VERDICTS[0]!));
+    fireEvent.click(screen.getByRole('button', { name: 'go-runs' }));
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it("a door runs under its command's `when`: Open session… with no sessions does nothing", () => {
+    useFleetStore.setState({ sessions: [] });
+    render(<><Doors ids={['open-session']} /><CommandLayer openNewSession={vi.fn()} /></>);
+    fireEvent.click(screen.getByRole('button', { name: 'open-session' }));
+    expect(palette()).toBeNull();
+  });
+
+  it('doorMark and actionDoor: the attribute alone, and a flow with its own handler', () => {
+    const fn = vi.fn();
+    render(<><fieldset {...doorMark('switch-layout')} /><button type="button" {...actionDoor('open-actions', fn)}>row</button></>);
+    expect(document.querySelector('fieldset')).toHaveAttribute('data-command', 'switch-layout');
+    const row = screen.getByRole('button', { name: 'row' });
+    expect(row).toHaveAttribute('data-action', 'open-actions');
+    fireEvent.click(row);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the palette hands focus back where it came from (D-5679)', () => {
+  const wait = (ms: number): Promise<void> => act(async () => { await new Promise((r) => setTimeout(r, ms)); });
+
+  it('to the field that opened it, once a closing layer has let go, even though that layer took focus and dropped it', async () => {
+    render(<><input aria-label="Search" /><CommandLayer openNewSession={vi.fn()} /></>);
+    const field = screen.getByRole('textbox', { name: 'Search' });
+    act(() => field.focus());
+    fireEvent.keyDown(field, { key: 'k', metaKey: true });
+    const input = screen.getByRole('combobox');
+    // A browser keeps the palette mounted while it animates out, its focus
+    // trap holding focus, and drops focus on the body as it unmounts. jsdom
+    // animates nothing, so that layer is planted by hand.
+    const closing = document.createElement('div');
+    closing.setAttribute('role', 'dialog');
+    closing.setAttribute('data-state', 'closed');
+    const trap = document.createElement('button');
+    closing.append(trap);
+    document.body.append(closing);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await wait(5);
+    act(() => trap.focus());
+    await wait(60);
+    act(() => closing.remove());
+    expect(document.activeElement).toBe(document.body);
+    await wait(120);
+    expect(document.activeElement).toBe(field);
+  });
+
+  it('never behind a cover: auth lost with the palette open leaves the composer alone (D-5679)', async () => {
+    // The login screen's passphrase field sits over a NON-inert app. Handing
+    // focus back to the composer behind it would route the passphrase into
+    // the composer, and Enter would send it as a chat message.
+    function Cover(): ReactNode {
+      const { lost } = useAuthLost();
+      return lost ? <div role="dialog" aria-modal="true"><input type="password" aria-label="Passphrase" /></div> : null;
+    }
+    render(<><Cover /><main id="content" tabIndex={-1}><textarea aria-label="Message" /></main><CommandLayer openNewSession={vi.fn()} /></>);
+    const composer = screen.getByRole('textbox', { name: 'Message' });
+    act(() => composer.focus());
+    fireEvent.keyDown(composer, { key: 'k', metaKey: true });
+    expect(palette()).not.toBeNull();
+    act(() => raiseAuthLost(AUTH_VERDICTS[0]!));
+    // The palette's trap had taken focus; its close drops it on the body.
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    await wait(1300);
+    expect(document.activeElement).not.toBe(composer);
+    expect(document.activeElement, 'nor the landmark behind the cover').not.toBe(document.getElementById('content'));
+  });
+
+  it('to the main landmark when the element that opened it can no longer take focus', async () => {
+    // The phone swap hides the fleet column (display: none) while the opener
+    // stays connected; focus() on it does nothing. A disabled button is jsdom's
+    // stand-in for an element that refuses focus.
+    render(<><main id="content" tabIndex={-1} /><button type="button">Opener</button><CommandLayer openNewSession={vi.fn()} /></>);
+    const opener = screen.getByRole('button', { name: 'Opener' });
+    act(() => opener.focus());
+    fireEvent.keyDown(opener, { key: 'k', metaKey: true });
+    (opener as HTMLButtonElement).disabled = true;
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
+    await wait(30);
+    expect(document.activeElement).toBe(document.getElementById('content'));
+  });
+
+  it("to the fleet column's landmark when the main one cannot take focus: a phone's fleet view (390), never the body", async () => {
+    // At 390 on the fleet view the phone swap hides <main> (display: none), so focus() on it does nothing (measured in
+    // Chrome in T2a's review). jsdom renders nothing, so main's focus is stubbed to refuse, as Chrome's does there.
+    render(<><main id={CONTENT_ID} tabIndex={-1} /><section id={FLEET_ID} aria-label="Fleet" tabIndex={-1} /><CommandLayer openNewSession={vi.fn()} /></>);
+    const main = document.getElementById(CONTENT_ID)!;
+    const refused = vi.spyOn(main, 'focus').mockImplementation(() => {});
+    fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true });
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
+    await wait(30);
+    expect(refused, 'main was asked first').toHaveBeenCalled();
+    expect(document.activeElement, 'not the body').toBe(screen.getByRole('region', { name: 'Fleet' }));
+  });
+
+  it('focusShownLandmark focuses each landmark without a scroll (preventScroll)', () => {
+    // A landmark is a page region, not a control to bring into view: both focus() calls pass preventScroll, the main
+    // one that is tried first and the fleet column's that takes the focus when main refuses it.
+    render(<><main id={CONTENT_ID} tabIndex={-1} /><section id={FLEET_ID} aria-label="Fleet" tabIndex={-1} /></>);
+    const main = vi.spyOn(document.getElementById(CONTENT_ID)!, 'focus').mockImplementation(() => {});
+    const fleet = vi.spyOn(document.getElementById(FLEET_ID)!, 'focus');
+    act(() => focusShownLandmark());
+    expect(main.mock.calls).toEqual([[{ preventScroll: true }]]);
+    expect(fleet.mock.calls).toEqual([[{ preventScroll: true }]]);
+  });
+
+  it('to the main landmark when the element that opened it is gone', async () => {
+    render(<><main id="content" tabIndex={-1} /><CommandLayer openNewSession={vi.fn()} /></>);
+    fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
+    await wait(30);
+    expect(document.activeElement).toBe(document.getElementById('content'));
+  });
+});
+
+// THE TOP SEARCH (D-6714, plan 2026-10-22-desktop-polish Task T5a): the palette's first level finds sessions by their
+// shown title and underlying name (R64), workspace, branch, project and, for a coordinator, its programme, after every
+// matching command, coordinators
+// first on an equal match. A worker and a coordinator in project-a with no run linking them, so `fleetOrder` lists the
+// worker (attention) first; a third session on branch runs-fold.
+describe('the top search finds sessions (D-6714)', () => {
+  const FIRST = fleetSession({ id: 'project-a-one', project: 'project-a', name: 'first', workspace: 'ws-a', bucket: 'attention', statusUpdatedAt: 3 });
+  const LEAD = fleetSession({ id: 'project-a-lead', project: 'project-a', name: 'lead', role: 'coordinator', bucket: 'idle', statusUpdatedAt: 2 });
+  const THIRD = fleetSession({ id: 'project-b-three', project: 'project-b', name: 'third', branch: 'runs-fold', bucket: 'idle', statusUpdatedAt: 1 });
+  const NAMES: Readonly<Record<string, string>> = {
+    [FIRST.id]: 'first, project-a', [LEAD.id]: 'lead, coordinator, project-a', [THIRD.id]: 'third, project-b',
+  };
+  const SESSION_NAMES = new Set(Object.values(NAMES));
+  const PROGRAMME = { id: 7, program: 'prog-a', programTitle: 'Programme A', wave: 1, waveOf: 2, project: 'project-a',
+    homeProject: null, state: 'working', closedAt: null, claimedBy: LEAD.id, sessionId: FIRST.id, kind: 'work' } as unknown as RunSummary;
+
+  beforeEach(() => {
+    useFleetStore.setState({ sessions: [FIRST, LEAD, THIRD], runs: [], blocked: false });
+  });
+
+  /** Every option's accessible name, in order (an option names itself by `aria-label` when it has one). */
+  // The run entries (D-8072) offer "Find runs matching" for any typed text, so these session pins read the options without it.
+  const optionNames = (): string[] => screen.queryAllByRole('option')
+    .map((o) => o.getAttribute('aria-label') ?? o.textContent ?? '').filter((n) => !n.startsWith('Find runs matching'));
+  const sessionOptions = (): string[] => optionNames().filter((n) => SESSION_NAMES.has(n));
+  const type = (q: string): HTMLElement => {
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: q } });
+    return input;
+  };
+  const openSessionPage = (): void => {
+    const input = type('open session');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByRole('combobox', { name: 'Open session' })).toBeTruthy();
+  };
+
+  it('typing a workspace slug lists that session at the first level, and Enter opens it and closes the palette', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    const input = type('ws-a');
+    expect(optionNames()).toEqual([NAMES[FIRST.id]]);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(window.location.pathname).toBe(`/s/${encodeURIComponent(FIRST.id)}`);
+    expect(palette()).toBeNull();
+  });
+
+  it('typing a project name lists its sessions after the commands, the coordinator before the worker', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    type('project-a');
+    expect(sessionOptions()).toEqual([NAMES[LEAD.id], NAMES[FIRST.id]]);
+    const names = optionNames();
+    const firstSession = names.findIndex((n) => SESSION_NAMES.has(n));
+    expect(names.slice(firstSession).every((n) => SESSION_NAMES.has(n)), 'no command after a session').toBe(true);
+  });
+
+  it("a command still comes first: 'runs' puts Go to Runs first, and Enter goes to /runs", () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    const input = type('runs');
+    const names = optionNames();
+    expect(names[0]).toMatch(/^Go to Runs/);
+    expect(names, 'the runs-fold branch is found, after the command').toContain(NAMES[THIRD.id]);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(window.location.pathname).toBe('/runs');
+  });
+
+  it("a coordinator is found by its programme's title; its worker is not", () => {
+    // The runs frame and the fleet frame of a current server: the worker carries the run binding (D-7182, C7d).
+    useFleetStore.setState({ runs: [PROGRAMME], sessions: withRunBinding(useFleetStore.getState().sessions, [PROGRAMME]) });
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    type('Programme A');
+    expect(sessionOptions()).toEqual([NAMES[LEAD.id]]);
+  });
+
+  it('an empty query lists the commands and no session', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    expect(optionNames().length).toBeGreaterThan(5);
+    expect(sessionOptions()).toEqual([]);
+    expect(screen.queryAllByRole('option').some((o) => o.hasAttribute('aria-label'))).toBe(false);
+  });
+
+  it('a one-letter query lists no session', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    type('p');
+    expect(sessionOptions()).toEqual([]);
+  });
+
+  it("each session option's accessible name is exact", () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    type('project-a');
+    const worker = screen.getByRole('option', { name: 'first, project-a' });
+    expect(screen.getByRole('option', { name: 'lead, coordinator, project-a' })).toBeTruthy();
+    expect(worker.getAttribute('aria-label') ?? '').not.toContain('coordinator');
+  });
+
+  it('each session option shows its title and group as separate words, both in its name (label in name, D-7897)', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    type('project-a');
+    // Drawn side by side with nothing between, `first` and `project-a` would read as the one word `firstproject`.
+    for (const name of ['first, project-a', 'lead, coordinator, project-a']) {
+      const option = screen.getByRole('option', { name });
+      expect(labelInName(shownText(option), name), `"${shownText(option)}" in "${name}"`).toBe(true);
+    }
+  });
+
+  it("the first level's placeholder is COMMAND_FIELD_WORDS and its empty text SEARCH_EMPTY; a page keeps its own placeholder", () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    expect(screen.getByRole('combobox').getAttribute('placeholder')).toBe(COMMAND_FIELD_WORDS);
+    type('z');
+    expect(screen.getByText(SEARCH_EMPTY)).toBeTruthy();
+    type('');
+    openSessionPage();
+    expect(screen.getByRole('combobox').getAttribute('placeholder')).toBe('Open session…');
+    type('zzzzqq');
+    expect(screen.queryByText(SEARCH_EMPTY), "a page says the palette's own empty text").toBeNull();
+  });
+
+  it('Open session… lists the same entries', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    const order = fleetOrder([FIRST, LEAD, THIRD], []).map((s) => NAMES[s.id]);
+    expect(order[0], 'the fixture: fleetOrder lists the worker first').toBe(NAMES[FIRST.id]);
+    const top: Record<string, string[]> = {};
+    for (const q of ['ws-a', 'project-a', 'runs-fold']) {
+      openPalette();
+      type(q);
+      top[q] = sessionOptions();
+      fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
+    }
+    openPalette();
+    openSessionPage();
+    expect(optionNames(), 'empty, the fleet in its order').toEqual(order);
+    type('ws-a');
+    expect(optionNames()).toEqual([NAMES[FIRST.id]]);
+    type('project-a');
+    expect(optionNames()).toEqual([NAMES[LEAD.id], NAMES[FIRST.id]]);
+    for (const q of Object.keys(top)) {
+      type(q);
+      expect(optionNames(), q).toEqual(top[q]);
+    }
+  });
+
+  // R64: a custom title wins sessionLabel, so the option shows the title; the underlying name is still searched.
+  it('a custom title hides the name: the top search and Open session… find it by either, show the title, and Enter opens it', () => {
+    const TITLED = fleetSession({ id: 'project-c/titled one', project: 'project-c', name: 'zeta-name', title: 'Alpha task', bucket: 'idle' });
+    const SHOWN = 'Alpha task, project-c';
+    useFleetStore.setState({ sessions: [FIRST, LEAD, THIRD, TITLED], runs: [], blocked: false });
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    // The shown title first: the control, which a dropped name term leaves green.
+    type('Alpha task');
+    expect(screen.queryByRole('option', { name: SHOWN }), 'found by the shown title').not.toBeNull();
+    const input = type('zeta-name');
+    expect(screen.queryByRole('option', { name: SHOWN }), 'found by the hidden name').not.toBeNull();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(window.location.pathname).toBe(`/s/${encodeURIComponent(TITLED.id)}`);
+    expect(palette()).toBeNull();
+    window.history.replaceState(null, '', '/');
+    openPalette();
+    openSessionPage();
+    type('Alpha task');
+    expect(optionNames(), 'the page, by the shown title').toEqual([SHOWN]);
+    const pageInput = type('zeta-name');
+    expect(optionNames(), 'the page, by the hidden name').toEqual([SHOWN]);
+    fireEvent.keyDown(pageInput, { key: 'Enter' });
+    expect(window.location.pathname, 'the page opens it too').toBe(`/s/${encodeURIComponent(TITLED.id)}`);
+    expect(palette()).toBeNull();
+  });
+});

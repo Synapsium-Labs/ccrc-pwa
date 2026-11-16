@@ -5,6 +5,9 @@
 commits are named in §5.6 and cherry-picked with attribution.
 **Escalation:** Fable, for the cross-cutting decision (ccd, the exec whitelist, server rings, the PWA,
 the fleet's pane readers). Execution is on Opus and below (§9).
+**Superseded in part (2026-10-14, D-5013):** §7 (wave 3, the deliberate un-pin) and its plan are
+superseded, unbuilt, by `docs/superpowers/specs/2026-10-14-terminal-drawer-every-width-design.md`.
+Waves 1 (#106) and 2 (#117) shipped and stand. See the note under §7's heading for what lapses.
 
 ## 1. The idea, and what it must not cost
 
@@ -196,8 +199,10 @@ ccd win-size --session <id> --mode smallest|canonical
 - `canonical` → `tmux resize-window -t cc-<id> -x 220 -y 50`. Restores the grid with or without
   clients attached and re-latches `manual`, which IS the pinned state §3 wants. **The server does
   not depend on this arm**: its own pin (§5.1, §7.3) is the already-granted `tmux resize-window`,
-  which works against an agent of any age. The arm exists for an operator on the box and for ccd's
-  own use (a `ccd` that pins a session it just spawned needs no server).
+  which works against an agent of any age. Its callers are an operator typing the verb on the box
+  and the agent's `win-size` grant — NOT ccd itself. Measured 2026-09-16, `cmd_win_size` has no
+  ccd caller at all: the earlier wording here ("and for ccd's own use — a `ccd` that pins a session
+  it just spawned needs no server") described a caller that does not exist.
 - Advertised in `cmd_caps` as `win-size-v1`, and the cap is the proof of BOTH halves of this wave —
   the verb and §6.3's stand-down ship in one ccd, so a server that sees the cap knows the readers on
   that box already yield to a narrow pane. The server gates on `capSupported(state, 'win-size-v1')`
@@ -262,6 +267,17 @@ server already running; neither reaches a pane that already exists.
    8-line slice from D-2368's final review) is untouched; the stand-down covers every typing site.
 
 ## 7. Wave 3 — the deliberate un-pin
+
+> **Superseded by** `docs/superpowers/specs/2026-10-14-terminal-drawer-every-width-design.md`
+> (operator ruling 2026-10-14, O8; D-5013). This section was never built and is kept as the record of
+> what was designed. In its place, a drawer attaches a tmux client exactly the window's size, so no
+> glass pans it and no phone narrows a window; a glass too narrow for the grid gets a browser-side
+> wrapped view; and a wide glass may have the window follow it, never below `READER_MIN_COLS`, behind
+> ccd's `geom-settle-v1`. With this section lapse §11's rulings 1, 13, 14 and 15 and the mail-lane half
+> of ruling 4 (`auto-continue-unmeasured`). Ruling 2's "un-pinned only through an advertised verb" is
+> re-read there (its §3) as "resized only by the server's granted `resize-window`, never below
+> `READER_MIN_COLS`, behind `geom-settle-v1`". The §7.6 residual (automation paused while a phone holds
+> a session narrow) does not occur in the new design.
 
 ### 7.1 Flow on `GET /ws/pty/:id`
 
@@ -424,6 +440,9 @@ handoff gate does not open.
   reader already has; unneeded while the un-pin works.
 
 ## 11. Decisions recorded here (Fable rulings)
+
+> Rulings 1, 13, 14 and 15, and the mail-lane half of ruling 4, lapsed with §7 on 2026-10-14 (D-5013;
+> see the note under §7's heading).
 
 1. `smallest`, not `latest`, is the following mode (F4/F5).
 2. The window is pinned before every attach and un-pinned only through an advertised verb (§3).

@@ -1,0 +1,8 @@
+# The gone-branch refusal, landed after W5
+
+- **D-7996 (2026-11-03)** — `ladder-gone-branch-after-w5` (Task P4-4 of `2026-10-20-workspace-disk-and-registry-truth.md`, three departures from its text; D-5944 stands as defined there).
+  1. **The order.** The plan puts P4-4 before consolidation W5, so that W5's characterization pins see the corrected ladder. W5's one refusal helper and its literal word pins (`ccd-helpers-pin.test.ts`) reached `main` first. The ladder itself did not move, so the task's content is unchanged. Its gate's purpose is met here instead: the pins, the census counts and the transition table gain the word in this PR, and `shared/workspaceTransitions.ts`, `workspace-refusal-census.test.ts` and `ccd-helpers-pin.test.ts` join the task's files.
+  2. **A third answer.** The plan gives `_ws_reclaim_head_unborn` two answers. It has three: 0 unborn, 1 not, and 2 when `symbolic-ref` failed with anything but its "detached" 1. The ladder reads a 2 as unmeasured and the pin stops on it, because a read that did not run proves nothing and must not fall through to a token.
+  3. **One mutant's red.** "Helper ignores `RECLAIM_BRANCHSTATE`" cannot red "a detached HEAD still passes", since a detached HEAD fails the symbolic read first. It reds "a HEAD on the standing branch is not unborn", a helper-level row this task adds.
+
+  **Known limit, not changed here:** a HEAD symbolic to a *different* branch with no commit (`git checkout --orphan`, or a drift onto an unborn name) still passes the ladder and fails the pin, measured `reclaimable` then `pin-failed`. D-5944's predicate names the registry branch only, and that shape is neither "gone" nor this word's.

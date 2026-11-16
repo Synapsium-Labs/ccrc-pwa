@@ -16,17 +16,13 @@
 // the sessions are still RUNNING, unattached — the one thing this fault does
 // not mean is that work was lost.
 import type { ReactNode } from 'react';
-import { substrateFault } from '../../../shared/api';
+import { substrateFault, type FleetSession } from '../../../shared/api';
+import { Banner } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
-import './fleet.css';
 
-export function SubstrateBanner({
-  store = useFleetStore,
-}: {
-  store?: FleetStore; // injectable for tests — the CoordBanner idiom
-}): ReactNode {
-  const sessions = store((s) => s.sessions);
-
+/** The fault every watched row reports, one per row, or null when the banner does not show: no watched row, or one
+ *  that does not report a substrate fault. The render below and {@link substrateBannerShows} both read it. */
+function watchedFaults(sessions: readonly FleetSession[]): { watched: number; faults: { at: number; text: string }[] } | null {
   // `?? null`: the live frame is cast, not revived (`asFleetMsg`), so an older
   // server's row can lack the key at runtime — the same tolerance
   // `substrateFault` itself applies to its own field.
@@ -55,6 +51,25 @@ export function SubstrateBanner({
     if (f === null) return null;
     faults.push(f);
   }
+  return { watched: watched.length, faults };
+}
+
+/** Does the substrate banner show? Every watched row reports the fault. The banner stack asks it (W2 Task S2c,
+ *  BannerStack.tsx). */
+export function substrateBannerShows(sessions: readonly FleetSession[]): boolean {
+  return watchedFaults(sessions) !== null;
+}
+
+export function SubstrateBanner({
+  store = useFleetStore,
+}: {
+  store?: FleetStore; // injectable for tests — the CoordBanner idiom
+}): ReactNode {
+  const sessions = store((s) => s.sessions);
+
+  const found = watchedFaults(sessions);
+  if (found === null) return null;
+  const { faults } = found;
 
   // The most-common reason, shown once — seventeen supervisors probing one
   // wedged server overwhelmingly agree on the text, and the odd one out
@@ -69,14 +84,22 @@ export function SubstrateBanner({
     if (n > best) { best = n; commonest = text; }
   }
 
-  const n = watched.length;
+  const n = found.watched;
   return (
-    <div className="substrate-banner" role="status">
-      <span className="substrate-banner-msg">
-        tmux unreachable on the fleet host — {n} {n === 1 ? 'session reports' : 'sessions report'} it
-        {' '}(<code className="substrate-banner-reason">{commonest}</code>);
-        sessions are still running unattached. Remedy: restart tmux or reboot.
-      </span>
-    </div>
+    // `tone="attention"` and not sticky, which is what the old rule set: the
+    // sessions are still RUNNING, unattached, and recovery is a human at a
+    // terminal (spec §1), so there is no action here to keep in reach while
+    // scrolling. The <code> drops to mono from Banner's base — the
+    // `substrate-banner-reason` class said the same two declarations.
+    // `substrate-banner` carries NO styling — it is a hook class, the same
+    // device `btn-primary` and `sheet-panel` are: a stable selector that says
+    // WHICH banner this is. `Banner`'s own base class cannot, since the host
+    // banner wears it too, and substrate-banner.test.tsx exists to tell the
+    // two apart on a screen that renders both.
+    <Banner tone="attention" className="substrate-banner">
+      tmux unreachable on the fleet host — {n} {n === 1 ? 'session reports' : 'sessions report'} it
+      {' '}(<code>{commonest}</code>);
+      sessions are still running unattached. Remedy: restart tmux or reboot.
+    </Banner>
   );
 }

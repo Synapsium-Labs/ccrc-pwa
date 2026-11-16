@@ -4,7 +4,7 @@ import type { FleetIO } from '../io.js';
 import type { ChatEvent } from '../../../shared/api.js';
 
 // Read at most the last 1 MB of a transcript for the backlog, not the whole
-// file. Transcripts reach tens of MB (custom-tools was 17.9 MB for the last 50
+// file. Transcripts reach tens of MB (project-d was 17.9 MB for the last 50
 // events); reading them whole through the agent RPC ballooned the agent's RSS
 // to ~1.9 GB and stalled its event loop. 1 MB comfortably covers BACKLOG_N=50
 // events even at large (multi-KB) line sizes.

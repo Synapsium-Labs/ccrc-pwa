@@ -1,7 +1,33 @@
 import { createHash } from 'node:crypto';
-import type { Dialog } from '../../../shared/api.js';
+import type { Dialog, DialogMulti } from '../../../shared/api.js';
+import { CHAT_ABOUT_ROW_RE, COMMIT_ROW_RE, EDIT_HINT_RE, FREE_TEXT_PLACEHOLDER_RE } from '../../../shared/ask-menu.js';
+import { PROMPT_GLYPH } from '../../../shared/pane-glyph.js';
+import { promptBoxShowing } from './statusline.js';
 
-const BUSY_RE = /esc to interrupt/;
+/**
+ * Claude Code's spinner row, matched as a ROW (worker stall watch wave 2, M3,
+ * `busy-re-anchored` (D-3626)). The phrase must end the row, or be followed by `)` or
+ * by a ` ·` hint segment, on a row that is not the prompt (`❯`), a tool
+ * continuation (`⎿`) or a quote (`>`). The unanchored phrase refused a `shell`
+ * or `busy` mail delivery with `turn-running` whenever a transcript line, a
+ * draft or a quoted capture in the last 8 rows carried it.
+ *
+ * TOLERANT, BECAUSE THE TAIL IS UNMEASURED. The operator's pane-layout
+ * measurement (the `claude-code-2-1-280-pane-layout` recipe, 2026-09-23)
+ * measures the box, the 👤 row, menus and banners, but not the spinner row.
+ * The two in-tree carriers both close on `)`: `fixtures/panes/busy.txt`, and
+ * the widest carrier named in `READER_MIN_COLS`'s derivation (shared/api.ts).
+ * A hint after the phrase, and a row wrapped just after it, stay accepted
+ * until the wave-2 capture checkpoint (C7) records the tail per lane. Narrow
+ * this only on C7's evidence. A missed spinner shape degrades to §9.2 (a nudge
+ * folded in at the next tool boundary); a false match holds mail for a minute.
+ *
+ * PLAIN TEXT ONLY. An SGR code between the phrase and `)` defeats the anchor.
+ * The one production caller strips escapes first: `inject/send.ts` captures
+ * with `captureAnsi` (`-e`) and tests `pane.replace(SGR, '')`. `paneState`
+ * shares this regex and has no production caller (D-102).
+ */
+const BUSY_RE = /^(?![ \t]*[❯⎿>]).*esc to interrupt(?:\)|[ \t]*·|[ \t]*$)/m;
 /** Claude Code's own limit recovery is ARMED: the status line reads "Usage limit
  *  reached · continuing automatically at HH:MM · esc or type to cancel" (or
  *  "continuing shortly"). ANY keystroke cancels it — bundle 2.1.267,
@@ -11,11 +37,33 @@ const BUSY_RE = /esc to interrupt/;
  *  (D-2367). */
 export const AUTO_CONTINUE_RE = /continuing automatically|continuing shortly/i;
 export function autoContinueArmed(pane: string): boolean { return AUTO_CONTINUE_RE.test(pane); }
+/** A turn is RUNNING: some row is Claude Code's spinner row, as `BUSY_RE`
+ *  (above) shapes it. The shape is tolerant until C7 measures the tail, and is
+ *  narrowed only on that evidence. This is BUSY_RE itself, exported rather than
+ *  copied. `inject/send.ts`'s `refuseIfTurnRunning` asks it of the pane's last
+ *  8 rows, SGR-stripped: the window it already hands `autoContinueArmed`. The
+ *  mail lane sets that option on every delivery whose live word was not `idle`
+ *  (`shell`, and wave 2's `busy`). It is BEST-EFFORT: a `--remote-control`
+ *  pane never renders the phrase, and a narrow pane can wrap it, so `false`
+ *  proves nothing. It is a drift tripwire behind the live status file and the
+ *  turn marker, never a proof of idleness (worker stall watch §4.1, §5.1). */
+export function turnRunning(pane: string): boolean { return BUSY_RE.test(pane); }
+/** The row starts with Claude Code's prompt glyph (`❯`): the input box's marker row, or a past
+ *  turn in the scrollback, or the cursor resting on a menu option. ONE spelling of the test
+ *  (ARCH-24): `inject/send.ts` reads the box through it rather than with inline literals. The
+ *  glyph is `shared/pane-glyph.ts`'s, the drawer's own (D-7187). The caller strips escapes first. */
+export function startsWithPromptGlyph(row: string): boolean { return row.startsWith(PROMPT_GLYPH); }
 const MENU_RE = /Enter to (confirm|select)/;
-const SGR = /\x1b\[[0-9;]*m/g; // any ANSI colour/attr code — same idiom as inject/send.ts:80
+const SGR = /\x1b\[[0-9;]*m/g;
+/** The ONE SGR (colour/attribute) stripper (ARCH-63): every reader of pane or terminal text that wants the escapes off
+ *  goes through it. Only `ESC [ … m` comes off; any other control sequence stays. */
+export function stripSgr(text: string): string { return text.replace(SGR, ''); }
 const MULTISELECT_RE = /Space to select/;
-/** A numbered menu option line, optionally carrying the ❯ selection marker. */
-const OPTION_RE = /^\s*(❯)?\s*(\d+)\.\s+(.+)$/;
+/** A numbered menu option line, optionally carrying the ❯ selection marker.
+ *  A list taller than its window marks its edge rows with a scroll arrow where
+ *  the cursor would sit (`↓ 3. Fable` on a 24-row /model picker, 2.1.280), and
+ *  that row is still an option. */
+const OPTION_RE = /^\s*(❯)?\s*(?:[↑↓]\s*)?(\d+)\.\s+(.+)$/;
 /** The ❯ cursor sitting on a NUMBERED option (`❯ 1. …`) — how a confirm/menu
  *  marks its selected row. Distinct from the input-box `❯ ` (space/text, no digit). */
 const SELECTED_OPTION_RE = /^\s*❯\s*\d+\.\s/;
@@ -47,12 +95,23 @@ export type PaneState = 'busy' | 'prompt' | 'menu' | 'other';
  * needs that answer to be wrong — either outcome is a bug. Callers that must
  * not TYPE into a menu (`inject/send.ts`'s `sendPrompt`/`clearBox`) cannot
  * treat a false 'busy' as safe-to-type. Callers that must not MISS a menu
- * (`sessionws.ts`'s `checkDialog`, `watch.ts`'s `detectDialogs` — the display
+ * (`sessionFeed.ts`'s `readDialog`, `watch.ts`'s `detectDialogs` — the display
  * path) cannot treat it as safe-to-suppress. And `parseDialog` itself
  * (`:169` below) cannot let it veto a parse of a dialog that is genuinely on
  * screen, busy marker or not (D-102).
  */
 export function hasMenu(pane: string): boolean {
+  // THE PROMPT BOX WITH THE STATUSLINE ROW UNDER IT MEANS NO MENU IS UP. Both
+  // arms below scan every line, so text ON SCREEN outside any menu tripped
+  // them: a reply quoting "Enter to select · …", an echoed `❯ 1. alpha` over a
+  // numbered reply, and a draft typed as `1. one` / `2. two` in the box itself
+  // — 12 false menus across 128 real 2.1.280 captures, each refusing sends as
+  // `dialog-open` and raising a question push, and a tap on the bogus sheet's
+  // default row pressed Enter into the box. Every real menu in the same set
+  // hid the box and the row (`promptBoxShowing`), so the arms now run only
+  // when they are gone; a pane without the ccrc statusline gets no veto, which
+  // is the old behaviour, and the failure direction stays "menu".
+  if (promptBoxShowing(pane)) return false;
   if (MENU_RE.test(pane)) return true;
   const lines = pane.split('\n');
   // Confirm dialogs (e.g. the /model and /effort switch prompts) put the ❯
@@ -72,7 +131,7 @@ export function paneState(pane: string): PaneState {
   // The input box marker is `❯` followed by either a space or a U+00A0
   // non-breaking space (empty box), so match the marker alone. Menus are already
   // handled above, so a bare `❯` here is the prompt.
-  if (pane.split('\n').some((l) => l.startsWith('❯'))) return 'prompt';
+  if (pane.split('\n').some(startsWithPromptGlyph)) return 'prompt';
   return 'other';
 }
 
@@ -86,32 +145,43 @@ const unparsed = (raw: string): Dialog => ({
  * A multi-select row's leading checkbox (`[ ] Bash`, `[x] Edit`) — the row's
  * STATE, never part of its label. Single-select menus don't paint one.
  *
- * ASSUMPTION, and it is worth knowing where it came from: this pattern is
- * matched against ONE 116-byte synthetic fixture
- * (`test/fixtures/panes/multiselect.txt`), not a real capture — no multi-select
- * pane has been recorded off a live session yet. A build whose marker this
- * regex does not recognise (`(•)`, `☐`, a leading glyph instead of brackets)
- * leaves the marker on every label, every label then disagrees with the hook's
- * verbatim copy, and `inject/ask.ts`'s identity gate refuses EVERY multi-select
- * answer with `menu-mismatch`.
- *
- * That failure is fail-shut and therefore safe, but from the outside it looks
- * like a refusal storm on one question shape with nothing wrong on screen — so
- * start here, not at the gate. Stripping happens BEFORE `leftCol` for the same
+ * MEASURED on real Claude Code 2.1.280 captures (`cc280-multiselect*.txt`):
+ * `[ ]` unticked, `[✔]` ticked. Only a box's STATES match — space, x, ✔, ✓,
+ * `*` — so a single-select label that merely starts with a bracketed letter
+ * (`[A] Alpha`) stays a label. It is also, since 2.1.280 dropped the "Space
+ * to select" footer, the only mark `parseDialog` has that a menu is
+ * multi-select. So a build whose marker this regex does not recognise (`(•)`,
+ * `☐`, a leading glyph instead of brackets) fails two ways at once: the marker
+ * stays on every label, so `inject/ask.ts`'s identity gate refuses every
+ * multi-select answer with `menu-mismatch` (fail-shut); and `parseDialog`
+ * reads the menu as SINGLE-select, so the scraped sheet — the one shown before
+ * a hook envelope arrives — offers its rows as one-tap answers, each of which
+ * ticks a box (fail-open; the envelope sheet has its own gate, the hook's
+ * `multiSelect`). Start here, not at the gate. Stripping happens BEFORE
+ * `leftCol` for the same
  * class of reason: a TUI that aligns its labels with two spaces (`1. [ ]  Bash`)
  * would otherwise have `leftCol` cut the row at the space run, leaving `"[ ]"`
  * to be stripped down to the empty string that `pairMatches` rejects outright.
  */
-const CHECKBOX_RE = /^\[[^\]]?\]\s*/;
+const CHECKBOX_RE = /^\[[ xX✔✓*]\]\s*/;
 
 /** One numbered row read off a pane menu: the digit it printed, its label
- *  (left column only — see `leftCol`), whether the ❯ cursor rests on it, and
- *  the line it came from. */
-export type OptionRow = { line: number; index: number; label: string; selected: boolean };
+ *  (left column only — see `leftCol`), whether the ❯ cursor rests on it,
+ *  whether it painted a multi-select checkbox, whether that box is ticked, and
+ *  the line it came from.
+ *
+ *  `checked` (D-5048) is the box's STATE: any of `CHECKBOX_RE`'s states but the
+ *  space (`[✔]` on 2.1.280 and 2.1.300). False on a row with no box. Added before
+ *  D-5008's Task 15 moves this type verbatim to `shared/pane-menu.ts`, so that move
+ *  carries it. */
+export type OptionRow = {
+  line: number; index: number; label: string; selected: boolean; checkbox: boolean; checked: boolean;
+};
 
 /**
- * The pane's numbered menu rows, in screen order — the longest run whose
- * printed indices count 1,2,3,… .
+ * The pane's numbered menu rows, in screen order — the run whose printed
+ * indices count 1,2,3,… that holds the menu's cursor (see the selection below
+ * for why neither the longest nor the lowest run will do).
  *
  * Split out of `parseDialog` so `inject/ask.ts` can compare the rows against
  * the labels it is about to answer WITHOUT going through `parseDialog`, which
@@ -128,41 +198,119 @@ export function paneOptionRows(pane: string): OptionRow[] {
   // split the list across a horizontal rule, so options are NOT adjacent —
   // we can't require consecutive lines.
   const lines = pane.split('\n');
-  const found: OptionRow[] = [];
+  const found: { col: number; row: OptionRow }[] = [];
   for (let i = 0; i < lines.length; i++) {
     const m = OPTION_RE.exec(lines[i]!);
     if (m) {
       found.push({
-        line: i, index: parseInt(m[2]!, 10),
-        // Checkbox first, THEN the column cut — see CHECKBOX_RE's own comment
-        // for what the other order costs on a two-space-aligned menu.
-        label: leftCol(m[3]!.replace(CHECKBOX_RE, '')), selected: !!m[1],
+        // The digit's column: the prefix before it holds no digit.
+        col: lines[i]!.indexOf(`${m[2]}.`),
+        row: {
+          line: i, index: parseInt(m[2]!, 10),
+          // Checkbox first, THEN the column cut — see CHECKBOX_RE's own comment
+          // for what the other order costs on a two-space-aligned menu.
+          label: leftCol(m[3]!.replace(CHECKBOX_RE, '')), selected: !!m[1],
+          checkbox: CHECKBOX_RE.test(m[3]!),
+          // `CHECKBOX_RE` anchors `[` at the label's first character, so the
+          // box's state is the character after it: ticked unless a space.
+          checked: CHECKBOX_RE.test(m[3]!) && m[3]![1] !== ' ',
+        },
       });
     }
   }
 
-  // Keep the longest run whose indices count 1,2,3,… — this rejects stray
-  // numbered lines in scrollback and locks onto the actual menu (ties prefer the
-  // later run, i.e. the one nearest the footer). Description/rule lines between
-  // numbered options are simply absent from `found`, so they don't break the run.
-  let best: OptionRow[] = [];
-  let cur: OptionRow[] = [];
-  for (const o of found) {
-    if (o.index === cur.length + 1) {
-      cur.push(o);
-    } else {
-      if (cur.length >= best.length) best = cur;
-      cur = o.index === 1 ? [o] : [];
+  // Runs whose indices count 1,2,3,…, kept PER DIGIT COLUMN: a menu prints
+  // every option's digit in one column, and a numbered list inside an option's
+  // description sits at the label's column, deeper — so it neither extends
+  // nor breaks the menu's run. Description/rule lines are absent from `found`
+  // and break nothing.
+  const runs: { col: number; rows: OptionRow[] }[] = [];
+  const open = new Map<number, OptionRow[]>();
+  for (const { col, row } of found) {
+    const cur = open.get(col) ?? [];
+    if (row.index === cur.length + 1) {
+      cur.push(row);
+      open.set(col, cur);
+      continue;
     }
+    if (cur.length > 0) runs.push({ col, rows: cur });
+    open.set(col, row.index === 1 ? [row] : []);
   }
-  if (cur.length >= best.length) best = cur;
-  return best;
+  for (const [col, rows] of open) if (rows.length > 0) runs.push({ col, rows });
+
+  // Which run is the menu? Neither the longest (a three-item reply above a
+  // two-option permission prompt won, and the prompt's own rows came back as
+  // "extras": twelve options, cursor on the tenth — `cc280-list-above-
+  // permission.txt`) nor the lowest (a description's "1. …"/"2. …" rows under
+  // the menu's last option won, and a tap on its first row pressed Enter on
+  // the real cursor row — `cc280-description-steps*.txt`). The menu is where
+  // its CURSOR is: the lowest `❯` on screen, since a menu that is up hides the
+  // prompt box and everything above it is chat (prompt echoes included). On a
+  // numbered row, its run is the menu. On an unnumbered row below the list
+  // (or with no cursor at all), the menu is the lowest run at the shallowest
+  // digit column — a description's list sits deeper, and chat above is higher.
+  const cursor = lines.reduce((at, l, i) => (/^\s*❯/.test(l) ? i : at), -1);
+  const holding = runs.find((r) => r.rows.some((o) => o.line === cursor));
+  if (holding) return holding.rows;
+  if (runs.length === 0) return [];
+  const shallowest = Math.min(...runs.map((r) => r.col));
+  return runs
+    .filter((r) => r.col === shallowest)
+    .reduce((a, r) => (r.rows.at(-1)!.line > a.rows.at(-1)!.line ? r : a)).rows;
+}
+
+/**
+ * The printed index of an AskUserQuestion menu's free-text row, or null when the menu on screen has none (D-5045).
+ * `answerDialog` refuses this row: Enter on it while it is empty rejects the WHOLE ask and throws away every question
+ * already answered (measured on Claude Code 2.1.300 and 2.1.291).
+ *
+ * Two readings, in order:
+ *  1. The placeholder: the row whose label passes `FREE_TEXT_PLACEHOLDER_RE` (`shared/ask-menu.ts`). This covers the
+ *     single-select `Type something.` and the multiSelect `[ ] Type something`.
+ *  2. The structural backstop: when the menu's last numbered row is `Chat about this` and a rule separates it from the
+ *     row above, that row above. It still names the row when the label reads differently, both when a build words the
+ *     placeholder otherwise (the bundle's own row is `label: "Other"`) and when the row holds typed text, where no
+ *     placeholder is left on screen. `Chat about this` must be NUMBERED. The two-column preview layout paints it
+ *     unnumbered, has no free-text row at all, and its last numbered row is a real option (`ask-2col-chat-about.txt`).
+ *
+ * Every recorded 2.1.280 and 2.1.300 ask screen agrees on both readings (`dialog.test.ts`, describe "freeTextRow
+ * (D-5045)"). Like `paneOptionRows`, it says nothing about whether a menu is up, so callers pair it with a parse.
+ */
+export function freeTextRow(pane: string): number | null {
+  return freeTextIndex(pane.split('\n'), paneOptionRows(pane));
+}
+
+/** `freeTextRow`'s two readings over rows already read, so `parseDialog` asks the one rule without reading twice. */
+function freeTextIndex(lines: readonly string[], rows: readonly OptionRow[]): number | null {
+  const placeholder = rows.find((r) => FREE_TEXT_PLACEHOLDER_RE.test(r.label));
+  if (placeholder) return placeholder.index;
+  const chat = rows.at(-1);
+  const above = rows.at(-2);
+  if (!chat || !above || !CHAT_ABOUT_ROW_RE.test(chat.label)) return null;
+  return lines.slice(above.line + 1, chat.line).some(isRule) ? above.index : null;
+}
+
+/**
+ * Does the menu's footer offer the external-editor chord (`EDIT_HINT_RE`, `shared/ask-menu.ts`)? Claude Code paints it
+ * while the cursor is on an AskUserQuestion's free-text row, and D-5047's focus proof needs it before typing. Read off
+ * the footer only (the first `Enter to select` line below the menu's last numbered row), so the same words typed into
+ * a row or said in chat above the menu never count. It is never proof of focus alone: the hint outlives the row.
+ */
+export function editHintShown(pane: string): boolean {
+  const last = paneOptionRows(pane).at(-1);
+  if (!last) return false;
+  const footer = pane.split('\n').find((l, i) => i > last.line && MENU_RE.test(l));
+  return footer !== undefined && EDIT_HINT_RE.test(footer);
 }
 
 /**
  * Parse a menu dialog out of a captured pane; null when no menu is present.
  * Multi-select menus and menus without ≥2 consecutive numbered options come
- * back as `{ parsed: false, raw }` — terminal-drawer territory in v1.
+ * back as `{ parsed: false, raw }` — terminal-drawer territory in v1. A
+ * multiSelect AskUserQuestion question also carries `multi` (D-5048,
+ * `multiMenu` below), which the operator's multiSelect answer reads
+ * (`POST /api/questions/session-<id>/answer`, `multi: true`; the retired
+ * `POST /api/sessions/:id/dialog/multi` until W7 C7p).
  */
 export function parseDialog(pane: string): Dialog | null {
   // hasMenu, not paneState(pane) !== 'menu': the busy check must not veto a
@@ -171,16 +319,24 @@ export function parseDialog(pane: string): Dialog | null {
   // it — a real, expected combined screen — so the old gate answered 'busy'
   // and refused to parse a dialog that was genuinely on screen. hasMenu is
   // deliberately independent of the busy check for exactly this reason
-  // (:33-45 above); it's the same idiom inject/send.ts:324 uses. SGR strip
+  // (:33-45 above); it's the same gate inject/send.ts's menu check uses. SGR strip
   // mirrors that idiom too — every current caller already captures pane text
   // without escape codes (tmux.capture, never captureAnsi), so this is
   // defensive idiom-consistency, not a behavior change today.
-  if (!hasMenu(pane.replace(SGR, ''))) return null;
-  if (MULTISELECT_RE.test(pane)) return unparsed(pane);
+  if (!hasMenu(stripSgr(pane))) return null;
 
   const lines = pane.split('\n');
   const best = paneOptionRows(pane);
+  // A multi-select by its rows as well as its footer: 2.1.280 dropped "Space
+  // to select" (its footer reads "Enter to select", and Enter on a row TOGGLES
+  // that box — measured), so the footer test alone no longer fires and the
+  // menu parsed as single-select. The checkboxes on the rows are the one mark
+  // both shapes share. `parsed: false` is what keeps the scraped sheet from
+  // offering its rows as one-tap answers (the envelope sheet also gates on the
+  // hook's own `multiSelect`).
+  const multiSelect = MULTISELECT_RE.test(pane) || best.filter((o) => o.checkbox).length >= 2;
   if (best.length < 2) return unparsed(pane);
+  const width = paneWidth(lines);
 
   const start = best[0]!.line;
   const bounds = best.map((o) => o.line);
@@ -211,7 +367,7 @@ export function parseDialog(pane: string): Dialog | null {
   // notes"), never a wrapped label — column position is the only thing that
   // tells them apart once the box borders are stripped.
   const gutter = twoColumn ? boxColumn(lines.slice(start, tail)) : Infinity;
-  const options = best.map((o, k) => {
+  const drafts = best.map((o, k) => {
     const from = o.line + 1;
     const to = k + 1 < bounds.length ? bounds[k + 1]! : tail;
     const between = lines.slice(from, to).filter((l) => !isRule(l));
@@ -222,15 +378,69 @@ export function parseDialog(pane: string): Dialog | null {
         .filter(Boolean)
         .join(' ');
       const label = [o.label, cont].filter(Boolean).join(' ');
-      return { index: o.index, label, description: undefined };
+      return { index: o.index, head: label, cont: [] as { text: string; glued: boolean }[], desc: [] as string[] };
     }
-    const description = between
-      .filter((l) => l.trim() !== '')
-      .map((l) => l.trim())
-      .join(' ')
-      .trim();
-    return { index: o.index, label: o.label, description: description || undefined };
+    // One column: the rows under an option are its description, with three
+    // exceptions the real 2.1.280 menus need.
+    //  - Text to the RIGHT of the label on the option's own row (the /model
+    //    picker's second column; `leftCol` cut it off) starts the description.
+    //  - A row that CONTINUES the label — see `continuesLabel` — is the label,
+    //    wrapped. At 100 columns a permission prompt's path fills option 2's
+    //    row and breaks mid-word, and a long question label word-wraps; both
+    //    read as a one-line label plus a "description".
+    //  - A row indented LEFT of the label column belongs to no option: the
+    //    permission footer ("Esc to cancel · Tab to amend"), /model's effort
+    //    row and its "… +3 models" hint, /theme's preview box all sit there,
+    //    and each used to end up as the last option's description.
+    const row = lines[o.line]!;
+    const col = labelColumn(row);
+    const right = rightOfLabel(row);
+    const cont: { text: string; glued: boolean }[] = [];
+    let prev = row;
+    while (cont.length < between.length && continuesLabel(prev, between[cont.length]!, col, width)) {
+      const next = between[cont.length]!;
+      cont.push({ text: next.trim(), glued: hardSplit(prev, next, col, width) });
+      prev = next;
+    }
+    const desc = [right, ...between.slice(cont.length).filter((l) => l.trim() !== '' && indentOf(l) >= col).map((l) => l.trim())]
+      .filter(Boolean);
+    return { index: o.index, head: o.label, cont, desc };
   });
+  // The wrap test's known miss (`continuesLabel`): a one-row label that ends
+  // near the edge takes its description — every row of it, since each wrapped
+  // description row chains the test on. Question options nearly always carry
+  // a description, so an option left with NONE while another in the same menu
+  // has one gives ALL its taken rows back: its label is its first row and the
+  // rest is its description, exactly as before labels were joined (the real
+  // 2.1.280 screens `cc280-label-near-edge-*.txt`). What that costs: an option
+  // whose description is empty and whose label wraps shows its label's first
+  // row only, with the rest as a description — which still prefix-matches the
+  // hook's label. A menu with no descriptions at all (a permission prompt)
+  // keeps every row it wrapped.
+  const described = drafts.some((d) => d.desc.length > 0);
+  const options = drafts.map((d) => {
+    const giveBack = described && d.desc.length === 0 && d.cont.length > 0;
+    const cont = giveBack ? [] : d.cont;
+    const desc = giveBack ? d.cont.map((c) => c.text) : d.desc;
+    const label = cont.reduce((l, c) => l + (c.glued ? '' : ' ') + c.text, d.head);
+    return { index: d.index, label, description: desc.join(' ').trim() || undefined };
+  });
+
+  if (multiSelect) {
+    // Unparsed, but with an id from what does not change while it is being
+    // answered — its labels, box stripped, and its question — and that question
+    // as its title. `unparsed`'s id hashes the whole pane, so every box ticked
+    // and every cursor move in the terminal read as a new question and re-sent
+    // the push (and with no title, as "Claude has a question"). Its rows are
+    // read above like any menu's, for `multiMenu`'s labels and descriptions
+    // (D-5048); the id hashes the row reader's labels, as it always has.
+    const { title, body } = header(lines, start, footer >= 0);
+    const multi = multiMenu(lines, best, options);
+    return {
+      ...unparsed(pane), id: sha1(best.map((o) => o.label).join('\n') + title), title, body,
+      ...(multi === null ? {} : { multi }),
+    };
+  }
 
   // Unnumbered selectable rows between that rule and the footer, numbered on
   // after the real options so the arrow-walk reaches them the same way the TUI
@@ -250,12 +460,63 @@ export function parseDialog(pane: string): Dialog | null {
 
   const selectedIndex = selectedExtra ?? best.find((o) => o.selected)?.index ?? 1;
 
+  const { title, body } = header(lines, start, footer >= 0);
+  const id = sha1(options.map((o) => o.label).join('\n') + title);
+  return { id, title, body, options, selectedIndex, parsed: true, raw: pane };
+}
+
+/**
+ * A multiSelect AskUserQuestion question's own reading (D-5048), or null when the menu is not the measured shape.
+ * Measured on Claude Code 2.1.300 (2.1.280 paints the same): `k. [ ] Label` rows, then `n+1. [ ] Type something`, then
+ * an unnumbered `Next` row (`Submit` on the last question), a rule, and `n+2. Chat about this`.
+ *
+ * Null unless the boxes are the menu's first rows, unbroken, and the last non-blank row below them, before the rule,
+ * the next numbered row or the footer, is the commit row (`COMMIT_ROW_RE`). That row is the mark of the layout whose
+ * keys were measured (a digit toggles a box, Enter toggles the cursor row, Tab from an option row commits); the
+ * 2.1.222 shape paints none, and committed with Enter. The free-text row is `freeTextRow`'s, read by the same rule,
+ * and every other box is an option. Labels and descriptions come from `parseDialog`'s own reading of the rows
+ * (`parsed`), ticks and the cursor from the row reader.
+ */
+function multiMenu(
+  lines: readonly string[], rows: readonly OptionRow[], parsed: readonly Dialog['options'][number][],
+): DialogMulti | null {
+  const boxes = rows.filter((r) => r.checkbox);
+  if (boxes.length === 0 || boxes.some((r, i) => r !== rows[i])) return null;
+  let at = -1;
+  for (let i = boxes.at(-1)!.line + 1; i < lines.length; i++) {
+    const l = lines[i]!;
+    if (isRule(l) || MENU_RE.test(l) || NUMBERED_OPTION_RE.test(l)) break;
+    if (l.trim() !== '') at = i;
+  }
+  const commit = at < 0 ? '' : leftCol(lines[at]!.replace(/^\s*❯\s*/, ''));
+  if (!COMMIT_ROW_RE.test(commit)) return null;
+
+  const free = freeTextIndex(lines, rows);
+  const freeRow = boxes.find((r) => r.index === free);
+  const options = boxes.filter((r) => r !== freeRow).map((r) => {
+    const read = parsed.find((o) => o.index === r.index);
+    const description = read?.description;
+    return {
+      index: r.index, label: read?.label ?? r.label, ...(description === undefined ? {} : { description }),
+      checked: r.checked,
+    };
+  });
+  return {
+    options,
+    freeText: freeRow === undefined ? null : { index: freeRow.index, label: freeRow.label, checked: freeRow.checked },
+    commit,
+    cursor: /^\s*❯/.test(lines[at]!) ? 'commit' : rows.find((r) => r.selected)?.index ?? null,
+  };
+}
+
+/** The dialog's title and body, read upward from its first option row. */
+function header(lines: string[], start: number, hasFooter: boolean): { title: string; body: string | undefined } {
   // Preamble block: everything from the dialog's upper box rule down to the first
   // option (capped so we never climb into unrelated conversation). This is the
   // fix for "I don't get the full question text".
   const bodyLines: string[] = [];
   for (let i = start - 1; i >= 0 && start - i <= 20; i--) {
-    if (isRule(lines[i]!)) break;
+    if (isRule(lines[i]!) || isOverlayEdge(lines[i]!)) break;
     bodyLines.push(lines[i]!.replace(/^\s*[●✻☐☑]\s*/, '').trimEnd());
   }
   while (bodyLines.length && bodyLines[bodyLines.length - 1]!.trim() === '') bodyLines.pop();
@@ -267,27 +528,103 @@ export function parseDialog(pane: string): Dialog | null {
   // Footer-less confirm dialogs (/model, /effort switch) put paragraphs between
   // their header and the options, so the nearest line is preamble tail — use the
   // block's TOP line as the header (e.g. "Switch model?") and the rest as body.
-  let title = '';
-  let body: string | undefined;
-  if (footer >= 0) {
+  if (hasFooter) {
+    let title = '';
     for (let i = start - 1; i >= 0; i--) {
       const t = lines[i]!.trim();
       if (t) { title = t.replace(/^[●✻☐☑]\s*/, ''); break; }
     }
-    body = block.join('\n').trim() || undefined;
-  } else {
-    title = (block[0] ?? '').replace(/^[●✻☐☑]\s*/, '').trim();
-    body = block.slice(1).join('\n').trim() || undefined;
+    return { title, body: block.join('\n').trim() || undefined };
   }
-
-  const id = sha1(options.map((o) => o.label).join('\n') + title);
-  return { id, title, body, options, selectedIndex, parsed: true, raw: pane };
+  return {
+    title: (block[0] ?? '').replace(/^[●✻☐☑]\s*/, '').trim(),
+    body: block.slice(1).join('\n').trim() || undefined,
+  };
 }
 
 /** A box-horizontal rule row (a run of `─`, the AskUserQuestion separators). */
 function isRule(line: string): boolean {
   const t = line.trim();
   return t.length >= 8 && [...t].every((c) => c === '─' || c === ' ');
+}
+
+/** The fullscreen renderer's overlay top edge: a run of `▔` where the classic
+ *  renderer draws its `─` rule. Its LAST character is what every real one
+ *  shares: it may carry a badge at its right end (`▔▔…▔ ● high · /effort ▔`),
+ *  and at 100 columns a tmux hint can overwrite everything but that last `▔`
+ *  (` tmux detected · … wheel scroll ▔`, 2.1.280 `/effort` captures). Without
+ *  it the header climb ran up past the dialog into chat, and "Change effort
+ *  level?" was titled with the edge itself or with a chat line. */
+function isOverlayEdge(line: string): boolean {
+  return /▔\s*$/.test(line);
+}
+
+/** The pane's width, read off its widest `─` rule: on every real 2.1.280
+ *  capture of a menu whose labels can wrap (question menus and permission
+ *  prompts, both renderers, 100 to 220 columns) the widest rule spans the pane
+ *  exactly. Widest, because chat above a menu can hold a shorter rule of its
+ *  own. Infinity when none is on screen (the fullscreen /model and effort
+ *  dialogs draw a `▔` edge instead, and their labels do not wrap), which turns
+ *  the wrap test in `continuesLabel` off rather than guessing a width. */
+function paneWidth(lines: string[]): number {
+  let w = 0;
+  for (const l of lines) if (isRule(l)) w = Math.max(w, l.length);
+  return w > 0 ? w : Infinity;
+}
+
+/** Column where an option row's label text starts (after `❯ N. `). */
+function labelColumn(row: string): number {
+  const m = OPTION_RE.exec(row);
+  return m ? row.length - m[3]!.length : indentOf(row);
+}
+
+/** The text an option row carries to the RIGHT of its label, past the column
+ *  gap `leftCol` cuts at; '' when the row is one column. */
+function rightOfLabel(row: string): string {
+  const m = OPTION_RE.exec(row);
+  if (!m) return '';
+  const t = m[3]!.replace(CHECKBOX_RE, '');
+  const cut = t.search(/\s{2,}|[│┃┌┐└┘├┤┬┴┼╭╮╰╯]/);
+  return cut >= 0 ? t.slice(cut).trim() : '';
+}
+
+/** Does `row` continue the label `prev` ended? Only at the label's own column
+ *  (a wrapped label resumes there), and only when `prev` could not have held
+ *  `row`'s first word — the test a word wrap applies.
+ *
+ *  NOT exact, and the miss has a known direction. A description also starts
+ *  at the label's column, and when a one-row label happens to end within a
+ *  word of the edge, its description's first row passes the same test: the TUI
+ *  draws a description dim, and a plain capture drops that. `parseDialog`
+ *  undoes the common case (an option left with no description gives its last
+ *  taken row back); where it cannot, the label carries extra text, which keeps
+ *  the hook's own label a prefix of it, so `DialogSheet.tsx`'s
+ *  `questionCorresponds` still lines up — and `inject/ask.ts` reads
+ *  `paneOptionRows`, which never joins rows. */
+function continuesLabel(prev: string, row: string, col: number, width: number): boolean {
+  if (row.trim() === '' || indentOf(row) !== col) return false;
+  const first = row.trim().split(/\s/)[0]!;
+  return prev.length >= width || prev.length + 1 + first.length > width;
+}
+
+/** Was the break between `prev` and `row` INSIDE one token, so the two halves
+ *  join with no space? Only when `prev` fills the pane AND the token it ends
+ *  with, run on into `row`'s first, could not fit one wrapped row by itself —
+ *  the only case a word wrap cuts a word (a path longer than the row). A row
+ *  that fills the pane by ending on a whole short word is an ordinary wrap, and
+ *  gluing there turned "report the" + "new build" into "thenew", a label the
+ *  hook's own copy no longer prefix-matches.
+ *
+ *  NOT exact either: a long WHOLE token that happens to end exactly at the
+ *  edge, followed by a word that together with it would not fit a row, looks
+ *  the same as a cut token on plain text, and is glued. Cut paths are the
+ *  common case (a permission prompt at 100 columns); the exact-fit one costs
+ *  the envelope sheet its match, which fails to "answer on the terminal". */
+function hardSplit(prev: string, row: string, col: number, width: number): boolean {
+  if (prev.length < width) return false;
+  const tail = prev.trimEnd().split(/\s/).at(-1)!;
+  const head = row.trim().split(/\s/)[0]!;
+  return tail.length + head.length > width - col;
 }
 
 /** The LEFT column of an option/continuation row — the text before the detail

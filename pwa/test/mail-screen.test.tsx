@@ -5,14 +5,13 @@
 //     live catch-up tail, merged and deduped — a screen that only shows one
 //     of the two either loses history across a deploy (D-3) or never shows
 //     what just happened;
-//   * `MailBadge` is the ONLY door to this screen (D-2) and, exactly like
-//     `AccountsStrip` before it, must never render nothing — the state a
-//     count of zero describes is not a state the control may vanish in.
+//   * the screen's door: `MailBadge` was its only door (D-2) until desktop-polish PL10 (D-7952), when the phone's
+//     bottom bar's Inbox door and the desk's Inbox tab and rail door became the doors (`test/phone-bar.test.tsx`).
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { NotifyEvent, RunSummary } from '../../shared/api';
 import { MailScreen } from '../src/screens/MailScreen';
-import { MailBadge } from '../src/fleet/MailBadge';
+import { SETTINGS_GLYPH } from '@ccrc/ui';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, acksSnapshot, resetAcks } from '../src/lib/seen';
@@ -29,9 +28,17 @@ const e = (over: Partial<NotifyEvent> = {}): NotifyEvent => ({
   ...over,
 });
 
-const makeStore = (): FleetStore => createFleetStore({
-  makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
-});
+/** The screen's feed read is the store's `refreshFeed()` (C7n, D-7209), so a row's feed answer is handed to the
+ *  store it mounts: `withFeed(store, load)` names the store's reader, and a store with none reads `api.feed`. */
+const feeds = new WeakMap<FleetStore, () => Promise<{ events: NotifyEvent[] }>>();
+const makeStore = (): FleetStore => {
+  const store: FleetStore = createFleetStore({
+    makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
+    fetchFeed: (n) => { const load = feeds.get(store); return load === undefined ? api.feed(n) : load(); },
+  });
+  return store;
+};
+const withFeed = (store: FleetStore, load: () => Promise<{ events: NotifyEvent[] }>): FleetStore => { feeds.set(store, load); return store; };
 
 describe('the mail feed', () => {
   it('renders the durable read AND the live tail, deduped by record identity', async () => {
@@ -46,7 +53,7 @@ describe('the mail feed', () => {
     const live = e({ seq: 2, title: 'live' });
     act(() => { store.setState({ feed: [live] }); });
     const feed = vi.fn().mockResolvedValue({ events: [e({ seq: 1, title: 'durable' }), live] });
-    render(<MailScreen store={store} loadFeed={feed} />);
+    render(<MailScreen store={withFeed(store, feed)} />);
     expect(await screen.findByText('durable')).toBeInTheDocument();
     expect(screen.getAllByText('live')).toHaveLength(1);
   });
@@ -68,7 +75,7 @@ describe('the mail feed', () => {
         ],
       });
     });
-    render(<MailScreen store={store} loadFeed={async () => ({ events: [] })} />);
+    render(<MailScreen store={withFeed(store, async () => ({ events: [] }))} />);
     const titles = [...document.querySelectorAll('.mail-row-title')].map((el) => el.textContent);
     expect(titles).toEqual(['newest', 'middle', 'oldest']);
   });
@@ -77,14 +84,14 @@ describe('the mail feed', () => {
     // Spec §6: a record lands whether or not you were watching; only the PUSH
     // is gated. An operator who learns that from a missing phone ping learns
     // the wrong lesson.
-    render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [] })} />);
+    render(<MailScreen store={withFeed(makeStore(), async () => ({ events: [] }))} />);
     expect(screen.getByText(/whether or not you were watching/i)).toBeInTheDocument();
   });
 
   it('renders a kind from a newer build rather than hiding the record', () => {
     const store = makeStore();
     act(() => { store.setState({ feed: [e({ kind: 'unknown', title: 'something new', body: 'from a newer build' })] }); });
-    render(<MailScreen store={store} loadFeed={async () => ({ events: [] })} />);
+    render(<MailScreen store={withFeed(store, async () => ({ events: [] }))} />);
     expect(screen.getByText('something new')).toBeInTheDocument();
     expect(screen.getByText('from a newer build')).toBeInTheDocument();
     expect(screen.getByText(/unknown/i)).toBeInTheDocument();
@@ -93,14 +100,14 @@ describe('the mail feed', () => {
   it('says how many records it could not read at all', () => {
     const store = makeStore();
     act(() => { store.setState({ feed: [e()], feedDropped: 2 }); });
-    render(<MailScreen store={store} loadFeed={async () => ({ events: [] })} />);
+    render(<MailScreen store={withFeed(store, async () => ({ events: [] }))} />);
     expect(screen.getByText(/2 records this build could not read/i)).toBeInTheDocument();
   });
 
   it('marks unread rows before the ack and none after it', async () => {
     const store = makeStore();
     act(() => { store.setState({ feed: [e({ seq: 1 }), e({ seq: 2 })] }); });
-    render(<MailScreen store={store} loadFeed={async () => ({ events: [] })} />);
+    render(<MailScreen store={withFeed(store, async () => ({ events: [] }))} />);
     // Opening the screen IS the ack — the same rule SessionScreen's mount ack
     // follows (SessionScreen.tsx:78-95).
     await vi.waitFor(() => expect(acksSnapshot()[FEED_ACK_KEY]).toBeGreaterThan(0));
@@ -128,7 +135,7 @@ describe('the mail feed', () => {
     const store = makeStore();
     const at = Date.now() - 60_000;
     act(() => { store.setState({ feed: [e({ seq: 1, at })] }); });
-    render(<MailScreen store={store} loadFeed={async () => ({ events: [] })} />);
+    render(<MailScreen store={withFeed(store, async () => ({ events: [] }))} />);
     act(() => { ack(FEED_ACK_KEY, at - 1); });
     expect(document.querySelectorAll('[data-unseen="true"]')).toHaveLength(1);
     expect(document.querySelectorAll('[data-unseen="false"]')).toHaveLength(0);
@@ -138,13 +145,13 @@ describe('the mail feed', () => {
     // `findByText`, not `getByText`: before this screen's own read resolves,
     // "loading" and "confirmed empty" are no longer the same render (review
     // finding 19) — a synchronous assertion would hit the loading state.
-    render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [] })} />);
+    render(<MailScreen store={withFeed(makeStore(), async () => ({ events: [] }))} />);
     expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('mail-back');
     expect(await screen.findByText(/nothing yet/i)).toBeInTheDocument();
   });
 
   it('says it could not read, not "Nothing yet", when the read fails (review finding 19)', async () => {
-    render(<MailScreen store={makeStore()} loadFeed={async () => { throw new Error('offline'); }} />);
+    render(<MailScreen store={withFeed(makeStore(), async () => { throw new Error('offline'); })} />);
     expect(await screen.findByText(/could not reach the server/i)).toBeInTheDocument();
     expect(screen.queryByText(/^nothing yet\.?$/i)).toBeNull();
   });
@@ -227,12 +234,46 @@ describe('the mail feed', () => {
                    body: 'workers 3 → 5, per day 12 → 12' });
     act(() => { store.setState({ feed: [ev] }); });
     const { container } = render(
-      <MailScreen store={store} loadFeed={vi.fn().mockResolvedValue({ events: [] })} />);
+      <MailScreen store={withFeed(store, vi.fn().mockResolvedValue({ events: [] }))} />);
     expect(await screen.findByText('caps changed')).toBeInTheDocument();
     const kind = container.querySelector('.mail-kind');
     expect(kind, 'the coord row rendered no kind cell at all').not.toBeNull();
-    expect(kind!.querySelector('.mail-kind-glyph')!.textContent, 'no glyph for coord').toBe('⚙');
+    expect(kind!.querySelector('.mail-kind-glyph')!.textContent, 'no glyph for coord').toBe(SETTINGS_GLYPH);
     expect(kind!.textContent, 'no word for coord').toContain('config');
+  });
+
+  // Wave 8 item A: the EIGHTH kind, a move the update dispatcher leased — about no session and no run,
+  // recorded and never pushed (D-3586). Same total-map guard as the coord case above.
+  it('renders an update-kind feed record with its own word and glyph', async () => {
+    const store = makeStore();
+    const ev = e({ seq: 10, kind: 'update', sessionId: '', title: 'update fleet: auto update to v0.0.10',
+                   body: 'auto update from v0.0.9 to v0.0.10 — lease held: accepted — the node queued a detached run' });
+    act(() => { store.setState({ feed: [ev] }); });
+    const { container } = render(
+      <MailScreen store={withFeed(store, vi.fn().mockResolvedValue({ events: [] }))} />);
+    expect(await screen.findByText('update fleet: auto update to v0.0.10')).toBeInTheDocument();
+    const kind = container.querySelector('.mail-kind');
+    expect(kind, 'the update row rendered no kind cell at all').not.toBeNull();
+    expect(kind!.querySelector('.mail-kind-glyph')!.textContent, 'no glyph for update').toBe('⇡');
+    expect(kind!.textContent, 'no word for update').toContain('update');
+  });
+
+  // The NINTH kind (landing-order wave 2): a PR the merge queue removed
+  // without landing. Not `merged` — it is the one PR outcome that is NOT a
+  // merge — and not `mail`, which the coordinator's notice already is. Same
+  // runtime assertion as coord's above, for the same reason.
+  it('renders a queue-kind feed record with its own word and glyph', async () => {
+    const store = makeStore();
+    const ev = e({ seq: 11, kind: 'queue', title: 'dequeued quiet-basin',
+                   body: 'PR #42 left the merge queue without landing' });
+    act(() => { store.setState({ feed: [ev] }); });
+    const { container } = render(
+      <MailScreen store={withFeed(store, vi.fn().mockResolvedValue({ events: [] }))} />);
+    expect(await screen.findByText('dequeued quiet-basin')).toBeInTheDocument();
+    const kind = container.querySelector('.mail-kind');
+    expect(kind, 'the queue row rendered no kind cell at all').not.toBeNull();
+    expect(kind!.querySelector('.mail-kind-glyph')!.textContent, 'no glyph for queue').toBe('⤺');
+    expect(kind!.textContent, 'no word for queue').toContain('queue');
   });
 
   const BLOCKED_TITLE = '✉ blocked › w1';
@@ -242,7 +283,7 @@ describe('the mail feed', () => {
     const store = makeStore();
     const blocked = e({ seq: 4, sessionId: 'boss', title: BLOCKED_TITLE, body: BLOCKED_BODY });
     act(() => { store.setState({ feed: [blocked] }); });
-    render(<MailScreen store={store} loadFeed={vi.fn().mockResolvedValue({ events: [] })} />);
+    render(<MailScreen store={withFeed(store, vi.fn().mockResolvedValue({ events: [] }))} />);
     expect(await screen.findByText(BLOCKED_TITLE)).toBeInTheDocument();
     // The kind word an unknown kind would NOT produce — the map stayed total.
     expect(screen.getByText(/^mail$/)).toBeInTheDocument();
@@ -250,38 +291,78 @@ describe('the mail feed', () => {
     // how the sender knows WHICH of its messages is the blocked one.
     expect(screen.getByText(BLOCKED_BODY)).toBeInTheDocument();
   });
-});
 
-describe('the door', () => {
-  it('is always rendered — with a count, and without one', () => {
-    // AccountsStrip.tsx:9-15's rule, inherited: the ONLY door to a screen may
-    // never render nothing, or the screen is unreachable in exactly the state
-    // it exists to explain.
-    const { rerender } = render(<MailBadge unread={0} />);
-    expect(screen.getByRole('button', { name: /mail — nothing unread/i })).toBeInTheDocument();
-    rerender(<MailBadge unread={3} />);
-    expect(screen.getByRole('button', { name: /mail — 3 unread/i })).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument();
+  // D-5431 (operator ruling 2026-10-18). The rows copy the server's own shape (`server/src/interruptlog.ts`: title
+  // `interrupt · <source>`, body `interruptEventBody`, no run; the nudge's from `server/src/watch.ts`).
+  const INTERRUPT_SENT = { kind: 'interrupt' as const, sessionId: 'proj-a-s1', title: 'interrupt · keycap',
+    body: 'source=keycap outcome=sent', runId: null };
+  const INTERRUPT_REFUSED = { kind: 'interrupt' as const, sessionId: 'proj-a-s1', title: 'interrupt · escape-key',
+    body: 'source=escape-key outcome=background-only', runId: null };
+  const NUDGE_BODY = 'Nudging with a "continue" prompt after an idle compaction left open tasks (compaction k1)';
+
+  it('an interrupt row keeps its record but shows its title, never the raw source=… outcome=… body (D-5431)', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ feed: [e({ seq: 1, ...INTERRUPT_SENT }), e({ seq: 2, ...INTERRUPT_REFUSED })] }); });
+    const { container } = render(<MailScreen store={withFeed(store, vi.fn().mockResolvedValue({ events: [] }))} />);
+    expect(await screen.findByText('⎋ interrupted · keycap')).toBeInTheDocument();
+    expect(screen.getByText('⎋ not interrupted · escape-key · background-only')).toBeInTheDocument();
+    expect(container.querySelectorAll('.mail-row'), 'both records are still on the screen').toHaveLength(2);
+    expect(container.textContent).not.toContain('source=');
+    expect(container.textContent).not.toContain('outcome=');
+    expect(container.querySelector('.mail-body'), 'an interrupt row printed a body line').toBeNull();
   });
 
-  it('navigates rather than toggling anything', () => {
-    render(<MailBadge unread={1} />);
-    fireEvent.click(screen.getByRole('button', { name: /mail/i }));
-    expect(location.pathname).toBe('/mail');
+  it('an interrupt body off its grammar is still printed — the title has nothing to stand in for it (D-5431)', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ feed: [e({ seq: 1, ...INTERRUPT_SENT, body: 'from a newer build' })] }); });
+    render(<MailScreen store={withFeed(store, vi.fn().mockResolvedValue({ events: [] }))} />);
+    expect(await screen.findByText('interrupt · keycap')).toBeInTheDocument();
+    expect(screen.getByText('from a newer build')).toBeInTheDocument();
   });
 
-  it('nests no control inside another', () => {
-    // The standing rule (commit ce313de). The bell is a separate button beside
-    // this one, never inside it.
-    render(<MailBadge unread={1} />);
-    const btn = screen.getByRole('button', { name: /mail/i });
-    expect(btn.querySelector('button')).toBeNull();
+  // R32's F5, moved here from the rail (T2d, D-6330): the Inbox's rows hold the feed's unread mark now, so the strict `>`
+  // of `isUnseenAt` is pinned on them. The ack is the watermark: a row AT it was seen, and so was an earlier one.
+  it("a row at the ack's own stamp, or before it, is not unseen; one millisecond past it is", () => {
+    const store = makeStore();
+    const stamp = Date.now();
+    const mail = (seq: number, at: number, title: string): NotifyEvent => e({ seq, at, kind: 'mail', title });
+    act(() => {
+      store.setState({ feed: [mail(1, stamp, 'at the stamp'), mail(2, stamp - 1_000, 'before the stamp'), mail(3, stamp + 1, 'past the stamp')] });
+    });
+    const { container } = render(<MailScreen store={withFeed(store, async () => ({ events: [] }))} />);
+    // The mount effect floors the ack to the newest row, so the watermark is set after mount (the case above has the argument).
+    act(() => { ack(FEED_ACK_KEY, stamp); });
+    const rows = [...container.querySelectorAll('.mail-row')];
+    const unseenOf = (text: string): string | null =>
+      rows.find((r) => r.textContent?.includes(text))?.getAttribute('data-unseen') ?? null;
+    expect(rows).toHaveLength(3);
+    expect(unseenOf('at the stamp')).toBe('false');
+    expect(unseenOf('before the stamp')).toBe('false');
+    expect(unseenOf('past the stamp')).toBe('true');
   });
 
-  it('caps the printed count so a three-digit number cannot blow the head open', () => {
-    render(<MailBadge unread={412} />);
-    expect(screen.getByText('99+')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /mail — 412 unread/i })).toBeInTheDocument();
+  it('an interrupt row is never marked unseen; mail and every other record-only kind still are (D-5431)', () => {
+    const store = makeStore();
+    const now = Date.now();
+    act(() => {
+      store.setState({ feed: [
+        e({ seq: 1, at: now - 60_000, ...INTERRUPT_SENT }),
+        e({ seq: 2, at: now - 59_000, kind: 'nudge', title: '↻ Nudging after idle compaction', body: NUDGE_BODY }),
+        e({ seq: 3, at: now - 58_000 }),
+      ] });
+    });
+    // The mount ack has already floored the watermark to the newest row by the time `render()` returns; rolling it
+    // back after mount is how the suite reads the comparison's true branch (the case above has the argument).
+    const { container } = render(<MailScreen store={withFeed(store, async () => ({ events: [] }))} />);
+    act(() => { ack(FEED_ACK_KEY, now - 120_000); });
+    const rows = [...container.querySelectorAll('.mail-row')];
+    const unseenOf = (text: string): string | null =>
+      rows.find((r) => r.textContent?.includes(text))?.getAttribute('data-unseen') ?? null;
+    // The nudge's body still prints under its title: only the interrupt kind changes.
+    expect(screen.getByText(NUDGE_BODY)).toBeInTheDocument();
+    expect(unseenOf('⎋ interrupted · keycap')).toBe('false');
+    expect(unseenOf('↻ Nudging after idle compaction')).toBe('true');
+    expect(unseenOf('✉ finding › clear-cove')).toBe('true');
   });
 });
 
@@ -307,7 +388,7 @@ const loadRuns = (): Promise<{ runs: RunSummary[] }> => Promise.resolve({ runs: 
 describe('the feed, grouped by programme', () => {
   const mount = (events: NotifyEvent[], runs = loadRuns): void => {
     const store = makeStore();
-    render(<MailScreen store={store} loadFeed={async () => ({ events })} loadRuns={runs} />);
+    render(<MailScreen store={withFeed(store, async () => ({ events }))} loadRuns={runs} />);
   };
 
   it('puts each record under its programme’s own title', async () => {
@@ -447,13 +528,12 @@ describe('the feed, grouped by programme', () => {
     const store = makeStore();
     render(
       <MailScreen
-        store={store}
-        loadFeed={async () => ({
+        store={withFeed(store, async () => ({
           events: [
             e({ seq: 1, runId: 5, at: now - 120_000, title: 'wave 1 dispatched' }),
             e({ seq: 2, runId: null, at: now - 60_000, title: 'an ask' }),
           ],
-        })}
+        }))}
         loadRuns={() => deferred}
       />,
     );
@@ -488,8 +568,7 @@ describe('the feed, grouped by programme', () => {
           : [],
       }));
     const store = makeStore();
-    render(<MailScreen store={store}
-                        loadFeed={async () => ({ events: [e({ runId: 9, title: 'wave 5 merged' })] })} />);
+    render(<MailScreen store={withFeed(store, async () => ({ events: [e({ runId: 9, title: 'wave 5 merged' })] }))} />);
     expect(await screen.findByText('Build 9b: peers and claims')).toBeInTheDocument();
     expect(runsSpy).toHaveBeenCalledWith(true);
   });
@@ -506,12 +585,12 @@ describe('the feed, grouped by programme', () => {
     let calls = 0;
     const store = makeStore();
     const { rerender } = render(
-      <MailScreen store={store} loadFeed={async () => ({ events: [e()] })}
+      <MailScreen store={withFeed(store, async () => ({ events: [e()] }))}
                   loadRuns={(): Promise<{ runs: RunSummary[] }> => { calls += 1; return loadRuns(); }} />);
     await screen.findByText('Not part of a programme');
     expect(calls).toBe(1);
     rerender(
-      <MailScreen store={store} loadFeed={async () => ({ events: [e()] })}
+      <MailScreen store={withFeed(store, async () => ({ events: [e()] }))}
                   loadRuns={(): Promise<{ runs: RunSummary[] }> => { calls += 1; return loadRuns(); }} />);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(calls).toBe(1);
@@ -530,7 +609,7 @@ describe('the feed, grouped by programme', () => {
     // (`act(() => { store.setState({ feed: [...] }); })`) — bypassing
     // revival on purpose.
     const store = makeStore();
-    render(<MailScreen store={store} loadFeed={async () => ({ events: [] })} loadRuns={loadRuns} />);
+    render(<MailScreen store={withFeed(store, async () => ({ events: [] }))} loadRuns={loadRuns} />);
     // Wait for the empty state FIRST: the durable read's own (empty) resolve
     // must land before this case writes `feed` itself, so nothing else can
     // clobber it afterward.
@@ -547,5 +626,83 @@ describe('the feed, grouped by programme', () => {
       store.setState({ feed: [withoutRunId as unknown as NotifyEvent] });
     });
     expect(await screen.findByText('Not part of a programme')).toBeInTheDocument();
+  });
+});
+
+// D-5102: the screen stands on the page scaffold — one h1, led by the caret.
+describe('the mail screen on the page scaffold (D-5102)', () => {
+  it('renders a PageScaffold with one h1, its Digest door in the header, and its empty line through EmptyState', async () => {
+    const { container } = render(<MailScreen store={withFeed(makeStore(), async () => ({ events: [] }))} />);
+    expect(container.querySelector('[data-page-body]')?.className.split(/\s+/)).toContain('max-w-(--page-max)');
+    const h1 = screen.getAllByRole('heading', { level: 1 });
+    expect(h1).toHaveLength(1);
+    expect(h1[0]).toHaveAccessibleName('Mail');
+    expect(screen.getByRole('banner')).toContainElement(screen.getByRole('button', { name: 'Digest' }));
+    await waitFor(() => expect(screen.getByText('Nothing yet.').closest('[data-state]')?.getAttribute('data-state')).toBe('ok'));
+  });
+});
+
+// D-6911: the review cap's notice carries a Lift cap door while its run is waiting.
+describe('the review cap door on the cap\'s record', () => {
+  const capRun = (over: Partial<RunSummary> = {}): RunSummary => ({
+    id: 12, program: 'programme-a', programTitle: 'Programme A', wave: 2, waveOf: 3, project: 'project-a',
+    homeProject: null, sessionId: 'lane-a-w', workspace: 'w', branch: 'ws/w', state: 'awaiting-review', kind: 'work',
+    reviews: null, claimedBy: 'lane-a-coord', resumed: false, clearedAt: null, openedAt: 1, dispatchStartedAt: null,
+    dispatchedAt: 2, closedAt: null, handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,
+    health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
+              briefQueued: true, clearError: null, coordKickoffPendingSince: null },
+    childReclaim: null, reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null }, hadChild: false, ...over,
+  });
+  const notice = (over: Partial<NotifyEvent> = {}): NotifyEvent =>
+    e({ seq: 9, kind: 'run', sessionId: '', runId: 12, title: 'Review cap reached on run 12', body: 'Lift the cap…', ...over });
+  const mount = async (ev: NotifyEvent, runs: RunSummary[], frameSeen = true) => {
+    const store = makeStore();
+    act(() => { store.setState({ runs, runsFrameSeen: frameSeen }); });
+    render(<MailScreen store={withFeed(store, async () => ({ events: [ev] }))} loadRuns={async () => ({ runs: [] })} />);
+    await screen.findByText(ev.title);
+    return store;
+  };
+  const door = () => screen.queryByRole('button', { name: /lift cap/i });
+
+  it('shows a Lift cap door on the cap notice of a waiting run, and opens the sheet', async () => {
+    vi.spyOn(api, 'reviewCap').mockReturnValue(new Promise(() => {}));
+    await mount(notice(), [capRun()]);
+    expect(door()).toBeInTheDocument();
+    fireEvent.click(door()!);
+    expect(await screen.findByText('Lift the review cap?')).toBeInTheDocument();
+  });
+
+  it('shows no door on a run record that names a session', async () => {
+    await mount(notice({ sessionId: 'lane-a-w' }), [capRun()]);
+    expect(door()).toBeNull();
+  });
+
+  it('shows no door once the run is lifted', async () => {
+    await mount(notice(), [capRun({ reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: 6, granted: 0, askHandledAt: null, coordLift: null } })]);
+    expect(door()).toBeNull();
+  });
+
+  it('shows no door on a closed run', async () => {
+    await mount(notice(), [capRun({ state: 'done' })]);
+    expect(door()).toBeNull();
+  });
+
+  it('shows no door before the runs frame has been seen, whatever the runs read', async () => {
+    await mount(notice(), [capRun()], false);
+    expect(door()).toBeNull();
+  });
+
+  it('takes the door away when the runs frame turns liftedAt non-null, without a remount', async () => {
+    const store = await mount(notice(), [capRun()]);
+    expect(door()).toBeInTheDocument();
+    act(() => { store.setState({ runs: [capRun({ reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: 6, granted: 0, askHandledAt: null, coordLift: null } })] }); });
+    expect(door()).toBeNull();
+  });
+
+  it('shows no door when the run carries no reviewCap (an older server)', async () => {
+    const r: Partial<RunSummary> = capRun();
+    delete r.reviewCap;
+    await mount(notice(), [r as RunSummary]);
+    expect(door()).toBeNull();
   });
 });

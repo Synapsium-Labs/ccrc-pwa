@@ -101,7 +101,7 @@ const seed = (): void => {
   fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
 };
 /** Compact JSONL, the shape Claude Code writes. `banner` is the real row from
- *  expoAI-assistant-swift-meadow at 2026-09-10T10:12:21Z, field for field. */
+ *  project-h-swift-meadow at 2026-09-10T10:12:21Z, field for field. */
 const L = {
   banner: (over: Record<string, unknown> = {}) => JSON.stringify({
     parentUuid: 'p', isSidechain: false, type: 'assistant', uuid: 'b1', timestamp: '2026-09-10T10:12:21.199Z',
@@ -277,7 +277,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
   /** tmux answers ONE pane for every capture (plain and `-e` alike), `_pane_box_draft`
    *  answers `$BOX_DRAFT`, and the swap decision is stubbed so the test is about the
    *  verdict, never the fixture roster's telemetry. */
-  const STUBS = (pane: string, target = 'claude2'): string => `
+  const STUBS = (pane: string, target = 'claude9'): string => `
     tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "\${1:-}" in
       capture-pane) printf '%s\\n' ${JSON.stringify(pane)} ;; list-panes) echo 4242 ;; esac; return 0; };
     _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };
@@ -293,8 +293,8 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
   it('a banner newest in the transcript rescues a session whose pane shows only a prompt; the line says via=transcript', () => {
     seed(); writeTranscript([L.banner()]);
     h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
-    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
-    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\] via=transcript/);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude9`]);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude9 \[home=claude\] via=transcript/);
   });
   it('a BLANK pane no longer blinds the rescue: the transcript decides', () => {
     seed(); writeTranscript([L.banner()]);
@@ -320,7 +320,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     seed(); writeTranscript([L.assistant()]);
     h.sh(`${STUBS(BANNER_PANE)} _auto_swap_check ${ID}`, { BOX_DRAFT: 'typing' });
     expect(dispatches()).toHaveLength(1);
-    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\]$/m);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude9 \[home=claude\]$/m);
   });
   it('no destination: a transcript banner marks the row stranded, like a pane banner does', () => {
     seed(); writeTranscript([L.banner()]);
@@ -1100,9 +1100,9 @@ Numbers D-2360..D-2374 ISSUED 2026-09-10 by `POST /api/ledger/deviations` (alloc
   META prompt, 09:30:07 the assistant) and swift-meadow (10:13:16 / 10:13:27), the negative on
   quiet-summit (an idle auto-home wrote no pair). `REDRIVE_WAIT_S` stays 20.
 - **D-2372** — *Observed, not fixed: a delayed dispatch does not re-check its subject.*
-  quiet-summit 10:14:20 `auto-home claude-expoai -> claude-dev0 (in 43s)`; 10:14:35 a swap
-  `claude-expoai -> gpt` landed from elsewhere; 10:15:05 the dispatch fired anyway,
-  `gpt -> claude-dev0`. Two restarts in thirty seconds. D-2232's neighbour; its own
+  quiet-summit 10:14:20 `auto-home claude-ext1 -> claude-lab0 (in 43s)`; 10:14:35 a swap
+  `claude-ext1 -> gpt` landed from elsewhere; 10:15:05 the dispatch fired anyway,
+  `gpt -> claude-lab0`. Two restarts in thirty seconds. D-2232's neighbour; its own
   investigation.
 - **D-2373** — *Observed, not fixed: a gpt-lane landing at ctx 100% ran no turn.* bright-meadow
   landed on `gpt` at 10:13:39 with the META prompt written and nothing after it in twelve

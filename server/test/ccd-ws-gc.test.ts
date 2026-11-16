@@ -82,6 +82,22 @@ describe('_ws_gc_scan', () => {
     expect(find(scan(), 'quiet-mesa')!.state).toBe('dirty');
   });
 
+  // `status.showUntrackedFiles=no` hides untracked files from a plain
+  // `status --porcelain` — and under it `git worktree remove` deletes them
+  // with no --force (git 2.43). So `_ws_gc_dirty` says `--untracked-files=all`,
+  // and the config cannot make an untracked file read clean.
+  for (const configured of [true, false]) {
+    it(`counts an untracked file as dirty ${configured ? 'UNDER status.showUntrackedFiles=no' : '— the control, without that config'}`, () => {
+      const main = h.makeRepo('demo');
+      const wt = addWs('demo', 'quiet-mesa');
+      if (configured) h.git(main, 'config', 'status.showUntrackedFiles', 'no');
+      fs.writeFileSync(path.join(wt, 'notes.md'), 'draft\n');
+      expect(h.git(wt, 'status', '--porcelain'), 'the CONTROL: what a plain status read says here')
+        .toBe(configured ? '' : '?? notes.md');
+      expect(find(scan(), 'quiet-mesa')!.state).toBe('dirty');
+    });
+  }
+
   it('classifies a worktree with no registry entry as an orphan', () => {
     h.makeRepo('demo');
     addOrphan('demo', 'still-cove');
@@ -305,6 +321,174 @@ describe('ws-gc report', () => {
   });
 });
 
+// `ws-gc --fast` (D-5886, #123): the membership answer without the sizing.
+// A plain `ws-gc` measures every worktree with `du` and then the whole set once
+// more for the total, which on a registry of multi-GB trees did not return
+// inside a minute. `--fast` reads the same rows and skips every `du`; an
+// archived row reuses the `worktreeBytes` its archive manifest already holds.
+describe('ws-gc --fast', () => {
+  // The stated bound for 45 workspaces. The run it times makes no `du` at all
+  // (asserted below), so what is left is one `git worktree list`, one
+  // `git status` per registered tree and one `stat` per row. Measured at about
+  // 1.7 s on a developer laptop, so the bound leaves CI ten times the room.
+  const FAST_BOUND_MS = 20_000;
+
+  /** 45 workspaces of one project, built with plain git and registry files
+   *  (45 `ws-add`s would cost minutes): 1-5 archived with a manifest,
+   *  6-35 tracked, 36-40 dirty, 41-45 orphans with no `.uuid`. */
+  const build45 = (): void => {
+    h.makeRepo('demo');
+    h.sh(`main="$HOME/projects/demo"; reg="$HOME/.cc-sessions"
+      for i in $(seq -w 1 45); do
+        s="ws-$i"; wt="$HOME/worktrees/demo/$s"
+        git -C "$main" worktree add -q -b "ws/$s" "$wt" >/dev/null 2>&1 || exit 1
+        (( 10#$i > 40 )) && continue
+        printf 'u-%s\\n' "$i" > "$reg/demo-$s.uuid"
+        (( 10#$i > 35 )) && printf 'x\\n' > "$wt/scratch.txt"
+        if (( 10#$i <= 5 )); then
+          : > "$reg/demo-$s.archived"
+          printf '{"id":"demo-%s","worktreeBytes":%d}\\n' "$s" $(( 10#$i * 1048576 )) > "$reg/demo-$s.archivemanifest"
+        fi
+      done; true`);
+  };
+
+  /** The table's rows as `state project slug path`, sorted; SIZE and IDLE left out. */
+  const members = (out: string): string[] => {
+    const lines = out.split('\n');
+    const rows: string[] = [];
+    for (const l of lines.slice(lines.findIndex((x) => x.startsWith('STATE')) + 1)) {
+      if (!l.trim()) break;
+      const f = l.trim().split(/\s+/);
+      rows.push(`${f[0]} ${f[1]} ${f[2]} ${f[f.length - 1]}`);
+    }
+    return rows.sort();
+  };
+
+  /** The SIZE column of one workspace's row. */
+  const sizeOf = (out: string, slug: string): string =>
+    out.split('\n').map((l) => l.trim().split(/\s+/)).find((f) => f[2] === slug)![3];
+
+  it('lists exactly the same candidates as the full run on a 45-workspace fixture, under the bound, with no du', () => {
+    build45();
+    const full = h.sh('cmd_ws_gc');
+    const t0 = Date.now();
+    const fast = h.sh(`_plat_bytes() { echo "$*" >> "$HOME/du-calls"; return 1; }; cmd_ws_gc --fast`);
+    const ms = Date.now() - t0;
+    const want = members(full);
+    expect(want).toHaveLength(45);
+    const count = (s: string): number => want.filter((r) => r.startsWith(`${s} `)).length;
+    expect([count('archived'), count('tracked'), count('dirty'), count('orphan')]).toEqual([5, 30, 5, 5]);
+    expect(members(fast)).toEqual(want);
+    expect(fs.existsSync(path.join(h.home, 'du-calls')), 'a du ran under --fast').toBe(false);
+    expect(ms, `--fast took ${ms} ms`).toBeLessThan(FAST_BOUND_MS);
+  }, 180_000);
+
+  it('gives an archived row the manifest\'s worktreeBytes and leaves every other row unmeasured', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    addWs('demo', 'still-cove');
+    const reg = path.join(h.home, '.cc-sessions');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-mesa.archived'), '');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-mesa.archivemanifest'), '{"id":"demo-quiet-mesa","worktreeBytes":3145728}\n');
+    const fast = h.sh('cmd_ws_gc --fast');
+    expect(sizeOf(fast, 'quiet-mesa'), fast).toMatch(/^(3\.0M|3145728)$/);
+    expect(sizeOf(fast, 'still-cove'), fast).toBe('-');
+    // The controls: the full run measures the same tracked row, and it still
+    // measures the ARCHIVED row with `du` too — the manifest's archive-time
+    // figure (3 MiB, on a tree of a few KiB) is `--fast`'s alone.
+    const full = h.sh('cmd_ws_gc');
+    expect(sizeOf(full, 'still-cove')).not.toBe('-');
+    expect(sizeOf(full, 'quiet-mesa'), full).not.toBe('-');
+    expect(sizeOf(full, 'quiet-mesa'), full).not.toMatch(/^(3\.0M|3145728)$/);
+  });
+
+  for (const [label, manifest] of [
+    ['a null worktreeBytes', '{"id":"demo-quiet-mesa","worktreeBytes":null}\n'],
+    ['a manifest that is not JSON', 'not json\n'],
+    ['a fractional worktreeBytes', '{"id":"demo-quiet-mesa","worktreeBytes":1.5}\n'],
+    ['no manifest at all', undefined],
+  ] as const) {
+    it(`reads an archived row with ${label} as unmeasured, never as 0`, () => {
+      h.makeRepo('demo');
+      addWs('demo', 'quiet-mesa');
+      const reg = path.join(h.home, '.cc-sessions');
+      fs.writeFileSync(path.join(reg, 'demo-quiet-mesa.archived'), '');
+      if (manifest !== undefined) fs.writeFileSync(path.join(reg, 'demo-quiet-mesa.archivemanifest'), manifest);
+      const fast = h.sh('cmd_ws_gc --fast');
+      expect(members(fast)[0]).toMatch(/^archived demo quiet-mesa /);
+      expect(sizeOf(fast, 'quiet-mesa'), fast).toBe('-');
+    });
+  }
+
+  it('reads an archived row whose manifest is a symlink as unmeasured, the registry\'s no-symlink rule', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    const reg = path.join(h.home, '.cc-sessions');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-mesa.archived'), '');
+    const elsewhere = path.join(h.home, 'planted.json');
+    fs.writeFileSync(elsewhere, '{"id":"demo-quiet-mesa","worktreeBytes":3145728}\n');
+    fs.symlinkSync(elsewhere, path.join(reg, 'demo-quiet-mesa.archivemanifest'));
+    const fast = h.sh('cmd_ws_gc --fast');
+    expect(members(fast)[0]).toMatch(/^archived demo quiet-mesa /);
+    expect(sizeOf(fast, 'quiet-mesa'), fast).toBe('-');
+  });
+
+  it('claims no total: the footer says sizing was skipped', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    const fast = h.sh('cmd_ws_gc --fast');
+    expect(fast).toContain('--fast skips sizing');
+    expect(fast).not.toContain('what removing all of them would free');
+    expect(fast).not.toContain('total unmeasured');
+  });
+
+  // SAFETY: `--fast` is a read. It never combines with `--prune`, in either
+  // order, so the flag cannot change which rows a prune acts on.
+  for (const args of ['--fast --prune', '--prune --fast']) {
+    it(`refuses \`${args}\` and removes nothing`, () => {
+      h.makeRepo('demo');
+      const wt = addOrphan('demo', 'still-cove');   // a clean merged orphan: what --prune removes
+      const out = h.sh(`(cmd_ws_gc ${args}) 2>&1; echo "rc=$?"`);
+      expect(out).toMatch(/--fast is read-only/);
+      expect(out).not.toContain('rc=0');
+      expect(out).not.toContain('pruning:');
+      expect(fs.existsSync(wt)).toBe(true);
+    });
+  }
+
+  it('refuses an unrecognised argument beside --fast, and a repeated flag', () => {
+    h.makeRepo('demo');
+    for (const args of ['--fast --purge', '--fast --fast', '--prune --prune']) {
+      const out = h.sh(`(cmd_ws_gc ${args}) 2>&1; echo "rc=$?"`);
+      expect(out, args).toContain('usage: ccd ws-gc [--prune | --fast]');
+      expect(out, args).not.toContain('rc=0');
+    }
+  });
+
+  it('MODIFIES NOTHING under --fast either', () => {
+    h.makeRepo('demo');
+    const wt = addOrphan('demo', 'still-cove');
+    const before = h.sh(`find "$HOME/worktrees" "$HOME/.cc-sessions" "$HOME/projects" -print | LC_ALL=C sort`);
+    h.sh('cmd_ws_gc --fast');
+    expect(h.sh(`find "$HOME/worktrees" "$HOME/.cc-sessions" "$HOME/projects" -print | LC_ALL=C sort`)).toBe(before);
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  it('is reachable as a subcommand', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    expect(h.sh(`"${CCD}" ws-gc --fast`)).toContain('quiet-mesa');
+  });
+
+  it('only the flag turns it on: an exported GC_FAST leaves a plain run measuring', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    const out = h.sh('cmd_ws_gc', { GC_FAST: '1' });
+    expect(sizeOf(out, 'quiet-mesa'), out).not.toBe('-');
+    expect(out).toContain('what removing all of them would free');
+  });
+});
+
 describe('ws-gc --prune', () => {
   const prune = (): string => h.sh(`cmd_ws_gc --prune 2>&1`);
 
@@ -380,6 +564,22 @@ describe('ws-gc --prune', () => {
     expect(fs.existsSync(wt)).toBe(true);
     expect(fs.readFileSync(path.join(wt, 'scratch.txt'), 'utf8')).toBe('unsaved\n');
   });
+
+  // The same config, on the prune: an orphan holding an untracked file is
+  // reported as holding uncommitted changes and left whole.
+  for (const configured of [true, false]) {
+    it(`leaves an orphan holding an untracked file ${configured ? 'UNDER status.showUntrackedFiles=no' : '— the control, without that config'}, and says why`, () => {
+      const main = h.makeRepo('demo');
+      const wt = addOrphan('demo', 'still-cove');
+      if (configured) h.git(main, 'config', 'status.showUntrackedFiles', 'no');
+      fs.writeFileSync(path.join(wt, 'notes.md'), 'draft\n');
+      expect(h.git(wt, 'status', '--porcelain'), 'the CONTROL: what a plain status read says here')
+        .toBe(configured ? '' : '?? notes.md');
+      expect(prune()).toContain('uncommitted');
+      expect(fs.readFileSync(path.join(wt, 'notes.md'), 'utf8')).toBe('draft\n');
+      expect(h.git(main, 'branch', '--list', 'ws/still-cove')).toContain('ws/still-cove');
+    });
+  }
 
   /* ── F1: the gate was INVERTED for the detached HEAD ──────────────────────
    *
@@ -1010,7 +1210,24 @@ describe('ws-gc --prune', () => {
     fs.writeFileSync(path.join(reg, 'demo-quiet-mesa.archived'), '');
     fs.mkdirSync(path.join(reg, 'demo-quiet-mesa.reaping'));
 
-    h.sh('_reg_purge demo-quiet-mesa');
+    // THE REFUSED UNLINK IS NOW REPORTED, so this call's STATUS is part of the
+    // contract and is captured rather than allowed to throw (D-2605). The
+    // fixture's whole mechanism is an `rm -f` that MUST fail, and since
+    // `_reg_purge` began tracking its unlinks a failed one makes the function
+    // return nonzero; `h.sh` is `execFileSync` (`sh` in `makeCcdHarness`), which
+    // throws on a nonzero exit, so a bare call would die HERE and not one of
+    // the six ordering assertions below would ever run. Measured: without this
+    // capture the suite is `1 failed | 68 passed` with
+    // `rm: cannot remove '…/demo-quiet-mesa.reaping': Is a directory`.
+    //
+    // 3 AND NOT MERELY NONZERO. The purge answers with THREE distinct nonzero
+    // conditions and this is the third — the emit has already gone, the row is
+    // destroyed, and one unlink was refused — which is the opposite of the 1 a
+    // pre-emit lock refusal returns. Asserting `nonzero` here would leave the
+    // fixture green on the very collapse the split exists to end.
+    const wedged = h.sh('_reg_purge demo-quiet-mesa; echo "rc=$?"');
+    expect(wedged, 'a refused unlink is the POST-EMIT condition, status 3')
+      .toMatch(/(^|\n)rc=3$/);
 
     expect(fs.existsSync(path.join(reg, 'demo-quiet-mesa.reaping')),
       'the fixture only means anything if rm -f really refused it').toBe(true);
@@ -1024,8 +1241,14 @@ describe('ws-gc --prune', () => {
 
     // With the breadcrumb gone the marker goes too: the normal path is
     // unchanged, and nothing is left behind on it.
+    // …and THIS one must succeed, so its zero is asserted in the same
+    // vocabulary as the nonzero above rather than left to `h.sh`'s throw. The
+    // pair is what makes the status a measurement: one run where every unlink
+    // took, one where one of them could not.
     fs.rmdirSync(path.join(reg, 'demo-quiet-mesa.reaping'));
-    h.sh('_reg_purge demo-quiet-mesa');
+    const clean = h.sh('_reg_purge demo-quiet-mesa; echo "rc=$?"');
+    expect(clean, 'a purge that took everything reports success')
+      .toMatch(/(^|\n)rc=0$/);
     expect(fs.readdirSync(reg).filter((f) => f.startsWith('demo-quiet-mesa.'))).toEqual([]);
   });
 
@@ -1214,6 +1437,32 @@ describe('archived and reaping workspaces', () => {
     const out = h.sh(`${ARCH} cmd_ws_gc --prune`);
     expect(out).toMatch(/declined .*quiet-mesa is mid-cleanup/);
     expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  // Workspace lifecycle wave 3b (the carried row): the two advisory lines told an operator to run a verb that REFUSES
+  // the breadcrumb (ws-reap refuses `expire:` and `reclaim:`), and that an archived workspace is removed "never on a
+  // timer" — false once the server expires it seven days after its archive. Reworded in place, line for line.
+  it('an `expire:` or `reclaim:` breadcrumb is not ws-reap’s to finish — the decline says whose it is', () => {
+    h.makeRepo('demo');
+    const wt = addWs('demo', 'quiet-mesa');
+    for (const crumb of ['expire:worktree', 'reclaim:worktree']) {
+      h.sh(`_reg_set demo-quiet-mesa reaping ${crumb}`);
+      const out = h.sh(`${ARCH} cmd_ws_gc --prune`);
+      expect(out).toMatch(/declined .*quiet-mesa is mid-cleanup/);
+      expect(out).toContain('the verb that left it finishes it');
+      expect(out).not.toContain('re-run ccd ws-reap to finish it');
+      expect(fs.existsSync(wt)).toBe(true);
+    }
+  });
+
+  it('an archived workspace’s decline no longer says "never on a timer" — the server cleans it up seven days on', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-mesa`);
+    const out = h.sh(`${ARCH} cmd_ws_gc --prune`);
+    expect(out).toMatch(/declined .*quiet-mesa is archived/);
+    expect(out).toContain('seven days after its archive');
+    expect(out).not.toContain('never on a timer');
   });
 });
 

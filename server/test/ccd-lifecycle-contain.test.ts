@@ -5,10 +5,10 @@
 // double-quoted `bash -c` string. That second shape is what this forbids.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { LIFECYCLE_MEAS_KEYS, LIFECYCLE_DEC_KEYS } from '../../shared/api.js';
 
-const src = readFileSync(CCD, 'utf8');
+const src = ccdSource();
 const BEGIN = '# ── lifecycle journal ';
 const END = '# ── end lifecycle journal ';
 
@@ -185,13 +185,43 @@ describe('the meas key vocabulary is ONE list', () => {
   // records does not currently exist to re-state.
   const all = new Set<string>(LIFECYCLE_MEAS_KEYS);
 
-  it('every meas.<key> ccd writes is on the list, and the list is exactly 28', () => {
+  it('every meas.<key> ccd writes is on the list, and the list is exactly 40', () => {
     // Mutant: emit `meas.slug` at any call site -> this fails with
     // `an unlisted meas key: [ 'slug' ]`, and wave 4 drops it at ingest with
     // nothing saying so — the identical failure mode `home`/`pool`/`reason`
     // themselves shipped with, silently, until this assertion's own `all`
     // was widened to see them (see the fix-round note above).
-    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 28').toBe(28);
+    // 28 -> 29 (D-2605 fix round 2, D-2782): `meas.unremoved`, carried by the
+    // three post-action callers' `purge-incomplete` failures. THIS SCAN IS
+    // WHAT CAUGHT IT — the key shipped in a commit whose own gate did not run
+    // this suite, exactly the suite-list gap the note above records for
+    // `home`/`pool`/`reason`, and it would otherwise have been dropped
+    // silently at ingest by `reviveMeas`.
+    // 29 -> 32 (child reclamation, wave 3): `meas.childOf`, `meas.wip` and
+    // `meas.residueBytes`, carried by `ws-reclaim`'s intent/done pair. Declared
+    // in the SAME commit that first emits them, so this scan never saw them
+    // unlisted — the `unremoved` failure mode above, closed in advance.
+    // 32 -> 34 (child reclamation, wave 6): `meas.tmpRootKept` and
+    // `meas.clipsKept`, carried by the reclaim/expire tail's done row (and its
+    // purge failures) when it KEEPS a leaf the removal helper did not remove.
+    // Declared in the SAME commit that first emits them, as wave 3's were.
+    // 34 -> 35 (path-identity W2): `meas.leaf`, the collector's `done` lines; declared in the SAME commit that first emits it.
+    // 35 -> 36 (D-7278): `meas.childRun`, the run marker `ws-shed-deps` journals beside its class; declared in the commit that
+    // fixes the PR emitting it, so `reviveMeas` carries it instead of dropping it.
+    // 36 -> 37 (delegation broker wave 5 PR3, D-7827, D-7980): `meas.startpoint`, the `ws-add --base` start point on the
+    // create row; declared in the commit that first emits it.
+    // 37 -> 38 (cleanup un-wedge R4, D-8002): `meas.witness`, a collect line's `moved-host` after a box move. THIS SCAN
+    // caught it in the PR's full CI run (the emitting commit's own gate did not run this suite: the gap the notes above
+    // record); declared in the fix that follows, before the merge.
+    // 38 -> 39 (cleanup un-wedge R2, D-8000): `meas.heldBy`, the ids of the rows that hold a child, on the reclaim audit's
+    // `probe-unmeasured` line; declared in the commit that first emits it.
+    // 39 -> 40 (D-5945, shipped under D-8286): `meas.staleLock`, the stale index locks rung 6 passed, on the reclaim
+    // and expiry intent lines; declared in the commit that first emits it.
+    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 40').toBe(40);
+    expect.soft(all.has('staleLock'), 'rung 6\'s stale index locks are a declared key').toBe(true);
+    expect.soft(all.has('heldBy'), 'the reclaim audit\'s holding rows are a declared key').toBe(true);
+    expect.soft(all.has('startpoint'), 'the ws-add --base start point is a declared key').toBe(true);
+    expect.soft(all.has('witness'), 'the collector\'s moved-host word is a declared key').toBe(true);
     const used = new Set([...src.matchAll(/\bmeas\.([A-Za-z][A-Za-z0-9]*)\b/g)].map((m) => m[1]!));
     expect.soft(used.size, 'no meas key found at all — the scan is vacuous').toBeGreaterThan(10);
     expect.soft([...used].filter((k) => !all.has(k)).sort(), 'an unlisted meas key').toEqual([]);

@@ -16,9 +16,10 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-substrate-'); });
@@ -64,7 +65,7 @@ describe('the substrate marker — one writer, epoch + verbatim reason (spec §2
     // which is the torn-read window `_reg_set` no longer has. FIRST-WRITE-WINS
     // is unaffected: the `[[ -e "$f" ]]` guard sits ABOVE the write and asks
     // about the DESTINATION, which rename replaces without ever unlinking.
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const body = /_substrate_mark\(\)\s*\{([\s\S]*?)\n\}/.exec(src)?.[1] ?? '';
     expect(body, 'nothing may redirect into the marker path any more').not.toMatch(/>\s*"\$f"/);
     expect(body).toMatch(/_reg_set "\$id" substrate/);
@@ -82,7 +83,7 @@ const ID = 'demo';
  *  so spawnSync's own timeout turns a loop that stops exiting into one failed
  *  case instead of a hung suite (the ccd-session-state.test.ts run idiom). */
 const run = (snippet: string): { code: number; stdout: string; stderr: string } => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
     env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
   });

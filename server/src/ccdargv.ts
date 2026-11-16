@@ -1,7 +1,24 @@
 import type { FleetState } from './fleetstate.js';
-import type { StopSurface } from '../../shared/api.js';
+import {
+  CHILD_RUN_ID, ROUTE_WRITABLE_FIELDS, isDelegationCarrierState, isDelegationLeaseReleaseReason, isRegistryId,
+  DELEGATION_LEASE_SOURCE_KINDS,
+  type CollectToken, type DelegationCarrierState, type DelegationLeaseReleaseReason, type DelegationLeaseSourceKind,
+  type OrphanToken, type RouteFields, type StopSurface,
+} from '../../shared/api.js';
+import type { DocSectionSlug } from '../../shared/docs.js';
+import { LINEAR_TEAM_KEY_SHAPE } from '../../shared/linear.js';
+import type { DepsShedClass } from './depsShed.js';
 
 declare const CcdArgvBrand: unique symbol;
+
+/** The verb that renames an existing workspace, spelled ONCE in `server/src`: `CCD_ARGV.wsTitle` builds its argv from
+ *  it and the route reads `ccd caps` for it (named workspaces S9). It is a VERB in the caps list, not the `ws-title-v1`
+ *  token (`WS_TITLE_CAP`), which only says that `ws-add` takes `--title` and is advertised before the verb exists. */
+export const WS_TITLE_VERB = 'ws-title';
+
+/** What a rename does to the title: set it to `title` (ccd also marks the workspace named), or clear it (both fields go,
+ *  which gives the workspace back to the ai-title sweep). Two shapes, never a `null` that means "clear". */
+export type WsTitleChange = { readonly title: string } | { readonly clear: true };
 
 /**
  * A ccd argv that provably came from `CCD_ARGV`. The brand is phantom — it
@@ -45,6 +62,50 @@ export type CcdArgv = readonly string[] & { readonly [CcdArgvBrand]: true };
  * inherent to TypeScript, not bugs in this function.
  */
 const argv = (parts: readonly string[]): CcdArgv => Object.freeze(parts) as CcdArgv;
+
+/** An orphaned tree's path as the census prints it: even-length lowercase hex, never empty. Anything else is a programming
+ *  error (the census is the only source), and fails toward not sending. */
+const treeHex = (hex: string): string => {
+  if (!/^(?:[0-9a-f]{2})+$/.test(hex)) throw new Error('an orphaned tree travels as even-length lowercase hex');
+  return hex;
+};
+
+/** `ccd ws-orphan --rescue`: the flag rides only when the caller spends the audit's rescue token (a tree whose head is on no
+ *  remote), and never otherwise. */
+const rescueFlag = (rescue: boolean): string[] => (rescue ? ['--rescue'] : []);
+
+/** A loose entry's name as the census prints it: even-length lowercase hex, never empty. Anything else is a programming
+ *  error (the census is the only source), and fails toward not sending. */
+const looseHex = (hex: string): string => {
+  if (!/^(?:[0-9a-f]{2})+$/.test(hex)) throw new Error('a loose entry travels as even-length lowercase hex');
+  return hex;
+};
+
+/** `ws-add --base`'s start point (delegation broker wave 5 PR3, D-7827): a FULL commit id of either object format, lowercase,
+ *  the grammar `cmd_ws_add` refuses anything else with. Never a ref or an abbreviation; anything else fails toward not sending. */
+const commitId = (id: string): string => {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id)) throw new Error('CCD_ARGV.wsAddWorkerBase: --base is a full 40- or 64-hex commit id');
+  return id;
+};
+
+/** `ccd hibernate --hold-ok <text>` (D-6091): the programme hold the run-done policy passes, verbatim, or nothing. Sent
+ *  only behind `HIBERNATE_HOLD_OK_CAP`; ccd refuses a dash-leading value, and a programme hold never begins with one. */
+const holdOkFlags = (text: string | null): string[] => (text === null ? [] : ['--hold-ok', text]);
+
+/** What follows `ccd hibernate`'s sleep: `sleep` (nothing, the plain hibernate), `roll` (D-7458, `--roll`: the automatic
+ *  roll's one act, the sleep and the wake in one verb, sent only behind `HIBERNATE_ROLL_CAP`) or `fresh` (`--roll
+ *  --fresh`, spec 2026-11-09 §3.3.11 H13: the same roll, whose wake starts a new conversation under the same session id).
+ *  An older ccd binds an unknown bare flag as a second positional and dies on its arity rule. */
+export type HibernateMode = 'sleep' | 'roll' | 'fresh';
+/** The flags each mode sends. NO CAPABILITY DECISION HERE: a caller sends `fresh` only where
+ *  `capSupported(state, HIBERNATE_FRESH_CAP)` answered yes for the box (the word `hibernate-fresh`, Table 11.1d), as `roll`
+ *  is sent only behind `capSupported(state, HIBERNATE_ROLL_CAP)`; the renewal act's ccd adapter (`ccdSessionHost.ts`) is the
+ *  first caller and holds that gate in the same function as its call. The server is the only caller by contract. */
+const HIBERNATE_MODE_FLAGS: Readonly<Record<HibernateMode, readonly string[]>> = {
+  sleep: [],
+  roll: ['--roll'],
+  fresh: ['--roll', '--fresh'],
+};
 
 /**
  * The DECLARED half of a provenance record (spec D2's `dec`), as the three ccd
@@ -105,6 +166,90 @@ const decFlags = (dec: ActorFlags | null): readonly string[] =>
     ? []
     : ['--surface', dec.surface, '--actor', dec.actor,
        ...(dec.reason === null ? [] : ['--reason', dec.reason])];
+
+/** `--if-no-pane`, or nothing: ccd refuses `live` when a pane or an active unit exists (D-6643). */
+const ifNoPaneFlag = (opts: { readonly ifNoPane?: boolean } | null): readonly string[] =>
+  opts !== null && opts.ifNoPane === true ? ['--if-no-pane'] : [];
+
+/**
+ * `--defer-expired`, or nothing (child reclamation, spec 2026-09-22 §5.7: the
+ * presence defer's ceiling, spent on the audit and the verb alike). A named
+ * helper and not an inline ternary ON PURPOSE: `ccdargv-dec-parity.test.ts`
+ * derives the dec-appending verbs from every `argv([…])` literal in the table
+ * below with a LAZY match to the first `])`, and an inline `: []` inside
+ * `wsReclaim`'s literal would end that match before `decFlags(` — hiding
+ * `ws-reclaim` from the one test that runs the real binary on its dec.
+ */
+/** `--child-of <run>`, or nothing: the expiry verbs' child arm (D-6641). */
+const childOfFlags = (childOf: number | undefined): readonly string[] => (childOf === undefined ? [] : ['--child-of', String(childOf)]);
+const deferFlags = (deferExpired: boolean): readonly string[] => (deferExpired ? ['--defer-expired'] : []);
+
+/** The stale arm's two flags (D-6639): the word, and for `held` the digest of the hold the server saw. Nothing for an
+ *  ordinary reclaim, so its argv is what it always was. */
+type StaleFlags = { readonly word: string; readonly holdDigest: string | null };
+const staleFlags = (stale: StaleFlags | undefined): readonly string[] =>
+  stale === undefined ? [] : ['--stale', stale.word, ...(stale.holdDigest === null ? [] : ['--hold-digest', stale.holdDigest])];
+
+/**
+ * `decFlags`' own `--actor`/`--reason` half, WITHOUT `--surface` — for
+ * `route`, the one dec-carrying verb below that never touches a pane and
+ * whose real parser (`cmd_route`, `ccd/ccd`) has no `--surface` case at all.
+ * See `CCD_ARGV.route`'s own docstring for the measurement that makes this a
+ * SEPARATE function rather than a third argument to `decFlags`.
+ */
+const actorReasonFlags = (dec: ActorFlags | null): readonly string[] =>
+  dec === null || dec === undefined
+    ? []
+    : ['--actor', dec.actor, ...(dec.reason === null ? [] : ['--reason', dec.reason])];
+
+/**
+ * The `--route field=value` flags for a wave's initial spawn (routing spec
+ * 2026-09-14 §5.3, slice 4). `null` — the same "this box might not understand
+ * the flag yet" contract `decFlags` above carries for `ActorFlags | null` —
+ * contributes NOTHING, byte for byte the argv that shipped before this slice;
+ * an EMPTY `{}` is a real, distinct value from `null` (it means the caller
+ * parsed a route body and it named no fields) and also contributes nothing,
+ * since there is nothing to flag. Walked in `ROUTE_WRITABLE_FIELDS` order,
+ * never `Object.entries`' insertion order, so the wire shape does not depend
+ * on which order a caller happened to set object keys in.
+ */
+const routeFlags = (r: RouteFields | null): string[] =>
+  r === null ? [] : ROUTE_WRITABLE_FIELDS.flatMap((f) => (r[f] === undefined ? [] : ['--route', `${f}=${r[f]}`]));
+
+/**
+ * The `--child <runId>` pair for a dispatched spawn (child-workspace
+ * reclamation, spec §5.1). `null` contributes NOTHING — `routeFlags`' own
+ * contract, for the same reason: a box that does not advertise `child-argv-v1`
+ * must receive the argv it always did, byte for byte.
+ *
+ * A HELPER RATHER THAN AN INLINE TERNARY, and that is measured, not taste:
+ * `ccdargv-dec-parity.test.ts` derives which verbs carry a dec by walking each
+ * `argv([…])` literal in `CCD_ARGV` up to its first `])`, and an inline
+ * `[...(child === null ? [] : ['--child', String(child)]), …]` closes a `])`
+ * INSIDE the literal — so the walk stops short of `decFlags(`, `ws-add` drops
+ * out of the derived set, and that suite reds on a builder that still declares.
+ */
+const routeDefaultFlags = (routeDefault: boolean, r: RouteFields | null): string[] =>
+  routeDefault && r !== null ? ['--route-default'] : [];
+
+const childFlags = (child: number | null): string[] =>
+  child === null ? [] : ['--child', String(child)];
+
+/**
+ * The `--ref <R>` pair for `docs-tree` (native Docs reader, spec 2026-10-01
+ * section 2 (a)), or nothing. `null` means exactly one thing: the request named
+ * no ref, so ccd serves the origin default branch. A named helper and not an
+ * inline ternary for `childFlags`' measured reason: `ccdargv-dec-parity.test.ts`
+ * walks each `argv([...])` literal in the table below to its first `])`.
+ */
+const docsRefFlags = (ref: string | null): string[] => (ref === null ? [] : ['--ref', ref]);
+
+/**
+ * The `--branch <B>` pair for `docs-fetch`, or nothing. `null` means exactly
+ * one thing: fetch the origin default branch (ccd resolves it and answers
+ * `defaultVia`). Named for `docsRefFlags`' reason.
+ */
+const docsBranchFlags = (branch: string | null): string[] => (branch === null ? [] : ['--branch', branch]);
 
 /**
  * The session's own device label as an `--actor` value.
@@ -170,6 +315,47 @@ export function sweepDec(
     : null;
 }
 
+/** One delegation lease's carrier mark (delegation broker wave 5, PR1): the generation the server has journalled and the
+ *  lease's fields, as `ccd ws-lease-mark` writes them into that lease's carrier file on the box. */
+export interface LeaseMarkArgs {
+  leaseId: string; generation: number; project: string; adminRecord: string; parentId: string; parentIncarnation: string;
+  activityId: string; source: DelegationLeaseSourceKind; state: DelegationCarrierState; journalSeq: number;
+  expiresAtMs: number | null; releaseReason: DelegationLeaseReleaseReason | null;
+  promoted: { runId: number; sessionId: string } | null;
+}
+const LEASE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const leaseCount = (n: number, max: number): boolean => Number.isSafeInteger(n) && n >= 1 && n <= max;
+/** `ws-lease-mark`'s argv, checked against the verb's own grammar (`ccd/lib/delegation-lease.sh#cmd_ws_lease_mark`'s rule 1),
+ *  so a value the verb would refuse as `usage` throws here instead. `--lease` leads; the admin record travels as hex, so a
+ *  name beginning with `-` or holding `@`/`+` never reaches a flag position; the tree itself is never in argv. */
+const leaseMarkArgv = (a: LeaseMarkArgs): CcdArgv => {
+  const bad = (what: string): never => { throw new Error(`CCD_ARGV.leaseMark: ${what}`); };
+  if (!LEASE_UUID_RE.test(a.leaseId)) bad('leaseId is not a lease id');
+  if (!leaseCount(a.generation, 9_999_999_999)) bad('generation is not a positive integer');
+  if (!leaseCount(a.journalSeq, 9_999_999_999)) bad('journalSeq is not a positive integer');
+  if (!/^[A-Za-z0-9_][A-Za-z0-9._-]{0,254}$/.test(a.project)) bad('project is not one path segment');
+  if (!/^[A-Za-z0-9._@+-]{1,255}$/.test(a.adminRecord) || a.adminRecord === '.' || a.adminRecord === '..') bad('adminRecord is not an admin record name');
+  if (!isRegistryId(a.parentId)) bad('parentId is not a registry id');
+  if (!LEASE_UUID_RE.test(a.parentIncarnation)) bad('parentIncarnation is not an incarnation id');
+  if (!/^[A-Za-z0-9._:-]{1,200}$/.test(a.activityId)) bad('activityId is not an activity id');
+  if (!(DELEGATION_LEASE_SOURCE_KINDS as readonly string[]).includes(a.source)) bad('source is not a lease source');
+  if (!isDelegationCarrierState(a.state)) bad('state is not a carrier state');
+  if (a.expiresAtMs !== null && !leaseCount(a.expiresAtMs, 9_999_999_999_999_999)) bad('expiresAtMs is not epoch milliseconds');
+  if ((a.state === 'released') !== (a.releaseReason !== null)) bad('releaseReason is given exactly when state is released');
+  if (a.releaseReason !== null && !isDelegationLeaseReleaseReason(a.releaseReason)) bad('releaseReason is not a release reason');
+  if ((a.state === 'promoted') !== (a.promoted !== null)) bad('promoted is given exactly when state is promoted');
+  if (a.promoted !== null && (!CHILD_RUN_ID.test(String(a.promoted.runId)) || !isRegistryId(a.promoted.sessionId))) bad('promoted is not a run and a session');
+  return argv([
+    'ws-lease-mark', '--lease', a.leaseId, '--generation', String(a.generation), '--project', a.project,
+    '--admin-record-hex', Buffer.from(a.adminRecord, 'utf8').toString('hex'), '--parent', a.parentId,
+    '--parent-incarnation', a.parentIncarnation, '--activity', a.activityId, '--source', a.source, '--state', a.state,
+    '--journal-seq', String(a.journalSeq),
+    ...(a.expiresAtMs !== null ? ['--expires-at', String(a.expiresAtMs)] : []),
+    ...(a.releaseReason !== null ? ['--release-reason', a.releaseReason] : []),
+    ...(a.promoted !== null ? ['--promoted-run', String(a.promoted.runId), '--promoted-session', a.promoted.sessionId] : []),
+  ]);
+};
+
 /**
  * The ONLY place ccd argv is constructed. Every route builds its call through
  * this table, and `whitelist-subset.test.ts` enumerates the table against the
@@ -179,16 +365,35 @@ export function sweepDec(
  * `CcdArgv` that `Deps.runCcd` demands.
  */
 export const CCD_ARGV = {
-  start:     (w: string, p: string, wd?: string) => argv(['start', w, p, ...(wd ? [wd] : [])]),
+  /** `route` is a FOURTH, OPTIONAL argument, not a fifth positional — flags
+   *  LEAD (the `swapCross` rule two entries down: a trailing flag on an old
+   *  ccd's exact-arity parse binds as the workdir or slides into it), and the
+   *  defaulted `null` keeps this builder's call shape unchanged everywhere it
+   *  already fires, so `whitelist-subset.test.ts`'s enumeration needs no
+   *  update for a sample that still passes two or three arguments. */
+  start:     (w: string, p: string, wd?: string, route: RouteFields | null = null) =>
+               argv(['start', ...routeFlags(route), w, p, ...(wd ? [wd] : [])]),
   /** `enable` is `start` plus the systemd enable, and it is what
    *  `POST /api/sessions` sends unless the body says `enable: false`. It is a
    *  separate entry because the two words are separate grants in the agent's
    *  list, and because layer 3 fails if a grant nothing builds is left over. */
-  enable:    (w: string, p: string, wd?: string) => argv(['enable', w, p, ...(wd ? [wd] : [])]),
+  enable:    (w: string, p: string, wd?: string, route: RouteFields | null = null) =>
+               argv(['enable', ...routeFlags(route), w, p, ...(wd ? [wd] : [])]),
   /** `start`/`enable` with the crossing declared — see `swapCross` below for
-   *  why the flag leads and why these are separate entries. */
-  startCross:  (w: string, p: string, wd?: string) => argv(['start', '--cross-pool', w, p, ...(wd ? [wd] : [])]),
-  enableCross: (w: string, p: string, wd?: string) => argv(['enable', '--cross-pool', w, p, ...(wd ? [wd] : [])]),
+   *  why the flag leads and why these are separate entries. `route` is the
+   *  same defaulted trailing parameter as `start`/`enable` above: measured
+   *  against the real binary, `cmd_start`'s flag loop in `ccd/ccd`
+   *  strips `--cross-pool` and `--route` independently of each other's
+   *  position, and `cmd_enable` forwards both unchanged to `cmd_start`
+   *  (`cmd_enable`'s closing `cmd_start` call) — so a cross-pool spawn takes `--route` exactly
+   *  like an in-pool one, and dropping it here (as the entries did before)
+   *  silently downgraded an operator's ask on the one path `POST
+   *  /api/sessions` reaches when `crossPool: true` is set (routing spec
+   *  §5.3, slice 4 fix round 1, finding #1). */
+  startCross:  (w: string, p: string, wd?: string, route: RouteFields | null = null) =>
+                 argv(['start', '--cross-pool', ...routeFlags(route), w, p, ...(wd ? [wd] : [])]),
+  enableCross: (w: string, p: string, wd?: string, route: RouteFields | null = null) =>
+                 argv(['enable', '--cross-pool', ...routeFlags(route), w, p, ...(wd ? [wd] : [])]),
   ensure:    (id: string) => argv(['ensure', id]),
   /** `surface` is REQUIRED, not defaulted — the caller always knows who is
    *  asking, and a default here would be how a second caller quietly
@@ -216,15 +421,67 @@ export const CCD_ARGV = {
    *  class this whole branch exists to remove — and this fix introduced it.
    *  `null` is how the caller now says "this box might not understand the
    *  flag yet" instead of finding out from a fleet-wide stop that silently
-   *  never happens. */
+   *  never happens.
+   *
+   *  THE PAIR LEADS THE ID (path identity W1a, spec §2.3, §2.4), and the
+   *  position is the safety property, not a style choice. With the id
+   *  first, `cmd_stop`'s loop cannot tell an id spelled `--surface` from the
+   *  key itself: `stop --surface --surface pwa` reads the first two tokens
+   *  as the pair, and the residue `pwa` is stopped, a session nobody named
+   *  (a project spelled `--surface` sends the pair form to `<wrapper>-pwa`
+   *  the same way). With the pair first, the loop consumes one
+   *  closed-grammar pair and the residue is the id: `stop --surface pwa
+   *  --surface` dies on ccd's usage line and stops nothing. The server's id
+   *  gates (`knownId`, `readSessionRecord`'s `bad-id`) refuse such an id
+   *  before either builder runs; this order is the lock behind them, for any
+   *  future caller of `stopId`. `stopPair` carries a legacy row's id split
+   *  at its `-<project>` suffix, and only that: `stopPairRefused`
+   *  (`server.ts`) refuses a non-workspace row whose id is not
+   *  `<wrapper>-<project>` before `stopArgvFor` runs, so the row's
+   *  `.wrapper` fallback never reaches `stopPair`. The value of
+   *  `identity.wrapper` no longer changes any outcome: a row that would use
+   *  it is refused by that pair clause, while `measuredIdentity`'s null arm
+   *  still answers 503. Defence in depth: the part check refuses a part
+   *  that is not a registry id. A `.project` of `--surface=<word>`, which
+   *  `cmd_stop`'s `--surface=*` arm strips from any position, is on the
+   *  fallback arm, so both clauses refuse it. One only the part check
+   *  refuses ends the id, empty or leading `-` or `.`: W1b's ccd refuses a
+   *  dash, `${2:?}` refuses an empty one, a dot one's `$1-$2` is the tapped row.
+   *  The order is safe on every ccd that advertises `stop-surface`,
+   *  whose loop strips the flag from any position: the any-position loop
+   *  came two days before the `stop-surface` token, so every ccd that
+   *  advertises the token has the loop (`ccd-session-state.test.ts`'s
+   *  "takes the flag before the id as well" pins the current one). A ccd
+   *  without the token is still sent no flag at all, by the `null` arm above.
+   *  `ccd-stop-argv-order.test.ts` runs both builders' argv through the
+   *  real `cmd_stop`. */
   stopId:    (id: string, surface: StopSurface | null) =>
-               argv(surface === null ? ['stop', id] : ['stop', id, '--surface', surface]),
+               argv(surface === null ? ['stop', id] : ['stop', '--surface', surface, id]),
   stopPair:  (w: string, p: string, surface: StopSurface | null) =>
-               argv(surface === null ? ['stop', w, p] : ['stop', w, p, '--surface', surface]),
+               argv(surface === null ? ['stop', w, p] : ['stop', '--surface', surface, w, p]),
   /** Registry-only removal of a DEAD non-workspace session — the end-of-life
    *  plain sessions never had. ccd re-proves every gate on the box (not a
    *  workspace, not held, not alive); this argv carries nothing but the id. */
   forget:    (id: string) => argv(['forget', id]),
+  /** The operator's "Wait until reset" on a session the limit watchdog found no room for (D-8123): ccd appends
+   *  `choice=wait` to the session's OPEN `$REG/<id>.limitwait` record and refuses anything else `not-waiting`. ONE
+   *  positional, the id, `forget`'s shape; it moves nothing and sends no key. Sent only behind `verbSupported` (the box's
+   *  `ccd caps` lists `limit-wait`). */
+  limitWait: (id: string) => argv(['limit-wait', id]),
+  /** Put a long-idle session to sleep (`hibernate-long-idle-sessions` (D-5242)): ccd re-measures box-local idle at the
+   *  act (the live word, the pane, a draft, the turn marker's `bg` and `crons`, a hold, an opt-out, a fresh swap and an
+   *  attached terminal) and refuses `session-busy: <reason>` at exit 3 otherwise, touching nothing. ONE positional, the
+   *  id, then the dec — stripped by ccd before its arity rule, as `ws-archive`'s are (`ccdargv-dec-parity.test.ts`;
+   *  `hibernate-verb-dec-and-idempotence` (D-5424)).
+   *  Sent only behind `verbSupported` (the box's `ccd caps` lists `hibernate`); `ensure` wakes it. `roll` (D-7458)
+   *  makes it the automatic roll's act: `.no-roll` refuses instead of `.no-hibernate`, and ccd wakes it in the same
+   *  verb, exiting 4 with `ccd: roll-wake-failed` when the wake fails and the row is back asleep, 5 with
+   *  `ccd: roll-wake-unrestored` when it could not be put back. `fresh` is the same roll whose wake starts a new
+   *  conversation (a new uuid, `--session-id`, never `--resume`), with every refusal and exit code the roll has, plus
+   *  exit 7, `ccd: roll-fresh-unproven`, when the wake answered 0 but no spawn left the fresh start's receipt (the old
+   *  uuid is back; the caller asks again later). */
+  hibernate: (id: string, dec: ActorFlags | null, holdOk: string | null = null, mode: HibernateMode = 'sleep') =>
+    argv(['hibernate', ...HIBERNATE_MODE_FLAGS[mode], ...holdOkFlags(holdOk), id, ...decFlags(dec)]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),
   /** THE DELIBERATE CROSSING (account pools, spec §5.7). A SEPARATE ENTRY, not
    *  a parameter of `swap` above — `start`/`enable`'s rule, for its reason: a
@@ -241,7 +498,50 @@ export const CCD_ARGV = {
    *  gate that should stop it reaching an old box at all; this is the second
    *  lock. */
   swapCross: (id: string, w: string) => argv(['swap', '--cross-pool', id, w]),
-  wsAdd:     (p: string) => argv(['ws-add', p]),
+  /** `swap` and `swapCross` with the operator's consent to lose the turn in progress (D-5240). Separate entries, the
+   *  rule above, and the flag LEADS for its reason. Sent only behind `capSupported(state, SWAP_BUSY_CAP)`: an old ccd
+   *  would bind a leading `--interrupt` as the id and fail loudly, but it refuses nothing either, so the old argv is
+   *  the right one there. */
+  swapInterrupt: (id: string, w: string) => argv(['swap', '--interrupt', id, w]),
+  swapCrossInterrupt: (id: string, w: string) => argv(['swap', '--cross-pool', '--interrupt', id, w]),
+  /** `route`, defaulted `null`: the PWA's ordinary add, from an operator who
+   *  may have tapped a routing picker before creating the workspace — the
+   *  `start`/`enable` rule above for the same reason (flags lead, the
+   *  default keeps every existing call site's argv unchanged).
+   *
+   *  `dec` (D-5301, coordinator-first spec §8): the PWA "+" says who made the
+   *  workspace, so the lifecycle log's `create` row names the operator's
+   *  device rather than `declared: nothing`. It TRAILS the project, where
+   *  `wsAddWorker` puts its own; `cmd_ws_add`'s strip loop parses both
+   *  positions. The route handler passes `pwaDec(req)` (D-5369: the device
+   *  actually used, `device:<label>` or `unmeasured`, not spec §8's literal
+   *  `--actor operator`), which is `null` on a
+   *  box whose ccd does not advertise `actor-flags-v1` — and `null` is the
+   *  argv this builder shipped before, token for token, because an old
+   *  `cmd_ws_add` bound a flag's first token as the slug (D-410). */
+  wsAdd:     (p: string, route: RouteFields | null = null, dec: ActorFlags | null = null) =>
+               argv(['ws-add', ...routeFlags(route), p, ...decFlags(dec)]),
+  /** The operator's NAMED create (named workspaces S5, design 2026-10-20 §4.1-4.2): `ws-add` with a display `title`, the
+   *  operator's own `slug`, and, from the new-session sheet, the `wrapper` (account) they picked. A NEW KEY, never a
+   *  widened `wsAdd`: `whitelist-subset.test.ts`'s key equality fails on a new key and not on a widened optional, so
+   *  the grant's reach stays a decision somebody made.
+   *
+   *  `--title` AND `--wrapper` LEAD, before the project — `--no-rc` and `--route`'s own position — and the slug sits
+   *  right behind the project. An older ccd binds an unknown `--` token as a POSITIONAL (D-6164): leading, `--title`
+   *  lands in the project slot and is refused by `_ws_project_valid`; trailing, after `project slug`, it would be
+   *  dropped unread and the workspace created unnamed — and on the least-loaded lane when the dropped flag was
+   *  `--wrapper` — with exit 0. The caller ALSO gates each on its `ccd caps` token (`WS_TITLE_CAP`, `WS_WRAPPER_CAP`),
+   *  and a `null` wrapper omits the pair entirely rather than send an empty token (ccd refuses a blank `--wrapper`).
+   *  `title` is never optional: ccd writes `named`, the sweep's exemption, ONLY when it is given.
+   *
+   *  `route` and `dec` ride as on `wsAdd` (a named create keeps the class route and the device actor, D-5301), the dec
+   *  trailing the slug, where `wsAddWorker` puts its own. `slug` is the operator's, ALREADY through `shared/slug.ts`'s
+   *  `deriveWorkspaceSlug`, so it starts with a letter or digit and can never be read as a flag; the caller never
+   *  passes an empty one (`['ws-add','demo','']` draws a random slug and exits 0). */
+  wsAddNamed: (p: string, slug: string, name: { title: string; wrapper: string | null },
+               route: RouteFields | null = null, dec: ActorFlags | null = null) =>
+                 argv(['ws-add', '--title', name.title, ...(name.wrapper === null ? [] : ['--wrapper', name.wrapper]),
+                   ...routeFlags(route), p, slug, ...decFlags(dec)]),
   /** The dispatch path's ws-add: a dispatched program worker spawns WITHOUT
    *  --remote-control (the 2026-08-13 ruling, task #37) — declared at
    *  creation, the only moment worker-ness is known (`hold` is written after
@@ -286,17 +586,185 @@ export const CCD_ARGV = {
    *  against the real binary rather than argued: `ccdargv-dec-parity.test.ts`
    *  derives this builder into its probe set FROM this table and runs the verb
    *  in a fixture HOME. */
-  wsAddWorker: (p: string, dec: ActorFlags | null) => argv(['ws-add', '--no-rc', p, ...decFlags(dec)]),
+  /**
+   * `route`, appended after `dec` (routing spec §5.3, slice 4): the dispatch
+   * path's ONE writer besides the standing `ws-hold`/`ws-release` pair, and
+   * the ONLY place a wave's routing reaches ccd on the SAME call that mints
+   * the workspace, rather than a second `ccd route` round trip a wave-1
+   * worker's pane does not exist to receive yet. `routeFlags` sits BETWEEN
+   * `--no-rc` and `p` — the same leading-flags position every builder above
+   * uses, never trailing after `decFlags`, where an old ccd's exact-arity
+   * parse would read a `--route` token as the actor/reason value it expects
+   * there. `null` (an old ccd, no `route-argv-v1`) composes the bare argv
+   * this builder shipped before this slice, token for token — the residual
+   * `dispatch.ts`'s own call site states is which capability gates it.
+   */
+  /**
+   * `child`, the minting run's id (child-workspace reclamation, spec §5.1): the
+   * BOX half of the two authorities that make a workspace a child. It goes
+   * IMMEDIATELY AFTER `--no-rc`, in the leading-flag group `cmd_ws_add`'s strip
+   * loop parses — never trailing after `decFlags`, for `route`'s reason above —
+   * and ahead of `--route`, so the two declarations the dispatch path makes
+   * about WHAT this spawn is (`--no-rc`, `--child`) sit together and the one
+   * about how it RUNS follows them. `null` — the default, and what dispatch
+   * passes to a box without `child-argv-v1` — composes this builder's previous
+   * argv token for token. A NUMBER, not a string: the run id is a SQLite rowid
+   * everywhere in the coordination store, and stringifying it here, once, means
+   * no caller can hand ccd a padded or signed spelling its grammar would refuse.
+   *
+   * `slug`, the name the coordinator gives the child: the ONE positional this
+   * builder adds, straight after the project, because `cmd_ws_add` binds
+   * `<project> [slug]` once its strip loop has removed every flag wherever it
+   * sits — and a slug cannot start with `-` (`WORKSPACE_SLUG_RE`, ccd's
+   * `_ws_slug_valid`), so it can never be read as one. `null`, the default,
+   * composes the previous argv token for token.
+   */
+  wsAddWorker: (p: string, dec: ActorFlags | null, route: RouteFields | null = null, child: number | null = null,
+                slug: string | null = null, routeDefault = false) =>
+                 argv(['ws-add', '--no-rc', ...childFlags(child), ...routeFlags(route), ...routeDefaultFlags(routeDefault, route), p,
+                   ...(slug === null ? [] : [slug]), ...decFlags(dec)]),
+  /** A promoting dispatch's ws-add (delegation broker wave 5 PR3, spec §5.7): `wsAddWorker` with `--base <commit>`, the
+   *  `git worktree add` start point and nothing else (`$REG/<id>.base`, the branch and the PR target are unchanged, D-7827).
+   *  A NEW KEY, never a widened `wsAddWorker` (`wsAddNamed`'s rule). `--base` LEADS beside `--child`, which the verb requires,
+   *  so an older ccd binds it as the project and refuses (D-6164) instead of dropping it and starting at origin's base.
+   *  Behind `WS_ADD_BASE_CAP`; its one composer is PR9's dispatch arm, which must call `markHadChild` before it sends this,
+   *  as the fresh-spawn arm does (D-8068): `run-had-child.test.ts` reds on any composer until its row says so. */
+  wsAddWorkerBase: (p: string, dec: ActorFlags | null, route: RouteFields | null, child: number, base: string,
+                    slug: string | null, routeDefault: boolean) =>
+                 argv(['ws-add', '--no-rc', ...childFlags(child), '--base', commitId(base), ...routeFlags(route),
+                   ...routeDefaultFlags(routeDefault, route), p, ...(slug === null ? [] : [slug]), ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
+  /** Landing order wave 5c (spec §5.5 "Landed state is PR-keyed"): one PR's state by number, with no workspace binding.
+   *  Sent only behind `PR_STATE_PR_CAP` (`CCD_CAN`'s `capRow`): an older ccd dies on this form's arity. The pr is refused
+   *  here as `prLanding` refuses its pairs. */
+  prStatePr: (p: string, pr: number | string) => {
+               if (!PR_NUMBER_RE.test(String(pr))) throw new Error('CCD_ARGV.prStatePr: a pr number is a positive integer with no leading zero');
+               return argv(['pr-state', '--project', p, '--pr', String(pr)]);
+             },
+  // D-7378: the bounded train prover the PR sweep runs after `pr-state --project` when a line read `train-unread`.
+  prTrainProve: (p: string)    => argv(['pr-train-prove', '--project', p]),
+  /** D-8147: one read of the repository's visibility, default branch and template (`linking/visibilityLane.ts`). */
+  repoVisibility: (p: string)  => argv(['repo-visibility', '--project', p]),
+  /** D-8147: the template pull request (`linking/routes.ts`, the operator's tap). The team key is held to Linear's grammar
+   *  here (upper case, as stored), so a bad one throws at the builder and never reaches ccd. */
+  prTemplate: (p: string, team: string) => {
+               if (!LINEAR_TEAM_KEY_SHAPE.test(team)) throw new Error('CCD_ARGV.prTemplate: a team key is Linear\'s upper-case grammar');
+               return argv(['pr-template', '--project', p, '--team', team]);
+             },
+  /** D-6784: the checks lane's read. One call names 1 to 16 `<id>:<pr>` pairs (ccd refuses more, and refuses the
+   *  whole call), each id a registry id (no comma, no colon: they delimit the pairs; no leading dash; no repeat) and
+   *  each pr a positive integer with no leading zero. The builder refuses all of these itself, so a bad pair throws
+   *  here instead of failing every pair in the call; the caller still chunks into calls of at most 16. */
+  prLanding: (p: string, sessions: readonly { readonly id: string; readonly pr: number | string }[]) => {
+               if (sessions.length < 1 || sessions.length > 16) throw new Error('CCD_ARGV.prLanding: one call names 1 to 16 sessions');
+               if (new Set(sessions.map(({ id }) => id)).size !== sessions.length) throw new Error('CCD_ARGV.prLanding: a session id appears once per call');
+               return argv(['pr-landing', '--project', p, '--sessions', sessions.map(({ id, pr }) => {
+                 if (!/^[A-Za-z0-9._][A-Za-z0-9._-]*$/.test(id)) throw new Error('CCD_ARGV.prLanding: a session id is letters, digits, dot, dash and underscore only, and does not start with a dash');
+                 if (!PR_NUMBER_RE.test(String(pr))) throw new Error('CCD_ARGV.prLanding: a pr number is a positive integer with no leading zero');
+                 return `${id}:${String(pr)}`;
+               }).join(',')]);
+             },
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>
                argv(['pr-open', '--session', id, '--title', t, '--body-b64', b64, '--draft', draft ? 'true' : 'false']),
-  wsArchive: (id: string, dec: ActorFlags | null) =>
-               argv(['ws-archive', '--session', id, ...decFlags(dec)]),
+  /** `opts.ifNoPane` (D-6642/D-6643, `ARCHIVE_IF_NO_PANE_CAP`): ccd refuses `live` before anything is written when a pane or
+   *  an active unit exists. Only the stale-archive arm sets it; absent, the argv is token for token what it was. */
+  wsArchive: (id: string, dec: ActorFlags | null, opts: { readonly ifNoPane?: boolean } | null = null) =>
+               argv(['ws-archive', '--session', id, ...ifNoPaneFlag(opts), ...decFlags(dec)]),
   wsRestore: (id: string, dec: ActorFlags | null) =>
                argv(['ws-restore', '--session', id, ...decFlags(dec)]),
   wsAudit:   (id: string) => argv(['ws-audit', '--session', id]),
   wsReap:    (tok: string, id: string) => argv(['ws-reap', '--expect', tok, '--session', id]),
+  /** `ws-audit --reclaim` (child reclamation, spec 2026-09-22 §5.5): the SAME
+   *  verb and the SAME granted prefix as `wsAudit` — `['ws-audit','--session']`
+   *  — with the mode flag AFTER the id, the order `cmd_ws_audit`'s fixed-arity
+   *  parse reads. No grant of its own: the audit destroys nothing. */
+  wsReclaimAudit: (id: string, deferExpired: boolean, stale?: StaleFlags) =>
+    argv(['ws-audit', '--session', id, '--reclaim', ...deferFlags(deferExpired), ...staleFlags(stale)]),
+  /** `ws-reclaim` — the ONE destructive argv this server composes with no human
+   *  in the path (spec §5.5). `childOf` is the run the SERVER holds as having
+   *  minted the workspace — the second authority, which ccd compares to the
+   *  box's `.child` marker, refusing `not-a-child` on any disagreement.
+   *  `token` is `ws-audit --reclaim`'s, re-proven by ccd inside the reap lock.
+   *  The confirmation token LEADS (`['ws-reclaim','--expect']` is the grant);
+   *  `--defer-expired` and the dec trail, and ccd strips both before it binds a
+   *  positional. */
+  wsReclaim: (token: string, childOf: number, id: string, deferExpired: boolean, dec: ActorFlags | null,
+              stale?: StaleFlags) =>
+    argv(['ws-reclaim', '--expect', token, '--child-of', String(childOf), '--session', id,
+          ...deferFlags(deferExpired), ...staleFlags(stale), ...decFlags(dec)]),
+  /** `ws-audit --expire` (workspace lifecycle, spec 2026-09-24 §5.3): the SAME verb and granted prefix as
+   *  `wsAudit` — `['ws-audit','--session']` — with the mode flag after the id, the order `cmd_ws_audit` reads. No
+   *  grant of its own, and no `--defer-expired`: an expiry never skips its presence rungs. */
+  wsExpireAudit: (id: string, childOf?: number) =>
+    argv(['ws-audit', '--session', id, '--expire', ...childOfFlags(childOf)]),
+  /** `ws-expire` — the server-composed teardown of an ARCHIVED workspace seven days after its archive. `token` is
+   *  `ws-audit --expire`'s, re-proven by ccd inside the reap lock; it binds the archive's epoch. The confirmation token
+   *  LEADS (`['ws-expire','--expect']` is the grant); the dec trails, and ccd strips it before it binds a positional.
+   *  Workspace lifecycle wave 3b's lane is its one caller (`expireArchived`'s act), behind `EXPIRE_CAP`. */
+  wsExpire: (token: string, id: string, dec: ActorFlags | null, childOf?: number) =>
+    argv(['ws-expire', '--expect', token, '--session', id, ...childOfFlags(childOf), ...decFlags(dec)]),
+  /** `ws-audit --collect` (child reclamation, spec 2026-09-22 §5.10): the SAME verb and granted prefix as `wsAudit` —
+   *  `['ws-audit','--session']` — with the mode flag after the id, the order `cmd_ws_audit` reads. No grant of its own,
+   *  and no `--defer-expired`. Its document carries a witnessed temp root's verdict and, when it is collectable, the
+   *  token `ws-collect` spends. */
+  wsCollectAudit: (id: string) => argv(['ws-audit', '--session', id, '--collect']),
+  /** `ws-collect` — the collector of a witnessed child temp root whose workspace is gone. `token` is
+   *  `ws-audit --collect`'s, recomputed and compared by ccd inside the reap lock BEFORE anything moves. It is a
+   *  `CollectToken` (`shared/api.ts`, spec §5.10), which only the collect audit's reader casts to, so a string from
+   *  anywhere else does not compile here. The confirmation token LEADS (`['ws-collect','--expect']` is the grant); the
+   *  dec trails, and ccd strips it before it binds a positional. Its ONE composer is the collector's executor
+   *  (`coord/collectTempRoot.ts`), behind `COLLECT_CAP`, armed by the switch (path-identity spec 2026-10-12 §5.2);
+   *  `ws-collect-wiring.test.ts` pins that no other server source composes it. */
+  wsCollect: (token: CollectToken, id: string, dec: ActorFlags | null) =>
+    argv(['ws-collect', '--expect', token, '--session', id, ...decFlags(dec)]),
+  /** `ws-audit --orphans` (fleet disk retention spec 2026-10-23 section 2.3, D-6628/D-6630): the read-only census of the
+   *  linked worktrees no registry row names, paths as hex. Behind `ORPHAN_CAP`. Granted by `['ws-audit','--orphans']`. */
+  wsOrphanCensus: () => argv(['ws-audit', '--orphans']),
+  /** `ws-audit --orphan-hex <hex>`: one orphaned tree's ladder answer, which mints the token (and the rescue token) that
+   *  `wsOrphan` spends. The path travels as hex and nowhere else, so a path with a space or a leading dash never reaches
+   *  argv raw; a value that is not even-length lowercase hex is refused here, before any argv exists. Granted by
+   *  `['ws-audit','--orphan-hex']`. */
+  wsOrphanAudit: (hex: string) => argv(['ws-audit', '--orphan-hex', treeHex(hex)]),
+  /** `ws-orphan --expect <token> --tree-hex <hex> [--rescue]`: the orphan lane's act, on its own granted prefix
+   *  (`['ws-orphan','--expect']`, enrolled in the agent's `REQUIRED_VERB_FLAG`). The token LEADS and binds the tree's
+   *  identity; `--rescue` rides only with the audit's rescue token; the dec trails and ccd strips it before it binds a
+   *  positional. Behind `ORPHAN_CAP`. Never `--force`. `CCD_ARGV` is the one place this argv is composed. */
+  wsOrphan: (token: OrphanToken, hex: string, rescue: boolean, dec: ActorFlags | null) =>
+    argv(['ws-orphan', '--expect', token, '--tree-hex', treeHex(hex), ...rescueFlag(rescue), ...decFlags(dec)]),
+  /** `ws-shed-deps --session <id> --class child|coordinator [--dry-run]` (D-7278; design note 2026-10-28 §4): the
+   *  deps-shed arm's ask, on its own granted prefix (`['ws-shed-deps','--session']`, enrolled in the agent's
+   *  `REQUIRED_VERB_FLAG`). The box re-proves the sleep, the class (a `child` needs its marker), its floor, once a sleep,
+   *  and git's own list of ignored, untracked directories, and removes only those; `--dry-run` (the arm's shadow) removes
+   *  nothing. The dec trails. Behind `SHED_DEPS_CAP`. Its one composer is the arm's pass (`depsShedPass.ts`). */
+  wsShedDeps: (id: string, cls: DepsShedClass, dryRun: boolean, dec: ActorFlags | null) =>
+    argv(['ws-shed-deps', '--session', id, '--class', cls, ...(dryRun ? ['--dry-run'] : []), ...decFlags(dec)]),
+  /** `ws-lease-mark --lease <uuid> ...` (delegation broker wave 5, PR1): the write of one lease's carrier at a generation
+   *  the server has journalled, on its own granted prefix (`['ws-lease-mark','--lease']`, enrolled in the agent's
+   *  `REQUIRED_VERB_FLAG`). Behind `LEASE_MARK_CAP`. No server code composes it yet (PR6 does). */
+  leaseMark: (a: LeaseMarkArgs) => leaseMarkArgv(a),
+  /** `ws-lease-audit --lease <uuid> --generation <n> [--holders]` (delegation broker wave 5, PR2): the read-only measure of
+   *  one leased tree at the carrier generation the server expects, on its own granted prefix (`['ws-lease-audit','--lease']`,
+   *  enrolled in the agent's `REQUIRED_VERB_FLAG`); `--holders` (the only `/proc` walk) only when asked. It writes nothing.
+   *  Behind `LEASE_AUDIT_CAP`. No server code composes it yet (PR7 and PR9 do). */
+  leaseAudit: (leaseId: string, generation: number, withHolders: boolean) => {
+    if (!LEASE_UUID_RE.test(leaseId)) throw new Error('CCD_ARGV.leaseAudit: leaseId is not a lease id');
+    if (!leaseCount(generation, 9_999_999_999)) throw new Error('CCD_ARGV.leaseAudit: generation is not a positive integer');
+    return argv(['ws-lease-audit', '--lease', leaseId, '--generation', String(generation), ...(withHolders ? ['--holders'] : [])]);
+  },
+  /** `ws-audit --collect-census` (fleet disk retention spec 2026-10-23 section 2.4, D-6625/D-6626): the read-only census
+   *  of the entries directly under `~/.cc-tmp`, classed, names as hex. Behind `COLLECT_LOOSE_CAP`. Granted by
+   *  `['ws-audit','--collect-census']`; it destroys nothing. */
+  wsCollectCensus: () => argv(['ws-audit', '--collect-census']),
+  /** `ws-audit --loose-hex <hex> --collect`: one loose entry's audit, which mints the token `wsCollectLoose` spends. The
+   *  name travels as hex and nowhere else, so a name that is a flag or has a space never reaches argv raw; a value that is
+   *  not even-length lowercase hex is refused here, before any argv exists. Granted by `['ws-audit','--loose-hex']`. */
+  wsCollectLooseAudit: (hex: string) => argv(['ws-audit', '--loose-hex', looseHex(hex), '--collect']),
+  /** `ws-collect --expect <token> --loose-hex <hex>`: the loose arm of the collector, on the SAME granted prefix as
+   *  `wsCollect` (`['ws-collect','--expect']`), so it adds no grant. The token LEADS and binds the entry's identity; the
+   *  dec trails and ccd strips it before it binds a positional. Behind `COLLECT_LOOSE_CAP`, never `COLLECT_CAP`. */
+  wsCollectLoose: (token: CollectToken, hex: string, dec: ActorFlags | null) =>
+    argv(['ws-collect', '--expect', token, '--loose-hex', looseHex(hex), ...decFlags(dec)]),
   wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),
   /** The dec flags ride AFTER `--reason`, and `--reason` is NOT one of them: on
    *  `ws-hold` the hold reason IS the declared reason (ccd's `cmd_ws_hold` says
@@ -326,11 +794,46 @@ export const CCD_ARGV = {
    *  and the server learns its verdict from the `bad-branch` refusal token. */
   wsRename:  (id: string, branch: string, dec: ActorFlags | null) =>
                argv(['ws-rename', '--session', id, '--branch', branch, ...decFlags(dec)]),
+  /** Rename an EXISTING workspace (named workspaces S9, design 2026-10-20 §6): `ws-title --session <id> (--title <text> |
+   *  --clear)`, which writes a workspace's operator `title` and `named` marker, or removes both, and nothing else. A NEW
+   *  KEY: its own verb, its own two-token grant (`['ws-title','--session']`, enrolled in the agent's `REQUIRED_VERB_FLAG`).
+   *
+   *  `--session` LEADS and its value is the id, ALREADY a registry id (the route's `knownId`): ccd consumes the value
+   *  whole, so even a flag-shaped one could not be read as a flag, but the census still classifies this builder `'id'`.
+   *  The title is its OWN token after `--title`, verbatim: ccd takes the next word as the text, so a title that begins
+   *  with dashes is still a title, and it is never joined into one `--title=` word. The caller sends a title that is
+   *  non-blank, free of control characters and within `WS_TITLE_MAX_BYTES` (`planRetitle`'s sanitising), and ccd re-proves
+   *  all three. NO `dec`: ccd's verb takes no `--surface`/`--actor` (it moves no workspace and journals nothing), and would
+   *  refuse the flags with its usage line.
+   *
+   *  Sent only behind `ccdCan(state, 'wsTitle')` (D-5866's one verb question): a box whose caps list lacks the verb is
+   *  refused with 501 `unsupported`; no evidence at all permits, the verb rows' polarity, and an old ccd then answers 502. */
+  wsTitle:   (id: string, change: WsTitleChange) =>
+               argv([WS_TITLE_VERB, '--session', id, ...('clear' in change ? ['--clear'] : ['--title', change.title])]),
   /** The pause marker's writer (Build 4, spec §4.2). `state` is a two-member
    *  union rather than a string: `POST /api/coord/pause` takes a boolean, and
    *  the on|off vocabulary is ccd's — the mapping happens once, at the call
    *  site, so no route can invent a third word the verb would `die` on. */
   coordPause: (state: 'on' | 'off') => argv(['coord-pause', '--state', state]),
+  /** The reclaim kill-switch's writer (child-reclamation wave 4, spec §5.8) —
+   *  `coordPause`'s shape exactly: `state` is a two-member union, so the on|off
+   *  vocabulary is ccd's and no route can invent a third word the verb would
+   *  `die` on. The flag LEADS, where the agent's two-token grant expects it. */
+  reclaimPause: (state: 'on' | 'off') => argv(['reclaim-pause', '--state', state]),
+  /** The test box switch's writer (test box plan TB9, D-7411; spec §2.7) — `coordPause`'s shape exactly: `state` is a
+   *  two-member union, the on|off vocabulary is ccd's, and the flag LEADS, where the agent's two-token grant expects it.
+   *  `ccd testbox-remote` is `$REG/testbox-remote-live`'s one shell writer. */
+  testboxRemote: (state: 'on' | 'off') => argv(['testbox-remote', '--state', state]),
+  /** The pane-scope stop's switch writer (D-7902) — `testboxRemote`'s shape: `state` is a two-member union, the
+   *  live|shadow vocabulary is ccd's, and the flag LEADS, where the agent's two-token grant expects it.
+   *  `ccd pane-scope-stop` is `$REG/pane-scope-stop-live`'s one shell writer. */
+  paneScopeStop: (state: 'live' | 'shadow') => argv(['pane-scope-stop', '--state', state]),
+  /** The busy arm's switch (D-7994), `coordPause`'s shape exactly. `ccd scope-sweep-busy` is
+   *  `$REG/scope-sweep-busy-live`'s one shell writer. */
+  scopeSweepBusy: (state: 'on' | 'off') => argv(['scope-sweep-busy', '--state', state]),
+  /** The delegation lane's adoption switch (D-8112), `scopeSweepBusy`'s shape exactly. `ccd delegation-adopt` is
+   *  `$REG/delegation-adopt`'s one shell writer, sent only after the door's refusal rule (`delegation-adopt-switch.ts`). */
+  delegationAdopt: (state: 'on' | 'off') => argv(['delegation-adopt', '--state', state]),
   /** The project pool tag's two writers (account pools, spec §5.4.2). TWO
    *  ENTRIES, not one builder taking `pool: string | null` — the `start`/
    *  `enable` rule above: the project-pool route picks between two words rather
@@ -345,15 +848,186 @@ export const CCD_ARGV = {
                       argv(['project-pool', '--project', project, '--pool', pool]),
   projectPoolClear: (project: string) =>
                       argv(['project-pool', '--project', project, '--clear']),
+  /** The project create's two writers (add-project spec 2026-11-04 §4). TWO ENTRIES, the `start`/`enable` and
+   *  `projectPool*` rule: `POST /api/projects` picks between a clone and an empty init rather than parameterising one
+   *  builder. `--name` LEADS, where the agent's gated grant (`REQUIRED_VERB_FLAG`) expects it. `name` and `url` come
+   *  from `planProjectAdd` (L1, `projectAdd.ts`), already held to `shared/projectAdd.ts`'s grammar, and ccd re-checks
+   *  both; the url is its own token after `--url`, so a value cannot be read as a flag. */
+  projectAddClone: (name: string, url: string) => argv(['project-add', '--name', name, '--url', url]),
+  projectAddEmpty: (name: string) => argv(['project-add', '--name', name, '--empty']),
 
   /** The routing record's writer (routing spec 2026-09-14 §5.3). ONE field per
    *  argv: the route that will call it (slice 4's picker, the wave N≥2 dispatch)
    *  picks a field and a value, and `field`/`value` reach ccd UNVALIDATED —
    *  `_route_valid` on the box is the authority and refuses before writing.
    *  No `--apply` form exists in this slice: the coordinator never types into
-   *  another session's pane, and the server's own apply path is slice 4's. */
-  route: (id: string, field: string, value: string) =>
-           argv(['route', '--session', id, '--set', `${field}=${value}`]),
+   *  another session's pane, and the server's own apply path is slice 4's.
+   *
+   *  `dec`, defaulted `null` (slice 4, Task 3): the wave N≥2 dispatch path is
+   *  an unattended lane calling this on a coordinator's behalf, exactly
+   *  `wsAddWorker`'s reason for carrying one — so it spends the SAME
+   *  `dispatchDec` measurement dispatch.ts already takes once and threads
+   *  through its hold, rather than a second, silently-uncredited write in the
+   *  journal. `null` (no `actor-flags-v1`) composes the bare argv this
+   *  builder always sent.
+   *
+   *  `actorReasonFlags`, NOT `decFlags` (measured deviation from this task's
+   *  own brief, which specified `decFlags`): `cmd_route`'s own usage line
+   *  (`ccd/ccd`) is `--session <id> --set <field>=<value>... [--actor <text>]
+   *  [--reason <text>]` — there never was a `--surface` case, because this
+   *  verb never touches a pane the way the five workspace verbs and `ws-add`
+   *  do, and `ccdargv-dec-parity.test.ts` runs the real binary and proves it:
+   *  `--surface agent` falls through `cmd_route`'s `*) die "$usage"` arm.
+   *  Sending it would be exactly the defect class that suite exists to catch
+   *  (D-410, this file's own long comment on `wsAddWorker`) — a flag that
+   *  reads right in this table and dies on the fleet. `actorReasonFlags`
+   *  carries `--actor`/`--reason` only, which `cmd_route` does parse; using a
+   *  DIFFERENT name from `decFlags` is also what keeps this builder OUT of
+   *  `ccdargv-dec-parity.test.ts`'s derived set, correctly — that suite's "six"
+   *  is `actor-flags-v1`'s own five workspace verbs plus `ws-add`'s D-410
+   *  extension, a contract this verb was never given and must not silently
+   *  inherit. */
+  route: (id: string, field: string, value: string, dec: ActorFlags | null = null) =>
+           argv(['route', '--session', id, '--set', `${field}=${value}`, ...actorReasonFlags(dec)]),
+
+  /** The LIVE-CHANGE form of `route` above (routing spec 2026-09-14 §5.3,
+   *  slice 4, Task 5): `--apply` asks `cmd_route` to type the field into the
+   *  session's own pane, session-only keystrokes, once the write itself has
+   *  landed — never a second verb, since `cmd_route --apply` is one argv, one
+   *  write, one (conditional) keystroke. The PWA's pickers are the one caller
+   *  in this slice; `route`/`routeSet` stay the record-only writers a
+   *  dispatch or a CLI caller reaches for when nobody is watching the pane.
+   *
+   *  `actorReasonFlags`, not `decFlags`, for exactly `route`'s own reason
+   *  directly above: `cmd_route`'s usage line has no `--surface` case, and
+   *  `ccdargv-dec-parity.test.ts` proves it by running the real binary.
+   *  Sending `--surface` here would die on the box the same way it would on
+   *  `route`'s bare form.
+   *
+   *  ONE field per call, matching the picker that is this slice's only
+   *  caller (a tap sets exactly one control) — `routeSet`'s multi-field,
+   *  all-or-nothing atomicity is not needed here and `POST
+   *  /api/sessions/:id/route` never builds more than one `--set` pair. */
+  routeApply: (id: string, field: string, value: string, dec: ActorFlags | null = null) =>
+                argv(['route', '--session', id, '--set', `${field}=${value}`, '--apply',
+                      ...actorReasonFlags(dec)]),
+
+  /** EVERY field in ONE argv (fix round 2, finding #3 / controller ruling
+   *  S4-R5). `route` above writes a single field and stays for slice 5's
+   *  picker, which sets exactly one; this entry is what a MULTI-field writer
+   *  must use, and the difference is not stylistic.
+   *
+   *  `cmd_route` (`ccd/ccd`) validates EVERY `--set` pair — the `--set` token
+   *  arity, the `field=value` shape, the field's membership, the ccd-only
+   *  `degraded`/`inert` refusal, `_route_valid`'s vocabulary lookup — and
+   *  then the class/effort pair check, ALL before its write loop touches the
+   *  registry. One argv therefore has a real atomicity guarantee: a refusal
+   *  leaves the record exactly as it found it. N SEPARATE calls forfeit it —
+   *  call 1 commits `class=haiku` to disk, call 2 dies on the pair check, and
+   *  the caller is left holding a half-applied record it never asked for and
+   *  cannot see. The pair check in particular is cross-call by design (ccd's
+   *  own comment: "the PAIR is refused whether it arrives in one call or
+   *  across two"), which is exactly what makes a per-field loop able to write
+   *  the first half of a pair the second half will be refused for.
+   *
+   *  Walked in `ROUTE_WRITABLE_FIELDS` order, NEVER `Object.keys(fields)` —
+   *  `routeFlags`' own rule one screen up: the wire shape must not depend on
+   *  which order a caller happened to set object keys in.
+   *
+   *  ZERO FIELDS THROWS. `cmd_route` refuses an argv with no `--set` at all
+   *  (`[[ -n "$id" && ${#sets[@]} -gt 0 ]] || die "$usage"`), so building one
+   *  is a programming error by the caller, not a runtime condition any route
+   *  can reach from a body: `routeFieldsOrNull` (`shared/api.ts`) collapses an
+   *  empty parse to `null` before a caller ever gets here, and a `null` route
+   *  means "don't call this". Throwing says so at the seam that knows, rather
+   *  than shipping a guaranteed-502 argv to the fleet. */
+  routeSet: (id: string, fields: RouteFields, dec: ActorFlags | null = null) => {
+    const pairs = ROUTE_WRITABLE_FIELDS.filter((f) => fields[f] !== undefined);
+    if (pairs.length === 0) {
+      throw new Error('CCD_ARGV.routeSet: no fields to set — ccd route refuses an argv with no --set pair');
+    }
+    return argv(['route', '--session', id,
+                 ...pairs.flatMap((f) => ['--set', `${f}=${fields[f]}`]),
+                 ...actorReasonFlags(dec)]);
+  },
+
+  /** The terminal drawer's window pin/un-pin (wave 2, spec §6.1). `mode` is a
+   *  two-member union rather than a string: `cmd_win_size` asserts exactly four
+   *  tokens and `die`s on any other word, so the vocabulary is ccd's and the
+   *  mapping happens once, here, where no route can invent a third. The agent's
+   *  grant cannot help with that — it is `['win-size','--session']`, and every
+   *  token after a granted prefix is unconstrained — so this union IS the
+   *  server's half of the refusal (`whitelist-subset.test.ts` pins it with a
+   *  `@ts-expect-error` on the third word, which `typecheck-tests.test.ts`
+   *  compiles).
+   *
+   *  `id` reaches ccd UNVALIDATED by this builder on purpose: `cmd_win_size`
+   *  re-states `shared/roster.ts`'s ID_RE as a bash class and enforces it
+   *  BEFORE any tmux target is built, then anchors that target with tmux's
+   *  exact-match `=` because `-t` is an fnmatch pattern (D-2780) — that pair is
+   *  the authority. What this builder guarantees is only that the tokens reach
+   *  it in the shape the agent grants. */
+  winSize: (id: string, mode: 'smallest' | 'canonical') =>
+             argv(['win-size', '--session', id, '--mode', mode]),
+
+  /** The read-only pool answer for a session's current account (the pool-set plan's Task 6): `ccd pool-answer
+   *  --session <id>`, granted as `['pool-answer','--session']` and enrolled in the agent's `REQUIRED_VERB_FLAG`, so no
+   *  wider argv is grantable. The id is refused here unless `isRegistryId` admits it; ccd re-checks it. Asked only behind
+   *  `ccdCan(state, 'poolAnswer')`, and read through `server/src/poolrule.ts#parsePoolAnswer`, `ran` first. */
+  poolAnswer: (id: string) => {
+    if (!isRegistryId(id)) throw new Error('CCD_ARGV.poolAnswer: the session id is not a registry id');
+    return argv(['pool-answer', '--session', id]);
+  },
+
+  /** NATIVE DOCS READER (spec 2026-10-01 section 2 (a), docs W2): one builder per
+   *  argv shape of the four read verbs `docs-v1` names. The verb comes first and
+   *  the flag the agent grants second (`--all` here, `--project` for the other
+   *  four builders); `docs-show`'s two builders ride ONE grant,
+   *  `['docs-show','--project']`. Every value reaches ccd UNVALIDATED by these
+   *  builders: the server's L1 parsers refuse a bad value with a 400 before any
+   *  exec, and ccd re-checks every token against the same grammars, so this
+   *  table holds no third copy of them. The one type-level closure is
+   *  `section: DocSectionSlug`. No builder takes `--blob` or `--worktree`, and
+   *  none emits `--`.
+   *
+   *  `docsIndex` is project-less: `--all` is its whole argument surface. */
+  docsIndex: () => argv(['docs-index', '--all']),
+
+  /** One project's listing. `ref` is the request's ref in either grammar, bare
+   *  or qualified, or `null` for the origin default branch, which adds no
+   *  `--ref` at all (`docsRefFlags`). */
+  docsTree: (project: string, ref: string | null) =>
+              argv(['docs-tree', '--project', project, ...docsRefFlags(ref)]),
+
+  /** A committed file, 12 tokens after the verb. `commit` is the pin the tree
+   *  answer served; `servedRef` is that answer's `ref.served`, qualified, which
+   *  ccd uses only for the `onRef` provenance check and never to choose bytes.
+   *  `maxBytes` is `DOCS_CLASS_CAP[contentClass(path)]`, the class cap the
+   *  server chose, stringified; ccd enforces `min(N, DOCS_MAX_FILE_BYTES)`. */
+  docsShowCommitted: (project: string, commit: string, servedRef: string, section: DocSectionSlug, path: string,
+                      maxBytes: number) =>
+                       argv(['docs-show', '--project', project, '--commit', commit, '--ref', servedRef,
+                             '--section', section, '--path', path, '--max-bytes', String(maxBytes)]),
+
+  /** A draft file, 14 tokens after the verb: the worktree holding `branch`
+   *  (bare) at `head`, read only while its bytes still hash to `fp`. ccd
+   *  resolves the worktree itself; `maxBytes` as for `docsShowCommitted`. */
+  docsShowDraft: (project: string, branch: string, head: string, section: DocSectionSlug, path: string, fp: string,
+                  maxBytes: number) =>
+                   argv(['docs-show', '--project', project, '--draft-branch', branch, '--head', head,
+                         '--section', section, '--path', path, '--fingerprint', fp, '--max-bytes', String(maxBytes)]),
+
+  /** The one docs verb that writes: a fetch of `branch` (bare) from origin, or
+   *  of the origin default branch for `null`, which adds no `--branch` at all
+   *  (`docsBranchFlags`). */
+  docsFetch: (project: string, branch: string | null) =>
+               argv(['docs-fetch', '--project', project, ...docsBranchFlags(branch)]),
+
+  /** One doc's history (rich-docs spec 2026-10-12 G4, W5b): the commits from `commit` back that changed
+   *  `section/path`, newest first, at most 100. 8 tokens after the verb, under its own grant
+   *  `['docs-log','--project']`, behind `DOCS_LOG_CAP`. The path is a value read by fixed index, never a pathspec. */
+  docsLog: (project: string, commit: string, section: DocSectionSlug, path: string) =>
+             argv(['docs-log', '--project', project, '--commit', commit, '--section', section, '--path', path]),
 } as const;
 
 /**
@@ -405,6 +1079,47 @@ export const ACTOR_FLAGS_CAP = 'actor-flags-v1';
  *  their composed contract now that both stages are present. */
 export const POOLS_CAP = 'pools-v1';
 
+/** The `ccd caps` token that says this box honours ACCOUNT-side pool
+ *  membership — `_pool_ok` (`ccd/ccd`) now consults `_acct_pool_state`'s
+ *  five-word projection rather than merely the declared roster name, so an
+ *  account-side `unreadable`/`stale`/`malformed` refuses into a tagged
+ *  project instead of silently serving it. Spelled ONCE in `server/src`, for
+ *  `ACTOR_FLAGS_CAP`'s reason: a capability token copied into two files is
+ *  the drift shape `single-definition.test.ts` exists for. ccd's own `echo
+ *  account-pools` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are
+ *  the other two spellings, and that test's `toContain` assertion is what
+ *  keeps THIS one equal to them.
+ *
+ *  Spec §5.9 originally sourced `PoolsEnforcement`'s `accountPools` field
+ *  from "the verb's presence in `ccd caps`", but ruling R2 removed the verb
+ *  the design assumed — there is no `ccd account-pools` to dispatch, only a
+ *  decision `_pool_ok` already makes on every call. Same channel, same
+ *  argument, as `POOLS_CAP` above: a CAPABILITY token, not a dispatchable
+ *  verb, so `accountPoolsEnforcement` (`pools.ts`) can answer `enforced`
+ *  only against a box that actually took this deploy. */
+export const ACCOUNT_POOLS_CAP = 'account-pools';
+
+/** The two `ccd caps` words for one measured fact: whether this box has the
+ *  pool-sync timer unit (`_pool_sync_installed`, `ccd/ccd`), so whether anything
+ *  pulls the projection `_pool_ok` reads (D-8015). A current ccd prints exactly
+ *  one, and an older ccd prints neither, which is how `accountPoolsEnforcement`
+ *  (`pools.ts`) tells caps skew from a measured absence. Spelled ONCE in
+ *  `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's `echo`s and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other spellings,
+ *  held equal by that test's `toContain` lines. */
+/** The `ccd caps` word that says this box has all of the pool set (the pool-set plan's Task 7, Table 11.1d): the set
+ *  side read by `_session_pool_side`, the route fields `poolset` and `acctorder`, and `ccd pool-answer`. Added last
+ *  among them, so no build that lacks a part advertises it. Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s
+ *  reason; ccd's `echo pool-set` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other spellings. */
+export const POOL_SET_CAP = 'pool-set';
+/** The `ccd caps` word that says this box renders a route's `profiledigest` whole or refuses the spawn, and refuses a swap
+ *  or a start it could not respawn (the Overlord W1 sandbox, PR A2). Designation's create and rebind need it. Spelled
+ *  ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's `echo launch-surface-v1` and `ccd-archive.test.ts`'s
+ *  `KNOWN_CAPABILITY_TOKENS` are the other spellings. */
+export const LAUNCH_SURFACE_CAP = 'launch-surface-v1';
+export const POOL_SYNC_INSTALLED_CAP = 'pool-sync-installed';
+export const POOL_SYNC_ABSENT_CAP = 'pool-sync-absent';
+
 /** The `ccd caps` token that says this box implements `ccd route` and reads
  *  the routing record at settle (routing spec 2026-09-14 §5.3). Spelled ONCE
  *  in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's `echo route-v1` and
@@ -413,6 +1128,296 @@ export const POOLS_CAP = 'pools-v1';
  *  decision, in slice 4: whether dispatch may pass a wave's routing on the
  *  `ws-add` argv — absent, the flag is OMITTED, the actor-flags-v1 shape. */
 export const ROUTE_CAP = 'route-v1';
+
+/** The `ccd caps` token that says this box parses `--route field=value` on
+ *  `ws-add`/`start`/`enable` (routing spec 2026-09-14 §5.3, slice 4). Spelled
+ *  ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's `echo
+ *  route-argv-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are
+ *  the other two spellings, held equal by that test's `toContain` line. It
+ *  gates ONE decision, distinct from `ROUTE_CAP` above: whether the SPAWNING
+ *  argv itself may carry `--route` — `ROUTE_CAP` gates the separate `ccd
+ *  route` verb a wave N≥2 dispatch calls AFTER a workspace already exists.
+ *  Two capabilities because a box can ship one implementation before the
+ *  other: `_route_argv_check` (this token) and `cmd_route` (`ROUTE_CAP`) are
+ *  different parse paths in `ccd/ccd`, landed in separate commits. */
+export const ROUTE_ARGV_CAP = 'route-argv-v1';
+
+/** The `ccd caps` token that says `ws-add` takes `--route-default` (D-6794): the `--route` pairs beside it are the
+ *  server's default row for the run kind, so ccd places by their class as a preference (strict=0) and a lane at the
+ *  weekly ceiling still places. Read with `capSupported` (null refuses): an older `cmd_ws_add` would bind the flag
+ *  as the project. Absent, a defaulted spawn sends NO route (the argv that shipped before D-6794) and journals
+ *  `route-omitted:no-route-default-cap`. ccd's `echo route-default-v1` is the other spelling. */
+export const ROUTE_DEFAULT_CAP = 'route-default-v1';
+
+/** The `ccd caps` token that says `browser` is a routing field this box takes (D-8121): `route --set browser=on|off`,
+ *  `--route browser=…` on the minting verbs, and the spawn's composition of the browser MCP servers' denial from it. An
+ *  older ccd refuses the field BY NAME on both paths ("unknown routing field"), so a server that does not see this token
+ *  sends none: the operator's doors answer 501 and a dispatch drops the field and journals
+ *  `route-omitted:no-browser-route-cap`. Read with `capSupported` (null refuses). ccd's `echo browser-route-v1` and
+ *  `ccdCapTokens.ts` are the other spellings. */
+export const BROWSER_ROUTE_CAP = 'browser-route-v1';
+
+/** The `ccd caps` token that says this box parses `--child <runId>` on
+ *  `ws-add`, stamps `$REG/<id>.child` before the first spawn, and exports a
+ *  child's own TMPDIR on every spawn path (child-workspace reclamation, spec
+ *  §5.1–§5.2, wave 1). One token for both halves, because they ship in one ccd
+ *  inode. Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's
+ *  own `echo child-argv-v1` and `ccd-archive.test.ts`'s
+ *  `KNOWN_CAPABILITY_TOKENS` are the other two spellings, and that test's
+ *  `toContain` line holds this one equal to them.
+ *
+ *  IT GATES THE D-410 HAZARD, ONE FLAG TO THE LEFT. An older `cmd_ws_add` has
+ *  no `--child` arm, so its strip loop hands the flag to the positionals: the
+ *  argv `wsAddWorker` composes would bind `--child` as the PROJECT and every
+ *  dispatched spawn on that box would refuse before a worktree existed. So the
+ *  flag is OMITTED, and the omission journalled on the run
+ *  (`child-omitted:no-child-argv-cap`), unless this token is advertised — and
+ *  read with `capSupported` (null → REFUSE), never `verbSupported`, whose
+ *  null → PERMIT is the right default for a verb that always existed and the
+ *  wrong one for a flag that never did. What an omission costs is stated
+ *  rather than hidden: the workspace is minted WITHOUT the marker and is
+ *  therefore simply not a child — the same thing every workspace minted before
+ *  this token existed already is (spec §6, "Deploy"). */
+export const CHILD_ARGV_CAP = 'child-argv-v1';
+
+/** The `ccd caps` token that says this box takes `--apply` on `ccd route` and
+ *  re-applies a pending routing record from its supervise tick, with the
+ *  SESSION-ONLY keystrokes and the acknowledgement read back before anything is
+ *  recorded applied (routing spec 2026-09-14 §5.3, slice 4). Spelled ONCE in
+ *  `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's `echo route-apply-v1`
+ *  and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two
+ *  spellings, held equal by that test's `toContain` line.
+ *
+ *  It gates ONE decision, distinct from both tokens above: whether the server
+ *  may ask for a LIVE change — `--apply` on an existing session — as opposed to
+ *  writing the record (`ROUTE_CAP`) or composing it onto a spawning argv
+ *  (`ROUTE_ARGV_CAP`). Absent, the flag is OMITTED and journalled, the
+ *  actor-flags-v1 shape: the record still lands and the next settle applies it,
+ *  which is why omission is a DELAY rather than a loss.
+ *
+ *  ITS FIRST CONSUMER is `POST /api/sessions/:id/route` (Task 5): the route
+ *  handler's `capSupported(deps.fleetState, ROUTE_APPLY_CAP)` gate, 501 when
+ *  absent — a picker tap on a box whose ccd predates `--apply` gets a loud
+ *  refusal, never a write the pane will never see. Between the token's
+ *  advertisement (this ccd arm) and that consumer landing, the constant's
+ *  whole job was the DRIFT constraint — three spellings held equal from the
+ *  moment the token is advertised, not from the moment the server first asks
+ *  about it. The `toContain` line in `ccd-archive.test.ts` is what makes that
+ *  equality measured. */
+export const ROUTE_APPLY_CAP = 'route-apply-v1';
+
+/** The `ccd caps` token for terminal-drawer wave 2, and it is evidence for BOTH
+ *  halves of that wave rather than for the verb alone: the `win-size` verb and
+ *  `_pane_measurable`'s stand-down at every typing site ship in ONE ccd inode,
+ *  so a box that echoes this token has both. That is a contract this wave keeps
+ *  rather than a property of the token: the stand-down is written (task 4)
+ *  before the ccd that echoes the token is deployed (task 6), so the only way to
+ *  meet the token without it is to deploy a ccd built from mid-wave.
+ *
+ *  Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's own
+ *  `echo win-size-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are
+ *  the other two spellings, and that test's `toContain` assertion is what keeps
+ *  THIS one equal to them (`capsupported.test.ts` scans for the "once" half).
+ *
+ *  NOTHING CALLS `ccd win-size` TODAY. The drawer wave that was to gate the
+ *  un-pin on this token was superseded unbuilt (spec 2026-10-14, D-5013): the
+ *  drawer now attaches a client the window's own size, so no drawer needs the
+ *  window moved, and the sizer that spec's stage 2 plans resizes through the
+ *  server's granted `resize-window`, not through this verb. The rule below
+ *  stands for any caller that ever does call it.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`, wherever a caller gates
+ *  `ccd win-size` on it. `verbSupported` PERMITS on no evidence ("an absent
+ *  list must never grey out the fleet") — the right default for verbs that
+ *  have always existed and the wrong one for a verb that never did: it would
+ *  send `ccd win-size` to
+ *  an agent that grants no such prefix, and, worse, would treat a box whose
+ *  readers have NOT learned to stand down as though they had. `capSupported`
+ *  refuses on no evidence, so an un-upgraded agent simply leaves the window
+ *  pinned: wave 1 behaviour, no fallback path, no second mechanism (spec §6.1).
+ *  This is a note on the token, not a wrapper function — the gate belongs at
+ *  that caller's own seam, where its mutation test can red on it. */
+export const WIN_SIZE_CAP = 'win-size-v1';
+
+/** The `ccd caps` token that says this box has child-workspace reclamation
+ *  (spec 2026-09-22 §5.5, wave 3): `ws-audit --reclaim`, `ws-reclaim` with its
+ *  own ladder, pin phase and tail arm, and ws-reap's mirror refusal — one ccd
+ *  inode. Spelled ONCE in `server/src`; ccd's `echo reclaim-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two
+ *  spellings, held equal by that test's `toContain`.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`. `verbSupported` PERMITS
+ *  on an absent verb list; the verb this token gates deletes a workspace, and a
+ *  destructive verb dispatched to a box with no evidence it exists is the
+ *  failure the capability reader was built to prevent. A box without the token
+ *  simply defers every child as `unsupported` — nothing is lost, nothing early. */
+export const RECLAIM_CAP = 'reclaim-v1';
+
+/** The `ccd caps` token that says this box's `ws-reclaim` and `ws-audit --reclaim` take `--stale <word>
+ *  [--hold-digest <sha256>]` (DR-26, D-6638): the stale arm of child reclaim (D-6639). Spelled ONCE in `server/src`;
+ *  ccd's `echo reclaim-stale-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two spellings.
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`: a box that does not prove it must never be sent the flag, for
+ *  an older ccd would read it as a positional and refuse in words the lane cannot tell from a real refusal. */
+export const RECLAIM_STALE_CAP = 'reclaim-stale-v1';
+
+/** The `ccd caps` token that says this box has `ccd reclaim-pause` — the
+ *  writer of `$REG/reclaim-paused` (child-reclamation wave 4). Spelled ONCE in
+ *  `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's own
+ *  `echo reclaim-pause-v1` and `ccd-archive.test.ts`'s
+ *  `KNOWN_CAPABILITY_TOKENS` are the other two spellings, and that test's
+ *  `toContain` holds this one equal to them.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`: the route that composes
+ *  this verb answers 501 on a box that never advertised it, rather than
+ *  sending a verb an older ccd answers with its usage line — which the phone
+ *  would render as "the switch is broken" when the truth is "the fleet host is
+ *  older than this server". A note on the token, not a wrapper: the gate lives
+ *  at the route's own seam, where its mutation test reds on it. */
+export const RECLAIM_PAUSE_CAP = 'reclaim-pause-v1';
+
+/** The `ccd caps` token that says this box has archived-workspace expiry (workspace lifecycle spec 2026-09-24 §5.3,
+ *  wave 3): `ws-audit --expire`, `ws-expire`, the `expire` journal act and the `expire:` breadcrumb with its refusals
+ *  and its spawn gate — one ccd inode. Spelled ONCE in `server/src`; ccd's `echo expire-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two spellings, held equal by that test's
+ *  `toContain`.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`: the verb it gates deletes a workspace, and a destructive verb
+ *  sent to a box with no evidence it exists is the failure the capability reader was built to prevent. Nothing reads
+ *  it in this build — wave 3b's lane does, before its first audit. */
+export const EXPIRE_CAP = 'expire-v1';
+
+/** The `ccd caps` token that says `ws-audit --expire` and `ws-expire` take `--child-of <run>` (spec 2026-10-23 section
+ *  2.7.4, D-6641): an archived child expires on the word of its run. Spelled ONCE in `server/src`; ccd's
+ *  `echo expire-child-v1` is the other spelling. READ IT WITH `capSupported`, NEVER `verbSupported`: the flag widens a
+ *  destructive verb, so a box with no evidence is never sent it. */
+export const EXPIRE_CHILD_CAP = 'expire-child-v1';
+
+/** The `ccd caps` token that says `ws-archive` parses `--if-no-pane` (D-6642, fleet disk retention): it refuses `live`
+ *  when a tmux session or an active unit exists, before the manifest. Spelled ONCE in `server/src`; ccd's
+ *  `echo archive-if-no-pane-v1` and `ccdCapTokens.ts` are the other two spellings. READ IT WITH `capSupported`: the
+ *  verb it guards archives, which kills a pane, and an older ccd would reject the flag as a usage error. Its one
+ *  reader is the stale-archive arm (`coord/staleArchive.ts`). */
+export const ARCHIVE_IF_NO_PANE_CAP = 'archive-if-no-pane-v1';
+
+/** The `ccd caps` token that says this box has the native Docs reader (spec 2026-10-01 section 2 (a), docs W2):
+ *  `docs-index`, `docs-tree`, `docs-show` and `docs-fetch` at exactly the argv the `docs*` builders above emit — one
+ *  ccd inode. Spelled ONCE in `server/src`; ccd's `echo docs-v1` and `ccd-archive.test.ts`'s
+ *  `KNOWN_CAPABILITY_TOKENS` are the other two spellings, held equal by that test's `toContain`.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`, and NEVER ALONE. The docs adapter's gate
+ *  (`docs/ccdsource.ts`) is a tri-state: a `ccdVerbs` of `null`, or a list without the token `caps` (an agent whose
+ *  boot read of `ccd caps` failed seeds `[]`), measured nothing and answers `caps-unknown`; only a list that DID
+ *  come from `ccd caps` and lacks this token answers `unsupported` (section 7.1's skew table, C1). `capSupported`
+ *  alone folds the first into the second, and the two have different remedies. */
+export const DOCS_CAP = 'docs-v1';
+
+/** The `ccd caps` token that says this box's ccd serves the sections `vision` and `promise` (rich-docs spec 2026-10-12
+ *  G1, W5b): ccd's `SECTIONS` holds them, so `docs-show` and `docs-log` accept them and `docs-tree` and `docs-index`
+ *  list them. Spelled ONCE in `server/src`; ccd's `echo docs-sections-v2` and `ccdCapTokens.ts` are the other two
+ *  spellings, held equal by `ccd-archive.test.ts`'s `toContain`. READ IT WITH `capSupported`, after the docs gate's
+ *  tri-state has measured a list (`docs/ccdsource.ts#readDocs`): an older ccd answers `bad-section` for either slug, a
+ *  failure word for a request a new server should never have sent. */
+export const DOCS_SECTIONS_CAP = 'docs-sections-v2';
+
+/** The `ccd caps` token that says this box's ccd has `docs-log` at exactly the argv `docsLog` builds (rich-docs spec
+ *  G4, W5b). Spelled ONCE in `server/src`; ccd's `echo docs-log-v1` and `ccdCapTokens.ts` are the other two spellings.
+ *  Read through `ccdCan`'s `docsLog` row (refuses on no evidence), inside the docs gate's tri-state. */
+export const DOCS_LOG_CAP = 'docs-log-v1';
+
+/** The `ccd caps` token that says this box has the child temp-root collector (child reclamation spec 2026-09-22 §5.10,
+ *  §8's wave 7): `ws-audit --collect`, `ws-collect`, the `collect` journal act and the quarantine record — one ccd
+ *  inode. Spelled ONCE in `server/src`; ccd's `echo collect-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS`
+ *  are the other two spellings, held equal by that test's `toContain`.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`: the verb it gates deletes a directory, and a destructive verb sent
+ *  to a box with no evidence it exists is the failure the capability reader was built to prevent. The collector's lane
+ *  asks it before every audit and again in the act's own scope (`verb-gate.test.ts`, `collect-temp-root.test.ts`). */
+export const COLLECT_CAP = 'collect-v1';
+
+/** The `ccd caps` token that says `pr-state` takes `--project <p> --pr <n>` (landing order wave 5c; spec §5.5
+ *  "Landed state is PR-keyed"). Spelled ONCE in `server/src`; ccd's echo and `ccdCapTokens.ts` are the other two
+ *  spellings, held equal by `ccd-archive.test.ts`'s `toContain`. READ IT THROUGH `ccdCan(state, 'prStatePr')`:
+ *  an older ccd dies on the arity of the new form, and `verbSupported(['pr-state'])` permits on every box. */
+export const PR_STATE_PR_CAP = 'pr-state-pr-v1';
+/** A pr number: a positive integer with no leading zero, at most nine digits. Module-local; `prLanding`'s pair check and
+ *  `prStatePr` read it, so the grammar is defined once. */
+const PR_NUMBER_RE = /^[1-9][0-9]{0,8}$/;
+
+/** The `ccd caps` token that says this box's ccd has the orphan lane (fleet disk retention spec 2026-10-23 section 2.3,
+ *  D-6629): `ws-audit --orphans`, `ws-audit --orphan-hex <hex>` and `ws-orphan --expect <token> --tree-hex <hex>`, one ccd
+ *  inode. Spelled ONCE in `server/src`; ccd's `echo orphan-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which
+ *  refuse on no evidence: the verb it gates deletes. */
+export const ORPHAN_CAP = 'orphan-v1';
+/** The `ccd caps` token that says this box's ccd has the deps-shed verb (D-7278): `ws-shed-deps --session <id> --class
+ *  <class> [--dry-run]`, one ccd inode. Spelled ONCE in `server/src`; ccd's `echo shed-deps-v1` is the other. READ IT WITH
+ *  `capSupported`/`ccdCan`, which refuse on no evidence: the verb it gates deletes. */
+export const SHED_DEPS_CAP = 'shed-deps-v1';
+/** The `ccd caps` token that says this box's ccd has the lease carrier's writer (delegation broker wave 5, PR1):
+ *  `ws-lease-mark --lease <id> ...`, in `ccd/lib/delegation-lease.sh`. Spelled ONCE in `server/src`; ccd's
+ *  `echo lease-mark-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence. */
+export const LEASE_MARK_CAP = 'lease-mark-v1';
+/** The `ccd caps` token that says this box's carrier mark takes the orphan act's lock (`$REG/.orphan-<s16>.lock`, PR6 ruling 1,
+ *  D-8037) for every state but `released`. Spelled ONCE in `server/src`; ccd's `echo lease-mark-lock-v1` is the other. READ IT WITH
+ *  `capSupported`, which refuses on no evidence: a mark of a state that holds a tree is composed only behind it. */
+export const LEASE_MARK_LOCK_CAP = 'lease-mark-lock-v1';
+/** The `ccd caps` token that says this box's orphan ladder has the lease rung (delegation broker wave 5 PR4,
+ *  `_dl_orphan_rung` in `ccd/lib/delegation-lease.sh`), so a held tree is skipped on the box. Spelled ONCE in `server/src`; ccd's
+ *  `echo orphan-lease-v1` is the other. READ IT WITH `capSupported`, which refuses on no evidence: a server act that moves a lease off
+ *  `ephemeral` (PR8's doors) needs it. */
+export const ORPHAN_LEASE_CAP = 'orphan-lease-v1';
+/** The `ccd caps` token that says this box's ccd has the lease audit (delegation broker wave 5, PR2): `ws-lease-audit
+ *  --lease <id> --generation <n> [--holders]`, in `ccd/lib/delegation-lease.sh`. Spelled ONCE in `server/src`; ccd's
+ *  `echo lease-audit-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence: a box without
+ *  it makes every tree count as changed, and promotion refuses. */
+export const LEASE_AUDIT_CAP = 'lease-audit-v1';
+/** The `ccd caps` token that says this box's `ws-add` takes `--base <commit>` beside `--child` (delegation broker wave 5 PR3):
+ *  a child workspace started at a given commit, a start point only. Spelled ONCE in `server/src`; ccd's `echo ws-add-base-v1` is
+ *  the other. READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence: a box without it must never be sent the flag. */
+export const WS_ADD_BASE_CAP = 'ws-add-base-v1';
+/** The `ccd caps` token that says this box's ccd has the collector's LOOSE arm (fleet disk retention spec 2026-10-23
+ *  section 2.4, D-6625): `ws-audit --collect-census`, `ws-audit --loose-hex <hex> --collect` and
+ *  `ws-collect --expect <token> --loose-hex <hex>` — one ccd inode. Distinct from `COLLECT_CAP`: a box with
+ *  `collect-v1` alone parses none of the three. Spelled ONCE in `server/src`; ccd's `echo collect-loose-v1` is the other.
+ *  READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence: the verb it gates deletes. */
+export const COLLECT_LOOSE_CAP = 'collect-loose-v1';
+
+/** The `ccd caps` token that says this box's `cmd_swap` re-measures the turn at the act and takes `--interrupt`
+ *  (D-5240, Task 11). It gates ONE decision: whether the swap route may send `CCD_ARGV.swapInterrupt` or
+ *  `swapCrossInterrupt`. Without it the route sends the old argv, which an old ccd parses and which refuses nothing —
+ *  the server's own read is then the only guard, as it was before. ccd's `echo swap-busy-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two spellings. */
+export const SWAP_BUSY_CAP = 'swap-busy-v1';
+
+/** The `ccd caps` token that says this box's `ws-add` takes `--title <text>` (named workspaces, design 2026-10-20 §4.1). It
+ *  gates the route that names a workspace: no token, no `--title`. The server must not send it to a box that does not
+ *  list it — an older ccd binds an unknown `--` token as a positional (D-6164), so a trailing `--title` is dropped unread
+ *  and the workspace is created with exit 0, unnamed. Read it with `capSupported`, never `verbSupported` (a null list is
+ *  REFUSE here). ccd's `echo ws-title-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other spellings. */
+export const WS_TITLE_CAP = 'ws-title-v1';
+
+/** The `ccd caps` token that says this box's `ws-add` takes `--wrapper <lane>` — the account the operator chose — and
+ *  refuses, rather than falls back, when that lane cannot take the workspace. Same gate, same reason, as `WS_TITLE_CAP`,
+ *  and a worse failure without it: a dropped `--wrapper` places the workspace on the least-loaded lane, not the chosen one. */
+export const WS_WRAPPER_CAP = 'ws-wrapper-v1';
+
+/** The `ccd caps` token that says this box's `cmd_hibernate` takes `--hold-ok <text>` (D-6091, fleet capacity W1-1):
+ *  ccd passes a `.hold` that re-reads byte-identical to `<text>` and is a programme hold. It gates ONE decision, the
+ *  run-done policy's: whether a finished child held only by its programme's hold may be put to sleep. Read through
+ *  `capSupported` (false on no evidence), so a box without it keeps today's `held`. ccd's `echo hibernate-hold-ok` and
+ *  `server/test/ccdCapTokens.ts` are the other two spellings. */
+export const HIBERNATE_HOLD_OK_CAP = 'hibernate-hold-ok';
+
+/** The `ccd caps` token that says this box's `cmd_hibernate` takes `--roll` (D-7458): the automatic coordinator roll's
+ *  one act, the sleep and the wake in one verb. It gates the roll lane: with no token the lane is unarmed and rolls
+ *  nothing (`capSupported`, false on no evidence). ccd's `echo hibernate-roll` and `server/test/ccdCapTokens.ts` are
+ *  the other two spellings. */
+export const HIBERNATE_ROLL_CAP = 'hibernate-roll';
+
+/** The `ccd caps` token that says this box's `cmd_hibernate` takes `--roll --fresh` (spec 2026-11-09 §3.3.11 H13): the
+ *  roll whose wake starts a new conversation under the same session id. It gates the renewal act (the ccd adapter of
+ *  `SessionHost`): with no token `renew` answers `capability-missing` and sends nothing (`capSupported`, false on no
+ *  evidence). ccd's `echo hibernate-fresh` and `server/test/ccdCapTokens.ts` are the other two spellings. */
+export const HIBERNATE_FRESH_CAP = 'hibernate-fresh';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
@@ -495,4 +1500,104 @@ export function capSupported(
  */
 export function stopSurfaceSupported(state: Pick<FleetState, 'ccdVerbs'> | undefined): boolean {
   return capSupported(state, 'stop-surface');
+}
+
+/**
+ * D-5866 (Task C1k; ARCH-71 (#806); spec K12's `ccdCan`): how ONE `CCD_ARGV` row is answered. `token` is the line
+ * `ccd caps` prints when the box can run that row, and `default` is the answer when there is no evidence at all
+ * (`ccdVerbs === null`). `'none'` is a verb ungated by decision (`verb-gate.test.ts`'s `UNGATED_BY_DECISION`): every
+ * ccd generation has it, so it is never asked.
+ *
+ * DEPARTURE (`ccd-can-verb-token`, recorded in the C1k PR body): a permitting row spells its verb name as its token,
+ * where the plan's `CanRow` wrote `null` for "the row's verb name". A `null` would need the verb read back off a built
+ * argv, and a builder cannot be called without its arguments; `verb-gate.test.ts` holds each such token equal to the
+ * builder's own first word, so it is not a second spelling that can drift.
+ */
+export type CanRow = { readonly token: string; readonly default: 'permit' | 'refuse' } | 'none';
+
+/** A verb `ccd caps` lists by name, which PERMITS on no evidence (`verbSupported`'s polarity). */
+const verbRow = (verb: string): CanRow => ({ token: verb, default: 'permit' });
+/** A capability token, which REFUSES on no evidence (`capSupported`'s polarity): a verb that never existed, or one
+ *  that is safe to send only on a box that proves it. */
+const capRow = (token: string): CanRow => ({ token, default: 'refuse' });
+
+/**
+ * One entry per `CCD_ARGV` row, keyed by the row's NAME. The name, not the argv's first word, is the key because rows
+ * share first words across different tokens: four rows start `swap`, three `route` (`ROUTE_CAP` for the read and the
+ * set, `ROUTE_APPLY_CAP` for the apply), and the three `ws-audit` modes are each asked beside a different mode token.
+ * Each default is the polarity its call sites used before D-5866, unchanged.
+ */
+export const CCD_CAN = {
+  start: 'none', enable: 'none', startCross: 'none', enableCross: 'none', ensure: 'none',
+  stopId: 'none', stopPair: 'none',
+  forget: verbRow('forget'),
+  // D-8123: a new verb, gated as `forget` is: an older ccd that does not list it is refused 501, never sent a usage error.
+  limitWait: verbRow('limit-wait'),
+  hibernate: verbRow('hibernate'),
+  swap: 'none', swapCross: 'none', swapInterrupt: 'none', swapCrossInterrupt: 'none',
+  wsAdd: 'none', wsAddWorker: 'none',
+  // `--base` is a new flag an older ccd binds as the project (D-6164): refuse on no evidence (delegation broker wave 5 PR3).
+  wsAddWorkerBase: capRow(WS_ADD_BASE_CAP),
+  // Named workspaces: `wsAddNamed` is `ws-add` with FLAGS, so the row is ungated like `wsAdd` and `planCreate` asks the
+  // flag tokens (`WS_TITLE_CAP`, `WS_WRAPPER_CAP`) with `capSupported`. `ws-title` is a verb `ccd caps` lists by name.
+  wsAddNamed: 'none', wsTitle: verbRow(WS_TITLE_VERB),
+  prStateSession: verbRow('pr-state'), prStateProject: verbRow('pr-state'), prStatePr: capRow(PR_STATE_PR_CAP), prOpen: verbRow('pr-open'),
+  prLanding: capRow('pr-landing-v1'),
+  prTrainProve: verbRow('pr-train-prove'),
+  repoVisibility: verbRow('repo-visibility'),
+  prTemplate: verbRow('pr-template'),
+  wsArchive: verbRow('ws-archive'), wsRestore: verbRow('ws-restore'),
+  wsAudit: verbRow('ws-audit'), wsReap: verbRow('ws-reap'),
+  wsReclaimAudit: verbRow('ws-audit'), wsReclaim: capRow(RECLAIM_CAP),
+  wsExpireAudit: verbRow('ws-audit'), wsExpire: capRow(EXPIRE_CAP),
+  wsCollectAudit: verbRow('ws-audit'), wsCollect: capRow(COLLECT_CAP),
+  // The orphan lane's three rows all refuse on no evidence: the census and the audit are new flags an older ccd rejects.
+  wsOrphanCensus: capRow(ORPHAN_CAP), wsOrphanAudit: capRow(ORPHAN_CAP), wsOrphan: capRow(ORPHAN_CAP),
+  // The deps-shed verb is new: an older ccd has none of it, and its dry run is the same row.
+  wsShedDeps: capRow(SHED_DEPS_CAP),
+  // The lease carrier's writer is new (delegation broker wave 5): an older ccd has none of it.
+  leaseMark: capRow(LEASE_MARK_CAP),
+  // So is its read-only audit (PR2).
+  leaseAudit: capRow(LEASE_AUDIT_CAP),
+  // The loose arm's three rows all refuse on no evidence: the audit and the census are new flags an older ccd rejects.
+  wsCollectCensus: capRow(COLLECT_LOOSE_CAP), wsCollectLooseAudit: capRow(COLLECT_LOOSE_CAP), wsCollectLoose: capRow(COLLECT_LOOSE_CAP),
+  wsAttic: verbRow('ws-attic'),
+  wsHold: verbRow('ws-hold'), wsRelease: verbRow('ws-release'), wsRename: verbRow('ws-rename'),
+  coordPause: verbRow('coord-pause'), reclaimPause: capRow(RECLAIM_PAUSE_CAP),
+  // A new verb: `ccd caps` names it, and a box whose list lacks it is refused 501 rather than sent a usage error.
+  testboxRemote: verbRow('testbox-remote'),
+  // D-7902: a new verb, gated as `testboxRemote` is.
+  paneScopeStop: verbRow('pane-scope-stop'),
+  scopeSweepBusy: verbRow('scope-sweep-busy'),
+  // D-8112: a new verb, gated as `scopeSweepBusy` is; the door asks the caps itself first, under its own rule (D-8113).
+  delegationAdopt: verbRow('delegation-adopt'),
+  projectPoolSet: verbRow('project-pool'), projectPoolClear: verbRow('project-pool'),
+  projectAddClone: verbRow('project-add'), projectAddEmpty: verbRow('project-add'),
+  route: capRow(ROUTE_CAP), routeApply: capRow(ROUTE_APPLY_CAP), routeSet: capRow(ROUTE_CAP),
+  winSize: capRow(WIN_SIZE_CAP),
+  poolAnswer: capRow(POOL_SET_CAP),
+  docsIndex: capRow(DOCS_CAP), docsTree: capRow(DOCS_CAP), docsShowCommitted: capRow(DOCS_CAP),
+  docsShowDraft: capRow(DOCS_CAP),
+  docsFetch: capRow(DOCS_CAP),
+  docsLog: capRow(DOCS_LOG_CAP),
+} as const satisfies Record<keyof typeof CCD_ARGV, CanRow>;
+
+/** A `CCD_ARGV` row name: what `ccdCan` is asked about. */
+export type CcdRow = keyof typeof CCD_ARGV;
+
+/**
+ * THE one verb question (D-5866): can this box's DEPLOYED ccd run this row? Asked by row NAME, so a lane asks it when
+ * it selects work, before any argv exists. `'none'` answers true. No evidence (`ccdVerbs === null`, or no state at
+ * all) answers the row's `default`. Otherwise the row's token must be on the list.
+ *
+ * `verbSupported`, `capSupported` and `stopSurfaceSupported` stay exported: a FLAG an existing verb parses
+ * (`ACTOR_FLAGS_CAP`, `POOLS_CAP`, `stop-surface` …) and a second verb's token asked as a precondition
+ * (`RECLAIM_PAUSE_CAP` beside the collector's own question) are not verb questions, and keep `capSupported`.
+ */
+export function ccdCan(state: Pick<FleetState, 'ccdVerbs'> | undefined, row: CcdRow): boolean {
+  const can: CanRow = CCD_CAN[row];
+  if (can === 'none') return true;
+  const verbs = state?.ccdVerbs ?? null;
+  if (verbs === null) return can.default === 'permit';
+  return verbs.includes(can.token);
 }

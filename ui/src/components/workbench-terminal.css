@@ -1,0 +1,251 @@
+/* `@layer components` — NOT unlayered; see typed-label.css for the full
+   argument and ../styles/theme.css for the layer declaration. */
+@layer components {
+  /* ------------------------------------------------------------------ *
+   *  Workbench terminal — the session's pane as a tab of its own.       *
+   *  Bar on the well's bar, the pane on the well, and on a phone the    *
+   *  dock: key row, shortcut chips, the input line.                     *
+   * ------------------------------------------------------------------ */
+  /* The tab is the container, so Split can leave when the PANE is narrow,
+     whatever the viewport says. */
+  .wb-term {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    container-type: inline-size;
+    color: var(--ink-primary);
+    background: var(--bg-surface);
+  }
+
+  /* The bar. The name and the attach word come first; the view switch is what
+     yields — it wraps to a second line, right-aligned, before the name is cut.
+     The name ellipsizes only when it alone is wider than the pane. */
+  .wb-term-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--sp-1) var(--sp-2);
+    min-width: 0;
+    min-height: 36px;
+    padding: 3px var(--sp-2) 3px var(--sp-3);
+    font-family: var(--family-mono);
+    font-size: var(--fs-meta);
+    white-space: nowrap;
+    color: var(--ink-on-well);
+    background: var(--well-bar-bg);
+    border-bottom: 1px solid var(--well-bar-hair);
+  }
+  .wb-term-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .wb-term-attach {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+  }
+  /* Matte, never a glow: attached is a state, not a heartbeat. The word beside
+     it is the second cue. */
+  .wb-term-dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: var(--r-full);
+    background: var(--accent-on-well);
+  }
+  .wb-term-attach[data-attached='false'] .wb-term-dot {
+    background: color-mix(in srgb, var(--ink-on-well) 85%, var(--bg-well));
+  }
+  .wb-term-views {
+    display: inline-flex;
+    flex: none;
+    gap: 2px;
+    margin-left: auto;
+    padding: 2px;
+    border: 1px solid var(--well-bar-hair);
+    border-radius: var(--r-sm);
+  }
+  /* The tap floor by default; the card's 24px only under a fine pointer. The
+     resting ink is the measured 85% floor on the bar (70% fails). Pressed is
+     two cues: full ink at semibold, and a ground of its own. */
+  .wb-term-bar .wb-term-view {
+    min-height: var(--tap-min);
+    padding: 0 var(--sp-2);
+    border-radius: var(--r-sm);
+    font: inherit;
+    cursor: pointer;
+    color: color-mix(in srgb, var(--ink-on-well) 85%, var(--well-bar-bg));
+    background: var(--well-bar-bg);
+  }
+  .wb-term-bar .wb-term-view[aria-pressed='true'] {
+    font-weight: var(--weight-semibold);
+    color: var(--ink-on-well);
+    background: color-mix(in srgb, var(--ink-on-well) 12%, var(--well-bar-bg));
+  }
+  @media (pointer: fine) {
+    .wb-term-bar .wb-term-view {
+      min-height: 24px;
+    }
+  }
+  @container (max-width: 559px) {
+    .wb-term-view[data-view='split'] {
+      display: none;
+    }
+  }
+
+  /* The pane: the well, edge to edge, no card around it. Focusable so a
+     keyboard can reach and scroll it. Read-only dims by stepping the ink to
+     the 85% floor, never by fading. */
+  .wb-term-pane {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+    padding: 10px var(--sp-3);
+    overflow: auto;
+    overscroll-behavior: contain;
+    font-family: var(--family-mono);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-mono);
+    color: var(--ink-on-well);
+    background: var(--bg-well);
+  }
+  .wb-term-pane[data-readonly='true'] {
+    color: color-mix(in srgb, var(--ink-on-well) 85%, var(--bg-well));
+  }
+
+  /* Desktop: one line under the pane, in the app's words. */
+  .wb-term .wb-term-hint {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--sp-2);
+    min-height: 32px;
+    padding: 0 var(--sp-3);
+    font-family: var(--family-mono);
+    font-size: var(--fs-meta);
+    color: var(--ink-tertiary);
+    border-top: 1px solid var(--edge-subtle);
+  }
+
+  /* Phone: the dock, on the well. */
+  .wb-term-dock {
+    display: grid;
+    flex: none;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-2);
+    padding: var(--sp-2) 0 10px;
+    color: var(--ink-on-well);
+    background: var(--bg-well);
+    border-top: 1px solid var(--well-bar-hair);
+  }
+  .wb-term-keys,
+  .wb-term-shortcuts {
+    display: flex;
+    gap: var(--sp-2);
+    padding: 0 var(--sp-3);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .wb-term-keys::-webkit-scrollbar,
+  .wb-term-shortcuts::-webkit-scrollbar {
+    display: none;
+  }
+  /* Keycap owns the shape (the tap square, the heavier bottom edge, the
+     sink); the well owns the skin: ink-on-well over a 9% fill, a 22% border,
+     each mixed down to the well itself so the rule stays self-grounded. */
+  .wb-term-keys .keycap {
+    flex: none;
+    padding: 0 var(--sp-2);
+    color: var(--ink-on-well);
+    background: color-mix(in srgb, var(--ink-on-well) 9%, var(--bg-well));
+    border-color: color-mix(in srgb, var(--ink-on-well) 22%, var(--bg-well));
+  }
+  /* The latch sends no byte, so it rests on a stronger edge; latched, it
+     inverts — a held key, never a glow. */
+  .wb-term-keys .wb-term-latch {
+    border-color: color-mix(in srgb, var(--ink-on-well) 40%, var(--bg-well));
+  }
+  .wb-term-keys .wb-term-latch[aria-pressed='true'] {
+    color: var(--bg-well);
+    background: var(--ink-on-well);
+    border-color: var(--ink-on-well);
+  }
+  /* The chip is the picture; the button around it is the tap square. */
+  .wb-term-short {
+    display: grid;
+    flex: none;
+    place-items: center;
+    min-width: var(--tap-min);
+    min-height: var(--tap-min);
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    background: none;
+  }
+  .wb-term-short .chip {
+    color: var(--ink-on-well);
+    background: color-mix(in srgb, var(--ink-on-well) 9%, var(--bg-well));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink-on-well) 22%, var(--bg-well));
+  }
+
+  /* The input line. 16px (`--fs-input`) so iOS never zooms on focus; the ring
+     is FOCUS_RING's, so no focus border here. */
+  .wb-term-line {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: 0 var(--sp-2) 0 var(--sp-3);
+  }
+  .wb-term-dock .wb-term-caret {
+    flex: none;
+    font-family: var(--family-mono);
+    font-size: var(--fs-md);
+    color: var(--accent-on-well);
+  }
+  .wb-term-input {
+    flex: 1 1 0;
+    width: 0;
+    min-width: 0;
+    height: var(--tap-min);
+    padding: 0 10px;
+    border: 1px solid var(--well-bar-hair);
+    border-radius: var(--r-md);
+    font-family: var(--family-mono);
+    font-size: var(--fs-input);
+    color: var(--ink-on-well);
+    background: color-mix(in srgb, var(--ink-on-well) 5%, var(--bg-well));
+  }
+  .wb-term-input::placeholder {
+    color: color-mix(in srgb, var(--ink-on-well) 85%, var(--bg-well));
+  }
+  .wb-term-input:disabled {
+    cursor: default;
+  }
+  .wb-term-send {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: var(--tap-min);
+    height: var(--tap-min);
+    border: 0;
+    border-radius: var(--r-md);
+    cursor: pointer;
+    color: var(--bg-well);
+    background: var(--accent-on-well);
+  }
+  /* Read-only: why, in the app's words, above the disabled line. */
+  .wb-term-dock .wb-term-why {
+    margin: 0;
+    padding: 0 var(--sp-3);
+    font-family: var(--family-mono);
+    font-size: var(--fs-meta);
+    line-height: 1.35;
+    color: color-mix(in srgb, var(--ink-on-well) 85%, var(--bg-well));
+  }
+}

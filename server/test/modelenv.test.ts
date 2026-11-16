@@ -9,11 +9,12 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, effortFile, mergeSettingsEnv, modelEnvBlock,
+  CODEX_LANE_ENV, LANE_ENV_KEYS, MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor, effortFile, mergeSettingsEnv,
+  modelEnvBlock, windowCeiling,
 } from '../../shared/modelenv.mjs';
-import { CLASSES, parseRegistry } from '../../shared/models.js';
-import type { Registry } from '../../shared/models.js';
-import { CODEX, SEEDED, UNSEEDED } from './fixtures/modelCases.js';
+import { CLASSES, parseRegistry, parseWindows } from '../../shared/models.js';
+import type { Catalogue, ModelWindows, Registry } from '../../shared/models.js';
+import { CODEX, CODEX_STALE, SEEDED, UNSEEDED, modelCases } from './fixtures/modelCases.js';
 
 const MODELENV_MJS_URL = pathToFileURL(
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'shared', 'modelenv.mjs'),
@@ -231,18 +232,18 @@ describe('modelEnvBlock', () => {
     expect(() => modelEnvBlock(UNSEEDED, null)).toThrow(/a lane needs at least one class/);
   });
 
-  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS is min(ANTHROPIC_MODEL\'s context, 200000), as a STRING '
-    + '(§6.1, amended 2026-09-08, Task 16c)', () => {
-    // ANTHROPIC_MODEL resolves opus ?? sonnet ?? haiku — SEEDED's opus slot is
-    // gpt-5.6-sol, and CODEX lists it with context 272000 — advertised, not
-    // usable: fleet-host measurement 2026-09-08 found the largest prompt EVER
-    // ACCEPTED on gpt-5.6-sol, over 2,339 transcripts, was 196,341 tokens, with
-    // 30 refusals past that wall. The key never raises the client's own 200k
-    // default on an advertised number alone. Env values are strings everywhere
-    // else in this block; a bare number here would be the one key that reads
+  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS is the provider\'s promise, the smallest class model\'s catalogue context, '
+    + 'as a STRING (D-8564)', () => {
+    // Operator ruling 2026-11-13 (D-8564): a lane's window follows the
+    // provider's promise, the catalogue's `context` for each class model, as
+    // a Claude lane's does, and Claude Code's own auto-compaction keeps a
+    // session below it. It replaces the 2026-09-08 rule that capped an
+    // advertised number at the client's 200k default. SEEDED's three class
+    // models are each 272000 in CODEX. Env values are strings everywhere else
+    // in this block; a bare number here would be the one key that reads
     // differently from the other seven.
     const b = modelEnvBlock(SEEDED, CODEX);
-    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
+    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
     expect(Object.keys(b)).toHaveLength(8);
   });
 
@@ -273,29 +274,286 @@ describe('modelEnvBlock', () => {
     expect(Object.keys(b)).toHaveLength(7);
   });
 
-  it('is ABSENT when the catalogue lists the resolved model with context: null', () => {
+  it('a class model the catalogue gives NO context bounds the lane at the client\'s own 200000 (D-8564)', () => {
+    // The provider promised nothing for that model, so Claude Code's own
+    // default for an unknown id is all anyone knows about it: the lane never
+    // runs above it while that is so.
     const noContext = { ...CODEX,
       models: CODEX.models.map((m) => (m.id === 'gpt-5.6-sol' ? { ...m, context: null } : m)) };
     const b = modelEnvBlock(SEEDED, noContext);
-    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
-    expect(Object.keys(b)).toHaveLength(7);
+    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
+    expect(contextWindowFor(SEEDED, noContext, null))
+      .toMatchObject({ tokens: 200000, rule: 'default', model: 'gpt-5.6-sol', source: 'client' });
   });
 
   it.each([0, -1, 131072.5])(
-    'is ABSENT when the resolved model\'s context is %s — never "unknown" as a sentinel '
-    + '(§6.1, amended 2026-09-08, Task 16c fix round 1)', (bad) => {
-      // Zero, a negative, and a non-integer are none of them a measured
-      // window: writing them verbatim ("0", "-1", "131072.5") would put a
-      // number on disk with no window it describes. The omit rule's existing
-      // reason applies unchanged — there is no "unavailable" reading for a
-      // context window, only "unknown", and the client's own default already
-      // means "unknown".
+    'a context of %s is no promise: the class model counts as unknown, never as that number '
+    + '(§6.1, amended 2026-09-08, Task 16c fix round 1; D-8564)', (bad) => {
+      // Zero, a negative, and a non-integer are none of them a window:
+      // writing them verbatim ("0", "-1", "131072.5") would put a number on
+      // disk with no window it describes.
       const badContext = { ...CODEX,
         models: CODEX.models.map((m) => (m.id === 'gpt-5.6-sol' ? { ...m, context: bad } : m)) };
       const b = modelEnvBlock(SEEDED, badContext);
-      expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
-      expect(Object.keys(b)).toHaveLength(7);
+      expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
     });
+
+  it('is ABSENT when NO class model has a context or a measured window', () => {
+    const none = { ...CODEX, models: CODEX.models.map((m) => ({ ...m, context: null })) };
+    const b = modelEnvBlock(SEEDED, none);
+    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
+    expect(Object.keys(b)).toHaveLength(7);
+  });
+});
+
+// ── codex-bridge spec §2.7: the measured-window rule ────────────────────────
+// Neutral model ids only: this repository is public.
+const ALPHA = 'model-6.1-alpha';
+const BETA = 'model-6.1-beta';
+const GAMMA = 'model-6.1-gamma';
+const DELTA = 'model-6.2-delta';
+/** A catalogue row. `maxContext` defaults to null (the catalogue names no
+ *  ceiling, so only WINDOW_MAX bounds a measured window); the D-8564 cases
+ *  below set it. */
+const nrow = (id: string, context: number | null, maxContext: number | null = null) => ({
+  id, label: id, context, maxContext, efforts: [], hidden: false, priceIn: null, priceOut: null,
+});
+const NEUTRAL: Registry = {
+  probe: 'codex',
+  classes: { haiku: GAMMA, sonnet: BETA, opus: ALPHA, fable: null },
+  subagent: 'sonnet',
+  discovery: 'catalogue',
+};
+const NEUTRAL_CAT: Catalogue = {
+  probe: 'codex', fetchedAt: 1789000000, stale: false,
+  models: [nrow(ALPHA, 272000), nrow(BETA, 272000), nrow(GAMMA, 272000), nrow(DELTA, 128000)],
+};
+/** Windows as `parseWindows` reads them off disk — the on-disk shape, never a
+ *  hand-built map, except where a case says it builds one in memory. */
+const measured = (byModel: Record<string, number>): ModelWindows =>
+  parseWindows({ windows: Object.fromEntries(Object.entries(byModel).map(([id, tokens]) => [id, { tokens }])) });
+const withClasses = (classes: Partial<Registry['classes']>): Registry =>
+  ({ ...NEUTRAL, classes: { ...NEUTRAL.classes, ...classes } });
+
+describe('contextWindowFor — the measured-window rule (codex-bridge spec §2.7)', () => {
+  it('every class model measured: the SMALLEST window, written as a string — above 200000 when measured so', () => {
+    const w = measured({ [ALPHA]: 511000, [BETA]: 400000, [GAMMA]: 450000 });
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w))
+      .toEqual({ tokens: 400000, rule: 'measured', unmeasured: [], model: BETA, source: 'measured' });
+    expect(modelEnvBlock(NEUTRAL, NEUTRAL_CAT, w).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('400000');
+  });
+
+  it('rounds the smallest DOWN to a multiple of 1000', () => {
+    const w = measured({ [ALPHA]: 600000, [BETA]: 511999, [GAMMA]: 512500 });
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w).tokens).toBe(511000);
+  });
+
+  it('caps at WINDOW_MAX, for a map built in memory past what parseWindows admits', () => {
+    const w: ModelWindows = { [ALPHA]: 1500000, [BETA]: 1200000, [GAMMA]: 1100000 };
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w))
+      .toEqual({ tokens: 1000000, rule: 'measured', unmeasured: [], model: GAMMA, source: 'measured' });
+  });
+
+  it('an unmeasured class model counts at its provider default, and is named (D-8564)', () => {
+    const w = measured({ [ALPHA]: 511000, [BETA]: 511000 });
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w))
+      .toEqual({ tokens: 272000, rule: 'default', unmeasured: [GAMMA], model: GAMMA, source: 'provider' });
+    expect(modelEnvBlock(NEUTRAL, NEUTRAL_CAT, w).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+  });
+
+  it('a class that moves to an unmeasured model takes its provider default until it is measured', () => {
+    const moved = withClasses({ opus: DELTA });
+    expect(contextWindowFor(moved, NEUTRAL_CAT, measured({ [ALPHA]: 511000, [BETA]: 511000, [GAMMA]: 511000 })))
+      .toEqual({ tokens: 128000, rule: 'default', unmeasured: [DELTA], model: DELTA, source: 'provider' });
+    expect(contextWindowFor(moved, NEUTRAL_CAT,
+      measured({ [ALPHA]: 511000, [BETA]: 511000, [GAMMA]: 511000, [DELTA]: 300000 })))
+      .toEqual({ tokens: 300000, rule: 'measured', unmeasured: [], model: DELTA, source: 'measured' });
+  });
+
+  it('fable counts when it is pinned: four class models need four windows', () => {
+    const four = withClasses({ fable: DELTA });
+    expect(contextWindowFor(four, NEUTRAL_CAT, measured({ [ALPHA]: 511000, [BETA]: 511000, [GAMMA]: 511000 })))
+      .toEqual({ tokens: 128000, rule: 'default', unmeasured: [DELTA], model: DELTA, source: 'provider' });
+  });
+
+  it('two classes on one model need one window — the class models are DISTINCT', () => {
+    const shared = withClasses({ haiku: BETA });
+    expect(contextWindowFor(shared, NEUTRAL_CAT, measured({ [ALPHA]: 511000, [BETA]: 450000 })))
+      .toEqual({ tokens: 450000, rule: 'measured', unmeasured: [], model: BETA, source: 'measured' });
+    expect(contextWindowFor(shared, NEUTRAL_CAT, measured({ [ALPHA]: 511000 })).unmeasured).toEqual([BETA]);
+  });
+
+  it('a window for a model no class names is ignored — it never lowers the lane', () => {
+    const w = measured({ [ALPHA]: 300000, [BETA]: 300000, [GAMMA]: 300000, [DELTA]: 5000 });
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w).tokens).toBe(300000);
+  });
+
+  it.each([['fresh', NEUTRAL_CAT], ['stale', { ...NEUTRAL_CAT, stale: true }], ['absent', null]] as
+    [string, Catalogue | null][])('the measured rule needs no catalogue: %s alike', (_why, cat) => {
+    const w = measured({ [ALPHA]: 400000, [BETA]: 400000, [GAMMA]: 400000 });
+    expect(contextWindowFor(NEUTRAL, cat, w))
+      .toEqual({ tokens: 400000, rule: 'measured', unmeasured: [], model: GAMMA, source: 'measured' });
+  });
+
+  // The declared third parameter is `ModelWindows | null | undefined`
+  // (`shared/modelenv.d.mts`): undefined is no reading, exactly as null is.
+  it('windows undefined is no reading at all: every class model at its provider default', () => {
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, undefined)).toEqual({
+      tokens: 272000, rule: 'default', unmeasured: [GAMMA, BETA, ALPHA], model: GAMMA, source: 'provider' });
+  });
+
+  it('no windows and no catalogue: no key, rule none, every class model unmeasured in CLASSES order', () => {
+    expect(contextWindowFor(NEUTRAL, null, null))
+      .toEqual({ tokens: null, rule: 'none', unmeasured: [GAMMA, BETA, ALPHA], model: null, source: null });
+    expect(Object.keys(modelEnvBlock(NEUTRAL, null, null))).toHaveLength(7);
+  });
+
+  it('an unseeded registry is never "every class model measured": an empty set measures nothing', () => {
+    expect(contextWindowFor(UNSEEDED, null, measured({})))
+      .toEqual({ tokens: null, rule: 'none', unmeasured: [], model: null, source: null });
+  });
+
+  it('a window the map only INHERITS is not measured — own entries only', () => {
+    const w: ModelWindows = Object.assign(Object.create({ [GAMMA]: 100000 }), { [ALPHA]: 400000, [BETA]: 400000 });
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w))
+      .toEqual({ tokens: 272000, rule: 'default', unmeasured: [GAMMA], model: GAMMA, source: 'provider' });
+  });
+
+  it('a window of exactly WINDOW_MIN is measured: the boundary is inclusive', () => {
+    const w = measured({ [ALPHA]: 1000, [BETA]: 400000, [GAMMA]: 400000 });
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w))
+      .toEqual({ tokens: 1000, rule: 'measured', unmeasured: [], model: ALPHA, source: 'measured' });
+  });
+
+  it('an in-memory window below WINDOW_MIN, or not an integer, counts as unmeasured — never a window', () => {
+    const w: ModelWindows = { [ALPHA]: 500, [BETA]: 400000.5, [GAMMA]: 400000 };
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w))
+      .toEqual({ tokens: 272000, rule: 'default', unmeasured: [BETA, ALPHA], model: BETA, source: 'provider' });
+  });
+});
+
+// ── D-8564 (operator ruling 2026-11-13): the provider's promise ─────────────
+// A lane's window follows the catalogue's advertised `context` for each class
+// model that has no measured window, as a Claude lane's follows its model's,
+// and Claude Code's own auto-compaction keeps a session below it. A measured
+// window still overrides, never above the catalogue's `maxContext`. Neutral
+// ids: WIDE stands for a 500000-default model with an 872000 ceiling, NARROW
+// for a 272000-default one with the same ceiling.
+describe('contextWindowFor — the provider\'s promise (D-8564)', () => {
+  const WIDE = 'model-6.1-wide';
+  const NARROW = 'model-6-narrow';
+  const CAT: Catalogue = {
+    probe: 'codex', fetchedAt: 1789000000, stale: false,
+    models: [nrow(WIDE, 500000, 872000), nrow(NARROW, 272000, 872000)],
+  };
+  const only = (id: string): Registry => ({ ...NEUTRAL, classes: { haiku: null, sonnet: id, opus: id, fable: null } });
+  const both: Registry = { ...NEUTRAL, classes: { haiku: NARROW, sonnet: WIDE, opus: WIDE, fable: null } };
+
+  it('an unmeasured 500000-default model reports 500000, not 200000, and the env block carries it', () => {
+    expect(contextWindowFor(only(WIDE), CAT, null))
+      .toEqual({ tokens: 500000, rule: 'default', unmeasured: [WIDE], model: WIDE, source: 'provider' });
+    expect(modelEnvBlock(only(WIDE), CAT, null).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('500000');
+  });
+
+  it('an unmeasured 272000-default model reports 272000', () => {
+    expect(contextWindowFor(only(NARROW), CAT, null))
+      .toEqual({ tokens: 272000, rule: 'default', unmeasured: [NARROW], model: NARROW, source: 'provider' });
+    expect(modelEnvBlock(only(NARROW), CAT, null).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+  });
+
+  it('a measured 400000 overrides the 500000 promise', () => {
+    expect(contextWindowFor(only(WIDE), CAT, measured({ [WIDE]: 400000 })))
+      .toEqual({ tokens: 400000, rule: 'measured', unmeasured: [], model: WIDE, source: 'measured' });
+    expect(modelEnvBlock(only(WIDE), CAT, measured({ [WIDE]: 400000 })).CLAUDE_CODE_MAX_CONTEXT_TOKENS)
+      .toBe('400000');
+  });
+
+  it('a measured window above the catalogue\'s maxContext counts only up to it', () => {
+    expect(contextWindowFor(only(WIDE), CAT, measured({ [WIDE]: 950000 })).tokens).toBe(872000);
+  });
+
+  it('one value serves every model in the session: the lane is the SMALLEST class model\'s window', () => {
+    expect(contextWindowFor(both, CAT, null))
+      .toEqual({ tokens: 272000, rule: 'default', unmeasured: [NARROW, WIDE], model: NARROW, source: 'provider' });
+    expect(contextWindowFor(both, CAT, measured({ [NARROW]: 400000 })))
+      .toEqual({ tokens: 400000, rule: 'default', unmeasured: [WIDE], model: NARROW, source: 'measured' });
+  });
+
+  it('a STALE catalogue never raises: no promise is read from it, so the lane keeps the old answer', () => {
+    const stale = { ...CAT, stale: true };
+    expect(contextWindowFor(only(WIDE), stale, null))
+      .toEqual({ tokens: null, rule: 'none', unmeasured: [WIDE], model: null, source: null });
+    expect(modelEnvBlock(only(WIDE), stale, null).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
+    // Part-measured on stale data: the unmeasured model is unknown, so the
+    // client's own 200000 bounds the lane, never the stale 500000.
+    expect(contextWindowFor(both, stale, measured({ [NARROW]: 400000 })))
+      .toEqual({ tokens: 200000, rule: 'default', unmeasured: [WIDE], model: WIDE, source: 'client' });
+  });
+
+  it('a stale catalogue\'s ceiling still LOWERS a measured window: stale data may lower, never raise', () => {
+    expect(contextWindowFor(only(WIDE), { ...CAT, stale: true }, measured({ [WIDE]: 950000 })).tokens).toBe(872000);
+  });
+
+  it('a class model the fresh catalogue does not list bounds the lane at the client default', () => {
+    const lane: Registry = { ...NEUTRAL, classes: { haiku: DELTA, sonnet: WIDE, opus: WIDE, fable: null } };
+    expect(contextWindowFor(lane, CAT, null))
+      .toEqual({ tokens: 200000, rule: 'default', unmeasured: [DELTA, WIDE], model: DELTA, source: 'client' });
+  });
+
+  it('an OpenRouter catalogue\'s maxContext is an output limit, never a window ceiling', () => {
+    const or: Catalogue = { ...CAT, probe: 'openrouter', models: [nrow(WIDE, 500000, 64000)] };
+    expect(contextWindowFor(only(WIDE), or, measured({ [WIDE]: 400000 })).tokens).toBe(400000);
+    expect(windowCeiling(or, WIDE)).toBe(1000000);
+  });
+
+  it('windowCeiling: the codex row\'s maxContext, else WINDOW_MAX, and never above WINDOW_MAX', () => {
+    expect(windowCeiling(CAT, WIDE)).toBe(872000);
+    expect(windowCeiling(CAT, DELTA)).toBe(1000000);
+    expect(windowCeiling(null, WIDE)).toBe(1000000);
+    expect(windowCeiling({ ...CAT, models: [nrow(WIDE, 500000, 2000000)] }, WIDE)).toBe(1000000);
+    expect(windowCeiling({ ...CAT, models: [nrow(WIDE, 500000, 0)] }, WIDE)).toBe(1000000);
+  });
+});
+
+describe('with no measured windows the eighth key is the provider\'s promise (D-8564)', () => {
+  /** The rule restated as the ORACLE. Kept here rather than imported:
+   *  importing the implementation would compare it with itself. */
+  const promise = (reg: Registry, cat: Catalogue | null): string | undefined => {
+    const ids = [...new Set(CLASSES.map((c) => reg.classes[c]).filter((v): v is string => v !== null))];
+    const ok = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
+    const each = ids.map((id) => {
+      const row = cat === null || cat.stale ? undefined : cat.models.find((m) => m.id === id);
+      return row !== undefined && ok(row.context) ? row.context : null;
+    });
+    const known = each.filter((v): v is number => v !== null);
+    if (known.length === 0) return undefined;
+    return String(Math.min(...known, ...(known.length < each.length ? [200000] : [])));
+  };
+  const narrow = CODEX.models.find((m) => m.context === 128000)!.id;
+  const regs: Registry[] = [
+    SEEDED,
+    ...modelCases.map((c) => c.reg).filter((r): r is Registry => r !== null),
+    { ...SEEDED, classes: { ...SEEDED.classes, haiku: narrow } },
+    { ...SEEDED, classes: { ...SEEDED.classes, opus: narrow } },
+  ];
+  const cats: (Catalogue | null)[] = [CODEX, CODEX_STALE, null];
+
+  it('every routable fixture, every catalogue: the oracle\'s answer, and an empty reading changes nothing', () => {
+    let compared = 0;
+    for (const reg of regs) {
+      for (const cat of cats) {
+        let base: Record<string, string>;
+        try { base = modelEnvBlock(reg, cat); } catch { continue; } // unroutable
+        expect(base.CLAUDE_CODE_MAX_CONTEXT_TOKENS, JSON.stringify(reg.classes)).toBe(promise(reg, cat));
+        expect(Object.keys(base)).toEqual(MODEL_ENV_KEYS.filter((k) => k in base));
+        expect(JSON.stringify(modelEnvBlock(reg, cat, measured({}))), JSON.stringify(reg.classes))
+          .toBe(JSON.stringify(base));
+        compared += 1;
+      }
+    }
+    // Guards the guard: 11 routable registries × 3 catalogues today.
+    expect(compared).toBeGreaterThanOrEqual(30);
+  });
 });
 
 describe('mergeSettingsEnv', () => {
@@ -337,7 +595,7 @@ describe('mergeSettingsEnv', () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
     mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, CODEX));
     expect(JSON.parse(fs.readFileSync(settings(), 'utf8')).env.CLAUDE_CODE_MAX_CONTEXT_TOKENS)
-      .toBe('200000');
+      .toBe('272000');
     mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null));
     const j = JSON.parse(fs.readFileSync(settings(), 'utf8'));
     expect(Object.keys(j.env)).not.toContain('CLAUDE_CODE_MAX_CONTEXT_TOKENS');
@@ -457,7 +715,7 @@ describe('C7\'s tmp names are unique per process — a static pin, not a race (r
     for (const l of lines) expect(l).toContain('${process.pid}');
   });
 
-  it('all three tmp-name sites in deploy/models-op.mjs (writeRegistry, materialise, litellm render) carry ${process.pid}', () => {
+  it('all three tmp-name sites in deploy/models-op.mjs (writeJsonFile, materialise, litellm render) carry ${process.pid}', () => {
     const lines = tmpAssignmentLines(path.join(REPO_ROOT, 'deploy', 'models-op.mjs'));
     expect(lines.length, `expected 3 tmp-name sites, found: ${JSON.stringify(lines)}`).toBe(3);
     for (const l of lines) expect(l).toContain('${process.pid}');
@@ -474,14 +732,65 @@ describe('MODEL_ENV_KEYS', () => {
 
   // C26 (moved here from the monorepo review, whose own pin read a sibling
   // worktree by a session-scoped absolute path and skipped everywhere else):
-  // `API_TIMEOUT_MS` and `CLAUDE_CODE_MAX_RETRIES` ride in the ccgpt wrapper
-  // (infra/handoff/ccgpt), never in a lane's settings.json — a re-materialise
-  // that ever wrote them here would silently override the operator's own
-  // timeout/retry knobs the next time `mergeSettingsEnv` ran. Pinned in-tree,
-  // on the shared/modelenv.mjs side, where this export actually lives.
-  it('never carries API_TIMEOUT_MS or CLAUDE_CODE_MAX_RETRIES — those ride in the ccgpt wrapper (C26)', () => {
+  // `API_TIMEOUT_MS` and `CLAUDE_CODE_MAX_RETRIES` ride in the lane's
+  // launcher — `ccd/ccrc-codex` for a ccrc-owned codex lane, as the other
+  // repository's `ccgpt` did for an external one (retired by Plan 4) — never
+  // in a lane's settings.json. A re-materialise that ever wrote
+  // them here would silently override the operator's own timeout/retry knobs
+  // the next time `mergeSettingsEnv` ran. Pinned in-tree, on the
+  // shared/modelenv.mjs side, where this export actually lives.
+  it('never carries API_TIMEOUT_MS or CLAUDE_CODE_MAX_RETRIES — those ride in the ccrc-codex launcher (C26)', () => {
     expect(MODEL_ENV_KEYS).not.toContain('API_TIMEOUT_MS');
     expect(MODEL_ENV_KEYS).not.toContain('CLAUDE_CODE_MAX_RETRIES');
+    // The same two, for the codex-lane switch: CODEX_LANE_ENV is written to the
+    // settings file too, so the same override argument applies to it.
+    expect(Object.keys(CODEX_LANE_ENV)).not.toContain('API_TIMEOUT_MS');
+    expect(Object.keys(CODEX_LANE_ENV)).not.toContain('CLAUDE_CODE_MAX_RETRIES');
+  });
+});
+
+describe('CODEX_LANE_ENV and LANE_ENV_KEYS — the security-guidance plugin\'s LLM reviews off on a codex lane (operator ruling 2026-11-12, option b)', () => {
+  it('a codex lane\'s block carries ENABLE_CODE_SECURITY_REVIEW=0', () => {
+    expect(modelEnvBlock(SEEDED, CODEX, null, { codexLane: true }).ENABLE_CODE_SECURITY_REVIEW).toBe('0');
+    expect(modelEnvBlock(SEEDED, null, null, { codexLane: true }).ENABLE_CODE_SECURITY_REVIEW).toBe('0');
+  });
+
+  it('the default call, and codexLane:false, carry no such key', () => {
+    expect(Object.keys(modelEnvBlock(SEEDED, CODEX))).not.toContain('ENABLE_CODE_SECURITY_REVIEW');
+    expect(Object.keys(modelEnvBlock(SEEDED, CODEX, null))).not.toContain('ENABLE_CODE_SECURITY_REVIEW');
+    expect(Object.keys(modelEnvBlock(SEEDED, CODEX, null, {}))).not.toContain('ENABLE_CODE_SECURITY_REVIEW');
+    expect(Object.keys(modelEnvBlock(SEEDED, CODEX, null, { codexLane: false })))
+      .not.toContain('ENABLE_CODE_SECURITY_REVIEW');
+  });
+
+  it('LANE_ENV_KEYS is every key a lane block can carry, frozen; CODEX_LANE_ENV is frozen', () => {
+    expect([...LANE_ENV_KEYS].sort())
+      .toEqual(Object.keys(modelEnvBlock(SEEDED, CODEX, null, { codexLane: true })).sort());
+    expect(LANE_ENV_KEYS).toEqual(expect.arrayContaining([...MODEL_ENV_KEYS]));
+    expect(Object.isFrozen(LANE_ENV_KEYS)).toBe(true);
+    expect(Object.isFrozen(CODEX_LANE_ENV)).toBe(true);
+    expect(CODEX_LANE_ENV).toEqual({ ENABLE_CODE_SECURITY_REVIEW: '0' });
+  });
+
+  it('the opts bag changes nothing but that key', () => {
+    const plain = modelEnvBlock(SEEDED, CODEX);
+    const codex = modelEnvBlock(SEEDED, CODEX, null, { codexLane: true });
+    const { ENABLE_CODE_SECURITY_REVIEW: _gone, ...rest } = codex;
+    expect(rest).toEqual(plain);
+  });
+
+  it('mergeSettingsEnv DELETES the key when a block omits it, and keeps a key ccrc does not own', () => {
+    const settings = path.join(home, '.claude-gpt', 'settings.json');
+    fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
+    fs.writeFileSync(settings, JSON.stringify({ env: { DISABLE_TELEMETRY: '1' } }));
+    mergeSettingsEnv(settings, modelEnvBlock(SEEDED, null, null, { codexLane: true }));
+    expect(JSON.parse(fs.readFileSync(settings, 'utf8')).env.ENABLE_CODE_SECURITY_REVIEW).toBe('0');
+    // The lane stops being codex-kind: its next block omits the key.
+    const r = mergeSettingsEnv(settings, modelEnvBlock(SEEDED, null));
+    expect(r).toEqual({ changed: true });
+    const j = JSON.parse(fs.readFileSync(settings, 'utf8'));
+    expect(Object.keys(j.env)).not.toContain('ENABLE_CODE_SECURITY_REVIEW');
+    expect(j.env.DISABLE_TELEMETRY).toBe('1');
   });
 });
 
@@ -647,5 +956,35 @@ describe('effortFile', () => {
   it('is an empty byModel when the registry has no effort map', () => {
     const { effort: _drop, ...noEffort } = SEEDED;
     expect(effortFile(noEffort, CODEX)).toEqual({ byModel: {} });
+  });
+});
+
+describe('the compaction chain: no lane env block disables or moves proactive compaction (codex-bridge D25, Stage 2 Task 15)', () => {
+  // Claude Code compacts proactively at window − 33k on a GPT model id only while it enforces the window: with the
+  // enforcement switch set it compacts at no size, and the auto-compact window lowers the threshold below the measured
+  // one (a value above the window is clamped). So neither may ever reach a lane's env block, whatever the layout.
+  const FORBIDDEN = ['CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'];
+  it('no lane env block names the enforcement switch or the auto-compact window', () => {
+    const regs: Registry[] = [SEEDED, NEUTRAL, withClasses({ fable: DELTA }), withClasses({ haiku: BETA }),
+      ...modelCases.map((c) => c.reg).filter((r): r is Registry => r !== null)];
+    const cats: (Catalogue | null)[] = [CODEX, CODEX_STALE, NEUTRAL_CAT, null];
+    let built = 0;
+    for (const reg of regs) {
+      const ids = [...new Set(CLASSES.map((c) => reg.classes[c]).filter((v): v is string => v !== null))];
+      const readings: (ModelWindows | null)[] = [null, measured({}),
+        measured(Object.fromEntries(ids.slice(1).map((id) => [id, 511000]))),
+        measured(Object.fromEntries(ids.map((id) => [id, 342000])))];
+      for (const cat of cats) {
+        for (const w of readings) {
+          let block: Record<string, string>;
+          try { block = modelEnvBlock(reg, cat, w); } catch { continue; } // unroutable: no block at all
+          for (const k of FORBIDDEN) expect(Object.keys(block), `${k} in ${JSON.stringify(reg.classes)}`).not.toContain(k);
+          built += 1;
+        }
+      }
+    }
+    for (const k of FORBIDDEN) expect([...MODEL_ENV_KEYS]).not.toContain(k);
+    // Guards the guard: every routable layout, under every catalogue and every windows reading.
+    expect(built).toBeGreaterThanOrEqual(100);
   });
 });

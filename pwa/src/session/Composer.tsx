@@ -7,13 +7,12 @@
 // keeps its Retry/Discard).
 import { useEffect, useRef, useState } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
-import { Sheet } from '../components/Sheet';
+import { AttachButton, AttachTray, Button, Icon, KeyHint, Sheet, Well } from '@ccrc/ui';
+import { PALETTE_KEYS } from '../command/CommandLayer';
 import type { PendingAttachment, PendingSend } from '../stores/session';
-import { AttachButton } from './AttachButton';
-import { AttachTray } from './AttachTray';
-import { clipboardImages, useStagedImages } from './useAttachImage';
-import { api } from '../lib/api';
-import { useMediaQuery } from '../lib/useMediaQuery';
+import { ATTACH_ACCEPT, clipboardFiles, isAttachable, useStagedImages } from './useAttachImage';
+import { api, sendErrorText } from '../lib/api';
+import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import type { SlashCommand } from '../../../shared/api';
 import { slashQuery, filterCommands } from './slashComplete';
 import './chat.css';
@@ -32,13 +31,46 @@ export interface ComposerProps {
   /** Store resolve — re-sends a draft-conflicted pending in place, same
    *  record, so its attachments and preview URLs survive. */
   onResolve?: (key: string, text: string, opts: { replaceDraft: boolean }) => void;
+  /** The LIVE status is `busy` (W2 Task S7b, D-5471): the send slot carries Stop. */
+  busy?: boolean;
+  /** Stop in the send slot. It reports `keycap`, the word the server already records for the on-screen control:
+   *  W2 changes no wire (D-5471), so the type admits no new source. */
+  onInterrupt?: (source: 'keycap') => void;
+  /** D-6326: an inline ask card is mounted, so Send is deferred LOCALLY for as long as it is: the button is DISABLED
+   *  before any click, the `dialog-open` sentence shows ABOVE the field (R93) the whole time (with a draft or without one), and
+   *  the text stays in the field. `send()`'s own guard is defence behind that, because Enter in the field calls it
+   *  directly: it makes no request either. This is the client's own rule, not the server's predicate: the server refuses
+   *  with `dialog-open` only while the pane has a menu, so an approval with no pane menu (fixture 7) would not be refused
+   *  there, yet the card still holds the send while it is mounted. It also holds through the reconnect gap, while
+   *  `DialogSheet`'s held, read-only card is up (`askInline` stays true then), so Send is held and Escape does not
+   *  interrupt until the new connection decides. Stop is unaffected: it stays enabled beside a disabled Send. */
+  askUp?: boolean;
 }
+
+/** After a send empties the draft during a busy turn, the danger Stop takes Send's spot at once; it ignores taps for
+ *  this long so an impatient double-tap on Send never stops the turn it just added to (W2 Task S7b, D-5471). */
+export const STOP_SETTLE_MS = 600;
 
 interface DraftConflict {
   key: string;
   text: string;
   draft: string;
 }
+
+/** Where the key hints show: a desk-width pane with a physical keyboard. */
+const KEY_HINTS_QUERY = `${DESK_QUERY} and (pointer: fine)`;
+
+/** The hints, in the order a reader reaches for them. Esc is the session screen's interrupt (`useEscapeInterrupt`);
+ *  ⌘K the command palette's. */
+const KEY_HINTS: readonly { keys: readonly string[]; word: string }[] = [
+  { keys: ['⏎'], word: 'send' },
+  { keys: ['⇧', '⏎'], word: 'newline' },
+  { keys: ['Esc'], word: 'stop' },
+  { keys: PALETTE_KEYS, word: 'commands' },
+];
+
+/** The hints line in words, for a screen reader. */
+const KEY_HINTS_SPOKEN = 'Keys: Enter sends, Shift Enter adds a newline, Escape stops the turn, Command K opens commands.';
 
 export function Composer({
   onSend,
@@ -47,6 +79,9 @@ export function Composer({
   disabled = false,
   placeholder = 'Message this session',
   onResolve,
+  busy = false,
+  onInterrupt,
+  askUp = false,
 }: ComposerProps): ReactNode {
   const [value, setValue] = useState('');
   const [conflict, setConflict] = useState<DraftConflict | null>(null);
@@ -60,24 +95,32 @@ export function Composer({
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
     if (id === undefined || disabled) return;
-    const files = clipboardImages(e.clipboardData);
+    const files = clipboardFiles(e.clipboardData);
     if (files.length === 0) return; // an ordinary text paste — leave it alone
     e.preventDefault();
     staged.add(files);
   };
 
   // Lazily fetch the session's slash commands (built-ins + skills) the first
-  // time the user starts a `/` command; cache for the rest of the session.
+  // time the user starts a `/` command; cache for the rest of the session. A
+  // failed read is not cached (an empty list would hide every command for the
+  // composer's life, review 1464 F6): it stays unknown and is asked once more
+  // when the next `/` command starts. What does the work is the dependency on
+  // `slashOpen`, not on the query: the effect runs once as a `/` command opens,
+  // so neither a pending read nor a failed one is asked again while it is
+  // typed, and a failure costs at most one request per `/`, never a loop
+  // (review 1473 F5).
   const query = slashQuery(value);
+  const slashOpen = query !== null;
   useEffect(() => {
-    if (query === null || commands !== null || id === undefined) return;
+    if (!slashOpen || commands !== null || id === undefined) return;
     let live = true;
     void api
       .commands(id)
       .then((r) => { if (live) setCommands([...r.builtins, ...r.skills]); })
-      .catch(() => { if (live) setCommands([]); });
+      .catch(() => {}); // stays unknown: asked again when the next `/` opens
     return () => { live = false; };
-  }, [query, commands, id]);
+  }, [slashOpen, commands, id]);
 
   const matches = query !== null && commands ? filterCommands(commands, query) : [];
 
@@ -120,13 +163,31 @@ export function Composer({
   const canSend = !disabled && !staged.hasFailed && !staged.uploading
     && (value.trim() !== '' || attachments.length > 0);
 
+  // Stop in the send slot (W2 Task S7b; D-5471, inside D-5099's "Later"). While a turn runs and nothing is drafted,
+  // the slot IS Stop. Anything drafted (a word or a staged image) returns the slot to Send, since sending during a
+  // turn is unchanged, and keeps a quieter Stop beside it, so Stop is never more than one tap away. Both skins render
+  // this composer, so both get it; the Escape key's interrupt stays `useEscapeInterrupt`'s.
+  const stopping = busy && onInterrupt !== undefined;
+  const drafted = value.trim() !== '' || staged.images.length > 0;
+  const sentAt = useRef(-Infinity);
+  const stop = (): void => {
+    if (Date.now() - sentAt.current < STOP_SETTLE_MS) return;
+    onInterrupt?.('keycap');
+  };
+
   const send = (): void => {
     if (!canSend) return;
+    // A local deferral while the inline card is mounted, whatever the server would say about the pane: no request is made
+    // and the text stays in the field. The Send button is disabled for the same reason (R77 F1), so this guard is the
+    // defence for Enter, which calls `send()` directly. The sentence above the field (R93) is the surface's own and shows
+    // while the card is up, not after a try.
+    if (askUp) return;
     const text = value.trim();
     // An explicit `undefined` second argument still counts as a 2-arg call to
     // a caller matching on arity — only pass opts when there is one.
     if (attachments.length > 0) onSend(text, { attachments });
     else onSend(text);
+    sentAt.current = Date.now();
     setValue('');
     staged.release();
   };
@@ -137,6 +198,9 @@ export function Composer({
   // built for. Shift+Enter is a newline in BOTH modes — near-universal, present
   // on on-screen keyboards, and free to honour where Enter already means newline.
   const finePointer = useMediaQuery('(pointer: fine)');
+  // W2 Task S7c (D-5471; spec §6): one quiet line of keys under the composer, where a keyboard exists and the pane
+  // is wide enough for it. Refined shows key hints here only.
+  const keyHints = useMediaQuery(KEY_HINTS_QUERY);
 
   // Opening a session should put the cursor here, not leave the user to
   // click again — the exact friction reported: tapping a fleet row (or
@@ -170,7 +234,11 @@ export function Composer({
         active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'
         || (active as HTMLElement).isContentEditable
       );
-      if (editingElsewhere || document.querySelector('[role="dialog"]') !== null) return;
+      // Any dialog but a CLOSING one (D-5457): the ⌘K palette that just ran
+      // "Open session…" is still mounted while it animates out, at
+      // `data-state="closed"`, and must not cost the arrival its focus. A
+      // dialog with no state at all (the login cover) still holds it.
+      if (editingElsewhere || document.querySelector('[role="dialog"]:not([data-state="closed"])') !== null) return;
       el.focus({ preventScroll: true });
     }, 0);
     return () => clearTimeout(timer);
@@ -200,7 +268,10 @@ export function Composer({
 
   const closeConflict = (): void => setConflict(null);
   const resolveConflict = (text: string): void => {
-    if (!conflict) return;
+    // D-6326 (R89): both resolving buttons are sends, held while the inline ask card is mounted. The buttons are disabled
+    // for the same fact; this is the defence behind them. The conflict is NOT cleared when held, so the sheet stays open
+    // with its draft and text, and nothing is queued to go when the card leaves.
+    if (!conflict || askUp) return;
     onResolve?.(conflict.key, text, { replaceDraft: true });
     setConflict(null);
   };
@@ -237,7 +308,11 @@ export function Composer({
         if (id === undefined || disabled) return;
         if (e.dataTransfer.files.length === 0) return; // a text/URL drop — leave it to the browser
         e.preventDefault();
-        staged.add(Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/')));
+        // `isAttachable`, not a bare `image/` type test: a dragged .md reports
+        // text/markdown on one OS and nothing at all on another, and the old
+        // type test dropped it SILENTLY — the file vanished with no chip, no
+        // toast and nothing in the box to say why.
+        staged.add(Array.from(e.dataTransfer.files).filter(isAttachable));
       }}
     >
       {matches.length > 0 && (
@@ -256,12 +331,20 @@ export function Composer({
         </ul>
       )}
       <AttachTray images={staged.images} onRemove={staged.remove} onRetry={staged.retry} />
+      {/* ABOVE the field (R93): the composer is at the foot of the pane, so a line here grows it upward and the field,
+          Send and Stop stay where they were; below the field the same line pushed them up by its own height. */}
+      {askUp && (
+        <p className="composer-refusal" role="status">{sendErrorText('dialog-open')}</p>
+      )}
       <div className="inputbar">
         <span className="prompt-glyph" aria-hidden="true">
           ❯
         </span>
+        {/* `data-page-keys`: while empty, `[`, `]` and `?` reach the
+            command layer (useShortcuts.ts, D-5457). */}
         <textarea
           ref={box}
+          data-page-keys=""
           className="composer-input"
           aria-label="Message"
           rows={1}
@@ -273,18 +356,49 @@ export function Composer({
           onPaste={onPaste}
         />
         {id !== undefined && (
-          <AttachButton disabled={disabled} onPick={(files) => staged.add(files)} />
+          <AttachButton accept={ATTACH_ACCEPT} disabled={disabled} onPick={(files) => staged.add(files)} />
         )}
-        <button
-          type="button"
-          className="send-btn"
-          aria-label="Send"
-          disabled={!canSend}
-          onClick={send}
-        >
-          <span aria-hidden="true">↑</span>
-        </button>
+        {stopping && !drafted ? (
+          <Button variant="danger" size="fit" className="stop-slot flex-none gap-2 rounded-full" onClick={stop}>
+            <Icon name="square" />
+            Stop
+          </Button>
+        ) : (
+          <>
+            {stopping && (
+              <Button variant="danger-ghost" size="fit" className="stop-slot flex-none min-w-tap rounded-full"
+                aria-label="Stop" onClick={stop}>
+                <Icon name="square" />
+              </Button>
+            )}
+            <button
+              type="button"
+              className="send-btn"
+              aria-label="Send"
+              disabled={!canSend || askUp}
+              onClick={send}
+            >
+              <span aria-hidden="true">↑</span>
+            </button>
+          </>
+        )}
       </div>
+
+      {keyHints && (
+        <>
+          {/* The glyphs read badly aloud (⏎ as "return symbol"), so the line is for the eye and one plain sentence
+              says the same to a screen reader. */}
+          <p className="composer-hints" aria-hidden="true">
+            {KEY_HINTS.map(({ keys, word }) => (
+              <span key={word} className="composer-hint">
+                <KeyHint keys={keys} />
+                {word}
+              </span>
+            ))}
+          </p>
+          <p className="sr-only">{KEY_HINTS_SPOKEN}</p>
+        </>
+      )}
 
       <Sheet
         open={conflict !== null}
@@ -315,24 +429,24 @@ export function Composer({
                     + " text in the session's input box. Send both together, or replace it with"
                     + ' your message.'}
               </p>
-              <pre className="well draft-well" data-testid="draft-well">{conflict.draft}</pre>
+              <Well className="draft-well" data-testid="draft-well">{conflict.draft}</Well>
               <div className="draft-actions">
-                <button
-                  type="button"
-                  className="btn-primary"
+                <Button
+                  variant="primary"
+                  disabled={askUp}
                   onClick={() => resolveConflict(conflict.text)}
                 >
                   Replace draft
-                </button>
+                </Button>
                 {/* Byte-identical to what it always was, and correct ONLY
                     because `conflict.draft` is now the whole box. */}
-                <button
-                  type="button"
-                  className="btn-ghost"
+                <Button
+                  variant="ghost"
+                  disabled={askUp}
                   onClick={() => resolveConflict(`${conflict.draft}\n${conflict.text}`)}
                 >
                   Append anyway
-                </button>
+                </Button>
                 <button type="button" className="draft-cancel" onClick={closeConflict}>
                   Cancel
                 </button>

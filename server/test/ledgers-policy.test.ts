@@ -1,0 +1,293 @@
+// Programme ledgers, PL1: the item vocabulary, the transition table and the
+// deciders in shared/ledgers.ts. Pure: no fs, no store. The table is DATA and
+// `nextItemState` reads only it, so the first group walks the whole
+// (state x act x actor) space against the five rows the spec names.
+import { describe, it, expect } from 'vitest';
+import {
+  ITEM_KINDS, ITEM_STATES, OPEN_ITEM_STATES, ITEM_TRANSITIONS, nextItemState,
+  orderItems, waitingCount, programmeWaitsOn, WAITS_ON_WORDS, isSlotSlug, isSpecPath,
+  CLEARED_WINDOW_MS, SOON_LABEL_MAX, ITEM_TITLE_MAX, ITEM_TEXT_MAX, ITEM_STEPS_MAX,
+  ITEM_OPTIONS_MAX, ANSWER_MAX, recommendationOf, earlierTickBlocks, doneWhenOf, DONE_WHEN_MAX_ITEMS, DONE_WHEN_ITEM_MAX,
+  type ItemAct, type ItemActor, type ItemState, type ItemView, type NeededBy, type WaitsOn,
+} from '../../shared/ledgers.js';
+import { OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, type RunKind, type RunState } from '../../shared/api.js';
+
+const ACTORS: readonly ItemActor[] = ['operator', 'coordinator', 'ccrc'];
+const ACTS = Object.keys(ITEM_TRANSITIONS) as ItemAct[];
+
+// The five rows of the spec's Figure 2 and the three of spec 2026-11-04 §10 (D-8076), spelled out independently of the table.
+const EXPECTED: Record<ItemAct, { actor: ItemActor; from: readonly ItemState[]; to: ItemState }> = {
+  tick: { actor: 'operator', from: ['open'], to: 'checking' },
+  confirm: { actor: 'coordinator', from: ['checking'], to: 'done' },
+  return: { actor: 'coordinator', from: ['checking'], to: 'open' },
+  withdraw: { actor: 'coordinator', from: ['open', 'checking'], to: 'withdrawn' },
+  dismiss: { actor: 'operator', from: ['open', 'checking'], to: 'dismissed' },
+  act: { actor: 'operator', from: ['open'], to: 'done' },
+  decline: { actor: 'operator', from: ['open'], to: 'dismissed' },
+  settle: { actor: 'ccrc', from: ['open', 'checking'], to: 'done' },
+};
+
+describe('vocabulary', () => {
+  it('lists the kinds, the states and the open pair', () => {
+    expect([...ITEM_KINDS]).toEqual(['decide', 'do', 'value', 'secret']);
+    expect([...ITEM_STATES]).toEqual(['open', 'checking', 'done', 'withdrawn', 'dismissed']);
+    expect([...OPEN_ITEM_STATES]).toEqual(['open', 'checking']);
+  });
+
+  it('OPEN_ITEM_STATES is what the table leaves: the states some row\'s `from` names, in ITEM_STATES order (F4)', () => {
+    const left = ITEM_STATES.filter((s) => Object.values(EXPECTED).some((row) => row.from.includes(s)));
+    expect([...OPEN_ITEM_STATES]).toEqual(left);
+    // and every state the table leaves is a state an item can still be moved out of
+    for (const s of ITEM_STATES) {
+      const movable = ACTS.some((a) => ITEM_TRANSITIONS[a].from.includes(s));
+      expect(OPEN_ITEM_STATES.includes(s), s).toBe(movable);
+    }
+  });
+
+  it('exports the bounds with the plan\'s values', () => {
+    expect(CLEARED_WINDOW_MS).toBe(48 * 3600 * 1000); // D-8194: was seven days
+    expect(SOON_LABEL_MAX).toBe(40);
+    expect(ITEM_TITLE_MAX).toBe(140);
+    expect(ITEM_TEXT_MAX).toBe(2000);
+    expect(ITEM_STEPS_MAX).toBe(12);
+    expect(ITEM_OPTIONS_MAX).toBe(6);
+    expect(ANSWER_MAX).toBe(2000);
+  });
+});
+
+describe('the transition table', () => {
+  it('has exactly the eight rows of the spec', () => {
+    expect(ACTS.sort()).toEqual(Object.keys(EXPECTED).sort());
+    for (const act of ACTS) expect(ITEM_TRANSITIONS[act], act).toEqual(EXPECTED[act]);
+  });
+
+  it("every act's row is honoured and every other (state, act, actor) is refused", () => {
+    for (const state of ITEM_STATES) {
+      for (const act of ACTS) {
+        for (const actor of ACTORS) {
+          const row = EXPECTED[act];
+          const got = nextItemState(state, act, actor, { programmeHasOpenRun: false });
+          const label = `${state} ${act} ${actor}`;
+          if (!row.from.includes(state)) {
+            expect(got, label).toEqual({ ok: false, why: 'not-open' });
+          } else if (row.actor !== actor) {
+            expect(got, label).toEqual({ ok: false, why: 'wrong-actor' });
+          } else {
+            expect(got, label).toEqual({ ok: true, to: row.to });
+          }
+        }
+      }
+    }
+  });
+
+  it('every act but dismiss ignores the programme context', () => {
+    for (const state of ITEM_STATES) {
+      for (const act of ACTS.filter((a) => a !== 'dismiss')) {
+        for (const actor of ACTORS) {
+          expect(nextItemState(state, act, actor, { programmeHasOpenRun: true }), `${state} ${act} ${actor}`)
+            .toEqual(nextItemState(state, act, actor, { programmeHasOpenRun: false }));
+        }
+      }
+    }
+  });
+
+  it('dismiss is refused while the programme has an open run', () => {
+    expect(nextItemState('open', 'dismiss', 'operator', { programmeHasOpenRun: true }))
+      .toEqual({ ok: false, why: 'programme-live' });
+    expect(nextItemState('checking', 'dismiss', 'operator', { programmeHasOpenRun: true }))
+      .toEqual({ ok: false, why: 'programme-live' });
+    expect(nextItemState('open', 'dismiss', 'operator', { programmeHasOpenRun: false }))
+      .toEqual({ ok: true, to: 'dismissed' });
+  });
+
+  it('a dismiss by the wrong actor or from a closed state is refused for that reason, not programme-live', () => {
+    expect(nextItemState('open', 'dismiss', 'coordinator', { programmeHasOpenRun: true }))
+      .toEqual({ ok: false, why: 'wrong-actor' });
+    expect(nextItemState('done', 'dismiss', 'operator', { programmeHasOpenRun: true }))
+      .toEqual({ ok: false, why: 'not-open' });
+  });
+});
+
+function item(id: number, state: ItemState, neededBy: NeededBy, raisedAt: number): ItemView {
+  return {
+    id, program: 'prog-a', runId: null, kind: 'do', title: `t${id}`, why: 'w', how: [], options: null,
+    recommended: null, recommendedWhy: null, neededBy, soonLabel: null, state, stale: false, raisedAt, tickedAt: null, closedAt: null,
+    answer: null, note: null, secretSlot: null, secretSet: null, history: [],
+  };
+}
+
+describe('orderItems', () => {
+  it('puts blocking first and checking after open, oldest first within each', () => {
+    const items = [
+      item(1, 'open', 'later', 10),
+      item(2, 'checking', 'blocking', 20),
+      item(3, 'open', 'soon', 30),
+      item(4, 'open', 'blocking', 40),
+      item(5, 'open', 'blocking', 5),
+    ];
+    const before = items.map((i) => i.id);
+    expect(orderItems(items).map((i) => i.id)).toEqual([5, 4, 2, 3, 1]);
+    expect(items.map((i) => i.id), 'does not mutate its input').toEqual(before);
+  });
+
+  it('breaks a tie on needed-by, state and raisedAt by id, whatever the input order (F2)', () => {
+    const items = [item(9, 'open', 'soon', 10), item(3, 'open', 'soon', 10), item(7, 'open', 'soon', 10)];
+    expect(orderItems(items).map((i) => i.id)).toEqual([3, 7, 9]);
+    expect(orderItems([...items].reverse()).map((i) => i.id)).toEqual([3, 7, 9]);
+  });
+});
+
+describe('waitingCount', () => {
+  it('counts open only', () => {
+    const items = [item(1, 'open', 'soon', 1), item(2, 'open', 'later', 2), item(3, 'checking', 'blocking', 3),
+      item(4, 'done', 'soon', 4)];
+    expect(waitingCount(items)).toBe(2);
+    expect(waitingCount([])).toBe(0);
+  });
+});
+
+describe('programmeWaitsOn', () => {
+  const r = (state: RunState, kind: RunKind) => ({ state, kind });
+  const cases: [string, { state: RunState; kind: RunKind }[], WaitsOn][] = [
+    ['no runs', [], 'ended'],
+    ['planned work', [r('planned', 'work')], 'next-wave'],
+    ['merging beats planned', [r('merging', 'work'), r('planned', 'work')], 'merge-queue'],
+    ['work awaiting review', [r('awaiting-review', 'work')], 'review'],
+    ['an active review run', [r('working', 'review')], 'review'],
+    ['active work beats merging', [r('working', 'work'), r('merging', 'work')], 'work'],
+    ['dispatched work is active', [r('dispatched', 'work')], 'work'],
+    ['only terminal runs', [r('done', 'work'), r('failed', 'review')], 'ended'],
+    // review 1323 F1: the priority, pinned with mixed rows
+    ['work awaiting review beats a merging run', [r('awaiting-review', 'work'), r('merging', 'work')], 'review'],
+    ['active work beats an active review', [r('working', 'review'), r('working', 'work')], 'work'],
+    ['a run of state unknown (work) is active', [r('unknown', 'work')], 'work'],
+    ['a merging review run is the merge queue', [r('merging', 'review')], 'merge-queue'],
+    ['done and failed runs are ended', [r('done', 'work'), r('failed', 'work')], 'ended'],
+    // review 1323 R1: `ended` is exactly "no run outside done and failed"; any other open run reads `work`
+    ['a closing work run is open, so work', [r('closing', 'work')], 'work'],
+    ['a closing review run is open, so work', [r('closing', 'review')], 'work'],
+    ['an active run of kind unknown is open, so work', [r('working', 'unknown')], 'work'],
+    ['a review run awaiting its own review is open, so work', [r('awaiting-review', 'review')], 'work'],
+    ['a closing run beside terminal ones is still open', [r('done', 'work'), r('closing', 'work')], 'work'],
+  ];
+  for (const [name, runs, want] of cases) {
+    it(`${name} -> ${want}`, () => { expect(programmeWaitsOn(runs)).toBe(want); });
+  }
+
+  it('words every WaitsOn exactly', () => {
+    expect(WAITS_ON_WORDS).toEqual({
+      work: 'work in progress',
+      review: 'a review',
+      'merge-queue': 'the merge queue',
+      'next-wave': 'the next wave to start',
+      ended: 'nothing: the programme has no open run',
+    });
+  });
+});
+
+describe('isSpecPath', () => {
+  it('accepts a spec path', () => {
+    expect(isSpecPath('docs/superpowers/specs/2026-10-31-x-design.md')).toBe(true);
+  });
+  it('refuses plans, parent hops, a leading slash, a double slash, a non-md file and a long path', () => {
+    for (const p of [
+      'docs/superpowers/plans/x.md', 'docs/superpowers/specs/../x.md', '/docs/superpowers/specs/x.md',
+      'docs/superpowers/specs/x.html', 'docs/superpowers/specs//x.md', 'docs/superpowers/specs/',
+      `docs/superpowers/specs/${'a'.repeat(200)}.md`,
+    ]) expect(isSpecPath(p), p).toBe(false);
+  });
+  it('accepts a path of exactly 200 characters', () => {
+    const p = `docs/superpowers/specs/${'a'.repeat(200 - 'docs/superpowers/specs/.md'.length)}.md`;
+    expect(p).toHaveLength(200);
+    expect(isSpecPath(p)).toBe(true);
+  });
+});
+
+describe('isSlotSlug', () => {
+  it('accepts a slug', () => {
+    expect(isSlotSlug('npm-token')).toBe(true);
+    expect(isSlotSlug('a')).toBe(true);
+    expect(isSlotSlug('a'.repeat(40))).toBe(true);
+  });
+  it('refuses parent hops, capitals, slashes, a leading dash and 41 characters', () => {
+    for (const s of ['../a', 'A', 'a/b', '-a', '', 'a'.repeat(41), 'a b', 'a.b']) {
+      expect(isSlotSlug(s), JSON.stringify(s)).toBe(false);
+    }
+  });
+});
+
+describe('recommendationOf, the one reader of a decide item\'s recommendation (plan PL9, spec §3.2, D24)', () => {
+  const decide = { kind: 'decide' as const, options: ['Library first', 'Keep the order'] };
+  it('answers the option and why for a decide item that names one', () => {
+    expect(recommendationOf({ ...decide, recommended: 1, recommendedWhy: 'Keeping the order costs nothing.' }))
+      .toEqual({ index: 1, why: 'Keeping the order costs nothing.' });
+  });
+  it('an item from a server before PL9 (both fields absent) or raised before the rule (both null) has none: it draws as before', () => {
+    expect(recommendationOf(decide)).toBeNull();
+    expect(recommendationOf({ ...decide, recommended: null, recommendedWhy: null })).toBeNull();
+  });
+  it('every other kind has none, whatever it carries', () => {
+    for (const kind of ['do', 'value', 'secret'] as const) {
+      expect(recommendationOf({ kind, options: ['a', 'b'], recommended: 0, recommendedWhy: 'Because.' }), kind).toBeNull();
+    }
+  });
+  it('an index naming no listed option, or reasons that are not text, mark nothing rather than the wrong option', () => {
+    for (const recommended of [-1, 2, 0.5, Number.NaN]) {
+      expect(recommendationOf({ ...decide, recommended, recommendedWhy: 'Because.' }), String(recommended)).toBeNull();
+    }
+    expect(recommendationOf({ ...decide, recommended: 0, recommendedWhy: '  ' })).toBeNull();
+    // A half row (a corrupt one: the route and the store never write it) marks nothing: an absent index is never option 0.
+    expect(recommendationOf({ ...decide, recommended: null, recommendedWhy: 'Because.' })).toBeNull();
+    expect(recommendationOf({ ...decide, recommendedWhy: 'Because.' })).toBeNull();
+    expect(recommendationOf({ ...decide, recommended: 0, recommendedWhy: 7 as never })).toBeNull();
+    expect(recommendationOf({ ...decide, options: null, recommended: 0, recommendedWhy: 'Because.' })).toBeNull();
+  });
+});
+
+// ONE DECIDER (desktop-polish carry, review 1338 advisory): whether an earlier tick mail holds the operator's next
+// tick is decided here alone, over (its delivery state, its recipient, the coordinator, the recipient's presence); the tick
+// handler only acts on the answer.
+describe('earlierTickBlocks', () => {
+  const PRESENCES = ['alive', 'dead', 'absent', 'unmeasured'] as const;
+  it('a mail no longer outstanding never blocks, whoever it went to and however they read', () => {
+    for (const state of TERMINAL_DELIVERY_STATES) {
+      for (const recipientPresence of PRESENCES) {
+        for (const recipient of ['coord-a', 'coord-b']) {
+          expect(earlierTickBlocks({ state, recipient, coordinator: 'coord-a', recipientPresence }), `${state} ${recipient} ${recipientPresence}`).toBe(false);
+        }
+      }
+    }
+  });
+  it('an outstanding mail blocks, except one left behind: its recipient is no longer the coordinator and reads dead or absent', () => {
+    for (const state of OUTSTANDING_DELIVERY_STATES) {
+      for (const recipientPresence of PRESENCES) {
+        expect(earlierTickBlocks({ state, recipient: 'coord-a', coordinator: 'coord-a', recipientPresence }), `${state} coordinator ${recipientPresence}`).toBe(true);
+        const leftBehind = recipientPresence === 'dead' || recipientPresence === 'absent';
+        expect(earlierTickBlocks({ state, recipient: 'coord-old', coordinator: 'coord-a', recipientPresence }), `${state} displaced ${recipientPresence}`).toBe(!leftBehind);
+      }
+    }
+  });
+});
+
+describe('doneWhenOf (D-8126)', () => {
+  it('refuses an empty list, empty or blank items, too many items, a long item and non-arrays', () => {
+    const tooMany = Array.from({ length: DONE_WHEN_MAX_ITEMS + 1 }, () => 'a');
+    for (const raw of [[], [''], ['  '], tooMany, ['a'.repeat(DONE_WHEN_ITEM_MAX + 1)], 'one', [1], null, undefined]) {
+      const r = doneWhenOf(raw);
+      expect(r.ok, JSON.stringify(raw)).toBe(false);
+      if (!r.ok) {
+        expect(r.detail).toContain(String(DONE_WHEN_MAX_ITEMS));
+        expect(r.detail).toContain(String(DONE_WHEN_ITEM_MAX));
+      }
+    }
+  });
+  it('trims each item', () => {
+    expect(doneWhenOf([' a ', 'b'])).toEqual({ ok: true, doneWhen: ['a', 'b'] });
+  });
+  it('accepts exactly 12 items of 2,000 characters', () => {
+    const raw = Array.from({ length: 12 }, () => 'x'.repeat(2000));
+    const r = doneWhenOf(raw);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.doneWhen).toEqual(raw);
+  });
+});

@@ -24,7 +24,7 @@ export interface RolloverCase {
 const compact = (o: Record<string, number | null>): string => JSON.stringify(o);
 
 /** Spaced, the way Python's json.dump writes gpt.json (default separators are
- *  `', '` and `': '`) — infra/handoff/ccgpt-usage. */
+ *  `', '` and `': '`) — ccd/ccgpt-usage.py. */
 const spaced = (o: Record<string, number | null>): string =>
   `{${Object.entries(o).map(([k, v]) => `"${k}": ${v}`).join(', ')}}`;
 
@@ -105,6 +105,26 @@ export function rolloverCases(now: number): RolloverCase[] {
       why: 'a lapsed resetAt over an absent value stays unknown, not 0',
     },
     {
+      file: 'statusline-five-null.json',
+      // What the statusline writes for a payload with no 5h figure. The window
+      // exists and nothing read it, so this is NOT the `fiveWindowMinutes: 0`
+      // lane below: the weekly figure stands, and the row still does not rank.
+      content: compact({ five: null, seven: 40, ts: now - 60, fiveResetAt: null, sevenResetAt: now + 200000 }),
+      expect: { five: null, seven: 40, fiveRolledOver: false, sevenRolledOver: false },
+      score: null,
+      why: 'a null five is unknown, never 0, and one known half does not rank',
+    },
+    {
+      file: 'statusline-five-null-kept-reset.json',
+      // The same payload over a row whose 5h figure had lapsed: the writer keeps
+      // that window's `fiveResetAt` for its older-row check. A lapsed reset with
+      // no figure beside it is no rollover, so nothing here may turn it into 0.
+      content: compact({ five: null, seven: 40, ts: now - 60, fiveResetAt: now - 100, sevenResetAt: now + 200000 }),
+      expect: { five: null, seven: 40, fiveRolledOver: false, sevenRolledOver: false },
+      score: null,
+      why: 'a null five that keeps its lapsed resetAt stays unknown, not a rollover',
+    },
+    {
       // ── SINGLE-WINDOW LANES ─────────────────────────────────────────────
       // A ChatGPT/Codex Pro lane has NO 5h window: the backend answers
       // `x-codex-secondary-window-minutes: 0` and ccgpt-usage carries it through
@@ -147,6 +167,37 @@ export function rolloverCases(now: number): RolloverCase[] {
       expect: { five: 12, seven: 40, fiveRolledOver: false, sevenRolledOver: false },
       score: 40,
       why: 'a real 5h window ranks on both halves, marker or no marker',
+    },
+    {
+      // D-8120: an ANTHROPIC lane whose plan has no 5h window. The statusline
+      // writer states the same marker once a whole 5h window of its readings
+      // carried no 5h figure, so the row ranks on its weekly figure exactly as a
+      // Codex weekly-only row does — compact, and with the run's start beside it.
+      file: 'statusline-no-five-window.json',
+      content: compact({ five: null, seven: 15, ts: now - 60, fiveResetAt: now - 259200,
+                         sevenResetAt: now + 200000, fiveAbsentSince: now - 259200, fiveWindowMinutes: 0 }),
+      expect: { five: null, seven: 15, fiveRolledOver: false, sevenRolledOver: false },
+      score: 15,
+      why: 'an Anthropic lane the writer marked as having no 5h window ranks on its weekly figure',
+    },
+    {
+      // The same lane before its run is a whole window old: the writer has not
+      // stated the marker, so `fiveAbsentSince` alone is no score — the readers
+      // never derive the fact from it.
+      file: 'statusline-five-absent-young.json',
+      content: compact({ five: null, seven: 15, ts: now - 60, fiveResetAt: null,
+                         sevenResetAt: now + 200000, fiveAbsentSince: now - 3600 }),
+      expect: { five: null, seven: 15, fiveRolledOver: false, sevenRolledOver: false },
+      score: null,
+      why: 'a five-less run younger than one window is still unknown, not weekly-only',
+    },
+    {
+      file: 'statusline-no-five-window-rolled.json',
+      content: compact({ five: null, seven: 70, ts: now - 60, fiveResetAt: now - 259200,
+                         sevenResetAt: now - 100, fiveAbsentSince: now - 259200, fiveWindowMinutes: 0 }),
+      expect: { five: null, seven: 0, fiveRolledOver: false, sevenRolledOver: true },
+      score: null,
+      why: 'a marked Anthropic lane whose weekly window rolled is unrankable, not 0',
     },
     {
       file: 'five-absent-old.json',

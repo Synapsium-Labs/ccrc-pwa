@@ -1,14 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { StatusDot } from '../src/components/StatusDot';
-import { LimitBar } from '../src/components/LimitBar';
-import { Skeleton } from '../src/components/Skeleton';
-import { Sheet } from '../src/components/Sheet';
-import { QuickConfirm } from '../src/components/QuickConfirm';
-import { toast, ToastHost } from '../src/components/Toast';
-import { declValue, ruleIn } from './cssRule';
+import { BACK_BUTTON, BackButton, Button, CHIP, CHIP_DOT, Chip, DOOR, Door, LimitBar, QuickConfirm, Sheet, Skeleton, StatusDot, ToastHost, buttonVariants, toast } from '@ccrc/ui';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself.
 afterEach(() => {
@@ -67,7 +59,7 @@ describe('StatusDot', () => {
   });
 
   it('pins the cleanup glyph to its TEXT presentation, so the lamp keeps its own colour', () => {
-    // U+267B has an emoji presentation and no coverage in the --font-mono
+    // U+267B has an emoji presentation and no coverage in the --family-mono
     // stack on Apple platforms, so the bare glyph falls back to Apple Color
     // Emoji — painting itself the emoji's green, ignoring --status-cleanup
     // and every ratio design/contrast-check.mjs measured for it, and reading
@@ -221,6 +213,8 @@ describe('Sheet', () => {
   // jsdom does no layout, so what follows can only be asserted against the
   // source — as the attach-tray CSS guards already do. The real geometry is
   // checked in Chromium; these keep the declarations from being dropped again.
+  // Since the Sheet moved to utility classes, "the source" is the class list
+  // rather than a rule in a stylesheet — see the note inside.
   //
   // Both surfaces render caller text: DialogSheet puts the real
   // AskUserQuestion in the title and its header chip in the eyebrow, and those
@@ -229,24 +223,32 @@ describe('Sheet', () => {
   // is clipped at the viewport edge, out of reach. Every other dynamic-text
   // surface in this codebase (.opt-label, .opt-desc, .well, .dlg-body) sets
   // `overflow-wrap: anywhere`.
-  describe('sheet header CSS guards', () => {
-    const css = readFileSync(
-      path.resolve(process.cwd(), 'src/components/primitives.css'),
-      'utf8',
-    );
-    // Shared rule reader (test/cssRule.ts), not a hand-rolled copy — fix round
-    // 4, controller item 1. The copy that used to live here was `^`-anchored
-    // with the `m` flag, so re-indenting primitives.css — a file this lane does
-    // not own — or grouping `.sheet-title` with a sibling selector turned these
-    // assertions into a thrown "" and a failure about nothing. `declValue`
-    // reads the DECLARATION, so it still fails when the value changes or the
-    // declaration is dropped, and it also catches a later override of the same
-    // property inside the same rule, which `toMatch` did not.
-    const rule = (selector: string): string => ruleIn(css, selector);
+  describe('sheet header guards', () => {
+    // WHAT CHANGED, AND WHAT IT COST. These two used to read primitives.css and
+    // assert the DECLARATIONS — `overflow-wrap: anywhere`, `max-height: 38vh`,
+    // `overflow-y: auto` — straight out of the stylesheet. The Sheet is styled
+    // with utility classes now, so there is no rule in any .css file to read:
+    // the class IS the declaration, and it only becomes CSS when Tailwind
+    // generates it at build time.
+    //
+    // So the guard asserts the classes are on the element. That is genuinely
+    // WEAKER than what it replaced, in one specific way worth naming: reading
+    // the rule also caught a LATER override of the same property inside it,
+    // and a class list cannot. It still fails if a class is dropped or
+    // renamed, which is the defect these were written for — a long
+    // AskUserQuestion running off a position:fixed panel with nothing to clip
+    // against, and a 600-char question pushing the option rows below the fold.
+    const open = (title: string, eyebrow?: string) =>
+      render(
+        <Sheet open title={title} eyebrow={eyebrow} onClose={() => {}}>
+          <p>body</p>
+        </Sheet>,
+      );
 
     it('lets a long unbroken token in the title and the eyebrow wrap', () => {
-      expect(declValue(rule('.sheet-title'), 'overflow-wrap')).toBe('anywhere');
-      expect(declValue(rule('.sheet-eyebrow'), 'overflow-wrap')).toBe('anywhere');
+      open('a/very/long/unbroken/path/that/cannot/break', 'claude is asking');
+      expect(document.querySelector('.sheet-title')).toHaveClass('[overflow-wrap:anywhere]');
+      expect(document.querySelector('.sheet-eyebrow')).toHaveClass('[overflow-wrap:anywhere]');
     });
 
     // The markup this replaced rendered the question in .dlg-body, capped at
@@ -255,9 +257,27 @@ describe('Sheet', () => {
     // rows below the fold on a phone — a 600-char question is ~430px of
     // heading. Short titles never reach the cap, so it stays invisible.
     it('caps the title with its own scroller, as .dlg-body was', () => {
-      const title = rule('.sheet-title');
-      expect(declValue(title, 'max-height')).toBe('38vh');
-      expect(declValue(title, 'overflow-y')).toBe('auto');
+      open('a question');
+      const title = document.querySelector('.sheet-title');
+      expect(title).toHaveClass('max-h-[38vh]');
+      expect(title).toHaveClass('overflow-y-auto');
+    });
+
+    // D-6325: an ask sheet has exactly ONE vertical scroller, the body. `titleScroll={false}` is the opt-in that drops
+    // the title's own cap and scroller so a long question grows inside the body; default `true` is every other sheet,
+    // unchanged, and the wrapping guard above holds either way.
+    it('titleScroll={false} drops the title\'s own cap and scroller; the default keeps both', () => {
+      const { unmount } = render(
+        <Sheet open title="a question" onClose={() => {}}><p>body</p></Sheet>,
+      );
+      expect(document.querySelector('.sheet-title')).toHaveClass('max-h-[38vh]', 'overflow-y-auto');
+      unmount();
+      render(<Sheet open title="a question" titleScroll={false} onClose={() => {}}><p>body</p></Sheet>);
+      const title = document.querySelector('.sheet-title');
+      expect(title).not.toHaveClass('max-h-[38vh]');
+      expect(title).not.toHaveClass('overflow-y-auto');
+      expect(title).toHaveClass('[overflow-wrap:anywhere]');
+      expect(title).toHaveClass('flex-none');
     });
   });
 });
@@ -296,6 +316,26 @@ describe('QuickConfirm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stop session' }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // Stall watch settings W2 (spec 2026-10-05 §13, P8; `confirm-on-stage-diff`
+  // (D-4034)): the sheet built from the server's write effect says one thing
+  // per line, so `consequence` takes a list and renders a paragraph per line,
+  // in order. A string is still one paragraph; an empty list renders none and
+  // leaves the actions.
+  it('renders one consequence paragraph per line of a list, and one for a string', () => {
+    const lines = () => [...document.querySelectorAll('p.qc-consequence')].map((p) => p.textContent);
+    const { rerender } = render(
+      <QuickConfirm {...props} consequence={['Checks turn on.', 'Busy delivery stops.']} open onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+    expect(lines()).toEqual(['Checks turn on.', 'Busy delivery stops.']);
+
+    rerender(<QuickConfirm {...props} open onConfirm={vi.fn()} onClose={vi.fn()} />);
+    expect(lines()).toEqual([props.consequence]);
+
+    rerender(<QuickConfirm {...props} consequence={[]} open onConfirm={vi.fn()} onClose={vi.fn()} />);
+    expect(lines()).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Stop session' })).toBeInTheDocument();
   });
 });
 
@@ -339,5 +379,229 @@ describe('toast + ToastHost', () => {
     });
     fireEvent.click(screen.getByText('Tap me away'));
     expect(screen.queryByText('Tap me away')).not.toBeInTheDocument();
+  });
+});
+
+// — BackButton —
+
+describe('BackButton', () => {
+  // The five rules this replaced had drifted twice, and both drifts were
+  // invisible from any one of them. The measured mutation table said neither
+  // claim below was guarded: dropping `motion-reduce:transition-none` and
+  // swapping the ink both left 192 tests green and the gate at ALL 3432 PASS.
+  // THE EXPORTED CONSTANT, not the file. Reading the source made the first
+  // version of these assertions VACUOUS and the mutation table caught it:
+  // deleting `motion-reduce:transition-none` from the class string left the
+  // phrase in the comment ABOVE it that explains the fix, so `toContain` was
+  // satisfied by prose while the utility was gone. 217 tests stayed green.
+  // `BACK_BUTTON` is the value the component actually renders.
+  const source = BACK_BUTTON;
+
+  it('honours prefers-reduced-motion, which four of the five rules did not', () => {
+    // THE ONE BEHAVIOUR CHANGE in the extraction, so it gets a guard rather
+    // than a comment. chat.css's reduced-motion block named `.chat-back`;
+    // fleet.css's named `.fab`, `.card`, `.notice-x`, `.acct-change`,
+    // `.acct-list .acct-row` and `.proj-row` — no back button. So four of the
+    // five animated for a reader who had asked nothing to animate, and the
+    // component is where that stops being per-stylesheet luck.
+    expect(source).toContain('motion-reduce:transition-none');
+  });
+
+  it('keeps the two transitions on their own durations', () => {
+    // `transform` at --dur-press and `color` at --dur-fast. A single
+    // `duration-*` utility cannot say that, so collapsing them would be a
+    // silent change to how the press feels — which is why this is an
+    // arbitrary property and why the shape is asserted.
+    expect(source).toContain('transform_var(--dur-press)_var(--curve-swift)');
+    expect(source).toContain('color_var(--dur-fast)_var(--curve-swift)');
+  });
+
+  it('paints --ink-secondary at rest and --ink-primary pressed', () => {
+    // Pinned BY NAME, not by ratio. Both inks clear 4.5 on --bg-page in all
+    // twelve palettes, so a swap passes every contrast check silently — the
+    // same gap TextInput's ink had. Which ink a control rests at is a design
+    // decision: the chevron is quiet until touched, and the lift to
+    // --ink-primary is one of the two cues the press gives.
+    expect(source).toContain('text-ink-secondary');
+    expect(source).toContain('active:text-ink-primary');
+    expect(source).toContain('active:scale-[0.88]');
+  });
+
+  it('renders a real button carrying the call site’s hook class', () => {
+    const onClick = vi.fn();
+    render(<BackButton className="chat-back" aria-label="Back to fleet" onClick={onClick}>‹</BackButton>);
+    const el = screen.getByRole('button', { name: 'Back to fleet' });
+    // The hook class is what shell.css's desktop-hiding rules still key on,
+    // and it is the half of the old assertions that did not need rewriting.
+    expect(el).toHaveClass('chat-back');
+    expect(el).toHaveAttribute('type', 'button');
+    fireEvent.click(el);
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+});
+
+// — Chip —
+
+describe('Chip', () => {
+  // Same rule as BackButton and Door: the EXPORTED constant, never the source
+  // file. The pill is pure appearance and vitest runs with `css: false`, so
+  // nothing in this repo can compute it — these assertions ARE the mechanism.
+  // Measured: deleting `rounded-full` from CHIP reddened nothing before this
+  // block existed, across the three suites that render chips.
+  it('is a pill, with the two literals the rules carried', () => {
+    // --r-full. A chip that loses this reads as a badge, which is a different
+    // control: a badge counts, a chip labels.
+    expect(CHIP).toContain('rounded-full');
+    // 6px sits between --sp-1 (4px) and --sp-2 (8px); 9px between --sp-2 and
+    // --sp-3 (12px). Pinned so a later tidy-up cannot round either to a token
+    // and call it a no-op — both would be visual changes.
+    expect(CHIP).toContain('gap-[6px]');
+    expect(CHIP).toContain('px-[9px]');
+    expect(CHIP).toContain('py-1');
+  });
+
+  it('is a mono micro-label that sets no colour of its own', () => {
+    expect(CHIP).toContain('font-mono');
+    // The meta role (D-5093): Refined 12px, the `text-xs` it replaced, and
+    // Instrument's 11 (D-5460: this pin follows the role).
+    expect(CHIP).toContain('text-meta');
+    expect(CHIP).toContain('font-medium');
+    expect(CHIP).toContain('leading-none');
+    // THE POINT OF THE EXTRACTION. An account hue is ccrc routing vocabulary,
+    // so it arrives from outside — inline style, or chat.css's three
+    // colour-only modifiers. A `text-`/`bg-` here would be a second place
+    // that decides what a chip means.
+    expect(CHIP).not.toMatch(/(^|\s)(text|bg)-(?!meta(\s|$))[a-z]/);
+  });
+
+  it('restores what the `font` shorthand reset, so an ancestor cannot leak in', () => {
+    // The rule used the shorthand, which zeroes font-style and
+    // font-variant-numeric. Utilities do not. The app sets
+    // `font-variant-numeric: tabular-nums` in twenty-odd places.
+    expect(CHIP).toContain('not-italic');
+    expect(CHIP).toContain('normal-nums');
+  });
+
+  it('gives the dot currentColor and nothing else to drift from', () => {
+    expect(CHIP_DOT).toContain('bg-current');
+    expect(CHIP_DOT).toContain('size-[5px]');
+    expect(CHIP_DOT).toContain('rounded-full');
+  });
+
+  it('never lets a long label squeeze the dot (D-5578)', () => {
+    // `.chip i` allowed the dot to shrink, and a label of about 18 characters
+    // that wraps inside its pill at 360 or 390 drew it 2 to 3px wide. The
+    // coordinator's ruling: a chip's dot never squeezes. `shrink-0` keeps the
+    // flex basis (`size-[5px]`) and nothing else, so it is the whole fix;
+    // `flex-none` would also zero the grow factor, which the dot never had.
+    expect(CHIP_DOT.split(/\s+/)).toContain('shrink-0');
+    expect(CHIP_DOT).not.toMatch(/(^|\s)(shrink|flex-shrink)(-[1-9]\d*)?(\s|$)/);
+    // Nor by another route: a `flex-*`, `basis-*` or `grow*` utility would
+    // move the dot's size from `size-[5px]` to the flex basis or grow share
+    // (`flex-1` sets the basis to 0%), so the class carries none.
+    expect(CHIP_DOT).not.toMatch(/(^|\s)(flex|basis|grow)(-\S+)?(\s|$)/);
+  });
+
+  it('renders the dot only when asked, and always aria-hidden', () => {
+    const { container, rerender } = render(<Chip>ccrc-pwa</Chip>);
+    expect(container.querySelector('i')).toBeNull();
+    rerender(<Chip dot>team·alt</Chip>);
+    const dot = container.querySelector('i');
+    expect(dot).not.toBeNull();
+    expect(dot).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('keeps the `chip` hook class, which chat.css’s three modifiers sit beside', () => {
+    const { container } = render(<Chip className="chip--archived">archived</Chip>);
+    const el = container.querySelector('span');
+    expect(el).toHaveClass('chip');
+    expect(el).toHaveClass('chip--archived');
+  });
+});
+
+// — Door —
+
+describe('Door', () => {
+  // Asserted against the EXPORTED constant for the reason BackButton's block
+  // gives: reading the source file let the comment explaining a fix satisfy
+  // the assertion about the fix.
+  it('honours prefers-reduced-motion, which neither door rule did', () => {
+    // fleet.css's reduced-motion block named `.fab`, `.card`, `.notice-x`,
+    // `.acct-change`, `.acct-list .acct-row` and `.proj-row`. Neither door.
+    expect(DOOR).toContain('motion-reduce:transition-none');
+  });
+
+  it('keeps the 5px gap a literal, because the rules did', () => {
+    // 5px sits between --sp-1 (4px) and --sp-2 (8px) and neither reads right
+    // against a mono micro-label. Pinned so a later tidy-up cannot round it
+    // to a token and call that a no-op — it would be a visual change.
+    expect(DOOR).toContain('gap-[5px]');
+  });
+
+  it('paints --ink-secondary at rest and --ink-primary pressed, on the tap floor', () => {
+    expect(DOOR).toContain('text-ink-secondary');
+    expect(DOOR).toContain('active:text-ink-primary');
+    expect(DOOR).toContain('active:scale-[0.88]');
+    expect(DOOR).toContain('min-h-tap');
+  });
+
+  it('renders the glyph aria-hidden beside an accessible name', () => {
+    render(<Door className="settings-door" glyph="⚙" aria-label="Settings — updates and notifications">Settings</Door>);
+    const el = screen.getByRole('button', { name: 'Settings — updates and notifications' });
+    expect(el).toHaveClass('settings-door');
+    // The glyph carries no meaning — the label does — so it must not reach the
+    // accessibility tree. `getByRole` above already proves the name comes from
+    // aria-label rather than the glyph; this pins the attribute itself.
+    expect(el.querySelector('[aria-hidden="true"]')).toHaveTextContent('⚙');
+    // And the visible word is still there for a voice user reading the screen.
+    expect(el).toHaveTextContent('Settings');
+  });
+
+  // Desk-nav Task A review 1646 A4 (desktop-polish Task C14, D-8110): an empty glyph span still took the 5px gap, so
+  // Instrument's wordmark sat 9px right of the lanes row's edge (measured in Chromium at 1280 and 1920, both palettes).
+  it('a null glyph renders no glyph span, so the word starts at the door\'s own padding', () => {
+    render(<Door glyph={null} aria-label="ccrc, Fleet, the way home">ccrc</Door>);
+    const el = screen.getByRole('button', { name: 'ccrc, Fleet, the way home' });
+    expect(el.querySelector('[aria-hidden="true"]')).toBeNull();
+    expect(el.firstChild?.nodeType).toBe(Node.TEXT_NODE);
+    expect(el).toHaveTextContent('ccrc');
+  });
+
+  // Review 1689 A11 (desktop-polish Task C16, D-8139): a glyph that draws nothing gets no span either. Zero is a ReactNode
+  // that renders "0", so it keeps its span.
+  it.each([['undefined', undefined], ['false', false], ['an empty string', '']])('a glyph of %s renders no glyph span', (_name, glyph) => {
+    render(<Door glyph={glyph} aria-label="ccrc, Fleet, the way home">ccrc</Door>);
+    const el = screen.getByRole('button', { name: 'ccrc, Fleet, the way home' });
+    expect(el.querySelector('[aria-hidden="true"]')).toBeNull();
+    expect(el.firstChild?.nodeType).toBe(Node.TEXT_NODE);
+  });
+
+  it('a glyph of 0 still draws its span, because 0 renders', () => {
+    render(<Door glyph={0} aria-label="Count, zero">Count</Door>);
+    expect(screen.getByRole('button', { name: 'Count, zero' }).querySelector('[aria-hidden="true"]')).toHaveTextContent('0');
+  });
+});
+
+// — Button —
+
+describe('Button', () => {
+  it('a full-width Button carries side padding', () => {
+    // `full` is the sheet shape and the default, so it is the button a long
+    // label wraps inside: "Archive and keep the branch" on a 360px sheet. It
+    // used to set the width and nothing else, so a wrapped label ran from
+    // border to border. `fit` already carried its own `px-3`.
+    //
+    // By UTILITY, not by substring: `px-4` must be a class of its own, and the
+    // rendered element is asserted as well as the variant, because what
+    // reaches the DOM is base + variant + size through `cn`, and a merge that
+    // dropped the padding would leave the cva string looking right.
+    expect(buttonVariants({ size: 'full' }).split(/\s+/)).toContain('px-4');
+    render(<Button>Archive and keep the branch</Button>);
+    const el = screen.getByRole('button', { name: 'Archive and keep the branch' });
+    expect(el).toHaveClass('w-full');
+    expect(el).toHaveClass('px-4');
+    // The fit size keeps its own, narrower padding — the two never stack.
+    expect(buttonVariants({ size: 'fit' }).split(/\s+/)).toContain('px-3');
+    expect(buttonVariants({ size: 'fit' }).split(/\s+/)).not.toContain('px-4');
   });
 });

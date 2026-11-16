@@ -8,7 +8,8 @@
 // pins the function directly, including the one case that route test cannot
 // reach (a body that itself contains a fenced code block).
 import { describe, it, expect } from 'vitest';
-import { renderEnvelope, renderMailNudge, type EnvelopeInput } from '../src/coord/envelope.js';
+import { renderEnvelope, renderInboxEntry, renderMailNudge, type EnvelopeInput } from '../src/coord/envelope.js';
+import { parseMailEnvelope } from '../../shared/api.js';
 
 const BASE: EnvelopeInput = {
   id: 7, fromId: 'demo-quiet-mesa', toId: 'demo-coordinator',
@@ -37,6 +38,20 @@ describe('renderEnvelope: the header', () => {
   it('omits the run: line entirely when runId is null', () => {
     const env = renderEnvelope(BASE);
     expect(env).not.toContain('run:');
+  });
+
+  it('D-8077: a run-less mail that names a programme prints a program: line, and it parses back', () => {
+    const env = renderEnvelope({ ...BASE, program: 'programme-a' });
+    expect(env).toContain('\nprogram: programme-a\n');
+    expect(env).not.toContain('run:');
+    const p = parseMailEnvelope(env);
+    expect(p.ok).toBe(true);
+    if (p.ok) expect(p.envelope).toMatchObject({ runId: null, program: 'programme-a', wave: null, waveOf: null, subject: 'a finding' });
+    // The inbox print keeps the line; a mail naming no programme prints neither.
+    expect(renderInboxEntry(7, env)).toContain('program: programme-a');
+    expect(renderEnvelope(BASE)).not.toContain('program:');
+    // An empty slug is malformed, never read as a programme.
+    expect(parseMailEnvelope(env.replace('program: programme-a', 'program: ')).ok).toBe(false);
   });
 
   it('renders run:/program/wave only when runId is given, with the wave/waveOf shape spec:120-123 names', () => {

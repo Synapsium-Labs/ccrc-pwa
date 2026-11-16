@@ -1,0 +1,107 @@
+// The AGENT's exec of `ccd` crosses the installed direct entry (reclaim-entry-
+// safety, D-3696; Task 5): the agent resolves `ccd` to `~/.local/bin/ccd` and
+// execFile's it, so on a box that path is the rendered Python launcher, and a
+// direct `ws-reclaim` or `ws-audit --session <id> --reclaim` it forwards must
+// reach the Bash body under privileged mode — an ordinary verb must not.
+//
+// The pair here is published by the SHIPPED publisher (`ccd/ccd-entry-install.py`)
+// from a fixture tree whose `ccd/ccd` is a body that records how it was started
+// to an absolute fixture path. Nothing here touches a real ccd or the real HOME.
+import { describe, it, expect, afterEach } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { RunningAgent } from '../src/server.js';
+import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const REPO = path.resolve(here, '..', '..');
+
+interface ExecRes { ok: boolean; code?: number; stdout?: string; stderr?: string; err?: string }
+
+describe('the agent’s exec of ccd crosses the installed launcher', () => {
+  let agent: RunningAgent | undefined;
+  let fixture: Fixture | undefined;
+  let client: TestClient | undefined;
+
+  afterEach(async () => {
+    client?.ws.close();
+    client = undefined;
+    if (agent) await agent.close();
+    agent = undefined;
+    if (fixture) {
+      for (const d of [fixture.home, fixture.projectsRoot, fixture.outside]) rmSync(d, { recursive: true, force: true });
+    }
+    fixture = undefined;
+  });
+
+  it('protected argv reaches the body privileged, an ordinary verb does not — through the real exec op', async () => {
+    fixture = makeFixture();
+    const out = path.join(fixture.home, 'started-as');
+    const tree = path.join(fixture.home, 'fixture-tree');
+    mkdirSync(path.join(tree, 'ccd'), { recursive: true });
+    // The publisher places the libraries a body pins (D-6913, D-7463) and the docs redactor's two shared/ files (D-7077),
+    // and renders each digest into the body's one placeholder line for it: the stub body carries the six placeholders
+    // (__CCD_LIB_SHA256, __CCD_LIB_TRAIN_SHA256, __CCD_LIB_LEASE_SHA256, __CCD_LIB_POOLSET_SHA256, __CCD_REDACT_SHA256, __CCD_REDACT_CLI_SHA256), the real files are planted
+    // beside it. The stub never loads any of them.
+    mkdirSync(path.join(tree, 'ccd', 'lib'), { recursive: true });
+    for (const f of ['disk-retention.sh', 'train-proof.sh', 'delegation-lease.sh', 'pool-set.sh']) copyFileSync(path.join(REPO, 'ccd', 'lib', f), path.join(tree, 'ccd', 'lib', f));
+    mkdirSync(path.join(tree, 'shared'), { recursive: true });
+    for (const f of ['redact.mjs', 'redact-cli.mjs']) copyFileSync(path.join(REPO, 'shared', f), path.join(tree, 'shared', f));
+    writeFileSync(path.join(tree, 'ccd', 'ccd'),
+      `#!/usr/bin/env bash\n__CCD_LIB_SHA256=stamp-at-install\n__CCD_LIB_TRAIN_SHA256=stamp-at-install\n__CCD_LIB_LEASE_SHA256=stamp-at-install\n__CCD_LIB_POOLSET_SHA256=stamp-at-install\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\n{ printf "%s\\0" "$-"; printf "%s\\0" "$@"; } > ${JSON.stringify(out)}\n`);
+    copyFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), path.join(tree, 'ccd', 'ccd-entry.py'));
+    copyFileSync(path.join(REPO, 'ccd', 'ccd-entry-install.py'), path.join(tree, 'ccd', 'ccd-entry-install.py'));
+    const python = spawnSync('python3', ['-IS', '-c', 'import os,sys;sys.stdout.write(os.path.realpath(sys.executable))'],
+      { encoding: 'utf8' }).stdout;
+    const pub = spawnSync(python, ['-IS', path.join(tree, 'ccd', 'ccd-entry-install.py'), 'install', tree, fixture.home],
+      { encoding: 'utf8' });
+    expect(pub.status, pub.stderr).toBe(0);
+    // D-3698: the shebang names the PATH python3 when it IS the probed binary,
+    // else the canonical path — either way an absolute path to that binary.
+    const shebang = /^#!(\/\S+) -IS$/.exec(readFileSync(path.join(fixture.home, '.local', 'bin', 'ccd'), 'utf8').split('\n')[0]!)?.[1];
+    expect(shebang, 'an absolute isolated-python shebang').toBeTruthy();
+    expect(realpathSync(shebang!), 'the shebang names the very interpreter that was probed').toBe(python);
+
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    await client.hello();
+    const startedAs = (): { flags: string; argv: string[] } => {
+      const parts = readFileSync(out, 'utf8').split('\0');
+      parts.pop();
+      return { flags: parts[0] ?? '', argv: parts.slice(1) };
+    };
+    const cases: Array<[string[], boolean]> = [
+      [['ws-audit', '--session', 'demo-x', '--reclaim'], true],
+      [['ws-audit', '--session', 'demo-x', '--reclaim', '--defer-expired'], true],
+      [['ws-reclaim', '--expect', 'a'.repeat(64), '--child-of', '7', '--session', 'demo-x'], true],
+      // Child reclamation wave 7: the collector's audit rides the existing `['ws-audit','--session']` grant and the
+      // verb its own `['ws-collect','--expect']` — both protected shapes, both through the real exec op.
+      [['ws-audit', '--session', 'demo-x', '--collect'], true],
+      [['ws-collect', '--expect', 'a'.repeat(64), '--session', 'demo-x'], true],
+      // Fleet disk retention DR-18 (D-6630): the orphan lane's census and audit are `ws-audit` modes with a grant each and run
+      // unprotected (read-only); the verb rides its own `['ws-orphan','--expect']` and starts under `bash -p`.
+      [['ws-audit', '--orphans'], false],
+      [['ws-audit', '--orphan-hex', '2f61'], false],
+      [['ws-orphan', '--expect', 'a'.repeat(64), '--tree-hex', '2f61', '--rescue'], true],
+      // Delegation broker wave 5 (W5-G4): the lease carrier's writer rides its own `['ws-lease-mark','--lease']` and starts under `bash -p`.
+      [['ws-lease-mark', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab'], true],
+      // Delegation broker wave 5 (W5-G12): the read-only lease audit rides its own `['ws-lease-audit','--lease']` and starts
+      // under `bash -p`, as its writer does.
+      [['ws-lease-audit', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', '--generation', '1'], true],
+      // Delegation broker wave 5 PR8b (D-8112, review 1665 N1): the adoption switch's writer rides `['delegation-adopt','--state']` and
+      // starts under `bash -p`, as ws-lease-mark does.
+      [['delegation-adopt', '--state', 'on'], true],
+      [['ensure', 'demo-x'], false],
+    ];
+    let id = 0;
+    for (const [args, privileged] of cases) {
+      rmSync(out, { force: true });
+      const res = await client.req<ExecRes>(++id, { op: 'exec', cmd: 'ccd', args });
+      expect(res, args.join(' ')).toMatchObject({ ok: true, code: 0 });
+      expect(startedAs().argv, args.join(' ')).toEqual(args);
+      expect(startedAs().flags.includes('p'), `${args.join(' ')}: flags ${startedAs().flags}`).toBe(privileged);
+    }
+  }, 60_000);
+});

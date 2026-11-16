@@ -4,16 +4,17 @@
 // first options as notification actions that answer it outright.
 /* global self, fetch */
 
+// ccrc:generated answer-lifecycle BEGIN
+// Rendered by pwa/test/answerRegion.ts from pwa/src/session/answerLifecycle.ts#ASK_REQUEST and
+// pwa/src/lib/refusalWords.ts; push-sw.test.ts holds it byte-equal.
+// Never edit it by hand: change the source, then run `CCRC_WRITE_ANSWER_REGION=1 npx vitest run test/push-sw.test.ts`
+// in pwa/.
+
 /**
- * One sentence per refusal `POST /api/sessions/:id/ask` can return, kept here
- * beside the code that renders them because the operator reads them with no app
- * open and no way to ask a follow-up question.
- *
- * The set is the route's own union (`server/src/inject/ask.ts`), not a subset:
- * `multiselect` and `duplicate-index` cannot be produced by a one-index tap
- * today, but they stay because the route owns that union and a future action
- * shape could send more than one index. An unlisted token falls back to the
- * generic sentence rather than showing the operator a bare error code.
+ * One sentence per refusal the answer's door can return, rendered beside the code that shows them because the operator
+ * reads them with no app open and no way to ask a follow-up question. The tables and why their set is the route's own
+ * union are in `refusalWords.ts#NOTIFICATION_REFUSAL_TEXT` and `#NOTIFICATION_QUESTION_DOOR_TEXT`. An unlisted token
+ * falls back to the generic sentence rather than showing the operator a bare error code.
  */
 const REFUSAL = {
   'stale-ask': 'That question is gone.',
@@ -27,9 +28,76 @@ const REFUSAL = {
   'menu-mismatch': 'The terminal is showing something else now.',
   'not-alive': 'That session is no longer running.',
   'unknown-session': 'That session is gone.',
+  'kind-mismatch': 'That answer didn\'t fit this session\'s question — open the session.',
 };
 
+/**
+ * The notification action "ask:<key>:<index>" for session `sessionId`, as the answer it sends, or null when the action
+ * is not one (or there is no session): then nothing is sent and the app opens. The key is minted server-side and
+ * carried verbatim; the index is a number, never derived from a label, because a relabelled or reordered option would
+ * then silently answer a different question.
+ */
+function askOf(action, sessionId) {
+  const m = /^ask:([^:]+):(\d+)$/.exec(action);
+  if (m === null || sessionId === null) return null;
+  return { kind: 'ask', sessionId, askKey: m[1], optionIndexes: [Number(m[2])] };
+}
+
+/**
+ * The request that answers `ask`: the question door family's operator door and its body, the one door there is.
+ */
+function askRequestOf(ask) {
+  return {
+    method: 'POST',
+    path: '/api/questions/' + encodeURIComponent('session-' + ask.sessionId) + '/answer',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: ask.kind, askKey: ask.askKey, optionIndexes: ask.optionIndexes }),
+  };
+}
+// ccrc:generated answer-lifecycle END
+
 const ICON = '/icons/icon-192.png';
+
+// The receipt worker's version: the same number as shared/responses.ts#RECEIPT_WORKER_VERSION. The worker cannot import
+// shared/, so push-sw.test.ts pins the two equal.
+const RECEIPT_WORKER_VERSION = 1;
+
+/** The hex SHA-256 of this subscription's endpoint (the bytes the server hashes), or null when there is no
+ *  subscription or anything throws: a receipt with no hash is not sent. */
+async function endpointHash() {
+  try {
+    const sub = await self.registration.pushManager.getSubscription();
+    if (!sub || typeof sub.endpoint !== 'string') return null;
+    const digest = await self.crypto.subtle.digest('SHA-256', new TextEncoder().encode(sub.endpoint));
+    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return null;
+  }
+}
+
+/** Tell the server this push was 'shown' or 'opened' (C67). Best effort: no push id or no hash posts nothing, a failure
+ *  is swallowed, nothing is retried, and the returned promise never rejects. */
+async function postReceipt(pushId, receipt) {
+  if (typeof pushId !== 'string') return;
+  try {
+    const hash = await endpointHash();
+    if (hash === null) return;
+    await fetch('/api/responses/receipts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        v: 1,
+        receipts: [{
+          ref: { kind: 'push', pushId },
+          receipt,
+          from: { source: 'worker', version: RECEIPT_WORKER_VERSION, endpointHash: hash },
+        }],
+      }),
+    });
+  } catch {
+    /* the receipt is a measurement, never something the operator waits on */
+  }
+}
 
 self.addEventListener('push', (event) => {
   let data = {};
@@ -44,6 +112,7 @@ self.addEventListener('push', (event) => {
   // extras silently dropped by the browser anyway — better to drop them where
   // the reason is written down.
   const actions = Array.isArray(data.actions) ? data.actions.slice(0, 2) : [];
+  const pushId = typeof data.pushId === 'string' ? data.pushId : null;
   event.waitUntil(
     self.registration.showNotification(title, {
       body: data.body || '',
@@ -55,10 +124,53 @@ self.addEventListener('push', (event) => {
       // The actions are mirrored into `data` because `notification.actions` is
       // not readable on every platform, and the click handler needs the tapped
       // action's LABEL to say what it just answered.
-      data: { sessionId: data.sessionId || null, actions },
-    }),
+      data: {
+        sessionId: data.sessionId || null, url: sameOriginPath(data.url), actions,
+        ...(pushId === null ? {} : { pushId }),
+      },
+    }).then(() => postReceipt(pushId, 'shown')),
   );
 });
+
+/** The TWO bases `sameOriginPath` resolves against. Only their SCHEME matters:
+ *  https is a special scheme exactly as the app's own origin is (http on a dev
+ *  box is special too), so a string resolves against them the way navigate()
+ *  and openWindow() will resolve it against ours. `.invalid` is reserved (RFC
+ *  2606), so no origin the app is served from can ever equal either.
+ *
+ *  TWO distinct bases, not one: a candidate that carries its OWN authority
+ *  (protocol-relative `//host`, a backslash or tab the parser folds into `//`,
+ *  or an embedded `user@host`) resolves to that ONE fixed host regardless of
+ *  which base it is given — so a string naming the single base's own host as
+ *  its authority would wrongly pass a one-base check. That string cannot name
+ *  BOTH hosts at once, while a real relative path (no authority of its own)
+ *  resolves onto whichever base it is given and so satisfies both. Requiring
+ *  agreement with both closes the hole without knowing the app's real origin. */
+const PATH_BASE_A = 'https://sw-a.invalid';
+const PATH_BASE_B = 'https://sw-b.invalid';
+
+/** A path this origin serves, or null: a string that starts with '/' and that the
+ *  URL parser itself keeps on BOTH sentinel bases' own origin (see PATH_BASE_A/B
+ *  above for why two). The parser decides, not a prefix check, because the parser
+ *  strips tabs and newlines and reads '\\' as '/', so '/\t/evil.example' and
+ *  '/\\evil.example' are both '//evil.example' — another host — while their
+ *  second character is neither '/' nor '\\'. Anything else (absolute,
+ *  cross-origin, protocol-relative, an embedded userinfo, not a string, empty)
+ *  is null and the tap falls back to /s/<sid> or '/'.
+ *
+ *  It answers the string AS WRITTEN, never the parser's normalised pathname:
+ *  '/.//evil.example' is a same-origin page whose pathname is '//evil.example',
+ *  and that pathname handed back to navigate() would be protocol-relative. */
+function sameOriginPath(u) {
+  if (typeof u !== 'string' || !u.startsWith('/')) return null;
+  try {
+    return new URL(u, PATH_BASE_A).origin === PATH_BASE_A
+      && new URL(u, PATH_BASE_B).origin === PATH_BASE_B
+      ? u : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Open (or focus) the app at `url`. The original tap behaviour, unchanged. */
 async function openApp(url) {
@@ -79,9 +191,10 @@ async function openApp(url) {
 
 /** Replace the notification the operator just tapped, keeping its tag so the
  *  reply lands in the same slot rather than stacking underneath. */
-function replace(title, body, sessionId, tag) {
+function replace(title, body, sessionId, tag, pushId) {
   return self.registration.showNotification(title, {
-    body, tag, icon: ICON, badge: ICON, data: { sessionId },
+    body, tag, icon: ICON, badge: ICON,
+    data: typeof pushId === 'string' ? { sessionId, pushId } : { sessionId },
   });
 }
 
@@ -101,27 +214,36 @@ self.addEventListener('notificationclick', (event) => {
   const action = event.action || '';
   const notification = event.notification;
   const sid = (notification.data && notification.data.sessionId) || null;
-  const url = sid ? `/s/${encodeURIComponent(sid)}` : '/';
+  const pushId = (notification.data && notification.data.pushId) || null;
+  // Started first and never awaited ahead of the open or the answer (C67): the tap does not wait on its receipt.
+  const receipt = postReceipt(pushId, 'opened');
+  // A payload url (a release push's '/settings/updates', design 2026-09-20 §13) wins
+  // over the session deep-link. The push listener filtered it already; it is
+  // filtered again here because the data is whatever this notification carries —
+  // one shown by an older copy of this worker, or by replace(), has no url, and
+  // nothing but this line decides where a tap goes.
+  const url = sameOriginPath(notification.data && notification.data.url)
+    ?? (sid ? `/s/${encodeURIComponent(sid)}` : '/');
 
-  // "ask:<key>:<index>". The key is minted server-side and carried verbatim;
-  // this worker never derives an index from a label, because a relabelled or
-  // reordered option would then silently answer a different question.
-  const m = /^ask:([^:]+):(\d+)$/.exec(action);
-  if (m === null || sid === null) {
+  // "ask:<key>:<index>", read by the generated region's askOf: the key is
+  // minted server-side and carried verbatim, and this worker never derives an
+  // index from a label, because a relabelled or reordered option would then
+  // silently answer a different question.
+  const ask = askOf(action, sid);
+  if (ask === null) {
     notification.close();
-    event.waitUntil(openApp(url));
+    event.waitUntil(Promise.all([receipt, openApp(url)]));
     return;
   }
 
   notification.close();
-  event.waitUntil((async () => {
+  event.waitUntil(Promise.all([receipt, (async () => {
+    // The door: the question family's operator door, the only one (W7 C7p
+    // retired the old /ask and the /health read that chose between them).
+    const req = askRequestOf(ask);
     let res;
     try {
-      res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/ask`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ askKey: m[1], optionIndexes: [Number(m[2])] }),
-      });
+      res = await fetch(req.path, { method: req.method, headers: req.headers, body: req.body });
     } catch {
       // NEVER silently dropped — and never overclaimed either. A rejected
       // `fetch` proves only that the RESPONSE did not arrive: the POST may have
@@ -132,13 +254,13 @@ self.addEventListener('notificationclick', (event) => {
       // looking for a menu that may be long gone — or, worse, believes one is
       // still up. Only the response can tell "never sent" from "sent and
       // applied", so say exactly that and leave the way back open.
-      await replace("Couldn't confirm", 'No connection — tap to open the session.', sid, notification.tag);
+      await replace("Couldn't confirm", 'No connection — tap to open the session.', sid, notification.tag, pushId);
       return;
     }
 
     if (res.ok) {
       const label = labelFor(notification, action);
-      await replace('Answered', label, sid, notification.tag);
+      await replace('Answered', label, sid, notification.tag, pushId);
       return;
     }
 
@@ -163,6 +285,7 @@ self.addEventListener('notificationclick', (event) => {
       REFUSAL[token] || `No reason given (HTTP ${res.status}) — tap to open the session.`,
       sid,
       notification.tag,
+      pushId,
     );
-  })());
+  })()]));
 });

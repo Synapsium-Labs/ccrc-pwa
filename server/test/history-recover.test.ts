@@ -1,0 +1,6526 @@
+// server/test/history-recover.test.ts — the history store's recovery step, and the binding verbs that register it
+// (spec docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md §9.14 "Recovery", §9.2, §8.4). W1-B2.
+// Three ways in:
+//   - as history-drain.test.ts, the REAL sweep as the box runs it: runSweep, and the run-pass driver (runDriver) where a case needs a run budget
+//     smaller than one pass's journal;
+//   - sweep.mjs's own recoveryStep, imported in-process against a real store, where a case needs a switch set between
+//     two chunks, a budget of a few records, or an executor of its own;
+//   - the operator verbs on a REAL terminal (node-pty), through both doors, where a case needs a TTY.
+// Every store lives in a mkTmp fixture HOME (historyHelpers' makeHistoryBox); nothing reads or writes the live ~/.ccrc.
+// Each test's fixture HOMEs are removed when it ends (removeTmpFixturesEachTest), not at the file's end.
+import { describe, it, expect, beforeAll } from 'vitest';
+import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { randomBytes, createHash } from 'node:crypto';
+import path from 'node:path';
+import { brotliDecompressSync as rrUnbrotli } from 'node:zlib';
+import { DatabaseSync } from 'node:sqlite';
+import {
+  makeHistoryBox, runSweep, runShim, runDriver, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession,
+  plantTranscript, spoolLine, preloadOptions, PRELOADS, CLI, recoverRow, boundEmptyStore,
+  runCli, withPane, seedFamily, journalDirOf, REPO, rewindStoreToV1, runOnPty, type HistoryBox, type SpawnOpts,
+  plantSegment, segmentSha, segmentsOf, segmentRows, exportDirOf, type PlantSegmentRow, type PlantSegmentBlob, strandedBlobs, strandedBlobsOn,
+} from './historyHelpers.js';
+import { userRow, assistantRow, boundaryRow, summaryRow, toolResultRow } from './historyFixtures.js';
+import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
+import {
+  HEALTH_META, RECOVER_PHASES, RECOVERY_STALL_TICKS, SCHEMA_VERSION, WRITING_FORMS, floorThreshold, historyPaths, journalRecord, mergeJournalByTime,
+  REDACTED_MARK, BELT_VERSION, parseBeltState, beltWidth, type BeltState, planReplay,
+  NODE_PARSER_VERSION, makePairIndex, secretPairs, parentRollup, nodeIndexTexts, exportedSourceKey,
+} from '../../ccd/history/lib.mjs';
+import { V2_INDEXES, StoreError, abortRestore, closeWriter, createFtsTables, createStore, getMeta, getStep, openWriter, setMeta, setStep, stageRestore } from '../../ccd/history/store.mjs';
+
+skipOnDarwin();
+removeTmpFixturesEachTest();
+
+// Each spawning case gets this budget (the sweep, the CLI and a terminal spawn on a heavily loaded box); longer is 1.5 * HEAVY or 2.5 * HEAVY, never a new literal.
+const HEAVY = 120_000;
+const ID = 'claude-a-demo';
+const ID2 = 'claude-b-demo';
+const SLUG = '-home-u-tree-demo';
+const WORK = '/home/u/tree/demo';
+const MIN = 60_000;
+const GIB = 1024 ** 3;
+/** A lowercase uuid from a small number: the UUID_RE grammar, readable in a failure. */
+const u = (n: number): string => `${n.toString(16).padStart(8, '0')}-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+
+interface SweepRecover {
+  RECOVER_EXECUTORS: Readonly<Record<string, unknown>>;
+  recoveryStep(db: DatabaseSync, ctx: Record<string, unknown>, executors?: Readonly<Record<string, unknown>>):
+    Promise<{ moved: boolean; done: boolean; held: boolean }>;
+  newBudget(now?: () => number, limits?: { maxMs?: number; maxBytes?: number; chunkBytes?: number }): Record<string, unknown>;
+  exportStep(db: DatabaseSync, ctx: Record<string, unknown>): Promise<unknown>;
+  checkSegmentMarks(db: DatabaseSync, ctx: Record<string, unknown>, record: string): { cleared: number; segments: string[]; stopped: string | null };
+  recoverPass(db: DatabaseSync, ctx: Record<string, unknown>, failedAtStart: number): Promise<number>;
+  journalRedactPairs(P: ReturnType<typeof historyPaths>, storeId: string):
+    { pairs: Array<{ len: number; sha256: string; t: number }>; foreign: string[]; unreadable: string[]; nonRegular: string[] };
+  makeIngestCtx(home: string, homes: readonly string[], nowMs: number, ids: unknown): Record<string, unknown>;
+  journalStoreDirs(home: string): Array<{ storeId: string; heads: string }>;
+  runOpPass(parsed: { op: string; opArgs: string[] }, deps: Record<string, unknown>, out: (line: string) => void): Promise<number>;
+  recoverReindex(db: DatabaseSync, ctx: Record<string, unknown>, cur: { pairsAdded: boolean }, budget: Record<string, unknown>):
+    Promise<{ done: boolean; moved: boolean }>;
+  writeChunk(db: DatabaseSync, chunk: Record<string, unknown>): { newEntries: number; minNewTsMs: number | null };
+}
+/** What batch HE calls of derive.mjs in-process. */
+interface DeriveNodes {
+  rederiveGistsFor(db: DatabaseSync, ictx: Record<string, unknown>, values: readonly string[], budget: Record<string, unknown>,
+    slice: Record<string, unknown>): number;
+  beltNodesStep(db: DatabaseSync, ictx: Record<string, unknown>, slice: Record<string, unknown>): boolean;
+  redactNodeFields(db: DatabaseSync, ictx: Record<string, unknown>, nodeIds: readonly string[]): number;
+  rerollParents(db: DatabaseSync, ictx: Record<string, unknown>, nodeIds: readonly string[], onlyIfChanged?: boolean): number;
+  deriveParents(db: DatabaseSync, ictx: Record<string, unknown>, budget: Record<string, unknown>): number;
+  refreshLeaf(db: DatabaseSync, ictx: Record<string, unknown>, nodeId: string): string;
+}
+let SW: SweepRecover;
+let DV: DeriveNodes;
+beforeAll(async () => {
+  SW = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepRecover;
+  DV = (await import('../../ccd/history/derive.mjs')) as unknown as DeriveNodes;
+});
+
+/** What recoveryStep reads of a TickCtx, in-process: a statfs stub with room to spare (so no case reads the free
+ *  space of the box running it) and a run budget, lib's unless `limits` makes it smaller. */
+const stepCtx = (box: HistoryBox, ids: { storeId: string; writer: string },
+  limits: { maxMs?: number; maxBytes?: number; chunkBytes?: number } = {}): Record<string, unknown> => ({
+  home: box.home, paths: historyPaths(box.home), ids, now: () => Date.now(), homes: box.homes, out: () => {},
+  deps: { statfs: async () => ({ bsize: 1, bavail: 4 * 2 ** 40, blocks: 8 * 2 ** 40 }) },
+  budget: SW.newBudget(() => Date.now(), limits), parsed: { secrets: [] },
+});
+/** The registered recovery step's cursor, read on the caller's own handle. */
+const cursorOn = (db: DatabaseSync): string | null => {
+  const r = db.prepare("SELECT cursor FROM derivation_state WHERE step = 'recover'").get() as { cursor: string | null } | undefined;
+  return r === undefined || r.cursor === null ? null : String(r.cursor);
+};
+/** Named counters, read on the caller's own handle (0 when never bumped). */
+const countersOn = (db: DatabaseSync, ...names: string[]): Record<string, number> =>
+  Object.fromEntries(names.map((n) => {
+    const r = db.prepare('SELECT n FROM counters WHERE name = ?').get(n) as { n: number } | undefined;
+    return [n, r === undefined ? 0 : Number(r.n)];
+  }));
+
+/** One scheduled pass that must exit 0. */
+const pass = (box: HistoryBox, env: Record<string, string> = {}, preloads: string[] = []): void => {
+  const r = runSweep(box, [], { env, preloads });
+  expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+};
+/** One query on the box's store, as plain objects. */
+const rows = (box: HistoryBox, sql: string, ...args: (string | number)[]): Array<Record<string, unknown>> => {
+  const db = openStoreRO(box);
+  try { return db.prepare(sql).all(...args).map((r) => ({ ...r })); } finally { db.close(); }
+};
+const countOf = (box: HistoryBox, table: string): number => Number(rows(box, `SELECT count(*) AS n FROM ${table}`)[0]!['n']);
+const metaOf = (box: HistoryBox, k: string): string | null => {
+  const db = openStoreRO(box);
+  try { return getMeta(db, k); } finally { db.close(); }
+};
+const offsetsOf = (box: HistoryBox): Array<Record<string, unknown>> =>
+  rows(box, 'SELECT file_id, "offset" AS at FROM ingest_files ORDER BY file_id');
+/** A recovery step registered on the box's store, as a restore's commit leaves one (§8.4). */
+const registerRecovery = (box: HistoryBox, version: number): void => {
+  const db = openWriter(historyPaths(box.home).dbFile);
+  try {
+    db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(version);
+  } finally {
+    closeWriter(db);
+  }
+};
+/** A journal file under journal/<storeId>/, written by hand: a head, then `lines` as given (journalRecord output, or
+ *  a line broken on purpose). The head names `headStore`, which is `storeId` unless a case plants a foreign one. */
+const plantJournalFile = (box: HistoryBox, storeId: string, month: string, writer: string, headT: number, lines: string[],
+  headStore: string = storeId): void => {
+  const dir = path.join(box.root, 'journal', storeId);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const head = journalRecord('head', headT, { store_id: headStore, month, writer });
+  fs.writeFileSync(path.join(dir, `${month}.${writer}.jsonl`), `${[head, ...lines].join('\n')}\n`, { mode: 0o600 });
+};
+interface StatusView {
+  recovering: { step: string; cursor: string } | null;
+  health: { pass: string | null; warn: Array<{ word: string }>; fail: Array<{ word: string }> };
+}
+/** `ccrc history status --json`, as doctor reads it. */
+const status = (box: HistoryBox): StatusView => { const r = runCli(box, ['status', '--json']); expect(r.json, `${r.stdout}${r.stderr}`).not.toBeNull(); return r.json as unknown as StatusView; };
+/** The families, epochs, receipts, recall rows and candidates of `id`, compared by name (§8.4 "what comes back
+ *  equal"): no surrogate key, no cwd_real. */
+const familyState = (box: HistoryBox, id: string): Record<string, Array<Record<string, unknown>>> => ({
+  sessions: rows(box, 'SELECT ccrc_id, generation, project, first_seen_ms, merged_into IS NOT NULL AS merged FROM sessions WHERE ccrc_id = ? ORDER BY generation', id),
+  epochs: rows(box, 'SELECT e.seq, e.cc_session_uuid, e.cause, e.declared_by, e.confirmed_ms FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE s.ccrc_id = ? ORDER BY e.seq', id),
+  receipts: rows(box, 'SELECT event_key, lower(hex(payload_sha)) AS sha, received_ms, ts_ms, ts_source FROM spool_receipts ORDER BY event_key'),
+  recall: rows(box, 'SELECT event_key, ccrc_id, generation, ts_ms, verb, rc, ms, arm FROM recall_calls ORDER BY event_key'),
+  candidates: rows(box, 'SELECT cc_session_uuid, ccrc_id, generation, cause, ts_ms, first_seen_ms FROM epoch_candidates ORDER BY cc_session_uuid'),
+});
+/** The journal's records counted by kind, a verdict by its kind: what a pass appended, measured. */
+const journalKinds = (box: HistoryBox): Record<string, number> => {
+  const out: Record<string, number> = {};
+  for (const r of journalRecords(box)) {
+    const k = r['k'] === 'verdict' ? `verdict:${String(r['kind'])}` : String(r['k']);
+    out[k] = (out[k] ?? 0) + 1;
+  }
+  return out;
+};
+
+/** Every entry under ~/.ccrc, files with their size and mtime: "writes nothing", measured. The shim's lock (opened on
+ *  every run) and SQLite's -wal and -shm (a read-only open may make them) are left out. Directories are listed by
+ *  name only, since a sidecar's create-and-remove moves a directory's mtime. */
+function ccrcSnapshot(box: HistoryBox): string[] {
+  const root = path.join(box.home, '.ccrc');
+  const out: string[] = [];
+  const visit = (d: string): void => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (e.name === 'history-sweep.lock' || /-(wal|shm)$/.test(e.name)) continue;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { out.push(`${path.relative(root, p)}/`); visit(p); continue; }
+      const st = fs.lstatSync(p);
+      out.push(`${path.relative(root, p)} ${st.size} ${Math.trunc(st.mtimeMs)}`);
+    }
+  };
+  visit(root);
+  return out.sort();
+}
+
+/** A command on a REAL terminal (historyHelpers' runOnPty), so stdin IS a TTY: the irreversible forms refuse without one
+ *  (§8.4). The timer is a safety net, never the assertion. */
+const onPty = (box: HistoryBox, argv: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> =>
+  runOnPty(box, argv, { env, timeoutMs: HEAVY / 3 });
+/** `ccrc history <args>` (the CLI door) and the shim's `--op` (the direct door), each on a terminal. */
+const cliOnPty = (box: HistoryBox, args: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> =>
+  onPty(box, [process.execPath, '--no-warnings', CLI, ...args], env);
+const shimOnPty = (box: HistoryBox, args: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> =>
+  onPty(box, ['bash', path.join(box.home, '.local', 'bin', 'ccd-history-sweep'), ...args], env);
+/** The --op pass's one JSON result, its LAST `{"rc"` line (§8.4), with a pty's \r stripped. */
+function lastRc(out: string): { rc: number; reason?: string } {
+  const lines = out.replace(/\r/g, '').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('{"rc"'));
+  expect(lines.length, `no {"rc":…} line in:\n${out}`).toBeGreaterThan(0);
+  return JSON.parse(lines[lines.length - 1]!) as { rc: number; reason?: string };
+}
+/** The CLI door's --json envelope, read as `{exit, reason?}`: the last line that parses as an object with a numeric
+ *  `exit`. On a terminal the sweep's relayed lines (stderr under --json) come before it. */
+function lastEnvelope(out: string): { exit: number; reason?: string } {
+  const lines = out.replace(/\r/g, '').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('{'));
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    let o: { exit?: unknown; reason?: unknown };
+    try { o = JSON.parse(lines[i]!) as { exit?: unknown; reason?: unknown }; } catch { continue; }
+    if (typeof o.exit === 'number') return typeof o.reason === 'string' ? { exit: o.exit, reason: o.reason } : { exit: o.exit };
+  }
+  throw new Error(`no --json envelope in:\n${out}`);
+}
+
+describe('the recovery step (W1-B2 Task 25; spec §9.14)', () => {
+  it('RECOVER_EXECUTORS runs every RECOVER_PHASES phase, and only those (W1-B4 adds its export phases to both)', () => {
+    expect(Object.keys(SW.RECOVER_EXECUTORS)).toEqual([...RECOVER_PHASES]);
+  });
+
+  it('O48, the replay order: a startup and two clears drained from one file, a gen-less recall, a later-tick confirmation and a held file replay into the same families, epochs, receipts and candidates with $REG gone', () => {
+    const box = makeHistoryBox('ccrc-history-recover-order-');
+    const P = historyPaths(box.home);
+    const [S, C1, C2, S9] = [u(0x51), u(0x52), u(0x53), u(0x59)];
+    const [G, G9] = [u(0xa1), u(0xa9)];
+    pass(box);   // first install: the store, spool/, and scan_ms, so no registry backfill runs below
+    const storeId = fs.readFileSync(P.storeId, 'utf8').trim();
+    plantSession(box, ID, { uuid: S, generation: G, project: 'demo', workdir: WORK });
+    const t0 = Date.now() - MIN;
+    spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: S, src: 'startup', reg: S, gen: G, ts: t0 });
+    spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: C1, src: 'clear', gen: G, ts: t0 + 1 });
+    spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: C2, src: 'clear', gen: G, ts: t0 + 2 });
+    spoolLine(box, ID, { v: 1, ev: 'recall', id: ID, cmd: 'grep', rc: 0, ms: 12, ts: t0 + 3 });
+    pass(box);   // the rename, observed: .uuid = S, .generation = G, .project = demo
+    pass(box);   // the drain: S confirmed by its own reg, C1 and C2 chained unconfirmed, the recall joined to G
+    plantSession(box, ID, { uuid: C1 });
+    pass(box);   // a later tick confirms C1: a verdict with no event_key, at its own position
+    const A = familyState(box, ID);
+    expect(A.epochs!.map((e) => [e['seq'], e['cc_session_uuid'], e['cause'], e['confirmed_ms'] === null]))
+      .toEqual([[1, S, 'startup', false], [2, C1, 'clear', false], [3, C2, 'clear', true]]);
+    expect(A.candidates!.map((c) => c['cc_session_uuid'])).toEqual([C2]);
+    expect(A.recall!.map((r) => r['generation'])).toEqual([G]);
+    expect(A.receipts).toHaveLength(4);
+
+    // The DB is lost, and the registry rows of ID with it.
+    for (const f of [P.dbFile, P.wal, P.shm]) fs.rmSync(f, { force: true });
+    for (const f of ['uuid', 'generation', 'project', 'workdir']) fs.rmSync(path.join(box.reg, `${ID}.${f}`), { force: true });
+    // A spool file journaled and HELD under store-missing: its records have no `drained` record.
+    plantSession(box, ID2, { uuid: S9, generation: G9, project: 'demo2', workdir: WORK });
+    spoolLine(box, ID2, { v: 1, ev: 'SessionStart', id: ID2, sid: S9, src: 'startup', gen: G9, ts: t0 + 10 });
+    const held = runSweep(box);
+    expect(held.code, held.stderr).toBe(5);
+    expect(held.stdout).toContain('history-sweep: store-missing');
+    for (const f of ['uuid', 'generation', 'project', 'workdir']) fs.rmSync(path.join(box.reg, `${ID2}.${f}`), { force: true });
+    // Today's recall-off/<ID> names another generation. The drain never saw it, so replay must not count it stale:
+    // a replayed line re-decides nothing from present state (§9.14; sweep.mjs's run.ectx.replay).
+    fs.mkdirSync(path.join(box.root, 'recall-off'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(box.root, 'recall-off', ID), u(0xee));
+
+    const before = journalKinds(box);
+    const bound = boundEmptyStore(box, storeId);
+    pass(box);   // the recovery step, whole (the default budget), then the journal half
+    expect(recoverRow(box)).toMatchObject({ version: bound.version, completed_ms: expect.any(Number) });
+    expect(counters(box)['recall_off_stale'] ?? 0, 'the replayed recall line read no recall-off switch').toBe(0);
+    const B = familyState(box, ID);
+    expect(B.sessions).toEqual(A.sessions);
+    expect(B.epochs).toEqual(A.epochs);
+    expect(B.recall).toEqual(A.recall);
+    expect(B.candidates, 'the clear still waiting re-enters epoch_candidates, aged by its journal time').toEqual(A.candidates);
+    expect(B.receipts, 'the held file is not replayed: no receipt until the live drain decides it').toEqual(A.receipts);
+    expect(rows(box, 'SELECT ccrc_id FROM sessions WHERE ccrc_id = ?', ID2)).toEqual([]);
+    // Replay writes no journal record: the pass added its bind (flushed), a head for the new writer's file and its
+    // own tick record, nothing else.
+    expect(journalKinds(box)).toEqual({
+      ...before,
+      head: (before['head'] ?? 0) + 1,
+      tick: (before['tick'] ?? 0) + 1,
+      'verdict:bind': (before['verdict:bind'] ?? 0) + 1,
+    });
+
+    pass(box);   // the live drain takes the held file, deciding from its observation sidecar
+    expect(rows(box,
+      'SELECT s.generation, s.project, e.cc_session_uuid, e.cause, e.confirmed_ms IS NOT NULL AS confirmed FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE s.ccrc_id = ?',
+      ID2)).toEqual([{ generation: G9, project: 'demo2', cc_session_uuid: S9, cause: 'startup', confirmed: 1 }]);
+  }, HEAVY);
+
+  it('O44: a recovery step larger than one pass holds the drain and the ingest over several passes, journals arriving spool files once, reports recovering, counts each skipped record, then both resume', () => {
+    const box = makeHistoryBox('ccrc-history-recover-hold-');
+    const P = historyPaths(box.home);
+    const U1 = u(0x61);
+    const G1 = u(0xb1);
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo', workdir: WORK });
+    const transcript = plantTranscript(box, 'claude-a', SLUG, U1, [
+      userRow({ uuid: u(0x1001), ts: new Date(Date.now() - 5 * MIN).toISOString(), text: 'the first row' }),
+    ]);
+    pass(box);   // first install, the registry mapping, and the transcript read to its end
+    const storeId = fs.readFileSync(P.storeId, 'utf8').trim();
+    const offsets0 = offsetsOf(box);
+    expect(offsets0, 'the transcript has a cursor').toHaveLength(1);
+    // A journal file of an older month: padding that makes the journal larger than the passes' budget, plus a torn
+    // line, an unknown kind and a newer v, each to be skipped and counted once.
+    const T20 = Date.UTC(2020, 0, 1);
+    plantJournalFile(box, storeId, '2020-01', '0badf00d', T20, [
+      ...Array.from({ length: 30 }, (_, i) => journalRecord('tick', T20 + (i + 1) * 1000, { lag_ms: null })),
+      '{"v":1,"k":"tick","t":17',
+      '{"v":1,"k":"zzz","t":1}',
+      '{"v":2,"k":"tick","t":1,"lag_ms":null}',
+      journalRecord('tick', T20 + 60_000, { lag_ms: 5 }),
+    ]);
+    const version = Date.now();
+    registerRecovery(box, version);
+    fs.appendFileSync(transcript, `${JSON.stringify(userRow({ uuid: u(0x1002), ts: new Date().toISOString(), text: 'written while recovering' }))}\n`);
+    const receipts0 = countOf(box, 'spool_receipts');
+    let passes = 0;
+    let sawStatus = false;
+    for (;;) {
+      spoolLine(box, ID, { v: 1, ev: 'Stop', id: ID, sid: U1, ts: Date.now() });
+      const r = runDriver(box, { budgetBytes: 1200, chunkBytes: 400 });
+      expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+      passes += 1;
+      expect(offsetsOf(box), `pass ${passes}: no ingest cursor moves while a recovery step is registered`).toEqual(offsets0);
+      expect(countOf(box, 'spool_receipts'), `pass ${passes}: nothing is drained while recovering`).toBe(receipts0);
+      const row = recoverRow(box)!;
+      if (row.completed_ms !== null) break;
+      expect(metaOf(box, HEALTH_META.recoverUnmovedTicks), 'a pass that moved the cursor').toBe('0');
+      if (!sawStatus) {
+        sawStatus = true;
+        const s = status(box);
+        expect(s.recovering).toEqual({ step: `recover/${version}`, cursor: row.cursor });
+        expect(s.health.warn.map((w) => w.word)).toContain('recovering');
+      }
+      expect(passes, 'the step never completed').toBeLessThan(40);
+    }
+    expect(passes, 'the step spans several passes').toBeGreaterThanOrEqual(3);
+    expect(sawStatus).toBe(true);
+    // Each pass's Stop file was journaled exactly once, though it was held over the passes after it.
+    const files = journalRecords(box).filter((x) => x['k'] === 'file').map((x) => String(x['name'])).filter((n) => n.startsWith(`${ID}.`));
+    expect(files).toHaveLength(passes);
+    expect(new Set(files).size).toBe(files.length);
+    // The torn line and the newer v are malformed, the unknown kind unknown: each counted once.
+    expect(counters(box)).toMatchObject({ journal_line_malformed: 2, journal_record_unknown: 1 });
+    // A recovery pass's own tick record, journaled after the bind, is never inserted a second time.
+    expect(rows(box, 'SELECT ts_ms, count(*) AS c FROM ticks GROUP BY ts_ms HAVING c > 1')).toEqual([]);
+    expect(rows(box, "SELECT name FROM sqlite_master WHERE name IN ('recover_verdicts', 'recover_drained')")).toEqual([]);
+    expect(metaOf(box, HEALTH_META.recoverUnmovedTicks)).toBe('0');
+    // Then both resume: the next pass drains every held file. A hint is a name in .draining/ after the drain, and the
+    // held files are drained (and unlinked) before the ingest looks, so it is a Stop line arriving now, renamed by this
+    // pass and drained by the next, that hints the transcript: it is then read to its new end.
+    spoolLine(box, ID, { v: 1, ev: 'Stop', id: ID, sid: U1, ts: Date.now() });
+    pass(box);
+    expect(countOf(box, 'spool_receipts')).toBe(receipts0 + passes);
+    expect(offsetsOf(box)[0]!['at']).toBe(fs.statSync(transcript).size);
+  }, 1.5 * HEAVY);
+
+  it('O44, the floor: below it a recovery pass does not start the step and counts capture_paused_low_disk; a per-chunk probe below it pauses the step too', () => {
+    const box = makeHistoryBox('ccrc-history-recover-floor-');
+    pass(box);
+    registerRecovery(box, Date.now());
+    const FS_BYTES = 100 * GIB;
+    const low = `${floorThreshold(FS_BYTES) - 4096}:${FS_BYTES}`;
+    pass(box, { HISTORY_TEST_STATFS: low });
+    expect(counters(box)['capture_paused_low_disk']).toBe(1);
+    expect(recoverRow(box)).toMatchObject({ cursor: null, completed_ms: null });
+    expect(metaOf(box, HEALTH_META.recoverUnmovedTicks), 'held by the floor: the count does not rise').toBe('0');
+    // The pass's own probe (the first statfs call) has room; the step's probe before its first chunk does not.
+    pass(box, { HISTORY_TEST_STATFS_AFTER: `1:${low}` });
+    expect(counters(box)['capture_paused_low_disk']).toBe(2);
+    expect(recoverRow(box)).toMatchObject({ cursor: null, completed_ms: null });
+    pass(box);
+    expect(recoverRow(box)!.completed_ms).not.toBeNull();
+  }, HEAVY);
+
+  it('in-process: history-off set between two passes holds the step with its cursor; removed, the step replays a family and an operator mapping at their positions, completes and drops its scratch tables', async () => {
+    const box = makeHistoryBox('ccrc-history-recover-inproc-');
+    const P = historyPaths(box.home);
+    const { storeId, writer } = createStore(box.home);
+    const U = u(0x71);
+    const G = u(0xc1);
+    const t0 = Date.now() - 10 * MIN;
+    plantJournalFile(box, storeId, new Date(t0).toISOString().slice(0, 7), 'feedbeef', t0, [
+      journalRecord('verdict', t0 + 1, { event_key: 'none', kind: 'family', ccrc_id: ID, generation: G, project: 'demo', first_seen_ms: t0 + 1 }),
+      journalRecord('verdict', t0 + 2, {
+        event_key: 'none', kind: 'mapping', ccrc_id: ID, generation: G, cc_session_uuid: U, declared_by: 'operator',
+        path: path.join(box.accountHome['claude-a']!, 'projects', SLUG, `${U}.jsonl`),
+      }),
+    ]);
+    const version = Date.now();
+    const db = openWriter(P.dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(version);
+      const ctx = stepCtx(box, { storeId, writer });
+      fs.writeFileSync(P.off, '');
+      expect(await SW.recoveryStep(db, ctx)).toEqual({ moved: false, done: false, held: true });
+      expect({ ...db.prepare("SELECT cursor FROM derivation_state WHERE step = 'recover'").get() }).toEqual({ cursor: null });
+      fs.rmSync(P.off);
+      expect(await SW.recoveryStep(db, ctx)).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT ccrc_id, generation, project, first_seen_ms FROM sessions').all().map((r) => ({ ...r })))
+        .toEqual([{ ccrc_id: ID, generation: G, project: 'demo', first_seen_ms: t0 + 1 }]);
+      expect(db.prepare('SELECT seq, cc_session_uuid, cause, declared_by, confirmed_ms FROM epochs').all().map((r) => ({ ...r })))
+        .toEqual([{ seq: 1, cc_session_uuid: U, cause: 'import', declared_by: 'operator', confirmed_ms: t0 + 2 }]);
+      expect({ ...db.prepare("SELECT completed_ms IS NOT NULL AS done FROM derivation_state WHERE step = 'recover'").get() }).toEqual({ done: 1 });
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE name IN ('recover_verdicts', 'recover_drained')").all()).toEqual([]);
+      expect(getMeta(db, HEALTH_META.recoverUnmovedTicks)).toBe('0');
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('in-process: two writers\' overlapping files of one month replay as ONE time-merged group (each file\'s order kept, a tie to the earlier file), and the ordinal cursor resumes that group across passes', async () => {
+    const box = makeHistoryBox('ccrc-history-recover-merge-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const t0 = Date.now() - 10 * MIN;
+    const M = new Date(t0).toISOString().slice(0, 7);
+    const [GA, GB, UA, UB] = [u(0xf1), u(0xf2), u(0xf3), u(0xf4)];
+    const family = (id: string, g: string, project: string, firstSeen: number, t: number): string =>
+      journalRecord('verdict', t, { event_key: 'none', kind: 'family', ccrc_id: id, generation: g, project, first_seen_ms: firstSeen });
+    const mapping = (id: string, g: string, uuid: string, t: number): string =>
+      journalRecord('verdict', t, { event_key: 'none', kind: 'mapping', ccrc_id: id, generation: g, cc_session_uuid: uuid, declared_by: 'operator' });
+    // A (head t0, last record t0 + 30) and B (head t0 + 1) overlap, so lib's orderJournalFiles makes them ONE group,
+    // A first. The first record to name a family makes its row (ensureFamily never rewrites one), so the order shows:
+    //   - ID: A's family and B's mapping share t0 + 10. The tie goes to A: project demo, first seen t0 + 5. B first
+    //     (a pick by <=) would make the row from the mapping: project '', first seen t0 + 10.
+    //   - ID2: B's family (t0 + 20) comes before A's mapping (t0 + 30) by time. A's records first (the group
+    //     concatenated, not merged) would make the row from the mapping: project '', first seen t0 + 30.
+    // The order is the one Task 7's planReplay gives over the same two files (O56).
+    plantJournalFile(box, ids.storeId, M, 'aaaaaaaa', t0, [family(ID, GA, 'demo', t0 + 5, t0 + 10), mapping(ID2, GB, UB, t0 + 30)]);
+    plantJournalFile(box, ids.storeId, M, 'bbbbbbbb', t0 + 1, [mapping(ID, GA, UA, t0 + 10), family(ID2, GB, 'demo2', t0 + 20, t0 + 20)]);
+    const db = openWriter(P.dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+      // Every record is longer than chunkBytes, so each chunk is one record, and each call (a fresh budget, and a
+      // fresh run with an empty merge cache, as a new pass has) takes two or three: the six-record group spans
+      // calls in both journal phases.
+      const cursors: string[] = [];
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 20 && !r.done; i += 1) {
+        r = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 300, chunkBytes: 100 }));
+        cursors.push(String(cursorOn(db)));
+      }
+      expect(r.done, cursors.join(' | ')).toBe(true);
+      const mid = new RegExp(`^apply:${M}\\.aaaaaaaa\\.jsonl:[1-5]/2$`);
+      expect(cursors.some((c) => mid.test(c)), `an apply call stopped inside the group, at an ordinal: ${cursors.join(' | ')}`).toBe(true);
+      expect(db.prepare('SELECT ccrc_id, generation, project, first_seen_ms FROM sessions ORDER BY ccrc_id').all().map((x) => ({ ...x })))
+        .toEqual([
+          { ccrc_id: ID, generation: GA, project: 'demo', first_seen_ms: t0 + 5 },
+          { ccrc_id: ID2, generation: GB, project: 'demo2', first_seen_ms: t0 + 20 },
+        ]);
+      // UA sorts before UB (u() pads the number).
+      expect(db.prepare('SELECT cc_session_uuid, cause FROM epochs ORDER BY cc_session_uuid').all().map((x) => ({ ...x })))
+        .toEqual([{ cc_session_uuid: UA, cause: 'import' }, { cc_session_uuid: UB, cause: 'import' }]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('in-process: a file whose head names another store is dropped and counted once; a file with no head is kept, as planReplay keeps it; an undrained spool record counts journal_spool_undrained_gone only when its file is gone from .draining/, .draining/rejected/ and every .draining/planted/<area>/', async () => {
+    const box = makeHistoryBox('ccrc-history-recover-files-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const ID3 = 'claude-c-demo';
+    const t0 = Date.now() - 10 * MIN;
+    const M = new Date(t0).toISOString().slice(0, 7);
+    const [GA, GB, GC, S] = [u(0xe1), u(0xe2), u(0xe3), u(0xe9)];
+    const family = (id: string, g: string, t: number): string =>
+      journalRecord('verdict', t, { event_key: 'none', kind: 'family', ccrc_id: id, generation: g, project: 'demo', first_seen_ms: t });
+    // Four journaled spool files with no `drained` record: GONE has left .draining/, HELD is still there (the live
+    // drain decides it after the step), and B1 set REJECTED aside into .draining/rejected/ (the store refused its rows,
+    // D-4346) and DISPLACED into .draining/planted/<area>/ (a directory stood at its
+    // sidecar name, D-4347). Only GONE is gone.
+    const GONE = `${ID}.${t0 + 5}.4242.jsonl`;
+    const HELD = `${ID}.${t0 + 6}.4242.jsonl`;
+    const REJECTED = `${ID}.${t0 + 7}.4242.jsonl`;
+    const DISPLACED = `${ID}.${t0 + 8}.4242.jsonl`;
+    const stop = (t: number): Record<string, unknown> => ({ v: 1, ev: 'Stop', id: ID, sid: S, ts: t });
+    plantJournalFile(box, ids.storeId, M, 'feedbeef', t0, [
+      family(ID, GA, t0 + 1),
+      journalRecord('file', t0 + 5, { name: GONE }), journalRecord('spool', t0 + 5, { ord: 1, rec: stop(t0 + 5) }),
+      journalRecord('file', t0 + 6, { name: HELD }), journalRecord('spool', t0 + 6, { ord: 1, rec: stop(t0 + 6) }),
+      journalRecord('file', t0 + 7, { name: REJECTED }), journalRecord('spool', t0 + 7, { ord: 1, rec: stop(t0 + 7) }),
+      journalRecord('file', t0 + 8, { name: DISPLACED }), journalRecord('spool', t0 + 8, { ord: 1, rec: stop(t0 + 8) }),
+    ]);
+    // In this store's directory, a head naming ANOTHER store: never replayed.
+    plantJournalFile(box, ids.storeId, M, '77777777', t0 + 2, [family(ID2, GB, t0 + 3)], u(0x77));
+    // A file whose first line is no head at all: kept, and sorted last in its month (lib orderJournalFiles).
+    fs.writeFileSync(path.join(box.root, 'journal', ids.storeId, `${M}.cccccccc.jsonl`), `${family(ID3, GC, t0 + 4)}\n`, { mode: 0o600 });
+    fs.mkdirSync(P.draining, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(P.draining, HELD), `\n${JSON.stringify(stop(t0 + 6))}\n`, { mode: 0o600 });
+    fs.mkdirSync(path.join(P.draining, 'rejected'), { mode: 0o700 });
+    fs.writeFileSync(path.join(P.draining, 'rejected', REJECTED), `\n${JSON.stringify(stop(t0 + 7))}\n`, { mode: 0o600 });
+    // An empty area first, as a drain killed before its end-of-drain cleanup leaves one (B1 removes an area it left empty
+    // at the end of every drain): undrainedFileKept must look past it.
+    fs.mkdirSync(path.join(P.draining, 'planted', `${t0 + 1}.4241`), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(path.join(P.draining, 'planted', `${t0 + 2}.4242`), { mode: 0o700 });
+    fs.writeFileSync(path.join(P.draining, 'planted', `${t0 + 2}.4242`, DISPLACED), `\n${JSON.stringify(stop(t0 + 8))}\n`, { mode: 0o600 });
+    const db = openWriter(P.dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT ccrc_id FROM sessions ORDER BY ccrc_id').all().map((x) => x['ccrc_id']),
+        'the foreign head\'s family is not replayed; the head-less file\'s is').toEqual([ID, ID3]);
+      expect(countersOn(db, 'journal_head_mismatch', 'journal_spool_undrained_gone', 'journal_line_malformed'))
+        .toEqual({ journal_head_mismatch: 1, journal_spool_undrained_gone: 1, journal_line_malformed: 0 });
+      expect({ ...db.prepare('SELECT count(*) AS n FROM spool_receipts').get() }, 'an undrained spool record is never a receipt').toEqual({ n: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('in-process: a stored cursor that does not parse fails the chunk instead of restarting the step; an executor that neither moves nor finishes ends the step for the pass after ONE call', async () => {
+    const box = makeHistoryBox('ccrc-history-recover-stuck-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const db = openWriter(P.dbFile);
+    try {
+      // Month 13 is outside lib's cursor grammar: never a guess at where to resume.
+      const bad = 'apply:2026-13.aaaaaaaa.jsonl:7';
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, ?, NULL)").run(Date.now(), bad);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: false, done: false, held: false });
+      expect(cursorOn(db), 'the cursor is kept as it was').toBe(bad);
+      expect(countersOn(db, 'recover_chunk_failed')).toEqual({ recover_chunk_failed: 1 });
+
+      db.prepare("UPDATE derivation_state SET cursor = NULL WHERE step = 'recover'").run();
+      let calls = 0;
+      const stuck = (_db: unknown, _run: unknown, cursor: unknown): { cursor: unknown; moved: boolean; phaseDone: boolean } => {
+        calls += 1;
+        return { cursor, moved: false, phaseDone: false };
+      };
+      // A 5 s budget bounds the red: without the rule the stuck executor is called again until the budget is spent.
+      const r = await SW.recoveryStep(db, stepCtx(box, ids, { maxMs: 5_000 }), { index: stuck, apply: stuck, reindex: stuck });
+      expect(r).toEqual({ moved: false, done: false, held: false });
+      expect(calls, 'one call, then the step ends for this pass').toBe(1);
+      expect(cursorOn(db)).toBeNull();
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('in-process: the executors see the pass\'s substring belt as run.ectx.belt, and recoverPass keeps its secrets step\'s belt on ctx (§8.3 layer 4)', async () => {
+    const box = makeHistoryBox('ccrc-history-recover-belt-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const sec = path.join(box.home, '.cc-secrets');
+    fs.mkdirSync(sec, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(sec, 'rb.env'), `ZQ_RB=QPrecoverbelt${'4kT9'.repeat(5)}7\n`, { mode: 0o600 });
+    const db = openWriter(P.dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+      const seen: unknown[] = [];
+      const capture = (_db: unknown, run: { ectx: { belt?: unknown } }, cursor: unknown): { cursor: unknown; moved: boolean; phaseDone: boolean } => {
+        seen.push(run.ectx.belt);
+        return { cursor, moved: false, phaseDone: false };
+      };
+      const BELT = Object.freeze({ sentinel: 'this pass\'s belt' });
+      expect(await SW.recoveryStep(db, { ...stepCtx(box, ids), belt: BELT }, { index: capture, apply: capture, reindex: capture }))
+        .toEqual({ moved: false, done: false, held: false });
+      expect(seen.length, 'CONTROL: the executor ran once').toBe(1);
+      expect(seen[0], 'recoveryStep hands ctx.belt to its executors as run.ectx.belt').toBe(BELT);
+      // The recover arm's own pass: its secrets step loaded rb.env, so the pass's belt holds a unit, and the default
+      // executors run (the step completes over an empty journal).
+      const ctx: Record<string, unknown> = { ...stepCtx(box, ids), pause: null };
+      expect(await SW.recoverPass(db, ctx, 0)).toBe(0);
+      expect((ctx['belt'] as { texts?: readonly string[] } | null | undefined)?.texts?.length ?? 0, 'recoverPass keeps its secrets step\'s belt, which holds rb.env\'s unit, on ctx for the executors').toBeGreaterThan(0);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('in-process: recoverPass registers the node merge step, so a value held only by a node leaves no index byte once the next tick merges (D-4609, H-158)', async () => {
+    const box = makeHistoryBox('ccrc-history-recover-nodemerge-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const V = `QPhg1nodemerge${randomBytes(12).toString('hex')}7`;
+    const sec = path.join(box.home, '.cc-secrets');
+    fs.mkdirSync(sec, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(sec, 'x.env'), `ZQ_NM=${V}\n`, { mode: 0o600 });
+    const db = openWriter(P.dbFile);
+    try {
+      db.exec('BEGIN');
+      createFtsTables(db);
+      db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, ?, '', 'demo', 1)").run(ID);
+      db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (1, 1, ?, 'startup', 'hook', 1)").run(RR_U1);
+      db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(RR_U1);
+      db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (2, ?, 'br5', NULL, 1)").run(Buffer.alloc(32, 8));
+      const gist = `Rotated the credential ${V} today.`;
+      db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id,
+        earliest_ms, latest_ms, src_chars, desc_count, desc_chars, parser_version, created_ms)
+        VALUES ('nm-leaf', 1, 1, 1, 'native_leaf', 0, 'not-requested', ?, '[]', 2, 1, 2, 0, 0, 0, 1, 1)`).run(gist);
+      const t = nodeIndexTexts({ gist, topics: [], refs: [] }, makePairIndex([]));
+      db.prepare("INSERT INTO nodes_fts (rowid, gist, topics, refs) SELECT rowid, ?, ?, ? FROM nodes WHERE node_id = 'nm-leaf'").run(t.gist, t.topics, t.refs);
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+      db.exec('COMMIT');
+      expect(await SW.recoverPass(db, { ...stepCtx(box, ids), pause: null }, 0)).toBe(0);
+      expect((db.prepare("SELECT gist FROM nodes WHERE node_id = 'nm-leaf'").get() as { gist: string }).gist.includes(V), 'CONTROL: the pass rewrote the leaf\'s gist').toBe(false);
+      expect((db.prepare("SELECT count(*) AS n FROM derivation_state WHERE step = 'fts-merge' AND version = 1 AND completed_ms IS NULL").get() as { n: number }).n,
+        'the rewrite registered the merge step pending, for the next tick to run').toBe(1);
+    } finally {
+      closeWriter(db);
+    }
+  }, HEAVY);
+
+  it('in-process: journalRedactPairs reads every redact record the index phase would read, and names each journal file it skips, a foreign head or one it cannot open (spec §8.4 and §9.14)', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    const box = makeHistoryBox('ccrc-history-recover-jpairs-');
+    const P = historyPaths(box.home);
+    const { storeId } = createStore(box.home);
+    const t0 = Date.now() - 10 * MIN;
+    const M = new Date(t0).toISOString().slice(0, 7);
+    const sha = (n: number): string => n.toString(16).padStart(64, '0');
+    plantJournalFile(box, storeId, M, 'feedbee1', t0, [
+      journalRecord('redact', t0 + 1, { len: 32, sha256: sha(1) }),
+      journalRecord('verdict', t0 + 2, { event_key: 'none', kind: 'family', ccrc_id: ID, generation: u(0xd1), project: 'demo', first_seen_ms: t0 + 2 }),
+      'this line is broken on purpose',
+      journalRecord('redact', t0 + 3, { len: 40, sha256: sha(2) }),
+    ]);
+    plantJournalFile(box, storeId, M, 'feedbee2', t0 + 5, [journalRecord('redact', t0 + 6, { len: 33, sha256: sha(3) })], u(0xd2));
+    plantJournalFile(box, storeId, M, 'feedbee3', t0 + 7, [journalRecord('redact', t0 + 8, { len: 34, sha256: sha(4) })]);
+    const locked = path.join(box.root, 'journal', storeId, `${M}.feedbee3.jsonl`);
+    fs.chmodSync(locked, 0o000);
+    try {
+      const got = SW.journalRedactPairs(P, storeId);
+      expect(got.pairs, 'both of this store\'s pairs, in journal order; the foreign head\'s pair is never read')
+        .toEqual([{ len: 32, sha256: sha(1), t: t0 + 1 }, { len: 40, sha256: sha(2), t: t0 + 3 }]);
+      expect(got.foreign, 'a foreign head is named, never skipped silently, and apart from what could not be read (H-103)').toEqual([`${M}.feedbee2.jsonl`]);
+      expect(got.unreadable, 'a file journalListing lists as unreadable is named in its own list').toEqual([`${M}.feedbee3.jsonl`]);
+    } finally { fs.chmodSync(locked, 0o600); }
+    expect(SW.journalRedactPairs(P, storeId).pairs.length, 'readable again: its pair is read too').toBe(3);
+  });
+
+  it('in-process: H-184, journalRedactPairs names a link, a directory and a FIFO at a month name unreadable, apart from a regular file whose head names another store, which stays foreign', () => {
+    const box = makeHistoryBox('ccrc-history-recover-jpairs-nonregular-');
+    const P = historyPaths(box.home);
+    const { storeId } = createStore(box.home);
+    const t0 = Date.now() - 10 * MIN;
+    const M = new Date(t0).toISOString().slice(0, 7);
+    plantJournalFile(box, storeId, M, 'feedbee1', t0, []);
+    plantJournalFile(box, storeId, M, 'feedbee2', t0 + 5, [], u(0xd2));
+    const dir = path.join(box.root, 'journal', storeId);
+    fs.symlinkSync(path.join(dir, `${M}.feedbee1.jsonl`), path.join(dir, `${M}.feedbee3.jsonl`));
+    fs.mkdirSync(path.join(dir, `${M}.feedbee4.jsonl`), { mode: 0o700 });
+    const fifo = spawnSync('mkfifo', [path.join(dir, `${M}.feedbee5.jsonl`)], { encoding: 'utf8' });
+    expect(fifo.status, `${fifo.stdout}${fifo.stderr}`).toBe(0);
+    const got = SW.journalRedactPairs(P, storeId);
+    expect(got.foreign, 'only the regular file with a foreign head is foreign').toEqual([`${M}.feedbee2.jsonl`]);
+    expect([...got.unreadable].sort(), 'a link, a directory and a FIFO are data the read could not see').toEqual([`${M}.feedbee3.jsonl`, `${M}.feedbee4.jsonl`, `${M}.feedbee5.jsonl`]);
+    expect([...got.nonRegular].sort(), 'H-219: and are named apart, so the refusal can give them their own remedy').toEqual([`${M}.feedbee3.jsonl`, `${M}.feedbee4.jsonl`, `${M}.feedbee5.jsonl`]);
+  });
+
+  it('mergeJournalByTime: two writers\' items merge by t, each file\'s own order kept, a tie to the earlier file; one file, and none, pass through (R-T25-1; planReplay and the executor share it)', () => {
+    const item = (tag: string, t: number): { tag: string; t: number } => ({ tag, t });
+    const tags = (xs: Array<{ tag: string }>): string[] => xs.map((x) => x.tag);
+    // A's third item is older than its second: a file's own order is kept, never re-sorted.
+    const A = [item('a1', 1), item('a2', 5), item('a3', 4)];
+    const B = [item('b1', 5), item('b2', 2)];
+    // a1 (1) first; a2 and b1 tie at 5, the earlier file (A) takes it; then a3 (4) against b1 (5); b2 follows b1.
+    expect(tags(mergeJournalByTime([A, B]))).toEqual(['a1', 'a2', 'a3', 'b1', 'b2']);
+    // The same files the other way round: a1 (1) first, then the tie at 5 goes to B (now the earlier file), whose b2 (2) follows.
+    expect(tags(mergeJournalByTime([B, A])), 'the file order given is the tie order').toEqual(['a1', 'b1', 'b2', 'a2', 'a3']);
+    expect(tags(mergeJournalByTime([A])), 'one file passes through').toEqual(['a1', 'a2', 'a3']);
+    expect(mergeJournalByTime([]), 'no file, no item').toEqual([]);
+    expect(tags(mergeJournalByTime([[], A])), 'an empty file takes no turn').toEqual(['a1', 'a2', 'a3']);
+  });
+
+  it('in-process: D-4592 (a), a journal month file the step cannot read fails the index chunk (recover_chunk_failed, cursor unmoved, step open) and is never counted journal_head_mismatch; readable again, the next call replays it', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    // In-process, because a real pass runs fixModes, which chmods a journal file back to 0600 before the step reads it.
+    const box = makeHistoryBox('ccrc-history-recover-unreadable-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const t0 = Date.now() - 10 * MIN;
+    const M = new Date(t0).toISOString().slice(0, 7);
+    const [GA, GB] = [u(0xd5), u(0xd6)];
+    const family = (id: string, g: string, t: number): string =>
+      journalRecord('verdict', t, { event_key: 'none', kind: 'family', ccrc_id: id, generation: g, project: 'demo', first_seen_ms: t });
+    plantJournalFile(box, ids.storeId, M, 'feedbea1', t0, [family(ID, GA, t0 + 1)]);
+    plantJournalFile(box, ids.storeId, M, 'feedbea2', t0 + 5, [family(ID2, GB, t0 + 6)]);
+    const locked = path.join(box.root, 'journal', ids.storeId, `${M}.feedbea1.jsonl`);
+    const db = openWriter(P.dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+      fs.chmodSync(locked, 0o000);
+      try {
+        // Two calls: the unreadable file fails the chunk every time, so the step is never completed past it.
+        for (let i = 0; i < 2; i += 1) {
+          expect(await SW.recoveryStep(db, stepCtx(box, ids)), `call ${i + 1}`).toEqual({ moved: false, done: false, held: false });
+        }
+        const c = countersOn(db, 'recover_chunk_failed', 'journal_head_mismatch');
+        expect(c['recover_chunk_failed'], 'each call counts the failed chunk').toBeGreaterThanOrEqual(1);
+        expect(c['journal_head_mismatch'], 'an unreadable file is not another store\'s file').toBe(0);
+        const cur = cursorOn(db);
+        expect(cur === null || cur.startsWith('index'), `the cursor stays in the index phase: ${String(cur)}`).toBe(true);
+        expect({ ...db.prepare("SELECT completed_ms IS NULL AS open FROM derivation_state WHERE step = 'recover'").get() }).toEqual({ open: 1 });
+        expect(db.prepare('SELECT ccrc_id FROM sessions').all(), 'the readable file is not replayed past the unreadable one either').toEqual([]);
+      } finally {
+        fs.chmodSync(locked, 0o600);
+      }
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+      expect(r.done).toBe(true);
+      expect(db.prepare('SELECT ccrc_id FROM sessions ORDER BY ccrc_id').all().map((x) => x['ccrc_id']),
+        'the file that was unreadable is replayed once it reads').toEqual([ID, ID2]);
+      expect(countersOn(db, 'journal_head_mismatch')).toEqual({ journal_head_mismatch: 0 });
+    } finally {
+      closeWriter(db);
+      try { fs.chmodSync(locked, 0o600); } catch { /* removed with the fixture */ }
+    }
+  });
+
+  it('in-process: H-93 (D-4607), a group that grows from one file to two under the same leader between two calls restarts at its start: the cursor\'s byte offset is never read as an ordinal', async () => {
+    const box = makeHistoryBox('ccrc-history-recover-regroup-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const t0 = Date.now() - 10 * MIN;
+    const M = new Date(t0).toISOString().slice(0, 7);
+    const letters = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const family = (id: string, g: string, t: number): string =>
+      journalRecord('verdict', t, { event_key: 'none', kind: 'family', ccrc_id: id, generation: g, project: 'demo', first_seen_ms: t });
+    // A alone is a group of one, read by byte offset: eight family records (one session row each), the last at t0 + 50.
+    const A = letters.map((l, i) => family(`claude-${l}-demo`, u(0x93a0 + i), t0 + (i === letters.length - 1 ? 50 : i + 1)));
+    plantJournalFile(box, ids.storeId, M, 'aaaaaaaa', t0, A);
+    const db = openWriter(P.dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+      // Each record is longer than chunkBytes, so a chunk is one record and a call takes two or three: the cursor stops
+      // inside A with a byte offset far past A's ten lines.
+      let offset = 0;
+      for (let i = 0; i < 20 && offset <= 40; i += 1) {
+        await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 300, chunkBytes: 100 }));
+        const m = /^apply:[^:]+:([0-9]+)/.exec(String(cursorOn(db)));
+        offset = m === null ? 0 : Number(m[1]);
+      }
+      expect(offset, `the apply cursor stopped inside A at a byte offset past its line count: ${String(cursorOn(db))}`).toBeGreaterThan(40);
+      expect(db.prepare('SELECT count(*) AS n FROM sessions').get()!['n'], 'A is only part-applied').toBeLessThan(letters.length);
+      // A second writer's file of the same month overlaps A's range (a store run on two boxes at once, spec 6.9): the
+      // listing now leads ONE group of two with A, and the cursor's number would be read as an ordinal into it.
+      plantJournalFile(box, ids.storeId, M, 'bbbbbbbb', t0 + 2, [family('claude-z-demo', u(0x93b0), t0 + 3)]);
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 40 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 300, chunkBytes: 100 }));
+      expect(r.done).toBe(true);
+      expect(db.prepare('SELECT ccrc_id FROM sessions ORDER BY ccrc_id').all().map((x) => x['ccrc_id']),
+        'every record of A was applied, and B\'s').toEqual([...letters.map((l) => `claude-${l}-demo`), 'claude-z-demo']);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('in-process: H-96, a file whose first line is blank and whose first non-empty line is a foreign head is dropped and counted once, as planReplay drops it: no record after the head is replayed', async () => {
+    const box = makeHistoryBox('ccrc-history-recover-blank-head-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const t0 = Date.now() - 10 * MIN;
+    const M = new Date(t0).toISOString().slice(0, 7);
+    const name = `${ID}.${t0 + 5}.4242.jsonl`;
+    const lines = [
+      journalRecord('head', t0, { store_id: u(0xd2), month: M, writer: 'feedbea7' }),
+      journalRecord('file', t0 + 5, { name }),
+      journalRecord('spool', t0 + 5, { ord: 1, rec: { v: 1, ev: 'Stop', id: ID, sid: u(0xd3), ts: t0 + 5 } }),
+      journalRecord('verdict', t0 + 6, { event_key: 'none', kind: 'drained', file: name }),
+    ];
+    const dir = path.join(box.root, 'journal', ids.storeId);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // A blank fence first (what a torn tail's next append leaves), then the head: planReplay skips empty lines and reads this head.
+    fs.writeFileSync(path.join(dir, `${M}.feedbea7.jsonl`), `\n${lines.join('\n')}\n`, { mode: 0o600 });
+    const planned = planReplay({ storeId: ids.storeId, files: [{ name: `${M}.feedbea7.jsonl`, month: M, writer: 'feedbea7', lines: ['', ...lines] }], ticksAfter: 0 });
+    expect(planned.map((a) => a.do), 'planReplay drops the file whole').toEqual(['skip']);
+    const db = openWriter(P.dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+      expect(r.done).toBe(true);
+      expect(countersOn(db, 'journal_head_mismatch', 'journal_spool_undrained_gone'), 'the executor counts the file once, as planReplay does').toEqual({ journal_head_mismatch: 1, journal_spool_undrained_gone: 0 });
+      expect({ ...db.prepare('SELECT count(*) AS n FROM spool_receipts').get() }, 'and inserts no receipt').toEqual({ n: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('in-process: H-177, the head is the first non-empty line however far in it starts or ends: 5000 leading newlines, and a head line that straddles byte 4096, still drop the foreign file whole, as planReplay drops it', async () => {
+    // journalEnds once read a 4096-byte probe: past it the head was null, the file was kept as this store's, and its later records replayed.
+    for (const blanks of [5000, 4050]) {
+      const box = makeHistoryBox(`ccrc-history-recover-far-head-${blanks}-`);
+      const P = historyPaths(box.home);
+      const ids = createStore(box.home);
+      const t0 = Date.now() - 10 * MIN;
+      const M = new Date(t0).toISOString().slice(0, 7);
+      const name = `${ID}.${t0 + 5}.4242.jsonl`;
+      const lines = [
+        journalRecord('head', t0, { store_id: u(0xd2), month: M, writer: 'feedbea7' }),
+        journalRecord('file', t0 + 5, { name }),
+        journalRecord('spool', t0 + 5, { ord: 1, rec: { v: 1, ev: 'Stop', id: ID, sid: u(0xd3), ts: t0 + 5 } }),
+        journalRecord('verdict', t0 + 6, { event_key: 'none', kind: 'drained', file: name }),
+      ];
+      const dir = path.join(box.root, 'journal', ids.storeId);
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(dir, `${M}.feedbea7.jsonl`), `${'\n'.repeat(blanks)}${lines.join('\n')}\n`, { mode: 0o600 });
+      if (blanks === 4050) {
+        const at = Buffer.byteLength('\n'.repeat(blanks));
+        expect(at < 4096 && at + Buffer.byteLength(lines[0]!) > 4096, 'CONTROL: the head line straddles byte 4096').toBe(true);
+      }
+      const planned = planReplay({ storeId: ids.storeId, files: [{ name: `${M}.feedbea7.jsonl`, month: M, writer: 'feedbea7', lines: [...Array<string>(blanks).fill(''), ...lines] }], ticksAfter: 0 });
+      expect(planned.map((a) => a.do), `${blanks}: planReplay drops the file whole`).toEqual(['skip']);
+      const db = openWriter(P.dbFile);
+      try {
+        db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+        let r = { moved: false, done: false, held: false };
+        for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+        expect(r.done, `${blanks}: the step completed`).toBe(true);
+        expect(countersOn(db, 'journal_head_mismatch', 'journal_spool_undrained_gone'), `${blanks}: the executor counts the file once, as planReplay does`).toEqual({ journal_head_mismatch: 1, journal_spool_undrained_gone: 0 });
+        expect({ ...db.prepare('SELECT count(*) AS n FROM spool_receipts').get() }, `${blanks}: and inserts no receipt`).toEqual({ n: 0 });
+      } finally {
+        closeWriter(db);
+      }
+    }
+  });
+
+  it('in-process: H-92, a month name that is a socket, a link to a this-store file or a directory is foreign (counted journal_head_mismatch once, never replayed, never a failed chunk), like any name that is no regular file', async () => {
+    // The listed name's kind decides, not the open's errno: a socket fails open with ENXIO, a link with ELOOP (O_NOFOLLOW),
+    // and a directory opens and meets the regular-file check. None is journal data an unreadable file might hold, so none
+    // wedges the step.
+    for (const kind of ['socket', 'link', 'directory'] as const) {
+      const box = makeHistoryBox(`ccrc-history-recover-nonregular-${kind}-`);
+      const P = historyPaths(box.home);
+      const ids = createStore(box.home);
+      const t0 = Date.now() - 10 * MIN;
+      const M = new Date(t0).toISOString().slice(0, 7);
+      const [GA, GB] = [u(0xd7), u(0xd8)];
+      const family = (id: string, g: string, t: number): string =>
+        journalRecord('verdict', t, { event_key: 'none', kind: 'family', ccrc_id: id, generation: g, project: 'demo', first_seen_ms: t });
+      plantJournalFile(box, ids.storeId, M, 'feedbea5', t0, [family(ID, GA, t0 + 1)]);
+      const dir = path.join(box.root, 'journal', ids.storeId);
+      const name = `${M}.abcdef01.jsonl`;
+      if (kind === 'socket') {
+        // A relative name from the directory itself: an absolute fixture path can pass sun_path's 108 bytes.
+        const made = spawnSync('python3', ['-I', '-c', 'import socket, sys\ns = socket.socket(socket.AF_UNIX)\ns.bind(sys.argv[1])', name], { cwd: dir, encoding: 'utf8' });
+        expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+        expect(fs.lstatSync(path.join(dir, name)).isSocket()).toBe(true);
+      } else if (kind === 'link') {
+        // The target is a this-store file the listing does not name (no month-file grammar), holding a family only replay would write.
+        const target = path.join(dir, 'target-not-a-month-file.jsonl');
+        const head = journalRecord('head', t0 + 2, { store_id: ids.storeId, month: M, writer: 'abcdef01' });
+        fs.writeFileSync(target, `${[head, family(ID2, GB, t0 + 3)].join('\n')}\n`, { mode: 0o600 });
+        fs.symlinkSync(target, path.join(dir, name));
+      } else {
+        fs.mkdirSync(path.join(dir, name), { mode: 0o700 });
+      }
+      const db = openWriter(P.dbFile);
+      try {
+        db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+        let r = { moved: false, done: false, held: false };
+        for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+        expect(r.done, `${kind}: the step completed`).toBe(true);
+        expect(countersOn(db, 'journal_head_mismatch', 'recover_chunk_failed'), `${kind}: counted foreign once, no chunk failed`)
+          .toEqual({ journal_head_mismatch: 1, recover_chunk_failed: 0 });
+        expect(db.prepare('SELECT ccrc_id FROM sessions ORDER BY ccrc_id').all().map((x) => x['ccrc_id']), `${kind}: only the real file is replayed`).toEqual([ID]);
+      } finally {
+        closeWriter(db);
+      }
+    }
+  });
+
+  it('in-process: H-95, a month file that becomes unreadable once the cursor is in the apply phase fails the apply chunk (recover_chunk_failed 1, cursor unmoved, step open), and a journal directory that cannot be listed fails the chunk instead of reading as an empty journal', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file and lists a 0000 directory
+    const box = makeHistoryBox('ccrc-history-recover-apply-unreadable-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const t0 = Date.now() - 10 * MIN;
+    const M = new Date(t0).toISOString().slice(0, 7);
+    const family = (id: string, g: string, t: number): string =>
+      journalRecord('verdict', t, { event_key: 'none', kind: 'family', ccrc_id: id, generation: g, project: 'demo', first_seen_ms: t });
+    plantJournalFile(box, ids.storeId, M, 'feedbea6', t0, [family(ID, u(0xd9), t0 + 1)]);
+    const dir = path.join(box.root, 'journal', ids.storeId);
+    const file = path.join(dir, `${M}.feedbea6.jsonl`);
+    const db = openWriter(P.dbFile);
+    const open = (): unknown => ({ ...db.prepare("SELECT completed_ms IS NULL AS open FROM derivation_state WHERE step = 'recover'").get() });
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, 'apply', NULL)").run(Date.now());
+      // (1) the apply phase: the file was readable at index (the cursor got here), and is not now.
+      fs.chmodSync(file, 0o000);
+      try {
+        expect(await SW.recoveryStep(db, stepCtx(box, ids)), 'apply, a file unreadable').toEqual({ moved: false, done: false, held: false });
+        expect(countersOn(db, 'recover_chunk_failed', 'journal_head_mismatch'), 'apply, a file unreadable').toEqual({ recover_chunk_failed: 1, journal_head_mismatch: 0 });
+        expect(cursorOn(db)).toBe('apply');
+        expect(open()).toEqual({ open: 1 });
+      } finally {
+        fs.chmodSync(file, 0o600);
+      }
+      // (2) the index phase over a directory that cannot be listed: an empty listing would complete the phase unread.
+      db.prepare("UPDATE derivation_state SET cursor = NULL WHERE step = 'recover'").run();
+      fs.chmodSync(dir, 0o000);
+      try {
+        expect(await SW.recoveryStep(db, stepCtx(box, ids)), 'index, a directory unlistable').toEqual({ moved: false, done: false, held: false });
+        expect(countersOn(db, 'recover_chunk_failed'), 'index, a directory unlistable').toEqual({ recover_chunk_failed: 2 });
+        expect(cursorOn(db)).toBeNull();
+        expect(open()).toEqual({ open: 1 });
+      } finally {
+        fs.chmodSync(dir, 0o700);
+      }
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+      expect(r.done, 'readable again, the step completes').toBe(true);
+    } finally {
+      closeWriter(db);
+      try { fs.chmodSync(dir, 0o700); fs.chmodSync(file, 0o600); } catch { /* removed with the fixture */ }
+    }
+  });
+
+  it('in-process: H-176, a journal/<id>/ that lists but cannot be searched (0600) leaves its month file unreadable, never gone: the redact-pair read names it and the recovery chunk fails', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root searches a 0600 directory
+    // Open and lstat both answer EACCES here (readdir works, so journalListing lists the name); 'gone' would drop the file from the listing and let the phases complete past it.
+    const box = makeHistoryBox('ccrc-history-recover-unsearchable-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const t0 = Date.now() - 10 * MIN;
+    const M = new Date(t0).toISOString().slice(0, 7);
+    const name = `${M}.feedbea8.jsonl`;
+    plantJournalFile(box, ids.storeId, M, 'feedbea8', t0, [
+      journalRecord('verdict', t0 + 1, { event_key: 'none', kind: 'family', ccrc_id: ID, generation: u(0xda), project: 'demo', first_seen_ms: t0 + 1 }),
+    ]);
+    const dir = path.join(box.root, 'journal', ids.storeId);
+    const db = openWriter(P.dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+      fs.chmodSync(dir, 0o600);
+      try {
+        const got = SW.journalRedactPairs(P, ids.storeId);
+        expect(got.unreadable, 'the unsearchable directory\'s month file is named unreadable').toEqual([name]);
+        expect(got.foreign, 'and is no foreign file').toEqual([]);
+        expect(await SW.recoveryStep(db, stepCtx(box, ids)), 'index, a month file in an unsearchable directory').toEqual({ moved: false, done: false, held: false });
+        expect(countersOn(db, 'recover_chunk_failed'), 'the chunk failed').toEqual({ recover_chunk_failed: 1 });
+        expect(cursorOn(db)).toBeNull();
+        expect(db.prepare('SELECT count(*) AS n FROM sessions').get()!['n'], 'nothing was replayed past it').toBe(0);
+      } finally {
+        fs.chmodSync(dir, 0o700);
+      }
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+      expect(r.done, 'CONTROL: searchable again, the step completes').toBe(true);
+      expect(db.prepare('SELECT ccrc_id FROM sessions').all().map((x) => x['ccrc_id']), 'CONTROL: and replays the file').toEqual([ID]);
+    } finally {
+      closeWriter(db);
+      try { fs.chmodSync(dir, 0o700); } catch { /* removed with the fixture */ }
+    }
+  });
+
+  it('in-process: D-4592 (b), a spool answer the step cannot measure (an lstat of .draining/ or of rejected/, or the listing of planted/) fails the apply chunk (recover_chunk_failed, cursor unmoved) and is never counted journal_spool_undrained_gone; measured again, the file is gone and counted once', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root measures through a 0000 directory
+    // In-process, because a real pass runs fixModes and the journal half around the step; this one holds the mode.
+    // Three ways to be unmeasurable, each with the rest of the spool readable where it can be:
+    //   - draining: .draining/ at 0000 (the lstat of .draining/<name> fails EACCES);
+    //   - rejected: .draining/rejected/ at 0000 (the lstat of rejected/<name> fails EACCES, the other lstat answers ENOENT);
+    //   - planted: .draining/planted/ at 0000 (every lstat answers ENOENT, then the listing of planted/ fails).
+    for (const locked of ['draining', 'rejected', 'planted'] as const) {
+      const box = makeHistoryBox(`ccrc-history-recover-unmeasured-${locked}-`);
+      const P = historyPaths(box.home);
+      const ids = createStore(box.home);
+      const t0 = Date.now() - 10 * MIN;
+      const M = new Date(t0).toISOString().slice(0, 7);
+      const S = u(0xe8);
+      const GONE = `${ID}.${t0 + 5}.4242.jsonl`;
+      plantJournalFile(box, ids.storeId, M, 'feedbea3', t0, [
+        journalRecord('file', t0 + 5, { name: GONE }),
+        journalRecord('spool', t0 + 5, { ord: 1, rec: { v: 1, ev: 'Stop', id: ID, sid: S, ts: t0 + 5 } }),
+      ]);
+      const area = { rejected: path.join(P.draining, 'rejected'), planted: path.join(P.draining, 'planted') };
+      for (const d of Object.values(area)) fs.mkdirSync(d, { recursive: true, mode: 0o700 });
+      const lock = locked === 'draining' ? P.draining : area[locked];
+      const db = openWriter(P.dbFile);
+      try {
+        db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+        fs.chmodSync(lock, 0o000);
+        try {
+          // The index phase reads the journal alone and moves; the apply chunk meets the spool it cannot measure.
+          expect(await SW.recoveryStep(db, stepCtx(box, ids)), locked).toEqual({ moved: true, done: false, held: false });
+          expect(await SW.recoveryStep(db, stepCtx(box, ids)), `${locked}: a second call meets the same spool`).toEqual({ moved: false, done: false, held: false });
+          const c = countersOn(db, 'recover_chunk_failed', 'journal_spool_undrained_gone');
+          expect(c['recover_chunk_failed'], `${locked}: the apply chunk failed`).toBeGreaterThanOrEqual(1);
+          expect(c['journal_spool_undrained_gone'], `${locked}: an unmeasured spool is never a gone file`).toBe(0);
+          expect(cursorOn(db), `${locked}: the cursor stays at the start of the apply phase`).toBe('apply');
+        } finally {
+          fs.chmodSync(lock, 0o700);
+        }
+        let r = { moved: false, done: false, held: false };
+        for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+        expect(r.done, locked).toBe(true);
+        expect(countersOn(db, 'journal_spool_undrained_gone'), `${locked}: measured, the file is gone`).toEqual({ journal_spool_undrained_gone: 1 });
+      } finally {
+        closeWriter(db);
+        try { fs.chmodSync(lock, 0o700); } catch { /* removed with the fixture */ }
+      }
+    }
+  });
+
+  it('H-91, D-4592 refined: a stray regular file at .draining/, .draining/rejected, .draining/planted or .draining/planted/<area> is a measured absence (nothing can stand under a non-directory), so the apply chunk does not fail and the gone file is counted once', async () => {
+    // ENOTDIR is not EACCES: D-4592 (b) fails the chunk on a spool it cannot measure, but no entry can exist under a file,
+    // so the answer "not there" is measured. Failing on it would wedge the step for good, since the drain and tidyDraining
+    // that cure a planted non-directory never run while the step is open.
+    for (const stray of ['draining', 'rejected', 'planted', 'area'] as const) {
+      const box = makeHistoryBox(`ccrc-history-recover-stray-${stray}-`);
+      const P = historyPaths(box.home);
+      const ids = createStore(box.home);
+      const t0 = Date.now() - 10 * MIN;
+      const M = new Date(t0).toISOString().slice(0, 7);
+      const GONE = `${ID}.${t0 + 5}.4242.jsonl`;
+      plantJournalFile(box, ids.storeId, M, 'feedbea4', t0, [
+        journalRecord('file', t0 + 5, { name: GONE }),
+        journalRecord('spool', t0 + 5, { ord: 1, rec: { v: 1, ev: 'Stop', id: ID, sid: u(0xe7), ts: t0 + 5 } }),
+      ]);
+      if (stray === 'draining') {
+        fs.mkdirSync(path.dirname(P.draining), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(P.draining, 'a stray file', { mode: 0o600 });
+      } else {
+        fs.mkdirSync(P.draining, { recursive: true, mode: 0o700 });
+        const at = stray === 'rejected' ? path.join(P.draining, 'rejected') : path.join(P.draining, 'planted');
+        if (stray === 'area') {
+          fs.mkdirSync(at, { mode: 0o700 });
+          fs.writeFileSync(path.join(at, `${t0 + 1}.4241`), 'a stray file', { mode: 0o600 });
+        } else {
+          fs.writeFileSync(at, 'a stray file', { mode: 0o600 });
+        }
+      }
+      const db = openWriter(P.dbFile);
+      try {
+        db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+        let r = { moved: false, done: false, held: false };
+        for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+        expect(r.done, `${stray}: the step completed`).toBe(true);
+        expect(countersOn(db, 'recover_chunk_failed', 'journal_spool_undrained_gone'), `${stray}: no chunk failed, the file is gone once`)
+          .toEqual({ recover_chunk_failed: 0, journal_spool_undrained_gone: 1 });
+      } finally {
+        closeWriter(db);
+      }
+    }
+  });
+
+  it('a chunk that throws rolls back with its cursor, counts recover_chunk_failed and recover_unmoved_ticks, and status FAILs recovery-stalled at RECOVERY_STALL_TICKS', () => {
+    const box = makeHistoryBox('ccrc-history-recover-stall-');
+    pass(box);
+    registerRecovery(box, Date.now());
+    const seam = { HISTORY_TEST_THROW_SQL: "SET cursor = ? WHERE step = 'recover'" };
+    pass(box, seam, [PRELOADS.faults]);
+    pass(box, seam, [PRELOADS.faults]);
+    expect(counters(box)['recover_chunk_failed']).toBe(2);
+    expect(recoverRow(box)).toMatchObject({ cursor: null, completed_ms: null });
+    expect(metaOf(box, HEALTH_META.recoverUnmovedTicks)).toBe('2');
+    expect(status(box).health.fail.map((f) => f.word)).not.toContain('recovery-stalled');
+    // The count as RECOVERY_STALL_TICKS - 3 more stalled passes would leave it; the next one reaches the threshold.
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try { setMeta(db, HEALTH_META.recoverUnmovedTicks, String(RECOVERY_STALL_TICKS - 1)); } finally { closeWriter(db); }
+    pass(box, seam, [PRELOADS.faults]);
+    expect(metaOf(box, HEALTH_META.recoverUnmovedTicks)).toBe(String(RECOVERY_STALL_TICKS));
+    expect(status(box).health.fail.map((f) => f.word)).toContain('recovery-stalled');
+    pass(box);   // the seam lifted: the step completes
+    expect(recoverRow(box)!.completed_ms).not.toBeNull();
+    expect(metaOf(box, HEALTH_META.recoverUnmovedTicks)).toBe('0');
+  }, HEAVY);
+});
+
+describe('RB6: while a recovery step is registered, every writing --op form but restore and rebuild is refused (W1-B2 Task 25)', () => {
+  // D-4698 (history-ops-refused-while-recovering): Task 6's decideOpGate row, measured by Task 19 in both halves (the
+  // sweep's is authoritative). The store is bound and at the code's version, so neither conditional exemption
+  // applies: migrate is refused as RB13 rules (its exempt arm is Task 19's), and adopt's two RB14 arms are Task 26's
+  // C55 cases. restore and rebuild are never refused (Tasks 27, 28).
+  it('each form this tree runs answers exit 2 recovering at both doors and writes nothing; the dry runs answer 0; tree and grep read lag=unmeasured; once the step completes a writing form runs again', async () => {
+    const box = makeHistoryBox('ccrc-history-recover-ops-');
+    const { transcript } = seedFamily(box, {
+      id: ID, project: 'demo', uuid: u(0x31), generation: u(0xa3), workdir: WORK,
+      rows: [userRow({ uuid: u(0x3001), ts: new Date(Date.now() - 5 * MIN).toISOString(), text: 'zqrecover words' })],
+    });
+    registerRecovery(box, Date.now());
+    const forms: ReadonlyArray<{ form: string; cli: string[]; op: string[] }> = [
+      { form: 'import-apply', cli: ['import', '--apply'], op: ['--op', 'import', '--apply'] },
+      { form: 'import-agents-apply', cli: ['import', '--agents', '--apply'], op: ['--op', 'import', '--agents', '--apply'] },
+      {
+        form: 'import-session-apply',
+        cli: ['import', '--session', ID, '--file', transcript, '--apply'],
+        op: ['--op', 'import', '--session', ID, '--file', transcript, '--apply'],
+      },
+      { form: 'prune-apply', cli: ['prune', '--older-than', '90d', '--apply'], op: ['--op', 'prune', '--older-than', '90d', '--apply'] },
+      { form: 'reparse-apply', cli: ['reparse', '--apply'], op: ['--op', 'reparse', '--apply'] },
+      { form: 'repair', cli: ['doctor', '--repair'], op: ['--op', 'repair'] },
+      { form: 'backup', cli: ['doctor', '--backup'], op: ['--op', 'backup'] },
+      { form: 'migrate', cli: ['doctor', '--migrate'], op: ['--op', 'migrate'] },
+    ];
+    // CONTROL: every WRITING_FORMS form but the three binding verbs and W2's recall-off pair.
+    expect(forms.map((f) => f.form).sort())
+      .toEqual(Object.keys(WRITING_FORMS).filter((k) => !WRITING_FORMS[k]!.binding && !k.startsWith('recall-off')).sort());
+    // No spool line is pending, so a sweep half that refuses after its lock-take journal half writes nothing either.
+    const before = ccrcSnapshot(box);
+    for (const f of forms) {
+      // Every form runs on a terminal, so no irreversible one stops at needs-tty first: recovering is the bump left.
+      const cli = await cliOnPty(box, [...f.cli, '--json']);
+      expect(lastEnvelope(cli.out), `${f.form}, the CLI door:\n${cli.out}`).toEqual({ exit: 2, reason: 'recovering' });
+      expect(cli.code).toBe(2);
+      const direct = await shimOnPty(box, f.op);
+      expect(lastRc(direct.out), `${f.form}, the direct door`).toEqual({ rc: 2, reason: 'recovering' });
+    }
+    for (const dry of [['import'], ['prune', '--older-than', '90d'], ['reparse']]) {
+      const c = runCli(box, [...dry, '--json']);
+      expect(c.code, `${dry.join(' ')} (a dry run), the CLI door: ${c.stdout}${c.stderr}`).toBe(0);
+      expect(lastRc(runShim(box, ['--op', ...dry]).stdout), `${dry.join(' ')} (a dry run), the direct door`).toEqual({ rc: 0 });
+    }
+    expect(ccrcSnapshot(box), 'a refusal and a dry run write nothing').toEqual(before);
+    expect(recoverRow(box)).toMatchObject({ cursor: null, completed_ms: null });
+    // The read verbs still answer (a read writes its recall line, so they run after the snapshot).
+    const tree = runCli(box, ['tree'], { env: withPane(box, ID) });
+    expect(tree.code, `${tree.stdout}${tree.stderr}`).toBe(0);
+    expect(tree.stdout.split('\n')[0]).toMatch(/^scope=family\(.* lag=unmeasured$/);
+    const grep = runCli(box, ['grep', 'zqrecover'], { env: withPane(box, ID) });
+    expect(grep.stdout.split('\n')[0], `${grep.stdout}${grep.stderr}`).toMatch(/^scope=family\(.* lag=unmeasured$/);
+    pass(box);   // the step completes
+    expect(recoverRow(box)!.completed_ms).not.toBeNull();
+    expect(lastRc(runShim(box, ['--op', 'import', '--apply']).stdout), 'the refusal lifts with the step').toEqual({ rc: 0 });
+  }, 2.5 * HEAVY);
+});
+
+describe('H-36: the RB6 sweep half answers through the release journal half', () => {
+  it('a spool line that lands after the lock-take half and before the recovering refusal is journaled before the refusal answers, so a half that skipped the release would leave it pending', async () => {
+    const box = makeHistoryBox('ccrc-history-recover-rb6-release-');
+    pass(box);                                    // binds the store: store.id and store.writer, so the journal half has ids
+    registerRecovery(box, Date.now());
+    const t = Date.now() - MIN;
+    const spool = path.join(box.root, 'spool', `${ID}.jsonl`);
+    // The stub runs after the lock-take half and before RB6's measure (opPass probes the volume between them).
+    let planted = 0;
+    const statfs = async (): Promise<{ bsize: number; bavail: number; blocks: number }> => {
+      if (planted === 0) spoolLine(box, ID, { v: 1, ev: 'Stop', id: ID, sid: u(0x36), ts: t });
+      planted += 1;
+      return { bsize: 1, bavail: 4 * 2 ** 40, blocks: 8 * 2 ** 40 };
+    };
+    const out: string[] = [];
+    const claudecode = process.env['CLAUDECODE'];
+    delete process.env['CLAUDECODE'];             // the gate's in-session refusal would answer before RB6 is reached
+    try {
+      expect(await SW.runOpPass({ op: 'import', opArgs: ['--apply'] }, { home: box.home, statfs }, (l) => { out.push(l); })).toBe(2);
+    } finally {
+      if (claudecode !== undefined) process.env['CLAUDECODE'] = claudecode;
+    }
+    expect(out.at(-1), out.join('\n')).toBe('{"rc":2,"reason":"recovering"}');
+    expect(planted, 'the stub ran, so the line was planted between the two halves').toBeGreaterThanOrEqual(1);
+    expect(fs.existsSync(spool), 'the planted line left spool/ (the release half moved it)').toBe(false);
+    expect(journalRecords(box).filter((r) => r['k'] === 'spool' && (r['rec'] as Record<string, unknown>)['sid'] === u(0x36)),
+      'and the journal holds its record').toHaveLength(1);
+  }, HEAVY);
+});
+
+describe('the recovery step\'s close re-measures the spool counters (W1-B2 Tasks 23, 25; D-4723 (history-counter-resets-after-cure))', () => {
+  it('a store-refused file kept in .draining/rejected/ is counted on the recovered store, which never held its count', () => {
+    const box = makeHistoryBox('ccrc-history-recover-counters-');
+    pass(box);
+    const dr = historyPaths(box.home).draining;
+    fs.mkdirSync(path.join(dr, 'rejected'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(dr, 'rejected', `${ID}.1700000000001.4242.jsonl`), '\n', { mode: 0o600 });
+    expect(counters(box)['drain_rejected'], 'CONTROL: this store never counted it').toBeUndefined();
+    registerRecovery(box, Date.now());
+    pass(box);
+    expect(recoverRow(box)!.completed_ms, 'CONTROL: the step completed').not.toBeNull();
+    expect(counters(box)['drain_rejected']).toBe(1);
+  }, HEAVY);
+});
+
+// ── W1-B2 Task 26: doctor --adopt (C55) ──────────────────────────────────────────────────────────────────────
+/** A store made unbound as a moved volume or a rebuilt home leaves it (§6.9): created by a pass, then store.id and
+ *  store.writer gone. */
+function unboundBox(prefix: string): { box: HistoryBox; storeId: string; oldWriter: string } {
+  const box = makeHistoryBox(prefix);
+  pass(box);
+  const P = historyPaths(box.home);
+  const storeId = fs.readFileSync(P.storeId, 'utf8').trim();
+  const oldWriter = fs.readFileSync(P.writer, 'utf8').trim();
+  fs.rmSync(P.storeId);
+  fs.rmSync(P.writer);
+  return { box, storeId, oldWriter };
+}
+/** A session and its transcript, for "the next tick ingests" after the adopt. */
+const plantWork = (box: HistoryBox, uuid: string, rowUuid: string): void => {
+  plantSession(box, ID, { uuid, generation: u(0xd1), project: 'demo', workdir: WORK });
+  plantTranscript(box, 'claude-a', SLUG, uuid, [userRow({ uuid: rowUuid, ts: new Date(Date.now() - MIN).toISOString(), text: 'adopted' })]);
+};
+
+describe('C55: doctor --adopt (W1-B2 Task 26; spec §8.4)', () => {
+  it('a v1 store adopted (D-5015): the adopt binds it at v1, and the next pass migrates it to the REAL v2', async () => {
+    const { box } = unboundBox('ccrc-history-adopt-v2-');
+    const P = historyPaths(box.home);
+    rewindStoreToV1(P.dbFile);
+    const uv = (): number => { const db = new DatabaseSync(P.dbFile, { readOnly: true }); try { return Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version); } finally { db.close(); } };
+    const indexes = (): string[] => { const db = new DatabaseSync(P.dbFile, { readOnly: true }); try { return (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map((r) => r.name); } finally { db.close(); } };
+    expect(uv(), 'CONTROL: the unbound store is a v1').toBe(1);
+    const r = await cliOnPty(box, ['doctor', '--adopt']);
+    expect(r.code, r.out).toBe(0);
+    expect(uv(), 'CONTROL: adopt binds, it does not migrate').toBe(1);
+    pass(box);
+    expect(uv()).toBe(SCHEMA_VERSION);
+    for (const ix of V2_INDEXES) expect(indexes(), `the migration made ${ix}`).toContain(ix);
+  }, 1.5 * HEAVY);
+
+  it('DB present, store.id absent → doctor --adopt on a terminal binds it under a new writer, journals the bind before answering 0, and the next tick ingests', async () => {
+    const { box, storeId, oldWriter } = unboundBox('ccrc-history-adopt-');
+    const P = historyPaths(box.home);
+    plantWork(box, u(0x81), u(0x2001));
+    const unbound = runSweep(box);
+    expect(unbound.code, unbound.stderr).toBe(5);
+    expect(unbound.stdout).toContain('history-sweep: store-unbound');
+    expect(countOf(box, 'entries'), 'an unbound store captures nothing').toBe(0);
+
+    const r = await cliOnPty(box, ['doctor', '--adopt']);
+    expect(r.code, r.out).toBe(0);
+    // RB11: adopt prints the carry remedy itself, naming where each directory goes on this box.
+    expect(r.out.replace(/\r/g, '')).toContain(
+      `copy each to the same path here (~/.ccrc/history/journal/${storeId}/, ~/.ccrc/history/export/${storeId}/)`);
+    // H-100 (R-T26-7): the line is the operator's act, said from the start of the sentence, never an instruction to a session.
+    expect(r.out.replace(/\r/g, '')).toContain(
+      `the operator, from a terminal outside any session: if the box this store left still has ~/.ccrc/history/journal/${storeId}/`);
+    // D-5635: a carry after the bind holds the ticks with history-off until it is whole, said where the operator reads it.
+    expect(r.out.replace(/\r/g, '')).toContain(
+      "their file names never collide with this box's; if you copy them after this adopt, touch ~/.ccrc/history-off before you copy and before the next tick, which comes within minutes (the bind has armed the check) and remove it only once both directories hold every source file at the same size");
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    const writer = fs.readFileSync(P.writer, 'utf8').trim();
+    expect(writer).toMatch(/^[0-9a-f]{8}$/);
+    expect(writer, 'a fresh token at every binding').not.toBe(oldWriter);
+    expect(metaOf(box, 'writer')).toBe(writer);
+    expect(rows(box, "SELECT k, v FROM meta WHERE k LIKE 'bound:%'")).toEqual([{ k: expect.stringMatching(/^bound:[0-9]+$/), v: 'adopt' }]);
+    expect(countOf(box, "derivation_state WHERE step = 'recover'"), 'adopt registers no recovery step').toBe(0);
+    // §8.4: the bind is in the fsynced journal before the verb answers 0, under the NEW token's file.
+    expect(countOf(box, 'journal_outbox')).toBe(0);
+    expect(journalRecords(box).filter((x) => x['k'] === 'verdict' && x['kind'] === 'bind'))
+      .toEqual([expect.objectContaining({ bind: 'adopt', writer, event_key: 'none' })]);
+    expect(fs.readdirSync(journalDirOf(box)).filter((n) => n.endsWith(`.${writer}.jsonl`))).toHaveLength(1);
+    expect(fs.existsSync(P.op), 'the op marker goes with the pass').toBe(false);
+
+    // The next tick ingests; a driver clock 31 minutes ahead makes the registry scan due.
+    const next = runDriver(box, { offsetMs: 31 * MIN });
+    expect(next.code, `${next.stdout}\n${next.stderr}`).toBe(0);
+    expect(countOf(box, 'entries')).toBeGreaterThan(0);
+  }, HEAVY);
+
+  it('a container rebuilt with its volume (the DB kept on db/\'s volume, the home new) adopts the same way, and the next tick ingests', async () => {
+    const vol = mkTmp('ccrc-history-volume-');
+    const a = makeHistoryBox('ccrc-history-adopt-old-');
+    fs.mkdirSync(a.root, { recursive: true, mode: 0o700 });
+    fs.symlinkSync(vol, historyPaths(a.home).dbDir);
+    pass(a);
+    const storeId = fs.readFileSync(path.join(a.root, 'store.id'), 'utf8').trim();
+
+    const b = makeHistoryBox('ccrc-history-adopt-new-');
+    fs.mkdirSync(b.root, { recursive: true, mode: 0o700 });
+    fs.symlinkSync(vol, historyPaths(b.home).dbDir);
+    plantWork(b, u(0x82), u(0x2101));
+    const unbound = runSweep(b);
+    expect(unbound.code, unbound.stderr).toBe(5);
+    expect(unbound.stdout).toContain('history-sweep: store-unbound');
+
+    const r = await cliOnPty(b, ['doctor', '--adopt']);
+    expect(r.code, r.out).toBe(0);
+    expect(fs.readFileSync(path.join(b.root, 'store.id'), 'utf8').trim(), 'identity follows the store').toBe(storeId);
+    expect(rows(b, "SELECT v FROM meta WHERE k LIKE 'bound:%'")).toEqual([{ v: 'adopt' }]);
+    const next = runDriver(b, { offsetMs: 31 * MIN });
+    expect(next.code, `${next.stdout}\n${next.stderr}`).toBe(0);
+    expect(countOf(b, `entries WHERE uuid = '${u(0x2101)}'`)).toBe(1);
+  }, HEAVY);
+
+  it('store.id present and naming another store → exit 2 adopt-refused at both doors, nothing written', async () => {
+    const { box } = unboundBox('ccrc-history-adopt-other-');
+    const P = historyPaths(box.home);
+    fs.writeFileSync(P.storeId, `${u(0x99)}\n`, { mode: 0o600 });
+    const before = ccrcSnapshot(box);
+    const cli = await cliOnPty(box, ['doctor', '--adopt']);
+    expect(cli.code, cli.out).toBe(2);
+    expect(cli.out.replace(/\r/g, ''), 'H-102: the CLI door says the reason, not just an exit 2').toContain('adopt-refused');
+    const shim = await shimOnPty(box, ['--op', 'adopt']);
+    expect(shim.code, shim.out).toBe(2);
+    expect(lastRc(shim.out)).toEqual({ rc: 2, reason: 'adopt-refused' });
+    expect(ccrcSnapshot(box)).toEqual(before);
+  }, HEAVY);
+
+  it('under CLAUDECODE → exit 2 apply-in-session at both doors, nothing written', async () => {
+    const { box } = unboundBox('ccrc-history-adopt-session-');
+    const before = ccrcSnapshot(box);
+    const cli = await cliOnPty(box, ['doctor', '--adopt'], { CLAUDECODE: '1' });
+    expect(cli.code, cli.out).toBe(2);
+    expect(cli.out.replace(/\r/g, ''), 'H-102: the CLI door says the reason, not just an exit 2').toContain('apply-in-session');
+    const shim = await shimOnPty(box, ['--op', 'adopt'], { CLAUDECODE: '1' });
+    expect(lastRc(shim.out)).toEqual({ rc: 2, reason: 'apply-in-session' });
+    expect(ccrcSnapshot(box)).toEqual(before);
+    expect(fs.existsSync(historyPaths(box.home).storeId)).toBe(false);
+  }, HEAVY);
+
+  it('a store whose user_version is newer than this build → exit 2 adopt-refused at both doors, before anything is written (G9)', async () => {
+    const { box } = unboundBox('ccrc-history-adopt-newer-');
+    const P = historyPaths(box.home);
+    // As a rollback past a migration leaves it: this build's openStore refuses such a store before its writer's open
+    // (schema-newer), and adopt must not write meta, the outbox or the binding files into it either. The refusal is
+    // decideBind's (RB17; its pure case is Task 6's): this case pins that adoptArm measures and relays it.
+    const db = new DatabaseSync(P.dbFile);
+    try { db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`); } finally { db.close(); }
+    const before = ccrcSnapshot(box);
+    const cli = await cliOnPty(box, ['doctor', '--adopt']);
+    expect(cli.code, cli.out).toBe(2);
+    expect(cli.out.replace(/\r/g, ''), 'H-102: the CLI door says the reason, not just an exit 2').toContain('adopt-refused');
+    const shim = await shimOnPty(box, ['--op', 'adopt']);
+    expect(lastRc(shim.out)).toEqual({ rc: 2, reason: 'adopt-refused' });
+    // H-99: under --json, or at the direct door, no CLI note names the operator, so the sweep's own line does (the detail itself is lib's).
+    expect(shim.out.replace(/\r/g, '')).toContain('adopt it with the build that wrote it; the operator acts on it, from a terminal outside any session');
+    expect(ccrcSnapshot(box)).toEqual(before);
+    expect(fs.existsSync(P.storeId)).toBe(false);
+  }, HEAVY);
+
+  it('H-101: a directory planted at op on an unbound store does not wedge adopt: the marker is cleared before it is written', async () => {
+    const { box, storeId } = unboundBox('ccrc-history-adopt-op-dir-');
+    const P = historyPaths(box.home);
+    fs.mkdirSync(P.op);
+    const unbound = runSweep(box);
+    expect(unbound.code, unbound.stderr).toBe(5);
+    expect(unbound.stdout).toContain('history-sweep: store-unbound');
+    const r = await cliOnPty(box, ['doctor', '--adopt']);
+    expect(r.code, r.out).toBe(0);
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    expect(fs.existsSync(P.op), 'the op marker goes with the pass').toBe(false);
+  }, HEAVY);
+
+  it('RB14: a registered recovery step refuses adopt on a bound store at both doors, and lets it bind an unbound one, whose step then runs', async () => {
+    // Refused arm: store.id present. The gate answers first, so the word is recovering, never adopt-refused, and
+    // nothing is written.
+    const bound = makeHistoryBox('ccrc-history-adopt-rec-bound-');
+    pass(bound);
+    registerRecovery(bound, Date.now());
+    const before = ccrcSnapshot(bound);
+    const refusedCli = await cliOnPty(bound, ['doctor', '--adopt', '--json']);
+    expect(lastEnvelope(refusedCli.out), refusedCli.out).toEqual({ exit: 2, reason: 'recovering' });
+    const refusedShim = await shimOnPty(bound, ['--op', 'adopt']);
+    expect(lastRc(refusedShim.out)).toEqual({ rc: 2, reason: 'recovering' });
+    expect(ccrcSnapshot(bound)).toEqual(before);
+
+    // Exempt arm: store.id absent (a store moved mid-recovery). No pass opens it, so its step cannot run until adopt
+    // binds it. The CLI door is the whole proof here: the CLI's pre-check passes it, and the sweep's authoritative
+    // half re-measures store.id before bindingPass, so a success means both halves let it through.
+    const { box, storeId } = unboundBox('ccrc-history-adopt-recovering-');
+    registerRecovery(box, Date.now());
+    const held = runSweep(box);
+    expect(held.code, held.stderr).toBe(5);
+    expect(held.stdout, 'CONTROL: unbound, the step cannot run').toContain('history-sweep: store-unbound');
+    const r = await cliOnPty(box, ['doctor', '--adopt']);
+    expect(r.code, r.out).toBe(0);
+    expect(fs.readFileSync(historyPaths(box.home).storeId, 'utf8').trim()).toBe(storeId);
+    expect(countOf(box, "derivation_state WHERE step = 'recover' AND completed_ms IS NULL"), 'adopt leaves the step registered').toBe(1);
+    pass(box);   // bound now: the store opens, and the scheduled pass takes its recover arm instead of store-unbound
+    const after = recoverRow(box)!; expect(after.cursor !== null || after.completed_ms !== null, 'the step ran once bound').toBe(true);
+  }, 1.5 * HEAVY);
+});
+
+// ── W1-B2 Tasks 27–29: doctor --restore, doctor --rebuild, and redaction through recovery ──────────────────────
+// Spec 2026-10-05 §8.4 ("doctor --restore <file>", "doctor --rebuild [--store-id <uuid>]"), §9.14 (recovery,
+// journal replay, redaction first), §6.2 (a pair learned late). Pins: C57 (Task 27); C58, O35, O36's replay
+// half, C67 (Task 28); O47 (Task 29). The helpers new to Task 27 are prefixed rr/Rr (the file's own ID, SLUG, WORK,
+// countOf, metaOf, recoverRow, ccrcSnapshot, lastRc, shimOnPty and cliOnPty serve them too). The binding verbs are
+// irreversible, so their runs go through a REAL terminal (node-pty). The TTY gate has no seam (§10.1). Every spawn
+// carries the statfs preload (historyHelpers), and every HOME is a fixture.
+type RrRow = Record<string, unknown>;
+
+const RR_G1 = '0189abcd-1234-4678-9abc-0000000000a1';
+const RR_U1 = 'a1a1a1a1-0000-4000-8000-000000000001';
+/** The migration seam history-op.test.ts uses (B1 Task 25): an additive v2 through the run-pass driver. */
+const RR_V2 = 'CREATE TABLE seam_v2 (x INTEGER)';
+
+const rrU = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const rrIso = (minutesAgo: number): string => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+const rrRoot = (box: HistoryBox): ReturnType<typeof historyPaths> => historyPaths(box.home);
+const rrNames = (dir: string): string[] => { try { return fs.readdirSync(dir).sort(); } catch { return []; } };
+
+/** A read of the box's store through a read-only handle, closed after. */
+function rrQ<T>(box: HistoryBox, sql: string, ...args: (string | number)[]): T[] {
+  const db = openStoreRO(box);
+  try { return db.prepare(sql).all(...args) as T[]; } finally { db.close(); }
+}
+/** Any SQLite file (a backup, the store), read-only. */
+function rrFileDb<T>(file: string, f: (db: DatabaseSync) => T): T {
+  const db = new DatabaseSync(file, { readOnly: true });
+  try { return f(db); } finally { db.close(); }
+}
+const rrDbMeta = (file: string, k: string): string | null =>
+  rrFileDb(file, (db) => (db.prepare('SELECT v FROM meta WHERE k = ?').get(k) as { v: string } | undefined)?.v ?? null);
+const rrJournalMode = (file: string): string =>
+  rrFileDb(file, (db) => String((db.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode));
+const rrUserVersion = (file: string): number =>
+  rrFileDb(file, (db) => Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version));
+
+const rrRecovered = (box: HistoryBox): boolean => {
+  const r = recoverRow(box);
+  return r !== undefined && r.completed_ms !== null;
+};
+const rrStepDone = (box: HistoryBox, step: string, version: number): boolean =>
+  rrQ<{ c: number | null }>(box, 'SELECT completed_ms AS c FROM derivation_state WHERE step = ? AND version = ?', step, version)[0]?.c != null;
+
+/** The env of a run that B1's faults preload SIGKILLs at one fs call (HISTORY_TEST_KILL). */
+const rrKill = (spec: string): Record<string, string> => ({
+  NODE_OPTIONS: preloadOptions([PRELOADS.statfs, PRELOADS.faults]), HISTORY_TEST_KILL: spec,
+});
+
+/** Scheduled passes through the shim until `done()` holds, at most `max`. Every one must exit 0. No pass may answer
+ *  store-unbound, which is what a restored or rebuilt store must never become (DI3). */
+function rrTickUntil(box: HistoryBox, done: () => boolean, max = 8, opts: SpawnOpts = {}): void {
+  for (let i = 0; i < max; i += 1) {
+    const r = runShim(box, [], opts);
+    expect(r.code, `pass ${i + 1}:\n${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stdout, 'a restored or rebuilt store is never refused unbound').not.toMatch(/store-unbound/);
+    if (done()) return;
+  }
+  throw new Error(`rrTickUntil: not done after ${max} passes`);
+}
+
+const rrStart = (id: string, sid: string, src: 'startup' | 'resume' | 'clear', extra: RrRow = {}): RrRow =>
+  ({ v: 1, ev: 'SessionStart', id, sid, src, ...extra });
+
+/** `n` alternating user and assistant rows of transcript `sid`, uuids rrU(base)… */
+function rrTalk(sid: string, base: number, n: number): object[] {
+  const rows: object[] = [];
+  for (let i = 0; i < n; i += 1) {
+    const at = { uuid: rrU(base + i), ts: rrIso(n - i), parentUuid: i === 0 ? null : rrU(base + i - 1), sessionId: sid, cwd: WORK };
+    rows.push(i % 2 === 0 ? userRow({ ...at, text: `zqrecover ask ${i}` }) : assistantRow({ ...at, text: `zqrecover answer ${i}` }));
+  }
+  return rows;
+}
+
+/** A transcript with one manual compaction (§7.4). It has a user and an assistant row, then the boundary, then the
+ *  summary right after it (the manual +1 position, which the boundary's anchor names), then one more row. The
+ *  first row and the summary's Current Work section both carry `work`. Row uuids are rrU(base)…rrU(base + 4).
+ *  One native leaf derives from it. `cwd` is where its rows say the session was launched (default WORK) and `tag`
+ *  is the word the other three texts begin with (default 'zqrecover'). */
+function rrCompacted(sid: string, base: number, work: string, cwd: string = WORK, tag = 'zqrecover'): object[] {
+  const at = (k: number) => ({
+    uuid: rrU(base + k), ts: rrIso(10 - k), parentUuid: k === 0 ? null : rrU(base + k - 1), sessionId: sid, cwd,
+  });
+  const anchor = rrU(base + 3);
+  const summary = [
+    '<summary>',
+    '1. Primary Request and Intent:',
+    '   Keep the fixture repository healthy.',
+    '8. Current Work:',
+    `   ${work}`,
+    '9. Optional Next Step:',
+    '   Run the suite again.',
+    '</summary>',
+  ].join('\n');
+  return [
+    userRow({ ...at(0), text: `${tag} ask about ${work}` }),
+    assistantRow({ ...at(1), text: `${tag} answer` }),
+    boundaryRow({ ...at(2), trigger: 'manual', headUuid: anchor, anchorUuid: anchor, tailUuid: anchor, allUuids: [] }),
+    summaryRow({ ...at(3), text: summary }),
+    userRow({ ...at(4), text: `${tag} after the compaction` }),
+  ];
+}
+
+interface RrBuilt { box: HistoryBox; storeId: string; transcript: string }
+/** A bound box whose store holds one confirmed family (ID, RR_G1) and its three-row transcript, ingested. Its
+ *  journal holds the file, spool, verdict (`drained` included) and tick records of that work. */
+function rrBuilt(prefix: string): RrBuilt {
+  const box = makeHistoryBox(prefix, { role: 'fleet' });
+  plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+  const transcript = plantTranscript(box, 'claude-a', SLUG, RR_U1, rrTalk(RR_U1, 1, 3));
+  spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+  rrTickUntil(box, () => countOf(box, 'entries') === 3);
+  return { box, storeId: fs.readFileSync(rrRoot(box).storeId, 'utf8').trim(), transcript };
+}
+
+/** `doctor --backup` through the direct door (Task 22; not irreversible, so no terminal). Returns the new name. */
+function rrBackup(box: HistoryBox): string {
+  const dir = rrRoot(box).backups;
+  const before = new Set(rrNames(dir));
+  const r = runShim(box, ['--op', 'backup']);
+  expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+  const made = rrNames(dir).filter((n) => /^[0-9]{8}T[0-9]{6}Z\.db$/.test(n) && !before.has(n));
+  expect(made, 'one new <ts>.db').toHaveLength(1);
+  return made[0]!;
+}
+
+/** The loss. The DB always goes, with its -wal and -shm (§8.4's remedy moves the three together). With
+ *  `binding`, store.id, store.writer and any pending marker go too. With `journal`, so does journal/. A box that
+ *  loses all three holds only what a fresh box with a planted backup holds (C57). */
+function rrLose(box: HistoryBox, o: { binding: boolean; journal: boolean }): void {
+  const P = rrRoot(box);
+  for (const f of [P.dbFile, P.wal, P.shm]) fs.rmSync(f, { force: true });
+  if (o.binding) for (const f of [P.storeId, P.writer, P.pending]) fs.rmSync(f, { force: true });
+  if (o.journal) fs.rmSync(P.journalDir, { recursive: true, force: true });
+}
+
+/** Every `bind` verdict in every journal directory. */
+const rrBinds = (box: HistoryBox): { bind: unknown; writer: unknown }[] =>
+  journalRecords(box).filter((r) => r['k'] === 'verdict' && r['kind'] === 'bind').map((r) => ({ bind: r['bind'], writer: r['writer'] }));
+
+/** What a restore or a rebuild must leave (§8.4):
+ *  - store.id and meta.store_id name `storeId`;
+ *  - a new writer token is in store.writer and mirrored in meta.writer;
+ *  - one `bound:<ms>` row names the verb;
+ *  - the store is in WAL mode;
+ *  - its `bind` record sits in journal/<storeId>/ under the new token. */
+function rrExpectBound(box: HistoryBox, storeId: string, kind: 'restore' | 'rebuild', oldWriter: string | null): void {
+  const P = rrRoot(box);
+  expect(fs.readFileSync(P.storeId, 'utf8').trim(), 'store.id').toBe(storeId);
+  expect(metaOf(box, 'store_id'), 'meta.store_id').toBe(storeId);
+  const writer = fs.readFileSync(P.writer, 'utf8').trim();
+  expect(writer).toMatch(/^[0-9a-f]{8}$/);
+  expect(metaOf(box, 'writer'), 'meta.writer mirrors store.writer').toBe(writer);
+  if (oldWriter !== null) expect(writer, 'a binding mints a new writer token').not.toBe(oldWriter);
+  expect(rrQ<{ v: string }>(box, "SELECT v FROM meta WHERE k LIKE 'bound:%'").map((x) => x.v)).toEqual([kind]);
+  expect(rrJournalMode(P.dbFile), 'journal_mode').toBe('wal');
+  expect(rrBinds(box).filter((b) => b.writer === writer)).toEqual([{ bind: kind, writer }]);
+  expect(rrNames(path.join(P.journalDir, storeId)).some((n) => n.endsWith(`.${writer}.jsonl`)),
+    'the bind record went to journal/<store_id>/ under the new writer').toBe(true);
+}
+
+const rrFamilies = (box: HistoryBox, id: string): { generation: string; merged_into: number | null }[] =>
+  rrQ(box, 'SELECT generation, merged_into FROM sessions WHERE ccrc_id = ? ORDER BY generation', id);
+const rrEpochs = (box: HistoryBox, id: string): { generation: string; seq: number; cc_session_uuid: string; cause: string }[] =>
+  rrQ(box, `SELECT s.generation, e.seq, e.cc_session_uuid, e.cause FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk
+    WHERE s.ccrc_id = ? ORDER BY s.generation, e.seq`, id);
+
+/** A copy of a backup that claims a newer schema than this build knows. */
+function rrSetUserVersion(file: string, v: number): void {
+  const db = new DatabaseSync(file);
+  try { db.exec(`PRAGMA user_version = ${v}`); } finally { db.close(); }
+}
+/** H-220: a handle on `file` that may edit sqlite_master. node:sqlite's defensive flag defaults to true on Node 24, where even
+ *  writable_schema ON refuses the sqlite_master UPDATE ("table sqlite_master may not be modified", measured on 24.14.1, the workers'
+ *  Node). The `defensive` constructor option and the enableDefensive method are both v25.1+ API (backported to 24.x), newer than the
+ *  22.16.0 floor (R-X-INTX), so the constructor takes no such option and the method is called only when it exists: a 22.16 build has
+ *  no API and relies on SQLite's own default, which is not defensive. */
+function rrOpenUndefensive(file: string): DatabaseSync {
+  const db = new DatabaseSync(file);
+  const maybe = db as unknown as { enableDefensive?: (active: boolean) => void };
+  if (typeof maybe.enableDefensive === 'function') maybe.enableDefensive(false);
+  return db;
+}
+/** The one error a defensive handle answers an edit of sqlite_master with (measured on Node 24.14.1: "table sqlite_master may not be modified"). */
+const RR_SCHEMA_EDIT_REFUSED = /may not be modified/;
+/** H-232: run `sql` over sqlite_master under writable_schema on an rrOpenUndefensive handle, and answer whether the edit TOOK. A
+ *  build whose handle stays defensive (Node 24 defaults to it; the node-floor leg runs exactly 22.16.0, unmeasured here) throws
+ *  RR_SCHEMA_EDIT_REFUSED: that, and only that, is "did not take" (false), so the caller omits the rows that need the damaged copy
+ *  and annotates why. Any other error propagates. A true answer is the edit having run to completion, not a regex over what a later
+ *  read said, so the caller's CONTROL is a real check on the copy. */
+function rrEditSchema(file: string, sql: string, ...params: string[]): boolean {
+  const db = rrOpenUndefensive(file);
+  try {
+    db.exec('PRAGMA writable_schema = ON');
+    try {
+      db.prepare(sql).run(...params);
+    } catch (e) {
+      if (RR_SCHEMA_EDIT_REFUSED.test(String((e as Error).message))) return false;
+      throw e;
+    }
+    db.exec('PRAGMA writable_schema = OFF');
+    return true;
+  } finally { db.close(); }
+}
+/** A copy of a backup whose integrity_check fails while every table still reads. The entries_ts index's
+ *  definition is rewritten so its stored keys no longer match its table (integrity_check then answers "row N
+ *  missing from index entries_ts" rows rather than throwing, and meta still reads). The handle is rrOpenUndefensive's.
+ *  H-232: answers whether the edit took (rrEditSchema); a defensive build leaves the copy intact and the caller omits its row. */
+function rrCorruptIndex(file: string): boolean {
+  if (!rrEditSchema(file, "UPDATE sqlite_master SET sql = ? WHERE name = 'entries_ts'", 'CREATE INDEX entries_ts ON entries(ts_ms, transcript_pk)')) return false;
+  const rows = rrFileDb(file, (d) => (d.prepare('PRAGMA integrity_check').all() as { integrity_check: string }[]).map((r) => r.integrity_check));
+  expect(rows, 'CONTROL: the edit took, so the fixture really fails integrity_check').not.toEqual(['ok']);
+  return true;
+}
+
+/** H-186: a backup whose meta reads but whose FTS5 index cannot be built: blobs_fts_config is gone from the schema, so
+ *  PRAGMA integrity_check throws `vtable constructor failed: blobs_fts` (SQLITE_ERROR, no 'no such table' in the text).
+ *  H-220, H-232: answers whether the edit took (rrEditSchema). A build that refuses the writable_schema edit (defensive mode) leaves the
+ *  copy intact, and the caller omits its row; when the edit took, the CONTROL below is a hard assertion over the copy, no longer a
+ *  regex over the value that said it took. */
+function rrBreakFts(file: string): boolean {
+  if (!rrEditSchema(file, "DELETE FROM sqlite_master WHERE name = 'blobs_fts_config'")) return false;
+  expect(() => rrFileDb(file, (d) => d.prepare('PRAGMA integrity_check').all()), 'CONTROL: the edit took, so integrity_check throws a SQLITE_ERROR').toThrow(/vtable constructor failed/);
+  return true;
+}
+
+describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
+
+  it('a fresh box holding only a backup: the tick refuses store-recoverable and creates nothing; --restore (the CLI, on a terminal) binds the backup, and the next passes recover, then resume the backup\'s cursors', async () => {
+    const { box, storeId, transcript } = rrBuilt('ccrc-hist-c57a-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    const backupWriter = rrDbMeta(path.join(P.backups, name), 'writer');
+    const live = rrQ<{ file_id: number }>(box, "SELECT file_id FROM ingest_files WHERE status = 'live'");
+    expect(live).toHaveLength(1);
+    // A row written after the backup: the restored cursor must take it from where the backup left off.
+    fs.appendFileSync(transcript, `${JSON.stringify(userRow({
+      uuid: rrU(4), ts: rrIso(0), parentUuid: rrU(3), sessionId: RR_U1, cwd: WORK, text: 'zqrecover written after the backup',
+    }))}\n`);
+    rrLose(box, { binding: true, journal: true });
+    const hold = runShim(box);
+    expect(hold.stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    expect([fs.existsSync(P.dbFile), fs.existsSync(P.storeId), fs.existsSync(P.pending)], 'the tick created nothing')
+      .toEqual([false, false, false]);
+    const r = await cliOnPty(box, ['doctor', '--restore', name]);
+    expect(r.code, r.out).toBe(0);
+    rrExpectBound(box, storeId, 'restore', backupWriter);
+    expect(recoverRow(box), 'the recovery step is registered inside the restored file').toMatchObject({ completed_ms: null });
+    rrTickUntil(box, () => rrRecovered(box));
+    // The drain and ingest resume after the step; a Stop line is the discovery hint for the appended row.
+    spoolLine(box, ID, { v: 1, ev: 'Stop', id: ID });
+    rrTickUntil(box, () => countOf(box, 'entries') === 4);
+    expect(rrQ<{ file_id: number }>(box, "SELECT file_id FROM ingest_files WHERE status = 'live'"),
+      'the backup\'s cursor row resumed; nothing was retired and re-read').toEqual(live);
+  }, 1.5 * HEAVY);
+
+  it('a pre-v<N>.db restores into WAL like a <ts>.db, and under history-off the restore binds while the recovery step waits for the switch', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c57b-');
+    const P = rrRoot(box);
+    const ts = rrBackup(box);
+    // A VACUUM INTO output under the snapshot's name: like every pre-v<N>.db, a rollback-journal database.
+    fs.copyFileSync(path.join(P.backups, ts), path.join(P.backups, 'pre-v2.db'));
+    expect(rrJournalMode(path.join(P.backups, 'pre-v2.db')), 'CONTROL: the backup is not WAL').toBe('delete');
+    rrLose(box, { binding: true, journal: true });
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    fs.writeFileSync(P.off, '');
+    const r = await cliOnPty(box, ['doctor', '--restore', 'pre-v2.db']);
+    expect(r.code, r.out).toBe(0);
+    rrExpectBound(box, storeId, 'restore', null);
+    expect(runShim(box).code, 'a scheduled pass under history-off').toBe(0);
+    expect(rrRecovered(box), 'the step waits while history-off is set').toBe(false);
+    fs.rmSync(P.off);
+    rrTickUntil(box, () => rrRecovered(box));
+  }, 1.5 * HEAVY);
+
+  it('a kill right after the link, with store.id absent: the next pass finishes the pending marker and runs the recovery step', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c57c-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    rrLose(box, { binding: true, journal: true });
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    await shimOnPty(box, ['--op', 'restore', name], rrKill('linkSync:.history.db.restore.:1:after'));
+    expect([fs.existsSync(P.dbFile), fs.existsSync(P.storeId), fs.existsSync(P.pending)],
+      'the kill landed between the link and the pending rename').toEqual([true, false, true]);
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    expect(rrBinds(box).map((b) => b.bind), 'the bind row was inside the file; the next pass flushed it').toEqual(['restore']);
+  }, 1.5 * HEAVY);
+
+  it('a kill right after the link, with store.id present: the next pass opens the store and runs the recovery step over the kept journal', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c57d-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    rrLose(box, { binding: false, journal: false });
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-missing$/m);
+    const k = await shimOnPty(box, ['--op', 'restore', name], rrKill('linkSync:.history.db.restore.:1:after'));
+    // With store.id present, a restore that was NOT killed leaves the same three facts, so the kill is measured
+    // on what only a kill leaves: no result line, the linked temp (unlinked right after the link), the op marker
+    // (removed in restoreArm's finally), and no restore bind in the journal yet (it is in the file's outbox).
+    expect(k.out, 'the pass was killed before its result').not.toMatch(/\{"rc"/);
+    expect([fs.existsSync(P.dbFile), fs.readFileSync(P.storeId, 'utf8').trim(), fs.existsSync(P.pending)])
+      .toEqual([true, storeId, false]);
+    expect(rrNames(P.dbDir).some((n) => n.startsWith('.history.db.restore.')), 'the kill left the linked temp').toBe(true);
+    expect(fs.existsSync(P.op), 'the killed pass left its op marker').toBe(true);
+    expect(rrBinds(box).filter((b) => b.bind === 'restore'), 'the bind row is still inside the file').toEqual([]);
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(rrBinds(box).filter((b) => b.bind === 'restore')).toHaveLength(1);
+    expect(counters(box)['recover_chunk_failed'] ?? 0).toBe(0);
+  }, 1.5 * HEAVY);
+
+  it('a v1 backup under a v2 migration seam: the next pass snapshots and migrates, and only the passes after it replay', async () => {
+    const { box } = rrBuilt('ccrc-hist-c57e-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    rrLose(box, { binding: false, journal: false });
+    expect(lastRc((await shimOnPty(box, ['--op', 'restore', name])).out)).toEqual({ rc: 0 });
+    const mig = runDriver(box, { extraMigrations: [RR_V2] });
+    expect(mig.code, `${mig.stdout}\n${mig.stderr}`).toBe(0);
+    expect(mig.stdout).toMatch(/^history-sweep: migrated$/m);
+    expect(rrUserVersion(P.dbFile)).toBe(2);
+    expect(fs.existsSync(path.join(P.backups, 'pre-v2.db')), 'the migration snapshot').toBe(true);
+    expect(rrRecovered(box), 'the replay waits for the code\'s version (§9.2, DI6)').toBe(false);
+    for (let i = 0; i < 6 && !rrRecovered(box); i += 1) {
+      const t = runDriver(box, { extraMigrations: [RR_V2] });
+      expect(t.code, `${t.stdout}\n${t.stderr}`).toBe(0);
+    }
+    expect(rrRecovered(box)).toBe(true);
+  }, 1.5 * HEAVY);
+
+  it('a v1 backup, no seam (D-5015): the restore (the CLI, on a terminal) binds it at v1, and the next pass migrates it to the REAL v2: user_version is SCHEMA_VERSION and every V2 index is there', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c57v2-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    const backup = path.join(P.backups, name);
+    const indexesOf = (file: string): string[] => rrFileDb(file, (db) => (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map((r) => r.name));
+    rewindStoreToV1(backup);   // the backup is what a B1 build would have taken: schema v1, none of the indexes v2 made
+    expect(rrUserVersion(backup), 'CONTROL: the backup is a v1').toBe(1);
+    for (const ix of V2_INDEXES) expect(indexesOf(backup), `CONTROL: the v1 backup has no ${ix}`).not.toContain(ix);
+    rrLose(box, { binding: true, journal: true });
+    const r = await cliOnPty(box, ['doctor', '--restore', name]);
+    expect(r.code, r.out).toBe(0);
+    rrExpectBound(box, storeId, 'restore', rrDbMeta(backup, 'writer'));
+    expect(rrUserVersion(P.dbFile), 'CONTROL: the restored store is the backup\'s v1, not yet migrated').toBe(1);
+    const mig = runShim(box);
+    expect(mig.code, `${mig.stdout}\n${mig.stderr}`).toBe(0);
+    expect(mig.stdout, 'the pass migrates before it recovers').toMatch(/^history-sweep: migrated$/m);
+    expect(rrUserVersion(P.dbFile)).toBe(SCHEMA_VERSION);
+    for (const ix of V2_INDEXES) expect(indexesOf(P.dbFile), `the migration made ${ix}`).toContain(ix);
+    expect(fs.existsSync(path.join(P.backups, 'pre-v2.db')), 'the migration snapshot').toBe(true);
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(rrUserVersion(P.dbFile)).toBe(SCHEMA_VERSION);
+  }, 1.5 * HEAVY);
+
+  it('a backup taken after a re-key: the recovery completes with one (id, G) family (DI4)', async () => {
+    const box = makeHistoryBox('ccrc-hist-c57f-', { role: 'fleet' });
+    const ID = 'claude-a-rekey';
+    const U5 = 'a5a5a5a5-0000-4000-8000-000000000005';
+    const G3 = '0189abcd-1234-4678-9abc-0000000000c3';
+    plantSession(box, ID, { uuid: U5, project: 'demo' });                 // no .generation yet: a '' family
+    spoolLine(box, ID, rrStart(ID, U5, 'startup', { reg: U5 }));
+    rrTickUntil(box, () => rrFamilies(box, ID).length === 1);
+    plantSession(box, ID, { generation: G3 });
+    spoolLine(box, ID, rrStart(ID, U5, 'resume', { reg: U5, gen: G3 }));
+    rrTickUntil(box, () => rrFamilies(box, ID).some((f) => f.generation === '' && f.merged_into !== null));
+    const name = rrBackup(box);
+    rrLose(box, { binding: false, journal: false });
+    expect(lastRc((await shimOnPty(box, ['--op', 'restore', name])).out)).toEqual({ rc: 0 });
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(rrFamilies(box, ID).filter((f) => f.merged_into === null).map((f) => f.generation)).toEqual([G3]);
+    expect(rrEpochs(box, ID).map((e) => [e.generation, e.seq, e.cc_session_uuid])).toEqual([[G3, 1, U5]]);
+    expect(counters(box)['recover_chunk_failed'] ?? 0).toBe(0);
+  }, 1.5 * HEAVY);
+
+  it('a recovery cursor held still for 15 passes by a throwing seam: status (and so doctor) FAILs recovery-stalled', async () => {
+    const { box } = rrBuilt('ccrc-hist-c57g-');
+    const name = rrBackup(box);
+    rrLose(box, { binding: false, journal: false });
+    expect(lastRc((await shimOnPty(box, ['--op', 'restore', name])).out)).toEqual({ rc: 0 });
+    // Task 25's knob and its substring (the stall case above): every statement that moves the step's cursor throws, so
+    // each pass's first chunk rolls back with its cursor.
+    const stall: SpawnOpts = { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_SQL: "SET cursor = ? WHERE step = 'recover'" } };
+    for (let i = 0; i < 15; i += 1) {
+      const t = runShim(box, [], stall);
+      expect(t.code, `pass ${i + 1}:\n${t.stdout}\n${t.stderr}`).toBe(0);
+    }
+    expect(rrRecovered(box)).toBe(false);
+    expect(Number(metaOf(box, HEALTH_META.recoverUnmovedTicks))).toBeGreaterThanOrEqual(15);
+    const st = runCli(box, ['status', '--json']);
+    const health = st.json?.['health'] as { fail?: { word: string }[] } | undefined;
+    expect((health?.fail ?? []).map((f) => f.word), st.stdout).toContain('recovery-stalled');
+  }, 1.5 * HEAVY);
+
+  it('each refusal answers restore-refused and writes nothing; CLAUDECODE and a piped stdin refuse at both doors; free space one byte short refuses and one byte over proceeds', async (ctx) => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c57h-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    const size = fs.statSync(path.join(P.backups, name)).size;
+    rrLose(box, { binding: true, journal: true });
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    const refused = async (args: string[], why: string, env: Record<string, string> = {}): Promise<string> => {
+      const before = ccrcSnapshot(box);
+      const r = await shimOnPty(box, ['--op', 'restore', ...args], env);
+      expect(lastRc(r.out), `${why}\n${r.out}`).toEqual({ rc: 2, reason: 'restore-refused' });
+      expect(ccrcSnapshot(box), `${why}: nothing written`).toEqual(before);
+      return r.out.replace(/\r/g, '');
+    };
+    // H-99: a refusal relayed from decideBind (before or after the staged copy is read) names the operator at the direct door too.
+    const OPERATOR = 'the operator acts on it, from a terminal outside any session';
+    // The name: never a path, never a temp, never a link.
+    await refused([`sub/${name}`], 'a name with /');
+    fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, `.${name}.tmp`));
+    await refused([`.${name}.tmp`], 'a .tmp');
+    fs.symlinkSync(path.join(P.backups, name), path.join(P.backups, '20200101T000000Z.db'));
+    await refused(['20200101T000000Z.db'], 'a symlink');
+    // H-106: the three rows below are decided by restorePre, before any copy; a pass that opens its staged copy is killed.
+    const noCopy = rrKill('openSync:.history.db.restore.:1');
+    // An old store's WAL with no DB would be replayed into the restored file (RC1).
+    fs.writeFileSync(P.wal, '');
+    await refused([name], 'a leftover history.db-wal', noCopy);
+    fs.rmSync(P.wal);
+    fs.writeFileSync(P.storeId, '0189abcd-1234-4678-9abc-0000000000ff\n', { mode: 0o600 });
+    expect(await refused([name], 'store.id names another store', noCopy), 'a refusal decideBind makes before the copy is staged').toContain(OPERATOR);
+    fs.rmSync(P.storeId);
+    fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000001Z.db'));
+    rrSetUserVersion(path.join(P.backups, '20200101T000001Z.db'), SCHEMA_VERSION + 1);
+    expect(await refused(['20200101T000001Z.db'], 'a newer user_version'), 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
+    // H-223 (D-4599): a backup at user_version 0 holds its store_id and passes integrity, but openStore would refuse it (exit 5) after the link, and
+    // restore and rebuild both refuse a present history.db: refused here, nothing linked (`refused` compares the whole snapshot).
+    fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000004Z.db'));
+    rrSetUserVersion(path.join(P.backups, '20200101T000004Z.db'), 0);
+    const v0 = await refused(['20200101T000004Z.db'], 'a user_version below 1');
+    expect(v0, 'H-223: the refusal names the version').toContain('user_version 0');
+    expect(v0, 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
+    expect(fs.existsSync(P.dbFile), 'H-223: nothing was linked').toBe(false);
+    fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000002Z.db'));
+    // H-232: both edits are made under writable_schema, which a defensive build refuses; a row cannot be skipped from the middle of a test, so
+    // such a build omits only the rows that need the damaged copy and annotates why, and every other assertion of the test still runs.
+    if (rrCorruptIndex(path.join(P.backups, '20200101T000002Z.db'))) {
+      expect(await refused(['20200101T000002Z.db'], 'a failed integrity_check'), 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
+    } else {
+      await ctx.annotate('failed-integrity_check row omitted: this node:sqlite build refuses writable_schema edits (defensive mode)');
+    }
+    // H-186: a SQLITE_ERROR that is no missing table (the index cannot be built) is still a verdict on the copy: exit 2, never 'internal error'.
+    fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000003Z.db'));
+    // H-220: a row cannot be skipped from the middle of a test (ctx.skip ends the test), so a build that refuses the writable_schema edit
+    // omits only this row and annotates why; the in-process classifier row (errcode 1 below) still pins the verdict there.
+    if (rrBreakFts(path.join(P.backups, '20200101T000003Z.db'))) {
+      expect(await refused(['20200101T000003Z.db'], 'an index that cannot be built'), 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
+    } else {
+      await ctx.annotate('H-186 row omitted: this node:sqlite build refuses writable_schema edits (defensive mode); the in-process classifier row still pins errcode 1');
+    }
+    // planCopy: free must exceed the threshold plus the backup's size (§6.11).
+    const fsSize = 100 * 2 ** 30;
+    const threshold = floorThreshold(fsSize);
+    await refused([name], 'free = threshold + size - 1', { HISTORY_TEST_STATFS: `${threshold + size - 1}:${fsSize}` });
+    await refused([name], 'a statfs that throws reads as low-disk (R3)', { HISTORY_TEST_STATFS: 'throw' });
+    // The bumps, at both doors (§8.4): CLAUDECODE, then a stdin that is no TTY.
+    const before = ccrcSnapshot(box);
+    const cc = runCli(box, ['doctor', '--restore', name, '--json'], { env: { CLAUDECODE: '1' } });
+    expect(cc.code, cc.stdout + cc.stderr).toBe(2);
+    expect(cc.stdout + cc.stderr).toContain('apply-in-session');
+    expect(lastRc(runShim(box, ['--op', 'restore', name], { env: { CLAUDECODE: '1' } }).stdout))
+      .toEqual({ rc: 2, reason: 'apply-in-session' });
+    const piped = runCli(box, ['doctor', '--restore', name, '--json']);
+    expect(piped.code, piped.stdout + piped.stderr).toBe(2);
+    expect(piped.stdout + piped.stderr).toContain('needs-tty');
+    expect(lastRc(runShim(box, ['--op', 'restore', name]).stdout)).toEqual({ rc: 2, reason: 'needs-tty' });
+    expect(ccrcSnapshot(box), 'the bumps wrote nothing').toEqual(before);
+    // A killed restore's copy is removed first, even by a pass that then refuses: under the lock every temp is
+    // stale (§9.4), and free space is measured without it. The one write a refusal makes, and only of a dead temp.
+    const dead = path.join(P.dbDir, '.history.db.restore.999999');
+    fs.writeFileSync(dead, 'a killed restore\'s copy', { mode: 0o600 });
+    const low = await shimOnPty(box, ['--op', 'restore', name], { HISTORY_TEST_STATFS: `${threshold + size - 1}:${fsSize}` });
+    expect(lastRc(low.out), low.out).toEqual({ rc: 2, reason: 'restore-refused' });
+    expect(fs.existsSync(dead), 'the stale temp went before the refusal').toBe(false);
+    // One byte more than the boundary, and it proceeds.
+    const ok = await shimOnPty(box, ['--op', 'restore', name], { HISTORY_TEST_STATFS: `${threshold + size + 1}:${fsSize}` });
+    expect(lastRc(ok.out), ok.out).toEqual({ rc: 0 });
+    expect(metaOf(box, 'store_id')).toBe(storeId);
+    // A live store is never overwritten.
+    await refused([name], 'a DB present', noCopy);
+  }, 2.5 * HEAVY);
+
+  it('H-101: a directory planted at op does not wedge restore: the marker is cleared before it is written', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c57op-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    rrLose(box, { binding: true, journal: true });
+    fs.mkdirSync(P.op);
+    const r = await shimOnPty(box, ['--op', 'restore', name]);
+    expect(lastRc(r.out), r.out).toEqual({ rc: 0 });
+    expect(metaOf(box, 'store_id')).toBe(storeId);
+    expect(fs.existsSync(P.op), 'the op marker goes with the pass').toBe(false);
+  }, 1.5 * HEAVY);
+
+  it('H-105: an I/O failure is exit 1 and never narrowed into restore-refused: an unsearchable db/backups, an integrity_check that throws; only an absent name is a refusal', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root searches and reads whatever the mode says
+    const { box, storeId } = rrBuilt('ccrc-hist-c57io-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    rrLose(box, { binding: true, journal: true });
+    const notRefused = (r: { out: string }, why: string): void => {
+      expect(lastRc(r.out), `${why}\n${r.out}`).toEqual({ rc: 1 });
+      expect(r.out, `${why}: no refusal word`).not.toContain('restore-refused');
+      expect(fs.existsSync(P.dbFile), `${why}: nothing was linked`).toBe(false);
+      expect(rrNames(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), `${why}: no staged copy is left`).toEqual([]);
+      expect(fs.existsSync(P.op), `${why}: the op marker goes with the pass`).toBe(false);
+    };
+    // The name is absent: the argument itself is refused.
+    const gone = await shimOnPty(box, ['--op', 'restore', '20200101T000009Z.db']);
+    expect(lastRc(gone.out), gone.out).toEqual({ rc: 2, reason: 'restore-refused' });
+    // db/backups listable but not searchable: lstat answers EACCES, which names nothing about the argument.
+    fs.chmodSync(P.backups, 0o600);
+    try { notRefused(await shimOnPty(box, ['--op', 'restore', name]), 'EACCES on lstat'); } finally { fs.chmodSync(P.backups, 0o700); }
+    // SQLite failing inside integrity_check (an I/O or memory error, not a verdict on the file): the good backup is not reported corrupt.
+    notRefused(await shimOnPty(box, ['--op', 'restore', name], {
+      NODE_OPTIONS: preloadOptions([PRELOADS.statfs, PRELOADS.faults]), HISTORY_TEST_THROW_SQL: 'PRAGMA integrity_check',
+    }), 'a throwing integrity_check');
+    // CONTROL: none of it was the backup's fault.
+    const ok = await shimOnPty(box, ['--op', 'restore', name]);
+    expect(lastRc(ok.out), ok.out).toEqual({ rc: 0 });
+    expect(metaOf(box, 'store_id')).toBe(storeId);
+  }, 2.5 * HEAVY);
+
+  it('H-105: stageRestore refuses an absent name and a link as restore-refused, and lets EACCES on the open through as the I/O failure it is', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root opens whatever the mode says
+    const box = makeHistoryBox('ccrc-hist-c57sr-');
+    const P = rrRoot(box);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    const refusal = (name: string): unknown => {
+      try { stageRestore(box.home, name); } catch (e) { return e; }
+      return null;
+    };
+    const absent = refusal('20200101T000000Z.db');
+    expect(absent, 'an absent name').toBeInstanceOf(StoreError);
+    expect((absent as StoreError).word).toBe('restore-refused');
+    fs.writeFileSync(path.join(P.backups, '20200101T000001Z.db'), 'x');
+    fs.symlinkSync(path.join(P.backups, '20200101T000001Z.db'), path.join(P.backups, '20200101T000002Z.db'));
+    const link = refusal('20200101T000002Z.db');
+    expect(link, 'a link').toBeInstanceOf(StoreError);
+    expect((link as StoreError).word).toBe('restore-refused');
+    const shut = path.join(P.backups, '20200101T000003Z.db');
+    fs.writeFileSync(shut, 'x', { mode: 0o000 });
+    const shutErr = refusal('20200101T000003Z.db');
+    expect(shutErr, 'EACCES is thrown').not.toBeNull();
+    expect(shutErr, 'and is no refusal of the argument').not.toBeInstanceOf(StoreError);
+    expect((shutErr as NodeJS.ErrnoException).code).toBe('EACCES');
+  });
+
+  it('H-105: stageRestore reads a SQLite verdict on the copy (corrupt, not a database) as a failed check, and any other SQLite failure inside integrity_check (I/O, memory) as the throw it is', () => {
+    const box = makeHistoryBox('ccrc-hist-c57mi-');
+    const P = rrRoot(box);
+    createStore(box.home);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    const name = '20200101T000000Z.db';
+    const src = new DatabaseSync(P.dbFile);
+    try { src.exec(`VACUUM INTO '${path.join(P.backups, name)}'`); } finally { src.close(); }
+    const proto = DatabaseSync.prototype;
+    const realPrepare = proto.prepare;
+    /** Every integrity_check on any handle throws an error of this shape (what node:sqlite throws carries code and, since it does, errcode). */
+    const failIntegrityWith = (e: { message: string; errcode?: number }): void => {
+      proto.prepare = function prepareFailing(this: DatabaseSync, sql: string) {
+        if (String(sql).includes('PRAGMA integrity_check')) throw Object.assign(new Error(e.message), { code: 'ERR_SQLITE_ERROR', ...(e.errcode === undefined ? {} : { errcode: e.errcode }) });
+        return realPrepare.call(this, sql);
+      } as typeof proto.prepare;
+    };
+    const stage = (): ReturnType<typeof stageRestore> | Error => {
+      try { return stageRestore(box.home, name); } catch (e) { return e as Error; } finally { proto.prepare = realPrepare; }
+    };
+    const clean = (): void => { for (const n of rrNames(P.dbDir).filter((f) => f.startsWith('.history.db.restore.'))) fs.rmSync(path.join(P.dbDir, n), { force: true }); };
+    try {
+      for (const verdict of [
+        { message: 'database disk image is malformed', errcode: 11 },
+        { message: 'file is not a database', errcode: 26 },
+        { message: 'database disk image is malformed (extended code)', errcode: 11 | (1 << 8) },
+        { message: 'no such table: meta', errcode: 1 },                  // a database with no meta table
+        { message: 'vtable constructor failed: blobs_fts', errcode: 1 },  // H-186: SQLITE_ERROR is a verdict whatever it says
+        { message: 'SQL logic error', errcode: 1 | (1 << 8) },
+        { message: 'database disk image is malformed' },                 // a build whose error carries no errcode is read by its message
+      ]) {
+        failIntegrityWith(verdict);
+        const got = stage();
+        expect(got, `a verdict on the content: ${JSON.stringify(verdict)}`).not.toBeInstanceOf(Error);
+        expect((got as ReturnType<typeof stageRestore>).integrityOk, JSON.stringify(verdict)).toBe(false);
+        abortRestore(got as ReturnType<typeof stageRestore>);
+      }
+      for (const failure of [
+        { message: 'disk I/O error', errcode: 10 },
+        { message: 'disk I/O error', errcode: 10 | (1 << 8) },           // SQLITE_IOERR_READ
+        { message: 'out of memory', errcode: 7 },
+        { message: 'database is locked', errcode: 5 },
+        { message: 'unable to open database file', errcode: 14 },
+        { message: 'disk I/O error' },
+      ]) {
+        failIntegrityWith(failure);
+        const got = stage();
+        expect(got, `not a verdict on the file: ${JSON.stringify(failure)}`).toBeInstanceOf(Error);
+        expect((got as Error).message).toBe(failure.message);
+        expect(got, 'and no refusal of the argument').not.toBeInstanceOf(StoreError);
+        clean();
+      }
+    } finally { proto.prepare = realPrepare; clean(); }
+  });
+
+  it('H-103: a readable journal file whose head names another store does not refuse the restore: it is skipped with a notice naming it, and the store is linked', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c57fo-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    rrLose(box, { binding: true, journal: false });
+    const month = new Date().toISOString().slice(0, 7);
+    plantJournalFile(box, storeId, month, 'feedbee2', Date.now(), [], u(0xd2));
+    const foreign = `${month}.feedbee2.jsonl`;
+    const r = await shimOnPty(box, ['--op', 'restore', name]);
+    expect(lastRc(r.out), r.out).toEqual({ rc: 0 });
+    const out = r.out.replace(/\r/g, '');
+    expect(out, 'the notice names the foreign file').toContain(foreign);
+    expect(out, 'and says recovery skips it').toContain('journal_head_mismatch');
+    expect(metaOf(box, 'store_id')).toBe(storeId);
+    expect(fs.existsSync(P.dbFile), 'the store is linked').toBe(true);
+    expect(out, 'H-184: the notice says what was measured, a head naming another store').toContain('a regular file whose head names another store');
+  }, 1.5 * HEAVY);
+
+  it('H-184 (D-4593): a link, FIFO or directory at a month name is unreadable data, not a foreign file: the restore is refused naming it, nothing is linked (the H-103 foreign-head case, a regular file, still restores)', async () => {
+    for (const kind of ['link', 'directory'] as const) {
+      const { box, storeId } = rrBuilt(`ccrc-hist-c57nr-${kind}-`);
+      const P = rrRoot(box);
+      const name = rrBackup(box);
+      rrLose(box, { binding: false, journal: false });
+      const dir = path.join(P.journalDir, storeId);
+      const month = new Date().toISOString().slice(0, 7);
+      const entry = `${month}.feedbee4.jsonl`;
+      // The store's own month file, moved away and replaced by a link (or a directory): its redact pairs are unknown.
+      if (kind === 'link') {
+        const moved = path.join(box.home, 'moved-month-file.jsonl');
+        fs.writeFileSync(moved, '');
+        fs.symlinkSync(moved, path.join(dir, entry));
+      } else {
+        fs.mkdirSync(path.join(dir, entry), { mode: 0o700 });
+      }
+      const idBefore = fs.readFileSync(P.storeId, 'utf8');
+      const r = await shimOnPty(box, ['--op', 'restore', name]);
+      expect(lastRc(r.out), `${kind}\n${r.out}`).toEqual({ rc: 2, reason: 'restore-refused' });
+      const line = r.out.replace(/\r/g, '').split('\n').find((l) => l.includes(entry));
+      expect(line !== undefined, `${kind}: a line names the entry`).toBe(true);
+      // H-219: no chmod cures a link or a directory (journalEnds opens O_NOFOLLOW), so the line says what the entry is and what really cures it.
+      expect(line, `${kind}: the entry is named as no regular file`).toContain('not regular files');
+      expect(line, `${kind}: the real remedy, by the operator`).toContain('the operator puts the regular month file back, or removes the entry');
+      expect(line, `${kind}: the chmod remedy is not offered for it`).not.toContain('makes them readable');
+      expect(fs.existsSync(P.dbFile), `${kind}: nothing was linked`).toBe(false);
+      expect(rrNames(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), `${kind}: the staged copy was removed`).toEqual([]);
+      expect(fs.readFileSync(P.storeId, 'utf8'), `${kind}: store.id is unchanged`).toBe(idBefore);
+    }
+  }, 2.5 * HEAVY);
+
+  it('H-180: the lines that say a binding verb stopped name the operator (OPERATOR_ACTS) at the end of the line: the bound-but-does-not-open, adopt-stopped and restore-stopped lines', () => {
+    // No fixture reaches these three: adoptStore's StoreError is a race after decideBind, and neither commitRestore's nor finishBind's open failure can be planted. So the source is pinned.
+    const src = fs.readFileSync(path.join(REPO, 'ccd', 'history', 'sweep.mjs'), 'utf8');
+    const defs = src.split('\n').filter((l) => l.startsWith('const OPERATOR_ACTS = '));
+    expect(defs, 'OPERATOR_ACTS is defined once').toHaveLength(1);
+    expect(defs[0], 'and names the operator').toContain('the operator acts on it, from a terminal outside any session');
+    for (const prefix of ['the store is bound but does not open yet: ', 'adopt stopped: ', 'restore stopped: ']) {
+      const lines = src.split('\n').filter((l) => l.includes('out(`history-sweep: ' + prefix));
+      expect(lines, `${prefix}: exactly one line says it (a rename turns this red, never vacuous)`).toHaveLength(1);
+      expect(lines[0]!.trimEnd().endsWith('${OPERATOR_ACTS}`);'), `${prefix}: ends with the operator clause`).toBe(true);
+    }
+  });
+});
+
+describe('Redaction first at the link: a restore applies the journal\'s redact records before history.db exists (W1-B2 Task 27)', () => {
+
+  it('a backup that lacks a pair only the journal holds: read verbs run right after the commit, before any pass, print no stretch of the value', async () => {
+    const box = makeHistoryBox('ccrc-hist-c57r-', { role: 'fleet' });
+    const P = rrRoot(box);
+    const value = randomBytes(32).toString('hex');
+    const sha = createHash('sha256').update(value).digest('hex').toUpperCase();
+    const tokenFile = path.join(box.home, '.ccrc', 'fixture.token');
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, [
+      userRow({ uuid: rrU(1), ts: rrIso(3), parentUuid: null, sessionId: RR_U1, cwd: WORK, text: `zqatlink the key ${value} here` }),
+      assistantRow({ uuid: rrU(2), ts: rrIso(2), parentUuid: rrU(1), sessionId: RR_U1, cwd: WORK, text: 'zqatlink noted' }),
+    ]);
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => countOf(box, 'entries') === 2);
+    const name = rrBackup(box);                                // taken before the pair is known
+    fs.writeFileSync(tokenFile, `${value}\n`, { mode: 0o600 });
+    expect(runShim(box).code).toBe(0);                     // learned now, and journaled as a redact record
+    fs.rmSync(tokenFile);                                    // then rotated out of every file: only the journal knows it
+    const pairSql = 'SELECT count(*) AS n FROM redact_hashes WHERE len = ? AND hex(sha256) = ?';
+    expect(rrFileDb(path.join(P.backups, name), (db) => Number((db.prepare(pairSql).get(value.length, sha) as { n: number }).n)),
+      'CONTROL: the backup lacks the pair').toBe(0);
+    expect(journalRecords(box).some((r) => r['k'] === 'redact' && String(r['sha256']).toUpperCase() === sha),
+      'CONTROL: the journal holds it').toBe(true);
+    rrLose(box, { binding: false, journal: false });
+    expect(lastRc((await shimOnPty(box, ['--op', 'restore', name])).out)).toEqual({ rc: 0 });
+    expect(recoverRow(box), 'CONTROL: no pass has run the recovery step yet').toMatchObject({ completed_ms: null });
+    expect(rrQ<{ n: number }>(box, pairSql, value.length, sha)[0]!.n, 'the linked store already holds the journal\'s pair').toBe(1);
+    const pane = withPane(box, ID);
+    for (const args of [['grep', 'zqatlink'], ['grep', 'zqatlink', '--json'], ['expand', rrU(1)], ['expand', rrU(1), '--json']]) {
+      const o = runCli(box, args, { env: pane });
+      expect(o.code, `${args.join(' ')}: rc`).toBe(0);
+      const said = o.stdout + o.stderr;
+      for (let i = 0; i + 14 <= value.length; i += 10) {
+        expect(said.includes(value.slice(i, i + 14)), `${args.join(' ')}: a stretch of the value at ${i}`).toBe(false);
+      }
+      expect(o.stdout.includes(REDACTED_MARK), `${args.join(' ')}: masked`).toBe(true);
+    }
+    expect(recoverRow(box), 'the read verbs ran before any pass: the step is still open').toMatchObject({ completed_ms: null });
+  }, 1.5 * HEAVY);
+
+  it('a journal file the pair read cannot open refuses the restore: named, nothing linked, the staged copy removed; readable again, the restore runs', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    const { box, storeId } = rrBuilt('ccrc-hist-c57s-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    rrLose(box, { binding: false, journal: false });
+    const files = rrNames(path.join(P.journalDir, storeId)).filter((n) => n.endsWith('.jsonl'));
+    expect(files.length > 0, 'CONTROL: the journal holds a file').toBe(true);
+    const shut = path.join(P.journalDir, storeId, files[0]!);
+    const idBefore = fs.readFileSync(P.storeId, 'utf8');
+    fs.chmodSync(shut, 0o000);
+    try {
+      // D-4593 (history-restore-refuses-unread-journal-pairs): a pair only the shut file holds would be missing from
+      // the copy at link time, and read verbs answer while the recovery step is registered.
+      const r = await shimOnPty(box, ['--op', 'restore', name]);
+      expect(lastRc(r.out), r.out).toEqual({ rc: 2, reason: 'restore-refused' });
+      const line = r.out.replace(/\r/g, '').split('\n').find((l) => l.includes('journal file(s) could not be read for redact pairs:'));
+      expect(line !== undefined && line.includes(files[0]!), 'the unread file is named, never skipped silently').toBe(true);
+      expect(line, 'H-100: and whose act it is to make it readable').toContain('the operator makes them readable, from a terminal outside any session');
+      expect(fs.existsSync(P.dbFile), 'nothing was linked').toBe(false);
+      expect(rrNames(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), 'the staged copy was removed').toEqual([]);
+      expect(fs.readFileSync(P.storeId, 'utf8'), 'store.id is unchanged').toBe(idBefore);
+    } finally { fs.chmodSync(shut, 0o600); }
+    expect(lastRc((await shimOnPty(box, ['--op', 'restore', name])).out), 'readable again, the same restore runs').toEqual({ rc: 0 });
+  }, 1.5 * HEAVY);
+
+  it('the restore checks the belt witness before its pair insert and stamps it after: a backup stale against its own content records the belt due, a stamped one keeps its state (ruling R-witness-restore)', async () => {
+    const belt = (box: HistoryBox): ReturnType<typeof parseBeltState> => parseBeltState(metaOf(box, 'fts_belt'));
+    /** A completed belt generation, stamped by the tick that wrote it (Task 7B's recordTick). */
+    const stamped = (box: HistoryBox): boolean => {
+      const s = belt(box);
+      return s !== null && s.v === BELT_VERSION && s.gen === null && s.w !== undefined;
+    };
+    const vrg = (s: ReturnType<typeof parseBeltState>): unknown => (s === null ? null : { v: s.v, rids: s.rids, gen: s.gen });
+
+    // A: after the last stamped tick, a B1-shaped write (a pair recorded straight into redact_hashes: the top rowid, a
+    // witnessed value, rises and fts_belt is not touched, as a build without the belt records one), then the backup.
+    // Its fts_belt witness is stale against its own content, so the restore must record the belt due, never stamp the
+    // stale state clean.
+    const a = rrBuilt('ccrc-hist-c57w-');
+    rrTickUntil(a.box, () => stamped(a.box), 12);
+    const before = metaOf(a.box, 'fts_belt');
+    const db = new DatabaseSync(rrRoot(a.box).dbFile);
+    try {
+      db.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, ?)').run(40, randomBytes(32), Date.now());
+    } finally { db.close(); }
+    const nameA = rrBackup(a.box);
+    expect(metaOf(a.box, 'fts_belt'), 'CONTROL: neither the B1-shaped write nor the backup pass wrote the belt state').toBe(before);
+    rrLose(a.box, { binding: false, journal: false });
+    expect(lastRc((await shimOnPty(a.box, ['--op', 'restore', nameA])).out)).toEqual({ rc: 0 });
+    expect(recoverRow(a.box), 'CONTROL: no pass has run since the restore').toMatchObject({ cursor: null, completed_ms: null });
+    expect(vrg(belt(a.box)), 'the restore recorded the belt due: the copy\'s witness had moved').toEqual({ v: 0, rids: [], gen: null });
+
+    // B: a backup right after a stamped tick, then a pair only the journal holds. The check finds the witness unmoved
+    // and keeps the backup's state; the stamp records the pair insert, so `w` moves with the top rowid and the first
+    // recovery pass does not read the restore's own write as another build's.
+    const b = rrBuilt('ccrc-hist-c57x-');
+    rrTickUntil(b.box, () => stamped(b.box), 12);
+    const atBackup = belt(b.box)!;
+    const nameB = rrBackup(b.box);
+    const value = randomBytes(32).toString('hex');
+    fs.writeFileSync(path.join(b.box.home, '.ccrc', 'fixture.token'), `${value}\n`, { mode: 0o600 });
+    expect(runShim(b.box).code).toBe(0);                       // learned and journaled after the backup
+    rrLose(b.box, { binding: false, journal: false });
+    expect(lastRc((await shimOnPty(b.box, ['--op', 'restore', nameB])).out)).toEqual({ rc: 0 });
+    expect(recoverRow(b.box), 'CONTROL: the journal-only pair went in, so the step starts +pairs').toMatchObject({ cursor: 'index+pairs', completed_ms: null });
+    const kept = belt(b.box);
+    expect(vrg(kept), 'the restore kept the backup\'s belt state: its witness had not moved').toEqual(vrg(atBackup));
+    expect(kept?.w !== undefined && kept.w !== atBackup.w, 'the restore stamped its own pair insert: w moved with the top redact_hashes rowid').toBe(true);
+  }, 2 * HEAVY);
+});
+
+// ── Task 28's helpers ───────────────────────────────────────────────────────────────────────────────────────
+const rrLeafIds = (box: HistoryBox): string[] =>
+  rrQ<{ node_id: string }>(box, "SELECT node_id FROM nodes WHERE kind <> 'condensed' ORDER BY node_id").map((r) => r.node_id);
+
+/** What O35 compares, each by its natural key and journaled times (§8.4 "What comes back equal"). Surrogate keys,
+ *  cwd_real, leaf_id_forked and uuid_two_sessions are not compared. */
+interface RrState {
+  storeId: string | null; sessions: unknown[]; epochs: unknown[]; receipts: unknown[]; redact: unknown[];
+  recall: unknown[]; leaves: string[];
+}
+function rrState(box: HistoryBox): RrState {
+  return {
+    storeId: metaOf(box, 'store_id'),
+    sessions: rrQ(box, 'SELECT ccrc_id, generation, project, first_seen_ms FROM sessions ORDER BY ccrc_id, generation'),
+    epochs: rrQ(box, `SELECT s.ccrc_id, s.generation, e.seq, e.cc_session_uuid, e.cause, e.declared_by
+      FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk ORDER BY s.ccrc_id, s.generation, e.seq`),
+    receipts: rrQ(box, 'SELECT event_key, hex(payload_sha) AS sha, received_ms FROM spool_receipts ORDER BY event_key'),
+    redact: rrQ(box, 'SELECT len, hex(sha256) AS sha FROM redact_hashes ORDER BY len, sha'),
+    recall: rrQ(box, 'SELECT event_key, ccrc_id, generation, ts_ms, verb, rc, ms, arm FROM recall_calls ORDER BY event_key'),
+    leaves: rrLeafIds(box),
+  };
+}
+/** The journal's records by kind, every store directory. `head` and `tick` are left out: a pass and a new writer
+ *  file write those whatever a recovery does. */
+function rrJournalKinds(box: HistoryBox): Record<'file' | 'spool' | 'redact' | 'verdict', number> {
+  const out = { file: 0, spool: 0, redact: 0, verdict: 0 };
+  for (const r of journalRecords(box)) {
+    const k = r['k'];
+    if (k === 'file' || k === 'spool' || k === 'redact' || k === 'verdict') out[k] += 1;
+  }
+  return out;
+}
+
+describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)', () => {
+  /** What a refusing rebuild must leave alone: every file of the store and its binding. The lock-take journal half
+   *  runs before the verb (it appends observation and verdict records to journal/ and moves spool/ lines, as C67's
+   *  note says), so those two trees are left out of the comparison. */
+  const bindingSnapshot = (box: HistoryBox): string[] =>
+    ccrcSnapshot(box).filter((l) => !l.startsWith('history/journal/') && !l.startsWith('history/spool/'));
+  /** A rebuild through the direct door on a terminal, which must refuse rebuild-refused and write nothing. */
+  const refused = async (box: HistoryBox, args: string[], why: string): Promise<string> => {
+    const before = bindingSnapshot(box);
+    // H-110: the snapshot leaves journal/ out, so the records are compared by kind: a refusal appends no bind verdict, nor any verdict or redact
+    // record. The lock-take half does append `file` and `spool` records (measured: it journals the spool lines it moves), so those two are not compared.
+    const recordsOf = (): Pick<ReturnType<typeof rrJournalKinds>, 'redact' | 'verdict'> => {
+      const { redact, verdict } = rrJournalKinds(box);
+      return { redact, verdict };
+    };
+    const kindsBefore = recordsOf();
+    const bindsBefore = rrBinds(box);
+    const r = await shimOnPty(box, ['--op', 'rebuild', ...args]);
+    expect(lastRc(r.out), `${why}\n${r.out}`).toEqual({ rc: 2, reason: 'rebuild-refused' });
+    expect(rrBinds(box), `${why}: no bind verdict was journaled`).toEqual(bindsBefore);
+    expect(recordsOf(), `${why}: no verdict or redact record was journaled`).toEqual(kindsBefore);
+    expect(r.out, `${why}: H-99, the relayed refusal names the operator at the direct door`).toContain('the operator acts on it, from a terminal outside any session');
+    expect(bindingSnapshot(box), `${why}: nothing written`).toEqual(before);
+    return r.out;
+  };
+  /** A journal directory journal/<dir>/ whose one month file holds only a head record naming `dir`. */
+  const plantDir = (box: HistoryBox, dir: string): void =>
+    plantJournalFile(box, dir, new Date().toISOString().slice(0, 7), randomBytes(4).toString('hex'), Date.now(), []);
+
+  it('store.id present and the DB lost: the pass holds store-missing; --rebuild (the CLI, on a terminal) makes a DB with that store_id, bound rebuild, its recovery step registered', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c58a-');
+    const P = rrRoot(box);
+    const oldWriter = fs.readFileSync(P.writer, 'utf8').trim();
+    rrLose(box, { binding: false, journal: false });
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-missing$/m);
+    const r = await cliOnPty(box, ['doctor', '--rebuild']);
+    expect(r.code, r.out).toBe(0);
+    rrExpectBound(box, storeId, 'rebuild', oldWriter);
+    expect(recoverRow(box)).toMatchObject({ completed_ms: null });
+    rrTickUntil(box, () => rrRecovered(box));
+  }, HEAVY);
+
+  it('no store.id and one journal directory whose heads name S: the pass refuses store-recoverable; --rebuild writes store_id S and store.id', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c58b-');
+    const P = rrRoot(box);
+    rrLose(box, { binding: true, journal: false });
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    expect(fs.existsSync(P.dbFile), 'the pass created nothing').toBe(false);
+    const r = await shimOnPty(box, ['--op', 'rebuild']);
+    expect(lastRc(r.out), r.out).toEqual({ rc: 0 });
+    rrExpectBound(box, storeId, 'rebuild', null);
+    rrTickUntil(box, () => rrRecovered(box));
+  }, HEAVY);
+
+  it('two journal directories S and T: rebuild-refused naming both, writing nothing; --store-id T rebuilds T', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c58c-');
+    const T = '0189abcd-1234-4678-9abc-0000000000d7';
+    rrLose(box, { binding: true, journal: false });
+    plantDir(box, T);
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    const out = await refused(box, [], 'two journal directories and no --store-id');
+    expect(out).toContain(storeId);
+    expect(out).toContain(T);
+    expect(out, 'H-107: --store-id cures this refusal, so the remedy line says so').toMatch(/the operator names one with --store-id <uuid>, from a terminal outside any session/);
+    const r = await shimOnPty(box, ['--op', 'rebuild', '--store-id', T]);
+    expect(lastRc(r.out), r.out).toEqual({ rc: 0 });
+    rrExpectBound(box, T, 'rebuild', null);
+  }, HEAVY);
+
+  it('each refusal answers rebuild-refused and writes nothing: a DB present, a leftover history.db-wal, store.id and --store-id disagreeing, a --store-id naming no directory, a directory whose heads name another store, and neither source', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c58d-');
+    const P = rrRoot(box);
+    // H-107: --store-id cures neither a DB present nor a leftover -wal, so the refusal still names the directories (the journal is kept) and points at no flag.
+    const dbPresent = await refused(box, [], 'a DB present');
+    expect(dbPresent, 'the candidate directories are still named').toContain(`journal store directories: ${storeId}`);
+    expect(dbPresent, 'but --store-id is not offered for a DB present').not.toMatch(/--store-id <uuid>/);
+    rrLose(box, { binding: false, journal: false });
+    fs.writeFileSync(P.wal, '');
+    expect(await refused(box, [], 'a leftover history.db-wal'), 'nor for a leftover -wal').not.toMatch(/--store-id <uuid>/);
+    fs.rmSync(P.wal);
+    const T = '0189abcd-1234-4678-9abc-0000000000d8';
+    plantDir(box, T);
+    expect(await refused(box, ['--store-id', T], 'store.id and --store-id disagree'), 'H-187: --store-id cures nothing here, so no flag is offered').not.toMatch(/--store-id <uuid>/);
+    fs.rmSync(path.join(P.journalDir, T), { recursive: true });
+    fs.rmSync(P.storeId);
+    fs.rmSync(P.writer);
+    expect(await refused(box, ['--store-id', '0189abcd-1234-4678-9abc-0000000000d9'], 'a --store-id naming no directory'),
+      'H-107: a --store-id naming no directory is cured by naming one that exists').toMatch(/the operator names one with --store-id <uuid>, from a terminal outside any session/);
+    // journal/X/ whose month files' heads name S: no directory names itself, so none names a store.
+    fs.renameSync(path.join(P.journalDir, storeId), path.join(P.journalDir, '0189abcd-1234-4678-9abc-0000000000da'));
+    expect(await refused(box, [], 'a directory whose heads name another store'), 'H-187: nor for heads naming another store').not.toMatch(/--store-id <uuid>/);
+    // A killed pass's temp is removed first, even by a rebuild that then refuses: under the lock every temp is stale
+    // (§9.4). The one write a refusal makes, and only of a dead temp.
+    const dead = path.join(P.dbDir, 'history.db.new.888888');
+    fs.writeFileSync(dead, 'a killed creation\'s temp', { mode: 0o600 });
+    expect(lastRc((await shimOnPty(box, ['--op', 'rebuild'])).out)).toEqual({ rc: 2, reason: 'rebuild-refused' });
+    expect(fs.existsSync(dead), 'the stale temp went before the refusal').toBe(false);
+    // Neither source: a box that never had a journal. Its first pass is held by a planted backup, not minted over it.
+    const fresh = makeHistoryBox('ccrc-hist-c58e-', { role: 'fleet' });
+    const FP = rrRoot(fresh);
+    fs.mkdirSync(FP.backups, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(FP.backups, '20200101T000000Z.db'), 'not a store');
+    expect(runShim(fresh).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    await refused(fresh, [], 'neither store.id nor a journal directory');
+    const empty = makeHistoryBox('ccrc-hist-c58g-', { role: 'fleet' });
+    fs.mkdirSync(path.join(rrRoot(empty).journalDir, '0189abcd-1234-4678-9abc-0000000000db'), { recursive: true, mode: 0o700 });
+    expect(runShim(empty).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    await refused(empty, [], 'an empty journal directory names no store');
+  }, 2 * HEAVY);
+
+  it('H-18 (D-4605): a journal directory or month file rebuild cannot read answers exit 5 store-unmeasured and writes no store, where a head naming another store and a foreign entry are still rebuild-refused (exit 2), and an empty directory is nothing to replay (H-227)', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file and lists a 0000 directory
+    const { box, storeId } = rrBuilt('ccrc-hist-c58h-');
+    const P = rrRoot(box);
+    rrLose(box, { binding: true, journal: false });
+    const dir = path.join(P.journalDir, storeId);
+    const month = path.join(dir, fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')).sort()[0]!);
+    const wordsOf = (): string => SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`).join(',');
+    expect(wordsOf(), 'readable, its head naming the directory').toBe(`${storeId}=agree`);
+    const noStore = (why: string): void => {
+      expect(fs.existsSync(P.dbFile), `${why}: no DB was minted`).toBe(false);
+      expect(fs.existsSync(P.storeId), `${why}: no store.id was written`).toBe(false);
+    };
+    for (const lock of [month, dir]) {
+      fs.chmodSync(lock, 0o000);
+      try {
+        expect(wordsOf(), `${lock === dir ? 'an unlistable directory' : 'an unreadable month file'} reads unreadable`).toBe(`${storeId}=unreadable`);
+        for (const args of [[], ['--store-id', storeId]]) {
+          const r = await shimOnPty(box, ['--op', 'rebuild', ...args]);
+          expect(lastRc(r.out), `${args.join(' ')}\n${r.out}`).toEqual({ rc: 5, reason: 'store-unmeasured' });
+          expect(r.out, `${args.join(' ')}: H-107, an unmeasured directory is named by the verdict's own detail, and no remedy line is printed`).not.toContain('journal store directories');
+          noStore(args.join(' '));
+        }
+      } finally {
+        fs.chmodSync(lock, lock === dir ? 0o700 : 0o600);
+      }
+    }
+    expect(wordsOf(), 'readable again').toBe(`${storeId}=agree`);
+    // Measured and refused stays a refusal: a directory with no month file, and a month file whose head names another store.
+    const E = '0189abcd-1234-4678-9abc-0000000000dc';
+    const F = '0189abcd-1234-4678-9abc-0000000000dd';
+    fs.mkdirSync(path.join(P.journalDir, E), { mode: 0o700 });
+    plantJournalFile(box, F, new Date().toISOString().slice(0, 7), 'abcdef01', Date.now(), [], storeId);
+    // H-178: a link at a month name is a measured, permanent condition, so it is its own word and a refusal, never the exit-5 retry of an unreadable file.
+    const G = '0189abcd-1234-4678-9abc-0000000000de';
+    fs.mkdirSync(path.join(P.journalDir, G), { mode: 0o700 });
+    fs.symlinkSync(month, path.join(P.journalDir, G, `${new Date().toISOString().slice(0, 7)}.abcdef01.jsonl`));
+    // H-227 (D-4605 refined): a directory with no month file is its own word, `empty`, and is nothing to replay; it is no longer a disagreement.
+    expect(SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`).sort())
+      .toEqual([`${storeId}=agree`, `${E}=empty`, `${F}=disagree`, `${G}=foreign`].sort());
+    for (const id of [F, G]) {
+      const r = await shimOnPty(box, ['--op', 'rebuild', '--store-id', id]);
+      expect(lastRc(r.out), r.out).toEqual({ rc: 2, reason: 'rebuild-refused' });
+      noStore(id);
+    }
+    // CONTROL: the empty directory, named, is the one that rebuilds.
+    const named = await shimOnPty(box, ['--op', 'rebuild', '--store-id', E]);
+    expect(lastRc(named.out), named.out).toEqual({ rc: 0 });
+    expect(fs.readFileSync(P.storeId, 'utf8').trim(), 'the store minted carries the empty directory\'s id').toBe(E);
+  }, 2 * HEAVY);
+
+  it('H-227 (D-4605 refined): store.id names S and journal/S/ holds no month file (the crash window before its first month file): --op rebuild answers 0 and mints the store with S\'s id, with and without --store-id; CONTROL: a month file whose head names another store still refuses', async () => {
+    for (const args of [[], ['--store-id', 'S']]) {
+      const { box, storeId } = rrBuilt(`ccrc-hist-c58emp${args.length}-`);
+      const P = rrRoot(box);
+      const oldWriter = fs.readFileSync(P.writer, 'utf8').trim();
+      rrLose(box, { binding: false, journal: true });
+      // The state appendJournal's mkdirDurable leaves when a crash lands before createMonthFile: the directory, and at most a dot-named temp.
+      fs.mkdirSync(path.join(P.journalDir, storeId), { recursive: true, mode: 0o700 });
+      expect(SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`), 'the directory is empty, not a disagreement').toEqual([`${storeId}=empty`]);
+      const r = await shimOnPty(box, ['--op', 'rebuild', ...args.map((a) => (a === 'S' ? storeId : a))]);
+      expect(lastRc(r.out), `${args.join(' ')}\n${r.out}`).toEqual({ rc: 0 });
+      rrExpectBound(box, storeId, 'rebuild', oldWriter);
+    }
+    const { box, storeId } = rrBuilt('ccrc-hist-c58empc-');
+    const P = rrRoot(box);
+    rrLose(box, { binding: false, journal: true });
+    plantJournalFile(box, storeId, new Date().toISOString().slice(0, 7), 'abcdef01', Date.now(), [], '0189abcd-1234-4678-9abc-0000000000ee');
+    expect(SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`), 'CONTROL: a head naming another store').toEqual([`${storeId}=disagree`]);
+    await refused(box, [], 'CONTROL: the marker\'s directory holds a month file naming another store');
+    expect(fs.existsSync(P.dbFile), 'CONTROL: no DB was minted').toBe(false);
+  }, 2 * HEAVY);
+
+  it('H-218 (D-4605): store.id present and no --store-id: a store\'s own month file replaced by a link is rebuild-refused, never skipped, and no store is minted; CONTROL: the intact directory rebuilds', async () => {
+    {
+      const kind = 'link';                                          // a directory would break the suite's own journalRecords reader, which the refusal helper calls
+      const { box, storeId } = rrBuilt(`ccrc-hist-c58mk-${kind}-`);
+      const P = rrRoot(box);
+      rrLose(box, { binding: false, journal: false });
+      expect(fs.readFileSync(P.storeId, 'utf8').trim(), 'store.id survives the loss').toBe(storeId);
+      const dir = path.join(P.journalDir, storeId);
+      // Another writer's month file (the box's own writer's must stay appendable: a lock-take that cannot journal answers journal-unwritable).
+      const month = `${new Date().toISOString().slice(0, 7)}.feedbee9.jsonl`;
+      fs.symlinkSync(path.join(dir, fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')).sort()[0]!), path.join(dir, month));
+      expect(SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`), `${kind}: recovery lists the directory foreign`).toEqual([`${storeId}=foreign`]);
+      const out = await refused(box, [], `${kind}: the marker's own directory holds an entry that is no regular file`);
+      expect(out, `${kind}: the refusal names the entry`).toContain('no regular file');
+      expect(fs.existsSync(P.dbFile), `${kind}: no DB was minted`).toBe(false);
+    }
+    const { box, storeId } = rrBuilt('ccrc-hist-c58mk-ok-');
+    rrLose(box, { binding: false, journal: false });
+    const r = await shimOnPty(box, ['--op', 'rebuild']);
+    expect(lastRc(r.out), `CONTROL\n${r.out}`).toEqual({ rc: 0 });
+    rrExpectBound(box, storeId, 'rebuild', null);
+  }, 3 * HEAVY);
+
+  it('H-179 (D-4605): in one directory a month file whose head names another store outranks a file that cannot be read, in either order; a link outranks an unreadable file and is outranked by the disagreement', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file
+    const { box, storeId } = rrBuilt('ccrc-hist-c58prec-');
+    const P = rrRoot(box);
+    rrLose(box, { binding: true, journal: false });
+    const M = new Date().toISOString().slice(0, 7);
+    const ids = { X: u(0xf1), Y: u(0xf2), Z1: u(0xf3), Z2: u(0xf4), W1: u(0xf5), W2: u(0xf6) };
+    const locked: string[] = [];
+    // Month files sort by writer: 'aaaaaaaa' is read before 'bbbbbbbb'. A foreign head names the built store; a 0000 file is unreadable; a link to a readable file is foreign.
+    const regular = (dir: string, writer: string): void => plantJournalFile(box, dir, M, writer, Date.now(), [], storeId);
+    const unread = (dir: string, writer: string): void => {
+      plantJournalFile(box, dir, M, writer, Date.now(), [], dir);
+      const f = path.join(P.journalDir, dir, `${M}.${writer}.jsonl`);
+      fs.chmodSync(f, 0o000);
+      locked.push(f);
+    };
+    const link = (dir: string, writer: string): void => {
+      fs.mkdirSync(path.join(P.journalDir, dir), { recursive: true, mode: 0o700 });
+      fs.symlinkSync(path.join(P.journalDir, storeId, fs.readdirSync(path.join(P.journalDir, storeId)).sort()[0]!), path.join(P.journalDir, dir, `${M}.${writer}.jsonl`));
+    };
+    try {
+      regular(ids.X, 'aaaaaaaa'); unread(ids.X, 'bbbbbbbb');      // the disagreement first
+      unread(ids.Y, 'aaaaaaaa'); regular(ids.Y, 'bbbbbbbb');      // the unreadable file first
+      link(ids.Z1, 'aaaaaaaa'); unread(ids.Z1, 'bbbbbbbb');       // the link first
+      unread(ids.Z2, 'aaaaaaaa'); link(ids.Z2, 'bbbbbbbb');       // the unreadable file first
+      regular(ids.W1, 'aaaaaaaa'); link(ids.W1, 'bbbbbbbb');      // the disagreement first
+      link(ids.W2, 'aaaaaaaa'); regular(ids.W2, 'bbbbbbbb');      // the link first
+      const words = Object.fromEntries(SW.journalStoreDirs(box.home).map((d) => [d.storeId, d.heads]));
+      expect(words[ids.X], 'X: a disagreement, then an unreadable file').toBe('disagree');
+      expect(words[ids.Y], 'Y: an unreadable file, then a disagreement').toBe('disagree');
+      expect(words[ids.Z1], 'Z1: a link, then an unreadable file').toBe('foreign');
+      expect(words[ids.Z2], 'Z2: an unreadable file, then a link').toBe('foreign');
+      expect(words[ids.W1], 'W1: a disagreement, then a link').toBe('disagree');
+      expect(words[ids.W2], 'W2: a link, then a disagreement').toBe('disagree');
+      const r = await shimOnPty(box, ['--op', 'rebuild', '--store-id', ids.Y]);
+      expect(lastRc(r.out), r.out).toEqual({ rc: 2, reason: 'rebuild-refused' });
+      expect(fs.existsSync(P.dbFile), 'no DB was minted').toBe(false);
+    } finally {
+      for (const f of locked) fs.chmodSync(f, 0o600);
+    }
+  }, HEAVY);
+
+  it('H-101: a directory planted at op does not wedge rebuild: the marker is cleared before it is written', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c58op-');
+    const P = rrRoot(box);
+    rrLose(box, { binding: true, journal: false });
+    fs.mkdirSync(P.op);
+    const r = await shimOnPty(box, ['--op', 'rebuild']);
+    expect(lastRc(r.out), r.out).toEqual({ rc: 0 });
+    rrExpectBound(box, storeId, 'rebuild', null);
+    expect(fs.existsSync(P.op), 'the op marker goes with the pass').toBe(false);
+  }, HEAVY);
+
+  it('H-108: a journal/ that lists but cannot be searched reads its directories unreadable (exit 5), never absent', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root searches whatever the mode says
+    const { box, storeId } = rrBuilt('ccrc-hist-c58ls-');
+    const P = rrRoot(box);
+    rrLose(box, { binding: true, journal: false });
+    expect(SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`).join(','), 'CONTROL: readable').toBe(`${storeId}=agree`);
+    fs.chmodSync(P.journalDir, 0o600);                               // readdir lists journal/<S>, lstat of it answers EACCES
+    try {
+      expect(SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`).join(','), 'listed but unsearchable reads unreadable').toBe(`${storeId}=unreadable`);
+      const r = await shimOnPty(box, ['--op', 'rebuild']);
+      expect(lastRc(r.out), r.out).toEqual({ rc: 5, reason: 'store-unmeasured' });
+      expect(r.out, 'not "nothing names a store_id"').not.toContain('nothing names a store_id');
+      expect(r.out).toContain(`journal/${storeId}/ could not be read`);
+      expect(fs.existsSync(P.dbFile), 'no DB was minted').toBe(false);
+    } finally { fs.chmodSync(P.journalDir, 0o700); }
+  }, HEAVY);
+
+  it('a kill right after the pending marker becomes store.id: the next pass runs the recovery step (DI3)', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c58f-');
+    const P = rrRoot(box);
+    rrLose(box, { binding: true, journal: false });
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    // The first rename naming store.id.pending writes the marker (temp then rename); the second makes it store.id.
+    const k = await shimOnPty(box, ['--op', 'rebuild'], rrKill('renameSync:store.id.pending:2:after'));
+    // A rebuild that was NOT killed leaves the same three facts, so the kill is measured on what only a kill leaves:
+    // no result line, the op marker (removed in rebuildArm's finally), and no bind in the journal (it is still in the
+    // new file's outbox; finishBind never ran).
+    expect(k.out, 'the pass was killed before its result').not.toMatch(/\{"rc"/);
+    expect([fs.existsSync(P.dbFile), fs.existsSync(P.pending), fs.readFileSync(P.storeId, 'utf8').trim()],
+      'the kill landed right after the pending rename').toEqual([true, false, storeId]);
+    expect(fs.existsSync(P.op), 'the killed pass left its op marker').toBe(true);
+    expect(rrBinds(box), 'the bind row is still inside the file').toEqual([]);
+    expect(recoverRow(box)).toMatchObject({ completed_ms: null });
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(rrBinds(box).map((b) => b.bind)).toEqual(['rebuild']);
+  }, HEAVY);
+});
+
+describe('O35 and O36: the rebuild drill (W1-B2 Task 28)', () => {
+  const A_ID = 'claude-a-demo';
+  const B_ID = 'claude-a-genless';
+  const C_ID = 'claude-a-rekey';
+  const D_ID = 'claude-a-ops';
+  const U = (n: number): string => `b${n}b${n}b${n}b${n}-0000-4000-8000-00000000003${n}`;
+  const G = (n: number): string => `0189abcd-1234-4678-9abc-00000000035${n}`;
+
+  it('O35: rebuilt from its journal alone, with the registry purged and a token rotated out, the store equals the lost one by name; O36: the step writes no record and the rebuild writes its own bind', async () => {
+    const box = makeHistoryBox('ccrc-hist-o35-', { role: 'fleet' });
+    const P = rrRoot(box);
+    const token = randomBytes(32).toString('hex');
+    const tokenFile = path.join(box.home, '.ccrc', 'fixture.token');
+    fs.writeFileSync(tokenFile, `${token}\n`, { mode: 0o600 });            // a learned redaction pair
+    // The store exists before any registry row does: a first pass over planted rows would import each registry uuid as
+    // an 'import' epoch and hint no transcript, which is not the work this drill journals.
+    pass(box);
+    expect(fs.existsSync(P.dbFile), 'CONTROL: the first pass made the store').toBe(true);
+    // Phase 1, in the first passes:
+    //  - A: a confirmed startup and a /clear in ONE draining file, and a recall line;
+    //  - B: a gen-less resume and a gen-less recall, both joining the registry's G(2);
+    //  - C: a gen-less startup with no .generation, so a '' family.
+    plantSession(box, A_ID, { uuid: U(2), generation: G(1), project: 'demo' });
+    spoolLine(box, A_ID, rrStart(A_ID, U(1), 'startup', { reg: U(1), gen: G(1) }));
+    spoolLine(box, A_ID, rrStart(A_ID, U(2), 'clear', { gen: G(1) }));
+    spoolLine(box, A_ID, { v: 1, ev: 'recall', id: A_ID, cmd: 'grep', rc: 0, ms: 12, gen: G(1) });
+    plantSession(box, B_ID, { uuid: U(3), generation: G(2), project: 'demo' });
+    spoolLine(box, B_ID, rrStart(B_ID, U(3), 'resume', { reg: U(3) }));
+    spoolLine(box, B_ID, { v: 1, ev: 'recall', id: B_ID, cmd: 'describe', rc: 3, ms: 7 });
+    plantSession(box, C_ID, { uuid: U(5), project: 'demo' });
+    spoolLine(box, C_ID, rrStart(C_ID, U(5), 'startup', { reg: U(5) }));
+    rrTickUntil(box, () => countOf(box, 'epochs') === 4, 10);
+    // Phase 2: B's gen-less SessionStart(clear), and C re-keyed once its row gains a generation.
+    plantSession(box, B_ID, { uuid: U(4) });
+    spoolLine(box, B_ID, rrStart(B_ID, U(4), 'clear'));
+    plantSession(box, C_ID, { generation: G(3) });
+    spoolLine(box, C_ID, rrStart(C_ID, U(5), 'resume', { reg: U(5), gen: G(3) }));
+    rrTickUntil(box, () => countOf(box, 'epochs') === 5 && rrFamilies(box, C_ID).some((f) => f.generation === '' && f.merged_into !== null));
+    // Phase 3: an operator mapping, `import --session --file --apply`, on a terminal (an irreversible form), of a
+    // compacted transcript (a leaf). Discovery would find a transcript planted in phase 1 only at the 30-minute scan.
+    plantSession(box, D_ID, { generation: G(4), project: 'demo' });
+    const file = plantTranscript(box, 'claude-a', SLUG, U(6), rrCompacted(U(6), 200, 'Polishing the fixture docs.'));
+    expect(lastRc((await shimOnPty(box, ['--op', 'import', '--session', D_ID, '--file', file, '--apply'])).out)).toEqual({ rc: 0 });
+    rrTickUntil(box, () => countOf(box, 'epochs') === 6 && rrLeafIds(box).length === 1, 10);
+    const a = rrState(box);
+    expect(a.leaves, 'CONTROL: A derived the leaf B must re-derive').toHaveLength(1);
+    expect(a.redact.length, 'CONTROL: A learned the token\'s pair').toBeGreaterThan(0);
+    expect(a.recall, 'CONTROL: both recall lines folded').toHaveLength(2);
+    const kindsA = rrJournalKinds(box);
+    // The loss: the token rotated out (only the journal remembers its pair), every registry row purged, the DB gone.
+    fs.rmSync(tokenFile);
+    fs.rmSync(box.reg, { recursive: true, force: true });
+    fs.mkdirSync(box.reg);
+    rrLose(box, { binding: false, journal: false });
+    const r = await cliOnPty(box, ['doctor', '--rebuild']);
+    expect(r.code, r.out).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box) && rrLeafIds(box).length === 1, 12);
+    const b = rrState(box);
+    for (const k of Object.keys(a) as (keyof RrState)[]) expect(b[k], `B's ${k} equals A's`).toEqual(a[k]);
+    // O36, the replay half: recovery and the passes after it appended no file, spool, redact or verdict record;
+    // the one new verdict is the rebuild's own bind, under the new writer token.
+    // H-109, measured: this line goes red (verdict 26, expected 24) when sweep.mjs applyReplayAction's `case 'verdict':` re-journals what it
+    // replays, i.e. after `replayVerdict(db, a.rec, false);` it adds `db.prepare('INSERT INTO journal_outbox (rec) VALUES (?)').run(JSON.stringify(a.rec));`.
+    expect(rrJournalKinds(box)).toEqual({ ...kindsA, verdict: kindsA.verdict + 1 });
+    expect(rrBinds(box)).toEqual([{ bind: 'rebuild', writer: fs.readFileSync(P.writer, 'utf8').trim() }]);
+  }, 2.5 * HEAVY);
+
+  it('O35, the held file: a startup and a gen-less clear journaled and held under store-missing are decided after the step from their sidecar, and the recall counter of the drained file folds exactly once', async () => {
+    const box = makeHistoryBox('ccrc-hist-o35h-', { role: 'fleet' });
+    const P = rrRoot(box);
+    const H_ID = 'claude-a-drained';
+    const K_ID = 'claude-a-held';
+    plantSession(box, H_ID, { uuid: U(7), generation: G(5), project: 'demo' });
+    spoolLine(box, H_ID, { v: 1, ev: 'recall', id: H_ID, cmd: 'tree', rc: 0, ms: 3, gen: G(5) });
+    spoolLine(box, H_ID, rrStart(H_ID, U(7), 'startup', { reg: U(7), gen: G(5) }));
+    rrTickUntil(box, () => countOf(box, 'recall_calls') === 1 && countOf(box, 'epochs') === 1);
+    const recallBefore = rrState(box).recall;
+    rrLose(box, { binding: false, journal: false });
+    plantSession(box, K_ID, { uuid: U(9), generation: G(6), project: 'demo' });
+    spoolLine(box, K_ID, rrStart(K_ID, U(8), 'startup', { reg: U(8) }));    // gen-less: the sidecar names G(6)
+    spoolLine(box, K_ID, rrStart(K_ID, U(9), 'clear'));                     // gen-less; the sidecar's .uuid names U(9)
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-missing$/m);
+    expect(rrNames(P.draining).filter((n) => n.endsWith('.jsonl')), 'journaled and held').toHaveLength(1);
+    fs.rmSync(box.reg, { recursive: true, force: true });                      // decided from the sidecar alone
+    fs.mkdirSync(box.reg);
+    expect((await cliOnPty(box, ['doctor', '--rebuild'])).code).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box) && rrNames(P.draining).filter((n) => n.endsWith('.jsonl')).length === 0, 10);
+    expect(rrFamilies(box, K_ID)).toEqual([{ generation: G(6), merged_into: null }]);
+    expect(rrEpochs(box, K_ID).map((e) => [e.seq, e.cc_session_uuid, e.cause])).toEqual([[1, U(8), 'startup'], [2, U(9), 'clear']]);
+    expect(rrState(box).recall, 'the drained file\'s recall line, once').toEqual(recallBefore);
+    expect(counters(box)['journal_spool_undrained_gone'] ?? 0, 'the held file was still there').toBe(0);
+  }, 2 * HEAVY);
+});
+
+describe('C67: unreadable is not absent (W1-B2 Task 28)', () => {
+  it('.generation for recall-off, store.id for status and the three binding verbs, .harness for every read verb', async () => {
+    const { box } = rrBuilt('ccrc-hist-c67-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    // .generation present but unreadable (a directory at the path, which no read opens, as root or not).
+    fs.rmSync(path.join(box.reg, `${ID}.generation`));
+    plantSession(box, ID, { generation: 'unreadable' });
+    let before = ccrcSnapshot(box);
+    const off = runCli(box, ['recall-off', ID, '--json']);
+    expect(off.code, off.stdout + off.stderr).toBe(2);
+    expect(off.stdout + off.stderr).toContain('generation-unreadable');
+    expect(ccrcSnapshot(box), 'recall-off wrote nothing').toEqual(before);
+    // store.id present but unreadable: exit 5 store-unmeasured, and no binding verb proceeds. This block runs BEFORE
+    // the read verbs below: a read verb that resolved an identity appends its ev:"recall" counter line to spool/
+    // (Task 11), and a binding verb's lock-take journal half would move that line into .draining/, a write the
+    // snapshot would see that is no binding verb's.
+    fs.rmSync(P.storeId);
+    fs.mkdirSync(P.storeId);
+    const st = runCli(box, ['status', '--json']);
+    expect(st.code, st.stdout).toBe(5);
+    expect(st.json?.['reason']).toBe('store-unmeasured');
+    before = ccrcSnapshot(box);
+    for (const args of [['--op', 'adopt'], ['--op', 'restore', name], ['--op', 'rebuild']]) {
+      const r = await shimOnPty(box, args);
+      expect(lastRc(r.out), `${args[1]}: ${r.out}`).toEqual({ rc: 5, reason: 'store-unmeasured' });
+    }
+    expect(ccrcSnapshot(box), 'the binding verbs wrote nothing').toEqual(before);
+    // .harness present but unreadable: every read verb refuses before any open. store.id is still a directory, which
+    // changes nothing here: readContext refuses harness-unreadable right after the identity, before it measures the
+    // store (Task 11).
+    fs.mkdirSync(path.join(box.reg, `${ID}.harness`));
+    const pane = withPane(box, ID);
+    for (const verb of [['grep', 'zqrecover'], ['describe', 'L0123456789abcdef0123'], ['expand', 'L0123456789abcdef0123'], ['tree']]) {
+      const r = runCli(box, [...verb, '--json'], { env: pane });
+      expect(r.code, `${verb[0]}: ${r.stdout}${r.stderr}`).toBe(2);
+      expect(r.stdout + r.stderr, verb[0]).toContain('harness-unreadable');
+    }
+  }, 1.5 * HEAVY);
+});
+
+// ── Task 29's helpers ───────────────────────────────────────────────────────────────────────────────────────
+/** The index's own bytes: every blobs_fts data block, as latin1 (B1 Task 23's measure). */
+const rrFtsBytes = (box: HistoryBox): string =>
+  rrQ<{ block: Uint8Array }>(box, 'SELECT block FROM blobs_fts_data').map((r) => Buffer.from(r.block).toString('latin1')).join('');
+/** The node index's own bytes: every nodes_fts data block, as latin1 (H-112: the node index is merged like the blob one). */
+const rrNodeIndexBytes = (box: HistoryBox): string =>
+  rrQ<{ block: Uint8Array }>(box, 'SELECT block FROM nodes_fts_data').map((r) => Buffer.from(r.block).toString('latin1')).join('');
+/** Whether any stored blob still holds `needle`: the store stays lossless while the index and the output redact. */
+const rrBlobsHold = (box: HistoryBox, needle: string): boolean =>
+  rrQ<{ z: Uint8Array }>(box, 'SELECT z FROM blobs WHERE z IS NOT NULL').some((b) => rrUnbrotli(b.z).toString('utf8').includes(needle));
+const rrMatches = (box: HistoryBox, table: 'blobs_fts' | 'nodes_fts', q: string): number =>
+  rrQ<{ n: number }>(box, `SELECT count(*) AS n FROM ${table} WHERE ${table} MATCH ?`, q)[0]!.n;
+const rrGists = (box: HistoryBox): string[] =>
+  rrQ<{ gist: string | null }>(box, "SELECT gist FROM nodes WHERE kind <> 'condensed' ORDER BY node_id").map((r) => r.gist ?? '');
+
+describe('O47: redaction survives recovery, and a pair learned late (W1-B2 Task 29)', () => {
+  it('a token rotated out of its file, then the store rebuilt: the old value is redacted in grep, expand and --json, and is no term and no index byte', async () => {
+    const box = makeHistoryBox('ccrc-hist-o47a-', { role: 'fleet' });
+    const token = randomBytes(32).toString('hex');
+    const tokenFile = path.join(box.home, '.ccrc', 'fixture.token');
+    fs.writeFileSync(tokenFile, `${token}\n`, { mode: 0o600 });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, [
+      userRow({ uuid: rrU(1), ts: rrIso(3), parentUuid: null, sessionId: RR_U1, cwd: WORK, text: `zqrotated the old key is ${token} here` }),
+      assistantRow({ uuid: rrU(2), ts: rrIso(2), parentUuid: rrU(1), sessionId: RR_U1, cwd: WORK, text: 'zqrotated noted' }),
+    ]);
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => countOf(box, 'entries') === 2);
+    fs.rmSync(tokenFile);                                   // rotated out: from here on only the journal knows the pair
+    expect(runShim(box).code).toBe(0);
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--rebuild'])).code).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box) && countOf(box, 'entries') === 2, 12);
+    const pane = withPane(box, ID);
+    for (const args of [['grep', 'zqrotated'], ['grep', 'zqrotated', '--json'], ['expand', rrU(1)], ['expand', rrU(1), '--json']]) {
+      const o = runCli(box, args, { env: pane });
+      expect(o.code, `${args.join(' ')}: ${o.stdout}${o.stderr}`).toBe(0);
+      expect(o.stdout + o.stderr, args.join(' ')).not.toContain(token);
+      expect(o.stdout, args.join(' ')).toContain(REDACTED_MARK);
+    }
+    expect(runCli(box, ['grep', `"${token.slice(0, 6)}"*`], { env: pane }).code, 'the old value is no term').toBe(3);
+    expect(rrFtsBytes(box).includes(token.slice(16, 32)), 'nor an index byte').toBe(false);
+    expect(rrBlobsHold(box, token), 'the store keeps the text: lossless').toBe(true);
+  }, 2 * HEAVY);
+
+  it('a backup taken before a pair was learned, restored after the pair was rotated out: the step re-indexes every blob and runs the merge steps, so the value is no term and no index byte', async () => {
+    const box = makeHistoryBox('ccrc-hist-o47b-', { role: 'fleet' });
+    const value = randomBytes(32).toString('hex');
+    const tokenFile = path.join(box.home, '.ccrc', 'fixture.token');
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, [
+      userRow({ uuid: rrU(1), ts: rrIso(3), parentUuid: null, sessionId: RR_U1, cwd: WORK, text: `zqlate the key ${value} here` }),
+      assistantRow({ uuid: rrU(2), ts: rrIso(2), parentUuid: rrU(1), sessionId: RR_U1, cwd: WORK, text: 'zqlate noted' }),
+    ]);
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => countOf(box, 'entries') === 2);
+    const name = rrBackup(box);                                // its index holds the value as a term
+    fs.writeFileSync(tokenFile, `${value}\n`, { mode: 0o600 });
+    expect(runShim(box).code).toBe(0);                     // learned now, and journaled as a redact record
+    fs.rmSync(tokenFile);                                    // then rotated out of every file
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--restore', name])).code).toBe(0);
+    expect(rrMatches(box, 'blobs_fts', `"${value.slice(0, 6)}"*`), 'CONTROL: the restored index holds the value').toBe(1);
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(rrMatches(box, 'blobs_fts', `"${value.slice(0, 6)}"*`), 'no term after the step').toBe(0);
+    expect(rrMatches(box, 'blobs_fts', 'zqlate'), 'the rows are still indexed, redacted').toBe(2);
+    expect(rrStepDone(box, 'fts-merge', 1), 'the merge steps ran to completion').toBe(true);
+    expect(rrFtsBytes(box).includes(value.slice(16, 32)), 'no index byte').toBe(false);
+    expect(rrBlobsHold(box, value)).toBe(true);
+    const out = runCli(box, ['grep', 'zqlate'], { env: withPane(box, ID) });
+    expect(out.stdout + out.stderr).not.toContain(value);
+    expect(out.stdout).toContain(REDACTED_MARK);
+  }, 2 * HEAVY);
+
+  it('a value holding - and _ indexed in clear, then added to a secret file: the next pass re-indexes it by quoted phrase and re-derives the leaf gist that held it; after the merge steps it is no index byte', () => {
+    const box = makeHistoryBox('ccrc-hist-o47c-', { role: 'fleet' });
+    const value = `zqv-${randomBytes(10).toString('hex')}_${randomBytes(10).toString('hex')}`;
+    const tail = value.slice(value.indexOf('_') + 1);
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, `Rotating the fixture credential ${value} before the release.`));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1);
+    expect(rrGists(box)[0], 'CONTROL: the native leaf gist holds the value').toContain(value);
+    expect(rrMatches(box, 'blobs_fts', `"${tail.slice(0, 6)}"*`), 'CONTROL: a term in the row index').toBeGreaterThan(0);
+    expect(rrMatches(box, 'nodes_fts', `"${tail.slice(0, 6)}"*`), 'CONTROL: a term in the node index').toBeGreaterThan(0);
+    expect(rrNodeIndexBytes(box).includes(tail.slice(4, 16)), 'CONTROL: a byte in the node index').toBe(true);
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(box.home, '.cc-secrets', 'late.env'), `ZQ_LATE_VALUE=${value}\n`, { mode: 0o600 });
+    rrTickUntil(box, () => rrStepDone(box, 'fts-merge', 1), 6);
+    expect(rrMatches(box, 'blobs_fts', `"${tail.slice(0, 6)}"*`)).toBe(0);
+    expect(rrMatches(box, 'nodes_fts', `"${tail.slice(0, 6)}"*`)).toBe(0);
+    expect(rrGists(box)[0], 'the leaf gist was re-derived').not.toContain(value);
+    expect(rrGists(box)[0]).toContain(REDACTED_MARK);
+    // The rewrite indexes the topics one per line, as Tasks 8 and 9 do, never the column's JSON text.
+    const t = rrQ<{ topics: string; fts: string }>(box, `SELECT n.topics AS topics, f.topics AS fts
+      FROM nodes n JOIN nodes_fts f ON f.rowid = n.rowid WHERE n.kind <> 'condensed'`)[0]!;
+    expect(t.fts, 'nodes_fts topics, one per line').toBe((JSON.parse(t.topics) as string[]).join('\n'));
+    expect(rrFtsBytes(box).includes(tail.slice(4, 16)), 'no index byte after the merge steps').toBe(false);
+    expect(rrNodeIndexBytes(box).includes(tail.slice(4, 16)), 'no node index byte after the merge steps').toBe(false);
+    expect(runCli(box, ['grep', `"${tail.slice(0, 6)}"*`], { env: withPane(box, ID) }).code).toBe(3);
+  }, 1.5 * HEAVY);
+
+  it('a backup that carries an open index rebuild (a repair killed before it was taken): the step supersedes that job and re-indexes every blob, so a resumed cursor cannot skip the blobs it had passed', async () => {
+    const box = makeHistoryBox('ccrc-hist-o47d-', { role: 'fleet' });
+    const P = rrRoot(box);
+    const value = randomBytes(32).toString('hex');
+    const tokenFile = path.join(box.home, '.ccrc', 'fixture.token');
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, [
+      userRow({ uuid: rrU(1), ts: rrIso(3), parentUuid: null, sessionId: RR_U1, cwd: WORK, text: `zqcarried the key ${value} here` }),
+      assistantRow({ uuid: rrU(2), ts: rrIso(2), parentUuid: rrU(1), sessionId: RR_U1, cwd: WORK, text: 'zqcarried noted' }),
+    ]);
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => countOf(box, 'entries') === 2);
+    const name = rrBackup(box);                                // its index holds the value as a term
+    // The backup also carries a repair's open job, its cursor past every blob and with a foreign-key baseline, as a
+    // repair always has: resumed as it stands, the job would index no blob and only merge.
+    const bdb = new DatabaseSync(path.join(P.backups, name));
+    try {
+      bdb.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('fts-rebuild', 1, ?, NULL)")
+        .run(JSON.stringify({ phase: 'blobs', blobId: 2 ** 31, baseline: [], undecodable: 0 }));
+    } finally { bdb.close(); }
+    fs.writeFileSync(tokenFile, `${value}\n`, { mode: 0o600 });
+    expect(runShim(box).code).toBe(0);                     // learned now, and journaled as a redact record
+    fs.rmSync(tokenFile);                                    // then rotated out of every file
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--restore', name])).code).toBe(0);
+    expect(rrMatches(box, 'blobs_fts', `"${value.slice(0, 6)}"*`), 'CONTROL: the restored index holds the value').toBe(1);
+    expect(rrQ(box, "SELECT version FROM derivation_state WHERE step = 'fts-rebuild' AND completed_ms IS NULL"),
+      'CONTROL: the restored file carries the open job').toEqual([{ version: 1 }]);
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(rrMatches(box, 'blobs_fts', `"${value.slice(0, 6)}"*`), 'no term after the step').toBe(0);
+    expect(rrMatches(box, 'blobs_fts', 'zqcarried'), 'every row re-indexed, redacted').toBe(2);
+    expect(rrQ(box, "SELECT version FROM derivation_state WHERE step = 'fts-rebuild' AND (version = 1 OR completed_ms IS NULL)"),
+      'the carried job is gone, and no rebuild is left open').toEqual([]);
+    expect(rrFtsBytes(box).includes(value.slice(16, 32)), 'no index byte').toBe(false);
+    expect(counters(box)['recover_chunk_failed'] ?? 0).toBe(0);
+  }, 2 * HEAVY);
+
+  it('a late pair whose leaf re-derivation throws: the leaf is rewritten fail-closed, parser_crash counts it once, and the next pass does not retry it', () => {
+    const box = makeHistoryBox('ccrc-hist-o47e-', { role: 'fleet' });
+    const value = `zqc-${randomBytes(10).toString('hex')}_${randomBytes(10).toString('hex')}`;
+    const tail = value.slice(value.indexOf('_') + 1);
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, `Rotating the fixture credential ${value} before the release.`));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1);
+    expect(rrGists(box)[0], 'CONTROL: the native leaf gist holds the value').toContain(value);
+    const crashes = (): number => counters(box)['parser_crash'] ?? 0;
+    const before = crashes();
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(box.home, '.cc-secrets', 'late.env'), `ZQ_LATE_VALUE=${value}\n`, { mode: 0o600 });
+    // Task 25's knob: refreshLeaf's own read throws, as a parser crash would. Only that statement holds the substring.
+    const crash: SpawnOpts = { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_SQL: 'directive_flag, capped, boundary_entry_id' } };
+    rrTickUntil(box, () => rrStepDone(box, 'fts-merge', 1), 6, crash);
+    expect(crashes() - before, 'the throw is counted once').toBe(1);
+    expect(rrGists(box)[0], 'rewritten fail-closed').not.toContain(value);
+    expect(rrGists(box)[0]).toContain(REDACTED_MARK);
+    expect(rrMatches(box, 'nodes_fts', `"${tail.slice(0, 6)}"*`)).toBe(0);
+    const again = runShim(box, [], crash);
+    expect(again.code, `${again.stdout}\n${again.stderr}`).toBe(0);
+    expect(crashes() - before, 'the next pass does not retry it').toBe(1);
+  }, 1.5 * HEAVY);
+});
+
+describe('§6.2 "The belt": a generation that opens re-redacts every node\'s stored fields (W1-B2 Task 29)', () => {
+  it('a native leaf whose gist and nodes_fts row hold a letter-glued value from before the belt is rewritten by the node step', () => {
+    const box = makeHistoryBox('ccrc-hist-beltnodes-', { role: 'fleet' });
+    const AN = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const v = `${Array.from(randomBytes(29), (b) => AN[b % AN.length]!).join('')}7`;
+    const work = `Rotating the fixture credential zq${v}x before the release.`;
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(box.home, '.cc-secrets', 'belt.env'), `ZQ_BELT=${v}\n`, { mode: 0o600 });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, work));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1);
+    expect(rrGists(box)[0], 'CONTROL: the belt masked the glued value when the leaf was derived').not.toContain(v.slice(0, 14));
+    // The leaf as a store with no belt state left it: the glued value in its gist and in its nodes_fts row.
+    const db = new DatabaseSync(rrRoot(box).dbFile);
+    try {
+      const n = db.prepare("SELECT rowid AS rid, node_id FROM nodes WHERE kind <> 'condensed'").get() as { rid: number; node_id: string };
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(work, n.node_id);
+      db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(n.rid);
+      db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, ?, ?)').run(n.rid, work, '', '');
+      db.prepare("DELETE FROM meta WHERE k = 'fts_belt'").run();
+    } finally { db.close(); }
+    expect(rrMatches(box, 'nodes_fts', `"zq${v}x"`), 'CONTROL: the planted row is a term').toBe(1);
+    expect(rrNodeIndexBytes(box).includes(v.slice(4, 20)), 'CONTROL: and a byte in the node index').toBe(true);
+    rrTickUntil(box, () => rrStepDone(box, 'nodes-belt', 1) && !rrGists(box)[0]!.includes(v.slice(0, 14)));
+    expect(rrGists(box)[0]).toContain(REDACTED_MARK);
+    expect(rrMatches(box, 'nodes_fts', `"zq${v}x"`), 'and its nodes_fts row').toBe(0);
+    // H-112: the node step's rewrite registered the merge step, and the tick that ran it merged nodes_fts too.
+    expect(rrNodeIndexBytes(box).includes(v.slice(4, 20)), 'no node index byte once the node step ran').toBe(false);
+  }, 1.5 * HEAVY);
+
+  it('a nodes_fts row holding a pair-only value glued to a literal escape is re-derived through nodeIndexTexts by the node step (spec §6.2 nodes_fts)', () => {
+    const box = makeHistoryBox('ccrc-hist-beltesc-', { role: 'fleet' });
+    const v = randomBytes(16).toString('hex');
+    const file = path.join(box.home, '.cc-secrets', 'esc.env');
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, `ZQ_ESC=${v}\n`, { mode: 0o600 });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, 'Rotating the fixture credential before the release.'));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1);
+    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM redact_hashes WHERE len = ?', v.length)[0]!.n,
+      'CONTROL: a tick recorded the value\'s pair').toBeGreaterThan(0);
+    // The value leaves its file: its pair stays (redact_hashes only grows), but no belt holds it any longer, so only the
+    // index's escape readings separate it from the literal `\n` glued onto it. redactField's one reading sees the run
+    // `n<value>`, which no pair matches, so the stored gist below is one redactField leaves as it is.
+    fs.writeFileSync(file, `ZQ_ESC_OTHER=${randomBytes(16).toString('hex')}\n`, { mode: 0o600 });
+    const gist = `Printed {"t":"a\\n${v}"} before the release.`;
+    const db = new DatabaseSync(rrRoot(box).dbFile);
+    try {
+      const n = db.prepare("SELECT rowid AS rid, node_id FROM nodes WHERE kind <> 'condensed'").get() as { rid: number; node_id: string };
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(gist, n.node_id);
+      db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(n.rid);
+      db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, ?, ?)').run(n.rid, gist, '', '');
+      db.prepare("DELETE FROM meta WHERE k = 'fts_belt'").run();
+    } finally { db.close(); }
+    expect(rrMatches(box, 'nodes_fts', `"n${v}"`), 'CONTROL: the planted row holds the glued term').toBe(1);
+    rrTickUntil(box, () => rrStepDone(box, 'nodes-belt', 1) && rrMatches(box, 'nodes_fts', `"n${v}"`) === 0);
+    expect(rrMatches(box, 'nodes_fts', '"printed"'), 'the row was re-derived, not dropped').toBe(1);
+  }, 1.5 * HEAVY);
+
+  it('a recovery re-derives node fields through the pass\'s belt, and a unit missing from the recovery passes\' belt leaves the belt due (ruling R-oppass-belt; review R47)', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    const box = makeHistoryBox('ccrc-hist-beltrec-', { role: 'fleet' });
+    const AN = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const unit = (): string => `${Array.from(randomBytes(29), (b) => AN[b % AN.length]!).join('')}7`;
+    const u = unit();                                          // loaded before the backup; unreadable on every recovery pass
+    const v = unit();                                          // learned after the backup; loaded on every recovery pass
+    const dir = path.join(box.home, '.cc-secrets');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const uFile = path.join(dir, 'u.env');
+    fs.writeFileSync(uFile, `ZQ_U=${u}\n`, { mode: 0o600 });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, `Rotating zq${u}x and zq${v}x before the release.`));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    const ridOf = (s: string): number => rrQ<{ rid: number }>(box, 'SELECT rowid AS rid FROM redact_hashes WHERE len = ? AND hex(sha256) = ?',
+      s.length, createHash('sha256').update(s).digest('hex').toUpperCase())[0]?.rid ?? 0;
+    const belt = (): BeltState | null => parseBeltState(metaOf(box, 'fts_belt'));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1 && ridOf(u) > 0 && (belt()?.rids.includes(ridOf(u)) ?? false), 12);
+    const uRid = ridOf(u);                                     // a restore copies redact_hashes, rowids included
+    expect(belt()?.v, 'CONTROL: a completed belt generation recorded u covered').toBe(BELT_VERSION);
+    expect(rrGists(box)[0]!.includes(u.slice(0, 14)), 'CONTROL: the belt masked u when the leaf was derived').toBe(false);
+    expect(rrGists(box)[0]!.includes(`zq${v}x`), 'CONTROL: v is in no file yet, so the gist holds it glued').toBe(true);
+    const atBackup = belt()!;                                  // the backup pass writes no belt state (Task 22)
+    const name = rrBackup(box);
+    fs.writeFileSync(path.join(dir, 'v.env'), `ZQ_V=${v}\n`, { mode: 0o600 });
+    expect(runShim(box).code).toBe(0);                     // v learned and journaled: the backup lacks its pair
+    rrLose(box, { binding: false, journal: false });
+    expect(lastRc((await shimOnPty(box, ['--op', 'restore', name])).out)).toEqual({ rc: 0 });
+    // Ruling R-witness-restore: the restore put v's journal pair into the copy between its witness check and its stamp,
+    // so the first recovery pass's secretsStep finds the witness unmoved and records nothing due. What leaves the belt
+    // due below is then the recovery's own belt-state rule, which M12 removes (Step 7).
+    const restored = belt();
+    const vrg = (s: BeltState): string => JSON.stringify([s.v, s.rids, s.gen]);
+    expect(restored !== null && vrg(restored) === vrg(atBackup) && restored.rids.includes(uRid)
+      && restored.w !== undefined && restored.w !== atBackup.w,
+    'CONTROL: the restore left the backup\'s covered state and stamped its pair insert').toBe(true);
+    fs.chmodSync(uFile, 0o000);                              // u's file unreadable on every recovery pass
+    const unreadable = (): number => counters(box)['redact_source_unreadable'] ?? 0;
+    const before = unreadable();
+    try {
+      rrTickUntil(box, () => rrRecovered(box), 12);
+      expect(unreadable() > before, 'CONTROL: the recovery passes could not read u\'s file (a root runner reads it anyway)').toBe(true);
+      // Review R47: the step re-derived the nodes with the pass's belt (run.ectx.belt), so v, loaded on these passes
+      // and glued by letters, leaves no stretch in a gist, nodes_fts or blobs_fts at the step's completion, before any
+      // tick runs the node step.
+      expect(rrGists(box)[0]!.includes(v.slice(0, 14)), 'no stretch of v in the gist at the step\'s completion').toBe(false);
+      expect(rrMatches(box, 'nodes_fts', `"zq${v}x"`), 'nor a nodes_fts term').toBe(0);
+      expect(rrFtsBytes(box).includes(v.slice(8, 22)), 'nor a blobs_fts byte').toBe(false);
+      // Ruling R-oppass-belt: u was missing from every recovery pass's belt, and the leaf the step re-derived holds it
+      // glued, so the step must leave the belt due for u.
+      expect(rrGists(box)[0]!.includes(`zq${u}x`), 'CONTROL: the re-derived gist holds u, whose file no recovery pass read').toBe(true);
+      const st = belt();
+      expect(st === null || st.v !== BELT_VERSION || !st.rids.includes(uRid), 'u is not recorded covered: the belt is due').toBe(true);
+    } finally { fs.chmodSync(uFile, 0o600); }
+    rrTickUntil(box, () => rrStepDone(box, 'nodes-belt', 1) && !rrGists(box)[0]!.includes(u.slice(0, 14)));
+    expect(rrMatches(box, 'nodes_fts', `"zq${u}x"`), 'and its nodes_fts term is gone').toBe(0);
+  }, 2 * HEAVY);
+
+  it('a reparse whose belt lacked a unit: once its file is readable again, the belt generation and its node step re-redact the reparsed leaf (ruling R-oppass-belt; review R46)', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    const box = makeHistoryBox('ccrc-hist-beltrp-', { role: 'fleet' });
+    const AN = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const v = `${Array.from(randomBytes(29), (b) => AN[b % AN.length]!).join('')}7`;
+    const dir = path.join(box.home, '.cc-secrets');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const vFile = path.join(dir, 'rp.env');
+    fs.writeFileSync(vFile, `ZQ_RP=${v}\n`, { mode: 0o600 });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, `Rotating the fixture credential ab${v}cd before the release.`));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    const belt = (): BeltState | null => parseBeltState(metaOf(box, 'fts_belt'));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1 && belt()?.v === BELT_VERSION && (belt()?.rids.length ?? 0) > 0
+      && rrStepDone(box, 'nodes-belt', 1), 12);
+    const K = beltWidth(v);
+    /** Whether `s` holds any K-wide stretch of v (K its belt width): what the belt guarantees no field or term keeps. */
+    const stretch = (s: string): boolean => Array.from({ length: v.length - K + 1 }, (_, i) => v.slice(i, i + K)).some((w) => s.includes(w));
+    const nodeText = (): string => [
+      ...rrQ<{ gist: string | null; topics: string | null }>(box, 'SELECT gist, topics FROM nodes').flatMap((r) => [r.gist ?? '', r.topics ?? '']),
+      ...rrQ<{ value: string }>(box, 'SELECT value FROM node_refs').map((r) => r.value),
+      ...rrQ<{ gist: string; topics: string; refs: string }>(box, 'SELECT gist, topics, refs FROM nodes_fts').flatMap((r) => [r.gist, r.topics, r.refs]),
+    ].join('\n');
+    expect(stretch(nodeText()), 'CONTROL: the belt masked v when the leaf was derived').toBe(false);
+    fs.chmodSync(vFile, 0o000);                              // v's file unreadable during the reparse only
+    try {
+      const r = runShim(box, ['--op', 'reparse', '--apply']);
+      expect(r.code, r.stderr).toBe(0);
+    } finally { fs.chmodSync(vFile, 0o600); }
+    expect(rrGists(box)[0]!.includes(`ab${v}cd`), 'CONTROL: the reparse ran without v\'s belt, so the gist holds it glued').toBe(true);
+    // The reparse recorded the belt due (Task 21); with v readable again, the next generation reopens ('nodes-belt', 1),
+    // whose node step re-redacts every stored node field and nodes_fts row.
+    rrTickUntil(box, () => belt()?.v === BELT_VERSION && rrStepDone(box, 'nodes-belt', 1), 12);
+    expect(stretch(nodeText()), 'no belt-width stretch of v in nodes.gist, topics, node_refs or nodes_fts').toBe(false);
+    expect(rrMatches(box, 'nodes_fts', `"ab${v}cd"`), 'nor a nodes_fts term').toBe(0);
+  }, 2 * HEAVY);
+});
+
+// ── Hardening batch HE: the Task 29 node redaction (H-112 to H-118) ────────────────────────────────────────────
+/** A 40-hex value that classifies as a `sha` ref (it holds a letter a-f). */
+const heValue = (): string => `c${randomBytes(19).toString('hex')}f`;
+/** Whether `text` holds any 8-character window of `v`: an unmatched prefix counts, as in the spec's SE1. */
+const heHolds = (text: string, v: string): boolean =>
+  Array.from({ length: v.length - 7 }, (_, i) => v.slice(i, i + 8)).some((w) => text.includes(w));
+/** `n` characters of words that end in a space, so a value placed right after is a run of its own. */
+const hePad = (n: number): string => `${'ab '.repeat(Math.ceil(n / 3)).slice(0, n - 1)} `;
+interface HeNode {
+  id: string; kind: 'native_leaf' | 'condensed'; gist: string | null; topics?: string[]; refs?: string[];
+  kids?: string[]; readable?: boolean;
+  /** A native leaf whose summary blob is tombstoned (z NULL): the real shape of a leaf that carries text and cannot be re-read. */
+  pruned?: boolean;
+}
+/** A store of hand-planted nodes, as one built before any pair was learned holds them: a condensed node's fields are
+ *  parentRollup of its children as planted (unredacted), its nodes_fts row is nodeIndexTexts of its fields with no pair.
+ *  Rows go in the given order, so a child's rowid is below its parent's. */
+function heStore(prefix: string, specs: readonly HeNode[], fts: boolean): { db: DatabaseSync; home: string } {
+  const home = mkTmp(prefix);
+  createStore(home);
+  const db = openWriter(historyPaths(home).dbFile);
+  db.exec('BEGIN');
+  if (fts) createFtsTables(db);
+  db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, ?, '', 'demo', 1)").run(ID);
+  db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (1, 1, ?, 'startup', 'hook', 1)").run(RR_U1);
+  db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(RR_U1);
+  db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 9), Buffer.from([0]));
+  db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (2, ?, 'br5', NULL, 1)").run(Buffer.alloc(32, 8));
+  const rolled = new Map<string, { gist: string | null; topics: string[]; refs: { kind: string; value: string; origin: string }[] }>();
+  for (const n of specs) {
+    const own = { gist: n.gist, topics: n.topics ?? [], refs: (n.refs ?? []).map((value) => ({ kind: 'sha', value, origin: 'tool_use' })) };
+    const kids = (n.kids ?? []).map((k) => rolled.get(k)!);
+    const r = n.kind === 'condensed'
+      ? parentRollup(kids.map((k) => ({ ...k, earliestMs: 1, latestMs: 2, srcChars: 0, descCount: 0, descChars: 0 })))
+      : { ...own };
+    rolled.set(n.id, { gist: r.gist, topics: r.topics, refs: r.refs });
+    db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id,
+      earliest_ms, latest_ms, src_chars, desc_count, desc_chars, parser_version, created_ms)
+      VALUES (?, 1, 1, 1, ?, ?, 'not-requested', ?, ?, ?, 1, 2, 0, 0, 0, 1, 1)`)
+      .run(n.id, n.kind, n.kind === 'condensed' ? 1 : 0, r.gist, JSON.stringify(r.topics), n.readable === true ? 1 : n.pruned === true ? 2 : null);
+    (n.kids ?? []).forEach((k, ord) => db.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)').run(n.id, k, ord));
+    for (const ref of r.refs) db.prepare('INSERT OR IGNORE INTO node_refs (node_id, kind, value, origin) VALUES (?, ?, ?, ?)').run(n.id, ref.kind, ref.value, ref.origin);
+    if (fts) {
+      const t = nodeIndexTexts({ gist: r.gist, topics: r.topics, refs: r.refs.map((x) => x.value) }, makePairIndex([]));
+      db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) SELECT rowid, ?, ?, ? FROM nodes WHERE node_id = ?').run(t.gist, t.topics, t.refs, n.id);
+    }
+  }
+  db.exec('COMMIT');
+  return { db, home };
+}
+/** Where `v`, or a prefix of 8 or more of its characters, is still stored: nodes.gist, nodes.topics, node_refs.value
+ *  and every nodes_fts column, by node id. Empty means nothing leaks. */
+function heLeaks(db: DatabaseSync, v: string): string[] {
+  const out: string[] = [];
+  for (const r of db.prepare('SELECT node_id, gist, topics FROM nodes ORDER BY rowid').all() as Array<{ node_id: string; gist: string | null; topics: string | null }>) {
+    if (heHolds(r.gist ?? '', v)) out.push(`${r.node_id}.gist`);
+    if (heHolds(r.topics ?? '', v)) out.push(`${r.node_id}.topics`);
+  }
+  for (const r of db.prepare('SELECT node_id, value FROM node_refs ORDER BY node_id').all() as Array<{ node_id: string; value: string }>) {
+    if (heHolds(r.value, v)) out.push(`${r.node_id}.ref`);
+  }
+  if (db.prepare("SELECT 1 AS t FROM sqlite_master WHERE name = 'nodes_fts'").get() !== undefined) {
+    for (const r of db.prepare('SELECT n.node_id AS node_id, f.gist AS gist, f.topics AS topics, f.refs AS refs FROM nodes_fts f JOIN nodes n ON n.rowid = f.rowid')
+      .all() as Array<{ node_id: string; gist: string; topics: string; refs: string }>) {
+      for (const col of ['gist', 'topics', 'refs'] as const) if (heHolds(r[col], v)) out.push(`${r.node_id}.fts.${col}`);
+    }
+  }
+  return out;
+}
+/** The ingest context a tick builds, in-process: nodes_fts on or off, and the pair index of `v` alone. */
+const heCtx = (home: string, v: string, fts: boolean): Record<string, unknown> =>
+  ({ ...SW.makeIngestCtx(home, [], 1_000, null), fts, pairIdx: makePairIndex(secretPairs([v]).pairs) });
+/** Two native leaves (summary blobs pruned, as production keeps text only on a native leaf) under one condensed node, the second holding `v` in its gist (placed so the condensed node's GIST_MAX cut
+ *  lands 13 characters inside it), in a topic (placed so TOPIC_CHARS cuts inside it) and in a `sha` ref: the store as it stood before `v` was a known secret. */
+const heUnderParent = (v: string, extra: readonly HeNode[] = []): HeNode[] => [
+  ...extra,
+  { id: 'he-b1', kind: 'native_leaf', pruned: true, gist: 'Raw one.' },
+  { id: 'he-b2', kind: 'native_leaf', pruned: true, gist: `${hePad(1186 - 'Raw one.'.length)}${v} and then more.`, topics: [`${hePad(60)}${v}`], refs: [v] },
+  { id: 'he-p', kind: 'condensed', gist: null, kids: ['he-b1', 'he-b2'] },
+];
+
+describe('hardening HE: the Task 29 node redaction (H-112 to H-118)', () => {
+  it('H-113 and H-114: a late pair on the fast path rewrites every node fail-closed, and a re-rolled parent is cut from redacted children (value in a topic, a ref and under a condensed parent)', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-he113-', [
+      { id: 'he-a', kind: 'native_leaf', gist: 'Alpha did the work.', topics: [`cred ${v}`], readable: true },
+      { id: 'he-b', kind: 'native_leaf', pruned: true, gist: `${hePad(1186 - 'Alpha did the work.'.length)}${v} and then more.`, topics: [`${hePad(60)}${v}`], refs: [v] },
+      { id: 'he-p', kind: 'condensed', gist: null, kids: ['he-a', 'he-b'] },
+    ], true);
+    try {
+      const p = db.prepare("SELECT gist FROM nodes WHERE node_id = 'he-p'").get() as { gist: string };
+      expect(p.gist.includes(v), 'CONTROL: the planted parent was cut inside the value, not after it').toBe(false);
+      expect(p.gist.includes(v.slice(0, 13)), 'CONTROL: and holds its first 13 characters').toBe(true);
+      expect(heLeaks(db, v), 'CONTROL: the store leaks the value').not.toEqual([]);
+      const budget = SW.newBudget();
+      expect(DV.rederiveGistsFor(db, heCtx(home, v, true), [v], budget, SW.newBudget()), 'the three nodes were touched').toBe(3);
+      expect(heLeaks(db, v), 'no 8-character window of the value in any node field or nodes_fts column').toEqual([]);
+      expect(db.prepare("SELECT value FROM node_refs WHERE node_id = 'he-p'").all(), 'a ref that no longer classifies is not stored on the parent').toEqual([]);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('H-113 and H-114: a recovery rewrites every node, then re-rolls each condensed node from its clean children, so a prefix the old cut left is healed', async () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-he113r-', heUnderParent(v), false);
+    try {
+      const pair = secretPairs([v]).pairs[0]!;
+      db.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, 1)').run(pair.len, Buffer.from(pair.sha256, 'hex'));
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', 5, NULL, NULL)").run();
+      expect(heLeaks(db, v), 'CONTROL: the restored store leaks the value').toEqual(expect.arrayContaining(['he-b2.gist', 'he-p.gist']));
+      const ctx = { home, homes: [], ids: null, now: () => Date.now(), budget: SW.newBudget(), belt: null };
+      let done = false;
+      for (let i = 0; i < 20 && !done; i += 1) done = (await SW.recoverReindex(db, ctx, { pairsAdded: true }, SW.newBudget())).done;
+      expect(done, 'the reindex phase completed').toBe(true);
+      expect(getStep(db, 'recover-nodes', 5)?.completedMs ?? null, 'the node sub-step completed').not.toBeNull();
+      expect(heLeaks(db, v), 'no 8-character window of the value in any node field').toEqual([]);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('H-114: the belt\'s node step rewrites a node whose only exposure is a topic or a ref', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-he114-', [
+      { id: 'he-t', kind: 'native_leaf', pruned: true, gist: 'Plain.', topics: [`cred ${v}`] },
+      { id: 'he-r', kind: 'native_leaf', pruned: true, gist: 'Plain two.', refs: [v] },
+    ], false);
+    try {
+      setStep(db, 'nodes-belt', 1, '0', null);
+      expect(DV.beltNodesStep(db, heCtx(home, v, false), SW.newBudget()), 'the step completed').toBe(true);
+      expect(heLeaks(db, v)).toEqual([]);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('H-112: each writer that deletes a nodes_fts row tells the tick\'s context, inside its transaction', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-he112-', heUnderParent(v), true);
+    try {
+      // A BEGIN that throws proves the call came from inside the rewrite's own transaction.
+      const told = { n: 0, outside: 0 };
+      const ctx = {
+        ...heCtx(home, v, true),
+        onNodesFtsDeleted: () => { told.n += 1; try { db.exec('BEGIN'); db.exec('ROLLBACK'); told.outside += 1; } catch { /* inside, as required */ } },
+      };
+      expect(DV.redactNodeFields(db, ctx, ['he-b2']), 'redactNodeFields rewrote the node').toBe(1);
+      expect(told.n, 'redactNodeFields told the context').toBe(1);
+      expect(DV.rerollParents(db, ctx, ['he-b2']), 'rerollParents rewrote the parent').toBe(1);
+      expect(told.n, 'rerollParents told the context').toBe(2);
+      expect(DV.redactNodeFields(db, { ...ctx, fts: false }, ['he-b2']), 'with no nodes_fts, nothing to tell').toBe(1);
+      expect(told.n, 'and the context was not told').toBe(2);
+      expect(told.outside, 'every call came from inside a transaction').toBe(0);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('H-112: a node rewrite alone, with no blob to re-index, registers the merge step, and the tick merges nodes_fts', () => {
+    const box = makeHistoryBox('ccrc-hist-he112t-', { role: 'fleet' });
+    const value = `zqn-${randomBytes(10).toString('hex')}_${randomBytes(10).toString('hex')}`;
+    const tail = value.slice(value.indexOf('_') + 1);
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, 'Rotating the fixture credential before the release.'));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1, 8);
+    // The value reaches the node alone: no blob holds it, so the blob paths register nothing and only the node rewrite can.
+    const gist = `Rotating the fixture credential ${value} before the release.`;
+    const db = new DatabaseSync(rrRoot(box).dbFile);
+    try {
+      const n = db.prepare("SELECT rowid AS rid, node_id FROM nodes WHERE kind <> 'condensed'").get() as { rid: number; node_id: string };
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(gist, n.node_id);
+      db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(n.rid);
+      db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, ?, ?)').run(n.rid, gist, '', '');
+    } finally { db.close(); }
+    expect(rrMatches(box, 'nodes_fts', `"${tail.slice(0, 6)}"*`), 'CONTROL: a term in the node index').toBeGreaterThan(0);
+    expect(rrMatches(box, 'blobs_fts', `"${tail.slice(0, 6)}"*`), 'CONTROL: and in no blob').toBe(0);
+    expect(rrNodeIndexBytes(box).includes(tail.slice(4, 16)), 'CONTROL: a byte in the node index').toBe(true);
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(box.home, '.cc-secrets', 'node.env'), `ZQ_NODE_VALUE=${value}\n`, { mode: 0o600 });
+    rrTickUntil(box, () => !rrGists(box)[0]!.includes(value), 6);
+    expect(rrMatches(box, 'nodes_fts', `"${tail.slice(0, 6)}"*`), 'no term').toBe(0);
+    expect(rrStepDone(box, 'fts-merge', 1), 'the merge steps completed in the tick that rewrote the node').toBe(true);
+    expect(rrNodeIndexBytes(box).includes(tail.slice(4, 16)), 'no node index byte once the tick merged').toBe(false);
+  }, 1.5 * HEAVY);
+
+  it('H-112: refreshLeaf tells the tick\'s context when it rewrites a leaf\'s nodes_fts row', () => {
+    const box = makeHistoryBox('ccrc-hist-he112l-', { role: 'fleet' });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, 'Polishing the fixture docs.'));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1, 8);
+    const db = openWriter(rrRoot(box).dbFile);
+    try {
+      let told = 0;
+      const ctx = { ...heCtx(box.home, heValue(), true), onNodesFtsDeleted: () => { told += 1; } };
+      expect(DV.refreshLeaf(db, ctx, rrLeafIds(box)[0]!), 'the leaf was re-derived in place').toBe('unchanged');
+      expect(told, 'refreshLeaf told the context').toBe(1);
+    } finally { closeWriter(db); }
+  }, 1.5 * HEAVY);
+
+  it('H-115: the late-pair fast path re-derives at most the leaf cap per call and rewrites the rest fail-closed', () => {
+    const box = makeHistoryBox('ccrc-hist-he115-', { role: 'fleet' });
+    const v = heValue();
+    const ids = [['claude-a', ID, RR_U1, RR_G1, 1], ['claude-b', ID2, 'b2b2b2b2-0000-4000-8000-000000000002', '0189abcd-1234-4678-9abc-0000000000a2', 11]] as const;
+    for (const [wrapper, id, uuid, gen, base] of ids) {
+      plantSession(box, id, { uuid, generation: gen, project: 'demo' });
+      plantTranscript(box, wrapper, SLUG, uuid, rrCompacted(uuid, base, `Rotating the fixture credential ${v} before the release.`));
+      spoolLine(box, id, rrStart(id, uuid, 'startup', { reg: uuid, gen }));
+    }
+    rrTickUntil(box, () => rrLeafIds(box).length === 2, 8);
+    const db = openWriter(rrRoot(box).dbFile);
+    try {
+      db.prepare("UPDATE nodes SET parser_version = 0 WHERE kind <> 'condensed'").run();
+      expect(rrGists(box).filter((g) => g.includes(v)), 'CONTROL: both native leaf gists hold the value').toHaveLength(2);
+      const ctx = { ...heCtx(box.home, v, true), rederiveLeafMax: 1 };
+      expect(DV.rederiveGistsFor(db, ctx, [v], SW.newBudget(), SW.newBudget()), 'both leaves were touched').toBe(2);
+      const derived = (db.prepare("SELECT count(*) AS n FROM nodes WHERE parser_version = ? AND kind <> 'condensed'").get(NODE_PARSER_VERSION) as { n: number }).n;
+      expect(derived, 'one leaf re-derived (the cap), the other only rewritten').toBe(1);
+      expect(heLeaks(db, v), 'both leaves are redacted').toEqual([]);
+    } finally { closeWriter(db); }
+  }, 1.5 * HEAVY);
+
+  it('H-116: a belt cursor that is not a plain number starts the step at the first node, never ends it unread', () => {
+    for (const cursor of ['garbage', 'Infinity', '1.5', '0x1', '9'.repeat(30)]) {
+      const v = heValue();
+      const { db, home } = heStore('ccrc-hist-he116-', [
+        { id: 'he-n1', kind: 'native_leaf', pruned: true, gist: `Printed ${v} once.` },
+        { id: 'he-n2', kind: 'native_leaf', pruned: true, gist: 'Plain.' },
+      ], false);
+      try {
+        setStep(db, 'nodes-belt', 1, cursor, null);
+        expect(DV.beltNodesStep(db, heCtx(home, v, false), SW.newBudget()), `cursor ${cursor}: the step completed`).toBe(true);
+        expect(heLeaks(db, v), `cursor ${cursor}: the first node was read`).toEqual([]);
+        expect(getStep(db, 'nodes-belt', 1)?.cursor, `cursor ${cursor}: the stamp is a node rowid`).toBe('2');
+      } finally { closeWriter(db); }
+    }
+  }, HEAVY);
+
+  it('H-117: the recovery sub-steps write their cursors in a transaction of their own, so a reindex run inside one throws', async () => {
+    for (const cursor of [null, 'condensed:0']) {
+      const { db, home } = heStore('ccrc-hist-he117-', [], false);
+      try {
+        db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', 5, NULL, NULL)").run();
+        if (cursor !== null) setStep(db, 'recover-nodes', 5, cursor, null);
+        const ctx = { home, homes: [], ids: null, now: () => Date.now(), budget: SW.newBudget(), belt: null };
+        db.exec('BEGIN');
+        try {
+          await expect(SW.recoverReindex(db, ctx, { pairsAdded: true }, SW.newBudget()), `cursor ${String(cursor)}`).rejects.toThrow();
+        } finally { db.exec('ROLLBACK'); }
+      } finally { closeWriter(db); }
+    }
+  }, HEAVY);
+
+  // ── HE fix round 1: a parent cut through a value is rebuilt on the tick path, the belt and new parents ──────────────
+  /** `n` parents, each over a clean readable native leaf and a readable native leaf whose gist and topic put `v` where the
+   *  parent's GIST_MAX and TOPIC_CHARS cuts land inside it. Leaf ids sort in parent order. */
+  const heManyParents = (v: string, n: number): HeNode[] => Array.from({ length: n }, (_, i): HeNode[] => [
+    { id: `he-c${i}`, kind: 'native_leaf', readable: true, gist: 'Raw one.' },
+    { id: `he-v${i}`, kind: 'native_leaf', readable: true, gist: `${hePad(1186 - 'Raw one.'.length)}${v} and then more.`, topics: [`${hePad(60)}${v}`] },
+    { id: `he-p${i}`, kind: 'condensed', gist: null, kids: [`he-c${i}`, `he-v${i}`] },
+  ]).flat();
+
+  it('F1: the leaves past the re-derivation cap are rewritten AND their parents re-rolled, so no parent keeps a prefix of the value', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-hefr1a-', heManyParents(v, 4), true);
+    try {
+      for (let i = 0; i < 4; i += 1) {
+        const p = db.prepare('SELECT gist FROM nodes WHERE node_id = ?').get(`he-p${i}`) as { gist: string };
+        expect(p.gist.includes(v), `CONTROL: parent ${i} was cut inside the value`).toBe(false);
+        expect(p.gist.includes(v.slice(0, 13)), `CONTROL: and holds its first 13 characters`).toBe(true);
+      }
+      const ctx = { ...heCtx(home, v, true), rederiveLeafMax: 1 };
+      DV.rederiveGistsFor(db, ctx, [v], SW.newBudget(), SW.newBudget());
+      expect(heLeaks(db, v), 'no 8-character window of the value in any node field or nodes_fts column, over the cap too').toEqual([]);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('F2: a matched leaf whose summary is pruned has its parent re-rolled, though no readable sibling holds the value', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-hefr1b-', [
+      { id: 'he-a', kind: 'native_leaf', readable: true, gist: 'Raw one.' },
+      { id: 'he-u', kind: 'native_leaf', pruned: true, gist: `${hePad(1186 - 'Raw one.'.length)}${v} and then more.`, topics: [`${hePad(60)}${v}`], refs: [v] },
+      { id: 'he-p', kind: 'condensed', gist: null, kids: ['he-a', 'he-u'] },
+    ], true);
+    try {
+      const p = db.prepare("SELECT gist FROM nodes WHERE node_id = 'he-p'").get() as { gist: string };
+      expect(p.gist.includes(v), 'CONTROL: the parent was cut inside the value').toBe(false);
+      expect(p.gist.includes(v.slice(0, 13)), 'CONTROL: and holds its first 13 characters').toBe(true);
+      expect(heLeaks(db, v), 'CONTROL: the store leaks').toEqual(expect.arrayContaining(['he-p.gist', 'he-u.gist']));
+      DV.rederiveGistsFor(db, heCtx(home, v, true), [v], SW.newBudget(), SW.newBudget());
+      expect(heLeaks(db, v), 'no 8-character window of the value in any node field or nodes_fts column').toEqual([]);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('F2: the belt rebuilds a condensed node that holds a prefix of the value over clean children, and rewrites no parent whose re-roll is unchanged', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-hefr1c-', [
+      ...heUnderParent(v),
+      { id: 'he-c1', kind: 'native_leaf', pruned: true, gist: 'Clean one.' },
+      { id: 'he-c2', kind: 'native_leaf', pruned: true, gist: 'Clean two.', topics: ['plain topic'] },
+      { id: 'he-q', kind: 'condensed', gist: null, kids: ['he-c1', 'he-c2'] },
+    ], true);
+    try {
+      // The children are clean already (a past build rewrote them), the parent still holds the prefix the old cut left.
+      expect(DV.redactNodeFields(db, heCtx(home, v, true), ['he-b1', 'he-b2']), 'the two children were rewritten').toBe(2);
+      expect(heLeaks(db, v), 'CONTROL: only the parent keeps the prefix (and its whole ref)').toEqual(expect.arrayContaining(['he-p.gist']));
+      expect(heLeaks(db, v).filter((x) => !x.startsWith('he-p.')), 'CONTROL: no child leaks').toEqual([]);
+      const ftsOf = (id: string): unknown => db.prepare('SELECT f.gist, f.topics, f.refs FROM nodes_fts f JOIN nodes n ON n.rowid = f.rowid WHERE n.node_id = ?').get(id);
+      const qBefore = JSON.stringify(ftsOf('he-q'));
+      const told = { n: 0 };
+      const ctx = { ...heCtx(home, v, true), onNodesFtsDeleted: () => { told.n += 1; } };
+      setStep(db, 'nodes-belt', 1, '0', null);
+      expect(DV.beltNodesStep(db, ctx, SW.newBudget()), 'the step completed').toBe(true);
+      expect(heLeaks(db, v), 'no 8-character window of the value in any node field or nodes_fts column').toEqual([]);
+      expect(told.n, 'exactly one node row was rewritten: the parent that differed (the clean one was left alone)').toBe(1);
+      expect(JSON.stringify(ftsOf('he-q')), 'the clean parent\'s index row is as it was').toBe(qBefore);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('H-154: the belt re-rolls the ancestors of a node it rewrote only when they change, so a stale index row alone rewrites no ancestor', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-he154-', [
+      { id: 'he-c1', kind: 'native_leaf', pruned: true, gist: 'Clean one.' },
+      { id: 'he-c2', kind: 'native_leaf', pruned: true, gist: 'Clean two.' },
+      { id: 'he-q', kind: 'condensed', gist: null, kids: ['he-c1', 'he-c2'] },
+    ], true);
+    try {
+      const ftsGist = (id: string): string => (db.prepare('SELECT f.gist AS g FROM nodes_fts f JOIN nodes n ON n.rowid = f.rowid WHERE n.node_id = ?').get(id) as { g: string }).g;
+      const want = ftsGist('he-c1');
+      db.prepare("UPDATE nodes_fts SET gist = 'stale' WHERE rowid = (SELECT rowid FROM nodes WHERE node_id = 'he-c1')").run();
+      expect(ftsGist('he-c1'), 'CONTROL: the leaf\'s index row is stale and its fields are clean').toBe('stale');
+      const told = { n: 0 };
+      const ctx = { ...heCtx(home, v, true), onNodesFtsDeleted: () => { told.n += 1; } };
+      setStep(db, 'nodes-belt', 1, '0', null);
+      expect(DV.beltNodesStep(db, ctx, SW.newBudget()), 'the step completed').toBe(true);
+      expect(ftsGist('he-c1'), 'CONTROL: the stale row was rewritten').toBe(want);
+      expect(told.n, 'only the leaf\'s own rewrite touched an index row: its unchanged ancestor was left alone').toBe(1);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('H-155: a node_children row whose child is gone is skipped, so the belt completes and the parent is rebuilt from the children that remain', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-he155-', [
+      { id: 'he-c1', kind: 'native_leaf', pruned: true, gist: 'Clean one.' },
+      { id: 'he-c2', kind: 'native_leaf', pruned: true, gist: 'Clean two.' },
+      { id: 'he-q', kind: 'condensed', gist: null, kids: ['he-c1', 'he-c2'] },
+    ], true);
+    try {
+      const rid = (db.prepare("SELECT rowid AS r FROM nodes WHERE node_id = 'he-c2'").get() as { r: number }).r;
+      db.exec('PRAGMA foreign_keys = OFF');
+      db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(rid);
+      db.prepare("DELETE FROM nodes WHERE node_id = 'he-c2'").run();
+      db.exec('PRAGMA foreign_keys = ON');
+      expect(db.prepare('PRAGMA foreign_key_check').all().length, 'CONTROL: the store carries one dangling child').toBe(1);
+      const ctx = heCtx(home, v, true);
+      setStep(db, 'nodes-belt', 1, '0', null);
+      expect(DV.beltNodesStep(db, ctx, SW.newBudget()), 'the step completes over a dangling child').toBe(true);
+      expect((db.prepare("SELECT gist FROM nodes WHERE node_id = 'he-q'").get() as { gist: string }).gist, 'the parent is rebuilt from the child that remains').toBe('Clean one.');
+      expect(() => DV.rerollParents(db, ctx, ['he-c1']), 'a re-roll over the same parent does not throw either').not.toThrow();
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('M2: rerollParents asks for ancestors in chunks of ictx.rerollChunk ids, never one IN list over every seed', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-hefr1d-', heManyParents(v, 5), false);
+    try {
+      const sqls: string[] = [];
+      const spy = new Proxy(db, {
+        get(target, prop) {
+          const val = Reflect.get(target, prop, target) as unknown;
+          if (prop === 'prepare') return (sql: string) => { if (sql.includes('ancestors')) sqls.push(sql); return target.prepare(sql); };
+          return typeof val === 'function' ? (val as (...a: unknown[]) => unknown).bind(target) : val;
+        },
+      }) as DatabaseSync;
+      const seeds = Array.from({ length: 5 }, (_, i) => `he-v${i}`);
+      expect(DV.rerollParents(spy, { ...heCtx(home, v, false), rerollChunk: 2 }, seeds), 'all five parents were re-rolled, once each').toBe(5);
+      expect(sqls.map((q) => (q.match(/\?/g) ?? []).length), 'three ancestor queries of 2, 2 and 1 placeholders').toEqual([2, 2, 1]);
+      expect(heLeaks(db, v).filter((x) => x.startsWith('he-p')), 'every parent was rebuilt from redacted children').toEqual([]);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('H-156: an ancestor shared by two chunks is re-rolled once, and after the parents below it, whatever chunk reached it first', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-he156-', [
+      ...heManyParents(v, 4),
+      { id: 'he-g', kind: 'condensed', gist: null, kids: ['he-p0', 'he-p3'] },
+    ], false);
+    try {
+      db.prepare("UPDATE nodes SET depth = 2 WHERE node_id = 'he-g'").run();
+      expect(heLeaks(db, v), 'CONTROL: the grandparent holds a prefix of the value in its topics').toContain('he-g.topics');
+      const seeds = Array.from({ length: 4 }, (_, i) => `he-v${i}`);
+      expect(DV.rerollParents(db, { ...heCtx(home, v, false), rerollChunk: 2 }, seeds), 'four parents and the shared grandparent, each re-rolled once').toBe(5);
+      expect(heLeaks(db, v).filter((x) => x.startsWith('he-p') || x.startsWith('he-g')), 'the grandparent was rolled from re-rolled parents, so nothing leaks').toEqual([]);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('F-a: a parent minted by deriveParents over a child that holds the value is built from redacted children', () => {
+    const v = heValue();
+    const home = mkTmp('ccrc-hist-hefr1e-');
+    createStore(home);
+    const db = openWriter(historyPaths(home).dbFile);
+    try {
+      const lead = Array.from({ length: 7 }, (_, i) => `Leaf ${i + 1}.`).join(' ');
+      const gists = [...Array.from({ length: 7 }, (_, i) => `Leaf ${i + 1}.`), `${hePad(1187 - lead.length - 1)}${v} and then more.`];
+      db.exec('BEGIN');
+      db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, ?, '', 'demo', 1)").run(ID);
+      db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (1, 1, ?, 'startup', 'hook', 1)").run(RR_U1);
+      db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(RR_U1);
+      db.prepare("INSERT INTO ingest_files (file_id, dev, ino, transcript_pk, status, parser_version) VALUES (1, 1, 9001, 1, 'live', 1)").run();
+      db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 9), Buffer.from([0]));
+      gists.forEach((gist, i) => {
+        const k = i + 1;
+        db.prepare("INSERT INTO entries (entry_id, uuid, transcript_pk, type, subtype, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 1, 'system', 'compact_boundary', 'harness', 1, 0, 0, 1, ?)")
+          .run(k, `d9e00000-0000-4000-8000-${k.toString(16).padStart(12, '0')}`, 1000 * k);
+        db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (?, 1, ?)').run(k, k);
+        db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (1, ?, ?)').run(k, k);
+        db.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, boundary_entry_id, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, parser_version, created_ms) VALUES (?, 1, 1, 1, 'native_leaf', 0, 'not-requested', ?, '[]', ?, ?, ?, 100, 0, 0, 1, 1)")
+          .run(`he-l${k}`, gist, k, 1000 * k, 1000 * k + 500);
+      });
+      db.exec('COMMIT');
+      const raw = parentRollup(gists.map((g) => ({ gist: g, topics: [], refs: [], earliestMs: 1, latestMs: 2, srcChars: 0, descCount: 0, descChars: 0 })));
+      expect(raw.gist?.includes(v), 'CONTROL: the unredacted rollup is cut inside the value').toBe(false);
+      expect(raw.gist?.includes(v.slice(0, 13)), 'CONTROL: and holds its first 13 characters').toBe(true);
+      expect(DV.deriveParents(db, heCtx(home, v, false), SW.newBudget()), 'one parent was minted').toBe(1);
+      expect(db.prepare("SELECT count(*) AS n FROM nodes WHERE kind = 'condensed'").get(), 'the parent exists').toEqual({ n: 1 });
+      const p = db.prepare("SELECT gist FROM nodes WHERE kind = 'condensed'").get() as { gist: string };
+      expect(heHolds(p.gist, v), 'the minted parent holds no 8-character window of the value').toBe(false);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('F-b: reparse --apply registers the merge step, so a rewritten nodes_fts row is merged by the next tick', () => {
+    const box = makeHistoryBox('ccrc-hist-hefr1f-', { role: 'fleet' });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, 'Rotating the fixture credential before the release.'));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    const pending = (): number => rrQ<{ n: number }>(box, "SELECT count(*) AS n FROM derivation_state WHERE step = 'fts-merge' AND version = 1 AND completed_ms IS NULL")[0]!.n;
+    rrTickUntil(box, () => rrLeafIds(box).length === 1 && pending() === 0, 12);
+    const r = runShim(box, ['--op', 'reparse', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(pending(), 'the reparse rewrote the leaf\'s nodes_fts row and registered the merge step pending').toBe(1);
+    rrTickUntil(box, () => rrStepDone(box, 'fts-merge', 1), 6);
+  }, 2 * HEAVY);
+
+  it('F-c: a recovery rebuilds a parent without a ref that is already stored as the mark, whatever the order of the passes', async () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-hefr1g-', [
+      { id: 'he-k1', kind: 'native_leaf', pruned: true, gist: 'Plain one.', refs: ['[redacted]'] },
+      { id: 'he-k2', kind: 'native_leaf', pruned: true, gist: 'Plain two.' },
+      { id: 'he-p', kind: 'condensed', gist: null, kids: ['he-k1', 'he-k2'] },
+    ], false);
+    try {
+      const pair = secretPairs([v]).pairs[0]!;
+      db.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, 1)').run(pair.len, Buffer.from(pair.sha256, 'hex'));
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', 5, NULL, NULL)").run();
+      const markRefs = (): unknown[] => db.prepare("SELECT node_id FROM node_refs WHERE value = '[redacted]' ORDER BY node_id").all();
+      expect(markRefs(), 'CONTROL: the child and the parent both store the mark as a ref').toEqual([{ node_id: 'he-k1' }, { node_id: 'he-p' }]);
+      const ctx = { home, homes: [], ids: null, now: () => Date.now(), budget: SW.newBudget(), belt: null };
+      let done = false;
+      for (let i = 0; i < 20 && !done; i += 1) done = (await SW.recoverReindex(db, ctx, { pairsAdded: true }, SW.newBudget())).done;
+      expect(done, 'the reindex phase completed').toBe(true);
+      expect(markRefs().map((x) => (x as { node_id: string }).node_id), 'the parent stores no ref with the mark as its value').not.toContain('he-p');
+    } finally { closeWriter(db); }
+  }, HEAVY);
+});
+
+// ── W1-B2 Task 34: DM48's rebuild clause, with Tasks 27 and 28's rr helpers (spec §6.1, §9.14; ruled Q16) ──────
+describe('DM48: a fork epoch comes back from the journal (W1-B2 Task 34)', () => {
+  it('a startup, an in-pane /branch fork confirmed by the observation, and a same-id fork are rebuilt equal by O35\'s columns, with the registry purged', async () => {
+    const box = makeHistoryBox('ccrc-hist-dm48r-', { role: 'fleet' });
+    expect(runShim(box).code).toBe(0);                  // binds the store; its scan finds an empty registry, so none runs below
+    const FID = 'claude-a-fork';
+    const P = 'a8a8a8a8-0000-4000-8000-000000000481';       // the parent
+    const F = 'a8a8a8a8-0000-4000-8000-000000000482';       // the fork
+    const G = '0189abcd-1234-4678-9abc-000000000480';
+    plantSession(box, FID, { uuid: P, generation: G, project: 'demo' });
+    spoolLine(box, FID, { v: 1, ev: 'SessionStart', id: FID, sid: P, src: 'startup', reg: P, gen: G });
+    rrTickUntil(box, () => rrEpochs(box, FID).length === 1);
+    spoolLine(box, FID, { v: 1, ev: 'SessionStart', id: FID, sid: F, src: 'fork', reg: P, gen: G });
+    plantSession(box, FID, { uuid: F });                // _sync_uuid moves .uuid before the rename
+    rrTickUntil(box, () => rrEpochs(box, FID).length === 2);
+    spoolLine(box, FID, { v: 1, ev: 'SessionStart', id: FID, sid: F, src: 'fork', reg: F, gen: G });
+    rrTickUntil(box, () => countOf(box, 'spool_receipts') === 3);
+    expect(rrEpochs(box, FID).map((e) => [e.seq, e.cc_session_uuid, e.cause])).toEqual([[1, P, 'startup'], [2, F, 'fork']]);
+    const a = rrState(box);
+    fs.rmSync(box.reg, { recursive: true, force: true });
+    fs.mkdirSync(box.reg);
+    rrLose(box, { binding: false, journal: false });
+    const r = await cliOnPty(box, ['doctor', '--rebuild']);
+    expect(r.code, r.out).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box), 10);
+    const b = rrState(box);
+    expect(b.sessions).toEqual(a.sessions);
+    expect(b.epochs, 'the fork epoch, back by O35\'s columns').toEqual(a.epochs);
+    expect(b.receipts).toEqual(a.receipts);
+  }, 2 * HEAVY);
+});
+
+// ── Fix round 1, review 441 F12: the node fast path stays inside the slice and the budget ─────────────────────────────
+// D-5025 (history-fast-path-stops-at-slice-and-budget). rederiveGistsFor asks the slice AND the run budget on entry, before
+// each leaf it re-derives and before each batch of BELT_NODE_BATCH nodes it rewrites; a path that stops short reopens the
+// belt's node step, so a later pass finishes what it left.
+/** A clock for a budget: it reads 0 for its first `n` calls after `allow(n)` and an hour on every later one. Every check of
+ *  the fast path (parentsBudgetLeft) makes ONE call, and a check asks the slice and then the budget (two calls when the
+ *  slice holds), so `allow(2 + 2 * k)` lets the entry check and k further checks pass and fails the next. */
+function f12Clock(): { now: () => number; allow: (n: number) => void } {
+  let left = Number.POSITIVE_INFINITY;
+  return { now: () => { if (left > 0) { left -= 1; return 0; } return 3_600_000; }, allow: (n) => { left = n; } };
+}
+/** `db` with every prepare recorded: what a pass asked of the store, in order. */
+function f12Spy(db: DatabaseSync): { db: DatabaseSync; sql: string[] } {
+  const sql: string[] = [];
+  const proxy = new Proxy(db, {
+    get(target, prop) {
+      if (prop === 'prepare') return (text: string) => { sql.push(text); return target.prepare(text); };
+      const v: unknown = Reflect.get(target, prop, target);
+      return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+    },
+  });
+  return { db: proxy, sql };
+}
+/** `n` parents, each over a clean readable native leaf and a readable native leaf holding `v` where the parent's cuts land inside it. */
+const f12Parents = (v: string, n: number): HeNode[] => Array.from({ length: n }, (_, i): HeNode[] => [
+  { id: `he-c${i}`, kind: 'native_leaf', readable: true, gist: 'Raw one.' },
+  { id: `he-v${i}`, kind: 'native_leaf', readable: true, gist: `${hePad(1186 - 'Raw one.'.length)}${v} and then more.`, topics: [`${hePad(60)}${v}`] },
+  { id: `he-p${i}`, kind: 'condensed', gist: null, kids: [`he-c${i}`, `he-v${i}`] },
+]).flat();
+const F12_LEAF_SQL = 'FROM nodes WHERE node_id = ? AND depth = 0';
+const F12_REDACT_SQL = 'UPDATE nodes SET gist = ?, topics = ? WHERE node_id = ?';
+const f12Count = (sql: readonly string[], part: string): number => sql.filter((s) => s.includes(part)).length;
+const f12Belt = (db: DatabaseSync): { cursor: string | null; completedMs: number | null } | null => getStep(db, 'nodes-belt', 1) as never;
+/** `n` native leaves with no readable summary, each holding `v`: matched, never re-derived, only rewritten in place. */
+const f12Pruned = (v: string, n: number): HeNode[] => Array.from({ length: n }, (_, i): HeNode => (
+  { id: `he-n${String(i).padStart(3, '0')}`, kind: 'native_leaf', pruned: true, gist: `Printed ${v} once.` }));
+
+describe('F12: the node fast path is bounded by the slice and the budget, and what it leaves is owed to the belt', () => {
+  it('(a) leaves: a budget that runs out after k leaves stops there, (b) the belt is due, and a following pass finishes; (c) CONTROL: an ample budget re-derives every leaf in one pass', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-f12leaf-', f12Parents(v, 4), true);
+    try {
+      // The belt has completed on an earlier generation.
+      setStep(db, 'nodes-belt', 1, '99', 1_000);
+      const clock = f12Clock();
+      const budget = SW.newBudget(clock.now, { maxMs: 1_000 });
+      const slice = SW.newBudget(clock.now, { maxMs: 1_000 });
+      const cut = f12Spy(db);
+      clock.allow(2 + 2 * 2);
+      DV.rederiveGistsFor(cut.db, { ...heCtx(home, v, true) }, [v], budget, slice);
+      expect(f12Count(cut.sql, F12_LEAF_SQL), '(a) two leaves were re-derived, then the budget said stop').toBe(2);
+      expect(f12Count(cut.sql, F12_REDACT_SQL), '(a) and no node was rewritten after it').toBe(0);
+      expect(heLeaks(db, v), 'CONTROL: the unreached leaves still hold the value').toEqual(expect.arrayContaining(['he-v2.gist', 'he-v3.gist']));
+      expect(f12Belt(db), '(b) the belt is due: its node step is open again, from the first node').toEqual({ cursor: null, completedMs: null });
+      // A following pass with budget finishes.
+      DV.rederiveGistsFor(db, heCtx(home, v, true), [v], SW.newBudget(), SW.newBudget());
+      expect(heLeaks(db, v), '(b) a following pass redacted every node').toEqual([]);
+      expect(f12Belt(db), 'CONTROL: and the pass with budget left the belt as it found it').toEqual({ cursor: null, completedMs: null });
+    } finally { closeWriter(db); }
+
+    const again = heStore('ccrc-hist-f12leafc-', f12Parents(v, 4), true);
+    try {
+      setStep(again.db, 'nodes-belt', 1, '99', 1_000);
+      const spy = f12Spy(again.db);
+      const touched = DV.rederiveGistsFor(spy.db, heCtx(again.home, v, true), [v], SW.newBudget(), SW.newBudget());
+      expect(f12Count(spy.sql, F12_LEAF_SQL), '(c) every leaf was re-derived in one pass').toBe(4);
+      expect(touched, '(c) and every node rewritten').toBe(4);
+      expect(heLeaks(again.db, v), '(c) nothing leaks').toEqual([]);
+      expect(f12Belt(again.db), '(c) a complete pass leaves the belt as it found it, completed').toEqual({ cursor: '99', completedMs: 1_000 });
+    } finally { closeWriter(again.db); }
+  }, HEAVY);
+
+  it('(a) nodes: a budget that runs out after one batch of BELT_NODE_BATCH nodes stops there, (b) the belt is due and finishes the rest; (c) CONTROL: an ample budget rewrites every batch in one pass', () => {
+    const v = heValue();
+    const BATCH = 64;
+    const { db, home } = heStore('ccrc-hist-f12node-', f12Pruned(v, 130), true);
+    try {
+      setStep(db, 'nodes-belt', 1, '999', 1_000);
+      const clock = f12Clock();
+      const budget = SW.newBudget(clock.now, { maxMs: 1_000 });
+      const slice = SW.newBudget(clock.now, { maxMs: 1_000 });
+      const cut = f12Spy(db);
+      clock.allow(2 + 2 * 1);
+      const touched = DV.rederiveGistsFor(cut.db, heCtx(home, v, true), [v], budget, slice);
+      expect(f12Count(cut.sql, F12_REDACT_SQL), '(a) one batch was rewritten, then the budget said stop').toBe(1);
+      expect(touched, '(a) of exactly BELT_NODE_BATCH nodes').toBe(BATCH);
+      const leaking = [...new Set(heLeaks(db, v).map((x) => x.split('.')[0]!))];
+      expect(leaking, '(a) the first batch is clean and every node after it still holds the value').toEqual(f12Pruned(v, 130).slice(BATCH).map((n) => n.id));
+      expect(f12Belt(db), '(b) the belt is due: its node step is open again, from the first node').toEqual({ cursor: null, completedMs: null });
+      expect(DV.beltNodesStep(db, heCtx(home, v, true), SW.newBudget()), '(b) the next step runs to its end').toBe(true);
+      expect(heLeaks(db, v), '(b) so every matched node ends redacted').toEqual([]);
+    } finally { closeWriter(db); }
+
+    const again = heStore('ccrc-hist-f12nodec-', f12Pruned(v, 130), true);
+    try {
+      setStep(again.db, 'nodes-belt', 1, '999', 1_000);
+      const spy = f12Spy(again.db);
+      const touched = DV.rederiveGistsFor(spy.db, heCtx(again.home, v, true), [v], SW.newBudget(), SW.newBudget());
+      expect(touched, '(c) every node was rewritten in one pass').toBe(130);
+      expect(f12Count(spy.sql, F12_REDACT_SQL), '(c) in batches of BELT_NODE_BATCH: 64, 64 and 2').toBe(3);
+      expect(heLeaks(again.db, v), '(c) nothing leaks').toEqual([]);
+      expect(f12Belt(again.db), '(c) a complete pass leaves the belt as it found it, completed').toEqual({ cursor: '999', completedMs: 1_000 });
+    } finally { closeWriter(again.db); }
+  }, HEAVY);
+});
+
+// ===========================================================================
+// W1-B4 Task 3: the export phases in the recovery step (spec §9.14 "Recovery",
+// "Export replay"). In-process on a real store, through B2's recoveryStep and
+// its executors seam, with the SHIPPED export executors (Task 10's; a store
+// with no export directory ends each phase at once) wrapped so the test sees each call. The
+// import is namespaced, so this block binds no name the file already binds;
+// ESM hoists it.
+// ===========================================================================
+import * as recExport from '../../ccd/history/lib.mjs';
+
+describe('W1-B4: the export phases in the recovery step (spec §9.14)', () => {
+  type ExportChunkAnswer = { cursor: recExport.RecoverCursor; moved: boolean; phaseDone: boolean };
+  type ExportChunk = (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor) => ExportChunkAnswer | Promise<ExportChunkAnswer>;
+  /** An executor that records its cursor and ends the step for the pass. */
+  const stopHere = (seen: string[]): ExportChunk => (_db, _run, c) => {
+    seen.push(recExport.formatRecoverCursor(c));
+    return { cursor: c, moved: false, phaseDone: false };
+  };
+  /** An executor whose phase is already done. */
+  const finished: ExportChunk = (_db, _run, c) => ({ cursor: c, moved: false, phaseDone: true });
+  /** The shipped executor of `phase`, recording the cursor it is called with. */
+  const shipped = (phase: string, seen: string[]): ExportChunk => (db, run, c) => {
+    seen.push(recExport.formatRecoverCursor(c));
+    return (SW.RECOVER_EXECUTORS[phase] as ExportChunk)(db, run, c);
+  };
+  /** A fresh store with one recovery step registered at `cursor`, and the writer handle `body` runs on. */
+  const withStep = async (cursor: string,
+    body: (db: DatabaseSync, box: HistoryBox, ids: { storeId: string; writer: string }) => Promise<void>): Promise<void> => {
+    const box = makeHistoryBox('ccrc-history-recover-b4-phases-');
+    const ids = createStore(box.home);
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, ?, NULL)").run(Date.now(), cursor);
+      await body(db, box, ids);
+    } finally {
+      closeWriter(db);
+    }
+  };
+
+  it('a step stored at apply+pairs walks export-blobs, export-stubs then export-rows (D-5397), through the shipped executors, to reindex with +pairs kept', async () => {
+    await withStep('apply+pairs', async (db, box, ids) => {
+      const seen: string[] = [];
+      const executors = {
+        index: stopHere(seen), apply: finished, 'export-blobs': shipped('export-blobs', seen), 'export-stubs': shipped('export-stubs', seen),
+        'export-rows': shipped('export-rows', seen), reindex: stopHere(seen),
+      };
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), executors)).toEqual({ moved: true, done: false, held: false });
+      expect(seen).toEqual(['export-blobs+pairs', 'export-stubs+pairs', 'export-rows+pairs', 'reindex+pairs']);
+      expect(cursorOn(db)).toBe('reindex+pairs');
+    });
+  });
+
+  it('a step stored inside an export phase resumes there: its cursor parses, and no chunk is counted failed', async () => {
+    await withStep('export-rows:7.0a1b2c3d.db:12+pairs', async (db, box, ids) => {
+      const seen: string[] = [];
+      const executors = {
+        index: stopHere(seen), apply: stopHere(seen), 'export-blobs': stopHere(seen), 'export-stubs': stopHere(seen),
+        'export-rows': shipped('export-rows', seen), reindex: stopHere(seen),
+      };
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), executors)).toEqual({ moved: true, done: false, held: false });
+      expect(seen).toEqual(['export-rows:7.0a1b2c3d.db:12+pairs', 'reindex+pairs']);
+      expect(countersOn(db, 'recover_chunk_failed')).toEqual({ recover_chunk_failed: 0 });
+    });
+  });
+
+  it('a step stored inside the stubs phase resumes there, and goes on to the rows phase (D-5397): its cursor parses, and no chunk is counted failed', async () => {
+    await withStep('export-stubs:7.0a1b2c3d.db:12+pairs', async (db, box, ids) => {
+      const seen: string[] = [];
+      const executors = {
+        index: stopHere(seen), apply: stopHere(seen), 'export-blobs': stopHere(seen), 'export-stubs': shipped('export-stubs', seen),
+        'export-rows': stopHere(seen), reindex: stopHere(seen),
+      };
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), executors)).toEqual({ moved: true, done: false, held: false });
+      expect(seen).toEqual(['export-stubs:7.0a1b2c3d.db:12+pairs', 'export-rows+pairs']);
+      expect(countersOn(db, 'recover_chunk_failed')).toEqual({ recover_chunk_failed: 0 });
+    });
+  });
+});
+
+// ── W1-B4 Task 10: export replay, the recovery step's three export phases (spec §9.14 "Export replay", §9.15) ───
+// Segments are planted through store.mjs (historyHelpers' plantSegment), never by hand, and every HOME is a fixture.
+// In-process cases run sweep.mjs's recoveryStep on a store createStore made; the O44 and rollback cases spawn the
+// real pass. Every name here is prefixed x10/X10, so nothing collides with B2's cases above.
+const X10_ID = 'claude-a-segment';
+const X10_G = '0189abcd-1234-4678-9abc-0000000010a1';
+const X10_WRITER = '0a1b2c3d';
+const X10_DEV = 64769;
+const X10_DAY = 86_400_000;
+const x10U = (n: number): string => `10101010-0000-4000-8000-${String(n).padStart(12, '0')}`;
+interface X10Text { uuid: string; text: string; tsMs: number; line: number }
+interface X10Family {
+  uuid: string; path: string; ino: number; texts: X10Text[];
+  id?: string; generation?: string; project?: string; seq?: number; cwd?: string; eofMs?: number | null;
+}
+/** `n` row texts of one transcript, old enough to be due anywhere, at byte offsets 0, 4096, … */
+const x10Texts = (base: number, n: number, word: string, t0: number): X10Text[] =>
+  Array.from({ length: n }, (_, i) => ({ uuid: x10U(base + i), text: `${word} row ${i} ${'x'.repeat(40)}`, tsMs: t0 + i * 1000, line: i * 4096 }));
+/** One family's rows as a format-1 segment carries them (Task 10's contract table): the family, its transcript, one
+ *  confirmed startup epoch launched in `cwd`, the gone file (path, dev, ino), then per text its entry and its
+ *  membership. */
+function x10Rows(o: X10Family): PlantSegmentRow[] {
+  const id = o.id ?? X10_ID;
+  const generation = o.generation ?? X10_G;
+  const t0 = o.texts[0]?.tsMs ?? Date.now() - 400 * X10_DAY;
+  const cwd = o.cwd ?? WORK;
+  const out: PlantSegmentRow[] = [
+    { kind: 'family', row: { ccrc_id: id, generation, project: o.project ?? 'demo', first_seen_ms: t0 } },
+    { kind: 'transcript', row: { cc_session_uuid: o.uuid, agent_id: '', harness: 'claude-code', parent_tool_use_id: null, workflow_run_id: null, agent_type: null } },
+    { kind: 'epoch', row: {
+      ccrc_id: id, generation, seq: o.seq ?? 1, cc_session_uuid: o.uuid, cause: 'startup', declared_by: 'hook',
+      started_ms: t0, cwd, git_branch: 'main', cwd_real: cwd, confirmed_ms: t0,
+    } },
+    { kind: 'file', row: {
+      path: o.path, dev: X10_DEV, ino: o.ino, cc_session_uuid: o.uuid, agent_id: '', size: 4096 * o.texts.length,
+      mtime_ns: BigInt(t0) * 1_000_000n, eof_ms: o.eofMs === undefined ? t0 + 60_000 : o.eofMs,
+    } },
+  ];
+  for (const x of o.texts) {
+    out.push({ kind: 'entry', row: {
+      uuid: x.uuid, cc_session_uuid: o.uuid, agent_id: '', type: 'user', subtype: null, role: 'user', model: null,
+      parent_uuid: null, ts_ms: x.tsMs, request_id: null, api_block_index: null, msg_id: null, source_tool_use_id: null,
+      tool_name: null, is_compact_summary: 0, provenance: 'operator', prov_version: 1, parse_state: 'ok',
+      struct_rank_ns: BigInt(t0) * 1_000_000n, struct_path: o.path, struct_dev: X10_DEV, struct_ino: o.ino,
+      blob_sha256: segmentSha(x.text),
+    } });
+    out.push({ kind: 'membership', row: { path: o.path, dev: X10_DEV, ino: o.ino, uuid: x.uuid, line: x.line } });
+  }
+  return out;
+}
+/** A store createStore made, its recovery step registered at `cursor` (null: the step's start), opened for writing. */
+function x10Store(prefix: string, cursor: string | null = null): { box: ReturnType<typeof makeHistoryBox>; ids: { storeId: string; writer: string }; db: DatabaseSync } {
+  const box = makeHistoryBox(prefix);
+  const ids = createStore(box.home);
+  const db = openWriter(historyPaths(box.home).dbFile);
+  db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, ?, NULL)").run(Date.now(), cursor);
+  return { box, ids, db };
+}
+const x10Count = (db: DatabaseSync, table: string): number =>
+  Number((db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+/** The shipped recovery executors, each recording the cursor it is called with, for recoveryStep's `executors` argument. */
+const x10Recording = (seen: string[]): Readonly<Record<string, unknown>> => Object.fromEntries(Object.entries(SW.RECOVER_EXECUTORS).map(([phase, fn]) =>
+  [phase, (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor): unknown => {
+    seen.push(recExport.formatRecoverCursor(c));
+    return (fn as (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor) => unknown)(db, run, c);
+  }]));
+
+describe('W1-B4 Task 10: export replay in the recovery step (spec §9.14 "Export replay")', () => {
+  it('O44, the segment case: a format-2 segment beside a format-1 one, under a step larger than one pass\'s budget: the step completes, format 1 replays and is marked, format 2 is skipped and FAILs export-segment-newer naming it', () => {
+    const box = makeHistoryBox('ccrc-history-b4-o44seg-');
+    pass(box);
+    const storeId = fs.readFileSync(historyPaths(box.home).storeId, 'utf8').trim();
+    // 256 random hex characters each, so Brotli cannot shrink a blob below the chunk bound: the step spans passes.
+    const texts = x10Texts(0x100, 12, 'zqo44seg', Date.now() - 400 * X10_DAY).map((t) => ({ ...t, text: `${t.text} ${randomBytes(128).toString('hex')}` }));
+    const one = plantSegment(box, storeId, {
+      seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+      rows: x10Rows({ uuid: x10U(0x10), path: '/home/u/gone/o44.jsonl', ino: 9001, texts }),
+    });
+    const two = plantSegment(box, storeId, { seq: 2, writer: X10_WRITER, format: 2, blobs: [{ text: 'zqo44seg a newer build wrote this' }], rows: [] });
+    const kinds0 = rrJournalKinds(box);
+    const version = Date.now();
+    registerRecovery(box, version);
+    let passes = 0;
+    for (;;) {
+      const r = runDriver(box, { budgetBytes: 1200, chunkBytes: 400 });
+      expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+      passes += 1;
+      if (recoverRow(box)!.completed_ms !== null) break;
+      expect(passes, 'the step never completed').toBeLessThan(60);
+    }
+    expect(passes, 'the step spans several passes').toBeGreaterThanOrEqual(2);
+    expect(rows(box, 'SELECT exported_seg AS seg, count(*) AS n FROM entries GROUP BY exported_seg')).toEqual([{ seg: path.basename(one), n: 12 }]);
+    expect(countOf(box, 'memberships')).toBe(12);
+    expect(rows(box, 'SELECT count(*) AS n FROM blobs WHERE exported_seg = ?', path.basename(one))).toEqual([{ n: 12 }]);
+    expect(rows(box, 'SELECT count(*) AS n FROM blobs WHERE lower(hex(sha256)) = ?', segmentSha('zqo44seg a newer build wrote this').toString('hex')),
+      'the newer segment\'s blob was never inserted').toEqual([{ n: 0 }]);
+    expect(metaOf(box, HEALTH_META.exportSegmentNewer)).toBe(JSON.stringify([path.basename(two)]));
+    const newer = (status(box).health.fail as Array<{ word: string; detail?: string }>).find((f) => f.word === 'export-segment-newer');
+    expect(newer?.detail, 'doctor FAILs export-segment-newer, naming the segment').toContain(path.basename(two));
+    expect(counters(box)['recover_chunk_failed'] ?? 0).toBe(0);
+    // O36's replay half for segments: the step journaled nothing.
+    expect(rrJournalKinds(box)).toEqual(kinds0);
+  }, 2.5 * HEAVY);
+
+  it('BK21: a row whose blob sits only in a LATER segment replays, because every segment\'s blobs go in before any segment\'s rows; replayed blobs and rows are marked with their own segments', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-bk21-');
+    try {
+      const texts = x10Texts(0x200, 1, 'zqbk21', Date.now() - 400 * X10_DAY);
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [], rows: x10Rows({ uuid: x10U(0x20), path: '/home/u/gone/bk21.jsonl', ino: 9101, texts }) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: 'feedface', blobs: [{ text: texts[0]!.text }], rows: [] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT e.uuid AS uuid, b.exported_seg AS blobSeg, e.exported_seg AS rowSeg FROM entries e JOIN blobs b ON b.blob_id = e.blob_id')
+        .all().map((r) => ({ ...r }))).toEqual([{ uuid: texts[0]!.uuid, blobSeg: '2.feedface.db', rowSeg: `1.${X10_WRITER}.db` }]);
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a late-linked sidecar\'s second segment (the entry again, with its sidecar row and only the sidecar\'s bytes) replays beside the first with no duplicate row', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-latesc-');
+    try {
+      const texts = x10Texts(0xa00, 1, 'zqlatesc', Date.now() - 400 * X10_DAY);
+      const fam: X10Family = { uuid: x10U(0xa0), path: '/home/u/gone/latesc.jsonl', ino: 9951, texts };
+      const side = 'zqlatesc the tool output that landed after its row was exported';
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: side }], rows: [
+        ...x10Rows(fam),
+        { kind: 'sidecar', row: { cc_session_uuid: fam.uuid, agent_id: '', name: 'b4late01.txt', blob_sha256: segmentSha(side), uuid: texts[0]!.uuid, first_seen_ms: texts[0]!.tsMs + 60_000 } },
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(['entries', 'memberships', 'sidecars', 'blobs', 'epochs'].map((t) => x10Count(db, t))).toEqual([1, 1, 1, 2, 1]);
+      expect(db.prepare('SELECT s.name AS name, e.uuid AS uuid, b.exported_seg AS seg FROM sidecars s JOIN entries e ON e.entry_id = s.entry_id JOIN blobs b ON b.blob_id = s.blob_id')
+        .all().map((r) => ({ ...r }))).toEqual([{ name: 'b4late01.txt', uuid: texts[0]!.uuid, seg: `2.${X10_WRITER}.db` }]);
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced', 'export_epoch_conflict'))
+        .toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0, export_epoch_conflict: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('journal first: a segment\'s family and epoch rows fill only what the journal lacks, through merged_into; a seq the journal gave another uuid is skipped and counted export_epoch_conflict', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-jfirst-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const [U1, U2, U3] = [x10U(0x31), x10U(0x32), x10U(0x33)];
+      // The journal: (X10_ID, '') and (X10_ID, X10_G), both project demo, the '' family re-keyed into G, and an operator
+      // mapping that chains U1 into G at seq 1 with no launch facts.
+      plantJournalFile(box, ids.storeId, new Date(t0).toISOString().slice(0, 7), 'feedbeef', t0, [
+        journalRecord('verdict', t0 + 1, { event_key: 'none', kind: 'family', ccrc_id: X10_ID, generation: '', project: 'demo', first_seen_ms: t0 + 1 }),
+        journalRecord('verdict', t0 + 2, { event_key: 'none', kind: 'family', ccrc_id: X10_ID, generation: X10_G, project: 'demo', first_seen_ms: t0 + 2 }),
+        journalRecord('verdict', t0 + 3, { event_key: 'none', kind: 'rekeyed', ccrc_id: X10_ID, generation: X10_G }),
+        journalRecord('verdict', t0 + 4, {
+          event_key: 'none', kind: 'mapping', ccrc_id: X10_ID, generation: X10_G, cc_session_uuid: U1, declared_by: 'operator',
+          path: '/home/u/gone/j1.jsonl',
+        }),
+      ]);
+      const epoch = (generation: string, seq: number, uuid: string): PlantSegmentRow => ({ kind: 'epoch', row: {
+        ccrc_id: X10_ID, generation, seq, cc_session_uuid: uuid, cause: 'startup', declared_by: 'hook',
+        started_ms: t0, cwd: WORK, git_branch: 'main', cwd_real: WORK, confirmed_ms: t0,
+      } });
+      // The store's own launch facts for U1, as its transcript's first row gave them (the tick's epochFacts, or a restored
+      // backup's epoch): they differ from the segment's in all four columns, and the store's win. A journal record carries
+      // none (chainEpoch writes the uuid, cause and confirmation only), so the facts go in between the step's journal phases
+      // and its export phases, through the executors seam.
+      const own = { started: t0 + 77, cwd: '/home/u/launch/own', branch: 'own-branch', real: '/home/u/launch/own-real' };
+      const executors = {
+        ...SW.RECOVER_EXECUTORS,
+        'export-blobs': (d: DatabaseSync, run: unknown, c: unknown): unknown => {
+          d.prepare('UPDATE epochs SET started_ms = ?, cwd = ?, git_branch = ?, cwd_real = ? WHERE cc_session_uuid = ? AND started_ms IS NULL AND cwd IS NULL')
+            .run(own.started, own.cwd, own.branch, own.real, U1);
+          return (SW.RECOVER_EXECUTORS['export-blobs'] as (a: unknown, b: unknown, c: unknown) => unknown)(d, run, c);
+        },
+      };
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [], rows: [
+        // a family the journal merged: it lands in (X10_ID, X10_G), whose project the journal set
+        { kind: 'family', row: { ccrc_id: X10_ID, generation: '', project: 'elsewhere', first_seen_ms: t0 } },
+        epoch('', 1, U1),        // the journal's U1, named by its pre-merge family: launch facts filled, seq and cause kept
+        epoch(X10_G, 1, U2),     // seq 1 is U1's: skipped, counted
+        epoch(X10_G, 2, U3),     // the journal lacks it: inserted at its own seq
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), executors)).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT generation, project, merged_into IS NOT NULL AS merged FROM sessions WHERE ccrc_id = ? ORDER BY generation')
+        .all(X10_ID).map((r) => ({ ...r }))).toEqual([
+        { generation: '', project: 'demo', merged: 1 },
+        { generation: X10_G, project: 'demo', merged: 0 },
+      ]);
+      expect(db.prepare(`SELECT e.seq AS seq, e.cc_session_uuid AS uuid, e.cause AS cause, e.declared_by AS by, e.cwd AS cwd, e.git_branch AS branch,
+          e.cwd_real AS real, e.started_ms AS started, e.confirmed_ms AS confirmed FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk
+          WHERE s.ccrc_id = ? AND s.generation = ? ORDER BY e.seq`).all(X10_ID, X10_G).map((r) => ({ ...r }))).toEqual([
+        // the store's launch facts and the journal's seq, cause and confirmation all win over the segment's
+        { seq: 1, uuid: U1, cause: 'import', by: 'operator', cwd: own.cwd, branch: own.branch, real: own.real, started: own.started, confirmed: t0 + 4 },
+        { seq: 2, uuid: U3, cause: 'startup', by: 'hook', cwd: WORK, branch: 'main', real: WORK, started: t0, confirmed: t0 },
+      ]);
+      expect(countersOn(db, 'export_epoch_conflict')).toEqual({ export_epoch_conflict: 1 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a gone file\'s memberships land on its exported: row (status exported, eof carried, else the segment\'s cutoff), never on a live row that reuses its inode; a blob the store holds is kept and marked', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-dead-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const CUT = Date.now() - 200 * X10_DAY;
+      const [UA, UB] = [x10U(0x41), x10U(0x42)];
+      const [pa, pb] = ['/home/u/gone/a.jsonl', '/home/u/gone/b.jsonl'];
+      const a = x10Texts(0x410, 3, 'zqdeada', t0);
+      const b = x10Texts(0x420, 2, 'zqdeadb', t0);
+      // A live file of another transcript that now holds a's (dev, ino), and a's first blob already in the store.
+      const other = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)').run(x10U(0x4f)).lastInsertRowid);
+      const live = Number(db.prepare("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, 9401, '', ?, 'live', 1)")
+        .run(X10_DEV, other).lastInsertRowid);
+      const raw0 = Buffer.from(a[0]!.text, 'utf8');
+      db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?)').run(segmentSha(a[0]!.text), 'br5', segmentSha('a stored body'), raw0.length);
+      plantSegment(box, ids.storeId, {
+        seq: 1, writer: X10_WRITER, cutoffMs: CUT, blobs: [...a, ...b].map((x) => ({ text: x.text })),
+        rows: [
+          ...x10Rows({ uuid: UA, path: pa, ino: 9401, texts: a }),
+          ...x10Rows({ uuid: UB, path: pb, ino: 9402, texts: b, seq: 2, eofMs: null }),
+        ],
+      });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      const files = db.prepare('SELECT file_id, source_key, status, eof_ms FROM ingest_files WHERE file_id <> ? ORDER BY file_id').all(live)
+        .map((r) => ({ ...r })) as Array<{ file_id: number; source_key: string; status: string; eof_ms: number }>;
+      expect(files.map(({ source_key, status, eof_ms }) => ({ source_key, status, eof_ms }))).toEqual([
+        { source_key: exportedSourceKey(pa, X10_DEV, 9401), status: 'exported', eof_ms: a[0]!.tsMs + 60_000 },
+        { source_key: exportedSourceKey(pb, X10_DEV, 9402), status: 'exported', eof_ms: CUT },
+      ]);
+      const held = (fileId: number): string[] => db.prepare('SELECT e.uuid AS uuid FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? ORDER BY m.line')
+        .all(fileId).map((r) => String((r as { uuid: string }).uuid));
+      expect(held(live), 'the live row holds nothing of the gone file').toEqual([]);
+      expect(held(files[0]!.file_id)).toEqual(a.map((x) => x.uuid));
+      expect(held(files[1]!.file_id)).toEqual(b.map((x) => x.uuid));
+      expect(db.prepare('SELECT DISTINCT struct_file_id AS f FROM entries ORDER BY f').all().map((r) => Number((r as { f: number }).f)))
+        .toEqual(files.map((f) => f.file_id));
+      expect({ ...(db.prepare('SELECT count(*) AS n, max(exported_seg) AS seg FROM blobs WHERE sha256 = ?').get(segmentSha(a[0]!.text)) as object) },
+        'insert-or-ignore kept the store\'s blob, and marked it').toEqual({ n: 1, seg: `1.${X10_WRITER}.db` });
+      expect(x10Count(db, 'file_paths'), 'a gone file gets no path: the live ingest can never find it').toBe(0);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a blob the store holds as a prune tombstone stays one when a segment carries its bytes (operator ruling 2026-10-18); a stub replays as a tombstone dated by the replay and is never marked exported', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-prune-');
+    try {
+      const texts = x10Texts(0xc00, 2, 'zqprune', Date.now() - 400 * X10_DAY);
+      const rawLen = (text: string): number => Buffer.byteLength(text, 'utf8');
+      // The store pruned the first blob before the replay: a tombstone, with its date.
+      db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, ?, NULL, ?, 12345)').run(segmentSha(texts[0]!.text), 'br5', rawLen(texts[0]!.text));
+      plantSegment(box, ids.storeId, {
+        // the first blob's bytes travel (its exporter had not pruned it); the second is a stub (its exporter had)
+        seq: 1, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }, { text: null, sha256: segmentSha(texts[1]!.text), rawLen: rawLen(texts[1]!.text) }],
+        rows: x10Rows({ uuid: x10U(0xc0), path: '/home/u/gone/prune.jsonl', ino: 9811, texts }),
+      });
+      const before = Date.now();
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      const blob = (text: string): Record<string, unknown> => ({ ...(db.prepare(
+        'SELECT z IS NULL AS pruned, pruned_ms, exported_ms, exported_seg FROM blobs WHERE sha256 = ?').get(segmentSha(text)) as object) });
+      expect(blob(texts[0]!.text), 'insert-or-ignore: the tombstone keeps its date, gains no body and no mark')
+        .toEqual({ pruned: 1, pruned_ms: 12345, exported_ms: null, exported_seg: null });
+      const stub = blob(texts[1]!.text);
+      expect([stub['pruned'], stub['exported_ms'], stub['exported_seg']], 'a stub is a tombstone and never exported text').toEqual([1, null, null]);
+      expect(Number(stub['pruned_ms']), 'dated by the replay, the time this store learned it').toBeGreaterThanOrEqual(before);
+      expect(x10Count(db, 'entries'), 'both rows place on their blobs').toBe(2);
+      expect(db.prepare('SELECT count(*) AS n FROM entries WHERE exported_seg = ?').get(`1.${X10_WRITER}.db`)).toEqual({ n: 2 });
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a boundary replays once however many segments carry its entry, silently; a boundary whose (transcript, ord) another entry holds is counted export_row_unplaced and skipped, the chunk completing: one row never stalls the step', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-bound-');
+    try {
+      const texts = x10Texts(0xd00, 2, 'zqbound', Date.now() - 400 * X10_DAY);
+      const fam = (t: X10Text): X10Family => ({ uuid: x10U(0xd0), path: '/home/u/gone/bound.jsonl', ino: 9821, texts: [t] });
+      const boundary = (uuid: string): PlantSegmentRow => ({ kind: 'boundary', row: {
+        uuid, cc_session_uuid: x10U(0xd0), agent_id: '', boundary_ord: 1, trigger: 'manual', head_uuid: null, anchor_uuid: null,
+        tail_uuid: null, kept_sha256: null, pre_tokens: 10, post_tokens: 5, duration_ms: 3,
+      } });
+      // The first entry and its boundary travel in two segments (a repeat replay absorbs, uncounted); a second entry of the
+      // same transcript claims the same ord in a third (a row the store cannot place: counted, skipped).
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }], rows: [...x10Rows(fam(texts[0]!)), boundary(texts[0]!.uuid)] });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [], rows: [...x10Rows(fam(texts[0]!)), boundary(texts[0]!.uuid)] });
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [{ text: texts[1]!.text }], rows: [...x10Rows(fam(texts[1]!)), boundary(texts[1]!.uuid)] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(countersOn(db, 'export_row_unplaced', 'recover_chunk_failed'),
+        'only the collision is counted (the repeat in segment 2 is not), and no chunk failed').toEqual({ export_row_unplaced: 1, recover_chunk_failed: 0 });
+      expect([x10Count(db, 'boundaries'), x10Count(db, 'entries')], 'one boundary; the second entry is placed without its boundary').toEqual([1, 2]);
+      expect(db.prepare('SELECT e.uuid AS uuid FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id').all().map((r) => ({ ...r })),
+        'the first claim stands').toEqual([{ uuid: texts[0]!.uuid }]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a replayed variant\'s first file is the dead-file row of the identity the segment names for it, else its entry\'s own', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-variant-');
+    try {
+      const texts = x10Texts(0xe00, 1, 'zqvariant', Date.now() - 400 * X10_DAY);
+      const fam: X10Family = { uuid: x10U(0xe0), path: '/home/u/gone/v1.jsonl', ino: 9831, texts };
+      const [va, vb] = ['zqvariant a later copy rewrote this row', 'zqvariant another copy wrote it differently'];
+      const variant = (text: string, firstPath: string, firstIno: number): PlantSegmentRow => ({ kind: 'variant', row: {
+        uuid: texts[0]!.uuid, blob_sha256: segmentSha(text), first_path: firstPath, first_dev: X10_DEV, first_ino: firstIno,
+        first_seen_ms: texts[0]!.tsMs + 5000, cause: 'unknown',
+      } });
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }, { text: va }, { text: vb }], rows: [
+        ...x10Rows(fam),
+        // a second gone file of the transcript, which the first variant names as its first
+        { kind: 'file', row: { path: '/home/u/gone/v2.jsonl', dev: X10_DEV, ino: 9832, cc_session_uuid: fam.uuid, agent_id: '', size: 4096, mtime_ns: 1n, eof_ms: null } },
+        variant(va, '/home/u/gone/v2.jsonl', 9832),
+        // the second variant names a file the segment carries no row for
+        variant(vb, '/home/u/gone/none.jsonl', 9833),
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      const dead = (p: string, ino: number): number => Number((db.prepare('SELECT file_id FROM ingest_files WHERE source_key = ?').get(exportedSourceKey(p, X10_DEV, ino)) as { file_id: number }).file_id);
+      expect(db.prepare('SELECT v.blob_id AS blob, v.first_file_id AS first FROM entry_variants v JOIN blobs b ON b.blob_id = v.blob_id ORDER BY b.blob_id')
+        .all().map((r) => ({ ...r })).map((r) => (r as { first: number }).first)).toEqual([dead('/home/u/gone/v2.jsonl', 9832), dead(fam.path, 9831)]);
+      expect(x10Count(db, 'ingest_files'), 'the unnamed file got no row of its own').toBe(2);
+      expect(countersOn(db, 'export_row_unplaced', 'export_row_blob_missing')).toEqual({ export_row_unplaced: 0, export_row_blob_missing: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('two transcripts\' retired files that share one (dev, ino) and export under their own source_key each keep their own dead-file row, entries and memberships, so no leaf of one holds a row of the other', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-retired-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const [UA, UB] = [x10U(0xb1), x10U(0xb2)];
+      const a = x10Texts(0xb10, 3, 'zqretira', t0);
+      const b = x10Texts(0xb20, 2, 'zqretirb', t0);
+      // B1 retires a row when a NEW file reuses its (dev, ino) and re-points its paths. Two generations of one inode, each of
+      // a different transcript, have no path left; the export writes each under its own store source_key ('retired:<hex>', unique
+      // per generation) as its path identity (D-5393 (history-export-pathless-file-identity)), so their dead-file keys differ.
+      const [pathA, pathB] = [`retired:${'a1'.repeat(32)}`, `retired:${'b2'.repeat(32)}`];
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: a.map((x) => ({ text: x.text })),
+        rows: x10Rows({ uuid: UA, path: pathA, ino: 9701, texts: a, id: 'claude-a-retired', generation: '0189abcd-1234-4678-9abc-0000000010b1' }) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: b.map((x) => ({ text: x.text })),
+        rows: x10Rows({ uuid: UB, path: pathB, ino: 9701, texts: b, id: 'claude-b-retired', generation: '0189abcd-1234-4678-9abc-0000000010b2' }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entries'), 'every entry is placed').toBe(5);
+      expect(countersOn(db, 'export_row_unplaced', 'export_row_blob_missing')).toEqual({ export_row_unplaced: 0, export_row_blob_missing: 0 });
+      const ofTranscript = (uuid: string): string[] => db.prepare(`SELECT e.uuid AS uuid FROM entries e JOIN transcripts t ON t.transcript_pk = e.transcript_pk
+          WHERE t.cc_session_uuid = ? ORDER BY e.entry_id`).all(uuid).map((r) => String((r as { uuid: string }).uuid));
+      expect(ofTranscript(UA)).toEqual(a.map((x) => x.uuid));
+      expect(ofTranscript(UB)).toEqual(b.map((x) => x.uuid));
+      // The files a transcript holds are its own, and each holds only that transcript's rows.
+      const heldBy = (uuid: string): string[][] => db.prepare(`SELECT f.file_id AS file_id FROM ingest_files f JOIN transcripts t ON t.transcript_pk = f.transcript_pk
+          WHERE t.cc_session_uuid = ? ORDER BY f.file_id`).all(uuid).map((f) => db.prepare(`SELECT e.uuid AS uuid FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+          WHERE m.file_id = ? ORDER BY m.line`).all((f as { file_id: number }).file_id).map((r) => String((r as { uuid: string }).uuid)));
+      expect(heldBy(UA), 'transcript A has a dead-file row holding exactly its rows').toEqual([a.map((x) => x.uuid)]);
+      expect(heldBy(UB), 'transcript B has a dead-file row holding exactly its rows').toEqual([b.map((x) => x.uuid)]);
+      expect(db.prepare(`SELECT count(*) AS n FROM entries e JOIN ingest_files f ON f.file_id = e.struct_file_id WHERE f.transcript_pk <> e.transcript_pk`).get(),
+        'no entry\'s structural file belongs to another transcript').toEqual({ n: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a replayed dead-file row exported again (a bind cleared its marks) travels under its own exported: key as its path, and replaying both segments into a fresh store yields ONE dead-file row (D-5393)', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-reexport-');
+    try {
+      const texts = x10Texts(0xf00, 2, 'zqreexp', Date.now() - 400 * X10_DAY);
+      const gone = '/home/u/gone/reexp.jsonl';
+      const ino = 9841;
+      const own = exportedSourceKey(gone, X10_DEV, ino);
+      // Segment 1 names the gone file by its real path. A store that replayed it holds the file as the dead-file row `own`
+      // and has no file_paths row for it, so when a bind clears the marks and the rows are exported again, the exporter
+      // writes that row with its source_key as the path: segment 2.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows({ uuid: x10U(0xf0), path: gone, ino, texts }) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [], rows: x10Rows({ uuid: x10U(0xf0), path: own, ino, texts }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT source_key, status FROM ingest_files').all().map((r) => ({ ...r })),
+        'one dead-file row, under the key the real path gives').toEqual([{ source_key: own, status: 'exported' }]);
+      expect([x10Count(db, 'entries'), x10Count(db, 'memberships')], 'each row once, on that one row').toEqual([2, 2]);
+      expect(db.prepare('SELECT count(*) AS n FROM entries e JOIN ingest_files f ON f.file_id = e.struct_file_id').get()).toEqual({ n: 2 });
+      expect(countersOn(db, 'export_row_unplaced', 'export_row_blob_missing', 'recover_chunk_failed'))
+        .toEqual({ export_row_unplaced: 0, export_row_blob_missing: 0, recover_chunk_failed: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('the cursor: each chunk commits its segment and position with what it applied; a rows phase split over many small budgets re-applies nothing and keeps +pairs at each of its cursors', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-cursor-', 'index+pairs');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const [U1, U2] = [x10U(0x51), x10U(0x52)];
+      plantJournalFile(box, ids.storeId, new Date(t0).toISOString().slice(0, 7), 'feedbeef', t0, [
+        journalRecord('verdict', t0 + 1, { event_key: 'none', kind: 'family', ccrc_id: X10_ID, generation: X10_G, project: 'demo', first_seen_ms: t0 + 1 }),
+        journalRecord('verdict', t0 + 2, {
+          event_key: 'none', kind: 'mapping', ccrc_id: X10_ID, generation: X10_G, cc_session_uuid: U1, declared_by: 'operator',
+          path: '/home/u/gone/c1.jsonl',
+        }),
+      ]);
+      const texts = x10Texts(0x500, 8, 'zqcursor', t0);
+      // U2's epoch claims seq 1, which the journal gave U1: one conflict, which a re-applied chunk would count twice.
+      plantSegment(box, ids.storeId, {
+        seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: U2, path: '/home/u/gone/c2.jsonl', ino: 9501, texts }),
+      });
+      const seen: string[] = [];
+      let finished = false;
+      for (let i = 0; i < 200 && !finished; i += 1) {
+        const r = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 600, chunkBytes: 300 }));
+        const c = cursorOn(db);
+        if (c !== null) seen.push(c);
+        finished = r.done || (c !== null && c.startsWith('reindex'));
+      }
+      expect(finished, `the step reached reindex: ${seen.join(' | ')}`).toBe(true);
+      const exportCursors = seen.filter((c) => c.startsWith('export-'));
+      expect(exportCursors.some((c) => new RegExp(`^export-rows:1\\.${X10_WRITER}\\.db:[1-9][0-9]*\\+pairs$`).test(c)),
+        `a pass ended inside the rows of segment 1: ${seen.join(' | ')}`).toBe(true);
+      expect(exportCursors.filter((c) => !c.endsWith('+pairs')), '+pairs survives every export cursor').toEqual([]);
+      expect(countersOn(db, 'export_epoch_conflict')).toEqual({ export_epoch_conflict: 1 });
+      expect([x10Count(db, 'entries'), x10Count(db, 'memberships')]).toEqual([8, 8]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('the floor: a per-chunk probe below it pauses the export phases with capture_paused_low_disk, the cursor where it was', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-floor-');
+    try {
+      const texts = x10Texts(0x600, 6, 'zqfloor', Date.now() - 400 * X10_DAY);
+      plantSegment(box, ids.storeId, {
+        seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0x60), path: '/home/u/gone/floor.jsonl', ino: 9601, texts }),
+      });
+      let calls = 0;
+      const roomy = { bsize: 1, bavail: 4 * 2 ** 40, blocks: 8 * 2 ** 40 };
+      const low = { bsize: 1, bavail: 1024, blocks: 8 * 2 ** 40 };
+      // Probes 1-3 (index, apply, the first export-blobs chunk) have room; the fourth, before the next chunk, does not.
+      const ctx = { ...stepCtx(box, ids, { chunkBytes: 100 }), deps: { statfs: async () => (++calls <= 3 ? roomy : low) } };
+      expect(await SW.recoveryStep(db, ctx)).toEqual({ moved: true, done: false, held: true });
+      expect(countersOn(db, 'capture_paused_low_disk')).toEqual({ capture_paused_low_disk: 1 });
+      const at = cursorOn(db);
+      expect(at).toMatch(new RegExp(`^export-blobs:1\\.${X10_WRITER}\\.db:[1-9][0-9]*$`));
+      expect(x10Count(db, 'entries'), 'no row before every blob').toBe(0);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entries')).toBe(6);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a segment whose meta names another store is skipped and counted export_segment_foreign, its rows never replayed', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-foreign-');
+    try {
+      const mine = x10Texts(0x700, 2, 'zqmine', Date.now() - 400 * X10_DAY);
+      const theirs = x10Texts(0x710, 2, 'zqtheirs', Date.now() - 400 * X10_DAY);
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: mine.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0x70), path: '/home/u/gone/mine.jsonl', ino: 9701, texts: mine }) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, metaStoreId: '0189abcd-1234-4678-9abc-0000000010ff',
+        blobs: theirs.map((t) => ({ text: t.text })), rows: x10Rows({ uuid: x10U(0x71), path: '/home/u/gone/theirs.jsonl', ino: 9702, texts: theirs, seq: 2 }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT uuid FROM entries ORDER BY uuid').all().map((r) => String((r as { uuid: string }).uuid))).toEqual(mine.map((t) => t.uuid));
+      expect(countersOn(db, 'export_segment_foreign')).toEqual({ export_segment_foreign: 1 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a segment that cannot be read fails its chunk (recover_chunk_failed) and the step waits for it, never skipping it; removed, the step completes', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-unreadable-');
+    try {
+      const texts = x10Texts(0x800, 2, 'zqunread', Date.now() - 400 * X10_DAY);
+      const one = plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0x80), path: '/home/u/gone/unread.jsonl', ino: 9801, texts }) });
+      const broken = path.join(path.dirname(one), `3.${X10_WRITER}.db`);
+      fs.writeFileSync(broken, 'not a database, and not a newer format either\n', { mode: 0o600 });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: false, held: false });
+      expect(countersOn(db, 'recover_chunk_failed')).toEqual({ recover_chunk_failed: 1 });
+      expect(cursorOn(db), 'the step waits at the unreadable segment').toBe(`export-blobs:3.${X10_WRITER}.db:0`);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids)), 'still unreadable: still waiting').toEqual({ moved: false, done: false, held: false });
+      fs.rmSync(broken);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entries')).toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a segment whose meta reads but whose pages do not (a partial or damaged copy) fails its chunk like an unreadable one: counted recover_chunk_failed, the line names the segment and the way out, in the blobs pass and in the rows pass', () => {
+    for (const table of ['blobs', 'entries']) {
+      const box = makeHistoryBox(`ccrc-history-b4-pagefail-${table}-`);
+      pass(box);
+      const storeId = fs.readFileSync(historyPaths(box.home).storeId, 'utf8').trim();
+      const texts = x10Texts(0x1000, 2, 'zqpagefail', Date.now() - 400 * X10_DAY);
+      const seg = plantSegment(box, storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0x100), path: '/home/u/gone/pagefail.jsonl', ino: 9851, texts }) });
+      // Overwrite the table's root page with 0xFF bytes: meta (another page) still reads, the table's rows do not.
+      const sdb = new DatabaseSync(seg, { readOnly: true });
+      const root = Number((sdb.prepare('SELECT rootpage FROM sqlite_master WHERE name = ?').get(table) as { rootpage: number }).rootpage);
+      const size = Number((sdb.prepare('PRAGMA page_size').get() as { page_size: number }).page_size);
+      sdb.close();
+      const fd = fs.openSync(seg, 'r+');
+      try { fs.writeSync(fd, Buffer.alloc(size, 0xff), 0, size, (root - 1) * size); } finally { fs.closeSync(fd); }
+      registerRecovery(box, Date.now());
+      const r = runSweep(box, []);
+      expect(r.code, `${table}: ${r.stdout}\n${r.stderr}`).toBe(0);
+      expect(r.stderr, `${table}: the line names the segment`).toContain(`${path.basename(seg)} cannot be read`);
+      expect(r.stderr, `${table}: and the way out`).toContain('Move it aside under a non-segment name to skip it (its text is not replayed), or put a good copy back');
+      expect(counters(box)['recover_chunk_failed'], `${table}: counted`).toBe(1);
+      expect(countOf(box, 'entries'), `${table}: nothing replayed past the failure`).toBe(0);
+      expect(recoverRow(box)!.completed_ms, `${table}: the step waits`).toBeNull();
+    }
+  }, HEAVY);
+
+  it('a chunk that throws rolls back what it applied with its cursor; the next pass applies it once', () => {
+    const box = makeHistoryBox('ccrc-history-b4-rollback-');
+    pass(box);
+    const storeId = fs.readFileSync(historyPaths(box.home).storeId, 'utf8').trim();
+    const t0 = Date.now() - 400 * X10_DAY;
+    const [U1, U2] = [x10U(0x91), x10U(0x92)];
+    plantJournalFile(box, storeId, new Date(t0).toISOString().slice(0, 7), 'feedbeef', t0, [
+      journalRecord('verdict', t0 + 1, { event_key: 'none', kind: 'family', ccrc_id: X10_ID, generation: X10_G, project: 'demo', first_seen_ms: t0 + 1 }),
+      journalRecord('verdict', t0 + 2, {
+        event_key: 'none', kind: 'mapping', ccrc_id: X10_ID, generation: X10_G, cc_session_uuid: U1, declared_by: 'operator',
+        path: '/home/u/gone/r1.jsonl',
+      }),
+    ]);
+    const texts = x10Texts(0x900, 4, 'zqrollback', t0);
+    plantSegment(box, storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+      rows: x10Rows({ uuid: U2, path: '/home/u/gone/r2.jsonl', ino: 9901, texts }) });
+    registerRecovery(box, Date.now());
+    // Every membership insert throws: the rows chunk (one chunk at the default budget) rolls back whole.
+    pass(box, { HISTORY_TEST_THROW_SQL: 'INTO memberships' }, [PRELOADS.faults]);
+    expect(counters(box)['recover_chunk_failed']).toBe(1);
+    expect([countOf(box, 'entries'), countOf(box, 'memberships'), counters(box)['export_epoch_conflict'] ?? 0], 'nothing of the failed chunk stayed').toEqual([0, 0, 0]);
+    expect(recoverRow(box)!.cursor).toBe('export-rows');
+    pass(box);
+    expect(recoverRow(box)!.completed_ms).not.toBeNull();
+    expect([countOf(box, 'entries'), countOf(box, 'memberships'), counters(box)['export_epoch_conflict']]).toEqual([4, 4, 1]);
+  }, HEAVY);
+});
+
+// ── W1-B4 Task 11: O43, the export survives source loss (spec §9.11 O43, §9.14, §9.15) ─────────────────────────────
+// The whole path through the real sweep, the real CLI and the real rebuild. A family is captured in a real workdir
+// and compacted; its leaf derives; the export pass, run two hours on (past its hourly clock; the fixture homes carry
+// no cleanupPeriodDays, so the transcript's home has horizon 0 and, under the per-copy rule, every row is due from the
+// file's last write, two hours before the pass's clock), writes one segment. Then the transcript and
+// history.db are lost, and `doctor --rebuild` replays the journal and the export. Only the export holds the text, the
+// gone file's memberships and the epoch's launch cwd, so each read verb that answers proves the segment came back.
+describe('O43: the export survives source loss (W1-B4 Task 11)', () => {
+  const O43_ID = 'claude-a-export';
+  const O43_G = '0189abcd-1234-4678-9abc-0000000043a1';
+  const O43_U = 'b43b43b4-0000-4000-8000-000000000431';
+  const O43_HOUR = 3_600_000;
+  const O43_WORK = 'Polishing the export fixture.';
+  const O43_TEXT = `zqb4export ask about ${O43_WORK}`;
+
+  interface O43Built { box: HistoryBox; transcript: string; workdir: string; leaf: string; segment: string; dev: bigint; ino: bigint }
+  /** A bound box whose store captured one compacted family launched in a real workdir, derived its leaf, and then
+   *  exported every row in one pass run two hours on. Nothing writes the transcript after it is planted, until a case
+   *  appends to it, so its mtime, the per-copy clock, is before every pass's. */
+  function o43Built(prefix: string): O43Built {
+    const box = makeHistoryBox(prefix, { role: 'fleet' });
+    const workdir = path.join(box.home, 'work', 'w');
+    fs.mkdirSync(workdir, { recursive: true });
+    plantSession(box, O43_ID, { uuid: O43_U, generation: O43_G, project: 'demo', workdir });
+    const transcript = plantTranscript(box, 'claude-a', SLUG, O43_U, rrCompacted(O43_U, 430, O43_WORK, workdir, 'zqb4export'));
+    spoolLine(box, O43_ID, rrStart(O43_ID, O43_U, 'startup', { reg: O43_U, gen: O43_G }));
+    rrTickUntil(box, () => countOf(box, 'entries') === 5 && rrLeafIds(box).length === 1, 10);
+    const leaf = rrLeafIds(box)[0]!;
+    const st = fs.statSync(transcript, { bigint: true });
+    const r = runDriver(box, { offsetMs: 2 * O43_HOUR });
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    const segs = segmentsOf(box).map((s) => path.basename(s));
+    expect(segs, 'one segment, written past the export\'s hourly clock').toHaveLength(1);
+    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', segs[0]!)[0]!.n, 'every row exported').toBe(5);
+    return { box, transcript, workdir, leaf, segment: segs[0]!, dev: st.dev, ino: st.ino };
+  }
+
+  const launch = (box: HistoryBox): unknown[] =>
+    rrQ(box, 'SELECT cc_session_uuid, cwd, cwd_real, started_ms, git_branch FROM epochs ORDER BY cc_session_uuid');
+
+  it('O43: exported, then the transcript and history.db lost: doctor --rebuild replays the segment, and expand, describe and --workspace answer from it; nothing is exported twice', async () => {
+    const b = o43Built('ccrc-hist-o43-');
+    const { box } = b;
+    const before = launch(box);
+    expect(before, 'CONTROL: the lost store knew the launch cwd').toEqual([expect.objectContaining({ cc_session_uuid: O43_U, cwd: b.workdir })]);
+    fs.rmSync(b.transcript);
+    rrLose(box, { binding: false, journal: false });
+    const r = await cliOnPty(box, ['doctor', '--rebuild']);
+    expect(r.code, r.out).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box) && rrLeafIds(box).length === 1, 12);
+    expect(rrLeafIds(box), 'the leaf re-derives from the exported copy, with the lost store\'s id').toEqual([b.leaf]);
+    expect(launch(box), 'the epoch\'s launch facts came back from the segment alone').toEqual(before);
+    expect(rrQ(box, 'SELECT source_key, status FROM ingest_files ORDER BY file_id'), 'one dead-file row, and no live one')
+      .toEqual([{ source_key: exportedSourceKey(b.transcript, b.dev, b.ino), status: 'exported' }]);
+    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', b.segment)[0]!.n, 'replayed rows are marked').toBe(5);
+    const pane = withPane(box, O43_ID);
+    const ex = runCli(box, ['expand', rrU(430)], { env: pane });
+    expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
+    expect(ex.stdout).toContain(O43_TEXT);
+    const d = runCli(box, ['describe', b.leaf, '--json'], { env: pane });
+    expect(d.code, `${d.stdout}\n${d.stderr}`).toBe(0);
+    expect((d.json?.['items'] as Array<{ node_id: string }>)[0]!.node_id).toBe(b.leaf);
+    const w = runCli(box, ['tree', '--workspace', '--json'], { env: pane });
+    expect(w.code, `${w.stdout}\n${w.stderr}`).toBe(0);
+    expect((w.json?.['scope'] as { families: Array<{ ccrc_id: string }> }).families.map((f) => f.ccrc_id)).toEqual([O43_ID]);
+    // The replay marked every row, so a pass past the rebuilt store's own hourly clock finds nothing due, though the
+    // per-copy rule makes every row of the gone transcript due at once: marked rows are never candidates.
+    const passBefore = Number(metaOf(box, HEALTH_META.exportPassMs) ?? 0);
+    const again = runDriver(box, { offsetMs: 2 * O43_HOUR });
+    expect(again.code, `${again.stdout}\n${again.stderr}`).toBe(0);
+    expect(Number(metaOf(box, HEALTH_META.exportPassMs)), 'the pass ran (it did not wait on its clock), and found nothing due').toBeGreaterThan(passBefore);
+    expect(segmentsOf(box).map((s) => path.basename(s))).toEqual([b.segment]);
+    expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
+  }, 2.5 * HEAVY);
+
+  it('O43, a reused inode: the gone file\'s exported memberships land on its exported: row, never on the live file that now has its inode, and ingesting that file moves nothing of them', async () => {
+    const b = o43Built('ccrc-hist-o43-inode-');
+    const { box } = b;
+    const B_ID = 'claude-a-inode';
+    const B_U = 'b43b43b4-0000-4000-8000-000000000432';
+    const B_G = '0189abcd-1234-4678-9abc-0000000043b1';
+    const aUuids = [0, 1, 2, 3, 4].map((k) => rrU(430 + k));
+    const bUuids = [rrU(440), rrU(441)];
+    // The reuse: A's file renamed onto B's canonical path keeps its inode, and rewriting it in place keeps it too.
+    const pB = path.join(path.dirname(b.transcript), `${B_U}.jsonl`);
+    fs.renameSync(b.transcript, pB);
+    fs.writeFileSync(pB, `${rrTalk(B_U, 440, 2).map((x) => JSON.stringify(x)).join('\n')}\n`);
+    expect(fs.statSync(pB, { bigint: true }).ino, 'CONTROL: B\'s file holds A\'s inode').toBe(b.ino);
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--rebuild'])).code).toBe(0);
+    plantSession(box, B_ID, { uuid: B_U, generation: B_G, project: 'demo' });
+    spoolLine(box, B_ID, rrStart(B_ID, B_U, 'startup', { reg: B_U, gen: B_G }));
+    const held = (fileId: number): string[] => rrQ<{ uuid: string }>(box,
+      'SELECT e.uuid AS uuid FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? ORDER BY m.line', fileId).map((x) => x.uuid);
+    const fileOf = (sourceKey: string): number | undefined => rrQ<{ file_id: number }>(box,
+      'SELECT file_id FROM ingest_files WHERE source_key = ? AND dev = ? AND ino = ?', sourceKey, Number(b.dev), Number(b.ino))[0]?.file_id;
+    rrTickUntil(box, () => rrRecovered(box) && fileOf('') !== undefined && held(fileOf('')!).length === 2, 12);
+    const dead = fileOf(exportedSourceKey(b.transcript, b.dev, b.ino));
+    const live = fileOf('')!;
+    expect(dead, 'A\'s dead-file row').toBeDefined();
+    expect(rrQ(box, 'SELECT status FROM ingest_files WHERE file_id = ?', dead!)).toEqual([{ status: 'exported' }]);
+    expect(held(dead!)).toEqual(aUuids);
+    expect(held(live)).toEqual(bUuids);
+    rrTickUntil(box, () => true, 1);   // one more tick over the live file
+    expect(held(dead!), 'nothing of A moved').toEqual(aUuids);
+    expect(held(live)).toEqual(bUuids);
+    expect(counters(box)['inode_recycled'] ?? 0, 'the dead row is never taken for the live file').toBe(0);
+    expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
+  }, 2.5 * HEAVY);
+
+  it('review focus: the same rebuild with the live transcript KEPT and still growing: expand prints each row once, the leaf keeps its id, the gone file\'s memberships stay on its exported: row, the replayed marks survive the re-ingest, and the next pass exports only the rows written since', async () => {
+    const b = o43Built('ccrc-hist-o43-kept-');
+    const { box } = b;
+    const aUuids = [0, 1, 2, 3, 4].map((k) => rrU(430 + k));
+    const grown = [rrU(435), rrU(436)];
+    // The session goes on after the export: two rows more land in the live transcript (same inode) and no tick reads them
+    // before history.db is lost, so the rebuilt store meets five replayed, marked rows and two fresh, unmarked ones.
+    const more = [
+      userRow({ uuid: grown[0]!, ts: rrIso(2), parentUuid: aUuids[4]!, sessionId: O43_U, cwd: b.workdir, text: 'zqb4export grew after the export' }),
+      assistantRow({ uuid: grown[1]!, ts: rrIso(1), parentUuid: grown[0]!, sessionId: O43_U, cwd: b.workdir, text: 'zqb4export grew, answered' }),
+    ];
+    fs.appendFileSync(b.transcript, more.map((r) => `${JSON.stringify(r)}\n`).join(''));
+    expect(fs.statSync(b.transcript, { bigint: true }).ino, 'CONTROL: the live file keeps its inode while it grows').toBe(b.ino);
+    expect(countOf(box, 'entries'), 'CONTROL: the lost store knew five rows, all exported').toBe(5);
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--rebuild'])).code).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box) && countOf(box, 'entries') === 7 && rrLeafIds(box).length === 1
+      && rrQ<{ n: number }>(box, "SELECT count(*) AS n FROM ingest_files WHERE source_key = '' AND eof_ms IS NOT NULL")[0]!.n === 1, 12);
+    expect(rrLeafIds(box), 'the leaf keeps the lost store\'s id').toEqual([b.leaf]);
+    const marks = (): Array<{ uuid: string; seg: string | null }> => rrQ(box, 'SELECT uuid, exported_seg AS seg FROM entries ORDER BY uuid');
+    expect(countOf(box, 'entries'), 'one row per uuid, whichever copy brought it').toBe(7);
+    const ex = runCli(box, ['expand', b.leaf], { env: withPane(box, O43_ID) });
+    expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
+    expect(ex.stdout.split(O43_TEXT).length - 1, 'each row once').toBe(1);
+    // Review Focus 5: an exported: dead-file row and the re-ingested live row coexist, and neither takes the other's memberships.
+    const fileOf = (sourceKey: string): number | undefined => rrQ<{ file_id: number }>(box,
+      'SELECT file_id FROM ingest_files WHERE source_key = ? AND dev = ? AND ino = ?', sourceKey, Number(b.dev), Number(b.ino))[0]?.file_id;
+    const held = (fileId: number): string[] => rrQ<{ uuid: string }>(box,
+      'SELECT e.uuid AS uuid FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? ORDER BY m.line', fileId).map((x) => x.uuid);
+    const dead = fileOf(exportedSourceKey(b.transcript, b.dev, b.ino));
+    const live = fileOf('');
+    expect(dead, 'the gone copy\'s dead-file row').toBeDefined();
+    expect(live, 'the live file\'s own row').toBeDefined();
+    expect(dead).not.toBe(live);
+    expect(rrQ(box, 'SELECT count(*) AS n FROM ingest_files'), 'two rows for the one inode, and no third').toEqual([{ n: 2 }]);
+    expect(rrQ(box, 'SELECT status FROM ingest_files WHERE file_id = ?', dead!), 'the gone copy\'s row stays exported').toEqual([{ status: 'exported' }]);
+    expect(rrQ(box, 'SELECT status FROM ingest_files WHERE file_id = ?', live!), 'and the file on disk is live').toEqual([{ status: 'live' }]);
+    expect(held(dead!), 'the dead row holds exactly what the segment exported').toEqual(aUuids);
+    expect(held(live!), 'the live row holds everything the file holds').toEqual([...aUuids, ...grown]);
+    expect(rrQ(box, 'SELECT DISTINCT struct_file_id AS f FROM entries'), 'the newest-rank rule puts every entry\'s structure on the live copy').toEqual([{ f: live }]);
+    expect(marks(), 'the re-ingest left the replayed marks and the owed rows unmarked')
+      .toEqual([...aUuids.map((uuid) => ({ uuid, seg: b.segment })), ...grown.map((uuid) => ({ uuid, seg: null }))]);
+    expect(segmentsOf(box).map((x) => path.basename(x)), 'no pass has exported since the rebuild').toEqual([b.segment]);
+    // The next pass past the rebuilt store's hourly clock exports the two rows written since, and only those.
+    const next = runDriver(box, { offsetMs: 2 * O43_HOUR });
+    expect(next.code, `${next.stdout}\n${next.stderr}`).toBe(0);
+    const names = segmentsOf(box).map((x) => path.basename(x));
+    expect(names, 'exactly one new segment').toHaveLength(2);
+    expect(names[0]).toBe(b.segment);
+    expect(segmentRows(path.join(exportDirOf(box), names[1]!), 'entries').map((r) => r['uuid']).sort(), 'it holds the two new rows and nothing else').toEqual(grown);
+    expect(marks(), 'the first five keep the original segment; the two new ones took the new one')
+      .toEqual([...aUuids.map((uuid) => ({ uuid, seg: b.segment })), ...grown.map((uuid) => ({ uuid, seg: names[1]! }))]);
+    expect([held(dead!), held(live!)], 'a pass moves no membership').toEqual([aUuids, [...aUuids, ...grown]]);
+    expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
+  }, 2.5 * HEAVY);
+});
+
+// ── W1-B4 fix round 1, F6 (review 614; D-5399 (history-export-late-unlinked-sidecar-clears-blob-mark)): an unlinked sidecar whose
+// blob another transcript already exported ────────────────────────────────────────────────────────────────────────────────
+// The fixture. Two sessions of one project in two workspaces (W1, W2), each with a transcript: T1 (session one) and T2
+// (session two). T1's own LINKED sidecar is the blob's earlier carrier: a tool_result row names the file, and the file is
+// the tool's saved output. A sidecar's blob is the file's own bytes, which no JSONL line is, so an entry body cannot share
+// it. (An unlinked first carrier would do as well: the pass offers it while its blob is unexported.) The later one is an
+// UNLINKED sidecar S of T2: the same bytes in a file no row names, written after the pass that exported T1's. Before D-5399
+// the pass never offered S (EXPORT_UNLINKED_SQL keeps only blobs with exported_ms NULL, and the census counts by the blob's
+// mark), so no segment held S's row; now S's ingest takes the blob's mark off, with its referrers' (T1's tool_result row), and
+// the next pass carries the blob once, S's row and T1's linked row with its entry. Everything is due and exported; then
+// both transcripts, both sidecar files and history.db are lost, `doctor --rebuild` replays the segments, and every read
+// scoped to T2 must still find S: the grep forms (FTS and --regex; tool provenance is searchable by default, so no flag
+// brings it in) by --workspace and by --session, each also in the family's own default scope. expand and describe answer
+// the same before and after: they list only a sidecar LINKED to an entry (recall.mjs expandItems skips entry_id NULL),
+// so S is not on them in the control either, and they are recorded, not asserted to show S.
+describe('F6 (D-5399): an unlinked sidecar whose blob another transcript exported is still found by scoped reads after a rebuild from the segments (W1-B4 fix round 1)', () => {
+  const F6_ID1 = 'claude-a-f6one';
+  const F6_ID2 = 'claude-a-f6two';
+  const F6_U1 = 'f6f6f6f6-0000-4000-8000-000000000611';
+  const F6_U2 = 'f6f6f6f6-0000-4000-8000-000000000612';
+  const F6_G1 = '0189abcd-1234-4678-9abc-0000000f6a01';
+  const F6_G2 = '0189abcd-1234-4678-9abc-0000000f6a02';
+  const F6_SLUG1 = '-home-u-tree-f6w1';
+  const F6_SLUG2 = '-home-u-tree-f6w2';
+  const F6_HOUR = 3_600_000;
+  const F6_WORD = 'zqf6sidecar';
+  const F6_SHARED = 'f6shared.txt';
+  const F6_ORPHAN = 'f6orphan.txt';
+  const F6_BODY = `${F6_WORD} the tool output two transcripts saved byte for byte\nthe second line of the shared output\n`;
+
+  interface F6Read { key: string; pane: string; args: string[]; asserted: boolean }
+  interface F6Answer { exit: number | null; sidecars: string[]; hasS: boolean; hasShared: boolean; sLine: string | null }
+  /** One read through the real CLI, in the JSON form (its items name the sidecars) and the human form (the line a session
+   *  sees). `hasS` is S's name or its text anywhere in the answer; `sLine` the human line that holds it. */
+  const f6Ask = (box: HistoryBox, r: F6Read): F6Answer => {
+    const env = withPane(box, r.pane);
+    const j = runCli(box, [...r.args, '--json'], { env });
+    const h = runCli(box, r.args, { env });
+    const items = ((j.json?.['items'] ?? []) as Array<Record<string, unknown>>);
+    const sidecars = items.map((i) => i['sidecar']).filter((x): x is string => typeof x === 'string');
+    const text = `${h.stdout}\n${j.stdout}`;
+    const sLine = h.stdout.split('\n').find((l) => l.includes(F6_ORPHAN) || l.includes('zqf6sidecar')) ?? null;
+    return {
+      exit: h.code, sidecars, hasS: sidecars.includes(F6_ORPHAN) || text.includes(F6_ORPHAN),
+      hasShared: sidecars.includes(F6_SHARED) || text.includes(F6_SHARED), sLine: sLine === null ? null : sLine.slice(0, 240),
+    };
+  };
+
+  for (const journal of [false, true]) {
+    it(`F6 (D-5399): ${journal ? 'the journal lost with history.db (the segments alone)' : 'history.db lost, the journal kept'}: grep (FTS and --regex) by --workspace and by --session finds the unlinked sidecar after doctor --rebuild, as it did before`, async () => {
+      const box = makeHistoryBox(`ccrc-hist-f6${journal ? 'j' : 'k'}-`, { role: 'fleet' });
+      const W1 = path.join(box.home, 'work', 'w1');
+      const W2 = path.join(box.home, 'work', 'w2');
+      fs.mkdirSync(W1, { recursive: true });
+      fs.mkdirSync(W2, { recursive: true });
+      const dirOf = (slug: string, uuid: string): string => path.join(box.accountHome['claude-a']!, 'projects', slug, uuid, 'tool-results');
+      plantSession(box, F6_ID1, { uuid: F6_U1, generation: F6_G1, project: 'demo', workdir: W1 });
+      plantSession(box, F6_ID2, { uuid: F6_U2, generation: F6_G2, project: 'demo', workdir: W2 });
+      const t1 = plantTranscript(box, 'claude-a', F6_SLUG1, F6_U1, [
+        userRow({ uuid: rrU(610), ts: rrIso(12), parentUuid: null, sessionId: F6_U1, cwd: W1, text: 'zqf6one ask for the output' }),
+        toolResultRow({
+          uuid: rrU(611), ts: rrIso(11), parentUuid: rrU(610), sessionId: F6_U1, cwd: W1, toolUseId: 'toolu_01F6ONE',
+          content: `Output too large. Full output saved to: /home/u/x/tool-results/${F6_SHARED}`,
+        }),
+        assistantRow({ uuid: rrU(612), ts: rrIso(10), parentUuid: rrU(611), sessionId: F6_U1, cwd: W1, text: 'zqf6one answer' }),
+      ]);
+      const t2 = plantTranscript(box, 'claude-a', F6_SLUG2, F6_U2, rrCompacted(F6_U2, 620, 'Polishing workspace two.', W2, 'zqf6two'));
+      fs.mkdirSync(dirOf(F6_SLUG1, F6_U1), { recursive: true });
+      fs.writeFileSync(path.join(dirOf(F6_SLUG1, F6_U1), F6_SHARED), F6_BODY);
+      spoolLine(box, F6_ID1, rrStart(F6_ID1, F6_U1, 'startup', { reg: F6_U1, gen: F6_G1 }));
+      spoolLine(box, F6_ID2, rrStart(F6_ID2, F6_U2, 'startup', { reg: F6_U2, gen: F6_G2 }));
+      const leafOf = (id: string): string[] => rrQ<{ node_id: string }>(box,
+        "SELECT n.node_id AS node_id FROM nodes n JOIN sessions s ON s.session_pk = n.session_pk WHERE s.ccrc_id = ? AND n.kind <> 'condensed' ORDER BY n.node_id", id).map((r) => r.node_id);
+      rrTickUntil(box, () => countOf(box, 'entries') === 8 && countOf(box, 'sidecars') === 1 && leafOf(F6_ID2).length === 1
+        && rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM epochs WHERE confirmed_ms IS NOT NULL')[0]!.n === 2, 12);
+
+      // The pass that exports T1's rows, T2's rows and the blob: every row is due (the files were last written before the clock).
+      const first = runDriver(box, { offsetMs: 2 * F6_HOUR });
+      expect(first.code, `${first.stdout}\n${first.stderr}`).toBe(0);
+      const names = segmentsOf(box).map((n) => path.basename(n));
+      expect(names, 'one segment').toHaveLength(1);
+      const seg1 = path.join(exportDirOf(box), names[0]!);
+      expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', names[0]!)[0]!.n, 'every row exported').toBe(8);
+      const blobSha = rrQ<{ sha: string }>(box, 'SELECT lower(hex(b.sha256)) AS sha FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id WHERE s.name = ?', F6_SHARED)[0]!.sha;
+      expect(rrQ(box, 'SELECT exported_seg AS seg FROM blobs WHERE lower(hex(sha256)) = ?', blobSha), 'CONTROL: T1\'s sidecar carried the blob').toEqual([{ seg: names[0]! }]);
+      expect(segmentRows(seg1, 'sidecars').map((x) => [x['name'], x['uuid']])).toEqual([[F6_SHARED, rrU(611)]]);
+
+      // S arrives after the blob was exported: a scan tick finds the file, an unlinked sidecar of T2 on the same blob.
+      fs.mkdirSync(dirOf(F6_SLUG2, F6_U2), { recursive: true });
+      fs.writeFileSync(path.join(dirOf(F6_SLUG2, F6_U2), F6_ORPHAN), F6_BODY);
+      for (let k = 1; k <= 3 && countOf(box, 'sidecars') < 2; k += 1) {
+        const tick = runDriver(box, { offsetMs: 2 * F6_HOUR + 35 * MIN * k });
+        expect(tick.code, `${tick.stdout}\n${tick.stderr}`).toBe(0);
+      }
+      expect(rrQ(box, `SELECT s.name AS name, s.entry_id IS NULL AS unlinked, t.cc_session_uuid AS uuid FROM sidecars s
+        JOIN transcripts t ON t.transcript_pk = s.transcript_pk ORDER BY s.name`), 'the fixture must store S unlinked, under T2')
+        .toEqual([{ name: F6_ORPHAN, unlinked: 1, uuid: F6_U2 }, { name: F6_SHARED, unlinked: 0, uuid: F6_U1 }]);
+      expect(rrQ<{ n: number }>(box, 'SELECT count(DISTINCT blob_id) AS n FROM sidecars')[0]!.n, 'the two sidecars share one blob').toBe(1);
+      // D-5399: S's ingest took the blob's mark off, and its referrers' (T1's tool_result row, which links the blob through its
+      // sidecar); every other row keeps segment 1.
+      expect(rrQ(box, 'SELECT exported_ms IS NULL AS unmarked, exported_seg AS seg FROM blobs WHERE lower(hex(sha256)) = ?', blobSha),
+        'S\'s ingest cleared the blob\'s mark').toEqual([{ unmarked: 1, seg: null }]);
+      expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries (the blob is unmarked, so every entry that references it is too)').toEqual([]);
+      expect(rrQ(box, 'SELECT uuid FROM entries WHERE exported_ms IS NULL ORDER BY uuid'), 'the mark of the one entry that references it (T1\'s tool_result row) is off with it')
+        .toEqual([{ uuid: rrU(611) }]);
+      expect(metaOf(box, 'export_due'), 'the census counts the blob due again, so doctor sees what the pass owes (before D-5399 it read 0 and nothing was owed)').toBe('1');
+
+      // The next pass past the hourly clock: the unlinked run offers the blob again, and the pass writes a second segment.
+      const last = runDriver(box, { offsetMs: 6 * F6_HOUR });
+      expect(last.code, `${last.stdout}\n${last.stderr}`).toBe(0);
+      const both = segmentsOf(box).map((n) => path.basename(n));
+      expect(both, 'S wrote a second segment').toHaveLength(2);
+      expect(both[0]).toBe(names[0]);
+      const seg2 = path.join(exportDirOf(box), both[1]!);
+      expect(segmentRows(seg2, 'blobs').map((b) => b['sha256']), 'it carries the blob\'s bytes once').toEqual([blobSha]);
+      expect(segmentRows(seg2, 'sidecars').map((x) => [x['name'], x['uuid']]).sort(), 'with BOTH sidecar rows: S\'s, unlinked, and T1\'s, linked, which travels with its re-exported entry')
+        .toEqual([[F6_ORPHAN, null], [F6_SHARED, rrU(611)]]);
+      expect(segmentRows(seg2, 'entries').map((e) => e['uuid']), 'the entry that references the blob is written again, the others stay in segment 1').toEqual([rrU(611)]);
+      expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', both[0]!)[0]!.n).toBe(7);
+      expect(rrQ(box, 'SELECT exported_seg AS seg FROM blobs WHERE lower(hex(sha256)) = ?', blobSha), 'the blob is marked by the second segment').toEqual([{ seg: both[1]! }]);
+      expect(metaOf(box, 'export_due'), 'nothing is left due').toBe('0');
+      expect(strandedBlobs(box)).toEqual([]);
+
+      const leaf = leafOf(F6_ID2)[0]!;
+      const reads: F6Read[] = [
+        { key: 'grep FTS --workspace (pane two)', pane: F6_ID2, args: ['grep', '--workspace', F6_WORD], asserted: true },
+        { key: 'grep FTS --session two (pane one)', pane: F6_ID1, args: ['grep', '--session', F6_ID2, F6_WORD], asserted: true },
+        { key: 'grep FTS own family (pane two)', pane: F6_ID2, args: ['grep', F6_WORD], asserted: true },
+        { key: 'grep --regex --workspace (pane two)', pane: F6_ID2, args: ['grep', '--workspace', '--regex', F6_WORD], asserted: true },
+        { key: 'grep --regex --session two (pane one)', pane: F6_ID1, args: ['grep', '--session', F6_ID2, '--regex', F6_WORD], asserted: true },
+        { key: 'grep --regex own family (pane two)', pane: F6_ID2, args: ['grep', '--regex', F6_WORD], asserted: true },
+        { key: 'expand T2 leaf (pane two)', pane: F6_ID2, args: ['expand', leaf], asserted: false },
+        { key: 'describe T2 leaf (pane two)', pane: F6_ID2, args: ['describe', leaf], asserted: false },
+        { key: 'expand T2 first row (pane two)', pane: F6_ID2, args: ['expand', rrU(620)], asserted: false },
+        // contrast: what the same segment still carries for T1, whose sidecar is linked
+        { key: 'grep FTS own family (pane one)', pane: F6_ID1, args: ['grep', F6_WORD], asserted: false },
+        { key: 'grep FTS --project (pane two)', pane: F6_ID2, args: ['grep', '--project', F6_WORD], asserted: false },
+        { key: 'expand T1 tool_result (pane one)', pane: F6_ID1, args: ['expand', rrU(611)], asserted: false },
+        // CONTROL of the scope: T2's own rows are found by --workspace on both sides of the rebuild
+        { key: 'grep FTS T2 row text --workspace (pane two)', pane: F6_ID2, args: ['grep', '--workspace', 'zqf6two'], asserted: false },
+      ];
+      const ask = (): Record<string, F6Answer> => Object.fromEntries(reads.map((r) => [r.key, f6Ask(box, r)]));
+      const before = ask();
+      for (const r of reads.filter((x) => x.asserted)) expect(before[r.key]!.hasS, `CONTROL: ${r.key} finds S before the loss: ${JSON.stringify(before[r.key])}`).toBe(true);
+      expect(before['expand T1 tool_result (pane one)']!.hasShared, 'CONTROL: expand shows a LINKED sidecar').toBe(true);
+
+      // The loss: every source of the text, then the rebuild from the segments.
+      fs.rmSync(t1);
+      fs.rmSync(t2);
+      fs.rmSync(dirOf(F6_SLUG1, F6_U1), { recursive: true });
+      fs.rmSync(dirOf(F6_SLUG2, F6_U2), { recursive: true });
+      rrLose(box, { binding: false, journal });
+      const rebuilt = await cliOnPty(box, ['doctor', '--rebuild']);
+      expect(rebuilt.code, rebuilt.out).toBe(0);
+      rrTickUntil(box, () => rrRecovered(box) && countOf(box, 'entries') === 8 && leafOf(F6_ID2).length === 1, 12);
+      expect(leafOf(F6_ID2), 'the leaf keeps its id').toEqual([leaf]);
+
+      const after = ask();
+      expect(after['grep FTS T2 row text --workspace (pane two)']!.exit, 'CONTROL: the rebuilt --workspace scope holds T2\'s rows').toBe(0);
+      const missing = reads.filter((r) => r.asserted && !after[r.key]!.hasS).map((r) => r.key);
+      const table = reads.map((r) => `${r.key}: before ${JSON.stringify(before[r.key])} / after ${JSON.stringify(after[r.key])}`).join('\n');
+      expect(missing, `scoped reads that no longer find S after the rebuild:\n${table}`).toEqual([]);
+      for (const r of reads.filter((x) => !x.asserted)) {
+        expect([after[r.key]!.exit, after[r.key]!.hasS, after[r.key]!.hasShared], `${r.key} answers as before`).toEqual([before[r.key]!.exit, before[r.key]!.hasS, before[r.key]!.hasShared]);
+      }
+
+      // ── Review 621 F3, the double fault, closed by D-5637 (history-export-replay-last-carrier). The rebuild marks the blob,
+      // and T1's tool_result row that segment 2 carried again, by segment 2: the LAST segment that carries them, and the only
+      // one that holds S's row. Then segment 2 is lost too (moved aside), an adopt binds the store again, its first tick checks
+      // the marks and runs a pass, and a second rebuild from the live segments alone must still place S. Under first-wins every
+      // mark named segment 1, so the check cleared nothing, no pass wrote S again (export_due 0), and after the second
+      // rebuild all six scoped greps missed S (review 621's measurement).
+      expect(rrQ(box, 'SELECT exported_seg AS seg FROM blobs WHERE lower(hex(sha256)) = ?', blobSha),
+        'D-5637: the rebuild marked the blob by its last carrier, the one segment that holds S\'s row').toEqual([{ seg: both[1]! }]);
+      expect(rrQ(box, 'SELECT exported_seg AS seg FROM entries WHERE uuid = ?', rrU(611)),
+        'D-5637: and T1\'s tool_result row, which segment 2 carried again with the blob').toEqual([{ seg: both[1]! }]);
+      expect(metaOf(box, 'export_marks_checked_binds'), 'CONTROL: the check after the rebuild\'s bind ran before segment 2 went, so its loss needs a bind of its own').not.toBeNull();
+      // Segment 2 is lost: the store is adopted on a box its export directory came to without that segment (§8.4's carry,
+      // not done for it).
+      const aside = path.join(box.home, 'export-aside');
+      fs.mkdirSync(aside);
+      fs.renameSync(seg2, path.join(aside, both[1]!));
+      fs.rmSync(rrRoot(box).storeId);
+      fs.rmSync(rrRoot(box).writer);
+      const adopted = await cliOnPty(box, ['doctor', '--adopt']);
+      expect(adopted.code, adopted.out).toBe(0);
+      const checked = runDriver(box, { offsetMs: 9 * F6_HOUR });   // the first tick after the adopt: the bind check, then the pass
+      expect(checked.code, `${checked.stdout}\n${checked.stderr}`).toBe(0);
+      expect(counters(box)['export_segment_missing'], 'the check found segment 2 missing and cleared the marks naming it').toBe(1);
+      const live = segmentsOf(box).map((n) => path.basename(n));
+      expect(live, 'segment 1 and the one the pass wrote').toHaveLength(2);
+      expect(live[0]).toBe(names[0]);
+      const seg3 = path.join(exportDirOf(box), live[1]!);
+      expect(segmentRows(seg3, 'sidecars').map((x) => [x['name'], x['uuid']]).sort(), 'the pass wrote S again, with the blob and T1\'s linked row')
+        .toEqual([[F6_ORPHAN, null], [F6_SHARED, rrU(611)]]);
+      expect(segmentRows(seg3, 'blobs').map((b) => b['sha256'])).toEqual([blobSha]);
+      // The second rebuild, from segment 1 and the segment the pass wrote.
+      rrLose(box, { binding: false, journal });
+      const again = await cliOnPty(box, ['doctor', '--rebuild']);
+      expect(again.code, again.out).toBe(0);
+      rrTickUntil(box, () => rrRecovered(box) && countOf(box, 'entries') === 8 && leafOf(F6_ID2).length === 1, 12);
+      const twice = ask();
+      const lost = reads.filter((r) => r.asserted && !twice[r.key]!.hasS).map((r) => r.key);
+      expect(lost, `scoped reads that no longer find S after the second rebuild:\n${reads.map((r) => `${r.key}: ${JSON.stringify(twice[r.key])}`).join('\n')}`).toEqual([]);
+    }, 4 * HEAVY);
+  }
+});
+
+// ── W1-B4 whole-branch review: replay marks an entry only while every blob it references is exported or pruned ──────
+// D-5395 (history-export-mark-needs-its-blobs). The real verbs, in fixture HOMEs: a late variant (or a late-linked
+// sidecar) clears its entry's mark; a backup taken then holds that entry unmarked over a live, unmarked blob; the loss
+// of history.db and `doctor --restore` replay the segment, which holds the entry without that blob. Replay used to
+// mark the entry unconditionally, so no pass ever offered it again and the census counted the blob due for good.
+describe('D-5395: a restore replays an exported entry without marking it over a blob its segment lacks (W1-B4 whole-branch review)', () => {
+  const D_HOUR = 3_600_000;
+  /** Three rows of session RR_U1 at fixed times (so a later line can repeat a uuid and its time), exported in one pass two
+   *  hours on. `extra` adds rows after the three. */
+  function d5395Built(prefix: string, extra: (at: (k: number) => Record<string, unknown>) => object[] = () => []):
+    { box: HistoryBox; transcript: string; segment: string; at: (k: number) => { uuid: string; ts: string; parentUuid: string | null; sessionId: string; cwd: string } } {
+    const box = makeHistoryBox(prefix, { role: 'fleet' });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    const times = [5, 4, 3, 2].map((m) => rrIso(m));
+    const at = (k: number) => ({ uuid: rrU(1 + k), ts: times[k]!, parentUuid: k === 0 ? null : rrU(k), sessionId: RR_U1, cwd: WORK });
+    const rows = [
+      userRow({ ...at(0), text: 'zqd5395 ask one' }),
+      assistantRow({ ...at(1), text: 'zqd5395 answer' }),
+      ...extra(at as never),
+    ];
+    const transcript = plantTranscript(box, 'claude-a', SLUG, RR_U1, rows);
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => countOf(box, 'entries') === rows.length);
+    const r = runDriver(box, { offsetMs: 2 * D_HOUR });
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    const names = segmentsOf(box).map((n) => path.basename(n));
+    expect(names, 'one segment, written past the export\'s hourly clock').toHaveLength(1);
+    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', names[0]!)[0]!.n, 'every row exported').toBe(rows.length);
+    return { box, transcript, segment: names[0]!, at };
+  }
+  /** A scan tick 35 minutes after the export pass (which ran two hours on): it ingests what landed since, and the export,
+   *  an hour from its last pass, waits. A tick at the real time would run the export at once: the pass clock stands in
+   *  the future then, and a clock that went backwards runs the pass (D-4756). */
+  const lateTick = (box: HistoryBox): void => {
+    const r = runDriver(box, { offsetMs: 2 * D_HOUR + 35 * MIN });
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+  };
+  const markOf = (box: HistoryBox, n: number): string | null =>
+    rrQ<{ seg: string | null }>(box, 'SELECT exported_seg AS seg FROM entries WHERE uuid = ?', rrU(n))[0]!.seg;
+
+  it('a late variant, then doctor --backup, the loss of history.db and doctor --restore: replay leaves the entry unmarked, the next pass exports the late body, and the census reads 0', async () => {
+    const { box, transcript, segment, at } = d5395Built('ccrc-hist-d5395a-');
+    fs.appendFileSync(transcript, `${JSON.stringify(userRow({ ...at(0), text: 'zqd5395 ask one, revised' }))}\n`);   // the same uuid and time, another body
+    lateTick(box);
+    expect(countOf(box, 'entry_variants'), 'the fixture must make a variant').toBe(2);
+    expect([markOf(box, 1), markOf(box, 2)], 'CONTROL: the late variant cleared its entry\'s mark').toEqual([null, segment]);
+    const name = rrBackup(box);
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--restore', name])).code).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(markOf(box, 2), 'the other row\'s replayed mark stands').toBe(segment);
+    expect(markOf(box, 1), 'the entry holding the late body is not marked: that body is in no segment').toBeNull();
+    expect(strandedBlobs(box)).toEqual([]);
+    const next = runDriver(box, { offsetMs: 4 * D_HOUR });
+    expect(next.code, `${next.stdout}\n${next.stderr}`).toBe(0);
+    const names = segmentsOf(box).map((n) => path.basename(n));
+    expect(names, 'one new segment').toHaveLength(2);
+    const seg2 = path.join(exportDirOf(box), names[1]!);
+    expect(segmentRows(seg2, 'entries').map((e) => e['uuid'])).toEqual([rrU(1)]);
+    expect(segmentRows(seg2, 'blobs'), 'it carries the late body').toHaveLength(1);
+    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM blobs WHERE z IS NOT NULL AND exported_ms IS NULL')[0]!.n, 'no live blob is left unexported').toBe(0);
+    expect(metaOf(box, 'export_due'), 'the census reads nothing due').toBe('0');
+    expect(strandedBlobs(box)).toEqual([]);
+  }, 2.5 * HEAVY);
+
+  it('the same with a sidecar linked late: the backup holds the entry unmarked over the sidecar\'s unexported bytes, and the restore does not mark it', async () => {
+    const dir = (b: HistoryBox): string => path.join(b.accountHome['claude-a']!, 'projects', SLUG, RR_U1, 'tool-results');
+    const { box, segment } = d5395Built('ccrc-hist-d5395s-', (at) => [toolResultRow({
+      ...(at(2) as { uuid: string; ts: string; parentUuid: string | null; sessionId: string; cwd: string }), toolUseId: 'toolu_01D5395',
+      content: 'Output too large. Full output saved to: /home/u/x/tool-results/d5395late.txt',
+    })]);
+    fs.mkdirSync(dir(box), { recursive: true });
+    fs.writeFileSync(path.join(dir(box), 'd5395late.txt'), 'zqd5395 the tool output that landed after its row was exported\n');
+    lateTick(box);
+    expect(rrQ(box, 'SELECT s.name AS name, e.uuid AS uuid FROM sidecars s JOIN entries e ON e.entry_id = s.entry_id'), 'CONTROL: the sidecar is linked').toEqual([{ name: 'd5395late.txt', uuid: rrU(3) }]);
+    expect([markOf(box, 1), markOf(box, 3)], 'CONTROL: the late sidecar cleared its entry\'s mark').toEqual([segment, null]);
+    const name = rrBackup(box);
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--restore', name])).code).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(markOf(box, 3), 'the entry linked to bytes in no segment is not marked').toBeNull();
+    expect(markOf(box, 1)).toBe(segment);
+    expect(strandedBlobs(box)).toEqual([]);
+    const next = runDriver(box, { offsetMs: 4 * D_HOUR });
+    expect(next.code, `${next.stdout}\n${next.stderr}`).toBe(0);
+    const names = segmentsOf(box).map((n) => path.basename(n));
+    expect(names).toHaveLength(2);
+    const seg2 = path.join(exportDirOf(box), names[1]!);
+    expect(segmentRows(seg2, 'entries').map((e) => e['uuid'])).toEqual([rrU(3)]);
+    expect(segmentRows(seg2, 'sidecars').map((x) => x['name'])).toEqual(['d5395late.txt']);
+    expect(segmentRows(seg2, 'blobs'), 'it carries the sidecar\'s bytes').toHaveLength(1);
+    expect(metaOf(box, 'export_due'), 'the census reads nothing due').toBe('0');
+    expect(strandedBlobs(box)).toEqual([]);
+  }, 2.5 * HEAVY);
+  // D-5396 (history-export-bind-clears-pruned-referrers). The backup is taken AFTER prune took row 1's first body, so the
+  // restored store holds that body as a tombstone whose mark names a segment this box no longer has. The check after the
+  // restore's bind clears the tombstone's referrers too, and the pass writes row 1 again with a stub of the body; replay
+  // never gives a tombstone its bytes back, from the stub or from anything else, so the body stays body-less throughout.
+  it('D-5396: a late variant, prune, doctor --backup, segment 1 moved aside, the loss of history.db and doctor --restore: the first body stays a tombstone through the bind, the pass and a second replay, row 1 travels again with a stub of it, and expand says "content pruned"', async () => {
+    const { box, transcript, segment, at } = d5395Built('ccrc-hist-d5396-');
+    fs.appendFileSync(transcript, `${JSON.stringify(userRow({ ...at(0), text: 'zqd5395 ask one, revised' }))}\n`);   // the same uuid and time, another body
+    lateTick(box);
+    expect([markOf(box, 1), markOf(box, 2)], 'CONTROL: the late variant cleared its entry\'s mark').toEqual([null, segment]);
+    const re = runDriver(box, { offsetMs: 4 * D_HOUR });
+    expect(re.code, `${re.stdout}\n${re.stderr}`).toBe(0);
+    const names = segmentsOf(box).map((n) => path.basename(n));
+    expect(names, 'row 1 was written again, with the late body').toHaveLength(2);
+    expect(names[0], 'CONTROL: the first segment is the original one').toBe(segment);
+    const second = names[1]!;
+    expect([markOf(box, 1), markOf(box, 2)], 'CONTROL: row 1 is marked by segment 2, row 2 by segment 1').toEqual([second, segment]);
+    const firstBody = rrQ<{ sha: string }>(box, 'SELECT lower(hex(b.sha256)) AS sha FROM entries e JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?', rrU(1))[0]!.sha;
+    const bodyOf = (): Array<{ stub: number; pruned: number }> =>
+      rrQ(box, 'SELECT z IS NULL AS stub, pruned_ms IS NOT NULL AS pruned FROM blobs WHERE lower(hex(sha256)) = ?', firstBody);
+    expect(bodyOf(), 'CONTROL: the first body is live before prune').toEqual([{ stub: 0, pruned: 0 }]);
+    const w = openWriter(rrRoot(box).dbFile);
+    try {   // prune took row 1's first body after segment 1 carried it
+      w.prepare('UPDATE blobs SET z = NULL, pruned_ms = ?, fts_indexed = 0 WHERE lower(hex(sha256)) = ?').run(Date.now(), firstBody);
+    } finally { closeWriter(w); }
+    const name = rrBackup(box);   // taken after the prune
+    expect(rrFileDb(path.join(rrRoot(box).backups, name), (d) => d.prepare('SELECT z IS NULL AS stub FROM blobs WHERE lower(hex(sha256)) = ?').all(firstBody)),
+      'CONTROL: the backup holds the first body as a tombstone').toEqual([{ stub: 1 }]);
+    const aside = path.join(box.home, 'export-aside');   // D-4765's own way out, to a place outside the store's export directory
+    fs.mkdirSync(aside);
+    fs.renameSync(path.join(exportDirOf(box), segment), path.join(aside, segment));
+    const rebound = async (): Promise<void> => {
+      rrLose(box, { binding: false, journal: false });
+      expect((await cliOnPty(box, ['doctor', '--restore', name])).code).toBe(0);
+      rrTickUntil(box, () => rrRecovered(box));
+    };
+    await rebound();
+    expect(bodyOf(), 'the restore replayed segment 2 without giving the tombstone its bytes').toEqual([{ stub: 1, pruned: 1 }]);
+    // the first tick after the bind cleared the tombstone's mark and, with it, row 1's (D-5396), whatever the export clock did
+    for (const hours of [6, 8]) {
+      const r = runDriver(box, { offsetMs: hours * D_HOUR });
+      expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+      expect(bodyOf(), 'a pass never gives it bytes').toEqual([{ stub: 1, pruned: 1 }]);
+    }
+    const live = segmentsOf(box).map((n) => path.basename(n));
+    expect(live, 'the first segment is gone; the restore\'s pass wrote a later one').toHaveLength(2);
+    const last = live[live.length - 1]!;
+    expect(live).not.toContain(segment);
+    expect(markOf(box, 1), 'row 1 travels again').toBe(last);
+    const seg = path.join(exportDirOf(box), last);
+    expect(segmentRows(seg, 'entries').map((e) => e['uuid']).sort(), 'with both rows').toEqual([rrU(1), rrU(2)]);
+    expect(segmentRows(seg, 'blobs').filter((b) => b['z'] === null).map((b) => b['sha256']), 'and a stub of the first body, which holds no bytes').toEqual([firstBody]);
+    expect(strandedBlobs(box)).toEqual([]);
+    // a second replay of both live segments over the same backup
+    await rebound();
+    expect(bodyOf(), 'replay of the stub gives the tombstone nothing').toEqual([{ stub: 1, pruned: 1 }]);
+    const ex = runCli(box, ['expand', rrU(1)], { env: withPane(box, ID) });
+    expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
+    expect(ex.stdout, 'expand on the pruned first body still says so').toContain('content pruned on');
+    expect(rrQ<{ n: number }>(box, "SELECT count(*) AS n FROM counters WHERE name IN ('export_row_blob_missing', 'export_row_unplaced') AND n > 0")[0]!.n,
+      'replay counted no row missing a blob and none unplaced (the restored backup holds the first body as a tombstone, so replay finds it whatever the live segments carry; what this case pins is that row 1 travels again)').toBe(0);
+  }, 3 * HEAVY);
+});
+
+// ── W1-B4 whole-branch review: replay's mark decisions, in-process on planted segments (D-5395) ─────────────────────
+describe('D-5395: replay marks an entry only while every blob it references is exported or pruned, row by row (W1-B4 whole-branch review)', () => {
+  const D_SEG = `1.${X10_WRITER}.db`;
+  const sha = (text: string): string => segmentSha(text).toString('hex');
+  /** A blob in the store the way ingest or prune left it: live and unmarked, live and exported, or a tombstone. */
+  const put = (db: DatabaseSync, text: string, o: { state: 'live' | 'exported' | 'pruned' }): void => {
+    db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms, exported_ms, exported_seg) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(segmentSha(text), 'br5', o.state === 'pruned' ? null : Buffer.from('stored body'), text.length,
+        o.state === 'pruned' ? 1 : null, o.state === 'exported' ? 1 : null, o.state === 'exported' ? '9.0a1b2c3d.db' : null);
+  };
+  const marksOf = (db: DatabaseSync): Array<string | null> =>
+    db.prepare('SELECT exported_seg AS seg FROM entries ORDER BY ts_ms, entry_id').all().map((r) => (r as { seg: string | null }).seg);
+
+  it('a variant, a linked sidecar or a boundary row that names a live, unmarked blob clears its entry\'s mark; one that names an exported blob, or a pruned one its segment carries, does not; one that names a pruned, unmarked blob its segment does not carry clears it too, whichever of the three it is (D-5396)', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-linkmark-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0xc00, 9, 'zqlinkmark', t0);
+      const fam: X10Family = { uuid: x10U(0xc0), path: '/home/u/gone/linkmark.jsonl', ino: 9971, texts };
+      const [k1, k2, k3, k4, k5, k6, k7, k8] = ['zqlinkmark k1', 'zqlinkmark k2', 'zqlinkmark k3', 'zqlinkmark k4', 'zqlinkmark k5', 'zqlinkmark k6', 'zqlinkmark k7', 'zqlinkmark k8'];
+      put(db, k1!, { state: 'live' });
+      put(db, k2!, { state: 'live' });
+      put(db, k3!, { state: 'live' });
+      put(db, k4!, { state: 'pruned' });
+      put(db, k5!, { state: 'exported' });
+      put(db, k6!, { state: 'pruned' });
+      put(db, k7!, { state: 'pruned' });
+      put(db, k8!, { state: 'pruned' });
+      const variant = (i: number, text: string): PlantSegmentRow => ({ kind: 'variant', row: {
+        uuid: texts[i]!.uuid, blob_sha256: segmentSha(text), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown',
+      } });
+      const sidecar = (i: number, name: string, text: string): PlantSegmentRow => ({ kind: 'sidecar', row: {
+        cc_session_uuid: fam.uuid, agent_id: '', name, blob_sha256: segmentSha(text), uuid: texts[i]!.uuid, first_seen_ms: t0 + 5,
+      } });
+      // k4's stub rides in the segment, as a pass writes one for a pruned, unmarked blob its rows name; k6's, k7's and k8's do not:
+      // a variant, a linked sidecar and a kept blob on a pruned blob the segment does not carry, the shape of a row written when an
+      // earlier segment held the blob and read now, without that segment (D-5396)
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [...texts.map((t) => ({ text: t.text })), { text: null, sha256: segmentSha(k4!) }], rows: [
+        ...x10Rows(fam),
+        variant(0, k1!),
+        sidecar(1, 'k2.txt', k2!),
+        { kind: 'boundary', row: {
+          uuid: texts[2]!.uuid, cc_session_uuid: fam.uuid, agent_id: '', boundary_ord: 1, trigger: 'manual', head_uuid: null, anchor_uuid: null,
+          tail_uuid: null, kept_sha256: segmentSha(k3!), pre_tokens: null, post_tokens: null, duration_ms: null,
+        } },
+        variant(3, k4!),
+        sidecar(4, 'k5.txt', k5!),
+        variant(6, k6!),
+        sidecar(7, 'k7.txt', k7!),
+        { kind: 'boundary', row: {
+          uuid: texts[8]!.uuid, cc_session_uuid: fam.uuid, agent_id: '', boundary_ord: 2, trigger: 'manual', head_uuid: null, anchor_uuid: null,
+          tail_uuid: null, kept_sha256: segmentSha(k8!), pre_tokens: null, post_tokens: null, duration_ms: null,
+        } },
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entry_variants'), 'the rows linked the blobs').toBe(3);
+      expect(x10Count(db, 'sidecars')).toBe(3);
+      expect(x10Count(db, 'boundaries')).toBe(2);
+      expect(marksOf(db), 'a variant on a live blob, a sidecar on one, a kept blob on one: unmarked; a pruned blob the segment carries, an exported one and no extra row: marked; a variant, a sidecar and a kept blob on a pruned blob the segment does not carry: unmarked (D-5396)')
+        .toEqual([null, null, null, D_SEG, D_SEG, D_SEG, null, null, null]);
+      expect(strandedBlobsOn(db)).toEqual([]);
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('an entry the store already holds with a live, unmarked blob on any of its four references is not marked by its replayed row: its own blob, a variant\'s, a linked sidecar\'s, its boundary\'s kept blob', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-gather-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0xd00, 6, 'zqgather', t0);
+      const fam: X10Family = { uuid: x10U(0xd0), path: '/home/u/gone/gather.jsonl', ino: 9981, texts };
+      const [v, s, b] = ['zqgather variant', 'zqgather sidecar', 'zqgather kept'];
+      // Segment 1 builds the store as a backup would hold it: four entries each with one more reference, a plain one.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [...texts.map((t) => ({ text: t.text })), { text: v! }, { text: s! }, { text: b! }], rows: [
+        ...x10Rows(fam),
+        { kind: 'variant', row: { uuid: texts[0]!.uuid, blob_sha256: segmentSha(v!), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown' } },
+        { kind: 'sidecar', row: { cc_session_uuid: fam.uuid, agent_id: '', name: 's.txt', blob_sha256: segmentSha(s!), uuid: texts[1]!.uuid, first_seen_ms: t0 + 5 } },
+        { kind: 'boundary', row: {
+          uuid: texts[2]!.uuid, cc_session_uuid: fam.uuid, agent_id: '', boundary_ord: 1, trigger: 'manual', head_uuid: null, anchor_uuid: null,
+          tail_uuid: null, kept_sha256: segmentSha(b!), pre_tokens: null, post_tokens: null, duration_ms: null,
+        } },
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'CONTROL: every row of segment 1 is marked').toEqual(Array(6).fill(D_SEG));
+      // The state a restored backup holds after a late variant, a late sidecar, a late boundary and a revived blob: those
+      // entries unmarked over blobs no segment holds. Segment 1 is gone from the box; segment 2 holds the rows again.
+      fs.rmSync(path.join(exportDirOf(box), D_SEG));
+      db.exec('UPDATE entries SET exported_ms = NULL, exported_seg = NULL');
+      const unmark = db.prepare('UPDATE blobs SET exported_ms = NULL, exported_seg = NULL WHERE sha256 = ?');
+      for (const text of [v!, s!, b!, texts[3]!.text]) unmark.run(segmentSha(text));
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [], rows: x10Rows(fam) });
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now() + 5000);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'a variant, a sidecar, a boundary and the entry\'s own blob each hold their entry unmarked; the two with exported blobs are marked')
+        .toEqual([null, null, null, null, `2.${X10_WRITER}.db`, `2.${X10_WRITER}.db`]);
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  // D-5396 (history-export-bind-clears-pruned-referrers), refined: replay marks an entry from a segment only when that segment
+  // carries each of the entry's pruned blobs that no mark names (its stub or its bytes), so a mark names a segment that holds
+  // what the entry needs, as the pass's does (planSegment stubs those blobs in the segment that marks the entry). Among the
+  // segments that may mark it, the LAST takes the mark (D-5637 (history-export-replay-last-carrier), wave 5h-1, reversing the
+  // first-wins this case pinned for E4). An exported blob licenses any of them: its bytes are where its own mark names, and
+  // losing that segment clears the entry with the blob.
+  it('D-5396, refined: an entry whose own blob is pruned and unmarked is marked by the last segment that carries that blob (its stub or its bytes), never by one that carries the row without it; one no segment carries stays unmarked; a pruned blob that was exported licenses a segment whatever it carries', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5396-mark-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0xf00, 6, 'zqd5396mark', t0);
+      const fam: X10Family = { uuid: x10U(0xf0), path: '/home/u/gone/d5396mark.jsonl', ino: 9961, texts };
+      const stub = (text: string): PlantSegmentBlob => ({ text: null, sha256: segmentSha(text), rawLen: text.length });
+      const tombstone = (text: string, o: { exported: boolean }): void => {
+        db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms, exported_ms, exported_seg) VALUES (?, ?, NULL, ?, 1, ?, ?)')
+          .run(segmentSha(text), 'br5', text.length, o.exported ? 1 : null, o.exported ? '9.0a1b2c3d.db' : null);
+      };
+      // E0: its stub is in segment 2 alone, the rebuild's shape (segment 1 carries the row, not the blob). E1: a tombstone the
+      // store held before the replay (a restore's), carried by no segment. E2: the same, and segment 1 carries its BYTES. E3: the
+      // same but exported once (its mark names a segment this box lacks), carried by no segment. E4: its stub is in both
+      // segments (the last of the carriers takes it, D-5637). E5: a live blob, carried by segment 1.
+      tombstone(texts[1]!.text, { exported: false });
+      tombstone(texts[2]!.text, { exported: false });
+      tombstone(texts[3]!.text, { exported: true });
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: texts[2]!.text }, stub(texts[4]!.text), { text: texts[5]!.text }], rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [stub(texts[0]!.text), stub(texts[4]!.text)], rows: x10Rows({ ...fam, texts: [texts[0]!, texts[4]!] }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entries')).toBe(6);
+      expect(marksOf(db), 'E0 is marked by segment 2, which carries its stub, not by segment 1; E1 stays unmarked: no segment carries its blob; E2 is marked by segment 1, which carries its bytes; E3 by segment 1 (exported); E4 by segment 2, the last of the two that carry its stub (D-5637: first-wins gave segment 1); E5 by segment 1')
+        .toEqual([`2.${X10_WRITER}.db`, null, D_SEG, D_SEG, `2.${X10_WRITER}.db`, D_SEG]);
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced'), 'every blob is in the store, every row placed')
+        .toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+      expect(countersOn(db, 'export_blob_tombstone_kept'), 'segment 1\'s bytes of E2 met their tombstone').toEqual({ export_blob_tombstone_kept: 1 });
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  // D-5396, F1c. The row arms judged a pruned, unmarked blob a replayed row links against the segment being REPLAYED, not against
+  // the segment the entry's mark names: an entry segment 1 marked at its entry row kept that mark when segment 2's variant row
+  // linked a pruned late body that segment 2 carries as a stub and segment 1 does not. The shape is what a pass writes after a
+  // late variant and a prune: segment 1 holds the row and its first body's bytes; segment 2 holds the row again, both variants
+  // and the stub. Planted here for the three arms (a variant, a linked sidecar, a kept blob); the real flow is in
+  // history-export.test.ts. Since D-5637 (history-export-replay-last-carrier, wave 5h-1) segment 2's own entry row moves each
+  // entry's mark to segment 2 before its rows link the pruned bodies, so the rows meet an entry marked by the segment that
+  // carries their stubs, and the mark stays. The arm that clears an entry another segment marks is reached now only where the
+  // mark names a segment that does not order before the row's (a restore's backup): the D-5637 describe below pins it.
+  it('D-5396, F1c: a row of a later segment that links a pruned, unmarked blob it carries keeps the mark its own entry row moved to that segment (D-5637), whichever of the three row kinds it is, and an exported blob clears nothing', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5396-f1c-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x1000, 5, 'zqf1c', t0);
+      const fam: X10Family = { uuid: x10U(0x10), path: '/home/u/gone/f1c.jsonl', ino: 9941, texts };
+      const stub = (text: string): PlantSegmentBlob => ({ text: null, sha256: segmentSha(text), rawLen: text.length });
+      const [x0, x1, x2, x3, z4] = ['zqf1c late body x0', 'zqf1c sidecar x1', 'zqf1c kept x2', 'zqf1c late body x3', 'zqf1c exported z4'];
+      const variant = (i: number, text: string): PlantSegmentRow => ({ kind: 'variant', row: {
+        uuid: texts[i]!.uuid, blob_sha256: segmentSha(text), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown',
+      } });
+      // Segment 1 holds rows E0, E1, E2 and E4 with their own bytes. Segment 2 holds E0..E4 again (E3 for the first time), the
+      // pruned bodies as stubs, the exported one (z4) as bytes, and the rows that link them.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [texts[0]!, texts[1]!, texts[2]!, texts[4]!].map((t) => ({ text: t.text })),
+        rows: x10Rows({ ...fam, texts: [texts[0]!, texts[1]!, texts[2]!, texts[4]!] }) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: texts[3]!.text }, { text: z4 }, stub(x0), stub(x1), stub(x2), stub(x3)], rows: [
+        ...x10Rows(fam),
+        variant(0, texts[0]!.text),   // the reviewer's shape: the first body's link (exported, bytes in segment 1) ...
+        variant(0, x0),               // ... and the late body's, pruned before the pass: its stub is in segment 2 alone
+        { kind: 'sidecar', row: { cc_session_uuid: fam.uuid, agent_id: '', name: 'x1.txt', blob_sha256: segmentSha(x1), uuid: texts[1]!.uuid, first_seen_ms: t0 + 5 } },
+        { kind: 'boundary', row: {
+          uuid: texts[2]!.uuid, cc_session_uuid: fam.uuid, agent_id: '', boundary_ord: 1, trigger: 'manual', head_uuid: null, anchor_uuid: null,
+          tail_uuid: null, kept_sha256: segmentSha(x2), pre_tokens: null, post_tokens: null, duration_ms: null,
+        } },
+        variant(3, x3),   // E3 is in segment 2 alone: marked by it at its entry row, and the stub it links is carried by it
+        variant(4, z4),   // E4 was marked by segment 1: an exported blob (segment 2 holds its bytes) clears nothing
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entries')).toBe(5);
+      expect([x10Count(db, 'entry_variants'), x10Count(db, 'sidecars'), x10Count(db, 'boundaries')], 'the rows linked the blobs: E0 two variants, E3 and E4 one each').toEqual([4, 1, 1]);
+      expect(marksOf(db), 'E0 (a variant), E1 (a sidecar) and E2 (a kept blob): marked by segment 2, whose entry rows took the marks before its rows linked the pruned bodies it carries as stubs (D-5637: first-wins left segment 1\'s marks, and the rows cleared them); E3 by segment 2, which carries its stub; E4 by segment 2 too, over an exported blob')
+        .toEqual(Array(5).fill(`2.${X10_WRITER}.db`));
+      expect(db.prepare('SELECT count(*) AS n FROM blobs WHERE z IS NULL AND exported_ms IS NULL').get(), 'the four late bodies are tombstones no mark names').toEqual({ n: 4 });
+      expect(strandedBlobsOn(db)).toEqual([]);
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  // Minor 6 of review 614 (an optimisation that must keep replay's answers), as D-5637 (history-export-replay-last-carrier, wave 5h-1)
+  // reshapes it: a segment is asked whether it carries a pruned, unmarked blob only where it may take or holds the entry's mark. A
+  // later segment's entry row may take the mark from an earlier one (the last carrier wins), so it is asked; a segment that orders
+  // before the mark is not (the D-5637 describe's restore case); and a row that links a blob to an entry marked by ANOTHER segment
+  // measures nothing in this one (it cannot count as carried there).
+  it('D-5396, F1c: a segment is looked up only where it may take or holds the entry\'s mark: segment 1 for E0\'s pruned own blob, segment 2 (the last carrier, D-5637) for it again and for the pruned late body its variant row links; an exported blob costs none', async () => {
+    const proto = DatabaseSync.prototype;
+    const realPrepare = proto.prepare;
+    let lookups = 0;
+    const LOOKUP_SQL = 'SELECT 1 AS x FROM blobs WHERE sha256 = ?';   // store.mjs segmentHasBlob's statement
+    proto.prepare = function prepareCounting(this: DatabaseSync, sql: string) {
+      const st = realPrepare.call(this, sql);
+      if (sql !== LOOKUP_SQL) return st;
+      return new Proxy(st, {
+        get(t, k) {
+          const v: unknown = Reflect.get(t, k, t);
+          if (k === 'get') return (...a: unknown[]): unknown => { lookups += 1; return (v as (...x: unknown[]) => unknown).apply(t, a); };
+          return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+        },
+      });
+    } as typeof proto.prepare;
+    const { box, ids, db } = x10Store('ccrc-history-d5396-f1c-look-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x1100, 2, 'zqf1clook', t0);
+      const fam: X10Family = { uuid: x10U(0x11), path: '/home/u/gone/f1clook.jsonl', ino: 9942, texts };
+      const stub = (text: string): PlantSegmentBlob => ({ text: null, sha256: segmentSha(text), rawLen: text.length });
+      const late = 'zqf1clook late body';
+      // E0's own blob is pruned, its stub in BOTH segments (the one case a lookup is asked: pruned, and no mark names it); E1's is live
+      // and exported. Segment 2 repeats both rows, and links E0 to the pruned late body: a row of ANOTHER segment than E0's mark.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [stub(texts[0]!.text), { text: texts[1]!.text }], rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [stub(texts[0]!.text), stub(late)], rows: [
+        ...x10Rows(fam),
+        { kind: 'variant', row: { uuid: texts[0]!.uuid, blob_sha256: segmentSha(late), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown' } },
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(lookups, 'three lookups: segment 1 for E0\'s pruned own blob at its entry row; segment 2 for it again at E0\'s entry row there, which takes the mark (D-5637; first-wins asked nothing there); segment 2 for the pruned late body its variant row links to E0, now marked by segment 2; E1\'s exported blob costs none').toBe(3);
+      expect(marksOf(db), 'E0 is marked by segment 2, which carries both its pruned bodies as stubs; E1 by segment 2, over an exported blob (D-5637: first-wins left E0 unmarked and E1 on segment 1)')
+        .toEqual([`2.${X10_WRITER}.db`, `2.${X10_WRITER}.db`]);
+    } finally {
+      proto.prepare = realPrepare;
+      closeWriter(db);
+    }
+  });
+});
+
+// ── wave 5h-1: replay marks by the LAST carrier (D-5637 (history-export-replay-last-carrier)), closing review 621 F3 ────────
+// Every export of an entry writes all the store holds of it, and every export of a blob carries every unlinked row naming it,
+// and nothing deletes those rows, so a later segment that carries a row holds everything an earlier one did. Replay used to
+// mark by the FIRST carrier, so a row that only a later segment holds (a late variant over bytes another entry exported, a
+// later unlinked sidecar row) had no mark naming its one carrier: once that segment was lost, the check after a bind cleared
+// nothing and nothing exported the row again. In-process on planted segments; the real verbs are F6's double fault above.
+describe('D-5637: export replay marks an entry and a blob by the last segment that carries them (wave 5h-1; review 621 F3)', () => {
+  const seg = (n: number): string => `${n}.${X10_WRITER}.db`;
+  const marksOf = (db: DatabaseSync): Array<string | null> =>
+    db.prepare('SELECT exported_seg AS seg FROM entries ORDER BY ts_ms, entry_id').all().map((r) => (r as { seg: string | null }).seg);
+  const blobMarkOf = (db: DatabaseSync, text: string): string | null =>
+    (db.prepare('SELECT exported_seg AS seg FROM blobs WHERE sha256 = ?').get(segmentSha(text)) as { seg: string | null }).seg;
+  const stub = (text: string): PlantSegmentBlob => ({ text: null, sha256: segmentSha(text), rawLen: text.length });
+
+  it('the variant probe: segment 2 carries an entry again with a late variant over bytes segment 1 exported with another entry; the entry is marked by segment 2, the only one that holds that link', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5637-variant-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x1700, 2, 'zqd5637v', t0);
+      const fam: X10Family = { uuid: x10U(0x17), path: '/home/u/gone/d5637v.jsonl', ino: 9951, texts };
+      const variant = (i: number, text: string): PlantSegmentRow => ({ kind: 'variant', row: {
+        uuid: texts[i]!.uuid, blob_sha256: segmentSha(text), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown',
+      } });
+      // Segment 1: E0 and E1 with their bytes. E0 then gains a variant whose body is E1's (already exported), so the pass
+      // writes E0 again with both its variants and no bytes: segment 2.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [], rows: [
+        ...x10Rows({ ...fam, texts: [texts[0]!] }), variant(0, texts[0]!.text), variant(0, texts[1]!.text),
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entry_variants'), 'CONTROL: segment 2 linked E0 to the second body').toBe(2);
+      expect(marksOf(db), 'E0 is marked by segment 2, the last segment that carries it and the only one with its late variant; E1 by segment 1')
+        .toEqual([seg(2), seg(1)]);
+      expect([blobMarkOf(db, texts[0]!.text), blobMarkOf(db, texts[1]!.text)], 'segment 2 carries no bytes, so each blob keeps segment 1').toEqual([seg(1), seg(1)]);
+      expect(strandedBlobsOn(db)).toEqual([]);
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('the unlinked-row probe: segment 2 carries a blob\'s bytes again with a new unlinked sidecar row (D-5399\'s re-export); the blob is marked by segment 2, and so is the entry segment 2 carried again', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5637-unlinked-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x1800, 2, 'zqd5637u', t0);
+      const fam: X10Family = { uuid: x10U(0x18), path: '/home/u/gone/d5637u.jsonl', ino: 9952, texts };
+      const out = 'zqd5637u the saved tool output';
+      const sidecar = (name: string, uuid: string | null): PlantSegmentRow => ({ kind: 'sidecar', row: {
+        cc_session_uuid: fam.uuid, agent_id: '', name, blob_sha256: segmentSha(out), uuid, first_seen_ms: t0 + 5,
+      } });
+      // Segment 1: E0 links the output through its sidecar, the bytes with it. Segment 2: an unlinked row naming the same bytes
+      // took the blob's mark off and its referrer's (D-5399), so the pass carried the bytes again, E0 with its linked row, and
+      // the unlinked row.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [...texts.map((t) => ({ text: t.text })), { text: out }],
+        rows: [...x10Rows(fam), sidecar('d5637u-linked.txt', texts[0]!.uuid)] });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: out }],
+        rows: [...x10Rows({ ...fam, texts: [texts[0]!] }), sidecar('d5637u-linked.txt', texts[0]!.uuid), sidecar('d5637u-orphan.txt', null)] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT name, entry_id IS NULL AS unlinked FROM sidecars ORDER BY name').all().map((r) => ({ ...(r as object) })), 'CONTROL: both rows placed')
+        .toEqual([{ name: 'd5637u-linked.txt', unlinked: 0 }, { name: 'd5637u-orphan.txt', unlinked: 1 }]);
+      expect(blobMarkOf(db, out), 'the blob is marked by segment 2, the last that carries its bytes and the only one with the unlinked row').toBe(seg(2));
+      expect(marksOf(db), 'E0, carried again by segment 2, is marked by it; E1 keeps segment 1').toEqual([seg(2), seg(1)]);
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a mark naming a segment that orders AFTER the one being replayed stays, on an entry and on a blob, as a restore\'s backup holds it; a row of the earlier segment that links a pruned, unmarked blob to such an entry still takes its mark off (D-5396)', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5637-later-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x1900, 2, 'zqd5637l', t0);
+      const fam: X10Family = { uuid: x10U(0x19), path: '/home/u/gone/d5637l.jsonl', ino: 9953, texts };
+      const late = 'zqd5637l late body, pruned before the pass';
+      const variant: PlantSegmentRow = { kind: 'variant', row: {
+        uuid: texts[1]!.uuid, blob_sha256: segmentSha(late), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown',
+      } };
+      const every = { blobs: [...texts.map((t) => ({ text: t.text })), stub(late)], rows: [...x10Rows(fam), variant] };
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, ...every });
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, ...every });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'CONTROL: the first replay marks both entries by segment 3, the last carrier').toEqual([seg(3), seg(3)]);
+      expect(texts.map((t) => blobMarkOf(db, t.text)), 'CONTROL: and both bodies').toEqual([seg(3), seg(3)]);
+      // The store now holds marks naming segment 3, as a backup taken after its pass does; segment 3 is not on this box, and a
+      // replay of segments 1 and 2 (a restore's) runs over those marks.
+      fs.renameSync(path.join(exportDirOf(box), seg(3)), path.join(box.home, seg(3)));
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now() + 5000);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(texts.map((t) => blobMarkOf(db, t.text)), 'a blob marked by a later segment keeps that mark: segments 1 and 2 order before it').toEqual([seg(3), seg(3)]);
+      expect(marksOf(db), 'E0 keeps segment 3; E1 loses it, because segment 2\'s variant row links the pruned late body and what segment 3 carries is not measured (D-5396\'s over-clear, never a loss): the check after the restore\'s bind clears E0 with the missing segment')
+        .toEqual([seg(3), null]);
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a later carrier that lacks a pruned, unmarked blob the entry needs takes the earlier mark off too, so the next pass writes the entry with the stub: the same seq from two writers, a directory carried in from another box (over-clearing, never a loss)', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5637-lacks-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x1a00, 2, 'zqd5637k', t0);
+      const fam: X10Family = { uuid: x10U(0x1a), path: '/home/u/gone/d5637k.jsonl', ino: 9954, texts };
+      const OTHER = 'ffffffff';   // orders after X10_WRITER at the same seq
+      // E0's own body was pruned before any pass: segment 1 of this writer carries its stub; segment 1 of the other writer
+      // carries E0's row without it. E1 is live and carried by both.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [stub(texts[0]!.text), { text: texts[1]!.text }], rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 1, writer: OTHER, blobs: [{ text: texts[1]!.text }], rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced'), 'CONTROL: both rows placed').toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+      // D-5726 (history-export-replay-mark-one-writer) re-expects E1: D-5637 moved its mark across writers to the later carrier
+      // (`1.ffffffff.db`); now a mark comes off across a fork (two writers at an equal seq), so E1 is unmarked too and owed to the pass (E0 was unmarked either way).
+      expect(marksOf(db), 'E0 is unmarked: the later carrier holds its row without the stub, and the earlier mark goes with it; E1 is unmarked too since D-5726: across a fork the marks come off')
+        .toEqual([null, null]);
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+});
+
+// ── W1-B4 whole-branch review: replay resumes after a segment the operator moved aside (D-4765's way out) ───────────
+// ── wave 5h-1: a mark moves to a later carrier of the same writer or of a successor writer, and comes off across a fork (D-5726 (history-export-replay-mark-one-writer)) ──
+// D-5637 marked a row by its last carrier in (seq, writer) order, which holds within one writer, and to a successor writer (a rebind's
+// new token, all its seqs above the earlier writer's): every export of a writer writes all the store held of a row, and nothing deletes
+// those rows. Across a fork (two writers whose seqs interleave or touch: a directory carried in from another box, or a split brain)
+// the content order is unknown, so a mark moved to the other writer's segment could name one that lacks a row only the earlier carrier
+// holds; with the earlier one lost the check cleared nothing and the row was never written again. Replay now takes the mark OFF across
+// a fork (lib decideReplayMark), so the pass writes the row again. A held mark naming an unlisted segment of another writer stays for
+// the check, and comes off at once in a forked directory. In-process on planted segments, the pass and the check run in-process too,
+// and the second rebuild is a fresh store of the same id replaying the segments that are left. The first assertions on the rebuilt
+// store are soft, so a red there still runs on to the loss it guards.
+describe('D-5726: replay moves an export mark to a later carrier of the same writer or of a successor writer; across a fork it comes off, and a held mark naming an unlisted segment of another writer stays for the check (wave 5h-1; whole-branch review)', () => {
+  const W1 = X10_WRITER;
+  const W2 = 'ffffffff';
+  const seg = (n: number, w: string = W1): string => `${n}.${w}.db`;
+  const marksOf = (db: DatabaseSync): Array<string | null> =>
+    db.prepare('SELECT exported_seg AS seg FROM entries ORDER BY ts_ms, entry_id').all().map((r) => (r as { seg: string | null }).seg);
+  const blobMarkOf = (db: DatabaseSync, text: string): string | null =>
+    (db.prepare('SELECT exported_seg AS seg FROM blobs WHERE sha256 = ?').get(segmentSha(text)) as { seg: string | null }).seg;
+  const stub = (text: string): PlantSegmentBlob => ({ text: null, sha256: segmentSha(text), rawLen: text.length });
+  const roomy = async (): Promise<{ bsize: number; bavail: number; blocks: number }> => ({ bsize: 1, bavail: 4 * 2 ** 40, blocks: 8 * 2 ** 40 });
+  const passCtx = (box: HistoryBox, ids: { storeId: string; writer: string }, now: () => number): Record<string, unknown> => ({
+    home: box.home, paths: historyPaths(box.home), ids, now, out: () => {}, deps: { statfs: roomy }, homes: box.homes, rosterUnreadable: false,
+    parsed: { secrets: [], homes: box.homes, rosterUnreadable: false }, budget: SW.newBudget(now, {}),
+  });
+  /** One export pass two hours on, then the live segment names. */
+  const passAfterRebuild = async (box: HistoryBox, ids: { storeId: string; writer: string }, db: DatabaseSync): Promise<string[]> => {
+    const later = Date.now() + 2 * 3_600_000;
+    // The store has ticked never, so its first-hour rule would hold the pass: a last pass a day ago makes it due.
+    setMeta(db, HEALTH_META.exportPassMs, String(later - 24 * 3_600_000));
+    await SW.exportStep(db, passCtx(box, ids, () => later));
+    return segmentsOf(box);
+  };
+  /** The check after a bind, over what export/ holds now. */
+  const checkAfterLoss = (box: HistoryBox, ids: { storeId: string; writer: string }, db: DatabaseSync): { cleared: number; segments: string[] } => {
+    const out = SW.checkSegmentMarks(db, passCtx(box, ids, () => Date.now() + 3 * 3_600_000), '["bound:1"]');
+    expect(out.stopped, 'the check ran to its done stamp').toBeNull();
+    return out;
+  };
+  const moveAside = (box: HistoryBox, name: string): void => {
+    const aside = path.join(box.home, 'export-aside');
+    fs.mkdirSync(aside, { recursive: true });
+    fs.renameSync(path.join(exportDirOf(box), name), path.join(aside, name));
+  };
+  /** The second rebuild: a fresh store of the same id on a fresh box, the live segments copied in, the recovery step run. */
+  const rebuildAgain = async (box: HistoryBox, ids: { storeId: string }): Promise<{ db: DatabaseSync; box2: HistoryBox; ids2: { storeId: string; writer: string } }> => {
+    const box2 = makeHistoryBox('ccrc-history-d5726-again-');
+    const ids2 = createStore(box2.home, { storeId: ids.storeId });
+    const db2 = openWriter(historyPaths(box2.home).dbFile);
+    db2.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+    const dir2 = path.join(box2.root, 'export', ids.storeId);
+    fs.mkdirSync(dir2, { recursive: true, mode: 0o700 });
+    for (const n of segmentsOf(box)) fs.copyFileSync(path.join(exportDirOf(box), n), path.join(dir2, n));
+    expect(await SW.recoveryStep(db2, stepCtx(box2, ids2))).toEqual({ moved: true, done: true, held: false });
+    return { db: db2, box2, ids2 };
+  };
+  const unmarkedOn = (db: DatabaseSync): { entries: number; blobs: number } => ({
+    entries: Number((db.prepare('SELECT count(*) AS n FROM entries WHERE exported_ms IS NULL').get() as { n: number }).n),
+    blobs: Number((db.prepare('SELECT count(*) AS n FROM blobs WHERE z IS NOT NULL AND exported_ms IS NULL').get() as { n: number }).n),
+  });
+  const sidecarNames = (db: DatabaseSync): string[] =>
+    db.prepare('SELECT name FROM sidecars ORDER BY name').all().map((r) => (r as { name: string }).name);
+  const sidecarRow = (fam: X10Family, name: string, blobText: string, uuid: string | null, t0: number): PlantSegmentRow =>
+    ({ kind: 'sidecar', row: { cc_session_uuid: fam.uuid, agent_id: '', name, blob_sha256: segmentSha(blobText), uuid, first_seen_ms: t0 + 5 } });
+
+  it('(a) an unlinked sidecar row only writer 1\'s segment carries: writer 2\'s segment at the same seq carries the blob without it; the rebuild leaves the blob unmarked and counts the take-off, a pass writes both again, and with writer 1\'s segment lost the second rebuild still finds the row', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-a-');
+    let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2100, 1, 'zqd5726a', t0);
+      const fam: X10Family = { uuid: x10U(0x21), path: '/home/u/gone/d5726a.jsonl', ino: 9971, texts };
+      const out = 'zqd5726a the tool output two writers carry';
+      const linked = sidecarRow(fam, 'd5726a-linked.txt', out, texts[0]!.uuid, t0);
+      const orphan = sidecarRow(fam, 'd5726a-orphan.txt', out, null, t0);
+      const blobs = [...texts.map((t) => ({ text: t.text })), { text: out }];
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs, rows: [...x10Rows(fam), linked, orphan] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W2, blobs, rows: [...x10Rows(fam), linked] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(sidecarNames(db), 'CONTROL: the orphan row is placed').toEqual(['d5726a-linked.txt', 'd5726a-orphan.txt']);
+      expect.soft(blobMarkOf(db, out), 'D-5726: the blob two writers carry is unmarked, owed to the pass (D-5637 moved it to writer 2\'s segment)').toBeNull();
+      expect.soft(marksOf(db), 'and so is the entry that references it').toEqual([null]);
+      expect.soft(countersOn(db, 'export_mark_taken_off')['export_mark_taken_off'], 'the take-off is counted, once for the entry\'s body and once for the sidecar\'s').toBe(2);
+      expect(strandedBlobsOn(db)).toEqual([]);
+      const live = await passAfterRebuild(box, ids, db);
+      const fresh = live.filter((n) => n !== seg(5, W1) && n !== seg(5, W2));
+      expect.soft(fresh, 'the pass wrote one segment').toHaveLength(1);
+      expect.soft(fresh[0], 'of the current writer').toBe(`6.${ids.writer}.db`);
+      if (fresh[0] !== undefined) expect.soft(segmentRows(path.join(exportDirOf(box), fresh[0]), 'sidecars').map((r) => r['name']).sort(), 'carrying the orphan row and the linked one').toEqual(['d5726a-linked.txt', 'd5726a-orphan.txt']);
+      expect.soft([blobMarkOf(db, out), ...marksOf(db)], 'the blob and the entry are marked by it').toEqual([fresh[0] ?? null, fresh[0] ?? null]);
+      moveAside(box, seg(5, W1));
+      expect.soft(checkAfterLoss(box, ids, db).segments, 'no mark names writer 1\'s lost segment, so the check clears nothing').toEqual([]);
+      expect.soft([blobMarkOf(db, out), ...marksOf(db)], 'nothing named the lost segment: both marks stand').toEqual([fresh[0] ?? null, fresh[0] ?? null]);
+      again = await rebuildAgain(box, ids);
+      expect(sidecarNames(again.db), 'the second rebuild still finds the orphan row').toEqual(['d5726a-linked.txt', 'd5726a-orphan.txt']);
+      expect(countersOn(again.db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      if (again !== null) closeWriter(again.db);
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('(b) an entry variant only writer 1\'s segment carries, a fork: the bodies\' bytes are in an earlier segment of writer 2 and neither fork segment carries them, so the entry take-off at writer 2\'s same-seq segment is the only thing that unmarks the entry; a pass writes it again, and with writer 1\'s segment lost the second rebuild still finds the variant', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-b-');
+    let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2200, 2, 'zqd5726b', t0);
+      const fam: X10Family = { uuid: x10U(0x22), path: '/home/u/gone/d5726b.jsonl', ino: 9972, texts };
+      const variant: PlantSegmentRow = { kind: 'variant', row: {
+        uuid: texts[0]!.uuid, blob_sha256: segmentSha(texts[1]!.text), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown',
+      } };
+      // Writer 2's seq 4 carries both bodies and no row. Writer 1's seq 5 carries E0 and E1 with the variant whose body is E1\'s;
+      // writer 2\'s seq 5 carries both entries and no variant. The ranges interleave (w2 [4, 5], w1 [5, 5]): a fork. Every blob the
+      // entries reference is exported by writer 2\'s seq 4 and never taken off, so only the ENTRY arm can unmark the entries.
+      plantSegment(box, ids.storeId, { seq: 4, writer: W2, blobs: texts.map((t) => ({ text: t.text })), rows: [] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [], rows: [...x10Rows(fam), variant] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W2, blobs: [], rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entry_variants'), 'CONTROL: the variant is placed').toBe(1);
+      expect(texts.map((t) => blobMarkOf(db, t.text)), 'CONTROL: both bodies stay marked by writer 2\'s seq 4, no blob take-off').toEqual([seg(4, W2), seg(4, W2)]);
+      expect.soft(marksOf(db), 'D-5726: both entries are unmarked (marked by writer 1\'s segment, taken off at writer 2\'s)').toEqual([null, null]);
+      expect.soft(countersOn(db, 'export_mark_taken_off')['export_mark_taken_off'], 'two entry take-offs').toBe(2);
+      expect(strandedBlobsOn(db)).toEqual([]);
+      const live = await passAfterRebuild(box, ids, db);
+      const fresh = live.filter((n) => ![seg(4, W2), seg(5, W1), seg(5, W2)].includes(n));
+      expect.soft(fresh, 'the pass wrote one segment').toHaveLength(1);
+      if (fresh[0] !== undefined) expect.soft(segmentRows(path.join(exportDirOf(box), fresh[0]), 'variants'), 'carrying the variant').toHaveLength(1);
+      moveAside(box, seg(5, W1));
+      checkAfterLoss(box, ids, db);
+      again = await rebuildAgain(box, ids);
+      expect(x10Count(again.db, 'entry_variants'), 'the second rebuild still finds the variant').toBe(1);
+      expect(countersOn(again.db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      if (again !== null) closeWriter(again.db);
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('(c) split brain: writer 1 at seq 5 and 6 and writer 2 at seq 5 all carry the blob, and the unlinked row is in writer 2\'s alone; the take-off at writer 2\'s segment is sticky, so writer 1\'s later segment cannot re-mark the blob, and with writer 2\'s segment lost after a pass the second rebuild still finds the row', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-c-');
+    let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2300, 1, 'zqd5726c', t0);
+      const fam: X10Family = { uuid: x10U(0x23), path: '/home/u/gone/d5726c.jsonl', ino: 9973, texts };
+      const out = 'zqd5726c the tool output a split brain carries';
+      const linked = sidecarRow(fam, 'd5726c-linked.txt', out, texts[0]!.uuid, t0);
+      const orphan = sidecarRow(fam, 'd5726c-orphan.txt', out, null, t0);
+      const blobs = [...texts.map((t) => ({ text: t.text })), { text: out }];
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs, rows: [...x10Rows(fam), linked] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W2, blobs, rows: [...x10Rows(fam), linked, orphan] });
+      plantSegment(box, ids.storeId, { seq: 6, writer: W1, blobs, rows: [...x10Rows(fam), linked] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(sidecarNames(db), 'CONTROL: the orphan row is placed').toEqual(['d5726c-linked.txt', 'd5726c-orphan.txt']);
+      expect.soft(blobMarkOf(db, out), 'D-5726: the blob stays unmarked: the later segment of writer 1 cannot re-mark a row whose earlier carriers disagree').toBeNull();
+      expect.soft(marksOf(db), 'and so does the entry').toEqual([null]);
+      expect(strandedBlobsOn(db)).toEqual([]);
+      const live = await passAfterRebuild(box, ids, db);
+      const fresh = live.filter((n) => ![seg(5, W1), seg(5, W2), seg(6, W1)].includes(n));
+      expect.soft(fresh, 'the pass wrote one segment').toHaveLength(1);
+      if (fresh[0] !== undefined) expect.soft(segmentRows(path.join(exportDirOf(box), fresh[0]), 'sidecars').map((r) => r['name']).sort()).toEqual(['d5726c-linked.txt', 'd5726c-orphan.txt']);
+      moveAside(box, seg(5, W2));
+      checkAfterLoss(box, ids, db);
+      again = await rebuildAgain(box, ids);
+      expect(sidecarNames(again.db), 'the second rebuild still finds the orphan row').toEqual(['d5726c-linked.txt', 'd5726c-orphan.txt']);
+    } finally {
+      if (again !== null) closeWriter(again.db);
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('(g) after a forked rebuild and a pass, two old writers\' segments leave the listing: the check re-arms (D-5636), clears the one mark that still names them, and the pass rewrites that row under the current writer', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-g-');
+    let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2700, 2, 'zqd5726g', t0);
+      const fam: X10Family = { uuid: x10U(0x27), path: '/home/u/gone/d5726g.jsonl', ino: 9977, texts };
+      const out = 'zqd5726g the tool output two writers carry';
+      const linked = sidecarRow(fam, 'd5726g-linked.txt', out, texts[0]!.uuid, t0);
+      const orphan = sidecarRow(fam, 'd5726g-orphan.txt', out, null, t0);
+      // Writer 1 carries E0 and E1 and the sidecar blob with both its rows; writer 2 carries E0 and the blob with the linked row.
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [...texts.map((t) => ({ text: t.text })), { text: out }], rows: [...x10Rows(fam), linked, orphan] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W2, blobs: [{ text: texts[0]!.text }, { text: out }], rows: [...x10Rows({ ...fam, texts: [texts[0]!] }), linked] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'E0, which both writers carry, is unmarked; E1, which only writer 1 carries, keeps writer 1\'s mark').toEqual([null, seg(5, W1)]);
+      expect(countersOn(db, 'export_mark_taken_off')['export_mark_taken_off'], 'E0\'s body and the sidecar blob were taken off').toBe(2);
+      // The pass re-exports what the two forked writers shared, and lets the re-export land.
+      const first = await passAfterRebuild(box, ids, db);
+      const s6 = `6.${ids.writer}.db`;
+      expect(first, 'the pass wrote one segment').toEqual([seg(5, W1), seg(5, W2), s6]);
+      expect(unmarkedOn(db), 'and nothing is left due: no entry and no live blob is unmarked').toEqual({ entries: 0, blobs: 0 });
+      expect(marksOf(db), 'E0 is marked by it; E1 still names writer 1').toEqual([s6, seg(5, W1)]);
+      // Both old writers\' segments leave the listing (moved out of export/).
+      moveAside(box, seg(5, W1));
+      moveAside(box, seg(5, W2));
+      expect(segmentsOf(box), 'only the current writer\'s segment is left').toEqual([s6]);
+      const later = Date.now() + 5 * 3_600_000;
+      setMeta(db, HEALTH_META.exportPassMs, String(later - 24 * 3_600_000));
+      await SW.exportStep(db, passCtx(box, ids, () => later));   // the check re-arms on the changed listing, then the pass runs
+      expect(countersOn(db, 'export_segment_missing')['export_segment_missing'], 'the check found writer 1\'s segment missing: the one mark that named it').toBe(1);
+      const s7 = `7.${ids.writer}.db`;
+      expect(segmentsOf(box), 'and the pass wrote E1 again into the current writer\'s second segment').toEqual([s6, s7]);
+      expect(segmentRows(path.join(exportDirOf(box), s7), 'entries').map((r) => r['uuid']), 'E1 alone').toEqual([texts[1]!.uuid]);
+      expect(marksOf(db), 'every mark names a segment of the current writer').toEqual([s6, s7]);
+      expect(unmarkedOn(db)).toEqual({ entries: 0, blobs: 0 });
+      // The directory now holds one writer, so a rebuild from it takes nothing off, and the orphan row is found.
+      again = await rebuildAgain(box, ids);
+      expect(countersOn(again.db, 'export_mark_taken_off'), 'one writer: nothing taken off').toEqual({ export_mark_taken_off: 0 });
+      expect(sidecarNames(again.db), 'and the orphan row is found').toEqual(['d5726g-linked.txt', 'd5726g-orphan.txt']);
+      expect(marksOf(again.db), 'each entry is marked by its last carrier').toEqual([s6, s7]);
+    } finally {
+      if (again !== null) closeWriter(again.db);
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('(h) CONTROL, a successor: a rebuild, a pass (the rebuild\'s new writer writes a segment), and a second rebuild: the second writer\'s seqs are all above the first\'s, so the mark moves to its segment, nothing is taken off, and a pass after the second rebuild writes nothing', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-h-');
+    let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2800, 2, 'zqd5726h', t0);
+      const fam: X10Family = { uuid: x10U(0x28), path: '/home/u/gone/d5726h.jsonl', ino: 9978, texts };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'CONTROL: the first rebuild marks both entries by the only segment').toEqual([seg(1), seg(1)]);
+      // E0 is due again, as a late variant's ingest makes it (its mark cleared): the pass writes it into the rebuild\'s writer\'s segment.
+      db.prepare('UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE uuid = ?').run(texts[0]!.uuid);
+      const live = await passAfterRebuild(box, ids, db);
+      const s2 = `2.${ids.writer}.db`;
+      expect(live, 'CONTROL: the pass wrote the successor writer\'s first segment').toEqual([seg(1), s2]);
+      again = await rebuildAgain(box, ids);
+      expect(countersOn(again.db, 'export_mark_taken_off'), 'a successor takes nothing off').toEqual({ export_mark_taken_off: 0 });
+      expect(marksOf(again.db), 'E0 is marked by the successor\'s segment, E1 by the first writer\'s').toEqual([s2, seg(1)]);
+      expect(texts.map((t) => blobMarkOf(again!.db, t.text)), 'the bodies stay with the first writer, the only one that carries them').toEqual([seg(1), seg(1)]);
+      expect(strandedBlobsOn(again.db)).toEqual([]);
+      await passAfterRebuild(again.box2, again.ids2, again.db);
+      expect(fs.readdirSync(path.join(again.box2.root, 'export', ids.storeId)).sort(), 'and a pass after the second rebuild writes nothing').toEqual([seg(1), s2]);
+    } finally {
+      if (again !== null) closeWriter(again.db);
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('(i) a fork made by interleaved ranges, not an equal seq: writer 1 at seq 5 and 7 and writer 2 at seq 6 carry the blob; the mark comes off at writer 2\'s segment and writer 1\'s seq 7 cannot re-mark it', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-i-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2900, 1, 'zqd5726i', t0);
+      const fam: X10Family = { uuid: x10U(0x29), path: '/home/u/gone/d5726i.jsonl', ino: 9979, texts };
+      const blobs = texts.map((t) => ({ text: t.text }));
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs, rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 6, writer: W2, blobs, rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 7, writer: W1, blobs, rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect([blobMarkOf(db, texts[0]!.text), ...marksOf(db)], 'D-5726: the blob and the entry are unmarked, owed to the pass').toEqual([null, null]);
+      expect(countersOn(db, 'export_mark_taken_off')['export_mark_taken_off'], 'the blob take-off at writer 2\'s segment is counted').toBe(1);
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  // ── FR1 F1: a held mark that names a segment the listing does not hold (moved aside after a recovery) ──────────────────────
+  // A restore's backup marks E0 by `2.W1`, then the operator moves that segment aside (the rule once a recovery has finished). The
+  // store still holds the mark, and a replay that moved it onto another writer's segment would leave the check after a bind nothing
+  // to clear: the rows only the missing segment carried would never be exported again. The three cases below pin the rule: a held
+  // mark naming an unlisted segment of ANOTHER writer stays for the check ('keep'), or comes off at once in a forked directory.
+  // E0 carries two entry_variants in the segment that is moved aside or lost (counted with `x10Count(d, 'entry_variants')`).
+  const variantRows = (fam: X10Family, texts: X10Text[], t0: number): PlantSegmentRow[] => [
+    { kind: 'variant', row: { uuid: texts[0]!.uuid, blob_sha256: segmentSha(texts[0]!.text), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown' } },
+    { kind: 'variant', row: { uuid: texts[0]!.uuid, blob_sha256: segmentSha(texts[1]!.text), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 6, cause: 'unknown' } },
+  ];
+  /** The recovery step run again, as a restore does: the step re-armed, then one full step. */
+  const recoverAgain = async (box: HistoryBox, ids: { storeId: string; writer: string }, db: DatabaseSync): Promise<unknown> => {
+    db.prepare("UPDATE derivation_state SET cursor = NULL, completed_ms = NULL, version = ? WHERE step = 'recover'").run(Date.now() + 7);
+    return SW.recoveryStep(db, stepCtx(box, ids));
+  };
+
+  it('J (FR1 F1, arm B) a restore\'s backup marks E0 by writer 1\'s seq 2, the operator moves it aside, and writer 2\'s seq 3 carries E0 without the variants: the mark stays on the missing segment, the check clears it, the pass writes E0 again, and the rebuild from export holds E0\'s two variants', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-j-');
+    let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2a00, 2, 'zqd5726j', t0);
+      const fam: X10Family = { uuid: x10U(0x2a), path: '/home/u/gone/d5726j.jsonl', ino: 9980, texts };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [], rows: [...x10Rows({ ...fam, texts: [texts[0]!] }), ...variantRows(fam, texts, t0)] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'the backup state: E0 marked by writer 1 seq 2').toEqual([seg(2), seg(1)]);
+      expect(x10Count(db, 'entry_variants'), 'the backup holds E0\'s two variants').toBe(2);
+      moveAside(box, seg(2));
+      const side = 'zqd5726j a late sidecar writer 2 linked';
+      plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [{ text: side }], rows: [...x10Rows({ ...fam, texts: [texts[0]!] }), sidecarRow(fam, 'd5726j.txt', side, texts[0]!.uuid, t0)] });
+      expect.soft(await recoverAgain(box, ids, db), 'the restore\'s replay completes').toEqual({ moved: true, done: true, held: false });
+      expect.soft(marksOf(db), 'D-5726 (FR1 F1): E0\'s mark stays on the segment that is gone, for the check').toEqual([seg(2), seg(1)]);
+      expect.soft(checkAfterLoss(box, ids, db).segments, 'the check finds the missing segment, named by the mark').toEqual([seg(2)]);
+      expect.soft(marksOf(db), 'and clears E0\'s mark').toEqual([null, seg(1)]);
+      const live = await passAfterRebuild(box, ids, db);
+      expect.soft(live, 'the pass wrote E0 into a segment of the current writer').toEqual([seg(1), seg(3, W2), `4.${ids.writer}.db`]);
+      expect.soft(unmarkedOn(db), 'and nothing is left due').toEqual({ entries: 0, blobs: 0 });
+      again = await rebuildAgain(box, ids);
+      expect(x10Count(again.db, 'entry_variants'), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      if (again !== null) closeWriter(again.db);
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('K (FR1 F1, the forked arm) a held mark naming a missing segment of writer 1, in a directory that holds a fork: writer 2\'s seq 5 takes it off at once, and writer 1\'s seq 7, which lacks the variants, cannot re-mark the row; the pass writes E0 again, and with writer 2\'s segment lost the rebuild from export holds E0\'s two variants', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-k-');
+    let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2b00, 2, 'zqd5726k', t0);
+      const fam: X10Family = { uuid: x10U(0x2b), path: '/home/u/gone/d5726k.jsonl', ino: 9981, texts };
+      const e0 = { ...fam, texts: [texts[0]!] };
+      plantSegment(box, ids.storeId, { seq: 3, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 4, writer: W1, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'the backup state: E0 marked by writer 1 seq 4').toEqual([seg(4), seg(3)]);
+      expect(x10Count(db, 'entry_variants'), 'the backup holds E0\'s two variants').toBe(2);
+      moveAside(box, seg(4));
+      plantSegment(box, ids.storeId, { seq: 5, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      plantSegment(box, ids.storeId, { seq: 7, writer: W1, blobs: [], rows: x10Rows(e0) });
+      expect.soft(await recoverAgain(box, ids, db), 'the restore\'s replay completes').toEqual({ moved: true, done: true, held: false });
+      expect.soft(marksOf(db), 'D-5726 (FR1 F1): E0\'s mark came off at writer 2\'s segment (a fork), and writer 1\'s seq 7 did not re-mark it').toEqual([null, seg(3)]);
+      expect.soft(countersOn(db, 'export_mark_taken_off')['export_mark_taken_off'], 'one take-off').toBe(1);
+      expect.soft(checkAfterLoss(box, ids, db).segments, 'no mark names a missing segment now').toEqual([]);
+      const live = await passAfterRebuild(box, ids, db);
+      expect.soft(live, 'the pass wrote E0 into a segment of the current writer').toEqual([seg(3), seg(5, W2), seg(7), `8.${ids.writer}.db`]);
+      expect.soft(unmarkedOn(db), 'and nothing is left due').toEqual({ entries: 0, blobs: 0 });
+      moveAside(box, seg(5, W2));
+      checkAfterLoss(box, ids, db);
+      again = await rebuildAgain(box, ids);
+      expect(x10Count(again.db, 'entry_variants'), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      if (again !== null) closeWriter(again.db);
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('L (FR1 F1, the fork the listing hides) the backup\'s mark names writer 1\'s seq 2, moved aside; writer 1 lists only seq 5 and writer 2 only seq 3, so by the listing alone they succeed one another and no fork shows: the marked name puts writer 1 at seq 2 to 5, a fork with writer 2, so the take-off comes at the third writer\'s seq 1 rows (E0\'s held mark names the unlisted writer-1 seq 2, of another writer, in a layout forked by the marked name), and neither seq 3 nor seq 5, which lacks the variants, can re-mark it; with writer 2\'s segment lost after a pass the rebuild from export holds E0\'s two variants', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-l-');
+    let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
+    try {
+      const W0 = '00000001';   // a third writer, below both: it carries the bodies, so no mark but E0's names a segment that goes
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2c00, 2, 'zqd5726l', t0);
+      const fam: X10Family = { uuid: x10U(0x2c), path: '/home/u/gone/d5726l.jsonl', ino: 9982, texts };
+      const e0 = { ...fam, texts: [texts[0]!] };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W0, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'the backup state: E0 marked by writer 1 seq 2').toEqual([seg(2), seg(1, W0)]);
+      expect(x10Count(db, 'entry_variants'), 'the backup holds E0\'s two variants').toBe(2);
+      moveAside(box, seg(2));
+      plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [], rows: x10Rows(e0) });
+      expect.soft(await recoverAgain(box, ids, db), 'the restore\'s replay completes').toEqual({ moved: true, done: true, held: false });
+      expect.soft(marksOf(db), 'D-5726 (FR1 F1): E0\'s mark came off at the third writer\'s seq 1 rows (an unlisted held name of another writer, in a layout forked by the marked name), and neither writer 2\'s seq 3 nor writer 1\'s seq 5 re-marked it').toEqual([null, seg(1, W0)]);
+      expect.soft(countersOn(db, 'export_mark_taken_off')['export_mark_taken_off'], 'one take-off').toBe(1);
+      expect.soft(checkAfterLoss(box, ids, db).segments, 'no mark names a missing segment now').toEqual([]);
+      const live = await passAfterRebuild(box, ids, db);
+      expect.soft(live, 'the pass wrote E0 into a segment of the current writer').toEqual([seg(1, W0), seg(3, W2), seg(5), `6.${ids.writer}.db`]);
+      expect.soft(unmarkedOn(db), 'and nothing is left due').toEqual({ entries: 0, blobs: 0 });
+      moveAside(box, seg(3, W2));
+      checkAfterLoss(box, ids, db);
+      again = await rebuildAgain(box, ids);
+      expect(x10Count(again.db, 'entry_variants'), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      if (again !== null) closeWriter(again.db);
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('(d) CONTROL, one writer: two segments carry the blob and the entry; the marks move to the later segment as D-5637 rules, and nothing is taken off', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-d-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2400, 1, 'zqd5726d', t0);
+      const fam: X10Family = { uuid: x10U(0x24), path: '/home/u/gone/d5726d.jsonl', ino: 9974, texts };
+      const blobs = texts.map((t) => ({ text: t.text }));
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs, rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 6, writer: W1, blobs, rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect([blobMarkOf(db, texts[0]!.text), ...marksOf(db)], 'both marks moved to the later segment').toEqual([seg(6), seg(6)]);
+      expect(countersOn(db, 'export_mark_taken_off'), 'and nothing was taken off').toEqual({ export_mark_taken_off: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('(e) the take-off clears the entries that reference the blob with it: a store that holds an entry and its body marked by writer 1\'s segment meets writer 2\'s segment carrying the body alone, and the entry loses its mark with the blob (D-5395: no entry stays marked over an unmarked blob)', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-e-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2500, 1, 'zqd5726e', t0);
+      const fam: X10Family = { uuid: x10U(0x25), path: '/home/u/gone/d5726e.jsonl', ino: 9975, texts };
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect([blobMarkOf(db, texts[0]!.text), ...marksOf(db)], 'CONTROL: the first replay marks the body and the entry').toEqual([seg(5), seg(5)]);
+      // A restore of a backup taken then: writer 2's segment appears, carrying the body and no row.
+      plantSegment(box, ids.storeId, { seq: 5, writer: W2, blobs: texts.map((t) => ({ text: t.text })), rows: [] });
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now() + 5000);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(blobMarkOf(db, texts[0]!.text), 'the body is unmarked').toBeNull();
+      expect(marksOf(db), 'and the entry that references it lost its mark first (D-5395, D-5396)').toEqual([null]);
+      expect(countersOn(db, 'export_mark_taken_off')['export_mark_taken_off']).toBe(1);
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('(f) an entry row two writers carry over a pruned body both carry as a stub: the entry\'s mark comes off at the second writer\'s segment, as its blobs\' would', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-f-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2600, 1, 'zqd5726f', t0);
+      const fam: X10Family = { uuid: x10U(0x26), path: '/home/u/gone/d5726f.jsonl', ino: 9976, texts };
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [stub(texts[0]!.text)], rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W2, blobs: [stub(texts[0]!.text)], rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'the entry is unmarked: writer 1\'s mark came off at writer 2\'s row').toEqual([null]);
+      expect(countersOn(db, 'export_mark_taken_off')['export_mark_taken_off']).toBe(1);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  // ── FR1 part b: D-5727 (history-export-replay-layout-once): the writer layout is measured once per replay, kept in one meta key, and only widened ──
+  // D-5726's first form measured the layout from the listing and the store's marks on EVERY recovery call, and a replay that spans calls
+  // (the budget ends a call after a chunk) consumed the very marks that witnessed a fork: probe M. The cases below run the replay one
+  // chunk per call (the smallest budget), so the layout the next call reads is whatever the previous calls left. Intermediate states are
+  // `expect.soft`, and the last assertion of each is the loss they guard: E0's two variants after the rebuild from export.
+  const LAYOUT_KEY = 'export_replay_layout';
+  const W0 = '00000001';
+  const rangesOf = (db: DatabaseSync): Record<string, [number, number]> | null => {
+    const kept = recExport.parseReplayLayout(getMeta(db, LAYOUT_KEY));
+    return kept === null ? null : Object.fromEntries([...kept.ranges.entries()].map(([w, r]) => [w, [r.lo, r.hi] as [number, number]]));
+  };
+  const rearm = (db: DatabaseSync): void => {
+    db.prepare("UPDATE derivation_state SET cursor = NULL, completed_ms = NULL, version = ? WHERE step = 'recover'").run(Date.now() + 7);
+  };
+  /** The recovery step called one chunk at a time (the smallest budget) until it is done or `until` answers true after a call; `each` sees every call. */
+  const drive = async (box: HistoryBox, ids: { storeId: string; writer: string }, db: DatabaseSync,
+    o: { until?: (c: { calls: number; seen: string[] }) => boolean; each?: (c: { calls: number; seen: string[] }) => void } = {}): Promise<{ calls: number; done: boolean }> => {
+    let calls = 0;
+    let done = false;
+    while (!done && calls < 150) {
+      const seen: string[] = [];
+      const r = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), x10Recording(seen)) as { done: boolean };
+      calls += 1;
+      done = r.done;
+      o.each?.({ calls, seen });
+      if (!done && o.until?.({ calls, seen }) === true) break;
+    }
+    return { calls, done };
+  };
+  const insideRowsOf = (db: DatabaseSync, name: string): boolean => (cursorOn(db) ?? '').startsWith(`export-rows:${name}:`);
+  /** After the replay: the check, a pass, the writer-2 segment lost, the check, and the rebuild from what export/ holds. Answers E0's variant rows there. */
+  const variantsAfterLoss = async (box: HistoryBox, ids: { storeId: string; writer: string }, db: DatabaseSync, lost: string): Promise<number> => {
+    expect.soft(checkAfterLoss(box, ids, db).segments, 'no mark names a missing segment once the replay is done').toEqual([]);
+    await passAfterRebuild(box, ids, db);
+    expect.soft(unmarkedOn(db), 'and nothing is left due after the pass').toEqual({ entries: 0, blobs: 0 });
+    moveAside(box, lost);
+    checkAfterLoss(box, ids, db);
+    const again = await rebuildAgain(box, ids);
+    try {
+      return x10Count(again.db, 'entry_variants');
+    } finally {
+      closeWriter(again.db);
+    }
+  };
+  /** L's shape (writer 0 carries the bodies and E1, a backup marks E0 by writer 1's seq 2, which is moved aside; writer 2's seq 3 carries E0 and its two
+   *  variants, writer 1's seq 5 carries E0 without them), recovered once, and the step re-armed for the replay. */
+  const plantL = async (prefix: string, base: number, word: string): Promise<{ box: HistoryBox; ids: { storeId: string; writer: string }; db: DatabaseSync }> => {
+    const { box, ids, db } = x10Store(prefix);
+    const t0 = Date.now() - 400 * X10_DAY;
+    const texts = x10Texts(base, 2, word, t0);
+    const fam: X10Family = { uuid: x10U(base >> 8), path: `/home/u/gone/${word}.jsonl`, ino: 9000 + (base >> 8), texts };
+    const e0 = { ...fam, texts: [texts[0]!] };
+    plantSegment(box, ids.storeId, { seq: 1, writer: W0, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+    plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+    expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+    expect(marksOf(db), 'the backup state: E0 marked by writer 1 seq 2').toEqual([seg(2), seg(1, W0)]);
+    expect(x10Count(db, 'entry_variants'), 'the backup holds E0\'s two variants').toBe(2);
+    moveAside(box, seg(2));
+    plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+    plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [], rows: x10Rows(e0) });
+    rearm(db);
+    return { box, ids, db };
+  };
+
+  it('D-5727 M (probe M, committed) L\'s shape run one chunk per call: the take-off at writer 0\'s rows must survive to the end, so writer 1\'s seq 5, which lacks the variants, never re-marks E0, and with writer 2\'s segment lost the rebuild from export holds E0\'s two variants', async () => {
+    const { box, ids, db } = await plantL('ccrc-history-d5727-m-', 0x2c00, 'zqd5727m');
+    try {
+      let takenOffAt = -1;
+      const run = await drive(box, ids, db, {
+        each: ({ calls }) => {
+          const m = marksOf(db)[0];
+          if (takenOffAt === -1) { if (m === null) takenOffAt = calls; }
+          else expect.soft(m, `call ${calls}: E0 stays unmarked from its take-off to done`).toBeNull();
+        },
+      });
+      expect(run.done, 'the replay completed').toBe(true);
+      expect(takenOffAt, 'E0\'s mark came off').toBeGreaterThan(0);
+      expect.soft(marksOf(db), 'E0 is unmarked, owed to the pass').toEqual([null, seg(1, W0)]);
+      expect(await variantsAfterLoss(box, ids, db, seg(3, W2)), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 M-K (control, K\'s shape one chunk per call) the fork shows in the listing alone, so it survives the take-off at either form: green before and after D-5727', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5727-mk-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2b80, 2, 'zqd5727mk', t0);
+      const fam: X10Family = { uuid: x10U(0x2b), path: '/home/u/gone/d5727mk.jsonl', ino: 9981, texts };
+      const e0 = { ...fam, texts: [texts[0]!] };
+      plantSegment(box, ids.storeId, { seq: 3, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 4, writer: W1, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'the backup state: E0 marked by writer 1 seq 4').toEqual([seg(4), seg(3)]);
+      moveAside(box, seg(4));
+      plantSegment(box, ids.storeId, { seq: 5, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      plantSegment(box, ids.storeId, { seq: 7, writer: W1, blobs: [], rows: x10Rows(e0) });
+      rearm(db);
+      let takenOffAt = -1;
+      const run = await drive(box, ids, db, {
+        each: ({ calls }) => {
+          const m = marksOf(db)[0];
+          if (takenOffAt === -1) { if (m === null) takenOffAt = calls; }
+          else expect.soft(m, `call ${calls}: E0 stays unmarked from its take-off to done`).toBeNull();
+        },
+      });
+      expect(run.done).toBe(true);
+      expect(takenOffAt, 'E0\'s mark came off').toBeGreaterThan(0);
+      expect.soft(marksOf(db)).toEqual([null, seg(3)]);
+      expect(await variantsAfterLoss(box, ids, db, seg(5, W2)), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  /** S and U: writer 0 carries the bodies and E0 (recovered once, so the store marks E0 by it); then writer 1's seq 2 (E0), writer 2's seq 3 (E0 and
+   *  two variants) and writer 1's seq 5 (E0, no variants). Writer 1's seq 2 is the only segment that shows writer 1 starting below writer 2's seq 3,
+   *  and no mark names it. The replay marks E0 by it, writer 2's seq 3 takes the mark off (a fork), and `2.W1` is moved aside from inside writer 2's
+   *  rows, before writer 1's seq 5 is replayed. `late`: seq 2 is planted AFTER the call that advanced into export-blobs, where the layout is measured (U), not before it (S). */
+  const witnessCase = async (prefix: string, base: number, word: string, late: boolean): Promise<{ variants: number; seen: Array<Record<string, [number, number]> | null> }> => {
+    const { box, ids, db } = x10Store(prefix);
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(base, 2, word, t0);
+      const fam: X10Family = { uuid: x10U(base >> 8), path: `/home/u/gone/${word}.jsonl`, ino: 9100 + (base >> 8), texts };
+      const e0 = { ...fam, texts: [texts[0]!] };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W0, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(e0) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'the backup state: E0 marked by writer 0').toEqual([seg(1, W0)]);
+      const plantTwo = (): void => { plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [], rows: x10Rows(e0) }); };
+      if (!late) plantTwo();
+      plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [], rows: x10Rows(e0) });
+      rearm(db);
+      const seen: Array<Record<string, [number, number]> | null> = [];
+      if (late) {
+        await drive(box, ids, db, { until: () => true });   // the call that advances into export-blobs, where the layout is measured (D-5727)
+        seen.push(rangesOf(db));
+        plantTwo();
+        await drive(box, ids, db, { until: () => true });   // the first chunk to list seq 2
+        seen.push(rangesOf(db));
+      }
+      // a stop INSIDE writer 2's seq 3 rows, past E0's take-off: the zero-byte chunk that finishes a segment rides the next segment's first row
+      const stop = await drive(box, ids, db, { until: () => marksOf(db)[0] === null && insideRowsOf(db, seg(3, W2)) });
+      expect(stop.done, 'the replay is still open inside writer 2\'s rows').toBe(false);
+      expect.soft(marksOf(db), 'E0\'s mark came off at writer 2\'s seq 3 (a fork with writer 1\'s seq 2 to 5)').toEqual([null]);
+      moveAside(box, seg(2));
+      const rest = await drive(box, ids, db, { each: () => { expect.soft(marksOf(db)[0], 'E0 stays unmarked until done').toBeNull(); } });
+      expect(rest.done, 'the replay completed').toBe(true);
+      const variants = await variantsAfterLoss(box, ids, db, seg(3, W2));
+      expect.soft(getMeta(db, LAYOUT_KEY), 'finishRecovery deleted the key').toBeNull();
+      return { variants, seen };
+    } finally {
+      closeWriter(db);
+    }
+  };
+
+  it('D-5727 S (the witness is listed at the phase advance and named by no mark) writer 1\'s seq 2 is moved aside after writer 2\'s take-off and before writer 1\'s seq 5: the kept layout still reads a fork, so seq 5 never re-marks E0 and the rebuild holds E0\'s two variants', async () => {
+    const out = await witnessCase('ccrc-history-d5727-s-', 0x2e00, 'zqd5727s', false);
+    expect(out.variants, 'E0\'s variant rows survive in the export').toBe(2);
+  }, 2 * HEAVY);
+
+  it('D-5727 U (the witness arrives after the phase advance) writer 1\'s seq 2 is planted after the call that advanced into export-blobs and measured the layout: the first chunk to list it widens the kept layout (writer 1 to [2, 5]), writer 2\'s seq 3 takes E0\'s mark off, and once seq 2 is moved aside seq 5 still never re-marks it', async () => {
+    const out = await witnessCase('ccrc-history-d5727-u-', 0x2f00, 'zqd5727u', true);
+    expect.soft(out.seen[0], 'the advance ranged the listing: writer 0 at 1, writer 2 at 3 and writer 1 at 5 alone').toEqual({ [W0]: [1, 1], [W2]: [3, 3], [W1]: [5, 5] });
+    expect.soft(out.seen[1], 'the next chunk listed seq 2 and the kept layout widened to it').toEqual({ [W0]: [1, 1], [W2]: [3, 3], [W1]: [2, 5] });
+    expect(out.variants, 'E0\'s variant rows survive in the export').toBe(2);
+  }, 2 * HEAVY);
+
+  it('D-5727 write-back (state pin) a segment of a NEW writer planted after the phase advance: the chunk that first lists it writes the widened layout back, naming that writer; a chunk that widens nothing writes nothing', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5727-wb-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x3000, 2, 'zqd5727wb', t0);
+      const fam: X10Family = { uuid: x10U(0x30), path: '/home/u/gone/d5727wb.jsonl', ino: 9301, texts };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [], rows: x10Rows(fam) });
+      // every write to the key is logged by a temp trigger on this connection, so "writes nothing" is measured, not inferred from an equal value
+      db.exec('CREATE TEMP TABLE keywrites (n INTEGER)');
+      for (const ev of ['INSERT', 'UPDATE']) db.exec(`CREATE TEMP TRIGGER keywrites_${ev} AFTER ${ev} ON main.meta WHEN NEW.k = '${LAYOUT_KEY}' BEGIN INSERT INTO keywrites VALUES (1); END`);
+      const writes = (): number => Number((db.prepare('SELECT count(*) AS n FROM keywrites').get() as { n: number }).n);
+      await drive(box, ids, db, { until: () => true });
+      expect(rangesOf(db), 'the advance ranged the listing').toEqual({ [W1]: [1, 2] });
+      expect(writes(), 'the advance wrote the key once').toBe(1);
+      const before = getMeta(db, LAYOUT_KEY);
+      await drive(box, ids, db, { until: ({ calls }) => calls >= 2 });
+      expect(getMeta(db, LAYOUT_KEY), 'chunks that widen nothing leave the key as it was').toBe(before);
+      expect(writes(), 'and write nothing: the key was written once, at the advance').toBe(1);
+      plantSegment(box, ids.storeId, { seq: 4, writer: W2, blobs: [], rows: [] });
+      await drive(box, ids, db, { until: () => true });
+      expect(rangesOf(db), 'the chunk that first listed writer 2\'s segment ranged it').toEqual({ [W1]: [1, 2], [W2]: [4, 4] });
+      expect(writes(), 'by one write, that chunk\'s').toBe(2);
+      const run = await drive(box, ids, db);
+      expect(run.done).toBe(true);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 S\' (the key of the call that advanced) the shape of S, but writer 1\'s seq 2 is moved aside RIGHT AFTER the call that advanced into export-blobs and ran its first chunk, before any later chunk lists it: the key that call wrote keeps writer 1 at [2, 5], so writer 2\'s seq 3 marks E0 and writer 1\'s seq 5 takes it off, and the rebuild holds E0\'s two variants (S pins the move after the take-off; the advance and the first chunk run in one call over one cached listing, so S\' does not pin the advance\'s own listing: T3b does)', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5727-sp-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x3500, 2, 'zqd5727sp', t0);
+      const fam: X10Family = { uuid: x10U(0x35), path: '/home/u/gone/d5727sp.jsonl', ino: 9305, texts };
+      const e0 = { ...fam, texts: [texts[0]!] };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W0, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(e0) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'the backup state: E0 marked by writer 0').toEqual([seg(1, W0)]);
+      plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [], rows: x10Rows(e0) });
+      plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [], rows: x10Rows(e0) });
+      rearm(db);
+      const first = await drive(box, ids, db, { until: () => true });   // the call that advanced into export-blobs and ran its first chunk
+      expect(first.done, 'the replay is open').toBe(false);
+      expect.soft(rangesOf(db), 'the key that call wrote ranged the listing, seq 2 included').toEqual({ [W0]: [1, 1], [W1]: [2, 5], [W2]: [3, 3] });
+      moveAside(box, seg(2));
+      const rest = await drive(box, ids, db);
+      expect(rest.done, 'the replay completed').toBe(true);
+      expect.soft(marksOf(db), 'E0 is unmarked: seq 3 marked it, and writer 1\'s seq 5 (a fork with writer 2 by the kept range) took it off').toEqual([null]);
+      expect(await variantsAfterLoss(box, ids, db, seg(3, W2)), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 re-entry (the null-name arm) L\'s shape driven past E0\'s take-off, then the stored cursor rewound to export-blobs with no file (a state exportPhaseChunk stores only during the blob phase, so this is the rule the null-name arm reaches, not a state a run is known to leave): the re-entered chunk only widens the key it finds (a chunk never measures), so the fork stays and E0 stays owed; the rebuild holds E0\'s two variants', async () => {
+    const { box, ids, db } = await plantL('ccrc-history-d5727-re-', 0x3600, 'zqd5727re');
+    try {
+      const stop = await drive(box, ids, db, { until: () => marksOf(db)[0] === null });
+      expect(stop.done, 'E0\'s mark came off with the replay still open').toBe(false);
+      const whole = { [W0]: [1, 1], [W1]: [2, 5], [W2]: [3, 3] };
+      expect(rangesOf(db), 'the key holds the fork the marks witnessed').toEqual(whole);
+      const at = cursorOn(db) ?? '';
+      db.prepare("UPDATE derivation_state SET cursor = ? WHERE step = 'recover' AND completed_ms IS NULL").run(at.endsWith('+pairs') ? 'export-blobs+pairs' : 'export-blobs');
+      await drive(box, ids, db, { until: () => true });   // the re-entered export-blobs chunk
+      expect.soft(rangesOf(db), 'the re-entered chunk widened the key and did not re-measure it (the marks no longer name seq 2)').toEqual(whole);
+      const run = await drive(box, ids, db);
+      expect(run.done).toBe(true);
+      expect.soft(marksOf(db), 'E0 is unmarked').toEqual([null, seg(1, W0)]);
+      expect(await variantsAfterLoss(box, ids, db, seg(3, W2)), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 widest (a replay an older build carried past its phase advance) M\'s shape with the key deleted right after E0\'s take-off: the next chunk takes the widest layout (every writer over the whole seq line, a fork), writer 0, 1 and 2 stay forked, E0 stays unmarked, and the rebuild holds E0\'s two variants', async () => {
+    const { box, ids, db } = await plantL('ccrc-history-d5727-wide-', 0x3100, 'zqd5727w');
+    try {
+      const stop = await drive(box, ids, db, { until: () => marksOf(db)[0] === null });
+      expect(stop.done, 'E0\'s mark came off with the replay still open').toBe(false);
+      expect.soft(getMeta(db, LAYOUT_KEY), 'the key stands mid-replay').not.toBeNull();
+      db.prepare('DELETE FROM meta WHERE k = ?').run(LAYOUT_KEY);
+      await drive(box, ids, db, { until: () => true });
+      const whole: [number, number] = [0, Number.MAX_SAFE_INTEGER];
+      expect.soft(rangesOf(db), 'the key was rewritten, widest').toEqual({ [W0]: whole, [W1]: whole, [W2]: whole });
+      const run = await drive(box, ids, db);
+      expect(run.done).toBe(true);
+      expect.soft(marksOf(db), 'E0 is unmarked').toEqual([null, seg(1, W0)]);
+      expect(await variantsAfterLoss(box, ids, db, seg(3, W2)), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it.each([
+    ['stale key', 'the key carries another replay\'s version and narrow ranges (no fork)', (): string => recExport.formatReplayLayout({ version: 7, ranges: new Map([[W0, { lo: 1, hi: 1 }], [W2, { lo: 3, hi: 3 }], [W1, { lo: 5, hi: 5 }]]) })],
+    ['torn key', 'the key is not a layout at all', (): string => '{"version":'],
+  ])('D-5727 %s (past the phase advance): L\'s shape, then %s: it is a mismatch, so the step completes on the widest layout, E0 comes off, and the rebuild holds E0\'s two variants', async (_name, _what, plant) => {
+    const { box, ids, db } = await plantL('ccrc-history-d5727-bad-', 0x3200, 'zqd5727b2');
+    try {
+      await drive(box, ids, db, { until: () => true });
+      expect.soft(getMeta(db, LAYOUT_KEY), 'the phase advance wrote this replay\'s key').not.toBeNull();
+      setMeta(db, LAYOUT_KEY, plant());
+      await drive(box, ids, db, { until: () => true });
+      const kept = recExport.parseReplayLayout(getMeta(db, LAYOUT_KEY));
+      expect.soft(kept, 'the next chunk replaced it with a layout').not.toBeNull();
+      expect.soft(kept?.version, 'of this replay, not the planted version').not.toBe(7);
+      expect.soft(kept === null ? null : kept.ranges.get(W1), 'the widest').toEqual({ lo: 0, hi: Number.MAX_SAFE_INTEGER });
+      const run = await drive(box, ids, db);
+      expect(run.done, 'the step completes, never a stall').toBe(true);
+      expect.soft(marksOf(db), 'E0 is unmarked').toEqual([null, seg(1, W0)]);
+      expect(await variantsAfterLoss(box, ids, db, seg(3, W2)), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 delete at done: the key stands from the phase advance to the last chunk, and finishRecovery\'s transaction deletes it', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5727-del-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x3300, 1, 'zqd5727d', t0);
+      const fam: X10Family = { uuid: x10U(0x33), path: '/home/u/gone/d5727d.jsonl', ino: 9303, texts };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      expect(getMeta(db, LAYOUT_KEY), 'no key before the replay').toBeNull();
+      let last: string | null = null;
+      const run = await drive(box, ids, db, { each: () => { const k = getMeta(db, LAYOUT_KEY); if (k !== null) last = k; } });
+      expect(run.done).toBe(true);
+      expect(last, 'the key stood during the replay').not.toBeNull();
+      expect(getMeta(db, LAYOUT_KEY), 'and finishRecovery deleted it').toBeNull();
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 blob arm (an unlinked sidecar blob) L\'s shape with the blob in place of E0: a backup marks the blob (and its orphan sidecar row) by writer 1\'s seq 2, moved aside; writer 2\'s seq 3 takes the blob\'s mark off, and writer 1\'s seq 5, which carries the blob without the row, cannot re-mark it; with writer 2\'s segment lost the rebuild still finds the orphan row', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5727-blob-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x3400, 1, 'zqd5727bl', t0);
+      const fam: X10Family = { uuid: x10U(0x34), path: '/home/u/gone/d5727bl.jsonl', ino: 9304, texts };
+      const out = 'zqd5727bl the tool output only the lost segment and writer 2 carry';
+      const orphan = sidecarRow(fam, 'd5727bl-orphan.txt', out, null, t0);
+      plantSegment(box, ids.storeId, { seq: 1, writer: W0, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [{ text: out }], rows: [orphan] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(blobMarkOf(db, out), 'the backup state: the blob marked by writer 1 seq 2').toBe(seg(2));
+      expect(sidecarNames(db), 'and its orphan row placed').toEqual(['d5727bl-orphan.txt']);
+      moveAside(box, seg(2));
+      plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [{ text: out }], rows: [orphan] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [{ text: out }], rows: [] });
+      rearm(db);
+      let takenOffAt = -1;
+      const run = await drive(box, ids, db, {
+        each: ({ calls }) => {
+          const m = blobMarkOf(db, out);
+          if (takenOffAt === -1) { if (m === null) takenOffAt = calls; }
+          else expect.soft(m, `call ${calls}: the blob stays unmarked from its take-off to done`).toBeNull();
+        },
+      });
+      expect(run.done, 'the replay completed').toBe(true);
+      expect(takenOffAt, 'the blob\'s mark came off at writer 2\'s seq 3').toBeGreaterThan(0);
+      expect.soft(checkAfterLoss(box, ids, db).segments, 'no mark names a missing segment once the replay is done').toEqual([]);
+      await passAfterRebuild(box, ids, db);
+      expect.soft(unmarkedOn(db), 'and nothing is left due after the pass').toEqual({ entries: 0, blobs: 0 });
+      moveAside(box, seg(3, W2));
+      checkAfterLoss(box, ids, db);
+      const again = await rebuildAgain(box, ids);
+      try {
+        expect(sidecarNames(again.db), 'the rebuild from export still finds the orphan row').toEqual(['d5727bl-orphan.txt']);
+      } finally {
+        closeWriter(again.db);
+      }
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 T3b (the measure at the phase advance) the rebuild\'s FIRST listed segment, writer 1\'s seq 1 and the fork\'s only witness, cannot be read at the first export chunk and is moved aside as the message offers: the measure taken at the advance into export-blobs (which opens no segment) kept it, so writer 1 reads [1, 5], a fork with writer 2, and the rebuild holds E0\'s two variants', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5727-t3b-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x4600, 2, 'zqd5727t3b', t0);
+      const fam: X10Family = { uuid: x10U(0x46), path: '/home/u/gone/d5727t3b.jsonl', ino: 9406, texts };
+      const e0 = { ...fam, texts: [texts[0]!] };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W1, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      plantSegment(box, ids.storeId, { seq: 2, writer: W0, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [], rows: x10Rows(e0) });
+      fs.writeFileSync(path.join(exportDirOf(box), seg(1)), randomBytes(8192));   // the witness cannot be read
+      const stall = await drive(box, ids, db, { until: ({ calls }) => calls >= 4 });
+      expect.soft(stall.done, 'the replay waits on the unreadable first segment').toBe(false);
+      expect.soft(rangesOf(db), 'the advance measured the listing, the unreadable seq 1 included').toEqual({ [W0]: [2, 2], [W1]: [1, 5], [W2]: [3, 3] });
+      moveAside(box, seg(1));
+      const rest = await drive(box, ids, db);
+      expect(rest.done, 'the replay completed').toBe(true);
+      expect(await variantsAfterLoss(box, ids, db, seg(3, W2)), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 off race (no phase advances under history-off) history-off is touched during the last apply chunk, which still commits: the advance into export-blobs, with its measure, does not, so the step answers held with the cursor at apply and no layout key, and only index and apply ran; with the switch removed the next call advances', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5727-off-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x4700, 1, 'zqd5727off', t0);
+      const fam: X10Family = { uuid: x10U(0x47), path: '/home/u/gone/d5727off.jsonl', ino: 9407, texts };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      const P = historyPaths(box.home);
+      const ran: string[] = [];
+      const executors = Object.fromEntries(Object.entries(SW.RECOVER_EXECUTORS).map(([phase, fn]) =>
+        [phase, async (d: DatabaseSync, run: unknown, c: recExport.RecoverCursor): Promise<{ phaseDone: boolean }> => {
+          ran.push(phase);
+          const r = await (fn as (d: DatabaseSync, run: unknown, c: recExport.RecoverCursor) => Promise<{ phaseDone: boolean }>)(d, run, c);
+          if (phase === 'apply' && r.phaseDone) fs.writeFileSync(P.off, '');   // touched while the last apply chunk is in flight
+          return r;
+        }]));
+      const r = await SW.recoveryStep(db, stepCtx(box, ids), executors);
+      expect.soft(ran, 'only index and apply ran').toEqual(['index', 'apply']);
+      expect.soft(getMeta(db, LAYOUT_KEY), 'no layout key: the measure is the advance\'s').toBeNull();
+      expect.soft((cursorOn(db) ?? '').startsWith('apply'), `the stored cursor is still apply's (${cursorOn(db)})`).toBe(true);
+      expect(r, 'the step is held').toEqual({ moved: true, done: false, held: true });
+      fs.rmSync(P.off);
+      const rest = await drive(box, ids, db);
+      expect(rest.done, 'and with the switch removed the replay completes').toBe(true);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 unlistable at the advance (a listing that throws fails the advance) export/<store_id>/ cannot be listed when the apply phase ends: the advance into export-blobs, whose measure lists it, rolls back, so the cursor stays at apply\'s end, no layout key is written and recover_chunk_failed counts it once; listable again, the next call advances and measures', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root lists a 0000 directory
+    const { box, ids, db } = x10Store('ccrc-history-d5727-unlistable-');
+    const dir = exportDirOf(box);
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x4800, 1, 'zqd5727unl', t0);
+      const fam: X10Family = { uuid: x10U(0x48), path: '/home/u/gone/d5727unl.jsonl', ino: 9408, texts };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      const failedBefore = countersOn(db, 'recover_chunk_failed')['recover_chunk_failed']!;
+      let applyEnd: string | null = null;
+      const executors = Object.fromEntries(Object.entries(SW.RECOVER_EXECUTORS).map(([phase, fn]) =>
+        [phase, async (d: DatabaseSync, run: unknown, c: recExport.RecoverCursor): Promise<{ phaseDone: boolean }> => {
+          const r = await (fn as (d: DatabaseSync, run: unknown, c: recExport.RecoverCursor) => Promise<{ phaseDone: boolean }>)(d, run, c);
+          if (phase === 'apply' && r.phaseDone) {
+            applyEnd = cursorOn(d);
+            fs.chmodSync(dir, 0o000);                               // unlistable exactly at the apply -> export-blobs advance
+          }
+          return r;
+        }]));
+      let r: unknown;
+      try {
+        r = await SW.recoveryStep(db, stepCtx(box, ids), executors);
+      } finally {
+        fs.chmodSync(dir, 0o700);
+      }
+      expect.soft(applyEnd, 'CONTROL: the apply phase ended in this call').not.toBeNull();
+      expect.soft(cursorOn(db), 'the cursor stays at apply\'s end').toBe(applyEnd);
+      expect.soft(getMeta(db, LAYOUT_KEY), 'no layout key: the advance that measures rolled back').toBeNull();
+      expect.soft(countersOn(db, 'recover_chunk_failed')['recover_chunk_failed'], 'the failed advance is counted once').toBe(failedBefore + 1);
+      expect(r, 'the step neither finished nor held').toEqual({ moved: true, done: false, held: false });
+      const seen: string[] = [];
+      const next = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), x10Recording(seen)) as { done: boolean };
+      expect.soft(next.done, 'CONTROL: the smallest budget leaves the replay open, so the key is still kept').toBe(false);
+      expect.soft((cursorOn(db) ?? '').startsWith('apply'), `listable again, the next call advances (${cursorOn(db)})`).toBe(false);
+      expect.soft(rangesOf(db), 'and measures the listing').toEqual({ [W1]: [1, 1] });
+      const rest = await drive(box, ids, db);
+      expect(rest.done, 'and the replay completes').toBe(true);
+    } finally {
+      try { fs.chmodSync(dir, 0o700); } catch { /* removed with the fixture */ }
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('JA (FR2, R-2\'s residue, arm A end to end) a held writer with NO listed name: writer 0 carries the bodies, writer 1\'s seq 2 carries E0 and its variants and is moved aside, and writer 2\'s seq 3 carries E0 without them; the held mark is ranged by its marked name alone, so the mark stays for the check and the rebuild holds E0\'s two variants', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-ja-');
+    let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x3a00, 2, 'zqd5726ja', t0);
+      const fam: X10Family = { uuid: x10U(0x3a), path: '/home/u/gone/d5726ja.jsonl', ino: 9990, texts };
+      const e0 = { ...fam, texts: [texts[0]!] };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W0, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'the backup state: E0 marked by writer 1 seq 2').toEqual([seg(2), seg(1, W0)]);
+      moveAside(box, seg(2));
+      plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [], rows: x10Rows(e0) });
+      rearm(db);
+      expect.soft(await SW.recoveryStep(db, stepCtx(box, ids)), 'the restore\'s replay completes').toEqual({ moved: true, done: true, held: false });
+      expect.soft(marksOf(db), 'the mark stays on the missing writer-1 segment, for the check').toEqual([seg(2), seg(1, W0)]);
+      expect.soft(checkAfterLoss(box, ids, db).segments, 'the check finds it, named by the mark').toEqual([seg(2)]);
+      expect.soft(marksOf(db), 'and clears E0\'s mark').toEqual([null, seg(1, W0)]);
+      await passAfterRebuild(box, ids, db);
+      expect.soft(unmarkedOn(db), 'and nothing is left due after the pass').toEqual({ entries: 0, blobs: 0 });
+      again = await rebuildAgain(box, ids);
+      expect(x10Count(again.db, 'entry_variants'), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      if (again !== null) closeWriter(again.db);
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+});
+
+describe('W1-B4 whole-branch review: export replay resumes after a segment moved aside, and walks no earlier segment again', () => {
+  const name = (seq: number): string => `${seq}.${X10_WRITER}.db`;
+  /** A published segment whose `entries` table can no longer be read, though its meta and its blobs read: a damaged copy. */
+  const breakEntries = (file: string): void => {
+    const sdb = new DatabaseSync(file, { readOnly: true });
+    const root = Number((sdb.prepare('SELECT rootpage FROM sqlite_master WHERE name = ?').get('entries') as { rootpage: number }).rootpage);
+    const size = Number((sdb.prepare('PRAGMA page_size').get() as { page_size: number }).page_size);
+    sdb.close();
+    const fd = fs.openSync(file, 'r+');
+    try { fs.writeSync(fd, Buffer.alloc(size, 0xff), 0, size, (root - 1) * size); } finally { fs.closeSync(fd); }
+  };
+
+  it('the blobs phase: a bad middle segment stalls the step at its name; moved aside, the step goes on at the next segment, counts the foreign segment once, and walks no earlier segment', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-aside-blobs-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const a = x10Texts(0xe00, 3, 'zqasideb', t0);
+      const b = x10Texts(0xe10, 3, 'zqasidec', t0);
+      // 1: another store's segment, which the blobs walk counts (export_segment_foreign) each time it reaches it
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, metaStoreId: '0189abcd-1234-4678-9abc-0000000010ff', blobs: [{ text: 'zqasideb theirs' }], rows: [] });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: a.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0xe0), path: '/home/u/gone/asideb.jsonl', ino: 9991, texts: a }) });
+      const mid = path.join(exportDirOf(box), name(3));
+      fs.writeFileSync(mid, 'not a database, and not a newer format either\n', { mode: 0o600 });
+      plantSegment(box, ids.storeId, { seq: 4, writer: X10_WRITER, blobs: b.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0xe1), path: '/home/u/gone/asidec.jsonl', ino: 9995, texts: b, seq: 2 }) });
+      const seen: string[] = [];
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: false, held: false });
+      expect(cursorOn(db), 'CONTROL: the step waits at the segment that cannot be read').toBe(`export-blobs:${name(3)}:0`);
+      expect(countersOn(db, 'recover_chunk_failed', 'export_segment_foreign')).toEqual({ recover_chunk_failed: 1, export_segment_foreign: 1 });
+      fs.renameSync(mid, `${mid}.aside`);
+      const mark = seen.length;
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: true, held: false });
+      const after = seen.slice(mark).filter((c) => c.startsWith('export-blobs'));
+      expect(after[0], 'the first chunk after the move names the segment moved aside').toBe(`export-blobs:${name(3)}:0`);
+      expect(after.slice(1).every((c) => c.startsWith(`export-blobs:${name(4)}:`)), `then only the segment that orders after it: ${after.join(' | ')}`).toBe(true);
+      expect(after.filter((c) => c.includes(`:${name(1)}:`) || c.includes(`:${name(2)}:`)), 'no chunk walks an earlier segment again').toEqual([]);
+      expect(countersOn(db, 'export_segment_foreign', 'recover_chunk_failed'), 'the foreign segment was counted once, as in a single pass').toEqual({ export_segment_foreign: 1, recover_chunk_failed: 1 });
+      expect([x10Count(db, 'entries'), x10Count(db, 'memberships'), x10Count(db, 'blobs')]).toEqual([6, 6, 6]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('the rows phase: a middle segment whose rows cannot be read stalls the step; moved aside, the step goes on at the next segment, and the first segment\'s rows are applied and counted once', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-aside-rows-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const first = x10Texts(0xf10, 2, 'zqasider1', t0);
+      const last = x10Texts(0xf20, 2, 'zqasider3', t0);
+      // 1: its second row names a blob no segment holds, so every apply of this row counts export_row_blob_missing once
+      const rows1 = x10Rows({ uuid: x10U(0xf1), path: '/home/u/gone/asider1.jsonl', ino: 9992, texts: first });
+      const orphan = rows1.filter((r) => r.kind === 'entry').pop()!;
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: first[0]!.text }], rows: rows1 });
+      expect(orphan.row['blob_sha256']).toEqual(segmentSha(first[1]!.text));
+      const mid = plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: first.map((t) => ({ text: `${t.text} again` })),
+        rows: x10Rows({ uuid: x10U(0xf2), path: '/home/u/gone/asider2.jsonl', ino: 9993, texts: first.map((t) => ({ ...t, uuid: `${t.uuid.slice(0, -1)}9`, text: `${t.text} again` })) }) });
+      breakEntries(mid);
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: last.map((t) => ({ text: t.text })), rows: x10Rows({ uuid: x10U(0xf3), path: '/home/u/gone/asider3.jsonl', ino: 9994, texts: last }) });
+      const seen: string[] = [];
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: false, held: false });
+      expect(cursorOn(db), 'CONTROL: the step waits in the rows phase at the segment whose rows cannot be read').toBe(`export-rows:${name(2)}:0`);
+      expect(countersOn(db, 'recover_chunk_failed', 'export_row_blob_missing')).toEqual({ recover_chunk_failed: 1, export_row_blob_missing: 1 });
+      const entriesBefore = x10Count(db, 'entries');
+      fs.renameSync(mid, `${mid}.aside`);
+      const mark = seen.length;
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: true, held: false });
+      const after = seen.slice(mark).filter((c) => c.startsWith('export-rows'));
+      expect(after[0]).toBe(`export-rows:${name(2)}:0`);
+      expect(after.filter((c) => c.includes(`:${name(1)}:`)), 'no chunk walks segment 1 again').toEqual([]);
+      expect(countersOn(db, 'export_row_blob_missing', 'recover_chunk_failed'), 'segment 1\'s row is counted once, as in a single pass').toEqual({ export_row_blob_missing: 1, recover_chunk_failed: 1 });
+      expect(x10Count(db, 'entries') - entriesBefore, 'and the last segment\'s two rows were applied').toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  });
+});
+
+// ── W1-B4 review 614, F2: replay applies every segment's carried bytes before any segment's stubs (D-5397) ──────────
+// An exporter writes a stub (D-4759) in one segment and, once ingest's revival on recapture (B2's D-4589) has cleared the
+// entry's mark (D-5395), the same blob's bytes in a later one. Replay is insert-or-ignore by sha256, so the order decides
+// which of the two lands: bytes first means the stub an earlier segment carries can never swallow them. The cases are
+// in-process on planted segments (the real exporter flow, and `expand` after a rebuild, is history-export.test.ts's).
+describe('D-5397: export replay applies every segment\'s bytes before any segment\'s stubs, both insert-or-ignore, on the recovery cursor (W1-B4 review 614, F2)', () => {
+  const segName = (seq: number): string => `${seq}.${X10_WRITER}.db`;
+  const stubOf = (text: string): PlantSegmentBlob => ({ text: null, sha256: segmentSha(text), rawLen: Buffer.byteLength(text, 'utf8') });
+  /** The blob of `text` as the store holds it: body-less or not, dated or not, and the segment that marked it. */
+  const blobOf = (db: DatabaseSync, text: string): Record<string, unknown> => ({ ...(db.prepare(
+    'SELECT z IS NULL AS stub, pruned_ms IS NOT NULL AS pruned, exported_seg AS seg FROM blobs WHERE sha256 = ?').get(segmentSha(text)) as object) });
+  /** What a read of the blob answers: its text, decoded from the stored body, or null for a body-less blob. */
+  const bodyOf = (db: DatabaseSync, text: string): string | null => {
+    const r = db.prepare('SELECT z FROM blobs WHERE sha256 = ?').get(segmentSha(text)) as { z: Uint8Array | null } | undefined;
+    return r === undefined || r.z === null ? null : rrUnbrotli(Buffer.from(r.z)).toString('utf8');
+  };
+  const markOf = (db: DatabaseSync, uuid: string): string | null =>
+    (db.prepare('SELECT exported_seg AS seg FROM entries WHERE uuid = ?').get(uuid) as { seg: string | null }).seg;
+  /** What a reader gets from the replayed store: the real `expand` verb on one row, run as the family's session (a registry
+   *  entry and a pane for it, so the verb's scope reaches the family the segment placed). It answers the row's text, or
+   *  says its content was pruned: the read the rows and the stored bodies are for. */
+  const expandOf = (box: HistoryBox, fam: X10Family, uuid: string): ReturnType<typeof runCli> => {
+    plantSession(box, X10_ID, { uuid: fam.uuid, generation: X10_G, project: 'demo', workdir: WORK });
+    return runCli(box, ['expand', uuid], { env: withPane(box, X10_ID) });
+  };
+  /** A family of `n` rows, and the segment rows that place any subset of them. */
+  const family = (base: number, n: number, word: string): { fam: X10Family; texts: X10Text[] } => {
+    const texts = x10Texts(base, n, word, Date.now() - 400 * X10_DAY);
+    return { texts, fam: { uuid: x10U(base >> 4), path: `/home/u/gone/${word}.jsonl`, ino: 9000 + base, texts } };
+  };
+
+  it('a stub in an earlier segment and the same blob\'s bytes in a later one, the two in separate passes: the bytes land, marked by the later segment; the entry is marked by the last segment that carries it (D-5637); the text reads', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397a-');
+    try {
+      const { fam, texts } = family(0x1100, 2, 'zqd5397a');
+      // The exporter's order: segment 1 carries row 0 with a stub of its pruned body and row 1 with its bytes; ingest's
+      // revival on recapture clears row 0's mark; segment 2 carries row 0 again, now with the bytes.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text), { text: texts[1]!.text }], rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }], rows: x10Rows({ ...fam, texts: [texts[0]!] }) });
+      // A budget of one byte ends a pass after the first chunk that carries any: the bytes of segment 1, then those of segment 2.
+      const seen: string[] = [];
+      const passOf: number[] = [];
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 40 && !r.done; i += 1) {
+        const before = seen.length;
+        r = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), x10Recording(seen));
+        for (let k = before; k < seen.length; k += 1) passOf.push(i);
+      }
+      expect(r.done, `the step completed: ${seen.join(' | ')}`).toBe(true);
+      expect(blobOf(db, texts[0]!.text), 'the bytes of segment 2 landed, and segment 2 marked them').toEqual({ stub: 0, pruned: 0, seg: segName(2) });
+      expect(bodyOf(db, texts[0]!.text), 'a read of the blob answers its text').toBe(texts[0]!.text);
+      expect(markOf(db, texts[0]!.uuid), 'the entry is marked by segment 2, the last segment that carries its row (D-5637: first-wins gave segment 1)').toBe(segName(2));
+      expect(markOf(db, texts[1]!.uuid)).toBe(segName(1));
+      const phases = seen.map((c) => c.replace(/[:+].*$/, ''));
+      const lastBytes = phases.lastIndexOf('export-blobs');
+      const firstStubs = phases.indexOf('export-stubs');
+      expect(lastBytes, `the bytes phase ran: ${seen.join(' | ')}`).toBeGreaterThanOrEqual(0);
+      expect(firstStubs, `and the stubs phase after its last chunk: ${seen.join(' | ')}`).toBeGreaterThan(lastBytes);
+      const bytesOfSeg2 = seen.indexOf(`export-blobs:${segName(2)}:0`);   // the chunk that applied segment 2's bytes, and ended its pass on the budget
+      expect(bytesOfSeg2, `segment 2's bytes page is its own chunk: ${seen.join(' | ')}`).toBeGreaterThan(0);
+      expect(passOf[firstStubs], `the stubs phase began in a later pass than that chunk's (${seen.join(' | ')})`).toBeGreaterThan(passOf[bytesOfSeg2]!);
+      expect(countersOn(db, 'export_blob_tombstone_kept', 'export_row_blob_missing', 'export_row_unplaced'), 'no tombstone was held, so none was kept')
+        .toEqual({ export_blob_tombstone_kept: 0, export_row_blob_missing: 0, export_row_unplaced: 0 });
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('the bytes in an earlier segment and a stub of the same blob in a later one: the bytes stay, and the stub changes nothing', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397b-');
+    try {
+      const { fam, texts } = family(0x1200, 2, 'zqd5397b');
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text)], rows: x10Rows({ ...fam, texts: [texts[0]!] }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(blobOf(db, texts[0]!.text), 'segment 1\'s bytes stay, marked by it').toEqual({ stub: 0, pruned: 0, seg: segName(1) });
+      expect(bodyOf(db, texts[0]!.text), 'a read of the blob answers its text').toBe(texts[0]!.text);
+      expect(markOf(db, texts[0]!.uuid), 'the entry is marked by segment 2, the last that carries its row; its blob keeps segment 1, which holds the bytes (D-5637: first-wins gave segment 1)').toBe(segName(2));
+      expect(countersOn(db, 'export_blob_tombstone_kept', 'export_row_blob_missing')).toEqual({ export_blob_tombstone_kept: 0, export_row_blob_missing: 0 });
+      // the read itself, through the real verb: the stub of segment 2 hid nothing
+      const ex = expandOf(box, fam, texts[0]!.uuid);
+      expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
+      expect(ex.stdout, 'expand prints the text the later stub did not swallow').toContain(texts[0]!.text);
+      expect(ex.stdout).not.toContain('content pruned on');
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('CONTROL: a tombstone the store held before the replay stays one when a segment carries its bytes, and the body replay ignores over it is counted export_blob_tombstone_kept; a body ignored over a blob the replay itself stored is not', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397c-');
+    try {
+      const { fam, texts } = family(0x1300, 2, 'zqd5397c');
+      // The store pruned row 0's body before the replay: a tombstone, with its date.
+      db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, ?, NULL, ?, 12345)')
+        .run(segmentSha(texts[0]!.text), 'br5', Buffer.byteLength(texts[0]!.text, 'utf8'));
+      // Segment 1 carries both bodies; segment 2 carries row 1's again, over the live blob segment 1 just stored.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: texts[1]!.text }], rows: x10Rows({ ...fam, texts: [texts[1]!] }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(blobOf(db, texts[0]!.text), 'the tombstone keeps its date, gains no body and no mark').toEqual({ stub: 1, pruned: 1, seg: null });
+      expect(db.prepare('SELECT pruned_ms FROM blobs WHERE sha256 = ?').get(segmentSha(texts[0]!.text))).toEqual({ pruned_ms: 12345 });
+      expect(bodyOf(db, texts[0]!.text), 'a read of it answers no text').toBeNull();
+      expect(blobOf(db, texts[1]!.text), 'row 1\'s body is marked by segment 2, the last that carries its bytes (D-5637: first-wins gave segment 1)').toEqual({ stub: 0, pruned: 0, seg: segName(2) });
+      expect(countersOn(db, 'export_blob_tombstone_kept'), 'one body met the tombstone; row 1\'s repeat met a blob the replay stored').toEqual({ export_blob_tombstone_kept: 1 });
+      // the reads, through the real verb: the tombstone answers that its content was pruned, the live blob its text
+      const pruned = expandOf(box, fam, texts[0]!.uuid);
+      expect(pruned.code, `${pruned.stdout}\n${pruned.stderr}`).toBe(0);
+      expect(pruned.stdout, 'expand on the tombstone says so').toContain('content pruned on');
+      expect(pruned.stdout, 'and prints none of the body replay ignored').not.toContain(texts[0]!.text);
+      const live = expandOf(box, fam, texts[1]!.uuid);
+      expect(live.code, `${live.stdout}\n${live.stderr}`).toBe(0);
+      expect(live.stdout, 'CONTROL: a live blob prints its text').toContain(texts[1]!.text);
+      expect(live.stdout).not.toContain('content pruned on');
+    } finally {
+      closeWriter(db);
+    }
+  });
+  it('a replay that resumes across chunks, passes and a kill applies all bytes before any stub: a cursor stored inside the bytes phase resumes there, and no stubs chunk runs before the last bytes chunk', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397d-');
+    let w = db;
+    try {
+      const { fam, texts } = family(0x1400, 3, 'zqd5397d');
+      // The stub of row 0 is in segment 1 and its bytes in segment 3; row 1 has its bytes in segment 1 and a stub after them in
+      // segment 2; row 2 has bytes in segment 2. The bytes phase spans three segments, and a stub is carried by two of them.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text), { text: texts[1]!.text }], rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: texts[2]!.text }, stubOf(texts[1]!.text)], rows: x10Rows({ ...fam, texts: [texts[1]!, texts[2]!] }) });
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }], rows: x10Rows({ ...fam, texts: [texts[0]!] }) });
+      const first: string[] = [];
+      expect(await SW.recoveryStep(w, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), x10Recording(first))).toEqual({ moved: true, done: false, held: false });
+      const stored = cursorOn(w);
+      expect(stored, 'CONTROL: the pass ended inside the bytes phase, after segment 1\'s bytes').toMatch(new RegExp(`^export-blobs:${segName(1)}:[1-9][0-9]*$`));
+      closeWriter(w);   // the kill: nothing of the first pass but the committed rows and the cursor survives
+      w = openWriter(historyPaths(box.home).dbFile);
+      const rest: string[] = [];
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 60 && !r.done; i += 1) r = await SW.recoveryStep(w, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), x10Recording(rest));
+      expect(r.done, `the step completed: ${rest.join(' | ')}`).toBe(true);
+      expect(rest[0], 'the first chunk after the kill is the stored cursor\'s').toBe(stored);
+      const phases = [...first, ...rest].map((c) => c.replace(/[:+].*$/, ''));
+      const order = ['index', 'apply', 'export-blobs', 'export-stubs', 'export-rows', 'reindex'];
+      expect(phases.map((p) => order.indexOf(p)), `the phases never go back: ${[...first, ...rest].join(' | ')}`)
+        .toEqual([...phases.map((p) => order.indexOf(p))].sort((a, b) => a - b));
+      expect(rest.filter((c) => c.includes(`:${segName(1)}:`) && c.startsWith('export-blobs')), 'the bytes of segment 1 are not applied again').toEqual([stored]);
+      expect(phases.indexOf('export-stubs'), 'and the stubs phase runs').toBeGreaterThan(phases.lastIndexOf('export-blobs'));
+      expect(blobOf(w, texts[0]!.text), 'segment 3\'s bytes beat segment 1\'s stub').toEqual({ stub: 0, pruned: 0, seg: segName(3) });
+      expect(blobOf(w, texts[1]!.text), 'segment 1\'s bytes beat segment 2\'s stub').toEqual({ stub: 0, pruned: 0, seg: segName(1) });
+      expect(blobOf(w, texts[2]!.text)).toEqual({ stub: 0, pruned: 0, seg: segName(2) });
+      expect(countersOn(w, 'recover_chunk_failed', 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ recover_chunk_failed: 0, export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(w);
+    }
+  });
+
+  it('the stubs phase obeys the resume rule of the others: a cursor naming a segment moved aside goes on at the next segment that orders after it, and walks no earlier segment again; a newer-format segment\'s stub is never applied', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397e-', `export-stubs:${segName(2)}:0`);
+    try {
+      const { fam, texts } = family(0x1500, 3, 'zqd5397e');
+      // Segment 1's stub is behind the cursor and so is not applied; segment 2 is gone; segment 3's stub is applied; segment 4 is
+      // a newer format whose stub must not be.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text)], rows: [] });
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [stubOf(texts[1]!.text)], rows: x10Rows({ ...fam, texts: [texts[1]!] }) });
+      plantSegment(box, ids.storeId, { seq: 4, writer: X10_WRITER, format: 2, blobs: [stubOf(texts[2]!.text)], rows: [] });
+      const seen: string[] = [];
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: true, held: false });
+      const stubs = seen.filter((c) => c.startsWith('export-stubs'));
+      expect(stubs[0], 'the first chunk is the stored cursor\'s').toBe(`export-stubs:${segName(2)}:0`);
+      expect(stubs.filter((c) => c.includes(`:${segName(1)}:`)), 'no chunk walks segment 1').toEqual([]);
+      expect(blobOf(db, texts[0]!.text), 'the stub behind the cursor was never applied').toEqual({});
+      expect(blobOf(db, texts[1]!.text), 'segment 3\'s was, dated by the replay and never marked').toEqual({ stub: 1, pruned: 1, seg: null });
+      expect(blobOf(db, texts[2]!.text), 'a newer-format segment\'s stub never').toEqual({});
+      expect(getMeta(db, HEALTH_META.exportSegmentNewer), 'the stubs walk does not note the newer segment (the bytes walk did not run in this step)').toBeNull();
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a segment replay skips is noted once per replay, by the bytes walk alone: the stubs and rows walks reach it again and say nothing', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397f-');
+    try {
+      const { fam, texts } = family(0x1600, 1, 'zqd5397f');
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, metaStoreId: '0189abcd-1234-4678-9abc-0000000010ff', blobs: [stubOf('zqd5397f theirs')], rows: [] });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, format: 2, blobs: [stubOf('zqd5397f newer')], rows: [] });
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text)], rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(countersOn(db, 'export_segment_foreign'), 'the foreign segment is counted by the bytes walk and by no other').toEqual({ export_segment_foreign: 1 });
+      expect(getMeta(db, HEALTH_META.exportSegmentNewer)).toBe(JSON.stringify([segName(2)]));
+      expect(blobOf(db, texts[0]!.text), 'and the stub of the segment that replays is applied').toEqual({ stub: 1, pruned: 1, seg: null });
+      expect([x10Count(db, 'entries'), countersOn(db, 'export_row_blob_missing')], 'before its row, which finds the blob').toEqual([1, { export_row_blob_missing: 0 }]);
+      expect([blobOf(db, 'zqd5397f theirs'), blobOf(db, 'zqd5397f newer')], 'neither skipped segment\'s stub').toEqual([{}, {}]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+  it('the tombstone probe runs only where an insert was ignored: a fresh blob costs no statement more; a body over a live blob is probed and not counted; a body over a tombstone is probed and counted', async () => {
+    const probes = (ran: string[]): number => ran.filter((t) => /FROM blobs WHERE sha256 = \? AND z IS NULL/.test(t)).length;
+    /** `db` with the text of every statement it runs recorded (history-export.test.ts's counting idiom). */
+    const counting = (target: DatabaseSync, ran: string[]): DatabaseSync => {
+      const wrap = (text: string, st: object): object => new Proxy(st, {
+        get(t, k) {
+          const v: unknown = Reflect.get(t, k, t);
+          if (k === 'run' || k === 'get' || k === 'all' || k === 'iterate') return (...a: unknown[]): unknown => { ran.push(text); return (v as (...x: unknown[]) => unknown).apply(t, a); };
+          return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+        },
+      });
+      return new Proxy(target, {
+        get(t, k) {
+          if (k === 'prepare') return (text: string): object => wrap(text, t.prepare(text));
+          const v: unknown = Reflect.get(t, k, t);
+          return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+        },
+      });
+    };
+    const fresh = x10Store('ccrc-history-b4-d5397g-');
+    try {
+      const { fam, texts } = family(0x1700, 1, 'zqd5397g');
+      plantSegment(fresh.box, fresh.ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }], rows: x10Rows(fam) });
+      const ran: string[] = [];
+      expect(await SW.recoveryStep(counting(fresh.db, ran), stepCtx(fresh.box, fresh.ids))).toEqual({ moved: true, done: true, held: false });
+      expect(ran.filter((t) => /INSERT INTO blobs/.test(t)).length, 'CONTROL: the blob went in through the insert').toBeGreaterThan(0);
+      expect(probes(ran), 'a fresh blob is not probed').toBe(0);
+    } finally {
+      closeWriter(fresh.db);
+    }
+    const held = x10Store('ccrc-history-b4-d5397h-');
+    try {
+      const { fam, texts } = family(0x1800, 2, 'zqd5397h');
+      held.db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?)').run(segmentSha(texts[0]!.text), 'br5', Buffer.from('stored body'), 11);   // live
+      held.db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, ?, NULL, ?, 12345)').run(segmentSha(texts[1]!.text), 'br5', 11);   // a tombstone
+      plantSegment(held.box, held.ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      const ran: string[] = [];
+      expect(await SW.recoveryStep(counting(held.db, ran), stepCtx(held.box, held.ids))).toEqual({ moved: true, done: true, held: false });
+      expect(probes(ran), 'the two ignored bodies are probed, once each').toBe(2);
+      expect(countersOn(held.db, 'export_blob_tombstone_kept'), 'and only the one over the tombstone is counted').toEqual({ export_blob_tombstone_kept: 1 });
+    } finally {
+      closeWriter(held.db);
+    }
+  });
+});
+
+// ── wave 5h-1 Task 6: a live copy keeps an entry's structure on a tie (D-5638 (history-ingest-live-beats-exported-tie);
+// review 614 F7; "Owed from B4" item 5) ─────────────────────────────────────────────────────────────────────────────────
+// A restore's backup holds an entry on its live file at struct rank R; a segment carries the same entry at R. Replay goes
+// through ingest's ENTRY_UPSERT with the exported: dead-file row, which is new and so has the larger file_id: under the
+// shipped "ties broken by the larger file_id" (RV15) the structure moved onto that row. Replay now never wins a tie, and
+// ingest's live copy beats an exported: holder at an equal rank whatever the file ids.
+describe('a live copy keeps an entry\'s structure on a tie (wave 5h-1 Task 6; D-5638 (history-ingest-live-beats-exported-tie))', () => {
+  /** The store a restore starts from: `fam`'s transcript, its LIVE file (an ingest_files row with its file_paths row) and
+   *  each text's blob and entry on that file at struct rank `rankOf(i)`. The live file_id. */
+  function x10LiveStore(db: DatabaseSync, fam: X10Family, rankOf: (i: number) => bigint): { live: number; transcriptPk: number } {
+    const transcriptPk = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)').run(fam.uuid).lastInsertRowid);
+    const live = Number(db.prepare("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, ?, '', ?, 'live', 1)")
+      .run(X10_DEV, fam.ino, transcriptPk).lastInsertRowid);
+    db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, ?, ?)').run(fam.path, live, Date.now());
+    fam.texts.forEach((x, i) => {
+      const blob = Number(db.prepare("INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, 'br5', ?, ?)")
+        .run(segmentSha(x.text), segmentSha(`a stored body ${i}`), Buffer.byteLength(x.text, 'utf8')).lastInsertRowid);
+      db.prepare("INSERT INTO entries (uuid, transcript_pk, type, role, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'user', 'operator', 1, ?, ?, ?, ?)")
+        .run(x.uuid, transcriptPk, rankOf(i), live, blob, x.tsMs);
+    });
+    return { live, transcriptPk };
+  }
+  /** Where an entry's structure sits: its struct_file_id, that row's status, and its rank as text (past 2^53). */
+  const structOf = (db: DatabaseSync, uuid: string): Record<string, unknown> => ({ ...(db.prepare(
+    'SELECT e.struct_file_id AS file, f.status AS status, CAST(e.struct_rank_ns AS TEXT) AS rank FROM entries e JOIN ingest_files f ON f.file_id = e.struct_file_id WHERE e.uuid = ?',
+  ).get(uuid) as object) });
+  const deadOf = (db: DatabaseSync, fam: X10Family): number =>
+    Number((db.prepare('SELECT file_id FROM ingest_files WHERE source_key = ?').get(exportedSourceKey(fam.path, X10_DEV, fam.ino)) as { file_id: number }).file_id);
+  /** One ingest chunk (for writeChunk) carrying `x` as a single row of `fam`'s transcript, read from live file `fileId` at struct rank `rankNs`. */
+  const liveChunkOf = (fam: X10Family, transcriptPk: number, fileId: number, x: X10Text, rankNs: bigint): Record<string, unknown> => ({
+    blobs: new Map([[segmentSha(x.text).toString('hex'), { sha: segmentSha(x.text), z: null, rawLen: 0 }]]), counts: new Map(),
+    rows: [{
+      kind: 'row', at: x.line, provenance: 'operator', sha: segmentSha(x.text), json: '{}', ftsText: null, ftsOverCap: false, boundary: null, kept: null,
+      entry: { uuid: x.uuid, type: 'user', subtype: null, role: 'user', model: null, parentUuid: null, tsMs: x.tsMs, requestId: null,
+        apiBlockIndex: null, msgId: null, sourceToolUseId: null, toolName: null, isCompactSummary: 0 },
+    }],
+    transcriptPk, fileId, rankNs, first: null, cursor: { offset: 0, tailSha: null }, size: 0, mtimeNs: 0n, rawError: null,
+    nowMs: Date.now(), pairIdx: null, ccUuid: fam.uuid,
+  });
+
+  it('replay: a segment carrying an entry at the rank the store holds it leaves the structure on the live file; a newer carried rank still takes it to the exported: row', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-5h-tie-replay-');
+    try {
+      const texts = x10Texts(0xd00, 2, 'zqtiereplay', Date.now() - 400 * X10_DAY);
+      const fam: X10Family = { uuid: x10U(0xd0), path: '/home/u/live/tie-replay.jsonl', ino: 9961, texts };
+      const R = BigInt(texts[0]!.tsMs) * 1_000_000n;   // x10Rows gives every entry of the family this struct_rank_ns
+      // texts[0] is held at R, the rank the segment carries (a tie); texts[1] at R - 1, older than the carried copy
+      const { live } = x10LiveStore(db, fam, (i) => (i === 0 ? R : R - 1n));
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      const dead = deadOf(db, fam);
+      expect(dead, 'CONTROL: the exported: row is new, so its file_id is the larger').toBeGreaterThan(live);
+      expect(structOf(db, texts[1]!.uuid), 'CONTROL: a newer carried rank takes the structure (the newest-rank rule is kept)')
+        .toEqual({ file: dead, status: 'exported', rank: String(R) });
+      expect(structOf(db, texts[0]!.uuid), 'a replayed copy never wins a tie: the structure stays on the live file')
+        .toEqual({ file: live, status: 'live', rank: String(R) });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('replay against replay: two segments carrying one entry at one rank, each through its own file, leave the structure on the first segment\'s exported: row', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-5h-tie-replay2-');
+    try {
+      const texts = x10Texts(0xd20, 1, 'zqtiereplaytwo', Date.now() - 400 * X10_DAY);
+      // one session's entry, carried by segment 1 through file A and by segment 2 through file B, at the same struct rank
+      const famA: X10Family = { uuid: x10U(0xd2), path: '/home/u/live/tie-replay-a.jsonl', ino: 9963, texts };
+      const famB: X10Family = { uuid: x10U(0xd2), path: '/home/u/live/tie-replay-b.jsonl', ino: 9964, texts };
+      const R = BigInt(texts[0]!.tsMs) * 1_000_000n;
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(famA) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(famB) });
+      let r = await SW.recoveryStep(db, stepCtx(box, ids));
+      for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+      expect(r, 'CONTROL: both segments replayed').toMatchObject({ done: true, held: false });
+      const first = deadOf(db, famA);
+      const second = deadOf(db, famB);
+      expect(second, 'CONTROL: the second segment\'s exported: row is the newer, so its file_id is the larger').toBeGreaterThan(first);
+      expect(structOf(db, texts[0]!.uuid), 'a replay-against-replay tie keeps the first segment\'s structure')
+        .toEqual({ file: first, status: 'exported', rank: String(R) });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('ingest: a live copy read at the rank an exported: row holds an entry\'s structure at takes it back though its file_id is the smaller; a live copy at an older rank does not', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-5h-tie-ingest-');
+    try {
+      const texts = x10Texts(0xd10, 2, 'zqtieingest', Date.now() - 400 * X10_DAY);
+      const fam: X10Family = { uuid: x10U(0xd1), path: '/home/u/live/tie-ingest.jsonl', ino: 9962, texts };
+      const R = BigInt(texts[0]!.tsMs) * 1_000_000n;
+      // the backup held both rows at R - 1; the segment carries them at R, newer, so replay moves both onto the exported: row
+      const { live, transcriptPk } = x10LiveStore(db, fam, () => R - 1n);
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      const dead = deadOf(db, fam);
+      expect(texts.map((x) => structOf(db, x.uuid)['file']), 'CONTROL: replay moved both onto the exported: row').toEqual([dead, dead]);
+      // The live file is read again from the backup's cursor: texts[0] at R (its file now has the carried copy's mtime), and
+      // texts[1] at R - 1 (an older read). One chunk each, through ingest's own writeChunk, on the LIVE file_id.
+      const chunkOf = (x: X10Text, rankNs: bigint): Record<string, unknown> => liveChunkOf(fam, transcriptPk, live, x, rankNs);
+      SW.writeChunk(db, chunkOf(texts[0]!, R));
+      SW.writeChunk(db, chunkOf(texts[1]!, R - 1n));
+      expect(structOf(db, texts[0]!.uuid), 'a live copy beats an exported: holder at an equal rank')
+        .toEqual({ file: live, status: 'live', rank: String(R) });
+      expect(structOf(db, texts[1]!.uuid), 'CONTROL: an older live copy never takes the structure')
+        .toEqual({ file: dead, status: 'exported', rank: String(R) });
+      expect(x10Count(db, 'entry_variants'), 'CONTROL: the same bodies made no variant').toBe(0);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  // RV15's surviving arm (final fix FX1): between two LIVE copies an equal rank goes to the larger file_id. Deleting
+  // `excluded.struct_file_id > entries.struct_file_id OR` from ENTRY_UPSERT's tie arm (the bound flag, the 21st positional parameter) left every suite green until this case.
+  it('ingest: between two live copies at one rank the larger file_id takes the structure; a smaller one does not take it back', () => {
+    const { db } = x10Store('ccrc-history-5h-tie-live-');
+    try {
+      const texts = x10Texts(0xd30, 1, 'zqtielive', Date.now() - 400 * X10_DAY);
+      const fam: X10Family = { uuid: x10U(0xd3), path: '/home/u/live/tie-live-a.jsonl', ino: 9965, texts };
+      const R = BigInt(texts[0]!.tsMs) * 1_000_000n;
+      const { live: low, transcriptPk } = x10LiveStore(db, fam, () => R);
+      // a second LIVE file of the same transcript, created after the first, so its file_id is the larger
+      const high = Number(db.prepare("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, ?, '', ?, 'live', 1)")
+        .run(X10_DEV, 9966, transcriptPk).lastInsertRowid);
+      db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, ?, ?)').run('/home/u/live/tie-live-b.jsonl', high, Date.now());
+      expect(high, 'CONTROL: the second live row has the larger file_id').toBeGreaterThan(low);
+      expect(structOf(db, texts[0]!.uuid), 'CONTROL: the entry starts on the first live file at R').toEqual({ file: low, status: 'live', rank: String(R) });
+      SW.writeChunk(db, liveChunkOf(fam, transcriptPk, high, texts[0]!, R));
+      expect(structOf(db, texts[0]!.uuid), 'a live copy with the larger file_id takes the structure at an equal rank')
+        .toEqual({ file: high, status: 'live', rank: String(R) });
+      SW.writeChunk(db, liveChunkOf(fam, transcriptPk, low, texts[0]!, R));
+      expect(structOf(db, texts[0]!.uuid), 'CONTROL: a live copy with the smaller file_id does not take it back')
+        .toEqual({ file: high, status: 'live', rank: String(R) });
+    } finally {
+      closeWriter(db);
+    }
+  });
+});
+
+// ── W2-1 Task 3: recall-off under a recovery step, and its generation read under the lock (W2-D27, W2-D28; RB12, C67) ──
+describe('W2-1 recall-off: RB12 and C67, decided under the lock', () => {
+  it('RB12: a registered recovery step never refuses recall-off; both forms run at both doors, and the step stays open', () => {
+    const box = makeHistoryBox('ccrc-history-recover-w21-rb12-');
+    seedFamily(box, {
+      id: ID, project: 'demo', uuid: u(0x41), generation: u(0xa4), workdir: WORK,
+      rows: [userRow({ uuid: u(0x4001), ts: new Date(Date.now() - 5 * MIN).toISOString(), text: 'zqrbtwelve words' })],
+    });
+    registerRecovery(box, Date.now());
+    // CONTROL: the step is registered, and it refuses a form RB12 does not exempt.
+    expect(lastRc(runShim(box, ['--op', 'import', '--apply']).stdout)).toEqual({ rc: 2, reason: 'recovering' });
+    const dir = path.join(historyPaths(box.home).root, 'recall-off');
+    const c = runCli(box, ['recall-off', ID, '--json']);
+    expect([c.code, c.json?.['reason']], `the CLI door\n${c.stdout}${c.stderr}`).toEqual([0, undefined]);
+    expect(fs.readFileSync(path.join(dir, ID), 'utf8')).toBe(`${u(0xa4)}\n`);
+    expect(lastRc(runShim(box, ['--op', 'recall-off', ID, '--clear']).stdout), 'the direct door').toEqual({ rc: 0 });
+    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(lastRc(runShim(box, ['--op', 'recall-off', ID]).stdout)).toEqual({ rc: 0 });
+    const all = runCli(box, ['recall-off', '--clear-all', '--json']);
+    expect([all.code, all.json?.['reason']], `${all.stdout}${all.stderr}`).toEqual([0, undefined]);
+    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(recoverRow(box)).toMatchObject({ cursor: null, completed_ms: null });
+  }, HEAVY);
+
+  it('C67 at the direct door: a $REG/<id>.generation present but unreadable refuses generation-unreadable under the lock, with or without --generation, and writes nothing', () => {
+    const box = makeHistoryBox('ccrc-history-recover-w21-c67-');
+    expect(runSweep(box).code).toBe(0);
+    plantSession(box, ID, { generation: 'unreadable' });
+    const before = ccrcSnapshot(box);
+    for (const extra of [[], ['--generation', u(0xa4)]]) {
+      const r = runShim(box, ['--op', 'recall-off', ID, ...extra]);
+      expect(lastRc(r.stdout), `${r.stdout}${r.stderr}`).toEqual({ rc: 2, reason: 'generation-unreadable' });
+      expect(r.code).toBe(2);
+    }
+    expect(ccrcSnapshot(box), 'nothing written').toEqual(before);
+    expect(fs.existsSync(path.join(historyPaths(box.home).root, 'recall-off'))).toBe(false);
+  }, HEAVY);
+});
+
+// ── W2-1 Task 4: the presence record across a recovery (W2-D30) ──────────────────────────────────────────────────
+// Replay rebuilds the change, gap and state rows from the journal without reading recall-off/, never replays seen_ms, and
+// never rewrites a row the store holds; the recover arm runs no presence step; the first ordinary tick after a rebuild
+// writes no change row for a file unchanged since before it.
+import * as roLib from '../../ccd/history/lib.mjs';
+
+describe('the recall-off presence record across a recovery (W2-D30; W2-1 Task 4)', () => {
+  interface RecallOffStep { recordRecallOff(db: DatabaseSync, ctx: Record<string, unknown>): void }
+  const K = roLib.RECALL_OFF_KEYS;
+  const [GA, GB, GC] = [u(0xc1), u(0xc2), u(0xc3)];
+  const [X, Y, W, Z] = ['claude-a-demo', 'claude-b-demo', 'claude-c-demo', 'claude-d-demo'];
+  const dirOf = (box: HistoryBox): string => path.join(box.root, 'recall-off');
+  const plant = (box: HistoryBox, id: string, gen: string): void => {
+    fs.mkdirSync(dirOf(box), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(dirOf(box), id), `${gen}\n`, { mode: 0o600 });
+  };
+  const presence = (box: HistoryBox): Record<string, string> => Object.fromEntries(
+    rows(box, 'SELECT k, v FROM meta WHERE k >= ? AND k < ? ORDER BY k', roLib.RECALL_OFF_META, `${roLib.RECALL_OFF_META.slice(0, -1)};`)
+      .map((r) => [String(r['k']), String(r['v'])]));
+  const changeKeys = (p: Record<string, string>, id?: string): string[] =>
+    Object.keys(p).filter((k) => k.startsWith(K.change) && (id === undefined || k.endsWith(`:${id}`)));
+  const changeCountOn = (db: DatabaseSync): number =>
+    Number((db.prepare('SELECT count(*) AS n FROM meta WHERE k >= ? AND k < ?').get(K.change, `${K.change.slice(0, -1)};`) as { n: number }).n);
+  /** A store whose record holds a first gap, X unchanged at GA, Y moved GA to GB, and W planted and then removed. Then
+   *  the DB is lost and recall-off/ moved away, so a replay that read it would find nothing; a rebuild is bound. */
+  const lostAfterTicks = (prefix: string): { box: HistoryBox; before: Record<string, string>; version: number } => {
+    const box = makeHistoryBox(prefix);
+    const P = historyPaths(box.home);
+    pass(box);
+    plant(box, X, GA); plant(box, Y, GA); plant(box, W, GA);
+    pass(box);
+    plant(box, Y, GB);
+    fs.rmSync(path.join(dirOf(box), W));
+    pass(box);
+    const before = presence(box);
+    expect(changeKeys(before, W), 'CONTROL: W came and went').toHaveLength(2);
+    expect(before[`${K.state}${W}`]).toBeUndefined();
+    const storeId = fs.readFileSync(P.storeId, 'utf8').trim();
+    for (const f of [P.dbFile, P.wal, P.shm]) fs.rmSync(f, { force: true });
+    fs.renameSync(dirOf(box), `${dirOf(box)}.away`);
+    return { box, before, version: boundEmptyStore(box, storeId).version };
+  };
+
+  it('replay rebuilds the change, gap and state rows from the journal without reading the directory; seen_ms is never replayed', () => {
+    const { box, before, version } = lostAfterTicks('ccrc-history-roff-replay-');
+    pass(box);   // the recovery step, whole; the recover arm runs no presence step
+    expect(recoverRow(box)).toMatchObject({ version, completed_ms: expect.any(Number) });
+    const after = presence(box);
+    expect(after[K.seen], 'seen_ms is not replayed').toBeUndefined();
+    expect(after).toEqual(Object.fromEntries(Object.entries(before).filter(([k]) => k !== K.seen)));
+    expect(fs.existsSync(dirOf(box)), 'CONTROL: the directory was away for the whole replay').toBe(false);
+  }, HEAVY);
+
+  it('a rebuild mid-window, then a tick: no change row for a file unchanged since before the rebuild, a gap from null, and null for one changed meanwhile', () => {
+    const { box, before } = lostAfterTicks('ccrc-history-roff-midwin-');
+    pass(box);   // the recovery step
+    fs.renameSync(`${dirOf(box)}.away`, dirOf(box));
+    plant(box, Y, GC);   // CONTROL: Y changed while the store was rebuilt; X did not
+    pass(box);   // the first ordinary tick after the step
+    const after = presence(box);
+    expect(changeKeys(after, X), 'X is unchanged since before the rebuild: no new change row').toEqual(changeKeys(before, X));
+    const newY = changeKeys(after, Y).filter((k) => !(k in before));
+    expect(newY.map((k) => JSON.parse(after[k]!) as unknown)).toEqual([{ from: { s: 'value', v: GB }, to: { s: 'value', v: GC }, prev_seen_ms: null }]);
+    const newGaps = Object.keys(after).filter((k) => k.startsWith(K.gap) && !(k in before));
+    expect(newGaps.map((k) => (JSON.parse(after[k]!) as { from: unknown }).from), 'the first observation after a rebuild is a gap from null').toEqual([null]);
+    expect(after[K.seen]).toMatch(/^[0-9]+$/);
+  }, HEAVY);
+
+  it('a recover pass with planted files writes no change: row and replay keeps a row the store holds; the step writes nothing while a recovery step is registered', () => {
+    const box = makeHistoryBox('ccrc-history-roff-recover-');
+    const P = historyPaths(box.home);
+    pass(box);   // the first observation: one gap row, journaled
+    const p0 = presence(box);
+    const gapKey = Object.keys(p0).find((k) => k.startsWith(K.gap));
+    expect(gapKey, 'the first observation wrote its gap row').toBeDefined();
+    plant(box, Z, GA);
+    // A row the store already holds under a journaled key, with another value: replay inserts DO NOTHING, so it stays.
+    const held = roLib.canonicalJson({ from: null, to: 1 });
+    const raw = new DatabaseSync(P.dbFile);
+    try { expect(Number(raw.prepare('UPDATE meta SET v = ? WHERE k = ?').run(held, gapKey!).changes)).toBe(1); } finally { raw.close(); }
+    registerRecovery(box, Date.now());
+    pass(box);   // the recover arm: the step replays this store's own journal and completes
+    expect(recoverRow(box)?.completed_ms).toEqual(expect.any(Number));
+    const mid = presence(box);
+    expect(changeKeys(mid), 'the recover arm wrote no change: row').toEqual([]);
+    expect(mid[`${K.state}${Z}`]).toBeUndefined();
+    expect(mid[K.seen], 'and observed nothing').toBe(p0[K.seen]);
+    expect(mid[gapKey!], 'a replayed gap record leaves the row the store held').toBe(held);
+    // The step guards itself: called in-process while a recovery step is registered, it writes nothing.
+    registerRecovery(box, Date.now() + 1);
+    const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+    const db = openWriter(P.dbFile);
+    try {
+      (SW as unknown as RecallOffStep).recordRecallOff(db, stepCtx(box, ids));
+      expect(changeCountOn(db), 'no change: row while a recovery step is registered').toBe(0);
+      db.prepare("DELETE FROM derivation_state WHERE step = 'recover' AND completed_ms IS NULL").run();
+      (SW as unknown as RecallOffStep).recordRecallOff(db, stepCtx(box, ids));
+      expect(changeCountOn(db), 'CONTROL: with none registered, the planted file is recorded').toBe(1);
+    } finally {
+      closeWriter(db);
+    }
+  }, HEAVY);
+});

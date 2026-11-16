@@ -1,0 +1,137 @@
+{
+  "name": "error-linear-invalid-priority",
+  "documentSource": "code",
+  "document": "mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success issue { id identifier title description priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } } }",
+  "variables": {
+    "id": "00000000-0006-4000-8000-000000000002",
+    "input": {
+      "priority": 99
+    }
+  },
+  "requestBody": "{\"query\":\"mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success issue { id identifier title description priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } } }\",\"variables\":{\"id\":\"00000000-0006-4000-8000-000000000002\",\"input\":{\"priority\":99}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631407398,
+  "receivedAtMs": 1793631407651,
+  "sentAt": "2026-11-02T14:56:47.398+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:48 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "422"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "11"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999989"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793635008026"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793635008026"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "errors": [
+      {
+        "message": "Argument Validation Error",
+        "path": [
+          "issueUpdate"
+        ],
+        "locations": [
+          {
+            "line": 1,
+            "column": 65
+          }
+        ],
+        "extensions": {
+          "code": "INVALID_INPUT",
+          "validationErrors": [
+            {
+              "target": {
+                "priority": 99
+              },
+              "value": 99,
+              "property": "priority",
+              "children": [],
+              "constraints": {
+                "max": "priority must not be greater than 4"
+              }
+            }
+          ],
+          "type": "invalid input",
+          "userError": true,
+          "userPresentableMessage": "priority must not be greater than 4."
+        }
+      }
+    ],
+    "data": null
+  },
+  "bodyRaw": "{\"errors\":[{\"message\":\"Argument Validation Error\",\"path\":[\"issueUpdate\"],\"locations\":[{\"line\":1,\"column\":65}],\"extensions\":{\"code\":\"INVALID_INPUT\",\"validationErrors\":[{\"target\":{\"priority\":99},\"value\":99,\"property\":\"priority\",\"children\":[],\"constraints\":{\"max\":\"priority must not be greater than 4\"}}],\"type\":\"invalid input\",\"userError\":true,\"userPresentableMessage\":\"priority must not be greater than 4.\"}}],\"data\":null}\n",
+  "note": "An invalid input: priority out of Linear's 0..4."
+}

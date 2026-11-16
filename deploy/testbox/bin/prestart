@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# The test box's prepare units' privileged first step, `ExecStartPre=+prestart <spec file>` (D-7406; plan
+# docs/superpowers/plans/2026-10-29-test-box.md, Task TB4; spec §2.2 "The run directory").
+#
+# `runs/<k>` is root's and the run writes only `runs/<k>/run`: this refuses to start when `run` already exists (in
+# any form, a link included), and otherwise creates it and its empty `home/`, mode 0700, owned by the run user. So
+# a run cannot leave a sibling of `run` that the cleanup would miss, or replace `run` with a link. It reads no config
+# file and no test box variable; the run directory and the run user come from the spec the service wrote.
+set -euo pipefail
+
+die() { printf 'ccrc-testbox-prestart: %s\n' "$*" >&2; exit 1; }
+
+[ "$#" -eq 1 ] || die "usage: prestart <spec file>"
+spec=$1
+[ -f "$spec" ] && [ ! -L "$spec" ] || die "no spec file: $spec"
+
+header=
+run=
+user=
+while IFS= read -r -d '' rec; do
+  if [ -z "$header" ]; then
+    [ "$rec" = ccrc-testbox-spec ] || die "not a test box spec: $spec"
+    header=1
+    continue
+  fi
+  case $rec in
+    D*) run=${rec:1} ;;
+    U*) user=${rec:1} ;;
+    *) ;;
+  esac
+done < "$spec"
+
+[ -n "$run" ] && [ -n "$user" ] || die "the spec names no run directory or run user"
+case $run in /*/run) ;; *) die "not a run directory: $run" ;; esac
+case $user in *[!a-z0-9_-]*|'') die "not a run user: $user" ;; esac
+slot=${run%/run}
+[ -d "$slot" ] && [ ! -L "$slot" ] || die "no run slot: $slot"
+if [ -e "$run" ] || [ -L "$run" ]; then die "the run directory already exists: $run"; fi
+
+mkdir -m 0700 -- "$run"
+mkdir -m 0700 -- "$run/home"
+chown -- "$user" "$run" "$run/home"

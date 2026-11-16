@@ -11,17 +11,18 @@
 // greps ccd itself, so if a rung is ever deleted the test fails here too and
 // the paragraph gets re-decided instead of quietly becoming false again.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // The path to the ccd script is spelled in exactly ONE file in this tree and
 // `single-definition.test.ts` enforces it — import the constant, never re-spell
 // it here (this file's first draft did, and that guard caught it).
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
+import { CAPS_REFRESH_MS } from '../src/laneSchedule.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
-const ccd = readFileSync(CCD, 'utf8');
+const ccd = ccdSource();
 
 /** The lifecycle list alone. The ordering assertion below is deliberately
  * scoped here: the README also discusses historical close/open mistakes, and
@@ -44,6 +45,15 @@ const holdsSection = (): string => {
   return readme.slice(start, end === -1 ? undefined : end);
 };
 
+// D-2745: this passage (the run-lifecycle list, steps 1-6) is pinned TWICE,
+// by two suites in two files with different slicers, and neither is
+// discoverable from the other. This file's own `lifecycleSection()` above
+// ('**Run lifecycle**' → '**The mail bus and its token.**', then this
+// describe's own '\n6. ' sub-slice on the crossing) pins the
+// operator-visible SENTENCES as literals. `server/test/crossrepo-prose.test.ts`'s
+// `lifecyclePassage()` ('**Run lifecycle**' → '\n**The mail bus') pins the
+// MECHANISM names (response fields, refusal codes, evidence tokens) over the
+// same region. An edit to this passage must be run against BOTH files.
 describe('README: run lifecycle ordering (D-2680)', () => {
   it('opens wave N+1 before it closes wave N, so the programme never retires between calls', () => {
     const section = lifecycleSection();
@@ -154,8 +164,12 @@ describe('README: workspace holds', () => {
     // Grounded in the code, not merely asserted in prose.
     const watchTs = readFileSync(path.join(root, 'server', 'src', 'watch.ts'), 'utf8');
     expect(watchTs).toMatch(/openRunsForSession/);
-    const serverTs = readFileSync(path.join(root, 'server', 'src', 'server.ts'), 'utf8');
-    expect(serverTs).toMatch(/'run-open'/);
+    // Workspace lifecycle wave 2: the code is L0's `ARCHIVE_REFUSALS.runOpen`, declared once and read by the door.
+    expect(readFileSync(path.join(root, 'shared', 'api.ts'), 'utf8')).toMatch(/runOpen: 'run-open'/);
+    const serverSrc = (readdirSync(path.join(root, 'server', 'src'), { recursive: true }) as string[])
+      .filter((f) => f.endsWith('.ts'))
+      .map((f) => readFileSync(path.join(root, 'server', 'src', f), 'utf8'));
+    expect(serverSrc.some((t) => t.includes('ARCHIVE_REFUSALS.runOpen'))).toBe(true);
   });
 });
 
@@ -319,8 +333,7 @@ describe('README: the --surface bullet', () => {
     expect(bullet).toMatch(/rollback/i);
     expect(bullet).toMatch(/60/);
     expect(bullet).not.toMatch(/\binstant(ly)?\b/i);
-    const watchTs = readFileSync(path.join(root, 'server', 'src', 'watch.ts'), 'utf8');
-    expect(watchTs).toMatch(/CAPS_REFRESH_MS\s*=\s*60_000/);
+    expect(CAPS_REFRESH_MS, 'the caps lane looks once a minute').toBe(60_000);
   });
 
   // Fix round 5 (task 14 follow-up, Important #1): round 4's local-mode
@@ -364,5 +377,16 @@ describe('README: the --surface bullet', () => {
     expect(whitelist).toMatch(/\[\s*'stop'\s*\]/);
     const bullet = execWhitelistBullet();
     expect(bullet).toMatch(/bare one-token/);
+  });
+});
+
+describe('README: the coordinator-ball push (stall watch wave 5)', () => {
+  // `coord-ball-restarts-on-reactivation` (D-3789): the 30 h runs from the later of the last mail on the run and the
+  // run's return to work. The sentence that announces the push says so, not only the paragraph after it.
+  it('the sentence that names the `⚠ waiting` push says its 30 h restarts on a send-back', () => {
+    const sentence = readme.replace(/\s+/g, ' ').split(/(?<=\.)\s+/).find((s) => s.includes('pushes `⚠ waiting`'));
+    expect(sentence, 'no README sentence names the push').toBeDefined();
+    expect(sentence).toMatch(/30 h/);
+    expect(sentence).toMatch(/send-back/);
   });
 });

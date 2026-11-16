@@ -11,58 +11,41 @@
 // Opening this screen IS the ack, the same rule SessionScreen's mount ack
 // follows. One watermark for the whole feed (FEED_ACK_KEY), because "have I
 // read my mail" is one question, not one per sender.
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import type { NotifyEvent, RunSummary } from '../../../shared/api';
-import { eventRunId, recordKey, reviveNotifyEvents } from '../lib/feed';
-import { api } from '../lib/api';
+import { eventRunId, interruptLine, raisesUnread, recordKey } from '../lib/feed';
 import { navigate } from '../lib/router';
+import { backToFleet } from '../command/door';
 import { ack, acksSnapshot, FEED_ACK_KEY, isUnseenAt, subscribeAcks } from '../lib/seen';
-import { useNow } from '../lib/useNow';
+import { Button, EmptyState, MAIL_GLYPH, PageScaffold, SETTINGS_GLYPH, useNow } from '@ccrc/ui';
 import { formatAge } from '../fleet/formatReset';
+import { LiftCapSheet } from '../fleet/LiftCapSheet';
+import { capDoorRun } from '../fleet/reviewCapWords';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { useHeardRuns } from '../fleet/useHeard';
+import { loadColdRuns, useColdRuns } from './useColdRuns';
 import '../fleet/fleet.css';
 
-/** The shipping default — `GET /api/feed?limit=100` — hoisted to MODULE
- *  scope rather than an inline arrow used as a default PARAMETER value. A
- *  default parameter is re-evaluated on every call to the function
- *  component, so an inline `() => api.feed(100)` is a fresh identity on
- *  every render, not a stable one. That identity used to sit in the effect
- *  below's own dependency array, and `mergeFeed` -> `mergeBySeq`
- *  (`lib/feed.ts`) allocates a fresh `feed` array even for a no-op merge —
- *  so every render re-minted this default, the effect's deps compared
- *  unequal, and it tore down and re-fired: an unbounded `GET /api/feed` loop
- *  for as long as this screen stayed mounted. (Fix round 1, Task 4, findings
- *  1 and 3 — reachable only on the real default path, which is why no
- *  shipped test caught it: every one supplied its own stable `loadFeed`.) */
-const loadFeedDefault = (): Promise<{ events: NotifyEvent[] }> => api.feed(100);
-
-/** The programme titles the headers are built from. `api.runs(true)` — WITH
- *  closed runs — because a feed record outlives its run: a wave that finished
- *  yesterday still has its records on this screen, and the active-only default
- *  would leave every one of them unresolved. Hoisted to module scope for
- *  `loadFeedDefault`'s own reason (a default parameter expression is re-minted
- *  on every render, and an effect keyed on that identity never stops firing). */
-const loadRunsDefault = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
+/** No live runs: before the runs frame has been seen, no record offers the review cap's door (D-6911). */
+const NO_RUNS: readonly RunSummary[] = [];
 
 /** The feed's own small vocabulary. Deliberately NOT NotifyEvent['kind']
  *  rendered raw: `merged` is a git word, `run` is a noun the board owns, and
  *  `unknown` has to read as an honest answer rather than as a bug. */
 const KIND_WORD: Record<NotifyEvent['kind'], string> = {
   mail: 'mail', run: 'run', ask: 'asked', done: 'finished', merged: 'merged',
-  coord: 'config', unknown: 'unknown',
+  coord: 'config', update: 'update', queue: 'queue', interrupt: 'interrupt', nudge: 'nudged', unknown: 'unknown',
 };
 const KIND_GLYPH: Record<NotifyEvent['kind'], string> = {
-  mail: '✉', run: '⟳', ask: '?', done: '✓', merged: '⑂', coord: '⚙', unknown: '·',
+  mail: MAIL_GLYPH, run: '⟳', ask: '?', done: '✓', merged: '⑂', coord: SETTINGS_GLYPH, update: '⇡', queue: '⤺', interrupt: '⎋', nudge: '↻', unknown: '·',
 };
 
 export function MailScreen({
   store = useFleetStore,
-  loadFeed = loadFeedDefault,
-  loadRuns = loadRunsDefault,
+  loadRuns = loadColdRuns,
 }: {
   store?: FleetStore;
-  loadFeed?: () => Promise<{ events: NotifyEvent[] }>;
   loadRuns?: () => Promise<{ runs: RunSummary[] }>;
 }): ReactNode {
   const feed = store((s) => s.feed);
@@ -83,52 +66,35 @@ export function MailScreen({
   // filter that is already set.
   const [filter, setFilter] = useState<string | null>(null);
 
-  // Held in a ref, not the effect's own dependency array below: "once per
-  // mount" has to hold regardless of the CALLER's identity discipline, not
-  // only the hoisted default's — a prop minted fresh on every render (an
-  // inline arrow passed by a future caller, say) must not be able to restart
-  // this either. The ref always reads the LATEST `loadFeed` without ever
-  // being a reason for the effect to re-run.
-  const loadFeedRef = useRef(loadFeed);
-  loadFeedRef.current = loadFeed;
-
   // The durable read, once per mount — now actually once: keyed on `[store]`
   // alone, so a merge-induced re-render (mergeFeed -> mergeBySeq always
   // allocates a fresh `feed` array, even for a no-op merge) cannot restart
-  // it. Revived rather than trusted: `CatchUp` has been consumed by a bare
-  // getJson since it shipped, and a kind from a newer server reaching an old
-  // client typed as one of three things it is not is exactly what that
-  // bareness costs.
+  // it. The request is the store's (C7n, D-7209): `refreshFeed()` is its one
+  // feed reader, which revives and merges the answer, and this screen words
+  // its empty state from the outcome — `'error'` only once the read has
+  // actually failed, never merely because it has not resolved yet.
   useEffect(() => {
     let live = true;
-    void loadFeedRef.current()
-      .then((r) => {
-        if (!live) return;
-        const { events, dropped: d } = reviveNotifyEvents(r.events);
-        store.getState().mergeFeed(events, d);
-        setReadState('ok');
-      })
-      .catch(() => { if (live) setReadState('error'); });
+    void store.getState().refreshFeed().then((outcome) => { if (live) setReadState(outcome); });
     return () => { live = false; };
   }, [store]);
 
   // The programme titles. A SEPARATE read from the feed's, and a failure here is
   // not a failure of this screen: the records still render, under headers that
   // say the programme was not measured. Never merged into the feed's own
-  // promise — one failing read must not take the other's data with it.
-  const [runsById, setRunsById] = useState<ReadonlyMap<number, RunSummary>>(new Map());
-  const loadRunsRef = useRef(loadRuns);
-  loadRunsRef.current = loadRuns;
-  useEffect(() => {
-    let live = true;
-    void loadRunsRef.current()
-      .then((r) => {
-        if (!live) return;
-        setRunsById(new Map(r.runs.map((run) => [run.id, run] as const)));
-      })
-      .catch(() => { /* the headers degrade; the feed does not */ });
-    return () => { live = false; };
-  }, [store]);
+  // promise — one failing read must not take the other's data with it. The
+  // archive read is the run board's (C7n, D-7209), with `closed=1` because a
+  // feed record outlives its run: a wave that finished yesterday still has its
+  // records on this screen. Once per mount: no transition re-reads it, since
+  // the headers need the titles, not a finished row's reclaim chip.
+  const { cold } = useColdRuns(store, loadRuns, { rereadOnTransitions: false });
+  const runsById = useMemo<ReadonlyMap<number, RunSummary>>(
+    () => new Map((cold ?? []).map((run) => [run.id, run] as const)), [cold]);
+  // D-6911: the cap's record carries its Lift cap door from the fleet store's live runs frame, never from the
+  // once-per-mount read above, so a lift (here or anywhere) takes the door away on the watcher's next frame. No frame
+  // yet is no door. The screen's one lift sheet opens from it.
+  const doorRuns = useHeardRuns(store) ?? NO_RUNS;
+  const [liftTarget, setLiftTarget] = useState<RunSummary | null>(null);
 
   // Opening the screen is the ack. Floored to the newest record's own instant
   // (seen.ts's `stampFor`) so a device behind the fleet host's clock does not
@@ -177,18 +143,20 @@ export function MailScreen({
   const shown = [...groups].filter(([key]) => activeFilter === null || key === activeFilter);
 
   return (
-    <div className="mail-screen">
-      <header className="mail-head">
-        <button type="button" className="mail-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
-          ‹
-        </button>
-        <h1 className="mail-title">Mail</h1>
-      </header>
-
+    // The page scaffold (D-5102): Back, the caret and the title, the Digest door at the header's right.
+    <PageScaffold
+      title="Mail"
+      back={backToFleet('mail-back')}
+      actions={
+        // The digest's standing door (D-5300, D-5493 (5)): the daily push opens it too, but a missed push must lose nothing.
+        <Button variant="ghost" size="fit" className="mail-digest" onClick={() => navigate('/digest')}>Digest</Button>
+      }
+    >
       {/* The presence-gate asymmetry, said once and permanently. A record is
           written whatever the operator was looking at; only the phone ping is
-          held back for a session already on screen. Prose, so it is sans. */}
-      <p className="mail-note">
+          held back for a session already on screen. Prose, so it is sans; the
+          scaffold's lede type (D-5102), so it is no rule of this screen's. */}
+      <p className="m-0 font-ui text-meta leading-normal text-ink-secondary">
         Records land here whether or not you were watching — only the phone ping is held back for a
         session you already have open.
       </p>
@@ -230,37 +198,51 @@ export function MailScreen({
         // their own honest render — `readState === 'error'` only fires once
         // this screen's own read has actually failed, never merely because
         // it has not resolved yet.
-        <p className="mail-empty" data-state={readState === 'error' ? 'error' : 'loading'}>
+        <EmptyState data-state={readState === 'error' ? 'error' : 'loading'}>
           {readState === 'error' ? 'Could not reach the server — mail may exist that is not shown.' : 'Loading…'}
-        </p>
+        </EmptyState>
       ) : rows.length === 0 ? (
-        <p className="mail-empty" data-state="ok">Nothing yet.</p>
+        <EmptyState data-state="ok">Nothing yet.</EmptyState>
       ) : (
         <>
           {shown.map(([key, g]) => (
             <div key={key} className="mail-group">
               <p className="mail-group-head">{g.head}</p>
               <ul className="mail-list">
-                {g.rows.map((ev) => (
-                  <li
-                    key={recordKey(ev)}
-                    className="mail-row"
-                    data-unseen={isUnseenAt(FEED_ACK_KEY, ev.at, acks) ? 'true' : 'false'}
-                  >
-                    <span className="mail-kind">
-                      <span className="mail-kind-glyph" aria-hidden="true">{KIND_GLYPH[ev.kind]}</span>
-                      {KIND_WORD[ev.kind]}
-                    </span>
-                    <span className="mail-row-title">{ev.title}</span>
-                    <span className="mail-when">{formatAge(nowSec - Math.floor(ev.at / 1000))}</span>
-                    {ev.body !== '' && <p className="mail-body">{ev.body}</p>}
-                  </li>
-                ))}
+                {g.rows.map((ev) => {
+                  // D-5431: an interrupt row whose body parsed shows it as its title, in words, and prints no raw
+                  // `source=… outcome=…` line — the title already says both. A body off its grammar has no title
+                  // standing in for it, so it still prints. `raisesUnread` keeps the row from ever reading unseen.
+                  const line = interruptLine(ev);
+                  const capRun = capDoorRun(ev, doorRuns);
+                  return (
+                    <li
+                      key={recordKey(ev)}
+                      className="mail-row"
+                      data-unseen={raisesUnread(ev) && isUnseenAt(FEED_ACK_KEY, ev.at, acks) ? 'true' : 'false'}
+                    >
+                      <span className="mail-kind">
+                        <span className="mail-kind-glyph" aria-hidden="true">{KIND_GLYPH[ev.kind]}</span>
+                        {KIND_WORD[ev.kind]}
+                      </span>
+                      <span className="mail-row-title">{line ?? ev.title}</span>
+                      <span className="mail-when">{formatAge(nowSec - Math.floor(ev.at / 1000))}</span>
+                      {ev.body !== '' && line === null && <p className="mail-body">{ev.body}</p>}
+                      {capRun !== null && (
+                        <Button variant="primary" size="fit" className="mail-cap-door text-xs leading-none"
+                          onClick={() => setLiftTarget(capRun)}>
+                          Lift cap
+                        </Button>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ))}
         </>
       )}
-    </div>
+      <LiftCapSheet run={liftTarget} onClose={() => setLiftTarget(null)} />
+    </PageScaffold>
   );
 }

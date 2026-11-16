@@ -1,0 +1,32 @@
+/* Advanced's "What ccrc closes on its own" (`RunCloseSection`, D-8077, Task 26; spec 2026-11-04 §8.6 item 2, §12.3). Skin tokens only.
+   Every control keeps the tap floor, text wraps, nothing is ellipsised. A row stacks on a phone and lays its state beside its
+   controls from medium (`runs` is the screen's container); at laptop width a lane row keeps to one line. */
+.rc-section { display: grid; gap: var(--sp-2); min-width: 0; margin-bottom: var(--sp-3); }
+.rc-row {
+  display: grid; gap: var(--sp-1); min-width: 0; padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-surface); color: var(--ink-primary); border-radius: var(--r-md);
+}
+.rc-title { margin: 0; font: var(--weight-medium) var(--fs-sm) / 1.4 var(--family-mono); overflow-wrap: anywhere; }
+.rc-row .rc-state { font: var(--weight-medium) var(--fs-xs) / 1.4 var(--family-mono); color: var(--ink-secondary); }
+.rc-row .rc-state-on { color: var(--ink-primary); text-decoration: underline; text-underline-offset: 0.2em; }
+.rc-row .rc-note, .rc-row .rc-tally { margin: 0; font-size: var(--fs-xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.rc-row .rc-count { margin: 0; font-size: var(--fs-xs); color: var(--ink-primary); overflow-wrap: anywhere; }
+.rc-controls { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.rc-controls .rc-control { min-height: var(--tap-min); }
+.rc-row .rc-why { margin: 0; font-size: var(--fs-2xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.rc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); }
+.rc-list li { display: grid; gap: 0; min-width: 0; }
+.rc-list .rc-run { font: var(--weight-medium) var(--fs-xs) / 1.4 var(--family-mono); overflow-wrap: anywhere; }
+.rc-sheet .rc-line { font-size: var(--fs-2xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.rc-sheet {
+  display: grid; gap: var(--sp-2); min-width: 0; padding: var(--sp-3);
+  color: var(--ink-primary); background: var(--bg-surface); border-radius: var(--r-md);
+}
+.rc-sheet .rc-sub { margin: 0; font: var(--weight-medium) var(--fs-xs) / 1.4 var(--family-mono); }
+.rc-sheet .rc-note, .rc-sheet .rc-count { margin: 0; font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.rc-sheet .rc-note { color: var(--ink-secondary); }
+@container runs (min-width: 640px) {
+  .rc-row { grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--sp-3); align-items: center; }
+  .rc-row > .rc-wide { grid-column: 1 / -1; }
+  .rc-row > .rc-controls { justify-self: end; }
+}

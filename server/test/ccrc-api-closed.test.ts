@@ -3,17 +3,24 @@
 // of one change: each one is something that would be true today and quietly
 // false in a month, and each is the kind of thing whose loss is invisible until
 // a session on a locked-down repo cannot talk to the server at all.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CCRC_API } from './ccdWsHelpers.js';
+import { CCRC_API, harnessBin } from './ccdWsHelpers.js';
+import { clientRoutes } from './ccrcApiTable.js';
+import { runClient, writeClientHome, type Run } from './ccrcApiClient.js';
+import { mkTmp } from './tmpHelpers.js';
+import { waveLifecycleText } from './waveLifecycle.js';
 
 const root = path.join(import.meta.dirname, '..', '..');
 const corpusFiles = (): string[] => {
   const out: string[] = [];
-  for (const dir of ['ccd/coordinator-skill', 'ccd/worker-skill']) {
+  // `ccd/linear-skill` (#1444, spec 2026-10-31 §11): its worked examples are executable, so each must map to a row.
+  for (const dir of ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill', 'ccd/history-skill', 'ccd/linear-skill', 'ccd/overlord-skill']) {
     const walk = (d: string): void => {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
         const p = path.join(d, e.name);
@@ -28,12 +35,33 @@ const corpusFiles = (): string[] => {
 
 const client = (): string => fs.readFileSync(CCRC_API, 'utf8');
 
-const routeKeys = (): Set<string> => {
-  const src = client();
-  const start = src.indexOf('declare -A ROUTES=(');
-  const table = src.slice(start, src.indexOf('\n)', start));
-  return new Set([...table.matchAll(/^\s*\[([a-z.-]+)\]=/gm)].map((m) => m[1]!));
-};
+const routeKeys = (): Set<string> => new Set(clientRoutes().map((r) => r.key));
+
+// D-8076 (spec 2026-11-04 §10): the operator's act and decline of an end-request item are absent from the client, like the
+// abandon door: a session asks with `end-request` and has no verb that ends a run or keeps one.
+describe("the operator's act and decline are not in ccrc-api's table", () => {
+  it('no client row reaches /api/items/:id/act or /decline, and the client text never spells them', () => {
+    const paths = clientRoutes().map((r) => r.path);
+    for (const door of ['/api/items/:id/act', '/api/items/:id/decline']) {
+      expect(paths, `${door} is a row of the client: a session could end a run`).not.toContain(door);
+    }
+    const text = fs.readFileSync(CCRC_API, 'utf8');
+    expect(text).not.toMatch(/\/act\b|\/decline\b/);
+  });
+});
+
+// D-8166 (test box connect spec §2.1, C14; plan TC12): the test box card's two routes are the console's alone. They put and pin
+// credentials on the fleet host, so a session on the fleet gets no verb that reaches them.
+describe("the test box connect routes are console-only: not in ccrc-api's table", () => {
+  it('no client row reaches /api/testbox/admin, and the client text never spells it', () => {
+    const paths = clientRoutes().map((r) => r.path);
+    for (const door of ['/api/testbox/admin', '/api/testbox/admin/:sub']) {
+      expect(paths, `${door} is a row of the client: a session could connect a test box`).not.toContain(door);
+    }
+    expect(paths.filter((p) => p.startsWith('/api/testbox/admin')), 'a client row reaches the test box admin routes').toEqual([]);
+    expect(fs.readFileSync(CCRC_API, 'utf8')).not.toMatch(/\/api\/testbox\/admin/);
+  });
+});
 
 /** The client with its comments stripped. The negative flag scans below MUST
  *  read this and not the raw file: `ccrc-api`'s own header names every flag it
@@ -141,19 +169,53 @@ describe('the corpora no longer invoke curl', () => {
       'asks.release',
       'claims.release',
       'claims.take',
+      'items.withdraw',
+      'landing.entries',
+      'landing.order',
+      'landing.show',
+      'leases.retain',
       'ledger.allocate',
+      'linear.comment',
+      'linear.create',
+      'linear.issue',
+      'linear.labels',
+      'linear.link',
+      'linear.search',
+      'linear.statuses',
+      'linear.update',
+      'linking.show',
+      'mail.inbox',
       'mail.send',
       'peers.list',
+      'plan.close',
+      'plan.epic-drop',
+      'plan.met',
+      'plan.put',
+      'plan.show',
+      'plan.ticket-add',
+      'plan.ticket-move',
+      'runs.end-request',
       'runs.list',
       'runs.open',
+      'runs.route',
+      'runs.signals',
     ]);
     expect([...invoked].filter((key) => !declared.has(key)),
       'an executable corpus command has no ccrc-api route row').toEqual([]);
   });
 
+  it('W5-R16: the delegated-worktrees reference calls `ccrc-api leases retain`, and the table has that row', () => {
+    const file = path.join(root, 'ccd/coordinator-skill/references/delegated-worktrees.md');
+    expect(fs.existsSync(file), 'the coordinator reference on delegated worktrees is missing').toBe(true);
+    const text = fs.readFileSync(file, 'utf8');
+    const calls = executableBlocks(text).flatMap((b) => [...b.matchAll(/ccrc-api\s+leases\s+retain\b/g)]);
+    expect(calls.length, 'the reference has no executable `ccrc-api leases retain` call').toBeGreaterThan(0);
+    expect(routeKeys().has('leases.retain'), 'no [leases.retain] row').toBe(true);
+  });
+
   it('executes ask examples with no valid default and exact expanded calls', () => {
-    const lifecycle = fs.readFileSync(path.join(
-      root, 'ccd/coordinator-skill/references/wave-lifecycle.md'), 'utf8');
+    // The lifecycle is one file or one per step: `waveLifecycleText` reads either.
+    const lifecycle = waveLifecycleText();
     const askBlocks = executableBlocks(lifecycle)
       .filter((block) => /"\$API"\s+asks\s+(?:answer|release)\b/.test(block));
     expect(askBlocks, 'the lifecycle must carry answer and release examples').toHaveLength(2);
@@ -221,7 +283,35 @@ describe('the client stays closed', () => {
     // identity-bearing flag reds here the day it lands. (`--*)` is not matched —
     // `*` is outside the class.)
     const cases = [...clientCode().matchAll(/^\s*(--[a-z-]+)\)/gm)].map((m) => m[1]!);
-    expect(cases.sort()).toEqual(['--by', '--json']);
+    // `--session` (delegation broker wave 3, Task 15) is the third label and is NOT a second identity-bearing flag: it belongs to
+    // `parse_intent`, the focused grammar of `coordinators intent`, where it is an ASSERTION that must equal the pane-derived id
+    // (the next test holds that), the shape `asks list --parent` already has.
+    expect(cases.sort()).toEqual(['--by', '--json', '--session']);
+  });
+
+  it('`coordinators intent` takes its identity from the pane: --session is compared with it and never builds anything (Task 15)', () => {
+    // The whole focused grammar is one function, read here as TEXT so a mutation that lets the flag SELECT the session reds by its line.
+    const code = clientCode();
+    const start = code.indexOf('parse_intent() {');
+    expect(start, 'the focused intent grammar is gone').toBeGreaterThan(-1);
+    const fn = code.slice(start, code.indexOf('\n}', start));
+    // ONE flag, and it is the only case label in the function.
+    expect([...fn.matchAll(/^\s*(--[a-z-]+)\)/gm)].map((m) => m[1])).toEqual(['--session']);
+    // The identity is derived BEFORE the comparison, and the comparison refuses.
+    const derive = fn.indexOf('derive_identity');
+    const compare = fn.indexOf('[[ "$session" == "$DERIVED_ID" ]]');
+    expect(derive, 'parse_intent no longer derives the pane identity').toBeGreaterThan(-1);
+    expect(compare, 'parse_intent no longer compares --session with the derived id').toBeGreaterThan(derive);
+    expect(fn.slice(compare, compare + 160)).toContain("refuse 'session-mismatch'");
+    // The id and the body come from the derived pair; the flag's value is read into `session` and reaches nothing else.
+    const body = /^\s*INTENT_BODY=(.*)$/m.exec(fn)?.[1] ?? '';
+    expect(body).toContain('$DERIVED_ID');
+    expect(body).toContain('$DERIVED_UUID');
+    expect(body, 'the body is built from the --session value').not.toContain('$session');
+    expect(/^\s*INTENT_ID="\$DERIVED_ID"$/m.test(fn), 'the path id is not the derived id').toBe(true);
+    expect([...fn.matchAll(/\$\{?session\b/g)].length, '--session is used for something besides the one comparison').toBe(1);
+    // And the generic parser is told nothing: it runs on an emptied argument list for this row.
+    expect(code).toMatch(/if \[\[ "\$key" == 'coordinators\.intent' \]\]; then\n\s+parse_intent "\$@"\n[^\n]*\n\s+set --\n/);
   });
 
   it('never hands the token to anything that prints', () => {
@@ -259,6 +349,19 @@ describe('the client stays closed', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('hands the token to curl on stdin, as one `-K -` config line, and on no argv (R16)', () => {
+    // A `-H` value is readable in every process listing on the box for the
+    // life of the call. The behaviour is pinned in ccrc-api.test.ts (a curl
+    // that records its argv and stdin); this pins the one sink in the source,
+    // so a second header site, or the old `-H "x-ccrc-mail-token: $TOKEN"`,
+    // reds here by its line.
+    const code = clientCode();
+    const mentions = code.split('\n').filter((l) => /x-ccrc-mail-token/i.test(l)).map((l) => l.trim());
+    expect(mentions).toEqual([`code=$(printf 'header = "x-ccrc-mail-token: %s"\\n' "$TOKEN" \\`]);
+    expect(code).toContain(`\n    | curl "\${args[@]}" "$url" 2>/dev/null)\n`);
+    expect(code).toMatch(/^\s*local -a args=\(-sS -K - /m);
+  });
+
   it('validates every caller-supplied fragment before it can reach a URL', () => {
     // The id and the query value are the ONLY caller-supplied text that ever
     // lands in a path or a query string, so they are the only places a path
@@ -268,6 +371,116 @@ describe('the client stays closed', () => {
     expect(src).toMatch(/SAFE_RE='\^\[A-Za-z0-9_-\]\+\$'/);
     expect((src.match(/=~ \$SAFE_RE/g) ?? []).length,
       'both the id and the query value must be checked').toBeGreaterThanOrEqual(3);
+  });
+
+  it('fills a body on exactly two rows and splices the family\'s kind on the four claimant rows, and the census of rows is unchanged (D-5298, D-7322)', () => {
+    // A body fill is one of the two ways this client writes words its caller did not.
+    // `ledger.allocate` fills `byId`; `runs.open` fills `claimedByUuid`, the
+    // claimant's own `.uuid` (coordinator-first routing, plan Task 11a). A third
+    // row, or `runs.open`'s fill moved onto a row that sets no claimant, is a
+    // decision this census makes someone take on purpose. Neither fill is a new
+    // row, a new route or a passthrough. The other way is `coordinators.intent`
+    // (delegation broker wave 3, Task 15), whose body `parse_intent` builds whole
+    // from the pane's identity: it fills nothing, so the scan below does not see
+    // it, and its row took the table from twenty-four to twenty-five on the merge.
+    // The three approvals rows (coordinator-first routing, plan Task 14) took it to
+    // twenty-eight; they fill nothing either: the hook builds its request body whole.
+    // The claimant's three (plan Task 16) took it to thirty-one: `rule` and `release` carry the caller's own body,
+    // and `show` derives its query from the pane as `asks list` does — a query, not a body fill.
+    // The test box's two (test box plan TB9, D-7411) took it to thirty-three; neither takes a body or fills one.
+    // The landing line's read (landing order wave 5e, D-7625) took it to thirty-four; it takes no body and fills none.
+    // The twelve Linear rows (D-7669, #1444) took it to forty-six; they fill no body: their identity rides the query
+    // (the describe at the end of this file).
+    // The programme ledgers' nine (plan PL3) took it to fifty-five; each takes the caller's own body, and none fills one.
+    // The landing line's two attributed writes (landing order wave 5f: `landing.entries`, `landing.order`) took it to fifty-seven;
+    // each takes the caller's own body, `byId` and `byUuid` included, and fills none, so the two fills below stay two.
+    // `leases.retain` (delegation broker wave 5, PR8) took it to fifty-eight; it takes the caller's own body and fills none.
+    // `runs.review-rounds` (the coordinator's review-cap extension, D-8125) took it to fifty-nine; it takes the caller's own body and fills none.
+    // `linear.link` (D-8141) took it to sixty; it takes the caller's own body and fills none.
+    // `runs.end-request` (D-8076) took it to sixty-one; it takes the caller's own body, `byId` and `byUuid` included, and fills none.
+    // `linking.show` (D-8147) took it to sixty-two.
+    // `goals.show` (autonomy-default wave A2, D-8126) took it to sixty-three; a GET by id, it fills nothing.
+    // The seven `plan` rows (D-8181) took it to seventy; each takes the caller's own body and fills none (the identity rides the query).
+    // The third fill is the question door family's `kind` (K5 Q3j): on the four claimant rows only, the client splices a
+    // `kind` read from the row's family template, never from the caller, so it is counted by its own scan below rather
+    // than by the two keyed fills' spelling. Since Q3l (D-7324) the template is the row's path and is always sent, so
+    // the scan reads the `$claimant` test Q3l writes (named exception).
+    const code = clientCode();
+    const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
+      .map((m) => m[1]!).sort();
+    expect(filled).toEqual(['ledger.allocate', 'runs.open']);
+    // `calls.record` (autonomy-default wave A3, D-8126) took it to sixty-four; it is the one body fill that REFUSES a caller's byId
+    // and byUuid, so it is counted by its own scan (`calls.record` below), not by the keyed fills' spelling.
+    // `mail.inbox` (D-6780) took it to sixty-five; its read takes no body, and the ack body it synthesizes is pinned below.
+    // The seven `plan` rows (D-8181) took it to seventy-two; `sessions.start` (Overlord W1a, the start report, no body fill) to seventy-three.
+    // `sessions.card` (Overlord W1a, the card piece, no body fill) took it to seventy-four, and the note door's four (the notes
+    // piece) to seventy-eight: the three POSTs take the `calls.record` fill's rule, pinned below. The three `timer` rows (the
+    // timers piece) took it to eighty-one: `parse_timer` builds each body whole from the pane's pair, no splice and no fill.
+    // The probe door's two (Overlord, the probes piece: `sessions.probe`, a read, and `probe.answer`, which takes the note door's
+    // rule) to eighty-three. The loads door's `sessions.loads` (Overlord W1 sandbox, Task 4; a POST of the hook's spooled body,
+    // no splice and no fill) to eighty-four.
+    expect(routeKeys().size).toBe(84);
+    // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
+    // refuses, then derives the pair from the pane, and fills nowhere else.
+    const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));
+    expect(code.match(/if \[\[ "\$key" == 'calls\.record' \]\]; then/g) ?? []).toHaveLength(1);
+    expect(callFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
+    expect(callFill).toMatch(/splice_body_field 'byUuid' "\$DERIVED_UUID"/);
+    expect(callFill).toMatch(/splice_body_field 'byId' "\$DERIVED_ID"/);
+    // The note door's fill (Overlord W1a, the notes piece) is the call record's rule on its three POST rows: it refuses a body
+    // naming either key, then splices the pane's pair; `note list` fills the query.
+    const noteFill = code.slice(code.indexOf("if [[ \"$key\" == 'note.add' || \"$key\" == 'note.close' || \"$key\" == 'note.handover' ]]; then"));
+    expect(code.match(/if \[\[ "\$key" == 'note\.add' \|\| "\$key" == 'note\.close' \|\| "\$key" == 'note\.handover' \]\]; then/g) ?? []).toHaveLength(1);
+    expect(noteFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
+    expect(noteFill).toMatch(/splice_body_field 'byUuid' "\$DERIVED_UUID"/);
+    expect(noteFill).toMatch(/splice_body_field 'byId' "\$DERIVED_ID"/);
+    // The probe answer's fill is the note door's rule on one row: refuse a body naming either key, then append the pane's pair.
+    const probeFill = code.slice(code.indexOf("if [[ \"$key\" == 'probe.answer' ]]; then\n    [[ -n"));
+    expect(code.match(/if \[\[ "\$key" == 'probe\.answer' \]\]; then\n    \[\[ -n/g) ?? []).toHaveLength(1);
+    expect(probeFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
+    expect(probeFill).toMatch(/append_body_field 'byId' "\$DERIVED_ID"/);
+    expect(probeFill).toMatch(/append_body_field 'byUuid' "\$DERIVED_UUID"/);
+    // The claimant's identity is the PANE's, derived, never a value the caller
+    // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
+    expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);
+    // The family's splice: one guard line, one `kind` splice, its value the variable read from the row template's
+    // prefix (`$claimant`), and the rows whose template is the family's are exactly the four claimant rows.
+    expect([...code.matchAll(/^\s*if \[\[ -n "\$claimant" \]\] && _api_server_cap "\$want"; then$/gm)], 'the family guard line').toHaveLength(1);
+    const kindSplices = [...code.matchAll(/splice_body_field 'kind' "\$([a-z_]+)"/g)].map((m) => m[1]!);
+    expect(kindSplices, 'the kind splice').toEqual(['claimant']);
+    expect(code, 'the spliced kind is derived from the family template\'s prefix').toMatch(
+      /^\s*claimant="\$\{tmpl#\/api\/questions\/\}"\n\s*claimant="\$\{claimant%%-\*\}"$/m);
+    expect(clientRoutes().filter((r) => r.path.startsWith('/api/questions/')).map((r) => r.key))
+      .toEqual(['asks.answer', 'asks.release', 'approvals.rule', 'approvals.release']);
+  });
+});
+
+// D-6780 (mail inbox, plan MI-6): the fifth body this client writes is the inbox's ack body, synthesized whole from the
+// pane's pair, as `parse_intent`'s is. It reaches the `mail.ack` row's own template, and every request of a run goes
+// through the one request function, which never exits, never clears the token and never arms a trap.
+describe('the inbox\'s ack body and the one request function (D-6780)', () => {
+  const fnBody = (code: string, name: string): string => {
+    const start = code.indexOf(`${name}() {`);
+    expect(start, `${name} is gone from the client`).toBeGreaterThan(-1);
+    return code.slice(start, code.indexOf('\n}', start));
+  };
+
+  it('the ack body is the pane-derived pair and nothing else, sent to the mail.ack row\'s template', () => {
+    const fn = fnBody(clientCode(), 'inbox_ack');
+    const sends = [...fn.matchAll(/send_request POST "([^"]*)" "((?:[^"\\]|\\.)*)"/g)];
+    expect(sends.map((m) => [m[1], m[2]])).toEqual([
+      ['$SERVER_URL${tmpl/\\{id\\}/$id}', '{\\"fromId\\":\\"$DERIVED_ID\\",\\"fromUuid\\":\\"$DERIVED_UUID\\"}'],
+    ]);
+    expect(fn).toMatch(/IFS='\|' read -r _ tmpl _ _ <<< "\$\{ROUTES\[mail\.ack\]\}"/);
+  });
+
+  it('send_request is the one place curl runs, and it never exits, clears the token or arms a trap', () => {
+    const code = clientCode();
+    const fn = fnBody(code, 'send_request');
+    expect(fn).toContain('| curl "${args[@]}" "$url" 2>/dev/null)');
+    expect(fn).not.toMatch(/\bexit\b|\btrap\b|TOKEN=/);
+    expect(code.match(/\| curl /g) ?? [], 'a second curl site').toHaveLength(1);
+    expect(code.match(/^\s*trap /gm) ?? [], 'a second trap').toHaveLength(1);
   });
 });
 
@@ -288,5 +501,221 @@ describe('the client is not on the exec surface', () => {
     const decl = /export const EXEC_COMMANDS = \[([^\]]*)\]/.exec(wl);
     expect(decl, 'EXEC_COMMANDS is no longer a literal array — re-read this guard').not.toBeNull();
     expect(decl![1]).not.toMatch(/ccrc-api/);
+  });
+});
+
+describe('the Linear rows: identity in the query on every row, the body as the caller gave it (D-7669, #1444)', () => {
+  // Spec §14 row 15. The client derives the pane's identity on every `linear.*` row and appends it to the QUERY, after
+  // the row's declared keys, GETs and POSTs alike; it never reads or edits a body for identity. The loopback server
+  // below stands in for the proxy's closed body validators (spec §5.3): it parses the body as JSON, so it sees keys
+  // as JSON defines them, `\u`-escaped ones included, and refuses `byId`, `byUuid` and `workspace` as `bad-field`
+  // with the field named. A body the client had spliced would arrive with a key the caller never wrote.
+  const BODY_ONLY_REFUSED = ['byId', 'byUuid', 'workspace'];
+  const TOKEN = 'y'.repeat(64);
+  let home: string;
+  let server: Server;
+  let seen: { method: string; url: string; body: string }[];
+
+  beforeEach(async () => {
+    home = mkTmp('ccrc-api-linear-');
+    seen = [];
+    server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        seen.push({ method: req.method ?? '', url: req.url ?? '', body });
+        let answer: { code: number; json: unknown } = { code: 200, json: { ok: true } };
+        if (body !== '') {
+          let parsed: unknown;
+          try { parsed = JSON.parse(body); } catch { parsed = undefined; }
+          if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            answer = { code: 400, json: { ok: false, error: 'bad-request', detail: 'body' } };
+          } else {
+            const named = BODY_ONLY_REFUSED.find((k) => Object.hasOwn(parsed as object, k));
+            if (named !== undefined) answer = { code: 400, json: { ok: false, error: 'bad-field', detail: named } };
+          }
+        }
+        res.writeHead(answer.code, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(answer.json));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    writeClientHome(home, `http://127.0.0.1:${(server.address() as AddressInfo).port}`, TOKEN);
+    // A tmux that answers for the pane, planted first on PATH (`ccrc-api.test.ts#plantPane`'s shape).
+    fs.writeFileSync(path.join(harnessBin(home), 'tmux'), "#!/bin/sh\nprintf 'cc-demo-ws\\n'\n", { mode: 0o755 });
+    fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-ws.uuid'), 'u-1234\n');
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((r) => { server.close(() => r()); });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  const PANE = { TMUX_PANE: '%7' };
+  const ID = 'byId=demo-ws&byUuid=u-1234';
+  const run = (args: string[], input?: string, env: Record<string, string | undefined> = PANE): Promise<Run> =>
+    runClient(home, args, input, env);
+  const envelope = (r: Run): { ok: boolean; error?: string; detail?: string } =>
+    JSON.parse(r.stdout) as { ok: boolean; error?: string; detail?: string };
+
+  // [verb args, method, path, the declared query the call sends before the identity pair ('' for none)].
+  const CALLS: ReadonlyArray<readonly [string[], string, string, string]> = [
+    [['linear', 'workspaces'], 'GET', '/api/linear/proxy/workspaces', ''],
+    [['linear', 'teams', '--workspace', 'ws-a'], 'GET', '/api/linear/proxy/teams', 'workspace=ws-a'],
+    [['linear', 'issue', 'AAA-12'], 'GET', '/api/linear/proxy/issues/AAA-12', ''],
+    [['linear', 'search', '--json', '-'], 'POST', '/api/linear/proxy/search', ''],
+    [['linear', 'comments', 'AAA-12', '--limit', '5', '--after', 'Y3Vyc29y'], 'GET', '/api/linear/proxy/issues/AAA-12/comments', 'limit=5&after=Y3Vyc29y'],
+    [['linear', 'statuses', '--team', 'AAA', '--workspace', 'ws-a'], 'GET', '/api/linear/proxy/statuses', 'team=AAA&workspace=ws-a'],
+    [['linear', 'projects', '--team', 'BBB', '--limit', '10'], 'GET', '/api/linear/proxy/projects', 'team=BBB&limit=10'],
+    [['linear', 'labels', '--team', 'AAA'], 'GET', '/api/linear/proxy/labels', 'team=AAA'],
+    [['linear', 'users', '--after', 'Y3Vyc29y'], 'GET', '/api/linear/proxy/users', 'after=Y3Vyc29y'],
+    [['linear', 'create', '--json', '-'], 'POST', '/api/linear/proxy/issues', ''],
+    [['linear', 'update', 'AAA-12', '--json', '-'], 'POST', '/api/linear/proxy/issues/AAA-12', ''],
+    [['linear', 'comment', 'AAA-12', '--json', '-'], 'POST', '/api/linear/proxy/issues/AAA-12/comments', ''],
+    [['linear', 'link', 'AAA-12', '--json', '-'], 'POST', '/api/linear/proxy/issues/AAA-12/links', ''],
+  ];
+  const linearRows = (): ReturnType<typeof clientRoutes> => clientRoutes().filter((r) => r.key.startsWith('linear.'));
+  const POSTS = CALLS.filter(([, m]) => m === 'POST');
+
+  it('the thirteen Linear rows are exactly the calls below, read through clientRoutes()', () => {
+    expect(linearRows().map((r) => r.key).sort()).toEqual(CALLS.map(([a]) => `${a[0]}.${a[1]}`).sort());
+    expect(linearRows()).toHaveLength(13);
+  });
+
+  it.each(CALLS)('%s sends %s %s with the pane\'s identity last in the query', async (args, method, p, q) => {
+    const r = await run(args, args.includes('--json') ? '{"team":"AAA","title":"t"}' : undefined);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen.map((s) => [s.method, s.url])).toEqual([[method, `${p}?${q === '' ? '' : `${q}&`}${ID}`]]);
+  });
+
+  it.each(POSTS)('%s puts the body on the wire byte for byte, and splices nothing into it', async (args) => {
+    const bodies = ['{"team":"AAA","title":"t"}', ' { "body" : "a\\nb" }\n', '{}'];
+    for (const b of bodies) await run(args, b);
+    // `$(cat)` strips a trailing newline, as every `--json -` row has always sent it; nothing else changes.
+    expect(seen.map((s) => s.body)).toEqual(bodies.map((b) => b.replace(/\n+$/, '')));
+    expect(seen.every((s) => s.url.endsWith(`?${ID}`))).toBe(true);
+  });
+
+  it.each(POSTS)('%s sends a body naming byId as given, the escaped spelling included, and the server refuses it bad-field', async (args) => {
+    const bodies = [
+      '{"\\u0062yId":"x","team":"AAA","title":"t"}',
+      '{"byId":"neighbour","byUuid":"u-other","team":"AAA","title":"t"}',
+      '{"workspace":"ws-b","team":"AAA","title":"t"}',
+    ];
+    const answers: [number, string | undefined, string | undefined][] = [];
+    for (const b of bodies) {
+      const r = await run(args, b);
+      answers.push([r.status, envelope(r).error, envelope(r).detail]);
+    }
+    expect(seen.map((s) => s.body)).toEqual(bodies);
+    expect(seen.every((s) => s.url.endsWith(`?${ID}`)), 'the query carries the pane\'s pair, never the body\'s').toBe(true);
+    expect(answers).toEqual([[0, 'bad-field', 'byId'], [0, 'bad-field', 'byId'], [0, 'bad-field', 'workspace']]);
+  });
+
+  it('a caller cannot name byId or byUuid on any Linear row: unknown-query, exit 2, nothing sent', async () => {
+    for (const [args] of CALLS) {
+      for (const k of ['--byId', '--byUuid']) {
+        const r = await run([...args, k, 'neighbour'], args.includes('--json') ? '{}' : undefined);
+        expect([r.status, envelope(r).error], `${args.join(' ')} ${k}`).toEqual([2, 'unknown-query']);
+      }
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it('free text has no query key: every Linear row declares only workspace, team, limit and after', async () => {
+    const allowed = new Set(['workspace', 'team', 'limit', 'after']);
+    for (const row of linearRows()) {
+      expect(row.query.filter((k) => !allowed.has(k)), row.key).toEqual([]);
+    }
+    for (const k of ['--text', '--title', '--description', '--body', '--q', '--query']) {
+      const r = await run(['linear', 'search', k, 'x', '--json', '-'], '{}');
+      expect([r.status, envelope(r).error], k).toEqual([2, 'unknown-query']);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it('workspace is declared on all eleven rows but workspaces, which takes no query key at all', () => {
+    for (const row of linearRows()) {
+      expect(row.query.includes('workspace'), row.key).toBe(row.key !== 'linear.workspaces');
+    }
+    expect(linearRows().find((r) => r.key === 'linear.workspaces')?.query).toEqual([]);
+  });
+
+  it('linking show sends GET /api/linking with the pane\'s byId and byUuid', async () => {
+    const r = await run(['linking', 'show']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen.map((s) => [s.method, s.url, s.body])).toEqual([['GET', `/api/linking?${ID}`, '']]);
+  });
+
+  it('linking show takes no id and no query key, and a caller cannot name the identity', async () => {
+    expect(clientRoutes().find((r) => r.key === 'linking.show')).toMatchObject({ method: 'GET', path: '/api/linking', query: [] });
+    for (const extra of [['AAA-12'], ['--workspace', 'x'], ['--byId', 'neighbour'], ['--byUuid', 'u-other'], ['--project', 'other']]) {
+      const r = await run(['linking', 'show', ...extra]);
+      expect(r.status, extra.join(' ')).not.toBe(0);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it('the issue verbs take --workspace and send workspace=x', async () => {
+    const f = path.join(home, 'comment.json');
+    fs.writeFileSync(f, '{"body":"b"}');
+    const calls: string[][] = [
+      ['linear', 'issue', 'AAA-12', '--workspace', 'x'],
+      ['linear', 'comments', 'AAA-12', '--workspace', 'x'],
+      ['linear', 'comment', 'AAA-12', '--workspace', 'x', '--json', f],
+    ];
+    for (const a of calls) {
+      const r = await run(a);
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+    }
+    expect(seen.map((s) => [s.method, s.url, s.body])).toEqual([
+      ['GET', `/api/linear/proxy/issues/AAA-12?workspace=x&${ID}`, ''],
+      ['GET', `/api/linear/proxy/issues/AAA-12/comments?workspace=x&${ID}`, ''],
+      ['POST', `/api/linear/proxy/issues/AAA-12/comments?workspace=x&${ID}`, '{"body":"b"}'],
+    ]);
+  });
+
+  it('search posts to its own path, never under /issues/', async () => {
+    const row = linearRows().find((r) => r.key === 'linear.search');
+    expect([row?.method, row?.path, row?.needsId]).toEqual(['POST', '/api/linear/proxy/search', false]);
+    await run(['linear', 'search', '--json', '-'], '{"text":"a b"}');
+    expect(seen.map((s) => s.url.split('?')[0])).toEqual(['/api/linear/proxy/search']);
+    expect(seen[0]!.url).not.toContain('/issues');
+  });
+
+  it('a <REF> that fails the identifier grammar is refused locally as bad-ref (D-7685), exit 2, and nothing is sent', async () => {
+    const refs = ['AAA12', 'AAA-', 'search', '-12', '1AA-12', 'AAA-1234567890', 'AAA-12-3'];
+    for (const verb of ['issue', 'comments', 'update', 'comment']) {
+      for (const ref of refs) {
+        const r = await run(['linear', verb, ref, ...(verb === 'update' || verb === 'comment' ? ['--json', '-'] : [])], '{}');
+        expect([r.status, envelope(r).error], `${verb} ${ref}`).toEqual([2, 'bad-ref']);
+      }
+    }
+    expect(seen).toEqual([]);
+    // The grammar's edges that pass: one letter, an underscore, nine digits.
+    for (const ref of ['A-1', 'a_B9-123456789']) await run(['linear', 'issue', ref]);
+    expect(seen.map((s) => s.url.split('?')[0])).toEqual(['/api/linear/proxy/issues/A-1', '/api/linear/proxy/issues/a_B9-123456789']);
+  });
+
+  it('a pane with no identity is refused locally on every Linear row, and nothing is sent', async () => {
+    for (const [args] of CALLS) {
+      const r = await run(args, args.includes('--json') ? '{}' : undefined, { TMUX_PANE: undefined, TMUX: undefined });
+      expect([r.status, envelope(r).error], args.join(' ')).toEqual([2, 'no-pane']);
+    }
+    fs.rmSync(path.join(home, '.cc-sessions', 'demo-ws.uuid'));
+    const r = await run(['linear', 'workspaces']);
+    expect([r.status, envelope(r).error]).toEqual([2, 'no-uuid']);
+    expect(seen).toEqual([]);
+  });
+
+  it('the identity is appended to the query and nowhere else: the Linear block never names the body', () => {
+    const code = clientCode();
+    const at = code.indexOf('if [[ "$key" == linear.* || "$key" == linking.show ]]; then');
+    expect(at, 'the Linear identity block is gone').toBeGreaterThan(-1);
+    const block = code.slice(at, code.indexOf('\n  fi\n', at));
+    expect(block).toContain('derive_identity');
+    expect(block).toContain('query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"');
+    expect(block, 'the Linear block reads or edits the body').not.toMatch(/\$\{?body\b|splice_body_field/);
   });
 });

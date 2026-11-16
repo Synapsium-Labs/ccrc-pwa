@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { BASE, post, get, pollUntil, wsCollect, eventsOf, sleep, waitIdle } from './helpers.js';
 
-const ID = 'claude2-cctest';
+const ID = 'claude-cctest';
 
 // The suite drives a real cctest session through ccrc's public API only.
 // Guarded so `vitest run` stays green when CCRC_BASE_URL is unset.
@@ -12,7 +12,7 @@ describe.skipIf(!BASE)('ccrc live e2e (cctest)', () => {
   });
 
   it('1. create + reach ready (idle, gates cleared)', async () => {
-    await post('/api/sessions', { wrapper: 'claude2', project: 'cctest', enable: true });
+    await post('/api/sessions', { wrapper: 'claude', project: 'cctest', enable: true });
     // Wait for genuinely ready — not just tmux-alive — so ccd's spawn automation
     // (trust gate, /effort injection) finishes before we drive the pane.
     await waitIdle(ID, 200_000);
@@ -47,12 +47,13 @@ describe.skipIf(!BASE)('ccrc live e2e (cctest)', () => {
     const dialog = dialogMsgs[dialogMsgs.length - 1].dialog;
     expect(dialog.options.length).toBeGreaterThanOrEqual(3);
 
-    // Answer option 2 and expect the dialog to clear.
+    // Answer option 2 and expect the dialog to clear. W7 C7p (D-7194): through the operator's answer door, the question
+    // family's (was `POST /api/sessions/:id/dialog`, retired).
     const clearedMsgs = await wsCollect(
       `/ws/session/${ID}`,
       (m) => m.type === 'dialog_cleared',
       60_000,
-      () => { void post(`/api/sessions/${ID}/dialog`, { dialogId: dialog.id, optionIndex: 2 }); },
+      () => { void post(`/api/questions/session-${ID}/answer`, { kind: 'dialog', dialogId: dialog.id, optionIndex: 2 }); },
     );
     expect(clearedMsgs.some((m) => m.type === 'dialog_cleared')).toBe(true);
   }, 230_000);

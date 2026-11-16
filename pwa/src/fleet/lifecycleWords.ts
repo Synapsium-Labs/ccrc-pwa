@@ -11,6 +11,7 @@
 // the table is total over the union, and the door into it tolerates a token
 // this build was never compiled to know.
 import type { FleetSession, SessionLifecycle } from '../../../shared/api';
+import { elapsedShort } from '@ccrc/ui';
 
 /** Every lifecycle except `stopped`, which needs the stamp to say anything
  *  useful and is handled in the function below. `running` maps to `null` on
@@ -33,17 +34,12 @@ const QUALIFIER: Record<Exclude<SessionLifecycle, 'stopped'>, string | null> = {
   unmeasurable: 'lifecycle unreadable',
 };
 
-/** '<1m' | '5m' | '3h' | '2d'. Same shape as SessionLine's `subagentElapsed`
- *  and PrKeycap's `rel()` — reimplemented locally for the reason both of
- *  those already record: there is no shared time-formatting module to import
- *  from yet. Unlike `rel()` this never returns null; a stop always has an
- *  age, even a fresh one. */
+/** '<1m' | '5m' | '3h' | '2d'. The ladder is `elapsedShort`'s, the shared
+ *  module three local copies used to cite as missing. Unlike `PrKeycap`'s
+ *  `rel()` this never renders nothing; a stop always has an age, even a
+ *  fresh one. */
 function elapsed(at: number, now: number): string {
-  const m = Math.floor(Math.max(0, now - at) / 60_000);
-  if (m < 1) return '<1m';
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
+  return elapsedShort(now - at) ?? '<1m';
 }
 
 /** The two halves of a stop stamp, each present only if the frame really

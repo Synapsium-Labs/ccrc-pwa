@@ -1,0 +1,18 @@
+❯ dnum2
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Order
+
+Which pipeline order?
+
+❯ 1. Fast
+     Skip lint.
+  2. Medium
+     Lint only.
+  3. Careful
+     1. lint every package in the workspace including the generated clients and all vendored tooling
+     2. run the test suites, then 3. build
+  4. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

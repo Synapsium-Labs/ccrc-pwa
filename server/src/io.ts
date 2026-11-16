@@ -1,7 +1,17 @@
-import { createReadStream, watch, type FSWatcher } from 'node:fs';
-import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { constants as fsConstants, createReadStream, watch, type FSWatcher } from 'node:fs';
+import { lstat, mkdir, open, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
-import type { ReadFailure } from '../../shared/agent-protocol.js';
+import type { ReadFailure, TestboxAdminAsked, TestboxOpReply, TestboxToolsSyncReply } from '../../shared/agent-protocol.js';
+import type { TestboxAdminFields, TestboxAdminSub } from '../../shared/testbox-admin.js';
+import type { DiskMeasured } from '../../shared/disk.js';
+import { measureDisk } from '../../agent/src/disk.js';
+import { measureHeadroom, measurePressure } from '../../agent/src/pressure.js';
+import { measureBackup } from '../../agent/src/backup.js';
+import type { BackupRead } from '../../shared/backup.js';
+import { measureTestbox, syncTestboxTools } from '../../agent/src/testboxOp.js';
+import type { HostPsi } from '../../shared/pressure.js';
+import { isReadFromRange, LANE_STATE_DIR_NAME, laneStateOpenHolds } from '../../shared/agent-protocol.js';
 
 /** Why a read couldn't produce content — and, since `MeasuredStat` below,
  *  why a `stat` couldn't produce {mtimeMs,size} either: ONE vocabulary for
@@ -35,7 +45,7 @@ import type { ReadFailure } from '../../shared/agent-protocol.js';
 export type { ReadFailure };
 
 /** A read that distinguishes ITS OWN two failure modes instead of collapsing
- *  both to `null`, unlike `readFile`/`readFileB64` below. See THE GOVERNING
+ *  both to `null`, unlike `readFile` below. See THE GOVERNING
  *  RULE in `docs/superpowers/plans/2026-08-20-fleetio-measured-read.md`
  *  (committed, not the session-scoped SDD scratch dir): the measured read is
  *  ADDITIONAL evidence, never a replacement for existing evidence — at every
@@ -57,6 +67,28 @@ export type MeasuredStat =
   | { ok: true; mtimeMs: number; size: number }
   | { ok: false; reason: ReadFailure };
 
+/** A PATH's OWN type, which `MeasuredStat` structurally cannot carry because
+ *  `stat` follows the link and answers about the target. Three positive kinds,
+ *  so `other` never borrows one of the two that decide anything.
+ *
+ *  `unmeasured` IS A FOURTH FAILURE REASON HERE AND NOT ON THE WIRE, and the
+ *  asymmetry is the point: it means this io cannot answer the question at all
+ *  — an agent too old to implement the `lstat` op, which rejects the request
+ *  rather than guessing. Folding it into `unreadable` would be an adapter
+ *  narrowing a distinction it received, and the narrowing would be the
+ *  dangerous direction: a caller that may act only on `regular` must be able
+ *  to tell "this box says not a plain file" from "nobody asked". */
+export type MeasuredPathKind =
+  | { ok: true; kind: 'regular' | 'symlink' | 'other' }
+  | { ok: false; reason: ReadFailure | 'unmeasured' };
+
+/** The `disk` measurement as a seam answers it: what the work filesystems read (`DiskMeasured`, the decider's input),
+ *  or why nothing was read. `unmeasured` is an agent too old to answer the op or any fault on the wire; `unreadable`
+ *  is a local fault. Neither is ever evidence of a healthy disk, and `absent` has no meaning here. */
+export type MeasuredDisk =
+  | { ok: true; measured: DiskMeasured }
+  | { ok: false; reason: 'unreadable' | 'unmeasured' };
+
 /** A binary read that distinguishes its THREE failure modes. `too-large` is
  *  not a fault and not an absence: the file is there and this transport
  *  cannot carry it (the agent's `MAX_READ_B64_BYTES`, a property of the WS
@@ -77,6 +109,29 @@ export type MeasuredRangeRead =
   | { ok: true; data: string; size: number }
   | { ok: false; reason: ReadFailure };
 
+/** A directory listing that distinguishes its two failure modes instead of
+ *  collapsing both to `null`, as `readdir` below does. An EMPTY listing is a
+ *  positive answer, never a failure: `ok: true` with no entries means "the
+ *  directory is there and holds nothing". `absent` is a proven ENOENT and
+ *  nothing else; anything this io cannot tell from a missing directory — an
+ *  older agent that sends a bare `names: null`, a malformed answer, a refusal,
+ *  a timeout, a disconnect — is `unreadable`. `readdir` derives from this. */
+export type MeasuredDirectoryRead =
+  | { ok: true; entries: readonly string[] }
+  | { ok: false; reason: ReadFailure };
+
+/** A bounded BYTE-range read: the bytes themselves, never text. `bytes` is
+ *  exactly `min(maxBytes, size - offset)` long (empty at EOF, which is a
+ *  positive answer), `size` the file's measured size. A split multibyte
+ *  character stays split — decoding is the caller's job, after it has framed
+ *  complete lines — and an answer that cannot prove those bytes (an older
+ *  peer's decoded `data`, malformed or non-canonical base64, a length that
+ *  disagrees with `size`, a size that has regressed below `offset`) is
+ *  `unreadable`, never reconstructed. */
+export type MeasuredByteRangeRead =
+  | { ok: true; bytes: Uint8Array; size: number }
+  | { ok: false; reason: ReadFailure };
+
 /**
  * Fs-facade seam every fleet-fs access goes through. `local` (this module)
  * hits node:fs against this box's disk; a `remote` implementation (T3) proxies
@@ -84,6 +139,11 @@ export type MeasuredRangeRead =
  * import node:fs directly for fleet paths once threaded through this.
  */
 export interface FleetIO {
+  // D-5969 (ARCH-08b): every member states its failure contract on a `Failure contract:` line, where a caller reads it
+  // (`fleetio-contract.test.ts` requires one). A `*Measured` member never rejects and tells its failures apart; its
+  // collapsing sibling is a convenience whose `null` folds them, and a read whose failure decides anything uses the
+  // measured one.
+
   /** Distinguishes "genuinely does not exist" from "exists but unreadable" —
    *  see `MeasuredRead`/`ReadFailure` above. `readFile` derives from this.
    *  `timeoutMs` overrides the remote client's ordinary request timeout; it can
@@ -94,38 +154,159 @@ export interface FleetIO {
    *  `readFile` member has no cancellation parameter. Local `readdir` ignores
    *  both optional arguments because the Node API used by this adapter accepts
    *  neither; Node also cannot interrupt every local
-   *  filesystem syscall after dispatch. */
+   *  filesystem syscall after dispatch.
+   *  Failure contract: never rejects; `absent` only for a proven ENOENT, every other failure `unreadable`. */
   readFileMeasured(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<MeasuredRead>;
-  readFile(path: string): Promise<string | null>;   // null on ANY failure — absent and unreadable both collapse here; use readFileMeasured to tell them apart
+  /** The collapsing convenience over `readFileMeasured`.
+   *  Failure contract: never rejects; `null` on ANY failure — absent and unreadable both collapse here; use
+   *  `readFileMeasured` to tell them apart. */
+  readFile(path: string): Promise<string | null>;
   /** Distinguishes absence from unreadability for a range read; the EOF arm
-   *  is a positive answer. `readFileFrom` derives from this. */
+   *  is a positive answer. `readFileFrom` derives from this.
+   *  Failure contract: never rejects; `absent` only for a proven ENOENT, every other failure `unreadable`. */
   readFileFromMeasured(path: string, offset: number): Promise<MeasuredRangeRead>;
-  readFileFrom(path: string, offset: number): Promise<{ data: string; size: number } | null>;   // null on ANY failure; use readFileFromMeasured to tell absent from unreadable
-  /** Distinguishes absence, unreadability and over-cap. `readFileB64` derives
-   *  from this. */
+  /** The collapsing convenience over `readFileFromMeasured`.
+   *  Failure contract: never rejects; `null` on ANY failure; use `readFileFromMeasured` to tell absent from
+   *  unreadable. */
+  readFileFrom(path: string, offset: number): Promise<{ data: string; size: number } | null>;
+  /** The BYTE-exact sibling of `readFileFromMeasured`: at most `maxBytes` bytes
+   *  from `offset`, as a `Uint8Array`, with the file's `size`. `maxBytes` is
+   *  `1..READ_FROM_MAX_BYTES` and `offset` a non-negative safe integer; anything
+   *  else is `unreadable` before the disk or the wire is touched. An offset past
+   *  `size` is a size regression and `unreadable` — the same answer on both
+   *  adapters. The remote adapter reads only the agent's `dataB64`; an older
+   *  agent that ignores `maxBytes` answers decoded `data` alone and is
+   *  `unreadable`, because bytes are never rebuilt from text. `timeoutMs` and
+   *  `signal` are forwarded by the remote adapter; `localIO` ignores both, as
+   *  `readdir` does. `readFileFromMeasured` is unchanged and keeps its decoded
+   *  string.
+   *  Failure contract: never rejects; `absent` only for a proven ENOENT, every other failure `unreadable`. */
+  readFileFromBytesMeasured(
+    path: string,
+    offset: number,
+    maxBytes: number,
+    timeoutMs?: number,
+    signal?: AbortSignal,
+  ): Promise<MeasuredByteRangeRead>;
+  /** Distinguishes absence, unreadability and over-cap. Binary-safe; `localIO`
+   *  has no cap. Its collapsing sibling `readFileB64` had no callers and is gone
+   *  (D-5969): its `null` folded all three.
+   *  Failure contract: never rejects; `absent` only for a proven absence, `too-large` for a file the agent will not
+   *  send (agent/src/fileops.ts's MAX_READ_B64_BYTES), every other failure `unreadable`. */
   readFileB64Measured(path: string): Promise<MeasuredB64Read>;
-  readFileB64(path: string): Promise<string | null>;      // null on ANY failure — the agent's half folds a THIRD condition in here, over-cap (agent/src/fileops.ts's MAX_READ_B64_BYTES); localIO has no cap — binary-safe
+  /** Distinguishes an empty listing, a missing directory and an unlistable
+   *  one — see `MeasuredDirectoryRead`. `readdir` derives from this. The
+   *  optional arguments are forwarded by the remote adapter and ignored by
+   *  `localIO`, exactly as for `readdir`.
+   *  Failure contract: never rejects; `absent` only for a proven ENOENT. An older agent's bare `names: null`, a
+   *  malformed answer, a refusal, a timeout and a disconnect are all `unreadable`, never `absent`. */
+  readdirMeasured(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<MeasuredDirectoryRead>;
+  /** The collapsing convenience over `readdirMeasured`. Its call sites may only shrink (the ratchet in
+   *  `fleetio-contract.test.ts`, D-5969): a listing whose failure decides anything reads `readdirMeasured`.
+   *  Failure contract: never rejects; `null` on ANY failure — absent and unreadable both collapse here; use
+   *  `readdirMeasured` to tell them apart. */
   readdir(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<string[] | null>;
+  /** `readdirMeasured` plus each entry's modification time (ms), when this io can report them (console speed S1).
+   *  OPTIONAL: an io without it answers names only, and a caller falls back to `readdir`. `localIO` deliberately
+   *  does NOT implement it: a test fake that spreads `...localIO` and overrides `readdir` would otherwise have the
+   *  cached registry read list the real filesystem through the inherited member. Local mode keeps names-only keys. A missing `times` is
+   *  "names only", never an error, and an entry missing from `times` has an unknown time (never 0).
+   *  Failure contract: never rejects; `absent` only for a proven ENOENT, every other failure `unreadable`; an agent
+   *  without the `readdir-mtimes` word, or one whose `times` answer is malformed, still answers the listing, without `times`. */
+  readdirWithTimesMeasured?(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<MeasuredDirectoryRead & { times?: ReadonlyMap<string, number> }>;
   /** Distinguishes "genuinely does not exist" from "could not be measured".
    *  `stat` derives from this; see `MeasuredStat` above for why the wire's
-   *  own absence marker could not be trusted before this existed. */
+   *  own absence marker could not be trusted before this existed.
+   *  Failure contract: never rejects; `absent` only for a proven absence, every other failure `unreadable`. */
   statMeasured(path: string): Promise<MeasuredStat>;
-  stat(path: string): Promise<{ mtimeMs: number; size: number } | null>;   // null on ANY failure — absent and unreadable both collapse here; use statMeasured to tell them apart
+  /** The collapsing convenience over `statMeasured`.
+   *  Failure contract: never rejects; `null` on ANY failure — absent and unreadable both collapse here; use
+   *  `statMeasured` to tell them apart. */
+  stat(path: string): Promise<{ mtimeMs: number; size: number } | null>;
+  /** The path's own type, NOT its target's — the question every other read
+   *  on this interface answers about the resolved file. Declared here because
+   *  a CONSUMER needs it (`limits.ts`'s `authDead` gate, which must agree with
+   *  two bash bodies that refuse a symlinked marker), and it has no
+   *  collapsing convenience sibling on purpose: the whole value of this member
+   *  is the distinction a `| null` would destroy.
+   *  Failure contract: never rejects; `absent` only for a proven absence; locally every other failure is
+   *  `unreadable`, and remotely an agent too old to answer, or any fault on the wire, is `unmeasured`. */
+  lstatMeasured(path: string): Promise<MeasuredPathKind>;
   /** Physical path for `path`, or null when it cannot be resolved (missing
    *  path, permission, or an implementation with no resolver — the remote io
    *  answers null unconditionally, so callers degrade to the unresolved
    *  path). Exists for transcript resolution: Claude Code munges its PHYSICAL
    *  cwd, the registry keeps the path ccd wrote, and on a symlinked projects
-   *  root the two disagree. */
+   *  root the two disagree.
+   *  Failure contract: never rejects; `null` on ANY failure, and always `null` remotely — never evidence of absence. */
   realpath(path: string): Promise<string | null>;
-  writeFileB64(path: string, dataB64: string): Promise<void>;          // mkdir -p parent
+  /** Writes `dataB64`'s bytes to `path`, creating the parent (`mkdir -p`).
+   *  Failure contract: REJECTS on any failure (the local errno, or the agent's refusal or a dropped connection); it
+   *  resolves only once the write is done. */
+  writeFileB64(path: string, dataB64: string): Promise<void>;
+  /** Follows `path` from `offset`, calling `onData` with each new chunk and `onReset` when the file shrinks under it;
+   *  answers its idempotent `close()`.
+   *  Failure contract: a read fault after it opens is retried on the next watch or poll (remotely, on the next
+   *  connection), never surfaced through the callbacks; opening the subscription may reject, so a caller guards the
+   *  call. */
   tailFile(
     path: string,
     offset: number,
     onData: (chunk: Buffer) => void,
     onReset: (size: number) => void,
-  ): Promise<() => void>; // returns close()
+  ): Promise<() => void>;
+  /** The filesystems the fleet's work roots (`DISK_WORK_ROOTS`) live on, with their sizes, free space and inodes, and
+   *  the expected mounts. Takes no path: the adapter resolves the roots itself, against ITS box's home.
+   *  Failure contract: never rejects; locally a fault is `unreadable`, and remotely an agent too old to answer the
+   *  op, a malformed reply, or any fault on the wire is `unmeasured`; never a measurement of zero. */
+  statfsMeasured(): Promise<MeasuredDisk>;
+  /** The host's memory and io PSI (#1170). Takes nothing: the adapter reads ITS box's /proc/pressure.
+   *  Failure contract: never rejects. `unsupported` is a box that cannot answer at all (an agent too old to list the
+   *  op, a kernel with no PSI): never a stall. `unanswered` is an ask the link or the agent failed (a timeout, a
+   *  disconnect, an error reply, a malformed one): the evidence of a stall. Neither is ever a reading of zero. */
+  pressureMeasured(): Promise<MeasuredPressure>;
+  /** The backup state files (D-7858), as the `backup` op reads them. Takes nothing: the adapter reads the directory ITS
+   *  box's reader is configured with (D-7859). Failure contract: never rejects. A read fault is not a failure here: it
+   *  is a `BackupRead` of `unreadable`, which the decider judges. `unsupported` is an agent too old to list the op
+   *  (never sent it); `unanswered` an ask the link or the agent failed, or a reply in no shape `readBackupRead` knows.
+   *  Neither is ever a read. */
+  backupMeasured(): Promise<MeasuredBackup>;
+  /** The fleet host's `testbox` op (test box plan TB9, D-7411): its measured tools and the box's status answer, or the
+   *  op's typed failure. Takes nothing: the adapter reads ITS box's test box settings.
+   *  Failure contract: never rejects. `no-op` is an agent too old to list the op (never sent it); `unanswered` is an
+   *  ask the link or the agent failed, or a reply in no shape the one reader knows. Neither is ever `ok`. */
+  testboxMeasured(): Promise<MeasuredTestbox>;
+  /** The `testbox-tools-sync` op, the `testbox` op's one write: the box is sent the fleet host's own release and
+   *  versions. Takes nothing. Failure contract: as `testboxMeasured`. */
+  testboxToolsSync(): Promise<TestboxSyncAsked>;
+  /** The `testbox-admin` op (test box connect spec §2.1, plan TC12, D-8166): runs `ccrc testbox-admin <sub>` on ITS box with
+   *  the builder's argv and the agent's own `--from agent`. Failure contract: never rejects. The builder's refusal is
+   *  `refused` (nothing sent), an agent that does not list the op is `unsupported` (never sent it), a frame that never left
+   *  is `not-started`, and a fault after the send, a deadline or a reply off `readTestboxAdminOpAnswer`'s grammar is `lost`
+   *  (the outcome is UNKNOWN: the caller says so and never retries). A local fleet's adapter answers `unsupported`: the
+   *  server's local arm (`testboxAdmin.ts`) spawns the verb itself there and never asks this member. */
+  testboxAdmin(sub: TestboxAdminSub, fields: TestboxAdminFields): Promise<TestboxAdminAsked>;
 }
+
+/** The `testbox` op as a seam answers it, or why there is none (D-7411). */
+export type MeasuredTestbox =
+  | { ok: true; reply: TestboxOpReply }
+  | { ok: false; reason: 'no-op' | 'unanswered' };
+
+/** The `testbox-tools-sync` op as a seam answers it, or why there is none (D-7411). */
+export type TestboxSyncAsked =
+  | { ok: true; reply: TestboxToolsSyncReply }
+  | { ok: false; reason: 'no-op' | 'unanswered' };
+
+/** The `backup` read as a seam answers it (D-7858), or why there is none. */
+export type MeasuredBackup =
+  | { ok: true; read: BackupRead }
+  | { ok: false; reason: 'unsupported' | 'unanswered' };
+
+/** The `pressure` reading as a seam answers it (#1170), or why there is none. */
+export type MeasuredPressure =
+  | { ok: true; psi: HostPsi; headroomBytes?: number | null }
+  | { ok: false; reason: 'unsupported' | 'unanswered' };
 
 /** Read byte range [start, end) of `file` (createReadStream `end` is inclusive). */
 function readRange(file: string, start: number, end: number): Promise<Buffer> {
@@ -149,11 +330,32 @@ const failureFor = (err: unknown): ReadFailure =>
 
 /** node:fs implementation preserving today's exact behavior. */
 export const localIO: FleetIO = {
+  // The agent's `read` op's rule, on this arm too (D-6058; accounts plan Task A12): open with `O_NONBLOCK`, so a FIFO
+  // never waits for a writer, and answer anything that is not a regular file `unreadable`, closed unread; a name
+  // directly in `~/.cc-sessions/.accounts` (a lane-state file) is opened with `O_NOFOLLOW`, so a symlink planted at
+  // a lane's name is `unreadable`, never its target's bytes (D-5755 (13d)), and so is a hardlink there or a `.accounts`
+  // that is a symlink (`laneStateOpenHolds`, D-6058 (5)). Both arms answer one path alike.
   async readFileMeasured(p, _timeoutMs, signal) {
+    const laneState = path.basename(path.dirname(p)) === LANE_STATE_DIR_NAME
+      && path.basename(path.dirname(path.dirname(p))) === '.cc-sessions';
+    let fh: Awaited<ReturnType<typeof open>>;
     try {
-      return { ok: true, content: await readFile(p, { encoding: 'utf8', signal }) };
+      fh = await open(p, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | (laneState ? fsConstants.O_NOFOLLOW : 0));
     } catch (err) {
       return { ok: false, reason: failureFor(err) };
+    }
+    try {
+      const st = await fh.stat();
+      if (!st.isFile()) return { ok: false, reason: 'unreadable' };
+      // A lane-state file is the one file at its name, with no second name, in a real directory (D-6058 (5)).
+      if (laneState && !laneStateOpenHolds(st, await lstat(p), await lstat(path.dirname(p)))) {
+        return { ok: false, reason: 'unreadable' };
+      }
+      return { ok: true, content: await fh.readFile({ encoding: 'utf8', signal }) };
+    } catch (err) {
+      return { ok: false, reason: failureFor(err) };
+    } finally {
+      await fh.close().catch(() => {});
     }
   },
 
@@ -179,18 +381,38 @@ export const localIO: FleetIO = {
     return r.ok ? { data: r.data, size: r.size } : null;
   },
 
+  async readFileFromBytesMeasured(p, offset, maxBytes) {
+    if (!isReadFromRange(offset, maxBytes)) return { ok: false, reason: 'unreadable' };
+    let size: number;
+    try { size = (await stat(p)).size; } catch (err) { return { ok: false, reason: failureFor(err) }; }
+    // A cursor beyond the file is a file that SHRANK under it — the remote
+    // reader answers the same, from the same arithmetic, so the two adapters
+    // cannot disagree about a regression.
+    if (offset > size) return { ok: false, reason: 'unreadable' };
+    const owed = Math.min(maxBytes, size - offset);
+    if (owed === 0) return { ok: true, bytes: new Uint8Array(0), size };   // EOF: a measurement, not a miss
+    try {
+      const bytes = await readRange(p, offset, offset + owed);
+      // Fewer bytes than the size promised means the file shrank between the
+      // stat and the read: not a measurement of this range.
+      if (bytes.length !== owed) return { ok: false, reason: 'unreadable' };
+      return { ok: true, bytes: new Uint8Array(bytes), size };   // a copy: a plain Uint8Array, not a pooled Buffer view
+    } catch (err) { return { ok: false, reason: failureFor(err) }; }
+  },
+
   async readFileB64Measured(p) {
     try { return { ok: true, dataB64: (await readFile(p)).toString('base64') }; }
     catch (err) { return { ok: false, reason: failureFor(err) }; }
   },
 
-  async readFileB64(p) {
-    const r = await this.readFileB64Measured(p);
-    return r.ok ? r.dataB64 : null;
+  async readdirMeasured(p) {
+    try { return { ok: true, entries: await readdir(p) }; }
+    catch (err) { return { ok: false, reason: failureFor(err) }; }
   },
 
-  async readdir(p) {
-    try { return await readdir(p); } catch { return null; }
+  async readdir(p, timeoutMs, signal) {
+    const r = await this.readdirMeasured(p, timeoutMs, signal);
+    return r.ok ? [...r.entries] : null;
   },
 
   async statMeasured(p) {
@@ -205,6 +427,15 @@ export const localIO: FleetIO = {
   async stat(p) {
     const r = await this.statMeasured(p);
     return r.ok ? { mtimeMs: r.mtimeMs, size: r.size } : null;
+  },
+
+  async lstatMeasured(p) {
+    try {
+      const s = await lstat(p);
+      return { ok: true, kind: s.isSymbolicLink() ? 'symlink' : s.isFile() ? 'regular' : 'other' };
+    } catch (err) {
+      return { ok: false, reason: failureFor(err) };
+    }
   },
 
   async realpath(p) {
@@ -295,4 +526,49 @@ export const localIO: FleetIO = {
       stopWatching();
     };
   },
+
+  // The process home by default; a server with a configured home wires `localIOFor(cfg.home)` instead.
+  statfsMeasured: () => measureLocalDisk(os.homedir()),
+
+  // The agent's own reader on this box's /proc (#1170): a box with no PSI (not Linux, or an old kernel) is
+  // `unsupported`, never a stall, so a local fleet never reads its own missing /proc as host pressure.
+  pressureMeasured: async () => {
+    try { return { ok: true, psi: measurePressure(), headroomBytes: measureHeadroom() }; } catch { return { ok: false, reason: 'unsupported' }; }
+  },
+
+  // The agent's own `backup` body on this box (D-7858): this process's `CCRC_BACKUP_STATE_DIR` (D-7859). It never throws.
+  backupMeasured: async () => {
+    try { return { ok: true, read: measureBackup() }; } catch { return { ok: false, reason: 'unanswered' }; }
+  },
+
+  // The agent's own op bodies on this box (D-7411), as `statfsMeasured` calls `measureDisk`; neither ever rejects.
+  testboxMeasured: () => localTestbox(os.homedir()),
+  testboxToolsSync: () => localTestboxSync(os.homedir()),
+  // The server's local arm spawns the verb itself (`testboxAdmin.ts#localTestboxAdminOps`); this seam is the agent arm's.
+  testboxAdmin: async () => ({ kind: 'unsupported' }),
 };
+
+/** The `testbox` op's body on `home` (D-7411): the one implementation, so the two adapters cannot disagree. */
+export async function localTestbox(home: string): Promise<MeasuredTestbox> {
+  try { return { ok: true, reply: await measureTestbox(home) }; } catch { return { ok: false, reason: 'unanswered' }; }
+}
+/** The `testbox-tools-sync` op's body on `home` (D-7411). */
+export async function localTestboxSync(home: string): Promise<TestboxSyncAsked> {
+  try { return { ok: true, reply: await syncTestboxTools(home) }; } catch { return { ok: false, reason: 'unanswered' }; }
+}
+
+/** The agent's own measurer on `home`: the one implementation of the `disk` op's arithmetic, so the two adapters
+ *  cannot disagree about a root (D-6615). It never throws for a disk fault (a fault is a `missing` row). */
+export async function measureLocalDisk(home: string): Promise<MeasuredDisk> {
+  try { return { ok: true, measured: await measureDisk(home) }; }
+  catch { return { ok: false, reason: 'unreadable' }; }
+}
+
+/** `localIO` measuring the server's CONFIGURED home (`cfg.home`: `CCRC_HOME` or the process home), as every other
+ *  local-mode path does, never the process home behind its back. */
+export function localIOFor(home: string): FleetIO {
+  return {
+    ...localIO, statfsMeasured: () => measureLocalDisk(home),
+    testboxMeasured: () => localTestbox(home), testboxToolsSync: () => localTestboxSync(home),
+  };
+}

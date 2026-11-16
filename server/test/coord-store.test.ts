@@ -7,12 +7,15 @@
 // from the ledger + the registry + .prhistory after the database is LOST.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { parsedFile, sqlStatementsInFile, symbolOf } from './scan/symbols.js';
+import { programMembers } from './scan/programView.js';
 import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR, MAIL_REPLAY_CEILING_ERROR,
          MAIL_RUN_CLOSED_ERROR, toRunSummary } from '../src/coord/store.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
+import { childBirthOf } from '../src/coord/childSpent.js';
 import {
   HOLD_REASON_MAX_CHARS,
   holdReason,
@@ -25,13 +28,23 @@ import {
   RUN_ID_MAX_DECIMAL,
 } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
-import { okRun, okRuns, okSiblings } from './coordReadHelpers.js';
+import { redactCommand } from '../src/coord/redact.js';
+import { okRun, okRuns, okSiblings, parentOfSession } from './coordReadHelpers.js';
+import { claimantsOfSession, coordinatorOfRun } from '../src/coord/bindingReads.js';
+import type { DatabaseSync } from 'node:sqlite';
+import {
+  DelegationModelError, delegationActivityCodec, delegationAttemptCodec, delegationEventCodec, delegationIntentKey, delegationLeaseCodec, delegationLineageCodec,
+  delegationSessionCodec, delegationSha256Hex, deriveDelegationActivityId, emptyDelegationCheckpoint,
+  encodeDelegationNaturalKey, formatDelegationInstant, projectionViewOfDelegationCheckpoint,
+  type DelegationActivityRow, type DelegationAttemptRow, type DelegationCheckpointV1, type DelegationEventRow,
+  type DelegationLeaseRow, type DelegationLineageRow,
+} from '../src/coord/delegation-model.js';
 
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
 
 const openRun = (s: CoordStore, over: Partial<Parameters<CoordStore['openRun']>[0]> = {}) =>
-  s.openRun({ program: 'build4', title: 'Transcript surface', project: 'ccrc-pwa',
+  s.openRun({ program: 'build4', title: 'Transcript surface', programmeTitle: 'Transcript surface', project: 'ccrc-pwa',
               wave: 1, waveOf: 5, claimedBy: 'ccrc-pwa-coordinator', ...over });
 
 describe('CoordStore: runs', () => {
@@ -48,6 +61,89 @@ describe('CoordStore: runs', () => {
     const b = openRun(s, { wave: 2 }) as { id: number; program: string; state: string };
     expect(b.program).toBe('build4');
     expect(s.programs().length).toBe(1);          // second open reuses the slug
+  });
+
+  it('openRun stamps the coordinator project it is given, and it round-trips', () => {
+    const s = store();
+    const opened = openRun(s, { coordProject: 'project-n' }) as { id: number };
+    expect('id' in opened).toBe(true);
+    const row = okRuns(s.runs({ includeClosed: true })).find((r) => r.id === opened.id);
+    expect(row).toBeDefined();
+    expect(row!.coordProject).toBe('project-n');
+  });
+
+  it('openRun leaves the stamp null when none is given — absence permits', () => {
+    const s = store();
+    const opened = openRun(s) as { id: number };
+    expect('id' in opened).toBe(true);
+    const row = okRuns(s.runs({ includeClosed: true })).find((r) => r.id === opened.id);
+    expect(row!.coordProject).toBeNull();
+  });
+
+  // Task 3 fix round 2 (Important 2): `coordPlacementStamps` shipped with no
+  // store-level test at all.
+  describe('CoordStore.coordPlacementStamps', () => {
+    it('returns a stamp only for runs whose coordProject is set, id/sessionId/claimedBy carried verbatim', () => {
+      const s = store();
+      const stamped = openRun(s, { coordProject: 'project-n' }) as { id: number };
+      s.bindSession(stamped.id, 'demo-worker');
+      openRun(s, { wave: 2 }); // unstamped — must not appear at all
+      expect(s.coordPlacementStamps()).toEqual({
+        ok: true,
+        stamps: [{ id: stamped.id, sessionId: 'demo-worker', claimedBy: 'ccrc-pwa-coordinator', coordProject: 'project-n' }],
+      });
+    });
+
+    // The whole reason this read includes closed runs at all
+    // (`fleet.ts`'s `readCoordPlacements`, and `fleet.test.ts`'s own
+    // end-to-end "CLOSED run stamp still places the session" pin) — this is
+    // the SAME fact, pinned one seam closer to the SQL that actually decides
+    // it, so a change to this method's own WHERE clause reds HERE first.
+    it("a CLOSED run's stamp remains visible — the wave-boundary guarantee, pinned at the store seam", () => {
+      const s = store();
+      const stamped = openRun(s, { coordProject: 'project-n' }) as { id: number };
+      s.bindSession(stamped.id, 'demo-worker');
+      expect(s.advance(stamped.id, 'failed', 'test-close').ok).toBe(true);
+      expect(s.coordPlacementStamps()).toEqual({
+        ok: true,
+        stamps: [{ id: stamped.id, sessionId: 'demo-worker', claimedBy: 'ccrc-pwa-coordinator', coordProject: 'project-n' }],
+      });
+    });
+  });
+
+  // Delegation broker wave 4 (PR1 Task 1.3): the delegation frame's R9 read. Through the real SQL, no spy.
+  describe('CoordStore.delegationRunStamps', () => {
+    const ids = (s: CoordStore, limit: number): number[] => {
+      const read = s.delegationRunStamps(limit);
+      if (!read.ok) throw new Error(read.detail);
+      return read.runs.map((r) => r.id);
+    };
+
+    it('W4-ST1: a stored run whose openedAt or closedAt is not a positive safe integer refuses the whole read, run-unreadable', () => {
+      for (const column of ['openedAt', 'closedAt'] as const) {
+        const s = store();
+        const run = openRun(s) as { id: number };
+        expect(s.advance(run.id, 'failed', 'test-close').ok).toBe(true);
+        expect(s.delegationRunStamps(10).ok, `${column}: readable before the write`).toBe(true);
+        s.db.exec('PRAGMA ignore_check_constraints = ON');
+        s.db.prepare(`UPDATE runs SET ${column} = 0 WHERE id = ?`).run(run.id);
+        s.db.exec('PRAGMA ignore_check_constraints = OFF');
+        expect(s.delegationRunStamps(10), column).toEqual({ ok: false, kind: 'run-unreadable', detail: `${column} is not a positive safe integer` });
+      }
+    });
+
+    it('W4-ST2: every open run, plus exactly the newest closedLimit closed ones, and nothing else', () => {
+      const s = store();
+      const made = [1, 2, 3, 4, 5].map((wave) => (openRun(s, { wave }) as { id: number }).id);
+      for (const i of [0, 1, 3]) expect(s.advance(made[i]!, 'failed', 'test-close').ok).toBe(true);
+      // closed: made[0], made[1], made[3]; open: made[2], made[4]. The newest two closed are made[3] and made[1].
+      expect(ids(s, 2)).toEqual([made[1], made[2], made[3], made[4]]);
+      expect(ids(s, 500)).toEqual(made);
+      const read = s.delegationRunStamps(500);
+      expect(read.ok && read.runs.find((r) => r.id === made[0])).toMatchObject({ sessionId: null, claimedBy: 'ccrc-pwa-coordinator' });
+      expect(read.ok && read.runs.find((r) => r.id === made[0])!.closedAt).not.toBeNull();
+      expect(read.ok && read.runs.find((r) => r.id === made[2])!.closedAt).toBeNull();
+    });
   });
 
   it('refuses a second coordinator rather than arbitrating', () => {
@@ -224,29 +320,49 @@ describe('CoordStore: runs', () => {
 
     /** Plant a `runs` row whose named column is wider than the JavaScript safe
      *  domain — the idiom `rejects an unsafe persisted id on an idempotent
-     *  retry` above already uses, generalised over which column carries it. */
-    const plantUnsafe = (s: CoordStore, column: 'id' | 'wave' | 'waveOf',
-                         over: { sessionId?: string } = {}): void => {
+     *  retry` above already uses, generalised over which column carries it.
+     *  `coordProject` defaults to the column's own NULL — every pre-existing
+     *  caller omits it and gets exactly the row it always got — and is here
+     *  ONLY so `coordPlacementStamps`'s own refusal test (fix round 2) can
+     *  plant a row its `WHERE coordProject IS NOT NULL` filter will not
+     *  itself exclude before `persistedInt` ever sees the unsafe id. */
+    const plantUnsafe = (s: CoordStore, column: 'id' | 'wave' | 'waveOf' | 'reviews',
+                         over: { sessionId?: string; coordProject?: string } = {}): void => {
       const now = Date.now();
       s.db.prepare(
         'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?)',
       ).run('wide', 'Wide', now, 'active', null);
-      s.db.prepare(
-        'INSERT INTO runs (id, program, wave, waveOf, project, sessionId, state, claimedBy, openedAt) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ).run(
-        column === 'id' ? UNSAFE : 7,
-        'wide',
-        column === 'wave' ? UNSAFE : 1,
-        column === 'waveOf' ? UNSAFE : 5,
-        'ccrc-pwa', over.sessionId ?? null, 'planned', 'ccrc-pwa-coordinator', now,
-      );
+      // `runs.reviews REFERENCES runs(id)` (migration 11): an UNSAFE value can
+      // never reference a real row, so with FK enforcement on this INSERT
+      // would be refused by SQLite itself before the store's own proof ever
+      // runs. Disabled for this one planted row only — the exact shape a row
+      // written before the column existed, or by anything outside this store,
+      // could already carry on disk; re-enabled immediately after.
+      s.db.exec('PRAGMA foreign_keys = OFF');
+      try {
+        s.db.prepare(
+          'INSERT INTO runs (id, program, wave, waveOf, project, sessionId, state, claimedBy, openedAt, ' +
+          'reviews, coordProject) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ).run(
+          column === 'id' ? UNSAFE : 7,
+          'wide',
+          column === 'wave' ? UNSAFE : 1,
+          column === 'waveOf' ? UNSAFE : 5,
+          'ccrc-pwa', over.sessionId ?? null, 'planned', 'ccrc-pwa-coordinator', now,
+          column === 'reviews' ? UNSAFE : null,
+          over.coordProject ?? null,
+        );
+      } finally {
+        s.db.exec('PRAGMA foreign_keys = ON');
+      }
     };
 
     it.each([
       ['id', 'run id is not a positive safe integer'],
       ['wave', 'run wave is not a positive safe integer'],
       ['waveOf', 'run waveOf is not a positive safe integer'],
+      ['reviews', 'run reviews is not a positive safe integer'],
     ] as const)('run() refuses an unrepresentable %s, naming the COLUMN and no value', (column, detail) => {
       const s = store();
       plantUnsafe(s, column);
@@ -287,6 +403,27 @@ describe('CoordStore: runs', () => {
         ok: false, kind: 'run-unreadable', detail: 'run id is not a positive safe integer',
       });
       expect(s.openRunsForSession('demo-nobody')).toEqual({ ok: true, siblings: [] });
+    });
+
+    // Task 3 fix round 2 (Important 2): `coordPlacementStamps` had this same
+    // ladder's `persistedInt` all-or-failure arm executed by NOTHING — mirrors
+    // `openRunsForSession`'s test immediately above, the precedent
+    // `coordPlacementStamps`'s own docstring cites. `coordProject` MUST be set
+    // on the planted row (unlike `openRunsForSession`'s plant above it), or
+    // this method's own `WHERE coordProject IS NOT NULL` filter would exclude
+    // the row before `persistedInt` ever ran on its id — a refusal this test
+    // would then be pinning nothing.
+    it('coordPlacementStamps() refuses an unrepresentable id, and answers [] when nothing is stamped', () => {
+      const s = store();
+      plantUnsafe(s, 'id', { sessionId: 'demo-alpha', coordProject: 'project-n' });
+      expect(s.coordPlacementStamps()).toEqual({
+        ok: false, kind: 'run-unreadable', detail: 'run id is not a positive safe integer',
+      });
+      // An unstamped-only store (no `coordProject` anywhere) is not the same
+      // condition as an EMPTY store, but both answer the same shape: `{ok:
+      // true, stamps: []}`, never `run-unreadable` for a store with nothing to
+      // refuse.
+      expect(store().coordPlacementStamps()).toEqual({ ok: true, stamps: [] });
     });
   });
 
@@ -408,41 +545,95 @@ describe('CoordStore: runs', () => {
 });
 
 describe('CoordStore: caps', () => {
-  it('counts running runs and 24h dispatches from the rows, not from a counter', () => {
+  // The rolling 24 h dispatch count is retired with the daily brake (D-7068): `capsUsage` counts
+  // running runs only, and takes no clock.
+  it('counts running runs from the rows, not from a counter', () => {
     const s = store();
     const now = 1_000_000_000_000;
     const a = openRun(s) as { id: number };
     const b = openRun(s, { wave: 2 }) as { id: number };
     s.markDispatched(a.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
     s.markDispatched(b.id, 'ccrc-pwa-still-fen', 'still-fen', 'ws/still-fen', true, now - 25 * 3600_000);
-    expect(s.capsUsage(now)).toEqual({ running: 2, dispatchedIn24h: 1 });
-    expect(s.caps()).toEqual({ maxConcurrentWorkers: 3, maxSessionsPerDay: 12 });
+    // `markDispatched` alone does not advance `state` (design 2026-09-14
+    // §7.1; see its own docstring) — `dispatchRun` is the real caller and
+    // always pairs it with `advance(..., 'dispatched', ...)` in the same
+    // transaction. Mirrored here so this fixture matches production instead
+    // of resting on `state` staying `planned`.
+    expect(s.advance(a.id, 'dispatched', 'coordinator').ok).toBe(true);
+    expect(s.advance(b.id, 'dispatched', 'coordinator').ok).toBe(true);
+    expect(s.capsUsage()).toEqual({ running: 2 });
+    expect(s.caps()).toEqual({ maxConcurrentWorkers: 3 });
   });
 
   it('does not count a `planned` run that never dispatched — a botched dispatch must not wedge the cap (D-13)', () => {
-    // capsUsage review: `state NOT IN ('done','failed')` alone also matched
-    // `planned` — the state `openRun` writes and Task 9's `ambiguous-dispatch`
-    // refusal deliberately leaves a run in, with no session and no workspace.
-    // Before this fix three botched dispatches on one program would pin
-    // `running` at the default `maxConcurrentWorkers` forever.
+    // capsUsage review: a bare "state is not terminal" predicate alone also
+    // matched `planned` — the state `openRun` writes and Task 9's
+    // `ambiguous-dispatch` refusal deliberately leaves a run in, with no
+    // session and no workspace. Before this fix three botched dispatches on
+    // one program would pin `running` at the default `maxConcurrentWorkers`
+    // forever.
     const s = store();
     const now = 1_000_000_000_000;
     openRun(s);                                                   // never dispatched
     const dispatched = openRun(s, { wave: 2 }) as { id: number };
     s.markDispatched(dispatched.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
-    expect(s.capsUsage(now)).toEqual({ running: 1, dispatchedIn24h: 1 });
+    // See the previous test's comment: mirror `dispatchRun`'s pairing.
+    expect(s.advance(dispatched.id, 'dispatched', 'coordinator').ok).toBe(true);
+    expect(s.capsUsage()).toEqual({ running: 1 });
   });
 
-  it('excludes a dispatch exactly 24h old — the window is `>`, not `>=` (D-59)', () => {
-    // Discriminates `capsUsage`: `>` -> `>=`. The only prior fixtures were
-    // `now` and `now - 25h`/`now - 23h` — nothing landed exactly on the
-    // boundary, so the mutant reproduced every assertion in both
-    // coord-store.test.ts and run-routes.test.ts unchanged.
+  it('does not count a run advanced to `dispatched` with no `dispatchedAt` — D-13\'s clause, now that `planned` is excluded by state too (spec §7.1 review, Important 1)', () => {
+    // Before design 2026-09-14 §7.1 this exact shape WAS D-13's whole proof:
+    // a `planned` row (NULL `dispatchedAt`) counted under the old predicate
+    // unless `dispatchedAt IS NOT NULL` excluded it. Now `planned` is ALSO
+    // excluded by state (`planned` is in `IDLE_RUN_STATES`), so every other
+    // caps assertion in the tree survives a mutant that deletes the
+    // `dispatchedAt IS NOT NULL` clause — `advance()` is public and does not
+    // require `markDispatched`, so a run can reach `dispatched` STATE with
+    // no dispatch timestamp at all, and only this clause still excludes it.
     const s = store();
     const now = 1_000_000_000_000;
     const a = openRun(s) as { id: number };
-    s.markDispatched(a.id, 'ccrc-pwa-boundary', 'boundary', 'ws/boundary', false, now - 24 * 3600_000);
-    expect(s.capsUsage(now)).toEqual({ running: 1, dispatchedIn24h: 0 });
+    expect(s.advance(a.id, 'dispatched', 'test').ok).toBe(true);
+    expect(s.capsUsage().running).toBe(0);
+  });
+
+  it('stops counting a run the moment it reaches an IDLE state, and counts it again at working (spec §7.1)', () => {
+    const s = store();
+    const now = 1_000_000_000_000;
+    const a = openRun(s) as { id: number };
+    s.markDispatched(a.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
+    // `markDispatched` itself does not advance `state` (it stamps
+    // `dispatchedAt`/`workspace`/`branch`/`sessionId` only, per its own
+    // docstring); the real dispatch commit is `dispatchRun`, which calls
+    // `markDispatched` and `advanceInner(..., 'dispatched', ...)` together.
+    // Mirrored here explicitly, matching every other `advance(id,
+    // 'dispatched', ...)` call site in this file.
+    expect(s.advance(a.id, 'dispatched', 'test').ok).toBe(true);
+    expect(s.capsUsage().running).toBe(1);                 // dispatched: active
+    expect(s.advance(a.id, 'working', 'test').ok).toBe(true);
+    expect(s.capsUsage().running).toBe(1);                 // working: active
+    expect(s.advance(a.id, 'awaiting-review', 'test').ok).toBe(true);
+    expect(s.capsUsage().running).toBe(0);                 // the worker is idle by contract
+    expect(s.advance(a.id, 'working', 'test').ok).toBe(true); // a send-back
+    expect(s.capsUsage().running).toBe(1);
+    expect(s.advance(a.id, 'awaiting-review', 'test').ok).toBe(true);
+    expect(s.advance(a.id, 'merging', 'test').ok).toBe(true);
+    expect(s.capsUsage().running).toBe(0);                 // merging: the coordinator's wait
+    expect(s.advance(a.id, 'closing', 'test').ok).toBe(true);
+    expect(s.capsUsage().running).toBe(0);
+    expect(s.advance(a.id, 'done', 'test').ok).toBe(true);
+    expect(s.capsUsage().running).toBe(0);
+  });
+
+  it('still counts an `unknown`-state row — a state this build cannot name must wedge, not over-dispatch', () => {
+    const s = store();
+    const now = 1_000_000_000_000;
+    const a = openRun(s) as { id: number };
+    s.markDispatched(a.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
+    // The one way such a row exists: written by a newer build. Planted raw.
+    s.db.prepare("UPDATE runs SET state = 'x-from-a-newer-build' WHERE id = ?").run(a.id);
+    expect(s.capsUsage().running).toBe(1);
   });
 });
 
@@ -655,6 +846,925 @@ describe('settleItems — the batch, all-or-nothing, in ONE transaction', () => 
   });
 });
 
+// ── Delegation broker wave 3, Task 7: the report-only coordination projection ─────────────────────────────────────────
+// The six delegation_* tables are REPAIRABLE OUTPUT of the checkpoint and the journal (Task 8 owns both); these cases
+// pin what the three synchronous methods do with them. The projection can never be a second identity source, so most
+// rows below are about what SQLite refuses to keep, to invent or to leave half-written.
+describe('CoordStore: the delegation projection (delegation broker wave 3, Task 7)', () => {
+  const DELEGATION_TABLES = [
+    'delegation_lineage', 'delegation_leases', 'delegation_events', 'delegation_attempts', 'delegation_activities',
+    'delegation_sessions',
+  ] as const;
+  const jid = (n: number): string => delegationSha256Hex(`fixture-journal-${n}`);
+  const at = (minute: number): string => formatDelegationInstant(Date.UTC(2026, 9, 14, 0, minute, 0, 0));
+  const natural = (parentId: string, parentIncarnation: string, sourceKind: DelegationActivityRow['sourceKind'], upstreamId: string) =>
+    ({ parentId, parentIncarnation, sourceKind, upstreamId });
+
+  /** A checkpoint that fills every table, with every kind of row a table can hold. `variant` 1 changes the CONTENT of
+   *  every row but none of the keys, so replacing variant 0 by variant 1 touches every table and orphans nothing. */
+  const fixture = (runId: number, variant: 0 | 1 = 0): DelegationCheckpointV1 => {
+    const tag = variant === 0 ? 'a' : 'b';
+    const m = variant === 0 ? 0 : 5;                       // minutes added to the clocks that may move
+    const k1 = natural('lane-a-demo', 'g1', 'agent', 'agent-1');
+    const k2 = natural('lane-a-demo', 'g1', 'workflow', 'run-1#0');
+    const k3 = natural('lane-b-demo', 'g1', 'bash-worktree', 'toolu_1');
+    const act = (n: number, k: ReturnType<typeof natural>, over: Partial<DelegationActivityRow>): DelegationActivityRow => ({
+      activityId: deriveDelegationActivityId(k, jid(n)), parentId: k.parentId, parentIncarnation: k.parentIncarnation,
+      sourceKind: k.sourceKind, upstreamId: k.upstreamId, identityJournalId: jid(n), displayName: null,
+      executionState: 'active', openedAt: at(1), endedAt: null, lastEventAt: at(2 + m), ...over,
+    });
+    const activities = [
+      act(1, k1, { displayName: `reviewer-${tag}`, executionState: 'ended', endedAt: at(3), lastEventAt: at(3) }),
+      act(2, k2, { executionState: 'active' }),
+      act(3, k3, { displayName: null, executionState: 'unknown' }),
+    ];
+    const lease = (n: number, a: DelegationActivityRow, over: Partial<DelegationLeaseRow>): DelegationLeaseRow => ({
+      leaseId: `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`,
+      generation: 0, creatingJournalSequence: 3 + n, currentJournalSequence: 3 + n, activityId: a.activityId,
+      parentId: a.parentId, parentIncarnation: a.parentIncarnation, project: 'project-a', adminRecord: `wt-${n}`,
+      canonicalPath: `/work/project-a/wt-${n}`, creationBase: null, sourceKind: 'agent', parentageState: 'linked',
+      workspaceState: 'present', disposition: 'ephemeral', cleanupState: 'not-due', cleanupPopulation: 'ephemeral-lease',
+      firstObservedAt: at(2), lastObservedAt: at(2), terminalEvidenceAt: null, adoptedAt: null, retainedAt: null,
+      promotedAt: null, cleanupDueAt: null, cleanupStartedAt: null, cleanupFinishedAt: null, cleanupEvidenceJson: null,
+      carrierGenerationSeen: null, releasedAt: null, ...over,
+    });
+    const leases = [
+      lease(1, activities[0]!, {}),
+      lease(2, activities[1]!, { creationBase: 'abc123', sourceKind: 'workflow', parentageState: 'unresolved', workspaceState: 'provisioning' }),
+      lease(3, activities[2]!, { project: 'project-b', sourceKind: 'raw', parentageState: 'conflicting', workspaceState: 'unmeasured' }),
+    ];
+    const attempt = (n: number, over: Partial<DelegationAttemptRow>): DelegationAttemptRow => ({
+      attemptId: `attempt-${n}`, parentId: 'lane-a-demo', parentIncarnation: 'g1', project: 'project-a', adminRecord: `wt-${n}`,
+      canonicalPath: null, attemptedAt: at(2 + n), rung: null, verdict: 'unresolved', evidenceJournalIds: [], detail: null, ...over,
+    });
+    const lin = (n: number, over: Partial<DelegationLineageRow>): DelegationLineageRow => ({
+      lineageId: delegationSha256Hex(`fixture-lineage-${n}`), parentId: 'lane-a-demo', parentIncarnation: 'g1',
+      activityId: null, leaseId: null, runId: null, openedAt: at(1), closedAt: null, closeReason: null, ...over,
+    });
+    return {
+      v: 1, revision: 3, appliedJournalSequence: 6, appliedJournalId: jid(6), appliedJournalDigest: delegationSha256Hex('digest-6'),
+      activityIdsByNaturalKey: Object.fromEntries(activities.map((a) => [encodeDelegationNaturalKey(a), a.activityId])),
+      // One entry per (session, incarnation) that carries a declaration, through the model's one encoder.
+      coordinatorIntentByParent: variant === 0
+        ? { [delegationIntentKey('lane-a-demo', 'g1')]: at(10), [delegationIntentKey('lane-a-demo', 'g2')]: at(10) }
+        : { [delegationIntentKey('lane-a-demo', 'g1')]: at(11), [delegationIntentKey('lane-a-demo', 'g2')]: at(11), [delegationIntentKey('lane-b-demo', 'g1')]: at(12) },
+      sessions: [
+        { sessionId: 'lane-a-demo', parentIncarnation: 'g1', explicitIntentAt: variant === 0 ? at(10) : at(11), effective: variant === 0,
+          effectiveBasis: variant === 0 ? ['explicit', 'delegation-inferred'] : ['run-owner'],
+          claudeSessionIds: variant === 0 ? ['cs-1', 'cs-2'] : ['cs-9'], firstObservedAt: at(variant === 0 ? 0 : 1), lastObservedAt: at(20 + m) },
+        { sessionId: 'lane-a-demo', parentIncarnation: 'g2', explicitIntentAt: variant === 0 ? at(10) : at(11), effective: variant === 0,
+          effectiveBasis: variant === 0 ? ['explicit'] : ['retained-lineage'],
+          claudeSessionIds: variant === 0 ? [] : ['cs-8'], firstObservedAt: at(variant === 0 ? 0 : 1), lastObservedAt: at(21 + m) },
+        { sessionId: 'lane-b-demo', parentIncarnation: 'g1', explicitIntentAt: variant === 0 ? null : at(12), effective: variant !== 0,
+          effectiveBasis: variant === 0 ? [] : ['explicit'],
+          claudeSessionIds: variant === 0 ? ['cs-3'] : [], firstObservedAt: at(variant === 0 ? 0 : 1), lastObservedAt: at(22 + m) },
+      ],
+      attempts: [
+        attempt(1, { verdict: 'linked', canonicalPath: '/work/project-a/wt-1', rung: 2, evidenceJournalIds: [jid(1)], detail: `ok-${tag}` }),
+        attempt(2, { verdict: 'unresolved', rung: null, detail: `no admin record ${tag}` }),
+        attempt(3, { verdict: 'conflicting', rung: 3, evidenceJournalIds: [jid(2), jid(3)] }),
+        attempt(4, { verdict: 'unmeasured', parentId: 'lane-b-demo', detail: 'registry unreadable' }),
+      ],
+      activities,
+      leases,
+      lineage: [
+        lin(1, { activityId: activities[0]!.activityId }),
+        lin(2, { leaseId: leases[0]!.leaseId, openedAt: leases[0]!.firstObservedAt }),
+        lin(3, { parentId: 'lane-b-demo', activityId: activities[2]!.activityId, closedAt: at(5), closeReason: `activity-ended-${tag}` }),
+        lin(4, { runId }),
+        lin(5, { leaseId: leases[1]!.leaseId, openedAt: leases[1]!.firstObservedAt }),
+        lin(6, { parentId: 'lane-b-demo', leaseId: leases[2]!.leaseId, openedAt: leases[2]!.firstObservedAt }),
+      ],
+      bucketCursors: [{ sessionId: 'lane-a-demo', parentIncarnation: 'g1', bucket: '2026-10-14T00', cursor: 10, lastSize: 10,
+        lastCompleteAt: at(2), intervalState: 'measured', detail: null, anchor: null, replaced: false }],
+      observationIntervals: [{ sessionId: 'lane-a-demo', parentIncarnation: 'g1', utcHour: at(0), state: 'measured', detail: null, recordedAt: at(1) }],
+      pruningHolds: [{ journalId: jid(1), reason: 'identity-candidate', ownerId: 'x' }],
+    };
+  };
+  const event = (n: number, over: Partial<DelegationEventRow> = {}): DelegationEventRow => ({
+    eventId: delegationSha256Hex(`fixture-event-${n}`), journalSequence: n, journalDigest: delegationSha256Hex(`digest-${n}`),
+    acceptedAt: at(n), sessionId: 'lane-a-demo', parentIncarnation: 'g1', claudeSessionId: 'cs-1', eventKind: 'PostToolUse',
+    observedAt: at(n - 1 < 0 ? 0 : n - 1), payloadJson: `{"v":1,"n":${n}}`, ...over,
+  });
+  /** A store, one run (the lineage fixture's run-owned row needs a real one), and the checkpoint over it. */
+  const setup = (variant: 0 | 1 = 0, db?: DatabaseSync) => {
+    const s = new CoordStore(db ?? openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+    const runId = (openRun(s, { program: 'wave3-fixture', wave: 1 }) as { id: number }).id;
+    return { s, runId, cp: fixture(runId, variant), fixture: (v: 0 | 1) => fixture(runId, v) };
+  };
+  const dump = (s: CoordStore): Record<string, unknown[]> =>
+    Object.fromEntries(DELEGATION_TABLES.map((t) => [t, s.db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()]));
+  const refused = (fn: () => unknown, code: string): void => {
+    expect(fn).toThrowError(expect.objectContaining({ name: 'DelegationModelError', code }));
+  };
+  /** `cp` over exactly `leases`: the lineage of any other lease goes, and a lease without one gets its opening row (the
+   *  wave-3 shape: replay opens a lease-owned lineage row at the lease's firstObservedAt). */
+  const withLeases = (cp: DelegationCheckpointV1, leases: readonly DelegationLeaseRow[]): DelegationCheckpointV1 => {
+    const have = new Set(leases.map((l) => l.leaseId));
+    const kept = cp.lineage.filter((n) => n.leaseId === null || have.has(n.leaseId));
+    const opened = new Set(kept.flatMap((n) => (n.leaseId === null ? [] : [n.leaseId])));
+    const added: DelegationLineageRow[] = leases.filter((l) => !opened.has(l.leaseId)).map((l) => ({
+      lineageId: delegationSha256Hex(`opening-${l.leaseId}`), parentId: l.parentId, parentIncarnation: l.parentIncarnation,
+      activityId: null, leaseId: l.leaseId, runId: null, openedAt: l.firstObservedAt, closedAt: null, closeReason: null,
+    }));
+    return { ...cp, leases, lineage: [...kept, ...added] };
+  };
+  /** `cp` plus a session the NEXT checkpoint will not carry: it LEAVES, and it owns a row in every child table (an
+   *  activity, an attempt, a lease with its opening lineage, a lineage row of its activity), so every foreign-key edge
+   *  into `delegation_sessions` has a row to protect when the replacement removes it. */
+  const withLeaver = (cp: DelegationCheckpointV1): DelegationCheckpointV1 => {
+    const k = natural('lane-c-demo', 'g1', 'agent', 'agent-c');
+    const act: DelegationActivityRow = {
+      activityId: deriveDelegationActivityId(k, jid(7)), parentId: k.parentId, parentIncarnation: k.parentIncarnation,
+      sourceKind: k.sourceKind, upstreamId: k.upstreamId, identityJournalId: jid(7), displayName: null, executionState: 'active',
+      openedAt: at(1), endedAt: null, lastEventAt: at(2),
+    };
+    const lease: DelegationLeaseRow = {
+      leaseId: '77777777-7777-4777-8777-777777777777', generation: 0, creatingJournalSequence: 7, currentJournalSequence: 7,
+      activityId: act.activityId, parentId: 'lane-c-demo', parentIncarnation: 'g1', project: 'project-c', adminRecord: 'wt-7',
+      canonicalPath: '/work/project-c/wt-7', creationBase: null, sourceKind: 'agent', parentageState: 'linked',
+      workspaceState: 'present', disposition: 'ephemeral', cleanupState: 'not-due', cleanupPopulation: 'ephemeral-lease',
+      firstObservedAt: at(2), lastObservedAt: at(2), terminalEvidenceAt: null, adoptedAt: null, retainedAt: null, promotedAt: null,
+      cleanupDueAt: null, cleanupStartedAt: null, cleanupFinishedAt: null, cleanupEvidenceJson: null,
+      carrierGenerationSeen: null, releasedAt: null,
+    };
+    const lin = (n: number, over: Partial<DelegationLineageRow>): DelegationLineageRow => ({
+      lineageId: delegationSha256Hex(`leaver-lineage-${n}`), parentId: 'lane-c-demo', parentIncarnation: 'g1', activityId: null,
+      leaseId: null, runId: null, openedAt: at(1), closedAt: null, closeReason: null, ...over,
+    });
+    return {
+      ...cp, appliedJournalSequence: 7,
+      sessions: [...cp.sessions, { sessionId: 'lane-c-demo', parentIncarnation: 'g1', explicitIntentAt: null, effective: false,
+        effectiveBasis: [], claudeSessionIds: [], firstObservedAt: at(0), lastObservedAt: at(1) }],
+      activities: [...cp.activities, act],
+      attempts: [...cp.attempts, { attemptId: 'attempt-c', parentId: 'lane-c-demo', parentIncarnation: 'g1', project: 'project-c',
+        adminRecord: 'wt-7', canonicalPath: null, attemptedAt: at(3), rung: null, verdict: 'unresolved', evidenceJournalIds: [], detail: null }],
+      leases: [...cp.leases, lease],
+      lineage: [...cp.lineage, lin(1, { activityId: act.activityId }), lin(2, { leaseId: lease.leaseId, openedAt: lease.firstObservedAt })],
+    };
+  };
+  /** Wraps a handle so every DELETE/INSERT on a delegation table is recorded (and optionally faulted) before it runs. */
+  const traced = (real: DatabaseSync) => {
+    const log: Array<{ kind: 'delete' | 'insert'; table: string; sql: string }> = [];
+    const execs: string[] = [];
+    let failAt: number | null = null;
+    const db = new Proxy(real, {
+      get(target, prop) {
+        if (prop === 'exec') return (sql: string) => { execs.push(sql); target.exec(sql); };
+        if (prop === 'prepare') {
+          return (sql: string) => {
+            const stmt = target.prepare(sql);
+            const m = /^\s*(DELETE FROM|INSERT INTO)\s+(delegation_[a-z]+)/.exec(sql);
+            if (m === null) return stmt;
+            return new Proxy(stmt, {
+              get(st, p) {
+                if (p === 'run') {
+                  return (...args: never[]) => {
+                    const idx = log.length;
+                    log.push({ kind: m[1] === 'DELETE FROM' ? 'delete' : 'insert', table: m[2]!, sql });
+                    if (failAt === idx) throw new Error('injected fault');
+                    return st.run(...args);
+                  };
+                }
+                const v = Reflect.get(st, p, st) as unknown;
+                return typeof v === 'function' ? v.bind(st) : v;
+              },
+            });
+          };
+        }
+        const v = Reflect.get(target, prop, target) as unknown;
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    }) as DatabaseSync;
+    return { db, log, execs, failAt: (i: number | null) => { failAt = i; log.length = 0; }, words: () => log.map((w) => `${w.kind} ${w.table}`) };
+  };
+
+  it('round-trips a checkpoint: server-minted lease ID, deterministic lineage ID, both journal sequences, generation 0, intent, every future-facing field', () => {
+    const { s, cp } = setup();
+    s.projectDelegationCheckpoint(cp);
+    const read = s.readDelegationProjection();
+    expect(read).toEqual(projectionViewOfDelegationCheckpoint(cp));
+    // The same facts, spelled out, so the comparison above is not the only witness:
+    expect(read.coordinatorIntentByParent).toEqual({ [delegationIntentKey('lane-a-demo', 'g1')]: at(10), [delegationIntentKey('lane-a-demo', 'g2')]: at(10) });
+    expect(Object.values(read.activityIdsByNaturalKey).sort()).toEqual(cp.activities.map((a) => a.activityId).sort());
+    expect(read.leases.map((l) => l.leaseId)).toEqual(cp.leases.map((l) => l.leaseId).sort());
+    const l2 = read.leases.find((l) => l.creationBase === 'abc123')!;
+    expect(l2).toMatchObject({ generation: 0, creatingJournalSequence: 5, currentJournalSequence: 5, sourceKind: 'workflow',
+      parentageState: 'unresolved', workspaceState: 'provisioning', disposition: 'ephemeral', cleanupState: 'not-due',
+      cleanupPopulation: 'ephemeral-lease', terminalEvidenceAt: null, adoptedAt: null, retainedAt: null, promotedAt: null,
+      cleanupDueAt: null, cleanupStartedAt: null, cleanupFinishedAt: null, cleanupEvidenceJson: null,
+      carrierGenerationSeen: null, releasedAt: null });
+    expect(read.lineage.map((l) => l.lineageId).sort()).toEqual(cp.lineage.map((l) => l.lineageId).sort());
+    expect(read.lineage.find((l) => l.runId !== null)!.activityId).toBeNull();
+    expect(read.sessions.find((x) => x.parentIncarnation === 'g1' && x.sessionId === 'lane-a-demo'))
+      .toMatchObject({ effective: true, effectiveBasis: ['explicit', 'delegation-inferred'], claudeSessionIds: ['cs-1', 'cs-2'] });
+    expect(read.attempts.find((a) => a.attemptId === 'attempt-3')).toMatchObject({ verdict: 'conflicting', canonicalPath: null, rung: 3, evidenceJournalIds: [jid(2), jid(3)] });
+    // And the checkpoint-only members are NOT recovered from SQLite: they come back empty or zero.
+    expect(read).toMatchObject({ v: 1, revision: 0, appliedJournalSequence: 0, appliedJournalId: null, appliedJournalDigest: null,
+      bucketCursors: [], observationIntervals: [], pruningHolds: [] });
+  });
+
+  it('every codec lists exactly its table’s columns, in the DDL’s order (an autoincrement id is not one)', () => {
+    const { s } = setup();
+    for (const codec of [delegationSessionCodec, delegationAttemptCodec, delegationActivityCodec, delegationLeaseCodec,
+                         delegationLineageCodec, delegationEventCodec]) {
+      const live = (s.db.prepare(`SELECT name FROM pragma_table_info('${codec.table}') ORDER BY cid`).all() as { name: string }[])
+        .map((c) => c.name).filter((n) => !(codec.table === 'delegation_events' && n === 'id'));
+      expect(codec.columns, codec.table).toEqual(live);
+    }
+  });
+
+  it('stores instants as epoch milliseconds, booleans as 0/1 and the lists as canonical JSON text', () => {
+    const { s, cp } = setup();
+    s.projectDelegationCheckpoint(cp);
+    expect(s.db.prepare("SELECT explicitIntentAt, effective, effectiveBasisJson, claudeSessionIdsJson, firstObservedAt FROM delegation_sessions WHERE sessionId = 'lane-a-demo' AND parentIncarnation = 'g1'").get())
+      .toEqual({ explicitIntentAt: Date.parse(at(10)), effective: 1, effectiveBasisJson: '["explicit","delegation-inferred"]',
+        claudeSessionIdsJson: '["cs-1","cs-2"]', firstObservedAt: Date.parse(at(0)) });
+    expect(s.db.prepare("SELECT evidenceJournalIdsJson AS j FROM delegation_attempts WHERE attemptId = 'attempt-3'").get())
+      .toEqual({ j: JSON.stringify([jid(2), jid(3)]) });
+  });
+
+  it('replaces the projection: a smaller checkpoint leaves nothing of the larger one, and reprojecting the same one is a no-op', () => {
+    const { s, cp, fixture: fx } = setup();
+    s.projectDelegationCheckpoint(cp);
+    const small: DelegationCheckpointV1 = { ...emptyDelegationCheckpoint(), appliedJournalSequence: 6, sessions: [cp.sessions[2]!] };
+    s.projectDelegationCheckpoint(small);
+    expect(s.readDelegationProjection()).toEqual(projectionViewOfDelegationCheckpoint(small));
+    for (const t of DELEGATION_TABLES) {
+      expect((s.db.prepare(`SELECT count(*) AS n FROM ${t}`).get() as { n: number }).n, t).toBe(t === 'delegation_sessions' ? 1 : 0);
+    }
+    s.projectDelegationCheckpoint(fx(1));
+    const once = dump(s);
+    s.projectDelegationCheckpoint(fx(1));
+    expect(s.readDelegationProjection()).toEqual(projectionViewOfDelegationCheckpoint(fx(1)));
+    expect(dump(s).delegation_leases).toEqual(once.delegation_leases);
+    expect(dump(s).delegation_sessions).toEqual(once.delegation_sessions);
+  });
+
+  describe('lease refusals — what assertLease refuses in delegation_leases (wave 3’s guard, loosened by wave 5)', () => {
+    const cases: Array<[string, (l: DelegationLeaseRow) => DelegationLeaseRow, string]> = [
+      ['a nonzero generation with equal sequences (generation 0 exactly when they are equal)', (l) => ({ ...l, generation: 1 }), 'lease-sequences'],
+      ['unequal creating and current sequences at generation 0', (l) => ({ ...l, currentJournalSequence: l.creatingJournalSequence + 1 }), 'lease-sequences'],
+      ['a non-ephemeral disposition', (l) => ({ ...l, disposition: 'retained' }), 'lease-disposition'],
+      ['a cleanup state other than not-due', (l) => ({ ...l, cleanupState: 'pending' }), 'lease-cleanup-state'],
+      ['a transition clock on an ephemeral lease', (l) => ({ ...l, adoptedAt: at(9) }), 'lease-disposition'],
+      ['transition evidence', (l) => ({ ...l, cleanupEvidenceJson: '{}' }), 'lease-transition-field'],
+      ['a carrier generation above the lease\'s', (l) => ({ ...l, carrierGenerationSeen: 1 }), 'lease-generation'],
+      ['a release with no carrier row naming why', (l) => ({ ...l, releasedAt: at(9) }), 'lease-carrier-row'],
+      ['F8: a releasedAt before its firstObservedAt (the table\'s CHECK, met by assertLease before SQLite)',
+        (l) => ({ ...l, releasedAt: '2000-01-01T00:00:00.000Z' }), 'lease-transition-field'],
+      ['a lastObservedAt that is not its firstObservedAt (replay sets both)', (l) => ({ ...l, lastObservedAt: at(9) }), 'lease-last-observed'],
+      ['an event-less lease (its creating sequence is past the applied journal)', (l) => ({ ...l, creatingJournalSequence: 7, currentJournalSequence: 7 }), 'lease-without-journal-entry'],
+    ];
+    it.each(cases)('refuses %s, and leaves the existing projection exactly as it was', (_label, mutate, code) => {
+      const { s, cp } = setup();
+      s.projectDelegationCheckpoint(cp);
+      const before = dump(s);
+      const bad: DelegationCheckpointV1 = { ...cp, leases: [mutate(cp.leases[0]!), ...cp.leases.slice(1)] };
+      refused(() => s.projectDelegationCheckpoint(bad), code);
+      expect(dump(s)).toEqual(before);
+    });
+
+    it.each([
+      ['no opening lineage row at all', (cp: DelegationCheckpointV1) => ({ ...cp, lineage: cp.lineage.filter((n) => n.leaseId !== cp.leases[0]!.leaseId) })],
+      ['an opening row opened at another instant', (cp: DelegationCheckpointV1) => ({ ...cp,
+        lineage: cp.lineage.map((n) => (n.leaseId === cp.leases[0]!.leaseId ? { ...n, openedAt: at(9) } : n)) })],
+      ['an activity-owned row standing in for the lease’s own', (cp: DelegationCheckpointV1) => ({ ...cp,
+        lineage: cp.lineage.map((n) => (n.leaseId === cp.leases[0]!.leaseId ? { ...n, leaseId: null, activityId: cp.activities[0]!.activityId } : n)) })],
+    ])('refuses %s, and leaves the existing projection exactly as it was', (_label, make) => {
+      const { s, cp } = setup();
+      s.projectDelegationCheckpoint(cp);
+      const before = dump(s);
+      refused(() => s.projectDelegationCheckpoint(make(cp)), 'lease-opening-lineage');
+      expect(dump(s)).toEqual(before);
+    });
+
+    it('refuses a session list a projection could not read back, before it writes anything', () => {
+      const { s, cp } = setup();
+      s.projectDelegationCheckpoint(cp);
+      const before = dump(s);
+      const bad = { ...cp, sessions: [{ ...cp.sessions[0]!, effectiveBasis: ['made-up'] as unknown as DelegationCheckpointV1['sessions'][number]['effectiveBasis'] }, ...cp.sessions.slice(1)] };
+      refused(() => s.projectDelegationCheckpoint(bad), 'bad-row');
+      expect(dump(s)).toEqual(before);
+      expect(() => s.readDelegationProjection(), 'what is there is still readable').not.toThrow();
+    });
+
+    it('refuses a checkpoint that repeats a session key BEFORE it opens a transaction, and leaves SQLite untouched', () => {
+      const t = traced(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+      const { s, cp } = setup(0, t.db);
+      s.projectDelegationCheckpoint(cp);
+      const before = dump(s);
+      t.execs.length = 0; t.failAt(null);
+      const first = cp.sessions[0]!;
+      for (const [label, sessions] of [
+        ['an identical repeat', [...cp.sessions, first]],
+        ['a repeat with other content (the upsert would quietly keep the last)', [first, { ...first, claudeSessionIds: ['other'], lastObservedAt: at(25) }, ...cp.sessions.slice(1)]],
+      ] as const) {
+        refused(() => s.projectDelegationCheckpoint({ ...cp, sessions }), 'bad-checkpoint');
+        expect(dump(s), `${label}: nothing written`).toEqual(before);
+        expect(t.log, `${label}: no DELETE or INSERT ran`).toEqual([]);
+        expect(t.execs.filter((e) => /BEGIN|COMMIT|ROLLBACK/.test(e)), `${label}: no transaction was opened`).toEqual([]);
+      }
+      // The same sessionId under another incarnation is a different key, not a repeat.
+      expect(cp.sessions.filter((x) => x.sessionId === first.sessionId).length).toBeGreaterThan(1);
+      expect(() => s.projectDelegationCheckpoint(cp)).not.toThrow();
+      expect(() => s.readDelegationProjection()).not.toThrow();
+    });
+
+    it('refuses to project when the connection does not enforce foreign keys, and writes nothing (the order below depends on them)', () => {
+      const { s, cp, fixture: fx } = setup();
+      s.projectDelegationCheckpoint(cp);
+      const before = dump(s);
+      s.db.exec('PRAGMA foreign_keys = OFF');
+      try {
+        refused(() => s.projectDelegationCheckpoint(fx(1)), 'foreign-keys-off');
+        expect(dump(s)).toEqual(before);
+      } finally {
+        s.db.exec('PRAGMA foreign_keys = ON');
+      }
+      expect(() => s.projectDelegationCheckpoint(fx(1))).not.toThrow();
+    });
+
+    it('refuses a checkpoint that is not version 1 or whose applied sequence is not a non-negative safe integer', () => {
+      const { s, cp } = setup();
+      refused(() => s.projectDelegationCheckpoint({ ...cp, v: 2 as unknown as 1 }), 'bad-checkpoint');
+      refused(() => s.projectDelegationCheckpoint({ ...cp, appliedJournalSequence: -1 }), 'bad-checkpoint');
+      refused(() => s.projectDelegationCheckpoint({ ...cp, appliedJournalSequence: 1.5 }), 'bad-checkpoint');
+      expect(dump(s).delegation_sessions).toEqual([]);
+    });
+
+    it('refuses a malformed instant before it opens a transaction', () => {
+      const { s, cp } = setup();
+      s.projectDelegationCheckpoint(cp);
+      const before = dump(s);
+      refused(() => s.projectDelegationCheckpoint({ ...cp, sessions: [{ ...cp.sessions[0]!, firstObservedAt: '2026-10-14 00:00:00' }, ...cp.sessions.slice(1)] }), 'bad-instant');
+      expect(dump(s)).toEqual(before);
+    });
+  });
+
+  it('SQLite never invents intent: deleting the rows and reprojecting restores it from the checkpoint, and clearing it in the checkpoint clears it', () => {
+    const { s, cp, fixture: fx } = setup();
+    s.projectDelegationCheckpoint(cp);
+    expect(s.readDelegationProjection().coordinatorIntentByParent).toEqual({ [delegationIntentKey('lane-a-demo', 'g1')]: at(10), [delegationIntentKey('lane-a-demo', 'g2')]: at(10) });
+    // The projection is lost, wholesale (the FK-safe order, by hand).
+    for (const t of DELEGATION_TABLES) s.db.prepare(`DELETE FROM ${t}`).run();
+    expect(s.readDelegationProjection().coordinatorIntentByParent, 'nothing to read').toEqual({});
+    s.projectDelegationCheckpoint(cp);
+    expect(s.readDelegationProjection().coordinatorIntentByParent, 'restored from the checkpoint alone').toEqual({ [delegationIntentKey('lane-a-demo', 'g1')]: at(10), [delegationIntentKey('lane-a-demo', 'g2')]: at(10) });
+    // The checkpoint stops carrying it: the next projection must not remember it.
+    const cleared: DelegationCheckpointV1 = {
+      ...cp, coordinatorIntentByParent: {}, sessions: cp.sessions.map((x) => ({ ...x, explicitIntentAt: null })),
+    };
+    s.projectDelegationCheckpoint(cleared);
+    expect(s.readDelegationProjection().coordinatorIntentByParent).toEqual({});
+    expect(s.db.prepare('SELECT count(*) AS n FROM delegation_sessions WHERE explicitIntentAt IS NOT NULL').get()).toEqual({ n: 0 });
+    // A row someone edited by hand is drift the read SHOWS, and the next projection overwrites.
+    s.projectDelegationCheckpoint(fx(0));
+    s.db.prepare("UPDATE delegation_sessions SET explicitIntentAt = ? WHERE sessionId = 'lane-b-demo'").run(Date.parse(at(11)));
+    expect(s.readDelegationProjection().coordinatorIntentByParent).toEqual(
+      { [delegationIntentKey('lane-a-demo', 'g1')]: at(10), [delegationIntentKey('lane-a-demo', 'g2')]: at(10), [delegationIntentKey('lane-b-demo', 'g1')]: at(11) });
+    expect(s.readDelegationProjection()).not.toEqual(projectionViewOfDelegationCheckpoint(fx(0)));
+    s.projectDelegationCheckpoint(fx(0));
+    expect(s.readDelegationProjection()).toEqual(projectionViewOfDelegationCheckpoint(fx(0)));
+  });
+
+  it('a natural key cannot mint a second activity: two IDs for one key fail the projection, whole', () => {
+    const { s, cp } = setup();
+    s.projectDelegationCheckpoint(cp);
+    const before = dump(s);
+    const twin: DelegationActivityRow = { ...cp.activities[1]!, activityId: 'f'.repeat(64) };
+    expect(() => s.projectDelegationCheckpoint({ ...cp, activities: [...cp.activities, twin] })).toThrow(/UNIQUE/);
+    expect(dump(s)).toEqual(before);
+  });
+
+  describe('lease identity — the partial unique indexes, each tested with the others dropped', () => {
+    /** A scratch store keeping ONE of the three lease indexes, so a duplicate can only be refused by that one. */
+    const only = (keep: string) => {
+      const base = setup();
+      for (const idx of ['delegation_leases_identity_null_base', 'delegation_leases_identity_with_base', 'delegation_leases_one_active_path']) {
+        if (idx !== keep) base.s.db.exec(`DROP INDEX ${idx}`);
+      }
+      return base;
+    };
+    /** `cp` with a second lease cloned from the first, differing only by `over`, on the same activity. */
+    const twinned = (cp: DelegationCheckpointV1, over: Partial<DelegationLeaseRow>): DelegationCheckpointV1 => {
+      const first = cp.leases[0]!;
+      return withLeases(cp, [first, { ...first, leaseId: 'twin-lease', creatingJournalSequence: 2, currentJournalSequence: 2, ...over }]);
+    };
+
+    it('null-base-identity row: two unreleased NULL-base leases of one (project, adminRecord, canonicalPath) are refused (W3-M18B)', () => {
+      const { s, cp } = only('delegation_leases_identity_null_base');
+      expect(cp.leases[0]!.creationBase).toBeNull();
+      expect(() => s.projectDelegationCheckpoint(twinned(cp, {}))).toThrow(/UNIQUE/);
+      expect(s.db.prepare('SELECT count(*) AS n FROM delegation_leases').get(), 'refused whole').toEqual({ n: 0 });
+      expect(() => s.projectDelegationCheckpoint(twinned(cp, { adminRecord: 'wt-other' })), 'a different admin record').not.toThrow();
+      expect(() => s.projectDelegationCheckpoint(twinned(cp, { project: 'project-z' })), 'a different project').not.toThrow();
+      expect(() => s.projectDelegationCheckpoint(twinned(cp, { canonicalPath: '/work/project-a/elsewhere' })), 'a different path').not.toThrow();
+    });
+
+    it('non-null base: the exact tuple is refused, a different creationBase is a different identity', () => {
+      const { s, cp } = only('delegation_leases_identity_with_base');
+      const withBase = withLeases(cp, [{ ...cp.leases[0]!, creationBase: 'abc' }]);
+      expect(() => s.projectDelegationCheckpoint(twinned(withBase, { creationBase: 'abc' }))).toThrow(/UNIQUE/);
+      expect(() => s.projectDelegationCheckpoint(twinned(withBase, { creationBase: 'def' }))).not.toThrow();
+      expect(() => s.projectDelegationCheckpoint(twinned(withBase, { creationBase: null })), 'the null index is not this index').not.toThrow();
+    });
+
+    it('active path: one unreleased lease per canonicalPath whatever its identity', () => {
+      const { s, cp } = only('delegation_leases_one_active_path');
+      expect(() => s.projectDelegationCheckpoint(twinned(cp, { adminRecord: 'wt-other', project: 'project-z', creationBase: 'abc' }))).toThrow(/UNIQUE/);
+      expect(() => s.projectDelegationCheckpoint(twinned(cp, { canonicalPath: '/work/project-a/elsewhere' }))).not.toThrow();
+    });
+
+    it('released-identity-reuse table: a released lease frees its tuple and its path for the next lease (W3-M64)', () => {
+      const rows: Array<[string, string, Partial<DelegationLeaseRow>]> = [
+        ['null base', 'delegation_leases_identity_null_base', {}],
+        ['with base', 'delegation_leases_identity_with_base', { creationBase: 'abc' }],
+        ['active path', 'delegation_leases_one_active_path', {}],
+      ];
+      for (const [label, keep, over] of rows) {
+        const { s, cp } = only(keep);
+        s.projectDelegationCheckpoint(withLeases(cp, [{ ...cp.leases[0]!, ...over }]));
+        const insertTwin = (id: string, seq: number) => {
+          const l = delegationLeaseCodec.toDb({ ...cp.leases[0]!, ...over, leaseId: id, creatingJournalSequence: seq, currentJournalSequence: seq });
+          s.db.prepare(`INSERT INTO delegation_leases (${delegationLeaseCodec.columns.join(', ')}) VALUES (${delegationLeaseCodec.columns.map(() => '?').join(', ')})`)
+            .run(...delegationLeaseCodec.columns.map((c) => l[c]));
+        };
+        expect(() => insertTwin('t1', 8), `${label}: still unreleased`).toThrow(/UNIQUE/);
+        s.db.prepare('UPDATE delegation_leases SET releasedAt = ?').run(Date.parse(at(15)));
+        expect(() => insertTwin('t1', 8), `${label}: reusable once released`).not.toThrow();
+        expect(() => insertTwin('t2', 9), `${label}: and unique again`).toThrow(/UNIQUE/);
+      }
+    });
+  });
+
+  it('lease-sequence round-trip table: both journal sequences, the generation and EVERY clock come back from their own columns (W3-M65)', () => {
+    const { s, cp } = setup();
+    s.projectDelegationCheckpoint(withLeases(cp, []));
+    // The DDL is the complete future-facing shape, and the READER is not wave 3's guard: a later wave’s row reads back whole.
+    // Every clock of every row below is a DIFFERENT instant, and every number differs from every other, so a codec that
+    // conflates two of them (in either direction) cannot round-trip.
+    const later = (id: string, k: number, over: Partial<DelegationLeaseRow>): DelegationLeaseRow => ({
+      ...cp.leases[0]!, leaseId: id, canonicalPath: `/work/${id}`, adminRecord: `wt-${id}`, creationBase: `base-${id}`,
+      parentageState: 'conflicting', workspaceState: 'absent', disposition: 'promoted', cleanupState: 'reclaimed',
+      firstObservedAt: at(k), lastObservedAt: at(k + 1), terminalEvidenceAt: at(k + 2), adoptedAt: at(k + 3), retainedAt: at(k + 4),
+      promotedAt: at(k + 5), cleanupDueAt: at(k + 6), cleanupStartedAt: at(k + 7), cleanupFinishedAt: at(k + 8),
+      cleanupEvidenceJson: JSON.stringify({ audit: id }), releasedAt: at(k + 9), ...over,
+    });
+    const rows: DelegationLeaseRow[] = [
+      later('x1', 1, { creatingJournalSequence: 4, currentJournalSequence: 4, generation: 0, carrierGenerationSeen: null }),
+      later('x2', 11, { creatingJournalSequence: 5, currentJournalSequence: 9, generation: 2, carrierGenerationSeen: 1 }),
+      later('x3', 21, { creatingJournalSequence: 7, currentJournalSequence: 12, generation: 3, carrierGenerationSeen: 8 }),
+    ];
+    for (const row of rows) {
+      const db = delegationLeaseCodec.toDb(row);
+      s.db.prepare(`INSERT INTO delegation_leases (${delegationLeaseCodec.columns.join(', ')}) VALUES (${delegationLeaseCodec.columns.map(() => '?').join(', ')})`)
+        .run(...delegationLeaseCodec.columns.map((c) => db[c]));
+    }
+    const read = s.readDelegationProjection().leases;
+    expect(read.map((l) => [l.leaseId, l.creatingJournalSequence, l.currentJournalSequence, l.generation, l.carrierGenerationSeen]))
+      .toEqual([['x1', 4, 4, 0, null], ['x2', 5, 9, 2, 1], ['x3', 7, 12, 3, 8]]);
+    expect(read, 'every column of every row, clocks included').toEqual(rows);
+    // And the wave-3 writer fills both sequences from the lease it is given.
+    s.projectDelegationCheckpoint({ ...withLeases(cp, [{ ...cp.leases[0]!, creatingJournalSequence: 8, currentJournalSequence: 8 }]), appliedJournalSequence: 9 });
+    expect(s.db.prepare('SELECT creatingJournalSequence AS c, currentJournalSequence AS u, generation AS g FROM delegation_leases').get())
+      .toEqual({ c: 8, u: 8, g: 0 });
+  });
+
+  it('nullable-attempt-path table: unresolved, conflicting and unmeasured round-trip with no path; a linked attempt with none fails (W3-M67)', () => {
+    const { s, cp } = setup();
+    s.projectDelegationCheckpoint(cp);
+    const byVerdict = Object.fromEntries(s.readDelegationProjection().attempts.map((a) => [a.verdict, a.canonicalPath]));
+    expect(byVerdict).toEqual({ linked: '/work/project-a/wt-1', unresolved: null, conflicting: null, unmeasured: null });
+    const before = dump(s);
+    const linkedNoPath: DelegationAttemptRow = { ...cp.attempts[0]!, attemptId: 'attempt-linked-null', canonicalPath: null };
+    expect(() => s.projectDelegationCheckpoint({ ...cp, attempts: [...cp.attempts, linkedNoPath] })).toThrow(/CHECK/);
+    expect(dump(s), 'a refused projection leaves the previous one').toEqual(before);
+    // Each non-linked verdict is also fine WITH a path, and the raw table agrees with the projection.
+    for (const verdict of ['unresolved', 'conflicting', 'unmeasured'] as const) {
+      expect(() => s.projectDelegationCheckpoint({ ...cp, attempts: [...cp.attempts, { ...cp.attempts[0]!, attemptId: `with-path-${verdict}`, verdict }] }), verdict).not.toThrow();
+    }
+  });
+
+  it('activity and lease source domains stay distinct in the tables', () => {
+    const { s, cp } = setup();
+    s.projectDelegationCheckpoint(cp);
+    expect(s.db.prepare("SELECT sourceKind FROM delegation_activities WHERE upstreamId = 'toolu_1'").get()).toEqual({ sourceKind: 'bash-worktree' });
+    expect(s.db.prepare("SELECT sourceKind FROM delegation_leases WHERE project = 'project-b'").get()).toEqual({ sourceKind: 'raw' });
+    const before = dump(s);
+    const rawActivity: DelegationActivityRow = { ...cp.activities[0]!, sourceKind: 'raw' as unknown as DelegationActivityRow['sourceKind'], upstreamId: 'zz', activityId: 'e'.repeat(64) };
+    expect(() => s.projectDelegationCheckpoint({ ...cp, activities: [...cp.activities, rawActivity] })).toThrow(/CHECK/);
+    const worktreeLease: DelegationLeaseRow = { ...cp.leases[0]!, leaseId: 'wt-lease', creatingJournalSequence: 2, currentJournalSequence: 2,
+      canonicalPath: '/work/other', adminRecord: 'other', sourceKind: 'bash-worktree' as unknown as DelegationLeaseRow['sourceKind'] };
+    expect(() => s.projectDelegationCheckpoint(withLeases(cp, [...cp.leases, worktreeLease]))).toThrow(/CHECK/);
+    expect(dump(s)).toEqual(before);
+    const attached: DelegationLeaseRow = { ...worktreeLease, sourceKind: 'attached' };
+    expect(() => s.projectDelegationCheckpoint(withLeases(cp, [...cp.leases, attached])), 'attached is representable').not.toThrow();
+  });
+
+  describe('insertDelegationEvent', () => {
+    it('inserts once and answers duplicate for the same evidence event, writing nothing the second time', () => {
+      const { s, cp } = setup();
+      s.projectDelegationCheckpoint(cp);
+      expect(s.insertDelegationEvent(event(1))).toBe('inserted');
+      expect(s.insertDelegationEvent(event(1))).toBe('duplicate');
+      expect(s.insertDelegationEvent(event(2, { sessionId: 'lane-b-demo' }))).toBe('inserted');
+      expect(s.db.prepare('SELECT count(*) AS n FROM delegation_events').get()).toEqual({ n: 2 });
+    });
+
+    it('stores the row as the model codec writes it', () => {
+      const { s, cp } = setup();
+      s.projectDelegationCheckpoint(cp);
+      s.insertDelegationEvent(event(2, { eventKind: 'SubagentStart', observedAt: at(1) }));
+      expect(s.db.prepare('SELECT eventId, journalSequence, journalDigest, acceptedAt, sessionId, parentIncarnation, claudeSessionId, eventKind, observedAt, payloadJson FROM delegation_events').get())
+        .toEqual({ eventId: event(2).eventId, journalSequence: 2, journalDigest: event(2).journalDigest, acceptedAt: Date.parse(at(2)),
+          sessionId: 'lane-a-demo', parentIncarnation: 'g1', claudeSessionId: 'cs-1', eventKind: 'SubagentStart',
+          observedAt: Date.parse(at(1)), payloadJson: '{"v":1,"n":2}' });
+    });
+
+    it('does not call a CONFLICT a duplicate: the same eventId at another sequence, or another event at one sequence, throws', () => {
+      const { s, cp } = setup();
+      s.projectDelegationCheckpoint(cp);
+      s.insertDelegationEvent(event(1));
+      refused(() => s.insertDelegationEvent(event(1, { journalSequence: 2 })), 'event-conflict');
+      refused(() => s.insertDelegationEvent(event(1, { payloadJson: '{"v":1,"n":99}' })), 'event-conflict');
+      expect(() => s.insertDelegationEvent(event(2, { journalSequence: 1 }))).toThrow(/UNIQUE/);
+      expect(s.db.prepare('SELECT count(*) AS n FROM delegation_events').get()).toEqual({ n: 1 });
+    });
+
+    it('needs the parent session in the projection: an event for an unknown session fails its foreign key', () => {
+      const { s, cp } = setup();
+      s.projectDelegationCheckpoint(cp);
+      expect(() => s.insertDelegationEvent(event(1, { sessionId: 'nobody' }))).toThrow(/FOREIGN KEY/);
+      expect(() => s.insertDelegationEvent(event(1, { parentIncarnation: 'g9' }))).toThrow(/FOREIGN KEY/);
+    });
+
+    it.each([
+      ['an unknown event kind', { eventKind: 'Stop' as unknown as DelegationEventRow['eventKind'] }, 'bad-event'],
+      ['an empty eventId', { eventId: '' }, 'bad-event'],
+      ['a zero journal sequence', { journalSequence: 0 }, 'bad-event'],
+      ['a fractional journal sequence', { journalSequence: 1.5 }, 'bad-event'],
+      ['a short digest', { journalDigest: 'abc' }, 'bad-event'],
+      ['a payload that is not JSON', { payloadJson: 'not json' }, 'bad-event'],
+      ['a payload that is not an object', { payloadJson: '[1]' }, 'bad-event'],
+      ['a malformed instant', { acceptedAt: 'yesterday' }, 'bad-instant'],
+    ])('refuses %s before it touches the table', (_label, over, code) => {
+      const { s, cp } = setup();
+      s.projectDelegationCheckpoint(cp);
+      refused(() => s.insertDelegationEvent(event(1, over as Partial<DelegationEventRow>)), code);
+      expect(s.db.prepare('SELECT count(*) AS n FROM delegation_events').get()).toEqual({ n: 0 });
+    });
+
+    it('events enter SQLite only here: a projection over sessions and no events leaves the events table empty', () => {
+      const { s, cp } = setup();
+      s.projectDelegationCheckpoint(cp);
+      s.projectDelegationCheckpoint(withLeaver(cp));
+      s.projectDelegationCheckpoint(cp);
+      expect(s.db.prepare('SELECT count(*) AS n FROM delegation_events').get()).toEqual({ n: 0 });
+    });
+  });
+
+  describe('insertDelegationEvents and delegationEventStats — the batch port Task 8A drives', () => {
+    const ev = (n: number, over: Partial<DelegationEventRow> = {}): DelegationEventRow => event(n, over);
+    const live = () => {
+      const t = traced(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+      const { s, cp, fixture: fx } = setup(0, t.db);
+      s.projectDelegationCheckpoint(cp);
+      t.execs.length = 0; t.failAt(null);
+      return { t, s, cp, fx };
+    };
+    const stored = (s: CoordStore): Array<[number, string]> =>
+      (s.db.prepare('SELECT journalSequence AS q, eventId AS e FROM delegation_events ORDER BY journalSequence').all() as Array<{ q: number; e: string }>).map((r) => [r.q, r.e]);
+
+    it('reports inserted, duplicate and conflicting rows; a conflict never aborts the rows after it', () => {
+      const { s } = live();
+      const changed = ev(1, { payloadJson: '{"v":1,"n":999}' });                // the SAME eventId as ev(1), a different row
+      const thief = ev(20, { journalSequence: 2 });                              // ANOTHER event on ev(2)'s journalSequence
+      const batch = [ev(1), ev(2), ev(3), ev(1), changed, thief, ev(5, { sessionId: 'lane-b-demo' })];
+      const r = s.insertDelegationEvents(batch);
+      expect(r).toEqual({ inserted: 4, duplicate: 1, conflicts: [changed, thief] });
+      expect(stored(s), 'ev(5) landed AFTER two conflicts; the conflicting rows did not').toEqual([[1, ev(1).eventId], [2, ev(2).eventId], [3, ev(3).eventId], [5, ev(5).eventId]]);
+      // Again: everything is now a duplicate, and the two conflicts are conflicts still.
+      expect(s.insertDelegationEvents(batch)).toEqual({ inserted: 0, duplicate: 5, conflicts: [changed, thief] });
+      expect(stored(s)).toHaveLength(4);
+    });
+
+    it('finds a conflict against a row already stored, not only one inside the batch', () => {
+      const { s } = live();
+      s.insertDelegationEvent(ev(1));
+      s.insertDelegationEvent(ev(2));
+      const changed = ev(1, { claudeSessionId: 'cs-other' });
+      const thief = ev(30, { journalSequence: 2 });
+      expect(s.insertDelegationEvents([changed, thief, ev(3)])).toEqual({ inserted: 1, duplicate: 0, conflicts: [changed, thief] });
+    });
+
+    it('is ONE transaction for the whole list, however long; an empty list writes no row', () => {
+      const { t, s } = live();
+      s.insertDelegationEvents(Array.from({ length: 25 }, (_, k) => ev(k + 1)));
+      expect(t.execs.filter((e) => e === 'BEGIN IMMEDIATE')).toHaveLength(1);
+      expect(t.execs.filter((e) => e === 'COMMIT')).toHaveLength(1);
+      expect(t.log.filter((w) => w.kind === 'insert' && w.table === 'delegation_events')).toHaveLength(25);
+      const writesBefore = t.log.length;
+      expect(s.insertDelegationEvents([])).toEqual({ inserted: 0, duplicate: 0, conflicts: [] });
+      expect(t.log.length, 'the empty list wrote nothing').toBe(writesBefore);
+      expect(stored(s)).toHaveLength(25);
+    });
+
+    it('goes through the same path as insertDelegationEvent: one row at a time, the verdicts agree', () => {
+      const a = live(), b = live();
+      const rows = [ev(1), ev(1), ev(2), ev(1, { payloadJson: '{"v":1,"n":7}' }), ev(40, { journalSequence: 2 }), ev(3, { sessionId: 'lane-b-demo' })];
+      const verdicts = rows.map((row) => {
+        try { return a.s.insertDelegationEvent(row); } catch (err) {
+          if (err instanceof DelegationModelError && err.code === 'event-conflict') return 'conflict';
+          if (err instanceof Error && /UNIQUE constraint failed: delegation_events\.journalSequence/.test(err.message)) return 'conflict';
+          throw err;
+        }
+      });
+      const batch = b.s.insertDelegationEvents(rows);
+      expect(batch.inserted).toBe(verdicts.filter((v) => v === 'inserted').length);
+      expect(batch.duplicate).toBe(verdicts.filter((v) => v === 'duplicate').length);
+      expect(batch.conflicts).toEqual(rows.filter((_, i) => verdicts[i] === 'conflict'));
+      expect(stored(b.s)).toEqual(stored(a.s));
+    });
+
+    it('rolls the WHOLE batch back and rethrows on a failure that is not a conflict (here an unknown session, mid-batch)', () => {
+      const { t, s } = live();
+      expect(() => s.insertDelegationEvents([ev(1), ev(2), ev(3, { sessionId: 'nobody' }), ev(4)])).toThrow(/FOREIGN KEY/);
+      expect(stored(s), 'the two rows before the failure are not kept').toEqual([]);
+      expect(t.execs.filter((e) => e === 'ROLLBACK')).toHaveLength(1);
+      expect(s.insertDelegationEvents([ev(1), ev(2)]), 'the connection is not left inside a transaction').toEqual({ inserted: 2, duplicate: 0, conflicts: [] });
+    });
+
+    it('rolls the whole batch back on an injected fault at a row after conflicts and inserts', () => {
+      const { t, s } = live();
+      s.insertDelegationEvent(ev(9));
+      const before = dump(s);
+      t.failAt(2);                                                                // the third INSERT of the batch
+      expect(() => s.insertDelegationEvents([ev(1), ev(9, { payloadJson: '{"v":1,"n":5}' }), ev(2), ev(3), ev(4)])).toThrow('injected fault');
+      expect(dump(s)).toEqual(before);
+    });
+
+    it('refuses a malformed row BEFORE opening a transaction, writing nothing', () => {
+      const { t, s } = live();
+      refused(() => s.insertDelegationEvents([ev(1), ev(2, { eventKind: 'Stop' as unknown as DelegationEventRow['eventKind'] }), ev(3)]), 'bad-event');
+      refused(() => s.insertDelegationEvents([ev(1), ev(2, { acceptedAt: 'yesterday' })]), 'bad-instant');
+      expect(stored(s)).toEqual([]);
+      expect(t.execs.filter((e) => /BEGIN/.test(e))).toEqual([]);
+    });
+
+    it('delegationEventStats: an empty table is {count: 0, maxSequence: null}, never 0 for the sequence', () => {
+      const { s } = live();
+      expect(s.delegationEventStats()).toEqual({ count: 0, maxSequence: null });
+    });
+
+    it('delegationEventStats counts the rows and names the highest journalSequence, wherever it sits', () => {
+      const { s, fx } = live();
+      s.insertDelegationEvents([ev(5), ev(100), ev(7, { sessionId: 'lane-b-demo' })]);
+      expect(s.delegationEventStats()).toEqual({ count: 3, maxSequence: 100 });
+      s.insertDelegationEvent(ev(101));
+      expect(s.delegationEventStats()).toEqual({ count: 4, maxSequence: 101 });
+      // A projection that removes a session removes its events, and the statistics follow.
+      s.projectDelegationCheckpoint({ ...fx(0), sessions: fx(0).sessions.filter((x) => x.sessionId !== 'lane-b-demo'),
+        attempts: fx(0).attempts.filter((x) => x.parentId !== 'lane-b-demo'), activities: fx(0).activities.filter((x) => x.parentId !== 'lane-b-demo'),
+        leases: fx(0).leases.filter((x) => x.parentId !== 'lane-b-demo'), lineage: fx(0).lineage.filter((x) => x.parentId !== 'lane-b-demo') });
+      expect(s.delegationEventStats()).toEqual({ count: 3, maxSequence: 101 });
+    });
+
+    it('the result type has one home: the L1 model, across the whole server tree. store.ts imports it from there and never from delegation-checkpoint.ts', () => {
+      const here = path.dirname(fileURLToPath(import.meta.url));
+      const root = path.join(here, '..', 'src');
+      const src = (f: string): string => readFileSync(path.join(root, 'coord', f), 'utf8');
+      // the TREE, not three files: every declaration of the type anywhere under server/src
+      const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.ts') ? [path.join(d, e.name)] : []));
+      const homes = walk(root).filter((f) => /(?:interface|type)\s+DelegationInsertEventsResult\b\s*[={<]/.test(readFileSync(f, 'utf8')));
+      expect(homes.map((f) => path.relative(root, f))).toEqual([path.join('coord', 'delegation-model.ts')]);
+      // D-8641: nor from any module of delegation-checkpoint.ts's program, so the pilot's moves cannot carry it a new importer
+      for (const m of programMembers('server/src/coord/delegation-checkpoint.ts')) expect(src('store.ts'), m).not.toContain(path.basename(m, '.ts'));
+      expect(src('store.ts')).toMatch(/type DelegationInsertEventsResult\b/);
+    });
+  });
+
+  describe('the session-upsert projection (ruling R20): statement list, rollback and event isolation', () => {
+    /** Four sessions in, three staying: the exact statement list of the replacement, with one session LEAVING. */
+    const LEAVING_LIST = [
+      'delete delegation_lineage', 'delete delegation_leases', 'delete delegation_events', 'delete delegation_attempts',
+      'delete delegation_activities', 'delete delegation_sessions',
+      ...Array<string>(3).fill('insert delegation_sessions'),
+      ...Array<string>(3).fill('insert delegation_activities'),
+      ...Array<string>(4).fill('insert delegation_attempts'),
+      ...Array<string>(3).fill('insert delegation_leases'),
+      ...Array<string>(6).fill('insert delegation_lineage'),
+    ];
+    /** No session leaves: no event is deleted, no session is deleted, and the sessions are upserted in place. */
+    const STAYING_LIST = [
+      'delete delegation_lineage', 'delete delegation_leases', 'delete delegation_attempts', 'delete delegation_activities',
+      ...Array<string>(3).fill('insert delegation_sessions'),
+      ...Array<string>(3).fill('insert delegation_activities'),
+      ...Array<string>(4).fill('insert delegation_attempts'),
+      ...Array<string>(3).fill('insert delegation_leases'),
+      ...Array<string>(6).fill('insert delegation_lineage'),
+    ];
+    /** A traced store holding checkpoint A (variant 0 plus one session that B will not carry) and events for every session. */
+    const stateA = () => {
+      const t = traced(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+      const { s, fixture: fx } = setup(0, t.db);
+      s.projectDelegationCheckpoint(withLeaver(fx(0)));
+      const evSession = ['lane-a-demo', 'lane-a-demo', 'lane-b-demo', 'lane-c-demo', 'lane-c-demo'];
+      evSession.forEach((sessionId, n) => {
+        s.insertDelegationEvent(event(100 + n, { sessionId, parentIncarnation: 'g1' }));
+      });
+      return { t, s, fx };
+    };
+
+    it('the statement list is exact: leaving sessions’ events, then the leaving sessions, then an UPSERT of the sessions, and no event INSERT (W3-M72)', () => {
+      const { t, s, fx } = stateA();
+      t.failAt(null);
+      s.projectDelegationCheckpoint(fx(1));
+      expect(t.words(), 'one leaving session: its events are deleted before it, the others upserted in place').toEqual(LEAVING_LIST);
+      expect(s.readDelegationProjection()).toEqual(projectionViewOfDelegationCheckpoint(fx(1)));
+      t.failAt(null);
+      s.projectDelegationCheckpoint(fx(1));
+      expect(t.words(), 'nothing leaves: no events delete, no sessions delete').toEqual(STAYING_LIST);
+    });
+
+    it('deletes a leaving session’s events through the delegation_events_by_parent index, once per leaving session', () => {
+      const { t, s, fx } = stateA();
+      t.failAt(null);
+      s.projectDelegationCheckpoint(fx(1));
+      const del = t.log.find((w) => w.kind === 'delete' && w.table === 'delegation_events')!;
+      expect(del.sql).toMatch(/WHERE sessionId = \? AND parentIncarnation = \?/);
+      const plan = (s.db.prepare(`EXPLAIN QUERY PLAN ${del.sql}`).all('lane-c-demo', 'g1') as Array<{ detail: string }>).map((r) => r.detail).join(' | ');
+      expect(plan).toContain('delegation_events_by_parent');
+      expect(plan, 'never a scan of the whole table').not.toMatch(/SCAN delegation_events\b(?! USING)/);
+    });
+
+    it('a fault at EVERY statement rolls the whole replacement back, byte for byte, and the next clean one lands (W3-M72)', () => {
+      const { t, s, fx } = stateA();
+      for (let i = 0; i < LEAVING_LIST.length; i++) {
+        const before = dump(s);
+        t.failAt(i);
+        expect(() => s.projectDelegationCheckpoint(fx(1)), `fault at ${i} (${LEAVING_LIST[i]})`).toThrow('injected fault');
+        expect(t.words()[i], 'the fault landed on the statement the list names').toBe(LEAVING_LIST[i]);
+        expect(dump(s), `rolled back after a fault at ${i} (${LEAVING_LIST[i]})`).toEqual(before);
+      }
+      t.failAt(null);
+      s.projectDelegationCheckpoint(fx(1));
+      expect(t.words(), 'the clean replacement runs exactly the listed statements').toEqual(LEAVING_LIST);
+      expect(s.readDelegationProjection()).toEqual(projectionViewOfDelegationCheckpoint(fx(1)));
+      expect((s.db.prepare("SELECT sessionId, count(*) AS n FROM delegation_events GROUP BY sessionId ORDER BY sessionId").all() as Array<{ sessionId: string; n: number }>)
+        .map((r) => [r.sessionId, r.n])).toEqual([['lane-a-demo', 2], ['lane-b-demo', 1]]);
+    }, 120_000);
+
+    it('a fault at every statement of the NO-LEAVER replacement also leaves the previous projection untouched', () => {
+      const { t, s, fx } = stateA();
+      s.projectDelegationCheckpoint(fx(1));                                 // lane-c is gone; only staying sessions from here
+      for (let i = 0; i < STAYING_LIST.length; i++) {
+        const before = dump(s);
+        t.failAt(i);
+        expect(() => s.projectDelegationCheckpoint(fx(0)), `fault at ${i} (${STAYING_LIST[i]})`).toThrow('injected fault');
+        expect(dump(s), `rolled back after a fault at ${i} (${STAYING_LIST[i]})`).toEqual(before);
+      }
+    }, 120_000);
+
+    it('projecting the same checkpoint again is idempotent: every table, events included, is identical afterwards', () => {
+      const { t, s, fx } = stateA();
+      s.projectDelegationCheckpoint(fx(1));
+      const once = dump(s);
+      for (let n = 0; n < 3; n++) {
+        t.failAt(null);
+        s.projectDelegationCheckpoint(fx(1));
+        expect(t.words()).toEqual(STAYING_LIST);
+        expect(dump(s).delegation_events, 'the events table is byte for byte what it was, ids included').toEqual(once.delegation_events);
+        expect(dump(s).delegation_sessions).toEqual(once.delegation_sessions);
+        expect(dump(s).delegation_leases).toEqual(once.delegation_leases);
+        expect(s.readDelegationProjection()).toEqual(projectionViewOfDelegationCheckpoint(fx(1)));
+      }
+    });
+
+    it('an incarnation change: the old incarnation (same sessionId) leaves with its events, the new one and every other session stay untouched', () => {
+      const { s, fixture: fx } = setup();
+      const before = fx(0);
+      s.projectDelegationCheckpoint(before);
+      // lane-a-demo restarted: g1 is replaced by g2. Everything g1 owned goes with it (it had children in every child table).
+      const g1 = (x: { parentId: string; parentIncarnation: string }) => x.parentId === 'lane-a-demo' && x.parentIncarnation === 'g1';
+      const after: DelegationCheckpointV1 = {
+        ...before,
+        sessions: before.sessions.filter((x) => !(x.sessionId === 'lane-a-demo' && x.parentIncarnation === 'g1')),
+        activities: before.activities.filter((x) => !g1(x)), attempts: before.attempts.filter((x) => !g1(x)),
+        leases: before.leases.filter((x) => !g1(x)), lineage: before.lineage.filter((x) => !g1(x)),
+      };
+      expect(before.sessions.map((x) => `${x.sessionId}/${x.parentIncarnation}`)).toEqual(['lane-a-demo/g1', 'lane-a-demo/g2', 'lane-b-demo/g1']);
+      const evs: Array<[string, string, number]> = [['lane-a-demo', 'g1', 3], ['lane-a-demo', 'g2', 2], ['lane-b-demo', 'g1', 2]];
+      let n = 100;
+      for (const [sessionId, parentIncarnation, count] of evs) {
+        for (let k = 0; k < count; k++) s.insertDelegationEvent(event(++n, { sessionId, parentIncarnation }));
+      }
+      s.db.exec('CREATE TEMP TABLE zz_session_deletes (sessionId TEXT, parentIncarnation TEXT)');
+      s.db.exec('CREATE TEMP TRIGGER zz_watch_session_deletes BEFORE DELETE ON main.delegation_sessions '
+        + 'BEGIN INSERT INTO zz_session_deletes VALUES (old.sessionId, old.parentIncarnation); END');
+      const rowsOf = (sessionId: string, parentIncarnation: string) => ({
+        events: s.db.prepare('SELECT * FROM delegation_events WHERE sessionId = ? AND parentIncarnation = ? ORDER BY id').all(sessionId, parentIncarnation),
+        session: s.db.prepare('SELECT rowid AS r, * FROM delegation_sessions WHERE sessionId = ? AND parentIncarnation = ?').all(sessionId, parentIncarnation),
+      });
+      const g2Before = rowsOf('lane-a-demo', 'g2');
+      const bBefore = rowsOf('lane-b-demo', 'g1');
+      expect([g2Before.events.length, bBefore.events.length]).toEqual([2, 2]);
+
+      s.projectDelegationCheckpoint(after);
+
+      expect(s.db.prepare("SELECT count(*) AS n FROM delegation_events WHERE sessionId = 'lane-a-demo' AND parentIncarnation = 'g1'").get(), 'the old incarnation’s events go').toEqual({ n: 0 });
+      expect(s.db.prepare("SELECT count(*) AS n FROM delegation_sessions WHERE sessionId = 'lane-a-demo' AND parentIncarnation = 'g1'").get()).toEqual({ n: 0 });
+      expect(rowsOf('lane-a-demo', 'g2'), 'the new incarnation of the SAME sessionId: its row and its events are untouched').toEqual(g2Before);
+      expect(rowsOf('lane-b-demo', 'g1'), 'another session: untouched').toEqual(bBefore);
+      expect((s.db.prepare('SELECT sessionId, parentIncarnation FROM zz_session_deletes').all() as Array<{ sessionId: string; parentIncarnation: string }>)
+        .map((r) => [r.sessionId, r.parentIncarnation]), 'only the old incarnation’s row was ever deleted').toEqual([['lane-a-demo', 'g1']]);
+      expect(s.readDelegationProjection()).toEqual(projectionViewOfDelegationCheckpoint(after));
+      expect((s.db.prepare('SELECT count(*) AS n FROM delegation_events').get() as { n: number }).n).toBe(4);
+    });
+
+    it('upserts EVERY column of a staying session: a later checkpoint changes each of them in place, and only the leaving session is ever deleted', () => {
+      const { s, fixture: fx } = setup();
+      s.projectDelegationCheckpoint(withLeaver(fx(0)));
+      // A witness inside SQLite, not a guess from row ids: every DELETE of a session row is recorded.
+      s.db.exec('CREATE TEMP TABLE zz_session_deletes (sessionId TEXT, parentIncarnation TEXT)');
+      s.db.exec('CREATE TEMP TRIGGER zz_watch_session_deletes BEFORE DELETE ON main.delegation_sessions '
+        + 'BEGIN INSERT INTO zz_session_deletes VALUES (old.sessionId, old.parentIncarnation); END');
+      const rowid = (id: string) => (s.db.prepare("SELECT rowid AS r FROM delegation_sessions WHERE sessionId = ? AND parentIncarnation = 'g1'").get(id) as { r: number }).r;
+      const [a0, b0] = [rowid('lane-a-demo'), rowid('lane-b-demo')];
+      s.projectDelegationCheckpoint(fx(1));
+      expect((s.db.prepare('SELECT sessionId, parentIncarnation FROM zz_session_deletes').all() as Array<{ sessionId: string; parentIncarnation: string }>)
+        .map((r) => [r.sessionId, r.parentIncarnation]), 'no staying session row was ever deleted').toEqual([['lane-c-demo', 'g1']]);
+      const after = s.readDelegationProjection().sessions;
+      expect(after).toEqual(projectionViewOfDelegationCheckpoint(fx(1)).sessions);
+      const g1 = after.find((x) => x.sessionId === 'lane-a-demo' && x.parentIncarnation === 'g1')!;
+      expect(g1).toMatchObject({ explicitIntentAt: at(11), effective: false, effectiveBasis: ['run-owner'], claudeSessionIds: ['cs-9'], firstObservedAt: at(1), lastObservedAt: at(25) });
+      expect([rowid('lane-a-demo'), rowid('lane-b-demo')], 'updated in place, not deleted and re-inserted').toEqual([a0, b0]);
+    });
+
+    it('over a large events table a projection touches no event row of a staying session and removes exactly a leaving session’s events', () => {
+      const { s, fixture: fx } = setup();
+      s.projectDelegationCheckpoint(withLeaver(fx(0)));
+      const per: Array<[string, string, number]> = [['lane-a-demo', 'g1', 3000], ['lane-a-demo', 'g2', 1500], ['lane-b-demo', 'g1', 3000], ['lane-c-demo', 'g1', 2500]];
+      const cols = delegationEventCodec.columns;
+      const ins = s.db.prepare(`INSERT INTO delegation_events (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`);
+      let seq = 1000;
+      tx(s.db, () => {
+        for (const [sessionId, parentIncarnation, n] of per) {
+          for (let k = 0; k < n; k++) {
+            const row = delegationEventCodec.toDb(event(0, { sessionId, parentIncarnation, journalSequence: ++seq, eventId: delegationSha256Hex(`bulk-${seq}`),
+              payloadJson: JSON.stringify({ v: 1, pad: 'x'.repeat(120), n: seq }) }));
+            ins.run(...cols.map((c) => row[c]));
+          }
+        }
+      });
+      const staying = () => s.db.prepare("SELECT * FROM delegation_events WHERE sessionId != 'lane-c-demo' ORDER BY id").all();
+      const before = staying();
+      expect(before).toHaveLength(7500);
+      const nonEventRows = (['delegation_lineage', 'delegation_leases', 'delegation_attempts', 'delegation_activities'] as const)
+        .reduce((n, t) => n + (s.db.prepare(`SELECT count(*) AS n FROM ${t}`).get() as { n: number }).n, 0);
+      const changes0 = (s.db.prepare('SELECT total_changes() AS n').get() as { n: number }).n;
+      s.projectDelegationCheckpoint(fx(1));
+      const changes1 = (s.db.prepare('SELECT total_changes() AS n').get() as { n: number }).n;
+      expect(staying(), 'every staying event row is identical, ids and all').toEqual(before);
+      expect(s.db.prepare("SELECT count(*) AS n FROM delegation_events WHERE sessionId = 'lane-c-demo'").get()).toEqual({ n: 0 });
+      expect(s.db.prepare('SELECT count(*) AS n FROM delegation_events').get()).toEqual({ n: 7500 });
+      // The connection counts every row a statement changed. Deleted: the four child tables and the leaver's 2500 events and
+      // 1 session. Written: 3 upserted sessions and the four child tables again. Not one event of a staying session.
+      const written = 3 + 3 + 4 + 3 + 6;
+      expect(changes1 - changes0, 'rows changed by the whole projection').toBe(nonEventRows + 2500 + 1 + written);
+    });
+  });
+
+  it('reads through typed readers: an unknown enum word, a malformed list or a wrong storage class is an unreadable row, never a cast', () => {
+    const { s, cp } = setup();
+    s.projectDelegationCheckpoint(cp);
+    s.db.exec('PRAGMA ignore_check_constraints = ON');
+    try {
+      s.db.prepare("UPDATE delegation_activities SET executionState = 'running' WHERE upstreamId = 'agent-1'").run();
+      expect(() => s.readDelegationProjection()).toThrowError(expect.objectContaining({ code: 'unreadable-row', message: expect.stringContaining('delegation_activities') }));
+      s.projectDelegationCheckpoint(cp);
+      s.db.prepare("UPDATE delegation_sessions SET effectiveBasisJson = 'not json' WHERE sessionId = 'lane-b-demo'").run();
+      expect(() => s.readDelegationProjection()).toThrowError(expect.objectContaining({ code: 'unreadable-row', message: expect.stringContaining('delegation_sessions') }));
+      s.projectDelegationCheckpoint(cp);
+      s.db.prepare("UPDATE delegation_leases SET sourceKind = 'bash-worktree' WHERE project = 'project-b'").run();
+      expect(() => s.readDelegationProjection()).toThrowError(expect.objectContaining({ code: 'unreadable-row', message: expect.stringContaining('delegation_leases') }));
+      s.projectDelegationCheckpoint(cp);
+      s.db.prepare("UPDATE delegation_attempts SET attemptedAt = 'soon' WHERE attemptId = 'attempt-1'").run();
+      expect(() => s.readDelegationProjection()).toThrowError(expect.objectContaining({ code: 'unreadable-row' }));
+    } finally {
+      s.db.exec('PRAGMA ignore_check_constraints = OFF');
+    }
+    s.projectDelegationCheckpoint(cp);
+    expect(s.readDelegationProjection()).toEqual(projectionViewOfDelegationCheckpoint(cp));
+  });
+
+  it('adds exactly nine delegation methods: no health reader, no intent writer, the compare-and-swap delta projection as the one per-row updater, and wave 4\'s one run read, retention count and range delete', () => {
+    // wave 4 (PR1 Task 1.3): `delegationRunStamps` reads RUNS (the frame's R9 stamps), never a delegation table
+    expect(Object.getOwnPropertyNames(CoordStore.prototype).filter((n) => /delegation/i.test(n)).sort())
+      .toEqual(['countDelegationEventsAtOrBelow', 'delegationEventStats', 'delegationRunStamps', 'deleteDelegationEventsBetween', 'insertDelegationEvent', 'insertDelegationEvents', 'projectDelegationCheckpoint', 'projectDelegationCheckpointChanges', 'readDelegationProjection']);
+  });
+});
+
 describe('CoordStore: programs', () => {
   it('reads a programs.state token this build does not know as `unknown`, never as a raw string (found in a later Task 3 review, D-27)', () => {
     // `programs()`'s OWN `isProgramState` guard (store.ts, formerly :179) was
@@ -672,23 +1782,23 @@ describe('CoordStore: programs', () => {
   it('writes programs.state through a real setter, and unwedges resolveCoordinator once a finished program is retired (found in a later Task 3 review, D-26)', () => {
     // Before this fix `programs.state` had no writer beyond `openRun`'s
     // hardcoded 'active' at first open — so once a SECOND program opened,
-    // `resolveCoordinator(null)` (the shipped ingress's `toId:'coordinator'`
+    // `soleActiveCoordinator()` (the shipped ingress's `toId:'coordinator'`
     // resolution) died permanently: two 'active' rows is `ambiguous`, and
     // nothing in the build could ever move the first one out of `active`,
     // even after every one of its runs was done. This is the failure
     // scenario, demonstrated at the store level, and its fix.
     const s = store();
-    s.openRun({ program: 'p1', title: 'Program one', project: 'ccrc-pwa',
+    s.openRun({ program: 'p1', title: 'Program one', programmeTitle: 'Program one', project: 'ccrc-pwa',
                 wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordA' });
-    expect(s.resolveCoordinator(null)).toBe('ccrc-pwa-coordA');
+    expect(s.soleActiveCoordinator()).toBe('ccrc-pwa-coordA');
 
     s.openRun({ program: 'p2', title: 'Program two', project: 'ccrc-pwa',
                 wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordB' });
-    expect(s.resolveCoordinator(null)).toBeNull();          // two active programs: ambiguous
+    expect(s.soleActiveCoordinator()).toBeNull();          // two active programs: ambiguous
 
     s.setProgramState('p1', 'done');
     expect(s.programs()).toContainEqual({ slug: 'p1', title: 'Program one', state: 'done' });
-    expect(s.resolveCoordinator(null)).toBe('ccrc-pwa-coordB');   // unwedged: p2 is the sole active program
+    expect(s.soleActiveCoordinator()).toBe('ccrc-pwa-coordB');   // unwedged: p2 is the sole active program
   });
 
   it('resolves \'coordinator\' to the NAMED RUN\'s own claim when a runId is given (fix-round finding 6) — zero coverage anywhere in the tree before this', () => {
@@ -705,9 +1815,9 @@ describe('CoordStore: programs', () => {
       wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordA' }) as { id: number };
     const b = s.openRun({ program: 'pB', title: 'B', project: 'ccrc-pwa',
       wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordB' }) as { id: number };
-    expect(s.resolveCoordinator(a.id)).toBe('ccrc-pwa-coordA');
-    expect(s.resolveCoordinator(b.id)).toBe('ccrc-pwa-coordB');
-    expect(s.resolveCoordinator(4242)).toBeNull();   // no such run — absent, not ambiguous
+    expect(coordinatorOfRun(s, a.id)).toBe('ccrc-pwa-coordA');
+    expect(coordinatorOfRun(s, b.id)).toBe('ccrc-pwa-coordB');
+    expect(coordinatorOfRun(s, 4242)).toBeNull();   // no such run — absent, not ambiguous
   });
 
   it('setDeliveryEnvelope overwrites a delivery\'s stored envelope in place, without touching mailId/toId/state', () => {
@@ -1351,6 +2461,52 @@ describe('CoordStore: feed (Task 10)', () => {
     }
     expect(s.feedEvents(10).map((e) => e.kind)).toEqual(['ask', 'done', 'merged', 'mail', 'run']);
   });
+
+  // D-5298: the writer archives every body redacted, so a body holding a token-shaped run (a commit SHA, a compaction
+  // uuid) is stored masked. `hasNotice`'s pre-key body read is asked with the RAW body (sweepLanding, the idle nudge),
+  // so it must compare in the stored form, or an already-told record reads as never told and is announced again.
+  it('hasNotice\'s pre-key body read finds a record whose body the writer stored redacted, asked with the raw body', () => {
+    const s = store();
+    const body = 'removed from the queue at 12:00 (head 0123456789abcdef0123456789abcdef01234567)';
+    s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind: 'queue', sessionId: 'cc-a', title: 't', body, runId: null });
+    expect(s.feedEvents(10)[0]!.body).not.toContain('0123456789abcdef0123456789abcdef01234567');
+    expect(s.hasNotice('queue', 'cc-a', 'k', body)).toBe(true);
+    expect(s.hasNotice('queue', 'cc-a', 'k', 'another body')).toBe(false);
+  });
+
+  // D-5860 (Task C1f): `hasNotice`, the once-only key read. Two compaction uuids mask to ONE body (D-5298), so a body
+  // read cannot tell two compactions apart; the key is stored hashed, never masked (departure `dedupe-key-unmasked`).
+  const U1 = '3f1c2a7e-9b4d-4e21-8c6a-1d2e3f4a5b6c';
+  const U2 = '9a8b7c6d-1e2f-4a3b-8c4d-5e6f7a8b9c0d';
+  const row = (seq: number, body: string) =>
+    ({ seq, at: 1000 + seq, kind: 'nudge' as const, sessionId: 'cc-a', title: 't', body, runId: null });
+  it('hasNotice tells two token-shaped keys apart where their masked bodies collide, and stores neither in the clear', () => {
+    const s = store();
+    s.recordFeedEvent('epoch-1', row(1, `compaction ${U1}`), U1);
+    expect(redactCommand(`compaction ${U1}`), 'the premise: the masked bodies collide').toBe(redactCommand(`compaction ${U2}`));
+    expect(s.hasNotice('nudge', 'cc-a', U1)).toBe(true);
+    expect(s.hasNotice('nudge', 'cc-a', U2)).toBe(false);
+    const stored = (s.db.prepare('SELECT dedupe_key AS k FROM feed_events').get() as { k: string }).k;
+    expect(stored).toMatch(/^[0-9a-f]{64}$/);
+    expect(stored).not.toContain(U1);
+  });
+
+  it('hasNotice matches a keyed row by its key whatever its body now says, and never by its body', () => {
+    const s = store();
+    s.recordFeedEvent('epoch-1', row(1, 'the first wording'), 'k1');
+    s.db.prepare('UPDATE feed_events SET body = ? WHERE seq = 1').run('a later wording');
+    expect(s.hasNotice('nudge', 'cc-a', 'k1', 'yet another wording')).toBe(true);
+    expect(s.hasNotice('nudge', 'cc-a', 'k2', 'a later wording'), 'a keyed row is never matched by its body').toBe(false);
+  });
+
+  it('a row written before the key existed (NULL) is matched by its body only when the caller names one', () => {
+    const s = store();
+    s.recordFeedEvent('epoch-1', row(1, `compaction ${U1}`));
+    expect(s.hasNotice('nudge', 'cc-a', U1)).toBe(false);
+    expect(s.hasNotice('nudge', 'cc-a', U1, `compaction ${U1}`)).toBe(true);
+    expect(s.hasNotice('nudge', 'cc-a', U1, 'another body')).toBe(false);
+    expect(s.hasNotice('nudge', 'cc-b', U1, `compaction ${U1}`)).toBe(false);
+  });
 });
 
 // Fix round 1, findings 2/4: `mailForRecipient`'s LIMIT used to be applied
@@ -1631,6 +2787,70 @@ describe('CoordStore.openRunsForSession', () => {
   });
 });
 
+// Board-placement wave 2, SECOND fix round. `parentOfSession`'s own cases live
+// in `asks-store.test.ts` (the lane that read is for), not here — so this block
+// sits beside `openRunsForSession`, the other session-keyed read of the same
+// `TERMINAL_RUN_STATES_SQL` complement, rather than beside a describe this file
+// does not carry.
+//
+// WHAT THE FOUR CASES ARE FOR. The two §12 doors (`claimant-is-a-worker` at
+// `POST /api/runs`, `heir-is-a-worker` at the reclaim ladder) used to read
+// `parentOfSession`, which is `LIMIT 1`: it answers about the NEWEST open run
+// and says nothing about the older ones. `runs_by_session` is non-unique and the
+// coordinator protocol opens wave N+1 before closing wave N, so "the newest run
+// that names this session" and "every coordinator this session currently works
+// for" are different facts — and the doors' sentences were about the second.
+describe('CoordStore.openClaimantsOf — every coordinator a session currently works for', () => {
+  it('names BOTH claimants when two open runs name one session, newest first', () => {
+    const s = store();
+    // Two DIFFERENT programmes, `asks-store.test.ts`'s own reason: `openRun`
+    // refuses a second `claimedBy` for one programme, and a reclaim would
+    // rewrite both rows to agree and defeat the point.
+    const older = s.openRun({ program: 'prog-a', title: 'A', project: 'p',
+      wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
+    s.setSession(older.id, 'demo-alpha');
+    const newer = s.openRun({ program: 'prog-b', title: 'B', project: 'p',
+      wave: 1, waveOf: null, claimedBy: 'coord-2' }) as { id: number };
+    s.setSession(newer.id, 'demo-alpha');
+    expect(older.id).toBeLessThan(newer.id);
+    expect(claimantsOfSession(s, 'demo-alpha')).toEqual(['coord-2', 'coord-1']);
+    // …and THIS is the difference the doors needed: the same fixture through
+    // the newest-only read hides `coord-1` entirely.
+    expect(parentOfSession(s, 'demo-alpha')).toBe('coord-2');
+  });
+
+  it('excludes a TERMINAL run\'s claimant — a finished worker is not a worker', () => {
+    const s = store();
+    const done = s.openRun({ program: 'prog-a', title: 'A', project: 'p',
+      wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
+    s.setSession(done.id, 'demo-alpha');
+    expect(s.advance(done.id, 'dispatched', 'coordinator')).toMatchObject({ ok: true });
+    expect(s.advance(done.id, 'closing', 'coordinator')).toMatchObject({ ok: true });
+    expect(s.advance(done.id, 'done', 'coordinator')).toMatchObject({ ok: true });
+    const open = s.openRun({ program: 'prog-b', title: 'B', project: 'p',
+      wave: 1, waveOf: null, claimedBy: 'coord-2' }) as { id: number };
+    s.setSession(open.id, 'demo-alpha');
+    expect(claimantsOfSession(s, 'demo-alpha')).toEqual(['coord-2']);
+  });
+
+  it('an OWNERLESS open row contributes nothing — there is no id to name (D-3012)', () => {
+    const s = store();
+    const orphan = s.openRun({ program: 'prog-a', title: 'A', project: 'p',
+      wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
+    s.setSession(orphan.id, 'demo-alpha');
+    // The shape `reconstruct` writes and `openRun`'s D-12 clause skips.
+    tx(s.db, () => { s.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(orphan.id); });
+    expect(claimantsOfSession(s, 'demo-alpha')).toEqual([]);
+    // NOT `[null]` and not a hole in the list: the guard reads ids, and the
+    // admission for an ownerless run is the doors' ruling, not this read's.
+    expect(claimantsOfSession(s, 'demo-alpha').every((c) => typeof c === 'string')).toBe(true);
+  });
+
+  it('answers [] for a session no run names at all', () => {
+    expect(claimantsOfSession(store(), 'demo-nobody')).toEqual([]);
+  });
+});
+
 describe('releaseIsSafe', () => {
   it('is true only when NOTHING else names the session', () => {
     expect(releaseIsSafe([])).toBe(true);
@@ -1862,16 +3082,55 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
   it('rewrites the TERMINAL run too, so the next wave stops being refused (R1)', () => {
     const s = store();
     const ids = fiveWaves(s);
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000))
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null))
       .toEqual({ ok: true, program: 'build4', runIds: ids, from: DEAD });
     // The closed wave-1 row is the whole assertion: it is the id both readers
     // reach first, and a rewrite that skipped it leaves them on the corpse.
     expect(okRun(s.run(ids[0]!))!.state).toBe('done');
     expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([LIVE, LIVE, LIVE, LIVE, LIVE]);
-    expect(s.resolveCoordinator(null)).toBe(LIVE);
+    expect(s.soleActiveCoordinator()).toBe(LIVE);
     expect(openRun(s, { wave: 6, waveOf: 6, claimedBy: LIVE })).toMatchObject({ state: 'planned' });
   });
 
+  // FINAL WHOLE-BRANCH REVIEW, Important 2 (D-2922). `claimedBy` and
+  // `coordProject` are two facts about ONE coordinator, and this statement used
+  // to rewrite only the first — leaving every row of the program pointing at
+  // the DISPLACED coordinator's project. Spec section 7: "Reclaim moves every
+  // worker of a programme at once, because the programme genuinely has a new
+  // coordinator. That is correct and is allowed to happen."
+  it('restamps coordProject alongside claimedBy, across the whole program', () => {
+    const s = store();
+    const ids = fiveWaves(s);
+    for (const id of ids) {
+      s.db.prepare('UPDATE runs SET coordProject = ? WHERE id = ?').run('old-coord-project', id);
+    }
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, 'new-coord-project'))
+      .toMatchObject({ ok: true });
+    const rows = okRuns(s.runs({ includeClosed: true }));
+    expect(ids.map((id) => rows.find((r) => r.id === id)!.coordProject))
+      .toEqual(['new-coord-project', 'new-coord-project', 'new-coord-project',
+                'new-coord-project', 'new-coord-project']);
+  });
+
+  it('nulls the stamp when the heir\'s project could not be measured — absence never guesses', () => {
+    const s = store();
+    const ids = fiveWaves(s);
+    for (const id of ids) {
+      s.db.prepare('UPDATE runs SET coordProject = ? WHERE id = ?').run('old-coord-project', id);
+    }
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
+    const rows = okRuns(s.runs({ includeClosed: true }));
+    // NULL, not the displaced coordinator's project: `boardPlacement` reads a
+    // null stamp as "place this row at home", which is the honest degenerate.
+    // Keeping the old value would leave the board asserting a coordinator the
+    // store has just recorded as displaced.
+    expect(ids.map((id) => rows.find((r) => r.id === id)!.coordProject))
+      .toEqual([null, null, null, null, null]);
+  });
+
+  // The claimedBy-NULL skip is the one rung that must NOT be restamped either:
+  // a reconstructed row names no coordinator, so it is not this reclaim's to
+  // move — the WHERE clause governs both columns or neither.
   it('leaves a reconstructed row NULL rather than inventing a claimant for it (D-12)', () => {
     const s = store();
     const ids = fiveWaves(s);
@@ -1880,7 +3139,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     // exists to SKIP those rows. Written with the store's own handle, the shape
     // this file already uses at :67 for a row no public method can produce.
     s.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(ids[2]!);
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000))
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null))
       .toEqual({ ok: true, program: 'build4', runIds: [ids[0]!, ids[1]!, ids[3]!, ids[4]!], from: DEAD });
     expect(okRun(s.run(ids[2]!))!.claimedBy).toBeNull();
     expect(s.runEvents(ids[2]!)).toEqual([]);     // and no trail invented for it either
@@ -1890,7 +3149,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     const s = store();
     const ids = fiveWaves(s);
     const at = 1_777_000_123_456;
-    s.reclaimProgram(ids[4]!, LIVE, at);
+    s.reclaimProgram(ids[4]!, LIVE, at, null);
     for (const id of ids) {
       const mine = s.runEvents(id).filter((e) => e.causedBy === 'operator');
       expect(mine.length).toBe(1);
@@ -1910,7 +3169,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     const s = store();
     const ids = fiveWaves(s);
     const before = ids.flatMap((id) => s.runEvents(id)).length;
-    expect(s.reclaimProgram(ids[4]!, DEAD, 1_777_000_000_000))
+    expect(s.reclaimProgram(ids[4]!, DEAD, 1_777_000_000_000, null))
       .toEqual({ ok: true, program: 'build4', runIds: [], from: DEAD });
     expect(ids.flatMap((id) => s.runEvents(id)).length).toBe(before);
     expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
@@ -1919,10 +3178,10 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
   it('refuses an id no run carries, and a run whose claimant is NULL — writing nothing either way', () => {
     const s = store();
     const ids = fiveWaves(s);
-    expect(s.reclaimProgram(ids[4]! + 999, LIVE, 1_777_000_000_000))
+    expect(s.reclaimProgram(ids[4]! + 999, LIVE, 1_777_000_000_000, null))
       .toEqual({ ok: false, kind: 'unknown-run' });
     s.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(ids[4]!);
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000))
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null))
       .toEqual({ ok: false, kind: 'no-claimant' });
     // The refusal returned BEFORE the UPDATE: the other four rows are untouched.
     expect(okRun(s.run(ids[0]!))!.claimedBy).toBe(DEAD);
@@ -1938,7 +3197,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     // because nothing else in this store can be made to fail on demand.
     const patched = s as unknown as { recordRunEvent: () => void };
     patched.recordRunEvent = () => { throw new Error('attribution failed'); };
-    expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toThrow('attribution failed');
+    expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toThrow('attribution failed');
     expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
   });
 });
@@ -2012,7 +3271,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     expect(s.outstandingMailFor(LIVE)).toEqual([]);
     expect(s.outstandingMailFor(DEAD).map((m) => m.deliveryId)).toEqual([d]);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     expect(del(s, d).toId).toBe(LIVE);
     // Repointed, NOT parked: the delivery is still exactly as outstanding as it
@@ -2029,7 +3288,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     // Identical in every way to arm (a)'s row except `mail.toId`, which is the
     // only column that distinguishes "sent to the chair" from "sent to you".
     const d = queue(s, { toId: DEAD, runId: ids[3]! }, DEAD);
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
     expect(del(s, d)).toMatchObject({ toId: DEAD, state: 'queued' });
   });
 
@@ -2044,7 +3303,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     // cannot pass by moving nothing at all.
     const live = queue(s, { toId: 'coordinator', runId: ids[3]! }, DEAD);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     expect(del(s, acked)).toMatchObject({ toId: DEAD, state: 'acked' });
     expect(del(s, parked)).toMatchObject({ toId: DEAD, state: 'rejected' });
@@ -2055,13 +3314,13 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const s = store();
     const ids = waves(s);
     // Reachable, not hypothetical: `POST /api/mail` accepts `{toId:'coordinator',
-    // runId:null}` and resolves it through `resolveCoordinator(null)`'s
+    // runId:null}` and resolves it through `soleActiveCoordinator()`'s
     // single-active-program arm. Once queued, nothing on the row records WHICH
     // program the sender meant — the resolution is spent — so repointing it would
     // be a guess on a door whose whole discipline is refusing to guess. The inner
     // JOIN drops it; this pins that as a decision rather than an accident.
     const d = queue(s, { toId: 'coordinator', runId: null }, DEAD);
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
     // Not repointed AND not cancelled: it is not a kickoff either.
     expect(del(s, d)).toMatchObject({ toId: DEAD, state: 'queued', lastError: null });
     // …and it is still visible to the party who CAN tell which program it meant.
@@ -2149,7 +3408,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
       .toEqual([...parked].sort((a, b) => a - b));
     expect(s.outstandingMailFor(LIVE)).toEqual([]);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     // The park is UNTOUCHED — this is a new delivery, not a reopen, and arm
     // (c)'s sentence stands exactly as it was written.
@@ -2208,7 +3467,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const mailId = s.delivery(parked)!.mailId;
     s.db.prepare('UPDATE mail SET kind = ? WHERE id = ?').run('not-a-kind', mailId);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     const heir = s.outstandingMailFor(LIVE);
     expect(heir.map((m) => m.id)).toEqual([mailId]);
@@ -2279,7 +3538,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     expect(s.outstandingMailFor(DEAD).map((m) => m.deliveryId).sort((a, b) => a - b))
       .toEqual([mine, literal, noRun, sibling].sort((a, b) => a - b));
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     const heir = s.outstandingMailFor(LIVE);
     expect(heir.map((m) => m.id)).toEqual([s.delivery(mine)!.mailId]);
@@ -2295,7 +3554,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
 
   it('one mail parked against TWO displaced claimants reaches the heir once, not twice', () => {
     // THE HAZARD THIS TREE HAS NEVER HAD BEFORE. `mail_deliveries` has no unique
-    // constraint on (mailId, toId) — the only index is `mail_deliveries_due`
+    // constraint on (mailId, toId) — neither of its two indexes is unique
     // (schema.ts) — and until this arm nothing ever wrote a second delivery
     // for one mail. Two claimants is the state reclaimProgram's own comment
     // (store.ts:648-656) says is reachable.
@@ -2316,7 +3575,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     expect(s.outstandingMailFor(DEAD).map((m) => m.deliveryId)).toEqual([toDead]);
     expect(s.outstandingMailFor(OTHER).map((m) => m.deliveryId)).toEqual([toOther]);
 
-    const r = s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000);
+    const r = s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null);
     expect(r).toMatchObject({ ok: true });
 
     // ONE new delivery, for ONE mail — the heir is not told the same thing twice.
@@ -2342,7 +3601,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const dead = s.queueDelivery(mail.id, DEAD, 'envelope rendered once, at queue time').id;
     s.rejectDelivery(dead, 'undeliverable', 'recipient session is stopped');
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     // The repoint moved the outstanding row; the park was left; and NO third row
     // was minted, because the heir can already read that message.
@@ -2368,7 +3627,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const parked = parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
     expect(okRun(s.run(ids[3]!))!.unreadMail).toBe(1);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     // The heir really did get the report…
     expect(s.outstandingMailFor(LIVE).map((m) => m.id)).toEqual([s.delivery(parked)!.mailId]);
@@ -2383,7 +3642,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const patched = s as unknown as { requeueAbandonedMail: () => void };
     patched.requeueAbandonedMail = () => { throw new Error('requeue failed'); };
 
-    expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toThrow('requeue failed');
+    expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toThrow('requeue failed');
 
     expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
     expect(del(s, parked).toId).toBe(DEAD);
@@ -2398,7 +3657,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const mine = queue(s, { toId: 'coordinator', runId: ids[3]! }, DEAD);
     const theirs = queue(s, { toId: 'coordinator', runId: other }, DEAD);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     expect(del(s, mine).toId).toBe(LIVE);
     // The sibling program still names DEAD as its own coordinator — this door
@@ -2417,7 +3676,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const report = queue(s, { toId: 'coordinator', runId: ids[3]! }, DEAD);
     const k = kickoff(s, DEAD);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     // The report moved and was NOT parked by the cancel.
     expect(del(s, report)).toMatchObject({ toId: LIVE, state: 'queued', lastError: null });
@@ -2449,7 +3708,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     // after: that count is `m.runId = ?`-scoped and a kickoff names no run.
     expect(okRun(s.run(ids[4]!))!.unreadMail).toBe(0);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     expect(s.outstandingMailFor(DEAD)).toEqual([]);
     expect(s.outstandingMailFor(LIVE)).toEqual([]);
@@ -2469,11 +3728,11 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     // A `to` that already holds the chair displaces nobody: `moved` is empty, so
     // the mail half never runs at all and the current coordinator's own unread
     // kickoff survives the operator re-typing the id the board already shows.
-    expect(s.reclaimProgram(ids[4]!, DEAD, 1_777_000_000_000))
+    expect(s.reclaimProgram(ids[4]!, DEAD, 1_777_000_000_000, null))
       .toMatchObject({ ok: true, runIds: [] });
     expect(del(s, mine).state).toBe('queued');
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
     expect(del(s, mine).state).toBe('rejected');
     // The heir's own kickoff is the one message that must survive: it is what
     // told this session to take the chair it is now taking.
@@ -2492,7 +3751,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
       { fromId: WORKER, toId: DEAD, runId: null, subject: PROGRAM_KICKOFF_SUBJECT }, DEAD);
     const real = kickoff(s, DEAD);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     expect(del(s, peer).state).toBe('queued');
     expect(del(s, real).state).toBe('rejected');
@@ -2511,7 +3770,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const patched = s as unknown as { repointCoordinatorMail: () => void };
     patched.repointCoordinatorMail = () => { throw new Error('repoint failed'); };
 
-    expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toThrow('repoint failed');
+    expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toThrow('repoint failed');
 
     expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
     expect(del(s, report).toId).toBe(DEAD);
@@ -2535,6 +3794,17 @@ describe('CoordStore: the coord feed kind', () => {
       title: 'caps', body: 'workers 3 to 5', runId: null });
     expect(s.feedEvents(10)).toEqual([
       { seq: 1, at: 10, kind: 'coord', sessionId: '', title: 'caps', body: 'workers 3 to 5', runId: null },
+    ]);
+  });
+
+  // Wave 8 item A: the same absence-half defect `isNotifyKind` guards against, for the eighth member
+  // `NOTIFY_KINDS` gained (M-A7) — a row would otherwise come back 'unknown' rather than 'update'.
+  it('round-trips an update feed event through the durable table', () => {
+    const s = store();
+    s.recordFeedEvent('epoch-1', { seq: 1, at: 10, kind: 'update', sessionId: '',
+      title: 'update fleet: auto update to v0.0.10', body: 'lease held', runId: null });
+    expect(s.feedEvents(10)).toEqual([
+      { seq: 1, at: 10, kind: 'update', sessionId: '', title: 'update fleet: auto update to v0.0.10', body: 'lease held', runId: null },
     ]);
   });
 });
@@ -2642,6 +3912,181 @@ describe('CoordStore: openCoordinatorIds', () => {
 
   it('is empty on a store with no runs at all', () => {
     expect(store().openCoordinatorIds()).toEqual([]);
+  });
+});
+
+describe('CoordStore.childReclaimCoordinatorClaims — the displacement-row selection is case-sensitive', () => {
+  // `reclaimProgram` writes its own displacement rows lower-case
+  // (`reclaim:<from> -> <to>`), and both parsers' own `startsWith('reclaim:')`
+  // check is case-sensitive. An operator can write ANY text into a run's own
+  // trail by hand, so a row that merely starts with the same six letters in a
+  // different case must never be read as this writer's own — reading it that
+  // way would either add a session that never coordinated anything, or
+  // (worse) throw and stop the whole reclaim lane fleet-wide for a run event
+  // unrelated to reclamation.
+  it('an operator row `RECLAIM:x -> y` adds neither side to the map, nor makes the read throw', () => {
+    const s = store();
+    const r = openRun(s, { claimedBy: 'the-coordinator' }) as { id: number };
+    s.recordRunEvent(r.id, 'operator', 'RECLAIM:x -> y');
+    expect(() => s.childReclaimCoordinatorClaims()).not.toThrow();
+    const ids = [...s.childReclaimCoordinatorClaims().keys()];
+    expect(ids).not.toContain('x');
+    expect(ids).not.toContain('y');
+  });
+
+  it('mixed case is refused too — `Reclaim:x -> y`', () => {
+    const s = store();
+    const r = openRun(s, { claimedBy: 'the-coordinator' }) as { id: number };
+    s.recordRunEvent(r.id, 'operator', 'Reclaim:x -> y');
+    expect(() => s.childReclaimCoordinatorClaims()).not.toThrow();
+    const ids = [...s.childReclaimCoordinatorClaims().keys()];
+    expect(ids).not.toContain('x');
+    expect(ids).not.toContain('y');
+  });
+
+  it('the CONTROL: a genuine lower-case `reclaim:x -> y` row does yield `x`, and its heir `y`', () => {
+    const s = store();
+    const r = openRun(s, { claimedBy: 'the-coordinator' }) as { id: number };
+    s.recordRunEvent(r.id, 'operator', 'reclaim:x -> y');
+    const ids = [...s.childReclaimCoordinatorClaims().keys()];
+    expect(ids).toContain('x');
+    expect(ids).toContain('y');
+  });
+});
+
+// K3 — the ONE store read the coordination fence reads (spec §1 rule 4, with
+// spec §5.6's recycled slugs: "has coordinated" is fenced to the workspace's
+// current generation by `childReclaimCoordinated`, which needs WHEN each
+// claim ended, not only that one existed). Per id: `'open'` over everything,
+// then `'unplaced'` over any number, then the greatest instant.
+describe('CoordStore.childReclaimCoordinatorClaims — the latest instant per id', () => {
+  let progN = 0;
+  /** A run claimed by `by`, in a programme of its own. */
+  const claimed = (s: CoordStore, by: string): { id: number; program: string } => {
+    const program = `k3-prog-${++progN}`;
+    const r = openRun(s, { program, title: program, claimedBy: by });
+    if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
+    return { id: r.id, program };
+  };
+  /** Abandon it (terminal), then — when given — pin its `closedAt` by direct SQL. */
+  const closed = (s: CoordStore, by: string, at?: number | string | null): { id: number; program: string } => {
+    const r = claimed(s, by);
+    expect(s.closeRun({ runId: r.id, finalState: 'failed', causedBy: 'test', handoffCommit: null,
+      program: r.program, viaClosing: false }).ok).toBe(true);
+    if (at !== undefined) s.db.prepare('UPDATE runs SET closedAt = ? WHERE id = ?').run(at, r.id);
+    return r;
+  };
+
+  it('(a) a run closed at 1 000 beside an open run, both claimed by X: open', () => {
+    const s = store();
+    closed(s, 'X', 1_000);
+    claimed(s, 'X');
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('open');
+  });
+
+  it('(b) two terminal runs, closed at 1 000 and 5 000: the LATEST, 5 000', () => {
+    const s = store();
+    closed(s, 'X', 1_000);
+    closed(s, 'X', 5_000);
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe(5_000);
+  });
+
+  it('(c) a terminal run whose closedAt is NULL is unplaced — alone, and beside a run closed at 5 000', () => {
+    const s = store();
+    closed(s, 'X', null);
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('unplaced');
+    closed(s, 'X', 5_000);
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('unplaced');
+  });
+
+  it('(d) a row whose state reads `unknown` counts as open — the predicate every open read here shares', () => {
+    const s = store();
+    const r = closed(s, 'X', 1_000);
+    s.db.prepare("UPDATE runs SET state = 'unknown' WHERE id = ?").run(r.id);
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('open');
+  });
+
+  it('(e) a reclaim dates BOTH sides at its own instant: the displaced from AND the heir', () => {
+    const s = store();
+    const r = closed(s, 'X');
+    const c = okRun(s.run(r.id))!.closedAt!;
+    const d = c + 60_000;
+    expect(s.reclaimProgram(r.id, 'Y', d, null)).toMatchObject({ ok: true });
+    const claims = s.childReclaimCoordinatorClaims();
+    expect(claims.get('X')).toBe(d);
+    expect(claims.get('Y')).toBe(d);
+  });
+
+  // The heir side walks EVERY ` -> ` suffix, not only the last: an heir id that
+  // itself holds ` -> ` must still be dated at the reclaim's instant. `d > c`
+  // keeps that visible — the runs read alone would date the rewritten
+  // `claimedBy` at the run's `closedAt`, `c`.
+  it('(e2) an heir id holding ` -> ` is dated at the reclaim, as is its last suffix', () => {
+    const s = store();
+    const r = closed(s, 'X');
+    const c = okRun(s.run(r.id))!.closedAt!;
+    const d = c + 60_000;
+    expect(s.reclaimProgram(r.id, 'heir -> y', d, null)).toMatchObject({ ok: true });
+    const claims = s.childReclaimCoordinatorClaims();
+    expect(claims.get('heir -> y')).toBe(d);
+    expect(claims.get('y')).toBe(d);
+  });
+
+  it('(f) a `reclaim:` row that does not parse THROWS, as before', () => {
+    const s = store();
+    const r = claimed(s, 'X');
+    s.recordRunEvent(r.id, 'operator', 'reclaim:mangled-with-no-arrow');
+    expect(() => s.childReclaimCoordinatorClaims()).toThrow(/unparseable reclaim-displacement row/);
+  });
+
+  it('(g) a closedAt that is not a positive safe integer is unplaced — TEXT or REAL, alone and beside 5 000', () => {
+    const s = store();
+    closed(s, 'X', 'x');
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('unplaced');
+    closed(s, 'X', 5_000);
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('unplaced');
+    closed(s, 'Z', 1_000.5);
+    expect(s.childReclaimCoordinatorClaims().get('Z')).toBe('unplaced');
+  });
+
+  it('(h) a `reclaim:` row whose at is not a positive safe integer leaves both its sides unplaced', () => {
+    const s = store();
+    const r = closed(s, 'X', 1_000);
+    expect(s.reclaimProgram(r.id, 'Y', 2_000, null)).toMatchObject({ ok: true });
+    s.db.prepare("UPDATE run_events SET at = 'x' WHERE substr(detail, 1, 8) = 'reclaim:'").run();
+    const claims = s.childReclaimCoordinatorClaims();
+    expect(claims.get('X')).toBe('unplaced');
+    expect(claims.get('Y')).toBe('unplaced');
+  });
+
+  // A non-canonical TEXT stamp. `Number()` reads `0x10` as 16 and `0b1` as 1 —
+  // instants before any workspace's birth, so a fold that took them would call
+  // the coordinator "not coordinated" (fail-open). The canonical parse leaves
+  // them unplaced, which keeps the child.
+  it('(i) a closedAt in a non-canonical spelling (0x10, 0b1) is unplaced — alone, and beside a run closed at 5 000', () => {
+    const s = store();
+    closed(s, 'X', '0x10');
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('unplaced');
+    closed(s, 'X', 5_000);
+    expect(s.childReclaimCoordinatorClaims().get('X')).toBe('unplaced');
+    closed(s, 'Z', '0b1');
+    expect(s.childReclaimCoordinatorClaims().get('Z')).toBe('unplaced');
+  });
+
+  it('(j) a `reclaim:` row whose at is a non-canonical spelling (0x20) leaves both its sides unplaced', () => {
+    const s = store();
+    const r = closed(s, 'X', 1_000);
+    expect(s.reclaimProgram(r.id, 'Y', 2_000, null)).toMatchObject({ ok: true });
+    s.db.prepare("UPDATE run_events SET at = '0x20' WHERE substr(detail, 1, 8) = 'reclaim:'").run();
+    const claims = s.childReclaimCoordinatorClaims();
+    expect(claims.get('X')).toBe('unplaced');
+    expect(claims.get('Y')).toBe('unplaced');
+  });
+
+  it('an id no run names and no displacement names is absent from the map', () => {
+    const s = store();
+    closed(s, 'X', 1_000);
+    expect(s.childReclaimCoordinatorClaims().has('never-claimed')).toBe(false);
   });
 });
 
@@ -2832,29 +4277,281 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     // one spelling of it (PR #75 review round 1, MUT-3): the old scan matched
     // `UPDATE runs SET sessionId` only, and a restored write with the column
     // LAST in its SET list walked straight past it, measured green.
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    const src = readFileSync(path.resolve(here, '../src/coord/store.ts'), 'utf8');
-    const updates = [...src.matchAll(/UPDATE runs SET([\s\S]*?)WHERE/g)]
-      .filter((m) => /\bsessionId\b/.test(m[1]!));
+    //
+    // ARCH-06 (#554): the census reads the store's SQL by symbol (`sqlStatementsInFile`), and each statement's home by
+    // the method whose span holds it, so a method that moves, or a statement that is re-indented, changes nothing here.
+    const STORE = 'server/src/coord/store.ts';
+    const sql = sqlStatementsInFile(STORE);
+    const homeOf = (name: string): { start: number; end: number } => symbolOf(STORE, `CoordStore.${name}`);
+    const within = (q: { start: number }, name: string): boolean => q.start >= homeOf(name).start && q.start < homeOf(name).end;
+    const writes = sql.filter((q) => q.verb === 'UPDATE' && q.table === 'runs' && /\bsessionId\b/i.test(q.set ?? ''));
+    // child-reclamation wave 2: an UNBIND is not a re-bind. It binds no value
+    // to the column, so it can hand a run to nobody and has no mail to move —
+    // but it is still a writer, so it is named here rather than let through by
+    // a wider regex: exactly ONE statement may set the column to NULL, it must
+    // mention the column nowhere else in its SET list, and it lives in
+    // `clearSession`. Fix (F14): SQLite column names are case-insensitive and
+    // it applies the rightmost duplicate SET, so `sessionId` here is matched
+    // with the `i` flag — a statement that, case-insensitively, sets or later
+    // re-touches the column with anything other than a LONE `NULL` (a `?`, an
+    // empty string, or the reviewer's own probe, a later `SESSIONID = ?` in
+    // the SAME statement) is a re-binder and lands in `updates` below, not a
+    // silent UNBIND.
+    const UNBIND = /^\s*sessionId\s*=\s*NULL\b(?![\s\S]*\bsessionId\b)/i;
+    const unbinds = writes.filter((q) => UNBIND.test(q.set!));
+    const updates = writes.filter((q) => !UNBIND.test(q.set!));
     expect(updates, 'runs.sessionId is written outside bindSession').toHaveLength(1);
+    expect(unbinds, 'a second statement sets runs.sessionId to NULL').toHaveLength(1);
+    expect(unbinds.every((q) => within(q, 'clearSession')), 'clearSession is gone — the unbind has no home').toBe(true);
     // The one that remains sits inside bindSession — the funnel, not a caller.
-    const bindAt = src.indexOf('  bindSession(runId: number, sessionId: string)');
-    const nextMethodAt = src.indexOf('\n  setSession(', bindAt);
-    expect(bindAt).toBeGreaterThan(-1);
-    expect(updates[0]!.index!).toBeGreaterThan(bindAt);
-    expect(updates[0]!.index!).toBeLessThan(nextMethodAt);
+    expect(within(updates[0]!, 'bindSession')).toBe(true);
     // The OTHER writer, named and argued rather than hidden (store-4):
     // `reconstruct`'s `INSERT INTO runs (…, sessionId, …)` makes a FRESH row
     // from the registry — there is no predecessor to inherit mail from, so it
     // is not a re-bind and the funnel has nothing to do for it. Exactly one
     // such INSERT, and it lives in `reconstruct`.
-    const inserts = [...src.matchAll(/INSERT INTO runs \(([^)]*)\)/g)]
-      .filter((m) => /\bsessionId\b/.test(m[1]!));
+    const inserts = sql.filter((q) => /\bsessionId\b/.test(/^\s*INSERT INTO runs \(([^)]*)\)/.exec(q.text)?.[1] ?? ''));
     expect(inserts, 'a second INSERT names runs.sessionId — argue it here or route it through bindSession').toHaveLength(1);
-    expect(inserts[0]!.index!).toBeGreaterThan(src.indexOf('  reconstruct(input: {'));
+    expect(within(inserts[0]!, 'reconstruct')).toBe(true);
     // Premise: the widened regex recognises what it forbids — it finds the
     // funnel's own statement.
-    expect(updates[0]![0]).toContain('sessionId');
+    expect(updates[0]!.text).toContain('sessionId');
+    // A `+` chain with a non-literal part splits into fragments, and the fragment that opens with `UPDATE runs SET`
+    // carries a `set` cut at the gap (PR #75 MUT-3's escape, through a conditional SET): any PARTIAL `UPDATE runs`
+    // whose whole chain mentions the column is a writer this census cannot place, so it is red.
+    expect(sql.filter((q) => q.verb === 'UPDATE' && q.table === 'runs' && q.partial && /\bsessionId\b/i.test(q.source)).map((q) => q.line),
+      'a conditional `UPDATE runs SET …` chain mentions runs.sessionId — route it through bindSession').toEqual([]);
+    // Superset tripwire (the pre-ARCH-06 raw-text census, kept for the spellings no string expression holds: a `.join`
+    // of pieces, a variable): every `UPDATE runs` in the store's raw text whose text up to the next WHERE names the
+    // column must sit inside bindSession (the funnel) or clearSession (the unbind).
+    const raw = parsedFile(STORE).text;
+    const stray = [...raw.matchAll(/UPDATE\s+runs\b/gi)].filter((m) => {
+      const from = m.index!;
+      const rest = raw.slice(from, from + 600);
+      const upTo = rest.search(/\bWHERE\b/i);
+      return /\bsessionId\b/i.test(upTo < 0 ? rest : rest.slice(0, upTo)) && !within({ start: from }, 'bindSession') && !within({ start: from }, 'clearSession');
+    });
+    expect(stray.map((m) => raw.slice(0, m.index).split('\n').length),
+      'an `UPDATE runs` outside bindSession/clearSession names runs.sessionId in the raw text (a .join or variable spelling)').toEqual([]);
+  });
+
+  it('CONTROL (fixture): a template-substituted SET that may name sessionId is partial', () => {
+    const dir = mkTmp('coord-store-census-');
+    const file = path.join(dir, 'store.ts');
+    writeFileSync(file, "class S { m(x: boolean) { return this.db.prepare(`UPDATE runs SET ${x ? 'sessionId = ?' : 'branch = ?'} WHERE id = ?`); } }\n");
+    const [q] = sqlStatementsInFile(file);
+    expect([q?.verb, q?.table, q?.partial, /\bsessionId\b/.test(q?.source ?? '')]).toEqual(['UPDATE', 'runs', true, true]);
+  });
+
+  it('CONTROL (fixture): a conditional-SET chain that names sessionId is partial and its source shows the column', () => {
+    const dir = mkTmp('coord-store-census-');
+    const file = path.join(dir, 'store.ts');
+    writeFileSync(file, "class S { m(x: boolean) { return this.db.prepare('UPDATE runs SET workspace = ?, ' + (x ? 'sessionId = ?' : 'branch = ?') + ' WHERE id = ?'); } }\n");
+    const [q] = sqlStatementsInFile(file);
+    expect([q?.verb, q?.table, q?.partial, q?.set, /\bsessionId\b/.test(q?.source ?? '')]).toEqual(['UPDATE', 'runs', true, ' workspace = ?, ', true]);
+    writeFileSync(file, "class S { m() { return this.db.prepare('UPDATE runs SET sessionId = ? ' + 'WHERE id = ?'); } }\n");
+    expect(sqlStatementsInFile(file).map((x) => x.partial)).toEqual([false]);   // a wholly literal chain is not partial
+  });
+
+  // Migration 16, child-reclamation spec §5.1, §5.3: the child's BIRTH is
+  // write-once PER BOUND SESSION, never a first stamp per run. `bindSession`
+  // is where the logic lives — `setSession` only forwards — so these cases
+  // drive `bindSession` directly, on the describe's own idiom above.
+  describe('sessionBornAt / sessionBornFor (migration 16) — the write-once birth', () => {
+    it('an explicit bornAt on a first bind writes it, and sessionBornFor names the bound session', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      const row = okRun(s.run(runId));
+      expect(row?.sessionBornAt).toBe(1_000);
+      expect(row?.sessionBornFor).toBe('demo-worker');
+    });
+
+    it('an explicit NULL bornAt (the adopted arm) writes null, not "unset" — and nulls sessionBornFor too, since there is no birth to attribute', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', null);
+      const row = okRun(s.run(runId));
+      expect(row?.sessionId).toBe('demo-worker');
+      expect(row?.sessionBornAt).toBeNull();
+      expect(row?.sessionBornFor).toBeNull();
+    });
+
+    it('two stamps, T1 then T2, with the bind on the second: sessionBornAt is T2, sessionBornFor stays the same session', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      s.bindSession(runId, 'demo-worker', 2_000);
+      const row = okRun(s.run(runId));
+      expect(row?.sessionBornAt).toBe(2_000);
+      expect(row?.sessionBornFor).toBe('demo-worker');
+    });
+
+    it('omitting bornAt on a SAME-session re-bind leaves both birth columns untouched', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      s.bindSession(runId, 'demo-worker');
+      const row = okRun(s.run(runId));
+      expect(row?.sessionBornAt).toBe(1_000);
+      expect(row?.sessionBornFor).toBe('demo-worker');
+    });
+
+    it('omitting bornAt on a DIFFERENT-session re-bind nulls both birth columns — a birth dated to the outgoing occupant is not the heir\'s', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      s.bindSession(runId, 'demo-heir');
+      const row = okRun(s.run(runId));
+      expect(row?.sessionId).toBe('demo-heir');
+      expect(row?.sessionBornAt).toBeNull();
+      expect(row?.sessionBornFor).toBeNull();
+    });
+
+    it('a bound session, then a direct markDispatchStarted: sessionBornAt/sessionBornFor unchanged and dispatchStartedAt moves — and childBirthOf now reads it as unplaceable (the accepted liveness cost)', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      s.markDispatchStarted(runId, 5_000);
+      const row = okRun(s.run(runId));
+      expect(row?.sessionBornAt).toBe(1_000);
+      expect(row?.sessionBornFor).toBe('demo-worker');
+      expect(row?.dispatchStartedAt).toBe(5_000);
+      // `childBirthOf` requires `sessionBornAt === dispatchStartedAt`, so a
+      // run whose dispatch was re-stamped by hand AFTER its birth — never a
+      // shape a real dispatch produces, since the fresh arm always stamps
+      // both from one measurement — now reads unplaceable rather than the
+      // birth it recorded first. This is the fail-closed cost the check
+      // accepts: the close would simply hold.
+      expect(childBirthOf({ ok: true, run: row! }, 'demo-worker')).toEqual({
+        kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth",
+      });
+    });
+
+    it('setSession forwards bornAt exactly as bindSession would — the two-argument form (the open route\'s) omits it', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.setSession(runId, 'demo-worker', 1_000);
+      expect(okRun(s.run(runId))?.sessionBornAt).toBe(1_000);
+      s.setSession(runId, 'demo-heir');
+      const row = okRun(s.run(runId));
+      expect(row?.sessionId).toBe('demo-heir');
+      expect(row?.sessionBornAt).toBeNull();
+      expect(row?.sessionBornFor).toBeNull();
+    });
+
+    it('clearSession nulls both birth columns alongside sessionId', () => {
+      // `clearSession` only writes a `planned` row (its own docstring) —
+      // `openOne` leaves the run exactly there, so no `advance` is needed.
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      const cleared = s.clearSession(runId, 42);
+      expect(cleared).toEqual({ ok: true, cleared: true });
+      const row = okRun(s.run(runId));
+      expect(row?.sessionId).toBeNull();
+      expect(row?.sessionBornAt).toBeNull();
+      expect(row?.sessionBornFor).toBeNull();
+    });
+
+    it('toRunSummary strips both birth columns off the wire, alongside coordProject and prLineage', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      const row = okRun(s.run(runId))!;
+      expect(row.sessionBornAt).toBe(1_000);
+      expect(row.sessionBornFor).toBe('demo-worker');
+      expect(toRunSummary(row)).not.toHaveProperty('sessionBornAt');
+      expect(toRunSummary(row)).not.toHaveProperty('sessionBornFor');
+    });
+
+    // A cross-build rollback across this migration can leave a stale birth on
+    // a row an OLDER build has since rebound — that build's `clearSession`/
+    // two-argument `setSession` never touch any of the three birth-adjacent
+    // columns, so a roll-forward can find `sessionId` moved on while
+    // `sessionBornAt`/`sessionBornFor` still name the outgoing occupant
+    // (a DIFFERENT id — `sessionBornFor` catches this), or find `sessionId`
+    // redrawn back to the SAME id (spec §5.5's recycled slug, extended across
+    // a rollback — `sessionBornFor` cannot see this, since the id never
+    // changed, but `dispatchStartedAt` moves on every genuine re-mint, so the
+    // `sessionBornAt === dispatchStartedAt` check catches it instead).
+    describe('childBirthOf and the cross-build rollback', () => {
+      it('the normal path: both checks agree, so the birth places', () => {
+        const s = store();
+        const runId = openOne(s);
+        // `markDispatchStarted` first, on `dispatch.ts`'s own fresh-arm order —
+        // a real bind always pairs the two stamps.
+        s.markDispatchStarted(runId, 1_000);
+        s.bindSession(runId, 'demo-s1', 1_000);
+        const row = okRun(s.run(runId))!;
+        expect(childBirthOf({ ok: true, run: row }, 'demo-s1')).toEqual({ kind: 'at', ms: 1_000 });
+      });
+
+      it('a same-session keep still places — neither column was touched', () => {
+        const s = store();
+        const runId = openOne(s);
+        s.markDispatchStarted(runId, 1_000);
+        s.bindSession(runId, 'demo-s1', 1_000);
+        s.bindSession(runId, 'demo-s1');   // omitted bornAt, same session: keep
+        const row = okRun(s.run(runId))!;
+        expect(childBirthOf({ ok: true, run: row }, 'demo-s1')).toEqual({ kind: 'at', ms: 1_000 });
+      });
+
+      it('the rollback shape: an OLD-BUILD rebind to a DIFFERENT id leaves the birth pointing at the outgoing occupant, and childBirthOf refuses it', () => {
+        const s = store();
+        const runId = openOne(s);
+        // v15 binds S1 on run R, birth T1.
+        s.bindSession(runId, 'demo-s1', 1_000);
+        // Roll back, then forward: simulate an OLDER build's rebind — it knows
+        // only `sessionId`, so it writes that column alone, exactly as
+        // `clearSession`/two-argument `setSession` did before this migration.
+        s.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run('demo-s2', runId);
+        const row = okRun(s.run(runId))!;
+        expect(row.sessionId).toBe('demo-s2');
+        // The birth columns are UNTOUCHED by the simulated old-build write —
+        // still S1's, dated T1 — which is exactly the stale pairing the guard
+        // exists to catch.
+        expect(row.sessionBornAt).toBe(1_000);
+        expect(row.sessionBornFor).toBe('demo-s1');
+        expect(childBirthOf({ ok: true, run: row }, 'demo-s2'))
+          .toEqual({ kind: 'unplaceable', detail: "the minting run's birth does not belong to its current session" });
+      });
+
+      // The redraw shape: a rollback
+      // followed by a SAME-id redraw (a recycled slug, spec §5.5, extended
+      // across a rollback) leaves `sessionBornFor` matching, since the id
+      // never changed — the `sessionBornFor` check alone cannot see it. The
+      // `sessionBornAt === dispatchStartedAt` check closes it, because every
+      // genuine re-mint — old build or new — always re-stamps
+      // `dispatchStartedAt` first (`CoordStore.markDispatchStarted`'s one
+      // call site, the fresh-spawn arm).
+      it('the redraw shape: an old-build re-mint of the SAME session id re-stamps dispatchStartedAt, and childBirthOf refuses it', () => {
+        const s = store();
+        const runId = openOne(s);
+        // v15 binds S1 at T1 — a real, paired bind.
+        s.markDispatchStarted(runId, 1_000);
+        s.bindSession(runId, 'demo-s1', 1_000);
+        // Roll back: an OLDER build's `clearSession` — `sessionId` (plus
+        // `workspace`/`branch`) alone, never the birth-adjacent columns.
+        s.db.prepare(
+          'UPDATE runs SET sessionId = NULL, workspace = NULL, branch = NULL WHERE id = ?',
+        ).run(runId);
+        // S1's workspace is fully removed and later redrawn for a DIFFERENT
+        // workspace under the SAME id (`_ws_slug_new`'s 12×12 pool, ccd/ccd) —
+        // an older build's fresh dispatch re-stamps `dispatchStartedAt` and
+        // binds `sessionId` with its own two-argument (birth-blind) write.
+        s.db.prepare('UPDATE runs SET sessionId = ?, dispatchStartedAt = ? WHERE id = ?')
+          .run('demo-s1', 2_000, runId);
+        const row = okRun(s.run(runId))!;
+        expect(row.sessionId).toBe('demo-s1');
+        expect(row.sessionBornAt).toBe(1_000);
+        expect(row.sessionBornFor).toBe('demo-s1');   // matches — the id never changed
+        expect(row.dispatchStartedAt).toBe(2_000);    // re-stamped — the re-mint is real
+        expect(childBirthOf({ ok: true, run: row }, 'demo-s1')).toEqual({
+          kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth",
+        });
+      });
+    });
   });
 });
 
@@ -2914,5 +4611,71 @@ describe('the programme filters', () => {
     // …and the unfiltered read still carries all three, which is where a
     // programless event belongs and the ONLY place it appears.
     expect(s.feedEvents(100).map((e) => e.title)).toEqual(['ours', 'theirs', 'a question']);
+  });
+});
+
+describe('CoordStore: run kind (design 2026-09-14 §5.1)', () => {
+  it('opens a work run by default and reads it back as kind work, reviews null', () => {
+    const s = store();
+    const a = openRun(s) as { id: number };
+    const row = okRun(s.run(a.id))!;
+    expect(row.kind).toBe('work');
+    expect(row.reviews).toBeNull();
+  });
+
+  it('persists kind review and the reviewed id, and hydrates both', () => {
+    const s = store();
+    const w = openRun(s) as { id: number };
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo', wave: 1, waveOf: 5,
+      claimedBy: 'ccrc-pwa-coordinator', kind: 'review', reviews: w.id }) as { id: number };
+    expect(r.id).not.toBe(w.id);   // the dup arm keys on kind too
+    const row = okRun(s.run(r.id))!;
+    expect(row.kind).toBe('review');
+    expect(row.reviews).toBe(w.id);
+    expect(okRun(s.run(w.id))!.reviews).toBeNull();
+  });
+
+  it('reads an out-of-vocabulary kind token as unknown, never as a raw string (D-2795)', () => {
+    const s = store();
+    const a = openRun(s) as { id: number };
+    s.db.prepare("UPDATE runs SET kind = 'x-from-a-newer-build' WHERE id = ?").run(a.id);
+    expect(okRun(s.run(a.id))!.kind).toBe('unknown');
+  });
+
+  it('advances a review run working -> done directly, and refuses the work-only states (spec §5.2)', () => {
+    const s = store();
+    const w = openRun(s) as { id: number };
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo', wave: 1, waveOf: 3,
+      claimedBy: 'ccrc-pwa-coordinator', kind: 'review', reviews: w.id }) as { id: number };
+    expect(s.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+    expect(s.advance(r.id, 'working', 'test').ok).toBe(true);
+    expect(s.advance(r.id, 'awaiting-review', 'test'))
+      .toEqual({ ok: false, error: 'bad-transition', from: 'working', to: 'awaiting-review' });
+    expect(s.advance(r.id, 'closing', 'test').ok).toBe(false);
+    expect(s.advance(r.id, 'done', 'test').ok).toBe(true);
+    expect(okRun(s.run(r.id))!.closedAt).not.toBeNull();
+  });
+
+  it('refuses every advance on a run whose kind this build cannot name (D-2795)', () => {
+    const s = store();
+    const a = openRun(s) as { id: number };
+    s.db.prepare("UPDATE runs SET kind = 'x-newer' WHERE id = ?").run(a.id);
+    expect(s.advance(a.id, 'dispatched', 'test'))
+      .toEqual({ ok: false, error: 'bad-transition', from: 'planned', to: 'dispatched' });
+  });
+
+  it('reviewInFlightFor: null with no reviewer, the review id while non-terminal, null again once terminal (Task 5 review m8)', () => {
+    const s = store();
+    const w = openRun(s) as { id: number };
+    expect(s.reviewInFlightFor(w.id)).toBeNull();
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'ccrc-pwa', wave: 1, waveOf: 5,
+      claimedBy: 'ccrc-pwa-coordinator', kind: 'review', reviews: w.id }) as { id: number };
+    expect(s.reviewInFlightFor(w.id)).toBe(r.id);   // planned
+    expect(s.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+    expect(s.reviewInFlightFor(w.id)).toBe(r.id);   // dispatched
+    expect(s.advance(r.id, 'working', 'test').ok).toBe(true);
+    expect(s.reviewInFlightFor(w.id)).toBe(r.id);   // working
+    expect(s.advance(r.id, 'failed', 'test').ok).toBe(true);
+    expect(s.reviewInFlightFor(w.id)).toBeNull();
   });
 });

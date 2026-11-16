@@ -10,10 +10,56 @@
  * centered 640 column, a FAB pinned to that column); at the breakpoint we
  * re-contain those to their pane. The accounts strip is rendered at the shell
  * level only on desktop (app.tsx / useMediaQuery); on mobile it lives in the
- * fleet screen, so there's only ever one instance. */
+ * fleet screen, so there's only ever one instance.
+ *
+ * THESE ARE THE FRAME'S RULES (D-5466, W2 Task S2b): `.app-shell` is
+ * `skins/frame.tsx`'s `ShellFrame`, the same element in both skins, and every
+ * rule here is shared by them: the phone swap, the detail pane's scroll
+ * region, the chat exception, the back-chevron rule and the overlays. A
+ * skin's own layout goes in its own stylesheet on its `ref-*` or `ins-*`
+ * classes (`skins/refined/refined.css`, `skins/instrument/instrument.css`);
+ * S4b moves Refined's desktop grid and the accounts top strip there. */
 
 .app-shell {
   min-height: 100dvh;
+}
+
+/* The skip link (W2 Task S2b): the frame's first focusable element, visually
+ * hidden until it has focus, then a self-grounded chip over the frame's top
+ * corner. `position: absolute` either way, so it never takes a grid cell and
+ * moves no pixel of the shell. Its click moves focus to `#content`. */
+.skip-link {
+  position: absolute;
+  top: var(--sp-2);
+  left: var(--sp-2);
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.skip-link:focus {
+  z-index: var(--z-block);
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  height: auto;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-4);
+  overflow: visible;
+  clip-path: none;
+  background: var(--bg-page);
+  color: var(--ink-primary);
+  font: var(--weight-medium) var(--fs-base) / var(--lh-normal) var(--family-ui);
+}
+
+/* The main landmark takes focus only from script: the skip link, a palette
+ * that hands focus back after a route change, a switch that replaced the
+ * focused part (`tabIndex=-1`, D-5679). It is not a control, so base.css's
+ * page-wide ring stays off it; measured in Chromium, a keyboard palette run
+ * drew that ring along the whole pane (`browser/content-focus-ring`). */
+.shell-detail:focus-visible {
+  outline: none;
 }
 
 /* ---- Mobile: full-screen swap (unchanged) ---------------------------- */
@@ -29,6 +75,83 @@
   .shell-placeholder {
     display: none;
   }
+}
+
+/* ---- Phone: the bottom bar of the console's places (desktop-polish PL10, D-7952) ----
+ * `PhoneBar` inside the frame's `<nav class="shell-phone-nav">`, which the frame mounts below 900 only and never in an
+ * open session (`phoneBarShown`), so no rule here hides it by width. Fixed to the bottom edge, above the home indicator,
+ * one row of seven doors, each a seventh of the width (51px at 360) and at least the tap floor tall, its word in the
+ * smallest type so "Accounts" fits that seventh.
+ *
+ * ONE HEIGHT, `--phone-bar-h`, on the root while the bar is mounted (`:has`, so no script publishes it and it is gone the
+ * moment the bar unmounts): its doors' row plus its top edge. Whatever the shell already lifts above the safe-area inset (the
+ * round `+` and `+ New`, the fleet list's bottom reservation) is lifted above the bar too, by the shell redefining
+ * `--safe-bottom` for its own descendants; the bar itself, a sheet and a toast (both portalled outside the shell) keep the
+ * device's inset, and the toast host adds `--phone-bar-h` itself. */
+:root:has(.shell-phone-nav) {
+  --phone-bar-h: calc(var(--tap-min) + var(--sp-2) + 1px);
+}
+.app-shell:has(> .shell-phone-nav) {
+  --safe-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--phone-bar-h));
+}
+/* A page in the detail pane keeps its last line clear of the bar; the fleet column's list already reserves its bottom
+   through `--safe-bottom` (fleet.css), so the fleet view adds nothing of its own. */
+.app-shell[data-view='session']:has(> .shell-phone-nav) {
+  padding-bottom: var(--safe-bottom);
+}
+.shell-phone-nav {
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: var(--z-header);
+  padding-bottom: var(--safe-bottom);
+  border-top: 1px solid var(--edge-subtle);
+  background: var(--bg-page);
+}
+.phone-bar {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  padding: var(--sp-1) 0;
+}
+.phone-bar-door {
+  position: relative;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: var(--tap-min);
+  padding: 0;
+  background: var(--bg-page);
+  color: var(--ink-secondary);
+  container-type: inline-size;
+}
+.phone-bar-door[aria-current='page'] {
+  background: var(--bg-page);
+  color: var(--ink-primary);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.phone-bar-word {
+  max-width: 100%;
+  overflow: hidden;
+  font-family: var(--family-ui);
+  font-size: var(--fs-2xs);
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Above the glyph and clear of its centre point: the glyph is the door's only mark at a glance. A one- or two-digit count sits on
+   the glyph's top-right corner. A count too wide for the room right of the glyph's centre ("99+" at 320, 360 and 390) moves left
+   by what it would overhang, and no further, so it never reaches into the next door, where a tap on it would land (review 1466
+   F18), and then covers the glyph's top edge: all of its width at 320 (review 1481 F4, accepted). The door is a size container
+   (`.phone-bar-door`), `50cqw` is half the door and `100%` in `translate` is the count's own width. */
+.phone-bar-count {
+  position: absolute;
+  top: calc(-1 * var(--sp-1));
+  left: calc(50% + var(--sp-1));
+  translate: min(0px, calc(50cqw - var(--sp-1) - 100%)) 0;
+  pointer-events: none;
 }
 
 /* ---- Desktop: accounts top-bar + two-pane master–detail ------------- */
@@ -58,7 +181,10 @@
      so hiding what was then its only door there was the bug, not a feature.
      AccountsStrip now always renders a non-empty `.accounts-strip`, with a quiet
      placeholder body in that state, so this bar is never `:empty` and the old
-     auto-hide rule is gone. */
+     auto-hide rule is gone.
+
+     Both skins mount that strip here, as the lanes row: under the bar's line,
+     inside this header, every lane a card (T2c, D-6329). */
   .shell-accounts {
     grid-column: 1 / -1;
     grid-row: 1;
@@ -66,14 +192,49 @@
     border-bottom: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
   }
-  /* One gauge per account across the width. 260px is all a gauge needs now that
-     the name sits beside its windows rather than above them, so all four stay
-     side by side down to ~1100px of viewport; below that auto-fit drops to fewer
-     columns and the strip grows a row rather than truncating a readout. */
+  /* One card per lane across the width, as many to a line as the width holds, and the end cell, the fold's control and
+     All accounts, in the track after the last card. A card's floor is only what its name and two windows need now
+     that the name sits beside them rather than above them; below that floor the tracks drop to fewer to a line and the
+     row wraps onto another line rather than truncating a readout. The floor is `LANE_CARD_MIN` (stripFold.ts), written
+     once there and handed to this rule by the strip as `--lane-card-min`, so the tracks drawn and the count the fold
+     measures (`rowFit`) agree. auto-fill, not auto-fit, so the tracks keep a card's width when the last line holds
+     fewer cards than the line. */
   .shell-accounts .accounts-strip {
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    /* `--lane-card-min` is declared here, with no value of its own (`initial`), and the strip's inline style always
+       outranks it with `LANE_CARD_MIN`: the figure stays written once, in stripFold.ts, and the token is still one
+       a stylesheet defines (css-vars.test.ts). Without the inline style the grid's columns are invalid and the cards
+       stack, a visible failure rather than a second figure. */
+    --lane-card-min: initial;
+    position: relative;
+    grid-template-columns: repeat(auto-fill, minmax(var(--lane-card-min), 1fr));
     gap: var(--sp-2);
     margin: 0;
+  }
+  /* The flyout (R120, strip-hover-flyout): the cards of the lanes the folded line leaves out (Task C13), in a panel
+     under the line, drawn over the content and pushing none of it down. It is out of flow, hung from the line's bottom
+     edge (`top: 100%` of the strip, which is `position: relative` above), above the frame's content in the sheet layer.
+     Its cards wrap in the line's own tracks and gap, the same card in the same floor, and its columns sit under the
+     line's: the panel reaches out past the strip's edges by its own padding and border, so its content box is the
+     strip's width at the strip's left and its auto-fill tracks are the line's, track for track, while the panel does
+     not scroll (a classic scrollbar, once it scrolls, narrows its content box and so its tracks). Taller than the room
+     under the line, it scrolls itself: at most 70% of the viewport's height, since the line sits at the top of the
+     window. Layer, hairline and the pop shadow: the surface the other floating panels use, no token of its own. */
+  .shell-accounts .accounts-flyout {
+    position: absolute;
+    top: 100%;
+    left: calc(-1 * (var(--sp-2) + 1px));
+    right: calc(-1 * (var(--sp-2) + 1px));
+    z-index: var(--z-sheet);
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--lane-card-min), 1fr));
+    gap: var(--sp-2);
+    max-height: 70dvh;
+    overflow-y: auto;
+    padding: var(--sp-2);
+    background: var(--bg-surface);
+    border: 1px solid var(--edge-subtle);
+    border-radius: var(--r-md);
+    box-shadow: var(--elev-pop);
   }
   /* Gauge: the account name moves from ABOVE its windows to BESIDE them, which is
      where the height comes from — three stacked lines become two. The windows
@@ -91,20 +252,37 @@
     border: 1px solid var(--edge-subtle);
     border-radius: var(--r-md);
   }
-  .shell-accounts .account-gauge-label {
-    flex: none;
-    font-size: var(--text-xs);
-  }
-  .shell-accounts .acct-rows {
-    flex: 1;
+  /* The end cell sits inline in the next track here, not on a row of its own as on a phone. It holds the fold's control
+     beside All accounts in that one track, on one row (fleet.css): the cell may shrink below its content
+     (`min-width: 0`, so a long "+13 more · 1 sign-in expired · 1 rate-limited" never widens the track) and the
+     control's words wrap inside it, so the cell stays one row and every item in the line keeps one top. */
+  .shell-accounts .accounts-end {
+    grid-column: auto;
     min-width: 0;
+  }
+  /* The lane's name gives first: a long one is cut with an ellipsis (its full name is the label's `title`) so the
+     windows keep their countdowns inside the card. */
+  .shell-accounts .account-gauge-label {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-meta);
+  }
+  /* The windows never shrink below what they draw, so only the name gives. `min-width: min-content` did not hold them:
+     a grid of rows with a 1fr track measures narrower than its rows draw, so a long name's card shrank them and the
+     countdowns spilled out of the card (lanes-row.browser.test.ts). */
+  .shell-accounts .acct-rows {
+    flex: 1 0 auto;
     gap: 1px;
   }
   /* The meter is the only elastic column, so it — never a number — is what gives
      when the window narrows, down to a 40px floor below which it stops reading as
      a gauge at all. Nothing here needs to reset a height: the 52px touch-target
      that used to leak into these rows from the account PICKER sharing the class
-     name is scoped away at its source now (`.acct-list .acct-row`, fleet.css). */
+     name is gone at its source — the picker row is `<ListRow className="acct-pick">`
+     now, and no longer wears `acct-row` at all (fleet.css). */
   .shell-accounts .acct-row {
     min-width: 0;
     grid-template-columns: auto minmax(40px, 1fr) auto auto;
@@ -114,19 +292,23 @@
   }
   .shell-accounts .acct-win {
     color: var(--ink-secondary);
+    font-size: var(--fs-meta);
   }
   /* The percentage leads: primary ink, medium, one step up in size. */
   .shell-accounts .acct-pct {
     color: var(--ink-primary);
     font-weight: var(--weight-medium);
-    font-size: var(--text-xs);
+    font-size: var(--fs-meta);
   }
   .shell-accounts .acct-reset {
     color: var(--ink-secondary);
+    font-size: var(--fs-meta);
   }
-  .shell-accounts .acct-meter {
-    height: 5px;
+  .shell-accounts .acct-unread {
+    font-size: var(--fs-meta);
   }
+  /* No height for the meter: it is `Meter`'s, from `--meter-h` (D-5098), so
+     the strip's meters take the skin's shape like every other. */
 
   .shell-nav {
     position: relative;
@@ -225,13 +407,20 @@
     margin: 0;
     overflow: hidden;
   }
-  .shell-detail .chat-back {
-    display: none;
-  }
-  /* AccountsScreen's own back chevron (Task 6, Build 3 PR G) — same reasoning
-     as .chat-back just above: the fleet sidebar is always visible on desktop,
-     so an explicit way back out of the detail pane is redundant there. */
-  .shell-detail .accounts-back {
+  /* EVERY back chevron in the detail pane, by the component's own class.
+     The fleet sidebar is always visible on desktop, so an explicit way back
+     out of the detail pane is redundant there — and `app.tsx` renders all six
+     detail screens inside this node, so the rule applies exactly where that
+     reason holds and nowhere else.
+
+     IT NAMED TWO HOOK CLASSES UNTIL THIS WAVE (`.chat-back` and
+     `.accounts-back`), while `.mail-back`, `.runs-back` and `.settings-back`
+     were not hidden: three chevrons rendered on desktop against this rule's
+     own argument. The drift was invisible from any one of the five per-screen
+     rules and became legible only when `BackButton` collected them
+     (`ui/src/primitives/back-button.tsx` records both halves). Naming the
+     COMPONENT cannot drift that way. */
+  .shell-detail .back-btn {
     display: none;
   }
 
@@ -245,15 +434,19 @@
     gap: var(--sp-2);
   }
   .shell-placeholder-mark {
-    font: var(--weight-regular) 40px / 1 var(--font-mono);
+    font: var(--weight-regular) 40px / 1 var(--family-mono);
     color: var(--ink-tertiary);
     opacity: 0.6;
   }
-  .shell-placeholder-copy {
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-    color: var(--ink-secondary);
-  }
+}
+
+/* The placeholder's copy, at every width: it is also the detail pane's loading line while a lazy screen's code loads
+   (`app.tsx`, console speed C1; review 1464 F9), and that line shows on a phone too. Below 900px the placeholder
+   itself is hidden, so only the loading line uses this there. */
+.shell-placeholder-copy {
+  font-family: var(--family-mono);
+  font-size: var(--fs-sm);
+  color: var(--ink-secondary);
 }
 
 /* ---- BlockScreen: the dormant handshake's block (Rider E) ------------ */
@@ -263,27 +456,57 @@
    --z-block (above --z-toast) is what actually does the covering; the DOM
    position is what keeps it out of any container that might clip or
    transform its own descendants. */
+/* `.block-screen` is `<CoverScreen>`. Nine of its twelve declarations are the
+   component's now; what stays is the GROUND — which four descendant rules
+   across the two covers are measured against — and the `gap`, the one
+   declaration the two screens disagreed on. */
 .block-screen {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-block);
+  gap: var(--sp-5);
+  background: var(--bg-page);
+  color: var(--ink-primary);
+}
+.block-screen-copy {
+  max-width: 40ch;
+  font: var(--weight-medium) var(--fs-base) / var(--lh-normal) var(--family-ui);
+}
+/* `<Button>` defaults to w-full for its usual sheet-flow home; here it
+   sits alone on an open screen, so it gets its own width back. */
+.block-screen .btn-primary {
+  width: auto;
+  min-width: 180px;
+}
+
+/* ---- RenderBoundary's fallbacks (native Docs reader, W4) ------------- */
+/* components/RenderBoundary.tsx: RootFallback replaces the whole app when it
+   throws while rendering; ScreenFallback replaces one screen inside
+   .shell-detail, beside a sidebar that still works. Self-grounded on the
+   pair .block-screen already ships (--ink-primary on --bg-page), so the
+   contrast gate measures no new pair; the copy sets no colour and inherits
+   it. The root variant covers the viewport as .block-screen does; the screen
+   one fills the pane. The buttons are `<Button>` (its utilities carry the
+   tap floor; `.btn-primary` is its hook class); this file only gives them
+   their width back, as `.block-screen .btn-primary` does. */
+.render-fallback {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: var(--sp-5);
+  min-height: 100%;
   padding: var(--sp-6);
   background: var(--bg-page);
   color: var(--ink-primary);
   text-align: center;
 }
-.block-screen-copy {
-  max-width: 40ch;
-  font: var(--weight-medium) var(--text-base) / var(--leading-normal) var(--font-ui);
+.render-fallback--root {
+  position: fixed;
+  inset: 0;
 }
-/* .btn-primary defaults to width:100% for its usual sheet-flow home; here it
-   sits alone on an open screen, so it gets its own width back. */
-.block-screen .btn-primary {
+.render-fallback-copy {
+  max-width: 40ch;
+  font: var(--weight-medium) var(--fs-base) / var(--lh-normal) var(--family-ui);
+}
+.render-fallback .btn-primary {
   width: auto;
   min-width: 180px;
 }
@@ -298,31 +521,26 @@
 
    Every declaration here is either layout or a token pair that already ships:
    the container is .block-screen's own --ink-primary on --bg-page, and
-   .login-input copies .sess-hold-input's declarations verbatim (edge-subtle
+   The passphrase field is `TextInput`; it once copied .sess-hold-input's declarations verbatim (edge-subtle
    border, bg-raised, ink-primary) — same tokens, no new pair for the contrast
    gate to measure. The copy and the label set NO colour and inherit the
    container's ink. */
+/* The ground and the gap — see `.block-screen`. The shared `--z-block` moved
+   into the component with the rest of the cover, and the ordering argument
+   above is unchanged: app.tsx renders this one first, so at equal z the block
+   screen paints on top. */
 .login-screen {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-block);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
   gap: var(--sp-4);
-  padding: var(--sp-6);
   background: var(--bg-page);
   color: var(--ink-primary);
-  text-align: center;
 }
 .login-title {
-  font: var(--weight-semibold) var(--text-lg) / var(--leading-tight) var(--font-mono);
-  letter-spacing: 0.04em;
+  font: var(--weight-semibold) var(--fs-lg) / var(--lh-tight) var(--family-mono);
+  letter-spacing: var(--ls-caps-sm);
 }
 .login-copy {
   max-width: 40ch;
-  font: var(--weight-medium) var(--text-base) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-medium) var(--fs-base) / var(--lh-normal) var(--family-ui);
 }
 .login-form {
   display: flex;
@@ -332,20 +550,9 @@
   max-width: 320px;
   text-align: left;
 }
+/* The passphrase field is @ccrc/ui's `TextInput` (primitives/text-input.tsx).
+   shell.css declared the same ten declarations fleet.css declared twice more;
+   the component says them once. */
 .login-label {
-  font: var(--weight-medium) var(--text-sm) / var(--leading-normal) var(--font-ui);
-}
-.login-input {
-  width: 100%;
-  min-height: var(--tap-min);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  background: var(--bg-raised);
-  color: var(--ink-primary);
-  font: var(--weight-regular) var(--text-input) / var(--leading-normal) var(--font-ui);
-  padding: 0 var(--sp-3);
-  outline: none;
-}
-.login-input:focus {
-  border-color: var(--accent);
+  font: var(--weight-medium) var(--fs-sm) / var(--lh-normal) var(--family-ui);
 }

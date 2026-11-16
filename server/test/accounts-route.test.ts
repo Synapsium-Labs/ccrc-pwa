@@ -10,6 +10,9 @@ import path from 'node:path';
 import type { AccountsResponse, AccountUsage } from '../../shared/api.js';
 import { loadConfig } from '../src/config.js';
 import { buildServer } from '../src/server.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { PoolEdgeLog } from '../src/coord/pooledgelog.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -122,6 +125,27 @@ describe('GET /api/accounts', () => {
     expect(projected).toEqual({ wrapper: 'claude-a', score: 5 });
   });
 
+  // D-8120: the statusline writer marks an Anthropic lane with no 5h window, and
+  // the route carries that marker to the PWA (which shows "No 5-hour limit") and
+  // ranks the lane on its week; a lane that reports its 5h window keeps today's shape.
+  it('carries an Anthropic lane\'s no-5h-window marker, and projects on its week', async () => {
+    const t = now();
+    const fresh = (five: number, seven: number) =>
+      ({ five, seven, ts: t - 60, fiveResetAt: t + 9000, sevenResetAt: t + 400000 });
+    const home = seedLimits({
+      claude: fresh(80, 40), 'claude-a': fresh(50, 50), 'claude-d': fresh(85, 45),
+      'claude-b': { five: null, seven: 7, ts: t - 60, fiveResetAt: t - 259200, sevenResetAt: t + 400000,
+                    fiveAbsentSince: t - 259200, fiveWindowMinutes: 0 },
+    });
+
+    const payload = await getPayload(home);
+    const byWrapper = Object.fromEntries(payload.accounts.map((a) => [a.wrapper, a]));
+    expect(byWrapper['claude-b']).toMatchObject({ five: null, seven: 7, fiveWindowMinutes: 0, fiveRolledOver: false });
+    expect(byWrapper['claude-a']).not.toHaveProperty('fiveWindowMinutes');
+    expect(byWrapper['claude-b']).not.toHaveProperty('fiveAbsentSince');
+    expect(payload.projected).toEqual({ wrapper: 'claude-b', score: 7 });
+  });
+
   it('projects an exhausted account rather than hiding it', async () => {
     // ccd's rule has no availability filter, so a pinned fleet still gets an
     // answer — and that answer is exactly what the affordance has to show.
@@ -188,20 +212,32 @@ describe('GET /api/accounts', () => {
     // account. A handler that forgot to copy it would ship a wire on which
     // every entry looks like an account — exactly the silent loss this file
     // exists to catch.
+    // `resolvedPool` (T7-R2): with no `coord` configured (`testDeps`'s
+    // default), there are no central `pool_edges` to read, so it falls back
+    // to the declared field, adapted — `{ state: 'untagged', origin:
+    // 'declared' }` for every one of these untagged accounts.
+    const untaggedDeclared = { state: 'untagged' as const, origin: 'declared' as const };
+    // The lane kind (D-5517, D-5751): `rosterKindOf`'s answer per entry —
+    // upstream is anthropic by construction, a secrets file makes a token lane,
+    // and `gpt` (`external`, no provider) is undeclared, so it carries
+    // telemetry and `managed: false`, the mark of a lane ccrc only records (D-8051 (13)).
+    const signIn = { provider: 'anthropic' as const, kind: 'sign-in' as const, telemetry: 'anthropic' as const };
+    const token = { provider: 'anthropic' as const, kind: 'token' as const, telemetry: 'anthropic' as const };
     expect(roster).toEqual([
-      { id: 'claude', label: 'claude', hue: 'cyan', homeAble: true, hidden: false, pool: null },
-      { id: 'claude-a', label: 'claude-a', hue: 'violet', homeAble: true, hidden: false, pool: null },
-      { id: 'claude-b', label: 'team·b', hue: 'blue', homeAble: true, hidden: false, pool: null },
-      { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false, pool: null },
-      { id: 'claude-d', label: 'claude-d', hue: 'green', homeAble: true, hidden: false, pool: null },
+      { id: 'claude', label: 'claude', hue: 'cyan', homeAble: true, hidden: false, pool: null, ...signIn, resolvedPool: untaggedDeclared },
+      { id: 'claude-a', label: 'claude-a', hue: 'violet', homeAble: true, hidden: false, pool: null, ...token, resolvedPool: untaggedDeclared },
+      { id: 'claude-b', label: 'team·b', hue: 'blue', homeAble: true, hidden: false, pool: null, ...signIn, resolvedPool: untaggedDeclared },
+      { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false, pool: null, telemetry: 'none', managed: false, resolvedPool: untaggedDeclared },
+      { id: 'claude-d', label: 'claude-d', hue: 'green', homeAble: true, hidden: false, pool: null, ...token, resolvedPool: untaggedDeclared },
     ]);
   });
 
-  // The server's half of the roster's own secret-keeping: `configDirSuffix`,
-  // `exec` (which carries a `~/.cc-secrets` path for a generated account) and
-  // `telemetry` describe how the SERVER launches and measures an account. A
-  // browser has no use for any of them, and `RosterWire` is where that line is
-  // drawn — this asserts the line is real on the wire, not just in the type.
+  // The server's half of the roster's own secret-keeping: `configDirSuffix`
+  // and `exec` (which carries a `~/.cc-secrets` path for a generated account)
+  // describe how the SERVER launches an account. A browser has no use for
+  // either, and `RosterWire` is where that line is drawn — this asserts the
+  // line is real on the wire, not just in the type. `telemetry` crossed it on
+  // purpose with the lane kind (D-5517, D-5751): a closed union, no path.
   it('ships no launch or secrets detail to the browser', async () => {
     const { roster } = await getPayload(seedLimits({ claude: { five: 2, seven: 3 } }));
     // The loop below is the assertion, and a loop over an empty array runs no
@@ -210,8 +246,11 @@ describe('GET /api/accounts', () => {
     // seeds `DEFAULT_TEST_ROSTER`, which has five accounts, so the count is a
     // fact about the fixture and not a guess about the handler.
     expect(roster).toHaveLength(5);
+    const base = ['hidden', 'homeAble', 'hue', 'id', 'label', 'pool', 'resolvedPool', 'telemetry'];
     for (const entry of roster) {
-      expect(Object.keys(entry).sort()).toEqual(['hidden', 'homeAble', 'hue', 'id', 'label', 'pool']);
+      // `gpt` is undeclared (`external`, no provider): no provider, no kind, and `managed: false` (D-8051 (13)).
+      const kind = entry.id === 'gpt' ? ['managed'] : ['kind', 'provider'];
+      expect(Object.keys(entry).sort(), entry.id).toEqual([...base, ...kind].sort());
     }
   });
 
@@ -231,6 +270,95 @@ describe('GET /api/accounts', () => {
       ['gpt', null],
       ['claude-d', null],
     ]);
+    // `resolvedPool` (T7-R2), no `coord` configured here either: it mirrors
+    // the declared `pool` field exactly, adapted to the wire shape.
+    expect(roster.map((a) => [a.id, a.resolvedPool])).toEqual([
+      ['claude', { state: 'tagged', pools: ['pool-a'], origin: 'declared' }],
+      ['claude-a', { state: 'tagged', pools: ['pool-a'], origin: 'declared' }],
+      ['claude-b', { state: 'tagged', pools: ['pool-b'], origin: 'declared' }],
+      ['gpt', { state: 'untagged', origin: 'declared' }],
+      ['claude-d', { state: 'untagged', origin: 'declared' }],
+    ]);
+  });
+
+  // Overlord W1 serviceability: the two account facts ride the roster wire, SET ones only. A fact nobody set is
+  // ABSENT (never `null`), because an older server omits both and absence reads as "not set".
+  it('carries fableBilling and continuity for an account that has them, and omits both for one that has neither', async () => {
+    const { roster } = await getPayloadWithRoster(
+      seedLimits({ claude: { five: 2, seven: 3 } }),
+      { version: 1, accounts: [
+        { id: 'lane-a', label: 'A', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan',
+          telemetry: 'anthropic', fableBilling: 'credits', continuity: { recordedAt: 1760000000 } },
+        { id: 'lane-b', label: 'B', configDirSuffix: '.claude-b', exec: { kind: 'generated' }, homeAble: true, hue: 'green',
+          telemetry: 'anthropic' },
+      ] });
+    const a = roster.find((r) => r.id === 'lane-a')!;
+    const b = roster.find((r) => r.id === 'lane-b')!;
+    expect(a.fableBilling).toBe('credits');
+    expect(a.continuity).toEqual({ recordedAt: 1760000000 });
+    expect(Object.prototype.hasOwnProperty.call(b, 'fableBilling')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(b, 'continuity')).toBe(false);
+  });
+
+  // T7-R2: the RESOLVED field must follow the CENTRAL edge, not the declared
+  // roster field, the moment a `pool_edges` row exists for an account —
+  // `NewSessionSheet.tsx:186-188` computing its crossing warning from the
+  // declared `pool` alone (before this field existed) is the live defect
+  // this closes: a PWA reading `pool` would contradict the server the moment
+  // an operator uses account pools for real.
+  it('resolvedPool follows the CENTRAL edge over the declared roster field', async () => {
+    const home = seedLimits({ claude: { five: 2, seven: 3 } });
+    seedRoster(home, POOLED_TEST_ROSTER);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const poolEdgeLog = new PoolEdgeLog(path.join(home, '.ccrc', 'pool-edges.log'));
+    // `claude` is declared `pool-a`; centrally re-tag it `pool-b`.
+    coord.setAccountPools({ accountId: 'claude', pools: ['pool-b'], addedBy: null }, poolEdgeLog);
+    const base = testDeps(home);
+    const app = await buildServer({ ...base, cfg, coord, poolEdgeLog });
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/accounts' });
+      expect(res.statusCode).toBe(200);
+      const { roster } = res.json() as AccountsResponse;
+      const claude = roster.find((a) => a.id === 'claude');
+      expect(claude?.pool).toBe('pool-a'); // the declared field is UNCHANGED
+      expect(claude?.resolvedPool).toEqual({ state: 'tagged', pools: ['pool-b'], origin: 'central' });
+      // An account with no central edge still falls back to declared.
+      const claudeB = roster.find((a) => a.id === 'claude-b');
+      expect(claudeB?.resolvedPool).toEqual({ state: 'tagged', pools: ['pool-b'], origin: 'declared' });
+    } finally {
+      await app.close();
+      coord.db.close();
+    }
+  });
+
+  // Minor 1 (review round 2): ONE hoisted `accountPoolEdges()` read for the
+  // whole request, not one per account — this proves the degrade-on-throw
+  // side of that hoist: the WHOLE response falls back to the declared-only
+  // shape rather than 500ing, and it does so consistently across every
+  // account (not just the ones a per-account try/catch happened to guard).
+  it('a throwing accountPoolEdges() degrades the WHOLE response to declared-only, never a 500', async () => {
+    const home = seedLimits({ claude: { five: 2, seven: 3 } });
+    seedRoster(home, POOLED_TEST_ROSTER);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    coord.accountPoolEdges = () => { throw new Error('simulated DatabaseSync failure'); };
+    const base = testDeps(home);
+    const app = await buildServer({ ...base, cfg, coord });
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/accounts' });
+      expect(res.statusCode).toBe(200);
+      const { roster } = res.json() as AccountsResponse;
+      // Every entry falls back to its DECLARED pool, adapted — none 500s and
+      // none silently drops the field.
+      expect(roster.find((a) => a.id === 'claude')?.resolvedPool)
+        .toEqual({ state: 'tagged', pools: ['pool-a'], origin: 'declared' });
+      expect(roster.find((a) => a.id === 'gpt')?.resolvedPool)
+        .toEqual({ state: 'untagged', origin: 'declared' });
+    } finally {
+      await app.close();
+      coord.db.close();
+    }
   });
 
   // The handler rebuilds each AccountUsage field by field, so a field it forgets

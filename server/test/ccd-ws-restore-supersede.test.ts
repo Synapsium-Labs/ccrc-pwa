@@ -75,8 +75,18 @@ describe('ws-restore records what it is about to erase', () => {
     h.sh(`${STUB} cmd_ws_restore --session ${id} 2>/dev/null || true`);
     const added = fs.readdirSync(path.join(h.home, '.cc-sessions'))
       .filter((f) => !before.has(f) && f.startsWith(`${id}.`));
+    // EXACTLY THE GENERATION, AND NOTHING ELSE (D-2994). The round-trip argument
+    // is about a new per-session FIELD TYPE entering the agent's per-tick read
+    // set; `.generation` is not one — it is D-2605's, and every row minted by
+    // `ws-add`, `start` or `ensure` already carries it, so the read set is
+    // unchanged whether or not restore repairs an absent one. This fixture
+    // builds its row with `_reg_set` rather than a real `ws-add`, so it has
+    // none and the mint fires every time, which is what makes the equality
+    // exact rather than tolerant. Asserting the LIST, not filtering it out:
+    // a genuinely new 25th field still reds here, and so does the mint going
+    // missing — the two failures this line has to tell apart.
     expect(added, 'a 25th per-session field costs 24 extra agent round-trips per 2s tick')
-      .toEqual([]);
+      .toEqual([`${id}.generation`]);
   });
 
   it('records spawn-failed when the undo landed and the session did not come back', () => {

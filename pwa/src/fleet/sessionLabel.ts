@@ -1,10 +1,14 @@
 import type { FleetSession } from '../../../shared/api';
 
 /**
- * What to call a session, everywhere. `name ?? branch ?? workspace ?? id`.
+ * What to call a session, everywhere. `title ?? name ?? branch ?? workspace ?? id`.
+ *
+ * `title` is the sentence the operator gave a named workspace (`FleetSession.title`,
+ * null when none); a name a human typed outranks every derived one, so it is the
+ * first rung. The server maps an empty title file to null, so '' never arrives.
  *
  * `name` is only ever present when it is worth showing: the server drops
- * Claude Code's derived session handles (`openclawhetzner-42` — cwd basename
+ * Claude Code's derived session handles (`project-c-42` — cwd basename
  * plus a counter) before they reach the wire, so a non-null name is one a
  * human chose. Branch outranks the slug because a workspace's branch gets
  * renamed to something descriptive while `workspace` keeps the slug it was
@@ -27,5 +31,5 @@ import type { FleetSession } from '../../../shared/api';
  * length of a program, which is a product decision, not a refactor.
  */
 export function sessionLabel(session: FleetSession): string {
-  return session.name ?? session.branch ?? session.workspace ?? session.id;
+  return session.title ?? session.name ?? session.branch ?? session.workspace ?? session.id;
 }

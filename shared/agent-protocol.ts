@@ -7,10 +7,17 @@
 // The RULE is `shared/`-wide, and it is stated as the rule rather than as a
 // fact about this file: `shared/` is the tree the PWA bundles from, so a
 // `node:*` import here is a defect the day a PWA module first imports this one.
-// Nothing under `pwa/src` imports this file TODAY (it reaches for `shared/api`
-// and `shared/roster`), and saying otherwise would be a false fact sitting next
-// to a true rule — this repo reads its comments as history.
+// Since centralised-update wave 14 `pwa/src` does import it, through
+// `shared/update-move.ts` (UPDATE_OP; D-4266), so the rule is now also a fact
+// about a bundled file — this repo reads its comments as history.
 import type { BuildInfo } from './buildinfo.js';
+import type { DiskMeasured } from './disk.js';
+import {
+  ACCOUNT_OP_KILL_GRACE_MS, ACCOUNT_SUB_TIMEOUT_MS, isReleaseTag, isRequestKind, type AccountSub, type InFlightReport,
+  type RequestKind,
+} from './api.js';
+import { ACCOUNT_ARGV_REFUSALS, type AccountArgvRefusal } from './account-argv.js';
+import { TESTBOX_ADMIN_ARGV_REFUSAL_MAP, type TestboxAdminArgvRefusal, type TestboxAdminFields, type TestboxAdminSub } from './testbox-admin.js';
 
 export interface AgentHello { t: 'hello'; token: string }
 /** `ccdVerbs` is what `ccd caps` printed on the AGENT's box at start —
@@ -59,8 +66,281 @@ export interface AgentHello { t: 'hello'; token: string }
  *  disagree". A stamp that fails validation is omitted too, never forwarded as
  *  a partial: a `build` whose `sha` is absent compares unequal to the server's
  *  sha and would manufacture a skew alarm out of a file the fleet host could
- *  not read. */
-export interface AgentReady { t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string; build?: BuildInfo }
+ *  not read.
+ *
+ *  `observedEpoch` is the epoch of the pool projection this node has actually
+ *  got, or `null` when it has none. ABSENT from an older agent, which is NOT
+ *  the same as `null`: absent means "this build cannot tell you", null means
+ *  "I have never synced". The reader keeps them apart
+ *  (`observedEpoch === undefined` -> unknown).
+ *
+ *  THIS VALUE HAS HANDSHAKE CADENCE, not `ccd-pool-sync`'s 60s cadence — it is
+ *  sampled once, when the WS connects, and the connection lives for days
+ *  while nothing re-samples it (the heartbeat is a bare ping/pong). A server
+ *  that treated it as a continuously-refreshing fact would show "in sync"
+ *  forever from the first `ready` frame onward, including for a node that
+ *  synced once and then stopped. Item 1 (wave-1 fix round A) is exactly that
+ *  bug: the server no longer reads this field as the pools wire's
+ *  `observedEpoch` authority — `server/src/pools.ts`'s own tick-based reader
+ *  of `$REG/pool-epoch` (via `FleetIO.readFileMeasured`, sharing
+ *  {@link parseObservedEpochDoc} with this frame's own producer) is. This
+ *  field still rides the wire — additive-only forbids removing a field an
+ *  older server reads — and `remote/client.ts`'s `onReady` still parses it
+ *  into `FleetState.observedEpoch`, but that field is no longer consumed by
+ *  the pools wire; see that handler's own comment for what, if anything,
+ *  still reads it.
+ *
+ *  `ops` names the request ops this agent answers beyond the closed set every
+ *  agent has always had (design 2026-09-20 §8/§10) — `['update']` from W4's
+ *  agent. ABSENT from every agent before that, and absence is tolerated and
+ *  grants nothing: the server's one reader (`remote/client.ts`'s
+ *  `readReadyOps`) reads an absent field, a non-array, and a list with any
+ *  word off `CAP_WORD` or more than `MAX_CAP_WORDS` words as the same `[]` —
+ *  "this link named no op I may send" — which the inventory stores as `''`
+ *  and which is NOT the server row's `NULL` ("no agent at all", decision 11).
+ *  Unlike `observedEpoch` above, handshake cadence is the RIGHT cadence for
+ *  this field: the ops an agent process answers cannot change without that
+ *  process restarting, and a restart is a new `ready`. */
+export interface AgentReady {
+  t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string; build?: BuildInfo;
+  observedEpoch?: number | null;
+  /** The op words defined for this list are `UPDATE_OP` (`'update'`), which programme wave 5's agent sends, and
+   *  `TOKEN_SYNC_OP` (`'token-sync'`, box-token lifecycle wave 1); `readReadyOps` reads them. */
+  ops?: string[];   // ADDITIVE (design 2026-09-20 §8/§10): the ops this agent answers; absent from every agent before W4
+}
+
+/**
+ * The pool-epoch projection's own FILENAME — `$REG/pool-epoch` on the fleet
+ * box, `~/.cc-sessions/pool-epoch` read from `$HOME`. `POOLS_DIR_NAME`
+ * (`server/src/pools.ts`) is this constant's DIRECTORY sibling, created the
+ * same way for the same reason; this one names the single FILE the
+ * projection is published as, sitting beside that directory in the same
+ * registry root.
+ *
+ * Item 17 (final fix round): five shipped files across three languages held
+ * this literal with no single source — `ccd/ccd-pool-sync` (the WRITER, bash
+ * and python), `ccd/ccd` (the placement reader, `_acct_pool_state`),
+ * `ccd/ccrc-doctor-checks` (the doctor, `_check_pool-sync`), and this
+ * constant's own two TypeScript readers (`server/src/pools.ts`'s
+ * `readObservedEpochFromRegistry`, `agent/src/server.ts`'s
+ * `readObservedEpoch`). `shared/agent-protocol.ts` is the home rather than
+ * either package's own `src/`, for the same reason `OBSERVED_EPOCH_NUM` and
+ * `ReadFailure` are here: neither package's tsconfig `include`s the other's
+ * `src/`, so a production import across that boundary is not the supported
+ * shape, and this constant is read by both. The three bash/python spellings
+ * cannot import it — bash cannot import a TypeScript constant —
+ * `pool-name-parity.test.ts` holds them byte-equal to this value by text
+ * scan instead, exactly as it already does for `POOL_NAME_RE` and
+ * `POOLS_DIR_NAME`. The WRITER's spelling matters most: a rename there alone
+ * leaves every reader answering "never synced" forever — fail-shut, so not
+ * dangerous, but the whole feature silently stops with no red anywhere.
+ */
+export const POOL_EPOCH_FILE_NAME = 'pool-epoch';
+
+/**
+ * The `~/.ccrc` NODE FILES — design 2026-09-20 §8's EXACT-BASENAME set, the
+ * one agent read grant that is not a directory prefix. Declared here, and not
+ * in either package's `src/`, for `POOL_EPOCH_FILE_NAME`'s reason above: the
+ * agent's `checkPath` (`agent/src/whitelist.ts`) admits exactly these names
+ * and the server's inventory sweep (`server/src/update/inventory.ts`) reads
+ * exactly these names, and a name spelled twice is a sweep that reads a file
+ * the agent refuses — `unreadable` forever, with no red anywhere.
+ *
+ * `~/.ccrc` ALSO holds `agent.env` (this agent's own bearer), `auth.scrypt`,
+ * `coord.db`, `deploy.env` and every other secret-bearing file `ccd/ccrc`
+ * writes. Nothing may ever be added to this object that names one of them —
+ * the grant derives from it, so an entry here IS a read grant.
+ * `projection` (`update-intent`) is in the set so the server can SHOW what a
+ * fleet node last received; it is never read back as authority (§8).
+ *
+ * Writers: `ccd/ccrc` writes `build.json`, `installed`, `ccrc-caps`, `floor`
+ * and `node-id` today (its `BOX_*_FILE` constants — bash cannot import this,
+ * so those spellings are its own); `previous` and `update.json` are W4's; the
+ * server process writes its OWN box's `update-intent` from W2, and W4's
+ * `ccd-update-sync` writes a fleet node's. A name read before its writer
+ * exists answers `absent`, which is the truth about that node.
+ *
+ * `tokenGeneration` (`box-token-generation`, box-token lifecycle wave 1, spec
+ * 4.5) is the ninth: one line, the 16-hex id of the box-token generation the
+ * node last wrote (`ccrc token sync` on a fleet node, the server's both-role
+ * writer on a both box). It holds an id, never a value, which is the only
+ * reason it may join this object. The server's token driver reads it on its
+ * own tick (D-4389), so the inventory sweep's `MEASURED_FILE_KEYS` leaves it
+ * out, as it leaves out `projection`.
+ *
+ * `tmpSweep` (`tmp-sweep.json`, fleet disk retention DR-12, D-6624) is the tenth: the tmp sweep's census, which
+ * `ccd/ccd-tmp-sweep` replaces whole each pass. The server's census lane reads it on its own tick
+ * (`server/src/tmpSweep.ts` parses it), so the inventory sweep's `MEASURED_FILE_KEYS` leaves it out too: it has its own
+ * reader, and its size (a thousand `moved` rows) is past the inventory's 64 KiB file cap.
+ *
+ * `boxSettings` (`box-settings.json`, box settings view, D-6916) is the eleventh: what `ccrc settings --write` records every five
+ * minutes. Version 1 holds the seven named settings; the server checks each version-1 `ok` value or origin against the same envelope
+ * as version 2, drops a version-1 refused row's value and why, rewrites an `ok` row outside the envelope as `unmeasured`, and cuts an
+ * unmeasured why to 240 before any console sees it (D-7911). Version 2 holds the 61 a fleet or server node reads, by display class,
+ * where only an `ok` row of class `value` or `origin` carries a value, and the server checks that value or origin against the
+ * setting's class and a refused row's `why` against the closed set (D-7913). An `unmeasured` row's `why` in either version is bounded
+ * text the box wrote (printable ASCII, at most 240), never checked against a closed set. The server's box-settings lane reads the
+ * file on the inventory's own run (`server/src/update/boxSettingsLane.ts`), so the sweep's `MEASURED_FILE_KEYS` leaves it out too: it
+ * has its own reader and its own parse.
+ */
+export const CCRC_DIR_NAME = '.ccrc';
+/** The history programme's W3 steer markers' directory under `~/.ccrc` (`<CCRC_DIR_NAME>/history/steer-on/<registry id>`, the file
+ *  the session hook's W3 gate reads). The agent admits a `stat` of one marker by it (`checkSteerOnStat`), and the server's
+ *  launch-profile lane names the path by it. A second spelling of `ccd/history/lib.mjs`'s `SWITCHES.steerOnDir` (bare Node,
+ *  another package), held equal to it by `continuity-profile-lane.test.ts`. */
+export const HISTORY_STEER_ON_DIR = 'history/steer-on';
+export const NODE_FILES = {
+  stamp: 'build.json', installed: 'installed', caps: 'ccrc-caps', floor: 'floor', previous: 'previous',
+  nodeId: 'node-id', report: 'update.json', projection: 'update-intent',
+  tokenGeneration: 'box-token-generation',
+  tmpSweep: 'tmp-sweep.json',
+  boxSettings: 'box-settings.json',
+} as const;
+export type NodeFileKey = keyof typeof NODE_FILES;
+/** The eleven names as one list, DERIVED — the agent's admission set and every
+ *  scan over it read this, never a restatement. */
+export const NODE_FILE_BASENAMES: readonly string[] = Object.values(NODE_FILES);
+
+/** The lane-state directory's name inside `~/.cc-sessions` (D-5517, D-5755): `~/.cc-sessions/.accounts/<id>.json`,
+ *  written by `deploy/account-op.mjs`'s `lane-state` op (bare Node, which spells it once in `laneStateDir`). Read by
+ *  the server's `readLaneStates` (`server/src/limits.ts`) over the agent's `read` op, which opens a file directly in
+ *  this directory with `O_NOFOLLOW`, so a symlink planted at a lane's name reads as unreadable, never as its target
+ *  (accounts plan Task A12; D-5755 (13d)). */
+export const LANE_STATE_DIR_NAME = '.accounts';
+
+/** What a lane-state open must still hold once the file is open (D-6058 (2), (5)), on both arms (the agent's
+ *  `openRegular`, the server's `localIO.readFileMeasured`): `O_NOFOLLOW` guards only the last name, so the handle must
+ *  be the one regular file at that name (`lstat`, same device and inode), have no second name (`nlink` 1, so no
+ *  hardlink lends it another file's bytes), and sit in a real directory that is not a symlink. Pure: the caller
+ *  passes the three stats it took AFTER the open, and treats `false` as unreadable. */
+export function laneStateOpenHolds(
+  opened: { dev: number; ino: number; nlink: number; isFile(): boolean },
+  atName: { dev: number; ino: number; isSymbolicLink(): boolean },
+  dir: { isDirectory(): boolean; isSymbolicLink(): boolean },
+): boolean {
+  return opened.isFile() && opened.nlink === 1 && !atName.isSymbolicLink()
+    && atName.dev === opened.dev && atName.ino === opened.ino && dir.isDirectory() && !dir.isSymbolicLink();
+}
+
+/** The shape of a node id, `NODE_FILES.nodeId`'s one line: the lowercase uuid `_inst_node_id` mints and nothing else,
+ *  so an uppercase, padded or CR-terminated `~/.ccrc/node-id` never becomes a row key or a `fleetIdentity`. Declared
+ *  ONCE, here, beside the file it reads (moved from `server/src/coord/store.ts`, which re-exports it, so the agent's
+ *  `account` op can answer `fleetIdentity` with the same grammar, D-5622). */
+export const NODE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * The `$REG/pool-epoch` document's numeric sub-grammar — `_acct_pool_state`'s
+ * own `numRe` (declared at its top, shared by `epoch`/`issued`/`lease`) and
+ * `ccd-pool-sync`'s own `NUM` (`ccd/ccd-pool-sync:156`): zero, or a non-zero
+ * digit followed by any digits — no leading zero, because the control
+ * plane's `%d` can never produce one.
+ *
+ * D-3086 (item 1, wave-1 fix round A): this constant
+ * and {@link parseObservedEpochDoc} moved here from `agent/src/server.ts`,
+ * where task 8/9 first wrote them as a LOCAL, unexported grammar for the
+ * agent's own handshake reader (`readObservedEpoch`). Item 1 gives the
+ * SERVER its own reader of the identical file (`server/src/pools.ts`,
+ * `FleetIO.readFileMeasured` in place of `readFileSync`) and the brief that
+ * ordered it is explicit that there must be exactly one parser, not two
+ * hand-typed copies of one grammar — `shared/` is this repo's established
+ * home for a grammar both `agent/` and `server/` need (D-1438 moved
+ * `ReadFailure` here for the identical reason, and its own comment records
+ * why: neither side's tsconfig `include`s the other's `src/`, so a
+ * production import across that boundary is not the supported shape here).
+ * `agent/src/server.ts` re-exports this constant so
+ * `pool-epoch-numeric-parity.test.ts`'s existing import keeps resolving
+ * unchanged.
+ *
+ * Exported as a non-capturing group (the same shape as the python spelling)
+ * rather than inlined into {@link parseObservedEpochDoc}'s own line regex, so
+ * `pool-epoch-numeric-parity.test.ts` can hold all three spellings
+ * byte-equal instead of trusting a comment that CLAIMS agreement — which is
+ * exactly what the previous version of this file did (review T8-R1, F5): the
+ * leading-zero fix tightened this reader to agree with bash's `numRe` on the
+ * strength of prose, and nothing checked that the prose was still true.
+ */
+export const OBSERVED_EPOCH_NUM = '(?:0|[1-9][0-9]*)';
+
+/** Matches a well-formed `epoch <n>` line ANYWHERE in the document, not only
+ *  the first line: `_acct_pool_state`'s own per-line parser is order-agnostic
+ *  (its `while` loop, whose `case "$k" in` dispatches on each line's KEY,
+ *  not a positional read; the terminator check just before the loop is not
+ *  the loop, review T8-R2 M2), so this reader must not be stricter than the
+ *  format actually is. */
+const EPOCH_LINE_RE = new RegExp(`^epoch (${OBSERVED_EPOCH_NUM})$`, 'm');
+
+/** Matches ANY line KEYED `epoch` — the same first-token test
+ *  `_acct_pool_state` makes (`k=${line%% *}`), regardless of
+ *  whether the rest of the line is a well-formed value. Used only to COUNT
+ *  such lines (review T8-R2, I2, Ruling): bash refuses a document carrying
+ *  two, and the reason (its `epoch` arm's comment, "nothing says which value is
+ *  true") is a statement about the epoch ITSELF — the exact fact this field
+ *  exists to report — not one of the placement-trust questions the rest of
+ *  that grammar answers and this reader defers (a duplicate `issued`/
+ *  `lease`/`acct` line, a second `end`, …). */
+const EPOCH_KEYED_LINE_RE = /^epoch(?: .*)?$/gm;
+
+/**
+ * Parses the `$REG/pool-epoch` document's own epoch field out of BYTES the
+ * caller already has — this function reads no file itself; `readObservedEpoch`
+ * (`agent/src/server.ts`, `readFileSync`) and `readObservedEpochFromRegistry`
+ * (`server/src/pools.ts`, `FleetIO.readFileMeasured`) each get the bytes
+ * their own way and hand them here, so the two cannot drift on what counts as
+ * a usable epoch.
+ *
+ * `null` means the document does not prove a usable epoch — a fact about the
+ * DOCUMENT'S content, never about how the bytes were obtained:
+ *
+ * 1. THE TERMINATOR (review T8-R1, F1). The document must end, after
+ *    stripping AT MOST one trailing newline, in a line that is exactly `end`
+ *    — the same structural check `_acct_pool_state` makes
+ *    (its `end` check) before it parses a single field, because a
+ *    line-oriented reader has no other way to tell a torn final row from a
+ *    complete one. This is a PROVENANCE check, not a usability one: an
+ *    unterminated document may be a FRAGMENT of a PREVIOUS one, and a number
+ *    reported off it UNDER-reports lag — the worse failure, because nobody
+ *    goes looking for a silence.
+ * 2. EXACTLY ONE `epoch`-KEYED LINE (review T8-R2, I2, Ruling). Zero is "no
+ *    epoch line" (unreadable as a projection at all); two or more is a
+ *    self-contradiction this parser cannot resolve — the same
+ *    direction-of-error argument as the terminator.
+ * 3. THAT ONE LINE'S OWN GRAMMAR AND PRECISION ({@link EPOCH_LINE_RE},
+ *    {@link OBSERVED_EPOCH_NUM}, plus the round-trip check below — review
+ *    T8-R2, M1). `Number(...)` on a digit run requiring ≥ 2^53 to represent
+ *    exactly silently ROUNDS — forwarding the rounded value would let the
+ *    server's own wire-level validator (`remote/client.ts`,
+ *    `Number.isSafeInteger`) discard it as off-grammar and record
+ *    `undefined` for a node that plainly has a real epoch. Refusing HERE,
+ *    where the content is, means the caller gets `null` — a fact this
+ *    document can prove — instead of a fabricated number a downstream reader
+ *    takes for absence.
+ *
+ * Everything else in `_acct_pool_state`'s grammar — a duplicate `issued`/
+ * `lease`/`acct` line, a second `end`, an off-grammar `acct` row, a NUL byte,
+ * the 64 KiB cap, `issued`/`lease`'s own numeric validation, lease-staleness —
+ * is NOT re-implemented here. Those exist to decide whether a TAG may be
+ * trusted for PLACEMENT, a different question from the one this field
+ * answers: "what epoch does this node have", true of a stale projection too —
+ * staleness stays `_acct_pool_state`'s own concern.
+ */
+export function parseObservedEpochDoc(text: string): number | null {
+  // The SAME strip-then-check algorithm `_acct_pool_state` uses
+  // (its `tail` strip and `end` check): at most ONE trailing newline is stripped, so a
+  // SECOND one (content after the terminator, even a blank line) leaves the
+  // true last line empty, not `end`, and is refused.
+  const stripped = text.endsWith('\n') ? text.slice(0, -1) : text;
+  const lastNewline = stripped.lastIndexOf('\n');
+  const lastLine = lastNewline === -1 ? stripped : stripped.slice(lastNewline + 1);
+  if (lastLine !== 'end') return null;
+  const epochKeyedLines = text.match(EPOCH_KEYED_LINE_RE) ?? [];
+  if (epochKeyedLines.length !== 1) return null;
+  const m = EPOCH_LINE_RE.exec(epochKeyedLines[0]!);
+  if (m === null) return null;
+  const digits = m[1]!;
+  const n = Number(digits);
+  if (String(n) !== digits) return null;
+  return n;
+}
 
 /** `ccd caps` output -> the list both readers keep: one token per non-empty
  *  line shaped like a bash identifier (`/^[a-z][a-z0-9-]*$/`) — verbs AND
@@ -87,24 +367,444 @@ export function parseCcdCaps(stdout: string): string[] {
 }
 export interface ExecReq   { t: 'req'; id: number; op: 'exec'; cmd: string; args: string[]; timeoutMs?: number }
 export interface ReadReq   { t: 'req'; id: number; op: 'read'; path: string }
-export interface ReadFromReq { t: 'req'; id: number; op: 'readFrom'; path: string; offset: number }
+/** `maxBytes` is ADDITIVE (delegation wave 3): an older caller omits it and gets the answer it always got, key for key.
+ *  Present, the agent reads no more than `maxBytes` bytes from `offset` and additionally answers `dataB64`, the canonical
+ *  base64 of exactly the bytes it read (see `isReadFromRange` for what a valid request is). It is the same op with one
+ *  optional field — no new op, no ready-frame word, no `FLEET_PROTO` bump. */
+export interface ReadFromReq { t: 'req'; id: number; op: 'readFrom'; path: string; offset: number; maxBytes?: number }
 export interface ReadB64Req { t: 'req'; id: number; op: 'readB64'; path: string }
-export interface ReaddirReq{ t: 'req'; id: number; op: 'readdir'; path: string }
+/** `times` is ADDITIVE (console speed S1): an agent that lists `READDIR_MTIMES_OP` in `ready.ops` answers
+ *  `times: Record<name, mtimeMs>` beside `names`; an older caller omits it and gets the answer it always got. */
+export interface ReaddirReq{ t: 'req'; id: number; op: 'readdir'; path: string; times?: true }
 export interface StatReq   { t: 'req'; id: number; op: 'stat'; path: string }
+/** The PATH's own type, never its target's — the one question `stat` cannot
+ *  answer because it follows. Its own op rather than a field on `stat` for
+ *  the reason `agent/src/fileops.ts`'s `StatResult` records for declining an
+ *  `lstat` ladder there: a second syscall on every field read, to separate a
+ *  state no ccd verb produces. That argument is about the HOT path and holds;
+ *  it says nothing about a caller that asks only where the answer decides
+ *  something, which is the only caller this op has. */
+export interface LstatReq  { t: 'req'; id: number; op: 'lstat'; path: string }
 export interface CapsReq   { t: 'req'; id: number; op: 'caps' }
 export interface WriteB64Req { t: 'req'; id: number; op: 'writeB64'; path: string; dataB64: string }
 export interface TailOpenReq { t: 'req'; id: number; op: 'tailOpen'; path: string; offset: number }
 export interface TailCloseReq{ t: 'req'; id: number; op: 'tailClose'; tailId: number }
 export interface PtyOpenReq  { t: 'req'; id: number; op: 'ptyOpen'; sessionId: string; cols: number; rows: number }
+/** Design 2026-09-20 §10: ONE member of the existing `req` envelope, not a new
+ *  top-level frame. `kind` absent means `'update'` (the agent's `validateReq`
+ *  fills it in). `tag` passes `isReleaseTag` before any case body sees it — a
+ *  failure answers `bad-tag`, never `bad-request`, which from this op means
+ *  exactly one thing: the agent predates it. */
+export interface UpdateReq { t: 'req'; id: number; op: 'update'; tag: string; kind?: RequestKind }
+/** Box-token lifecycle spec 4.4: ONE member of the `req` envelope. `code` is the only field and passes `isClaimCode`
+ *  in the agent's `validateReq` before any case body sees it; a failure answers `bad-code`, never `bad-request`. It
+ *  carries no URL, path, value or argv: the fleet box reaches the server at the address it already has. */
+export interface TokenSyncReq { t: 'req'; id: number; op: 'token-sync'; code: string }
 export interface PtyInput    { t: 'pty'; ptyId: number; ev: 'input'; dataB64: string }
 export interface PtyResize   { t: 'pty'; ptyId: number; ev: 'resize'; cols: number; rows: number }
 export interface PtyClose    { t: 'pty'; ptyId: number; ev: 'close' }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq;
+/** Accounts plan Task A8 (spec §13.2, D-5513, D-5622): ONE member of the `req` envelope, the typed `ccrc account <sub>`
+ *  op. `laneId` names the lane (the envelope's `id` is the request number), `null` for the subs that name none.
+ *  `fields` are typed values the agent's builder (`shared/account-argv.ts`) turns into flags, never argv; `stdinB64`
+ *  is the secret or code, the child's stdin, never logged. Every argument failure is answered `ok: true` with
+ *  `kind: 'refused'` and the node's `fleetIdentity` (`AccountOpAnswer`), never `bad-request`, which from this op
+ *  means "the agent predates it". */
+export interface AccountOpReq {
+  t: 'req'; id: number; op: 'account'; sub: AccountSub; laneId: string | null; fields: Readonly<Record<string, string>>; stdinB64?: string;
+}
+/** Fleet disk retention spec §2.5 (D-6614): ONE member of the `req` envelope, the agent's `disk` op. It carries NO
+ *  field: the agent measures its own work roots (`DISK_WORK_ROOTS`), so no path ever crosses the link in a request.
+ *  A frame with any extra field is a malformed frame (`bad-request`), the same word an agent that predates the op
+ *  answers. */
+export interface DiskReq { t: 'req'; id: number; op: 'disk' }
+/** Test box connect spec §2.1 (D-8166): ONE member of the `req` envelope, the typed `ccrc testbox-admin <sub>` op, the
+ *  FIFTH wire-triggered spawn. `fields` is the type the builder (`shared/testbox-admin.ts#buildTestboxAdminArgv`) takes,
+ *  carried as the JSON it is; the agent hands it to the builder unchanged. NO stdin: no secret crosses the wire (§2.3).
+ *  Every argument failure is answered `ok: true` with `kind: 'refused'` and the node's `fleetIdentity`, never
+ *  `bad-request`, which from this op means "the agent predates it". */
+export interface TestboxAdminReq { t: 'req'; id: number; op: 'testbox-admin'; sub: TestboxAdminSub; fields: TestboxAdminFields }
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq|TestboxAdminReq|BackupReq|OverlordHistoryReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
-export interface ResErr { t: 'res'; id: number; ok: false; err: string }
+/** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
+ *  agent can say beyond the word — the `--detach` parent's first stderr line,
+ *  what `update.json` said. Absence permits: every op but `update` sends none,
+ *  and an agent from before the field sends none. Its ONE reader is
+ *  `server/src/remote/client.ts`'s `AgentOpError`. No `FLEET_PROTO` bump. */
+export interface ResErr { t: 'res'; id: number; ok: false; err: string; detail?: string }
 // exec → {code, stdout, stderr}; read → {data: string|null, absent?: true}; readFrom → {data: string, size: number}|{data: null, absent?: true};
-// readB64 → {dataB64: string|null, absent?: true, tooLarge?: true, size?: number}; readdir → {names: string[]|null}; stat → {mtimeMs, size}|{missing: true, absent?: true};
-// writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}
+//   readFrom WITH `maxBytes` → {data: string, dataB64: string, size: number}|{data: null, absent?: true}: `data` is the old lossy UTF-8
+//   decode of the bounded bytes, `dataB64` their canonical base64, and a reader that needs the BYTES reads `dataB64` alone — an older agent
+//   ignores `maxBytes` and sends no `dataB64`, which a byte reader must take as unmeasured, never as text to re-encode;
+// readB64 → {dataB64: string|null, absent?: true, tooLarge?: true, size?: number}; readdir → {names: string[], times?: Record<string, number>}|{names: null, absent?: true}
+//   (`absent` only on a proven ENOENT; an older agent sends a bare {names: null} for every failure, which is unmeasured, never absent);
+//   stat → {mtimeMs, size}|{missing: true, absent?: true};
+// lstat → {kind: 'regular'|'symlink'|'other'}|{missing: true, absent?: true}. TWO positive markers and no
+//   silent third answer: an agent that does not implement this op fails the request outright
+//   (`not-implemented`), so the server reads UNMEASURED rather than mistaking an older peer's
+//   silence for `regular` — the D-114 shape, in the one direction that matters here, because
+//   `regular` is the only answer that lets a caller condemn anything.
+// writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}; update → {accepted: true, detail?: string} (D-3413: `detail` only from the bound's arms B and D)
+// token-sync → {synced: <16 hex>, transport?: 'http'|'https'} (transport ADDITIVE; its one reader is readTokenTransport)
+// account → AccountOpAnswer: {fleetIdentity, kind, …} for every outcome, a refusal included (its one reader is readAccountOpAnswer)
+// disk → DiskOpReply = DiskMeasured: {filesystems, expectedMounts, missing} (its one decider is server/src/disk.ts's diskVerdict)
+
+// ── the `update` op (design 2026-09-20 §10) ─────────────────────────────────
+// Everything both ends of the op must agree on is declared here, once. The
+// agent (`agent/src/server.ts`) spawns from these templates. The server's
+// dispatcher spawns its OWN node from the same two calls
+// (`server/src/update/converge.ts`) and maps the same words
+// (`server/src/update/dispatch.ts`'s `classifyOpAnswer`). Bash cannot import this, so `ccd/ccrc`
+// spells its side itself (`UPD_FROM_WORDS`, the `--detach`/`--to` parser), and
+// wave 4's tests hold that side.
+
+/** The op's name — and the one word an agent that answers it lists in `ready.ops`. */
+export const UPDATE_OP = 'update';
+
+/** D-3370 — the ONLY words the agent's `update` case
+ *  answers with. `ResErr.err` has no closed vocabulary (every other op's words
+ *  are free strings), so this op's own are declared here. The dispatcher's
+ *  answer mapping switches over `UpdateOpError` with a `never` arm, so a word
+ *  added on one side alone is a compile error. `bad-request` is deliberately
+ *  NOT a member: it is the envelope's word for an op `validateReq` does not
+ *  know, which from this op means the agent predates it.
+ *
+ *  `not-queued` (D-3413, fix round 1 item 2) is the one word the bound's arm A needs across the link: the `--detach`
+ *  parent was stopped at `UPDATE_SPAWN_TIMEOUT_MS` BEFORE it queued anything (the box's `update.json` read the same
+ *  before and after, and the parent's stdout, read to EOF, carried neither the `update.json` WARN nor the `detached`
+ *  line), so nothing started and the server releases the row `idle` with the request standing. It is not `busy`
+ *  (busy means ANOTHER actor is updating, and no one is) and not `spawn-failed` (which halts, and this is no fault).
+ *  No skew hazard: only a wave-5 server ever sends the op, and this word ships inside wave 5. */
+export const UPDATE_OP_ERRORS = ['bad-tag', 'bad-kind', 'busy', 'spawn-failed', 'not-queued'] as const;
+export type UpdateOpError = (typeof UPDATE_OP_ERRORS)[number];
+/** Use THIS, never `UPDATE_OP_ERRORS.includes(x as UpdateOpError)` — `isRunState`'s rule. */
+export function isUpdateOpError(v: unknown): v is UpdateOpError {
+  return typeof v === 'string' && (UPDATE_OP_ERRORS as readonly string[]).includes(v);
+}
+
+/** The `--from` word every console-driven move carries — a member of wave 4's
+ *  `UPD_FROM_WORDS` (`ccd/ccrc`), which refuses any other at exit 2. */
+export const UPDATE_OP_FROM = 'pwa';
+
+/** `$HOME/.local/bin/ccrc` as parts: the installed shim, ABSOLUTE (§18 "the
+ *  spawn argv is absolute"). A systemd user unit's PATH does not carry
+ *  `~/.local/bin` (the reason `resolveSpawnCmd` exists for `ccd`), and a bare
+ *  name would run whatever PATH found first. Spelled here once, and
+ *  `single-definition.test.ts` holds it to this file. */
+export const UPDATE_LAUNCHER_PARTS = ['.local', 'bin', 'ccrc'] as const;
+
+/** `<home>/.local/bin/ccrc`. Throws `RangeError` unless `home` is absolute
+ *  (`/`-led) with no trailing `/`: that is a caller bug (the agent's
+ *  `cfg.home`, the server's own `cfg.home`), never something to spawn. Joined
+ *  by hand because L0 imports no `node:path`. */
+export function updateLauncherPath(home: string): string {
+  if (!home.startsWith('/') || home.endsWith('/')) {
+    throw new RangeError(`updateLauncherPath: home must be absolute with no trailing slash (got ${JSON.stringify(home)})`);
+  }
+  return [home, ...UPDATE_LAUNCHER_PARTS].join('/');
+}
+
+/** THE TWO TEMPLATES (spec §10): `[kind, '--to', tag, '--detach', '--from',
+ *  UPDATE_OP_FROM]`. The spawn is therefore `ccrc update --to <tag> --detach
+ *  --from pwa` or `ccrc rollback --to <tag> --detach --from pwa`, with `tag` the
+ *  only variable token. Throws `RangeError` unless `isRequestKind(kind)` and
+ *  `isReleaseTag(tag)`. The tag guard runs AGAIN here, though the agent's
+ *  `validateReq` ran it first, so an edit that lets an unvalidated tag through
+ *  the shape gate still never reaches `execFile`. Frozen: a caller cannot
+ *  append a flag to a template. */
+export function updateSpawnArgv(kind: RequestKind, tag: string): readonly string[] {
+  if (!isRequestKind(kind)) {
+    throw new RangeError(`updateSpawnArgv: kind must be update or rollback (got ${JSON.stringify(kind)})`);
+  }
+  if (!isReleaseTag(tag)) {
+    throw new RangeError('updateSpawnArgv: tag is not a release tag (vX.Y.Z) — a caller bug; nothing was spawned');
+  }
+  return Object.freeze([kind, '--to', tag, '--detach', '--from', UPDATE_OP_FROM]);
+}
+
+/** D-3374 — the agent's bound on the `--detach` parent, and the
+ *  server-role local spawn's. The parent is not instant: `ccrc rollback
+ *  --detach` asks the release host whether the tag exists before it detaches
+ *  (wave 4 Task 7), within `CCRC_RELEASE_PROBE_MAX_TIME` (`ccd/ccrc`, 15 s by
+ *  default), which wave 4 sized to sit under this value, so a silent release host
+ *  answers as that verb's own refusal, not as this bound's timeout. */
+export const UPDATE_SPAWN_TIMEOUT_MS = 20_000;
+/** The server's `FleetClient.request` deadline for THIS op only (the client's
+ *  default is 15 s). Held strictly above `UPDATE_SPAWN_TIMEOUT_MS` by a test.
+ *  The agent's answer, even "the parent timed out", therefore always arrives
+ *  before the server gives up, so a timeout never releases a lease while a
+ *  node is still starting a run. */
+export const UPDATE_OP_TIMEOUT_MS = 30_000;
+/** How long, after the `--detach` parent has EXITED, the bounded spawner still waits for its stdout to reach
+ *  EOF before it answers with `stdout: null`. A grandchild that left the parent's process group (setsid) and
+ *  still holds the pipe would otherwise keep `close` from ever firing. The whole answer therefore arrives within
+ *  `UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS` of the spawn (the drain is ONE deadline, armed by the kill or by
+ *  the exit, whichever comes first — never restarted), and that sum plus the op's bounded reads before and after it must
+ *  stay below `UPDATE_OP_TIMEOUT_MS`, so the agent always answers before the server gives up on the op (a test pins
+ *  the sum). */
+export const UPDATE_SPAWN_DRAIN_MS = 2_000;
+
+/** What the bounded update spawner answers, on both roles (the agent's `makeUpdateSpawn`, the server's
+ *  `localUpdateSpawnFor`). `stdout` is the parent's WHOLE stdout read to EOF, or `null` when EOF was not reached
+ *  within `UPDATE_SPAWN_DRAIN_MS` of the parent's exit, or the capture cap was hit: `null` is "not measured", never
+ *  "empty". `pid` is the spawned parent's pid, null only when the spawn itself failed. `killed` is true when the
+ *  bound fired and the whole process group was sent SIGKILL. */
+export interface UpdateSpawnResult { code: number; stdout: string | null; stderr: string; killed: boolean; pid: number | null }
+/** The bound on `ResErr.detail`. It is 200, the same as W2's
+ *  `REPORT_DETAIL_MAX` for `update.json`'s own detail. */
+export const UPDATE_OP_DETAIL_MAX = 200;
+
+/** What a `spawn-failed` answer carries (spec §10, D-3372).
+ *  Each line of the `--detach` parent's stderr is cleaned by W2's
+ *  `printableDetail` rule: every run of characters outside printable ASCII
+ *  (0x20–0x7E) becomes one space, then the ends are trimmed. The first line
+ *  with anything left in it is the answer, cut to `UPDATE_OP_DETAIL_MAX`. With
+ *  no such line the answer is `'no message'`, never an empty detail. */
+export function firstStderrLine(stderr: string): string {
+  for (const raw of stderr.split('\n')) {
+    const line = raw.replace(/[^\x20-\x7e]+/g, ' ').trim();
+    if (line !== '') return line.slice(0, UPDATE_OP_DETAIL_MAX);
+  }
+  return 'no message';
+}
+
+/** D-3411 — the sentence the `--detach` parent's lock probe dies with, as the PREFIX both roles match. Wave 4's
+ *  `_upd_busy_die` (`ccd/ccrc`) prints `ccrc: update: another update holds ~/.ccrc/update.lock (<holder>)` to
+ *  stderr through `_ccrc_die`, whose `$PROG: ` prefix is part of the line; the parenthesised holder varies. It is
+ *  declared ONCE, here: a parent that exits non-zero with THIS as its first stderr line was refused by a lock
+ *  somebody holds, with nothing on the box changed, so the node is BUSY, not faulted. Every other refusal keeps its
+ *  mapping — `_upd_flock_die` (no `flock`) and the probe's unmeasured arm stay `spawn-failed`, because a box that
+ *  cannot measure its own lock has a fault. `agent/test/update-busy-writer.test.ts` and `server/test/update-converge.test.ts`
+ *  run the real `ccd/ccrc` under a held lock and pin this prefix to the line it prints. */
+export const UPDATE_LOCK_HELD_PREFIX = 'ccrc: update: another update holds ~/.ccrc/update.lock';
+/** True iff `line` — the parent's FIRST stderr line, as `firstStderrLine` cleans it — is the lock-held sentence. */
+export function isUpdateLockHeldLine(line: string): boolean {
+  return line.startsWith(UPDATE_LOCK_HELD_PREFIX);
+}
+
+/** What one `process.kill(pid, 0)` did: it returned, or it threw with this errno code (`null`: a throw without a
+ *  string code). Each ROLE supplies the adapter that makes one — L0 imports nothing, not even `node:*`. */
+export type KillProbeOutcome = { threw: false } | { threw: true; code: string | null };
+
+/** D-3411 — THE liveness rule, over the outcome of `kill(pid, 0)`. A call that returns is a live writer, and so is
+ *  `EPERM` (the process exists and is somebody else's). Only `ESRCH` is dead. Any OTHER failure proves nothing about
+ *  the writer, so it reads alive: today's `busy`, the direction that never spawns a second updater onto a run this
+ *  box could not measure. A report whose pid is absent or unreadable never reaches this function; its caller keeps
+ *  `busy`. A pid the kernel has REUSED reads alive (D-3411 names the cost). */
+export function updateWriterAlive(outcome: KillProbeOutcome): boolean {
+  return !outcome.threw || outcome.code !== 'ESRCH';
+}
+
+/** D-3411 — the way out a `busy` detail ends with, on both roles: a live updater (or a lock holder that writes no
+ *  report, a hung `versions --prune`) answers busy on every sweep, so the exit is to ack the row or mend the box
+ *  (ruling (b)). ONE constant, ONE cutter (`withBusyAdvice`): a `busy` detail is never built without it. */
+const BUSY_ADVICE = ' - a live updater that hangs answers busy on every sweep: ack the row or mend the box';
+/** `head` cut to fit, then the advice: the FRONT is cut so the advice at the end is never the part that is lost, and
+ *  the whole stays within `UPDATE_OP_DETAIL_MAX`. */
+function withBusyAdvice(head: string): string {
+  return head.slice(0, UPDATE_OP_DETAIL_MAX - BUSY_ADVICE.length) + BUSY_ADVICE;
+}
+
+/** D-3411 — the busy sentence for an in-flight report, built ONCE for both roles (the agent's `update` op and the
+ *  server-role local spawn). It names the phase, target, start second and the WRITER's pid, then says what the
+ *  operator can do (`withBusyAdvice`). A `target` has no length cap on its numeric parts, so the FRONT is cut. */
+export function inFlightBusyDetail(r: InFlightReport): string {
+  return withBusyAdvice(`update.json says ${r.phase} (target ${r.target ?? 'none'}, started ${r.startedAtS ?? 'unknown'}, writer pid ${r.pid ?? 'unknown'})`);
+}
+
+/** The busy sentence for a LOCK-held refusal: the parent's lock line (`isUpdateLockHeldLine` true) with the same way
+ *  out. A holder that hangs without ever writing a report (a hung watchdog hold, `versions --prune`) answers busy on
+ *  every sweep, so the line alone would leave the operator with no exit named. The line's tail is cut, never the advice. */
+export function lockHeldBusyDetail(line: string): string {
+  return withBusyAdvice(line);
+}
+
+/** D-3411 — whether an in-flight report's writer may still be running, the ONE composition both roles use: a `null`
+ *  pid (absent or unreadable) is not dead, so it may, and a readable pid is asked through the role's own `kill(pid, 0)`
+ *  adapter (`probe`) and judged by `updateWriterAlive`. L0 imports nothing, so the adapter is passed in. */
+export function updateWriterMayLive(pid: number | null, probe: (pid: number) => KillProbeOutcome): boolean {
+  return pid === null || updateWriterAlive(probe(pid));
+}
+
+// ── the bound's outcome, by attributed re-measurement (D-3400 amended, D-3413; fix round 1 item 2) ──────────
+// A `--detach` parent that outlives `UPDATE_SPAWN_TIMEOUT_MS` is killed (its whole group), and neither role may then
+// GUESS what it did. Each role reads `update.json` BEFORE the spawn and AFTER the kill and hands both reads, the
+// parent's stdout (read to EOF, or `null`), its pid and the lease's tag to `decideKilledSpawn`, the ONE decision.
+
+/** One bounded read of `update.json`, in three values that are never folded: its text, proven absent, or unreadable
+ *  (any other failure, a non-regular file, over the cap, past the deadline). */
+export type UpdateReportRead = { kind: 'bytes'; text: string } | { kind: 'absent' } | { kind: 'unreadable' };
+
+/** The first words of the two stdout lines the `--detach` parent can print BEFORE it is stopped, declared once and
+ *  tied to `ccd/ccrc` by a source scan (`server/test/update-killed-arms.test.ts`): `_upd_phase`'s WARN when it could
+ *  not write `update.json`, and `_upd_detach`'s success line. Either one on stdout means the parent got further than
+ *  arm A may assume (a queued write that WARNed, or a unit that was started), so the outcome cannot be arm A. */
+export const UPDATE_PHASE_WARN_PREFIX = 'update: WARN: could not write ~/.ccrc/update.json';
+export const UPDATE_DETACHED_PREFIX = 'update: detached';
+
+/** The report's WRITER and TARGET, read by name from any one-line JSON object, or `null` when the text is not one.
+ *  Not `inFlightReport`: the killed parent's own report may already be in a non-in-flight phase (`failed`), and it is
+ *  still the parent's. `pid` follows `inFlightReport`'s rule (a positive safe integer, else `null`). */
+function reportWriter(text: string): { pid: number | null; target: string | null } | null {
+  let doc: unknown;
+  try { doc = JSON.parse(text); } catch { return null; }
+  if (typeof doc !== 'object' || doc === null || Array.isArray(doc)) return null;
+  const d = doc as Record<string, unknown>;
+  return {
+    pid: typeof d.pid === 'number' && Number.isSafeInteger(d.pid) && d.pid > 0 ? d.pid : null,
+    target: isReleaseTag(d.target) ? d.target : null,
+  };
+}
+
+/** The verdict on a KILLED spawn. `A` releases the lease `idle` (the request stands, nothing started): it travels as
+ *  `not-queued`. `B` and `D` HOLD it (as `accepted`); the detail is what the row reads. */
+export type KilledSpawnVerdict = { arm: 'A' | 'B' | 'D'; detail: string };
+
+const stdoutHas = (stdout: string, prefix: string): boolean => stdout.split('\n').some((l) => l.startsWith(prefix));
+const clip = (s: string): string => s.slice(0, UPDATE_OP_DETAIL_MAX);
+
+/** D-3400 (amended), D-3413 — the arms, decided A, then B, then D, and only A ever releases:
+ *  A. `before` and `after` are both READABLE and byte-identical (or absent at both), and `stdout`, read to EOF, has
+ *     neither the WARN line nor the `detached` line. The parent was stopped before its `queued` write, which comes
+ *     before `systemd-run`, so nothing was queued or started.
+ *  B. `after` names the killed parent's own `pid` AND the lease's `tag`: it queued (the run may have started).
+ *  D. anything else: unreadable, a change that is not the parent's, the WARN or `detached` line, no EOF. A change that
+ *     is not the parent's cannot prove our unit never started (our own `queued` may be what was overwritten).
+ *  Every detail is one line within `UPDATE_OP_DETAIL_MAX`, and says what happened. */
+export function decideKilledSpawn(i: {
+  before: UpdateReportRead; after: UpdateReportRead; stdout: string | null; pid: number | null; tag: string;
+}): KilledSpawnVerdict {
+  const { before, after, stdout, pid, tag } = i;
+  const bound = `${UPDATE_SPAWN_TIMEOUT_MS} ms`;
+  const warned = stdout !== null && stdoutHas(stdout, UPDATE_PHASE_WARN_PREFIX);
+  const detached = stdout !== null && stdoutHas(stdout, UPDATE_DETACHED_PREFIX);
+  const unchanged =
+    (before.kind === 'absent' && after.kind === 'absent') ||
+    (before.kind === 'bytes' && after.kind === 'bytes' && before.text === after.text);
+  if (unchanged && stdout !== null && !warned && !detached) {
+    return { arm: 'A', detail: `the --detach parent was stopped at the ${bound} bound before it queued anything; nothing started` };
+  }
+  const written = after.kind === 'bytes' ? reportWriter(after.text) : null;
+  if (written !== null && pid !== null && written.pid === pid && written.target === tag) {
+    return { arm: 'B', detail: clip(`the --detach parent was stopped at the ${bound} bound after it queued ${tag} (pid ${pid}); the run may have started, lease held`) };
+  }
+  const seen: string[] = [];
+  if (before.kind === 'unreadable' && after.kind === 'unreadable') seen.push('update.json was unreadable before and after');
+  else if (before.kind === 'unreadable') seen.push('update.json was unreadable before the spawn');
+  else if (after.kind === 'unreadable') seen.push('update.json was unreadable after the stop');
+  // "Changed" is only a fact when the snapshot was readable: an unreadable before compares with nothing.
+  if (after.kind === 'bytes' && before.kind !== 'unreadable' && !unchanged) {
+    // The parent's OWN pid with another target is the parent's report for another move (arm B took our tag), never
+    // "not by the parent" — that sentence is for a pid that is not the parent's (or that could not be compared).
+    seen.push(written === null ? 'update.json changed to something unparseable'
+      : pid !== null && written.pid === pid
+        ? `update.json changed to the parent's report for another target (${written.target ?? 'none'})`
+        : `update.json changed, but not by the parent (pid ${written.pid ?? 'unknown'}, target ${written.target ?? 'none'})`);
+  }
+  if (after.kind === 'absent' && before.kind === 'bytes') seen.push('update.json was removed');
+  if (warned) seen.push('the parent printed the update.json WARN');
+  if (detached) seen.push("the parent printed 'detached'");
+  if (stdout === null) seen.push('its stdout did not reach EOF');
+  // One line within UPDATE_OP_DETAIL_MAX, and the ending (that it could not be attributed, and what happens to the lease, naming the move)
+  // is never the part that is lost: reasons are taken whole, in order, while they fit, and the rest are counted. The head
+  // is short so an ordinary tag and pid fit whole; a reason that still cannot fit (the longest tag the ingress admits,
+  // twice) is cut only with `...`, never mid-token unmarked, and the count of those left out rides after it.
+  const head = 'stopped at the bound; ';
+  const tail = ` - it could not be attributed; lease for ${tag} held until the report or deadline`;
+  const budget = Math.max(0, UPDATE_OP_DETAIL_MAX - head.length - tail.length);
+  let taken = 0;
+  let text = '';
+  for (const reason of seen) {
+    const next = taken === 0 ? reason : `${text}, ${reason}`;
+    if (next.length + (taken + 1 < seen.length ? ` (+${seen.length - taken - 1} more)`.length : 0) > budget) break;
+    text = next;
+    taken += 1;
+  }
+  if (taken === 0) {
+    const more = seen.length > 1 ? ` (+${seen.length - 1} more)` : '';
+    text = `${seen[0]!.slice(0, Math.max(0, budget - more.length - 3))}...${more}`;
+  } else if (taken < seen.length) text += ` (+${seen.length - taken} more)`;
+  return { arm: 'D', detail: head + text + tail };
+}
+
+// ── the `token-sync` op (box-token lifecycle spec 2026-10-07 §4.4) ─────────────
+// Everything both ends of the op agree on, declared once. The agent
+// (`agent/src/tokensync.ts`, `agent/src/server.ts`) spawns from the template and
+// maps the child's answer with these words; the server's link
+// (`server/src/token/link.ts`) reads the result with them; bash cannot import
+// this, so `ccd/ccrc-token-sync` spells its side itself and Part B's text scan
+// holds those spellings to these values.
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const TOKEN_SYNC_OP = 'token-sync';
+
+/** The ONLY words the op refuses with. `bad-request` is deliberately NOT a member: from this op it keeps meaning
+ *  "the agent predates it" (the envelope's word for an op `validateReq` does not know). There is no insecure-url
+ *  word: a plain-http install rotates (R2). `busy` and `spawn-failed` are the agent's own; the rest are the verb's. */
+export const TOKEN_SYNC_OP_ERRORS = ['bad-code', 'busy', 'spawn-failed', 'claim-refused', 'code-used',
+  'write-failed', 'proof-failed', 'proof-unmeasured', 'stale-client'] as const;
+export type TokenSyncOpError = (typeof TOKEN_SYNC_OP_ERRORS)[number];
+/** Use THIS, never `TOKEN_SYNC_OP_ERRORS.includes(x as TokenSyncOpError)` — `isRunState`'s rule. */
+export function isTokenSyncOpError(v: unknown): v is TokenSyncOpError {
+  return typeof v === 'string' && (TOKEN_SYNC_OP_ERRORS as readonly string[]).includes(v);
+}
+
+/** The verb's own refusal words and their exit codes; `busy` and `spawn-failed` are the agent's, never the verb's.
+ *  The agent maps a child's answer to a word only when BOTH the exit code and the first stderr line agree. */
+export const TOKEN_SYNC_EXIT: Readonly<Record<Exclude<TokenSyncOpError, 'busy' | 'spawn-failed'>, number>> = Object.freeze({
+  'bad-code': 20, 'claim-refused': 21, 'code-used': 22, 'write-failed': 23,
+  'proof-failed': 24, 'proof-unmeasured': 25, 'stale-client': 26,
+});
+/** First stderr line of a refusal: `ccrc: token sync: <word>: <sentence>`. */
+export const TOKEN_SYNC_STDERR_PREFIX = 'ccrc: token sync: ';
+
+/** The generation id's shape, as a regex BODY: 8 random bytes as 16 lowercase hex. The ONE spelling;
+ *  `GENERATION_ID_RE` (`shared/box-token.ts`) and `TOKEN_SYNC_SYNCED_RE` below are built from it. */
+export const GENERATION_ID_HEX = '[0-9a-f]{16}';
+
+export const TOKEN_TRANSPORTS = ['http', 'https'] as const;
+export type TokenTransport = (typeof TOKEN_TRANSPORTS)[number];
+/** The ONE reader of the op result's additive `transport` field: anything else, including absence, is
+ *  `'unmeasured'` — never folded into `https`, because an older agent's silence proves nothing about the wire. */
+export function readTokenTransport(raw: unknown): TokenTransport | 'unmeasured' {
+  return typeof raw === 'string' && (TOKEN_TRANSPORTS as readonly string[]).includes(raw) ? (raw as TokenTransport) : 'unmeasured';
+}
+
+/** The verb's ONE stdout line on success: `synced <generation> <transport>`. */
+export const TOKEN_SYNC_SYNCED_RE = new RegExp(`^synced (${GENERATION_ID_HEX}) (${TOKEN_TRANSPORTS.join('|')})$`);
+
+/** 32 random bytes as unpadded base64url = 43 characters. */
+export const CLAIM_CODE_RE = /^[A-Za-z0-9_-]{43}$/;
+/** The ONE code guard: the agent's `validateReq` and the server's claim door both call it. */
+export function isClaimCode(v: unknown): v is string {
+  return typeof v === 'string' && CLAIM_CODE_RE.test(v);
+}
+
+/** The `--from` word the agent's spawn carries; the verb refuses any other at exit 2. */
+export const TOKEN_SYNC_FROM = 'agent';
+/** THE template: `ccrc token sync --from agent`, no variable token (the code rides stdin). The file is
+ *  `updateLauncherPath(home)`, the same absolute shim the update op spawns. Frozen: a caller cannot append a flag. */
+export function tokenSyncSpawnArgv(): readonly string[] {
+  return Object.freeze(['token', 'sync', '--from', TOKEN_SYNC_FROM]);
+}
+
+/** The agent's bound on the verb: SIGTERM to the child's process group at this bound, so its trap removes its temps. */
+export const TOKEN_SYNC_SPAWN_TIMEOUT_MS = 40_000;
+/** Then SIGKILL, this long after the SIGTERM. */
+export const TOKEN_SYNC_KILL_GRACE_MS = 2_000;
+/** ONE drain deadline, armed by the child's exit or by the SIGKILL, whichever comes first, never restarted. */
+export const TOKEN_SYNC_DRAIN_MS = 2_000;
+/** The server's `FleetClient.request` deadline for this op (the client's default is 15 s). */
+export const TOKEN_SYNC_OP_TIMEOUT_MS = 50_000;
+/** A claim code's life. Pinned: SPAWN + KILL_GRACE + DRAIN < OP_TIMEOUT < CLAIM_CODE_TTL (44 000 < 50 000 < 60 000),
+ *  by `server/test/token-shared.test.ts`, so the agent always answers first and a lost answer is never a live code. */
+export const CLAIM_CODE_TTL_MS = 60_000;
+
+/** A `spawn-failed` detail that means "this ccrc has no `token` verb" (a named hold, never a failure, D-4395):
+ *  `_ccrc_usage_die`'s line from an older `ccrc`, or the agent's own sentence when no launcher is there at all. */
+export const TOKEN_VERB_MISSING_PREFIXES = ['ccrc: unknown argument: token', 'could not start the launcher'] as const;
+export function isTokenVerbMissing(detail: string | null | undefined): boolean {
+  return typeof detail === 'string' && TOKEN_VERB_MISSING_PREFIXES.some((p) => detail.startsWith(p));
+}
 
 /** Why a `read`/`readB64`/`readFrom`/`stat` op couldn't produce its answer —
  *  the ONE vocabulary both ends of this wire fold the op's boolean
@@ -131,8 +831,354 @@ export interface ResErr { t: 'res'; id: number; ok: false; err: string }
  *  nothing to the PWA's bundle unless the PWA starts importing this file. */
 export type ReadFailure = 'absent' | 'unreadable';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const READ_FAILURE_MAP: Record<ReadFailure, true> = { absent: true, unreadable: true };
+export const READ_FAILURES: readonly ReadFailure[] = Object.keys(READ_FAILURE_MAP) as ReadFailure[];
+
+/** The largest `maxBytes` one `readFrom` may carry — the per-call ceiling of the delegation spool reader (wave 3). A
+ *  bound on the REQUEST, declared once so the agent that enforces it and the two server adapters that refuse before
+ *  the wire agree on the number. */
+export const READ_FROM_MAX_BYTES = 262144;
+
+/** Whether `(offset, maxBytes)` is a valid byte-range request: `offset` a non-negative safe integer, `maxBytes` an
+ *  integer in `1..READ_FROM_MAX_BYTES`. The ONE judgment of it — the agent's `validateReq` answers `bad-request` to a
+ *  frame that fails it, and `localIO` and the remote adapter answer `unreadable` without touching the disk or the
+ *  wire. Old callers never pass `maxBytes` and never reach it: their clamping of an odd offset is unchanged. */
+export function isReadFromRange(offset: unknown, maxBytes: unknown): boolean {
+  return typeof offset === 'number' && Number.isSafeInteger(offset) && offset >= 0
+    && typeof maxBytes === 'number' && Number.isSafeInteger(maxBytes) && maxBytes >= 1 && maxBytes <= READ_FROM_MAX_BYTES;
+}
+
 export interface TailData  { t: 'tail'; tailId: number; dataB64: string }       // appended bytes
 export interface TailReset { t: 'tail'; tailId: number; reset: true; size: number } // file truncated/rotated
 export interface PtyData   { t: 'pty'; ptyId: number; ev: 'data'; dataB64: string }
 export interface PtyExit   { t: 'pty'; ptyId: number; ev: 'exit' }
 export interface Ping { t: 'ping' }  export interface Pong { t: 'pong' }
+
+// ── the `account` op (accounts spec §13.2; plan Task A8, D-5513, D-5622) ─────
+// Everything both ends agree on, declared once. The agent (`agent/src/accountop.ts`, `agent/src/server.ts`) builds
+// argv with `buildAccountArgv` and answers `AccountOpAnswer`; the server's remote arm (`server/src/accounts/ops.ts`)
+// sends `AccountOpReq` and reads the answer with `readAccountOpAnswer`. The sub union, its bounds, the kill grace and
+// the output cap live in `shared/api.ts` (A7) for both arms.
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const ACCOUNT_OP = 'account';
+
+/** After the SIGKILL, how long the agent waits for the child's pipes to close before it answers anyway. */
+export const ACCOUNT_OP_DRAIN_MS = 2_000;
+
+/** The server's `FleetClient.request` deadline for one sub: the sub's bound, the kill grace, the drain and a margin,
+ *  so the agent always answers first and a lost answer means the link, never the bound. */
+export function accountOpRequestTimeoutMs(sub: AccountSub): number {
+  return ACCOUNT_SUB_TIMEOUT_MS[sub] + ACCOUNT_OP_KILL_GRACE_MS + ACCOUNT_OP_DRAIN_MS + 5_000;
+}
+
+/** How one `account` op ended on the node, each arm kept apart:
+ *  `exited`      the verb ran and exited with `code`; `stdout` is its whole output (one JSON document).
+ *  `timeout`     the sub outran its bound: SIGTERM to its group, SIGKILL after the grace. Outcome UNKNOWN (D-5518).
+ *  `too-large`   stdout passed `ACCOUNT_OP_OUTPUT_MAX_BYTES`; the child was killed. Outcome unknown, as `timeout`.
+ *  `not-started` the launcher could not be started. Nothing ran.
+ *  `refused`     the builder refused before any spawn (`AccountArgvRefusal`). Nothing ran. */
+export type AccountOpOutcome =
+  | { kind: 'exited'; code: number; stdout: string }
+  | { kind: 'timeout' }
+  | { kind: 'too-large' }
+  | { kind: 'not-started' }
+  | { kind: 'refused'; why: AccountArgvRefusal };
+
+/** The op's `ok: true` payload. `fleetIdentity` is the node's `~/.ccrc/node-id` read through `NODE_ID_RE` when the
+ *  answer was built, `null` when absent, unreadable or malformed: every answer carries it (spec §13.2). */
+export type AccountOpAnswer = AccountOpOutcome & { fleetIdentity: string | null };
+
+/** THE ONE READER of an `account` op's answer. `null` is "no answer to trust" (a field off its grammar), never an
+ *  outcome: the caller reads it as unknown. */
+export function readAccountOpAnswer(raw: unknown): AccountOpAnswer | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const fid = r.fleetIdentity;
+  if (fid !== null && (typeof fid !== 'string' || !NODE_ID_RE.test(fid))) return null;
+  const fleetIdentity = fid as string | null;
+  switch (r.kind) {
+    case 'exited':
+      if (typeof r.code !== 'number' || !Number.isInteger(r.code) || r.code < 0 || r.code > 255) return null;
+      if (typeof r.stdout !== 'string') return null;
+      return { kind: 'exited', code: r.code, stdout: r.stdout, fleetIdentity };
+    case 'timeout': case 'too-large': case 'not-started':
+      return { kind: r.kind, fleetIdentity };
+    case 'refused':
+      if (typeof r.why !== 'string' || !(ACCOUNT_ARGV_REFUSALS as readonly string[]).includes(r.why)) return null;
+      return { kind: 'refused', why: r.why as AccountArgvRefusal, fleetIdentity };
+    default:
+      return null;
+  }
+}
+
+// ── the `testbox-admin` op (test box connect spec §2.1, §2.11; plan TC11, D-8166) ──────────────────────────
+// The agent builds argv with `buildTestboxAdminArgv` and answers `TestboxAdminOpAnswer`; the server's agent arm
+// (TC12) sends `TestboxAdminReq` and reads the answer with `readTestboxAdminOpAnswer`, then the verb's own JSON line
+// with `readTestboxAdminStatus` or the act reader. The agent never parses the verb's output.
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const TESTBOX_ADMIN_OP = 'testbox-admin';
+
+/** A short sub's bound; a long sub's bound covers only its DETACH (the unit it starts outlives the call). */
+export const TESTBOX_ADMIN_SHORT_TIMEOUT_MS = 60_000;
+export const TESTBOX_ADMIN_LONG_TIMEOUT_MS = 30_000;
+/** After the SIGTERM to the child's group, how long before the SIGKILL. */
+export const TESTBOX_ADMIN_KILL_GRACE_MS = 5_000;
+/** The most stdout the agent keeps: one byte more kills the group and answers `too-large`. */
+export const TESTBOX_ADMIN_OUTPUT_MAX_BYTES = 1024 * 1024;
+/** After the SIGKILL, how long the agent waits for the child's pipes to close before it answers anyway. */
+export const TESTBOX_ADMIN_DRAIN_MS = 2_000;
+
+/** The server's `FleetClient.request` deadline for one call: the bound, the grace, the drain and a margin, so the
+ *  agent always answers first and a lost answer means the link, never the bound. */
+export function testboxAdminRequestTimeoutMs(long: boolean): number {
+  return (long ? TESTBOX_ADMIN_LONG_TIMEOUT_MS : TESTBOX_ADMIN_SHORT_TIMEOUT_MS) + TESTBOX_ADMIN_KILL_GRACE_MS
+    + TESTBOX_ADMIN_DRAIN_MS + 5_000;
+}
+
+/** How one `testbox-admin` op ended on the node (the `account` op's arms, kept apart the same way):
+ *  `exited` the verb ran and exited with `code`; `stdout` is its output, one JSON line, unread here.
+ *  `timeout` / `too-large` the child was killed; outcome UNKNOWN. `not-started` nothing ran. `refused` the builder
+ *  refused before any spawn. */
+export type TestboxAdminOpOutcome =
+  | { kind: 'exited'; code: number; stdout: string }
+  | { kind: 'timeout' }
+  | { kind: 'too-large' }
+  | { kind: 'not-started' }
+  | { kind: 'refused'; why: TestboxAdminArgvRefusal };
+
+/** The op's `ok: true` payload; `fleetIdentity` is the node's `~/.ccrc/node-id` through `NODE_ID_RE`, or `null`. */
+export type TestboxAdminOpAnswer = TestboxAdminOpOutcome & { fleetIdentity: string | null };
+
+/** How one `testbox-admin` call ended as the SERVER's seam answers it (`FleetIO.testboxAdmin`, plan TC12): the node's outcome
+ *  (`exited`, `timeout`, `too-large`, `not-started`, `refused`), plus the two the link adds. `unsupported`: an agent that
+ *  does not list the op in `ready.ops`, or answers `bad-request`; nothing ran. `lost`: the frame left and no answer came back
+ *  (the link's deadline, a disconnect, an answer off `readTestboxAdminOpAnswer`'s grammar); the outcome is UNKNOWN. */
+export type TestboxAdminAsked = TestboxAdminOpOutcome | { kind: 'unsupported' } | { kind: 'lost' };
+
+/** THE ONE READER of a `testbox-admin` op's answer. `null` is "no answer to trust", never an outcome. */
+export function readTestboxAdminOpAnswer(raw: unknown): TestboxAdminOpAnswer | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const fid = r.fleetIdentity;
+  if (fid !== null && (typeof fid !== 'string' || !NODE_ID_RE.test(fid))) return null;
+  const fleetIdentity = fid as string | null;
+  switch (r.kind) {
+    case 'exited':
+      if (typeof r.code !== 'number' || !Number.isInteger(r.code) || r.code < 0 || r.code > 255) return null;
+      if (typeof r.stdout !== 'string') return null;
+      return { kind: 'exited', code: r.code, stdout: r.stdout, fleetIdentity };
+    case 'timeout': case 'too-large': case 'not-started':
+      return { kind: r.kind, fleetIdentity };
+    case 'refused':
+      if (typeof r.why !== 'string' || !Object.hasOwn(TESTBOX_ADMIN_ARGV_REFUSAL_MAP, r.why)) return null;
+      return { kind: 'refused', why: r.why as TestboxAdminArgvRefusal, fleetIdentity };
+    default:
+      return null;
+  }
+}
+
+// ── the `disk` op (fleet disk retention spec 2026-10-23 §2.5, D-6614) ──────────
+// The agent measures the filesystems the fleet's work roots live on and answers what it read; the server's decider
+// (`server/src/disk.ts`) turns that into a level. The op takes NO argument, so there is nothing to validate and no
+// path to contain. ADDITIVE: no `FLEET_PROTO` bump; an agent that predates it answers `bad-request` and is never
+// sent the op (the server reads `ready.ops` first).
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const DISK_OP = 'disk';
+
+/** The word an agent lists in `ready.ops` when its `readdir` op answers modification times on request (console speed
+ *  S1). Not an op of its own: it names a field of `readdir`. It matches `CAP_WORD` in shared/api.ts. */
+export const READDIR_MTIMES_OP = 'readdir-mtimes';
+
+/** The deadline for ONE `statfs`/`stat` of a work root on the agent. A root that does not answer in this time is
+ *  reported `missing` with `why: 'timeout'` (unknown, never zero): a full or stalled volume is exactly when its
+ *  `statfs` hangs. The server's request deadline (the client's default is 15 s) stays above it. */
+export const DISK_STATFS_DEADLINE_MS = 5_000;
+
+/** The `disk` op's reply: exactly what the decider takes (`DiskMeasured`), in this one type. */
+export type DiskOpReply = DiskMeasured;
+
+// ── the `pressure` op (#1170) ─────────────────────────────────────────────────────────────────────────────────────
+// The agent reads the host's pressure stall information (/proc/pressure/memory and /proc/pressure/io) and answers
+// what it read (`HostPsi`, shared/pressure.ts); the server's decider (`server/src/pressure.ts`) holds the last reading
+// and classifies a stalled link by it. Declared at the file's foot so no line cited above moves. The op takes NO
+// argument, so no path crosses the link. ADDITIVE: no `FLEET_PROTO` bump; an agent that predates it answers
+// `bad-request` and is never sent the op (the server reads `ready.ops` first).
+
+/** ONE member of the `req` envelope. A frame with any extra field is a malformed frame (`bad-request`). */
+export interface PressureReq { t: 'req'; id: number; op: 'pressure' }
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const PRESSURE_OP = 'pressure';
+
+/** The `pressure` op's reply: exactly what the decider takes, in this one type. D-8122 adds `headroomBytes`, the session
+ *  slice's memory headroom (`memory.max` minus `memory.current`, no more than `MemAvailable`; `MemAvailable` alone when
+ *  the slice has no `memory.max`), or `null` when it could not be read. ADDITIVE: an older agent sends no field, which
+ *  the server reads as `null` (unmeasured), never as room. */
+export type PressureOpReply = HostPsi & { headroomBytes?: number | null };
+import type { HostPsi } from './pressure.js';
+
+// ── the `testbox` and `testbox-tools-sync` ops (test box plan TB9, D-7411; spec 2026-10-28 §2.7, §2.10) ─────────────
+// The fleet agent reads its host's test box settings through the wrapper's own printer, measures the six tools with
+// the user manager's PATH (D-7427) and calls the box's status with the status deadline; the server's decider
+// (`server/src/testbox.ts`) turns that into a state. Both ops take NO argument: every spawn is a fixed template
+// (D-7430) and the tools sync's release and versions are the fleet host's own, never the caller's. ADDITIVE: no
+// `FLEET_PROTO` bump; an agent that predates them answers `bad-request` and is never sent them (the server reads
+// `ready.ops` first). D-7555: the second op's word is `testbox-tools-sync`, never `testbox.tools-sync`, because
+// `ready.ops` words follow `CAP_WORD`, and a dotted word would make an older server drop the agent's whole list.
+
+/** ONE member of the `req` envelope. A frame with any extra field is a malformed frame (`bad-request`). */
+export interface TestboxReq { t: 'req'; id: number; op: 'testbox' }
+/** ONE member of the `req` envelope, the `testbox` op's one write. A frame with any extra field is `bad-request`. */
+export interface TestboxToolsSyncReq { t: 'req'; id: number; op: 'testbox-tools-sync' }
+
+/** The ops' names, and the words an agent that answers them lists in `ready.ops`. */
+export const TESTBOX_OP = 'testbox';
+export const TESTBOX_TOOLS_SYNC_OP = 'testbox-tools-sync';
+
+/** The bound on ONE of the op's fixed spawns on the agent (the user manager's environment, the settings printer, each
+ *  version probe): a probe that does not answer in this time is unmeasured (`null`), never a version. */
+export const TESTBOX_PROBE_DEADLINE_MS = 5_000;
+/** The server's request deadline for either op (the client's default is 15 s): the settings read, then the probes
+ *  beside the box's call, which `CCRC_TESTBOX_STATUS_DEADLINE` bounds on the agent, stay well inside it. */
+export const TESTBOX_OP_REQUEST_MS = 60_000;
+
+/** The fleet host's measured tool versions, each normalised as `TestboxToolVersions` spells them, or `null` when its
+ *  probe did not answer a version. */
+export type TestboxHostTools = { readonly [K in TestboxTool]: string | null };
+
+/** Why the op has no status answer: no test box is configured (`CCRC_TESTBOX_URL` unset), the box did not answer
+ *  within the deadline, or it answered something that is not a status answer. */
+export type TestboxOpFailure = 'unconfigured' | 'unreachable' | 'bad-answer';
+export const TESTBOX_OP_FAILURE_MAP: Record<TestboxOpFailure, true> = { unconfigured: true, unreachable: true, 'bad-answer': true };
+
+/** What the fleet host measured of itself: the six tools, the release it runs (`~/.ccrc/build.json`, `null` when that
+ *  cannot be read) and when (UTC ISO 8601 to the second). */
+export interface TestboxHostMeasure {
+  readonly tools: TestboxHostTools;
+  readonly release: string | null;
+  readonly measuredAt: string;
+}
+
+export type TestboxBoxRead =
+  | { readonly ok: true; readonly status: StatusAnswer }
+  | { readonly ok: false; readonly failure: TestboxOpFailure; readonly detail: string | null };
+
+/** The `testbox` op's reply. `pollMs` is `CCRC_TESTBOX_POLL` as the printer validated it, `null` when the settings
+ *  could not be read. */
+export interface TestboxOpReply {
+  readonly host: TestboxHostMeasure;
+  readonly pollMs: number | null;
+  readonly box: TestboxBoxRead;
+}
+
+/** The `testbox-tools-sync` op's outcome: the frame was sent, or why it was not (`unmeasured`: a tool or the release
+ *  could not be measured, so there is nothing true to send). */
+export type TestboxSyncOutcome = 'sent' | 'unconfigured' | 'unreachable' | 'bad-answer' | 'unmeasured';
+export const TESTBOX_SYNC_OUTCOME_MAP: Record<TestboxSyncOutcome, true> = {
+  sent: true, unconfigured: true, unreachable: true, 'bad-answer': true, unmeasured: true,
+};
+
+/** The `testbox-tools-sync` op's reply: the frame it built (sent, or refused by the link), and why it was not sent. */
+export interface TestboxToolsSyncReply {
+  readonly outcome: TestboxSyncOutcome;
+  readonly detail: string | null;
+  readonly frame: ToolsSync | null;
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const exactKeys = (o: Record<string, unknown>, keys: readonly string[]): boolean =>
+  Object.keys(o).length === keys.length && keys.every((k) => Object.prototype.hasOwnProperty.call(o, k));
+const shortTextOrNull = (v: unknown): v is string | null => v === null || (typeof v === 'string' && v.length <= 4096);
+const TESTBOX_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const TESTBOX_VERSION = /^\d+(?:\.\d+)*[a-z]?$/;
+
+/** A frame object through `shared/testbox.ts`'s one frame reader, so a status answer or a tools sync is never read
+ *  twice by two readers. */
+function viaFrameReader<T extends TestboxFrame['t']>(v: unknown, t: T): Extract<TestboxFrame, { t: T }> | null {
+  if (!isObj(v) || v.t !== t) return null;
+  const r = readTestboxFrame(JSON.stringify(v));
+  return r.ok && r.value.t === t ? (r.value as Extract<TestboxFrame, { t: T }>) : null;
+}
+
+/** THE ONE READER of a `testbox` op's reply (the `res` frame itself: its envelope fields are not read). `null` is "no
+ *  answer to trust", never a state. */
+export function readTestboxOpReply(raw: unknown): TestboxOpReply | null {
+  if (!isObj(raw)) return null;
+  const { host, pollMs, box } = raw;
+  if (!isObj(host) || !exactKeys(host, ['tools', 'release', 'measuredAt'])) return null;
+  const tools = host.tools;
+  if (!isObj(tools) || !exactKeys(tools, TESTBOX_TOOLS)) return null;
+  for (const t of TESTBOX_TOOLS) {
+    const v = tools[t];
+    if (v !== null && (typeof v !== 'string' || v.length > 64 || !TESTBOX_VERSION.test(v))) return null;
+  }
+  if (host.release !== null && !(isReleaseTag(host.release) && host.release.length <= 64)) return null;
+  if (typeof host.measuredAt !== 'string' || !TESTBOX_UTC.test(host.measuredAt)) return null;
+  if (pollMs !== null && (typeof pollMs !== 'number' || !Number.isSafeInteger(pollMs) || pollMs < 1)) return null;
+  if (!isObj(box)) return null;
+  let read: TestboxBoxRead;
+  if (box.ok === true && exactKeys(box, ['ok', 'status'])) {
+    const status = viaFrameReader(box.status, 'status');
+    if (status === null) return null;
+    read = { ok: true, status };
+  } else if (box.ok === false && exactKeys(box, ['ok', 'failure', 'detail'])) {
+    if (typeof box.failure !== 'string' || !Object.prototype.hasOwnProperty.call(TESTBOX_OP_FAILURE_MAP, box.failure)) return null;
+    if (!shortTextOrNull(box.detail)) return null;
+    read = { ok: false, failure: box.failure as TestboxOpFailure, detail: box.detail };
+  } else return null;
+  return {
+    host: { tools: tools as TestboxHostTools, release: host.release as string | null, measuredAt: host.measuredAt },
+    pollMs: pollMs as number | null, box: read,
+  };
+}
+
+/** THE ONE READER of a `testbox-tools-sync` op's reply (the `res` frame itself). `null` is "no answer to trust". */
+export function readTestboxToolsSyncReply(raw: unknown): TestboxToolsSyncReply | null {
+  if (!isObj(raw)) return null;
+  if (typeof raw.outcome !== 'string' || !Object.prototype.hasOwnProperty.call(TESTBOX_SYNC_OUTCOME_MAP, raw.outcome)) return null;
+  if (!shortTextOrNull(raw.detail)) return null;
+  const frame = raw.frame === null ? null : viaFrameReader(raw.frame, 'tools.sync');
+  if (raw.frame !== null && frame === null) return null;
+  // A frame exists once the release and every tool were measured: always when sent, never when unmeasured or
+  // unconfigured (nothing was built), and either way when the box could not take it.
+  if (raw.outcome === 'sent' && frame === null) return null;
+  if ((raw.outcome === 'unmeasured' || raw.outcome === 'unconfigured') && frame !== null) return null;
+  return { outcome: raw.outcome as TestboxSyncOutcome, detail: raw.detail, frame };
+}
+import { readTestboxFrame, TESTBOX_TOOLS, type StatusAnswer, type TestboxFrame, type TestboxTool, type ToolsSync } from './testbox.js';
+
+// ── the `backup` op (D-7858) ─────────────────────────────────────────────────────────────────────────────────────
+// The agent reads the backup state files in the directory its own environment names (`CCRC_BACKUP_STATE_DIR`, D-7859)
+// and answers what it read (`BackupRead`, shared/backup.ts); the server's decider (`backupVerdict`) judges it. Declared
+// at the file's foot so no line cited above moves. The op takes NO argument, so no path crosses the link. ADDITIVE: no
+// `FLEET_PROTO` bump; an agent that predates it answers `bad-request` and is never sent the op (the server reads
+// `ready.ops` first).
+
+/** ONE member of the `req` envelope. A frame with any extra field is a malformed frame (`bad-request`). */
+export interface BackupReq { t: 'req'; id: number; op: 'backup' }
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const BACKUP_OP = 'backup';
+
+/** The `backup` op's reply: exactly what the decider takes, in this one type. */
+export type BackupOpReply = BackupRead;
+import type { BackupRead } from './backup.js';
+
+// ── the `overlord-history` op (Overlord W1, w1-board-history.md Task 3; spec 2026-11-09 §3.2, C47) ──
+// `ccrc history`'s three read verbs over every project, run by the agent in a worker thread with one slot. The request is
+// shared/overlordHistory.ts' `OverlordHistoryRequest`, read by `readOverlordHistoryRequest` in `validateReq`; a request it
+// refuses is answered `ok: true` as `{outcome: 'request-refused', word}`, so `bad-request` keeps meaning "this agent
+// predates the op". Every answer, refusals and failures included, is an `OverlordHistoryAnswer` on `ResOk`, read by
+// `readOverlordHistoryAnswer`. ADDITIVE: no `FLEET_PROTO` bump; an agent that predates it never lists the word in
+// `ready.ops`, so the server never sends it the op.
+
+/** ONE member of the `req` envelope: the request's fields beside the envelope's. */
+export interface OverlordHistoryReq extends OverlordHistoryRequest { t: 'req'; id: number; op: 'overlord-history' }
+
+/** The op's name, and the word an agent that serves the history store lists in `ready.ops` (Task 4). */
+export const OVERLORD_HISTORY_OP = 'overlord-history';
+import type { OverlordHistoryRequest } from './overlordHistory.js';

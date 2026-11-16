@@ -1,0 +1,18 @@
+❯ rvstep1
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Path
+
+Which migration path?
+
+❯ 1. Alpha
+     First choice.
+  2. Beta
+     Second choice.
+  3. Gamma
+     Pick this when the old cluster must stay readable during the move, which takes a while. Order:
+     1. stop the writers, then migrate.
+  4. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

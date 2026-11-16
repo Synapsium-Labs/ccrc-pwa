@@ -62,10 +62,10 @@ describe('ccd ws-hold / ws-release', () => {
   it('holds a workspace: writes the reason verbatim', () => {
     h.sh(`${WS_ADD}; cmd_ws_add demo`);
     const id = h.wsId('demo');
-    const out = h.sh(`cmd_ws_hold --session ${id} --reason "program:agent-evals wave:1/4"`);
+    const out = h.sh(`cmd_ws_hold --session ${id} --reason "program:prog-j wave:1/4"`);
     expect(out).toContain(`held ${id}`);
     expect(fs.readFileSync(path.join(h.home, '.cc-sessions', `${id}.hold`), 'utf8'))
-      .toBe('program:agent-evals wave:1/4');
+      .toBe('program:prog-j wave:1/4');
   });
 
   it('re-hold updates the reason in place, exit 0', () => {
@@ -535,8 +535,8 @@ git commit -m "feat(server): the hold gates archiveMerged; hold/release routes; 
 
 ```tsx
 it('shows the held chip with the reason verbatim', () => {
-  render(<SessionLine session={f({ held: 'program:agent-evals wave:2/4' })} onOpen={() => {}} onActions={() => {}} />);
-  expect(screen.getByText('program:agent-evals wave:2/4')).toBeInTheDocument();
+  render(<SessionLine session={f({ held: 'program:prog-j wave:2/4' })} onOpen={() => {}} onActions={() => {}} />);
+  expect(screen.getByText('program:prog-j wave:2/4')).toBeInTheDocument();
 });
 
 it('shows no chip when unheld — null is the wire default, not a state to render', () => {
@@ -607,7 +607,7 @@ This build ships `ccd/` — **agent first**, then server+PWA:
 The server's routes are `verbSupported`-gated, so a server deployed against a stale ccd refuses politely rather than failing — but the order above makes that window zero.
 
 **Live proof, on clear-cove itself (operator-observed):**
-1. Restore `expoAI-assistant-clear-cove` via the PWA (operator action — the runbook's rule stands: session lifecycle through the PWA).
+1. Restore `project-h-clear-cove` via the PWA (operator action — the runbook's rule stands: session lifecycle through the PWA).
 2. Hold it: reason `program:<name> wave:2/…`.
 3. `/api/fleet` shows `held` on the record; the card shows the chip; the cleanup bucket does NOT contain it.
 4. One `archiveMerged` sweep passes (it is merged:#591): verify NO archive happened and the held-merged push arrived once with the held copy.

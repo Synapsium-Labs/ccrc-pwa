@@ -1,0 +1,81 @@
+// The Sheet's focused panel draws no ring (D-5931), in a real Chrome over the production build.
+//
+// The Sheet focuses its panel on open (`tabIndex={-1}`, `useSheetFocus`). Chrome marks a script focus that follows a
+// keyboard action as `:focus-visible`, and `pwa/src/styles/base.css`'s page-wide `:focus-visible` outline is
+// unlayered, so it beats a layered `outline-none` utility: every keyboard-opened sheet painted a 2px accent ring around
+// the whole panel. jsdom computes no cascade, so this file holds what Chrome computes: the `?` shortcuts sheet and the
+// New session sheet (Enter on its button), at 360, 390, 1280 and 1920 in both skins and both palettes — the panel has
+// the focus, and its computed outline style is `none`.
+//
+// Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/sheet-focus-ring.browser.test.tsx )`.
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { chromium, type Browser, type Page } from 'playwright-core';
+import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
+import { resolveChrome } from './harness';
+import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
+
+const VIEWS: AppView[] = [REFINED, INSTRUMENT].flatMap((skin) => [PHOSPHOR, 'light'].flatMap((theme) =>
+  [360, 390, 1280, 1920].map((width) => ({ skin, theme, width }))));
+const named = (v: AppView): string => `${v.skin}, ${v.theme}, ${v.width}px`;
+const FIXTURE: AppFixture = {
+  api: { '/api/projects': { roots: ['/w'], projects: [{ name: 'project-a', workdir: '/w/project-a' }] } },
+  fleetFrames: [{ type: 'fleet', sessions: [] }],
+};
+
+let dist: string | undefined;
+let server: DistServer | undefined;
+let browser: Browser | undefined;
+
+beforeAll(async () => {
+  const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
+  dist = sharedDist();
+  server = await serveDist(dist);
+  browser = await chromium.launch({ executablePath, headless: true });
+}, 180_000);
+
+afterAll(async () => {
+  await browser?.close();
+  await server?.close();
+});
+
+/** The open panel: whether it holds the focus, matches `:focus-visible`, and its computed outline style. */
+const panel = (page: Page) => page.evaluate(() => {
+  const p = document.querySelector('.sheet-panel[data-state="open"]') as HTMLElement;
+  return { focused: document.activeElement === p, outline: getComputedStyle(p).outlineStyle };
+});
+
+async function openShortcuts(page: Page): Promise<void> {
+  await page.keyboard.press('?');
+}
+
+/** The visible New session door: the `new-session` command door (Refined's bar and `+ New`, Instrument's top bar).
+ *  Every visible one carries the command mark, Instrument's phone round `+` since T2b (D-6328). */
+async function openNewSession(page: Page): Promise<void> {
+  const door = page.locator('[data-command="new-session"]:visible').first();
+  await door.waitFor({ timeout: 20_000 });
+  await door.focus();
+  await page.keyboard.press('Enter');
+}
+
+describe('a keyboard-opened Sheet focuses its panel and draws no ring on it', () => {
+  for (const [what, open] of [['the ? shortcuts sheet', openShortcuts], ['the New session sheet', openNewSession]] as const) {
+    for (const view of VIEWS) {
+      it(`${what}: ${named(view)}`, async () => {
+        const { ctx, page } = await openApp(browser!, view, FIXTURE);
+        try {
+          await page.emulateMedia({ reducedMotion: 'reduce' });
+          await page.goto(server!.origin + '/');
+          // The first VISIBLE landmark: on a phone the frame's `main#content` is hidden on the fleet route (the swap)
+          // and the fleet column, a `section.fleet`, is what shows (W2 S2b; D-5466).
+          await page.locator('main:visible, section.fleet:visible, [data-page-scaffold]:visible').first().waitFor({ timeout: 20_000 });
+          await open(page);
+          await page.locator('.sheet-panel[data-state="open"]').waitFor({ timeout: 10_000 });
+          await page.waitForFunction(() => document.activeElement?.classList.contains('sheet-panel') === true, undefined, { timeout: 5_000 });
+          expect(await panel(page)).toEqual({ focused: true, outline: 'none' });
+        } finally {
+          await ctx.close();
+        }
+      }, 60_000);
+    }
+  }
+});

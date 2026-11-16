@@ -112,7 +112,7 @@ describe('_limit_field rollover', () => {
 });
 
 describe('_codex_lane_status on a python-written gpt.json', () => {
-  // ~/.cc-limits/gpt.json is written by infra/handoff/ccgpt-usage (python
+  // ~/.cc-limits/gpt.json is written by ccd/ccgpt-usage.py (python
   // json.dump), whose default separators put a space after every colon. Every
   // other reader in ccd tolerates that; _codex_lane_status must too, or `ccd ls`
   // silently drops the cooldown countdown it exists to print.
@@ -248,8 +248,8 @@ describe('the account that was stranded on 2026-07-27', () => {
     // Registry for a session whose HOME is claude but which sits on gpt.
     const reg = path.join(home, '.cc-sessions');
     fs.mkdirSync(reg, { recursive: true });
-    fs.writeFileSync(path.join(reg, 'claude-synapsium-platform.home'), 'claude');
-    fs.writeFileSync(path.join(reg, 'claude-synapsium-platform.wrapper'), 'gpt');
+    fs.writeFileSync(path.join(reg, 'claude-project-k.home'), 'claude');
+    fs.writeFileSync(path.join(reg, 'claude-project-k.wrapper'), 'gpt');
   };
 
   it('makes the home account available again', () => {
@@ -259,7 +259,7 @@ describe('the account that was stranded on 2026-07-27', () => {
 
   it('sends the exiled session home instead of leaving it on gpt', () => {
     strand();
-    expect(sh('_swap_target claude-synapsium-platform gpt claude')).toBe('claude');
+    expect(sh('_swap_target claude-project-k gpt claude')).toBe('claude');
   });
 });
 
@@ -341,5 +341,60 @@ describe('a rolled-over account is ELIGIBLE — _avail answers eligibility, not 
     // order. Both scores are equal (0 today, 100 after) and the tie-break is a
     // strict `<`, so the answer is stable across the fix.
     expect(sh('_swap_target claude-demo claude-b claude-b || true')).toBe('claude');
+  });
+});
+
+// The statusline's row for a payload with no 5h figure. `five: null` is one
+// known half: enough for eligibility, not enough for rank.
+describe('a row with a null five reads as unknown, never as room', () => {
+  const fiveNull = (w: string, seven: number): void => {
+    const t = now();
+    writeLimits(`${w}.json`, JSON.stringify({ five: null, seven, ts: t, fiveResetAt: null, sevenResetAt: t + 400000 }));
+  };
+
+  it('_limit_field keeps the weekly figure and answers empty for five, not 0', () => {
+    fiveNull('claude', 3);
+    expect(sh('_limit_field claude seven')).toBe('3');
+    expect(sh('_limit_field claude five')).toBe('');
+    expect(sh('_limit_score claude')).toBe('');
+  });
+
+  it('_avail refuses on the known weekly half at the ceiling', () => {
+    fiveNull('claude', 98);
+    expect(sh('_avail claude && echo AVAIL || echo NO')).toBe('NO');
+  });
+
+  it('_swap_target ranks it after a fuller measured lane, however low its weekly figure', () => {
+    fiveNull('claude', 3);
+    const t = now();
+    writeLimits('claude-a.json', json({ five: 60, seven: 60, ts: t, fiveResetAt: t + 3600, sevenResetAt: t + 400000 }));
+    writeLimits('claude-b.json', json({ five: 99, seven: 99, ts: t }));
+    expect(sh('_swap_target claude-demo claude-b claude-b || true')).toBe('claude-a');
+  });
+});
+
+// D-6181: the raw reset reader. `_limit_field_to` blanks a window whose reset
+// has passed (a value nobody measured since); the pin's expiry needs the reset
+// itself, as written, whether or not it has passed. One definition, over the
+// same `_limit_pick_to` source; D-6182's "window ended" reader is built on it.
+describe('_limit_reset_to: the raw reset, as written (D-6181)', () => {
+  it('reads a future reset', () => {
+    const r = now() + 3600;
+    writeLimits('claude.json', json({ five: 99, fiveResetAt: r, seven: 10, sevenResetAt: r + 9, ts: now() }));
+    expect(sh('_limit_reset_to v claude five; echo "$?:$v"')).toBe(`0:${r}`);
+    expect(sh('_limit_reset_to v claude seven; echo "$?:$v"')).toBe(`0:${r + 9}`);
+  });
+
+  it('reads a reset that has passed, which _limit_field_to blanks', () => {
+    const r = now() - 60;
+    writeLimits('claude.json', json({ five: 99, fiveResetAt: r, ts: now() - 100 }));
+    expect(sh('_limit_field_to pct claude five; echo "[$pct]"')).toBe('[]');
+    expect(sh('_limit_reset_to v claude five; echo "$?:$v"')).toBe(`0:${r}`);
+  });
+
+  it('a missing file or field answers empty and rc 1', () => {
+    expect(sh('_limit_reset_to v claude-b five; echo "$?:[$v]"')).toBe('1:[]');
+    writeLimits('claude.json', json({ five: 20, ts: now() }));
+    expect(sh('_limit_reset_to v claude five; echo "$?:[$v]"')).toBe('1:[]');
   });
 });

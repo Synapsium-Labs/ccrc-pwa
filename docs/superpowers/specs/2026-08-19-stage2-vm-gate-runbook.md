@@ -712,7 +712,7 @@ ccrc update
 `update: fetching …` lines, then
 
 ```
-update: verified ccrc-v0.0.2.tar.gz (transport checksum, then the per-file MANIFEST)
+update: verified ccrc-v0.0.2.tar.gz (transport checksum, provenance, then the per-file MANIFEST)
 ```
 
 then `update: backup: ~/ccrc-backups/<ts> …` — the backup is complete BEFORE any install write —
@@ -723,9 +723,9 @@ closing doctor, and the supervisor sweep:
 update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (KillMode=process verified per unit before any restart; panes untouched)
 ```
 
-The same line closes the sweep on a box with no live sessions — the `KillMode=process` preflight
-still ran, against an uninstantiated instance of the template, and `try-restart` simply matched
-nothing. If you instead see `update: sweep REFUSED — …` and an `update: DEGRADED: …` line, the
+On a box with no live sessions the sweep closes instead with
+`update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart (KillMode=process verified before the restart; panes untouched)` — the `KillMode=process` preflight still ran, against an
+uninstantiated instance of the template. If you instead see `update: sweep REFUSED — …` and an `update: DEGRADED: …` line, the
 update itself still converged (it exits 0); the refusal names the resolved KillMode and the
 drop-in path that fixes it — a real finding on that box, not a broken update. The transcript
 closes with the from→to report, your boxes' own two shas in the parentheses:
@@ -870,5 +870,5 @@ point of the A2-NEW work this gate is proving. If a step above does not converge
   consumes no forwarded header, and turning proxy trust on would only arm a spoof surface for
   whatever reads `req.ip` next.
 - **More than one operator.** The session layer carries a single identity — there are no users, no
-  roles, and no per-person audit. That is the team-edition seam, held open deliberately; this slice
+  roles, and no per-person audit. That is a seam held open deliberately for a later decision; this slice
   ships one operator.

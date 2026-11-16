@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import type { RunningAgent } from '../../agent/src/server.js';
@@ -7,14 +7,27 @@ import { connectFleet, type ConnectedFleet } from '../src/remote/client.js';
 import { bootAgent, connectToAgent, makeFixture, TOKEN, type RemoteFixture } from './remoteHelpers.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
-import { testDeps } from './helpers.js';
+import { testDeps, withFakeClock } from './helpers.js';
 
+/** Writes the ccd the agent execs (`~/.local/bin/ccd`) as a SELF-CONTAINED
+ *  entry. The agent's caps cache is keyed on BOTH halves of the installed pair
+ *  — that entry and the body at `~/.local/libexec/ccrc/ccd` — and an
+ *  unmeasurable body is "no evidence", which keeps the old list. So a
+ *  placeholder body is seeded once if none exists, as `agent/test/caps.test.ts`
+ *  does; it is never exec'd and never changed, so the half these cases move is
+ *  the entry, and a changed entry must still change `caps()`. */
 function writeCcd(home: string, body: string): void {
   const dir = path.join(home, '.local', 'bin');
   mkdirSync(dir, { recursive: true });
   const p = path.join(dir, 'ccd');
   writeFileSync(p, `#!/bin/sh\n${body}\n`);
   chmodSync(p, 0o755);
+  const bodyHalf = path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
+  if (!existsSync(bodyHalf)) {
+    mkdirSync(path.dirname(bodyHalf), { recursive: true });
+    writeFileSync(bodyHalf, '#!/bin/sh\nexit 70\n');
+    chmodSync(bodyHalf, 0o755);
+  }
 }
 
 describe('caps refresh', () => {
@@ -92,7 +105,7 @@ describe('the caps lane', () => {
     // never reach the `refreshCaps` call below. Same fix as
     // `mail-sweep.test.ts`'s `harness()`.
     mkdirSync(deps.cfg.registryDir, { recursive: true });
-    const w = new FleetWatcher(deps, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
 
     vi.useFakeTimers();
     await w.tick(); await w.tick(); await w.tick();
@@ -112,7 +125,7 @@ describe('the caps lane', () => {
   });
 
   it('local mode has nothing to refresh and does not throw', async () => {
-    const w = new FleetWatcher(testDeps(), new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(testDeps()), new Bus(), 2000);
     await expect(w.tick()).resolves.not.toThrow();
   });
 
@@ -121,7 +134,7 @@ describe('the caps lane', () => {
     const deps = { ...testDeps(), refreshCaps: async () => { calls += 1; } };
     // Empty, but LISTABLE — see the identical comment in the test above.
     mkdirSync(deps.cfg.registryDir, { recursive: true });
-    const w = new FleetWatcher(deps, new Bus(), 2000);
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
 
     vi.useFakeTimers();
     await w.tick();

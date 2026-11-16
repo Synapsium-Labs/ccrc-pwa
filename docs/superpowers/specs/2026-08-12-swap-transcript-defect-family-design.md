@@ -14,13 +14,13 @@ and `2026-08-11-artifact-lifecycle-policy.md` (§7 below declares this work's ar
 
 ## 0. What this is, in one paragraph
 
-On 2026-08-11 21:32 a supervise-driven auto-rescue moved `claude2-expoAI-assistant` from `claude`
-to `claude-dev0` while the session sat on a permission prompt. The swap's transcript copy looked
+On 2026-08-11 21:32 a supervise-driven auto-rescue moved `claude9-project-h` from `claude`
+to `claude-lab0` while the session sat on a permission prompt. The swap's transcript copy looked
 in one guessed directory, found nothing, wrote one warning line into a log file nobody reads, and
 completed anyway; the session resumed on the new account with no history. At 21:39:53 an
 agent-surface `stop` removed its boot persistence, so the row went dead-but-listed and the 70MB of
 history — intact under `~/.claude` the whole time — read as lost. A second session,
-`claude-corp-data-internal`, had been stopped on Aug 7 through the agent surface and then restarted
+`claude-acme-project-e`, had been stopped on Aug 7 through the agent surface and then restarted
 by a bare `ccd start` on Aug 11, which spawned a tmux pane with **no systemd unit**: it ran
 unsupervised for 22 minutes and died with nothing recording that it had. Four defects made that one
 incident, and each of them is a different sentence about the same disease — *the fleet's state is
@@ -35,28 +35,28 @@ archive manifests and reap tombstones that outlive the sessions they describe (�
 ## 1. Measured facts that shaped everything
 
 **M1 — one inode, three names, in production right now.** The manual recovery left the incident
-transcript as three hardlinked names under `~/.claude-dev0/projects/`:
+transcript as three hardlinked names under `~/.claude-lab0/projects/`:
 
 ```
-$ find ~/.claude-dev0/projects -name 'b7001948*.jsonl' -printf '%i %n %s %p\n'
-8828232 3 70906385 …/-data-projects-expoAI-assistant/b7001948-….jsonl
-8828232 3 70906385 …/-mnt-HC-Volume-105751470-projects-expoAI-assistant/b7001948-….jsonl
-8828232 3 70906385 …/-mnt-…-expoAI-assistant--claude-worktrees-converse-loop/b7001948-….jsonl
+$ find ~/.claude-lab0/projects -name 'b7001948*.jsonl' -printf '%i %n %s %p\n'
+8828232 3 70906385 …/-data-projects-project-h/b7001948-….jsonl
+8828232 3 70906385 …/-mnt-…-projects-project-h/b7001948-….jsonl
+8828232 3 70906385 …/-mnt-…-project-h--claude-worktrees-converse-loop/b7001948-….jsonl
 ```
 
 Any locator that copies "every match" without an inode check copies 70MB three times.
 
 **M2 — 17 of 23 registry rows already have transcript residue under 1–4 *other* accounts.** Every
 past swap left the source account's copy frozen where it was. The incident uuid alone exists in
-five config dirs at five different sizes (`~/.claude` 70,013,580; `~/.claude-dev0` 70,906,385;
-`~/.claude-personal` 59,311,017; `~/.claude-corp` 62,368,894; `~/.claude-gpt` 28,856,697). A
+five config dirs at five different sizes (`~/.claude` 70,013,580; `~/.claude-lab0` 70,906,385;
+`~/.claude-home` 59,311,017; `~/.claude-acme` 62,368,894; `~/.claude-gpt` 28,856,697). A
 cross-account search that is allowed to win over the session's own account would render stale
 history for most of the fleet. This is why the foreign-config rung in §5 is last, conditional, and
 always bannered.
 
 **M3 — the sidecar directory is the big object, and it is not always beside a `.jsonl`.** The
 incident's sidecar `…/b7001948-…/` (holding `subagents`, `tool-results`, `workflows`) measures
-188MB under `~/.claude-dev0` and 188MB under `~/.claude`; two more sidecars for the same uuid sit
+188MB under `~/.claude-lab0` and 188MB under `~/.claude`; two more sidecars for the same uuid sit
 in project dirs that hold **no** `.jsonl` for it at all. Sidecars must be globbed in their own
 right, and they must not be copied byte-for-byte.
 
@@ -68,7 +68,7 @@ appending under its startup directory, and `resolveTranscriptFile` has no rung t
 the live cwd to the registry workdir.
 
 **M5 — three units are running without boot persistence at this moment.** `ccrc-pwa-calm-mesa`,
-`data-internal-plain-harbor` and `data-internal-still-prairie` appear in
+`project-e-plain-harbor` and `project-e-still-prairie` appear in
 `systemctl --user list-units 'claude-session@*'` but not in
 `~/.config/systemd/user/default.target.wants/`. Note precisely what this is and is not: these rows
 *have* supervisors — they are active units, so auto-swap and uuid-sync are running for them — they
@@ -498,14 +498,14 @@ is what would. §3.1's `reset-failed` is what makes that sentence true rather th
 ### 3.4 One-arg id form, and a start that stops rewriting the account
 
 `ccd start <wrapper> <project>` recomputes the id from its two arguments. A swapped session keeps
-the id it was born with (`claude2-expoAI-assistant` stays that even while its `wrapper` field reads
-`claude-dev0`), so an operator reading the account off the board and typing it back mints a
+the id it was born with (`claude9-project-h` stays that even while its `wrapper` field reads
+`claude-lab0`), so an operator reading the account off the board and typing it back mints a
 *different* id. `cmd_start` and `cmd_enable` gain the one-argument id form `ccd start <id>`, exactly
 as `cmd_stop` did and for the reason its comment already records (ccd:7101-7113).
 
 The two-argument form also stops clobbering the account. Today `cmd_start` unconditionally
-`_reg_set`s `wrapper` from its argument (ccd:6963), so `ccd start claude2 expoAI-assistant` on a
-session living under `claude-dev0` rewrites the registry to an account whose config dir does not
+`_reg_set`s `wrapper` from its argument (ccd:6963), so `ccd start claude9 project-h` on a
+session living under `claude-lab0` rewrites the registry to an account whose config dir does not
 hold the transcript. For an existing row the registry `wrapper` wins and a differing argument is a
 warning; `ccd swap` remains the only verb that moves a session between accounts.
 
@@ -711,7 +711,7 @@ never that its `readdir` answered `null` with the account itself unreachable. An
 foreign hit while the own account is genuinely unmeasured would present that unmeasured account as
 an empty one — precisely the error §5.5 names ("incomplete must never be read as absence"), one
 rung upstream of the fallback arm it was written for: a `found` at rung 6 would tell the PWA
-"stranded history, held by `claude2`" and render a months-old copy while the live transcript sits
+"stranded history, held by `claude9`" and render a months-old copy while the live transcript sits
 unread in the account the search never actually reached. So when rung 5's own-account glob is
 unmeasured, rung 6 is skipped outright and the ladder falls straight through to the rung-7
 fallback with `complete: false` — the fallback arm already means exactly "here is the raw path,

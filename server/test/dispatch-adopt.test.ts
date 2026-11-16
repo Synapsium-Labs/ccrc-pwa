@@ -25,9 +25,10 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, toRunSummary } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { clearSender } from '../src/inject/send.js';
 import type { CcdResult } from '../src/lifecycle.js';
 import { UNMEASURED } from '../src/exec.js';
-import type { CcdArgv } from '../src/ccdargv.js';
+import { ROUTE_ARGV_CAP, type CcdArgv } from '../src/ccdargv.js';
 import { configDirFor, type CcrcConfig } from '../src/config.js';
 import { readRegistry } from '../src/registry.js';
 import { localIO } from '../src/io.js';
@@ -83,6 +84,17 @@ interface HarnessCfg {
    *  flight and no session id exists yet. A timestamp asserted only after the
    *  spawn returns would pass while being invisible for exactly that window. */
   onWsAdd?: () => void;
+  /** Routing spec §6 "Arms" (fix round 1, finding #1): the route body this
+   *  dispatch is asked to seed onto the argv. `undefined` (the default) keeps
+   *  every existing case in this file byte-identical — no fifth argument. */
+  route?: unknown;
+  /** Overrides the harness's default `fleetState` (`undefined`, under which
+   *  `capSupported` always answers false — "no evidence"). Set to include
+   *  `ROUTE_ARGV_CAP` for a case that seeds routing onto the `ws-add` argv. */
+  ccdVerbs?: string[];
+  /** The child's name, forwarded as `dispatchRun`'s sixth argument. `undefined`
+   *  (the default) keeps every other case byte-identical. */
+  slug?: unknown;
 }
 
 const harness = async (cfg: HarnessCfg) => {
@@ -110,15 +122,15 @@ const harness = async (cfg: HarnessCfg) => {
         seedRow(home, r.id, { held: r.held ?? null, spawnRc: r.spawnRc ?? null });
       }
       return {
-        ok: cfg.ccd.ok, stdout: '', stderr: cfg.ccd.stderr,
+        ran: true, ok: cfg.ccd.ok, stdout: '', stderr: cfg.ccd.stderr,
         killed: cfg.ccd.killed ?? UNMEASURED,
         signal: cfg.ccd.signal === undefined ? UNMEASURED : cfg.ccd.signal,
       };
     }
-    return { ok: true, stdout: '', stderr: '', killed: false, signal: null };
+    return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null };
   };
 
-  const base = testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' }));
+  const base = testDeps(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }));
   // `listed: false` on the AFTER read only — BEFORE must succeed, or the test
   // proves nothing about the asymmetry. `sawWsAdd` flips when the double runs.
   let sawWsAdd = false;
@@ -127,11 +139,13 @@ const harness = async (cfg: HarnessCfg) => {
     : localIO;
   const deps: DispatchRunDeps = {
     ...base, io, coord, runCcd,
+    fleetState: cfg.ccdVerbs === undefined ? undefined
+      : { connected: true, downSince: null, ccdVerbs: cfg.ccdVerbs, rosterFp: null, build: null },
     // The one join `configDirFor` owns, supplied through dispatch's
     // consumer-declared port (wave 2, F2). NOTE: the `as` assertion below does
     // NOT make this optional — a missing property would pass the compiler here
     // and throw at the call, which is why it is written out.
-    configDir: (w: string) => configDirFor(base.cfg as CcrcConfig, w),
+    configDir: (w: string) => configDirFor(base.cfg as CcrcConfig, w), turnVerdict: async () => 'idle' as const, sendClear: clearSender(base),
   } as DispatchRunDeps;
 
   return {
@@ -146,12 +160,57 @@ const harness = async (cfg: HarnessCfg) => {
     // (`typeof brief !== 'string'` -> `bad-request`, before the pause check and
     // long before any registry read) — an object here refuses every case in this
     // file for a reason none of them are about.
-    dispatch: () => dispatchRun(deps, opened.id, 'go', undefined),
+    dispatch: () => dispatchRun(deps, opened.id, 'go', undefined, cfg.route, cfg.slug),
     cleanup: () => { rmSync(home, { recursive: true, force: true }); },
   };
 };
 
 describe('§1.5 — adoption, and everything that must NOT adopt', () => {
+  // A NAMED spawn has one acceptable identity. An unheld stranger appearing
+  // inside a cut-short window (an operator's racing ws-add) satisfies every
+  // other adoption gate — so without the name check it WOULD be adopted.
+  it('a NAMED killed ws-add never adopts an unheld stranger, only <project>-<slug>', async () => {
+    const h = await harness({ ccd: { ok: false, killed: true, stderr: '' }, slug: 'task-42',
+                              after: [{ id: 'demo-quiet-basin', held: null, spawnRc: 4 }] });
+    const out = await h.dispatch();
+    expect(out).toMatchObject({ ok: false, kind: 'fleetFailed' });
+    expect(okRun(h.coord.run(h.runId))).toMatchObject({ state: 'planned', sessionId: null });
+    expect(h.ccdCalls().some((c) => c[0] === 'ws-hold')).toBe(false);
+    expect(h.coord.runEvents(h.runId).map((e) => e.detail)).toContain('dispatch-refused:fleetFailed candidates=');
+  });
+
+  it("D-8147: a slug carrying the team's ticket is refused in a public project before any ws-add, and goes in a private one", async () => {
+    const h = await harness({ ccd: { ok: true, stderr: '' }, slug: 'key-12-fix-login', after: [{ id: 'demo-key-12-fix-login', held: null, spawnRc: 0 }] });
+    h.coord.setLinking(PROJECT, { teamKey: 'KEY', override: 'public' }, 'd', 1);
+    const out = await h.dispatch();
+    expect(out).toMatchObject({ ok: false, kind: 'bad-request', detail: expect.stringContaining('KEY-12') });
+    expect(h.ccdCalls().some((c) => c[0] === 'ws-add')).toBe(false);
+    expect(okRun(h.coord.run(h.runId))).toMatchObject({ state: 'planned', sessionId: null });
+    // a store that cannot be read refuses too, instead of going on keyless
+    vi.spyOn(h.coord, 'linkingOf').mockImplementation(() => { throw new Error('db locked'); });
+    expect(await h.dispatch()).toMatchObject({ ok: false, kind: 'registry-unmeasurable' });
+    expect(h.ccdCalls().some((c) => c[0] === 'ws-add')).toBe(false);
+    vi.restoreAllMocks();
+    h.coord.setLinking(PROJECT, { teamKey: 'KEY', override: 'private' }, 'd', 2);
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    h.cleanup();
+  });
+
+  it('and ADOPTS the named one when that is what the killed ws-add left', async () => {
+    const h = await harness({ ccd: { ok: false, killed: true, stderr: '' }, slug: 'task-42',
+                              after: [{ id: 'demo-task-42', held: null, spawnRc: 4 }] });
+    expect(await h.dispatch()).toMatchObject({ ok: true, adopted: true, sessionId: 'demo-task-42' });
+  });
+
+  it('a named spawn ccd refuses fails with ccd\'s own words, binding nothing', async () => {
+    // The refusal TEXT is ccd's and is only carried, never parsed — the fixture's
+    // words are arbitrary on purpose (the real one is pinned in ccd's own suite).
+    const h = await harness({ ccd: { ok: false, killed: false, signal: null, stderr: 'ccd: refused (fixture words)' },
+                              slug: 'task-42' });
+    expect(await h.dispatch()).toMatchObject({ ok: false, kind: 'fleetFailed', stderr: 'ccd: refused (fixture words)' });
+    expect(okRun(h.coord.run(h.runId))).toMatchObject({ state: 'planned', sessionId: null });
+  });
+
   it('ADOPTS a killed ws-add that created exactly ONE UNHELD workspace', async () => {
     const h = await harness({ ccd: { ok: false, killed: true, stderr: '' },
                               after: [{ id: 'demo-quiet-basin', held: null, spawnRc: 4 }] });
@@ -511,10 +570,146 @@ describe('T1 — `dispatchStartedAt`: the run says a dispatch is in flight', () 
       after: [{ id: 'demo-quiet-basin', held: null }],
     });
     await h.dispatch();
-    // `toRunSummary` is a spread that strips `prLineage` and nothing else, so
-    // this asserts the field is on `RunSummary` rather than server-internal.
+    // `toRunSummary` is a spread that strips `prLineage` and (since Task 1's
+    // migration 12) `coordProject`, and nothing else, so this asserts the
+    // field is on `RunSummary` rather than server-internal.
     const wire: RunSummary = toRunSummary(okRun(h.coord.run(h.runId))!);
     expect(wire.dispatchStartedAt).toBe(NOW);
     expect(okRuns(h.coord.runs()).map((r) => toRunSummary(r).dispatchStartedAt)).toEqual([NOW]);
+  });
+});
+
+// Child-reclamation spec §5.1, §5.3; migration 16: the child's BIRTH is
+// write-once per BOUND session, spent from the SAME `startedAt` this arm
+// stamps onto `dispatchStartedAt` above — never a second `Date.now()` read,
+// which could date the two columns apart for no reason a reader could
+// recover. A CLEAN spawn binds its stamp; an ADOPTED spawn binds NULL,
+// because the workspace it adopted may be an earlier attempt's — `childBirthOf`
+// must never place a PR row against a birth this call cannot vouch for.
+describe('T2 — sessionBornAt: the write-once birth', () => {
+  const NOW = 1_756_000_000_000;
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('a CLEAN spawn binds its stamp — sessionBornAt equals dispatchStartedAt', async () => {
+    const h = await harness({
+      ccd: { ok: true, killed: false, stderr: '' },
+      after: [{ id: 'demo-quiet-basin', held: null }],
+    });
+    expect(await h.dispatch()).toMatchObject({ ok: true, adopted: false });
+    const row = okRun(h.coord.run(h.runId))!;
+    expect(row.sessionBornAt).toBe(NOW);
+    expect(row.sessionBornAt).toBe(row.dispatchStartedAt);
+  });
+
+  it("an ADOPTED spawn binds a NULL birth — the workspace may be an earlier attempt's", async () => {
+    const h = await harness({ ccd: { ok: false, killed: true, stderr: '' },
+                              after: [{ id: 'demo-quiet-basin', held: null, spawnRc: 4 }] });
+    expect(await h.dispatch()).toMatchObject({ ok: true, adopted: true, sessionId: 'demo-quiet-basin' });
+    const row = okRun(h.coord.run(h.runId))!;
+    expect(row.sessionBornAt).toBeNull();
+    // `dispatchStartedAt` is STILL stamped — the two columns' whole point is
+    // that an adoption is exactly where they diverge.
+    expect(row.dispatchStartedAt).toBe(NOW);
+  });
+
+  it('reaches the WIRE only as `dispatchStartedAt` — toRunSummary strips sessionBornAt, never sends it', async () => {
+    const h = await harness({
+      ccd: { ok: true, killed: false, stderr: '' },
+      after: [{ id: 'demo-quiet-basin', held: null }],
+    });
+    await h.dispatch();
+    const row = okRun(h.coord.run(h.runId))!;
+    expect(row.sessionBornAt).toBe(NOW);
+    expect(toRunSummary(row)).not.toHaveProperty('sessionBornAt');
+  });
+
+  // "ONE MEASUREMENT, SPENT TWICE" is asserted in `dispatch.ts`'s own comment
+  // but was unpinned — every case above runs under a frozen fake `Date`, so a
+  // second `Date.now()` read at the `setSession` call would stay green too.
+  // This advances the clock from INSIDE the stubbed
+  // `ws-add` — the one vantage point between the stamp `dispatchStartedAt`
+  // takes and the `setSession` call that would read a second one — so a
+  // regression that reads `Date.now()` again at the bind reds here even
+  // though it would pass every other case in this file.
+  it('spends ONE Date.now() for both columns — a slow ws-add must not date sessionBornAt later than dispatchStartedAt', async () => {
+    const h = await harness({
+      ccd: { ok: true, killed: false, stderr: '' },
+      after: [{ id: 'demo-quiet-basin', held: null }],
+      // The spawn takes 42 s of wall clock, exactly T1's "is NEVER cleared"
+      // case's idiom — the only thing that moves the clock between the two
+      // stamps is this line.
+      onWsAdd: () => { vi.setSystemTime(NOW + 42_000); },
+    });
+    expect(await h.dispatch()).toMatchObject({ ok: true, adopted: false });
+    const row = okRun(h.coord.run(h.runId))!;
+    expect(row.dispatchStartedAt).toBe(NOW);
+    // A second `Date.now()` at `setSession` would read NOW + 42_000 — the
+    // clock the double just advanced — so this is the assertion a stray
+    // re-read reds.
+    expect(row.sessionBornAt).toBe(NOW);
+  });
+});
+
+// Routing spec §6 "Arms" (fix round 1, finding #1). §1.5's adoption path is the
+// exact case that falsifies "the arm gate can read `res.ok`": `cmd_ws_add`
+// writes the worktree and every registry row FIRST and blocked LAST, so the
+// `--route` pairs a killed `ws-add` carried were applied to the workspace this
+// call then adopts, binds and holds — `res.ok === false` throughout. The old
+// gate (`routeFields !== null && capSupported(...) && res.ok`) skipped the
+// record for exactly that run, and a route-seeded dispatch that refused AFTER
+// `ws-add` genuinely succeeded (`registry-unmeasurable`/`ambiguous-dispatch`)
+// left the arm recorded for an attempt the run never bound to — read back as
+// the run's `arm` forever, since `runRoutingEvents` takes the FIRST `arm:`
+// event. Both are fixed by moving the record to right after `coord.setSession`
+// — the point a session is genuinely, irreversibly bound — and gating only on
+// whether routing was actually seeded onto the argv, never on `res.ok`.
+describe('routing spec §6 "Arms" — the arm gate reads BOUND, never `res.ok` (fix round 1, finding #1)', () => {
+  it('an ADOPTED spawn (res.ok:false, a genuinely killed ws-add) still records its seeded arm', async () => {
+    const h = await harness({
+      ccd: { ok: false, killed: true, stderr: '' },
+      after: [{ id: 'demo-quiet-basin', held: null, spawnRc: 4 }],
+      ccdVerbs: ['ws-add', 'ws-hold', ROUTE_ARGV_CAP],
+      route: { class: 'opus', effort: 'high' },
+    });
+    const out = await h.dispatch();
+    expect(out).toMatchObject({ ok: true, adopted: true, sessionId: 'demo-quiet-basin' });
+    // The seeded pairs really did reach the `ws-add` argv this call sent.
+    expect(h.ccdCalls()).toContainEqual(expect.arrayContaining(['--route', 'class=opus']));
+    expect(h.coord.runEvents(h.runId).map((e) => e.detail)).toContain('arm:class=opus effort=high');
+  });
+
+  it('a route-seeded dispatch that refuses AFTER ws-add succeeded (ambiguous-dispatch) records NO arm', async () => {
+    // `ws-add` itself is CLEAN (`ok:true`) — this is the false positive named
+    // by finding #1(b), not the adoption path: two same-project candidates
+    // appear in the AFTER read (an operator race, or a second live worker),
+    // so the dispatch refuses `ambiguous-dispatch` before `coord.setSession`
+    // is ever reached — nothing was bound, so nothing should be armed.
+    const h = await harness({
+      ccd: { ok: true, killed: false, stderr: '' },
+      after: [{ id: 'demo-quiet-basin', held: null }, { id: 'demo-still-cove', held: null }],
+      ccdVerbs: ['ws-add', 'ws-hold', ROUTE_ARGV_CAP],
+      route: { class: 'opus', effort: 'high' },
+    });
+    const out = await h.dispatch();
+    expect(out).toEqual({ ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: 2 });
+    expect(okRun(h.coord.run(h.runId))?.sessionId).toBeNull();
+    expect(h.coord.runEvents(h.runId).some((e) => (e.detail ?? '').startsWith('arm:'))).toBe(false);
+  });
+
+  it('a route-seeded dispatch that refuses AFTER ws-add succeeded (registry-unmeasurable) records NO arm', async () => {
+    // The other refusal-after-success shape finding #1(b) names: ccd itself
+    // reported nothing wrong, but the AFTER listing could not be measured —
+    // refused before `coord.setSession`, same as above.
+    const h = await harness({
+      ccd: { ok: true, killed: false, stderr: '' },
+      afterListed: false,
+      ccdVerbs: ['ws-add', 'ws-hold', ROUTE_ARGV_CAP],
+      route: { class: 'opus', effort: 'high' },
+    });
+    const out = await h.dispatch();
+    expect(out).toEqual({ ok: false, kind: 'registry-unmeasurable' });
+    expect(okRun(h.coord.run(h.runId))?.sessionId).toBeNull();
+    expect(h.coord.runEvents(h.runId).some((e) => (e.detail ?? '').startsWith('arm:'))).toBe(false);
   });
 });

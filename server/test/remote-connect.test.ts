@@ -1,9 +1,14 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
+import v8 from 'node:v8';
+import vm from 'node:vm';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { RunningAgent } from '../../agent/src/server.js';
-import { connectFleet, FleetClient, type ConnectedFleet } from '../src/remote/client.js';
+import { connectFleet, FleetClient, readReadyOps, type ConnectedFleet } from '../src/remote/client.js';
+import { LinkNotSentError } from '../src/remote/errors.js';
+import { MAX_CAP_WORDS } from '../../shared/api.js';
 import { TOKEN, bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 
 describe('connectFleet — connection lifecycle', () => {
@@ -35,8 +40,24 @@ describe('connectFleet — connection lifecycle', () => {
     // equality on purpose — a field added to `FleetState` and never populated
     // by `onReady` fails here, which is the only check that does not depend on
     // someone remembering to assert the new field.
+    //
+    // `observedEpoch: null`, not omitted and not `undefined`: unlike
+    // `rosterFp`/`build`, a real agent NEVER omits this field — the fixture
+    // home has no `~/.cc-sessions/pool-epoch`, so `readObservedEpoch` answers
+    // "never synced" (`null`), sent on the wire explicitly, not "no evidence".
+    // `agentOps: ['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync', 'testbox-admin', 'backup', 'readdir-mtimes', 'overlord-history']`: the REAL agent advertises the ops it
+    // answers beyond the closed set (design 2026-09-20 §10, programme wave 5
+    // Task 2; `token-sync` from box-token lifecycle wave 1, spec 4.4; `account`
+    // from the accounts plan's A8, spec §13.2; `disk` from D-6614; `pressure`
+    // the host-pressure read of #1170; `testbox` and `testbox-tools-sync` from the test box plan's TB9, D-7411), read
+    // through `readReadyOps`. This literal read `[]` while the agent sent
+    // no `ops`; a ready frame that stops sending the word reds HERE — §18 "an
+    // agent without the op is never sent it", on the agent's side.
     await vi.waitFor(
-      () => expect(fleet!.state).toEqual({ connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null }),
+      () => expect(fleet!.state).toEqual({
+        connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null, observedEpoch: null,
+        agentOps: ['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync', 'testbox-admin', 'backup', 'readdir-mtimes', 'overlord-history'],
+      }),
       { timeout: 3000 });
   });
 
@@ -102,6 +123,24 @@ describe('connectFleet — connection lifecycle', () => {
     // nothing to close. Isolates the initializer from connection lifecycle.
     const client = new FleetClient({ url: 'ws://127.0.0.1:1', token: 'unused' });
     expect(client.state.ccdVerbs).toBeNull();
+  });
+
+  it('starts with observedEpoch:undefined before any handshake — never null', () => {
+    // The pre-handshake state is "no evidence at all", which is the ABSENT
+    // condition (`undefined`), not "this node has synced never" (`null`) — a
+    // fact only a real `ready` frame can assert. Getting this default wrong
+    // in either direction is exactly the fold the whole field exists to
+    // prevent: `null` here would read as a measured fact before any peer was
+    // ever asked.
+    const client = new FleetClient({ url: 'ws://127.0.0.1:1', token: 'unused' });
+    expect(client.state.observedEpoch).toBeUndefined();
+  });
+
+  it('starts with agentOps:undefined before any handshake — "no evidence", not "no ops"', () => {
+    // `[]` would claim a ready frame arrived and named nothing; before any
+    // handshake nothing arrived at all (design 2026-09-20 §8, decision 11).
+    const client = new FleetClient({ url: 'ws://127.0.0.1:1', token: 'unused' });
+    expect(client.state.agentOps).toBeUndefined();
   });
 });
 
@@ -205,6 +244,57 @@ describe('FleetClient.request — every settlement releases its pending resource
     await vi.waitFor(() => expect(requestSeen).toBe(true), { timeout: 3000 });
     replyLate();
     await new Promise((resolve) => setImmediate(resolve));
+    expect(reachable.pending.size).toBe(0);
+  });
+
+  it("drops the frame once sent: a pending account op keeps nothing of its frame alive (spec §13.2, D-5513)", async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    wss = server;
+    const frames: string[] = [];
+    let reply!: () => void;
+    server.on('connection', (ws) => {
+      ws.on('message', (raw) => {
+        const text = raw.toString();
+        const msg = JSON.parse(text) as { t?: unknown; id?: unknown };
+        if (msg.t === 'hello') ws.send(JSON.stringify({ t: 'ready', v: 1, ops: ['account'] }));
+        else if (msg.t === 'req' && typeof msg.id === 'number') {
+          frames.push(text);
+          reply = () => ws.send(JSON.stringify({ t: 'res', id: msg.id, ok: true, kind: 'not-started', fleetIdentity: null }));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+    const address = server.address();
+    const port = typeof address === 'object' && address !== null ? address.port : 0;
+    fleet = connectFleet({ url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+
+    const canary = ['CANARY', 'client', String(process.pid)].join('-');
+    const stdinB64 = Buffer.from(canary).toString('base64');
+    // The payload is built in a frame of its own and only a WeakRef to it survives here, so the one thing that can
+    // keep it alive while the request is pending is the client (its pending entry, a listener, a timer closure, a
+    // closure context the executor shares with them). A real collector run decides, not the entry's key shape:
+    // `--expose-gc` is switched on in-process and `gc` taken from a fresh context.
+    v8.setFlagsFromString('--expose-gc');
+    const gc = vm.runInNewContext('gc') as () => void;
+    const send = (): { request: Promise<unknown>; ref: WeakRef<object> } => {
+      const payload = { t: 'req' as const, op: 'account' as const, sub: 'credential' as const, laneId: 'lane-a',
+        fields: {}, stdinB64: Buffer.from(canary).toString('base64') };
+      return { request: fleet!.client.request(payload, 60_000), ref: new WeakRef(payload) };
+    };
+    const { request, ref } = send();
+    const reachable = fleet.client as unknown as { pending: Map<number, unknown> };
+    expect(reachable.pending.size).toBe(1);
+    for (let i = 0; i < 5 && ref.deref() !== undefined; i++) {
+      await new Promise((r) => setImmediate(r));
+      gc();
+    }
+    expect(reachable.pending.size, 'still pending while the collector ran').toBe(1);
+    expect(ref.deref(), 'a pending request keeps nothing of its frame alive').toBeUndefined();
+    await vi.waitFor(() => expect(frames).toHaveLength(1), { timeout: 3000 });
+    expect(frames[0], 'the frame did reach the wire (the control)').toContain(stdinB64);
+    reply();
+    await expect(request).resolves.toMatchObject({ ok: true, kind: 'not-started' });
     expect(reachable.pending.size).toBe(0);
   });
 
@@ -380,6 +470,19 @@ describe('FleetClient.onReady — ccdVerbs validation distinguishes null from em
     expect(fleet.state.ccdVerbs).toBeNull();
   });
 
+  // D-7079 characterization: the ready frame RESETS, `null` included. A reconnect to an older agent (no `ccdVerbs`
+  // in its ready frame) must not keep the list the previous agent advertised.
+  it('a ready frame with no ccdVerbs resets: null after a list stood', async () => {
+    let readies = 0;
+    server = await fakeReadyAgent(() => (++readies === 1 ? { ccdVerbs: ['start', 'ws-audit'] } : {}));
+    fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.ccdVerbs).toEqual(['start', 'ws-audit']), { timeout: 3000 });
+    fleet.client.ws?.close();
+    await vi.waitFor(() => expect(readies).toBe(2), { timeout: 5000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    expect(fleet.state.ccdVerbs).toBeNull();
+  });
+
   it('a real empty array is recorded as [], distinct from the null "no evidence" case', async () => {
     server = await fakeReadyAgent({ ccdVerbs: [] });
     fleet = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
@@ -514,5 +617,500 @@ describe('FleetClient.onReady — build is re-validated at the wire, never trust
     extra = { build: { ...STAMP, sha: '' } };
     fleet.client.ws?.close();
     await vi.waitFor(() => expect(fleet!.state.build).toBeNull(), { timeout: 3000 });
+  });
+});
+
+describe('FleetClient.onReady — observedEpoch keeps THREE answers apart, never two', () => {
+  // A real `ccrc-agent` never omits this field (`agent/test/observed-epoch.test.ts`
+  // pins that) — it always answers a number or `null`. Only a fake agent old
+  // enough to skip the field at all reaches the "absent" branch, exactly the
+  // way `rosterFp`/`build`'s fake-agent describe blocks above reach theirs.
+  let server: { port: number; close(): Promise<void> } | undefined;
+  let fleet: ConnectedFleet | undefined;
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (server) await server.close();
+    server = undefined;
+  });
+
+  const connect = async (extra: Record<string, unknown>): Promise<ConnectedFleet> => {
+    server = await fakeReadyAgent(extra);
+    const f = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(f.state.connected).toBe(true), { timeout: 3000 });
+    return f;
+  };
+
+  it('records a reported number verbatim', async () => {
+    fleet = await connect({ observedEpoch: 43 });
+    expect(fleet.state.observedEpoch).toBe(43);
+  });
+
+  it('records epoch 0 as 0 — a real, measured epoch, not "no evidence"', async () => {
+    fleet = await connect({ observedEpoch: 0 });
+    expect(fleet.state.observedEpoch).toBe(0);
+  });
+
+  it('records an explicit null as null — "this node has synced never", a fact, not an absence', async () => {
+    fleet = await connect({ observedEpoch: null });
+    expect(fleet.state.observedEpoch).toBeNull();
+  });
+
+  // THE MUTATION THIS TASK NAMES: an absent field (an older agent) and an
+  // explicit `null` (a real "never synced" report) MUST read as two different
+  // values on `fleetState`. A reader using `== null` to test absence would
+  // pass every other test in this file (both branches assign a nullish-ish
+  // value) and fail only here, where the two conditions are asserted apart in
+  // the SAME test.
+  it('an absent field and an explicit null are NOT the same value', async () => {
+    const absent = await connect({});
+    expect(absent.state.observedEpoch).toBeUndefined();
+    await absent.close();
+
+    const neverSynced = await connect({ observedEpoch: null });
+    expect(neverSynced.state.observedEpoch).toBeNull();
+
+    expect(absent.state.observedEpoch).not.toBe(neverSynced.state.observedEpoch);
+  });
+
+  it.each([
+    ['a string', { observedEpoch: '43' }],
+    ['a boolean', { observedEpoch: true }],
+    ['an array', { observedEpoch: [43] }],
+    ['an object', { observedEpoch: { epoch: 43 } }],
+    // Review T8-R1, F4: a JSON *number* is not automatically a well-formed
+    // one — `build`'s own comment three lines below states the doctrine this
+    // reader must also follow: "the peer may be older, newer, or broken."
+    // `ccd-pool-sync`'s own writer rejects both of these before ever
+    // rendering a document (`ccd-pool-sync:163`, `:186`).
+    ['a negative number', { observedEpoch: -1 }],
+    ['a non-integer number', { observedEpoch: 4.5 }],
+  ])('%s off the wire contract is discarded as undefined, not fabricated into a number', async (_label, extra) => {
+    fleet = await connect(extra);
+    expect(fleet.state.observedEpoch).toBeUndefined();
+  });
+
+  it('a peer that stops reporting on RECONNECT drops the epoch it had, not keeps it', async () => {
+    // Same reset-on-every-ready guard as `build`'s reconnect test above,
+    // proven on the branch a fresh connection cannot reach: a client whose
+    // `state.observedEpoch` already holds a real number, reconnecting to a
+    // peer that now omits the field entirely (a downgrade). A reader that
+    // kept the stale number would report a fleet host as caught up to an
+    // epoch it can no longer even claim.
+    let extra: Record<string, unknown> = { observedEpoch: 43 };
+    server = await fakeReadyAgent(() => extra);
+    fleet = connectFleet({
+      url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000,
+      reconnectMinMs: 30, reconnectMaxMs: 100,
+    });
+    await vi.waitFor(() => expect(fleet!.state.observedEpoch).toBe(43), { timeout: 3000 });
+
+    extra = {};
+    fleet.client.ws?.close();
+    await vi.waitFor(() => expect(fleet!.state.observedEpoch).toBeUndefined(), { timeout: 3000 });
+  });
+});
+
+describe('readReadyOps — the ONE validator of AgentReady.ops (design 2026-09-20 §8)', () => {
+  // §8: "`caps` and `agentOps` words must match `CAP_WORD` with at most 32
+  // words, and one bad word drops the whole file to ''". The inventory stores
+  // `[]` as `''`; the server row's NULL is the sweep's, never this reader's.
+  it.each<[string, unknown, string[]]>([
+    ['absent (every agent before W4)', undefined, []],
+    ['null', null, []],
+    ['a bare string', 'update', []],
+    ['an object', { update: true }, []],
+    ['an empty list', [], []],
+    ['one valid word', ['update'], ['update']],
+    ['two valid words', ['update', 'rollback'], ['update', 'rollback']],
+    ['one word off CAP_WORD drops the whole list', ['update', 'Update'], []],
+    ['a word with a space', ['update now'], []],
+    ['a non-string element', ['update', 1], []],
+    ['a 33-character word', ['a'.repeat(33)], []],
+  ])('%s', (_label, raw, want) => {
+    expect(readReadyOps(raw)).toEqual(want);
+  });
+
+  it('exactly MAX_CAP_WORDS words pass; one more drops them all', () => {
+    const words = (n: number): string[] => Array.from({ length: n }, (_, i) => `op-${i}`);
+    expect(readReadyOps(words(MAX_CAP_WORDS))).toEqual(words(MAX_CAP_WORDS));
+    expect(readReadyOps(words(MAX_CAP_WORDS + 1))).toEqual([]);
+  });
+});
+
+describe('FleetClient.onReady — ops is read through readReadyOps, on every ready', () => {
+  let server: { port: number; close(): Promise<void> } | undefined;
+  let fleet: ConnectedFleet | undefined;
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (server) await server.close();
+    server = undefined;
+  });
+
+  const connect = async (extra: Record<string, unknown>): Promise<ConnectedFleet> => {
+    server = await fakeReadyAgent(extra);
+    const f = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(f.state.connected).toBe(true), { timeout: 3000 });
+    return f;
+  };
+
+  it('an absent ops (every agent before W4) is [] — connected, no op named', async () => {
+    fleet = await connect({});
+    expect(fleet.state.agentOps).toEqual([]);
+  });
+
+  it('a valid list is recorded verbatim', async () => {
+    fleet = await connect({ ops: ['update'] });
+    expect(fleet.state.agentOps).toEqual(['update']);
+  });
+
+  it('one bad word off the wire drops the whole list — never a partial', async () => {
+    fleet = await connect({ ops: ['update', 'RM -RF'] });
+    expect(fleet.state.agentOps).toEqual([]);
+  });
+
+  it('a peer that stops sending ops on RECONNECT drops what it had, not keeps it', async () => {
+    // The reset-on-every-ready guard, on the branch a fresh connection cannot
+    // reach: a W4 agent downgraded to a W2 one must not keep being sent an op
+    // it no longer answers.
+    let extra: Record<string, unknown> = { ops: ['update'] };
+    server = await fakeReadyAgent(() => extra);
+    fleet = connectFleet({
+      url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000,
+      reconnectMinMs: 30, reconnectMaxMs: 100,
+    });
+    await vi.waitFor(() => expect(fleet!.state.agentOps).toEqual(['update']), { timeout: 3000 });
+    extra = {};
+    fleet.client.ws?.close();
+    await vi.waitFor(() => expect(fleet!.state.agentOps).toEqual([]), { timeout: 3000 });
+  });
+});
+
+describe('the ~/.ccrc node files over a REAL agent — what the inventory sweep reads (design 2026-09-20 §8)', () => {
+  // The server's remote FleetIO against the real agent's checkPath, over a real
+  // loopback WS: the path Task 11's sweep takes for the fleet node. Fixture
+  // HOMEs only.
+  let agent: RunningAgent | undefined;
+  let fixture: RemoteFixture | undefined;
+  let fleet: ConnectedFleet | undefined;
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (agent) await agent.close();
+    agent = undefined;
+    if (fixture) {
+      rmSync(fixture.home, { recursive: true, force: true });
+      rmSync(fixture.projectsRoot, { recursive: true, force: true });
+    }
+    fixture = undefined;
+  });
+
+  const open = async (): Promise<string> => {
+    fixture = makeFixture();
+    const ccrc = path.join(fixture.home, '.ccrc');
+    mkdirSync(ccrc, { recursive: true });
+    agent = await bootAgent(fixture);
+    fleet = connectToAgent(agent.port, { heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    return ccrc;
+  };
+
+  it('a node file reads, stats and lstats; an unwritten one is ABSENT; the secret beside them is refused', async () => {
+    const ccrc = await open();
+    writeFileSync(path.join(ccrc, 'build.json'), '{"sha":"abc"}\n');
+    writeFileSync(path.join(ccrc, 'agent.env'), 'CCRC_AGENT_TOKEN=not-for-the-wire\n');
+    const stamp = path.join(ccrc, 'build.json');
+    expect(await fleet!.io.readFileMeasured(stamp)).toEqual({ ok: true, content: '{"sha":"abc"}\n' });
+    expect(await fleet!.io.statMeasured(stamp)).toMatchObject({ ok: true, size: 14 });
+    expect(await fleet!.io.lstatMeasured(stamp)).toEqual({ ok: true, kind: 'regular' });
+    expect(await fleet!.io.readFileMeasured(path.join(ccrc, 'node-id'))).toEqual({ ok: false, reason: 'absent' });
+    expect(await fleet!.io.readFileMeasured(path.join(ccrc, 'agent.env'))).toEqual({ ok: false, reason: 'unreadable' });
+    expect(await fleet!.io.readdir(ccrc)).toBeNull();
+  });
+
+  it('a live symlink carrying a node-file name is never followed — refused over read and lstat alike', async () => {
+    const ccrc = await open();
+    writeFileSync(path.join(ccrc, 'agent.env'), 'CCRC_AGENT_TOKEN=not-for-the-wire\n');
+    writeFileSync(path.join(ccrc, 'installed'), 'abc\n');
+    symlinkSync(path.join(ccrc, 'agent.env'), path.join(ccrc, 'build.json'));
+    symlinkSync(path.join(ccrc, 'installed'), path.join(ccrc, 'floor'));
+    for (const name of ['build.json', 'floor']) {
+      const p = path.join(ccrc, name);
+      expect(await fleet!.io.readFileMeasured(p), name).toEqual({ ok: false, reason: 'unreadable' });
+      // `unmeasured`, never `regular`: the agent refuses the lstat outright
+      // (`forbidden`) and the remote io reports a refused lstat as `unmeasured`
+      // (`remote/io.ts`'s `lstatMeasured`), which the sweep folds to
+      // `unreadable` (D-3178). `regular` for `floor` is the
+      // regression the literal-basename rule exists to stop.
+      expect(await fleet!.io.lstatMeasured(p), name).toEqual({ ok: false, reason: 'unmeasured' });
+    }
+  });
+
+  it('a DANGLING symlink carrying a node-file name lstats as `symlink` — the kind the sweep refuses', async () => {
+    const ccrc = await open();
+    symlinkSync(path.join(ccrc, 'no-such-target'), path.join(ccrc, 'update.json'));
+    expect(await fleet!.io.lstatMeasured(path.join(ccrc, 'update.json'))).toEqual({ ok: true, kind: 'symlink' });
+  });
+});
+
+/** A minimal hello->ready server, same shape as the scaffold in the
+ *  `every settlement releases its pending resources` describe above, plus a
+ *  record of every `req` frame it sees and the socket that sent the last one
+ *  — so a case can terminate exactly the connection that carries a pending
+ *  request. */
+async function listen(): Promise<{
+  server: WebSocketServer;
+  port: number;
+  requestFrames: Array<Record<string, unknown>>;
+  reqSocket(): WebSocket | undefined;
+}> {
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  const requestFrames: Array<Record<string, unknown>> = [];
+  let lastReqSocket: WebSocket | undefined;
+  server.on('connection', (ws) => {
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(raw.toString()) as Record<string, unknown>;
+      if (msg.t === 'hello') ws.send(JSON.stringify({ t: 'ready', v: 1 }));
+      else if (msg.t === 'req') {
+        requestFrames.push(msg);
+        lastReqSocket = ws;
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+  const address = server.address();
+  const port = typeof address === 'object' && address !== null ? address.port : 0;
+  return { server, port, requestFrames, reqSocket: () => lastReqSocket };
+}
+
+describe('FleetClient.request — what never reached the link is a LinkNotSentError, and nothing after the send is (D-3555, residue R1)', () => {
+  let wss: WebSocketServer | undefined;
+  let fleet: ConnectedFleet | undefined;
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    await fleet?.close();
+    fleet = undefined;
+    if (wss) {
+      for (const client of wss.clients) client.terminate();
+      await new Promise<void>((resolve) => wss!.close(() => resolve()));
+    }
+    wss = undefined;
+  });
+
+  it('no ready link at the call: LinkNotSentError(disconnected), nothing left pending', async () => {
+    fleet = connectFleet({
+      url: 'ws://127.0.0.1:1', token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000,
+    });
+    const reachable = fleet.client as unknown as { pending: Map<number, unknown> };
+    const request = fleet.client.request({ t: 'req', op: 'caps' });
+    await expect(request).rejects.toBeInstanceOf(LinkNotSentError);
+    await expect(request).rejects.toMatchObject({ message: 'disconnected' });
+    expect(reachable.pending.size).toBe(0);
+  });
+
+  it('a signal already aborted: LinkNotSentError(aborted), no frame ever reaches the server', async () => {
+    const l = await listen();
+    wss = l.server;
+    fleet = connectFleet({ url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+
+    const controller = new AbortController();
+    controller.abort();
+    const request = fleet.client.request({ t: 'req', op: 'caps' }, 60_000, controller.signal);
+    await expect(request).rejects.toBeInstanceOf(LinkNotSentError);
+    await expect(request).rejects.toMatchObject({ message: 'aborted' });
+    expect(l.requestFrames).toEqual([]);
+  });
+
+  it('a synchronous send throw: LinkNotSentError(the thrown message), and the registration above is undone', async () => {
+    const l = await listen();
+    wss = l.server;
+    fleet = connectFleet({ url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+
+    const socket = (fleet.client as unknown as { socket: WebSocket }).socket;
+    vi.spyOn(socket, 'send').mockImplementation(() => { throw new Error('send refused'); });
+
+    vi.useFakeTimers();
+    const timersBefore = vi.getTimerCount();
+    const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, 'removeEventListener');
+    const reachable = fleet.client as unknown as { pending: Map<number, unknown> };
+
+    const request = fleet.client.request({ t: 'req', op: 'caps' }, 60_000, controller.signal);
+
+    await expect(request).rejects.toBeInstanceOf(LinkNotSentError);
+    await expect(request).rejects.toMatchObject({ message: 'send refused' });
+    expect(reachable.pending.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(timersBefore);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+    expect(l.requestFrames).toEqual([]);
+  });
+
+  type PostSendCase = {
+    label: string;
+    message: string;
+    // Boxed in `{ p }`, never returned bare: an `async` function auto-awaits
+    // (flattens) a returned promise before its own caller's `await` sees
+    // anything, which would let the rejection this case is arranging escape
+    // BEFORE the test attaches its `.rejects` assertion — an unhandled
+    // rejection, not a failed expectation.
+    arrange(ctx: {
+      fleet: ConnectedFleet;
+      l: Awaited<ReturnType<typeof listen>>;
+      controller: AbortController;
+    }): Promise<{ p: Promise<unknown> }>;
+  };
+
+  const postSendCases: PostSendCase[] = [
+    {
+      label: 'a timeout',
+      message: 'timeout',
+      arrange: async ({ fleet: f, l }) => {
+        const p = f.client.request({ t: 'req', op: 'caps' }, 25);
+        // Node flags `p` unhandled the instant its timer fires if that lands
+        // before the caller's `.rejects` chain attaches — which can beat the
+        // `vi.waitFor` poll below on a loaded box. A no-op catch here (same
+        // pattern as the two `void request.catch(() => {});` calls above in
+        // this file) is silent by construction and never swallows the
+        // rejection itself: the returned `p` is what the caller still awaits.
+        void p.catch(() => {});
+        await vi.waitFor(() => expect(l.requestFrames.length).toBe(1), { timeout: 3000 });
+        return { p };
+      },
+    },
+    {
+      label: 'a socket close',
+      message: 'disconnected',
+      arrange: async ({ fleet: f, l }) => {
+        const p = f.client.request({ t: 'req', op: 'caps' }, 60_000);
+        void p.catch(() => {});
+        await vi.waitFor(() => expect(l.requestFrames.length).toBe(1), { timeout: 3000 });
+        l.reqSocket()!.terminate();
+        return { p };
+      },
+    },
+    {
+      label: 'close()',
+      message: 'disconnected',
+      arrange: async ({ fleet: f, l }) => {
+        const p = f.client.request({ t: 'req', op: 'caps' }, 60_000);
+        void p.catch(() => {});
+        await vi.waitFor(() => expect(l.requestFrames.length).toBe(1), { timeout: 3000 });
+        void f.close();
+        return { p };
+      },
+    },
+    {
+      label: 'an abort',
+      message: 'aborted',
+      arrange: async ({ fleet: f, l, controller }) => {
+        const p = f.client.request({ t: 'req', op: 'caps' }, 60_000, controller.signal);
+        void p.catch(() => {});
+        await vi.waitFor(() => expect(l.requestFrames.length).toBe(1), { timeout: 3000 });
+        controller.abort();
+        return { p };
+      },
+    },
+  ];
+
+  it.each(postSendCases.map((c) => [c.label, c] as const))(
+    '%s after the send stays a plain Error, never the marker',
+    async (_label, c) => {
+      const l = await listen();
+      wss = l.server;
+      fleet = connectFleet({
+        url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000,
+      });
+      await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+
+      const controller = new AbortController();
+      const { p: request } = await c.arrange({ fleet, l, controller });
+      await expect(request).rejects.toThrow(c.message);
+      await expect(request).rejects.not.toBeInstanceOf(LinkNotSentError);
+    },
+  );
+});
+
+describe('FleetClient — the connect deadline bounds socket creation → ready', () => {
+  let fleet: ConnectedFleet | undefined;
+  let closeServer: (() => Promise<void>) | undefined;
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    await closeServer?.();
+    closeServer = undefined;
+  });
+
+  /** Accepts TCP and swallows every byte: the kernel's listen backlog behind an agent that is mid-shutdown or
+   *  mid-reboot. The upgrade request goes out and no reply or RST ever comes. */
+  async function silentTcp(): Promise<{ port: number; accepted: () => number }> {
+    const sockets: net.Socket[] = [];
+    const server = net.createServer((s) => { sockets.push(s); s.on('data', () => {}); s.on('error', () => {}); });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    closeServer = () => new Promise<void>((resolve) => {
+      for (const s of sockets) s.destroy();
+      server.close(() => resolve());
+    });
+    return { port: (server.address() as net.AddressInfo).port, accepted: () => sockets.length };
+  }
+
+  /** Completes the upgrade, reads `hello`, and answers `ready` only when `answer` is set. */
+  async function wsAgent(answer: boolean): Promise<{ port: number; accepted: () => number }> {
+    let accepted = 0;
+    const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>((resolve) => wss.on('listening', () => resolve()));
+    wss.on('connection', (ws) => {
+      accepted++;
+      ws.on('message', () => { if (answer) ws.send(JSON.stringify({ t: 'ready', v: 1 })); });
+    });
+    closeServer = () => new Promise<void>((resolve) => {
+      for (const c of wss.clients) c.terminate();
+      wss.close(() => resolve());
+    });
+    return { port: (wss.address() as net.AddressInfo).port, accepted: () => accepted };
+  }
+
+  const fast = { heartbeatMs: 60_000, reconnectMinMs: 20, reconnectMaxMs: 40, connectTimeoutMs: 150 };
+
+  it('abandons an upgrade the peer never answers and dials again', async () => {
+    const peer = await silentTcp();
+    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    await vi.waitFor(() => expect(peer.accepted()).toBeGreaterThanOrEqual(2), { timeout: 3000 });
+    expect(fleet.state.connected).toBe(false);
+    expect(fleet.state.downSince).not.toBeNull();
+  });
+
+  it('abandons an open socket whose hello never gets a ready and dials again', async () => {
+    const peer = await wsAgent(false);
+    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    await vi.waitFor(() => expect(peer.accepted()).toBeGreaterThanOrEqual(2), { timeout: 3000 });
+    expect(fleet.state.connected).toBe(false);
+  });
+
+  it('never fires once ready arrived in time: no terminate, no second connection', async () => {
+    const peer = await wsAgent(true);
+    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    await new Promise((r) => setTimeout(r, fast.connectTimeoutMs * 3));
+    expect(fleet.state.connected).toBe(true);
+    expect(peer.accepted()).toBe(1);
+  });
+
+  it('close() during a pending connect leaves no timer to dial again', async () => {
+    const peer = await silentTcp();
+    fleet = connectFleet({ url: `ws://127.0.0.1:${peer.port}`, token: TOKEN, ...fast });
+    await vi.waitFor(() => expect(peer.accepted()).toBe(1), { timeout: 3000 });
+    await fleet.close();
+    await new Promise((r) => setTimeout(r, fast.connectTimeoutMs * 3));
+    expect(peer.accepted()).toBe(1);
   });
 });

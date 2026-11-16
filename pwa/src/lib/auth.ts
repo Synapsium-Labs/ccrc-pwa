@@ -25,6 +25,7 @@
 // reach it without a cycle. It is also why `GET /api/auth/status` is spelled
 // HERE rather than in `lib/api.ts`: it is the one route that must be readable
 // while everything else is being refused, and it must never itself raise.
+import { setToastSuppressor } from '@ccrc/ui';
 import { useSyncExternalStore } from 'react';
 import { isAuthVerdict, type AuthStatus, type AuthVerdict } from '../../../shared/api';
 
@@ -60,6 +61,20 @@ export function authLost(): AuthLost {
 export function isAuthLost(): boolean {
   return current.lost;
 }
+
+// A 401 is ONE event however many calls it breaks. The login screen is the
+// answer to all of them; a stack of "unauthenticated" toasts behind it is noise
+// about a fact already on screen, and an action toast would be an offer nothing
+// can accept until the operator is back in. Swallowed at the single funnel
+// rather than at ~40 catch blocks — the same argument this module makes for the
+// signal itself.
+//
+// It is INSTALLED HERE, beside the signal it reads, rather than in main.tsx:
+// the toast belongs to @ccrc/ui, which must not know what an ccrc session is,
+// and main.tsx is the one module no test ever loads — wiring the policy there
+// would leave it unexercised by the suite that checks it. Importing this module
+// at all is what arms it, and every consumer of the signal already does.
+setToastSuppressor(isAuthLost);
 
 /**
  * Raise the signal. FIRST WINS while it is up.
@@ -195,6 +210,46 @@ export async function readAuthStatus(
   const res = await fetchImpl(STATUS_PATH, { headers: { accept: 'application/json' } });
   if (!res.ok) throw new Error(`auth status ${res.status}`);
   return (await res.json()) as Partial<AuthStatus>;
+}
+
+/**
+ * The modes that mean THERE IS A GATE ON THIS BOX to add a passkey to (moved here from `fleet/PasskeyNotice.tsx`
+ * by settings Task R2d, D-5508, so the notice and Settings › Security's passkey read share one roster) — the
+ * POSITIVE list, and written as a `Record` over the union rather than as
+ * literals in an `if` so that a fourth `mode` cannot be added to `AuthStatus`
+ * without an author deciding here whether it nags. Measured, not assumed: with
+ * `| 'device-bound'` added to the union, `tsc --noEmit` fails on the object
+ * below with `TS2741: Property '"device-bound"' is missing in type
+ * '{ passphrase: true; 'locked-out': true; }'`. `AUTH_VERDICT_MAP`'s
+ * idiom (shared/api.ts) for its reason: a hand-written list of literals goes
+ * stale in silence, and the silence in this particular spot means "armed".
+ *
+ *   - `'passphrase'` — armed, a secret exists. The box the notice is for.
+ *   - `'locked-out'` — armed, and the login rate-limiter's window is closed.
+ *     It nags too, deliberately: the gate has just refused somebody, we are
+ *     already in (the notice's `authed` refusal), and enrolment rides the session
+ *     cookie rather than the rate-limited login route — so the advice is both
+ *     true and actionable, and it is the box that most wants a second way in.
+ *   - `'off'` is the member of the union deliberately NOT here, and it is the
+ *     whole reason the list exists: `CCRC_AUTH` is off by default for every OSS
+ *     install, and on a dark box there is no lock for the advice to be about.
+ */
+export const ARMED_MODES: Record<Exclude<AuthStatus['mode'], 'off'>, true> = {
+  passphrase: true,
+  'locked-out': true,
+};
+
+/** Is what the box said about its gate one of {@link ARMED_MODES}?
+ *
+ *  `unknown`, not `AuthStatus['mode']`, because the parameter's real domain is
+ *  "whatever came back from a `fetch`": `undefined` from an older server that
+ *  never had the field, `null` or a string this build has never heard of from
+ *  anything between us and it. The type says three values; the wire does not
+ *  promise three. `isAuthVerdict` (shared/api.ts) takes `unknown` for exactly
+ *  this reason, and for the same one it tests the CONSTANT for membership
+ *  rather than asserting the input is already a member. */
+export function armedMode(mode: unknown): boolean {
+  return typeof mode === 'string' && Object.hasOwn(ARMED_MODES, mode);
 }
 
 /**

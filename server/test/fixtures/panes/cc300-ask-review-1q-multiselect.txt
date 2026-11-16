@@ -1,0 +1,50 @@
+
+❯ Call your AskUserQuestion tool exactly once with TWO questions in one call. Question 1: header "Colour", question "Which colour do you prefer?", multiSelect false, options Red, Green, Blue (each with a short
+  description). Question 2: header "Features", question "Which features do you want?", multiSelect true, options Logging, Metrics, Tracing (each with a short description). After you get the answers, reply with the raw
+  answers exactly as the tool returned them and nothing else.
+
+⏺ User answered Claude's questions:
+  ⎿  · Which colour do you prefer? → Teal 2
+     · Which features do you want? → Tracing, Logging, Audit 3
+
+⏺ "Which colour do you prefer?"="Teal 2", "Which features do you want?"="Tracing, Logging, Audit 3"
+
+✻ Crunched for 3s · done 3:19
+
+❯ Now call AskUserQuestion exactly once with THREE questions. Q1: header "Pets", question "Which pets do you like?", multiSelect true, options Cats, Dogs, Fish. Q2: header "Size", question "Which size?", multiSelect
+  false, options Small, Large. Q3: header "Mode", question "Which mode?", multiSelect false, options Fast, Safe. Give each option a short description. Afterwards reply with the raw answers only.
+
+⏺ User declined to answer questions
+  ⎿  · Which pets do you like? (Cats / Dogs / Fish)
+     · Which size? (Small / Large)
+     · Which mode? (Fast / Safe)
+
+✻ Baked for 1s · done 3:20
+
+❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header "Fruit", question "Which fruit?", options Apple, Pear. Q2: header "Drink", question "Which drink?", options Tea, Coffee. Short
+  descriptions. Afterwards reply with the raw answers only.
+
+⏺ User declined to answer questions
+  ⎿  · Which fruit? (Apple / Pear)
+     · Which drink? (Tea / Coffee)
+
+✻ Churned for 1s · done 3:21
+
+❯ Call AskUserQuestion exactly once with ONE question: header "Tools", question "Which tools?", multiSelect true, options Hammer, Saw, Drill, short descriptions. Afterwards reply with the raw answers only.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Tools  ✔ Submit  →
+
+Review your answers
+
+ ● Which tools?
+   → Hammer, Drill
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel
+
+
+
+

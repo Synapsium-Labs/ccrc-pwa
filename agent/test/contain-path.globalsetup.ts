@@ -37,6 +37,15 @@
  *  has no such reach. Stale directories cost disk; a wrong sweep costs eleven
  *  sessions.
  *
+ *  INSIDE THE PER-RUN TEMP PARENT. `vitest.config.ts` runs the server
+ *  package's `run-tmp.globalsetup.mjs` BEFORE this file, so `tmpdir()` here
+ *  is that run's own `ccrc-testrun-XXXXXX/tmp` and this root is made inside it.
+ *  That parent is what removes the root on SIGTERM, SIGINT and SIGHUP, which
+ *  this teardown never sees. Its next-run sweep does not reopen the refusal
+ *  above: it condemns only a run whose owner's socket refuses (vitest's main
+ *  process is dead) and that has been quiet for its whole window — never a
+ *  live run, never by prefix. Pinned by `run-tmp.test.ts`.
+ *
  *  FAILS SAFE. If this file is ever unwired, `contain-path.setup.ts` falls back
  *  to `os.tmpdir()` and the containment itself is unaffected — the stub `tmux`
  *  and `gh` are still made and still put earliest on PATH. Only the cleanup

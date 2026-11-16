@@ -5,10 +5,11 @@
 #     converge decision.
 #   - RELEASE mode (`--release [vX.Y.Z]`): download the CI-built tarball +
 #     SHA256SUMS from GitHub Releases (latest, or the named tag), verify
-#     `sha256sum -c`, extract to a staging dir, and hand off to the STAGED
-#     `ccrc install` — no build step on the box, prebuilt dists ship in the
-#     tarball. Everything after `--release [tag]` passes through to the
-#     staged verb verbatim (`--role …` rides here).
+#     the tarball against its own SHA256SUMS line, extract to a staging
+#     dir, and hand off to the STAGED `ccrc install` — no build step on
+#     the box, prebuilt dists ship in the tarball. Everything after
+#     `--release [tag]` passes through to the staged verb verbatim
+#     (`--role …` rides here).
 # Neither mode touches ~/.ccrc, ~/.local/bin or systemd — bootstrap
 # builds/fetches, the verb installs. Re-running is safe: npm ci and the
 # builds are idempotent and the verb converges.
@@ -22,6 +23,119 @@ ROOT="$(cd "${HERE%/*}" && pwd)"
 # mirror.
 CCRC_RELEASE_OWNER="Synapsium-Labs"
 CCRC_RELEASE_REPO="ccrc-pwa"
+
+# ── The release-host bounds — the updater's five knobs, same names, same values.
+# The updater reads these from ccd/ccrc (`: "${CCRC_RELEASE_…:=…}"`); this file
+# is the bootstrap and sources nothing, so it holds a COPY. install-sh.test.ts
+# reds when any of the five lines differs from ccd/ccrc's. The connect and
+# stall bounds ride both fetches; the total-time and size bounds ride only
+# SHA256SUMS (small by design — a host that keeps sending forever is not "a
+# slow but live download"), as the updater's two fetches do. A tarball gets
+# no total bound: a large live transfer must be let finish.
+# `--max-filesize` is enforced for a body of UNKNOWN length (no Content-Length)
+# only by curl 8.4.0 and later; below that curl ignores it for such a body — its
+# manual says so — and only the total bound holds.
+: "${CCRC_RELEASE_CONNECT_TIMEOUT:=10}"
+: "${CCRC_RELEASE_SPEED_LIMIT:=1024}"
+: "${CCRC_RELEASE_SPEED_TIME:=30}"
+: "${CCRC_RELEASE_SUMS_MAX_TIME:=20}"
+: "${CCRC_RELEASE_SUMS_MAX_FILESIZE:=4096}"
+
+# curl reads 0 (and a negative or non-numeric spelling) for each of these as "no
+# limit" or an error, so a value is used only when it is a plain whole number
+# from 1 to the updater's own ceiling; anything else falls back to the default
+# with one warning line (the updater's `_upd_validate_timeout`, same sentence,
+# on stderr here). The release arm's calls repeat its arguments, and
+# install-sh.test.ts reds when a default or a ceiling differs from the ones
+# ccd/ccrc passes.
+# Indirect read and `printf -v`: no eval, and both are bash 3.1+.
+_inst_validate_knob() {
+  local name="$1" default="$2" what="${3:-a whole number of seconds from 1 to 3600}" max="${4:-3600}" val LC_ALL=C
+  val="${!name:-}"
+  if [ -z "$val" ]; then return 0; fi
+  if [[ "$val" =~ ^[1-9][0-9]{0,9}$ ]] && [ "$val" -le "$max" ]; then return 0; fi
+  echo "install.sh: WARN: $name='${val//[![:print:]]/?}' is not $what — using $default" >&2
+  printf -v "$name" '%s' "$default"
+}
+
+# ── The URL redactor — a COPY of `_upd_redact` (ccd/ccrc), held equal by OUTPUT,
+# not by text, under an install.sh-local name. It masks a URL's userinfo, a
+# scheme URL's query and fragment (D-8342: what follows the '?' or '#' reads
+# `[withheld]`) and the home directory. Why the text differs: this file
+# runs `--release` BEFORE its bash version refusal, so the copy can run on
+# macOS /bin/bash 3.2, where (as in every bash up to 4.2) a quoted replacement
+# string inside "${s/pat/rep}" keeps its quotes and would print `https"://"h/r`;
+# ccd/ccrc needs bash 4.4 and never meets that. So each replacement here is a
+# first-occurrence cut-and-join (`${s%%"$m"*}$r${s#*"$m"}`) with no pattern
+# substitution in it (an unquoted `$r` in a `${s/…/$r}` would also expand a `&`
+# under bash 5.2). install-sh.test.ts runs both functions over the same inputs,
+# the copy also under BASH_COMPAT=42, 40 and 32, and reds on any byte of difference.
+_inst_redact() {
+  local s="${1:-}" mode="${2:-}" LC_ALL=C cut="" m="" r=""
+  if [ "${#s}" -gt 4096 ]; then
+    local head="${s:0:4001}"
+    if [[ "$head" =~ ^(.*)[[:space:]] ]]; then head="${BASH_REMATCH[1]}"; else head=""; fi
+    cut="${head:+ }[cut: $(( ${#s} - ${#head} )) more bytes withheld, over the redactor's 4096-byte cap]"
+    s="$head"
+  fi
+  local sre=':((\\?/)+)@*[^/@?#[:space:]]+@'; while [[ "$s" =~ $sre ]]; do m="${BASH_REMATCH[0]}"; r=":${BASH_REMATCH[1]}"; s="${s%%"$m"*}$r${s#*"$m"}"; done
+  local kre='(^|[[:space:]"'"'"'<(])(-{0,2}[A-Za-z_][A-Za-z0-9_-]*=)([^:=/?#[:space:]"'"'"'<(][^/?#[:space:]]*(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $kre ]]; do m="${BASH_REMATCH[0]}"; r="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"; s="${s%%"$m"*}$r${s#*"$m"}"; done
+  local re='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:]]+[/?#])'; while [[ "$s" =~ $re ]]; do m="${BASH_REMATCH[0]}"; r="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"; s="${s%%"$m"*}$r${s#*"$m"}"; done
+  local cre='(^|[[:space:]"'"'"'<(])(([^/?#[:space:]"'"'"'<(][^/?#[:space:]]*)?(:|%3[Aa])[^/?#[:space:]]*@)'; while [[ "$s" =~ $cre ]]; do m="${BASH_REMATCH[0]}"; r="${BASH_REMATCH[1]}"; s="${s%%"$m"*}$r${s#*"$m"}"; done
+  local ptre='(^|[[:space:]"'"'"'<(`])((@*[^/@?#[:space:]"'"'"'<(`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)(([^/@?#[:space:]:]*[^/@?#[:space:]:0-9][^/@?#[:space:]:]*|\[[0-9A-Za-z:.%_~-]+\]):[0-9]+([^0-9A-Za-z.!}_~-]|$|[.!}]+([^0-9A-Za-z.!}_~-]|$)))'; while [[ "$s" =~ $ptre ]]; do m="${BASH_REMATCH[0]}"; r="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"; s="${s%%"$m"*}$r${s#*"$m"}"; done
+  if [ "$mode" = bare-host ]; then
+    local bre='(^|[[:space:]"<`])((@*[^/@?#[:space:]"<`][^/@?#[:space:]]*@)([^/@?#[:space:]]*@)*)([^/@?#[:space:])]+([/?#)]|$))'
+    while [[ "$s" =~ $bre ]]; do m="${BASH_REMATCH[0]}"; r="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"; s="${s%%"$m"*}$r${s#*"$m"}"; done
+  fi
+  local qre='(^|[^A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]*:(\\?/)+[^?#[:space:]"<>`]*)([?#])[^[:space:]"<>`]*' qout=""
+  while [[ "$s" =~ $qre ]]; do m="${BASH_REMATCH[0]}"; qout+="${s%%"$m"*}${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[4]}[withheld]"; s="${s#*"$m"}"; done
+  s="$qout$s"
+  local home="${HOME:-}"
+  home="${home%/}"
+  if [ -n "$home" ]; then
+    local seen="" out="" pre="" post="" before="" after="" left=0 right=0
+    while [[ "$s" == *"$home"* ]]; do
+      pre="${s%%"$home"*}"
+      post="${s#*"$home"}"
+      seen+="$pre"
+      before="${seen: -1}"
+      after="${post:0:1}"
+      left=0; right=0
+      case "$before" in
+        ''|' '|$'\t'|$'\n'|'"'|"'"|'`'|'='|':'|'('|'['|'{'|','|';'|'<'|'>'|'|') left=1 ;;
+        '/') case "$seen" in *://) left=1 ;; esac ;;
+      esac
+      case "$after" in
+        ''|'/'|' '|$'\t'|$'\n'|'"'|"'"|':'|')') right=1 ;;
+      esac
+      if [ "$left" -eq 1 ] && [ "$right" -eq 1 ]; then out+="${pre}~"; else out+="${pre}${home}"; fi
+      seen+="$home"
+      s="$post"
+    done
+    s="${out}${s}"
+  fi
+  s+="$cut"
+  printf '%s' "$s"
+}
+
+# The tarball name SHA256SUMS supplies reaches `curl -o` before any checksum is
+# checked, so it is held to a rule where it is read. Prints the rule broken (or
+# nothing). The length test runs FIRST so a long value is never pattern-scanned;
+# counted and matched under LC_ALL=C so "bytes" and "printable ASCII" mean bytes.
+# A refusal built from this names the rule, never the raw name (it may carry a
+# terminal escape).
+_inst_name_refusal() {
+  local n="$1" LC_ALL=C
+  if [ "${#n}" -gt 128 ]; then echo "is ${#n} bytes, over the 128-byte limit"; return 0; fi
+  if [[ "$n" == *[^[:print:]]* ]]; then echo "is not printable ASCII"; return 0; fi
+  case "$n" in
+    */*) echo "has a path separator"; return 0 ;;
+    *..*) echo 'has a ".."'; return 0 ;;
+    ccrc-*.tar.gz) ;;
+    *) echo "is no ccrc tarball (names no ccrc-*.tar.gz)"; return 0 ;;
+  esac
+  return 0
+}
 
 usage() { echo "usage: bash install.sh — build this checkout and run 'ccrc install' (single box, localhost)"; }
 
@@ -49,7 +163,26 @@ if [ "$RELEASE_MODE" = true ]; then
   command -v curl >/dev/null 2>&1 \
     || { echo "install.sh: curl is not installed — install curl, then re-run" >&2; exit 1; }
   BASE="${CCRC_RELEASE_BASE_URL:-https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases}"
+  # The release paths are appended to the base, so a query or a fragment swallows
+  # them (the updater's `_upd_base_ok` refuses the same base, D-8342). The sentence
+  # names the variable and never the value: a query can carry a token.
+  case "$BASE" in
+    *'?'*|*'#'*)
+      echo "install.sh: CCRC_RELEASE_BASE_URL holds a query or a fragment, so the release paths cannot be appended to it — refusing" >&2
+      exit 1 ;;
+  esac
   if [ -n "$RELEASE_TAG" ]; then URL_DIR="$BASE/download/$RELEASE_TAG"; else URL_DIR="$BASE/latest/download"; fi
+
+  # Only the two fetches below read a knob, so only this arm judges one, before
+  # the first of them, as the updater's `_upd_resolve` does: a bad value is no
+  # warning of `--help`'s or a checkout install's.
+  _inst_validate_knob CCRC_RELEASE_CONNECT_TIMEOUT 10
+  _inst_validate_knob CCRC_RELEASE_SPEED_LIMIT 1024 \
+    'a whole number of bytes/second from 1 to 100000000' 100000000
+  _inst_validate_knob CCRC_RELEASE_SPEED_TIME 30
+  _inst_validate_knob CCRC_RELEASE_SUMS_MAX_TIME 20
+  _inst_validate_knob CCRC_RELEASE_SUMS_MAX_FILESIZE 4096 \
+    'a whole number of bytes from 1 to 1048576' 1048576
 
   # AN EXPLICIT TEMPLATE, because BSD `mktemp` IGNORES `$TMPDIR` when given
   # none — measured: macOS answers inside its own per-user Darwin temp dir
@@ -68,19 +201,46 @@ if [ "$RELEASE_MODE" = true ]; then
   # SHA256SUMS first: under `latest/` the tag is unknown until the sums file
   # names the tarball. A missing release is curl's own failure, surfaced —
   # `-f` turns the 404 into exit 22 and the message below names the URL.
-  echo "install.sh: fetching $URL_DIR/SHA256SUMS …"
-  curl -fsSL -o "$STAGING/SHA256SUMS" "$URL_DIR/SHA256SUMS" \
-    || { echo "install.sh: download failed: $URL_DIR/SHA256SUMS (is there a release?)" >&2; exit 1; }
+  URL_SAFE="$(_inst_redact "$URL_DIR")"
+  # `-g` on every release curl: curl expands `{…}` and `[…]` before it parses a
+  # URL, so a base spelled `http:{/}/u:p@h` would authenticate while the line
+  # below printed it whole; with globbing off curl refuses it before a byte is
+  # sent, and a tarball name is never globbed (the updater's D-6748).
+  echo "install.sh: fetching $URL_SAFE/SHA256SUMS …"
+  # The updater's sentence at its own fetch (D-8342): `--max-filesize` caps the file only on curl 8.4.0 or later (a body of
+  # unknown length passes it below that), so below 8.4.0 the `read` of SHA256SUMS's first line is linear in what curl wrote
+  # within its total bound, before the name's 128-byte rule.
+  curl -g -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
+    --max-time "$CCRC_RELEASE_SUMS_MAX_TIME" --max-filesize "$CCRC_RELEASE_SUMS_MAX_FILESIZE" \
+    --speed-limit "$CCRC_RELEASE_SPEED_LIMIT" --speed-time "$CCRC_RELEASE_SPEED_TIME" \
+    -o "$STAGING/SHA256SUMS" "$URL_DIR/SHA256SUMS" \
+    || { echo "install.sh: download failed: $URL_SAFE/SHA256SUMS (is there a release, or did the connection stall — connect ${CCRC_RELEASE_CONNECT_TIMEOUT}s / under ${CCRC_RELEASE_SPEED_LIMIT}B/s for ${CCRC_RELEASE_SPEED_TIME}s — or did it time out after ${CCRC_RELEASE_SUMS_MAX_TIME}s / exceed ${CCRC_RELEASE_SUMS_MAX_FILESIZE} bytes) — nothing on this box was changed" >&2; exit 1; }
   read -r _sum TARNAME < "$STAGING/SHA256SUMS" \
     || { echo "install.sh: SHA256SUMS is empty — refusing" >&2; exit 1; }
+  # The sha256sum binary-mode marker (`<digest> *<name>`) is the line format's,
+  # not part of the name: it goes FIRST, so the rules below judge (and count)
+  # the name itself. It is a one-character prefix strip, cheap on any length.
   TARNAME="${TARNAME#\*}"
-  case "$TARNAME" in
-    ccrc-*.tar.gz) ;;
-    *) echo "install.sh: SHA256SUMS names no ccrc tarball (got: $TARNAME) — refusing" >&2; exit 1 ;;
-  esac
-  echo "install.sh: fetching $URL_DIR/$TARNAME …"
-  curl -fsSL -o "$STAGING/$TARNAME" "$URL_DIR/$TARNAME" \
-    || { echo "install.sh: download failed: $URL_DIR/$TARNAME" >&2; exit 1; }
+  NAME_RULE="$(_inst_name_refusal "$TARNAME")"
+  if [ -n "$NAME_RULE" ]; then
+    echo "install.sh: SHA256SUMS's tarball name $NAME_RULE — refusing" >&2; exit 1
+  fi
+  # THE TAG IS BOUND, as the updater's `_upd_resolve` binds it: the name SHA256SUMS
+  # gives must BE the tag asked for, tag to tag and un-stripped, before the tarball
+  # is fetched. Printing the name is safe here: it has passed the rules above. The
+  # sentence is the updater's, word for word (D-8385); install-sh.test.ts reads
+  # ccd/ccrc's and reds on any difference.
+  if [ -n "$RELEASE_TAG" ]; then
+    V="${TARNAME#ccrc-}"; V="${V%.tar.gz}"
+    if [ "$V" != "$RELEASE_TAG" ]; then
+      echo "install.sh: the release at $RELEASE_TAG names a $TARNAME (version $V, not $RELEASE_TAG) — refusing; nothing on this box was changed" >&2; exit 1
+    fi
+  fi
+  echo "install.sh: fetching $URL_SAFE/$TARNAME …"
+  curl -g -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
+    --speed-limit "$CCRC_RELEASE_SPEED_LIMIT" --speed-time "$CCRC_RELEASE_SPEED_TIME" \
+    -o "$STAGING/$TARNAME" "$URL_DIR/$TARNAME" \
+    || { echo "install.sh: download failed: $URL_SAFE/$TARNAME (or did the connection stall — connect ${CCRC_RELEASE_CONNECT_TIMEOUT}s / under ${CCRC_RELEASE_SPEED_LIMIT}B/s for ${CCRC_RELEASE_SPEED_TIME}s) — nothing on this box was changed" >&2; exit 1; }
 
   # Verify BEFORE extracting: a tarball that fails its checksum never gets
   # to put a single file on disk, let alone run one.
@@ -92,18 +252,39 @@ if [ "$RELEASE_MODE" = true ]; then
   # macOS does not ship it — and because the check swallows its own stderr,
   # a missing tool exits the subshell 127 and lands in the `||` arm: the
   # first thing a macOS operator ever saw from ccrc was a FABRICATED
-  # supply-chain accusation about an intact download. `shasum -a 256 -c`
-  # reads the GNU-written two-space SHA256SUMS unchanged (measured against
+  # supply-chain accusation about an intact download. `shasum -a 256`
+  # prints the same `<digest>  <name>` line GNU writes (measured against
   # the published release). Unquoted on use, so the two words split.
+  # The updater's rule (D-8390): never `$SUM -c SHA256SUMS`, which opens every
+  # path the file names (any file on this box, a FIFO that blocks, /dev/zero).
+  # The one file digested is the staged tarball, on stdin, and it must equal
+  # the digest on the line TARNAME came from: 64 lowercase hex, as
+  # `deploy/build-release.sh` writes it. No other line is read.
   SUM=sha256sum
   [ "$(uname -s 2>/dev/null)" = Darwin ] && SUM="shasum -a 256"
-  ( cd "$STAGING" && $SUM -c SHA256SUMS >/dev/null 2>&1 ) \
-    || { echo "install.sh: checksum verification FAILED for $TARNAME — refusing to extract or install" >&2; exit 1; }
+  GOT="$($SUM < "$STAGING/$TARNAME" 2>/dev/null)" || GOT=""
+  GOT="${GOT%% *}"
+  case "$_sum" in *[!0123456789abcdef]*) _sum="" ;; esac
+  if [ "${#_sum}" -ne 64 ] || [ "$GOT" != "$_sum" ]; then
+    echo "install.sh: checksum verification FAILED for $TARNAME — refusing to extract or install" >&2; exit 1
+  fi
 
   mkdir "$STAGING/tree"
   tar -xzf "$STAGING/$TARNAME" -C "$STAGING/tree"
   echo "install.sh: verified $TARNAME — handing off to the staged 'ccrc install'"
+  # TRUST ON FIRST USE, said out loud (design 2026-09-20 §5): this bootstrap
+  # has no installed verifier to use and must not use the one it just
+  # downloaded (self-attestation). The tree it places carries the verifier;
+  # every `ccrc update` from here verifies provenance before extracting.
+  echo "install.sh: first install trusts the release's transport checksum only; every update from here verifies provenance"
   trap - EXIT
+  # M6 (W1 minor): CCRC_UPDATE_VERIFIED is `cmd_update`'s word to the spine
+  # that it VERIFIED this tree's provenance — `_inst_installed` reads it and
+  # nothing else to decide the marker's line 2. This bootstrap verified
+  # nothing (trust on first use, said above), so an export left in the
+  # caller's shell must never reach the verb. A builtin, not `env -u`: this
+  # script runs on a bare box and names no tool it does not need.
+  unset CCRC_UPDATE_VERIFIED
   exec bash "$STAGING/tree/ccd/ccrc" install "$@"
 fi
 
@@ -140,8 +321,8 @@ fi
 
 command -v node >/dev/null 2>&1 || { echo "install.sh: node is not installed — install Node (nodesource or nvm), then re-run" >&2; exit 1; }
 # The floor is READ from the shipped package.json — never a second copy
-# (node-floor.test.ts pins the three package.jsons identical; the server does
-# not degrade below it, it fails to boot on node:sqlite).
+# (node-floor.test.ts pins all three identical). Without node:sqlite the server
+# will not boot; without its FTS5 ccrc history captures unsearched (fts5-absent; D-4296).
 floor="$(node -e 'process.stdout.write(require(process.argv[1]).engines.node)' "$ROOT/server/package.json" 2>/dev/null)" \
   || { echo "install.sh: cannot read engines.node from $ROOT/server/package.json — is this a complete checkout?" >&2; exit 1; }
 node -e '
@@ -155,6 +336,10 @@ if (!ok) { console.error(`install.sh: node ${cur} is below the required ${floor}
 
 echo "install.sh: building (server deps, PWA bundle, server dist)…"
 ( cd "$ROOT/server" && npm ci --no-audit --no-fund )
+# ui is installed, not built, and before pwa: pwa builds @ccrc/ui from SOURCE
+# (`file:../ui`), whose imports resolve from ui/node_modules alone, so a fresh
+# checkout fails the PWA build without it (deploy/build-release.sh says why).
+( cd "$ROOT/ui" && npm ci --no-audit --no-fund )
 ( cd "$ROOT/pwa" && npm ci --no-audit --no-fund && npm run build )
 ( cd "$ROOT/server" && npm run build )
 # D-1159: the agent is the FOURTH artifact `ccrc install` refuses without, for
@@ -166,4 +351,7 @@ echo "install.sh: building (server deps, PWA bundle, server dist)…"
 # NOT building it cost a live fleet its agent.
 ( cd "$ROOT/agent" && npm ci --no-audit --no-fund && npm run build )
 
+# M6: a checkout install verified nothing either — the release arm's rule,
+# said there.
+unset CCRC_UPDATE_VERIFIED
 exec bash "$ROOT/ccd/ccrc" install

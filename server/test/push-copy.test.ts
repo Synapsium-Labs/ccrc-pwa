@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
+import { ASK_SETTLE_TICKS } from '../src/askwindow.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
@@ -11,15 +12,40 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { NotifyLog } from '../src/notifylog.js';
-import { Presence } from '../src/presence.js';
+import { Viewers } from '../src/viewer.js';
 import { askKey } from '../src/askkey.js';
 import type { PushPayload } from '../src/push.js';
-import { PRESENCE_REFRESH_MS, PRESENCE_TTL_MS } from '../../shared/api.js';
+import { FLEET_SCOPE, VIEWER_REFRESH_MS, VIEWER_TTL_MS, type NodeRole, type UpdateChannel } from '../../shared/api.js';
 import { openCoordDb } from '../src/coord/db.js';
-import { CoordStore } from '../src/coord/store.js';
+import { CoordStore, type NodeMeasurement, type ReleaseListingRow, type UpdateIntentPatch } from '../src/coord/store.js';
 import { okRuns } from './coordReadHelpers.js';
+import type { CcrcConfig } from '../src/config.js';
+import type { CataloguePoller } from '../src/update/catalogue.js';
+import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
+import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/updateintentlog.js';
+import { NODE_FILES } from '../../shared/agent-protocol.js';
+import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
+import type { FleetState } from '../src/fleetstate.js';
+import { UNTOLD_SUBJECT_PREFIX } from '../src/coord/untold.js';
+import { RUN_CLOSE_WARNING_PREFIX } from '../src/coord/runCloseLane.js';
+import { STALL_CHECK_PREFIX, STALL_FAILED_PREFIX, STALL_ORPHANED_PREFIX, STALL_REPLY_PREFIX, STALL_REPORT_PREFIX, stallFailedSubject, stallOrphanESubject } from '../src/coord/stall.js';
+
+/** Item 3, fix round 1 (F3/F4): a remote-mode fleetState double — a minimal `FleetState`, same shape as
+ *  `update-inventory.test.ts`'s own local factory (that file's is not exported; L0/L1 boundaries keep this
+ *  file from importing across test files). */
+const fleetState = (over: Partial<FleetState> = {}): FleetState =>
+  ({ connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null, ...over });
 
 const dir = async () => mkdtemp(path.join(tmpdir(), 'push-copy-'));
+
+// D-7878: these factories own their watchers; drain them before tmpHelpers removes their homes.
+const watchers: FleetWatcher[] = [];
+afterEach(async () => {
+  for (const w of watchers.splice(0)) {
+    w.stop();
+    await w.closeDelegation();
+  }
+});
 
 /** Per-session bookkeeping `markIdle` and the tmux runner both need: the pid
  *  the live-status file is keyed by, and the wrapper config dir it lives
@@ -64,15 +90,18 @@ function seedSessions(home: string, specs: string[]): Map<string, Seeded> {
  *  the busy→idle edge under test can fire a push. */
 function runnerFor(info: Map<string, Seeded>, pane = 'ready\n❯ \n'): Runner {
   return async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes' && args.includes('-a')) {   // the tick's one listing (console speed S1): every seeded session, active window, pane 0
+      return { ran: true, code: 0, stdout: [...info].map(([id, v]) => `cc-${id} 1 0 ${v.pid}\n`).join(''), stderr: '' };
+    }
     if (args[0] === 'list-panes') {
       const target = args[2] ?? '';
-      const id = target.startsWith('cc-') ? target.slice('cc-'.length) : '';
+      const id = /^=cc-(.*):$/.exec(target)?.[1] ?? '';   // the exact target `=cc-<id>:` (D-3525)
       const pid = info.get(id)?.pid;
-      return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
+      return { ran: true, code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
     }
-    if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: pane, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
 }
 
@@ -110,8 +139,10 @@ const oneQuestion = (options: { label: string }[]) => ({
  * can then drive a genuine busy→idle edge on the next `tick()`.
  */
 function watcher(opts: {
-  push: { notify: (p: PushPayload) => Promise<void> };
-  presence?: Presence;
+  /** Plan W3 Task 3: optional — omitted, the watcher has NO push service,
+   *  as a box with no VAPID keys runs (`index.ts` builds `push` only then). */
+  push?: { notify: (p: PushPayload) => Promise<void> };
+  viewers?: Viewers;
   notifyLog?: NotifyLog;
   /** Task 10: when true, a real `CoordStore` (over this fixture home's own
    *  `.ccrc/coord.db`) is wired in and returned — the mail/run notify lanes
@@ -123,22 +154,47 @@ function watcher(opts: {
    *  mid-fixture (a row LISTED but unreadable), the same shape every other
    *  registry-ladder test in this tree uses. */
   io?: FleetIO;
-}): { tick: () => Promise<void>; markIdle: (id: string) => void; markBusy: (id: string) => void; home: string; coord?: CoordStore } {
-  const home = mkTmp('ccrc-');
+  /** Plan W3 Task 3: fields laid over `testDeps`' config — `{ role: 'fleet' }`
+   *  is a fleet-role process, which owns no push subscriptions. */
+  cfg?: Partial<CcrcConfig>;
+  /** Plan W3 Task 3: the catalogue lane's poller (W2 Task 10's `Deps.catalogue`). */
+  catalogue?: CataloguePoller;
+  /** Plan W3 Task 3: an EXISTING fixture home. A second watcher over the same
+   *  home opens a second connection to the same `coord.db` — a restart. */
+  home?: string;
+  /** Item 3, fix round 1 (F3/F4): a remote-mode `fleetState` double, so a test can drive the agent link
+   *  down (or later flip it up) and exercise `inventorySwept`'s gate for real, through `inventoryNow()`. */
+  fleetState?: FleetState;
+  /** D-5234: lays a test's own behaviour over the seeded runner — a tick on
+   *  which `list-panes` fails, say — delegating everything else to it. */
+  wrapRunner?: (seeded: Runner) => Runner;
+}): { tick: () => Promise<void>; markIdle: (id: string) => void; markBusy: (id: string) => void; home: string; coord?: CoordStore; w: FleetWatcher } {
+  const home = opts.home ?? mkTmp('ccrc-');
   const info = seedSessions(home, opts.sessions);
   const coord = opts.coord ? new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db'))) : undefined;
+  const seededRunner = runnerFor(info, opts.pane);
+  const base = testDeps(home, opts.wrapRunner ? opts.wrapRunner(seededRunner) : seededRunner);
   const deps = {
-    ...testDeps(home, runnerFor(info, opts.pane)),
-    push: opts.push as never,
-    presence: opts.presence,
+    ...base,
+    ...(opts.cfg ? { cfg: { ...base.cfg, ...opts.cfg } } : {}),
+    ...(opts.push ? { push: opts.push as never } : {}),
+    viewers: opts.viewers,
     notifyLog: opts.notifyLog,
     coord,
     ...(opts.io ? { io: opts.io } : {}),
+    ...(opts.catalogue ? { catalogue: opts.catalogue } : {}),
+    ...(opts.fleetState ? { fleetState: opts.fleetState } : {}),
   };
-  const w = new FleetWatcher(deps, new Bus(), 10_000);
+  // The state cache stays inside the fixture home: without the fourth
+  // argument the constructor falls back to `defaultCachePath()`, the LIVE
+  // ~/.ccrc — never read by a local-mode tick, but a fixture has no business
+  // naming it.
+  const w = new FleetWatcher(deps, new Bus(), 10_000, path.join(home, 'state-cache.json'));
+  watchers.push(w);
   return {
     home,
     coord,
+    w,
     tick: () => w.tick(),
     markIdle: (id: string) => {
       const s = info.get(id);
@@ -172,7 +228,7 @@ describe('push copy discipline — project context, presence suppression, log fi
   it('names the project when more than one is active', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-    const w = watcher({ push, sessions: ['ccrc-pwa/cc-a', 'rp-llm/cc-b'] });
+    const w = watcher({ push, sessions: ['ccrc-pwa/cc-a', 'project-j/cc-b'] });
     await w.tick();
     w.markIdle('cc-a');
     await w.tick();
@@ -183,10 +239,10 @@ describe('push copy discipline — project context, presence suppression, log fi
   it('fires nothing for a session a client reports visible', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-    const presence = new Presence();
+    const viewers = new Viewers();
     const token = Symbol('t');
-    presence.setVisible(token, 'cc-a');
-    const w = watcher({ push, presence, sessions: ['ccrc-pwa/cc-a'] });
+    viewers.setVisible(token, 'cc-a');
+    const w = watcher({ push, viewers, sessions: ['ccrc-pwa/cc-a'] });
     await w.tick();
     w.markIdle('cc-a');
     await w.tick();
@@ -196,12 +252,12 @@ describe('push copy discipline — project context, presence suppression, log fi
   it('fires again once every client has disconnected', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-    const presence = new Presence();
+    const viewers = new Viewers();
     const token = Symbol('t');
-    presence.setVisible(token, 'cc-a');
-    const w = watcher({ push, presence, sessions: ['ccrc-pwa/cc-a'] });
+    viewers.setVisible(token, 'cc-a');
+    const w = watcher({ push, viewers, sessions: ['ccrc-pwa/cc-a'] });
     await w.tick();
-    presence.drop(token);
+    viewers.drop(token);
     w.markIdle('cc-a');
     await w.tick();
     expect(sent).toHaveLength(1);
@@ -218,11 +274,11 @@ describe('push copy discipline — project context, presence suppression, log fi
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
     let now = 1_000_000;
-    const presence = new Presence(() => now, PRESENCE_TTL_MS);
-    presence.setVisible(Symbol('t'), 'cc-a');        // the phone said so, then vanished
-    const w = watcher({ push, presence, sessions: ['ccrc-pwa/cc-a'] });
+    const viewers = new Viewers(() => now, VIEWER_TTL_MS);
+    viewers.setVisible(Symbol('t'), 'cc-a');        // the phone said so, then vanished
+    const w = watcher({ push, viewers, sessions: ['ccrc-pwa/cc-a'] });
     await w.tick();
-    now += PRESENCE_TTL_MS + 1;                      // no heartbeat ever arrived
+    now += VIEWER_TTL_MS + 1;                      // no heartbeat ever arrived
     w.markIdle('cc-a');
     await w.tick();
     expect(sent).toHaveLength(1);
@@ -232,14 +288,14 @@ describe('push copy discipline — project context, presence suppression, log fi
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
     let now = 1_000_000;
-    const presence = new Presence(() => now, PRESENCE_TTL_MS);
+    const viewers = new Viewers(() => now, VIEWER_TTL_MS);
     const token = Symbol('t');
-    presence.setVisible(token, 'cc-a');
-    const w = watcher({ push, presence, sessions: ['ccrc-pwa/cc-a'] });
+    viewers.setVisible(token, 'cc-a');
+    const w = watcher({ push, viewers, sessions: ['ccrc-pwa/cc-a'] });
     await w.tick();
     // Heartbeats at the client's own cadence carry the claim past the TTL.
-    for (let i = 0; i < 4; i++) { now += PRESENCE_REFRESH_MS; presence.setVisible(token, 'cc-a'); }
-    expect(now).toBeGreaterThan(1_000_000 + PRESENCE_TTL_MS);
+    for (let i = 0; i < 4; i++) { now += VIEWER_REFRESH_MS; viewers.setVisible(token, 'cc-a'); }
+    expect(now).toBeGreaterThan(1_000_000 + VIEWER_TTL_MS);
     w.markIdle('cc-a');
     await w.tick();
     expect(sent).toEqual([]);
@@ -248,12 +304,12 @@ describe('push copy discipline — project context, presence suppression, log fi
   it('records into the log only what was actually sent', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-    const presence = new Presence();
+    const viewers = new Viewers();
     const token = Symbol('t');
-    presence.setVisible(token, 'cc-a');
+    viewers.setVisible(token, 'cc-a');
     const log = new NotifyLog(path.join(await dir(), 'n.json'));
     await log.load();
-    const w = watcher({ push, presence, notifyLog: log, sessions: ['ccrc-pwa/cc-a'] });
+    const w = watcher({ push, viewers, notifyLog: log, sessions: ['ccrc-pwa/cc-a'] });
     await w.tick();
     w.markIdle('cc-a');
     await w.tick();
@@ -320,7 +376,7 @@ describe('a degraded row must never fire the busy→idle "✓ Finished" push (bl
   // suppression set agreed with the assembled row by luck of the fixture.
   // `tick()` used to take TWO independent whole-fleet reads — its own, at the
   // top, which `unmeasuredIds` is computed from, and `assembleFleet`'s own,
-  // 23 [registry-read-census:fields] reads per session later — and the gate
+  // 4 [registry-read-census:fields] unconditional reads per session (plus one per other listed field) later — and the gate
   // only ever suppressed rows the FIRST one could not measure. A drop landing
   // in the SECOND
   // window (the "ordinary shape in remote mode" the ladder exists for) left
@@ -459,35 +515,101 @@ describe('an unreadable live-status file must never fire the busy→idle "✓ Fi
   });
 });
 
+// D-5234: the overload tick. A loaded box fails `list-panes` for every busy
+// row at once; before this fix each failed `panePid` read left the row at the
+// `alive` default `idle`, and the watcher spent six measured-looking busy→idle
+// edges as six "✓ Finished" pushes for turns that never ended. A failed pid
+// read is now `busy` and `statusUnmeasured`, which the watcher skips, keeping
+// each row's previous status. The seventh, idle row is what the declaration
+// itself is for: painted `busy` WITHOUT it, that row's blip would read as a
+// turn starting, and the healthy tick would push a Finished for it.
+describe('an overload tick whose panePid reads fail fires no "✓ Finished" push (D-5234)', () => {
+  it('six busy rows and one idle, every list-panes failing for one tick: zero pushes on it and on the next healthy one', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    let overloaded = false;
+    const ids = ['cc-a', 'cc-b', 'cc-c', 'cc-d', 'cc-e', 'cc-f'];
+    const w = watcher({
+      push,
+      sessions: [...ids, 'cc-quiet'].map((id) => `project-a/${id}`),
+      wrapRunner: (seeded) => async (cmd, args) => (overloaded && args[0] === 'list-panes'
+        ? { ran: true, code: 1, stdout: '', stderr: 'server exited unexpectedly' }
+        : seeded(cmd, args)),
+    });
+
+    w.markIdle('cc-quiet');
+    await w.tick();                    // priming tick: six busy, one idle
+    expect(sent, 'priming must never push').toEqual([]);
+
+    overloaded = true;
+    await w.tick();                    // every panePid read fails
+    expect(sent, 'a failed panePid read is not a turn ending').toEqual([]);
+
+    overloaded = false;
+    await w.tick();                    // healthy again: six still busy, one still idle
+    expect(sent).toEqual([]);
+
+    // The positive control: a real edge on the same fixture still lands.
+    w.markIdle('cc-a');
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.title).toBe('✓ Finished');
+  });
+});
+
 describe('ask notifications carry actions only where the route would accept them', () => {
   /** One session, one watcher, a pane the test drives — so a test can put the
    *  menu up and the envelope down in whichever ORDER it needs, and tick as
    *  many times as it needs. */
-  function askFixture(): {
+  function askFixture(opts: {
+    /** D-5302: the session under test (default `ccrc-pwa/cc-a`, every older case's). */
+    spec?: string;
+    /** D-5302: a real `CoordStore` over the fixture home's `coord.db`, so the HOLD raise site can be reached. */
+    coord?: boolean;
+    notifyLog?: NotifyLog;
+  } = {}): {
     sent: PushPayload[];
     tick: () => Promise<void>;
     showMenu: (text?: string) => void;
     clearMenu: () => void;
     writeAsk: (ask: unknown, state?: string) => void;
+    child: (runId: number, parent: string, project: string) => void;
+    coord?: CoordStore;
   } {
+    const spec = opts.spec ?? 'ccrc-pwa/cc-a';
+    const id = spec.split('/')[1]!;
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
     let pane = 'ready\n❯ \n';
     const home = mkTmp('ccrc-');
-    const info = seedSessions(home, ['ccrc-pwa/cc-a']);
+    const info = seedSessions(home, [spec]);
     const runner: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: `${info.get('cc-a')!.pid}\n`, stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${info.get(id)!.pid}\n`, stderr: '' };
+      if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: pane, stderr: '' };
+      return { ran: true, code: 0, stdout: '', stderr: '' };
     };
-    const w = new FleetWatcher({ ...testDeps(home, runner), push: push as never }, new Bus(), 10_000);
+    const coord = opts.coord ? new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db'))) : undefined;
+    const w = new FleetWatcher({
+      ...testDeps(home, runner), push: push as never,
+      ...(coord ? { coord } : {}), ...(opts.notifyLog ? { notifyLog: opts.notifyLog } : {}),
+    }, new Bus(), 10_000, path.join(home, 'state-cache.json'));
+    watchers.push(w);
     return {
       sent,
       tick: () => w.tick(),
       showMenu: (text: string = MENU_PANE) => { pane = text; },
       clearMenu: () => { pane = 'ready\n❯ \n'; },
-      writeAsk: (ask: unknown, state?: string) => writeHookState(home, 'cc-a', ask, state),
+      writeAsk: (ask: unknown, state?: string) => writeHookState(home, id, ask, state),
+      // D-5290: make this session a dispatched child of `parent` (its `.child`
+      // marker naming `runId`), and give the parent a live registry row.
+      child: (runId: number, parent: string, project: string) => {
+        const reg = path.join(home, '.cc-sessions');
+        writeFileSync(path.join(reg, `${id}.child`), String(runId));
+        const fields: Record<string, string> = { wrapper: 'claude', project, workdir: `/w/${parent}`, uuid: `u-${parent}`, started: '1' };
+        for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${parent}.${k}`), v);
+      },
+      ...(coord ? { coord } : {}),
     };
   }
 
@@ -499,7 +621,16 @@ describe('ask notifications carry actions only where the route would accept them
     if (ask !== undefined) f.writeAsk(ask, opts.state);
     f.showMenu();
     await f.tick();                                  // the menu appears → one ask push
+    // D-5290: with no hookstate `waiting`, the first actionless raise waits out
+    // the bounded settle window and fires on the sighting after it.
+    if (ask === undefined || (opts.state !== undefined && opts.state !== 'waiting')) await settle(f);
     return f.sent;
+  }
+
+  /** D-5290: tick through `ASK_SETTLE_TICKS`, the deferral a pane-only menu's
+   *  first raise waits while hookstate is not `waiting`. */
+  async function settle(f: { tick: () => Promise<void> }): Promise<void> {
+    for (let i = 0; i < ASK_SETTLE_TICKS; i++) await f.tick();
   }
 
   it('attaches the first two option labels as actions, each carrying the key', async () => {
@@ -598,7 +729,8 @@ describe('ask notifications carry actions only where the route would accept them
     const f = askFixture();
     await f.tick();                       // priming, no menu
     f.showMenu();
-    await f.tick();                       // menu with no envelope → action-less push
+    await f.tick();                       // menu with no envelope → deferred (D-5290)
+    await settle(f);                      // … then the action-less push
     expect(f.sent).toHaveLength(1);
     expect(f.sent[0]!.actions).toBeUndefined();
 
@@ -661,8 +793,92 @@ describe('ask notifications carry actions only where the route would accept them
     await f.tick();                                  // priming: no menu
     f.showMenu(`${BUSY_LINE}\n\n${MENU_PANE}`);
     await f.tick();                                   // RC-off: both on screen at once
+    await settle(f);                                  // no hookstate: the D-5290 deferral
     expect(f.sent).toHaveLength(1);
     expect(f.sent[0]!.title).toBe('❓ Question');
+  });
+
+  // D-5302 (plan 2026-10-17-coordinator-first-routing, Task 3): 14 of 36 measured ask pushes carried a lone border
+  // glyph as their body, because both raise sites pushed `dialog.title || …` and the scrape's nearest line above the
+  // options was the dialog's box edge. The pane below is that shape: the parsed title is `│`.
+  const GLYPH_MENU_PANE = 'Which colour?\n │\n❯ 1. Red\n  2. Blue\n  3. Green\nEnter to select\n';
+  const GLYPHS = /^[\s\u2500-\u259f]*$/u;
+
+  it('D-5302: a raised ask whose parsed title is `│` and has no envelope carries the fallback body, not the glyph', async () => {
+    const f = askFixture({ spec: 'project-a/project-a-quiet-basin' });
+    await f.tick();                                  // priming: no menu
+    f.showMenu(GLYPH_MENU_PANE);
+    await f.tick();                                  // the menu appears → one ask push
+    await settle(f);                                 // no hookstate: the D-5290 deferral
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]!.body).not.toMatch(GLYPHS);
+    expect(f.sent[0]!.body).toBe('Claude has a question');
+  });
+
+  it('D-5302: a raised ask with a question envelope carries the first question, whatever the scraped title', async () => {
+    const f = askFixture({ spec: 'project-a/project-a-quiet-basin' });
+    await f.tick();
+    f.writeAsk({ questions: [{ question: 'Which colour should the badge be?', header: 'Badge', multiSelect: false,
+      options: [{ label: 'Red' }, { label: 'Blue' }] }] });
+    f.showMenu(GLYPH_MENU_PANE);
+    await f.tick();
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]!.body).toBe('Which colour should the badge be?');
+  });
+
+  it('D-5356: a raised ask with an approval envelope carries the tool name and a fixed phrase', async () => {
+    const f = askFixture({ spec: 'project-a/project-a-quiet-basin' });
+    await f.tick();
+    f.writeAsk({ approval: { tool: 'Bash', summary: 'rm -rf scratch' } });
+    f.showMenu(GLYPH_MENU_PANE);
+    await f.tick();
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]!.body).toBe('Bash — permission requested');
+  });
+
+  // D-5356: every push body is also kept in the NotifyLog ring and archived in coord.db's `feed_events`; until the
+  // redactor lands (Task 16) an approval's command must reach none of the three.
+  it('D-5356: an approval whose command carries a token never puts the command in the push, the NotifyLog or feed_events', async () => {
+    const token = 'sentinel-token-not-a-secret-7f3a9c';
+    const command = `curl -H "Authorization: Bearer ${token}" https://example.invalid/x`;
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const f = askFixture({ spec: 'project-a/project-a-quiet-basin', coord: true, notifyLog: log });
+    await f.tick();                                  // priming: no menu
+    f.writeAsk({ approval: { tool: 'Bash', summary: command } });
+    f.showMenu(GLYPH_MENU_PANE);
+    await f.tick();                                  // no parent → pushed, recorded, archived
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]!.body).toBe('Bash — permission requested');
+    const recorded = log.catchUp(log.epoch, 0).events;
+    const archived = f.coord!.feedEvents(10);
+    expect(recorded.filter((e) => e.kind === 'ask')).toHaveLength(1);
+    expect(archived.filter((e) => e.kind === 'ask')).toHaveLength(1);
+    for (const [where, value] of [['push', f.sent], ['NotifyLog', recorded], ['feed_events', archived]] as const) {
+      const text = JSON.stringify(value);
+      expect(text, where).not.toContain(token);
+      expect(text, where).not.toContain('example.invalid');
+    }
+  });
+
+  it('D-5302: the HELD raise site builds the same body — the recorded held ask carries the question, not the glyph', async () => {
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const f = askFixture({ spec: 'project-a/project-a-quiet-basin', coord: true, notifyLog: log });
+    const run = f.coord!.openRun({
+      program: 'prog', title: 'Prog', project: 'project-a',
+      wave: 1, waveOf: null, claimedBy: 'project-a-calm-mesa', coordProject: 'project-a',
+    }) as { id: number };
+    f.coord!.setSession(run.id, 'project-a-quiet-basin');
+    f.child(run.id, 'project-a-calm-mesa', 'project-a');
+    await f.tick();                                  // priming: no menu
+    f.writeAsk(oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu(GLYPH_MENU_PANE);
+    await f.tick();                                  // eligible, has a parent → held, recorded, not pushed
+    expect(f.sent).toEqual([]);
+    const recorded = log.catchUp(log.epoch, 0).events.filter((e) => e.kind === 'ask');
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.body).toBe('Which colour?');
   });
 });
 
@@ -688,11 +904,11 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
   it('the presence-gate exemption: a visible session still gets the RECORD, never the PUSH', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-    const presence = new Presence();
-    presence.setVisible(Symbol('t'), 'cc-a');
+    const viewers = new Viewers();
+    viewers.setVisible(Symbol('t'), 'cc-a');
     const log = new NotifyLog(path.join(await dir(), 'n.json'));
     await log.load();
-    const w = watcher({ push, presence, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+    const w = watcher({ push, viewers, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a'] });
     await w.tick();                    // priming: seeds the mail watermark
 
     const mail = w.coord!.insertMail({
@@ -822,7 +1038,7 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
     it('falls back to the RECIPIENT session\'s own project for run-less mail in a multi-project fleet', async () => {
       const sent: PushPayload[] = [];
       const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a', 'rp-llm/cc-b'] });
+      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a', 'project-j/cc-b'] });
       await w.tick();                  // priming
 
       const mail = w.coord!.insertMail({
@@ -842,7 +1058,7 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
     it('suppresses the decoration entirely — never a dangling separator — when even the recipient\'s project is unknown', async () => {
       const sent: PushPayload[] = [];
       const push = { notify: async (p: PushPayload) => { sent.push(p); } };
-      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a', 'rp-llm/cc-b'] });
+      const w = watcher({ push, coord: true, sessions: ['ccrc-pwa/cc-a', 'project-j/cc-b'] });
       await w.tick();
 
       // `toId` names no live session (e.g. reaped between send and
@@ -923,6 +1139,26 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
       // carry the run they are about — every one of the three, since
       // `recordAlways` records the suppressed `closing` push too.
       expect(w.coord!.feedEvents(10).map((e) => e.runId)).toEqual([run.id, run.id, run.id]);
+    });
+
+    it('a lane close (causedBy sweep, expired:*) is recorded into the log and the feed, never pushed (D-8077)', async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const log = new NotifyLog(path.join(await dir(), 'n.json'));
+      await log.load();
+      const w = watcher({ push, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+      await w.tick();                  // priming
+      const run = w.coord!.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      }) as { id: number };
+      w.coord!.setSession(run.id, 'cc-a');
+      w.coord!.advance(run.id, 'dispatched', 'coordinator');
+      w.coord!.advance(run.id, 'failed', 'sweep', 'expired:never-started');
+      await w.tick();
+      // Filtered to the run lane's own tags: an unrelated lane (a disk notice on a full box) may push in the same tick.
+      expect(sent.map((p) => p.tag).filter((t) => t?.startsWith('run-'))).toEqual([`run-${run.id}-dispatched`]);
+      expect(w.coord!.feedEvents(10).map((e) => e.title).filter((t) => t.startsWith('▸'))).toEqual(['▸ dispatched › ccrc-pwa', '▸ failed › ccrc-pwa']);
     });
 
     it('never pushes or records a NON-transition row on a bound run', async () => {
@@ -1045,5 +1281,637 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
       expect(warnSpy.mock.calls.some(([line]) =>
         String(line).includes('priming the mail/run watermarks failed'))).toBe(true);
     });
+  });
+});
+
+// ── Plan W3 Task 3: the release push (design 2026-09-20 §13) ────────────────────────────────────────────────
+// A fleet-level push with no session (D-3296): decided by the pure `releaseToNotify`
+// (Task 2), marked in `releases.notifiedAt` BEFORE the send is started (D-3295), and
+// sent through `notifyPushOnly` — never through `pushOne`, whose presence gate and feed record are about a
+// session. Since the push outbox (Overlord W1) it is shown at most once: a rejected send is not retried, and a send every
+// subscription refused is retried inside its ten minutes (slug release-push-shown-at-most-once). Each case calls the
+// watcher's public `pushRelease` directly unless it is about a lane's wiring.
+describe('the release push — once per tag, across restarts, sessionless (design 2026-09-20 §13)', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  const T = 1_790_000_000_000;
+  const listed = (tag: string, channel: UpdateChannel = 'stable'): ReleaseListingRow => ({
+    tag, channel, publishedAt: T, commitSha: null, tarballUrl: `https://example.invalid/download/${tag}/ccrc-${tag}.tar.gz`,
+    bundleListed: true, notes: null, draft: false,
+  });
+  /** A measured node row, label-keyed (a node with no node-id yet — the store admits it, W2 Task 5). */
+  const measured = (label: string, role: NodeRole, currentVersion: string | null): NodeMeasurement => ({
+    nodeId: label, role, label, currentVersion, currentSha: 'a'.repeat(40), currentRef: 'main',
+    currentBuiltAt: '2026-09-22T00:00:00Z', currentDirty: false, stampRead: 'ok', installState: 'complete',
+    provenance: 'verified', caps: ['verify', 'node-id', 'floor'], agentOps: role === 'fleet' ? [] : null,
+    highestVersion: currentVersion, previousVersion: null, floorRead: currentVersion === null ? 'absent' : 'measured', previousRead: 'absent',
+    os: 'linux', measuredAt: T, report: null,
+  });
+  const recorder = (): { sent: PushPayload[]; push: { notify: (p: PushPayload) => Promise<void> } } => {
+    const sent: PushPayload[] = [];
+    return { sent, push: { notify: async (p: PushPayload) => { sent.push(p); } } };
+  };
+  /** The catalogue plus a remote-mode fleet's two measured nodes. */
+  const seed = (coord: CoordStore, o: { releases: ReleaseListingRow[]; server: string | null; fleet: string | null }): void => {
+    expect(coord.applyReleaseListing(o.releases, T, 'complete')).toMatchObject({ ok: true });
+    expect(coord.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', o.server)).ok).toBe(true);
+    expect(coord.upsertNodeMeasurement(measured(FLEET_LABEL, 'fleet', o.fleet)).ok).toBe(true);
+  };
+  /** The fleet row's intent, through the store's one intent writer and its journal. */
+  const intent = (w: { home: string; coord?: CoordStore }, patch: UpdateIntentPatch): void => {
+    const log = new UpdateIntentLog(defaultUpdateIntentLogPath(path.join(w.home, '.ccrc')));
+    expect(w.coord!.setIntent(FLEET_SCOPE, patch, log, T)).toMatchObject({ ok: true });
+  };
+  const notifiedAt = (coord: CoordStore, tag: string): number | null | undefined =>
+    coord.releases().find((r) => r.tag === tag)?.notifiedAt;
+  const COPY_V009 = {
+    title: 'ccrc v0.0.9 is out',
+    body: 'On stable — fleet and server are on v0.0.7. Tap to see what\'s new.',
+    tag: 'release-v0.0.9',
+    url: '/settings/updates',
+  };
+
+  it('sends the pinned copy — title, body, collapse tag and the /settings/updates url, with no session', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9'), listed('v0.0.7')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    const outcome = w.w.pushRelease(T);
+    expect(sent).toEqual([COPY_V009]);
+    expect(Object.keys(sent[0]!).sort()).toEqual(['body', 'tag', 'title', 'url']);   // no sessionId, no actions
+    expect(sent[0]!.sessionId).toBeUndefined();
+    expect(sent[0]!.actions).toBeUndefined();
+    expect(outcome).toEqual({ did: 'pushed', tag: 'v0.0.9', payload: sent[0] });
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBe(T);
+    expect(notifiedAt(w.coord!, 'v0.0.7')).toBeNull();   // only the newest is ever announced
+  });
+
+  it("a measured node whose stamp did not read is a MISSING side in the push body, never 'unversioned' (D-3307)", () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', 'v0.0.7')).ok).toBe(true);
+    // The fleet row HAS been measured (`measuredAt` is set — W5 review 161, F-I:
+    // `statedOf` asks "ever measured", never "measured this sweep"), but its stamp
+    // did not read — the
+    // same shape a local-mode box's EACCES leaves. `measured()` fixes
+    // stampRead 'ok', so this overrides it to the unread arm directly.
+    expect(w.coord!.upsertNodeMeasurement({ ...measured(FLEET_LABEL, 'fleet', null), stampRead: 'unreadable' }).ok).toBe(true);
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.7. Tap to see what\'s new.');
+    expect(sent[0]!.body).not.toContain('unversioned');
+  });
+
+  it('names each side when the nodes disagree — On dev — fleet v0.0.7 · server v0.0.9', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.10', 'dev'), listed('v0.0.9')], server: 'v0.0.9', fleet: 'v0.0.7' });
+    intent(w, { channel: 'dev' });
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.10' });   // semver: v0.0.10 > v0.0.9
+    expect(sent.map((p) => [p.title, p.body, p.tag])).toEqual([
+      ['ccrc v0.0.10 is out', 'On dev — fleet v0.0.7 · server v0.0.9. Tap to see what\'s new.', 'release-v0.0.10'],
+    ]);
+  });
+
+  it('sends once per tag: a second decision after notifiedAt sends nothing and keeps the first mark', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(w.w.pushRelease(T + 60_000)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });
+    expect(w.w.pushRelease(T + 120_000)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });
+    expect(sent).toHaveLength(1);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBe(T);
+  });
+
+  it('sends once per tag across a restart: a NEW watcher over the same coord.db sends nothing', () => {
+    const first = recorder();
+    const a = watcher({ push: first.push, coord: true, sessions: [] });
+    seed(a.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    expect(a.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(first.sent).toHaveLength(1);
+
+    const second = recorder();
+    a.coord!.db.close();                                // the first process is gone: nothing below reads through its handle
+    const b = watcher({ push: second.push, coord: true, sessions: [], home: a.home });
+    expect(notifiedAt(b.coord!, 'v0.0.9')).toBe(T);     // a second connection, from disk, reads the committed mark
+    expect(b.w.pushRelease(T + 60_000)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });
+    expect(second.sent).toEqual([]);
+  });
+
+  it("notify: 'stable' skips a newer dev tag and announces the stable one, on stable", () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9', 'dev'), listed('v0.0.8')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    intent(w, { channel: 'dev', notify: 'stable' });
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.8' });
+    expect(sent.map((p) => p.tag)).toEqual(['release-v0.0.8']);
+    expect(sent[0]!.body).toBe('On stable — fleet and server are on v0.0.7. Tap to see what\'s new.');
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+  });
+
+  it("notify: 'off' sends nothing and marks nothing", () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    intent(w, { notify: 'off' });
+    expect(w.w.pushRelease(T)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+  });
+
+  // D-3294: a tag every measured node already runs is marked, not announced.
+  it('a fleet already on the newest tag is marked with no push, and the next tag listed afterwards is pushed', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.9', fleet: 'v0.0.9' });
+    expect(w.w.pushRelease(T)).toEqual({ did: 'marked', tag: 'v0.0.9' });
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBe(T);
+
+    expect(w.coord!.applyReleaseListing([listed('v0.0.10'), listed('v0.0.9')], T + 1, 'complete')).toMatchObject({ ok: true });
+    expect(w.w.pushRelease(T + 1)).toMatchObject({ did: 'pushed', tag: 'v0.0.10' });
+    expect(sent.map((p) => p.title)).toEqual(['ccrc v0.0.10 is out']);
+  });
+
+  // D-3295: the mark is COMMITTED — visible to another connection — before the send starts.
+  it('commits the mark before notify is called: a second connection reads notifiedAt inside the send', () => {
+    let reader: CoordStore | null = null;
+    const seen: (number | null | undefined)[] = [];
+    const push = { notify: async (_p: PushPayload) => { seen.push(reader === null ? undefined : notifiedAt(reader, 'v0.0.9')); } };
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    reader = new CoordStore(openCoordDb(path.join(w.home, '.ccrc', 'coord.db')));
+    expect(notifiedAt(reader, 'v0.0.9')).toBeNull();     // control: nothing is marked before the decision
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed' });
+    expect(seen).toEqual([T]);
+  });
+
+  it('a send that rejects is not retried — at most once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let calls = 0;
+    const push = { notify: async (_p: PushPayload) => { calls += 1; throw new Error('endpoint gone'); } };
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    await vi.waitFor(() => expect(warn.mock.calls.some(([l]) =>
+      String(l).startsWith('ccrc-server: ') && String(l).includes('release push for v0.0.9 did not send')
+      && String(l).includes('not retried') && String(l).includes('(endpoint gone)'))).toBe(true));
+    expect(w.w.pushRelease(T + 60_000)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });
+    expect(calls).toBe(1);
+  });
+
+  it('a mark that loses sends nothing — another writer marked the tag first', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    vi.spyOn(w.coord!, 'markReleaseNotified').mockReturnValue({ ok: false, why: 'already-notified', notifiedAt: T - 1 });
+    expect(w.w.pushRelease(T)).toEqual({ did: 'refused', tag: 'v0.0.9', why: 'already-notified' });
+    expect(sent).toEqual([]);
+  });
+
+  it('a store that throws is a failed decision — warned once per reason, nothing sent, never thrown to the lane', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    w.coord!.db.close();                     // node:sqlite now throws synchronously on every read
+    const a = w.w.pushRelease(T);
+    const b = w.w.pushRelease(T + 60_000);
+    expect(a).toMatchObject({ did: 'failed' });
+    expect(b).toEqual(a);
+    expect(sent).toEqual([]);
+    const decisionWarns = warn.mock.calls.filter(([l]) => String(l).includes('the release push was not decided'));
+    expect(decisionWarns).toHaveLength(1);
+    expect(String(decisionWarns[0]![0])).toMatch(/^ccrc-server: /);   // item 10, F10: the prefix is pinned, not just present
+  });
+
+  it("a fleet-role process neither sends nor marks — push subscriptions are the server box's", () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [], cfg: { role: 'fleet' } });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    expect(w.w.pushRelease(T)).toEqual({ did: 'skipped', why: 'not-server-role' });
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+  });
+
+  it('no coordination database: nothing to decide', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, sessions: [] });
+    expect(w.w.pushRelease(T)).toEqual({ did: 'skipped', why: 'no-coord' });
+    expect(sent).toEqual([]);
+  });
+
+  it('no push service (no VAPID keys) decides and marks nothing — a sender configured later still announces the tag', () => {
+    const w = watcher({ coord: true, sessions: [] });   // no `push`: the box `index.ts` builds without VAPID keys
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    expect(w.w.pushRelease(T)).toEqual({ did: 'skipped', why: 'no-push-service' });
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();   // not used up: nothing was sent
+    const { sent, push } = recorder();
+    const b = watcher({ push, coord: true, sessions: [], home: w.home });   // the restart after VAPID keys are configured
+    expect(b.w.pushRelease(T + 60_000)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent.map((p) => p.tag)).toEqual(['release-v0.0.9']);
+  });
+
+  it('a visible session does not suppress it — the release push has no session to be looking at', () => {
+    const { sent, push } = recorder();
+    const viewers = new Viewers();
+    viewers.setVisible(Symbol('t'), 'cc-a');
+    const w = watcher({ push, viewers, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    expect(viewers.isVisible('cc-a')).toBe(true);        // control: the gate WOULD suppress a pushOne about cc-a
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent).toHaveLength(1);
+  });
+
+  it('leaves no feed row and no ring record — it is a push, not a NotifyEvent', async () => {
+    const { sent, push } = recorder();
+    const log = new NotifyLog(path.join(mkTmp('push-release-log-'), 'n.json'));
+    await log.load();
+    const w = watcher({ push, notifyLog: log, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed' });
+    expect(sent).toHaveLength(1);
+    expect(log.seq).toBe(0);
+    expect(w.coord!.feedEvents(10)).toEqual([]);
+  });
+
+  it('is wired through the inventory lane: inventoryNow() on a local-mode server pushes once the sweep has measured the box', async () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    writeFileSync(path.join(w.home, '.ccrc', NODE_FILES.stamp),
+      `${JSON.stringify({ sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-09-22T00:00:00Z', dirty: false, version: 'v0.0.7' })}\n`);
+    // D-3300: before the first sweep no node is measured, so nothing is decided.
+    expect(w.w.pushRelease(Date.now())).toEqual({ did: 'skipped', why: 'nothing-to-notify' });
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+    await w.w.inventoryNow();
+    expect(sent).toEqual([COPY_V009]);   // local mode: the one `both` row is both sides
+  });
+
+  /** A catalogue double whose `poll` lists `v0.0.9` into the watcher's own store, as W2's poller writes. */
+  const listingPoller = (store: () => CoordStore): CataloguePoller => ({
+    poll: async (now: number) => {
+      store().applyReleaseListing([listed('v0.0.9')], now, 'complete');
+      return { lastOkAt: now, lastError: null };
+    },
+    state: () => ({ lastOkAt: null, lastError: null }),
+    lastRequestAt: () => null,
+  });
+  const writeStamp = (home: string, version: string): void => {
+    writeFileSync(path.join(home, '.ccrc', NODE_FILES.stamp),
+      `${JSON.stringify({ sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-09-22T00:00:00Z', dirty: false, version })}\n`);
+  };
+
+  it('is wired through the catalogue lane: once this process has swept, the poll that lists a tag announces it', async () => {
+    const { sent, push } = recorder();
+    let store: CoordStore | null = null;
+    const w = watcher({ push, coord: true, sessions: [], catalogue: listingPoller(() => store!) });
+    store = w.coord!;
+    writeStamp(w.home, 'v0.0.7');
+    expect(w.w.pushRelease(T)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });   // control: nothing listed yet
+    // This process's first inventory run: it measures the box (v0.0.7) and, with nothing listed, decides nothing.
+    await w.w.inventoryNow();
+    expect(sent).toEqual([]);
+    vi.spyOn(w.w, 'inventoryNow').mockResolvedValue([]);   // the inventory lane stays out: this case is the catalogue's
+    await w.tick();
+    await vi.waitFor(() => expect(sent.map((p) => p.tag)).toEqual(['release-v0.0.9']));
+    expect(sent[0]!.body).toBe('On stable — fleet and server are on v0.0.7. Tap to see what\'s new.');
+  });
+
+  // D-3314: until this process's first inventory run rewrites them, the nodes
+  // rows are the PREVIOUS process's — after a server-box update, still at the version the update replaced.
+  it("the catalogue lane waits for this process's first inventory run — a row from before the restart is never decided on", async () => {
+    const { sent, push } = recorder();
+    let store: CoordStore | null = null;
+    const w = watcher({ push, coord: true, sessions: [], catalogue: listingPoller(() => store!) });
+    store = w.coord!;
+    // The previous process's row: this box on v0.0.7, measured before the update that placed v0.0.9 and restarted it.
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'both', 'v0.0.7')).ok).toBe(true);
+    writeStamp(w.home, 'v0.0.9');                            // this process's tree, which its first run will read
+    expect(w.w.pushRelease(T)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });   // control: nothing listed yet
+    const inventory = vi.spyOn(w.w, 'inventoryNow').mockResolvedValue([]);   // the first run has not finished
+    const afterPoll = vi.spyOn(w.w, 'pushReleaseAfterPoll');
+    await w.tick();
+    await vi.waitFor(() => expect(afterPoll).toHaveBeenCalledTimes(1));
+    expect(afterPoll.mock.results[0]!.value).toEqual({ did: 'skipped', why: 'not-yet-swept' });
+    expect(w.coord!.releases().map((r) => r.tag)).toEqual(['v0.0.9']);   // control: the poll DID list the tag
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+    // The first run finishes: it measures v0.0.9 (the same label-keyed row, rewritten) and decides — marked, no push.
+    inventory.mockRestore();
+    await w.w.inventoryNow();
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toEqual(expect.any(Number));
+  });
+
+  // Fix round 1 (F3, D-3314 amended): `inventorySwept` opens only on a sweep that actually rewrote what the
+  // push decides on. A link-down sweep only marks the fleet row unreachable — it does not remeasure it — so
+  // this must not count, either for the flag or for the DIRECT `pushRelease` call `sweepThenProject` makes at
+  // its own end (the same hazard `pushReleaseAfterPoll` guards for the catalogue lane).
+  it("a remote-mode boot with the agent link down never pushes on the previous process's rows — a later sweep that measures the link does (F3, D-3314 amended)", async () => {
+    const { sent, push } = recorder();
+    const state = fleetState({ connected: false, downSince: T });
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote', role: 'server' }, fleetState: state });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    // The previous process's fleet row — already behind the candidate.
+    expect(w.coord!.upsertNodeMeasurement(measured(FLEET_LABEL, 'fleet', 'v0.0.7')).ok).toBe(true);
+    writeStamp(w.home, 'v0.0.9');
+    await w.w.inventoryNow();   // the link is down: sweepFleet only marks it unreachable, never remeasures
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+    expect(w.w.pushReleaseAfterPoll(T + 1)).toEqual({ did: 'skipped', why: 'not-yet-swept' });
+
+    // The link recovers: the next sweep measures the fleet row for real, and this process finally decides.
+    state.connected = true;
+    await w.w.inventoryNow();
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toEqual(expect.any(Number));
+  });
+
+  // Fix round 1 (F4, D-3314 amended): a `sweepOwn` throw (a locked/corrupt coord.db, most likely) must not
+  // open the flag either — its premise, "this sweep rewrote the rows", is not measured.
+  it("a boot whose sweepOwn throws also leaves inventorySwept closed — pushRelease is not tried on the previous process's row (F4, D-3314 amended)", async () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });   // local mode: one `both` row
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    // The previous process's row — already behind the candidate.
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'both', 'v0.0.7')).ok).toBe(true);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(w.coord!, 'upsertNodeMeasurement').mockImplementationOnce(() => { throw new Error('boom'); });
+    await w.w.inventoryNow();   // sweepOwn's own write throws, caught as an 'error' outcome
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+    expect(w.w.pushReleaseAfterPoll(T + 1)).toEqual({ did: 'skipped', why: 'not-yet-swept' });
+
+    // The mock was `mockImplementationOnce` — this second sweep's write succeeds for real, and a later good
+    // sweep does open the gate and decide.
+    await w.w.inventoryNow();
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toEqual(expect.any(Number));
+    warn.mockRestore();
+  });
+
+  // W5 review 161 (F-G): `sweptEnoughToDecide`'s `wasMeasured` counts only a
+  // `'measured'`/`'node-id-collision'` outcome. A `'refused'` row — the
+  // store's own upsert REFUSING the write (e.g. `superseded`), never a
+  // throw — is a third shape, previously unpinned: nothing wrote this
+  // sweep's row either way, so it must not open the gate, exactly like the
+  // throw case right above.
+  it("a sweep whose own upsert is REFUSED (not thrown) also leaves inventorySwept closed (F-G)", async () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });   // local mode: one `both` row
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    // The previous process's row — already behind the candidate.
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'both', 'v0.0.7')).ok).toBe(true);
+    vi.spyOn(w.coord!, 'upsertNodeMeasurement')
+      .mockImplementationOnce(() => ({ ok: false, why: 'superseded', supersededBy: 'some-other-node-id' }));
+    await w.w.inventoryNow();   // sweepOwn's own write is REFUSED, caught as a 'refused' outcome, never a throw
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+    expect(w.w.pushReleaseAfterPoll(T + 1)).toEqual({ did: 'skipped', why: 'not-yet-swept' });
+
+    // The mock was `mockImplementationOnce` — the next sweep's write succeeds for real, and opens the gate.
+    await w.w.inventoryNow();
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toEqual(expect.any(Number));
+  });
+
+  // Fix round 1 (F1, D-3313 via remoteSides, moved to L0): on a REMOTE fleet, deciding sides from a
+  // pre-filtered row set is what let a `both` server row's own version stand in for a fleet nobody measured.
+  // The reviewer's exact rows: a server row recorded `both`, and a separate fleet row whose stamp did not read.
+  it('on a remote fleet, a server row recorded as both never states a fleet version nobody measured (F1)', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote' } });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'both', 'v0.0.7')).ok).toBe(true);
+    expect(w.coord!.upsertNodeMeasurement({ ...measured(FLEET_LABEL, 'fleet', null), stampRead: 'unreadable' }).ok).toBe(true);
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.7. Tap to see what\'s new.');
+  });
+
+  // W5 review 161 (F-D): every case above uses at most ONE row per role, so a
+  // caller that pre-filtered before mapping to a `SummaryRow` and one that
+  // did not would happen to agree. This proves the rule actually bites: two
+  // LIVE rows both carry role 'fleet' (distinct node ids — `versionSides`'
+  // `.find` is generic over the array, not keyed to FLEET_LABEL specifically)
+  // — the first unstated (its stamp never read), the second fully stated and
+  // current. `versionSides` still picks the FIRST live 'fleet' row it finds,
+  // so the summary reads a dash for the fleet side; a pre-filter that dropped
+  // the unstated row BEFORE picking sides would let the second, stated row
+  // stand in instead, and the summary would name its version.
+  it('sides are picked from EVERY row, never a pre-filtered subset — two rows share one role, and a pre-filter would change the answer (F-D)', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote' } });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', 'v0.0.9')).ok).toBe(true);
+    expect(w.coord!.upsertNodeMeasurement({ ...measured(FLEET_LABEL, 'fleet', null), stampRead: 'unreadable' }).ok).toBe(true);
+    expect(w.coord!.upsertNodeMeasurement(measured('second-fleet-node', 'fleet', 'v0.0.9')).ok).toBe(true);
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.9. Tap to see what\'s new.');
+  });
+
+  // The narrower D-3313 case: no separate fleet row exists AT ALL, so `versionSides`' own `both`-row fallback
+  // is what would fire (a real fleet-role row's mere presence, above, already blocks the fallback regardless
+  // of which side-picker runs — this is the case that needs `remoteSides` specifically).
+  it('on a remote fleet with no fleet row at all, a lone both row never lends its version to the fleet side (D-3313)', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote' } });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'both', 'v0.0.7')).ok).toBe(true);
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.7. Tap to see what\'s new.');
+  });
+
+  // Fix round 1 (F14, D-3316): "unreachable is not current" binds the push body too. An unreachable fleet
+  // row carrying an old version does not state its version in the push body.
+  //
+  // W5 review 161 (F-J): this case's title used to also claim it pins the DECISION half ("is not treated as
+  // current" — i.e. that `!reachable` is what keeps the push from being suppressed). It does not: the fleet
+  // row here also carries an OLDER version (v0.0.7 against the v0.0.9 candidate), so `isNewerTag` alone
+  // already makes `releaseToNotify`'s push decision true regardless of `reachable` — dropping the
+  // `!n.reachable ||` clause from `notify.ts`'s push test would NOT red this case. The decision half is
+  // pinned properly in `update-notify.test.ts`'s "an unreachable node never counts as already on the
+  // candidate, even one whose cached version reads current" (a node on the SAME tag as the candidate, so
+  // only `!reachable` can be why it still pushes) and "a sole unreachable node still pushes". This case pins
+  // the TEXT half only: the push BODY's summary clause reads the unreachable side as a dash, never its stale
+  // `v0.0.7`.
+  it('an unreachable fleet row carrying an old version does not state its version in the push body (F14, D-3316)', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote' } });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', 'v0.0.9')).ok).toBe(true);
+    expect(w.coord!.upsertNodeMeasurement(measured(FLEET_LABEL, 'fleet', 'v0.0.7')).ok).toBe(true);
+    expect(w.coord!.markUnreachable(FLEET_LABEL, 'fleet', T + 1).ok).toBe(true);   // the connection then drops
+    // Pushed because the cached v0.0.7 is older than the candidate — a control, not this case's own claim.
+    expect(w.w.pushRelease(T + 1)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.9. Tap to see what\'s new.');
+  });
+});
+
+// The stall watch on the phone (spec 2026-09-29 §4.2, "Push shape"):
+// - a stall-check and a BOUND reply are recorded, never pushed;
+// - the watch's report is pushed under its own title;
+// - any other mail wearing those prefixes is pushed as ordinary mail, so no box-token holder can use a prefix
+//   to keep a mail off the phone.
+describe('the stall watch on the phone — pushNewMail\'s stall classes', () => {
+  /** A run whose worker is cc-a (workspace cc-a-ws) and whose coordinator session is cc-b. */
+  const stallRig = async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const w = watcher({ push, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a', 'ccrc-pwa/cc-b'] });
+    await w.tick();                  // priming: seeds the mail watermark
+    const run = w.coord!.openRun({
+      program: 'stall-push', title: 'Stall push', project: 'ccrc-pwa', wave: 1, waveOf: 2, claimedBy: 'cc-b',
+    }) as { id: number };
+    w.coord!.markDispatched(run.id, 'cc-a', 'cc-a-ws', 'ws/cc-a', false);
+    /** One mail on the run, delivered to `deliverTo` (the resolved session behind `toId`). */
+    const mail = (fromId: string, toId: string, deliverTo: string, subject: string): number => {
+      const m = w.coord!.insertMail({ fromId, fromUuid: fromId, toId, runId: run.id, kind: 'status', subject, body: 'b', artifacts: [] });
+      w.coord!.queueDelivery(m.id, deliverTo, 'envelope');
+      return m.id;
+    };
+    const check = (): number => mail('operator', 'cc-a', 'cc-a', `${STALL_CHECK_PREFIX} run ${run.id} — quiet 2h 0m, owed: first report`);
+    return { sent, log, w, run, mail, check };
+  };
+
+  it('a stall-check from operator is recorded, never pushed', async () => {
+    const { sent, log, w, check } = await stallRig();
+    check();
+    await w.tick();
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(1);
+  });
+
+  it('an untold notice (runs closed:) is recorded, never pushed', async () => {
+    const { sent, log, w, mail } = await stallRig();
+    mail('operator', 'cc-b', 'cc-b', `${UNTOLD_SUBJECT_PREFIX} 2 runs`);
+    await w.tick();
+    // Filtered to the mail lane's own tag: an unrelated lane (a disk notice on a full box) may push in the same tick.
+    expect(sent.filter((p) => p.tag?.startsWith('mail-'))).toEqual([]);
+    expect(log.seq).toBeGreaterThanOrEqual(1);
+  });
+
+  it('a run-close warning (runs closing:) is recorded, never pushed (D-8077)', async () => {
+    const { sent, log, w, mail } = await stallRig();
+    mail('operator', 'cc-b', 'cc-b', `${RUN_CLOSE_WARNING_PREFIX} programme-a`);
+    await w.tick();
+    expect(sent.filter((p) => p.tag?.startsWith('mail-'))).toEqual([]);
+    expect(log.seq).toBeGreaterThanOrEqual(1);
+  });
+
+  it('a fired timer\'s mail (from the role timer) is recorded, never pushed; the same mail from a session is pushed (review 2053 F2)', async () => {
+    const { sent, log, w, mail } = await stallRig();
+    mail(TIMER_MAIL_SENDER, 'cc-a', 'cc-a', 'timer: 1 due (7)');
+    await w.tick();
+    expect(sent.filter((p) => p.tag?.startsWith('mail-'))).toEqual([]);
+    expect(log.seq).toBeGreaterThanOrEqual(1);
+    mail('cc-b', 'cc-a', 'cc-a', 'timer: 1 due (7)');
+    await w.tick();
+    expect(sent.filter((p) => p.tag?.startsWith('mail-')).map((p) => p.body)).toEqual(['timer: 1 due (7)']);
+  });
+
+  it('a BOUND reply (the run\'s worker, after the first check on that run) is recorded, never pushed', async () => {
+    const { sent, log, w, mail, check } = await stallRig();
+    check();
+    mail('cc-a', 'coordinator', 'cc-b', `${STALL_REPLY_PREFIX} working — task 3 of 7, next report 14:00Z`);
+    await w.tick();
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(2);
+  });
+
+  it('a re stall-check: from another sender is pushed as ordinary mail', async () => {
+    const { sent, w, mail, check } = await stallRig();
+    check();
+    const subject = `${STALL_REPLY_PREFIX} waiting — nothing to see`;
+    mail('cc-c', 'coordinator', 'cc-b', subject);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title: '✉ status › cc-a-ws', body: subject });
+  });
+
+  it('a re stall-check: from the worker with NO check on its run is pushed as ordinary mail', async () => {
+    const { sent, w, mail } = await stallRig();
+    mail('cc-a', 'coordinator', 'cc-b', `${STALL_REPLY_PREFIX} working — unprompted`);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.title).toBe('✉ status › cc-a-ws');
+  });
+
+  it('a re stall-check: OLDER than the first check on its run is pushed as ordinary mail', async () => {
+    const { sent, log, w, mail, check } = await stallRig();
+    const early = `${STALL_REPLY_PREFIX} working — before any check`;
+    mail('cc-a', 'coordinator', 'cc-b', early);
+    check();
+    await w.tick();
+    expect(sent.map((p) => p.body)).toEqual([early]);   // the check is recorded, not pushed
+    expect(log.seq).toBe(2);
+  });
+
+  it('the watch\'s stall: report to the coordinator is pushed as ⚠ stall › <run workspace>', async () => {
+    const { sent, w, mail, run } = await stallRig();
+    const subject = `${STALL_REPORT_PREFIX} run ${run.id} — worker quiet 3h 0m, check unanswered`;
+    const id = mail('operator', 'cc-b', 'cc-b', subject);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title: '⚠ stall › cc-a-ws', body: subject, tag: `mail-cc-b-${id}` });
+  });
+
+  it('a stall-check: prefix from a session (not operator) is pushed as ordinary mail', async () => {
+    const { sent, w, mail, run } = await stallRig();
+    mail('cc-b', 'cc-a', 'cc-a', `${STALL_CHECK_PREFIX} run ${run.id} — spoofed`);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.title).toBe('✉ status › cc-a-ws');
+  });
+
+  // Wave 2 (spec 2026-09-29 §5.2): the watch's self-wakes are its own notices, so the phone records them and
+  // never buzzes. Its reports are titled by the kind their subject names. Every watch subject below is the watch's
+  // own: a self-wake comes from Task 10's builders, and a report tail is Task 13's golden form (`stallW2ReportMail`'s
+  // `stall: run <id> — <kind>: <rest>`, whose builder is private), so a fixture can never drift from what ships.
+  const W2_STOP = Date.parse('2026-09-29T10:00:00Z');
+  const W2_ORPHANED_E = stallOrphanESubject({ bgKinds: ['subagent'], stopAt: W2_STOP });
+  const W2_FAILED = stallFailedSubject('server_error', W2_STOP);
+
+  it('an orphaned: self-wake from operator to the run\'s worker is recorded, never pushed', async () => {
+    const { sent, log, w, mail } = await stallRig();
+    mail('operator', 'cc-a', 'cc-a', W2_ORPHANED_E);
+    await w.tick();
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(1);
+  });
+
+  it('a failed: self-wake from operator to a RUN-LESS session (a coordinator) is recorded, never pushed', async () => {
+    const { sent, log, w } = await stallRig();
+    const m = w.coord!.insertMail({ fromId: 'operator', fromUuid: 'operator', toId: 'cc-b', runId: null, kind: 'status',
+      subject: W2_FAILED, body: 'b', artifacts: [] });
+    w.coord!.queueDelivery(m.id, 'cc-b', 'envelope');
+    await w.tick();
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(1);
+  });
+
+  it.each([
+    [STALL_ORPHANED_PREFIX, W2_ORPHANED_E],
+    [STALL_FAILED_PREFIX, W2_FAILED],
+  ] as const)('a %s subject from a session (not operator) is pushed as ordinary mail', async (prefix, subject) => {
+    const { sent, w, mail } = await stallRig();
+    expect(subject.startsWith(prefix)).toBe(true);
+    mail('cc-b', 'cc-a', 'cc-a', subject);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title: '✉ status › cc-a-ws', body: subject });
+  });
+
+  it.each([
+    ['stall', 'worker silent 3h 0m, stall-check unanswered', '⚠ stall › cc-a-ws'],
+    ['frozen', 'frozen: no hook event for 1h 1m', '⚠ frozen › cc-a-ws'],
+    ['dead', 'dead: orphan for 0h 12m', '⚠ dead › cc-a-ws'],
+    ['failed', 'failed: server_error twice at 2026-09-29T10:00Z', '⚠ failed › cc-a-ws'],
+  ] as const)('a %s report to the coordinator is pushed under its own title', async (_kind, tail, title) => {
+    const { sent, w, mail, run } = await stallRig();
+    const subject = `${STALL_REPORT_PREFIX} run ${run.id} — ${tail}`;
+    const id = mail('operator', 'cc-b', 'cc-b', subject);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title, body: subject, tag: `mail-cc-b-${id}` });
   });
 });

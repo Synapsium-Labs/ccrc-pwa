@@ -2,9 +2,10 @@
 # build-release.sh — the release pipeline's testable core (stage 4, spec §2).
 #
 # Builds ONE tarball, `ccrc-<version>.tar.gz`, holding the matched set a box
-# installs from — prebuilt dists, the three package.json+lock pairs (for
-# `npm ci --omit=dev` on the box), `shared/`, `ccd/`, `deploy/`'s units and
-# helpers, `install.sh` — plus a MANIFEST (per-file sha256, verified by
+# installs from — prebuilt dists, the three package.json+lock pairs and each
+# package's tracked `scripts/` (for `npm ci --omit=dev` on the box, whose
+# install-time hooks name them — D-3105), `shared/`, `ccd/`, `deploy/`'s units
+# and helpers, `install.sh` — plus a MANIFEST (per-file sha256, verified by
 # `ccrc update` after extraction) inside it and `SHA256SUMS` (sha256sum -c
 # compatible, guards transport) beside it. CI (`release.yml`) merely invokes
 # this script: no logic lives in YAML that the script doesn't own, and every
@@ -80,8 +81,21 @@ fi
 # The pwa build lands in server/dist-pwa (vite outDir), same as deploy.sh's
 # lane; the artifact checks after the builds refuse BY ARTIFACT, because a
 # green npm exit is a promise and the file on disk is a fact.
+#
+# ui/ IS INSTALLED, NEVER BUILT, AND ALWAYS BEFORE pwa. pwa consumes
+# `@ccrc/ui` as SOURCE (`"file:../ui"`, `exports['.']` → `src/index.ts`), so
+# both halves of pwa's `npm run build` (`tsc --noEmit && vite build`) read
+# `../ui/src/**` — and a bare import there resolves from ui's OWN directory,
+# never from pwa/node_modules. npm does not install the dependencies of a
+# `file:` link outside the package root; pwa's lockfile holds only the link.
+# Without this line a clean release machine fails pwa's `tsc --noEmit` with
+# "Cannot find module" for react, class-variance-authority, vaul and every
+# other ui import (measured on a clean clone: exit 2, no bundle) — and every
+# merge's prerelease would stall. ui ships nothing of its own: the bundle in server/dist-pwa is
+# the whole of it, which is why ui is absent from the tarball's set below.
 echo "build-release.sh: building $VERSION (server, PWA, agent)…"
 ( cd "$ROOT/server" && npm ci --no-audit --no-fund && npm run build )
+( cd "$ROOT/ui"     && npm ci --no-audit --no-fund )
 ( cd "$ROOT/pwa"    && npm ci --no-audit --no-fund && npm run build )
 ( cd "$ROOT/agent"  && npm ci --no-audit --no-fund && npm run build )
 [ -f "$ROOT/server/dist/server/src/index.js" ] \
@@ -100,16 +114,55 @@ mkdir -p "$TOP"
 # Tracked content only (see header). The pathspec is spec §2's layout: a path
 # missing from HEAD makes git archive fail loudly, which is an incomplete
 # checkout refusing rather than a thinner tarball shipping.
-git -C "$ROOT" archive --format=tar HEAD -- \
-  install.sh shared ccd deploy \
-  server/package.json server/package-lock.json \
-  agent/package.json agent/package-lock.json \
-  pwa/package.json pwa/package-lock.json \
-  | tar -x -C "$TOP"
+PATHSPEC=(install.sh shared ccd deploy
+  server/package.json server/package-lock.json
+  agent/package.json agent/package-lock.json
+  pwa/package.json pwa/package-lock.json)
+# A package's tracked scripts/ rides beside its package.json (D-3105): the
+# box's `npm ci --omit=dev` runs every install-time hook that file declares,
+# and v0.0.2 shipped server's `postinstall` (node scripts/fix-node-pty-helper.mjs)
+# WITHOUT the file — so the staged install died on every box and every
+# contributor HOME, after the new tree was already placed. Tracked content
+# only, like everything else here; a package with no scripts/ adds nothing.
+for pkg in server agent pwa; do
+  if [ -n "$(git -C "$ROOT" ls-tree -d HEAD -- "$pkg/scripts")" ]; then PATHSPEC+=("$pkg/scripts"); fi
+done
+# THROUGH A FILE, NEVER A PIPE (D-8391). macOS's tar (bsdtar) may stop reading
+# once it has read the archive's end marker, before `git archive` has written
+# the rest of its last record: git then dies of SIGPIPE, `pipefail` fails the
+# stage with 141, and `set -e` ends the build with nothing on stderr, since
+# bash reports no SIGPIPE. Measured intermittently on hosted macOS runners;
+# GNU tar reads to the end of its input, so Linux never showed it. A file has
+# no reader to outlive. It sits in $STAGE, beside the tree, never inside it.
+git -C "$ROOT" archive --format=tar -o "$STAGE/tracked.tar" HEAD -- "${PATHSPEC[@]}"
+tar -x -f "$STAGE/tracked.tar" -C "$TOP"
+rm -f "$STAGE/tracked.tar"
 
 cp -a "$ROOT/server/dist"     "$TOP/server/dist"
 cp -a "$ROOT/server/dist-pwa" "$TOP/server/dist-pwa"
 cp -a "$ROOT/agent/dist"      "$TOP/agent/dist"
+
+# ── Every install-time hook must find what it names (D-3105) ─────────────
+# The other half of the same defect: a hook that names a file the release set
+# does not hold is a refusal HERE, on the release machine, never an npm error
+# on a box. Tokens shaped like a path (a `/`; not a flag, not a URL) resolve
+# inside the packed package. `node` is on PATH because npm just ran.
+for pkg in server agent pwa; do
+  while IFS=$'\t' read -r hook cmd; do
+    [ -n "$hook" ] || continue
+    for tok in $cmd; do
+      case "$tok" in
+        -*|*://*) ;;
+        */*) [ -e "$TOP/$pkg/$tok" ] \
+          || die "$pkg/package.json's $hook runs '$cmd', but $pkg/$tok is not in the release set — npm ci on a box would fail after the tree is placed; ship it (a tracked $pkg/scripts/ rides the tarball) or drop the hook" ;;
+      esac
+    done
+  done < <(node -e '
+    const s = require(process.argv[1]).scripts || {};
+    for (const h of ["preinstall", "install", "postinstall", "prepare", "prepublish"])
+      if (s[h]) process.stdout.write(h + "\t" + s[h] + "\n");
+  ' "$TOP/$pkg/package.json")
+done
 
 # ── build.json: the artifact carries its own identity (stage 4, Task 6) ───
 # An extracted release tree is not a git repository, so the box-side stamper
@@ -122,11 +175,36 @@ cp -a "$ROOT/agent/dist"      "$TOP/agent/dist"
 # cover it like everything else in the set. The field shape is the two
 # stampers' exact shape (deploy.sh `stamp_build`, `_inst_stamp`), which
 # `shared/buildinfo.ts` and `_box_build_fields` both validate.
-printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":false,"version":"%s"}\n' \
+# THE TREE'S `ccd caps`, stamped as `ccdCaps` (the Overlord W1 pool set, plan Task 7, slug `ccd-caps-ride-build-json`):
+# the whole list the BUILT tree's ccd prints, verbs and capability tokens together, because membership is all a reader
+# asks (`ccd/ccrc#_upd_cap_floor_check`, before an update or a rollback moves a box below a word a standing fact needs).
+# ccd needs bash 4.4 or later and has no general floor of its own, so this script tests it first (`br_bash_floor`), and
+# ccd caps needs a roster, so it runs in a scratch HOME seeded with the generated default one; nothing outside that HOME
+# is written. A non-zero exit, an empty list or a line off the token grammar fails the build: the field is never written
+# empty, partial, or with a byte that needs escaping.
+br_bash_floor() {   # <major> <minor> <version> -> 0 iff bash 4.4 or later; else "too old" on stdout, rc 1
+  if [ "$1" -gt 4 ] || { [ "$1" -eq 4 ] && [ "$2" -ge 4 ]; }; then return 0; fi
+  echo "too old: bash $3 cannot run ccd (it needs bash 4.4 or later; macOS ships 3.2 as /bin/bash) - run this script with a newer bash"
+  return 1
+}
+BR_FLOOR="$(br_bash_floor "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}" "$BASH_VERSION")" || die "$BR_FLOOR"
+CAPS_HOME="$STAGE/caps-home"
+mkdir -p "$CAPS_HOME/.ccrc" || die "cannot create the scratch HOME $CAPS_HOME for ccd caps"
+( cd "$TOP" && node deploy/gen-accounts.mjs deploy/accounts.default.json ) > "$CAPS_HOME/.ccrc/accounts.sh" \
+  || die "the default roster could not be generated for ccd caps (node deploy/gen-accounts.mjs deploy/accounts.default.json)"
+CCD_CAPS="$(cd "$CAPS_HOME" && HOME="$CAPS_HOME" bash "$TOP/ccd/ccd" caps)" || die "the built tree's ccd caps exited non-zero, so build.json cannot name its ccdCaps"
+[ -n "$CCD_CAPS" ] || die "the built tree's ccd caps printed nothing, so build.json cannot name its ccdCaps"
+CCD_CAPS_JSON=""
+while IFS= read -r tok; do
+  [[ "$tok" =~ ^[a-z][a-z0-9-]*$ ]] || die "the built tree's ccd caps printed a line that is not a capability token: '$tok'"
+  CCD_CAPS_JSON+="${CCD_CAPS_JSON:+,}\"$tok\""
+done <<< "$CCD_CAPS"
+
+printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":false,"version":"%s","ccdCaps":[%s]}\n' \
   "$(git -C "$ROOT" rev-parse HEAD)" \
   "$(git -C "$ROOT" rev-parse --abbrev-ref HEAD)" \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  "$VERSION" > "$TOP/build.json"
+  "$VERSION" "$CCD_CAPS_JSON" > "$TOP/build.json"
 
 # ── MANIFEST: every file, per-file sha256 ─────────────────────────────────
 # Generated OUTSIDE the tree then moved in, so `find` can never race its own

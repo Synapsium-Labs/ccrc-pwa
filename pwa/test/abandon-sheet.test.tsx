@@ -11,19 +11,26 @@
 // two-tap flow and the row-control structural pins — a control that only
 // ever exists in its own isolated test file ships missing the moment
 // someone drops the line from `RunsScreen`.
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import type { CoordCapsView } from '../../shared/api';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import type { ChildMark, CoordCapsView, FleetSession } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { RunSummary } from '../../shared/api';
-import { AbandonSheet } from '../src/fleet/AbandonSheet';
-import { ToastHost } from '../src/components/Toast';
+import { AbandonSheet, abandonChildOf, abandonConsequence, workspaceSubject } from '../src/fleet/AbandonSheet';
+import { coordinatorGoneOf, runRowName } from '../src/fleet/runWords';
+import * as router from '../src/lib/router';
+import { ToastHost } from '@ccrc/ui';
 import { CoordBanner } from '../src/fleet/CoordBanner';
-import { RunsScreen } from '../src/screens/RunsScreen';
+import { RunsScreen, STUCK_NOW, stuckOpen, RowsBoard } from './runs-board';
 import { ApiError, COORD_UNSUPPORTED_TEXT, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
+beforeEach(stuckOpen);
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 // Same shape as runs-screen.test.tsx's own `r()` — RunSummary as PR I
@@ -32,7 +39,8 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 3, program: 'build4-transcript-surface', programTitle: 'Build 4: transcript surface',
   wave: 3, waveOf: 4, project: 'ccrc-pwa', homeProject: null,
   sessionId: 'ccrc-pwa-clear-cove', workspace: 'clear-cove', branch: 'ws/clear-cove',
-  state: 'working', claimedBy: 'ccrc-pwa-coordinator', resumed: false, clearedAt: null,
+  state: 'working', kind: 'work', reviews: null,
+  claimedBy: 'ccrc-pwa-coordinator', resumed: false, clearedAt: null,
   openedAt: Date.now() - 1_000_000, dispatchStartedAt: null,
   dispatchedAt: Date.now() - 900_000, closedAt: null,
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0,
@@ -40,12 +48,46 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   // predates the warn row and must keep rendering exactly as it did.
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false,
+  // Abandon sits on stuck rows alone (D-8074, Task 13), so the board cases below find their run in the Stuck band.
+  stuck: STUCK_NOW, ...over,
 });
+
+// `runs-screen.test.tsx`'s own `sess` builder, verbatim: a full `FleetSession`
+// literal, because `tsc` covers `test/`. Its `id` is the `sessionId` of `run()`.
+const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'ccrc-pwa-clear-cove', project: 'ccrc-pwa', workspace: 'clear-cove', branch: 'ws/clear-cove', bucket: 'working', ...over }));
+
+// The confirm line's four sentences, for `run()` (id 3, workspace clear-cove), spelled
+// out in full: a sentence is the thing under test here, so it is never rebuilt from the
+// source's own pieces. The not-a-child one is the sentence the sheet shipped
+// before it learned about children, byte for byte.
+const NOT_CHILD = 'Its workspace is clear-cove. A release destroys nothing: the worktree survives, the record stays.';
+const CHILD = 'clear-cove is a child workspace, so the server reclaims it when nothing keeps it: its commits and uncommitted work (not ignored or secret-shaped files) are pinned in the attic and its transcripts kept, then its session is stopped, its worktree, branch, clips and temp root are removed, and its registry row is purged.';
+const UNKNOWN = 'This board cannot tell whether clear-cove is a child workspace. If it is, the server reclaims it when nothing keeps it, pinning its commits and uncommitted work (not ignored or secret-shaped files) in the attic first; if not, a release destroys nothing.';
+const NO_SESSION = 'It holds no workspace of its own, so it has none to release or reclaim.';
 
 const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null,
     close(): void {} }) as unknown as WebSocket,
+});
+
+// D-6170 keeps D-5589's id rule: the row is named in words, and the run number
+// lives only in the controls' accessible names and the row's title.
+it("the run number survives in Abandon's accessible name and the row's title (Resume left the row, Task 19: its name is pinned on the run page)", () => {
+  const store = makeStore();
+  act(() => {
+    store.setState({
+      // Abandon sits on the stuck run 3 (the Stuck band); run 4 is an ordinary row and carries no Resume.
+      runs: [run(), run({ id: 4, program: 'programme-b', stuck: undefined })], runsFrameSeen: true, fleetFrameSeen: true, conn: 'open',
+      sessions: [fleetSession({ id: 'ccrc-pwa-coordinator', project: 'ccrc-pwa', status: 'dead', bucket: 'dead', lifecycle: 'orphan' })],
+    });
+  });
+  const { container } = render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+  expect(screen.getByRole('button', { name: 'Abandon run 3' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /^Resume/ })).toBeNull();
+  const row = container.querySelector<HTMLElement>('li.run-stuck')!;
+  expect(row.title).toMatch(/\brun 3\b/);
+  expect(row.title).toContain('clear-cove');
 });
 
 // Review fix round 1, Important 1: `AbandonSheet` is mounted UNCONDITIONALLY
@@ -83,12 +125,12 @@ const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {
 describe('AbandonSheet — the copy and the refusals', () => {
   it('names the run AND its workspace in the confirm line', () => {
     render(<AbandonSheet run={run()} onClose={() => {}} />);
-    expect(screen.getByText(/run 3/i)).toBeInTheDocument();
+    expect(screen.getByText('Abandon run 3?')).toBeInTheDocument();
     expect(screen.getByText(/clear-cove/i)).toBeInTheDocument();
   });
 
   it('says a release destroys nothing — the worktree survives, the record stays', () => {
-    render(<AbandonSheet run={run()} onClose={() => {}} />);
+    render(<AbandonSheet run={run()} workspaceChild="not-child" onClose={() => {}} />);
     expect(screen.getByText(/a release destroys nothing/i)).toBeInTheDocument();
     expect(screen.getByText(/worktree survives/i)).toBeInTheDocument();
     expect(screen.getByText(/record stays/i)).toBeInTheDocument();
@@ -111,7 +153,7 @@ describe('AbandonSheet — the copy and the refusals', () => {
       new ApiError(409, { ok: false, error: 'bad-transition', from: 'failed', to: 'failed' }),
     );
     render(<AbandonSheet run={run()} onClose={() => {}} abandonRun={abandonRun} />);
-    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
     expect(await screen.findByText(/this run already closed/i)).toBeInTheDocument();
     // `from` is what makes the sentence a measurement, not a hardcoded
     // "done" — a `from: 'failed'` case exercises that it is actually read.
@@ -121,7 +163,7 @@ describe('AbandonSheet — the copy and the refusals', () => {
   it('renders 404 as "that run is gone — the board will catch up"', async () => {
     const abandonRun = vi.fn().mockRejectedValue(new ApiError(404, { ok: false, error: 'unknown-run' }));
     render(<AbandonSheet run={run()} onClose={() => {}} abandonRun={abandonRun} />);
-    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
     expect(await screen.findByText('that run is gone — the board will catch up')).toBeInTheDocument();
   });
 
@@ -135,7 +177,7 @@ describe('AbandonSheet — the copy and the refusals', () => {
   it('renders a 409 {error:\'unknown-run\'} with the accurate sentence, not the generic catch-all', async () => {
     const abandonRun = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'unknown-run' }));
     render(<AbandonSheet run={run()} onClose={() => {}} abandonRun={abandonRun} />);
-    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
     expect(await screen.findByText('that run is gone — the board will catch up')).toBeInTheDocument();
     expect(screen.queryByText(/does not recognise/i)).toBeNull();
   });
@@ -143,14 +185,14 @@ describe('AbandonSheet — the copy and the refusals', () => {
   it('renders 501 as "the fleet host needs the newer ccd"', async () => {
     const abandonRun = vi.fn().mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
     render(<AbandonSheet run={run()} onClose={() => {}} abandonRun={abandonRun} />);
-    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
     expect(await screen.findByText('the fleet host needs the newer ccd')).toBeInTheDocument();
   });
 
   // Whole-branch review, M2: this sentence shipped as TWO byte-identical
   // literals in source — `ABANDON_COPY.unsupported` here and
   // `inlinePauseError`'s own 501 arm in `CoordBanner.tsx` — with
-  // `UNSUPPORTED_VERB_TEXT` (`lib/api.ts`) a third, DELIBERATELY different
+  // `UNSUPPORTED_VERB_TEXT` (`lib/refusalWords.ts`) a third, DELIBERATELY different
   // spelling for the lifecycle routes. The two coordination sites now read
   // one constant. This renders BOTH surfaces at 501 and compares what the
   // operator actually sees, so a re-inlined literal at either site is caught
@@ -159,13 +201,13 @@ describe('AbandonSheet — the copy and the refusals', () => {
   it('the two coordination surfaces render ONE 501 sentence, from one home (M2)', async () => {
     const abandonRun = vi.fn().mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
     render(<AbandonSheet run={run()} onClose={() => {}} abandonRun={abandonRun} />);
-    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
     const fromSheet = (await screen.findByText(COORD_UNSUPPORTED_TEXT)).textContent;
 
     cleanup();
 
     const store = makeStore();
-    act(() => { store.setState({ coord: { pause: 'clear', mail: 'clear' }, coordFrameSeen: true }); });
+    act(() => { store.setState({ coord: { pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] }, coordFrameSeen: true }); });
     const coordPause = vi.fn().mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
     render(<CoordBanner store={store} coordPause={coordPause} />);
     fireEvent.click(screen.getByRole('button'));
@@ -174,7 +216,7 @@ describe('AbandonSheet — the copy and the refusals', () => {
     expect(fromSheet).toBe(fromBanner);
     expect(fromSheet).toBe(COORD_UNSUPPORTED_TEXT);
     // …and it stays DISTINCT from the lifecycle routes' own sentence: that
-    // third spelling is argued for by name in `lib/api.ts`'s own docstring,
+    // third spelling is argued for by name in `lib/refusalWords.ts`'s own docstring,
     // not drift, and collapsing the three into one is not what this pins.
     expect(fromSheet).not.toBe(UNSUPPORTED_VERB_TEXT);
   });
@@ -185,12 +227,117 @@ describe('AbandonSheet — the copy and the refusals', () => {
     );
     const onClose = vi.fn();
     render(<AbandonSheet run={run()} onClose={onClose} abandonRun={abandonRun} />);
-    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
     expect(await screen.findByText('ccd: ws-release: permission denied')).toBeInTheDocument();
     // Not closed, and not stuck disabled — the operator can tap Abandon
     // again without leaving and reopening the sheet.
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: /^abandon$/i })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: /^abandon run \d+$/i })).not.toBeDisabled();
+  });
+});
+
+// The confirm line says what happens to the run's workspace, in four cases the
+// sheet decides on its own: no session, a child, not a child, and "cannot tell".
+// Every child sentence says what happens WHEN NOTHING KEEPS IT, never that it
+// will: the sheet cannot know before the tap whether an open sibling, a hold,
+// the pause switch, presence or a refusal will keep the child.
+describe('AbandonSheet — what the confirm line says about a child workspace', () => {
+  it('a child: the server reclaims it when nothing keeps it, its work pinned first', () => {
+    expect(abandonConsequence(run(), 'child')).toBe(CHILD);
+    render(<AbandonSheet run={run()} workspaceChild="child" onClose={() => {}} />);
+    expect(screen.getByText(CHILD)).toBeInTheDocument();
+    expect(screen.queryByText(NOT_CHILD)).toBeNull();
+  });
+
+  it('not a child: the sentence the sheet always carried, byte for byte', () => {
+    expect(abandonConsequence(run(), 'not-child')).toBe(
+      'Its workspace is clear-cove. A release destroys nothing: the worktree survives, the record stays.',
+    );
+    expect(abandonConsequence(run(), 'not-child')).toBe(NOT_CHILD);
+  });
+
+  it('unknown: the board cannot tell, so the line hedges both ways', () => {
+    expect(abandonConsequence(run(), 'unknown')).toBe(UNKNOWN);
+    // No `workspaceChild` prop at all: a caller that did not say reads unknown.
+    render(<AbandonSheet run={run()} onClose={() => {}} />);
+    expect(screen.getByText(UNKNOWN)).toBeInTheDocument();
+    expect(screen.queryByText(NOT_CHILD)).toBeNull();
+  });
+
+  // A run with no session names no workspace, so it names no child: the line is
+  // decided on `run.sessionId` alone, whatever the child answer is.
+  it.each(['child', 'not-child', 'unknown'] as const)(
+    'no session: says it holds no workspace, whatever the child answer (%s)',
+    (child) => {
+      const bare = run({ sessionId: null, workspace: null, state: 'planned' });
+      expect(abandonConsequence(bare, child)).toBe(NO_SESSION);
+      cleanup();
+      render(<AbandonSheet run={bare} workspaceChild={child} onClose={() => {}} />);
+      expect(screen.getByText(NO_SESSION)).toBeInTheDocument();
+    },
+  );
+});
+
+// Each sentence pinned by ITS OWN words, written here as literals — not by equality
+// with CHILD / NOT_CHILD / UNKNOWN / NO_SESSION above, which are edited together
+// with the source and so agree with it however the copy drifts (measured: "pinned in
+// the attic" -> "pinned in the archive" in both stayed green). Two reads per phrase:
+// the RENDERED sentence has it, and so does the SOURCE of `abandonConsequence` —
+// read as text, and cut to that function so the header comment, which names some of
+// these phrases, cannot stand in for the sentence.
+const SHEET_SOURCE = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'AbandonSheet.tsx'), 'utf8');
+const CONSEQUENCE_SOURCE = ((): string => {
+  const from = SHEET_SOURCE.indexOf('export function abandonConsequence(');
+  return from < 0 ? '' : SHEET_SOURCE.slice(from, SHEET_SOURCE.indexOf('\n}\n', from));
+})();
+
+/** The words no sentence of the sheet may carry: the phone never archives, the
+ *  refusal copy ('failed', 'does not recognise') belongs to a refusal, and the
+ *  'still claimed' toast to a release a sibling blocked. */
+const NEVER_IN_THE_SHEET = [/archive/i, /failed/i, /does not recognise/i, /still claimed/i];
+
+const bareRun = (): RunSummary => run({ sessionId: null, workspace: null, state: 'planned' });
+const SENTENCES: ReadonlyArray<{
+  name: string; run: () => RunSummary; child: 'child' | 'not-child' | 'unknown';
+  says: readonly string[]; never: readonly RegExp[];
+}> = [
+  { name: 'child', run, child: 'child',
+    says: ['is a child workspace', 'when nothing keeps it', 'not ignored or secret-shaped files',
+      'pinned in the attic', 'transcripts kept', 'session is stopped', 'temp root', 'are removed',
+      'registry row', 'is purged'],
+    // It reclaims: the worktree does NOT survive.
+    never: [/destroys nothing/i, /survives/i, /record stays/i] },
+  { name: 'not-child', run, child: 'not-child',
+    says: ['A release destroys nothing', 'worktree survives', 'record stays'],
+    never: [/attic/i, /removed/i, /purged/i, /reclaims/i, /transcripts/i] },
+  { name: 'no-session', run: bareRun, child: 'child',
+    says: ['holds no workspace of its own', 'none to release or reclaim'],
+    never: [/attic/i, /removed/i, /purged/i, /survives/i, /child workspace/i] },
+  { name: 'unknown', run, child: 'unknown',
+    says: ['cannot tell whether', 'is a child workspace', 'when nothing keeps it',
+      'not ignored or secret-shaped files', 'in the attic first', 'a release destroys nothing'],
+    never: [/removed/i, /purged/i, /survives/i] },
+];
+
+describe.each(SENTENCES)('AbandonSheet — the $name sentence, pinned by its own words', (s) => {
+  it('renders every phrase it is known by, and each is in the source of abandonConsequence', () => {
+    expect(CONSEQUENCE_SOURCE).toContain("case 'child':");
+    render(<AbandonSheet run={s.run()} workspaceChild={s.child} onClose={() => {}} />);
+    const line = document.querySelector('.qc-consequence')?.textContent ?? '';
+    expect(line.length).toBeGreaterThan(0);
+    for (const phrase of s.says) {
+      expect(line, `rendered: ${phrase}`).toContain(phrase);
+      expect(CONSEQUENCE_SOURCE, `source: ${phrase}`).toContain(phrase);
+    }
+  });
+
+  it('carries no word that belongs to another sentence, to a refusal or to an archive', () => {
+    render(<AbandonSheet run={s.run()} workspaceChild={s.child} onClose={() => {}} />);
+    const line = document.querySelector('.qc-consequence')?.textContent ?? '';
+    const sheet = document.querySelector('.abandon-sheet')?.textContent ?? '';
+    expect(line.length).toBeGreaterThan(0);
+    for (const word of s.never) expect(line, String(word)).not.toMatch(word);
+    for (const word of NEVER_IN_THE_SHEET) expect(sheet, String(word)).not.toMatch(word);
   });
 });
 
@@ -203,7 +350,7 @@ describe('the resolution the sheet used to throw away', () => {
     const abandonRun = vi.fn(async () => ({ released: false }));
     const onClose = vi.fn();
     render(<><ToastHost /><AbandonSheet run={run()} onClose={onClose} abandonRun={abandonRun} /></>);
-    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     // The sheet closes (the abandon SUCCEEDED); the toast carries the part
     // that would otherwise be silent.
@@ -213,7 +360,7 @@ describe('the resolution the sheet used to throw away', () => {
   it('says nothing extra when it DID release', async () => {
     const abandonRun = vi.fn(async () => ({ released: true }));
     render(<><ToastHost /><AbandonSheet run={run()} onClose={() => {}} abandonRun={abandonRun} /></>);
-    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
     await waitFor(() => expect(abandonRun).toHaveBeenCalled());
     expect(screen.queryByText(/still claimed/i)).toBeNull();
   });
@@ -234,7 +381,7 @@ describe('the resolution the sheet used to throw away', () => {
     render(<><ToastHost />
       <AbandonSheet run={run({ sessionId: null, workspace: null, state: 'planned' })}
                     onClose={() => {}} abandonRun={abandonRun} /></>);
-    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
     await waitFor(() => expect(abandonRun).toHaveBeenCalled());
     expect(screen.queryByText(/still claimed/i)).toBeNull();
   });
@@ -251,36 +398,73 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     vi.stubGlobal('fetch', fetchImpl);
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
 
-    // Task 13, spec §4.4: `RunsScreen` also mounts `StartProgramSheet` now,
-    // whose own `useProjectedHome(open)` (review fix round 1, Minor 2) is
-    // gated on the SHEET's own `open` — never tapped here, so it never
-    // polls `/api/accounts` in this test at all. The exclusion below is
-    // defensive rather than currently load-bearing: it keeps this assertion
-    // meaning "no OTHER route at all" (review fix round 1, Minor 1) even if
-    // that gate is ever widened, rather than narrowing to "only the abandon
-    // route", which would stop catching a stray SECOND route (a prefetch, a
-    // second run's abandon) alongside the real one.
-    const otherCalls = (): [string, RequestInit][] =>
-      fetchImpl.mock.calls.filter(([url]) => !String(url).includes('/api/accounts')) as [string, RequestInit][];
+    // Task 13, spec §4.4: `RunsScreen` also mounts `StartProgramSheet` now. Since C8 (D-6440) its
+    // `useProjectedHome(open)` only reads the fleet store, which this test never connects, so no sheet
+    // polls `/api/accounts` and nothing needs setting aside: every fetch counts. That keeps this
+    // assertion meaning "no OTHER route at all" (review fix round 1, Minor 1) rather than narrowing to
+    // "only the abandon route", which would stop catching a stray SECOND route (a prefetch, a second
+    // run's abandon) alongside the real one.
+    const otherCalls = (): [string, RequestInit][] => fetchImpl.mock.calls as [string, RequestInit][];
 
     // First tap: the row's own control opens the sheet. Nothing has been
     // sent to any route yet — opening is not confirming.
     fireEvent.click(screen.getByRole('button', { name: /abandon run 3/i }));
-    expect(await screen.findByText(/a release destroys nothing/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^This board cannot tell whether clear-cove/i)).toBeInTheDocument();
     expect(otherCalls()).toHaveLength(0);
 
     // Second tap: the sheet's OWN confirm button is what actually abandons,
     // through the real `api.abandonRun` (the default, uninjected here) —
     // pins the production wiring, not only a test-only injected function
     // (Task 11 review, lesson 2).
-    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(otherCalls()).toHaveLength(1);
     const [url, init] = otherCalls()[0] as [string, RequestInit];
     expect(url).toBe('/api/runs/3/abandon');
     expect(init.method).toBe('POST');
     // The sheet closes on success.
-    expect(screen.queryByText(/a release destroys nothing/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^This board cannot tell whether clear-cove/i)).not.toBeInTheDocument();
+  });
+
+  // The board hands the sheet the child mark of the run's workspace, read off the
+  // fleet row it already looks up. A child handed over from an earlier wave carries
+  // that wave's run id and is just as finished, so ANY child mark gets the child
+  // sentence, not only one naming this run. A server predating the field omits the
+  // key (the live frame is cast, never revived), and says nothing about children.
+  const legacy = { ...sess() } as Record<string, unknown>;
+  delete legacy['child'];
+  it.each<readonly [string, FleetSession[], string]>([
+    ['a child of this run', [sess({ child: { kind: 'child', runId: 3 } })], CHILD],
+    ['a child handed over from an earlier wave', [sess({ child: { kind: 'child', runId: 1 } })], CHILD],
+    ['no marker', [sess({ child: { kind: 'none' } })], NOT_CHILD],
+    ['an older server, no child key at all', [legacy as unknown as FleetSession], NOT_CHILD],
+    ['an unreadable marker', [sess({ child: { kind: 'unreadable' } })], UNKNOWN],
+    ['a marker shape this build cannot read', [sess({ child: { kind: 'child', runId: 'x' } as unknown as ChildMark })], UNKNOWN],
+    ['no fleet row for the session', [], UNKNOWN],
+  ])('the sheet the board opens says the right thing for %s', async (_name, sessions, expected) => {
+    const store = makeStore();
+    // Each row carries the run binding the current server sends over the run (D-7182, C7d): the case is about the
+    // child mark, and the board finds the run's worker through its binding.
+    act(() => { store.setState({ runs: [run()], runsFrameSeen: true, sessions: withRunBinding(sessions, [run()]), fleetFrameSeen: true }); });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })));
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    fireEvent.click(screen.getByRole('button', { name: /abandon run 3/i }));
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+  });
+
+  // THE OLD-SERVER SKEW ROW (C7d, D-7182; the fixture re-point's one explicit row, PR body): a fleet frame from a
+  // server predating ARCH-61's server half carries no `run` or `openRun` key, so the board cannot tell the open run's
+  // worker from a recycled id and finds none (`workerOf`): the sheet hedges, as it does for no fleet row. Before C7d
+  // the board took the listed session by id and said the child sentence.
+  it('the sheet the board opens hedges for an older server that sends no run binding: an open run finds no worker', async () => {
+    const store = makeStore();
+    const s = sess({ child: { kind: 'child', runId: 3 } });
+    expect('run' in s || 'openRun' in s).toBe(false);
+    act(() => { store.setState({ runs: [run()], runsFrameSeen: true, sessions: [s], fleetFrameSeen: true }); });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })));
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    fireEvent.click(screen.getByRole('button', { name: /abandon run 3/i }));
+    expect(await screen.findByText(UNKNOWN)).toBeInTheDocument();
   });
 
   // D-287 (was D-B4-14): the fix round's own anchor — `RunsScreen.tsx:118-122` used to
@@ -296,17 +480,17 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     }
   });
 
-  it('an inert row (no session) still offers abandon — that is the wedge it exists for', () => {
+  it('a row with no session still offers abandon — that is the wedge it exists for', () => {
     const store = makeStore();
     act(() => {
       store.setState({ runs: [run({ sessionId: null, state: 'planned' })], runsFrameSeen: true });
     });
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
-    // No session to open — .run-open is absent — but the release valve
-    // (an ambiguous-dispatch wedge is exactly a `planned` run with no
-    // session) is still there.
-    expect(screen.queryByRole('button', { name: /clear-cove/i })).toBeNull();
-    expect(screen.getByRole('button', { name: /abandon run 3/i })).toBeInTheDocument();
+    // No session to open, yet the row opens the run's page (A9), and the release valve (an ambiguous-dispatch wedge is
+    // exactly a `planned` run with no session) is still there.
+    // The run is stuck, so the band lists it and its programme group keeps it too (a second view, not a move).
+    expect(screen.getAllByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole('button', { name: /abandon run 3/i }).length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -324,18 +508,18 @@ describe('per-target state (review fix round 1, Important 1)', () => {
     render(<Harness abandonRun={abandonRun} />);
 
     // Abandon run 3 — it fails, and the refusal renders inline.
-    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
     expect(await screen.findByText('ccd: ws-release: permission denied')).toBeInTheDocument();
 
     // Cancel, then open a DIFFERENT run's sheet.
-    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^keep it$/i }));
     fireEvent.click(screen.getByRole('button', { name: /open run 7/i }));
 
     // Run 7's sheet must not open already showing run 3's refusal. Matching
     // the consequence line specifically (not a bare /run 7/i, which also
     // matches the harness's own "open run 7" trigger button still on
     // screen) — same specificity `sheet.test-d.tsx`'s neighbours use.
-    expect(await screen.findByText(/^Abandon run 7 —/)).toBeInTheDocument();
+    expect(await screen.findByText(/far-mesa/)).toBeInTheDocument();
     expect(screen.queryByText('ccd: ws-release: permission denied')).toBeNull();
   });
 
@@ -349,7 +533,7 @@ describe('per-target state (review fix round 1, Important 1)', () => {
     render(<Harness abandonRun={abandonRun} onDone={onDone} />);
 
     // Confirm run 3 — the request is deliberately left hanging.
-    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
     expect(await screen.findByText(/abandoning…/i)).toBeInTheDocument();
 
     // Dismissed via the SCRIM, not the (disabled-while-busy) Cancel button —
@@ -363,7 +547,7 @@ describe('per-target state (review fix round 1, Important 1)', () => {
     // the second sheet's own mount (a jsdom/vaul timing artifact, not the
     // behaviour under test — the two-sheet race itself is exercised by the
     // assertions below, once both are settled at a real DOM state each).
-    await waitFor(() => expect(screen.queryByRole('button', { name: /^abandon$/i })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^abandon run \d+$/i })).toBeNull());
 
     fireEvent.click(screen.getByRole('button', { name: /open run 7/i }));
 
@@ -371,14 +555,368 @@ describe('per-target state (review fix round 1, Important 1)', () => {
     // "Abandoning…" for a request it never made. Matching the consequence
     // line specifically (not a bare /run 7/i, which also matches the
     // harness's own "open run 7" trigger button still on screen).
-    expect(await screen.findByText(/^Abandon run 7 —/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^abandon$/i })).not.toBeDisabled();
+    expect(await screen.findByText(/far-mesa/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^abandon run \d+$/i })).not.toBeDisabled();
 
     // Run 3's request FINALLY resolves. It must not close run 7's sheet or
     // fire onDone for a run the operator never touched.
     resolveRun3!();
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(onDone).not.toHaveBeenCalled();
-    expect(screen.getByText(/^Abandon run 7 —/)).toBeInTheDocument();
+    expect(screen.getByText(/far-mesa/)).toBeInTheDocument();
+  });
+});
+
+// THE REST OF `abandonErrorText`'s DISPATCH, and the one guard its twin
+// sheets already have a killer for. Every arm above sends a WELL-FORMED body;
+// the arms below send the shapes a box under load actually produces — a body
+// that is not an object, a 502 that carried no stderr, a 409 word this build
+// has never heard of — and each had no case at all (measured: statements 74,
+// 102, 126 and branches 78#1, 85#1, 86#1, 87#0, 96#1, 105#1, 109#1, 112#1,
+// 145#2, 258#0 uncovered with this file 38/38 green).
+describe('abandonErrorText — the shapes a well-formed fixture never sends', () => {
+  const refusedWith = (err: unknown): void => {
+    render(<AbandonSheet run={run()} onClose={() => {}}
+                         abandonRun={vi.fn().mockRejectedValue(err)} />);
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
+  };
+
+  it('a rejection that is not an ApiError at all is still a sentence', async () => {
+    // `fetch` rejecting with a `TypeError` when the box goes away mid-request
+    // is the ordinary producer. This sheet has no toast to defer to, so a
+    // silent sheet would be the whole failure.
+    refusedWith(new TypeError('Failed to fetch'));
+    expect(await screen.findByText(/a reason this build does not recognise/i)).toBeInTheDocument();
+  });
+
+  it('a 409 whose body is not an object reads its code as absent, not as a crash', async () => {
+    // A proxy in front of the box answering `text/html` is how a 409 arrives
+    // as a string. `(body as {error?: unknown}).error` on a string is
+    // `undefined`, which is why the `typeof` guard is the thing that must be
+    // measured — without it the expression still evaluates and the case still
+    // lands on `unknown`, so nothing but a test says the guard carries weight.
+    refusedWith(new ApiError(409, 'Conflict'));
+    expect(await screen.findByText(/a reason this build does not recognise/i)).toBeInTheDocument();
+  });
+
+  it('a 409 bad-transition with NO `from` says the bare sentence, never "already undefined"', async () => {
+    refusedWith(new ApiError(409, { ok: false, error: 'bad-transition' }));
+    const said = await screen.findByText(/this run already closed/i);
+    // The base sentence says "already" itself, so the claim is about the
+    // trailing CLAUSE: `— it was already <word>` is what `from` buys.
+    expect(said.textContent, 'no `from` means no trailing clause').not.toMatch(/it was already/i);
+  });
+
+  it('a 409 bad-transition whose `from` is not a RunState drops the clause rather than printing the token', async () => {
+    // `isRunState` is the gate. A server that someday renames a state sends a
+    // word this build cannot translate, and `RUN_WORD[from]` would be
+    // `undefined` — "it was already undefined" is the sentence the guard
+    // exists to prevent.
+    refusedWith(new ApiError(409, { ok: false, error: 'bad-transition', from: 'hibernating' }));
+    const said = await screen.findByText(/this run already closed/i);
+    expect(said.textContent).not.toMatch(/hibernating|undefined/);
+  });
+
+  it('a 409 carrying a refusal word this build has never heard of lands on the designated unknown', async () => {
+    refusedWith(new ApiError(409, { ok: false, refused: 'moon-phase-wrong' }));
+    expect(await screen.findByText(/a reason this build does not recognise/i)).toBeInTheDocument();
+  });
+
+  it('a 502 with no stderr says the release failed, rather than printing nothing', async () => {
+    refusedWith(new ApiError(502, { ok: false, error: 'ccd-failed' }));
+    expect(await screen.findByText('The release failed.')).toBeInTheDocument();
+  });
+
+  it('a 502 whose stderr is only whitespace is the same as none', async () => {
+    // The trim is the point: a verb that wrote a newline and died is a real
+    // shape, and rendering it leaves a blank line where the reason goes.
+    refusedWith(new ApiError(502, { ok: false, error: 'ccd-failed', stderr: ' \n\t ' }));
+    expect(await screen.findByText('The release failed.')).toBeInTheDocument();
+  });
+
+  it('a status this build does not dispatch on falls to the same catch-all', async () => {
+    // 413 `hold-oversize` is reachable on this route and deliberately has no
+    // copy of its own — it names the SURVIVING run's hold, which this sheet
+    // is not abandoning and cannot name (`abandonErrorText`'s closing note).
+    refusedWith(new ApiError(413, { ok: false, error: 'hold-oversize', limit: 2048 }));
+    expect(await screen.findByText(/a reason this build does not recognise/i)).toBeInTheDocument();
+  });
+
+  it("a superseded refusal cannot write run 3's reason into run 7's open sheet", async () => {
+    // The REJECT arm's generation guard. The case two describes up kills the
+    // resolve arm only; this is the arm that writes the damaging thing — a
+    // sentence about run 3's transport failure under run 7's confirm line.
+    let fail!: () => void;
+    const abandonRun = vi.fn((id: number) => {
+      if (id !== 3) return Promise.resolve({ released: true });
+      return new Promise<{ released: boolean }>((_res, rej) => {
+        fail = () => rej(new ApiError(502, { ok: false, stderr: 'ccd: ws-release: run 3 is wedged' }));
+      });
+    });
+    render(<Harness abandonRun={abandonRun} />);
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^abandon run \d+$/i })).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: /open run 7/i }));
+    expect(await screen.findByText(/far-mesa/)).toBeInTheDocument();
+
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.queryByText(/run 3 is wedged/)).toBeNull();
+    expect(screen.getByRole('button', { name: /^abandon run \d+$/i })).not.toBeDisabled();
+  });
+});
+
+// `workspaceOf`'s last fallback. The confirm line names the workspace, and a
+// run that has neither a workspace nor a branch — a `planned` row the
+// coordinator opened before any dispatch minted one — would otherwise name
+// nothing at all. The id is the only identifier left, and it is the one the
+// operator sees on the board.
+it('a run with neither workspace nor branch is named by its id', () => {
+  render(<AbandonSheet run={run({ workspace: null, branch: null, sessionId: 'ccrc-pwa-clear-cove' })}
+                       onClose={() => {}} abandonRun={vi.fn()} />);
+  expect(screen.getByText(/^This board cannot tell whether its workspace is a child workspace/)).toBeInTheDocument();
+});
+
+// D-5971 (#549, ARCH-11b): a defensive arm. The abandon route's close outcome does not send `registry-unmeasurable`
+// today; if it ever does (with or without stderr), the sheet reads the WORD at any status: "the release failed" is a different fact.
+describe('an abandon refused registry-unmeasurable (D-5971)', () => {
+  const refusedWith = (err: unknown): void => {
+    render(<AbandonSheet run={run()} onClose={() => {}}
+                         abandonRun={vi.fn().mockRejectedValue(err)} />);
+    fireEvent.click(screen.getByRole('button', { name: /^abandon run \d+$/i }));
+  };
+
+  it.each([502, 503])('at %i says the registry could not be read, never that the release failed', async (status) => {
+    refusedWith(new ApiError(status, { ok: false, error: 'registry-unmeasurable' }));
+    expect(await screen.findByText(/registry could not be read/i)).toBeInTheDocument();
+    expect(screen.queryByText('The release failed.')).toBeNull();
+    expect(screen.queryByText(/does not recognise/i)).toBeNull();
+  });
+
+  it('keeps the stderr ccd sent with it, the more specific fact', async () => {
+    refusedWith(new ApiError(502, { ok: false, error: 'registry-unmeasurable', stderr: 'ccd: no wrapper has capacity' }));
+    expect(await screen.findByText('ccd: no wrapper has capacity')).toBeInTheDocument();
+  });
+});
+
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The runs rebuild, wave B3 (D-8073; spec 2026-11-04 section 9.1): the one sheet, its words, its proof and its refusals.
+// ---------------------------------------------------------------------------------------------------------------------
+const consequenceOf = (r: RunSummary, c: 'child' | 'not-child' | 'unknown'): string => abandonConsequence(r, c);
+
+describe('the consequence sentences by what the run recorded (A44)', () => {
+  it('opens with no title and names no run number', () => {
+    expect(consequenceOf(run({ sessionId: null, workspace: null }), 'unknown')).toBe('It holds no workspace of its own, so it has none to release or reclaim.');
+    expect(consequenceOf(run({ workspace: 'ws-a' }), 'not-child')).toBe('Its workspace is ws-a. A release destroys nothing: the worktree survives, the record stays.');
+    expect(consequenceOf(run({ workspace: null, branch: 'b-a' }), 'not-child')).toBe('Its branch is b-a. A release destroys nothing: the worktree survives, the record stays.');
+    expect(consequenceOf(run({ workspace: null, branch: null }), 'not-child')).toBe('A release destroys nothing: the worktree survives, the record stays.');
+    expect(consequenceOf(run({ workspace: null, branch: 'b-a' }), 'child')).toMatch(/^The workspace on b-a is a child workspace, so/);
+    expect(consequenceOf(run({ workspace: null, branch: null }), 'child')).toMatch(/^Its workspace is a child workspace, so/);
+    expect(consequenceOf(run({ workspace: null, branch: null }), 'unknown')).toMatch(/^This board cannot tell whether its workspace is a child workspace\./);
+    expect(consequenceOf(run({ workspace: null, branch: 'b-a' }), 'unknown')).toMatch(/^This board cannot tell whether the workspace on b-a is a child workspace\./);
+    for (const c of ['not-child', 'child', 'unknown'] as const) expect(consequenceOf(run(), c)).not.toMatch(/^Abandon run/);
+    for (const c of ['not-child', 'child', 'unknown'] as const) expect(consequenceOf(run({ id: 83, workspace: null, branch: null }), c)).not.toMatch(/\b83\b/);
+  });
+
+  it('workspaceSubject gives the recorded workspace, a branch as "the workspace on", and never the run number', () => {
+    expect(workspaceSubject(run({ workspace: 'ws-a' }))).toEqual({ subject: 'ws-a', Subject: 'ws-a' });
+    expect(workspaceSubject(run({ workspace: null, branch: 'b-a' }))).toEqual({ subject: 'the workspace on b-a', Subject: 'The workspace on b-a' });
+    expect(workspaceSubject(run({ id: 83, workspace: null, branch: null }))).toEqual({ subject: 'its workspace', Subject: 'Its workspace' });
+  });
+});
+
+describe('coordinatorGoneOf is the field\'s one reader (A60)', () => {
+  it('coordinatorGone false wins over a presence of dead', () => { expect(coordinatorGoneOf({ coordinatorGone: false }, 'dead')).toBe(false); });
+  it('coordinatorGone true wins over a presence of unknown', () => { expect(coordinatorGoneOf({ coordinatorGone: true }, 'unknown')).toBe(true); });
+  it('an absent field reads presence', () => {
+    expect(coordinatorGoneOf({}, 'dead')).toBe(true);
+    expect(coordinatorGoneOf({}, 'alive')).toBe(false);
+    expect(coordinatorGoneOf({}, 'unknown')).toBe(false);
+  });
+});
+
+describe('the sheet lines (spec 9.1, F8, A52)', () => {
+  const sheetText = (): string => document.querySelector('.abandon-sheet')?.textContent ?? '';
+
+  it('the sheet repeats the row\'s name and context line verbatim', () => {
+    const r = run({ state: 'awaiting-review', waitsOn: 'coordinator', stuck: undefined });
+    render(<AbandonSheet run={r} onClose={() => {}} />);
+    expect(screen.getByText(runRowName(r))).toBeInTheDocument();
+    expect(screen.getByText('Reviews done. Waits on its coordinator.')).toBeInTheDocument();
+  });
+
+  it('the sheet states a close time once, in the context line it was handed', () => {
+    render(<AbandonSheet run={run()} contextLine="ccrc closes it in 3 h." onClose={() => {}} />);
+    expect(sheetText().match(/closes it in 3 h/g)).toHaveLength(1);
+  });
+
+  it('Its worker is still running. shows when waitsOn is worker and not otherwise', () => {
+    render(<AbandonSheet run={run({ waitsOn: 'worker' })} onClose={() => {}} />);
+    expect(screen.getByText('Its worker is still running.')).toBeInTheDocument();
+    cleanup();
+    render(<AbandonSheet run={run({ waitsOn: 'coordinator' })} onClose={() => {}} />);
+    expect(screen.queryByText('Its worker is still running.')).toBeNull();
+  });
+
+  it('Its coordinator is told. shows, and is left out when the coordinator reads gone', () => {
+    render(<AbandonSheet run={run()} coordinatorPresence="alive" onClose={() => {}} />);
+    expect(screen.getByText('Its coordinator is told.')).toBeInTheDocument();
+    cleanup();
+    render(<AbandonSheet run={run({ coordinatorGone: true })} coordinatorPresence="alive" onClose={() => {}} />);
+    expect(screen.queryByText('Its coordinator is told.')).toBeNull();
+    cleanup();
+    render(<AbandonSheet run={run()} coordinatorPresence="dead" onClose={() => {}} />);
+    expect(screen.queryByText('Its coordinator is told.')).toBeNull();
+    cleanup();
+    render(<AbandonSheet run={run({ coordinatorGone: false })} coordinatorPresence="dead" onClose={() => {}} />);
+    expect(screen.getByText('Its coordinator is told.')).toBeInTheDocument();
+  });
+
+  it('See this run links to the detail', () => {
+    render(<AbandonSheet run={run({ id: 206 })} onClose={() => {}} />);
+    expect(screen.getByRole('link', { name: 'See this run' })).toHaveAttribute('href', '/runs/206');
+  });
+
+  it('the buttons read Abandon run N and Keep it, under the title Abandon run N?', () => {
+    render(<AbandonSheet run={run({ id: 206 })} onClose={() => {}} />);
+    expect(screen.getByText('Abandon run 206?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Abandon run 206' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Keep it' })).toBeInTheDocument();
+  });
+
+  it('an unreadable child marker reads unknown, the sheet says this board cannot tell, and Abandon still acts (n1)', async () => {
+    const abandonRun = vi.fn(async () => ({ released: true }));
+    render(<AbandonSheet run={run()} workspaceChild={abandonChildOf(sess({ child: { kind: 'unreadable' } }))} onClose={() => {}} abandonRun={abandonRun} />);
+    expect(screen.getByText(/^This board cannot tell whether clear-cove is a child workspace/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run 3' }));
+    await waitFor(() => expect(abandonRun).toHaveBeenCalledWith(3));
+  });
+});
+
+describe('the toast is the proof (F9, F24)', () => {
+  const open = (r: RunSummary, answer: Awaited<ReturnType<NonNullable<React.ComponentProps<typeof AbandonSheet>['abandonRun']>>>) => {
+    const navigate = vi.spyOn(router, 'navigate').mockImplementation(() => undefined);
+    render(<><ToastHost /><AbandonSheet run={r} onClose={() => {}} abandonRun={vi.fn(async () => answer)} /></>);
+    fireEvent.click(screen.getByRole('button', { name: `Abandon run ${r.id}` }));
+    return navigate;
+  };
+
+  it('a plain success says Run 206 abandoned. and offers Open record', async () => {
+    const navigate = open(run({ id: 206 }), { released: true });
+    expect(await screen.findByText('Run 206 abandoned.')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Open record'));
+    expect(navigate).toHaveBeenCalledWith('/runs/206');
+  });
+
+  it('a sibling that holds the workspace keeps today\'s sentence, with the same action', async () => {
+    open(run({ id: 206, workspace: 'ws-a' }), { released: false });
+    expect(await screen.findByText('Run 206 abandoned — ws-a is still claimed by another open run.')).toBeInTheDocument();
+    expect(screen.getByText('Open record').tagName).toBe('BUTTON');
+  });
+
+  it('a run that had already closed says so, and claims neither an abandon nor a sibling', async () => {
+    open(run({ id: 206, workspace: 'ws-a' }), { released: false, childReclaim: 'not-queued', alreadyClosed: true });
+    expect(await screen.findByText('Run 206 had already closed, so nothing was abandoned.')).toBeInTheDocument();
+    expect(screen.queryByText(/still claimed/)).toBeNull();
+  });
+
+  it('a queued child reclaim says the workspace is being reclaimed', async () => {
+    open(run({ id: 206 }), { released: true, childReclaim: 'queued' });
+    expect(await screen.findByText('Run 206 abandoned. Its workspace is being reclaimed.')).toBeInTheDocument();
+    expect(screen.getByText('Open record').tagName).toBe('BUTTON');
+  });
+
+  it('a not-queued child reclaim is a plain success', async () => {
+    open(run({ id: 206 }), { released: true, childReclaim: 'not-queued' });
+    expect(await screen.findByText('Run 206 abandoned.')).toBeInTheDocument();
+  });
+
+  // The why-word is the server's: the PWA renders no close word, so the parse drops it (child-reclaim-chip-source).
+  it('api.abandonRun keeps childReclaim, drops the why-word, and passes its read options', async () => {
+    const { createApi } = await import('../src/lib/api');
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ ok: true, id: 3, state: 'closing', released: true, childReclaim: 'not-queued', childReclaimWhy: 'marker-unreadable' }),
+      { status: 200, headers: { 'content-type': 'application/json' } }));
+    const got = await createApi(fetchImpl as unknown as typeof fetch).abandonRun(3, { timeoutMs: 5_000 });
+    expect(got).toEqual({ released: true, childReclaim: 'not-queued' });
+    const old = await createApi((async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch).abandonRun(3);
+    expect(old).toEqual({ released: true });
+  });
+});
+
+describe('the refusals keep the sheet open (spec 9.1)', () => {
+  const refuse = async (err: unknown): Promise<{ onClose: ReturnType<typeof vi.fn> }> => {
+    const onClose = vi.fn();
+    render(<AbandonSheet run={run({ id: 206 })} onClose={onClose} abandonRun={vi.fn().mockRejectedValue(err)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run 206' }));
+    return { onClose };
+  };
+
+  it('409 bad-transition says This run already closed. with an Open record link, and the sheet stays open', async () => {
+    const { onClose } = await refuse(new ApiError(409, { ok: false, error: 'bad-transition', from: 'done', to: 'closing' }));
+    expect(await screen.findByText(/^This run already closed/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open record' })).toHaveAttribute('href', '/runs/206');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Abandon run 206' })).not.toBeDisabled();
+  });
+
+  it('409 unknown-run reads as a 404 does', async () => {
+    await refuse(new ApiError(409, { ok: false, error: 'unknown-run' }));
+    expect(await screen.findByText('that run is gone — the board will catch up')).toBeInTheDocument();
+  });
+
+  it('400 hold-invalid and 413 hold-oversize show the server\'s detail in full', async () => {
+    await refuse(new ApiError(400, { ok: false, error: 'hold-invalid', detail: 'a sibling wave\'s stored numbers cannot be written as a hold' }));
+    expect(await screen.findByText('a sibling wave\'s stored numbers cannot be written as a hold')).toBeInTheDocument();
+    expect(screen.queryByText(/does not recognise/i)).toBeNull();
+    cleanup();
+    await refuse(new ApiError(413, { ok: false, error: 'hold-oversize', limit: 2048, detail: 'the hold is 4096 bytes, over the limit of 2048' }));
+    expect(await screen.findByText('the hold is 4096 bytes, over the limit of 2048')).toBeInTheDocument();
+  });
+
+  it('a 502 says The release failed. and then the server\'s text', async () => {
+    await refuse(new ApiError(502, { ok: false, stderr: 'ccd: ws-release: permission denied' }));
+    expect(await screen.findByText('The release failed.')).toBeInTheDocument();
+    expect(screen.getByText('ccd: ws-release: permission denied')).toBeInTheDocument();
+  });
+});
+
+describe('the sheet through an end-request item (Task 24, spec 2026-11-04 §10; D-8076)', () => {
+  it('with an itemId the confirm calls act for that item and never the run\'s own abandon route', async () => {
+    const abandonRun = vi.fn();
+    const actItem = vi.fn().mockResolvedValue({ released: true });
+    const onDone = vi.fn();
+    render(<AbandonSheet run={run({ id: 206 })} itemId={31} onClose={() => {}} onDone={onDone} abandonRun={abandonRun} actItem={actItem} />);
+    expect(screen.getByText('Abandon run 206?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run 206' }));
+    await waitFor(() => expect(actItem).toHaveBeenCalledWith(31));
+    expect(abandonRun).not.toHaveBeenCalled();
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+  });
+
+  it('without an itemId the confirm calls the run\'s abandon route as before', async () => {
+    const abandonRun = vi.fn().mockResolvedValue({ released: true });
+    const actItem = vi.fn();
+    render(<AbandonSheet run={run({ id: 206 })} onClose={() => {}} abandonRun={abandonRun} actItem={actItem} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run 206' }));
+    await waitFor(() => expect(abandonRun).toHaveBeenCalledWith(206));
+    expect(actItem).not.toHaveBeenCalled();
+  });
+
+  it('an item that moved is said in the item\'s words, the arm\'s refusals in the abandon words, and the sheet stays open', async () => {
+    const onClose = vi.fn();
+    const actItem = vi.fn().mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'not-open' }))
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'bad-transition', from: 'done', to: 'closing' }))
+      .mockRejectedValueOnce(new ApiError(404, { ok: false, error: 'unknown-item' }));
+    render(<AbandonSheet run={run({ id: 206 })} itemId={31} onClose={onClose} actItem={actItem} />);
+    const confirm = screen.getByRole('button', { name: 'Abandon run 206' });
+    fireEvent.click(confirm);
+    expect(await screen.findByText(/This item is not open any more/)).toBeInTheDocument();
+    fireEvent.click(confirm);
+    expect(await screen.findByText(/^This run already closed/)).toBeInTheDocument();
+    expect(screen.queryByText(/This item is not open any more/)).toBeNull();
+    fireEvent.click(confirm);
+    expect(await screen.findByText(/no such item any more/)).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

@@ -2,29 +2,23 @@
 // fleet store hydrates from it at boot (conn stays 'connecting'), and the
 // fleet screen stale-marks hydrated data until the socket opens.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, screen } from '@testing-library/react';
 import { createElement } from 'react';
 import type { FleetSession } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../src/lib/offline';
+import { spawnVerdictChip } from '../src/fleet/spawnWords';
 import { createFleetStore } from '../src/stores/fleet';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { renderFleet } from './fleetHost';
 import { TEST_ROSTER } from './rosterFixture';
 
-const session = (id: string): FleetSession => ({
-  id,
-  wrapper: 'claude',
-  home: '/home/rc',
-  project: 'OpenClawHetzner',
-  workdir: '/home/rc/projects/OpenClawHetzner',
-  workspace: null,
-  name: null,
-  status: 'idle',
-  statusUpdatedAt: null,
-  limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  version: '2.1.0', hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null,
-});
+const session = (id: string): FleetSession =>
+  fleetSession({
+    id, home: '/home/u', project: 'ProjectC',
+    workdir: '/home/u/projects/ProjectC',
+    limits: { five: 10, seven: 40 }, version: '2.1.0',
+  });
 
 /** Scripted WebSocket stand-in (same shape the store tests use). */
 class FakeSocket {
@@ -65,10 +59,10 @@ afterEach(() => {
 
 describe('fleet snapshot (lib/offline)', () => {
   it('round-trips sessions through localStorage', () => {
-    saveFleetSnapshot([session('claude:OpenClawHetzner')]);
+    saveFleetSnapshot([session('claude:ProjectC')]);
     const snap = loadFleetSnapshot();
     expect(snap?.sessions).toHaveLength(1);
-    expect(snap?.sessions[0]?.id).toBe('claude:OpenClawHetzner');
+    expect(snap?.sessions[0]?.id).toBe('claude:ProjectC');
     expect(typeof snap?.savedAt).toBe('number');
   });
 
@@ -98,21 +92,54 @@ describe('fleet snapshot (lib/offline)', () => {
   });
 });
 
+// Landing order wave 4b (D-7481): the snapshot copies live frames, and a landing is optional and additive. It survives the
+// round trip, an absent key stays absent (never a clean landing), and a malformed one revives as no key, the session kept.
+describe('the landing radar reading in the snapshot (wave 4b)', () => {
+  const landing = {
+    at: '2026-10-29T12:00:00Z', pr: 12, head: 'abc1234', baseRef: 'main',
+    base: { state: 'conflict', paths: ['src/a.ts'] }, paired: true,
+    conflicts: [{ pr: 14, paths: ['src/x.ts'], pathsCut: false }], unmeasuredWith: [],
+    cut: { heads: false, pairs: false, unbound: false },
+  };
+
+  it('keeps `landing` through the round trip', () => {
+    saveFleetSnapshot([{ ...session('claude:ProjectC'), landing } as FleetSession]);
+    expect(loadFleetSnapshot()?.sessions[0]?.landing).toEqual(landing);
+  });
+
+  it('keeps no key as no key', () => {
+    saveFleetSnapshot([session('claude:ProjectC')]);
+    const s = loadFleetSnapshot()?.sessions[0];
+    expect(s).toBeDefined();
+    expect('landing' in s!).toBe(false);
+  });
+
+  it('gives no key for a malformed landing, and keeps the session', () => {
+    window.localStorage.setItem('ccrc.fleet-snapshot.v1', JSON.stringify({
+      savedAt: Date.now(), roster: [],
+      sessions: [{ ...session('claude:ProjectC'), landing: { ...landing, base: { state: 'fine' } } }],
+    }));
+    const s = loadFleetSnapshot()?.sessions[0];
+    expect(s?.id).toBe('claude:ProjectC');
+    expect('landing' in s!).toBe(false);
+  });
+});
+
 // Fix round 1, finding 3: a cold offline start hydrated `sessions` from the
 // snapshot but never `roster` — every account rendered as its raw wrapper id
-// (`claude2`, `claude-corp`) instead of the jargon-free label this module
+// (`claude9`, `claude-acme`) instead of the jargon-free label this module
 // exists to restore, a real regression against the compile-time roster this
 // replaced (which had no "unarrived" state at all).
 describe('the roster travels with the snapshot (fix round 1, finding 3)', () => {
   it('round-trips the roster alongside sessions', () => {
-    saveFleetSnapshot([session('claude:OpenClawHetzner')], TEST_ROSTER);
+    saveFleetSnapshot([session('claude:ProjectC')], TEST_ROSTER);
     expect(loadFleetSnapshot()?.roster).toEqual(TEST_ROSTER);
   });
 
   it('degrades an absent roster to `[]` — a pre-Task-7 snapshot is version skew, not corruption', () => {
     // Same call shape a caller that has never heard of `roster` would make —
     // the second argument defaults, it is not required.
-    saveFleetSnapshot([session('claude:OpenClawHetzner')]);
+    saveFleetSnapshot([session('claude:ProjectC')]);
     expect(loadFleetSnapshot()?.roster).toEqual([]);
     // And the sessions still revive normally — an unknown-to-this-snapshot
     // field must not sink the read the way a malformed SESSION does.
@@ -122,7 +149,7 @@ describe('the roster travels with the snapshot (fix round 1, finding 3)', () => 
   it('degrades a roster of the wrong shape entirely to `[]`, without rejecting the whole snapshot', () => {
     window.localStorage.setItem(
       'ccrc.fleet-snapshot.v1',
-      JSON.stringify({ savedAt: Date.now(), sessions: [session('claude:OpenClawHetzner')], roster: 'not an array' }),
+      JSON.stringify({ savedAt: Date.now(), sessions: [session('claude:ProjectC')], roster: 'not an array' }),
     );
     const snap = loadFleetSnapshot();
     expect(snap?.roster).toEqual([]);
@@ -134,12 +161,12 @@ describe('the roster travels with the snapshot (fix round 1, finding 3)', () => 
       'ccrc.fleet-snapshot.v1',
       JSON.stringify({
         savedAt: Date.now(),
-        sessions: [session('claude:OpenClawHetzner')],
+        sessions: [session('claude:ProjectC')],
         roster: [
           TEST_ROSTER[0],
           null, // the shape a `null` array entry takes — `.id` on it would throw
-          { id: 'claude2', label: 'team·alt', hue: 'not-a-real-hue', homeAble: true },
-          { id: 'claude-corp', label: 'team·b', homeAble: true }, // missing hue
+          { id: 'claude9', label: 'team·alt', hue: 'not-a-real-hue', homeAble: true },
+          { id: 'claude-acme', label: 'team·b', homeAble: true }, // missing hue
           'not an object',
         ],
       }),
@@ -156,9 +183,9 @@ describe('the roster travels with the snapshot (fix round 1, finding 3)', () => 
 // nothing, so a frame this shape must never overwrite a fuller prior one.
 describe('saveFleetSnapshot refuses an empty or degraded frame (Task 2)', () => {
   it('an empty frame never overwrites a real prior snapshot', () => {
-    saveFleetSnapshot([session('claude:OpenClawHetzner')]);
+    saveFleetSnapshot([session('claude:ProjectC')]);
     saveFleetSnapshot([]); // e.g. a transient readdir failure broadcast as `[]`
-    expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude:OpenClawHetzner']);
+    expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude:ProjectC']);
   });
 
   it('an empty frame writes nothing on a cold start either — no snapshot is the honest answer, not an empty one', () => {
@@ -167,34 +194,34 @@ describe('saveFleetSnapshot refuses an empty or degraded frame (Task 2)', () => 
   });
 
   it('a frame carrying even one degraded (unmeasured) row never overwrites a real prior snapshot', () => {
-    saveFleetSnapshot([session('claude:OpenClawHetzner')]);
+    saveFleetSnapshot([session('claude:ProjectC')]);
     saveFleetSnapshot([
-      session('claude:OpenClawHetzner'),
-      { ...session('claude2:mekwarlive'), unmeasured: ['workdir'] },
+      session('claude:ProjectC'),
+      { ...session('claude9:project-f'), unmeasured: ['workdir'] },
     ]);
-    expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude:OpenClawHetzner']);
+    expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude:ProjectC']);
   });
 
   it('a fully-measured frame writes normally — the guard is specific to the two refused shapes, not a blanket freeze', () => {
-    saveFleetSnapshot([session('claude:OpenClawHetzner')]);
-    saveFleetSnapshot([session('claude:OpenClawHetzner'), session('claude2:mekwarlive')]);
+    saveFleetSnapshot([session('claude:ProjectC')]);
+    saveFleetSnapshot([session('claude:ProjectC'), session('claude9:project-f')]);
     expect(loadFleetSnapshot()?.sessions.map((s) => s.id).sort()).toEqual(
-      ['claude:OpenClawHetzner', 'claude2:mekwarlive'].sort(),
+      ['claude:ProjectC', 'claude9:project-f'].sort(),
     );
   });
 });
 
 describe('fleet store hydration + persistence', () => {
   it('hydrates sessions from the snapshot at boot, still connecting', () => {
-    saveFleetSnapshot([session('claude:OpenClawHetzner')]);
+    saveFleetSnapshot([session('claude:ProjectC')]);
     const store = createFleetStore({ makeSocket: (url) => new FakeSocket(url) as unknown as WebSocket });
-    expect(store.getState().sessions.map((s) => s.id)).toEqual(['claude:OpenClawHetzner']);
+    expect(store.getState().sessions.map((s) => s.id)).toEqual(['claude:ProjectC']);
     expect(store.getState().conn).toBe('connecting');
   });
 
   // Fix round 1, finding 3.
   it('hydrates the roster from the snapshot at boot too, alongside sessions', () => {
-    saveFleetSnapshot([session('claude:OpenClawHetzner')], TEST_ROSTER);
+    saveFleetSnapshot([session('claude:ProjectC')], TEST_ROSTER);
     const store = createFleetStore({ makeSocket: (url) => new FakeSocket(url) as unknown as WebSocket });
     expect(store.getState().roster).toEqual(TEST_ROSTER);
   });
@@ -204,10 +231,10 @@ describe('fleet store hydration + persistence', () => {
     store.getState().connect();
     const sock = FakeSocket.instances[0]!;
     sock.open();
-    sock.message(JSON.stringify({ type: 'fleet', sessions: [session('claude2:mekwarlive')] }));
+    sock.message(JSON.stringify({ type: 'fleet', sessions: [session('claude9:project-f')] }));
 
-    expect(store.getState().sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
-    expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
+    expect(store.getState().sessions.map((s) => s.id)).toEqual(['claude9:project-f']);
+    expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude9:project-f']);
     store.getState().disconnect();
   });
 
@@ -223,7 +250,7 @@ describe('fleet store hydration + persistence', () => {
     store.setState({ roster: TEST_ROSTER });
     const sock = FakeSocket.instances[0]!;
     sock.open();
-    sock.message(JSON.stringify({ type: 'fleet', sessions: [session('claude2:mekwarlive')] }));
+    sock.message(JSON.stringify({ type: 'fleet', sessions: [session('claude9:project-f')] }));
 
     expect(loadFleetSnapshot()?.roster).toEqual(TEST_ROSTER);
     store.getState().disconnect();
@@ -235,22 +262,22 @@ describe('fleet store hydration + persistence', () => {
   // direct call site.
   it('a LIVE fleet frame carrying a degraded row still updates the in-memory store (the socket is still ' +
      'authoritative) but does NOT overwrite the offline snapshot', () => {
-    saveFleetSnapshot([session('claude:OpenClawHetzner')]);
+    saveFleetSnapshot([session('claude:ProjectC')]);
     const store = createFleetStore({ makeSocket: (url) => new FakeSocket(url) as unknown as WebSocket });
     store.getState().connect();
     const sock = FakeSocket.instances[0]!;
     sock.open();
     sock.message(JSON.stringify({
       type: 'fleet',
-      sessions: [{ ...session('claude2:mekwarlive'), unmeasured: ['workdir'] }],
+      sessions: [{ ...session('claude9:project-f'), unmeasured: ['workdir'] }],
     }));
 
     // The live view still reflects the fresh frame — degrade-and-heal is a
     // DISPLAY concern (SessionLine's own grey+reason note), not a reason to
     // hide the row from the connected client.
-    expect(store.getState().sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
+    expect(store.getState().sessions.map((s) => s.id)).toEqual(['claude9:project-f']);
     // The offline cache, by contrast, keeps the last FULLY-measured snapshot.
-    expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude:OpenClawHetzner']);
+    expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude:ProjectC']);
     store.getState().disconnect();
   });
 
@@ -269,17 +296,47 @@ describe('fleet store hydration + persistence', () => {
     store.getState().connect();
     const sock = FakeSocket.instances[0]!;
     sock.open();
-    const raw = session('claude2:mekwarlive') as unknown as Record<string, unknown>;
+    const raw = session('claude9:project-f') as unknown as Record<string, unknown>;
     delete raw['unmeasured'];
 
     expect(() => sock.message(JSON.stringify({ type: 'fleet', sessions: [raw] }))).not.toThrow();
 
-    expect(store.getState().sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
+    expect(store.getState().sessions.map((s) => s.id)).toEqual(['claude9:project-f']);
     // Absent reads as MEASURED (same rule `optUnmeasured` applies on the
     // revival path), so this frame is not degraded and DOES overwrite the
     // offline snapshot.
-    expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
+    expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude9:project-f']);
     store.getState().disconnect();
+  });
+
+  // Task 7 (board-placement wave 2): `projects` is the LAST successful
+  // `/api/projects` read, lifted into the store so the session view can
+  // label a repo without a second agent round trip. It is deliberately NOT
+  // part of the persisted snapshot — same reason as `pools`.
+  //
+  // Fix round 1, finding 1: `loadFleetSnapshot` REBUILDS its return literal
+  // (`{ savedAt, sessions, roster }`, offline.ts's own `loadFleetSnapshot`)
+  // on every read, so a `"projects"` key can never survive a round trip
+  // through it — asserting over `loadFleetSnapshot()`'s OUTPUT can never red,
+  // whatever was actually stored. This pins the RAW stored string after a
+  // REAL save instead.
+  it('projects start null and are NOT part of the persisted snapshot (Task 7)', () => {
+    const store = createFleetStore({ makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close() {} }) as unknown as WebSocket });
+    expect(store.getState().projects).toBeNull();
+    store.getState().setProjects([{ name: 'demo', workdir: '/w/demo', repo: { state: 'named', slug: 'o/demo' } }]);
+    expect(store.getState().projects?.[0]?.name).toBe('demo');
+
+    // `saveFleetSnapshot` returns early on an empty sessions list (Task 2) —
+    // seed one non-degraded session so the save actually writes.
+    store.setState({ sessions: [session('claude:ProjectC')] });
+    saveFleetSnapshot(store.getState().sessions, store.getState().roster);
+
+    // `KEY` (offline.ts, `'ccrc.fleet-snapshot.v1'`) is module-private, not
+    // exported — the literal is the only way to read the raw stored string.
+    const raw = window.localStorage.getItem('ccrc.fleet-snapshot.v1');
+    expect(raw).not.toBeNull();
+    expect(raw).toContain('"sessions"'); // control: proves a save actually happened
+    expect(raw).not.toContain('"projects"');
   });
 });
 
@@ -292,9 +349,9 @@ describe('fleet store hydration + persistence', () => {
 const v1Session = (id: string): Record<string, unknown> => ({
   id,
   wrapper: 'claude',
-  home: '/home/rc',
-  project: 'OpenClawHetzner',
-  workdir: '/home/rc/worktrees/OpenClawHetzner/quiet-basin',
+  home: '/home/u',
+  project: 'ProjectC',
+  workdir: '/home/u/worktrees/ProjectC/quiet-basin',
   workspace: 'quiet-basin',
   name: null,
   status: 'idle',
@@ -319,7 +376,7 @@ const putRaw = (sessions: unknown[]): void =>
 
 describe('snapshot revival (a snapshot written by an older build)', () => {
   it('revives absent pr/archivedAt/tasks as null, not undefined', () => {
-    putRaw([v1Session('claude:OpenClawHetzner')]);
+    putRaw([v1Session('claude:ProjectC')]);
     const s = loadFleetSnapshot()?.sessions[0];
 
     // `undefined !== null` is true, so an absent archivedAt reads as ARCHIVED
@@ -333,7 +390,7 @@ describe('snapshot revival (a snapshot written by an older build)', () => {
     // so `{archivedAt: undefined}` would persist right back to absent.
     expect(Object.keys(s ?? {})).toEqual(expect.arrayContaining(['pr', 'archivedAt', 'tasks']));
     // Everything the old build DID know survives — this is not a discard.
-    expect(s?.id).toBe('claude:OpenClawHetzner');
+    expect(s?.id).toBe('claude:ProjectC');
     expect(s?.branch).toBe('ws/quiet-basin');
     expect(s?.workspace).toBe('quiet-basin');
     expect(s?.statusUpdatedAt).toBe(1785300000000);
@@ -341,7 +398,7 @@ describe('snapshot revival (a snapshot written by an older build)', () => {
   });
 
   it('hydrates the store from an old snapshot with nulls at boot', () => {
-    putRaw([v1Session('claude:OpenClawHetzner')]);
+    putRaw([v1Session('claude:ProjectC')]);
     const store = createFleetStore({ makeSocket: (url) => new FakeSocket(url) as unknown as WebSocket });
     const s = store.getState().sessions[0];
     expect(s?.archivedAt).toBeNull();
@@ -357,7 +414,7 @@ describe('snapshot revival (a snapshot written by an older build)', () => {
     // for archivedBytes too (or vice versa) would pass every OTHER test in
     // this file, since they all leave the two fields equal (both absent,
     // both null). Distinct non-null values is the only way to catch that.
-    putRaw([{ ...v1Session('claude:OpenClawHetzner'), archivedAt: 100, archivedBytes: 5_000_000 }]);
+    putRaw([{ ...v1Session('claude:ProjectC'), archivedAt: 100, archivedBytes: 5_000_000 }]);
     const s = loadFleetSnapshot()?.sessions[0];
     expect(s?.archivedAt).toBe(100);
     expect(s?.archivedBytes).toBe(5_000_000);
@@ -366,7 +423,7 @@ describe('snapshot revival (a snapshot written by an older build)', () => {
   it('revives a pr object whose newer fields the writing build did not have', () => {
     // The same skew one level down: `pr` exists, but a field added to PrState
     // after it was written does not.
-    putRaw([{ ...v1Session('claude:OpenClawHetzner'), pr: { phase: 'open', number: 7, ahead: 3 } }]);
+    putRaw([{ ...v1Session('claude:ProjectC'), pr: { phase: 'open', number: 7, ahead: 3 } }]);
     const pr = loadFleetSnapshot()?.sessions[0]?.pr;
     expect(pr?.phase).toBe('open');
     expect(pr?.number).toBe(7);
@@ -387,13 +444,35 @@ describe('snapshot revival (a snapshot written by an older build)', () => {
     // ('unchecked' / null), so a token from a newer build has somewhere honest
     // to land and the session stays usable.
     putRaw([{
-      ...v1Session('claude:OpenClawHetzner'),
+      ...v1Session('claude:ProjectC'),
       pr: { phase: 'teleported', reason: 'sunspots', ahead: 0, number: 12 },
     }]);
     const pr = loadFleetSnapshot()?.sessions[0]?.pr;
     expect(pr?.phase).toBe('unchecked');
     expect(pr?.reason).toBeNull();
     expect(pr?.number).toBe(12);
+  });
+
+  it('keeps a snapshot holding a spawnState word this bundle cannot name — the word itself, as the live chip showed it', () => {
+    // #174's `narrow` was exactly such a word to every older bundle, and one
+    // narrow row used to cost the whole offline fleet. The live frame is CAST,
+    // so spawnWords.ts shows an unnameable word as itself, loud; the offline
+    // copy keeps the same word so the chip does not turn quiet `unknown`.
+    putRaw([
+      { ...v1Session('claude:ProjectC'), spawnState: 'some-future-word' },
+      v1Session('claude:project-j'),
+    ]);
+    const snap = loadFleetSnapshot();
+    expect(snap?.sessions.map((s) => s.spawnState)).toEqual(['some-future-word', null]);
+    expect(spawnVerdictChip(snap!.sessions[0]!)).toEqual({ word: '? some-future-word', data: 'some-future-word' });
+  });
+
+  it('never revives a pane width — offline is not THIS tick', () => {
+    putRaw([{ ...v1Session('claude:ProjectC'), spawnState: 'narrow', paneCols: 220 }]);
+    const row = loadFleetSnapshot()?.sessions[0];
+    expect(row?.paneCols).toBeNull();
+    // …so a narrow spawn stays LOUD offline rather than claiming it was widened.
+    expect(spawnVerdictChip(row!)?.word).toBe('narrow');
   });
 
   it('rejects the whole snapshot rather than launder a malformed session', () => {
@@ -473,7 +552,7 @@ describe('snapshot revival (a snapshot written by an older build)', () => {
     // cold-starting every phone empty — the one thing this module exists to
     // prevent — and would need bumping again for the next nullable field. So the
     // v1 key must still be read, and written back to, with no second key beside it.
-    putRaw([v1Session('claude:OpenClawHetzner')]);
+    putRaw([v1Session('claude:ProjectC')]);
     expect(loadFleetSnapshot()?.sessions).toHaveLength(1);
 
     saveFleetSnapshot(loadFleetSnapshot()!.sessions);
@@ -485,26 +564,71 @@ describe('snapshot revival (a snapshot written by an older build)', () => {
   });
 
   it('still round-trips a snapshot this build wrote', () => {
-    saveFleetSnapshot([session('claude:OpenClawHetzner')]);
-    expect(loadFleetSnapshot()?.sessions).toEqual([session('claude:OpenClawHetzner')]);
+    saveFleetSnapshot([session('claude:ProjectC')]);
+    expect(loadFleetSnapshot()?.sessions).toEqual([session('claude:ProjectC')]);
+  });
+});
+
+// D-7208 (Task C7c Step 2c; plan item 20): the snapshot keeps ARCH-48's two keys, so a row hydrated at cold start (all
+// the fleet the PWA has offline) reads the presence its last frame carried, not `unknown`.
+describe('the snapshot keeps presence and deadSince (D-7208)', () => {
+  const revived = (extra: Record<string, unknown>): FleetSession | undefined => {
+    putRaw([{ ...v1Session('session-a'), ...extra }]);
+    return loadFleetSnapshot()?.sessions[0];
+  };
+
+  it('a row with each Presence word revives with it', () => {
+    for (const presence of ['alive', 'asleep', 'dead', 'unknown'] as const) {
+      window.localStorage.clear();
+      expect(revived({ presence })?.presence, presence).toBe(presence);
+    }
+  });
+
+  it('a row with no key revives with no key, not `unknown` written in', () => {
+    const s = revived({});
+    expect(s).toBeDefined();
+    expect(Object.keys(s ?? {})).not.toContain('presence');
+    expect(Object.keys(s ?? {})).not.toContain('deadSince');
+  });
+
+  it('a word this build does not know revives as no key (it reads unknown), and the row is kept', () => {
+    const s = revived({ presence: 'zombie' });
+    expect(s?.id).toBe('session-a');
+    expect(Object.keys(s ?? {})).not.toContain('presence');
+  });
+
+  it('deadSince revives a number as itself, null as null, and absent as absent', () => {
+    expect(revived({ deadSince: 1_784_400_000_000 })?.deadSince).toBe(1_784_400_000_000);
+    window.localStorage.clear();
+    const nulled = revived({ deadSince: null });
+    expect(Object.keys(nulled ?? {})).toContain('deadSince');
+    expect(nulled?.deadSince).toBeNull();
+    window.localStorage.clear();
+    expect(Object.keys(revived({}) ?? {})).not.toContain('deadSince');
+  });
+
+  it('a row this build wrote with both keys round-trips them', () => {
+    const row = { ...session('session-a'), presence: 'dead' as const, deadSince: 1_784_400_000_000 };
+    saveFleetSnapshot([row]);
+    expect(loadFleetSnapshot()?.sessions[0]).toEqual(row);
   });
 });
 
 describe('FleetScreen stale marking', () => {
   it('shows hydrated cards behind a last-known banner while connecting', () => {
-    saveFleetSnapshot([session('claude:OpenClawHetzner')]);
+    saveFleetSnapshot([session('claude:ProjectC')]);
     const store = createFleetStore({ makeSocket: (url) => new FakeSocket(url) as unknown as WebSocket });
-    render(createElement(FleetScreen, { store }));
+    renderFleet(createElement(FleetScreen, { store }));
 
     // Instant content from the snapshot, clearly marked stale.
-    expect(screen.getByText('OpenClawHetzner')).toBeInTheDocument();
+    expect(screen.getByText('ProjectC')).toBeInTheDocument();
     expect(screen.getByText('Last known state — connecting…')).toBeInTheDocument();
 
     // Socket opens with a live snapshot: the stale banner goes away.
     act(() => {
       const sock = FakeSocket.instances[0]!;
       sock.open();
-      sock.message(JSON.stringify({ type: 'fleet', sessions: [session('claude:OpenClawHetzner')] }));
+      sock.message(JSON.stringify({ type: 'fleet', sessions: [session('claude:ProjectC')] }));
     });
     expect(screen.queryByText('Last known state — connecting…')).not.toBeInTheDocument();
   });

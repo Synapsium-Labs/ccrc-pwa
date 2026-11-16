@@ -110,6 +110,10 @@ describe('mkTmp (agent suite)', () => {
       // teardown it returns. It cannot route through `mkTmp` either: `mkTmp`'s
       // `afterAll` needs a suite, and the main process has none.
       ['contain-path.globalsetup.ts', 'globalSetup in the main process; removes its own root in its teardown'],
+      // The per-run temp parent's pin. Its socket bases must be SHORT, under
+      // `/tmp` (a `mkTmp` path inside the run is too long for `sun_path` on
+      // macOS), so it makes them itself and removes each in an `afterEach`.
+      ['run-tmp.test.ts', 'short /tmp socket bases for nested runs, removed in afterEach'],
     ]);
 
     const files = readdirSync(here).filter((f) => f.endsWith('.ts')).sort();
@@ -186,8 +190,9 @@ describe('mkTmp (agent suite)', () => {
     // And both are still wired, which is the constraint the standing rules put
     // above everything else in this package.
     const cfg = readFileSync(path.resolve(here, '..', 'vitest.config.ts'), 'utf8');
-    expect(cfg).toContain("setupFiles: ['test/contain-path.setup.ts']");
+    // Each list may also carry the shared git-environment scrub (../server/test/git-env.setup.mjs) ahead of it.
+    expect(cfg).toMatch(/setupFiles: \[(?:'[^']*', )*'test\/contain-path\.setup\.ts'\]/);
     expect(cfg, 'globalSetup is unwired — a module-load throw leaks again')
-      .toContain("globalSetup: ['test/contain-path.globalsetup.ts']");
+      .toMatch(/globalSetup: \[(?:'[^']*', )*'test\/contain-path\.globalsetup\.ts'\]/);
   });
 });

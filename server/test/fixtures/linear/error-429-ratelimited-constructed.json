@@ -1,0 +1,56 @@
+{
+  "name": "error-429-ratelimited-constructed",
+  "documentSource": "code",
+  "constructed": "NOT RECORDED. Built from Linear's developer documentation, the page titled \"Rate limiting\" (read 2026-11-02): a request over a rate limit is answered HTTP 429, its errors array carries the RATELIMITED code in extensions.code, Retry-After gives the number of seconds to wait, and X-RateLimit-Requests-Reset is the time the window resets in UTC epoch milliseconds. The limit (2500) is the one the capture recorded; the remaining count, the reset time and the Retry-After value are illustrative, and the message is ours. No capture provoked a rate limit.",
+  "document": "query KeyCheck($after: String) { viewer { name } organization { id name urlKey } teams(first: 250, after: $after) { nodes { id key name } pageInfo { hasNextPage endCursor } } }",
+  "variables": {
+    "after": null
+  },
+  "requestBody": "{\"query\":\"query KeyCheck($after: String) { viewer { name } organization { id name urlKey } teams(first: 250, after: $after) { nodes { id key name } pageInfo { hasNextPage endCursor } } }\",\"variables\":{\"after\":null}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631301830,
+  "receivedAtMs": 1793631302030,
+  "sentAt": "2026-11-02T14:55:01.830+00:00",
+  "status": 429,
+  "statusLine": "HTTP/2 429 ",
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "96"
+    ],
+    [
+      "retry-after",
+      "60"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "0"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634901830"
+    ]
+  ],
+  "body": {
+    "errors": [
+      {
+        "message": "constructed: over the rate limit",
+        "extensions": {
+          "code": "RATELIMITED"
+        }
+      }
+    ]
+  },
+  "bodyRaw": "{\"errors\":[{\"message\":\"constructed: over the rate limit\",\"extensions\":{\"code\":\"RATELIMITED\"}}]}\n"
+}

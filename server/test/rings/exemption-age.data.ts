@@ -1,0 +1,27 @@
+/**
+ * D-6045, stage 2 (Task C0n; ARCH-04 (#545)): one stamp per may-only-shrink exemption set, keyed
+ * `<repo-relative file>#<exported or declared name>`. `size` is the set's size, held exactly, so any change to the
+ * set edits its stamp in the same diff; `reason` says why the set is still not empty, and `since` is the day the
+ * set last changed or that reason was last re-dated. `exemption-age.test.ts` turns a non-empty set red once its
+ * stamp is more than 60 days old: a debt nobody has shrunk or re-justified in two months has stopped being tracked.
+ *
+ * Every `*_EXEMPTIONS` set in a `rings/*.data.ts` file needs a stamp. An allowlist (`FASTIFY_L4_ALLOWLIST`, the
+ * `.mjs` carve-out) is not a debt and has none.
+ */
+export interface SetStamp {
+  size: number;
+  reason: string;
+  since: string;
+}
+
+export const EXEMPTION_SET_STAMPS: Readonly<Record<string, SetStamp>> = {
+  'server/test/rings/outward-edges.data.ts#OUTWARD_EDGE_EXEMPTIONS': { size: 0, reason: 'empty since D-7508 (ARCH-05, #551)', since: '2026-10-30' },
+  'server/test/rings/host-imports.data.ts#HOST_IMPORT_EXEMPTIONS': { size: 0, reason: 'empty since ARCH-03 (#541)', since: '2026-10-20' },
+  'server/test/rings/shared-imports.data.ts#SHARED_IMPORT_EXEMPTIONS': { size: 0, reason: 'empty since stage 1 landed', since: '2026-10-20' },
+  'server/test/rings/mjs-node.data.ts#REACHABLE_MJS_EXEMPTIONS': { size: 0, reason: 'empty since stage 1 landed', since: '2026-10-20' },
+  'server/test/rings/pwa-rings.data.ts#PWA_L1_EXEMPTIONS': { size: 0, reason: 'empty since D-7570 (ARCH-05, #551)', since: '2026-10-31' },
+  'server/test/rings/pwa-rings.data.ts#UI_PWA_EXEMPTIONS': { size: 0, reason: 'empty since stage 3 landed (D-6118)', since: '2026-10-20' },
+  'server/test/rings/wire-totality.data.ts#WIRE_TOTALITY_EXEMPTIONS': { size: 1, reason: '#2371 drained 27 of the 28 merge-day listless unions; BaseUrlRefusal stays because base-url.ts defines no value (D-7307)', since: '2026-11-07' },
+  'server/test/growth-exemptions.json#exemptions': { size: 0, reason: 'empty again since #1132 landed: an entry names one PR the operator exempted from the growth check, and goes once that PR lands (D-6211)', since: '2026-10-23' },
+  'server/test/deviation-refs.test.ts#GRANDFATHERED': { size: 0, reason: 'empty since D-8562: the 16 pre-allocator D-number collisions were renumbered to issued numbers or reworded', since: '2026-11-13' },
+};

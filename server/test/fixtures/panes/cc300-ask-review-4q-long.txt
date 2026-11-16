@@ -1,0 +1,50 @@
+ ▝▝   ▝▝   <projects-root>/project-a
+
+⚠ Safe mode: all customizations are disabled (CLAUDE.md, skills, plugins, hooks, MCP, agents, and more)
+  Restart without --safe-mode to re-enable
+
+▎ [✻] [✻] [✻] · Share Claude Code and earn $10 in usage credits · /passes
+
+❯ Call AskUserQuestion exactly once with TWO single-select questions. Q1: header "Caching", question "Enable caching?", options Yes, No. Q2: header "Tracing", question "Enable tracing?", options Yes, No. Short
+  descriptions. Afterwards reply with the raw answers only.
+
+⏺ User declined to answer questions
+  ⎿  · Enable caching? (Yes / No)
+     · Enable tracing? (Yes / No)
+
+✻ Worked for 1s · done 4:04
+
+❯ Call AskUserQuestion exactly once with FOUR single-select questions, two options each with short descriptions. Copy each question text EXACTLY, keeping backticks and asterisks. Q1 header "Engine" question "Should the
+  ledger table use Postgres or SQLite?" options Postgres, SQLite. Q2 header "Order" question "When the new release is ready, in which order should the two machines be updated, given that the second machine reads files
+  the first machine writes and caches its settings at start-up, so a change that widens a reader must land before any writer that relies on it?" options "First machine first", "Second machine first". Q3 header "Notes"
+  question "Any notes for the reviewer?" options None, Later. Q4 header "Region" question "Which region?" options EU, US. Afterwards reply with the raw answers only.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Engine  ☒ Order  ☒ Notes  ☒ Region  ✔ Submit  →
+
+Review your answers
+
+ ● Should the `ledger` table use **Postgres** or SQLite?
+   → Postgres
+ │ ● When the new release is ready, in which order should the two machines be updated, given that the second machine reads files the first machine writes and caches its settings at start-up, so a change that widens a
+ │   reader must land before any writer that relies on it?
+   → Sentence 01 of answer A: keep the schema portable and test it nightly. Sentence 02 of answer A: keep the schema portable and test it nightly. Sentence 03 of answer A: keep the schema portable and test it nightly.
+   Sentence 04 of answer A: keep the schema portable and test it nightly. Sentence 05 of answer A: keep the schema portable and test it nightly. Sentence 06 of answer A: keep the schema portable and test it nightly.
+   Sentence 07 of answer A: keep the schema portable and test it nightly. Sentence 08 of answer A: keep the schema portable and test it nightly. Sentence 09 of answer A: keep the schema portable and test it nightly.
+   Sentence 10 of answer A: keep the schema portable and test it nightly. Sentence 11 of answer A: keep the schema portable and test it nightly. Sentence 12 of answer A: keep the schema portable and test it nightly.
+   Sentence 13 of answer A: keep the schema portable and test it nightly. Sentence 14 of answer A: keep the schema portable and test it nightly.. END-A
+ ● Any notes for the reviewer?
+   → Sentence 01 of answer B: keep the schema portable and test it nightly. Sentence 02 of answer B: keep the schema portable and test it nightly. Sentence 03 of answer B: keep the schema portable and test it nightly.
+   Sentence 04 of answer B: keep the schema portable and test it nightly. Sentence 05 of answer B: keep the schema portable and test it nightly. Sentence 06 of answer B: keep the schema portable and test it nightly.
+   Sentence 07 of answer B: keep the schema portable and test it nightly. Sentence 08 of answer B: keep the schema portable and test it nightly. Sentence 09 of answer B: keep the schema portable and test it nightly.
+   Sentence 10 of answer B: keep the schema portable and test it nightly. Sentence 11 of answer B: keep the schema portable and test it nightly. Sentence 12 of answer B: keep the schema portable and test it nightly.
+   Sentence 13 of answer B: keep the schema portable and test it nightly. Sentence 14 of answer B: keep the schema portable and test it nightly.. END-B
+ ● Which region?
+   → Sentence 01 of answer C: keep the schema portable and test it nightly. Sentence 02 of answer C: keep the schema portable and test it nightly. Sentence 03 of answer C: keep the schema portable and test it nightly.
+   Sentence 04 of answer C: keep the schema portable and test it nightly. Sentence 05 of answer C: keep the schema portable and test it nightly. Sentence 06 of answer C: keep the schema portable and test it nightly.
+   Sentence 07 of answer C: keep the schema portable and test it nightly. Sentence 08 of answer C: keep the schema portable and test it nightly. Sentence 09 of answer C: k END-C
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel

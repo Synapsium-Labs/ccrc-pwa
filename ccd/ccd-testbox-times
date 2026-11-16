@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# ccd-testbox-times — the test box's per-file durations, fetched once a day on the fleet host (test box TB11; D-7413,
+# D-7421, D-7567; spec 2026-10-28 §2.5 "The budget").
+#
+# WHY A TIMER. `ccrc test`'s remote arm estimates a run's time on the box from the per-file durations CI publishes
+# (`agent/src/testbox/budget.ts`), and refuses or falls back when the estimate is over `CCRC_TESTBOX_BUDGET`. Those
+# durations are the `testtimes` artifact of a trusted run of `.github/workflows/ci.yml` on `main`: no box can read an
+# artifact without a token, and the release tarball carries no `.github/`. So the fleet host fetches it with its own
+# `gh`, daily (`deploy/systemd/ccd-testbox-times.timer`), and writes it to `CCRC_TESTBOX_TIMES`, which the wrapper reads.
+#
+# THE ROWS (D-7567). The repository table is the test box's own config (spec §2.6), and the fleet host holds no row
+# (D-7558), so the rows this timer reads are the sources file beside the durations file: CCRC_TESTBOX_TIMES with
+# `.sources` in place of a trailing `.json` (default `~/.ccrc/testbox-times.sources`), one row per line,
+# `<repository> <owner>/<name>`: the repository's name as the wrapper matches it (origin's last path segment without
+# `.git`, lower-cased) and the GitHub repository whose CI publishes its durations. A row that names no GitHub
+# repository is not written, so a repository with no row estimates with the per-file default. Blank lines and `#`
+# lines are skipped. ccrc's code names no repository: the operator writes the rows.
+#
+# TRUSTED, AS CI's OWN PICKER SAYS (`.github/ci/main-artifact.mjs`): the newest unexpired artifact named `testtimes`
+# whose run is this repository's own (not a fork's) `.github/workflows/ci.yml` on branch `main`, triggered by `push`,
+# `schedule` or `workflow_dispatch`. That module is not in the release, so its rules are restated here as jq filters;
+# `server/test/testbox-times.test.ts` holds a row per rule.
+#
+# THE FILE. Every row's map nests under its repository's name (`{ "<repository>": { "<path>": <ms>, … } }`), the form
+# budget.ts reads for a file of several repositories. It is written whole to a temporary file in its own directory and
+# renamed over the old one, so a reader sees the old file or the new one, never part of one.
+#
+# A FAILURE KEEPS THE PREVIOUS FILE. Any row that cannot be fetched or does not parse stops the pass before the rename:
+# the previous file stays as it was, and the pass logs one line saying why and exits 0 (a kept file is the designed
+# fallback, and a box with no network is not a broken unit). With no test box configured (CCRC_TESTBOX_URL unset) the
+# pass fetches nothing and says so.
+#
+# SETTINGS. Read through the test box's one printer, `ccrc test --testbox-knobs host` (D-7430), the way the fleet
+# agent's op reads them, so a value that is not its shape keeps its default here too.
+set -uo pipefail
+
+PROG=ccd-testbox-times
+_say() { printf '%s: %s\n' "$PROG" "$1" >&2; }
+
+TRUSTED_EVENTS='["push","schedule","workflow_dispatch"]'
+CI_WORKFLOW_PATH='.github/workflows/ci.yml'
+ARTIFACT=testtimes
+
+_knob() {   # <KEY> -> its value from the printer's lines in $KNOBS
+  local k v
+  while IFS=$'\037' read -r k _ v _; do
+    [ "$k" = "$1" ] && { printf '%s' "$v"; return 0; }
+  done <<<"$KNOBS"
+  return 1
+}
+
+# One row: the newest trusted artifact's durations map, checked, to <work>/maps/<repository>.json, or a reason on stderr
+# and exit 1.
+_fetch_row() {   # <repository> <owner/name> <work dir>
+  local repo="$1" slug="$2" work="$3" repo_id cands aid run_id run trusted=""
+  repo_id=$(gh api "repos/$slug" 2>/dev/null | jq -er '.id | numbers') || { echo "$repo: gh could not read repos/$slug" >&2; return 1; }
+  cands=$(gh api "repos/$slug/actions/artifacts?name=$ARTIFACT&per_page=100" 2>/dev/null | jq -er --arg n "$ARTIFACT" --argjson id "$repo_id" '
+      [.artifacts[] | select(.name == $n and (.expired | not) and .workflow_run != null
+        and .workflow_run.head_branch == "main" and .workflow_run.repository_id == $id
+        and .workflow_run.head_repository_id == $id)]
+      | sort_by(.created_at, .id) | reverse | .[] | "\(.id) \(.workflow_run.id)"') \
+    || { echo "$repo: gh could not list $slug's $ARTIFACT artifacts" >&2; return 1; }
+  while read -r aid run_id; do
+    [ -n "$aid" ] || continue
+    run=$(gh api "repos/$slug/actions/runs/$run_id" 2>/dev/null) || continue
+    if jq -e --arg p "$CI_WORKFLOW_PATH" --argjson ev "$TRUSTED_EVENTS" --argjson id "$repo_id" '
+        .path == $p and .head_branch == "main" and (.event as $e | $ev | index($e) != null)
+        and .repository.id == $id and .head_repository.id == $id' <<<"$run" >/dev/null 2>&1; then
+      trusted="$run_id"; break
+    fi
+  done <<<"$cands"
+  [ -n "$trusted" ] || { echo "$repo: no $ARTIFACT artifact of a trusted run of $slug's $CI_WORKFLOW_PATH on main" >&2; return 1; }
+  mkdir -p "$work/$repo" || return 1
+  gh run download "$trusted" -R "$slug" -n "$ARTIFACT" -D "$work/$repo" >/dev/null 2>&1 \
+    || { echo "$repo: gh could not download run $trusted's $ARTIFACT artifact" >&2; return 1; }
+  jq -ce 'if type == "object" and length > 0 and ([.[] | type == "number" and . >= 0] | all) then . else error("not a durations map") end' \
+    "$work/$repo/$ARTIFACT.json" > "$work/maps/$repo.json" 2>/dev/null \
+    || { echo "$repo: run $trusted's $ARTIFACT.json is not a map of test file paths to milliseconds" >&2; return 1; }
+}
+
+main() {
+  local launcher="$HOME/.local/bin/ccrc" url times sources work tmp line repo slug extra why need
+  local -a maps=()
+  KNOBS=$("$launcher" test --testbox-knobs host 2>/dev/null) || { _say "kept the previous file: the test box settings could not be read ($launcher test --testbox-knobs host)"; return 0; }
+  url=$(_knob CCRC_TESTBOX_URL) || url=""
+  if [ -z "$url" ]; then _say "no test box is configured (CCRC_TESTBOX_URL is unset); nothing fetched"; return 0; fi
+  times=$(_knob CCRC_TESTBOX_TIMES) || { _say "kept the previous file: the settings name no CCRC_TESTBOX_TIMES"; return 0; }
+  # shellcheck disable=SC2088  # the setting spells the reader's home as a literal `~/`; it is replaced here
+  case "$times" in '~/'*) times="$HOME/${times#\~/}" ;; esac
+  sources="${times%.json}.sources"
+  for need in gh jq; do command -v "$need" >/dev/null 2>&1 || { _say "kept the previous file: $need is not on PATH"; return 0; }; done
+  [ -f "$sources" ] || { _say "kept the previous file: no rows (${sources/#"$HOME"/\~} is not there)"; return 0; }
+  work=$(mktemp -d "${TMPDIR:-/tmp}/ccd-testbox-times.XXXXXXXXXX") || { _say "kept the previous file: no temporary directory"; return 0; }
+  # shellcheck disable=SC2064  # the path is fixed now, on purpose
+  trap "rm -rf -- '$work'" EXIT
+  mkdir -p "$work/maps" || { _say "kept the previous file: no temporary directory"; return 0; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    read -r repo slug extra <<<"$line"
+    if ! [[ "$repo" =~ ^[a-z0-9][a-z0-9._-]*$ && "$slug" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && -z "$extra" ]]; then
+      _say "kept the previous file: ${sources/#"$HOME"/\~} has a row that is not '<repository> <owner>/<name>': $line"; return 0
+    fi
+    if [ -e "$work/maps/$repo.json" ]; then _say "kept the previous file: ${sources/#"$HOME"/\~} names $repo twice"; return 0; fi
+    _fetch_row "$repo" "$slug" "$work" 2>"$work/why" || { why=$(<"$work/why"); _say "kept the previous file: ${why:-$repo: the fetch failed}"; return 0; }
+    maps+=("$work/maps/$repo.json")
+  done < "$sources"
+  [ "${#maps[@]}" -gt 0 ] || { _say "kept the previous file: ${sources/#"$HOME"/\~} names no repository"; return 0; }
+  mkdir -p "${times%/*}" || { _say "kept the previous file: cannot create ${times%/*}"; return 0; }
+  tmp="${times}.tmp.$$"
+  # Each map nests under its file's name, in the rows' order; the maps go by file, never by argv (one is ~70 KB).
+  if jq -cn --arg d "$work/maps/" 'reduce inputs as $m ({}; . + {(input_filename | ltrimstr($d) | rtrimstr(".json")): $m})' \
+       "${maps[@]}" > "$tmp" 2>/dev/null && mv -f "$tmp" "$times"; then
+    _say "wrote the durations of ${#maps[@]} repositor$([ "${#maps[@]}" -eq 1 ] && echo y || echo ies) to ${times/#"$HOME"/\~}"
+  else
+    rm -f -- "$tmp"; _say "kept the previous file: could not write ${times/#"$HOME"/\~}"
+  fi
+  return 0
+}
+
+main "$@"

@@ -1,0 +1,36 @@
+
+  ▐▛███▛█   Claude Code v2.1.299
+ ▝▜██████▀  Sonnet 4.5 · API Usage Billing
+  ▝▝   ▝▝   /rig/project-a
+
+ ❯ Plan the farewell function for project-a.
+
+ ● Here is a summary of the two functions project-a will export once the farewell
+   function lands, with the file each one lives in and the test that covers it. The
+   table is the plan; the code block after it is the shape of the new function.
+
+⇆  ┌──────────┬────────────┬───────────────────────┬──────────────────┐
+⇆  │ Function │    File    │        Returns        │    Covered by    │
+⇆  ├──────────┼────────────┼───────────────────────┼──────────────────┤
+⇆  │ greet    │ src/app.ts │ a greeting for a name │ test/app.test.ts │
+⇆  ├──────────┼────────────┼───────────────────────┼──────────────────┤
+⇆  │ farewell │ src/app.ts │ a farewell for a name │ test/app.test.ts │
+⇆  └──────────┴────────────┴───────────────────────┴──────────────────┘
+
+   export function farewell(name: string): string {
+     return `goodbye, ${name}`;
+   }
+
+   1. Add the function beside greet in src/app.ts.
+   2. Add one test case for it in test/app.test.ts, next to the greet case, so the two
+      read as a pair.
+      - Keep the test names parallel.
+
+   That keeps the module small: two pure functions, one file, one test file.
+
+ ✻ Crunched for 1s · done 12:00 PM
+
+──
+ ❯ 
+──
+   ⏸ manual mode on · ? for shortcuts · ← for agents

@@ -10,8 +10,10 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
 import { genFile } from './lifecycleHelpers.js';
-import { testDeps } from './helpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { callsIn, symbolOf } from './scan/symbols.js';
 import {
   LC_ACT_UNKNOWN, LC_DIR_NAME, LC_GEN_PREFIX, LC_GEN_SUFFIX, LIFECYCLE_ACTS,
 } from '../../shared/api.js';
@@ -34,9 +36,8 @@ const rig = () => {
   const dir = path.join(deps.cfg.registryDir, LC_DIR_NAME);
   fs.mkdirSync(dir, { recursive: true });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const w = new FleetWatcher(
-    { ...deps, coord,
-      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-rm', LC_CAP_TOKEN] } } as never,
+  const w = new FleetWatcher(withFakeClock({ ...deps, coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-rm', LC_CAP_TOKEN] } } as never),
     new Bus(),
   );
   return { w, dir, coord };
@@ -75,7 +76,7 @@ describe('FleetWatcher.sweepLifecycle', () => {
   });
 
   it('answers null with no coordination database', () => {
-    const bare = new FleetWatcher(testDeps(mkTmp('ccrc-lcsweep-')), new Bus());
+    const bare = new FleetWatcher(withFakeClock(testDeps(mkTmp('ccrc-lcsweep-'))), new Bus());
     expect(bare.lifecycleHealth()).toBeNull();
   });
 
@@ -97,13 +98,15 @@ describe('FleetWatcher.sweepLifecycle', () => {
 describe('the tick itself', () => {
   const src = fs.readFileSync(path.join(srcRoot, 'watch.ts'), 'utf8');
 
-  it('adds NO new timer — the sweep rides the tick that already exists', () => {
+  it('adds NO sweep timer of its own — the sweep rides the tick that already exists (the lane\'s stall sampler is the one other interval)', () => {
     // `start()` is the one place a timer is created in this class (`:484`). A
     // second setInterval/setTimeout would be a second clock nothing stops on
     // close. FIX ROUND 1, F8: two independent claims, softened (lower stakes
     // than the health split above — neither dereferences the other's result —
     // but both should get to report rather than the first hiding the second).
-    expect.soft(src.match(/setInterval\(/g) ?? []).toHaveLength(1);
+    // D-5832: the one other interval is the delegation lane's stall sampler, a measurement clock (not a sweep), unref'd; only tests call the lane's close(), so in production it lives for the process.
+    expect.soft(src.match(/setInterval\(/g) ?? []).toHaveLength(2);
+    expect.soft(callsIn(symbolOf('server/src/watch.ts', 'createDelegationStallSampler')).filter((c) => c.callee === 'LANE_TIMERS.setInterval'), 'the second is the lane sampler, by name').toHaveLength(1);
     expect.soft(src).not.toContain('lifecycleTimer');
   });
 
@@ -121,7 +124,7 @@ describe('the tick itself', () => {
   // commit SHA — and was confirmed that way in review (`sweepMail`
   // unchanged against `05033c5`). This test is the parity SIGNAL, named for
   // exactly that.
-  it('sweepMail has not shrunk, and takes NO dependency on the lifecycle subsystem — a parity SIGNAL, not a proof of byte-identity', () => {
+  it('mailPass (the body of sweepMail) has not shrunk, and takes NO dependency on the lifecycle subsystem — a parity SIGNAL, not a proof of byte-identity', () => {
     // The most load-bearing loop on the box. Wave 4 adds a producer beside it,
     // never inside it. The slice ends on the method's OWN closing brace —
     // `\n  }\n` at two-space indent — rather than on the next member, so it
@@ -142,15 +145,16 @@ describe('the tick itself', () => {
     // where that distinction is already drawn. No new I/O, no new timer, no
     // call into the sweep next door.
     //
+    // D-8610: the rung now reads the recipient through `readSession`, which takes the lifecycle as its `lifecycle`
+    // fact and asks `lifecycleIsDead` itself, so the third permitted read is that fact's key, matched whole.
+    //
     // So the allow-list below is EXPLICIT and short. A new lifecycle reference
     // that is not one of these three reds this test, which is a stricter
     // statement of the same rule than the blanket substring ever was — that one
     // could only say "none", and had no way to say "these, and nothing else".
-    const from = src.indexOf('  async sweepMail(');
-    expect(from, 'sweepMail was not found — this assertion would pass vacuously').toBeGreaterThan(-1);
-    const to = src.indexOf('\n  }\n', from);
-    expect(to, 'sweepMail has no two-space closing brace').toBeGreaterThan(from);
-    const body = src.slice(from, to);
+    // D-6114: keyed on the method's symbol (scan/symbols.ts), so the slice follows `sweepMail` wherever it moves; a
+    // renamed or missing method throws by name.
+    const body = sourceOfSymbol(path.join(srcRoot, 'watch.ts'), 'FleetWatcher.mailPass');
     expect.soft(body.length).toBeGreaterThan(2000);
 
     // The producer and its neighbours stay out, by name.
@@ -174,7 +178,8 @@ describe('the tick itself', () => {
     // stayed green. Stripping `//`-to-end-of-line first takes the stray `/*`
     // with it, so no block match can open.
     const code = body.replace(/\/\/[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
-    const ALLOWED = ['sessionLifecycle(', 'lifecycleIsDead(', 'lifecycleInputFor('];
+    const ALLOWED = ['sessionLifecycle(', 'lifecycleInputFor('];
+    const FACT = 'lifecycle';
     const mentions = [...code.matchAll(/[A-Za-z_$]*[Ll]ifecycle[A-Za-z_$]*\s*\(?/g)].map((m) => m[0].trim());
 
     // THE CANARY, and it is the mechanism rather than the ordering above. Any
@@ -186,9 +191,9 @@ describe('the tick itself', () => {
     expect.soft(mentions.length,
       'the lifecycle census found none of the three reads it knows are there — the comment strip has ' +
       'blinded it, and `unexpected: []` below would be vacuous rather than clean')
-      .toBeGreaterThanOrEqual(ALLOWED.length);
+      .toBeGreaterThanOrEqual(ALLOWED.length + 1);
 
-    const unexpected = mentions.filter((m) => !ALLOWED.some((a) => m.startsWith(a.slice(0, -1))));
+    const unexpected = mentions.filter((m) => m !== FACT && !ALLOWED.some((a) => m.startsWith(a.slice(0, -1))));
     expect.soft(unexpected,
       'a lifecycle reference in sweepMail that is not one of the three permitted pure reads')
       .toEqual([]);

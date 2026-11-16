@@ -1,22 +1,44 @@
+import path from 'node:path';
+import { wireHookAsk } from './fleet.js';
 import type { Deps } from './server.js';
+import { SHAPE_ONLY_MASKER } from './accounts/mask.js';
 import type { Bus, Notice } from './bus.js';
+import type { rowFactsOf } from './tickPlan.js';
+import { servedFromWatcher } from './servedRead.js';
 import { configDirFor, type CcrcConfig } from './config.js';
 import { measuredIdentity, readSessionRecord } from './registry.js';
 import { liveSessionStatus, readLiveStateMeasured } from './livestate.js';
+import { readSession } from './sessionReading.js';
 import {
-  rungRank, TranscriptResolver, type TranscriptResolution,
+  continuesInto, resumedPastMarker, rungRank, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
-import { hasMenu, parseDialog } from './pane/dialog.js';
-import { alignAsk, readPendingAsk } from './transcript/ask.js';
-import { readTasks } from './tasks/read.js';
-import { readHookState } from './hookstate.js';
-import { askKey } from './askkey.js';
-import type { Dialog, DialogAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
+import { feedFor, type FeedFacts, type FeedMail, type FeedReading, type FeedSubscriber, type FeedTasks, type SessionFeed } from './sessionFeed.js';
+import { SessionWorkflows, sessionDirOf } from './workflows/read.js';
+import { workflowsFrame, type Proc } from './workflows/model.js';
+import { foldHookStateRead, type HookStateRawRead } from './hookstate.js';
+import { askKey, nextAgedKeep, NO_AGED_KEEP, type AgedKeep } from './askkey.js';
+import { framePairing } from './pane/askPairing.js';
+import type { Dialog, DialogAsk, FleetSession, DialogMulti, HookAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
+import { reviewQuestions, reviewRows } from '../../shared/ask-menu.js';
 
-const POLL_MS = 2000;
+/** The per-socket heartbeat of both sockets, `/ws/fleet` and `/ws/session/:id` (console speed S2, spec D14). It is an app
+ *  frame because a browser cannot see pings, and it comes from a timer of the socket's own because a beat driven by the
+ *  watcher's tick would stop exactly when the tick is slow. */
+export const BEAT_MS = 10_000;
+/** A stream re-resolves on a `row:<id>` event, a status change in the watcher's fleet frame or the tailer's rotation;
+ *  this is the last trigger, the backstop for a change none of them saw (console speed S2, spec D8), and the stream's
+ *  only timer that re-resolves (D-8611). */
+export const STREAM_BACKSTOP_MS = 30_000;
+/** What a stream asks the watcher for: structural, so `sessionws.ts` never imports `watch.ts` (`FleetWatcher` satisfies it). */
+export interface RowFactsSource {
+  currentRowFacts(id: string): ReturnType<typeof rowFactsOf>;
+}
+/** A watcher that has not ticked: no row facts. The server hands it on a box with no watcher (the same
+ *  `watcher?.… ?? null` its other reads make). Nothing sends `row:<id>` or `'fleet'` there, so such a stream reads for
+ *  itself and re-resolves on the backstop alone: the 2 s poll is retired, not kept for a box without a watcher (D-8611). */
+export const NO_TICK: RowFactsSource = { currentRowFacts: () => null };
 const BACKLOG_N = 50;
-const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see checkDialog's own comment
 
 interface Resolved {
   uuid: string;
@@ -28,22 +50,28 @@ interface Resolved {
   cfgDir: string;
   status: SessionStatus;
   statusUpdatedAt: number | null;
+  /** D-5561: the session's Claude Code process as this resolve measured it —
+   *  the workflow reader's orphan rule needs `gone` apart from `unknown` (a
+   *  substrate fault is not a dead process) and the live file's `startedAt`.
+   *  `status` above keeps its own deliberate fold (D-309). */
+  proc: Proc;
 }
 
 /**
- * `resolve()`'s own three-way (registry ladder, Task 2) — same `ok`+`reason`
- * shape `SingleRead` (registry.ts) already draws, deliberately not a new
- * vocabulary. `ok: false, reason: 'unmeasurable'` covers BOTH of
+ * `resolve()`'s own three-way (registry ladder, Task 2) — `SingleRead`'s
+ * (registry.ts) answers folded into this stream's `ok`+`reason`, deliberately
+ * not a new vocabulary. `ok: false, reason: 'unmeasurable'` covers BOTH of
  * `SingleRead`'s own `unlistable` (the whole-directory collapse — the LARGER
  * cousin of a degraded row, and just as much not proof this session is
  * gone) and a listed-but-degraded identity triple (`measuredIdentity`
  * answering null): in either case this read simply could not say, so the
  * client is told to wait, never that the session is unknown.
  * `ok: false, reason: 'absent'` covers a PROVEN absence (`SingleRead`'s own
- * `absent`) and the wrapper/config-dir mapping gap this function has always
- * folded into the same answer (see its own comment below) — neither is
- * registry-unmeasurable, so retrying this same 2 s poll can never heal
- * either one.
+ * `absent`), an id `isRegistryId` refuses (`SingleRead`'s `bad-id`, spec
+ * §2.3), and the wrapper/config-dir mapping gap this function has always
+ * folded into the same answer (see its own comment below) — none is
+ * registry-unmeasurable, so re-running this same resolve can never heal
+ * any of them.
  */
 type Resolution =
   | { ok: true; data: Resolved }
@@ -56,20 +84,60 @@ type Resolution =
  * rotation (clear/compact/swap), reports status flips, and forwards bus
  * notices plus targeted `session:<id>` messages.
  */
-export class SessionStream {
+export class SessionStream implements FeedSubscriber {
   private tailer: TranscriptTailer | null = null;
-  private poll: NodeJS.Timeout | null = null;
+  /** The 30 s backstop's interval; set once `start()` has armed the stream. */
+  private backstop: NodeJS.Timeout | null = null;
+  /** A row event, or a status change in a fleet frame, that came in while a tick was in flight, or before `start()`
+   *  armed the stream, and nothing else (the backstop that finds a tick in flight drops), so the tick that ends (or
+   *  `start()`) runs once more. */
+  private rerun = false;
+  /** The `statusUpdatedAt` of the last measurement this stream took, to compare with the fleet frame's. */
+  private statusAt: number | null = null;
+  /** The beat's own interval (`BEAT_MS`), independent of the backstop: started before `start()`'s first await. */
+  private beat: NodeJS.Timeout | null = null;
   private stopped = false;
   private ticking = false;
   private uuid: string | null = null;
   private status: SessionStatus | null = null;
   /** What the client last saw of the pane menu — see nextDialogFrame. */
-  private seenDialog: DialogSeen = { id: null, ask: null };
-  /** The transcript state that already failed to explain the menu on screen —
-   *  see claimAskRead. */
-  private askProbe: { file: string; id: string; size: number; mtimeMs: number } | null = null;
+  private seenDialog: DialogSeen = { id: null, ask: null, raw: null };
+  /** `applyHook`'s keep decision for an aged envelope (D-6324). */
+  private agedKeep: AgedKeep = NO_AGED_KEEP;
+  /** The feed's last look at the pane this stream judged: whether it failed and held the menu (under
+   *  FAILED_CAPTURES_CLEAR). An early return in `applyDialog` keeps the previous reading's value (D-6324). */
+  private captureHeld = false;
+  /** The session's one reader of the pane, the plan, the hookstate and the mail (ARCH-52); null until `start()`. */
+  private feed: SessionFeed | null = null;
+  /** Whether this stream's last resolve measured its session. A tick that could not stops the readings from reaching
+   *  it, as it stopped the stream's own reads, until one does. */
+  private readable = true;
+  /** Where the last measured resolve found the transcript, for the workflow reader a reading drives. */
+  private resolvedFor: { file: string; proc: Proc } | null = null;
   /** Serialized last-sent task list — the change gate for the `tasks` frame. */
   private lastTasksJson: string | null = null;
+  /** D-5560: the workflow reader for the session dir now being tailed (a new
+   *  one when the transcript moves: /clear, compaction, an account swap), the
+   *  rows the client was last sent, and the change gate for the `workflows`
+   *  frame. `undefined` until the first read, for `lastMailJson`'s reason: a
+   *  `ReconnectingSocket` reconnect keeps the client's rows, so a workflow that
+   *  finished while it was away would stay on screen as running if an empty
+   *  first read were swallowed — so a session that HAS a workflow directory
+   *  states its first read, empty included. The one first read swallowed is
+   *  `absent` with no witness: this session dir never had a workflow, so a
+   *  client can hold no rows from it: the client drops its rows on every
+   *  `backlog` (`pwa/src/stores/session.ts`) — the frame that comes whenever the
+   *  session dir can have changed (a /clear, a swap, a reconnect onto another
+   *  file) — and `sendBacklogAndTail` resets this gate with it. */
+  private workflows: SessionWorkflows | null = null;
+  private shownWorkflows: SessionStreamMsg & { type: 'workflows' } = { type: 'workflows', workflows: [] };
+  private lastWorkflowsJson: string | undefined = undefined;
+  /** Whether this connection has sent a `workflows` frame yet (see above). */
+  private sentWorkflows = false;
+  /** The hook's last fresh Stop listed a `workflow` among its background kinds
+   *  (D-5231's pair, read by `applyHook`). The one witness that a workflow
+   *  exists when its directory does not — see `checkWorkflows`. */
+  private hookWorkflowBackground = false;
   /** Serialized last-sent outstanding-mail list — the change gate for the
    *  `mail` frame. `undefined` (not `null`) until the first read, for the
    *  EXACT reason `lastAskJson` below is `undefined`: this instance is per
@@ -81,7 +149,7 @@ export class SessionStream {
    *  the socket drops, the session acks that delivery while the client is
    *  away, then a fresh `SessionStream` connects and its own first read is
    *  ALREADY `[]` — with the old `null` sentinel and its first-read-empty
-   *  swallow (mirroring `checkTasks`'s own swallow), `null === null` never
+   *  swallow (mirroring `applyTasks`'s own swallow), `null === null` never
    *  held (the JSON is `'[]'`, not `null`), but the SWALLOW clause itself
    *  (`lastMailJson === null && outstanding.length === 0`) matched and ate
    *  the send — the reconnecting client's stale one-item list was never
@@ -92,7 +160,7 @@ export class SessionStream {
    *  nothing outstanding. */
   private lastMailJson: string | null | undefined = undefined;
   /** Serialized last-sent hook ask envelope — the change gate for `ask` /
-   *  `ask_cleared`. See `checkHookAsk`. `undefined` (not `null`) until the
+   *  `ask_cleared`. See `applyHook`. `undefined` (not `null`) until the
    *  first read: this instance is per CONNECTION, and a client can arrive
    *  already holding a stale `ask` from before the drop (an automatic
    *  ReconnectingSocket reconnect never runs the PWA's own disconnect(),
@@ -104,22 +172,52 @@ export class SessionStream {
    *  (fixing round 1, I1): `ask_cleared` at minimum, confirming to a
    *  possibly-stale client that there is truly nothing pending. */
   private lastAskJson: string | null | undefined = undefined;
+  /** D-7031: the envelope and the dialog this stream last SENT (an `ask` frame's wire envelope, a `dialog` frame's
+   *  dialog), the two sides of the `pairing` field (`paired`). Each is null after its `_cleared` frame and before its
+   *  first frame. Recorded as sent, never read back for a gate: no frame is added, dropped or reordered for them. */
+  private sentAsk: HookAsk | null = null;
+  private sentDialog: Dialog | null = null;
   /** One memo per stream (§5.4): steady state is ONE stat per tick for this
    *  session, and a session with nothing at any exact address pays for a full
    *  search on a back-off rather than every two seconds. */
   private readonly transcripts: TranscriptResolver;
   /** The outcome the open tailer was built from — the left-hand side of
-   *  §5.3's re-point comparison. Null until the first tailer exists. */
+   *  §5.3's re-point comparison. Null until the first tailer exists.
+   *
+   *  KEPT CURRENT for the file it names (D-4947): a later answer for the SAME
+   *  path at the same rung replaces it (`tick`'s no-move arm) — keeping a
+   *  decline that a later FAILED read could not see again — because what a
+   *  re-ladder learns about that file — the successor its marker names
+   *  (`declinedTo`), a tail it could not read — is exactly what
+   *  `registryCaughtUp` must see when `ccd` moves the registry. The tailer
+   *  itself is untouched: same file, same offset.
+   *
+   *  And one fact only the STREAM can add (#189 re-review, SV-2): when the
+   *  registry moves onto a successor this file leads to but nothing has
+   *  been written to yet, `keepsTailer` keeps this file on screen and names
+   *  that successor in `declinedTo` — the stream declined it, exactly as a
+   *  walk declines an empty successor — so `shouldRepoint` can move forward
+   *  to it once it has content. */
   private tailed: TranscriptResolution | null = null;
 
+  /** Predecessor answers whose tail `repointFacts` MEASURED as not resumed
+   *  (`resumedPastMarker` -> `not-shown`), held by IDENTITY. The resolver's
+   *  memo hands back the same answer object for as long as that file's stamp
+   *  holds, and a new one once its walk re-runs. So a predecessor served
+   *  clean tick after tick (its window holds no deciding line) is read once,
+   *  not every 2 s, and one that changes is read again as soon as the memo
+   *  re-walks it. Only "not shown" is kept: it can delay an un-follow by the
+   *  memo's two-poll gate, never cause one. */
+  private readonly notResumed = new WeakSet<TranscriptResolution>();
+
+  /** Every frame's one way out, masked (see the constructor's `sendRaw`). */
+  private readonly send: (m: SessionStreamMsg) => void;
   private readonly onNotice = (n: Notice): void => this.send({ type: 'notice', message: n.message });
-  // This stream detects dialogs itself (start + every tick), so it always
-  // delivers a dialog that is ALREADY pending when the client connects — the
-  // global watcher only emits on the appear/clear transition, which a
-  // late-joining client would miss. Ignore the watcher's dialog bus events here
-  // to avoid double-delivery; still forward its notices.
+  // This stream frames the dialog itself, from the session's feed (the watcher publishes the pane on `pane:<id>`, and
+  // the feed's opening reading delivers a dialog that is ALREADY pending when the client connects: a transition-only
+  // emit would be missed by a late-joining client). The watcher sends no dialog frames of its own any more.
   //
-  // A second channel runs the same way, alongside it: `checkHookAsk` reads
+  // A second channel runs the same way, alongside it: `applyHook` reads
   // `~/.cc-sessions/<id>.hookstate.json` itself, on connect and every tick,
   // and sends `ask` / `ask_cleared` on its own change gate (`lastAskJson`) —
   // the hook-sourced envelope, entirely independent of the pane scrape above.
@@ -128,15 +226,35 @@ export class SessionStream {
   // both are sent exactly as read. The client prefers the envelope when both
   // are present; the server never guesses which one is right.
   private readonly onSessionMsg = (m: SessionStreamMsg): void => {
-    if (m.type === 'dialog' || m.type === 'dialog_cleared') return;
     this.send(m);
   };
+
+  /** Decision `ask-answer-returns-next-screen`: an answer route saw the pane move to `next` (null: no menu). It goes
+   *  through the same gate as a poll's reading (`nextDialogFrame`), so this stream's record of what its client saw stays
+   *  true, and a later poll that finds the screen gone still says so. Every open stream of the session gets it, so a
+   *  second tab moves with the one that answered. */
+  private readonly onAnswered = (next: Dialog | null): void => {
+    if (this.stopped) return;
+    this.frame(next, 'answer');
+  };
+
+  /** Send what `dialog` (a reading of the pane, or null for no menu) changes for the client, if anything, and log it. */
+  private frame(dialog: Dialog | null, from: 'poll' | 'answer', startedAt: number | null = null): void {
+    const { seen, msg } = nextDialogFrame(this.seenDialog, dialog);
+    this.seenDialog = seen;
+    if (!msg) return;
+    console.log(dialogFrameLine(this.id, msg, from, startedAt === null ? null : Date.now() - startedAt));
+    this.sentDialog = msg.type === 'dialog' ? msg.dialog : null;
+    this.send(this.paired(msg));
+  }
 
   constructor(
     private readonly deps: Deps,
     private readonly bus: Bus,
     private readonly id: string,
-    private readonly send: (m: SessionStreamMsg) => void,
+    /** The socket's raw sender. Every frame reaches it only through `this.send`, which masks each decoded string
+     *  field first (D-5513, accounts plan Task A10): the transcript rows, the ask and dialog frames, the mail. */
+    sendRaw: (m: SessionStreamMsg) => void,
     /** `file` is the transcript the client's `offset` was taken in (§5.3).
      *
      *  OPTIONAL, and the omission is a REAL exposure, not a shrug. A client
@@ -166,19 +284,45 @@ export class SessionStream {
      *  gets the backlog. This is why the parameter is still optional and why
      *  its absence is still not a mismatch — a client with no file is a real
      *  state, and it is a state with no offset to protect. */
-    private readonly since?: { uuid: string; offset: number; file?: string | null },
+    private readonly since: { uuid: string; offset: number; file?: string | null } | undefined,
+    /** The watcher's last tick (console speed S2): `resolve()` takes the row, the pane verdict and the pid from it while
+     *  they are fresh; the stream re-resolves on `row:<id>`, on a status change in the watcher's fleet frame
+     *  (`onFleet`) and on the backstop. Required (D-8611): a box with no watcher hands `NO_TICK`. */
+    private readonly rows: RowFactsSource,
   ) {
+    const masker = deps.masker ?? SHAPE_ONLY_MASKER;
+    this.send = (m) => sendRaw(masker.maskDeep(m));
     this.transcripts = new TranscriptResolver(deps.io);
   }
 
+  /** The watcher saw this row's record or pane verdict change: re-resolve now. Before `start()` has armed the stream,
+   *  or while a tick is in flight, it keeps the event as `rerun`: only a change is kept, never the backstop. */
+  private readonly onRowChanged = (): void => { if (this.backstop && !this.ticking) void this.tick(); else this.rerun = true; };
+
+  /** The watcher's fleet frame, sent when its tick's listing changed (D-8611: this replaced a look at the listing every
+   *  2 s). It re-resolves only when the row's status or `statusUpdatedAt` is not what this stream last measured; a
+   *  frame without the row does nothing, because the row leaving sends `row:<id>` and the backstop covers the rest. */
+  private readonly onFleet = (sessions: FleetSession[]): void => {
+    const row = sessions.find((x) => x.id === this.id);
+    if (row !== undefined && (row.status !== this.status || row.statusUpdatedAt !== this.statusAt)) this.onRowChanged();
+  };
+
   async start(): Promise<void> {
+    // Before the first resolve, so a change during it is kept (`rerun`) and run once the stream is armed.
+    this.bus.on(`row:${this.id}`, this.onRowChanged);
+    this.bus.on('fleet', this.onFleet);
     this.bus.on('notice', this.onNotice);
     this.bus.on(`session:${this.id}`, this.onSessionMsg);
+    this.bus.on(`answered:${this.id}`, this.onAnswered);
+    // Before the first await: it beats while a resolve or a tick is held, whatever the resolve's outcome.
+    this.beat = setInterval(() => { this.send({ type: 'beat', at: Date.now() }); }, BEAT_MS);
+    this.beat.unref();
     const r = await this.resolve();
     if (this.stopped) return;
     if (r.ok) {
       this.uuid = r.data.uuid;
       this.status = r.data.status;
+      this.statusAt = r.data.statusUpdatedAt;
       this.tailed = r.data.resolution;
       const echoed = this.since?.file ?? null;
       if (this.since && this.since.uuid === r.data.uuid
@@ -209,7 +353,7 @@ export class SessionStream {
       // for the life of the tab: `pwa/src/stores/session.ts`'s
       // `getSessionStore`, written by this frame and nothing else).
       //
-      // MEASURED 2026-09-10 on `expoAI-assistant-warm-cove`: a lane swap left
+      // MEASURED 2026-09-10 on `project-h-warm-cove`: a lane swap left
       // the pane gone for 4.8s, the client watching it was told `dead`, and
       // the socket that would have corrected it on its next poll was replaced
       // rather than kept (the screen reopened, the phone woke, the agent
@@ -243,109 +387,56 @@ export class SessionStream {
       this.send({ type: 'notice', message: `unknown session ${this.id}` });
     }
     if (this.stopped) return;
-    await this.checkDialog(r.ok ? r.data.file : null); // deliver an already-pending dialog on connect
-    if (this.stopped) return;
-    if (r.ok) await this.checkTasks(r.data.cfgDir, r.data.uuid); // and the plan as it stands
-    if (this.stopped) return;
-    if (r.ok) await this.checkHookAsk(r.data.uuid); // and any hook ask already waiting
-    if (this.stopped) return;
-    if (r.ok) await this.checkMail(); // and any outstanding mail addressed to this session
+    // The feed's opening reading is what a connecting client is owed whatever the schedule: an already-pending dialog,
+    // the plan as it stands, any hook ask already waiting, the workflows running now, and any outstanding mail
+    // addressed to this session, in that order (`onReading`).
+    this.feed = feedFor(this.deps, this.bus, this.id);
+    if (r.ok) this.resolvedFor = { file: r.data.file, proc: r.data.proc };
+    await this.feed.join(this, r.ok ? factsOf(r.data) : null);
     if (this.stopped) return;
     // `absent` is terminal for this connection: a proven-gone session id
-    // does not un-absent itself by polling, and installing the retry timer
-    // anyway would poll a dead end for the socket's whole lifetime. `ok` and
-    // `unmeasurable` both keep polling — for `unmeasurable` that IS the
+    // does not un-absent itself by re-resolving, and arming the triggers
+    // anyway would re-resolve a dead end for the socket's whole lifetime. `ok` and
+    // `unmeasurable` both stay armed — for `unmeasurable` that IS the
     // point of degrade-and-heal, and it is what lets `tick()`'s own
     // appeared-branch heal a stream that started life unable to prove the
     // session existed at all (`this.uuid` is still null on that first tick).
     if (r.ok || r.reason === 'unmeasurable') {
-      this.poll = setInterval(() => { void this.tick(); }, POLL_MS);
-      this.poll.unref();
+      this.backstop = setInterval(() => { void this.tick(); }, STREAM_BACKSTOP_MS).unref();
+      if (this.rerun) { this.rerun = false; void this.tick(); }
+    } else {
+      this.bus.off(`row:${this.id}`, this.onRowChanged);   // a proven-gone session installs no trigger
+      this.bus.off('fleet', this.onFleet);
+      this.feed.leave(this);          // nothing will ever be asked of it again
     }
   }
 
-  /** Capture the pane; send `dialog` when a menu appears/changes or first comes
-   *  back enriched, and `dialog_cleared` when it vanishes — tracked per stream
-   *  so a client that joins after the menu appeared still receives it.
-   *
-   *  `file` is the transcript being tailed, and WHICH file matters: after an
-   *  account swap the same `<uuid>.jsonl` exists under several wrapper config
-   *  dirs, and the ask has to come from the one this session is writing.
-   *  null (unresolvable session) → the menu still ships, unenriched. */
-  private async checkDialog(file: string | null): Promise<void> {
+  /** One reading from the session's feed (ARCH-52): the four things this stream used to read itself every tick, in the
+   *  order it read them, with the workflows between the hook ask and the mail as they always were. Each applies its
+   *  reading through this stream's own change gate, so a client is told exactly what it has not seen. */
+  async onReading(reading: FeedReading): Promise<void> {
+    if (this.stopped || !this.readable) return;
+    this.applyDialog(reading);
+    if (reading.tasks !== null) this.applyTasks(reading.tasks);
+    if (reading.hook !== null) this.applyHook(reading.hook);
     if (this.stopped) return;
-    const pane = await this.deps.tmux.capture(this.id);
-    // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the
-    // WHOLE pane, and an RC-off pane renders the busy marker WHILE a dialog is
-    // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
-    // 'busy' here and this call site would suppress the parse forever. hasMenu
-    // is deliberately independent of the busy check for exactly that reason
-    // (pane/dialog.ts:42-54); it's the same idiom send.ts:320 uses to decide
-    // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
-    // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
-    // captureAnsi().
-    let dialog = pane !== null && hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
-    // Read the transcript only while this menu is still unexplained. Once its ask
-    // is latched, re-reading costs a 256 KB tail every 2 s and can buy nothing:
-    // nextDialogFrame would suppress the frame anyway. Menus that never latch are
-    // held off by claimAskRead instead — they are the majority.
-    const latched = dialog !== null && this.seenDialog.id === dialog.id && this.seenDialog.ask !== null;
-    if (dialog?.parsed && file !== null && !latched) {
-      const st = await this.deps.io.stat(file);
-      if (this.stopped) return;
-      if (this.claimAskRead(file, dialog.id, st)) {
-        const questions = await readPendingAsk(this.deps.io, file);
-        if (this.stopped) return;
-        const ask = questions === null ? null : alignAsk(dialog.options, questions);
-        // Enrichment rides ALONGSIDE the scraped options — it never rewrites them.
-        // `id` stays a hash of the pane alone (answerDialog re-parses the pane to
-        // check staleness) and the keystrokes an answer sends stay positional.
-        if (ask !== null) dialog = { ...dialog, ask };
-      }
-    }
-    // The probe is scoped to the PARSED menu on screen, so it dies with it. A
-    // capture can miss a menu that is still there: tmux returns null, one stray
-    // 'esc to interrupt' anywhere in the pane flips it to busy, or the grab lands
-    // mid-redraw and comes back `unparsed` (a menu footer with its option rows
-    // half-erased — dialog.ts:94). That last one is still a dialog, so testing
-    // for null alone would keep the probe alive past the menu it was taken for.
-    // On the way back the ask is unlatched but the transcript is untouched — the
-    // agent is blocked awaiting the answer — so a surviving probe would decline
-    // the read the reappearance needs and the menu would come back bare and stay
-    // bare. Forgetting it costs nothing: the read above is gated on
-    // `dialog?.parsed`, so an unparsed menu never spends one.
-    if (dialog === null || !dialog.parsed) this.askProbe = null;
-    const { seen, msg } = nextDialogFrame(this.seenDialog, dialog);
-    this.seenDialog = seen;
-    if (msg) this.send(msg);
+    const at = this.resolvedFor;
+    if (reading.tasks !== null && at !== null) await this.checkWorkflows(at.file, at.proc);
+    if (this.stopped) return;
+    if (reading.mail !== null) this.applyMail(reading.mail);
   }
 
-  /**
-   * May we spend a transcript tail read on this menu? Records the state we read
-   * at, so the next poll can tell whether anything could have changed.
-   *
-   * The ask latch above only closes on SUCCESS, and most menus never succeed:
-   * permission prompts, /model, trust-folder carry no AskUserQuestion, and they
-   * sit on screen until a human answers. Reading is the expensive half —
-   * `readPendingAsk` pulls up to 256 KB, over the agent RPC in remote-fleet mode
-   * (see transcript/tail.ts:6-11 for what reading whole transcripts once cost
-   * us) — while a stat is cheap and settles it: byte-identical bytes cannot have
-   * started explaining a menu they did not explain last time. A file that grows
-   * (the tool_use line finally flushed) or a different menu re-opens the read.
-   *
-   * The cost: a read that failed for an IO reason rather than an absent ask is
-   * indistinguishable here, so that menu stays unenriched until the transcript
-   * next changes. It still ships, and it is still answerable from the raw sheet.
-   */
-  private claimAskRead(file: string, id: string, st: { size: number; mtimeMs: number } | null): boolean {
-    if (st === null) {              // no transcript yet — nothing to read, nothing to remember
-      this.askProbe = null;
-      return false;
-    }
-    const p = this.askProbe;
-    if (p !== null && p.file === file && p.id === id && p.size === st.size && p.mtimeMs === st.mtimeMs) return false;
-    this.askProbe = { file, id, size: st.size, mtimeMs: st.mtimeMs };
-    return true;
+  /** Send `dialog` when a menu appears/changes or first comes back enriched, and `dialog_cleared` when it vanishes —
+   *  tracked per stream so a client that joins after the menu appeared still receives it. The feed took the reading
+   *  (the pane, and the transcript's ask while the menu is unexplained); a failed capture is no reading and the menu
+   *  the client holds stays (`held`, decision `ask-failed-capture-holds`), and one an answer overtook is dropped
+   *  (decision `ask-stale-poll-dropped`). */
+  private applyDialog(reading: FeedReading): void {
+    const d = reading.dialog;
+    if (d.kind === 'dropped' || reading.gen !== this.feed?.answeredGen) return;
+    this.captureHeld = d.kind === 'held';
+    if (d.kind === 'held') return;
+    this.frame(d.dialog, 'poll', reading.startedAt);
   }
 
   /** The io-bound half of §5.3's rule: the ONE fact `shouldRepoint` cannot
@@ -369,12 +460,51 @@ export class SessionStream {
    *  different path once the tailed file is gone" is that pin; it must fail
    *  if this line is ever weakened again. It cannot simply be deleted in
    *  favour of always calling `shouldRepoint`: skipping the stat on the
-   *  same-rung/same-path case is what keeps a healthy tick free. */
+   *  same-rung/same-path case is what keeps a healthy tick free.
+   *
+   *  "GONE" MEANS A PROVEN ENOENT, NOTHING LESS (D-4946). The folded `stat`
+   *  answered one `null` for "absent" and for "this stat failed", and
+   *  `shouldRepoint`'s last clause re-points away from a file that is gone —
+   *  so one unreadable stat of a successor the stream was already reading
+   *  (one agent RPC timing out, in remote mode) re-pointed it onto the best
+   *  file the re-ladder had left: the frozen pre-fork transcript, backwards.
+   *  An unmeasured file is still there as far as anyone knows; the next tick
+   *  asks again.
+   *
+   *  The fork clauses' two facts (`RepointFacts`) are measured here too, each
+   *  ONLY when its clause is the one deciding — a predecessor answer that is
+   *  clean (one read of its tail, once per answer: `notResumed`), or the
+   *  successor the tailed file declined (one stat) — so neither costs a
+   *  healthy tick anything. */
   private async repointNeeded(next: TranscriptResolution): Promise<boolean> {
     const cur = this.tailed;
     if (cur === null) return false;
     if (cur.path === next.path && rungRank(cur) === rungRank(next)) return false;  // no stat
-    return shouldRepoint(cur, next, (await this.deps.io.stat(cur.path)) !== null);
+    const st = await this.deps.io.statMeasured(cur.path);
+    return shouldRepoint(cur, next, st.ok || st.reason !== 'absent', await this.repointFacts(cur, next));
+  }
+
+  /** `shouldRepoint`'s io-bound facts, for exactly the shapes its fork
+   *  clauses decide (see `RepointFacts`). */
+  private async repointFacts(cur: TranscriptResolution, next: TranscriptResolution): Promise<RepointFacts> {
+    if (cur.kind !== 'found' || next.kind !== 'found' || cur.uuid === next.uuid) return {};
+    if (cur.followedFrom?.includes(next.uuid) === true) {
+      // An answer that could not read the predecessor, or that read its
+      // marker and declined, is not one that says it was resumed.
+      if (next.tailUnmeasured === true || next.declinedTo !== undefined) return {};
+      if (this.notResumed.has(next)) return {};
+      const v = await resumedPastMarker(this.deps.io, next.path, next.uuid);
+      if (v === 'not-shown') this.notResumed.add(next);
+      return { predecessorResumed: v === 'resumed' };
+    }
+    if (cur.declinedTo === next.uuid) return { successorHasContent: await this.hasContent(next.path) };
+    return {};
+  }
+
+  /** A MEASURED non-empty file. Unreadable is not "has content". */
+  private async hasContent(file: string): Promise<boolean> {
+    const st = await this.deps.io.statMeasured(file);
+    return st.ok && st.size > 0;
   }
 
   /** Read the session's task list and send it when it differs from what this
@@ -391,21 +521,50 @@ export class SessionStream {
    *  status and no activeForm, so there is no row to send and no honest count
    *  to fold into a summary built out of rows. The surface that DOES show a
    *  denominator is the fleet card's `done/total`, and that one comes from
-   *  `taskProgress` in `watch.ts`, where the count lands. The frame stays
-   *  exactly as wide as it was: additive-only means a new field is allowed,
-   *  not that an unrendered one earns its place. */
-  private async checkTasks(cfgDir: string, uuid: string): Promise<void> {
-    if (this.stopped) return;
-    const { tasks } = await readTasks(this.deps.io, cfgDir, uuid);
-    if (this.stopped) return;
-    const json = JSON.stringify(tasks);
+   *  `taskProgress` in `watch.ts`, where the count lands. Additive-only means
+   *  a new field is allowed, not that an unrendered one earns its place: the
+   *  one field added since, `touchedAt` (D-5372), is rendered — it is how the
+   *  strip tells a live plan from one left open days ago. */
+  private applyTasks(read: FeedTasks): void {
+    const { tasks, touchedAt } = read;
+    // D-5372: `touchedAt` rides the frame (optional) and joins the dedupe key,
+    // so a rewrite that leaves the rows equal still refreshes the strip's age.
+    const json = JSON.stringify([tasks, touchedAt ?? null]);
     if (json === this.lastTasksJson) return;
     if (this.lastTasksJson === null && tasks.length === 0) {
       this.lastTasksJson = json;
       return;
     }
     this.lastTasksJson = json;
-    this.send({ type: 'tasks', tasks });
+    this.send({ type: 'tasks', tasks, ...(typeof touchedAt === 'number' ? { touchedAt } : {}) });
+  }
+
+  /** D-5560/D-5561: read the session's workflows (`workflows/read.ts`) and
+   *  send them when they differ from what this client last saw. What a read
+   *  becomes is `workflowsFrame`'s decision (model.ts) — absent, unreadable and
+   *  read are three frames, never folded; this method only carries it.
+   *  Read-only: nothing here starts, stops or changes a workflow. */
+  private async checkWorkflows(file: string, proc: Proc): Promise<void> {
+    if (this.stopped) return;
+    const dir = sessionDirOf(file);
+    if (this.workflows?.sessionDir !== dir) {
+      this.workflows = new SessionWorkflows(this.deps.io, dir);
+      this.shownWorkflows = { type: 'workflows', workflows: [] };
+    }
+    const read = await this.workflows.read(proc, Date.now());
+    if (this.stopped) return;
+    const decided = workflowsFrame(read, this.hookWorkflowBackground, this.shownWorkflows.workflows);
+    const frame: SessionStreamMsg & { type: 'workflows' } = decided.unreadable
+      ? { type: 'workflows', workflows: decided.workflows, unreadable: true }
+      : { type: 'workflows', workflows: decided.workflows };
+    const json = JSON.stringify(frame);
+    if (json === this.lastWorkflowsJson) return;
+    const neverHad = read.kind === 'absent' && !decided.unreadable;
+    this.lastWorkflowsJson = json;
+    if (neverHad && this.sentWorkflows === false) return;
+    this.sentWorkflows = true;
+    if (frame.unreadable !== true) this.shownWorkflows = frame;
+    this.send(frame);
   }
 
   /**
@@ -451,59 +610,89 @@ export class SessionStream {
    * (store.ts) — the most this call could ever widen to, so this is "as
    * wide as the store allows," not an arbitrary bigger number.
    */
-  private async checkMail(): Promise<void> {
-    if (this.stopped || !this.deps.coord) return;
-    const outstanding = this.deps.coord.outstandingMailFor(this.id, 500);
+  private applyMail(outstanding: FeedMail): void {
     const json = JSON.stringify(outstanding);
     if (json === this.lastMailJson) return;
     this.lastMailJson = json;
     this.send({ type: 'mail', mail: outstanding });
   }
 
-  /** Read this session's hookstate and send `ask` / `ask_cleared` when the
-   *  hook-sourced envelope appears, changes (JSON-compare), or goes away —
-   *  null, stale, or the file itself missing all read the same here: nothing
-   *  fresh to report. `readHookState` already gates freshness and identity
-   *  (uuid match against the registry), so a null return covers all three
-   *  uniformly — this frame just tracks the transition, not the reason. */
-  private async checkHookAsk(uuid: string): Promise<void> {
-    if (this.stopped) return;
-    const hs = await readHookState(this.deps.io, this.deps.cfg.registryDir, this.id, uuid, Date.now());
-    if (this.stopped) return;
-    const ask = hs?.ask ?? null;
+  /** Read this session's hookstate once and send `ask` / `ask_cleared` when the hook-sourced envelope appears,
+   *  changes (JSON-compare), or goes away. The envelope is the fresh, current-session one (`foldHookStateRead`: a
+   *  missing, foreign or malformed file reads as none), or, past the 30-minute cut, the aged one while this tick's
+   *  menu (`seenDialog`, set by the feed's pane reading just before) is that envelope's call (`nextAgedKeep`, D-6324). */
+  private applyHook(raw: HookStateRawRead): void {
+    const read = foldHookStateRead(raw, Date.now());
+    const hs = read.ok ? read.state : null;
+    this.hookWorkflowBackground = hs?.background?.kinds.includes('workflow') === true;
+    this.agedKeep = nextAgedKeep(this.agedKeep, raw, this.seenDialog, !this.captureHeld);
+    const ask = hs?.ask ?? (raw.ok && this.agedKeep.kept ? raw.state.ask : null);
     const json = ask === null ? null : JSON.stringify(ask);
     if (json === this.lastAskJson) return;
     this.lastAskJson = json;
-    this.send(ask === null ? { type: 'ask_cleared' } : { type: 'ask', ask, key: askKey(ask) });
+    // D-5298 (spec §6.7): an approval's summary leaves redacted (`wireHookAsk`); the key is the envelope's own.
+    this.sentAsk = ask === null ? null : wireHookAsk(ask);
+    // D-7211: the clear goes through `paired` too, so it carries the transcript copy's pairing when the last-sent dialog
+    // has a copy, and is today's bare frame otherwise.
+    this.send(this.paired(this.sentAsk === null ? { type: 'ask_cleared' } : { type: 'ask', ask: this.sentAsk, key: askKey(ask) }));
+  }
+
+  /** D-7031: `msg` with the pairing of the envelope and the dialog this stream last sent (`pane/askPairing.ts`), as an
+   *  optional TOP-LEVEL `pairing` field: an `ask` frame against the last dialog, a `dialog` frame against the last
+   *  envelope, an `ask_cleared` frame (no envelope) against the last dialog (D-7211). The rule is `framePairing`'s
+   *  (D-7206, D-7213): the hook's usable question envelope, else the dialog's transcript copy (`from: 'transcript'`),
+   *  else none. `msg` itself, key for key, when it pairs nothing (no dialog, an approval, no source), so such a frame
+   *  is byte for byte what it was; `dialog_cleared` never pairs. It rides a frame already being sent and never causes
+   *  one. */
+  private paired(msg: SessionStreamMsg): SessionStreamMsg {
+    if (msg.type !== 'ask' && msg.type !== 'dialog' && msg.type !== 'ask_cleared') return msg;
+    const ask = msg.type === 'ask' ? msg.ask : msg.type === 'ask_cleared' ? null : this.sentAsk;
+    const dialog = msg.type === 'dialog' ? msg.dialog : this.sentDialog;
+    const pairing = framePairing(ask, dialog);
+    return pairing === null ? msg : { ...msg, pairing };
   }
 
   stop(): void {
     this.stopped = true;
     this.bus.off('notice', this.onNotice);
     this.bus.off(`session:${this.id}`, this.onSessionMsg);
-    if (this.poll) clearInterval(this.poll);
-    this.poll = null;
+    this.bus.off(`answered:${this.id}`, this.onAnswered);
+    this.bus.off(`row:${this.id}`, this.onRowChanged);
+    this.bus.off('fleet', this.onFleet);
+    if (this.backstop) clearInterval(this.backstop);
+    this.backstop = null;
+    if (this.beat) clearInterval(this.beat);
+    this.beat = null;
+    this.feed?.leave(this);
+    this.feed = null;
     this.tailer?.stop();
     this.tailer = null;
   }
 
   /** Registry record + live state → current uuid, transcript file, and status. */
   private async resolve(): Promise<Resolution> {
-    // C0.3: one session's own row, not the whole registry — this stream only
-    // ever asks about `this.id`, every 2 s, for as long as the socket is open.
-    const read = await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
-    if (!read.found) {
-      // `unlistable` is the SAME whole-fleet collapse `RegistryRead`'s own
-      // `listed: false` types elsewhere in this build — it proves nothing
-      // about whether THIS id exists, only that this read could not say.
-      // Only a proven `absent` earns the terminal "unknown session".
-      return read.reason === 'unlistable' ? { ok: false, reason: 'unmeasurable' } : { ok: false, reason: 'absent' };
+    // C0.3: one session's own row, not the whole registry — this stream only ever asks about `this.id`: on a
+    // row event, a status change in the watcher's fleet frame or the backstop.
+    const served = servedFromWatcher(this.rows.currentRowFacts(this.id), Date.now());
+    const facts = served.serve ? served.value : null;
+    const read = facts ? { kind: 'found' as const, record: facts.record } : await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
+    if (read.kind !== 'found') {
+      // The registry ladder is `readSession`'s row arm (ARCH-48, #783); this door keeps only its terminal answers.
+      // `unlistable` is the SAME whole-fleet collapse `RegistryRead`'s own `listed: false` types elsewhere in this
+      // build: it proves nothing about whether THIS id exists, only that this read could not say, so it heals by
+      // polling. Every other arm is terminal "unknown session": a proven absence, an id `isRegistryId` refuses
+      // (spec §2.3, which never heals by polling) and `unmeasurable`, a listed row `buildRecord` could not assemble,
+      // which answered `absent` before `SingleRead` split it out (ARCH-47) and keeps that answer here: the unassembled
+      // row is NOT given the terminal-absent-vs-doubt split `measureClaimant` makes, because this door's consumer
+      // is a socket whose only choices are "keep polling" and "close".
+      const row = readSession({ row: read.kind, pane: null, lifecycle: null, hibernatedAt: null, turn: null });
+      return { ok: false, reason: row.why === 'rowUnlistable' ? 'unmeasurable' : 'absent' };
     }
     // Display/connectivity — DEGRADE-AND-HEAL, not a refusal: a degraded
     // `uuid`/`workdir` would resolve `transcriptPath` against `''`, a path
     // that names nothing real, rather than this session's actual transcript.
     // `measuredIdentity` — the one door to the triple — is null the instant
-    // ANY of the three is unmeasured; this poll re-runs every 2 s, so a
+    // ANY of the three is unmeasured; this resolve re-runs on a row event, a status change in the fleet frame or the 30 s backstop, so a
     // transient field read heals itself on the very next tick with no
     // special-casing beyond this early return. HONEST LIMIT: there is no
     // half-measure here — when `uuid` itself is unmeasured there is no
@@ -520,7 +709,7 @@ export class SessionStream {
       // identity triple measured CLEAN, `configDirFor` (server/src/config.ts)
       // just does not recognise this wrapper — a typo'd registry write, or a
       // wrapper this box's roster (`~/.ccrc/accounts.json`) has not been taught
-      // about yet. Retrying this same poll can never heal it without a fixed
+      // about yet. Re-running this same resolve can never heal it without a fixed
       // roster and a restart (`loadConfig` reads it once, at boot), so
       // this is `absent`, not `unmeasurable`, even though identity itself was
       // fully measured — a session the registry knows, running under a
@@ -535,15 +724,27 @@ export class SessionStream {
       return { ok: false, reason: 'absent' };
     }
     let cwd = identity.workdir;
-    let status: SessionStatus = 'dead';
+    // The turn fact `readSession` reads at the end: null while the pane is not live (that reads `dead` below).
+    let turn: 'busy' | 'idle' | null = null;
     let statusUpdatedAt: number | null = null;
+    // D-5561: one `has-session`, as before — its verdict kept, because the
+    // workflow reader must not read a substrate fault (`unknown`) as a process
+    // that died mid-run. `status` folds it exactly as `hasSession` did.
+    const verdict = (facts ? facts.verdict : await this.deps.tmux.sessionVerdict(this.id)).verdict;
+    let proc: Proc = verdict === 'gone' ? { kind: 'gone' } : { kind: 'unmeasured' };
     // D-309 (was D-B8-13): `unknown` deliberately reads as not-alive here, so the chat
     // header shows 'dead' during a substrate fault — display-only, and the
     // same deferred product decision as assembleFleet's (see fleet.ts).
-    if (await this.deps.tmux.hasSession(this.id)) {
-      status = 'idle';
-      const pid = await this.deps.tmux.panePid(this.id);
-      if (pid) {
+    if (verdict === 'live') {
+      turn = 'idle';
+      const pid = facts ? facts.pid : await this.deps.tmux.panePid(this.id);
+      if (pid === null) {
+        // D-5275: mirror `assembleFleet` (D-5234). The pane is alive and its
+        // pid read FAILED, which measured nothing about the session; the card
+        // paints that `busy`, so the header does too — the D-115 mirror rule
+        // below. `statusUpdatedAt` stays null and `cwd` at the registry's.
+        turn = 'busy';
+      } else {
         // D-115, the chat half of the same fix `assembleFleet` takes (see its
         // block in fleet.ts for the full argument). The folded read answered
         // ONE null for four conditions and this block spent it as "leave
@@ -551,29 +752,34 @@ export class SessionStream {
         // open transcript said the session was at rest when the truth was
         // that its `<pid>.json` could not be read at all.
         //
-        // MIRRORED RATHER THAN INVENTED HERE: these two surfaces are two
-        // renderings of one measurement, and a fleet card reading `busy`
-        // beside a chat header reading `idle` for the same session in the
-        // same second is worse than either answer on its own — the operator
-        // has no way to tell which one to believe.
+        // The two surfaces are two renderings of one measurement: a fleet card reading `busy` beside a chat header
+        // reading `idle` for the same session in the same second leaves the operator no way to tell which to believe.
+        // Each surface pins its half in its own tests (`fleet.test.ts`, `sessionws.test.ts`); the card/header pair is held to one
+        // word, row by row, in `session-ladders-characterization.test.ts`, and the liveness half is the truth table.
         const read = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
         if (read.ok) {
           if (read.state.cwd) cwd = read.state.cwd;
-          status = liveSessionStatus(read.state.status);
+          turn = liveSessionStatus(read.state.status) === 'idle' ? 'idle' : 'busy';
           statusUpdatedAt = read.state.statusUpdatedAt;
+          proc = { kind: 'live', startedAt: read.state.startedAt };
         } else if (read.reason === 'unmeasured') {
           // `status` ALONE moves. `cwd` stays at the registry's `workdir` and
           // `statusUpdatedAt` stays null: an unmeasured read has no fields to
           // report, and `statusUpdatedAt` is what the header renders as the
           // `· 1m ago` beside the word — a fabricated one would put a fresh
-          // timestamp under a status nobody measured. `no-state` (absent,
-          // half-written, naming no session) still leaves this at `idle`,
+          // timestamp under a status nobody measured. `no-state` (absent, or a
+          // well-formed record naming no session — a torn body is unmeasured
+          // since D-5234) still leaves this at `idle`,
           // which is the ordinary shape for a pane that has published
           // nothing yet.
-          status = 'busy';
+          turn = 'busy';
         }
       }
     }
+    // The header's word is the reading's turn: a pane that is not live has none, and reads `dead` (display-only, D-309).
+    const reading = readSession({ row: 'present', pane: verdict, lifecycle: null, hibernatedAt: null, turn });
+    const word = reading.turn.word;
+    const status: SessionStatus = word === 'busy' || word === 'idle' ? word : 'dead';
     const resolution = await this.transcripts.resolve({
       configDir: cfgDir,
       dir: cwd,
@@ -585,7 +791,7 @@ export class SessionStream {
     });
     return {
       ok: true,
-      data: { uuid: identity.uuid, file: resolution.path, resolution, cfgDir, status, statusUpdatedAt },
+      data: { uuid: identity.uuid, file: resolution.path, resolution, cfgDir, status, statusUpdatedAt, proc },
     };
   }
 
@@ -602,6 +808,11 @@ export class SessionStream {
     const { events, offset, missing, measured } = await readBacklog(this.deps.io, r.file, BACKLOG_N);
     if (this.stopped) return;
     this.tailed = r.resolution;
+    // D-5560: the client drops its workflow rows on every backlog (a backlog is
+    // where the session dir can change under it), so the next workflows read
+    // is a FIRST read again and is stated — see `lastWorkflowsJson`.
+    this.lastWorkflowsJson = undefined;
+    this.sentWorkflows = false;
     this.send({
       type: 'backlog', uuid: r.uuid, events, offset, file: r.file, missing,
       fileMeasured: measured,
@@ -626,7 +837,7 @@ export class SessionStream {
   /** The tailed file shrank under us: treat as rotation — re-resolve, resend backlog.
    *  An unmeasurable or absent re-resolve here (rare — the file just rotated,
    *  so the registry read a moment ago plainly succeeded) leaves the OLD
-   *  tailer alone rather than tearing it down on a guess; the next 2 s tick
+   *  tailer alone rather than tearing it down on a guess; the next row event, fleet frame or backstop
    *  retries. */
   private async onFileShrunk(): Promise<void> {
     if (this.stopped) return;
@@ -637,9 +848,64 @@ export class SessionStream {
     await this.sendBacklogAndTail(r.data);
   }
 
-  /** 2 s poll: uuid change → rotated + fresh backlog; status change → status msg. */
+  /** Does the tailed file's own `continued-in` chain lead to `uuid`? The
+   *  witness `tick` asks when the registry moves and `registryCaughtUp` has
+   *  no held fact for it (D-4947). A tailed fallback has no file to ask. */
+  private async tailedContinuesInto(uuid: string, next: TranscriptResolution): Promise<boolean> {
+    const cur = this.tailed;
+    if (cur === null || cur.kind !== 'found') return false;
+    return continuesInto(this.deps.io, cur, uuid, next.kind === 'found' ? [path.dirname(next.path)] : []);
+  }
+
+  /**
+   * A registry move `tick` already called a continuation: keep the open tailer
+   * rather than open `next`? Yes, while the tailed file still exists (only a
+   * proven ENOENT is gone, D-4946), when `next` is:
+   *
+   *   - a link BEHIND the tailed file — a uuid it was followed FROM (SV-1).
+   *     `ccd` advances one hop per quiescence, so a stream that followed
+   *     A->B->C sees the registry land on B, and a walk from B that cannot
+   *     read B's tail answers B. That is `shouldRepoint`'s backward refusal,
+   *     which this branch skipped. A B that was really resumed past its
+   *     marker is re-pointed to on the next tick, by that same rule.
+   *   - a `fallback`, or a file with NO CONTENT — empty, or not measured
+   *     (SV-2). `ccd`'s resume path could name a successor a live background
+   *     job holds but has not written (D-4944); the walk itself never trades
+   *     a file with content for that, and a backlog of it replaced the whole
+   *     conversation with an empty chat.
+   *
+   * When the registry's uuid is DOWNSTREAM of the tailed file (the move was
+   * explained by its decline or its marker chain, not by a link it was
+   * followed through), the kept answer records it as `declinedTo`: that
+   * successor's later answer comes off its own ladder with no `followedFrom`,
+   * and the decline is what lets `shouldRepoint` move forward to it once it
+   * has content. The stream's frames keep the uuid the tailer was opened
+   * under until the next backlog; a reconnect in that window is answered
+   * with a backlog, never a stitched offset.
+   *
+   * Paid only on a registry move this stream already calls a continuation:
+   * at most one stat of `next` and one of the tailed file. A keep onto a link
+   * BEHIND has a tail too: the memo serves that link's flagged answer for its
+   * back-off, and `repointNeeded` stats the tailed file on each of those
+   * ticks — one `statMeasured` per tick, for at most `RESOLVER_BACKOFF_MS`
+   * (measured; the base sent the link's backlog instead and tailed it).
+   */
+  private async keepsTailer(registryUuid: string, next: TranscriptResolution): Promise<boolean> {
+    const cur = this.tailed;
+    if (cur === null || cur.kind !== 'found' || cur.path === next.path) return false;
+    const behind = next.kind === 'found' && next.uuid !== cur.uuid && cur.followedFrom?.includes(next.uuid) === true;
+    if (!behind && next.kind === 'found' && await this.hasContent(next.path)) return false;
+    const st = await this.deps.io.statMeasured(cur.path);
+    if (!st.ok && st.reason === 'absent') return false;
+    const downstream = registryUuid !== cur.uuid && cur.followedFrom?.includes(registryUuid) !== true;
+    if (downstream) this.tailed = { ...cur, declinedTo: registryUuid };
+    return true;
+  }
+
+  /** The re-resolve (run on a row event, a status change in the fleet frame, or the backstop): uuid change → rotated + fresh backlog; status change → status msg. */
   private async tick(): Promise<void> {
-    if (this.stopped || this.ticking) return;
+    if (this.stopped) return;
+    if (this.ticking) return;   // no overlap: the backstop that finds a tick in flight drops, as before (F2)
     this.ticking = true;
     try {
       const r = await this.resolve();
@@ -652,18 +918,86 @@ export class SessionStream {
       // `resolve()` was always a silent early return here) — a session that
       // was streaming and got reaped keeps its last frames on screen rather
       // than being yanked mid-read, and one that never resolved at all stays
-      // quiet and keeps retrying via this same poll. HONEST LIMIT: neither
+      // quiet and keeps retrying on the next trigger. HONEST LIMIT: neither
       // branch reaches for `this.uuid` to rebuild a transcript path — a
       // remembered uuid paired with whatever this pass DID manage to read is
       // not proven to be the same incarnation, and is a guess wearing a real
       // address (see `resolve()`'s own comment).
-      if (this.stopped || !r.ok) return;
+      if (this.stopped) return;
+      this.readable = r.ok;
+      if (!r.ok) return;
       const data = r.data;
+      this.statusAt = data.statusUpdatedAt;
+      this.resolvedFor = { file: data.file, proc: data.proc };
+      this.feed?.setFacts(this, factsOf(data));
       if (data.uuid !== this.uuid) {
         const appeared = this.uuid === null; // record was unknown/unmeasurable at start
+        // THE REGISTRY CATCHING UP IS NOT A RESET (whole-branch review, F2).
+        // This branch fires on the REGISTRY uuid, and the registry is not
+        // where a fork is first seen: `resolveTranscript` followed the
+        // `continued-in` pointer the moment the successor had a byte in it,
+        // so this stream may already be tailing that successor's file while
+        // `$REG/<id>.uuid` still names the transcript it was forked from
+        // (`resolveTranscript`'s own docstring states that asymmetry). `ccd`
+        // then walks the same pointer at ONE HOP PER QUIESCENCE — so a
+        // two-hop chain A->B->C moves the registry twice over ~20 seconds,
+        // and each move lands here.
+        //
+        // Without this test each of those moves sends `rotated`, and
+        // `rotated`'s only PWA-side effect beyond uuid/offset bookkeeping is
+        // minting a "Session context reset" divider that the following
+        // backlog deliberately keeps on top (pwa/src/stores/session.ts) — so
+        // the operator's just-recovered conversation collects one to three
+        // false reset dividers, seconds after the follow correctly healed it.
+        // The spec calls that the most alarming false sentence this build
+        // could print, and the re-point branch below already refuses it for
+        // the same reason.
+        //
+        // The discriminator is the TRANSCRIPT, not the uuid: when the newly
+        // resolved path is the one already being tailed, nothing moved and
+        // nothing was reset — the registry merely agreed with a supersession
+        // this stream had already followed. Send the backlog alone, exactly
+        // as the re-point branch does; it carries `uuid`, `file` and `offset`
+        // and is self-describing. A registry uuid that moves to a DIFFERENT
+        // file is still a real rotation (a `/clear`, a compaction, a swap
+        // onto a fresh uuid) and still says so.
+        //
+        // AND THE TRANSCRIPT IS NOT THE ONLY WITNESS (D-4947). The path test
+        // only sees the order where this stream followed FIRST. Measured
+        // (#189 review, S2): when the successor is written a few seconds after
+        // the marker, this stream's re-ladder declines it and waits out its
+        // 30 s back-off, `ccd` reads the file meanwhile and moves the
+        // registry FIRST — and the path test called that a rotation. So did a
+        // chain longer than `MAX_CONTINUATION_HOPS`, where this stream stops
+        // hops AHEAD of the registry and the registry's own walk lands one
+        // file further. `registryCaughtUp` asks the answer being tailed
+        // whether the registry's new uuid is on its own chain.
+        //
+        // AND WHEN NOTHING HELD EXPLAINS THE MOVE, THE TAILED FILE IS ASKED
+        // (#189 fix-forward, probes P2early/P2twohop). The registry can read a
+        // marker before this stream does — a delayed tick (a loaded box,
+        // remote mode) lets `ccd` move first, so `tailed` predates the marker
+        // and names no decline — or move twice in one gap, past the decline
+        // it does name. The marker on the tailed file, followed within the
+        // hop bound, is the witness both cases leave; `continuesInto` reads
+        // it. Paid only on a move no held fact explains, which is otherwise a
+        // real rotation: one stat and one tail read of a file with no marker.
+        //
+        // AND A CONTINUATION NEVER TRADES THE FILE ON SCREEN FOR LESS (#189
+        // re-review, SV-1/SV-2). Catching up is not the same as having
+        // something better to show, and this branch used to open whatever the
+        // registry's new uuid resolved to the moment the move was called a
+        // continuation — a link BEHIND the followed file whose tail read
+        // failed this once, or a successor with nothing written yet.
+        // `keepsTailer` decides, by the re-point rule's own terms.
+        const caughtUp = registryCaughtUp(this.tailed, data.uuid, data.resolution)
+          || (!appeared && await this.tailedContinuesInto(data.uuid, data.resolution));
+        if (this.stopped) return;
+        const keep = !appeared && caughtUp && await this.keepsTailer(data.uuid, data.resolution);
+        if (this.stopped) return;
         this.uuid = data.uuid;
-        if (!appeared) this.send({ type: 'rotated', uuid: data.uuid });
-        await this.sendBacklogAndTail(data);
+        if (!appeared && !caughtUp) this.send({ type: 'rotated', uuid: data.uuid });
+        if (!keep) await this.sendBacklogAndTail(data);
       } else if (await this.repointNeeded(data.resolution)) {
         // §5.3: the uuid did not move but the ANSWER did — a swap landed, or
         // the file this stream was tailing is gone. Fix round 1, MY RULING
@@ -680,6 +1014,31 @@ export class SessionStream {
         // beside it; an older client with no `sinceFile` support still just
         // sees a fresh backlog, exactly as it does on first connect.
         await this.sendBacklogAndTail(data);
+      } else if (this.tailed !== null && this.tailed.path === data.resolution.path
+        && rungRank(this.tailed) === rungRank(data.resolution)) {
+        // Nothing moved — same file, same rung, same tailer — but the answer
+        // may know more about that file than the one it replaces: the
+        // successor its marker names, or that its tail could not be read
+        // (D-4947, see `tailed`). Without this, `tailed` kept the answer from
+        // BEFORE the fork, and a registry move onto the declined successor
+        // was judged against a file that had never been seen to carry a marker.
+        //
+        // A DECLINE OUTLIVES A READ THAT FAILED (#189 fix-forward, probe R1).
+        // An answer that could not read the file's tail knows LESS than one
+        // that read its marker, not something different: a decline learned
+        // from a MEASURED read stays true until a later measured read says
+        // otherwise. Replacing `tailed` outright threw that away — after the
+        // back-off the re-walk's read of A failed, A{tailUnmeasured}
+        // overwrote A{declinedTo B}, and ccd's move onto B then sent
+        // `rotated`. A MEASURED answer still replaces it whole: a file that
+        // was resumed past its marker (a finished turn after it, D-4940)
+        // really has stopped naming it.
+        const held = this.tailed;
+        const next = data.resolution;
+        this.tailed = next.kind === 'found' && next.tailUnmeasured === true && next.declinedTo === undefined
+          && held.kind === 'found' && held.declinedTo !== undefined
+          ? { ...next, declinedTo: held.declinedTo }
+          : next;
       }
       if (this.stopped) return;
       if (data.status !== this.status) {
@@ -687,24 +1046,49 @@ export class SessionStream {
         this.send({ type: 'status', status: data.status, statusUpdatedAt: data.statusUpdatedAt });
       }
       if (this.stopped) return;
-      await this.checkDialog(data.file);
-      if (this.stopped) return;
-      await this.checkTasks(data.cfgDir, data.uuid);
-      if (this.stopped) return;
-      await this.checkHookAsk(data.uuid);
-      if (this.stopped) return;
-      await this.checkMail();
+      // The pane, the plan, the hook ask, the workflows and the mail are not read here any more: the session's feed
+      // reads them on its own clock and `onReading` applies them. This tick states what it measured about the session.
     } finally {
       this.ticking = false;
+      if (this.rerun && !this.stopped) { this.rerun = false; void this.tick(); }
     }
   }
 }
 
+/** The facts the session's feed reads with, off one measured resolve. */
+const factsOf = (r: Resolved): FeedFacts => ({ file: r.file, cfgDir: r.cfgDir, uuid: r.uuid });
+
+/**
+ * The journal line for one `dialog`/`dialog_cleared` frame a session stream sends (decision `dialog-frame-log`). Until
+ * it, nothing on either box recorded what the sheet was told, so the 2026-10-16 report could only be settled by asking
+ * the operator what the sheet showed. One line per frame actually sent, never per poll:
+ * `ccrc-server: dialog-frame <session> <kind> <id8> from=<poll|answer> tick=<ms|->`.
+ * - `kind`: `cleared`, `review` (`reviewRows`), `multi` (`Dialog.multi`), `unparsed`, or `question`;
+ * - `tick`: how far into its poll the stream was when it sent the frame (`-` for an answer's frame, sent between polls).
+ * Ids and kinds only: no pane text, no labels.
+ */
+export function dialogFrameLine(id: string, msg: SessionStreamMsg, from: 'poll' | 'answer', tickMs: number | null): string {
+  let kind = 'cleared';
+  let short = '-';
+  if (msg.type === 'dialog') {
+    const d = msg.dialog;
+    short = d.id.slice(0, 8);
+    kind = reviewRows(d) !== null ? 'review' : d.multi !== undefined ? 'multi' : d.parsed ? 'question' : 'unparsed';
+  }
+  return `ccrc-server: dialog-frame ${id} ${kind} ${short} from=${from} tick=${tickMs === null ? '-' : String(tickMs)}`;
+}
+
 /** What a client has already been told about the pane menu: the dialog id it
- *  last saw, and the enrichment (if any) that rode along with it. */
+ *  last saw, the enrichment (if any) that rode along with it, and — for an
+ *  UNPARSED dialog only, null otherwise — the raw pane it was sent. */
 export interface DialogSeen {
   id: string | null;
   ask: DialogAsk | null;
+  raw: string | null;
+  /** An unparsed multiSelect menu's labels (`Dialog.multi`), the evidence `keepAgedAsk` reads (D-6324). */
+  multi?: DialogMulti;
+  /** The question texts a review screen lists (`reviewQuestions`); absent when the pane is not a review (D-6324). */
+  review?: string[];
 }
 
 /**
@@ -722,6 +1106,14 @@ export interface DialogSeen {
  * So: send on a new id OR on the first upgrade to an enriched dialog, and never
  * the other way round — a transient read miss must not strip descriptions off a
  * sheet the operator is already reading.
+ *
+ * And send again when an UNPARSED dialog repaints under the same id. Its raw
+ * pane is the only picture of it the phone has (`DialogSheet.tsx` shows it in
+ * a well), and a multi-select keeps one id while its boxes are ticked at the
+ * terminal (`parseDialog`: that id is what the push edge-triggers on), so an
+ * id-only gate froze the well at its first capture with every box unticked.
+ * The phone replaces its dialog on every frame and keys dismissal on the id,
+ * so the refresh never re-opens a sheet the operator closed.
  */
 export function nextDialogFrame(
   prev: DialogSeen,
@@ -729,34 +1121,161 @@ export function nextDialogFrame(
 ): { seen: DialogSeen; msg: SessionStreamMsg | null } {
   if (!dialog) {
     if (prev.id === null) return { seen: prev, msg: null };
-    return { seen: { id: null, ask: null }, msg: { type: 'dialog_cleared' } };
+    return { seen: { id: null, ask: null, raw: null }, msg: { type: 'dialog_cleared' } };
   }
   const isNew = prev.id !== dialog.id;
   const latched = isNew ? null : prev.ask;       // a new menu forgets the old ask
   const ask = dialog.ask ?? latched;             // and a missed read never downgrades
   const upgraded = ask !== null && latched === null;
-  if (!isNew && !upgraded) return { seen: prev, msg: null };
+  const repainted = !dialog.parsed && prev.raw !== dialog.raw;
+  if (!isNew && !upgraded && !repainted) return { seen: prev, msg: null };
   return {
-    seen: { id: dialog.id, ask },
+    seen: { id: dialog.id, ask, raw: dialog.parsed ? null : dialog.raw, multi: dialog.multi,
+      review: reviewQuestions(dialog) ?? undefined },
     msg: { type: 'dialog', dialog: ask === null ? dialog : { ...dialog, ask } },
   };
 }
 
 /**
  * §5.3's re-point decision, pure: re-point when the answer CHANGED and either
- * the new rung is strictly better or the file being tailed is gone.
+ * it names a different transcript session, the new rung is strictly better, or
+ * the file being tailed is gone.
  *
  * "Better" is §5.1's rung order, which is why the rung travels in the union
  * rather than being recomputed here. A same-rung, same-path answer changes
- * nothing — the common case every tick — and a worse rung never drags a healthy
- * stream off an exact-address transcript that still exists.
+ * nothing — the common case every tick.
+ *
+ * THE UUID CLAUSE IS NOT A RUNG QUESTION. A transcript that Claude Code
+ * superseded (`continued-in`) resolves at the SAME rung, to a DIFFERENT path,
+ * while the old file is still on disk — frozen, not deleted — so all three of
+ * the original clauses decline it and the stream would tail a dead file for
+ * ever. Supersession is not a better ADDRESS for the same thing; it is a
+ * different thing, and rung order was never asked to rank it. A fallback
+ * carries no uuid and needs none: it always ranks last, so a fallback on
+ * either side is already decided by rank.
+ *
+ * `facts` are the two the fork clauses need that only io can give, MEASURED
+ * by the caller only when that clause is the one deciding (`repointNeeded`).
+ * Absent, each answers "not shown": neither ever re-points on a guess.
  */
+export interface RepointFacts {
+  /** `next` is a uuid `cur` was followed FROM, and the newest deciding line
+   *  of its own tail, read at the moment of this decision, is a FINISHED
+   *  TURN (`resumedPastMarker` -> `resumed`): it was resumed past its
+   *  marker. A window with no deciding line is not that. */
+  readonly predecessorResumed?: boolean;
+  /** `next` is the successor `cur` declined, and its file measured non-empty. */
+  readonly successorHasContent?: boolean;
+}
+
 export function shouldRepoint(
-  cur: TranscriptResolution, next: TranscriptResolution, tailedExists: boolean,
+  cur: TranscriptResolution, next: TranscriptResolution, tailedExists: boolean, facts: RepointFacts = {},
 ): boolean {
+  // SUPERSESSION RUNS ONE WAY (D-4946). A different uuid re-points only when
+  // the new answer's walk passed THROUGH the uuid being tailed — it is that
+  // file's successor, or a successor of it. This clause used to fire on ANY
+  // difference, and the backward case is real: the registry keeps naming the
+  // predecessor until `ccd` moves it, so every re-ladder starts from there,
+  // and one that cannot read the predecessor's tail (or stat the successor)
+  // answers the predecessor. Measured (#189 review, S1): that re-pointed a
+  // stream already reading the fork back onto the frozen pre-fork file, whose
+  // backlog replaced the chat. Any other uuid difference falls through to the
+  // address clauses below, so a successor that is genuinely GONE still gives
+  // way to the best file left.
+  if (cur.kind === 'found' && next.kind === 'found' && cur.uuid !== next.uuid
+    && next.followedFrom?.includes(cur.uuid) === true) return true;
+  // NOR BACKWARDS BY ADDRESS (D-4946, #189 fix-forward). The clause above no
+  // longer runs backwards, but the RUNG clause below still could: a
+  // `<pid>.json` read that comes back unmeasured makes the stream resolve
+  // from the registry workdir instead of the live cwd — another memo KEY —
+  // and under that key the predecessor sits at a better rung (a symlinked
+  // workdir's resolved spelling), served stale from a blip before the fork or
+  // answered fresh when its tail read fails. Measured (probes E2/E2b): one
+  // `backlog` of the pre-fork file, then one of the fork on the next tick — a
+  // 2 s flap of the whole chat on every such blip. A predecessor this answer
+  // was followed FROM is never a better address for it while it is still
+  // there; once it is gone, the address rules below decide as before.
+  //
+  // UNLESS IT IS THE CONVERSATION AGAIN (#189 re-review, server lens). An
+  // explicit `claude --resume <pre-fork id>` never checks the marker, so a
+  // supervisor that resumes the predecessor (one not yet moved to this
+  // build, or a head `ccd` cannot see) puts the operator's prompts in it
+  // while this stream shows the fork. Its tail then ends in a finished turn,
+  // and Claude Code's own reader answers "not continued" for exactly that
+  // (D-4940). The answer alone cannot say so — a clean predecessor is also
+  // what a stale memo entry serves (E2b) — so the caller reads the
+  // predecessor's tail at this moment (`predecessorResumed`), and only a
+  // MEASURED finished turn re-points back. Not the walk's "no successor":
+  // an 8 KiB window with no deciding line in it (records that are not turns
+  // piled after the marker) is one Claude Code, reading 64 KiB back, still
+  // calls continued — and re-pointing on it sent the stream back to the
+  // frozen pre-fork file (#189 re-review, verifier probe FALSE-UNFOLLOW).
+  if (cur.kind === 'found' && next.kind === 'found' && cur.uuid !== next.uuid
+    && cur.followedFrom?.includes(next.uuid) === true) {
+    if (facts.predecessorResumed === true) return true;
+    if (tailedExists) return false;
+  }
+  // AND A SUCCESSOR THE TAILED FILE DECLINED IS DOWNSTREAM TOO (#189
+  // re-review, SV-2). When the registry moves onto a successor with nothing
+  // written yet, `tick` keeps the file on screen and records the successor
+  // as declined; its later answer comes off its own ladder, with no
+  // `followedFrom`, so the decline is the only thing that says it continues
+  // this file. It re-points once its file has content — the walk's own rule:
+  // following may only improve the answer — and never onto it empty while
+  // the tailed file is still there.
+  if (cur.kind === 'found' && next.kind === 'found' && cur.uuid !== next.uuid && cur.declinedTo === next.uuid) {
+    if (facts.successorHasContent === true) return true;
+    if (tailedExists) return false;
+  }
   if (cur.path === next.path && rungRank(cur) === rungRank(next)) return false;
   if (rungRank(next) < rungRank(cur)) return true;
   return !tailedExists;
+}
+
+/**
+ * The registry's uuid moved: is that THIS stream's conversation continuing,
+ * or a reset? Pure, for the same reason `shouldRepoint` is (D-4947).
+ *
+ * The registry is not where a fork is first seen, and it is not seen there in
+ * step with this stream: `ccd` walks the same `continued-in` pointer ONE HOP
+ * PER QUIESCENCE, sometimes before this stream has followed it and sometimes
+ * after. A move is a continuation when the answer being tailed already says
+ * so, in any of four ways:
+ *
+ *   - the newly resolved path IS the tailed path (whole-branch review, F2: the
+ *     stream followed first and the registry agreed);
+ *   - the registry now names the uuid being tailed, at another address;
+ *   - the registry now names the successor the tailed file's marker names but
+ *     the walk declined (`declinedTo`) — `ccd` read the file after the
+ *     successor was written, while this stream waited out its back-off
+ *     (#189 review, S2);
+ *   - the registry now names a uuid the tailed answer was followed THROUGH
+ *     (`followedFrom`) — a chain longer than `MAX_CONTINUATION_HOPS` leaves
+ *     this stream hops ahead of the registry (#189 review, server lens).
+ *
+ * Anything else is decided by the tailed file itself: `tick` reads its
+ * marker chain (`continuesInto`) before calling the move a rotation — that
+ * covers a registry that moved before this stream read the marker at all,
+ * and one that moved TWO hops past a declined successor between two ticks.
+ * What is left is a real rotation — a `/clear`, a compaction, a swap onto a
+ * fresh uuid — and still says so. HONEST LIMIT: a tailed file whose tail
+ * cannot be read at that moment either, with no decline already learned,
+ * is still announced as a rotation, since nobody knows what it named; that
+ * costs one false divider over a backlog that is right, never a lost event.
+ *
+ * Every clause has a table row of its own in `sessionws.test.ts` that no
+ * other clause also satisfies — the path clause's row is a tailed answer
+ * with no `followedFrom` and a registry naming its predecessor.
+ */
+export function registryCaughtUp(
+  tailed: TranscriptResolution | null, registryUuid: string, next: TranscriptResolution,
+): boolean {
+  if (tailed === null) return false;
+  if (tailed.path === next.path) return true;
+  if (tailed.kind !== 'found') return false;
+  return tailed.uuid === registryUuid
+    || tailed.declinedTo === registryUuid
+    || tailed.followedFrom?.includes(registryUuid) === true;
 }
 
 /**
@@ -765,8 +1284,8 @@ export function shouldRepoint(
  *
  * Read off `cfg.roster.accounts`, which `loadConfig` DERIVES from
  * `~/.ccrc/accounts.json` (see `config.ts`'s own comment on why: a hand-typed
- * copy is how `claude-dev0` was missing for the account's entire life — and
- * `~/.claude-dev0` is precisely where the incident's recovered transcript
+ * copy is how `claude-lab0` was missing for the account's entire life — and
+ * `~/.claude-lab0` is precisely where the incident's recovered transcript
  * sits today). Never a literal list of account names in this module
  * (architecture rule (a): config is data).
  *

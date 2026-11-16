@@ -1,0 +1,495 @@
+// `deploy/measure-landing.py` — the landing-order programme's instrument
+// (spec 2026-09-23 §10). It runs by hand on the fleet box, where the host `gh`
+// carries a repo-WRITE token, so the property that matters most is the one it
+// states first: it READS. Two halves pin that, and neither trusts the other:
+// the static half reads the file's own argv literals; the behavioural half runs
+// a subcommand against a recording `gh` stub and reads what was actually asked.
+// The same two halves hold its second door, `~/.local/bin/ccrc-api`, whose
+// table also carries POST rows: only `runs list` and `mail list` may pass.
+// The rest pins the pure decisions every baseline number is derived from, each
+// by a case that goes red when its rule is bent (the plan's mutation table).
+//
+// Every python3 spawn carries PYTHONDONTWRITEBYTECODE: loading the tool as a
+// module would otherwise leave `deploy/__pycache__/` behind (gitignored, but a
+// directory walk of `deploy/` would read it — the ccgpt harness's precedent).
+import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path, { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { mkTmp } from './tmpHelpers.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const TOOL = path.resolve(here, '..', '..', 'deploy', 'measure-landing.py');
+const src = readFileSync(TOOL, 'utf8');
+const PYENV = { ...process.env, PYTHONDONTWRITEBYTECODE: '1' };
+const LOAD = [
+  'import importlib.util, json, sys',
+  `s = importlib.util.spec_from_file_location("ml", ${JSON.stringify(TOOL)})`,
+  'm = importlib.util.module_from_spec(s); s.loader.exec_module(m)',
+];
+
+/** Evaluate one Python expression against the imported module `m`, with `a`
+ *  bound to the JSON argument, and return its JSON value. The module is
+ *  loaded by path (its name has a hyphen) and its `main` never runs. */
+const py = (expr: string, a: unknown = null): any => {
+  const code = [...LOAD, 'a = json.loads(sys.stdin.read())', `print(json.dumps(${expr}))`].join('\n');
+  const r = spawnSync('python3', ['-c', code], { input: JSON.stringify(a), encoding: 'utf8', env: PYENV });
+  expect(r.status, r.stderr).toBe(0);
+  return JSON.parse(r.stdout);
+};
+
+/** A fixture HOME whose PATH starts with a recording `gh` (the given case arms)
+ *  and whose `~/.local/bin/ccrc-api` records too. Nothing real is reachable. */
+const stubHome = (ghCases: string[] = [], apiCases: string[] = []): { home: string; env: NodeJS.ProcessEnv } => {
+  const home = mkTmp('ccrc-measure-landing-');
+  const bin = join(home, 'bin');
+  const local = join(home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(local, { recursive: true });
+  writeFileSync(join(bin, 'gh'), ['#!/bin/sh', 'printf \'%s\\n\' "$*" >> "$HOME/gh-calls"',
+    'case "$*" in', ...ghCases, '  *) echo \'{}\' ;;', 'esac'].join('\n') + '\n', { mode: 0o755 });
+  writeFileSync(join(local, 'ccrc-api'), ['#!/bin/sh', 'printf \'%s\\n\' "$*" >> "$HOME/api-calls"',
+    'case "$*" in', ...apiCases, '  *) echo \'{}\' ;;', 'esac'].join('\n') + '\n', { mode: 0o755 });
+  return { home, env: { ...PYENV, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}` } };
+};
+const calls = (home: string, file: string): string[] | null =>
+  existsSync(join(home, file)) ? readFileSync(join(home, file), 'utf8').trim().split('\n') : null;
+const tool = (h: { home: string; env: NodeJS.ProcessEnv }, args: string[]) =>
+  spawnSync('python3', [TOOL, ...args, '--out', join(h.home, 'out')], { encoding: 'utf8', cwd: h.home, env: h.env });
+const inModule = (h: { home: string; env: NodeJS.ProcessEnv }, stmt: string) =>
+  spawnSync('python3', ['-c', [...LOAD, stmt].join('\n')], { encoding: 'utf8', env: h.env });
+
+describe('measure-landing: it reads GitHub and never writes it', () => {
+  it('runs gh from exactly one argv, and that argv is a GET', () => {
+    const argv = [...src.matchAll(/subprocess\.run\(\[\s*'gh'[^\]]*\]/g)].map((m) => m[0]);
+    expect(argv, 'gh is run from more or fewer than one place').toHaveLength(1);
+    expect(argv[0]).toBe("subprocess.run(['gh', 'api', '-X', 'GET', '--allow-escape-sequences', path]");
+    expect(src, 'a second method is spelled somewhere').not.toMatch(/'(POST|PUT|PATCH|DELETE)'|--method|--field|'-f'|'-F'/);
+  });
+
+  it('runs git for object reads only — cat-file and show', () => {
+    const verbs = [...src.matchAll(/\['git', '-C', clone, '([a-z-]+)'/g)].map((m) => m[1]);
+    expect(new Set(verbs)).toEqual(new Set(['cat-file', 'show']));
+    expect(src.match(/subprocess\.run\(\['git'/g) ?? [], 'git is run outside the -C clone form').toHaveLength(verbs.length);
+  });
+
+  it('refuses a path that is not a plain REST read, before gh runs', () => {
+    const h = stubHome();
+    for (const bad of ['-X POST repos/o/r/pulls/1/merge', 'repos/o/r/pulls/1 --method PUT', 'graphql', '/repos/o/r']) {
+      const r = inModule(h, `m._gh(${JSON.stringify(bad)})`);
+      expect(r.status, `${bad} was not refused`).not.toBe(0);
+      expect(r.stderr).toContain('refused a GitHub path');
+    }
+    expect(calls(h.home, 'gh-calls'), 'gh ran for a refused path').toBeNull();
+  });
+
+  it('refuses a path with a `..` segment: the grammar is no way round the graphql refusal', () => {
+    // Each of these matched the character-class grammar and, resolved by the
+    // server, names `graphql` (or another endpoint) the plain-REST pin refuses.
+    const h = stubHome();
+    for (const bad of ['repos/a/b/../../../graphql', 'repos/../../graphql?query=%7Bviewer%7D', 'repos/a/b/..', 'repos/../b/x']) {
+      const r = inModule(h, `m._gh(${JSON.stringify(bad)})`);
+      expect(r.status, `${bad} was not refused`).not.toBe(0);
+      expect(r.stderr).toContain('refused a GitHub path');
+    }
+    // A name that merely CONTAINS dots is a name, not a traversal.
+    for (const ok of ['repos/a/b.c', 'repos/a/b/contents/x..y', 'repos/a/b/commits/v1..v2', 'repos/a/b/actions/runs?created=2026-09-08..2026-09-22']) {
+      const r = inModule(h, `assert m.GH_PATH.match(${JSON.stringify(ok)}), ${JSON.stringify(ok)}`);
+      expect(r.status, `${ok} was refused: ${r.stderr}`).toBe(0);
+    }
+    expect(calls(h.home, 'gh-calls'), 'gh ran for a refused path').toBeNull();
+  });
+
+  it('asks GitHub only GETs, measured through a recording stub', () => {
+    const h = stubHome([
+      '  *rules/branches/main*) echo \'[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test (server)"}]}}]\' ;;',
+      '  *required_status_checks*) echo \'{"contexts":["build-pwa"]}\' ;;',
+    ]);
+    const r = tool(h, ['required', 'o/r']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).required).toEqual(['build-pwa', 'test (server)']);
+    expect(calls(h.home, 'gh-calls')).toEqual([
+      'api -X GET --allow-escape-sequences repos/o/r/rules/branches/main',
+      'api -X GET --allow-escape-sequences repos/o/r/branches/main/protection/required_status_checks',
+    ]);
+  });
+
+  it('reaches ccrc-api from one door, for its two list verbs only (static and behavioural)', () => {
+    // The client's table carries POST rows (runs close, mail send, ledger
+    // allocate); a hand-run instrument that reached one would write the
+    // coordination store. Every `_api(` call site names a list verb, and the
+    // door itself refuses anything else before the client runs.
+    const sites = [...src.matchAll(/_api\('([a-z]+)', '([a-z-]+)'/g)].map((m) => `${m[1]} ${m[2]}`);
+    expect(new Set(sites)).toEqual(new Set(['runs list', 'mail list']));
+    expect(src.match(/_api\(/g)!.length - 1, 'an _api call site names its verb some other way').toBe(sites.length);
+    const h = stubHome();
+    for (const bad of ["'runs', 'close', '7'", "'mail', 'send', '--json', '-'", "'ledger', 'allocate'"]) {
+      const r = inModule(h, `m._api(${bad})`);
+      expect(r.status, `_api(${bad}) was not refused`).not.toBe(0);
+      expect(r.stderr).toContain('refused a ccrc-api verb that is not a list read');
+    }
+    expect(calls(h.home, 'api-calls'), 'ccrc-api ran for a refused verb').toBeNull();
+  });
+});
+
+describe('measure-landing: an input it could not read is never a number', () => {
+  it('required: refuses a repository whose required contexts read as nothing, and caches nothing', () => {
+    // Both endpoints answer, and neither names a context (or both fail): an
+    // empty set would make every later verdict green, and a cached one would
+    // make it so on every re-run.
+    const h = stubHome(['  *rules/branches/main*) echo \'[]\' ;;']);
+    const r = tool(h, ['required', 'o/r']);
+    expect(r.status, 'an empty required set was accepted').not.toBe(0);
+    expect(r.stderr).toContain('no required status context could be read');
+    expect(existsSync(join(h.home, 'out', 'cache', 'required-o_r.json')), 'the empty read was cached').toBe(false);
+  });
+
+  it('absorptions: refuses a run with no --fleet-login before it reads anything', () => {
+    const h = stubHome();
+    const r = tool(h, ['absorptions', 'o/r']);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('--fleet-login L1,L2 is required');
+    expect(calls(h.home, 'gh-calls'), 'gh ran before the fleet was named').toBeNull();
+  });
+
+  it('inversions: refuses a run with no --fleet-login before it reads anything, a cache write included', () => {
+    // `cmd_inversions(repo, req(), …, fleet_logins(args))` evaluated `req()` first:
+    // two GETs and a cache file before the refusal the docstring promises. The stub
+    // must answer a REAL required context: with its default `{}` answers the read is
+    // an empty set that the empty-set refusal rejects before anything is cached, so
+    // the cache stays empty under either evaluation order and pins nothing.
+    const h = stubHome(['  *required_status_checks*) echo \'{"contexts":["build-pwa"]}\' ;;']);
+    const r = tool(h, ['inversions', 'o/r']);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('--fleet-login L1,L2 is required');
+    // Soft, so a failure of the first does not hide the second: each is a pin of its own.
+    expect.soft(calls(h.home, 'gh-calls'), 'gh ran before the fleet was named').toBeNull();
+    const cache = join(h.home, 'out', 'cache');
+    expect.soft(existsSync(cache) ? readdirSync(cache) : [], 'a cache file was written before the fleet was named').toEqual([]);
+  });
+
+  it('mail-latency: a full newest-first page is truncation, never data; a run with no claimant is skipped', () => {
+    const at = Date.parse('2026-09-10T12:00:00Z');
+    const row = (i: number) => ({ at: at + i, state: 'delivered' });
+    const full = JSON.stringify({ ok: true, mail: Array.from({ length: 500 }, (_, i) => row(i)) });
+    const one = JSON.stringify({ ok: true, mail: [row(0)] });
+    const h = stubHome([], [
+      '  *"runs list"*) echo \'{"runs":[{"claimedBy":null},{"claimedBy":"coord-full"},{"claimedBy":"coord-one"}]}\' ;;',
+      `  *"--to coord-full"*) echo '${full}' ;;`,
+      `  *"--to coord-one"*) echo '${one}' ;;`,
+    ]);
+    const r = tool(h, ['mail-latency']);
+    expect(r.status, r.stderr).toBe(0);
+    const d = JSON.parse(r.stdout);
+    expect(d.coordinators, 'a null claimant was counted as a coordinator').toBe(2);
+    expect(d.truncatedCoordinators, 'a full page was read as the whole history').toBe(1);
+    expect(d.unmatched, "the truncated coordinator's mail was counted").toBe(1);
+    expect(calls(h.home, 'api-calls')!.filter((c) => c.startsWith('mail list'))
+      .every((c) => c.endsWith('--limit 500')), 'a mail read asked for the default page').toBe(true);
+  });
+  it('mail-latency: a closed-runs read at its cap is truncation, named in the output, never the whole history', () => {
+    // `runs list --closed 1` answers every ACTIVE run plus only the newest 500
+    // closed ones (`runs()`'s asymmetric clamp). Rows of an active run are not
+    // closed ones: 3 active + 499 closed is under the cap, 3 active + 500 is not.
+    const closedRows = (n: number) => Array.from({ length: n }, (_, i) => ({ id: 1000 + i, claimedBy: 'coord-c', state: 'merged' }));
+    const active = [{ id: 1, claimedBy: 'coord-c', state: 'working' }, { id: 2, claimedBy: 'coord-c', state: 'dispatched' },
+      { id: 3, claimedBy: 'coord-c', state: 'unknown' }];
+    const arms = (n: number) => [
+      `  *"runs list --closed 1"*) echo '${JSON.stringify({ runs: [...active, ...closedRows(n)] })}' ;;`,
+      `  *"runs list"*) echo '${JSON.stringify({ runs: active })}' ;;`,
+      '  *"--to coord-c"*) echo \'{"ok":true,"mail":[]}\' ;;',
+    ];
+    const at = tool(stubHome([], arms(500)), ['mail-latency']);
+    expect(at.status, at.stderr).toBe(0);
+    expect(JSON.parse(at.stdout).runsTruncated, 'a closed-runs read at its cap was read as the whole history').toBe(true);
+    const under = tool(stubHome([], arms(499)), ['mail-latency']);
+    expect(under.status, under.stderr).toBe(0);
+    expect(JSON.parse(under.stdout).runsTruncated, 'active runs were counted against the closed cap').toBe(false);
+    expect(JSON.parse(under.stdout).closedRuns).toBe(499);
+  });
+
+  it('mail-latency: the closed-runs read is made BEFORE the open one, so a run closing between them counts as closed', () => {
+    // The order is the whole of the skew argument (the comment above the two reads): a run
+    // that closes between them is then in the closed read and absent from the open one, so
+    // any skew OVERcounts toward `runsTruncated`; the other order drops it from both and
+    // could read 500 - k as under the cap. A stateless stub answers each read the same
+    // either way round, and swapping which read binds which name goes red for the wrong
+    // reason, so the order is read from what the stub was ASKED, in the order it was asked.
+    const h = stubHome([], [
+      '  *"runs list --closed 1"*) echo \'{"runs":[{"id":1,"claimedBy":"coord-o","state":"working"}]}\' ;;',
+      '  *"runs list"*) echo \'{"runs":[{"id":1,"claimedBy":"coord-o","state":"working"}]}\' ;;',
+      '  *"--to coord-o"*) echo \'{"ok":true,"mail":[]}\' ;;',
+    ]);
+    const r = tool(h, ['mail-latency']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(calls(h.home, 'api-calls')!.filter((c) => c.startsWith('runs list')),
+      'the open runs read was made before the closed one: a run closing between them drops out of both').toEqual(['runs list --closed 1', 'runs list']);
+  });
+
+  it('mail-latency: every input left out is counted by name — an undelivered mail, a run with no claimant', () => {
+    const at = Date.parse('2026-09-10T12:00:00Z');
+    const mail = [
+      { at, state: 'delivered' }, { at: at + 1, state: 'queued' }, { at: at + 2, state: 'rejected' },
+      { at: at + 3, state: 'some-future-state' },
+      // A mail the coordinator WAS nudged, then parked `rejected` when its run closed
+      // (`cancelOutstandingDeliveries`): the read carries no `deliveredAt`, so it is
+      // `undelivered` too — the docstring says so. This row adds no red the `at + 2`
+      // `rejected` row above does not already give (`cmd_mail_latency` branches on
+      // `state` alone and never reads `lastError`); it guards a FUTURE split keyed on
+      // `lastError`, which only this row would red.
+      { at: at + 4, state: 'rejected', lastError: 'run closed' },
+      { at: Date.parse('2026-01-01T00:00:00Z'), state: 'queued' },   // outside the window: not an input of it
+    ];
+    const h = stubHome([], [
+      '  *"runs list"*) echo \'{"runs":[{"id":1,"claimedBy":null},{"id":2,"claimedBy":null},{"id":3,"claimedBy":"coord-u"}]}\' ;;',
+      `  *"--to coord-u"*) echo '${JSON.stringify({ ok: true, mail })}' ;;`,
+    ]);
+    const r = tool(h, ['mail-latency']);
+    expect(r.status, r.stderr).toBe(0);
+    const d = JSON.parse(r.stdout);
+    expect(d.undelivered, 'a window mail that was never delivered or acked was left out silently').toBe(4);
+    expect(d.runsWithoutClaimant, 'a run with no claimant was dropped without a count').toBe(2);
+    expect(d.unmatched, 'an undelivered mail was counted as unmatched').toBe(1);
+    const per = JSON.parse(readFileSync(join(h.home, 'out', 'mail-latency-2026-09-08-2026-09-22.json'), 'utf8')).perCoordinator['coord-u'];
+    expect(per.undelivered).toBe(4);
+  });
+  it('mail-latency: its docstring says `undelivered` includes mail parked rejected at its run\'s close, which may have been nudged', () => {
+    // `unmatched` and `minutes` count mail still read `delivered` or `acked`. A mail a
+    // coordinator WAS handed and never acked reads `rejected` once its run closes, so
+    // "counts only mail a coordinator was handed" overclaimed for `undelivered`'s
+    // complement. The wire has no `deliveredAt` to split the two; the docstring owns it.
+    const doc: string = py('m.cmd_mail_latency.__doc__').replace(/\s+/g, ' ');
+    expect(doc).toContain("parked `rejected` at its run's close");
+    expect(doc).toContain('may have been nudged');
+    expect(doc, 'the overclaim is back').not.toContain('count only mail a coordinator was handed');
+  });
+
+  it('mail-latency: a refused or failed ccrc-api read is an error, never an empty page', () => {
+    // The client exits 0 on EVERY HTTP answer, a 4xx body included, and exits 3
+    // on a transport failure while still printing {"ok":false}. Read as data,
+    // either would be `mail: []` — a coordinator counted with n 0, unmatched 0.
+    const arms = (denied: string) => [
+      '  *"runs list"*) echo \'{"runs":[{"claimedBy":"coord-a"},{"claimedBy":"coord-b"}]}\' ;;',
+      `  *"--to coord-a"*) ${denied} ;;`,
+      '  *"--to coord-b"*) echo \'{"ok":true,"mail":[]}\' ;;',
+    ];
+    const refused = stubHome([], arms('echo \'{"ok":false,"error":"unauthorized"}\''));
+    const r = tool(refused, ['mail-latency']);
+    expect(r.status, 'a refused read (exit 0, ok:false) was read as an empty page').not.toBe(0);
+    expect(r.stderr).toContain('ccrc-api answered no data');
+    expect(r.stderr).toContain('unauthorized');
+    const down = stubHome([], arms('echo \'{"ok":false,"error":"transport"}\'; exit 3'));
+    const t = tool(down, ['mail-latency']);
+    expect(t.status, 'a transport failure (exit 3) was read as an empty page').not.toBe(0);
+    expect(t.stderr).toContain('ccrc-api answered no data');
+    // A body of some other shape (no ok, no list under the verb's key — a
+    // framework's own 500) and a refused `runs list` are refused the same way.
+    const odd = tool(stubHome([], arms('echo \'{"statusCode":500,"error":"Internal Server Error"}\'')), ['mail-latency']);
+    expect(odd.status, 'a body with no mail list was read as an empty page').not.toBe(0);
+    expect(odd.stderr).toContain('ccrc-api answered no data');
+    const noRuns = tool(stubHome([], ['  *"runs list"*) echo \'{"ok":false,"error":"unauthorized"}\' ;;']), ['mail-latency']);
+    expect(noRuns.status, 'a refused runs list was read as no coordinators').not.toBe(0);
+    expect(noRuns.stderr).toContain('ccrc-api answered no data for \'runs list\'');
+  });
+});
+
+describe('measure-landing: the decisions every baseline is derived from', () => {
+  const C = (name: string, conclusion: string | null, completed_at = '2026-09-10T00:00:00Z') =>
+    ({ name, conclusion, completed_at });
+
+  it('required_state: green, red, and the unmeasured middle — a cancel is not a red, a re-run supersedes', () => {
+    expect(py('m.required_state(a, ["build","test"])', [C('build', 'success'), C('test', 'success')])).toBe('green');
+    expect(py('m.required_state(a, ["build","test"])', [C('build', 'success'), C('test', 'failure')])).toBe('red');
+    expect(py('m.required_state(a, ["build","test"])', [C('build', 'success'), C('test', 'cancelled')])).toBe('unmeasured');
+    expect(py('m.required_state(a, ["build","test"])', [C('build', 'success')])).toBe('unmeasured');
+    expect(py('m.required_state(a, ["build","test"])', [C('build', 'success'), C('test', 'failure'),
+      C('mac', 'failure'), C('test', 'success', '2026-09-10T01:00:00Z')]), 'the re-run is the verdict').toBe('green');
+    expect(py('m.required_state(a, [])', [C('x', 'failure')]), 'no required context is not a verdict').toBe('unmeasured');
+  });
+
+  it('required_state: an in-progress LATEST attempt is unmeasured, never decided by an earlier one', () => {
+    const running = (name: string) => ({ name, conclusion: null, completed_at: null });
+    expect(py('m.required_state(a, ["test"])', [C('test', 'failure'), running('test')]), 'failure then running').toBe('unmeasured');
+    expect(py('m.required_state(a, ["test"])', [running('test'), C('test', 'failure')]), 'the order of the list is not the order of the attempts').toBe('unmeasured');
+    expect(py('m.required_state(a, ["test"])', [C('test', 'success'), running('test')]), 'success then running').toBe('unmeasured');
+    expect(py('m.required_state(a, ["build","test"])', [C('build', 'failure'), C('test', 'success'), running('test')]),
+      "another context's red still decides").toBe('red');
+  });
+
+  it('red_intervals: opens on red, closes only on green, and an open one ends at the window', () => {
+    expect(py('m.red_intervals([tuple(x) for x in a], "END")', [
+      ['t1', 'red'], ['t2', 'unmeasured'], ['t3', 'red'], ['t4', 'green'], ['t5', 'green'], ['t6', 'red'],
+    ])).toEqual([['t1', 't4'], ['t6', 'END']]);
+  });
+
+  it("merge_of_main: a merge of the PR's own branch is not one; update-branch and a local merge are told apart", () => {
+    const commit = (msg: string, p2: string, committer = 'dev', login: string | null = 'dev') => ({
+      parents: [{ sha: 'p1' }, { sha: p2 }],
+      commit: { message: msg, committer: { name: committer }, author: { name: 'dev' } },
+      committer: login ? { login } : null, author: { login: 'dev' },
+    });
+    const own = ['p1', 'own2'];
+    expect(py('m.merge_of_main(a[0], set(a[1]))', [commit("Merge remote-tracking branch 'origin/main' into ws/x", 'main9'), own])).toBe('local');
+    expect(py('m.merge_of_main(a[0], set(a[1]))', [commit("Merge branch 'main' into ws/x", 'main9', 'GitHub', 'web-flow'), own])).toBe('update-branch');
+    expect(py('m.merge_of_main(a[0], set(a[1]))', [commit("Merge remote-tracking branch 'origin/main' into ws/x", 'own2'), own]),
+      'the second parent is the PR\'s own commit').toBeNull();
+    expect(py('m.merge_of_main(a[0], set(a[1]))', [commit("Merge branch 'feature/y' into ws/x", 'other'), own])).toBeNull();
+  });
+
+  it('repeat_share: every merge past a PR\'s first is a repeat', () => {
+    expect(py('m.repeat_share(a)', [1, 1, 2, 3, 3, 3])).toEqual([6, 3, 3]);
+  });
+
+  it('fleet_logins: the fleet is a set, from the list the operator names', () => {
+    expect(py('sorted(m.fleet_logins({"fleet-login": a}))', 'fleet-a,fleet-b')).toEqual(['fleet-a', 'fleet-b']);
+  });
+
+  it('sync_kind: the transcript classifier, including the probe and the aborts it must not count', () => {
+    const k = (cmd: string): unknown => py('m.sync_kind(a)', cmd);
+    expect(k('git merge origin/main')).toBe('merge');
+    expect(k('git pull --rebase origin main')).toBe('pull');
+    expect(k('git merge --no-commit --no-ff origin/main')).toBe('probe');
+    expect(k('gh pr update-branch 12')).toBe('update-branch');
+    expect(k('git merge --abort')).toBeNull();
+    expect(k('git merge-tree --write-tree HEAD origin/main')).toBeNull();
+  });
+
+  it('episode_class: conflict first, then ritual only when nothing was edited and no agent ran', () => {
+    expect(py('m.episode_class(a)', { conflict: true, edits: 0, agents: 0 })).toBe('conflict');
+    expect(py('m.episode_class(a)', { conflict: false, edits: 0, agents: 0 })).toBe('ritual');
+    expect(py('m.episode_class(a)', { conflict: false, edits: 2, agents: 0 })).toBe('mixed');
+  });
+});
+
+describe('measure-landing: queue-ejections — a merge_group run that failed, by cause', () => {
+  const cause = (lines: string[], steps: string[] = ['Test']): string => py('m.failure_cause(a[0], a[1])', [lines, steps]);
+
+  it('queue_pr: the PR number comes from the queue branch name, and from nothing else', () => {
+    expect(py('m.queue_pr(a)', 'gh-readonly-queue/main/pr-1379-b09311272c67a746ce9972ff3b0cdbdabc1ab1e1')).toBe(1379);
+    expect(py('m.queue_pr(a)', 'main')).toBeNull();
+    expect(py('m.queue_pr(a)', 'feature/pr-12-abcdef0')).toBeNull();
+  });
+
+  it('failure_cause: the vitest teardown race and a held port are flakes, named', () => {
+    expect(cause(['EnvironmentTeardownError: [vitest-worker]: Closing rpc while "onUserConsoleLog" was pending'])).toBe('flake:vitest-teardown');
+    expect(cause(['OSError: [Errno 98] Address already in use', 'FAIL test/ccrc-codex.test.ts'])).toBe('flake:port-in-use');
+    expect(cause(['FAIL codex: lane port held by another process'])).toBe('unclassified');
+    expect(cause(['Error: listen EADDRINUSE: address already in use 127.0.0.1:7788'])).toBe('flake:port-in-use');
+    expect(cause(['Error: write EPIPE'])).toBe('flake:broken-pipe');
+  });
+
+  it('failure_cause: a wall-clock or throughput assertion is a flake, a content assertion is real', () => {
+    expect(cause(['FAIL test/update-spawn.test.ts', 'AssertionError: expected 1883 to be greater than or equal to 1900'])).toBe('flake:timing');
+    expect(cause(['AssertionError: sent 0 bytes in 2081ms: expected 0 to be greater than 1500'])).toBe('flake:timing');
+    expect(cause(['curl: (28) Operation too slow. Less than 1024 bytes/sec transferred'])).toBe('flake:timing');
+    expect(cause(['FAIL test/rings/totality.test.ts', 'AssertionError: no row reaches these: add a file row'])).toBe('real:test');
+  });
+
+  it('failure_cause: KNOWN LIMIT — a bare count comparison has no unit, so it reads as timing (the ledger states it)', () => {
+    // pinned so a change to TIMING is deliberate: the ledger's caveat on the flake/real split names this form
+    expect(cause(['FAIL test/rows.test.ts', 'AssertionError: expected 0 to be greater than 0'])).toBe('flake:timing');
+    expect(py('m.TIMING.pattern', null)).toContain('expected \\d+(\\.\\d+)? to be (less than|greater than)');
+  });
+
+  it('collapse_failures: overlapping build-2 runs that fail seconds apart on a shared test are one event', () => {
+    const row = (at: string, pr: number, cause: string, tests: string[]) => ({ run: pr, at, pr, cause, tests });
+    const groups = (rows: object[]): number[][] =>
+      py('[[r["pr"] for r in g] for g in m.collapse_failures(a)]', rows);
+    // same test, 2 s apart: one event, oldest first
+    expect(groups([row('2026-10-24T09:11:29Z', 1195, 'real:test', ['t/a.test.ts', 't/b.test.ts']),
+      row('2026-10-24T09:11:27Z', 1200, 'real:test', ['t/a.test.ts'])])).toEqual([[1200, 1195]]);
+    // 1 s apart but no shared test: two events
+    expect(groups([row('2026-10-25T10:41:53Z', 1357, 'flake:vitest-teardown', []),
+      row('2026-10-25T10:41:54Z', 1367, 'real:test', ['t/c.test.ts'])])).toEqual([[1357], [1367]]);
+    // shared test, but minutes apart: two events
+    expect(groups([row('2026-10-24T08:51:50Z', 1200, 'real:test', ['t/a.test.ts']),
+      row('2026-10-24T09:11:27Z', 1195, 'real:test', ['t/a.test.ts'])])).toEqual([[1200], [1195]]);
+    // no test on either side: the same cause joins, a different one does not
+    expect(groups([row('2026-10-25T10:00:00Z', 1, 'flake:broken-pipe', []), row('2026-10-25T10:00:03Z', 2, 'flake:broken-pipe', [])]))
+      .toEqual([[1, 2]]);
+    expect(groups([row('2026-10-25T10:00:00Z', 1, 'flake:broken-pipe', []), row('2026-10-25T10:00:03Z', 2, 'unclassified', [])]))
+      .toEqual([[1], [2]]);
+  });
+
+  it('failure_cause: a compile error is real, a failed setup step is infra, nothing readable is unclassified', () => {
+    expect(cause(['test/x.test.ts(35,53): error TS2345: Argument of type'], ['Test'])).toBe('real:typecheck');
+    expect(cause([], ['Run ./.github/actions/server-deps'])).toBe('infra:setup-step');
+    expect(cause([], ['Test'])).toBe('unclassified');
+  });
+
+  it('failure_cause: a teardown error beside a real failing test does not hide the failure', () => {
+    expect(cause(['FAIL test/a.test.ts', 'AssertionError: expected 1 to be 2', 'EnvironmentTeardownError: Closing rpc'])).toBe('real:test');
+  });
+
+  it('root_job: a "Refuse a prerequisite" job is a consequence, not a cause', () => {
+    expect(py('m.root_job(a)', ['Refuse a prerequisite that did not succeed (no script involved)'])).toBe(false);
+    expect(py('m.root_job(a)', ['Test'])).toBe(true);
+    expect(py('m.root_job(a)', [])).toBe(true);
+  });
+
+  it('read-only through a recording stub: counts, causes per run, and a PR that landed after its ejection', () => {
+    const run = (id: number, concl: string | null, pr: number) => JSON.stringify({ id, created_at: '2026-10-22T00:00:00Z', conclusion: concl,
+      head_branch: `gh-readonly-queue/main/pr-${pr}-aaaaaaa` });
+    const h = stubHome([
+      `  *actions/runs?event=merge_group*) echo '{"workflow_runs":[${run(1, 'failure', 7)},${run(2, 'success', 7)},${run(3, 'success', 8)},${run(4, 'cancelled', 9)},${run(5, 'failure', 8)}]}' ;;`,
+      '  *actions/runs/1/jobs*) echo \'{"jobs":[{"id":11,"name":"test (server)","conclusion":"failure","steps":[{"name":"Refuse a prerequisite that did not succeed (no script involved)","conclusion":"failure"}]},{"id":12,"name":"server 2/12","conclusion":"failure","steps":[{"name":"Test","conclusion":"failure"}]}]}\' ;;',
+      // run 5 is the same group's second run, failing at the same second on the same job log: one event, two rows
+      '  *actions/runs/5/jobs*) echo \'{"jobs":[{"id":12,"name":"server 2/12","conclusion":"failure","steps":[{"name":"Test","conclusion":"failure"}]}]}\' ;;',
+      '  *actions/jobs/12/logs*) printf \'Vitest caught 1 unhandled error\\nEnvironmentTeardownError: Closing rpc\\n\' ;;',
+      '  *pulls?state=all*) echo \'[{"number":7,"created_at":"2026-10-21T00:00:00Z","updated_at":"2026-10-22T00:00:00Z","merged_at":"2026-10-22T01:00:00Z"}]\' ;;',
+    ]);
+    const r = tool(h, ['queue-ejections', 'o/r', '--since', '2026-10-21', '--until', '2026-10-25']);
+    expect(r.status, r.stderr).toBe(0);
+    const rep = JSON.parse(r.stdout);
+    expect(rep.runs).toEqual({ total: 5, success: 2, failure: 2, cancelled: 1, other: 0 });
+    expect(rep.ejections).toBe(2);
+    expect(rep.byCause).toEqual({ 'flake:vitest-teardown': 2 });
+    expect(rep.distinctPrsEjected).toBe(2);
+    expect(rep.ejectedThenMerged).toBe(1); // #7 merged; #8 did not in the stub
+    expect(rep.failureEvents).toBe(1);
+    expect(rep.failureEventsByCause).toEqual({ 'flake:vitest-teardown': 1 });
+    const gh = calls(h.home, 'gh-calls')!;
+    expect(gh.every((c) => c.startsWith('api -X GET --allow-escape-sequences '))).toBe(true);
+  });
+});
+
+describe('measure-landing: queue-waits — where the green-to-merge wait went', () => {
+  const split = (green: string, merged: string, ev: [string, string][]) => py('m.queue_wait_split(a[0], a[1], a[2])', [green, merged, ev]);
+  const add = (t: string): [string, string] => ['added_to_merge_queue', t];
+  const rem = (t: string): [string, string] => ['removed_from_merge_queue', t];
+
+  it('queue_wait_split: first entry after green, last entry before merge, an ejection between them', () => {
+    expect(split('2026-10-22T00:00:00Z', '2026-10-22T01:00:00Z',
+      [add('2026-10-22T00:10:00Z'), rem('2026-10-22T00:20:00Z'), add('2026-10-22T00:40:00Z')])).toEqual([10, 20, 60]);
+  });
+  it('queue_wait_split: an add before green is not the first entry, and a PR never queued is None', () => {
+    expect(split('2026-10-22T00:30:00Z', '2026-10-22T01:00:00Z',
+      [add('2026-10-22T00:10:00Z'), add('2026-10-22T00:40:00Z')])).toEqual([10, 20, 30]);
+    expect(split('2026-10-22T00:00:00Z', '2026-10-22T01:00:00Z', [])).toBeNull();
+  });
+  it('read-only through a recording stub: the split per PR, from the timeline, GET only', () => {
+    const pr = (n: number, sha: string) => JSON.stringify({ number: n, created_at: '2026-10-21T00:00:00Z', updated_at: '2026-10-22T00:00:00Z',
+      merged_at: '2026-10-22T01:00:00Z', head: { sha } });
+    const ev = (e: string, t: string) => ({ event: e, created_at: t });
+    const h = stubHome([
+      `  *pulls?state=all*) echo '[${pr(7, 'abc')},${pr(8, 'def')},${pr(9, 'ghi')}]' ;;`,
+      '  *commits/*/check-runs*) echo \'{"check_runs":[{"name":"a","conclusion":"success","completed_at":"2026-10-22T00:00:00Z"}]}\' ;;',
+      `  *issues/7/timeline*) echo '${JSON.stringify([ev('added_to_merge_queue', '2026-10-22T00:10:00Z'), ev('labeled', '2026-10-22T00:11:00Z'),
+        ev('removed_from_merge_queue', '2026-10-22T00:20:00Z'), ev('added_to_merge_queue', '2026-10-22T00:40:00Z')])}' ;;`,
+      "  *issues/8/timeline*) echo '[]' ;;",
+      `  *issues/9/timeline*) echo '${JSON.stringify([ev('added_to_merge_queue', '2026-10-22T00:10:00Z'), ev('removed_from_merge_queue', '2026-10-22T01:00:00Z')])}' ;;`,
+    ]);
+    const r = tool(h, ['queue-waits', 'o/r', '--required', 'a', '--since', '2026-10-21', '--until', '2026-10-25']);
+    expect(r.status, r.stderr).toBe(0);
+    const rep = JSON.parse(r.stdout);
+    expect(rep.prs).toBe(2); // 9 merged with the removal GitHub logs at the merge itself: not an ejection
+    expect(rep.mergedWithoutQueueEntry).toBe(1);
+    expect(rep.prsReQueued).toBe(1);
+    expect(rep.greenToFirstEntryMin.n).toBe(2);
+    expect(rep.greenToFirstEntryMin.median).toBe(10);
+    expect(rep.lastEntryToMergeMin.median).toBe(35);
+    expect(rep.greenToMergeMin.median).toBe(60);
+    expect(calls(h.home, 'gh-calls')!.every((c) => c.startsWith('api -X GET --allow-escape-sequences '))).toBe(true);
+  });
+});

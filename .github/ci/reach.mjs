@@ -1,0 +1,361 @@
+// The light pull-request rule for the suites that have no dependency map
+// (operator ruling 2026-10-25). The server suite is selected from a traced
+// map (select.mjs); the agent suite, the pwa shards and the browser leg are
+// not, so a pull request asks THIS module whether its change can reach them,
+// and runs their tests only when it can. The typechecks, the build and the
+// required check names do not depend on the answer: only the test steps skip.
+//
+// Written as the INVERSE of a reach list on purpose. "Run when the change
+// touches agent/ or shared/" would miss every file a test reads from another
+// tree (the agent's vitest setup lives in server/test, the pwa suite renders
+// docs/). So the rule names what a package provably does NOT read, and a
+// package skips only when EVERY changed file is one of those. Anything
+// unlisted, an empty change, an unknown package and a diff that cannot be
+// taken all RUN the tests: the safe direction.
+//
+// Only a `pull_request` can skip, with ONE exception below. A merge-queue run,
+// the daily run, a dispatch and a call all run every test, and so does a pull
+// request that carries the `full-ci` label or changes `.github/` (the Select
+// step decides both for the server suite; this module repeats the label and
+// the `.github/` rule, which falls out of `.github/` being foreign to nobody).
+//
+// THE QUEUE'S BROWSER SKIP (the owner's ruling of 2026-11-02, reversing
+// 2026-10-25's "the queue runs every test" for the browser shards ONLY). In a
+// merge-queue run the legs in QUEUE_SKIPPABLE (the browser suite) ask the same
+// question of the group's whole change, from the queue's base to its head, and
+// skip when no file in it can reach them (`queueScope`: `skipsTests`, the same
+// FOREIGN and READS lists). A docs-only group is the case it exists for: the
+// browser tests read nothing under docs/ (the census in
+// server/test/ci-reach-census.test.ts pins that), while the pwa unit suite
+// renders docs/, so docs/ is foreign to `browser` and never to `pwa`. Every
+// other package runs every test in the queue, whatever changed, but for the
+// docs-only group below.
+//
+// A DOCS-ONLY CHANGE (D-7868, the operator's direction of 2026-11-03) runs only
+// the checks that can see it. `docsOnly` is the one predicate: a non-empty
+// change whose every file is under docs/ and is no infrastructure file
+// (`infraTrigger`); a root Markdown file (README.md, CLAUDE.md), which server
+// suites read, is not under docs/. In the merge queue such a group runs, per
+// `QUEUE_DOCS_ONLY`, the server tests a pull request runs for it (select.mjs
+// and the `fast-plan` job take the fast path), skips the node floor's and the
+// agent's tests, and runs the pwa suite in full. On a pull request the agent
+// tests, the pwa typecheck, the pwa build and Storybook (`pwa-build`) skip for
+// it, because docs/ is foreign to them (FOREIGN; the census pins that). A
+// mixed change, an empty one and one that cannot be diffed are not docs-only.
+//
+// THE FAST RUN (operator ruling 2026-10-28). An ordinary pull request runs only
+// the fast checks: the typechecks, the build, the tests its change can reach and
+// the guard suites. `fastRun` says whether a change is ordinary: it is, unless a
+// file is infrastructure every test shares (select-tests.mjs `infraTrigger`, the
+// one list). A head branch under `train/` or the `full-ci` label arrives here as
+// `--full-label true` and is never fast. The legs in QUEUE_ONLY (the browser
+// suite) run in the merge queue and on main, and skip on a fast pull request.
+
+import { appendFileSync, readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { infraTrigger } from './select-tests.mjs';
+
+/** Directory prefixes (with the trailing slash) that a package's tests never read. */
+export const FOREIGN = {
+  // docs/ too (D-7868): no agent test and no file of its vitest setup reads anything under it.
+  agent: ['pwa/', 'ui/', 'docs/'],
+  pwa: ['agent/', 'server/', 'ccd/', 'deploy/'],
+  // docs/ too: the browser tests read nothing under it (pwa's own suite does, so it is not foreign to `pwa`).
+  browser: ['agent/', 'server/', 'ccd/', 'deploy/', 'docs/'],
+  // The pwa checks that are not tests: `pwa-static`'s typechecks, palette check and Storybook build, `build-pwa`'s
+  // provenance check, install and vite build, and `storybook-a11y` (D-7868). Their tsconfigs, vite configs and
+  // Storybook config name nothing under docs/ (the census pins that), so only docs/ is listed: nothing wider is claimed.
+  'pwa-build': ['docs/'],
+};
+
+/**
+ * Paths under a foreign prefix that the package's tests DO read, so a change
+ * to one still runs them. A path ending in `/` is a directory. The list is
+ * pinned to the tests by the census in server/test/ci-reach-census.test.ts,
+ * which scans every path literal that leaves a tree and goes red when one
+ * resolves under a foreign prefix without an entry here.
+ */
+export const READS = {
+  // ccd/testbox-knobs too (D-8166): pwa/test/testbox-admin-words.test.ts pins the card's knob words to the knobs file.
+  // server/test/scan/ (D-8288): the pwa census and scan suites import the repo's one TypeScript parser from
+  // server/test/scan/parse.ts. KNOWN WIDTH: a change to its pin alone (`typescript-api` in server/package.json and the
+  // lock) is not listed, so a pull request that only bumps it skips the pwa tests; the merge queue runs them whole.
+  pwa: ['server/test/fixtures/', 'server/src/laneSchedule.ts', 'server/src/pane/', 'ccd/testbox-knobs', 'server/test/scan/'],
+  browser: ['server/test/fixtures/', 'server/src/laneSchedule.ts', 'server/src/pane/'],
+};
+
+/**
+ * Whether a package may skip its tests for this change: true only when the
+ * change is non-empty and every file is under one of its foreign prefixes.
+ * @param {string} pkg @param {string[]} changed
+ */
+export function skipsTests(pkg, changed) {
+  const foreign = Object.hasOwn(FOREIGN, pkg) ? FOREIGN[pkg] : undefined;
+  if (!foreign) return false;
+  const files = changed.map((f) => f.trim()).filter(Boolean);
+  if (files.length === 0) return false;
+  const reads = Object.hasOwn(READS, pkg) ? READS[pkg] : [];
+  const read = (/** @type {string} */ f) => reads.some((r) => (r.endsWith('/') ? `${f}/`.startsWith(r) : f === r));
+  // Under docs/, only a document is foreign: a manifest or a config there is infrastructure (`docFile`).
+  return files.every((f) => foreign.some((p) => f.startsWith(p) && (p !== DOCS || docFile(f))) && !read(f));
+}
+
+const DOCS = 'docs/';
+
+/** A file under docs/ that is no infrastructure file (`infraTrigger`: a manifest, a vitest or tsconfig, ...).
+ *  @param {string} f */
+function docFile(f) {
+  return f.startsWith(DOCS) && infraTrigger(f) === null;
+}
+
+/**
+ * THE docs-only predicate (D-7868, the operator's direction of 2026-11-03): true only when the change is non-empty
+ * and every file is under docs/ and is no infrastructure file. A root file (README.md, CLAUDE.md, CONTRIBUTING.md) is
+ * not under docs/, so a change to one is not docs-only: about 40 server suites read them. An empty change is never
+ * docs-only, so every check runs: the safe direction.
+ * @param {string[]} changed @returns {boolean}
+ */
+export function docsOnly(changed) {
+  const files = changed.map((f) => f.trim()).filter(Boolean);
+  return files.length > 0 && files.every(docFile);
+}
+
+/** The legs a fast pull request leaves to the merge queue and main (operator ruling 2026-10-28). */
+export const QUEUE_ONLY = ['browser'];
+
+/** The legs a merge-queue run may skip when the group's change cannot reach them (the owner's ruling of 2026-11-02:
+ *  the browser shards only). */
+export const QUEUE_SKIPPABLE = ['browser'];
+
+/** What a docs-only merge-queue group runs, per leg (D-7868, the operator's direction of 2026-11-03): the server tests
+ *  a pull request runs for that change (`selected`: select.mjs's selection and the `fast-plan` job), and no node floor
+ *  or agent tests (docs cannot change runtime compatibility, and no agent test reads docs/). Every leg not named here
+ *  runs as for any other group: the pwa suite renders docs/, so it runs whole; the browser leg is QUEUE_SKIPPABLE. */
+export const QUEUE_DOCS_ONLY = { server: 'selected', 'node-floor': 'skip', agent: 'skip' };
+
+/**
+ * A merge-queue group's scope for a package: `skip` for a QUEUE_SKIPPABLE leg when no file of the group's change can
+ * reach its tests (`skipsTests`); for a docs-only group (`docsOnly`), the leg's QUEUE_DOCS_ONLY entry; otherwise
+ * `all`. Never `changed`: the queue runs a leg whole, skips it or runs its pull-request selection. An empty change, a
+ * mixed one, an unknown package and every other package answer `all`, the safe direction.
+ * @param {string} pkg @param {string[]} changed @returns {'skip'|'selected'|'all'}
+ */
+export function queueScope(pkg, changed) {
+  if (QUEUE_SKIPPABLE.includes(pkg) && skipsTests(pkg, changed)) return 'skip';
+  if (Object.hasOwn(QUEUE_DOCS_ONLY, pkg) && docsOnly(changed)) return /** @type {'skip'|'selected'} */ (QUEUE_DOCS_ONLY[pkg]);
+  return 'all';
+}
+
+/**
+ * Whether a pull request's change may take the fast run: true only when the
+ * change is non-empty and no file is infrastructure every test shares. An empty
+ * change answers false (the full run: the safe direction), and so does a change
+ * `infraTrigger` names, with its reason.
+ * @param {string[]} changed @returns {{ fast: boolean, why: string }}
+ */
+export function fastRun(changed) {
+  const files = changed.map((f) => f.trim()).filter(Boolean);
+  if (files.length === 0) return { fast: false, why: 'no changed file could be read' };
+  for (const f of [...files].sort()) {
+    const reason = infraTrigger(f);
+    if (reason) return { fast: false, why: reason };
+  }
+  return { fast: true, why: 'an ordinary change: the fast checks run, the merge queue runs the full suite' };
+}
+
+/**
+ * A pull request's scope for a package: `skip` for a QUEUE_ONLY leg when the
+ * change takes the fast run, otherwise `scopeOf`'s answer.
+ * @param {string} pkg @param {string[]} changed @returns {'skip'|'changed'|'all'}
+ */
+export function prScope(pkg, changed) {
+  if (QUEUE_ONLY.includes(pkg) && fastRun(changed).fast) return 'skip';
+  return scopeOf(pkg, changed);
+}
+
+/**
+ * Paths whose effect on the pwa tests vitest can follow through imports, so
+ * `vitest --changed` selects them exactly: TypeScript (and the .mjs/.mts of
+ * shared/) only. Anything else — a stylesheet, JSON, an asset or a font under
+ * pwa/src or ui/src, docs/, a fixture read with fs, package files, vite and
+ * vitest configs, the root — is reached some other way (many pwa suites read
+ * the CSS and the source tree with node:fs) and runs every pwa test.
+ */
+const IMPORTABLE = [/^pwa\/src\/.+\.tsx?$/, /^ui\/src\/.+\.tsx?$/, /^shared\/.+\.(?:ts|tsx|mts|mjs)$/, /^pwa\/test\/[^/]+\.(?:ts|tsx|mts)$/];
+
+/**
+ * How much of a package's tests a pull request runs: `skip` (none), `changed`
+ * (only the tests vitest relates to the change, plus `alwaysRunPwaTests`) or
+ * `all`. Only the pwa shards have `changed`.
+ * @param {string} pkg @param {string[]} changed @returns {'skip'|'changed'|'all'}
+ */
+export function scopeOf(pkg, changed) {
+  if (skipsTests(pkg, changed)) return 'skip';
+  if (pkg !== 'pwa') return 'all';
+  const files = changed.map((f) => f.trim()).filter(Boolean);
+  if (files.length === 0) return 'all';
+  const foreign = FOREIGN.pwa;
+  const reads = READS.pwa;
+  const isForeign = (/** @type {string} */ f) => foreign.some((p) => f.startsWith(p)) && !reads.some((r) => (r.endsWith('/') ? `${f}/`.startsWith(r) : f === r));
+  return files.every((f) => isForeign(f) || IMPORTABLE.some((re) => re.test(f))) ? 'changed' : 'all';
+}
+
+/** A string literal naming node:fs (`'fs'`, `'node:fs'`, `'node:fs/promises'`), in any import form. */
+const FS_MODULE = /['"`](?:node:)?fs(?:\/promises)?['"`]/;
+/** A relative module specifier in an import, a re-export, a dynamic import or a require. */
+const RELATIVE_IMPORT = /(?:\bfrom|\bimport|\bimport\s*\(|\brequire\s*\()\s*['"](\.{1,2}\/[^'"]+)['"]/g;
+const RESOLVE_EXT = ['', '.ts', '.tsx', '.mts', '.mjs', '.js', '/index.ts', '/index.tsx'];
+
+/**
+ * The pwa test files a `changed` pull request runs whatever it changed: every
+ * test that can read the tree from disk, because `vitest --changed` follows
+ * imports and a suite that scans pwa/src or ui/src with node:fs (css-vars,
+ * contrast, the boundary and census suites, ...) imports none of what it reads.
+ * DERIVED, not listed: a test is in the set when it, or a pwa/test helper it
+ * imports (transitively: sourceScan.ts, literalWalker.ts, ...), names node:fs.
+ * That is a superset of "reads src/" on purpose — it costs a few suites that
+ * only read fixtures, and it cannot miss one that reads the source through a
+ * helper. Every census and guard suite rides along by name. Paths are
+ * pwa-relative (`test/css-vars.test.ts`), sorted. A census in
+ * server/test/ci-reach.test.ts pins it from the other side: a pwa test that
+ * calls an fs read must be in this set.
+ * @param {string} root the repository root
+ * @returns {string[]}
+ */
+export function alwaysRunPwaTests(root) {
+  const pwa = path.join(root, 'pwa');
+  /** @type {Map<string, boolean>} */
+  const memo = new Map();
+  const usesFs = (/** @type {string} */ file) => {
+    if (memo.has(file)) return /** @type {boolean} */ (memo.get(file));
+    memo.set(file, false); // a cycle reads as "no" until proven otherwise
+    let text = '';
+    try { text = readFileSync(file, 'utf8'); } catch { return false; }
+    let yes = FS_MODULE.test(text);
+    if (!yes) {
+      for (const m of text.matchAll(RELATIVE_IMPORT)) {
+        const spec = m[1].replace(/\.js$/, '');
+        const base = path.resolve(path.dirname(file), spec);
+        // Only the pwa test tree's own helpers: a pwa/src or shared/ module that names fs does so for the server
+        // side (shared/api.ts), and a change to it is an import vitest follows.
+        if (!base.startsWith(path.join(pwa, 'test') + path.sep) || base.includes(`${path.sep}node_modules${path.sep}`)) continue;
+        const hit = RESOLVE_EXT.map((e) => base + e).find((c) => existsSync(c) && statSync(c).isFile());
+        if (hit && /\.(?:ts|tsx|mts|mjs|js)$/.test(hit) && usesFs(hit)) { yes = true; break; }
+      }
+    }
+    memo.set(file, yes);
+    return yes;
+  };
+  /** @param {string} dir @returns {string[]} */
+  const walk = (dir) => {
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) return e.name === 'node_modules' || e.name === 'dist' ? [] : walk(p);
+      return /\.test\.tsx?$/.test(e.name) ? [p] : [];
+    });
+  };
+  return [path.join(pwa, 'test'), path.join(pwa, 'src')].flatMap(walk)
+    .filter((f) => /-(?:census|guard)\.test\.tsx?$/.test(f) || usesFs(f))
+    .map((f) => path.relative(pwa, f).split(path.sep).join('/'))
+    .sort();
+}
+
+function parseArgs(argv) {
+  const out = {};
+  for (let i = 0; i < argv.length; i += 2) out[argv[i].replace(/^--/, '')] = argv[i + 1];
+  return out;
+}
+
+function changedFiles(opt) {
+  if (opt['changed-file']) return readFileSync(opt['changed-file'], 'utf8').split('\n');
+  const mb = execFileSync('git', ['merge-base', opt.base, 'HEAD'], { encoding: 'utf8' }).trim();
+  return execFileSync('git', ['diff', '--name-only', '--no-renames', mb, 'HEAD'], { encoding: 'utf8' }).split('\n');
+}
+
+/** `--ask fast`: writes `fast=true` for a pull request that takes the fast run, and for a docs-only merge-queue group
+ *  (`queueScope('server', …)` answers `selected`, D-7868), `fast=false` otherwise. */
+function askFast(opt) {
+  let fast = false;
+  let why = 'not a pull request: the full run';
+  if (opt.event === 'merge_group') {
+    // The group's change, `--base` (the queue's base sha) to HEAD. Undiffable: the full run.
+    why = 'a merge-queue group that is not docs-only: the full run';
+    try {
+      fast = queueScope('server', changedFiles(opt)) === 'selected';
+      if (fast) why = 'a docs-only merge-queue group: the server tests a pull request runs for it (D-7868, the operator\'s direction of 2026-11-03)';
+    } catch (e) {
+      why = `could not diff this merge-queue group (${e instanceof Error ? e.message : e}); the full run`;
+      console.log(`::warning::${why}`);
+    }
+  } else if (opt.event === 'pull_request' && opt['full-label'] === 'true') {
+    why = 'the full-ci label or a train/ head branch asks for the full run';
+  } else if (opt.event === 'pull_request') {
+    try {
+      ({ fast, why } = fastRun(changedFiles(opt)));
+    } catch (e) {
+      why = `could not diff this change (${e instanceof Error ? e.message : e}); the full run`;
+      console.log(`::warning::${why}`);
+    }
+  }
+  console.log(`fast: ${fast} — ${why}`);
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `fast=${fast}\n`);
+}
+
+function main() {
+  const opt = parseArgs(process.argv.slice(2));
+  if (opt.ask === 'fast') return askFast(opt);
+  let skip = false;
+  let scope = 'all';
+  let why = 'every test runs';
+  if (opt.event === 'merge_group') {
+    // The group's change, `--base` (the queue's base sha) to HEAD (its head). Undiffable: every test runs.
+    try {
+      const changed = changedFiles(opt);
+      scope = queueScope(opt.pkg, changed);
+      skip = scope === 'skip';
+      // A leg runs whole here or skips: `selected` is the server leg's, which select.mjs and fast-plan carry.
+      if (scope === 'selected') scope = 'all';
+      why = !skip
+        ? `a file in this merge-queue group can reach the ${opt.pkg} tests`
+        : QUEUE_SKIPPABLE.includes(opt.pkg) && skipsTests(opt.pkg, changed)
+          ? `no file in this merge-queue group can reach the ${opt.pkg} tests (owner ruling 2026-11-02)`
+          : `a docs-only merge-queue group skips the ${opt.pkg} tests (D-7868, the operator's direction of 2026-11-03)`;
+    } catch (e) {
+      console.log(`::warning::could not diff this merge-queue group (${e instanceof Error ? e.message : e}); running the ${opt.pkg} tests`);
+    }
+  } else if (opt.event === 'pull_request' && opt['full-label'] !== 'true') {
+    try {
+      const changed = changedFiles(opt);
+      scope = prScope(opt.pkg, changed);
+      skip = scope === 'skip';
+      why = skip
+        ? (QUEUE_ONLY.includes(opt.pkg) && fastRun(changed).fast ? `a fast pull request leaves the ${opt.pkg} tests to the merge queue` : `no changed file can reach the ${opt.pkg} tests`)
+        : `a changed file can reach the ${opt.pkg} tests`;
+    } catch (e) {
+      console.log(`::warning::could not diff this change (${e instanceof Error ? e.message : e}); running the ${opt.pkg} tests`);
+    }
+  } else if (opt['full-label'] === 'true') {
+    why = 'the full-ci label asks for every test';
+  }
+  // A `changed` pwa run also runs the suites that read the tree from disk (alwaysRunPwaTests): they ride every
+  // shard, sharded with the rest. Unreadable: fall back to everything, the safe direction.
+  let always = '';
+  if (scope === 'changed') {
+    try {
+      always = alwaysRunPwaTests(path.resolve(opt.repo ?? process.cwd())).join(' ');
+      if (!always) throw new Error('no pwa test reads from disk');
+      console.log(`${opt.pkg}: ${always.split(' ').length} test file(s) that read the tree from disk run whatever changed`);
+    } catch (e) {
+      console.log(`::warning::could not list the pwa tests that read from disk (${e instanceof Error ? e.message : e}); running every pwa test`);
+      scope = 'all';
+      always = '';
+    }
+  }
+  console.log(`${opt.pkg}: ${skip ? 'tests skipped' : `tests run (${scope})`} — ${why}`);
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `skip=${skip}\nscope=${scope}\nalways=${always}\n`);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

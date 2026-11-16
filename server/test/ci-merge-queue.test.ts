@@ -1,0 +1,286 @@
+/**
+ * The merge queue's half of `.github/workflows/ci.yml` (landing-order stage 2,
+ * spec §5.2), on CI test selection's shape (#183). Five properties, each read
+ * from the file or from the modules it runs, never trusted to a comment:
+ *
+ *  1. `merge_group` is a trigger. Without it a queue entry's required checks
+ *     never report, and the queue removes the entry at its timeout.
+ *  2. A queue run has a concurrency group of its OWN, and nothing cancels it.
+ *     GitHub keeps one PENDING run per group and cancels the older one even
+ *     with `cancel-in-progress: false`, so a queue run in the shared `refresh`
+ *     group (or any group another run shares) could lose its checks.
+ *  3. A queue run skips every macOS job and every job that needs one
+ *     (`full-suite`), and NOTHING a required check needs mentions
+ *     `merge_group` — but for the one step that asks the pipeline question of
+ *     a queue run too. The second half is the dangerous one: GitHub reports a
+ *     job skipped by `if:` as passing, so a required leg that skipped the
+ *     queue would let the queue merge a tree nobody tested. The one leg that
+ *     may skip its tests in the queue is the browser suite, by STEP, on
+ *     reach.mjs's answer for the group's change (the owner's ruling of
+ *     2026-11-02): its ask is the only other place the event is named. And a
+ *     DOCS-ONLY group (D-7868, the operator's direction of 2026-11-03) skips
+ *     the agent tests by STEP, on the agent's own queue ask, and the node
+ *     floor's by its leg switch, on select's `fast`; the select and fast-plan
+ *     steps read the queue's base. Each of those shapes is allowed whole here.
+ *  4. A queue run runs the FULL server suite and a pull request runs the light
+ *     selection (operator ruling 2026-10-25, which replaced 2026-09-28's "a
+ *     queue run runs what a pull request runs"): the header's mode table says
+ *     so, `decideMode` agrees for every input, and the queue never answers
+ *     `selected` but for a docs-only group (D-7868), which runs what a pull
+ *     request runs for its change.
+ *  5. The selector and the verdict agree on which triggers may never answer
+ *     `tests: none` — derived from `on:`, so a trigger added to one module's
+ *     pull-request arm and not the other's reds here.
+ *
+ * DERIVED, not listed: "a macOS job" is any job whose block says
+ * `runs-on: macos-…`, "needs one" is the transitive `needs:` closure, and the
+ * required legs' prerequisites are the closure of the three jobs that carry a
+ * required name — so a job CI selection adds later is held to rule 3 without
+ * this file learning its name.
+ */
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { decideMode, modeInvariantViolation } from '../../.github/ci/select.mjs';
+import { serverVerdict } from '../../.github/ci/verdict.mjs';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const ci = (): string => readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+
+/** The lines of one TOP-LEVEL key's block: everything after `^<key>:` up to the
+ *  next line that opens another top-level key. A SECOND block with the same key
+ *  is a duplicate YAML key — invalid, and invisible to a reader that stops at
+ *  the first — so this refuses one. */
+function topBlock(yml: string, key: string): string[] {
+  const lines = yml.split('\n');
+  const heads = lines.flatMap((l, i) => (l === `${key}:` || l.startsWith(`${key}: `) ? [i] : []));
+  expect(heads.length, `ci.yml carries ${heads.length} top-level \`${key}:\` keys`).toBe(1);
+  const rest = lines.slice(heads[0]! + 1);
+  const end = rest.findIndex((l) => /^[A-Za-z_][\w-]*:/.test(l));
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
+/** `jobs:` as job id -> that job's lines (every job key at two-space indent). */
+function jobs(yml: string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  let cur: string[] | null = null;
+  for (const l of topBlock(yml, 'jobs')) {
+    const head = /^ {2}([A-Za-z][\w-]*):\s*$/.exec(l);
+    if (head) { cur = []; out.set(head[1]!, cur); continue; }
+    cur?.push(l);
+  }
+  expect(out.size, 'parsed no jobs at all').toBeGreaterThan(0);
+  return out;
+}
+
+/** Every occurrence of a job-level scalar key (four-space indent) — more than
+ *  one is a duplicate key. */
+function jobKeys(block: string[], key: string): string[] {
+  return block.flatMap((l) => { const m = new RegExp(`^ {4}${key}: (.*)$`).exec(l); return m ? [m[1]!] : []; });
+}
+
+const needsOf = (block: string[]): string[] => {
+  const v = jobKeys(block, 'needs')[0];
+  return v === undefined ? [] : v.replace(/^\[|\]$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
+};
+
+/** Split an expression at its TOP level (outside parentheses) on `op`. */
+function topLevel(expr: string, op: ' && ' | ' || '): string[] {
+  const parts: string[] = [];
+  let depth = 0; let start = 0;
+  for (let i = 0; i < expr.length; i++) {
+    const c = expr[i];
+    if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (depth === 0 && expr.startsWith(op, i)) { parts.push(expr.slice(start, i)); start = i + op.length; i += op.length - 1; }
+  }
+  parts.push(expr.slice(start));
+  return parts.map((p) => p.trim());
+}
+
+const SKIP = "github.event_name != 'merge_group'";
+// An allowed event may carry one schedule exclusion, `(github.event_name == 'schedule' && github.event.schedule != '<cron>')`
+// (D-6769: probe-macos runs on the daily schedule and not on the hourly refresh); it still names no merge_group.
+const ALLOWED = String.raw`(?:github\.event_name == '[a-z_]+'|\(github\.event_name == 'schedule' && github\.event\.schedule != '[^']+'\))`;
+const ALLOW_LIST = new RegExp(`^${ALLOWED}(?: \\|\\| ${ALLOWED})*$`);
+
+/** Whether a job-level `if:` keeps a `merge_group` run out: either the skip is
+ *  one of its TOP-LEVEL conjuncts and it has no top-level `||` (a disjunct
+ *  would route around the conjunct), or it is a pure event allow-list that does
+ *  not name `merge_group`. */
+function skipsQueue(cond: string | undefined): boolean {
+  if (cond === undefined) return false;
+  if (topLevel(cond, ' || ').length > 1) return ALLOW_LIST.test(cond) && !cond.includes('merge_group');
+  return topLevel(cond, ' && ').includes(SKIP);
+}
+
+const onKeys = (): string[] => topBlock(ci(), 'on').flatMap((l) => { const m = /^ {2}([a-z_]+):/.exec(l); return m ? [m[1]!] : []; });
+
+/** The ONE place the required closure may name the event: `select`'s pipeline
+ *  check, a STEP (never a job-level condition), which asks a queue run the
+ *  pull request's question against the queue's base (rule 4). */
+const PIPELINE_STEP_LINES = [
+  "        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'",
+  "          BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || format('origin/{0}', github.base_ref) }}",
+];
+
+/** The browser leg's merge-queue ask (the owner's ruling of 2026-11-02): a STEP of `browser-pwa`, never a job-level
+ *  condition, that asks reach.mjs whether the group's change can reach the browser tests. It may skip only the browser
+ *  leg's own later steps (ci-pipeline.test.ts evaluates that), so its lines are allowed there and nowhere else. */
+const QUEUE_BROWSER_ASK_LINES = [
+  "        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'",
+  '          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}',
+  '        run: node .github/ci/reach.mjs --pkg browser --event merge_group --base "$QUEUE_BASE"',
+];
+
+/** The docs-only queue group's shapes (D-7868, the operator's direction of 2026-11-03), allowed whole in the required
+ *  closure: the agent's queue ask (a STEP of `test`, as the browser leg's is), the node floor's leg switch (one env
+ *  line, which skips by step on select's `fast`), and the queue's base in select's Select step and fast-plan's Plan
+ *  step (the pipeline step's own BASE line, already allowed above). None is a job-level condition. */
+const QUEUE_AGENT_ASK_LINES = [
+  "        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'",
+  '          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}',
+  '        run: node .github/ci/reach.mjs --pkg agent --event merge_group --base "$QUEUE_BASE"',
+];
+const QUEUE_FLOOR_LEG_LINE = "      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true' || needs.select.outputs.docs_followup == 'true')) || (github.event_name == 'merge_group' && needs.select.outputs.fast == 'true')) && 'skip' || 'run' }}";
+
+describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s shape)', () => {
+  it('triggers on merge_group, beside pull_request', () => {
+    const on = onKeys();
+    expect(on, 'ci.yml no longer triggers on pull_request').toContain('pull_request');
+    expect(on, 'ci.yml does not trigger on merge_group — a queue entry would never get its required checks')
+      .toContain('merge_group');
+  });
+
+  it('gives a queue run a concurrency group of its own, and never cancels one', () => {
+    const block = topBlock(ci(), 'concurrency');
+    const group = block.find((l) => l.startsWith('  group: ')) ?? '';
+    // Run-unique: `github.run_id` is unique per run. An arm keyed on the ref,
+    // the sha or the mode could be shared, and a shared group drops pending runs.
+    expect(group, 'a merge_group run has no group of its own — it falls through to a shared one')
+      .toContain("github.event_name == 'merge_group' && format('queue-{0}', github.run_id)");
+    // …and it is taken BEFORE the shared push-to-main group can be reached.
+    expect(group.indexOf("format('queue-{0}', github.run_id)"), 'the queue arm sits after the shared refresh arm')
+      .toBeLessThan(group.indexOf("'refresh'"));
+    expect(block, 'cancel-in-progress must be the pull_request event and nothing wider — a cancelled queue run removes the entry')
+      .toContain("  cancel-in-progress: ${{ github.event_name == 'pull_request' }}");
+  });
+
+  it('keeps every macOS job, and every job that needs one, off a queue run — and no required prerequisite mentions merge_group', () => {
+    const all = jobs(ci());
+    // A macOS job runs on macOS, or is a call of macos.yml, where the macOS legs live (operator ruling 2026-10-28).
+    const isMac = (b: string[]): boolean => b.some((l) => /^ {4}runs-on: macos-/.test(l) || l === '    uses: ./.github/workflows/macos.yml');
+    // Guard the guard: a reader that parsed no macOS job makes the loop vacuous.
+    const macs = [...all].filter(([, b]) => isMac(b)).map(([n]) => n);
+    expect(macs.length, 'parsed no macOS job at all — this test went blind').toBeGreaterThan(0);
+    // macos.yml itself never listens for a queue run or a pull request.
+    const macosYml = readFileSync(path.join(ROOT, '.github', 'workflows', 'macos.yml'), 'utf8');
+    expect(topBlock(macosYml, 'on').join('\n')).not.toMatch(/merge_group|pull_request/);
+    // Every job that needs a macOS job, transitively (full-suite needs the `macos` call).
+    const needsMac = (id: string, seen = new Set<string>()): boolean => {
+      if (seen.has(id)) return false; seen.add(id);
+      return needsOf(all.get(id) ?? []).some((n) => macs.includes(n) || needsMac(n, seen));
+    };
+    const offQueue = [...all.keys()].filter((id) => macs.includes(id) || needsMac(id));
+    expect(offQueue, 'full-suite no longer needs a macOS leg — re-derive this rule').toContain('full-suite');
+    for (const id of offQueue) {
+      const conds = jobKeys(all.get(id)!, 'if');
+      expect(conds.length, `job \`${id}\` carries ${conds.length} job-level if: keys`).toBeLessThanOrEqual(1);
+      expect(skipsQueue(conds[0]), `job \`${id}\` runs on a merge_group run: ${conds[0] ?? '(no if:)'}`).toBe(true);
+    }
+    // The required legs and everything they need: none may mention merge_group,
+    // because a required leg skipped by `if:` reads as PASSING to the queue.
+    const req = new Set<string>();
+    const walk = (id: string): void => { if (req.has(id)) return; req.add(id); needsOf(all.get(id) ?? []).forEach(walk); };
+    ['server', 'test', 'pwa', 'build-pwa'].forEach(walk);
+    expect([...req].sort()).toEqual(['browser-pwa', 'build-pwa', 'deps', 'fast-plan', 'node-floor', 'pwa', 'pwa-shard', 'pwa-static', 'select', 'server', 'server-shard', 'server-typecheck', 'test']);
+    // The one exception: a refusal step that only the queue runs (operator ruling 2026-10-28: `test (pwa)` refuses a
+    // red browser suite there, `test (server)` a red node floor). It can only ADD red: its `if:` starts with the
+    // event test and its body is `exit 1`, so no job and no step is skipped by it.
+    const QUEUE_REFUSAL = /^ {6}- name: [^\n]+\n {8}if: github\.event_name == 'merge_group' && needs\.[a-z-]+\.result != 'success'\n {8}run: exit 1\n/gm;
+    const refusals: string[] = [];
+    let browserAsk = 0;
+    let agentAsk = 0;
+    let floorLeg = 0;
+    for (const id of req) {
+      const text = (all.get(id) ?? []).join('\n') + '\n';
+      for (const m of text.match(QUEUE_REFUSAL) ?? []) refusals.push(`${id}: ${/needs\.([a-z-]+)\./.exec(m)?.[1]}`);
+      const asks = (l: string): boolean => (id === 'browser-pwa' && QUEUE_BROWSER_ASK_LINES.includes(l))
+        || (id === 'test' && QUEUE_AGENT_ASK_LINES.includes(l)) || (id === 'node-floor' && l === QUEUE_FLOOR_LEG_LINE);
+      browserAsk += id === 'browser-pwa' ? (all.get(id) ?? []).filter(asks).length : 0;
+      agentAsk += id === 'test' ? (all.get(id) ?? []).filter(asks).length : 0;
+      floorLeg += id === 'node-floor' ? (all.get(id) ?? []).filter(asks).length : 0;
+      const code = text.replace(QUEUE_REFUSAL, '').split('\n').filter((l) => !/^\s*#/.test(l) && !PIPELINE_STEP_LINES.includes(l) && !asks(l)).join('\n');
+      expect(code, `\`${id}\` mentions merge_group — a required leg skipped by if: reports as PASSING, and the queue would merge an untested tree`)
+        .not.toContain('merge_group');
+    }
+    expect(refusals.sort(), 'the queue-only refusals are exactly the browser suite and the node floor').toEqual(['pwa: browser-pwa', 'server: node-floor']);
+    // The browser ask is there, whole, once.
+    expect(browserAsk, 'browser-pwa does not carry the whole merge-queue ask exactly once').toBe(QUEUE_BROWSER_ASK_LINES.length);
+    // The docs-only shapes are whole (D-7868): the agent's ask, and the floor's one leg line.
+    expect(agentAsk, 'test (agent) carries part of the docs-only merge-queue ask').toBe(QUEUE_AGENT_ASK_LINES.length);
+    expect(floorLeg, 'node-floor carries no docs-only leg switch').toBe(1);
+  });
+
+  it('runs the full suite where a pull request runs the light one: the mode table has the row, and decideMode agrees for every input', () => {
+    const header = ci().split('\n').filter((l) => l.startsWith('#'));
+    const row = (ev: string): string | undefined => header.map((l) => new RegExp(`^#   ${ev}\\s{2,}(\\w+)`).exec(l)?.[1]).find(Boolean);
+    expect(row('merge_group'), 'the header mode table has no merge_group row').toBe('full');
+    expect(row('pull_request'), 'the header mode table has no pull_request row').toBe('selected');
+    expect(row('merge_group')).toBe(decideMode({ event: 'merge_group', fullGreen: false }).tests);
+    expect(row('pull_request')).toBe(decideMode({ event: 'pull_request', fullGreen: false }).tests);
+    for (const inputMode of [undefined, 'full', 'rebuild']) {
+      for (const fullGreen of [false, true]) {
+        expect(decideMode({ event: 'merge_group', inputMode, fullGreen }).tests, `inputMode=${inputMode} fullGreen=${fullGreen}: a queue run must be full`)
+          .toBe('full');
+        expect(decideMode({ event: 'merge_group', inputMode, fullGreen, queueDocsOnly: false }).tests).toBe('full');
+        // The one exception (D-7868): a docs-only group runs the selection a pull request runs for its change.
+        expect(decideMode({ event: 'merge_group', inputMode, fullGreen, queueDocsOnly: true }).tests, `inputMode=${inputMode}: a docs-only group`)
+          .toBe('selected');
+      }
+    }
+    // The invariant refuses a queue selection, but for a docs-only group; and never lets one answer none.
+    expect(modeInvariantViolation('merge_group', undefined, 'selected')).toMatch(/merge_group answered tests: selected/);
+    expect(modeInvariantViolation('merge_group', undefined, 'selected', true)).toBeNull();
+    expect(modeInvariantViolation('merge_group', undefined, 'none', true)).toMatch(/tests: none/);
+    // The docs-only flag reaches nothing but the queue.
+    for (const event of ['pull_request', 'schedule', 'workflow_dispatch', 'push']) {
+      expect(decideMode({ event, fullGreen: false, queueDocsOnly: true }), event).toEqual(decideMode({ event, fullGreen: false }));
+    }
+    // The header says so, beside the full row.
+    expect(header.join('\n')).toMatch(/DOCS-ONLY group/);
+  });
+
+  it('keeps the full shard matrix on the queue path: server-shard is not narrowed by anything but select\'s own outputs, and a queue run is never skipped by the light rule', () => {
+    const all = jobs(ci());
+    const shard = (all.get('server-shard') ?? []).join('\n');
+    // select's matrix, unless select answered fast — which only an ordinary pull request does (reach.mjs --ask fast
+    // answers false for every other event, ci-reach.test.ts), so a queue run always takes select's full matrix.
+    expect(shard, 'server-shard no longer takes its matrix from select').toContain("matrix: ${{ fromJSON(needs.select.outputs.fast == 'true' && needs.fast-plan.outputs.server_matrix || needs.select.outputs.server_matrix) }}");
+    expect(jobKeys(all.get('fast-plan') ?? [], 'if')[0]).toContain("needs.select.outputs.fast == 'true'");
+    expect((all.get('select') ?? []).join('\n')).toContain('node .github/ci/reach.mjs --ask fast --event "$EVENT"');
+    expect(jobKeys(all.get('server-shard') ?? [], 'if')[0], 'server-shard\'s condition must not name an event')
+      .not.toMatch(/github\.event_name/);
+    // The light-pull-request rule (reach.mjs) is asked only of a pull request, in every job that asks it.
+    for (const id of ['test', 'pwa-shard', 'browser-pwa']) {
+      const b = (all.get(id) ?? []).join('\n');
+      expect(b, `${id}: the reach step must be a pull_request-only question`).toContain("github.event_name == 'pull_request'");
+      expect(b, `${id}: the reach step is missing`).toContain('.github/ci/reach.mjs');
+    }
+  });
+
+  it('the selector and the verdict agree on which triggers may never answer tests: none', () => {
+    const events = onKeys();
+    expect(events.length, 'parsed no triggers').toBeGreaterThan(0);
+    for (const event of events) {
+      const neverNone = [undefined, 'full', 'rebuild'].every((inputMode) =>
+        [false, true].every((fullGreen) => decideMode({ event, inputMode, fullGreen }).tests !== 'none'));
+      expect(modeInvariantViolation(event, undefined, 'none') !== null, `${event}: select.mjs's invariant disagrees with decideMode`)
+        .toBe(neverNone);
+      const v = serverVerdict({ select: 'success', typecheck: '', shards: '', tests: 'none', count: '', event });
+      expect(v.ok, `${event}: verdict.mjs reads tests: none as ${v.ok ? 'green' : 'red'}, decideMode says it ${neverNone ? 'can never' : 'can'} happen`)
+        .toBe(!neverNone);
+    }
+  });
+});

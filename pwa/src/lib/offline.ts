@@ -1,13 +1,22 @@
 // Offline shell state. The service worker (vite.config.ts) makes the app
-// shell load without a network; this module makes it load with *content*: the
-// last fleet snapshot persists to localStorage and the fleet store hydrates
-// from it at boot, so a cold start — installed-app launch in a tunnel, on a
-// plane — renders the fleet instantly. The data is clearly last-known: the
-// store keeps conn 'connecting' until the socket opens, and FleetScreen
-// stale-marks everything under that state. /api and /ws are never cached
-// (network-only) — this snapshot is the only offline data, by design.
+// shell load without a network; this module makes it load with *content*. It
+// keeps two copies, each under its own key:
+// - the last fleet snapshot: the fleet store hydrates `sessions` from it at
+//   boot, so a cold start — installed-app launch in a tunnel, on a plane —
+//   renders the fleet instantly. The data is clearly last-known: the store
+//   keeps conn 'connecting' until the socket opens, and FleetScreen
+//   stale-marks everything under that state.
+// - the last Waiting on you list (console speed, Task C4; spec §2.6, D16): the
+//   store hydrates `waitingSaved` from it, never `waiting`, and the Waiting
+//   page draws it marked as not current, with acting blocked, until the live
+//   list lands (`ledgers/savedCopy.ts` decides which to draw).
+// /api and /ws are never cached (network-only) — these two copies are the only
+// offline data, by design.
 import { reviveFleetSessions, unmeasuredFields, type FleetSession, type RosterWire } from '../../../shared/api';
+import type { ItemView, WaitingView } from '../../../shared/ledgers';
 import { HUES } from '../../../shared/roster';
+import { isWaitingView } from '../ledgers/waitingView';
+import { readKey, removeKey, writeKey, type StorageSource } from './storage';
 
 // Stays at v1 — deliberately. A snapshot written before `tasks`/`pr`/`archivedAt`
 // existed is still usable data, and the read normalizes it (reviveFleetSessions);
@@ -16,9 +25,7 @@ import { HUES } from '../../../shared/roster';
 // for every future nullable field.
 const KEY = 'ccrc.fleet-snapshot.v1';
 
-// Always via `window.` — Node 22+ ships an experimental bare `localStorage`
-// global that shadows jsdom's working one under vitest.
-const storage = (): Storage => window.localStorage;
+// Read and written through the one storage port (`lib/storage.ts`, D-7190).
 
 export interface FleetSnapshot {
   savedAt: number; // epoch ms of the snapshot
@@ -28,7 +35,7 @@ export interface FleetSnapshot {
    *  *something* instantly — without this, `accountLabel`/`accountColorVar`
    *  read an empty roster on a cold start exactly as they would before the
    *  first `/api/accounts` poll, and every account rendered as its raw
-   *  wrapper id (`claude2`, `claude-corp`) instead of the jargon-free label
+   *  wrapper id (`claude9`, `claude-acme`) instead of the jargon-free label
    *  this module exists to restore. Against the compile-time roster this
    *  replaced, that case never existed — labels were always available,
    *  synchronously, with no snapshot involved. `[]` for a pre-Task-7
@@ -52,6 +59,21 @@ function isRosterWireLike(v: unknown): v is RosterWire {
     && typeof o['hue'] === 'string' && (HUES as readonly string[]).includes(o['hue']);
 }
 
+/** True when `saveFleetSnapshot` would refuse this frame: it is EMPTY, or carries even one row with a non-empty
+ *  `unmeasured` (the two shapes `saveFleetSnapshot`'s docblock gives its reasons for). The refusal is decided HERE,
+ *  once; the writer below uses it, and so does a caller that schedules writes (`stores/fleet.ts`), so a frame the
+ *  snapshot would refuse is never scheduled — it neither opens a throttle window nor displaces a good frame waiting
+ *  in one. Pure: no storage, no clock, no timers. */
+export function snapshotRefused(sessions: readonly FleetSession[]): boolean {
+  if (sessions.length === 0) return true;
+  // `unmeasuredFields`, not `s.unmeasured` directly (blocking review finding
+  // 2): a LIVE fleet frame never goes through `reviveFleetSession` (only this
+  // module's own persisted-snapshot read does), so a row from a server that
+  // predates this field can genuinely lack the key at runtime despite the
+  // static type — see `unmeasuredFields`'s own docstring in shared/api.ts.
+  return sessions.some((s) => unmeasuredFields(s).length > 0);
+}
+
 /** Best-effort persist — quota errors and private-mode walls are swallowed;
  *  the app simply cold-starts empty next time.
  *
@@ -68,7 +90,8 @@ function isRosterWireLike(v: unknown): v is RosterWire {
  *    genuinely empty fleet — and while `watch.ts`'s tick path now refuses to
  *    broadcast that shape (it takes `readRegistryMeasured` and returns before
  *    `bus.emit('fleet', …)`), TWO producers still ship it: `server.ts`'s
- *    `GET /api/fleet` fallback and the connect-time `/ws/fleet` push both
+ *    `GET /api/fleet` fallback and a connect-time `/ws/fleet` push made before
+ *    the watcher's first broadcast (after it, the push IS that broadcast) both
  *    call `assembleFleet` fresh and take `readRegistry`'s `[]`-on-unlistable
  *    answer — plus any older server predating the ladder (the same
  *    FLEET_PROTO-stays-1 skew the `unmeasured` revival tolerates). So this
@@ -93,19 +116,9 @@ function isRosterWireLike(v: unknown): v is RosterWire {
  *  know what to preserve, which is a second read this function has never
  *  needed for `sessions` either. */
 export function saveFleetSnapshot(sessions: FleetSession[], roster: readonly RosterWire[] = []): void {
-  if (sessions.length === 0) return;
-  // `unmeasuredFields`, not `s.unmeasured` directly (blocking review finding
-  // 2): a LIVE fleet frame never goes through `reviveFleetSession` (only this
-  // module's own persisted-snapshot read does), so a row from a server that
-  // predates this field can genuinely lack the key at runtime despite the
-  // static type — see `unmeasuredFields`'s own docstring in shared/api.ts.
-  if (sessions.some((s) => unmeasuredFields(s).length > 0)) return;
-  try {
-    const snap: FleetSnapshot = { savedAt: Date.now(), sessions, roster: [...roster] };
-    storage().setItem(KEY, JSON.stringify(snap));
-  } catch {
-    /* ignore */
-  }
+  if (snapshotRefused(sessions)) return;
+  const snap: FleetSnapshot = { savedAt: Date.now(), sessions, roster: [...roster] };
+  writeKey(KEY, JSON.stringify(snap));
 }
 
 /** Last persisted snapshot, or null when absent/corrupt/unreadable.
@@ -126,16 +139,83 @@ export function saveFleetSnapshot(sessions: FleetSession[], roster: readonly Ros
  *  `accountLabel`/`accountColorVar` already have a fallback for. */
 export function loadFleetSnapshot(): FleetSnapshot | null {
   try {
-    const raw = storage().getItem(KEY);
+    const raw = readKey(KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null) return null;
     const { savedAt, sessions, roster } = parsed as { savedAt?: unknown; sessions?: unknown; roster?: unknown };
     if (typeof savedAt !== 'number') return null;
-    const revived = reviveFleetSessions(sessions);
+    // `keep`: this snapshot holds what live frames carried, so a spawn word
+    // this bundle cannot name renders offline exactly as it did live.
+    const revived = reviveFleetSessions(sessions, 'keep');
     if (revived === null) return null;
     const revivedRoster = Array.isArray(roster) ? roster.filter(isRosterWireLike) : [];
     return { savedAt, sessions: revived, roster: revivedRoster };
+  } catch {
+    return null;
+  }
+}
+
+/** The key of the device's copy of the Waiting on you list, beside the fleet snapshot's. Versioned like it: a later
+ *  shape that cannot be read as today's is a new key, and the old copy simply stops being drawn. */
+export const WAITING_SNAPSHOT_KEY = 'ccrc.waiting-snapshot.v1';
+
+/** The Waiting on you list as this device last heard it, and when (epoch ms) it was saved. */
+export interface WaitingSnapshot {
+  readonly savedAt: number;
+  readonly view: WaitingView;
+}
+
+/** A secret item's answer carries its tail after this word (`secretAnswer`, `shared/ledgers.ts`: `set <ISO> ending <tail>`). */
+const SECRET_ANSWER_TAIL = / ending [\s\S]*$/;
+
+/** One item with no secret tail: the slot state's `tail` blanked, and a secret item's answer cut before ` ending `, which
+ *  is the shape `secretAnswer` writes with no tail. Any other item, and every other field, is as it came. */
+function itemWithoutTail(item: ItemView): ItemView {
+  if (item.kind !== 'secret') return item;
+  const set = item.secretSet;
+  return {
+    ...item,
+    answer: item.answer === null ? null : item.answer.replace(SECRET_ANSWER_TAIL, ''),
+    secretSet: set !== null && 'tail' in set ? { ...set, tail: '' } : set,
+  };
+}
+
+/** THE LIST AS THE DEVICE MAY KEEP IT (review 1556 R2): G15's no-hint rule (accounts-connect spec) extends to this copy,
+ *  so no fragment of a stored secret rests on the device. A secret's tail (the last characters the masker caught) is
+ *  blanked in both places it travels, its slot's state and its answer. Item text (why, how, note) stays, as the fleet
+ *  snapshot keeps session text. The ONE place the copy is made safe to keep; `saveWaitingSnapshot` writes nothing else. */
+export function waitingViewToKeep(view: WaitingView): WaitingView {
+  return { ...view, items: view.items.map(itemWithoutTail), cleared: view.cleared.map(itemWithoutTail) };
+}
+
+/** Keep `view` as the device's copy of the list, with no secret tail (`waitingViewToKeep`). Best effort, like the fleet
+ *  snapshot: the answer is `writeKey`'s, `false` when the store is absent, full or throws, and nothing else changes then.
+ *  The store calls it after each `waiting` write (`stores/fleet.ts`), so the copy is always a list the page has heard. */
+export function saveWaitingSnapshot(view: WaitingView, now: number = Date.now(), from?: StorageSource): boolean {
+  const snap: WaitingSnapshot = { savedAt: now, view: waitingViewToKeep(view) };
+  return writeKey(WAITING_SNAPSHOT_KEY, JSON.stringify(snap), from);
+}
+
+/** Forget the device's copy of the list: a deliberate sign-out calls it (`ThisSessionCard`), so the list does not wait on
+ *  the device for whoever opens it next. `removeKey`'s answer. The fleet snapshot is not touched here. */
+export function forgetWaitingSnapshot(from?: StorageSource): boolean {
+  return removeKey(WAITING_SNAPSHOT_KEY, from);
+}
+
+/** The device's copy of the list, or `null` when there is no copy to draw. ONE `null`, deliberately, for every such
+ *  case: nothing stored, a store that is absent or throws, bad JSON, a `savedAt` that is not a number, and a `view`
+ *  that the one list reader (`isWaitingView`) refuses. Every caller handles them the same way (the page draws what it
+ *  draws with no copy), so there is no distinction here for a caller to lose. */
+export function loadWaitingSnapshot(from?: StorageSource): WaitingSnapshot | null {
+  const raw = readKey(WAITING_SNAPSHOT_KEY, from);
+  if (raw === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const { savedAt, view } = parsed as { savedAt?: unknown; view?: unknown };
+    if (typeof savedAt !== 'number' || !isWaitingView(view)) return null;
+    return { savedAt, view };
   } catch {
     return null;
   }

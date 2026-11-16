@@ -1,0 +1,7 @@
+● Bash(grep -rn "esc to interrupt" .)
+  ⎿  esc to interrupt)
+
+────────────────────────────────
+❯ 
+────────────────────────────────
+  👤 lane-a·max

@@ -1,21 +1,154 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
+import { fileURLToPath } from 'node:url';
 import { swDenylist } from './src/lib/sw-denylist.js';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import type { Plugin } from 'vite';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import { compressAssets } from './build/compressAssets.js';
+
+// The worker bundle resolves `decode-named-character-reference` (reached through
+// remark-gfm and micromark) to its plain `index.js`, never its `browser` entry,
+// `index.dom.js`, which decodes through `document.createElement` at module load.
+// A worker has no `document`, so that entry throws before the worker can answer,
+// and every parse sent to it ends `worker-failed` (review 408, F1). Vite 8 has no
+// worker-scoped `resolve.conditions` (its worker config takes `format`, `plugins`
+// and `rolldownOptions`, and a worker plugin's `config` hook is overridden by the
+// main resolved config), so this plugin, given only to `worker.plugins`, maps the
+// one package; the main-thread bundle keeps its `browser` entry. The built chunk
+// is loaded with no `document` by test/markdown-worker-built.test.ts.
+function workerSafeEntries(): Plugin {
+  return {
+    name: 'ccrc-worker-safe-entries',
+    enforce: 'pre',
+    async resolveId(source, importer, options) {
+      if (source !== 'decode-named-character-reference') return null;
+      const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
+      if (!resolved?.id.endsWith('/index.dom.js')) return null;
+      return { ...resolved, id: resolved.id.slice(0, -'index.dom.js'.length) + 'index.js' };
+    },
+  };
+}
+
+// The dev server does not bundle the worker: it serves the worker's modules from
+// the main graph, whose pre-bundled dependencies take the `browser` entry, so
+// `vite dev` would answer every chat message over 4 KiB as plain text. Under
+// `serve` only, and never under vitest (whose jsdom main thread keeps the entry a
+// browser ships), the package is aliased to its plain entry for both threads.
+// Node's resolution of the bare name takes its `default` export, `index.js`.
+// Pinned by test/markdown-worker-dev.test.ts, which starts the dev server.
+function devWorkerSafeEntries(): Plugin {
+  return {
+    name: 'ccrc-dev-worker-safe-entries',
+    apply: (_config, env) => env.command === 'serve' && process.env['VITEST'] === undefined,
+    config: () => ({
+      resolve: {
+        alias: [{
+          find: /^decode-named-character-reference$/,
+          replacement: createRequire(import.meta.url).resolve('decode-named-character-reference'),
+        }],
+      },
+    }),
+  };
+}
+
+// Brotli and gzip copies of the scripts, stylesheets and SVGs under assets/, written beside them once the bundle is on
+// disk (build/compressAssets.ts); the server sends the copy a browser accepts (server/src/pwaStatic.ts). Build only.
+// It runs in `writeBundle`, which ends before any `closeBundle` begins, so the service worker VitePWA generates in its
+// `closeBundle` is always made with the copies on disk, and `globPatterns` below, which names no `.br` or `.gz`, is
+// what keeps them out of its precache. Pinned by test/compress-assets.test.ts and test/reader-built.test.ts.
+function precompressAssets(): Plugin {
+  let assetsDir = '';
+  let info: (message: string) => void = () => undefined;
+  return {
+    name: 'ccrc-precompress-assets',
+    apply: 'build',
+    configResolved(config) {
+      assetsDir = config.build.assetsDir;
+      info = (message) => config.logger.info(message);
+    },
+    writeBundle(output) {
+      if (output.dir === undefined) throw new Error('ccrc-precompress-assets: the build has no output directory');
+      const started = performance.now();
+      const files = compressAssets(path.join(output.dir, assetsDir));
+      const written = files.flatMap((f) => [f.br, f.gz]).filter((c) => c.kind === 'written').length;
+      info(`precompress: ${files.length} files under ${assetsDir}/, ${written} copies written, `
+        + `${Math.round(performance.now() - started)} ms`);
+    },
+  };
+}
 
 // https://vite.dev/config/
 export default defineConfig({
+  // ONE REACT, ALWAYS.
+  //
+  // @ccrc/ui is consumed as SOURCE from a sibling folder and keeps its own
+  // react/react-dom/vaul so Storybook can run standalone. Node resolves a bare
+  // import from the IMPORTER outward, so ui/src/primitives/sheet.tsx — and vaul
+  // and radix beneath it — all find ui/node_modules/react long before they
+  // reach this package. Two React instances (19.3.0 there, 19.2.7 here), and
+  // every hook the sheet calls throws "Invalid hook call".
+  //
+  // `dedupe` alone does NOT fix it: dedupe picks one copy among the candidates
+  // the resolver already offers, and ui's copy is simply found first. These
+  // aliases are absolute and unconditional, so there is only ever one
+  // candidate. vaul is aliased too — otherwise it loads from ui's tree and
+  // drags ui's radix, and therefore ui's react, back in behind it.
+  //
+  // react-dom is listed BEFORE react because vite matches alias keys by prefix
+  // in insertion order, and 'react-dom' starts with 'react'.
+  //
+  // EVERY REACT-CALLING PACKAGE ui DEPENDS ON BELONGS IN ALL THREE LISTS
+  // (dedupe, alias, and `test.server.deps.inline` below). framer-motion joined
+  // when the composites migrated: `ToolCard` renders `motion`/`AnimatePresence`,
+  // so it reaches react through framer-motion's copy exactly as the sheet
+  // reaches it through vaul's. (NOT because of reduced motion — ui has its own
+  // `usePrefersReducedMotion` precisely so that branch needs no framer import.)
+  // Adding a ui dependency without adding it here fails only under test, and
+  // fails as "Invalid hook call" — which reads like a bug in the component
+  // rather than a second React.
+  resolve: {
+    dedupe: ['react', 'react-dom', 'vaul', 'framer-motion', '@radix-ui/react-popover'],
+    alias: {
+      // `@/…` RESOLVES INTO `@ccrc/ui`'s SOURCE, not into pwa's. shadcn's CLI
+      // writes `@/lib/utils`-style imports into whatever `components.json`
+      // points at, and `components.json` lives in `ui/` because that is where
+      // a pasted component belongs. pwa compiles ui's source directly
+      // (`exports['.']` is `src/index.ts`), so pwa's bundler has to resolve
+      // the alias too or the pasted file builds nowhere.
+      //
+      // ONE MEANING, THREE RESOLVERS: this alias, `ui/vite.config.ts`'s, and
+      // `ui/tsconfig.json`'s `paths`. `pwa/test/shadcn-alias.test.ts` pins
+      // that the three agree — the same seam `shared/models`' twins taught
+      // this branch, where `tsc` and the bundle read different files and the
+      // type check passed on a binding that was `undefined` at runtime.
+      '@': fileURLToPath(new URL('../ui/src', import.meta.url)),
+      'react-dom': fileURLToPath(new URL('./node_modules/react-dom', import.meta.url)),
+      react: fileURLToPath(new URL('./node_modules/react', import.meta.url)),
+      vaul: fileURLToPath(new URL('./node_modules/vaul', import.meta.url)),
+      'framer-motion': fileURLToPath(new URL('./node_modules/framer-motion', import.meta.url)),
+      // The Popover (D-5934) reaches react through Radix exactly as the sheet
+      // does through vaul, so pwa carries its own copy on vaul's Radix line
+      // here and this alias takes it (D-6018).
+      '@radix-ui/react-popover': fileURLToPath(new URL('./node_modules/@radix-ui/react-popover', import.meta.url)),
+    },
+  },
   plugins: [
     react(),
     tailwindcss(),
+    devWorkerSafeEntries(),
+    precompressAssets(),
     // Installable PWA. Updates apply themselves — main.tsx also drives periodic
     // update CHECKS, because a never-navigating SPA otherwise never asks.
     VitePWA({
-      // autoUpdate: a new deploy's worker skip-waits + claims clients and the
-      // page reloads onto it — no stuck-on-old-bundle (the 'prompt' default
-      // needed a full app close to swap). Right for a single-user control app
-      // that should always run the latest.
+      // autoUpdate: a new deploy's worker skip-waits + claims clients — no
+      // stuck-on-old-bundle (the 'prompt' default needed a full app close to
+      // swap). Right for a single-user control app that should always run the
+      // latest. The page's reload onto it waits for the next move between
+      // screens, never in the first 15 s back: main.tsx hands registerSW an
+      // onNeedReload that only marks it pending (console speed, Task C3).
       registerType: 'autoUpdate',
       manifest: {
         name: 'ccrc',
@@ -47,18 +180,25 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Precache the app shell only: JS/CSS/HTML + icons + manifest. Server
+        // Precache the app shell only: JS/CSS/HTML + icons + manifest + the
+        // self-hosted Geist pair (woff2, D-5095), so an installed client's offline
+        // second launch renders Geist rather than the system faces behind it
+        // (test/fonts-built.test.ts reads the emitted sw.js). Server
         // state must never be cached — /api and /ws are explicitly
         // network-only (and navigations to them never fall back to the shell).
         //
-        // CO-TENANTS ARE A BUILD-TIME KNOB, not a built-in list. `/docs` (a
-        // docserver) and `/fleet` (a preview) are what the REFERENCE box puts
-        // behind the same proxy; a stranger's install has neither, and baking
-        // those paths in would ship one operator's reverse-proxy layout inside
-        // everybody's service worker. The box that has co-tenants sets
-        // CCRC_SW_DENYLIST in its own (gitignored) env — see
-        // deploy/ccrc.env.example.
-        globPatterns: ['**/*.{js,css,html,png,svg,webmanifest}'],
+        // CO-TENANTS ARE A BUILD-TIME KNOB, not a built-in list. A box may put
+        // a wiki at `/wiki` and a preview at `/fleet` behind the same proxy; a
+        // stranger's install has neither, and baking those paths in would ship
+        // one operator's reverse-proxy layout inside everybody's service worker.
+        // The box that has co-tenants sets CCRC_SW_DENYLIST on the deploying
+        // machine — see deploy/deploy.sh's header. An entry covering `/docs`,
+        // ccrc's own Docs pages, fails the build (src/lib/sw-denylist.ts).
+        globPatterns: ['**/*.{js,css,html,png,svg,webmanifest,woff2}'],
+        // The reader frame's Mermaid script is far over workbox's 2 MiB precache ceiling, which makes the build throw.
+        // It is not precached: it loads on demand, only for a document the Mermaid gate lets in (A9, M8.14; the
+        // precache exclusion is the W8a plan's refinement (i)).
+        globIgnores: ['**/mermaid.frame-*.js'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: swDenylist(process.env['CCRC_SW_DENYLIST']),
         // Web Push handlers (push + notificationclick) live in public/push-sw.js
@@ -68,6 +208,10 @@ export default defineConfig({
       },
     }),
   ],
+  // The Markdown parse worker (src/lib/markdownWorker.ts, spawned by
+  // src/lib/markdownRunner.ts) is bundled as an ES module worker, with its own
+  // resolution of one package (workerSafeEntries, above).
+  worker: { format: 'es', plugins: () => [workerSafeEntries()] },
   // The built shell lands inside the server package: ccrc-server statically
   // serves dist-pwa/ at / with SPA fallback (server.ts findPwaRoot).
   build: {
@@ -75,6 +219,11 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    // pwa has no workspace root above it, so the dev server and vitest would allow pwa/ alone, and @ccrc/ui resolves
+    // through its symlink to ../ui: a `?raw` read of its stylesheets (docs/export/stylesheet.ts) is refused outside
+    // the allow list. Setting `allow` replaces the default, so '.' keeps pwa's own root. The production build is not
+    // affected.
+    fs: { allow: ['.', '../ui'] },
     // Dev proxy to a local ccrc-server (run with CCRC_HOME at a fixture tree).
     proxy: {
       '/api': { target: 'http://127.0.0.1:7788', changeOrigin: true },
@@ -83,11 +232,25 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // Vitest otherwise turns a `.css?raw` import into an empty string, so the reader's stylesheet text (and the
+    // test that hashes it against the manifest) needs the real bytes. Only the `?raw` form is let through.
+    css: { include: [/\.css\?raw$/] },
     setupFiles: ['./test/setup.ts'],
+    // The real-browser leg (browser/**, driven by vitest.browser.config.ts and CI's `browser (pwa)` job) needs a
+    // Chrome; the hermetic run never does. vitest's default include would collect browser/*.browser.test.ts, so it
+    // is excluded here, beside vitest's own defaults. Pinned by test/browser-leg.test.ts.
+    exclude: [...configDefaults.exclude, 'browser/**'],
     // Type-level tests (*.test-d.tsx) run as part of `vitest run`. Props here
     // are contracts — a widening like Sheet's ReactNode eyebrow is invisible at
     // runtime, so without this the only thing that catches a revert is a
     // separate `tsc --noEmit` nobody is obliged to run.
     typecheck: { enabled: true },
+    // Vitest externalises anything under node_modules and lets NODE resolve it,
+    // which walks past `resolve.alias` entirely. vaul then loads
+    // ui/node_modules/react and every sheet test dies on a second React
+    // instance. Inlining routes both through vite's pipeline, where the alias
+    // above applies. The app BUILD never needed this — it bundles everything,
+    // so the alias already held there.
+    server: { deps: { inline: [/node_modules\/(vaul|@radix-ui|framer-motion)\//, '@ccrc/ui'] } },
   },
 });

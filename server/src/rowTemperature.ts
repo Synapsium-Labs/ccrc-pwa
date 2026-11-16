@@ -1,0 +1,59 @@
+/**
+ * L1, pure (console speed S1): which registry rows a watcher tick must read in full (`hot`) and which it may take
+ * from the previous tick (`cold`). Imports types and `isCleanRecord` (owned by `registry.ts`, the record's writer) only; no fs, no clock (the caller passes `nowMs`).
+ *
+ * The doctrine is the polarity of `classifyHasSession`: DOUBT READS HOT. A row is cold only when every condition
+ * below is positively measured, so a missing previous read, an unclean record, an unknown verdict or no listing at
+ * all each make the row hot, never cold.
+ */
+import { isCleanRecord, type SessionRecord } from './registry.js';
+
+export { isCleanRecord };
+import type { SessionVerdict } from './exec.js';
+
+/** A cold row is re-read in full at least this often, whatever its key says. */
+export const COLD_ROW_REREAD_MS = 30_000;
+
+/** The registry listing's fingerprint of one row: the sorted names of `<id>.*` entries and, when the agent gave
+ *  them, their mtimes in the same order. `times: null` = the agent gave none (names-only key). */
+export type RowKey = { names: readonly string[]; times: readonly number[] | null };
+
+/** Names equal; times: both null compare on names alone, one null and one present are NOT equal, both present
+ *  compare element-wise. */
+export function rowKeyEqual(a: RowKey, b: RowKey): boolean {
+  if (a.names.length !== b.names.length) return false;
+  for (let i = 0; i < a.names.length; i++) if (a.names[i] !== b.names[i]) return false;
+  if (a.times === null && b.times === null) return true;
+  if (a.times === null || b.times === null) return false;
+  if (a.times.length !== b.times.length) return false;
+  for (let i = 0; i < a.times.length; i++) if (a.times[i] !== b.times[i]) return false;
+  return true;
+}
+
+export type PrevRow = { record: SessionRecord; key: RowKey; readAt: number };
+
+export function rowTemperature(
+  prev: PrevRow | undefined,
+  verdict: SessionVerdict | null,
+  key: RowKey,
+  nowMs: number,
+): 'hot' | 'cold' {
+  if (prev === undefined) return 'hot';
+  if (!isCleanRecord(prev.record)) return 'hot';
+  if (prev.record.stopped === null && prev.record.archivedAt === null) return 'hot';
+  if (verdict?.verdict !== 'gone') return 'hot';
+  if (!rowKeyEqual(prev.key, key)) return 'hot';
+  const age = nowMs - prev.readAt;
+  if (age < 0 || age >= COLD_ROW_REREAD_MS) return 'hot';
+  return 'cold';
+}
+
+/** With times only: a clean row whose key (names AND mtimes) is unchanged reuses its record even when hot, for less
+ *  than `COLD_ROW_REREAD_MS` since its read (a reused row keeps its `readAt`, so a one-off failed field read cannot
+ *  stick while the key never changes). A names-only key cannot see a rewrite in place, so it never licenses reuse. */
+export function hotRowReuse(prev: PrevRow | undefined, key: RowKey, nowMs: number): boolean {
+  if (prev === undefined || key.times === null || prev.key.times === null) return false;
+  const age = nowMs - prev.readAt;
+  if (age < 0 || age >= COLD_ROW_REREAD_MS) return false;
+  return isCleanRecord(prev.record) && rowKeyEqual(prev.key, key);
+}

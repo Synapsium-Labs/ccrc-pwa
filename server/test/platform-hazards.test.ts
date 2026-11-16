@@ -35,6 +35,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { itLinux, itDarwin, platformContrast } from './platformFixtures.js';
+import { spawnSyncGroup } from './spawnGroup.js';
+import { makeCcdHarness } from './ccdWsHelpers.js';
+import { unitJson } from './docsHelperPy.js';
 
 const HELPER = path.resolve(__dirname, '../../ccd/ccd-account-auth');
 const CANARY = 'CANARY_PLATFORM_HAZARD_TOKEN';
@@ -44,7 +47,11 @@ const CANARY = 'CANARY_PLATFORM_HAZARD_TOKEN';
  *  including whether it had to be cut. */
 function bash(program: string, ms = 20_000): { cut: boolean; stdout: string; ms: number } {
   const t0 = Date.now();
-  const r = spawnSync('bash', ['-c', program], { encoding: 'utf8', timeout: ms, stdio: ['ignore', 'pipe', 'pipe'] });
+  // IN A PROCESS GROUP OF ITS OWN (#172, D-5894): these probes wedge on purpose (BSD `grep -r` blocked on a live
+  // FIFO is the measured case), and a timeout that killed only `bash` left the wedged grep running past the run.
+  // A probe whose grandchild outlives it by design has that grandchild ended through the group, not left behind.
+  const r = spawnSyncGroup('bash', ['-c', program], { encoding: 'utf8', timeout: ms, stdio: ['ignore', 'pipe', 'pipe'] },
+    { strays: 'end' });
   const cut = r.error !== undefined && (r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
   return { cut, stdout: (r.stdout ?? '') + (r.stderr ?? ''), ms: Date.now() - t0 };
 }
@@ -191,24 +198,103 @@ describe('the deadline shim, asked directly (D-2661)', () => {
   // IT PINS TODAY'S BEHAVIOUR ON PURPOSE. When D-2764 lands, this case goes
   // RED — which is the mechanism that forces whoever fixes it to come here and
   // invert it, rather than leaving a stale assertion behind.
-  it('the deadline does NOT escalate to KILL — on BOTH platforms (D-2764, booked)', () => {
-    const r = bash(shim('2', 'trap "" TERM; sleep 30'), 8_000);
+  it('the deadline ESCALATES to KILL — on BOTH platforms (D-2764, fixed)', () => {
+    // THIS CASE WAS THE PIN ON THE DEFECT, and it is inverted rather than
+    // deleted because that is what its old form asked for. It used to assert
+    // `r.cut === true`: `_auth_timeout 2 'trap "" TERM; sleep 30'` never
+    // returned at all and the harness cut it at 8 s, on BOTH platforms.
+    // D-2764's fix passes `-k <grace>` once the binary is PROVED to understand
+    // it, so the same call now ends at `secs + grace` and reports 124 — the
+    // code every call site already branches on.
+    //
+    // The bound is 20 s against a 5-second expectation because this file's own
+    // header says the macOS runner is ~2x variable; a cap close to the answer
+    // would flap in both directions and report nothing either way.
+    const r = bash(shim('2', 'trap "" TERM; sleep 30'), 20_000);
     expect(
       r.cut,
-      'the shim ENDED a TERM-ignoring child. If D-2764 has been fixed, invert this case;\n'
-      + 'if it has not, the shim changed underneath us and that is worth knowing.\n'
+      'the shim did NOT end a TERM-ignoring child — D-2764 is back.\n'
       + `  elapsed: ${r.ms}ms  picked: ${field(r.stdout, 'PICKED')}  rc: ${field(r.stdout, 'RC')}`,
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      field(r.stdout, 'RC'),
+      `the child was ended but not as a timeout. picked=${field(r.stdout, 'PICKED')} elapsed=${field(r.stdout, 'ELAPSED')}s`,
+    ).toBe('124');
+    expect(
+      Number(field(r.stdout, 'ELAPSED')),
+      `the deadline was reported ${field(r.stdout, 'ELAPSED')}s in, which is not a bound on a 2-second deadline`,
+    ).toBeLessThanOrEqual(10);
   });
 
+  /** WAIT FOR EOF ON fd 8 WITH ONE READER AND NO `select()` (D-8344). The
+   *  reader is a plain blocking `read` loop in a subshell, which reaches EOF
+   *  through read(2) and marks it in `$D/eof`. It is the ONLY reader of the
+   *  FIFO: this shell never reads fd 8, it only polls that file. Sets `GOT`
+   *  (eof or never) and `AFTER`, and leaves the reader's pid in `R`.
+   *
+   *  WHY NOT `read -t` (the shape this replaced). On macOS a FIFO's EOF is
+   *  ONE-SHOT for anything that waits for it: the end-of-file flag that
+   *  `select()` and an already-blocked read wait on is cleared by the first read
+   *  that returns EOF. A NEW read(2) still returns 0 at once while no writer is
+   *  left. On Linux a FIFO with no writers stays readable and every read returns
+   *  0, so nothing below happens there.
+   *  MEASURED on macos-26-arm64, bash 5.3.20, coreutils 9.12 (C27, D-8344):
+   *  - 17 of 185 iterations of this case's own scenario went red. In each red,
+   *    the timeout's whole process group was gone at +2 s and no `sleep 60` was
+   *    left on the runner, yet `read -t 0.5` answered 142, a timeout, every tick
+   *    for 15 s and never 1. In the 8 reds that were inspected, a second reader
+   *    on the same fd got `select()` not readable after 0.5 s, then read(2)
+   *    returned 0 bytes at once.
+   *  - With two readers waiting on one FIFO, usually only ONE saw the EOF: of
+   *    100 iterations, `read -t` alone saw it 66 times, a blocking reader alone
+   *    11 times, both 16 times and neither 7 times.
+   *  So `read -t`'s own read consumed the EOF and still answered 142, and every
+   *  `select()` after that waited for a flag that was already cleared. The
+   *  probe measured its reader, not the FIFO, and reported a missing EOF that
+   *  had arrived. */
+  const eofWait = (secs: number): string => `
+      ( while IFS= read -r -u 8 line; do :; done; echo eof > "$D/eof" ) &
+      R=$!
+      t0=$SECONDS; GOT=never
+      while (( SECONDS - t0 <= ${secs} )); do
+        if [ -s "$D/eof" ]; then GOT=eof; break; fi
+        sleep 0.2
+      done
+      AFTER=$((SECONDS-t0))`;
+
+  // THE INSTRUMENT MUST STILL BE ABLE TO SAY never, on both platforms (D-8344).
+  // A reader that answered eof whatever happened would turn the darwin case
+  // below green and hollow. Here a writer holds the FIFO open for the whole
+  // window, so the only correct answer is never.
+  it('the select-free EOF reader still says never while a writer holds the FIFO (D-8344 control)', () => {
+    const r = bash(`
+      D=$(mktemp -d); mkfifo -m 600 "$D/out"
+      ( exec 7>"$D/out"; sleep 30 ) &
+      H=$!
+      exec 8<"$D/out"
+      ${eofWait(3)}
+      echo "EOF=$GOT"
+      kill $R $H 2>/dev/null; pkill -P $$ 2>/dev/null; exec 8<&-; rm -rf "$D"
+    `, 20_000);
+    expect(r.cut, `the control itself was cut after ${r.ms}ms`).toBe(false);
+    expect(field(r.stdout, 'EOF'), `a held writer read as EOF: ${r.stdout.slice(0, 200)}`).toBe('never');
+  });
+
+  // ANSWERED (C27, D-8344): on macOS too, EOF arrives once the deadline fires.
+  // The intermittent reds this case gave (2026-11-09, 2026-11-12, and earlier
+  // on PRs #116 and #117) came from the READER it used, `read -t`, which can
+  // consume a Darwin FIFO's one-shot EOF and still answer a timeout; `eofWait`
+  // above says how that was measured. Candidate (b), a descendant holding the
+  // write end, was not seen in any of those runs. The case stays: it still asks
+  // the question, now with a reader that answers it.
+  //
   // PLATFORM-ONLY: the Linux answer to this one is already measured and is not
   // in dispute — EOF arrived in all six configurations tried, including a
   // setsid'd grandchild confirmed alive. This asks it of the platform where
   // D-2661 was observed, which is the only place the answer was unknown.
   itDarwin('BSD: after the deadline fires, does the output FIFO reach EOF? — candidate (b)', () => {
-    // THE ONE THAT MATTERS. `_auth_pump` leaves only on EOF, and EOF needs every
-    // writer of the FIFO to close. On Linux, EOF arrived in all six
-    // configurations tried, including a setsid'd grandchild confirmed alive.
+    // `_auth_pump` leaves only on EOF, and EOF needs every writer of the FIFO
+    // to close.
     const r = bash(`
       export CCRC_AUTH_NO_MAIN=1 HOME=$(mktemp -d)
       source ${JSON.stringify(HELPER)}
@@ -217,23 +303,270 @@ describe('the deadline shim, asked directly (D-2661)', () => {
       _auth_timeout 2 bash -c 'bash -c "sleep 60" & sleep 60' >"$D/out" 2>&1 &
       W=$!
       exec 8<"$D/out"
-      t0=$SECONDS; GOT=none
-      while :; do
-        IFS= read -r -t 0.5 -u 8 line; rc=$?
-        if (( rc == 1 )); then GOT=eof; break; fi
-        if (( SECONDS - t0 > 15 )); then GOT=never; break; fi
-      done
+      # THE WRITER'S GROUP IS READ BEFORE THE DEADLINE, while it exists. The
+      # timeout binary makes its own process group, so the group's id is the
+      # binary's pid. The old diagnostic asked the pgid of $W after the
+      # deadline, when $W had already exited, so it always printed nothing.
+      ( sleep 1; ps -A -o pid=,ppid=,command= 2>/dev/null \\
+          | awk -v w=$W '$2 == w && $3 ~ /timeout$/ {print $1; exit}' > "$D/tpg" ) &
+      ${eofWait(15)}
       echo "EOF=$GOT"
-      echo "AFTER=$((SECONDS-t0))"
-      kill $W 2>/dev/null; pkill -P $$ 2>/dev/null; exec 8<&-; rm -rf "$D"
+      echo "AFTER=$AFTER"
+      # WHEN IT SAYS never, SAY WHO, from the group recorded before the deadline.
+      # SCOPED TO THAT GROUP, never a box-wide match on the sleep command: a
+      # shared box runs unrelated sessions, and a CI failure message in a
+      # public repository is no place for their paths.
+      if [ "$GOT" = never ]; then
+        echo "BASHV=$BASH_VERSION"
+        echo "TMO=$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || echo none)"
+        PG=$(cat "$D/tpg" 2>/dev/null)
+        echo "PGID=$PG"
+        echo "SURV=$( [ -n "$PG" ] && ps -A -o pid=,ppid=,pgid=,stat=,command= 2>/dev/null | awk -v pg="$PG" '$3 == pg' | cut -c1-72 | tr -s ' ' | tr '\\n' '|')"
+      fi
+      kill $W $R 2>/dev/null; pkill -P $$ 2>/dev/null; exec 8<&-; rm -rf "$D"
     `, 40_000);
     expect(
       field(r.stdout, 'EOF'),
-      'THE OUTPUT FIFO NEVER REACHED EOF after the deadline fired on macOS. That is D-2661 candidate (b)\n'
-      + 'and it is the mechanism: a surviving descendant holds the write end, `_auth_pump` loops for ever,\n'
-      + 'and only D-2736\'s backstop ends the run. The fix is to end the DESCENDANTS, not to wait longer.\n'
-      + `  eof=${field(r.stdout, 'EOF')} after=${field(r.stdout, 'AFTER')}s  cut=${r.cut}`,
+      'THE OUTPUT FIFO NEVER REACHED EOF after the deadline fired on macOS, measured by a reader that does\n'
+      + 'not use select(). That is D-2661 candidate (b): a descendant of the deadline\'s child still holds\n'
+      + 'the write end, `_auth_pump` loops for ever, and only D-2736\'s backstop ends the run. The fix is to\n'
+      + 'end the DESCENDANTS, not to wait longer.\n'
+      + `  eof=${field(r.stdout, 'EOF')} after=${field(r.stdout, 'AFTER')}s  cut=${r.cut}\n`
+      + `  bash=${field(r.stdout, 'BASHV')}  timeout-binary=${field(r.stdout, 'TMO')}\n`
+      + `  the timeout's group (recorded before the deadline)=${field(r.stdout, 'PGID')}, still alive in it: ${field(r.stdout, 'SURV')}`,
     ).toBe('eof');
   });
 
+});
+
+// ── R14(i): THE UTF-8 LOCALE BASH TAKES, AND WHETHER THE LOCALE PINS CAN RED ──
+// D-3833 and D-3979 pin `LC_ALL=C` around the auth readers (`_box_env_has_nul`, `_box_unit_env`,
+// `_box_unit_env_shell`) because under a UTF-8 locale bash 5.x (1) misses a NUL that follows a lead byte in an
+// unpinned `read -d ''`, and (2) merges a line ending in a lead byte with the next one in an unpinned `read -r`
+// loop. Both are measured on Linux; neither was ever measured on macOS, and the macOS tests that rely on them
+// (U4n, U4u in the `ccrc-doctor-*` test files) could be hollow there if the runner's bash did not misread. So this asks,
+// and RECORDS: a Darwin case here asserts only that the probes ran, because a red would be a `full-suite` red,
+// which blocks `stable`. The coordinator reads the answer from the PR's `probe-macos` and `test-macos` logs.
+describe('R14(i): the UTF-8 locale bash takes here, and whether D-3833/D-3979\'s locale pins are load-bearing on this platform', () => {
+  /** The first UTF-8 locale under which bash counts the two-byte `é` as ONE character. A copy of
+   *  `ccrc-doctorFixture.ts`'s `utf8Locale()` candidate list and one-character test: a test file cannot be imported
+   *  from another. It yields `'none'` rather than throwing, so collection never fails here (H1 does). */
+  const LOC = ((): string => {
+    try {
+      for (const loc of ['C.UTF-8', 'en_US.UTF-8']) {
+        const r = spawnSync('bash', ['-c', `x=$'\\xc3\\xa9'; printf '%s' "\${#x}"`], {
+          encoding: 'utf8', timeout: 15_000, env: { PATH: process.env.PATH ?? '', LC_ALL: loc },
+        });
+        if (r.status === 0 && r.stdout === '1') return loc;
+      }
+    } catch { /* fall through: H1 reports it */ }
+    return 'none';
+  })();
+
+  /** The two unpinned reads, under `locale` and no pin anywhere. `NUL_RC` is `read -d ''`'s rc over a lead byte
+   *  then a NUL (0 = found it, 1 = missed it); `LINES` is how many lines an unpinned `read -r` loop counts over
+   *  `# caf<lead byte>\nX=1\n` (2 = kept them apart, 1 = merged them). */
+  const probe = (locale: string): { status: number | null; nulRc: string; lines: string; bashv: string; out: string } => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-r14i-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'nul'), '# caf\xc3\0\nCCRC_AUTH=on\n', 'latin1');
+      fs.writeFileSync(path.join(dir, 'lines'), '# caf\xc3\nX=1\n', 'latin1');
+      const script = [
+        `IFS= read -r -d '' x < ${JSON.stringify(path.join(dir, 'nul'))}; echo "NUL_RC=$?"`,
+        `n=0; while IFS= read -r l; do n=$((n+1)); done < ${JSON.stringify(path.join(dir, 'lines'))}; echo "LINES=$n"`,
+        'echo "BASHV=$BASH_VERSION"',
+      ].join('\n');
+      const r = spawnSync('bash', ['-c', script], {
+        encoding: 'utf8', timeout: 15_000, env: { PATH: process.env.PATH ?? '', LC_ALL: locale },
+      });
+      const out = (r.stdout ?? '') + (r.stderr ?? '');
+      return { status: r.status, nulRc: field(out, 'NUL_RC'), lines: field(out, 'LINES'), bashv: field(out, 'BASHV'), out };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it(`R14(i): bash takes ${LOC} here`, () => {
+    // Fails, never skips: a host with no UTF-8 locale makes every UTF-8 row elsewhere hollow.
+    expect(LOC, 'no UTF-8 locale takes effect in bash on this runner (C.UTF-8, en_US.UTF-8)').not.toBe('none');
+    console.info(`R14(i): bash takes ${LOC} here (${process.platform}; bash ${probe(LOC).bashv})`);
+  });
+
+  /** Whether this bash is one that misreads: every bash below 5.3. Measured 2026-11-16 (desktop-polish Task C34,
+   *  D-8657) under C.UTF-8 with these probes: 5.1.16, 5.2.15 and 5.2.37 miss the NUL and merge the lines, while 5.3.9 and
+   *  5.3.20 do neither, on glibc and on musl alike, so the change is bash's own and not the C library's. A bash below 5.1 is
+   *  inferred to misread, not measured. `null` when the version cannot be read. */
+  const misreadingBash = (bashv: string): boolean | null => {
+    const m = /^(\d+)\.(\d+)/.exec(bashv);
+    if (m === null) return null;
+    return Number(m[1]) < 5 || (Number(m[1]) === 5 && Number(m[2]) < 3);
+  };
+
+  // The control. On a bash that misreads, both answers are the hazard itself, which is why dropping a pin reds T4-M32,
+  // T4-M31 and T1-1 there; if either flipped on such a bash, those mutation rows would be hollow, so this asserts them.
+  // From bash 5.3 the unpinned reads read bytes correctly, the pins guard nothing on that bash and those rows cannot
+  // red there, so it RECORDS which answer it gave and asserts only that both probes ran (the fleet box's bash 5.3.9 was
+  // red here on every run before C34; CI's 5.2.21 asserts).
+  itLinux('R14(i): on Linux, under the UTF-8 locale and no pin, a bash below 5.3 misses a NUL after a lead byte and merges a line ending in one; a later bash is recorded', () => {
+    const p = probe(LOC);
+    const misreads = misreadingBash(p.bashv);
+    expect(misreads, `the bash version could not be read (${p.out.slice(0, 200)})`).not.toBeNull();
+    if (misreads === true) {
+      expect.soft(p.nulRc, `under ${LOC} with bash ${p.bashv}: an unpinned read -d '' over a lead byte then a NUL (${p.out.slice(0, 200)})`).toBe('1');
+      expect.soft(p.lines, `under ${LOC} with bash ${p.bashv}: an unpinned read -r loop over a line ending in a lead byte (${p.out.slice(0, 200)})`).toBe('1');
+      return;
+    }
+    const misses = p.nulRc === '1';
+    const merges = p.lines === '1';
+    console.info(`R14(i): under ${LOC} with bash ${p.bashv}, an unpinned read -d '' ${misses ? 'misses' : 'sees'} the NUL after a lead byte `
+      + `and an unpinned read ${merges ? 'merges' : 'keeps'} the line (LINES=${p.lines}), so dropping a locale pin `
+      + `${misses || merges ? 'can' : 'cannot'} red T4-M32, T4-M31 and T1-1 on this bash`);
+    expect(['0', '1'], `the NUL probe under bash ${p.bashv} gave NUL_RC=${p.nulRc} (${p.out.slice(0, 200)})`).toContain(p.nulRc);
+    expect(p.lines, `the line probe under bash ${p.bashv} gave LINES=${p.lines} (${p.out.slice(0, 200)})`).toMatch(/^\d+$/);
+  });
+
+  // RECORDED, not wished for: either answer is a fact, so this asserts only that each probe ran and produced its
+  // field, and prints which answer the runner gave.
+  itDarwin('R14(i): on macOS, RECORDED — do the unpinned reads misread under the UTF-8 locale?', () => {
+    const p = probe(LOC);
+    const misses = p.nulRc === '1';
+    const merges = p.lines === '1';
+    const answer = `${LOC === 'none' ? 'NO UTF-8 LOCALE TOOK EFFECT — ' : ''}R14(i): under ${LOC} with bash ${p.bashv}, an unpinned read -d '' ${misses ? 'misses' : 'sees'} the NUL after a lead byte `
+      + `(so U4n ${misses ? 'can' : 'cannot'} red here); an unpinned read ${merges ? 'merges' : 'keeps'} the line `
+      + `(so U4u F2 and G1 ${merges ? 'can' : 'cannot'} red here; LINES=${p.lines})`;
+    console.info(answer);
+    expect(['0', '1'], `${answer}. The NUL probe gave NUL_RC=${p.nulRc}.`).toContain(p.nulRc);
+    // Whatever number it is: the instrument records the macOS answer and never asserts it.
+    expect(p.lines, `${answer}. The line probe gave LINES=${p.lines}.`).toMatch(/^\d+$/);
+  });
+});
+
+// ── B2: WHAT DARWIN'S killpg ANSWERS WHILE AN OVERFLOWED LEADER EXITS (centralised update wave 20 follow-up) ──
+// Row 64 of `ccd-docs-tree.test.ts` (a `git status` that overflows a lowered `stdout_cap`) read `unreadable` on the
+// macOS leg in 536 ms after wave 20's fix had made it green there once. Wave 20 absorbs an EPERM from the Docs
+// helper's first `killpg(SIGTERM)` only when `poll()` reaps the leader at that instant. The open hypothesis: Darwin
+// also answers EPERM for a leader that is still EXITING, not yet a zombie a wait can reap, so `poll()` is None and
+// the EPERM raises. This asks the helper's own `Sys.spawn` the question many times, against two writers that
+// overflow 200 bytes and exit at once, and RECORDS each stop: every `killpg` answer, and at each EPERM what
+// `kill(pid, 0)` and a non-reaping `waitid` say of the leader at that moment (and, in the last pass, `ps`'s state).
+// A stop that raised also records how long the leader took to become reapable. `os.killpg` is wrapped through the
+// helper's own `os` seam; the shipped helper is unchanged. Like R14(i), the Darwin arm asserts only that the probe
+// ran, because a red here is a `full-suite` red; the answer is read from the `probe-macos` and `test-macos` logs.
+//
+// ANSWERED, 2026-10-18 (macOS 26.6.2, CPython 3.15.0, git 2.56.0). Before the fix (probe-macos job 117707283076):
+// every first SIGTERM of all 92 stops met EPERM. In 42, a non-reaping waitid said the leader had not exited while
+// kill(pid, 0) answered ok, and the stop raised; each such leader was reapable 0.6 to 3.8 ms later (36 of the 40
+// `git status` stops). So the hypothesis held. D-5339 makes the SIGTERM's absorb wait for the reap, inside the stop's
+// grace. After it (job 117709790251): all 92 stops overflow and return, 37 of the 40 `git status` stops through an
+// EPERM met while waitid still said not exited.
+type B2Pass = { label: string; n: number; tally: Record<string, number>; reapAfterRaise: string[] };
+type B2Report = { python: string; mac: string; git: string; passes: B2Pass[] };
+
+const B2_PROBE = [
+  'import errno, os, platform, subprocess, time',
+  'real = os.killpg',
+  'it = None',
+  'def name(e):',
+  '    return errno.errorcode.get(e.errno, str(e.errno))',
+  'def kill0(pid):',
+  '    try:',
+  '        os.kill(pid, 0)',
+  "        return 'ok'",
+  '    except OSError as e:',
+  '        return name(e)',
+  'def nowait(pid):',
+  "    if not hasattr(os, 'waitid'):",
+  "        return 'n/a'",
+  '    try:',
+  '        r = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)',
+  '    except OSError as e:',
+  '        return name(e)',
+  "    return 'unexited' if r is None else 'exited'",
+  'def ps(pid):',
+  "    r = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)], capture_output=True, text=True)",
+  "    return r.stdout.strip() or 'gone'",
+  'def probing(pgid, sig):',
+  '    try:',
+  '        real(pgid, sig)',
+  '    except OSError as e:',
+  "        rec = '%d:%s' % (sig, name(e))",
+  "        if e.errno == errno.EPERM:",
+  "            rec += '(kill0=%s,waitid=%s' % (kill0(pgid), nowait(pgid))",
+  "            if it['ps']:",
+  "                rec += ',ps=%s' % ps(pgid)",
+  "            rec += ')'",
+  "        it['calls'].append(rec)",
+  '        raise',
+  "    it['calls'].append('%d:ok' % sig)",
+  'os.killpg = probing',
+  'class Probe(H.Sys):',
+  '    def _stop(self, proc):',
+  '        try:',
+  '            H.Sys._stop(self, proc)',
+  '        finally:',
+  '            if proc.returncode is None:',
+  '                t0 = time.monotonic()',
+  '                while proc.poll() is None and time.monotonic() - t0 < 5:',
+  '                    time.sleep(0.0005)',
+  "                it['reap'] = '%.1fms' % ((time.monotonic() - t0) * 1000)",
+  'H.SYS = Probe()',
+  'def run(label, argv, cwd, n, with_ps):',
+  '    global it',
+  '    tally, reaps = {}, []',
+  '    for _ in range(n):',
+  "        it = {'calls': [], 'ps': with_ps, 'reap': None}",
+  '        try:',
+  '            sp = H.SYS.spawn(argv, dict(os.environ), cwd, 10, 200)',
+  "            end = 'overflow' if sp.overflow else 'rc %s' % sp.rc",
+  '        except OSError as e:',
+  "            end = 'raised ' + name(e)",
+  "        if it['reap'] is not None:",
+  "            reaps.append(it['reap'])",
+  "        key = '%s <- %s' % (end, ' '.join(it['calls']) or 'no signal')",
+  '        tally[key] = tally.get(key, 0) + 1',
+  "    return {'label': label, 'n': n, 'tally': tally, 'reapAfterRaise': reaps}",
+  "repo = os.path.join(os.environ['HOME'], 'b2-repo')",
+  "status = ['git', 'status', '--porcelain=v2', '-z', '--untracked-files=all']",
+  "gitv = subprocess.run(['git', '--version'], capture_output=True, text=True).stdout.strip()",
+  "out({'python': platform.python_version(), 'mac': platform.mac_ver()[0], 'git': gitv, 'passes': [",
+  "    run('git status', status, repo, 40, False),",
+  "    run('printf', ['printf', '%0400d', '0'], repo, 40, False),",
+  "    run('git status, ps at each EPERM', status, repo, 12, True)]})",
+].join('\n');
+
+describe('B2: what killpg answers while an overflowed leader exits, asked of the Docs helper\'s own stop (wave 20 follow-up)', () => {
+  const probe = (): B2Report => {
+    const h = makeCcdHarness('ccrc-b2-');
+    try {
+      const repo = path.join(h.home, 'b2-repo');
+      fs.mkdirSync(repo);
+      h.git(repo, 'init', '-q');
+      for (let i = 0; i < 20; i++) fs.writeFileSync(path.join(repo, `long-name-${i}-${'x'.repeat(40)}.md`), 'n\n');
+      return unitJson<B2Report>(h.home, B2_PROBE, { timeoutMs: 280_000 });
+    } finally {
+      h.cleanup();
+    }
+  };
+  const ran = (r: B2Report): void => {
+    for (const p of r.passes) {
+      expect(Object.values(p.tally).reduce((a, b) => a + b, 0), `${p.label}: ${JSON.stringify(p)}`).toBe(p.n);
+    }
+  };
+
+  // RECORDED: whichever answers Darwin gives are the measurement.
+  itDarwin('every stop of an overflowed writer — RECORDED: each killpg answer, and the leader\'s state at each EPERM', () => {
+    const r = probe();
+    console.info(`B2 probe on macOS ${r.mac}, python ${r.python}, ${r.git}:\n${JSON.stringify(r.passes, null, 1)}`);
+    ran(r);
+  }, 300_000);
+
+  // The control: Linux signals a group whose leader has exited unreaped with rc 0, so no stop meets an EPERM.
+  itLinux('every stop of an overflowed writer — the SIGTERM is delivered or meets an empty group, never EPERM, and every stop returns', () => {
+    const r = probe();
+    console.info(`B2 probe on Linux, python ${r.python}, ${r.git}:\n${JSON.stringify(r.passes, null, 1)}`);
+    ran(r);
+    for (const p of r.passes) {
+      expect(Object.keys(p.tally).filter((k) => !k.startsWith('overflow <- ') || k.includes('EPERM')), JSON.stringify(p)).toEqual([]);
+    }
+  }, 300_000);
 });

@@ -1,28 +1,34 @@
-import type { Tmux } from '../exec.js';
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { Deps } from '../server.js';
+import type { RunCcd, WatcherCoordPort } from './ports.js';
 import { cutShort } from '../lifecycle.js';
-import type { KeyedQueue } from '../inject/queue.js';
-import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import type { SessionRecord } from '../registry.js';
+import type { TurnVerdict } from './archiveDoor.js';
+import { fieldMeasured, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
-import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
-import { sendPrompt } from '../inject/send.js';
+import {
+  BROWSER_ROUTE_CAP, CCD_ARGV, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, ROUTE_DEFAULT_CAP, capSupported, ccdCan, sweepDec, type ActorFlags,
+} from '../ccdargv.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
 import {
-  COORDINATOR_PAUSE_MARKER,
-  MAIL_DISABLED_MARKER,
   clearRefusedDetail,
   holdReasonVerdict,
-  queueSystemMail,
+  releaseIsSafe,
+  survivorOf,
   type HoldReasonVerdict,
 } from './rundefs.js';
+import { queueSystemMail } from './rundefsTx.js';
+import { WAVE_BRIEF_SUBJECT } from './briefwatch.js';
 import {
-  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
-  type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
+  SPAWN_NOT_RECORDED, armEventDetail, routeForBrowserCap,
+  type RouteFields, type RunKind, type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
-import { readWorkerSkillState } from '../skillstate.js';
+import { readSkillState, skillDirFor } from '../skillstate.js';
+import { childBindGate, type ChildBindVerdict } from './childBind.js';
+import {
+  decideDispatch, type CapsReading, type DispatchHalt, type DispatchRun, type DispatchStop,
+} from './dispatchDecide.js';
 
 // The worker kickoff rides the brief mail itself: dispatch writes nothing to a
 // wave-1 pane (the zero-send-keys pin), and skills are invoked BY NAME (the
@@ -39,6 +45,17 @@ import { readWorkerSkillState } from '../skillstate.js';
 // `name:`, so a rename cannot leave every worker being sent after a ghost.
 export const WORKER_KICKOFF_PREFIX =
   "Run the ccrc-worker skill — it is your standing protocol; read it before acting on anything below.\n\n";
+
+// The reviewer's half of the same pair (design 2026-09-14 §8): one sentence,
+// one skill name, bound to `ccd/reviewer-skill/SKILL.md`'s frontmatter by
+// `reviewer-skill.test.ts` exactly as the worker's is.
+export const REVIEWER_KICKOFF_PREFIX =
+  "Run the ccrc-reviewer skill — it is your standing protocol; read it before acting on anything below.\n\n";
+
+/** Which standing protocol a brief of this kind invokes. `unknown` never
+ *  reaches here — dispatch refuses it at the transition precondition. */
+export const kickoffPrefixFor = (kind: RunKind): string =>
+  kind === 'review' ? REVIEWER_KICKOFF_PREFIX : WORKER_KICKOFF_PREFIX;
 
 /**
  * L1 decision function (architecture doc increment 4 — "deciding split from
@@ -60,10 +77,19 @@ export const WORKER_KICKOFF_PREFIX =
  * not serialise itself, the same way `verifyDone` does not lock anything —
  * the caller's job, not the decision's.
  */
+/** What typing the `/clear` answered: `sendPrompt`'s result, narrowed to the two words dispatch reads. */
+export type ClearResult = { ok: true } | { ok: false; error: string };
+
 export interface DispatchRunDeps {
   coord: CoordStore;
-  io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState;
-  tmux: Tmux; queue: KeyedQueue;
+  io: FleetIO; cfg: CcrcConfig; runCcd: RunCcd; fleetState?: FleetState;
+  /**
+   * Types the `/clear` a resumed worker is sent, and answers what the typing did (`sendPrompt`'s proof discipline,
+   * with a human's draft stashed around it, D-5912). A PORT, for `turnVerdict`'s reason: `inject/send.ts` is L3,
+   * and whether to type is `decideDispatch`'s `act` step, not this module's (ARCH-22, #553). REQUIRED, for
+   * `configDir`'s reason too: an optional port a caller forgot to wire would never clear a resumed worker.
+   */
+  sendClear: (sessionId: string) => Promise<ClearResult>;
   /**
    * A wrapper's config dir, or `undefined` when this box's roster does not
    * carry that wrapper — the CONSUMER-DECLARED port (L2) for the one join
@@ -82,6 +108,28 @@ export interface DispatchRunDeps {
    * failure the preflight exists to delete.
    */
   configDir: (wrapper: string) => string | undefined;
+  /**
+   * The fail-closed turn verdict (`turnVerdictFor`, `server/src/turnverdict.ts`, the reads' one home; the rule is
+   * `stopVerdict`'s) for the session the resume arm is about to `/clear` — D-5238's live gate. A PORT, for
+   * `configDir`'s reason: the reads close over the watcher and `server.ts`'s deps, which this policy module cannot
+   * import. REQUIRED, for `configDir`'s reason too: an optional port a caller forgot to wire would answer
+   * `unmeasured` on a healthy fleet for ever.
+   */
+  turnVerdict: (rec: SessionRecord, uuid: string) => Promise<TurnVerdict>;
+  /** The fleet-wide wake budget's one list (D-5242, `FleetWatcher.admitWake`): a resume onto a hibernated worker records
+   *  an ASKED wake there beside its `ensure`, and is never refused for it. Absent (no watcher): nothing is recorded. */
+  admitWake?: (kind: 'asked', id: string) => boolean;
+}
+
+/** What the dispatch route polls while a pane this dispatch's `ensure` started comes up (D-5238): the registry row
+ *  and the uuid the resume arm measured, handed back so the route asks the SAME `turnVerdict` port outside
+ *  `coordMutex`. */
+export interface SpawnPollTarget { readonly record: SessionRecord; readonly uuid: string }
+
+/** `cmd_ensure` prints `alive: <id>` ONLY on its early return for an already-live pane (`ccd/ccd`); any other answer
+ *  is an ensure that (re)started the pane, whose live file may not exist yet. */
+export function ensureFoundAlive(stdout: string, sessionId: string): boolean {
+  return stdout.split('\n').some((line) => line.trim() === `alive: ${sessionId}`);
 }
 
 export type DispatchOutcome =
@@ -102,10 +150,26 @@ export type DispatchOutcome =
        * `unmeasurable` is not `absent` — nothing was proven about the fleet
        * either way, so it is an unknown to report, not a gap to go fix.
        */
-      skillState: SkillState }
+      skillState: SkillState;
+      /** The landing intent keys this dispatch wrote (wave 5g, D-8086); `[]` when it named none. A `200` that carries no
+       *  `intents` field came from a server older than 5g, which took no hold. */
+      intents: readonly string[] }
   | { ok: false; kind: 'unknown-run' }
+  /** Spec §2.3: the run's STORED `sessionId` is not a registry id, so no id-taking argv may name it. That rules out
+   *  the resume's `ensure`, the spent-child release or hand-over, the hold and the route write. It is refused before
+   *  the pause listing, and the run stays `planned`. This is a stored defect, not a transient: a retry cannot change
+   *  it, and `POST /api/runs/:id/abandon` closes such a run with no fleet act. */
+  | { ok: false; kind: 'bad-session' }
+  /** D-6790: the dispatch's `route` names class `fable`, which only the operator selects. Refused before any fleet act. */
+  | { ok: false; kind: 'fable-operator-only' }
   | { ok: false; kind: 'bad-transition'; from: RunState; to: RunState }
-  | { ok: false; kind: 'bad-request' }
+  /** `detail` is PRESENT for the malformed-`route` refusal (routing spec
+   *  §5.3, slice 4: `route: <why>[ <field>]`) and for the two `slug` refusals
+   *  (`slug: must match …` — rename it; `slug: this run resumes …` — drop it).
+   *  Every other `bad-request` on this union carries none, so the field
+   *  distinguishes by presence rather than an empty string standing in for
+   *  "nothing to say". */
+  | { ok: false; kind: 'bad-request'; detail?: string }
   /** `detail` is the operator's own arithmetic, and it exists because the cap
    *  no longer measures the thing the sender is holding: the mail is
    *  `WORKER_KICKOFF_PREFIX + brief`, so a brief AT the cap refuses and
@@ -117,11 +181,15 @@ export type DispatchOutcome =
   | { ok: false; kind: 'oversize'; limit: number; detail: string }
   | Extract<HoldReasonVerdict, { ok: false }>
   | { ok: false; kind: 'refused';
-      code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily' |
-        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'project-mismatch'>;
-      limit?: number; running?: number; used?: number; candidates?: number;
+      code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' |
+        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'project-mismatch' | 'status-unmeasurable' |
+        'intent-held'>;
+      limit?: number; running?: number; candidates?: number;
+      /** `intent-held`'s own fields, PRESENT exactly on that code: the key and the other programme's run that holds it. */
+      key?: string; holder?: { runId: number; program: string };
       /** WHICH project the measured party belongs to — `project-mismatch`'s
-       *  own field, and the only refusal on this union that carries a string.
+       *  own field, one of two string fields on this union (`key` is
+       *  `intent-held`'s).
        *  PRESENT EXACTLY WHEN `.project` was MEASURED with a non-empty name
        *  that differs from the run's — never `record.project`, whose
        *  `registry.ts` collapsing read (`project ?? id`) would arrive as the
@@ -142,13 +210,38 @@ export type DispatchOutcome =
    *  on this path quotes ccd; this one does too.
    *
    *  ABSENT is not "ccd said nothing": it is "ccd is not the failing party" (the
-   *  `ws-add` or `ensure` succeeded, and only the registry read failed). An empty
+   *  `ws-add` or `ensure` succeeded, and only the registry read failed; or, on the
+   *  fresh-spawn arm's pre-spawn read, no ccd call has been made at all). An empty
    *  string would collapse those two, which is the defect class this whole
    *  increment is about — so the distinction is PRESENCE, never `''`. */
   | { ok: false; kind: 'registry-unmeasurable'; stderr?: string }
   | { ok: false; kind: 'unsupported' }
+  /** D-5238: the pane this dispatch's `ensure` just STARTED has not published a measurable live file. Answered at
+   *  once, with NOTHING after the `ensure` done (no hold, no route write, no transition, no `/clear`): this function
+   *  runs inside `coordMutex` and never waits. The route waits for `poll` OUTSIDE the mutex and re-runs the whole
+   *  decision once on a measured verdict; on the wire it is `409 {refused:'worker-starting'}`. */
+  | { ok: false; kind: 'worker-starting'; poll: SpawnPollTarget }
   | { ok: false; kind: 'fleetFailed'; stderr: string }
-  | { ok: false; kind: 'advanceFailed'; adv: Extract<AdvanceResult, { ok: false }> };
+  | { ok: false; kind: 'advanceFailed'; adv: Extract<AdvanceResult, { ok: false }> }
+  /** Rule 3 at dispatch (child-reclamation spec §5.4): the resumed session is
+   *  a CHILD whose branch has had a PR since this run was opened
+   *  (`workspace-spent`, `pr` naming it), or whose evidence could not be read
+   *  (`spent-unmeasured`, `detail` saying which). Its own member rather than a
+   *  `refused` code because it is the one refusal on this union that may
+   *  CHANGE something: on `workspace-spent` the spent child's claim is
+   *  released — or handed to a surviving sibling — and the run is unbound, and
+   *  `unbound` says whether that happened. `true`: dispatch again and a fresh
+   *  child is minted. `false`: ALWAYS carries a `detail` (D-3349, F3+F6), one
+   *  of two kinds. PERMANENT — the fleet act never even ran because a gate
+   *  ahead of it refused first: this box's ccd does not support the verb, the
+   *  surviving run's claim could not be written, or the other runs naming the
+   *  workspace could not be read — the caller must STOP AND REPORT.
+   *  RETRYABLE — everything else: the act ran and FAILED (`<verb> failed: …`),
+   *  or the act ran, SUCCEEDED, and `clearSession` found the run no longer
+   *  `planned` and bound — either way retry the same dispatch once, and if it
+   *  repeats, stop and report. `spent-unmeasured` never unbinds — unknown is
+   *  not spent. `pr` and `detail` distinguish by PRESENCE. */
+  | { ok: false; kind: 'childSpent'; code: 'workspace-spent' | 'spent-unmeasured'; pr?: number; detail?: string; unbound: boolean };
 
 /**
  * Dispatch a run: pause and caps checked FIRST, then either a fresh
@@ -164,140 +257,315 @@ export type DispatchOutcome =
  * the route used to (D-46: the transition guard runs BEFORE the body is even
  * looked at).
  */
-export async function dispatchRun(
-  deps: DispatchRunDeps, id: number, brief: unknown, items: unknown,
-): Promise<DispatchOutcome> {
-  const coord = deps.coord;
-  const read = coord.run(id);
-  // D-2545, `closeRun`'s own arm exactly (see its comment): the row exists and
-  // its integers are unrepresentable — refused in words, ahead of any fleet
-  // act, never thrown. `POST /api/runs/:id/dispatch` is as uncaught as the
-  // close route, so a throw here was a bare 500 with no `DispatchOutcome`
-  // shape. `hold-invalid` for the same reason, and the same `detail` rule:
-  // the column, never the value.
-  if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
-  const run = read.run;
-  if (!run) return { ok: false, kind: 'unknown-run' };
-  // Precondition (D-46; a genuine CLAIM, not a stale read, because the
-  // caller runs this whole function behind `CoordMutex` — see that class's
-  // own docstring in `routes.ts`): `RUN_TRANSITIONS.dispatched` has no
-  // self-edge (`dispatched -> dispatched` is illegal). `advance()` below
-  // still re-checks the live row and is still the only WRITER of `state`;
-  // this only answers the question early enough that `ccd ensure`/`/clear`/
-  // `ws-add`/`ws-hold` never fire for a transition that was always going to
-  // be refused.
-  if (run.state !== 'planned') {
-    return { ok: false, kind: 'bad-transition', from: run.state, to: 'dispatched' };
-  }
 
-  if (typeof brief !== 'string' || brief.trim() === '') {
-    return { ok: false, kind: 'bad-request' };
-  }
-  // THE MAIL, composed once: the standing protocol by name, then the wave's
-  // own brief. Composed HERE, before the cap below, because the cap must
-  // measure what is actually queued — see that check's own comment.
-  const body = WORKER_KICKOFF_PREFIX + brief;
-  // Fix, review finding 2: the SAME byte cap `POST /api/mail` enforces on
-  // its own `body`, applied to the mail this dispatch will queue —
-  // `queueSystemMail` below is a SECOND producer of `mail`/`mail_deliveries`
-  // rows that used to bypass every cap the envelope's own cost model depends
-  // on (`envelope.ts`'s COST paragraph: the caps exist "precisely so this
-  // paragraph's 'a few hundred' [round trips] stays the true worst case").
-  // `server.ts` builds Fastify with no `bodyLimit` override, so without this
-  // the ceiling was Fastify's default 1 MiB — a whole plan document pasted as
-  // a wave brief types as tens of thousands of `sendPrompt` round trips, one
-  // per line, inside this session's single `KeyedQueue` slot.
-  //
-  // MEASURED ON `body`, NOT ON `brief`, and that is the whole point rather
-  // than tidiness: the cost this cap exists to bound is the ENVELOPE's, and
-  // the envelope carries the composed body. A cap on the raw brief would let a
-  // brief at exactly the ceiling through and queue a mail over it — the one
-  // ingress (`POST /api/mail`) and this one would then disagree about what
-  // 8 KiB means, by exactly the length of a constant in this file.
-  if (Buffer.byteLength(body, 'utf8') > MAIL_BODY_MAX_BYTES) {
-    return { ok: false, kind: 'oversize', limit: MAIL_BODY_MAX_BYTES,
-      detail: `brief ${Buffer.byteLength(brief, 'utf8')} bytes + worker kickoff prefix ` +
-        `${Buffer.byteLength(WORKER_KICKOFF_PREFIX, 'utf8')} bytes exceeds the ` +
-        `${MAIL_BODY_MAX_BYTES}-byte mail body cap` };
-  }
-
-  // Spec §3.1. The BRIEF stays opaque prose and is parsed by nothing
-  // (build7:216-217, :246-248) — the server never learns to read a wave plan
-  // out of English. The coordinator, which wrote the brief, declares the item
-  // titles beside it, as a structured field. `undefined` and `[]` are the same
-  // legal answer: this run declared no ledger, and its tally renders an em
-  // dash rather than 0/0 (spec §3.3).
-  //
-  // Validated HERE, beside the brief's own checks and BEFORE the pause check:
-  // a malformed body is the cheapest refusal there is and D-46's ordering rule
-  // puts it first — nothing is listed, counted, spawned or held for a request
-  // that was never going to be accepted. BYTES, not characters, for
-  // `WORK_ITEM_TITLE_MAX`'s own reason (`shared/api.ts`) and the brief cap's
-  // just above.
-  if (items !== undefined) {
-    if (!Array.isArray(items) || items.length > WORK_ITEM_MAX) {
-      return { ok: false, kind: 'bad-request' };
-    }
-    for (const t of items) {
-      if (typeof t !== 'string' || t.trim() === '' ||
-          Buffer.byteLength(t, 'utf8') > WORK_ITEM_TITLE_MAX) {
-        return { ok: false, kind: 'bad-request' };
-      }
-    }
-  }
-  const itemTitles: readonly string[] = (items as string[] | undefined) ?? [];
-
-  // The complete hold is known from the persisted run. Validate it after the
-  // cheaper untrusted-body checks retain their existing precedence, but before
-  // pause/cap reads and, critically, before a fresh dispatch can spawn a
-  // workspace. `openRun` checks this too; this seam rechecks authoritatively
-  // because reconstructed or newer-database rows can bypass that ingress.
-  const hold = holdReasonVerdict(run.program, run.wave, run.waveOf, run.id);
-  if (!hold.ok) return hold;
-
-  // 1: PAUSE / KILL-SWITCH FIRST, before anything is counted or spawned. A
-  // directory we cannot list is a pause we cannot rule out — fail-shut, the
-  // identical idiom `watch.ts`'s mail sweep uses for its own `mail-disabled`
-  // kill-switch marker, and for the same reason. spec:201-205: "no verb, no
-  // route, no way for the coordinator to unpause itself."
-  const names = await deps.io.readdir(deps.cfg.registryDir);
-  if (names === null || names.includes(COORDINATOR_PAUSE_MARKER)) {
-    return { ok: false, kind: 'refused', code: 'paused' };
-  }
-  // Fix, review finding 17: dispatch used to consult ONLY the pause marker —
-  // refusing outright (rather than merely skipping the `/clear`) means the
-  // run stays `planned` and the retry, once the operator lifts the marker,
-  // gets a genuinely fresh dispatch.
-  if (names.includes(MAIL_DISABLED_MARKER)) {
-    return { ok: false, kind: 'refused', code: 'mail-disabled' };
-  }
-
-  // 2: caps. The refusal carries the numbers — a cap that refuses without
-  // saying what it is is indistinguishable from a bug.
+/**
+ * THE CAP, MEASURED ONCE AND DECIDED ONCE (design 2026-09-14 §7.2 pin 2; D-2805).
+ * Two routes refuse on the concurrency cap — `dispatchRun` below and
+ * `POST /api/runs/:id/advance` when a run re-enters `working` from an idle
+ * state — and both take their numbers from this one read, so the refusal's
+ * arithmetic is spelled here and nowhere else. It reads `coord` rather than
+ * taking the pair as arguments because `coord-caps-route.test.ts` pins that
+ * `routes.ts` spells `.capsUsage(` exactly once (the caps VIEW); a route that
+ * needs the numbers for a refusal asks here and never reads them itself.
+ * `overConcurrency` carries the numbers a refusal must say (the caps doctrine:
+ * a cap that refuses without saying what it is is indistinguishable from a bug).
+ */
+export function capsMeasured(coord: CoordStore): CapsReading {
   const caps = coord.caps();
   const usage = coord.capsUsage();
-  if (usage.running >= caps.maxConcurrentWorkers) {
-    return { ok: false, kind: 'refused', code: 'cap-concurrency',
-      limit: caps.maxConcurrentWorkers, running: usage.running };
-  }
-  if (usage.dispatchedIn24h >= caps.maxSessionsPerDay) {
-    return { ok: false, kind: 'refused', code: 'cap-daily',
-      limit: caps.maxSessionsPerDay, used: usage.dispatchedIn24h };
-  }
+  const overConcurrency = usage.running >= caps.maxConcurrentWorkers
+    ? { limit: caps.maxConcurrentWorkers, running: usage.running }
+    : null;
+  return { caps, usage, overConcurrency };
+}
 
-  let sessionId: string; let workspace: string | null; let branch: string | null;
-  let resumed: boolean; let clearedAt: number | null = null; let clearError: string | null = null;
-  // §1.5. Both stay at these values on every path that is not the fresh-spawn
-  // adoption gate — a resumed wave-N run adopts nothing, and neither does a
-  // clean `ws-add`.
-  let adopted = false; let adoptedSpawn: SpawnVerdict | null = null;
-  // The account this session is running on AT DISPATCH, for the skill preflight
-  // below. `winner`/`record` are block-scoped inside the two arms, so the
-  // wrapper is hoisted here rather than the read being done twice. `null` means
-  // there is no wrapper to map — a real, TOLERATED case on the resume arm (a
-  // session absent from a listable registry) — and that is `unmeasurable`,
-  // never `absent`.
-  let wrapper: string | null = null;
+/** The `DispatchOutcome` member `refuseSpentChild` answers, and its inputs —
+ *  named so its signature carries no braces (see the note above). */
+type ChildSpentOutcome = Extract<DispatchOutcome, { kind: 'childSpent' }>;
+type ChildBindRefusal = Extract<ChildBindVerdict, { ok: false }>;
+interface RunBinding { id: number; sessionId: string }
+
+/**
+ * The resume arm refusing a CHILD it may not bind (child-reclamation spec
+ * §5.4). Spentness can turn true between open and dispatch — the previous
+ * wave's worker opens its PR after this wave was opened on its workspace — so
+ * this refusal cannot merely fail: a refusal with no automated exit would need
+ * a human, which rule 4 forbids.
+ *
+ * `spent-unmeasured` touches nothing and keeps the binding: unknown is not
+ * spent, and the retry re-asks. `workspace-spent` runs the FLEET ACT FIRST
+ * (D-48's order: a failed act leaves the run retryable, never half-unbound),
+ * then `clearSession`:
+ *   - RELEASE ONLY WHEN NOTHING ELSE CLAIMS IT — `closeRun`'s abandon arm,
+ *     reached from a second door. If another open run still names this
+ *     workspace (a coordinator that dispatched N+1 before closing N), a
+ *     release would drop that live run's claim; the claim is HANDED OVER
+ *     instead, re-held with the surviving run's own reason.
+ *   - An unreadable sibling list, an invalid survivor hold, or a ccd that
+ *     lacks the verb answers `unbound: false`, with a `detail` naming that
+ *     PERMANENT cause, and changes nothing — stop and report (F3).
+ *   - A failed act answers `unbound: false` the same way — retryable, not
+ *     permanent.
+ *   - A successful act whose `clearSession` finds the run no longer `planned`
+ *     and bound also answers `unbound: false`, with a `detail` naming the act
+ *     that DID run (F6) — retryable, not "nothing changed".
+ *   - The act spends `dispatchDec` — this dispatch's OWN actor (F7), not the
+ *     open's: the open placed its hold under `` sweepDec(…, `run:${opened.id}
+ *     open`) `` (`routes.ts`), so the journal shows two actors, the open's and
+ *     the dispatch's, never one label reused.
+ * A crash between the act and `clearSession` leaves a released run still
+ * bound; the next dispatch re-asks the gate, re-releases (idempotent) and
+ * unbinds.
+ */
+async function refuseSpentChild(
+  deps: DispatchRunDeps, run: RunBinding, gate: ChildBindRefusal, dispatchDec: ActorFlags | null,
+): Promise<ChildSpentOutcome> {
+  if (gate.code === 'spent-unmeasured') {
+    return { ok: false, kind: 'childSpent', code: 'spent-unmeasured', detail: gate.detail, unbound: false };
+  }
+  const pr = gate.pr;
+  const keep = (detail: string): ChildSpentOutcome =>
+    ({ ok: false, kind: 'childSpent', code: 'workspace-spent', pr, detail, unbound: false });
+  const sibRead = deps.coord.bindingsOf(run.sessionId).worker({ excludeRunId: run.id });
+  if (!sibRead.ok) return keep(`the other runs naming this workspace could not be read: ${sibRead.detail}`);
+  const survivor = survivorOf(sibRead.siblings);
+  let handoff: HoldReasonVerdict | null = null;
+  if (!releaseIsSafe(sibRead.siblings) && survivor !== null) {
+    handoff = holdReasonVerdict(survivor.program, survivor.wave, survivor.waveOf, survivor.id);
+    if (!handoff.ok) return keep(`the surviving run's claim cannot be written: ${handoff.detail}`);
+  }
+  const argv = handoff !== null && handoff.ok
+    ? CCD_ARGV.wsHold(run.sessionId, handoff.reason, dispatchDec)
+    : CCD_ARGV.wsRelease(run.sessionId, dispatchDec);
+  // D-5866: the row the argv above was built from — the hold when a survivor takes the claim, else the release.
+  if (!ccdCan(deps.fleetState, handoff !== null && handoff.ok ? 'wsHold' : 'wsRelease')) {
+    return keep(`this box's ccd does not support ${argv[0]}`);
+  }
+  const res = await deps.runCcd(argv);
+  if (!res.ok) return keep(`${argv[0]} failed: ${res.stderr.trim()}`);
+  const cleared = deps.coord.clearSession(run.id, pr);
+  // F3 + F6 (D-3349): the fleet act above DID run — `argv[0]` names which,
+  // `ws-release` or the hand-over's `ws-hold` — but `clearSession` guards on
+  // the run still being `planned` and bound. Every run-writing ROUTE runs
+  // behind the same `coordMutex` (`routes.ts`), and a crash never reaches
+  // this `return` at all — so there is, today, no path through the routes
+  // that leaves `cleared.cleared` false here (F6's own reachability
+  // argument). The `detail` below exists to keep the answer honest if that
+  // ever stops being true — a future caller outside the mutex, a timer this
+  // file has not audited — rather than assert "impossible" about a guard
+  // whose whole point is to answer for a state it did not expect.
+  // `unbound:false` here is NOT one of the three PERMANENT causes `keep`
+  // above reports (unsupported verb, invalid survivor hold, unrepresentable
+  // sibling): the act already ran, so this `detail` means retry the same
+  // dispatch once, and if it repeats, stop and report — never "nothing
+  // changed", which would be a lie about the act that just happened.
+  if (!cleared.cleared) {
+    return { ok: false, kind: 'childSpent', code: 'workspace-spent', pr, unbound: false,
+      detail: `${argv[0]} ran, but run ${run.id} was no longer planned and bound by the time it ` +
+        'completed, so nothing was unbound' };
+  }
+  return { ok: false, kind: 'childSpent', code: 'workspace-spent', pr, unbound: true };
+}
+
+/** The one place a decider's non-`go` answer becomes a `DispatchOutcome`. The `switch` is exhaustive: a fourth arm in
+ *  `dispatchDecide.ts` is a compile error here until it is answered. A refusal that carries an `event` journals it
+ *  first, as the inline code did. */
+function stopped(coord: CoordStore, id: number, d: DispatchStop): DispatchHalt {
+  switch (d.kind) {
+    case 'refused':
+      if (d.event !== undefined) coord.recordRunEvent(id, 'coordinator', d.event);
+      return d.outcome;
+    case 'stale':
+      return d.outcome;
+    default:
+      return d satisfies never;
+  }
+}
+
+/** What a dispatch bound: the session it will hold, brief and (resumed) `/clear`. */
+interface Bound {
+  sessionId: string; workspace: string | null; branch: string | null; wrapper: string | null; resumed: boolean;
+  /** D-5238: what the resume gate measured, read again at the act. `null` on a fresh spawn. */
+  liveGate: SpawnPollTarget | null;
+  adopted: boolean; adoptedSpawn: SpawnVerdict | null;
+  /** D-6794: the default route was withheld (no `route-default-v1`), so `route-defaulted` is not journaled. */
+  defaultOmitted: boolean;
+}
+
+/**
+ * Wave 1: mint a workspace and learn its id by REGISTRY DIFF, never by parsing ccd's echoed sentence (a prose line
+ * nobody wrote a contract for). Read the registry before and after; exactly one new `workspace !== null` row for this
+ * project is the run's session. Which row, and whether to ADOPT one a cut-short `ws-add` left, is
+ * `decideDispatch`'s `bind` step; this function only reads, spawns and writes.
+ */
+async function spawnFresh(
+  deps: DispatchRunDeps, run: DispatchRun, routeFieldsIn: RouteFields | null, childSlug: string | null,
+  dispatchDec: ActorFlags | null, routeDefaulted = false,
+): Promise<Bound | DispatchHalt> {
+  const coord = deps.coord;
+  // [registry-refused:refuses] an unlistable registry refuses before anything is spawned.
+  const before = decideDispatch({ step: 'before', read: await readRegistryMeasured(deps.io, deps.cfg) });
+  if (before.kind !== 'go') return stopped(coord, run.id, before);
+  // D-6794: the table's default row rides `--route-default`, so ccd places by its class as a PREFERENCE and a lane at
+  // the seven-day ceiling still places (an explicit class is strict and would refuse). A box without
+  // `route-default-v1` would bind that flag as the project, and sending the pairs without it would make the class
+  // strict, so such a box gets NO default route at all, journalled: the argv that shipped before D-6794.
+  let routeFields = routeFieldsIn;
+  // A box without `route-argv-v1` drops every `--route` already (journalled below as `route-omitted:no-route-argv-cap`),
+  // so the default-specific withholding applies only where the pairs would otherwise have been sent.
+  const defaultOk = routeDefaulted && routeFields !== null && capSupported(deps.fleetState, ROUTE_DEFAULT_CAP);
+  let defaultWithheld = false;
+  if (routeDefaulted && routeFields !== null && !defaultOk && capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
+    coord.recordRunEvent(run.id, 'coordinator', 'route-omitted:no-route-default-cap');
+    defaultWithheld = true;
+    // D-8121: a `browser` the coordinator named rode over the row; it is the coordinator's, so it is still sent.
+    routeFields = routeFields.browser !== undefined ? { browser: routeFields.browser } : null;
+  }
+  // ROUTING (routing spec §5.3, slice 4, Task 3): gated on `ROUTE_ARGV_CAP`, the ARGV-PARSING capability: a
+  // DIFFERENT token from the `ROUTE_CAP` the wave N>=2 arm gates the `ccd route` VERB on. `routeFields === null`
+  // sends the identical bare argv regardless of the cap, so an absent token never fires the omission event for a
+  // wave that carried no routing to omit.
+  if (routeFields !== null && !capSupported(deps.fleetState, ROUTE_ARGV_CAP)) coord.recordRunEvent(run.id, 'coordinator', 'route-omitted:no-route-argv-cap');
+  // THE CHILD (child-workspace reclamation, spec §5.1): every workspace this arm mints is a child of THIS run, so
+  // `--child <run.id>` is sent unconditionally, EXCEPT to a box that has not said it parses the flag (`capSupported`:
+  // no evidence REFUSES, since an older `cmd_ws_add` would bind `--child` as the project, D-410). A box without the
+  // token ALWAYS journals the omission: a workspace minted without the marker is simply not a child.
+  const child = capSupported(deps.fleetState, CHILD_ARGV_CAP) ? run.id : null;
+  if (child === null) coord.recordRunEvent(run.id, 'coordinator', 'child-omitted:no-child-argv-cap');
+  // `wsAddWorker`, not `wsAdd`: the one call site that knows the spawn is a dispatched program worker, so it
+  // declares `--no-rc` at creation (the 2026-08-13 ruling) and WHO (D-410's remedy): the same `dispatchDec` the hold
+  // spends, so the journal's `create` row and the `hold` row that follows read as one act by one lane. `null` (an
+  // older ccd, no `actor-flags-v1`) composes the bare argv that shipped before.
+  const argv = CCD_ARGV.wsAddWorker(run.project, dispatchDec, capSupported(deps.fleetState, ROUTE_ARGV_CAP) ? routeFields : null, child, childSlug, defaultOk);
+  // BEFORE the call, never after: the only moment the run can say "a dispatch is in flight" (the id does not exist
+  // yet). ONE MEASUREMENT, SPENT TWICE (child-reclamation spec §5.1): this instant is this attempt's
+  // `dispatchStartedAt` AND, only for a clean spawn, this session's `sessionBornAt`.
+  const startedAt = Date.now();
+  coord.markDispatchStarted(run.id, startedAt);
+  if (child !== null) coord.markHadChild(run.id);
+  const res = await deps.runCcd(argv);
+  // [registry-refused:refuses] a refused name new since BEFORE refuses the bind (the bind step decides it).
+  const bind = decideDispatch({ step: 'bind', project: run.project, childSlug, beforeIds: before.plan,
+    after: await readRegistryMeasured(deps.io, deps.cfg),
+    res: res.ok ? { ok: true } : { ok: false, stderr: res.stderr, cutShort: cutShort(res) } });
+  if (bind.kind !== 'go') return stopped(coord, run.id, bind);
+  const { winner, adopted, adoptedSpawn } = bind.plan;
+  // Fix, review finding 7: persist the spawn onto the run row RIGHT AWAY, before the hold, which can still fail. The
+  // adopted arm (child-reclamation spec §5.1) dates NO birth: the workspace may be an EARLIER attempt's, so
+  // `childBirthOf` refuses to date any PR row against it, `childBindGate` refuses on any PR evidence, and the close
+  // holds rather than guessing which attempt this workspace's history belongs to.
+  coord.setSession(run.id, winner.id, adopted ? null : startedAt);
+  // Routing spec §6 "Arms": the `arm:` record, only when routing was actually seeded onto the argv, and gated on the
+  // dispatch BINDING a session, never on `res.ok` (an adopted spawn reaches here with `res.ok === false`).
+  if (routeFields !== null && capSupported(deps.fleetState, ROUTE_ARGV_CAP)) coord.recordRunEvent(run.id, 'coordinator', armEventDetail(routeFields));
+  // `winner.wrapper` is MEASURED: the bind step refuses any same-project record whose identity is not.
+  return { sessionId: winner.id, workspace: winner.workspace, branch: winner.branch, wrapper: winner.wrapper,
+    resumed: false, liveGate: null, adopted, adoptedSpawn, defaultOmitted: defaultWithheld };
+}
+
+/**
+ * D-7563 (operator ruling 2026-10-30): THE RETURNED CHILD'S BIND. A dispatch whose `ws-add` came back after the dispatch
+ * stopped reading leaves a planned run that names no session beside a live child workspace whose `.child` marker names
+ * it. The dead-dispatch pass (`abandonDeadDispatch.ts`) proves that shape and calls this, inside the coordination
+ * serialiser, right after its re-measure. It binds through THE SAME STORE WRITE the fresh-spawn arm above makes,
+ * `setSession`, with the adopted arm's `null` birth: the workspace may be an earlier attempt's, so no birth is dated
+ * against it. It lives here, beside that arm, so the binding's writers stay the files `BINDING_WRITER_FILES` names.
+ *
+ * SYNCHRONOUS from its read to its write: the run is read again and bound with no `await` between, so nothing in this
+ * process can move it in between. Any change since the pass measured it refuses: not planned, already bound, another
+ * claimant, or another dispatch stamp (a retry restamps the run). Nothing else is written here: no hold, no advance, no
+ * brief. The coordinator's next dispatch of the run resumes the bound workspace through the resume arm below.
+ */
+export function bindReturnedChild(
+  coord: WatcherCoordPort, b: { runId: number; sessionId: string; claimedBy: string; startedAt: number },
+): { ok: true } | { ok: false; why: string } {
+  const read = coord.run(b.runId);
+  if (!read.ok) return { ok: false, why: `the run could not be read (${read.detail})` };
+  const run = read.run;
+  if (run === null) return { ok: false, why: 'the run is gone' };
+  if (run.state !== 'planned') return { ok: false, why: `the run is ${run.state}` };
+  if (run.sessionId !== null) return { ok: false, why: `the run already names ${run.sessionId}` };
+  if (run.claimedBy !== b.claimedBy) return { ok: false, why: `the run's claimant is ${run.claimedBy ?? 'none'}` };
+  if (run.dispatchStartedAt !== b.startedAt) return { ok: false, why: 'the run was dispatched again' };
+  coord.setSession(b.runId, b.sessionId, null);
+  return { ok: true };
+}
+
+/**
+ * Wave N>=2: resume the SAME workspace (deviation D-1: no ccd verb can spawn fresh into an existing one). NO
+ * `markDispatchStarted` here, deliberately: that column measures the window in which a workspace is being MINTED
+ * with no session id yet, and a resume has neither half. Adding the stamp widens what NULL means and reds
+ * `run-routes.test.ts`'s resume-scope pin: do it only as a decided scope change.
+ */
+async function resumeBound(
+  deps: DispatchRunDeps, run: DispatchRun, sessionId: string, dispatchDec: ActorFlags | null,
+): Promise<Bound | DispatchHalt> {
+  // Rule 3's dispatch half (child-reclamation spec §5.4): BEFORE `ensure`, so a spent child is never resumed.
+  const childGate = await childBindGate(deps, deps.coord, sessionId);
+  if (!childGate.ok) return refuseSpentChild(deps, { id: run.id, sessionId }, childGate, dispatchDec);
+  // D-5242: resuming a hibernated worker WAKES it. The coordinator asked, so the wake budget never refuses it (its
+  // answer is not read), but the wake is recorded in the window the mail lane's automatic wakes are bounded by.
+  if (deps.admitWake !== undefined) {
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    if (names !== null && names.includes(`${sessionId}.hibernated`)) deps.admitWake('asked', sessionId);
+  }
+  const res = await deps.runCcd(CCD_ARGV.ensure(sessionId));
+  if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
+  // NO REFUSED-ID ARM HERE, by design (spec §2.3): `sessionId` is the run's STORED id, and the request step's
+  // stored-row gate refuses a bad one before any read; `childBindGate` holds it `spent-unmeasured` behind that.
+  //
+  // The live registry falls back to the run row (`fingerprint.ts`'s `verifyDone` uses the identical fallback). An
+  // unmeasured value is refused BEFORE it is persisted by `markDispatched`: it would stop being a transient read and
+  // become a fact the run row carries forever, and a degraded `record.uuid` (`''`) fed to the hook read would look up
+  // a file that matches no real one and read back "not busy", turning the FAIL-SHUT busy gate FAIL-OPEN.
+  const d = await decideDispatch({ step: 'resume', project: run.project, sessionId, runWorkspace: run.workspace,
+    runBranch: run.branch, ensureStarted: !ensureFoundAlive(res.stdout, sessionId),
+    // [registry-refused:gated] guarded by the stored-row gate and childBindGate, above.
+    registry: () => readRegistryMeasured(deps.io, deps.cfg),
+    projectField: () => fieldMeasured(deps.io, deps.cfg.registryDir, sessionId, 'project'),
+    hookState: (uuid) => readHookStateMeasured(deps.io, deps.cfg.registryDir, sessionId, uuid, Date.now()),
+    turnVerdict: deps.turnVerdict });
+  if (d.kind !== 'go') return stopped(deps.coord, run.id, d);
+  return { sessionId, ...d.plan, resumed: true, adopted: false, adoptedSpawn: null, defaultOmitted: false };
+}
+
+/** The stamp around a dispatch (D-8077; the run-close lane's R4): `runs.lastDispatchAttemptAt` is written here, by EVERY answer,
+ *  a refusal and a throw included, once the answer is known, in one small statement outside any `gh` or fleet call. It
+ *  changes no answer and no order. It takes the attempt as a thunk, not `dispatchRun` itself, so the one bare `dispatchRun(...)`
+ *  call stays at the route's `coordMutex.run(...)` where `dispatch-mutex-gate.test.ts` reads it. */
+export async function stampDispatchAttempt(
+  coord: Pick<DispatchRunDeps['coord'], 'noteDispatchAttempt'>, id: number, attempt: () => Promise<DispatchOutcome>,
+): Promise<DispatchOutcome> {
+  try {
+    return await attempt();
+  } finally {
+    try { coord.noteDispatchAttempt(id, Date.now()); } catch { /* the stamp is a record: it never changes the answer */ }
+  }
+}
+
+export async function dispatchRun(
+  deps: DispatchRunDeps, id: number, brief: unknown, items: unknown, route: unknown = undefined,
+  slug: unknown = undefined, intents: unknown = undefined,
+): Promise<DispatchOutcome> {
+  const coord = deps.coord;
+  // Everything the request says, in D-46's order: the cheapest refusal first, and nothing listed, counted, spawned or
+  // held for a request that was never going to be accepted. SYNCHRONOUS up to the first `await` below on purpose:
+  // two calls fired together both read the same `planned` row (`coord-decide.test.ts`).
+  const req = decideDispatch({ step: 'request', read: coord.run(id), brief, items, route, slug, intents,
+    held: (project, keys) => coord.heldLandingIntents(project, keys),
+    linking: (project) => { try { const l = coord.linkingOf(project); return { mode: l.mode, teamKey: l.teamKey }; } catch { return null; } },
+    prefixes: { work: WORKER_KICKOFF_PREFIX, review: REVIEWER_KICKOFF_PREFIX } });
+  if (req.kind !== 'go') return stopped(coord, id, req);
+  const { run, body, itemTitles, routeFields: plannedRoute, routeDefaulted, childSlug, intentKeys, hold } = req.plan;
+  // PAUSE / KILL-SWITCH FIRST, then the caps, before anything is counted or spawned.
+  const admit = decideDispatch({ step: 'admit', names: await deps.io.readdir(deps.cfg.registryDir),
+    caps: () => capsMeasured(coord) });
+  if (admit.kind !== 'go') return stopped(coord, id, admit);
+  // D-8121: an older ccd refuses a `browser` routing field by name, on the minting argv and on `ccd route` alike, so a box
+  // without `browser-route-v1` gets the wave's route without it, and the omission is journalled.
+  const browserCap = routeForBrowserCap(plannedRoute, capSupported(deps.fleetState, BROWSER_ROUTE_CAP));
+  if (browserCap.dropped) coord.recordRunEvent(id, 'coordinator', 'route-omitted:no-browser-route-cap');
+  const routeFields = browserCap.route;
 
   // ONE MEASUREMENT, SPENT TWICE — the dispatch's own dec, hoisted above the
   // fresh-spawn branch because BOTH of this function's ccd writes are the same
@@ -324,367 +592,71 @@ export async function dispatchRun(
   // `--surface`/`--actor` where the fresh `sweepDec` this hoist replaced would
   // have omitted them, at the cost `capSupported`'s no-evidence-FALSE default
   // is argued for in `ccdargv.ts`. Nothing below catches it, and the asymmetry
-  // is three lines from the spend: `verbSupported(deps.fleetState, holdArgv)`
+  // is three lines from the spend: `ccdCan(deps.fleetState, 'wsHold')`
   // re-reads the SAME field FRESH there, and by its own opposite default
   // answers TRUE on `null`. Accepted deliberately — one actor across the two
   // rows of one act outweighs a flag pair a regressed box refuses, and the
   // regression is a deploy-window event — but it is a staleness, not the
   // absence of one.
+  //
+  // AND A THIRD SPEND, on a refusal path only (child-reclamation wave 2):
+  // `refuseSpentChild` releases — or hands to a surviving sibling — the claim
+  // an earlier open placed on a spent child, under THIS dispatch's own
+  // actor (F7) rather than minting a second label: the open placed its hold
+  // under `` sweepDec(…, `run:${opened.id} open`) `` (`routes.ts`), so the
+  // journal shows two actors for the two acts, the open's and the dispatch's.
   const dispatchDec = sweepDec(deps.fleetState, `run:${run.id} dispatch`);
 
-  if (run.sessionId === null) {
-    // 3/4: fresh spawn — wave 1. Learn the new id by REGISTRY DIFF, never
-    // by parsing ccd's own echoed sentence (`workspace <id> on <wrapper> —
-    // <path> (branch …)`, `ccd/ccd:1234`) — a prose line nobody wrote a
-    // contract for, and this repo has already paid for one of those. Read
-    // the registry before and after; exactly one new `workspace !== null`
-    // row for this project is the run's session.
-    // BEFORE tolerates degradation, deliberately — the question it answers
-    // ("which ids already exist") is "does this still exist", and that
-    // question tolerates degradation the same way `readRegistry`'s plain,
-    // old signature always has (a degraded or dropped row just doesn't
-    // count as pre-existing, which is always the SAFE direction to be
-    // wrong in here: at worst a real id gets treated as new and trips
-    // `ambiguous-dispatch` below, never silently misbound).
-    const before = await readRegistry(deps.io, deps.cfg);
-    const beforeIds = new Set(before.map((r) => r.id));
-    // `wsAddWorker`, not `wsAdd`: this is the one call site that knows the
-    // spawn is a dispatched program worker, so it declares `--no-rc` at
-    // creation (the 2026-08-13 ruling, task #37). The PWA's ordinary
-    // workspace-add keeps `wsAdd` and the box's own RC default.
-    //
-    // AND IT DECLARES WHO (D-410's remedy, re-landed against a ccd that can
-    // read it). The same `dispatchDec` the hold at step 5 spends, so the
-    // journal's `create` row and the `hold` row that follows carry one
-    // identical actor and read as one act by one lane. Without it Build 9a
-    // recorded this spawn as `declared: nothing`, indistinguishable from an
-    // operator's own add. `null` — an older ccd, no `actor-flags-v1` — composes
-    // the bare argv that shipped before, token for token; the residual that
-    // makes THIS change AGENT-FIRST is stated on `wsAddWorker`'s docstring.
-    const argv = CCD_ARGV.wsAddWorker(run.project, dispatchDec);
-    // BEFORE the call, never after: this is the only moment the run can say
-    // "a dispatch is in flight" — the id does not exist yet, and a stamp
-    // written once `runCcd` resolves would be null for the entire window it
-    // exists to describe. Nothing clears it; `state` ends the render.
-    coord.markDispatchStarted(id, Date.now());
-    const res = await deps.runCcd(argv);
-    // §1.5: NO EARLY RETURN HERE ANY MORE. `!res.ok` used to short-circuit on
-    // this line, before the diff below — see the gate after `winner`.
-    // AFTER never tolerates degradation — the question here is "is this
-    // NEW", the identity-by-subtraction this whole block performs, and
-    // THAT one must not guess. Two drops (or, under the ladder, two
-    // degraded same-project rows) could otherwise make an unrelated LIVE
-    // workspace the SOLE "new" candidate below, which this function then
-    // binds, holds and /clear's — a running worker's context destroyed
-    // because of a read failure on a DIFFERENT session entirely. This is
-    // the asymmetry to preserve on any future "simplification" of this
-    // block back to a plain `readRegistry` call: BEFORE answers "does this
-    // still exist" (tolerant); AFTER answers "is this new" (never
-    // tolerant).
-    //
-    // AND §1.5 CHANGED WHAT MAKES BEFORE'S TOLERANCE SAFE. It was safe because the
-    // SUCCESS path always contributes exactly one genuinely-new row, so a
-    // false-new made the count 2 and `candidates.length !== 1` refused. ON THE
-    // ADOPTION PATH THAT GUARANTEE IS GONE: a false-new makes the count 1, AND
-    // WOULD BE ADOPTED. Two triggers were measured — a whole-fleet listing failure
-    // (`readRegistry` collapses an unlistable directory to `[]`, emptying
-    // `beforeIds`) and an operator `ws-add` from the PWA racing a refused dispatch
-    // (`server.ts`'s own route, outside `coordMutex`, with no diff of its own).
-    // `killed` + `held` are what REPLACE the lost precondition: the first says a
-    // spawn really was interrupted here and now, the second is fail-shut and says
-    // nothing else has claimed the row.
-    const afterRead = await readRegistryMeasured(deps.io, deps.cfg);
-    if (!afterRead.listed ||
-        afterRead.records.some((r) => r.project === run.project && measuredIdentity(r) === null)) {
-      // ccd's own words ride along when ccd ALSO failed. Before §1.5 this arm was
-      // unreachable on a failed `ws-add` — the early return fired first and the
-      // 502 quoted ccd — so moving that return DOWN silently deleted the fleet's
-      // half of the story for the one case where two things broke at once.
-      // Present-or-absent, never `''`: see the union member's own docstring.
-      return { ok: false, kind: 'registry-unmeasurable', ...(res.ok ? {} : { stderr: res.stderr }) };
-    }
-    const after = afterRead.records;
-    const candidates = after.filter((r) =>
-      !beforeIds.has(r.id) && r.project === run.project && r.workspace !== null);
-    if (candidates.length !== 1) {
-      // Nothing claimed on a guess: the run stays `planned`, no hold placed
-      // — the operator resolves it.
-      if (!res.ok) {
-        coord.recordRunEvent(id, 'coordinator',
-          `dispatch-refused:${candidates.length === 0 ? 'fleetFailed' : 'ambiguous-dispatch'}`
-          + ` candidates=${candidates.map((c) => c.id).join(',')}`);
-        // ccd failed AND left nothing new: there is no ambiguity to report, only
-        // a failure. Zero candidates after a failed `ws-add` is the ordinary
-        // shape of "it refused before it created anything", and `fleetFailed`
-        // is the honest answer — `ambiguous-dispatch` means "the ws-add worked
-        // and we cannot read the diff", which is a different sentence.
-        if (candidates.length === 0) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
-      }
-      return { ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: candidates.length };
-    }
-    const winner = candidates[0]!;
-    // §1.5. `!res.ok` NO LONGER SHORT-CIRCUITS BEFORE THE DIFF — that early return
-    // is what turned a slow spawn into an unclaimed workspace: `cmd_ws_add` writes
-    // the worktree and every registry row FIRST and blocked LAST, so a kill at the
-    // budget landed after the workspace existed and before anything claimed it.
-    //
-    // ADOPTION NEEDS POSITIVE EVIDENCE THAT THIS CANDIDATE IS THE ONE THIS CALL
-    // CREATED, and two gates supply it. `cutShort` (§1.4, widened by §1.7)
-    // separates "this call's child was cut short in flight" from "ccd refused" —
-    // a ccd `die` is exit 1, byte-identical without it — and it reads BOTH halves
-    // of that measurement, because node reports `killed` only for a kill IT
-    // issued and an external `kill`/OOM/systemd-stop shows up as a `signal`
-    // alone. The transport catch path measures neither, so a dropped socket
-    // answers `UNMEASURED` and does not adopt; only a literal `true` does.
-    // `held` is fail-shut by construction (`registry.ts`: a listed-but-unreadable
-    // `.hold` reads as HELD): a workspace a cut-short `ws-add` just created never
-    // carries one, while a live coordinated worker always does.
-    if (!res.ok) {
-      if (!(cutShort(res) === true && winner.held === null)) {
-        // §1.2's OTHER polarity, and the reason the refusal is no longer silent.
-        // A settle that expires INSIDE the agent's 300 s ceiling is a clean
-        // non-zero exit — so ccd created, claimed and supervised a workspace,
-        // and we correctly decline to bind it (nothing ties it to THIS call;
-        // the `.spawn` fact says how A spawn ended, never whose). But a run
-        // stuck in `planned` beside an unexplained new workspace is a state no
-        // verb names, which is the class this build is judged on. Say what
-        // happened and which ids appeared, WITHOUT claiming any of them.
-        coord.recordRunEvent(id, 'coordinator',
-          `dispatch-refused:fleetFailed candidates=${candidates.map((c) => c.id).join(',')}`);
-        return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
-      }
-      adopted = true;
-      adoptedSpawn = spawnVerdict(winner.spawn === null ? null : winner.spawn.rc);
-    }
-    sessionId = winner.id; workspace = winner.workspace; branch = winner.branch;
-    // Guaranteed MEASURED: the AFTER read above refuses the whole dispatch when
-    // any same-project record has `measuredIdentity(r) === null`, and the
-    // candidate filter is same-project.
-    wrapper = winner.wrapper;
-    resumed = false;
-    // Fix, review finding 7: persist the spawn onto the run row RIGHT AWAY —
-    // before the hold, which can still fail two steps below.
-    coord.setSession(id, sessionId);
-  } else {
-    // Wave N>=2: resume the SAME workspace (deviation D-1 — no ccd verb can
-    // spawn fresh into an existing one), then discard the resumed context
-    // with an injected `/clear` through `sendPrompt`'s full proof discipline.
-    //
-    // AND NO `markDispatchStarted` HERE, deliberately — the arm above stamps,
-    // this one does not. That column measures the window in which a workspace
-    // is being MINTED and no session id exists yet, and a resume has neither
-    // half: `run.sessionId` is known before the call, so the console already
-    // has a row to point at. Adding the stamp here widens what NULL means and
-    // reds `run-routes.test.ts`'s resume-scope pin, which is the intended
-    // cost — do it only as a decided scope change, never as a tidy-up.
-    sessionId = run.sessionId;
-    const argv = CCD_ARGV.ensure(sessionId);
-    const res = await deps.runCcd(argv);
-    if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
-    resumed = true;
-    // The live registry, falling back to the run row — the identical
-    // fallback `fingerprint.ts`'s `verifyDone` uses for the same reason
-    // (see `DoneRun`'s own docstring): the live registry is the fresher
-    // source, the run row is what is left when it cannot answer.
-    //
-    // REFUSE before the busy gate and before EITHER of workspace/branch is
-    // persisted onto the run row below (`coord.markDispatched`) — registry
-    // ladder, and the spot the design names as most likely to get
-    // "simplified" back into a bug, so the reasoning is written at the
-    // call site rather than only in the spec: an unmeasured value
-    // persisted by `markDispatched` STOPS being a transient read and
-    // BECOMES a fact the run row carries forever; and a degraded
-    // `record.uuid` (`''`) fed to `readHookStateMeasured` below looks up a
-    // hookstate file that matches no real one, reading back `no-state`
-    // (`null`, before D-115 gave that answer a name) — which the busy gate
-    // still treats as "not busy", correctly, because it IS a measurement of
-    // an identity that does not match — silently turning a
-    // FAIL-SHUT busy gate FAIL-OPEN on a session this read simply could
-    // not measure, not one this read proved idle.
-    //
-    // Fix (blocking review finding 7): the registry read ITSELF must not
-    // reopen that same fail-open door one level up. `readRegistry`'s old
-    // signature collapses a whole-fleet `io.readdir` failure to `[]` —
-    // exactly the shape "no such session" wears — so `record` used to come
-    // back `undefined` for TWO different facts this function must tell
-    // apart: the session's row is genuinely absent from a LISTABLE
-    // registry (the pre-existing, tolerated "honest stale" case
-    // `DoneRun`'s own docstring names, which keeps falling back to
-    // `run.workspace`/`run.branch` below, same as always), and the
-    // registry directory itself could not be listed at all — which proves
-    // NOTHING about this session and must refuse exactly like the AFTER
-    // read some 40-odd lines above already does. `readRegistryMeasured`
-    // draws that line explicitly: `!listed` refuses OUTRIGHT, before
-    // `record` is ever computed, so `record === undefined` past this point
-    // means only the first, tolerated case — never the second.
-    const registryRead = await readRegistryMeasured(deps.io, deps.cfg);
-    if (!registryRead.listed) {
-      return { ok: false, kind: 'registry-unmeasurable' };
-    }
-    const record = registryRead.records.find((r) => r.id === sessionId);
-    const recordIdentity = record !== undefined ? measuredIdentity(record) : null;
-    if (record !== undefined && recordIdentity === null) {
-      return { ok: false, kind: 'registry-unmeasurable' };
-    }
-    // F1's registry rung (design 2026-09-08 §3 F1) — MEASURED at the decision
-    // point, not read off `record.project`. `SessionRecord.project` is built
-    // `project ?? id` over `field()`'s collapsing read (`registry.ts`), so an
-    // absent or unreadable `.project` file would arrive here as the SESSION
-    // ID and compare unequal to every run's project: a false, non-retryable
-    // `project-mismatch` naming a session id as the offending repository, on
-    // a fact nobody measured. The design's own sentence forbids exactly that
-    // ("refusing on a fact not measured would be the same error in the other
-    // direction"), so this rung reads the one field it decides on through the
-    // D-114 ladder and tells three answers apart:
-    //   unreadable — the registry could not be measured for THIS row, which is
-    //     what `registry-unmeasurable` already means a few lines up: transient,
-    //     retryable, nothing spent.
-    //   absent, or present and empty — a PROVEN ENOENT, or a field with no
-    //     name in it. The row predates the field (ccd writes `.project` at
-    //     `ws-add`; rows from before 2026-07-28 carry none, as ccd's own
-    //     `_project_pool_state` says) and its repository is unknown to the
-    //     registry. Absence PERMITS, exactly as the open route's
-    //     `sessionProject` null does: nothing is measured, nothing is refused,
-    //     and the dispatch proceeds as it did before this wave existed.
-    //   measured — the file's content, compared to the run's project. Unequal
-    //     is the crossing this build refuses, and `by` names what was READ.
-    // `record.project` keeps its `project ?? id` default for every display
-    // consumer; only the DECISION reads measured. Putting `project` on the
-    // measured ladder inside `readRegistryMeasured` itself is the fuller
-    // remedy and reaches every consumer of `SessionRecord.project` — it is
-    // recorded as D-2342 in this wave's deviation ledger, with the fuller
-    // remedy as the follow-up, not done here.
-    //
-    // THE POSITION IS PART OF THE GUARD. Here it is: after the record is found
-    // and its identity measured, and BEFORE the hold, the injected `/clear` and
-    // `markDispatched`. Moved past the hold, a crossing costs a claim on a
-    // workspace this run is not going to use; moved past the `/clear`, it costs
-    // a live worker's context. Nothing has been spawned at this point — the
-    // resume arm only ran `ensure` — so the run is untouched and still
-    // `planned`.
-    //
-    // `record !== undefined` is load-bearing and is NOT the same condition as
-    // the refusal above it: an undefined record on a LISTABLE registry is the
-    // tolerated honest-stale case, which keeps falling back to `run.workspace`
-    // below exactly as it always has. An unlistable registry never reaches here
-    // — `readRegistryMeasured` refused it with its own code. Refusing on a
-    // fact not measured would be the same error in the other direction.
-    if (record !== undefined) {
-      const projectRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sessionId, 'project');
-      if (!projectRead.ok && projectRead.reason === 'unreadable') {
-        return { ok: false, kind: 'registry-unmeasurable' };
-      }
-      if (projectRead.ok && projectRead.content !== '' && projectRead.content !== run.project) {
-        return { ok: false, kind: 'refused', code: 'project-mismatch', by: projectRead.content };
-      }
-    }
-    workspace = record?.workspace ?? run.workspace;
-    branch = record?.branch ?? run.branch;
-    // `recordIdentity` is null exactly when `record` is undefined — the
-    // tolerated "honest stale" row this arm proceeds past on purpose. There is
-    // then no wrapper at all, and the preflight says so rather than guessing.
-    wrapper = recordIdentity?.wrapper ?? null;
-    // Fix, review finding 12: refuse to `/clear` a session that is
-    // OBSERVABLY mid-turn. `sendPrompt`'s `ok:true` can mean only "the
-    // text left the input box" — `watch.ts`'s own mail-sweep comment and
-    // `hookstate.ts`'s own docstring both say so in as many words: Claude
-    // Code silently QUEUES a prompt sent mid-turn, so "the box reads
-    // empty" is not "nothing is pending", and a `clearedAt` stamped from
-    // `sendPrompt`'s return alone would assert a measurement the server
-    // never made. This reads the SAME hookstate the mail lane's own gate
-    // reads.
-    //
-    // TWO CASES, and D-115 is what happens when they are one (this is the
-    // arm of that deviation that ends in a KEYSTROKE, which is why it is
-    // fixed first):
-    //
-    //  - The read HAPPENED and the file does not describe a live turn —
-    //    absent, stale, from a previous process, `done` (`no-state`, or an
-    //    `ok` state of `done`). That is the ordinary shape for a workspace
-    //    this fresh, or one whose last turn ended, and it proceeds exactly
-    //    as it always has.
-    //  - The read did NOT happen (`unmeasured`): the file is there and this
-    //    box could not read it, so nothing was measured about this session
-    //    at all. It could say `working`. Proceeding here would send `/clear`
-    //    into a possibly mid-turn pane and discard a real context on the
-    //    strength of a read that answered nothing — a FAIL-SHUT gate turned
-    //    FAIL-OPEN by a permission bit. It refuses, with its own code:
-    //    `worker-busy` would assert the measurement this branch is defined
-    //    by not having, and a coordinator reading it would settle in to wait
-    //    out a turn that may not exist.
-    //
-    // `readHookStateMeasured`, not `readHookState`, is the whole mechanism —
-    // the folded form cannot express the second case, which is why the gate
-    // read it wrong for as long as it did.
-    const hs = recordIdentity
-      ? await readHookStateMeasured(deps.io, deps.cfg.registryDir, sessionId, recordIdentity.uuid, Date.now())
-      : null;
-    if (hs !== null && !hs.ok && hs.reason === 'unmeasured') {
-      return { ok: false, kind: 'refused', code: 'hookstate-unmeasurable' };
-    }
-    if (hs !== null && hs.ok && hs.state.state !== 'done') {
-      return { ok: false, kind: 'refused', code: 'worker-busy' };
-    }
-  }
+  const bound = run.sessionId === null
+    ? await spawnFresh(deps, run, routeFields, childSlug, dispatchDec, routeDefaulted)
+    : await resumeBound(deps, run, run.sessionId, dispatchDec);
+  if ('ok' in bound) return bound;
+  // D-6794: the journal says the route was the table's row, not the coordinator's. It records the decision; a box
+  // without `route-argv-v1` drops `--route` and journals `route-omitted` beside it. Written after the spawn's refusals.
+  if (routeDefaulted && !bound.defaultOmitted) coord.recordRunEvent(id, 'coordinator', `route-defaulted:${run.kind}`);
+  const { sessionId, resumed, liveGate, adopted, adoptedSpawn } = bound;
 
-  // 5: hold, behind `verbSupported` — the standing convention reason string,
-  // DISPLAY-ONLY and never parsed back. `dispatchDec` rather than a second
-  // `sweepDec` call: see its declaration above, where the one measurement this
-  // function takes is explained.
-  //
-  // R7: THE HOLD IS PLACED BEFORE THE PANE IS CLEARED (D-1897). The `/clear` fires a
-  // SessionStart, and the card that SessionStart emits quotes
-  // `$REG/<id>.hold` — so a hold written after it would have the card quote
-  // the PREVIOUS wave's bytes, and wave 1 would see none at all. The refusal
-  // shapes are unchanged, and this is still net positive: a failed `ws-hold`
-  // already returned before the transaction with the `/clear` sent, so the
-  // reorder strictly reduces the window in which that happens.
-  //
-  // IT IS NOT FREE, THOUGH, AND SAYING SO IS THE POINT (fix wave, I6). This
-  // comment used to claim "the ordering costs nothing". The `worker-busy` /
-  // `hookstate-unmeasurable` gate above exists to refuse a `/clear` into an
-  // observably mid-turn pane, and that measurement is now separated from the
-  // `/clear` it guards by `verbSupported` PLUS a full `runCcd(wsHold)` round
-  // trip over the agent WebSocket. So the evidence the gate acted on is staler
-  // by exactly that much when the `/clear` finally lands, and a pane that
-  // started a turn inside that window is cleared on a reading taken before it.
-  // The window was widened deliberately, in exchange for a card that quotes
-  // this wave's bytes rather than the previous wave's; it is not an argument
-  // for moving the hold back.
-  //
-  // STILL ONE SHARED CALL SITE, positioned exactly where it always was — a
-  // fresh spawn never sends a `/clear` at all, and a resume's `/clear` moved
-  // to AFTER this point (below) rather than the hold moving to BEFORE the
-  // resume arm's own preconditions; `unattended-actor.test.ts`'s own
-  // call-site count pins `CCD_ARGV.wsHold` to exactly one occurrence in this
-  // file, so the fix is the `/clear` relocating to meet the hold, not a
-  // second hold call meeting the `/clear`.
+  // The hold: claimed AS SOON AS the session id exists, and on a resume BEFORE the injected `/clear` (R7: the `/clear`
+  // fires a SessionStart whose card quotes the hold file, so the hold must already be there).
   const holdArgv = CCD_ARGV.wsHold(sessionId, hold.reason, dispatchDec);
-  if (!verbSupported(deps.fleetState, holdArgv)) {
-    return { ok: false, kind: 'unsupported' };
-  }
+  if (!ccdCan(deps.fleetState, 'wsHold')) return { ok: false, kind: 'unsupported' };
   const holdRes = await deps.runCcd(holdArgv);
   if (!holdRes.ok) return { ok: false, kind: 'fleetFailed', stderr: holdRes.stderr };
 
-  // R7 continued: the injected `/clear` itself, now placed AFTER the hold
-  // above rather than before it — the only piece that moved. `resumed` is
-  // exactly the condition the old `else` arm's own presence used to encode
-  // (a fresh spawn never reaches this point with `resumed === true`), so
-  // gating on it here reproduces that arm's scope precisely, just on the far
-  // side of the hold.
-  if (resumed) {
-    const clearRes = await sendPrompt({ tmux: deps.tmux, queue: deps.queue }, sessionId, '/clear');
-    // A refused `/clear` (dialog open, draft present, an ignored Enter…) is
-    // not fatal to dispatch itself — the run still lands in `dispatched`
-    // below, with `clearedAt` left null as the honest record that the
-    // second step has not run yet; a coordinator that notices retries it
-    // like any other failed step (D-1, orchestrator amendment). What
-    // "recorded" and "retried" actually need — the refusal CODE, and never
-    // queuing a brief into a context D-1's own "genuinely fresh" guarantee
-    // was never met for — is deviation D-47 below.
-    clearedAt = clearRes.ok ? Date.now() : null;
-    clearError = clearRes.ok ? null : clearRes.error;
+  // Routing spec §5.3: a resumed worker is routed by calling the `route` verb on its session. ONE ARGV, EVERY PAIR
+  // (fix round 2, finding #3): `cmd_route` validates every `--set` pair before its write loop touches the registry,
+  // so a refusal leaves the record untouched, which N calls would not. AFTER the hold, BEFORE the `/clear`: writing
+  // first is what keeps a refused route from stranding a cleared, brief-less pane. A refusal returns `fleetFailed`;
+  // the run stays `planned`, the `/clear` never fires, and there is nothing to unwind.
+  if (resumed && routeFields !== null) {
+    if (!ccdCan(deps.fleetState, 'routeSet')) {
+      coord.recordRunEvent(id, 'coordinator', 'route-omitted:no-route-v1-cap');
+    } else {
+      const routeRes = await deps.runCcd(
+        CCD_ARGV.routeSet(sessionId, routeFields, sweepDec(deps.fleetState, `run:${id} dispatch`)));
+      if (!routeRes.ok) return { ok: false, kind: 'fleetFailed', stderr: routeRes.stderr };
+      // Routing spec §6 "Arms": recorded only once the `route` verb itself succeeded.
+      coord.recordRunEvent(id, 'coordinator', armEventDetail(routeFields));
+    }
   }
+
+  // R7 continued: the injected `/clear`, AFTER the hold. Whether it is typed, and whether the live verdict still
+  // holds at the act (D-5238), is `decideDispatch`'s `act` step; typing it is the `sendClear` port.
+  const act = await decideDispatch({ step: 'act', resumed, liveGate, turnVerdict: deps.turnVerdict });
+  if (act.kind !== 'go') return stopped(coord, id, act);
+  // D-5912: a human's draft in the worker's box is stashed around the `/clear` and restored after it (Claude Code
+  // restores a stash after a slash command too, measured in Task P1b's probe), never a reason to skip the clear.
+  // A refused `/clear` (dialog open, a stash refused, an ignored Enter…) is
+  // not fatal to dispatch itself — the run still lands in `dispatched`
+  // below, with `clearedAt` left null as the honest record that the
+  // second step has not run yet; a coordinator that notices retries it
+  // like any other failed step (D-1, orchestrator amendment). What
+  // "recorded" and "retried" actually need — the refusal CODE, and never
+  // queuing a brief into a context D-1's own "genuinely fresh" guarantee
+  // was never met for — is deviation D-47 below.
+  const clearRes = act.plan.clear ? await deps.sendClear(sessionId) : null;
+  const clearedAt = clearRes?.ok ? Date.now() : null;
+  const clearError = clearRes === null || clearRes.ok ? null : clearRes.error;
 
   // 6: ONE call, and one transaction (D-277 (was D-B4-4)). The dispatch write, the
   // `clearedAt` stamp, the transition and the declared ledger's INSERTs used
@@ -695,7 +667,7 @@ export async function dispatchRun(
   // attributable (`markDispatched`'s own docstring). A `/clear` refusal is
   // RECORDED (deviation D-47, found in Task 9 review) — D-1's own amended
   // text promises "the refusal recorded" and nothing did: `run_events.detail`
-  // carries the typed `sendPrompt` error code (`dialog-open`/`draft-present`/
+  // carries the typed `sendPrompt` error code (`dialog-open`/`stash-failed`/
   // `verify-failed`/`enter-ignored`/…) an operator (or Task 11's own record)
   // can otherwise only guess at.
   // COMPUTED HERE, ABOVE THE COMMIT, and used twice: once as a column the commit
@@ -706,8 +678,8 @@ export async function dispatchRun(
   // site in step 7 (D-47), which is where a reader looking for "why is the brief
   // gated" will go.
   const briefQueued = !resumed || clearedAt !== null;
-  const adv = coord.dispatchRun({ runId: id, sessionId, workspace, branch, resumed, clearedAt,
-    items: itemTitles, briefQueued, clearError,
+  const adv = coord.dispatchRun({ runId: id, sessionId, workspace: bound.workspace, branch: bound.branch, resumed,
+    clearedAt, items: itemTitles, intents: intentKeys, briefQueued, clearError,
     // The SUFFIX is a `SpawnVerdict`, never a raw rc — and never the word
     // `spawnstate`, which is not a field and must never become one. Recorded only
     // on the adoption path, so its PRESENCE is the record that this workspace came
@@ -748,8 +720,13 @@ export async function dispatchRun(
   // it written only for absent/unmeasurable, the ABSENCE of a row would mean
   // either `present` or "an older build with no preflight" — a second
   // overloaded null, one layer down from the one this field deletes.
-  const skillState = await readWorkerSkillState(
-    deps.io, wrapper === null ? undefined : deps.configDir(wrapper));
+  // Which skill directory: BY KIND. The cast is sound because the transition
+  // precondition above (`:190`, Task 4) already refused a `kind:'unknown'`
+  // row before this function ever reaches an irreversible act — `unknown`
+  // never lands here, so the narrower union is not a lie.
+  const skillState = await readSkillState(
+    deps.io, bound.wrapper === null ? undefined : deps.configDir(bound.wrapper),
+    skillDirFor(run.kind as 'work' | 'review'));
   coord.recordRunEvent(id, 'coordinator', `skill-preflight:${skillState}`);
 
   // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never
@@ -765,7 +742,7 @@ export async function dispatchRun(
   //
   // WHAT THAT COSTS CHANGED UNDER THIS BUILD, and the new cost is the worse
   // of the two (wave-check). It used to be a park: the delivery lane's next
-  // sweep hit `draft-present`, kept hitting it, and parked the brief
+  // sweep hit `draft-present` (a word that lane no longer meets, D-5912), kept hitting it, and parked the brief
   // `rejected('undeliverable')` after `MAIL_MAX_ATTEMPTS` with nothing
   // surfacing why. Both halves of that are now false — Task 407 lets the
   // lane CLEAR exactly this box, on the record THIS CALL writes
@@ -789,9 +766,9 @@ export async function dispatchRun(
     // is the standing claim in that function's own dedupe comment, so there is
     // nothing here for the answer to change.
     queueSystemMail(coord, run, { fromId: 'coordinator', toId: sessionId, runId: id,
-      kind: 'status', subject: 'wave-brief', body });
+      kind: 'status', subject: WAVE_BRIEF_SUBJECT, body });
   }
 
   return { ok: true, id, sessionId, resumed, clearedAt, briefQueued, clearError,
-    adopted, spawnState: adoptedSpawn, skillState };
+    adopted, spawnState: adoptedSpawn, skillState, intents: intentKeys };
 }

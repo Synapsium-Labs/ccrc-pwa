@@ -7,13 +7,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
-import { ACTOR_FLAGS_CAP, POOLS_CAP, ROUTE_CAP } from '../src/ccdargv.js';
+import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
+import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, BROWSER_ROUTE_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, DOCS_LOG_CAP, DOCS_SECTIONS_CAP, EXPIRE_CAP, LAUNCH_SURFACE_CAP, POOL_SYNC_ABSENT_CAP, POOL_SET_CAP, POOL_SYNC_INSTALLED_CAP, POOLS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP } from '../src/ccdargv.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
 const SHA256_EMPTY = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+/** The three keys D-7999 (cleanup un-wedge R1) adds to the archive manifest, for the rows rung's archive arm. */
+const R1_MANIFEST_KEYS: readonly string[] = ['workdir', 'workdirReal', 'uuid', 'worktreeAdmin'];
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-arch-'); });
@@ -151,7 +154,9 @@ describe('ccd caps', () => {
   // still fail loudly on anything ELSE that drifts: a THIRD capability token
   // added without updating this list is exactly as much a silent hole as an
   // undispatched verb would be.
-  const KNOWN_CAPABILITY_TOKENS = ['account-v1', 'actor-flags-v1', 'lifecycle-v1', 'pools-v1', 'route-v1', 'stop-surface'];
+  // The list lives in `ccdCapTokens.ts` (D-6051), so `ccd-verb-sets.test.ts` reads the same one.
+  const KNOWN_CAPABILITY_TOKENS = [...CCD_CAPABILITY_TOKENS];
+  // `swap-busy-v1` (D-5240, Task 11; D-5350): its server constant, `SWAP_BUSY_CAP`, arrived with the server half (Task 12), and the `toContain` below holds the two equal.
 
   it('advertises exactly the verbs the dispatcher implements, plus the known capability tokens', () => {
     // The THIRD spelling of this token, closing the parity gap `ccdargv.ts`'s
@@ -164,11 +169,64 @@ describe('ccd caps', () => {
     expect(KNOWN_CAPABILITY_TOKENS).toContain(ACTOR_FLAGS_CAP);
     expect(KNOWN_CAPABILITY_TOKENS).toContain(POOLS_CAP);
     expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_ARGV_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_APPLY_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(ACCOUNT_POOLS_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(POOL_SYNC_INSTALLED_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(POOL_SYNC_ABSENT_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(POOL_SET_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(LAUNCH_SURFACE_CAP);   // the Overlord W1 sandbox, PR A2
+    // Terminal drawer wave 2's token. Task 2 added the STRING to the list
+    // above; this line is what holds it equal to the constant wave 3 reads —
+    // without it `win-size-v1` would be the one known token whose three
+    // spellings are free to drift, which is the drift this block exists for.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(WIN_SIZE_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(SWAP_BUSY_CAP);
+    // Named workspaces (S1): the two `ws-add` flags. The server gates `--title` and `--wrapper` on these and sends
+    // neither to a box that does not list them (an older ccd binds an unknown token as a positional, D-6164); this
+    // holds the string here equal to both the constant the route will read and ccd's own `echo`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(WS_TITLE_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(WS_WRAPPER_CAP);
+    // Child reclamation wave 3's token: the third spelling of `reclaim-v1`,
+    // held equal to the constant the executor gates on (`capSupported`) and to
+    // ccd's own `echo reclaim-v1`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(RECLAIM_CAP);
+    // Child-reclamation wave 4's token: holds the STRING Task 2 appended equal
+    // to the constant `POST /api/coord/reclaim-pause` reads.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(RECLAIM_PAUSE_CAP);
+    // Child-workspace reclamation wave 1's token, landed in the SAME commit as
+    // ccd's `echo child-argv-v1` — this test reads the real `ccd/ccd`, so the
+    // string here and the echo there cannot ship apart without a red suite.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(CHILD_ARGV_CAP);
+    // Workspace lifecycle wave 3's token: the third spelling of `expire-v1`, held equal to the constant wave 3b's lane
+    // will gate on (`capSupported`) and to ccd's own `echo expire-v1`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(EXPIRE_CAP);
+    // Child reclamation wave 7's token: the third spelling of `collect-v1`, held equal to the constant the collector's
+    // lane will gate on (`capSupported`) and to ccd's own `echo collect-v1`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(COLLECT_CAP);
+    // Landing order wave 5c's token: the third spelling of the PR-keyed pr-state form's capability.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(PR_STATE_PR_CAP);
+    // D-6794: the default-route flag's token, held equal to ccd's own `echo route-default-v1`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_DEFAULT_CAP);
+    // D-8121: the browser route field's token, held equal to ccd's own `echo browser-route-v1`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(BROWSER_ROUTE_CAP);
+    // The native Docs reader's token (docs W2): the third spelling of `docs-v1`, held equal to the constant the docs
+    // adapter's gate reads (`capSupported`) and to ccd's own `echo docs-v1` (W1).
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(DOCS_CAP);
+    // The sections token (docs W5b-1): held equal to the constant the docs adapter's sections gate reads and to ccd's own
+    // `echo docs-sections-v2`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(DOCS_SECTIONS_CAP);
+    // The history token (docs W5b-1): held equal to the constant the docs-log row reads and to ccd's own `echo docs-log-v1`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(DOCS_LOG_CAP);
+    // The delegation broker's wave-3 token: the spool grammar plus ccd making each session's spool directory. The server-side constant
+    // that gates ingestion arrives with the ingestion task; until then this list and ccd's own `echo delegation-events-v1` are the two
+    // spellings, and `delegation-spool.test.ts` pins that the token is advertised exactly once.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain('delegation-events-v1');
     // The deployed ~/.local/bin/ccd is a COPY, not a symlink to the repo, so a
     // verb can pass the agent whitelist and still not exist on the box. This
     // list is what the agent reports; a list that drifts from the dispatcher
     // is worse than none, because the server would trust it.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     // Anchored on the dispatcher's own preamble, and the anchor's uniqueness is
     // asserted. `case "${1:-}" in` occurs TWICE — cmd_ws_gc's option parser
     // (ccd:10575) comes first — so slicing from indexOf landed inside ws-gc, and
@@ -188,7 +246,9 @@ describe('ccd caps', () => {
     // the known set — neither a silently-dropped one nor an undocumented
     // extra one hiding inside what the verb-parity check above now excludes.
     const capabilities = advertised.filter((a) => KNOWN_CAPABILITY_TOKENS.includes(a));
-    expect(capabilities.sort()).toEqual([...KNOWN_CAPABILITY_TOKENS].sort());
+    // One word of the known set is not printed here: the two `pool-sync-*` words are one measured fact, and this
+    // fixture HOME has no timer. `ccd-caps-pool-sync.test.ts` holds the other arm.
+    expect(capabilities.sort()).toEqual(KNOWN_CAPABILITY_TOKENS.filter((t) => t !== POOL_SYNC_INSTALLED_CAP).sort());
   });
 });
 
@@ -418,13 +478,13 @@ describe('_transcript_path', () => {
 
   it('never crosses into another account to answer', () => {
     // The one thing the ladder must NOT do. A session on `claude` whose only
-    // copy sits under `.claude-corp` gets the canonical unchecked address, not
+    // copy sits under `.claude-acme` gets the canonical unchecked address, not
     // another account's file — that is D4's bannered rung, and it belongs to a
     // surface that can show the banner, not to a tombstone that cannot.
     const wd = path.join(h.home, 'projects', 'lonely');
     fs.mkdirSync(wd, { recursive: true });
     h.sh(`_reg_set t5 wrapper claude; _reg_set t5 workdir '${wd}'; _reg_set t5 uuid u-5`);
-    plant('.claude-corp', mungePath(fs.realpathSync(wd)), 'u-5');
+    plant('.claude-acme', mungePath(fs.realpathSync(wd)), 'u-5');
     expect(h.sh('_transcript_path t5')).toBe(
       path.join(h.home, '.claude', 'projects', mungePath(fs.realpathSync(wd)), 'u-5.jsonl'),
     );
@@ -452,7 +512,7 @@ describe('_ws_ignored_digest', () => {
     fs.writeFileSync(path.join(wt, 'debug.log'), 'l\n');
     // `--ignored=matching` collapses `secrets/` to ONE entry — the whole reason
     // this is not `ls-files --others --ignored`, which enumerates per file
-    // (measured 210,070 entries / 24.6 MB in custom-tools against an 8 MB agent
+    // (measured 210,070 entries / 24.6 MB in project-d against an 8 MB agent
     // buffer). Pinning the exact preimage pins the collapse, the `!! ` filter and
     // the sort at once; asserting only "64 hex chars" would not.
     expect(h.sh(`_ws_ignored_digest "${wt}"`))
@@ -532,8 +592,9 @@ describe('_ws_ignored_digest', () => {
 
 describe('_ws_status', () => {
   it('reads ONLY "idle" as idle — shell, compacting and anything new are busy', () => {
-    // server/src/livestate.ts:14-30 is this repo's own record of the wrapper's
-    // vocabulary (`idle`, `busy`, and `shell` = a Bash tool command is running)
+    // `liveSessionStatus`'s docstring (server/src/livestate.ts) is this repo's
+    // own record of the wrapper's vocabulary (`idle`, `busy`, `waiting`, and
+    // `shell` = an idle main loop relabelled while a background shell runs)
     // and of what matching `busy` and calling the rest idle cost when the
     // server side did it. An allowlist is the only polarity that survives a
     // vocabulary that grows.
@@ -653,6 +714,15 @@ describe('ws-archive', () => {
       .toContain('ws/quiet-basin');
     expect(h.calls()).toContain('unsupervise demo-quiet-basin');
     expect(h.calls().some((c) => c.startsWith('tmux kill-session'))).toBe(true);
+  });
+
+  it('ends a HIBERNATION: a hibernated workspace row loses .hibernated, so the mail lane never wakes it (D-5242)', () => {
+    workspace('demo', 'quiet-basin');
+    // A sleeping row, as `ccd hibernate` leaves it: stopped, its marker beside it.
+    h.sh(`_reg_set demo-quiet-basin stopped "1 ccd"; _reg_set demo-quiet-basin hibernated "1 7"`);
+    expect(h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`)).toMatch(/^archived demo-quiet-basin/);
+    expect(h.reg('demo-quiet-basin', 'archived')).toMatch(/^\d+$/);
+    expect(h.reg('demo-quiet-basin', 'hibernated'), 'the marker survived the archive').toBeNull();
   });
 
   it('archives a DIRTY tree — it destroys nothing, and refusing would strand it', () => {
@@ -865,6 +935,73 @@ describe('ws-archive', () => {
     // The manifest describes the thing that may later be deleted, so it cannot
     // live inside it.
     expect(fs.existsSync(path.join(wt, '.archivemanifest'))).toBe(false);
+  });
+
+  // D-7999 (cleanup un-wedge R1), Step 0: the manifest's keys as `main` wrote them before R1 added
+  // `workdir`, `workdirReal` and `uuid`, taken on `main` first. Every older key keeps its name, its place and its value.
+  it('every older key is unchanged', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    const old = Object.fromEntries(Object.entries(m).filter(([k]) => !R1_MANIFEST_KEYS.includes(k)));
+    expect(Object.keys(old)).toEqual(['id', 'branch', 'worktreeHead', 'base', 'tip', 'dirty', 'ignoredDigest', 'stashes',
+      'worktreeBytes', 'pr', 'prHistory', 'transcript']);
+    expect(old).toEqual({
+      id: 'demo-quiet-basin', branch: 'ws/quiet-basin', worktreeHead: 'ws/quiet-basin', base: 'origin/main',
+      tip: h.git(wt, 'rev-parse', 'HEAD'), dirty: 0, ignoredDigest: SHA256_EMPTY, stashes: 0,
+      worktreeBytes: expect.any(Number) as unknown, pr: null, prHistory: [],
+      transcript: path.join(h.home, '.claude', 'projects', mungePath(wt), `${h.reg('demo-quiet-basin', 'uuid')}.jsonl`),
+    });
+  });
+
+  it('the archive record carries workdir, workdirReal and uuid', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    expect(m.workdir).toBe(h.reg('demo-quiet-basin', 'workdir'));
+    expect(m.workdir).toBe(wt);
+    expect(m.workdirReal, 'a physical spelling records itself').toBe(wt);
+    expect(m.uuid).toBe(h.reg('demo-quiet-basin', 'uuid'));
+    expect(m.uuid).toMatch(/^[0-9a-f-]{36}$/);
+    // Fix round 1, F1: the name of git's admin directory for the tree, under the common directory's worktrees/.
+    const admin = h.git(wt, 'rev-parse', '--absolute-git-dir');
+    expect(path.basename(path.dirname(admin))).toBe('worktrees');
+    expect(m.worktreeAdmin).toBe(path.basename(admin));
+  });
+
+  it('a tree whose git directory is not one of the project’s linked admin directories records worktreeAdmin as null', () => {
+    workspace('demo', 'quiet-basin');
+    // `git rev-parse --git-dir` answers something outside `<common>/worktrees/`: the record names no admin directory.
+    h.sh(`${ARCH} git() { if [[ "$*" == *"rev-parse --path-format=absolute --git-dir"* ]]; then echo /elsewhere/x; return 0; fi;`
+      + ' command git "$@"; }; cmd_ws_archive --session demo-quiet-basin');
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    expect(m.worktreeAdmin).toBeNull();
+  });
+
+  it('a workspace reached through a link records workdirReal as its physical path', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    fs.symlinkSync(path.join(h.home, 'worktrees'), path.join(h.home, 'wtlink'));
+    const linked = path.join(h.home, 'wtlink', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.workdir'), linked);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    expect(m.workdir, 'the row’s spelling, as read').toBe(linked);
+    expect(m.workdirReal, 'where that spelling lands').toBe(fs.realpathSync(wt));
+    expect(m.workdirReal).not.toBe(m.workdir);
+  });
+
+  it('an unreadable .uuid refuses the archive, and nothing is touched', (ctx) => {
+    if (process.getuid?.() === 0) { ctx.skip(); return; }
+    workspace('demo', 'quiet-basin');
+    const f = path.join(h.home, '.cc-sessions', 'demo-quiet-basin.uuid');
+    fs.chmodSync(f, 0o000);
+    try {
+      const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/manifest: could not read the uuid/);
+      expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+      expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+    } finally { fs.chmodSync(f, 0o644); }
   });
 
   it('carries the stash count a reap would refuse on', () => {
@@ -1197,6 +1334,137 @@ describe('ws-archive refuses rather than record a manifest that lies', () => {
   });
 });
 
+/** D-8335 (#2360): a stopped workspace whose folder stands EMPTY, which git records no worktree for and whose branch
+ *  resolves nowhere — not in the project, not as a tracking ref, not on any remote — holds nothing to lose, so it
+ *  archives without anything recreated. The proof needs every condition, each read fail-closed; any other shape still
+ *  refuses as before. */
+describe('ws-archive: an empty folder with no git record and no branch anywhere (D-8335)', () => {
+  const ID = 'demo-quiet-basin';
+  const BRANCH = 'ws/quiet-basin';
+  /** The measured shape: the worktree removed with its record, its branch deleted, and the folder made again empty. */
+  const emptyUnrecorded = (): { wt: string; main: string } => {
+    const wt = workspace('demo', 'quiet-basin');
+    const main = path.join(h.home, 'projects', 'demo');
+    h.git(main, 'worktree', 'remove', '--force', wt);
+    h.git(main, 'branch', '-D', BRANCH);
+    fs.mkdirSync(wt);
+    expect(h.git(main, 'ls-remote', '--heads', 'origin'), 'the fixture: origin holds no workspace branch').not.toContain(BRANCH);
+    return { wt, main };
+  };
+  const refusedUntouched = (r: { code: number; stderr: string }, why: RegExp): void => {
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/cannot describe demo-quiet-basin truthfully — nothing was touched/);
+    expect(r.stderr).toMatch(/has no worktree record for/);
+    expect(r.stderr).toMatch(why);
+    expect(h.reg(ID, 'archived')).toBeNull();
+    expect(h.reg(ID, 'archivemanifest')).toBeNull();
+  };
+
+  it('archives it, records the shape in the manifest, and keeps the folder', () => {
+    const { wt } = emptyUnrecorded();
+    const r = shFail(`${ARCH} cmd_ws_archive --session ${ID}`);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^archived demo-quiet-basin \(no commits beyond base\) — worktree kept at /);
+    expect(h.reg(ID, 'archived')).toMatch(/^\d+$/);
+    expect(h.reg(ID, 'archivedreason')).toBe('empty');
+    const m = JSON.parse(h.reg(ID, 'archivemanifest')!) as Record<string, unknown>;
+    expect(m).toMatchObject({
+      id: ID, branch: BRANCH, worktreeHead: null, tip: null, dirty: 0, ignoredDigest: null, worktreeAdmin: null,
+      workdir: wt, unrecordedEmpty: true,
+    });
+    expect(typeof m.uuid).toBe('string');
+    // Archive destroys nothing: the folder stays, empty, so ws-restore puts the row back exactly as it was.
+    expect(fs.statSync(wt).isDirectory()).toBe(true);
+    expect(fs.readdirSync(wt)).toEqual([]);
+  });
+
+  it('archives it through the dispatcher too, the program the box runs', () => {
+    emptyUnrecorded();
+    const r = runCcd('ws-archive', '--session', ID);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+    expect(h.reg(ID, 'archived')).toMatch(/^\d+$/);
+  });
+
+  it('a folder holding any entry, even one dotfile, still refuses', () => {
+    const { wt } = emptyUnrecorded();
+    fs.writeFileSync(path.join(wt, '.notes'), 'work\n');
+    refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /is not empty/);
+  });
+
+  it('a folder holding an empty subdirectory still refuses', () => {
+    const { wt } = emptyUnrecorded();
+    fs.mkdirSync(path.join(wt, 'src'));
+    refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /is not empty/);
+  });
+
+  it('a branch that still stands in the project refuses', () => {
+    const { main } = emptyUnrecorded();
+    h.git(main, 'branch', BRANCH, 'main');
+    refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /refs\/heads\/ws\/quiet-basin still stands in/);
+  });
+
+  it('a branch that stands only on the remote refuses', () => {
+    const { main } = emptyUnrecorded();
+    h.git(main, 'branch', BRANCH, 'main');
+    h.git(main, 'push', '-q', 'origin', BRANCH);
+    h.git(main, 'branch', '-D', BRANCH);
+    h.git(main, 'update-ref', '-d', `refs/remotes/origin/${BRANCH}`);
+    refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /stands on the remote origin/);
+  });
+
+  it('a tracking ref left behind refuses, though the remote dropped the branch', () => {
+    const { main } = emptyUnrecorded();
+    h.git(main, 'update-ref', `refs/remotes/origin/${BRANCH}`, h.git(main, 'rev-parse', 'main'));
+    refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /refs\/remotes\/origin\/ws\/quiet-basin still stands/);
+  });
+
+  it('a remote that cannot be asked refuses — a probe that did not answer is no proof', () => {
+    const { main } = emptyUnrecorded();
+    h.git(main, 'remote', 'set-url', 'origin', path.join(h.home, 'origins', 'gone.git'));
+    refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /could not ask the remote origin/);
+  });
+
+  it('a link standing at the workdir refuses, even to an empty directory', () => {
+    const { wt } = emptyUnrecorded();
+    fs.rmdirSync(wt);
+    const target = path.join(h.home, 'elsewhere-empty');
+    fs.mkdirSync(target);
+    fs.symlinkSync(target, wt);
+    refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /is not a plain directory/);
+  });
+
+  it('a mount point refuses — its emptiness may be a disk that is not mounted', () => {
+    emptyUnrecorded();
+    const MOUNT = `_plat_devino() { case "$1" in */) echo 2:1 ;; *) echo 1:1 ;; esac; };`;
+    refusedUntouched(shFail(`${ARCH} ${MOUNT} cmd_ws_archive --session ${ID}`), /is a mount point/);
+  });
+
+  it('a folder whose entries cannot be listed refuses', () => {
+    const { wt } = emptyUnrecorded();
+    fs.chmodSync(wt, 0o000);
+    try {
+      refusedUntouched(shFail(`${ARCH} cmd_ws_archive --session ${ID}`), /could not be listed/);
+    } finally { fs.chmodSync(wt, 0o755); }
+  });
+
+  it('a worktree list that cannot be read refuses', () => {
+    emptyUnrecorded();
+    const NOLIST = `${ARCH} git() { [[ "$*" == *"worktree list"* ]] && return 128; command git "$@"; };`;
+    refusedUntouched(shFail(`${NOLIST} cmd_ws_archive --session ${ID}`), /could not read .*worktree list/);
+  });
+
+  it('an admin entry naming the folder refuses, though git\'s list omits it', () => {
+    const { wt, main } = emptyUnrecorded();
+    const adm = path.join(main, '.git', 'worktrees', 'quiet-basin');
+    fs.mkdirSync(adm, { recursive: true });
+    fs.writeFileSync(path.join(adm, 'gitdir'), `${wt}/.git\n`);
+    const OMIT = `${ARCH} git() { if [[ "$*" == *"worktree list --porcelain"* ]]; then command git "$@" | awk '/^worktree /{keep=($0 !~ /quiet-basin/)} keep'; return 0; fi; command git "$@"; };`;
+    refusedUntouched(shFail(`${OMIT} cmd_ws_archive --session ${ID}`), /omitted a record that exists/);
+  });
+});
+
 /** Drift between the registry's branch name and git's worktree record is a
  *  DESCRIBABLE fact about a healthy directory, not an unreadable one — so archive
  *  records it and folds the workspace out of the live fleet. Refusing was
@@ -1294,6 +1562,42 @@ describe('ws-restore', () => {
     // and the supervision land BEFORE the blocking settle (F8).
     expect(h.calls()).toContain('spawn_start demo-quiet-basin resume');
     expect(h.calls()).toContain('supervise demo-quiet-basin');
+  });
+
+  it('an archived row with NO generation GAINS one on restore — the third respawn path, and the only one that never minted', () => {
+    workspace('demo', 'quiet-basin');
+    // Plant the pre-D-2605 row rather than describe it: `cmd_ws_add` mints a
+    // generation, so the fixture has to take it away to BE the row the fleet
+    // actually carried — 31 of 34 live rows on 2026-09-17.
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.generation'));
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(h.reg('demo-quiet-basin', 'generation'), 'archiving mints nothing').toBeNull();
+    h.sh(`${ARCH} cmd_ws_restore --session demo-quiet-basin`);
+    // `cmd_ensure` and `cmd_start` each mint before spawning; this verb reaches
+    // `_spawn_start` directly, so without a mint of its own the restored pane
+    // carries no CCRC_SESSION_GENERATION and `_hook_generation_ok` fails closed
+    // for that pane's whole life — inert, and until D-2993 silently so.
+    // Two assertions, not one: `.toMatch` on a null throws a TypeError, which
+    // reds for the right reason with the wrong message. The absence IS the
+    // defect, so it gets its own line and says so.
+    const gen = h.reg('demo-quiet-basin', 'generation');
+    expect(gen, 'restore mints the generation it found missing').not.toBeNull();
+    expect(gen ?? '', 'and mints a UUID, not a placeholder')
+      .toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
+  it('and a restore whose row ALREADY carries one leaves it byte-identical — the mint is absence-only', () => {
+    workspace('demo', 'quiet-basin');
+    const before = h.reg('demo-quiet-basin', 'generation');
+    expect(before, 'ws-add minted one').toMatch(/^[0-9a-f-]{36}$/);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    h.sh(`${ARCH} cmd_ws_restore --session demo-quiet-basin`);
+    // Re-minting would be the worse defect: the hook compares the ROW's bytes to
+    // the value its pane was spawned with, so a fresh value on every restore
+    // would silently disown every pane that outlived it. THIS ROW IS THE CONTROL
+    // — it stays green across the fix, which is what makes the red one above
+    // mean "mints on absence" rather than "writes the file unconditionally".
+    expect(h.reg('demo-quiet-basin', 'generation'), 'never re-minted').toBe(before);
   });
 
   it('leaves the started flag set even when the entry never had one', () => {
@@ -1457,7 +1761,7 @@ describe('the archive manifest is written atomically (registry-durability wave 2
     // and would not notice either way — which is exactly why the bytes are
     // preserved deliberately rather than by luck: a migration that also
     // changes what is on disk is two changes wearing one commit.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).not.toMatch(/>\s*"\$REG\/\$id\.archivemanifest"/);
     expect(src).toMatch(/_reg_set "\$id" archivemanifest "\$manifest"\$'\\n'/);
   });

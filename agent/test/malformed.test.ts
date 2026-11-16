@@ -92,6 +92,25 @@ describe('ccrc-agent malformed requests never crash the process', () => {
     });
   }
 
+  // Overlord W1 (w1-board-history.md Task 3): the `overlord-history` op's reader refuses a malformed request on ResOk, as
+  // `account` and `testbox-admin` do, so `bad-request` keeps meaning "this agent predates the op"; nothing is started.
+  const historyCases: Array<{ name: string; frame: Record<string, unknown>; word: string }> = [
+    { name: 'overlord-history missing every field', frame: { op: 'overlord-history' }, word: 'bad-verb' },
+    { name: 'overlord-history non-string verb', frame: { op: 'overlord-history', verb: 7, target: { kind: 'all' } }, word: 'bad-verb' },
+    { name: 'overlord-history target not an object', frame: { op: 'overlord-history', verb: 'search', target: 'all' }, word: 'bad-target' },
+    { name: 'overlord-history non-string project', frame: { op: 'overlord-history', verb: 'search', target: { kind: 'project', project: 3 } }, word: 'bad-project' },
+    { name: 'overlord-history args not an array', frame: { op: 'overlord-history', verb: 'search', target: { kind: 'all' }, args: 'x' }, word: 'bad-args' },
+    { name: 'overlord-history non-boolean agents', frame: { op: 'overlord-history', verb: 'search', target: { kind: 'all' }, agents: 1 }, word: 'bad-agents' },
+  ];
+  for (const { name, frame, word } of historyCases) {
+    it(`answers request-refused (not a crash) for: ${name}`, async () => {
+      await open();
+      const res = await client!.req<Res>(1, frame);
+      expect(res).toMatchObject({ ok: true, outcome: 'request-refused', word });
+      await assertStillAlive();
+    });
+  }
+
   it('drops the frame silently when id is missing or non-numeric, and stays alive', async () => {
     await open();
     client!.send({ t: 'req', op: 'read' }); // no id at all

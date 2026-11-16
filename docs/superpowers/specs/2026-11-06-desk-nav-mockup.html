@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desk navigation mockup</title>
+<style>
+:root {
+  --doc-bg:#F7F8F6; --doc-ink:#1A201B; --doc-dim:#4E5850; --doc-edge:#DDE2DC; --doc-card:#FFFFFF;
+  --bg-page:#F4F6F3; --bg-surface:#FFFFFF; --bg-raised:#EAEEEA; --edge-subtle:#DDE2DC; --edge-strong:#C3CAC2;
+  --ink-primary:#1A201B; --ink-secondary:#4E5850; --ink-tertiary:#5F6962; --accent:#0E7B3F; --accent-tint:#DFF2E5; --on-accent:#FFFFFF;
+  --attn:#8A5A0A; --attn-tint:#F7E9CF; --dead:#B2402C; --busy:#106E39; --blue:#2F55B8; --violet:#6D3FB4; --cyan:#0A6377; --rose:#A23A63;
+  --reader-bg:#FBFAF6; --reader-ink:#1E1E1C; --mark:#C2410C;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --doc-bg:#0E100F; --doc-ink:#E6EAE6; --doc-dim:#9AA39B; --doc-edge:#2A2F2B; --doc-card:#151816;
+    --bg-page:#0B0D0C; --bg-surface:#141715; --bg-raised:#1C201D; --edge-subtle:#262B27; --edge-strong:#39403A;
+    --ink-primary:#ECF0EC; --ink-secondary:#ADB6AE; --ink-tertiary:#8B948C; --accent:#45D67E; --accent-tint:#12291B; --on-accent:#06120A;
+    --attn:#F2B84B; --attn-tint:#2E2413; --dead:#E8836F; --busy:#57E08B; --blue:#96B4F4; --violet:#C7A7F4; --cyan:#6FD6EA; --rose:#F09AB8;
+    --reader-bg:#121412; --reader-ink:#E4E6E1; --mark:#FB923C;
+  }
+}
+:root[data-theme="dark"], body:has(#th-dark:checked) {
+  --doc-bg:#0E100F; --doc-ink:#E6EAE6; --doc-dim:#9AA39B; --doc-edge:#2A2F2B; --doc-card:#151816;
+  --bg-page:#0B0D0C; --bg-surface:#141715; --bg-raised:#1C201D; --edge-subtle:#262B27; --edge-strong:#39403A;
+  --ink-primary:#ECF0EC; --ink-secondary:#ADB6AE; --ink-tertiary:#8B948C; --accent:#45D67E; --accent-tint:#12291B; --on-accent:#06120A;
+  --attn:#F2B84B; --attn-tint:#2E2413; --dead:#E8836F; --busy:#57E08B; --blue:#96B4F4; --violet:#C7A7F4; --cyan:#6FD6EA; --rose:#F09AB8;
+  --reader-bg:#121412; --reader-ink:#E4E6E1; --mark:#FB923C;
+}
+body:has(#th-light:checked) {
+  --doc-bg:#F7F8F6; --doc-ink:#1A201B; --doc-dim:#4E5850; --doc-edge:#DDE2DC; --doc-card:#FFFFFF;
+  --bg-page:#F4F6F3; --bg-surface:#FFFFFF; --bg-raised:#EAEEEA; --edge-subtle:#DDE2DC; --edge-strong:#C3CAC2;
+  --ink-primary:#1A201B; --ink-secondary:#4E5850; --ink-tertiary:#5F6962; --accent:#0E7B3F; --accent-tint:#DFF2E5; --on-accent:#FFFFFF;
+  --attn:#8A5A0A; --attn-tint:#F7E9CF; --dead:#B2402C; --busy:#106E39; --blue:#2F55B8; --violet:#6D3FB4; --cyan:#0A6377; --rose:#A23A63;
+  --reader-bg:#FBFAF6; --reader-ink:#1E1E1C; --mark:#C2410C;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--doc-bg); color: var(--doc-ink); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; overflow-x: hidden; }
+.page { max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px; }
+.page h1 { font-size: 24px; margin: 0 0 4px; }
+.page h2 { font-size: 18px; margin: 40px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--doc-edge); }
+.page > p { max-width: 80ch; }
+.lede { color: var(--doc-dim); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 12px 0; font-size: 14px; color: var(--doc-dim); }
+.controls div { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.controls label { border: 1px solid var(--doc-edge); border-radius: 999px; padding: 4px 12px; cursor: pointer; background: var(--doc-card); }
+.controls input { margin: 0 6px 0 0; }
+.legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin: 12px 0; }
+.legend div { background: var(--doc-card); border: 1px solid var(--doc-edge); border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+.shot { margin: 18px 0 30px; }
+.shot h3 { font-size: 14px; font-weight: 600; margin: 0 0 8px; color: var(--doc-dim); font-family: ui-monospace, Menlo, monospace; }
+.shot .note { font-size: 14px; color: var(--doc-dim); font-style: italic; margin: 8px 0 0; }
+.scaler { overflow-x: auto; border: 1px solid var(--doc-edge); border-radius: 8px; zoom: .5; padding-bottom: 8px; background: var(--doc-bg); }
+body:has(#z75:checked) .scaler { zoom: .75; }
+body:has(#z100:checked) .scaler { zoom: 1; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* ---- the console sketch ---- */
+.frame { position: relative; display: grid; grid-template-rows: 113px minmax(0, 1fr) 24px; background: var(--bg-page); color: var(--ink-primary); overflow: hidden;
+  font: 400 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+.mono, .wm, .lane, .crumbs, .status, kbd, .rail-bell, .dense, .truth, .main.empty, .add { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.ic { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.ic.sm { width: 14px; height: 14px; } .ic.xs { width: 12px; height: 12px; }
+.hdr { padding: 8px 16px; border-bottom: 1px solid var(--edge-subtle); background: var(--bg-surface); display: grid; grid-template-rows: 44px 45px; row-gap: 7px; min-width: 0; }
+.topbar { display: flex; align-items: center; gap: 12px; height: 44px; min-width: 0; }
+.wm { display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0 6px; font-weight: 700; font-size: 18px; letter-spacing: .02em; position: relative; flex: none; }
+.caret { color: var(--accent); }
+.crumbs { flex: 1 1 0; min-width: 0; font-size: 12px; color: var(--ink-primary); height: 44px; display: flex; align-items: center; outline: 1px dashed color-mix(in srgb, var(--mark) 70%, transparent); outline-offset: -4px; padding-left: 10px; }
+.cmd { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 10px; border: 1px solid var(--edge-subtle); border-radius: 5px; color: var(--ink-secondary); font-size: 12px; min-width: 84px; overflow: hidden; }
+.cmd.fixed { flex: 0 1 280px; }
+.cmd.grow { flex: 1 1 0; }
+.cmd-words { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; }
+kbd { border: 1px solid var(--edge-strong); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; font-size: 11px; color: var(--ink-primary); background: var(--bg-raised); }
+.new { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 5px; background: var(--accent); color: var(--on-accent); flex: none; }
+.sq { width: 44px; height: 44px; display: grid; place-items: center; color: var(--ink-secondary); flex: none; border-radius: 5px; }
+.doors { display: flex; align-items: stretch; gap: 2px; flex: none; }
+.door { position: relative; display: inline-flex; align-items: center; gap: 7px; height: 44px; padding: 0 10px; color: var(--ink-secondary); font-size: 13px; font-weight: 500; white-space: nowrap; border-radius: 5px; }
+.door.cur, .wm.home.cur { color: var(--ink-primary); }
+.door.cur::after, .wm.home.cur::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: 0; height: 2px; background: var(--accent); }
+.door.badged { gap: 13px; }
+.door.iconly { width: 44px; padding: 0; justify-content: center; }
+.door.iconly .ic-wrap { position: static; }
+.door.iconly .badge { top: 2px; left: auto; right: 0; }
+.door.focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ic-wrap { position: relative; display: inline-flex; }
+.badge { position: absolute; top: -8px; left: 11px; min-width: 18px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--attn-tint); color: var(--attn); font: 700 10px/16px ui-monospace, Menlo, monospace; text-align: center; border: 1px solid color-mix(in srgb, var(--attn) 40%, transparent); }
+.tip { position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: var(--bg-raised); color: var(--ink-primary); border: 1px solid var(--edge-strong); padding: 4px 8px; border-radius: 4px; font-size: 12px; white-space: nowrap; z-index: 3; }
+.lanes { display: flex; gap: 8px; min-width: 0; }
+.lane { flex: 1 1 0; min-width: 0; height: 45px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 5px; background: var(--bg-raised); font-size: 10.5px; color: var(--ink-secondary); overflow: hidden; }
+.lane-name { font-weight: 700; } .l0 { color: var(--cyan); } .l1 { color: var(--violet); } .l2 { color: var(--blue); } .l3 { color: var(--rose); }
+.lane-bars { display: grid; gap: 4px; flex: 1; } .bar { height: 6px; border-radius: 3px; border: 1px solid var(--edge-strong); overflow: hidden; } .bar i { display: block; height: 100%; background: var(--accent); }
+.lane-pct { white-space: nowrap; } .lane.more { flex: 0 0 150px; justify-content: center; } .lane.all { flex: 0 0 110px; justify-content: center; background: var(--bg-surface); border: 1px solid var(--edge-strong); color: var(--ink-primary); font-family: system-ui, sans-serif; font-weight: 600; font-size: 12px; }
+.body { display: grid; min-height: 0; }
+.rail { display: flex; flex-direction: column; border-right: 1px solid var(--edge-subtle); background: var(--bg-surface); position: relative; outline: 2px dashed color-mix(in srgb, var(--mark) 70%, transparent); outline-offset: -3px; }
+.rail-item { position: relative; height: 44px; display: grid; place-items: center; color: var(--ink-secondary); }
+.rail-item.cur { color: var(--ink-primary); } .rail-item.cur::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px; background: var(--accent); }
+.badge.rb { top: 4px; left: 28px; }
+.rail-foot { margin-top: auto; display: flex; flex-direction: column; align-items: center; padding-bottom: 6px; }
+.rail-bell { height: 28px; display: grid; place-items: center; color: var(--ink-secondary); }
+.list { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; border-right: 1px solid var(--edge-subtle); min-width: 0; overflow: hidden; }
+.toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+.toggle span { height: 32px; display: grid; place-items: center; border: 1px solid var(--edge-strong); border-radius: 5px; font-weight: 600; }
+.toggle .on { border-color: var(--accent); background: var(--bg-raised); }
+.grp { font-size: 13px; margin-top: 6px; }
+.row { display: grid; grid-template-columns: 14px 1fr auto; gap: 6px; align-items: start; padding-left: 8px; }
+.dot { width: 6px; height: 6px; border-radius: 99px; margin-top: 7px; background: var(--ink-tertiary); } .dot.amber { background: var(--attn); } .dot.green { background: var(--busy); }
+.nm { font-size: 14px; display: grid; } .nm small { font-size: 12px; color: var(--ink-tertiary); }
+.st { font-size: 12px; color: var(--ink-tertiary); } .amber-t { color: var(--attn); } .green-t { color: var(--busy); } .red-t { color: var(--dead); }
+.add { color: var(--ink-tertiary); font-size: 11px; margin-top: 18px; padding-left: 8px; }
+.main { min-width: 0; position: relative; }
+.main.empty { display: grid; place-items: center; text-align: center; color: var(--ink-secondary); }
+.caret.big { font-size: 40px; color: var(--ink-tertiary); }
+.main.page { padding: 20px 28px; }
+.ph1 { font-size: 22px; margin: 0 0 16px; }
+.runrow { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--edge-subtle); }
+.pill { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--edge-strong); color: var(--ink-secondary); }
+.amber-b { color: var(--attn); background: var(--attn-tint); border-color: transparent; } .green-b { color: var(--busy); background: var(--accent-tint); border-color: transparent; }
+.status { display: flex; align-items: center; gap: 16px; padding: 0 12px; border-top: 1px solid var(--edge-subtle); font-size: 11px; color: var(--ink-secondary); }
+.status .keys { margin-left: auto; display: flex; gap: 4px; }
+.ruler { display: flex; margin-top: 6px; font: 600 13px/1 ui-monospace, Menlo, monospace; color: var(--doc-dim); }
+.seg { border-left: 1px solid var(--doc-dim); border-right: 1px solid var(--doc-dim); border-bottom: 1px solid var(--doc-dim); padding: 6px 4px; text-align: center; white-space: nowrap; overflow: hidden; }
+.seg.gain { color: var(--accent); border-color: var(--accent); }
+.seg.gone { color: var(--mark); border-color: var(--mark); }
+
+/* ---- the Docs leaf ---- */
+.docmain { display: flex; flex-direction: column; min-height: 0; }
+.dhead.before { padding: 8px 16px 0; display: grid; grid-template-rows: 44px 44px 44px; row-gap: 12px; height: 164px; flex: none; }
+.dhead.after { padding: 4px 16px 4px; display: grid; grid-template-rows: 44px 28px; row-gap: 4px; height: 84px; flex: none; }
+.drow { display: flex; align-items: center; gap: 10px; min-width: 0; white-space: nowrap; }
+.back { width: 32px; height: 44px; display: grid; place-items: center; font-size: 20px; color: var(--ink-secondary); flex: none; }
+.dcrumbs { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 13px; color: var(--ink-secondary); }
+.dcrumbs b { color: var(--ink-primary); }
+.truth { font-size: 12px; color: var(--ink-secondary); gap: 6px; }
+.tbtn { height: 44px; display: inline-grid; place-items: center; padding: 0 10px; border: 1px solid var(--edge-strong); border-radius: 5px; color: var(--ink-primary); }
+.chip44 { height: 44px; display: inline-flex; align-items: center; gap: 4px; padding: 0 10px; border: 1px solid var(--edge-strong); border-radius: 999px; }
+.acts { gap: 18px; font-size: 13px; } .acts u { text-underline-offset: 3px; }
+.spacer { flex: 1 1 0; }
+.sep { width: 1px; height: 20px; background: var(--edge-strong); flex: none; }
+.cbtn { height: 30px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; border: 1px solid var(--edge-strong); border-radius: 5px; font-size: 12px; color: var(--ink-primary); flex: none; }
+.cbtn.aa { font-family: Georgia, serif; font-size: 14px; }
+.dense { height: 28px; display: flex; align-items: center; gap: 6px; padding-left: 42px; font-size: 11.5px; color: var(--ink-secondary); white-space: nowrap; overflow: hidden; }
+.mini { display: inline-grid; place-items: center; width: 22px; height: 22px; border: 1px solid var(--edge-strong); border-radius: 4px; font-size: 12px; color: var(--ink-primary); }
+.chip28 { height: 22px; display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; border: 1px solid var(--edge-strong); border-radius: 999px; }
+.rframe { flex: 1 1 0; min-height: 0; margin: 0 4px; border: 1px solid var(--edge-subtle); border-radius: 4px; background: var(--reader-bg); color: var(--reader-ink); overflow: hidden; display: flex; flex-direction: column; }
+.rtop { height: 104px; flex: none; display: flex; justify-content: flex-end; padding: 16px 24px; }
+.aa { font-family: Georgia, serif; font-size: 15px; }
+.rbody { max-width: 620px; width: 100%; margin: 0 auto; font: 17px/1.65 "Iowan Old Style", Georgia, "Times New Roman", serif; padding: 0 16px; }
+.rframe.after .rbody { padding-top: 2px; }
+.doc-h1 { font-size: 36px; line-height: 1.2; font-weight: 600; margin: 0 0 14px; }
+.rbody p { margin: 0 0 14px; }
+.ymark { position: absolute; left: 0; right: 0; height: 0; border-top: 2px dashed var(--mark); z-index: 4; pointer-events: none; }
+.ymark .yl { position: absolute; right: 12px; top: -12px; background: var(--mark); color: #FFFFFF; font: 700 13px/1 ui-monospace, Menlo, monospace; padding: 5px 8px; border-radius: 4px; }
+.ymark:not(.title) { border-top-style: dotted; border-top-color: var(--ink-tertiary); }
+.ymark:not(.title) .yl { background: var(--bg-raised); color: var(--ink-secondary); left: 12px; right: auto; }
+.marks { font-size: 14px; color: var(--doc-dim); }
+.marks i { display: inline-block; width: 22px; height: 0; border-top: 2px dashed var(--mark); vertical-align: middle; margin-right: 6px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-hand" viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></symbol>
+<symbol id="i-mail" viewBox="0 0 24 24"><path d="m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7"/><rect x="2" y="4" width="20" height="16" rx="2"/></symbol>
+<symbol id="i-workflow" viewBox="0 0 24 24"><rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/></symbol>
+<symbol id="i-key-round" viewBox="0 0 24 24"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5"/></symbol>
+<symbol id="i-archive" viewBox="0 0 24 24"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></symbol>
+<symbol id="i-file-text" viewBox="0 0 24 24"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></symbol>
+<symbol id="i-bell-off" viewBox="0 0 24 24"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M17 17H4a1 1 0 0 1-.74-1.673C4.59 13.956 6 12.499 6 8a6 6 0 0 1 .258-1.742"/><path d="m2 2 20 20"/><path d="M8.668 3.01A6 6 0 0 1 18 8c0 2.687.77 4.653 1.707 6.05"/></symbol>
+<symbol id="i-settings" viewBox="0 0 24 24"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+<symbol id="i-layout-list" viewBox="0 0 24 24"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/><path d="M14 4h7"/><path d="M14 9h7"/><path d="M14 15h7"/><path d="M14 20h7"/></symbol>
+<symbol id="i-share" viewBox="0 0 24 24"><path d="M12 2v13"/><path d="m16 6-4-4-4 4"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/></symbol>
+<symbol id="i-download" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></symbol>
+<symbol id="i-refresh-cw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+<symbol id="i-list-checks" viewBox="0 0 24 24"><path d="M13 5h8"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/></symbol>
+<symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+</defs></svg>
+<main class="page">
+  <h1>Desk navigation mockup</h1>
+  <p class="lede">A sketch of <code>docs/superpowers/specs/2026-11-06-desk-nav-design.md</code>, not the product. Instrument skin, fixture data only: every name is a stand-in. Colours follow the console's Phosphor &amp; Ink palette; icons are the console's vendored Lucide set. Each frame is drawn at its real pixel size and scaled to fit.</p>
+  <div class="legend">
+    <div><b>Part A, the top bar.</b> The rail's doors move into the top bar where the breadcrumb was. The wordmark becomes the way home to Fleet. Bell and Settings move to the bar's right end. The main pane gains the rail's 52 px.</div>
+    <div><b>Part B, the Docs head.</b> Back, crumbs, Aa and the three actions share one row; the truth line is one dense line under it. The title moves from y = 382 to about y = 200 at 1280 × 800.</div>
+    <div class="marks"><b>Marks.</b> <i></i>An orange dashed outline is what Part A removes (the rail and the breadcrumb). An orange dashed line across a Docs frame is the document title's y.</div>
+  </div>
+  <div class="controls">
+    <div role="radiogroup" aria-label="Theme">Theme:
+      <label><input type="radio" name="t" id="th-auto" checked>Auto</label>
+      <label><input type="radio" name="t" id="th-dark">Dark</label>
+      <label><input type="radio" name="t" id="th-light">Light</label>
+    </div>
+    <div role="radiogroup" aria-label="Frame zoom">Frame zoom:
+      <label><input type="radio" name="z" id="z50" checked>50%</label>
+      <label><input type="radio" name="z" id="z75">75%</label>
+      <label><input type="radio" name="z" id="z100">100%</label>
+    </div>
+  </div>
+
+  <h2>Part A: Instrument's desk top bar</h2>
+  <section class="shot"><h3>A1 · BEFORE · 1600 × 900, the Fleet page</h3><div class="scaler"><div class="frame" style="width:1600px;height:900px">
+  <header class="hdr"><div class="topbar"><span class="wm"><b class="caret">❯</b>ccrc</span><span class="crumbs" data-note="breadcrumb">Fleet</span><span class="cmd fixed"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg><span class="cmd-words">Search or run a command</span><kbd>⌘</kbd><kbd>K</kbd></span><span class="new"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg></span></div><div class="lanes"><div class="lane"><span class="lane-name l0">lane-a</span><span class="lane-bars"><span class="bar"><i style="width:8%"></i></span><span class="bar"><i style="width:15%"></i></span></span><span class="lane-pct">8% · 1h 9m<br>15% · 1d 1h</span></div><div class="lane"><span class="lane-name l1">lane-b</span><span class="lane-bars"><span class="bar"><i style="width:19%"></i></span><span class="bar"><i style="width:22%"></i></span></span><span class="lane-pct">19% · 1h 9m<br>22% · 1d 1h</span></div><div class="lane"><span class="lane-name l2">lane-c</span><span class="lane-bars"><span class="bar"><i style="width:30%"></i></span><span class="bar"><i style="width:29%"></i></span></span><span class="lane-pct">30% · 1h 9m<br>29% · 1d 1h</span></div><div class="lane"><span class="lane-name l3">lane-d</span><span class="lane-bars"><span class="bar"><i style="width:41%"></i></span><span class="bar"><i style="width:36%"></i></span></span><span class="lane-pct">41% · 1h 9m<br>36% · 1d 1h</span></div><div class="lane more">+2 more</div><div class="lane all">All accounts</div></div></header>
+  <div class="body" style="grid-template-columns:52px 420px 1fr"><div class="rail"><span class="rail-item"><svg class="ic" aria-hidden="true"><use href="#i-hand"/></svg></span><span class="rail-item"><svg class="ic" aria-hidden="true"><use href="#i-mail"/></svg><span class="badge rb">1</span></span><span class="rail-item"><svg class="ic" aria-hidden="true"><use href="#i-workflow"/></svg></span><span class="rail-item"><svg class="ic" aria-hidden="true"><use href="#i-key-round"/></svg></span><span class="rail-item"><svg class="ic" aria-hidden="true"><use href="#i-archive"/></svg></span><span class="rail-item"><svg class="ic" aria-hidden="true"><use href="#i-file-text"/></svg></span><span class="rail-foot"><span class="rail-bell"><svg class="ic" aria-hidden="true"><use href="#i-bell-off"/></svg></span><span class="rail-item"><svg class="ic" aria-hidden="true"><use href="#i-settings"/></svg></span></span></div><div class="list">
+  <div class="toggle"><span class="on">Status</span><span>Project</span></div>
+  <div class="grp">▾ Needs you · 1</div>
+  <div class="row"><span class="dot amber"></span><span class="nm">sess-a<small>ws/sess-a</small></span><span class="st amber-t">waiting · needs you</span></div>
+  <div class="grp">▾ Done · 1</div>
+  <div class="row"><span class="dot"></span><span class="nm">sess-b<small>ws/sess-b</small></span><span class="st">done</span></div>
+  <div class="grp">▾ Working · 2</div>
+  <div class="row"><span class="dot green"></span><span class="nm">sess-c<small>ws/sess-c</small></span><span class="st green-t">working</span></div>
+  <div class="row"><span class="dot green"></span><span class="nm">sess-d<small>ws/sess-d</small></span><span class="st green-t">working</span></div>
+  <div class="grp">▸ Idle · 1</div>
+  <div class="grp">▸ Exited · 1</div>
+  <div class="add">+ Add project</div>
+</div><div class="main empty"><div><b class="caret big">❯</b><br>Select a session</div></div></div>
+  <footer class="status"><span><b class="red-t">×</b> agent down</span><span>6 sessions · 1 waiting</span><span class="keys"><kbd>⌘K</kbd><kbd>?</kbd></span></footer>
+</div><div class="ruler" style="width:1600px"><span class="seg gone" style="width:52px">rail 52</span><span class="seg " style="width:420px">list 420</span><span class="seg " style="width:1128px">main pane 1128</span></div></div><p class="note">Today: a 52 px rail of doors down the left; the breadcrumb box spans 1142 px and holds the one word "Fleet".</p></section>
+  <section class="shot"><h3>A2 · AFTER · 1600 × 900, the Fleet page</h3><div class="scaler"><div class="frame" style="width:1600px;height:900px">
+  <header class="hdr"><div class="topbar"><span class="wm home cur" title="Fleet"><b class="caret">❯</b>ccrc</span><nav class="doors" aria-label="Primary (sketch)"><span class="door"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-hand"/></svg></span><span class="door-label">Waiting on you</span></span><span class="door badged"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-mail"/></svg><span class="badge">1</span></span><span class="door-label">Inbox</span></span><span class="door"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-workflow"/></svg></span><span class="door-label">Runs</span></span><span class="door"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-key-round"/></svg></span><span class="door-label">Accounts</span></span><span class="door"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-archive"/></svg></span><span class="door-label">Archive</span></span><span class="door"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-file-text"/></svg></span><span class="door-label">Docs</span></span></nav><span class="cmd grow"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg><span class="cmd-words">Search or run a command</span><kbd>⌘</kbd><kbd>K</kbd></span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-bell-off"/></svg></span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-settings"/></svg></span><span class="new"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg></span></div><div class="lanes"><div class="lane"><span class="lane-name l0">lane-a</span><span class="lane-bars"><span class="bar"><i style="width:8%"></i></span><span class="bar"><i style="width:15%"></i></span></span><span class="lane-pct">8% · 1h 9m<br>15% · 1d 1h</span></div><div class="lane"><span class="lane-name l1">lane-b</span><span class="lane-bars"><span class="bar"><i style="width:19%"></i></span><span class="bar"><i style="width:22%"></i></span></span><span class="lane-pct">19% · 1h 9m<br>22% · 1d 1h</span></div><div class="lane"><span class="lane-name l2">lane-c</span><span class="lane-bars"><span class="bar"><i style="width:30%"></i></span><span class="bar"><i style="width:29%"></i></span></span><span class="lane-pct">30% · 1h 9m<br>29% · 1d 1h</span></div><div class="lane"><span class="lane-name l3">lane-d</span><span class="lane-bars"><span class="bar"><i style="width:41%"></i></span><span class="bar"><i style="width:36%"></i></span></span><span class="lane-pct">41% · 1h 9m<br>36% · 1d 1h</span></div><div class="lane more">+2 more</div><div class="lane all">All accounts</div></div></header>
+  <div class="body" style="grid-template-columns:420px 1fr"><div class="list">
+  <div class="toggle"><span class="on">Status</span><span>Project</span></div>
+  <div class="grp">▾ Needs you · 1</div>
+  <div class="row"><span class="dot amber"></span><span class="nm">sess-a<small>ws/sess-a</small></span><span class="st amber-t">waiting · needs you</span></div>
+  <div class="grp">▾ Done · 1</div>
+  <div class="row"><span class="dot"></span><span class="nm">sess-b<small>ws/sess-b</small></span><span class="st">done</span></div>
+  <div class="grp">▾ Working · 2</div>
+  <div class="row"><span class="dot green"></span><span class="nm">sess-c<small>ws/sess-c</small></span><span class="st green-t">working</span></div>
+  <div class="row"><span class="dot green"></span><span class="nm">sess-d<small>ws/sess-d</small></span><span class="st green-t">working</span></div>
+  <div class="grp">▸ Idle · 1</div>
+  <div class="grp">▸ Exited · 1</div>
+  <div class="add">+ Add project</div>
+</div><div class="main empty"><div><b class="caret big">❯</b><br>Select a session</div></div></div>
+  <footer class="status"><span><b class="red-t">×</b> agent down</span><span>6 sessions · 1 waiting</span><span class="keys"><kbd>⌘K</kbd><kbd>?</kbd></span></footer>
+</div><div class="ruler" style="width:1600px"><span class="seg " style="width:420px">list 420</span><span class="seg gain" style="width:1180px">main pane 1180 (+52)</span></div></div><p class="note">After: wordmark (current, so underlined, since this is the Fleet page), then the six doors with icon and label, the command field taking the rest, bell, Settings and New session. The lanes row is unchanged.</p></section>
+  <section class="shot"><h3>A3 · AFTER · 1024 × 560, icons only (900 to 1279 px), on Runs, with the Accounts door focused</h3><div class="scaler"><div class="frame" style="width:1024px;height:560px">
+  <header class="hdr"><div class="topbar"><span class="wm home" title="Fleet"><b class="caret">❯</b>ccrc</span><nav class="doors" aria-label="Primary (sketch)"><span class="door iconly badged"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-hand"/></svg><span class="badge">99+</span></span></span><span class="door iconly badged"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-mail"/></svg><span class="badge">99+</span></span></span><span class="door iconly badged cur"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-workflow"/></svg><span class="badge">99+</span></span></span><span class="door iconly focus"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-key-round"/></svg></span><span class="tip">Accounts</span></span><span class="door iconly"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-archive"/></svg></span></span><span class="door iconly"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-file-text"/></svg></span></span></nav><span class="cmd grow"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg><span class="cmd-words">Search or run a command</span><kbd>⌘</kbd><kbd>K</kbd></span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-bell-off"/></svg></span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-settings"/></svg></span><span class="new"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg></span></div><div class="lanes"><div class="lane"><span class="lane-name l0">lane-a</span><span class="lane-bars"><span class="bar"><i style="width:8%"></i></span><span class="bar"><i style="width:15%"></i></span></span><span class="lane-pct">8% · 1h 9m<br>15% · 1d 1h</span></div><div class="lane"><span class="lane-name l1">lane-b</span><span class="lane-bars"><span class="bar"><i style="width:19%"></i></span><span class="bar"><i style="width:22%"></i></span></span><span class="lane-pct">19% · 1h 9m<br>22% · 1d 1h</span></div><div class="lane"><span class="lane-name l2">lane-c</span><span class="lane-bars"><span class="bar"><i style="width:30%"></i></span><span class="bar"><i style="width:29%"></i></span></span><span class="lane-pct">30% · 1h 9m<br>29% · 1d 1h</span></div><div class="lane more">+3 more</div><div class="lane all">All accounts</div></div></header>
+  <div class="body" style="grid-template-columns:340px 1fr"><div class="list">
+  <div class="toggle"><span class="on">Status</span><span>Project</span></div>
+  <div class="grp">▾ Needs you · 1</div>
+  <div class="row"><span class="dot amber"></span><span class="nm">sess-a<small>ws/sess-a</small></span><span class="st amber-t">waiting · needs you</span></div>
+  <div class="grp">▾ Done · 1</div>
+  <div class="row"><span class="dot"></span><span class="nm">sess-b<small>ws/sess-b</small></span><span class="st">done</span></div>
+  <div class="grp">▾ Working · 2</div>
+  <div class="row"><span class="dot green"></span><span class="nm">sess-c<small>ws/sess-c</small></span><span class="st green-t">working</span></div>
+  <div class="row"><span class="dot green"></span><span class="nm">sess-d<small>ws/sess-d</small></span><span class="st green-t">working</span></div>
+  <div class="grp">▸ Idle · 1</div>
+  <div class="grp">▸ Exited · 1</div>
+  <div class="add">+ Add project</div>
+</div><div class="main page"><h4 class="ph1">Runs</h4>
+  <div class="runrow"><span class="pill amber-b">awaiting review</span>run 1201 · project-a · wave 2 of 3</div>
+  <div class="runrow"><span class="pill green-b">working</span>run 1202 · project-a · wave 1 of 2</div>
+  <div class="runrow"><span class="pill">planned</span>run 1203 · project-a</div></div></div>
+  <footer class="status"><span><b class="red-t">×</b> agent down</span><span>6 sessions · 1 waiting</span><span class="keys"><kbd>⌘K</kbd><kbd>?</kbd></span></footer>
+</div><div class="ruler" style="width:1024px"><span class="seg " style="width:340px">list 340</span><span class="seg gain" style="width:684px">main pane 684 (+52)</span></div></div><p class="note">Below 1280 px each door shows its icon only. The tooltip moves below the icon and shows on hover and on keyboard focus. Every badge is drawn at "99+", the worst case the plan measures. The current door (Runs) has the accent underline; the page heading says where you are.</p></section>
+
+  <h2>Part B: the desk Docs head</h2>
+  <section class="shot"><h3>B1 · BEFORE · Instrument 1280 × 800, a Docs leaf</h3><div class="scaler"><div class="frame docs" style="width:1280px;height:800px">
+  <header class="hdr"><div class="topbar"><span class="wm"><b class="caret">❯</b>ccrc</span><span class="crumbs" data-note="breadcrumb">Docs</span><span class="cmd fixed"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg><span class="cmd-words">Search or run a command</span><kbd>⌘</kbd><kbd>K</kbd></span><span class="new"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg></span></div><div class="lanes"><div class="lane"><span class="lane-name l0">lane-a</span><span class="lane-bars"><span class="bar"><i style="width:8%"></i></span><span class="bar"><i style="width:15%"></i></span></span><span class="lane-pct">8% · 1h 9m<br>15% · 1d 1h</span></div><div class="lane"><span class="lane-name l1">lane-b</span><span class="lane-bars"><span class="bar"><i style="width:19%"></i></span><span class="bar"><i style="width:22%"></i></span></span><span class="lane-pct">19% · 1h 9m<br>22% · 1d 1h</span></div><div class="lane"><span class="lane-name l2">lane-c</span><span class="lane-bars"><span class="bar"><i style="width:30%"></i></span><span class="bar"><i style="width:29%"></i></span></span><span class="lane-pct">30% · 1h 9m<br>29% · 1d 1h</span></div><div class="lane more">+3 more</div><div class="lane all">All accounts</div></div></header>
+  <div class="body" style="grid-template-columns:52px 340px 1fr"><div class="rail"><span class="rail-item"><svg class="ic" aria-hidden="true"><use href="#i-hand"/></svg></span><span class="rail-item"><svg class="ic" aria-hidden="true"><use href="#i-mail"/></svg><span class="badge rb">1</span></span><span class="rail-item"><svg class="ic" aria-hidden="true"><use href="#i-workflow"/></svg></span><span class="rail-item"><svg class="ic" aria-hidden="true"><use href="#i-key-round"/></svg></span><span class="rail-item"><svg class="ic" aria-hidden="true"><use href="#i-archive"/></svg></span><span class="rail-item cur"><svg class="ic" aria-hidden="true"><use href="#i-file-text"/></svg></span><span class="rail-foot"><span class="rail-bell"><svg class="ic" aria-hidden="true"><use href="#i-bell-off"/></svg></span><span class="rail-item"><svg class="ic" aria-hidden="true"><use href="#i-settings"/></svg></span></span></div><div class="list">
+  <div class="toggle"><span class="on">Status</span><span>Project</span></div>
+  <div class="grp">▾ Needs you · 1</div>
+  <div class="row"><span class="dot amber"></span><span class="nm">sess-a<small>ws/sess-a</small></span><span class="st amber-t">waiting · needs you</span></div>
+  <div class="grp">▾ Done · 1</div>
+  <div class="row"><span class="dot"></span><span class="nm">sess-b<small>ws/sess-b</small></span><span class="st">done</span></div>
+  <div class="grp">▾ Working · 2</div>
+  <div class="row"><span class="dot green"></span><span class="nm">sess-c<small>ws/sess-c</small></span><span class="st green-t">working</span></div>
+  <div class="row"><span class="dot green"></span><span class="nm">sess-d<small>ws/sess-d</small></span><span class="st green-t">working</span></div>
+  <div class="grp">▸ Idle · 1</div>
+  <div class="grp">▸ Exited · 1</div>
+  <div class="add">+ Add project</div>
+</div><div class="main docmain"><div class="dhead before">
+  <div class="drow"><span class="back">‹</span><span class="dcrumbs"><span>Docs</span> / <span>project-a</span> / <span>specs</span> / <b>2026-10-20-example-design.md</b></span></div>
+  <div class="drow truth">origin/main · a1b2c3d <span class="tbtn">copy commit</span> · default branch (origin/HEAD) · committed · 3 KiB · <span class="chip44">never fetched <svg class="ic sm" aria-hidden="true"><use href="#i-refresh-cw"/></svg></span></div>
+  <div class="drow acts"><u>View on GitHub</u><u>Share</u><u>Export (plain view)</u></div>
+</div>
+<div class="rframe before"><div class="rtop"><span class="aa">Aa</span></div><div class="rbody"><h1 class="doc-h1">Example design</h1>
+<p>A path names one document at one ref, so a link means the same thing on every checkout.</p>
+<p>Paragraph 1 of the body, long enough to wrap on a narrow width and show the reading measure.</p>
+<p>Paragraph 2 of the body, long enough to wrap on a narrow width and show the reading measure.</p>
+<p>Paragraph 3 of the body, long enough to wrap on a narrow width and show the reading measure.</p>
+<p>Paragraph 4 of the body, long enough to wrap on a narrow width and show the reading measure.</p>
+<p>Paragraph 5 of the body, long enough to wrap on a narrow width and show the reading measure.</p>
+<p>Paragraph 6 of the body, long enough to wrap on a narrow width and show the reading measure.</p></div></div></div></div>
+  <footer class="status"><span><b class="red-t">×</b> agent down</span><span>6 sessions · 1 waiting</span><span class="keys"><kbd>⌘K</kbd><kbd>?</kbd></span></footer>
+  <div class="ymark" style="top:113px"></div>
+  <div class="ymark title" style="top:382px"><span class="yl">title at y = 382</span></div>
+</div></div><p class="note">Today: three 44 px rows (back and crumbs, the truth line, the actions), then the reader frame's own Aa bar and top space, 101 px, before the title. The dotted line is y = 113, where the console header ends.</p></section>
+  <section class="shot"><h3>B2 · AFTER · Instrument 1280 × 800, the same leaf (Part A applied too)</h3><div class="scaler"><div class="frame docs" style="width:1280px;height:800px">
+  <header class="hdr"><div class="topbar"><span class="wm home" title="Fleet"><b class="caret">❯</b>ccrc</span><nav class="doors" aria-label="Primary (sketch)"><span class="door"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-hand"/></svg></span><span class="door-label">Waiting on you</span></span><span class="door badged"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-mail"/></svg><span class="badge">1</span></span><span class="door-label">Inbox</span></span><span class="door"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-workflow"/></svg></span><span class="door-label">Runs</span></span><span class="door"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-key-round"/></svg></span><span class="door-label">Accounts</span></span><span class="door"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-archive"/></svg></span><span class="door-label">Archive</span></span><span class="door cur"><span class="ic-wrap"><svg class="ic" aria-hidden="true"><use href="#i-file-text"/></svg></span><span class="door-label">Docs</span></span></nav><span class="cmd grow"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg><span class="cmd-words">Search or run a command</span><kbd>⌘</kbd><kbd>K</kbd></span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-bell-off"/></svg></span><span class="sq"><svg class="ic" aria-hidden="true"><use href="#i-settings"/></svg></span><span class="new"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg></span></div><div class="lanes"><div class="lane"><span class="lane-name l0">lane-a</span><span class="lane-bars"><span class="bar"><i style="width:8%"></i></span><span class="bar"><i style="width:15%"></i></span></span><span class="lane-pct">8% · 1h 9m<br>15% · 1d 1h</span></div><div class="lane"><span class="lane-name l1">lane-b</span><span class="lane-bars"><span class="bar"><i style="width:19%"></i></span><span class="bar"><i style="width:22%"></i></span></span><span class="lane-pct">19% · 1h 9m<br>22% · 1d 1h</span></div><div class="lane"><span class="lane-name l2">lane-c</span><span class="lane-bars"><span class="bar"><i style="width:30%"></i></span><span class="bar"><i style="width:29%"></i></span></span><span class="lane-pct">30% · 1h 9m<br>29% · 1d 1h</span></div><div class="lane more">+3 more</div><div class="lane all">All accounts</div></div></header>
+  <div class="body" style="grid-template-columns:340px 1fr"><div class="list">
+  <div class="toggle"><span class="on">Status</span><span>Project</span></div>
+  <div class="grp">▾ Needs you · 1</div>
+  <div class="row"><span class="dot amber"></span><span class="nm">sess-a<small>ws/sess-a</small></span><span class="st amber-t">waiting · needs you</span></div>
+  <div class="grp">▾ Done · 1</div>
+  <div class="row"><span class="dot"></span><span class="nm">sess-b<small>ws/sess-b</small></span><span class="st">done</span></div>
+  <div class="grp">▾ Working · 2</div>
+  <div class="row"><span class="dot green"></span><span class="nm">sess-c<small>ws/sess-c</small></span><span class="st green-t">working</span></div>
+  <div class="row"><span class="dot green"></span><span class="nm">sess-d<small>ws/sess-d</small></span><span class="st green-t">working</span></div>
+  <div class="grp">▸ Idle · 1</div>
+  <div class="grp">▸ Exited · 1</div>
+  <div class="add">+ Add project</div>
+</div><div class="main docmain"><div class="dhead after">
+  <div class="drow one"><span class="back">‹</span><span class="dcrumbs"><span>Docs</span> / <span>project-a</span> / <span>specs</span> / <b>2026-10-20-example-design.md</b></span><span class="spacer"></span><span class="cbtn aa">Aa</span><span class="sep"></span><span class="cbtn">GitHub</span><span class="cbtn"><svg class="ic sm" aria-hidden="true"><use href="#i-share"/></svg>Share</span><span class="cbtn"><svg class="ic sm" aria-hidden="true"><use href="#i-download"/></svg>Export</span></div>
+  <div class="dense">origin/main · a1b2c3d <span class="mini" title="Copy commit">⧉</span> · default branch (origin/HEAD) · committed · 3 KiB · <span class="chip28">never fetched <svg class="ic xs" aria-hidden="true"><use href="#i-refresh-cw"/></svg></span></div>
+</div>
+<div class="rframe after"><div class="rbody"><h1 class="doc-h1">Example design</h1>
+<p>A path names one document at one ref, so a link means the same thing on every checkout.</p>
+<p>Paragraph 1 of the body, long enough to wrap on a narrow width and show the reading measure.</p>
+<p>Paragraph 2 of the body, long enough to wrap on a narrow width and show the reading measure.</p>
+<p>Paragraph 3 of the body, long enough to wrap on a narrow width and show the reading measure.</p>
+<p>Paragraph 4 of the body, long enough to wrap on a narrow width and show the reading measure.</p>
+<p>Paragraph 5 of the body, long enough to wrap on a narrow width and show the reading measure.</p>
+<p>Paragraph 6 of the body, long enough to wrap on a narrow width and show the reading measure.</p></div></div></div></div>
+  <footer class="status"><span><b class="red-t">×</b> agent down</span><span>6 sessions · 1 waiting</span><span class="keys"><kbd>⌘K</kbd><kbd>?</kbd></span></footer>
+  <div class="ymark" style="top:113px"></div>
+  <div class="ymark title" style="top:200px"><span class="yl">title at about y = 200</span></div>
+</div></div><p class="note">After: one 44 px row with back, the crumbs, Aa and the actions as compact buttons; the truth line as one 28 px line (fine pointer); the frame's own bar off. The title rises by about 182 px. Refined draws the same head under its own 109 px header, so its title lands about 4 px higher.</p></section>
+</main>
+</body>
+</html>

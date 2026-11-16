@@ -13,10 +13,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
-import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
+import { ccdSource, makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, type CcdHarness, WIDE_PANE }
+  from './ccdWsHelpers.js';
+import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
 
+import { itLinux } from './platformFixtures.js';
 let h: CcdHarness;
 beforeEach(() => {
   h = makeCcdHarness('ccrc-ccd-auto-swap-pool-');
@@ -24,6 +26,12 @@ beforeEach(() => {
   // Re-seeded rather than hand-written: a fixture accounts.sh typed out here
   // would be a fourth copy of the roster.
   seedAccountsSh(h.home, POOLED_TEST_ROSTER);
+  // The central projection, agreeing with the declared roster above — this
+  // file's real, unstubbed `_auto_swap_check`/`_swap_target` read the account
+  // side through it since wave 1 Task 2, and without it every account reads
+  // `unreadable` (no document at all) and every decision below becomes
+  // undecidable rather than the pool verdict each case is about.
+  plantPoolEpoch(h.home, POOL_BY_ID);
 });
 afterEach(() => { h.cleanup(); });
 
@@ -97,8 +105,8 @@ const seed = (): void => {
  *  `_avail` left REAL: a pane at a clean prompt, a pane pid, and a dispatch
  *  that logs instead of running systemd-run. */
 const AFFINITY = `
-  tmux() { case "\${1:-}" in
-             capture-pane) printf '%s\\n' "❯ " ;;
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
+             capture-pane) printf '%s\\n' "────────────────────────" "❯ " "────────────────────────" ;;   # the bordered box (D-8116)
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
   _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
@@ -107,7 +115,7 @@ const AFFINITY = `
 /** The RESCUE fixture: a real limit banner, matched by the REAL
  *  `_pane_hard_blocked` — the classifier IS the discriminator here. */
 const BLOCKED = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) echo "API Error: 429 Too Many Requests" ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
@@ -122,7 +130,7 @@ const BLOCKED = `
  *  presence or absence of `--cross-pool` on an automatic move is decidable.
  *  Same technique as `ccd-crosspool.test.ts`'s self-swap fixture. */
 const BLOCKED_REAL_DISPATCH = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) echo "API Error: 429 Too Many Requests" ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
@@ -239,6 +247,59 @@ describe('_strand_why names the candidates the decision was actually about', () 
     seed(); tagPool('demo', 'Pool Orate');
     expect(h.sh(`_strand_why ${ID} demo`))
       .toBe(`tag:malformed ${h.home}/.cc-sessions/pools/demo`);
+  });
+
+  // LINUX-ONLY, and not because the assertion is awkward on darwin: a darwin
+  // FLEET BOX CANNOT EXIST. `ccd-pool-sync` is never installed there at all —
+  // its only runner is a systemd timer, and `ccrc` says so in its own install
+  // summary ("no ccd-pool-sync and no ccd-update-sync — their timers are
+  // systemd-only", `_inst_bins`' Darwin echo in `ccd/ccrc`). So
+  // `_pool_sync_installed` is correctly FALSE on darwin,
+  // the box has no control plane BY CONFIGURATION, and the declared-tag
+  // fallback is the right answer there rather than a degraded one. Planting a
+  // plist to force this arm would fabricate a state production cannot reach
+  // and would test a branch that is dead on that platform. Measured: these
+  // four ran on the macOS CI leg and read `untagged`, which is the CORRECT
+  // darwin answer to a question this test was not asking.
+  itLinux('obeys that same rule for the ACCOUNT side — one projection token, not one per candidate', () => {
+    // I2, fix round 1. The rule above was written about the project TAG, and
+    // this loop was violating it the moment `_pool_ok`'s account arm gained
+    // undecidable states of its own: `! [the rule]` takes rc 2 as true, so a
+    // cold node (no projection document at all) put a `pool=` token on EVERY
+    // candidate — five invented per-candidate reasons for one shared
+    // condition, and each one naming a pool the account may not even be in.
+    // The three account-side undecidable words are all properties of the ONE
+    // document, so the honest answer is one token naming that document.
+    //
+    // THE PROJECT TAG IS READABLE HERE, deliberately: `named pool-b`. If the
+    // token were still `tag:` this case could not tell the two conditions
+    // apart, which is the whole finding.
+    // Item 5 (I3, wave-1 fix round A): absence alone now falls back to the
+    // declared tag on a non-fleet box, so this cold-node/fail-shut case
+    // needs `plantPoolSyncTimer` to keep meaning what it says — a FLEET
+    // node whose control plane has never synced, not a box that was never
+    // asked to run one.
+    seed(); tagPool('demo', 'pool-b');
+    plantPoolEpoch(h.home, undefined);
+    plantPoolSyncTimer(h.home);
+    expect(h.sh(`_strand_why ${ID} demo`))
+      .toBe(`projection:unreadable ${h.home}/.cc-sessions/pool-epoch`);
+  });
+
+  it('and tells that projection token apart from a STALE one — different remedy, different word', () => {
+    seed(); tagPool('demo', 'pool-b');
+    plantPoolEpoch(h.home, POOL_BY_ID, { lease: 1 });
+    expect(h.sh(`_strand_why ${ID} demo`))
+      .toBe(`projection:stale ${h.home}/.cc-sessions/pool-epoch`);
+  });
+
+  it('guards the guard: with the projection readable the per-candidate census is unchanged', () => {
+    // Without this the two cases above would also pass against a `_strand_why`
+    // that had simply stopped annotating candidates at all.
+    seed(); tagPool('demo', 'pool-b');
+    disable('claude-b'); writeLimits('claude-d', 99, 99); writeLimits('claude-a', 99, 99);
+    expect(h.sh(`_strand_why ${ID} demo`))
+      .toBe('claude-a:pool=pool-a claude-b:disabled claude-d:limit');
   });
 });
 
@@ -583,6 +644,101 @@ describe('the tick strands rather than crossing (§5.5.4 steps 3-4, ruling 6)', 
       .toBe('claude-b');
   });
 
+  describe('a pay-per-use overflow lane joins the rotation only when a pool names it (D-8098)', () => {
+    // What `add --placement overflow` writes. `homeAble: false` keeps it out of placement, and no statusline ever
+    // gives it a limits file, so `_avail` reads it as free. Before D-8098 being enabled was enough to take a blocked
+    // session with no operator act, and every session it took billed the key. Now a pool has to name it.
+    const OPENROUTER_LANE = 'lane-d';
+    const plantLane = (pool?: string): void => {
+      seedAccountsSh(h.home, {
+        ...POOLED_TEST_ROSTER,
+        accounts: [...POOLED_TEST_ROSTER.accounts, {
+          id: OPENROUTER_LANE, label: 'lane·d', configDirSuffix: `.claude-${OPENROUTER_LANE}`,
+          exec: { kind: 'generated', provider: 'openrouter', secretsFile: `.cc-secrets/${OPENROUTER_LANE}-openrouter.env` },
+          homeAble: false, hue: 'amber', telemetry: 'openrouter', ...(pool ? { pool } : {}),
+        }],
+      });
+      if (pool) plantPoolEpoch(h.home, { ...POOL_BY_ID, [OPENROUTER_LANE]: pool });
+      install(OPENROUTER_LANE);
+    };
+    const pinned = (pool?: string): void => {
+      seed(); plantNotify(); tagPool('demo', 'pool-b');
+      writeLimits('claude-b', 99, 99);
+      writeLimits('claude-d', 99, 99);
+      plantLane(pool);
+    };
+    const defaultPool = (): string[] => h.sh(`_default_pool ${ID}`).trim().split(/\s+/);
+
+    it('enabled but named by no pool, it is NOT in the default pool and the session strands', () => {
+      pinned();
+      expect(h.sh(`echo "\${CCRC_PAY_PER_USE[@]}"`).trim(), 'the generator projects the provider').toBe(OPENROUTER_LANE);
+      expect(defaultPool()).not.toContain(OPENROUTER_LANE);
+      tick(BLOCKED);
+      expect(h.calls().join('\n'), 'nothing bills the key').not.toContain('dispatch');
+      expect(h.reg(ID, 'stranded')).not.toContain(OPENROUTER_LANE);
+      expect(h.reg(ID, 'stranded')).toMatch(/^\d{10} /);
+    });
+
+    it('in the project\'s pool, it IS a candidate and the tick dispatches onto it', () => {
+      pinned('pool-b');
+      expect(defaultPool()).toContain(OPENROUTER_LANE);
+      tick(BLOCKED_REAL_DISPATCH);
+      expect(h.calls().join('\n')).toMatch(new RegExp(`exec '[^']*/ccd' swap '${ID}' '${OPENROUTER_LANE}'`));
+    });
+
+    it('in another pool, it stays out — the pool has to be the project\'s own', () => {
+      pinned('pool-a');
+      expect(defaultPool()).not.toContain(OPENROUTER_LANE);
+    });
+
+    it('an untagged project leaves it out even when the lane carries a pool — no pool names it for this session', () => {
+      seed(); plantNotify();
+      plantLane('pool-b');
+      expect(h.sh(`_project_pool_state demo`).trim()).toBe('untagged');
+      expect(defaultPool()).not.toContain(OPENROUTER_LANE);
+    });
+
+    // Linux only, like `_strand_why`'s projection case above: on darwin `_pool_sync_installed` is false by
+    // configuration, so an absent projection reads the declared tag there and is not a fleet box's cold state.
+    itLinux('on a fleet box with no pool projection, it stays out: the rule fails closed', () => {
+      pinned('pool-b');
+      plantPoolSyncTimer(h.home);
+      expect(defaultPool(), 'the control: the same fixture with the projection readable admits it').toContain(OPENROUTER_LANE);
+      plantPoolEpoch(h.home, undefined);
+      expect(h.sh(`_acct_pool_state ${OPENROUTER_LANE}`).trim()).toBe('unreadable');
+      expect(defaultPool()).not.toContain(OPENROUTER_LANE);
+    });
+
+    it('with a pool projection it cannot read, it stays out: the rule fails closed', () => {
+      pinned('pool-b');
+      expect(defaultPool(), 'the control: the same fixture with the projection readable admits it').toContain(OPENROUTER_LANE);
+      fs.writeFileSync(reg('pool-epoch'), 'not a projection\n');
+      expect(h.sh(`_acct_pool_state ${OPENROUTER_LANE}`).trim()).toBe('malformed');
+      expect(defaultPool()).not.toContain(OPENROUTER_LANE);
+    });
+
+    it('named by the session\'s registry `pool` list, it IS a candidate', () => {
+      pinned();
+      h.sh(`_reg_set ${ID} pool "claude-b claude-d ${OPENROUTER_LANE}"`);
+      tick(BLOCKED_REAL_DISPATCH);
+      expect(h.calls().join('\n')).toMatch(new RegExp(`exec '[^']*/ccd' swap '${ID}' '${OPENROUTER_LANE}'`));
+    });
+
+    it('a session already on it is not evacuated by the rule', () => {
+      pinned();
+      h.sh(`_reg_set ${ID} wrapper ${OPENROUTER_LANE}`);
+      expect(h.sh(`_swap_target ${ID} ${OPENROUTER_LANE} claude-b; echo "rc=$?"`).trim()).toBe('rc=0');
+    });
+
+    it('disabled, it is out of the rotation even when a pool names it', () => {
+      pinned('pool-b');
+      disable(OPENROUTER_LANE);
+      tick(BLOCKED);
+      expect(h.calls().join('\n'), 'nothing is placeable').not.toContain('dispatch');
+      expect(h.reg(ID, 'stranded')).not.toContain(OPENROUTER_LANE);
+    });
+  });
+
   it('STRANDS when the untagged lane is at its ceiling too, naming it in the reason', () => {
     // The contrast that proves the case above measures the RULING and not merely
     // "some destination existed". Identical fixture, one number changed: the
@@ -707,10 +863,16 @@ describe('_reg_purge`s dot-free inventory', () => {
     // The comment now scopes itself to the `$REG/<id>.<field>` SHAPE — which
     // is what it always measured — and discloses the one file outside it, so
     // this anchor tracks the corrected words rather than the wrong ones.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('The dot-free claim, measured against every `$REG/<id>.<field>` file');
     expect(from, 'the inventory comment could not be found').toBeGreaterThan(-1);
-    const block = src.slice(from, from + 2400);
+    // The window ends at the inventory list's own last field, not at a byte
+    // count: a fixed 2400 left 14 characters of headroom after continuity
+    // wave 2's plan was measured, and the stall watch's `turn` spent them
+    // before that wave's `rescuewait` landed (departure 3847).
+    const to = src.indexOf('`wrapper`. Note that `pool` here', from);
+    expect(to, 'the inventory list\'s end could not be found after its claim').toBeGreaterThan(from);
+    const block = src.slice(from, to);
     for (const f of ['`crosspool`', '`stranded`', '`strandnotify`']) {
       expect(block, `${f} is written by this build and missing from the inventory`).toContain(f);
     }
@@ -745,7 +907,7 @@ describe('the candidate-walk count in `ccd/ccd` stays honest', () => {
     // exact for `ccd/ccd` today. A code line carrying the pattern inside a
     // trailing comment would be miscounted, and this pin would then need a real
     // tokenizer rather than a looser regex.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const at = src.indexOf('CANDIDATE WALKS DO NOT AGREE');
     expect(at, "#61's candidate-walk block could not be found").toBeGreaterThan(-1);
     // Start BEFORE the heading numeral, and flatten: the claim and the cited

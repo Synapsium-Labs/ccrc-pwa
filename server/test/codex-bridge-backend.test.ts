@@ -1,0 +1,650 @@
+// codex-bridge-backend.test.ts — the backend adapter, `ccd/codexbridge/backend.py` (codex-bridge Stage 2 plan
+// 2026-10-22, Task 7; spec 2026-10-15 §2.2 "the backend adapter targets today's route", §2.3 "No top-level
+// `instructions`, so nothing outranks it", §2.4 "An upstream idle timeout of 300 s, as in Codex", D27 "Send
+// `originator: ccrc`").
+//
+// Every case runs the package through `runBridgeDriver` in a mkTmp HOME. A request is built from an Anthropic body by
+// the package's own `inbound.from_anthropic`, so no case spells a neutral request. The upstream is `fakeResponses`, an
+// in-process server on 127.0.0.1, reached through CCGPT_BRIDGE_UPSTREAM_BASE; a case that needs no answer leaves that
+// variable at CLOSED_AUTH_BASE. The bearer token is a synthetic JWT built at runtime, and the fake records it only as a
+// sha256.
+import { describe, it, expect } from 'vitest';
+import { createHash } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import path, { join } from 'node:path';
+import { pythonOrSkip, runPy, runPyAsync } from './ccgptHarness.js';
+import { ghContainedEnv } from './ccdWsHelpers.js';
+import { mkTmp } from './tmpHelpers.js';
+import { AUTH_LIB, CLOSED_AUTH_BASE, FIXTURE_ACCOUNT_ID, plantBackendCredential, syntheticJwt } from './codexAuthFixture.js';
+import { driverLines, fakeResponses, runBridgeDriver, type ResponsesAnswer } from './codexBridgeFixture.js';
+import { CATALOGUE_VERBOSITIES } from '../../shared/models.js';
+
+const PY = pythonOrSkip();
+
+it('this box has a usable python3', () => {
+  if (process.env.CI) expect(PY).toBeTruthy();
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Line = Record<string, any>;
+
+/** The bearer token of every case without a planted credential: built at runtime, never a literal. */
+const TOKEN = syntheticJwt({ sub: 'fixture-backend' });
+
+/** Run `ops` in one driver process; every op must print its line, and none may raise unless `allowRaise`. */
+async function run(
+  ops: object[],
+  o: {
+    env?: Record<string, string>; home?: string; timeoutMs?: number; allowRaise?: boolean; consts?: Record<string, unknown>;
+  } = {},
+): Promise<Line[]> {
+  const action = o.consts ? { ops, consts: o.consts } : { ops };
+  const r = await runBridgeDriver(o.home ?? mkTmp('cb-backend-'), action, o.env ?? {}, { timeoutMs: o.timeoutMs ?? 10_000 });
+  expect(r.timedOut, `${r.stdout}\n${r.stderr}`).toBe(false);
+  const lines = driverLines(r.stdout);
+  expect(lines.map((l) => l.op), `${r.stdout}\n${r.stderr}`).toEqual(ops.map((x) => (x as { op: string }).op));
+  if (!o.allowRaise) for (const l of lines) expect(l.raised, JSON.stringify(l)).toBeUndefined();
+  return lines;
+}
+
+/** One backend-post against a fake that answers `answers`, then the `after` ops; the post's line and what the fake
+ *  recorded. */
+async function post(
+  answers: ResponsesAnswer[], op: Record<string, unknown>,
+  o: { env?: Record<string, string>; home?: string; timeoutMs?: number; consts?: Record<string, unknown>; after?: object[] } = {},
+): Promise<{ line: Line; requests: Awaited<ReturnType<typeof fakeResponses>>['requests'] }> {
+  const fake = await fakeResponses(answers);
+  try {
+    const [line] = await run([{ op: 'backend-post', token: TOKEN, ...op }, ...(o.after ?? [])],
+      { ...o, env: { ...(o.env ?? {}), CCGPT_BRIDGE_UPSTREAM_BASE: fake.base } });
+    return { line, requests: fake.requests };
+  } finally {
+    await fake.close();
+  }
+}
+
+const SYSTEM = 'You are the fixture system prompt.';
+const USER = 'hello from the fixture';
+
+/** A small Anthropic body: the billing line Claude Code prepends, the system text, one user turn. */
+function anthropic(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    model: 'model-6.1-alpha',
+    system: [
+      { type: 'text', text: 'x-anthropic-billing-header: cc_version=0.0.0; cc_entrypoint=cli' },
+      { type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } },
+    ],
+    messages: [{ role: 'user', content: [{ type: 'text', text: USER }] }],
+    stream: true,
+    ...extra,
+  };
+}
+
+const DEVELOPER_ITEM = { type: 'message', role: 'developer', content: [{ type: 'input_text', text: SYSTEM }] };
+
+/** A short stream that ends in `response.completed`. */
+const COMPLETED = [
+  'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_fx1","output":[]}}\n\n',
+  'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_fx1","output":[],'
+    + '"usage":{"input_tokens":5,"output_tokens":1}}}\n\n',
+].join('');
+
+/** The body's keys in the order Codex writes them (upstream openai/codex @ 092d3ac,
+ *  codex-rs/codex-api/src/common.rs:278-304), with `stream` moved up to second; `text` comes last when present. */
+const ORDER = ['model', 'stream', 'input', 'tools', 'tool_choice', 'parallel_tool_calls', 'reasoning', 'store', 'include',
+  'prompt_cache_key'];
+
+/** Never sent on the backend route by this bridge (plan Task 7, `build_body`). */
+const FORBIDDEN = ['instructions', 'max_output_tokens', 'temperature', 'top_p', 'user', 'metadata', 'previous_response_id',
+  'truncation', 'text'];
+
+describe.skipIf(!PY)('the backend adapter: the body (codex-bridge spec §2.2, §2.3)', () => {
+  it('the body carries no instructions, and the developer message is input[0]', async () => {
+    const { line, requests } = await post([{ status: 200, sse: COMPLETED }], { body: anthropic() });
+    expect(line.status).toBe(200);
+    expect(line.error).toBeNull();
+    expect(requests).toHaveLength(1);
+    const [req] = requests;
+    expect(req.method).toBe('POST');
+    expect(req.path).toBe('/responses');
+    const body = req.body!;
+    expect(Object.keys(body)).not.toContain('instructions');
+    expect(body.input[0]).toEqual(DEVELOPER_ITEM);
+    expect(body.input[1]).toEqual({ type: 'message', role: 'user', content: [{ type: 'input_text', text: USER }] });
+    // ruling 2: Claude Code's text alone. No base prompt of the bridge's own (LiteLLM's is 7,572 characters), no lead
+    // sentence telling the model to follow the developer message, and the billing line is gone.
+    const wire = JSON.stringify(body);
+    expect(wire.length).toBeLessThan(1000);
+    expect(wire).not.toMatch(/follow/i);
+    expect(wire).not.toContain('x-anthropic-billing-header');
+    expect(body.input.filter((i: Line) => i.role === 'developer')).toHaveLength(1);
+  });
+
+  it('with the bridge-instructions marker, the system is instructions alone', async () => {
+    const home = mkTmp('cb-backend-marker-');
+    const laneDir = join(home, 'lane');
+    mkdirSync(laneDir, { mode: 0o700 });
+    const [consts, without] = await run([{ op: 'backend-consts' }, { op: 'backend-body', body: anthropic(), laneDir }],
+      { home });
+    expect(consts.INSTRUCTIONS_MARKER).toBe('bridge-instructions');
+    expect(Object.keys(without.body)).not.toContain('instructions');
+    expect(without.body.input[0]).toEqual(DEVELOPER_ITEM);
+
+    writeFileSync(join(laneDir, 'bridge-instructions'), '');
+    const [marked] = await run([{ op: 'backend-body', body: anthropic(), laneDir }], { home });
+    expect(marked.body.instructions).toBe(SYSTEM);
+    expect(marked.keys.slice(0, 3)).toEqual(['model', 'stream', 'instructions']);
+    expect(marked.body.input).toEqual([{ type: 'message', role: 'user', content: [{ type: 'input_text', text: USER }] }]);
+    expect(marked.body.input.filter((i: Line) => i.role === 'developer')).toEqual([]);
+
+    // with the marker and no system text there is nothing to send as instructions
+    const [bare] = await run([{ op: 'backend-body', body: anthropic({ system: undefined }), laneDir }], { home });
+    expect(Object.keys(bare.body)).not.toContain('instructions');
+  });
+
+  it('the forbidden keys are never sent', async () => {
+    const body = anthropic({
+      max_tokens: 32000, temperature: 0.5, top_p: 0.9, top_k: 5, metadata: { user_id: 'lane-a-user' },
+      stop_sequences: ['STOP'], thinking: { type: 'enabled', budget_tokens: 1024 }, reasoning: { effort: 'high' },
+    });
+    const { requests } = await post([{ status: 200, sse: COMPLETED }], { body });
+    const sent = requests[0].body!;
+    for (const k of FORBIDDEN) expect(Object.keys(sent), k).not.toContain(k);
+    expect(sent.reasoning).toEqual({ effort: 'high' });
+    expect(JSON.stringify(sent)).not.toContain('32000');
+  });
+
+  it('the key order puts model and stream first', async () => {
+    const { requests } = await post([{ status: 200, sse: COMPLETED }], { body: anthropic({ reasoning: { effort: 'high' } }) });
+    const sent = requests[0].body!;
+    const keys = Object.keys(sent);
+    expect(keys.slice(0, 2)).toEqual(['model', 'stream']);
+    expect(keys.filter((k) => ORDER.includes(k))).toEqual(ORDER);
+    expect(sent.model).toBe('model-6.1-alpha');
+    expect(sent.stream).toBe(true);
+    expect(sent.store).toBe(false);
+    expect(sent.include).toEqual(['reasoning.encrypted_content']);
+    expect(sent.tool_choice).toBe('auto');
+    expect(sent.parallel_tool_calls).toBe(true);
+    expect(sent.tools).toEqual([]);
+    // no effort: no reasoning key at all, and the rest keep their order
+    const [plain] = await run([{ op: 'backend-body', body: anthropic() }]);
+    expect(plain.keys).toEqual(ORDER.filter((k) => k !== 'reasoning'));
+    expect(plain.wire.startsWith('{"model":"model-6.1-alpha","stream":true,')).toBe(true);
+  });
+
+  it('an output format is sent as text.format after prompt_cache_key, and no text key without one', async () => {
+    const schema = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] };
+    const outputConfig = { format: { type: 'json_schema', schema } };
+    const [withFormat, translated, without] = await run([
+      { op: 'backend-body', body: anthropic(), output_config: outputConfig },
+      { op: 'from-anthropic', body: anthropic(), output_config: outputConfig },
+      { op: 'backend-body', body: anthropic() },
+    ]);
+    expect(translated.request.output_format).toBeTruthy();
+    expect(withFormat.body.text).toEqual({ format: translated.request.output_format });
+    expect(Object.keys(withFormat.body.text)).toEqual(['format']);
+    expect(withFormat.keys.slice(-2)).toEqual(['prompt_cache_key', 'text']);
+    expect(without.keys).not.toContain('text');
+  });
+
+  it("the request's tools, tool choice and parallel flag are what the body sends", async () => {
+    const tools = [{
+      type: 'custom', name: 'fixture_lookup', description: 'Looks a fixture up.',
+      input_schema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
+    }];
+    const body = anthropic({ tools, tool_choice: { type: 'tool', name: 'fixture_lookup', disable_parallel_tool_use: true } });
+    const [translated] = await run([{ op: 'from-anthropic', body }]);
+    expect(translated.request.tools).toHaveLength(1);
+    expect(translated.request.tool_choice).toEqual({ type: 'function', name: 'fixture_lookup' });
+    expect(translated.request.parallel_tool_calls).toBe(false);
+    const { requests } = await post([{ status: 200, sse: COMPLETED }], { body });
+    const sent = requests[0].body!;
+    expect(sent.tools).toEqual(translated.request.tools);
+    expect(sent.tool_choice).toEqual({ type: 'function', name: 'fixture_lookup' });
+    expect(sent.parallel_tool_calls).toBe(false);
+  });
+});
+
+describe.skipIf(!PY)('the backend adapter: the headers (codex-bridge spec §2.2, D27)', () => {
+  it('originator is ccrc and the user agent names ccrc', async () => {
+    const [ua] = await run([{ op: 'backend-ua', version: '0.0.700' }]);
+    const [system, release, machine] = ua.platform as string[];
+    const clean = (s: string): string => s.replace(/[^\x20-\x7e]/g, '_');
+    expect(ua.ua).toBe(clean(`ccrc/0.0.700 (codex-bridge; ${system} ${release}; ${machine})`));
+    const [odd] = await run([{ op: 'backend-ua', version: 'v1\né\u0007' }]);
+    expect(odd.ua.startsWith('ccrc/v1___ (codex-bridge; ')).toBe(true);
+    expect(odd.ua).toMatch(/^[\x20-\x7e]+$/);
+
+    const { requests } = await post([{ status: 200, sse: COMPLETED }], { body: anthropic(), version: '0.0.700' });
+    const [req] = requests;
+    expect(req.values.originator).toBe('ccrc');
+    expect(req.values['user-agent']).toBe(ua.ua);
+    expect(req.values['content-type']).toBe('application/json');
+    expect(req.values.accept).toBe('text/event-stream');
+    expect(req.values['accept-encoding']).toBe('identity');
+    expect(req.headers).toContain('authorization');
+    expect(req.authorizationSha256).toBe(createHash('sha256').update(`Bearer ${TOKEN}`).digest('hex'));
+  });
+
+  it('session-id carries the Claude Code session id and prompt_cache_key the cache key', async () => {
+    const headers = { 'x-claude-code-session-id': 'sess-fx1', 'x-claude-code-agent-id': 'agent-fx1' };
+    const [keys] = await run([{ op: 'inbound-keys', cache: [['sess-fx1', 'agent-fx1']] }]);
+    const withSession = await post([{ status: 200, sse: COMPLETED }], { body: anthropic(), headers });
+    const [req] = withSession.requests;
+    expect(req.values['session-id']).toBe('sess-fx1');
+    expect(req.headers.filter((h) => h === 'session-id')).toHaveLength(1);
+    expect(req.body!.prompt_cache_key).toBe(keys.cache[0]);
+
+    const none = await post([{ status: 200, sse: COMPLETED }], { body: anthropic() });
+    expect(none.requests[0].headers).not.toContain('session-id');
+    // with no session id the cache key is a fresh anonymous one (inbound.cache_key), never another session's
+    expect(none.requests[0].body!.prompt_cache_key).toMatch(/^ccrc:anon-[0-9a-f-]{36}$/);
+  });
+
+  it("the account header is the credential's account id, never the lane id", async () => {
+    const home = mkTmp('cb-backend-acct-');
+    const authDir = join(home, 'auth');
+    const planted = plantBackendCredential(authDir);
+    const env = { CCGPT_ACCOUNT_ID: 'lane-a' };
+    const { line, requests } = await post([{ status: 200, sse: COMPLETED }],
+      { body: anthropic(), authDir, lib: AUTH_LIB }, { home, env });
+    expect(line.error).toBeNull();
+    const [req] = requests;
+    expect(req.values['chatgpt-account-id']).toBe(FIXTURE_ACCOUNT_ID);
+    expect(req.values['chatgpt-account-id']).not.toBe('lane-a');
+    expect(req.authorizationSha256).toBe(createHash('sha256').update(`Bearer ${planted.access}`).digest('hex'));
+
+    // a credential that names no account: the header is left out, never filled with the lane id
+    const home2 = mkTmp('cb-backend-noacct-');
+    const authDir2 = join(home2, 'auth');
+    plantBackendCredential(authDir2, { accountId: null, claimAccountId: null });
+    const second = await post([{ status: 200, sse: COMPLETED }],
+      { body: anthropic(), authDir: authDir2, lib: AUTH_LIB }, { home: home2, env });
+    expect(second.line.error).toBeNull();
+    expect(second.requests[0].headers).not.toContain('chatgpt-account-id');
+  });
+});
+
+describe.skipIf(!PY)('the backend adapter: the endpoint and the transport (codex-bridge spec §2.4)', () => {
+  it('a non-loopback upstream base refuses at start', async () => {
+    const [consts] = await run([{ op: 'backend-consts' }]);
+    expect(consts.DEFAULT_BASE).toBe('https://chatgpt.com/backend-api/codex');
+    expect(consts.RESPONSES_PATH).toBe('/responses');
+    const accepted: Array<[Record<string, string>, string]> = [
+      [{}, consts.DEFAULT_BASE],
+      [{ CCGPT_BRIDGE_UPSTREAM_BASE: '' }, consts.DEFAULT_BASE],
+      [{ CCGPT_BRIDGE_UPSTREAM_BASE: 'http://127.0.0.1:8080' }, 'http://127.0.0.1:8080'],
+      [{ CCGPT_BRIDGE_UPSTREAM_BASE: 'http://localhost:9/base/' }, 'http://localhost:9/base'],
+      [{ CCGPT_BRIDGE_UPSTREAM_BASE: 'http://[::1]:7' }, 'http://[::1]:7'],
+    ];
+    const refused = [
+      'http://example.invalid', 'http://example.invalid:8080/x', 'https://127.0.0.1:8080', 'https://chatgpt.com/backend-api/codex',
+      'http://127.0.0.1.example.invalid:9', 'http://user@127.0.0.1:9', 'http://127.0.0.1:99999', 'ftp://127.0.0.1:9',
+      'http://127.0.0.1:9\n', 'http://localhost@example.invalid/', 'http://127.0.0.1:9?x=1',
+    ];
+    const lines = await run([
+      ...accepted.map(([environ]) => ({ op: 'backend-base', environ })),
+      ...refused.map((v) => ({ op: 'backend-base', environ: { CCGPT_BRIDGE_UPSTREAM_BASE: v } })),
+    ], { allowRaise: true });
+    accepted.forEach(([environ, want], i) => expect(lines[i], JSON.stringify(environ)).toEqual({ op: 'backend-base', base: want }));
+    refused.forEach((v, i) => expect(lines[accepted.length + i], JSON.stringify(v)).toEqual({ op: 'backend-base', raised: 'ValueError' }));
+
+    // at start: the process's own environment, as the server reads it
+    const [atStart] = await run([{ op: 'backend-base' }], { env: { CCGPT_BRIDGE_UPSTREAM_BASE: 'http://example.invalid:9' }, allowRaise: true });
+    expect(atStart.raised).toBe('ValueError');
+  });
+
+  it('an HTTP 429 usage_limit_reached body maps through the error table', async () => {
+    const now = 1_900_000_000;
+    const answer: ResponsesAnswer = {
+      status: 429,
+      headers: { 'x-request-id': 'req_fx1' },
+      body: { error: { type: 'usage_limit_reached', message: 'fixture upstream words never shown', resets_at: now + 120 } },
+    };
+    const { line } = await post([answer], { body: anthropic(), now });
+    expect(line.status).toBe(429);
+    expect(line.timeout).toBeNull();
+    const e = line.error;
+    expect(e.error).toMatchObject({ status: 429, etype: 'billing_error', state: 'limit-paused', requestId: 'req_fx1',
+      code: 'usage_limit_reached', kind: 'billing' });
+    expect(e.answer.status).toBe(429);
+    expect(e.answer.headers).toMatchObject({ 'retry-after': '120', 'x-should-retry': 'false' });
+    expect(e.answer.body.type).toBe('error');
+    expect(e.answer.body.error.type).toBe('billing_error');
+    expect(JSON.stringify(e)).not.toContain('fixture upstream words');
+  });
+
+  it('a 300 s silence is the idle timeout', async () => {
+    const [consts] = await run([{ op: 'backend-consts' }]);
+    expect(consts.IDLE_TIMEOUT_S).toBe(300);
+    const created = 'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_fx1","output":[]}}\n\n';
+    // no idle_s: the default path, IDLE_TIMEOUT_S read when post is called, lowered through the driver's consts
+    const { line } = await post([{ status: 200, sse: { chunks: [created], holdOpenMs: 2000 } }],
+      { body: anthropic() }, { consts: { 'backend.IDLE_TIMEOUT_S': 0.3 } });
+    expect(line.status).toBe(200);
+    expect(line.types).toEqual(['response.created']);
+    expect(line.timeout).toBe('read');
+    expect(line.elapsed).toBeLessThan(1.5);
+  });
+
+  it('a response head that never comes is the idle timeout', async () => {
+    const [consts] = await run([{ op: 'backend-consts' }]);
+    expect(consts.CONNECT_TIMEOUT_S).toBe(30);
+    const { line } = await post([{ status: 200, sse: COMPLETED, holdHeadMs: 5000 }], { body: anthropic(), idle_s: 0.3 });
+    expect(line.status).toBeNull();
+    expect(line.timeout).toBe('head');
+    expect(line.elapsed).toBeLessThan(2);
+  });
+
+  it('the default endpoint is reached over TLS verified by the default context', async () => {
+    // The driver replaces http.client's two connection classes and socket.create_connection with recorders that raise
+    // before any I/O, so this case reaches nothing; it reads what post would have connected with.
+    const [consts, tls] = await run([{ op: 'backend-consts' }, { op: 'backend-tls', token: TOKEN }]);
+    expect(tls.postRaised).toBe('_NoNetwork');
+    expect(tls.constructed).toEqual([{
+      cls: 'HTTPSConnection', host: 'chatgpt.com', port: 443, timeout: consts.CONNECT_TIMEOUT_S,
+      verifyMode: 'CERT_REQUIRED', checkHostname: true,
+    }]);
+  });
+
+  it('close drops the connection mid-stream, a Connection: close answer included', async () => {
+    // With `Connection: close`, http.client hands the socket to the response and closes the connection object first,
+    // so closing that object alone leaves the stream open. The driver reads one chunk, closes, then stays alive past
+    // the stream's end, so only a close that drops the socket shows as `dropped` before the fake ends its answer.
+    // The fake ends its answer about 0.8 s after the first chunk (eight chunks 100 ms apart, then the end); the 3 s
+    // sleep leaves a wide margin before the driver's exit, or the helper's fake.close(), could mark `dropped` on its
+    // own and so hide a close that does nothing.
+    const chunks = Array.from({ length: 8 }, (_, i) =>
+      `event: response.created\ndata: {"type":"response.created","response":{"id":"resp_fx${i}","output":[]}}\n\n`);
+    const heads: Array<Record<string, string>> = [{ connection: 'close' }, {}];
+    for (const headers of heads) {
+      const { line, requests } = await post([{ status: 200, headers, sse: { chunks, delayMs: 100 } }],
+        { body: anthropic(), closeAfter: 1 }, { after: [{ op: 'sleep', s: 3 }] });
+      expect(line.status, JSON.stringify(headers)).toBe(200);
+      expect(line.types, JSON.stringify(headers)).toEqual(['response.created']);
+      expect(requests[0].dropped, JSON.stringify(headers)).toBe(true);
+    }
+  });
+});
+
+describe.skipIf(!PY)('the contained environments name the bridge upstream (codex-bridge Stage 2, Task 7)', () => {
+  // Unset or EMPTY, the adapter reads the live endpoint, so every contained env names a loopback one unless the
+  // caller's own env names one (Stage 1's CCRC_CODEX_AUTH_BASE rule, `ccgpt-harness.test.ts`).
+  it('every contained env names a loopback CCGPT_BRIDGE_UPSTREAM_BASE', async () => {
+    const home = mkTmp('cb-backend-contained-');
+    const mine = 'http://127.0.0.1:4243';
+    const base = (e: NodeJS.ProcessEnv): string | undefined => e['CCGPT_BRIDGE_UPSTREAM_BASE'];
+    for (const opts of [{}, { systemd: true }, { tmux: true, net: true }]) {
+      expect(base(ghContainedEnv(home, {}, opts)), JSON.stringify(opts)).toBe(CLOSED_AUTH_BASE);
+      expect(base(ghContainedEnv(home, { CCGPT_BRIDGE_UPSTREAM_BASE: '' }, opts)), JSON.stringify(opts)).toBe(CLOSED_AUTH_BASE);
+      expect(base(ghContainedEnv(home, { CCGPT_BRIDGE_UPSTREAM_BASE: mine }, opts)), JSON.stringify(opts)).toBe(mine);
+      // the two endpoints are independent: naming one leaves the other at its default
+      expect(ghContainedEnv(home, { CCGPT_BRIDGE_UPSTREAM_BASE: mine }, opts)['CCRC_CODEX_AUTH_BASE']).toBe(CLOSED_AUTH_BASE);
+    }
+    const f = path.join(home, 'base.py');
+    writeFileSync(f, 'import os\nprint(os.environ.get("CCGPT_BRIDGE_UPSTREAM_BASE"))\n');
+    expect(runPy(f, { home }).stdout.trim()).toBe(CLOSED_AUTH_BASE);
+    expect(runPy(f, { home, env: { CCGPT_BRIDGE_UPSTREAM_BASE: '' } }).stdout.trim()).toBe(CLOSED_AUTH_BASE);
+    expect(runPy(f, { home, env: { CCGPT_BRIDGE_UPSTREAM_BASE: mine } }).stdout.trim()).toBe(mine);
+    expect((await runPyAsync(f, { home })).stdout.trim()).toBe(CLOSED_AUTH_BASE);
+  });
+});
+
+// ── the request markers (D-8622, D-8623) ──────────────────────────────────────────────────────────────────────────
+// Three markers in the lane directory, each existence-only and off by default, each add one thing native Codex sends:
+// `reasoning.context: "all_turns"` on a Lite model, `text.verbosity` at the model's default, and the `x-codex-turn-state`
+// echo. Codex's shapes (upstream openai/codex @ 826b6e8, codex-rs/codex-api/src/common.rs): `Reasoning` serialises
+// `effort`, `summary`, `context` in that order, `TextControls` `verbosity` then `format`, and the request's `text`
+// follows `prompt_cache_key`. The body's eligibility is the catalogue row's (D-8620's fields), never the model's name.
+const LITE_ROW = { id: 'model-6.1-alpha', hidden: false, efforts: [], useResponsesLite: true, supportVerbosity: true, defaultVerbosity: 'low' };
+const PLAIN_ROW = { id: 'model-6.1-alpha', hidden: false, efforts: [], useResponsesLite: false, supportVerbosity: false, defaultVerbosity: 'low' };
+/** A session id, so every body of a case shares one cache key (an anonymous one is fresh per request). The driver
+ *  prints its lines with sorted keys, so a nested object's key ORDER is asserted on `wire`, the bytes sent. */
+const SESSION_H = { 'x-claude-code-session-id': 'sess-fx1' };
+const FORMAT_CONFIG = { format: { type: 'json_schema', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } } };
+
+/** A fixture lane directory holding the named markers (each an empty file). */
+function markedLane(prefix: string, names: string[]): { home: string; laneDir: string } {
+  const home = mkTmp(prefix);
+  const laneDir = join(home, 'lane');
+  mkdirSync(laneDir, { mode: 0o700 });
+  for (const n of names) writeFileSync(join(laneDir, n), '');
+  return { home, laneDir };
+}
+
+describe.skipIf(!PY)('the request markers: the body (D-8622)', () => {
+  // D-8632: the fourth, last, so the three before it keep their order
+  const ALL = ['bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state', 'bridge-service-tier-fast'];
+
+  it('the marker names and the words they send are the backend\'s constants, and its verbosities are the catalogue\'s', async () => {
+    const [c] = await run([{ op: 'backend-consts' }]);
+    expect(c).toMatchObject({
+      ALL_TURNS_MARKER: 'bridge-reasoning-all-turns', VERBOSITY_MARKER: 'bridge-verbosity', TURN_STATE_MARKER: 'bridge-turn-state',
+      SERVICE_TIER_FAST_MARKER: 'bridge-service-tier-fast',
+      ALL_TURNS: 'all_turns', TURN_STATE_HEADER: 'x-codex-turn-state',
+      // Codex's ServiceTier::Fast.request_value() (upstream openai/codex @ 826b6e8, protocol/src/config_types.rs)
+      SERVICE_TIER_PRIORITY: 'priority',
+    });
+    expect(c.MARKERS).toEqual(ALL);
+    // the three words of Codex's OpenAiVerbosity, the same bound D-8620's catalogue readers apply
+    expect(c.VERBOSITIES).toEqual([...CATALOGUE_VERBOSITIES]);
+  });
+
+  it('with no marker the body is byte for byte the unmarked body, whatever the row says', async () => {
+    const { home, laneDir } = markedLane('cb-backend-nomark-', []);
+    for (const extra of [{}, { reasoning: { effort: 'high' } }]) {
+      for (const output of [undefined, FORMAT_CONFIG]) {
+        const oc = output === undefined ? {} : { output_config: output };
+        const [base, lite] = await run([
+          { op: 'backend-body', headers: SESSION_H, body: anthropic(extra), ...oc },
+          { op: 'backend-body', headers: SESSION_H, body: anthropic(extra), ...oc, laneDir, row: LITE_ROW },
+        ], { home });
+        expect(lite.wire, JSON.stringify({ extra, output })).toBe(base.wire);
+        expect(lite.carried).toEqual([]);
+      }
+    }
+  });
+
+  it('bridge-reasoning-all-turns on a Lite row: context follows effort in reasoning, or stands alone', async () => {
+    const { home, laneDir } = markedLane('cb-backend-allturns-', ['bridge-reasoning-all-turns']);
+    const [effort, none, formatted] = await run([
+      { op: 'backend-body', headers: SESSION_H, body: anthropic({ reasoning: { effort: 'high' } }), laneDir, row: LITE_ROW },
+      { op: 'backend-body', headers: SESSION_H, body: anthropic(), laneDir, row: LITE_ROW },
+      { op: 'backend-body', headers: SESSION_H, body: anthropic({ reasoning: { effort: 'low' } }), output_config: FORMAT_CONFIG, laneDir, row: LITE_ROW },
+    ], { home });
+    expect(effort.body.reasoning).toEqual({ effort: 'high', context: 'all_turns' });
+    expect(effort.wire).toContain('"parallel_tool_calls":true,"reasoning":{"effort":"high","context":"all_turns"},"store":false,');
+    expect(effort.keys).toEqual(ORDER);
+    expect(effort.carried).toEqual(['bridge-reasoning-all-turns']);
+    // no effort: reasoning is the context alone, in its place
+    expect(none.body.reasoning).toEqual({ context: 'all_turns' });
+    expect(none.wire).toContain('"parallel_tool_calls":true,"reasoning":{"context":"all_turns"},"store":false,');
+    expect(none.keys).toEqual(ORDER);
+    expect(none.keys).not.toContain('text');
+    // an output format is unchanged by it: text is the format alone
+    expect(formatted.body.reasoning).toEqual({ effort: 'low', context: 'all_turns' });
+    expect(formatted.wire).toContain('"prompt_cache_key":"ccrc:sess-fx1","text":{"format":{');
+  });
+
+  it('bridge-reasoning-all-turns sends nothing for a row that is not Lite, says nothing, says it wrongly, or is absent', async () => {
+    const { home, laneDir } = markedLane('cb-backend-allturns-no-', ['bridge-reasoning-all-turns']);
+    const rows = [PLAIN_ROW, { id: 'model-6.1-alpha' }, { ...LITE_ROW, useResponsesLite: 'true' }, { ...LITE_ROW, useResponsesLite: 1 }, undefined];
+    const [base, ...lines] = await run([
+      { op: 'backend-body', headers: SESSION_H, body: anthropic({ reasoning: { effort: 'high' } }) },
+      ...rows.map((row) => ({ op: 'backend-body', headers: SESSION_H, body: anthropic({ reasoning: { effort: 'high' } }), laneDir, ...(row ? { row } : {}) })),
+    ], { home });
+    for (const [i, l] of lines.entries()) {
+      expect(l.wire, JSON.stringify(rows[i])).toBe(base.wire);
+      expect(l.carried).toEqual([]);
+    }
+  });
+
+  it('bridge-verbosity: text.verbosity is the row\'s default, before text.format in the one text object', async () => {
+    const { home, laneDir } = markedLane('cb-backend-verbosity-', ['bridge-verbosity']);
+    const [alone, formatted, high, translated] = await run([
+      { op: 'backend-body', headers: SESSION_H, body: anthropic(), laneDir, row: LITE_ROW },
+      { op: 'backend-body', headers: SESSION_H, body: anthropic(), output_config: FORMAT_CONFIG, laneDir, row: LITE_ROW },
+      { op: 'backend-body', headers: SESSION_H, body: anthropic(), laneDir, row: { ...LITE_ROW, defaultVerbosity: 'high' } },
+      { op: 'from-anthropic', headers: SESSION_H, body: anthropic(), output_config: FORMAT_CONFIG },
+    ], { home });
+    expect(alone.body.text).toEqual({ verbosity: 'low' });
+    expect(alone.keys).toEqual([...ORDER.filter((k) => k !== 'reasoning'), 'text']);
+    expect(alone.wire.endsWith(',"text":{"verbosity":"low"}}')).toBe(true);
+    expect(alone.carried).toEqual(['bridge-verbosity']);
+    expect(formatted.body.text).toEqual({ verbosity: 'low', format: translated.request.output_format });
+    expect(formatted.wire).toContain('"prompt_cache_key":"ccrc:sess-fx1","text":{"verbosity":"low","format":{');
+    expect(formatted.keys.slice(-2)).toEqual(['prompt_cache_key', 'text']);
+    expect(high.body.text).toEqual({ verbosity: 'high' });
+    // reasoning is untouched by it
+    expect(alone.keys).not.toContain('reasoning');
+  });
+
+  it('bridge-verbosity sends nothing without supportVerbosity true and a valid defaultVerbosity', async () => {
+    const { home, laneDir } = markedLane('cb-backend-verbosity-no-', ['bridge-verbosity']);
+    const rows = [
+      PLAIN_ROW, { ...LITE_ROW, supportVerbosity: 'true' }, { ...LITE_ROW, defaultVerbosity: 'terse' },
+      { ...LITE_ROW, defaultVerbosity: 'LOW' }, { ...LITE_ROW, defaultVerbosity: ['low'] },
+      { id: 'model-6.1-alpha', supportVerbosity: true }, undefined,
+    ];
+    for (const output of [undefined, FORMAT_CONFIG]) {
+      const oc = output === undefined ? {} : { output_config: output };
+      const [base, ...lines] = await run([
+        { op: 'backend-body', headers: SESSION_H, body: anthropic(), ...oc },
+        ...rows.map((row) => ({ op: 'backend-body', headers: SESSION_H, body: anthropic(), ...oc, laneDir, ...(row ? { row } : {}) })),
+      ], { home });
+      for (const [i, l] of lines.entries()) {
+        expect(l.wire, JSON.stringify(rows[i])).toBe(base.wire);
+        expect(l.carried).toEqual([]);
+      }
+    }
+  });
+
+  it('every marker on a Lite row: the whole body, in Codex\'s order, and the turn-state marker adds nothing to it', async () => {
+    const { home, laneDir } = markedLane('cb-backend-allmarks-', ALL);
+    const [line, translated] = await run([
+      { op: 'backend-body', headers: SESSION_H, body: anthropic({ reasoning: { effort: 'medium' } }), output_config: FORMAT_CONFIG, laneDir, row: LITE_ROW },
+      { op: 'from-anthropic', headers: SESSION_H, body: anthropic(), output_config: FORMAT_CONFIG },
+    ], { home });
+    expect(line.body).toEqual({
+      model: 'model-6.1-alpha', stream: true, service_tier: 'priority',
+      input: [DEVELOPER_ITEM, { type: 'message', role: 'user', content: [{ type: 'input_text', text: USER }] }],
+      tools: [], tool_choice: 'auto', parallel_tool_calls: true, reasoning: { effort: 'medium', context: 'all_turns' },
+      store: false, include: ['reasoning.encrypted_content'], prompt_cache_key: line.body.prompt_cache_key,
+      text: { verbosity: 'low', format: translated.request.output_format },
+    });
+    expect(line.keys).toEqual(['model', 'stream', 'service_tier', ...ORDER.slice(2), 'text']);
+    expect(line.wire.startsWith('{"model":"model-6.1-alpha","stream":true,"service_tier":"priority","input":[')).toBe(true);
+    expect(line.wire).toContain('"reasoning":{"effort":"medium","context":"all_turns"},"store":false,');
+    expect(line.wire).toContain('"prompt_cache_key":"ccrc:sess-fx1","text":{"verbosity":"low","format":{');
+    // in MARKERS' order; the turn-state marker's addition is a header the server sends, never a body field
+    expect(line.carried).toEqual(['bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-service-tier-fast']);
+  });
+
+  // D-8632: Codex's Fast mode. Its ResponsesApiRequest (upstream openai/codex @ 826b6e8, codex-rs/codex-api/src/
+  // common.rs) declares `model`, `stream`, `service_tier`, `input`: a routing field first, so it goes right after stream.
+  it('bridge-service-tier-fast: service_tier priority right after stream, whatever the row, the rest byte for byte', async () => {
+    const { home, laneDir } = markedLane('cb-backend-fast-', ['bridge-service-tier-fast']);
+    const rows = [undefined, PLAIN_ROW, LITE_ROW, { id: 'model-6.1-alpha' }];
+    for (const extra of [{}, { reasoning: { effort: 'high' } }]) {
+      const [base, ...lines] = await run([
+        { op: 'backend-body', headers: SESSION_H, body: anthropic(extra) },
+        ...rows.map((row) => ({ op: 'backend-body', headers: SESSION_H, body: anthropic(extra), laneDir, ...(row ? { row } : {}) })),
+      ], { home });
+      expect(base.keys).not.toContain('service_tier');
+      for (const [i, l] of lines.entries()) {
+        const what = JSON.stringify({ extra, row: rows[i] });
+        expect(l.body.service_tier, what).toBe('priority');
+        expect(l.keys, what).toEqual(['model', 'stream', 'service_tier', ...base.keys.slice(2)]);
+        // the unmarked bytes with the one field spliced in after stream, and nothing else moved
+        expect(l.wire, what).toBe(base.wire.replace('"stream":true,', '"stream":true,"service_tier":"priority",'));
+        expect(l.carried, what).toEqual(['bridge-service-tier-fast']);
+      }
+    }
+  });
+
+  it('bridge-service-tier-fast with the instructions form: service_tier comes before instructions', async () => {
+    const { home, laneDir } = markedLane('cb-backend-fast-instr-', ['bridge-service-tier-fast', 'bridge-instructions']);
+    const plain = markedLane('cb-backend-fast-instr-plain-', ['bridge-instructions']);
+    const [line] = await run([{ op: 'backend-body', headers: SESSION_H, body: anthropic(), laneDir }], { home });
+    const [base] = await run([{ op: 'backend-body', headers: SESSION_H, body: anthropic(), laneDir: plain.laneDir }], { home: plain.home });
+    expect(line.keys.slice(0, 4)).toEqual(['model', 'stream', 'service_tier', 'instructions']);
+    expect(line.body.instructions).toBe(SYSTEM);
+    expect(line.wire).toBe(base.wire.replace('"stream":true,', '"stream":true,"service_tier":"priority",'));
+    expect(line.carried).toEqual(['bridge-service-tier-fast']);
+  });
+
+  it('a client\'s own service_tier is never sent: none without the marker, the marker\'s priority with it', async () => {
+    const { home, laneDir } = markedLane('cb-backend-fast-client-', ['bridge-service-tier-fast']);
+    const [without, marked] = await run([
+      { op: 'backend-body', headers: SESSION_H, body: anthropic({ service_tier: 'flex' }) },
+      { op: 'backend-body', headers: SESSION_H, body: anthropic({ service_tier: 'flex' }), laneDir },
+    ], { home });
+    expect(without.keys).not.toContain('service_tier');
+    expect(without.wire).not.toContain('flex');
+    expect(marked.body.service_tier).toBe('priority');
+    expect(marked.wire).not.toContain('flex');
+  });
+
+  it('with the fast marker and the other two on a Lite row, the carried markers keep MARKERS\' order', async () => {
+    const { home, laneDir } = markedLane('cb-backend-fast-order-', ['bridge-service-tier-fast', 'bridge-verbosity']);
+    const [line] = await run([{ op: 'backend-body', headers: SESSION_H, body: anthropic(), laneDir, row: LITE_ROW }], { home });
+    expect(line.carried).toEqual(['bridge-verbosity', 'bridge-service-tier-fast']);
+    expect(line.keys).toEqual(['model', 'stream', 'service_tier', ...ORDER.slice(2).filter((k) => k !== 'reasoning'), 'text']);
+  });
+});
+
+describe.skipIf(!PY)('the request markers: the turn-state header and the turn (D-8623)', () => {
+  const STATE = `ts-fixture-${'a1b2c3'.repeat(4)}`;
+
+  it('the header is sent only when given, right after session-id, its value as given', async () => {
+    const session = { 'x-claude-code-session-id': 'sess-fx1' };
+    const withState = await post([{ status: 200, sse: COMPLETED }], { body: anthropic(), headers: session, turnState: STATE });
+    const [req] = withState.requests;
+    expect(req.values['x-codex-turn-state']).toBe(STATE);
+    expect(req.headers.filter((h) => h === 'x-codex-turn-state')).toHaveLength(1);
+    expect(req.headers.indexOf('x-codex-turn-state')).toBe(req.headers.indexOf('session-id') + 1);
+    const without = await post([{ status: 200, sse: COMPLETED }], { body: anthropic(), headers: session });
+    expect(without.requests[0].headers).not.toContain('x-codex-turn-state');
+    // everything else is the unmarked request's, in its order
+    expect(req.headers.filter((h) => h !== 'x-codex-turn-state')).toEqual(without.requests[0].headers);
+    // a value outside a header token's shape (a space, a control character, empty) is never sent
+    for (const bad of ['two words', 'tab\there', '']) {
+      const r = await post([{ status: 200, sse: COMPLETED }], { body: anthropic(), headers: session, turnState: bad });
+      expect(r.line.error, JSON.stringify(bad)).toBeNull();
+      expect(r.requests[0].headers, JSON.stringify(bad)).not.toContain('x-codex-turn-state');
+    }
+  });
+
+  it('a turn is its latest user message holding no tool_result, hashed with the cache key', async () => {
+    const userA = { role: 'user', content: [{ type: 'text', text: 'task A' }] };
+    const call = { role: 'assistant', content: [{ type: 'tool_use', id: 'call_fx1', name: 'Read', input: { file_path: 'a' } }] };
+    const result = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_fx1', content: 'A' }] };
+    // Claude Code's text beside tool results lives in the tool-result message: it never starts a turn
+    const resultWithText = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_fx1', content: 'A' }, { type: 'text', text: 'and B' }] };
+    // Claude Code moves its cache breakpoint onto the newest message, so the turn's own message loses it
+    const userAMarked = { role: 'user', content: [{ type: 'text', text: 'task A', cache_control: { type: 'ephemeral' } }] };
+    const userB = { role: 'user', content: 'task B' };
+    const [line] = await run([{ op: 'turn-key', cases: [
+      [[userAMarked], 'ccrc:sess-fx1'],
+      [[userA, call, result], 'ccrc:sess-fx1'],
+      [[userA, call, resultWithText], 'ccrc:sess-fx1'],
+      [[{ role: 'user', content: 'task A' }], 'ccrc:sess-fx1'],
+      [[userA, call, result, { role: 'assistant', content: 'done' }, userB], 'ccrc:sess-fx1'],
+      [[userA], 'ccrc:sess-fx1:agent-fx1'],
+      // a later turn that opens on the same words is a turn of its own (its message's place differs)
+      [[userA, call, result, { role: 'assistant', content: 'done' }, userA], 'ccrc:sess-fx1'],
+      [[result], 'ccrc:sess-fx1'],
+      [[], 'ccrc:sess-fx1'],
+      ['not a list', 'ccrc:sess-fx1'],
+    ] }]);
+    const [a, loop, beside, asString, b, subagent, again, none, empty, odd] = line.keys as (string | null)[];
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect([loop, beside, asString]).toEqual([a, a, a]);
+    expect(b).not.toBe(a);
+    expect(subagent).not.toBe(a);
+    expect(again).toMatch(/^[0-9a-f]{64}$/);
+    expect([a, b]).not.toContain(again);
+    expect([none, empty, odd]).toEqual([null, null, null]);
+  });
+});

@@ -1,0 +1,417 @@
+// containedTools.ts — the ONE place that says which tools a ccrc test env may never let reach a real binary, how a
+// recording poison for one is planted, the curl that lets a loopback case through, and the check that a final env
+// really holds (wave 9 R10d, D-3818..D-3820).
+//
+// IMPORTS ONLY `node:*`, and that is load-bearing: `installTreeFixture.ts` is vitest-free by its own header and
+// imports this file for `keepDigest`'s env, so nothing here may reach `vitest` or a sibling that does.
+//
+// WHY EACH PIECE EXISTS
+//
+// * CONTAINED_TOOLS. Before this wave, "contained" meant whatever each builder remembered: `ghContainedEnv` planted
+//   gh (and, on request, the managers and tmux); a builder planted curl and journalctl by hand. Measured at main
+//   (the wave-9 Task 3 report): `updateEnv` left ssh, scp, tmux and curl real; `ccrcEnv` in ccrc-cli and
+//   ccrc-install-graphify left ssh, scp, tmux and systemd-run real; `chainEnv` and every raw spawn of the real
+//   `ccd/ccrc` left systemctl and systemd-run real as well, and the sourced harness left systemd-run real; and
+//   EVERY one of them inherited the real `XDG_RUNTIME_DIR`, which is the real user bus. One list, read by the poisons, the checker, FIXTURE_BINS
+//   and the darwin probe bin, is what keeps those from drifting apart again.
+//
+// * plantPoison is CREATE-IF-ABSENT, `ghContainedEnv`'s systemd/tmux rule and for its reason: a builder plants its
+//   functional stub AFTER the poisons, and must win; a stub planted BEFORE them must be kept. A poison that
+//   overwrote would turn every functional `ssh` or `systemctl` a case wrote first into a refusal.
+//
+// * loopbackCurlFront. Four cases in ccrc-update-*.test.ts (each calls `allowCurlPort`) measure the REAL curl: its own
+//   `--max-time`/`--max-filesize` bounds against a listener the case itself opened, and a refused connection at
+//   port 9. A poison would answer 97 and measure nothing. So their curl is a front that execs the real one ONLY
+//   for a URL on 127.0.0.1 at a port the case listed in `$HOME/curl-allow-ports`: never the live server's 7788 or the agent's 7789 by default, never another host, never
+//   a `-K` config file (which could name a URL this scan cannot see). Everything it refuses is recorded. Since wave 13
+//   (R16) it admits `-K -` with a stdin config of `header = "…"` lines only, because ccrc-api and notify.sh send the box
+//   token that way, and `-m`, `-X` and `-d`/`--data-binary`, so either sender can be driven through it.
+//
+// * assertNoRealTool reads RESOLUTION, never executes the tool: `command -v` under the env, then `realpath` of
+//   what it printed. realpath, because a symlink from the fixture HOME to a real binary resolves to a path inside
+//   HOME and is exactly the thing the check is for (`pathWithout`'s `no-<tool>-bin` dirs are such symlinks). It
+//   also requires `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` to be SET, and under HOME: merely deleting
+//   them would let ccrc's own `: "${XDG_RUNTIME_DIR:=/run/user/$UID}"` (seven pairs in ccd/ccrc, one in
+//   ccrc-doctor-checks) default them to the real bus. A stub under HOME that itself execs a real binary is that
+//   stub's own contract (the rsync recorder's and the loopback curl front's are two), not this check's.
+//
+// * THE POISON LEDGER (D-8394, residue R35(e)). A poison answers 97 and records, and a test that met one and stayed
+//   green used to leave nothing but that record, removed unread with its HOME. Every shared poison (`plantPoison`,
+//   `ghContainedEnv`'s gh, the loopback curl front's refusals) now also appends its record's path to this file's
+//   ledger, a path fixed when the module loads (one per test file: vitest isolates the module registry by file), so
+//   a HOME a test removes itself cannot take the hit with it. `tmpHelpers.ts`'s teardown reads it after every test
+//   and fails that test for a record it did not take (`takePoisonRecord`), and scans each `mkTmp` directory it
+//   removes for any `*-poison` file, hand-written poisons included.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+
+/** THE names a ccrc test env may never let resolve outside its fixture HOME (wave 9 R10d). The two managers and their
+ *  macOS twin, tmux (the live fleet server), gh (a repo-WRITE token), curl (a live server), ssh and scp (a live box).
+ *  ONE spelling: the poisons, the checker, FIXTURE_BINS and the darwin probe bin all read this list. */
+export const CONTAINED_TOOLS = ['ssh', 'scp', 'systemctl', 'systemd-run', 'launchctl', 'loginctl', 'tmux', 'gh', 'curl'] as const;
+// `loginctl` joined in D-8394 (residue R35(f)): `_inst_linger` runs `loginctl enable-linger`, a write to the same
+// user manager, and before it only the install and update fixtures' own recorders stood in for it.
+
+/** This test file's poison ledger (D-8394): `hit <record path>\t<argv>` per poison call, `taken <record path>` per
+ *  take. Created by the first hit, so a file that meets no poison writes nothing under TMPDIR; it lies in the run's
+ *  own TMPDIR (`run-tmp.globalsetup.mjs`), which the run removes. */
+const LEDGER = path.join(os.tmpdir(), `ccrc-poison-ledger-${process.pid}-${randomBytes(4).toString('hex')}`);
+
+/** The ledger's path, single-quoted for sh. */
+const LEDGER_SH = `'${LEDGER.replace(/'/g, `'\\''`)}'`;
+
+/** The sh line a poison runs to log one hit of the record at `$HOME/<record>`, with its argv, in the ledger. It
+ *  cannot fail the poison: a ledger that cannot be written leaves the record itself, which the removal scan sees. */
+export function ledgerHitLine(record: string): string {
+  return `printf 'hit %s\\t%s\\n' "$HOME/${record}" "$*" >> ${LEDGER_SH} 2>/dev/null || :`;
+}
+
+/** A poison record's file name: `<tool>-poison` (and `<tool>-stdin-poison`), lowercase, as every poison in both
+ *  test trees spells it. */
+export const POISON_RECORD_RE = /^[a-z][a-z0-9-]*-poison$/;
+
+/** Reads `<home>/<name>-poison` as argv lines (absent: none) and marks it TAKEN in the ledger: the test met that
+ *  poison on purpose and has asserted on it (D-8394). A later hit of the same record re-arms the teardown. */
+export function takePoisonRecord(home: string, name: string): string[] {
+  const p = path.join(home, `${name}-poison`);
+  fs.appendFileSync(LEDGER, `taken ${p}\n`);
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+}
+
+/** The doctor's own `gh auth status` probe, the one argv a doctor run may send the gh POISON: on a box with no gh
+ *  stub the poison answers 97, as an unauthenticated gh would, and `gh_auth` reports it. Every doctor runner takes
+ *  exactly that record (D-8394); any other argv in it still fails the teardown. */
+export const DOCTOR_GH_PROBE = /^auth status(?: --hostname github\.com)?$/;
+
+/** Takes `<home>/<name>-poison` ONLY when every line it holds matches `expected` (D-8394): a fixture whose subject
+ *  meets a poison by design (the doctor's `gh auth status` probe on a box with no gh stub, answered 97 as an
+ *  unauthenticated gh would) takes exactly that, and any other argv in the record still fails the teardown. Returns
+ *  whether it took. */
+export function takeExpectedPoison(home: string, name: string, expected: RegExp): boolean {
+  const p = path.join(home, `${name}-poison`);
+  if (!fs.existsSync(p)) return false;
+  const lines = fs.readFileSync(p, 'utf8').split('\n').filter(Boolean);
+  if (lines.length === 0 || !lines.every((l) => expected.test(l))) return false;
+  fs.appendFileSync(LEDGER, `taken ${p}\n`);
+  return true;
+}
+
+/** THE ONE STANDING ALLOWANCE (D-8394): a service manager's READ-ONLY state query. `launchctl print
+ *  gui/<uid>/<label>`, `systemctl --user is-active <unit>` and `loginctl show-user <uid> --property=Linger` are what
+ *  ccrc's status, removal and doctor paths ask, and a manager poison answers each with 97, which ccrc reads as
+ *  `unknown`: the fixture default of every ccrc runner that plants a manager poison (`ccrc-cli.test.ts` says so), and
+ *  a query that cannot change a box. A record holding only these is not a leak. Any other argv in it is. */
+const READ_ONLY_MANAGER_QUERY: Readonly<Record<string, RegExp>> = {
+  'launchctl-poison': /^print gui\/\d+\/[A-Za-z0-9._-]+$/,
+  'systemctl-poison': /^--user is-active [A-Za-z0-9@._-]+$/,
+  'loginctl-poison': /^show-user \d+ --property=Linger$/,
+};
+
+/** One record's ledger state: its last kind, and the argv of every hit since its last take. */
+interface LedgerRecord { kind: 'hit' | 'taken'; argv: string[] }
+
+/** The ledger, folded by normalised record path; no ledger reads as none. */
+function ledgerState(): Map<string, LedgerRecord> {
+  const state = new Map<string, LedgerRecord>();
+  let text: string;
+  try { text = fs.readFileSync(LEDGER, 'utf8'); } catch { return state; }
+  for (const line of text.split('\n')) {
+    const hit = /^hit ([^\t]+)(?:\t(.*))?$/.exec(line);
+    if (hit) {
+      const p = path.normalize(hit[1]!);
+      const prev = state.get(p);
+      const argv = prev?.kind === 'hit' ? prev.argv : [];
+      state.set(p, { kind: 'hit', argv: [...argv, hit[2] ?? ''] });
+      continue;
+    }
+    const taken = /^taken (.+)$/.exec(line);
+    if (taken) state.set(path.normalize(taken[1]!), { kind: 'taken', argv: [] });
+  }
+  return state;
+}
+
+/** The argv lines of the record at `p`: the file's, while it exists, else the ledger's hits since the last take. */
+function recordArgv(p: string, state: Map<string, LedgerRecord>): string[] {
+  try { return fs.readFileSync(p, 'utf8').split('\n').filter(Boolean); } catch { /* removed with its HOME */ }
+  return state.get(path.normalize(p))?.argv ?? [];
+}
+
+/** True when the record at `p` holds nothing but a read-only manager state query (`READ_ONLY_MANAGER_QUERY`). */
+function readOnlyManagerRecord(p: string, state: Map<string, LedgerRecord>): boolean {
+  const rule = READ_ONLY_MANAGER_QUERY[path.basename(p)];
+  if (rule === undefined) return false;
+  const argv = recordArgv(p, state);
+  return argv.length > 0 && argv.every((l) => rule.test(l));
+}
+
+/** Every `*-poison` regular file under `root` (to `depth` levels, symlinks not followed, `.git` and `node_modules`
+ *  skipped) that the ledger does not hold as taken (D-8394). */
+export function poisonRecordsUnder(root: string, depth = 4): string[] {
+  const found: string[] = [];
+  const state = ledgerState();
+  const walk = (dir: string, left: number): void => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isFile() && POISON_RECORD_RE.test(e.name)) { if (state.get(path.normalize(p))?.kind !== 'taken') found.push(p); }
+      else if (e.isDirectory() && left > 1 && e.name !== '.git' && e.name !== 'node_modules') walk(p, left - 1);
+    }
+  };
+  walk(root, depth);
+  return found;
+}
+
+/** One line per record: its path and the first argv it holds (from the ledger once its HOME is gone). */
+function describeRecords(records: string[], state: Map<string, LedgerRecord>): string {
+  return records.map((p) => {
+    const first = recordArgv(p, state)[0];
+    const gone = !fs.existsSync(p);
+    return `  ${p}: ${first === undefined ? '(no argv recorded)' : JSON.stringify(first)}${gone ? ' (removed with its HOME)' : ''}`;
+  }).join('\n');
+}
+
+/** THROWS when a poison was hit and its record not taken, by the ledger, or when a `*-poison` file lies under one of
+ *  `dirs` untaken (D-8394, R35(e)), unless the record holds only a read-only manager state query (the one standing
+ *  allowance, `READ_ONLY_MANAGER_QUERY`). Every untaken record is marked taken first, so one leak reds once, in the
+ *  test that made it, and not again in every later one. `tmpHelpers.ts` calls it after every test and before it
+ *  removes a directory; `makeCcdHarness`'s cleanup calls it before it removes its HOME. */
+export function assertNoPoisonLeft(dirs: readonly string[] = []): void {
+  const state = ledgerState();
+  const left = new Set([...state].filter(([, r]) => r.kind === 'hit').map(([p]) => p));
+  for (const d of dirs) for (const p of poisonRecordsUnder(d)) left.add(path.normalize(p));
+  const leaks = [...left].filter((p) => !readOnlyManagerRecord(p, state));
+  for (const p of left) fs.appendFileSync(LEDGER, `taken ${p}\n`);
+  if (leaks.length === 0) return;
+  throw new Error('poison record(s) left behind: a contained tool was reached and nothing took the record '
+    + `(read it through takePoisonRecord when the case means to meet the poison, D-8394):\n${describeRecords(leaks, state)}`);
+}
+
+/** A recording poison at `<bin>/<name>`, CREATE-IF-ABSENT — `ghContainedEnv`'s systemd/tmux rule, for its reason: a
+ *  builder plants its functional stub AFTER this runs, and must win; a stub planted BEFORE it is kept. Records argv to
+ *  `$HOME/<name>-poison`, exit 97. */
+export function plantPoison(bin: string, name: string): void {
+  const p = path.join(bin, name);
+  if (fs.existsSync(p)) return;
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(p,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n${ledgerHitLine(`${name}-poison`)}\n`
+    + `echo "ccrc tests must never reach a real ${name}" >&2\nexit 97\n`, { mode: 0o755 });
+}
+
+/** The one `data` config line the front admits: ccd/ccrc-token-sync's claim body, as a sh-level ERE (grep -E). The
+ *  quotes inside the JSON are escaped as curl's config syntax needs (a backslash before
+ *  each), and every field is shaped, so the line names no file, no URL and no field beyond the two the claim door
+ *  reads. */
+export const CLAIM_DATA_LINE_ERE = String.raw`^data = "\{\\"code\\":\\"[A-Za-z0-9_-]{43}\\",\\"nodeId\\":\\"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\"\}"$`;
+
+/** A curl that runs `realCurl` ONLY for a call it can fully account for (wave 9 R10d, review fix). It PARSES argv:
+ *
+ *  - PASSES: the options ccrc's own curl calls use, measured in ccd/ccrc and ccd/ccrc-doctor-checks — the short flag
+ *    clusters made of `g`, `s`, `S`, `f`, `L` (`-s`, `-fsS`, `-fsSL`, and the release curls' `-g`, D-6748), read letter
+ *    by letter, so a cluster that leads with an admitted letter carries no other (`-gK`, `-gx`: D-8389, the
+ *    ccrc-containment rows, which run on macOS too); `-o`, `-w` and `-H` with the one value each takes; and
+ *    `--connect-timeout`, `--max-time`, `--max-filesize`, `--speed-limit`, `--speed-time` with theirs. A value-taking
+ *    option's value is CONSUMED as its value, never read as a URL. Names are matched exactly: curl itself accepts
+ *    unambiguous prefixes (`--max-t`), and an abbreviation is refused here.
+ *  - PASSES, since wave 13 (R16, D-4095): what ccd/ccrc-api and deploy/notify.sh add, NOT what ccrc uses — `-m` with
+ *    its value; `-X` with a method of capital letters only; `-d` and `--data-binary` with a value that does not start
+ *    with `@` (no file read); and `-K -` exactly, whose stdin config must be `header = "<name>: <value>"` lines only,
+ *    each line starting `header = "`, the name `[A-Za-z0-9-]+`, the value holding no `"`, no `\` and no control
+ *    character; an EMPTY config passes too. Nothing in-tree sends one now (notify.sh exits 0 before curl when it has no token, D-4393,
+ *    and ccrc-api, ccrc-token-sync and the sync scripts always send a header or a data line); the allowance is kept
+ *    because an empty config can name nothing (a CLOSED stdin reads as one under dash; under bash, macOS's /bin/sh,
+ *    `cfg=$(cat)` hangs instead: it never passes, and leaves no refusal record — wave 18, R23(a)). Since the box-token lifecycle
+ *    (wave 1, Task B1) ONE more line shape passes: `ccrc token sync`'s claim body, `CLAIM_DATA_LINE_ERE` above — a
+ *    `data = "…"` line that is exactly `{"code":<43 base64url>,"nodeId":<lowercase uuid>}` with its quotes escaped,
+ *    so it names no file (no leading `@`), no URL and no other field. Any other key (`url`, `proxy`,
+ *    `connect-to`, `resolve`, `output`, `config`, …), another spelling of the key, an `@file` header, a leading or
+ *    interior blank line, a comment line, a second `-K -`, `-K <file>` and `--config` are refused. The config is read
+ *    once with `cfg=$(cat)`, which strips EVERY trailing newline before the check runs: so trailing blank lines pass, a
+ *    config of only newlines reads as the empty config, and the real curl gets that NORMALISED text on its stdin (one
+ *    trailing newline), not the caller's bytes. The check FAILS CLOSED (wave 13 fix round 1): a non-empty config passes
+ *    only when its grep exits exactly 1, so a grep that errors or is not on PATH refuses, as a line outside the rule
+ *    does. The config is never written to a log. Every `ccrcContainedEnv(…, { curl: 'loopback' })` case runs
+ *    behind this same front, so a ccrc call using these would pass too: none of them can move the connection off the
+ *    URL this scan reads (a method word, a body that names no file, a time bound, request headers).
+ *  - EVERY URL — each remaining positional argument, and the value of `--url` or `--url=` — must be
+ *    `http://127.0.0.1:<port>/…` (or end after the port) with `<port>` a line of `$HOME/curl-allow-ports`. A scheme-less
+ *    positional (curl defaults it to http), another host, userinfo, https, and an unlisted port (the live server's 7788
+ *    and the agent's 7789 included) are refused.
+ *  - REFUSED, whatever its value: every other option. That subsumes `--config`, `-x`/`--proxy`, `--preproxy`,
+ *    `--socks*`, `--connect-to`, `--resolve`, `--unix-socket`, `--abstract-unix-socket`, `--doh-url`, `--next`/`-:`, `--`
+ *    and an unknown spelling: each could move the connection off the URL this scan reads.
+ *
+ *  A refused call is appended to `$HOME/curl-poison` and exits 97 without running curl; a passed call appends each URL to
+ *  `$HOME/curl-front-passed` and execs `realCurl` with `-q` as its FIRST argument (no `.curlrc`, whatever `CURL_HOME` or
+ *  `XDG_CONFIG_HOME` name) and the proxy variables unset. A call with no URL at all (`curl -s`) passes: it reaches nothing.
+ *  Not covered, by design: a redirect (`-L`) answered by a LISTED listener — that listener is the case's own. */
+export function loopbackCurlFront(realCurl: string): string {
+  const real = `'${realCurl.replace(/'/g, `'\\''`)}'`;
+  return [
+    '#!/bin/sh',
+    '# wave 9 R10d (D-3819, review fix): the loopback curl front — see containedTools.ts.',
+    'allow="$HOME/curl-allow-ports"',
+    'argv_log="$*"',
+    'refuse() {',
+    '  printf \'%s\\n\' "$argv_log" >> "$HOME/curl-poison"',
+    `  ${ledgerHitLine('curl-poison')}`,
+    '  echo "ccrc tests: this curl takes only ccrc\'s own options and reaches only http://127.0.0.1:<port>/ with <port> listed in $HOME/curl-allow-ports" >&2',
+    '  exit 97',
+    '}',
+    'allowed() {',
+    '  case "$1" in',
+    '    http://127.0.0.1:[0-9]*)',
+    '      rest=${1#http://127.0.0.1:}',
+    '      port=${rest%%[!0-9]*}',
+    '      tail=${rest#"$port"}',
+    '      case "$tail" in',
+    '        ""|/*) [ -f "$allow" ] && grep -qx "$port" "$allow" ;;',
+    '        *) return 1 ;;',
+    '      esac ;;',
+    '    *) return 1 ;;',
+    '  esac',
+    '}',
+    // One pass decides (check), a second records: a refusal after a partial record would be a lie in curl-front-passed.
+    'url_ok() {',
+    '  if [ "$mode" = check ]; then allowed "$1" || refuse; else printf \'%s\\n\' "$1" >> "$HOME/curl-front-passed"; fi',
+    '}',
+    // `-K -` (wave 13, R16): stdin is read ONCE, in the check pass, and must be nothing but `header = "<name>: <value>"`
+    // lines, anchored at the line start — no other key, no `@file`, no quote, backslash or control character in the
+    // value. `cfg=$(cat)` strips every TRAILING newline first, so a trailing blank line passes and the real curl is
+    // re-fed the NORMALISED text (one trailing newline); a leading or interior blank line is refused, and a config of
+    // only newlines reads as the empty config. An EMPTY config passes (nothing in-tree sends one now: notify.sh exits before curl
+    // when it has no token; it is allowed because it can name nothing), and a second `-K -` is refused. The config is never logged: a refusal records argv only.
+    // `cat`'s own status is deliberately not a verdict: what the check sees is exactly what is re-fed, so a read that
+    // fails part-way checks and feeds the same prefix (a closed stdin is an empty config under dash, and passes; under
+    // bash the substitution's pipe lands on fd 0, `cat` blocks reading a pipe whose only writer is itself, and the
+    // front hangs: it never passes, and leaves no refusal record).
+    'cfg=; have_cfg=',
+    // FAILS CLOSED (wave 13 fix round 1, review 294 F1): grep -qv exits 1 only when NO line falls outside the rule, and
+    // that is the one status that passes. 0 is a line outside the rule; 2 (an error) and 127 (no grep on PATH) are a
+    // check that gave no verdict. Never fold grep's status through `!`: that would pass 2 and 127.
+    'cfg_ok() {',
+    '  [ -n "$cfg" ] || return 0',
+    '  printf \'%s\\n\' "$cfg" | grep -qvE -e \'^header = "[A-Za-z0-9-]+: [^"\\\\[:cntrl:]]*"$\' -e \'' + CLAIM_DATA_LINE_ERE + '\'',
+    '  [ $? -eq 1 ]',
+    '}',
+    'scan() {',
+    '  while [ $# -gt 0 ]; do',
+    '    a=$1; shift',
+    '    case "$a" in',
+    '      --url) [ $# -gt 0 ] || refuse; url_ok "$1"; shift ;;',
+    '      --url=*) url_ok "${a#--url=}" ;;',
+    '      --connect-timeout|--max-time|--max-filesize|--speed-limit|--speed-time|-m|-o|-w|-H) [ $# -gt 0 ] || refuse; shift ;;',
+    '      -X) [ $# -gt 0 ] || refuse; case "$1" in ""|*[!A-Z]*) refuse ;; esac; shift ;;',
+    '      -d|--data-binary) [ $# -gt 0 ] || refuse; case "$1" in @*) refuse ;; esac; shift ;;',
+    '      -K) [ $# -gt 0 ] && [ "$1" = - ] || refuse',
+    '          if [ "$mode" = check ]; then [ -z "$have_cfg" ] || refuse; cfg=$(cat); have_cfg=1; cfg_ok || refuse; fi; shift ;;',
+    '      -[gsSfL]*) case "${a#-}" in *[!gsSfL]*) refuse ;; esac ;;',
+    '      -*) refuse ;;',
+    '      *) url_ok "$a" ;;',
+    '    esac',
+    '  done',
+    '}',
+    'mode=check; scan "$@"',
+    'mode=record; scan "$@"',
+    // A proxy in the parent env would carry a loopback URL off the box.
+    'unset http_proxy HTTP_PROXY https_proxy HTTPS_PROXY all_proxy ALL_PROXY',
+    // The config read in the check pass goes back on the real curl's stdin; without `-K -`, stdin is the caller's. It
+    // sits AFTER the unset above, so the `-K -` path runs the real curl with no proxy variable either.
+    `[ -z "$have_cfg" ] || { { [ -z "$cfg" ] || printf '%s\\n' "$cfg"; } | ${real} -q "$@"; exit $?; }`,
+    `exec ${real} -q "$@"`,
+  ].join('\n') + '\n';
+}
+
+/** Where a bus env var points, as a path: the `path=` of a `unix:` address, or the bare value (XDG_RUNTIME_DIR).
+ *  A value with `;` or `%` answers null, so `busUnder` is false and `assertNoRealTool` throws (wave 18, D-5257): a
+ *  `;`-separated address list falls through to a LATER address (`unix:path=<home>/bus;unix:path=/run/user/1000/bus`),
+ *  and D-Bus unescapes `%2e%2e` where `path.resolve` does not. So does a value with more than one `path=` key
+ *  (D-5258): libdbus reads the FIRST, and the match below, which reads the first address only, takes the LAST. */
+function busPath(name: string, value: string): string | null {
+  if (/[;%]/.test(value) || (value.match(/(?:^unix:|,)path=/g) ?? []).length > 1) return null;
+  if (name === 'XDG_RUNTIME_DIR') return value;
+  const m = /^unix:(?:[^,]*,)*path=([^,]+)/.exec(value);
+  return m ? m[1]! : null;
+}
+
+/** Where `p` PHYSICALLY leads (D-8394, residue R35(e) and (f)): the realpath of its deepest existing ancestor, found
+ *  by walking up WITHOUT lexical normalisation (and `realpathSync.native`: the JS `realpathSync` resolves `..`
+ *  lexically first), with the rest appended. So `<home>/sym/..` (with `sym` a symlink out of
+ *  home) and a symlink under home to the real runtime dir answer where a client would land, not where
+ *  `path.resolve` puts them. A relative path, or a dangling symlink on the way, answers null. */
+export function physicalPath(p: string): string | null {
+  if (!path.isAbsolute(p)) return null;
+  const rest: string[] = [];
+  let cur = p;
+  for (;;) {
+    let exists = true;
+    try { fs.lstatSync(cur); } catch { exists = false; }
+    if (exists) {
+      try { return path.join(fs.realpathSync.native(cur), ...rest.reverse()); } catch { return null; }
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    rest.push(path.basename(cur));
+    cur = parent;
+  }
+}
+
+/** True when the bus value `v` of `name` names a path that is physically inside `home` (`busPath`, then
+ *  `physicalPath`). */
+function busInside(name: string, v: string | undefined, inside: (p: string) => boolean): boolean {
+  const p = v === undefined || v === '' ? null : busPath(name, v);
+  const phys = p === null ? null : physicalPath(p);
+  return phys !== null && inside(phys);
+}
+
+/** The one "inside the fixture HOME" predicate: the path itself or under it, for HOME as given or its realpath
+ *  (macOS's `/var` is `/private/var`). `assertNoRealTool` and `busUnder` both read it (wave 18). */
+export function insideOf(home: string): (p: string) => boolean {
+  const homes = [path.resolve(home), fs.realpathSync(home)];
+  return (p) => homes.some((h) => p === h || p.startsWith(h + path.sep));
+}
+
+/** True when BOTH bus variables are set and name paths inside `home`: a fixture bus the test made itself, which
+ *  `ghContainedEnv` keeps (wave 18, D-5248). Exactly the condition `assertNoRealTool` refuses the negation of.
+ *  A value with `;`, `%` or a second `path=` is refused (`busPath`, D-5257, D-5258). The path is read PHYSICALLY
+ *  (`physicalPath`, D-8394): a symlink under HOME to the real runtime dir, or a `sym/..` that climbs out through one,
+ *  is outside. */
+export function busUnder(env: NodeJS.ProcessEnv, home: string): boolean {
+  const inside = insideOf(home);
+  return (['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'] as const).every((name) => busInside(name, env[name], inside));
+}
+
+/** THROWS unless, under `env`, every CONTAINED_TOOLS name resolves to NOTHING or to a file whose REALPATH is inside
+ *  realpath(home) — a symlink from the fixture to a real binary fails — and unless XDG_RUNTIME_DIR and
+ *  DBUS_SESSION_BUS_ADDRESS are both SET and name a path inside home. One `/bin/sh -c 'command -v …'` per name; the
+ *  resolved file is never executed. A bus value with `;`, `%` or a second `path=` is refused (D-5257, D-5258), and the
+ *  bus path is read physically (D-8394): a SYMLINK under home that points at the real runtime dir is refused. It reads
+ *  RESOLUTION: a stub under home that itself execs a real binary is that
+ *  stub's own contract (the rsync recorder's and the loopback curl front's are two), not this check's. */
+export function assertNoRealTool(env: NodeJS.ProcessEnv, home: string): void {
+  const inside = insideOf(home);
+  for (const name of ['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS']) {
+    const v = env[name];
+    if (v === undefined || v === '') {
+      throw new Error(`assertNoRealTool: ${name} is not set — ccrc would default it to the real user bus`);
+    }
+    if (!busInside(name, v, inside)) {
+      throw new Error(`assertNoRealTool: ${name}=${v} does not name a path inside the fixture HOME ${home}`);
+    }
+  }
+  for (const name of CONTAINED_TOOLS) {
+    const r = spawnSync('/bin/sh', ['-c', `command -v ${name}`], { env, encoding: 'utf8' });
+    const resolved = (r.stdout ?? '').trim();
+    if (resolved === '') continue;
+    let real: string;
+    try { real = fs.realpathSync(resolved); } catch { real = resolved; }
+    if (!inside(real)) {
+      throw new Error(`assertNoRealTool: ${name} resolved to ${resolved}`
+        + `${real === resolved ? '' : ` (realpath ${real})`}, outside the fixture HOME ${home}`);
+    }
+  }
+}

@@ -10,6 +10,7 @@
  * newer build lands somewhere honest instead of being switched on and
  * rendered as nothing — `PrPhase`'s `'unchecked'` is the precedent
  * (`server/src/registry.ts:135-142`). Deviation D-8 found that this plan's
+ * @anchor mailDeliveriesStateVocabulary
  * own draft left two of the five — `programs.state` and
  * `mail_deliveries.state` — uncovered on the wire (`programs()` returning a
  * raw `string`; `MailSummary.state` a closed union with no `unknown` arm).
@@ -38,6 +39,7 @@
  * server itself already typed", and likened that to `mail_rejections.code`
  * below; both halves were wrong, the second more so, since that column's own
  * docstring in `store.ts` states the OPPOSITE stance in so many words). The
+ * @anchor deployRollbackOlderServer
  * exemption's premise fails on a rollback: `deploy.sh` keeps per-timestamp
  * backups, and `shared/api.ts`'s own rollback paragraph (`:567-571`) is
  * exactly the "older, same, or newer" span that makes "this server itself
@@ -60,6 +62,11 @@
  * `runs.claimedBy` implements spec:291-292's multi-coordinator non-goal: one
  * coordinator per program, and a second one refuses rather than arbitrating.
  */
+import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
+
+// The close-columns fill (entry 44) reads RunState's terminal set from its one home, never spelled as a literal tuple.
+const TERMINAL_STATES_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
+
 export const MIGRATIONS: readonly string[] = [
   // ── 1: user_version 0 -> 1 ────────────────────────────────────────────────
   `
@@ -866,6 +873,2502 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE programs ADD COLUMN homeProject TEXT;
   ALTER TABLE feed_events ADD COLUMN runId INTEGER;
+  `,
+
+  // ── 11: user_version 10 -> 11 ─────────────────────────────────────────────
+  // Review runs (design 2026-09-14 §5.1): a reviewer is a RUN of a new KIND,
+  // reusing dispatch, mail, hold, slot and close rather than inventing a
+  // lighter carrier. MIGRATIONS[0..9] ARE FROZEN, for the reason every entry
+  // above states: db.ts's loop runs `for (v = current; v < COORD_SCHEMA_VERSION;
+  // v++)`, so an amendment to an applied entry never runs again.
+  //
+  // `runs.kind` — 'work' | 'review'. NOT NULL DEFAULT 'work' on purpose, and
+  // this is the ONE column in this file whose default is an assertion rather
+  // than an overloaded null: every row that exists today IS a work run, with
+  // no change of meaning, and a NULL here would say "kind unknown" about rows
+  // whose kind is perfectly known. The revive path (`hydrateRun`) reads an
+  // out-of-vocabulary token as `'unknown'`, the `RunState` idiom (D-2795).
+  //
+  // `runs.reviews` — the work run this review run reads; NULL on a work run.
+  // Set at open, never updated. NULLABLE, NO DEFAULT: NULL means "this run
+  // reviews nothing" — true of every work run — never "the reviewed run could
+  // not be read". `REFERENCES runs(id)` with a NULL default is the one shape
+  // SQLite's ALTER TABLE ADD COLUMN accepts for a foreign key.
+  //
+  // The index serves `reviewInFlightFor` — "is a non-terminal review run
+  // already naming this work run" — which `POST /api/runs` asks on every
+  // review open and `POST /api/runs/:id/advance` on every send-back.
+  `
+  ALTER TABLE runs ADD COLUMN kind TEXT NOT NULL DEFAULT 'work';
+  ALTER TABLE runs ADD COLUMN reviews INTEGER REFERENCES runs(id);
+  CREATE INDEX runs_by_reviews ON runs(reviews);
+  `,
+
+  // ── 12: user_version 11 -> 12 ───────────────────────────────────────────
+  // The coordinator's project, stamped on the run AT OPEN TIME.
+  //
+  // Why stamped and not derived: the board places a coordinated workspace on
+  // its coordinator's card, and deriving that placement from a LIVE read of
+  // the coordinator's registry record means the workers scatter the moment
+  // that record is archived, removed or unreadable. Stamping makes the
+  // placement a fact the run carries for its whole life.
+  //
+  // NULLABLE, and null is a real answer with two producers: a run opened
+  // before this column existed, and an open where the coordinator's registry
+  // record could not be read. Both mean "not stamped", and the placement
+  // policy treats both the same way — the session's own project.
+  //
+  // MIGRATIONS[0..10] are frozen: `db.ts:182` iterates `for (let v = current;
+  // v < COORD_SCHEMA_VERSION; v++)`, so an edit to an applied entry never
+  // runs against the live `~/.ccrc/coord.db`.
+  //
+  // THIS ENTRY WAS SLOT 11 WHEN IT WAS WRITTEN. #108 (review runs) merged
+  // first and took `user_version 10 -> 11`, so this one moved down a slot at
+  // merge time rather than sharing an index: two entries at one `user_version`
+  // is a migration that never runs on a db that has already passed that
+  // version. Nothing else about it changed. Re-verified against origin/main at
+  // 2f9deae2 that `runs` carries no `coordProject` today.
+  `
+  ALTER TABLE runs ADD COLUMN coordProject TEXT;
+  `,
+
+  // ── 13: user_version 12 -> 13 ───────────────────────────────────────────
+  // Account-pool membership: the authoritative store (design 2026-09-18 §5.2).
+  //
+  // ROW PER EDGE, not a column on an account (operator ruling 2). `subjectKind`
+  // exists from day one though wave 1 writes only 'account' rows: the project
+  // half may migrate in later, and a later product decision's `user -> pinned account` is
+  // a DIFFERENT EDGE, not a wider column. Wave 1's "one pool per account" is a
+  // PARTIAL UNIQUE INDEX, so relaxing it to multi-pool later drops an index and
+  // rewrites no rows and changes no wire shape — where widening a column would
+  // change the rule in three languages at once.
+  //
+  // `addedBy` is NULLABLE and null is a real answer: a row written by a path
+  // that had no session identity. It is attribution, never authentication.
+  //
+  // `pool_epoch` takes the single-row idiom from `coordinator_state` above
+  // (`id INTEGER PRIMARY KEY CHECK (id = 1)`) and is SEEDED here, so every
+  // reader after this migration finds a row and none has to handle its absence.
+  // Epoch 0 means "nothing has ever been tagged", which is a measurement.
+  //
+  // MIGRATIONS[0..11] are frozen: `db.ts:182` iterates from the live
+  // `user_version`, so an edit to an applied entry never runs.
+  //
+  // THIS ENTRY IS SLOT 13 AS WRITTEN. PR #40 (automation-runner) carries a
+  // migration spelled slot 11 — already taken on main — so it must move up when
+  // rebased and may take 13 first. Migration 12's own comment records the last
+  // branch that lost this race. RE-MEASURE against origin/main before merge.
+  `
+  CREATE TABLE pool_edges (
+    id          INTEGER PRIMARY KEY,
+    subjectKind TEXT    NOT NULL,
+    subjectId   TEXT    NOT NULL,
+    pool        TEXT    NOT NULL,
+    addedAt     INTEGER NOT NULL,
+    addedBy     TEXT
+  );
+  CREATE UNIQUE INDEX pool_edges_one_per_account
+    ON pool_edges(subjectId) WHERE subjectKind = 'account';
+
+  CREATE TABLE pool_epoch (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    epoch    INTEGER NOT NULL,
+    issuedAt INTEGER NOT NULL,
+    digest   TEXT    NOT NULL
+  );
+  INSERT INTO pool_epoch (id, epoch, issuedAt, digest) VALUES (1, 0, 0, '');
+  `,
+
+  // ── 14: user_version 13 -> 14 ───────────────────────────────────────────
+  // The update control plane (design 2026-09-20 §6): the release CATALOGUE,
+  // each node's verdict on a release, the node INVENTORY, the DESIRED STATE
+  // per scope, and the projection's epoch. Every column the whole design
+  // needs — `notify`, which W3 reads; the lease and request columns, which
+  // W4's dispatcher writes — ships in THIS ONE slot, so no later wave of that
+  // design claims a second.
+  //
+  // ONE WRITER PER COLUMN GROUP. Each group's comment below names the METHOD
+  // that writes it, because `update-writer-groups.test.ts` scans `store.ts`'s
+  // SQL and binds method names to these column lists; a comment naming
+  // something other than the method would be a second, unpinned claim. The
+  // spec's per-row `upsertRelease` does not appear: the yank mark is a
+  // statement about a whole listing, so the ONE catalogue writer is
+  // `applyReleaseListing` (D-3180). `nodes.role` and
+  // `nodes.label` sit on the key line but belong to the measurement group;
+  // `nodes.nodeId` is the row KEY — the measurement writers' INSERT creates a
+  // row under it and only `rekeyNode` changes it. `update_intent` and
+  // `update_epoch` are one group each, and their one writer is `setIntent`.
+  //
+  // Enumerated columns are TEXT with no SQL CHECK — this file's header idiom:
+  // each vocabulary lives ONCE in `shared/api.ts` (union + runtime array +
+  // guard) and its store reader maps an out-of-vocabulary token to a stated
+  // fallback, never a cast. The ones whose fallback is NOT a we-do-not-know
+  // member (D-3181): `releases.channel` and `nodes.role`
+  // read NULL, as `nodes.channel` and `nodes.requestedKind` do;
+  // `nodes.stampRead` reads `unreadable`; `update_intent.auto`
+  // reads `off` (nothing unattended); `update_intent.notify` reads `channel`
+  // (the operator hears of more, never of nothing). An out-of-vocabulary
+  // `update_intent.channel` resolves the node's `nodes.channel` to NULL with
+  // the reason in `resolveDetail` — never the fleet default, which would be
+  // fail-open.
+  //
+  // Every version-bearing column holds the TAG form (`vX.Y.Z`, decision 2).
+  // Every time column is epoch MS — `reportedStartedAt`/`reportedUpdatedAt`
+  // included: the report file carries unix SECONDS and the inventory sweep
+  // converts them at its one validator, so no reader here ever sees seconds.
+  //
+  // `releases` is NEVER DELETED FROM. A draft, or a release absent from a
+  // later listing, is `yanked = 1` (§7); the row stays, so a node running a
+  // yanked tag still has a catalogue row that says so.
+  //
+  // `nodes.updateState` is `NOT NULL DEFAULT 'idle'`
+  // (D-3186): a never-dispatched node IS idle, and the
+  // measurement writer's first INSERT must be able to name only identity,
+  // measurement and report columns — without a default it would have to name
+  // the lease column the writer-group scan forbids it. Like `runs.kind`'s
+  // default (entry 11), this asserts something true of every row; it is not
+  // an overloaded null.
+  //
+  // The NULLs are real answers, one meaning each (§6 "Null discipline"):
+  // `commitSha NULL` = `target_commitish` was a branch name; `notifiedAt NULL`
+  // = no release push sent; `currentVersion NULL` with `stampRead = 'ok'` = an
+  // unversioned build; `measuredAt NULL` = never measured; `highestVersion
+  // NULL` = UNCONSTRAINED only when `floorRead = 'absent'` (measured, this
+  // sweep OR CARRIED FORWARD from an earlier one, that there is no floor
+  // file, or a garbled one) — a NULL beside `floorRead = 'unmeasured'` means
+  // NOTHING WAS EVER MEASURED for this row, and the resolver refuses to
+  // treat that as unconstrained (D-3213, corrected by fix round 1's own
+  // review, I-1: the STATE carries forward with the value, so a
+  // previously-absent floor never relabels itself `unmeasured` just because
+  // one later sweep's own read failed); `previousVersion NULL` = nothing to
+  // roll back to, by the same `previousRead` distinction; `agentOps NULL` = no agent by construction (a server-role
+  // row) while `''` = an agent too old to say; `unreachableSince NULL` iff
+  // reachable; `reportedPhase NULL` = no report file, distinct from
+  // `'unknown'`, a phase outside the vocabulary; `desiredTag NULL` carries
+  // its reason in `resolveDetail`; `requestedTag NULL` = no operator request
+  // outstanding; `supersededBy NULL` = live.
+  //
+  // `update_intent` is SEEDED with the fleet default (`scope = '*'`) and
+  // `update_epoch` with epoch 0, so no reader handles either's absence.
+  // `update_epoch` takes `pool_epoch`'s single-row idiom (entry 13) but NOT
+  // its `digest` column: `pool_epoch.digest` is provenance that nothing
+  // reads (`poolEdgeDigest`'s docstring in `store.ts`), and the projection's
+  // torn-write detectors are its `end` terminator and its 65536-byte cap
+  // (§9) — a digest here would be a column with no reader.
+  //
+  // MIGRATIONS[0..12] are frozen: `db.ts:182` iterates from the live
+  // `user_version`, so an edit to an applied entry never runs.
+  //
+  // THIS ENTRY IS SLOT 14 AS WRITTEN. PR #40 (automation-runner) is open and
+  // stale: its tree predates entries 12 and 13 and still spells its own
+  // migration slot 11, so its next rebase renumbers it into THIS slot. Two
+  // entries at one `user_version` is a migration that never runs on a db
+  // already past it (entry 12's paragraph records the last branch that lost
+  // this race); whichever merges second moves up. RE-MEASURE against
+  // origin/main immediately before the PR and again before merge — the
+  // banner count on main must still be 13:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  // `coord-db.test.ts`'s banner-sequence case reds a textual double slot left
+  // in THIS tree; a slot another branch holds is visible only to that
+  // measurement.
+  `
+  CREATE TABLE releases (
+    -- catalogue columns: writer = the poller (§7), method applyReleaseListing
+    -- tag: NOT NULL PRIMARY KEY (D-3212) — SQLite's rowid-table rule admits a
+    -- NULL TEXT primary key otherwise; the writer's own guard (isReleaseTag)
+    -- was the only thing standing between a NULL key and more than one row.
+    tag TEXT NOT NULL PRIMARY KEY, version TEXT NOT NULL, channel TEXT NOT NULL, publishedAt INTEGER NOT NULL,
+    commitSha TEXT, tarballUrl TEXT NOT NULL, bundleListed INTEGER NOT NULL, notes TEXT,
+    yanked INTEGER NOT NULL DEFAULT 0, observedAt INTEGER NOT NULL,
+    -- notification columns: writer = the notifier (W3), method markReleaseNotified
+    notifiedAt INTEGER
+  );
+  CREATE TABLE node_release_refusals (
+    -- writer = the inventory sweep, method refuseRelease; cleared by clearRefusals / ackNode; re-keyed by rekeyNode
+    nodeId TEXT NOT NULL, tag TEXT NOT NULL, at INTEGER NOT NULL, detail TEXT NOT NULL,
+    PRIMARY KEY (nodeId, tag)
+  );
+  CREATE TABLE nodes (
+    -- nodeId: NOT NULL PRIMARY KEY (D-3212) — same rowid-table gap as
+    -- releases.tag; the guard was NODE_ID_RE, not the column.
+    nodeId TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL, label TEXT NOT NULL,
+    -- measurement columns: upsertNodeMeasurement, markUnreachable
+    currentVersion TEXT, currentSha TEXT, currentRef TEXT, currentBuiltAt TEXT, currentDirty INTEGER,
+    stampRead TEXT NOT NULL, installState TEXT NOT NULL, provenance TEXT NOT NULL, caps TEXT NOT NULL,
+    agentOps TEXT, highestVersion TEXT, previousVersion TEXT,
+    -- floorRead / previousRead: fix round 1, D-3213 (re-review N-1) -- the
+    -- STORED read-STATE beside each tag column ('measured' | 'absent' |
+    -- 'unmeasured'), a fact about the ROW: 'unmeasured' means NEVER
+    -- measured (no sweep, this one or an earlier one, has read this file).
+    -- applyMeasurement carries the PAIR (value AND state) forward from the
+    -- row when a sweep's own raw read is 'unmeasured' and the row already
+    -- held something better, rather than overwrite it with NULL, so
+    -- highestVersion alone can no longer tell "no floor file" (unconstrained,
+    -- section 9) apart from "never measured" (never unconstrained -- resolve.ts
+    -- checks the state, not just the value, and refuses to resolve instead).
+    -- This slot is still UNMERGED (entry 14 as written), so the two columns
+    -- join the measurement group's DDL directly rather than a later
+    -- migration.
+    floorRead TEXT NOT NULL, previousRead TEXT NOT NULL,
+    os TEXT NOT NULL, measuredAt INTEGER,
+    reachable INTEGER NOT NULL, unreachableSince INTEGER,
+    -- report columns: upsertNodeMeasurement
+    reportedPhase TEXT, reportedTarget TEXT, reportedStartedAt INTEGER, reportedUpdatedAt INTEGER, reportedDetail TEXT,
+    -- lease columns: dispatchNode (W4), releaseLease, settleNode, ackNode
+    updateState TEXT NOT NULL DEFAULT 'idle', updateTarget TEXT, updateStartedAt INTEGER, updateDetail TEXT,
+    -- resolved columns: resolveNode
+    channel TEXT, desiredTag TEXT, resolveDetail TEXT,
+    -- request columns: requestNode (W4) sets; settleNode and ackNode clear
+    requestedTag TEXT, requestedKind TEXT, requestedAt INTEGER,
+    -- identity column: rekeyNode
+    supersededBy TEXT
+  );
+  CREATE TABLE update_intent (
+    -- writer = the intent route (§12), method setIntent
+    -- scope: NOT NULL PRIMARY KEY (D-3212) — same rowid-table gap; the guard
+    -- was FLEET_SCOPE / a live nodeId, not the column.
+    scope TEXT NOT NULL PRIMARY KEY, channel TEXT NOT NULL, pinnedTag TEXT, auto TEXT NOT NULL, notify TEXT NOT NULL,
+    setAt INTEGER NOT NULL, setBy TEXT NOT NULL
+  );
+  INSERT INTO update_intent VALUES ('*', 'stable', NULL, 'off', 'channel', 0, 'migration');
+  -- writer = setIntent, in the same transaction as the intent row and the journal append
+  CREATE TABLE update_epoch (id INTEGER PRIMARY KEY CHECK (id = 1), epoch INTEGER NOT NULL, issuedAt INTEGER NOT NULL);
+  INSERT INTO update_epoch (id, epoch, issuedAt) VALUES (1, 0, 0);
+  `,
+  // ── 15: user_version 14 -> 15 ───────────────────────────────────────────
+  // Indexes for the stall watch's per-candidate mail read, `CoordStore.stallMailFor` (worker stall watch wave 5).
+  // That read runs once per stall candidate per sweep on the server's one synchronous handle, and before this entry
+  // both of its statements planned `SCAN mail` and `SCAN mail_deliveries` (EXPLAIN QUERY PLAN, measured), so every
+  // sweep's cost grew with the whole mail history, which is never pruned.
+  //
+  // THREE INDEXES, AND `mail_deliveries(toId)` IS NOT ONE OF THEM. The review that found the scan proposed
+  // `mail_deliveries(mailId)` and `mail_deliveries(toId)`. Measured: an index led by `toId` takes over every
+  // delivery read that filters `toId = ? AND state IN ('queued','delivered')`, because this server never runs
+  // ANALYZE and the planner rates one equality above a two-value IN. On a 20 000-mail fixture whose busiest
+  // recipient held half the deliveries, the peer-duplicate and peer-quota probes went from about 0.01 ms to about
+  // 14 ms and `outstandingMailFor` from about 0.7 ms to about 33 ms. The read's delivered-to arm is bounded through
+  // `mail_by_at` instead (`store.ts`, `stallMailFor`), so it needs no `toId` index. `stall-store.test.ts`'s plan rows
+  // pin that those reads still use `mail_deliveries_due`.
+  //
+  // `mail_by_run` serves the read's run clause (and `hasMailWithSubject`, every per-run mail statement, and the
+  // health read's join); `mail_by_at` its horizon; `mail_deliveries_by_mail` its delivery statement. `mail` is
+  // append-only and `mail_deliveries.mailId` is never rewritten, so the write cost is one b-tree insert per row.
+  // `IF NOT EXISTS`, so a database where an operator made one of these by hand still starts.
+  //
+  // MIGRATIONS[0..13] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry
+  // never runs. THIS ENTRY IS SLOT 15 AS WRITTEN, measured against origin/main at the wave's first step; an open
+  // branch held `user_version 14 -> 15` too, and whichever merges second moves up (entry 12 records the last branch
+  // that lost this race). RE-MEASURE immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE INDEX IF NOT EXISTS mail_by_run ON mail(runId);
+  CREATE INDEX IF NOT EXISTS mail_by_at ON mail(at);
+  CREATE INDEX IF NOT EXISTS mail_deliveries_by_mail ON mail_deliveries(mailId);
+  `,
+  // ── 16: user_version 15 -> 16 ─────────────────────────────────────────────
+  // Child reclamation (design 2026-09-22 §5.1, §5.3): `runs.sessionBornAt`, the
+  // child's BIRTH — write-once per BOUND session, never a first stamp per run.
+  // `dispatchStartedAt` (migration 5) keeps its every-attempt meaning: it
+  // moves on every fresh-spawn dispatch attempt, retries included, and the
+  // spawn-in-flight render still reads it unchanged. `sessionBornAt` answers a
+  // narrower question — "when was THIS occupant's tenancy of this workspace
+  // minted" — and `childBirthOf` (`coord/childSpent.ts`) moves onto this
+  // column in the same task that adds it, so every PR row a child's branch has
+  // ever carried is placed against the SESSION's own birth, not against
+  // whichever attempt most recently touched `dispatchStartedAt`.
+  //
+  // `runs.sessionBornFor` — a cross-build rollback can leave a stale birth on
+  // a row, which is why this column rides beside `sessionBornAt` — names the
+  // session the birth was recorded FOR. This build's `CoordStore.bindSession`
+  // is the only writer that keeps both columns honest across a rebind; an
+  // OLDER build's `clearSession`/two-argument `setSession` unbind or rebind
+  // `sessionId` without touching either, so a roll-forward after a
+  // roll-back-then-forward across this migration can leave a row whose
+  // `sessionId` has moved on while its birth still names the PREVIOUS
+  // occupant. `childBirthOf` refuses to place a birth unless `sessionBornFor`
+  // still equals the row's own `sessionId`, so that stale pairing reads as
+  // unplaceable rather than as a too-early date on the new occupant.
+  // `childBirthOf` ALSO requires `sessionBornAt` to equal `dispatchStartedAt`
+  // (migration 5) — the `sessionBornFor` check alone cannot see a rollback
+  // followed by a SAME-id redraw (a recycled slug, spec §5.5, extended across
+  // a rollback: the id never changes, so `sessionBornFor` still matches), but
+  // every genuine re-mint re-stamps `dispatchStartedAt` first, so a birth
+  // still dated to an earlier occupant no longer agrees with it either. Both
+  // columns have no migration of their own — this slot has never shipped, so
+  // they are edited in place rather than adding a slot 17 for a fix to a slot
+  // nothing has run yet.
+  //
+  // The backfill dates every row that already carries a bound session to the
+  // ONLY birth this build has ever recorded for it — `dispatchStartedAt` —
+  // with `sessionBornFor` set to that same row's own `sessionId` (never a
+  // second read: the row already carries both). Setting `sessionBornAt` FROM
+  // `dispatchStartedAt` also means the equality check above is trivially
+  // satisfied for every backfilled row — no separate write is needed. ONE
+  // exception: a row whose `run_events` trail carries a `spawn-adopted:` event bound to an
+  // EARLIER attempt's workspace, never this session's own mint (`dispatch.ts`'s
+  // fresh arm: an adopted winner binds with a NULL birth, because the
+  // workspace it adopted may be an earlier attempt's, and a backfilled guess
+  // would date it to the wrong attempt). An unbound row (`sessionId IS NULL`)
+  // is left NULL by the `WHERE` clause alone, matching a run nothing has ever
+  // dispatched. The exclusion OVER-REACHES in one narrow, fail-closed way,
+  // accepted rather than special-cased: a row whose CURRENT occupant is a
+  // clean re-dispatch — `clearSession` unbound the adopted occupant, then a
+  // fresh `ws-add` bound a new one — still carries the OLD `spawn-adopted:`
+  // event on its trail from the earlier occupant, so the backfill leaves it
+  // NULL too, even though the current occupant's own mint was clean. A row in
+  // that shape reaches `sessionBornAt`/`childBirthOf`'s live write path on its
+  // NEXT dispatch regardless, since `bindSession` — not the backfill — is
+  // this build's own ongoing writer; the backfill only ever dates history the
+  // live path has not yet had a chance to.
+  //
+  // MIGRATIONS[0..14] are frozen: `db.ts:182` iterates from the live
+  // `user_version`, so an edit to an applied entry never runs.
+  //
+  // THIS ENTRY WAS SLOT 15 WHEN IT WAS WRITTEN. #237 (the stall watch's mail
+  // indexes) merged first and took `user_version 14 -> 15`, so this one moved
+  // up a slot at merge time rather than sharing an index: two entries at one
+  // `user_version` is a migration that never runs on a db that has already
+  // passed that version. Nothing else about it changed.
+  `
+  ALTER TABLE runs ADD COLUMN sessionBornAt INTEGER;
+  ALTER TABLE runs ADD COLUMN sessionBornFor TEXT;
+  UPDATE runs SET sessionBornAt = dispatchStartedAt, sessionBornFor = sessionId
+    WHERE sessionId IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM run_events e WHERE e.runId = runs.id AND e.detail LIKE 'spawn-adopted:%');
+  `,
+  // ── 17: user_version 16 -> 17 ─────────────────────────────────────────────
+  // Stall watch settings (design 2026-10-05 §8): the operator's stall-watch level and quiet time, chosen in Settings.
+  // ONE ROW, `CHECK (id = 1)`, the `coordinator_state` idiom. Its writer is `CoordStore.setStallSettings`, called only
+  // by the settings POST; its reader is `CoordStore.stallSettings`, whose values `parseStallSettings` (`stallsettings.ts`)
+  // decides: `level` through `isStallLevelChoice` and `quietMs` through `isStallQuietMs`, never cast. `quietMs` NULL is
+  // the built-in quiet time, and has no other meaning.
+  //
+  // THE SEED IS TODAY'S BEHAVIOUR: `follow` (the fleet box's files decide) and NULL (the built-in quiet time), so this
+  // entry changes nothing on deploy. `STALL_SETTINGS_SEED` (`stallsettings.ts`) carries the same two values for the
+  // store's insert arm, which a lost row takes.
+  //
+  // `run_events_by_at` serves the notice-count read, `CoordStore.stallObservationsSince` (§11): `run_events` had only
+  // `run_events_by_run(runId, at)`, whose leading column is `runId`, so a window on `at` alone scanned the table. This
+  // server never runs ANALYZE, so the planner's choice for a one-sided range is fixed, and
+  // `stall-settings-store.test.ts` pins the plan (departure `run-events-at-index` (D-4028)). `IF NOT EXISTS`, so a
+  // database where an operator made it by hand still starts.
+  //
+  // MIGRATIONS[0..15] are frozen. THIS ENTRY IS SLOT 17 AS WRITTEN, measured against origin/main at the wave's first
+  // step; whichever branch holding the same slot merges second moves up. RE-MEASURE immediately before the PR and
+  // before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE stall_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    level     TEXT NOT NULL,
+    quietMs   INTEGER,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO stall_settings (id, level, quietMs, updatedAt) VALUES (1, 'follow', NULL, 0);
+  CREATE INDEX IF NOT EXISTS run_events_by_at ON run_events(at);
+  `,
+  // ── 18: user_version 17 -> 18 ─────────────────────────────────────────────
+  // The dead-coordinator lane's DURABLE first-dead anchor (workspace lifecycle spec 2026-09-24 §5.4, "The hour is the
+  // lane's own observation, made durable"): one row per claimant the lane last measured CRASHED — `firstDeadAt`, the
+  // first pass of the episode, and `lastDeadAt`, the latest — written on a crashed pass and deleted on any alive,
+  // unmeasurable or non-crash answer (`CoordStore.setDeadAnchor`/`deleteDeadAnchor`, the table's one writer pair).
+  // Epoch ms, the server's clock. The table survives restarts; `.supervised`'s stamp may only RAISE the anchor
+  // (`deadCoordinatorSince`).
+  //
+  // A NEW TABLE AND NOTHING ELSE, and that is the choice that keeps a ROLLBACK bootable — `ccrc-update-watchdog` can
+  // roll a server box back with no human in the loop. MEASURED against `origin/main`'s own `db.ts` (wave 4's plan,
+  // Pre-flight): an older build opening a file at `user_version 18` takes rule 3 — it warns, reads as-is, migrates
+  // nothing, and its runs, mail, claims and ledger reads and writes work unchanged, because it never names this table
+  // and every read names its columns. An `ALTER TABLE runs ADD COLUMN … NOT NULL` would have been the dangerous shape:
+  // an older build's `INSERT INTO runs` names no such column. What the older build cannot do is keep the anchors, so
+  // rows it leaves behind are an episode nobody measured — which is why `lastDeadAt` rides beside `firstDeadAt`, and
+  // the lane restarts an episode whose last crashed pass is older than `DEAD_COORDINATOR_GAP_MS` (the departure
+  // `dead-anchor-restarts-after-an-unobserved-gap`).
+  //
+  // MIGRATIONS[0..16] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry never
+  // runs. THIS ENTRY WAS SLOT 17 WHEN ITS PLAN WAS WRITTEN. Stall-watch-settings W1 (#320) merged first and took
+  // `user_version 16 -> 17`, so this one moved up a slot rather than sharing an index, as entry 12 did before it.
+  // RE-MEASURE immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE dead_claimants (claimantId TEXT NOT NULL PRIMARY KEY, firstDeadAt INTEGER NOT NULL, lastDeadAt INTEGER NOT NULL);
+  `,
+  // ── 19: user_version 18 -> 19 ─────────────────────────────────────────────
+  // The dead-coordinator breaker's TYPED STATE (workspace lifecycle spec 2026-09-24 §5.4 and §12; the operator's ruling
+  // 4286, which chose a dedicated typed table over a sentinel claimant row or an untyped `run_events` marker). ONE ROW,
+  // `CHECK (id = 1)`, the `coordinator_state` and `stall_settings` idiom: it is control state, never a claimant, so no
+  // `claimedBy` can collide with it.
+  //   - `state` is `dirty`, `clean` or `sealed`. The lane writes `dirty` ALONE, in its own statement, before it changes any
+  //     anchor (`CoordStore.markDeadCoordinatorBreakerDirty`), and `clean` only in the ONE transaction that also writes the
+  //     breaker's exact held snapshot and every anchor change of the pass (`CoordStore.commitDeadCoordinatorBreakerState`).
+  //     `sealed` (fix round 5, D-4916, the operator's choice of 2026-10-13, "Seal on clean shutdown") is `clean` with a
+  //     witness: the server's shutdown handler writes it, in one generation-checked statement over the same snapshot, only
+  //     when nothing is pending and the state is durably clean (`CoordStore.sealDeadCoordinatorBreakerState`). A start
+  //     trusts a snapshot ONLY when it reads `sealed`, and the lane's first pass writes `clean` back at once
+  //     (`unsealDeadCoordinatorBreakerState`); `clean` and `dirty` both seed the conservative hold.
+  //   - `generation` moves on at every write, so a commit lands only over the dirty mark it was handed.
+  //   - `held` is that snapshot, in `deadCoordinatorBreakerHeldDetail`'s encoding (the `run_events` record's): NULL only
+  //     on a row marked dirty before any snapshot landed.
+  //   - `writtenAt` is the write-time clock of the last write (epoch ms, the server's clock).
+  // NO SEED ROW. An absent row reads as dirty (`CoordStore.deadCoordinatorBreakerState`'s `absent`), so the first pass
+  // after the deploy that creates this table flags every claimant it does not release (it holds them only when two or more
+  // stand unreleased) and writes the first exact snapshot: a database whose lane ran on an older build carries no record
+  // of that lane's hold, and an empty seed would read as "nothing held". Clean (unsealed), dirty, absent and unreadable
+  // all fail shut; nothing clears dirty by comparing timestamps.
+  //
+  // A NEW TABLE AND NOTHING ELSE, entry 18's argument: an older build opening a file at `user_version 19` takes rule 3
+  // (it warns, reads as-is, migrates nothing) and never names this table, so its runs, mail, claims and ledger work
+  // unchanged. What it cannot do is keep the breaker's hold — which is why the spec's §12 says to disarm the lane before
+  // rolling back below this release.
+  //
+  // MIGRATIONS[0..17] are frozen. THIS ENTRY IS SLOT 19 AS WRITTEN, measured against origin/main (28e8dc1b2, 18 entries)
+  // at this fix round's first step; whichever branch holding the same slot merges second moves up. RE-MEASURE
+  // immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE dead_coordinator_breaker_state (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    generation INTEGER NOT NULL,
+    state      TEXT NOT NULL CHECK (state IN ('clean', 'dirty', 'sealed')),
+    held       TEXT,
+    writtenAt  INTEGER NOT NULL
+  );
+  `,
+  // ── 20: user_version 19 -> 20 ─────────────────────────────────────────────
+  // The temp-root collector's Settings switch (path-identity spec 2026-10-12 §5.2; child reclamation wave 10). ONE
+  // ROW, `CHECK (id = 1)`, the `stall_settings` idiom. Its one writer is `CoordStore.setCollectLane`, called only by
+  // `POST /api/coord/collect-lane` and the collector's one latch helper; its reader is `CoordStore.collectLaneRow`,
+  // whose raw values `measureCollectLaneRow` (`collectLane.ts`, L1) decides, never cast. camelCase columns, the house
+  // style: `choice` is the raw stored token (only exact `live` arms); `fleetNodeId` the directly measured fleet node
+  // the operator confirmed (null for `off`); `markerRetiredAt` the legacy marker's journaled latch (null until a
+  // listing proves the marker absent, and never cleared once set); `generation` the database half of the generation
+  // proof; `updatedAt` a diagnostic wall time, never an arming input.
+  //
+  // THE SEED IS TODAY'S BEHAVIOUR, and it is EXACT: `off`, no node, no latch, generation 0, updatedAt 0. Beside a
+  // missing journal it is the one bootstrap, under which the legacy marker alone still arms the lane, so this entry
+  // changes nothing on deploy. An absent row, or a row that differs from the seed in any field, is not the seed, and
+  // nothing inserts one. `choice` deliberately carries NO CHECK: a token a newer build writes must not stop an older
+  // build opening the file; this build reads it as readable but ineffective.
+  //
+  // The proof's other half is `~/.ccrc/collect-lane-generation.log`, the server-owned generation journal: appended
+  // BEFORE this row is updated, never replayed into it, never rebuilt from it, and never restored with a snapshot of
+  // this file. The row is coherent only when the journal's maximum equals `generation`.
+  //
+  // A NEW TABLE AND NOTHING ELSE, the `dead_claimants` entry's shape and for its reason: an older build opening a file
+  // at `user_version 20` takes rule 3 (it warns, reads as-is and migrates nothing), never names this table, and boots;
+  // the legacy marker alone then arms its lane.
+  //
+  // Every earlier entry is frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry never
+  // runs. THIS ENTRY WAS SLOT 19 WHEN ITS PLAN WAS WRITTEN. Workspace lifecycle W6 (#351) merged first and took
+  // `user_version 18 -> 19`, so this one moved up a slot rather than sharing an index, as entry 18 did before it. The
+  // delegation-broker wave 3 plan names a slot too, and whichever branch holding one merges second moves up.
+  // RE-MEASURE immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE collect_lane_settings (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    choice          TEXT NOT NULL,
+    fleetNodeId     TEXT,
+    markerRetiredAt INTEGER,
+    generation      INTEGER NOT NULL,
+    updatedAt       INTEGER NOT NULL
+  );
+  INSERT INTO collect_lane_settings (id, choice, fleetNodeId, markerRetiredAt, generation, updatedAt)
+    VALUES (1, 'off', NULL, NULL, 0, 0);
+  `,
+  // ── 21: user_version 20 -> 21 ─────────────────────────────────────────────
+  // D-5290 (coordinator-first routing spec 2026-10-17 §5.2): an ask row may be MINTED `released`, never held, when
+  // its child's parent is not live (`parent-not-live`) or is a session of another project (`parent-project-mismatch`):
+  // the operator is pushed on the same tick, and the row is the journal of why the parent was skipped. `releaseReason`
+  // is that why, NULL for every row the hold minted (a lapse or a decline leaves it NULL too). Read back through
+  // `isAskReleaseReason`, never a cast; NO CHECK, for the reason `collect_lane_settings.choice` gives: a token a newer
+  // build writes must not stop an older build opening the file.
+  //
+  // ONE ADDITIVE COLUMN, nullable, no default, and nothing else: an older build opening a file at `user_version 21`
+  // takes rule 3 (it warns, reads as-is and migrates nothing); its `ASK_COLS` never names the column, so it reads these
+  // rows as the lapsed `released` rows they look like. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE asks ADD COLUMN releaseReason TEXT;
+  `,
+  // ── 22: user_version 21 -> 22 ─────────────────────────────────────────────
+  // The delegation broker's REPORT-ONLY coordination projection (delegation broker wave 3, spec §5.2): the six
+  // `delegation_*` tables, of the complete future-facing shape, in ONE step — waves 4-7 add code and no schema.
+  //   - `delegation_sessions`, `_attempts`, `_activities`, `_leases`, `_lineage`, `_events`. Columns are camelCase, tables and
+  //     indexes snake_case, every instant is epoch ms (the server's clock); the checkpoint and the journal spell the same
+  //     instants as canonical UTC strings, and `delegation-model.ts` is the one codec between the two.
+  //   - THEY ARE REPAIRABLE OUTPUT, NEVER AUTHORITY. The journal (`delegation-events.log`) and the checkpoint
+  //     (`delegation-checkpoint.json`) are the record. The checkpoint carries sessions, attempts, activities, leases and
+  //     lineage, and `CoordStore.projectDelegationCheckpoint` rebuilds exactly those five in one transaction: it deletes the
+  //     lineage, leases, attempts and activities, deletes the sessions (and, first, the events) that LEFT the checkpoint,
+  //     upserts the staying sessions in place, and inserts the activities, attempts, leases and lineage. An ordinary
+  //     application that only adds rows and updates some does less: `CoordStore.projectDelegationCheckpointChanges` writes
+  //     just the changed rows (a compare-and-swap UPDATE each, a plain INSERT for each new row) and holds the five tables to
+  //     the new checkpoint's row counts, falling back to the full projection for anything else; a lease row only ever UPDATEs there (a new lease takes the full projection). The checkpoint
+  //     carries NO events, so `delegation_events` is journal-derived: only `CoordStore.insertDelegationEvent` and its batch
+  //     `insertDelegationEvents` write it, a
+  //     projection deletes the events of a session that leaves and touches no other, and a lost or damaged events table is
+  //     repaired by replaying the retained journal through those two (Task 8), NOT by projecting. Nothing else
+  //     writes any of the six. So SQLite never becomes a second identity source, and it holds no health and no
+  //     coordinator intent as an authority (the checkpoint's `observationIntervals` and `coordinatorIntentByParent` do).
+  //     Bucket cursors and pruning holds have NO table: they live in the checkpoint alone.
+  //   - WAVE 3 WRITES A LEASE ROW ONLY BY REPLAYING A DURABLE `lease-created` ENTRY, and fixes generation 0, equal creating
+  //     and current journal sequences, `ephemeral` disposition, `not-due` cleanup and every transition clock, evidence and
+  //     carrier field to NULL. The DDL deliberately allows more (adoption, retention, promotion, cleanup, a carrier
+  //     generation, a release) because later waves fill those in; the guard is `assertLease` in code (wave 3's, loosened by
+  //     wave 5's transitions), so the schema never has to change to loosen it.
+  //   - THE TWO PARTIAL IDENTITY INDEXES on `delegation_leases` are one idea in two halves. SQLite treats NULLs in a UNIQUE
+  //     index as distinct, so a single UNIQUE (project, adminRecord, creationBase, canonicalPath) would admit unlimited
+  //     duplicates whose `creationBase` is NULL; one index per nullness avoids that, and both cover UNRELEASED rows only
+  //     (`releasedAt IS NULL`) so the exact tuple is reusable once its lease is released. `delegation_leases_one_active_path`
+  //     is independent: no two unreleased leases own one `canonicalPath`.
+  //   - An unresolved, conflicting or unmeasured ATTEMPT may keep `canonicalPath` NULL; a linked one may not.
+  //   - `delegation_lineage.runId` is a foreign key to `runs(id)`; every other key is internal to the six.
+  //
+  // A NEW SET OF TABLES AND NOTHING ELSE, entries 18, 19 and 20's argument, and the choice that keeps a ROLLBACK bootable: an
+  // older build opening a file at `user_version 22` takes `db.ts` rule 3 (it warns, reads as-is, migrates nothing) and
+  // never names these tables, so its runs, mail, claims and ledger work unchanged, and no table it owns was altered.
+  //
+  // MIGRATIONS[0..20] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry never
+  // runs. THIS ENTRY WAS SLOT 20 WHEN IT WAS WRITTEN, measured against origin/main (19 entries) at the wave-3 task that
+  // wrote it. The child reclamation wave 10 collector switch (#384) merged first and took `user_version 19 -> 20`, so this
+  // one moved up a slot rather than sharing an index, as entries 18 and 19 did before it. It moved up once more on its
+  // landing merge, because the asks release reason (#511) had taken `user_version 20 -> 21`. A move is safe only because
+  // this entry has never shipped: no release and no box carries it at an earlier index, so no database applied it there,
+  // and a move changes its index and this comment, never its SQL. Whichever branch holding the same slot merges second
+  // moves up the same way, and the tests find this entry by its DDL, so a renumber edits only the version pins that name
+  // the slot. RE-MEASURE immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE delegation_sessions (
+    sessionId            TEXT NOT NULL,
+    parentIncarnation    TEXT NOT NULL,
+    explicitIntentAt     INTEGER,
+    effective            INTEGER NOT NULL CHECK (effective IN (0, 1)),
+    effectiveBasisJson   TEXT NOT NULL,
+    claudeSessionIdsJson TEXT NOT NULL,
+    firstObservedAt      INTEGER NOT NULL,
+    lastObservedAt       INTEGER NOT NULL,
+    PRIMARY KEY (sessionId, parentIncarnation),
+    CHECK (lastObservedAt >= firstObservedAt)
+  );
+  CREATE INDEX delegation_sessions_by_effective
+    ON delegation_sessions(effective, lastObservedAt);
+
+  CREATE TABLE delegation_attempts (
+    attemptId         TEXT NOT NULL PRIMARY KEY,
+    parentId          TEXT NOT NULL,
+    parentIncarnation TEXT NOT NULL,
+    project           TEXT NOT NULL,
+    adminRecord       TEXT NOT NULL,
+    canonicalPath     TEXT,
+    attemptedAt       INTEGER NOT NULL,
+    rung              INTEGER CHECK (rung IS NULL OR rung BETWEEN 1 AND 4),
+    verdict           TEXT NOT NULL CHECK (verdict IN ('linked', 'unresolved', 'conflicting', 'unmeasured')),
+    evidenceJournalIdsJson TEXT NOT NULL,
+    detail            TEXT,
+    CHECK (verdict != 'linked' OR canonicalPath IS NOT NULL),
+    FOREIGN KEY (parentId, parentIncarnation)
+      REFERENCES delegation_sessions(sessionId, parentIncarnation)
+  );
+  CREATE INDEX delegation_attempts_by_parent
+    ON delegation_attempts(parentId, parentIncarnation, attemptedAt);
+  CREATE INDEX delegation_attempts_by_path
+    ON delegation_attempts(project, adminRecord, attemptedAt);
+
+  CREATE TABLE delegation_activities (
+    activityId         TEXT NOT NULL PRIMARY KEY,
+    parentId           TEXT NOT NULL,
+    parentIncarnation  TEXT NOT NULL,
+    sourceKind         TEXT NOT NULL CHECK (sourceKind IN ('agent', 'workflow', 'bash-worktree')),
+    upstreamId         TEXT NOT NULL,
+    identityJournalId  TEXT NOT NULL CHECK (length(identityJournalId) = 64),
+    displayName        TEXT,
+    executionState     TEXT NOT NULL CHECK (executionState IN ('active', 'ended', 'unknown')),
+    openedAt           INTEGER NOT NULL,
+    endedAt            INTEGER,
+    lastEventAt        INTEGER NOT NULL,
+    UNIQUE (parentId, parentIncarnation, sourceKind, upstreamId),
+    FOREIGN KEY (parentId, parentIncarnation)
+      REFERENCES delegation_sessions(sessionId, parentIncarnation),
+    CHECK (endedAt IS NULL OR endedAt >= openedAt),
+    CHECK (lastEventAt >= openedAt)
+  );
+  CREATE INDEX delegation_activities_by_parent
+    ON delegation_activities(parentId, parentIncarnation, executionState);
+
+  CREATE TABLE delegation_leases (
+    leaseId                 TEXT NOT NULL PRIMARY KEY,
+    generation              INTEGER NOT NULL CHECK (generation >= 0),
+    creatingJournalSequence INTEGER NOT NULL UNIQUE CHECK (creatingJournalSequence > 0),
+    currentJournalSequence  INTEGER NOT NULL CHECK (currentJournalSequence >= creatingJournalSequence),
+    activityId              TEXT NOT NULL REFERENCES delegation_activities(activityId),
+    parentId                TEXT NOT NULL,
+    parentIncarnation       TEXT NOT NULL,
+    project                 TEXT NOT NULL,
+    adminRecord             TEXT NOT NULL,
+    canonicalPath           TEXT NOT NULL,
+    creationBase            TEXT,
+    sourceKind              TEXT NOT NULL CHECK (sourceKind IN ('agent', 'workflow', 'raw', 'attached')),
+    parentageState          TEXT NOT NULL CHECK (parentageState IN ('linked', 'unresolved', 'conflicting', 'unmeasured')),
+    workspaceState          TEXT NOT NULL CHECK (workspaceState IN ('none', 'provisioning', 'present', 'absent', 'unmeasured')),
+    disposition             TEXT NOT NULL CHECK (disposition IN ('ephemeral', 'adopted', 'retained', 'promoted')),
+    cleanupState            TEXT NOT NULL CHECK (cleanupState IN ('not-due', 'pending', 'running', 'refused', 'reclaimed', 'unmeasured')),
+    cleanupPopulation       TEXT NOT NULL CHECK (cleanupPopulation = 'ephemeral-lease'),
+    firstObservedAt         INTEGER NOT NULL,
+    lastObservedAt          INTEGER NOT NULL,
+    terminalEvidenceAt      INTEGER,
+    adoptedAt               INTEGER,
+    retainedAt              INTEGER,
+    promotedAt              INTEGER,
+    cleanupDueAt            INTEGER,
+    cleanupStartedAt        INTEGER,
+    cleanupFinishedAt       INTEGER,
+    cleanupEvidenceJson     TEXT,
+    carrierGenerationSeen   INTEGER CHECK (carrierGenerationSeen IS NULL OR carrierGenerationSeen >= 1),
+    releasedAt              INTEGER,
+    FOREIGN KEY (parentId, parentIncarnation)
+      REFERENCES delegation_sessions(sessionId, parentIncarnation),
+    CHECK (lastObservedAt >= firstObservedAt),
+    CHECK (terminalEvidenceAt IS NULL OR terminalEvidenceAt >= firstObservedAt),
+    CHECK (adoptedAt IS NULL OR adoptedAt >= firstObservedAt),
+    CHECK (retainedAt IS NULL OR retainedAt >= firstObservedAt),
+    CHECK (promotedAt IS NULL OR promotedAt >= firstObservedAt),
+    CHECK (cleanupDueAt IS NULL OR cleanupDueAt >= firstObservedAt),
+    CHECK (cleanupStartedAt IS NULL OR cleanupStartedAt >= firstObservedAt),
+    CHECK (cleanupFinishedAt IS NULL OR cleanupFinishedAt >= firstObservedAt),
+    CHECK (cleanupFinishedAt IS NULL OR cleanupStartedAt IS NOT NULL),
+    CHECK (releasedAt IS NULL OR releasedAt >= firstObservedAt)
+  );
+  CREATE UNIQUE INDEX delegation_leases_identity_null_base
+    ON delegation_leases(project, adminRecord, canonicalPath)
+    WHERE creationBase IS NULL AND releasedAt IS NULL;
+  CREATE UNIQUE INDEX delegation_leases_identity_with_base
+    ON delegation_leases(project, adminRecord, creationBase, canonicalPath)
+    WHERE creationBase IS NOT NULL AND releasedAt IS NULL;
+  CREATE UNIQUE INDEX delegation_leases_one_active_path
+    ON delegation_leases(canonicalPath)
+    WHERE releasedAt IS NULL;
+  CREATE INDEX delegation_leases_by_parent
+    ON delegation_leases(parentId, parentIncarnation, releasedAt);
+  CREATE INDEX delegation_leases_by_activity
+    ON delegation_leases(activityId);
+  CREATE INDEX delegation_leases_by_cleanup
+    ON delegation_leases(cleanupPopulation, cleanupState, cleanupDueAt);
+
+  CREATE TABLE delegation_lineage (
+    lineageId          TEXT NOT NULL PRIMARY KEY,
+    parentId           TEXT NOT NULL,
+    parentIncarnation  TEXT NOT NULL,
+    activityId         TEXT REFERENCES delegation_activities(activityId),
+    leaseId            TEXT REFERENCES delegation_leases(leaseId),
+    runId              INTEGER REFERENCES runs(id),
+    openedAt           INTEGER NOT NULL,
+    closedAt           INTEGER,
+    closeReason        TEXT,
+    FOREIGN KEY (parentId, parentIncarnation)
+      REFERENCES delegation_sessions(sessionId, parentIncarnation),
+    CHECK (((activityId IS NOT NULL) + (leaseId IS NOT NULL) + (runId IS NOT NULL)) = 1),
+    CHECK ((closedAt IS NULL) = (closeReason IS NULL)),
+    CHECK (closedAt IS NULL OR closedAt >= openedAt)
+  );
+  CREATE INDEX delegation_lineage_by_parent
+    ON delegation_lineage(parentId, parentIncarnation, closedAt);
+  CREATE INDEX delegation_lineage_by_activity
+    ON delegation_lineage(activityId, closedAt);
+  CREATE INDEX delegation_lineage_by_lease
+    ON delegation_lineage(leaseId, closedAt);
+  CREATE INDEX delegation_lineage_by_run
+    ON delegation_lineage(runId, closedAt);
+
+  CREATE TABLE delegation_events (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    eventId            TEXT NOT NULL UNIQUE,
+    journalSequence    INTEGER NOT NULL UNIQUE CHECK (journalSequence > 0),
+    journalDigest      TEXT NOT NULL CHECK (length(journalDigest) = 64),
+    acceptedAt         INTEGER NOT NULL,
+    sessionId          TEXT NOT NULL,
+    parentIncarnation  TEXT NOT NULL,
+    claudeSessionId    TEXT NOT NULL,
+    eventKind          TEXT NOT NULL CHECK (eventKind IN ('SessionStart', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit', 'SessionEnd')),
+    observedAt         INTEGER NOT NULL,
+    payloadJson        TEXT NOT NULL,
+    FOREIGN KEY (sessionId, parentIncarnation)
+      REFERENCES delegation_sessions(sessionId, parentIncarnation)
+  );
+  CREATE INDEX delegation_events_by_parent
+    ON delegation_events(sessionId, parentIncarnation, journalSequence);
+  CREATE INDEX delegation_events_by_observed
+    ON delegation_events(observedAt);
+  `,
+  // ── 23: user_version 22 -> 23 ─────────────────────────────────────────────
+  // D-5298 (coordinator-first routing spec 2026-10-17 §6.4, plan Task 11b): a run OPENED by a claimant that sent no
+  // `claimedByUuid` while the fleet did not yet carry Task 11a's `ccrc-api` (`fleetCarriesRunsAttribution` false) is
+  // accepted, and this column is its journal: 1 for such an open, 0 for every other row, including every row that
+  // existed before this entry (they predate the question, and 0 is "not recorded unattributed", never "proven
+  // attributed"). Task M reports the count, which should fall to zero after the fleet's rollout; once the fleet
+  // carries the client the same open is `409 attribution-required` and writes no row at all.
+  //
+  // ONE ADDITIVE COLUMN with a constant default, and nothing else: an older build opening a file at `user_version 23`
+  // takes rule 3 (it warns, reads as-is and migrates nothing) and its inserts, which never name the column, store 0.
+  // Every earlier entry is frozen. RE-MEASURE the slot immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN unattributed INTEGER NOT NULL DEFAULT 0;
+  `,
+  // ── 24: user_version 23 -> 24 ─────────────────────────────────────────────
+  // D-5298 (coordinator-first routing spec 2026-10-17 §6.3 server half, plan Task 16): the `approvals` table, one row
+  // per permission-prompt request a dispatched child's hook sent, and the journal of every ruling made in the
+  // operator's name. `digest` is sha256 over the request's canonical array (the UNREDACTED input, held only for the
+  // request); `inputRedacted` is the only stored text, `redactCommand`ed and capped, and is cleared after
+  // `APPROVAL_INPUT_RETENTION_DAYS` while the row is kept. `askAt` is the mint time and `notifyAt` the window's end
+  // (`approvalWindowMs`, D-5441). `state` is an `ApprovalState`, read through `isApprovalState`, never a cast;
+  // `releaseReason` an `ApprovalReleaseReason`, set only on a row minted `released`. `ruling` is the signed record as
+  // the hook fetches it (`{record, sig}` JSON). `toolUseId` and `corrected` are the journal's later joins (the
+  // PostToolUse that followed, not built yet, D-5491; Task 17's correction mail), NULL and 0 until then.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 24` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE approvals (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    childId       TEXT    NOT NULL,
+    parentId      TEXT    NOT NULL,     -- the held-for claimant, or 'operator' for a row held for nobody
+    runId         INTEGER,              -- the run the child's mark names
+    digest        TEXT    NOT NULL CHECK (length(digest) = 64),
+    nonce         TEXT    NOT NULL CHECK (length(nonce) = 32),
+    agentId       TEXT    NOT NULL,     -- '' on the main thread
+    tool          TEXT    NOT NULL,
+    inputRedacted TEXT,                 -- NULL once pruned
+    truncated     INTEGER NOT NULL DEFAULT 0,
+    class         TEXT    NOT NULL,
+    state         TEXT    NOT NULL,
+    releaseReason TEXT,
+    askAt         INTEGER NOT NULL,
+    notifyAt      INTEGER NOT NULL,
+    ruledAt       INTEGER,
+    verdict       TEXT,
+    reason        TEXT,
+    ruling        TEXT,
+    answeredBy    TEXT,
+    toolUseId     TEXT,
+    corrected     INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX approvals_by_child ON approvals(childId, state);
+  CREATE INDEX approvals_by_parent ON approvals(parentId, state);
+  CREATE INDEX approvals_by_state ON approvals(state, notifyAt);
+  `,
+  // ── 25: user_version 24 -> 25 ─────────────────────────────────────────────
+  // D-5300 (coordinator-first routing spec 2026-10-17 §10, plan Task 17): the daily digest's idempotence and its
+  // correction mark. `digests` holds one row per UTC day the digest beat ran for (`day` is `YYYY-MM-DD`), inserted
+  // BEFORE the push, so a restart at the digest hour finds the row and sends no second push; `count` is the decisions
+  // it listed (0: the day had none and no push went). `asks.corrected` is the asks' half of the mark the approvals
+  // table already carries (`approvals.corrected`, migration 24): 1 once the operator sent a correction on the row,
+  // which spec §11 counts as a wrong ruling.
+  //
+  // A NEW TABLE AND ONE ADDITIVE COLUMN with a constant default, and nothing else: an older build opening a file at
+  // `user_version 25` takes rule 3 (it warns, reads as-is and migrates nothing), never names the table, and its asks
+  // inserts, which never name the column, store 0. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE digests (
+    day    TEXT    PRIMARY KEY CHECK (length(day) = 10),
+    sentAt INTEGER NOT NULL,
+    count  INTEGER NOT NULL
+  );
+  ALTER TABLE asks ADD COLUMN corrected INTEGER NOT NULL DEFAULT 0;
+  `,
+  // ── 26: user_version 25 -> 26 ─────────────────────────────────────────────
+  // D-5516 (accounts-connect spec 2026-10-18 §3.6, plan Task A7): `account_events`, the session-only audit of every
+  // account act. Its ONE writer is `AccountAudit.write` (`server/src/accounts/audit.ts`), which refuses any value
+  // outside the closed vocabularies and grammars before the INSERT, so no column can carry a secret, a code, a URL, a
+  // key hint, a key hash or an email. `at` is epoch ms; `actor` is `<device label> <8 hex of idHash>`, never an IP.
+  // `laneId` is NULL only for the laneless acts (`step-up-locked`, `management-remove`, `ceiling-lower`); `provider`
+  // is NULL when the act names none (D-5620); `method`, `code` and `keyName` (a minted key's fixed NAME, D-5555) are NULL when the act has
+  // none; `fleetIdentity` is the node-id the act ran against, NULL when it was not known. Rows older than 365 days are
+  // swept (`AccountAudit.sweep`), which the index on `at` serves. v1 ships no reader (spec §3.6).
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 26` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE account_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    at            INTEGER NOT NULL,
+    actor         TEXT    NOT NULL,
+    act           TEXT    NOT NULL,
+    laneId        TEXT,
+    provider      TEXT,
+    method        TEXT,
+    outcome       TEXT    NOT NULL CHECK (outcome IN ('ok', 'refused', 'failed', 'unknown')),
+    code          TEXT,
+    keyName       TEXT,
+    fleetIdentity TEXT
+  );
+  CREATE INDEX account_events_by_at ON account_events(at);
+  `,
+  // ── 27: user_version 26 -> 27 ─────────────────────────────────────────────
+  // D-5838 (durability #752, #754): the PARKED delivery state. A never-delivered row whose recipient
+  // is alive but whose input box will not take the nudge (`enter-ignored` at once, any other send refusal at
+  // `MAIL_MAX_ATTEMPTS`) is no longer rejected: it stays `queued` — so every outstanding-state reader keeps
+  // counting it — and these columns say it is parked. `parkedAt` is when the park began (NULL: not parked);
+  // `parkReason` the `sendPrompt` refusal that parked it; `parkBox` the input box's text when it last parked,
+  // which the sweep's probe compares against to wake the row on a change; `parkEscalatedAt` when the one
+  // operator push went (NULL: not yet). `markDelivered` clears all four.
+  //
+  // FOUR NULLABLE COLUMNS AND NOTHING ELSE: an older build opening a file at `user_version 27` takes rule 3 (it
+  // warns, reads as-is and migrates nothing), never names them, and retries a parked row as the ordinary
+  // `queued` row it still is. Every earlier entry is frozen. RE-MEASURE the slot immediately before the PR and
+  // before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail_deliveries ADD COLUMN parkedAt INTEGER;
+  ALTER TABLE mail_deliveries ADD COLUMN parkReason TEXT;
+  ALTER TABLE mail_deliveries ADD COLUMN parkBox TEXT;
+  ALTER TABLE mail_deliveries ADD COLUMN parkEscalatedAt INTEGER;
+  `,
+  // ── 28: user_version 27 -> 28 ─────────────────────────────────────────────
+  // D-5513 (accounts-connect spec 2026-10-18 §3.3, plan Task A10): `secret_fingerprints`, the exact-bytes half of the
+  // egress mask. One row per lane secret: `fp` is `HMAC-SHA256(box token, "ccrc-secret-fp-v1\0" ‖ secret)` in
+  // lowercase hex over the secret with its trailing `=` stripped, and `len` that stripped secret's byte length (D-5996:
+  // only a run of a held length is hashed), computed ON THE BOX by the account verbs (which hold both); `gen` names the box-token
+  // generation it was keyed with (D-5975), so a rotation can keep matching the previous generation's rows until the
+  // re-keyed ones land. `at` is epoch ms. The server never holds a lane secret, and this table is never served: its
+  // ONE reader and writer is `SecretMasker` (`server/src/accounts/mask.ts`); A12's `reloadRoster` fills it through it.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 28` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE secret_fingerprints (
+    laneId TEXT    NOT NULL,
+    fp     TEXT    NOT NULL CHECK (length(fp) = 64),
+    gen    TEXT    NOT NULL,
+    len    INTEGER NOT NULL CHECK (len BETWEEN 20 AND 8192),
+    at     INTEGER NOT NULL,
+    PRIMARY KEY (laneId, gen, fp)
+  );
+  `,
+  // ── 29: user_version 28 -> 29 ─────────────────────────────────────────────
+  // D-5860 (consolidation W1a plan, Task C1f; ARCH-55 #790): `feed_events.dedupe_key`, the label a notice that must
+  // happen once carries (which compaction a nudge is about; which PR removal a dequeue is about). Its ONE writer is
+  // `CoordStore.recordFeedEvent` and its one reader `CoordStore.hasNotice`; the key is stored as its SHA-256 hex,
+  // never through the body's redactor (departure `dedupe-key-unmasked`: a masked key collides exactly as a masked body
+  // does). NULL is a row written before this migration, or a notice with no once-only rule; `hasNotice` matches such a
+  // row by its body (departure `dedupe-key-legacy-text`). The index serves `hasNotice`'s three-column read.
+  //
+  // ONE NULLABLE COLUMN (no NOT NULL, no CHECK, no default) AND ONE INDEX, nothing else: an older build opening a file at
+  // `user_version 29` takes rule 3 (it warns, reads as-is and migrates nothing), never names the column, and its
+  // inserts store NULL. Every earlier entry is frozen. RE-MEASURE the slot immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE feed_events ADD COLUMN dedupe_key TEXT;
+  CREATE INDEX feed_events_by_dedupe ON feed_events(kind, sessionId, dedupe_key);
+  `,
+  // ── 30: user_version 29 -> 30 ─────────────────────────────────────────────
+  // D-6795 (build-spend controls plan 2026-10-24): `review_cap`, one row per WORK run whose review rounds reached
+  // the cap. `askedAt` is when the operator's ask was raised (null while the row records only a lift made ahead of
+  // the cap), `liftedAt` when the operator lifted the cap for that run (null while it stands). Its ONE writer is
+  // `CoordStore` (`raiseReviewCapAsk`, `liftReviewCap`), and the row is what makes the ask once-only: the insert that
+  // creates it is the raise.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 30` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE review_cap (
+    workRunId INTEGER NOT NULL PRIMARY KEY REFERENCES runs(id),
+    askedAt   INTEGER,
+    liftedAt  INTEGER
+  );
+  `,
+  // ── 31: user_version 30 -> 31 ─────────────────────────────────────────────
+  // D-5922 (coordinator-durability tail spec 2026-10-20 §4.3, plan Task DT2; #760): `drift_findings`, the reconciler's
+  // standing state: one row per thing found out of step, keyed by the subject so the same drift is the same row on
+  // every pass. `kind` is a DriftKind (read back through `isDriftKind`, never cast), `subject` the JSON of the ids it
+  // names, `detail` one redacted line. `factAt` is the fact's own time where it has one; `firstSeenAt`/`lastSeenAt`
+  // bracket the passes that found it; `clearedAt` is set ONLY by a later pass that measured the fact gone. `pushedAt`
+  // and `pushedVia` are the once-only authority for the operator push (`item`: its own push, `summary`: folded into the
+  // first-pass summary); `shadowAt` is the same once-only for the unarmed lane's record of what it would have pushed.
+  // Its writers are `CoordStore.recordDriftPass`, `markDriftPushed` and `markDriftShadowed`, nothing else.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 31` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE drift_findings (
+    key         TEXT    PRIMARY KEY,
+    kind        TEXT    NOT NULL,
+    subject     TEXT    NOT NULL,
+    detail      TEXT    NOT NULL,
+    factAt      INTEGER,
+    runId       INTEGER,
+    sessionId   TEXT,
+    firstSeenAt INTEGER NOT NULL,
+    lastSeenAt  INTEGER NOT NULL,
+    clearedAt   INTEGER,
+    pushedAt    INTEGER,
+    pushedVia   TEXT CHECK (pushedVia IN ('item', 'summary')),
+    shadowAt    INTEGER
+  );
+  CREATE INDEX drift_findings_pushed ON drift_findings(pushedAt);
+  CREATE INDEX drift_findings_open ON drift_findings(clearedAt, kind);
+  `,
+  // ── 32: user_version 31 -> 32 ─────────────────────────────────────────────
+  // D-6861 (disk retention): `shadow_journal`, the durable record of what an UNARMED disk
+  // lane (`expire-child`, `stale-archive`, `nested-rescue`) would have done, so a lane can be reviewed before it is armed
+  // after the 2000-row feed archive has rolled over. `key` is the once-only key (lane, subject, path, epoch), so a verdict
+  // asked again after a restart is the same row; `at` is the first write; `bytes`/`inodes` are NULL where the lane does
+  // not measure them. Its one writer is `CoordStore.recordShadowVerdict`, which also prunes by age and by row count.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 32` takes rule 3 (it warns, reads as-is
+  // and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR and
+  // before merge (the count above).
+  `
+  CREATE TABLE shadow_journal (
+    key     TEXT    PRIMARY KEY,
+    lane    TEXT    NOT NULL,
+    subject TEXT    NOT NULL,
+    path    TEXT,
+    rung    TEXT    NOT NULL,
+    bytes   INTEGER,
+    inodes  INTEGER,
+    detail  TEXT    NOT NULL,
+    at      INTEGER NOT NULL
+  );
+  CREATE INDEX shadow_journal_at ON shadow_journal(at);
+  `,
+  // ── 33: user_version 32 -> 33 ─────────────────────────────────────────────
+  // D-7319 (operator ruling 2026-10-29): the Settings switch of the act that abandons a dispatch that never came back
+  // (`coord/abandonDeadDispatch.ts`). ONE ROW, `CHECK (id = 1)`, the `stall_settings` idiom. Its one writer is
+  // `CoordStore.setDispatchAbandon`, called only by `POST /api/coord/dispatch-abandon`; its reader is
+  // `CoordStore.dispatchAbandonSetting`, and only an exact `on` arms the act (`isDispatchAbandonChoice`, never a cast).
+  // `choice` carries NO CHECK, `collect_lane_settings.choice`'s reason: a token a newer build writes must not stop an
+  // older build opening the file; this build reads it as `unknown`, which arms nothing.
+  //
+  // THE SEED IS THE RULING: `on`, updatedAt 0. A lost row arms nothing (the store answers `absent`) and nothing inserts
+  // one but the POST.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 33` takes rule 3 (it warns, reads as-is
+  // and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR and
+  // before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE dispatch_abandon_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    choice    TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO dispatch_abandon_settings (id, choice, updatedAt) VALUES (1, 'on', 0);
+  `,
+  // ── 34: user_version 33 -> 34 ─────────────────────────────────────────────
+  // D-7453 (the automatic coordinator roll, the operator's rulings of 2026-10-29): `roll_settings`, the Settings ›
+  // Automation row "Roll idle sessions". ONE ROW, `CHECK (id = 1)`, the `stall_settings` idiom. `targets` is a
+  // `ClaudeRollTargets` (`coordinators` or `off`), read back through `isClaudeRollTargets`, never cast, so NO CHECK: a
+  // word a newer build writes reads as unknown here, which rolls nothing (`rollTargetsOf`). Its one writer is
+  // `CoordStore.setRollTargets`, called only by `POST /api/coord/roll-idle`; its one reader `CoordStore.rollSettings`.
+  //
+  // THE SEED IS THE OPERATOR'S RULE: `coordinators`, the row ON. A lost row reads as the same default.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 34` takes rule 3 (it warns, reads as-is
+  // and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR and
+  // before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE roll_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    targets   TEXT    NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO roll_settings (id, targets, updatedAt) VALUES (1, 'coordinators', 0);
+  `,
+  // ── 35: user_version 34 -> 35 ─────────────────────────────────────────────
+  // Landing order wave 5e (D-7611, D-7613, D-7614): the landing line's two tables, each complete. `landing_entries`
+  // holds one row per (project, pr): the PR a coordinator pinned at `merging`, at the head it verified. Its ONE writer
+  // is `CoordStore.advanceLanding`, which writes `pinnedSha` and `ejections` in the same transaction as the run's
+  // advance, from the same head as the run's `merging-at:` detail. `landing_projects` holds a project's two flags.
+  // `state` and `ejectionKind` carry NO CHECK, `collect_lane_settings.choice`'s reason: a word a newer build writes
+  // must not stop an older build opening the file; this build reads it as `unknown` (`landingEntryOfRow`), which is
+  // never in the line. `afterIds` (entry ids, a JSON array), `fixesMain`, `setBy` on a run-less entry, `mainRedHold`
+  // and `operatorPaused` hold their defaults until 5f, 5i and 5j. There is NO repo column (D-7612).
+  //
+  // NO SEED ROW: an absent `landing_projects` row reads both flags clear (`CoordStore.landingProject`).
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 35` takes rule 3 (it warns, reads as-is
+  // and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR and
+  // before merge (it must print 34 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE landing_entries (
+    id            INTEGER PRIMARY KEY,
+    project       TEXT    NOT NULL,
+    pr            INTEGER NOT NULL,
+    pinnedSha     TEXT    NOT NULL,
+    handoffCommit TEXT    NOT NULL,
+    runId         INTEGER REFERENCES runs(id),
+    state         TEXT    NOT NULL,
+    baseSha       TEXT,
+    ejectionKind  TEXT,
+    ejections     INTEGER NOT NULL DEFAULT 0,
+    afterIds      TEXT    NOT NULL DEFAULT '[]',
+    fixesMain     INTEGER NOT NULL DEFAULT 0,
+    setBy         TEXT    NOT NULL,
+    detail        TEXT,
+    pinnedAt      INTEGER NOT NULL,
+    UNIQUE (project, pr)
+  );
+  CREATE INDEX landing_entries_run ON landing_entries(runId);
+  CREATE TABLE landing_projects (
+    project        TEXT    NOT NULL PRIMARY KEY,
+    operatorPaused INTEGER NOT NULL DEFAULT 0,
+    mainRedHold    INTEGER NOT NULL DEFAULT 0
+  );
+  `,
+  // ── 36: user_version 35 -> 36 ─────────────────────────────────────────────
+  // D-7671 (Linear central key, #1444, spec §7): `linear_events`, the journal of every Linear write a session sends
+  // through the server and of every Settings act on a workspace key. Its ONE writer is `LinearJournal`
+  // (`server/src/linear/journal.ts`), which checks every value against its grammar before the INSERT: `op`,
+  // `outcome` and `code` are closed words, the ids are SAFE_RE or UUIDs, `teamKey`, `target` and `result` are a
+  // team key, an issue identifier or a UUID, and `fields` holds only names from the operation's closed list. So no
+  // column can carry a title, a body, a name, the key, its tail or its digest. `at` is epoch ms, set when the row is
+  // inserted `pending`; the outcome replaces `pending` when the route answers, and a row left `pending` reads as
+  // "outcome unknown". `sessionId`/`sessionUuid` are NULL on a key act and `actor` is NULL on a session write.
+  // `result` is indexed for the read side's `viaFleet` (spec §5.4). Rows older than 365 days are swept
+  // (`LinearJournal.sweep`, on `index.ts`'s daily beat beside the account audit's). v1 ships no reader (spec §16 Q3).
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 36` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR
+  // and before merge (it must print 35 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE linear_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    at          INTEGER NOT NULL,
+    sessionId   TEXT,
+    sessionUuid TEXT,
+    actor       TEXT,
+    workspaceId TEXT,
+    teamKey     TEXT,
+    op          TEXT    NOT NULL,
+    target      TEXT,
+    result      TEXT,
+    fields      TEXT,
+    outcome     TEXT    NOT NULL CHECK (outcome IN ('pending', 'ok', 'refused', 'denied', 'failed', 'unknown')),
+    code        TEXT,
+    masked      INTEGER,
+    decisionId  TEXT
+  );
+  CREATE INDEX linear_events_by_result ON linear_events(result);
+  `,
+  // ── 37: user_version 36 -> 37 ─────────────────────────────────────────────
+  // Programme ledgers (plan PL2, spec 2026-10-31 §3-§4): the operator's items, the history of each, the spec
+  // modifications, and the spec pin on the programme row. Everything is keyed on the programme's SLUG (spec §3.4), not
+  // on a run, so a programme with no open run still has its items (shown as ended, dismissable) and they are live again
+  // exactly as they were if a run opens under the same slug.
+  //
+  // `operator_items`: one row per item. Its ONE writer is `CoordStore` (`raiseItem` inserts; `moveItem` is the only
+  // writer of `state`, `tickedAt`, `closedAt`, `answer` and the return `note`, and it decides only through
+  // `nextItemState` in `shared/ledgers.ts`; `setBlocking` is the only other writer, of `neededBy`). Its readers are
+  // `itemById`, `itemsFor` and the routes and frames built on them. `how` and `options` are JSON `string[]` text
+  // (`options` NULL = the kind takes none); `soonLabel` is NULL unless the item was raised `soon`; `secretSlot` is the
+  // slot NAME for a `secret` item and never a value (spec §5); `answer` is the operator's answer and never a secret;
+  // `note` is the coordinator's latest sent-back note; `tickedAt` and `closedAt` are NULL until those moves happen.
+  // `state`, `kind`, `neededBy` carry no SQL CHECK: the vocabulary is `shared/ledgers.ts`'s, and a SQL list would be a
+  // second copy of it.
+  //
+  // `operator_item_events`: append-only, one row per move, written in the SAME transaction as the move. `act` is an
+  // `ItemAct` or `raise`, `block`, `unblock`; `actor` is `operator` or `coordinator`; `note` is the move's note (a
+  // `block` row keeps the needed-by it replaced, which is what `unblock` restores). Its one writer is `CoordStore`;
+  // its reader is `itemHistory`.
+  //
+  // `programme_modifications`: the dated "Changed since approval" list. Its one writer is `CoordStore`
+  // (`addModification` inserts, `markModificationsMerged` sets `mergedAt` once); its reader is `goalsFor`. `mergedAt`
+  // NULL = the spec PR has not merged ("spec update pending"); `itemId` and `pr` are NULL when the change came from no
+  // item or has no PR yet.
+  //
+  // `programs.specPath`, `programs.inShort`, `programs.inShortAt`: the spec pin. NULL until the coordinator pins a spec
+  // (`setSpecPin` is the one writer, `goalsFor` the reader); a programme that already existed reads NULL, which is
+  // "no pin", and nothing is guessed into them.
+  //
+  // NEW TABLES, ONE INDEX AND THREE NULLABLE COLUMNS, NOTHING ELSE: an older build opening a file at `user_version 37`
+  // takes rule 3 (it warns, reads as-is and migrates nothing) and never names them. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 36 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE operator_items (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    program    TEXT    NOT NULL,
+    runId      INTEGER,
+    raisedBy   TEXT    NOT NULL,
+    kind       TEXT    NOT NULL,
+    title      TEXT    NOT NULL,
+    why        TEXT    NOT NULL,
+    how        TEXT    NOT NULL,
+    options    TEXT,
+    neededBy   TEXT    NOT NULL,
+    soonLabel  TEXT,
+    secretSlot TEXT,
+    state      TEXT    NOT NULL,
+    answer     TEXT,
+    note       TEXT,
+    raisedAt   INTEGER NOT NULL,
+    tickedAt   INTEGER,
+    closedAt   INTEGER
+  );
+  CREATE INDEX operator_items_by_program ON operator_items(program, state);
+  CREATE TABLE operator_item_events (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    itemId INTEGER NOT NULL,
+    at     INTEGER NOT NULL,
+    act    TEXT    NOT NULL,
+    actor  TEXT    NOT NULL,
+    note   TEXT
+  );
+  CREATE TABLE programme_modifications (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    program  TEXT    NOT NULL,
+    at       INTEGER NOT NULL,
+    text     TEXT    NOT NULL,
+    ruling   TEXT,
+    itemId   INTEGER,
+    pr       INTEGER,
+    mergedAt INTEGER
+  );
+  ALTER TABLE programs ADD COLUMN specPath TEXT;
+  ALTER TABLE programs ADD COLUMN inShort TEXT;
+  ALTER TABLE programs ADD COLUMN inShortAt INTEGER;
+  `,
+  // ── 38: user_version 37 -> 38 ─────────────────────────────────────────────
+  // A decide item's recommendation (plan PL9, spec 2026-10-31 §3.2, D24): `operator_items.recommended` is the
+  // 0-based index into `options` of the option the raiser recommends, and `operator_items.recommendedWhy` says why it beats
+  // each alternative. Their ONE writer is `raiseItem` (`ledgersStore.ts`), from a body `parseRaise` has checked: both set on
+  // a `decide` item, both NULL on every other kind. Their readers are `itemById` and `itemsFor`, and the console reads them
+  // through `recommendationOf` (`shared/ledgers.ts`) alone. An item raised before this entry reads NULL for both, which is
+  // "no recommendation", drawn as before; nothing is guessed into them.
+  //
+  // TWO NULLABLE COLUMNS, NOTHING ELSE: an older build opening a file at `user_version 38` takes rule 3 (it warns, reads
+  // as-is and migrates nothing), and its `SELECT` names columns, never `*`, so it never reads them. Every earlier entry is
+  // frozen. Shared with landing-order 5f by agreement: whichever lands second moves its own entry after the other's.
+  `
+  ALTER TABLE operator_items ADD COLUMN recommended INTEGER;
+  ALTER TABLE operator_items ADD COLUMN recommendedWhy TEXT;
+  `,
+  // ── 39: user_version 38 -> 39 ─────────────────────────────────────────────
+  // Landing order wave 5f: the landing line's authority overlay, its journal cursor, a DB-only association witness and
+  // the quarantine marker. Nothing here is seeded from `landing_entries`: those ordering columns stay the fallback only.
+  //
+  // `landing_subjects`: one row per identity the landing journal (`landing.log`) ever named. Its ONE writer is the
+  // private apply family of `CoordStore` (live write and replay alike); its readers are `readLanding` and the recovery
+  // fold (`landingRecoveryOf`). `bindingKind`/`observedRunId` are the LATEST historical observation of the subject's
+  // run association, with `observedSeq` the journal sequence that made it; `observedRunId` has no FK to `runs` and is
+  // never joined to a current run. `creationSeq`/`creationClaim` are the original entry record, both NULL for a subject
+  // only ever named as a target. ID and (project, pr) are each unique.
+  //
+  // `landing_authority`: the decided order of one subject (`afterIds` a JSON array of entry ids, `fixesMain` 0/1, the
+  // setter and the record sequence). Same writer and readers. Individual edge identity and uniqueness are policy
+  // (`parseLandingJournal`, `decideLandingMutation`), not a SQL graph walker.
+  //
+  // `landing_journal_cursor`: one row, `appliedSeq` the last journal sequence applied. Seeded `(1, 0)`, the only seed.
+  //
+  // `landing_projection_witness`: DB-only evidence of the last VERIFIED pin of a projection (`advanceLanding` is its
+  // only writer, atomically with the pin). `observedSeq` 0 means no subject observation yet. It is not journal authority
+  // and never current association authority; it is empty at migration and replay never mints it. It cascades with its
+  // projection; no FK to `runs`.
+  //
+  // `landing_entries.quarantineKind`: NULL for an ordinary projection, `stale-episode-head` (with `state` `unknown`) for
+  // a deliberately quarantined stale pin. Only `advanceLanding` writes or clears it. No existing row is quarantined.
+  //
+  // NEW TABLES AND ONE NULLABLE COLUMN, NOTHING ELSE: an older build opening a file at `user_version 39` takes rule 3
+  // (it warns, reads as-is and migrates nothing) and never names them. Every earlier entry is frozen. RE-MEASURE the
+  // slot before the PR and before merge (it must print 38 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE landing_subjects (
+    id            INTEGER PRIMARY KEY CHECK (typeof(id) = 'integer' AND id BETWEEN 1 AND 9007199254740991),
+    project       TEXT    NOT NULL CHECK (typeof(project) = 'text' AND project = trim(project, ' ' || char(9) || char(10) || char(13)) AND length(project) > 0),
+    pr            INTEGER NOT NULL CHECK (typeof(pr) = 'integer' AND pr BETWEEN 1 AND 9007199254740991),
+    bindingKind   TEXT    NOT NULL CHECK (bindingKind IN ('run', 'no-run')),
+    observedRunId INTEGER CHECK (observedRunId IS NULL OR (typeof(observedRunId) = 'integer' AND observedRunId BETWEEN 1 AND 9007199254740991)),
+    observedSeq   INTEGER NOT NULL CHECK (typeof(observedSeq) = 'integer' AND observedSeq BETWEEN 1 AND 9007199254740991),
+    creationSeq   INTEGER CHECK (creationSeq IS NULL OR (typeof(creationSeq) = 'integer' AND creationSeq BETWEEN 1 AND 9007199254740991)),
+    creationClaim TEXT,
+    UNIQUE (project, pr),
+    CHECK ((bindingKind = 'run') = (observedRunId IS NOT NULL)),
+    CHECK ((creationSeq IS NULL) = (creationClaim IS NULL)),
+    CHECK (creationSeq IS NULL OR creationSeq <= observedSeq),
+    CHECK (creationClaim IS NULL OR (CASE WHEN json_valid(creationClaim) THEN (json_type(creationClaim) IS 'object'
+      AND json_type(creationClaim, '$.at') IS 'integer'
+      AND json_extract(creationClaim, '$.at') BETWEEN 0 AND 9007199254740991
+      AND json_type(creationClaim, '$.setBy') IS 'text'
+      AND json_extract(creationClaim, '$.setBy') = trim(json_extract(creationClaim, '$.setBy'), ' ' || char(9) || char(10) || char(13))
+      AND length(json_extract(creationClaim, '$.setBy')) > 0
+      AND json_type(creationClaim, '$.pinnedSha') IS 'text'
+      AND length(json_extract(creationClaim, '$.pinnedSha')) = 40
+      AND json_extract(creationClaim, '$.pinnedSha') NOT GLOB '*[^0-9a-f]*'
+      AND json_type(creationClaim, '$.handoffCommit') IS 'text'
+      AND length(json_extract(creationClaim, '$.handoffCommit')) = 40
+      AND json_extract(creationClaim, '$.handoffCommit') NOT GLOB '*[^0-9a-f]*') ELSE 0 END))
+  );
+  CREATE TABLE landing_authority (
+    subjectId INTEGER PRIMARY KEY REFERENCES landing_subjects(id) CHECK (typeof(subjectId) = 'integer' AND subjectId BETWEEN 1 AND 9007199254740991),
+    afterIds  TEXT    NOT NULL CHECK (CASE WHEN json_valid(afterIds) THEN json_type(afterIds) = 'array' ELSE 0 END),
+    fixesMain INTEGER NOT NULL CHECK (typeof(fixesMain) = 'integer' AND fixesMain IN (0, 1)),
+    setBy     TEXT    NOT NULL CHECK (typeof(setBy) = 'text' AND setBy = trim(setBy, ' ' || char(9) || char(10) || char(13)) AND length(setBy) > 0),
+    seq       INTEGER NOT NULL CHECK (typeof(seq) = 'integer' AND seq BETWEEN 1 AND 9007199254740991)
+  );
+  CREATE TABLE landing_journal_cursor (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    appliedSeq INTEGER NOT NULL CHECK (typeof(appliedSeq) = 'integer' AND appliedSeq BETWEEN 0 AND 9007199254740991)
+  );
+  CREATE TABLE landing_projection_witness (
+    entryId       INTEGER PRIMARY KEY REFERENCES landing_entries(id) ON DELETE CASCADE CHECK (typeof(entryId) = 'integer' AND entryId BETWEEN 1 AND 9007199254740991),
+    project       TEXT    NOT NULL CHECK (typeof(project) = 'text' AND project = trim(project, ' ' || char(9) || char(10) || char(13)) AND length(project) > 0),
+    pr            INTEGER NOT NULL CHECK (typeof(pr) = 'integer' AND pr BETWEEN 1 AND 9007199254740991),
+    observedSeq   INTEGER NOT NULL CHECK (typeof(observedSeq) = 'integer' AND observedSeq BETWEEN 0 AND 9007199254740991),
+    runId         INTEGER NOT NULL CHECK (typeof(runId) = 'integer' AND runId BETWEEN 1 AND 9007199254740991),
+    pinnedSha     TEXT    NOT NULL CHECK (typeof(pinnedSha) = 'text' AND length(pinnedSha) = 40 AND pinnedSha NOT GLOB '*[^0-9a-f]*'),
+    handoffCommit TEXT    NOT NULL CHECK (typeof(handoffCommit) = 'text' AND length(handoffCommit) = 40 AND handoffCommit NOT GLOB '*[^0-9a-f]*')
+  );
+  ALTER TABLE landing_entries ADD COLUMN quarantineKind TEXT DEFAULT NULL
+    CHECK (quarantineKind IS NULL OR (quarantineKind = 'stale-episode-head' AND state = 'unknown'));
+  INSERT INTO landing_journal_cursor (id, appliedSeq) VALUES (1, 0);
+  `,
+  // ── 40: user_version 39 -> 40 ─────────────────────────────────────────────
+  // A revived park's heir names its parent (D-5914, D-7901; spec 2026-10-20 §3.2, #125). `revivedFrom` is the id of
+  // the `rejected` delivery a later delivery of the same mail was queued to replace, once that parked row's recipient
+  // read live again. Its ONE writer is `CoordStore.queueDelivery`, called with a parent only by
+  // `reviveParkedDeliveries`; it is written at INSERT and never updated. Its readers are `HAS_HEIR_SQL` in `store.ts`,
+  // the one fragment both `ABANDONED_PARK_SQL` (a parent with an heir is not abandoned) and the revive's own select (no
+  // heir yet) read. NULL is "this row revives nothing", which every row before this entry is. The partial index serves
+  // that `EXISTS` lookup and holds only heirs.
+  //
+  // ONE NULLABLE COLUMN AND ONE PARTIAL INDEX, NOTHING ELSE: an older build opening a file at `user_version 40` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the column, and inserts with it NULL. It then
+  // counts a revived parent beside its heir again, which is #125's old reading and nothing worse. Every earlier entry
+  // is frozen. RE-MEASURE the slot before the PR and before merge (it must print 39 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail_deliveries ADD COLUMN revivedFrom INTEGER;
+  CREATE INDEX mail_deliveries_by_revived ON mail_deliveries(revivedFrom) WHERE revivedFrom IS NOT NULL;
+  `,
+  // ── 41: user_version 40 -> 41 ─────────────────────────────────────────────
+  // A run had a child (D-8068, the ruling of 2026-11-06 on D-7214): the fact the runs board used to gather in a browser
+  // set. 1 means this run held a child workspace. Its writers are `CoordStore.markHadChild`, which dispatch's fresh-spawn
+  // arm calls before it asks ccd for `--child <run>`, and `bindSession`, which passes it to a later wave bound to that
+  // session. `hydrateRun` reads it, with `sessionId`, into `RunSummary.hadChild`.
+  //
+  // ROWS STORED BEFORE THIS ENTRY ARE BACKFILLED, NOT READ AS "NO CHILD". A row that closed before the deploy can have its
+  // child reclaimed after it, and that row needs the re-read as much as a new one does. The evidence is the one the
+  // fresh-spawn arm leaves: a bound row with a `dispatchStartedAt` and no `child-omitted:` event (the journal of a spawn
+  // sent without `--child`), then every row bound to a session such a row names. The wrong answers it can give are of
+  // one kind: a row older than child marks reads 1, or a recycled name's later row does. Either costs one spare archive
+  // read per reclaim end, and neither can drop a re-read. Only that arm sends `--child`, and a later wave binds the
+  // session it names, so the one marked child it can miss is a run whose first attempt journalled the omission and whose
+  // retry reached a box that had gained the flag: that row stays 0 and is re-read on the chip triggers alone. After this
+  // entry the live writers add a second wrong 1 of the same price: `markHadChild` is sticky, so a failed attempt keeps its
+  // mark with no session, a later bind to a session that is no child reads true, and later waves inherit it.
+  //
+  // ONE ADDITIVE COLUMN with a constant default, and one backfill: an older build opening a file at `user_version 41`
+  // takes rule 3 (it warns, reads as-is and migrates nothing), never names the column, and inserts 0. A row a rolled-back
+  // build dispatches therefore keeps 0 after the roll forward: the board re-reads it on the chip triggers alone, which
+  // is the old board's reading after a reload, and nothing worse. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 40 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN hadChild INTEGER NOT NULL DEFAULT 0;
+  UPDATE runs SET hadChild = 1
+    WHERE sessionId IS NOT NULL AND dispatchStartedAt IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM run_events e WHERE e.runId = runs.id AND e.detail LIKE 'child-omitted:%');
+  UPDATE runs SET hadChild = 1
+    WHERE hadChild = 0 AND sessionId IN (SELECT m.sessionId FROM runs m WHERE m.hadChild = 1);
+  `,
+  // ── 42: user_version 41 -> 42 ─────────────────────────────────────────────
+  // A dispatch's landing intents (landing order wave 5g, D-8080 to D-8086; spec 2026-09-23 §5.5): the pull requests or
+  // deviations a run said, at dispatch, it will land. One row per (run, key): `key` is `#<pr>` or `D-<n>` (the grammar
+  // is `shared/landingIntents.ts`'s, not this table's), `project` the run's project, `takenAt` the run's `dispatchedAt`.
+  // `setBy` is NULL with ONE meaning: the run had no claimant when it dispatched. Its ONE writer is
+  // `CoordStore.dispatchRun`, inside the dispatch's own transaction and after the transition is allowed; its ONE reader
+  // is `CoordStore.heldLandingIntents`. A hold ends when its run is terminal, and nothing writes that end: the read
+  // excludes terminal runs, so no row is ever updated or deleted.
+  //
+  // ONE NEW TABLE AND ONE INDEX, NOTHING ELSE: an older build opening a file at `user_version 42` takes rule 3 (it
+  // warns, reads as-is and migrates nothing) and never names the table, so it neither writes nor honours an intent.
+  // Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 41 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE landing_intents (
+    runId   INTEGER NOT NULL REFERENCES runs(id),
+    project TEXT    NOT NULL,
+    key     TEXT    NOT NULL,
+    setBy   TEXT,
+    takenAt INTEGER NOT NULL,
+    PRIMARY KEY (runId, key)
+  );
+  CREATE INDEX landing_intents_by_key ON landing_intents(project, key);
+  `,
+  // ── 43: user_version 42 -> 43 ─────────────────────────────────────────────
+  // A run keeps the title it was opened with (D-8071; spec 2026-11-04 §11.1, F6, A8). `runs.title` is that title. Its ONE
+  // writer is `CoordStore.openRun`, at INSERT. NULL is "this run has no title of its own", which every run before this
+  // entry is, bar the one below. `programs.title` stops being the last open's title: both `ON CONFLICT(slug)` arms
+  // leave it alone, so it is written once, when the programme row is created.
+  //
+  // THE COPY: each programme's current title goes to its NEWEST run (the highest id), then `programs.title` becomes the
+  // slug as words, the spelling `programmeNameFromSlug` (`shared/api.ts`) gives. Earlier runs keep NULL and read the
+  // programme's name. The restore statement `run-titles.test.ts` pins sets each `programs.title` from its newest titled
+  // run, and Rollback names it.
+  //
+  // ONE NULLABLE COLUMN AND ONE REWRITE OF `programs.title`: an older build opening a file at `user_version 43` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the column, and still writes `programs.title` on
+  // each open, which is its old reading. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before
+  // merge (it must print 42 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN title TEXT;
+  UPDATE runs SET title = (SELECT p.title FROM programs p WHERE p.slug = runs.program)
+    WHERE id IN (SELECT MAX(id) FROM runs GROUP BY program);
+  UPDATE programs SET title = upper(substr(replace(slug, '-', ' '), 1, 1)) || substr(replace(slug, '-', ' '), 2)
+    WHERE slug IN (SELECT program FROM runs);
+  `,
+  // ── 44: user_version 43 -> 44 ─────────────────────────────────────────────
+  // Who closed a run, and why (D-8071; spec 2026-11-04 §9.3, §11.2, A17, A30). `runs.closedBy` is one of the three words
+  // `run_events.causedBy` carries for a close ('coordinator', 'operator', 'sweep'), and `runs.closeDetail` is that row's
+  // `detail`. Their ONE writer is `CoordStore.advanceInner`, in the statement that writes `closedAt`, so they cannot
+  // differ from the terminal `run_events` row it writes beside them. A `causedBy` outside the three words (a session id)
+  // stores no `closedBy`, and the run reads as it did before.
+  //
+  // THE FILL: each terminal run takes both columns from its newest terminal `run_events` row. A run with no such row, and
+  // a row whose `causedBy` is not one of the three words, stays NULL.
+  //
+  // TWO NULLABLE COLUMNS, NOTHING ELSE: an older build opening a file at `user_version 44` takes rule 3 (it warns, reads
+  // as-is and migrates nothing), never names the columns, and its closes store NULL, which reads "as today". Every earlier
+  // entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 43 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN closedBy TEXT;
+  ALTER TABLE runs ADD COLUMN closeDetail TEXT;
+  UPDATE runs SET
+    closedBy = (SELECT e.causedBy FROM run_events e WHERE e.runId = runs.id AND e.toState IN ${TERMINAL_STATES_SQL}
+                  AND e.causedBy IN ('coordinator', 'operator', 'sweep') ORDER BY e.id DESC LIMIT 1),
+    closeDetail = (SELECT e.detail FROM run_events e WHERE e.runId = runs.id AND e.toState IN ${TERMINAL_STATES_SQL}
+                  AND e.causedBy IN ('coordinator', 'operator', 'sweep') ORDER BY e.id DESC LIMIT 1)
+    WHERE state IN ${TERMINAL_STATES_SQL};
+  `,
+  // ── 45: user_version 44 -> 45 ─────────────────────────────────────────────
+  // The stuck verdict's own clock for a person with no other stored time (D-8071; spec 2026-11-04 §7, A63, n3):
+  // `gone_since (personId, firstGoneAt, lastGoneAt)`, one row per coordinator or worker the verdict's pass last read GONE.
+  // Epoch ms, the server's clock. The pass is the table's one writer, through `CoordStore.setGoneSince` and
+  // `deleteGoneSince`, and it follows `deadAnchorNext`'s rule: the first pass writes `firstGoneAt`, a later one moves
+  // `lastGoneAt` alone, and a gap over `DEAD_COORDINATOR_GAP_MS` starts afresh. It exists so a restart that empties the
+  // in-memory reader moves no age, and so a paused dead-coordinator lane (which writes no `dead_claimants` row) leaves
+  // no run without its owner-gone verdict.
+  //
+  // A NEW TABLE AND NOTHING ELSE, migration 18's shape and for its reason: an older build opening a file at
+  // `user_version 45` takes rule 3 (it warns, reads as-is and migrates nothing), never names this table, and boots.
+  // Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 44 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE gone_since (personId TEXT NOT NULL PRIMARY KEY, firstGoneAt INTEGER NOT NULL, lastGoneAt INTEGER NOT NULL);
+  `,
+  // ── 46: user_version 45 -> 46 ─────────────────────────────────────────────
+  // The close-order list's index (D-8071; spec 2026-11-04 §11.4, A30): `GET /api/runs/find` pages terminal runs by
+  // `closedAt` descending, then id, and a partial index on `closedAt` for runs that have one lets that order walk the
+  // index instead of sorting the archive. The query repeats the index's predicate (`closedAt IS NOT NULL`) so the
+  // planner may use it.
+  //
+  // AN INDEX AND NOTHING ELSE: an older build opening a file at `user_version 46` takes rule 3 (it warns, reads as-is and
+  // migrates nothing), never names the index, and boots. Every earlier entry is frozen. RE-MEASURE the slot before the PR
+  // and before merge (it must print 45 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE INDEX runs_by_closed_at ON runs(closedAt DESC, id DESC) WHERE closedAt IS NOT NULL;
+  `,
+  // ── 47: user_version 46 -> 47 ─────────────────────────────────────────────
+  // Telling the coordinator (D-8073; spec 2026-11-04 §11.7, the ruled plan's W1): `run_close_untold` holds one row per run
+  // an operator or the sweep closed, written by the close's own transaction (`CoordStore.closeRun`) and deleted in the
+  // transaction that queues the one notice (`untoldPass`), so a crash between the two still yields exactly one notice. A
+  // claimant that does not read alive keeps its rows until an heir takes the programme. `mail_deliveries.wake` is null or
+  // `never`: the mail sweep's hibernated gate holds a `never` delivery without asking `ccd ensure`.
+  //
+  // A NEW TABLE AND A NULLABLE COLUMN, nothing on an existing table that an older build would trip on: it opens a file at
+  // `user_version 47` by rule 3 (it warns, reads as-is and migrates nothing). Every earlier entry is frozen. RE-MEASURE the
+  // slot before the PR and before merge (it must print 46 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE run_close_untold (
+    runId    INTEGER NOT NULL PRIMARY KEY,
+    program  TEXT NOT NULL,
+    wave     INTEGER NOT NULL,
+    waveOf   INTEGER,
+    claimant TEXT NOT NULL,
+    cause    TEXT NOT NULL,
+    detail   TEXT,
+    at       INTEGER NOT NULL
+  );
+  ALTER TABLE mail_deliveries ADD COLUMN wake TEXT;
+  `,
+  // ── 48: user_version 47 -> 48 ─────────────────────────────────────────────
+  // The coordinator lifts the review-round cap (D-8125): `review_cap.granted` is the extra rounds the run's coordinator
+  // has allowed (NULL reads as 0; each lift adds `REVIEW_ROUND_CAP`, so the cap in force is 3 + granted); `askHandledAt` is
+  // when a coordinator lift last closed the open ask (a re-raise at the next cap clears it); `review_cap_lifts` is the
+  // append-only journal, one row per coordinator lift (who, when, why, the rounds then and the cap before and after). The
+  // writers are `reviewCapStore.ts`'s `liftReviewCapByCoordinator` and `raiseReviewCapAsk`, both through `CoordStore`; the
+  // operator's lift (`liftReviewCap`) still writes `liftedAt` alone and still removes the cap.
+  //
+  // TWO NULLABLE COLUMNS AND A NEW TABLE, nothing an older build trips on: it opens a file at `user_version 48` by rule 3
+  // (it warns, reads as-is and migrates nothing). A coordinator lift never writes `askedAt` to NULL and never writes
+  // `liftedAt`, so that older build reads the run as waiting on a raised ask with no lift, refuses the open at 3, and the
+  // operator can lift. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 47
+  // before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE review_cap ADD COLUMN granted INTEGER;
+  ALTER TABLE review_cap ADD COLUMN askHandledAt INTEGER;
+  CREATE TABLE review_cap_lifts (
+    id          INTEGER PRIMARY KEY,
+    workRunId   INTEGER NOT NULL REFERENCES runs(id),
+    at          INTEGER NOT NULL,
+    byId        TEXT    NOT NULL,
+    reason      TEXT    NOT NULL,
+    rounds      INTEGER NOT NULL,
+    capBefore   INTEGER NOT NULL,
+    capAfter    INTEGER NOT NULL,
+    closedAskAt INTEGER
+  );
+  CREATE INDEX review_cap_lifts_by_run ON review_cap_lifts(workRunId, id);
+  `,
+  // ── 49: user_version 48 -> 49 ─────────────────────────────────────────────
+  // An item that asks carries its own control (D-8076; spec 2026-11-04 §10, A18 to A21): `operator_items.action` is the
+  // typed action the server wrote for it (JSON: an end-run verb with the run id and its stuck reason, today) and `operator_items.heldUntil`
+  // is the time before which `itemsFor` leaves it out, the coordinator-first hold. Their ONE writer is `raiseItem`
+  // (`ledgersStore.ts`), from a server caller; `parseRaise` never carries either, so a coordinator cannot attach an action
+  // to an ordinary item. Both read NULL for every item raised before this entry.
+  //
+  // TWO NULLABLE COLUMNS, NOTHING ELSE: an older build opening a file at `user_version 49` takes rule 3 (it warns, reads
+  // as-is and migrates nothing), and its `SELECT` names columns, never `*`, so it never reads them. Every earlier entry is
+  // frozen. RE-MEASURE the slot before the PR and before merge (it must print 48 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE operator_items ADD COLUMN action TEXT;
+  ALTER TABLE operator_items ADD COLUMN heldUntil INTEGER;
+  `,
+  // ── 50: user_version 49 -> 50 ─────────────────────────────────────────────
+  // The run-close lane's three durable facts (D-8077; spec 2026-11-04 §7, §12; the ruled plan's W1, R4, R5):
+  //  - `runs.lastDispatchAttemptAt`: the moment `dispatchRun` last answered for the run, whatever it answered, so a refused
+  //    dispatch counts as the programme's activity (R4). Written by one store method, outside any `gh` or fleet call.
+  //  - `run_close_anchors (laneRow, key, firstAt, lastAt)`: the first and the latest pass of an unbroken series on which a
+  //    lane row's condition held for a key (a programme, or a run), `deadAnchorNext`'s rule (R5).
+  //  - `run_close_warnings (programme, claimant, warnedAt, deliveryId)`: the one E1 warning a programme has been sent. Any
+  //    activity after `warnedAt` deletes the row, so the next close needs a fresh warning delivered 24 h earlier.
+  //
+  // ONE NULLABLE COLUMN AND TWO NEW TABLES, nothing on an existing table that an older build would trip on: it opens a file
+  // at `user_version 50` by rule 3 (it warns, reads as-is and migrates nothing). Every earlier entry is frozen. RE-MEASURE
+  // the slot before the PR and before merge (it must print 49 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN lastDispatchAttemptAt INTEGER;
+  CREATE TABLE run_close_anchors (
+    laneRow TEXT NOT NULL,
+    key     TEXT NOT NULL,
+    firstAt INTEGER NOT NULL,
+    lastAt  INTEGER NOT NULL,
+    PRIMARY KEY (laneRow, key)
+  );
+  CREATE TABLE run_close_warnings (
+    programme  TEXT NOT NULL PRIMARY KEY,
+    claimant   TEXT NOT NULL,
+    warnedAt   INTEGER NOT NULL,
+    deliveryId INTEGER NOT NULL
+  );
+  `,
+  // ── 51: user_version 50 -> 51 ─────────────────────────────────────────────
+  // Arming the run-close lanes from the UI (D-8077; spec 2026-11-04 §12.3, A15; the runs rebuild, Task 26):
+  //  - `run_close_settings`: ONE ROW, `CHECK (id = 1)`, the `dispatch_abandon_settings` idiom, one column per lane group. Only an
+  //    exact `on` arms and only an exact `off` stops; any other token reads as shadow (`runCloseChoiceOf`). THE SEED IS THE RULING:
+  //    shadow for both, updatedAt 0. Its one writer is `CoordStore.setRunCloseChoice`, called only by `POST /api/coord/run-close`.
+  //  - `run_close_refusals (groupName, runId, why, at)`: a close a group's arm refused, one row per (group, run, reason) with the
+  //    latest time, so the Advanced row can say how many it met in 7 days.
+  //
+  // TWO NEW TABLES AND NOTHING ELSE: an older build opening a file at `user_version 51` takes rule 3 (it warns, reads as-is and
+  // migrates nothing) and never names them. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge
+  // (it must print 50 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE run_close_settings (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    neverStarted    TEXT NOT NULL,
+    claimantCrashed TEXT NOT NULL,
+    updatedAt       INTEGER NOT NULL
+  );
+  INSERT INTO run_close_settings (id, neverStarted, claimantCrashed, updatedAt) VALUES (1, 'shadow', 'shadow', 0);
+  CREATE TABLE run_close_refusals (
+    groupName TEXT NOT NULL,
+    runId     INTEGER NOT NULL,
+    why       TEXT NOT NULL,
+    at        INTEGER NOT NULL,
+    PRIMARY KEY (groupName, runId, why)
+  );
+  `,
+  // ── 52: user_version 51 -> 52 ─────────────────────────────────────────────
+  // The linking standard (D-8147): `project_linking` holds, per project, the operator's Linear team key and visibility
+  // override (`teamKey`, `override`, with who and when) and the last reading of the repository's GitHub visibility (`visibility`,
+  // the repository `slug`, whether the pull request `template` file is present, a `failReason` when the reading failed and
+  // when it was taken). The writers are `linkingStore.ts`'s `setLinking` (the operator) and `recordReading` (the PR sweep),
+  // both through `CoordStore`; which rule applies is `linking/policy.ts`'s `linkingMode` and is never stored.
+  //
+  // A NEW TABLE, nothing an older build trips on: it opens a file at `user_version 52` by rule 3 (it warns, reads as-is
+  // and migrates nothing) and never touches a table it does not know. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 51 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE project_linking (
+    project     TEXT NOT NULL PRIMARY KEY,
+    teamKey     TEXT,
+    override    TEXT CHECK (override IN ('private','public')),
+    setBy       TEXT, setAt INTEGER,
+    visibility  TEXT CHECK (visibility IN ('public','private','internal')),
+    slug        TEXT, template TEXT CHECK (template IN ('present','absent')),
+    failReason  TEXT, measuredAt INTEGER
+  );
+  `,
+  // ── 53: user_version 52 -> 53 ─────────────────────────────────────────────
+  // The stored definition of done (D-8126; spec 2026-11-09 §8.1, the autonomy default's wave A2): `programs.doneWhen`, a
+  // JSON array of 1 to 12 strings (`doneWhenOf`, `shared/ledgers.ts`), or NULL for a programme that has none. Its writers
+  // are `setSpecPin` (a pin that carries a list; one without keeps the stored list) and `setDoneWhen` (a modification
+  // that carries one) in `ledgersStore.ts`, and nothing else; its reader is `goalsFor`, which reads a value that does not
+  // parse as `doneWhenOf` accepts as NULL (absence permits; never a throw).
+  //
+  // ONE NULLABLE COLUMN, NOTHING ELSE: an older build opening a file at `user_version 53` takes rule 3 (it warns, reads
+  // as-is and migrates nothing), never names the column, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 52 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE programs ADD COLUMN doneWhen TEXT;   -- JSON array of strings, or NULL; written by setSpecPin and setDoneWhen only
+  `,
+  // ── 54: user_version 53 -> 54 ─────────────────────────────────────────────
+  // The claimant-gone group of the run-close lane (D-8078; spec 2026-11-04 §12; the runs rebuild, Task 28): rows E3, E3s and E5
+  // arm together under their own choice, so no row is armed by another group's choice or marker (R8). One nullable-by-default
+  // column on `run_close_settings`, seeded `shadow` (the ruling: shadow arms nothing). An older build opening a file at
+  // `user_version 54` takes rule 3 (it warns, reads as-is and migrates nothing); its `SELECT`s name their own columns and never
+  // name this one. RE-MEASURE the slot before the PR and before merge (it must print 53 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE run_close_settings ADD COLUMN claimantGone TEXT NOT NULL DEFAULT 'shadow';
+  `,
+  // ── 55: user_version 54 -> 55 ─────────────────────────────────────────────
+  // The coordinator call record (D-8126; spec 2026-11-09 §8.2, the autonomy default's wave A3): `coordinator_calls`, one row
+  // per decision a coordinator took in the operator's name. `class` is `routine` (the run record), `big` (the operator's
+  // Seen door) or `block` (a thread waiting on a condition, `wakeOn`, lapsing at `expiresAt`). Its writers are all in
+  // `coordCallsStore.ts`: `insertCall` is the only INSERT, `markCallSeen` the only writer of `seenAt`, `overturnCallTx` the
+  // only writer of `overturnedAt` and `overturnNote` (inside `correctWithMail`'s transaction), `markBlockWoken` the only
+  // writer of `wokenAt`. `build` is the server's build stamp at the insert.
+  //
+  // A NEW TABLE AND ITS INDEXES, NOTHING ELSE: an older build opening a file at `user_version 55` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 54 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE coordinator_calls (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    program      TEXT    NOT NULL,
+    runId        INTEGER REFERENCES runs(id),
+    madeBy       TEXT    NOT NULL,
+    class        TEXT    NOT NULL,
+    question     TEXT,
+    options      TEXT,
+    chosen       TEXT    NOT NULL,
+    why          TEXT    NOT NULL,
+    reversible   INTEGER NOT NULL,
+    wakeOn       TEXT,
+    expiresAt    INTEGER,
+    at           INTEGER NOT NULL,
+    seenAt       INTEGER,
+    overturnedAt INTEGER,
+    overturnNote TEXT,
+    wokenAt      INTEGER,
+    build        TEXT
+  );
+  CREATE INDEX coordinator_calls_by_program ON coordinator_calls(program, class, at);
+  CREATE INDEX coordinator_calls_by_run ON coordinator_calls(runId);
+  CREATE INDEX coordinator_calls_live_blocks ON coordinator_calls(madeBy, class, wokenAt, expiresAt);
+  `,
+  // ── 56: user_version 55 -> 56 ─────────────────────────────────────────────
+  // D-8274 (worktree economy spec 2026-10-28 R-6): `lane_arm_settings`, Settings › Automation › Shadow lanes. ONE ROW PER
+  // LANE, keyed by its `LaneArmLane` name, seeded `shadow` at updatedAt 0 (the seed is what "never written" means to the
+  // marker import). `choice` carries NO CHECK, `collect_lane_settings.choice`'s reason: a token a newer build writes reads
+  // here as `unknown`, which arms nothing. Its writers are all in `CoordStore`: `setLaneArm`, called only by
+  // `POST /api/coord/lane-arm`, writes `choice` and `updatedAt`; `importLaneArmMarker`, called only by the watcher's
+  // one-time import, writes `importedAt` and `imported` (and `choice` once, for a never-written row whose marker stood).
+  // Its readers go through `CoordStore.laneArmSetting`. A later lane joins with a migration that inserts its seed row.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 56` takes rule 3 (it warns, reads as-is
+  // and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot before the
+  // PR and before merge (it must print 55 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE lane_arm_settings (
+    lane       TEXT PRIMARY KEY,
+    choice     TEXT NOT NULL,
+    updatedAt  INTEGER NOT NULL,
+    importedAt INTEGER,
+    imported   TEXT
+  );
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('roster-card', 'shadow', 0);
+  `,
+  // ── 57: user_version 56 -> 57 ─────────────────────────────────────────────
+  // D-8166 (test box connect spec §2.10, plan TC12): `testbox_events`, the session-only ledger of every act the test box
+  // card runs. Its ONE writer is `TestboxAudit.write` (`server/src/testboxAudit.ts`), which refuses any act, outcome or code
+  // outside the closed vocabularies (`shared/testbox-admin.ts`, `shared/refusal.ts`), a fingerprint off the host key form
+  // and a fleet identity off the node-id grammar before the INSERT, so no column can carry an address, a path, a secret or
+  // free text. `at` is epoch ms; `actor` is `<device label> <8 hex of idHash>`, never an IP (`accounts/audit.ts#actorOf`);
+  // `actId` is a long act's 32-hex id and UNIQUE, so the lane that writes the act's end row (plan TC13) cannot write it twice
+  // across a restart; `code`, `fingerprint` and `fleetIdentity` are NULL when the row has none. Rows older than 365 days are
+  // swept (`TestboxAudit.sweep`), which the index on `at` serves.
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 57` takes rule 3 (it warns, reads as-is
+  // and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before
+  // merge (it must print 56 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE testbox_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    at            INTEGER NOT NULL,
+    actor         TEXT    NOT NULL,
+    act           TEXT    NOT NULL,
+    actId         TEXT    UNIQUE,
+    outcome       TEXT    NOT NULL CHECK (outcome IN ('ok', 'refused', 'failed', 'unknown')),
+    code          TEXT,
+    fingerprint   TEXT,
+    fleetIdentity TEXT
+  );
+  CREATE INDEX testbox_events_by_at ON testbox_events(at);
+  `,
+  // ── 58: user_version 57 -> 58 ─────────────────────────────────────────────
+  // The case lane's table (Overlord spec §10.5, W1a): `practice_cases`, one row per case a trigger signature has earned
+  // (`shared/practice-triggers.ts#signatureText`). `state` is `open` and nothing else in W1a (a later review moves it);
+  // `mode` is the lane's mode word (`shadow`: recorded, no review offered); `cause` is a `CaseCause`; `programmes` and
+  // `evidence` are JSON arrays (programme slugs, run_events ids), ascending. Its one writer is `openPracticeCase` in
+  // `practiceCasesStore.ts`, a compare-and-set on the signature's newest `openedAt`.
+  //
+  // A NEW TABLE AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 58` takes rule 3
+  // (it warns, reads as-is and migrates nothing), never names this table, and boots. Every earlier entry is frozen.
+  // This build's writer names its columns, so a later build that adds a column to `practice_cases` must make it nullable
+  // or give it a DEFAULT, or this build's writer fails after a rollback.
+  // RE-MEASURE the slot before the PR and before merge (it must print 57 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE practice_cases (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    signature   TEXT NOT NULL,     -- a trigger signature's text (shared/practice-triggers.ts#signatureText)
+    state       TEXT NOT NULL,     -- 'open'; W1a writes nothing else, a later review moves it
+    mode        TEXT NOT NULL,     -- 'shadow' in W1a: recorded, no review offered
+    cause       TEXT NOT NULL,     -- a CaseCause: 'count' | 'programmes'
+    occurrences INTEGER NOT NULL,
+    programmes  TEXT NOT NULL,     -- JSON array of programme slugs, ascending
+    evidence    TEXT NOT NULL,     -- JSON array of run_events ids, ascending
+    windowFrom  INTEGER NOT NULL,
+    openedAt    INTEGER NOT NULL
+  );
+  CREATE INDEX practice_cases_by_signature ON practice_cases(signature, openedAt);
+  `,
+  // ── 59: user_version 58 -> 59 ─────────────────────────────────────────────
+  // The plan model (Linear hierarchy design 2026-11-10 §4.2, D-8181): a programme's epics, checkpoints and tickets
+  // (`plan_epics`, `plan_checkpoints`, `plan_tickets`), the one table that binds each of them to a Linear object
+  // (`linear_bindings`, never deleted from), the sync's due queue (`plan_sync_due`, keyed by a programme slug or
+  // `upkeep:<project>`), `runs.ticketId`, the per-project hierarchy settings on `project_linking`, and the programme's plan
+  // columns. `planRequired = 0` marks every programme that existed before this build (it opens runs as today until its team
+  // migrates, §4.3); a programme created later takes the default 1. The reserved `linear-sync` row (§7.6) is inserted
+  // `paused`, never `active`, so `soleActiveCoordinator()`'s "exactly one active programme" guard is unchanged.
+  // `droppedWhy` is a drop's reason; `putBackAt` is set only by the migration's put-back; `failedAt`, `failedWord` and
+  // `failedInputs` let the sync return a `failed` binding to `pending`.
+  //
+  // NEW TABLES AND NULLABLE-OR-DEFAULTED COLUMNS ONLY: an older build opening a file at `user_version 59` takes rule 3 (it
+  // warns, reads as-is and migrates nothing); its `SELECT`s name their own columns and never name these, and its
+  // `INSERT INTO programs` / `project_linking` / `runs` lists name theirs, so every added column takes its default. So a
+  // programme an older build creates on a migrated file (a rollback, then this build again) reads `planRequired` 1, like
+  // any programme created after this build: when this build returns, its next `runs open` with no epic is refused
+  // `plan-missing`, whose recovery is the coordinator's `plan put` with that programme's home (`references/plan.md`). The
+  // plan's own number for this entry was 57; slots 55 to 58 went first (coordinator_calls, lane_arm_settings,
+  // testbox_events, practice_cases), so it is 59. RE-MEASURE the slot before the PR and before merge (it must print 58
+  // before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE plan_epics (id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT, project TEXT NOT NULL, waves TEXT NOT NULL,
+    key TEXT NOT NULL, ordinal INTEGER NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, state TEXT NOT NULL,
+    droppedWhy TEXT, putBackAt INTEGER, openedAt INTEGER, doneAt INTEGER, UNIQUE (program, key));
+  CREATE UNIQUE INDEX plan_epics_upkeep ON plan_epics(project) WHERE program IS NULL;
+  CREATE TABLE plan_checkpoints (id INTEGER PRIMARY KEY AUTOINCREMENT, epicId INTEGER NOT NULL REFERENCES plan_epics(id),
+    key TEXT NOT NULL, ordinal INTEGER NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL, proves TEXT NOT NULL,
+    state TEXT NOT NULL, droppedWhy TEXT, putBackAt INTEGER, metAt INTEGER, evidence TEXT, itemId INTEGER,
+    UNIQUE (epicId, key));
+  CREATE TABLE plan_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT, project TEXT NOT NULL,
+    epicId INTEGER NOT NULL REFERENCES plan_epics(id), checkpointId INTEGER REFERENCES plan_checkpoints(id), key TEXT NOT NULL,
+    kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, source TEXT NOT NULL, state TEXT NOT NULL, runId INTEGER,
+    droppedWhy TEXT, putBackAt INTEGER, UNIQUE (program, key));
+  CREATE UNIQUE INDEX plan_tickets_upkeep ON plan_tickets(epicId, key) WHERE program IS NULL;
+  ALTER TABLE runs ADD COLUMN ticketId INTEGER;
+  CREATE TABLE linear_bindings (id INTEGER PRIMARY KEY AUTOINCREMENT, localKind TEXT NOT NULL, localId INTEGER NOT NULL,
+    workspaceId TEXT NOT NULL, teamKey TEXT, linearId TEXT, identifier TEXT, fingerprint TEXT, syncedAt INTEGER,
+    state TEXT NOT NULL, failedAt INTEGER, failedWord TEXT, failedInputs TEXT, driftCount INTEGER NOT NULL DEFAULT 0,
+    driftSince INTEGER, heldItemId INTEGER, UNIQUE (localKind, localId, workspaceId));
+  CREATE TABLE plan_sync_due (program TEXT PRIMARY KEY, dueAt INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0);
+  ALTER TABLE project_linking ADD COLUMN initiatives TEXT NOT NULL DEFAULT 'on';
+  ALTER TABLE project_linking ADD COLUMN linearOwner TEXT;
+  ALTER TABLE project_linking ADD COLUMN ownsTeam INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE programs ADD COLUMN planBy TEXT;
+  ALTER TABLE programs ADD COLUMN planAt INTEGER;
+  ALTER TABLE programs ADD COLUMN planRequired INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE programs ADD COLUMN planEnd TEXT;
+  ALTER TABLE programs ADD COLUMN planEndWhy TEXT;
+  ALTER TABLE programs ADD COLUMN planEndAt INTEGER;
+  UPDATE programs SET planRequired = 0;
+  INSERT OR IGNORE INTO programs (slug, title, createdAt, state, planRequired) VALUES ('linear-sync', 'Linear sync', 0, 'paused', 0);
+  `,
+  // ── 60: user_version 59 -> 60 ─────────────────────────────────────────────
+  // D-8289 (plan 2026-11-11-new-build-capture, the operator's ruling SH-1): `claude_builds`, the trusted set of Claude Code
+  // builds as data. ONE ROW PER BUILD: where it came from (`rig`, the 2026-10-18 rig record seeded here; `fleet`, a build a
+  // session ran), its capture (`queued`, `pass`, `fail`, CHECKed: an unknown token is no verdict any reader could trust),
+  // whether the capture proved a PermissionRequest's cwd (`cwd`), when it was recorded, the jobs that actually went out
+  // (`attempts`), the last try's time sent or not (`lastAttemptAt`, the retry clock), why that try sent nothing (`notSent`,
+  // CHECKed: `no-test-box` or `no-runner`, null once a job went out), the verdict's time and the replay output's tail. Its writers are all `CoordStore` methods over
+  // `coord/claudeBuildsStore.ts`; its readers go through `shared/claudeBuildTrust.ts#buildTrustOf`. The seed is the four builds
+  // `APPROVAL_HOOK_VERSIONS` and `APPROVAL_CWD_TRUSTED` named, so a child on one stays trusted as it was.
+  //
+  // A NEW TABLE AND ITS SEED, NOTHING ELSE: an older build opening a file at `user_version 60` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot before the PR and
+  // before merge (it must print 59 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE claude_builds (
+    build         TEXT    PRIMARY KEY,
+    source        TEXT    NOT NULL CHECK (source IN ('rig', 'fleet')),
+    capture       TEXT    NOT NULL CHECK (capture IN ('queued', 'pass', 'fail')),
+    cwd           INTEGER NOT NULL DEFAULT 0,
+    seenAt        INTEGER NOT NULL,
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    lastAttemptAt INTEGER,
+    notSent       TEXT    CHECK (notSent IS NULL OR notSent IN ('no-test-box', 'no-runner')),
+    verdictAt     INTEGER,
+    output        TEXT
+  );
+  INSERT INTO claude_builds (build, source, capture, cwd, seenAt, verdictAt) VALUES
+    ('2.1.296', 'rig', 'pass', 1, 0, 0), ('2.1.300', 'rig', 'pass', 1, 0, 0),
+    ('2.1.301', 'rig', 'pass', 1, 0, 0), ('2.1.302', 'rig', 'pass', 1, 0, 0);
+  `,
+  // ── 61: user_version 60 -> 61 ─────────────────────────────────────────────
+  // D-8386 (residue R37 of the centralised-update programme): `nodes.reportedSweep`, the supervisor sweep's record from a
+  // node's `update.json` (its `sweep` key, wave 17's D-5314), in the REPORT group beside the five report columns, so
+  // `GET /api/updates` can carry it. Its one writer is `upsertNodeMeasurement`, from the inventory's one reader
+  // (`reportFrom`). NULL = NOT MEASURED (no key, a key this build cannot read, or no report file), never "nothing down".
+  //
+  // ONE NULLABLE COLUMN ON AN EXISTING TABLE, nothing else: an older build opening a file at `user_version 61` takes
+  // rule 3 (it warns, reads as-is and migrates nothing); its reads and writes name their columns and never this one, so
+  // the column stays NULL or stale under it, and this build's next sweep writes it again. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 60 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE nodes ADD COLUMN reportedSweep TEXT;
+  `,
+  // ── 62: user_version 61 -> 62 ─────────────────────────────────────────────
+  // D-8395 (operator ruling 2026-11-12, the claims hard cap): `claims.chainedFrom`, the id of the row a claim continues.
+  // A holder measured running that re-takes its paths inside the last `CLAIM_LEASE_MS` before its hard cap ends the old
+  // row (`released`, `endedBy 'rechained'`) and inserts a new one with a fresh lease and a fresh hard cap carrying the
+  // old id here, so `GET /api/claims?all=1` reads one hold as one chain. Its one writer is `claimAttempt`. NULL = a claim
+  // taken afresh, which is every row written before this entry.
+  //
+  // ONE NULLABLE COLUMN ON AN EXISTING TABLE, nothing else: an older build opening a file at `user_version 62` takes
+  // rule 3 (it warns, reads as-is and migrates nothing); its reads and writes name their columns and never this one, so
+  // a row it inserts reads as taken afresh. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before
+  // merge (it must print 61 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE claims ADD COLUMN chainedFrom INTEGER;
+  `,
+  // ── 63: user_version 62 -> 63 ─────────────────────────────────────────────
+  // D-8399 (the operator's ruling on the test box ledger, amending TC12 of the test box connect plan): `testbox_events.changes`,
+  // each setting an `ok` settings act changed with its old and new value, as JSON, and `testbox_staged_changes`, a long
+  // `settings-box` act's changes held by its 32-hex act id from the route that started it until the lane writes its end row
+  // (which takes them when the act ended ok and drops them either way), so a server restart mid-act loses none. Both are
+  // written only by `TestboxAudit` (`server/src/testboxAudit.ts`), which checks every list with `readTestboxLedgerChanges`
+  // (`shared/testbox-admin.ts`): a value is one its key's own shape takes, and a secret-bearing setting, a path, an address
+  // or a list is a presence word, so no column carries free text, a path or a secret. NULL = the row has none. Staged rows
+  // are swept with the ledger (365 days).
+  //
+  // ONE NULLABLE COLUMN ON AN EXISTING TABLE AND ONE NEW TABLE, nothing else: an older build opening a file at
+  // `user_version 63` takes rule 3 (it warns, reads as-is and migrates nothing); its INSERT and SELECT name their columns and
+  // never these, so its rows read as having no changes. Every earlier entry is frozen. RE-MEASURE the slot before the PR and
+  // before merge (it must print 62 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE testbox_events ADD COLUMN changes TEXT;
+  CREATE TABLE testbox_staged_changes (
+    actId   TEXT    PRIMARY KEY,
+    at      INTEGER NOT NULL,
+    changes TEXT    NOT NULL
+  );
+  `,
+  // ── 64: user_version 63 -> 64 ─────────────────────────────────────────────
+  // D-8405 (the automatic team link): who set a project's team key and why. `teamSource` is `manual` (the operator typed,
+  // chose or cleared it) or `auto` (the automatic pass linked it), NULL for a row no one has decided since this entry;
+  // `teamName`, `teamEvidence` (JSON, `isTeamEvidence`) and `teamAt` say which team the pass linked, on what evidence and
+  // when (`teamAt` is the operator's time for `manual`); `teamCandidates` (JSON, `isTeamCandidate` each) is the pass's
+  // one-tap choices for a project with no key. The writers are `linkingStore.ts`'s `setLinking` (the operator, through
+  // `teamSourceAfterWrite`), `linkTeamAuto` (the pass, which never writes over a key or a `manual` source) and
+  // `recordTeamCandidates`; a value that does not parse reads as none (absence permits; never a throw).
+  //
+  // FIVE NULLABLE COLUMNS ON AN EXISTING TABLE, nothing else: an older build opening a file at `user_version 64` takes
+  // rule 3 (it warns, reads as-is and migrates nothing); its reads and writes name their columns and never these, so an
+  // operator's write there leaves the five as they were (a rollback's residual: a key linked automatically and then
+  // changed under the older build still reads `auto` here until the operator saves it again). Every earlier entry is
+  // frozen. RE-MEASURE the slot before the PR and before merge (it must print 63 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE project_linking ADD COLUMN teamSource TEXT CHECK (teamSource IN ('manual','auto'));
+  ALTER TABLE project_linking ADD COLUMN teamName TEXT;
+  ALTER TABLE project_linking ADD COLUMN teamEvidence TEXT;
+  ALTER TABLE project_linking ADD COLUMN teamAt INTEGER;
+  ALTER TABLE project_linking ADD COLUMN teamCandidates TEXT;
+  `,
+  // ── 65: user_version 64 -> 65 ─────────────────────────────────────────────
+  // #2726 (the invited reply, plan docs/superpowers/plans/2026-11-10-overlord/w1a-invited-replies.md): `mail.answersMail`,
+  // the MAIL row id of the mail this row was admitted as the invited reply to. Peer mail (`runId` NULL) of kind `answer`
+  // whose `inReplyTo` names a delivery to its sender, of a mail from its recipient, is outside the peer bound
+  // (`coord/peerBound.ts`, `peerMailVerdict`), and this column records that admission: the peer counts skip a row that
+  // carries it, so an invited reply holds no slot, and `mail_answers_once` makes "one invited reply per mail" a fact of
+  // the database as well as of the route. Keyed on the MAIL id, never the delivery id the wire names, because a parked
+  // delivery revived by `reviveParkedDeliveries` gets a new delivery id for the same mail and must buy no second reply.
+  // Its one writer is `insertMail`, from the mail ingress only. NULL = an ordinary mail, which is every row written
+  // before this entry.
+  //
+  // ONE NULLABLE COLUMN ON AN EXISTING TABLE AND ONE PARTIAL INDEX, nothing else: an older build opening a file at
+  // `user_version 65` takes rule 3 (it warns, reads as-is and migrates nothing); its INSERT names its columns and never
+  // this one, so a row it writes is an ordinary mail, and its peer counts count invited replies as ordinary mail too:
+  // stricter, never looser. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must
+  // print 64 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail ADD COLUMN answersMail INTEGER REFERENCES mail(id);
+  CREATE UNIQUE INDEX mail_answers_once ON mail(answersMail) WHERE answersMail IS NOT NULL;
+  `,
+  // ── 66: user_version 65 -> 66 ─────────────────────────────────────────────
+  // The start report (Overlord spec §3.3.11, H12, W1a): `continuity_starts`, one row per SessionStart the hook reported
+  // through `POST /api/sessions/:id/start` (`server/src/continuity/routes.ts`). `reportId` is the hook's own id for the
+  // report, so a resend of a spooled report is the same row (`UNIQUE (sessionId, reportId)`); `source` is a word of
+  // `START_SOURCES` (`other` for any word outside it); `rowIncarnation` is the registry row's incarnation as the session's
+  // environment carries it (`CCRC_SESSION_GENERATION`, a lowercase UUID ccd writes); `model` and `rowIncarnation` are null when the
+  // payload or the environment carried none; `reportedAt` is the hook's clock, by which a reader orders a session's starts, and `receivedAt` the server's, which every reader ages from
+  // (§11.5). Its one writer is `insertStart` in `server/src/continuity/continuityStore.ts`.
+  //
+  // A NEW TABLE AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 66` takes rule 3
+  // (it warns, reads as-is and migrates nothing), never names this table, and boots. Every earlier entry is frozen.
+  // This build's writer names its columns, so a later build that adds a column to `continuity_starts` must make it
+  // nullable or give it a DEFAULT, or this build's writer fails after a rollback.
+  // RE-MEASURE the slot before the PR and before merge (it must print 65 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_starts (
+    id         INTEGER PRIMARY KEY,
+    sessionId  TEXT NOT NULL,
+    reportId   TEXT NOT NULL,     -- the hook's own id for this report, so a resend is one row
+    uuid       TEXT NOT NULL,     -- the conversation that started
+    source     TEXT NOT NULL,     -- startup | resume | clear | compact | fork | other
+    model      TEXT,              -- as the payload carries it, or null
+    rowIncarnation TEXT,          -- the row's incarnation, CCRC_SESSION_GENERATION (a lowercase UUID), or null
+    reportedAt INTEGER NOT NULL,  -- the hook's clock, ms: a session's start order
+    receivedAt INTEGER NOT NULL,  -- the server's clock, ms: what every reader ages from
+    UNIQUE (sessionId, reportId)
+  );
+  CREATE INDEX continuity_starts_by_session ON continuity_starts(sessionId, receivedAt);
+  `,
+  // ── 67: user_version 66 -> 67 ─────────────────────────────────────────────
+  // The Overlord face plan, Task 6: the operator's character choice, `face_settings`, one row seeded `(1, 'orb', 0)`
+  // (`updatedAt` 0 = never chosen). Its one writer is `CoordStore.setFaceCharacter`, behind `POST /api/face`; its one reader
+  // is `CoordStore.faceSettings`, which reads a word `isCharacter` refuses, or a lost row, as the default character.
+  // `character` carries NO CHECK, `collect_lane_settings.choice`'s reason: a word a newer build writes must not stop an
+  // older build opening the file.
+  //
+  // ONE NEW TABLE AND ITS SEED, nothing else: an older build opening a file at `user_version 67` takes rule 3 (it warns,
+  // reads as-is and migrates nothing) and never names the table. Every earlier entry is frozen. RE-MEASURE the slot before
+  // the PR and before merge (it must print 66 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE face_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    character TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO face_settings (id, character, updatedAt) VALUES (1, 'orb', 0);
+  `,
+  // ── 68: user_version 67 -> 68 ─────────────────────────────────────────────
+  // The generations (Overlord spec §3.3.1 C36, §3.3.11 H12, Table 11.1a, W1a): `continuity_generations`, one row per life
+  // of a long-lived identity, minted at each reported start, and `continuity_cursor`, the renewal lane's place in
+  // `continuity_starts`. Both have ONE writer, the generations lane, through `server/src/continuity/continuityStore.ts`
+  // (every write a compare-and-set on `(identity, term, n)` and both state columns). `state` moves only on a walk begun
+  // while `continuity` was live, `shadowState` only on one begun in shadow (`walk` records which; reviews 1896 R1, 1902
+  // F1), and each carries its own deadline column, so a shadow walk's deadline never stands on a live row. Every
+  // observed-time column is the identity's accumulator (`observed`, carried across mints), and a deadline is wall time.
+  // The seed row `continuity` = `shadow` adds the lane to the Shadow lanes card.
+  //
+  // NEW TABLES, AN INDEX AND ONE SEED ROW, nothing on an existing table: an older build opening a file at `user_version 68`
+  // takes rule 3 (it warns, reads as-is and migrates nothing), never names either table, reads the `continuity` lane-arm
+  // row as no lane it knows, and boots. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge
+  // (it must print 67 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_generations (
+    id          INTEGER PRIMARY KEY,
+    identity    TEXT NOT NULL,          -- a coordinator's session id ('overlord' from W1)
+    sessionId   TEXT NOT NULL,
+    role        TEXT NOT NULL,          -- a FleetRole word
+    term        INTEGER NOT NULL,       -- 1 in W1a
+    rowIncarnation TEXT,                -- the registry row's incarnation at the start, or null
+    n           INTEGER NOT NULL,
+    state       TEXT NOT NULL,          -- a GenerationState word; moves only on a live walk
+    shadowState TEXT,                   -- the would-be state of a walk begun in shadow, else null
+    walk        TEXT,                   -- 'live' | 'shadow': the mode the walk in flight began in; null outside a walk
+    walkClass   TEXT,                   -- the walk's TriggerClass, or null
+    enteredAt   INTEGER NOT NULL,       -- wall ms the walk's column last changed state
+    deadlineAt  INTEGER,                -- wall ms, state's deadline, set once on entry; null outside a timed state
+    shadowDeadlineAt INTEGER,           -- wall ms, shadowState's deadline, the same rule
+    dueSince    INTEGER,                -- wall ms, shown to the operator; never read for a decision
+    dueWhy      TEXT,
+    dueClass    TEXT,
+    dueSinceObservedMs INTEGER,         -- the accumulator when the trigger became due
+    proven      INTEGER NOT NULL DEFAULT 0,
+    renudged    INTEGER NOT NULL DEFAULT 0,
+    probeRounds INTEGER NOT NULL DEFAULT 0,  -- failed rounds in this probing (0 or 1)
+    hostEnded   INTEGER NOT NULL DEFAULT 0,  -- the receipt's first half came in this clearing
+    blind       TEXT,                   -- JSON array of the RenewalTrigger words the last pass could not read
+    model       TEXT,
+    prevModel   TEXT,                   -- the ended generation's model, for a resumed start's class
+    lane        TEXT,
+    host        TEXT,
+    cardHash    TEXT,
+    snapshotId  TEXT,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    outcome     TEXT,                   -- a GenerationOutcome word, set when ended
+    resumed     INTEGER NOT NULL,
+    startId     INTEGER NOT NULL UNIQUE REFERENCES continuity_starts(id),
+    startReportedAt INTEGER NOT NULL,   -- the start's reportedAt: the hook's clock, the order of a session's starts
+    observed    TEXT NOT NULL,          -- JSON Observed, the identity's accumulator
+    mintedObservedMs INTEGER NOT NULL,
+    softRenewalObservedMs INTEGER,
+    holdOffUntilObservedMs INTEGER,     -- absolute, on the accumulator; the gather subtracts mintedObservedMs
+    UNIQUE (identity, term, n)
+  );
+  CREATE UNIQUE INDEX continuity_generations_live ON continuity_generations(identity) WHERE state <> 'ended';
+  CREATE TABLE continuity_cursor (lane TEXT PRIMARY KEY, lastStartId INTEGER NOT NULL);
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('continuity', 'shadow', 0);
+  `,
+  // ── 69: user_version 68 -> 69 ─────────────────────────────────────────────
+  // The card door (Overlord spec §3.3.3 C38, §3.3.5, W1a, the card piece): `continuity_snapshots`, the facts each card was
+  // rendered from, and `continuity_card_reads`, one row per full read (every page of one card hash served to the session).
+  // Both have ONE writer, the card door (`server/src/continuity/routes.ts`), through `continuityStore.ts`. A snapshot's id
+  // is the sha256 of its facts with the time of rendering left out, so unchanged facts keep one row; `hash` is the card
+  // hash it rendered to when last served and `served` a sequence that orders the serves, so the session's current card is
+  // its snapshot with the highest `served` (slug card-current-hash-is-the-last-served). A read carries the conversation's
+  // uuid, so the generations lane matches it to the start that minted a generation (slug card-read-by-the-start). A read
+  // names its snapshot (a foreign key, no ON DELETE, `foreign_keys` on), so a retention sweep deletes a snapshot's reads
+  // before the snapshot, and `continuity_card_reads_by_snapshot` makes each such delete a keyed one (slug
+  // card-snapshots-kept; review 2023 F11).
+  //
+  // NEW TABLES AND INDEXES, nothing on an existing table: an older build opening a file at `user_version 69` takes rule 3
+  // (it warns, reads as-is and migrates nothing), never names either table, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 68 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_snapshots (
+    id         TEXT PRIMARY KEY,        -- sha256 of the facts JSON, the time of rendering left out
+    sessionId  TEXT NOT NULL,
+    at         INTEGER NOT NULL,        -- wall ms it was first rendered
+    facts      TEXT NOT NULL,           -- the CardFacts JSON, without \`at\`
+    hash       TEXT NOT NULL,           -- the card hash (sha256 of the trimmed text) it rendered to when last served
+    served     INTEGER NOT NULL         -- a sequence over every serve: the session's highest is its current card
+  );
+  CREATE INDEX continuity_snapshots_by_session ON continuity_snapshots(sessionId, served);
+  CREATE TABLE continuity_card_reads (
+    id         INTEGER PRIMARY KEY,
+    sessionId  TEXT NOT NULL,
+    uuid       TEXT NOT NULL,           -- the conversation that read it (the door's attributed byUuid)
+    snapshotId TEXT NOT NULL REFERENCES continuity_snapshots(id),
+    hash       TEXT NOT NULL,
+    pages      INTEGER NOT NULL,
+    at         INTEGER NOT NULL         -- wall ms the last page was served
+  );
+  CREATE INDEX continuity_card_reads_by_conversation ON continuity_card_reads(sessionId, uuid, id);
+  CREATE INDEX continuity_card_reads_by_snapshot ON continuity_card_reads(snapshotId);
+  `,
+  // ── 70: user_version 69 -> 70 ─────────────────────────────────────────────
+  // The timers (Overlord spec §3.3.12 C61 to C65, Table 3.3.12a, I17; W1a, the timers piece): `continuity_timers`, one row
+  // per timer a session set itself. Its moves are `TIMER_TRANSITIONS` (`shared/continuity-timers.ts`), each with ONE
+  // writer in `server/src/continuity/continuityStore.ts`: the set (`insertTimer`), the fire (`markTimersFired`, in the
+  // transaction that queues its one mail), the cancel (`cancelTimer`, its reason checked against its actor) and the purge
+  // of terminal rows past `TIMER_KEEP_MS` (`purgeTimers`). `setterIncarnation` is the setter row's `.generation` at the
+  // set (W1's designation term for the Overlord's), so a renewed generation of the same identity gets the mail and a
+  // different session under the same id never does. A timer binds a run or a programme, never both (the CHECK).
+  //
+  // A NEW TABLE and its indexes, nothing on an existing table: an older build opening a file at `user_version 70` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 69 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_timers (
+    id                INTEGER PRIMARY KEY,
+    setter            TEXT NOT NULL,          -- a session id, or 'overlord' from W1
+    setterIncarnation TEXT NOT NULL,          -- the registry row's .generation; the designation's designatedTerm from W1
+    setById           TEXT NOT NULL,          -- the caller as attributed at the set
+    setByUuid         TEXT NOT NULL,
+    role              TEXT NOT NULL,          -- roleOf at the set, or 'undecided'
+    note              TEXT NOT NULL,
+    runId             INTEGER,
+    programme         TEXT,
+    setAt             INTEGER NOT NULL,
+    dueAt             INTEGER NOT NULL,
+    state             TEXT NOT NULL DEFAULT 'pending',
+    firedAt           INTEGER,
+    mailId            INTEGER,
+    cancelledAt       INTEGER,
+    cancelReason      TEXT,
+    CHECK (runId IS NULL OR programme IS NULL)
+  );
+  CREATE INDEX continuity_timers_pending ON continuity_timers(state, dueAt);
+  CREATE INDEX continuity_timers_by_setter ON continuity_timers(setter, setAt);
+  `,
+  // ── 71: user_version 70 -> 71 ─────────────────────────────────────────────
+  // Launch profiles PR B (Overlord spec §3.6 H1, §3.3.7 H14, Table 11.1d; W1a): the seed row `launch-profile` = `shadow`
+  // adds the launch-profile lane to the Shadow lanes card, and `plain_memory_settings` is the Settings row "Auto memory for
+  // plain sessions". ONE ROW, `CHECK (id = 1)`, the `roll_settings` idiom. `choice` is a `PlainAutoMemoryChoice` (`off` or
+  // `on`), read back through `isPlainAutoMemoryChoice`, never cast, so NO CHECK: a word a newer build writes reads as
+  // unknown here, and the lane writes nothing from it (`plainAutoMemoryOf`). Its one writer is
+  // `CoordStore.setPlainAutoMemory`, called only by `POST /api/coord/plain-auto-memory`; its one reader
+  // `CoordStore.plainAutoMemorySettings`.
+  //
+  // THE SEED IS THE SPEC'S DEFAULT (H14): `off` on a fleet host. A lost row reads as the same default. Nothing changes a
+  // session from this row while the `launch-profile` row is shadow.
+  //
+  // A NEW TABLE AND ONE SEED ROW, nothing on an existing table: an older build opening a file at `user_version 71` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the table, reads the `launch-profile` lane-arm row as
+  // no lane it knows, and boots. Every earlier entry is frozen. It lands after card PR B's entry 69 (#2793) and timers
+  // PR A's entry 70 (#2797), which took those slots first; `coord-db.test.ts` holds the order. RE-MEASURE the slot before
+  // merge (it must print 70 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE plain_memory_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    choice    TEXT    NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO plain_memory_settings (id, choice, updatedAt) VALUES (1, 'off', 0);
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('launch-profile', 'shadow', 0);
+  `,
+  // ── 72: user_version 71 -> 72 ─────────────────────────────────────────────
+  // The notes (Overlord spec §3.3.2 C37, W1a, the notes piece): `continuity_notes`, a long-lived session's working notes,
+  // and `continuity_handovers`, the handover note a generation writes in `checkpointed`. Both have ONE writer, the note door
+  // (`server/src/continuity/routes.ts`), through `continuityStore.ts`, so `continuity_generations` keeps its one writer
+  // (slug handover-table). A note is APPEND-ONLY: a revision is a new row naming the note it supersedes (`revises`), a close
+  // is a revision with `closes` set, and no statement updates or deletes a note. A note is live while no row revises it and
+  // it does not close. `continuity_notes_one_revision` makes a second revision of one note a constraint failure, so two
+  // revisions race to one winner (slug revision-by-unique-index); `continuity_notes_by_identity` keys the live read.
+  //
+  // NEW TABLES AND INDEXES, nothing on an existing table: an older build opening a file at `user_version 72` takes rule 3
+  // (it warns, reads as-is and migrates nothing), never names either table, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 71 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_notes (
+    id           INTEGER PRIMARY KEY,
+    identity     TEXT NOT NULL,         -- the long-lived identity the note belongs to (a coordinator's session id)
+    sessionId    TEXT NOT NULL,         -- the session that wrote it
+    generationId INTEGER,               -- the identity's live generation when it was written, or NULL
+    keyKind      TEXT NOT NULL,         -- programme | item | run (NoteKey)
+    keyRef       TEXT NOT NULL,         -- the programme's slug, or the item's or run's id
+    kind         TEXT NOT NULL,         -- thread | caution (NoteKind)
+    waitsOn      TEXT NOT NULL,
+    next         TEXT NOT NULL,
+    revises      INTEGER REFERENCES continuity_notes(id),
+    closes       INTEGER NOT NULL DEFAULT 0,
+    at           INTEGER NOT NULL       -- wall ms it was written
+  );
+  CREATE UNIQUE INDEX continuity_notes_one_revision ON continuity_notes(revises) WHERE revises IS NOT NULL;
+  CREATE INDEX continuity_notes_by_identity ON continuity_notes(identity, id);
+  CREATE TABLE continuity_handovers (
+    generationId INTEGER PRIMARY KEY REFERENCES continuity_generations(id),
+    note         TEXT NOT NULL,         -- the HandoverNote JSON, its status words dropped
+    dropped      INTEGER NOT NULL,      -- how many status words were dropped
+    at           INTEGER NOT NULL       -- wall ms it was written
+  );
+  `,
+  // ── 73: user_version 72 -> 73 ─────────────────────────────────────────────
+  // The probes (Overlord spec §3.3.5 C41, §3.3.9 C52, W1a, the probes piece, PR B): `continuity_probes`, one row per question
+  // of a round. Two writers through `continuityStore.ts`, one per fact: the generations lane opens a round (`openRound`: the
+  // questions and what each expects), and the probe door records its answers (`answerRound`: the answer, the grade and
+  // whether the session read its card or notes in between, `book`). `roundUnmeasured` is the round's own fact, on each of its
+  // rows: the round was short because a read its composition needed had failed, so it is never graded `failed` for that.
+  // `continuity_reads` is when a session last read its card or its notes through the continuity doors, one row per door
+  // (ONE writer, `stampContinuityRead`, from the card and note GETs): the probe door marks an answer `open` when it follows
+  // such a read (slug closed-book-is-unmeasured-in-w1a).
+  //
+  // NEW TABLES AND AN INDEX, nothing on an existing table: an older build opening a file at `user_version 73` takes rule 3
+  // (it warns, reads as-is and migrates nothing), never names either table, and boots. Every earlier entry is frozen.
+  // RE-MEASURE the slot before the PR and before merge (it must print 72 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_probes (
+    id              INTEGER PRIMARY KEY,
+    roundId         TEXT NOT NULL,      -- the round's id, shared by its questions
+    qid             TEXT NOT NULL,      -- the question's id inside its round (p1 to p5), what the door serves
+    sessionId       TEXT NOT NULL,
+    generationId    INTEGER NOT NULL REFERENCES continuity_generations(id),
+    kind            TEXT NOT NULL,      -- start | compaction | spot (ProbeKind)
+    cls             TEXT NOT NULL,      -- the probe class (ProbeClass)
+    question        TEXT NOT NULL,
+    choices         TEXT,               -- the choices as a JSON list, or NULL for an id or none
+    expected        TEXT NOT NULL,      -- never leaves the server
+    snapshotId      TEXT,               -- the snapshot a start or compaction round was drawn from; NULL for a spot round
+    depthTokens     INTEGER,            -- the context depth a spot or compaction round opened at (the spot baseline)
+    modelClass      TEXT,               -- a spot round's model class when it opened
+    roundUnmeasured INTEGER NOT NULL DEFAULT 0,
+    askedAt         INTEGER NOT NULL,   -- wall ms the round opened
+    answeredAt      INTEGER,
+    answer          TEXT,
+    grade           TEXT,               -- pass | fail | unmeasured (ProbeGrade)
+    book            TEXT,               -- closed | open | unmeasured (BookState)
+    UNIQUE (roundId, qid),
+    UNIQUE (roundId, cls, question)
+  );
+  CREATE INDEX continuity_probes_by_generation ON continuity_probes(generationId, id);
+  CREATE INDEX continuity_probes_by_session ON continuity_probes(sessionId, id);
+  CREATE TABLE continuity_reads (
+    sessionId TEXT NOT NULL,
+    door      TEXT NOT NULL,            -- card | notes
+    at        INTEGER NOT NULL,         -- wall ms of the newest read through that door
+    PRIMARY KEY (sessionId, door)
+  );
+  `,
+  // ── 74: user_version 73 -> 74 ─────────────────────────────────────────────
+  // The anchor piece (Overlord spec §3.3.3 C38; W1a, plan `w1a-anchor.md` Task 2): the seed row `anchor-slot` = `shadow`
+  // adds the anchor's switch to the Shadow lanes card. Shadow, the card door's `part=anchor` renders the anchor, logs its
+  // size and answers `dark`, so the session hook prints today's role card; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, serves it. The merge arms nothing.
+  //
+  // ONE SEED ROW, nothing else: an older build opening a file at `user_version 74` takes rule 3 (it warns, reads as-is and
+  // migrates nothing), reads the `anchor-slot` lane-arm row as no lane it knows, and boots. Every earlier entry is frozen.
+  // Probes PR B (#2802) took 73, so this entry is 74, the next free slot, pinned to the entry before it (the coordinator's
+  // rulings on ask 416 and of 19835). RE-MEASURE the slot before the PR and before merge (it must print 73 before this entry
+  // is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('anchor-slot', 'shadow', 0);
+  `,
+  // ── 75: user_version 74 -> 75 ─────────────────────────────────────────────
+  // The push outbox (Overlord spec §6.7, §6.1 C31, §4.3 C67; plan `docs/superpowers/plans/2026-11-14-overlord-w1/
+  // w1-push-outbox.md`, Task 3): one row per push, moved only through `pushOutboxStore.ts` by `OUTBOX_TRANSITIONS`;
+  // `push_outbox_one_per_source` holds a bound row to one per ask or item (I2), and `claimSeq` ties a verdict to its
+  // claim. `reachedOperatorAt` has ONE writer, `stampReach`. No backfill. The anchor (#2803) took 74, so this is 75. NEW
+  // TABLES AND TWO NULLABLE COLUMNS: an older build opening a file at `user_version 75` takes rule 3, never names them, and
+  // boots. RE-MEASURE the slot before the PR and before merge (it must print 74 before this entry is counted):
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE push_outbox (
+    id INTEGER PRIMARY KEY, pushId TEXT NOT NULL UNIQUE,
+    sourceKind TEXT, sourceId INTEGER,  -- 'ask' | 'item', or both NULL for an unbound push
+    payload TEXT, tag TEXT,             -- the masked PushPayload as JSON, NULL once terminal; tag NULL only when written with no payload
+    state TEXT NOT NULL, createdAt INTEGER NOT NULL, armedAt INTEGER NOT NULL,
+    claimSeq INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
+    claimedAt INTEGER, nextAttemptAt INTEGER, pushedAt INTEGER,
+    verdict TEXT, silentWhy TEXT, settledAt INTEGER,
+    CHECK ((sourceKind IS NULL) = (sourceId IS NULL))
+  );
+  CREATE UNIQUE INDEX push_outbox_one_per_source ON push_outbox(sourceKind, sourceId) WHERE sourceKind IS NOT NULL;
+  CREATE INDEX push_outbox_due ON push_outbox(state, nextAttemptAt);
+  CREATE TABLE push_outbox_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL);
+  ALTER TABLE asks ADD COLUMN reachedOperatorAt INTEGER;
+  ALTER TABLE operator_items ADD COLUMN reachedOperatorAt INTEGER;
+  `,
+
+  // ── 76: user_version 75 -> 76 ─────────────────────────────────────────────
+  // The portfolio (Overlord spec §5.6 H38; W1, plan `w1-portfolio.md` Task 2): `portfolio_rank`, the operator's order, one row
+  // per ranked programme, and `portfolio_rank_revision`, one row whose counter only rises. ONE writer for both,
+  // `portfolioStore.ts#setPortfolioRank`, reached only from the rank door; no row exists until the operator writes one.
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 76` takes rule 3 and boots.
+  // The anchor took 74 and the push outbox 75, so this entry is 76 (the coordinator's word at landing). RE-MEASURE the slot
+  // before the PR and before merge (it must print 75 before this entry is counted; renumber on the coordinator's word):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE portfolio_rank (
+    program   TEXT PRIMARY KEY,   -- a programs.slug; the writer checks it exists
+    position  INTEGER NOT NULL,   -- the place inside its class band, 1 first
+    cls       TEXT NOT NULL,      -- ServiceClass; read through isServiceClass, never a cast
+    fixedDate TEXT,               -- YYYY-MM-DD, only on fixed-date
+    setAt     INTEGER NOT NULL,   -- wall ms of the write that last placed this row
+    setBy     TEXT NOT NULL       -- that write's actor: the session's device actor, or flag-off
+  );
+  CREATE TABLE portfolio_rank_revision (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    revision INTEGER NOT NULL,    -- only rises; 0 is "never written", which no row stores
+    setAt    INTEGER NOT NULL,
+    setBy    TEXT NOT NULL
+  );
+  `,
+
+  // ── 77: user_version 76 -> 77 ─────────────────────────────────────────────
+  // The replay quiz (Overlord spec §3.3.9 C52, §12 M13; W1a, plan `w1a-replay-quiz.md` Task 1; W0-28 ruled B):
+  // `continuity_quiz_runs`, one row per replay quiz run the operator ran by hand and recorded. ONE writer,
+  // `continuity/quizStore.ts#insertQuizRun`, which sets `baseline` by `continuity/quiz.ts#quizBaseline` in its own
+  // transaction. A row holds the score and its interval only, never a PASS or a benefit. `reportSha` is unique, so a resend
+  // is one row. The anchor took 74, the push outbox 75 and the portfolio 76, so this entry is 77 (the coordinator's
+  // word at landing).
+  //
+  // A NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 77` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 76 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_quiz_runs (
+    id            INTEGER PRIMARY KEY,
+    measuredAt    INTEGER NOT NULL,     -- wall ms the quiz was measured (the report's)
+    recordedAt    INTEGER NOT NULL,     -- wall ms the row was written
+    recordedBy    TEXT NOT NULL,        -- who recorded it (attribution, not authentication)
+    reportSha     TEXT NOT NULL UNIQUE, -- the report's sha256
+    questionsSha  TEXT NOT NULL,        -- the frozen question list's sha256
+    questions     INTEGER NOT NULL,
+    families      INTEGER NOT NULL,
+    score         REAL NOT NULL,
+    lo            REAL NOT NULL,        -- the score's interval
+    hi            REAL NOT NULL,
+    judgeModel    TEXT NOT NULL,
+    ccrcRelease   TEXT NOT NULL,
+    claudeBuilds  TEXT NOT NULL,        -- the Claude Code builds, a JSON list
+    steerArmed    TEXT NOT NULL,        -- yes | no | partial | unmeasured (QuizArmed)
+    agentsOnArmed TEXT NOT NULL,        -- yes | no | partial | unmeasured (QuizArmed)
+    baseline      INTEGER NOT NULL      -- 1 for M13's baseline (quizBaseline), else 0
+  );
+  `,
+
+  // ── 78: user_version 77 -> 78 ─────────────────────────────────────────────
+  // The loads report (Overlord spec §3.6 H4, Table 11.1e; W1 sandbox, plan `w1-sandbox.md` Task 5): `continuity_start_loads`,
+  // what a session's `startup` or `resume` start loaded, one row per start, joined by `startId`. ONE writer,
+  // `insertStartLoads` (`continuityStore.ts`), from the loads door: the first body for a start is kept, a resend of the same
+  // body changes nothing, and a second body that differs sets `conflicted`, which every reader reads as every property
+  // unmeasured. No verdict is stored: every reader computes one from the newest start's row and the server's own profile.
+  // `carriedFrom` is the `reportId` of the start a resume carried instructions and hooks from (slug
+  // resume-carries-its-own-start).
+  //
+  // A NEW TABLE, nothing on an existing one: an older build opening a file at `user_version 78` takes rule 3 (it warns, reads
+  // as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. Sibling W1 pieces add
+  // migrations too: whoever lands later renumbers on the coordinator's word; the push outbox (#2838) took 75, the portfolio (#2842) 76
+  // and the replay quiz (#2839) 77, so this is 78 (the coordinator's word at landing, 2026-11-15). RE-MEASURE the slot
+  // before the PR and before merge (it must print 77 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_start_loads (
+    startId        INTEGER PRIMARY KEY REFERENCES continuity_starts(id),
+    profileRole    TEXT,               -- from CCRC_LAUNCH_PROFILE, or NULL when the session had none
+    profileDigest  TEXT,               -- 64 lowercase hex, or NULL
+    launchRc       TEXT,               -- CCRC_LAUNCH_RC: on | off, or NULL
+    claudeVersion  TEXT,               -- the build, or NULL
+    permissionMode TEXT,               -- the hook payload's word, or NULL
+    cwdInWorkspace INTEGER,            -- 1 | 0, or NULL when unmeasured
+    loaded         TEXT NOT NULL,      -- JSON: per known kind, its sorted list or "unmeasured"
+    carriedFrom    TEXT,               -- the reportId a resume carried from, or NULL
+    bodySha256     TEXT NOT NULL,      -- the first report's narrowed body, reportedAt left out
+    conflicted     INTEGER NOT NULL DEFAULT 0,  -- 1 once a second, different body arrived for this start
+    reportedAt     INTEGER NOT NULL,   -- the hook's clock, ms
+    receivedAt     INTEGER NOT NULL    -- the server's clock, ms
+  );
+  `,
+
+  // ── 79: user_version 78 -> 79 ─────────────────────────────────────────────
+  // The renewal act (Overlord spec §3.3.2 C37 and §3.3.11 H12; W1a, plan `w1a-renewal-act.md` Task 3): two tables of the
+  // generations lane, which is their only writer. `continuity_checkpoints` holds the checkpoint the lane assembles for a
+  // generation before it renews it: the identity's live notes and, for a coordinator, its last ten rulings (each a JSON
+  // array), and the handover note's JSON or NULL (a hard trigger carries none). The card reads the row of the generation
+  // that ended last. `continuity_renew_calls` holds one row per `SessionHost.renew` call the lane makes for a try of one
+  // renewal (an episode: a generation that went back to active may renew again), inserted BEFORE the call (a crash then
+  // never repeats a try) and given its answer word after. `continuity_soft_renewals` holds one row per soft due the lane fed,
+  // the soft budget's count across generations.
+  //
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 78` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names any of them, and boots. Every earlier entry is frozen.
+  // The push outbox (#2838) took 75, the portfolio (#2842) 76, the replay quiz (#2839) 77 and the loads report (#2847) 78,
+  // so this entry is 79, the next free slot, pinned to the entry before it (the coordinator's word at landing).
+  // RE-MEASURE the slot before the PR and before merge (it must print 78 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_checkpoints (
+    generationId INTEGER PRIMARY KEY,   -- the generation the checkpoint was assembled for (continuity_generations.id)
+    notes        TEXT NOT NULL,         -- JSON array: the identity's live notes as stored
+    rulings      TEXT NOT NULL,         -- JSON array: a coordinator's last ten rulings, newest first; [] for any other role
+    handover     TEXT,                  -- JSON: the handover note (with its generation and dropped count), or NULL
+    at           INTEGER NOT NULL       -- wall ms the lane stored it
+  );
+  CREATE TABLE continuity_renew_calls (
+    generationId INTEGER NOT NULL,
+    episode      INTEGER NOT NULL,      -- the renewal: wall ms its generation entered clearing (set once on entry)
+    try          INTEGER NOT NULL,      -- the try within the renewal (1-based)
+    at           INTEGER NOT NULL,      -- wall ms the call was claimed, before it was made
+    answer       TEXT,                  -- the RenewResult word, or NULL while the call is in flight or its answer was lost
+    PRIMARY KEY (generationId, episode, try)
+  );
+  CREATE TABLE continuity_soft_renewals (
+    id           INTEGER PRIMARY KEY,
+    identity     TEXT NOT NULL,
+    term         INTEGER NOT NULL,
+    generationId INTEGER NOT NULL,      -- the generation whose soft due was fed
+    observedMs   INTEGER NOT NULL       -- the identity's accumulator when it was fed
+  );
+  CREATE INDEX continuity_soft_renewals_identity ON continuity_soft_renewals(identity, term);
+  `,
+
+  // ── 80: user_version 79 -> 80 ─────────────────────────────────────────────
+  // The answer marks (Overlord spec §9.2.1 C70; W1, plan `w1-delegation-marks.md` Task 2): `answer_marks`, every change of
+  // the operator's two marks (`could-answer`, `unsure`) on a row of Waiting on you, append-only; the newest record of a row's
+  // mark is its value. ONE writer, `answerMarkStore.ts#recordAnswerMark`, reached only from the operator's door. A record
+  // names its row by kind and id and copies no fact of it (plan question 10). `kind` and `mark` carry no CHECK on purpose: a
+  // later build may name another kind or mark, and every reader takes them through `isAnswerMarkKind`/`isAnswerMarkName`.
+  // Sandbox A took 78 and the renewal act (#2852) 79, so this entry is 80, the next free slot (the coordinator's word).
+  //
+  // A NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 80` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 79 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE answer_marks (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind   TEXT NOT NULL,                       -- AnswerMarkKind; read through isAnswerMarkKind, never a cast
+    rowId  INTEGER NOT NULL,                    -- operator_items.id or asks.id, by kind; no copy of either row
+    mark   TEXT NOT NULL,                       -- AnswerMarkName; read through isAnswerMarkName, never a cast
+    value  INTEGER NOT NULL CHECK (value IN (0, 1)),
+    at     INTEGER NOT NULL,                    -- wall ms of the change
+    actor  TEXT NOT NULL                        -- the session's device actor, or flag-off
+  );
+  CREATE INDEX answer_marks_row ON answer_marks (kind, rowId, mark, id);
+  `,
+
+  // ── 81: user_version 80 -> 81 ─────────────────────────────────────────────
+  // The Overlord authority journal's head row (spec §7.6, Table 7.6a; plan `w1-authority-journal.md` Task 3, question 5): the
+  // position of the last record of `~/.ccrc/overlord-authority.jsonl` whose row committed. ONE writer, the apply step of
+  // `overlordAuthorityJournal.ts#OverlordAuthorityJournal.appendInTx`, in the transaction of the authority row it records. Boot
+  // coherence compares the file's head with it. It landed first, so it keeps 81 and responses A takes 82 (the
+  // coordinator's word). A NEW TABLE: an older build at `user_version 81` takes rule 3 and never names it. RE-MEASURE the slot:
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_authority_head (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    sequence   INTEGER NOT NULL,
+    journalId  TEXT NOT NULL,
+    digest     TEXT NOT NULL,
+    at         INTEGER NOT NULL     -- the record's acceptedAt, as epoch milliseconds
+  );
+  `,
+
+  // ── 82: user_version 81 -> 82 ─────────────────────────────────────────────
+  // The response record (Overlord spec §4.3 C66, C67; W1, plan `w1-responses.md` Task 2): `operator_responses`, one row per
+  // message ccrc put in front of the operator, sealed once by the response lane; `response_receipts`, what a device reported
+  // of it, written only by the receipts door; `response_boots`, one row per boot of this server (question 17). One writer
+  // for each fact, named in `responsesStore.ts` and `writers-map.test.ts`. Each kind's reference is one partial unique index
+  // over columns its own CHECKs make non-null, and every insert names its conflict, so a repeat is nothing and a CHECK throws.
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 82` takes rule 3, never names
+  // them, and records nothing (Table 11.1a). Sibling W1 pieces add migrations too: the renewal act (#2852) took 79,
+  // answer marks A (#2879) 80 and authority journal A (#2895) 81, so this is 82 (the coordinator's word, 2026-11-16).
+  // RE-MEASURE the slot before the PR and before merge (it must print 81 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE operator_responses (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, label TEXT NOT NULL, pushId TEXT UNIQUE,
+    refKind TEXT, refId INTEGER, refKey TEXT, carriesKind TEXT, carriesId INTEGER, hasActions INTEGER NOT NULL DEFAULT 0,
+    tag TEXT, delivery TEXT NOT NULL, state TEXT NOT NULL, acceptedSubs TEXT NOT NULL DEFAULT '[]',
+    sends INTEGER NOT NULL DEFAULT 0, bootMeasured INTEGER NOT NULL, bootEpoch INTEGER,
+    restoreMeasured INTEGER NOT NULL, restoreGeneration INTEGER, insertedAt INTEGER NOT NULL, admittedAt INTEGER,
+    deliveredAt INTEGER, windowCapAt INTEGER, shownAt INTEGER, openedAt INTEGER, actedAt INTEGER,
+    outcome TEXT, how TEXT, why TEXT, sealedAt INTEGER, handledAt INTEGER,
+    CHECK ((bootMeasured = 1) = (bootEpoch IS NOT NULL)),
+    CHECK ((restoreMeasured = 1) = (restoreGeneration IS NOT NULL)),
+    CHECK ((kind = 'push') = (pushId IS NOT NULL)), CHECK ((carriesKind IS NULL) = (carriesId IS NULL)),
+    CHECK ((kind = 'waiting') = (refKind IS NOT NULL)), CHECK ((kind IN ('waiting', 'reply')) = (refId IS NOT NULL)),
+    CHECK ((kind = 'digest') = (refKey IS NOT NULL)));
+  CREATE UNIQUE INDEX operator_responses_one_waiting ON operator_responses(refKind, refId) WHERE kind = 'waiting';
+  CREATE UNIQUE INDEX operator_responses_one_digest ON operator_responses(refKey) WHERE kind = 'digest';
+  CREATE UNIQUE INDEX operator_responses_one_reply ON operator_responses(refId) WHERE kind = 'reply';
+  CREATE INDEX operator_responses_open ON operator_responses(state, windowCapAt);
+  CREATE INDEX operator_responses_by_insert ON operator_responses(insertedAt);
+  CREATE TABLE response_receipts (id INTEGER PRIMARY KEY, responseId INTEGER NOT NULL, receipt TEXT NOT NULL,
+    source TEXT NOT NULL, version INTEGER, endpointHash TEXT NOT NULL DEFAULT '', at INTEGER NOT NULL,
+    CHECK ((source = 'worker') = (version IS NOT NULL)));
+  CREATE UNIQUE INDEX response_receipts_once ON response_receipts(responseId, receipt, source, endpointHash);
+  CREATE TABLE response_boots (epoch INTEGER PRIMARY KEY, bootedAt INTEGER NOT NULL, buildSha TEXT);
   `,
 ];
 

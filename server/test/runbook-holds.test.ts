@@ -28,7 +28,7 @@
 //
 // NARROW BY DESIGN: this does not pin the runbook's prose, only the
 // exact-match transcript lines it stakes an operator's diff against, and it
-// does not run the full `ccrc install` fixture (`ccrc-install.test.ts`
+// does not run the full `ccrc install` fixture (`ccrc-install-*.test.ts`
 // already pays that cost once per file it needs it in — importing that file
 // here would re-register its ~75 tests as a side effect of the module
 // import, which is waste, not reuse).
@@ -38,6 +38,8 @@ import { readFileSync, mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ccrcContainedEnv } from './ccrcContainment.js';
+import { assertNoRealTool } from './containedTools.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const CCRC = join(root, 'ccd/ccrc');
@@ -98,8 +100,13 @@ const runDrRcState = (body: string | undefined): string => {
       mkdirSync(join(home, '.ccrc'), { recursive: true });
       writeFileSync(join(home, '.ccrc', 'remote-control'), body);
     }
-    const r = spawnSync('bash', ['-c', `. "$1"; _dr_rc_state`, 'bash', DOCTOR_CHECKS],
-      { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    // Contained like the spawn below (wave 18, D-5255): the doctor checks are outside the raw-spawn census's names, so
+    // no census row sees this env. The assertion reads the SAME binding the spawn takes (review 535 F11). The checks'
+    // path rides that env, not argv, so the command text stays constant (fix round 3, D-5259: CodeQL reads every argv
+    // element of a `bash -c` as part of the command).
+    const env = { ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }), DOCTOR_CHECKS };
+    assertNoRealTool(env, home);
+    const r = spawnSync('bash', ['-c', '. "$DOCTOR_CHECKS"; _dr_rc_state'], { env, encoding: 'utf8' });
     expect(r.status, r.stderr).toBe(0);
     return r.stdout;
   } finally {
@@ -140,15 +147,18 @@ const runExposureCheck = (fn: string, stubs?: Record<string, string>): string =>
       'CCRC_DDNS_TOKEN=fixture-token-not-real',
       '',
     ].join('\n'), { mode: 0o600 });
-    let env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+    // Contained (wave 18, R14(b)): the fixture HOME, the fixture bus, and a recording poison for every
+    // CONTAINED_TOOLS name, first on PATH. The stubs go ahead of the poisons; none of them is a contained tool.
+    let env: NodeJS.ProcessEnv = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
     if (stubs) {
       const bin = join(home, 'stub-bin');
       mkdirSync(bin);
       for (const [name, body] of Object.entries(stubs)) {
         writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
       }
-      env = { ...env, PATH: `${bin}:${process.env.PATH}` };
+      env = { ...env, PATH: `${bin}:${env['PATH'] ?? ''}` };
     }
+    assertNoRealTool(env, home);
     const r = spawnSync('bash', ['-c', `. "$1"; . "$2"; ${fn}`, 'bash', CCRC, DOCTOR_CHECKS],
       { env, encoding: 'utf8' });
     expect(r.status, r.stderr).toBe(0);
@@ -203,13 +213,21 @@ describe('the VM-gate runbook quotes what a real fresh install actually prints',
   });
 
   it("Step 2's PASS rc line is the state right after install, not the absent-file default", () => {
-    // FACT 1 — ORDER: _inst_rc runs before cmd_doctor, same function body.
+    // FACT 1 — ORDER: _inst_rc is a step of the spine, and cmd_install runs
+    // the spine before cmd_doctor, same function body. Since W4 Task 4 the
+    // spine is the `CCRC_INST_SPINE` array, iterated through `_inst_step`.
+    const spine = /^CCRC_INST_SPINE=\(([\s\S]*?)\n\)/m.exec(ccrcSrc);
+    expect(spine, 'ccd/ccrc has no CCRC_INST_SPINE').not.toBeNull();
+    expect(spine![1]!.split('\n').map((l) => l.trim())).toContain('_inst_rc');
     const body = cmdInstallBody();
-    const rcIdx = body.search(/^\s*_inst_rc\s*$/m);
-    const doctorIdx = body.search(/^\s*cmd_doctor\s*$/m);
-    expect(rcIdx, body).toBeGreaterThan(-1);
+    const loopIdx = body.search(/^\s*for inst_fn in "\$\{CCRC_INST_SPINE\[@\]\}"; do _inst_step "\$inst_fn"; done\s*$/m);
+    // W6 Task 3: doctor runs inside `_inst_doctor_tail`, which runs it FIRST
+    // and returns its rc (ccrc-install-*.test.ts pins both), so the tail's line
+    // is where the spine hands over to doctor.
+    const doctorIdx = body.search(/^\s*_inst_doctor_tail\s*$/m);
+    expect(loopIdx, body).toBeGreaterThan(-1);
     expect(doctorIdx, body).toBeGreaterThan(-1);
-    expect(rcIdx).toBeLessThan(doctorIdx);
+    expect(loopIdx).toBeLessThan(doctorIdx);
 
     // FACT 2 — BYTES: _inst_rc writes exactly `off\n` when the file is absent.
     expect(ccrcSrc).toContain('printf \'%s\\n\' "off" > "$tmp"');
@@ -407,15 +425,28 @@ describe('step 12 (the release round-trip) quotes what the release verbs actuall
   });
 
   it("`ccrc update`'s verified line is derived from _upd_fetch's template", () => {
-    const template = 'echo "update: verified $tarname (transport checksum, then the per-file MANIFEST)"';
+    // D-3141 (Tasks 9-13, centralised-update-management part B): the
+    // provenance bundle is now verified between the transport checksum and
+    // the per-file MANIFEST, and the success line says so — re-measured by
+    // content against the current source, not retyped from memory.
+    const template = 'echo "update: verified $UPD_TARNAME (transport checksum, provenance, then the per-file MANIFEST)"';
     expect(ccrcSrc).toContain(template);
     // The update in the worked example crosses to v0.0.2.
     expect(step12Section()).toContain(
-      'update: verified ccrc-v0.0.2.tar.gz (transport checksum, then the per-file MANIFEST)');
+      'update: verified ccrc-v0.0.2.tar.gz (transport checksum, provenance, then the per-file MANIFEST)');
   });
 
   it('the sweep close line is quoted verbatim — it is a constant in _upd_sweep', () => {
     const line = 'update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (KillMode=process verified per unit before any restart; panes untouched)';
+    expect(ccrcSrc).toContain(`echo "${line}"`);
+    expect(step12Section()).toContain(line);
+  });
+
+  // Wave 8 item G: the sweep's OTHER close line — a box with no live sessions
+  // does not run the line above (nothing was restarted, so nothing was
+  // "verified … before any restart"), and the runbook now quotes the real one.
+  it('the zero-supervisors sweep close line is quoted verbatim — it is a constant in _upd_sweep', () => {
+    const line = 'update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart (KillMode=process verified before the restart; panes untouched)';
     expect(ccrcSrc).toContain(`echo "${line}"`);
     expect(step12Section()).toContain(line);
   });

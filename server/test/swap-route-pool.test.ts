@@ -80,10 +80,16 @@ const open = async (
   opts: { ccdVerbs?: string[] | null; io?: FleetIO; queue?: KeyedQueue } = {},
 ): Promise<FastifyInstance> => {
   calls = [];
-  const run: Runner = async (_cmd, args) => { calls.push([...args]); return { code: 0, stdout: '', stderr: '' }; };
+  const run: Runner = async (_cmd, args) => { calls.push([...args]); return { ran: true, code: 0, stdout: '', stderr: '' }; };
+  // D-5240: the swap route reads the turn (`turnVerdictFor`) before the queue and inside it. This suite is about the
+  // pool rule, so tmux answers on its own runner, never recorded in `calls`: the pane is proven gone, a verdict of
+  // `idle` with no further read (`swap-route-busy.test.ts` owns the busy and unmeasured cases).
+  const paneGone: Runner = async (_cmd, args) =>
+    args[0] === 'has-session' ? { ran: true, code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` }
+      : { ran: true, code: 0, stdout: '', stderr: '' };
   const cfg = loadConfig({ CCRC_HOME: home });
   const a = await buildServer({
-    cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: opts.queue ?? new KeyedQueue(),
+    cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(paneGone), io: opts.io ?? localIO, queue: opts.queue ?? new KeyedQueue(),
     ...(opts.ccdVerbs !== undefined
       ? { fleetState: { connected: true, downSince: null, ccdVerbs: opts.ccdVerbs, rosterFp: null, build: null } }
       : {}),
@@ -151,7 +157,7 @@ describe('POST /api/sessions/:id/swap — the pool pre-check', () => {
     expect(res.json()).toEqual({ ok: false, error: 'pool-unreadable', state: 'unreadable' });
   });
 
-  it('404s an id the registry does not list, and 503s a registry it could not list', async () => {
+  it('404s an id the registry does not list, and 502s a registry it could not list', async () => {
     app = await open();
     const missing = await app.inject({ method: 'POST', url: '/api/sessions/claude-nothing/swap', payload: { wrapper: 'claude' } });
     expect(missing.statusCode).toBe(404);
@@ -159,7 +165,7 @@ describe('POST /api/sessions/:id/swap — the pool pre-check', () => {
     await app.close();
     app = await open({ io: { ...localIO, readdir: async () => null } });
     const unlistable = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/swap`, payload: { wrapper: 'claude' } });
-    expect(unlistable.statusCode).toBe(503);
+    expect(unlistable.statusCode).toBe(502);
     expect(unlistable.json()).toEqual({ ok: false, error: 'registry-unmeasurable' });
   });
 });
@@ -448,11 +454,11 @@ describe('POST /api/sessions/:id/swap — each arm refuses before the queued cal
     expect(res.json()).toEqual({ ok: false, error: 'unknown-session' });
   });
 
-  it('answers the ordinary 503 while the slot is held', async () => {
+  it('answers the ordinary 502 registry-unmeasurable while the slot is held', async () => {
     const queue = new RecordingQueue();
     app = await open({ io: { ...localIO, readdir: async () => null }, queue });
     const res = await refusalAnswersWhileHeld(app, queue, ID, { wrapper: 'claude' });
-    expect(res.statusCode).toBe(503);
+    expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ ok: false, error: 'registry-unmeasurable' });
   });
 });

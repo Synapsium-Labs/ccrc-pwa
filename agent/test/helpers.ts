@@ -21,7 +21,7 @@ const tmp = mkTmp;
 
 export function makeFixture(): Fixture {
   const home = tmp('ccrc-agent-home-');
-  for (const dir of ['.cc-sessions', '.cc-limits', '.cc-clips', '.claude', '.claude-personal']) {
+  for (const dir of ['.cc-sessions', '.cc-limits', '.cc-clips', '.claude', '.claude-home']) {
     mkdirSync(path.join(home, dir), { recursive: true });
   }
   const projectsRoot = tmp('ccrc-agent-projects-');
@@ -38,6 +38,9 @@ export async function boot(fixture: Fixture, extra: Partial<AgentOpts> = {}): Pr
     home: fixture.home,
     projectsRoot: fixture.projectsRoot,
     helloTimeoutMs: 300, // keep the "no hello" test fast
+    // Overlord W1 (R10): the ready frame's `overlord-history` check reads the platform; Linux here, so every runner's real-agent
+    // `ops` pins see one list. A case that passes its own `historySeams` replaces this whole object.
+    historySeams: { platform: 'linux' },
     ...extra,
   });
 }

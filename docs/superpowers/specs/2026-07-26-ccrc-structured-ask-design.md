@@ -252,7 +252,7 @@ and toggle, `.tool-ask`.
 - `server/test/fixtures/transcript-ask-2col.jsonl` (new) — paired with the existing
   `ask-2col-chat-about.txt`. No new pane fixture is needed: that one is already a
   live capture, documented at `dialog.test.ts:128-130` as "Captured from
-  cc-claude-corp-data-internal while it was actually asking". The transcript
+  cc-claude-acme-project-e while it was actually asking". The transcript
   fixture's labels must be **longer than the pane's truncated rows**, not equal to
   them — the three labels in that pane round-trip out in full, so a fixture using
   those exact strings passes under strict equality and never exercises the prefix

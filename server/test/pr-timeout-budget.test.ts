@@ -3,9 +3,10 @@
  * halves — because a comment tried to hold this relationship and got it exactly
  * backwards.
  *
- * `ccd pr-state --project` now makes TWO network calls: the row window
- * (`PR_GH_TIMEOUT`) and the open-PR check rollup (`PR_GH_CHECKS_TIMEOUT`),
- * both in bash. What KILLS the whole verb is in TypeScript, one process and one
+ * `ccd pr-state --project` now makes THREE network calls: the row window
+ * (`PR_GH_TIMEOUT`), the open-PR check rollup (`PR_GH_CHECKS_TIMEOUT`) and,
+ * since landing-order wave 2, the merge-queue read (`PR_GH_QUEUE_TIMEOUT`),
+ * all in bash. What KILLS the whole verb is in TypeScript, one process and one
  * box away: `CCD_VERB_TIMEOUT_MS['pr-state']` in `server/src/remote/runner.ts`,
  * applied by `timeoutMsFor` to every `runCcd` in remote mode — this fleet's
  * standing config.
@@ -18,10 +19,13 @@
  * left TWO SECONDS for `_pr_state_one` to loop every workspace of the project,
  * each costing a dozen-odd `git` spawns plus a python3 interpreter start.
  *
- * So this reads all three numbers from their real sources and asserts the
- * arithmetic. It is deliberately a BUDGET assertion rather than three literal
- * pins: the numbers may move, and what must not move is that the two calls
- * cannot eat the bound.
+ * (The bound is 25_000 since landing-order wave 2, raised for the third call
+ * rather than squeezing the two measured ones.)
+ *
+ * So this reads every number from its real source and asserts the
+ * arithmetic. It is deliberately a BUDGET assertion rather than literal pins:
+ * the numbers may move, and what must not move is that the calls cannot eat
+ * the bound.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -32,14 +36,16 @@ import { fileURLToPath } from 'node:url';
 // this file twice: first for joining the path itself, then for quoting that
 // join in this very comment, because the scan is textual and does not care
 // whether a spelling is code.
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
+import { PR_SWEEP_MS, laneRow } from '../src/laneSchedule.js';
+import { LANDED_READS_PER_SWEEP } from '../src/coord/landed.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
 
 /** A bare `NAME=<seconds>` assignment in ccd, in seconds. */
 function ccdSeconds(name: string): number {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(src);
   expect(m, `ccd no longer defines ${name} as a bare integer assignment — this gate went blind`).not.toBeNull();
   return Number(m![1]);
@@ -54,39 +60,228 @@ function verbTimeoutMs(verb: string): number {
   return Number(m![1].replace(/_/g, ''));
 }
 
-describe('pr-state fits inside the bound that kills it', () => {
-  // 30% is not a round number for its own sake: `_pr_state_one` runs AFTER both
-  // network calls, once per workspace of the project, and each pass shells out
-  // roughly a dozen times (`_reg_get` x4, two `rev-parse`s, `rev-list --count`,
-  // `_ws_wt_branch`, `_ws_common_dir`) plus one python3 start. On a project
-  // with eight workspaces that is seconds, not milliseconds.
-  const LOCAL_LOOP_RESERVE = 0.3;
+// ONE reserve for both describes, so the two budgets cannot drift apart.
+// 30% is not a round number for its own sake: `_pr_state_one` runs AFTER both
+// network calls, once per workspace of the project, and each pass shells out
+// roughly a dozen times (`_reg_get` x4, two `rev-parse`s, `rev-list --count`,
+// `_ws_wt_branch`, `_ws_common_dir`) plus one python3 start. On a project
+// with eight workspaces that is seconds, not milliseconds.
+const LOCAL_LOOP_RESERVE = 0.3;
 
-  it('the two gh calls together leave real room for the per-workspace loop', () => {
-    const rows = ccdSeconds('PR_GH_TIMEOUT');
-    const checks = ccdSeconds('PR_GH_CHECKS_TIMEOUT');
+describe('pr-state fits inside the bound that kills it', () => {
+
+  // THREE calls since landing-order wave 2: the merge-queue read
+  // (`PR_GH_QUEUE_TIMEOUT`, `_gh_pr_queue`) runs after the local loop and adds
+  // to the same wall clock the outer bound kills, so it is summed here with
+  // the other two — and the bound was raised 20 s -> 25 s to make room for it
+  // rather than squeezing the two measured budgets.
+  const CALLS = ['PR_GH_TIMEOUT', 'PR_GH_CHECKS_TIMEOUT', 'PR_GH_QUEUE_TIMEOUT'] as const;
+
+  it('the three gh calls together leave real room for the per-workspace loop', () => {
+    const secs = CALLS.map((c) => ccdSeconds(c));
     const outerMs = verbTimeoutMs('pr-state');
 
     // Guard the guard: a regex that silently stopped matching would make every
     // assertion below vacuous, which is the failure mode this whole file exists
     // to retire one level up.
-    expect(rows, 'PR_GH_TIMEOUT read as zero').toBeGreaterThan(0);
-    expect(checks, 'PR_GH_CHECKS_TIMEOUT read as zero').toBeGreaterThan(0);
+    CALLS.forEach((c, i) => expect(secs[i], `${c} read as zero`).toBeGreaterThan(0));
     expect(outerMs, 'the outer bound read as zero').toBeGreaterThan(0);
 
     const budgetS = outerMs / 1000;
-    expect(rows + checks,
-      `the two gh calls (${rows}s + ${checks}s) leave only ${budgetS - rows - checks}s of the `
+    const sum = secs.reduce((a, b) => a + b, 0);
+    expect(sum,
+      `the three gh calls (${secs.join('s + ')}s) leave only ${budgetS - sum}s of the `
       + `${budgetS}s pr-state bound for _pr_state_one to loop every workspace — raise the bound in `
       + `server/src/remote/runner.ts or lower a timeout in ccd, but do not leave them in this ratio`)
       .toBeLessThanOrEqual(budgetS * (1 - LOCAL_LOOP_RESERVE));
   });
 
+  // THE TRAIN PROOF (D-7362). `--session` makes ONE rows call and may then
+  // spend PR_STATE_TRAIN_TIMEOUT on train records; `--project`, with the three
+  // calls above already at the edge of the bound, spends nothing on them and
+  // reads only the proofs already kept. Both halves are pinned.
+  it('--session: the rows call plus the train budget fit the bound', () => {
+    const sum = ccdSeconds('PR_GH_TIMEOUT') + ccdSeconds('PR_STATE_TRAIN_TIMEOUT');
+    expect(ccdSeconds('PR_STATE_TRAIN_TIMEOUT')).toBeGreaterThan(0);
+    expect(sum).toBeLessThanOrEqual((verbTimeoutMs('pr-state') / 1000) * (1 - LOCAL_LOOP_RESERVE));
+  });
+
+  it('--project spends no time on train records: its deadline is now, and only --session gets the budget', () => {
+    const src = ccdSource();
+    const body = src.slice(src.indexOf('\ncmd_pr_state()'), src.indexOf('\ncmd_pr_state()') + 40000);
+    expect(body).toContain('local _PR_TRAIN_DEADLINE=$SECONDS\n');
+    expect(body).toContain('[[ $mode == --session ]] && _PR_TRAIN_DEADLINE=$(( SECONDS + PR_STATE_TRAIN_TIMEOUT ))');
+  });
+
   it('each single call also fits the bound on its own — a trivially true check that stops a silly one', () => {
-    // If either call alone could outlive the verb, the sum assertion above
-    // would still be satisfiable by making the OTHER one tiny.
+    // If any call alone could outlive the verb, the sum assertion above would
+    // still be satisfiable by making the OTHERS tiny.
     const outerS = verbTimeoutMs('pr-state') / 1000;
-    expect(ccdSeconds('PR_GH_TIMEOUT')).toBeLessThan(outerS);
-    expect(ccdSeconds('PR_GH_CHECKS_TIMEOUT')).toBeLessThan(outerS);
+    for (const c of CALLS) expect(ccdSeconds(c), c).toBeLessThan(outerS);
+  });
+});
+
+describe('pr-state --project <p> --pr <n> fits inside the bound that kills it (landing order wave 5c)', () => {
+  const CALLS = ['PR_GH_VIEW_TIMEOUT', 'PR_STATE_TRAIN_TIMEOUT'] as const;
+  const helper = (): string => {
+    const src = ccdSource();
+    const start = src.indexOf('\n_pr_state_by_pr()');
+    expect(start, '_pr_state_by_pr moved').toBeGreaterThan(0);
+    return src.slice(start, src.indexOf('\n}\n', start));
+  };
+
+  it('the one view call plus the train budget leave the reserve', () => {
+    const secs = CALLS.map((c) => ccdSeconds(c));
+    secs.forEach((s, i) => expect(s, `${CALLS[i]} read as zero`).toBeGreaterThan(0));
+    const sum = secs.reduce((a, b) => a + b, 0);
+    expect(sum).toBeLessThanOrEqual((verbTimeoutMs('pr-state') / 1000) * (1 - LOCAL_LOOP_RESERVE));
+  });
+
+  it('one bounded gh call, and the train deadline set once from PR_STATE_TRAIN_TIMEOUT', () => {
+    const body = helper();
+    expect([...body.matchAll(/_plat_timeout "\$PR_GH_VIEW_TIMEOUT" gh pr view /g)].length).toBe(1);
+    expect([...body.matchAll(/_plat_timeout [^\n]* gh /g)].length, 'a gh call this pin does not count').toBe(1);
+    expect(body).toContain('local _PR_TRAIN_DEADLINE=$(( SECONDS + PR_STATE_TRAIN_TIMEOUT ))');
+    expect(body).toContain('_ws_train_record "$main" "$repo" "$n" "$h" "$b" 1');
+  });
+
+  it('the pr-state header names the form in its gh-call budget', () => {
+    const src = ccdSource();
+    const start = src.indexOf('\ncmd_pr_state()');
+    const header = src.slice(start, src.indexOf('[[ $# -eq 4 && $1 == --project && $3 == --pr ]]', start));
+    expect(header).toContain('and one for `--project <p> --pr <n>`');
+    expect(header).toContain('PR_GH_VIEW_TIMEOUT');
+  });
+
+  it('the header counts the PR-keyed form once per open landing entry per sweep and names the reader\'s cap', () => {
+    const src = ccdSource();
+    const start = src.indexOf('\ncmd_pr_state()');
+    const header = src.slice(start, src.indexOf('[[ $# -eq 4 && $1 == --project && $3 == --pr ]]', start));
+    expect(header).toContain('once per open landing entry');
+    expect(header).toContain('LANDED_READS_PER_SWEEP');
+    const reads: unknown = LANDED_READS_PER_SWEEP;
+    expect(Number.isInteger(reads) && (reads as number) > 0).toBe(true);
+  });
+
+  it('the reader\'s worst hour stays under a tenth of the 5000-an-hour allowance', () => {
+    expect((LANDED_READS_PER_SWEEP * 3_600_000) / PR_SWEEP_MS).toBeLessThanOrEqual(500);
+  });
+
+  it('a pass at the cap fits inside its row\'s staleAfterMs', () => {
+    expect(LANDED_READS_PER_SWEEP * verbTimeoutMs('pr-state')).toBeLessThan(laneRow('landed').staleAfterMs!);
+  });
+
+  it('the view call alone is under the bound', () => {
+    expect(ccdSeconds('PR_GH_VIEW_TIMEOUT')).toBeLessThan(verbTimeoutMs('pr-state') / 1000);
+  });
+});
+
+describe('pr-landing fits inside the bound that kills it (D-6784)', () => {
+  // `cmd_pr_landing` makes one GraphQL call and, at most, two REST reads (the base's rules and its protection) for
+  // ONE uncached base: the loop over bases spends a single REST budget, and `ccd-pr-landing.test.ts` pins the cap with
+  // a fixture call naming sessions on two uncached bases (at most 3 gh calls).
+  // Each is counted: a call left out of this list is a call the bound no longer covers.
+  // And the train proof's budget (D-7362), spent over every train-record read
+  // of the call together, each read bounded by what is left of it.
+  const CALLS = ['PR_LANDING_GQL_TIMEOUT', 'PR_LANDING_REST_TIMEOUT', 'PR_LANDING_REST_TIMEOUT',
+    'PR_LANDING_TRAIN_TIMEOUT'] as const;
+
+  it('the pr-landing budget pin holds, every call counted', () => {
+    const secs = CALLS.map((c) => ccdSeconds(c));
+    const budgetS = verbTimeoutMs('pr-landing') / 1000;
+    secs.forEach((s, i) => expect(s, `${CALLS[i]} read as zero`).toBeGreaterThan(0));
+    expect(budgetS, 'the outer bound read as zero').toBeGreaterThan(0);
+    const sum = secs.reduce((a, b) => a + b, 0);
+    expect(sum, `${secs.join('s + ')}s against ${budgetS}s`).toBeLessThanOrEqual(budgetS * (1 - LOCAL_LOOP_RESERVE));
+  });
+
+  it('the pin names every timeout cmd_pr_landing reads', () => {
+    const src = ccdSource();
+    const start = src.indexOf('\ncmd_pr_landing()');
+    expect(start, 'cmd_pr_landing moved').toBeGreaterThan(0);
+    // The REST reads live in the helper the verb calls; scan the verb and its helpers' timeout reads together.
+    const reads = new Set([...src.matchAll(/\$PR_LANDING_([A-Z]+)_TIMEOUT/g)].map((m) => `PR_LANDING_${m[1]}_TIMEOUT`));
+    expect([...reads].sort()).toEqual([...new Set(CALLS)].sort());
+    const gh = [...src.matchAll(/_plat_timeout "\$PR_LANDING_[A-Z]+_TIMEOUT" gh /g)].length;
+    expect(gh, 'a gh call this pin does not count').toBe(CALLS.length - 1);
+    // The train budget is the deadline the train-record reads share, set once per call.
+    expect(src).toContain('local _PR_TRAIN_DEADLINE=$(( SECONDS + $PR_LANDING_TRAIN_TIMEOUT ))');
+  });
+
+  it('the rules loop hands the REST budget to one base only', () => {
+    const src = ccdSource();
+    const loop = src.slice(src.indexOf('\ncmd_pr_landing()'));
+    expect(loop).toMatch(/_pr_landing_rules "\$project" "\$repo" "\$rb" "\$rest"/);
+    expect(loop).toMatch(/\(\( hit == 1 \)\) \|\| rest=0/);
+  });
+
+  it('each call alone is under the bound', () => {
+    for (const c of new Set(CALLS)) expect(ccdSeconds(c), c).toBeLessThan(verbTimeoutMs('pr-landing') / 1000);
+  });
+});
+
+describe('pr-train-prove fits inside its own bound, and pr-state keeps its own (D-7378)', () => {
+  // The bounded prover the 120 s sweep runs after `pr-state --project`: ONE row-window call (`_gh_pr_list`,
+  // PR_GH_TIMEOUT) and then PR_TRAIN_PROVE_TIMEOUT over every train read of the call together, each read bounded by
+  // what is left of it. Its own row in CCD_VERB_TIMEOUT_MS, so the coordMutex-held `pr-state` bound is not raised.
+  const CALLS = ['PR_GH_TIMEOUT', 'PR_TRAIN_PROVE_TIMEOUT'] as const;
+
+  it('the row window plus the train budget leave room for the per-workspace loop', () => {
+    const secs = CALLS.map((c) => ccdSeconds(c));
+    secs.forEach((s, i) => expect(s, `${CALLS[i]} read as zero`).toBeGreaterThan(0));
+    const budgetS = verbTimeoutMs('pr-train-prove') / 1000;
+    expect(budgetS, 'the outer bound read as zero').toBeGreaterThan(0);
+    const sum = secs.reduce((a, b) => a + b, 0);
+    expect(sum, `${secs.join('s + ')}s against ${budgetS}s`).toBeLessThanOrEqual(budgetS * (1 - LOCAL_LOOP_RESERVE));
+  });
+
+  it('K is small, and the deadline is set once per call from the prover budget', () => {
+    const k = ccdSeconds('PR_TRAIN_PROVE_MAX');
+    expect(k).toBeGreaterThan(0);
+    expect(k).toBeLessThanOrEqual(4);
+    const src = ccdSource();
+    const start = src.indexOf('\ncmd_pr_train_prove()');
+    expect(start, 'cmd_pr_train_prove moved').toBeGreaterThan(0);
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    expect(body).toContain('local _PR_TRAIN_DEADLINE=$(( SECONDS + PR_TRAIN_PROVE_TIMEOUT ))');
+    // Its gh reads are the row window and `_ws_train_record`'s, which take their bound from that deadline.
+    expect(body).toContain('rows=$(_gh_pr_list "$repo")');
+    expect(body).not.toMatch(/_plat_timeout [^\n]* gh /);
+  });
+
+  it('the pr-state bound is untouched by the prover: still the 25 s the three-call pin sums against', () => {
+    expect(verbTimeoutMs('pr-state')).toBe(25_000);
+  });
+});
+
+describe('pr-template fits inside the bound that kills it (D-8147)', () => {
+  // `cmd_pr_template` makes up to nine gh calls, each `_plat_timeout "$PR_GH_TIMEOUT"`: the repository read, the branch's
+  // PR rows, the default branch's tip, the template there, the branch ref, the ref POST (or the template read on the
+  // branch), the file PUT, `gh pr create` and the rows read back. Each can run its deadline plus the kill grace.
+  const GH_CALLS = 9;
+
+  it('nine calls, each its deadline plus the default kill grace, fit the outer bound', () => {
+    const src = ccdSource();
+    const grace = Number(/CCD_TIMEOUT_KILL_AFTER:-(\d+)/.exec(src)?.[1]);
+    expect(grace, 'the kill grace default was not found').toBeGreaterThan(0);
+    const budgetS = verbTimeoutMs('pr-template') / 1000;
+    expect(GH_CALLS * (ccdSeconds('PR_GH_TIMEOUT') + grace), 'nine calls against the bound').toBeLessThanOrEqual(budgetS);
+  });
+
+  it('the pin names every gh call site the verb and its helper make', () => {
+    const src = ccdSource();
+    const start = src.indexOf('\ncmd_pr_template()');
+    const end = src.indexOf('\ncmd_pr_state()');
+    expect(start, 'cmd_pr_template moved').toBeGreaterThan(0);
+    // The sites are counted by kind (the `_gh_api` definition itself is cut out). The longest path through them is the
+    // nine: repo read, PR rows, tip, template, branch ref, ref POST (or template read on the branch), file PUT, create, rows.
+    const body = src.slice(start, end).replace(/\n_gh_api\(\) \{[\s\S]*?\n\}\n/, '\n');
+    const count = (re: RegExp): number => [...body.matchAll(re)].length;
+    expect({
+      api: count(/\$\(_gh_api |^ *_gh_api /gm),
+      create: count(/_plat_timeout "\$PR_GH_TIMEOUT" gh pr create/g),
+      rows: count(/\$\(_gh_pr_list /g),
+      meta: count(/\$\(_gh_repo_meta /g),
+    }, 'a gh call site was added or removed: re-derive GH_CALLS and the pr-template bound').toEqual({ api: 6, create: 1, rows: 2, meta: 1 });
   });
 });

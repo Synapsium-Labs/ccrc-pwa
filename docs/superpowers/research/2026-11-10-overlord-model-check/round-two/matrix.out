@@ -1,0 +1,77 @@
+| machine | scenario | reading | states | transitions | secs | violated |
+|---|---|---|---|---|---|---|
+| grant | grant | safe | 23448 | 73698 | 0.2 | - |
+| grant | ladder | safe | 2187 | 7533 | 0.0 | - |
+| grant | staging | safe | 20064 | 53348 | 0.2 | - |
+| grant | staging-ladder | safe | 17130 | 67086 | 0.2 | - |
+| grant | staging-body | safe | 12612 | 28829 | 0.1 | - |
+| grant | expiry | safe | 80619 | 221458 | 0.6 | - |
+| grant | grant | COND_SUSPEND=stored-nokind | 30504 | 101318 | 0.3 | A3 |
+| grant | grant | SHADOW_LATCH=suspended | 31188 | 96513 | 0.2 | A4 |
+| grant | ladder | LATCH_STORE=single-overwrite | 2673 | 8775 | 0.0 | A1 |
+| grant | ladder | LATCH_STORE=single-min | 2430 | 7992 | 0.0 | - |
+| grant | staging-body | COMMIT_FENCE=term | 11820 | 28061 | 0.1 | I5 |
+| grant | expiry | EXPIRY_GATE=state | 80087 | 220028 | 0.6 | A2 |
+| grant | expiry | COMMIT_BLIND=skip | 79807 | 219584 | 0.6 | A2b |
+| grant | staging | UNSEEN=never-shown | 18732 | 49946 | 0.1 | L1 |
+| grant | staging | VOID_WHEN=lazy | 18422 | 54201 | 0.1 | V2 |
+| grant | staging | VOID_NOTIFY=none | 27582 | 74184 | 0.2 | V1 |
+| restore | restore-db | safe | 136661 | 204041 | 0.7 | - |
+| restore | restore-volume | safe | 19552 | 27526 | 0.1 | - |
+| restore | restore-body | safe | 3380 | 4212 | 0.0 | - |
+| restore | designate | safe | 24501 | 42472 | 0.1 | - |
+| restore | restore-db | ACT_COHERENCE=none | 136325 | 203525 | 0.7 | I3 R1 |
+| restore | restore-db | TRAILING=literal | 122467 | 180641 | 0.6 | G1 |
+| restore | restore-body | TRAILING=literal | 3276 | 4029 | 0.0 | I7 T1 |
+| restore | restore-db | TRAILING=mark | 133843 | 198497 | 0.7 | - |
+| restore | restore-body | TRAILING=mark | 3380 | 4212 | 0.0 | - |
+| restore | restore-db | ACT_COHERENCE=none TRAILING=literal | 118737 | 174872 | 0.6 | G1 I3 R1 |
+| restore | restore-db | RECONCILE=mark-only | 147272 | 216671 | 0.8 | I3 R1 |
+| restore | restore-volume | EPOCH_COUNTS_ACTS=False | 19072 | 26908 | 0.1 | I3 R1 |
+| restore | restore-volume | EPOCH_COMPARE=number | 18424 | 26181 | 0.1 | I3 I7 R1 |
+| restore | restore-volume | WITNESS_CAP=advise | 28934 | 41762 | 0.1 | I3 I7w R1 |
+| restore | restore-volume | VOLUME_RECONCILE=journal-only | 21190 | 29766 | 0.1 | I3 |
+| restore | restore-body | CONFIRM_BODY=row | 3482 | 4557 | 0.0 | I7 |
+| restore | restore-body | TERM_AT_CONFIRM=row+1 | 3380 | 4212 | 0.0 | T1 |
+| restore | restore-db | ID_FLOOR=db | 136661 | 204041 | 0.7 | G1 |
+| restore | designate | PENDING_DEADLINE=door | 26303 | 46491 | 0.1 | LP |
+| request | life | safe | 76836 | 243927 | 0.4 | - |
+| request | operator | safe | 17378 | 59574 | 0.1 | - |
+| request | ladder | safe | 29228 | 121636 | 0.2 | - |
+| request | gap | safe | 9920 | 30500 | 0.0 | - |
+| request | ends | safe | 2906 | 9532 | 0.0 | - |
+| request | life | FIRST_CLOCK=readback | 76506 | 242923 | 0.4 | L1 L1r |
+| request | ladder | ARM_BELOW=stops | 28036 | 116736 | 0.2 | L1 L1r |
+| request | gap | GAP_RETIME=all | 10160 | 31140 | 0.1 | FU1 |
+| request | life | ANSWER_UNACKED=in-progress | 139648 | 441059 | 0.7 | S1 |
+| request | life | DROP_NEEDS_YOU=table | 78936 | 250011 | 0.4 | S8 |
+| request | operator | UNBLOCK=edge | 14786 | 51798 | 0.1 | L1 |
+| command | command | safe | 2083 | 4788 | 0.0 | - |
+| command | retry | safe | 1787 | 3615 | 0.0 | - |
+| command | retry | NATKEY=blocks | 1479 | 3021 | 0.0 | L3 |
+| command | command | REFUSED_TOLD=none | 2051 | 4716 | 0.0 | L1 |
+| command | command | STALE_DETECT=open-only | 2249 | 5076 | 0.0 | S8 |
+| outbox | by | safe | 262 | 463 | 0.0 | - |
+| outbox | by-quiet | safe | 131 | 210 | 0.0 | - |
+| outbox | now | safe | 174 | 280 | 0.0 | - |
+| outbox | batch | safe | 1026 | 2410 | 0.0 | - |
+| outbox | batch-nobrief | safe | 59 | 94 | 0.0 | - |
+| outbox | block | safe | 108 | 226 | 0.0 | - |
+| outbox | faults | safe | 1596 | 3826 | 0.0 | - |
+| outbox | by | SPENT_BY=defer | 254 | 455 | 0.0 | P1 |
+| outbox | by-quiet | QUIET_RULE=defers | 123 | 202 | 0.0 | P1 |
+| outbox | by | CONSOLE_SETTLES=all-deferred | 316 | 604 | 0.0 | P1 |
+| outbox | batch-nobrief | NOBRIEF=never | 53 | 91 | 0.0 | L5 |
+| outbox | batch | BOOT_SENDS=deferred-too | 1370 | 3210 | 0.0 | B1 |
+| outbox | block | REPEAT_SCOPE=all-blocking | 130 | 246 | 0.0 | I9 |
+| outbox | by | REPEAT_ROW=new-row | 262 | 463 | 0.0 | I2 |
+| practice | narrow | safe | 345 | 1059 | 0.0 | - |
+| practice | narrow-full | safe | 86 | 195 | 0.0 | - |
+| practice | widen | safe | 434 | 1291 | 0.0 | - |
+| practice | operator | safe | 132 | 382 | 0.0 | - |
+| practice | narrow | LIVE_HOLDOUT=none NO_MEASURE=renew | 257 | 723 | 0.0 | PR1 |
+| practice | narrow | CONTRADICT=stays-proposed | 346 | 1061 | 0.0 | PL1 |
+| practice | narrow-full | AGE_FROM=live | 17 | 45 | 0.0 | PL2 |
+| practice | operator | OPERATOR_BREACH=retire | 82 | 227 | 0.0 | PR2 |
+
+total states 2067697, 13.9s

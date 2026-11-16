@@ -23,13 +23,14 @@
 // is compliant with no stub of its own.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
+import { markedSpan, refuseCalls, refuseWords } from './census-w5/ccdHelpers.js';
 
-const src = readFileSync(CCD, 'utf8');
+const src = withoutReclaim(ccdSource());
 
 const scan = (text: string): string[] => {
   const t = new Set<string>();
-  for (const m of text.matchAll(/_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) t.add(m[1]!);
+  for (const w of reapWords(text)) t.add(w);
   for (const m of text.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) t.add(m[1]!);
   for (const m of text.matchAll(/'!([a-zA-Z0-9-]+)/g)) t.add(m[1]!);
   for (const m of text.matchAll(/"verdict":"([a-zA-Z0-9-]+)"/g)) { if (m[1] !== 'reapable') t.add(m[1]!); }
@@ -55,12 +56,19 @@ describe('the lifecycle block cannot poison wsaudit.test.ts\'s scan', () => {
     // whether the other three also fail. expect.soft per STANDING RULE #1,
     // softened from the brief's literal hard `expect` inside this loop.
     const slice = src.slice(from, to);
-    for (const shape of [/_reap_refuse\s/, /"refused":"/, /"verdict":"/, /'!/]) {
+    // D-7072: the one helper's family is its region's, so the old name's shape is a census query: the block's two
+    // markers re-taken in ccd's whole text, comment-line calls included (as the shape matched raw text).
+    const full = ccdSource();
+    const [a, b] = [full.indexOf('# ── lifecycle journal '), full.indexOf('# ── end lifecycle journal ')];
+    expect(b, 'the lifecycle block in ccd’s whole text').toBeGreaterThan(a);
+    expect.soft(refuseCalls(full).filter((c) => c.regionFamily === 'reap' && c.offset >= a && c.offset < b).map((c) => c.text.trim()),
+      'no reap-family call in the lifecycle block, in code OR in a comment').toEqual([]);
+    for (const shape of [/"refused":"/, /"verdict":"/, /'!/]) {
       expect.soft(slice, `the lifecycle emitter is written in a harvested shape: ${shape}`).not.toMatch(shape);
     }
   });
 
-  it('leaves the whole-file token set at exactly the 55 that shipped before build 9', () => {
+  it('leaves the token set OUTSIDE the reclaim region at exactly the 55 that shipped before build 9', () => {
     // Three independent claims about the same scan — STANDING RULE #1 —
     // softened from the brief's literal hard `expect`s so a first failure
     // does not hide the rest.
@@ -78,5 +86,107 @@ describe('the lifecycle block cannot poison wsaudit.test.ts\'s scan', () => {
     expect.soft(scan(src)).toHaveLength(55);
     expect.soft(scan(src)).toContain('in-progress');
     expect.soft(scan(src)).not.toContain('refusal');
+    // THE RECLAIM REGION IS HELD APART, NOT HIDDEN (child reclamation wave 3,
+    // Task 2 — the reclaim ladder, spec 2026-09-22 §5.5). `src` above is the
+    // file with its `RECLAIM-BEGIN`…`RECLAIM-END` region cut out, because the
+    // pin line above is quoted BYTE FOR BYTE, at its line, by the frozen
+    // compaction-card corpus (`session-hook.test.ts`'s citation audit), so its
+    // number cannot move while that corpus stands. The region's words are
+    // counted here instead, measured the same way as the 54 -> 55 re-baseline:
+    // the scan over the task's base `ccd/ccd` answers 55 and over its tree 60,
+    // and the set difference is exactly the five ladder words that task gave
+    // `SENTENCES` copy for (ENTERED below; LEFT none). A later word, in or out
+    // of the region, reds one of these three assertions or the pin above.
+    // 60 -> 62 (Task 4, the verb): `reap-in-progress` (ws-reclaim's refusal of
+    // a ws-reap breadcrumb) and `reclaim-in-progress` (ws-reap's refusal of a
+    // `reclaim:` one), both given `SENTENCES` copy. The second is ws-reap's own
+    // word, so its literal is in neither place: not among ws-reap's lines
+    // (the pin above would move) and not in the RECLAIM region (whose words
+    // are ws-reclaim's fourteen alone). It stands in its own `MIRROR-BEGIN`…
+    // `MIRROR-END` block below the region (`_ws_reclaim_mirror`, called from
+    // `_ws_reap_locked` in one line), which `src` cuts out exactly as it cuts
+    // the region — so the pin above stays 55 and byte-identical. Measured the
+    // same way: base 60 -> tree 62, ENTERED those two, LEFT none; the scan
+    // outside both blocks answers 55 at both.
+    // 62 -> 65 (workspace lifecycle wave 3, Task 3 — `ws-expire`'s ladder, spec 2026-09-24
+    // §5.3): the expiry's own words stand in its own `EXPIRE-BEGIN`…`EXPIRE-END`
+    // region, which `src` cuts out exactly as it cuts the other two blocks — so
+    // the pin above stays 55 and byte-identical. Measured the same way: the full
+    // scan answers 65, ENTERED the expiry's new words, LEFT none; the scan
+    // outside the three blocks answers 55.
+    // 65 -> 66 (Task 4, the verb): `expire-in-progress`, ws-reap's refusal of an `expire:`
+    // breadcrumb, in the MIRROR block beside its reclaim twin; the rest of the
+    // verb's words are already counted. The scan outside the blocks answers 55.
+    // 66 -> 67 (Task 9A, amendment 3: 3962): `in-use`, rung 5's refusal of a process working
+    // in an archived worktree, spelled in the EXPIRE region and given `SENTENCES` copy. ENTERED that
+    // one word, LEFT none; the scan outside the three blocks still answers 55.
+    // 67 -> 68 (fleet disk retention DR-26, D-6638): `not-idle`, the stale reclaim's refusal of a child that worked
+    // within seven days, spelled in the RECLAIM region and given `SENTENCES` copy. ENTERED one word, LEFT none.
+    // 68 -> 69 (D-5944): `branch-gone-checked-out`, the ladder's refusal of a HEAD still symbolic to a gone branch,
+    // spelled in the RECLAIM region and given `SENTENCES` copy. ENTERED one word, LEFT none.
+    const full = ccdSource();
+    expect.soft(scan(full)).toHaveLength(69);
+    expect.soft(scan(full).filter((t) => !scan(src).includes(t)))
+      .toEqual(['attached', 'branch-gone-checked-out', 'child', 'containment-unproven', 'expire-in-progress', 'in-use', 'live', 'not-a-child',
+        'not-expired', 'not-idle', 'paused', 'reap-in-progress', 'reclaim-in-progress', 'tree-busy']);
+    expect.soft(reclaimRegion(full).length, 'the region was found — an empty cut proves nothing').toBeGreaterThan(5000);
+    expect.soft(markedBlock(full, 'MIRROR-BEGIN', 'MIRROR-END'), 'the mirror block was found, and holds ws-reap’s breadcrumb word')
+      .toContain('"refused":"reclaim-in-progress"');
+    expect.soft(markedBlock(full, 'COLLECT-BEGIN', 'COLLECT-END'), 'the COLLECT region was found, and holds the collector’s audit')
+      .toContain('_ws_collect_audit_contained() {');
   });
 });
+
+/** The `RECLAIM-BEGIN`…`RECLAIM-END` region of `ccd/ccd`, whole lines, or ''
+ *  when the markers are absent. */
+function reclaimRegion(text: string): string {
+  return markedBlock(text, 'RECLAIM-BEGIN', 'RECLAIM-END');
+}
+
+/** The whole lines from the one holding `begin` to the one holding `end`, or
+ *  '' when either marker is absent. */
+function markedBlock(text: string, begin: string, end: string): string {
+  const b = text.indexOf(begin);
+  const e = text.indexOf(end);
+  if (b < 0 || e < b) return '';
+  const from = text.lastIndexOf('\n', b) + 1;
+  const nl = text.indexOf('\n', e);
+  return text.slice(from, nl < 0 ? text.length : nl + 1);
+}
+
+/** The reap family's words in `text` (D-7072), which is `src` (the cut) or ccd's whole text: for the cut, the census
+ *  reads ccd's whole text with the four blocks `withoutReclaim` cuts excluded by their offsets, comment-line calls
+ *  included as `scan()` includes them. Any other text throws: the census reads ccd's text, not a slice of it.
+ *  Memoized per text: `scan()` runs once per token in the residue row, and each census read walks all of ccd. */
+const reapWordsMemo = new Map<string, readonly string[]>();
+function reapWords(text: string): string[] {
+  const hit = reapWordsMemo.get(text);
+  if (hit !== undefined) return [...hit];
+  const words = reapWordsUncached(text);
+  reapWordsMemo.set(text, words);
+  return [...words];
+}
+
+function reapWordsUncached(text: string): string[] {
+  const full = ccdSource();
+  if (text === full) return refuseWords('reap');
+  if (text !== withoutReclaim(full)) throw new Error('scan() reads ccd’s whole text or its cut, nothing else');
+  const cut = ([['RECLAIM-BEGIN', 'RECLAIM-END'], ['MIRROR-BEGIN', 'MIRROR-END'], ['EXPIRE-BEGIN', 'EXPIRE-END'],
+    ['COLLECT-BEGIN', 'COLLECT-END']] as const).map(([b, e]) => markedSpan(full, b, e)).filter((s): s is [number, number] => s !== null);
+  return refuseWords('reap', { exclude: cut });
+}
+
+/** `text` with that region — and ws-reap's mirror block below it, which holds
+ *  ws-reap's refusal of a reclaim breadcrumb (child reclamation wave 3, Task 4),
+ *  and the EXPIRE region, `ws-expire`'s own words (workspace lifecycle wave 3),
+ *  and Task 4's COLLECT region, the temp-root collector's own words (child
+ *  reclamation wave 7) — cut out. A function DECLARATION, so it is hoisted and `src` can use it on
+ *  its own line without moving the lines the corpus cites. */
+function withoutReclaim(text: string): string {
+  let out = text;
+  for (const block of [reclaimRegion(text), markedBlock(text, 'MIRROR-BEGIN', 'MIRROR-END'), markedBlock(text, 'EXPIRE-BEGIN', 'EXPIRE-END'),
+    markedBlock(text, 'COLLECT-BEGIN', 'COLLECT-END')]) {
+    if (block !== '') out = out.replace(block, '');
+  }
+  return out;
+}

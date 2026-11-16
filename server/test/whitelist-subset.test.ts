@@ -2,80 +2,16 @@
 // refuses. That failure is invisible to every other test in this repo — the
 // route returns 502 only on the live fleet — and it has already shipped once
 // (ws-add/ws-rm).
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import {
-  EXEC_WHITELIST, FORBIDDEN_COMMANDS, UNGRANTABLE_VERBS, isExecAllowed,
+  EXEC_COMMANDS, EXEC_WHITELIST, FORBIDDEN_COMMANDS, UNGRANTABLE_VERBS, isExecAllowed,
 } from '../../agent/src/whitelist.js';
 import { CCD_ARGV, verbSupported } from '../src/ccdargv.js';
+import { CCD_ARGV_SAMPLES } from './ccdArgvSamples.js';
 
-/** One representative call per entry. Every entry MUST appear: the exhaustive
- *  assertion below is what stops a new route hiding behind an untested one. */
-// `unknown[]`, not `string[]`, since wave 6: `wsArchive` and its four siblings
-// take an `ActorFlags | null` argument, so a sample is no longer all-strings.
-// The call site below already casts through `unknown[]`; this widens the
-// declaration to match what the table accepts. EXPECTED stays `string[]` — an
-// argv is still tokens.
-const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
-  start: ['claude', 'demo'],
-  // `enable` is a SEPARATE entry, not a parameter of `start`: POST /api/sessions
-  // picks between the two words (`POST /api/sessions` in `server.ts`) and the agent grants them
-  // separately, so layer 3 below fails outright if nothing builds `enable`.
-  enable: ['claude', 'demo'],
-  ensure: ['demo-quiet-basin'],
-  stopId: ['demo-quiet-basin', 'pwa'],
-  stopPair: ['claude', 'demo', 'pwa'],
-  forget: ['claude-corp-demo'],
-  swap: ['demo-quiet-basin', 'claude2'],
-  /** THE DELIBERATE CROSSING (account pools, spec §5.7). Three separate
-   *  ENTRIES rather than an option on the three above — `start`/`enable`'s own
-   *  rule, for its reason: a route picks the ENTRY, so both spellings are
-   *  enumerated here and neither can drift out of the agent's whitelist. */
-  swapCross: ['demo-quiet-basin', 'claude-b'],
-  startCross: ['claude', 'demo'],
-  enableCross: ['claude', 'demo'],
-  wsAdd: ['demo'],
-  // Same bare `['ws-add']` grant, second builder: the dispatch path's
-  // worker-declaring form. Its sample proves the FLAGGED shape crosses the
-  // existing prefix with no widening — tokens after the prefix are
-  // unconstrained, the same rule that carries `stop --surface`. It CARRIES A
-  // DEC, for `wsHold`'s reason two entries down: a bare sample would leave
-  // layer 2 proving only the unflagged shape reachable, which is not the shape
-  // the dispatch path sends on a caps-advertising box.
-  //
-  // AND THIS FILE STILL CANNOT BE THE PLACE THAT VALIDATES IT (D-410): trailing
-  // tokens are unconstrained by the agent's prefix grant, so the flagged shape
-  // crosses this layer green whether or not the fleet binary can read it — it
-  // did, for a whole commit, while real ccd refused it as an invalid slug.
-  // `ccdargv-dec-parity.test.ts` runs the real binary; this layer only says the
-  // tokens reach it.
-  wsAddWorker: ['demo', { surface: 'agent', actor: 'run:7 dispatch', reason: null }],
-  prStateSession: ['demo-quiet-basin'],
-  prStateProject: ['demo'],
-  prOpen: ['demo-quiet-basin', 'the work', 'Ym9keQ==', 'false'],
-  wsArchive: ['demo-quiet-basin', null],
-  wsRestore: ['demo-quiet-basin', null],
-  wsAudit: ['demo-quiet-basin'],
-  wsReap: ['a'.repeat(64), 'demo-quiet-basin'],
-  wsAttic: ['demo-quiet-basin'],
-  // The one sample that carries a dec, so layer 2's `isExecAllowed` check
-  // actually proves the FLAGGED shape is reachable under the granted
-  // `['ws-hold','--session']` prefix rather than only the bare one.
-  wsHold: ['demo-quiet-basin', 'program:agent-evals wave:1/4',
-           { surface: 'pwa', actor: 'device:iPhone', reason: null }],
-  wsRelease: ['demo-quiet-basin', null],
-  wsRename: ['demo-quiet-basin', 'ws/brainstorm-helix-and-slide-notes', null],
-  coordPause: ['on'],
-  // Two ENTRIES, not one parameterised by `pool: string | null` — the
-  // `start`/`enable` rule stated in `CCD_ARGV`'s `enable` docstring: the route
-  // picks between two words, the argv shapes differ in their tail, and layer
-  // 3 fails outright if nothing builds one of them.
-  projectPoolSet: ['demo', 'pool-a'],
-  projectPoolClear: ['demo'],
-  // Routing slice 1: the record's one writer besides ccd. The sample carries
-  // a real field=value so layer 2 proves the flagged shape is reachable under
-  // the granted `['route','--session']` prefix.
-  route: ['demo-quiet-basin', 'effort', 'high'],
-};
+/** One representative call per entry, shared with `ccd-verb-sets.test.ts` (D-6053). Every entry MUST appear: the
+ *  exhaustive assertion below is what stops a new route hiding behind an untested one. */
+const SAMPLES = CCD_ARGV_SAMPLES;
 
 /**
  * NO EXEMPTION SET (review finding 1, and the reason this note replaces one).
@@ -204,6 +140,62 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsReap(tok, 'demo-quiet-basin')])).toBe(true);
   });
 
+  // CHILD RECLAMATION wave 3 — the second destructive verb, and the first the
+  // SERVER sends with no human in the path. Same mechanism, same reasons, read
+  // from the object across the package boundary.
+  it('ws-expire is grantable ONLY with its confirmation token, and its audit needs no grant of its own', () => {
+    const tok = 'a'.repeat(64);
+    const ex = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-expire');
+    expect(ex, 'exactly one ws-expire grant, on its token').toEqual([['ws-expire', '--expect']]);
+    expect(isExecAllowed('ccd', ['ws-expire'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-expire', '--session', 'demo-quiet-dune'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsExpire(tok, 'demo-quiet-dune', null)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsExpireAudit('demo-quiet-dune')])).toBe(true);
+    expect(UNGRANTABLE_VERBS, 'ws-expire has a lawful grantable form; it is not ungrantable').not.toContain('ws-expire');
+  });
+
+  it('ws-reclaim is grantable ONLY with its confirmation token, and its audit needs no grant of its own', () => {
+    const rc = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-reclaim');
+    expect(rc.length, 'exactly one ws-reclaim grant').toBe(1);
+    expect(rc[0]).toEqual(['ws-reclaim', '--expect']);
+    const tok = 'a'.repeat(64);
+    expect(isExecAllowed('ccd', ['ws-reclaim', '--child-of', '7', '--session', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-reclaim'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-reclaim', tok, '--child-of', '7', '--session', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', false, null)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', true,
+      { surface: 'agent', actor: 'run:7 reclaim sweep', reason: null })])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsReclaimAudit('demo-quiet-basin', true)])).toBe(true);
+    // The only other `ws-audit` grants are the orphan lane's two read-only modes (D-6630) and the loose collect's two (D-6626),
+    // by name; none takes the reclaim audit's place.
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-audit' && p[1] !== '--orphans' && p[1] !== '--orphan-hex'
+      && p[1] !== '--collect-census' && p[1] !== '--loose-hex'),
+      'no second audit grant').toEqual([['ws-audit', '--session']]);
+    expect(UNGRANTABLE_VERBS, 'ws-reclaim has a lawful grantable form; it is not ungrantable').not.toContain('ws-reclaim');
+  });
+
+  // Fix round 1: the `deferExpired` polarity was unpinned in one arm of each
+  // builder. Layer 2c's exact-argv table (below) pins `wsReclaimAudit(…, true)`
+  // and `wsReclaim(…, false, …)` only — one arm each, from `SAMPLES`' own
+  // fixed shape — so dropping `...deferFlags(deferExpired)` from `wsReclaim`,
+  // or hardcoding `'--defer-expired'` into `wsReclaimAudit` regardless of its
+  // argument, survived every other test in this file. This pins BOTH arms of
+  // BOTH builders, independent of the dec.
+  it('wsReclaimAudit and wsReclaim both flip on deferExpired, independent of the dec', () => {
+    const tok = 'a'.repeat(64);
+    const dec = { surface: 'agent' as const, actor: 'run:7 reclaim sweep', reason: null };
+    expect(CCD_ARGV.wsReclaimAudit('demo-quiet-basin', false))
+      .toEqual(['ws-audit', '--session', 'demo-quiet-basin', '--reclaim']);
+    expect(CCD_ARGV.wsReclaimAudit('demo-quiet-basin', true))
+      .toEqual(['ws-audit', '--session', 'demo-quiet-basin', '--reclaim', '--defer-expired']);
+    expect(CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', false, dec))
+      .toEqual(['ws-reclaim', '--expect', tok, '--child-of', '7', '--session', 'demo-quiet-basin',
+                '--surface', 'agent', '--actor', 'run:7 reclaim sweep']);
+    expect(CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', true, dec))
+      .toEqual(['ws-reclaim', '--expect', tok, '--child-of', '7', '--session', 'demo-quiet-basin',
+                '--defer-expired', '--surface', 'agent', '--actor', 'run:7 reclaim sweep']);
+  });
+
   // The SECOND entry in REQUIRED_VERB_FLAG, and the first one that is not there
   // because the verb is destructive. `ws-rename` destroys nothing; it is here
   // because it is the OTHER write the server calls unattended — `ws-archive`
@@ -225,6 +217,233 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsRename('demo-quiet-basin', 'ws/x', null)])).toBe(true);
   });
 
+  // NAMED WORKSPACES S9: the workspace rename, `ws-rename`'s shape one verb over (enrolled for its argument surface, and
+  // granted on `--session` alone). Both forms cross the grant: the title form with a title that begins with dashes, which
+  // ccd reads as text because it is its OWN token after `--title`, and the clear form with no title at all.
+  it('ws-title is grantable ONLY with --session, and builds its set and clear forms', () => {
+    const wt = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-title');
+    expect(wt, 'exactly one ws-title grant').toEqual([['ws-title', '--session']]);
+    expect(isExecAllowed('ccd', ['ws-title', '--title', 'X', '--session', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-title'])).toBe(false);
+    expect(CCD_ARGV.wsTitle('demo-quiet-basin', { title: 'ENG-1234 - Fix' }))
+      .toEqual(['ws-title', '--session', 'demo-quiet-basin', '--title', 'ENG-1234 - Fix']);
+    expect(CCD_ARGV.wsTitle('demo-quiet-basin', { clear: true }))
+      .toEqual(['ws-title', '--session', 'demo-quiet-basin', '--clear']);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsTitle('demo-quiet-basin', { title: '--clear' })])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsTitle('demo-quiet-basin', { clear: true })])).toBe(true);
+  });
+
+  // D-6784: the checks lane's read is granted on `--project` alone, the shape the docs verbs take. A bare
+  // `['pr-landing']` grant would let `ccd pr-landing --sessions <pairs>` through with no project bound first.
+  it('pr-landing is grantable ONLY with --project', () => {
+    const pl = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'pr-landing');
+    expect(pl, 'exactly one pr-landing grant').toEqual([['pr-landing', '--project']]);
+    expect(isExecAllowed('ccd', ['pr-landing'])).toBe(false);
+    expect(isExecAllowed('ccd', ['pr-landing', '--sessions', 'a:1'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.prLanding('project-a', [{ id: 'a', pr: 1 }])])).toBe(true);
+  });
+
+  // D-8147: the visibility reader is granted on `--project` alone, the shape `pr-landing` takes.
+  it('repo-visibility is grantable ONLY with --project', () => {
+    const rv = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'repo-visibility');
+    expect(rv, 'exactly one repo-visibility grant').toEqual([['repo-visibility', '--project']]);
+    expect(isExecAllowed('ccd', ['repo-visibility'])).toBe(false);
+    expect(isExecAllowed('ccd', ['repo-visibility', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.repoVisibility('project-a')])).toBe(true);
+  });
+
+  // D-8147: the template PR is granted on `--project` alone, and its builder refuses a team key outside Linear's grammar.
+  it('pr-template is grantable ONLY with --project, and the builder holds the team key to its grammar', () => {
+    const pt = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'pr-template');
+    expect(pt, 'exactly one pr-template grant').toEqual([['pr-template', '--project']]);
+    expect(isExecAllowed('ccd', ['pr-template'])).toBe(false);
+    expect(isExecAllowed('ccd', ['pr-template', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.prTemplate('project-a', 'KEY')])).toBe(true);
+    for (const bad of ['key', 'K Y', '1K', 'KEY-1', '']) expect(() => CCD_ARGV.prTemplate('project-a', bad), bad).toThrow(/team key/);
+  });
+
+  // The project create (add-project spec 2026-11-04 §4) is granted on `--name` alone: the flag is its whole argument
+  // surface, and a bare `['project-add']` would let any form through. Both builders lead with it.
+  it('project-add is grantable ONLY with --name, and builds its clone and empty forms', () => {
+    const pa = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'project-add');
+    expect(pa, 'exactly one project-add grant').toEqual([['project-add', '--name']]);
+    expect(isExecAllowed('ccd', ['project-add'])).toBe(false);
+    expect(isExecAllowed('ccd', ['project-add', '--url', 'https://github.com/o/r.git', '--name', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.projectAddClone('demo', 'https://github.com/o/r.git')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.projectAddEmpty('demo')])).toBe(true);
+  });
+
+  // Enrolled in REQUIRED_VERB_FLAG for its ARGUMENT SURFACE rather than for a
+  // confirmation token — `ws-rename`, `coord-pause`, `project-pool` and
+  // `route`'s reason — and reached from a door as open as any of theirs, with
+  // one more hazard on top: `GET /ws/pty/:id` (wave 3) carries no box token at
+  // all, as `coord-pause`'s own route does not (D-282), and the `:id` it hands
+  // down is a path param THAT HANDLER VALIDATES NOWHERE. Measured over the
+  // handler body in `server/src/server.ts`: it destructures `req.params` and
+  // passes the id straight to `resizeWindow` and `spawnPty`, with no id-class
+  // test, no roster lookup and no 400 in it — so ccd's `cmd_win_size` is the
+  // whole gate behind this grant, and wave 3's plan lists validating `:id` as
+  // work it will do. A bare `['win-size']` would
+  // permit `ccd win-size <anything> <anything…>` — every positional form the
+  // verb might ever grow — and it would stay green in layer 2 and in layer 3's
+  // reachability check, because `['win-size']` is a genuine prefix of the argv
+  // `CCD_ARGV.winSize` builds. Cross-PACKAGE and object-reading, for the
+  // reasons the ws-reap assertion above states.
+  // Overlord W1 pool set (plan Task 6, Review Focus 6): the read-only pool answer cannot be widened by the wire. Its
+  // grant stops at the flag, and the agent's `REQUIRED_VERB_FLAG` enrolment makes a bare grant a boot refusal.
+  it('pool-answer is grantable ONLY with --session', () => {
+    const pa = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'pool-answer');
+    expect(pa).toEqual([['pool-answer', '--session']]);
+    expect(isExecAllowed('ccd', ['pool-answer', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', ['pool-answer'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.poolAnswer('demo-quiet-basin')])).toBe(true);
+    expect(() => CCD_ARGV.poolAnswer('-x')).toThrow(/not a registry id/);
+    expect(() => CCD_ARGV.poolAnswer('a b')).toThrow(/not a registry id/);
+  });
+
+  it('win-size is grantable ONLY with --session', () => {
+    const ws = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'win-size');
+    expect(ws.length, 'exactly one win-size grant').toBe(1);
+    expect(ws[0]).toEqual(['win-size', '--session']);
+    expect(isExecAllowed('ccd', ['win-size', 'demo-quiet-basin', '--mode', 'smallest'])).toBe(false);
+    expect(isExecAllowed('ccd', ['win-size'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.winSize('demo-quiet-basin', 'smallest')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.winSize('demo-quiet-basin', 'canonical')])).toBe(true);
+  });
+
+  // Enrolled for its ARGUMENT SURFACE, `coord-pause`'s reason, and reached
+  // from a door as open: `POST /api/coord/reclaim-pause` carries no box token.
+  // What this verb guards is whether automation may DELETE child workspaces,
+  // so a bare `['reclaim-pause']` — green in layer 2 and in layer 3's
+  // reachability check, because it is a genuine prefix of the argv
+  // `CCD_ARGV.reclaimPause` builds — is refused here, cross-PACKAGE and
+  // object-reading, for the reasons the ws-reap assertion above states.
+  it('reclaim-pause is grantable ONLY with --state', () => {
+    const rp = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'reclaim-pause');
+    expect(rp.length, 'exactly one reclaim-pause grant').toBe(1);
+    expect(rp[0]).toEqual(['reclaim-pause', '--state']);
+    expect(isExecAllowed('ccd', ['reclaim-pause', 'on'])).toBe(false);
+    expect(isExecAllowed('ccd', ['reclaim-pause'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.reclaimPause('on')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.reclaimPause('off')])).toBe(true);
+  });
+
+  // The test box switch (test box plan TB9, D-7411): `reclaim-pause`'s argument exactly. What this verb guards is
+  // whether a session's tests leave the fleet host, reached from `POST /api/testbox/switch` (session-only), so a bare
+  // `['testbox-remote']` — green in layer 2 and in layer 3's reachability check — is refused here.
+  it('scope-sweep-busy is grantable ONLY with --state (D-7994)', () => {
+    const sw = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'scope-sweep-busy');
+    expect(sw.length, 'exactly one scope-sweep-busy grant').toBe(1);
+    expect(sw[0]).toEqual(['scope-sweep-busy', '--state']);
+    expect(isExecAllowed('ccd', ['scope-sweep-busy', 'on'])).toBe(false);
+    expect(isExecAllowed('ccd', ['scope-sweep-busy'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.scopeSweepBusy('on')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.scopeSweepBusy('off')])).toBe(true);
+  });
+
+  it('testbox-remote is grantable ONLY with --state', () => {
+    const tb = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'testbox-remote');
+    expect(tb.length, 'exactly one testbox-remote grant').toBe(1);
+    expect(tb[0]).toEqual(['testbox-remote', '--state']);
+    expect(isExecAllowed('ccd', ['testbox-remote', 'on'])).toBe(false);
+    expect(isExecAllowed('ccd', ['testbox-remote'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.testboxRemote('on')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.testboxRemote('off')])).toBe(true);
+  });
+
+  // The adoption switch (D-8112): `scope-sweep-busy`'s argument exactly, reached from `POST /api/coord/delegation-adopt` (session-only).
+  it('delegation-adopt is grantable ONLY with --state (D-8112)', () => {
+    const sw = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'delegation-adopt');
+    expect(sw.length, 'exactly one delegation-adopt grant').toBe(1);
+    expect(sw[0]).toEqual(['delegation-adopt', '--state']);
+    expect(isExecAllowed('ccd', ['delegation-adopt', 'on'])).toBe(false);
+    expect(isExecAllowed('ccd', ['delegation-adopt'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.delegationAdopt('on')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.delegationAdopt('off')])).toBe(true);
+  });
+
+  // The pane-scope stop's switch (D-7902): `testbox-remote`'s argument exactly, reached from
+  // `POST /api/coord/pane-scope-stop` (session-only), so a bare `['pane-scope-stop']` is refused here.
+  it('pane-scope-stop is grantable ONLY with --state', () => {
+    const ps = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'pane-scope-stop');
+    expect(ps.length, 'exactly one pane-scope-stop grant').toBe(1);
+    expect(ps[0]).toEqual(['pane-scope-stop', '--state']);
+    expect(isExecAllowed('ccd', ['pane-scope-stop', 'live'])).toBe(false);
+    expect(isExecAllowed('ccd', ['pane-scope-stop'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.paneScopeStop('live')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.paneScopeStop('shadow')])).toBe(true);
+  });
+
+  // NATIVE DOCS READER wave 2 (spec 2026-10-01 section 2 (a), row 44). Four
+  // read-only verbs, each enrolled for its ARGUMENT SURFACE (`coord-pause`'s
+  // reason) and reached from session-gated routes that carry no box token. A
+  // bare grant is green in layer 2 and in layer 3's reachability check,
+  // because the bare verb is a genuine prefix of every argv the builders make,
+  // so it is refused here, cross-PACKAGE and object-reading, for the reasons
+  // the ws-reap assertion above states. ONE `docs-show` grant serves both of
+  // its builders; a second grant would be dead weight layer 3 cannot see.
+  it('docs verbs are grantable ONLY with their flag, one grant each, and both docs-show builders cross it', () => {
+    const GRANTS: readonly (readonly [verb: string, flag: string])[] = [
+      ['docs-index', '--all'], ['docs-tree', '--project'], ['docs-show', '--project'], ['docs-fetch', '--project'],
+      ['docs-log', '--project'],
+    ];
+    for (const [verb, flag] of GRANTS) {
+      expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === verb), `exactly one ${verb} grant, on ${flag}`)
+        .toEqual([[verb, flag]]);
+      expect(isExecAllowed('ccd', [verb]), `bare ${verb}`).toBe(false);
+      expect(isExecAllowed('ccd', [verb, 'demo']), `${verb} with a positional`).toBe(false);
+    }
+    expect(isExecAllowed('ccd', ['docs-index', '--project', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-tree', '--all'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-show', '--all'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-fetch', '--all'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsIndex()])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsTree('demo', null)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsTree('demo', 'ws/a')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsShowCommitted('demo', 'a'.repeat(40), 'refs/remotes/origin/main',
+      'specs', 'a.md', 2097152)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsShowDraft('demo', 'main', 'b'.repeat(40), 'plans', 'b.md',
+      'c'.repeat(64), 2097152)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsFetch('demo', null)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsFetch('demo', 'ws/a')])).toBe(true);
+    // The history verb's 8-token argv, as the builder writes it.
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsLog('demo', 'a'.repeat(40), 'specs', 'a.md')])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-log', '--all'])).toBe(false);
+  });
+
+  // The other half of the same decision, and the half a `not.toContain(
+  // 'set-option')` check cannot carry: `tmux set-option` is NOT granted and
+  // must never be — prefix matching leaves every later token unconstrained, so
+  // a `['tmux','set-option']` prefix would permit setting ANY option on ANY
+  // target of the shared server, which is the whole reason the un-pin was
+  // wrapped in a ccd verb (`server/test/ccd-win-size.test.ts`'s header).
+  //
+  // THE HEADS ARE PINNED EXACTLY, not screened by name, because tmux verbs have
+  // aliases: measured here with `tmux -L <unused-socket> list-commands` on tmux
+  // 3.4, which prints `set-option (set)` and `set-window-option (setw)`. A grant
+  // of `['tmux','set']` is byte-for-byte the capability this program refused to
+  // take, and it walks straight past a check that looks for the long spelling.
+  // An exact list is the only form that also catches the spelling this
+  // comment's author did not think of; it costs a deliberate edit here the next
+  // time the fleet genuinely needs a sixth tmux verb, which is the point.
+  // Sorted on both sides, so reordering the list is not a failure — only its
+  // MEMBERSHIP is pinned. It is also what makes `ccd-win-size.test.ts`'s
+  // "grants tmux exactly five verbs, `set-option` not among them" a measured
+  // claim rather than a sentence in a header.
+  it('tmux is granted exactly five verbs, and no option-setter under any spelling', () => {
+    const heads = EXEC_WHITELIST.tmux.map((p) => p[0]);
+    expect([...heads].sort()).toEqual(
+      ['has-session', 'list-panes', 'capture-pane', 'send-keys', 'resize-window'].sort());
+    for (const spelling of ['set-option', 'set', 'set-window-option', 'setw']) {
+      expect(heads, spelling).not.toContain(spelling);
+      expect(isExecAllowed('tmux', [spelling, '-t', 'cc-demo', 'window-size', 'smallest']), spelling)
+        .toBe(false);
+    }
+    // …and the pin is not a blanket refusal of tmux: the verb the server's own
+    // window PIN already rides on is still granted (wave 3 keeps using it).
+    expect(isExecAllowed('tmux', ['resize-window', '-t', 'cc-demo', '-x', '220', '-y', '50'])).toBe(true);
+  });
+
   // Fix round 1 (task 14 follow-up): the drift pin above caught `stopId`/
   // `stopPair` shipping with no `--surface` at all, sixteen tasks and eleven
   // reviews after the spec named the flag. `stop`'s grant is the ONE-token
@@ -234,14 +453,14 @@ describe('layer 3 — the list never drifts wider than the code', () => {
   // unconstrained") is what already covers `--surface` with zero widening.
   // Executed here directly, past `CCD_ARGV`, so this is proof the PREFIX
   // governs the shape rather than an assumption about which one does — and
-  // for both forms `stop` actually takes, since the id form and the
-  // `<wrapper> <project>` form put the flag at different offsets.
+  // for both forms `stop` actually takes: since path identity W1a the flag
+  // LEADS in both (spec §2.4), and the two forms leave different residues.
   it('stop is a bare one-token grant, so --surface crosses with no widening, in both argv forms', () => {
     const grant = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'stop');
     expect(grant.length, 'exactly one stop grant').toBe(1);
     expect(grant[0]).toEqual(['stop']);
-    expect(isExecAllowed('ccd', ['stop', 'demo-quiet-basin', '--surface', 'pwa'])).toBe(true);
-    expect(isExecAllowed('ccd', ['stop', 'claude', 'demo', '--surface', 'pwa'])).toBe(true);
+    expect(isExecAllowed('ccd', ['stop', '--surface', 'pwa', 'demo-quiet-basin'])).toBe(true);
+    expect(isExecAllowed('ccd', ['stop', '--surface', 'pwa', 'claude', 'demo'])).toBe(true);
     // The exact argv the route actually builds, both forms.
     expect(isExecAllowed('ccd', [...CCD_ARGV.stopId('demo-quiet-basin', 'pwa')])).toBe(true);
     expect(isExecAllowed('ccd', [...CCD_ARGV.stopPair('claude', 'demo', 'pwa')])).toBe(true);
@@ -330,19 +549,32 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     start: ['start', 'claude', 'demo'],
     enable: ['enable', 'claude', 'demo'],
     ensure: ['ensure', 'demo-quiet-basin'],
-    stopId: ['stop', 'demo-quiet-basin', '--surface', 'pwa'],
-    stopPair: ['stop', 'claude', 'demo', '--surface', 'pwa'],
-    forget: ['forget', 'claude-corp-demo'],
-    swap: ['swap', 'demo-quiet-basin', 'claude2'],
+    // LEADING pair, then the id (path identity W1a, spec §2.3, §2.4): with the
+    // id first, an id spelled `--surface` reached cmd_stop as `stop --surface
+    // --surface pwa`, and its loop stopped `pwa`. `ccd-stop-argv-order.test.ts`
+    // runs both rows through the real binary.
+    stopId: ['stop', '--surface', 'pwa', 'demo-quiet-basin'],
+    stopPair: ['stop', '--surface', 'pwa', 'claude', 'demo'],
+    forget: ['forget', 'claude-acme-demo'],
+    limitWait: ['limit-wait', 'claude-acme-demo'],
+    hibernate: ['hibernate', 'demo-quiet-basin', '--surface', 'agent', '--actor', 'sweep:hibernate'],
+    swap: ['swap', 'demo-quiet-basin', 'claude9'],
     // LEADING flag, before the positionals — the token order is
     // parse-load-bearing and it is the SAFE direction under version skew (spec
     // §5.6): a TRAILING `--cross-pool` on an old ccd's `start w p wd` is a
     // silently ignored fourth positional, while a leading one is refused by
     // `_is_valid_wrapper` on every ccd that has ever shipped. Loud beats silent.
     swapCross: ['swap', '--cross-pool', 'demo-quiet-basin', 'claude-b'],
+    swapInterrupt: ['swap', '--interrupt', 'demo-quiet-basin', 'claude9'],
+    swapCrossInterrupt: ['swap', '--cross-pool', '--interrupt', 'demo-quiet-basin', 'claude-b'],
     startCross: ['start', '--cross-pool', 'claude', 'demo'],
     enableCross: ['enable', '--cross-pool', 'claude', 'demo'],
     wsAdd: ['ws-add', 'demo'],
+    // THE NAMED CREATE (named workspaces S5, design 2026-10-20 §4.1-4.2): `--title` and `--wrapper` LEAD, before the
+    // project, because an older ccd binds an unknown `--` token as a POSITIONAL (D-6164) — leading, it lands in the
+    // project slot and is refused there; trailing, it would be dropped unread and the workspace created unnamed on the
+    // least-loaded lane with exit 0. The slug follows the project and the dec trails it, as `wsAddWorker` does.
+    wsAddNamed: ['ws-add', '--title', 'ENG-1234', '--wrapper', 'lane-a', 'demo', 'eng-1234', '--surface', 'pwa', '--actor', 'unmeasured'],
     // LEADING flag, then the project — ccd's `cmd_ws_add` shifts `--no-rc`
     // before its positionals, so token order here is parse-load-bearing the
     // same way `prOpen`'s is. The dec rides LAST, after the positional, where
@@ -352,9 +584,20 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     // SLUG whatever it looked like — `cmd_ws_add` bound `slug="${2:-}"` with no
     // flag loop at all; it has one now, and `ccd-lifecycle-sites.test.ts` runs
     // every one of these four forms through the real binary.
-    wsAddWorker: ['ws-add', '--no-rc', 'demo', '--surface', 'agent', '--actor', 'run:7 dispatch'],
+    // `--child <runId>` IMMEDIATELY after `--no-rc`: both are declarations of
+    // what this spawn IS, both are parsed by the same strip loop, and neither
+    // may trail the dec, where an old ccd's positional binding would eat it.
+    wsAddWorker: ['ws-add', '--no-rc', '--child', '7', 'demo', '--surface', 'agent', '--actor', 'run:7 dispatch'],
+    // W5-G18 (delegation broker wave 5 PR3): `--base` LEADS beside `--child`, before the project and the slug, so an older ccd
+    // binds it as the project and refuses (D-6164). The one-token `['ws-add']` grant covers it: no agent change.
+    wsAddWorkerBase: ['ws-add', '--no-rc', '--child', '7', '--base', 'a'.repeat(40), 'demo', 'quiet-mesa', '--surface', 'agent', '--actor', 'run:7 dispatch'],
     prStateSession: ['pr-state', '--session', 'demo-quiet-basin'],
     prStateProject: ['pr-state', '--project', 'demo'],
+    prStatePr: ['pr-state', '--project', 'demo', '--pr', '41'],
+    prTrainProve: ['pr-train-prove', '--project', 'demo'],
+    repoVisibility: ['repo-visibility', '--project', 'demo'],
+    prTemplate: ['pr-template', '--project', 'demo', '--team', 'KEY'],
+    prLanding: ['pr-landing', '--project', 'demo', '--sessions', 'demo-quiet-basin:41'],
     // SAMPLES.prOpen's fourth element is the STRING 'false' (SAMPLES is typed
     // unknown[] since wave 6, and the call site casts through `unknown[]`), which
     // is truthy at runtime — so this sample actually exercises the `draft: true` arm.
@@ -364,20 +607,102 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsRestore: ['ws-restore', '--session', 'demo-quiet-basin'],
     wsAudit: ['ws-audit', '--session', 'demo-quiet-basin'],
     wsReap: ['ws-reap', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-basin'],
+    wsReclaimAudit: ['ws-audit', '--session', 'demo-quiet-basin', '--reclaim', '--defer-expired'],
+    wsReclaim: ['ws-reclaim', '--expect', 'a'.repeat(64), '--child-of', '7', '--session', 'demo-quiet-basin',
+                '--surface', 'agent', '--actor', 'run:7 reclaim close'],
+    wsExpireAudit: ['ws-audit', '--session', 'demo-quiet-dune', '--expire'],
+    wsExpire: ['ws-expire', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-dune', '--surface', 'agent', '--actor', 'expiry sweep'],
+    wsCollectAudit: ['ws-audit', '--session', 'demo-quiet-dune', '--collect'],
+    wsCollect: ['ws-collect', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-dune', '--surface', 'agent', '--actor', 'collect sweep'],
+    wsOrphanCensus: ['ws-audit', '--orphans'],
+    wsOrphanAudit: ['ws-audit', '--orphan-hex', '2f6f7270'],
+    wsOrphan: ['ws-orphan', '--expect', 'a'.repeat(64), '--tree-hex', '2f6f7270', '--rescue', '--surface', 'agent', '--actor', 'orphan sweep'],
+    wsShedDeps: ['ws-shed-deps', '--session', 'project-a-quiet-basin', '--class', 'child', '--dry-run', '--surface', 'agent', '--actor', 'sweep:deps-shed'],
+    leaseMark: ['ws-lease-mark', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', '--generation', '2', '--project', 'demo',
+                '--admin-record-hex', '6167656e742d61', '--parent', 'lane-a-demo', '--parent-incarnation', '11111111-2222-4333-8444-555555555555',
+                '--activity', 'act-1', '--source', 'agent', '--state', 'adopted', '--journal-seq', '9', '--expires-at', '1767225600000'],
+    leaseAudit: ['ws-lease-audit', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', '--generation', '2', '--holders'],
+    wsCollectCensus: ['ws-audit', '--collect-census'],
+    wsCollectLooseAudit: ['ws-audit', '--loose-hex', '2d7266', '--collect'],
+    wsCollectLoose: ['ws-collect', '--expect', 'a'.repeat(64), '--loose-hex', '2d7266', '--surface', 'agent', '--actor', 'collect sweep'],
     wsAttic: ['ws-attic', '--session', 'demo-quiet-basin'],
-    wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:agent-evals wave:1/4',
+    wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:prog-j wave:1/4',
              '--surface', 'pwa', '--actor', 'device:iPhone'],
     wsRelease: ['ws-release', '--session', 'demo-quiet-basin'],
     wsRename: ['ws-rename', '--session', 'demo-quiet-basin', '--branch', 'ws/brainstorm-helix-and-slide-notes'],
+    wsTitle: ['ws-title', '--session', 'demo-quiet-basin', '--title', '-- ENG-1234 - Fix the login flow'],
     coordPause: ['coord-pause', '--state', 'on'],
+    reclaimPause: ['reclaim-pause', '--state', 'on'],
+    testboxRemote: ['testbox-remote', '--state', 'on'],
+    paneScopeStop: ['pane-scope-stop', '--state', 'live'],
+    scopeSweepBusy: ['scope-sweep-busy', '--state', 'on'],
+    delegationAdopt: ['delegation-adopt', '--state', 'on'],
     projectPoolSet: ['project-pool', '--project', 'demo', '--pool', 'pool-a'],
     projectPoolClear: ['project-pool', '--project', 'demo', '--clear'],
+    projectAddClone: ['project-add', '--name', 'demo', '--url', 'https://github.com/o/r.git'],
+    projectAddEmpty: ['project-add', '--name', 'demo', '--empty'],
     route: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high'],
+    // Pairs in `ROUTE_WRITABLE_FIELDS` order — `class` before `effort` — not
+    // the sample object's own key order, which happens to agree here; the
+    // out-of-order case is pinned in `dispatch-route.test.ts`.
+    routeSet: ['route', '--session', 'demo-quiet-basin', '--set', 'class=opus', '--set', 'effort=high'],
+    routeApply: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high', '--apply'],
+    winSize: ['win-size', '--session', 'demo-quiet-basin', '--mode', 'smallest'],
+    poolAnswer: ['pool-answer', '--session', 'demo-quiet-basin'],
+    // NATIVE DOCS READER wave 2: spec 2026-10-01 section 2 (a)'s verb table, token for token. The verb, then
+    // `--project` (or `--all`), then every flag pair in ccd's argv order; `--max-bytes` is the class cap,
+    // stringified. Committed show is 12 tokens after the verb, draft show 14.
+    docsIndex: ['docs-index', '--all'],
+    docsTree: ['docs-tree', '--project', 'demo'],
+    docsShowCommitted: ['docs-show', '--project', 'demo', '--commit', 'a'.repeat(40), '--ref', 'refs/remotes/origin/main',
+                        '--section', 'specs', '--path', 'a.md', '--max-bytes', '2097152'],
+    docsShowDraft: ['docs-show', '--project', 'demo', '--draft-branch', 'main', '--head', 'b'.repeat(40),
+                    '--section', 'plans', '--path', 'b.md', '--fingerprint', 'c'.repeat(64), '--max-bytes', '2097152'],
+    docsFetch: ['docs-fetch', '--project', 'demo'],
+    docsLog: ['docs-log', '--project', 'demo', '--commit', 'a'.repeat(40), '--section', 'specs', '--path', 'a.md'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {
     const build = CCD_ARGV[key] as (...a: unknown[]) => readonly string[];
     expect(build(...(SAMPLES[key] as unknown[]))).toEqual(EXPECTED[key]);
+  });
+
+  // NATIVE DOCS READER wave 2. The samples above carry `null` tails, so the
+  // row above sees only the shortest argv of `docsTree` and `docsFetch`. This
+  // pins both arms of both builders: a non-null value adds exactly its one
+  // flag pair AFTER the project, and `null` adds nothing at all (never an
+  // empty `--ref ''`, which ccd would refuse as `bad-ref`).
+  it('docsTree and docsFetch add their optional flag pair only for a non-null value, after the project', () => {
+    expect(CCD_ARGV.docsTree('demo', null)).toEqual(['docs-tree', '--project', 'demo']);
+    expect(CCD_ARGV.docsTree('demo', 'ws/a')).toEqual(['docs-tree', '--project', 'demo', '--ref', 'ws/a']);
+    expect(CCD_ARGV.docsTree('demo', 'refs/remotes/origin/main'))
+      .toEqual(['docs-tree', '--project', 'demo', '--ref', 'refs/remotes/origin/main']);
+    expect(CCD_ARGV.docsFetch('demo', null)).toEqual(['docs-fetch', '--project', 'demo']);
+    expect(CCD_ARGV.docsFetch('demo', 'ws/a')).toEqual(['docs-fetch', '--project', 'demo', '--branch', 'ws/a']);
+  });
+
+  // CHILD-RECLAMATION WAVE 1. The exact-argv row above carries a child but no
+  // route (its sample's route is `null`), so it cannot see the ORDER of the two
+  // leading groups. This can: `--child` first, then `--route`, both before the
+  // project — and a `null` child adds nothing at all.
+  it('wsAddWorker leads with --child, then --route, both before the project — and null adds nothing', () => {
+    expect(CCD_ARGV.wsAddWorker('demo', null, { class: 'opus' }, 7))
+      .toEqual(['ws-add', '--no-rc', '--child', '7', '--route', 'class=opus', 'demo']);
+    expect(CCD_ARGV.wsAddWorker('demo', null, { class: 'opus' }, null))
+      .toEqual(['ws-add', '--no-rc', '--route', 'class=opus', 'demo']);
+    expect(CCD_ARGV.wsAddWorker('demo', null, null, null)).toEqual(CCD_ARGV.wsAddWorker('demo', null));
+  });
+
+  // The ORDER the exact-argv row cannot see on its own: title, wrapper, route, project, slug, dec — every flag
+  // that names the create before the project, a `null` wrapper omitted (never an empty token), and the bare
+  // slug-and-project form the one a box without the caps would be sent.
+  it('wsAddNamed leads with --title, --wrapper and --route before the project, then the slug, then the dec', () => {
+    expect(CCD_ARGV.wsAddNamed('demo', 'eng-1', { title: 'T', wrapper: 'lane-a' }, { class: 'opus' }, null))
+      .toEqual(['ws-add', '--title', 'T', '--wrapper', 'lane-a', '--route', 'class=opus', 'demo', 'eng-1']);
+    expect(CCD_ARGV.wsAddNamed('demo', 'eng-1', { title: 'T', wrapper: null }, null, null))
+      .toEqual(['ws-add', '--title', 'T', 'demo', 'eng-1']);
+    expect(CCD_ARGV.wsAddNamed('demo', 'eng-1', { title: 'T', wrapper: null }, null, { surface: 'pwa', actor: 'unmeasured', reason: null }))
+      .toEqual(['ws-add', '--title', 'T', 'demo', 'eng-1', '--surface', 'pwa', '--actor', 'unmeasured']);
   });
 
   it('prOpen maps a real boolean draft to --draft true/false unambiguously', () => {
@@ -387,10 +712,326 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
       .toEqual(['pr-open', '--session', 'demo-quiet-basin', '--title', 'the work', '--body-b64', 'Ym9keQ==', '--draft', 'false']);
   });
 
+  // The exact-argv row above pins the TOKEN ORDER of the mode that is built;
+  // this pins the VOCABULARY the builder will accept at all, which no runtime
+  // assertion in this file can reach. `mode` is a two-member union, so the
+  // third word is a compile error at every call site in `server/src` — and the
+  // third word is not hypothetical: `window-size latest` is the one value
+  // `cmd_win_size`'s own comment refuses outright (a keystroke-driven reflow
+  // flip measured at +6 MB tmux RSS per flip, never returned).
+  //
+  // THE DIRECTIVE IS THE PIN, not the call. Widen `mode` to `string` and the
+  // line below stops being an error, which tsc reports as TS2578 ("unused
+  // '@ts-expect-error' directive") — a real gate here, because
+  // `typecheck-tests.test.ts` compiles all of `server/test/` under
+  // `test/tsconfig.tests.json`. (In `agent/test/` it would be a pin that cannot
+  // fail; `whitelist-structural.test.ts`'s header says why.)
+  // THE TITLE SAYS ONLY WHAT THIS MEASURES (fix round 2). It read "… a third
+  // word never reaches ccd", which is the one thing the body then shows is
+  // false: the argv IS allowed by the whitelist, and what refuses `latest` is
+  // the TYPE on the server side and ccd's own `case` on the box — not this
+  // table. The disclosure below was always honest; the title was not.
+  it('winSize`s mode vocabulary is closed at the TYPE — and the GRANT does not close it', () => {
+    // @ts-expect-error 'latest' is not a member of the union, and must not be.
+    const forced: readonly string[] = CCD_ARGV.winSize('demo-quiet-basin', 'latest');
+    // DISCLOSED, not implied: the agent's grant does NOT constrain the mode —
+    // it is two tokens wide, and everything after a granted prefix is
+    // unconstrained. So this argv is allowed by the whitelist, and the two
+    // things that actually refuse it are the type above (server side) and
+    // ccd's own `case` on the box, which `ccd-win-size.test.ts` pins with
+    // `bad mode: latest (want smallest|canonical)` against the real binary.
+    expect(isExecAllowed('ccd', [...forced])).toBe(true);
+  });
+
   it('the cross-pool builders carry the workdir AFTER the positionals, flag still leading', () => {
     expect(CCD_ARGV.startCross('claude', 'demo', '/w'))
       .toEqual(['start', '--cross-pool', 'claude', 'demo', '/w']);
     expect(CCD_ARGV.enableCross('claude', 'demo', '/w'))
       .toEqual(['enable', '--cross-pool', 'claude', 'demo', '/w']);
+  });
+});
+
+// Spec §10 and its §15 W4 row: "the whitelist pin tests gain a case that the `update` op reaches no exec path". The `update` op is
+// one of TWO wire-triggered spawns outside the exec whitelist (the box token's `token-sync` op is the other, layer 4b below), so the whole safety of each is that nothing else can reach its spawn port and that it
+// reaches nothing of the whitelist's. It is a SOURCE scan, because no behavioural case can see an extra call whose answer comes out
+// the same. It lives in THIS whitelist pin test, and not in one of the agent's three, because this is the one that reads the agent's
+// exec surface from OUTSIDE it (layer 3: "the list never drifts wider than the code") and this describe is that layer's other half: the
+// code that spawns without the list. The agent's three whitelist suites spawn a `tsc` over their own type-bypass fixtures and are
+// about the list's shape; a text scan of `server.ts` is not their subject. `agent/test/update-op.test.ts` keeps its own slices of the
+// update case; this one adds the census of every call site. (Added, not weakened: no case above is touched.)
+describe('layer 4 — the update op is not an exec path, and its spawn port has one caller (spec §10)', () => {
+  // Dynamic imports, so this append moves no line above it (this file's `describe`s are cited by line).
+  let readFileSync: typeof import('node:fs').readFileSync;
+  let readdirSync: typeof import('node:fs').readdirSync;
+  let path: typeof import('node:path');
+  let SRC_DIR = '';
+  let serverSrc = '';
+  let handleReq = '';
+  /** Every way into the exec surface or the wire read gate. */
+  const EXEC_PATH = /\b(?:isExecAllowed|runExec|resolveSpawnCmd|checkPath)\s*\(|\bEXEC_WHITELIST\b/;
+  /** Whole-line and trailing `// ` comments dropped: a sentence naming `spawnUpdate(` is not a call, and a scan that reds on prose is a false red. */
+  const code = (src: string): string => src.split('\n').filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).map((l) => l.replace(/\s\/\/.*$/, '')).join('\n');
+  const CASE_END = /\n    (?:case '|default:)/;
+  /** The text of one `case '<word>': {` body of a switch, up to the next case at the same indent. */
+  function caseBody(src: string, word: string): string {
+    const open = `case '${word}': {`;
+    const at = src.indexOf(open);
+    expect(at, `${open} not found`).toBeGreaterThanOrEqual(0);
+    const rest = src.slice(at + open.length);
+    const end = CASE_END.exec(rest);
+    expect(end, `no end after ${open}`).not.toBeNull();
+    return rest.slice(0, end!.index);
+  }
+  beforeAll(async () => {
+    ({ readFileSync, readdirSync } = await import('node:fs'));
+    path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent', 'src');
+    serverSrc = readFileSync(path.join(SRC_DIR, 'server.ts'), 'utf8');
+    const at = serverSrc.indexOf('async function handleReq(');
+    expect(at, 'handleReq not found').toBeGreaterThanOrEqual(0);
+    const rest = serverSrc.slice(at);
+    const end = /\n\}\n/.exec(rest);
+    expect(end, 'no end after handleReq').not.toBeNull();
+    handleReq = rest.slice(0, end!.index);
+  });
+
+  it("(a) neither `case 'update'` nor the update spawner names an exec-surface symbol; the same cut of `case 'exec'` does (the control)", () => {
+    const updateCase = caseBody(handleReq, 'update');
+    expect(code(updateCase)).not.toMatch(EXEC_PATH);
+    expect(code(updateCase), 'the cut is the update op, not an empty slice').toMatch(/\bspawnUpdate\s*\(/);
+    const at = serverSrc.indexOf('export function makeUpdateSpawn');
+    expect(at, 'makeUpdateSpawn not found').toBeGreaterThanOrEqual(0);
+    const rest = serverSrc.slice(at);
+    const end = /\ninterface PtyEntry/.exec(rest);
+    expect(end, 'no end after makeUpdateSpawn').not.toBeNull();
+    expect(code(rest.slice(0, end!.index))).not.toMatch(EXEC_PATH);
+    expect(code(readFileSync(path.join(SRC_DIR, '..', '..', 'shared', 'spawn.mjs'), 'utf8')), 'the update spawner (shared/spawn.mjs, D-7055) names no exec-surface symbol').not.toMatch(EXEC_PATH);
+    expect(caseBody(handleReq, 'exec')).toMatch(/isExecAllowed\(/);
+  });
+
+  it("(b) `spawnUpdate(` is called exactly once in agent/src, inside `case 'update'` of handleReq, and nowhere outside it", () => {
+    const updateCase = caseBody(handleReq, 'update');
+    const call = /\bspawnUpdate\s*\(/g;
+    expect(code(updateCase).match(call)?.length ?? 0, "one call inside case 'update'").toBe(1);
+    // Every file of the package's source, the whole of server.ts included: the count outside the case is zero.
+    const outsideUpdateCase = serverSrc.replace(updateCase, '');
+    expect(outsideUpdateCase.length, 'the case was cut out of the scan').toBeLessThan(serverSrc.length);
+    expect(code(outsideUpdateCase).match(call)?.length ?? 0, "call sites outside case 'update' in server.ts").toBe(0);
+    for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
+      expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')).match(call)?.length ?? 0, `${f} calls spawnUpdate(`).toBe(0);
+    }
+  });
+
+  // Review of the item 6 census, M2: the `\bspawnUpdate\s*\(` count above cannot see an alias
+  // (`const su = ctx.spawnUpdate; await su(...)` in `case 'exec'` calls the port with no such token), so every line that
+  // NAMES the port is pinned, as the `makeUpdateSpawn`/`realUpdateSpawn` case pins its own.
+  it('(b) `spawnUpdate` is named only where the port is declared, carried and called: an alias of it is a new line here', () => {
+    const lines = code(serverSrc).split('\n').filter((l) => /\bspawnUpdate\b/.test(l)).map((l) => l.trim());
+    expect(lines).toEqual([
+      'spawnUpdate?: UpdateSpawn;',
+      'spawnUpdate: UpdateSpawn;',
+      'spawned = await ctx.spawnUpdate(file, argv, UPDATE_SPAWN_TIMEOUT_MS);',
+      'spawnUpdate: opts.spawnUpdate,',
+      'spawnUpdate: rawOpts.spawnUpdate ?? realUpdateSpawn,',
+    ]);
+    for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
+      expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')), `${f} names the update spawn port`).not.toMatch(/\bspawnUpdate\b/);
+    }
+  });
+
+  it('(b) makeUpdateSpawn and realUpdateSpawn are referenced only where the port is wired: the definition, the default, and the option that carries it', () => {
+    const lines = (word: RegExp): string[] => code(serverSrc).split('\n').filter((l) => word.test(l)).map((l) => l.trim());
+    expect(lines(/\bmakeUpdateSpawn\b/)).toEqual([
+      'export function makeUpdateSpawn(env: NodeJS.ProcessEnv): UpdateSpawn {',
+      'export const realUpdateSpawn: UpdateSpawn = makeUpdateSpawn(process.env);',
+    ]);
+    expect(lines(/\brealUpdateSpawn\b/)).toEqual([
+      'export const realUpdateSpawn: UpdateSpawn = makeUpdateSpawn(process.env);',
+      'spawnUpdate: rawOpts.spawnUpdate ?? realUpdateSpawn,',
+    ]);
+    for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
+      expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')), `${f} references the update spawn port`).not.toMatch(/\b(?:makeUpdateSpawn|realUpdateSpawn)\b/);
+    }
+  });
+});
+
+// Layer 4b (box-token lifecycle, Task A2): the `token-sync` op is the SECOND wire-triggered spawn outside the exec
+// whitelist. The same two properties as layer 4, for its own port: its case names no exec-surface symbol, and
+// `spawnTokenSync(` has exactly one call site, inside `case 'token-sync'` of handleReq.
+describe("layer 4b — the token-sync op is not an exec path, and its spawn port has one caller", () => {
+  let readFileSync: typeof import('node:fs').readFileSync;
+  let readdirSync: typeof import('node:fs').readdirSync;
+  let path: typeof import('node:path');
+  let SRC_DIR = '';
+  let serverSrc = '';
+  let handleReq = '';
+  const EXEC_PATH = /\b(?:isExecAllowed|runExec|resolveSpawnCmd|checkPath)\s*\(|\bEXEC_WHITELIST\b/;
+  const code = (src: string): string => src.split('\n').filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).map((l) => l.replace(/\s\/\/.*$/, '')).join('\n');
+  const CASE_END = /\n    (?:case '|default:)/;
+  function caseBody(src: string, word: string): string {
+    const open = `case '${word}': {`;
+    const at = src.indexOf(open);
+    expect(at, `${open} not found`).toBeGreaterThanOrEqual(0);
+    const rest = src.slice(at + open.length);
+    const end = CASE_END.exec(rest);
+    expect(end, `no end after ${open}`).not.toBeNull();
+    return rest.slice(0, end!.index);
+  }
+  beforeAll(async () => {
+    ({ readFileSync, readdirSync } = await import('node:fs'));
+    path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent', 'src');
+    serverSrc = readFileSync(path.join(SRC_DIR, 'server.ts'), 'utf8');
+    const at = serverSrc.indexOf('async function handleReq(');
+    expect(at, 'handleReq not found').toBeGreaterThanOrEqual(0);
+    const rest = serverSrc.slice(at);
+    const end = /\n\}\n/.exec(rest);
+    expect(end, 'no end after handleReq').not.toBeNull();
+    handleReq = rest.slice(0, end!.index);
+  });
+
+  it("(a) `case 'token-sync'` and agent/src/tokensync.ts name no exec-surface symbol", () => {
+    const body = caseBody(handleReq, 'token-sync');
+    expect(code(body)).not.toMatch(EXEC_PATH);
+    expect(code(body), 'the cut is the token-sync op, not an empty slice').toMatch(/\bspawnTokenSync\s*\(/);
+    expect(code(readFileSync(path.join(SRC_DIR, 'tokensync.ts'), 'utf8'))).not.toMatch(EXEC_PATH);
+  });
+
+  it("(b) `spawnTokenSync(` is called exactly once in agent/src, inside `case 'token-sync'`, and nowhere outside it", () => {
+    const body = caseBody(handleReq, 'token-sync');
+    const call = /\bspawnTokenSync\s*\(/g;
+    expect(code(body).match(call)?.length ?? 0, "one call inside case 'token-sync'").toBe(1);
+    const outside = serverSrc.replace(body, '');
+    expect(outside.length, 'the case was cut out of the scan').toBeLessThan(serverSrc.length);
+    expect(code(outside).match(call)?.length ?? 0, "call sites outside case 'token-sync' in server.ts").toBe(0);
+    for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
+      expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')).match(call)?.length ?? 0, `${f} calls spawnTokenSync(`).toBe(0);
+    }
+  });
+});
+
+// Layer 4c (test box plan TB9, D-7411, D-7430): the `testbox` and `testbox-tools-sync` ops are the FOURTH class of
+// wire-triggered spawn outside the exec whitelist. Their spawns are fixed templates in `agent/src/testboxOp.ts`
+// (`systemctl --user show-environment`, the settings printer, the six version probes), run through the bounded spawner
+// with no field of the frame in them. The same two properties as layers 4 and 4b: neither case nor the op's module
+// names an exec-surface symbol, and the op bodies are called exactly once each in agent/src, inside their own case.
+describe('layer 4c — the testbox ops are not an exec path, and their bodies have one caller each', () => {
+  let readFileSync: typeof import('node:fs').readFileSync;
+  let readdirSync: typeof import('node:fs').readdirSync;
+  let path: typeof import('node:path');
+  let SRC_DIR = '';
+  let serverSrc = '';
+  let handleReq = '';
+  const EXEC_PATH = /\b(?:isExecAllowed|runExec|resolveSpawnCmd|checkPath)\s*\(|\bEXEC_WHITELIST\b/;
+  const code = (src: string): string => src.split('\n').filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).map((l) => l.replace(/\s\/\/.*$/, '')).join('\n');
+  const CASE_END = /\n    (?:case '|default:)/;
+  function caseBody(src: string, word: string): string {
+    const open = `case '${word}': {`;
+    const at = src.indexOf(open);
+    expect(at, `${open} not found`).toBeGreaterThanOrEqual(0);
+    const rest = src.slice(at + open.length);
+    const end = CASE_END.exec(rest);
+    expect(end, `no end after ${open}`).not.toBeNull();
+    return rest.slice(0, end!.index);
+  }
+  beforeAll(async () => {
+    ({ readFileSync, readdirSync } = await import('node:fs'));
+    path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent', 'src');
+    serverSrc = readFileSync(path.join(SRC_DIR, 'server.ts'), 'utf8');
+    const at = serverSrc.indexOf('async function handleReq(');
+    expect(at, 'handleReq not found').toBeGreaterThanOrEqual(0);
+    const rest = serverSrc.slice(at);
+    const end = /\n\}\n/.exec(rest);
+    expect(end, 'no end after handleReq').not.toBeNull();
+    handleReq = rest.slice(0, end!.index);
+  });
+
+  it.each([['testbox', 'measureTestbox'], ['testbox-tools-sync', 'syncTestboxTools']])(
+    "(a) `case '%s'` and agent/src/testboxOp.ts name no exec-surface symbol", (word, body) => {
+      const cut = caseBody(handleReq, word);
+      expect(code(cut)).not.toMatch(EXEC_PATH);
+      expect(code(cut), 'the cut is the op, not an empty slice').toMatch(new RegExp(`\\b${body}\\s*\\(`));
+      expect(code(readFileSync(path.join(SRC_DIR, 'testboxOp.ts'), 'utf8'))).not.toMatch(EXEC_PATH);
+    });
+
+  it.each([['testbox', 'measureTestbox'], ['testbox-tools-sync', 'syncTestboxTools']])(
+    "(b) the `%s` op's body is called exactly once in agent/src, inside its case", (word, body) => {
+      const cut = caseBody(handleReq, word);
+      const call = new RegExp(`\\b${body}\\s*\\(`, 'g');
+      expect(code(cut).match(call)?.length ?? 0, `one call inside case '${word}'`).toBe(1);
+      const outside = serverSrc.replace(cut, '');
+      expect(outside.length, 'the case was cut out of the scan').toBeLessThan(serverSrc.length);
+      expect(code(outside).match(call)?.length ?? 0, `call sites outside case '${word}' in server.ts`).toBe(0);
+      for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts' && n !== 'testboxOp.ts')) {
+        expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')).match(call)?.length ?? 0, `${f} calls ${body}(`).toBe(0);
+      }
+    });
+
+  it("(c) the op's module spawns only through the bounded spawner, never `child_process` itself", () => {
+    const src = code(readFileSync(path.join(SRC_DIR, 'testboxOp.ts'), 'utf8'));
+    expect(src).not.toMatch(/child_process/);
+    expect(src).toMatch(/from '\.\/testbox\/exec\.js'/);
+  });
+});
+
+// Layer 4d (test box connect plan TC11, D-8166): the `testbox-admin` op is the FIFTH class of wire-triggered spawn
+// outside the exec whitelist. It adds nothing to the whitelist: `ssh` (which the verb runs on the fleet host, never the
+// agent) stays forbidden, and the op's case and module name no exec-surface symbol (agent/test/testbox-admin-op.test.ts
+// holds the same scan from the agent's side).
+describe('layer 4d — the testbox-admin op is not an exec path and the whitelist is unchanged', () => {
+  it('EXEC_COMMANDS and FORBIDDEN_COMMANDS are unchanged and ssh stays forbidden', async () => {
+    expect([...EXEC_COMMANDS]).toEqual(['tmux', 'ccd']);
+    expect(Object.keys(EXEC_WHITELIST).sort()).toEqual(['ccd', 'tmux']);
+    for (const cmd of ['ssh', 'scp', 'sftp', 'rsync', 'gh', 'git', 'bash', 'sh', 'env', 'curl', 'nc']) {
+      expect(FORBIDDEN_COMMANDS as readonly string[], cmd).toContain(cmd);
+      expect(isExecAllowed(cmd, ['testbox-admin', 'status']), cmd).toBe(false);
+    }
+    expect(FORBIDDEN_COMMANDS as readonly string[]).not.toContain('testbox-admin');
+    expect(EXEC_COMMANDS as readonly string[]).not.toContain('testbox-admin');
+    expect(EXEC_COMMANDS as readonly string[]).not.toContain('ccrc');
+  });
+
+  it("`case 'testbox-admin'` and agent/src/testboxAdminOp.ts name no exec-surface symbol and call the port once", async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent', 'src');
+    const EXEC_PATH = /\b(?:isExecAllowed|runExec|resolveSpawnCmd|checkPath)\s*\(|\bEXEC_WHITELIST\b/;
+    const code = (src: string): string => src.split('\n').filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).map((l) => l.replace(/\s\/\/.*$/, '')).join('\n');
+    const readSrc = (name: string): string => readFileSync(path.join(dir, name), 'utf8');
+    // The op's case, cut by `cutBetween` (a helper, so the cut is not a literal pin on agent/src/server.ts).
+    const cutBetween = (src: string, open: string, close: RegExp): string => {
+      const at = src.indexOf(open);
+      expect(at, `${open} is there`).toBeGreaterThanOrEqual(0);
+      const after = src.slice(at + open.length);
+      return after.slice(0, close.exec(after)!.index);
+    };
+    const server = readSrc('server.ts');
+    const handle = cutBetween(server, 'async function handleReq(', /\n\}\n/);
+    const body = cutBetween(handle, "case 'testbox-admin': {", /\n    (?:case '|default:)/);
+    const calls = (src: string): number => code(src).match(/\bspawnTestboxAdmin\s*\(/g)?.length ?? 0;
+    expect(code(body)).not.toMatch(EXEC_PATH);
+    expect(calls(body), 'one call inside the case').toBe(1);
+    expect(calls(server.replace(body, '')), 'no call outside it').toBe(0);
+    expect(code(readSrc('testboxAdminOp.ts'))).not.toMatch(EXEC_PATH);
+  });
+});
+
+// The admin-merge door (D-8124) is a SESSION verb: a coordinator runs it from its own Bash, and no server route or argv
+// builder may name it, so the agent's whitelist never grants it.
+describe('the admin-merge door is not a server verb', () => {
+  it('no server argv builder names pr-admin-merge: the door is a session verb, never the server\'s', async () => {
+    const { readdirSync, readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+    const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true })
+      .flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
+    const holders = walk(root).filter((f) => f.endsWith('.ts') && readFileSync(f, 'utf8').includes('pr-admin-merge'));
+    expect(holders).toEqual([]);
   });
 });

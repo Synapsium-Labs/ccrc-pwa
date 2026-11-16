@@ -27,8 +27,8 @@ shared readers), tar+sha256sum, systemd user units.
   `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*` units. The sweep task tests its
   preflight/refusal logic against RECORDING systemd stubs — it never runs a real sweep.
 - TDD red-first; every guard mutation-measured, counts recorded in `## Deviations found`
-  (D-139 onward — the 3b plan's ledger is separate; if 3b merges first and claims numbers,
-  renumber at branch-review time).
+  (D-8602 to D-8608: they were numbered D-139 to D-145, which `2026-08-20-stage3a-auth.md` also
+  defines, until D-8562 renumbered them).
 - Bash single-definition: new path/name constants (`CCRC_RELEASE_*`, backup dir, unit
   names) spelled once, pinned like `CCRC_RC_FILE`. No secret/env value ever printed.
 - `ccd/ccd` is NOT touched. If a task must touch it: stop, record a deviation, re-stamp
@@ -75,7 +75,7 @@ new pin: two stamps differing only in `version` still compare `agreed`.
   it (`git tag --points-at HEAD` in both stampers); the buildAgreement pin above.
   (Ran red: 7 TS-side + 2 ccrc-cli + 1 status + 1 install-stamp before implementation.)
 - [x] GREEN across every reader listed. `ccd version`'s python3 reader lives in `ccd/ccd`
-  — left untouched, deviation D-139 (it omits the tag; additive absence).
+  — left untouched, deviation D-8602 (it omits the tag; additive absence).
 - [x] Mutations: drop the absence-tolerance (7 red); make buildAgreement compare version
   (2 red — the version-only-differ pin, unit + end-to-end). Suites: buildinfo + config +
   single-definition + ccrc-cli all green (plus health, fleet-build-skew, ccrc-doctor,
@@ -183,7 +183,7 @@ comparison silently (D-150). NO sweep in this task (Task 7).
   leaves the backup complete); `--to` fetches the named tag's URL (recording curl stub
   argv); rollback prints the coord.db restore lines and does NOT copy the db itself.
   (Ran red: 12/12 in the new `ccrc-update.test.ts`, +2 in `build-release.test.ts` (the
-  shipped build.json — see D-141), +1 in `ccrc-cli.test.ts` (the usage verb list), before
+  shipped build.json — see D-8604), +1 in `ccrc-cli.test.ts` (the usage verb list), before
   implementation. The harness copies `freshBox`'s pieces rather than importing them —
   `build-release.test.ts`'s stated reason: importing a .test.ts registers its whole suite.)
 - [x] GREEN; mutations: reorder backup after install (the ordering pin reds); skip manifest
@@ -261,10 +261,9 @@ extend `ccrc-cli.test.ts`.
 
 ## Deviations found
 
-(D-139 onward; recorded during execution — renumber against 3b's ledger at review time if
-it merges first.)
+(D-8602 to D-8608, renumbered by D-8562 from D-139 to D-145; recorded during execution.)
 
-- **D-139** (Task 1): `ccd version`'s python3 reader of `~/.ccrc/build.json` lives in
+- **D-8602** (Task 1; was D-139): `ccd version`'s python3 reader of `~/.ccrc/build.json` lives in
   `ccd/ccd` (the heredoc near `ccd/ccd:2453`), which this branch does not touch by
   contract. That one reader is OUT of Task 1's scope: `ccd version` simply omits the tag —
   additive absence, correct by the same wire rule every other reader follows.
@@ -284,7 +283,7 @@ it merges first.)
   MANIFEST test: the node-crypto spot-verify of that file's digest, independently of
   `sha256sum -c MANIFEST` which reds on the same bytes). Suite green 10/10 before and
   after; typecheck-tests + single-definition + install-sh green (79/79).
-- **D-140** (Task 5): the task text's "SKIPS `ccrc.service` + coord/auth/skills steps that
+- **D-8603** (Task 5; was D-140): the task text's "SKIPS `ccrc.service` + coord/auth/skills steps that
   presuppose a server" is applied with the restrictive clause doing the work: the steps a
   fleet box skips are `ccrc.service` (unit + enable/restart/verify — replaced by
   `ccrc-agent.service` end-to-end) and the two server-only landing lines (the PWA address
@@ -331,7 +330,7 @@ it merges first.)
   (checkout-mode handoff untouched). Note: `usage()`'s pinned one-line string is
   deliberately unchanged (existing tests pass untouched, per this task's own checklist);
   `--release` is documented in install.sh's header and lands in README/runbook at Task 10.
-- **D-141** (Task 6): **the release artifact must carry the identity it installs, or every
+- **D-8604** (Task 6; was D-141): **the release artifact must carry the identity it installs, or every
   release-mode box lies about its build for ever.** An extracted tarball is not a git
   repository, so `_inst_stamp` skips on it BY DESIGN — which meant a `--release` install or
   an update left the OLD stamp in place while the box ran new code, and the restated proof
@@ -349,7 +348,7 @@ it merges first.)
   stamp exists (ccrc-install's pinned skip strings all green). This also fixes the same
   latent gap in `install.sh --release` (Task 4 shipped it unstamped) with the one
   implementation.
-- **D-142** (Task 6): the task text's "print the from→to report; finish with `cmd_doctor`"
+- **D-8605** (Task 6; was D-142): the task text's "print the from→to report; finish with `cmd_doctor`"
   is implemented as spine-then-report: the staged `ccrc install` IS the `_inst_*` re-run
   and already ENDS with `cmd_doctor` from the NEW tree, so update's transcript is
   …install steps… doctor …report — the report closes the transcript instead of preceding
@@ -369,7 +368,7 @@ it merges first.)
   96/96, ccrc-doctor + runbook-holds 260/260, typecheck-tests 9/9. Intended extensions
   beyond the task's named files, annotated in place: `ccrc-cli.test.ts`'s usage-verb pin
   gained `update` (a verb that dispatches but is not in the usage line is a verb nobody
-  can find), `build-release.test.ts` gained the D-141 stamp test + `build.json` in
+  can find), `build-release.test.ts` gained the D-8604 stamp test + `build.json` in
   `EXPECTED_ENTRIES`. The fleet-behind WARN and its D-150 silences (401, unreachable, no
   address) are covered by two dedicated tests (skewed → WARN naming fleet-box-first;
   401 → silent, run proceeds).
@@ -392,7 +391,7 @@ it merges first.)
   the absence of the record), and the fixture systemctl gained `try-restart`,
   `list-units` (per-state fixture files) and `show -p KillMode` (answered by the fixture
   drop-in's presence) arms.
-- **D-143** (Task 8): **the settings.json predicate stays defined once, so the sweep rides
+- **D-8606** (Task 8; was D-143): **the settings.json predicate stays defined once, so the sweep rides
   the installer.** `ccd/install-session-hooks.sh` — outside Task 8's named file list —
   gained a `--remove` mode: the `unmanaged` jq def (its line 72 predicate) is THE single
   definition of "which settings.json entries are ccrc's", and an uninstaller that
@@ -404,7 +403,7 @@ it merges first.)
   (`$CCRC_HERE/install-session-hooks.sh`), deliberately the OPPOSITE of `_inst_hooks`'
   installed-copy doctrine: an installed copy that predates the flag would read `--remove`
   as a default install run and RE-REGISTER every hook it was asked to remove.
-- **D-144** (Task 8): `~/.local/bin/ccd-cap-scopes` is in the remove set although spec §7
+- **D-8607** (Task 8; was D-144): `~/.local/bin/ccd-cap-scopes` is in the remove set although spec §7
   spells only `~/.local/bin/{ccd,ccrc}` — `_inst_bins` installs THREE executables, and this
   same verb removes `ccd-cap-scopes.{service,timer}`; leaving the third binary would strand
   an orphan on PATH for ever. The spec's pair predates the third bin; annotated in place.
@@ -462,7 +461,7 @@ it merges first.)
   less than the section now tells); `ccrc.env.example`'s `CCRC_ROLE` entry states it is
   the one key in that file the server never reads (readers: `ccrc update`/`logs`/
   `uninstall`), matching `cmd_update`'s absent/unrecognisable → default-both fallback.
-- **D-145** (Task 8, found — NOT caused — during execution; for Task 11's fix round):
+- **D-8608** (Task 8, was D-145; found — NOT caused — during execution; for Task 11's fix round):
   `agent/test/deploy-verify.test.ts` is red 2/42 at this branch's pre-Task-8 HEAD
   (`3eb0d4d`) and on the working tree alike, and the cause is Task 1's `stamp_build`
   comment: the sentence "MEASURED, like everything else in this stamp" contains the

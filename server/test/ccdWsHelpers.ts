@@ -3,13 +3,18 @@
 // environment override, which is what stops a unit test pointing
 // `git worktree remove` or `git branch -d` at a real repository.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { mkTmp } from './tmpHelpers.js';
-import { DEFAULT_TEST_ROSTER } from './helpers.js';
+import { DEFAULT_TEST_ROSTER } from './helpers/roster.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { asManagerCalls } from './platformFixtures.js';
+import { inheritedEnv } from './gitEnvStrip.js';
+import { CONTAINED_TOOLS, assertNoPoisonLeft, busUnder, ledgerHitLine, plantPoison, takePoisonRecord } from './containedTools.js';
+import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
+import { markGenerated } from '../../shared/mark.mjs';
 
 /** The home-able ids of the test roster — the set ccd reads as `CCRC_HOME_ABLE`
  *  out of the roster `seedAccountsSh` writes below. Derived, not hand-typed,
@@ -21,12 +26,191 @@ const HOME_ABLE_WRAPPERS: readonly string[] =
 
 export const CCD = path.resolve(__dirname, '../../ccd/ccd');
 
+/** The library `CCD` loads at its foot (D-6913): the fleet disk-retention code, a separate file in
+ *  `ccd/lib/` that the body finds beside itself, in the repository and in the installed layout alike. */
+export const CCD_LIB = path.resolve(__dirname, '../../ccd/lib/disk-retention.sh');
+
+/** The committed placeholder for the library pin (D-6913): like line 2's stamp, the digest is written at install time. */
+export const CCD_LIB_PIN_PLACEHOLDER = '__CCD_LIB_SHA256=stamp-at-install';
+
+/** The second library `CCD` loads at its foot (D-7463): the train proof, beside the first in `ccd/lib/`, pinned the same way. */
+export const CCD_TRAIN_LIB = path.resolve(__dirname, '../../ccd/lib/train-proof.sh');
+
+/** Its committed pin placeholder, rendered at install time like `CCD_LIB_PIN_PLACEHOLDER`. */
+export const CCD_TRAIN_LIB_PIN_PLACEHOLDER = '__CCD_LIB_TRAIN_SHA256=stamp-at-install';
+
+/** The third library `CCD` loads at its foot (wave 5): the delegation lease, beside the others in `ccd/lib/`, pinned the same way. */
+export const CCD_LEASE_LIB = path.resolve(__dirname, '../../ccd/lib/delegation-lease.sh');
+
+/** Its committed pin placeholder, rendered at install time like `CCD_LIB_PIN_PLACEHOLDER`. */
+export const CCD_LEASE_LIB_PIN_PLACEHOLDER = '__CCD_LIB_LEASE_SHA256=stamp-at-install';
+
+/** The fourth library `CCD` loads at its foot (the Overlord's W1): the session's pool set, beside the others in `ccd/lib/`,
+ *  pinned the same way. */
+export const CCD_POOLSET_LIB = path.resolve(__dirname, '../../ccd/lib/pool-set.sh');
+
+/** Its committed pin placeholder, rendered at install time like `CCD_LIB_PIN_PLACEHOLDER`. */
+export const CCD_POOLSET_LIB_PIN_PLACEHOLDER = '__CCD_LIB_POOLSET_SHA256=stamp-at-install';
+
+/** Every library `CCD` loads, in load order: the file and the name it is installed under in `lib/` beside the body. */
+export const CCD_LIBS: readonly string[] = [CCD_LIB, CCD_TRAIN_LIB, CCD_LEASE_LIB, CCD_POOLSET_LIB];
+
+/** The docs redactor's two files (D-7077, OA-C11 (a)): installed beside the body in `shared/`, read by the installer from the
+ *  tree's `shared/`, and pinned by digest in the body like the library. */
+export const CCD_REDACT = path.resolve(__dirname, '../../shared/redact.mjs');
+export const CCD_REDACT_CLI = path.resolve(__dirname, '../../shared/redact-cli.mjs');
+
+/** What `ccd/ccd-entry-install.py` publishes for a ccd source beside library bytes `lib`, the redactor's two files
+ *  (`shared`, the repository's by default) and the train-proof, delegation-lease and pool-set libraries' bytes (`train`, `lease`, `poolset`, the
+ *  repository's by default): the six pin placeholders rendered to their files' SHA-256 FIRST, then the line-2 placeholder swapped, in place, for the
+ *  marker `markGenerated` writes, so the stamp covers the pins. A mirror for fixtures; `ccd-entry-install.test.ts` holds it
+ *  equal to the installer's real output. */
+export function installedCcdBody(
+  source: string, lib: string | Buffer,
+  shared: { redact: string | Buffer; cli: string | Buffer } = { redact: fs.readFileSync(CCD_REDACT), cli: fs.readFileSync(CCD_REDACT_CLI) },
+  train: string | Buffer = fs.readFileSync(CCD_TRAIN_LIB),
+  lease: string | Buffer = fs.readFileSync(CCD_LEASE_LIB),
+  poolset: string | Buffer = fs.readFileSync(CCD_POOLSET_LIB),
+): string {
+  const digest = createHash('sha256').update(lib).digest('hex');
+  const sha = (b: string | Buffer): string => createHash('sha256').update(b).digest('hex');
+  const lines = source.replace(/^__CCD_REDACT_SHA256=stamp-at-install$/m, `__CCD_REDACT_SHA256=${sha(shared.redact)}`)
+    .replace(/^__CCD_REDACT_CLI_SHA256=stamp-at-install$/m, `__CCD_REDACT_CLI_SHA256=${sha(shared.cli)}`)
+    .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${digest}`)
+    .replace(/^__CCD_LIB_TRAIN_SHA256=stamp-at-install$/m, `__CCD_LIB_TRAIN_SHA256=${sha(train)}`)
+    .replace(/^__CCD_LIB_LEASE_SHA256=stamp-at-install$/m, `__CCD_LIB_LEASE_SHA256=${sha(lease)}`)
+    .replace(/^__CCD_LIB_POOLSET_SHA256=stamp-at-install$/m, `__CCD_LIB_POOLSET_SHA256=${sha(poolset)}`).split('\n');
+  if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
+  return markGenerated(lines.join('\n'));
+}
+
+let ccdSourceMemo: string | undefined;
+/** ccd's whole shell source as ONE text (D-6913): `ccd/ccd` with each `# @ccd-lib:<id>` pointer line replaced
+ *  by that region of its library (any of `CCD_LIBS`; an id names one region across them all), back where the code sat
+ *  before it moved. Every test that SCANS ccd's text reads it through
+ *  here, so a moved region stays under the same scanner, the same marker pair and the same ordering; a bare
+ *  `readFileSync(CCD, 'utf8')` would read ccd without the moved code, and a scan would pass over less than it did.
+ *  `ccd-lib-load.test.ts` holds that no test reads it bare. Tests about the FILES (the stamp, the digest, the install)
+ *  read the real bytes of `CCD` and `CCD_LIB` themselves. Only the pointer lines differ from the pre-move text. */
+export function ccdSource(): string {
+  if (ccdSourceMemo !== undefined) return ccdSourceMemo;
+  return (ccdSourceMemo = spliceCcd(fs.readFileSync(CCD, 'utf8'), CCD_LIBS.filter((lib) => fs.existsSync(lib)).map((lib) => fs.readFileSync(lib, 'utf8'))));
+}
+
+/** `ccdSource()`'s splice as a pure function of the texts (the file split's Task 1, D-8634): `main` with each
+ *  `# @ccd-lib:<id>` pointer line replaced by that region of the library texts `libs`, one level deep. A pointer with
+ *  no region stays as it is; an id two libraries both name throws. */
+export function spliceCcd(main: string, libs: readonly string[]): string {
+  const regions = new Map<string, string>();
+  for (const text of libs) {
+    const parts = text.split(/^# @ccd-lib:(\w+)\n/m);
+    for (let i = 1; i + 1 < parts.length; i += 2) {
+      if (regions.has(parts[i]!)) throw new Error(`ccdSource: the region id ${parts[i]} is named twice across ccd's libraries`);
+      regions.set(parts[i]!, parts[i + 1]!.replace(/\n+$/, ''));
+    }
+  }
+  if (regions.size === 0) return main;
+  return main.replace(/^# @ccd-lib:(\w+)\b.*$/gm, (line, id: string) => regions.get(id) ?? line);
+}
+
 /** The coordination client, beside `ccd` and installed the same way. Spelled
  *  here rather than joined at each call site for the reason
  *  `single-definition.test.ts` exists — its scan is TEXTUAL, so a second
  *  `path.resolve(…, 'ccd', 'ccrc-api')` anywhere is a second definition even
  *  inside a comment explaining why it is one. */
 export const CCRC_API = path.resolve(__dirname, '../../ccd/ccrc-api');
+
+/** The installed direct entry's tracked TEMPLATE (reclaim-entry-safety,
+ *  D-3696): a standard-library Python launcher rendered to `~/.local/bin/ccd`
+ *  with an absolute isolated-Python shebang and the SHA-256 of the active Bash
+ *  body at `~/.local/libexec/ccrc/ccd`. `CCD` above stays the SOURCEABLE body —
+ *  every `source "$CCD"` harness in this suite is source mode, which never
+ *  crosses the launcher and is outside the direct-entry guarantee. */
+export const CCD_ENTRY = path.resolve(__dirname, '../../ccd/ccd-entry.py');
+
+/** The two placeholders the template carries exactly once each. */
+export const CCD_ENTRY_PLACEHOLDERS = { python: '@CCRC_PYTHON3@', digest: '@CCRC_CCD_SHA256@' } as const;
+
+/** The canonical path of the `python3` this test process's PATH selects,
+ *  asked of that interpreter itself under `-IS` — the spelling a rendered
+ *  shebang carries, never a bare `python3`. */
+export function canonicalPython3(): string {
+  return execFileSync('python3', ['-IS', '-c', 'import os,sys;sys.stdout.write(os.path.realpath(sys.executable))'],
+    { encoding: 'utf8' });
+}
+
+/** The template rendered for one interpreter and one body digest, with the
+ *  placeholder census the installer enforces: exactly one of each before, none
+ *  of any `@CCRC_…@` shape after. Throws rather than rendering a launcher that
+ *  could not run. */
+export function renderCcdEntry(template: string, python: string, sha256: string): string {
+  for (const p of Object.values(CCD_ENTRY_PLACEHOLDERS)) {
+    const n = template.split(p).length - 1;
+    if (n !== 1) throw new Error(`the launcher template carries ${n} copies of ${p}, not exactly one`);
+  }
+  const out = template.replace(CCD_ENTRY_PLACEHOLDERS.python, python).replace(CCD_ENTRY_PLACEHOLDERS.digest, sha256);
+  if (/@CCRC_[A-Z0-9_]+@/.test(out)) throw new Error('the rendered launcher still carries a placeholder');
+  return out;
+}
+
+export interface DirectEntry {
+  /** `<home>/.local/bin/ccd` — what a direct caller executes. */
+  entry: string;
+  /** `<home>/.local/libexec/ccrc/ccd` — the active Bash body. */
+  body: string;
+  /** The interpreter rendered into the shebang; `null` on a tree with no
+   *  launcher template, where the entry is the legacy self-contained Bash copy. */
+  python: string | null;
+}
+
+/**
+ * A FIXTURE install of the direct-entry pair under `<home>/.local` — never the
+ * live install paths. The body goes to `libexec/ccrc/ccd` (0644, only ever run
+ * through Bash); the launcher is the tracked template rendered with this
+ * process's canonical `python3` and the body's digest (0755). `body` replaces
+ * the shipped body's bytes for launcher-only cases (an argv echo, a fixture
+ * marker) — the launcher is generic over what it hashes.
+ *
+ * On a tree with no template the entry is the legacy one: the Bash body itself
+ * copied to `bin/ccd`, exactly what every install placed before D-3696. That is
+ * what lets the unfixed tree's controls run green and its attacks run red.
+ */
+export function installDirectEntry(home: string, opts: { body?: string | Buffer } = {}): DirectEntry {
+  const bin = path.join(home, '.local', 'bin');
+  const libexec = path.join(home, '.local', 'libexec', 'ccrc');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(libexec, { recursive: true });
+  // The shipped body goes in as the installer publishes it (its library pin rendered, then stamped); a fixture body as given.
+  const bodyBytes = opts.body === undefined
+    ? Buffer.from(installedCcdBody(fs.readFileSync(CCD, 'utf8'), fs.readFileSync(CCD_LIB)))
+    : Buffer.from(opts.body);
+  const body = path.join(libexec, 'ccd');
+  const entry = path.join(bin, 'ccd');
+  fs.rmSync(body, { force: true });
+  fs.writeFileSync(body, bodyBytes, { mode: 0o644 });
+  fs.chmodSync(body, 0o644);
+  // The libraries the body loads (D-6913, D-7463), where the installer puts them: `lib/` beside the body.
+  for (const lib of CCD_LIBS) {
+    if (!fs.existsSync(lib)) continue;
+    fs.mkdirSync(path.join(libexec, 'lib'), { recursive: true });
+    fs.copyFileSync(lib, path.join(libexec, 'lib', path.basename(lib)));
+  }
+  // The docs redactor (D-7077), where the installer puts it: `shared/` beside the body.
+  fs.mkdirSync(path.join(libexec, 'shared'), { recursive: true });
+  fs.copyFileSync(CCD_REDACT, path.join(libexec, 'shared', 'redact.mjs'));
+  fs.copyFileSync(CCD_REDACT_CLI, path.join(libexec, 'shared', 'redact-cli.mjs'));
+  fs.rmSync(entry, { force: true });
+  if (!fs.existsSync(CCD_ENTRY)) {
+    fs.writeFileSync(entry, bodyBytes, { mode: 0o755 });
+    fs.chmodSync(entry, 0o755);
+    return { entry, body, python: null };
+  }
+  const python = canonicalPython3();
+  const digest = createHash('sha256').update(bodyBytes).digest('hex');
+  fs.writeFileSync(entry, renderCcdEntry(fs.readFileSync(CCD_ENTRY, 'utf8'), python, digest), { mode: 0o755 });
+  fs.chmodSync(entry, 0o755);
+  return { entry, body, python };
+}
 
 /** How many lines BACK of source `ccd-workspaces.test.ts`'s bash-spawn scan
  *  reads to find a call site's `ghContainedEnv(...)` and its opts — single-
@@ -37,6 +221,24 @@ export const CCRC_API = path.resolve(__dirname, '../../ccd/ccrc-api');
  *  really lacks containment" and "the marker fell out of the window" — must
  *  not silently start disagreeing about where the window ends. */
 export const SCAN_LOOKBACK_LINES = 12;
+
+/** `DEFAULT_TEST_ROSTER` with the two H16 facts set on named lanes: `fableBilling` and a continuity record's `recordedAt`.
+ *  Pass the result to `seedAccountsSh` and `seedRoster` so both twins read one roster. */
+export function rosterWithFacts(
+  facts: Record<string, { fableBilling?: 'included' | 'credits'; continuity?: number }>,
+): typeof DEFAULT_TEST_ROSTER {
+  return {
+    ...DEFAULT_TEST_ROSTER,
+    accounts: DEFAULT_TEST_ROSTER.accounts.map((a) => {
+      const f = facts[a.id];
+      return f === undefined ? a : {
+        ...a,
+        ...(f.fableBilling !== undefined ? { fableBilling: f.fableBilling } : {}),
+        ...(f.continuity !== undefined ? { continuity: { recordedAt: f.continuity } } : {}),
+      };
+    }),
+  };
+}
 
 /**
  * Writes `<home>/.ccrc/accounts.sh` — the generated roster `ccd` sources on the
@@ -59,6 +261,83 @@ export const SCAN_LOOKBACK_LINES = 12;
 export function seedAccountsSh(home: string, roster: unknown = DEFAULT_TEST_ROSTER): void {
   fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
   fs.writeFileSync(path.join(home, '.ccrc', 'accounts.sh'), generateAccountsSh(parseRoster(roster)));
+}
+
+/** The CENTRAL projection `_acct_pool_state` reads — `$HOME/.cc-sessions/pool-epoch`
+ *  — written in the wire grammar `ccd-pool-sync` emits: `epoch`, `issued`,
+ *  `lease`, zero or more `acct <id> <pool>` rows, and the literal `end`
+ *  terminator the reader refuses a document without.
+ *
+ *  IT LIVES HERE, BESIDE `seedAccountsSh`, BECAUSE IT IS A GRAMMAR AND NOT
+ *  DATA. Five test files grew their own copy of these six lines in wave 1
+ *  Task 2, each justified as "matching how `POOLED_TEST_ROSTER`/`tagPool` are
+ *  already duplicated per file". That argument does not carry: those are
+ *  FIXTURE DATA, where a per-file copy says what that file is about, while
+ *  this is the reader's wire format with exactly one real writer
+ *  (`ccd/ccd-pool-sync`). A per-file copy of a grammar fails the wrong way
+ *  round — change the terminator or add a required field and ONE fixture
+ *  reds while the other four keep asserting the old format and stay GREEN,
+ *  which is the shape `single-definition.test.ts` exists to refuse.
+ *
+ *  `tags` UNDEFINED MEANS NO DOCUMENT AT ALL — removed, never written empty,
+ *  because those are two different answers: no document is the cold node that
+ *  has never synced (`unreadable` -> undecidable -> refuse into a tagged
+ *  project) ON A FLEET BOX — item 5 (I3, wave-1 fix round A) split this:
+ *  absence on a box with NO `ccd-pool-sync.timer` installed (this harness's
+ *  own default — nothing here plants one) now falls back to the DECLARED
+ *  tag instead, exactly as `main` did before this feature existed. A test
+ *  that means "this is a fleet node that has never synced" must call
+ *  {@link plantPoolSyncTimer} first, or its absence measures the OTHER
+ *  condition. A document with an `epoch` and no `acct` rows is SYNCED,
+ *  NOTHING TAGGED, on either kind of box. `ccd-pool-sync`'s own header
+ *  states that pair; a helper that folded them would make the fail-shut
+ *  untestable.
+ *
+ *  `lease` DEFAULTS FAR IN THE FUTURE so a planted document is CURRENT; pass
+ *  a past one to plant the `stale` state without a second copy of the
+ *  grammar, which is the whole reason the parameter exists. */
+export function plantPoolEpoch(
+  home: string,
+  tags: Readonly<Record<string, string | undefined>> | undefined,
+  opts: { epoch?: number; issued?: number; lease?: number } = {},
+): void {
+  const dir = path.join(home, '.cc-sessions');
+  const f = path.join(dir, 'pool-epoch');
+  fs.rmSync(f, { force: true });
+  if (!tags) return;
+  fs.mkdirSync(dir, { recursive: true });
+  const lines = [
+    `epoch ${opts.epoch ?? 1}`,
+    `issued ${opts.issued ?? 1}`,
+    `lease ${opts.lease ?? 9_999_999_999}`,
+    ...Object.entries(tags)
+      .filter((e): e is [string, string] => e[1] !== undefined)
+      .map(([id, pool]) => `acct ${id} ${pool}`),
+    'end', '',
+  ];
+  fs.writeFileSync(f, lines.join('\n'));
+}
+
+/** Marks a `makeCcdHarness`/plain fixture HOME as a FLEET box — the ONLY
+ *  probe item 5 (I3, wave-1 fix round A) trusts for "does this box have a
+ *  control plane BY CONFIGURATION": `ccd-pool-sync.timer`'s unit file,
+ *  installed on disk, never `$REG/pool-epoch`'s own presence or absence
+ *  (`ccd/ccd`'s `_pool_sync_installed`). Content is irrelevant — only the
+ *  path is read — so an empty file is planted, the same "existence is the
+ *  fact" idiom `plantPoolEpoch`'s own tags use for a marker row.
+ *
+ *  LINUX PATH ONLY: this suite's `CcdHarness.sh` always runs under
+ *  `CCD_OS=linux` (`ccd/ccd`'s own `uname`-based detection, computed once at
+ *  source time — measured, not assumed: this repo's test boxes are Linux,
+ *  and nothing here overrides `CCD_OS`), matching `ccrc-doctor-checks`'
+ *  `CCRC_UNIT_DIR` for the identical reason. A harness that needed the
+ *  darwin arm would target `~/Library/LaunchAgents/app.ccrc.ccd-pool-sync.timer.plist`
+ *  instead — `macos-platform.test.ts` is where that arm is actually
+ *  exercised, not here. */
+export function plantPoolSyncTimer(home: string): void {
+  const dir = path.join(home, '.config', 'systemd', 'user');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'ccd-pool-sync.timer'), '');
 }
 
 /** ws-add spawns a session; tmux is not available under test, so stub the spawn
@@ -98,6 +377,19 @@ export const WS_ADD_REAL_SPAWN = `
   sleep() { :; };
   tmux() {
     echo "tmux $*" >> "$HOME/ccd-calls"
+    # Section 6.3's width query, SPELLED OUT rather than reusing the
+    # WIDE_PANE_IF_UP constant: that constant is declared LOWER DOWN in this
+    # module, and a template literal at module scope reading it would be a TDZ
+    # ReferenceError at import. (No backticks anywhere in this comment either
+    # — it lives inside a template literal, and one would end the string.)
+    # Same shape, same reason: answer the width from the SAME pane-up file this
+    # stub answers has-session from.
+    #
+    # MEASURED both ways on cmd_ws_add through this stub: with the line,
+    # 'tmux send-keys -t cc-<id> -l /effort ultracode' is recorded, as it was
+    # before this wave. The settle types no /effort any more (the default
+    # rides the spawn argv), so this line no longer changes what is recorded.
+    case "$*" in *pane_active*) [[ -e "\$HOME/pane-up" ]] || return 1; echo "1 200"; return 0 ;; esac
     case "\$1" in
       new-session)  : > "\$HOME/pane-up" ;;
       kill-session) rm -f "\$HOME/pane-up" ;;
@@ -116,10 +408,11 @@ export const WS_ADD_REAL_SPAWN = `
  *
  *  It is NOT "the one stub directory in the suite", and reading it that way is
  *  what broke five `ccrc status` tests: a consumer that never runs ccd
- *  (`ccrc-doctor.test.ts`) keeps its own `<home>/stub-bin`, and only the
+ *  (`ccrc-doctorFixture.ts`) keeps its own `<home>/stub-bin`, and only the
  *  poisons this file actually plants can shadow what is in it. That set is `gh`
- *  for every caller, plus systemd for a caller that ASKS — see
- *  `ghContainedEnv`. */
+ *  for every caller, plus systemd, tmux and the net tools (ssh, scp, curl) for a
+ *  caller that ASKS — see `ghContainedEnv`. Since wave 18 a functional stub of a
+ *  contained tool is written through `stubContainedTool` (D-5249). */
 export function harnessBin(home: string): string {
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
@@ -151,11 +444,11 @@ export function harnessBin(home: string): string {
  * at all, and anything planted here lands in a directory it PREPENDS — so an
  * unconditional systemd poison displaces the `systemctl` such a file planted on
  * its own PATH, in a directory the create-if-absent guard below can never see.
- * Measured: planting it unconditionally took `ccrc-doctor.test.ts` from 170/170
+ * Measured: planting it unconditionally took `ccrc-doctorFixture.ts` from 170/170
  * to 165/170, and every failure named `ccrc status`, three files from the edit.
  */
 export interface ContainOpts {
-  /** Plant the `systemctl`/`systemd-run` poisons too. ASK FOR THIS IF THE SPAWN
+  /** Plant the `systemctl`/`systemd-run`/`launchctl` poisons too, and since D-8394 `plantPoison`'s `loginctl`. ASK FOR THIS IF THE SPAWN
    *  RUNS ccd: every path that can reach `_have_systemctl` or
    *  `_supervised_start` needs it, `makeCcdHarness` asks on behalf of every test
    *  that goes through the harness, and `ccd-workspaces.test.ts`'s source scan
@@ -168,6 +461,56 @@ export interface ContainOpts {
    *  Same create-if-absent shape as systemd, for the same displaceability
    *  reason, and a bash FUNCTION stub still wins over both. */
   tmux?: boolean;
+  /** Plant the `ssh`, `scp` and `curl` poisons (wave 18, D-5247), `plantPoison`'s create-if-absent ones, so a stub
+   *  written through `stubContainedTool` replaces the poison and is kept. `makeCcdHarness` asks. OPT-IN for the reason
+   *  `systemd` is: suites run a FUNCTIONAL curl from a directory of their own or the real one against a loopback
+   *  listener, and a poison here outranks both. Measured with it on for every `systemd: true` caller: 91 reds in
+   *  ccd-update-sync, ccrc-api and ccrc-token-sync (116 before two files moved their stub here). */
+  net?: boolean;
+}
+
+/** The ssh, scp and curl poisons `net` plants: three of the CONTAINED_TOOLS names the other options do not cover. */
+const NET_TOOLS = ['ssh', 'scp', 'curl'] as const;
+
+/** THE named door for a test that needs a FUNCTIONAL contained tool under the harness, a curl stub above all (wave
+ *  18, D-5249): writes `body` as `<harnessBin(home)>/<name>`, REPLACING the poison `net` (or `systemd`, `tmux`)
+ *  plants there. A poison is create-if-absent, so every later plant keeps the stub. Refuses a name outside
+ *  CONTAINED_TOOLS, so the call site names the tool it takes over, and refuses `gh` (D-5254): `ghContainedEnv`
+ *  REWRITES the gh poison on every call, so a gh stub here would be overwritten by the next `sh()` — a function
+ *  stub (`GH_STUB`) is gh's door. Returns the stub's path. */
+export function stubContainedTool(
+  home: string, name: Exclude<(typeof CONTAINED_TOOLS)[number], 'gh'>, body: string,
+): string {
+  if (!(CONTAINED_TOOLS as readonly string[]).includes(name)) {
+    throw new Error(`stubContainedTool: ${String(name)} is not a contained tool`);
+  }
+  if ((name as string) === 'gh') {
+    throw new Error('stubContainedTool: gh is re-poisoned on every ghContainedEnv call; stub it with GH_STUB');
+  }
+  const p = path.join(harnessBin(home), name);
+  fs.writeFileSync(p, body, { mode: 0o755 });
+  fs.chmodSync(p, 0o755); // the mode above applies only when the file is created, and a poison may already be there
+  return p;
+}
+
+/** The codex auth library's endpoint for every contained env (codex-bridge Stage 1, Task 6): the caller's own
+ *  CCRC_CODEX_AUTH_BASE when it names one, else CLOSED_AUTH_BASE. An environment VALUE, not a poison: only the
+ *  auth library reads it, so it moves no other code path (the opt-in rule below is about poisons), and unset or
+ *  EMPTY the library reads the live endpoint, so an empty caller value names none (`runAuthDriver`'s rule). */
+function containedAuthBase(env: NodeJS.ProcessEnv): { CCRC_CODEX_AUTH_BASE: string; CLAUDECODE: string } {
+  const named = env['CCRC_CODEX_AUTH_BASE'];
+  // D-6791: `ccd` refuses class=fable from a Claude Code session's shell (CLAUDECODE set), so a suite run from inside
+  // one must not inherit it: the harness answers empty unless the test names CCRC_TEST_CLAUDECODE.
+  return { CCRC_CODEX_AUTH_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE, CLAUDECODE: env['CCRC_TEST_CLAUDECODE'] ?? '' };
+}
+
+/** The codex bridge's upstream for every contained env (codex-bridge Stage 2, Task 7): the caller's own
+ *  CCGPT_BRIDGE_UPSTREAM_BASE when it names one, else CLOSED_AUTH_BASE, by `containedAuthBase`'s rule. Only the
+ *  bridge's backend adapter reads it, and unset or EMPTY it names the live endpoint, so an empty caller value names
+ *  none. */
+function containedBridgeBase(env: NodeJS.ProcessEnv): { CCGPT_BRIDGE_UPSTREAM_BASE: string } {
+  const named = env['CCGPT_BRIDGE_UPSTREAM_BASE'];
+  return { CCGPT_BRIDGE_UPSTREAM_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE };
 }
 
 export function ghContainedEnv(
@@ -175,14 +518,24 @@ export function ghContainedEnv(
 ): NodeJS.ProcessEnv {
   const bin = harnessBin(home);
   fs.writeFileSync(path.join(bin, 'gh'),
-    '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/gh-poison"\n'
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/gh-poison"\n${ledgerHitLine('gh-poison')}\n`
     + 'echo "ccd tests must never reach the real gh" >&2\nexit 97\n', { mode: 0o755 });
-  // Everything below is the SYSTEMD boundary, and it happens only for a caller
-  // that asked. OPT-IN, not opt-out: a default-on poison is invisible to the
+  // Everything below is the SYSTEMD boundary and the tmux poison (since wave 18
+  // also the net poisons and loginctl), and it happens only for a caller that asked. OPT-IN, not opt-out: a default-on poison is invisible to the
   // consumer it hurts, because the damage shows up as a wrong ANSWER in a file
   // that never mentioned systemd (see the header). Opt-in makes the widening
   // land at the call site, where the reviewer of that call site can see it.
-  if (!opts.systemd && !opts.tmux) return { ...env, PATH: `${bin}:${env['PATH'] ?? ''}` };
+  // The user bus is SET for every caller, the gh-only one included (D-8394, residue R35(f)): an environment VALUE,
+  // not a poison, so it is on by default as `containedAuthBase` is. Before it, a thin builder with no `systemd` kept
+  // the caller's real pair, D-5253's named blind spot. ccd's `: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"` would turn
+  // an absence back into the real one, so it is set, after the caller's env, to two paths under HOME that do not
+  // exist. A caller's own pair stands only when BOTH name a path physically under HOME (`busUnder`, the rule
+  // `assertNoRealTool` applies): a fixture runtime dir a test made itself.
+  const bus = busUnder(env, home) ? {} : {
+    XDG_RUNTIME_DIR: path.join(home, 'no-runtime-dir'),
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(home, 'no-bus')}`,
+  };
+  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
   // THE SECOND STRUCTURAL BOUNDARY for the ccd runners, and the reason it is a
   // poison rather than an absence: `_have_systemctl` is `command -v systemctl`,
   // so REMOVING systemctl would send every ccd test down `_supervised_start`'s
@@ -200,7 +553,7 @@ export function ghContainedEnv(
   // literal. Re-planting would break both suites and read as a mystery.
   //
   // That guard only answers WITHIN this directory, which is why it did not
-  // save `ccrc-doctor.test.ts`: its `systemctl` lives in `<home>/stub-bin`, so
+  // save `ccrc-doctorFixture.ts`: its `systemctl` lives in `<home>/stub-bin`, so
   // there was nothing here to be absent, and the poison won on ordering alone.
   // Displaceability inside `harnessBin` and remit outside it are two different
   // questions, and only the second one has an answer that helps a stranger.
@@ -239,10 +592,13 @@ export function ghContainedEnv(
       + '[ "$rc" = 0 ] || echo "ccd tests must never reach the real user manager" >&2\nexit "$rc"\n',
       { mode: 0o755 });
   }
+  // `loginctl`, the user manager's linger switch, is poisoned with the managers (D-8394, residue R35(f)).
+  if (opts.systemd) plantPoison(bin, 'loginctl');
+  if (opts.net) for (const n of NET_TOOLS) plantPoison(bin, n);
   // Prepended to whatever the caller passed, never the other way round: a
   // snippet that supplies its own PATH must not be able to displace the poison,
   // which is the difference between structural and advisory.
-  return { ...env, PATH: `${bin}:${env['PATH'] ?? ''}` };
+  return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
 }
 
 /** The one reader every append-only call log in this file goes through: absent
@@ -250,11 +606,99 @@ export function ghContainedEnv(
 const readLines = (p: string): string[] =>
   fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
 
-/** Every argv the poisoned `gh` at `<home>` saw. */
-export const ghPoisonAt = (home: string): string[] => readLines(path.join(home, 'gh-poison'));
+/** Every argv the poisoned `gh` at `<home>` saw, TAKEN: a case that reads it has decided about it (D-8394). */
+export const ghPoisonAt = (home: string): string[] => takePoisonRecord(home, 'gh');
+
+/** THE WIDTH QUERY EVERY ccd FIXTURE MUST ANSWER since wave 2, spread as the
+ *  first statement of a bash `tmux()` stub.
+ *
+ *  `_pane_measurable` (`ccd/ccd`) runs
+ *  `tmux list-panes -t <name> -F '#{pane_active} #{pane_width}'` ahead of every
+ *  reader that decides to TYPE on a phrase match, and stands that reader down
+ *  unless the ACTIVE row is at least `READER_MIN_COLS` wide. A stub that
+ *  answers the new format with a pane pid — or with nothing at all — therefore
+ *  measures as UNMEASURABLE, and every case in that fixture exercises the
+ *  stand-down instead of the branch it means to test. Measured when the guard
+ *  landed: 165 cases across 14 files went red that way, none of them about the
+ *  width.
+ *
+ *  Every fixture that spreads this models an ORDINARY, full-width pane, so the
+ *  active row answers 200 columns. A fixture that means to model a NARROW
+ *  drawer answers its own rows instead, defining its own `tmux` rather than
+ *  using this — `ccd-reader-standdown.test.ts`'s once-per-loop case does, and
+ *  so does `ccd-pane-narrow-note.test.ts`'s `NARROW_PANE` (drawer wave 2); do
+ *  not assume that is the full set, the same way the spread-site split below
+ *  stopped being trustworthy as a fixed count.
+ *
+ *  `$*`, NEVER `$1`, is the discriminator: `list-panes` is ONE verb carrying
+ *  two formats, and `_auto_compact_check`'s `-F '#{pane_pid}'` must keep the
+ *  answer its fixture already gives it.
+ *
+ *  IT RETURNS, so nothing below it in the stub runs for the width query — and
+ *  that is why WHERE it is spread decides whether the query is LOGGED.
+ *  RE-DERIVE, DO NOT TRUST A COUNT WRITTEN HERE. Walking the text between
+ *  each `tmux() {` and its arm and asking whether `ccd-calls` appears in it
+ *  splits `WIDE_PANE`/`WIDE_PANE_IF_UP`/`DEAD_PANE` spread sites into ones
+ *  that LOG and ones that do not: every `WIDE_PANE_IF_UP` and `DEAD_PANE`
+ *  site logs, and only SOME of the `WIDE_PANE` ones do. This paragraph used
+ *  to state a fixed total and split, and kept being wrong at the next edit to
+ *  `server/test/` — most recently when `ccd-arith-containment.test.ts` grew
+ *  more `WIDE_PANE` spreads (review round 3, S8) and nobody swept the
+ *  sentence that named a total. Removing the digits rather than re-fixing
+ *  them again is this repo's own range-rule shape applied here: a fixed
+ *  count in prose is stale the moment the next test file changes, so nothing
+ *  is asserted that a future edit would silently falsify. No assertion in
+ *  this repo turns on either half, but a new one that counts calls should
+ *  re-run the walk above against the CURRENT tree rather than read a number
+ *  off this comment. */
+export const WIDE_PANE = 'case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac;';
+
+/** Claude Code's input box as a pane draws it: the `❯` row between two `─` borders, chrome below. ccd reads a `❯` row
+ *  as the box only when it sits directly under a border (D-8116, `_pane_box_read`), so a pane that stands for an idle
+ *  or drafting session draws the box this way; a bare `❯` row with no border reads as no box (a dialog is open). */
+export const boxed = (text = '', below = '  ? for shortcuts'): string =>
+  `${'─'.repeat(24)}\n❯ ${text}\n${'─'.repeat(24)}${below ? `\n${below}` : ''}`;
+
+/** `WIDE_PANE` for a fixture that MODELS LIVENESS, and the reason it has to
+ *  exist: a stub cannot answer `has-session` from `$HOME/pane-up` and report a
+ *  200-column ACTIVE pane for that same session in the same breath. Real tmux
+ *  cannot produce that pair — `list-panes -t cc-nope` exits 1 on a session that
+ *  is not there — and a fixture that produces it is not teaching the stub a
+ *  fact, it is teaching it a CONTRADICTION. Measured: the contradiction is what
+ *  kept `ccd-spawn-verdict`'s rc-3 / `spawn rc 3` pins green while the tree
+ *  answered 6.
+ *
+ *  So this one answers the width query from the SAME file the stub answers
+ *  `has-session` from. `SPAWN_MAKES_PANE=0` ("new-session returns, no pane is
+ *  ever there") therefore reaches `_pane_measurable` as a refusal, exactly as
+ *  it reaches `has-session` as one. */
+export const WIDE_PANE_IF_UP =
+  'case "$*" in *pane_active*) [[ -e "$HOME/pane-up" ]] || return 1; echo "1 200"; return 0 ;; esac;';
+
+/** The width query REFUSED, for a stub whose `has-session` always fails: that
+ *  fixture's session does not exist, and `tmux list-panes` against a session
+ *  that does not exist exits 1. The same contradiction as `WIDE_PANE_IF_UP`
+ *  guards against, in the fixtures that model a dead pane unconditionally
+ *  rather than through a file. */
+export const DEAD_PANE = 'case "$*" in *pane_active*) return 1 ;; esac;';
+
+/** THE MOUNT TABLE EVERY `sh()` HANDS ccd, relative to the fixture HOME
+ *  (D-4500). The sidecar carry's link route reads `CCD_MOUNTINFO`, else
+ *  `/proc/self/mountinfo`, the moment a link fails, and decides link-or-copy
+ *  from it. Left to the default, a verdict would depend on the HOST — a Linux
+ *  runner answers from its own table, macOS from none — so the same case would
+ *  log one cause on CI and another on a laptop, and a test that names a cause
+ *  would be measuring the machine. The harness therefore points every snippet at
+ *  this path inside HOME, which is ABSENT until a test writes a table there
+ *  (`fixtures/fakeMountKernel.ts`): the route answers `mounts-absent` on every
+ *  host alike. A snippet's own `CCD_MOUNTINFO` wins over it; `''` restores the
+ *  real table, which only the probe-gated real-kernel case asks for. */
+export const FIXTURE_MOUNTINFO = '.fixture-mountinfo';
 
 export interface CcdHarness {
   home: string;
+  /** The env `sh(snippet, extra)` spawns with, built the same way (wave 18): what `assertNoRealTool` reads. */
+  env(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
   sh(snippet: string, env?: NodeJS.ProcessEnv): string;
   reg(id: string, field: string): string | null;
   calls(): string[];
@@ -277,6 +721,24 @@ export interface CcdHarness {
   git(cwd: string, ...args: string[]): string;
   cleanup(): void;
 }
+
+/** D-5241: the tool-child priority's `env` token, as `_spawn_start` splices it after `_resume_env` — read
+ *  from ccd's own `_tool_adj_env` (one definition, read twice), with its leading space, so a pinned spawn
+ *  line is byte-exact on macOS (empty) and on Linux alike. */
+export const toolAdjToken = (h: Pick<CcdHarness, 'sh'>): string => {
+  const v = h.sh('_tool_adj_env');
+  return v ? ` ${v}` : '';
+};
+
+/** D-6636: the session's own temp root, as `_spawn_start` splices it after the TMPDIR token — the child's leaf
+ *  when one is given, else the box's `TMPDIR` as the harness's ccd sees it (`/tmp` when unset) — with its leading
+ *  space. Read the box's value through the same shell, so a harness whose TMPDIR differs still pins byte-exact. */
+export const sessionTmpToken = (h: Pick<CcdHarness, 'sh'>, childLeaf?: string): string =>
+  ` CCRC_SESSION_TMPDIR='${childLeaf ?? h.sh('printf %s "${TMPDIR:-/tmp}"')}'`;
+
+/** D-8050: the step that puts `$HOME/.local/bin` on the pane's PATH, read from ccd's one definition. Both launch lines
+ *  splice it before their last `cd`; `ccd-session-path.test.ts` runs it, so the pins below read it and do not restate it. */
+export const sessionPanePath = (h: Pick<CcdHarness, 'sh'>): string => h.sh('printf %s "$SESSION_PANE_PATH"');
 
 export function makeCcdHarness(prefix: string): CcdHarness {
   const home = mkTmp(prefix);
@@ -302,13 +764,24 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   // harness runs ccd, so it asks for the systemd boundary too, here and on
   // every `sh()` below: that is what makes "every test that can reach
   // `_supervised_start` is contained" a property of the harness rather than a
-  // rule each ccd test file remembers.
-  ghContainedEnv(home, {}, { systemd: true, tmux: true });
+  // rule each ccd test file remembers. Since wave 18 it asks for ssh, scp and
+  // curl (`net`) too, and the fixture user bus is set for every caller (D-5248, D-8394), so every
+  // CONTAINED_TOOLS name is planted here, at creation.
+  ghContainedEnv(home, {}, { systemd: true, tmux: true, net: true });
 
+  // Fixture git runs with auto-maintenance and auto-gc OFF. Each commit would
+  // otherwise start `git maintenance run --auto --detach`, which outlives the
+  // commit; on git 2.55 its default task is a geometric `repack -d`, which can
+  // merge and delete the temporary pack of a fixture's own explicit `gc` before
+  // gc's cruft pass reads it ("could not find pack '.tmp-…'"). An explicit
+  // `git gc` is not affected. `inheritedEnv()` drops any inherited
+  // GIT_CONFIG_COUNT/KEY/VALUE, so these are the only pairs.
   const gitEnv = (): NodeJS.ProcessEnv => ({
-    ...process.env, HOME: home,
+    ...inheritedEnv(), HOME: home,
     GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x',
     GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x',
+    GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'maintenance.auto', GIT_CONFIG_VALUE_0: 'false',
+    GIT_CONFIG_KEY_1: 'gc.auto', GIT_CONFIG_VALUE_1: '0',
   });
 
   const git = (cwd: string, ...args: string[]): string =>
@@ -319,8 +792,8 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   const makeRepoAt = (name: string): string => {
     const origin = path.join(home, 'origins', `${name}.git`);
     const main = path.join(home, 'projects', name);
-    execFileSync('git', ['init', '--bare', '-b', 'main', origin]);
-    execFileSync('git', ['init', '-b', 'main', main]);
+    execFileSync('git', ['init', '--bare', '-b', 'main', origin], { env: inheritedEnv() });
+    execFileSync('git', ['init', '-b', 'main', main], { env: inheritedEnv() });
     fs.writeFileSync(path.join(main, 'README.md'), 'hi\n');
     git(main, 'add', 'README.md');
     git(main, 'commit', '-m', 'init');
@@ -330,22 +803,47 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     return main;
   };
 
+  // `cwd: home` is part of the isolation, not a convenience. Without it the
+  // snippet inherits vitest's cwd — `infra/ccrc/server` — so any ccd path that
+  // resolves a RELATIVE path writes into the repository. Measured: the hostile
+  // -CDPATH ws-add case makes `$common` two lines long, and `mkdir -p
+  // "$common/info"` then created 74 directories under `server/`, two of them
+  // holding a real `.git/info/exclude`. `git status` cannot see them (the tree
+  // walk skips a component named `.git`, and empty dirs are unreported), so
+  // the suite littered the checkout invisibly and `git add -A` would have
+  // committed newline-bearing paths. HOME is only the ONLY boundary this file
+  // claims if the process starts inside it.
+  //
+  // `env` is the ONE expression `sh` spawns with (wave 18; `sh` adds only its two
+  // harness variables after it), exposed so a test can hand it to
+  // `assertNoRealTool`. `CCD_MOUNTINFO` sits BEFORE `...extra` so a snippet can
+  // override it: see `FIXTURE_MOUNTINFO` for why the host's table never decides
+  // a verdict. A bus pair outside HOME cannot override the fixture's.
+  // `CCRC_BROWSER_MCP_DEFAULT=on` (D-8121): the box default is `off`, which adds the browser servers' denial to every
+  // spawn's one `--settings`; the suites that pin a spawn argv byte for byte predate it and measure everything else, so
+  // the harness keeps the servers on and `ccd-browser-spawn.test.ts` measures the default (an empty value is unset).
+  const env = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv =>
+    ghContainedEnv(home, { ...inheritedEnv(), HOME: home,
+      CCD_MOUNTINFO: path.join(home, FIXTURE_MOUNTINFO), CCRC_BROWSER_MCP_DEFAULT: 'on', ...extra }, { systemd: true, tmux: true, net: true });
+  // The ccd path and the caller's snippet ride the ENVIRONMENT, not argv (wave 18 fix round 3, D-5259): CodeQL reads
+  // every argv element of a `bash -c` as part of the command (js/shell-command-injection-from-environment), and a
+  // snippet often interpolates this fixture HOME. Both are set AFTER `env(extra)`, so no `extra` overrides them, and
+  // unset before ccd is sourced, so nothing ccd starts inherits them. That is hygiene, not containment: the two keys
+  // carry a fixture path and test text, never a tool, a bus or a HOME, and no row pins them (review 585, F3).
+  // `eval` gives every snippet that PARSES the meaning the old `-c` text gave it. Three differences remain:
+  // (a) a syntax error now surfaces after ccd is sourced, prefixed `eval:` (rc 2 either way); (b) execFileSync's
+  // thrown message no longer carries the snippet, so a `toThrow` can match only stderr; (c) the snippet can see the
+  // two non-exported shell variables `ccd_h_src` and `ccd_h_snippet`.
+  const sh = (snippet: string, extra: NodeJS.ProcessEnv = {}): string =>
+    execFileSync('bash', ['-c', 'ccd_h_src=$CCD_HARNESS_SRC ccd_h_snippet=$CCD_HARNESS_SNIPPET; '
+      + 'unset CCD_HARNESS_SRC CCD_HARNESS_SNIPPET; source "$ccd_h_src"; FLEET_SPAWN_PINS=; eval "$ccd_h_snippet"'],
+      { encoding: 'utf8', cwd: home,
+        env: { ...env(extra), CCD_HARNESS_SRC: CCD, CCD_HARNESS_SNIPPET: snippet } }).trim();
+
   return {
     home,
-    // `cwd: home` is part of the isolation, not a convenience. Without it the
-    // snippet inherits vitest's cwd — `infra/ccrc/server` — so any ccd path that
-    // resolves a RELATIVE path writes into the repository. Measured: the hostile
-    // -CDPATH ws-add case makes `$common` two lines long, and `mkdir -p
-    // "$common/info"` then created 74 directories under `server/`, two of them
-    // holding a real `.git/info/exclude`. `git status` cannot see them (the tree
-    // walk skips a component named `.git`, and empty dirs are unreported), so
-    // the suite littered the checkout invisibly and `git add -A` would have
-    // committed newline-bearing paths. HOME is only the ONLY boundary this file
-    // claims if the process starts inside it.
-    sh: (snippet, env = {}) =>
-      execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
-        { encoding: 'utf8', cwd: home,
-          env: ghContainedEnv(home, { ...process.env, HOME: home, ...env }, { systemd: true, tmux: true }) }).trim(),
+    env,
+    sh,
     reg: (id, field) => {
       const p = path.join(home, '.cc-sessions', `${id}.${field}`);
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;
@@ -392,6 +890,45 @@ export function makeCcdHarness(prefix: string): CcdHarness {
       return main;
     },
     git,
-    cleanup: () => { fs.rmSync(home, { recursive: true, force: true }); },
+    // A poison record under HOME that nothing took fails the test (D-8394, residue R35(e)); HOME goes either way.
+    cleanup: () => { try { assertNoPoisonLeft([home]); } finally { fs.rmSync(home, { recursive: true, force: true }); } },
   };
 }
+
+/** A shell prefix that runs `<secs> <argv…>` under a cross-platform alarm and, on
+ *  the alarm, kills the child's WHOLE process group, reaps it and exits 142 (the
+ *  old form's code); otherwise it exits as the child did. Perl is on both
+ *  supported userlands. The old `perl -e 'alarm shift; exec @ARGV'` BECAME the
+ *  child, so the alarm signalled bash alone and a `tail` bash had forked —
+ *  blocked opening a FIFO whenever a mutation removed a detector's guard —
+ *  outlived every timed-out run; the fleet box's dead pane scopes held such
+ *  processes for weeks (session-continuity spec §1.3, §5.6 item 3). perl now
+ *  forks the child into a process group of its own and kills that group.
+ *
+ *  THE PARENT-SIDE RACE (session-continuity wave 4b). A group the CHILD alone
+ *  creates does not exist until the child is scheduled: an alarm that fires in
+ *  that window kills `-$p`, finds no such group, and leaves the child to exec and
+ *  run on. So the parent ALSO calls `setpgid($p, $p)` before it arms the alarm;
+ *  parent and child establish the SAME child-owned group (it is never the
+ *  parent's), whichever runs first. POSIX `setpgid` returns undef on failure and a
+ *  defined value equal to 0 on success, so success is tested with `defined`, never
+ *  `!= 0`; errno is saved at once. EACCES means the child has already exec'd (after
+ *  its own successful group setup) and ESRCH that it is already gone: both leave a
+ *  group to kill or nothing to kill. Any other failure is followed by asking the
+ *  group itself (below); only a child that never gets its group is killed and
+ *  reaped, and the prefix exits 125 rather than arming an alarm against an
+ *  unknown group.
+ *
+ *  STATE, NOT ERRNO, DECIDES (D-8343). Seen on the macOS runner: a FIFO case read
+ *  this prefix's rc 125, with nothing on stderr, for its own 0 (the daily run of
+ *  2026-11-09). Inferred, not seen: a tick-diet batch there ended in 0.4 s with no
+ *  row begun and an empty stderr, its rc unrecorded, and a failed `setpgid` is the
+ *  cause that fits both. XNU's `setpgid` has failure paths besides EACCES and
+ *  ESRCH, so a failed call does not by itself prove that the group is missing. So
+ *  a failed call on either side is followed by asking the group itself: the child
+ *  goes on when it already leads its own group, and the parent, for up to 2 s,
+ *  waits until the child leads one (or is gone) before it arms the alarm. That
+ *  covers a failure once the group exists. A child whose own call fails before the
+ *  group exists still exits 125, and every 125 and 127 now says why on stderr, so
+ *  the next failure names its cause instead of an empty line. */
+export const BOUNDED = `perl -e 'use POSIX qw(setpgid); use Errno qw(EACCES ESRCH); $t = shift; $p = fork; die "fork: $!" unless defined $p; if (!$p) { if (!defined(setpgid(0, 0))) { $m = "$!"; if (getpgrp(0) != $$) { print STDERR "bounded: the child could not make its own process group: $m\\n"; exit 125 } } exec @ARGV; print STDERR "bounded: could not exec $ARGV[0]: $!\\n"; exit 127 } $g = setpgid($p, $p); $e = 0 + $!; $m = "$!"; if (!defined($g) && $e != EACCES && $e != ESRCH) { for ($i = 0; $i < 2000; $i++) { $q = getpgrp($p); last if $q == $p || $q < 0; select(undef, undef, undef, 0.001) } if ($q != $p && $q >= 0) { print STDERR "bounded: the child is not in its own process group ($q, not $p) and setpgid failed: $m\\n"; kill "KILL", $p; waitpid($p, 0); exit 125 } } $SIG{ALRM} = sub { kill "KILL", -$p; waitpid($p, 0); exit 142 }; alarm $t; waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)'`;

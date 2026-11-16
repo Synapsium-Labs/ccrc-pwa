@@ -1,5 +1,5 @@
 // installTreeFixture.ts — the ONE definition of the `ccrc install` fixture
-// tree, shared by `ccrc-install.test.ts` and `ccrc-install-graphify.test.ts`.
+// tree, shared by `ccrc-install-*.test.ts` and `ccrc-install-graphify.test.ts`.
 //
 // Both suites used to carry their own copy of `TREE_FILES` / `TREE_STUBS` /
 // `installFixtureTree`, each citing the other's header as the reason: a
@@ -8,16 +8,26 @@
 // helpers would register that whole suite a second time. That reasoning
 // still holds — it just argues for a THIRD file with no `describe` in it,
 // not for two copies. This file is that third file: it imports nothing from
-// vitest and registers no tests, so both suites can import it directly.
+// vitest and registers no tests, so both suites can import it directly. Its
+// non-`node:` imports are `containedTools.ts` (itself `node:*` only), for
+// `keepDigestEnv`, and `swFixtures.ts` (no imports at all), for the bundle's
+// `sw.js`; it never imports `ccrcContainment.ts`, which reaches vitest.
 //
 // The cost of the two-copy shape was real: an edit to one `TREE_FILES` that
 // missed the other broke 34 tests in the file nobody touched. This module
 // makes that a structural impossibility rather than a discipline.
 import {
-  copyFileSync, cpSync, mkdirSync, statSync, chmodSync, writeFileSync,
+  copyFileSync, cpSync, mkdirSync, statSync, chmodSync, writeFileSync, symlinkSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The first non-`node:` import, and it imports only `node:*` itself — which is what keeps this file vitest-free
+// (wave 9 R9-F8). It may never import `ccrcContainment.ts`, which reaches vitest through `ccdWsHelpers.ts`.
+import { CONTAINED_TOOLS, plantPoison } from './containedTools.js';
+// The second, and it imports nothing at all (Docs W4): the PWA bundle's one fixture worker, so the closing doctor's
+// `docs-sw` check reads the same text `ccrc-doctorFixture.ts`'s `healthy()` plants.
+import { swJs } from './swFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -43,6 +53,38 @@ export const TREE_FILES = [
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
   'ccd/ccrc-adopt',
+  // D-7298: the `ccrc test` wrapper, which doctor's closing `test-slice` check asks for the slice and
+  // the queue (`$CCRC_HERE/ccrc-test --status`). A real tree has it: `_inst_tree` rsyncs `ccd/` whole.
+  'ccd/ccrc-test',
+  // D-7354, D-7360: the graph resolver, which `ccrc install`/`update` (the sweep units' renderers and the store's
+  // creation) and `ccrc uninstall` (the marked store) source from beside ccrc. A real tree has it: `ccd/` is rsynced whole.
+  'ccd/graph-resolve',
+  // D-7353: the engine wrapper, which doctor's closing graphify check runs as `graph-build --probe` from beside
+  // ccrc (`$CCRC_HERE/graph-build`) and FAILs by name when absent. A real tree has it: `ccd/` is rsynced whole.
+  'ccd/graph-build',
+  // The GPT lane's five common executables, COPIED from the repository: the
+  // two `.py` files (Plan 2a, placed since Plan 2b-1), and the runtime builder
+  // and launcher. Plan 2b-2 wrote each of those two unplaced, then added both
+  // here in the commit that made `_inst_bins` place them: an entry joins this
+  // list NO EARLIER than the commit that writes its source. `_inst_bins`
+  // places all five, so a tree missing any one fails an install for a fixture
+  // reason rather than a real one. NEVER stubbed: a stub once hid a placement
+  // that dies on a real tree (D-3165), the class `install-census.test.ts`'s
+  // tracked-source case reds on. The launcher is `ccrc-codex`, not `ccgpt`
+  // (D-3478). The auth library `ccgpt-auth.py` (codex bridge Stage 1, Task 5)
+  // joined in the commit that placed it, first, as `_inst_bins` orders it.
+  'ccd/ccgpt-auth.py',
+  'ccd/ccgpt-proxy.py',
+  'ccd/ccgpt-usage.py',
+  'ccd/ccgpt-runtime',
+  'ccd/ccrc-codex',
+  // The codex bridge's package (codex bridge Stage 2, Task 9), which the shim's
+  // direct entry imports from the installed TREE (CCGPT_BRIDGE_DIR, the tree's
+  // `ccd/codexbridge`), never from `~/.local/bin`: no installer places it, so
+  // it rides the tree and nothing else. A DIRECTORY entry, copied whole, so
+  // every `ccd/codexbridge/*.py` is in the fixture tree, a module added later
+  // included.
+  'ccd/codexbridge',
   // The generators, reached as `$CCRC_HERE/../deploy/<name>.mjs` — the same
   // "one directory up from this script" resolution `cmd_wrappers` uses, true
   // in a checkout and at `~/ccrc/deploy` on a deployed box.
@@ -57,11 +99,26 @@ export const TREE_FILES = [
   // rather than of an installed box. Its two imports, `shared/roster-json.mjs`
   // and `shared/base-url.mjs`, are both in this list too.
   'deploy/account-op.mjs',
+  // Plan 3a Task 10: the model-registry op, the two modules it imports at
+  // load, the probe it runs and the template `ccrc models litellm` renders,
+  // so the PLACED launcher can run `ccrc models refresh --all` the way
+  // `ccrc-models.service` runs it (`ExecStart=%h/.local/bin/ccrc models
+  // refresh --all`). Without the two imports every models verb dies with
+  // ERR_MODULE_NOT_FOUND. Copied, never stubbed, for the GPT lane's reason above.
+  'ccd/ccrc-models-probe',
+  'deploy/models-op.mjs',
+  'deploy/litellm-config.template.yaml',
+  'shared/modelenv.mjs',
+  'shared/litellm.mjs',
+  // The auto-advance plan's pure rules (Codex arm, Task 3): `deploy/models-op.mjs` imports them at load, so a
+  // placed tree without this file fails every models verb with ERR_MODULE_NOT_FOUND.
+  'shared/model-advance.mjs',
+  'shared/model-suggest.mjs',
   // The roster SEED `_inst_roster` places on a box that has none. The
   // realistic "the operator already has a roster" fixture is no repo file any
   // more — the shipped five-account migration roster left the tree with the
   // stage-5 de-brand (spec §5, D-202) — so FIVE_ACCOUNT_ROSTER (in
-  // `ccrc-install.test.ts`) serialises `DEFAULT_TEST_ROSTER` instead: a roster
+  // `ccrc-install-*.test.ts`) serialises `DEFAULT_TEST_ROSTER` instead: a roster
   // with `claude-b` in it, so "generated FROM the installed roster" stays
   // provable rather than merely plausible.
   'deploy/accounts.default.json',
@@ -87,6 +144,14 @@ export const TREE_FILES = [
   'shared/base-url.mjs',
   'shared/roster-json.mjs',
   'shared/wrapper.mjs',
+  // The docs redactor's two files (D-7077, OA-C11 (a)): their reader is ccd's pair installer
+  // (`ccd/ccd-entry-install.py`), which publishes both beside ccd's body and pins their digests, and refuses a tree
+  // without them, so every install fixture built on this list needs them.
+  'shared/redact.mjs',
+  'shared/redact-cli.mjs',
+  // ccrc history's policy ring (`ccd/history/lib.mjs`, copied whole with `ccd/history`) imports the run-id grammar from here
+  // (W4 addendum P10, the shared arm); a placed tree without it fails `status --json` at load, and doctor's history check with it.
+  'shared/workflow-ids.mjs',
   // The node floor doctor reads out of the shipped `package.json`, for BOTH
   // box roles (`_check_node` looks for the server's, then the agent's). The
   // doctor tail arrives in Task 8; the files are cheap and their absence would
@@ -101,6 +166,21 @@ export const TREE_FILES = [
   // wrong file, all of which a real payload catches and a 12-byte one does
   // not.
   'ccd/ccd',
+  // ccd's direct-entry PAIR (D-3696): the launcher TEMPLATE `_inst_bins`
+  // renders onto PATH and the program that renders, self-tests and publishes
+  // the pair. COPIED, never stubbed — an install test must render the real
+  // template through the real publisher.
+  'ccd/ccd-entry.py',
+  'ccd/ccd-entry-install.py',
+  // The library the body pins and loads (D-6913): the publisher reads it from the tree and refuses a tree
+  // without it, or with one the body does not pin, so it is COPIED beside the body it belongs to.
+  'ccd/lib/disk-retention.sh',
+  // Its second library (D-7463), the train proof: read, pinned and published exactly as the first.
+  'ccd/lib/train-proof.sh',
+  // Its third library (wave 5), the delegation lease: read, pinned and published exactly as the others.
+  'ccd/lib/delegation-lease.sh',
+  // Its fourth library (the Overlord's pool set): read, pinned and published exactly as the others.
+  'ccd/lib/pool-set.sh',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
@@ -120,10 +200,70 @@ export const TREE_FILES = [
   // engine Task 6 landed, and `_inst_bins` places both under this name each.
   'ccd/ccd-usage-sweep',
   'ccd/ccd-usage-sweep.py',
+  // The per-uid temp-dir reaper, shipped by `_inst_bins` on the same
+  // non-Darwin, every-ROLE arm; without it `_inst_atomic` dies naming a source
+  // the fixture tree does not carry.
+  'ccd/ccd-tmp-sweep',
+  // history spec 2026-10-05 §9.5: the history sweep's shim, placed by
+  // `_inst_bins` on the non-Darwin arm for every role but server; without it
+  // `_inst_atomic` dies naming a source the tree does not carry. And the
+  // directory its `exec node` and doctor's `status --json` read, copied whole.
+  'ccd/ccd-history-sweep',
+  'ccd/history',
+  // `ccrc-api` (wave 17, D-5313), placed by `_inst_bins` on both arms for every
+  // role but server; without it `_inst_atomic` dies naming a source the tree
+  // does not carry.
+  'ccd/ccrc-api',
+  // The pane-scope sweep (session-continuity wave 4), shipped by `_inst_bins` on
+  // the same non-Darwin, every-ROLE arm as the reaper above.
+  'ccd/ccd-scope-sweep',
+  // The read-only conflict radar (landing order wave 3b), placed by `_inst_bins` on the same non-Darwin, every-ROLE arm.
+  'ccd/ccd-land-probe',
+  // Test box TB11 (D-7413): the durations fetch, placed by `_inst_bins` on the radar's non-Darwin, every-ROLE arm.
+  'ccd/ccd-testbox-times',
+  // D-7857: the carry dedupe sweep, placed by `_inst_bins` on the radar's non-Darwin, every-ROLE arm.
+  'ccd/ccd-carry-dedupe-sweep',
+  // D-5241: the tool-child priority's shell prefix, placed by `_inst_bins` on
+  // the same non-Darwin, every-ROLE arm as the sweep above.
+  'ccd/ccd-tool-adj',
+  // account-pool-membership wave 1, Task 4 fix round 1 (F1): the leased-
+  // projection puller, shipped by `_inst_bins` on the same non-Darwin, every-
+  // ROLE arm as the four above. Without this row `_inst_atomic` dies naming a
+  // source the tree does not carry and EVERY Linux describe in the install
+  // suite goes red for a fixture reason (measured: 72 of them).
+  'ccd/ccd-pool-sync',
+  // programme wave 4 (design 2026-09-20 §9): the update-intent puller,
+  // shipped by `_inst_bins` on the same non-Darwin, every-ROLE arm. Without
+  // this row `_inst_atomic` dies naming a source the tree does not carry, and
+  // every Linux describe in the install suite goes red for a fixture reason.
+  'ccd/ccd-update-sync',
   // The account-connection helper `ccd account-pane` execs. `_inst_bins`
   // places it on BOTH platform arms — it is neither cgroup- nor timer-bound —
   // so unlike the four above it, a Darwin install expects it on PATH too.
   'ccd/ccd-account-auth',
+  // The compaction card's helper (compaction-card spec §2). `_inst_files`
+  // places it beside the hook and BEFORE it, so the tree has to carry it or
+  // `_inst_atomic` dies naming the missing source and every describe here goes
+  // red for a fixture reason.
+  'ccd/compact-card.mjs',
+  // The launch profiles ccd renders at a profile-naming spawn (Overlord W1a); `_inst_files` places it under `.cc-sessions/lib`.
+  'ccd/lib/launch-profiles.json',
+  // The Overlord's constitution (W1 sandbox); `_inst_files` places it under `.cc-sessions/lib`.
+  'ccd/lib/overlord-constitution.md',
+  // The transcript reader ccd and the doctor load with `jq -L` (ARCH-65); `_inst_files` places it under `.cc-sessions/lib`.
+  'ccd/lib/transcript.jq',
+  // The roster card's one builder (D4, R-5a, D-8201); `_inst_files` places it beside the reader above.
+  'ccd/lib/roster-card.jq',
+  // `ccd carry-dedupe`'s program (#317); `_inst_files` places it beside the reader above.
+  'ccd/lib/carry-dedupe.py',
+  // the in-flight manifest's program (session-continuity 6b); placed beside it.
+  'ccd/lib/inflight-manifest.py',
+  // The settings reader the ccd-* sweeps source (wave 29): `_inst_bins` places it under ~/.local/libexec/ccrc on every
+  // OS and role, so a tree without it dies in `_inst_atomic` naming the missing source.
+  'ccd/lib/ccrc-settings.sh',
+  // The approval verifier (coordinator-first routing, plan Task 14, D-5297): `_inst_files` places it beside the hook
+  // and before it, as the card's helper above, so a tree without it dies the same way.
+  'ccd/approval-verify.mjs',
   'ccd/session-hook.sh',
   'ccd/install-session-hooks.sh',
   'ccd/tmux.conf',
@@ -154,19 +294,29 @@ export const TREE_FILES = [
   // `$CCRC_HERE/../deploy/` to measure what is (not) there. Without it in the
   // tree, that check would report a bug in ccrc on every fixture box.
   'deploy/gen-auth-hash.mjs',
-  // ── The two SKILL TREES and their two installers (worker-skill Task 4).
-  // `_inst_skills` places each tree into `~/.cc-sessions/` and then RUNS the
-  // installer it just placed beside it, so all four are read out of the tree
-  // this fixture builds. They are DIRECTORY entries for the same reason
-  // `deploy/systemd` is: the coordinator skill is a SKILL.md plus a
-  // `references/` directory whose contents its own installer refuses to run
-  // without, and a hand-listed fixture would go stale the moment a fourth
-  // reference lands.
+  // ── The five SKILL TREES and their five installers (worker-skill Task 4,
+  // reviewer-skill Task 10). `_inst_skills` places each tree into
+  // `~/.cc-sessions/` and then RUNS the installer it just placed beside it,
+  // so all eight are read out of the tree this fixture builds. They are
+  // DIRECTORY entries for the same reason `deploy/systemd` is: the
+  // coordinator skill is a SKILL.md plus a `references/` directory whose
+  // contents its own installer refuses to run without, and a hand-listed
+  // fixture would go stale the moment a fourth reference lands.
   'ccd/coordinator-skill',
   'ccd/worker-skill',
+  'ccd/reviewer-skill',
+  'ccd/history-skill',
+  'ccd/linear-skill',
+  // The Overlord's skill tree and its staging installer (Overlord W1): `_inst_skills` runs that installer out of this
+  // tree, and it stages the tree once at `~/.cc-sessions/overlord-skill`, in no account home.
+  'ccd/overlord-skill',
+  'ccd/install-overlord-skill.sh',
   'ccd/install-coordinator-skill.sh',
   'ccd/install-worker-skill.sh',
-  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two
+  'ccd/install-reviewer-skill.sh',
+  'ccd/install-history-skill.sh',
+  'ccd/install-linear-skill.sh',
+  // graphify Task 3: `_inst_graphify_skill` stages this beside the other three
   // installers, through the same `_inst_atomic`. It ships alone — no
   // `ccd/graphify-skill` tree — because its SRC is assembled from the
   // installed package at run time, never vendored (spec §B).
@@ -183,6 +333,9 @@ export const TREE_FILES = [
 export const TREE_STUBS: Record<string, string> = {
   'server/dist/server/src/index.js': '// fixture: stands in for the built server\n',
   'server/dist-pwa/index.html': '<!doctype html><title>fixture PWA</title>\n',
+  // Docs W4: the service worker the bundle ships. The closing doctor's `docs-sw` FAILs a tree without one, so every
+  // fixture that ends in `ccrc doctor` places it; `swJs()` is the default-denylist text a build emits.
+  'server/dist-pwa/sw.js': swJs(),
   // D-1159: the agent entry point `ccrc-agent.service` runs. Present for the
   // same reason the two above are — a fleet box cannot run an agent it never
   // built — and deleted by the one test that wants that refusal.
@@ -211,4 +364,86 @@ export function installFixtureTree(home: string, sub = 'checkout'): string {
     writeFileSync(dest, body);
   }
   return root;
+}
+
+/** keepDigest's env (wave 9 R9-F8, D-3820): the real `ccd/ccrc` is sourced here, so nothing real may resolve. Its
+ *  poisons live in `<home>/.keep-digest-poison-bin` — INSIDE the fixture HOME, so `assertNoRealTool` (which passes only
+ *  a realpath under home) passes and the dir goes when the mkTmp home goes; OUTSIDE `~/.local/bin`, so
+ *  `adoptPlantedSystemd` and the exact listings of that dir never read it. Create-if-absent, on every call. PATH keeps
+ *  the parent's PATH after it, so `bash`, `sha256sum`/`shasum` and `find` resolve as they do today (a narrowed PATH
+ *  would hand macOS's /bin/bash 3.2 — M1's lesson). No process-exit cleanup: the agent suite measured
+ *  `process.on('exit')` as insufficient under vitest's forks pool (agent/test/contain-path.setup.ts). */
+export function keepDigestEnv(home: string): NodeJS.ProcessEnv {
+  const bin = join(home, '.keep-digest-poison-bin');
+  mkdirSync(bin, { recursive: true });
+  for (const n of CONTAINED_TOOLS) plantPoison(bin, n);
+  return {
+    HOME: home, PATH: `${bin}:${process.env['PATH'] ?? '/usr/bin:/bin'}`,
+    XDG_RUNTIME_DIR: join(home, 'no-runtime-dir'), DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(home, 'no-bus')}`,
+  };
+}
+
+/** Record `root`'s digest the way the SHIPPED code does (D-3465): source the
+ *  checkout's `ccd/ccrc` (its dispatch is guarded by `BASH_SOURCE[0] == $0`, so
+ *  sourcing runs nothing) in a fixture-HOME shell and call its own
+ *  `_ver_digest_write` — never a second implementation of the recipe in TS.
+ *  A test that changes a kept version's tree AFTER planting it calls this
+ *  again, so the change is part of what "kept" describes; a test that wants a
+ *  write-through leaves it out. Throws when the shipped helper refuses. */
+export function keepDigest(root: string, home: string): void {
+  const r = spawnSync('bash', ['-c', '. "$1"; _ver_digest_write "$2" || { echo "$VER_WHY" >&2; exit 1; }',
+    'keep-digest', join(REPO, 'ccd', 'ccrc'), root],
+  { env: keepDigestEnv(home), encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`keepDigest(${root}) failed: ${r.stderr}`);
+}
+
+/** A W6 box's version directory (W6 Task 2): the fixture tree placed at
+ *  `<home>/ccrc-versions/<name>`, the shape `_inst_tree` leaves behind.
+ *
+ *  `complete` (default true) writes the two files a version keeps at its root
+ *  once an install completed from it — `.ccrc-stamp.json`, a stamp
+ *  `_box_build_fields` accepts (`sha` default forty `a`s, `ref` main, a fixed
+ *  `builtAt`, `dirty: false`, and `version` only when given), and
+ *  `.ccrc-installed`, one line naming that sha. Without them the version is
+ *  incomplete, which is what a placement that died leaves.
+ *
+ *  `digest` (default true, and only when `complete`) also records the tree's
+ *  digest through the shipped helper (`keepDigest`) — a version "kept" before
+ *  digests existed is `digest: false`. It is written AFTER the tree is
+ *  planted and BEFORE `link`, so a caller that edits the tree afterwards must
+ *  call `keepDigest` again.
+ *
+ *  `link` (default true) points `<home>/ccrc` at it with an ABSOLUTE target,
+ *  the value `_plat_ln_swap` writes and `_ver_layout` reads back.
+ *
+ *  Returns the version root. The one helper later W6 tasks plant a
+ *  versioned box with. */
+export function installVersionedTree(
+  home: string, name: string,
+  opts: { link?: boolean; complete?: boolean; digest?: boolean; stamp?: { sha: string; version?: string } } = {},
+): string {
+  const root = installFixtureTree(home, join('ccrc-versions', name));
+  if (opts.complete ?? true) {
+    const sha = opts.stamp?.sha ?? 'a'.repeat(40);
+    const version = opts.stamp?.version;
+    const stamp = {
+      sha, ref: 'main', builtAt: '2026-09-23T00:00:00Z', dirty: false,
+      ...(version === undefined ? {} : { version }),
+    };
+    writeFileSync(join(root, '.ccrc-stamp.json'), `${JSON.stringify(stamp)}\n`);
+    if (opts.digest ?? true) keepDigest(root, home);
+    writeFileSync(join(root, '.ccrc-installed'), `${sha}\n`);
+  }
+  if (opts.link ?? true) symlinkSync(root, join(home, 'ccrc'));
+  return root;
+}
+
+/** THE rsync recorder (wave 9 M6, D-3811): logs the argv of every call ccrc MAKES, then execs the real binary. A call
+ *  whose first argument is `--server` is the rsync implementation's OWN re-exec — openrsync, macOS's /usr/bin/rsync,
+ *  forks `rsync --server …` by PATH lookup for a local copy and so reaches this file a second time; samba rsync on
+ *  Linux copies in-process and never does — so it is handed straight on and not logged. One spelling, imported by
+ *  ccrc-install, ccrc-update and ccrc-install-graphify. */
+export function rsyncRecorder(realRsync: string): string {
+  return `#!/bin/sh\ncase "$1" in --server) exec ${realRsync} "$@" ;; esac\n`
+    + `printf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${realRsync} "$@"\n`;
 }

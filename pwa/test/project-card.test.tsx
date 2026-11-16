@@ -1,32 +1,39 @@
 // A card is always a project; a line is always a session. No bare path.
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, RunSummary } from '../../shared/api';
-import type { ProjectPlacementRead } from '../src/fleet/ProjectCard';
+import type { DelegationProjectionWire, FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, RunSummary } from '../../shared/api';
+import { fleetSession, hibernatedSession, DEAD_LIFECYCLE } from './fleetFixture';
+import type { ProjectPlacementRead } from '../src/fleet/placementWords';
 import { SPAWN_STALL_MS } from '../../shared/api';
 import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
-import { NEST_BRACKET, POOL_UNAVAILABLE_TEXT, ProjectCard } from '../src/fleet/ProjectCard';
-import { CROSSING_GLYPH, waveLabel } from '../src/fleet/runWords';
+import { NEST_BRACKET, POOL_UNAVAILABLE_TEXT, ProjectCard as Card } from '../src/fleet/ProjectCard';
+import { withRunBinding } from './runBindingFixture';
+
+/** The card as a current server feeds it (D-7182, C7d): each of the group's sessions carries the run binding the server
+ *  sends over the runs this render hands the card (`runBindingFixture.ts`), so a worker of a run on the card is that
+ *  run's bound worker, as it is on the wire. Every assertion below reads the real card. */
+const ProjectCard = (p: Parameters<typeof Card>[0]): ReturnType<typeof Card> =>
+  <Card {...p} group={{ ...p.group, sessions: withRunBinding(p.group.sessions, p.runs ?? []) }} />;
+import { waveLabel } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
+import { fleetTree } from '../src/fleet/fleetTree';
+import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
+import { NO_ROLLUP_PREFS, rollupCard, toggleChildren, type RollupPrefs } from '../src/fleet/rollup';
+import { WARN_GLYPH } from '@ccrc/ui';
+import { COORD_A, LEASE_ID, cardElement, okJson, renderCard, worldWithLease, worldWithUnowned } from './leaseCardFixture';
+import { clearAuthLost } from '../src/lib/auth';
+import { GROUP_WORDS } from '../src/fleet/delegationWords';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
 // without this, rerender/multi-render tests below leak DOM across `it` blocks.
 afterEach(cleanup);
 
-const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-quiet-mesa', wrapper: 'claude', home: 'claude', project: 'demo',
-  workdir: '/w', workspace: 'quiet-mesa', name: null, status: 'idle',
-  statusUpdatedAt: null, limits: null, dialogPending: false, version: null,
-  model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, ...over,
-});
+const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'demo-quiet-mesa', workspace: 'quiet-mesa', ...over }));
 
 const grp = (over: Partial<FleetGroup> = {}): FleetGroup => ({
-  project: 'demo', sessions: [sess()], attention: false, busy: 0, unseen: 0, pin: 'claude',
-  stranded: 0, archived: [], ...over,
+  project: 'demo', sessions: [sess()], attention: false, busy: 0, unseen: 0, pin: { state: 'shared', home: 'claude' },
+  stranded: 0, archived: [], released: [], elsewhere: [], ...over,
 });
 
 describe('uniform shape', () => {
@@ -46,10 +53,23 @@ describe('uniform shape', () => {
     expect(screen.getByText('still-cove')).toBeInTheDocument();
   });
 
-  it('shows the live session count', () => {
+  it('shows the live session count, as a number with its noun (T3a, D-6331)', () => {
     const g = grp({ sessions: [sess(), sess({ id: 'b', workspace: 'still-cove' })] });
     render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('2 sessions')).toBeInTheDocument();
+    expect(screen.queryByText('2')).not.toBeInTheDocument();
+  });
+
+  it('shows no count for a project holding one session', () => {
+    const { container } = render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card-count')).toBeNull();
+  });
+
+  it('renders NO pin chip on an empty card — nothing is pinned and nothing disagrees', () => {
+    const { container } = render(
+      <ProjectCard group={grp({ sessions: [], pin: { state: 'empty' } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card-pin')).toBeNull();
+    expect(screen.getByText('demo')).toBeInTheDocument();
   });
 });
 
@@ -68,7 +88,7 @@ describe('folding', () => {
       sessions: [sess({ dialogPending: true }), sess({ id: 'demo-still-cove', workspace: 'still-cove' })],
     });
     render(<ProjectCard group={g} collapsed onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('2 sessions')).toBeInTheDocument();
     expect(screen.getByLabelText('waiting on you')).toBeInTheDocument();
   });
 
@@ -118,23 +138,29 @@ describe('the + button', () => {
 
 describe('pinned account', () => {
   it('shows the account the project is pinned to', () => {
-    render(<ProjectCard group={grp({ pin: 'claude-corp' })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
+    render(<ProjectCard group={grp({ pin: { state: 'shared', home: 'claude-acme' } })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
     expect(screen.getByText('team·b')).toBeInTheDocument();
   });
 
-  it('says "mixed" when the sessions disagree rather than picking one', () => {
-    render(<ProjectCard group={grp({ pin: null })} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('mixed')).toBeInTheDocument();
+  it('says "several accounts" when the sessions disagree rather than picking one (T3a, D-6331)', () => {
+    render(<ProjectCard group={grp({ pin: { state: 'mixed' } })} onOpen={() => {}} onActions={() => {}} />);
+    const chip = screen.getByText('several accounts');
+    expect(chip).toBeInTheDocument();
+    // The chip measures each session's PINNED account (ccd `home`), not where it runs, so its title says "pinned".
+    expect(chip).toHaveAttribute('title', 'The sessions here are pinned to different accounts');
+    expect(chip).toHaveAttribute('aria-label', 'pinned accounts differ');
+    expect(chip).toHaveAttribute('data-mixed');
+    expect(screen.queryByText('mixed')).not.toBeInTheDocument();
   });
 
   it('names the pin for assistive tech — a bare label reads as decoration', () => {
-    render(<ProjectCard group={grp({ pin: 'claude' })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
+    render(<ProjectCard group={grp({ pin: { state: 'shared', home: 'claude' } })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
     expect(screen.getByLabelText('pinned to team·max')).toBeInTheDocument();
   });
 });
 
 describe('the + is icon-only', () => {
-  const projected = { wrapper: 'claude2', score: 9 };
+  const projected = { wrapper: 'claude9', score: 9 };
 
   it('renders no visible projection text in the header', () => {
     const { container } = render(
@@ -224,7 +250,7 @@ describe('status owns the perimeter only for attention', () => {
     // gone now — `bucket` is the one field both `group.busy` and the row's
     // own word read — so this is structurally impossible rather than merely
     // untested; the assertions below are the same ones that caught it.
-    const [g] = groupFleet([sess({ bucket: 'attention' })]);
+    const [g] = groupFleet([sess({ bucket: 'attention' })], []);
     const { rerender } = render(
       <ProjectCard collapsed group={g!} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText('working')).toBeNull();
@@ -239,7 +265,7 @@ describe('status owns the perimeter only for attention', () => {
     const [g] = groupFleet([
       sess({ bucket: 'attention' }),
       sess({ id: 'demo-still-cove', workspace: 'still-cove', bucket: 'working' }),
-    ]);
+    ], []);
     const { rerender } = render(
       <ProjectCard collapsed group={g!} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText('2 working')).toBeNull();
@@ -297,7 +323,7 @@ describe('session count', () => {
   it('renders from two upwards', () => {
     const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
     render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('2 sessions')).toBeInTheDocument();
   });
 });
 
@@ -384,7 +410,8 @@ const FROZEN = 1_800_000_000_499;
 const runFor = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 1, program: 'build9b', programTitle: 'Build 9b', wave: 1, waveOf: 3,
   project: 'demo', homeProject: null, sessionId: null, workspace: null, branch: null,
-  state: 'dispatched', claimedBy: 'demo-quiet-mesa', resumed: false, clearedAt: null,
+  state: 'dispatched', kind: 'work', reviews: null,
+  claimedBy: 'demo-quiet-mesa', resumed: false, clearedAt: null,
   openedAt: FROZEN - 1_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },
   unreadMail: 0,
@@ -392,7 +419,7 @@ const runFor = (over: Partial<RunSummary> = {}): RunSummary => ({
   // predates the warn row and must keep rendering exactly as it did.
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false, ...over,
 });
 
 const worker = sess({ id: 'demo-still-cove', workspace: 'still-cove' });
@@ -446,7 +473,10 @@ describe('the nesting bracket', () => {
     // reads off a run stays identical. Nesting is then the only variable left.
     const orphaned = runFor({ id: 11, sessionId: 'demo-still-cove', claimedBy: 'other-project-coordinator' });
     const flat = render(<ProjectCard group={g} runs={[orphaned]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
-    const before = flat.container.querySelectorAll('.sess-line')[1]?.outerHTML;
+    // By its label, not its index: a worker of a programme elsewhere is drawn under its own sub-heading (Task G2).
+    const before = [...flat.container.querySelectorAll('.sess-line')]
+      .find((el) => el.querySelector('.sess-label')?.textContent === 'still-cove')?.outerHTML;
+    expect(before).toBeDefined();
     cleanup();
     const { container } = render(
       <ProjectCard group={g} runs={[childRun]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
@@ -518,7 +548,24 @@ describe('the pending child — a spawn the operator can watch arrive', () => {
     expect(container.querySelector('.proj-pending')?.getAttribute('data-phase')).toBe('stalled');
     expect(screen.getByText('spawn never completed')).toBeInTheDocument();
     expect(screen.queryByText('spawning a worker')).toBeNull();
-    expect(container.querySelector('.proj-pending-glyph')?.textContent).toBe('⚠');
+    // The constant, never a literal: it carries U+FE0E (D-5100).
+    expect(container.querySelector('.proj-pending-glyph')?.textContent).toBe(WARN_GLYPH);
+  });
+
+  it('D-7563: the stalled run bound to its returned child clears the wedge, and the child is drawn under its coordinator', () => {
+    // The server's auto-bind leaves the run planned and its stamp as it was, and names the child workspace as its
+    // session. BOTH directions on the same group: unbound, the wedge; bound, the child's own row and no wedge.
+    const stalled = spawning({ dispatchStartedAt: FROZEN - SPAWN_STALL_MS * 600 });
+    const unbound = render(
+      <ProjectCard group={pair} runs={[stalled]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('spawn never completed')).toBeInTheDocument();
+    unbound.unmount();
+    const { container } = render(
+      <ProjectCard group={pair} runs={[{ ...stalled, sessionId: 'demo-still-cove' }]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText('spawn never completed')).toBeNull();
+    expect(container.querySelector('.proj-pending')).toBeNull();
+    expect(container.querySelector('.proj-nest[data-depth="1"] .sess-label')?.textContent).toBe('still-cove');
   });
 
   it('renders nothing at all for a planned run nobody has dispatched', () => {
@@ -549,7 +596,7 @@ describe('the pending child — a spawn the operator can watch arrive', () => {
 // the row does not. It is answered from the run rows themselves — never by
 // reading the run id out of the hold string, which `rundefs.ts` keeps
 // display-only and `run-routes.test.ts` scans `pwa/src` to enforce.
-describe('the held cell opens the run board when a run is actually on it (Task 5)', () => {
+describe('the held cell opens the run page when a run is actually on it (Task 5, D-8072)', () => {
   const heldWorker = sess({
     id: 'demo-still-cove', workspace: 'still-cove', held: 'program:build9b wave:1/3 run:10',
   });
@@ -561,13 +608,13 @@ describe('the held cell opens the run board when a run is actually on it (Task 5
     expect(cell()?.tagName).toBe('BUTTON');
   });
 
-  it('leads to /runs, and not into the session underneath it', () => {
+  it('leads to /runs/<id>, and not into the session underneath it', () => {
     const onOpen = vi.fn();
     history.pushState(null, '', '/');
     render(<ProjectCard group={grp({ sessions: [heldWorker] })} runs={[childRun]} nowMs={FROZEN}
                         onOpen={onOpen} onActions={() => {}} />);
     fireEvent.click(cell()!);
-    expect(location.pathname).toBe('/runs');
+    expect(location.pathname).toBe('/runs/10');
     expect(onOpen).not.toHaveBeenCalled();
   });
 
@@ -580,6 +627,15 @@ describe('the held cell opens the run board when a run is actually on it (Task 5
                         onOpen={() => {}} onActions={() => {}} />);
     expect(cell()?.tagName).toBe('SPAN');
     expect(document.querySelector('button.sess-held')).toBeNull();
+  });
+
+  // C7d's behaviour row, OA-C15 (a) (D-7265): the door follows the wire's binding. A run that names the session by id
+  // but that the server binds to no incarnation of it (#746's recycled id, or an older server's frame with no binding)
+  // is not the session's run, so the hold reads as the inert text it is (a door before C7d).
+  it('opens no door for an open run that names the session but that the wire does not bind to it', () => {
+    render(<ProjectCard group={grp({ sessions: [{ ...heldWorker, run: null, openRun: null }] })} runs={[childRun]} nowMs={FROZEN}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.tagName).toBe('SPAN');
   });
 
   it('opens no door for a run that names a DIFFERENT session on the same card', () => {
@@ -608,6 +664,7 @@ describe('the pool chip', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
     expect(screen.queryByText(/pool/i)).not.toBeInTheDocument();
     expect(screen.queryByText('no pool')).not.toBeInTheDocument();
+    expect(screen.queryByText('Set pool')).not.toBeInTheDocument();
   });
 
   it('names the pool a tagged project is in', () => {
@@ -618,10 +675,40 @@ describe('the pool chip', () => {
   });
 
   it('flags a MEASURED untagged project — ruling 3\'s worklist', () => {
+    // No handler: nowhere to go, so the chip is a span and keeps the state's own words — a word that names an action
+    // must not appear where there is no door to take it (T3a, D-6331).
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
                         placement={measured({ state: 'untagged' })} pools={listed({})} />);
     const chip = screen.getByText('no pool');
     expect(chip).toHaveAttribute('data-pool', 'untagged');
+    expect(chip.tagName).toBe('SPAN');
+    expect(screen.queryByText('Set pool')).not.toBeInTheDocument();
+  });
+
+  it("an untagged project's chip reads 'Set pool' and is still the button that opens the pool sheet", () => {
+    const onPool = vi.fn();
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'untagged' })} pools={listed({})} onPool={onPool} />);
+    const chip = screen.getByText('Set pool');
+    expect(chip.tagName).toBe('BUTTON');
+    // Ruling 3's attention ink keys on this attribute (`fleet.css`), so the new word keeps it.
+    expect(chip).toHaveAttribute('data-pool', 'untagged');
+    // The accessible name begins with the words the door shows (WCAG 2.5.3, R121 Q6; C12 item 10), then the state's
+    // sentence; the tooltip stays the sentence.
+    expect(chip).toHaveAccessibleName('Set pool — no project pool — any account may serve this project');
+    expect(chip).toHaveAttribute('title', 'no project pool — any account may serve this project');
+    expect(screen.queryByText('no pool')).not.toBeInTheDocument();
+    fireEvent.click(chip);
+    expect(onPool).toHaveBeenCalledTimes(1);
+    expect(onPool).toHaveBeenCalledWith('demo');
+  });
+
+  it('a dim untagged chip (the fleet ccd predates pools) keeps its state word, not the action word', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'untagged' })}
+                        pools={listed({}, 'unavailable')} onPool={() => {}} />);
+    expect(screen.queryByText('Set pool')).not.toBeInTheDocument();
+    expect(screen.getByText('no pool').tagName).toBe('SPAN');
   });
 
   it('tells malformed from unreadable, in two aria-labels that each carry the full path', () => {
@@ -662,7 +749,7 @@ describe('the pool chip', () => {
     const chip = screen.getByText(/app older than fleet; reload/i);
     expect(chip).toHaveAttribute('data-pool', 'unrecognised');
     expect(chip).toHaveAccessibleName(/app bundle is older than the fleet; reload/i);
-    for (const absent of ['pool-z', 'pool unreadable', 'pool malformed', 'no pool']) {
+    for (const absent of ['pool-z', 'pool unreadable', 'pool malformed', 'no pool', 'Set pool']) {
       expect(screen.queryByText(absent)).not.toBeInTheDocument();
     }
   });
@@ -709,7 +796,7 @@ describe('the pool chip', () => {
 describe('route-owned pool handoff to session rows', () => {
   const roster = TEST_ROSTER.map((account) => ({
     ...account,
-    pool: account.id === 'claude2' ? 'pool-b' : null,
+    pool: account.id === 'claude9' ? 'pool-b' : null,
   }));
   const placement: ProjectPlacementRead = {
     kind: 'measured',
@@ -723,13 +810,13 @@ describe('route-owned pool handoff to session rows', () => {
   };
 
   it('passes the route pool to an active row when the pools frame disagrees', () => {
-    const active = sess({ wrapper: 'claude2', home: 'claude2' });
+    const active = sess({ wrapper: 'claude9', home: 'claude9' });
     render(<ProjectCard group={grp({ sessions: [active] })} placement={placement}
                         pools={conflictingFrame} roster={roster}
                         onOpen={() => {}} onActions={() => {}} />);
 
-    const account = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
-    expect(account).toHaveAttribute('data-offpool', 'true');
+    // D-5545: the account cell left the card; off-pool is the row's marker, its sentence the title.
+    expect(screen.getByTitle('running on team·alt (pool pool-b), project is pool pool-a')).toHaveTextContent('off-pool');
   });
 
   it('keeps an expanded archived dead row neutral when the pools frame disagrees', () => {
@@ -738,16 +825,72 @@ describe('route-owned pool handoff to session rows', () => {
     // the route-owned prop is inert here. Its direct suite pins that policy;
     // the active case above independently pins ProjectCard's handoff.
     const archived = sess({
-      id: 'demo-quiet-basin', wrapper: 'claude2', home: 'claude2',
-      workspace: 'quiet-basin', status: 'dead', bucket: 'archived',
+      id: 'demo-quiet-basin', wrapper: 'claude9', home: 'claude9',
+      workspace: 'quiet-basin', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived',
       archivedAt: 1_785_300_000,
     });
     render(<ProjectCard group={grp({ archived: [archived] })} placement={placement}
                         pools={conflictingFrame} roster={roster} archivedOpen
                         onOpen={() => {}} onActions={() => {}} />);
 
-    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
     expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+  });
+});
+
+// Task 4 fix round 1 (review finding, Important): after the key flip a MOVED
+// row (`s.project !== group.project`) must be judged against ITS OWN
+// project's pool, never the card's — `~/.cc-sessions/pools/<project>` is
+// keyed by the session's own project, and a card's `placement`/`pool` is one
+// `/api/projects` read for `group.project` alone.
+describe('a moved row is judged against its OWN project\'s pool, never the card\'s (Task 4 fix round 1)', () => {
+  // The card (`demo`) is tagged pool-a — DIFFERENT from the moved row's own
+  // project (`beta`, tagged pool-b via `poolFor`), so a card-pool judgment and
+  // an own-project judgment disagree in both directions these two cases probe.
+  const cardPlacement: ProjectPlacementRead = {
+    kind: 'measured',
+    pool: { state: 'tagged', name: 'pool-a' },
+    placement: { kind: 'unmeasurable' },
+  };
+  const poolFor = (project: string): ProjectPoolWire | null =>
+    project === 'beta' ? { state: 'tagged', name: 'pool-b' } : null;
+  const moved = () => sess({
+    id: 'beta-still-cove', project: 'beta', boardProject: 'demo',
+    wrapper: 'claude9', home: 'claude9', workspace: 'still-cove',
+  });
+
+  it('no off-pool label when the moved row\'s account matches ITS OWN project\'s pool, though the card is tagged differently', () => {
+    // claude9 is in pool-b, the moved row's own project (beta) is pool-b:
+    // they agree. Judged against the CARD's pool-a instead, this would be a
+    // false off-pool warning — exactly the defect the finding named.
+    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude9' ? 'pool-b' : null }));
+    render(<ProjectCard group={grp({ sessions: [moved()] })} placement={cardPlacement}
+                        poolFor={poolFor} roster={roster}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+  });
+
+  it('names the moved row\'s OWN project\'s pool when its account disagrees — never the card\'s pool', () => {
+    // claude9 is in pool-a, the moved row's own project (beta) is pool-b:
+    // they disagree, and the label must name pool-b (beta's own tag), not
+    // pool-a (the card's tag, which happens to equal the account's pool here
+    // — a judgment against the card would swallow the warning entirely).
+    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude9' ? 'pool-a' : null }));
+    render(<ProjectCard group={grp({ sessions: [moved()] })} placement={cardPlacement}
+                        poolFor={poolFor} roster={roster}
+                        onOpen={() => {}} onActions={() => {}} />);
+    // D-5545: the account cell left the card; off-pool is the row's marker, its sentence the title.
+    expect(screen.getByTitle('running on team·alt (pool pool-a), project is pool pool-b')).toHaveTextContent('off-pool');
+  });
+
+  it('CONTROL: a same-project row is still judged against the card\'s own pool, exactly as before', () => {
+    // group.project === s.project here (both 'demo'), so poolOf must return
+    // `pool` (the card's), never call `poolFor` at all.
+    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude9' ? 'pool-b' : null }));
+    render(<ProjectCard group={grp({ sessions: [sess({ wrapper: 'claude9', home: 'claude9' })] })}
+                        placement={cardPlacement} poolFor={poolFor} roster={roster}
+                        onOpen={() => {}} onActions={() => {}} />);
+    // D-5545: the account cell left the card; off-pool is the row's marker, its sentence the title.
+    expect(screen.getByTitle('running on team·alt (pool pool-b), project is pool pool-a')).toHaveTextContent('off-pool');
   });
 });
 
@@ -755,8 +898,8 @@ describe('the stranded cell', () => {
   it('does not surface a stranded aggregate for a sole dead marker-bearing row', () => {
     const marker = { at: 1, reason: 'no account in pool pool-a can take it' };
     const [group] = groupFleet([
-      sess({ status: 'dead', bucket: 'dead', stranded: marker }),
-    ]);
+      sess({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stranded: marker }),
+    ], []);
     render(<ProjectCard group={group!} onOpen={() => {}} onActions={() => {}} />);
 
     expect(screen.queryByText(/stranded/)).not.toBeInTheDocument();
@@ -791,7 +934,7 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={null}
                         placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'none', pool: 'pool-b' } }}
-                        roster={pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })}
+                        roster={pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
     const btn = screen.getByRole('button', { name: /New workspace on demo/ });
     expect(btn.getAttribute('aria-label')).toContain('team·alt and team·d');
@@ -802,9 +945,19 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={null}
                         placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'none', pool: 'pool-b' } }}
-                        roster={pooled({ claude: 'pool-a', claude2: 'pool-a', 'claude-corp': 'pool-a', 'claude-dev0': 'pool-a' })}
+                        roster={pooled({ claude: 'pool-a', claude9: 'pool-a', 'claude-acme': 'pool-a', 'claude-lab0': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
     expect(screen.getByRole('button', { name: 'New workspace on demo — nothing is in pool pool-b' }))
+      .toBeInTheDocument();
+  });
+
+  it('names the class rather than the pool when a `?class=` read measures every lane unservable for it (routing slice 4, Task 6)', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
+                        projected={null}
+                        placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'none', pool: 'pool-b', class: 'fable' } }}
+                        roster={pooled({ claude: 'pool-a', claude9: 'pool-a', 'claude-acme': 'pool-a', 'claude-lab0': 'pool-a' })}
+                        pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
+    expect(screen.getByRole('button', { name: 'New workspace on demo — no lane can serve fable' }))
       .toBeInTheDocument();
   });
 
@@ -812,11 +965,11 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
     const placement: ProjectPlacementRead = {
       kind: 'measured',
       pool: { state: 'tagged', name: 'pool-b' },
-      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+      placement: { kind: 'projected', wrapper: 'claude9', score: 9 },
     };
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={{ wrapper: 'claude', score: 18 }} placement={placement}
-                        roster={pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })}
+                        roster={pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
     const button = screen.getByRole('button', { name: /New workspace on demo/ });
     expect(button).toHaveAccessibleName('New workspace on demo — team·alt, 91% free');
@@ -831,7 +984,7 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
     };
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={{ wrapper: 'claude', score: 18 }} placement={placement}
-                        roster={pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })}
+                        roster={pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' }} />);
 
     expect(screen.getByLabelText('project pool pool-b')).toHaveTextContent('pool-b');
@@ -845,7 +998,7 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
     const common = {
       group: grp(), onOpen: () => {}, onActions: () => {}, onAddWorkspace: () => {},
       projected: { wrapper: 'claude', score: 18 },
-      roster: pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' }),
+      roster: pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' }),
       pools: { listed: true, byProject: { demo: { state: 'tagged' as const, name: 'pool-b' } }, enforcement: 'enforced' as const },
     };
     const { rerender } = render(
@@ -908,194 +1061,169 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
   });
 });
 
-// ── cross-repo wave 2: the orphan gets a sentence (spec §3 F4) ───────────────
+// ── cross-repo wave 2: the orphan gets a marker (spec §3 F4; D-5545) ─────────
 //
 // `nestFleet`'s rule 3 is right and stays: a worker whose coordinator sits on
 // another project's card is NOT bracketed, because a `└─` may not cross two
-// cards. What it left behind was a row at depth 0 that looks exactly like an
-// ordinary session and is not one — correct, and silent. The card has the run in
-// its hand; the marker is one sentence built from it, and the TREE does not move.
-describe('the orphan worker says which programme it belongs to', () => {
+// cards. Until D-5545 the card explained it with a SECOND LINE under the row —
+// `⇄ <programme> wave 2/3 · coordinator gone` — which repeated the programme and
+// wave the row itself already names. Now the row carries it as its one attention
+// marker: "coordinator gone" (or "coordinator hibernated"), the guidance and the
+// home clause in its title. A coordinator the frame has not measured says nothing.
+describe('the orphan worker\'s marker rides its row', () => {
   const orphanRun = runFor({
     id: 11, program: 'build9b', wave: 2, waveOf: 3,
     project: 'demo', sessionId: 'demo-still-cove', claimedBy: 'off-card-coordinator',
     homeProject: 'home-repo',
   });
-
-  it('explains the row rule 3 leaves flat, naming the programme, the wave and the home', () => {
-    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
-    const { container } = render(
-      <ProjectCard group={g} runs={[orphanRun]} nowMs={FROZEN}
-                   onOpen={() => {}} onActions={() => {}} />);
-    // The tree is untouched: no bracket was drawn across cards.
-    expect(container.querySelector('.proj-nest')).toBeNull();
-    const marker = container.querySelector('.proj-crossing');
-    expect(marker).not.toBeNull();
-    expect(marker!.textContent).toContain('build9b');
-    expect(marker!.textContent).toContain(waveLabel({ wave: 2, waveOf: 3 }));
-    expect(marker!.textContent).toContain('home home-repo');
-    expect(marker!.querySelector('.proj-crossing-glyph')?.textContent).toBe(CROSSING_GLYPH);
+  const worker = (): FleetSession => sess({
+    id: 'demo-still-cove', workspace: 'still-cove', role: 'child',
+    child: { kind: 'child', runId: 11 }, held: 'program:build9b wave:2/3 run:11',
   });
+  const orphans = (): FleetGroup => grp({ sessions: [sess(), worker()] });
+  const deadCoord = sess({ id: 'off-card-coordinator', project: 'elsewhere', status: 'dead', bucket: 'dead', lifecycle: 'orphan' });
+  const marker = (c: HTMLElement): HTMLElement | null => c.querySelector('[data-marker^="coordinator-"]');
 
-  it('says the programme and wave WITHOUT a home clause while homeProject is null', () => {
-    // The legacy generation. The orphan is still worth explaining — its
-    // coordinator IS elsewhere, measured off `claimedBy` — but nothing measured
-    // a home, so nothing claims one.
-    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+  it('draws no second line: the row names its programme and wave once, and the tree does not move', () => {
     const { container } = render(
-      <ProjectCard group={g} runs={[{ ...orphanRun, homeProject: null }]} nowMs={FROZEN}
+      <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN}
                    onOpen={() => {}} onActions={() => {}} />);
-    const marker = container.querySelector('.proj-crossing');
-    expect(marker).not.toBeNull();
-    expect(marker!.textContent).toContain('build9b');
-    expect(marker!.textContent).not.toContain('home');
+    expect(container.querySelector('.proj-nest')).toBeNull();
+    expect(container.querySelector('.proj-crossing')).toBeNull();
+    // Task G2: a worker whose coordinator is off this card sits under "Workers of programmes elsewhere".
+    const row = [...container.querySelectorAll('.sess-line')].find((el) => el.querySelector('.sess-label')?.textContent === 'still-cove')!;
+    expect(row.closest('.pg-elsewhere')).not.toBeNull();
+    expect(row.textContent!.split('build9b').length - 1).toBe(1);
+    expect(row.textContent).toContain('build9b · wave 2 of 3');
   });
 
   it('marks NO row when the coordinator is on this very card — the bracket already says it', () => {
-    // `pair` is the coordinator + worker fixture; `childRun` is bracketed. A
-    // marker here would be a second sentence saying what the `└─` says. It
-    // does NOT pass on the depth check alone: the worker's row is depth 1, so
-    // the marker slot is never rendered for it regardless of what `orphanNote`
-    // returns, and `orphanNote` itself would independently silence it via the
-    // `group.sessions.some(...)` guard (its coordinator is on this card). That
-    // is why the rule-4 case below exists — it puts a coordinator's own
-    // worker at depth 0, where the depth check cannot help and only that
-    // guard can silence it: depth 0 is not proof a coordinator is elsewhere.
     const { container } = render(
-      <ProjectCard group={pair} runs={[childRun]} nowMs={FROZEN}
+      <ProjectCard group={pair} runs={[childRun]} nowMs={FROZEN} frameSeen coordOf={() => deadCoord}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-nest')).not.toBeNull();
-    expect(container.querySelector('.proj-crossing')).toBeNull();
+    expect(marker(container)).toBeNull();
   });
 
   it('marks no row at RULE 4 either, where a worker that is also a parent stays flat', () => {
-    // `nestFleet` rule 4: a session that is both a child of one run and the
-    // parent of another renders at TOP level with its own children beneath it.
-    // So a depth-0 row is NOT evidence that its coordinator is off this card —
-    // and without the `group.sessions.some(...)` guard this row would carry
-    // "this worker's coordinator is not among this card's live sessions" while
-    // that coordinator is rendered two lines above it. This case is the
-    // guard's only witness.
-    const coord = sess();                                             // demo-quiet-mesa
-    const middle = sess({ id: 'demo-still-cove', workspace: 'still-cove' });
-    const leaf = sess({ id: 'demo-far-bank', workspace: 'far-bank' });
-    const g = grp({ sessions: [coord, middle, leaf] });
+    // `nestFleet` rule 4: a session that is both a child of one run and the parent of another renders at TOP
+    // level. A depth-0 row is NOT evidence that its coordinator is off this card; `orphanNote`'s
+    // `group.sessions.some(...)` guard is the only thing that silences it, and this case is its witness.
+    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' }), sess({ id: 'demo-far-bank', workspace: 'far-bank' })] });
     const { container } = render(
-      <ProjectCard
-        group={g}
+      <ProjectCard group={g} frameSeen coordOf={() => deadCoord}
         runs={[
           runFor({ id: 20, sessionId: 'demo-still-cove', claimedBy: 'demo-quiet-mesa' }),
           runFor({ id: 21, sessionId: 'demo-far-bank', claimedBy: 'demo-still-cove' }),
         ]}
-        nowMs={FROZEN}
-        onOpen={() => {}}
-        onActions={() => {}}
-      />);
-    // The leaf is bracketed under the middle row; the middle row stays flat.
+        nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelectorAll('.proj-nest')).toHaveLength(1);
-    expect(container.querySelector('.proj-crossing')).toBeNull();
+    expect(marker(container)).toBeNull();
   });
 
-  it('marks no row on a card with no runs at all', () => {
+  it('keeps the marked row its own line — no marker wrapper, no sibling line', () => {
     const { container } = render(
-      <ProjectCard group={pair} runs={[]} nowMs={FROZEN}
+      <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? deadCoord : null)}
                    onOpen={() => {}} onActions={() => {}} />);
-    expect(container.querySelector('.proj-crossing')).toBeNull();
+    const row = [...container.querySelectorAll('.sess-line')].find((el) => el.querySelector('.sess-label')?.textContent === 'still-cove')!;
+    // Task G2: its one wrapper is the elsewhere group's row slot (the programme's hue), never a marker line.
+    expect(row.parentElement?.classList.contains('pg-far')).toBe(true);
+    expect(row.parentElement?.childElementCount).toBe(1);
+    expect(row.parentElement?.parentElement?.parentElement).toBe(container.querySelector('.proj-card-body'));
+    expect(row.nextElementSibling?.classList.contains('proj-crossing') ?? false).toBe(false);
+    expect(marker(row as HTMLElement)).not.toBeNull();
   });
 
-  it('leaves the marked row itself byte-identical — the marker is a SIBLING, not a wrapper', () => {
-    // The same control the bracket cases use: a row that gains an explanation
-    // must not gain a wrapper, lose its tap surface or change its own DOM.
-    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
-    const plain = render(
-      <ProjectCard group={g} runs={[]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
-    const before = plain.container.querySelectorAll('.sess-line')[1]?.outerHTML;
-    cleanup();
-    const { container } = render(
-      <ProjectCard group={g} runs={[orphanRun]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
-    const after = container.querySelectorAll('.sess-line')[1]?.outerHTML;
-    expect(after).toBe(before);
-    // D-2574(a): the outerHTML compare above is blind to a WRAPPER — a `<div>`
-    // around the row does not change the row's own outerHTML, only what it sits
-    // inside. `previousElementSibling` does not catch it either (under a
-    // wrapper the row and the marker are still siblings OF EACH OTHER); the
-    // only check that reds under a wrapper is that both share `.proj-card-body`
-    // as their direct parent.
-    expect(container.querySelectorAll('.sess-line')[1]?.parentElement)
-      .toBe(container.querySelector('.proj-card-body'));
-    expect(container.querySelector('.proj-crossing')?.parentElement)
-      .toBe(container.querySelector('.proj-card-body'));
+  it('marks no row for a SELF-CLAIMED or an UNCLAIMED run', () => {
+    for (const claimedBy of ['demo-still-cove', null]) {
+      cleanup();
+      const { container } = render(
+        <ProjectCard group={orphans()} runs={[runFor({ id: 13, sessionId: 'demo-still-cove', claimedBy })]} nowMs={FROZEN}
+                     frameSeen coordOf={() => deadCoord} onOpen={() => {}} onActions={() => {}} />);
+      expect(marker(container), String(claimedBy)).toBeNull();
+    }
   });
 
-  it('says nothing about home when the measured home IS the card\'s own project — coordinator archived elsewhere on this card', () => {
-    // D-2574(b): reachable in production — a programme homed in THIS repo
-    // whose coordinator session has moved to `group.archived` (not
-    // `group.sessions`) passes the parent guard exactly like a genuinely
-    // off-card coordinator would, because the `group.sessions.some(...)` check
-    // only looks in `sessions`. Measured sameness (home === the card's own
-    // project) must still silence the home clause — nothing here has proven a
-    // CROSSING, only that the coordinator is not among the live rows.
-    const archivedCoord = sess({ id: 'demo-archived-lead', workspace: 'archived-lead', bucket: 'archived' });
-    const g = grp({
-      sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })],
-      archived: [archivedCoord],
-    });
-    const sameHomeRun = runFor({
-      id: 12, sessionId: 'demo-still-cove', claimedBy: 'demo-archived-lead', homeProject: 'demo',
-    });
+  it('says the coordinator is GONE when the fleet measures it dead, naming the run board and the home in its title', () => {
     const { container } = render(
-      <ProjectCard group={g} runs={[sameHomeRun]} nowMs={FROZEN}
+      <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? deadCoord : null)}
                    onOpen={() => {}} onActions={() => {}} />);
-    const marker = container.querySelector('.proj-crossing');
-    expect(marker).not.toBeNull();
-    expect(marker!.textContent).toContain('build9b');
-    expect(marker!.textContent).not.toContain('home');
+    const m = marker(container)!;
+    expect(m.getAttribute('data-marker')).toBe('coordinator-gone');
+    // IN THE TEXT (final fix round): a title is invisible on touch.
+    expect(m.textContent).toBe('coordinator gone');
+    expect(m.getAttribute('title')).toContain('reclaim');
+    expect(m.getAttribute('title')).toContain('homed in home-repo');
   });
 
-  it('marks no row for a SELF-CLAIMED run — there is no separate coordinator to call off-card', () => {
-    // D-2574(c), the `parent === row.session.id` clause. `claimedBy ===
-    // sessionId`: a session that claimed its own run. There is no coordinator
-    // OTHER than this row to name.
-    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
-    const selfClaimed = runFor({ id: 13, sessionId: 'demo-still-cove', claimedBy: 'demo-still-cove' });
+  it('compares the home against the CARD\'s own project, not the run\'s (D-2576)', () => {
+    const abroadRun = { ...orphanRun, project: 'other', homeProject: 'other' };
     const { container } = render(
-      <ProjectCard group={g} runs={[selfClaimed]} nowMs={FROZEN}
+      <ProjectCard group={orphans()} runs={[abroadRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? deadCoord : null)}
                    onOpen={() => {}} onActions={() => {}} />);
-    expect(container.querySelector('.proj-crossing')).toBeNull();
+    expect(marker(container)!.getAttribute('title')).toContain('homed in other');
   });
 
-  it('marks no row for an UNCLAIMED run — no coordinator is a different fact from a coordinator elsewhere', () => {
-    // D-2574(c), the `parent === null` clause. `claimedBy: null` and "the
-    // coordinator is off this card" are two conditions the operator reads
-    // differently; collapsing them would be the overloaded-silence shape this
-    // repo forbids at a seam.
-    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
-    const unclaimed = runFor({ id: 14, sessionId: 'demo-still-cove', claimedBy: null });
+  it('says nothing about home when the measured home IS the card\'s own project', () => {
     const { container } = render(
-      <ProjectCard group={g} runs={[unclaimed]} nowMs={FROZEN}
+      <ProjectCard group={orphans()} runs={[{ ...orphanRun, homeProject: 'demo' }]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? deadCoord : null)}
                    onOpen={() => {}} onActions={() => {}} />);
-    expect(container.querySelector('.proj-crossing')).toBeNull();
+    expect(marker(container)!.getAttribute('title')).not.toContain('homed');
   });
 
-  it('compares the crossing against the CARD\'s own project, not the run\'s (D-2576)', () => {
-    // Every other fixture in this file sets `run.project` equal to
-    // `group.project`, which is why this comparison shipped unwitnessed —
-    // Task 7's `abroad` list is the reason it stops being safe to assume.
-    // Here the run's OWN project ('other') equals its `homeProject`, so a
-    // comparison against `run.project` would read this as measured sameness
-    // and stay silent; a comparison against `group.project` ('demo') reads it
-    // as a genuine crossing and names the home.
-    const g = grp({ project: 'demo', sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
-    const abroadRun = runFor({
-      id: 15, sessionId: 'demo-still-cove', claimedBy: 'off-card-coordinator',
-      project: 'other', homeProject: 'other',
-    });
+  it('says the coordinator is HIBERNATED, not gone, when it sleeps — and names the wake, not the reclaim (D-5242)', () => {
+    const sleepingCoord = hibernatedSession(FROZEN - 3_600_000, { id: 'off-card-coordinator', project: 'elsewhere' });
     const { container } = render(
-      <ProjectCard group={g} runs={[abroadRun]} nowMs={FROZEN}
+      <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? sleepingCoord : null)}
                    onOpen={() => {}} onActions={() => {}} />);
-    const marker = container.querySelector('.proj-crossing');
-    expect(marker).not.toBeNull();
-    expect(marker!.textContent).toContain('home other');
+    const m = marker(container)!;
+    expect(m.getAttribute('data-marker')).toBe('coordinator-hibernated');
+    expect(m.textContent).toBe('coordinator hibernated');
+  });
+
+  // D-7371: a hibernated orphan or never-started coordinator (the server reads it `dead`) is asleep, never gone.
+  it.each(['orphan', 'never-started'] as const)('says HIBERNATED, not gone, for a hibernated %s coordinator (D-7371)', (lifecycle) => {
+    const sleepingCoord = fleetSession({ id: 'off-card-coordinator', project: 'elsewhere', status: 'dead', bucket: 'dead',
+      lifecycle, hibernatedAt: FROZEN - 3_600_000 });
+    const { container } = render(
+      <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? sleepingCoord : null)}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const m = marker(container)!;
+    expect(m.getAttribute('data-marker')).toBe('coordinator-hibernated');
+    expect(container.textContent).not.toContain('coordinator gone');
+  });
+
+  // D-7370: a substrate stamp over a pane tmux called gone is doubt (D-309): no marker, no "coordinator gone".
+  it('claims nothing about a coordinator whose gone pane carries a substrate stamp (D-7370)', () => {
+    const stamped = fleetSession({ id: 'off-card-coordinator', project: 'elsewhere', status: 'dead', bucket: 'dead',
+      lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' } });
+    const { container } = render(
+      <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? stamped : null)}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(marker(container)).toBeNull();
+    expect(container.textContent).not.toContain('coordinator gone');
+  });
+
+  it('claims nothing about a coordinator the frame has not measured', () => {
+    const { container } = render(
+      <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(marker(container)).toBeNull();
+    expect(container.textContent).not.toContain('coordinator gone');
+  });
+
+  it('reads dead as unknown while frameSeen is not passed — D-1138\'s half: a dead session alone is not enough', () => {
+    const { container } = render(
+      <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN} coordOf={() => deadCoord}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(marker(container)).toBeNull();
   });
 });
 
@@ -1184,5 +1312,868 @@ describe('the home card lists the waves running abroad', () => {
       <ProjectCard group={grp({ sessions: [sess(), worker] })} runs={[]} abroad={[settledAway]} nowMs={FROZEN}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-nest')).toBeNull();
+  });
+
+  it('renders the elsewhere lines as text with no control, and nothing when nothing moved', () => {
+    const { container, rerender } = render(
+      <ProjectCard group={grp({ sessions: [], pin: { state: 'empty' }, elsewhere: [{ project: 'project-n', count: 2 }] })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const line = container.querySelector('.proj-elsewhere-line')!;
+    expect(line.textContent).toBe('2 workspaces under project-n');
+    expect(container.querySelectorAll('.proj-elsewhere button, .proj-elsewhere a')).toHaveLength(0);
+    rerender(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-elsewhere')).toBeNull();
+  });
+});
+
+// D-5545: spec §6's repo label left the row. A row whose project differs from its card's carries the cross-project
+// chip (D-5527) inside its button instead, which keeps two same-slug rows two accessible names; the session header
+// names the repository.
+describe('the repo label appears only where the card stops implying it (spec §6, Task 6)', () => {
+  const moved = sess({ id: 'project-d-still-river', project: 'project-d', workspace: 'still-river', boardProject: 'demo' });
+
+  it('labels no row with a repo: a moved row says whose code it works on instead', () => {
+    render(<ProjectCard group={grp({ sessions: [sess(), moved] })} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-repo')).toBeNull();
+    expect(screen.getByRole('button', { name: /still-river.*works on.*project-d/ })).toBeInTheDocument();
+  });
+  it('two colliding slugs on one card are two distinct accessible names', () => {
+    const own = sess({ id: 'demo-still-river', workspace: 'still-river' });
+    render(<ProjectCard group={grp({ sessions: [own, moved] })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByRole('button', { name: 'still-river' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /still-river.*works on.*project-d/ })).toBeInTheDocument();
+  });
+});
+
+describe('the Released (n) fold (workspace lifecycle spec §5.1)', () => {
+  const released = (id: string, program: string, closedAt: number, over: Partial<FleetSession> = {}, child = false): FleetSession =>
+    sess({
+      id, workspace: id.slice(5), bucket: 'done',
+      releasedFrom: { runId: closedAt, program, programTitle: program === 'alpha' ? 'Alpha programme' : null, claimedBy: 'coord', closedAt, child },
+      ...over,
+    });
+  const archivedRow = sess({ id: 'demo-old-bay', workspace: 'old-bay', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 1_785_300_000 });
+
+  it('renders nothing when nothing is released', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.proj-released')).toBeNull();
+  });
+
+  it('is collapsed by default, and sits directly ABOVE the Archived fold', () => {
+    const g = grp({ released: [released('demo-amber-delta', 'alpha', 200)], archived: [archivedRow] });
+    const { container } = render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
+    const toggle = screen.getByRole('button', { name: /released \(1\)/i });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(container.querySelectorAll('.proj-released-body .sess-line')).toHaveLength(0);
+    const folds = [...container.querySelectorAll('.proj-released, .proj-archived')].map((e) => e.className);
+    expect(folds).toEqual(['proj-released', 'proj-archived']);
+  });
+
+  it('hides along with the rest of the card when the card is collapsed', () => {
+    render(<ProjectCard collapsed group={grp({ released: [released('demo-amber-delta', 'alpha', 200)] })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByRole('button', { name: /released/i })).not.toBeInTheDocument();
+  });
+
+  it('toggles under its own composite key, and expands to rows grouped by programme that still open', () => {
+    const onOpen = vi.fn();
+    const onToggle = vi.fn();
+    const g = grp({ released: [
+      released('demo-amber-delta', 'alpha', 200),
+      released('demo-still-cove', 'beta', 300),
+      released('demo-quiet-bay', 'alpha', 100),
+    ] });
+    const { container, rerender } = render(<ProjectCard group={g} onOpen={onOpen} onToggle={onToggle} onActions={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /released \(3\)/i }));
+    expect(onToggle).toHaveBeenCalledWith('demo::released');
+    rerender(<ProjectCard group={g} onOpen={onOpen} onToggle={onToggle} onActions={() => {}} releasedOpen />);
+    const headings = [...container.querySelectorAll('.proj-released-heading')].map((e) => e.textContent);
+    expect(headings).toEqual(['beta', 'alpha · Alpha programme']);
+    const rows = [...container.querySelectorAll('.proj-released-body .sess-line')].map((e) => e.textContent ?? '');
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toContain('amber-delta');
+    expect(rows[2]).toContain('quiet-bay');
+    fireEvent.click(screen.getByText('amber-delta'));
+    expect(onOpen).toHaveBeenCalledWith('demo-amber-delta');
+  });
+
+  it('"Archive all" counts only the rows it would send, and names the children it skips', () => {
+    const onArchiveReleased = vi.fn();
+    const g = grp({ released: [
+      released('demo-amber-delta', 'alpha', 200),
+      released('demo-kid-one', 'alpha', 150, {}, true),
+    ] });
+    render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} releasedOpen onArchiveReleased={onArchiveReleased} />);
+    const button = screen.getByRole('button', { name: 'Archive all 1 released workspace in demo' });
+    expect(button).toHaveTextContent('Archive all (1)');
+    fireEvent.click(button);
+    expect(onArchiveReleased).toHaveBeenCalledWith('demo');
+    expect(screen.getByText('Archive all skips 1 child workspace.')).toBeInTheDocument();
+  });
+
+  it('no button without a handler, none when every row is a child, and a disabled one while the loop runs', () => {
+    const one = grp({ released: [released('demo-amber-delta', 'alpha', 200)] });
+    const { rerender } = render(<ProjectCard group={one} onOpen={() => {}} onActions={() => {}} releasedOpen />);
+    expect(screen.queryByRole('button', { name: /archive all/i })).not.toBeInTheDocument();
+    rerender(<ProjectCard group={grp({ released: [released('demo-kid-one', 'alpha', 150, {}, true)] })}
+      onOpen={() => {}} onActions={() => {}} releasedOpen onArchiveReleased={() => {}} />);
+    expect(screen.queryByRole('button', { name: /archive all/i })).not.toBeInTheDocument();
+    rerender(<ProjectCard group={one} onOpen={() => {}} onActions={() => {}} releasedOpen onArchiveReleased={() => {}} archivingReleased />);
+    const running = screen.getByRole('button', { name: 'Archiving released workspaces in demo' });
+    expect(running).toBeDisabled();
+    expect(running).toHaveTextContent('Archiving…');
+  });
+
+  it('shows itself while it holds the selected row — a release is not the operator\u2019s act, so the row being read must not vanish', () => {
+    const g = grp({ released: [released('demo-amber-delta', 'alpha', 200)] });
+    const { container, rerender } = render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelectorAll('.proj-released-body .sess-line')).toHaveLength(0);
+    rerender(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} selectedId="demo-amber-delta" />);
+    expect(screen.getByRole('button', { name: /released \(1\)/i })).toHaveAttribute('aria-expanded', 'true');
+    expect(container.querySelectorAll('.proj-released-body .sess-line')).toHaveLength(1);
+  });
+
+  it('the toggle is disabled while the selected row holds the fold open, and live otherwise', () => {
+    // Forced open by the selection, a tap could not collapse the fold — it would only invert the stored key.
+    const g = grp({ released: [released('demo-amber-delta', 'alpha', 200)] });
+    const onToggle = vi.fn();
+    const { rerender } = render(<ProjectCard group={g} onOpen={() => {}} onToggle={onToggle} onActions={() => {}} selectedId="demo-amber-delta" />);
+    const held = screen.getByRole('button', { name: /released \(1\)/i });
+    expect(held).toBeDisabled();
+    fireEvent.click(held);
+    expect(onToggle).not.toHaveBeenCalled();
+    // The control: a selection elsewhere leaves the toggle live.
+    rerender(<ProjectCard group={g} onOpen={() => {}} onToggle={onToggle} onActions={() => {}} selectedId="demo-elsewhere" />);
+    const free = screen.getByRole('button', { name: /released \(1\)/i });
+    expect(free).toBeEnabled();
+    fireEvent.click(free);
+    expect(onToggle).toHaveBeenCalledWith('demo::released');
+    // And a fold the operator opened (`releasedOpen`) with the selection elsewhere: shown, yet its toggle is live,
+    // so the operator can close what they opened. Only the selection disables it, never the fold being shown.
+    onToggle.mockClear();
+    rerender(<ProjectCard group={g} onOpen={() => {}} onToggle={onToggle} onActions={() => {}} releasedOpen selectedId="demo-elsewhere" />);
+    const opened = screen.getByRole('button', { name: /released \(1\)/i });
+    expect(opened).toHaveAttribute('aria-expanded', 'true');
+    expect(opened).toBeEnabled();
+    fireEvent.click(opened);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onToggle).toHaveBeenCalledWith('demo::released');
+  });
+
+  it('a COLLAPSED card still marks the selection when the selected row sits only in Released', () => {
+    // Before the fold a released row lived in `group.sessions`, so the folded header carried the mark; the row now
+    // lives in `group.released`, and the mark must follow it.
+    const g = grp({ released: [released('demo-amber-delta', 'alpha', 200)] });
+    const { container } = render(
+      <ProjectCard collapsed selectedId="demo-amber-delta" group={g} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card')).toHaveAttribute('data-holds-selection');
+  });
+});
+
+// Delegation broker wave 4, PR2 Task 2.7: delegated work, worktrees and the two groups on a project card. The card
+// draws `fleetTree`'s rows and the words module's labels; it decides nothing of its own.
+describe('delegation rows on a project card (delegation broker wave 4)', () => {
+  const coordA = fleetSession({ id: 'coord-a', project: 'project-a', workspace: null, workdir: '/work/project-a', name: 'coord-a' });
+  const workerA = fleetSession({ id: 'worker-a', project: 'project-a', workspace: 'worker-a', workdir: '/work/project-a/.ws/worker-a', role: 'child' });
+  const prun = (over: Partial<RunSummary>): RunSummary => ({
+    id: 7, program: 'port-api', programTitle: 'Port the API', wave: 1, waveOf: 3, project: 'project-a', homeProject: null,
+    sessionId: 'worker-a', workspace: 'worker-a', branch: null, state: 'dispatched', kind: 'work', reviews: null,
+    claimedBy: 'coord-a', resumed: false, clearedAt: null, openedAt: 1, dispatchStartedAt: null, dispatchedAt: null,
+    closedAt: null, handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,
+    health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true,
+      clearError: null, coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false, ...over,
+  });
+  const cardFor = (w: DelegationProjectionWire, sessions = [coordA], runs: RunSummary[] = []) =>
+    fleetTree(withRunBinding(sessions, runs), [], runs, {}, w).find((g) => g.project === 'project-a')!;
+  const countText = (root: HTMLElement, text: string): number =>
+    [...root.querySelectorAll('*')].filter((el) => el.childElementCount === 0 && el.textContent === text).length;
+
+  it('W4-U28: a raw worktree under its parent reads inferred and its Bash call, with no control of its own', () => {
+    const { container } = render(<ProjectCard group={cardFor(frame({ leases: [lease({ sourceKind: 'raw' })] }))}
+      onOpen={() => {}} onActions={() => {}} />);
+    const row = container.querySelector<HTMLElement>('.proj-work');
+    if (row === null) throw new Error('no worktree row');
+    expect(row.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);
+    const chips = [...row.querySelectorAll('.proj-work-chip')];
+    expect(chips.map((c) => c.textContent)).toEqual(['inferred', 'Bash call …est_0001']);
+    expect(chips[1]!.getAttribute('title')).toContain(TOOL_USE_ID);
+    expect(chips[0]!.getAttribute('title')).toContain(TOOL_USE_ID);
+    expect(row.querySelector('button')).toBeNull();
+    expect(row.closest('.proj-nest')!.querySelector('button')).toBeNull();
+    // No user-facing word says "lease": the operator's word is "worktree".
+    expect(container.textContent).not.toMatch(/lease/i);
+  });
+
+  it('W4-U29: every raw worktree wears inferred wherever it lands: nested, via a worker, and in the opened groups', () => {
+    const w = frame({
+      leases: [
+        lease({ leaseId: 'l-nested', sourceKind: 'raw' }),
+        lease({ leaseId: 'l-via', sourceKind: 'raw', via: 'worker-a', adminRecord: 'agent-v1', canonicalPath: '/work/project-a/.claude/worktrees/agent-v1' }),
+        lease({ leaseId: 'l-off', sourceKind: 'raw', parentId: 'coord-gone', adminRecord: 'agent-o1', canonicalPath: '/work/project-a/.claude/worktrees/agent-o1' }),
+        lease({ leaseId: 'l-agent', sourceKind: 'agent', adminRecord: 'agent-g1', canonicalPath: '/work/project-a/.claude/worktrees/agent-g1' }),
+      ],
+      unowned: [unowned({ verdict: 'conflicting', adminRecord: 'agent-a1' })],
+    });
+    const { container } = render(<ProjectCard group={cardFor(w, [coordA, workerA], [prun({})])} onOpen={() => {}} onActions={() => {}}
+      offlineOpen unownedOpen />);
+    expect(countText(container, 'inferred')).toBe(3);
+    const via = [...container.querySelectorAll('.proj-work')].find((r) => r.textContent?.includes('via '));
+    expect(via?.textContent).toContain('inferred');
+    expect(container.textContent).toContain('Offline coordinator (1)');
+    expect(container.textContent).toContain('Unowned work (1)');
+  });
+
+  it('R9 on the card: a programme worker\'s live activity is a chip on its row, never a row of its own', () => {
+    const w = frame({ activities: [activity({ activityId: 'a-w', parentId: 'worker-a', placement: 'chip' })] });
+    const { container } = render(<ProjectCard group={cardFor(w, [coordA, workerA], [prun({})])} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
+    const chips = [...container.querySelectorAll('.sess-meta-chip')];
+    expect(chips.map((c) => c.textContent)).toEqual(['1 delegated']);
+    expect(chips[0]!.closest('.proj-nest')).not.toBeNull();
+  });
+
+  it('a session in no programme folds three delegated activities into one line, as the rollup decided (main\'s boxes)', () => {
+    const w = frame({ activities: ['a1', 'a2', 'a3'].map((id) => activity({ activityId: id, parentId: 'coord-a' })) });
+    // A working session, so the card is active and open by default (rollup rule 2).
+    const g = cardFor(w, [{ ...coordA, status: 'busy', bucket: 'working' }]);
+    const drawn = (prefs: RollupPrefs) => render(<ProjectCard group={g} rollup={rollupCard(g, prefs, Date.now(), null)}
+      onOpen={() => {}} onActions={() => {}} onToggleChildren={() => {}} />);
+    const { container, unmount } = drawn(NO_ROLLUP_PREFS);
+    expect(container.querySelector('section.pg-box'), 'coord-a claims no run: it is no box').toBeNull();
+    const line = screen.getByRole('button', { name: '3 delegated' });
+    expect(line.getAttribute('aria-expanded')).toBe('false');
+    expect(line.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);
+    expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
+    unmount();
+    const open = drawn(toggleChildren(NO_ROLLUP_PREFS, 'coord-a'));
+    expect(screen.getByRole('button', { name: '3 delegated' }).getAttribute('aria-expanded')).toBe('true');
+    expect(open.container.querySelectorAll('.proj-work')).toHaveLength(3);
+  });
+
+  it('W4-U30: a group is a closed disclosure by default, opened under its composite key', async () => {
+    const w = frame({ unowned: [unowned({ adminRecord: 'u1' }), unowned({ adminRecord: 'u2' }), unowned({ adminRecord: 'u3' })] });
+    const onToggle = vi.fn();
+    const { container, rerender } = render(<ProjectCard group={cardFor(w)} onOpen={() => {}} onActions={() => {}} onToggle={onToggle} />);
+    const toggle = screen.getByRole('button', { name: /Unowned work \(3\)/ });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('title')).toContain('never makes one eligible for removal');
+    expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
+    await userEvent.click(toggle);
+    expect(onToggle).toHaveBeenCalledWith('project-a::unowned');
+    rerender(<ProjectCard group={cardFor(w)} onOpen={() => {}} onActions={() => {}} onToggle={onToggle} unownedOpen />);
+    expect(screen.getByRole('button', { name: /Unowned work \(3\)/ }).getAttribute('aria-expanded')).toBe('true');
+    expect(container.querySelectorAll('.proj-work')).toHaveLength(3);
+  });
+
+  it('VIS-P1: an offline-group row names the session it came from: its listed label, else its raw id', () => {
+    const arch = fleetSession({ id: 'coord-arch', project: 'project-a', workspace: null, name: 'old coordinator', archivedAt: 1_800_000_000_000 });
+    const w = frame({
+      activities: [activity({ activityId: 'a-arch', parentId: 'coord-arch', displayName: 'old work' })],
+      leases: [lease({ leaseId: 'l-gone', parentId: 'coord-gone', adminRecord: 'agent-o1', canonicalPath: '/work/project-a/.claude/worktrees/agent-o1' })],
+    });
+    const parts = (root: HTMLElement): (string | null)[][] =>
+      [...root.querySelectorAll('.proj-work')].map((r) => [...r.querySelectorAll('.proj-work-part')].map((p) => p.textContent));
+    const off = render(<ProjectCard group={cardFor(w, [coordA, arch])} onOpen={() => {}} onActions={() => {}}
+      coordOf={(id) => (id === arch.id ? arch : null)} offlineOpen />);
+    expect(parts(off.container)).toEqual([
+      ['agent worktree', 'agent-o1', 'not confirmed', 'from coord-gone'],
+      ['agent', 'old work', 'not confirmed', 'from old coordinator'],
+    ]);
+    off.unmount();
+    // A row under its own session names no parent.
+    const nested = render(<ProjectCard group={cardFor(frame({ activities: [activity({ parentId: 'coord-a' })] }))}
+      onOpen={() => {}} onActions={() => {}} />);
+    expect(parts(nested.container)).toEqual([['agent', 'explore the tree', 'not confirmed']]);
+  });
+});
+
+// Delegation broker wave 5, PR10 (Task 5.10.2): the worktree controls on a card's rows. The words module decides which control a
+// row offers and spells every word; the card draws them, asks first where the words say so, calls the door, and says a
+// refusal in worktree words (D-8097). O5-8 (c) (D-7847) and D-8095: an unowned row offers Not delegated only, and only
+// through the lease the projection hid on its tree. Fix round 1 (review 1615): focus after an act (F2), the refusal's
+// region (F3), Attach only with a live own session (F4), tone, focus, toast and busy pinned (F6), and F9's details. Fix round 2
+// (review 1623): a door refusal only at a door's status (F2), focus and the regions while a row offers none (F3), an ask
+// closed by its row (F4), a dead session's Attach (F5), and F8's details. F1's one-post rows are `worktree-confirm-close`'s.
+describe('worktree controls on a project card (delegation broker wave 5, PR10)', () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); clearAuthLost(); });
+  type Call = { url: string; body: unknown };
+  const accepted = (expiresAt: string | null = '2026-11-24T12:00:00.000Z') => okJson({ ok: true, lease: LEASE_ID, generation: 2,
+    disposition: 'retained', expiresAt, carrier: 'pending' });
+  const recorder = (answer: (url: string) => Response | Promise<Response> = () => accepted()) => {
+    const calls: Call[] = [];
+    return { calls, fetch: (url: string, init?: RequestInit) => {
+      calls.push({ url, body: typeof init?.body === 'string' ? JSON.parse(init.body) : init?.body });
+      return answer(url);
+    } };
+  };
+  const RESOLVE = new RegExp(`/api/leases/${LEASE_ID}/resolve$`);
+  const rowOf = (container: HTMLElement, worktree = 'agent-a1'): HTMLElement =>
+    [...container.querySelectorAll<HTMLElement>('.proj-work')].find((r) => r.textContent?.includes(worktree))!;
+  /** F2: the focus sits on a live element in the row (never a disabled control). */
+  const focusInRow = (row: HTMLElement): void => {
+    const at = document.activeElement as HTMLElement | null;
+    expect(at !== null && row.contains(at), `focus is in the row, not on ${at?.tagName}.${at?.className}`).toBe(true);
+    expect((at as HTMLButtonElement).disabled ?? false, 'focus is not on a disabled control').toBe(false);
+  };
+  const confirmButton = (dialog: HTMLElement, name: string): HTMLElement => within(dialog).getByRole('button', { name });
+
+  it('W5-U4: an adopted row says it is kept until its date once, and Keep calls operator-retain, toasts its date and keeps the focus', async () => {
+    const r = recorder();
+    const { container, getByRole, getByText } = renderCard(worldWithLease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' }),
+      { fetch: r.fetch });
+    expect(getByText('worktree kept until 17 Nov')).toBeTruthy();
+    expect(container.textContent).not.toMatch(/kept\b.*\bkept until/);
+    await userEvent.click(getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    expect(r.calls.map((c) => c.url)).toEqual([expect.stringMatching(/\/api\/leases\/[0-9a-f-]{36}\/operator-retain$/)]);
+    expect(await screen.findByText('Worktree kept until 24 Nov')).toBeTruthy();
+    focusInRow(rowOf(container));
+  });
+
+  it('W5-U5: an inferred row\'s Attach offers only its own session, posts {action:\'attach\', parent}, says its date and keeps the focus', async () => {
+    const r = recorder();
+    const { container } = renderCard(worldWithLease({ sourceKind: 'raw' }), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Attach to… (agent-a1)' }));
+    expect(r.calls).toEqual([]);
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('Attach this worktree to coord-a?');
+    // The one choice is the worktree's own session: no picker, no list of sessions.
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(screen.queryByRole('combobox')).toBeNull();
+    await userEvent.click(confirmButton(dialog, 'Attach to coord-a'));
+    expect(r.calls).toEqual([{ url: expect.stringMatching(RESOLVE), body: { action: 'attach', parent: 'coord-a' } }]);
+    expect(await screen.findByText('Worktree attached to coord-a, kept until 24 Nov')).toBeTruthy();
+    focusInRow(rowOf(container));
+  });
+
+  it('W5-U5 (R9): a programme worker\'s inferred worktree attaches to the worker, never to the coordinator it is drawn under', async () => {
+    const worker = fleetSession({ id: 'worker-a', project: 'project-a', workspace: 'worker-a', workdir: '/work/project-a/.ws/worker-a', role: 'child' });
+    const r = recorder();
+    renderCard(worldWithLease({ sourceKind: 'raw', parentId: 'coord-a', via: 'worker-a' }, [COORD_A, worker]), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Attach to… (agent-a1)' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Attach to worker-a' }));
+    expect(screen.queryByRole('button', { name: 'Attach to coord-a' })).toBeNull();
+    expect(r.calls).toEqual([{ url: expect.stringMatching(RESOLVE), body: { action: 'attach', parent: 'worker-a' } }]);
+  });
+
+  it('F4: Attach shows only while the worktree\'s own session is listed live; a raw row whose session is gone offers none', () => {
+    const worker = fleetSession({ id: 'worker-a', project: 'project-a', workspace: 'worker-a', workdir: '/work/project-a/.ws/worker-a', role: 'child' });
+    const gone = renderCard(worldWithLease({ sourceKind: 'raw', parentId: 'coord-gone', group: 'offline-coordinator' }));
+    const row = rowOf(gone.container);
+    expect(row.textContent).toContain('from coord-gone');
+    expect(within(row).getAllByRole('button').map((b) => b.textContent)).toEqual(['Keep worktree', 'Not delegated']);
+    gone.unmount();
+    // CONTROL: the same offline row whose own session (`via`) is listed live offers Attach to it.
+    const live = renderCard(worldWithLease({ sourceKind: 'raw', parentId: 'coord-gone', via: 'worker-a', group: 'offline-coordinator' },
+      [COORD_A, worker]));
+    expect(within(rowOf(live.container)).getAllByRole('button').map((b) => b.textContent)).toEqual(['Keep worktree', 'Attach to…', 'Not delegated']);
+  });
+
+  it('W5-U6: an unowned row with a hidden lease offers Not delegated only, posting to that lease; with none it offers nothing', async () => {
+    const r = recorder();
+    const { container, unmount } = renderCard(worldWithUnowned({ verdict: 'conflicting', leaseId: LEASE_ID }), { fetch: r.fetch });
+    const row = container.querySelector<HTMLElement>('.proj-work')!;
+    expect([...row.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Not delegated']);
+    // D-8095: the wire carries no parent for the hidden lease, so no attach can be posted from this row.
+    expect(screen.queryByRole('button', { name: /^Attach/ })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-u1)' }));
+    await userEvent.click(confirmButton(await screen.findByRole('dialog'), 'Not delegated'));
+    expect(r.calls).toEqual([{ url: expect.stringMatching(RESOLVE), body: { action: 'foreign' } }]);
+    unmount();
+    const none = renderCard(worldWithUnowned({ verdict: 'conflicting' }));
+    expect(none.container.querySelector('.proj-work')).not.toBeNull();
+    expect(none.container.querySelector('.proj-work button')).toBeNull();
+    expect(none.container.querySelector('.proj-work-controls')).toBeNull();
+  });
+
+  it('W5-U7 (F6): Not delegated asks first in the danger tone with Cancel focused, says what it means, and posts only after it', async () => {
+    const r = recorder();
+    const { container } = renderCard(worldWithLease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' }), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-a1)' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain(
+      'This worktree is not delegated work. It will no longer be shown here, and it is not held back from the disk sweep.');
+    expect(confirmButton(dialog, 'Not delegated').className, 'the danger tone').toMatch(/\bbtn-danger\b/);
+    expect(document.activeElement, 'Cancel holds the focus').toBe(confirmButton(dialog, 'Cancel'));
+    expect(r.calls).toEqual([]);
+    await userEvent.click(confirmButton(dialog, 'Cancel'));
+    expect(r.calls).toEqual([]);
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-a1)' }));
+    await userEvent.click(confirmButton(await screen.findByRole('dialog'), 'Not delegated'));
+    expect(r.calls).toEqual([{ url: expect.stringMatching(RESOLVE), body: { action: 'foreign' } }]);
+    expect(await screen.findByText('Worktree marked not delegated')).toBeTruthy();
+    focusInRow(rowOf(container));
+  });
+
+  it('F2: a row that leaves while it holds the focus hands it to its card\'s toggle', async () => {
+    const r = recorder();
+    const world = worldWithLease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' });
+    const { container, rerender } = renderCard(world, { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-a1)' }));
+    await userEvent.click(confirmButton(await screen.findByRole('dialog'), 'Not delegated'));
+    await screen.findByText('Worktree marked not delegated');
+    focusInRow(rowOf(container));
+    // The next frame carries no row for it.
+    rerender(cardElement({ ...world, frame: { ...world.frame, leases: [] } }));
+    expect(container.querySelector('.proj-work')).toBeNull();
+    expect(document.activeElement).toBe(container.querySelector('.proj-card-toggle'));
+  });
+
+  it('W5-U8: a transferring row says "moving to a run" and offers no control; a promoted one offers only Not delegated', () => {
+    const { container, unmount } = renderCard(worldWithLease({ disposition: 'transferring', expiresAt: '2026-11-17T12:00:00.000Z' }));
+    expect(screen.getByText('moving to a run')).toBeTruthy();
+    expect(container.querySelector('.proj-work button')).toBeNull();
+    expect(container.textContent).not.toContain('kept until');
+    unmount();
+    const promoted = renderCard(worldWithLease({ disposition: 'promoted' }));
+    expect(screen.getByText('moved to a run')).toBeTruthy();
+    expect([...promoted.container.querySelectorAll('.proj-work button')].map((b) => b.textContent)).toEqual(['Not delegated']);
+  });
+
+  it('W5-U9 (D-8097, F3): a refusal is said in worktree words in a region mounted empty, its detail never drawn, and nothing retries', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const detail = 'lease 0b0c3f8e is behind its carrier; retry operator-retain later';
+    const r = recorder(() => okJson({ ok: false, error: 'carrier-behind', detail }, 409));
+    const { container } = renderCard(worldWithLease({ disposition: 'retained', expiresAt: '2026-11-17T12:00:00.000Z' }), { fetch: r.fetch });
+    const row = rowOf(container);
+    const region = within(row).getByRole('alert');
+    expect(region.textContent, 'the region is mounted empty, before it has anything to say').toBe('');
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    expect(await within(row).findByText('The fleet box has not caught up with this worktree yet. Try again shortly.')).toBe(region);
+    expect(within(row).getByRole('alert'), 'the same region, its text swapped').toBe(region);
+    expect(document.body.textContent).not.toContain(detail);
+    expect(document.body.textContent).not.toMatch(/operator-retain|carrier-behind/);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
+    expect(r.calls, 'nothing is retried by itself').toHaveLength(1);
+  });
+
+  it('D-8097: a refusal word this build does not know says one plain sentence; a failure that is no answer says the app\'s words', async () => {
+    const unknown = recorder(() => okJson({ ok: false, error: 'future-word', detail: 'a newer lease rule refused this' }, 409));
+    const { container } = renderCard(worldWithLease({ disposition: 'retained' }), { fetch: unknown.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    expect(await within(rowOf(container)).findByText('The server refused this.')).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/future-word|newer lease rule/);
+    cleanup();
+    const broken = recorder(() => okJson({ error: 'internal' }, 500));
+    renderCard(worldWithLease({ disposition: 'retained' }), { fetch: broken.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    expect(await screen.findByText(/^Couldn't keep the worktree/)).toBeTruthy();
+    expect(broken.calls).toHaveLength(1);
+  });
+
+  it('F1 (measured, not a departure): a raw row on a conflicting tree, and a box without the hold, each say their refusal', async () => {
+    for (const [error, sentence] of [
+      ['lease-conflicting', 'Two sessions claimed this worktree, so it cannot be kept until that is settled.'],
+      ['box-unsupported', 'The fleet box cannot hold this worktree back from the disk sweep until its ccrc is updated.'],
+    ] as const) {
+      const r = recorder(() => okJson({ ok: false, error, detail: 'lease refused' }, error === 'box-unsupported' ? 503 : 409));
+      const { container } = renderCard(worldWithLease({ sourceKind: 'raw', disposition: 'ephemeral' }), { fetch: r.fetch });
+      await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+      expect(await within(rowOf(container)).findByText(sentence), error).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  it('F6: every control is disabled while an act is in flight, and comes back when it ends', async () => {
+    let release: (r: Response) => void = () => {};
+    const r = recorder(() => new Promise<Response>((res) => { release = res; }));
+    const { container } = renderCard(worldWithLease({ sourceKind: 'raw', disposition: 'retained' }), { fetch: r.fetch });
+    const buttons = () => within(rowOf(container)).getAllByRole('button') as HTMLButtonElement[];
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    expect(buttons().map((b) => b.disabled)).toEqual([true, true, true]);
+    focusInRow(rowOf(container));
+    await act(async () => { release(accepted()); });
+    await screen.findByText('Worktree kept until 24 Nov');
+    expect(buttons().map((b) => b.disabled)).toEqual([false, false, false]);
+  });
+
+  // F9 (a), the confirm's words as it closes, is `worktree-confirm-close.test.tsx`'s: jsdom unmounts a closed sheet at once.
+  it('F9 (b): an ask is dropped when its row stops offering the act, and it never reopens or posts by itself', async () => {
+    const r = recorder();
+    const world = (disposition: 'adopted' | 'transferring') => worldWithLease({ disposition, expiresAt: '2026-11-17T12:00:00.000Z' });
+    const { rerender } = renderCard(world('adopted'), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-a1)' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    rerender(cardElement(world('transferring')));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    rerender(cardElement(world('adopted')));
+    expect(screen.queryByRole('dialog'), 'the ask does not come back with the control').toBeNull();
+    expect(r.calls).toEqual([]);
+  });
+
+  it('F9 (c): a 2xx whose body is not JSON says the act was accepted and its answer unread, with no thrown parse', async () => {
+    const r = recorder(() => new Response('<html>ok</html>', { status: 200, headers: { 'content-type': 'text/html' } }));
+    const { container } = renderCard(worldWithLease({ disposition: 'retained' }), { fetch: r.fetch });
+    const row = rowOf(container);
+    const status = within(row).getByRole('status');
+    expect(status.textContent, 'the status region is mounted empty').toBe('');
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    // F8 (b) (review 1623): an accepted act is no error, so it is said politely, never in the alert.
+    expect(await within(row).findByText(
+      'The server accepted this, but its answer could not be read; the row updates with its next change.')).toBe(status);
+    expect(within(row).getByRole('alert').textContent).toBe('');
+  });
+
+  it('F8 (a) (review 1623): a 2xx that says ok with no expiresAt reads it as no date known, as the wire\'s own reader does', async () => {
+    const r = recorder(() => okJson({ ok: true }));
+    const { container } = renderCard(worldWithLease({ disposition: 'retained' }), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    expect(await screen.findByText('Worktree kept')).toBeTruthy();
+    expect(rowOf(container).textContent).not.toContain('could not be read');
+  });
+
+  it('F2 (review 1623): a refusal that is no door\'s answer (the server\'s real 401, 403, 429 and 501 bodies, a door word at another status) says the app\'s words', async () => {
+    for (const [status, body] of [
+      [401, { ok: false, error: 'unauthenticated', verdict: 'no-session' }],
+      [501, { ok: false, error: 'not-configured' }],
+      [403, { ok: false, error: 'foreign-origin' }],
+      [429, { ok: false, error: 'rate-limited' }],
+      [409, { ok: false, error: 'not-ready', detail: 'a door word at a status it is never sent with' }],
+    ] as const) {
+      const r = recorder(() => okJson(body, status));
+      const { container } = renderCard(worldWithLease({ disposition: 'retained' }), { fetch: r.fetch });
+      await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+      const alert = within(rowOf(container)).getByRole('alert');
+      await vi.waitFor(() => expect(alert.textContent, `${status} ${body.error}`).toMatch(/^Couldn't keep the worktree — /));
+      expect(alert.textContent, `${status} ${body.error}`).not.toBe('The server refused this.');
+      cleanup();
+      clearAuthLost();
+    }
+  });
+
+  it('F5 (review 1623): a session in the dead bucket is still listed, so its inferred worktree offers Attach to it', () => {
+    const dead = fleetSession({ id: 'coord-a', project: 'project-a', workspace: null, workdir: '/work/project-a', name: 'coord-a', bucket: 'dead' });
+    const { container } = renderCard(worldWithLease({ sourceKind: 'raw' }, [dead]));
+    expect(within(rowOf(container)).getAllByRole('button').map((b) => b.textContent)).toEqual(['Keep worktree', 'Attach to…', 'Not delegated']);
+  });
+
+  it('F4 (review 1623): Attach removed by its session leaving the list while its confirm is open closes it; Keep and Not delegated stay; nothing posts', async () => {
+    const r = recorder();
+    const world = worldWithLease({ sourceKind: 'raw' });
+    const { container, rerender } = renderCard(world, { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Attach to… (agent-a1)' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    rerender(cardElement({ ...world, sessions: [] }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(within(rowOf(container)).getAllByRole('button').map((b) => b.textContent)).toEqual(['Keep worktree', 'Not delegated']);
+    rerender(cardElement(world));
+    expect(screen.queryByRole('dialog'), 'the ask does not come back with the control').toBeNull();
+    expect(r.calls).toEqual([]);
+  });
+
+  it('F4 (review 1623): an open Attach closes when the worktree\'s own session changes, and never posts the old one', async () => {
+    const worker = (id: string) => fleetSession({ id, project: 'project-a', workspace: id, workdir: `/work/project-a/.ws/${id}`, role: 'child' });
+    const sessions = [COORD_A, worker('worker-a'), worker('worker-b')];
+    const r = recorder();
+    const at = (via: string) => worldWithLease({ sourceKind: 'raw', parentId: 'coord-a', via }, sessions);
+    const { rerender } = renderCard(at('worker-a'), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Attach to… (agent-a1)' }));
+    expect((await screen.findByRole('dialog')).textContent).toContain('Attach this worktree to worker-a?');
+    rerender(cardElement(at('worker-b')));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(r.calls).toEqual([]);
+  });
+
+  it('F3 (a) (review 1623): a row that goes transferring while its box holds the focus hands it to the card\'s toggle, its regions kept', async () => {
+    const r = recorder();
+    const world = (disposition: 'retained' | 'transferring') => worldWithLease({ disposition, expiresAt: '2026-11-17T12:00:00.000Z' });
+    const { container, rerender } = renderCard(world('retained'), { fetch: r.fetch });
+    const alert = within(rowOf(container)).getByRole('alert');
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    await screen.findByText('Worktree kept until 24 Nov');
+    expect(document.activeElement).toBe(container.querySelector('.proj-work-controls'));
+    rerender(cardElement(world('transferring')));
+    expect(container.querySelector('.proj-work button')).toBeNull();
+    expect(document.activeElement).toBe(container.querySelector('.proj-card-toggle'));
+    expect(within(rowOf(container)).getByRole('alert'), 'the region stays mounted while the row offers none').toBe(alert);
+  });
+
+  it('F3 (a) (review 1623): in a delegation group, the focus goes to the group\'s toggle, the nearest heading still drawn', async () => {
+    const r = recorder();
+    const world = (disposition: 'retained' | 'transferring') =>
+      worldWithLease({ disposition, parentId: 'coord-gone', group: 'offline-coordinator' });
+    const { container, rerender } = renderCard(world('retained'), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    await screen.findByText(/^Worktree kept/);
+    rerender(cardElement(world('transferring')));
+    const toggles = [...container.querySelectorAll('.proj-group-toggle')];
+    expect(toggles.length).toBeGreaterThan(0);
+    expect(document.activeElement).toBe(toggles.find((t) => t.textContent?.includes(GROUP_WORDS['offline-coordinator'].label)));
+  });
+
+  it('F3 (b) (review 1623): a row first drawn with none that later offers a control and loses it, focused, hands the focus over', () => {
+    const world = (disposition: 'transferring' | 'promoted') => worldWithLease({ disposition });
+    const { container, rerender } = renderCard(world('transferring'));
+    expect(container.querySelector('.proj-work button')).toBeNull();
+    rerender(cardElement(world('promoted')));
+    act(() => { screen.getByRole('button', { name: 'Not delegated (agent-a1)' }).focus(); });
+    rerender(cardElement(world('transferring')));
+    expect(document.activeElement).toBe(container.querySelector('.proj-card-toggle'));
+  });
+
+  it('F3 (c) (review 1623): a refusal that settles while the row offers none is said then, in the same region, which never remounts', async () => {
+    let release: (r: Response) => void = () => {};
+    const r = recorder(() => new Promise<Response>((res) => { release = res; }));
+    const world = (disposition: 'retained' | 'transferring') => worldWithLease({ disposition });
+    const { container, rerender } = renderCard(world('retained'), { fetch: r.fetch });
+    const alert = within(rowOf(container)).getByRole('alert');
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    rerender(cardElement(world('transferring')));
+    await act(async () => { release(okJson({ ok: false, error: 'wrong-disposition', detail: 'x' }, 409)); });
+    expect(alert.isConnected).toBe(true);
+    await vi.waitFor(() => expect(alert.textContent).toBe("This worktree's state does not allow that now."));
+    rerender(cardElement(world('retained')));
+    // Review 1624 F5 (ruled): the refusal answered the act the row offered before; once its controls are back it is cleared.
+    expect(within(rowOf(container)).getByRole('alert'), 'the same element, still mounted').toBe(alert);
+    expect(alert.textContent, 'the old refusal is no longer said').toBe('');
+  });
+
+  it('F5 (review 1624): a refusal is cleared when the row\'s state moves under the same controls; a repeat of the act says it again', async () => {
+    const r = recorder(() => okJson({ ok: false, error: 'wrong-disposition', detail: 'x' }, 409));
+    const world = (disposition: 'retained' | 'adopted') => worldWithLease({ disposition, expiresAt: '2026-11-17T12:00:00.000Z' });
+    const { container, rerender } = renderCard(world('retained'), { fetch: r.fetch });
+    const alert = within(rowOf(container)).getByRole('alert');
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    await vi.waitFor(() => expect(alert.textContent).toBe("This worktree's state does not allow that now."));
+    // CONTROL: a frame that changes nothing the row offers keeps the sentence.
+    rerender(cardElement(world('retained')));
+    expect(alert.textContent).toBe("This worktree's state does not allow that now.");
+    rerender(cardElement(world('adopted')));
+    expect(within(rowOf(container)).getAllByRole('button').map((b) => b.textContent), 'the same two controls').toEqual(
+      ['Keep worktree', 'Not delegated']);
+    expect(within(rowOf(container)).getByRole('alert'), 'the region stays mounted').toBe(alert);
+    expect(alert.textContent, 'its text emptied').toBe('');
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    await vi.waitFor(() => expect(alert.textContent).toBe("This worktree's state does not allow that now."));
+  });
+
+  it('F2 (review 1624): an unknown word at a status no door sends, and a 409 body with no ok, say the app\'s words', async () => {
+    for (const [status, body, what] of [
+      [500, { ok: false, error: 'future-word' }, 'an unknown word away from a door status'],
+      [409, { error: 'x' }, 'a body without ok: false'],
+    ] as const) {
+      const r = recorder(() => okJson(body, status));
+      const { container } = renderCard(worldWithLease({ disposition: 'retained' }), { fetch: r.fetch });
+      await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+      const alert = within(rowOf(container)).getByRole('alert');
+      await vi.waitFor(() => expect(alert.textContent, what).toMatch(/^Couldn't keep the worktree — /));
+      expect(alert.textContent, what).not.toBe('The server refused this.');
+      expect(r.calls, what).toHaveLength(1);
+      cleanup();
+    }
+  });
+
+  it('F1 (review 1624): a hand-off clears the box\'s hold, so a later change moves no focus; every focus the row moves skips the scroll', async () => {
+    const r = recorder();
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      const world = (disposition: 'retained' | 'promoted' | 'transferring') =>
+        worldWithLease({ sourceKind: 'raw', disposition, expiresAt: '2026-11-17T12:00:00.000Z' });
+      const { container, rerender } = renderCard(world('retained'), { fetch: r.fetch });
+      const toggle = container.querySelector<HTMLElement>('.proj-card-toggle')!;
+      // The row's own script focuses: the box after Keep, after a confirmed Not delegated, and the hand-off below.
+      const ours = (): unknown[] => focus.mock.calls.filter((_, i) => {
+        const el = focus.mock.contexts[i] as HTMLElement;
+        return el === toggle || el.classList.contains('proj-work-controls');
+      }).map((c) => c[0]);
+      await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+      await screen.findByText('Worktree kept until 24 Nov');
+      await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-a1)' }));
+      await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Not delegated' }));
+      await screen.findByText('Worktree marked not delegated');
+      // The focus on a button the row then removes, with no blur (as a removal fires none): the box still holds it.
+      act(() => { screen.getByRole('button', { name: 'Attach to… (agent-a1)' }).focus(); });
+      rerender(cardElement(world('promoted')));
+      expect(within(rowOf(container)).getAllByRole('button').map((b) => b.textContent)).toEqual(['Not delegated']);
+      expect(document.activeElement).toBe(document.body);
+      rerender(cardElement(world('transferring')));
+      expect(document.activeElement, 'the hand-off, as F3 (b) rules it').toBe(toggle);
+      // The operator moves on; the box is no longer theirs. The row comes back and goes again: nothing moves.
+      act(() => { toggle.blur(); });
+      rerender(cardElement(world('promoted')));
+      rerender(cardElement(world('transferring')));
+      expect(document.activeElement, 'no focus moved at an unrelated moment').toBe(document.body);
+      expect(ours().length, 'the box twice for Not delegated, once for Keep, and one hand-off').toBe(4);
+      for (const o of ours()) expect(o, 'every focus the row moves skips the scroll').toEqual({ preventScroll: true });
+    } finally {
+      focus.mockRestore();
+    }
+  });
+
+  it('F3 (review 1624): an ask its row stops offering, closed while the sheet gives the focus back to nothing, places it in the box', async () => {
+    const r = recorder();
+    const world = worldWithLease({ sourceKind: 'raw' });
+    const { container, rerender } = renderCard(world, { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Attach to… (agent-a1)' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    // The worktree's session leaves the list: Attach, the opener, goes with it, so the sheet has nothing to give back to.
+    rerender(cardElement({ ...world, sessions: [] }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await vi.waitFor(() => expect(document.activeElement).toBe(container.querySelector('.proj-work-controls')));
+    expect(r.calls).toEqual([]);
+  });
+
+  it('F4 (b) (review 1624): an unowned row that loses its controls while its box holds the focus hands it to its group\'s toggle', async () => {
+    const r = recorder();
+    const { container, rerender } = renderCard(worldWithUnowned({ verdict: 'conflicting', leaseId: LEASE_ID }), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-u1)' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Not delegated' }));
+    await screen.findByText('Worktree marked not delegated');
+    expect(document.activeElement).toBe(container.querySelector('.proj-work-controls'));
+    // The next frame's row hides no record any more: its controls go, the row stays.
+    rerender(cardElement(worldWithUnowned({ verdict: 'conflicting' })));
+    expect(container.querySelector('.proj-work-controls')).toBeNull();
+    expect(container.querySelector('.proj-work')).not.toBeNull();
+    const group = [...container.querySelectorAll('.proj-group-toggle')].find((t) => t.textContent?.includes(GROUP_WORDS.unowned.label));
+    expect(group).toBeDefined();
+    expect(document.activeElement, 'the group\'s toggle, never the card\'s').toBe(group);
+  });
+
+  it('F11 (a) (review 1624): an open Not delegated drops its ask when the record on its worktree is replaced, and posts to neither', async () => {
+    const r = recorder();
+    const { rerender } = renderCard(worldWithUnowned({ verdict: 'conflicting', leaseId: LEASE_ID }), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-u1)' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    // CONTROL: the same record in a new frame keeps the ask open.
+    rerender(cardElement(worldWithUnowned({ verdict: 'conflicting', leaseId: LEASE_ID })));
+    expect(screen.queryByRole('dialog')).not.toBeNull();
+    rerender(cardElement(worldWithUnowned({ verdict: 'conflicting', leaseId: '7d1e2f30-4a5b-4c6d-8e9f-a0b1c2d3e4f5' })));
+    expect(screen.queryByRole('dialog'), 'the ask was about the replaced record').toBeNull();
+    expect(screen.getByRole('button', { name: 'Not delegated (agent-u1)' }), 'the control stays, for the new record').toBeTruthy();
+    expect(r.calls).toEqual([]);
+  });
+
+  it('F1 (review 1626): a row left with no controls while its confirm is open hands the focus to its heading, the box being the opener', async () => {
+    const r = recorder();
+    const world = (disposition: 'retained' | 'transferring') => worldWithLease({ sourceKind: 'raw', disposition });
+    const { container, rerender } = renderCard(world('retained'), { fetch: r.fetch });
+    // The box holds the focus when the confirm opens (a tap that does not focus its button), so the sheet's opener is the box.
+    const box = container.querySelector<HTMLElement>('.proj-work-controls')!;
+    act(() => { box.focus(); });
+    fireEvent.click(screen.getByRole('button', { name: 'Attach to… (agent-a1)' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    rerender(cardElement(world('transferring')));
+    expect(container.querySelector('.proj-work-controls'), 'the box stays, with no controls').not.toBeNull();
+    await vi.waitFor(() => expect(document.activeElement, 'the heading, never the empty box').toBe(container.querySelector('.proj-card-toggle')));
+    expect(r.calls).toEqual([]);
+  });
+
+  it('F3 (b) (review 1626): Cancel on a confirm with no opener to give back to leaves no hold, so a later change moves nothing', async () => {
+    const world = (disposition: 'retained' | 'transferring') => worldWithLease({ sourceKind: 'raw', disposition });
+    const { container, rerender } = renderCard(world('retained'));
+    // The page holds the focus when the confirm opens (a tap that focuses nothing), so the sheet has no opener.
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.click(screen.getByRole('button', { name: 'Attach to… (agent-a1)' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(document.body);
+    rerender(cardElement(world('transferring')));
+    expect(container.querySelector('.proj-work button')).toBeNull();
+    expect(document.activeElement, 'nothing moved').toBe(document.body);
+  });
+
+  it('F4 (review 1626): an unowned row whose hidden record is replaced clears its refusal, and a late answer for the old one draws nothing', async () => {
+    const REPLACED = '7d1e2f30-4a5b-4c6d-8e9f-a0b1c2d3e4f5';
+    const refused = () => okJson({ ok: false, error: 'wrong-disposition', detail: 'x' }, 409);
+    const at = (leaseId: string) => worldWithUnowned({ verdict: 'conflicting', leaseId });
+    const notDelegated = async (): Promise<void> => {
+      await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-u1)' }));
+      await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Not delegated' }));
+    };
+    const first = renderCard(at(LEASE_ID), { fetch: recorder(refused).fetch });
+    const alert = first.container.querySelector<HTMLElement>('.proj-work [role="alert"]')!;
+    await notDelegated();
+    await vi.waitFor(() => expect(alert.textContent).toBe("This worktree's state does not allow that now."));
+    // CONTROL: the same record in a new frame keeps the sentence.
+    first.rerender(cardElement(at(LEASE_ID)));
+    expect(alert.textContent).toBe("This worktree's state does not allow that now.");
+    first.rerender(cardElement(at(REPLACED)));
+    expect(first.container.querySelector('.proj-work [role="alert"]'), 'the region stays mounted').toBe(alert);
+    expect(alert.textContent, 'the old record\'s refusal is no longer said').toBe('');
+    first.unmount();
+    // An answer for the old record that lands after the swap draws nothing.
+    let release: (r: Response) => void = () => {};
+    const late = recorder(() => new Promise<Response>((res) => { release = res; }));
+    const second = renderCard(at(LEASE_ID), { fetch: late.fetch });
+    const region = second.container.querySelector<HTMLElement>('.proj-work [role="alert"]')!;
+    await notDelegated();
+    expect(late.calls).toHaveLength(1);
+    second.rerender(cardElement(at(REPLACED)));
+    await act(async () => { release(refused()); });
+    await act(async () => { await Promise.resolve(); });
+    expect(region.textContent, 'the late answer is about a record the row no longer offers').toBe('');
+    expect(screen.queryByText(/^Worktree marked/)).toBeNull();
+    second.unmount();
+    // And a late failure that is no door's answer: the app's words are about the old record too.
+    let fail: (r: Response) => void = () => {};
+    const broken = recorder(() => new Promise<Response>((res) => { fail = res; }));
+    const third = renderCard(at(LEASE_ID), { fetch: broken.fetch });
+    const failRegion = third.container.querySelector<HTMLElement>('.proj-work [role="alert"]')!;
+    await notDelegated();
+    third.rerender(cardElement(at(REPLACED)));
+    await act(async () => { fail(okJson({ error: 'internal' }, 500)); });
+    await act(async () => { await Promise.resolve(); });
+    expect(failRegion.textContent, 'the late failure draws nothing').toBe('');
+    third.unmount();
+    // Review 1628 F2: a late success toasts nothing, and a late answer that cannot be read says nothing in the status.
+    for (const [arm, answer] of [
+      ['a late success', () => accepted()],
+      ['a late unreadable answer', () => new Response('<html>ok</html>', { status: 200, headers: { 'content-type': 'text/html' } })],
+    ] as const) {
+      let land: (r: Response) => void = () => {};
+      const held = recorder(() => new Promise<Response>((res) => { land = res; }));
+      const view = renderCard(at(LEASE_ID), { fetch: held.fetch });
+      const status = view.container.querySelector<HTMLElement>('.proj-work [role="status"]')!;
+      await notDelegated();
+      view.rerender(cardElement(at(REPLACED)));
+      await act(async () => { land(answer()); });
+      await act(async () => { await new Promise((res) => setTimeout(res, 50)); });
+      expect(screen.queryByText(/^Worktree marked/), `${arm}: no toast`).toBeNull();
+      expect(status.textContent, `${arm}: no status`).toBe('');
+      view.unmount();
+    }
+  });
+
+  it('F5 (review 1626): a refusal is cleared when Attach goes because its session left the list, the state unchanged', async () => {
+    const worker = fleetSession({ id: 'worker-a', project: 'project-a', workspace: 'worker-a', workdir: '/work/project-a/.ws/worker-a', role: 'child' });
+    const r = recorder(() => okJson({ ok: false, error: 'wrong-disposition', detail: 'x' }, 409));
+    const world = (sessions: readonly FleetSession[]) => worldWithLease({ sourceKind: 'raw', parentId: 'coord-a', via: 'worker-a',
+      disposition: 'retained', expiresAt: '2026-11-17T12:00:00.000Z' }, sessions);
+    const { container, rerender } = renderCard(world([COORD_A, worker]), { fetch: r.fetch });
+    const alert = within(rowOf(container)).getByRole('alert');
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    await vi.waitFor(() => expect(alert.textContent).toBe("This worktree's state does not allow that now."));
+    rerender(cardElement(world([COORD_A])));
+    expect(within(rowOf(container)).getAllByRole('button').map((b) => b.textContent), 'Attach went; the state did not move').toEqual(
+      ['Keep worktree', 'Not delegated']);
+    expect(within(rowOf(container)).getByRole('alert'), 'the region stays mounted').toBe(alert);
+    expect(alert.textContent, 'its text emptied').toBe('');
+  });
+
+  it('W5-U10: an older server\'s rows (no disposition, no hidden lease) render byte for byte as on the base', () => {
+    // Measured on the base (67121c031) with this fixture, before PR10's card change.
+    const BASE = [
+    "<div class=\"proj-work\" title=\"/work/project-a/.claude/worktrees/agent-a1; Execution not confirmed: its session is live in the run that started it, but nothing shows the helper itself is still working\"><span class=\"proj-work-parts\"><span class=\"proj-work-part\">agent worktree</span><span class=\"proj-work-part proj-work-name\"><span class=\"proj-work-name-text\">agent-a1</span></span><span class=\"proj-work-part\">not confirmed</span></span></div>",
+    "<div class=\"proj-work\" title=\"/work/project-a/.claude/worktrees/agent-r1; Execution not confirmed: its session is live in the run that started it, but nothing shows the helper itself is still working\"><span class=\"proj-work-parts\"><span class=\"proj-work-part\">worktree</span><span class=\"proj-work-part proj-work-name\"><span class=\"proj-work-name-text\">agent-r1</span></span><span class=\"proj-work-part\">not confirmed</span></span><span class=\"proj-work-chip\" title=\"linked by the worktree listing taken before and after Bash call toolu_test_0001, with no other session's listing overlapping it; no upstream id confirms it, and nothing acts on it automatically\">inferred</span><span class=\"proj-work-chip\" title=\"the Bash call that created this worktree: toolu_test_0001\">Bash call …est_0001</span></div>",
+    "<div class=\"proj-work\" title=\"/work/project-a/.claude/worktrees/agent-u1: no-correlating-evidence\"><span class=\"proj-work-parts\"><span class=\"proj-work-part proj-work-name\"><span class=\"proj-work-name-text\">agent-u1</span></span><span class=\"proj-work-part\">two owners claimed it</span></span></div>",
+    ];
+    const { container } = renderCard({ frame: frame({ leases: [lease({ leaseId: LEASE_ID }), lease({ leaseId: 'l-raw', sourceKind: 'raw',
+      adminRecord: 'agent-r1', canonicalPath: '/work/project-a/.claude/worktrees/agent-r1' })],
+      unowned: [unowned({ verdict: 'conflicting' })] }), sessions: [COORD_A] });
+    expect([...container.querySelectorAll('.proj-work')].map((r) => r.outerHTML)).toEqual(BASE);
+  });
+
+  it('W5-U11 (F9 (f)): the three controls are buttons named by their words and their worktree, drawn by the design system\'s Button', () => {
+    const { container } = renderCard(worldWithLease({ sourceKind: 'raw', disposition: 'retained', expiresAt: '2026-11-17T12:00:00.000Z' }));
+    const row = rowOf(container);
+    expect(within(row).getAllByRole('button').map((b) => b.textContent)).toEqual(['Keep worktree', 'Attach to…', 'Not delegated']);
+    expect(within(row).getAllByRole('button').map((b) => b.getAttribute('aria-label')))
+      .toEqual(['Keep worktree (agent-a1)', 'Attach to… (agent-a1)', 'Not delegated (agent-a1)']);
+    // `Button` (@ccrc/ui) carries its own tap floor, which is why control-census registers no `<Button>` call site.
+    for (const b of within(row).getAllByRole('button')) expect(b.className).toMatch(/\bmin-h-tap\b/);
+    expect(row.textContent).not.toMatch(/lease|adopt|retain|clean|spool|running/i);
+    // F8 (c), (d) (review 1623): the controls carry no tooltip of the row's (an empty title ends its reach), and sit in a
+    // group named by the row's worktree.
+    for (const b of within(row).getAllByRole('button')) expect(b.closest('[title]')?.getAttribute('title')).toBe('');
+    expect(within(row).getByRole('group', { name: 'Worktree agent-a1' })).toBe(row.querySelector('.proj-work-controls'));
   });
 });

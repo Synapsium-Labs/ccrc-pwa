@@ -1,27 +1,48 @@
-import { configDirFor, type CcrcConfig } from './config.js';
+import type { CcrcConfig } from './config.js';
+import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
+import { pidFromListing, verdictFromListing, type PaneListing } from './tickPlan.js';
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
-import { readRegistry, readSessionRecord } from './registry.js';
+import { readRegistryMeasured } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readLimits } from './limits.js';
-import { liveSessionStatus, readLiveState, readLiveStateMeasured } from './livestate.js';
+import { liveSessionStatus, liveStatusCoversDelegation } from './liveVerdicts.js';
+import type { LiveStateRead } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
-import type { FleetSession, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
+import { isHookEvent, type HookEvent } from '../../shared/hook-events.js';
+import type { FleetSession, HookAsk, LifecycleInput, PrState, SessionLanding, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
-import { sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.js';
+import { readSession } from './sessionReading.js';
+import { RADAR_PROBE_FRESH_S, freshWithin, sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.js';
+import { sessionRoleOf } from './roleOf.js';
 import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
-import type { AskRow, CoordStore } from './coord/store.js';
+import type { ApprovalRow, AskRow } from './coord/store.js';
+import type { WatcherCoordPort } from './coord/ports.js';
+// Task 3: the pure board-placement decision (Task 2) — this file supplies its
+// ONE port (`stampOf`) from a `coord.db` read, placement.ts itself imports
+// nothing from here. D-2921 moved the fold that BUILDS that port into
+// placement.ts too: it is the same pure decision, and holding half of it here
+// in L3 is what let the two halves disagree about what the hop is keyed on.
+import { boardPlacement, foldCoordPlacements, type StampLookup } from './coord/placement.js';
+import { foldLastRuns, releasedFrom, type ReleasedLookup } from './coord/released.js';
+import { incarnationOfMark, type SessionRunRead } from './coord/runWire.js';
 // F2(b): the `held` chip's ceiling, DERIVED from the lane's own two
 // windows. It lives in `askwindow.ts` because `watch.ts` (their first
 // reader) imports this module, so the constants could not stay there.
-import { ASK_HELD_CHIP_MAX_MS } from './askwindow.js';
+import { ASK_HELD_CHIP_MAX_MS, askNotifyAt } from './askwindow.js';
+import { redactCommand } from './coord/redact.js';
+// D-7026: the question tables are read through `coord/questions.ts`; the guard and the warn stay here.
+import { currentFor } from './coord/questions.js';
 
-/** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
-const ASK_SUMMARY_MAX_LEN = 80;
+/** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript; an ask push's too (D-5356). */
+export const ASK_SUMMARY_MAX_LEN = 80;
+/** D-5231, D-5272: the hook events whose `done` can hold the delegated pair —
+ *  the main `Stop` that writes it, and the two subagent events that carry it. */
+const BACKGROUND_CARRIER_EVENTS: ReadonlySet<HookEvent> = new Set(['Stop', 'SubagentStart', 'SubagentStop']);
 
 /**
  * The fleet card's one-line summary of a `waiting` hook state.
@@ -54,7 +75,16 @@ const ASK_SUMMARY_MAX_LEN = 80;
  */
 export function hookAskSummary(hs: HookState | null, liveWaitingFor: string | null = null): string | null {
   const text = hookAskText(hs) ?? (liveWaitingFor?.trim() || null);
-  return text === null || text === '' ? null : text.slice(0, ASK_SUMMARY_MAX_LEN);
+  // D-5298 (spec §6.7): redacted where it enters the wire — an approval summary is a child's raw command (hookstate
+  // keeps it raw, cut to 200 characters), and a question can carry a token too. Redacted BEFORE the cut, so a mask is
+  // never split into a half-token.
+  return text === null || text === '' ? null : redactCommand(text).slice(0, ASK_SUMMARY_MAX_LEN);
+}
+
+/** D-5298 (spec §6.7): the hookstate envelope as it leaves this server on the session frame (`sessionws.ts`), with an
+ *  approval's `summary` redacted. A question envelope is the operator's answer sheet and is sent as read. */
+export function wireHookAsk(ask: HookAsk): HookAsk {
+  return 'approval' in ask ? { approval: { tool: ask.approval.tool, summary: redactCommand(ask.approval.summary) } } : ask;
 }
 
 function hookAskText(hs: HookState | null): string | null {
@@ -129,9 +159,9 @@ const ASK_ANSWERED_CHIP_WINDOW_MS = 30 * 60_000;
  * F2(b) — the ruling). The `held` bound is the one this function went a
  * wave without, on the premise that "a held ask is live by definition":
  * true only within one process lifetime and only while `staleAsk` can still
- * reach the row, and a restart mid-hold breaks both (`heldAsks` is never
- * rehydrated, and `dialogIds` is stamped before the notify gate, so no
- * re-mint ever clears it). See `ASK_HELD_CHIP_MAX_MS`'s own docstring for
+ * reach the row, and a restart mid-hold broke both (the hold was not yet
+ * re-seeded from the rows, D-5925 came later, and `dialogIds` is stamped
+ * before the notify gate, so no re-mint cleared it). See `ASK_HELD_CHIP_MAX_MS`'s own docstring for
  * why the ceiling is derived from the lane's two windows rather than picked.
  */
 function fleetAsk(row: AskRow | null, nowMs: number): FleetSession['ask'] {
@@ -148,24 +178,68 @@ function fleetAsk(row: AskRow | null, nowMs: number): FleetSession['ask'] {
 }
 
 /**
+ * `with-coordinator-state` (D-5296): `FleetSession.withCoordinator` from the
+ * session's NEWEST asks row (`currentAsksFor`, the same batched read
+ * `fleetAsk` takes). Set only while that row is `held` or `answering` (a
+ * principal is mid-answer) AND the assembly's clock is strictly before
+ * `notifyAt`; `released`, `declined`, `answered`, `stale` and `unknown` all
+ * give null, so a hand-over, the parent's own release, an answer and a gone
+ * dialog each return the row to the ladder's attention rung on the next
+ * assembly. `notifyAt` is `askNotifyAt(row.at)`, the mint time, NEVER
+ * `row.askAt` (hookstate's `updatedAt`, the instance guard): the sweep counts
+ * the window from the mint, so the fleet clears the state at the moment the
+ * operator's push fires (D-5364). Plan Task 16 adds the approvals source
+ * here, through this one function.
+ */
+function fleetWithCoordinator(row: AskRow | null, nowMs: number, approval: ApprovalRow | null = null): FleetSession['withCoordinator'] {
+  // D-5298 (plan Task 16): a held permission prompt first — the hook is waiting on it, inside its own window
+  // (`notifyAt`, D-5441), and a row minted released was held for nobody.
+  if (approval !== null && approval.state === 'held' && approval.releaseReason === null && nowMs < approval.notifyAt) {
+    return { kind: 'approval', parentId: approval.parentId, since: approval.askAt, notifyAt: approval.notifyAt };
+  }
+  if (row === null) return null;
+  if (row.state !== 'held' && row.state !== 'answering') return null;
+  const notifyAt = askNotifyAt(row.at);
+  if (nowMs >= notifyAt) return null;
+  return { kind: 'question', parentId: row.parentId, since: row.at, notifyAt };
+}
+
+/** `coord.heldApprovalsFor`'s guarded whole-frame read, `readCurrentAsks`' twin: a broken store degrades every row's
+ *  approval source to none (Needs-you, the safe direction), never a throw out of `assembleFleet`. */
+function readHeldApprovals(coord: WatcherCoordPort | undefined, childIds: readonly string[]): Map<string, ApprovalRow> {
+  if (!coord || childIds.length === 0) return new Map();
+  try {
+    const read = currentFor(coord, childIds, 'approval');
+    if (!read.ok) {
+      console.warn(`ccrc-server: heldApprovalsFor refused — ${read.detail} — one bad read must not kill the poll`);
+      return new Map();
+    }
+    return read.rows;
+  } catch (err) {
+    console.warn(`ccrc-server: heldApprovalsFor failed — ${err instanceof Error ? err.message : String(err)} — one bad read must not kill the poll`);
+    return new Map();
+  }
+}
+
+/**
  * `coord.currentAsksFor`'s guarded, WHOLE-FRAME read (fix round 1, item 3 —
  * collapsing what was one `db.prepare`/`.get` PER registry row into one
  * query for the whole assembly). Guarded for the identical reason the prior
  * per-session `readCurrentAsk` was (found by the full suite rather than by
  * any Task 19 test: `push-copy.test.ts`'s "a broken coord.db degrades,
  * never crashes the poll" and `fleetws.test.ts`'s matching cold-start
- * case): `assembleFleet` is called UNWRAPPED from both `FleetWatcher.tick()`
- * and the `/ws/fleet` connect handler, and `node:sqlite` throws
+ * case): the assembly is called UNWRAPPED from both `FleetWatcher.tick()`
+ * (`assembleFleetWithPanePids`) and the `/ws/fleet` connect handler, and `node:sqlite` throws
  * SYNCHRONOUSLY on a closed connection or a lock race. Because this is now
  * ONE call per assembly rather than one per session, a broken box warns
  * ONCE per tick/connect/request here, not once per session — the "20
  * near-identical lines a second, burying the one warn that names the real
  * cause" the reviewer measured is gone by construction, not by an
  * extra dedup flag. */
-function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, AskRow> {
+function readCurrentAsks(coord: WatcherCoordPort | undefined, childIds: readonly string[]): Map<string, AskRow> {
   if (!coord || childIds.length === 0) return new Map();
   try {
-    const read = coord.currentAsksFor(childIds);
+    const read = currentFor(coord, childIds, 'ask');
     // D-2545. An unreadable ask row degrades the WHOLE frame's ask chips to
     // absent, exactly as a throw already did — the fail-safe direction this
     // function was written for, reached by a typed result instead of an
@@ -181,6 +255,111 @@ function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly strin
   }
 }
 
+/** `boardPlacement`'s empty port: nothing stamped, so every row goes home.
+ *  Handed back by `readCoordPlacements`'s guards below when there is nothing
+ *  TO read — no `coord` wired, or `sessionCount === 0` (an empty registry) —
+ *  and by a successful read that found nothing stamped
+ *  (`foldCoordPlacements([])`). A refused or throwing read no longer hands
+ *  this back: since wave 2 (D-2875) it answers `{ ok: false }` instead. */
+const emptyCoordPlacements = (): StampLookup => () => null;
+
+/** What `readCoordPlacements` hands back: the port when the store answered
+ *  (including "nothing stamped" — an empty port is a measurement), or `ok:
+ *  false` when the READ itself failed. The two used to fold to one empty
+ *  port, so every row of a broken box read `boardProject === project` as if
+ *  measured (D-2875; the field's own docstring carried the gap as prose). */
+type CoordPlacementsRead = { ok: true; stampOf: StampLookup } | { ok: false };
+
+/**
+ * Task 3's own batched, guarded read — the `boardPlacement` port supply,
+ * built ONCE per assembly (never per row, which would be O(rows x hops)
+ * `coord.db` queries), by handing `coordPlacementStamps`' rows to the pure
+ * `foldCoordPlacements` (`coord/placement.ts`, L1 — D-2921 moved it there, to
+ * sit beside the walk it feeds). Same guard shape as `readCurrentAsks` right
+ * above: `coord` is absent on a dark box and in every pre-Task-3 test, and
+ * `node:sqlite` can throw SYNCHRONOUSLY on a closed connection or a lock
+ * race — either failure is caught, never thrown out of `assembleFleet`, and
+ * answers `{ ok: false }`, which the row literal emits as `boardProject:
+ * null` (the wire's own word for "this server did not decide", D-2875) — a
+ * broken coord.db costs every row its placement rather than the whole tick.
+ * `sessionCount === 0` (an empty registry) also skips the read entirely —
+ * `readCurrentAsks`'s own `childIds.length === 0` short-circuit, restated
+ * here: no row exists to spend the answer on.
+ *
+ * Fix round 1: this used to call `coord.runs({includeClosed:true})`, which
+ * hydrates every row (`itemTally`, `unreadMailCount`, batch health, a
+ * `prLineage` JSON parse) to obtain three columns — priced at "~3,000 [SQL
+ * statements] for one [on-demand] board load" (`store.ts`), paid here every
+ * 2s tick and every `/ws/fleet` connect instead. `coord.coordPlacementStamps`
+ * is the narrow sibling built for this one caller (`store.ts`'s own
+ * docstring), no hydration, `coordProject IS NOT NULL` pushed into SQL.
+ *
+ * `includeClosed: true` is deliberate (`coordPlacementStamps` always
+ * includes closed runs, up to its own clamp): a placement keyed on open runs
+ * alone would bounce every worker between cards at the close-then-open wave
+ * boundary, one of the four defects this design exists to end.
+ */
+function readCoordPlacements(coord: WatcherCoordPort | undefined, sessionCount: number): CoordPlacementsRead {
+  if (!coord || sessionCount === 0) return { ok: true, stampOf: emptyCoordPlacements() };
+  try {
+    const read = coord.coordPlacementStamps();
+    if (!read.ok) {
+      console.warn(`ccrc-server: coordPlacementStamps refused while computing board placement — ${read.detail} — boardProject reads null this tick`);
+      return { ok: false };
+    }
+    return { ok: true, stampOf: foldCoordPlacements(read.stamps) };
+  } catch (err) {
+    console.warn(`ccrc-server: coordPlacementStamps failed while computing board placement — ${err instanceof Error ? err.message : String(err)} — boardProject reads null this tick`);
+    return { ok: false };
+  }
+}
+
+/** What `readReleased` hands back: the port when the store answered, or `ok: false` when the READ failed —
+ *  `CoordPlacementsRead`'s shape and reason (D-2875): a failed read must not look like "nothing released". */
+type ReleasedRead = { ok: true; lookup: ReleasedLookup } | { ok: false };
+
+/**
+ * `FleetSession.releasedFrom`'s batched, guarded read (workspace lifecycle spec §5.1) — ONE `lastRunBySession`
+ * call per assembly, beside `readCoordPlacements` and under the same failure contract: `coord` absent (a dark
+ * box, every older test) or an empty registry reads nothing and answers "no runs" for every row; a refusal or a
+ * synchronous `node:sqlite` throw is caught, never thrown out of `assembleFleet`, and answers `{ ok: false }`,
+ * which makes every row's `releasedFrom` null this tick — doubt leaves every row where it was.
+ */
+function readReleased(coord: WatcherCoordPort | undefined, sessionIds: readonly string[]): ReleasedRead {
+  if (!coord || sessionIds.length === 0) return { ok: true, lookup: foldLastRuns([], [], []) };
+  try {
+    const read = coord.lastRunBySession(sessionIds);
+    if (!read.ok) {
+      console.warn(`ccrc-server: lastRunBySession refused while computing released rows — ${read.detail} — releasedFrom reads null this tick`);
+      return { ok: false };
+    }
+    return { ok: true, lookup: foldLastRuns(read.last, read.openWorkers, read.openClaimants) };
+  } catch (err) {
+    console.warn(`ccrc-server: lastRunBySession failed while computing released rows — ${err instanceof Error ? err.message : String(err)} — releasedFrom reads null this tick`);
+    return { ok: false };
+  }
+}
+
+/**
+ * `FleetSession.run` and `.openRun`'s guarded read (ARCH-61, #796): each row's binding, decided by `bindingOf` over the
+ * session's series, one read per row in this assembly. `coord` absent (a dark box, every older test) answers no run for every
+ * row, as `readReleased` does. A series this process cannot represent, or a throw from `node:sqlite`, is caught and warned
+ * once per row's read, never thrown out of `assembleFleet`, and answers null for that row this tick (`SessionRun`'s contract:
+ * doubt leaves the row where it was).
+ */
+function readSessionRun(coord: WatcherCoordPort | undefined, r: { id: string; child: SessionRecord['child'] }): SessionRunRead {
+  const none: SessionRunRead = { ok: true, run: null, openRun: null };
+  if (!coord) return none;
+  try {
+    const read = coord.bindingsOf(r.id).card(incarnationOfMark(coord, r.id, r.child));
+    if (!read.ok) console.warn(`ccrc-server: session run refused for ${r.id} — ${read.detail} — run reads null this tick`);
+    return read;
+  } catch (err) {
+    console.warn(`ccrc-server: session run failed for ${r.id} — ${err instanceof Error ? err.message : String(err)} — run reads null this tick`);
+    return { ok: false, detail: 'threw' };
+  }
+}
+
 /**
  * Which account a session id belongs to, from the id alone — the fallback
  * `assembleFleet` uses when the registry has no explicit `home` written
@@ -193,11 +372,11 @@ function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly strin
  * are generated from — one rule, two languages.
  *
  * The ordering is the entire point. Its predecessor was a hand-typed, unordered
- * prefix array that did not even MENTION `claude-dev0`, under which
- * `claude-dev0-quiet-basin` fell through to the bare `claude-` branch and came
+ * prefix array that did not even MENTION `claude-lab0`, under which
+ * `claude-lab0-quiet-basin` fell through to the bare `claude-` branch and came
  * back `claude` — a live session attributed to the wrong account, which is not
- * hypothetical: `claude-dev0-*` ids exist in the registry today. Get the order
- * wrong here (or in ccd's own `case`) and a `claude-dev0` session is silently
+ * hypothetical: `claude-lab0-*` ids exist in the registry today. Get the order
+ * wrong here (or in ccd's own `case`) and a `claude-lab0` session is silently
  * re-attributed to `claude`, reproducing the old bug for real. `fleet.test.ts`
  * pins both the real ids and a synthetic prefix-collision roster.
  *
@@ -220,58 +399,6 @@ export function idHomeWrapper(roster: Roster, id: string): string {
   return roster.upstreamId;
 }
 
-/**
- * Authoritative live status for one session — the same signal the fleet uses:
- * dead if no tmux session, else busy/idle from the live status file. Used by
- * the interrupt route: a --remote-control pane never renders the busy marker
- * at all, and an RC-off pane does render it, but the same pane can ALSO be
- * showing a dialog painted right alongside it — either way busy-ness has to
- * come from the live status file, which also sees subagents the pane never
- * shows.
- */
-export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
-  // C0.3: this only ever asks about ONE id — no uniqueness or subtraction
-  // over the rest of the fleet — so it reads just that id's row rather than
-  // the whole registry (a 24-session fleet's baseline is 553 agent-WS
-  // operations [registry-read-census:fleet] per `readRegistry` call, before
-  // conditional reconfirmation, for a question about one session).
-  const read = await readSessionRecord(io, cfg, id);
-  // A degraded row must never answer 'dead' — the interrupt route's own
-  // "not busy" refusal reads THIS, and reporting dead-by-drop on a session
-  // this read simply could not measure would let it refuse an interrupt on a
-  // plainly busy one. `!read.found` (genuinely absent, or the whole
-  // directory unlistable) is still 'dead': there is no pane to ask about
-  // either way, the same answer this gave before the ladder existed.
-  // D-309 (was D-B8-13): `hasSession` here deliberately collapses `unknown` into 'dead' —
-  // which this route turns into a REFUSED interrupt, the safe direction this
-  // function's own comment above already argues for. Splitting the pair for
-  // the operator's view is the substrate-unreachable spec's job (a state word
-  // through shared/server/pwa), not a guard's.
-  if (!read.found || !(await tmux.hasSession(id))) return 'dead';
-  const rec = read.record;
-  const pid = await tmux.panePid(id);
-  // Unmeasured wrapper => 'idle', via the EXISTING `!cfgDir` fallback: a
-  // degraded `rec.wrapper` is `''`, which `configDirFor` (an unknown wrapper
-  // string) already answers `undefined` for — honest-but-blind, and it fails
-  // TOWARD refusing an interrupt rather than granting one on a guess.
-  const cfgDir = configDirFor(cfg, rec.wrapper);
-  if (!pid || !cfgDir) return 'idle';
-  // THE FOLDED READ, KEPT ON PURPOSE — do not "finish" D-115 here.
-  // `assembleFleet` below takes `readLiveStateMeasured` and paints an
-  // unreadable live file `busy`; this function must keep answering `'idle'`
-  // for it, and the two are not drift. A card DISPLAYS, so its reassuring
-  // word is the dangerous one; this function's sole consumer is
-  // `POST /api/sessions/:id/interrupt`'s `… === 'busy'` check, which REFUSES
-  // on anything else — so here `'idle'` is what withholds the keystroke, and
-  // "fail toward busy" would GRANT an interrupt on a read that measured
-  // nothing, inverting D-115's own intent one line from its remedy. Same
-  // direction the `!cfgDir` fallback above already argues for, on the same
-  // grounds. `fleet.test.ts` pins this answer beside `assembleFleet`'s
-  // opposite one, on ONE fixture, so the asymmetry reads as a decision.
-  const live = await readLiveState(io, cfgDir, pid);
-  return live ? liveSessionStatus(live.status) : 'idle';
-}
-
 /** The PR state a session has WITHOUT a live sweep: whatever `ccd pr-state`
  *  last wrote into the registry. `unchecked` when it has never run. Null for a
  *  main checkout, which is the only session that gets no PR control at all.
@@ -288,6 +415,25 @@ function persistedPr(r: SessionRecord): PrState | null {
     // The registry stores no backoff: it is per-process, per-project, in-memory.
     retryAt: null,
   };
+}
+
+/** A session's CURRENT branch, the one derivation (D-7484): `assembleFleet` puts it on the wire and the landing radar
+ *  lane (wave 4b) matches a probe head against it. A statusline branch read THIS tick wins: it is a live pane capture
+ *  and knows about a manual checkout. When the pane gave no fresh full branch (no capture yet, a dead pane, a narrow
+ *  one that cut the `⎇` segment, or a tick that measured nothing and kept the last reading, `retained`) the
+ *  worktree's own HEAD, as the divergence sweep last measured it, knows the same thing. A retained pane branch comes
+ *  next, and the registry's `.branch` last: ccd writes it only at ws-add/ws-rename, so a manual checkout leaves it
+ *  naming a branch the worktree is no longer on (measured 2026-09-23 on three of the four narrow rows that surfaced
+ *  this). */
+export function sessionBranchOf(
+  r: SessionRecord, statusline: Statusline | undefined, headBranch: string | null | undefined,
+): string | null {
+  return (statusline?.retained ? undefined : statusline?.branch) ?? headBranch ?? statusline?.branch ?? r.branch ?? null;
+}
+
+/** A session's PR state, the one derivation (D-7484): the watcher's last sweep, else what the registry last held. */
+export function sessionPrOf(r: SessionRecord, prStates: ReadonlyMap<string, PrState> | undefined): PrState | null {
+  return prStates?.get(r.id) ?? persistedPr(r);
 }
 
 /**
@@ -338,22 +484,43 @@ export function lifecycleInputFor(
   };
 }
 
-export async function assembleFleet(
-  io: FleetIO,
-  cfg: CcrcConfig,
-  tmux: Tmux,
-  now = Math.floor(Date.now() / 1000),
-  pendingDialogs?: Set<string>,
-  statuslines?: Map<string, Statusline>,
-  taskProgress?: Map<string, TaskProgress>,
+/** The sends of a fleet that was NOT just assembled (landing order wave 4b, fix round 1): the `/ws/fleet` cold frame and
+ *  `GET /api/fleet`'s degraded arm, which carry the watcher's last broadcast, and the snapshot arms, which carry a saved
+ *  file. Each drops a `landing` that `freshWithin` no longer accepts, the rule `assembleFleet` applies on its own path, so
+ *  no send of the wire carries a prediction past `RADAR_PROBE_FRESH_S` however long the lane has been blind (D-7481).
+ *  Pure: `nowMs` is the caller's clock. It never mutates what it is handed, because the watcher keeps its last fleet and
+ *  re-sends it: a row with nothing to drop is returned as it is, a row with a stale landing as a copy without the key
+ *  (absence means unknown, never `null`), and a list with no such row as the same list, so the frame cache keyed on it
+ *  still hits. */
+export function dropStaleLandings(sessions: readonly FleetSession[], nowMs: number): FleetSession[] {
+  const stale = (s: FleetSession): boolean => s.landing !== undefined && !freshWithin(s.landing.at, RADAR_PROBE_FRESH_S, nowMs);
+  if (!sessions.some(stale)) return sessions as FleetSession[];
+  return sessions.map((s) => {
+    if (!stale(s)) return s;
+    const { landing: _old, ...rest } = s;
+    return rest;
+  });
+}
+
+/** D-7512: the port the assembly reads Claude Code's live status file through, `<configDir>/sessions/<pid>.json` →
+ *  the measured read. Its adapter is `livestate.ts#liveStateReaderOver`, `readLiveStateMeasured` bound to one box's
+ *  io: that file is L3 (the torn-body wait), and this one is L1, so the read is handed in rather than imported. */
+export type LiveStateMeasuredReader = (configDir: string, pid: number) => Promise<LiveStateRead>;
+
+/** `assembleFleet`'s inputs past the first five, by name (#2399): every one optional, so a caller names only what it
+ *  carries and the many short calls (io, cfg, tmux, reader, clock) stay positional. */
+export interface AssembleFleetOptions {
+  pendingDialogs?: ReadonlySet<string>;
+  statuslines?: Map<string, Statusline>;
+  taskProgress?: Map<string, TaskProgress>;
   /** Last-swept PR state per session id (FleetWatcher's third lane). Absent on
    *  a cold start and in every existing test — which is exactly why the
    *  registry fallback below exists. */
-  prStates?: Map<string, PrState>,
+  prStates?: Map<string, PrState>;
   /** Fresh per-session hook state (FleetWatcher's fifth lane), same pattern
    *  as `pendingDialogs`: absent on a cold start and in every existing test,
    *  which is exactly why every hook-derived field below defaults to null. */
-  hookStates?: Map<string, HookState>,
+  hookStates?: Map<string, HookState>;
   /**
    * The registry rows this assembly must describe, when the caller has
    * ALREADY read them — the same `records ?? await readRegistry(...)` idiom
@@ -370,8 +537,8 @@ export async function assembleFleet(
    * straight off THIS call's own return value (`sessions[i].unmeasured`), not
    * off a separately-read set of `SessionRecord`s. If this function took its
    * OWN read instead of the rows `tick()` already has, that would be a
-   * SEPARATE whole-fleet sweep, 23 [registry-read-census:fields] field reads
-   * per session, a few hundred ms after the one `tick()` used for
+   * SEPARATE whole-fleet sweep, 4 [registry-read-census:fields] unconditional
+   * reads and one per other listed field per session, a few hundred ms after the one `tick()` used for
    * `sweepHookStates`/`detectDialogs` — and a
    * row that read clean in tick()'s sweep and degraded in THIS one would
    * still land in `sessions` with `unmeasured` empty (wrong), or vice versa.
@@ -380,7 +547,7 @@ export async function assembleFleet(
    * the same reasoning `tick()`'s own comment states for why it shares this
    * read with `sweepHookStates`/`detectDialogs` in the first place.
    */
-  records?: SessionRecord[],
+  records?: SessionRecord[];
   /**
    * Task 19: the ask pre-emption lane's own store, when this box runs
    * coordination at all — `undefined` on every caller that predates the
@@ -394,28 +561,95 @@ export async function assembleFleet(
    * state reads this assembly already does per row, and paid only when a
    * `coord` is actually passed.
    */
-  coord?: CoordStore,
+  coord?: WatcherCoordPort;
   /** Fresh per-session usage readings (routing slice 0, the watcher's usage
    *  lane), same pattern as `hookStates`: absent on a cold start and in every
    *  older test, which is why the field defaults to null. */
-  usageReadings?: Map<string, SessionUsage>,
+  usageReadings?: Map<string, SessionUsage>;
+  /** The branch each worktree's own HEAD names, as the watcher's divergence
+   *  sweep last measured it (`FleetWatcher.currentHeadBranches()`), keyed by
+   *  session id; `null` for a detached or unreadable HEAD. Absent on a cold
+   *  start, on callers that do not carry it, and in every older test — the
+   *  registry fallback below covers all three. */
+  headBranches?: ReadonlyMap<string, string | null>;
+  /** The landing radar lane's map (landing order wave 4b, `FleetWatcher.currentLandings()`), keyed by session id. Absent
+   *  on every caller that builds no fleet frame and in older tests. An entry past its window is dropped here, so no
+   *  frame this assembly builds carries an old prediction however long the lane has been blind; the sends that carry an
+   *  earlier fleet instead take `dropStaleLandings` (D-7481). */
+  landings?: ReadonlyMap<string, SessionLanding>;
+  /** Console speed S1: the tick's one tmux listing. An ok one replaces the per-row `sessionVerdict` and `panePid`. */
+  paneListing?: PaneListing;
+  /** The limits the caller already read; absent = read here. */
+  limitsRead?: Awaited<ReturnType<typeof readLimits>>;
+}
+
+/** One assembly's two outputs (#2399): the wire rows, and the pane pid it read for every ALIVE row, keyed by session id
+ *  (`null` when tmux answered none). A row whose pane is not alive gets no entry. Only `watch.ts`'s `tick()` reads
+ *  `panePids`: it hands them to the stall lane as `StallTick.panePids`, so the lane never reads a pid a second time
+ *  (worker stall watch wave 2, M6: slug `tick-hands-the-lane-pids-and-records` (D-3649)). */
+export interface FleetAssembly {
+  sessions: FleetSession[];
+  panePids: Map<string, number | null>;
+}
+
+/** The assembly's clock, in epoch SECONDS: `assembleFleet`'s default `now`, and what a caller passes for "now" when it
+ *  also names options. */
+export const fleetNow = (): number => Math.floor(Date.now() / 1000);
+
+/** The wire rows alone: `assembleFleetWithPanePids` for every caller that does not hand pane pids on. */
+export async function assembleFleet(
+  io: FleetIO,
+  cfg: CcrcConfig,
+  tmux: Tmux,
+  readLive: LiveStateMeasuredReader,
+  now = fleetNow(),
+  opts: AssembleFleetOptions = {},
 ): Promise<FleetSession[]> {
-  const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
+  return (await assembleFleetWithPanePids(io, cfg, tmux, readLive, now, opts)).sessions;
+}
+
+/** The assembly itself, with the pane pid it read for each alive row as its own output (`FleetAssembly`). */
+export async function assembleFleetWithPanePids(
+  io: FleetIO,
+  cfg: CcrcConfig,
+  tmux: Tmux,
+  readLive: LiveStateMeasuredReader,
+  now = fleetNow(),
+  opts: AssembleFleetOptions = {},
+): Promise<FleetAssembly> {
+  const { pendingDialogs, statuslines, taskProgress, prStates, hookStates, records, coord, usageReadings, headBranches, landings,
+    paneListing, limitsRead } = opts;
+  const panePids = new Map<string, number | null>();
+  // Reached by TESTS alone (spec §2.3): every production caller passes the rows it read itself, and
+  // registry-refused-census.test.ts pins all six production assemblies, so this fallback decides nothing a user
+  // sees. An unlistable registry reads as no rows here, the old fallback's answer; refused rows were never rows.
+  // [registry-refused:tests-only]
+  const [recs, limits] = await Promise.all([records ?? readRegistryMeasured(io, cfg).then((r) => (r.listed ? r.records : [])), limitsRead ?? readLimits(io, cfg, now)]);
   // Task 19 fix round 1, item 3: ONE batched read for the whole assembly,
   // outside the per-session map below — never one `currentAskFor` per row.
   // `now` here is SECONDS (this function's own parameter contract); `asks`
   // rows carry millisecond timestamps (`settleAsk`'s callers all pass
   // `Date.now()`), so `nowMs` is computed once and threaded into `fleetAsk`.
   const asksByChild = readCurrentAsks(coord, recs.map((r) => r.id));
+  const approvalsByChild = readHeldApprovals(coord, recs.map((r) => r.id));
+  // Task 3: ONE pass over the stamped runs, reused by every row below — see
+  // `readCoordPlacements`'s own docstring for why this is batched rather than
+  // a per-row query.
+  const placements = readCoordPlacements(coord, recs.length);
+  // Workspace lifecycle §5.1: ONE run read for the whole assembly, like the placement read above.
+  const released = readReleased(coord, recs.map((r) => r.id));
   const nowMs = now * 1000;
-  return Promise.all(recs.map(async (r): Promise<FleetSession> => {
+  const sessions = await Promise.all(recs.map(async (r): Promise<FleetSession> => {
     // D-309: `hasSession` here deliberately collapses `unknown` into `alive
     // = false`, so a substrate fault reads 'dead' in the PWA — a false dead,
     // with the ungated Restart button under it. Known, and deferred BY DECISION
     // to the substrate-unreachable spec: what the fleet view shows for
     // cannot-ask is a product judgement (a new SessionStatus crosses the wire
     // and every render seam), not a guard this assembly may improvise.
-    const alive = await tmux.hasSession(r.id);
+    const sessionRun = readSessionRun(coord, r);
+    const listing = paneListing?.ok ? paneListing : undefined;
+    const verdict = listing ? verdictFromListing(listing, r.id) : await tmux.sessionVerdict(r.id);
+    const alive = verdict.verdict === 'live';
     let status: SessionStatus = 'dead';
     let name: string | null = null, statusUpdatedAt: number | null = null, version: string | null = null;
     // D-76. Claude Code's own "I am blocked on the human" verdict, hoisted out
@@ -429,12 +663,28 @@ export async function assembleFleet(
     // apart from the word `busy` alone, and it must (see `statusUnmeasured`'s
     // own docstring in `shared/api.ts`).
     let statusUnmeasured = false;
+    // Whether `status` is an affirmative reading from a build whose own word
+    // already counts a running Workflow (`liveStatusCoversDelegation`). Only
+    // a readable file sets it; every other path leaves the pane row to speak.
+    let liveCoversWorkflows = false;
     if (alive) {
       status = 'idle';
-      const pid = await tmux.panePid(r.id);
+      const pid = listing ? pidFromListing(listing, r.id) : await tmux.panePid(r.id);
+      panePids.set(r.id, pid);
       const cfgDir = configDirFor(cfg, r.wrapper);
-      if (pid && cfgDir) {
-        // D-115: `readLiveStateMeasured`, not `readLiveState`. The folded read
+      if (pid === null) {
+        // D-5234: the pane is alive and its pid read FAILED (`list-panes`
+        // answered non-zero or nothing parseable — a loaded tmux server, a
+        // dropped round trip). That measured nothing about the session, so
+        // it takes the unreadable-live-file arm's shape below (D-115): `busy`
+        // on this display surface, declared unmeasured so `watch.ts` keeps
+        // the row's previous status instead of spending an edge — an overload
+        // tick that failed six busy rows' reads used to push six "Finished".
+        // The interrupt route's verdict answers `not-busy` here (D-5236).
+        status = 'busy';
+        statusUnmeasured = true;
+      } else if (cfgDir) {
+        // D-115: `livestate.ts#readLiveStateMeasured`, reached through `readLive`, not `readLiveState`. The folded read
         // answered ONE null for four conditions, and this block spent it as
         // "leave `status` at the `alive` default" — which is `'idle'`. So a
         // pane whose `<pid>.json` this box could not read (EACCES; in remote
@@ -444,11 +694,11 @@ export async function assembleFleet(
         // file over — "a status we don't recognise is far likelier to be new
         // work than new rest" — reached by a path that never got as far as a
         // status word.
-        const read = await readLiveStateMeasured(io, cfgDir, pid);
+        const read = await readLive(cfgDir, pid);
         if (read.ok) {
           const live = read.state;
           status = liveSessionStatus(live.status);
-          // A derived name is Claude Code's session handle (`openclawhetzner-42`
+          // A derived name is Claude Code's session handle (`project-c-42`
           // — cwd basename plus a counter), never a description of the work, so
           // it is dropped HERE rather than shipped for the PWA to re-judge.
           // `name` on the wire therefore means "a name worth displaying", and
@@ -457,6 +707,7 @@ export async function assembleFleet(
           // an absent nameSource is an older file whose name a human chose.
           name = live.nameSource === 'derived' ? null : live.name;
           statusUpdatedAt = live.statusUpdatedAt; version = live.version;
+          liveCoversWorkflows = liveStatusCoversDelegation(live.version);
           // Read off the RAW status word, not off `status` — `liveSessionStatus`
           // has already collapsed `waiting` into `busy` by this line, and that
           // collapse is deliberate and frozen (see its docstring). This is the
@@ -466,14 +717,12 @@ export async function assembleFleet(
         } else if (read.reason === 'unmeasured') {
           // `busy` is this SURFACE's fail-shut direction, and only this
           // surface's: a card is read as permission to walk away, so the
-          // reassuring word is the dangerous one here. `liveStatus` two
-          // functions up answers `'idle'` on this identical failure ON
-          // PURPOSE — its sole consumer is the interrupt route's
-          // `… === 'busy'`, which REFUSES on idle, so "fail toward busy"
-          // there would GRANT interrupts on a read that measured nothing.
-          // Both are failing away from the act that cannot be taken back;
-          // `fleet.test.ts` pins the pair together on ONE fixture so the
-          // asymmetry cannot be mistaken for drift and quietly "fixed".
+          // reassuring word is the dangerous one here. The interrupt route's
+          // verdict answers an unread word the other way ON PURPOSE (D-5236):
+          // it REFUSES on one, so "fail toward busy" there would GRANT
+          // interrupts on a read that measured nothing. Both fail away from
+          // the act that cannot be taken back; `turnverdict.ts` holds that
+          // side, so the asymmetry cannot be mistaken for drift and "fixed".
           //
           // `status` ALONE moves. `name`, `statusUpdatedAt`, `version`,
           // `liveWaiting` and `liveWaitingFor` stay at their defaults,
@@ -481,8 +730,8 @@ export async function assembleFleet(
           // them is the same defect one field over — `statusUpdatedAt` in
           // particular renders as the `· 1m ago` beside the word, so a
           // fabricated one would put a fresh timestamp under a status nobody
-          // measured. `no-state` — absent, half-written, or naming no session
-          // — is untouched and still leaves the whole block at `idle`: that
+          // measured. `no-state` — absent, or a well-formed record naming no
+          // session (a torn body is unmeasured since D-5234) — is untouched and still leaves the whole block at `idle`: that
           // is a real measurement of a pane that has published nothing yet,
           // the ordinary shape in the seconds after `ccd ws-add`.
           status = 'busy';
@@ -497,9 +746,18 @@ export async function assembleFleet(
     }
     const acct = limits[r.wrapper];
     const sl = statuslines?.get(r.id);
-    // A running Workflow leaves the orchestrator reporting idle while it waits
-    // on subagents — surface it as busy so it doesn't read as finished.
-    if (sl?.workflowActive && status === 'idle') status = 'busy';
+    const head = headBranches?.get(r.id) ?? null;
+    const landing = landings?.get(r.id);
+    // The pane's Workflow row speaks only where Claude Code's own file did not:
+    // no readable file (`no-state` leaves the `alive` default `idle`), no
+    // configDir, or a build older than 2.1.277 or naming no version. From
+    // 2.1.277 that file reads busy while any workflow runs, so an idle from it
+    // has already ruled a running one out, and a row still on screen is a
+    // finished run's ~30 s linger — on 2.1.281+ one with a failed or killed
+    // agent even reads as running (statusline.ts) — which must not hold the card
+    // busy, nor the busy→idle "Finished" push back. `=== true`: `undefined`
+    // is a tick that never saw the row (statusline.ts), which promotes nothing.
+    if (sl?.workflowActive === true && status === 'idle' && !liveCoversWorkflows) status = 'busy';
     // STATUS IS FROZEN above this line: `hs` informs dialogPending and the
     // three hook-derived fields below, and MUST NOT feed back into `status` —
     // that derivation is done the moment this line runs.
@@ -517,7 +775,7 @@ export async function assembleFleet(
     //
     // `nowMs` DECISION (task-9-report.md carries the full reasoning, corrected
     // in fix round 1 after MEASUREMENT — see below): `now` is THIS PROCESS's
-    // own clock (`Date.now()`, `assembleFleet`'s own default parameter), not
+    // own clock (`Date.now()`, through `fleetNow()`, `assembleFleet`'s default `now`), not
     // the fleet host's — `r.supervisedAt` can be written on a REMOTE box
     // across `remote/io.ts`'s seam, and that protocol carries no clock op at
     // all (`stat`'s `mtimeMs` is the nearest thing, and no caller threads it
@@ -550,9 +808,23 @@ export async function assembleFleet(
     // specifically to render this field — it is not a permanent argument, only
     // this task's.
     const lifecycleInput: LifecycleInput = lifecycleInputFor(r, alive, now * 1000);
+    const lifecycle = sessionLifecycle(lifecycleInput);
+    // ARCH-48 (#783): the wire's `presence` and `deadSince`, from `readSession` over the facts THIS assembly measured —
+    // the row (listed, so present), tmux's verdict, the lifecycle just derived and the registry's `.hibernated` stamp.
+    // The reading is computed here once; a reader renders it (doubt is `unknown`, never `dead`).
+    const reading = readSession({ row: 'present', pane: verdict.verdict, lifecycle, hibernatedAt: r.hibernatedAt,
+      turn: alive && status !== 'dead' ? status : null });
     const session: FleetSession = {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(cfg.roster, r.id),
-      project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,
+      project: r.project, workdir: r.workdir, workspace: r.workspace, name, title: r.title, status, statusUpdatedAt,
+      // Task 3: which CARD this row renders on. ONE port, SESSION-keyed
+      // (D-2921) — the walk starts at this row's own id and every later hop
+      // asks the same question of the coordinator it just reached. Built ONCE
+      // above, outside this per-row map.
+      // D-2875: a failed read is the wire's null, never a non-null that reads as measured.
+      boardProject: placements.ok
+        ? boardPlacement({ sessionId: r.id, ownProject: r.project, held: r.held !== null, stampOf: placements.stampOf })
+        : null,
       limits: acct ? { five: acct.five, seven: acct.seven } : null,
       // Either source can raise the flag: the pane detector sees an
       // AskUserQuestion/permission menu the hook never gets a write for
@@ -566,18 +838,22 @@ export async function assembleFleet(
       // hook event, so without this arm they reached the wire as `working`.
       dialogPending: (pendingDialogs?.has(r.id) ?? false) || hs?.state === 'waiting' || liveWaiting, version,
       model: sl?.model ?? null, effort: sl?.effort ?? null,
-      // The statusline wins: it is a live pane capture and knows about a manual
-      // checkout. The registry fills the gap before the first capture lands.
-      ultracode: sl?.ultracode ?? false, branch: sl?.branch ?? r.branch ?? null,
+      ultracode: sl?.ultracode ?? false,
+      // The branch derivation is `sessionBranchOf`'s (D-7484), documented there.
+      branch: sessionBranchOf(r, sl, head),
       // D-2011: the pane's own `▓ ctx` reading, no registry fallback (nothing
       // else on the record ever measured this). `?? null`, not `?? 0` —
       // `Statusline.ctxPct` is `undefined` on a session with no fresh
       // statusline (dead pane, pre-first-capture, or a build with no ▓
       // segment at all), and a measured 0 must ride through unchanged.
       ctxPct: sl?.ctxPct ?? null,
+      // THIS tick's prompt-box width or nothing — FleetWatcher never keeps it
+      // across a tick that could not see the box (watch.ts), so a null here
+      // is always "unmeasured", never "narrow".
+      paneCols: sl?.boxCols ?? null,
       usage: usageReadings?.get(r.id) ?? null,
       tasks: taskProgress?.get(r.id) ?? null,
-      pr: prStates?.get(r.id) ?? persistedPr(r),
+      pr: sessionPrOf(r, prStates),
       archivedAt: r.archivedAt,
       archivedBytes: r.archivedBytes,
       held: r.held,
@@ -591,7 +867,29 @@ export async function assembleFleet(
       // coord.db degrades every row to null rather than throwing out of
       // `assembleFleet`, which neither caller wraps.
       ask: fleetAsk(asksByChild.get(r.id) ?? null, nowMs),
+      // D-5296: the quiet "with coordinator" state, from the same row.
+      withCoordinator: fleetWithCoordinator(asksByChild.get(r.id) ?? null, nowMs, approvalsByChild.get(r.id) ?? null),
       subagents: hs?.subagents ?? null,
+      // `background-aware-working` (D-5231): the delegated work a main Stop
+      // left running, and ONLY when the live file's own word covers that work
+      // (2.1.277 on, `liveCoversWorkflows`) — below that floor D-75 answers as
+      // before — and only while the hook state is that Stop's `done` with a
+      // count above zero. Null everywhere else, which is the ladder's old answer.
+      // A subagent event after that Stop carries the pair but, until D-5232's
+      // gated arm keeps the main event, rewrites `event`: so the `done` may
+      // read `SubagentStart`/`SubagentStop`, the two events that carry it
+      // (`BACKGROUND_CARRIER_EVENTS`, D-5272); no other event writes the pair.
+      background: liveCoversWorkflows && hs !== null && hs.state === 'done'
+        && isHookEvent(hs.event) && BACKGROUND_CARRIER_EVENTS.has(hs.event)
+        && hs.background !== undefined && hs.background.count > 0
+        ? hs.background : null,
+      // D-5237: the registry's record of the last process end, carried as is;
+      // the PWA shows it for an hour (`recentLastEnd`).
+      lastEnd: r.lastEnd,
+      // D-5242: already epoch MS (`hibernatedAtOf`, `registry.ts`), carried straight off the record like `lastEnd`.
+      hibernatedAt: r.hibernatedAt,
+      // D-8121: the spawn's browser MCP record, carried as is; null when the row has none.
+      browserMcp: r.browserMcp ?? null,
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them
       // apart — collapsing them one layer out would undo that on the wire.
@@ -635,7 +933,11 @@ export async function assembleFleet(
       // archived row it is redundant but true. `pwa/test/session-lifecycle
       // .test.tsx` pins both, so this paragraph cannot silently go stale the
       // way its predecessor did.
-      lifecycle: sessionLifecycle(lifecycleInput),
+      lifecycle,
+      presence: reading.presence,
+      // The narrow reading (`FleetSession.deadSince`): only a `stopped` death, dated by the stop stamp's own instant.
+      // An `orphan` reads null (its last heartbeat dates supervision, not the death); `never-started` has no date.
+      deadSince: reading.deadCause === 'stopped' && r.stopped !== null ? r.stopped.at * 1000 : null,
       // Epoch MS on the wire — the timebase `statusUpdatedAt`/`bucketSince`
       // already use and the PWA's relative-time helpers already read.
       // `archivedAt` is the one exception, in seconds, because it shipped that
@@ -650,6 +952,12 @@ export async function assembleFleet(
       stranded: r.stranded === null
         ? null
         : { at: r.stranded.at * 1000, reason: r.stranded.reason },
+      // D-8123: the limit watchdog's no-room record, seconds→MS at THIS seam like `stranded`. A closed record, an absent file
+      // and a listed one that would not read are all null: an item with unknown `since`, `reset` and `account` is not shown.
+      limitWait: r.limitWait === undefined || r.limitWait === null || r.limitWait === 'unreadable'
+        ? null
+        : { since: r.limitWait.since * 1000, reset: r.limitWait.reset === null ? null : r.limitWait.reset * 1000,
+            account: r.limitWait.account, waiting: r.limitWait.waiting, waitingBy: r.limitWait.waitingBy },
       // Same seconds→MS conversion, at THIS seam only, like `stoppedBy` and
       // `swapBlocked` above. An unreadable marker's fail-shut `{at: 0}` rides
       // through as 0 (not a real 1970 stamp — the PWA renders text-only when
@@ -664,6 +972,32 @@ export async function assembleFleet(
       // against). This is a PROJECTION onto the wire, not a second field.
       started: r.started,
       spawnState: spawnVerdict(r.spawn === null ? null : r.spawn.rc),
+      // Carried straight off the record — the seven routing files
+      // `SessionRecord.route` already read alongside every other field on the
+      // registry's one `Promise.all` (registry.ts). No timestamp inside it to
+      // convert (unlike `stoppedBy`/`swapBlocked`/`stranded`/`substrate`
+      // above), so this is a bare passthrough.
+      route: r.route,
+      // Carried straight off the record, like `route` above: the registry's
+      // three-way reading of `$REG/<id>.child` (`SessionRecord.child`). A
+      // display value on this wire — the bind gate re-reads the registry.
+      child: r.child,
+      // D-5301: the role, from `.child` and nothing else — `sessionRoleOf`,
+      // the one derivation, so the badge and the start card agree on the
+      // `.child` axis only (the card is also silent for a held row; see there).
+      role: sessionRoleOf(r.child),
+      // Workspace lifecycle §5.1. `child` here is the registry's reading, `unreadable` counted as a child.
+      releasedFrom: released.ok
+        ? releasedFrom({
+          ...released.lookup(r.id), workspace: r.workspace, held: r.held !== null,
+          archived: r.archivedAt !== null, child: r.child.kind !== 'none',
+        })
+        : null,
+      // ARCH-61 (#796): the two named queries over the row's binding, decided once, here.
+      run: sessionRun.ok ? sessionRun.run : null,
+      openRun: sessionRun.ok ? sessionRun.openRun : null,
+      // Wave 4b: absent means unknown, so an entry the radar no longer speaks for leaves the key out, never `null` (D-7481).
+      ...(landing !== undefined && freshWithin(landing.at, RADAR_PROBE_FRESH_S, Date.now()) ? { landing } : {}),
       bucket: 'idle', bucketSince: null,   // replaced immediately below
     };
     // Computed FROM the assembled session, never from a second copy of the
@@ -680,4 +1014,5 @@ export async function assembleFleet(
     // no `event` to give.
     return { ...session, ...sessionBucket(session, hs?.updatedAt ?? null, hs?.event ?? null) };
   }));
+  return { sessions, panePids };
 }

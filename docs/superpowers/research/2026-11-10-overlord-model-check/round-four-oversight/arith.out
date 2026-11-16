@@ -1,0 +1,162 @@
+## T1. The bounds the text quotes
+ok  12 of 12: lower bound 0.779 (text 78%)
+ok  19 of 19: lower bound 0.854 (text 85%)
+ok  29 of 29: lower bound 0.902 (text 90%)
+note a lower bound of 0.85 over  19 cases needs  19 agreeing (0 misses allowed); 18 of 19 gives 0.774
+note a lower bound of 0.85 over  20 cases needs  20 agreeing (0 misses allowed); 19 of 20 gives 0.784
+note a lower bound of 0.85 over  30 cases needs  29 agreeing (1 misses allowed); 28 of 30 gives 0.805
+note a lower bound of 0.85 over  31 cases needs  30 agreeing (1 misses allowed); 29 of 31 gives 0.811
+note a lower bound of 0.85 over  40 cases needs  38 agreeing (2 misses allowed); 37 of 40 gives 0.817
+note a lower bound of 0.85 over  60 cases needs  56 agreeing (4 misses allowed); 55 of 60 gives 0.833
+note a lower bound of 0.85 over 100 cases needs  92 agreeing (8 misses allowed); 91 of 100 gives 0.848
+note a lower bound of 0.85 over 200 cases needs 179 agreeing (21 misses allowed); 178 of 200 gives 0.847
+note with one miss the least count is 30; with two misses it is 40
+
+## T2. The first gate: what `examined` selects (§6.6, Table 9.5a)
+| true agreement | examined share of accepts | glanced share of all answers | measured agreement | cases to pass | operator answers | days at 1 / 5 / 20 a day |
+|---|---|---|---|---|---|---|
+| 0.90 | 0% | 79% | 0.529 | never | never | never |
+| 0.90 | 20% | 63% | 0.730 | never | never | never |
+| 0.90 | 40% | 47% | 0.810 | never | never | never |
+| 0.90 | 60% | 32% | 0.854 | over 4000 | over 4000 | over 4000 |
+| 0.90 | 80% | 16% | 0.881 | 410 | 487 | 487 / 97 / 24 |
+| 0.90 | 100% | 0% | 0.900 | 150 | 150 | 150 / 30 / 7.5 |
+| 0.95 | 0% | 83% | 0.704 | never | never | never |
+| 0.95 | 20% | 66% | 0.851 | over 4000 | over 4000 | over 4000 |
+| 0.95 | 40% | 50% | 0.900 | 150 | 299 | 299 / 60 / 15 |
+| 0.95 | 60% | 33% | 0.925 | 76 | 114 | 114 / 23 / 5.7 |
+| 0.95 | 80% | 17% | 0.940 | 50 | 60 | 60 / 12 / 3.0 |
+| 0.95 | 100% | 0% | 0.950 | 40 | 40 | 40 / 8.0 / 2.0 |
+| 0.98 | 0% | 86% | 0.860 | 3790 | 26596 | 26596 / 5319 / 1330 |
+| 0.98 | 20% | 69% | 0.936 | 59 | 188 | 188 / 38 / 9.4 |
+| 0.98 | 40% | 51% | 0.959 | 40 | 82 | 82 / 16 / 4.1 |
+| 0.98 | 60% | 34% | 0.970 | 30 | 46 | 46 / 9.1 / 2.3 |
+| 0.98 | 80% | 17% | 0.976 | 30 | 36 | 36 / 7.2 / 1.8 |
+| 0.98 | 100% | 0% | 0.980 | 30 | 30 | 30 / 6.0 / 1.5 |
+CE G1-bias: at a true agreement of 0.90 the measured agreement passes 0.85 only while at least 58% of accepts are examined (a glanced share of at most 33%): below the fatigue line of 40%, so the gate closes before the fatigue rule acts
+note at a true agreement of 0.95 the measured agreement passes 0.85 only while at least 20% of accepts are examined (a glanced share of at most 66%)
+note at a true agreement of 0.98 the measured agreement passes 0.85 only while at least 0% of accepts are examined (a glanced share of at most 86%)
+CE G1-pick: before the hold tier nothing is "escalated", so no denominator binds: an Overlord right on 70% of rows that seals predictions only on the 50% it is surest of (right on 95% of those) shows 0.95 and passes the first gate at 40 cases
+note the same Overlord scored on blind answers alone passes at 150, 40, 30 cases (p 0.90, 0.95, 0.98): 1200, 320, 240 operator answers
+
+## T3. The third gate: a change of model, skill or card template (Table 9.5a)
+| replay set | bound at n of n | one answer changed | two changed | three changed | changed answers the gate tolerates |
+|---|---|---|---|---|---|
+| 19 | 0.854 | -0.069 | -0.133 | -0.193 | 0 |
+CE G3-noise: a replay set of 19: one changed answer moves the bound by 0.069, more than the gate's 0.05
+| 30 | 0.905 | -0.043 | -0.084 | -0.124 | 1 |
+| 40 | 0.928 | -0.033 | -0.065 | -0.096 | 1 |
+| 60 | 0.951 | -0.022 | -0.043 | -0.064 | 2 |
+| 100 | 0.970 | -0.013 | -0.025 | -0.037 | 4 |
+| 200 | 0.985 | -0.006 | -0.012 | -0.018 | 8 |
+| 400 | 0.993 | -0.003 | -0.006 | -0.009 | 17 |
+| replay set | false failure at equal true agreement 0.90 | at 0.95 |
+|---|---|---|
+| 30 | 26% | 25% |
+CE G3-noise: a replay set of 30 and no change in judgement: the gate fails 25% of changes (independent replays, true agreement 0.95)
+| 60 | 22% | 15% |
+CE G3-noise: a replay set of 60 and no change in judgement: the gate fails 15% of changes (independent replays, true agreement 0.95)
+| 100 | 15% | 12% |
+CE G3-noise: a replay set of 100 and no change in judgement: the gate fails 12% of changes (independent replays, true agreement 0.95)
+| 200 | 8% | 3% |
+| 400 | 2% | 0% |
+CE G3-ratchet: each change passes at "the last generation's less 0.05": a kind armed at 0.90 answers at 0.85, 0.80, 0.75, 0.70, 0.65, 0.60 after 6 changes, every gate green
+note Table 9.5a gives the third gate no least count: before the first gate passes, the replay set is under 30 cases
+
+## T4. `askOrAct` cells (§6.3, Table 11.5b)
+| size | urgency | lambda | bound needed | clean blind answers | with one disagreement | escalations in the cell at one in eight | days at 1 / 5 / 20 a day |
+|---|---|---|---|---|---|---|---|
+| routine | batchable | 1 | 0.050 | 59 | 93 | 472 | 472 / 94 / 24 |
+| routine | blocking-by | 1 | 0.075 | 39 | 62 | 312 | 312 / 62 / 16 |
+| routine | blocking-now | 1 | 0.100 | 29 | 46 | 232 | 232 / 46 / 12 |
+| big | batchable | 1 | 0.017 | 179 | 283 | 1432 | 1432 / 286 / 72 |
+| big | blocking-by | 1 | 0.025 | 119 | 188 | 952 | 952 / 190 / 48 |
+| big | blocking-now | 1 | 0.033 | 89 | 141 | 712 | 712 / 142 / 36 |
+| routine | batchable | 3 | 0.150 | 19 | 30 | 152 | 152 / 30 / 7.6 |
+| routine | blocking-by | 3 | 0.225 | 12 | 20 | 96 | 96 / 19 / 4.8 |
+| routine | blocking-now | 3 | 0.300 | 9 | 14 | 72 | 72 / 14 / 3.6 |
+| big | batchable | 3 | 0.050 | 59 | 93 | 472 | 472 / 94 / 24 |
+| big | blocking-by | 3 | 0.075 | 39 | 62 | 312 | 312 / 62 / 16 |
+| big | blocking-now | 3 | 0.100 | 29 | 46 | 232 | 232 / 46 / 12 |
+ok  the text's "about sixty", "about 180" and "about ninety" are 59, 179 and 89
+note before a cell acts, a weekly spot-check has nothing to draw from it: its only source is the blind sample of its escalations
+note once a cell acts, its rows are answered and no longer escalated: the blind sample stops, and the record grows by at most 3 spot-checks a week, shared by every cell
+note a cell that needs 59 clean cases and gets only spot-checks: 20 weeks if every spot-check of every week fell in it
+
+## T5. The grant gate (§7.2, Table 9.5a)
+note 19 blind cases pass only at 19 of 19; one miss needs 30 blind cases, two need 40
+reading: evidence per effect and scope, a cap under 19 -> unsatisfiable: every case is from the scope's one programme
+reading: evidence per effect and scope, a cap 19 or more -> the cap never binds
+reading: evidence per effect, across programmes, a cap under 19 -> satisfiable, and §7.2's "one scope" is false
+CE G2-cap: a scope is one programme: "a cap on cases from one programme" is either unsatisfiable (a cap under 19) or never binds
+note 19 blind cases at one in eight are 152 questions of one effect in one programme: 152 / 30 / 7.6 days at 1 / 5 / 20 such questions a day
+note with one miss: 240 questions; the five days are met by then at any rate under 30 a day
+CE G2-window: the grant evidence has "the window" and no length for it: at 30 days the gate needs 5.1 questions a day of one effect in one programme, at 90 days 1.7, at 180 days 0.8
+note a renewal needs three acts under the grant in its 30 days; an O3 item of one effect in one programme may come less often
+
+## T6. The label queue (§3.7)
+ok  a 10% target needs 29 clean answers and a 5% target 59
+note 12 rows take their labels from the queue; their lines need 378 labels beyond the line in all: 38 weeks at ten a week, if every card lands beyond a line
+| how the ten cards are shared | first line admitted | `scope.widens` (a gate, 59) | last line admitted | rows with no line after 400 weeks |
+|---|---|---|---|---|
+| oldest case first | week 11 | week 26 | week 152 | 0 |
+| newest case first | week 5 | week - | - | 5 |
+CE LQ-starve: ten cards a week shared "newest case first": 5 rows never reach a line (scope.widens ...)
+| equal shares | week 13 | week 27 | week 39 | 0 |
+| a gate first, then the row nearest its line | week 6 | week 6 | week 38 | 0 |
+CE LQ-source: `grant.inside` needs 59 labelled yes answers with no error, and its one label source, `overturn`, labels a yes only as wrong: its line is never admitted
+
+## T7. The consistency divisor (§9.5)
+| pairs | consistent | divisor as written (the rate) | raw bound the 0.85 floor then asks | agreeing of 30 | divisor at its 95% upper bound | agreeing of 30 |
+|---|---|---|---|---|---|---|
+| 20 | 20 | 1.00 | 0.850 | 29 | 1.00 | 29 |
+| 20 | 18 | 0.90 | 0.765 | 28 | 0.98 | 29 |
+| 20 | 16 | 0.80 | 0.680 | 25 | 0.93 | 28 |
+| 20 | 14 | 0.70 | 0.595 | 23 | 0.86 | 27 |
+| 50 | 40 | 0.80 | 0.680 | 25 | 0.89 | 27 |
+| 100 | 81 | 0.81 | 0.689 | 26 | 0.87 | 27 |
+CE G-divisor: the divisor is a point estimate on as few as 20 pairs: at 14 of 20 the "0.85" gate passes at 23 of 30 agreeing (7 misses)
+
+## T8. The auditor's model (§3.4, §9.5)
+ok  the Overlord on fable: the auditor may run opus
+CE AUD-total: the Overlord on opus (a fallback generation): no class is left for the auditor. `fable` is the operator's choice for the designated session only, and `opus` is the judged model
+
+## T9. The operator's week when every mechanism asks at once (§4.1, §3.7, §9.5, §9.6, §7.2)
+| what asks | cards a week | from | minutes a week | where it is budgeted |
+|---|---|---|---|---|
+| the weekly check (§9.6) | 5 | five cards at most | 5.0 | inside the Week page |
+| the rest of the Week page (§4.1) | 0 | the track record, overturns, ladder changes, drills, grants, entries | 5.0 | about ten minutes with the check |
+| the daily view, seven days (§4.1) | 0 | about two minutes a day | 14.0 | its own cadence |
+| the label queue (§3.7) | 10 | up to ten one-tap cards | 5.0 | in no cadence of Table 4.1a |
+| the judge's labels (§9.5) | 1.5 | twenty audit rows a quarter | 1.5 | monthly, "not fixed" |
+| grant renewals, 3 grants (§7.2) | 2.1 | three spot-checks a grant every 30 days | 2.1 | monthly, "not fixed" |
+| the blind sample's second step (§9.5) | 0 | one escalation in eight is answered twice | 0.0 | in the decision queue |
+note in all: 18.6 cards and about 33 minutes a week, at half a minute a one-tap card and one minute a spot-check or label
+note the promises hold one by one: five cards in the check, ten label cards. Table 4.1a budgets 24 of the 33 minutes
+CE LOAD-unbudgeted: the label queue's ten cards a week sit in no cadence of Table 4.1a, and "behind the operator's own items" gives them no place on the Week page
+
+## T10. What it takes to earn each kind of trust
+An "answer" is an operator answer that falls in the gate's own population: one kind, one cell, or one effect in one
+programme. Days are at 1, 5 and 20 such answers a day. The blind share is one in eight.
+| Gate | The events it needs | Least count | Operator answers | Days at 1 a day | at 5 | at 20 | Practical? |
+|---|---|---|---|---|---|---|---|
+| A kind of answer leaves shadow (Table 9.5a, row 1): every accept examined | answers of that kind, `blind` or `examined`, a prediction sealed before each | 30, at most 1 miss | 30 | 30 | 6.0 | 1.5 | yes |
+| the same, true agreement 0.95, three accepts in five examined | as above; every disagreement counts, a plain accept does not | 76 | 114 | 114 | 23 | 5.7 | yes |
+| the same, true agreement 0.95, two accepts in five examined | as above; every disagreement counts, a plain accept does not | 150 | 299 | 299 | 60 | 15 | slow |
+| the same, no accept examined | only the blind answers and the disagreements count | never: the measured agreement is 0.70 | - | - | - | - | no |
+| A grant proposal (row 2) | `blind` answers on one effect in one programme, on five days | 19 of 19 | 152 | 152 | 30 | 7.6 | no: 152 O3 questions of one effect in one programme |
+| the same, one miss | as above | 29 of 30 | 240 | 240 | 48 | 12 | no |
+| A grant leaves shadow (§7.2) | the operator's tap on its shadow report | no least count | - | - | - | - | yes: the operator's call |
+| A grant renews (§7.2) | three acts under the grant in its 30 days, answered as spot-checks | 3 acts every 30 days | - | - | - | - | only for a busy effect |
+| A change of model, skill or card (row 3) | a replay of the replay set, and the scenario suite | no least count; no operator answer | - | - | - | - | fails by chance 25% of the time at 30 cases |
+| An `askOrAct` cell acts: routine, batchable, `lambda` 1 | clean `blind` answers in that cell | 59 | 472 | 472 | 94 | 24 | no |
+| An `askOrAct` cell acts: routine, blocking-now, `lambda` 1 | clean `blind` answers in that cell | 29 | 232 | 232 | 46 | 12 | slow |
+| An `askOrAct` cell acts: big, batchable, `lambda` 1 | clean `blind` answers in that cell | 179 | 1432 | 1432 | 286 | 72 | no |
+| An `askOrAct` cell acts: big, blocking-now, `lambda` 1 | clean `blind` answers in that cell | 89 | 712 | 712 | 142 | 36 | no |
+| An `askOrAct` cell acts: routine, batchable, `lambda` 3 | clean `blind` answers in that cell | 19 | 152 | 152 | 30 | 7.6 | slow |
+| An `askOrAct` cell acts: big, batchable, `lambda` 3 | clean `blind` answers in that cell | 59 | 472 | 472 | 94 | 24 | no |
+| A decision-model line, 10% target | label cards beyond the line, none wrong | 29 | - | - | - | - | 3 weeks alone; weeks 13 to 39 at equal shares of ten cards |
+| A decision-model line, 5% target (`scope.widens`) | as above | 59 | - | - | - | - | 6 weeks alone; week 27 at equal shares, week 6 gate first |
+| `grant.inside`, 5% target | labels from `overturn` only | 59 yes answers labelled right | - | - | - | - | no: an overturn labels a yes only as wrong |
+
+== arith: counterexamples 14; checks passed 6

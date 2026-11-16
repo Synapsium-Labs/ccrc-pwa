@@ -32,7 +32,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { chmodSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, WIDE_PANE_IF_UP, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-rc-flag-'); });
@@ -192,7 +192,7 @@ describe('_rc_enabled — the box flag reader', () => {
  *  cases) and a shared stub would make each file's fixture the other's
  *  constraint. */
 const SPAWN_STUB = `sleep() { :; };
-  tmux() { case "$1" in
+  tmux() { ${WIDE_PANE} case "$1" in
     capture-pane) printf '%s' "$PANE_TEXT" ;;
     *) echo "tmux $*" >> "$HOME/ccd-calls" ;;
   esac; };`;
@@ -208,7 +208,7 @@ const acceptRc = (paneText: string, fromswap = '0'): number => {
 /** AN INVENTED FIXTURE, and it is labelled so deliberately.
  *
  *  Only the LAST line is measured bytes: it is the real captured footer from
- *  `statusline.test.ts:9` (`cc-claude2-expoAI-assistant`), which is the one part
+ *  `statusline.test.ts:9` (`cc-claude9-project-h`), which is the one part
  *  of the pane the marker set actually matches on when RC is off. The lines
  *  above it are a plausible idle prompt box written by hand — nobody has yet
  *  run a flag-off session on a real box, because Stage 2e is what makes flag-off
@@ -267,7 +267,7 @@ describe('_accept_first_run_prompts: a session on an RC-OFF box still reads as u
 });
 
 describe('the ready-marker set keeps ALL FIVE alternatives, `/rc active` included', () => {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
 
   /** The marker line is the ONE `echo "$pane" | grep -Eq "…"` in ccd (the only
    *  other `grep -Eq` is `_pane_login_screen`'s, single-quoted and fed from a
@@ -335,6 +335,7 @@ describe('the per-session rc field (the 2026-08-13 ruling, task #37)', () => {
   const TMUX = `sleep() { :; };
     tmux() {
       echo "tmux $*" >> "$HOME/ccd-calls"
+      ${WIDE_PANE_IF_UP}
       case "$1" in
         new-session)  : > "$HOME/pane-up" ;;
         kill-session) rm -f "$HOME/pane-up" ;;
@@ -349,6 +350,7 @@ describe('the per-session rc field (the 2026-08-13 ruling, task #37)', () => {
   const RESUME_DIES = `sleep() { :; };
     tmux() {
       echo "tmux $*" >> "$HOME/ccd-calls"
+      ${WIDE_PANE_IF_UP}
       case "$1" in
         new-session)  case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac ;;
         has-session)  [[ -e "$HOME/pane-up" ]] ;;
@@ -425,10 +427,9 @@ describe('the per-session rc field (the 2026-08-13 ruling, task #37)', () => {
     // Code in token mode against a local proxy, and its config dir holds no
     // claude.ai OAuth at all — so the flag would be refused, or hang the
     // spawn on a handshake that can never complete. `_spawn_start` gates
-    // `rcflag` on `_is_home_able "$wrapper"` for this reason, mirroring
-    // `_spawn_settle`'s `_is_home_able` guard around `_inject_spawn_effort`:
-    // the same "the external backend doesn't take Claude-specific input"
-    // reasoning, gating a different line of the same spawn.
+    // `rcflag` on `_is_home_able "$wrapper"` for this reason, on the same
+    // "the external backend doesn't take Claude-specific input" reasoning that
+    // gates the `--effort` default, a different line of the same spawn.
     //
     // The harness never installs the roster's non-home-able account; this
     // case installs the stub on purpose, the same idiom

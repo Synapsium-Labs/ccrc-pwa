@@ -47,7 +47,7 @@ const flat = (s: string): string => s.replace(/^\s*\*\s?/gm, '').replace(/\s+/g,
 
 describe('the sixth refusal union', () => {
   it('derives the runtime list from the map, in declaration order', () => {
-    expect(RECLAIM_REFUSE_CODES).toEqual(['claimant-alive', 'no-claimant']);
+    expect(RECLAIM_REFUSE_CODES).toEqual(['claimant-alive', 'no-claimant', 'heir-is-a-worker']);
   });
 
   it('is total in both directions at compile time', () => {
@@ -55,7 +55,8 @@ describe('the sixth refusal union', () => {
     // the map gains one the union does not have. `typecheck-tests.test.ts` compiles
     // this directory under `test/tsconfig.tests.json`, whose `include` carries
     // `../../shared/**/*.ts`, so this is a gate and not a comment.
-    const total: Record<ReclaimRefuseCode, true> = { 'claimant-alive': true, 'no-claimant': true };
+    const total: Record<ReclaimRefuseCode, true> =
+      { 'claimant-alive': true, 'no-claimant': true, 'heir-is-a-worker': true };
     expect(Object.keys(total)).toEqual([...RECLAIM_REFUSE_CODES]);
   });
 
@@ -102,7 +103,7 @@ describe('the sixth refusal union', () => {
     }
   });
 
-  it('both members are kebab tokens the coord scanner will actually see', () => {
+  it('every member is a kebab token the coord scanner will actually see', () => {
     // Anti-vacuity for the arm added to `mail-routes.test.ts:606` in this same
     // commit. That scanner matches `/'([a-z]+(?:-[a-z]+)+)'/` over every `.ts` under
     // `server/src/coord`; a single-word member would need no arm at all and the arm
@@ -352,5 +353,39 @@ describe('RunSummary.claimedBy stops claiming what stopped being true', () => {
     expect(d).not.toContain('/api/runs/:id/reclaim');
     // …while the route that DOES write this field at open is still named, correctly.
     expect(d).toContain('POST /api/runs');
+  });
+});
+
+describe("the sheet's copy map is keyed on the door's union, never a respelling of it", () => {
+  // BESIDE THE `Object.keys` PIN ABOVE (`:63`), one ring out and on the same
+  // argument. `RECLAIM_COPY` (`pwa/src/fleet/ResumeSheet.tsx`) is a total
+  // `Record` whose key type is `ReclaimRefuseCode` UNION the arms this sheet
+  // adds on top of the door's vocabulary — so the day that union gains a
+  // member, the map is a compile error rather than a runtime fall-through to
+  // `unknown`. Hand-write today's three literals back in its place and nothing
+  // else reds: the map still compiles, still covers exactly the three codes
+  // that exist, and silently stops being total on the next member. That is the
+  // drift `builds the list with Object.keys` guards for the runtime list, so
+  // the pin takes the same shape — a source regex over the declaration itself,
+  // because the PWA is not compiled by this suite and a type cannot be
+  // asserted from here any other way.
+  //
+  // WHY IT SITS AT THE END OF THIS FILE rather than physically beside its
+  // sibling at `:63`. Three citations point INTO this file below that line —
+  // `docs/superpowers/plans/2026-09-08-crossrepo-wave1-server.md`'s `:95-103`,
+  // `docs/superpowers/specs/2026-09-08-crossrepo-programmes-design.md`'s
+  // `:101`, and this wave's own plan's `:297-303` — and the first two belong to
+  // a CLOSED programme whose documents are byte-identical to `origin/main`, so
+  // they cannot be re-pointed from this branch. All three resolve today;
+  // inserting a block above them would rot them to buy a nicer line number.
+  // Appending costs nothing, because nothing cites past the end.
+  it('declares RECLAIM_COPY over ReclaimRefuseCode, not three hand-written literals', () => {
+    const src = readFileSync(path.join(root, 'pwa', 'src', 'fleet', 'ResumeSheet.tsx'), 'utf8');
+    // ANTI-VACUITY FIRST, and it earns its place: a regex over a file that was
+    // renamed or moved passes by reading nothing. This separates "the sheet is
+    // gone" from "the key type was respelled", which are different repairs.
+    expect(src, 'reading the sheet that declares the map').toContain('export const RECLAIM_COPY');
+    expect(src, "RECLAIM_COPY's key type names the door's union rather than respelling its members")
+      .toMatch(/RECLAIM_COPY[^=]*Record<\s*ReclaimRefuseCode/);
   });
 });

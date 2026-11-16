@@ -152,7 +152,7 @@ export function reviveDec(v: unknown): LifecycleDec | null {
 }
 
 /**
- * `LifecycleMeas`'s full twenty-eight keys, and only those — a 29th key is a
+ * `LifecycleMeas`'s full thirty-five keys, and only those — a 36th key is a
  * compile error here (TS2353) exactly as it is on the interface itself
  * (`shared/api.ts`'s own `LIFECYCLE_MEAS_KEY_MAP`).
  *
@@ -186,7 +186,7 @@ export function reviveDec(v: unknown): LifecycleDec | null {
  * `task-29-report.md`.
  *
  * What the brief's "ten declared, rest lives in raw" design intent survives
- * as: any key a future ccd emits that is NOT one of these twenty-eight still
+ * as: any key a future ccd emits that is NOT one of these thirty-FIVE still
  * never reaches `meas` — it is still recoverable only from `raw`, verbatim.
  */
 export function reviveMeas(v: unknown): LifecycleMeas | null {
@@ -206,6 +206,19 @@ export function reviveMeas(v: unknown): LifecycleMeas | null {
     // Account pools wave 2b (Task 6 fix round 1) — the two `rehome` emitters'
     // fields; see `LifecycleMeas.home`/`.pool`/`.reason`'s own docstrings.
     home: s(o, 'home'), pool: s(o, 'pool'), reason: s(o, 'reason'),
+    // D-2605 fix round 2 (D-2782) — what a `purge-incomplete` failure could
+    // not unlink; then ws-reclaim's run, WIP commit and residue (child reclamation, wave 3); then the leaves its tail KEPT (wave 6).
+    unremoved: s(o, 'unremoved'), childOf: s(o, 'childOf'), wip: s(o, 'wip'), residueBytes: s(o, 'residueBytes'), tmpRootKept: s(o, 'tmpRootKept'), clipsKept: s(o, 'clipsKept'), leaf: presentAsText(o, 'leaf'),
+    // D-7278 — the run marker a deps-shed line was judged against (`LifecycleMeas.childRun`).
+    childRun: s(o, 'childRun'),
+    // Delegation broker wave 5 PR3 (D-7827) — a child `create` row's `--base` start point (`LifecycleMeas.startpoint`).
+    startpoint: s(o, 'startpoint'),
+    // Cleanup un-wedge R4 (D-8002) — a collection of a leaf released after a box move (`LifecycleMeas.witness`).
+    witness: s(o, 'witness'),
+    // Cleanup un-wedge R2 (D-8000) — the rows that hold a child, on the reclaim audit's `probe-unmeasured` line (`LifecycleMeas.heldBy`).
+    heldBy: s(o, 'heldBy'),
+    // D-5945 — the stale index locks rung 6 passed, on a reclaim or expiry intent (`LifecycleMeas.staleLock`).
+    staleLock: s(o, 'staleLock'),
   };
 }
 
@@ -251,7 +264,7 @@ export function parseJournalLine(line: string): JournalRow {
     // UNIX user — identity there is attribution, not authentication
     // (`CLAUDE.md`) — so any session can append a line, and this parser is
     // the boundary that has to re-establish the invariant the writer
-    // enforces (`ccd/ccd:1535-1540`'s `_lc_emit`, which only ever sets
+    // enforces (`ccd/ccd`'s `_lc_emit`, which only ever sets
     // `badact`/`badoutcome` for a token that FAILED its vocabulary match,
     // never alongside a matched one) rather than trust it off the wire.
     // ONE condition now: `badact` only exists to answer "what did `act`
@@ -262,7 +275,7 @@ export function parseJournalLine(line: string): JournalRow {
     outcome,
     // `badoutcome` — F1: previously dropped entirely (no field on
     // `JournalRow`, `o['badoutcome']` never read), even though ccd writes it
-    // today (`ccd/ccd:1469`, `:1417-1422`) and `LifecycleEvent.badoutcome`
+    // today (`_lc_emit`'s degrade arm, through `_lc_json`) and `LifecycleEvent.badoutcome`
     // (`shared/api.ts:4873-4876`) already declares it with the identical
     // invariant `badact` has: "null whenever `outcome` is not
     // `LC_OUTCOME_UNKNOWN`... neither sends a reader to `raw` for it."
@@ -283,4 +296,14 @@ export function parseJournalLine(line: string): JournalRow {
     obs: reviveObs(o['obs']), dec: reviveDec(o['dec']), meas: reviveMeas(o['meas']),
     raw: line,
   };
+}
+
+/** `meas.leaf`'s reviver (path-identity spec §3.4). Absent, or a JSON null, is `null`: the key was not carried. A JSON
+ *  null is the store's own spelling of that, since `reviveMeas` writes every key and the store keeps that object. A
+ *  string is itself, whatever its word. Any other PRESENT value is its JSON text, so a present value is never read as
+ *  absent. Declared at the foot, below every line the frozen plan corpus cites. */
+function presentAsText(o: Obj, k: string): string | null {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  return typeof v === 'string' ? v : JSON.stringify(v);
 }

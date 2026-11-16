@@ -1,0 +1,210 @@
+// A SENTENCE WRITTEN TWICE is copy that drifts, and this is the census that
+// will not let a third appear.
+//
+// WHY A FOURTH CENSUS. The three before it read STRUCTURE — stylesheet rules
+// (`shape-census`), JSX trees, `className=` literals and leaf attribute sets
+// (`markup-census`), hand-drawn controls (`control-census`). Every one of them
+// is blind, by construction, to a string that is none of those. Measured, not
+// argued: a single scan of this tree found SEVENTEEN duplicated literals, and
+// eleven were real copy no census could see —
+//
+//   * `tmux unreachable — <reason>` in SEVEN files, three of them carrying a
+//     comment that said the string was "never a second copy";
+//   * `that run is gone — the board will catch up` in two refusal `Record`s;
+//   * `This workspace is claimed` as a `title=` prop and as a computed title;
+//   * `${reads} graphify read(s) this session` in two chips;
+//   * three pool sentences across four surfaces;
+//   * one `console.warn` in three pollers of one route;
+//   * `(prefers-reduced-motion: reduce)` in the app's router and in the design
+//     system's own hook;
+//   * `merged, ready to clean up` in a header and in `StatusDot`'s map;
+//   * two class strings assigned to CONSTANTS, which the markup census's
+//     literal half cannot see because it reads `className=` attributes.
+//
+// WHAT IT READS. Every string literal, no-substitution template and template
+// SKELETON (the head plus each span's literal, with the expressions replaced
+// by one placeholder) in both packages and in `shared/`. A skeleton so that
+// `Couldn't set the pool — ${a}` and `Couldn't set the pool — ${b}` are one
+// sentence, which is what they are.
+//
+// THE TWO FLOORS, both measured. TWENTY-FIVE characters: at 15 the census
+// fills with `data-testid` values and two-word labels that are the same word
+// twice, not the same decision; at 40 it loses `This workspace is claimed`
+// (25) and `merged, ready to clean up` (25), which are exactly the copies a
+// reader wants named. And the literal must contain a SPACE or sentence
+// punctuation: without that rule every `camelCaseIdentifier` and
+// `kebab-case-slug` in the tree qualifies on length alone, and an identifier
+// repeated is a vocabulary being USED, which is the point of a vocabulary.
+//
+// IMPORT SPECIFIERS ARE NOT COPY. `'../primitives/collapsible-strip'` in two
+// files is two modules importing one module — the opposite of drift. They are
+// excluded by their POSITION in the syntax tree, never by a path-shaped
+// pattern, so a sentence that happens to look like a path still counts.
+//
+// MEASURED. Five mutations, each run against the whole file:
+//
+//   | mutation                                            | result     |
+//   |-----------------------------------------------------|------------|
+//   | a 30-char sentence copied into two app files        | 1 red      |
+//   | the registry's one entry deleted                    | 1 red      |
+//   | an entry for a literal that is not duplicated       | 1 red      |
+//   | the file walk returns an empty list                 | 2 red      |
+//   | the import-specifier exclusion removed              | 2 red      |
+//
+// Baseline: 4 passed.
+import { describe, expect, it } from 'vitest';
+import { readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { ts } from '../../server/test/scan/parse';
+import { parseTs, isSpecifier } from './literalWalker';
+
+const PKG = path.join(import.meta.dirname, '..', '..');
+
+function sources(tag: string, root: string): [string, string][] {
+  const out: [string, string][] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir).sort()) {
+      const p = path.join(dir, entry);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.tsx?$/.test(p) && !p.endsWith('.stories.tsx') && !p.endsWith('.d.ts')) {
+        out.push([`${tag}/${path.relative(root, p)}`, p]);
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+const FILES = [
+  ...sources('pwa', path.join(PKG, 'pwa', 'src')),
+  ...sources('ui', path.join(PKG, 'ui', 'src')),
+  ...sources('shared', path.join(PKG, 'shared')),
+];
+
+const MIN_CHARS = 25;
+/** The placeholder a template's expressions collapse to. A private-use code
+ *  point, so no real string can contain it. */
+const HOLE = '';
+
+/** Every file, parsed ONCE, at module load (see `LITERALS`). */
+const PARSED: readonly (readonly [string, ts.SourceFile])[] = FILES.map(([name, file]) => [name, parseTs(file)] as const);
+
+function literals(): Map<string, string[]> {
+  const found = new Map<string, string[]>();
+  for (const [name, src] of PARSED) {
+    const visit = (n: ts.Node): void => {
+      let text: string | null = null;
+      if ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) && !isSpecifier(n)) {
+        text = n.text;
+      } else if (ts.isTemplateExpression(n)) {
+        text = n.head.text + n.templateSpans.map((s) => HOLE + s.literal.text).join('');
+      }
+      if (text !== null) {
+        const t = text.trim();
+        if (t.length >= MIN_CHARS && /[ .?!—:]/.test(t)) {
+          const line = src.getLineAndCharacterOfPosition(n.getStart()).line + 1;
+          const at = `${name}:${line}`;
+          const prev = found.get(t);
+          if (prev === undefined) found.set(t, [at]); else prev.push(at);
+        }
+      }
+      n.forEachChild(visit);
+    };
+    visit(src);
+  }
+  return found;
+}
+
+/** The whole tree, parsed ONCE, at module load. A full TypeScript parse of every file is seconds of synchronous work
+ *  (1.5 s idle, 4.8 s on one contended core), and inside a case it ran three times against the 5 s per-case deadline:
+ *  the first case timed out under load. Collection has no such deadline. */
+const LITERALS = literals();
+
+/** ACROSS FILES, never within one. A literal repeated inside ONE file is that
+ *  file's own business — two arms of a ternary, a fixture used twice — and the
+ *  drift this census is about is between files that cannot see each other. */
+const duplicated = (m: Map<string, string[]>): string[] =>
+  [...m.entries()]
+    .filter(([, v]) => new Set(v.map((a) => a.slice(0, a.lastIndexOf(':')))).size >= 2)
+    .map(([k]) => k)
+    .sort();
+
+/** The reason the test box's shape sentences are two literals (D-8166). */
+const TESTBOX_SHAPE_COPY = 'TWO TABLES, ONE ORIGIN, AGREEING TODAY. `TESTBOX_SHAPE_SENTENCE` (shared/testbox-admin.ts) is the L0 copy of '
+  + '`_tb_shape_says` (ccd/testbox-knobs), one sentence per shape class, and `BOX_SETTING_REFUSAL_WORDS` (shared/api.ts) is the closed list '
+  + 'of words a box-settings row\'s `why` may be, every sentence `_set_says` prints. `readTestboxAdminStatus` accepts the union of the two '
+  + '(`REFUSAL_SENTENCES`), and `server/test/box-settings-table.test.ts` holds the second to the bash it was read from, so each table '
+  + 'has its own owner and a fold would make a reword of one a silent reword of the other.';
+
+/** Every cross-file literal, with the reason it is still two literals.
+ *
+ *  An entry is a decision, not an exemption: either these two sentences are
+ *  two decisions that happen to agree today, or this is the next fold and the
+ *  reason says what it is waiting on. Checked in both directions. */
+const REGISTERED: Record<string, string> = {
+  // No NEXT. The one entry below is argued, not deferred.
+  'The latest read failed — this is the last answer that landed.':
+    'TWO SECTIONS, TWO COPIES, agreeing today. `UPDATES_STALE_TEXT` '
+    + '(fleet/useUpdatesView.ts) is the UPDATE plane\'s sentence for a poll that '
+    + 'failed after one landed, said by Settings and every update surface on the '
+    + 'home screen (centralised-update wave 19); '
+    + '`STALL_SECTION_TEXT.stale` (shared/api.ts) is the stall-watch section\'s '
+    + 'for its own read. They are two surfaces with two owners — the stall '
+    + 'watch\'s whole copy table is in L0 because the SERVER composes some of '
+    + 'it, and the update plane\'s is not — so folding them would make one '
+    + 'section\'s rewording silently reword the other. The repo\'s own pattern '
+    + 'is a copy table per surface (`ABANDON_COPY`, `RECLAIM_COPY`), and this '
+    + 'is that pattern costing one duplicated sentence.',
+  // D-8166 (test box connect, TC1; found by TC15's run of this census, which no earlier task of the plan ran): the shape sentences of
+  // the test box's own settings, spelled once in `shared/testbox-admin.ts` and once in `shared/api.ts`.
+  ...Object.fromEntries([
+    'a URL such as https://testbox.invalid',
+    'a list of file name patterns',
+    'a whole number from 1 to 99',
+    'a whole number with a K, M or G suffix',
+    'a whole number with an s, m, h or d suffix',
+    'an absolute path, or one starting ~/, with no . or .. part',
+  ].map((sentence) => [sentence, TESTBOX_SHAPE_COPY])),
+  'not 32 lowercase hex characters': 'TWO READERS, TWO COPIES, agreeing today. `runId` (shared/testbox.ts) refuses a run id and `actState` '
+    + '(shared/testbox-admin.ts) an act id, each its own reader of its own wire (the shared readers say each refusal in its own file, '
+    + 'which names the field), so folding them would make one reader\'s rewording silently reword the other.',
+};
+
+describe('literal census', () => {
+  it('registers every literal written in two files', () => {
+    const dups = duplicated(LITERALS);
+    const missing = dups.filter((d) => REGISTERED[d] === undefined);
+    expect(missing, 'a sentence spelled in two files is copy that drifts — register it or fold it')
+      .toEqual([]);
+  });
+
+  it('keeps no stale entry', () => {
+    const dups = new Set(duplicated(LITERALS));
+    const stale = Object.keys(REGISTERED).filter((k) => !dups.has(k));
+    expect(stale, 'this literal is no longer duplicated — drop the entry').toEqual([]);
+  });
+
+  it('gives every entry a reason long enough to be one', () => {
+    for (const [k, why] of Object.entries(REGISTERED)) expect(why.length, k).toBeGreaterThan(60);
+  });
+
+  it('parses every file it reads without a syntax error, so no file is read only in part', () => {
+    // A `.ts` file read with the TSX grammar takes a generic arrow `async <T>(…)` for a JSX tag, and every literal
+    // after it is lost to the census: `lib/api.ts` was read only in part that way.
+    const misparsed = PARSED
+      .filter(([, src]) => (src as unknown as { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics.length > 0)
+      .map(([name]) => name);
+    expect(misparsed).toEqual([]);
+  });
+
+  it('reads strings at all, and still excludes specifiers', () => {
+    // The whole census is a parse away from a serene zero.
+    expect(FILES.length).toBeGreaterThan(80);
+    const all = LITERALS;
+    expect(all.size).toBeGreaterThan(300);
+    // The exclusion is asserted rather than assumed: this path is imported by
+    // two files in `@ccrc/ui` and would be a duplicate without it.
+    expect([...all.keys()], 'an import specifier reached the census')
+      .not.toContain('../primitives/collapsible-strip');
+  });
+});

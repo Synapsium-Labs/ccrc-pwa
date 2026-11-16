@@ -1,0 +1,12 @@
+ ❯ add a cache to project-a
+
+ ● I'll add the cache in
+   src/lib/cache.ts.
+
+ ✽ Working… (3s · ↓ 12 tokens)
+
+──
+ ❯
+──
+   esc to interrupt
+

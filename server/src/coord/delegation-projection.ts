@@ -1,0 +1,194 @@
+// Delegation broker wave 4, PR1 Task 1.2: the `delegation` frame, DECIDED (spec §5.8, §8.4; D-6999, D-7002, D-7023).
+//
+// THIS MODULE IS L1. It imports the shared wire, the pure model, the one newest-attempt derivation (`delegation-conflicts.ts`), the correlation
+// module's tree key, the lease's one carrier-state derivation (`delegation-lease-state.ts`, PR7), the binding's R9 decider, the divergence sweep's ccd identity of a worktree and `rowStanding`, and nothing else: no filesystem, no store, no clock, no census adapter (`gitref.ts` is L3, so the census shape is
+// declared structurally below; `DelegationCensusPass` and the lane's `absences` values are assignable to it as they are). It makes no
+// durable write. The watcher (L4) gathers the inputs after a pass and broadcasts what this returns.
+//
+// R9 is decided by the binding module (`claimantAt`, `coord/runBinding.ts`), the one place a run is told to bind a session. It is
+// legitimately different from `foldCoordPlacements` (`coord/placement.ts`): placement answers "the newest stamp for this session" to put
+// a card on a project; R9 asks "whose run was live at THIS instant", because one ccd session id works several runs over time,
+// sometimes for different coordinators, and the placement stamps do not carry a run's interval.
+import {
+  isDelegationActivityPlacement,
+  isDelegationCarrierState,
+  isDelegationCreatorKind,
+  isDelegationLiveness,
+  isDelegationRowGroup,
+  type DelegationActivityWire,
+  type DelegationInferredWire,
+  type DelegationLeaseWire,
+  type DelegationLiveness,
+  type DelegationProjectionWire,
+  type DelegationRowGroup,
+  type DelegationUnownedWire,
+  type FleetSession,
+} from '../../../shared/api.js';
+import {
+  formatDelegationInstant,
+  parseDelegationInstant,
+  type DelegationActivityRow,
+  type DelegationCensusRecord,
+  type DelegationCheckpointV1,
+} from './delegation-model.js';
+import { delegationTreeKey } from './delegation-correlation.js';
+import { conflictingTreeKeys, newestUnownedAttempts, resolvedAttemptCovered, treeLeaseOf } from './delegation-conflicts.js';
+import { claimantAt, type StampedRun } from './runBinding.js';
+import { delegationCarrierStateOf } from './delegation-lease-state.js';
+import { ccdIdForWorktree } from '../divergence.js';
+import { rowStanding, type RowStandingFacts } from '../sessionReading.js';
+
+/** How many newest closed runs the R9 mapping reads (L4 passes it to the store's narrow read). A worker whose run is older than
+ *  that window falls back to its own row: the rider's store read by `sessionId` removes the bound. */
+export const DELEGATION_PROJECTION_CLOSED_RUNS = 200;
+
+export type DelegationProjectionSession = Pick<FleetSession, 'id'> & RowStandingFacts;
+/** One run's stamp, from the narrow read `delegationRunStamps`, never the full `runs()` hydration: the binding module's
+ *  `StampedRun`, declared once there (R9's decider reads it). */
+export type DelegationProjectionRun = StampedRun;
+export interface DelegationProjectionInput {
+  checkpoint: Pick<DelegationCheckpointV1, 'activities' | 'leases' | 'attempts' | 'leaseCarriers'>;
+  census: {
+    measuredAt: number;
+    projects: ReadonlyMap<string, { delegation: readonly DelegationCensusRecord[] | null }>;
+    incarnations: ReadonlyMap<string, { kind: 'measured'; incarnation: string } | { kind: 'unmeasured' }>;
+  };
+  absences: readonly { project: string; adminRecord: string }[];
+  /** This tick's listed registry; never a partial listing (the lane withholds the projection when the registry is unlisted). */
+  sessions: readonly DelegationProjectionSession[];
+  /** The tick's refused ids (`RegistryRead.refused`): listed but never read, so a parent among them is in no `sessions` and proves nothing. */
+  refused: ReadonlySet<string>;
+  /** Open runs plus the newest `DELEGATION_PROJECTION_CLOSED_RUNS` closed ones. */
+  runs: readonly DelegationProjectionRun[];
+}
+
+type Presence = 'present' | 'absent' | 'unmeasured';
+const bySortKey = <T>(key: (x: T) => readonly string[]) => (a: T, b: T): number => {
+  const ka = key(a);
+  const kb = key(b);
+  for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i]! < kb[i]! ? -1 : 1;
+  return 0;
+};
+
+/** The frame's payload for one pass. Byte-stable for the watcher's dedupe: every list is sorted on fixed keys. */
+export function projectDelegation(input: DelegationProjectionInput): DelegationProjectionWire {
+  const { checkpoint, census } = input;
+  const sessions = new Map(input.sessions.map((s) => [s.id, s]));
+  // Programme ownership wins (D-7006): a listed session owns a tree when its id is the tree's ccd id (`ccdIdForWorktree`, the
+  // divergence sweep's identity), never by comparing path spellings. A path that names no ccd id, or no path, is owned by nobody.
+  const owns = (project: string, path: string | null): boolean => {
+    const id = path === null ? null : ccdIdForWorktree(project, path);
+    return id !== null && sessions.has(id);
+  };
+  const activities = new Map(checkpoint.activities.map((a) => [a.activityId, a]));
+  const absent = new Set(input.absences.map((a) => delegationTreeKey(a.project, a.adminRecord)));
+  const groupOf = (id: string): DelegationRowGroup => (sessions.has(id) ? 'parent' : 'offline-coordinator');
+  const coordinatorOf = (id: string, at: string): string | null => claimantAt(input.runs, id, parseDelegationInstant(at));
+  const presence = (project: string, adminRecord: string): Presence => presenceOf(census.projects, absent, project, adminRecord);
+  const liveness = (a: DelegationActivityRow): DelegationLiveness => livenessOf(a, sessions, input.refused, census.incarnations);
+
+  const unreleased = checkpoint.leases.filter((l) => l.releasedAt === null);
+  const leasedTrees = new Set(unreleased.map((l) => delegationTreeKey(l.project, l.adminRecord)));
+  const leasedActivities = new Set(unreleased.map((l) => l.activityId));
+  // The newest unowned-work attempt per tree, and the trees whose newest is `conflicting` and not covered by an operator's resolve
+  // (`delegation-conflicts.ts`, the derivations every wave-5 decider reads too, D-7820).
+  const newest = newestUnownedAttempts(checkpoint);
+  const conflicting = conflictingTreeKeys(checkpoint);
+
+  const activityRows: DelegationActivityWire[] = [];
+  for (const a of checkpoint.activities) {
+    if (a.sourceKind === 'bash-worktree' || leasedActivities.has(a.activityId)) continue;
+    const now = liveness(a);
+    if (now === 'ended') continue;
+    activityRows.push({
+      activityId: a.activityId, parentId: a.parentId, group: groupOf(a.parentId),
+      placement: coordinatorOf(a.parentId, a.openedAt) === null ? 'row' : 'chip', sourceKind: a.sourceKind, upstreamId: a.upstreamId,
+      displayName: a.displayName, liveness: now, openedAt: a.openedAt, lastEventAt: a.lastEventAt,
+    });
+  }
+
+  const leaseRows: DelegationLeaseWire[] = [];
+  for (const l of unreleased) {
+    const k = delegationTreeKey(l.project, l.adminRecord);
+    if (owns(l.project, l.canonicalPath)) continue;
+    if (conflicting.has(k) && l.sourceKind !== 'raw') continue;
+    const workspace = presence(l.project, l.adminRecord);
+    if (workspace === 'absent') continue;
+    const coordinator = coordinatorOf(l.parentId, l.firstObservedAt);
+    const parentId = coordinator ?? l.parentId;
+    const act = activities.get(l.activityId);
+    const inferred: DelegationInferredWire | null = l.sourceKind !== 'raw' ? null
+      : { creator: act?.sourceKind === 'bash-worktree' ? { kind: 'bash-call', toolUseId: act.upstreamId } : { kind: 'unmeasured' } };
+    leaseRows.push({
+      leaseId: l.leaseId, parentId, via: coordinator === null ? null : l.parentId, group: groupOf(parentId), project: l.project,
+      adminRecord: l.adminRecord, canonicalPath: l.canonicalPath, sourceKind: l.sourceKind, workspace,
+      liveness: act ? liveness(act) : 'unmeasured', inferred, firstObservedAt: l.firstObservedAt,
+      // PR7 (Task 5.7.4): the carrier state and the hold's end; an unreleased lease is never `released`
+      disposition: delegationCarrierStateOf(l, checkpoint.leaseCarriers?.find((c) => c.leaseId === l.leaseId)) as Exclude<ReturnType<typeof delegationCarrierStateOf>, 'released'>,
+      expiresAt: l.cleanupDueAt,
+    });
+  }
+
+  const unownedRows: DelegationUnownedWire[] = [];
+  for (const [k, a] of newest) {
+    if ((leasedTrees.has(k) && a.verdict !== 'conflicting') || owns(a.project, a.canonicalPath)) continue;
+    if (resolvedAttemptCovered(checkpoint, a)) continue;                      // the operator resolved it (D-7820)
+    const workspace = presence(a.project, a.adminRecord);
+    if (workspace === 'absent') continue;
+    // PR8: the lease hidden for a conflict on this tree, named so the lease has a control: `treeLeaseOf`, the one derivation a
+    // `tree-<key>` resolve reads too, so the row and the resolve name the same lease (F7).
+    const hidden = treeLeaseOf(checkpoint, conflicting, k);
+    unownedRows.push({
+      project: a.project, adminRecord: a.adminRecord, canonicalPath: a.canonicalPath, verdict: a.verdict as DelegationUnownedWire['verdict'],
+      reason: a.detail!, rung: a.rung, workspace, attemptedAt: a.attemptedAt, ...(hidden?.hiddenForConflict === true ? { leaseId: hidden.lease.leaseId } : {}),
+    });
+  }
+
+  return {
+    asOf: formatDelegationInstant(census.measuredAt),
+    activities: activityRows.sort(bySortKey((r) => [r.parentId, r.openedAt, r.activityId])),
+    leases: leaseRows.sort(bySortKey((r) => [r.parentId, r.firstObservedAt, r.leaseId])),
+    unowned: unownedRows.sort(bySortKey((r) => [r.project, r.adminRecord])),
+  };
+}
+
+/** The parent's row reads as `claimProbe` reads a holder (D-6908, `rowStanding`), so every parent a claim holds as doubt
+ *  is `unmeasured` here: a refused or restarting one, one tmux did not answer for, or one with an identity field unmeasured.
+ *  The reverse does not follow: the helper's own unknowns below read `unmeasured` over a parent that is here. A sleeping
+ *  parent has its own word: it is neither gone nor in doubt. */
+function livenessOf(
+  a: DelegationActivityRow,
+  sessions: ReadonlyMap<string, DelegationProjectionSession>,
+  refused: ReadonlySet<string>,
+  incarnations: DelegationProjectionInput['census']['incarnations'],
+): DelegationLiveness {
+  if (a.executionState === 'ended') return 'ended';
+  if (refused.has(a.parentId)) return 'unmeasured';
+  const parent = sessions.get(a.parentId);
+  const standing = parent === undefined ? 'gone' : rowStanding(parent);
+  if (standing === 'gone') return 'stale';
+  if (standing === 'asleep') return 'asleep';
+  if (standing === 'doubt') return 'unmeasured';
+  const inc = incarnations.get(a.parentId);
+  if (a.executionState === 'unknown' || inc?.kind !== 'measured') return 'unmeasured';
+  return inc.incarnation === a.parentIncarnation ? 'live' : 'stale';
+}
+
+/** A tree's presence: an unmeasured project is never absent; a present record wins; a lane-held absence of a measured project is
+ *  absent; anything else is unmeasured. */
+function presenceOf(
+  projects: DelegationProjectionInput['census']['projects'],
+  absent: ReadonlySet<string>,
+  project: string,
+  adminRecord: string,
+): Presence {
+  const records = projects.get(project)?.delegation ?? null;
+  if (records === null) return 'unmeasured';
+  if (records.some((r) => r.adminRecord === adminRecord && r.state === 'present')) return 'present';
+  return absent.has(delegationTreeKey(project, adminRecord)) ? 'absent' : 'unmeasured';
+}
+
+/** The projection's closed words, for the mail-routes kebab census: derived from `shared/api.ts`'s four tables, never re-spelled. */
+export const isDelegationProjectionKebab = (tok: string): boolean =>
+  isDelegationLiveness(tok) || isDelegationRowGroup(tok) || isDelegationActivityPlacement(tok) || isDelegationCreatorKind(tok)
+  || isDelegationCarrierState(tok);

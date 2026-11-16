@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the fleet limit watchdog every minute
+[Timer]
+# Its OWN timer and never a supervisor tick: the watchdog is the net under every cause that keeps a session on a usage
+# limit (a stand-down hold, a cached verdict, a class window nobody can decide), and a supervisor that is itself
+# wedged, or still running a pre-fix inode, cannot silence it for its own sessions.
+# `OnActiveSec=`, not `OnBootSec=`, for ccd-tmp-sweep.timer's reason: armed by a deploy on a box up for days, a
+# boot-relative first elapse is already past and would fire at once, on top of the deploy's own supervisor sweep.
+OnActiveSec=2min
+OnUnitActiveSec=60s
+AccuracySec=10s
+[Install]
+WantedBy=timers.target

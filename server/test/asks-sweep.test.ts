@@ -22,12 +22,13 @@
 // test that only awaits `tick()` has not awaited it — every assertion below
 // calls `w.sweepAsks()` directly, the same reason it is PUBLIC.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import { FleetWatcher } from '../src/watch.js';
-import { testDeps } from './helpers.js';
+import { questionsTestView } from '../src/coord/questions.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { PushPayload } from '../src/push.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -35,6 +36,8 @@ import { CoordStore } from '../src/coord/store.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { askKey } from '../src/askkey.js';
 import { okAsk, okAsks } from './coordReadHelpers.js';
+import { doorInsOf } from './questionDoorIns.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -52,7 +55,8 @@ const T0 = 1_785_400_000_000;
 // production constant fails THIS test. Importing `ASK_GRACE_MS`/
 // `ASK_ANSWERING_MAX_MS` now that they are exported would make the test
 // track whatever `askwindow.ts` says rather than pin what it must say.
-const ASK_GRACE_MS = 120_000;
+// D-5295: 180 s by the operator's ruling of 2026-10-17 ("180 s, late answer wins").
+const ASK_GRACE_MS = 180_000;
 const ASK_SWEEP_MS = 10_000;
 const ASK_ANSWERING_MAX_MS = 60_000;
 
@@ -60,8 +64,10 @@ const ASK_ANSWERING_MAX_MS = 60_000;
  *  `(w as unknown as {...})` idiom (`sweepSettled`/`forceDue`), the
  *  codebase's established way to assert on state a public method
  *  deliberately does not expose. */
+// W3 Q3d (D-7028, named exception 1): the held asks are the watcher's `Questions` instance's, read per child through
+// its test-only view, as the private `heldAsks` map held them.
 const heldMap = (w: FleetWatcher): Map<string, { until: number; askId: number; answeringSince: number | null }> =>
-  (w as unknown as { heldAsks: Map<string, { until: number; askId: number; answeringSince: number | null }> }).heldAsks;
+  questionsTestView(w.questions).heldAsks();
 
 /** Per-session bookkeeping the registry + live-status files need — verbatim
  *  idiom from `asks-mint.test.ts`'s own `Seeded`/`seedSessions` (itself
@@ -133,20 +139,23 @@ function fixture(opts: {
   const info = seedSessions(home, opts.sessions);
   const panes = new Map<string, string>(opts.sessions.map((spec) => [spec.split('/')[1]!, BARE_PROMPT]));
   const runner: Runner = async (_cmd, args) => {
-    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
     const target = args[2] ?? '';
-    const id = target.startsWith('cc-') ? target.slice('cc-'.length) : '';
+    const id = /^=cc-(.*):$/.exec(target)?.[1] ?? '';   // the exact target `=cc-<id>:` (D-3525)
     if (args[0] === 'list-panes') {
       const pid = info.get(id)?.pid;
-      return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
+      return { ran: true, code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
     }
-    if (args[0] === 'capture-pane') return { code: 0, stdout: panes.get(id) ?? BARE_PROMPT, stderr: '' };
-    return { code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: panes.get(id) ?? BARE_PROMPT, stderr: '' };
+    return { ran: true, code: 0, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const io: FleetIO = opts.overIo ? opts.overIo(localIO) : localIO;
   const deps = { ...testDeps(home, runner), push: opts.push as never, coord, io };
-  const w = new FleetWatcher(deps, new Bus(), 10_000);
+  // D-8140 (C17 item 3): every case's watcher is quiet before its case ends. Its ticks start a delegation pass nothing else awaits,
+  // and one left running reads the next case's `Date.now` jump inside a phase and logs its slow line into that case's spy (CI run
+  // 42673038502, F9: `cut=0`, so not the pass F9's own `closeDelegation()` had closed).
+  const w = quietAtTestEnd(new FleetWatcher(withFakeClock(deps), new Bus(), 10_000));
   return {
     coord, home, reg, w,
     tick: () => w.tick(),
@@ -157,6 +166,20 @@ function fixture(opts: {
 
 const askTag = (id: string): string => `ask-${id}`;
 
+/** D-5290: only a dispatched child under a live parent is held — so make
+ *  `childId` one, as `ws-add --child <run>` leaves it (its `.child` marker
+ *  naming the run), and give `parentId` a registry row in the child's project
+ *  unless the fixture already seeded it. */
+function markChild(f: ReturnType<typeof fixture>, childId: string, runId: number, parentId: string): void {
+  writeFileSync(path.join(f.reg, `${childId}.child`), String(runId));
+  if (existsSync(path.join(f.reg, `${parentId}.uuid`))) return;
+  const project = readFileSync(path.join(f.reg, `${childId}.project`), 'utf8');
+  const fields: Record<string, string> = {
+    wrapper: 'claude', project, workdir: `/w/${parentId}`, uuid: `u-${parentId}`, started: '1',
+  };
+  for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(f.reg, `${parentId}.${k}`), v);
+}
+
 /** Opens a run claimed by `parentId`, dispatches to `childId`, primes, then
  *  shows an eligible single-question menu and ticks once more — the mint
  *  edge (`detectDialogs`'s `last !== dialog.id` branch). Returns the minted,
@@ -164,9 +187,10 @@ const askTag = (id: string): string => `ask-${id}`;
 async function mintHold(f: ReturnType<typeof fixture>, childId: string, parentId: string): Promise<number> {
   const run = f.coord.openRun({
     program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-    wave: 1, waveOf: null, claimedBy: parentId,
+    wave: 1, waveOf: null, claimedBy: parentId, coordProject: 'ccrc-pwa',
   }) as { id: number };
   f.coord.setSession(run.id, childId);
+  markChild(f, childId, run.id, parentId);
   await f.tick();                                          // priming
   f.writeAsk(childId, oneQuestion);
   f.showMenu(childId);
@@ -177,6 +201,22 @@ async function mintHold(f: ReturnType<typeof fixture>, childId: string, parentId
 }
 
 describe('sweepAsks — the release sweep (Task 7)', () => {
+  // D-5295 (plan Task 6): the window is 180 s, counted from the mint. A sweep at 179 s keeps the hold; a sweep
+  // at exactly 180 s fires it (`held.until > now` keeps, so the deadline itself releases). Two fixtures, one sweep
+  // each: the sweep's own `ASK_SWEEP_MS` throttle would skip a second sweep one second after the first.
+  it('does not release at 179 s and does at 180 s (D-5295)', async () => {
+    for (const [offset, fires] of [[179_000, 0], [180_000, 1]] as const) {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      at(T0);
+      const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+      await mintHold(f, 'cc-a', 'coord-1');
+      at(T0 + offset);
+      await f.w.sweepAsks();
+      expect(sent.filter((p) => p.tag === askTag('cc-a')), `swept at +${offset} ms`).toHaveLength(fires);
+    }
+  });
+
   it('fires the held payload verbatim once the window lapses', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
@@ -209,9 +249,10 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a');
+    markChild(f, 'cc-a', run.id, 'coord-1');           // a hold in every respect but the switch
 
     // Armed BEFORE any sweep runs, so `tick()`'s own auto-dispatched
     // `sweepAsks()` (fired during the priming tick below) already sees it —
@@ -252,7 +293,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     at(T0 + ASK_SWEEP_MS + 1);
     await f.w.sweepAsks();
 
-    expect((f.w as unknown as { asksDisabled: boolean }).asksDisabled).toBe(true);
+    expect(questionsTestView(f.w.questions).asksDisabled()).toBe(true);
   });
 
   // RULING F9, branch 1: a principal has TAKEN the row (`answering`) — the
@@ -277,7 +318,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     // The principal gives up — `answering -> held` — and the VERY NEXT sweep
     // (own clock, past ASK_SWEEP_MS) fires the still-live hold. This is only
     // possible because the entry survived the sweep above.
-    f.coord.untakeAsk(askId);
+    f.coord.untakeAsk(askId, 'held');
     at(T0 + ASK_GRACE_MS + 1 + ASK_SWEEP_MS + 1);
     await f.w.sweepAsks();
 
@@ -297,6 +338,10 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const askId = await mintHold(f, 'cc-a', 'coord-1');
     expect(f.coord.releaseAsk(askId, T0 + 1)).toBe(true);        // held -> released, by "someone else"
+    // D-8140 (C17 item 3): mintHold's ticks start a delegation pass that is not this sweep's, and the clock jump below
+    // used to land inside it, so the pass logged (its slow line, or its compaction line) into the spy. It is awaited
+    // to its end here, before the spy, so nothing but this sweep can write to it.
+    await f.w.closeDelegation();
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     at(T0 + ASK_GRACE_MS + 1);
@@ -307,7 +352,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     expect(okAsk(f.coord.askById(askId))!.state).toBe('released');      // untouched, not rewritten
     // Silent: distinguishes this branch from the exhaustiveness fallback
     // ('held'/'unknown'), which warns.
-    expect(warn).not.toHaveBeenCalled();
+    expect(warn.mock.calls).toEqual([]);
   });
 
   // RULING F9, branch 3: the row itself is gone — a lost coord.db. Its loss
@@ -418,7 +463,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     // `releaseAsk` is stubbed to report a beaten CAS anyway, the only way to
     // reach the 'held' arm of the switch in a single-threaded process (a
     // real CAS against a genuinely-held row would simply succeed).
-    f.coord.untakeAsk(askId);
+    f.coord.untakeAsk(askId, 'held');
     const realReleaseAsk = f.coord.releaseAsk.bind(f.coord);
     f.coord.releaseAsk = () => false;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -456,6 +501,66 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
     expect(heldMap(f.w).has('cc-a')).toBe(false);
     expect(warn).toHaveBeenCalled();
+  });
+});
+
+// D-5289 (coordinator-first routing, Task 4; spec §5.1): the lapse still
+// pushes at the deadline, but the row stays answerable by its parent; a late
+// parent answer replaces the operator's notification under the SAME tag.
+describe('sweepAsks — late answer wins (D-5289)', () => {
+  const KID = 'project-a-quiet-basin';
+  const MESA = 'project-a-calm-mesa';
+
+  it('the lapse pushes at the deadline; a later parent answer replaces the notification', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: [`project-a/${KID}`] });
+    const askId = await mintHold(f, KID, MESA);
+
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();
+    expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
+    expect(okAsk(f.coord.askById(askId))!.state).toBe('released');
+
+    doorInsOf(f.w).answeredLate(KID, askId, MESA);
+    const tagged = sent.filter((p) => p.tag === askTag(KID));
+    expect(tagged).toHaveLength(2);
+    expect(tagged[1]!.body).toBe(`Answered by ${MESA}`);
+    expect(tagged[1]!.actions).toBeUndefined();
+
+    // Once: the replacement is the lapse's, not a fresh notification per call.
+    doorInsOf(f.w).answeredLate(KID, askId, MESA);
+    expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(2);
+  });
+
+  it('replaces nothing for a different ask id, or for an ask that never lapsed', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: [`project-a/${KID}`] });
+    const askId = await mintHold(f, KID, MESA);
+    doorInsOf(f.w).answeredLate(KID, askId, MESA);                 // still held: no push went out
+    expect(sent.filter((p) => p.tag === askTag(KID))).toEqual([]);
+
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();
+    doorInsOf(f.w).answeredLate(KID, askId + 1, MESA);             // another row's answer
+    expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
+  });
+
+  it('a dialog that clears after the lapse forgets the notification', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: [`project-a/${KID}`] });
+    const askId = await mintHold(f, KID, MESA);
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();
+    f.showMenu(KID, BARE_PROMPT);
+    await f.tick();                                      // dialog_cleared
+    doorInsOf(f.w).answeredLate(KID, askId, MESA);
+    expect(sent.filter((p) => p.tag === askTag(KID))).toHaveLength(1);
   });
 });
 

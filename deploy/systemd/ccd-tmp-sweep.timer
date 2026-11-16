@@ -1,0 +1,19 @@
+[Unit]
+Description=Reap Claude Code's per-uid temp dir every hour
+[Timer]
+# `OnActiveSec=`, NOT `OnBootSec=`, for ccd-telemetry-keepalive.timer's reason
+# (D-1981): this timer is first armed by a deploy on a box that has been up for
+# days, where a boot-relative elapse point is already in the past and the pass
+# would start AT ONCE — on top of deploy.sh's supervisor sweep, which is at that
+# instant restarting every claude-session@ unit. The first pass on a neglected
+# box is also this unit's heaviest (see the .service's budget), so ten minutes
+# after arming is the honest anchor. At boot the two anchors are the same thing.
+# `Persistent=` would do nothing here: it only affects OnCalendar= timers.
+OnActiveSec=10min
+# Hourly: the growth this exists for is gigabytes per day (single task
+# `.output` files of 1-4G), while the horizon is days (CCD_TMP_SWEEP_MAX_AGE_DAYS,
+# default 7), so an hour of lag costs nothing and a steady-state pass is cheap.
+OnUnitActiveSec=1h
+AccuracySec=1min
+[Install]
+WantedBy=timers.target

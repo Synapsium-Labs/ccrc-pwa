@@ -6,7 +6,7 @@
 // while their own comments state a BACKEND reason:
 //
 //   1. `--remote-control` — Claude Code's own protocol; Codex cannot answer it.
-//   2. `_inject_spawn_effort` — types Claude-specific input into the TUI.
+//   2. the `--effort` default on the spawn argv (was `_inject_spawn_effort`, a settle keystroke, until D-8149).
 //   3. the transcript sanitiser — exists FOR the cross-backend hop.
 //   4. the 429 exclusion row — the Codex lane's only "pool is full" signal.
 //
@@ -21,7 +21,7 @@ import path from 'node:path';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 
 /** A roster in the shape this change exists for: a Codex lane that IS placeable. */
 const roster = parseRoster({ version: 1, accounts: [
@@ -108,7 +108,7 @@ describe('_is_anthropic_backend — the question homeAble was overloaded with', 
 });
 
 describe('the four callers now ask the backend question', () => {
-  const src = readFileSync(CCD, 'utf8');   // ccd is ~17k lines: a spawned cat ENOBUFs
+  const src = ccdSource();   // ccd is ~17k lines: a spawned cat ENOBUFs
   const code = src.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#'));
 
   it('the transcript sanitiser fires on the CROSS-BACKEND hop', () => {
@@ -120,11 +120,14 @@ describe('the four callers now ask the backend question', () => {
     expect(line).toContain('_is_anthropic_backend "$target"');
   });
 
-  it('Remote Control and the effort injection are gated on the backend', () => {
+  it('Remote Control and the spawn-argv effort default are gated on the backend', () => {
     expect(code.find((l) => l.includes("rcflag=\"--remote-control")))
       .toContain('_is_anthropic_backend');
-    expect(code.find((l) => l.includes('_inject_spawn_effort "$tname"')))
+    expect(code.find((l) => l.includes('-n "$SPAWN_EFFORT"')))
       .toContain('_is_anthropic_backend');
+    // D-8631: the effort default asks BOTH named backends — a Codex lane takes it too, a third backend does not.
+    expect(code.find((l) => l.includes('-n "$SPAWN_EFFORT"')))
+      .toContain('_is_codex_backend');
   });
 
   it('placement keeps asking the PLACEMENT question', () => {
@@ -143,7 +146,7 @@ describe('the four callers now ask the backend question', () => {
 // Codex's vocabulary — "Codex weekly cap reached (100%)", a 5h cooldown
 // countdown, the ccgpt-usage JSON shape. Until 2026-09-14 that trailer was a
 // single hardcoded line about `gpt`, which by then was wrong twice over: a
-// second Codex lane (`gpt2`) had existed since 2026-09-10 and had no line at
+// second Codex lane (`gpt7`) had existed since 2026-09-10 and had no line at
 // all, and both lanes had become home-able on 2026-09-11, so calling either an
 // "overflow lane" was false.
 //
@@ -171,12 +174,12 @@ describe('_is_codex_backend — and why it is not the complement of the other tw
     // `[[ "$w" == "$v" ]]` with an unquoted RHS would glob, and `"$v"*` would
     // prefix-match: both mutants survived the original suite, because no
     // fixture had a non-Codex account whose id extends a Codex one. The live
-    // roster is full of that shape (`claude` / `claude-corp` / `claude-dev1`),
+    // roster is full of that shape (`claude` / `claude-acme` / `claude-lab1`),
     // so this is one rename away from being real.
     const prefixy = parseRoster({ version: 1, accounts: [
       { id: 'an', label: 'AN', configDirSuffix: '.an', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
       { id: 'cx', label: 'CX', configDirSuffix: '.cx', exec: { kind: 'external' }, homeAble: true, hue: 'blue', telemetry: 'codex' },
-      { id: 'cx-corp', label: 'CXC', configDirSuffix: '.cx-corp', exec: { kind: 'generated' }, homeAble: true, hue: 'green', telemetry: 'anthropic' },
+      { id: 'cx-acme', label: 'CXC', configDirSuffix: '.cx-acme', exec: { kind: 'generated' }, homeAble: true, hue: 'green', telemetry: 'anthropic' },
     ] });
     const dir = mkTmp('ccd-backend-prefix-');
     mkdirSync(path.join(dir, '.ccrc'), { recursive: true });
@@ -185,10 +188,10 @@ describe('_is_codex_backend — and why it is not the complement of the other tw
       { cwd: dir, encoding: 'utf8',
         env: ghContainedEnv(dir, { ...process.env, HOME: dir }, { systemd: true, tmux: true }) }).trim();
     expect(ask('_is_codex_backend cx && echo yes || echo no')).toBe('yes');
-    expect(ask('_is_codex_backend cx-corp && echo yes || echo no')).toBe('no');
+    expect(ask('_is_codex_backend cx-acme && echo yes || echo no')).toBe('no');
     // The identical unguarded comparison lives in `_is_anthropic_backend`, so
     // pin it from the other side in the same fixture.
-    expect(ask('_is_anthropic_backend cx-corp && echo yes || echo no')).toBe('yes');
+    expect(ask('_is_anthropic_backend cx-acme && echo yes || echo no')).toBe('yes');
     expect(ask('_is_anthropic_backend cx && echo yes || echo no')).toBe('no');
   });
 

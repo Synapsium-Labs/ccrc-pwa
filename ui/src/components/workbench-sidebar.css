@@ -1,0 +1,393 @@
+/* `@layer components` — NOT unlayered; see typed-label.css for the full
+   argument and ../styles/theme.css for the layer declaration. */
+@layer components {
+  /* ------------------------------------------------------------------ *
+   *  Workbench sidebar — the desk's workspace tree. Fills its column:   *
+   *  the WIDTH is the desk shell's (a per-skin width would be a new     *
+   *  skin token), so this sheet sets none.                              *
+   * ------------------------------------------------------------------ */
+  /* Self-grounded: every coloured descendant below names a painter in its
+     own selector, so the contrast gate measures it on a ground it can see. */
+  .wb-side {
+    /* A Chip's drawn height: its `py-1` twice around one meta line. */
+    --wb-side-chip-h: calc(var(--fs-meta) + 2 * var(--sp-1));
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    height: 100%;
+    color: var(--ink-primary);
+    background: var(--bg-surface);
+    border-inline-end: 1px solid var(--edge-subtle);
+  }
+
+  /* --- the filter and the mode switch ------------------------------- */
+  .wb-side-tools {
+    flex: none;
+    display: grid;
+    gap: var(--sp-2);
+    padding: var(--sp-2);
+  }
+  .wb-side-search {
+    position: relative;
+  }
+  /* The glass sits inside the field's left padding (`pl-8` on the input).
+     Decoration only: the field's own label names it. */
+  .wb-side .wb-side-search > svg {
+    position: absolute;
+    left: var(--sp-3);
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    color: var(--ink-tertiary);
+  }
+  .wb-side-modes {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--edge-subtle);
+    border-radius: var(--r-md);
+  }
+  .wb-side-mode {
+    flex: 1 1 0;
+    min-height: var(--tap-min);
+    border: 0;
+    border-radius: var(--r-sm);
+    font: var(--weight-medium) var(--fs-ui) / 1 var(--family-ui);
+    color: var(--ink-tertiary);
+    background: var(--bg-surface);
+    cursor: pointer;
+  }
+  .wb-side-mode[aria-pressed='true'] {
+    color: var(--ink-primary);
+    background: var(--bg-raised);
+    box-shadow: 0 0 0 1px var(--edge-strong);
+  }
+  @media (pointer: fine) {
+    .wb-side-mode {
+      min-height: 28px;
+    }
+  }
+
+  /* --- the tree ------------------------------------------------------ */
+  .wb-side-tree {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 var(--sp-1) var(--sp-2);
+  }
+
+  /* The section head: a painter of its own, because hover lifts it. */
+  .wb-side-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    min-height: var(--tap-min);
+    padding: 0 var(--sp-1) 0 var(--sp-2);
+    border-radius: var(--r-sm);
+    color: var(--ink-secondary);
+    background: var(--bg-surface);
+    cursor: pointer;
+  }
+  @media (pointer: fine) {
+    .wb-side-head {
+      min-height: 32px;
+    }
+  }
+  /* One character each, so the label never shifts when the fold flips. */
+  .wb-side-head .wb-side-fold {
+    flex: none;
+    width: 1ch;
+    font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+  }
+  /* The yield order on a long id or a narrow column. The label and the pool
+     share one wrapping line exactly one chip tall, clipped: the label's basis
+     is its 8ch floor and it takes the free space first (grow 1000, up to its
+     own width), the pool shrinks to its own floor next, and when the two
+     floors no longer fit the pool wraps onto the clipped second line — gone,
+     rather than an empty pill. Last, the label alone ellipsizes. The counts
+     and the `+` never shrink, so the fact that names the section is the last
+     thing to go, not the first. */
+  .wb-side-head .wb-side-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: var(--sp-2);
+    height: var(--wb-side-chip-h);
+    overflow: hidden;
+  }
+  .wb-side-head .wb-side-label {
+    flex: 1000 1 8ch;
+    min-width: 0;
+    max-width: max-content;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: var(--weight-semibold) var(--fs-ui) / var(--wb-side-chip-h) var(--family-ui);
+    color: var(--ink-primary);
+  }
+  /* Projects mode: the label is a project id — the machine's voice. */
+  .wb-side-label[data-mono='true'] {
+    font-family: var(--family-mono);
+  }
+  .wb-side-head .wb-side-pool {
+    flex: 1 1 calc(6ch + 18px);
+    min-width: 0;
+    max-width: max-content;
+    color: var(--ink-tertiary);
+    background: var(--bg-raised);
+  }
+  .wb-side-counts {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+  }
+  .wb-side-head .wb-side-total {
+    font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-tertiary);
+  }
+  .wb-side-head .wb-side-new {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: var(--tap-min);
+    height: var(--tap-min);
+    border: 0;
+    border-radius: var(--r-sm);
+    font: var(--weight-regular) var(--fs-md) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+    background: var(--bg-surface);
+    cursor: pointer;
+  }
+  @media (pointer: fine) {
+    .wb-side-head .wb-side-new {
+      width: 24px;
+      height: 24px;
+    }
+  }
+
+  /* A chip's text, clipped: a Chip is `inline-flex`, and only a real flex
+     item can ellipsize inside it. */
+  .wb-side .wb-side-clip {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The session row: two lines, a lamp column, chips at the right. */
+  .wb-side-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: 12px minmax(0, 1fr) auto;
+    column-gap: var(--sp-2);
+    row-gap: 3px;
+    align-items: center;
+    min-height: var(--row-h);
+    padding: 6px var(--sp-2) 6px 10px;
+    border-radius: var(--r-md);
+    color: var(--ink-primary);
+    background: var(--bg-surface);
+    cursor: pointer;
+  }
+  /* The system's selection: tint, an inset accent rail, a heavier name. */
+  .wb-side-row[aria-selected='true'] {
+    background: var(--accent-tint);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  .wb-side-row[aria-selected='true'] .wb-side-name {
+    font-weight: var(--weight-semibold);
+  }
+  .wb-side-row .wb-side-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: var(--weight-regular) var(--fs-ui) / var(--lh-tight) var(--family-ui);
+    color: var(--ink-primary);
+  }
+  .wb-side-chips {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+  }
+  .wb-side-row .wb-side-pr {
+    color: var(--pr-merged);
+    background: var(--bg-raised);
+  }
+  .wb-side-row .wb-side-subs {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-secondary);
+  }
+  /* The coordinator tag never takes an account hue: account colours mean
+     accounts. 20px drawn; under a coarse (or no) pointer its hit area grows
+     to the tap floor through `::before`, which paints nothing. */
+  .wb-side-row .wb-side-ctag {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 6px;
+    border: 1px solid var(--edge-subtle);
+    border-radius: var(--r-sm);
+    font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+    white-space: nowrap;
+    color: var(--ink-secondary);
+    background: var(--bg-raised);
+    cursor: pointer;
+  }
+  .wb-side-ctag::before {
+    content: '';
+    position: absolute;
+    inset-inline: 0;
+    inset-block: calc((20px - var(--tap-min)) / 2);
+  }
+  @media (pointer: fine) {
+    .wb-side-ctag::before {
+      inset-block: 0;
+    }
+  }
+
+  /* Line two: the machine's voice. */
+  .wb-side-sub {
+    grid-column: 2 / 4;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    min-width: 0;
+    overflow: hidden;
+    font: var(--weight-regular) var(--fs-meta) / var(--lh-tight) var(--family-mono);
+    white-space: nowrap;
+  }
+  /* Line two yields in order. The shrink factors are a millionfold apart, so
+     each one gives way before the next starts: at a thousandfold the word
+     still took a fortieth of a pixel and drew an ellipsis. None is under 1,
+     because a sum below 1 shrinks only that fraction of the overflow. The
+     branch, down to its floor; then the
+     account chip, which never grows past its cap, down to its own; the state
+     word only last, in a column too narrow for both floors. */
+  .wb-side-row .wb-side-word {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--ink-secondary);
+  }
+  /* The lamp says it twice: the dot pulses and the word turns amber. */
+  .wb-side-row .wb-side-word[data-attention='true'] {
+    color: var(--status-attention-text);
+  }
+  .wb-side-row .wb-side-branch {
+    flex: 0 1e12 auto;
+    min-width: min(6ch, 15%);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--ink-tertiary);
+  }
+  .wb-side-row .wb-side-acct {
+    margin-left: auto;
+    flex: 0 1e6 auto;
+    min-width: min(calc(4ch + 18px), 25%);
+    color: var(--acct-active);
+    background: var(--acct-active-tint);
+  }
+  /* The chip's cap sits on its text, not on the chip: a cap on the flex item
+     itself would clamp AFTER the shrink and hand its share to the word. */
+  .wb-side-row .wb-side-acct .wb-side-clip {
+    max-width: 14ch;
+  }
+  /* Merged and archived rows step their ink DOWN; they never fade. The state
+     sits on the coloured element itself so the gate grounds it on the row. */
+  .wb-side-row .wb-side-name[data-dim='true'],
+  .wb-side-row .wb-side-word[data-dim='true'] {
+    color: var(--ink-tertiary);
+  }
+
+  /* A coordinator's lanes and a session's agents, indented and joined by
+     the tree rule. The wrapper is `role="none"`: only the rule is drawn. */
+  .wb-side-lanes {
+    position: relative;
+    margin-left: 16px;
+  }
+  .wb-side-lanes::before {
+    content: '';
+    position: absolute;
+    left: -7px;
+    top: 0;
+    bottom: var(--sp-3);
+    border-left: 1px solid var(--edge-strong);
+  }
+
+  /* A running subagent: lamp, mono name, task, age. 32px under a fine
+     pointer, the tap floor otherwise. */
+  .wb-side-agent {
+    display: grid;
+    /* The name ellipsizes and the task keeps 4ch, so the age always shows. */
+    grid-template-columns: 12px minmax(0, max-content) minmax(4ch, 1fr) auto;
+    column-gap: var(--sp-2);
+    align-items: center;
+    min-height: var(--tap-min);
+    padding: 0 var(--sp-2) 0 10px;
+    border-radius: var(--r-sm);
+    font: var(--weight-regular) var(--fs-meta) / var(--lh-tight) var(--family-mono);
+    color: var(--ink-secondary);
+    background: var(--bg-surface);
+    cursor: pointer;
+  }
+  @media (pointer: fine) {
+    .wb-side-agent {
+      min-height: 32px;
+    }
+  }
+  .wb-side-agent .wb-side-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--ink-secondary);
+  }
+  .wb-side-agent .wb-side-task {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--family-ui);
+    color: var(--ink-tertiary);
+  }
+  .wb-side-agent .wb-side-age {
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-tertiary);
+  }
+
+  .wb-side .wb-side-empty {
+    flex: 1 1 auto;
+    padding: 14px 10px;
+    font: var(--weight-regular) var(--fs-ui) / var(--lh-normal) var(--family-ui);
+    color: var(--ink-secondary);
+  }
+
+  /* Hover lifts a control to `--bg-hover`, only where hover exists. */
+  @media (hover: hover) {
+    .wb-side-row:hover,
+    .wb-side-head:hover,
+    .wb-side-agent:hover,
+    .wb-side-mode:not([aria-pressed='true']):hover {
+      background: var(--bg-hover);
+    }
+    .wb-side-row[aria-selected='true']:hover {
+      background: var(--accent-tint);
+    }
+    .wb-side-head .wb-side-new:hover {
+      color: var(--ink-primary);
+      background: var(--bg-hover);
+    }
+  }
+}

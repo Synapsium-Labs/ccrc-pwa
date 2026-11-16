@@ -1,12 +1,10 @@
-import { tx } from './db.js';
-import { renderEnvelope } from './envelope.js';
-import type { CoordStore, OpenSibling, RunRow } from './store.js';
+import type { OpenSibling, PrLineageEntry } from './store.js';
 import {
   HOLD_REASON_MAX_CHARS,
   holdReason as serializeHoldReason,
   isPositiveDecimalSafeInteger,
-  type MailKind,
 } from '../../../shared/api.js';
+import { TIMER_MAIL_SENDER } from '../../../shared/continuity-timers.js';
 
 /**
  * Shared by `routes.ts` (the `POST /api/runs` open route, and
@@ -19,7 +17,21 @@ import {
  * done-claim rejection) and advance (an advance rejection) alike. A single
  * shared home means the three call sites can never drift onto three
  * different reason strings or three different system-mail shapes.
+ *
+ * THIS IS THE PURE HALF (D-5896, ARCH-05). The mail writes, which run under
+ * `tx`, are in `rundefsTx.ts`. This file holds no handle and imports no
+ * transaction, so a policy file that wants a marker loads nothing else.
+ * `coord-policy-rings.test.ts` walks its runtime imports.
  */
+
+/**
+ * Whether a `.prhistory` row is evidence about `branch` (D-5941, spec 2026-10-20 §2.8). The one rule, for both readers:
+ * `childSpent`'s ledger rung and the close's lineage fold. A row that carries `prbranch` is placed, and speaks only for
+ * that branch. A row without it was written before ccd recorded the field, so it is unplaced and counts as it always did.
+ * A null `branch` matches no placed row; `decideLedger` answers a null-branch run itself, before it asks this.
+ */
+export const prRowCounts = (row: PrLineageEntry, branch: string | null): boolean =>
+  row.prbranch === undefined || row.prbranch === branch;
 
 /** The 40-hex `SHA` shape check `fingerprint.ts`'s `verifyDone` runs on a
  *  done claim — mirrored here (fix, review findings 6/18), NOT imported,
@@ -36,25 +48,39 @@ import {
 export const HANDOFF_SHA = /^[0-9a-f]{40}$/;
 
 /** `$REG/mail-disabled` — the SAME kill-switch `watch.ts`'s `sweepMail`
- *  already gates on (its own `MAIL_DISABLED_MARKER`), duplicated as a literal
- *  there rather than imported (fix, review finding 17): dispatch's own
- *  registry listing already covers `COORDINATOR_PAUSE_MARKER` below, and a
- *  second literal is lower-risk than an import into a file `watch.ts` itself
- *  does not depend on. Before this fix, dispatch consulted ONLY the
+ *  gates on; both reach its one definition, its `shared/switches.ts` row
+ *  (D-5855). Dispatch reads it (fix, review finding 17) from its own registry
+ *  listing, which already covers `COORDINATOR_PAUSE_MARKER` below. Before
+ *  this fix, dispatch consulted ONLY the
  *  coordinator-pause marker: an operator who `touch`ed this one to silence
  *  injection mid-debugging still got `ccd ensure` + an injected `/clear`
  *  wiping the worker's context, with the wave brief queued but held by the
  *  very kill-switch the operator raised — the worker sat in an EMPTY,
  *  `/clear`ed context for as long as the marker stood, invisible to anything
  *  short of reading the pane. */
-export const MAIL_DISABLED_MARKER = 'mail-disabled';
+export { MAIL_DISABLED_MARKER } from '../../../shared/switches.js';
 
 /** `$REG/coordinator-paused` — spec:199-205: "no verb, no route, no way for
  *  the coordinator to unpause itself." Deliberately not `-disabled`-suffixed
  *  like `mail-disabled`: `limits.ts:134-142` filters `<name>-disabled`
  *  markers out of `/api/accounts` as candidate wrapper names, and this is not
  *  a lane kill-switch — it must not read as one there. */
-export const COORDINATOR_PAUSE_MARKER = 'coordinator-paused';
+export { COORDINATOR_PAUSE_MARKER } from '../../../shared/switches.js';
+
+/** `$REG/reclaim-paused` — the fleet-wide kill-switch on the AUTOMATIC
+ *  reclamation of child workspaces (child-reclamation spec §5.8). Written only
+ *  by `ccd reclaim-pause` (through `POST /api/coord/reclaim-pause`), read by
+ *  FOUR parties, spec §5.8's four: the watcher's frame (`emitCoord`, which
+ *  renders it); the watcher's sweep (`sweepChildReclaim`, which skips before
+ *  asking); the one executor both triggers share (`reclaimChild`, through
+ *  `childReclaimPauseRead` in `childReclaimOutcome`, which defers
+ *  `paused-at-server` after its sibling re-read and before presence or any
+ *  argv — that is the close path's skip, and the sweep's for a reclaim that
+ *  was queued before the switch went up); and — the one that matters —
+ *  `ws-reclaim` itself on the box, which refuses `paused`. Not
+ *  `-disabled`-suffixed, for `COORDINATOR_PAUSE_MARKER`'s reason: `limits.ts`
+ *  reads `<name>-disabled` as a wrapper's lane switch. */
+export { RECLAIM_PAUSE_MARKER } from '../../../shared/switches.js';
 
 /**
  * `run_events.detail` for a dispatch whose post-resume `/clear` was refused
@@ -134,6 +160,26 @@ export const holdReasonVerdict = (
   return { ok: true, reason };
 };
 
+/** A programme hold, read back: what `holdReason` wrote for a run's workspace. */
+export interface ProgrammeHold { readonly program: string; readonly wave: number; readonly runId: number | null }
+
+/** Read a `.hold`'s text as a programme hold, or null when it is not one (D-6091, fleet capacity W1-1).
+ *
+ *  THE ONE READER of the grammar `holdReasonVerdict` validates: the same `HOLD_REASON_PATTERN` and the same cap,
+ *  never a second spelling (`single-definition.test.ts`), and ccd's `_hold_is_programme` is crossed with it over one
+ *  fixture list (`hold-programme-parity.test.ts`). The run-done policy reads it to tell a hold that guards a
+ *  WORKSPACE (a programme's) from an operator's own hold: anything this answers null for keeps holding sleep. A text
+ *  outside the cap or a number outside the safe-integer range answers null too, which fails closed (it holds). */
+export const programmeHoldOf = (text: string): ProgrammeHold | null => {
+  if (text.length > HOLD_REASON_MAX_CHARS || !HOLD_REASON_PATTERN.test(text)) return null;
+  // The pattern has matched, so the text is exactly `program:<slug> wave:<n>[/<m>][ run:<id>]`, single-spaced.
+  const [programPart, wavePart, runPart] = text.split(' ');
+  const wave = Number(wavePart!.slice('wave:'.length).split('/')[0]);
+  const runId = runPart === undefined ? null : Number(runPart.slice('run:'.length));
+  if (!Number.isSafeInteger(wave) || (runId !== null && !Number.isSafeInteger(runId))) return null;
+  return { program: programPart!.slice('program:'.length), wave, runId };
+};
+
 /** May this close END the claim on the workspace, or must it hand the claim
  *  to whoever else still owns it?
  *
@@ -145,9 +191,23 @@ export const holdReasonVerdict = (
 export const releaseIsSafe = (openSiblings: readonly OpenSibling[]): boolean =>
   openSiblings.length === 0;
 
+/** The claim that survives a close (or a spent-child refusal): the MOST
+ *  RECENTLY opened run, because the coordinator protocol opens wave N+1
+ *  before closing wave N. With the ordinary one-sibling case this is a
+ *  distinction without a difference; it is written down so two siblings
+ *  produce a DETERMINISTIC reason rather than a coin toss
+ *  (`openRunsForSession` is `ORDER BY id`).
+ *
+ *  Hoisted here (fix round B, F13) so `close.ts` and `dispatch.ts` share ONE
+ *  survivor rule instead of two independent spellings of the same
+ *  `s[s.length - 1] ?? null` — no test pinned the two doors equal before this
+ *  move, and a future edit to one would have silently drifted from the
+ *  other. */
+export const survivorOf = (s: readonly OpenSibling[]): OpenSibling | null => s[s.length - 1] ?? null;
+
 /**
  * The two SYSTEM MAIL senders. Neither is a registry row: both are fixed ROLE
- * identities, the same way `resolveCoordinator`'s own docstring already treats
+ * identities, the same way `coordinatorOfRun`'s own docstring already treats
  * `toId:'coordinator'`. Enumerated once, here, and DERIVED into `MAIL_ROLE_IDS`
  * below rather than hand-listed twice — `watch.ts` is the second reader and a
  * second copy is exactly the drift `single-definition.test.ts` exists to refuse.
@@ -159,7 +219,7 @@ export const releaseIsSafe = (openSiblings: readonly OpenSibling[]): boolean =>
  * is sent BY the operator TO the session that is about to become the
  * coordinator — a mail from `'coordinator'` to the coordinator-to-be would be a
  * false statement on the face of its own envelope, and, worse, would send
- * `tellSender` through `resolveCoordinator(null)`, whose answer is whichever
+ * `tellSender` through `soleActiveCoordinator()`, whose answer is whichever
  * program happens to be the single active one.
  *
  * WIDENED BY THE ASK LANE (whole-branch review M4). `'operator'`'s gloss below
@@ -169,11 +229,26 @@ export const releaseIsSafe = (openSiblings: readonly OpenSibling[]): boolean =>
  * sender is still right — the question is the operator's to answer, and the
  * mail exists to let a parent answer it first — but "a route" is no longer how
  * it gets sent, so the gloss says both.
+ *
+ * WIDENED AGAIN BY THE STALL WATCH (wave 1). The watcher's stall lane is the
+ * second raiser the operator did not tap for. Its stall-check to a silent worker
+ * and its report to that run's coordinator are both operator mail, sent by
+ * `queueStallNotice` off a measured silence. The reasoning is the ask nudge's:
+ * the operator is who the watch speaks for, and no session is.
+ *
+ * `timer` JOINED WITH THE TIMERS LANE (Overlord W1a, C63). A timer's mail carries
+ * its setter's own earlier words back to that setter, as untrusted data, so it
+ * must never speak as `operator`. As a role it resolves to no sender
+ * (`mailSender`: no park notice, no push tagged with it), no session can send as
+ * it (`POST /api/mail` finds no registry row), and `runLastMoves` never counts it.
+ * It is not in `REVIVE_SKIPPED_SENDERS`: a run's reminder is still owed.
  */
 const SYSTEM_MAIL_SENDER_MAP = {
   coordinator: "the program's own coordinator session, speaking as the role",
   operator: 'the operator — either through a PWA-surface route or raised by the ' +
-    'watcher on their behalf (the ask nudge); never a session speaking for itself',
+    'watcher on their behalf (the ask nudge, the stall watch, the landing notices); never a session speaking for itself',
+  [TIMER_MAIL_SENDER]: 'the timer lane: a reminder its recipient set itself; the note inside is that session\'s own ' +
+    'words, untrusted',
 } as const;
 
 export type SystemMailSender = keyof typeof SYSTEM_MAIL_SENDER_MAP;
@@ -184,99 +259,10 @@ export type SystemMailSender = keyof typeof SYSTEM_MAIL_SENDER_MAP;
  *  `fromId` said before wave 4 taught it the difference. */
 export const MAIL_ROLE_IDS: ReadonlySet<string> = new Set(Object.keys(SYSTEM_MAIL_SENDER_MAP));
 
-/**
- * What `queueSystemMail` did, said out loud (D-1042). It used to return `void`
- * and short-circuit its dedupe with a bare `return`, so "queued just now" and
- * "an identical one is already outstanding" reached every caller as the same
- * non-answer — the overloaded seam this codebase treats as a defect class. The
- * three run-mail callers can live without the distinction (each has at most one
- * instance in flight per run by construction); a route that must answer an
- * operator cannot, and wave 5's re-kickoff — which most often targets a session
- * that still has an unacked kickoff — least of all.
- *
- * The false arm carries no reason string on purpose: there is exactly ONE
- * condition under which this function declines, and a vocabulary with a single
- * member is a distinction pretending to exist.
- */
-export type SystemMailQueued =
-  | { queued: true; mailId: number; deliveryId: number }
-  | { queued: false };
-
-/**
- * The SERVER's OWN mail — the wave brief (dispatch), a done-claim rejection
- * mailed back (close, advance), and the program kickoff (kickoff.ts) — queued
- * DIRECTLY rather than through `POST /api/mail`'s ingress. The ingress exists to
- * police attribution for a message this server did not originate (spec:136-148: a
- * box token authenticates the box, `{fromId,fromUuid}` is verified against
- * the registry); a message the SERVER itself is sending has no sender
- * session to be stale about, so re-entering that gate would be checking a
- * fact that cannot fail against itself. The sender is used as both `fromId` and
- * `fromUuid` — a fixed ROLE identity, not a registry row. Mirrors the ingress
- * route's own tx shape exactly (insert mail, insert delivery so its own id
- * exists, render the envelope AGAINST THE DELIVERY ID, land it) — see that
- * route's comment on `setDeliveryEnvelope` for why the two ids cannot be assumed
- * to walk together.
- *
- * `run` and `m.runId` are nullable since wave 4 (D-1039/D-1040): the program
- * kickoff is sent BEFORE run 1 exists, because opening run 1 is the first thing
- * it asks its recipient to do. The alternative — synthesising a
- * `{program: slug, wave: 0, waveOf: null}` at the call site — compiles and even
- * works, since `renderEnvelope` skips all three fields when `runId === null`, but
- * it asserts a run that does not exist. The type expresses the condition instead.
- */
-export function queueSystemMail(
-  coord: CoordStore,
-  run: Pick<RunRow, 'program' | 'wave' | 'waveOf'> | null,
-  m: { fromId: SystemMailSender; toId: string; runId: number | null;
-       kind: MailKind; subject: string; body: string },
-): SystemMailQueued {
-  // Review finding 33: don't requeue an identical outstanding system mail.
-  // The calls in this file — `wave-brief` (dispatch), `wave-done-rejected`
-  // (close, on a re-measurement refusal) and `wave-advance-rejected`
-  // (advance) — each have at most ONE outstanding instance in flight per run
-  // by construction; a retry landing here again (the coordinator's own retry
-  // loop, or a few taps of a PWA button) is restating a fact the recipient
-  // has already been told, not a new one, and previously inserted a fresh
-  // `mail` + `mail_deliveries` row — a fresh, non-collapsing push
-  // (spec:236-237) and a fresh `feed_events` row — on EVERY retry, unbounded.
-  // `recordRejection` (the caller's own audit log) is unaffected: this only
-  // guards the MAIL queue, never the record of the refusal itself.
-  if (coord.hasOutstandingMail(m.fromId, m.runId, m.toId, m.subject)) return { queued: false };
-  let out: SystemMailQueued = { queued: false };
-  tx(coord.db, () => {
-    const inserted = coord.insertMail({ fromId: m.fromId, fromUuid: m.fromId, toId: m.toId,
-      runId: m.runId, kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
-    const delivery = coord.queueDelivery(inserted.id, m.toId, '');
-    const envelope = renderEnvelope({ id: delivery.id, fromId: m.fromId, toId: m.toId, runId: m.runId,
-      program: run?.program ?? null, wave: run?.wave ?? null, waveOf: run?.waveOf ?? null,
-      kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
-    const stamped = coord.setDeliveryEnvelope(delivery.id, envelope);
-    // Structurally impossible inside this transaction — the row was inserted
-    // six lines up and nothing else can see it. THROWN rather than ignored
-    // because `tx` rolls back on throw and rethrows: if the impossible
-    // happens, the whole mail is withdrawn rather than accepted with the
-    // placeholder envelope, which carries no `ack:` line and so names no
-    // delivery id for any recipient to ack against. The throw ESCAPES
-    // `queueSystemMail` — all five of its callers: `close.ts`'s `closeRun`,
-    // `dispatch.ts`'s `dispatchRun`, `kickoff.ts`'s `queueProgramKickoff`,
-    // `routes.ts`'s `POST /api/runs/:id/advance` handler, and `watch.ts`'s
-    // `FleetWatcher.hold` (the ask pre-emption lane's parent nudge, added
-    // after this file's other four) — deliberately:
-    // `{ queued: false }` already means "the dedupe guard suppressed it", a
-    // different and true statement this must not borrow.
-    //
-    // THAT LIST NAMES ITS CALLERS, and carries no line numbers, deliberately.
-    // It cited lines through two corrections and the second went stale inside
-    // a single wave: an edit anywhere ABOVE a call site moves it while the
-    // call itself does not change, so the cardinal rots on edits that have
-    // nothing to do with the fact being stated. The enclosing function is the
-    // property that identifies a caller; the number was only ever a way of
-    // pointing at it, and a worse one.
-    if (!stamped.ok) throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
-    out = { queued: true, mailId: inserted.id, deliveryId: delivery.id };
-  });
-  return out;
-}
+/** The landing lane's two notice subjects live in `landing.ts` (L1: the lane's verdict spells them, and this
+ *  file once held the database handle an L1 file may not reach); re-exported so `watch.ts` and the coordinator-skill
+ *  test keep the import they always had. Spelled ONCE, there. */
+export { dequeuedSubject, mergedSubject } from './landing.js';
 
 /** The ask pre-emption lane's own nudge-mail subject prefix — the ONE source
  *  `askNudgeSubject` (the queue side) and `isAskNudgeMail` (the reader side)
@@ -320,4 +306,19 @@ export function isAskNudgeMail(m: { fromId: string; runId: number | null; subjec
   return m.fromId === 'operator' && m.runId === null &&
     m.subject.startsWith(ASK_NUDGE_SUBJECT_PREFIX) &&
     /^\d+$/.test(m.subject.slice(ASK_NUDGE_SUBJECT_PREFIX.length));
+}
+
+/** The approvals lane's nudge-mail subject prefix (plan Task 16, D-5298): the mail that wakes a child's claimant to
+ *  rule on its permission prompt. One source for the queue side (`approvalNudgeSubject`) and the reader side
+ *  (`isApprovalNudgeMail`), as the ask nudge's pair has. */
+const APPROVAL_NUDGE_SUBJECT_PREFIX = 'approval:';
+
+export const approvalNudgeSubject = (approvalId: number): string => `${APPROVAL_NUDGE_SUBJECT_PREFIX}${approvalId}`;
+
+/** Is this mail row an approval nudge? Recorded and never pushed, for the ask nudge's reason (`isAskNudgeMail`): it
+ *  exists to keep the prompt off the operator's phone during the window, so its own delivery must not buzz it. */
+export function isApprovalNudgeMail(m: { fromId: string; runId: number | null; subject: string }): boolean {
+  return m.fromId === 'operator' && m.runId === null &&
+    m.subject.startsWith(APPROVAL_NUDGE_SUBJECT_PREFIX) &&
+    /^\d+$/.test(m.subject.slice(APPROVAL_NUDGE_SUBJECT_PREFIX.length));
 }

@@ -18,6 +18,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { usageSidecarPath, USAGE_FRESH_S } from '../src/usage.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { fakeTime } from './fakeTime.js';
 
 const seedSession = (home: string, id: string, wrapper: string): void => {
   const reg = path.join(home, '.cc-sessions');
@@ -38,14 +39,14 @@ const writeUsage = (home: string, id: string, over: Record<string, unknown> = {}
  *  `ctxPct` describe block uses, so this fixture exercises only the sweep
  *  lanes, never the dialog/pane-capture ones. */
 const idleRun: Runner = async (_cmd, args) => {
-  if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-  if (args[0] === 'list-panes') return { code: 0, stdout: '', stderr: '' };
-  return { code: 0, stdout: '', stderr: '' };
+  if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+  if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: '', stderr: '' };
+  return { ran: true, code: 0, stdout: '', stderr: '' };
 };
 
 const makeWatcher = (home: string, io: FleetIO): FleetWatcher => {
   const cfg = loadConfig({ CCRC_HOME: home });
-  const deps = { cfg, runCcd: ccdRunner(idleRun, cfg), tmux: new Tmux(idleRun), io, queue: new KeyedQueue() };
+  const deps = { cfg, runCcd: ccdRunner(idleRun, cfg), tmux: new Tmux(idleRun), io, queue: new KeyedQueue(), time: fakeTime().ports };
   return new FleetWatcher(deps, new Bus());
 };
 
@@ -76,8 +77,10 @@ describe('FleetWatcher usage sweep lane (routing slice 0)', () => {
     await watcher.tick();
 
     const usage = watcher.currentUsage().get('demo-usage-a');
+    // D-8267: `cacheExpiresAt` comes from the same sidecar read; this sidecar names none, so it reads null.
     expect(usage).toEqual({
-      ts: expect.any(Number), model: 'claude-opus-5', class: 'opus', effort: 'high', ctxPct: 12, cost: 1.25, stale: false,
+      ts: expect.any(Number), model: 'claude-opus-5', class: 'opus', effort: 'high', ctxPct: 12, ctxTokens: null,
+      ctxWindow: null, cost: 1.25, cacheExpiresAt: null, stale: false,
     });
   });
 
@@ -121,7 +124,7 @@ describe('FleetWatcher usage sweep lane (routing slice 0)', () => {
     // the same private-field poke `dialog.test.ts` avoids needing by calling
     // `sweepHookStates()` directly, not available to us here since the
     // throttle itself is what this test is exercising.
-    (watcher as unknown as { lastUsageSweep: number }).lastUsageSweep = 0;
+    watcher.kick('usage');
     degrade = true;
     await watcher.tick();
 
@@ -153,7 +156,7 @@ describe('FleetWatcher usage sweep lane (routing slice 0)', () => {
     (watcher as unknown as { usage: Map<string, typeof prev> }).usage.set('demo-usage-d', prev);
 
     degrade = true;
-    (watcher as unknown as { lastUsageSweep: number }).lastUsageSweep = 0;
+    watcher.kick('usage');
     await watcher.tick();
 
     const carried = watcher.currentUsage().get('demo-usage-d');

@@ -1,0 +1,61 @@
+// D-6631 (fleet disk retention spec 2026-10-23 §2.3); moved out of `watch.ts` by the consolidation (GitHub #1279). L4: the
+// orphan-worktree lane's wiring. `OrphanTreeSweep` (`orphanTreeSweep.ts`) holds the lane's memory and runs a pass, the
+// decisions are `orphanTreeLane.ts`'s and every ccd call is `coord/collectOrphanTree.ts`'s; this builds the sweep from the
+// watcher's ports, on first use. The cadence is the `orphanTrees` row of `LANE_SCHEDULE`, run by `FleetWatcher.runLane`.
+// Shadow until `orphan-tree-live` stands.
+import type { WatcherDeps } from './deps.js';
+import { NO_FLEET_IDENTITY } from './fleetidentity.js';
+import { notify } from './notice.js';
+import { orphanCoordinatorSet, orphanPressure } from './orphanTreeLane.js';
+import { OrphanTreeSweep } from './orphanTreeSweep.js';
+import { fieldMeasured, readSessionRecord } from './registry.js';
+import { childReclaimEverClaimedIds } from './coord/childReclaim.js';
+import type { DiskHealth, DiskOrphanTrees } from '../../shared/disk.js';
+import { orphanLeaseHold, type OrphanLeaseHold } from './coord/delegation-orphan-hold.js';
+import { delegationCarrierStateOf } from './coord/delegation-lease-state.js';
+import type { DeepReadonly, DelegationCheckpointV1 } from './coord/delegation-model.js';
+
+/** The orphan lane's delegation hold (PR4, D-7828): the L1 decision over the applier's checkpoint while it is `ready` (null
+ *  otherwise). A lease's state is its carrier state (PR5a's `delegationCarrierStateOf`), so a transfer holds the tree too. */
+export const beatLeaseHold = (checkpointIfReady: () => DeepReadonly<DelegationCheckpointV1> | null, nowMs: () => number = Date.now) =>
+  async (path: string, orphanClass: string | null): Promise<OrphanLeaseHold> => orphanLeaseHold({
+    checkpoint: checkpointIfReady(), path, orphanClass, nowMs: nowMs(),
+    heldStateOf: (l, cp) => delegationCarrierStateOf(l, cp.leaseCarriers?.find((c) => c.leaseId === l.leaseId)),
+  });
+
+export class OrphanTreeBeat {
+  private sweep: OrphanTreeSweep | null = null;
+
+  /** `mono` is the watcher's monotonic clock reading, the one the lane's rows throttle on. `diskBlock` is the disk alarm's
+   *  held block, read on every pass: its `pressure` is the lane's pressure mode (D-7865). `checkpointIfReady` is the watcher's
+   *  delegation read (`FleetWatcher.delegationCheckpointIfReady`), asked on every act job; the disk block stays the last argument. */
+  constructor(private readonly deps: () => Pick<WatcherDeps, 'coord' | 'io' | 'cfg' | 'runCcd' | 'fleetState' | 'queue' | 'fleetIdentity' | 'notifyLog'>, private readonly mono: () => number,
+    private readonly checkpointIfReady: () => DeepReadonly<DelegationCheckpointV1> | null, private readonly diskBlock: () => Pick<DiskHealth, 'pressure'> | null) {}
+
+  /** The `disk` block's `orphanTrees`, or null before the lane's first census. */
+  health(): DiskOrphanTrees | null { return this.sweep?.health() ?? null; }
+
+  /** One pass. The caller holds the coord store (a coord-less server has no lane) and the cadence. */
+  async pass(): Promise<void> {
+    const d = this.deps();
+    const coord = d.coord;
+    if (!coord) return;
+    this.sweep ??= new OrphanTreeSweep({
+      io: d.io, registryDir: d.cfg.registryDir, runCcd: d.runCcd, fleetState: d.fleetState,
+      queue: d.queue, mono: this.mono, leaseHold: beatLeaseHold(this.checkpointIfReady),
+      epochNow: () => (this.deps().fleetIdentity ?? NO_FLEET_IDENTITY).epochNow(), pressure: () => orphanPressure(this.diskBlock()),
+      coordinators: () => { const c = orphanCoordinatorSet({ everClaimedIds: () => childReclaimEverClaimedIds(coord), openCoordinatorIds: () => coord.openCoordinatorIds() }); if (c === null) throw new Error('coordinator claims unreadable'); return c; },
+      // A containing row that is no workspace (a plain session, a main checkout) is no nesting; an unreadable or absent row keeps the tree.
+      isWorkspace: async (id) => {
+        const r = await readSessionRecord(d.io, d.cfg, id);
+        if (r.kind !== 'found' || r.record.unmeasured.length > 0) return null;
+        // MEASURED: `listedField` collapses an unreadable marker to null, which would read as 'plain session' and audit a worker's tree.
+        const w = await fieldMeasured(d.io, d.cfg.registryDir, id, 'workspace');
+        return w.ok ? true : w.reason === 'absent' ? false : null;
+      },
+      record: (title, body) => notify({ notifyLog: d.notifyLog, coord },
+        { kind: 'coord', sessionId: '', runId: null, title, body }, 'record-only', { degraded: `orphan-tree lane ${title}, feed archive degraded` }),
+    });
+    await this.sweep.pass();
+  }
+}

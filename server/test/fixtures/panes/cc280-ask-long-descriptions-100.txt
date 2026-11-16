@@ -1,0 +1,27 @@
+❯ ask4long
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Target
+
+Which of four deployment targets should we use for the rig?
+
+❯ 1. Target number 1
+     Option 1 long description: this text is deliberately long so that it wraps past the pane edge
+     at narrow widths and tests whether description rows are attributed to the right option in the
+     parsed dialog output.
+  2. Target number 2
+     Option 2 long description: this text is deliberately long so that it wraps past the pane edge
+     at narrow widths and tests whether description rows are attributed to the right option in the
+     parsed dialog output.
+  3. Target number 3
+     Option 3 long description: this text is deliberately long so that it wraps past the pane edge
+     at narrow widths and tests whether description rows are attributed to the right option in the
+     parsed dialog output.
+  4. Target number 4
+     Option 4 long description: this text is deliberately long so that it wraps past the pane edge
+     at narrow widths and tests whether description rows are attributed to the right option in the
+     parsed dialog output.
+  5. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  6. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

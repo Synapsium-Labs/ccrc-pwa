@@ -17,7 +17,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO, type MeasuredRead } from '../src/io.js';
 import { isSafeProjectSegment } from '../src/coord/ledgerseed.js';
-import { seedRoster, testDeps } from './helpers.js';
+import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const NOW = 1_785_300_000_000;
@@ -61,8 +61,7 @@ const fixture = (over: { coord?: unknown } = {}): Fixture => {
   const coord = 'coord' in over
     ? over.coord
     : new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const watcher = new FleetWatcher(
-    { ...testDeps(home), cfg, io, coord } as never, new Bus(), 10_000);
+  const watcher = new FleetWatcher(withFakeClock({ ...testDeps(home), cfg, io, coord } as never), new Bus(), 10_000);
   return { watcher, reads, home, fail: () => { failing = true; } };
 };
 
@@ -197,9 +196,9 @@ describe('the readiness sweep — the coord probe', () => {
 describe('the sweep measures the box token on the SERVER box', () => {
   /** THE PRODUCTION TOPOLOGY, as a fixture. `CCRC_FLEET=remote` is standing
    *  config on the live server, so the watcher's `deps.io` is the agent-backed
-   *  FleetIO — and the agent's read whitelist has no `.ccrc` arm
+   *  FleetIO — and the agent's read whitelist admits no `.ccrc` name but its eight node files
    *  (`agent/src/whitelist.ts`: .cc-sessions, .cc-limits, .cc-clips, the
-   *  projects root, underClaudeGlob). This io refuses `.ccrc` exactly as that
+   *  projects root, underClaudeGlob). This io refuses `.ccrc` whole — exact for `mail.token`, as that
    *  whitelist does, while the token file really exists on this box.
    *
    *  Before the local/fleet split this fixture answered `unmeasurable`, so the
@@ -223,8 +222,7 @@ describe('the sweep measures the box token on the SERVER box', () => {
       },
     };
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-    const watcher = new FleetWatcher(
-      { ...testDeps(home), cfg, io, coord } as never, new Bus(), 10_000);
+    const watcher = new FleetWatcher(withFakeClock({ ...testDeps(home), cfg, io, coord } as never), new Bus(), 10_000);
     return { watcher, refused, home };
   };
 

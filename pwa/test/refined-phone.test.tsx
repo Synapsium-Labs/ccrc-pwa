@@ -1,0 +1,399 @@
+// Refined's phone header, subtitle, gauges and FAB (W2 Task S5, D-5471).
+//
+// What a person on a phone sees first, held through `App` in the Refined skin: one header row of the wordmark and four
+// icon doors (each a registry command, each named by its word, a badged one by its count too), one mono readout under
+// it from `fleetSummary`, the full accounts strip (each lane's 5h and 7d rows, the strip one `go-accounts` door), and
+// an extended `+ New` in the thumb's corner that publishes its height so a toast clears it. jsdom applies no media
+// queries and no layout, so a width is a `matchMedia` stub that answers every `min-width` and `max-width` query against
+// one number, and what this file counts is what is MOUNTED; what is visible at each width is the per-width render pass.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { INSTRUMENT, REFINED, toast } from '@ccrc/ui';
+import type { AccountUsage, RunSummary } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
+import { seventeenLanes } from './seventeenLanes';
+import { itemView, waitingView } from './ledgersFixture';
+import { lanesByFree } from '../src/fleet/laneOrder';
+import { pageAt, treeOk, treeResponse } from './docsFixtures';
+import type { DocsVisit } from '../src/docs/useDocsVisit';
+
+/** A lazy screen's first load (console speed C1): the wait, and its case's own ceiling a few seconds above it, so a
+ *  hang reports the wait's own failure, with the DOM, before the case's timeout (reviews 1464 F8 and 1473 A9). */
+const LAZY_WAIT_MS = 30_000;
+const LAZY_CEILING_MS = LAZY_WAIT_MS + 5_000;
+
+// The bell renders only where the browser can push; this one can, so a bell left in the header would show.
+vi.mock('../src/lib/push', () => ({
+  pushSupported: () => true,
+  pushEnabled: async () => false,
+  enablePush: async () => ({ status: 'enabled' }),
+  disablePush: async () => {},
+}));
+
+const { App } = await import('../src/app');
+const { navigate } = await import('../src/lib/router');
+const { setSkin } = await import('../src/lib/skin');
+const { useFleetStore } = await import('../src/stores/fleet');
+const { fleetSummary } = await import('../src/fleet/fleetSummary');
+const { api } = await import('../src/lib/api');
+const { DocsHead } = await import('../src/docs/DocsHead');
+
+/** A Docs visit whose actions are inert: the up door reads only the page. */
+const docsVisit = (): DocsVisit => ({
+  tree: { s: 'ok', answer: treeResponse(treeOk()), receivedAt: Date.now() },
+  file: { s: 'none' }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
+  retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+});
+
+const SRC = path.join(import.meta.dirname, '..', 'src');
+
+/** Every width query answered against one viewport width. */
+function atWidth(width: number): void {
+  vi.stubGlobal('matchMedia', (q: string) => {
+    const min = /min-width:\s*([\d.]+)px/.exec(q);
+    const max = /max-width:\s*([\d.]+)px/.exec(q);
+    const matches = (min === null || width >= Number(min[1])) && (max === null || width <= Number(max[1]))
+      && (min !== null || max !== null);
+    return {
+      matches, media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    };
+  });
+}
+
+const nowSec = Math.floor(Date.now() / 1000);
+const lane = (wrapper: string, five: number | null, seven: number | null): AccountUsage => ({
+  wrapper, five, seven, ts: nowSec - 60, fiveResetAt: null, sevenResetAt: null,
+  fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false,
+});
+
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+  setSkin(REFINED);
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  act(() => { navigate('/'); });
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false, fleetFrameSeen: false, waiting: null }));
+  setSkin(REFINED);
+});
+
+const head = (): HTMLElement => {
+  const h = document.querySelector<HTMLElement>('header.ref-phone-head');
+  expect(h, 'the phone header is mounted').not.toBeNull();
+  return h!;
+};
+// The header's one door since PL10: the places it held are the phone's bottom bar's (desktop-polish PL10, D-7952; the
+// coordinator's ruling on PL10's question, 2026-11-04).
+const DOORS = [
+  ['go-settings', 'Settings'],
+] as const;
+/** The phone's bottom bar (`PhoneBar`, inside the frame's `<nav aria-label="Navigation">`). */
+const phoneBar = (): HTMLElement => {
+  const b = document.querySelector<HTMLElement>('nav.shell-phone-nav');
+  expect(b, 'the bottom bar is mounted').not.toBeNull();
+  return b!;
+};
+
+describe("Refined's phone header (W2 Task S5)", () => {
+  it('the phone header holds the wordmark and the Settings door, with its word as its accessible name, at least --tap-min, carrying its data-command; the places are the bottom bar\'s', () => {
+    atWidth(390);
+    render(<App />);
+    const h = head();
+    expect(h.querySelector('[data-wordmark]'), 'the identity core').not.toBeNull();
+    const doors = [...h.querySelectorAll<HTMLElement>('.ref-phone-doors [data-command]')];
+    expect(doors.map((d) => d.getAttribute('data-command'))).toEqual(DOORS.map(([id]) => id));
+    for (const [i, [, word]] of DOORS.entries()) {
+      expect(doors[i], word).toHaveAccessibleName(word);
+      // jsdom has no layout: the floor is the tap utilities on the door itself (the census measures the rule).
+      expect(doors[i], `${word} is at least --tap-min high`).toHaveClass('min-h-tap');
+      expect(doors[i], `${word} is at least --tap-min wide`).toHaveClass('min-w-tap');
+      expect(doors[i]!.className, word).not.toMatch(/(^|\s)h-\d/);
+    }
+    expect(within(h).queryByRole('navigation'), 'the header is no second navigation').toBeNull();
+    // The places are the bar's, and a door there runs its command: the layer navigates.
+    fireEvent.click(within(phoneBar()).getByRole('button', { name: 'Runs' }));
+    expect(location.pathname).toBe('/runs');
+  });
+
+  it("a badged door's name carries its count (the bottom bar's, since PL10)", () => {
+    // Only what waits on the operator is counted (T2d, D-6330): two sessions ask, and one run's worker is one of them.
+    const run = (id: number, sessionId: string): RunSummary =>
+      ({ id, program: 'p', state: 'working', closedAt: null, sessionId, claimedBy: 'calm' }) as unknown as RunSummary;
+    const runs = [run(1, 'ask-a'), run(2, 'calm')];
+    const sessions = withRunBinding([
+      fleetSession({ id: 'ask-a', bucket: 'attention' }),
+      fleetSession({ id: 'ask-b', bucket: 'attention' }),
+      fleetSession({ id: 'calm', bucket: 'idle' }),
+    ], runs);
+    atWidth(390);
+    render(<App />);
+    act(() => useFleetStore.setState({ conn: 'open', sessions, fleetFrameSeen: true, runs, runsFrameSeen: true }));
+    const h = phoneBar();
+    expect(within(h).getByRole('button', { name: 'Inbox, 2 waiting for you' })).toHaveAttribute('data-command', 'go-inbox');
+    expect(within(h).getByRole('button', { name: 'Runs, 1 needs you' })).toHaveAttribute('data-command', 'go-runs');
+    act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'calm', bucket: 'idle' })] }));
+    expect(within(h).getByRole('button', { name: 'Inbox' })).toBeInTheDocument();
+    expect(within(h).getByRole('button', { name: 'Runs' })).toBeInTheDocument();
+  });
+
+  // Desktop-polish PL5a (D-7712): the phone's Waiting on you door counts open items plus questions, never an item being checked.
+  it("the Waiting on you door's name carries its count, and prints no badge before the waiting frame (the bottom bar's, since PL10)", () => {
+    atWidth(390);
+    render(<App />);
+    act(() => useFleetStore.setState({ conn: 'open', fleetFrameSeen: true, sessions: [fleetSession({ id: 'ask-a', bucket: 'attention' })] }));
+    const h = phoneBar();
+    expect(within(h).getByRole('button', { name: 'Waiting' })).toHaveAttribute('data-command', 'go-waiting');
+    act(() => useFleetStore.setState({
+      waiting: waitingView({ items: [itemView({ id: 1 }), itemView({ id: 2, state: 'checking' })] }),
+    }));
+    expect(within(h).getByRole('button', { name: 'Waiting, 2 waiting on you' })).toHaveTextContent(/2$/);
+    fireEvent.click(within(h).getByRole('button', { name: 'Waiting, 2 waiting on you' }));
+    expect(location.pathname).toBe('/waiting');
+  });
+
+  it("the subtitle is `fleetSummary`'s readout", () => {
+    const sessions = [fleetSession({ id: 'a', bucket: 'attention' }), fleetSession({ id: 'b' }), fleetSession({ id: 'c' })];
+    const runs = [{ id: 1, program: 'p', state: 'working', closedAt: null } as unknown as RunSummary];
+    atWidth(390);
+    render(<App />);
+    act(() => useFleetStore.setState({ conn: 'open', sessions, runs, runsFrameSeen: true }));
+    const line = head().querySelector('.ref-phone-sub');
+    expect(line).toHaveTextContent(fleetSummary(sessions, runs).readout);
+    // The one function counts; the header counts nothing itself (W2 plan, "one derived value, one function").
+    const code = readFileSync(path.join(SRC, 'skins', 'refined', 'PhoneHeader.tsx'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    expect(code).toMatch(/import \{[^}]*\bfleetSummary\b[^}]*\} from '..\/..\/fleet\/fleetSummary'/);
+    expect(code).not.toMatch(/\.length\b|\.filter\(|\.reduce\(/);
+  });
+
+  it('the FAB opens New session, and no FAB is mounted at ≥900', () => {
+    atWidth(390);
+    render(<App />);
+    act(() => useFleetStore.setState({ conn: 'open' }));
+    const fab = document.querySelector<HTMLElement>('.ref-fab');
+    expect(fab).not.toBeNull();
+    expect(fab).toHaveAttribute('data-command', 'new-session');
+    expect(fab).toHaveAccessibleName(/New/);
+    fireEvent.click(fab!);
+    expect(screen.getByRole('dialog', { name: /start a session/i })).toBeInTheDocument();
+    cleanup();
+    for (const width of [900, 1280]) {
+      atWidth(width);
+      render(<App />);
+      expect(document.querySelector('.ref-fab'), `${width}`).toBeNull();
+      // The bar's `+ New session` is the one door to the command at a desk.
+      expect(document.querySelectorAll('[data-command="new-session"]'), `${width}`).toHaveLength(1);
+      cleanup();
+    }
+  });
+
+  it('a toast shown on the fleet sits above the FAB', () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const h = this.classList.contains('ref-fab') ? 56 : 0;
+      return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: h, width: 0, height: h, toJSON: () => ({}) } as DOMRect;
+    });
+    atWidth(390);
+    render(<App />);
+    const published = (): string => document.documentElement.style.getPropertyValue('--phone-nav-h');
+    expect(published()).toMatch(/56px/);
+    act(() => { toast('Saved'); });
+    const host = document.querySelector('.toast-host');
+    expect(host).not.toBeNull();
+    // The host's offset sums the composer and whatever is fixed to the bottom edge.
+    expect(host!.className).toMatch(/var\(--composer-h,0px\)\+var\(--phone-nav-h,0px\)/);
+    // Off the fleet route the FAB is not mounted, so nothing is published for a toast to clear.
+    act(() => { navigate('/runs'); });
+    expect(document.querySelector('.ref-fab')).toBeNull();
+    expect(published()).toBe('');
+  });
+
+  it("the phone header shows the full strip: each lane's 5h and 7d rows, each card its lane's door, and no go-accounts door (PL10: the bar holds Accounts)", async () => {
+    const lanes = [lane('lane-a', 30, 80), lane('lane-b', 12, null), lane('lane-c', null, 5), lane('lane-d', 1, 2), lane('lane-e', 3, 4)];
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
+    atWidth(390);
+    render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage, highest lane-a 80%/ });
+    await within(strip).findByText('lane-a');
+    expect(strip).toHaveClass('accounts-strip');
+    // The strip is no door itself: its cards are. Below 900 the bottom bar holds the Accounts place, so the phone head draws no
+    // `go-accounts` door, All accounts included (desktop-polish PL10, review 1466 F3).
+    expect(strip).not.toHaveAttribute('data-command');
+    const cards = [...strip.querySelectorAll<HTMLElement>('.account-gauge')];
+    expect(cards).toHaveLength(lanes.length);
+    // Most free first: lane-d (2), lane-e (4), lane-c (5), lane-b (12), lane-a (80).
+    const name = (card: HTMLElement): string => card.querySelector('.account-gauge-label')?.textContent ?? '';
+    expect(cards.map(name)).toEqual(['lane-d', 'lane-e', 'lane-c', 'lane-b', 'lane-a']);
+    const windows = (card: HTMLElement): string[] => [...card.querySelectorAll('.acct-win')].map((w) => w.textContent ?? '');
+    expect(windows(cards.find((c) => name(c) === 'lane-a')!)).toEqual(['5h', '7d']);
+    expect(windows(cards.find((c) => name(c) === 'lane-b')!)).toEqual(['5h']);
+    expect(windows(cards.find((c) => name(c) === 'lane-c')!)).toEqual(['7d']);
+    // One readout of the lanes on the page: the full strip is the phone's.
+    expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
+    expect(within(head()).queryByRole('button', { name: 'All accounts' })).toBeNull();
+    expect(head().querySelector('[data-command="go-accounts"]')).toBeNull();
+    // A card opens its lane.
+    fireEvent.click(cards.find((c) => name(c) === 'lane-b')!);
+    expect(location.pathname).toBe('/accounts');
+    expect(location.search).toBe('?lane=lane-b');
+  });
+
+  // The strip folds at every width (S5b, D-6530): four cards on a phone, whatever its width, and the control's words say
+  // what the fold hides that needs the operator.
+  const stubSeventeen = (): void => {
+    const f = seventeenLanes(nowSec);
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+  };
+  const cardNames = (strip: HTMLElement): string[] =>
+    [...strip.querySelectorAll<HTMLElement>('.account-gauge')].map((c) => c.querySelector('.account-gauge-label')?.textContent ?? '');
+
+  it("at 390 with 17 lanes the phone header shows four cards and '+13 more · 1 sign-in expired · 1 rate-limited'", async () => {
+    stubSeventeen();
+    atWidth(390);
+    render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage, highest lane-q 100%/ });
+    await within(strip).findByText('lane-a');
+    expect(cardNames(strip)).toEqual(['lane-a', 'lane-f', 'lane-with-a-very-long-name-q', 'lane-e']);
+    const more = within(strip).getByRole('button', { name: '+13 more · 1 sign-in expired · 1 rate-limited' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    // The end cell holds the control alone (no All accounts below 900: PL10, review 1466 F3): still one strip on the page.
+    expect([...more.closest('.accounts-end')!.children]).toEqual([more]);
+    expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
+  });
+
+  // The phone's rule (S5c, phone-strip-tap-panel): the control opens a panel of the lanes the line folds away (Task C13:
+  // every lane drawn once across the line and the panel) instead of expanding the strip, and the stored choice is the
+  // desk's alone, so nothing is remembered and a remount finds the strip as it began.
+  const lineNames = (strip: HTMLElement): string[] =>
+    [...strip.children].filter((c) => c.classList.contains('account-gauge')).map((c) => c.querySelector('.account-gauge-label')?.textContent ?? '');
+
+  it('a tap on the control opens a panel of the 13 folded lanes, in order, under a line that stays four, stores nothing, and a remount finds it closed', async () => {
+    stubSeventeen();
+    atWidth(390);
+    const first = render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(strip).findByText('lane-a');
+    fireEvent.click(within(strip).getByRole('button', { name: /^\+13 more/ }));
+    const panel = strip.querySelector<HTMLElement>('.accounts-flyout');
+    expect(panel).not.toBeNull();
+    const f = seventeenLanes(nowSec);
+    const order = lanesByFree(f.accounts).map((a) => f.roster.find((r) => r.id === a.wrapper)!.label);
+    const inPanel = [...panel!.querySelectorAll('.account-gauge')].map((c) => c.querySelector('.account-gauge-label')?.textContent ?? '');
+    expect(lineNames(strip)).toEqual(order.slice(0, 4));
+    expect(inPanel).toEqual(order.slice(4));
+    expect(within(strip).getByRole('button', { name: /^\+13 more/ })).toHaveAttribute('aria-controls', panel!.id);
+    expect(window.localStorage.getItem('ccrc-accounts-strip')).toBeNull();
+    first.unmount();
+    render(<App />);
+    const again = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(again).findByText('lane-a');
+    expect(again.querySelector('.accounts-flyout')).toBeNull();
+    expect(lineNames(again)).toHaveLength(4);
+    expect(within(again).getByRole('button', { name: /^\+13 more/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('a stored choice of expanded is not read below 900: the phone header still folds to its line', async () => {
+    stubSeventeen();
+    window.localStorage.setItem('ccrc-accounts-strip', 'expanded');
+    atWidth(390);
+    render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(strip).findByText('lane-a');
+    expect(lineNames(strip)).toHaveLength(4);
+    expect(within(strip).getByRole('button', { name: /^\+13 more/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('a phone whose grid draws four tracks shows two lines of them: eight cards', async () => {
+    stubSeventeen();
+    atWidth(700);
+    // jsdom lays nothing out: the observer answers the group's width, and the computed style names the tracks it draws.
+    // The strip's computed style is the real one with two properties answered (the accessible-name walk of a group query
+    // asks it for `getPropertyValue` too).
+    const real = window.getComputedStyle.bind(window);
+    const drawn: Record<string, string> = { columnGap: '6px', gridTemplateColumns: '145.5px 145.5px 145.5px 145.5px' };
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+      const style = real(el, pseudo);
+      if (!el.classList.contains('accounts-strip')) return style;
+      return new Proxy(style, {
+        get: (target, key: string) => {
+          if (key in drawn) return drawn[key];
+          const value = Reflect.get(target, key, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    });
+    vi.stubGlobal('ResizeObserver', class {
+      private readonly cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+      observe(target: Element): void {
+        if (target.classList.contains('accounts-strip')) this.cb([{ target, contentRect: { width: 600 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+    });
+    render(<App />);
+    const strip = await within(head()).findByRole('group', { name: /^account usage/ });
+    await within(strip).findByRole('button', { name: /^\+9 more/ });
+    expect(lineNames(strip)).toHaveLength(8);
+  });
+
+  it('Refined renders neither FleetHead nor `.fab`; Instrument still renders both', () => {
+    atWidth(390);
+    render(<App />);
+    expect(document.querySelector('.fleet-head')).toBeNull();
+    expect(document.querySelector('.fab')).toBeNull();
+    // The bell lives in Settings' notifications section on a Refined phone.
+    expect(within(head()).queryByRole('button', { name: /^Notifications/ })).toBeNull();
+    cleanup();
+    setSkin(INSTRUMENT);
+    atWidth(390);
+    render(<App />);
+    expect(document.querySelector('.fleet-head')).not.toBeNull();
+    expect(document.querySelector('.fab')).not.toBeNull();
+    expect(document.querySelector('header.ref-phone-head')).toBeNull();
+    expect(document.querySelector('.ref-fab')).toBeNull();
+  });
+});
+
+describe('the back door to the fleet (W2 Task S5, the door table\'s go-fleet row)', () => {
+  for (const route of ['/runs', '/accounts', '/mail', '/settings', '/archive', '/digest', '/s/a']) {
+    it(`the back button on ${route} carries go-fleet`, { timeout: LAZY_CEILING_MS }, async () => {
+      atWidth(390);
+      render(<App />);
+      act(() => { navigate(route); });
+      // Five of these screens load on demand (console speed C1): the chunk resolves after the navigation's commit.
+      const back = await screen.findAllByRole('button', { name: 'Back to fleet' }, { timeout: LAZY_WAIT_MS });
+      expect(back.length, route).toBeGreaterThan(0);
+      for (const b of back) expect(b, route).toHaveAttribute('data-command', 'go-fleet');
+    });
+  }
+
+  it('a back button whose target is not the fleet carries no go-fleet', { timeout: LAZY_CEILING_MS }, async () => {
+    atWidth(390);
+    render(<App />);
+    act(() => { navigate('/settings/updates'); });
+    const back = await screen.findByRole('button', { name: 'Back to Settings' }, { timeout: LAZY_WAIT_MS }); // loads on demand (C1)
+    expect(back).not.toHaveAttribute('data-command');
+  });
+
+  it("the Docs index's up door, whose target is the fleet, carries go-fleet; deeper up doors do not", () => {
+    const upDoor = (url: string): HTMLElement => {
+      cleanup();
+      const visit = { ...docsVisit(), tree: null };
+      render(<DocsHead page={pageAt(url)} visit={visit} tree={null} />);
+      const b = document.querySelector<HTMLElement>('.docs-back');
+      expect(b, url).not.toBeNull();
+      return b!;
+    };
+    expect(upDoor('/docs')).toHaveAttribute('data-command', 'go-fleet');
+    for (const url of ['/docs/demo', '/docs/demo/specs', '/docs/demo/specs/a.md']) {
+      expect(upDoor(url), url).not.toHaveAttribute('data-command');
+    }
+  });
+});

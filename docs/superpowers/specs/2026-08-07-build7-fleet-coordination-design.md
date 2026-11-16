@@ -17,7 +17,7 @@ exactly this build's goals. Scoped from five read-only scouts against
 ## 0. Four measured facts that shaped everything
 
 1. **Two boxes.** The server (and therefore SQLite) lives on `<server-host>`;
-   ccd, the registry, tmux and every session live on `openclaw`. The agent
+   ccd, the registry, tmux and every session live on `<fleet-host>`. The agent
    link between them is **read-only for files** (writes: `.cc-clips` only) —
    the server mutates the registry only through whitelisted ccd verbs.
    `README.md`'s "local mode is what's deployed" is false
@@ -211,10 +211,12 @@ an account without the skill).
   Convention, plus a mechanical speed bump, named as exactly that.
 - **Wave lifecycle** automates Build 2.5's six manual steps: coordinator
   opens the run (ledger commit + hold), dispatches, watches mail + pr-state,
-  re-measures the done fingerprint, reviews the handoff commit, updates the
-  hold reason, dispatches wave N+1 fresh into the same workspace, releases on
-  final merge. **The brief's content stays discipline** — the skill carries
-  the template, the quality gate stays ordinary review of the handoff commit.
+  re-measures the done fingerprint, **dispatches a review run and rules on
+  its report** (design 2026-09-14), updates the hold reason, dispatches wave
+  N+1 fresh into the same workspace, releases on final merge. **The brief's
+  content stays discipline** — the skill carries the template, the quality
+  gate stays ordinary review of the handoff commit — run by a dispatched
+  reviewer in its own worktree, ruled on by the coordinator.
 - The operator observes and interrupts at every point: the run board, the
   mail feed, push events, the pause file, and the ordinary ability to just
   talk to any session.

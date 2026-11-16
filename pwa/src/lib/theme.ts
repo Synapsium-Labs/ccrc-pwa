@@ -1,11 +1,25 @@
-// Theme reachability — the "true light theme" in tokens.css must actually be
-// applied, not just defined. Dark stays the identity default; the app follows
-// the system setting: `prefers-color-scheme: light` stamps
-// `data-theme="light"` on the root (the selector every light token hangs off)
-// and live setting changes flow through without a reload. The browser-chrome
-// `theme-color` meta re-reads --bg-page after every flip so installed-app
-// chrome always matches the glass — values come from the loaded tokens, never
-// hardcoded here.
+// Theme reachability — a palette defined in tokens.css must actually be
+// APPLIED, not just defined.
+//
+// This file owns three things and nothing else: the stored preference, the
+// system media query, and keeping the browser-chrome `theme-color` meta on the
+// page's own background. WHICH palettes exist, what they are called, and what
+// stamping one means are all @ccrc/ui's (`styles/themes.ts`) — this app picks
+// among them, it does not enumerate them.
+//
+// The default is SYSTEM: follow `prefers-color-scheme` between the two
+// Phosphor palettes, which is exactly what the app did before any of this was
+// selectable. A pinned palette ignores the OS entirely — someone on a light
+// desktop who chose Nord gets Nord after dark too.
+//
+// It also keeps the CHOICE IN FORCE (D-5572), the shape `lib/skin.ts` gives
+// the skin (D-5096): `initTheme` reads it, `setTheme` sets it, and every
+// `useThemeChoice()` re-renders. The palette's "Switch theme…" and Settings'
+// Theme picker both call `setTheme`, so the picker's checked row follows a
+// choice made in either, never a copy taken at mount.
+import { useSyncExternalStore } from 'react';
+import { THEME_STORAGE_KEY, SYSTEM, applyTheme, resolveTheme } from '@ccrc/ui';
+import { readKey, writeKey } from './storage';
 
 /** The slice of MediaQueryList the theme needs — injectable for tests. */
 export interface ThemeMedia {
@@ -13,11 +27,23 @@ export interface ThemeMedia {
   addEventListener(type: 'change', cb: (e: { matches: boolean }) => void): void;
 }
 
-function apply(light: boolean): void {
-  const root = document.documentElement;
-  if (light) root.setAttribute('data-theme', 'light');
-  else root.removeAttribute('data-theme');
+/** The stored choice, or SYSTEM when there is none or it is unreadable.
+ *
+ *  Storage throws in a private window and in some embedded WebViews, and this
+ *  runs before first paint — an exception here is a blank app, so the read is
+ *  guarded and a failure is simply "no preference". */
+export function storedTheme(): string {
+  // The port's read is guarded (a throw answers null), and `resolveTheme` reads null as SYSTEM.
+  return resolveTheme(readKey(THEME_STORAGE_KEY));
+}
 
+/** Remember a choice. A failed write is not an error the user needs: the theme
+ *  still applies for this session, it just will not survive a reload. */
+export function rememberTheme(choice: string): void {
+  writeKey(THEME_STORAGE_KEY, choice); // refused (private window, blocked storage): the session keeps the theme anyway
+}
+
+function chrome(root: HTMLElement): void {
   // Keep the browser/PWA chrome on the page's own background. Guarded: in
   // environments without the tokens stylesheet (unit tests) the var resolves
   // empty and the meta is left alone.
@@ -26,10 +52,62 @@ function apply(light: boolean): void {
   if (bg !== '' && meta !== null) meta.content = bg;
 }
 
-/** Wire the theme to the system setting; call once at boot (main.tsx). */
+/** The choice in force — SYSTEM or a palette id — as `initTheme` read it or
+ *  `setTheme` last made it, wherever it was made (Settings, or the palette's
+ *  "Switch theme…"). Held here rather than re-read from storage, so a choice
+ *  made with storage blocked still shows as chosen for the session (D-5572). */
+let chosen: string = SYSTEM;
+const listeners = new Set<() => void>();
+
+function choose(choice: string): void {
+  chosen = choice;
+  for (const l of listeners) l();
+}
+
+/** Apply a choice now, remember it, and tell every `useThemeChoice()`.
+ *  Used by the Settings picker and the palette's "Switch theme…". */
+export function setTheme(
+  choice: string,
+  mq: ThemeMedia = window.matchMedia('(prefers-color-scheme: light)'),
+): void {
+  const root = document.documentElement;
+  const asked = resolveTheme(choice);
+  applyTheme(asked, root, mq.matches);
+  rememberTheme(choice);
+  chrome(root);
+  choose(asked);
+}
+
+/** Wire the theme at boot (main.tsx).
+ *
+ *  The media subscription stays live even when a palette is PINNED, and that
+ *  is deliberate rather than wasteful: the listener re-applies the choice in
+ *  force each time (D-5572), so a user who switches back to "System" later gets the current
+ *  OS answer without a reload, and a pinned palette simply ignores the event. */
 export function initTheme(
   mq: ThemeMedia = window.matchMedia('(prefers-color-scheme: light)'),
 ): void {
-  apply(mq.matches);
-  mq.addEventListener('change', (e) => apply(e.matches));
+  const root = document.documentElement;
+  const stored = storedTheme();
+  applyTheme(stored, root, mq.matches);
+  chrome(root);
+  choose(stored);
+  mq.addEventListener('change', (e) => {
+    // The choice in force, not a fresh storage read: with storage blocked a
+    // re-read says SYSTEM and would swap a pinned palette under its still-
+    // checked row (D-5572).
+    applyTheme(chosen, root, e.matches);
+    chrome(root);
+  });
+}
+
+function subscribe(onChange: () => void): () => void {
+  listeners.add(onChange);
+  return () => { listeners.delete(onChange); };
+}
+
+/** The choice in force, for the Settings Theme picker's checked row. Re-renders
+ *  on every `setTheme`, wherever it is called (D-5572). */
+export function useThemeChoice(): string {
+  return useSyncExternalStore(subscribe, () => chosen, () => SYSTEM);
 }

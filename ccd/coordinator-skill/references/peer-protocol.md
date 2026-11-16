@@ -62,6 +62,28 @@ the watcher while the holding session is measured running; the hard cap
 (`CLAIM_HARD_CAP_MS`, 8 h) is never renewed, so a long program re-declares
 its claim rather than holding it forever.
 
+Before the hard cap, a still-busy holder re-takes its paths (D-8395). The
+200 names the cap as `hardExpiresAt`; once it is less than one lease (45 min)
+away and you are still working on those paths, POST the same paths again.
+Because the server measures you running, it ends the old claim
+(`endedBy:"rechained"`) and opens a new one with a fresh lease and a fresh
+8 h cap, whose `chainedFrom` names the old id, and the 200 says so:
+`rechained: [{from, to}]`, with the new `hardExpiresAt`. Release or report
+by the new id (`to`). A re-take earlier than that only renews the lease and
+leaves the cap where it was. A holder the server does not measure running
+is not re-chained and still lapses at the cap. That lapse is the
+`lapsedSince` gap below, so re-take before the cap, not after it.
+
+A 200 that carries `lapsedSince` (`[{id, endedAt, endedBy}]`) means one of
+YOUR claims on these paths lapsed within the last lease (`CLAIM_LEASE_MS`)
+and you have just taken them again: between `endedAt` (when that lease ran
+out, however late it was swept) and now nothing held them, so another
+session may have edited them. Before you edit, fetch and
+read what landed on those paths since `endedAt` (`git log --since`, the
+peers' branches, `GET /api/claims?project=<slug>&all=1` for who held them in
+the gap), and fold any change in; say in your report that the claim had a
+gap. The field is absent when there was no gap.
+
 Release is `POST /api/claims/:id/release` when a claim is done early:
 
     body=$("$API" claims release "$claim" --json - <<JSON
@@ -107,12 +129,34 @@ is genuinely a new question); more than 3 outstanding to one peer
 (`PEER_MAIL_HOURLY`), refuses 429 `peer-quota`. Bound the producer, never
 the record.
 
+A reply you were asked for is never refused by those bounds (#2726): send it
+`"kind":"answer"` with `"inReplyTo"` set to the DELIVERY id of the mail you
+answer (its envelope's `id:` line, the inbox's `delivery:` line, `deliveryId`
+in `mail list`; never the 202's `id`, which is a mail id). It must answer an
+unasked mail delivered to you by the peer you are replying to, and each such
+mail buys one reply; it then holds no slot either. A reply to an invited
+reply, or to your own mail, invites nothing, so a thanks-for-the-thanks is
+ordinary peer mail. Anything else is ordinary peer mail too. A `peer-quota` refusal
+says when the mail can go, in its `detail` and in a `retry` field:
+`{"on":"ack","toId":…}` (when that peer acks one of your outstanding mails,
+which it does when it next reads its mail) or `{"on":"time","at":<epoch ms>}`
+(when your oldest mail of the hour leaves it). Wait for that, or answer
+through `inReplyTo`; do not drop the mail.
+
 ## History — `GET /api/claims`, `GET /api/lifecycle`, `GET /api/ledger`
 
-`GET /api/claims?project=<slug>` is the live set — the coordinator reads it
-before splitting a wave (clause 10); `all=1` includes ended rows, because
+`GET /api/claims?project=<slug>` is the live set (`claims`) — the coordinator
+reads it before splitting a wave (clause 10). Beside it, `recentlyLapsed`
+lists the rows that lapsed within the last lease, each `state:"lapsed"` with
+its `endedAt` and `endedBy` (`session-gone`, `expired`, `hard-cap`), so a
+lapsed claim no longer reads like one never taken. A recently lapsed row on a
+path the wave touches is treated as still held by its holder: mail the holder
+and dispatch onto that path only once it confirms it is done there, or has
+re-claimed it. `all=1` includes ended rows, because
 "held by X until it died" is an answer, which is why a lapsed claim is kept
-and never deleted. `GET /api/lifecycle?session=<id>` is a workspace's past
+and never deleted. A hold that outlived one 8 h window reads there as a
+chain: each `released` row with `endedBy:"rechained"` is continued by the
+row whose `chainedFrom` is its id (D-8395). `GET /api/lifecycle?session=<id>` is a workspace's past
 tense, and it answers for a workspace that no longer exists — read each
 row's own lifecycle families (`obs`/`dec`/`meas`), never the registry's
 archive stamp, which is measured false on live rows. `GET /api/ledger?project=<slug>`

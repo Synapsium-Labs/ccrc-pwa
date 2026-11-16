@@ -16,7 +16,7 @@
 // stays ≠ its id so label/id confusions keep failing). Hues match
 // `server/test/helpers.ts`'s `DEFAULT_TEST_ROSTER` — the server suite's own
 // root copy of this same roster shape — rather than inventing a
-// second assignment: `claude-dev0` gets `green`, the concrete case this
+// second assignment: `claude-lab0` gets `green`, the concrete case this
 // task's SessionScreen/SwapSheet fix exists for (its `colorVar` used to be
 // the non-hue `--ink-tertiary`, and a wrapper whose token wasn't an
 // `--acct-*` name fell through to `claude`'s cyan).
@@ -37,11 +37,11 @@ import type { RosterWire } from '../../shared/api';
 // sends.
 export const TEST_ROSTER: RosterWire[] = [
   { id: 'claude', label: 'team·max', hue: 'cyan', homeAble: true, hidden: false, pool: null },
-  { id: 'claude2', label: 'team·alt', hue: 'violet', homeAble: true, hidden: false, pool: null },
-  { id: 'claude-corp', label: 'team·b', hue: 'blue', homeAble: true, hidden: false, pool: null },
+  { id: 'claude9', label: 'team·alt', hue: 'violet', homeAble: true, hidden: false, pool: null },
+  { id: 'claude-acme', label: 'team·b', hue: 'blue', homeAble: true, hidden: false, pool: null },
   // Not home-able: an overflow lane the auto-swapper may rotate a session
   // onto as a last resort, never one ccd's `_ws_least_loaded` chooses on its
   // own.
   { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false, pool: null },
-  { id: 'claude-dev0', label: 'team·d', hue: 'green', homeAble: true, hidden: false, pool: null },
+  { id: 'claude-lab0', label: 'team·d', hue: 'green', homeAble: true, hidden: false, pool: null },
 ];

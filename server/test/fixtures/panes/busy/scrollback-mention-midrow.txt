@@ -1,0 +1,6 @@
+● The guard greps for esc to interrupt before it types, so a false busy is safe.
+
+────────────────────────────────
+❯ 
+────────────────────────────────
+  👤 lane-a·max

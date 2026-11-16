@@ -30,7 +30,7 @@
 // the challenge, the signature counter, the signature — is made on the server
 // against values it recorded itself. Nothing here is trusted; this is the code
 // that RUNS the ceremony, not the code that decides whether it passed.
-import type { PasskeyAssertStart, PasskeyRegisterStart } from '../../../shared/api';
+import type { PasskeyAssertFinish, PasskeyAssertStart, PasskeyRegisterStart, StepUpStart } from '../../../shared/api';
 import { COSE_ES256 } from '../../../shared/api';
 import { api } from './api';
 
@@ -276,5 +276,45 @@ export async function assertPasskey(
     // DER, as the authenticator produced it — `createVerify('SHA256')` reads it
     // natively, so nothing here unpacks it into (r, s).
     signatureB64url: toB64url(response.signature),
+  });
+}
+
+/**
+ * STEP UP with a passkey (D-5512, spec §3.2; accounts plan Task A6, D-5690): the browser half of
+ * `POST /api/auth/step-up/finish`, over a challenge the caller fetched EARLIER.
+ *
+ * THE ONE RULE THIS FUNCTION EXISTS FOR: `creds.get` is called SYNCHRONOUSLY, before this function returns, so a
+ * click handler that calls it has made the call inside its own user activation. iOS Safari refuses the call once an
+ * `await` has run between the tap and it, and {@link assertPasskey} above awaits its `start` first, which is why it
+ * cannot serve here. So `options` is a parameter, never fetched, and nothing before `runCeremony`'s own call to
+ * `fn` awaits: an async function runs synchronously up to its first `await`, and `fn()` is that await's operand.
+ *
+ * Resolves to the `/finish` body; the caller posts it. An empty `allowCredentialIdsB64url` throws rather than
+ * prompting for a key that cannot exist (the passphrase arm is the step on such a box).
+ */
+export function assertStepUp(
+  options: StepUpStart, creds: CredentialsApi = realCredentials(), timeoutMs = 60_000,
+): Promise<PasskeyAssertFinish> {
+  if (options.allowCredentialIdsB64url.length === 0) {
+    return Promise.reject(new PasskeyCeremonyError('no passkey is enrolled on this box', options.rpId));
+  }
+  const ceremony = runCeremony('confirming it is you', () => creds.get({
+    publicKey: {
+      challenge: fromB64url(options.challengeB64url),
+      rpId: options.rpId,
+      allowCredentials: options.allowCredentialIdsB64url.map((id) => ({ type: 'public-key' as const, id: fromB64url(id) })),
+      // Matches the server, which refuses an assertion with the UV flag clear.
+      userVerification: 'required',
+      timeout: timeoutMs,
+    },
+  }), options.rpId);
+  return ceremony.then((got) => {
+    const response = (got as PublicKeyCredential).response as AuthenticatorAssertionResponse;
+    return {
+      credentialIdB64url: toB64url((got as PublicKeyCredential).rawId),
+      authenticatorDataB64url: toB64url(response.authenticatorData),
+      clientDataJsonB64url: toB64url(response.clientDataJSON),
+      signatureB64url: toB64url(response.signature),
+    };
   });
 }

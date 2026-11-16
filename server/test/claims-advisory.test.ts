@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parsedFile } from './scan/symbols.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -48,6 +49,38 @@ describe('claims are advisory (D12)', () => {
                              // sweepDivergences feeds divergence.claim-orphan.
                              // Whole-file admission would blind the scan to a NEW
                              // call site, so the count pin below carries the load.
+      'sleepLane.ts',        // D-5370, D-5242 (one executor since D-7042): for both sleep
+                             // lanes a live claim HOLDS the server's own unattended sleep
+                             // of the claim's HOLDER awake (`claim`), and does nothing
+                             // else. It never refuses, delays or redirects another
+                             // party's work, so it cannot become enforcement: the only
+                             // effect of a claim is that its holder's process is left
+                             // running (hibernation's `claim` hold, spec §5.11). The
+                             // count pin below keeps a second, differently-shaped use out.
+      'depsShedPass.ts',     // D-7278: the deps-shed arm of the run-done row reads the live claims
+                             // once per pass and passes one boolean per row, and a live claim
+                             // only HOLDS the server's own removal of the HOLDER's ignored
+                             // dependency directories (`claim`). It never refuses, delays or
+                             // redirects another party's work, and it never enforces anything:
+                             // the only effect of a claim is that the holder's node_modules
+                             // stay on disk. A missing claim sheds nothing by itself. The call
+                             // count pin below keeps a second use out.
+      'depsShed.ts',         // D-7278: the arm's L1 verdict names the field in a docstring and
+                             // only reads the boolean the pass hands it (`claim` → hold). It
+                             // carries no call, which the pin below holds at zero.
+      'coord/ports.ts',      // D-7579: the watcher's store port names the member once, as a
+                             // string-literal member of the type-only `WatcherCoordMember` union
+                             // that `WatcherCoordPort` Picks from `CoordStore`. tsc emits nothing
+                             // for the file, so naming it there reads no claim and enforces
+                             // nothing; the port only narrows what the watcher (already allowed
+                             // above, count-pinned) may call. The pin below holds that single
+                             // quoted occurrence, so a call landing here still fails.
+      'continuity/cardFacts.ts', // Overlord W1a, the card piece: the card's gatherer reads the live claims
+                             // once per card request and keeps the caller's own (`heldBy`) as
+                             // display facts, printed on that session's own card. It decides
+                             // nothing, never refuses, delays or redirects any work, and holds
+                             // nothing: a claim's only effect is a line on its holder's card. The
+                             // call count pin below keeps a second use out.
     ]);
     const holders = walk(srcRoot)
       .filter((f) => f.endsWith('.ts'))
@@ -70,9 +103,36 @@ describe('claims are advisory (D12)', () => {
     // place a claim can become enforcement (the "just skip claimed rows in a
     // sweep" mutant lands exactly here), so it must be argued and re-pinned,
     // never absorbed.
+    // The store port's exception (D-7579), held by SHAPE: exactly one occurrence, and it is the quoted union member.
+    const portsSrc = readFileSync(path.join(srcRoot, 'coord', 'ports.ts'), 'utf8');
+    expect(portsSrc.split('activeClaims').length - 1, 'coord/ports.ts names activeClaims once, as a type member').toBe(1);
+    expect(portsSrc.split("'activeClaims'").length - 1, 'that one occurrence is the quoted union member').toBe(1);
     const watchSrc = readFileSync(path.join(srcRoot, 'watch.ts'), 'utf8');
     expect(watchSrc.split('activeClaims').length - 1,
       'watch.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
       .toBe(4);
+    // The sleep lanes' exception (D-5370, D-5242; D-7042), held by COUNT of CALLS over EVERY call scan/symbols.ts
+    // parses in sleepLane.ts: one `coord.activeClaims()` call in each lane row's binding read (run-done's batched
+    // `storeReads`, idle-hours' once-a-pass `claimantsOf`), each feeding the `claim` hold. The count is over the
+    // whole file, not over its top-level symbols: RUN_DONE_LANE and IDLE_HOURS_LANE are object-literal consts with
+    // no symbol of their own, and a lane row's arrows (`bindings`, `asks.*`, `notices`) are exactly where a new
+    // lane-shaped claim use would land. The store ports' `Pick`s and the docstrings are not calls and are not counted.
+    const SLEEP_LANE = path.join(srcRoot, 'sleepLane.ts');
+    const claimCalls = parsedFile(SLEEP_LANE).calls.filter((c) => c.name === 'activeClaims');
+    expect(claimCalls.map((c) => c.callee),
+      'sleepLane.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
+      .toEqual(['coord.activeClaims', 'coord.activeClaims']);
+    // The deps-shed arm's exception (D-7278), held by COUNT of CALLS the same way: ONE `deps.coord.activeClaims()` in
+    // the pass's batched `storeReads`, feeding the `claim` hold, and NONE in the L1 verdict, which reads a boolean.
+    const shedCalls = (f: string) => parsedFile(path.join(srcRoot, f)).calls.filter((c) => c.name === 'activeClaims')
+      .map((c) => c.callee);
+    expect(shedCalls('depsShedPass.ts'),
+      'depsShedPass.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
+      .toEqual(['deps.coord.activeClaims']);
+    expect(shedCalls('depsShed.ts'), 'the deps-shed verdict reads the store through the pass, never itself').toEqual([]);
+    // The card's gatherer (Overlord W1a), held by COUNT of CALLS the same way: ONE `coord.activeClaims()`, read for display.
+    expect(shedCalls('continuity/cardFacts.ts'),
+      'cardFacts.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
+      .toEqual(['coord.activeClaims']);
   });
 });

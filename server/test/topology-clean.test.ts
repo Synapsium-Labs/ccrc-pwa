@@ -7,13 +7,13 @@
 // pre-flip re-scan is then confirmation, not the mechanism.
 //
 // The one subtlety spec §3 settles: a suite that spelled the forbidden tokens
-// verbatim would itself publish them. So every class forbids by PATTERN —
-// a shape, plus the committed placeholders the docs are allowed to speak in —
-// and never names a real host, address or id. The synthetic tokens in each
-// class's `catches` list live only in THIS file, which the walk excludes by
-// path; rename this file and the walk scans it, its own fixtures score, and
-// the suite goes loudly red until `SELF` is updated — a safe failure mode,
-// left deliberately.
+// verbatim would itself publish them. So a class forbids by PATTERN — a shape,
+// plus the committed placeholders the docs are allowed to speak in — or, for
+// names no shape can express, by keyed HASH (the hashed class below), and never
+// names a real host, address or id. The synthetic tokens in each class's
+// `catches` list live only in THIS file, which the walk excludes by path (the
+// hashed class reads it anyway: it carries only hashes); rename this file and
+// the walk scans it, and the suite goes loudly red until `SELF` is updated.
 //
 // No allowlist of files at ship — an empty allowlist IS the claim. A class's
 // `allowed` predicate admits only the documented placeholder VOCABULARY
@@ -41,12 +41,41 @@
 // blindness, measured rather than argued); the guarded suite ran exactly 1 red,
 // `README.md:2250: 1.2.3.4` on the public-IPv4 RANGE row, with all 47 other
 // rows — every tip row included — still green; 48/48 on revert.
+// D-5878 2026-10-19: the private-tracker-id class landed red-first — exactly
+// 1 red (its tree row, listing 8 ids in 7 files), 60/61; 61/61 after the scrub.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  CANARY, EXEMPTIONS, MODES, PRIVATE_NAMES, entriesOf, entryKey, entryOf, hitsIn, maskText, pairHits,
+} from './private-names.mjs';
+import {
+  EXAMPLE_SESSION_ID, PUBLIC_TEXT_CLASSES, privateTrackerKeysOf, publicTextClassesFor, type PublicTextClass,
+} from '../src/linking/publicTextClasses.js';
+
+/** The private tracker keys whose ticket ids this public tree may not carry
+ *  (D-5878, CLAUDE.md's "This repository is public" rule): a reader cannot
+ *  open a private ticket, so its id is a dead pointer that also maps the
+ *  private workspace. The tracker syncs each ticket to a GitHub issue, and the
+ *  tree refers to ccrc work by that `#n`. No key is spelled here (D-8181): the
+ *  keys are the installer's, read from the same setting the server reads,
+ *  `CCRC_PRIVATE_TRACKER_KEYS` (`privateTrackerKeysOf`), so an operator's run of
+ *  this suite scans for that operator's keys. `FIXTURE_TRACKER_KEY` is a neutral
+ *  stand-in the class's own rows below assert, and the tree measures zero ids
+ *  under it too. */
+const FIXTURE_TRACKER_KEY = 'ACME';
+/** This repository's own tracker key stays named here, as it was before D-8181: CI runs this walk with no installer
+ *  setting, and the guard must still catch this tree's real key. Only the RUNTIME check reads the setting alone. */
+const REPO_TRACKER_KEY = 'CCRCP';
+const PRIVATE_TRACKER_KEYS: readonly string[] = [...new Set([
+  FIXTURE_TRACKER_KEY, REPO_TRACKER_KEY,
+  ...privateTrackerKeysOf(process.env.CCRC_PRIVATE_TRACKER_KEYS).keys,
+])];
+/** The classes the walk applies: the runtime list, with the tracker class built over those keys. */
+const TREE_CLASSES: readonly PublicTextClass[] = publicTextClassesFor(PRIVATE_TRACKER_KEYS);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..');
@@ -206,237 +235,193 @@ function rangeCorpus(cwd: string, range: string): CorpusFile[] {
   return out;
 }
 
+/** A `+++` header's new path, or null for a deletion: git appends a TAB to a
+ *  name containing a space, and C-quotes a name with a quote, a backslash or a
+ *  control character (octal escapes for its bytes). */
+function dstPath(raw: string): string | null {
+  let p = raw.endsWith('\t') ? raw.slice(0, -1) : raw;
+  if (p.startsWith('"') && p.endsWith('"')) {
+    const bytes: number[] = [];
+    const body = p.slice(1, -1);
+    const named: Record<string, number> = { n: 10, t: 9, r: 13, a: 7, b: 8, f: 12, v: 11 };
+    for (let i = 0; i < body.length; i++) {
+      const c = body[i]!;
+      if (c !== '\\') { bytes.push(...Buffer.from(c, 'utf8')); continue; }
+      const d = body[++i] ?? '';
+      if (/[0-7]/.test(d)) { bytes.push(parseInt(body.slice(i, i + 3), 8)); i += 2; } else bytes.push(named[d] ?? d.charCodeAt(0));
+    }
+    p = Buffer.from(bytes).toString('utf8');
+  }
+  return p.startsWith('b/') ? p.slice(2) : null;
+}
+
+/** The lines a branch ADDS, net of its own later edits: the `+` lines of
+ *  `git diff <base>...HEAD` (from the merge-base), keyed on each new path, at
+ *  their line numbers in the tip. The hashed class charges a branch for this and
+ *  not for `rangeCorpus`: once that class lands, every open branch whose
+ *  intermediate commits still carry an old name would be red for blobs its tip
+ *  no longer has, and could never clear by editing — the sweep's own branch
+ *  first. So an open branch answers for what its tip adds, and clears by
+ *  editing its tip. Commit messages and branch names are not read here: the
+ *  plan's pre-push grep covers them, and the hook will after this PR merges.
+ *
+ *  Diff configuration is pinned on the command line (no colour, no external
+ *  diff or textconv, `a/`/`b/` prefixes, unquoted paths, no renames), so a
+ *  developer's git config cannot change what this parses. SELF and the binary
+ *  extensions are skipped for the reasons the walks above skip them. */
+function netAddedCorpus(cwd: string, base: string): CorpusFile[] {
+  const text = execFileSync('git', [
+    '-c', 'color.ui=never', '-c', 'core.quotePath=false',
+    '-c', 'diff.noprefix=false', '-c', 'diff.mnemonicPrefix=false', '-c', 'diff.relative=false',
+    'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--unified=0',
+    '--src-prefix=a/', '--dst-prefix=b/', `${base}...HEAD`,
+  ], { cwd, maxBuffer: 512 * 1024 * 1024 }).toString('utf8');
+  const out: CorpusFile[] = [];
+  let cur: CorpusFile | null = null;
+  let oldLeft = 0, newLeft = 0, newNo = 0;
+  for (const line of text.split('\n')) {
+    if (oldLeft > 0 || newLeft > 0) {
+      // Inside a hunk, counted by its header: a removed line that itself
+      // begins `-- ` must not read as a `--- ` file header.
+      if (line.startsWith('+')) { if (cur) cur.lines[newNo - 1] = line.slice(1); newNo++; newLeft--; }
+      else if (line.startsWith('-')) oldLeft--;
+      else if (line.startsWith(' ')) { newNo++; newLeft--; oldLeft--; }
+      continue;
+    }
+    if (line.startsWith('+++ ')) {
+      const file = dstPath(line.slice(4));
+      cur = file && file !== SELF && !BINARY_EXT.has(path.extname(file)) ? { file, lines: [] } : null;
+      if (cur) out.push(cur);
+      continue;
+    }
+    const m = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (m) {
+      oldLeft = m[1] === undefined ? 1 : Number(m[1]);
+      newNo = Number(m[2]);
+      newLeft = m[3] === undefined ? 1 : Number(m[3]);
+    }
+  }
+  for (const f of out) f.lines = Array.from(f.lines, (l) => l ?? '');
+  return out;
+}
+
 const HISTORY_BASE: string | null = resolveBase(root);
 const HISTORY_CORPUS: CorpusFile[] =
   HISTORY_BASE ? rangeCorpus(root, `${HISTORY_BASE}..HEAD`) : [];
+const NET_ADDED_CORPUS: CorpusFile[] = HISTORY_BASE ? netAddedCorpus(root, HISTORY_BASE) : [];
 
-/** One forbidden class. Later stage-5 tasks APPEND to `FORBIDDEN` — the
- *  table is the ratchet's whole registration surface. */
-interface ForbiddenClass {
-  /** the slug the red output carries */
-  name: string;
-  /** applied per LINE; must carry the `g` flag (matchAll requires it) */
-  pattern: RegExp;
-  /** why this class can never return */
-  why: string;
-  /** files the class does not (yet) reach — Tasks 3/4/5 landed scoped
-   *  (`!file.startsWith('docs/')`) and Task 8 dropped every scope; the field
-   *  stays for any future class that must land the same way. Absent means
-   *  the whole corpus, and at ship NO class carries one. */
+/** The hashed class reads this suite too: its entries are hashes, so SELF
+ *  carries nothing it matches unless somebody adds a name here. */
+const CORPUS_WITH_SELF: CorpusFile[] =
+  [...CORPUS, { file: SELF, lines: readFileSync(path.join(root, SELF), 'utf8').split('\n') }];
+
+/** A forbidden class as this suite runs it: the class from `server/src/linking/publicTextClasses.ts` (the one home of
+ *  its pattern, vocabulary and `why`, which the server's public-text check reads too) and its liveness fixtures, which
+ *  stay HERE: each `catches` list holds tokens the walk forbids, and this file is the one it excludes by path. */
+interface ForbiddenClass extends PublicTextClass {
+  /** files the class does not (yet) reach — Tasks 3/4/5 landed scoped (`!file.startsWith('docs/')`) and Task 8 dropped
+   *  every scope; the field stays for any future class that must land the same way. Absent means the whole corpus, and
+   *  NO class carries one. A tree-walk concern, so it lives here and not in the server's class. */
   scope?: (file: string) => boolean;
-  /** lines the class does not read at all — the narrowest escape there is,
-   *  and each one is argued where it is written */
-  skipLine?: (line: string, file: string) => boolean;
-  /** the documented placeholder vocabulary — a token this admits is not a
-   *  violation. Never a file path. */
-  allowed?: (token: string) => boolean;
-  /** liveness fixtures: each must score a violation on a synthetic line —
-   *  the guard on the guard, so a pattern edit that goes vacuous turns its
-   *  own row red instead of the tree scan quietly green. The FIRST entry is
-   *  the mutation-ceremony token. */
+  /** liveness fixtures: each must score a violation on a synthetic line — the guard on the guard, so a pattern edit
+   *  that goes vacuous turns its own row red instead of the tree scan quietly green. The FIRST entry is the
+   *  mutation-ceremony token. */
   catches: string[];
-  /** and each of these must NOT score — the placeholders and carve-outs,
-   *  pinned so a pattern edit cannot silently widen into them either */
+  /** and each of these must NOT score — the placeholders and carve-outs, pinned so a pattern edit cannot silently
+   *  widen into them either */
   passes: string[];
 }
 
-/** The committed EXAMPLE session id — the one `session_01…`-shaped literal
- *  the tree may speak (`server/test/fixtures/panes/ask-user-question-real.txt`
- *  renders it; the stage-5 plan quotes it). 23 alnum after the prefix where a
- *  real id carries 22, which is why the pattern is greedy + equality here
- *  rather than the plan's `{22}` exact (D-190) — an exact-22 match would
- *  extract this example's own first 22 characters and flag the example as a
- *  leak. The run length is `{10,}` rather than `{22,}`: a TRUNCATED id, half
- *  pasted out of a log or an error message, still names the account it came
- *  from, and greedy-plus-equality keeps the committed example green either
- *  way. Nothing shorter than 10 is id-shaped enough to matter (D-201,
- *  superseding D-190's run length; the greedy+equality shape it argued for
- *  is unchanged). */
-const EXAMPLE_SESSION_ID = 'session_01EXAMPLEEXAMPLEEXAMPLE00';
+/** The class-9 entries' only non-hashed member, by construction: the canary
+ *  is synthetic, and `PRIVATE_NAMES[0]` is its entry (pinned below). */
+const CANARY_H8 = entryOf(CANARY, 'part').h.slice(0, 8);
 
-/** The duckdns placeholder vocabulary (D-189 — the shipped set, not the
- *  plan's draft): `mybox`/`otherbox`/`fixture`/`subdomain` are the
- *  documentation and fixture names; `www` is DuckDNS's OWN update endpoint
- *  (`https://www.duckdns.org/update?…`), load-bearing in the shipped
- *  `deploy/systemd/ccrc-ddns.service` and pinned verbatim by
- *  `ccrc-expose.test.ts` — a service hostname, not anybody's box name.
- *  Bracket placeholders (`<sub>.duckdns.org`, `<name>.duckdns.org`) need no
- *  entry: the `>` breaks adjacency with `.duckdns.org`, so the pattern never
- *  matches them at all — pinned in `passes` below. */
-const DUCKDNS_PLACEHOLDERS = new Set(['mybox', 'otherbox', 'fixture', 'subdomain', 'www']);
-
-/** The reference fleet's own two name tokens — its tailnet's DNS label and
- *  its server host's name — BASE64-ENCODED, spec §3's residue idiom: a
- *  pattern can say `*.ts.net` without naming anybody, but these two are
- *  concrete values a pattern cannot express, and a suite that spelled them
- *  verbatim would itself publish the strings it exists to hunt. Encoding
- *  breaks casual greppability; the values are already public-by-ruling in
- *  the retained commit-author history, so this is noise-prevention, not
- *  secrecy. Decoded once, fed to the pattern and the liveness fixtures. */
-const TAILNET_RESIDUE: string[] = ['dGFpbDMzZjExYw==', 'Y2xhdWRlLXJj']
-  .map((b) => Buffer.from(b, 'base64').toString('utf8'));
-
-/** The reference fleet's four real account labels plus its operator's old
- *  employer name (Task 5, spec §5) — BASE64-ENCODED, the same residue idiom
- *  as TAILNET_RESIDUE above and for the same reason: these are concrete
- *  values no pattern can express without spelling them, and a suite that
- *  spelled them verbatim would itself publish the strings it exists to hunt.
- *  The fixture vocabulary that replaced them (`team·max`, `alt·max`,
- *  `team·shared`, `lab·dev0`, and `orchard-api` for the project name) is
- *  pinned in `passes` below so the class cannot silently widen into its own
- *  replacements. */
-const ROSTER_RESIDUE: string[] = [
-  'ZXhwb8K3bWF4', 'Z21haWzCt21heA==', 'ZXhwb8K3dGVhbQ==', 'c3luwrdkZXYw', 'ZXhwb3BsYXRmb3Jt',
-].map((b) => Buffer.from(b, 'base64').toString('utf8'));
-
-/** The residue no pattern can express (Task 8, spec §3): the operator's
- *  username, the two SSH key names, the Hetzner volume id, the GitHub
- *  handle and the pre-transfer owner org — BASE64-ENCODED for the same
- *  reason as the two residue lists above: a suite that spelled them
- *  verbatim would itself publish the strings it exists to hunt. Encoding
- *  breaks casual greppability, while the values themselves are already
- *  public-by-ruling in the retained commit-author history, so this is
- *  noise-prevention, not secrecy. The owner-org token joins NOW rather
- *  than post-transfer: PR #93 already flipped `CCRC_RELEASE_OWNER`, and
- *  the tree measured zero occurrences at ship — the ban costs nothing and
- *  a transfer-window reintroduction is exactly what it exists to catch. */
-const OPERATOR_RESIDUE: string[] = [
-  'bWZhc3RvdmV0cw==', 'b3BlbmNsYXctaGV0em5lcg==', 'b3BlbmNsYXctcmM=',
-  'SENfVm9sdW1lXzEwNTc1MTQ3MA==', 'MGJMb00=', 'RXhwb1BsYXRmb3JtLUx0ZA==',
-].map((b) => Buffer.from(b, 'base64').toString('utf8'));
-
-const FORBIDDEN: ForbiddenClass[] = [
-  {
-    name: 'public IPv4',
-    // Any dotted quad OUTSIDE: RFC 1918 (10/8, 172.16/12, 192.168/16),
-    // loopback (127/8), CGNAT (100.64/10 — Task 3 adds that range as its own
-    // class; this one deliberately leaves it), the RFC 5737 documentation
-    // ranges (192.0.2/24, 198.51.100/24, 203.0.113/24 — the ONLY ranges a
-    // doc example may speak), and 0/8. A public address in this tree is
-    // somebody's real box.
-    pattern: /\b(?!(?:10|127|192\.168|172\.(?:1[6-9]|2\d|3[01])|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])|203\.0\.113|198\.51\.100|192\.0\.2|0)\.)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g,
-    why: 'a public IP names a reachable machine — examples speak RFC 5737, fixtures speak RFC 1918',
-    // package-lock.json's "version"/"resolved" lines carry npm's own dotted
-    // strings, none of them addresses; nothing else gets the line skip.
-    skipLine: (line, file) =>
-      file.endsWith('package-lock.json') &&
-      (line.includes('"version"') || line.includes('"resolved"')),
+const FIXTURES: Record<string, { catches: string[]; passes: string[] }> = {
+  'public IPv4': {
     catches: ['1.2.3.4', '100.200.0.1', '172.32.0.1'],
     passes: ['203.0.113.7', '198.51.100.7', '192.0.2.1', '10.1.2.3', '127.0.0.1',
       '192.168.7.7', '172.31.255.1', '100.100.1.1', '0.0.0.0'],
   },
-  {
-    name: 'claude.ai session id',
-    // The shape of a real session id: `session_01` + 22+ base62. Greedy so
-    // the 23-character committed EXAMPLE matches WHOLE and the equality
-    // below can admit it — see EXAMPLE_SESSION_ID's docstring.
-    pattern: /session_01[A-Za-z0-9]{10,}/g,
-    why: 'a real session id is a pointer into somebody\'s claude.ai account — only the committed EXAMPLE may appear',
-    allowed: (token) => token === EXAMPLE_SESSION_ID,
+  'claude.ai session id': {
     // Constructed, not spelled: a verbatim 24-char id-shaped literal in this
     // file would be exactly the noise the suite exists to prevent.
     catches: ['session_01' + 'A'.repeat(22)],
     passes: [EXAMPLE_SESSION_ID],
   },
-  {
-    name: 'CGNAT tailnet IP',
-    // 100.64/10 (RFC 6598) is the range tailscale hands out, so every dotted
-    // quad in it names some real tailnet's box — the reference fleet's own
-    // addresses lived here until Task 3 swept them. The public-IPv4 class
-    // above deliberately excludes this range; this class owns it.
-    pattern: /\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b/g,
-    why: 'a CGNAT 100.64/10 literal is a real tailnet box — fixtures speak 203.0.113.x, or the one documented placeholder',
-    // Task 3 landed this class SCOPED to non-docs (D-193): the gitignored
-    // operator file that keeps the real reach values had to exist BEFORE the
-    // tree-wide sweep erased them. Task 8 wrote deploy/reference-fleet.md,
-    // swept the docs corpus, and dropped the scope — the class now reaches
-    // every tracked file, and no class below carries a scope any more.
-    // The ONE sanctioned CGNAT literal (D-193): `_dr_ip4_global`'s whole
-    // point is classifying this range, so ccrc-doctor.test.ts's CGNAT-arm
-    // fixture cannot speak 203.0.113.x — the class admits exactly one
-    // obviously-synthetic placeholder instead. It is nobody's box: CGNAT
-    // addresses are not publicly routable, so the leak this class prevents
-    // is fleet topology, which a fixed placeholder does not carry.
-    allowed: (token) => token === '100.100.1.1',
+  'CGNAT tailnet IP': {
     catches: ['100.64.7.7', '100.127.3.4', '100.100.1.2'],
     passes: ['100.100.1.1', '100.63.0.1', '100.128.0.1', '203.0.113.7', '10.64.0.1'],
   },
-  {
-    name: 'tailnet name',
-    // Any `<label>.ts.net` name plus the reference fleet's two bare tokens
-    // (TAILNET_RESIDUE — base64-argued above). A tailnet DNS name locates a
-    // real box on a real person's tailnet; examples speak `mybox.example.com`
-    // (the plan's rpId vocabulary — a `.ts.net` placeholder would match this
-    // very ban), and prose that needs the tailnet SHAPE speaks bracket forms
-    // (`<tailnet>.ts.net`), which the `>` keeps out of the pattern's reach.
-    // Bare `ts.net` stays legal: it is the PUBLIC SUFFIX, load-bearing in
-    // webauthn.ts's PUBLIC_SUFFIX_TRAPS and every PSL discussion.
-    // Case-insensitive (D-206, whole-branch review): DNS is case-blind, so a
-    // capitalised residue token or an upper-cased `.ts.net` name locates the
-    // same real box — the roster/operator classes already carried `i`, and
-    // this class landing without it admitted every casing but lowercase.
-    pattern: new RegExp(`[a-z0-9-]+\\.ts\\.net|${TAILNET_RESIDUE.join('|')}`, 'gi'),
-    why: 'a tailnet DNS name or the reference fleet\'s own name tokens locate somebody\'s real box',
-    // Task 4 landed this class scoped to the runtime tree (D-193's reason,
-    // restated at the CGNAT class); Task 8 dropped the scope.
-    catches: ['fixture-box.ts.net', TAILNET_RESIDUE[0]!, TAILNET_RESIDUE[1]!,
-      'Fixture-Box.TS.NET', TAILNET_RESIDUE[1]!.toUpperCase()],
+  'tailnet name': {
+    catches: ['fixture-box.ts.net', 'Fixture-Box.TS.NET'],
     passes: ['mybox.example.com', 'ts.net', '*.ts.net', '<tailnet>.ts.net',
       '<other-box>.<tailnet>.ts.net', 'tailscale.net'],
   },
-  {
-    name: 'fleet account label',
-    // The reference fleet's four real account labels and the old employer
-    // name (ROSTER_RESIDUE — base64-argued above), case-insensitive: the
-    // employer token has appeared capitalised, hyphen-suffixed and inside
-    // project names, and every casing locates the same real organisation.
-    // A label names a person's or a company's account; fixtures speak the
-    // `team·…` vocabulary instead.
-    pattern: new RegExp(ROSTER_RESIDUE.join('|'), 'gi'),
-    why: 'a real account label or the old employer name ties the tree to one operator\'s fleet — fixtures speak team·…',
-    // Task 5 landed this class scoped exactly as Task 3's was (D-193's
-    // reason, restated at the CGNAT class); Task 8 dropped the scope.
-    catches: [...ROSTER_RESIDUE, ROSTER_RESIDUE[4]!.toUpperCase()],
-    passes: ['team·max', 'alt·max', 'team·shared', 'lab·dev0', 'orchard-api',
-      // `gpt` keeps its literal roster id: ccd's Codex overflow lane is keyed
-      // on it, so it is a real identifier and not a name anyone chose.
-      'gpt', 'claude', 'claude-corp'],
-  },
-  {
-    name: 'duckdns subdomain',
-    // DuckDNS names are claimed by a person — any subdomain outside the
-    // placeholder vocabulary is somebody's real, resolvable box.
-    // Case-insensitive (D-206, same reason as the tailnet class: DNS is
-    // case-blind). The `allowed` vocabulary stays EXACT-lowercase on purpose:
-    // the docs speak the canonical placeholder spelling, so a case-variant
-    // placeholder is a vocabulary drift the ratchet flags, not admits.
-    pattern: /[a-z0-9-]+\.duckdns\.org/gi,
-    why: 'a duckdns subdomain outside the placeholder set resolves to somebody\'s real box',
-    allowed: (token) => DUCKDNS_PLACEHOLDERS.has(token.replace(/\.duckdns\.org$/, '')),
+  'duckdns subdomain': {
     catches: ['realbox.duckdns.org', 'RealBox.DuckDNS.org'],
     passes: ['mybox.duckdns.org', 'otherbox.duckdns.org', 'fixture.duckdns.org',
       'subdomain.duckdns.org', 'www.duckdns.org', '<sub>.duckdns.org', '<name>.duckdns.org'],
   },
-  {
-    name: 'operator residue',
-    // The six concrete tokens of OPERATOR_RESIDUE (base64-argued above),
-    // case-insensitive: the handle has appeared in repo slugs and the org
-    // token capitalised. Docs and fixtures speak the role vocabulary
-    // instead: `you@<server-host>`, `/home/you`, `/srv/projects`,
-    // `~/.ssh/<your-key>`, `example-org/example-repo`. The old monorepo
-    // name is NOT in this class — it survives in agent whitelist fixtures
-    // and hundreds of historical plan anchors, and names a repository, not
-    // a reachable box; the class bans what locates or logs into one.
-    pattern: new RegExp(OPERATOR_RESIDUE.join('|'), 'gi'),
-    why: 'the operator\'s username, key names, volume id, GitHub handle or the pre-transfer owner org ties the tree to the reference fleet — docs speak roles',
-    catches: [...OPERATOR_RESIDUE, OPERATOR_RESIDUE[0]!.toUpperCase()],
-    passes: ['you@<server-host>', '/home/you', '/srv/projects', '~/.ssh/<your-key>',
-      'example-org/example-repo', 'Synapsium-Labs', 'openclaw'],
+  'email address': {
+    // Constructed so this public test never carries a contiguous plausible
+    // personal address; runtime liveness still exercises lower, mixed, plus,
+    // and dotted local-part forms under non-reserved domains.
+    catches: [
+      ['person', '@', 'acme', '.', 'pro'].join(''),
+      ['Person', '@', 'Acme', '.', 'Pro'].join(''),
+      ['first.last', '+tag', '@', 'team', '.', 'engineering'].join(''),
+      ['first.last', '+tag', '@', 'team', '.', 'engineering'].join('').toUpperCase(),
+    ],
+    passes: [
+      'you@example.com', 'you@sub.example.com',
+      'you@example.org', 'you@sub.example.org',
+      'you@example.net', 'you@sub.example.net',
+      'you@host.example', 'you@nested.host.example',
+      'you@host.invalid', 'you@nested.host.invalid',
+      'you@host.test', 'you@nested.host.test',
+      'you@host.localhost', 'you@nested.host.localhost', 'you@localhost',
+      'noreply@anthropic.com', 'git@github.com',
+      ['*', '@evil.com'].join(''), ['8080', '@evil.com'].join(''),
+      ['pass', '@evil.com'].join(''), 'i@izs.me',
+      'ccrc-agent@worker.service', 'ccrc-agent@worker.timer',
+      'ccrc-agent@worker.slice', 'ccrc-agent@worker.socket',
+      'ccrc-agent@worker.target', 'ccrc-agent@worker.scope',
+      'ccrc-agent@worker.path', 'ccrc-agent@worker.mount',
+      'ccrc-agent@worker.device', 'ccrc-agent@worker.swap',
+      'ccrc-agent@worker.automount', '<your-email>', 'user@host',
+    ],
   },
-];
+  'private name (hashed)': {
+    catches: [CANARY],
+    // ccrc's own components and roster words, the house stand-ins, and the
+    // vocabulary the two removed classes pinned as their replacements.
+    passes: ['ccrc', 'ccd', 'ccgpt', 'ccrc-codex', 'gpt', 'claude', 'claude-a', 'project-a', 'lane-a',
+      'example-org/example-repo', 'Synapsium-Labs', 'the fleet box', '<fleet-host>', '<projects-root>',
+      'team·max', 'alt·max', 'team·shared', 'lab·dev0', 'orchard-api',
+      'you@<server-host>', '/home/you', '/home/u', '/srv/projects', '~/.ssh/<your-key>'],
+  },
+  'private tracker id': {
+    catches: [
+      ...PRIVATE_TRACKER_KEYS.map((k) => `${k}-1`),
+      `${FIXTURE_TRACKER_KEY}-12345`,
+      `${FIXTURE_TRACKER_KEY.toLowerCase()}-120`,
+      ['linear.app', 'some-workspace'].join('/'),
+    ],
+    passes: [...PRIVATE_TRACKER_KEYS, `${FIXTURE_TRACKER_KEY}-`, `${FIXTURE_TRACKER_KEY}-n`,
+      'D-5878', 'ARCH-21', 'OA-2', 'SHA-256', 'UTF-8', 'CVE-2024-3094', 'GitHub #548', 'linear.app',
+      'https://linear.app/'],
+  },
+};
 
-/** The scan: every violation as `file:line: token` — when a sweep task lands
- *  its class red-first, this list IS the work-list. The corpus parameter
+const FORBIDDEN: ForbiddenClass[] = TREE_CLASSES.map((cls) => {
+  const fixtures = FIXTURES[cls.name];
+  if (!fixtures) throw new Error(`class ${cls.name} has no fixtures`);
+  return { ...cls, ...fixtures };
+});
+
+/** The scan: every violation as `file:line: token` — or `file:line #h8` for a
+ *  hashed class, which never prints the text it matched — and when a sweep task
+ *  lands its class red-first, this list IS the work-list. The corpus parameter
  *  exists for the liveness rows below: `scoresOn` proves a PATTERN is alive,
  *  but only a call through THIS function proves the scan is — a neutered
  *  `violationsOf` returns `[]` and every tree test stays green, so each class
@@ -445,9 +430,17 @@ function violationsOf(cls: ForbiddenClass, corpus: CorpusFile[] = CORPUS): strin
   const out: string[] = [];
   for (const { file, lines } of corpus) {
     if (cls.scope && !cls.scope(file)) continue;
+    const shown = cls.printPath ? cls.printPath(file) : file;
     lines.forEach((line, i) => {
       if (cls.skipLine?.(line, file)) return;
-      for (const m of line.matchAll(cls.pattern)) {
+      if (cls.match) {
+        for (const h of cls.match(line, file)) out.push(`${shown}:${i + 1} #${h}`);
+        if (cls.matchPair && i + 1 < lines.length) {
+          for (const h of cls.matchPair(line, lines[i + 1]!, file)) out.push(`${shown}:${i + 1} #${h}`);
+        }
+        return;
+      }
+      for (const m of line.matchAll(cls.pattern!)) {
         if (cls.allowed?.(m[0])) continue;
         out.push(`${file}:${i + 1}: ${m[0]}`);
       }
@@ -458,11 +451,37 @@ function violationsOf(cls: ForbiddenClass, corpus: CorpusFile[] = CORPUS): strin
 
 /** What a class would say about one synthetic line — the liveness harness. */
 function scoresOn(cls: ForbiddenClass, token: string): number {
-  return [...`a line carrying ${token} in prose`.matchAll(cls.pattern)]
+  const line = `a line carrying ${token} in prose`;
+  if (cls.match) return cls.match(line, 'server/synthetic.md').length;
+  return [...line.matchAll(cls.pattern!)]
     .filter((m) => !cls.allowed?.(m[0])).length;
 }
 
+/** The tree row's corpus and the branch row's, per class (see `match`). */
+const treeCorpusOf = (cls: ForbiddenClass): CorpusFile[] => (cls.match ? CORPUS_WITH_SELF : CORPUS);
+const branchCorpusOf = (cls: ForbiddenClass): CorpusFile[] => (cls.match ? NET_ADDED_CORPUS : HISTORY_CORPUS);
+
 describe('the corpus this walks', () => {
+  it('registers exactly eight forbidden classes', () => {
+    // A loop-generated describe disappears with a deleted row, so this is the
+    // permanent registration pin for each class the ratchet claims to carry.
+    // Eight: eight, less the two classes made only of base64 literals, plus the
+    // hashed class that replaced them and the private tracker id class (D-5878).
+    expect(FORBIDDEN).toHaveLength(8);
+    // D-5878: the newest class, pinned by name so a rename cannot drop it.
+    expect(FORBIDDEN.map((c) => c.name)).toContain('private tracker id');
+  });
+
+  it('the fixtures are keyed by exactly the classes the module registers', () => {
+    expect(Object.keys(FIXTURES).sort()).toEqual(PUBLIC_TEXT_CLASSES.map((c) => c.name).sort());
+  });
+
+  it('every class sets exactly one of pattern and match', () => {
+    for (const cls of FORBIDDEN) {
+      expect(Boolean(cls.pattern) !== Boolean(cls.match), `${cls.name} sets both or neither`).toBe(true);
+    }
+  });
+
   it('actually walked the tree — a scan over an empty list passes everything', () => {
     // The single-definition idiom: a moved root or a broken `git ls-files`
     // must turn THIS red rather than silently disarm every class below.
@@ -584,7 +603,7 @@ for (const cls of FORBIDDEN) {
       }
     });
 
-    it('the scan itself is alive — a synthetic corpus yields the file:line: token row', () => {
+    it('the scan itself is alive — a synthetic corpus yields its work-list row', () => {
       // Through violationsOf, not scoresOn: this is the row that goes red if
       // the tree scan is neutered (the push deleted, an early return added)
       // while every pattern stays healthy. It also pins the work-list format
@@ -597,18 +616,28 @@ for (const cls of FORBIDDEN) {
       const synthetic: CorpusFile[] = [
         { file: 'server/synthetic.md', lines: [`a line carrying ${cls.catches[0]} in prose`] },
       ];
-      expect(violationsOf(cls, synthetic)).toEqual([`server/synthetic.md:1: ${cls.catches[0]}`]);
+      // A hashed class names its entry, never the text: the leak pin is the
+      // second assertion, because CI logs on a public repository are public.
+      const found = violationsOf(cls, synthetic);
+      if (cls.match) {
+        expect(found).toEqual([`server/synthetic.md:1 #${CANARY_H8}`]);
+        expect(found.join('\n')).not.toContain(cls.catches[0]);
+      } else {
+        expect(found).toEqual([`server/synthetic.md:1: ${cls.catches[0]}`]);
+      }
     });
 
     it('nothing in the tree speaks it', () => {
-      expect(violationsOf(cls)).toEqual([]);
+      expect(violationsOf(cls, treeCorpusOf(cls))).toEqual([]);
     });
 
-    it('and nothing this branch ADDS speaks it, at any commit in the range', () => {
+    it('and nothing this branch ADDS speaks it (every blob of the range; a hashed class: its net added lines)', () => {
       // D-208: the rows above pass over a branch whose MIDDLE commits are
       // dirty. This one reads every blob `<base>..HEAD` introduces, so a token
       // added and later removed still reds the branch that would publish it.
-      expect(violationsOf(cls, HISTORY_CORPUS)).toEqual([]);
+      // The hashed class reads the branch's NET added lines instead
+      // (`netAddedCorpus` says why).
+      expect(violationsOf(cls, branchCorpusOf(cls))).toEqual([]);
     });
 
     it('and no tracked path is NAMED after it', () => {
@@ -619,3 +648,94 @@ for (const cls of FORBIDDEN) {
     });
   });
 }
+
+describe('the hashed class: its entries, its exemptions, its branch corpus', () => {
+  it('opens with the canary, then entries sorted, none repeated, each well formed', () => {
+    // `hash --list` prints exactly this order; a hand-edited row shows here.
+    expect(PRIVATE_NAMES[0]).toEqual(entryOf(CANARY, 'part'));
+    const rest = PRIVATE_NAMES.slice(1).map(entryKey);
+    expect(rest).toEqual([...rest].sort());
+    expect(new Set(rest).size).toBe(rest.length);
+    for (const e of PRIVATE_NAMES) {
+      expect(e.h).toMatch(/^[0-9a-f]{32}$/);
+      expect(e.f).toMatch(/^[0-9a-f]{32}$/);
+      expect(MODES).toContain(e.mode);
+      expect(Number.isInteger(e.n) && e.n >= 1, `n is ${e.n}`).toBe(true);
+      if (e.n === 1) expect(e.f, 'a one-token entry is its own first token').toBe(e.h);
+    }
+  });
+
+  it('prints a path with each hit masked, and reads a phrase broken across a line', () => {
+    const cls = FORBIDDEN.find((c) => c.match)!;
+    const synthetic: CorpusFile[] = [{ file: `server/${CANARY}.md`, lines: [`a line carrying ${CANARY}`, 'and none'] }];
+    const found = violationsOf(cls, synthetic);
+    expect(found).toEqual([`server/#${CANARY_H8}.md:1 #${CANARY_H8}`]);
+    expect(found.join('\n')).not.toContain(CANARY);
+    // The scan reads a phrase across a line break through `violationsOf`: the
+    // class with a synthetic phrase in place of its entries, so a deleted
+    // pair loop reds here.
+    const phrase = entriesOf('zed quux', 'words');
+    const probe: ForbiddenClass = { ...cls, match: (line, file) => hitsIn(line, file, phrase),
+      matchPair: (prev, line, file) => pairHits(prev, line, file, phrase) };
+    expect(violationsOf(probe, [{ file: 'server/synthetic.md', lines: ['written by Zed', 'Quux on Monday'] }]))
+      .toEqual([`server/synthetic.md:1 #${phrase[0]!.h.slice(0, 8)}`]);
+  });
+
+  it('keeps its exemptions at three or fewer', () => {
+    // Each exemption is a hole in the class; a fourth must be argued into this
+    // pin as well as into private-names.mjs, not waved through in review.
+    expect(EXEMPTIONS.length).toBeLessThanOrEqual(3);
+  });
+
+  it('charges a branch only for the lines its tip adds', () => {
+    // A throwaway repo, the fixture discipline of the blindness row above: both
+    // config scopes at /dev/null, identity per process.
+    const tmp = realpathSync(mkdtempSync(path.join(tmpdir(), 'ccrc-net-')));
+    try {
+      const env = {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null',
+        GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'fixture@example.com',
+        GIT_COMMITTER_NAME: 'fixture', GIT_COMMITTER_EMAIL: 'fixture@example.com',
+      };
+      const git = (...args: string[]): void => {
+        execFileSync('git', args, { cwd: tmp, stdio: 'pipe', env });
+      };
+      const commit = (file: string, body: string, msg: string): void => {
+        execFileSync('mkdir', ['-p', path.dirname(path.join(tmp, file))]);
+        writeFileSync(path.join(tmp, file), body);
+        git('add', '-A');
+        git('commit', '-qm', msg);
+      };
+      const cls = FORBIDDEN.find((c) => c.match)!;
+      git('init', '-q', '-b', 'main');
+      commit('f.md', 'nothing here\n', 'base');
+
+      // Added by the middle commit and removed by the last: the tip adds nothing.
+      git('checkout', '-q', '-b', 'cleared', 'main');
+      commit('f.md', `a line carrying ${CANARY} in prose\n`, 'dirty middle');
+      commit('f.md', 'nothing here again\n', 'clean tip');
+      expect(violationsOf(cls, netAddedCorpus(tmp, 'main'))).toEqual([]);
+
+      // Still added at the tip: exactly one row, at its line in the tip.
+      git('checkout', '-q', '-b', 'dirty', 'main');
+      commit('f.md', `nothing here\na line carrying ${CANARY} in prose\n`, 'dirty tip');
+      expect(violationsOf(cls, netAddedCorpus(tmp, 'main'))).toEqual([`f.md:2 #${CANARY_H8}`]);
+
+      // Added to this suite's own path: SELF's lines are the tree row's to read.
+      git('checkout', '-q', '-b', 'self', 'main');
+      commit(SELF, `a line carrying ${CANARY} in prose\n`, 'self');
+      expect(violationsOf(cls, netAddedCorpus(tmp, 'main'))).toEqual([]);
+
+      // Paths git decorates in a diff header: a space (a trailing TAB) and a
+      // quote (C-quoted). Both are still read, at their own names.
+      git('checkout', '-q', '-b', 'names', 'main');
+      commit('a b.md', `${CANARY}\n`, 'space');
+      commit('q"x.md', `${CANARY}\n`, 'quote');
+      expect(violationsOf(cls, netAddedCorpus(tmp, 'main')).sort())
+        .toEqual([`a b.md:1 #${CANARY_H8}`, `q"x.md:1 #${CANARY_H8}`]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

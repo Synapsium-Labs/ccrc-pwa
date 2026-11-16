@@ -1,0 +1,1536 @@
+#!/usr/bin/env python3
+"""The session-continuity programme's instrument (spec 2026-09-23 §9). READ-ONLY.
+
+Run by hand on the fleet box, as the fleet user; it opens every file it reads
+read-only, writes nothing anywhere, never runs `ccd`, never touches tmux or a
+unit (`--stage 6` reads the user journal by one read-only `journalctl --user`
+run, unless `--journal` names an export of it). It grows with the programme: each wave adds the §9 rows it owns as one
+function registered in STAGES (`N: stageN`), in the same PR as the mechanism
+those rows measure. `stageN(ctx)` returns a dict of named sections.
+
+    python3 deploy/measure-continuity.py                          # every stage, table
+    python3 deploy/measure-continuity.py --stage 1 --json         # one stage, JSON
+    python3 deploy/measure-continuity.py --since 2026-09-24 --deployed '2026-09-24 10:00'
+
+ctx carries `home` (`--home`, default `$HOME`; the test suite's fixture HOMEs),
+`swap_log` (`--swap-log`, default `<home>/.cc-sessions/swap.log`), `since` and
+`until` (`--since` inclusive, `--until` exclusive), `deployed` (`--deployed`)
+and `all_copies` (`--all-copies`). The three times are EPOCH seconds. On the
+command line they are `YYYY-MM-DD[ HH:MM[:SS]]` in LOCAL time, because
+swap.log's stamps are `date '+%F %T'`, local time on the box that wrote them,
+and are converted with `time.mktime`; run it on the fleet box (or with TZ set
+to that box's zone). Transcript stamps are ISO UTC (`…Z`), converted with
+`calendar.timegm`.
+"""
+import argparse
+import calendar
+import collections
+import glob
+import json
+import mmap
+import os
+import re
+import subprocess
+import sys
+import time
+
+TS = r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)"
+
+
+def epoch(stamp):
+    """swap.log's local-time stamp -> epoch seconds, or None."""
+    try:
+        return int(time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")))
+    except (ValueError, OverflowError):
+        return None
+
+
+def read_lines(path):
+    with open(path, "rb") as fh:
+        return [raw.decode("utf-8", "replace").rstrip("\n") for raw in fh]
+
+
+def swap_log_lines(ctx):
+    """swap.log's lines, the one place the instrument opens it (D-8353). Answers `(lines, None)`,
+    `(None, {"swap_log": "absent"})` for no file, or `(None, {"swap_log": "unmeasured", "error": <class>})` for any
+    other OSError (a directory at the path, no permission): an unreadable log is unmeasured, never a traceback."""
+    path = ctx["swap_log"] or os.path.join(ctx["home"], ".cc-sessions", "swap.log")
+    try:
+        return read_lines(path), None
+    except FileNotFoundError:
+        return None, {"swap_log": "absent"}
+    except OSError as e:
+        return None, {"swap_log": "unmeasured", "error": type(e).__name__}
+
+
+# ── stage 1 (wave 1): the carry, and the journal-missing resume refusals ─────
+# carry   every `sidecar <uuid> -> <dst> (<mode>)` line in swap.log, by mode —
+#         link, copy, merged, and `kept` by reason: `kept` alone is the
+#         pre-merge rule (an existing destination, skipped); `kept: busy`,
+#         `kept: budget` and `kept: error` are the merge's three fallbacks —
+#         plus the merged walks' summed +N ~R !D, the `diverged` rows, and
+#         the budget's cut: `deferred_carries` counts the merges that ended
+#         `, deferred K` (the budget ran out part way; what was placed is
+#         whole) and `deferred_actions` sums their K — the backlog the next
+#         visit prices first. `kept: budget` stays its own count: a walk
+#         whose FIRST action alone was over budget and placed nothing.
+#         §9's target: `kept` only as busy/budget, under 2% of carries,
+#         reported over every carry AND (`--deployed`) over the carries whose
+#         pair — the session's uuid and the destination's account root — was
+#         NOT stranded before the deploy: a pair is stranded when that root
+#         held the session before `--deployed`, i.e. a sidecar line before it
+#         names that root, or a `swap` line before it names that root's
+#         wrapper as either side (the root the session was BORN on is named by
+#         no sidecar line, only as a swap's `from`). A wrapper's root is
+#         learned from the log itself — a carry's sidecar lines precede its
+#         `swap <id>: <from> -> <to> (uuid <uuid>)` line — so a wrapper that
+#         never received a sidecar carry cannot be mapped, and a born-there
+#         pair on it reads as not stranded: the named cost of reading swap.log
+#         alone. The deferred counts are split the same way, so the stranded
+#         backlog draining (deferred on a stranded pair) is told apart from a
+#         steady state that still overruns the budget.
+#         WHY A CARRY COPIED, AND HOW MUCH (D-4500, D-4501). A first carry
+#         that linked through the common mount logs `(link: via-mount)`
+#         (counted as `link`, and in `link_via_mount`); one that copied logs
+#         `(copy: <cause> <bytes|?> bytes)` (counted as `copy`); a merge appends
+#         `, via-mount V` and one `, copy: <cause> <F> files <B> bytes` per
+#         cause. `copy_by_cause` sums, per cause word, the first carries, the
+#         merged files and their bytes; `copied_bytes` splits the bytes by
+#         first carry and merge; `merged_via_mount` sums V. A bare `(copy)` —
+#         what ccd wrote before D-4501 — is `copy_legacy`, and a copy whose
+#         size ccd could not measure (`?`) is `copy_unsized`: both are copies,
+#         neither carries a byte figure. Causes are read generically
+#         (`[a-z-]+`), so a word ccd adds later is counted, never `other`.
+#         §9's stage-1 target: `exdev-*` copies at 0 on a box whose filesystem
+#         has a read-write mount exposing every account root.
+#         THE BACKLOG COLLECTED (#317 items 3-4). `ccd carry-dedupe --apply`
+#         logs one `carry-dedupe <uuid> kept=… unlinked=N bytes=B refused=…`
+#         line per uuid; `dedupe_lines` counts them in the window and
+#         `dedupe_reclaimed_bytes` sums B. Additive: a log with none reads 0.
+# resume  every Workflow tool call carrying `resumeFromRunId`, deduplicated by
+#         tool-use id across the account-root copies a swapping session
+#         accumulates, classified by its tool result: ok, journal-missing
+#         ("… is not on disk …"), script-path ("scriptPath must be a script
+#         path"), other-error, or no-result. §9's target: journal-missing 0.
+def iso_epoch(stamp):
+    """A transcript's ISO UTC stamp ('YYYY-MM-DDTHH:MM:SS…Z') -> epoch seconds, or None."""
+    try:
+        return calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def in_window(t, ctx):
+    """t: epoch seconds, or None (an unparseable stamp is never in a window)."""
+    return t is not None and (ctx["since"] is None or t >= ctx["since"]) \
+        and (ctx["until"] is None or t < ctx["until"])
+
+
+CARRY = re.compile(TS + r" sidecar (\S+) -> (.+) \(([^()]*)\)$")
+DIVERGED = re.compile(TS + r" sidecar (\S+) diverged (.+) longer (.+)$")
+SWAP = re.compile(TS + r" swap \S+: (\S+) -> (\S+) \(uuid (\S+)\)$")
+MERGED = re.compile(r"^merged \+(\d+) ~(\d+) !(\d+)(?:, deferred (\d+))?"
+                    r"((?:, via-mount \d+|, copy: [a-z-]+ \d+ files \d+ bytes)*)$")
+MERGED_VIA = re.compile(r", via-mount (\d+)")
+MERGED_COPY = re.compile(r", copy: ([a-z-]+) (\d+) files (\d+) bytes")
+COPY = re.compile(r"^copy: ([a-z-]+) (\d+|\?) bytes$")
+DEDUPE = re.compile(TS + r" carry-dedupe \S+ kept=\S+ unlinked=\d+ bytes=(\d+) refused=\S+")
+KEPT_REASONS = ("busy", "budget", "error")
+
+
+def carry_counts(modes_seen):
+    modes = {"link": 0, "copy": 0, "merged": 0, "kept": 0,
+             "kept: busy": 0, "kept: budget": 0, "kept: error": 0, "other": 0}
+    added = replaced = diverged = deferred_carries = deferred_actions = 0
+    link_via = merged_via = copy_legacy = copy_unsized = 0
+    by_cause = {}
+    copied_bytes = {"first_carry": 0, "merge": 0}
+
+    def cause_row(cause):
+        return by_cause.setdefault(cause, {"first_carries": 0, "merged_files": 0, "bytes": 0})
+
+    for mode in modes_seen:
+        mm = MERGED.match(mode)
+        cm = COPY.match(mode)
+        if mm:
+            modes["merged"] += 1
+            added += int(mm.group(1)); replaced += int(mm.group(2)); diverged += int(mm.group(3))
+            k = int(mm.group(4) or 0)
+            deferred_carries += 1 if k else 0
+            deferred_actions += k
+            merged_via += sum(int(v) for v in MERGED_VIA.findall(mm.group(5)))
+            for cause, files, nbytes in MERGED_COPY.findall(mm.group(5)):
+                row = cause_row(cause)
+                row["merged_files"] += int(files); row["bytes"] += int(nbytes)
+                copied_bytes["merge"] += int(nbytes)
+        elif mode == "link: via-mount":
+            modes["link"] += 1
+            link_via += 1
+        elif cm:
+            modes["copy"] += 1
+            row = cause_row(cm.group(1))
+            row["first_carries"] += 1
+            if cm.group(2) == "?":
+                copy_unsized += 1
+            else:
+                row["bytes"] += int(cm.group(2))
+                copied_bytes["first_carry"] += int(cm.group(2))
+        elif mode == "copy":
+            modes["copy"] += 1
+            copy_legacy += 1
+        elif mode in modes:
+            modes[mode] += 1
+        else:
+            modes["other"] += 1
+    total = sum(modes.values())
+    kept_all = modes["kept"] + sum(modes["kept: " + r] for r in KEPT_REASONS)
+    return {
+        "carries": total,
+        "by_mode": modes,
+        "kept_total": kept_all,
+        "kept_share": round(kept_all / total, 4) if total else None,
+        "kept_other_than_busy_budget": modes["kept"] + modes["kept: error"],
+        "merged_added": added, "merged_replaced": replaced, "merged_diverged": diverged,
+        "deferred_carries": deferred_carries, "deferred_actions": deferred_actions,
+        "link_via_mount": link_via, "merged_via_mount": merged_via,
+        "copy_legacy": copy_legacy, "copy_unsized": copy_unsized,
+        "copy_by_cause": by_cause, "copied_bytes": copied_bytes,
+    }
+
+
+def carry_section(ctx):
+    lines, err = swap_log_lines(ctx)
+    if err:
+        return err
+    deployed = ctx["deployed"]
+    early = lambda t: deployed is not None and t is not None and t < deployed
+    carries, diverged_rows = [], 0          # carries: (t, uuid, root, mode) inside the window
+    dedupe_lines = dedupe_bytes = 0
+    pending = collections.defaultdict(list)  # uuid -> roots its sidecar lines named, awaiting its swap line
+    root_of = {}                             # wrapper -> account root, learned from the log
+    stranded, visits = set(), []             # (uuid, root) pairs; (uuid, from, to) swap lines before --deployed
+    for line in lines:
+        m = DEDUPE.match(line)
+        if m:
+            if in_window(epoch(m.group(1)), ctx):
+                dedupe_lines += 1
+                dedupe_bytes += int(m.group(2))
+            continue
+        m = DIVERGED.match(line)
+        if m:
+            if in_window(epoch(m.group(1)), ctx):
+                diverged_rows += 1
+            continue
+        m = CARRY.match(line)
+        if m:
+            t, uuid, mode = epoch(m.group(1)), m.group(2), m.group(4)
+            root = m.group(3).rsplit("/projects/", 1)[0]
+            pending[uuid].append(root)
+            if early(t):
+                stranded.add((uuid, root))
+            if in_window(t, ctx):
+                carries.append((t, uuid, root, mode))
+            continue
+        m = SWAP.match(line)
+        if m:
+            t, frm, to, uuid = epoch(m.group(1)), m.group(2), m.group(3), m.group(4)
+            if pending.get(uuid):
+                root_of[to] = pending.pop(uuid)[-1]
+            if early(t):
+                visits.append((uuid, frm, to))
+    for uuid, frm, to in visits:
+        for w in (frm, to):
+            if w in root_of:
+                stranded.add((uuid, root_of[w]))
+    out = carry_counts(mode for _, _, _, mode in carries)
+    out["diverged_rows"] = diverged_rows
+    out["dedupe_lines"], out["dedupe_reclaimed_bytes"] = dedupe_lines, dedupe_bytes
+    out["excluding_stranded"] = None if deployed is None else \
+        carry_counts(mode for _, u, r, mode in carries if (u, r) not in stranded)
+    return out
+
+
+def transcripts(ctx):
+    """Main-session transcripts, `<root>/projects/<pdir>/<uuid>.jsonl` — the
+    Workflow tool is the session's, not its workflow agents'. A swapping session
+    leaves one copy per account root it visited (and one name per mirrored
+    project dir), each a PREFIX of the copy it moved on with, so by default only
+    the LARGEST copy of each uuid is read: measured on the fleet box at
+    planning, 44.6 GB of names in the window collapse to 6.4 GB. A copy that
+    diverged would hide a call only it holds; `--all-copies` reads every one."""
+    best = {}
+    for root in sorted(glob.glob(os.path.join(ctx["home"], ".claude*"))):
+        for path in glob.glob(os.path.join(root, "projects", "*", "*.jsonl")):
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            if ctx["since"] is not None and st.st_mtime < ctx["since"]:
+                continue      # last written before the window opened: no call in it
+            key = path if ctx["all_copies"] else os.path.basename(path)
+            if key not in best or st.st_size > best[key][1]:
+                best[key] = (path, st.st_size)
+    return sorted(p for p, _ in best.values())
+
+
+def classify(text):
+    if "is not on disk" in text:
+        return "journal-missing"
+    if "scriptPath must be a script path" in text:
+        return "script-path"
+    return "other-error"
+
+
+def resume_section(ctx):
+    calls = {}      # tool_use id -> timestamp
+    results = {}    # tool_use id -> class
+    for path in transcripts(ctx):
+        try:
+            with open(path, "rb") as fb:
+                with mmap.mmap(fb.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                    if mm.find(b"resumeFromRunId") < 0:
+                        continue      # the common case, decided in C without a line loop
+            f = open(path, encoding="utf8", errors="replace")
+        except (OSError, ValueError):
+            continue
+        pending = set()
+        with f:
+            for line in f:
+                hit_use = "resumeFromRunId" in line
+                hit_res = pending and '"tool_result"' in line and any(i in line for i in pending)
+                if not (hit_use or hit_res):
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                content = (row.get("message") or {}).get("content")
+                if not isinstance(content, list):
+                    continue
+                for b in content:
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "tool_use" and b.get("name") == "Workflow" \
+                            and isinstance(b.get("input"), dict) and b["input"].get("resumeFromRunId"):
+                        calls.setdefault(b.get("id"), row.get("timestamp") or "")
+                        pending.add(b.get("id"))
+                    elif b.get("type") == "tool_result" and b.get("tool_use_id") in pending:
+                        c = b.get("content")
+                        text = c if isinstance(c, str) else json.dumps(c)
+                        err = str(b.get("is_error")).lower() == "true"
+                        results[b["tool_use_id"]] = classify(text) if err else "ok"
+    out = {"ok": 0, "journal-missing": 0, "script-path": 0, "other-error": 0, "no-result": 0}
+    n = 0
+    for i, ts in calls.items():
+        if not in_window(iso_epoch(ts), ctx):
+            continue
+        n += 1
+        out[results.get(i, "no-result")] += 1
+    return {"resume_calls": n, "by_outcome": out}
+
+
+def stage1(ctx):
+    return {"carry": carry_section(ctx), "resume": resume_section(ctx)}
+
+
+# ── stage 4 (wave 2): the rescue policy ─────────────────────────────────────
+# §9's stage-4 rows but "non-rescue swaps that cut delegated work" (wave 7's),
+# read off swap.log; the no-room rows also read a session's `.rescuewait`
+# record, read-only, to tell a wait open NOW from one a purge cut short. The
+# line shapes are ccd's own, and `server/test/measure-continuity-stage4.test.ts`
+# binds each regex below to a line the real ccd function wrote. Self-contained:
+# it reads `ctx` as the contract's dict and uses no helper outside this block,
+# so it drops in unchanged whichever wave wrote the rest of the file.
+S4_TS = r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)"
+S4_RESCUE = re.compile(S4_TS + r" auto-rescue (\S+): (\S+) \(blocked\) -> (\S+) \[home=[^\]]*\](.*)$")
+S4_LANDING = re.compile(S4_TS + r" swap (\S+): (\S+) -> (\S+) \(uuid ")
+S4_CARRIED = re.compile(S4_TS + r" carried-in (\S+): via=(\S+) ")
+S4_WAIT_OPEN = re.compile(S4_TS + r" rescuewait (\S+): kind=(\S+) on (\S+) reset=(\S+)$")
+S4_WAIT_END = re.compile(S4_TS + r" rescuewait-end (\S+): kind=(\S+) on (\S+) reset=(\S+) after (\d+)s end=(\S+)$")
+S4_TOKEN = re.compile(r" (reset|type|row)=(\d+|[a-z_]+)")
+# ccd's RESCUE_WAIT_GRACE; the stage-4 test binds the two numbers together.
+S4_GRACE = 120
+
+
+def s4_epoch(stamp):
+    """swap.log's LOCAL-time stamp -> epoch seconds (time.mktime), or None."""
+    try:
+        return int(time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")))
+    except (ValueError, OverflowError):
+        return None
+
+
+def stage4(ctx):
+    since, until = ctx["since"], ctx["until"]
+    lines, err = swap_log_lines(ctx)
+    if err:
+        return {"rescue": err}
+    rescues, landings, carried = [], collections.defaultdict(list), []
+    moves, landed_moves, chain_opens = collections.defaultdict(list), collections.defaultdict(list), collections.defaultdict(list)
+    opened, ended = collections.Counter(), collections.Counter()
+    chain_neither, near_swap = 0, 0
+    # §11 item 6, ruled 2026-09-24 "leave it and count it": a STALLED session
+    # whose own account is the only one with room idles in the no-room wait
+    # after that account resets, because only an ARMED pane ends a wait in place
+    # there (`turned`). Counted: a no-room wait with a numeric reset — ccd records
+    # one only for a five-hour row written before it, and ends it `stale` when a
+    # newer row proves that reset did not turn the account — not ended `turned`
+    # or `stale`, whose end (its end line in the window) or, still open, the
+    # window's end (`--until`, else now) is more than S4_GRACE past its reset;
+    # seconds run from the reset. `pending` pairs
+    # each session's entry line with its exit line — the record holds one wait at
+    # a time, so they alternate. A purge removes the record and writes no exit
+    # line, so a wait measured NOW is open only while
+    # `<home>/.cc-sessions/<id>.rescuewait` still says `state=open` (a later
+    # session of the same id may have re-used a closed one); a past window
+    # (`--until`) has only the log, and a session purged mid-wait there counts to
+    # the window's end. Named cost: a no-room wait whose block turned into lost
+    # auth mid-strand still counts past its reset — the log does not say the
+    # verdict changed while the strand stood.
+    now = int(time.time())
+    ref = until if until is not None else now
+    upto = lambda t: t is not None and (t < until if until is not None else t <= now)   # the window's end, or now
+    pending, past = {}, []
+    inwin = lambda t: t is not None and (since is None or t >= since) and (until is None or t < until)
+    for line in lines:
+        m = S4_LANDING.match(line)
+        if m:
+            t = s4_epoch(m.group(1))
+            if t is not None:
+                landings[m.group(2)].append(t)
+                landed_moves[m.group(2)].append((t, m.group(3), m.group(4)))
+            continue
+        m = S4_RESCUE.match(line)
+        if m:
+            t = s4_epoch(m.group(1))
+            if inwin(t):
+                rescues.append((t, m.group(2), dict(S4_TOKEN.findall(m.group(5)))))
+            if t is not None:
+                moves[m.group(2)].append((t, m.group(3), m.group(4), dict(S4_TOKEN.findall(m.group(5)))))
+            continue
+        m = S4_CARRIED.match(line)
+        if m:
+            t = s4_epoch(m.group(1))
+            if inwin(t):
+                carried.append((t, m.group(2), m.group(3)))
+            continue
+        m = S4_WAIT_OPEN.match(line)
+        if m:
+            t = s4_epoch(m.group(1))
+            if inwin(t):
+                opened[m.group(3)] += 1
+            if t is not None and m.group(3) == "chain":
+                chain_opens[m.group(2)].append(t)
+            if upto(t):
+                pending[m.group(2)] = (m.group(3), m.group(5))
+            continue
+        m = S4_WAIT_END.match(line)
+        if m:
+            t = s4_epoch(m.group(1))
+            if upto(t):
+                pending.pop(m.group(2), None)
+            if not inwin(t):
+                continue
+            kind, reset, end = m.group(3), m.group(5), m.group(7)
+            ended[f"{kind}:{end}"] += 1
+            if kind == "noroom" and end not in ("turned", "stale") and reset.isdigit() and t > int(reset) + S4_GRACE:
+                past.append((end, t - int(reset)))
+            # A chain wait reaches its reset when it ends there (`turned`), when
+            # Claude Code continued at or after it (`clear`), or when it became the
+            # near wait on that same reset (`near`, ended by rule 2 at the reset).
+            at_reset = end in ("turned", "near") or (end == "clear" and reset.isdigit() and t >= int(reset))
+            if kind == "chain" and end != "swap" and not at_reset:
+                chain_neither += 1
+            if kind == "near" and end == "swap":
+                near_swap += 1
+
+    for sid, (kind, reset) in pending.items():
+        if kind != "noroom" or not reset.isdigit() or ref <= int(reset) + S4_GRACE:
+            continue
+        if until is None:
+            try:
+                with open(os.path.join(ctx["home"], ".cc-sessions", sid + ".rescuewait")) as fh:
+                    rec = fh.read().split()
+            except OSError:
+                continue
+            if "state=open" not in rec:
+                continue
+        past.append(("open", ref - int(reset)))
+    past_by_end = collections.Counter(end for end, _ in past)
+
+    # §9's stage-4 target, restated 2026-10-03 (review 246's F6): no session
+    # takes a FOURTH rescue inside an hour that no chain wait preceded. Rule 3
+    # counts LANDED rescues (a dispatch whose swap was refused never left), so
+    # this row does too: a rescue landed when the session's next `swap <id>:
+    # <from> -> <to>` line, before its next rescue, names the same move. Only a
+    # fourth rescue the chain wait could have held is asked about — one on a
+    # dated block (`reset=` and `type=` on its line) not past its five-hour
+    # reset's grace, the chain wait's own gate; "preceded" is a `kind=chain`
+    # entry line for that session between the third rescue and the fourth. A
+    # `reset=` that is not one to twelve digits is no date: any session can
+    # append to swap.log, and `int()` of a forged token raises.
+    # Named cost: a Codex-lane session is never chain-waited, by rule, and the
+    # log does not say which lane a source account is, so a dated fourth rescue
+    # of one counts here; its line names its source account.
+    unchained = 0
+    for sid, mv in moves.items():
+        mv.sort(key=lambda x: x[0])
+        lands = sorted(landed_moves.get(sid, []))
+        done = []
+        for k, (t, src, dst, tok) in enumerate(mv):
+            nxt = mv[k + 1][0] if k + 1 < len(mv) else float("inf")
+            if any(t <= lt < nxt and (ls, ld) == (src, dst) for lt, ls, ld in lands):
+                done.append((t, tok))
+        for i in range(3, len(done)):
+            t, tok = done[i]
+            if not inwin(t) or t - done[i - 3][0] >= 3600 or not re.fullmatch(r"\d{1,12}", tok.get("reset", "")) or "type" not in tok:
+                continue
+            if tok.get("type") == "five_hour" and t >= int(tok["reset"]) + S4_GRACE:
+                continue
+            if not any(done[i - 1][0] <= c <= t for c in chain_opens.get(sid, [])):
+                unchained += 1
+                break
+
+    # Sessions with RESCUE_CHAIN_COUNT + 1 (= 4) or more auto-rescues inside any 60 minutes.
+    by_sess = collections.defaultdict(list)
+    for t, sid, _ in rescues:
+        by_sess[sid].append(t)
+    worst, four_plus = 0, 0
+    for ts in by_sess.values():
+        ts.sort()
+        best = max((sum(1 for u in ts if t <= u < t + 3600) for t in ts), default=0)
+        worst = max(worst, best)
+        four_plus += best >= 4
+    # A rescue on a carried-in banner: its `row=` is older than the landing the
+    # LOG records for that session (the newest `swap <id>:` line before the
+    # rescue) — measured from the log, not from the clock that decided. Since
+    # D-3526 the one sanctioned case is a landing whose Claude Code never came up.
+    dated, on_carried = 0, 0
+    for t, sid, tok in rescues:
+        if "row" not in tok:
+            continue
+        dated += 1
+        before = [u for u in landings.get(sid, []) if u <= t]
+        if before and int(tok["row"]) < max(before) - 1:
+            on_carried += 1
+    # §9: pane positives D-3526 suppressed that became a rescue of the same
+    # session within 5 minutes (a real block read as carried in while the
+    # transcript lagged the pane). The transcript rung's suppressions are
+    # counted by `via` beside it.
+    pane_became = sum(1 for t, sid, via in carried if via in ("pane", "banner")
+                      and any(r[1] == sid and 0 <= r[0] - t <= 300 for r in rescues))
+
+    return {"rescue": {
+        "rescues": len(rescues),
+        "sessions_with_4plus_rescues_in_an_hour": four_plus,
+        "max_rescues_in_an_hour": worst,
+        "sessions_with_an_unchained_4th_rescue_in_an_hour": unchained,
+        "chain_waits_ending_in_neither_swap_nor_reset": chain_neither,
+        "rescues_on_a_carried_in_banner": on_carried,
+        "rescues_with_a_dated_row": dated,
+        "near_reset_waits_ending_in_a_swap": near_swap,
+        "rule1_suppressions_by_via": dict(sorted(collections.Counter(v for _, _, v in carried).items())),
+        "rule1_pane_suppressions_rescued_within_5min": pane_became,
+        "waits_opened_by_kind": dict(sorted(opened.items())),
+        "waits_ended_by_kind_and_end": dict(sorted(ended.items())),
+        "noroom_waits_past_their_reset": len(past),
+        "noroom_waits_past_their_reset_by_end": dict(sorted(past_by_end.items())),
+        "noroom_seconds_past_their_reset_total": sum(s for _, s in past),
+        "noroom_seconds_past_their_reset_max": max((s for _, s in past), default=0),
+    }}
+
+
+# ── stage 6 (wave 4): the OOM stops of the pressure reap's own class ─────────
+# §9's stage-6 row, baseline B: OOM stops of pane scopes whose session had been
+# idle 30 minutes or more with a live background shell — the class Claude Code's
+# background-shell pressure reap chooses by (spec §1.3) — with every pane-scope
+# OOM stop beside it. B is the count over the week that starts at wave 4's
+# deploy, with the reap still on (wave 4b ships the variable that disables it).
+# Four sources, all read-only:
+#   the user journal  every `tmux-spawn-*.scope` record: its start (JOB_TYPE
+#                     start, JOB_RESULT done) and its OOM stop (UNIT_RESULT
+#                     oom-kill — under OOMPolicy=stop the kill of any process in
+#                     a pane scope ends the scope and its session). Read from
+#                     `--journal FILE` (`journalctl -o json` lines) when given,
+#                     else by ONE read-only `journalctl --user` run.
+#   .lifecycle/       ccd's own `spawn` events: a scope is the session whose
+#                     spawn event landed in the S6_SPAWN_SLOP seconds AFTER the
+#                     scope's start (the event follows the settle: measured on
+#                     the fleet box, 2–6 s after the scope for most spawns) —
+#                     exactly one session, or the stop is `unmapped`. The same
+#                     event dates that Claude Code's process.
+#   <id>.uuid         the session's transcript (the largest copy, as stage 1).
+#   the transcript    idle: no user or assistant row in the S6_IDLE seconds
+#                     before the stop; a live background shell: a Bash
+#                     `run_in_background` start ("Command running in background
+#                     with ID: X") after the spawn and at or before the stop,
+#                     with no `<task-notification>` for X at or before it.
+# Named costs: a scope whose start fell out of the journal's retention, or whose
+# spawn shared its window with another session's, is `unmapped`; ccd writes no
+# spawn event for a respawn within five minutes with an unchanged rc, so that
+# scope is `unmapped`, or — when another session's spawn falls in its window —
+# caught by the reverse check (a spawn that two scope starts precede is claimed
+# by neither: both stops are `unmapped`, never guessed); a session whose
+# transcript changed uuid since the stop (a /clear) reads the newer file, which
+# holds no row before the stop, so it reads as idle with no shell; a background
+# shell ended by Claude Code without a notification row reads as live.
+# §9's second stage-6 metric, dead ccd scopes that pass the inert test yet
+# survive a day, is read from a FIFTH source, at the moment of the reading (the
+# record keeps no history, so `--since`/`--until` do not apply to it):
+#   ccd-scope-sweep.state  the sweep's verdict record ($XDG_RUNTIME_DIR): its
+#                     `dead` lines whose verdict says every stop predicate held
+#                     (`would-stop`, `held`, `stop-failed`), and of those the
+#                     ones first seen dead a day or more before its tick. While
+#                     the stop is shadowed every inert scope survives by design:
+#                     the count is reported, and its target of 0 applies once the
+#                     operator arms the stop. An absent record is `absent`, never 0.
+#                     So is every record that is not a CURRENT, wholly readable
+#                     v1 record: a `stale` one (its tick older than S6_STALE_S), a
+#                     `future` one, or any body line no shape reads is published
+#                     as `{record: <that word>}` ALONE, never as counts or zero. A
+#                     `carry` line (a scope the tick could not measure) is counted
+#                     beside, in `carried_scopes`, and never inflates dead/inert.
+# `--reap-baseline <count>` supplies B, an already-frozen reap-class count (not a
+# file, not a live re-read), and needs `--stage 6` alone with an explicit seven-day
+# `--since`/`--until`. The window is exactly 7 x 86400 elapsed seconds, both ends read
+# in the process's local zone like every time argument (see the docstring), so a local
+# calendar week across a DST change, an hour longer or shorter, is refused; the
+# documented invocation (the plan's Task 5) sets `TZ=UTC`. It adds the READ-ONLY
+# `pressure_reap_comparison` section:
+# the baseline, the exclusive withdrawal threshold B + 2, the observed reap class
+# and `decision` (`withdraw` above B + 2, `not-triggered` at or below it,
+# `unmeasured` when the journal cannot be read). `not-triggered` is not a health
+# verdict: the raw unknown counts stay beside it, and the comparison never changes
+# spawning, removes a key or acts on anything.
+# Wave 4b adds a THIRD, DIFFERENT section, `direct_pressure_kills`, read from the
+# main transcripts (`transcripts`, the stage-1 discovery): a complete
+# `<task-notification>` envelope, read from three sources (D-7960): a user message,
+# a queued-command attachment row (`attachment.type` queued_command, its `prompt`)
+# and a queue enqueue row (its `content`), the dequeue and remove rows being no
+# sources. The envelope has one task id, `status` killed, and a summary whose whole
+# reason is the verified "was stopped because the
+# system is running low on memory". It counts unique (transcript uuid, task id)
+# pairs, so a repeated notification or another copy of one uuid is one task and
+# the same id in two uuids is two. The three sections are separate measurements
+# on separate time bases: `direct_pressure_kills` is Claude Code's own reap
+# notification, timed by the stamp of the row that carries it: a delivered notice at
+# its delivery, an enqueued one at its queue time (an observation, not the kill
+# instant; `--since` inclusive, `--until` exclusive; the shell may have started
+# earlier). A notice enqueued before `--until` and delivered after it counts in both
+# adjacent windows: an over-count by design, the safe direction for a target of 0.
+# `notification_sources` counts, per source and before deduplication, the
+# notification texts and unreadable items of the rows that pass the stamp-type check
+# and the window (D-7963); `reap_class_oom` is the kernel pane-scope OOM stop, timed by
+# the journal; `inert_scopes` is NOW's sweep record, never windowed. Neither of
+# the first two substitutes for the other, and the comparison consumes only
+# `reap_class_oom`, never the direct count. Declared discovery limits: the
+# adapter skips stat failures silently and cannot enumerate unreadable roots,
+# the default largest-copy-per-uuid read can hide a divergent smaller copy
+# (`--all-copies` reads it; a task is still counted once), subagent transcripts
+# are outside its pattern, and the remove and dequeue rows are not read. A queued
+# `prompt` the scanner cannot read as text (a dict, or a list element that is no text
+# part) or an enqueue `content` that is no string (read only as a string: a list or dict
+# of any shape is ONE unreadable item, whole) whose JSON holds a `<task-notification>`
+# is one unreadable item, an unmeasured notification, never skipped. An unreadable item
+# is matched when the marker appears anywhere in its dump, broader than a readable text,
+# which must start with it: the fail-safe direction. A payload that cannot be dumped
+# cannot be searched, so the row's raw line decides: without the opener (plain or JSON-escaped)
+# it counts nothing; with it the row takes the usual order (stamp type, window) and then is
+# one malformed row, with no source count or classification. The unit of
+# `unmeasured_notifications` is the distinct (transcript uuid, text) pair, the text being
+# the stripped text of a readable notice and the sorted dump of an unreadable one, so a
+# notice seen again in the same shape is one, while the same notice in two payload shapes,
+# or with different trailing text, can count again, an over-count by design (D-7961).
+# A KNOWN NON-EVENT is a well-formed
+# envelope read as not this event, adding no unmeasured count: exactly one status
+# element whose readable value is a known non-killed one (`completed`, `failed`,
+# `stopped`: a workflow that did not finish before the previous session ended
+# carries `stopped`), whatever its task-id count (a batched envelope; the status is
+# read BEFORE the id count); or no status element, exactly one readable task-id
+# element and exactly one plain `<event>` element (an event-style notification); or no
+# status element and a body that is, whole, one plain `<summary>` element (no other
+# element, stray closing tag or free text around it, and no task id: a security-review
+# notice) whose value does not contain `low on memory`, case-insensitively (D-7962). A
+# summary-only body that names low memory stays unmeasured, as does any other body.
+# An envelope is the whole `<task-notification>…</task-notification>` text once
+# trailing whitespace and whole trailing `<system-reminder>…</system-reminder>`
+# blocks (optional whitespace between them) are removed, but only the shapes above
+# keep that reminder tolerance: a `killed` envelope must have nothing after its
+# closing tag, and with trailing reminder blocks it is unmeasured, the strict
+# envelope the kill count was read under as Task 4 shipped it (the coordinator's R1
+# ruling). A known quirk kept as at the base (parked, O4): the lazy envelope match
+# lets a killed body extend past its first closing tag to a stray later
+# `</task-notification>`, taking in what lies between, so such text can still count a kill.
+# The kill rule has its own non-pressure case: a single-task `killed` envelope (one
+# readable status, one readable task id) with exactly one summary element, readable
+# and not the verified pressure reason, and nothing after its closing tag, is read as
+# not this event too (with the pressure reason it is the one kill). Every other
+# shape is unmeasured: a status, task-id or summary element the scanner cannot read
+# (an attribute, markup in the value, a second unreadable one) counts against the
+# envelope, a `killed` envelope with no summary or with two is unmeasured, and a
+# batched `killed` envelope is unmeasured, never a kill.
+# A partial read (an unreadable file, a malformed row, an envelope with an
+# unreadable stamp or ambiguous fields) and an absent roster are reported as such
+# and are never a clean zero; a row whose stamp is no string, or whose JSON nests
+# deeper than the parser can read, is a malformed row; a file's hits count only
+# once it was read to its end, and so are its unmeasured keys and source counts. The
+# scanner and the comparison only read: neither writes a marker or an environment
+# assignment, or acts.
+S6_IDLE = 1800
+S6_SPAWN_SLOP = 10
+S6_DAY = 86400
+S6_STALE_S = 300
+S6_NUM = r"(?:0|[1-9][0-9]{0,15})"
+S6_POS = r"(?:[1-9][0-9]{0,15})"
+S6_CPU = r"(?:0|[1-9][0-9]{0,19})"
+# `\S` below excludes only ASCII whitespace (the three record patterns compile with re.ASCII): in the C locale the sweep folds exactly the
+# six ASCII whitespace characters out of a comm, and Python's Unicode `\s` would also split on \x1c-\x1f, \x85 and \xa0 that the fold leaves in.
+# The sweep sets no `LC_ALL`, so under another locale (`C.UTF-8`, say) its fold also replaces non-ASCII space characters (U+2003, measured);
+# the ASCII reader reads a record folded either way.
+S6_UNIT = r"tmux-spawn-\S+\.scope"
+S6_HDR = re.compile(rf"# ccd-scope-sweep v1 tick=({S6_NUM}) up=({S6_NUM}) mode=(shadow|live)")
+S6_DEAD = re.compile(
+    rf"dead {S6_UNIT} first=(?P<first>{S6_POS}) cpu0={S6_CPU} "
+    rf"verdict=(?P<verdict>report|would-stop|held|stopped|stop-failed) "
+    rf"why=[a-z0-9-]+(?:,[a-z0-9-]+)* server=(?:gone|ccd|reused) "
+    rf"procs={S6_POS} mem=(?:{S6_NUM}|\?) sockets={S6_NUM} "
+    rf"youngest=(?:-1|{S6_NUM}) oldest=(?:-1|{S6_NUM}) age={S6_NUM} "
+    rf"pids=[1-9][0-9]*(?:,[1-9][0-9]*)*",
+    re.ASCII,
+)
+S6_OLD = re.compile(rf"old {S6_UNIT} pid={S6_POS} age={S6_NUM} comm=\S*", re.ASCII)
+S6_CARRY = re.compile(
+    rf"carry {S6_UNIT} state=(?P<state>dead|live|unknown) "
+    rf"first=(?P<first>none|{S6_POS}) cpu0=(?P<cpu0>none|{S6_CPU}) "
+    r"why=(?P<why>unit-show|description|control-group|cpu|scope-start|procs|cgroup-dir|child-cgroup|server-stat|server-comm|tmux-unknown|parent-hop-cap|socket-tables|socket-fd|box-stat)",
+    re.ASCII,
+)
+# The busy arm's two lines (D-7993): read so the record stays readable, and counted nowhere, because this instrument's
+# figures are the inert scopes'. `\S` in `session=` and `procs=` is the ASCII class above, a comm being folded the same way.
+S6_BUSY = re.compile(
+    rf"busy {S6_UNIT} first=(?:none|{S6_POS}) "
+    rf"verdict=(?:report|carry|would-stop|held|stopped|stop-failed) "
+    rf"why=[a-z0-9-]+(?:,[a-z0-9-]+)* session=\S+ n={S6_NUM} procs=\S+",
+    re.ASCII,
+)
+S6_BUSY_MODE = "busy-mode live"
+S6_UNKNOWN_REASONS = frozenset(("unit-show", "description", "control-group", "cpu", "scope-start", "procs", "cgroup-dir", "child-cgroup", "server-stat", "server-comm", "tmux-unknown"))
+
+
+def s6_carry_valid(c):
+    if (c.group("first") == "none") != (c.group("cpu0") == "none"):
+        return False
+    state, why = c.group("state"), c.group("why")
+    return ((state == "unknown" and why in S6_UNKNOWN_REASONS)
+            or (state == "live" and why == "parent-hop-cap")
+            or (state == "dead" and why in ("socket-tables", "socket-fd", "box-stat")))
+
+
+S6_INERT = ("would-stop", "held", "stop-failed")
+S6_TS = re.compile(rb'"timestamp":"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)')
+S6_ROW = re.compile(rb'"type":"(?:user|assistant)"')
+S6_BG = re.compile(rb"Command running in background with ID: ([A-Za-z0-9_-]+)")
+S6_NOTE = re.compile(rb"<task-notification>(?:\\n|\s)*<task-id>([A-Za-z0-9_-]+)</task-id>")
+
+
+def s6_iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)).encode()
+
+
+def s6_journal(ctx):
+    """The journal's pane-scope records as dicts, or None when they cannot be read."""
+    try:
+        if ctx.get("journal"):
+            with open(ctx["journal"], "rb") as fh:
+                raw = fh.read()
+        else:
+            # Two FIELD matches, OR'd (`+`), never `-u 'tmux-spawn-*.scope'`: a unit glob
+            # walks the whole journal (5 min 41 s on the fleet box, 2026-10-06, against
+            # this call's own 600 s bound), the indexed matches take 23 s, and the
+            # tmux-spawn records they return are the same 6,115 (filtered below).
+            p = subprocess.run(["journalctl", "--user", "--no-pager", "-o", "json",
+                                "--output-fields=USER_UNIT,UNIT_RESULT,JOB_TYPE,JOB_RESULT",
+                                "JOB_TYPE=start", "+", "UNIT_RESULT=oom-kill"], capture_output=True, timeout=600)
+            if p.returncode != 0:
+                return None
+            raw = p.stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = []
+    for line in raw.decode("utf-8", "replace").splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(e, dict) and str(e.get("USER_UNIT", "")).startswith("tmux-spawn-"):
+            out.append(e)
+    return out
+
+
+def s6_spawns(ctx):
+    """ccd's lifecycle `spawn` events: (epoch seconds, session id), oldest first."""
+    out = []
+    for f in sorted(glob.glob(os.path.join(ctx["home"], ".cc-sessions", ".lifecycle", "journal-*.ndjson"))):
+        try:
+            lines = read_lines(f)
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(e, dict) and e.get("act") == "spawn" and e.get("outcome") == "done" \
+                    and isinstance(e.get("at"), int) and isinstance(e.get("id"), str):
+                out.append((e["at"] / 1000.0, e["id"]))
+    return sorted(out)
+
+
+def s6_transcript(ctx, sid):
+    try:
+        with open(os.path.join(ctx["home"], ".cc-sessions", sid + ".uuid"), "rb") as fh:
+            uuid = fh.read().decode("utf-8", "replace").strip()
+    except OSError:
+        return []
+    if not re.fullmatch(r"[0-9a-f-]{36}", uuid):
+        return []
+    best = []
+    for p in glob.glob(os.path.join(ctx["home"], ".claude*", "projects", "*", uuid + ".jsonl")):
+        try:
+            best.append((os.path.getsize(p), p))
+        except OSError:
+            pass
+    best.sort(reverse=True)
+    return [p for _, p in best] if ctx["all_copies"] else [p for _, p in best[:1]]
+
+
+def s6_classify(paths, born, at):
+    """-> busy | idle-no-shell | reap-class, read off the transcript's own rows."""
+    lo, hi, born_iso = s6_iso(at - S6_IDLE), s6_iso(at), s6_iso(born)
+    started, ended, busy = set(), set(), False
+    for p in paths:
+        with open(p, "rb") as fh:
+            if os.fstat(fh.fileno()).st_size == 0:
+                continue
+            mm = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+            try:
+                def row_at(pos):
+                    a = mm.rfind(b"\n", 0, pos) + 1
+                    b = mm.find(b"\n", pos)
+                    line = mm[a:b if b >= 0 else len(mm)]
+                    m = S6_TS.search(line)
+                    return line, (m.group(1) if m else None)
+                for m in S6_TS.finditer(mm):
+                    ts = m.group(1)
+                    if lo < ts <= hi and not busy:
+                        line, _ = row_at(m.start())
+                        busy = bool(S6_ROW.search(line))
+                for m in S6_BG.finditer(mm):
+                    _, ts = row_at(m.start())
+                    if ts is not None and born_iso <= ts <= hi:
+                        started.add(m.group(1))
+                for m in S6_NOTE.finditer(mm):
+                    _, ts = row_at(m.start())
+                    if ts is not None and ts <= hi:
+                        ended.add(m.group(1))
+            finally:
+                mm.close()
+    if busy:
+        return "busy"
+    return "reap-class" if started - ended else "idle-no-shell"
+
+
+def s6_inert():
+    rec = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid(), "ccd-scope-sweep.state")
+    try:
+        lines = read_lines(rec)
+    except FileNotFoundError:
+        return {"record": "absent"}
+    except OSError:
+        return {"record": "unreadable"}
+    m = S6_HDR.fullmatch(lines[0]) if lines else None
+    if not m:
+        return {"record": "unreadable"}
+    tick, up, mode = int(m.group(1)), int(m.group(2)), m.group(3)
+    now = int(time.time())
+    if tick > now:
+        return {"record": "future"}
+    if now - tick > S6_STALE_S:
+        return {"record": "stale"}
+    dead = inert = day = 0
+    carried = {"dead": 0, "live": 0, "unknown": 0}
+    for line in lines[1:]:
+        if not line:
+            continue
+        d = S6_DEAD.fullmatch(line)
+        if d:
+            dead += 1
+            if d.group("verdict") in S6_INERT:
+                inert += 1
+                if up - int(d.group("first")) >= S6_DAY:
+                    day += 1
+            continue
+        c = S6_CARRY.fullmatch(line)
+        if c and s6_carry_valid(c):
+            carried[c.group("state")] += 1
+            continue
+        if S6_OLD.fullmatch(line) or S6_BUSY.fullmatch(line) or line == S6_BUSY_MODE:
+            continue
+        return {"record": "unreadable"}
+    return {"mode": mode, "dead": dead, "inert": inert,
+            "inert_dead_a_day_or_more": day, "carried_scopes": carried}
+
+
+def s6_pressure_comparison(reading, baseline):
+    out = {"baseline_reap_class": baseline, "withdraw_above": baseline + 2}
+    observed = reading.get("reap_class")
+    if not isinstance(observed, int) or isinstance(observed, bool) or observed < 0:
+        return {**out, "decision": "unmeasured"}
+    return {**out, "observed_reap_class": observed,
+            "decision": "withdraw" if observed > baseline + 2 else "not-triggered"}
+
+
+# An ENVELOPE is the whole `<task-notification>…</task-notification>` text once its
+# trailing whitespace and any whole trailing `<system-reminder>…</system-reminder>`
+# blocks (each complete, optional whitespace between them, nothing else) are
+# removed; any other text after the closing tag leaves it no envelope. The ruled
+# non-event shapes keep that tolerance; a `killed` envelope does not: one with any
+# trailing reminder block is unmeasured, the strict envelope the kill count was read
+# under as Task 4 shipped it (`trailing` names those blocks). The lazy body match
+# is the base's and is kept as it was (parked, O4): a killed body can extend past
+# its first closing tag to a stray later `</task-notification>`, so such text, with
+# no `trailing` left, can still count a kill. A status or task-id or summary element
+# is counted by its OPENER (`<status\b`, `<task-id\b`, `<summary\b`, which also
+# counts an attribute and a longer name: the fail-safe direction) as well as by its
+# readable value, so an element the scanner cannot read is never a missing one.
+S6_NOTIFICATION = re.compile(
+    r"<task-notification>\s*(.*?)\s*</task-notification>"
+    r"(?P<trailing>(?:\s*<system-reminder>(?:(?!</system-reminder>).)*</system-reminder>)*)", re.S
+)
+S6_TASK_ID = re.compile(r"<task-id>([A-Za-z0-9_-]+)</task-id>")
+S6_STATUS = re.compile(r"<status>([^<>]*)</status>")
+S6_STATUS_OPEN = re.compile(r"<status\b")
+S6_TASK_ID_OPEN = re.compile(r"<task-id\b")
+S6_EVENT_TAGS = re.compile(r"</?event\b[^<>]*>?")
+S6_SUMMARY = re.compile(r"<summary>([^<>]*)</summary>", re.S)
+S6_SUMMARY_OPEN = re.compile(r"<summary\b")
+# A summary-only body (D-7962): the whole envelope body is one plain summary element, with no
+# other element, no stray closing tag and no free text around it.
+S6_SUMMARY_ONLY = re.compile(r"<summary>([^<>]*)</summary>")
+S6_PRESSURE_SUMMARY = re.compile(
+    r'Background command ".*" was stopped because the system is running low on memory', re.S
+)
+
+
+def s6_notification_texts(row):
+    if not isinstance(row, dict) or row.get("type") != "user":
+        return []
+    msg = row.get("message")
+    if not isinstance(msg, dict) or msg.get("role") != "user":
+        return []
+    content = msg.get("content")
+    if isinstance(content, str):
+        return [content]
+    if isinstance(content, list):
+        return [part["text"] for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+                and isinstance(part.get("text"), str)]
+    return []
+
+
+S6_MARKER = "<task-notification>"
+# The opener in a row's raw line, plain or JSON-escaped (`<` as a backslash-u003c escape, either hex case).
+S6_RAW_OPENER = re.compile(rb"(?:<|\\u003[cC])task-notification(?:>|\\u003[eE])")
+
+
+def s6_unreadable(value):
+    """One unreadable item when the value's JSON holds a notification, else nothing.
+
+    A value that cannot be dumped raises: the caller makes its whole row one malformed row,
+    never a silent skip of a payload that may hold a notification."""
+    dump = json.dumps(value, sort_keys=True)
+    return [(dump, False)] if S6_MARKER in dump else []
+
+
+def s6_queued_texts(value):
+    """(text, readable) pairs of a queued prompt or enqueued content."""
+    if isinstance(value, str):
+        return [(value, True)]
+    if isinstance(value, list):
+        out = []
+        for part in value:
+            if isinstance(part, dict) and part.get("type") == "text" \
+                    and isinstance(part.get("text"), str):
+                out.append((part["text"], True))
+            else:
+                out.extend(s6_unreadable(part))
+        return out
+    return s6_unreadable(value)
+
+
+def s6_notification_sources(row):
+    """(source, text, readable) for every place a row can carry a notification."""
+    out = [("user", text, True) for text in s6_notification_texts(row)]
+    if not isinstance(row, dict):
+        return out
+    if row.get("type") == "attachment":
+        att = row.get("attachment")
+        if isinstance(att, dict) and att.get("type") == "queued_command":
+            out.extend(("queued_command", t, r) for t, r in s6_queued_texts(att.get("prompt")))
+    elif row.get("type") == "queue-operation" and row.get("operation") == "enqueue":
+        content = row.get("content")
+        if isinstance(content, str):
+            out.append(("queue_enqueue", content, True))
+        else:
+            out.extend(("queue_enqueue", t, False) for t, _ in s6_unreadable(content))
+    return out
+
+
+def s6_pressure_kills(ctx):
+    paths = transcripts(ctx)
+    if not paths:
+        return {"transcripts": "absent"}
+    hits = set()
+    unmeasured_keys = set()
+    sources = {"user": 0, "queued_command": 0, "queue_enqueue": 0}
+    read = unreadable = malformed = 0
+    for path in paths:
+        uuid = os.path.basename(path)[:-len(".jsonl")]
+        file_hits = set()
+        file_malformed = 0
+        file_unmeasured = set()
+        file_sources = dict.fromkeys(sources, 0)
+        try:
+            with open(path, "rb") as fh:
+                for raw in fh:
+                    try:
+                        row = json.loads(raw)
+                    except (ValueError, UnicodeError, RecursionError):
+                        file_malformed += 1
+                        continue
+                    undumpable = False
+                    try:
+                        found = s6_notification_sources(row)
+                    except (TypeError, ValueError, RecursionError):
+                        # The payload cannot be searched, so the row's own raw bytes decide
+                        # whether it holds a notification (the opener, plain or JSON-escaped).
+                        # One that does not counts nothing; one that does goes through the
+                        # stamp check and the window below, then is one malformed row.
+                        if not S6_RAW_OPENER.search(raw):
+                            continue
+                        undumpable = True
+                        found = []
+                    candidates = []
+                    for source, text, readable in found:
+                        if readable:
+                            text = text.strip()
+                            if not text.startswith(S6_MARKER):
+                                continue
+                        candidates.append((source, text, readable))
+                    if not candidates and not undumpable:
+                        continue
+                    stamp = row.get("timestamp") if isinstance(row, dict) else None
+                    if stamp is not None and not isinstance(stamp, str):
+                        # A stamp that is no string (an object, a number) is a malformed
+                        # row, once per row however many notification texts it carries.
+                        file_malformed += 1
+                        continue
+                    at = iso_epoch(stamp)
+                    # A readable timestamp outside the requested window is no event in it.
+                    if at is not None and not in_window(at, ctx):
+                        continue
+                    if undumpable:
+                        # No source count, nothing classified for it.
+                        file_malformed += 1
+                        continue
+                    for source, text, readable in candidates:
+                        file_sources[source] += 1
+                        if not readable:
+                            file_unmeasured.add((uuid, text))
+                            continue
+                        envelope = S6_NOTIFICATION.fullmatch(text)
+                        if not envelope:
+                            file_unmeasured.add((uuid, text))
+                            continue
+                        body = envelope.group(1)
+                        ids = S6_TASK_ID.findall(body)
+                        statuses = S6_STATUS.findall(body)
+                        id_openers = len(S6_TASK_ID_OPEN.findall(body))
+                        status_openers = len(S6_STATUS_OPEN.findall(body))
+                        if at is None:
+                            file_unmeasured.add((uuid, text))
+                            continue
+                        if status_openers == 0:
+                            # Event-style: no status element, exactly one readable task id
+                            # and exactly one plain event element.
+                            if id_openers == 1 and len(ids) == 1 \
+                                    and S6_EVENT_TAGS.findall(body) == ["<event>", "</event>"]:
+                                continue
+                            # Summary-only (D-7962): the whole body is one plain summary that
+                            # does not name low memory, such as a security-review notice.
+                            summary_only = S6_SUMMARY_ONLY.fullmatch(body)
+                            if summary_only and "low on memory" not in summary_only.group(1).lower():
+                                continue
+                            file_unmeasured.add((uuid, text))
+                            continue
+                        status = statuses[0] if statuses else None
+                        if status_openers != 1 or len(statuses) != 1 \
+                                or status not in ("completed", "failed", "killed", "stopped"):
+                            file_unmeasured.add((uuid, text))
+                            continue
+                        # A known non-killed status is read BEFORE the task-id count, so a
+                        # batched envelope (several ids, one status) is a known non-event.
+                        if status != "killed":
+                            continue
+                        if envelope.group("trailing"):
+                            # The killed arm keeps the strict envelope: trailing reminder blocks
+                            # leave it unmeasured, whatever its summary (it only moves readings
+                            # toward unmeasured). The lazy body match, which can run past the first
+                            # closing tag to a stray later one, is the base's and is not asked more (O4).
+                            file_unmeasured.add((uuid, text))
+                            continue
+                        if id_openers != 1 or len(ids) != 1:
+                            file_unmeasured.add((uuid, text))
+                            continue
+                        summaries = S6_SUMMARY.findall(body)
+                        if len(S6_SUMMARY_OPEN.findall(body)) != 1 or len(summaries) != 1:
+                            file_unmeasured.add((uuid, text))
+                            continue
+                        if S6_PRESSURE_SUMMARY.fullmatch(summaries[0]):
+                            file_hits.add((uuid, ids[0]))
+            read += 1
+        except OSError:
+            unreadable += 1
+            continue
+        hits.update(file_hits)
+        malformed += file_malformed
+        unmeasured_keys.update(file_unmeasured)
+        for name, n in file_sources.items():
+            sources[name] += n
+    return {
+        "reading": "partial" if unreadable or malformed or unmeasured_keys else "measured",
+        "killed_background_tasks": len(hits),
+        "transcript_uuids_with_kills": len({uuid for uuid, _ in hits}),
+        "transcripts_read": read,
+        "unreadable_transcripts": unreadable,
+        "malformed_rows": malformed,
+        "unmeasured_notifications": len(unmeasured_keys),
+        "notification_sources": sources,
+    }
+
+
+def stage6(ctx):
+    reading = s6_reap(ctx)
+    out = {
+        "reap_class_oom": reading,
+        "inert_scopes": s6_inert(),
+        "direct_pressure_kills": s6_pressure_kills(ctx),
+    }
+    if ctx.get("reap_baseline") is not None:
+        out["pressure_reap_comparison"] = s6_pressure_comparison(reading, ctx["reap_baseline"])
+    return out
+
+
+def s6_reap(ctx):
+    recs = s6_journal(ctx)
+    if recs is None:
+        return {"journal": "unreadable"}
+    born, stops = {}, []
+    for e in recs:
+        try:
+            t = int(e["__REALTIME_TIMESTAMP"]) / 1e6
+        except (KeyError, TypeError, ValueError):
+            continue
+        u = e["USER_UNIT"]
+        if e.get("JOB_TYPE") == "start" and e.get("JOB_RESULT") == "done":
+            born[u] = t
+        elif e.get("UNIT_RESULT") == "oom-kill" and in_window(int(t), ctx):
+            stops.append((t, u))
+    spawns = s6_spawns(ctx)
+    counts, unmapped, sessions = collections.Counter(), collections.Counter(), collections.Counter()
+    for at, unit in sorted(stops):
+        t0 = born.get(unit)
+        if t0 is None:
+            unmapped["no start record"] += 1
+            continue
+        near = [(s, sid) for s, sid in spawns if t0 <= s <= t0 + S6_SPAWN_SLOP]
+        if len({sid for _, sid in near}) != 1:
+            unmapped["no spawn" if not near else "two sessions spawned together"] += 1
+            continue
+        spawned, sid = near[-1]
+        # The same window seen from the spawn's side: ccd writes no spawn event for a
+        # same-rc respawn within 300 s, so a scope can hold another session's spawn.
+        if sum(1 for b in born.values() if spawned - S6_SPAWN_SLOP <= b <= spawned) != 1:
+            unmapped["two scopes started before one spawn"] += 1
+            continue
+        paths = s6_transcript(ctx, sid)
+        if not paths:
+            counts["unmeasured"] += 1
+            continue
+        try:
+            cls = s6_classify(paths, spawned, at)
+        except (OSError, ValueError):
+            counts["unmeasured"] += 1
+            continue
+        counts[cls] += 1
+        if cls == "reap-class":
+            sessions[sid] += 1
+    return {
+        "pane_scope_oom_stops": len(stops),
+        "reap_class": counts["reap-class"],
+        "idle_without_a_live_background_shell": counts["idle-no-shell"],
+        "busy_within_the_idle_window": counts["busy"],
+        "unmapped": sum(unmapped.values()),
+        "unmapped_by_reason": dict(sorted(unmapped.items())),
+        "unmeasured": counts["unmeasured"],
+        "reap_class_by_session": dict(sorted(sessions.items())),
+    }
+
+
+# ── stage 7 (wave 3): the operator's choice survives a restart ──────────────
+# §9's stage-7 row, "restarts that revert an operator's /model", read off
+# swap.log. Before a stop that a spawn follows (and, since wave 4b, before a
+# pane-observed uuid rotation (a `/clear`)), ccd writes an operator's own
+# `/model` or `/effort` to the route record (`route <id>: <field> <old> -> <new>
+# [actor=operator-session]`), or says why it could not: a value outside the
+# vocabulary, or one the record's own checks refused (`operator-choice <id>: …`).
+# Those two are the lines at which ccd KNOWS it could not keep the operator's choice.
+# Wave 4b widened where they come from: they are written by the dead-session keep
+# (a stop or revival that a spawn follows) AND by the live promotion `_sync_uuid`
+# makes before it moves the registry uuid off the transcript that holds the choice
+# (a /clear, a pane rotation). Both use one parser, floor, filter, mtime rule and
+# writer, and one log stream, so the row counts promotion writes and logged model
+# refusals, NOT measured restarts: a refused `/model` may be logged again at a
+# later promotion or keep until a newer command replaces it or its field is written
+# after it, and a live rotation need not be followed by any stop or restart.
+# The row's key, `restarts_that_reverted_an_operator_model`, keeps its wave-3 name
+# although what it counts is those logged refusals (outside-vocabulary plus
+# route-refused `/model` lines, from either path). The writes are reported beside
+# the row, and so are the lines where ccd could not read at all
+# (`operator-choice <id>: unmeasured (…)`), which MAY have lost one — never folded
+# into the row, never dropped. The field `stops_that_could_not_read_the_transcript`
+# keeps its name too and counts those `unmeasured` lines from both paths, one per
+# line (the acknowledgement-drift line counts as well). These are conservative
+# observation counters, not distinct commands, sessions, stops or restarts. Named
+# cost: a session on a non-Anthropic lane is skipped and leaves no line, so its
+# `/model` is never counted.
+# Self-contained, as stage 4.
+S7_WRITE = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) route (\S+): (class|effort) .+? -> (\S+) \[actor=operator-session\]")
+S7_SKIP = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) operator-choice (\S+): /(model|effort) .*(outside the \S+ vocabulary|refused by the route record)")
+S7_UNMEASURED = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) operator-choice (\S+): unmeasured \(")
+
+
+def stage7(ctx):
+    since, until = ctx["since"], ctx["until"]
+    lines, err = swap_log_lines(ctx)
+    if err:
+        return {"operator_choice": err}
+    def inwin(stamp):
+        try:
+            t = int(time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")))
+        except (ValueError, OverflowError):
+            return False
+        return (since is None or t >= since) and (until is None or t < until)
+    written, outside, refused = collections.Counter(), collections.Counter(), collections.Counter()
+    unmeasured = 0
+    for line in lines:
+        m = S7_WRITE.match(line)
+        if m and inwin(m.group(1)):
+            written[m.group(3)] += 1
+            continue
+        m = S7_SKIP.match(line)
+        if m and inwin(m.group(1)):
+            (outside if m.group(4).startswith("outside") else refused)[m.group(3)] += 1
+            continue
+        m = S7_UNMEASURED.match(line)
+        if m and inwin(m.group(1)):
+            unmeasured += 1
+    return {"operator_choice": {
+        "restarts_that_reverted_an_operator_model": outside["model"] + refused["model"],
+        "operator_choices_written_by_field": dict(sorted(written.items())),
+        "operator_values_outside_the_vocabulary_by_kind": dict(sorted(outside.items())),
+        "operator_choices_refused_by_kind": dict(sorted(refused.items())),
+        "stops_that_could_not_read_the_transcript": unmeasured,
+    }}
+
+
+# ── stage 3 (wave 6a): the graceful stop's time ──
+# `ccd/ccd#_graceful_stop_note` appends one `graceful-stop <id>: site=<site> mode=<mode> <outcome>` line to
+# swap.log per stop at the swap, limit-resume and hibernate sites. This reads them by site and mode and reports
+# how long the process took to exit (nearest rank, `exited` only); an `alive` outcome is a censored reading (the
+# process outlived the wait), never an exit time. It reports and sets no target: the bound is the operator's.
+S3_GSTOP = re.compile(TS + r" graceful-stop (\S+): site=(swap|limit-resume|hibernate) mode=(shadow|live) (?:(exited|alive)=(0|[1-9][0-9]{0,8})|(no-pid)|(gone-before-signal)|unmeasured=(wedged|no-start-time|stat-unreadable|detach-failed))")
+
+
+def s3_rank(sorted_values, pct):
+    """Nearest-rank percentile of a non-empty ascending list."""
+    return sorted_values[max(0, -(-pct * len(sorted_values) // 100) - 1)]
+
+
+def stage3(ctx):
+    lines, err = swap_log_lines(ctx)
+    if err:
+        return {"graceful_stop": err, "manifest": err}
+    return {"graceful_stop": s3_graceful(lines, ctx), "manifest": s3_manifest(lines, ctx)}
+
+
+def s3_graceful(lines, ctx):
+    stops, malformed = 0, 0
+    by_key, exits, censored, why = {}, {}, collections.Counter(), collections.Counter()
+    for line in lines:
+        head = re.match(TS + " ", line)
+        if not head or not in_window(epoch(head.group(1)), ctx) or " graceful-stop " not in line:
+            continue
+        m = S3_GSTOP.fullmatch(line)
+        if not m:
+            malformed += 1
+            continue
+        stops += 1
+        key = f"{m.group(3)}/{m.group(4)}"
+        row = by_key.setdefault(key, {"exited": 0, "alive": 0, "no_pid": 0, "gone_before_signal": 0, "unmeasured": 0})
+        if m.group(5) == "exited":
+            row["exited"] += 1
+            exits.setdefault(key, []).append(int(m.group(6)))
+        elif m.group(5) == "alive":
+            row["alive"] += 1
+            censored[key] += 1
+        elif m.group(7):
+            row["no_pid"] += 1
+        elif m.group(8):
+            row["gone_before_signal"] += 1
+        else:
+            row["unmeasured"] += 1
+            why[m.group(9)] += 1
+    exit_ms = {}
+    for key, vals in sorted(exits.items()):
+        vals.sort()
+        exit_ms[key] = {"n": len(vals), "p50": s3_rank(vals, 50), "p90": s3_rank(vals, 90),
+                        "p99": s3_rank(vals, 99), "max": vals[-1]}
+    return {
+        "stops": stops,
+        "by_site_mode": dict(sorted(by_key.items())),
+        "exit_ms": exit_ms,
+        "censored": dict(sorted(censored.items())),
+        "unmeasured_by_why": dict(sorted(why.items())),
+        "malformed_lines": malformed,
+    }
+
+
+# ── stage 3 (wave 6b): what was in flight at a restart ──
+# `ccd/ccd#_inflight_write` ends in one `manifest <id>: site=<site> <header tokens>` line (`_inflight_note`), at the
+# swap, the limit-resume and a revival (never the hibernate, which writes no `ended` line). This pairs each restart
+# (an `ended <id>: <cause>` line in the window) with the id's next manifest line before its next `ended` line, reading
+# past --until, and counts. It reports, and sets no target. A second spelling of the program's tuples
+# (`ccd/lib/inflight-manifest.py`, D-8376), held equal by `measure-continuity-stage3.test.ts`.
+S3_DAYS_OUT_S = 86400
+MANIFEST_CLASSES = ('in-flight', 'holed', 'stopped-agent', 'diverged', 'deferred-until-reset', 'abandoned')
+MANIFEST_VERDICTS = ('listed', 'none', 'unread', 'not-applicable', 'unmeasured')
+MANIFEST_WHY = ('busy', 'budget', 'time', 'error')
+MANIFEST_SITES = ('swap', 'limit-resume', 'revival')
+S3_COUNTS = ("items",) + MANIFEST_CLASSES + ("unread", "unread-expired", "killed", "resumed", "drop-id", "drop-path",
+                                              "drop-budget", "drop-shape", "drop-read", "drop-readpath", "drop-over", "retired")
+S3_ENDED = re.compile(TS + r" ended (\S+): ([a-z][a-z-]*)")
+S3_MANIFEST = re.compile(
+    TS + r" manifest (\S+): site=(" + "|".join(MANIFEST_SITES) + r") verdict=(" + "|".join(MANIFEST_VERDICTS)
+    + r") why=(" + "|".join(MANIFEST_WHY) + r"|-) wait=(\d+|-|\?|undated)"
+    + "".join(" " + c + r"=(\d+|-)" for c in S3_COUNTS))
+S3_NOROOM = re.compile(TS + r" rescuewait (\S+): kind=noroom on \S+ reset=-")
+S3_DISPATCH_FAILED = re.compile(TS + r" dispatch FAILED for (\S+) -> \S+ \(resume\)")
+S3_SWAP_REFUSED = re.compile(TS + r" swap-refused (\S+): .*")
+S3_SWAP_DONE = re.compile(TS + r" swap (\S+): \S+ -> \S+ \(uuid \S+\)")
+
+
+def s3_num(v):
+    return int(v) if v.isdigit() else 0
+
+
+def s3_manifest(lines, ctx):
+    events = collections.defaultdict(list)   # id -> [(line index, kind, payload)] in log order
+    first_seen, noroom, malformed = {}, 0, 0
+    for i, line in enumerate(lines):
+        head = re.match(TS + " ", line)
+        t = epoch(head.group(1)) if head else None
+        if head and " manifest " in line and in_window(t, ctx) and not S3_MANIFEST.fullmatch(line):
+            malformed += 1
+        m = S3_ENDED.fullmatch(line)
+        if m:
+            events[m.group(2)].append((i, "ended", (t, m.group(3))))
+            continue
+        m = S3_MANIFEST.fullmatch(line)
+        if m:
+            mid = m.group(2)
+            vals = dict(zip(S3_COUNTS, m.groups()[6:]))
+            first_seen.setdefault(mid, i)
+            events[mid].append((i, "manifest", {"site": m.group(3), "verdict": m.group(4), "why": m.group(5),
+                                                "wait": m.group(6), "n": {k: s3_num(v) for k, v in vals.items()},
+                                                "first": first_seen[mid] == i}))
+        m = S3_NOROOM.fullmatch(line)
+        if m:
+            if in_window(t, ctx):
+                noroom += 1
+            continue
+        m = S3_DISPATCH_FAILED.fullmatch(line)
+        if m:
+            events[m.group(2)].append((i, "dispatch-failed", None))
+            continue
+        m = S3_SWAP_REFUSED.fullmatch(line)
+        if m:
+            events[m.group(2)].append((i, "refused", None))
+            continue
+        m = S3_SWAP_DONE.fullmatch(line)
+        if m:
+            events[m.group(2)].append((i, "done", None))
+    # Each id's restarts, in log order: (in window, cause, paired manifest, not_restarted, refused).
+    per_id = {}
+    for rid, evs in events.items():
+        rows = []
+        ends = [k for k, e in enumerate(evs) if e[1] == "ended"]
+        for n, k in enumerate(ends):
+            stop = ends[n + 1] if n + 1 < len(ends) else len(evs)
+            span = evs[k + 1:stop]
+            t, cause = evs[k][2]
+            man = next((e[2] for e in span if e[1] == "manifest"), None)
+            failed = any(e[1] == "dispatch-failed" for e in span)
+            refused = False
+            if cause.startswith("swap-"):
+                for e in span:
+                    if e[1] == "done":
+                        break
+                    if e[1] == "refused":
+                        refused = True
+                        break
+            rows.append({"in": in_window(t, ctx), "cause": cause, "man": man, "failed": failed, "refused": refused})
+        per_id[rid] = rows
+    zero = lambda: {c: 0 for c in MANIFEST_CLASSES}
+    r = {"restarts": 0, "restarts_by_cause": collections.Counter(), "manifests_by_site_verdict": collections.Counter(),
+         "restarts_with_items": 0, "restarts_with_items_by_site": collections.Counter(),
+         "restarts_with_items_by_class": zero(), "restarts_with_resumable_items": 0,
+         "restarts_with_items_later_resumed": 0, "resumed_items": 0, "items_by_class": zero(), "killed_in_flight": 0,
+         "first_manifests": {"restarts": 0, "restarts_with_items": 0, "items_by_class": zero()},
+         "unread_expired": 0, "unmeasured_by_why": {w: 0 for w in MANIFEST_WHY}, "not_applicable": 0,
+         "unread_manifests": 0, "never_written_by_cause": collections.Counter(), "not_restarted": 0,
+         "refused_restart": 0, "drops": {k: 0 for k in ("id", "path", "budget", "shape", "read", "readpath", "over")},
+         "weekly_waits": {"days_out": 0, "days_out_with_items": 0, "days_out_deferred": 0, "wait_unreadable": 0,
+                          "limitwait_reset_unknown": 0, "noroom_reset_unknown": noroom},
+         "malformed_lines": malformed}
+    for rows in per_id.values():
+        for k, row in enumerate(rows):
+            if not row["in"]:
+                continue
+            r["restarts"] += 1
+            r["restarts_by_cause"][row["cause"]] += 1
+            man = row["man"]
+            if row["failed"]:
+                r["not_restarted"] += 1
+            elif row["refused"]:
+                r["refused_restart"] += 1
+            elif man is None:
+                r["never_written_by_cause"][row["cause"]] += 1
+            if man is None:
+                continue
+            n = man["n"]
+            r["manifests_by_site_verdict"][f"{man['site']}/{man['verdict']}"] += 1
+            has_items = n["items"] >= 1
+            if has_items:
+                r["restarts_with_items"] += 1
+                r["restarts_with_items_by_site"][man["site"]] += 1
+            if any(n[c] >= 1 for c in ("in-flight", "holed", "stopped-agent", "deferred-until-reset")):
+                r["restarts_with_resumable_items"] += 1
+            for c in MANIFEST_CLASSES:
+                r["items_by_class"][c] += n[c]
+                if n[c] >= 1:
+                    r["restarts_with_items_by_class"][c] += 1
+            if has_items:   # forward pairing: the same id's next paired manifest says whether the work resumed
+                nxt = next((x["man"] for x in rows[k + 1:] if x["man"] is not None), None)
+                if nxt is not None and nxt["n"]["resumed"] >= 1:
+                    r["restarts_with_items_later_resumed"] += 1
+            r["resumed_items"] += n["resumed"]
+            r["killed_in_flight"] += n["killed"]
+            r["unread_expired"] += n["unread-expired"]
+            if man["first"]:
+                f = r["first_manifests"]
+                f["restarts"] += 1
+                f["restarts_with_items"] += 1 if has_items else 0
+                for c in MANIFEST_CLASSES:
+                    f["items_by_class"][c] += n[c]
+            if man["verdict"] == "unmeasured" and man["why"] in r["unmeasured_by_why"]:
+                r["unmeasured_by_why"][man["why"]] += 1
+            if man["verdict"] == "not-applicable":
+                r["not_applicable"] += 1
+            if man["verdict"] == "unread":
+                r["unread_manifests"] += 1
+            for d in r["drops"]:
+                r["drops"][d] += n["drop-" + d]
+            w, ww = man["wait"], r["weekly_waits"]
+            if w.isdigit() and int(w) >= S3_DAYS_OUT_S:
+                ww["days_out"] += 1
+                ww["days_out_with_items"] += 1 if has_items else 0
+                ww["days_out_deferred"] += 1 if n["deferred-until-reset"] >= 1 else 0
+            elif w == "?":
+                ww["wait_unreadable"] += 1
+            elif w == "undated":
+                ww["limitwait_reset_unknown"] += 1
+    for key in ("restarts_by_cause", "manifests_by_site_verdict", "restarts_with_items_by_site", "never_written_by_cause"):
+        r[key] = dict(sorted(r[key].items()))
+    return r
+
+
+STAGES = {1: stage1, 3: stage3, 4: stage4, 6: stage6, 7: stage7}
+
+
+def when(s):
+    """--since/--until/--deployed: 'YYYY-MM-DD[ HH:MM[:SS]]' (a `T` for the space
+    is accepted), LOCAL time as swap.log writes it -> epoch seconds."""
+    v = s.replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return int(time.mktime(time.strptime(v, fmt)))
+        except ValueError:
+            pass
+    raise argparse.ArgumentTypeError(f"not YYYY-MM-DD[ HH:MM[:SS]]: {s!r}")
+
+
+def reap_baseline(s):
+    if not re.fullmatch(r"0|[1-9][0-9]{0,15}", s):
+        raise argparse.ArgumentTypeError("reap baseline must be a non-negative decimal count, without leading zeroes")
+    return int(s)
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--stage", type=int, choices=sorted(STAGES), action="append")
+    ap.add_argument("--home", default=os.path.expanduser("~"))
+    ap.add_argument("--swap-log", help="default: <home>/.cc-sessions/swap.log")
+    ap.add_argument("--since", type=when, help="YYYY-MM-DD[ HH:MM[:SS]] (local), inclusive")
+    ap.add_argument("--until", type=when, help="YYYY-MM-DD[ HH:MM[:SS]] (local), exclusive")
+    ap.add_argument("--deployed", type=when, help="the stage's rollout time (local): splits out pairs stranded before it")
+    ap.add_argument("--all-copies", action="store_true", help="read every transcript copy, not the largest per uuid")
+    ap.add_argument("--journal", help="stage 6: a `journalctl --user -o json` export to read instead of running journalctl")
+    ap.add_argument("--reap-baseline", type=reap_baseline, help="stage 6 only: frozen reap-class count; read-only B+2 comparison for an explicit seven-day window")
+    ap.add_argument("--json", action="store_true")
+    a = ap.parse_args(argv)
+    if a.reap_baseline is not None:
+        if a.stage != [6] or a.since is None or a.until is None or a.until - a.since != 7 * 86400:
+            ap.error("--reap-baseline requires --stage 6 alone and an explicit seven-day --since/--until window")
+    ctx = {
+        "home": a.home,
+        "swap_log": a.swap_log or os.path.join(a.home, ".cc-sessions", "swap.log"),
+        "since": a.since, "until": a.until, "deployed": a.deployed,
+        "all_copies": a.all_copies, "journal": a.journal,
+        "reap_baseline": a.reap_baseline,
+    }
+    out = {f"stage{n}": STAGES[n](ctx) for n in (a.stage or sorted(STAGES))}
+    if a.json:
+        print(json.dumps(out, indent=1, sort_keys=True))
+        return 0
+    for stage, sections in out.items():
+        print(stage)
+        for name, rows in sections.items():
+            print(f"  [{name}]")
+            for k, v in (rows.items() if isinstance(rows, dict) else [("", rows)]):
+                print(f"    {k:40} {json.dumps(v, sort_keys=True) if isinstance(v, dict) else v}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

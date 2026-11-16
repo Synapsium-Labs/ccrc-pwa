@@ -1,0 +1,3270 @@
+// server/test/ccgpt-proxy.test.ts
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { type ChildProcess } from 'node:child_process';
+import { createServer, request as httpRequest, type Server } from 'node:http';
+import { connect as netConnect, type AddressInfo } from 'node:net';
+import { writeFileSync, mkdirSync, utimesSync, chmodSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { gzipSync, gunzipSync, deflateSync, inflateSync } from 'node:zlib';
+import { pythonOrSkip, spawnPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness.js';
+import { mkTmp } from './tmpHelpers.js';
+// Task 9 of the codex bridge Stage 2 plan (2026-10-22): the shim's direct entry, served from the package.
+import { cpSync, existsSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { createServer as createNetServer, type Server as NetServer } from 'node:net';
+import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
+import { freePort } from './codexLaneFixture.js';
+import { BRIDGE_AUTH_LIB, BRIDGE_DIR, BRIDGE_MODELS, fakeResponses, plantBridgeLane } from './codexBridgeFixture.js';
+
+// No case listens on a fixed port. A fixed listening port (this file once
+// bound 45010 and 45011) sits inside Linux's ephemeral range (32768-60999), so
+// any concurrent socket on a CI runner could already hold it and the case
+// failed with EADDRINUSE.
+// - PROXY_PORT is the SHIM's: the shim takes its port from CCGPT_PROXY_PORT
+//   before it binds and refuses 0, so every case draws its own from the
+//   codex-lane fixture's `freePort` (D-6856: below the ephemeral range, and
+//   disjoint from every other live worker's) in the `beforeEach` below.
+// - UPSTREAM_PORT is the in-process upstream's: `startPair` binds it on port 0
+//   and records the port the OS assigned here, for the shim's
+//   CCGPT_LITELLM_PORT and for a case that asserts on it.
+// - UNDIALLED_LITELLM_PORT is for a shim that never dials LiteLLM: one that
+//   refuses to start, or exits before it serves, or runs the direct entry.
+//   Nothing in this file listens on it.
+let PROXY_PORT = 0;
+let UPSTREAM_PORT = 0;
+const UNDIALLED_LITELLM_PORT = 45011;
+
+// The shim's `SYSTEM_LEAD`, spelled here as its own LITERAL rather than read
+// out of `ccd/ccgpt-proxy.py`: a test that derived its expectation from the
+// file under test would follow any drift in that constant and stay green.
+// Spelled twice on purpose — this copy is the pin. The shim keeps Claude
+// Code's top-level `system` as the system prompt, behind this one line, so
+// LiteLLM carries it in the Responses `instructions` after the Codex CLI's
+// own base prompt (spec §22).
+const SYSTEM_LEAD = "You are running inside Claude Code, not the Codex CLI. What follows is Claude Code's system prompt for this session: wherever it differs from the Codex CLI instructions above, follow it.";
+
+/** The `system` value the shim forwards for a top-level system prompt whose
+ *  flattened text is `text`: the lead line, a blank line, then the text. */
+function led(text: string): string {
+  return `${SYSTEM_LEAD}\n\n${text}`;
+}
+
+// commit fe7da071 Fix round 2, finding 1: C-2's identity check ("the answer's lane must equal
+// what THIS call expects") is necessary but not sufficient when "what this
+// call expects" is a hardcoded shared string — the re-review demonstrated
+// that a same-lane orphan left by an EARLIER run is then silently adopted (7
+// passed where 9 should fail). "Give each case a distinct id" is a
+// convention, and conventions get skipped: Tasks 3-9 will copy the plan's own
+// two-argument `startPair(home, handler)` shape, and none of their six
+// authors will be thinking about orphan adoption. So `startPair` below MINTS
+// its own lane id and returns it — a caller cannot get this wrong because it
+// never supplies one. `process.pid` (this vitest worker) plus a
+// monotonically-increasing per-process counter is unique across every
+// invocation within one run AND across runs on one box (a different run is a
+// different pid): a leftover orphan can never coincide with the CURRENT
+// process's own pid+counter pair, no matter what string it happens to
+// answer.
+let mintedLaneCount = 0;
+function mintLane(): string {
+  mintedLaneCount += 1;
+  return `codex-a-${process.pid}-${mintedLaneCount}`;
+}
+
+// Probed once at module scope, same shape as ccgpt-harness.test.ts: a
+// missing interpreter must be a visible skip, not every case below quietly
+// `return`ing and vitest reporting a green checkmark for work that never ran.
+const PY = pythonOrSkip();
+
+it('this box has a usable python3', () => {
+  if (process.env.CI) expect(PY).toBeTruthy();
+});
+
+let proc: ChildProcess | null = null;
+let upstream: Server | null = null;
+
+beforeEach(async () => {
+  PROXY_PORT = await freePort();
+  UPSTREAM_PORT = 0;
+});
+
+afterEach(async () => {
+  // commit b56286a4 Fix round 1, C-2 part 3: await the child's own `'close'` after
+  // signalling, rather than firing SIGKILL and moving on. A fire-and-forget
+  // kill let the very next case's readiness poll start while this one's
+  // child (and its port) were still alive for a few more milliseconds —
+  // ordinarily harmless, but it is also what made the vacuous-suite failure
+  // mode possible in the first place (see `startPair`'s comment below).
+  if (proc) {
+    const p = proc;
+    proc = null;
+    await new Promise<void>((resolve) => {
+      if (p.exitCode !== null || p.signalCode !== null) { resolve(); return; }
+      p.once('close', () => resolve());
+      p.kill('SIGKILL');
+    });
+  }
+  if (upstream) { await new Promise<void>((r) => upstream!.close(() => r())); upstream = null; }
+});
+
+type SpawnOutcome = { kind: 'exited'; code: number | null } | { kind: 'still-serving' };
+
+/** Bounds a wait for a spawned child's exit against a fixed deadline,
+ *  producing a DISCRIMINATED outcome instead of letting a stuck child turn
+ *  into vitest's own `testTimeout` (commit b56286a4 fix round 1, I-3). This repo already
+ *  fights a load-flake class where a slow box sheds tests at exactly the
+ *  deadline (`vitest.config.ts`), so a red that IS a timeout cannot tell "the
+ *  guard is gone" from "the box is loaded" — and a loaded box would red the
+ *  *unmutated* case too. 3s is roughly 1000x the measured real refusal
+ *  (which exits before any socket is touched), so it cannot be starved by
+ *  ordinary load the way a 20s deadline racing a `spawn` can. Listens for
+ *  `'close'`, not `'exit'`: `'exit'` can fire before the last `data` chunk on
+ *  `stderr` has been delivered, which would make the caller's captured
+ *  stderr a race against its own assertion. */
+function raceExitOrDeadline(child: ChildProcess, ms = 3_000): Promise<SpawnOutcome> {
+  return Promise.race([
+    new Promise<SpawnOutcome>((resolve) =>
+      child.once('close', (code) => resolve({ kind: 'exited', code }))),
+    new Promise<SpawnOutcome>((resolve) =>
+      setTimeout(() => resolve({ kind: 'still-serving' }), ms)),
+  ]);
+}
+
+/** A raw GET that preserves duplicate response headers exactly as received.
+ *  Fix round 2, finding 2: `fetch`'s parsed `Headers` normalises/hides
+ *  hop-by-hop duplication (the HTTP client manages `Connection` itself
+ *  rather than exposing it faithfully), so proving "exactly one `Connection`
+ *  line, not two" needs `node:http`'s `rawHeaders` — a flat [key, value,
+ *  key, value, ...] array in receipt order, duplicates included. */
+function rawGet(port: number, path: string): Promise<{ status: number | undefined; rawHeaders: string[] }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, method: 'GET' }, (res) => {
+      res.resume();
+      res.on('end', () => resolve({ status: res.statusCode, rawHeaders: res.rawHeaders }));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/** Sends a hand-framed `Transfer-Encoding: chunked` POST over a raw
+ *  `node:net` socket — `fetch` cannot produce malformed chunk framing
+ *  (bad hex size, negative size, missing CRLF, a short chunk), it can only
+ *  produce well-formed chunked bodies (task-7a-rulings.md's interface
+ *  note, commit ef4c4e6b). Writes the request head, then the raw (possibly malformed) body
+ *  bytes verbatim, then half-closes (`socket.end()`) — every framing this
+ *  file sends either raises inside `_read_chunked_body` on bytes already
+ *  in flight, or (the short-chunk case) needs the half-close's EOF to turn
+ *  a would-be-indefinite `rfile.read(size)` into a short, immediate read.
+ *  Resolves once the server closes its end, with whatever bytes arrived —
+ *  including zero bytes, the shape a dropped connection with no HTTP
+ *  response produces, so a caller can tell "refused with a real response"
+ *  from "connection dropped" by parsing what comes back rather than by
+ *  racing a timeout. */
+function rawChunkedPost(port: number, path: string, rawBody: Buffer): Promise<{ status: number | null; body: string }> {
+  return new Promise((resolve, reject) => {
+    const sock = netConnect(port, '127.0.0.1', () => {
+      const head =
+        `POST ${path} HTTP/1.1\r\n` +
+        `Host: 127.0.0.1:${port}\r\n` +
+        `Content-Type: application/json\r\n` +
+        `Transfer-Encoding: chunked\r\n` +
+        `Connection: close\r\n` +
+        `\r\n`;
+      sock.write(head, 'latin1');
+      sock.write(rawBody);
+      sock.end();
+    });
+    const chunks: Buffer[] = [];
+    // net.Socket's typed 'data' event is `string | NonSharedBuffer` — it only
+    // ever emits a string when `setEncoding` has been called, which neither
+    // raw-socket helper in this file does, so this is real narrowing (checked
+    // by shape) rather than a cast: the string arm is honoured, not asserted
+    // away, using the same 'latin1' byte-preserving encoding this file writes
+    // the head with.
+    sock.on('data', (c) => chunks.push(typeof c === 'string' ? Buffer.from(c, 'latin1') : c));
+    sock.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('latin1');
+      const sep = raw.indexOf('\r\n\r\n');
+      if (sep === -1) { resolve({ status: null, body: '' }); return; }
+      const statusLine = raw.slice(0, sep).split('\r\n')[0];
+      const status = Number(statusLine.split(' ')[1]);
+      resolve({ status: Number.isFinite(status) ? status : null, body: raw.slice(sep + 4) });
+    });
+    sock.on('error', reject);
+    const guard = setTimeout(() => reject(new Error('rawChunkedPost timed out')), 5_000);
+    sock.on('close', () => clearTimeout(guard));
+  });
+}
+
+/** General-purpose raw-socket request (task-7a fix round 1: M-1's bad
+ *  `Content-Length` and task-7a M-3's HEAD-suppression case both need a method
+ *  and/or headers `rawChunkedPost` doesn't expose — an arbitrary method,
+ *  arbitrary headers, and no forced `Transfer-Encoding: chunked`). Returns
+ *  the parsed status line's headers too, not only the body, because task-7a M-3
+ *  needs to see `Content-Length` while asserting the body bytes are empty.
+ *  Same "resolve on close, even with zero bytes" shape as `rawChunkedPost`
+ *  — a dropped connection with no response parses to `status: null` rather
+ *  than hanging on a timeout. */
+function rawRequest(
+  port: number, method: string, path: string, headers: string[], body: Buffer,
+): Promise<{ status: number | null; headers: string[]; body: string }> {
+  return new Promise((resolve, reject) => {
+    const sock = netConnect(port, '127.0.0.1', () => {
+      const head =
+        `${method} ${path} HTTP/1.1\r\n` +
+        `Host: 127.0.0.1:${port}\r\n` +
+        headers.map((h) => `${h}\r\n`).join('') +
+        `Connection: close\r\n` +
+        `\r\n`;
+      sock.write(head, 'latin1');
+      if (body.length) sock.write(body);
+      sock.end();
+    });
+    const chunks: Buffer[] = [];
+    // net.Socket's typed 'data' event is `string | NonSharedBuffer` — it only
+    // ever emits a string when `setEncoding` has been called, which neither
+    // raw-socket helper in this file does, so this is real narrowing (checked
+    // by shape) rather than a cast: the string arm is honoured, not asserted
+    // away, using the same 'latin1' byte-preserving encoding this file writes
+    // the head with.
+    sock.on('data', (c) => chunks.push(typeof c === 'string' ? Buffer.from(c, 'latin1') : c));
+    sock.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('latin1');
+      const sep = raw.indexOf('\r\n\r\n');
+      if (sep === -1) { resolve({ status: null, headers: [], body: '' }); return; }
+      const headLines = raw.slice(0, sep).split('\r\n');
+      const status = Number(headLines[0].split(' ')[1]);
+      resolve({ status: Number.isFinite(status) ? status : null, headers: headLines.slice(1), body: raw.slice(sep + 4) });
+    });
+    sock.on('error', reject);
+    const guard = setTimeout(() => reject(new Error('rawRequest timed out')), 5_000);
+    sock.on('close', () => clearTimeout(guard));
+  });
+}
+
+/** Frames arbitrary bytes as a single well-formed HTTP/1.1 chunk (RFC 7230
+ *  §4.1), for the task-7b cases that need a hand-built chunked body but,
+ *  unlike `rawChunkedPost`'s malformed-framing cases, still want it to
+ *  PARSE correctly — `fetch` cannot combine a raw-socket header shape
+ *  (split/list `Transfer-Encoding`, an extra trailer line) with a
+ *  chunked-encoded body of its own choosing, so this is sent through
+ *  `rawRequest` instead, which sends its `body` argument verbatim. `ext`,
+ *  when given, reproduces a chunk-extension (`size;ext\r\n...`, M15) —
+ *  RFC 7230 §4.1.1 syntax, ignored by every real recipient that doesn't
+ *  define it, including this shim, which is the point of M15's guard. */
+function chunkEncode(data: Buffer, ext?: string): Buffer {
+  const sizeLine = `${data.length.toString(16)}${ext ? `;${ext}` : ''}\r\n`;
+  return Buffer.concat([
+    Buffer.from(sizeLine, 'latin1'), data, Buffer.from('\r\n'),
+    Buffer.from('0\r\n\r\n'),
+  ]);
+}
+
+/** Starts a recording upstream plus the shim. `env` extends the child's
+ *  environment for whatever ELSE a later task's case needs — it can no
+ *  longer set `CCGPT_ACCOUNT_ID`, `CCGPT_PROXY_PORT` or `CCGPT_LITELLM_PORT`
+ *  (fix round 2, finding 1): those three are applied AFTER `...env`, the same
+ *  "spread last, cannot be overridden by accident" shape `containedSpawnOptions`
+ *  itself uses for HOME. The lane id specifically is MINTED here, not read
+ *  from any argument, and returned to the caller — see `mintLane` above for
+ *  why a convention was not enough. Returns once the shim has answered
+ *  /ccgpt/lane as THIS lane, or throws with the child's own captured stderr
+ *  if it dies first. `opts.listenUpstream: false` (D-4933) leaves the upstream
+ *  port with nothing listening, for a case about a refused connection; the
+ *  returned `listenUpstream()` starts the listener when that case wants it.
+ *  Without `opts.upstreamPort` the upstream binds port 0, and the port the OS
+ *  assigned becomes `UPSTREAM_PORT` and the shim's `CCGPT_LITELLM_PORT`.
+ *  `opts.upstreamPort` (D-4933) names the port instead, for a case that leaves
+ *  it unbound (`listenUpstream: false`) and binds it later, both as the port
+ *  the listener takes and as the shim's `CCGPT_LITELLM_PORT`, so a case that
+ *  leaves its port unbound does not do it on a port another process may bind.
+ *  The shim's own readiness poll never touches upstream, so it comes up either
+ *  way. */
+async function startPair(
+  home: string,
+  handler: (req: any, body: Buffer, res: any) => void,
+  env: Record<string, string> = {},
+  opts: { listenUpstream?: boolean; upstreamPort?: number } = {},
+): Promise<{ child: ChildProcess; lane: string; listenUpstream: () => Promise<void> }> {
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => handler(req, Buffer.concat(chunks), res));
+  });
+  upstream = server;
+  if (opts.listenUpstream === false && opts.upstreamPort === undefined) {
+    throw new Error('startPair: listenUpstream: false needs an upstreamPort to leave unbound');
+  }
+  const listenOn = (port: number) =>
+    new Promise<number>((r) => server.listen(port, '127.0.0.1', () => r((server.address() as AddressInfo).port)));
+  let upstreamPort = opts.upstreamPort ?? 0;
+  const listenUpstream = async () => { await listenOn(upstreamPort); };
+  if (opts.listenUpstream !== false) {
+    upstreamPort = await listenOn(upstreamPort);
+    UPSTREAM_PORT = upstreamPort;
+  }
+
+  const lane = mintLane();
+  const { child } = spawnPy(ccgptFile('ccgpt-proxy.py'), {
+    home,
+    env: {
+      PYTHONPATH: PYSTUB_DIR,
+      ...env,
+      // Applied LAST, deliberately: a caller's own `env` — even one that
+      // (by mistake or by copying an older example) sets `CCGPT_ACCOUNT_ID`
+      // — cannot override the minted lane or the port pair this file
+      // allocates.
+      CCGPT_ACCOUNT_ID: lane,
+      CCGPT_PROXY_PORT: String(PROXY_PORT),
+      CCGPT_LITELLM_PORT: String(upstreamPort),
+    },
+  });
+  proc = child;
+
+  let stderr = '';
+  child.stderr?.on('data', (c) => { stderr += c.toString(); });
+  let closed: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  child.once('close', (code, signal) => { closed = { code, signal }; });
+
+  // Poll the lane endpoint rather than sleeping: a fixed sleep is a flake.
+  //
+  // commit b56286a4 Fix round 1, C-2: this used to accept the first `r.ok`, full stop — a
+  // port answering was treated as proof this child was alive and correct.
+  // Measured by the reviewer: pre-bind an unrelated listener on the shim's port and
+  // the whole suite reports "4 passed" in under a second while every one of
+  // its own children died `EADDRINUSE` — a green suite that tested nothing.
+  // Two fixes, both here: (1) race the poll against the child's own
+  // `'close'`, so a child that dies (bind failure, crash) fails fast with
+  // its captured stderr instead of a silent stall to the 5s bound; (2)
+  // require the answer's `lane` field to equal the id THIS child was given,
+  // so a foreign listener — or a stale sibling from a prior case that has
+  // not released the port yet — cannot satisfy the poll merely by answering
+  // *something*. The spec's own §7.4 refuses to adopt a listener that
+  // answers another lane's id for exactly this reason; the harness that
+  // tests that behaviour needs the same discipline.
+  for (let i = 0; i < 100; i++) {
+    if (closed) {
+      const c: { code: number | null; signal: NodeJS.Signals | null } = closed;
+      throw new Error(
+        `ccgpt-proxy exited before answering its own /ccgpt/lane as ${JSON.stringify(lane)} ` +
+        `(code=${c.code} signal=${c.signal}): ${stderr || '(no stderr)'}`,
+      );
+    }
+    try {
+      const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/ccgpt/lane`);
+      if (r.ok) {
+        const body: unknown = await r.json();
+        if (body && typeof body === 'object' && (body as { lane?: unknown }).lane === lane) {
+          return { child, lane, listenUpstream };
+        }
+        // Answered, but not as THIS lane — a foreign or stale listener owns
+        // the port right now. Keep polling rather than accepting an answer
+        // that is not provably ours.
+      }
+    } catch { /* not up yet */ }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`shim did not come up as lane ${JSON.stringify(lane)} (stderr: ${stderr || '(none)'})`);
+}
+
+/** The lane's own effort file path — `~/.ccrc/models/<id>.effort.json`, the
+ *  same path `deploy/models-op.mjs`'s `effortPath` and the materialiser
+ *  (`effortFile`, `shared/modelenv.mjs`) write, keyed by ACCOUNT id (here,
+ *  the fixture's own minted `lane`), never by model: one lane, one file,
+ *  holding every model that lane can reach. */
+function effortFilePath(home: string, lane: string): string {
+  return join(home, '.ccrc', 'models', `${lane}.effort.json`);
+}
+
+/** Writes `{"byModel": byModel}` to the lane's own effort file, creating
+ *  `~/.ccrc/models` first (`writeFileSync` does not create parent
+ *  directories). When `mtimeSeconds` is given, the file's mtime is pinned
+ *  EXACTLY via `fs.utimesSync` rather than left to whatever the write
+ *  itself produces (task-8-rulings.md (commit e5318e97) §2): a same-second rewrite may not
+ *  move mtime at all on some filesystems, and both halves of the cache case
+ *  below depend on mtime being precisely what the test intends, not
+ *  incidental to when it happened to run on a box carrying ~20 live
+ *  sessions. */
+function writeEffortFile(
+  home: string, lane: string, byModel: Record<string, string>, mtimeSeconds?: number,
+): void {
+  const p = effortFilePath(home, lane);
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, JSON.stringify({ byModel }));
+  if (mtimeSeconds !== undefined) utimesSync(p, mtimeSeconds, mtimeSeconds);
+}
+
+describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
+  it('answers /ccgpt/lane with its own lane id', async () => {
+    const home = mkTmp('ccgpt-proxy-lane-');
+    const { lane } = await startPair(home, (_req, _body, res) => { res.writeHead(200); res.end('{}'); });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/ccgpt/lane`);
+    expect(await r.json()).toEqual({ lane });
+  });
+
+  // Fix round 2, finding 1, pin (a): the simple half of the ask — two
+  // invocations, even back to back, never mint the same lane.
+  it('mints a distinct lane id for every startPair invocation, even back to back', async () => {
+    const home1 = mkTmp('ccgpt-proxy-mint-1-');
+    const first = await startPair(home1, (_req, _body, res) => { res.writeHead(200); res.end('{}'); });
+    const firstLane = first.lane;
+
+    // Tear this child (and its upstream) down before starting the second —
+    // both share the same PROXY_PORT (this case's own, from `beforeEach`), and
+    // the whole point of minting is that reusing the port back to back must
+    // still never repeat an id.
+    await new Promise<void>((resolve) => {
+      const c = first.child;
+      if (c.exitCode !== null || c.signalCode !== null) { resolve(); return; }
+      c.once('close', () => resolve());
+      c.kill('SIGKILL');
+    });
+    proc = null;
+    if (upstream) { await new Promise<void>((r) => upstream!.close(() => r())); upstream = null; }
+
+    const home2 = mkTmp('ccgpt-proxy-mint-2-');
+    const second = await startPair(home2, (_req, _body, res) => { res.writeHead(200); res.end('{}'); });
+    expect(second.lane).not.toBe(firstLane);
+    expect(second.lane).toMatch(/^codex-a-\d+-\d+$/);
+  });
+
+  // Fix round 2, finding 1, pin (b): the re-review's own defeat, reproduced
+  // with the REALISTIC version of the threat — not a hand-typed guess, but a
+  // genuine orphan still answering an EARLIER call's own real, legitimately
+  // minted lane id (standing in for a process the OS hasn't finished
+  // reaping — round 1 measured an 8ms port-release window on an idle box —
+  // or a supervisor that restarted it under stale state). Round 1's fix
+  // ("require the answer's lane to equal what THIS call expects") was
+  // defeated because a shared hardcoded lane made every call's "expects" the
+  // same string; minting removes that, because each call's own expectation
+  // is fresh every time, so an earlier call's real answer can never satisfy
+  // a later one's poll.
+  it('a stale orphan still answering an earlier call\'s own real lane id is never adopted by a later call', async () => {
+    const home1 = mkTmp('ccgpt-proxy-mint-orphan-1-');
+    const first = await startPair(home1, (_req, _body, res) => { res.writeHead(200); res.end('{}'); });
+    const earlierLane = first.lane;
+
+    await new Promise<void>((resolve) => {
+      const c = first.child;
+      if (c.exitCode !== null || c.signalCode !== null) { resolve(); return; }
+      c.once('close', () => resolve());
+      c.kill('SIGKILL');
+    });
+    proc = null;
+    if (upstream) { await new Promise<void>((r) => upstream!.close(() => r())); upstream = null; }
+
+    // Stand in for the orphan: a plain listener, still bound to the shim's
+    // own port, still answering the FIRST call's genuine lane id.
+    const orphan = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ lane: earlierLane }));
+    });
+    await new Promise<void>((r) => orphan.listen(PROXY_PORT, '127.0.0.1', () => r()));
+    try {
+      const home2 = mkTmp('ccgpt-proxy-mint-orphan-2-');
+      await expect(
+        startPair(home2, (_req, _body, res) => { res.writeHead(200); res.end('{}'); }),
+      ).rejects.toThrow();
+    } finally {
+      await new Promise<void>((r) => orphan.close(() => r()));
+    }
+  });
+
+  it('forwards a non-/messages request byte-identically and returns the upstream response unchanged', async () => {
+    const home = mkTmp('ccgpt-proxy-pass-');
+    let seen: Buffer | null = null;
+    let seenPath = '';
+    await startPair(home, (req, body, res) => {
+      seen = body; seenPath = req.url;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    // commit b56286a4 Fix round 1, M-1: real non-ASCII bytes, not the pure-ASCII string this
+    // case originally sent under a "weird bytes" comment that measured
+    // false. `é`/` `/`ü` each encode to 2 UTF-8 bytes, so a
+    // json.loads/json.dumps round trip inside the shim (there isn't one on
+    // this path, but a regression could add one) would corrupt this payload
+    // where a pure-ASCII one could not catch it.
+    const payloadText = '{"weird":"é ü bytes","n":1}';
+    const payload = Buffer.from(payloadText, 'utf8');
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: payload,
+    });
+    expect(r.status).toBe(200);
+    expect(seenPath).toBe('/v1/models');
+    expect(seen!.toString('utf8')).toBe(payloadText);   // byte-identical, not re-serialised
+
+    // commit b56286a4 Fix round 1, M-6: passthrough is bidirectional — the request direction
+    // was covered above, but the upstream's own response body and headers
+    // coming back unchanged is the other half and was previously asserted
+    // only by status code.
+    expect(r.headers.get('content-type')).toBe('application/json');
+    expect(await r.text()).toBe('{"ok":true}');
+  });
+
+  it('drops hop-by-hop headers from the forwarded request while end-to-end headers survive', async () => {
+    // commit b56286a4 Fix round 1, I-4: HOP_BY_HOP is a shipped guard with no test — deleting
+    // the whole set, or dropping just `accept-encoding` (the member Task 6's
+    // gzip/deflate handling depends on), left the suite 4/4 green.
+    //
+    // These three headers are never literally ABSENT on the wire — measured
+    // directly against `urllib.request` (the shim's own HTTP client):
+    // `http.client` always fills `Accept-Encoding` and `Host` with its own
+    // neutral values whenever the shim does not forward an explicit one, and
+    // forces `Connection: close` unconditionally regardless of what is
+    // forwarded (an explicit `Connection: keep-alive` added to the outgoing
+    // request is silently overridden to `close` either way — so `connection`
+    // membership in HOP_BY_HOP is not independently observable at this
+    // boundary and is not asserted here). So the meaningful assertion is not
+    // "absent" but "not the client's chosen value":
+    //   - `accept-encoding` must read Python's own default `identity`, not
+    //     the client's requested `gzip, deflate` — if HOP_BY_HOP stopped
+    //     excluding it, the client's value would reach upstream instead
+    //     (measured: an explicitly-added Accept-Encoding header suppresses
+    //     http.client's own default and wins outright).
+    //   - `host` must read the actual upstream authority
+    //     (127.0.0.1:<UPSTREAM_PORT>), not the address the CLIENT connected
+    //     to (127.0.0.1:<PROXY_PORT>) — if HOP_BY_HOP stopped excluding it,
+    //     the client's Host would be forwarded verbatim (measured: an
+    //     explicitly-added Host header is NOT overridden by http.client, so
+    //     a forwarded client Host would silently misdirect a real
+    //     vhost-routing upstream).
+    const home = mkTmp('ccgpt-proxy-hopbyhop-');
+    let seenHeaders: Record<string, string | string[] | undefined> = {};
+    await startPair(home, (req, _body, res) => {
+      seenHeaders = req.headers;
+      res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ok');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`, {
+      headers: {
+        authorization: 'Bearer test-token-not-a-secret',
+        'accept-encoding': 'gzip, deflate',
+      },
+    });
+    // End-to-end: describes the MESSAGE, must survive unchanged.
+    expect(seenHeaders['authorization']).toBe('Bearer test-token-not-a-secret');
+    // Hop-by-hop: the client's own value must not reach upstream.
+    expect(seenHeaders['accept-encoding']).toBe('identity');
+    expect(seenHeaders['host']).toBe(`127.0.0.1:${UPSTREAM_PORT}`);
+  });
+
+  // Fix round 2, finding 2 — my own error from round 1, corrected by the
+  // re-review: I argued `connection` couldn't be pinned because
+  // `urllib.request` forces `Connection: close` on the REQUEST regardless of
+  // what the shim strips (true, and still true — see the previous test's
+  // comment). What I hadn't checked is the RESPONSE: an upstream answers
+  // with its OWN `Connection` header (a real HTTP/1.1 server does this by
+  // default — measured directly against Node's own `http.createServer`,
+  // this suite's own upstream shape, which defaults to `Connection:
+  // keep-alive` and answers `Connection: close` once it sees a
+  // closed-connection request, exactly what the shim's own forced-closed
+  // request produces). If `HOP_BY_HOP` ever stopped excluding `connection`
+  // on the response-copying loop, that upstream header would be forwarded
+  // IN ADDITION to the shim's own explicit
+  // `self.send_header("Connection", "close")` a few lines later — two lines
+  // on the wire, not one. `fetch`'s parsed `Headers` hides this (the HTTP
+  // client manages `Connection` itself), so this reads `rawHeaders` via
+  // `node:http` directly, which preserves duplicates exactly as received.
+  it('sends exactly one Connection header on the response, never a duplicate of the upstream\'s own', async () => {
+    const home = mkTmp('ccgpt-proxy-connection-response-');
+    await startPair(home, (_req, _body, res) => {
+      // Deliberately NOT setting `connection` here — Node's own http server
+      // supplies a real one on its own (measured), which is exactly the
+      // realistic shape: the shim must not simply trust that upstream never
+      // sends one.
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('ok');
+    });
+    const { status, rawHeaders } = await rawGet(PROXY_PORT, '/v1/models');
+    expect(status).toBe(200);
+    const connectionLines = rawHeaders
+      .filter((_, i) => i % 2 === 0)
+      .filter((key) => key.toLowerCase() === 'connection');
+    expect(connectionLines.length).toBe(1);
+  });
+
+  // Fix round 1, Question 2's rider: the hoisted `spawnPy` ships with its own
+  // pin in THIS file too, not only in ccgpt-harness.test.ts — a child started
+  // through it, by the shim's own real spawn site in `startPair`'s shape,
+  // must see the fixture HOME even when the caller spreads `process.env`.
+  it('a child spawned through spawnPy keeps the fixture HOME even when the caller spreads process.env', async () => {
+    const home = mkTmp('ccgpt-proxy-spawnpy-home-');
+    const probe = join(home, 'probe.py');
+    writeFileSync(probe, 'import os\nprint(os.environ["HOME"])\n');
+    const { child } = spawnPy(probe, { home, env: { ...process.env, FOO: '1' } });
+    proc = child;
+    let stdout = '';
+    child.stdout?.on('data', (c) => { stdout += c.toString(); });
+    await new Promise<void>((resolve) => child.once('close', () => resolve()));
+    proc = null;
+    expect(stdout.trim()).toBe(home);
+  });
+
+  // commit fe7da071 Fix round 2, finding 5 — M-5 shipped code-only in round 1. HEAD/OPTIONS
+  // used to answer a bare 501 from `BaseHTTPRequestHandler`'s own default,
+  // which made "everything else forwarded untouched" not literally true.
+  it.each(['HEAD', 'OPTIONS'] as const)('forwards a %s request instead of answering a bare 501', async (method) => {
+    const home = mkTmp(`ccgpt-proxy-verb-${method}-`);
+    let seenMethod = '';
+    await startPair(home, (req, _body, res) => {
+      seenMethod = req.method;
+      res.writeHead(204); res.end();
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { method });
+    expect(r.status).not.toBe(501);
+    expect(seenMethod).toBe(method);
+  });
+
+  // commit fe7da071 Fix round 2, finding 5 — M-4 shipped code-only in round 1: a bind
+  // failure now prints a named ccrc-shaped message instead of a bare
+  // socketserver traceback. Reproduced the same way commit fe7da071 C-2's foreign-listener
+  // scenario is: pre-bind the port, then start a second shim on it.
+  it('names the bind failure instead of a bare traceback when the port is already taken', async () => {
+    const home1 = mkTmp('ccgpt-proxy-bindfail-holder-');
+    const first = await startPair(home1, (_req, _body, res) => { res.writeHead(200); res.end('{}'); });
+    void first; // keep the first shim alive, still holding PROXY_PORT
+
+    const home2 = mkTmp('ccgpt-proxy-bindfail-second-');
+    const { child: second } = spawnPy(ccgptFile('ccgpt-proxy.py'), {
+      home: home2,
+      env: {
+        PYTHONPATH: PYSTUB_DIR,
+        CCGPT_ACCOUNT_ID: mintLane(),
+        CCGPT_PROXY_PORT: String(PROXY_PORT),
+        CCGPT_LITELLM_PORT: String(UNDIALLED_LITELLM_PORT),
+      },
+    });
+    let stderr = '';
+    second.stderr?.on('data', (c) => { stderr += c.toString(); });
+    const outcome = await raceExitOrDeadline(second);
+    expect(outcome.kind).toBe('exited');
+    expect(outcome.kind === 'exited' ? outcome.code : null).not.toBe(0);
+    expect(stderr).toMatch(/ccgpt-proxy: failed to bind 127\.0\.0\.1:\d+/);
+    expect(stderr).not.toMatch(/Traceback/);
+    // `proc`/`upstream` (module-level) still point at the FIRST shim, so
+    // `afterEach` tears that one down as usual; the second already exited.
+  });
+
+  // `HTTPServer.server_bind` fills `server_name` with `socket.getfqdn(host)`,
+  // a reverse lookup of 127.0.0.1 that nothing in the shim reads. On the macOS
+  // CI runner that lookup took 35.0 s in every new process (diagnostic run
+  // 36410278756, 2026-09-28: six of six hand-started shims answered after
+  // 35.4-36.2 s, the main thread's stack parked in `getfqdn` under
+  // `server_bind`), so every `startPair` here cost ~36 s and this file took
+  // 47 min on macOS against 6 s on Linux. The driver makes any `getfqdn` call
+  // fatal and stops at `serve_forever`, so the server `__main__` builds must
+  // reach its serve loop without asking.
+  it('starts without a reverse lookup of its bind address (socket.getfqdn is never called)', async () => {
+    const home = mkTmp('ccgpt-proxy-nofqdn-');
+    const driver = join(home, 'no-fqdn-driver.py');
+    writeFileSync(driver, [
+      'import runpy, socket, socketserver, sys',
+      'def _refuse(*a, **k):',
+      '    raise AssertionError("ccgpt-proxy called socket.getfqdn%r" % (a,))',
+      'socket.getfqdn = _refuse',
+      'def _stop(self, *a, **k):',
+      '    print("reached serve_forever", flush=True)',
+      '    raise SystemExit(0)',
+      'socketserver.BaseServer.serve_forever = _stop',
+      'runpy.run_path(sys.argv[1], run_name="__main__")',
+      '',
+    ].join('\n'));
+    const { child } = spawnPy(driver, {
+      home,
+      args: [ccgptFile('ccgpt-proxy.py')],
+      env: {
+        PYTHONPATH: PYSTUB_DIR,
+        CCGPT_ACCOUNT_ID: mintLane(),
+        CCGPT_PROXY_PORT: String(PROXY_PORT),
+        CCGPT_LITELLM_PORT: String(UNDIALLED_LITELLM_PORT),
+      },
+    });
+    proc = child;
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (c) => { stdout += c.toString(); });
+    child.stderr?.on('data', (c) => { stderr += c.toString(); });
+    const outcome = await raceExitOrDeadline(child);
+    if (outcome.kind === 'exited') proc = null; // else: still alive — afterEach kills+awaits it.
+    expect(stderr).not.toMatch(/getfqdn/);
+    expect(outcome).toEqual({ kind: 'exited', code: 0 });
+    expect(stdout).toContain('reached serve_forever');
+  });
+
+  // commit b56286a4 Fix round 1, M-3 (second half): only CCGPT_LITELLM_PORT's refusal was
+  // pinned; the docstring's actual claim is that all three are required.
+  it.each(['CCGPT_ACCOUNT_ID', 'CCGPT_PROXY_PORT', 'CCGPT_LITELLM_PORT'] as const)(
+    'refuses to start when %s is unset, naming the missing variable',
+    async (missing) => {
+      const home = mkTmp(`ccgpt-proxy-nodefault-${missing}-`);
+      const fullEnv: Record<string, string> = {
+        PYTHONPATH: PYSTUB_DIR,
+        CCGPT_ACCOUNT_ID: 'codex-a-nodefault',
+        CCGPT_PROXY_PORT: String(PROXY_PORT),
+        CCGPT_LITELLM_PORT: String(UNDIALLED_LITELLM_PORT),
+      };
+      delete fullEnv[missing];
+      const { child } = spawnPy(ccgptFile('ccgpt-proxy.py'), { home, env: fullEnv });
+      proc = child;
+      let stderr = '';
+      child.stderr?.on('data', (c) => { stderr += c.toString(); });
+
+      const outcome = await raceExitOrDeadline(child);
+      if (outcome.kind === 'exited') proc = null; // else: still alive — afterEach kills+awaits it.
+      expect(outcome.kind).toBe('exited');
+      expect(outcome.kind === 'exited' ? outcome.code : null).not.toBe(0);
+      expect(stderr).toMatch(new RegExp(missing));
+    },
+  );
+
+  // commit b56286a4 Fix round 1, M-3 (first half): a non-numeric port used to escape as a
+  // bare `ValueError` traceback rather than the shim's own named refusal.
+  it('refuses to start with a named message when CCGPT_PROXY_PORT is not a valid port number', async () => {
+    const home = mkTmp('ccgpt-proxy-badport-');
+    const { child } = spawnPy(ccgptFile('ccgpt-proxy.py'), {
+      home,
+      env: {
+        PYTHONPATH: PYSTUB_DIR,
+        CCGPT_ACCOUNT_ID: 'codex-a-badport',
+        CCGPT_PROXY_PORT: 'not-a-port',
+        CCGPT_LITELLM_PORT: String(UNDIALLED_LITELLM_PORT),
+      },
+    });
+    proc = child;
+    let stderr = '';
+    child.stderr?.on('data', (c) => { stderr += c.toString(); });
+
+    const outcome = await raceExitOrDeadline(child);
+    if (outcome.kind === 'exited') proc = null;
+    expect(outcome.kind).toBe('exited');
+    expect(outcome.kind === 'exited' ? outcome.code : null).not.toBe(0);
+    expect(stderr).toMatch(/CCGPT_PROXY_PORT/);
+    expect(stderr).not.toMatch(/Traceback/);
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: the mid-conversation system door', () => {
+  it('converts a mid-conversation system turn to user, in place, both content shapes', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-mid-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x', messages: [
+          { role: 'user', content: 'first' },
+          { role: 'system', content: 'a plain string instruction' },
+          { role: 'assistant', content: 'ok' },
+          { role: 'system', content: [{ type: 'text', text: 'a block instruction' }] },
+        ],
+      }),
+    });
+    expect(seen.messages.map((m: any) => m.role)).toEqual(['user', 'user', 'assistant', 'user']);
+    expect(seen.messages[1].content).toBe('a plain string instruction');          // content untouched
+    expect(seen.messages[3].content).toEqual([{ type: 'text', text: 'a block instruction' }]);
+    expect(JSON.stringify(seen).includes('"role":"system"')).toBe(false);
+  });
+
+  // commit 8903d18a Fix round 1, I-1: `json.loads` on a sufficiently deep-nested body raises
+  // `RecursionError`, which is a `RuntimeError` subclass — neither
+  // `TypeError` nor `ValueError` — so it used to escape
+  // `_rewrite_messages_body`'s except arm entirely and kill the connection
+  // with no HTTP response at all (a full `socketserver` traceback in the
+  // unit's journal, `RemoteDisconnected` at the client). Depth chosen to
+  // reliably exceed Python's default recursion limit (measured: 2000 is not
+  // enough, 20000 is) without depending on the exact crossover, which is an
+  // interpreter default and therefore not something to pin exactly.
+  // 20000 stopped being enough on Python 3.14, whose guard measures the C
+  // stack instead of counting frames: the macOS CI runner's 3.14.7 parsed a
+  // 20000-deep array whole, so this case reached the non-object refusal and
+  // never the recursion it exists for (diagnostic run 36410278756,
+  // 2026-09-28: "top-level JSON value is not an object"). A million levels
+  // is past any C stack a thread gets, and still only a 2 MB body.
+  //
+  // Task 7a (D-3151, arms 1+2 of 3, CLOSED): this body used to be pure
+  // passthrough — forwarded unrewritten, `system` intact had there been
+  // one — and is now refused explicitly instead. The assertion this case
+  // exists for is unchanged (the connection is not dropped, the client
+  // gets a real HTTP response); only WHICH response changed, from a 200
+  // passthrough to a 400 refusal.
+  it('a deeply-nested body does not drop the connection — it is refused explicitly, not forwarded', async () => {
+    const home = mkTmp('ccgpt-proxy-deepnest-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const depth = 1_000_000;
+    const deeplyNested = '['.repeat(depth) + ']'.repeat(depth);
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: deeplyNested,
+    });
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toMatch(/malformed json/i);
+    expect(reached).toBe(false);                                 // upstream never saw it
+  });
+
+  // D-3151, arm 2 of 3, CLOSED: valid JSON whose top level is not an
+  // object (a bare array carries no `messages` key and cannot be routed as
+  // an Anthropic request either) used to forward unrewritten; now refused.
+  it('refuses a body whose top-level JSON value is not an object', async () => {
+    const home = mkTmp('ccgpt-proxy-nonobject-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify([1, 2, 3]),
+    });
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toMatch(/not an object/i);
+    expect(reached).toBe(false);
+  });
+
+  // D-3151, arm 3 of 3, CLOSED (`_fold_midturn_system`'s own guard): a
+  // `messages` field present but not a list — e.g. a dict — used to
+  // forward `data` unmodified, leaving any `role: "system"`-shaped entry
+  // nested inside it untouched. Now refused. A `grep` for `return body`
+  // alone would not have found this arm (it returns `data`); this case is
+  // the behavioural proof the plan's D-3151 entry asked for.
+  it('refuses a body whose messages field is present but not a list', async () => {
+    const home = mkTmp('ccgpt-proxy-messagesnotlist-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: { role: 'system', content: 'not a list' } }),
+    });
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toMatch(/messages.*not a list/i);
+    expect(reached).toBe(false);
+  });
+
+  // task-7a-rulings.md §6, the over-correction guard (durable version:
+  // spec §6.4, "what does not change" — byte-identical forwarding of
+  // non-`/messages` paths): an over-broad refusal breaking the lane is a
+  // worse failure than the one this task fixes. A malformed JSON body on a
+  // NON-`/messages` path is not this task's subject at all — it must still
+  // forward untouched and still
+  // reach upstream, exactly as every other non-`/messages` body always has.
+  it('still forwards a malformed JSON body untouched on a non-/messages path (regression)', async () => {
+    const home = mkTmp('ccgpt-proxy-nonmessages-malformed-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const notJson = 'this is not json at all {{{';
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: notJson,
+    });
+    expect(r.status).toBe(200);                                  // forwarded, not refused
+    expect(seen!.toString('utf8')).toBe(notJson);                 // byte-identical
+  });
+
+  // commit 8903d18a Fix round 1, M-4: the rewrite predicate matched only the exact literal
+  // `/v1/messages`, narrower than spec §6.4's "non-/messages paths" wording
+  // and the reference implementation's `endswith("/messages")`. Measured by
+  // the reviewer: a prefixed mount (`/gpt/v1/messages`) forwarded
+  // `role:"system"` intact. Nothing in THIS repo pins the generated
+  // launcher's base URL to an empty path, so this is not merely
+  // hypothetical here.
+  it('folds a mid-conversation system turn on a prefixed /messages path too', async () => {
+    const home = mkTmp('ccgpt-proxy-mid-prefixed-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/gpt/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'system', content: 'prefixed' }] }),
+    });
+    expect(seen.messages[0].role).toBe('user');
+    expect(seen.messages[0].content).toBe('prefixed');
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
+  // Spec §22: the top-level `system` is KEPT as the system prompt.
+  // `_system_as_instructions` flattens it to one plain string (text blocks
+  // joined with a blank line) and puts `SYSTEM_LEAD` ahead of it; LiteLLM's
+  // Anthropic adapter maps a top-level `system` of that shape to the
+  // Responses `instructions` field, AFTER the Codex CLI base prompt its
+  // chatgpt provider always writes there (measured offline on LiteLLM
+  // 1.101.0 and 1.104.0). It used to be removed and folded into the first
+  // USER turn, where Claude Code's whole system prompt — a subagent's role,
+  // its tool rules, its report contract — reached the model as user text
+  // below the Codex prompt and lost every conflict with it.
+  //
+  // `messages` is no longer touched by this door at all: nothing is merged
+  // into the first turn and nothing is inserted ahead of it. The only
+  // rewrite `messages` ever sees is the mid-conversation door's
+  // `role: "system"` -> `"user"` flip, in place. The two doors now write
+  // disjoint fields, so the call-order binding this block used to pin
+  // (D-3152: the merge branch made the two folds order-dependent) no longer
+  // exists — spec §22 supersedes it — and every case below asserts that
+  // `messages` is exactly what was sent, mid-turn roles aside.
+  it('keeps the top-level system as the system prompt and flips mid-turn entries in place, merging nothing', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        system: 'TOP LEVEL',
+        messages: [
+          { role: 'system', content: 'WAS MID TURN' },
+          { role: 'user', content: 'hi' },
+          { role: 'assistant', content: 'ok' },
+          { role: 'system', content: [{ type: 'text', text: 'LATER' }] },
+        ],
+      }),
+    });
+    expect(seen.system).toBe(led('TOP LEVEL'));
+    // Four messages in, four out, in the same order: the leading entry is
+    // flipped to `user` but NOT merged with the top-level text (it used to
+    // become 'TOP LEVEL\n\nWAS MID TURN').
+    expect(seen.messages).toEqual([
+      { role: 'user', content: 'WAS MID TURN' },
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: [{ type: 'text', text: 'LATER' }] },
+    ]);
+  });
+
+  // When the first message is not `user`, the old fold INSERTED a leading
+  // user turn carrying the system text. Nothing is inserted now.
+  it('inserts no leading turn when the first message is not user', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-noinsert-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        system: 'TOP LEVEL',
+        messages: [{ role: 'assistant', content: 'hi' }],
+      }),
+    });
+    expect(seen.system).toBe(led('TOP LEVEL'));
+    expect(seen.messages).toEqual([{ role: 'assistant', content: 'hi' }]);
+  });
+
+  // The old insert branch's other trigger: no first message at all.
+  it('inserts no leading turn when messages is empty', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-noinsert-empty-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', system: 'TOP LEVEL', messages: [] }),
+    });
+    expect(seen.system).toBe(led('TOP LEVEL'));
+    expect(seen.messages).toEqual([]);
+  });
+
+  // task-7a Fix round 1, C-1 (Critical), the over-refusal guard: `messages`
+  // ABSENT entirely — not the same condition as `messages: []` above — used
+  // to be swallowed by `_fold_midturn_system`'s `not isinstance(msgs, list)`
+  // check and refused 400 with a message about a key that was not there.
+  // task-7a-rulings.md §6 exists to prevent exactly that: a `messages` key
+  // that does not exist cannot hide an unfolded mid-turn `system` entry, so
+  // refusing it buys nothing. It must still answer 200, with the system
+  // prompt carried, and no `messages` key manufactured for it.
+  it('forwards a body with only a top-level system and no messages key at all', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-nomessages-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', system: 'TOP LEVEL' }),
+    });
+    expect(r.status).toBe(200);
+    expect(seen.system).toBe(led('TOP LEVEL'));
+    expect('messages' in seen).toBe(false);                      // nothing manufactured
+  });
+
+  // The other half of task-7a C-1: an EXPLICIT `messages: null` is the same
+  // `data.get("messages") is None` condition as absent, and must forward,
+  // not refuse — with the `null` left exactly as sent.
+  it('forwards a body with a top-level system and an explicit null messages', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-nullmessages-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', system: 'TOP LEVEL', messages: null }),
+    });
+    expect(r.status).toBe(200);
+    expect(seen.system).toBe(led('TOP LEVEL'));
+    expect(seen.messages).toBeNull();                            // forwarded as sent, no turn invented
+  });
+
+  // A `system` whose flattened text is empty or whitespace only — null, an
+  // empty or whitespace-only string, or a block list carrying no string
+  // `text`, only empty text, or only whitespace — is DROPPED: the lead line
+  // is never sent with nothing behind it, since it would introduce a system
+  // prompt that is not there. Each row's own `messages` reaches upstream
+  // untouched, with no turn invented for an instruction that said nothing.
+  const NO_TEXT: [string, unknown][] = [
+    ['null', null],
+    ['an empty string', ''],
+    ['a whitespace-only string', ' \n\t '],
+    ['a block list with only an image block', [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }]],
+    ['a block list whose text block carries no string text', [{ type: 'text' }]],
+    ['a block list holding only empty text blocks', [{ type: 'text', text: '' }, { type: 'text', text: '' }]],
+    ['a block list holding only whitespace text', [{ type: 'text', text: '  \n ' }]],
+  ];
+  it.each(NO_TEXT)('drops a system that is %s, never sending the lead line alone', async (_label, system) => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-notext-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        system,
+        messages: [{ role: 'user', content: 'only turn' }],
+      }),
+    });
+    expect(r.status).toBe(200);
+    expect('system' in seen).toBe(false);
+    expect(seen.messages).toEqual([{ role: 'user', content: 'only turn' }]);
+  });
+
+  // A block-shaped `system` is flattened to the same plain string a
+  // string-shaped one would be (the shape LiteLLM carries into
+  // `instructions`), and a block-content leading user turn is left alone —
+  // the old fold PREPENDED the system text to it as a new first block.
+  it('flattens a block-shaped system and leaves a block-content leading user turn untouched', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-blocks-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        system: [{ type: 'text', text: 'BLOCK INSTRUCTION' }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'existing block' }] }],
+      }),
+    });
+    expect(seen.system).toBe(led('BLOCK INSTRUCTION'));
+    expect(seen.messages).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'existing block' }] },
+    ]);
+  });
+
+  // Several text blocks join in the order the sender wrote them, with a
+  // blank line between each; a block that carries no string `text`, or an
+  // empty one, contributes nothing (it is skipped, not joined as an empty
+  // part), and the blocks' own extra keys (`cache_control`) do not survive
+  // the flattening — `instructions` is one string.
+  it('joins a multi-block system with blank lines, in order, skipping blocks with no text', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-multiblock-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        system: [
+          { type: 'text', text: 'FIRST' },
+          { type: 'text' },
+          { type: 'text', text: '' },
+          { type: 'text', text: 'SECOND', cache_control: { type: 'ephemeral' } },
+        ],
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    expect(seen.system).toBe(led('FIRST\n\nSECOND'));
+    expect(seen.messages).toEqual([{ role: 'user', content: 'hi' }]);
+  });
+
+  // The call-site pin. `_rewrite_messages_body` calls
+  // `_system_as_instructions` behind `if "system" in data:`; with that call
+  // gone, a block-list `system` would reach LiteLLM as the block list the
+  // client sent — no lead line, and not the plain string this design
+  // relies on the adapter mapping to `instructions`. Measured RED with that
+  // call line deleted when this case was written.
+  it('the call site runs: a block-list system reaches upstream as one string that starts with the lead line', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-callsite-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        system: [{ type: 'text', text: 'You are a code reviewer.' }],
+        messages: [{ role: 'user', content: 'review this' }],
+      }),
+    });
+    expect(r.status).toBe(200);
+    expect(typeof seen.system).toBe('string');
+    expect(seen.system.startsWith(SYSTEM_LEAD)).toBe(true);
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: chunked request bodies', () => {
+  // Task 5: `_relay` used to read Content-Length only. A request arriving
+  // with `Transfer-Encoding: chunked` (no Content-Length at all) forwarded
+  // with NO body — measured: the upstream received 0 bytes. Node's `fetch`
+  // sends a `ReadableStream` body chunked, which is how this case produces
+  // the shape without hand-framing; `duplex: 'half'` is what Node requires
+  // for a stream body.
+  it('decodes a chunked body, rewrites it, and forwards a correct length', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-chunked-');
+    let seen: Buffer | null = null; let seenTE = ''; let seenCL = '';
+    await startPair(home, (req, body, res) => {
+      seen = body;
+      seenTE = String(req.headers['transfer-encoding'] ?? '');
+      seenCL = String(req.headers['content-length'] ?? '');
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payload = JSON.stringify({ model: 'gpt-x', system: 'TOP', messages: [{ role: 'system', content: 'MID' }] });
+    const stream = new ReadableStream({
+      start(c) { c.enqueue(new TextEncoder().encode(payload.slice(0, 20)));
+                 c.enqueue(new TextEncoder().encode(payload.slice(20))); c.close(); },
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: stream, duplex: 'half',
+    } as any);
+    expect(r.status).toBe(200);
+    expect(seen!.length).toBeGreaterThan(0);                    // the hole: this was 0
+    const got = JSON.parse(seen!.toString('utf8'));
+    expect(got.system).toBe(led('TOP'));                        // it was rewritten, not just relayed
+    expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
+    // M1 (task-7b-rulings.md (commit 8bd10c1c) §4): `expect(seenCL).toBe(String(seen!.length))`
+    // cannot fail — Node's HTTP server reads EXACTLY `Content-Length` body
+    // bytes, so `seen.length` and the received `Content-Length` are equal
+    // by construction whenever this line is even reached; the review
+    // measured both directions (inflating the header times the case out,
+    // deflating it reds on `seen` being `null`) and neither makes THIS
+    // assertion itself fire. Replaced with the rewritten payload's byte
+    // length computed INDEPENDENTLY here — not derived from `seen` — so a
+    // wrong `Content-Length` (one that doesn't match what `_rewrite_
+    // messages_body` actually produces for this exact input) has something
+    // to red against.
+    //
+    // Recomputed for spec §22, from a hand-built dict through `json.dumps`
+    // with its defaults (not through the shim) and checked against a
+    // by-hand count of the same string: the mid-turn entry becomes
+    // `{"role": "user", "content": "MID"}` IN PLACE, with nothing merged
+    // into it; `system` is popped and re-added, so it is now the LAST key;
+    // its value is `SYSTEM_LEAD`, a blank line, then `TOP`. 275 bytes —
+    // `json.dumps`'s default `', '`/`': '` separators (not JSON.stringify's
+    // compact ones), `ensure_ascii=False` (the lead's apostrophe is not
+    // escaped either way), and the blank line appearing as the
+    // two-character escape `\n` twice, not a literal newline byte. Written
+    // out in full rather than built from `SYSTEM_LEAD`, so it stays an
+    // independent spelling of the forwarded body.
+    const expectedRewritten = '{"model": "gpt-x", "messages": [{"role": "user", "content": "MID"}], "system": "You are running inside Claude Code, not the Codex CLI. What follows is Claude Code\'s system prompt for this session: wherever it differs from the Codex CLI instructions above, follow it.\\n\\nTOP"}';
+    expect(Buffer.byteLength(expectedRewritten, 'utf8')).toBe(275);
+    expect(seenCL).toBe(String(Buffer.byteLength(expectedRewritten, 'utf8')));
+    expect(seen!.toString('utf8')).toBe(expectedRewritten);     // the whole body, key order included
+    expect(seenTE).toBe('');                                    // re-framed, not re-chunked
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: malformed chunked framing is refused explicitly (Task 7a §4)', () => {
+  // Task 7a: `_read_chunked_body` raising `ValueError` used to escape
+  // `_relay` uncaught and drop the connection with no HTTP response — the
+  // shape Task 5's own module note originally argued was correct for this
+  // different failure surface. That design is superseded here: every one
+  // of these four framings — the three `raise ValueError` sites the
+  // paired Tasks 5+6 review measured as pinned by nothing, plus the
+  // short-chunk guard — now earns an explicit 400, and the invariant
+  // (upstream is never reached) is asserted in every case, not only the
+  // status code.
+  //
+  // `fetch` cannot produce any of these — it only ever sends well-formed
+  // chunked bodies — so each is hand-framed over a raw `node:net` socket
+  // (`rawChunkedPost` above).
+
+  it('refuses a chunk-size line that is not valid hex', async () => {
+    const home = mkTmp('ccgpt-proxy-chunk-badhex-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200); res.end('{}');
+    });
+    const { status, body } = await rawChunkedPost(PROXY_PORT, '/v1/models', Buffer.from('zz\r\nhello\r\n0\r\n\r\n', 'latin1'));
+    expect(status).toBe(400);
+    expect(JSON.parse(body).error).toMatch(/hex/i);
+    expect(reached).toBe(false);                                 // the invariant, not just the status
+  });
+
+  it('refuses a negative declared chunk size', async () => {
+    const home = mkTmp('ccgpt-proxy-chunk-negsize-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200); res.end('{}');
+    });
+    const { status, body } = await rawChunkedPost(PROXY_PORT, '/v1/models', Buffer.from('-1\r\nhello\r\n0\r\n\r\n', 'latin1'));
+    expect(status).toBe(400);
+    expect(JSON.parse(body).error).toMatch(/negative/i);
+    expect(reached).toBe(false);
+  });
+
+  it('refuses a chunk missing its terminating CRLF', async () => {
+    const home = mkTmp('ccgpt-proxy-chunk-nocrlf-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200); res.end('{}');
+    });
+    // "5\r\n" declares 5 bytes; "hello" supplies exactly 5; "XX" stands
+    // where the mandatory CRLF must be.
+    const { status, body } = await rawChunkedPost(PROXY_PORT, '/v1/models', Buffer.from('5\r\nhelloXX0\r\n\r\n', 'latin1'));
+    expect(status).toBe(400);
+    expect(JSON.parse(body).error).toMatch(/crlf/i);
+    expect(reached).toBe(false);
+  });
+
+  it('refuses a chunk declared longer than what was actually sent', async () => {
+    const home = mkTmp('ccgpt-proxy-chunk-short-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200); res.end('{}');
+    });
+    // "a" (hex) declares 10 bytes; only 3 ("abc") are ever sent, and
+    // `rawChunkedPost` half-closes right after — the EOF is what turns
+    // `rfile.read(10)` into an immediate short read instead of an
+    // indefinite hang waiting for the other 7 bytes.
+    const { status, body } = await rawChunkedPost(PROXY_PORT, '/v1/models', Buffer.from('a\r\nabc', 'latin1'));
+    expect(status).toBe(400);
+    expect(JSON.parse(body).error).toMatch(/truncated/i);
+    expect(reached).toBe(false);
+  });
+
+  // task-7a Fix round 1, M-1: `_read_request_body` raises `ValueError` from a
+  // SECOND site too, on the non-chunked path — `int(Content-Length)`. The
+  // fix wraps it with a `ccgpt-proxy:`-prefixed message (it was the only
+  // refusal in the file that didn't name the shim) and corrects the
+  // docstring's "from `_read_chunked_body`" claim, which named only the
+  // first of its two raisers.
+  it('refuses a non-numeric Content-Length with a named, ccgpt-proxy-prefixed message', async () => {
+    const home = mkTmp('ccgpt-proxy-badcl-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200); res.end('{}');
+    });
+    const { status, body } = await rawRequest(PROXY_PORT, 'POST', '/v1/models', [
+      'Content-Type: application/json',
+      'Content-Length: abc',
+    ], Buffer.alloc(0));
+    expect(status).toBe(400);
+    const parsed = JSON.parse(body);
+    expect(parsed.error).toMatch(/^ccgpt-proxy:/);
+    expect(parsed.error).toMatch(/content-length/i);
+    expect(reached).toBe(false);
+  });
+
+  // task-7a Fix round 1, M-3: `_refuse` used to write the JSON body unconditionally,
+  // unlike `send_error` (which suppresses the body — but not the headers
+  // describing it — for a HEAD request, per RFC 7231 §4.3.2). `do_HEAD =
+  // _relay`, so a HEAD request can reach a refusal (malformed chunked
+  // framing is the easiest to reproduce over a raw socket). Harmless in
+  // practice (`Connection: close`), but a protocol wart worth pinning.
+  it('suppresses the refusal body on a HEAD request but still sends a matching Content-Length', async () => {
+    const home = mkTmp('ccgpt-proxy-head-refuse-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200); res.end('{}');
+    });
+    const { status, headers, body } = await rawRequest(PROXY_PORT, 'HEAD', '/v1/models', [
+      'Content-Type: application/json',
+      'Transfer-Encoding: chunked',
+    ], Buffer.from('zz\r\nhello\r\n0\r\n\r\n', 'latin1'));
+    expect(status).toBe(400);
+    const cl = headers.find((h) => /^content-length:/i.test(h));
+    expect(cl).toBeDefined();
+    expect(Number(cl!.split(':')[1].trim())).toBeGreaterThan(0);   // headers still describe the real body
+    expect(body).toBe('');                                          // but HEAD gets no body bytes
+    expect(reached).toBe(false);
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: gzip/deflate request bodies', () => {
+  // Task 6: on a gzip body, the OLD code's `json.loads` raised
+  // `UnicodeDecodeError` (a `ValueError` subclass), and the
+  // `except ValueError: return body` arm forwarded the body UNREWRITTEN —
+  // the compressed bytes still contain `"system"`. Unlike the chunked
+  // defect (Task 5, which lost the body entirely), this is the ORIGINAL
+  // sticky-replay hazard reaching the Codex backend, still correctly
+  // labelled `Content-Encoding: gzip` so upstream's own decode finds
+  // `system` right there. `deflate` shares the identical shape through the
+  // same except arm. (Since spec §22 a top-level `system` is forwarded on
+  // purpose, as a plain string behind `SYSTEM_LEAD`; what an unrewritten
+  // body still carries is an unconverted mid-turn entry and a system prompt
+  // with no lead line, which is what these cases' assertions tell apart.)
+  const ENCODINGS: [string, (b: Buffer) => Buffer, (b: Buffer) => Buffer][] = [
+    ['gzip', gzipSync, gunzipSync],
+    ['deflate', deflateSync, inflateSync],
+  ];
+
+  it.each(ENCODINGS)('decodes a %s body, rewrites it, and re-encodes it', async (enc, pack, unpack) => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp(`ccgpt-proxy-${enc}-`);
+    let seen: Buffer | null = null; let seenEnc = '';
+    await startPair(home, (req, body, res) => {
+      seen = body; seenEnc = String(req.headers['content-encoding'] ?? '');
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const body = pack(Buffer.from(JSON.stringify({
+      model: 'gpt-x', system: 'TOP', messages: [{ role: 'system', content: 'MID' }],
+    })));
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': enc },
+      // `body` is a `Buffer<ArrayBufferLike>` (gzipSync/deflateSync's return
+      // type); `fetch`'s BodyInit only accepts an ArrayBufferView pinned to a
+      // real (non-shared) ArrayBuffer. Copying into a fresh Uint8Array is
+      // honest, not a cast around the mismatch — a Node Buffer is never
+      // actually SharedArrayBuffer-backed, this just gives the type checker
+      // a view that says so.
+      body: new Uint8Array(body),
+    });
+    expect(r.status).toBe(200);
+    expect(seenEnc).toBe(enc);                                  // re-encoded, not silently decompressed
+    const got = JSON.parse(unpack(seen!).toString('utf8'));
+    expect(got.system).toBe(led('TOP'));                        // rewritten: the lead line proves the shim saw it
+    expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
+  });
+
+  // `_is_chunked` (Task 5) deliberately checks the LAST comma-separated
+  // token of `Transfer-Encoding` per RFC 7230 §3.3.1, so `Transfer-Encoding:
+  // chunked` and `Content-Encoding: gzip` can arrive on the SAME request —
+  // transport framing (chunked) is the OUTER layer, content encoding (gzip)
+  // the INNER one. `_read_request_body` peels the chunked framing off
+  // first, handing `_relay` the complete, still gzip-compressed bytes;
+  // only then does the `/messages` branch's gzip decode run. Reversed, the
+  // chunk reader would be handed compressed bytes it cannot parse as chunk
+  // framing, or the gzip decoder would be handed a body that still has
+  // chunk framing embedded in it — either way garbage. This proves the two
+  // decodes compose correctly end to end, not just that each works alone.
+  it('decodes a gzip body sent with Transfer-Encoding: chunked, in the right order', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-gzip-chunked-');
+    let seen: Buffer | null = null; let seenEnc = ''; let seenTE = '';
+    await startPair(home, (req, body, res) => {
+      seen = body;
+      seenEnc = String(req.headers['content-encoding'] ?? '');
+      seenTE = String(req.headers['transfer-encoding'] ?? '');
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const gz = gzipSync(Buffer.from(JSON.stringify({
+      model: 'gpt-x', system: 'TOP', messages: [{ role: 'system', content: 'MID' }],
+    })));
+    const mid = Math.floor(gz.length / 2);
+    const stream = new ReadableStream({
+      start(c) { c.enqueue(gz.subarray(0, mid)); c.enqueue(gz.subarray(mid)); c.close(); },
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' },
+      body: stream, duplex: 'half',
+    } as any);
+    expect(r.status).toBe(200);
+    expect(seenEnc).toBe('gzip');
+    expect(seenTE).toBe('');                                    // re-framed, not re-chunked
+    const got = JSON.parse(gunzipSync(seen!).toString('utf8'));
+    expect(got.system).toBe(led('TOP'));
+    expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
+  });
+
+  // A body that CLAIMS `Content-Encoding: gzip` but is not actually gzip at
+  // all (bad header) must not repeat either of this shim's two other
+  // "could not use the body" shapes: forwarding it silently still-labelled
+  // gzip (a fourth D-3151-style arm, and the exact hazard this task
+  // closes — the client's mid-conversation `role: "system"` entries would
+  // still be sitting inside those bytes, unconverted), or dropping the
+  // connection the way a malformed chunked frame does (Task 5's known,
+  // carried gap). It gets an explicit refusal
+  // instead, and the upstream must never see the request at all.
+  //
+  // D-3153 (task-7a-rulings.md §7): this case used to assert only
+  // `400 <= status < 500` with no body check, which is exactly why Task 6's
+  // `send_error`-shaped divergence (an HTML body, the exception text in the
+  // status-line reason phrase) was invisible. Replaced with the exact code
+  // and a body assertion — the "other change" the rulings asked to be
+  // reported: yes, both existing cases needed exactly this, nothing else;
+  // both were still measured 29/29 and their own mutations re-measured
+  // (see the report).
+  it('answers an explicit 400, never reaching upstream, when the gzip body has a bad header', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-gzip-badheader-');
+    let upstreamHit = false;
+    await startPair(home, (_req, _body, res) => {
+      upstreamHit = true;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' },
+      body: Buffer.from('this is not gzip at all'),
+    });
+    expect(r.status).toBe(400);
+    expect(r.headers.get('content-type')).toBe('application/json');
+    expect((await r.json()).error).toMatch(/gzip/i);
+    expect(upstreamHit).toBe(false);                             // refused here, never reached upstream
+  });
+
+  // The bad-header case above exercises `gzip.BadGzipFile` (an `OSError`
+  // subclass). A body with a VALID gzip header that is simply cut short —
+  // compressed data ending before the stream's own end-of-stream marker —
+  // raises `EOFError` instead, which is NOT an `OSError` subclass. Measured
+  // directly against Python's own `gzip` module while implementing this
+  // task: an `except OSError` alone does not catch it, and an uncaught
+  // `EOFError` would propagate out of `_relay` and drop the connection —
+  // reproducing, for this one case, the exact shape the task said not to
+  // replicate. A dedicated case because the bad-header case above cannot
+  // exercise this branch at all.
+  it('answers an explicit 400, never reaching upstream, when the gzip body is truncated (EOFError, not OSError)', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-gzip-truncated-');
+    let upstreamHit = false;
+    await startPair(home, (_req, _body, res) => {
+      upstreamHit = true;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const full = gzipSync(Buffer.from(JSON.stringify({
+      model: 'gpt-x', system: 'TOP', messages: [{ role: 'user', content: 'hi' }],
+    })));
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' },
+      body: full.subarray(0, Math.floor(full.length / 2)),      // valid header, cut mid-stream
+    });
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toMatch(/gzip/i);
+    expect(upstreamHit).toBe(false);
+  });
+
+  // C1 (tasks-5-6-review.md (commit ef4c4e6b)): the two cases above exercise
+  // `gzip.BadGzipFile` (bad header) and `EOFError` (cut short) — both
+  // `OSError`/`EOFError`. A THIRD shape neither reaches: a VALID gzip
+  // header wrapping a CORRUPTED deflate payload, with the trailing
+  // CRC32/ISIZE footer left intact. That raises `zlib.error` — an
+  // `Exception` subclass, neither `OSError` nor `EOFError` — which used to
+  // escape `_decode_body` uncaught, propagate out of `_relay`, and drop the
+  // connection with no HTTP response (measured twice at the wire by the
+  // review: `UND_ERR_SOCKET | other side closed`, `upstreamHit=false`).
+  // Constructed the same way the review measured it: flip every payload
+  // byte between the fixed 10-byte gzip header and the fixed 8-byte
+  // CRC32+ISIZE trailer, leaving both intact — verified directly against
+  // this box's own `gzip.decompress` while writing this case: the flipped
+  // bytes raise `zlib.error` ("invalid distance too far back"), never a
+  // successful-but-CRC-mismatched decode (which would be `BadGzipFile`,
+  // not this branch).
+  it('answers an explicit 400, never reaching upstream, when the gzip payload is corrupt but the header and CRC/ISIZE footer are intact (C1)', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-gzip-corruptpayload-');
+    let upstreamHit = false;
+    await startPair(home, (_req, _body, res) => {
+      upstreamHit = true;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const good = gzipSync(Buffer.from(JSON.stringify({
+      model: 'gpt-x', system: 'TOP', messages: [{ role: 'user', content: 'hi' }],
+    })));
+    const bad = Buffer.from(good);
+    for (let i = 10; i < bad.length - 8; i++) bad[i] = bad[i] ^ 0xff;   // header (10B) and footer (8B) untouched
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' },
+      body: bad,
+    });
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toMatch(/gzip/i);
+    expect(upstreamHit).toBe(false);
+  });
+
+  // task-7a Fix round 1, I-2: arm 1 (`_rewrite_messages_body`'s malformed-JSON
+  // refusal) was previously pinned by ONLY the deep-nesting `RecursionError`
+  // case — its rarest of three triggers. An ordinary truncated/malformed
+  // JSON body had no case at all: mutating `except (TypeError, ValueError,
+  // RecursionError)` down to `except RecursionError` left the suite fully
+  // green (42/42), and under that mutation an ordinary malformed body drops
+  // the connection with no HTTP response — precisely the failure shape this
+  // whole wave exists to close.
+  //
+  // Sent gzip-WRAPPED deliberately (not plain), because this closes a
+  // second, separately-unpinned gap in the same act: task-7a-rulings.md §2's
+  // second rider (durable version: spec §6.3's gzip transport hole) said
+  // an arm-1 hit on the gzip path used to decompress,
+  // fail to parse, and RE-COMPRESS before forwarding, and that this path
+  // must disappear. It does (probed, never pinned before this case): the
+  // shim raises `_UnusableBody` before any re-encode is attempted, so the
+  // gzip round trip never happens for an unparseable body.
+  it('refuses a gzip-wrapped truncated JSON body via arm 1, never reaching upstream', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-gzip-truncatedjson-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const truncated = gzipSync(Buffer.from('{"model":"gpt-x","messages":[{'));
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' },
+      body: truncated,
+    });
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toMatch(/malformed json/i);
+    expect(reached).toBe(false);
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: an unimplemented content-encoding earns a 415 (Task 7a §3)', () => {
+  // The brief's own case (task-7-brief.md, embedded verbatim in the plan's
+  // "### Task 7" section, `docs/superpowers/plans/
+  // 2026-09-21-gpt-lane-ownership-2a-request-path.md`), verbatim status
+  // and assertion shape. `br` used to fall into D-3151 arm 1 (`json.loads` on the raw
+  // compressed bytes fails, and the old arm forwarded them unrewritten,
+  // still labelled `Content-Encoding: br` — the exact sticky-replay
+  // hazard this whole wave exists to close). Now refused by name before
+  // any attempt to parse it as JSON.
+  it('refuses an undecodable encoding instead of forwarding it unexamined', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-badenc-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true; res.writeHead(200); res.end('{}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'br' },
+      body: Buffer.from([0x1b, 0x00, 0x00, 0x00]),
+    });
+    expect(r.status).toBe(415);
+    expect((await r.json()).error).toMatch(/content-encoding/i);
+    expect(reached).toBe(false);                                // upstream never saw it
+  });
+
+  // task-7a-rulings.md §3 and §6 of the paired review (durable version:
+  // spec §6.3): `_content_encoding`
+  // does not split on commas, so a list-form or trailing-comma
+  // `Content-Encoding` never equals the bare token `"gzip"` and never hit
+  // the decode branch — it fell into D-3151 arm 1 instead (measured by the
+  // review: `upstreamHit=true`, still gzip-compressed, `system` intact).
+  // Both forms now earn the same explicit 415 as `br`.
+  it.each(['gzip, br', 'gzip,'])('refuses the list/trailing-comma content-encoding %s instead of forwarding it unexamined', async (enc) => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-badenc-list-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true; res.writeHead(200); res.end('{}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': enc },
+      body: gzipSync(Buffer.from(JSON.stringify({ model: 'gpt-x', messages: [{ role: 'system', content: 'MID' }] }))),
+    });
+    expect(r.status).toBe(415);
+    expect((await r.json()).error).toMatch(/content-encoding/i);
+    expect(reached).toBe(false);
+  });
+
+  // §3's other half: two values must keep working, and both are easy to
+  // break. Absent `Content-Encoding` is already covered by every
+  // unencoded-body case above; `identity` — which explicitly means "no
+  // encoding" — has no dedicated case anywhere else, so refusing it would
+  // be a regression nothing else here would catch.
+  it('folds and forwards normally when Content-Encoding is explicitly identity', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-identity-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'identity' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'system', content: 'MID' }] }),
+    });
+    expect(r.status).toBe(200);
+    expect(seen.messages[0].role).toBe('user');                  // folded, not refused
+  });
+
+  // The three cases above all use a body that is not valid JSON on its
+  // face (real `br`/gzip-list-form bytes), so a mutation collapsing the
+  // 415 guard to a passthrough would still be caught by the ALSO-CLOSED
+  // D-3151 arm 1 (json.loads fails regardless) — redding the case, but not
+  // through the invariant the mutation table names ("`reached` becomes
+  // `true`"). This case isolates the 415 guard from arm 1: the body IS
+  // valid JSON, so nothing else in the file would refuse it — only the
+  // encoding check stands between it and upstream, and this is what
+  // actually reaches upstream if that check is ever removed.
+  it('refuses an unimplemented content-encoding even when the body is otherwise valid JSON', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-badenc-validjson-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true; res.writeHead(200); res.end('{}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'br' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'system', content: 'MID' }] }),
+    });
+    expect(r.status).toBe(415);
+    expect((await r.json()).error).toMatch(/content-encoding/i);
+    expect(reached).toBe(false);
+  });
+
+  // task-7a Fix round 1, M-4: nothing pinned the 415 guard to the `/messages`
+  // path — measured correct today (probed at the wire by the review), but
+  // hoisting the encoding check above the path-suffix check in `_relay`
+  // left the whole suite green. Every other path is forwarded byte-for-byte
+  // regardless of `Content-Encoding` (module docstring); this binds it for
+  // an encoding this shim does not implement specifically, the case most
+  // likely to tempt a future edit into checking it too early.
+  it('does not apply the 415 guard outside the /messages path (task-7a M-4)', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-415-scoped-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payload = Buffer.from([0x1b, 0x00, 0x00, 0x00]);
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'br' },
+      body: payload,
+    });
+    expect(r.status).toBe(200);                     // forwarded, not refused
+    expect(seen!.equals(payload)).toBe(true);        // byte-identical
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: upstream unreachable answers the same refusal shape (502)', () => {
+  // task-7a Fix round 1, I-1: `_refuse`'s docstring used to claim, UNIVERSALLY,
+  // that reaching this method means upstream was never contacted — false
+  // at the 502 call site, which fires AFTER `urlopen`, i.e. the request
+  // body WAS already offered upstream by the time this refusal is chosen.
+  // Pinned here, both halves the review asked for: the 502 JSON shape
+  // itself (the one wire shape this task changed with zero coverage before
+  // this round — a silent revert to `send_error`'s HTML shape would have
+  // gone unnoticed), and that `reached` is `true`, the documented exception
+  // to the body-refusal invariant, not a violation of it.
+  it('answers the 502 upstream-unreachable refusal in the same JSON shape as every other refusal', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-upstream-down-');
+    let reached = false;
+    await startPair(home, (req, _body, _res) => {
+      reached = true;
+      req.socket.destroy();                          // upstream saw the request, then vanished
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    expect(r.status).toBe(502);
+    expect(r.headers.get('content-type')).toBe('application/json');
+    expect((await r.json()).error).toMatch(/upstream unreachable/i);
+    expect(reached).toBe(true);                       // the documented exception: upstream WAS reached
+  });
+});
+
+// D-4933. A release restarts a lane's gateway, which takes about 46 s to stop
+// and listen again; in that window the shim used to answer every request with
+// an immediate 502 on its refused connection, and Claude Code ended the turn on
+// it. The shim now waits out a REFUSED connection (nothing reached upstream, so
+// a request that reached upstream is never sent again) for a bounded time and
+// only while its client is still connected, and keeps today's immediate 502 for
+// everything else.
+describe.skipIf(!PY)('ccgpt-proxy: a refused upstream connection is waited out, for a bounded time (D-4933)', () => {
+  /** One POST through the shim, timed, and capped at `capMs` by an abort. A
+   *  mutation that makes the shim wait far longer than a case expects then
+   *  reds on `status` (null) with the elapsed time beside it, never on vitest's
+   *  own 20 s timeout, which a loaded box also produces on the unmutated case. */
+  async function timedPost(capMs: number) {
+    const t0 = Date.now();
+    try {
+      const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+        signal: AbortSignal.timeout(capMs),
+      });
+      const json: any = await r.json().catch(() => null);
+      return { status: r.status as number | null, contentType: r.headers.get('content-type'), json, ms: Date.now() - t0 };
+    } catch {
+      return { status: null as number | null, contentType: null as string | null, json: null as any, ms: Date.now() - t0 };
+    }
+  }
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  // A port nothing listens on comes from the codex-lane fixture's `freePort`
+  // (D-6856), below the kernel's ephemeral range: a refused-connection case
+  // binds its upstream LATER (`listenUpstream`), and a sibling suite's port-0
+  // bind could otherwise take it in between. Each case takes its OWN, so the
+  // upstream port of another case is never left unbound for one of them to be refused on.
+  /** `startPair` with nothing listening upstream yet, on a port of its own. */
+  async function startRefusedPair(
+    home: string, handler: (req: any, body: Buffer, res: any) => void, env: Record<string, string> = {},
+  ) {
+    const upstreamPort = await freePort();
+    return startPair(home, handler, env, { listenUpstream: false, upstreamPort });
+  }
+
+  /** What an upstream saw of one request. */
+  type Seen = { method: string | undefined; url: string | undefined; contentType: string | undefined; body: string };
+  const seenOf = (req: any, body: Buffer): Seen =>
+    ({ method: req.method, url: req.url, contentType: req.headers['content-type'], body: body.toString('utf8') });
+  /** The requests that are the one `timedPost` sends, and none other. */
+  const isTheRequest = (s: Seen) => s.method === 'POST' && s.url === '/v1/models';
+  const theRequest: Seen = { method: 'POST', url: '/v1/models', contentType: 'application/json', body: '{}' };
+
+  // Python's own text for ECONNREFUSED is `[Errno <n>] Connection refused`, and
+  // n is the platform's: 111 on Linux, 61 on macOS.
+  const ECONNREFUSED = process.platform === 'darwin' ? 61 : 111;
+
+  it('sends the same request again until upstream listens: 200, the body relayed, upstream saw ONE request', async () => {
+    const home = mkTmp('ccgpt-proxy-refused-late-');
+    const seen: Seen[] = [];
+    const { listenUpstream } = await startRefusedPair(home, (req, body, res) => {
+      seen.push(seenOf(req, body));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"relayed":true}');
+    }, { CCGPT_UPSTREAM_WAIT_S: '10' });
+    // The listener comes up 1.5 s after the request leaves; the shim has been
+    // refused at 0 s, 0.5 s and 1 s by then, and its next try lands on it.
+    const [r] = await Promise.all([timedPost(15_000), sleep(1_500).then(listenUpstream)]);
+    expect(r.status).toBe(200);
+    expect(r.json).toEqual({ relayed: true });
+    const matching = seen.filter(isTheRequest);
+    expect(matching).toHaveLength(1);                  // a refused try reached nothing, so the request was sent once
+    expect(matching[0]).toEqual(theRequest);           // and it is the same request: method, path, content-type, body
+  });
+
+  // The production default. Production units do not set CCGPT_UPSTREAM_WAIT_S,
+  // so this is the only case that proves an unset variable means a wait at all:
+  // every other case here sets the variable, and would stay green with a
+  // default of 0.
+  it('waits out a refused connection with CCGPT_UPSTREAM_WAIT_S absent: the production default', async () => {
+    const home = mkTmp('ccgpt-proxy-refused-default-');
+    const seen: Seen[] = [];
+    const { listenUpstream } = await startRefusedPair(home, (req, body, res) => {
+      seen.push(seenOf(req, body));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"relayed":true}');
+    });                                                // no CCGPT_UPSTREAM_WAIT_S: startPair's env is only PYTHONPATH and the three required ports
+    const [r] = await Promise.all([timedPost(15_000), sleep(1_500).then(listenUpstream)]);
+    expect(r.status).toBe(200);
+    expect(seen.filter(isTheRequest)).toHaveLength(1);
+  });
+
+  it('answers the 502 refusal after the whole wait when nothing ever listens, naming the wait', async () => {
+    const home = mkTmp('ccgpt-proxy-refused-forever-');
+    await startRefusedPair(home, (_req, _body, res) => { res.writeHead(200); res.end('{}'); },
+      { CCGPT_UPSTREAM_WAIT_S: '2' });
+    const r = await timedPost(10_000);
+    expect(r.status).toBe(502);
+    expect(r.contentType).toBe('application/json');
+    expect(r.json.error).toMatch(/upstream unreachable/i);
+    expect(r.json.error).toMatch(/connection refused for 2s/);
+    expect(r.ms).toBeGreaterThanOrEqual(2_000);        // refused for the whole wait, measured from the first refusal
+    expect(r.ms).toBeLessThan(8_000);
+  });
+
+  it('CCGPT_UPSTREAM_WAIT_S=0 does not retry: the same immediate 502, with the same message, as before', async () => {
+    const home = mkTmp('ccgpt-proxy-refused-nowait-');
+    await startRefusedPair(home, (_req, _body, res) => { res.writeHead(200); res.end('{}'); },
+      { CCGPT_UPSTREAM_WAIT_S: '0' });
+    const r = await timedPost(10_000);
+    expect(r.status).toBe(502);
+    // The exact text the shim answered before D-4933, and the shape every
+    // reader of its log already knows: no "refused for Ns", no wait named.
+    expect(r.json.error).toBe(`ccgpt-proxy: upstream unreachable: <urlopen error [Errno ${ECONNREFUSED}] Connection refused>`);
+    expect(r.ms).toBeLessThan(1_500);
+  });
+
+  // A client that has gone is not waited for. The shim peeks at its socket
+  // before each re-send; once the client has closed, nothing is sent upstream,
+  // so a client that gave up (and perhaps asked again) does not have its old
+  // request reach a gateway that has come back. The raw client sends the POST
+  // and closes its socket at about 1 s; the listener starts at about 2.5 s and
+  // the shim, retrying every half second under a 10 s bound, would reach it by
+  // 3 s were it still sending. A listener that sees 0 requests, 1.5 s after it
+  // started, proves the shim stopped.
+  it('stops waiting and sends nothing upstream once its client has gone', async () => {
+    const home = mkTmp('ccgpt-proxy-client-gone-');
+    const seen: Seen[] = [];
+    const { child, listenUpstream } = await startRefusedPair(home, (req, body, res) => {
+      seen.push(seenOf(req, body));
+      res.writeHead(200); res.end('{}');
+    }, { CCGPT_UPSTREAM_WAIT_S: '10' });
+    let stderr = '';
+    child.stderr?.on('data', (c) => { stderr += c.toString(); });
+
+    const sock = netConnect(PROXY_PORT, '127.0.0.1', () => {
+      sock.write(
+        'POST /v1/models HTTP/1.1\r\n' +
+        `Host: 127.0.0.1:${PROXY_PORT}\r\n` +
+        'Content-Type: application/json\r\n' +
+        'Content-Length: 2\r\n' +
+        '\r\n' +
+        '{}',
+        'latin1',
+      );
+    });
+    sock.on('error', () => { /* the client is going away on purpose */ });
+    await sleep(1_000);
+    sock.destroy();                                    // the client has gone, at ~1 s
+    await sleep(1_500);
+    await listenUpstream();                            // upstream is back, at ~2.5 s
+    await sleep(1_500);                                // three tries' worth, had the shim kept sending
+
+    expect(seen).toHaveLength(0);                      // and not one request reached it
+    // The shim is still serving, and did not log a failure of its own: it
+    // answered the 502 into a socket that is closed, and that write is guarded
+    // (BrokenPipeError, ConnectionResetError, any OSError), so no traceback.
+    const lane = await fetch(`http://127.0.0.1:${PROXY_PORT}/ccgpt/lane`);
+    expect(lane.status).toBe(200);
+    expect(stderr).not.toMatch(/Traceback/);
+  });
+
+  // A client that HALF-closed (sent its request, shut its writing side, and
+  // still reads) shows the shim the same FIN as one that has gone, which a peek
+  // cannot tell apart. So the shim answers the old immediate 502 either way: a
+  // fully gone client discards it, this one reads it. Nothing is ever sent
+  // upstream. The 502 arrives at ~0.5 s (the first sleep, then the check); the
+  // listener starts at ~2 s and the shim, were it still sending, would reach it
+  // within half a second; 1.5 s later upstream must have seen 0 requests.
+  it('answers a client that half-closed with the 502, and sends nothing upstream', async () => {
+    const home = mkTmp('ccgpt-proxy-half-closed-');
+    const seen: Seen[] = [];
+    const { child, listenUpstream } = await startRefusedPair(home, (req, body, res) => {
+      seen.push(seenOf(req, body));
+      res.writeHead(200); res.end('{}');
+    }, { CCGPT_UPSTREAM_WAIT_S: '10' });
+    let stderr = '';
+    child.stderr?.on('data', (c) => { stderr += c.toString(); });
+
+    const chunks: Buffer[] = [];
+    const sock = netConnect(PROXY_PORT, '127.0.0.1', () => {
+      // `end(data)` writes the request and then shuts the writing side only
+      // (shutdown(SHUT_WR)); the socket stays readable.
+      sock.end(
+        'POST /v1/models HTTP/1.1\r\n' +
+        `Host: 127.0.0.1:${PROXY_PORT}\r\n` +
+        'Content-Type: application/json\r\n' +
+        'Content-Length: 2\r\n' +
+        '\r\n' +
+        '{}',
+        'latin1',
+      );
+    });
+    sock.on('data', (c) => { chunks.push(Buffer.from(c)); });
+    sock.on('error', () => { /* a reset here would fail the assertions below */ });
+    const closed = new Promise<void>((r) => { sock.on('close', () => r()); });
+    await Promise.race([closed, sleep(8_000)]);        // the shim closes after answering
+    sock.destroy();
+
+    const reply = Buffer.concat(chunks).toString('utf8');
+    expect(reply).toMatch(/^HTTP\/1\.[01] 502 /);
+    expect(JSON.parse(reply.slice(reply.indexOf('\r\n\r\n') + 4))).toEqual({
+      error: `ccgpt-proxy: upstream unreachable: <urlopen error [Errno ${ECONNREFUSED}] Connection refused>`,
+    });                                                // today's message, the one a refusal got before D-4933
+
+    await sleep(1_500);
+    await listenUpstream();                            // upstream is back, at ~2 s
+    await sleep(1_500);                                // three tries' worth, had the shim kept sending
+    expect(seen).toHaveLength(0);
+    const lane = await fetch(`http://127.0.0.1:${PROXY_PORT}/ccgpt/lane`);
+    expect(lane.status).toBe(200);
+    expect(stderr).not.toMatch(/Traceback/);
+  });
+
+  // The other half of "only a refusal": a connection that was ACCEPTED and then
+  // closed may have reached upstream, so a retry could send one request twice.
+  // Under the DEFAULT bound (60 s) this must still be the immediate 502, and
+  // upstream is reached exactly once.
+  it('does not retry a connection upstream accepted and then dropped: an immediate 502, upstream reached once', async () => {
+    const home = mkTmp('ccgpt-proxy-vanish-once-');
+    let hits = 0;
+    await startPair(home, (req, _body, _res) => {
+      hits += 1;
+      req.socket.destroy();                            // upstream saw the request, then vanished
+    });
+    const r = await timedPost(10_000);
+    expect(r.status).toBe(502);
+    expect(r.json.error).toMatch(/upstream unreachable/i);
+    expect(r.ms).toBeLessThan(1_500);
+    expect(hits).toBe(1);
+  });
+
+  // The bound is read once, at start-up, and a bad value refuses to start in the
+  // same named shape every other variable's refusal has. Anything but a string
+  // of ASCII digits is refused, and so is a value over 600; '٣' is ARABIC-INDIC
+  // DIGIT THREE, which `isdigit()` and `int()` both accept, and a string of
+  // 5000 digits is one `int()` itself refuses to parse.
+  const waitEnv = (value: string): Record<string, string> => ({
+    PYTHONPATH: PYSTUB_DIR,
+    CCGPT_ACCOUNT_ID: 'codex-a-waitenv',
+    CCGPT_PROXY_PORT: String(PROXY_PORT),
+    CCGPT_LITELLM_PORT: String(UNDIALLED_LITELLM_PORT),
+    CCGPT_UPSTREAM_WAIT_S: value,
+  });
+  it.each([
+    ['abc', 'abc'], ['-1', '-1'], ['601', '601'],
+    ['an Arabic-indic digit', '٣'],
+    ['a string of 5000 digits', '9'.repeat(5000)],
+  ])('refuses to start with a named message when CCGPT_UPSTREAM_WAIT_S is %s', async (_label, raw) => {
+    const home = mkTmp('ccgpt-proxy-badwait-');
+    const { child } = spawnPy(ccgptFile('ccgpt-proxy.py'), { home, env: waitEnv(raw) });
+    proc = child;
+    let stderr = '';
+    child.stderr?.on('data', (c) => { stderr += c.toString(); });
+
+    const outcome = await raceExitOrDeadline(child);
+    if (outcome.kind === 'exited') proc = null; // else: still alive — afterEach kills+awaits it.
+    expect(outcome.kind).toBe('exited');
+    expect(outcome.kind === 'exited' ? outcome.code : null).not.toBe(0);
+    expect(stderr).toContain('ccgpt-proxy: refusing to start — CCGPT_UPSTREAM_WAIT_S is not a whole number of seconds from 0 to 600');
+    expect(stderr).toContain(`: '${raw}'`);
+    expect(stderr).not.toMatch(/Traceback/);
+  });
+
+  // 600 is the ceiling, and `0600` is 600: leading zeros are digits.
+  it.each(['600', '0600'])('starts with CCGPT_UPSTREAM_WAIT_S at its upper bound, %s', async (raw) => {
+    const home = mkTmp('ccgpt-proxy-maxwait-');
+    await startPair(home, (_req, _body, res) => { res.writeHead(200); res.end('{}'); },
+      { CCGPT_UPSTREAM_WAIT_S: raw });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/ccgpt/lane`);
+    expect(r.status).toBe(200);                        // startPair already required it to answer as its own lane
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned by nothing (Task 7b)', () => {
+  // task-7b-rulings.md (commit 458ae3a7) §1/I4: `headers.get(name)` on an
+  // `http.client.HTTPMessage` returns only the FIRST occurrence of a
+  // header name; RFC 7230 §3.2.2 permits a comma-list header to be sent as
+  // repeated lines instead of one line, and `fetch` never emits that shape
+  // — every case in this block is a raw socket for exactly that reason.
+  it('recognizes chunked framing when Transfer-Encoding is split across two header lines (I4)', async () => {
+    const home = mkTmp('ccgpt-proxy-te-split-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payload = Buffer.from(JSON.stringify({
+      model: 'gpt-x', system: 'TOP', messages: [{ role: 'system', content: 'MID' }],
+    }));
+    const { status } = await rawRequest(PROXY_PORT, 'POST', '/v1/messages', [
+      'Content-Type: application/json',
+      'Transfer-Encoding: gzip',      // first line: NOT "chunked" alone
+      'Transfer-Encoding: chunked',   // second line: the flag a get()-only read would miss entirely
+    ], chunkEncode(payload));
+    expect(status).toBe(200);
+    // The invariant, not just the status (task-7b-rulings.md §1's own
+    // instruction): a get()-only read sees 'gzip' alone, _is_chunked
+    // answers False, _read_request_body falls to Content-Length (absent on
+    // a chunked request -> 0), and this reaches upstream with an EMPTY
+    // body — the Task 5 symptom verbatim, still 200 because an empty POST
+    // isn't itself an error.
+    expect(seen).not.toBeNull();
+    const got = JSON.parse(seen!.toString('utf8'));
+    expect(got.system).toBe(led('TOP'));
+    expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
+  });
+
+  // Same defect class, `_content_encoding`'s own single-line read
+  // (task-7b-rulings.md (commit 458ae3a7) §1/I4, "same fix"). A split Content-Encoding
+  // cannot join back into a bare recognised codec token (joining always
+  // inserts a comma), so the OBSERVABLE difference this fix makes is: a
+  // get()-only read sees only 'identity' (the first line) and forwards the
+  // plain, unencoded body normally (200); the fixed read sees the full
+  // 'identity,gzip' and correctly refuses it as an encoding this shim does
+  // not implement (415) rather than silently keying off whichever line
+  // happened to arrive first.
+  it('reads Content-Encoding split across two header lines instead of only the first (I4)', async () => {
+    const home = mkTmp('ccgpt-proxy-ce-split-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true; res.writeHead(200); res.end('{}');
+    });
+    const payload = Buffer.from(JSON.stringify({ model: 'gpt-x', messages: [{ role: 'system', content: 'MID' }] }));
+    const { status, body } = await rawRequest(PROXY_PORT, 'POST', '/v1/messages', [
+      'Content-Type: application/json',
+      'Content-Encoding: identity',
+      'Content-Encoding: gzip',
+      `Content-Length: ${payload.length}`,
+    ], payload);
+    expect(status).toBe(415);
+    expect(JSON.parse(body).error).toMatch(/content-encoding/i);
+    expect(reached).toBe(false);
+  });
+
+  // M9 (task-7b-rulings.md (commit 458ae3a7) §3): `_content_encoding` lower-cases before
+  // comparing against `_CODECS`'s keys and the `''`/`identity` exemption.
+  // Content-coding values are case-insensitive per RFC 7231's Content-Coding
+  // section; without
+  // `.lower()`, this mixed-case spelling would fail every membership check
+  // and earn a 415 instead of folding normally.
+  it('folds a gzip body whose Content-Encoding is spelled in mixed case (M9)', async () => {
+    const home = mkTmp('ccgpt-proxy-ce-case-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const gz = gzipSync(Buffer.from(JSON.stringify({
+      model: 'gpt-x', system: 'TOP', messages: [{ role: 'system', content: 'MID' }],
+    })));
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'GZIP' },
+      body: gz,
+    });
+    expect(r.status).toBe(200);
+    const got = JSON.parse(gunzipSync(seen!).toString('utf8'));
+    expect(got.system).toBe(led('TOP'));
+  });
+
+  // M6 (task-7b-rulings.md (commit 458ae3a7) §3): `_is_chunked` already reads the LAST
+  // comma-separated token (its own docstring cites RFC 7230 §3.3.1 for
+  // it), but nothing exercises a Transfer-Encoding value where the first
+  // token is something OTHER than "chunked" — every existing case sends
+  // "chunked" alone, where "first token" and "last token" are the same
+  // token and a first-token mutation would not be visible. RFC 7230
+  // §3.3.1's own worked example is exactly this shape: "gzip, chunked"
+  // meaning the entity was gzip-compressed, THEN chunk-framed.
+  // task-7b M-5 (task-7b-fix-rulings.md): this fixture is deliberately NOT a
+  // self-consistent HTTP message — the `Transfer-Encoding: gzip, chunked`
+  // header names a `gzip` TRANSFER-coding layer this shim never applies
+  // (or reverses; it isn't implemented at all), over a body that was
+  // gzip-compressed exactly once, at the CONTENT level, matching the
+  // separate `Content-Encoding: gzip` header instead. Left this way on
+  // purpose rather than "fixed": the property this case exists to pin is
+  // that `_is_chunked` reads the LAST Transfer-Encoding token and ignores
+  // every token ahead of it — it does not, and must not, try to interpret
+  // or apply any of those earlier tokens, `gzip` among them. Building a
+  // truly self-consistent message would require this shim to actually
+  // decode a `gzip` TRANSFER-coding, which does not exist anywhere in this
+  // file and is out of scope; the unapplied token is exactly as
+  // uninterpreted here as it is on the wire.
+  it('recognizes chunked framing as the LAST token when another encoding is named first (M6)', async () => {
+    const home = mkTmp('ccgpt-proxy-te-lasttoken-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const gz = gzipSync(Buffer.from(JSON.stringify({
+      model: 'gpt-x', system: 'TOP', messages: [{ role: 'system', content: 'MID' }],
+    })));
+    const { status } = await rawRequest(PROXY_PORT, 'POST', '/v1/messages', [
+      'Content-Type: application/json',
+      'Content-Encoding: gzip',
+      'Transfer-Encoding: gzip, chunked',   // one line, two tokens — "chunked" is last, not first
+    ], chunkEncode(gz));
+    expect(status).toBe(200);
+    expect(seen).not.toBeNull();
+    const got = JSON.parse(gunzipSync(seen!).toString('utf8'));
+    expect(got.system).toBe(led('TOP'));
+    expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
+  });
+
+  // M15 (task-7b-rulings.md (commit 458ae3a7) §3): the chunk-extension strip
+  // (`size_line.split(b";", 1)[0]`) is correctness-verified already (the
+  // paired review measured it working end to end) but pinned by nothing —
+  // no case sends a chunk-size line carrying one. RFC 7230 §4.1.1 permits
+  // `chunk-ext` after the size and before the CRLF; a real intermediary can
+  // add one, and this shim must ignore it rather than fail to parse the
+  // size.
+  it('strips a chunk-extension from the size line instead of failing to parse it (M15)', async () => {
+    const home = mkTmp('ccgpt-proxy-chunk-ext-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payload = Buffer.from(JSON.stringify({ model: 'gpt-x', messages: [{ role: 'system', content: 'MID' }] }));
+    const { status } = await rawRequest(PROXY_PORT, 'POST', '/v1/messages', [
+      'Content-Type: application/json',
+      'Transfer-Encoding: chunked',
+    ], chunkEncode(payload, 'ext=1'));
+    expect(status).toBe(200);
+    expect(seen).not.toBeNull();
+    const got = JSON.parse(seen!.toString('utf8'));
+    expect(got.messages[0].role).toBe('user');
+  });
+
+  // M11 (task-7b-rulings.md (commit 458ae3a7) §3): the trailer-drain loop is
+  // correctness-verified already (a well-formed trailer costs nothing to
+  // skip draining — nothing else in `_relay` reads `rfile` again, and the
+  // shim always answers `Connection: close`, so leftover unread bytes are
+  // never observed) but pinned by nothing. The one place removing it IS
+  // observable: a connection that closes mid-trailer. With the loop, that
+  // is caught (`rfile.readline()` returns `b''` at EOF) and refused
+  // explicitly, matching every other truncated-framing case in this file;
+  // without it, the terminating zero-size chunk alone is enough to `break`
+  // out and return the chunks already read, successfully, with the
+  // truncated trailer bytes never even inspected.
+  it('refuses a chunked body whose connection closes mid-trailer, never reaching upstream (M11)', async () => {
+    const home = mkTmp('ccgpt-proxy-trailer-trunc-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200); res.end('{}');
+    });
+    // "5\r\nhello\r\n" is one complete 5-byte chunk; "0\r\n" is the
+    // terminating chunk; "trailer-nam" is a trailer header line with
+    // neither its own CRLF nor the final blank line that would close the
+    // body — the socket half-closes right there.
+    const raw = Buffer.from('5\r\nhello\r\n0\r\ntrailer-nam', 'latin1');
+    const { status, body } = await rawRequest(PROXY_PORT, 'POST', '/v1/models', [
+      'Content-Type: application/json',
+      'Transfer-Encoding: chunked',
+    ], raw);
+    expect(status).toBe(400);
+    expect(JSON.parse(body).error).toMatch(/trailer/i);
+    expect(reached).toBe(false);
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: 7b fix round 1 — chunked named but not final earns 400 (I-2)', () => {
+  // task-7b-fix-rulings.md (commit 1ac3ec20) I-2 / task-7b-review.md I-2: RFC 7230 §3.3.3
+  // item 3 — when `chunked` appears in Transfer-Encoding but is not the
+  // FINAL token, the message length cannot be determined by any means this
+  // shim implements, and it MUST be refused. Before this, both spellings
+  // below fell through `_is_chunked` (correctly False — chunked is not
+  // what this shim should decode as chunked framing) straight to
+  // Content-Length, which a Transfer-Encoding-bearing request is
+  // RFC-forbidden from also carrying reliably, and forwarded ZERO bytes —
+  // the exact silent-empty-body symptom this whole wave exists to kill,
+  // reached by a spelling the I4 join fix did not close.
+  it('refuses Transfer-Encoding naming chunked but not final, single line', async () => {
+    const home = mkTmp('ccgpt-proxy-te-notfinal-oneline-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true; res.writeHead(200); res.end('{}');
+    });
+    const { status, body } = await rawRequest(PROXY_PORT, 'POST', '/v1/models', [
+      'Content-Type: application/json',
+      'Transfer-Encoding: chunked, gzip',   // one line, chunked NOT last
+    ], Buffer.alloc(0));
+    expect(status).toBe(400);
+    const parsed = JSON.parse(body);
+    expect(parsed.error).toMatch(/^ccgpt-proxy:/);
+    expect(parsed.error).toMatch(/transfer-encoding/i);
+    expect(parsed.error).toMatch(/chunked/i);
+    expect(reached).toBe(false);
+  });
+
+  // Same shape, but the two tokens arrive as two separate header LINES —
+  // this is the row the I4 join fix newly REACHES (row 3 of the review's
+  // table): joining split lines made this spelling agree with the
+  // single-line one above, which was already answering 200 with an empty
+  // body before this round.
+  it('refuses Transfer-Encoding naming chunked but not final, split across two lines', async () => {
+    const home = mkTmp('ccgpt-proxy-te-notfinal-split-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true; res.writeHead(200); res.end('{}');
+    });
+    const { status, body } = await rawRequest(PROXY_PORT, 'POST', '/v1/models', [
+      'Content-Type: application/json',
+      'Transfer-Encoding: chunked',
+      'Transfer-Encoding: gzip',            // second line — chunked (line 1) is NOT the final token
+    ], Buffer.alloc(0));
+    expect(status).toBe(400);
+    const parsed = JSON.parse(body);
+    expect(parsed.error).toMatch(/^ccgpt-proxy:/);
+    expect(parsed.error).toMatch(/transfer-encoding/i);
+    expect(parsed.error).toMatch(/chunked/i);
+    expect(reached).toBe(false);
+  });
+
+  // The regression control the ruling asks for by name: a Transfer-Encoding
+  // that never mentions "chunked" at all must keep falling through to
+  // Content-Length and forwarding normally — refusing this would be
+  // refusing a request this shim already handles correctly today, the
+  // over-refusal hazard every guard in this file is written against.
+  it('still forwards via Content-Length when Transfer-Encoding never mentions chunked (regression control)', async () => {
+    const home = mkTmp('ccgpt-proxy-te-nochunked-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payload = Buffer.from(JSON.stringify({ model: 'gpt-x', messages: [{ role: 'system', content: 'MID' }] }));
+    const { status } = await rawRequest(PROXY_PORT, 'POST', '/v1/messages', [
+      'Content-Type: application/json',
+      'Transfer-Encoding: gzip',            // names an encoding, but never "chunked"
+      `Content-Length: ${payload.length}`,
+    ], payload);
+    expect(status).toBe(200);
+    expect(seen).not.toBeNull();
+    const got = JSON.parse(seen!.toString('utf8'));
+    expect(got.messages[0].role).toBe('user');   // folded and forwarded, not refused
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: effort precedence and the single-slot cache (Task 8)', () => {
+  // Case 1 (task-8-brief.md; `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` §6.2):
+  // an explicit client `output_config.effort`
+  // wins outright over the lane default, even when a default for this
+  // exact model is on file.
+  it('an explicit output_config.effort wins over the lane default', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-explicit-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    writeEffortFile(home, lane, { 'gpt-x': 'low' });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        output_config: { effort: 'high' },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    expect(seen.reasoning).toEqual({ effort: 'high' });          // explicit, not the file's 'low'
+    expect('output_config' in seen).toBe(false);
+  });
+
+  // D-8631: the level map is the IDENTITY. Claude Code's five levels are all Codex levels, so each one a
+  // client sends comes out as the same `reasoning.effort`, never translated and never the lane default.
+  it('each of low medium high xhigh max comes out as the same reasoning.effort (the identity map, D-8631)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-identity-');
+    const seen: any[] = [];
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen.push(JSON.parse(body.toString('utf8')));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    writeEffortFile(home, lane, { 'gpt-x': 'ultra' });
+    const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+    for (const level of LEVELS) {
+      await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-x', output_config: { effort: level }, messages: [{ role: 'user', content: 'hi' }] }),
+      });
+    }
+    expect(seen.map((b) => b.reasoning)).toEqual(LEVELS.map((effort) => ({ effort })));
+  });
+
+  // Case 2: with no explicit effort, the lane default for THIS request's
+  // own model applies.
+  it('applies the lane default for this model when no explicit effort is sent', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-default-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    writeEffortFile(home, lane, { 'gpt-x': 'low' });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(seen.reasoning).toEqual({ effort: 'low' });
+  });
+
+  // C-1 (task-8 fix round 1, Critical): `output_config.effort: "auto"` must be
+  // treated as ABSENT, not as an explicit choice — `auto` is a first-class
+  // word in ccrc's own routing vocabulary meaning "the lane decides"
+  // (`ccd/ccd`'s `ROUTE_EFFORTS`, its own exclusion from the spawn argv's
+  // `--effort`, `/effort auto`'s documented behaviour), and the
+  // model-class-registry design says so explicitly (§6.4 "when present and
+  // not `auto`"; §12's acceptance criterion "`auto` and absent → the lane
+  // default for that model"). Measured by the review: an unhandled `auto`
+  // is not merely inert — the literal string is written into
+  // `reasoning.effort` and forwarded, and Codex has no `auto` level, so the
+  // live consequence is a provider 400 on every turn. Both halves of §12's
+  // acceptance criterion, pinned as their own cases:
+  it('treats an explicit auto as absent and applies the lane default instead (task-8 C-1)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-auto-default-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    writeEffortFile(home, lane, { 'gpt-x': 'low' });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        output_config: { effort: 'auto' },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    expect(seen.reasoning).toEqual({ effort: 'low' });   // the lane default, never the literal 'auto'
+  });
+
+  it('treats an explicit auto as absent and omits reasoning entirely when there is no lane default (task-8 C-1)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-auto-nodefault-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    // No effort file at all — nothing for 'auto' to fall through TO.
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        output_config: { effort: 'auto' },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    expect('reasoning' in seen).toBe(false);             // never the literal 'auto', never invented
+    expect('output_config' in seen).toBe(false);
+  });
+
+  // M-4 (task-8 fix round 1, Minor): a resolved level is set as `.effort` on an
+  // EXISTING client-sent `reasoning` object, never by replacing it
+  // wholesale — a sibling key (`reasoning.summary`, unreachable from Claude
+  // Code today but not this shim's business to discard) must survive.
+  it('merges a resolved effort into an existing client-sent reasoning object rather than replacing it (task-8 M-4)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-merge-reasoning-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        reasoning: { summary: 'detailed', effort: 'low' },
+        output_config: { effort: 'high' },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    expect(seen.reasoning).toEqual({ summary: 'detailed', effort: 'high' });   // sibling survives
+  });
+
+  // Case 3 (brief): output_config and thinking are both absent from the
+  // forwarded body when an explicit effort was sent.
+  it('strips both output_config and thinking when an explicit effort is sent', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-stripped-explicit-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        output_config: { effort: 'high' },
+        thinking: { type: 'adaptive' },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    expect('output_config' in seen).toBe(false);
+    expect('thinking' in seen).toBe(false);
+  });
+
+  // task-8-rulings.md (commit e5318e97) §5: bind the `thinking` strip INDEPENDENTLY of the
+  // effort path — a body carrying `thinking` and no `output_config` at all
+  // (and no lane default either) must still come out with `thinking` gone,
+  // so a mutation that stops stripping `thinking` cannot hide behind
+  // `output_config`'s own removal.
+  it('strips thinking even when output_config is absent entirely and no lane default applies (ruling §5)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-stripped-thinking-only-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    // No effort file at all — nothing to default to, either.
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        thinking: { type: 'adaptive' },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    expect('thinking' in seen).toBe(false);
+    expect('output_config' in seen).toBe(false);       // never present; trivially true
+    expect('reasoning' in seen).toBe(false);            // nothing to apply — provider default
+  });
+
+  // Case 4, REPLACED per task-8-rulings.md (commit e5318e97) §1 — the brief's own second half
+  // ("rewriting identical bytes at the same mtime does not [re-read]") is
+  // UNFALSIFIABLE: identical bytes produce an identical applied default
+  // whether the cache re-read them or not, so that assertion passes under
+  // every implementation, including one with no cache at all — a control
+  // derived from the measurement, a shape this project has a standing rule
+  // against.
+  //
+  // Split into two INDEPENDENT tests, deliberately, rather than one
+  // three-step sequence: the mutation-2 measurement below (drop mtime from
+  // the cache key) must red the first and stay green on the second, and a
+  // shared sequence can't show that cleanly — under a path-only cache key,
+  // the "changed mtime" read never lands either, so a combined test's third
+  // assertion (hard-coded to the value the SECOND read would have produced)
+  // would go red too, for the wrong reason. Split, the control below
+  // establishes and re-checks its OWN baseline, so it is genuinely a no-op
+  // under both the correct implementation and the mutation — not merely
+  // lucky to still pass.
+  //
+  // Both halves depend on mtime being EXACTLY what this test intends
+  // (task-8-rulings.md §2) — `fs.utimesSync`, not a wall-clock rewrite,
+  // which may not move mtime at all inside the same second on some
+  // filesystems.
+  it('re-reads the effort file when its mtime changes (case 4, the bind)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-cache-bind-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const T1 = 1_700_000_000;
+    const T2 = 1_700_000_100;            // deliberately far apart — never ambiguous with T1
+
+    // Cold read: byModel['gpt-x'] = 'low', at T1.
+    writeEffortFile(home, lane, { 'gpt-x': 'low' }, T1);
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(seen.reasoning).toEqual({ effort: 'low' });
+
+    // NEW mtime, different bytes (byModel['gpt-x'] = 'high') — the cache
+    // must re-read.
+    writeEffortFile(home, lane, { 'gpt-x': 'high' }, T2);
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(seen.reasoning).toEqual({ effort: 'high' });
+  });
+
+  // The observable replacement for the brief's unfalsifiable half: write
+  // DIFFERENT bytes at the SAME mtime as an already-cached read, and assert
+  // the OLD default still applies. That fails if the cache key is wrong in
+  // the OTHER direction (re-reading when it must not), and pins the real,
+  // accepted consequence of keying on `(path, mtime)` — a same-mtime
+  // content change is invisible to this cache. That is sound in practice,
+  // not merely convenient: the materialiser (`effortFile`/`models-op.mjs`)
+  // writes a FRESH TMP FILE — carrying a new mtime of its own — and renames
+  // THAT over the target, so this shim never sees a same-mtime content
+  // change outside a test deliberately forcing one (task-8 M-7,
+  // task-8-fix-rulings.md, commit 1a0196d5: `rename(2)` itself PRESERVES the renamed file's mtime — it is the
+  // freshness of the tmp file, not the rename call, that makes this sound;
+  // said again, correctly this time, in a comment at the Python site).
+  //
+  // FIX ROUND 1 CORRECTION (task-8-fix-rulings.md, commit 1a0196d5, "Where I was wrong"):
+  // the original ruling called this case "a control, not a pin". The
+  // review's own mutation (delete the cache-hit check entirely, so every
+  // call re-reads) found this is the ONLY one of 68 cases that reds under
+  // that mutation — it is the SOLE pin for the cache existing at all, not
+  // merely a control on the opposite direction. Under mutation 2 (drop
+  // mtime from the cache key, tested separately) this case stays green FOR
+  // A DIFFERENT REASON: a path-only cache never re-reads at all, so "the
+  // same-mtime rewrite is not picked up" holds trivially there too — that
+  // half of the framing survives, the "not a pin" half does not.
+  it('does not re-read the effort file for a same-mtime content change (case 4, the control)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-cache-control-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const T = 1_700_000_000;
+
+    // Establish a cached baseline of this test's own: byModel['gpt-x'] = 'alpha'.
+    writeEffortFile(home, lane, { 'gpt-x': 'alpha' }, T);
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(seen.reasoning).toEqual({ effort: 'alpha' });
+
+    // SAME mtime, DIFFERENT bytes (byModel['gpt-x'] = 'beta') — must not be
+    // picked up; the applied default stays this test's own baseline.
+    writeEffortFile(home, lane, { 'gpt-x': 'beta' }, T);
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(seen.reasoning).toEqual({ effort: 'alpha' });   // stale — the same mtime hid the rewrite
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: the effort file itself — absent, malformed, valid (ruling §3)', () => {
+  // Ruling: this is ccrc's OWN config, not client input — a broken effort
+  // file must not break the lane. All three conditions fall through to the
+  // provider default identically; none of them is refused.
+  it('falls through to the provider default when the effort file is absent', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-absent-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    // Deliberately no ~/.ccrc/models directory at all.
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(r.status).toBe(200);
+    expect('reasoning' in seen).toBe(false);
+  });
+
+  it('falls through to the provider default when the effort file is malformed, not raising (ruling §3)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-malformed-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const p = effortFilePath(home, lane);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, 'this is not json at all {{{');
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(r.status).toBe(200);                 // our own broken config never breaks the lane
+    expect('reasoning' in seen).toBe(false);
+  });
+
+  it('applies the lane default when the effort file is valid (ruling §3)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-valid-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    writeEffortFile(home, lane, { 'gpt-x': 'xhigh' });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(r.status).toBe(200);
+    expect(seen.reasoning).toEqual({ effort: 'xhigh' });
+  });
+
+  // M-1 (task-8 fix round 1, Minor): the ruling's own §3 pin sentence named only
+  // "absent, malformed, valid" and omitted `unreadable`, which its OWN
+  // prose arm required handling — the ruling's gap, not a gap in the work.
+  // `chmod 000` denies even the owning user (this process) read access, so
+  // `open()` raises `PermissionError`, an `OSError` subclass — the same
+  // guard the malformed case exercises via `json.JSONDecodeError`.
+  it('falls through to the provider default when the effort file is unreadable (task-8 M-1)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-unreadable-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    writeEffortFile(home, lane, { 'gpt-x': 'high' });
+    chmodSync(effortFilePath(home, lane), 0o000);
+    try {
+      const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+      });
+      expect(r.status).toBe(200);
+      expect('reasoning' in seen).toBe(false);
+    } finally {
+      chmodSync(effortFilePath(home, lane), 0o600);   // let mkTmp's afterAll rmSync remove it
+    }
+  });
+
+  // M-2 (task-8 fix round 1, Minor — a real caching bug the first round shipped):
+  // a read/parse FAILURE must not be written into the cache slot. The
+  // original implementation cached the empty map under the file's real
+  // `(path, mtime)`, so a fix applied WITHOUT the file's mtime moving (a
+  // permission repair — `chmod` moves ctime, not mtime — or simply losing
+  // a race with a transient EMFILE/ENOMEM) would stay latched to "no lane
+  // default" forever, with nothing able to clear it. Pinned at the SAME
+  // mtime throughout, deliberately: this is exactly the shape a
+  // successful read's cache WOULD stay stale under (case 4's control,
+  // above) — the point of this case is that a FAILED read must not get
+  // that same stickiness.
+  it('picks up a fixed effort file immediately, even at the same mtime as the failure it replaces (task-8 M-2)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-fixed-samemtime-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const T = 1_700_000_000;
+    const p = effortFilePath(home, lane);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, 'this is not json at all {{{');
+    utimesSync(p, T, T);
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect('reasoning' in seen).toBe(false);           // the failure — no lane default
+
+    // Fix the content WITHOUT moving mtime at all.
+    writeFileSync(p, JSON.stringify({ byModel: { 'gpt-x': 'high' } }));
+    utimesSync(p, T, T);
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(seen.reasoning).toEqual({ effort: 'high' });   // picked up immediately, not latched
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: effort resolution is scoped to /messages, like the folds (ruling §4)', () => {
+  // Ship a case proving a non-/messages body is untouched by any of this —
+  // must not run outside the same path the folds run on, and must not open
+  // a new way for a body to be forwarded unexamined (every existing "cannot
+  // use this body" condition already has exactly one shape; this adds none).
+  it('does not touch output_config/thinking on a non-/messages path', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-scoped-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payloadText = JSON.stringify({
+      model: 'gpt-x', output_config: { effort: 'high' }, thinking: { type: 'adaptive' },
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: payloadText,
+    });
+    expect(r.status).toBe(200);
+    expect(seen!.toString('utf8')).toBe(payloadText);     // byte-identical: untouched
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: SSE responses stream through incrementally, not buffered whole (Task 9 §1)', () => {
+  // task-9 fix round 1 I-1 (task-9-fix-rulings.md (commit 5a99aaf1), task-9-review.md I-3).
+  // `_relay` used to read the upstream response via `resp.read(8192)`,
+  // which BLOCKS until 8 KB has accumulated or the stream ends — measured
+  // (task-7b-review.md), an 18-byte SSE event written by upstream at t=0
+  // reached the client only at t=40.2s, when the stream itself closed;
+  // `git log -S 'resp.read(8192)'` places the defect at `85f97a4d`, this
+  // wave's own Task 2. A case that only checks the frames eventually arrive
+  // intact — the brief's own wording — WOULD PASS under that defect:
+  // content survives buffering, just late.
+  //
+  // The FIRST version of this case (Task 9) gated the second upstream write
+  // on a fixed 1000ms `setTimeout` and claimed that made the ordering
+  // assertion "immune to a loaded box". That claim measured FALSE: the
+  // margin was real (33-60ms against the 1000ms budget) but it was still a
+  // BUDGET, not a proof — a box loaded enough to blow past it would red a
+  // correct implementation. Node's single-threading makes the *read* of
+  // `secondWritten` atomic; it says nothing about whether the write racing
+  // against it finishes in time.
+  //
+  // This version is genuinely order-bound instead of merely timing-bound:
+  // the SECOND write is not scheduled by a timer at all, it is gated on a
+  // promise (`firstObserved`) that only resolves when the CLIENT's own
+  // `data` handler has already fired and called `observeFirst()`. So the
+  // second frame cannot exist, on the wire, before the first one has been
+  // observed — there is no window to blow through, at any load, because
+  // nothing is racing a clock. The 5s timer that remains is a deadlock
+  // escape only, for the case where nothing ever arrives (the restored
+  // defect): without it, that run would hang instead of failing. It is
+  // never the thing the passing case's timing depends on — measured at
+  // ~222ms green (no wall-clock dependence at all) versus ~1200ms for the
+  // fixed-timer version it replaces, and it still reds under the restored
+  // blocking read (mutation 1 below), at ~5.2s — the deadlock escape firing
+  // exactly as designed, not a false pass.
+  it('task-9 fix round 1 forwards the first SSE frame before the second is written upstream — order-bound, not timing-bound', async () => {
+    const home = mkTmp('ccgpt-proxy-sse-');
+    let secondWritten = false;
+    let observeFirst!: () => void;
+    const firstObserved = new Promise<void>((resolve) => { observeFirst = resolve; });
+    await startPair(home, (_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: {"first":true}\n\n');
+      void Promise.race([
+        firstObserved,
+        new Promise<void>((r) => setTimeout(r, 5_000)),   // deadlock escape only, never the driver
+      ]).then(() => {
+        secondWritten = true;
+        res.write('data: {"second":true}\n\n');
+        res.end();
+      });
+    });
+
+    const firstFrameBeforeSecondWrite = await new Promise<boolean>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          host: '127.0.0.1', port: PROXY_PORT, path: '/v1/messages', method: 'POST',
+          headers: { 'content-type': 'application/json' },
+        },
+        (res) => {
+          res.once('data', () => { resolve(!secondWritten); observeFirst(); res.resume(); });
+          res.on('error', reject);
+        },
+      );
+      req.on('error', reject);
+      req.end('{}');
+    });
+    expect(firstFrameBeforeSecondWrite).toBe(true);
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: tools and tool_result content blocks forward intact (Task 9 §2)', () => {
+  it('task-9 forwards tools and a tool_result content block with both intact', async () => {
+    const home = mkTmp('ccgpt-proxy-tools-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payload = {
+      model: 'gpt-x',
+      tools: [{
+        name: 'get_weather', description: 'Look up the weather',
+        input_schema: { type: 'object', properties: { city: { type: 'string' } } },
+      }],
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'Berlin' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny, 21C' }] },
+      ],
+    };
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    expect(r.status).toBe(200);
+    expect(seen.tools).toEqual(payload.tools);
+    expect(seen.messages[0].content[0]).toEqual({ type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'Berlin' } });
+    expect(seen.messages[1].content[0]).toEqual({ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny, 21C' });
+  });
+
+  // Regression pin for task-9 I-1. That task MEASURED (task-9-rulings.md
+  // (commit 26d24305) §2) that the old `_fold_system` merged a non-empty
+  // top-level `system` into a block-list `messages[0]` by unconditionally
+  // PREPENDING a text block, so a leading `tool_result` — which the
+  // Anthropic API requires to come first in a user message — was pushed to
+  // `content[1]`; the plan accepted that as D-3156. Spec §22 supersedes
+  // that acceptance: the top-level `system` is now kept as the system
+  // prompt, and this door never writes `messages` at all, so the tool_result
+  // stays where the client put it. Should a fold into the first turn ever
+  // come back, this case reds.
+  it('task-9 I-1 regression pin: the system prompt never touches a leading tool_result', async () => {
+    const home = mkTmp('ccgpt-proxy-tools-system-order-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payload = {
+      model: 'gpt-x',
+      system: 'be concise',
+      messages: [
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny, 21C' }] },
+      ],
+    };
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    expect(r.status).toBe(200);
+    expect(seen.system).toBe(led('be concise'));
+    // Nothing prepended: the tool_result is still content[0], and still the
+    // only block.
+    expect(seen.messages[0].content[0]).toEqual({ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny, 21C' });
+    expect(seen.messages).toEqual(payload.messages);
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: hop-by-hop headers dropped from the forwarded request (Task 9 §3/§4/§5)', () => {
+  // ruling §5, "do not re-pin what is already pinned": `connection` is
+  // already pinned on the RESPONSE side by "sends exactly one Connection
+  // header on the response, never a duplicate of the upstream's own" above
+  // (fix round 2, finding 2) — the REQUEST side is not independently
+  // observable (`urllib.request` forces `Connection: close` on the outgoing
+  // request regardless of what HOP_BY_HOP strips, ruling §4). And
+  // `transfer-encoding` is already pinned dropped from a real chunked
+  // `/messages` request by "decodes a chunked body, rewrites it, and
+  // forwards a correct length" above (`expect(seenTE).toBe('')`). Neither
+  // is re-pinned here.
+  //
+  // task-9 fix round 1 I-3 (task-9-fix-rulings.md (commit 26d24305), task-9-review.md I-1):
+  // the FIRST version of this comment claimed "`fetch` cannot even SEND the
+  // five headers below — undici refuses to construct the request at all".
+  // Measured false for three of five: `Proxy-Authorization`, `TE` and
+  // `Trailer` all send through `fetch` without complaint (this box's Node,
+  // v24.14.1) — upstream sees them exactly as sent. Only `Keep-Alive` and
+  // `Upgrade` are genuinely refused by undici (`InvalidArgumentError:
+  // invalid keep-alive header` / `invalid upgrade header`; `fetch` throws
+  // before the request is even constructed). The extrapolation from two
+  // measured refusals to "the same shape for" three more, unmeasured, is
+  // exactly what this repo's own convention calls out: an operation and its
+  // evidence are two separate claims.
+  //
+  // The DECISION this block makes — route all six rows below through
+  // `rawRequest`'s raw socket uniformly, rather than `fetch` for the three
+  // that would send and `rawRequest` only for the two that would not — is
+  // unaffected and stands: it is simpler as one shape than as two, and
+  // matches this file's own precedent (the chunked-framing cases already
+  // use `rawRequest` for bodies `fetch` cannot produce). Only the STATED
+  // reason was wrong.
+  it.each([
+    ['Keep-Alive', 'timeout=5'],
+    ['Upgrade', 'websocket'],
+    ['Proxy-Authorization', 'Basic dGVzdA=='],
+    ['TE', 'trailers'],
+    // task-9 M-1 (ruling §3): the header NAME under test here is `Trailer`
+    // (RFC 7230 §4.4) — `trailers` (plural, the case directly above) is a
+    // VALUE of the `TE` header (§4.3), never a header name, so this is a
+    // distinct condition, not a second spelling of the same case. This is
+    // the one row that RED before this task's HOP_BY_HOP fix (the shipped
+    // set carried `"trailers"`, which never matches a `Trailer:` header at
+    // all) and is the case named in "Mutations required" §3.
+    ['Trailer', 'X-Checksum'],
+    // task-9 fix round 1 M-3 (task-9-fix-rulings.md): the one HOP_BY_HOP
+    // member none of this file's cases pinned before this round — measured,
+    // removing only `proxy-authenticate` left the whole suite green.
+    // Response-only in real HTTP (a proxy's own 407 challenge header) and a
+    // LiteLLM upstream never sends one, so the practical value is low, but
+    // §6.4's own wording is "the hop-by-hop header **set**", and this was
+    // the last unpinned member of it. Tested on the REQUEST side, like
+    // every other row here, for uniformity — `fetch` sends it without
+    // complaint (measured), but this row goes through the same `rawRequest`
+    // path as the rest rather than special-casing the one row that could
+    // use `fetch`.
+    ['Proxy-Authenticate', 'Basic realm="ccgpt"'],
+  ] as const)('task-9 drops %s from the forwarded request', async (headerName, value) => {
+    const home = mkTmp(`ccgpt-proxy-hopbyhop-${headerName}-`);
+    let seenHeaders: Record<string, unknown> = {};
+    let seenAuth = '';
+    await startPair(home, (req, _body, res) => {
+      seenHeaders = req.headers;
+      seenAuth = String(req.headers['authorization'] ?? '');
+      res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ok');
+    });
+    const { status } = await rawRequest(
+      PROXY_PORT, 'GET', '/v1/models',
+      [`${headerName}: ${value}`, 'Authorization: Bearer test-token-not-a-secret'],
+      Buffer.alloc(0),
+    );
+    expect(status).toBe(200);
+    expect(seenHeaders[headerName.toLowerCase()]).toBeUndefined();
+    // End-to-end, on the SAME request: proves the absence above is
+    // HOP_BY_HOP filtering doing its job, not an empty/dropped header set.
+    expect(seenAuth).toBe('Bearer test-token-not-a-secret');
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: a non-2xx upstream response relays through read1 too (task-9 fix round 1 I-4)', () => {
+  // task-9 fix round 1 I-4 (task-9-fix-rulings.md, task-9-review.md I-4, commit 5a99aaf1).
+  // `_relay` catches `urllib.error.HTTPError` and assigns `resp = e`, so a
+  // non-2xx upstream status streams through the SAME `resp.read1(8192)`
+  // loop the 200 path uses — but `HTTPError` reaches `read1` by a DIFFERENT
+  // inheritance path (delegation through `tempfile._TemporaryFileWrapper.
+  // __getattr__`, which `urllib.response.addbase` inherits without
+  // overriding — see the `read1` comment above the loop in `ccgpt-proxy.py`
+  // for the measured mechanism), not because `HTTPError` itself is an
+  // `io.BufferedIOBase` the way a plain `HTTPResponse` is.
+  //
+  // No case in this file, before this round, ever exercised a non-2xx
+  // upstream at all — measured: replacing this except arm's body with an
+  // unconditional refusal left the suite at 81/81 green. That gap was
+  // tolerable before Task 9 (the arm forwarded whatever `resp.read(8192)`
+  // handed it, an already-exercised code shape); it is not now, because
+  // `read1` is the method THIS task introduced and this is the one path
+  // that reaches it differently. This case closes the gap and pins the
+  // status/header/body relay in one measurement.
+  it('task-9 fix round 1 relays a non-2xx upstream status, headers and body unchanged', async () => {
+    const home = mkTmp('ccgpt-proxy-httperror-relay-');
+    await startPair(home, (_req, _body, res) => {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end('{"error":"model not found"}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`);
+    expect(r.status).toBe(404);
+    expect(r.headers.get('content-type')).toBe('application/json');
+    expect(await r.text()).toBe('{"error":"model not found"}');
+  });
+});
+
+// ── the direct entry (codex bridge Stage 2, Task 9) ─────────────────────────────────────────────────────────────
+//
+// With CCGPT_BRIDGE unset the shim is today's shim; with CCGPT_BRIDGE=direct its `__main__` hands the process to the
+// `codexbridge` package (`_run_direct`), passing the shim's own request hooks; any other value exits 2. A direct case
+// runs the shim as a lane's unit does, `python3 -I <home>/.local/bin/ccgpt-proxy.py`, with the package copied to
+// `<home>/ccrc/ccd/codexbridge` and the auth library to `<home>/.local/bin/ccgpt-auth.py`: `-I` implies `-E`, so the
+// PYTHONDONTWRITEBYTECODE the harness sets is ignored there, as on a box, and a `__pycache__` the entry let through
+// lands in the fixture HOME, never in this tree. Containment is `spawnPy`'s (the fixture HOME, both endpoint bases);
+// the launcher only re-execs the interpreter with `-I`. The upstream is `fakeResponses` on loopback, the credential
+// a fresh synthetic one (so no token request is made), and the LiteLLM port is a listener that counts connections.
+
+/** The shim in direct mode, the package and the auth library, placed in the fixture HOME as a box places them. */
+function placeDirectTree(home: string): { shim: string; bridgeDir: string; authLib: string } {
+  const bin = join(home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  const shim = join(bin, 'ccgpt-proxy.py');
+  cpSync(ccgptFile('ccgpt-proxy.py'), shim);
+  const authLib = join(bin, 'ccgpt-auth.py');
+  cpSync(BRIDGE_AUTH_LIB, authLib);
+  const bridgeDir = join(home, 'ccrc', 'ccd', 'codexbridge');
+  cpSync(BRIDGE_DIR, bridgeDir, { recursive: true, filter: (src) => !src.split('/').includes('__pycache__') });
+  return { shim, bridgeDir, authLib };
+}
+
+/** Run as `python3 -I -c` with the shim's path after it: `socket.getfqdn` raises, then the shim runs as `__main__`. A
+ *  server class that binds through `HTTPServer.server_bind` (which calls it) dies before it listens; the shim's own
+ *  `_Server` never calls it (fix round 2, T9-R2-1). */
+const NO_FQDN_PRELUDE = [
+  'import runpy, socket, sys',
+  'def _no_lookup(*a, **k):',
+  '    raise RuntimeError("getfqdn")',
+  'socket.getfqdn = _no_lookup',
+  'sys.argv = sys.argv[1:]',
+  'runpy.run_path(sys.argv[0], run_name="__main__")',
+].join('\n');
+
+/** `python3 -I <shim>`, through spawnPy's containment: a launcher that re-execs the same interpreter with `-I`.
+ *  `noFqdn` runs the shim under NO_FQDN_PRELUDE instead. */
+function spawnIsolated(home: string, shim: string, env: Record<string, string>, noFqdn = false): ChildProcess {
+  const launcher = join(home, 'isolated-launcher.py');
+  const head = noFqdn ? `[sys.executable, "-I", "-c", ${JSON.stringify(NO_FQDN_PRELUDE)}]` : '[sys.executable, "-I"]';
+  writeFileSync(launcher, `import os, sys\nos.execv(sys.executable, ${head} + sys.argv[1:])\n`);
+  const { child } = spawnPy(launcher, { home, args: [shim], env });
+  return child;
+}
+
+/** A listener for the LiteLLM port, on port 0 (its `port` is the one the OS assigned), that counts the connections
+ *  it is offered and drops each one at once, so a shim that relays there answers its own 502 rather than waiting. */
+async function countingListener(): Promise<{ port: number; count(): number; close(): Promise<void> }> {
+  let n = 0;
+  const srv: NetServer = createNetServer((sock) => { n += 1; sock.destroy(); });
+  const port = await new Promise<number>((r) => srv.listen(0, '127.0.0.1', () => r((srv.address() as AddressInfo).port)));
+  return { port, count: () => n, close: () => new Promise<void>((r) => srv.close(() => r())) };
+}
+
+type DirectShim = { child: ChildProcess; lane: string; key: string; laneAnswer: unknown; stderr(): string };
+
+/** Start the shim in direct mode on PROXY_PORT for a lane planted under `home`, and wait until it answers its lane.
+ *  The answer is kept (`laneAnswer`), not judged: a case asserts its shape. Direct mode never dials LiteLLM, so its
+ *  port is `UNDIALLED_LITELLM_PORT` unless a case listens there to prove it (`litellmPort`). */
+async function startDirect(
+  home: string, upstreamBase: string, noFqdn = false, litellmPort = UNDIALLED_LITELLM_PORT,
+): Promise<DirectShim> {
+  const lane = mintLane();
+  const planted = plantBridgeLane(home, lane);
+  const { shim, bridgeDir, authLib } = placeDirectTree(home);
+  const child = spawnIsolated(home, shim, {
+    CCGPT_BRIDGE: 'direct',
+    CCGPT_ACCOUNT_ID: lane,
+    CCGPT_PROXY_PORT: String(PROXY_PORT),
+    CCGPT_LITELLM_PORT: String(litellmPort),
+    CCGPT_BRIDGE_DIR: bridgeDir,
+    CCGPT_LANE_DIR: planted.laneDir,
+    CCRC_CODEX_AUTH_LIB: authLib,
+    CCGPT_CCRC_VERSION: 'dev',
+    CCGPT_CATALOGUE: planted.catalogue,
+    CCGPT_BRIDGE_UPSTREAM_BASE: upstreamBase,
+    CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE,
+  }, noFqdn);
+  proc = child;
+  let stderr = '';
+  child.stderr?.on('data', (c) => { stderr += c.toString(); });
+  let closed = false;
+  child.once('close', () => { closed = true; });
+  for (let i = 0; i < 200; i++) {
+    if (closed) throw new Error(`the direct shim exited before answering its lane: ${stderr || '(no stderr)'}`);
+    try {
+      const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/ccgpt/lane`);
+      if (r.ok) {
+        const body: unknown = await r.json();
+        if (body && typeof body === 'object' && (body as { lane?: unknown }).lane === lane) {
+          return { child, lane, key: planted.key, laneAnswer: body, stderr: () => stderr };
+        }
+      }
+    } catch { /* not up yet */ }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`the direct shim did not answer as lane ${JSON.stringify(lane)} (stderr: ${stderr || '(none)'})`);
+}
+
+const DIRECT_MODEL = BRIDGE_MODELS[0];
+const sseEvent = (type: string, o: Record<string, unknown> = {}): string =>
+  `event: ${type}\ndata: ${JSON.stringify({ type, ...o })}\n\n`;
+/** One whole synthetic text reply, the fixture corpus's shape (`resp_fx<n>`, `msg_fx<n>`). */
+const directTextReply = (text: string): string =>
+  sseEvent('response.created', { response: { id: 'resp_fx1' } })
+  + sseEvent('response.output_item.done', {
+    output_index: 0,
+    item: { type: 'message', id: 'msg_fx1', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text }] },
+  })
+  + sseEvent('response.completed', {
+    response: { id: 'resp_fx1', status: 'completed', usage: { input_tokens: 12, output_tokens: 3, input_tokens_details: { cached_tokens: 0 } } },
+  });
+
+async function postDirect(key: string, body: Record<string, unknown>): Promise<{ status: number; type: string; text: string }> {
+  const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages?beta=true`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': key },
+    body: JSON.stringify(body),
+  });
+  return { status: r.status, type: r.headers.get('content-type') ?? '', text: await r.text() };
+}
+
+function pycacheDirs(dir: string): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (!e.isDirectory()) continue;
+    const p = join(dir, e.name);
+    if (e.name === '__pycache__') out.push(p);
+    else out.push(...pycacheDirs(p));
+  }
+  return out;
+}
+
+describe.skipIf(!PY)('ccgpt-proxy: the direct entry (codex bridge Stage 2, Task 9)', () => {
+  it('with CCGPT_BRIDGE unset the shim is today\'s shim', async () => {
+    const home = mkTmp('ccgpt-proxy-direct-unset-');
+    let seenPath = '';
+    const { lane } = await startPair(home, (req, _body, res) => {
+      seenPath = req.url;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"relayed":true}');
+    });
+    const ans = await fetch(`http://127.0.0.1:${PROXY_PORT}/ccgpt/lane`);
+    expect(await ans.json()).toEqual({ lane });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: DIRECT_MODEL, max_tokens: 8, messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(r.status).toBe(200);
+    expect(await r.text()).toBe('{"relayed":true}');
+    expect(seenPath).toBe('/v1/messages');
+  });
+
+  it('CCGPT_BRIDGE=direct serves /v1/messages from the package and never connects to the LiteLLM port', async () => {
+    const home = mkTmp('ccgpt-proxy-direct-serve-');
+    const litellm = await countingListener();
+    const fake = await fakeResponses([{ status: 200, sse: directTextReply('hello from the package') }]);
+    try {
+      const d = await startDirect(home, fake.base, false, litellm.port);
+      const r = await postDirect(d.key, {
+        model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
+      });
+      // Judged first (fix round 1, T9-SPEC-2), so a shim that relays is red here, on the port the title names.
+      expect(litellm.count()).toBe(0);
+      expect(d.laneAnswer).toEqual({ lane: d.lane, mode: 'direct' });
+      expect(r.status).toBe(200);
+      expect(r.type).toMatch(/^text\/event-stream/);
+      expect(r.text).toContain('event: message_start');
+      expect(r.text).toContain('hello from the package');
+      expect(r.text).toContain('event: message_stop');
+      expect(fake.requests.map((q) => `${q.method} ${q.path}`)).toEqual(['POST /responses']);
+    } finally {
+      await fake.close();
+      await litellm.close();
+    }
+  });
+
+  it.each([
+    ['bogus', "ccgpt-proxy: unknown CCGPT_BRIDGE 'bogus'"],
+    ['litellm', "ccgpt-proxy: unknown CCGPT_BRIDGE 'litellm'"],
+    ['', "ccgpt-proxy: unknown CCGPT_BRIDGE ''"],
+  ])('an unknown CCGPT_BRIDGE exits 2 (%j)', async (value, line) => {
+    const home = mkTmp('ccgpt-proxy-direct-unknown-');
+    const { child } = spawnPy(ccgptFile('ccgpt-proxy.py'), {
+      home,
+      env: {
+        PYTHONPATH: PYSTUB_DIR,
+        CCGPT_BRIDGE: value,
+        CCGPT_ACCOUNT_ID: mintLane(),
+        CCGPT_PROXY_PORT: String(PROXY_PORT),
+        CCGPT_LITELLM_PORT: String(UNDIALLED_LITELLM_PORT),
+      },
+    });
+    proc = child;
+    let stderr = '';
+    child.stderr?.on('data', (c) => { stderr += c.toString(); });
+    const outcome = await raceExitOrDeadline(child);
+    if (outcome.kind === 'exited') proc = null;
+    expect(outcome).toEqual({ kind: 'exited', code: 2 });
+    expect(stderr.trim()).toBe(line);
+  });
+
+  // Fix round 1 (T9-SPEC-1, T9-CQ-1): the directory is checked before the import, so `absent`, `another directory`
+  // and `an empty package directory` (which Python would import as a namespace package, `__file__` None) each get
+  // the pre-import line, and no sibling package runs first. The post-import check is reached by an `__init__.py`
+  // that links out of the named directory. Fix round 2 (T9-R2-CQ-1): an `__init__.py` that sets `__file__` to None
+  // leaves the state a namespace package would, had its `__init__.py` gone between the check and the import. Fix
+  // round 3 (T9-R3-CQ-1): that line states what was measured (`__file__` is not a string), not a cause.
+  it.each([
+    ['unset', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not set$/],
+    ['absent', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
+    ['another directory', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
+    ['an empty package directory', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not a codexbridge package directory; run 'ccrc update'$/],
+    ['a package whose __init__.py links elsewhere', /^ccgpt-proxy: direct: CCGPT_BRIDGE_DIR is not the directory the codexbridge package imported from; run 'ccrc update'$/],
+    ['a package whose __init__.py has no __file__', /^ccgpt-proxy: direct: the codexbridge package imported with no file path \(its __file__ is not a string\); run 'ccrc update'$/],
+    ['a broken package', /^ccgpt-proxy: direct: the codexbridge package did not import from CCGPT_BRIDGE_DIR \(RuntimeError\); run 'ccrc update'$/],
+  ] as const)('a missing package dir exits with one direct: line (%s)', async (shape, line) => {
+    const home = mkTmp('ccgpt-proxy-direct-nopkg-');
+    const { shim, bridgeDir } = placeDirectTree(home);
+    const sentinel = `SENTINEL-${process.pid}-broken-package`;
+    let dir: string | null = bridgeDir;
+    if (shape === 'unset') dir = null;
+    else if (shape === 'absent') dir = join(home, 'nowhere', 'ccd', 'codexbridge');
+    else if (shape === 'another directory') dir = join(home, 'ccrc', 'ccd', 'not-the-bridge');
+    else if (shape === 'an empty package directory') dir = join(home, 'empty', 'ccd', 'codexbridge');
+    else if (shape === 'a package whose __init__.py links elsewhere') {
+      const elsewhere = join(home, 'elsewhere');
+      mkdirSync(elsewhere, { recursive: true });
+      cpSync(join(bridgeDir, '__init__.py'), join(elsewhere, '__init__.py'));
+      rmSync(join(bridgeDir, '__init__.py'));
+      symlinkSync(join(elsewhere, '__init__.py'), join(bridgeDir, '__init__.py'));
+    } else if (shape === 'a package whose __init__.py has no __file__') {
+      writeFileSync(join(bridgeDir, '__init__.py'), '__file__ = None\n');
+    } else writeFileSync(join(bridgeDir, '__init__.py'), `raise RuntimeError(${JSON.stringify(sentinel)})\n`);
+    if (shape === 'another directory' || shape === 'an empty package directory') mkdirSync(dir!, { recursive: true });
+    const env: Record<string, string> = {
+      CCGPT_BRIDGE: 'direct',
+      CCGPT_ACCOUNT_ID: mintLane(),
+      CCGPT_PROXY_PORT: String(PROXY_PORT),
+      CCGPT_LITELLM_PORT: String(UNDIALLED_LITELLM_PORT),
+    };
+    if (dir !== null) env.CCGPT_BRIDGE_DIR = dir;
+    const child = spawnIsolated(home, shim, env);
+    proc = child;
+    let stderr = '';
+    child.stderr?.on('data', (c) => { stderr += c.toString(); });
+    const outcome = await raceExitOrDeadline(child);
+    if (outcome.kind === 'exited') proc = null;
+    expect(outcome.kind).toBe('exited');
+    expect(outcome.kind === 'exited' ? outcome.code : null).toBe(1);
+    const lines = stderr.split('\n').filter(Boolean);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(line);
+    expect(stderr).not.toContain(sentinel);
+    expect(stderr).not.toMatch(/Traceback/);
+  });
+
+  it('the direct entry hands the popped output_config to inbound', async () => {
+    const home = mkTmp('ccgpt-proxy-direct-format-');
+    const fake = await fakeResponses([{ status: 200, sse: directTextReply('{"a":"b"}') }]);
+    const schema = { type: 'object', properties: { a: { type: 'string' } }, required: ['a'], additionalProperties: false };
+    try {
+      const d = await startDirect(home, fake.base);
+      const r = await postDirect(d.key, {
+        model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
+        output_config: { effort: 'low', format: { type: 'json_schema', schema } },
+      });
+      expect(r.status).toBe(200);
+      expect(fake.requests).toHaveLength(1);
+      const sent = fake.requests[0]!.body!;
+      // `_apply_effort` ran on the very body the format was read from (fix round 1, T9-CQ-3: the body is built field by
+      // field, so an `output_config` key could never reach it and asserting its absence decided nothing).
+      expect(sent.reasoning).toEqual({ effort: 'low' });
+      expect(sent.text?.format?.type).toBe('json_schema');
+      expect(sent.text?.format?.schema).toEqual(schema);
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it('the direct entry decodes a gzip body through the shim\'s own hook', async () => {
+    const home = mkTmp('ccgpt-proxy-direct-gzip-');
+    const fake = await fakeResponses([{ status: 200, sse: directTextReply('decoded') }]);
+    try {
+      const d = await startDirect(home, fake.base);
+      const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages?beta=true`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-encoding': 'gzip', 'x-api-key': d.key },
+        body: gzipSync(Buffer.from(JSON.stringify({
+          model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
+        }))),
+      });
+      expect(r.status).toBe(200);
+      expect(await r.text()).toContain('decoded');
+      expect(fake.requests.map((q) => `${q.method} ${q.path}`)).toEqual(['POST /responses']);
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it('the direct entry binds through the shim\'s own _Server (no reverse lookup of its address)', async () => {
+    const home = mkTmp('ccgpt-proxy-direct-bind-');
+    const fake = await fakeResponses([{ status: 200, sse: directTextReply('bound') }]);
+    try {
+      // With socket.getfqdn raising, a lane answer at all means the package bound with the shim's `_Server`.
+      const d = await startDirect(home, fake.base, true);
+      expect(d.laneAnswer).toEqual({ lane: d.lane, mode: 'direct' });
+      const r = await postDirect(d.key, {
+        model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
+      });
+      expect(r.status).toBe(200);
+      expect(r.text).toContain('bound');
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it('the direct entry writes no __pycache__ beside the package', async () => {
+    const home = mkTmp('ccgpt-proxy-direct-pyc-');
+    const fake = await fakeResponses([{ status: 200, sse: directTextReply('no bytecode') }]);
+    try {
+      const d = await startDirect(home, fake.base);
+      // A served request has imported the package and loaded the auth library (its `ensure_fresh` ran), so every
+      // module the direct entry loads has been loaded by now.
+      const r = await postDirect(d.key, {
+        model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
+      });
+      expect(r.status).toBe(200);
+      expect(r.text).toContain('no bytecode');
+      expect(existsSync(join(home, 'ccrc', 'ccd', 'codexbridge', '__init__.py'))).toBe(true);
+      expect(pycacheDirs(home)).toEqual([]);
+    } finally {
+      await fake.close();
+    }
+  });
+});

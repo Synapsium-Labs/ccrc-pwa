@@ -25,18 +25,27 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, seedAccountsSh, WS_ADD, type CcdHarness }
-  from './ccdWsHelpers.js';
-import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
+import { CCD, ghContainedEnv, makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, WS_ADD, type CcdHarness, WIDE_PANE, ccdSource } from './ccdWsHelpers.js';
+import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
 
+import { itLinux } from './platformFixtures.js';
 let h: CcdHarness;
 beforeEach(() => {
   h = makeCcdHarness('ccrc-ccd-crosspool-');
   seedAccountsSh(h.home, POOLED_TEST_ROSTER);
+  // The central projection, agreeing with the declared roster above. Every
+  // case in this file exercises the cross-pool machinery over a TAGGED
+  // account, and `_pool_ok` reads that side through THIS document since wave 1
+  // Task 2 — without it every account reads `unreadable` (no document at all:
+  // the cold-node fail-shut, spec §5.8) and every verdict below becomes
+  // undecidable instead of the mismatch or serve each case is about. The two
+  // cases that are ABOUT the carriers disagreeing re-plant it themselves.
+  plantPoolEpoch(h.home, POOL_BY_ID);
 });
 afterEach(() => { h.cleanup(); });
 
@@ -67,9 +76,13 @@ const writeLimits = (w: string, five: number, seven: number): void => {
     JSON.stringify({ five, seven, ts: Math.floor(Date.now() / 1000) }));
 };
 
+/** D-5240 (fixture fallout, D-5350): a manual swap reads `_ws_status` before anything else, and an
+ *  alive pane with no pid is unreadable there (status-unknown). These cases
+ *  are about pools, so the pane is GONE, which `_ws_status` reads as idle. */
+const NO_PANE = 'case "${1:-}" in has-session) echo "can\'t find session: x" >&2; return 1 ;; esac;';
 const SWAP_STUBS = 'systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };'
   + ' launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };'
-  + ' tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 0; }; sleep() { :; };';
+  + ` tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} ${NO_PANE} return 0; }; sleep() { :; };`;
 
 /** The registry row cmd_swap reads. Returns `mdir` — the munge of the resolved
  *  workdir, computed here exactly as ccd's `tr '/._' '---'` computes it. */
@@ -102,14 +115,14 @@ const shFail = (snippet: string, env: NodeJS.ProcessEnv = {}):
 
 /** The tick, with `_swap_target` and `_auto_swap_check` REAL. */
 const BLOCKED = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) echo "API Error: 429 Too Many Requests" ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
   _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
 `;
 const QUIET = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) printf '%s\\n' "❯ " ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
@@ -335,6 +348,38 @@ describe('`_reg_read` — the distinguishing read C1 is built on', () => {
     expect(rc(`_reg_read ${ID} dangling`)).toBe('2');
   });
 
+  it('a symlink to an EXISTING REGULAR FILE is rc 2 — never rc 0 with the target\'s bytes', () => {
+    // D-2989 (review 71 CRITICAL 1), AND THE SHAPE NO EXISTING CASE PLANTED.
+    // The dangling case above is GREEN without the guard, because `-f` is
+    // false for a broken link — which is exactly why it pinned nothing and
+    // why this escape survived two rounds of review. `-f` FOLLOWS a chain, so
+    // a link that RESOLVES answered rc 0 with a foreign file's bytes:
+    // indistinguishable from a real field read, from outside `$REG`.
+    seedRow();
+    const foreign = path.join(h.home, 'outside-the-registry');
+    fs.writeFileSync(foreign, 'SECRET-OUTSIDE-REG');
+    // `seedRow()` plants a REAL field here; the link replaces it, which is
+    // also the realistic shape — a field that existed and was swapped.
+    fs.rmSync(reg(`${ID}.wrapper`), { force: true });
+    fs.symlinkSync(foreign, reg(`${ID}.wrapper`));
+    expect(rc(`_reg_read ${ID} wrapper`)).toBe('2');
+    // `|| true` because the helper now exits non-zero here and `execFileSync`
+    // THROWS on that — without it this line fails for the right reason wearing
+    // the wrong costume, and would keep failing after a regression too.
+    expect(h.sh(`_reg_read ${ID} wrapper || true`), 'the target\'s bytes must never reach stdout')
+      .not.toContain('SECRET-OUTSIDE-REG');
+  });
+
+  it('CONTROL: a real regular file at the same path still answers its own bytes, rc 0', () => {
+    // The control the guard needs to prove it refuses a TYPE and not the
+    // field. Without it, "rc 2" above is equally consistent with a guard that
+    // broke every read.
+    seedRow();
+    fs.writeFileSync(reg(`${ID}.wrapper`), 'claude');
+    expect(rc(`_reg_read ${ID} wrapper`)).toBe('0');
+    expect(h.sh(`_reg_read ${ID} wrapper`)).toBe('claude');
+  });
+
   it.skipIf(process.getuid?.() === 0)(
     'an UNSEARCHABLE registry directory is rc 2 for every field — not rc 1', () => {
       // The arm with the widest blast radius, and the one no caller can reach
@@ -347,6 +392,37 @@ describe('`_reg_read` — the distinguishing read C1 is built on', () => {
       try { expect(rc(`_reg_read ${ID} wrapper`)).toBe('2'); }
       finally { fs.chmodSync(dir, 0o755); }
     });
+});
+
+describe('`_reg_get` — the same escape, in the fold-everything twin (D-2989)', () => {
+  const rc = (snippet: string): string => h.sh(`${snippet} >/dev/null; echo $?`);
+
+  it('a symlink to an EXISTING REGULAR FILE is rc 1 and prints nothing', () => {
+    // `_reg_get` folds ABSENT/UNREADABLE/EMPTY into one `""` deliberately, so
+    // it cannot report WHY — but it must not answer a FABRICATED value. `-f`
+    // followed the chain here too; the `! -L` conjunct is what stops it. rc 1
+    // is its existing not-a-field arm, not a new verdict.
+    seedRow();
+    const foreign = path.join(h.home, 'outside-the-registry-get');
+    fs.writeFileSync(foreign, 'SECRET-OUTSIDE-REG');
+    // `seedRow()` plants a REAL field here; the link replaces it, which is
+    // also the realistic shape — a field that existed and was swapped.
+    fs.rmSync(reg(`${ID}.home`), { force: true });
+    fs.symlinkSync(foreign, reg(`${ID}.home`));
+    expect(rc(`_reg_get ${ID} home`)).toBe('1');
+    // `|| true` because the helper now exits non-zero here and `execFileSync`
+    // THROWS on that — without it this line fails for the right reason wearing
+    // the wrong costume, and would keep failing after a regression too.
+    expect(h.sh(`_reg_get ${ID} home || true`), 'the target\'s bytes must never reach stdout')
+      .not.toContain('SECRET-OUTSIDE-REG');
+  });
+
+  it('CONTROL: a real regular file still answers its own bytes, rc 0', () => {
+    seedRow();
+    fs.writeFileSync(reg(`${ID}.home`), '/home/demo');
+    expect(rc(`_reg_get ${ID} home`)).toBe('0');
+    expect(h.sh(`_reg_get ${ID} home`)).toBe('/home/demo');
+  });
 });
 
 describe('C1 — the tick MEASURES its own inputs, so a transient failure never ends a crossing', () => {
@@ -693,8 +769,8 @@ const SELF = `
   systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
   launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };
   sleep() { :; };
-  tmux() { case "\${1:-}" in display-message) echo "cc-${ID}";; esac;
-    echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };
+  tmux() { ${WIDE_PANE} case "\${1:-}" in display-message) echo "cc-${ID}";; esac;
+    echo "tmux $*" >> "$HOME/ccd-calls"; ${NO_PANE} return 0; };
   _svc_run_detached() { echo "detached $*" >> "$HOME/ccd-calls"; return 0; };
 `;
 
@@ -705,8 +781,14 @@ describe('cmd_swap refuses a crossing that was not asked for', () => {
     const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n'); tagPool('demo', 'pool-a');
     const r = shFail(`${SELF} cmd_swap ${ID} claude-b`, { TMUX: '/tmp/x,1,0' });
     expect(r.code).not.toBe(0);
+    // THE CLAUSE NAMES ITS CARRIER (wave 1 Task 2 fix round 1, I2): the pool
+    // it prints is the PROJECTED one, which is what `_pool_ok` read, not
+    // `_acct_pool`'s declared roster name — they agree here, and the case
+    // where they do not is `cmd_prefer`'s skew case further down.
     expect(r.stderr).toContain(
-      "pool-mismatch: claude-b is in pool 'pool-b' and project 'demo' is in pool 'pool-a'");
+      "pool-mismatch: claude-b is in pool 'pool-b' (measured from the projection, "
+      + `${h.home}/.cc-sessions/pool-epoch — not the declared roster)`
+      + " and project 'demo' is in pool 'pool-a'");
     expect(r.stderr).toContain(`ccd swap --cross-pool ${ID} claude-b`);
     expect(h.calls().join('\n'), 'the detach arm was never reached').not.toContain('detached');
     expect(h.reg(ID, 'wrapper')).toBe('claude');
@@ -908,7 +990,7 @@ describe('cmd_swap\'s CCD_SWAP_AUTO strand filter (§5.8.4) — a sound filter, 
     tagPool('demo', 'pool-a'); plantNotify();
     const AUTO_GATED_SUPERVISOR = `
       systemctl() { :; }; launchctl() { :; }; sleep() { :; };
-      tmux() { case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
+      tmux() { ${WIDE_PANE} case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
       _swap_target() { echo claude-b; };
       # A SUBSHELL, because that is what the real one is: _dispatch_swap runs
       # cmd_swap in a transient systemd unit, and cmd_swap's guard reaches
@@ -962,7 +1044,7 @@ const START_STUBS = `${WS_ADD} _alive() { return 1; }; _have_systemctl() { retur
  *  for the registry-wins warning and fixed it the same way: `spawnSync`
  *  captures both streams unconditionally. */
 const run = (snippet: string): { code: number; stdout: string; stderr: string } => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
     env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
   });
@@ -1108,6 +1190,92 @@ describe('cmd_prefer', () => {
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain('pool-mismatch: claude-b is in pool');
     expect(r.stderr).toContain(`ccd prefer --cross-pool ${ID} claude-b`);
+    expect(h.reg(ID, 'home'), 'nothing was touched').toBe('claude');
+  });
+
+  it('the PROJECTION decides which pool the target is in, not the declared roster', () => {
+    // I2 + I4, fix round 1. The declared roster says `claude-b -> pool-b`
+    // (`POOLED_TEST_ROSTER`, untouched); the projection below says
+    // `claude-b -> pool-a`. The project is tagged `pool-b`, so the two
+    // carriers give OPPOSITE verdicts and the case cannot pass under both:
+    //   declared read  -> pool-b == pool-b: SERVE. `ccd prefer` succeeds and
+    //                     rewrites `.home`. No refusal text at all.
+    //   projected read -> pool-a vs pool-b: MISMATCH, refuse, and the
+    //                     sentence must name `pool-a` — the pool the account
+    //                     was actually judged to be in.
+    // That is both halves of the finding in one case: which carrier decides,
+    // and which pool the refusal names.
+    seedRow(); tagPool('demo', 'pool-b');
+    plantPoolEpoch(h.home, { ...POOL_BY_ID, 'claude-b': 'pool-a' });
+    const r = shFail(`cmd_prefer ${ID} claude-b`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("pool-mismatch: claude-b is in pool 'pool-a'");
+    expect(r.stderr).not.toContain("is in pool 'pool-b' (measured");
+    expect(r.stderr).toContain("project 'demo' is in pool 'pool-b'");
+    expect(h.reg(ID, 'home'), 'nothing was touched').toBe('claude');
+  });
+
+  it('guards the guard: with the two carriers AGREEING, the same call is a plain in-pool rehome', () => {
+    // Without this the case above proves only that something refused. Same
+    // row, same project tag, same verb — only the projection's `claude-b`
+    // row moves back to `pool-b`, and the rehome goes through.
+    seedRow(); tagPool('demo', 'pool-b');
+    plantPoolEpoch(h.home, { ...POOL_BY_ID, 'claude-b': 'pool-b' });
+    h.sh(`cmd_prefer ${ID} claude-b`);
+    expect(h.reg(ID, 'home')).toBe('claude-b');
+  });
+
+  // LINUX-ONLY, and not because the assertion is awkward on darwin: a darwin
+  // FLEET BOX CANNOT EXIST. `ccd-pool-sync` is never installed there at all —
+  // its only runner is a systemd timer, and `ccrc` says so in its own install
+  // summary ("no ccd-pool-sync and no ccd-update-sync — their timers are
+  // systemd-only", `_inst_bins`' Darwin echo in `ccd/ccrc`). So
+  // `_pool_sync_installed` is correctly FALSE on darwin,
+  // the box has no control plane BY CONFIGURATION, and the declared-tag
+  // fallback is the right answer there rather than a degraded one. Planting a
+  // plist to force this arm would fabricate a state production cannot reach
+  // and would test a branch that is dead on that platform. Measured: these
+  // four ran on the macOS CI leg and read `untagged`, which is the CORRECT
+  // darwin answer to a question this test was not asking.
+  itLinux('a cold node dies naming the PROJECTION and its own remedy, never the healthy project tag', () => {
+    // I1, fix round 1. All three manual verbs rendered ONE sentence for all
+    // five of `_pool_ok`'s rc-2 conditions — "pool tag for demo is named
+    // pool-a: <path> — fix or clear it; nothing was touched" — which on a
+    // node that has never synced blames a tag that is perfectly readable and
+    // whose stated remedy ("clear it") would UNTAG THE PROJECT. The tag here
+    // is `named pool-b` and fine; the projection is the thing nobody can
+    // read.
+    // Item 5 (I3, wave-1 fix round A): `plantPoolSyncTimer` marks this a
+    // FLEET box, so absence still fails shut here — without it, absence now
+    // falls back to the declared tag instead, a different case entirely.
+    seedRow(); tagPool('demo', 'pool-b');
+    plantPoolEpoch(h.home, undefined);       // no document at all: never synced
+    plantPoolSyncTimer(h.home);
+    const r = shFail(`cmd_prefer ${ID} claude-b`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain(
+      `the pool projection for claude-b is unreadable: ${h.home}/.cc-sessions/pool-epoch`);
+    // It says POSITIVELY that the other side is fine, because the sentence it
+    // replaces said the opposite.
+    expect(r.stderr).toContain("project 'demo' is tagged and its tag reads fine");
+    expect(r.stderr).not.toContain('pool tag for demo');
+    expect(r.stderr).toContain('nothing was touched');
+    expect(h.reg(ID, 'home'), 'nothing was touched').toBe('claude');
+  });
+
+  it('tells STALE from UNREADABLE — the control-plane link, not this file', () => {
+    // The pair spec §5.7 names: "both mean nobody decides, but one's remedy
+    // is file permissions and the other's is the control-plane link, and the
+    // die message and the chip each need to say which." A well-formed
+    // document past its lease is not an absent one.
+    seedRow(); tagPool('demo', 'pool-b');
+    plantPoolEpoch(h.home, POOL_BY_ID, { lease: 1 });     // 1970: expired
+    const r = shFail(`cmd_prefer ${ID} claude-b`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('the pool projection for claude-b is stale');
+    expect(r.stderr).toContain('past its lease');
+    expect(r.stderr).toContain('the control-plane link');
+    expect(r.stderr).not.toContain('is unreadable');
     expect(h.reg(ID, 'home'), 'nothing was touched').toBe('claude');
   });
 
@@ -1435,7 +1603,7 @@ describe('the SECOND crossing read in `_swap_target` is guarded too', () => {
 // remedies measured as defects). Every case below is one that went RED against
 // PR #69 exactly as shipped.
 const NOPANE = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) : ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
@@ -1691,7 +1859,7 @@ describe('S3 — the type check reaches `_reg_get` too, not just its measured si
     // BYTE-IDENTICAL and could only prove "two such lines exist": they are
     // distinct now, so each entry names one function's line and a reader moved
     // between the two would red.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const lines = src.split('\n')
       .filter((l) => l.includes('_reg_get "') && !l.trim().startsWith('#'));
     expect(lines.length, 'the census moved; re-measure the comment too')
@@ -1857,13 +2025,16 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
     // every input that answers today: absent, a directory and `/dev/null` all
     // make grep produce nothing and the lane returns on the line below.
     seedRow();
-    const pane = 'ctx ▓▓▓▓ 80%\\n❯ ';
+    // From a FILE, so real newlines survive the `bash -c '…'` quoting below:
+    // the ctx reader takes a number only off the `👤`-led statusline row, which
+    // Claude Code draws on its own line under the prompt box.
+    fs.writeFileSync(path.join(h.home, 'pane.txt'), `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  👤 acct-a │ 🤖 Opus 5 · high │ ▓ ctx ▓▓▓▓ 80%\n`);
     const stubs = `
-      tmux() { case "\${1:-}" in
-                 capture-pane) printf '%s\\n' "${pane}" ;;
+      tmux() { ${WIDE_PANE} case "\${1:-}" in
+                 capture-pane) cat "$HOME/pane.txt" ;;
                  list-panes)   echo ${PANE_PID} ;;
-               esac; return 0; };
-      _dispatch_compact() { echo "compact $1" >> "$HOME/ccd-calls"; };`;
+                 send-keys)    echo "tmux $*" >> "$HOME/ccd-calls" ;;
+               esac; return 0; };`;
     const sfDir = h.sh(`printf '%s' "$(_cfg_dir claude)/sessions"`);
     fs.mkdirSync(sfDir, { recursive: true });
     const sf = path.join(sfDir, `${PANE_PID}.json`);
@@ -1873,7 +2044,13 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
       `timeout 5 bash -c 'source "${CCD}"; ${stubs} _auto_compact_check ${ID}'; echo "rc=$?"`);
     expect(out, 'a FIFO status file: the lane returns, and rc 124 would mean it hung')
       .toContain('rc=0');
-    expect(calls(), 'and it compacts nothing off a file it could not read').not.toContain('compact');
+    // The compaction is `_auto_compact_check`'s own `tmux send-keys -t <pane> -l "/compact"` (D-6051): the
+    // `_dispatch_compact` stub this case asserted on named a function ccd never had, so it could not go red.
+    expect(calls(), 'and it compacts nothing off a file it could not read').not.toContain('/compact');
+    // …and it got THERE: a pane with no ctx reading returns long before the
+    // status file, which would make both lines above pass having read nothing.
+    expect(String(h.reg(ID, 'compactskip') ?? ''), 'the tick never reached the status-file read')
+      .toMatch(/ status-unreadable$/);
     fs.rmSync(sf);
   });
 
@@ -1894,13 +2071,13 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
     // places. Collapse the `if/elif` to a bare `[[ -f ]] || return 0` and the
     // FIFO case below reds with no note at all.
     seedRow();
-    const pane = 'ctx ▓▓▓▓ 80%\n❯ ';
+    fs.writeFileSync(path.join(h.home, 'pane.txt'), `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  👤 acct-a │ 🤖 Opus 5 · high │ ▓ ctx ▓▓▓▓ 80%\n`);
     const stubs = `
-      tmux() { case "\${1:-}" in
-                 capture-pane) printf '%s\\n' "${pane}" ;;
+      tmux() { ${WIDE_PANE} case "\${1:-}" in
+                 capture-pane) cat "$HOME/pane.txt" ;;
                  list-panes)   echo ${PANE_PID} ;;
-               esac; return 0; };
-      _dispatch_compact() { echo "compact $1" >> "$HOME/ccd-calls"; };`;
+                 send-keys)    echo "tmux $*" >> "$HOME/ccd-calls" ;;
+               esac; return 0; };`;
     const sfDir = h.sh(`printf '%s' "$(_cfg_dir claude)/sessions"`);
     fs.mkdirSync(sfDir, { recursive: true });
     const sf = path.join(sfDir, `${PANE_PID}.json`);
@@ -1943,6 +2120,7 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
       .toContain('status-unreadable');
     expect(lastSkipLine(), 'and the sentence names what was actually measured')
       .toContain('not a regular file');
+    expect(calls(), 'and neither unreadable status file compacts the session').not.toContain('/compact');
     fs.rmSync(sf);
   });
 });
@@ -2199,11 +2377,13 @@ describe('B5 — `_swap_target` SAYS which condition it could not decide', () =>
     tick(BLOCKED);
     const word = String(h.reg(ID, 'tickstuck')).split(' ')[1];
     const sentence = String(h.reg(ID, 'stranded'));
-    const named = ['crosspool', 'pool', 'project', 'home']
+    const named = ['crosspool', 'pool', 'projection', 'set', 'project', 'home']
       .filter((w) => (w === 'crosspool' ? sentence.includes('crossing record')
         : w === 'pool' ? sentence.includes('pool tag')
-          : w === 'project' ? sentence.includes('own registry field')
-            : sentence.includes('home account')));
+          : w === 'projection' ? sentence.includes('pool projection')
+            : w === 'set' ? sentence.includes('account set on the route record')
+              : w === 'project' ? sentence.includes('own registry field')
+                : sentence.includes('home account')));
     expect(named, 'the sentence names exactly one condition').toHaveLength(1);
     expect(named[0], `the stamp says ${word}; the sentence must agree`).toBe(word);
   });
@@ -2215,12 +2395,13 @@ describe('B5 — `_swap_target` SAYS which condition it could not decide', () =>
     // X can take it" — a fabricated positive claim about accounts nobody asked.
     seedRow(); tagPool('demo', 'pool-a'); plantNotify();
     for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
-    h.sh(`${BLOCKED} _swap_target() { return 7; }; _auto_swap_check ${ID}`);
+    // rc 7 and 8 are named since the pool set's PR A3 (the projection and the set sides), so the stub is rc 9.
+    h.sh(`${BLOCKED} _swap_target() { return 9; }; _auto_swap_check ${ID}`);
     expect(String(h.reg(ID, 'stranded')), 'it says it does not know')
       .toContain('this build does not name');
     expect(String(h.reg(ID, 'stranded')), 'and never a pool census')
       .not.toContain('can take it');
-    expect(String(h.reg(ID, 'tickstuck')), 'the stamp carries the code itself').toContain('rc7');
+    expect(String(h.reg(ID, 'tickstuck')), 'the stamp carries the code itself').toContain('rc9');
   });
 });
 

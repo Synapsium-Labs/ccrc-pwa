@@ -68,7 +68,7 @@ describe('ccd route (routing spec 2026-09-14 §5.3)', () => {
     ['no --set at all', `--session ${ID}`, /usage: ccd route/],
     ['no such session', `--session nobody --set effort=high`, /no such session: nobody/],
     ['a bad session id', `--session 'a b' --set effort=high`, /bad session id/],
-    ['--apply, which this slice does not have', `--session ${ID} --set effort=high --apply`, /usage: ccd route/],
+    ['--apply with nothing to set', `--session ${ID} --apply`, /usage: ccd route/],
   ])('%s: refuses with rc 1 and writes NOTHING', (_l, args, msg) => {
     seed();
     const r = route(args);

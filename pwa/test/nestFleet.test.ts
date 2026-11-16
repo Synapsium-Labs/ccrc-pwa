@@ -12,18 +12,22 @@
 // right now and forgets it the moment the programme closes.
 import { describe, it, expect } from 'vitest';
 import type { FleetSession, RunSummary } from '../../shared/api';
-import { nestFleet, type FleetRow } from '../src/fleet/nestFleet';
+import { fleetSession } from './fleetFixture';
+import { nestFleet as nestFleetOf, type CardDelegation, type FleetRow } from '../src/fleet/nestFleet';
+import { withRunBinding } from './runBindingFixture';
+import { activity, lease, unowned } from './delegationFixture';
+import { fingerprint, recording, type Recorded } from './characterise';
 
-const sess = (id: string, over: Partial<FleetSession> = {}): FleetSession => ({
-  id, wrapper: 'claude', home: 'claude', project: 'ccrc-pwa', workdir: '/w',
-  workspace: id, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
-  dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, ...over,
-});
+/** W4-U0: every `nestFleet` call this file's cases make, recorded (see `characterise.ts`). */
+const nestCalls: Recorded<Parameters<typeof nestFleetOf>>[] = [];
+const recordedNest = recording(nestFleetOf, nestCalls);
+
+/** The helper as a current server feeds it (D-7182, C7d): each session carries the run binding the server sends over the
+ *  case's runs (`runBindingFixture.ts`), the input `attentionFirst`'s worker reader (`workerOf`) reads. */
+const nestFleet = (sessions: readonly FleetSession[], runs: readonly RunSummary[]): FleetRow[] => recordedNest(withRunBinding(sessions, runs), runs);
+
+const sess = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
+  fleetSession({ id, project: 'ccrc-pwa', workspace: id, ...over });
 
 /** A run in the shape the `runs` frame actually carries one. `claimedBy` is
  *  spelled at every call site rather than defaulted, because the ownership
@@ -36,7 +40,8 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   // non-null variants by spreading this builder; they must not re-add the field
   // here.
   project: 'ccrc-pwa', homeProject: null, sessionId: null, workspace: null, branch: null,
-  state: 'dispatched', claimedBy: 'coord', resumed: false, clearedAt: null,
+  state: 'dispatched', kind: 'work', reviews: null,
+  claimedBy: 'coord', resumed: false, clearedAt: null,
   openedAt: 1_800_000_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },
   unreadMail: 0,
@@ -44,14 +49,14 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   // predates the warn row and must keep rendering exactly as it did.
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false, ...over,
 });
 
 /** `[what, depth]` per row, in display order — a session row by its id, a
  *  pending spawn by the run it is waiting on. One readable literal per
  *  assertion, so a rule that breaks says which row moved. */
 const shape = (rows: readonly FleetRow[]): [string, number][] =>
-  rows.map((r) => (r.kind === 'session' ? [r.session.id, r.depth] : [`spawn:${r.run.id}`, r.depth]));
+  rows.map((r) => (r.kind === 'session' ? [r.session.id, r.depth] : r.kind === 'pending' ? [`spawn:${r.run.id}`, r.depth] : [r.kind, r.depth]));
 
 describe('nestFleet — rule 0: a fleet with no programme reads exactly as it does today', () => {
   it('returns every session at depth 0, in the order it was given', () => {
@@ -89,7 +94,7 @@ describe('nestFleet — rule 1: the happy shape', () => {
   });
 });
 
-describe('nestFleet — rule 2: children are in PROGRAMME order, not status order', () => {
+describe("nestFleet — rule 2: children are attention-first, then in PROGRAMME order — never the list's own", () => {
   it('sorts children by the run’s wave ascending, then by run id — against the list’s own order', () => {
     // The input order DISAGREES with the programme order on purpose: `w2` is
     // ahead of `w1` in `sortFleet`'s result (it was interacted with more
@@ -110,6 +115,42 @@ describe('nestFleet — rule 2: children are in PROGRAMME order, not status orde
       run({ id: 20, wave: 2, sessionId: 'earlier', claimedBy: 'coord' }),
     ]);
     expect(shape(rows)).toEqual([['coord', 0], ['earlier', 1], ['later', 1]]);
+  });
+
+  it('puts a sibling that is waiting on the operator FIRST, ahead of programme order', () => {
+    // `later` is wave 2 and would sort after `earlier` by programme order
+    // alone; it is blocked on the operator, and an indented row three deep
+    // hides that just as well as a fold does (spec §6).
+    const sessions = [sess('coord'), sess('earlier'), sess('later', { bucket: 'attention' })];
+    const rows = nestFleet(sessions, [
+      run({ id: 20, wave: 1, sessionId: 'earlier', claimedBy: 'coord' }),
+      run({ id: 21, wave: 2, sessionId: 'later', claimedBy: 'coord' }),
+    ]);
+    expect(shape(rows)).toEqual([['coord', 0], ['later', 1], ['earlier', 1]]);
+  });
+
+  it('CONTROL: with no attention sibling the order is programme order exactly as before', () => {
+    // The existing rule-2 cases hard-code `bucket: 'idle'` on every fixture, so
+    // an attention-first key is a no-op on them and they cannot pin it. This
+    // case states that premise; the case above is the pin.
+    const sessions = [sess('coord'), sess('earlier'), sess('later')];
+    const rows = nestFleet(sessions, [
+      run({ id: 21, wave: 2, sessionId: 'later', claimedBy: 'coord' }),
+      run({ id: 20, wave: 1, sessionId: 'earlier', claimedBy: 'coord' }),
+    ]);
+    expect(shape(rows)).toEqual([['coord', 0], ['earlier', 1], ['later', 1]]);
+  });
+
+  it('never lifts a waiting row above its PARENT — the key is scoped to siblings', () => {
+    // Two children under `coord`, the waiting one at a LATER wave, and a
+    // top-level row ahead of `coord`: the waiting child rises among its
+    // siblings and no further — the top level is the caller's order, verbatim.
+    const sessions = [sess('other'), sess('coord'), sess('kidLate', { bucket: 'attention' }), sess('kidEarly')];
+    const rows = nestFleet(sessions, [
+      run({ id: 20, wave: 1, sessionId: 'kidEarly', claimedBy: 'coord' }),
+      run({ id: 21, wave: 2, sessionId: 'kidLate', claimedBy: 'coord' }),
+    ]);
+    expect(shape(rows)).toEqual([['other', 0], ['coord', 0], ['kidLate', 1], ['kidEarly', 1]]);
   });
 });
 
@@ -264,5 +305,147 @@ describe('nestFleet — the top-level order is never re-sorted', () => {
     const sessions = [sess('other'), sess('w1'), sess('coord'), sess('unrelated')];
     const rows = nestFleet(sessions, [run({ id: 10, sessionId: 'w1', claimedBy: 'coord' })]);
     expect(shape(rows)).toEqual([['other', 0], ['coord', 0], ['w1', 1], ['unrelated', 0]]);
+  });
+});
+
+// Delegation broker wave 4, PR2 Task 2.4: rules 6-11. Every case calls the UNRECORDED `nestFleetOf`, so W4-U0's
+// fingerprints above stay exactly what main produced. `nestD` also asserts one level on every case (W4-U13).
+describe('nestFleet — delegation rows (rules 6 to 11, delegation broker wave 4)', () => {
+  const nestD = (sessions: FleetSession[], runs: RunSummary[], d: CardDelegation | null): FleetRow[] => {
+    const rows = nestFleetOf(sessions, runs, d);
+    expect(rows.filter((r) => r.depth > 1), 'nothing is ever drawn at depth 2').toEqual([]);
+    return rows;
+  };
+  const slice = (over: Partial<CardDelegation> = {}): CardDelegation =>
+    ({ card: 'ccrc-pwa', activities: [], leases: [], unowned: [], ...over });
+  const dshape = (rows: readonly FleetRow[]): [string, number][] => rows.map((r) => {
+    switch (r.kind) {
+      case 'session': return [r.session.id, r.depth];
+      case 'pending': return [`spawn:${r.run.id}`, r.depth];
+      case 'activity': return [`activity:${r.activity.activityId}`, r.depth];
+      case 'lease': return [`lease:${r.lease.leaseId}`, r.depth];
+      case 'unowned': return [`unowned:${r.item.adminRecord}`, r.depth];
+      case 'delegation-group': return [`group:${r.group}(${r.count})`, r.depth];
+    }
+  });
+  const leaseRow = (rows: readonly FleetRow[], id: string) => {
+    const r = rows.find((x) => x.kind === 'lease' && x.lease.leaseId === id);
+    if (r === undefined || r.kind !== 'lease') throw new Error(`no lease row ${id}`);
+    return r;
+  };
+  const sessionRow = (rows: readonly FleetRow[], id: string) => {
+    const r = rows.find((x) => x.kind === 'session' && x.session.id === id);
+    if (r === undefined || r.kind !== 'session') throw new Error(`no session row ${id}`);
+    return r;
+  };
+  const coord = sess('coord-a', { workdir: '/work/project-a' });
+  const worker = sess('worker-a', { workdir: '/work/project-a/.ccd/worker-a' });
+  const programme = [run({ id: 7, claimedBy: 'coord-a', sessionId: 'worker-a' })];
+
+  it('W4-U12 (rule 8, depth 0): a coordinator\'s live activity and raw worktree nest one level under it, after its worker', () => {
+    const rows = nestD([coord, worker], programme,
+      slice({ activities: [activity()], leases: [lease({ sourceKind: 'raw' })] }));
+    expect(dshape(rows)).toEqual([['coord-a', 0], ['worker-a', 1], ['activity:act-1', 1], ['lease:lease-1', 1]]);
+    expect(leaseRow(rows, 'lease-1').via).toBeNull();
+    expect(leaseRow(rows, 'lease-1').group).toBeNull();
+  });
+
+  it('W4-U13 (rule 8, one level): a worker\'s activity is its chip, never a row; a worker\'s worktree sits under the coordinator, via the worker', () => {
+    const chip = activity({ activityId: 'a-chip', parentId: 'worker-a', placement: 'chip' });
+    const skewAct = activity({ activityId: 'a-skew', parentId: 'worker-a', placement: 'row' });
+    const viaLease = lease({ leaseId: 'l-via', parentId: 'coord-a', via: 'worker-a' });
+    const skewLease = lease({ leaseId: 'l-skew', parentId: 'worker-a', via: null, firstObservedAt: '2026-10-26T11:00:00.000Z' });
+    const rows = nestD([coord, worker], programme, slice({ activities: [chip, skewAct], leases: [viaLease, skewLease] }));
+    expect(dshape(rows)).toEqual([['coord-a', 0], ['worker-a', 1], ['lease:l-via', 1], ['lease:l-skew', 1]]);
+    expect(sessionRow(rows, 'worker-a').delegated?.map((a) => a.activityId)).toEqual(['a-chip', 'a-skew']);
+    expect(sessionRow(rows, 'coord-a').delegated).toBeUndefined();
+    expect(leaseRow(rows, 'l-via').via).toBe('worker-a');
+    expect(leaseRow(rows, 'l-skew').via).toBe('worker-a');
+  });
+
+  it('W4-U14 (rule 7, programme wins): a worktree whose path is a listed session\'s workdir is not drawn', () => {
+    const rows = nestD([coord, worker], programme,
+      slice({ leases: [lease({ leaseId: 'l-ws', parentId: 'coord-a', via: 'worker-a', canonicalPath: worker.workdir })] }));
+    expect(dshape(rows)).toEqual([['coord-a', 0], ['worker-a', 1]]);
+  });
+
+  it('W4-U15 (rule 7, never lifts): a programme child that owns a worktree stays a child; its worktree is the via row', () => {
+    const rows = nestD([coord, worker], programme, slice({ leases: [lease({ leaseId: 'l-w', parentId: 'worker-a' })] }));
+    expect(dshape(rows)).toEqual([['coord-a', 0], ['worker-a', 1], ['lease:l-w', 1]]);
+    expect(leaseRow(rows, 'l-w').via).toBe('worker-a');
+    // The same list without the slice brackets identically: the worktree moved no session row.
+    expect(dshape(nestD([coord, worker], programme, null)).slice(0, 2)).toEqual(dshape(rows).slice(0, 2));
+  });
+
+  it('W4-U16 (rule 9): a missing parent\'s worktree and an offline activity file under one "offline coordinator" group', () => {
+    const rows = nestD([coord, worker], programme, slice({
+      leases: [lease({ leaseId: 'l-gone', parentId: 'coord-gone' })],
+      activities: [activity({ activityId: 'a-off', group: 'offline-coordinator' })],
+    }));
+    expect(dshape(rows)).toEqual([
+      ['coord-a', 0], ['worker-a', 1], ['group:offline-coordinator(2)', 0], ['lease:l-gone', 1], ['activity:a-off', 1],
+    ]);
+    expect(leaseRow(rows, 'l-gone').group).toBe('offline-coordinator');
+  });
+
+  it('W4-U17 (rule 10): unowned work is one group, after the offline group', () => {
+    const rows = nestD([coord], [], slice({
+      leases: [lease({ leaseId: 'l-gone', parentId: 'coord-gone' })],
+      unowned: [unowned({ adminRecord: 'u1' }), unowned({ adminRecord: 'u2' }), unowned({ adminRecord: 'u3' })],
+    }));
+    expect(dshape(rows)).toEqual([
+      ['coord-a', 0], ['group:offline-coordinator(1)', 0], ['lease:l-gone', 1],
+      ['group:unowned(3)', 0], ['unowned:u1', 1], ['unowned:u2', 1], ['unowned:u3', 1],
+    ]);
+  });
+
+  it('W4-U18 (rule 11): a worktree nests with no run and with an ended, unmeasured state', () => {
+    const rows = nestD([coord, worker], [], slice({
+      activities: [activity()],
+      leases: [lease({ sourceKind: 'raw', liveness: 'ended', workspace: 'unmeasured' })],
+    }));
+    expect(dshape(rows)).toEqual([['coord-a', 0], ['activity:act-1', 1], ['lease:lease-1', 1], ['worker-a', 0]]);
+  });
+});
+
+describe('W4-U0: today\'s tree, characterised before delegation rows (delegation broker wave 4)', () => {
+  it('every fixture set above renders the JSON captured on main', () => {
+    expect(nestCalls.length).toBeGreaterThan(0);
+    expect(nestCalls.map((c) => fingerprint(c.json))).toMatchInlineSnapshot(`
+      [
+        "e62918530390aa5d",
+        "d06c1e0f811abfe5",
+        "0012ed6ffa807a0d",
+        "0012ed6ffa807a0d",
+        "d32785791958a5e2",
+        "98b60dac18c8cf99",
+        "d32785791958a5e2",
+        "8eba1dd80a969324",
+        "f0bd344a1e83091d",
+        "541f06abe5aec593",
+        "ff6637a9c1e64e0b",
+        "abbbc1a3ec076379",
+        "f1726f6f897122dd",
+        "6fa31fc71f251017",
+        "6a494693174b8d9f",
+        "656e74aba800dfd3",
+        "1ceb3a12bf7f0e01",
+        "656e74aba800dfd3",
+        "0671f479e48ec62e",
+        "801031130ec09d13",
+        "ef5a74c30bd14003",
+        "96ed471ba958c8cd",
+        "e0d7cc74b870bc7a",
+      ]
+    `);
+  });
+
+  it('W4-U11 (rule 6): every input above with no slice, or an empty one, renders the identical JSON', () => {
+    expect(nestCalls.length).toBeGreaterThan(0);
+    for (const c of nestCalls) {
+      const [sessions, runs] = c.args;
+      expect(JSON.stringify(nestFleetOf(sessions, runs, null))).toBe(c.json);
+      expect(JSON.stringify(nestFleetOf(sessions, runs, { card: 'ccrc-pwa', activities: [], leases: [], unowned: [] }))).toBe(c.json);
+    }
   });
 });

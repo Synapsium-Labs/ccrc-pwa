@@ -9,9 +9,11 @@
 // A tap does exactly one thing in every state: open the sheet. No state of the
 // cap performs an action, so a misread badge can never cost anything.
 import type { ReactNode } from 'react';
+import { Keycap, elapsedShort } from '@ccrc/ui';
 import type { PrChecks, PrReason, PrState } from '../../../shared/api';
 import { UNCHECKED_PR } from '../../../shared/api';
 import { UNSUPPORTED_VERB_TEXT } from '../lib/api';
+import { prDoorWord } from './prCap';
 import './chat.css';
 
 /** Integration finding 6: "we have not looked yet" is defined ONCE, in
@@ -23,14 +25,10 @@ import './chat.css';
  *  one object; `server/test/single-definition.test.ts` fails on a fourth. */
 export { UNCHECKED_PR };
 
-/** '2m' | '3h' | '5d', or null under a minute. */
+/** '2m' | '3h' | '5d', or null under a minute — `elapsedShort`'s own answer
+ *  there, which is why this cap needs nothing of its own for that case. */
 function rel(then: number | null): string | null {
-  if (then === null) return null;
-  const m = Math.floor(Math.max(0, Date.now() - then) / 60_000);
-  if (m < 1) return null;
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
+  return then === null ? null : elapsedShort(Date.now() - then);
 }
 
 /** The legend on the cap: a number once we have one, `PR` otherwise. In
@@ -84,11 +82,18 @@ const REASON_TEXT: Record<PrReason, string> = {
   // because that is where the other two server-code -> sentence maps live.
   unsupported: UNSUPPORTED_VERB_TEXT,
   'agent-down': 'ccrc could not reach the sessions box.',
+  'cut-short': 'ccrc could not finish reading the PRs in time.',
   error: 'GitHub could not be read.',
   // The one reason that is NOT a failed read: GitHub answered, and said merged.
   // So this copy must not blame the connection — it says what is missing and
   // implies the safe consequence (ccrc will not offer cleanup on this).
   'merge-unproven': 'GitHub reports this merged but named no usable merge commit, so ccrc will not call it merged.',
+  // The third reason that is NOT a failed read, and the one a `closed` phase carries (D-7362): GitHub answered, the PR
+  // wears the landed-in-train label, and no merged train PR lists it at its head, so ccrc will not call it merged.
+  'train-unproven': 'It is labelled as landed in a merge train, but no merged train PR lists it at its head, so ccrc will not call it merged.',
+  // A FAILED read (D-7378): the same label, and the train record was not read yet. Not closed and not merged; ccrc
+  // reads the record on its own and says which once it has.
+  'train-unread': 'It is labelled as landed in a merge train, and ccrc has not read the train’s record yet. ccrc will try again.',
   // The second reason that is NOT a failed read: ccrc's registry and git
   // disagree about which branch this workspace is on, so there are two
   // candidate answers to "its PR" and ccd measured neither rather than
@@ -145,7 +150,10 @@ export function prSentence(pr: PrState, branch?: string): string {
       return `Pull request #${pr.number ?? '?'}: merged${ago === null ? '' : ` ${ago} ago`}.`;
     }
     case 'closed':
-      return `Pull request #${pr.number ?? '?'}: closed without merging. This branch's commits are not on main.`;
+      // `train-unproven` (D-7362): the PR wears the landed-in-train label, but the train record did not prove it.
+      return pr.reason === 'train-unproven'
+        ? `Pull request #${pr.number ?? '?'}: closed. ${REASON_TEXT['train-unproven']}`
+        : `Pull request #${pr.number ?? '?'}: closed without merging. This branch's commits are not on main.`;
     case 'unknown':
       return `Pull request: ${unknownReasonText(pr.reason)}${retryText(pr.retryAt)}${stale}`;
   }
@@ -223,7 +231,17 @@ function checkText(pr: PrState): string {
   return ` ${CHECK_PHRASE[pr.checks ?? 'none']}${names}.`;
 }
 
-export function PrKeycap({ pr, onOpen }: { pr: PrState | null; onOpen: () => void }): ReactNode {
+export function PrKeycap(
+  { pr, onOpen, 'data-command': command, notYet }: {
+    pr: PrState | null;
+    onOpen: () => void;
+    /** The registry command this cap is the door of (`session-pr`, W2 Task S2d), carried for the parity test. */
+    'data-command'?: string;
+    /** Set while the door cannot act yet (the inspector's, before the session screen has loaded; console speed C1):
+     *  what it says instead of the PR's sentence, and the cap is drawn `aria-disabled`. */
+    notYet?: string;
+  },
+): ReactNode {
   // MUTATION SURVIVOR, disclosed: `??` here is swappable for `||` with the
   // suite green, and no test can ever distinguish them. `pr` is
   // `PrState | null`, and a `PrState` is an object — so the only falsy values
@@ -236,17 +254,21 @@ export function PrKeycap({ pr, onOpen }: { pr: PrState | null; onOpen: () => voi
   const state = pr ?? UNCHECKED_PR;
   const glyph = state.checks === null ? null : CHECK_GLYPH[state.checks];
   return (
-    <button
-      type="button"
-      className="keycap keycap--pr"
+    <Keycap
+      className="keycap--pr"
       data-phase={state.phase}
       data-checks={state.checks ?? undefined}
       aria-label={prSentence(state)}
+      title={notYet ?? tooltipSentence(prSentence(state))}
+      aria-disabled={notYet === undefined ? undefined : 'true'}
+      data-command={command}
       onClick={onOpen}
     >
       <span className="pr-dot" aria-hidden="true" />
+      {/* Two spans, one shown per width (chat.css): the legend below 900, the door's word from it. */}
       <span className="pr-legend">{prLegend(state)}</span>
+      <span className="keycap-word" aria-hidden="true">{prDoorWord(state)}</span>
       {glyph !== null && <span className="pr-glyph" aria-hidden="true">{glyph}</span>}
-    </button>
+    </Keycap>
   );
 }

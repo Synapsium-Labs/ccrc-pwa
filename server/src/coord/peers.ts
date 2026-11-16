@@ -28,6 +28,9 @@ export interface PeerProbe {
   readonly tmux: 'live' | 'gone' | 'unknown';
   readonly panePid: number | null;
   readonly lifecycle: SessionLifecycle;
+  /** D-5242: `$REG/<id>.hibernated` is listed — the session is ASLEEP (`ccd hibernate`), from the registry listing the
+   *  caller already took (`FleetSession.hibernatedAt !== null`). */
+  readonly hibernated: boolean;
 }
 
 /** Rung 4's total table — `Record<SessionLifecycle, …>` so a ninth
@@ -51,6 +54,11 @@ const LIFECYCLE_RUNG: Record<SessionLifecycle, 'pass' | 'no' | 'unknown'> = {
 export function peerDeliverable(p: PeerProbe): PeerDeliverable {
   if (p.registry === 'absent') return 'no:not-in-registry';
   if (p.registry === 'unmeasurable') return 'unknown';
+  // D-5242: a HIBERNATED peer is deliverable — the mail lane wakes it (`ccd ensure`, under the fleet-wide wake budget)
+  // and delivers once it is up, holding the mail under its `hibernated` gate meanwhile. After the registry rungs (an
+  // absent or unreadable row is never vouched for) and BEFORE the tmux rung, which would answer `no:session-gone` for
+  // the pane `ccd hibernate` killed before `LIFECYCLE_RUNG` ever read its `stopped`.
+  if (p.hibernated) return 'yes';
   if (p.tmux === 'gone') return 'no:session-gone';
   if (p.tmux === 'unknown') return 'unknown';
   if (p.panePid === null) return 'no:no-pane';

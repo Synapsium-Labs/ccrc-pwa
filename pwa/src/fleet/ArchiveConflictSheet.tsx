@@ -1,10 +1,10 @@
 // The archive-conflict sheet — what `409 run-open` looks like to a human.
 //
-// WITHOUT THIS FILE the operator sees the toast "Archiving failed —
-// run-open": `apiErrorText` is stderr-first, then `API_ERROR_TEXT` (one key,
-// `unsupported`), then `err.message`, which `ApiError`'s constructor sets
-// from `body.error` — and a 409 has no stderr. A bare slug in a toast is the
-// precise defect `API_ERROR_TEXT`'s own docstring was written to close.
+// WITHOUT THIS SHEET the operator sees a toast: `apiErrorText` is stderr-first, then `API_ERROR_TEXT` (which spreads
+// `ARCHIVE_REFUSAL_TEXT`, so `run-open` is a sentence now, not a bare slug), and a 409 has no stderr. The sentence
+// is "A run still claims this workspace." — and a toast names no run and offers no way forward. This sheet names the
+// run and keeps "Archive anyway" under the operator's own hand. Its one door today is `PrSheet`; the actions sheet's
+// archive goes through `ArchiveSheet`, which shares this file's validator, `isArchiveConflictRun`.
 //
 // On `Sheet`, modelled line-for-line on `AbandonSheet` — the one 409 idiom in
 // this codebase that dispatches on status, reads a SECOND body field so the
@@ -25,8 +25,9 @@
 // mean it".
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Sheet } from '../components/Sheet';
-import { ApiError, UNSUPPORTED_VERB_TEXT, api } from '../lib/api';
+import { ARCHIVE_REFUSALS, isArchiveRefusal } from '../../../shared/api';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet } from '@ccrc/ui';
+import { ARCHIVE_REFUSAL_TEXT, ApiError, UNSUPPORTED_VERB_TEXT, api, apiErrorText, isRegistryUnmeasurable } from '../lib/api';
 import './fleet.css';
 
 /** One run named by a `409 run-open` body. DEGRADE, NEVER INVENT: if `runs`
@@ -45,7 +46,7 @@ export interface ArchiveConflictRun {
  *  is coverage of something no operator can reach.
  *
  *  It was DROPPED rather than wired because neither door has run-board
- *  navigation to hand it: `SessionActionsSheet` lives on FleetScreen and
+ *  navigation to hand it: `SessionActionsSheet` renders from FleetFlows and
  *  `PrSheet` under SessionHeader, and neither takes a navigate/route prop —
  *  inventing one is a surface the plan never designed, decided from a review
  *  finding.
@@ -62,10 +63,31 @@ export interface ArchiveConflictSheetProps {
   onDone?: () => void;
 }
 
+/** THE ONE VALIDATOR of a run, shared by every reader of a run-bearing body in the client: `runOpenRuns` below and
+ *  `ArchiveSheet`'s `runsOf` (its `ended`, `closed`, `notClosed` and `coordinator-has-open-runs` members) both filter
+ *  through it, so a fix to what counts as a readable run lands once.
+ *
+ *  ALL FOUR fields are measured, `waveOf` included. It used to be the one
+ *  this predicate ASSERTED and did not check — and a type predicate that
+ *  asserts is a lie the compiler then believes everywhere downstream: a
+ *  member merely OMITTING `waveOf` passed as `undefined`, and `runPhrase`
+ *  suppresses the `/total` suffix only on `=== null`, so the sheet rendered
+ *  "wave 2/undefined" at the operator. `null` is admitted because it is the
+ *  LEGITIMATE value (a wave whose total is not known); anything else is a
+ *  body this build cannot read, and the sheet's degrade case — "A run is
+ *  still open on this workspace", naming no id — is the right answer to it. */
+export const isArchiveConflictRun = (v: unknown): v is ArchiveConflictRun =>
+  typeof v === 'object' && v !== null
+  && typeof (v as ArchiveConflictRun).id === 'number'
+  && typeof (v as ArchiveConflictRun).program === 'string'
+  && typeof (v as ArchiveConflictRun).wave === 'number'
+  && ((v as ArchiveConflictRun).waveOf === null || typeof (v as ArchiveConflictRun).waveOf === 'number');
+
 /** `409 { error:'run-open', runs }` -> the runs, or `null` for any other
  *  error. THE ONE READER of that body in the whole client: Task 213 wires TWO
  *  doors (`PrSheet`, `SessionActionsSheet`) into this sheet, and a reader per
- *  door is how the two sentences drift.
+ *  door is how the two sentences drift. A member of `runs` is read by
+ *  `isArchiveConflictRun`, the one validator of a run that `ArchiveSheet` shares.
  *
  *  THREE answers, three different facts, and they must not collapse into two:
  *    - `null`  — not a run-open refusal at all: the caller toasts it exactly
@@ -82,25 +104,10 @@ export function runOpenRuns(err: unknown): readonly ArchiveConflictRun[] | null 
   if (!(err instanceof ApiError) || err.status !== 409) return null;
   const body = err.body;
   if (typeof body !== 'object' || body === null) return null;
-  if ((body as { error?: unknown }).error !== 'run-open') return null;
+  if ((body as { error?: unknown }).error !== ARCHIVE_REFUSALS.runOpen) return null;
   const raw = (body as { runs?: unknown }).runs;
   if (!Array.isArray(raw)) return [];
-  // ALL FOUR fields are measured, `waveOf` included. It used to be the one
-  // this predicate ASSERTED and did not check — and a type predicate that
-  // asserts is a lie the compiler then believes everywhere downstream: a
-  // member merely OMITTING `waveOf` passed as `undefined`, and `runPhrase`
-  // suppresses the `/total` suffix only on `=== null`, so the sheet rendered
-  // "wave 2/undefined" at the operator. `null` is admitted because it is the
-  // LEGITIMATE value (a wave whose total is not known); anything else is a
-  // body this build cannot read, and the sheet's degrade case — "A run is
-  // still open on this workspace", naming no id — is the right answer to it.
-  return raw.filter((r): r is ArchiveConflictRun =>
-    typeof r === 'object' && r !== null
-    && typeof (r as ArchiveConflictRun).id === 'number'
-    && typeof (r as ArchiveConflictRun).program === 'string'
-    && typeof (r as ArchiveConflictRun).wave === 'number'
-    && ((r as ArchiveConflictRun).waveOf === null
-        || typeof (r as ArchiveConflictRun).waveOf === 'number'));
+  return raw.filter(isArchiveConflictRun);
 }
 
 /** `err` -> the sentence rendered INSIDE the sheet. Status-first dispatch,
@@ -108,7 +115,12 @@ export function runOpenRuns(err: unknown): readonly ArchiveConflictRun[] | null 
  *  because a failed forced archive has nowhere else to be said. */
 function archiveErrorText(err: unknown): string {
   if (!(err instanceof ApiError)) return 'the archive was refused, for a reason this build does not recognise';
+  // D-5971: the word, at any status — the box never ran the archive, so the 502 arm's "failed on the box" is wrong.
+  if (isRegistryUnmeasurable(err)) return apiErrorText(err);
   if (err.status === 404) return 'that session is gone — the fleet will catch up';
+  // Workspace lifecycle §5.2: the door's typed refusals, in the words every archive surface uses.
+  const code = typeof err.body === 'object' && err.body !== null ? (err.body as { error?: unknown }).error : undefined;
+  if (err.status === 409 && isArchiveRefusal(code)) return ARCHIVE_REFUSAL_TEXT[code];
   if (err.status === 501) return UNSUPPORTED_VERB_TEXT;
   if (err.status === 502) {
     const stderr = typeof err.body === 'object' && err.body !== null
@@ -118,8 +130,26 @@ function archiveErrorText(err: unknown): string {
   return 'the archive was refused, for a reason this build does not recognise';
 }
 
-const runPhrase = (r: ArchiveConflictRun): string =>
+export const runPhrase = (r: ArchiveConflictRun): string =>
   `run ${r.id} — ${r.program} wave ${r.wave}${r.waveOf === null ? '' : `/${r.waveOf}`}`;
+
+/** The claimed workspace's two sentences, ONE spelling for the two sheets that say them: this one, behind the PR
+ *  sheet's door, and `ArchiveSheet`'s `run-open` case (workspace lifecycle §5.2). `null` runs degrade, never invent. */
+export const claimedSentence = (named: readonly ArchiveConflictRun[] | null): string =>
+  named === null
+    ? 'A run is still open on this workspace'
+    : named.length === 1
+      ? `${runPhrase(named[0]!)} is still open on this workspace.`
+      : `${named.map(runPhrase).join('; ')} are still open on this workspace.`;
+
+/** The sheet's own title, and the one the archive sheet gives the same
+ *  refusal when it renders it in place. TWO SURFACES, ONE CLAIM — the literal
+ *  census found the second copy, which neither the markup nor the shape
+ *  census could see: a `title=` prop takes a string, not a class. */
+export const CLAIMED_TITLE = 'This workspace is claimed';
+
+export const CLAIMED_CONSEQUENCE =
+  'Archiving stops the session and puts the worktree away. Nothing is deleted, but the run loses the workspace it is working in.';
 
 export function ArchiveConflictSheet({
   sessionId, runs, onClose, onDone,
@@ -167,30 +197,36 @@ export function ArchiveConflictSheet({
   };
 
   return (
-    <Sheet open onClose={onClose} title="This workspace is claimed">
-      <div className="archive-conflict-sheet">
-        <p className="qc-consequence">
-          {named === null
-            ? 'A run is still open on this workspace'
-            : named.length === 1
-              ? `${runPhrase(named[0]!)} is still open on this workspace.`
-              : `${named.map(runPhrase).join('; ')} are still open on this workspace.`}
-        </p>
-        <p className="qc-consequence">
-          Archiving stops the session and puts the worktree away. Nothing is deleted, but the
-          run loses the workspace it is working in.
-        </p>
-        <div className="qc-actions">
-          <button type="button" className="btn-primary" disabled={busy} onClick={force}>
+    <Sheet
+      open
+      onClose={onClose}
+      title={CLAIMED_TITLE}
+      // The answers are pinned in the Sheet's footer (D-5932).
+      footer={
+        <div className={QC_ACTIONS}>
+          <Button variant="danger" disabled={busy} onClick={force}>
             {busy ? 'Archiving…' : 'Archive anyway'}
-          </button>
+          </Button>
           {/* Two buttons, not three — see the `onOpenRun` note on
               `ArchiveConflictSheetProps` for the affordance that was here and
               why it went. */}
-          <button type="button" className="btn-ghost" disabled={busy} onClick={onClose}>
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
             Cancel
-          </button>
+          </Button>
         </div>
+      }
+    >
+      <div className="archive-conflict-sheet">
+        {/* MERGE NOTE: main moved both sentences behind `claimedSentence` and
+            `CLAIMED_CONSEQUENCE`, which is a single-source-of-truth win this
+            branch has no argument with — the branch had only restyled the
+            literals it replaced. Main's text, the branch's utilities. */}
+        <p className={QC_CONSEQUENCE}>
+          {claimedSentence(named)}
+        </p>
+        <p className={QC_CONSEQUENCE}>
+          {CLAIMED_CONSEQUENCE}
+        </p>
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>
     </Sheet>

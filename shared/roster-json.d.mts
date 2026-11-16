@@ -1,10 +1,12 @@
-import type { Hue, ExecSpec } from './roster.js';
+import type { AccountDef, Hue, ExecSpec, CodexBridgeMode, CodexUpstream } from './roster.js';
+import type { ProviderId } from './providers.js';
+import type { FableBilling, ContinuityRecord } from './rosterFacts.js';
 
 /**
  * One account as validated by `rosterFromJson` — the flattened shape Task
  * 5's wrapper writer and `deploy/gen-accounts.mjs`'s emitter both consume
- * structurally. `execKind` and `secretsFile` are `checkAccount`'s own
- * projection of `shared/roster.ts`'s nested `exec: ExecSpec` (D-75, closed
+ * structurally. `execKind`, `secretsFile` and `provider` are `checkAccount`'s
+ * own projection of `shared/roster.ts`'s nested `exec: ExecSpec` (D-75, closed
  * by the move to this file); every other field matches `AccountDef`
  * one-for-one.
  */
@@ -13,7 +15,8 @@ export interface RosterJsonAccount {
   label: string;
   configDirSuffix: string;
   homeAble: boolean;
-  telemetry: 'anthropic' | 'none';
+  /** `AccountDef['telemetry']`, so the union has one home (D-5753). */
+  telemetry: AccountDef['telemetry'];
   hue: Hue;
   /** The account's pool, or `null` for untagged — `AccountDef.pool`
    *  (`shared/roster.ts`) one-for-one, including that a JSON `null` is
@@ -22,15 +25,35 @@ export interface RosterJsonAccount {
    *  `_ccrc_pool`. `hidden` is validated by `checkAccount` and NOT returned:
    *  nothing downstream of this type reads it. */
   pool: string | null;
+  /** `AccountDef.fableBilling` one-for-one: `null` only for an absent key, a written `null` is REFUSED. Returned
+   *  because `generateAccountsSh` emits it into `_ccrc_fable_billing`. */
+  fableBilling: FableBilling | null;
+  /** `AccountDef.continuity` one-for-one, as `{recordedAt}`, `null` for an absent key. Emitted into `_ccrc_continuity`. */
+  continuity: ContinuityRecord | null;
   execKind: ExecSpec['kind'];
   /** Present only when the roster declared one; `undefined` otherwise. Legal on
-   *  ALL THREE exec kinds and gated identically on each — on `generated` it is
-   *  the file ccrc writes and the wrapper sources; on `upstream` and `external`
-   *  it is declarative, naming the file somebody else's launcher sources so
-   *  doctor can say whether it exists. This docstring used to add "including
-   *  whenever `execKind` is not `'generated'`", which the code never did
+   *  ALL FOUR exec kinds and gated identically on each — on `generated` and
+   *  `codex` it is the optional file ccrc's owned launcher may source; on
+   *  `upstream` and `external` it is declarative, naming the file somebody
+   *  else's launcher sources so doctor can say whether it exists. This docstring
+   *  used to add "including whenever `execKind` is not `'generated'`", which the code never did
    *  (D-1855). */
   secretsFile: string | undefined;
+  /** `exec.provider` exactly as the roster spelled it, `undefined` when absent
+   *  (always on `upstream`, and on a `generated` row `parseRoster` would default
+   *  to `anthropic`). Returned since D-8098: `generateAccountsSh` reads it for
+   *  `CCRC_PAY_PER_USE`. */
+  provider: ProviderId | undefined;
+  /** Present only when `execKind === 'codex'`: the lane's two listener ports
+   *  and OAuth directory, copied exactly from its validated exec topology. */
+  proxyPort?: number;
+  litellmPort?: number;
+  authDir?: string;
+  /** Present only when `execKind === 'codex'`, RESOLVED: an absent roster key
+   *  reads the first word of `shared/roster.ts`'s `CODEX_BRIDGE_MODES` /
+   *  `CODEX_UPSTREAMS` (codex-bridge spec D20). */
+  bridge?: CodexBridgeMode;
+  upstream?: CodexUpstream;
 }
 
 /**

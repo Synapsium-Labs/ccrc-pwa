@@ -4,8 +4,8 @@ Both specs below are verified against the live code, not just reasoned about. Pa
 
 # PART 1 — `ccd ws-rm` orphans the branch when the worktree directory is gone
 
-**File:** `/srv/projects/OpenClawHetzner/infra/<server-host>-portability/ccd` (`cmd_ws_rm`, lines 233–271)
-**Tests:** `/srv/projects/OpenClawHetzner/infra/ccrc/server/test/ccd-workspaces.test.ts` (`describe('ws-rm')`, line 295)
+**File:** `/srv/projects/project-c/infra/<server-host>-portability/ccd` (`cmd_ws_rm`, lines 233–271)
+**Tests:** `/srv/projects/project-c/infra/ccrc/server/test/ccd-workspaces.test.ts` (`describe('ws-rm')`, line 295)
 
 ## 1. The defect, exactly
 

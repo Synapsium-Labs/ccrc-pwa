@@ -10,14 +10,24 @@
 //  2. `ccrc` is invoked through `<home>/ccrc/ccd/ccrc` — the shape of a
 //     deployed box, and the shape `CCRC_HERE` (ccd/ccrc:842-844) resolves
 //     `../deploy/account-op.mjs` against.
-//  3. `ghContainedEnv` plants the poisoned `gh`; curl/systemctl/launchctl are
-//     poisoned beside it (ccrc-cli.test.ts's `ccrcEnv` idiom). This verb shells
-//     out to none of them, which is itself asserted below.
+//  3. `ghContainedEnv` plants the poisoned `gh`; curl/systemctl/systemd-run/
+//     launchctl are poisoned beside it (ccrc-cli.test.ts's `ccrcEnv` idiom).
+//     This verb shells out to none of them, which is itself asserted below —
+//     with ONE exception since Plan 2b-2: removing a CODEX lane asks systemctl
+//     whether a user manager exists. The poison says no, so the removal stops
+//     only the tiers it proves its own, on the nohup arm. A case that needs a
+//     manager plants Task 4's fake one (`plantSystemd`), and `env()` then
+//     leaves it standing in the two manager poisons' place — writing either
+//     poison back only if its name is ABSENT (final review E1), so a lost
+//     plant line can never leave the name to the box's real binary.
+//     Every runner then checks its FINAL env (`assertManagerStandIns`,
+//     codexLaneFixture.ts) immediately before the spawn: both manager names
+//     must resolve to a marked stand-in inside this HOME.
 //  4. This file is NOT in the name-triggered containment scan
 //     (`ccd-workspaces.test.ts:1177` selects /^ccd.*\.ts$/), so the poisons are
 //     here because they are right, not because a scanner demands them.
-import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { describe, it, expect, afterEach } from 'vitest';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
   appendFileSync, chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync,
@@ -26,14 +36,32 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
+import { CCD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
+import { takePoisonRecord, takeExpectedPoison } from './containedTools.js';
 import { PROVIDERS, PROVIDER_IDS } from '../../shared/providers.js';
 import { markGenerated } from '../../shared/mark.mjs';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
+import {
+  alive, assertManagerStandIns, codexAuthDir, eventually, fakeUnit, failUnitStop, freePorts,
+  killLaneProcesses, MANAGER_STANDIN_MARK, plantCodexUsage, plantForeignUsage, plantSystemd, portAccepts, psArgs, spawnFakeLitellm,
+  systemctlCalls, systemdRunCalls,
+} from './codexLaneFixture.js';
+import { shadowAccountOp } from './laneStateFixture.js';
+import { pythonOrSkip } from './ccgptHarness.js';
+import { CLOSED_AUTH_BASE, plantBackendCredential } from './codexAuthFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const CCRC_SRC = join(REPO, 'ccd', 'ccrc');
+
+// Every fixture HOME is registered before an async setup can track a process.
+// Existing local finally blocks make the prompt path explicit; this is the
+// ordinary-failure net when a setup rejects before reaching one.
+const fixtureHomes: string[] = [];
+afterEach(async () => {
+  for (const home of fixtureHomes.splice(0)) await killLaneProcesses(home);
+});
 
 /** bash's absolute path, resolved once under this process's real PATH. */
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
@@ -46,24 +74,37 @@ const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
  *  `../shared/base-url.mjs` too — `account-op.mjs`'s own header states the
  *  same fact), and node resolves both through the link's realpath — the
  *  fixture never needs a copy of either directory, which is also why a new
- *  sibling import costs this fixture nothing. (`ccrc-doctor.test.ts` COPIES
+ *  sibling import costs this fixture nothing. (`ccrc-doctorFixture.ts` COPIES
  *  instead, and there the closure has to be listed file by file — Task 33.)
  *
  *  IT ALSO MATERIALISES THE CONTAINMENT BINS, and that last line is not
- *  housekeeping. `ghContainedEnv` → `harnessBin` (ccdWsHelpers.ts:123-127) does
+ *  housekeeping. `ghContainedEnv` → `harnessBin` (ccdWsHelpers.ts) does
  *  `mkdirSync(<home>/.local/bin)` and then writes the `gh` poison
- *  (:177-179), and `env()` below writes three more beside it — so
- *  `~/.local/bin` goes from ABSENT to four entries the first time anything
+ *  (`ghContainedEnv`'s first `fs.writeFileSync`), and `env()` below writes its
+ *  own poisons beside it — so
+ *  `~/.local/bin` goes from ABSENT to one entry per poison the first time anything
  *  calls `run()`. A test that brackets a run with a directory snapshot — the
  *  shape "leaves the box alone" (below) checks with `existsSync`, not a
  *  listing — would be measuring the HARNESS arriving rather than the verb
  *  writing, and would red on every refusal row for a reason that has
  *  nothing to do with the refusal under test. Building the env once here, at
  *  box-construction time, moves that arrival before the baseline. `env()` is
- *  idempotent — it rewrites the same four files with the same bytes — so the
+ *  idempotent — it rewrites the same files with the same bytes — so the
  *  `run()` calls that follow change nothing about the listing. */
 function box(prefix: string): string {
   return boxAt(mkTmp(prefix));
+}
+
+/** `_svc_have_user_manager`'s probe, which a codex lane's stop and reap ask on Linux (Darwin answers "no manager"
+ *  before asking): `systemctl --user show-environment`, answered 97 by this file's systemctl poison, which reads as NO
+ *  user manager, the nohup arm these cases mean. Read-only `is-active` state queries ride beside it. */
+const NO_MANAGER_PROBE = /^--user (?:show-environment|is-active [A-Za-z0-9@._-]+)$/;
+
+/** Takes `home`'s systemctl poison record when it holds nothing but that probe (D-8394: a case that meets the poison
+ *  on purpose takes it); any other argv in it is left for the teardown, which reds. A Darwin box never asks. */
+function takeNoManagerProbe(home: string): void {
+  const took = takeExpectedPoison(home, 'systemctl', NO_MANAGER_PROBE);
+  if (process.platform === 'darwin') expect(took, 'a Darwin box asked systemctl for a user manager').toBe(false);
 }
 
 /** A fixture HOME `chars` characters long or a little more, carrying the same
@@ -93,42 +134,90 @@ function boxAt(home: string): string {
   symlinkSync(join(REPO, 'deploy'), join(home, 'ccrc', 'deploy'));
   symlinkSync(join(REPO, 'shared'), join(home, 'ccrc', 'shared'));
   env(home);   // for its side effects only — see the paragraph above
+  fixtureHomes.push(home);
   return home;
 }
 
+/** The env every runner in this file spawns under, CHECKED: `buildEnv`'s
+ *  poisons, then {@link assertManagerStandIns} on exactly what is returned.
+ *  A runner that merges an `extraEnv` over it (`run`, `sourceRun`) checks
+ *  the MERGED env again, because a PATH override is the one way a later
+ *  merge could put something else first (final review E1). */
 function env(home: string): NodeJS.ProcessEnv {
-  const e = ghContainedEnv(home, { ...process.env, HOME: home });
+  const e = buildEnv(home);
+  assertManagerStandIns(e, home);
+  return e;
+}
+
+function buildEnv(home: string): NodeJS.ProcessEnv {
+  // `net` (the second ring, residue R35(a), D-8394): ssh, scp and curl poisons, create-if-absent, so this file's own
+  // curl poison below still replaces the curl one; the fixture user bus is set for every caller. Not
+  // `ccrcContainedEnv`: its tmux poison records into `tmux-calls`, the log this file keeps apart (see `tmux` below).
+  const e = ghContainedEnv(home, { ...process.env, HOME: home }, { net: true });
+  // Every poison carries the manager stand-in mark: the two manager names'
+  // final-env check reads it, and on the other names it is inert.
   const poison = (name: string, says: string, ifAbsent = false): void => {
     const p = join(home, '.local', 'bin', name);
     if (ifAbsent && existsSync(p)) return;
     writeFileSync(p,
-      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
+      `#!/bin/sh\n${MANAGER_STANDIN_MARK}\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
       + `echo "${says}" >&2\nexit 97\n`, { mode: 0o755 });
   };
   poison('curl', 'ccrc tests must never reach a real server');
-  poison('systemctl', 'ccrc tests must never query this box\'s real systemd');
+  // TASK 4'S FAKE MANAGER, ONCE A CASE HAS PLANTED ONE, STANDS IN PLACE OF
+  // BOTH MANAGER POISONS (Plan 2b-2 Task 8, ruling R31). `plantSystemd` writes
+  // a functional `systemctl` and a `systemd-run` into this same
+  // `~/.local/bin`. Those fakes answer only from `$HOME/fake-systemd`, and an
+  // unconditional poison here would overwrite them on the very `run()` that
+  // needs them. Either way nothing reaches a real manager. ONCE MANAGED, THE
+  // POISONS ARE CREATE-IF-ABSENT rather than skipped (final review E1): a
+  // `plantSystemd` that lost either write leaves that name ABSENT, and
+  // skipping would let `command -v` find the box's real binary — measured at
+  // review as `systemd-run=/usr/bin/systemd-run`.
+  const managed = existsSync(join(home, 'fake-systemd', 'user-manager'));
+  poison('systemctl', 'ccrc tests must never query this box\'s real systemd', managed);
+  // THE TRANSIENT-UNIT STARTER, poisoned on the same terms (Plan 2b-2 Task 8).
+  // A codex lane's removal reaches `_svc_have_user_manager`, whose first half
+  // is `command -v systemd-run`, and on this box that found the REAL binary.
+  // Nothing in the reap runs it. This poison makes that a property of the
+  // harness rather than of today's code ("every systemd-run a test can reach
+  // is a fixture").
+  poison('systemd-run', 'ccrc tests must never start a transient unit on this box\'s real user manager', managed);
   poison('launchctl', 'ccrc tests must never query this box\'s real launchd');
-  // THE FOURTH POISON, AND IT IS CREATE-IF-ABSENT while the three above are
-  // not. `env()` runs on EVERY `run()`, so an unconditional write would
+  // The linger switch of the same user manager, a contained tool since D-8394 (residue R35(f)).
+  poison('loginctl', 'ccrc tests must never change this box\'s real linger', true);
+  // THE LAST POISON, AND IT IS ALWAYS CREATE-IF-ABSENT, where curl and
+  // launchctl never are and the two manager poisons are only once managed.
+  // `env()` runs on EVERY `run()`, so an unconditional write would
   // re-plant itself between two calls and displace a test's own tmux stub;
-  // curl/systemctl/launchctl want the unconditional write because nothing in
-  // this file ever wants those to answer. `ghContainedEnv` draws exactly this
-  // line for exactly this reason (ccdWsHelpers.ts:192-200, the guard at :233).
+  // curl/launchctl want the unconditional write because nothing in this file
+  // ever wants those to answer, and the two manager poisons are written on
+  // every `run()` until a case plants Task 4's fake manager (above).
+  // `ghContainedEnv` draws exactly this
+  // line for exactly this reason (`ghContainedEnv`'s CREATE-IF-ABSENT comment and
+  // its guard `if (fs.existsSync(p)) continue;`).
   // Without it `_acct_live` (Task 28) reaches the DEVELOPER's tmux server: this
   // runner keeps the real PATH, and a box that happens to have a server running
   // would answer `measured` where a box that does not would answer `null`.
   //
   // IT IS THIS FILE'S OWN POISON RATHER THAN `ghContainedEnv(…, {tmux:true})`,
   // and the difference is the LOG NAME. That one records into `$HOME/tmux-calls`
-  // (ccdWsHelpers.ts:229), which is also where `plantTmux` below records — so
+  // (`ghContainedEnv`'s `tmux` row), which is also where `plantTmux` below records — so
   // "the poison answered" and "the fixture's own tmux answered" would be the
   // same file, and the case that asserts tmux was never asked could not tell a
   // silent poison from an absent stub. `$HOME/tmux-poison` keeps the two
   // conditions apart, which is the whole claim of the no-rows case.
   poison('tmux', 'ccrc account tests must never reach this box\'s real tmux', true);
+  // The lane library's two knobs (Plan 2b-2, ruling R23): a codex removal
+  // reaches `_codex_tier_ours`' per-probe bound (CCRC_CODEX_PROBE_S) and
+  // `_codex_lock`'s wait (CCRC_CODEX_READY_S), and a developer's exported
+  // value would change both.
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
     'CCRC_ACCOUNT_AUTH_TIMEOUT',
-    'CCRC_ACCOUNT_PROBE_TIMEOUT']) delete e[k];
+    'CCRC_ACCOUNT_PROBE_TIMEOUT',
+    'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S',
+    // Plan 3b Task A3: account removal's wait for a running usage poll.
+    'CCRC_ACCT_USAGE_WAIT_S']) delete e[k];
   return e;
 }
 
@@ -140,11 +229,13 @@ interface Result { code: number; stdout: string; stderr: string }
  *  purpose: `env()` DELETES every `CCRC_*` this CLI reads so the answer never
  *  depends on the developer's exported shell, so a knob a test wants to set is
  *  a knob that has just been deleted. `runDoctor`'s shape
- *  (`ccrc-doctor.test.ts:884`). */
+ *  (`ccrc-doctorFixture.ts`'s `runDoctor`). */
 function run(home: string, args: string[], stdin = '',
   extraEnv: NodeJS.ProcessEnv = {}): Result {
+  const merged = { ...buildEnv(home), ...extraEnv };
+  assertManagerStandIns(merged, home);
   const r = spawnSync(BASH, [ccrcIn(home), ...args],
-    { env: { ...env(home), ...extraEnv }, encoding: 'utf8', input: stdin });
+    { env: merged, encoding: 'utf8', input: stdin });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -313,15 +404,15 @@ describe('deploy/account-op.mjs: the one writer of this verb\'s stdout', () => {
     expect(got).toEqual(want);
     // The composition is what the op prints, so the columns are measured
     // through it rather than beside it — but the ORDER of a connect list is
-    // offer order (§4.2: anthropic's `login` is "(default)", and `check-add`
-    // takes `P.connect[0]` when `--method` is absent), so it is compared as a
-    // sequence and never as a set.
-    expect((got['anthropic'] as { connect: string[] }).connect[0]).toBe('login');
+    // offer order (Q1: anthropic's Mint is the default since accounts plan Task
+    // A20, and `check-add` takes `P.connect[0]` when `--method` is absent), so
+    // it is compared as a sequence and never as a set.
+    expect((got['anthropic'] as { connect: string[] }).connect[0]).toBe('setup-token');
   });
 });
 
 /** A roster on the fixture box, plus the accounts.sh projection ccd and the
- *  four installers read. Written through the real generator so the fixture can
+ *  six installers read. Written through the real generator so the fixture can
  *  never disagree with what a deployed box would have. */
 function seedBoxRoster(home: string, roster: unknown): void {
   mkdirSync(join(home, '.ccrc'), { recursive: true });
@@ -559,7 +650,7 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
     //
     // POISONING `stat` IS THE WAY IN. `_plat_size` shells out to it
     // (ccd/ccrc:150), and `ghContainedEnv` puts `<home>/.local/bin` FIRST on
-    // PATH (ccdWsHelpers.ts:185), so a shim there outranks the real one — the
+    // PATH (its returned `PATH: ${bin}:…`), so a shim there outranks the real one — the
     // same mechanism as this file's `env()` poisons for curl/systemctl/launchctl.
     // It is planted per-CASE rather than in `env()` because a box with no
     // working `stat` is this one case's subject and every other case's broken
@@ -669,9 +760,10 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
 
   it('a bin directory with nothing account-shaped in it answers an empty list, not a refusal', () => {
     // NOT an empty directory, and the name says so: `ghContainedEnv` +
-    // `harnessBin` (ccdWsHelpers.ts:123-127) create `<home>/.local/bin` and
-    // plant `gh`, and this file's own `env()` plants curl/systemctl/launchctl
-    // and — since Task 28 — tmux beside it. All FIVE are id-shaped `#!`
+    // `harnessBin` (ccdWsHelpers.ts) create `<home>/.local/bin` and
+    // plant `gh`, and this file's own `env()` plants curl/systemctl/launchctl,
+    // tmux (since Task 28) and systemd-run (since Plan 2b-2) beside it. All SIX
+    // are id-shaped `#!`
     // scripts, so they pass two of the
     // predicates and are dropped by `_wrap_declares_config_dir` — which is
     // exactly the "anything looser would report every tool in ~/.local/bin as
@@ -683,13 +775,15 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
     // be admitted here on purpose rather than absorbed. A poison that started
     // declaring a config dir would leave this list unchanged and turn the
     // `candidates` answer below non-empty, which is the half the census cannot
-    // see and the `toEqual([])` can.
+    // see and the `toEqual([])` can. Plan 2b-2's systemd-run poison was
+    // admitted the same way.
     const home = box('ccrc-account-cands-empty-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     const r = run(home, ['account', 'candidates']);
     expect(r.code).toBe(0);
+    // ssh, scp (`net`) and loginctl admitted on purpose by the second ring (residue R35(a) and (f), D-8394).
     expect(readdirSync(join(home, '.local', 'bin')).sort())
-      .toEqual(['curl', 'gh', 'launchctl', 'systemctl', 'tmux']);
+      .toEqual(['curl', 'gh', 'launchctl', 'loginctl', 'scp', 'ssh', 'systemctl', 'systemd-run', 'tmux']);
     expect(oneObject(r)['candidates']).toEqual([]);
   });
 });
@@ -943,7 +1037,7 @@ function sourceCall(home: string, script: string, stdin = ''): Result {
  *  reason `ccrc-passwd.test.ts:100` states — without a terminal the refusing
  *  branch is the ONLY one a test can reach — and each pins the deletion of its
  *  guard as a mutation (`ccrc-passwd.test.ts:484`, `ccrc-expose.test.ts:262`,
- *  `ccrc-install.test.ts:3222`). This gate INVERTS: it refuses the terminal. It
+ *  `ccrc-install-*.test.ts`). This gate INVERTS: it refuses the terminal. It
  *  is pinned the same way anyway, because the inversion does not change the
  *  fact that a pipe-only test can never reach the branch, and a guard no test
  *  can reach is a guard nothing measures. Task 22's plan carried no test for
@@ -968,7 +1062,7 @@ function sourceCallTty(home: string, script: string): Promise<Result> {
       clearTimeout(timer);
       resolve({ code, stdout: out, stderr: '' });   // a pty merges the two streams
     };
-    // 19s, NOT 20s — `ccrc-install.test.ts:3247`'s number and its reason.
+    // 19s, NOT 20s — `ccrc-install-*.test.ts`'s number and its reason.
     // `server/vitest.config.ts:87` sets `testTimeout: 20_000` on linux, so a
     // 20s timer here TIES with the runner and loses: measured at review round
     // 1, vitest won at 20012ms, `p.kill()` never ran and the pty `bash` was
@@ -1289,8 +1383,8 @@ const ADD_LANES: [string, Record<string, string | null>][] = [
 
 /** Everything a refusal must not have touched.
  *
- *  `bins` is a DIFFERENCE, not an absolute: the four containment poisons
- *  (`gh` from `ghContainedEnv`, plus curl/systemctl/launchctl from `env()`)
+ *  `bins` is a DIFFERENCE, not an absolute: the containment poisons
+ *  (`gh` from `ghContainedEnv`, plus curl/systemctl/systemd-run/launchctl/tmux from `env()`)
  *  live in that directory too, and `box()` plants them before any baseline is
  *  taken precisely so this comparison measures the verb. The property each row
  *  actually means — "no wrapper was written for the id it refused" — is
@@ -1364,8 +1458,10 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     ['a suffix another account already holds', { '--suffix': '.claude-a' },
       'suffix-collision', 1],
     ['a provider nothing knows', { '--provider': 'orchard' }, 'unknown-provider', 2],
-    ['a provider whose lane is somebody else\'s launcher',
-      { '--provider': 'openai', '--base-url': null }, 'external-provider-use-declare', 2],
+    // `add` makes this lane now (accounts plan Task A24), as a `direct` lane that needs no Codex runtime (Stage 4,
+    // Task 7), so what refuses here is the credential this table's argv carries: a ChatGPT lane's credential is its
+    // sign-in. `ccrc-account-codex-add.test.ts` drives the add itself, and the box with no python3 for the lane.
+    ['a codex lane handed a credential it has no file for', { '--provider': 'openai', '--base-url': null }, 'credential-not-managed', 2],
     ['a compatible lane with no endpoint', { '--base-url': null }, 'base-url-required', 2],
     // THE OTHER SIDE OF THE SAME GATE, and the row that keeps `base-url-required`
     // from being read as "every provider without a default". An `anthropic` lane
@@ -1510,7 +1606,9 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     // spells out as legal. It resolves to a plan, and `baseUrl` is null in it.
     const home = box('ccrc-account-add-login-');
     seedBoxRoster(home, FIXTURE_ROSTER);
-    const r = checkAdd(home, { '--provider': 'anthropic', '--base-url': null });
+    // `--method login` NAMED: since accounts plan Task A20 the table's first member, and so the default, is
+    // `setup-token` (Q1), which `ccrc-account-auth-start.test.ts` measures.
+    const r = checkAdd(home, { '--provider': 'anthropic', '--base-url': null, '--method': 'login' });
     expect(r.code, r.stderr).toBe(0);
     const plan = JSON.parse(r.stdout)['plan'] as Record<string, unknown>;
     expect(plan['method']).toBe('login');
@@ -1930,7 +2028,8 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     seedBoxRoster(home, FIXTURE_ROSTER);
     // TWO IDS, NOT ONE: a pair of hard-coded `.claude-lab-dev0` constants would
     // agree with each other perfectly and mean nothing.
-    for (const id of ['lab-dev0', 'orchard-api']) {
+    // `claude-x` is G4's case (accounts plan Task A16): an id that already starts `claude-` is `.<id>`.
+    for (const id of ['lab-dev0', 'orchard-api', 'claude-x']) {
       const bash = sourceCall(home,
         `_acct_add_parse --id ${id} --provider compatible --label 'lab·dev0' --hue amber\n`
         + 'printf "SUFFIX=[%s]\\n" "$ACCT_SUFFIX"');
@@ -1938,7 +2037,7 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
       const node = checkAdd(home, { '--suffix': null, '--id': id });
       expect(node.code, node.stderr).toBe(0);
       const resolved = JSON.parse(node.stdout)['plan']['configDirSuffix'] as string;
-      expect(resolved).toBe(`.claude-${id}`);
+      expect(resolved).toBe(id.startsWith('claude-') ? `.${id}` : `.claude-${id}`);
       expect(bash.stdout, `_acct_add_parse and check-add disagree about the default for "${id}"`)
         .toContain(`SUFFIX=[${resolved}]`);
     }
@@ -2150,9 +2249,17 @@ function plantUpstream(home: string): void {
   writeFileSync(join(bin, 'claude'), 'PKnot-a-script\n', { mode: 0o755 });
 }
 
-/** The four standalone installers, as ARGV RECORDERS at the installed path
+/** The upstream launcher as a probe turn that passes (accounts plan Task A16): `credential` and an Anthropic paste
+ *  run one turn through it with the candidate token before they write, and these cases are about the write. It
+ *  records nothing, so the canary scans see no copy of the token. `ccrc-account-paste.test.ts` owns the refusals. */
+function plantPassingProbe(home: string): void {
+  writeFileSync(join(home, '.local', 'bin', 'claude'),
+    '#!/bin/sh\necho \'{"type":"result","subtype":"success","is_error":false,"result":"ok"}\'\nexit 0\n', { mode: 0o755 });
+}
+
+/** The six standalone installers, as ARGV RECORDERS at the installed path
  *  `_acct_provision` must reach them by. Recorders rather than the real
- *  scripts because three of the four need a box this fixture is not
+ *  scripts because five of the six need a box this fixture is not
  *  (`install-graphify-skill.sh` assembles from a pinned venv, :12-20) — and
  *  because the property under test is that each is invoked once, in order,
  *  scoped to the one new home. The settings.json merge gets the REAL script in
@@ -2169,7 +2276,8 @@ function plantInstallers(home: string): void {
   const d = join(home, '.cc-sessions');
   mkdirSync(d, { recursive: true });
   for (const n of ['install-session-hooks.sh', 'install-coordinator-skill.sh',
-    'install-worker-skill.sh', 'install-graphify-skill.sh']) {
+    'install-worker-skill.sh', 'install-reviewer-skill.sh', 'install-graphify-skill.sh',
+    'install-history-skill.sh', 'install-linear-skill.sh']) {
     writeFileSync(join(d, n),
       `#!/bin/sh\nprintf '%s %s\\n' "${n}" "$*" >> "$HOME/installer-calls"\nexit 0\n`,
       { mode: 0o755 });
@@ -2209,7 +2317,7 @@ describe('ccrc account add: the ordered write', () => {
         kind: 'generated', provider: 'compatible', baseUrl: 'https://orchard-api/v1',
         secretsFile: '.cc-secrets/lab-dev0-compatible.env',
       },
-      homeAble: true, hue: 'amber', telemetry: 'anthropic',
+      homeAble: true, hue: 'amber', telemetry: 'none',
     });
     // APPENDED, never re-ordered: every other account is byte-identical and in
     // its original position, because the roster is USER-OWNED and this verb is
@@ -2241,7 +2349,7 @@ describe('ccrc account add: the ordered write', () => {
     // The half `oneObject` alone cannot prove: that the two convergers' lines
     // were REDIRECTED and not discarded. `_inst_accounts_sh` (ccd/ccrc:5575)
     // and `cmd_wrappers` (:2904) both write these on stdout for `ccrc install`.
-    // Only the second is pinned there (ccrc-install.test.ts:2687-2688, the
+    // Only the second is pinned there (ccrc-install-*.test.ts, the
     // `summary:` regex; :2820 is `_inst_wrappers`' own line, ccd/ccrc:7148, and
     // nothing in server/test/ mentions `install: accounts.sh` at all) — so this
     // assertion is also the first one in the tree to measure the accounts.sh
@@ -2266,6 +2374,9 @@ describe('ccrc account add: the ordered write', () => {
     const home = box('ccrc-account-add-rosterfail-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+    // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+    // verb; without it this case would measure the lock refusing, not the write it is about.
+    mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
     chmodSync(join(home, '.ccrc'), 0o500);
     const r = run(home, addArgs(), `${CANARY}\n`);
     chmodSync(join(home, '.ccrc'), 0o700);
@@ -2284,6 +2395,9 @@ describe('ccrc account add: the ordered write', () => {
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
     plantInstallers(home);
+    // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+    // verb; without it this case would measure the lock refusing, not the write it is about.
+    mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
     chmodSync(join(home, '.ccrc'), 0o500);
     expect(run(home, addArgs(), 'first-token-value\n').code).toBe(1);
     chmodSync(join(home, '.ccrc'), 0o700);
@@ -2298,7 +2412,7 @@ describe('ccrc account add: the ordered write', () => {
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
     plantInstallers(home);
-    const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
+    const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic', '--method', 'login',
       '--label', 'lab·dev0', '--hue', 'amber']);
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
@@ -2466,28 +2580,7 @@ describe('ccrc account add: the ordered write', () => {
  *  importing it RUNS it, argv and all. */
 function staleAtBox(prefix: string, missingOp: string): string {
   const home = box(prefix);
-  rmSync(join(home, 'ccrc', 'deploy'));   // the symlink into the real tree
-  mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
-  // AND THE REST OF `deploy/` IS STILL THERE. A box with one stale file is what
-  // this fixture stands in for; a box MISSING `gen-accounts.mjs` is a different
-  // one, and it refuses at `accounts-sh` long before the op under test — which
-  // is what the third case below measured the first time it ran. The two cases
-  // above never reach `_acct_converge`, so this changes nothing for them.
-  for (const f of readdirSync(join(REPO, 'deploy'))) {
-    if (f === 'account-op.mjs') continue;
-    symlinkSync(join(REPO, 'deploy', f), join(home, 'ccrc', 'deploy', f));
-  }
-  const real = JSON.stringify(join(REPO, 'deploy', 'account-op.mjs'));
-  writeFileSync(join(home, 'ccrc', 'deploy', 'account-op.mjs'), [
-    `if (process.argv[2] === ${JSON.stringify(missingOp)}) {`,
-    '  process.stderr.write("usage: node deploy/account-op.mjs <refuse|providers|roster'
-      + '|candidates|check-add> [--<key> <value>]\\u2026\\n");',
-    '  process.exitCode = 2;',
-    '} else {',
-    `  await import(${real});`,
-    '}',
-    '',
-  ].join('\n'));
+  shadowAccountOp(home, missingOp);
   return home;
 }
 
@@ -2657,12 +2750,14 @@ describe('ccd/ccrc: no refusal sentence may begin with a flag', () => {
     for (const [i, raw] of lines.entries()) {
       if (!raw.includes('_acct_refuse')) continue;
       if (/^\s*#/.test(raw)) continue;            // prose about the function
-      if (/^_acct_refuse\(\)/.test(raw)) continue; // its definition
+      if (/^_acct_refuse(_reason)?\(\)/.test(raw)) continue; // its definition, and its with-a-reason twin's
       mentions++;
       // THE DETAIL MUST BE ONE DOUBLE-QUOTED WORD, and that is half the check:
       // an unquoted detail would word-split into `$4`, `$5`… and arrive at
-      // `account-op.mjs` as a mis-spelled key for the same reason.
-      const m = /_acct_refuse\s+[0-9]+\s+[a-z][a-z0-9-]*\s+"(.*)$/.exec(raw);
+      // `account-op.mjs` as a mis-spelled key for the same reason. The twin
+      // (accounts plan Task A20) carries a reason word between the code and it.
+      const m = /_acct_refuse\s+[0-9]+\s+[a-z][a-z0-9-]*\s+"(.*)$/.exec(raw)
+        ?? /_acct_refuse_reason\s+[0-9]+\s+[a-z][a-z0-9-]*\s+[a-z][a-z0-9-]*\s+"(.*)$/.exec(raw);
       expect(m, `ccd/ccrc:${i + 1} calls _acct_refuse in a shape this scan cannot `
         + 'read, so the rule below went unmeasured on it. Either put the call on '
         + 'one line as `_acct_refuse <exit> <code> "<detail>"`, or teach this scan '
@@ -2774,7 +2869,7 @@ const settingsAt = (home: string, suffix: string): Record<string, unknown> =>
 const STANDS = 'STANDS-MARKER-4a91c2 the caller says this much.';
 
 describe('ccrc account add: the new home, provisioned', () => {
-  it('creates the config dir, writes the managed env block, and runs the four installers', () => {
+  it('creates the config dir, writes the managed env block, and runs the six installers', () => {
     const home = box('ccrc-account-prov-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
@@ -2802,15 +2897,18 @@ describe('ccrc account add: the new home, provisioned', () => {
     expect(readFileSync(join(home, '.claude-lab-dev0', 'settings.json'), 'utf8'))
       .not.toContain(CANARY);
 
-    // FOUR CALLS, EACH SCOPED TO THE ONE NEW HOME, coordinator before worker.
-    // This is also the step list Task 26 turns into an answer key: at THIS
-    // commit `ACCT_PROVISIONED` is written and not yet read, and the recorder
-    // is what measures it.
+    // SIX CALLS, EACH SCOPED TO THE ONE NEW HOME, coordinator before worker
+    // before reviewer. This is also the step list Task 26 turns into an
+    // answer key: at THIS commit `ACCT_PROVISIONED` is written and not yet
+    // read, and the recorder is what measures it.
     expect(installerCalls(home)).toEqual([
       `install-session-hooks.sh --homes ${join(home, '.claude-lab-dev0')}`,
       `install-coordinator-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
       `install-worker-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
+      `install-reviewer-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
       `install-graphify-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
+      `install-history-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
+      `install-linear-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
     ]);
   });
 
@@ -2831,7 +2929,7 @@ describe('ccrc account add: the new home, provisioned', () => {
     expect(existsSync(join(home, '.claude-lab-dev0', 'settings.json'))).toBe(false);
     // The step still RAN — it decided to write nothing, which is a different
     // thing from being skipped, and the installers still got their home.
-    expect(installerCalls(home).length).toBe(4);
+    expect(installerCalls(home).length).toBe(7);   // the session hooks and six skill installers, ccrc-linear's included
   });
 
   it('an operator\'s own settings.json survives byte-identically outside the managed keys', () => {
@@ -2845,7 +2943,7 @@ describe('ccrc account add: the new home, provisioned', () => {
       env: { MY_OWN_KEY: 'kept', ANTHROPIC_BASE_URL: 'https://stale-endpoint/v1' },
       permissions: { allow: ['Bash(ls:*)'] },
     }, null, 2));
-    const r = run(home, addArgs(), `${CANARY}\n`);
+    const r = run(home, [...addArgs(), '--adopt'], `${CANARY}\n`);
     expect(r.code, r.stderr).toBe(0);
     const s = settingsAt(home, '.claude-lab-dev0');
     expect(s['statusLine']).toEqual({ type: 'command', command: 'bash "$HOME/mine.sh"' });
@@ -2940,7 +3038,7 @@ describe('ccrc account add: the new home, provisioned', () => {
     symlinkSync(join(REPO, 'ccd', 'install-session-hooks.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'));
     for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh',
-      'install-graphify-skill.sh']) {
+      'install-reviewer-skill.sh', 'install-graphify-skill.sh', 'install-history-skill.sh', 'install-linear-skill.sh']) {
       writeFileSync(join(home, '.cc-sessions', n), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     }
     const r = run(home, addArgs(), `${CANARY}\n`);
@@ -3066,7 +3164,7 @@ describe('ccrc account add: a merge refusal names what still stands (D-2126)', (
     plantUpstream(home);
     plantInstallers(home);
     plantBadSettings(home);
-    const r = run(home, addArgs(), `${CANARY}\n`);
+    const r = run(home, [...addArgs(), '--adopt'], `${CANARY}\n`);
     expect(r.code, r.stderr).toBe(1);
     const j = oneObject(r);
     expect(j['error']).toBe('settings-invalid');
@@ -3094,7 +3192,7 @@ describe('ccrc account add: a merge refusal names what still stands (D-2126)', (
     // 3. THE DEAD END ITSELF, RUN rather than described. `ccrc account add` is
     //    still a refusal — the fix is a signpost, not a new door — and that is
     //    precisely why the sentence has to name `ccrc install` instead.
-    const again = run(home, addArgs(), `${CANARY}\n`);
+    const again = run(home, [...addArgs(), '--adopt'], `${CANARY}\n`);
     expect(again.code).toBe(1);
     expect(oneObject(again)['error']).toBe('duplicate-id');
   });
@@ -3108,7 +3206,7 @@ describe('ccrc account add: a merge refusal names what still stands (D-2126)', (
     plantInstallers(home);
     plantBadSettings(home);
     const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
-      '--label', 'lab·dev0', '--hue', 'amber']);
+      '--label', 'lab·dev0', '--hue', 'amber', '--adopt']);
     expect(r.code, r.stderr).toBe(1);
     const detail = oneObject(r)['detail'] as string;
     expect(detail).toContain('The roster entry was written and nothing rolls back');
@@ -3182,7 +3280,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
     // "is spelled in exactly one file, and that file is ccdWsHelpers.ts" went
     // red on this file. Measured, not remembered — and apt, given this case is
     // itself about two spellings of one name drifting apart.
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     expect(ccd).toContain('_lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }');
     expect(ccd).toContain('_account_ok() { [[ -x "$WRAPPER_DIR/$1" ]] && _lane_enabled "$1"; }');
   });
@@ -3227,15 +3325,18 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
     plantUpstream(home);
     plantInstallers(home);
     const j = oneObject(run(home, addArgs(), `${CANARY}\n`));
+    // `fleetIdentity` since accounts plan Task A16, so the server reloads the roster from this answer (spec §13.2);
+    // `fingerprints` rides beside it only on a box with a token, and this fixture has none.
     expect(Object.keys(j).sort()).toEqual(
-      ['disabled', 'id', 'ok', 'operator-steps', 'provisioned', 'roster'].sort());
+      ['disabled', 'fleetIdentity', 'id', 'ok', 'operator-steps', 'provisioned', 'roster'].sort());
     expect(j['id']).toBe('lab-dev0');
     expect((j['roster'] as { accounts: unknown[] }).accounts.length).toBe(4);
-    // Task 25's step list, now an answer key — the four installers plus the env
-    // merge, in the order `_acct_provision` ran them. `settings-env` is the
-    // WROTE token: this lane has an endpoint, so the merge produced a file.
+    // Task 25's step list, now an answer key — the six installers plus the
+    // env merge, in the order `_acct_provision` ran them. `settings-env` is
+    // the WROTE token: this lane has an endpoint, so the merge produced a file.
     expect(j['provisioned']).toEqual([
-      'settings-env', 'session-hooks', 'coordinator-skill', 'worker-skill', 'graphify-skill',
+      'settings-env', 'session-hooks', 'coordinator-skill', 'worker-skill',
+      'reviewer-skill', 'graphify-skill', 'history-skill', 'linear-skill',
     ]);
   });
 
@@ -3269,7 +3370,8 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, '.claude-lab-dev0', 'settings.json'))).toBe(false);
     expect(oneObject(r)['provisioned']).toEqual([
-      'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill', 'graphify-skill',
+      'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill',
+      'reviewer-skill', 'graphify-skill', 'history-skill', 'linear-skill',
     ]);
   });
 
@@ -3288,7 +3390,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       + '_acct_operator_steps lab-dev0\n_acct_operator_steps lab-dev0\n'
       + 'printf \'%s %s\\n\' "${#ACCT_PROVISIONED[@]}" "${#ACCT_OPERATOR_STEPS[@]}"');
     expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout.trim()).toBe('5 2');
+    expect(r.stdout.trim()).toBe('8 2');   // settings-env, the session hooks and six skill installers
   });
 
   it('all four of the provisioning refusals end in the one clause the caller built (D-2128)', () => {
@@ -3322,7 +3424,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       seedBoxRoster(home, FIXTURE_ROSTER);
       plantUpstream(home);
       plant(home);
-      const r = run(home, addArgs(), `${CANARY}\n`);
+      const r = run(home, [...addArgs(), '--adopt'], `${CANARY}\n`);
       expect(r.code, `${what}: ${r.stderr}`).toBe(1);
       const j = oneObject(r);
       expect(j['error'], what).toBe(err);
@@ -3497,6 +3599,9 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       plantInstallers(home);
       const marker = join(home, '.cc-sessions', 'lab-dev0-disabled');
       try {
+        // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+        // verb; without it this case would measure the lock refusing, not the write it is about.
+        mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
         chmodSync(join(home, '.ccrc'), 0o500);
         const r = run(home, addArgs(), `${CANARY}\n`);
         expect(r.code, r.stderr).toBe(1);
@@ -3642,10 +3747,11 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
         env: { ANTHROPIC_BASE_URL: 'https://orchard-api/v1', ANTHROPIC_API_KEY: '' },
       }, null, 2)}\n`;
       writeFileSync(join(cfg, 'settings.json'), already);
-      const r = run(home, addArgs(), `${CANARY}\n`);
+      const r = run(home, [...addArgs(), '--adopt'], `${CANARY}\n`);
       expect(r.code, r.stderr).toBe(0);
       expect(oneObject(r)['provisioned']).toEqual([
-        'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill', 'graphify-skill',
+        'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill',
+        'reviewer-skill', 'graphify-skill', 'history-skill', 'linear-skill',
       ]);
       // The bytes are untouched — the converge arm returns before the backup, so
       // this is also the idempotence claim `_acct_settings_env` makes for itself.
@@ -3742,6 +3848,8 @@ const HOMEABLE = (
 });
 
 describe('ccrc account enable / disable', () => {
+  // `enable --force` IN THE MARKER CASES BELOW (accounts plan Task A13, D-7731): they pin the marker, and `enable`'s
+  // readiness question, which `--force` skips and nothing else, is `ccrc-account-enable-ready.test.ts`'s.
   it('disable writes ccd\'s marker and reports the measured state without requiring telemetry', () => {
     const home = box('ccrc-account-disable-');
     seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet', 'none')]);
@@ -3760,9 +3868,9 @@ describe('ccrc account enable / disable', () => {
     plantLauncher(home, 'alt-max');
     mkdirSync(join(home, '.cc-sessions'), { recursive: true });
     writeFileSync(offMarker(home, 'alt-max'), '');
-    expect(oneObject(run(home, ['account', 'enable', '--id', 'alt-max']))['disabled']).toBe(false);
+    expect(oneObject(run(home, ['account', 'enable', '--id', 'alt-max', '--force']))['disabled']).toBe(false);
     expect(existsSync(offMarker(home, 'alt-max'))).toBe(false);
-    const again = run(home, ['account', 'enable', '--id', 'alt-max']);
+    const again = run(home, ['account', 'enable', '--id', 'alt-max', '--force']);
     expect(again.code, again.stderr).toBe(0);
     expect(oneObject(again)['disabled']).toBe(false);
   });
@@ -3771,7 +3879,7 @@ describe('ccrc account enable / disable', () => {
     const home = box('ccrc-account-enable-marker-directory-');
     seedRosterJson(home, [UPSTREAM]);
     mkdirSync(offMarker(home, 'claude'), { recursive: true });
-    const r = run(home, ['account', 'enable', '--id', 'claude']);
+    const r = run(home, ['account', 'enable', '--id', 'claude', '--force']);
     expect(r.code).toBe(1);
     const j = oneObject(r);
     expect(j['error']).toBe('marker-conflict');
@@ -3801,7 +3909,7 @@ describe('ccrc account enable / disable', () => {
     mkdirSync(join(home, '.cc-sessions'), { recursive: true });
     writeFileSync(offMarker(home, 'alt-max'), '');
 
-    const r = run(home, ['account', 'enable', '--id', 'alt-max']);
+    const r = run(home, ['account', 'enable', '--id', 'alt-max', '--force']);
     expect(r.code).toBe(1);
     const j = oneObject(r);
     expect(j['error']).toBe('no-answer');
@@ -3850,7 +3958,7 @@ if [ "$1" = -p ] && [ "$2" = "$HOME/.cc-sessions" ]; then
 fi
 exec /bin/mkdir "$@"
 `, { mode: 0o755 });
-    const pair = spawnSync(BASH, ['-c',
+    const pair = spawnSyncGroup(BASH, ['-c',
       '"$1" account disable --id claude >"$HOME/claude.out" 2>"$HOME/claude.err" & p1=$!\n'
       + '"$1" account disable --id alt-max >"$HOME/alt-max.out" 2>"$HOME/alt-max.err" & p2=$!\n'
       + 'wait "$p1" || :\nwait "$p2" || :\n', '_', ccrcIn(home)],
@@ -3968,7 +4076,8 @@ exec /bin/mkdir "$@"
     const home = box('ccrc-account-endis-argv-');
     seedRosterJson(home, [UPSTREAM]);
     for (const sub of ['enable', 'disable']) {
-      const unknown = run(home, ['account', sub, '--id', 'claude', '--force']);
+      // Not `--force`, which `enable` takes since A13 (CLI only, spec §10).
+      const unknown = run(home, ['account', sub, '--id', 'claude', '--yes']);
       expect(unknown.code, `${sub}: unknown flag`).toBe(2);
       expect(oneObject(unknown)['error'], `${sub}: unknown flag`).toBe('unknown-argument');
       for (const [idArgv, detail] of [
@@ -4305,6 +4414,9 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
       seedRosterJson(home, [UPSTREAM]);
       plantLauncher(home, 'lab-dev0');
       const dir = join(home, '.ccrc');
+      // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+      // verb; without it this case would measure the lock refusing, not the write it is about.
+      mkdirSync(join(dir, 'locks'), { recursive: true, mode: 0o700 });
       chmodSync(dir, 0o500);
       try {
         const r = run(home, ['account', 'declare', '--id', 'lab-dev0',
@@ -5015,7 +5127,7 @@ function plantRow(home: string, sid: string, o: { wrapper: string; home?: string
  *  `env()` plants, which is why that one is conditional. Any argv other than
  *  `list-sessions` is a loud failure: a verb that started DRIVING tmux rather
  *  than asking it could not pass unnoticed (stubTmux's rule,
- *  ccrc-doctor.test.ts:195-203). */
+ *  `ccrc-doctorFixture.ts`'s `stubTmux`). */
 function plantTmux(home: string, sessions: string[]): void {
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   writeFileSync(join(home, '.local', 'bin', 'tmux'), [
@@ -5050,6 +5162,268 @@ const TOKEN_LANE = {
     secretsFile: '.cc-secrets/alt-max-oauth.env' },
 };
 
+const CODEX_LANE = {
+  id: 'codex-a', label: 'codex·a', hue: 'magenta', configDirSuffix: '.claude-codex-a',
+  homeAble: true, telemetry: 'codex', exec: {
+    kind: 'codex', provider: 'openai', proxyPort: 8901, litellmPort: 8902,
+    authDir: '.local/share/ccrc/codex/codex-a', secretsFile: '.cc-secrets/codex-a.env',
+  },
+};
+
+/** python3, or null. Task 5's `spawnFakeLitellm` (ruling R29) runs its
+ *  stand-in on it, so the four cases that start a LiteLLM-shaped tier, C2, C3,
+ *  C5 and C6, skip without it. */
+const PY3 = pythonOrSkip();
+
+/** Whether this box has `flock`. Without it `_codex_lock` holds nothing
+ *  (ruling R19: rc 0 with `CX_LOCK_FD` empty, so stops run unserialised), and
+ *  C3's lock probe would have nothing to measure. So C3 skips there, rather
+ *  than pass on a probe that cannot fail. */
+const HAVE_FLOCK = spawnSync('sh', ['-c', 'command -v flock'], { encoding: 'utf8' }).status === 0;
+
+/** CODEX_LANE on two DISTINCT ports this box has just proved free
+ *  (`freePorts`, Task 4's one definition — ruling R5). EVERY case that
+ *  reaches a codex removal needs this rather than CODEX_LANE itself: the stop
+ *  and the verdict after it PROBE both ports before they decide a tier is
+ *  down, and a hard-coded port is a probe of whatever happens to listen there
+ *  on the box running the suite (Plan 2b-2's live-box rules). */
+async function codexLaneOnFreePorts(): Promise<typeof CODEX_LANE> {
+  const [proxyPort, litellmPort] = await freePorts(2);
+  return { ...CODEX_LANE, exec: { ...CODEX_LANE.exec, proxyPort: proxyPort!, litellmPort: litellmPort! } };
+}
+
+/** The launcher ccrc generates for CODEX_LANE, marker and all — the one
+ *  `_acct_remove_wrapper` can prove ccrc wrote. */
+function plantCodexLauncher(home: string): string {
+  return plantLauncher(home, CODEX_LANE.id, markGenerated(generateWrapperBody(
+    { id: CODEX_LANE.id, configDirSuffix: CODEX_LANE.configDirSuffix, execKind: 'codex',
+      secretsFile: CODEX_LANE.exec.secretsFile }, 'claude')));
+}
+
+/** The lane state `ccrc codex start` leaves behind (Appendix A's lane-state
+ *  table, plus the `litellm.yaml.prev` the litellm render keeps and the `.lock`
+ *  every start takes — ruling R10's reap list with R11's addition), planted by
+ *  hand so these cases measure the REAP and not the start. `laneOnly` is what
+ *  nothing but the reap removes; the markers may also be cleaned by a stop.
+ *  Both pid files name a pid that has already exited (a STALE file, the
+ *  ordinary leftover). A case that needs a LIVE tier's handle rewrites
+ *  `litellm.pid` after `spawnOwnLitellm`, which must run after this function:
+ *  the stand-in refuses a `--config` that is not a file, as LiteLLM does, and
+ *  this is what writes the lane's `litellm.yaml`. */
+function plantLaneState(home: string, lane: typeof CODEX_LANE):
+  { reaped: string[]; laneOnly: string[]; logDir: string; logs: Record<string, string> } {
+  const dir = join(home, '.ccrc', 'codex', lane.id);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const stale = spawnSync('true').pid;
+  const put = (name: string, body: string): string => {
+    const p = join(dir, name);
+    writeFileSync(p, body, { mode: 0o600 });
+    return p;
+  };
+  const laneOnly = [
+    put('lane.json', `${JSON.stringify({
+      id: lane.id, configDir: lane.configDirSuffix, authDir: lane.exec.authDir,
+      proxyPort: lane.exec.proxyPort, litellmPort: lane.exec.litellmPort,
+      units: { litellm: `ccgpt-${lane.id}-litellm.service`, shim: `ccgpt-${lane.id}-shim.service` },
+    }, null, 2)}\n`),
+    put('runtime.env', 'LITELLM_MASTER_KEY=fixture-not-a-key\n'),
+    put('litellm.yaml', 'model_list: []\n'),
+    put('litellm.yaml.prev', 'model_list: []\n'),
+    put('.lock', ''),
+  ];
+  const markers = [
+    put('litellm.started', '{"generation":"fixture","code":"fixture"}\n'),
+    put('shim.started', '{"generation":"fixture","code":"fixture"}\n'),
+    put('litellm.pid', `${stale}\n`),
+    put('shim.pid', `${stale}\n`),
+  ];
+  const logDir = join(home, '.ccrc', 'logs', 'codex', lane.id);
+  mkdirSync(logDir, { recursive: true });
+  const logs: Record<string, string> = {};
+  for (const tier of ['litellm', 'shim']) {
+    const p = join(logDir, `${tier}.log`);
+    logs[p] = `${tier} fixture log line\n`;
+    writeFileSync(p, logs[p]!);
+  }
+  return { reaped: [...laneOnly, ...markers], laneOnly, logDir, logs };
+}
+
+/** A process that passes `_codex_tier_ours`' litellm identity: the pid is
+ *  alive, its `ps -ww -o args=` holds `--config $HOME/.ccrc/codex/<id>/litellm.yaml`,
+ *  and it listens on the lane's litellmPort. It is Task 5's one stand-in
+ *  LiteLLM (`spawnFakeLitellm`, ruling R29), never a second fake of this
+ *  file's. Call it after `plantLaneState`, which writes that config.
+ *
+ *  `reparent: true` because ccrc kills it (C2) while `spawnSync` blocks Node's
+ *  event loop. The directly held fixture supervisor is init's child, waits for
+ *  the tier, and reaps it independently; teardown owns that supervisor handle,
+ *  never the observed tier PID (hazard 11). */
+const spawnOwnLitellm = (home: string, lane: typeof CODEX_LANE): Promise<number> =>
+  spawnFakeLitellm(home, {
+    port: lane.exec.litellmPort,
+    config: join(home, '.ccrc', 'codex', lane.id, 'litellm.yaml'),
+    reparent: true,
+  });
+
+/** ANOTHER TOOL'S GATEWAY on one of the lane's ports: the same stand-in, live
+ *  and listening, whose `--config` is not this lane's, so `_codex_tier_ours`
+ *  answers 2 (foreign) for that tier. It is the live box's shape: the other
+ *  repository's tiers hold these ports under the same `ccgpt-<id>-*` unit
+ *  names (the 2026-09-23 live-box census). It remains a direct child so an
+ *  ordinary Darwin run can clean it through its current-run handle. The port
+ *  assertion below, not `kill -0`, detects a removal that wrongly stopped it. */
+async function spawnForeign(home: string, port: number): Promise<number> {
+  const cfg = join(home, 'another-tool', 'litellm.yaml');
+  mkdirSync(path.dirname(cfg), { recursive: true });
+  writeFileSync(cfg, 'model_list: []\n');
+  return spawnFakeLitellm(home, { port, config: cfg });
+}
+
+/** C3'S LOCK PROBE, the one stub that goes FIRST on PATH (through `run()`'s
+ *  extraEnv). It is not a manager (ruling R31): Task 4's `plantSystemd` is the
+ *  manager, and this holds no state and answers nothing. It is a pass-through
+ *  `systemctl` that, on a `stop`, records whether this lane's `.lock` is held
+ *  at that moment, then execs the planted fake at `~/.local/bin/systemctl`
+ *  with the same argv, so the fake still records and answers every call.
+ *
+ *  `flock -n` on a NEW open of the file fails while ccrc holds the lock on its
+ *  own open, so `lock=held` is how C3 sees the stop run under the lane lock
+ *  (ruling R11). A box with no `flock` records `lock=unmeasurable`, never a
+ *  false `held`. */
+function plantLockProbe(home: string, id: string): string {
+  const dir = join(home, 'lock-probe');
+  mkdirSync(dir, { recursive: true });
+  const lock = join(home, '.ccrc', 'codex', id, '.lock');
+  const calls = join(home, 'lock-probe-calls');
+  writeFileSync(join(dir, 'systemctl'), [
+    '#!/bin/sh',
+    // A marked stand-in (final review E1): the runner's final-env check finds
+    // THIS file first on PATH, and the fake it execs must carry the mark too.
+    MANAGER_STANDIN_MARK,
+    'case " $* " in',
+    '  *" stop "*)',
+    '    if ! command -v flock >/dev/null 2>&1; then echo lock=unmeasurable',
+    `    elif flock -n '${lock}' true 2>/dev/null; then echo lock=free`,
+    `    else echo lock=held; fi >> '${calls}' ;;`,
+    'esac',
+    `exec '${join(home, '.local', 'bin', 'systemctl')}' "$@"`,
+  ].join('\n') + '\n', { mode: 0o755 });
+  return dir;
+}
+
+/** C12-C15 read and remove a systemd `timers.target.wants` link. On macOS
+ *  ccrc's unit directory is ~/Library/LaunchAgents and no usage timer exists
+ *  (the doctor says "usage timer not applicable on macOS"), so
+ *  `_acct_remove_usage` finds no link there and asks the manager nothing —
+ *  correct on that platform, and not what these cases measure. */
+const itSystemd = it.skipIf(process.platform === 'darwin');
+
+/** Plan 3a Task 7: a marked `systemctl` stand-in, FIRST on PATH through
+ *  `run()`'s extraEnv. It answers `--user disable --now ccrc-codex-usage@*.timer`
+ *  by removing that timer's wants link, and records it. It records any argv
+ *  naming `ccgpt-usage` to `usage-ctl-foreign`, and passes EVERY other call to
+ *  this file's own stand-in at `~/.local/bin/systemctl`, whose poison still
+ *  answers the lane library. `keepLink` makes it a manager that answers 0 and
+ *  leaves the link where it was (C15).
+ *
+ *  Plan 3b Task A3 (D-4049): EVERY argv
+ *  naming ccrc's usage SERVICE, `ccrc-codex-usage@<id>.service`, is answered
+ *  here and never passed on. It is recorded to `usage-svc-calls` with what
+ *  stood at that moment: the lane's limits row (`row=present|absent`) and its
+ *  roster entry (`roster=named|dropped`). `is-active` answers from `svc`, one
+ *  word per call, the LAST word sticking (default `inactive`, the word a
+ *  oneshot that is not running reads). The word `-` is a manager that did not
+ *  answer: nothing on stdout, exit 1. After 30 `is-active` calls it answers
+ *  `inactive` whatever `svc` says, so a wait that a mutation leaves unbounded
+ *  still ends (Global Constraints: every wait case self-expires). Any other
+ *  verb on the service (a stop) exits 0 having only been recorded; the cases
+ *  assert there is none. `onFirstRead` is one shell line run on the FIRST
+ *  `is-active` call, before it answers: what a ccd placement does while the
+ *  removal waits (D-4050's re-census cases). */
+function plantUsageCtl(home: string, o: { keepLink?: boolean; svc?: string[]; onFirstRead?: string } = {}): string {
+  const dir = join(home, 'usage-ctl');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(home, 'usage-svc-states'), (o.svc ?? []).map((w) => `${w}\n`).join(''));
+  rmSync(join(home, 'usage-svc-n'), { force: true });
+  writeFileSync(join(dir, 'systemctl'), [
+    '#!/bin/sh',
+    MANAGER_STANDIN_MARK,
+    'case " $* " in *" ccgpt-usage"*) printf \'%s\\n\' "$*" >> "$HOME/usage-ctl-foreign" ;; esac',
+    'u=\'\'',
+    'for a in "$@"; do case "$a" in ccrc-codex-usage@*.service) u="$a" ;; esac; done',
+    'if [ -n "$u" ]; then',
+    '  id="${u#ccrc-codex-usage@}"; id="${id%.service}"',
+    '  row=absent; [ -e "$HOME/.cc-limits/$id.json" ] && row=present',
+    '  roster=dropped; grep -q "\\"$id\\"" "$HOME/.ccrc/accounts.json" 2>/dev/null && roster=named',
+    '  printf \'%s row=%s roster=%s\\n\' "$*" "$row" "$roster" >> "$HOME/usage-svc-calls"',
+    '  { [ "$1" = --user ] && [ "$2" = is-active ]; } || exit 0',
+    '  f="$HOME/usage-svc-states"; w=inactive',
+    '  if [ -s "$f" ]; then',
+    '    w="$(head -n 1 "$f")"',
+    '    if [ "$(wc -l < "$f")" -gt 1 ]; then tail -n +2 "$f" > "$f.next" && mv -f "$f.next" "$f"; fi',
+    '  fi',
+    '  n=0; [ -f "$HOME/usage-svc-n" ] && n="$(cat "$HOME/usage-svc-n")"; n=$((n + 1)); printf \'%s\' "$n" > "$HOME/usage-svc-n"',
+    ...(o.onFirstRead === undefined ? [] : [`  if [ "$n" -eq 1 ]; then ${o.onFirstRead}; fi`]),
+    '  [ "$n" -le 30 ] || w=inactive',
+    '  [ "$w" = - ] && exit 1',
+    '  printf \'%s\\n\' "$w"; [ "$w" = active ] && exit 0; exit 3',
+    'fi',
+    'if [ "$1" = --user ] && [ "$2" = disable ] && [ "$3" = --now ]; then',
+    '  case "$4" in ccrc-codex-usage@*.timer)',
+    '    printf \'%s\\n\' "$*" >> "$HOME/usage-ctl-calls"',
+    o.keepLink === true ? '    exit 0 ;;' : '    rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$4"; exit 0 ;;',
+    '  esac',
+    'fi',
+    `exec '${join(home, '.local', 'bin', 'systemctl')}' "$@"`,
+  ].join('\n') + '\n', { mode: 0o755 });
+  return dir;
+}
+const usageCtlCalls = (home: string): string[] =>
+  (existsSync(join(home, 'usage-ctl-calls')) ? readFileSync(join(home, 'usage-ctl-calls'), 'utf8').split('\n').filter(Boolean) : []);
+/** Plan 3b Task A3: every argv `plantUsageCtl` saw naming ccrc's usage service, in order. */
+const usageSvcCalls = (home: string): string[] =>
+  (existsSync(join(home, 'usage-svc-calls')) ? readFileSync(join(home, 'usage-svc-calls'), 'utf8').split('\n').filter(Boolean) : []);
+/** The live lanes' shape before the cutover (exec.kind external, telemetry codex; retired by Plan 4), as C4, C14 and C15 spell it. */
+const USAGE_EXT_A = {
+  id: 'ext-a', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-ext-a', homeAble: false,
+  telemetry: 'codex', exec: { kind: 'external', provider: 'openai' },
+};
+const lexists = (p: string): boolean => { try { lstatSync(p); return true; } catch { return false; } };
+
+// These cases deliberately share one process across sequential ordinary tests.
+// The first mimics setup failing after it obtained a current-run supervisor; the
+// second is its only pre-fix escape hatch, and proves afterEach drained it.
+describe('ccrc account: setup failures keep current-run fixture ownership', { concurrent: false }, () => {
+  let failedSetup: { home: string; port: number; pid: number } | null = null;
+
+  it.skipIf(!PY3)('first setup rejection leaves its current-run fake to file-level cleanup', async () => {
+    const home = box('ccrc-account-setup-failure-');
+    const [port] = await freePorts(1);
+    const config = join(home, 'fixture-litellm.yaml');
+    writeFileSync(config, 'model_list: []\n');
+    const setup = async (): Promise<void> => {
+      const pid = await spawnFakeLitellm(home, { port: port!, config, reparent: true });
+      failedSetup = { home, port: port!, pid };
+      throw new Error('fixture: post-registration setup failure');
+    };
+    await expect(setup()).rejects.toThrow('fixture: post-registration setup failure');
+    // No local cleanup: ordinary afterEach must drain the owner this setup left.
+  });
+
+  it.skipIf(!PY3)('next sequential case proves the prior setup failure was drained', async () => {
+    expect(failedSetup, 'the sequential setup-failure case did not run').not.toBeNull();
+    const { home, port, pid } = failedSetup!;
+    try {
+      expect(alive(pid), 'the file-level cleanup left the prior setup failure process alive').toBe(false);
+      expect(psArgs(pid), 'the prior setup failure left its fixture process row').toBe('');
+      expect(await portAccepts(port), 'the prior setup failure kept its fixture port').toBe(false);
+    } finally {
+      // This makes the RED and registration-removal mutation self-contained.
+      await killLaneProcesses(home);
+    }
+  });
+});
+
 describe('ccrc account remove', () => {
   /** A lane with every ccrc-owned artifact plus operator history and settings. */
   const seedFull = (home: string): void => {
@@ -5068,9 +5442,9 @@ describe('ccrc account remove', () => {
     writeFileSync(join(home, '.cc-limits', 'alt-max.json'), '{"five":0,"seven":0,"ts":1}');
     mkdirSync(join(home, '.cc-sessions'), { recursive: true });
     writeFileSync(offMarker(home, 'alt-max'), '');
-    writeFileSync(join(home, '.cc-sessions', 'alt-max.hookstate.json'), '{}');
+    writeFileSync(join(home, '.cc-sessions', 'alt-max.hookstate.json'), '{}'); writeFileSync(join(home, '.cc-sessions', 'alt-max.turn.json'), '{}');
     const cfg = join(home, '.claude-alt-max');
-    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'graphify']) {
+    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify', 'ccrc-history', 'ccrc-linear']) {
       mkdirSync(join(cfg, 'skills', skill), { recursive: true });
     }
     mkdirSync(join(cfg, 'projects'), { recursive: true });
@@ -5099,13 +5473,13 @@ describe('ccrc account remove', () => {
       join(home, '.cc-secrets', 'alt-max-oauth.env'),
       join(home, '.cc-limits', 'alt-max.json'),
       offMarker(home, 'alt-max'),
-      join(home, '.cc-sessions', 'alt-max.hookstate.json'),
+      join(home, '.cc-sessions', 'alt-max.hookstate.json'), join(home, '.cc-sessions', 'alt-max.turn.json'),
     ]) expect(existsSync(f), f).toBe(false);
 
     const cfg = join(home, '.claude-alt-max');
     expect(readFileSync(join(cfg, 'projects', 'CANARY.jsonl'), 'utf8'))
       .toBe('the operator history\n');
-    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'graphify']) {
+    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify', 'ccrc-history', 'ccrc-linear']) {
       expect(existsSync(join(cfg, 'skills', skill)), skill).toBe(false);
     }
     const settings = JSON.parse(readFileSync(join(cfg, 'settings.json'), 'utf8'));
@@ -5172,6 +5546,8 @@ describe('ccrc account remove', () => {
     expect(br.code).toBe(1);
     expect(oneObject(br)['error']).toBe('live-unmeasured');
     expect(existsSync(join(blind, '.local', 'bin', 'alt-max'))).toBe(true);
+    // The tmux poison is what left it blind (taken, D-8394: the case meets it on purpose).
+    expect(takePoisonRecord(blind, 'tmux')).toEqual(['list-sessions -F #{session_name}']);
 
     const empty = box('ccrc-account-remove-empty-');
     seedFull(empty);
@@ -5247,6 +5623,10 @@ describe('ccrc account remove', () => {
     chmodSync(join(home, '.cc-sessions', 'orchard-api.wrapper'), 0o600);
     const noTmux = why('tmux() { return 3; }');
     const unreadable = why('_SVC_REG="$HOME/.cc-sessions-not-a-dir"; : > "$_SVC_REG"');
+    // A case without its own tmux reaches the tmux poison's one call (taken, D-8394: met on purpose).
+    const tmuxAsked = takePoisonRecord(home, 'tmux');
+    expect(tmuxAsked.length).toBeGreaterThan(0);
+    for (const l of tmuxAsked) expect(l).toBe('list-sessions -F #{session_name}');
 
     expect(blind.startsWith('false|'), `a blind field measured: ${blind}`).toBe(true);
     expect(noTmux.startsWith('false|'), `a failing tmux measured: ${noTmux}`).toBe(true);
@@ -5337,6 +5717,1127 @@ describe('ccrc account remove', () => {
     expect(readFileSync(join(external, externalSecret), 'utf8'))
       .toBe('owned by the external launcher\n');
     expect(ej['kept']).toContain(join(external, externalSecret));
+  });
+
+  it("an external lane's settings env stays: it is that launcher's credential, and ccrc never wrote it (D-8051 (15))", () => {
+    const home = box('ccrc-account-remove-external-env-');
+    seedRosterJson(home, [UPSTREAM,
+      { id: 'lane-x', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-lane-x',
+        homeAble: false, telemetry: 'none', exec: { kind: 'external', provider: 'compatible', baseUrl: 'https://orchard-api/v1' } }]);
+    plantLauncher(home, 'lane-x', '#!/bin/sh\n# somebody else wrote this\nexit 0\n');
+    plantTmux(home, []);
+    const cfg = join(home, '.claude-lane-x');
+    mkdirSync(join(cfg, 'skills', 'ccrc-worker'), { recursive: true });
+    const env = { ANTHROPIC_API_KEY: 'sk-canary', ANTHROPIC_BASE_URL: 'https://orchard-api/v1', OTHER: 'kept' };
+    writeFileSync(join(cfg, 'settings.json'), `${JSON.stringify({ env })}\n`);
+    const r = run(home, ['account', 'remove', '--id', 'lane-x']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(cfg, 'settings.json'), 'utf8')).env).toEqual(env);
+    // ccrc's own skills and hooks do leave, and the sheet's sentence says they do.
+    expect(existsSync(join(cfg, 'skills', 'ccrc-worker'))).toBe(false);
+    expect(oneObject(r)['kept']).toContain(cfg);
+  });
+
+  it("a generated lane's settings env is ccrc's, and goes with the lane (D-8051 (15))", () => {
+    const home = box('ccrc-account-remove-generated-env-');
+    seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet'), HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'alt-max', 'team-shared']) plantLauncher(home, id);
+    plantTmux(home, []);
+    const cfg = join(home, '.claude-alt-max');
+    mkdirSync(cfg, { recursive: true });
+    writeFileSync(join(cfg, 'settings.json'), `${JSON.stringify({ env: { ANTHROPIC_API_KEY: '', ANTHROPIC_BASE_URL: 'https://orchard-api/v1', OTHER: 'kept' } })}\n`);
+    const r = run(home, ['account', 'remove', '--id', 'alt-max']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(cfg, 'settings.json'), 'utf8')).env).toEqual({ OTHER: 'kept' });
+  });
+
+  it('removes a codex launcher but keeps its OAuth when told to, and its optional secrets', async () => {
+    // FREE PORTS, NOT CODEX_LANE'S (Plan 2b-2 Task 8): removal now stops and
+    // reaps the lane, and the stop PROBES both ports before it decides a tier
+    // is down.
+    const home = box('ccrc-account-remove-codex-');
+    seedRosterJson(home, [UPSTREAM, await codexLaneOnFreePorts(), HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    const launcher = plantLauncher(home, 'codex-a', markGenerated(generateWrapperBody(
+      { id: CODEX_LANE.id, configDirSuffix: CODEX_LANE.configDirSuffix, execKind: 'codex',
+        secretsFile: CODEX_LANE.exec.secretsFile }, 'claude')));
+    const auth = join(home, CODEX_LANE.exec.authDir, 'auth.json');
+    const oauthBytes = '{"fixture":"oauth"}\n';
+    mkdirSync(path.dirname(auth), { recursive: true });
+    writeFileSync(auth, oauthBytes);
+    const secret = join(home, CODEX_LANE.exec.secretsFile);
+    const secretBytes = 'fixture optional secrets\n';
+    mkdirSync(path.dirname(secret), { recursive: true });
+    writeFileSync(secret, secretBytes);
+    plantTmux(home, []);
+
+    const r = run(home, ['account', 'remove', '--id', 'codex-a', '--keep-codex-auth']);
+    expect(r.code, r.stderr).toBe(0);
+    takeNoManagerProbe(home);
+    const j = oneObject(r);
+    expect(existsSync(launcher)).toBe(false);
+    expect(readFileSync(auth, 'utf8')).toBe(oauthBytes);
+    expect(readFileSync(secret, 'utf8')).toBe(secretBytes);
+    expect(j['kept']).toContain(secret);
+    // A LANE THAT NEVER RAN has no lane directory. The removal's own lane lock
+    // (ruling R11) creates one, and the reap takes the lock file and the
+    // emptied directory with it — and that `.lock` was this run's, not the
+    // account's, so it is not reported as removed.
+    const laneDir = join(home, '.ccrc', 'codex', 'codex-a');
+    expect(existsSync(laneDir), 'the removal left the lane lock it took').toBe(false);
+    expect(j['removed'] as string[]).not.toContain(join(laneDir, '.lock'));
+  });
+
+  it('C1: reaps a codex lane\'s generated state and reports it, keeping its logs, and its OAuth when told to', async () => {
+    const home = box('ccrc-account-remove-codex-reap-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    // Task 4's `codexAuthDir` (ruling R39): Task 10's later `plantLaneAuth`/
+    // `authDirOf` need not be used here.
+    const auth = join(home, codexAuthDir(lane.id), 'auth.json');
+    mkdirSync(path.dirname(auth), { recursive: true });
+    writeFileSync(auth, '{"fixture":"oauth"}\n');
+    const state = plantLaneState(home, lane);
+    plantTmux(home, []);
+
+    const r = run(home, ['account', 'remove', '--id', 'codex-a', '--keep-codex-auth']);
+    expect(r.code, r.stderr).toBe(0);
+    takeNoManagerProbe(home);
+    const j = oneObject(r);
+    for (const f of state.reaped) expect(existsSync(f), `${f} survived the reap`).toBe(false);
+    expect(j['removed']).toEqual(expect.arrayContaining(state.reaped));
+    for (const [f, bytes] of Object.entries(state.logs)) expect(readFileSync(f, 'utf8'), f).toBe(bytes);
+    expect(j['kept']).toContain(state.logDir);
+    expect(readFileSync(auth, 'utf8')).toBe('{"fixture":"oauth"}\n');
+  });
+
+  it.skipIf(!PY3)('C2: stops a running tier FIRST, then reaps — the gateway does not outlive its account', async () => {
+    const home = box('ccrc-account-remove-codex-running-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const state = plantLaneState(home, lane);
+    const tier = await spawnOwnLitellm(home, lane);
+    try {
+      // The nohup arm's handle: the litellm pid file names the live tier.
+      writeFileSync(join(home, '.ccrc', 'codex', lane.id, 'litellm.pid'), `${tier}\n`, { mode: 0o600 });
+      plantTmux(home, []);
+      // This file's systemctl poison answers no user manager, so the stop is
+      // the nohup arm: the pid file's pid, verified ours, killed.
+      const r = run(home, ['account', 'remove', '--id', 'codex-a']);
+      expect(r.code, r.stderr).toBe(0);
+      takeNoManagerProbe(home);
+      oneObject(r);   // the lane library's own lines left this verb's stdout alone
+      await eventually(() => !alive(tier), 'the litellm tier to stop with its account', 5000);
+      expect(await portAccepts(lane.exec.litellmPort)).toBe(false);
+      for (const f of state.reaped) expect(existsSync(f), f).toBe(false);
+    } finally { await killLaneProcesses(home); }
+  });
+
+  // Codex bridge Stage 2, Task 11: a direct lane's one tier, the bridge, on the shim's port. Its stand-in holds the
+  // bridge's exact argv (`<python3> -I <shim file> --ccrc-bridge=direct --ccrc-lane=<id>`, the shim file a tiny server
+  // here) and answers `/ccgpt/lane` in the bridge's shape; it is reparented through nohup, so a stop reaps it while
+  // `spawnSync` blocks this event loop, and it ends itself after 60 s whatever happens.
+  it.skipIf(!PY3 || process.platform === 'darwin')('C2b: a direct lane\'s running bridge is stopped FIRST, then its bridge files are reaped', async () => {
+    const home = box('ccrc-account-remove-codex-bridge-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, { ...lane, exec: { ...lane.exec, bridge: 'direct' } }, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const state = plantLaneState(home, lane);
+    const dir = join(home, '.ccrc', 'codex', lane.id);
+    const lj = JSON.parse(readFileSync(join(dir, 'lane.json'), 'utf8')) as Record<string, unknown>;
+    writeFileSync(join(dir, 'lane.json'), `${JSON.stringify({ ...lj, bridge: 'direct', upstream: 'backend',
+      bridgeFiles: { stats: 'bridge.stats.json', store: 'reasoning.sqlite', recordings: 'recordings', requests: 'bridge.requests.jsonl' } }, null, 2)}\n`);
+    const bridgeFiles = ['bridge.stats.json', 'reasoning.sqlite', 'reasoning.sqlite-wal', 'reasoning.sqlite-shm',
+      'record-streams', 'bridge-instructions', 'bridge-reasoning-all-turns', 'bridge-verbosity', 'bridge-turn-state',
+      'bridge-service-tier-fast', // Fast mode's marker (D-8632)
+      'record-requests', 'bridge.requests.jsonl', 'bridge.requests.jsonl.1', // the request record and its marker (D-8619)
+    ].map((f) => join(dir, f));
+    for (const f of bridgeFiles) writeFileSync(f, 'fixture\n', { mode: 0o600 });
+    mkdirSync(join(dir, 'recordings'), { mode: 0o700 });
+    writeFileSync(join(dir, 'recordings', 'r1.sse'), 'event: fixture\n\n');
+    const shim = join(home, '.local', 'bin', 'ccgpt-proxy.py');
+    mkdirSync(path.dirname(shim), { recursive: true });
+    writeFileSync(shim, [
+      'import http.server, json, os, threading',
+      'class H(http.server.BaseHTTPRequestHandler):',
+      '    def do_GET(self):',
+      '        b = json.dumps({"lane": "codex-a", "mode": "direct"}).encode()',
+      '        self.send_response(200); self.send_header("Content-Type", "application/json")',
+      '        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)',
+      '    def log_message(self, *a): pass',
+      's = http.server.HTTPServer(("127.0.0.1", int(os.environ["FAKE_BRIDGE_PORT"])), H)',
+      'threading.Timer(60, lambda: os._exit(0)).start()',
+      's.serve_forever()', ''].join('\n'), { mode: 0o755 });
+    const plant = spawnSync(BASH, ['-c',
+      'FAKE_BRIDGE_PORT="$2" nohup "$0" -I "$1" --ccrc-bridge=direct --ccrc-lane=codex-a </dev/null >/dev/null 2>&1 & echo $!',
+      PY3!, shim, String(lane.exec.proxyPort)], { encoding: 'utf8' });
+    const pid = Number(plant.stdout.trim());
+    expect(pid > 1, plant.stderr).toBe(true);
+    await eventually(() => portAccepts(lane.exec.proxyPort), 'the stand-in bridge to bind', 10_000);
+    writeFileSync(join(dir, 'bridge.pid'), `${pid}\n`, { mode: 0o600 });
+    writeFileSync(join(dir, 'bridge.started'), '{"fixture":"bridge"}\n', { mode: 0o600 });
+    plantTmux(home, []);
+    const r = run(home, ['account', 'remove', '--id', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    takeNoManagerProbe(home);
+    oneObject(r);
+    await eventually(() => !alive(pid), 'the bridge to stop with its account', 15_000);
+    expect(await portAccepts(lane.exec.proxyPort)).toBe(false);
+    for (const f of [...state.reaped, ...bridgeFiles, join(dir, 'bridge.pid'), join(dir, 'bridge.started'), join(dir, 'recordings')]) {
+      expect(existsSync(f), `${f} survived the reap`).toBe(false);
+    }
+  }, 60_000);
+
+  it.skipIf(!PY3 || process.platform === 'darwin' || !HAVE_FLOCK)(
+    'C3: a stop that fails refuses the removal before the roster changes, and reaps nothing', async () => {
+      const home = box('ccrc-account-remove-codex-stuck-');
+      const lane = await codexLaneOnFreePorts();
+      seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+      for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+      const launcher = plantCodexLauncher(home);
+      const state = plantLaneState(home, lane);
+      const tier = await spawnOwnLitellm(home, lane);
+      try {
+        // A user manager that EXISTS and REFUSES this lane's stop: Task 4's
+        // fake with a knob, never a manager of this file's own (ruling R31).
+        // Its unit is active with this lane's own tier as MainPID, so any
+        // `_codex_stop_lane` faithful to its contract must answer stop-failed:
+        // the MainPID passes the identity check, and the stop fails
+        // (`failUnitStop`, Task 5). `refuseSpawn` keeps it from starting
+        // anything a removal might wrongly ask it to.
+        const unit = 'ccgpt-codex-a-litellm.service';
+        plantSystemd(home, { userManager: true, refuseSpawn: true });
+        fakeUnit(home, unit, { state: 'active', pid: tier });
+        failUnitStop(home, unit, true);
+        const probe = plantLockProbe(home, lane.id);
+        const roster = join(home, '.ccrc', 'accounts.json');
+        const rosterBefore = readFileSync(roster, 'utf8');
+        plantTmux(home, []);
+        const r = run(home, ['account', 'remove', '--id', 'codex-a'], '',
+          { PATH: `${probe}:${env(home)['PATH'] ?? ''}` });
+        expect(r.code).toBe(1);
+        const j = oneObject(r);
+        expect(j['error']).toBe('codex-reap-failed');
+        expect(String(j['detail'])).toContain('ccrc codex stop codex-a');
+        expect(r.stderr).toContain('stop-failed');
+        // THE ATTEMPT IS THE CONTROL: a removal that never asked the manager to
+        // stop would pass every assertion below for the wrong reason.
+        expect(systemctlCalls(home).join('\n')).toMatch(/stop .*ccgpt-codex-a-litellm\.service/);
+        // …and it asked UNDER THE LANE LOCK (ruling R11): at the moment of the
+        // stop, the probe could not take `.lock` on an open of its own.
+        const locks = readFileSync(join(home, 'lock-probe-calls'), 'utf8');
+        expect(locks, 'the stop ran without the lane lock').toMatch(/^lock=held$/m);
+        expect(locks).not.toMatch(/^lock=(free|unmeasurable)$/m);
+        expect(readFileSync(roster, 'utf8'), 'the roster changed under a failed reap').toBe(rosterBefore);
+        expect(existsSync(launcher)).toBe(true);
+        for (const f of state.laneOnly) expect(existsSync(f), `${f} was reaped although the stop failed`).toBe(true);
+        expect(alive(tier), 'the removal killed a pid its unit refused to stop (spec §7.4)').toBe(true);
+        expect(systemdRunCalls(home), 'a removal started a unit').toEqual([]);
+      } finally { await killLaneProcesses(home); }
+    });
+
+  it('C4: never reaps, stops or asks a service manager about an EXTERNAL lane — the live lanes\' shape before the cutover', () => {
+    // `ext-a`: a fixture id (ruling R40), in the live Codex lanes' shape before
+    // the cutover (retired by Plan 4) — exec.kind external, telemetry codex.
+    const home = box('ccrc-account-remove-external-lane-state-');
+    seedRosterJson(home, [UPSTREAM,
+      { id: 'ext-a', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-ext-a', homeAble: false,
+        telemetry: 'codex', exec: { kind: 'external', provider: 'openai' } },
+      HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantLauncher(home, 'ext-a', '#!/bin/sh\n# somebody else wrote this\nexit 0\n');
+    // A lane directory under an external id: the shape a codex lane rolled
+    // back to external would leave. Its units are named ccgpt-ext-a-* too.
+    const state = plantLaneState(home, { ...CODEX_LANE, id: 'ext-a', configDirSuffix: '.claude-ext-a' });
+    const before = Object.fromEntries(state.reaped.map((f) => [f, readFileSync(f, 'utf8')]));
+    plantTmux(home, []);
+    const r = run(home, ['account', 'remove', '--id', 'ext-a']);
+    expect(r.code, r.stderr).toBe(0);
+    for (const [f, bytes] of Object.entries(before)) expect(readFileSync(f, 'utf8'), f).toBe(bytes);
+    expect(existsSync(join(home, 'systemctl-poison')), 'an external removal asked a service manager').toBe(false);
+    expect(existsSync(join(home, 'systemd-run-poison'))).toBe(false);
+  });
+
+  it.skipIf(!PY3 || process.platform === 'darwin')(
+    'C5: a unit of the lane\'s name that is not the lane\'s is never stopped, blocks nothing, and is named', async () => {
+      // THE LIVE BOX'S SHAPE (D-3488, ruling R8): another repository's
+      // gateway runs under this lane's unit name and on its port.
+      const home = box('ccrc-account-remove-codex-foreign-unit-');
+      const lane = await codexLaneOnFreePorts();
+      seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+      for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+      plantCodexLauncher(home);
+      const other = await spawnForeign(home, lane.exec.litellmPort);
+      try {
+        const state = plantLaneState(home, lane);
+        // Task 4's manager (ruling R31), UP and starting nothing, with this
+        // lane's litellm unit name active and ANOTHER tool's gateway as its
+        // MainPID: a unit of this lane's name that is not this lane's, which
+        // ruling R8 forbids stopping at all. Nothing refuses a stop here, so
+        // a removal that did stop it would end `other` (the fake's `stop`
+        // ends a process under this HOME), and the case would see that too.
+        plantSystemd(home, { userManager: true, refuseSpawn: true });
+        fakeUnit(home, 'ccgpt-codex-a-litellm.service', { state: 'active', pid: other });
+        plantTmux(home, []);
+        const r = run(home, ['account', 'remove', '--id', 'codex-a']);
+        expect(r.code, r.stderr).toBe(0);
+        const j = oneObject(r);
+        // THE ASK IS THE CONTROL: a removal that never asked the manager about
+        // the unit would pass the no-stop assertion for the wrong reason.
+        const calls = systemctlCalls(home).join('\n');
+        expect(calls).toMatch(/is-active .*ccgpt-codex-a-litellm\.service/);
+        expect(calls, 'a removal stopped a unit it could not prove its own')
+          .not.toMatch(/(^| )(stop|kill|restart)( |$)/m);
+        expect(systemdRunCalls(home), 'a removal started a unit').toEqual([]);
+        expect(alive(other), 'the removal killed another tool\'s gateway').toBe(true);
+        expect(await portAccepts(lane.exec.litellmPort)).toBe(true);
+        // NAMED, in the envelope a caller keeps — INCLUDING THE REASON
+        // (review fix round 1, finding mut-4, which pinned the raw WHY word).
+        // Since the fix wave (review A2) the reason is `_codex_foreign_what`'s
+        // own sentence, never this arm's: a live unit whose MainPID does not
+        // prove the lane is named as exactly that.
+        const steps = j['operator-steps'] as string[];
+        expect(steps.some((s) => s.includes(`port ${lane.exec.litellmPort}`)
+          && s.includes('ccgpt-codex-a-litellm.service') && s.includes('left running')
+          && s.includes("is active but is not codex-a's litellm tier: its MainPID's command line does not prove this lane")),
+        `no operator step names the foreign tier with its reason: ${JSON.stringify(steps)}`).toBe(true);
+        // …and it BLOCKED NOTHING: the account is gone and the lane reaped.
+        expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).not.toContain('"codex-a"');
+        for (const f of state.reaped) expect(existsSync(f), `${f} survived the reap`).toBe(false);
+      } finally { await killLaneProcesses(home); }
+    });
+
+  it.skipIf(!PY3)('C6: with no user manager, a stranger on the lane\'s shim port blocks nothing either, and is named', async () => {
+    // The nohup arm's twin of C5 (this file's poison says no manager, and a
+    // darwin box never has one), on the OTHER tier. The stranger is the
+    // stand-in LiteLLM, whose JSON answer to `/ccgpt/lane` names no lane, so
+    // `_codex_tier_ours` reads it as foreign (`listener-unidentified`).
+    const home = box('ccrc-account-remove-codex-foreign-port-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const other = await spawnForeign(home, lane.exec.proxyPort);
+    try {
+      const state = plantLaneState(home, lane);
+      plantTmux(home, []);
+      const r = run(home, ['account', 'remove', '--id', 'codex-a']);
+      expect(r.code, r.stderr).toBe(0);
+      takeNoManagerProbe(home);
+      const j = oneObject(r);
+      expect(alive(other), 'the removal killed a process it could not prove its own').toBe(true);
+      expect(await portAccepts(lane.exec.proxyPort)).toBe(true);
+      // The reason too (finding mut-4), in `_codex_foreign_what`'s words
+      // (review A2) — see C5's comment.
+      const steps = j['operator-steps'] as string[];
+      expect(steps.some((s) => s.includes(`port ${lane.exec.proxyPort}`) && s.includes('left running')
+        && s.includes("is held by a listener that is not this lane's")
+        && s.includes('If nothing on this box should still hold it, stop that owner by hand')
+        && !s.includes('other ports in ~/.ccrc/accounts.json')),
+      `no operator step names the foreign tier with its reason: ${JSON.stringify(steps)}`).toBe(true);
+      for (const f of state.reaped) expect(existsSync(f), `${f} survived the reap`).toBe(false);
+    } finally { await killLaneProcesses(home); }
+  });
+
+  it('C7: the lane\'s files are reaped only AFTER the roster drop — a drop that cannot write leaves every one', async () => {
+    const home = box('ccrc-account-remove-codex-drop-fails-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const state = plantLaneState(home, lane);
+    plantTmux(home, []);
+    try {
+      // `a drop that cannot write says which registry rows it has ALREADY
+      // rehomed`'s lever: `drop` renames a tmp beside the roster, so an
+      // unwritable `~/.ccrc` refuses THERE. The lane directory keeps its own
+      // mode, so the lane lock and the stop above the drop still run.
+      // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+      // verb; without it this case would measure the lock refusing, not the write it is about.
+      mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
+      chmodSync(join(home, '.ccrc'), 0o500);
+      const r = run(home, ['account', 'remove', '--id', 'codex-a']);
+      expect(r.code, r.stderr).toBe(1);
+      takeNoManagerProbe(home);
+      expect(oneObject(r)['error']).toBe('roster-write');
+      for (const f of state.laneOnly) {
+        expect(existsSync(f), `${f} was reaped while the lane was still rostered`).toBe(true);
+      }
+    } finally {
+      // RESTORED BEFORE `afterAll`, as that case's own `finally` explains.
+      chmodSync(join(home, '.ccrc'), 0o700);
+    }
+  });
+
+  it('C8: a file reap that fails AFTER the drop refuses, and says the roster no longer names the lane', async () => {
+    const home = box('ccrc-account-remove-codex-reap-fails-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const state = plantLaneState(home, lane);
+    const dir = join(home, '.ccrc', 'codex', lane.id);
+    plantTmux(home, []);
+    try {
+      // A read-only lane directory: the lane lock still opens the EXISTING
+      // `.lock`, and nothing in the directory can be unlinked.
+      chmodSync(dir, 0o500);
+      const r = run(home, ['account', 'remove', '--id', 'codex-a']);
+      expect(r.code).toBe(1);
+      takeNoManagerProbe(home);
+      const j = oneObject(r);
+      expect(j['error']).toBe('artifact-remove');
+      expect(String(j['detail'])).toContain(dir);
+      expect(String(j['detail'])).toContain('no longer name codex-a');
+      // Both claims are true on disk: the drop landed, the files stand.
+      expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).not.toContain('"codex-a"');
+      expect(existsSync(state.laneOnly[0]!)).toBe(true);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  });
+
+  it.skipIf(!PY3 || process.platform === 'darwin')('C9: a tier whose ownership cannot be measured (rc 3) refuses the removal, and the reap never touches a live tier\'s only handle', async () => {
+    // Linux-only because it preserves a deliberately reparented product shape
+    // while synchronous removal sees it alive. Fixture cleanup is owned through
+    // a current-run supervisor, not by the tier's observed PID.
+    // Review fix round 1, finding mut-2: the comment above the STOP arm's
+    // verdict argues rc 3 must refuse ("a 3 cannot prove the lane down, and
+    // the file reap would then delete the only handle (`<tier>.pid`) on a
+    // live tier"), but no case reached it — mutation c15 (moving 3 into the
+    // `1)` arm) stayed green, 33/33. This reuses Task 5's own PLATFORM-
+    // INDEPENDENT "stub that cannot ask" fixture (ccrc-codex.test.ts's
+    // `_codex_pid_listens() { CX_LISTEN_WHY=...; return 3; }` override,
+    // defined AFTER sourcing ccd/ccrc so it supersedes the real function in
+    // the SAME shell) rather than the Darwin lsof arm — so this runs on
+    // every CI leg, Linux included, not one. `cmd_account remove --id
+    // codex-a` is called directly, the same way `lib()`'s own cases call
+    // `cmd_codex …` directly: `ccd/ccrc`'s bottom dispatch only fires when
+    // the file is RUN, never when it is sourced, so this reaches the exact
+    // same `_acct_remove` a normal `ccrc account remove` invocation would.
+    const home = box('ccrc-account-remove-codex-unmeasurable-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const state = plantLaneState(home, lane);
+    const tier = await spawnOwnLitellm(home, lane);
+    try {
+      // The nohup arm's handle: the litellm pid file names the live tier —
+      // exactly C2's own setup, so this differs from C2 only in the
+      // ownership answer `_codex_pid_listens` gives about it.
+      writeFileSync(join(home, '.ccrc', 'codex', lane.id, 'litellm.pid'), `${tier}\n`, { mode: 0o600 });
+      plantTmux(home, []);
+      const roster = join(home, '.ccrc', 'accounts.json');
+      const rosterBefore = readFileSync(roster, 'utf8');
+      const script = `. "${ccrcIn(home)}"\n`
+        + "_codex_pid_listens() { CX_LISTEN_WHY='a stub that cannot ask'; return 3; }\n"
+        + 'cmd_account remove --id codex-a';
+      const r0 = spawnSync(BASH, ['-c', script], { env: env(home), encoding: 'utf8', input: '' });
+      const r = { code: r0.status ?? -1, stdout: r0.stdout ?? '', stderr: r0.stderr ?? '' };
+      expect(r.code).toBe(1);
+      takeNoManagerProbe(home);
+      const j = oneObject(r);
+      expect(j['error']).toBe('codex-reap-failed');
+      expect(r.stderr).toContain('tier-unmeasured');
+      expect(readFileSync(roster, 'utf8'), 'the roster changed under an unmeasurable tier').toBe(rosterBefore);
+      expect(existsSync(join(home, '.ccrc', 'codex', lane.id, 'litellm.pid')),
+        'the reap deleted a live tier\'s only handle').toBe(true);
+      for (const f of state.laneOnly) {
+        expect(existsSync(f), `${f} was reaped although the tier's ownership was unmeasurable`).toBe(true);
+      }
+      expect(alive(tier), 'the removal killed a pid it could not prove its own').toBe(true);
+    } finally { await killLaneProcesses(home); }
+  });
+
+  /** C10/C11's shell: ccd/ccrc SOURCED, the lane library's two seams the
+   *  re-measure reads redefined AFTER it (C9's idiom), then the verb. The
+   *  stubs signal nothing: `_codex_stop_lane` is replaced outright. */
+  const removeWithStubs = (home: string, stubs: string): { code: number; stdout: string; stderr: string } => {
+    const r0 = spawnSync(BASH, ['-c', `. "${ccrcIn(home)}"\n${stubs}\ncmd_account remove --id codex-a`],
+      { env: env(home), encoding: 'utf8', input: '' });
+    return { code: r0.status ?? -1, stdout: r0.stdout ?? '', stderr: r0.stderr ?? '' };
+  };
+  /** The re-measure's answer for the litellm tier; the shim reads not running. */
+  const litellmAnswers = (rc: number, why: string, via = '', pid = ''): string =>
+    '_codex_tier_ours() { _codex_row "$1" >/dev/null 2>&1; CX_TIER_VIA=""; CX_TIER_PID=""; CX_TIER_WHY=""; '
+    + `if [ "$2" = litellm ]; then CX_TIER_VIA='${via}'; CX_TIER_PID='${pid}'; CX_TIER_WHY='${why}'; return ${rc}; fi; return 1; }`;
+
+  it('C10: a re-measure that still finds this lane\'s own process by its handle while another holds its port (listener-other-process) refuses the removal, and the reap never deletes that handle (review A1)', async () => {
+    // The stop failed to end the proven process (a nohup pid that survived
+    // its KILL, or a unit the manager would not stop). That 2 carries a
+    // HANDLE: the port's holder is foreign, the process is this lane's —
+    // the same reading `_codex_stop_tier` gives it — so it is `lane_left`,
+    // never an operator step the removal walks past.
+    const home = box('ccrc-account-remove-codex-lop-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const state = plantLaneState(home, lane);
+    plantTmux(home, []);
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const r = removeWithStubs(home, [
+      '_codex_stop_lane() { echo "fixture: the stop did not end this lane\'s litellm" >&2; return 1; }',
+      litellmAnswers(2, 'listener-other-process', 'nohup', '4242'),
+    ].join('\n'));
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('codex-reap-failed');
+    expect(String(j['detail'])).toMatch(/codex lane codex-a's litellm tier\(s\) still run/);
+    expect(j['operator-steps'] ?? []).toEqual([]);
+    expect(readFileSync(roster, 'utf8'), 'the roster was dropped under a live tier of this lane').toBe(rosterBefore);
+    expect(existsSync(join(home, '.ccrc', 'codex', lane.id, 'litellm.pid')),
+      'the reap deleted the only handle of a live tier of this lane').toBe(true);
+    for (const f of state.laneOnly) expect(existsSync(f), `${f} was reaped under a live tier of this lane`).toBe(true);
+  });
+
+  it('C11: a live unit whose identity is only UNPROVEN after the stop — this lane\'s own crash-looping tier reads so — refuses the removal, named in _codex_foreign_what\'s words, with the retry (review A2/D2)', async () => {
+    // Ruling PF-13: inside its RestartSec window this lane's own tier's unit
+    // is live with MainPID 0. That is not proven foreign, so the removal
+    // must not walk past it and reap the files it restarts from.
+    const home = box('ccrc-account-remove-codex-unproven-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const state = plantLaneState(home, lane);
+    plantTmux(home, []);
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const r = removeWithStubs(home, ['_codex_stop_lane() { return 0; }', litellmAnswers(2, 'unit-unproven')].join('\n'));
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('codex-reap-failed');
+    expect(String(j['detail'])).toMatch(/identity is unproven/);
+    expect(String(j['detail'])).toMatch(/retry the removal in a few seconds\.$/);
+    expect(r.stderr).toMatch(/^ccrc codex: unit-foreign: the unit ccgpt-codex-a-litellm\.service is active, but its identity as codex-a's litellm tier is unproven: .*Re-run in a few seconds/m);
+    expect(r.stderr).not.toMatch(/stop that owner by hand/);
+    expect(readFileSync(roster, 'utf8'), 'the roster was dropped past an unproven tier').toBe(rosterBefore);
+    for (const f of state.laneOnly) expect(existsSync(f), `${f} was reaped past an unproven tier`).toBe(true);
+  });
+
+  // The whole-wave addendum (LB-2 part a): the shim and the bridge share one port and one unit, so one fact there
+  // reads on both. The re-measure walks `_codex_stop_order` (a litellm lane: shim, litellm, bridge), reads the other
+  // mode's tier through `_codex_tier_is_other_mode`, and names a finding on that shared port or unit once.
+  /** The re-measure's answer for the two front tiers, which share one port and one unit; litellm reads not running. */
+  const frontAnswers = (rc: number, why: string): string =>
+    '_codex_tier_ours() { _codex_row "$1" >/dev/null 2>&1; CX_TIER_VIA=""; CX_TIER_PID=""; CX_TIER_WHY=""; '
+    + `case "$2" in shim|bridge) CX_TIER_WHY='${why}'; return ${rc} ;; esac; return 1; }`;
+  /** `plantLaneState`'s lane.json, given the mode word a litellm lane's render carries. */
+  const asLitellmLane = (home: string, id: string): void => {
+    const f = join(home, '.ccrc', 'codex', id, 'lane.json');
+    writeFileSync(f, `${JSON.stringify({ ...JSON.parse(readFileSync(f, 'utf8')) as Record<string, unknown>, bridge: 'litellm', upstream: 'backend' }, null, 2)}\n`, { mode: 0o600 });
+  };
+
+  it('C11b: a stranger on the shim port reads on both front tiers of that one port, and is named as one operator step, the shim\'s', async () => {
+    const home = box('ccrc-account-remove-codex-shared-port-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    plantLaneState(home, lane);
+    asLitellmLane(home, lane.id);
+    plantTmux(home, []);
+    const r = removeWithStubs(home, ['_codex_stop_lane() { return 0; }', frontAnswers(2, 'listener-unidentified')].join('\n'));
+    expect(r.code, r.stderr).toBe(0);
+    takeNoManagerProbe(home);
+    const steps = (oneObject(r)['operator-steps'] ?? []) as string[];
+    const onPort = steps.filter((s) => s.includes(`port ${lane.exec.proxyPort}`));
+    expect(onPort, JSON.stringify(steps)).toHaveLength(1);
+    expect(onPort[0]).toContain(`Codex lane ${lane.id}'s shim tier, port ${lane.exec.proxyPort}`);
+    expect(steps.join('\n')).not.toMatch(/bridge tier/);
+  });
+
+  it('C11c: a crash-looping shim unit on a litellm lane refuses the removal by its shim alone, and names no bridge', async () => {
+    const home = box('ccrc-account-remove-codex-shared-unit-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const state = plantLaneState(home, lane);
+    asLitellmLane(home, lane.id);
+    plantTmux(home, []);
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const r = removeWithStubs(home, ['_codex_stop_lane() { return 0; }', frontAnswers(2, 'unit-unproven')].join('\n'));
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('codex-reap-failed');
+    expect(String(j['detail'])).toMatch(new RegExp(`codex lane ${lane.id}'s shim tier\\(s\\) still run`));
+    expect(r.stderr.split('\n').filter((l) => l.startsWith('ccrc codex: unit-foreign: '))).toHaveLength(1);
+    expect(r.stderr).not.toMatch(/bridge tier/);
+    expect(readFileSync(roster, 'utf8'), 'the roster was dropped past an unproven tier').toBe(rosterBefore);
+    for (const f of state.laneOnly) expect(existsSync(f), `${f} was reaped past an unproven tier`).toBe(true);
+  });
+
+  it('C11d: a shim still starting as this lane\'s after the stop refuses the removal by the shim alone: the bridge tier its shared unit covers is not running', async () => {
+    const home = box('ccrc-account-remove-codex-other-mode-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    plantLaneState(home, lane);
+    asLitellmLane(home, lane.id);
+    plantTmux(home, []);
+    // The real `_codex_tier_ours` records each answer in CX_TIER_SEEN, which `_codex_tier_is_other_mode` reads; this
+    // stub does too. The shim is this lane's and still starting (4), and the bridge tier reads its shared unit.
+    const r = removeWithStubs(home, ['_codex_stop_lane() { return 0; }',
+      '_codex_tier_ours() { _codex_row "$1" >/dev/null 2>&1; CX_TIER_VIA=""; CX_TIER_PID=""; CX_TIER_WHY=""; local rc=1; '
+      + 'case "$2" in shim) rc=4 ;; bridge) CX_TIER_WHY=unit-unproven; rc=2 ;; esac; '
+      + 'declare -p CX_TIER_SEEN >/dev/null 2>&1 || declare -gA CX_TIER_SEEN=(); CX_TIER_SEEN["$1/$2"]="$rc"; return "$rc"; }',
+    ].join('\n'));
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('codex-reap-failed');
+    expect(String(j['detail'])).toMatch(new RegExp(`codex lane ${lane.id}'s shim tier\\(s\\) still run`));
+    expect(r.stderr).not.toMatch(/bridge tier/);
+  });
+
+  itSystemd('C12: removing a codex account disables ccrc\'s own usage timer for it, reports the link removed, keeps its logs and, told to, its OAuth, and never names another repository\'s (Plan 3a Task 7)', async () => {
+    const home = box('ccrc-account-remove-codex-usage-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const auth = join(home, codexAuthDir(lane.id), 'auth.json');
+    mkdirSync(path.dirname(auth), { recursive: true });
+    writeFileSync(auth, '{"fixture":"oauth"}\n');
+    // The OAuth file is compared by lstat only — size, mtime, inode — and never
+    // read: nothing this plan adds opens an auth.json, its tests included (G8).
+    const authStat = (): [number, number, number] => { const st = lstatSync(auth); return [st.size, st.mtimeMs, st.ino]; };
+    const authBefore = authStat();
+    const state = plantLaneState(home, lane);
+    const { link } = plantCodexUsage(home, lane.id, { row: false });
+    const foreign = plantForeignUsage(home, lane.id);
+    const ctl = plantUsageCtl(home);
+    plantTmux(home, []);
+    const r = run(home, ['account', 'remove', '--id', lane.id, '--keep-codex-auth'], '', { PATH: `${ctl}:${env(home)['PATH'] ?? ''}` });
+    expect(r.code, r.stderr).toBe(0);
+    takeNoManagerProbe(home);
+    const j = oneObject(r);
+    expect(usageCtlCalls(home)).toEqual([`--user disable --now ccrc-codex-usage@${lane.id}.timer`]);
+    expect(lexists(link), 'ccrc\'s usage timer is still enabled for a removed account').toBe(false);
+    expect(j['removed']).toContain(link);
+    expect(lexists(foreign) && lstatSync(foreign).isSymbolicLink(), 'another repository\'s usage link was removed').toBe(true);
+    expect(existsSync(join(home, 'usage-ctl-foreign')), 'a systemctl call named another repository\'s usage unit').toBe(false);
+    expect(authStat(), 'the removal changed the lane\'s OAuth file').toEqual(authBefore);
+    for (const [f, bytes] of Object.entries(state.logs)) expect(readFileSync(f, 'utf8'), f).toBe(bytes);
+  });
+
+  itSystemd('C13: a usage timer the manager will not disable is an operator step, and the removal still completes', async () => {
+    const home = box('ccrc-account-remove-codex-usage-refused-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    plantLaneState(home, lane);
+    const { link } = plantCodexUsage(home, lane.id, { row: false });
+    plantTmux(home, []);
+    // No stand-in: this file's own systemctl poison refuses every call (97).
+    const r = run(home, ['account', 'remove', '--id', lane.id]);
+    expect(r.code, r.stderr).toBe(0);
+    // …and that refusal is what this case is about, so it takes the record (D-8394): the disable it refused, beside
+    // the no-manager probe and read-only state queries, and nothing else.
+    const asked = takePoisonRecord(home, 'systemctl');
+    expect(asked).toContain(`--user disable --now ccrc-codex-usage@${lane.id}.timer`);
+    for (const l of asked) {
+      if (l !== `--user disable --now ccrc-codex-usage@${lane.id}.timer`) expect(l).toMatch(NO_MANAGER_PROBE);
+    }
+    const steps = oneObject(r)['operator-steps'] as string[];
+    expect(steps).toContain(`ccrc's usage timer ccrc-codex-usage@${lane.id}.timer is still enabled for the removed account ${lane.id}, so it may go on rewriting $HOME/.cc-limits/${lane.id}.json. Run: systemctl --user disable --now ccrc-codex-usage@${lane.id}.timer`);
+    expect(lexists(link)).toBe(true);
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).not.toContain(`"${lane.id}"`);
+  });
+
+  // Plan 3b Task A3 (D-4049): this run now also asks `is-active ccrc-codex-usage@ext-a.service`; plantUsageCtl's
+  // stand-in answers it before the poison stub ever sees it, so `systemctl-poison` stays absent and the title (frozen) holds.
+  itSystemd('C14: an EXTERNAL account still carrying the ccrc usage timer its codex days enabled has it disabled too — and asks the manager nothing else (C4 stands)', () => {
+    const home = box('ccrc-account-remove-external-usage-');
+    seedRosterJson(home, [UPSTREAM,
+      { id: 'ext-a', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-ext-a', homeAble: false,
+        telemetry: 'codex', exec: { kind: 'external', provider: 'openai' } },
+      HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantLauncher(home, 'ext-a', '#!/bin/sh\n# somebody else wrote this\nexit 0\n');
+    const { link } = plantCodexUsage(home, 'ext-a', { row: false });
+    const ctl = plantUsageCtl(home);
+    plantTmux(home, []);
+    const r = run(home, ['account', 'remove', '--id', 'ext-a'], '', { PATH: `${ctl}:${env(home)['PATH'] ?? ''}` });
+    expect(r.code, r.stderr).toBe(0);
+    expect(usageCtlCalls(home)).toEqual(['--user disable --now ccrc-codex-usage@ext-a.timer']);
+    expect(lexists(link)).toBe(false);
+    expect(existsSync(join(home, 'systemctl-poison')), 'an external removal asked the manager anything else').toBe(false);
+    // Final-review fix wave (MF2): the stand-in's first and only word is `inactive`, the word every Linux removal with
+    // the template gets, so it is DONE: no operator step for the poll. Read as unmeasured, it would add one.
+    expect(((oneObject(r)['operator-steps'] ?? []) as string[]).filter((x) => x.includes('ccrc-codex-usage@ext-a.service')),
+      'an `inactive` poll was read as unmeasured').toEqual([]);
+  });
+
+  // The guard C12-C14 cannot reach: ccrc reports the link removed only once a
+  // re-read finds it gone, never on the manager's exit code alone. Without
+  // this case `_acct_remove_usage`'s `! _codex_usage_enabled` re-measure can be
+  // deleted with every case green (measured: mutation row A4g).
+  itSystemd('C15: a disable the manager answers 0 while the link stays is NOT reported removed — it is an operator step, measured and not assumed (Plan 3a Task 7)', () => {
+    const home = box('ccrc-account-remove-usage-unmeasured-');
+    seedRosterJson(home, [UPSTREAM,
+      { id: 'ext-a', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-ext-a', homeAble: false,
+        telemetry: 'codex', exec: { kind: 'external', provider: 'openai' } },
+      HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantLauncher(home, 'ext-a', '#!/bin/sh\n# somebody else wrote this\nexit 0\n');
+    const { link } = plantCodexUsage(home, 'ext-a', { row: false });
+    const ctl = plantUsageCtl(home, { keepLink: true });
+    plantTmux(home, []);
+    const r = run(home, ['account', 'remove', '--id', 'ext-a'], '', { PATH: `${ctl}:${env(home)['PATH'] ?? ''}` });
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    // THE ATTEMPT IS THE CONTROL: the disable was asked, and answered 0.
+    expect(usageCtlCalls(home)).toEqual(['--user disable --now ccrc-codex-usage@ext-a.timer']);
+    expect(lexists(link)).toBe(true);
+    expect(j['removed'], 'a link still on disk was reported removed on the manager\'s word').not.toContain(link);
+    expect(j['operator-steps']).toContain('ccrc\'s usage timer ccrc-codex-usage@ext-a.timer is still enabled for the removed account ext-a, so it may go on rewriting $HOME/.cc-limits/ext-a.json. Run: systemctl --user disable --now ccrc-codex-usage@ext-a.timer');
+  });
+
+  // ── Plan 3b Task A3 (D-4049,
+  // D-4050): a usage poll the timer already
+  // fired is WAITED for, never stopped, before the roster drop and before the
+  // limits row. `ext-a` (C14's shape) keeps every other manager question out of
+  // the run, so `systemctl-poison` stays absent: nothing else was asked.
+  const seedUsageWait = (home: string, svc: string[], o: { enabled?: boolean; keepLink?: boolean; onFirstRead?: string } = {}): { link: string; row: string; ctl: string } => {
+    seedRosterJson(home, [UPSTREAM, USAGE_EXT_A, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantLauncher(home, 'ext-a', '#!/bin/sh\n# somebody else wrote this\nexit 0\n');
+    const { link, row } = plantCodexUsage(home, 'ext-a', { enabled: o.enabled });
+    const ctl = plantUsageCtl(home, { svc, keepLink: o.keepLink, onFirstRead: o.onFirstRead });
+    plantTmux(home, []);
+    return { link, row, ctl };
+  };
+  const runWith = (home: string, ctl: string, extra: NodeJS.ProcessEnv = {}): Result =>
+    run(home, ['account', 'remove', '--id', 'ext-a'], '', { PATH: `${ctl}:${env(home)['PATH'] ?? ''}`, ...extra });
+  const SVC = 'ccrc-codex-usage@ext-a.service';
+
+  itSystemd('Plan 3b Task A3: a usage poll already running is WAITED for — one waiting line, is-active only, never a stop — before the roster drop and the limits row', () => {
+    const home = box('ccrc-account-remove-usage-wait-');
+    const { link, row, ctl } = seedUsageWait(home, ['active', 'activating', 'inactive']);
+    const r = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '30' });
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    // THE ORDER IS THE CLAIM: every read saw the row AND the roster entry still standing.
+    expect(usageSvcCalls(home)).toEqual(Array(3).fill(`--user is-active ${SVC} row=present roster=named`));
+    expect(r.stderr.split('\n').filter((l) => l.startsWith('ccrc account remove: '))).toEqual([
+      `ccrc account remove: ccrc's usage poll ${SVC} is running (active); waiting up to 30s for it to finish before $HOME/.cc-limits/ext-a.json is removed. ccrc never stops it, and a row removed under a running poll is written again.`]);
+    expect(usageCtlCalls(home)).toEqual(['--user disable --now ccrc-codex-usage@ext-a.timer']);
+    expect(lexists(link)).toBe(false);
+    expect(existsSync(row), 'the limits row survived the removal').toBe(false);
+    expect(j['removed']).toEqual(expect.arrayContaining([link, row]));
+    expect(existsSync(join(home, 'systemctl-poison')), 'the removal asked the manager something else').toBe(false);
+    // Final-review fix wave (MF2): the wait ENDS on `inactive`, which is done — never the unmeasured operator step.
+    expect(((j['operator-steps'] ?? []) as string[]).filter((x) => x.includes(SVC)), 'the `inactive` that ended the wait was read as unmeasured').toEqual([]);
+  });
+
+  itSystemd('Plan 3b Task A3: a poll still running at the bound REFUSES usage-refresh-in-flight before the roster drop and before any limits-row deletion — never a stop', () => {
+    const home = box('ccrc-account-remove-usage-in-flight-');
+    const { link, row, ctl } = seedUsageWait(home, ['activating']);
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const r = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '2' });
+    expect(r.code).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('usage-refresh-in-flight');
+    const detail = String(j['detail']);
+    expect(detail.startsWith(`ccrc's usage poll ${SVC} for ext-a still reads activating after 2s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before $HOME/.cc-limits/ext-a.json: ccrc never stops a poll, and a row removed under a running poll is written again.`), detail).toBe(true);
+    expect(detail).toContain('ccrc\'s usage timer ccrc-codex-usage@ext-a.timer is not enabled, so no new poll starts.');
+    expect(detail).toContain('The roster entry and all account artifacts still stand');
+    // P9: THIS run disabled the timer, so the refusal corrects the clause that says what stands, in one sentence.
+    const WITHDREW = 'Except ccrc\'s usage timer ccrc-codex-usage@ext-a.timer: this run disabled it, so it does not stand; \'ccrc install\' enables it again for a lane that is still codex.';
+    expect(detail, 'the refusal claims everything stands after it disabled the timer').toContain(WITHDREW);
+    expect(detail.indexOf(WITHDREW), 'the correction must follow the clause it corrects').toBeGreaterThan(detail.indexOf('The roster entry and all account artifacts still stand'));
+    expect(detail.endsWith(`Retry 'ccrc account remove --id ext-a' once 'systemctl --user is-active ${SVC}' reads inactive: every step this run took is safe to repeat.`), detail).toBe(true);
+    expect(r.stderr).toMatch(/^ccrc account remove: ccrc's usage poll ccrc-codex-usage@ext-a\.service is running \(activating\); waiting up to 2s /m);
+    expect(readFileSync(roster, 'utf8'), 'the roster was dropped past a running poll').toBe(rosterBefore);
+    expect(existsSync(row), 'the limits row was deleted under a running poll').toBe(true);
+    expect(lexists(link), 'the timer is withdrawn first, so no new poll starts').toBe(false);
+    const calls = usageSvcCalls(home);
+    expect(calls.length, 'the bound was not waited out').toBeGreaterThanOrEqual(2);
+    for (const c of calls) expect(c).toBe(`--user is-active ${SVC} row=present roster=named`);
+    expect(existsSync(join(home, 'systemctl-poison'))).toBe(false);
+  });
+
+  // Final-review fix wave (MF3): the in-flight words a oneshot is NOT expected to read but the manager can still
+  // answer. Read as anything else they would be UNMEASURED, and the limits row would be deleted under the poll.
+  itSystemd.each([['deactivating'], ['reloading'], ['refreshing']])('Plan 3b Task A3: a poll reading %s is in flight — refused usage-refresh-in-flight at the bound', (word) => {
+    const home = box(`ccrc-account-remove-usage-${word}-`);
+    const { row, ctl } = seedUsageWait(home, [word]);
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const r = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '2' });
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['error']).toBe('usage-refresh-in-flight');
+    expect(existsSync(row), `the limits row was deleted under a poll reading ${word}`).toBe(true);
+    expect(readFileSync(roster, 'utf8')).toBe(rosterBefore);
+    for (const c of usageSvcCalls(home)) expect(c).toBe(`--user is-active ${SVC} row=present roster=named`);
+  });
+
+  // Final-review fix wave (MF3): a template that is a DANGLING link is still ccrc's template placed (`-L`), so the
+  // manager is asked; `-e` alone reads it as absent and asks nothing.
+  itSystemd('Plan 3b Task A3: a usage template that is a dangling link is still asked about — one is-active read', () => {
+    const home = box('ccrc-account-remove-usage-dangling-tpl-');
+    const { row, ctl } = seedUsageWait(home, []);
+    const tpl = join(home, '.config', 'systemd', 'user', 'ccrc-codex-usage@.service');
+    rmSync(tpl);
+    symlinkSync(join(home, 'no-such-unit-file'), tpl);
+    const r = runWith(home, ctl);
+    expect(r.code, r.stderr).toBe(0);
+    expect(usageSvcCalls(home), 'a dangling template read as no template').toEqual([`--user is-active ${SVC} row=present roster=named`]);
+    expect(existsSync(row)).toBe(false);
+  });
+
+  // THE RETRY INTO THE SAME POLL: the timer is already gone (a first run took it), so this run disables nothing,
+  // and its refusal measures the link at the bound and claims no disable of its own.
+  itSystemd('Plan 3b Task A3: a retry into the same still-running poll finds the timer already disabled — it refuses again, says it did not disable it, and asks for no second disable', () => {
+    const home = box('ccrc-account-remove-usage-in-flight-again-');
+    const { link, row, ctl } = seedUsageWait(home, ['activating'], { enabled: false });
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const again = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '2' });
+    expect(again.code).toBe(1);
+    const aj = oneObject(again);
+    expect(aj['error']).toBe('usage-refresh-in-flight');
+    const detail = String(aj['detail']);
+    expect(detail).toContain('ccrc\'s usage timer ccrc-codex-usage@ext-a.timer is not enabled, so no new poll starts.');
+    const NOT_THIS_RUNS = 'Except ccrc\'s usage timer ccrc-codex-usage@ext-a.timer: it is not enabled, and this run did not disable it, so it does not stand; \'ccrc install\' enables it again for a lane that is still codex.';
+    expect(detail, 'the retry left "all account artifacts still stand" uncorrected for a link that is gone').toContain(NOT_THIS_RUNS);
+    expect(detail.indexOf(NOT_THIS_RUNS)).toBeGreaterThan(detail.indexOf('The roster entry and all account artifacts still stand'));
+    expect(detail, 'a run that disabled nothing claimed a disable').not.toContain('this run disabled it');
+    expect(detail.endsWith(`Retry 'ccrc account remove --id ext-a' once 'systemctl --user is-active ${SVC}' reads inactive: every step this run took is safe to repeat.`), detail).toBe(true);
+    expect(usageCtlCalls(home), 'the retry disabled a timer that was already disabled').toEqual([]);
+    expect(lexists(link)).toBe(false);
+    expect(existsSync(row), 'the limits row was deleted under a running poll').toBe(true);
+    expect(readFileSync(roster, 'utf8')).toBe(rosterBefore);
+  });
+
+  // A DISABLE THE MANAGER ANSWERS 0 WHILE THE LINK STAYS: still enabled at the bound, and the refusal says so.
+  itSystemd('Plan 3b Task A3: a disable the manager answers 0 while the link stays leaves the timer enabled at the bound — the refusal says new polls go on starting and claims no disable', () => {
+    const home = box('ccrc-account-remove-usage-in-flight-stuck-');
+    const { link, row, ctl } = seedUsageWait(home, ['activating'], { keepLink: true });
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const stuck = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '2' });
+    expect(stuck.code).toBe(1);
+    const sj = oneObject(stuck);
+    expect(sj['error']).toBe('usage-refresh-in-flight');
+    expect(String(sj['detail'])).toContain('ccrc\'s usage timer ccrc-codex-usage@ext-a.timer is still enabled, so new polls go on starting: run systemctl --user disable --now ccrc-codex-usage@ext-a.timer first.');
+    expect(String(sj['detail']), 'a disable that did not take claimed a withdrawal').not.toContain('Except ccrc\'s usage timer');
+    expect(usageCtlCalls(home), 'the disable was asked, and answered 0').toEqual(['--user disable --now ccrc-codex-usage@ext-a.timer']);
+    expect(lexists(link), 'the link the manager left standing').toBe(true);
+    expect(existsSync(row)).toBe(true);
+    expect(readFileSync(roster, 'utf8')).toBe(rosterBefore);
+  });
+
+  itSystemd('Plan 3b Task A3: the refusal is retryable — every step before the wait repeats as a no-op, and the retry completes the removal', () => {
+    const home = box('ccrc-account-remove-usage-retry-');
+    seedFull(home);
+    plantRow(home, 'orchard-api', { wrapper: 'alt-max', home: 'alt-max' });
+    const { link } = plantCodexUsage(home, 'alt-max', { row: false });   // seedFull writes the row
+    const ctl = plantUsageCtl(home, { svc: ['activating'] });
+    plantTmux(home, []);
+    const row = join(home, '.cc-limits', 'alt-max.json');
+    const launcher = join(home, '.local', 'bin', 'alt-max');
+    const field = (name: string): string => readFileSync(join(home, '.cc-sessions', `orchard-api.${name}`), 'utf8');
+    const runIt = (): Result => run(home, ['account', 'remove', '--id', 'alt-max'], '',
+      { PATH: `${ctl}:${env(home)['PATH'] ?? ''}`, CCRC_ACCT_USAGE_WAIT_S: '2' });
+
+    const first = runIt();
+    expect(first.code).toBe(1);
+    const f = oneObject(first);
+    expect(f['error']).toBe('usage-refresh-in-flight');
+    // Final-review fix wave (MF1, D-4050 widened): the wait comes BEFORE the tier stop, the rehome and the home
+    // sweep, so a refusal at the bound has done none of them. Only the timer disable, which a retry skips, happened…
+    expect(String(f['detail'])).toContain('The roster entry and all account artifacts still stand; no registry field was rehomed, no codex tier was stopped and no home was swept.');
+    expect(lexists(link)).toBe(false);
+    expect(field('wrapper'), 'a registry field was rehomed before the wait').toBe('alt-max');
+    expect(field('home')).toBe('alt-max');
+    expect(existsSync(join(home, '.claude-alt-max', 'skills', 'ccrc-worker')), 'the home was swept before the wait').toBe(true);
+    // …and nothing the drop or the artifact loop owns did.
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toContain('"alt-max"');
+    for (const p of [row, launcher]) expect(existsSync(p), p).toBe(true);
+
+    writeFileSync(join(home, 'usage-svc-states'), 'inactive\n');
+    const second = runIt();
+    expect(second.code, second.stderr).toBe(0);
+    const j = oneObject(second);
+    expect(j['rehomed'], 'the retry did not rehome the row the refused run left').toEqual(['orchard-api']);
+    expect(field('wrapper')).toBe('claude');
+    expect(field('home')).toBe('claude');
+    expect(existsSync(join(home, '.claude-alt-max', 'skills', 'ccrc-worker')), 'the retry did not sweep the home').toBe(false);
+    expect((j['roster'] as { accounts: { id: string }[] }).accounts.map((a) => a.id)).toEqual(['claude', 'team-shared']);
+    for (const p of [row, launcher]) expect(existsSync(p), p).toBe(false);
+    expect(j['removed']).toEqual(expect.arrayContaining([row, launcher]));
+    expect(usageCtlCalls(home), 'the retry disabled the timer a second time').toEqual(['--user disable --now ccrc-codex-usage@alt-max.timer']);
+    for (const c of usageSvcCalls(home)) expect(c).toBe('--user is-active ccrc-codex-usage@alt-max.service row=present roster=named');
+  });
+
+  // ── Final-review fix wave (MF1, D-4050 widened): ccd's placements never take the placement lock this removal
+  // holds (ccd/ccd's "A RE-READ, NOT A LOCK"), so a session can land on the lane WHILE the removal waits for a
+  // poll. A removal that waited takes its liveness census again before it stops a tier or moves anything. The
+  // stand-in plants the row on its FIRST is-active read, before it answers `active`: the census before the wait
+  // finds no row (and so never asks tmux), the one after it finds the row.
+  const PLACED_DURING_WAIT = 'r="$HOME/.cc-sessions"; mkdir -p "$r"; printf u-1234 > "$r/orchard-api.uuid"; '
+    + 'printf ext-a > "$r/orchard-api.wrapper"; printf ext-a > "$r/orchard-api.home"';
+  const plantExtHome = (home: string): string => {
+    const skill = join(home, '.claude-ext-a', 'skills', 'ccrc-worker');
+    mkdirSync(skill, { recursive: true });
+    return skill;
+  };
+  const regField = (home: string, name: string): string => readFileSync(join(home, '.cc-sessions', `orchard-api.${name}`), 'utf8');
+
+  itSystemd('Plan 3b Task A3: a session placed on the lane during the wait refuses the removal after the wait, before any tier stop, rehome or home sweep', () => {
+    const home = box('ccrc-account-remove-usage-placed-');
+    const { link, row, ctl } = seedUsageWait(home, ['active', 'inactive'], { onFirstRead: PLACED_DURING_WAIT });
+    plantTmux(home, ['cc-orchard-api']);
+    const skill = plantExtHome(home);
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const r = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '30' });
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)).toMatchObject({ error: 'live-sessions', live: ['orchard-api'] });
+    // Residual round (R-1): node's envelope carries the timer this run disabled, through refuse-live's `--stands`.
+    expect(String(oneObject(r)['detail']), 'the live-sessions refusal says nothing of the timer this run disabled').toBe(
+      'ext-a has 1 live session(s) — stop or swap each one first. Nothing else was written. ccrc\'s usage timer for ext-a was disabled; \'ccrc install\' enables it again for a lane that is still codex.');
+    expect(r.stderr).toMatch(/^ccrc account remove: ccrc's usage poll ccrc-codex-usage@ext-a\.service is running \(active\); /m);
+    expect(usageSvcCalls(home), 'the wait did not end on the second read').toEqual(Array(2).fill(`--user is-active ${SVC} row=present roster=named`));
+    expect(readFileSync(roster, 'utf8'), 'the roster was dropped under a live session').toBe(rosterBefore);
+    expect(regField(home, 'wrapper'), 'the live row was rehomed').toBe('ext-a');
+    expect(regField(home, 'home')).toBe('ext-a');
+    expect(existsSync(skill), 'the home was swept under a live session').toBe(true);
+    expect(existsSync(row), 'the limits row was removed under a live session').toBe(true);
+    expect(existsSync(join(home, '.local', 'bin', 'ext-a'))).toBe(true);
+    expect(lexists(link), 'the timer is withdrawn before the wait, as before').toBe(false);
+    expect(existsSync(join(home, 'systemctl-poison'))).toBe(false);
+  });
+
+  // Residual round (R-1): …and a run that disabled nothing claims nothing — the envelope keeps node's own sentence.
+  itSystemd('Plan 3b Task A3: a session placed during the wait, with the timer already disabled, is refused live-sessions in node\'s own words', () => {
+    const home = box('ccrc-account-remove-usage-placed-no-disable-');
+    const { ctl } = seedUsageWait(home, ['active', 'inactive'], { enabled: false, onFirstRead: PLACED_DURING_WAIT });
+    plantTmux(home, ['cc-orchard-api']);
+    const r = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '30' });
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j).toMatchObject({ error: 'live-sessions', live: ['orchard-api'] });
+    expect(String(j['detail']), 'a run that disabled no timer added a clause').toBe('ext-a has 1 live session(s) — stop or swap each one first');
+    expect(usageCtlCalls(home), 'a timer that was not enabled was disabled').toEqual([]);
+  });
+
+  // Residual round (JC3): the post-wait census's FIRST refusal, a registry field that exists and cannot be read,
+  // says what this run wrote. It is a directory where `.wrapper` belongs, so no uid can read it as a file.
+  itSystemd('Plan 3b Task A3: a registry field that turns unreadable during the wait refuses registry-unreadable after it, naming the timer this run disabled', () => {
+    const home = box('ccrc-account-remove-usage-recensus-unreadable-');
+    const { row, ctl } = seedUsageWait(home, ['active', 'inactive'], {
+      onFirstRead: 'r="$HOME/.cc-sessions"; mkdir -p "$r"; printf u-1234 > "$r/orchard-api.uuid"; mkdir "$r/orchard-api.wrapper"' });
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const r = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '30' });
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('registry-unreadable');
+    const d = String(j['detail']);
+    expect(d.endsWith('so this removal cannot prove whether it names account ext-a. Nothing else was written. ccrc\'s usage timer for ext-a was disabled; \'ccrc install\' enables it again for a lane that is still codex.'), d).toBe(true);
+    expect(readFileSync(roster, 'utf8')).toBe(rosterBefore);
+    expect(existsSync(row)).toBe(true);
+  });
+
+  // Residual round (R-3): the re-census is BEFORE the tier stop, on the lane kind that has tiers. A real stand-in
+  // LiteLLM runs as this lane's tier (C2's shape: the pid file names it, the poison manager makes the stop the
+  // nohup arm), and a session is placed on the lane during the wait. The refusal must leave that tier running.
+  it.skipIf(!PY3 || process.platform === 'darwin')('Plan 3b Task A3: on a codex lane, a session placed during the wait refuses the removal before any tier stop — the tier still runs', async () => {
+    const home = box('ccrc-account-remove-usage-placed-codex-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const state = plantLaneState(home, lane);
+    const { link } = plantCodexUsage(home, lane.id, { row: false });
+    const ctl = plantUsageCtl(home, { svc: ['active', 'inactive'], onFirstRead:
+      `r="$HOME/.cc-sessions"; mkdir -p "$r"; printf u-1234 > "$r/orchard-api.uuid"; printf ${lane.id} > "$r/orchard-api.wrapper"` });
+    plantTmux(home, ['cc-orchard-api']);
+    const tier = await spawnOwnLitellm(home, lane);
+    try {
+      writeFileSync(join(home, '.ccrc', 'codex', lane.id, 'litellm.pid'), `${tier}\n`, { mode: 0o600 });
+      const roster = join(home, '.ccrc', 'accounts.json');
+      const rosterBefore = readFileSync(roster, 'utf8');
+      const r = run(home, ['account', 'remove', '--id', lane.id], '', { PATH: `${ctl}:${env(home)['PATH'] ?? ''}`, CCRC_ACCT_USAGE_WAIT_S: '30' });
+      expect(r.code, r.stderr).toBe(1);
+      expect(oneObject(r)).toMatchObject({ error: 'live-sessions', live: ['orchard-api'] });
+      expect(usageSvcCalls(home)).toEqual(Array(2).fill(`--user is-active ccrc-codex-usage@${lane.id}.service row=absent roster=named`));
+      await new Promise((res) => setTimeout(res, 1000));   // a stop the removal made would have ended the tier by now
+      expect(alive(tier), 'the removal stopped the lane\'s tier under a session placed during the wait').toBe(true);
+      expect(readFileSync(join(home, '.ccrc', 'codex', lane.id, 'litellm.pid'), 'utf8')).toBe(`${tier}\n`);
+      const poison = existsSync(join(home, 'systemctl-poison')) ? readFileSync(join(home, 'systemctl-poison'), 'utf8') : '';
+      expect(poison, 'a systemctl stop of the lane\'s tiers was asked').not.toMatch(/\bstop\b.*ccgpt-codex-a-/);
+      expect(readFileSync(roster, 'utf8')).toBe(rosterBefore);
+      for (const f of state.laneOnly) expect(existsSync(f), `${f} was reaped`).toBe(true);
+      expect(lexists(link), 'the timer is withdrawn before the wait').toBe(false);
+    } finally { await killLaneProcesses(home); }
+  });
+
+  // The re-census's own two clauses: after the wait, "Nothing was written." is false of a timer this run disabled.
+  itSystemd.each([
+    ['this run disabled the timer', true, ' Nothing else was written. ccrc\'s usage timer for ext-a was disabled; \'ccrc install\' enables it again for a lane that is still codex.'],
+    ['the timer was already disabled', false, ' Nothing was written.'],
+  ] as const)('Plan 3b Task A3: a re-census after the wait that cannot tell refuses live-unmeasured, and its clause says what was written (%s)', (_what, enabled, tail) => {
+    const home = box('ccrc-account-remove-usage-recensus-blind-');
+    const { row, ctl } = seedUsageWait(home, ['activating', 'inactive'], { enabled, onFirstRead: PLACED_DURING_WAIT });
+    // tmux that fails saying something other than "no server": unmeasured. The first census never asks it (no row).
+    writeFileSync(join(home, '.local', 'bin', 'tmux'), '#!/bin/sh\necho "lost server: protocol version mismatch" >&2\nexit 1\n', { mode: 0o755 });
+    const skill = plantExtHome(home);
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const r = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '30' });
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('live-unmeasured');
+    const d = String(j['detail']);
+    expect(d.endsWith(`so this removal cannot prove the lane has no live pane.${tail}`), d).toBe(true);
+    expect(readFileSync(roster, 'utf8')).toBe(rosterBefore);
+    expect(regField(home, 'wrapper')).toBe('ext-a');
+    expect(existsSync(skill)).toBe(true);
+    expect(existsSync(row)).toBe(true);
+  });
+
+  // Final-review fix wave (MF1): the usage half now runs BEFORE the tier stop, the rehome and the home sweep, so a
+  // refusal in any of them comes after this run disabled the timer, and its clause says so, as the drop's and the
+  // projection's do (P9). C10/C11's idiom: ccd/ccrc sourced, one seam redefined after it, then the verb.
+  const NOTE_CODEX = 'ccrc\'s usage timer for codex-a was disabled; \'ccrc install\' enables it again for a lane that is still codex.';
+  const STOPPED = '_codex_stop_lane() { return 0; }\n_codex_tier_ours() { return 1; }';
+  it.skipIf(process.platform === 'darwin').each([
+    ['the lane lock', 'codex-reap-failed', '_codex_lock() { echo "fixture: the lock is held" >&2; return 1; }'],
+    ['the tier stop', 'codex-reap-failed', `_codex_stop_lane() { return 0; }\n${litellmAnswers(2, 'unit-unproven')}`],
+    ['a registry field that changed', 'registry-changed', `${STOPPED}\n_acct_rehome() { return 3; }`],
+    ['a rehome that fails', 'rehome-failed', `${STOPPED}\n_acct_rehome() { return 1; }`],
+    ['the home sweep', 'unprovision-fixture', `${STOPPED}\n_acct_unprovision() { _acct_refuse 1 unprovision-fixture "fixture: the sweep refused. $2"; }`],
+  ] as const)('Plan 3b Task A3: a refusal at %s, after this run disabled the usage timer, says so in its own clause', async (_at, word, stubs) => {
+    const home = box('ccrc-account-remove-usage-then-refused-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    plantLaneState(home, lane);
+    plantRow(home, 'orchard-api', { wrapper: lane.id });
+    const { link } = plantCodexUsage(home, lane.id, { row: false });
+    const ctl = plantUsageCtl(home);
+    plantTmux(home, []);
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const r0 = spawnSync(BASH, ['-c', `. "${ccrcIn(home)}"\n${stubs}\ncmd_account remove --id ${lane.id}`],
+      { env: { ...env(home), PATH: `${ctl}:${env(home)['PATH'] ?? ''}` }, encoding: 'utf8', input: '' });
+    const r = { code: r0.status ?? -1, stdout: r0.stdout ?? '', stderr: r0.stderr ?? '' };
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe(word);
+    expect(String(j['detail']), 'a refusal after the timer disable does not say the timer was disabled').toContain(NOTE_CODEX);
+    expect(lexists(link), 'the usage half did not run before this refusal').toBe(false);
+    expect(readFileSync(roster, 'utf8')).toBe(rosterBefore);
+  });
+
+  itSystemd('Plan 3b Task A3: a manager that does not say whether the poll runs is UNMEASURED — an operator step, never read as done — and the removal completes', () => {
+    const home = box('ccrc-account-remove-usage-unmeasured-svc-');
+    const { row, ctl } = seedUsageWait(home, ['-']);
+    const r = runWith(home, ctl);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)['operator-steps']).toContain(`ccrc's usage poll ${SVC} may still be running for the removed account ext-a: the user manager did not say (systemctl --user is-active answered ""), so this removal did not wait for it, and a poll that was running may write $HOME/.cc-limits/ext-a.json again after this removal. Run: systemctl --user is-active ${SVC} — once it reads inactive, remove $HOME/.cc-limits/ext-a.json by hand if it is there.`);
+    expect(usageSvcCalls(home)).toEqual([`--user is-active ${SVC} row=present roster=named`]);
+    expect(existsSync(row)).toBe(false);
+    expect(r.stderr).not.toMatch(/waiting up to/);
+  });
+
+  itSystemd('Plan 3b Task A3: a poll whose last run ended `failed` is DONE — the removal completes at once, with no waiting line and no operator step for the poll', () => {
+    const home = box('ccrc-account-remove-usage-failed-');
+    const { link, row, ctl } = seedUsageWait(home, ['failed']);
+    const r = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '2' });   // a mutation that waits on `failed` refuses at 2s
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    expect(usageSvcCalls(home), 'one read: `failed` writes nothing more, so nothing is waited for').toEqual([`--user is-active ${SVC} row=present roster=named`]);
+    expect(r.stderr).not.toMatch(/waiting up to/);
+    expect(((j['operator-steps'] ?? []) as string[]).filter((x) => x.includes(SVC)), 'a failed poll was read as unmeasured').toEqual([]);
+    expect(lexists(link)).toBe(false);
+    expect(existsSync(row), 'the limits row survived the removal').toBe(false);
+  });
+
+  itSystemd('Plan 3b Task A3: a roster drop that cannot write, after this run disabled the usage timer, says so — the drop\'s own clause names the withdrawn timer', () => {
+    const home = box('ccrc-account-remove-usage-drop-fails-');
+    const { link, row, ctl } = seedUsageWait(home, []);   // no word: the stand-in answers inactive, so nothing waits
+    try {
+      // `drop` renames a tmp beside the roster, so an unwritable `~/.ccrc` refuses THERE: the timer is already disabled.
+      // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+      // verb; without it this case would measure the lock refusing, not the write it is about.
+      mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
+      chmodSync(join(home, '.ccrc'), 0o500);
+      const r = runWith(home, ctl);
+      expect(r.code, r.stderr).toBe(1);
+      const j = oneObject(r);
+      expect(j['error']).toBe('roster-write');
+      expect(String(j['detail']), 'the drop\'s clause did not name the timer this run had already withdrawn')
+        .toContain('ccrc\'s usage timer for ext-a was disabled; \'ccrc install\' enables it again for a lane that is still codex.');
+      expect(lexists(link), 'the usage half did not run before the drop').toBe(false);
+      expect(existsSync(row), 'the limits row went before the drop').toBe(true);
+      expect(usageSvcCalls(home)).toEqual([`--user is-active ${SVC} row=present roster=named`]);
+    } finally {
+      chmodSync(join(home, '.ccrc'), 0o700);
+    }
+  });
+
+  itSystemd('Plan 3b Task A3: a projection that cannot be regenerated, after this run disabled the usage timer, says so — the projection clause names the withdrawn timer too', () => {
+    const home = box('ccrc-account-remove-usage-projection-fails-');
+    const { link, row, ctl } = seedUsageWait(home, []);
+    // The generator replaced by one that refuses (C-projection's lever): the drop SUCCEEDS and the projection does not.
+    const deploy = join(home, 'ccrc', 'deploy');
+    rmSync(deploy);
+    mkdirSync(deploy);
+    for (const name of readdirSync(join(REPO, 'deploy'))) {
+      if (name === 'gen-accounts.mjs') continue;
+      symlinkSync(join(REPO, 'deploy', name), join(deploy, name));
+    }
+    writeFileSync(join(deploy, 'gen-accounts.mjs'),
+      "process.stderr.write('gen-accounts: remedy: this generator was replaced by a fixture\\n');\n"
+      + 'process.exit(1);\n');
+    const r = runWith(home, ctl);
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('projection-failed');
+    const d = String(j['detail']);
+    expect(d).toContain('The roster no longer contains ext-a');
+    expect(d, 'the projection clause claims every artifact stands after this run disabled the timer')
+      .toContain('all account artifacts still stand. Registry fields and home cleanup are not rolled back; the config directory and transcript history remain intentionally. ccrc\'s usage timer for ext-a was disabled; \'ccrc install\' enables it again for a lane that is still codex.');
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).not.toContain('"ext-a"');
+    expect(lexists(link), 'the usage half did not run before the drop').toBe(false);
+    expect(existsSync(row), 'the limits row went before the projection step').toBe(true);
+  });
+
+  it('Plan 3b Task A3: on macOS no manager is asked about a usage poll — ccrc places no usage unit there (decision 17)', () => {
+    const home = box('ccrc-account-remove-usage-darwin-');
+    plantCodexUsage(home, 'ext-a', { enabled: false, row: false });   // the template, on the Linux path the sourced file resolved
+    const r = sourceRun(home, 'CCD_OS=darwin\n_acct_remove_usage ext-a "STANDS."\nprintf "removed=%s|step=%s|wait=%s\\n" "$ACCT_USAGE_REMOVED" "$ACCT_USAGE_STEP" "$ACCT_USAGE_WAIT_STEP"');
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe('removed=|step=|wait=\n');
+    for (const p of ['launchctl-poison', 'systemctl-poison']) expect(existsSync(join(home, p)), p).toBe(false);
+  });
+
+  it('Plan 3b Task A3: CCRC_ACCT_USAGE_WAIT_S is the bound, in whole seconds, default 300, falling back exactly as CCRC_CODEX_READY_S does', () => {
+    const home = box('ccrc-account-usage-wait-secs-');
+    const read = (v?: string): string =>
+      sourceRun(home, '_acct_usage_wait_secs', v === undefined ? {} : { CCRC_ACCT_USAGE_WAIT_S: v }).stdout;
+    expect(read()).toBe('300');
+    expect(read('7')).toBe('7');
+    expect(read('010'), 'read in base 10, never octal').toBe('10');
+    for (const v of ['', 'abc', '0', '00', '00007', '99999', '-5', '1.5']) expect(read(v), JSON.stringify(v)).toBe('300');
   });
 
   it('keeps a generated lane credential whose path ccrc cannot prove it derived', () => {
@@ -5497,7 +6998,7 @@ describe('ccrc account remove', () => {
     const fifo = make('ccrc-account-remove-registry-fifo-');
     const made = spawnSync('mkfifo', [field(fifo)], { encoding: 'utf8' });
     expect(made.status, made.stderr).toBe(0);
-    const fr = spawnSync(BASH, [ccrcIn(fifo), 'account', 'remove', '--id', 'alt-max'],
+    const fr = spawnSyncGroup(BASH, [ccrcIn(fifo), 'account', 'remove', '--id', 'alt-max'],
       { env: env(fifo), encoding: 'utf8', timeout: 2_000 });
     expect(fr.error, 'remove blocked while reading a FIFO registry field').toBeUndefined();
     expect(fr.status).toBe(1);
@@ -5577,6 +7078,9 @@ describe('ccrc account remove', () => {
       // `drop` writes a tmp beside the roster and renames it, so an unwritable
       // `~/.ccrc` refuses THERE and nowhere earlier: the rehome and the home
       // sweep have both already happened.
+      // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+      // verb; without it this case would measure the lock refusing, not the write it is about.
+      mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
       chmodSync(join(home, '.ccrc'), 0o500);
       const r = run(home, ['account', 'remove', '--id', 'alt-max']);
       expect(r.code, r.stderr).toBe(1);
@@ -5680,7 +7184,7 @@ describe('ccrc account remove', () => {
       + 'printf %s alt-max > "$HOME/.cc-sessions/orchard-api.wrapper"\n'
       + 'flock -u 9\n'
       + 'wait "$p"; printf \'%s\' "$?" > "$HOME/remove.status"\n';
-    const pair = spawnSync(BASH, ['-c', script, '_', ccrcIn(home)],
+    const pair = spawnSyncGroup(BASH, ['-c', script, '_', ccrcIn(home)],
       { env: env(home), encoding: 'utf8', timeout: 10_000 });
     expect(pair.error, pair.stderr).toBeUndefined();
     expect(readFileSync(join(home, 'remove.status'), 'utf8')).toBe('1');
@@ -5690,15 +7194,20 @@ describe('ccrc account remove', () => {
     expect(roster.accounts.map((a) => a.id)).toContain('alt-max');
   });
 
-  it('revalidates same-target marker changes queued behind removal', () => {
+  it('refuses a marker change on the lane a removal holds, `lane-busy` (accounts plan Task A11)', () => {
+    // UNTIL TASK A11 the marker verb queued on the placement lock behind the
+    // removal and re-validated the regenerated projection after it (`unknown-id`).
+    // Since A11 one lane takes one act at a time: the removal holds lane
+    // alt-max's lock, so the marker verb on that lane is refused at once, before
+    // it reads anything, and never reaches the placement lock at all. The
+    // re-validation after the placement lock stays, for a removal by a ccrc that
+    // predates the lane lock.
     for (const verb of ['enable', 'disable']) {
       const home = box(`ccrc-account-remove-${verb}-queued-`);
       seedFull(home);
       plantTmux(home, []);
 
-      // Stop removal inside its locked drop. The marker verb validates once,
-      // queues on the same lock, then must validate the regenerated projection
-      // again before touching the removed account's marker.
+      // Stop removal inside its locked drop.
       const deploy = join(home, 'ccrc', 'deploy');
       rmSync(deploy);
       mkdirSync(deploy);
@@ -5725,24 +7234,26 @@ describe('ccrc account remove', () => {
         { encoding: 'utf8' }).stdout.trim();
       writeFileSync(join(home, '.local', 'bin', 'flock'), [
         '#!/bin/sh',
-        'if mkdir "$HOME/flock-first" 2>/dev/null; then :; else : > "$HOME/flock-second"; fi',
+        // Only the BLOCKING call counts: that is the placement lock. The lane lock
+      // (accounts plan Task A11) is `flock -n`, taken first, and is not the
+      // queue this case is about.
+      'case "$1" in -n) ;; *) if mkdir "$HOME/flock-first" 2>/dev/null; then :; else : > "$HOME/flock-second"; fi ;; esac',
         `exec ${JSON.stringify(realFlock)} "$@"`,
       ].join('\n') + '\n', { mode: 0o755 });
 
       const script = `"$1" account remove --id alt-max >"$HOME/remove.out" 2>"$HOME/remove.err" & p1=$!\n`
         + 'while [ ! -e "$HOME/drop-ready" ]; do sleep 0.01; done\n'
-        + `"$1" account ${verb} --id alt-max >"$HOME/marker.out" 2>"$HOME/marker.err" & p2=$!\n`
-        + 'while [ ! -e "$HOME/flock-second" ]; do sleep 0.01; done\n'
+        + `"$1" account ${verb} --id alt-max >"$HOME/marker.out" 2>"$HOME/marker.err"\n`
+        + 'printf \'%s\' "$?" > "$HOME/marker.status"\n'
         + ': > "$HOME/drop-release"\n'
-        + 'wait "$p1"; printf \'%s\' "$?" > "$HOME/remove.status"\n'
-        + 'wait "$p2"; printf \'%s\' "$?" > "$HOME/marker.status"\n';
-      const pair = spawnSync(BASH, ['-c', script, '_', ccrcIn(home)],
+        + 'wait "$p1"; printf \'%s\' "$?" > "$HOME/remove.status"\n';
+      const pair = spawnSyncGroup(BASH, ['-c', script, '_', ccrcIn(home)],
         { env: env(home), encoding: 'utf8', timeout: 10_000 });
       expect(pair.error, pair.stderr).toBeUndefined();
       expect(readFileSync(join(home, 'remove.status'), 'utf8')).toBe('0');
       expect(readFileSync(join(home, 'marker.status'), 'utf8')).toBe('1');
       expect(JSON.parse(readFileSync(join(home, 'marker.out'), 'utf8')))
-        .toMatchObject({ ok: false, error: 'unknown-id' });
+        .toMatchObject({ ok: false, error: 'lane-busy' });
       expect(existsSync(offMarker(home, 'alt-max'))).toBe(false);
     }
   });
@@ -5783,7 +7294,10 @@ describe('ccrc account remove', () => {
       { encoding: 'utf8' }).stdout.trim();
     writeFileSync(join(home, '.local', 'bin', 'flock'), [
       '#!/bin/sh',
-      'if mkdir "$HOME/flock-first" 2>/dev/null; then :; else : > "$HOME/flock-second"; fi',
+      // Only the BLOCKING call counts: that is the placement lock. The lane lock
+      // (accounts plan Task A11) is `flock -n`, taken first, and is not the
+      // queue this case is about.
+      'case "$1" in -n) ;; *) if mkdir "$HOME/flock-first" 2>/dev/null; then :; else : > "$HOME/flock-second"; fi ;; esac',
       `exec ${JSON.stringify(realFlock)} "$@"`,
     ].join('\n') + '\n', { mode: 0o755 });
 
@@ -5794,7 +7308,7 @@ describe('ccrc account remove', () => {
       + ': > "$HOME/drop-release"\n'
       + 'wait "$p1"; printf \'%s\' "$?" > "$HOME/remove.status"\n'
       + 'wait "$p2"; printf \'%s\' "$?" > "$HOME/disable.status"\n';
-    const pair = spawnSync(BASH, ['-c', script, '_', ccrcIn(home)],
+    const pair = spawnSyncGroup(BASH, ['-c', script, '_', ccrcIn(home)],
       { env: env(home), encoding: 'utf8', timeout: 10_000 });
     expect(pair.error, pair.stderr).toBeUndefined();
     expect(readFileSync(join(home, 'remove.status'), 'utf8')).toBe('0');
@@ -5808,10 +7322,199 @@ describe('ccrc account remove', () => {
   });
 
   it('names registry destinations exactly the way ccd does', () => {
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const ccrc = readFileSync(CCRC_SRC, 'utf8');
     expect(ccd).toContain('_plat_mv_notdir "$tmp" "$REG/$1.$2"');
     expect(ccrc).toContain('_plat_mv_notdir "$tmp" "$_SVC_REG/$1.$2"');
+  });
+});
+
+// ── codex-bridge Stage 1, Task 9: removal takes the auth library's lock around the tier stop ────────────────────
+// The library's lock (`auth.json.lock` beside the credential, `ccd/ccgpt-auth.py`'s `held`) serialises every
+// credential write; removal takes it after the lane lock and releases it after `_codex_stop_lane`, so a stop never
+// lands inside a refresh's token round trip (D-6384). C10/C11's idiom: ccd/ccrc sourced, the stop and the re-measure
+// redefined after it, then the verb. The stop records whether the auth lock was held at that moment (a `flock -n` on
+// a new open fails while ccrc holds it on its own) and whether the case's holder had already let go.
+describe('ccrc account remove: a codex lane takes the auth library\'s lock (codex-bridge Stage 1, Task 9)', () => {
+  const itHold = it.skipIf(!PY3 || !HAVE_FLOCK);
+
+  async function authHoldBox(prefix: string, opts: { credential?: boolean } = {}): Promise<{
+    home: string; authDir: string; lock: string; launcher: string; roster: string; rosterBefore: string; laneOnly: string[];
+  }> {
+    const home = box(prefix);
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    const launcher = plantCodexLauncher(home);
+    const { laneOnly } = plantLaneState(home, lane);
+    plantTmux(home, []);
+    const authDir = join(home, lane.exec.authDir);
+    if (opts.credential !== false) plantBackendCredential(authDir);
+    // The library this tree ships, placed where `_codex_auth_lib` reads it.
+    copyFileSync(join(REPO, 'ccd', 'ccgpt-auth.py'), join(home, '.local', 'bin', 'ccgpt-auth.py'));
+    const roster = join(home, '.ccrc', 'accounts.json');
+    return { home, authDir, lock: join(authDir, 'auth.json.lock'), launcher, roster,
+      rosterBefore: readFileSync(roster, 'utf8'), laneOnly };
+  }
+
+  /** The removal verb with the stop replaced by a probe of the auth lock, under CLOSED_AUTH_BASE. With `timeoutMs`
+   *  it runs in a process group of its own (`spawnSyncGroup`), so a removal that blocks is ended with its children
+   *  and comes back with `timedOut` set instead of hanging the suite. */
+  function removeProbed(home: string, lock: string, opts: { timeoutMs?: number } = {}):
+    Result & { calls: string[]; ms: number; timedOut: boolean } {
+    const calls = join(home, 'auth-lock-calls');
+    const stubs = [
+      `_codex_stop_lane() { if [ ! -e '${path.dirname(lock)}' ]; then echo auth=no-authdir; elif flock -n '${lock}' true 2>/dev/null; then echo auth=free; else echo auth=held; fi >> '${calls}'`,
+      `  if [ -e '${join(home, 'holder-released')}' ]; then echo after-release >> '${calls}'; fi; return 0; }`,
+      '_codex_tier_ours() { return 1; }',
+    ].join('\n');
+    const t0 = Date.now();
+    const argv = ['-c', `. "${ccrcIn(home)}"\n${stubs}\ncmd_account remove --id codex-a`];
+    const o = { env: { ...env(home), CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE }, encoding: 'utf8' as const, input: '' };
+    const r0 = opts.timeoutMs === undefined ? spawnSync(BASH, argv, o)
+      : spawnSyncGroup(BASH, argv, { ...o, timeout: opts.timeoutMs });
+    const ms = Date.now() - t0;
+    return { code: r0.status ?? -1, stdout: r0.stdout ?? '', stderr: r0.stderr ?? '', ms,
+      timedOut: (r0.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT',
+      calls: existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter(Boolean) : [] };
+  }
+
+  /** Another process holding the auth lock for `secs`: `flock(1)` on the same file, in its own process group so the
+   *  case can end it and its child together. Resolves once it holds; it touches `holder-released` just before it
+   *  lets go. */
+  async function holdAuthLock(home: string, lock: string, secs: number): Promise<ChildProcess> {
+    const held = join(home, 'holder-held');
+    const holder = spawn('flock', [lock, 'sh', '-c', `: > '${held}'; sleep ${secs}; : > '${join(home, 'holder-released')}'`],
+      { detached: true, stdio: 'ignore' });
+    await eventually(() => existsSync(held), 'the holder to take the auth lock', 5000);
+    return holder;
+  }
+  const endHolder = (h: ChildProcess): void => { try { if (h.pid) process.kill(-h.pid, 'SIGKILL'); } catch { /* gone */ } };
+
+  /** The refusal's "nothing removed": the roster, the launcher and the lane's own files all still stand. */
+  function nothingRemoved(b: { roster: string; rosterBefore: string; launcher: string; laneOnly: string[] }): void {
+    expect(readFileSync(b.roster, 'utf8'), 'the roster changed under a refused removal').toBe(b.rosterBefore);
+    expect(existsSync(b.launcher), 'the launcher went').toBe(true);
+    for (const f of b.laneOnly) expect(existsSync(f), `${f} was reaped`).toBe(true);
+  }
+
+  itHold('removal takes the auth library\'s lock around the stop: a holder makes it wait, then proceed', async () => {
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-wait-');
+    const holder = await holdAuthLock(b.home, b.lock, 2);
+    try {
+      const r = removeProbed(b.home, b.lock);
+      expect(r.code, r.stderr).toBe(0);
+      oneObject(r);
+      // The stop ran once, under the auth lock, and only after the holder had let go of it.
+      expect(r.calls, r.stderr).toEqual(['auth=held', 'after-release']);
+      expect(r.ms, 'the removal did not wait for the holder').toBeGreaterThanOrEqual(1500);
+      expect(readFileSync(b.roster, 'utf8')).not.toBe(b.rosterBefore);
+    } finally { endHolder(holder); }
+  });
+
+  itHold('a lane never signed in (no authDir) holds nothing and is removed, creating no authDir and no lock', async () => {
+    // The library is placed, so `_codex_auth paths` answers: only the absent-authDir arm stands between the hold and
+    // an open of a lock file in a directory that does not exist (auth-lock-unusable, codex-reap-failed).
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-noauthdir-', { credential: false });
+    expect(existsSync(b.authDir)).toBe(false);
+    const r = removeProbed(b.home, b.lock);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)['ok'], r.stderr).toBe(true);
+    expect(r.calls, 'the tiers were not stopped once').toEqual(['auth=no-authdir']);
+    expect(existsSync(b.authDir), 'the removal created the authDir').toBe(false);
+    expect(existsSync(b.lock), 'the removal created an auth lock').toBe(false);
+    expect(readFileSync(b.roster, 'utf8')).not.toBe(b.rosterBefore);
+  });
+
+  itHold('a holder past the bound refuses codex-reap-failed, nothing removed', async () => {
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-timeout-');
+    // The library's bound is 60 s (LOCK_WAIT_S), which no case may wait out: a stand-in at the library's path answers
+    // `paths` with the real lock path and a 1 s bound. The hold reads both from that answer and spells neither.
+    writeFileSync(join(b.home, '.local', 'bin', 'ccgpt-auth.py'), [
+      'import json, sys',
+      'argv = sys.argv[1:]',
+      'if argv[:1] == ["paths"]:',
+      '    d = argv[argv.index("--auth-dir") + 1]',
+      '    print(json.dumps({"credential": d + "/auth.json", "pending": d + "/auth.pending.json",',
+      '                      "lock": d + "/auth.json.lock", "status": d + "/auth.status.json", "lockWaitS": 1}))',
+      '',
+    ].join('\n'));
+    const holder = await holdAuthLock(b.home, b.lock, 8);
+    try {
+      const r = removeProbed(b.home, b.lock);
+      expect(r.code, r.stderr).toBe(1);
+      const j = oneObject(r);
+      expect(j['error']).toBe('codex-reap-failed');
+      expect(String(j['detail'])).toContain('auth library');
+      expect(r.calls, 'the tiers were stopped without the auth lock').toEqual([]);
+      expect(r.ms, 'the removal waited out the holder instead of its bound').toBeLessThan(7000);
+      nothingRemoved(b);
+    } finally { endHolder(holder); }
+  });
+
+  itHold('a symlink at the auth lock path refuses codex-reap-failed, nothing removed, its target untouched', async () => {
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-symlink-');
+    const target = join(b.home, 'elsewhere', 'not-a-lock');
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, 'somebody else\'s file\n', { mode: 0o644 });
+    const before = statSync(target, { bigint: true });
+    symlinkSync(target, b.lock);
+    const r = removeProbed(b.home, b.lock);
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['error']).toBe('codex-reap-failed');
+    expect(r.calls, 'the tiers were stopped although the lock could not be taken').toEqual([]);
+    nothingRemoved(b);
+    expect(lstatSync(b.lock).isSymbolicLink(), 'the symlink was replaced').toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe('somebody else\'s file\n');
+    const after = statSync(target, { bigint: true });
+    expect([after.ino, after.mtimeNs, after.mode]).toEqual([before.ino, before.mtimeNs, before.mode]);
+  });
+
+  itHold('a FIFO at the auth lock path refuses codex-reap-failed (auth-lock-unusable) without opening it, nothing removed', async () => {
+    // `exec {fd}>>` on a FIFO is an O_WRONLY open with no O_NONBLOCK, which blocks until a reader comes: only the
+    // non-regular-file half of the hold's refusal stands between the removal and that unbounded wait. The spawn is
+    // bounded and grouped, so a regression comes back as `timedOut` instead of hanging the suite.
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-fifo-');
+    const made = spawnSync('mkfifo', [b.lock], { encoding: 'utf8' });
+    expect(made.status, made.stderr).toBe(0);
+    const r = removeProbed(b.home, b.lock, { timeoutMs: 15_000 });
+    expect(r.timedOut, 'the removal blocked opening a FIFO as its auth lock').toBe(false);
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['error']).toBe('codex-reap-failed');
+    expect(r.stderr).toContain('auth-lock-unusable');
+    expect(r.calls, 'the tiers were stopped although the lock could not be taken').toEqual([]);
+    nothingRemoved(b);
+    expect(lstatSync(b.lock).isFIFO(), 'the FIFO was replaced').toBe(true);
+  });
+
+  itHold('a library whose paths answer names no lock path or bound refuses codex-reap-failed (auth-status-unreadable), nothing removed', async () => {
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-nopaths-');
+    // A stand-in at the library's path that answers `paths` with an empty object: rc 0, but no `lock` and no
+    // `lockWaitS`. The hold must refuse rather than go ahead holding nothing.
+    writeFileSync(join(b.home, '.local', 'bin', 'ccgpt-auth.py'), [
+      'import sys',
+      'if sys.argv[1:2] == ["paths"]:',
+      '    print("{}")',
+      '',
+    ].join('\n'));
+    const r = removeProbed(b.home, b.lock, { timeoutMs: 15_000 });
+    expect(r.timedOut).toBe(false);
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['error']).toBe('codex-reap-failed');
+    expect(r.stderr).toContain('auth-status-unreadable');
+    expect(r.calls, 'the tiers were stopped holding nothing').toEqual([]);
+    nothingRemoved(b);
+    expect(existsSync(b.lock), 'the removal created an auth lock').toBe(false);
+  });
+
+  itHold('under a 0277 umask the hold leaves the lock file it created at 0600', async () => {
+    const b = await authHoldBox('ccrc-account-remove-codex-authlock-umask-');
+    expect(existsSync(b.lock)).toBe(false);
+    const r = spawnSync(BASH, ['-c',
+      `. "${ccrcIn(b.home)}"\numask 0277\n_codex_auth_hold codex-a; echo "rc=$? fd=\${CX_AUTH_LOCK_FD:+set}"; _codex_auth_release`],
+      { env: { ...env(b.home), CCRC_CODEX_AUTH_BASE: CLOSED_AUTH_BASE }, encoding: 'utf8', input: '' });
+    expect(r.stdout, r.stderr).toMatch(/^rc=0 fd=set$/m);
+    expect(statSync(b.lock).mode & 0o777, 'the lock file the hold created').toBe(0o600);
   });
 });
 
@@ -5843,7 +7546,7 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
       'cp "$HOME/.ccrc/accounts.json" "$HOME/roster-during.json"',
       'flock -u 9',
     ].join('\n');
-    const r = spawnSync(BASH, ['-c', script, '_', ccrcIn(home), BASH],
+    const r = spawnSyncGroup(BASH, ['-c', script, '_', ccrcIn(home), BASH],
       { env: env(home), encoding: 'utf8', input: stdin, timeout: 20_000 });
     expect(r.error, r.stderr).toBeUndefined();
     return {
@@ -5919,7 +7622,16 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
     // directory, so this is a hardening rather than a live hole; what makes it
     // worth the line is that the same two properties are what stop two writers
     // of one roster colliding on one name.
-    const src = readFileSync(join(REPO, 'deploy', 'account-op.mjs'), 'utf8');
+    // THE LANE-STATE FILE'S WRITER IS NOT A ROSTER WRITER (accounts plan Task
+    // A11): it writes `~/.cc-sessions/.accounts/<id>.json` and never the roster,
+    // so its own rename is cut out before the count. Nor is the first-run seed
+    // (A13, D-7731), which writes a lane's `.claude.json`.
+    let src = readFileSync(join(REPO, 'deploy', 'account-op.mjs'), 'utf8');
+    for (const fn of ['function laneStateWrite(', 'function opSeed(']) {
+      const ls = src.indexOf(fn);
+      expect(ls, `${fn} moved: re-derive this cut`).toBeGreaterThan(-1);
+      src = src.slice(0, ls) + src.slice(src.indexOf('\n}\n', ls) + 3);
+    }
     const renames = [...src.matchAll(/\brenameSync\(/g)].length;
     expect(renames, `the roster is written from ${renames} places, not one`).toBe(1);
     expect(src, 'the temporary roster name carries nothing a reader of /proc could not derive')
@@ -5941,7 +7653,7 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
     const home = box('ccrc-account-lock-reentrant-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     mkdirSync(join(home, '.cc-sessions'), { recursive: true });
-    const r = spawnSync(BASH, ['-c',
+    const r = spawnSyncGroup(BASH, ['-c',
       `. ${JSON.stringify(ccrcIn(home))}\n`
       + '_acct_marker_lock "Nothing was written."\n'
       + 'first="$ACCT_MARKER_LOCK_FD"\n'
@@ -5954,6 +7666,43 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
     const [first, second] = (r.stdout ?? '').trim().split(' ');
     expect(first, 'no descriptor was opened at all').toBeTruthy();
     expect(second, 'the second call opened a second descriptor').toBe(first);
+  });
+
+  it('a wedged second acquisition is killed WITH its flock: no lock holder outlives the timeout (#172, D-5894)', () => {
+    // The case above exists for the run where the guard is gone, and on that run
+    // `spawnSync`'s timeout killed only `bash`: the `flock` it had started waited
+    // on, reparented, holding the fixture's lock after the fixture was deleted.
+    // Measured: seven such `flock`s, about eleven days old, one per red run. This
+    // case FORCES that wedge (the guard's variable is emptied between the two calls,
+    // which is exactly what deleting the guard does) and asserts the run left no
+    // process holding the lock. It reds if the runner above stops killing the
+    // child's whole process group.
+    const lsof = spawnSync('sh', ['-c', 'command -v lsof'], { encoding: 'utf8' });
+    expect(lsof.status, 'lsof is needed to see who holds the lock').toBe(0);
+    const home = box('ccrc-account-lock-wedge-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    const r = spawnSyncGroup(BASH, ['-c',
+      `. ${JSON.stringify(ccrcIn(home))}\n`
+      + '_acct_marker_lock "Nothing was written."\n'
+      + 'ACCT_MARKER_LOCK_FD=\n'
+      + '_acct_marker_lock "Nothing was written."\n'],
+    { env: env(home), encoding: 'utf8', timeout: 2_000 });
+    expect((r.error as NodeJS.ErrnoException | undefined)?.code,
+      `the forced wedge did not wedge, so this case measured nothing: ${r.status} ${r.stderr}`).toBe('ETIMEDOUT');
+    const lock = join(home, '.cc-sessions', '.account-placement.lock');
+    expect(existsSync(lock), 'the lock file was never made').toBe(true);
+    // SIGKILL is delivered, not awaited: give the kernel a moment to finish.
+    let holders = '';
+    for (let i = 0; i < 40; i++) {
+      holders = spawnSync('lsof', ['-t', '--', lock], { encoding: 'utf8' }).stdout.trim();
+      if (holders === '') break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+    // No kill of the listed holders: a PID read from a listing is never signalled
+    // (D-3533). The group kill above is the handle; a survivor fails here and the
+    // run-level leak check names it.
+    expect(holders, 'a process still holds the lock after the timeout: the flock outlived its bash').toBe('');
   });
 
   it('every caller of the shared lock names what still stands', () => {
@@ -6145,11 +7894,11 @@ describe('deploy/account-op.mjs: lane and rotated, driven by hand', () => {
     seedRosterJson(home, [UPSTREAM,
       { id: 'gpt', label: 'gpt', hue: 'amber', configDirSuffix: '.claude-gpt',
         homeAble: false, telemetry: 'none', exec: { kind: 'external' } },
-      { id: 'gpt2', label: 'gpt2', hue: 'amber', configDirSuffix: '.claude-gpt2',
+      { id: 'gpt7', label: 'gpt7', hue: 'amber', configDirSuffix: '.claude-gpt7',
         homeAble: false, telemetry: 'none', exec: { kind: 'external', provider: 'openai' } }]);
     expect(node(['lane', '--file', rosterFile(home), '--id', 'gpt']).stdout.split('\n').slice(0, 4))
       .toEqual(['external', '', '', '']);
-    expect(node(['lane', '--file', rosterFile(home), '--id', 'gpt2']).stdout.split('\n').slice(0, 4))
+    expect(node(['lane', '--file', rosterFile(home), '--id', 'gpt7']).stdout.split('\n').slice(0, 4))
       .toEqual(['external', 'openai', '', '']);
   });
 
@@ -6241,6 +7990,7 @@ const LANE_LINES = ['generated', 'anthropic', '.cc-secrets/alt-max-oauth.env',
 describe('ccrc account credential', () => {
   it('writes the secret 0600 into a 0700 directory, and prints nothing of it', () => {
     const home = box('ccrc-account-cred-write-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantTmux(home, []);
     const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
@@ -6281,6 +8031,7 @@ describe('ccrc account credential', () => {
     // file's own size), and `/dev/tty` is opened once and answers ENXIO, so
     // nothing is written there either.
     const home = box('ccrc-account-cred-shellsyntax-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantTmux(home, []);
     const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
@@ -6308,6 +8059,7 @@ describe('ccrc account credential', () => {
 
   it('lists the LIVE sessions on the lane, and only those', () => {
     const home = box('ccrc-account-cred-live-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantRow(home, 'orchard-api', { wrapper: 'alt-max' });   // live
     plantRow(home, 'lab-dev0', { wrapper: 'alt-max' });      // registered, pane gone
@@ -6324,6 +8076,7 @@ describe('ccrc account credential', () => {
     // this lane has nothing that could be live, so a tmux that cannot answer is
     // not a gap — and rotating a credential must not need a tmux server.
     const home = box('ccrc-account-cred-norows-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     // A REGISTRY WITH ROWS ON ANOTHER LANE, not an absent one: without this the
     // case would also pass on a verb that never read the registry at all.
@@ -6347,6 +8100,7 @@ describe('ccrc account credential', () => {
 
   it('answers live:null — never [] — when a row exists and tmux cannot be measured', () => {
     const home = box('ccrc-account-cred-notmux-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
     const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
@@ -6359,8 +8113,7 @@ describe('ccrc account credential', () => {
     expect(existsSync(join(home, '.cc-secrets', 'alt-max-oauth.env'))).toBe(true);
     // AND THE POISON IS WHAT ANSWERED, which is the whole containment claim:
     // the argv it recorded is this verb's one tmux call and nothing else.
-    expect(readFileSync(join(home, 'tmux-poison'), 'utf8'))
-      .toBe('list-sessions -F #{session_name}\n');
+    expect(takePoisonRecord(home, 'tmux')).toEqual(['list-sessions -F #{session_name}']);
   });
 
   it('answers live:null when the REGISTRY ITSELF cannot be read (D-2185)', () => {
@@ -6372,6 +8125,7 @@ describe('ccrc account credential', () => {
     // no rows at all. An operator who has just rotated a credential reads that
     // as "nothing to restart", which is the one thing it does not say.
     const home = box('ccrc-account-cred-regmode-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
     const reg = join(home, '.cc-sessions');
@@ -6408,6 +8162,7 @@ describe('ccrc account credential', () => {
     // has no third state to say it in (`--measured false` carries no ids by
     // contract, `account-op.mjs`'s `rotated`).
     const home = box('ccrc-account-cred-rowmode-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
     plantRow(home, 'lab-dev0', { wrapper: 'alt-max' });
@@ -6434,6 +8189,7 @@ describe('ccrc account credential', () => {
 
   it('answers live:null for a dangling wrapper link, never treating it as an absent field', () => {
     const home = box('ccrc-account-cred-row-dangling-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
     const wrapper = join(home, '.cc-sessions', 'orchard-api.wrapper');
@@ -6456,6 +8212,7 @@ describe('ccrc account credential', () => {
     // agent wire's `absent` marker draw on the server side (D-1396). So this
     // box still answers a MEASURED list, and the live pane is named in it.
     const home = box('ccrc-account-cred-rowbare-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
     // A row with a `.uuid` and no `.wrapper` beside it at all.
@@ -6540,6 +8297,26 @@ describe('ccrc account credential', () => {
     expect(r.stdout + r.stderr).not.toContain(CANARY);
   });
 
+  it('refuses a codex lane with an OAuth-specific identity before reading credentials', () => {
+    const home = box('ccrc-account-cred-codex-');
+    seedRosterJson(home, [UPSTREAM, CODEX_LANE]);
+    const r = run(home, ['account', 'credential', '--id', 'codex-a', '--credential', '-'],
+      `${CANARY}\n`);
+    expect(r.code).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('codex-lane');
+    expect(String(j['detail'])).toContain('ChatGPT OAuth directory');
+    expect(String(j['detail'])).toContain('exec.authDir');
+    // The flow the old sentence promised "once the runtime ships" has shipped
+    // (Plan 2b-2 Task 8), so the refusal names it — by its ccrc spelling,
+    // never the launcher's (D-3479).
+    expect(String(j['detail'])).toContain("'ccrc codex login codex-a'");
+    expect(String(j['detail'])).not.toContain('unavailable');
+    expect(String(j['detail'])).not.toContain('ccgpt login');
+    expect(r.stdout + r.stderr).not.toContain(CANARY);
+    expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
+  });
+
   it('refuses a lane whose provider keeps no env var, even when it names a secretsFile', () => {
     // THE SECOND `not-managed` GATE, WHICH THE TWO CASES ABOVE NEVER REACH
     // (D-2145's rule: not "is this tested" but which line, on which input).
@@ -6572,6 +8349,7 @@ describe('ccrc account credential', () => {
     // written `[ "$ACCT_KIND" = generated ]` would pass every other case in
     // this describe and refuse the one lane every fleet has.
     const home = box('ccrc-account-cred-upstream-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [
       { ...UPSTREAM, exec: { kind: 'upstream', secretsFile: '.cc-secrets/claude-oauth.env' } }]);
     plantTmux(home, []);
@@ -6628,8 +8406,12 @@ describe('ccrc account credential', () => {
         exec: { kind: 'generated', provider: 'openrouter',
           secretsFile: '.cc-secrets/orchard-api-openrouter.env' } }]);
     plantTmux(home, []);
+    // An OpenRouter key is validated first (accounts plan Task A26): a `curl` that answers the 200, ahead of the poison.
+    const or = join(home, 'or-bin');
+    mkdirSync(or, { recursive: true });
+    writeFileSync(join(or, 'curl'), `#!/bin/sh\n${MANAGER_STANDIN_MARK}\ncat >/dev/null\nprintf '{"data":{"is_management_key":false,"is_provisioning_key":false}}\\n200'\n`, { mode: 0o755 });
     const r = run(home, ['account', 'credential', '--id', 'orchard-api', '--credential', '-'],
-      `${CANARY}\n`);
+      `${CANARY}\n`, { PATH: `${or}:${env(home)['PATH'] ?? ''}` });
     expect(r.code, r.stderr).toBe(0);
     const f = join(home, '.cc-secrets', 'orchard-api-openrouter.env');
     expect(readFileSync(f, 'utf8')).toBe(`export ANTHROPIC_AUTH_TOKEN=${CANARY}\n`);
@@ -6964,6 +8746,16 @@ describe('deploy/account-op.mjs classify: four exit codes, and only two of them 
       { verdict: 'auth-dead', source: 'auth-status' });
   });
 
+  it('a provider refusal is auth-dead at 401 and at 403; a status with no row of its own stays unknown (D-8051 (16))', () => {
+    const probe = (status: number | null, result: string): Record<string, unknown> => JSON.parse(opRun(['classify', '--source', 'probe', '--exit', '1'],
+      `${JSON.stringify({ is_error: true, terminal_reason: 'api_error', api_error_status: status, result })}\n`).stdout);
+    expect(probe(401, 'Not logged in · Please run /login')).toMatchObject({ verdict: 'auth-dead' });
+    expect(probe(403, 'API Error: 403 OAuth token has been revoked')).toMatchObject({ verdict: 'auth-dead', detail: 'API Error: 403 OAuth token has been revoked' });
+    expect(probe(403, '')).toMatchObject({ verdict: 'auth-dead', detail: 'the endpoint refused the credential (403)' });
+    expect(probe(429, 'API Error: 429 slow down')).toMatchObject({ verdict: 'unknown' });
+    expect(probe(null, 'API Error: 500 Internal server error')).toMatchObject({ verdict: 'unreachable' });
+  });
+
   it('no parseable answer is exit 3 with stdout EMPTY — not a row, not a refusal', () => {
     // A row would be a VERDICT and the caller's `[ -n "$ACCT_HEALTH" ]` would
     // short-circuit on it; a refusal would say something is wrong with the box.
@@ -7106,9 +8898,9 @@ describe('ccrc account check: auth status', () => {
 
   it('reports a timed-out auth status as timeout, not as unknown', () => {
     // No `linkReal` is needed and none exists in this file: unlike
-    // `ccrc-doctor.test.ts`, this suite's `env()` KEEPS the real PATH
+    // `ccrc-doctorFixture.ts`, this suite's `env()` KEEPS the real PATH
     // (`ghContainedEnv` PREPENDS the fixture bin rather than replacing PATH,
-    // ccdWsHelpers.ts:185), so `_plat_timeout` finds the box's own `timeout`
+    // its returned `PATH: ${bin}:…`), so `_plat_timeout` finds the box's own `timeout`
     // and the stub finds `sleep`. `ccrc-cli.test.ts:80-86` says the same thing
     // about the same runner, from the other side.
     const home = box('ccrc-account-check-authslow-');
@@ -7336,9 +9128,15 @@ function snapshotHome(home: string): string[] {
  *  whole shape is "the second call sees the first call's variable", which one
  *  process per invocation can never show. */
 function sourceRun(home: string, script: string,
-  extraEnv: NodeJS.ProcessEnv = {}): Result {
-  const r = spawnSync(BASH, ['-c', `. ${JSON.stringify(ccrcIn(home))}\n${script}\n`],
-    { env: { ...env(home), ...extraEnv }, encoding: 'utf8', input: '' });
+  extraEnv: NodeJS.ProcessEnv = {}, { strands = false }: { strands?: boolean } = {}): Result {
+  const merged = { ...buildEnv(home), ...extraEnv };
+  assertManagerStandIns(merged, home);
+  const argv = ['-c', `. ${JSON.stringify(ccrcIn(home))}\n${script}\n`];
+  // `strands`: the case strands a process ON PURPOSE, so the run leads its own process group (#172, D-5894) and
+  // what it leaves there is ended through that group when it returns, never by a pid it wrote down (D-3533).
+  const r = strands
+    ? spawnSyncGroup(BASH, argv, { env: merged, encoding: 'utf8', input: '', timeout: 60_000 }, { strays: 'end' })
+    : spawnSync(BASH, argv, { env: merged, encoding: 'utf8', input: '' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -7408,7 +9206,7 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
         // value timeout(1) would reject, BEFORE the call. What is left is
         // timeout(1) failing for one of its OWN reasons, which is the condition
         // GNU documents 125 for — stood in for by a shim on the fixture PATH,
-        // which `ghContainedEnv` PREPENDS (ccdWsHelpers.ts:185) so it wins over
+        // which `ghContainedEnv` PREPENDS (its returned `PATH: ${bin}:…`) so it wins over
         // the box's real coreutils. Without this the branch would ship
         // unmeasured, which is the thing this wave is counting.
         writeFileSync(join(home, '.local', 'bin', 'timeout'),
@@ -7673,7 +9471,14 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
     const r = run(home, ['account', 'check', '--id', 'claude']);
     expect(r.code, r.stderr).toBe(0);
     expect((oneObject(r)['health'] as Record<string, unknown>)['verdict']).toBe('auth-dead');
-    expect(snapshotHome(home), 'ccrc account check wrote to the box').toEqual(before);
+    // EXCEPT THE TWO WRITES ACCOUNTS PLAN TASK A11 GIVES EVERY VERB: the lane's
+    // lock file and its lane-state file, each named exactly. Everything else on
+    // the box is still byte for byte what it was.
+    const a11 = (l: string): boolean => /^D \.ccrc\/locks$|^F \.ccrc\/locks\/claude\.lock |^D \.cc-sessions$|^D \.cc-sessions\/\.accounts$|^F \.cc-sessions\/\.accounts\/claude\.json /.test(l);
+    const after = snapshotHome(home);
+    expect(after.filter((l) => a11(l) && !before.includes(l)).map((l) => l.split(' ').slice(0, 2).join(' ')))
+      .toEqual(['D .cc-sessions', 'D .cc-sessions/.accounts', 'F .cc-sessions/.accounts/claude.json', 'D .ccrc/locks', 'F .ccrc/locks/claude.lock']);
+    expect(after.filter((l) => !a11(l) || before.includes(l)), 'ccrc account check wrote to the box').toEqual(before);
     // …and the listing is not vacuously empty: it saw the roster it read.
     expect(before.some((l) => l.startsWith('F .ccrc/accounts.json '))).toBe(true);
     expect(before.length).toBeGreaterThan(8);
@@ -8956,7 +10761,7 @@ describe('ccrc account check: the probe', () => {
     // `ccdWsHelpers.ts` alone; building it here from REPO and two segments reds
     // it — measured, D-2132's defect in the task that cites it. And the scan
     // reads comments too, so this sentence must not spell the shape either.
-    const ccd = readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const ccrc = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
     const a = /^LIMITS_DIR="([^"]+)"/m.exec(ccd)?.[1];
     const b = /^CCRC_LIMITS_DIR="([^"]+)"/m.exec(ccrc)?.[1];
@@ -9282,7 +11087,7 @@ describe('ccrc account check: the probe', () => {
     // call site is exactly what rotted, and a count cannot.
     //
     // THE EXISTING NO-COREUTILS CASE CANNOT MAKE THIS ASSERTION, and being
-    // reassured by it is the mistake to avoid: `ccrc-doctor.test.ts` replaces
+    // reassured by it is the mistake to avoid: `ccrc-doctorFixture.ts` replaces
     // PATH with a stub bin that has no `sleep` at all, so the `|| exit 0` guard
     // fires, the watcher exits immediately and no orphan is ever created. It
     // passes in seconds and proves nothing about this arm. The sleep-PRESENT
@@ -9299,6 +11104,11 @@ describe('ccrc account check: the probe', () => {
       expect(real, `this box has no ${name} to link`).toBeTruthy();
       symlinkSync(real, join(bin, name));
     }
+    // THE SLEEPER THIS CASE ORPHANS ON PURPOSE outlives it by up to its bound
+    // (10 s below), and the suite's leak check (#172, D-5894) rightly fails a
+    // run it outlives. So both runs pass `strands` to `sourceRun`, whose own
+    // process group holds the sleeper and is ended when the run returns: the
+    // run's handle, never a pid read back from a file (D-3533).
     // THE GUARDS ARE THE HALF THAT KEEPS THIS FROM PASSING VACUOUSLY: with a
     // coreutils deadline binary still reachable the shim never reaches its
     // fallback at all, and with no `sleep` the watcher exits before it can
@@ -9313,7 +11123,7 @@ describe('ccrc account check: the probe', () => {
     const t0 = Date.now();
     const r = sourceRun(home, [...guards,
       'out="$(_plat_timeout 10 echo hi)"; rc=$?',
-      'printf \'%s|%s\' "$out" "$rc"'].join('\n'));
+      'printf \'%s|%s\' "$out" "$rc"'].join('\n'), {}, { strands: true });
     const ms = Date.now() - t0;
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout, 'the command\'s own answer did not survive the redirection').toBe('hi|0');
@@ -9326,7 +11136,7 @@ describe('ccrc account check: the probe', () => {
     // branches on.
     const slow = sourceRun(home, [...guards,
       'out="$(_plat_timeout 1 sleep 30)"; rc=$?',
-      'printf \'%s|%s\' "$out" "$rc"'].join('\n'));
+      'printf \'%s|%s\' "$out" "$rc"'].join('\n'), {}, { strands: true });
     expect(slow.code, slow.stderr).toBe(0);
     expect(slow.stdout, 'the bounded call no longer reports expiry').toBe('|124');
 
@@ -9346,6 +11156,11 @@ describe('ccrc account check: the probe', () => {
       if (!src.startsWith('#!')) continue;
       const n = [...src.matchAll(CALLS)].length;
       if (n > 0) sites.set(f.name, n);
+    }
+    // ccd's library, loaded at ccd's foot (D-6913), has no shebang and is ccd's code all the same.
+    for (const f of readdirSync(join(ccdDir, 'lib')).filter((n) => n.endsWith('.sh'))) {
+      const n = [...readFileSync(join(ccdDir, 'lib', f), 'utf8').matchAll(CALLS)].length;
+      if (n > 0) sites.set(`lib/${f}`, n);
     }
     const census = [...sites].map(([f, n]) => `${f}=${n}`).join(' ');
     const total = [...sites.values()].reduce((a, b) => a + b, 0);
@@ -9386,6 +11201,170 @@ describe('ccrc account check: the probe', () => {
     expect(r.code, r.stderr).toBe(0);
     const added = snapshotHome(home).filter((l) => !before.has(l))
       .map((l) => l.split(' ').slice(0, 2).join(' ')).sort();
-    expect(added).toEqual(['D .ccrc/probe', 'F claude-argv', 'F claude-env']);
+    // Since accounts plan Task A11, `check` also takes the lane's lock and
+    // records its verdict in the lane-state file: two writes, named here.
+    expect(added).toEqual(['D .cc-sessions', 'D .cc-sessions/.accounts', 'D .ccrc/locks', 'D .ccrc/probe',
+      'F .cc-sessions/.accounts/orchard-api.json', 'F .ccrc/locks/orchard-api.lock', 'F claude-argv', 'F claude-env']);
+  });
+});
+
+// ── Final review E1: the codex-suite runners' final-env check ─────────────
+// Harness level only: the builders and the check are called directly, and
+// the one `run()` below is refused BEFORE its spawn (and would run `ccrc
+// account` with no subcommand, which reaches no manager, if it were not).
+// Every "wrong" stand-in planted here is itself a harmless `exit 97` script,
+// or a symlink the check only reads — never a real manager that runs.
+describe('ccrc account: the runners check their final env for the user manager (final review E1)', () => {
+  const unmarked = (p: string): void => {
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(p, '#!/bin/sh\necho "an unmarked stand-in" >&2\nexit 97\n', { mode: 0o755 });
+  };
+  const withPath = (home: string, first: string): NodeJS.ProcessEnv =>
+    ({ ...buildEnv(home), PATH: `${first}:${buildEnv(home)['PATH'] ?? ''}` });
+
+  it('a box as built, unmanaged and managed, and a marked lock probe first on PATH, all pass', () => {
+    const home = box('ccrc-account-e1-ok-');
+    expect(() => env(home)).not.toThrow();
+    plantSystemd(home, { userManager: true });
+    expect(() => env(home)).not.toThrow();
+    expect(readFileSync(join(home, '.local', 'bin', 'systemctl'), 'utf8'), 'env() re-poisoned a planted manager')
+      .not.toContain('must never query');
+    const probe = plantLockProbe(home, 'codex-a');
+    expect(() => assertManagerStandIns(withPath(home, probe), home)).not.toThrow();
+  });
+
+  it('a plantSystemd whose write was lost is poisoned back, never left to the real binary (the measured shape)', () => {
+    // Review E1, measured: plantSystemd(userManager: true), then its
+    // systemd-run removed — the effect of losing that write line — resolved
+    // `systemd-run` to /usr/bin/systemd-run. env() now writes the poison back
+    // for an ABSENT name, and the check proves where it resolves.
+    for (const name of ['systemd-run', 'systemctl']) {
+      const home = box(`ccrc-account-e1-lost-${name}-`);
+      plantSystemd(home, { userManager: true });
+      rmSync(join(home, '.local', 'bin', name));
+      const e = env(home);
+      const at = spawnSync('/bin/sh', ['-c', `command -v ${name}`], { env: e, encoding: 'utf8' }).stdout.trim();
+      expect(at, `${name} fell through PATH once its plant was lost`).toBe(join(home, '.local', 'bin', name));
+      expect(readFileSync(at, 'utf8'), `${name} was not poisoned back`).toContain('exit 97');
+    }
+  });
+
+  it('assertManagerStandIns refuses a symlink to the real binary, an unmarked stand-in, and an unmarked one ahead on PATH', () => {
+    // Each env is built FIRST and the stand-in tampered with AFTER, because
+    // `buildEnv` rewrites an unmanaged box's poisons — and a write through a
+    // symlink to the real binary is exactly what a case must never attempt.
+    // (i) a symlink at the stand-in's own path. Its target is the box's real
+    // manager where it has one, which is only READ here, never run.
+    const real = spawnSync('/bin/sh', ['-c', 'command -v systemctl'], { encoding: 'utf8' }).stdout.trim();
+    const linked = box('ccrc-account-e1-symlink-');
+    const linkedEnv = buildEnv(linked);
+    const ctl = join(linked, '.local', 'bin', 'systemctl');
+    rmSync(ctl);
+    symlinkSync(real !== '' ? real : '/bin/sh', ctl);
+    expect(() => assertManagerStandIns(linkedEnv, linked))
+      .toThrow(/systemctl does not carry the manager stand-in mark/);
+    // (ii) an unmarked stand-in at the right path.
+    const plain = box('ccrc-account-e1-unmarked-');
+    const plainEnv = buildEnv(plain);
+    unmarked(join(plain, '.local', 'bin', 'systemd-run'));
+    expect(() => assertManagerStandIns(plainEnv, plain))
+      .toThrow(/systemd-run does not carry the manager stand-in mark/);
+    // (iii) an unmarked systemctl in a directory AHEAD of the stand-ins.
+    const ahead = box('ccrc-account-e1-ahead-');
+    unmarked(join(ahead, 'ahead-bin', 'systemctl'));
+    expect(() => assertManagerStandIns(withPath(ahead, join(ahead, 'ahead-bin')), ahead))
+      .toThrow(/ahead-bin\/systemctl does not carry the manager stand-in mark/);
+    // (iv) a directory ahead that holds a name OUTSIDE this HOME.
+    const outside = box('ccrc-account-e1-outside-');
+    const other = box('ccrc-account-e1-other-');
+    unmarked(join(other, 'bin', 'systemd-run'));
+    expect(() => assertManagerStandIns(withPath(outside, join(other, 'bin')), outside))
+      .toThrow(/systemd-run resolved to .*, not a stand-in inside /);
+  });
+
+  it('run() and sourceRun() check the MERGED env: an extraEnv PATH cannot put an unmarked manager first', () => {
+    const home = box('ccrc-account-e1-merged-');
+    const ahead = join(home, 'ahead-bin');
+    unmarked(join(ahead, 'systemctl'));
+    const extra = { PATH: `${ahead}:${buildEnv(home)['PATH'] ?? ''}` };
+    expect(() => run(home, ['account'], '', extra)).toThrow(/assertManagerStandIns: .*ahead-bin\/systemctl/);
+    expect(() => sourceRun(home, 'true', extra)).toThrow(/assertManagerStandIns: .*ahead-bin\/systemctl/);
+    expect(existsSync(join(home, 'systemctl-poison')), 'something ran under the refused env').toBe(false);
+  });
+
+  it('every buildEnv() in this file is checked before it is handed to a spawn (a text pin)', () => {
+    // Every call of the UNCHECKED builder above this describe must be one of
+    // the three checked forms, each followed on its next line by the check of
+    // the very variable it assigned. A fourth caller — an inline
+    // `{ env: buildEnv(home) }` at a spawn — reds here.
+    const all = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+    const src = all.slice(0, all.indexOf('// ── Final review E1: the codex-suite runners\' final-env check'));
+    const calls = [...src.matchAll(/buildEnv\(/g)].filter((m) => !src.slice(m.index! - 9, m.index!).endsWith('function '));
+    const checked = [...src.matchAll(
+      /^ {2}const (e|merged) = (?:\{ \.\.\.)?buildEnv\(home\)(?:, \.\.\.extraEnv \})?;\n {2}assertManagerStandIns\(\1, home\);$/gm)];
+    expect(checked.length, 'env(), run() and sourceRun() no longer each check what they build').toBe(3);
+    expect(calls.length, `buildEnv( is called ${calls.length} times above this describe, and only 3 are checked`).toBe(3);
+  });
+});
+
+describe('ccrc account add: re-add safety (accounts plan Task A16; G4, G20)', () => {
+  it('an id starting `claude-` gets `.<id>`, never `.claude-claude-…`', () => {
+    const home = box('ccrc-account-a16-suffix-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    const r = run(home, addArgs({ '--id': 'claude-x' }), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    const entry = (oneObject(r)['roster'] as { accounts: { id: string; configDirSuffix: string }[] }).accounts
+      .find((a) => a.id === 'claude-x');
+    expect(entry?.configDirSuffix).toBe('.claude-x');
+    expect(existsSync(join(home, '.claude-x'))).toBe(true);
+    expect(existsSync(join(home, '.claude-claude-x'))).toBe(false);
+    // A collision with a suffix the roster already holds is still refused.
+    const clash = checkAdd(home, { '--id': 'lab-dev1', '--suffix': '.claude-x' });
+    expect(clash.code).toBe(1);
+    expect(JSON.parse(clash.stdout)['error']).toBe('suffix-collision');
+  });
+
+  it('an existing config folder refuses `config-dir-exists` with what it measured, and `--adopt` proceeds', () => {
+    const home = box('ccrc-account-a16-cfgdir-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    const cfg = join(home, '.claude-lab-dev0');
+    mkdirSync(cfg, { recursive: true });
+    writeFileSync(join(cfg, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'someone@example.invalid' } }));
+    writeFileSync(join(cfg, '.credentials.json'), '{"fixture":"not a credential"}', { mode: 0o600 });
+    const rosterBefore = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('config-dir-exists');
+    expect(j['found']).toEqual({ signedIn: true, identity: 'someone@example.invalid' });
+    expect(j['detail']).toContain('signed in as someone@example.invalid');
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(rosterBefore);
+    expect(existsSync(join(home, '.cc-secrets', 'lab-dev0-compatible.env'))).toBe(false);
+    expect(existsSync(join(home, '.local', 'bin', 'lab-dev0'))).toBe(false);
+
+    // Signed out: the measurement says so.
+    rmSync(join(cfg, '.credentials.json'));
+    const out = oneObject(run(home, addArgs(), `${CANARY}\n`));
+    expect(out['found']).toEqual({ signedIn: false, identity: 'someone@example.invalid' });
+    expect(out['detail']).toContain('is signed out');
+
+    const adopt = run(home, [...addArgs(), '--adopt'], `${CANARY}\n`);
+    expect(adopt.code, adopt.stderr).toBe(0);
+    expect(readFileSync(join(cfg, '.claude.json'), 'utf8')).toContain('someone@example.invalid');
+  });
+
+  it('`ccd caps` lists `account-v2` and `account-openrouter-v2`', () => {
+    const home = box('ccrc-account-a16-caps-');
+    seedBoxRoster(home, FIXTURE_ROSTER);   // ccd sources the projection before any verb
+    const r = spawnSync(BASH, [CCD, 'caps'], { env: env(home), encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout.split('\n')).toContain('account-v2');
+    expect(r.stdout.split('\n')).toContain('account-v1');
+    expect(r.stdout.split('\n')).toContain('account-openrouter-v2');
   });
 });

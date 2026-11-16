@@ -1,0 +1,32 @@
+// The inspector's PR (W2 Task S8, D-5474): the workspace's PR state, through the header's own cap (`PrKeycap`), and its
+// door to `PrSheet`. The door runs `session-pr` (`commandDoor`), which the session screen's `SessionFlows` answers by
+// opening its one PR sheet: the inspector sits outside that host, and owns no sheet of its own. The section renders
+// only when a PR EXISTS, that is when it has a number: a main checkout (`hasPrCap`), a row not read yet and a workspace
+// that has not opened a PR all render nothing, because the header's PR door is the door to make one and a heading
+// over "No PR" would only repeat it (desktop polish T3d, D-6334).
+import type { ReactNode } from 'react';
+import { PrKeycap } from '../session/PrKeycap';
+import { hasPrCap } from '../session/prCap';
+import { InspectorSection } from './InspectorSection';
+import { useSessionDoor } from './sessionDoor';
+import { useInspectorSession } from './useInspectorSession';
+
+export function PrSection(): ReactNode {
+  const session = useInspectorSession();
+  // Inert, and marked so, until the session screen can run it (console speed C1, review 1464 F4).
+  const door = useSessionDoor('session-pr');
+  if (session === null) return null;
+  const row = session.row;
+  // The row is not read yet before the first frame, and `pr` may be absent on a cast frame (the fleet wire is a cast);
+  // the header's cap tolerates both, so the number is read tolerantly once, here.
+  const pr = row?.pr ?? null;
+  const number = pr?.number ?? null;
+  if (!hasPrCap(row) || pr === null || number === null) return null;
+  return (
+    <InspectorSection id="pr" title="PR">
+      <div className="insp-pr">
+        <PrKeycap pr={pr} onOpen={door.onClick} data-command={door['data-command']} notYet={door.title} />
+      </div>
+    </InspectorSection>
+  );
+}

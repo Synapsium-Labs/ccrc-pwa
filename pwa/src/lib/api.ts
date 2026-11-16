@@ -2,92 +2,74 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
+import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
+import type { ArchiveAnswer, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
+import type { GoalsView, ItemActBody, ItemView, WaitingView } from '../../../shared/ledgers';
+import type { AnswerMarkKind, AnswerMarkName, AnswerMarkView } from '../../../shared/answerMarks';
+import type { LinearConnectionView } from '../../../shared/linear';
+import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
+import type { LaneArmRequest, LaneArmView } from '../../../shared/lane-arm';
+import type { OverridesView } from '../../../shared/overrides';
+import type { RunCloseRequest, RunCloseView } from '../../../shared/run-close';
+import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
+import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt';
+import type { RotateAnswer } from '../../../shared/box-token';
+import type { ResolveRead } from '../fleet/workspaceNameWords';
+import type { PaneScopeStopState } from '../fleet/paneScopeStopWords';
 import { raiseAuthLostFrom } from './auth';
+import { ApiError } from './apiError';
+import type { Character as CharacterName } from '../../../shared/face';
+import { LONG_READ_MS, limitedFetch, type ReadOpts } from './readLimit';
+import { questionAnswerRequest } from '../session/answerLifecycle';
+import { ANSWERED, readDoorAnswer, readDoorRefusal, type DoorAnswer, answered, linearViewOf, linearWorkspacesOf, linearWorkspacesNotConnectedOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readProjectAdd, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange, type LinearWorkspacesRead } from './wireReaders';
+import { TOKEN_ROTATE_PATH } from '../../../shared/box-token';
+import { READER_LAB_RUNS_PATH, readerLabClosePath, readerLabProbePath, readerLabRunPath } from '../../../shared/readerLab';
+import {
+  DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, contentClass, docsApi, type DocsFileResponse, type DocsProjectsResponse,
+  type DocsHistoryResponse, type DocsRefreshResponse, type DocsTreeResponse,
+} from '../../../shared/docs';
+import {
+  declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
+  type DocsHistoryLoader,
+} from '../docs/failures';
+import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
+import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared/plainAutoMemory';
+import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
+import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
+import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
+import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
-export class ApiError extends Error {
-  readonly status: number;
-  readonly body: unknown;
+/** `GET`/`POST /api/face`'s answer. */
+export interface FaceAnswer { readonly character: CharacterName; readonly updatedAt: number }
 
-  constructor(status: number, body: unknown) {
-    const serverError =
-      typeof body === 'object' && body !== null && 'error' in body
-        && typeof (body as { error: unknown }).error === 'string'
-        ? (body as { error: string }).error
-        : null;
-    super(serverError ?? `request failed (${status})`);
-    this.name = 'ApiError';
-    this.status = status;
-    this.body = body;
-  }
+/** `GET`/`POST /api/coord/roll-idle`'s answer (D-7453). */
+export interface RollIdleView {
+  readonly ok: true;
+  readonly targets: ClaudeRollTargets | null;
+  readonly default: ClaudeRollTargets;
+  readonly choices: readonly ClaudeRollTargets[];
 }
 
-/** Send failures the server names by code. Left raw these surfaced as bare
- *  slugs under the failed bubble ("dialog-open"), which says nothing about what
- *  to do next. `draft-present` is absent on purpose — it has its own sheet. */
-const SEND_ERROR_TEXT: Record<string, string> = {
-  'dialog-open': "Claude is asking a question — answer that first, then send.",
-  // No longer "open the terminal to check": the text is verified sitting in the
-  // box, the server knows it, and the failed bubble now carries a Send it
-  // button that presses one more Enter. A sentence that sends the operator
-  // somewhere else to do something the UI can do is the dead end this build set
-  // out to close.
-  'enter-ignored': "Typed it, but the session didn't take it.",
-  // Replaced, not reworded. The old sentence ("The session never showed the
-  // text — open the terminal to check.") went false twice in Build 8: the
-  // ordinary path now REFUSES rather than clearing, so the text is still in
-  // the box, and the box-scoped echo check makes this refusal fire more often.
-  // A message that tells the operator to go somewhere else and do something
-  // the UI can do is the dead end `enter-ignored`'s own copy was rewritten to
-  // close; this is its neighbour, in the same register, and deliberately not
-  // the same string — the two failures are different (nothing came back at
-  // all, versus it came back and then would not go).
-  'verify-failed': 'Typed it, but the session never echoed it back.',
-  'draft-clear-failed': "Couldn't clear the existing draft — open the terminal.",
-  'not-alive': 'That session is not running.',
-  // D-2368/D-2369: the recipient's OWN limit recovery is armed (any keystroke
-  // cancels it) — only the mail lane's `holdIfAutoContinueArmed` opt-in ever
-  // produces this code (dialog.ts's `autoContinueArmed`, send.ts's own doc).
-  'auto-continue-armed': 'Claude is waiting out a usage limit and will continue by itself — sending now would cancel that.',
-};
 
-export const sendErrorText = (code: string): string => SEND_ERROR_TEXT[code] ?? code;
+// `ApiError` lives in `./apiError` (D-5897, ARCH-05), a leaf that imports nothing, so a pure word module can name
+// it without loading this fetch adapter. Re-exported: every existing import, and every screen, keeps its line.
+/** `GET /api/runs/:id/items`' answer: the wave's declared ledger, one row per item. */
+export interface RunItemsAnswer {
+  readonly ok: true;
+  readonly items: readonly { readonly id: number; readonly title: string; readonly state: WorkItemState; readonly claimedBy: string | null }[];
+}
 
-/** `POST /submit`'s own refusals. Separate from SEND_ERROR_TEXT because they
- *  answer a different question — not "why didn't my message send" but "why
- *  didn't the rescue work".
- *
- *  Not one of them is good news, and `nothing-to-submit` used to be written as
- *  if it were ("it went through after all"). An empty box is not proof that
- *  this message was sent: the draft-conflict sheet's "Replace draft" empties
- *  the box with `C-u` and types a different message over it, so the operator
- *  could be told their text went through at the exact moment it was destroyed.
- *  The server proves the box is empty; only the transcript can say what left
- *  it. */
-const SUBMIT_ERROR_TEXT: Record<string, string> = {
-  'nothing-to-submit': 'The box is empty — nothing was sent from here. Check the transcript before sending again.',
-  'blank-first-row': "The box's first line is blank, so what would be sent can't be proven — open the terminal.",
-  'box-mismatch': 'The box holds something else now — open the session and look before sending.',
-  'dialog-open': 'A question is up — answer that first.',
-  'not-alive': 'That session is not running.',
-  'enter-ignored': "Still not taking it — open the terminal.",
-};
+/** `GET /api/runs/:id/signals`' answer. */
+export interface RunSignalsAnswer { readonly ok: true; readonly signals: RunSignals }
 
-export const submitErrorText = (code: string): string => SUBMIT_ERROR_TEXT[code] ?? code;
+export { ApiError };
+// The read time limit (console speed, task C1) lives in `./readLimit`, this file being one the growth check holds.
+export { ApiTimeout, LONG_READ_MS, READ_TIMEOUT_MS, type ReadOpts } from './readLimit';
+// The refusal tables and the readers left this file (ARCH-13b): re-exported, so no importer changes a line.
+export * from './refusalWords';
+export * from './wireReaders';
 
-/** Upload failures the server names by code. Same reason as SEND_ERROR_TEXT,
- *  sharper consequence: a failed chip's only affordance is retry, and for a 413
- *  retry can never succeed — so the chip has to say what went wrong, in words
- *  that imply what to do instead. */
-const UPLOAD_ERROR_TEXT: Record<string, string> = {
-  'too-large': 'That image is too large — 12 MB is the limit.',
-  'unsupported-type': "Can't attach that — PNG, JPEG or WebP only.",
-  'bad-request': "That upload didn't arrive — try attaching it again.",
-  'unknown-session': 'That session is not running.',
-  'bad-session-id': 'That session is not running.',
-};
-
-export const uploadErrorText = (code: string): string => UPLOAD_ERROR_TEXT[code] ?? code;
 
 /** Origin-qualified on purpose: MessageBubble's `absolute()` turns a bare
  *  `/api/...` into `https:///api/...` (empty host), so a root-relative href
@@ -97,188 +79,24 @@ export const clipUrl = (id: string, name: string): string =>
   new URL(`/api/sessions/${encodeURIComponent(id)}/clip/${encodeURIComponent(name)}`,
     location.origin).href;
 
-/**
- * The one sentence for a fleet host whose `ccd` predates the verb being
- * called — for the LIFECYCLE routes (`archive`/`restore`/PR sweep) only.
- *
- * `PrKeycap.tsx`'s `REASON_TEXT.unsupported` already owned it — it is what the
- * cap says when the PR SWEEP hits the same skew. This is the definition and
- * that map imports it, rather than the two spelling the same fact differently:
- * the reader who sees the greyed cap and the reader who taps Archive are
- * looking at one condition on one box.
- *
- * NOT the COORDINATION surfaces' 501 text (`COORD_UNSUPPORTED_TEXT`, just
- * below — spec §4.2's own literal "the fleet host needs the newer ccd").
- * That IS a second spelling of the same fact — a deliberate one, not the
- * drift this docstring used to argue against: the spec quotes its own phrase
- * verbatim and `coord-banner.test.tsx` pins it, so editing THIS constant does
- * not change what the pause banner or the abandon sheet renders.
- *
- * TWO constants, THREE call sites, and this names all three (review M2, which
- * found the previous wording had reasoned about exactly this question and then
- * listed only two of them, missing the one the same wave shipped):
- *   1. lifecycle routes (`PrKeycap.tsx`'s `REASON_TEXT.unsupported`,
- *      `PrSheet`'s archive/restore toasts) → THIS constant;
- *   2. the pause banner (`CoordBanner.tsx`'s `inlinePauseError`) → and
- *   3. the abandon sheet (`AbandonSheet.tsx`'s `ABANDON_COPY.unsupported`)
- *      → both `COORD_UNSUPPORTED_TEXT`.
- * If a fourth route ever needs the same refusal, wire it to whichever of the
- * two its own spec/test actually names — neither is universal.
- */
-export const UNSUPPORTED_VERB_TEXT =
-  'The fleet host is running a ccd that does not have this verb yet.';
+/** The resolution of a close, as `closeAnswerOf` reads it. */
+type CloseAnswer = { released: boolean; childReclaim?: 'queued' | 'not-queued'; alreadyClosed?: true };
 
-/**
- * The same fact as `UNSUPPORTED_VERB_TEXT`, in the COORDINATION surfaces'
- * words — spec §4.2's literal phrase, pinned verbatim by
- * `coord-banner.test.tsx` and `abandon-sheet.test.tsx`.
- *
- * It lives here rather than in either component because it has TWO renderers
- * and they are in different files: `CoordBanner`'s 501 arm and
- * `AbandonSheet`'s `ABANDON_COPY.unsupported` shipped it as two byte-identical
- * literals (review M2). One box, one skew, one sentence — a reader who taps
- * Pause and a reader who taps Abandon on the same stale host must not be told
- * two different things, and two literals is how that starts.
- *
- * Lower-case and un-terminated on purpose: both sites render it as inline
- * refusal copy inside their own surface, not as a standalone sentence the way
- * `UNSUPPORTED_VERB_TEXT` reaches a toast.
- */
-export const COORD_UNSUPPORTED_TEXT = 'the fleet host needs the newer ccd';
-
-/**
- * ccd's own refusal for an empty hold reason (`cmd_ws_hold`, `ccd/ccd`),
- * verbatim: "empty reason — say which program holds this". The server's
- * `/hold` route refuses the identical input before building any argv (400
- * `bad-request`, no reason text on the wire back), so the ONLY place this
- * sentence can come from for a same-session client-side refusal is this
- * constant — copied, not fetched, because refusing before a network round
- * trip is the whole point of catching it here. `SessionActionsSheet` is the
- * one caller; keeping the string here rather than inline keeps it beside
- * `UNSUPPORTED_VERB_TEXT`, this file's other copy of a truth that also lives
- * in ccd.
- */
-export const HOLD_EMPTY_REASON_TEXT = 'empty reason — say which program holds this';
-
-/**
- * Failures the LIFECYCLE routes name by CODE rather than by ccd's stderr. Same
- * reason as `SEND_ERROR_TEXT` and `UPLOAD_ERROR_TEXT` above: left raw these
- * reach a toast as a bare slug.
- *
- * svc's round-4 residual. `/archive` and `/restore` grew a `verbSupported` gate
- * that answers `501 { error: 'unsupported' }` — a 501 has no `stderr`, so
- * `apiErrorText` fell through to `err.message`, which `ApiError`'s constructor
- * sets from `body.error`, and `PrSheet`'s toast read "Archiving failed —
- * unsupported". That is a slug where the reader needs the one thing that tells
- * them the tap will never work until the box is updated.
- *
- * Deliberately keyed on `body.error`, not on the message: the code is what the
- * server states, and a message that merely happens to equal a code should not
- * be rewritten into a sentence about the host.
- */
-const API_ERROR_TEXT: Record<string, string> = {
-  unsupported: UNSUPPORTED_VERB_TEXT,
-  // Two of the kickoff route's four codes (program-leverage wave 4). Without
-  // these the operator reads a bare slug at the one moment the sheet has stopped
-  // being able to retry for them — and a box with no `coord.db` is an ordinary,
-  // silent state, not an error anybody has seen before.
-  //
-  // The other two — `unknown-session` and `bad-session-id` — are DELIBERATELY
-  // absent, and the tree said so before this comment did: `uploadErrorText`
-  // consumes THIS function's output as a KEY, so a code it owns must survive
-  // `apiErrorText` unchanged or the upload translator gets a sentence to look up
-  // and finds nothing. Adding `unknown-session` here reds
-  // "does not shadow any code the UPLOAD translator owns", measured. The
-  // start-program sheet says what it needs to about those two in its own
-  // sentence, where the session id is in scope anyway.
-  'not-configured': 'This box does not run coordination — there is no mail store to queue a kickoff into.',
-  'registry-unmeasurable': 'The session registry could not be read, so this box cannot say whether that session exists.',
-  // Account pools (spec §5.6). Three codes, three different things the box
-  // established — and NOT one sentence between them, because the remedies are
-  // not the same: cross on purpose, fix a file on the fleet box, or type a
-  // legal name. `unsupported` above already covers the 501 both pool routes
-  // can answer with, so no fourth entry is added for it.
-  //
-  // None of these is a code `uploadErrorText`, `kickoffErrorText` or
-  // `sendErrorText` owns — they consume this function's OUTPUT as a KEY, so a
-  // sentence here for a code one of them owns would lose its wording. The
-  // suite asserts that in both directions.
-  'pool-mismatch': 'That account is in a different pool from this project. Use a flow that can disclose and confirm a pool crossing, or change the project\'s pool.',
-  'pool-unreadable': 'The project\'s pool tag could not be read on the fleet host, so nothing here can decide. Fix or clear its file under ~/.cc-sessions/pools/ and try again.',
-  'bad-pool-name': 'A pool name starts with a lowercase letter and holds only lowercase letters, digits and hyphens.',
-};
-
-/** Human-readable failure text for a caught error.
- *
- *  Lifecycle send sites answer `{ ok:false, stderr }`; coded send sites answer
- *  `{ ok:false, error, ...fields }`. Those server shapes are disjoint, so these
- *  branches do not express precedence between two fields on one response. The
- *  bare message stays the floor. */
-export function apiErrorText(err: unknown): string {
-  if (err instanceof ApiError && typeof err.body === 'object' && err.body !== null) {
-    const stderr = (err.body as { stderr?: unknown }).stderr;
-    if (typeof stderr === 'string' && stderr.trim().length > 0) return stderr.trim();
-    const code = (err.body as { error?: unknown }).error;
-    if (code === 'pool-mismatch') {
-      const { accountPool, projectPool } = err.body as {
-        accountPool?: unknown;
-        projectPool?: unknown;
-      };
-      if (typeof accountPool === 'string' && typeof projectPool === 'string') {
-        return `The account pool (${accountPool}) differs from the project pool (${projectPool}).`;
-      }
-    }
-    if (code === 'pool-unreadable') {
-      const state = (err.body as { state?: unknown }).state;
-      if (state === 'malformed') {
-        return 'The project\'s pool tag contains an invalid pool name. Fix or clear its file under ~/.cc-sessions/pools/ and try again.';
-      }
-    }
-    if (typeof code === 'string') {
-      const text = API_ERROR_TEXT[code];
-      if (text !== undefined) return text;
-    }
-  }
-  return err instanceof Error ? err.message : String(err);
+/** What a close route answers (`abandonRun`, `actItem`): `released` as before, and the child reclaim's two facts when the server
+ *  sent them (F24); an older server sends neither, and an absent `released` reads TRUE. */
+async function closeAnswerOf(res: Response): Promise<CloseAnswer> {
+  const body = (await res.json().catch(() => ({}))) as { released?: unknown; childReclaim?: unknown; alreadyClosed?: unknown };
+  return {
+    released: body.released !== false,
+    ...(body.alreadyClosed === true ? { alreadyClosed: true as const } : {}),
+    ...(body.childReclaim === 'queued' || body.childReclaim === 'not-queued' ? { childReclaim: body.childReclaim } : {}),
+  };
 }
-
-/**
- * `POST /api/sessions/:id/kickoff`'s own refusals (wave-4 review, MINOR 3,
- * D-1120). The fourth per-surface map in this file, composed exactly as
- * `useAttachImage.ts` composes the upload one: `kickoffErrorText(apiErrorText(err))`.
- *
- * WHY IT IS NOT MORE ENTRIES IN `API_ERROR_TEXT`. Three of the five codes that
- * route can answer with are OWNED by `uploadErrorText`, which consumes
- * `apiErrorText`'s OUTPUT as a KEY — so a sentence there hands the upload
- * translator a sentence to look up instead of a code, and its own upload
- * wording is lost. The suite says so in both directions, for all three
- * translators. Everything `API_ERROR_TEXT` already turns into a sentence passes
- * through here untouched, because a sentence matches no key.
- *
- * These are the sentences a phone shows above a retry button, so each says what
- * the box actually established and, where the answer is terminal, stops short of
- * implying a retry will help. `unknown-session` in particular used to reach the
- * operator as a bare slug inside a sentence that ALSO asserted the session was
- * running — the exact fact the registry had just denied.
- */
-const KICKOFF_ERROR_TEXT: Record<string, string> = {
-  'unknown-session': 'That session is no longer in the registry — nothing can be queued for it.',
-  'bad-session-id': 'That session id is not one this box will accept.',
-  // NOT "did not arrive": since the shared kickoff verdict, this code also
-  // answers a name that DID arrive and was refused on its shape or length, and
-  // a blank title. The server sends a `detail` naming which; `kickoffErrorText`
-  // is the fallback for when it does not.
-  'bad-request': 'That program name or title was refused — check the name is letters, numbers, '
-    + 'underscores or hyphens and within the length limit, and that the title is not blank.',
-  oversize: 'That program title is too long to send as mail — shorten it and start again.',
-};
-
-export const kickoffErrorText = (text: string): string => KICKOFF_ERROR_TEXT[text] ?? text;
 
 /** Injectable for tests; defaults to the real global fetch. */
 export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
-  const request = async (path: string, init?: RequestInit): Promise<Response> => {
-    const res = await fetchImpl(path, init);
+  const request = async (path: string, init?: RequestInit, opts?: ReadOpts): Promise<Response> => {
+    const res = await limitedFetch(fetchImpl, path, init, opts);
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       let body: unknown = text;
@@ -299,26 +117,32 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       // committed behind the login screen. What is suppressed is the NOISE, not
       // the failure: `toast()` drops anything fired while the screen is up.
       if (res.status === 401) raiseAuthLostFrom(body);
-      throw new ApiError(res.status, body);
+      throw new ApiError(res.status, body, res.headers.get('content-type'));
     }
     return res;
   };
 
-  const getJson = async <T>(path: string): Promise<T> =>
-    (await request(path)).json() as Promise<T>;
+  const getJson = async <T>(path: string, opts?: ReadOpts): Promise<T> =>
+    (await request(path, undefined, opts)).json() as Promise<T>;
+
+  const postInit = (body?: unknown): RequestInit =>
+    body === undefined
+      ? { method: 'POST' }
+      : {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        };
 
   const post = async (path: string, body?: unknown): Promise<void> => {
-    await request(
-      path,
-      body === undefined
-        ? { method: 'POST' }
-        : {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(body),
-          },
-    );
+    await request(path, postInit(body));
   };
+
+  /** `post`'s request, byte for byte, with its 2xx answer READ — for a door whose success carries a second outcome
+   *  (the archive door's `archived:false`, workspace lifecycle §5.2). An answer that cannot be read resolves to
+   *  `unreadable`, `postJsonOr`'s reasoning below: the exchange completed and answered 2xx. */
+  const postRead = async <T>(path: string, unreadable: T, body?: unknown): Promise<T> =>
+    (await (await request(path, postInit(body))).json().catch(() => unreadable)) as T;
 
   /** The init a JSON-answering POST sends, spelled ONCE for the two helpers
    *  below. `accept: application/json` on both arms, and no `content-type` at
@@ -365,6 +189,22 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     (await (await request(path, jsonInit(body))).json().catch(() => unreadable)) as T;
 
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
+
+  /** A worktree door's POST (delegation broker wave 5, PR10). A 2xx is read by `readDoorAnswer` (`postJsonOr`: a body that
+   *  is not JSON reads `unreadable`, never a thrown parse). A failed request is a door's ANSWER (`readDoorRefusal`, review
+   *  1623 F2) in four parts: (1) a door word only at its own status; (2) a word the route vocabulary names that is no door
+   *  word never (a 401 `unauthenticated`, which the funnel has already raised, a 403, a 429, a 501 `not-configured`);
+   *  (3) a word in neither, which only a newer server sends, only at a door's status, said as a plain refusal; (4) a body
+   *  without `ok: false` and a string `error` never. Every other failure rejects with its `ApiError`. */
+  const doorPost = async (path: string, body: object): Promise<DoorAnswer> => {
+    try {
+      return readDoorAnswer(await postJsonOr<unknown>(path, 'unreadable', body));
+    } catch (err) {
+      const refusal = err instanceof ApiError ? readDoorRefusal(err.status, err.body) : null;
+      if (refusal === null) throw err;
+      return refusal;
+    }
+  };
 
   return {
     /**
@@ -436,6 +276,22 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       post('/api/auth/passkey/assert/finish', b),
 
     /**
+     * STEP-UP THAT KEEPS THE SESSION (D-5512, spec §3.2; accounts plan Tasks A5, A6). Wire shapes only: the
+     * ceremony's browser half is `lib/passkey.ts`'s `assertStepUp`, and the step's state is `accounts/useStepUp.ts`.
+     *
+     * Unlike the login doors these mint nothing: no cookie, no new session, the same `generation`. Each 200 is the
+     * requesting session's new `stepUpFreshUntil`. A refusal reaches the caller as an ordinary `ApiError` whose body
+     * names the word (`step-up-required`, with `verdict: 'wrong'` on a failed proof, at 403 and never 401, so the
+     * funnel above raises no login screen over a live session; `step-up-locked`; `passkey-enrolled`; `auth-off`).
+     * The passphrase travels in the BODY only, as `login`'s does.
+     */
+    stepUpStart: (): Promise<StepUpStart> => postJson<StepUpStart>('/api/auth/step-up/start'),
+    stepUpFinish: (b: PasskeyAssertFinish): Promise<StepUpAnswer> =>
+      postJson<StepUpAnswer>('/api/auth/step-up/finish', b),
+    stepUpPassphrase: (passphrase: string): Promise<StepUpAnswer> =>
+      postJson<StepUpAnswer>('/api/auth/step-up/passphrase', { passphrase }),
+
+    /**
      * The enrolment screen's two gated calls (Task 8 review, MF-2).
      *
      * `revokePasskey` is the control that was missing entirely: without it a lost
@@ -450,7 +306,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      * happen not to need escaping" is how a path-injection ships the day the id
      * format changes.
      */
-    passkeys: (): Promise<PasskeyListResponse> => getJson<PasskeyListResponse>('/api/auth/passkeys'),
+    passkeys: (opts?: ReadOpts): Promise<PasskeyListResponse> => getJson<PasskeyListResponse>('/api/auth/passkeys', opts),
     revokePasskey: async (credentialIdB64url: string): Promise<void> => {
       await request(`/api/auth/passkey/${encodeURIComponent(credentialIdB64url)}`, { method: 'DELETE' });
     },
@@ -458,26 +314,220 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     fleet: () => getJson<{ sessions: FleetSession[]; stale?: boolean; downSince?: number | null }>('/api/fleet'),
     fleetHealth: () => getJson<FleetHealth>('/api/fleet/health'),
     rebootFleet: () => post('/api/fleet/reboot'),
+
+    /** `GET /api/updates` — the control plane read (W2 Task 13): catalogue line,
+     *  releases, live nodes, intent rows. `501 not-configured` on a box with no
+     *  coordination database. Read through `useUpdatesView`, whose
+     *  `asUpdatesView` treats a malformed answer as a failure — the generic
+     *  here is the contract, not a proof. */
+    updates: (opts?: ReadOpts) => getJson<UpdatesView>('/api/updates', { timeoutMs: LONG_READ_MS.updates, ...opts }),
+    /** `POST /api/updates/intent` — a PARTIAL over one scope (`UpdateIntentRequest`).
+     *
+     *  `postJsonOr`, not `postJson` (D-1150), for `setCoordCaps`'s reason: after
+     *  an intent WRITE, "the answer could not be read" and "the request never
+     *  happened" are different states — the first may well have stored the
+     *  channel — so the screen says "unconfirmed" and re-polls rather than
+     *  reporting a failure that may not have happened. A refusal still rejects
+     *  with its `ApiError`, whose body (`nodes`, `field`, `detail`) the screen
+     *  reads. */
+    setUpdateIntent: (body: UpdateIntentRequest) =>
+      postJsonOr<IntentWriteAnswer | 'unreadable'>('/api/updates/intent', 'unreadable', body),
+    /** `POST /api/updates/refresh` — *Check now*. `postJson`: it stores no
+     *  operator choice to be unconfirmed about — the answer IS the catalogue
+     *  line the screen shows, and an unreadable one is a failed check, which
+     *  the next 60 s poll heals. `429 rate-limited {retryAfterS}` inside the
+     *  route's derived `REFRESH_MIN_INTERVAL_MS` of the last catalogue request
+     *  (scheduled or tapped). */
+    refreshUpdates: () => postJson<CatalogueState>('/api/updates/refresh'),
+    /** `POST /api/updates/ack` — clears a node's failed/reverted state or an
+     *  outstanding request. `postJsonOr`, the `setUpdateIntent` argument: an
+     *  ack that answered unreadably may already have cleared the row. */
+    ackUpdateNode: (nodeId: string) =>
+      postJsonOr<AckAnswer | 'unreadable'>('/api/updates/ack', 'unreadable', { nodeId }),
+    /** `POST /api/updates/apply` (programme wave 5) — move one node (`{nodeId}`) or
+     *  every node the tag takes forward (`{all: true}`), to `tag` or, without one,
+     *  to each node's resolved desired tag. The answer is a REQUEST written, never
+     *  a move made: `202 {requested, skipped}`; the dispatcher moves the nodes one
+     *  at a time and the inventory is where the result is read.
+     *
+     *  `postJsonOr`, the `setUpdateIntent` argument (D-1150): a 2xx whose body
+     *  would not parse may still have written the request, so the move sheet
+     *  says "requested, unconfirmed" and re-polls rather than reporting a refusal
+     *  that did not happen. A refusal — `400`, `404`, a single node's `409`
+     *  (the dispatcher's own predicate), `501` — still rejects with its
+     *  `ApiError`, which `updateErrorText` reads code-first. */
+    applyUpdate: (body: ApplyUpdateBody) =>
+      postJsonOr<MoveRequestAnswer | 'unreadable'>('/api/updates/apply', 'unreadable', body),
+    /** `POST /api/updates/rollback` (programme wave 5) — one node back to `to`, or
+     *  without one to its `previousVersion`. Single-node by route: a fleet-wide
+     *  rollback is one of these per node, in dispatch order (the move sheet's
+     *  `sendMove`). `postJsonOr` for `applyUpdate`'s reason. */
+    rollbackUpdate: (body: RollbackUpdateBody) =>
+      postJsonOr<MoveRequestAnswer | 'unreadable'>('/api/updates/rollback', 'unreadable', body),
+
+    /** `POST /api/token/rotate` — the card's "Rotate now" (box-token lifecycle wave 1, Task B6). Session-only
+     *  route, no body. Its three refusals (409 `held`, 429 `rate-limited`, 501 `not-configured`) are ANSWERS the
+     *  card renders in place, so they resolve as the `RotateAnswer` they carry; any other failure (a 401 included,
+     *  which still raises the one login screen through `request`) rejects with its `ApiError`. `postJsonOr` for
+     *  `setUpdateIntent`'s reason (D-1150): a 2xx that cannot be read may still have started a rotation. */
+    rotateBoxToken: async (): Promise<RotateAnswer | 'unreadable'> => {
+      let answer: unknown;
+      try {
+        answer = await postJsonOr<unknown>(TOKEN_ROTATE_PATH, 'unreadable');
+      } catch (err) {
+        const refusal = rotateRefusalOf(err);
+        if (refusal !== null) return refusal;
+        throw err;
+      }
+      return readRotateStarted(answer);
+    },
+
+    /** The Linear section's four calls (named workspaces S4b, design §5.1). Each answers the connection's state, or
+     *  `'unreadable'` for a 2xx whose body is not one (the exchange completed, so a write may have landed: the
+     *  section re-reads). A refusal rejects with its `ApiError`, whose body names the word (`bad-key`,
+     *  `key-rejected`, `unreachable`, `step-up-required`…); `checkLinear` is the one exception, resolving the state
+     *  a 409 `not-connected` carries, because that state IS its answer. The key is only ever in the PUT's body. */
+    linearConnection: async (): Promise<LinearConnectionView | 'unreadable'> =>
+      linearViewOf(await (await request('/api/linear/connection', { headers: { accept: 'application/json' } })).json().catch(() => null)),
+    connectLinear: async (key: string): Promise<LinearConnectionView | 'unreadable'> =>
+      linearViewOf(await (await request('/api/linear/connection', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ key }),
+      })).json().catch(() => null)),
+    checkLinear: async (): Promise<LinearConnectionView | 'unreadable'> => {
+      try {
+        return linearViewOf(await (await request('/api/linear/connection/check', jsonInit())).json().catch(() => null));
+      } catch (err) {
+        const state = linearNotConnectedOf(err);
+        if (state !== null) return state;
+        throw err;
+      }
+    },
+    disconnectLinear: async (): Promise<LinearConnectionView | 'unreadable'> =>
+      linearViewOf(await (await request('/api/linear/connection', { method: 'DELETE', headers: { accept: 'application/json' } })).json().catch(() => null)),
+    /** The Settings card's four calls for workspace keys (#1444, spec §10.1, §10.2), beside the legacy row's four
+     *  above. Each answers the list, or `'unreadable'` for a 2xx whose body is not one (a write may have landed: the
+     *  card re-reads). A refusal rejects with its `ApiError` (`workspace-exists` names the workspace, `step-up-required`
+     *  …), except a check's 409 `not-connected`, whose list IS its answer. The key is only ever in the add's body. */
+    linearWorkspaces: async (opts?: ReadOpts): Promise<LinearWorkspacesRead | 'unreadable'> =>
+      linearWorkspacesOf(await (await request('/api/linear/workspaces', { headers: { accept: 'application/json' } }, opts)).json().catch(() => null)),
+    addLinearWorkspace: async (key: string, replace: boolean): Promise<LinearWorkspacesRead | 'unreadable'> =>
+      linearWorkspacesOf(await (await request('/api/linear/workspaces', jsonInit(replace ? { key, replace } : { key }))).json().catch(() => null)),
+    checkLinearWorkspace: async (id: string): Promise<LinearWorkspacesRead | 'unreadable'> => {
+      try {
+        return linearWorkspacesOf(await (await request(`/api/linear/workspaces/${encodeURIComponent(id)}/check`, jsonInit())).json().catch(() => null));
+      } catch (err) {
+        const list = linearWorkspacesNotConnectedOf(err);
+        if (list !== null) return list;
+        throw err;
+      }
+    },
+    removeLinearWorkspace: async (id: string): Promise<LinearWorkspacesRead | 'unreadable'> =>
+      linearWorkspacesOf(await (await request(`/api/linear/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { accept: 'application/json' } })).json().catch(() => null)),
+
     // `AccountsResponse`, not a restatement of it: this shape used to be
     // hand-written here, in the handler and in the route test, and the roster
     // field added in Stage 2a is exactly the kind of addition that lands in two
     // of three copies. The generic is the contract now.
     accounts: () => getJson<AccountsResponse>('/api/accounts'),
+    /** The lane routes (accounts plan Task A14, D-7732; spec §10, §13.1): Check, and the kill switch. `postJson`: a
+     *  refusal rejects with its `ApiError`, whose body's `error` word (and `reason`, `verbCode`) the screen words
+     *  (`laneActRefusal`), never its text. Check spends one test reply; neither switch probes. */
+    accountCheck: (id: string) => postJson<AccountCheckAnswer>(`/api/accounts/${encodeURIComponent(id)}/check`),
+    accountEnable: (id: string) => postJson<AccountSwitchAnswer>(`/api/accounts/${encodeURIComponent(id)}/enable`),
+    accountDisable: (id: string) => postJson<AccountSwitchAnswer>(`/api/accounts/${encodeURIComponent(id)}/disable`),
+    /** `POST /api/accounts` (accounts plan Task A18, D-7740; spec §6.3, §13.1): add a lane, with a pasted token in
+     *  `credential` for the paste method. The body is sent once and kept nowhere: no retry, no queue. A refusal rejects
+     *  with its `ApiError`, whose `error` word the connect sheet words (`addRefusal`), never its text. */
+    accountAdd: (body: AccountAddBody) => postJson<AccountAddAnswer>('/api/accounts', body),
+    /** Remove, Discard and Replace token (accounts plan Task A19, D-7742; spec §9, §11, §13.1). `accountRemoveCheck` is
+     *  remove's pre-check (`{mode:'check'}`, which changes nothing); `accountRemove` sends `{mode:'remove', confirmId}`
+     *  or `{mode:'discard'}`; `accountCredential` a replacement token by paste, sent once and kept nowhere;
+     *  `accountRevokeAck` the operator's tick, which carries the lane and the credential kind and no value (N6). A
+     *  refusal rejects with its `ApiError`, whose `error` word the sheet words, never its text. */
+    accountRemoveCheck: (id: string) =>
+      postJson<AccountRemoveCheckAnswer>(`/api/accounts/${encodeURIComponent(id)}/remove`, { mode: 'check' } satisfies AccountRemoveBody),
+    accountRemove: (id: string, body: Exclude<AccountRemoveBody, { mode: 'check' }>) =>
+      postJson<AccountRemoveAnswer>(`/api/accounts/${encodeURIComponent(id)}/remove`, body),
+    accountCredential: (id: string, body: AccountCredentialBody) =>
+      postJson<AccountCredentialAnswer>(`/api/accounts/${encodeURIComponent(id)}/credential`, body),
+    accountRevokeAck: (body: AccountRevokeAckBody) => postJson<{ ok: true }>('/api/accounts/revoke-ack', body),
+    /** Mint and Sign in (accounts plan Task A22, D-7849; spec §3.7, §3.8, §6.2, §6.3, §13.1): start an attempt (step-up),
+     *  read its status (polled by an open sheet only, never otherwise), send its one code (held for the request, kept
+     *  nowhere: no retry, no queue), cancel it; `set {stated}` for a minted lane's stated account; and N5's sign-out.
+     *  A refusal rejects with its `ApiError`, whose `error` word the sheet words, never its text. */
+    accountAuthStart: (id: string, body: AccountAuthStartBody) =>
+      postJson<AccountAuthStartAnswer>(`/api/accounts/${encodeURIComponent(id)}/auth/start`, body),
+    accountAuthStatus: (id: string) => getJson<AccountAuthStatusAnswer>(`/api/accounts/${encodeURIComponent(id)}/auth`),
+    accountAuthCode: (id: string, body: AccountAuthCodeBody) =>
+      postJson<{ ok: true }>(`/api/accounts/${encodeURIComponent(id)}/auth/code`, body),
+    accountAuthCancel: (id: string, body: AccountAuthCancelBody) =>
+      postJson<{ ok: true }>(`/api/accounts/${encodeURIComponent(id)}/auth/cancel`, body),
+    accountSet: (id: string, body: AccountSetBody) =>
+      postJson<AccountSwitchAnswer>(`/api/accounts/${encodeURIComponent(id)}/set`, body),
+    accountSignOut: (id: string) =>
+      postJson<AccountSignOutAnswer>(`/api/accounts/${encodeURIComponent(id)}/credential`, { signOut: true }),
     // `ProjectRow`, not a hand-written twin — the comment two lines up names
     // this exact failure mode, and F3's `readiness` is the field it predicted:
     // spelled inline here, this generic would have gone on declaring a shape
     // the server had already stopped sending (D-1028).
-    projects: () => getJson<{ roots: string[]; projects: ProjectRow[] }>('/api/projects'),
+    /** `cls` appends `?class=` only when given (routing spec, slice 4, Task 6)
+     *  — an ordinary fetch (the fleet screen, this sheet's own project list)
+     *  asks nothing and gets the byte-identical class-blind answer; only a
+     *  caller that means to forecast one class's placement sends it. */
+    projects: async (cls?: string) => {
+      const read = await getJson<{ roots: string[]; projects: ProjectRow[] }>(
+        cls === undefined ? '/api/projects' : `/api/projects?class=${encodeURIComponent(cls)}`,
+      );
+      if (!Array.isArray(read?.projects)) throw new Error("The server's project list could not be read.");
+      return read;
+    },
     /** `crossPool` is STRIPPED unless it is literally `true`, so an ordinary
      *  start keeps the parsed request shape it sent before pools existed —
      *  no key an older server does not know, and a flag that only ever means
-     *  "yes" never needs to travel saying "no". */
-    createSession: ({ crossPool, ...rest }: {
+     *  "yes" never needs to travel saying "no". `route` rides the same rule:
+     *  present only when the sheet's routing row set at least one field, so
+     *  an ordinary start's body is unchanged from before that row existed. */
+    createSession: ({ crossPool, route, ...rest }: {
       wrapper: string; project: string; workdir?: string; crossPool?: boolean;
-    }) => post('/api/sessions', crossPool === true ? { ...rest, crossPool: true } : rest),
+      route?: Partial<Record<Extract<RouteField, 'class' | 'effort' | 'workflow' | 'browser'>, string>>;
+    }) => post('/api/sessions', {
+      ...rest,
+      ...(crossPool === true ? { crossPool: true } : {}),
+      ...(route !== undefined && Object.keys(route).length > 0 ? { route } : {}),
+    }),
     ensure: (id: string) => post(`${sid(id)}/ensure`),
-    workspaceAdd: (project: string): Promise<void> =>
-      post(`/api/projects/${encodeURIComponent(project)}/workspaces`),
+    /** `route` rides the body ONLY when given — the fleet screen's class
+     *  chooser (routing spec, slice 5, Task 6) seeds it from whichever class
+     *  is selected there, and an ordinary `+` (the chooser left on
+     *  "Coordinator row") calls this with one argument, so its request body
+     *  is byte-identical to every caller that predates this parameter.
+     *
+     *  `name` (named workspaces S7) rides only when it is non-blank after a trim, and `wrapper` only beside a name:
+     *  the server ignores a wrapper without one, so sending it would be a field with no meaning. The 2xx is READ:
+     *  a named create answers `{ok, id, slug, title}`. */
+    workspaceAdd: async (project: string, opts: WorkspaceAddOptions = {}): Promise<WorkspaceAddAnswer> => {
+      return readWorkspaceAdd(await postRead<unknown>(`/api/projects/${encodeURIComponent(project)}/workspaces`, null,
+        workspaceAddBody(opts)));
+    },
+    /** `POST /api/projects` — clone a GitHub repository, or init an empty one, under the projects root (add-project
+     *  spec 2026-11-04). The body rides as given; a refusal rejects with its `ApiError` (`projectAddWords.ts`). */
+    projectAdd: async (body: ProjectAddBody): Promise<ProjectAddAnswer | 'unreadable'> =>
+      readProjectAdd(await postRead<unknown>('/api/projects', null, body)),
+    /** `POST /api/sessions/:id/title` — rename an EXISTING workspace: the title only, the slug and branch never change
+     *  (named workspaces S9). A title is sent trimmed; `{clear: true}` removes it. A refusal rejects with its `ApiError`
+     *  (`workspaceRenameWords.ts` reads the word); a 2xx is READ, `'unreadable'` when this build cannot. */
+    workspaceTitle: async (id: string, change: WorkspaceTitleChange): Promise<WorkspaceTitleAnswer> =>
+      readWorkspaceTitle(await postRead<unknown>(`${sid(id)}/title`, null,
+        'clear' in change ? { clear: true } : { title: change.title.trim() })),
+    /** `GET /api/linear/resolve?ref=` — what a typed or pasted name would become, with Linear's real title when it
+     *  can be asked (named workspaces S4/S7). Session-gated like every PWA read. A refusal (`bad-ref`,
+     *  `ref-too-long`, a signed-out 401) rejects with its `ApiError`; a 2xx this build cannot read is `'unreadable'`,
+     *  never a guess at a title. */
+    linearResolve: async (ref: string): Promise<ResolveRead | 'unreadable'> =>
+      readResolve(await (await request(`/api/linear/resolve?ref=${encodeURIComponent(ref)}`,
+        { headers: { accept: 'application/json' } })).json().catch(() => null)) ?? 'unreadable',
     /** `POST /api/projects/:project/pool` — tag the project into an account
      *  pool, or clear it with an explicit `null`.
      *
@@ -493,14 +543,56 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     setProjectPool: (project: string, pool: string | null) =>
       postJson<{ ok: true; pool: ProjectPoolWire; warning?: 'unknown-pool' }>(
         `/api/projects/${encodeURIComponent(project)}/pool`, { pool }),
-    stop: (id: string) => post(`${sid(id)}/stop`),
+    /** `POST /api/projects/:project/linking` (D-8147): set a project's Linear team key and visibility override (`null`
+     *  clears each). The answer is the stored row, read back after the write, and is what the card shows. */
+    saveLinking: (project: string, body: LinkingWriteBody) =>
+      postJson<{ ok: true; linking: ProjectLinkingWire }>(`/api/projects/${encodeURIComponent(project)}/linking`, body),
+    /** `POST /api/projects/:project/pr-template` (D-8147): the operator's tap that opens a pull request adding the pull
+     *  request template to a private project. No body; a refusal rejects with its `ApiError`. */
+    openTemplatePr: (project: string) =>
+      postJson<{ ok: true; url: string }>(`/api/projects/${encodeURIComponent(project)}/pr-template`),
+    /** `POST /api/pools/accounts/:id` (Task 7) — tag an account into a pool,
+     *  or clear it with `pools: []`. Wave 1 is one pool per account, but the
+     *  wire already carries an array (the server's own `one-pool-per-account`
+     *  400 is the length gate, not this client).
+     *
+     *  Unlike `setProjectPool`, the reply does NOT echo the account's
+     *  resulting tag — only the MEASURED epoch this write produced
+     *  (`{ ok, epoch, raced?, warning? }`) — because the authority for an
+     *  account's pool is `~/.ccrc/coord.db`'s `pool_edges`, re-read by
+     *  `GET /api/pools/epoch`, not this route's own body. A caller that wants
+     *  the resulting tag re-polls `GET /api/accounts`, the route the fleet
+     *  store already polls every 20s (C8, D-6440).
+     *
+     *  `warning: 'unknown-account'` is a WARNING and not a refusal, on
+     *  `setProjectPool`'s exact terms: this box's roster copy can lag the
+     *  fleet's, so an id no account here carries may still be about to gain
+     *  one. */
+    setAccountPools: (accountId: string, pools: string[]) =>
+      postJson<{ ok: true; epoch: number; raced?: true; warning?: 'unknown-account' }>(
+        `/api/pools/accounts/${encodeURIComponent(accountId)}`, { pools }),
+    /** `POST /stop`. A plain stop sends no body, byte-identical to before; `body` carries D-8199's claims choice (the
+     *  answer to `coordinator-has-open-runs`) or `restart: true` (the stop half of a restart: the id is kept, nothing asked).
+     *  The 2xx answer is READ (`StopAnswer`: the claims moved, or that they could not be read); unreadable → `null`. */
+    stop: (id: string, body?: StopBody) => postRead<StopAnswer | null>(`${sid(id)}/stop`, null, body),
     /** `{crossPool:true}` ONLY when it is true — `opts?.crossPool === false`
      *  and an absent `opts` both keep the ordinary `{wrapper}` request shape.
      *  Not a checkbox anywhere in the UI: it is what a
      *  pick made under `SwapSheet`'s "show other pools" disclosure sends, after
-     *  a confirm sentence that names the crossing. */
-    swap: (id: string, wrapper: string, opts?: { crossPool?: boolean }) =>
-      post(`${sid(id)}/swap`, opts?.crossPool === true ? { wrapper, crossPool: true } : { wrapper }),
+     *  a confirm sentence that names the crossing, or by the Move sessions sheet for a target picked there (D-7736).
+     *  `{interrupt:true}` the same way (D-5240): ONLY when it is true, sent only after the route answered
+     *  `409 session-busy` — `SwapSheet`'s "swap anyway", the second tap, and the Move sessions sheet's "Also interrupt
+     *  busy ones" (D-7736), the second request for that session. */
+    swap: (id: string, wrapper: string, opts?: { crossPool?: boolean; interrupt?: boolean }) =>
+      post(`${sid(id)}/swap`, {
+        wrapper,
+        ...(opts?.crossPool === true ? { crossPool: true } : {}),
+        ...(opts?.interrupt === true ? { interrupt: true } : {}),
+      }),
+    /** D-8123: the operator's "Wait until reset" choice on a session the limit watchdog found no account for
+     *  (`FleetSession.limitWait`). `POST /api/sessions/:id/limit-wait`, no body; `409 not-waiting` when the record closed
+     *  before the tap (the session moved on its own, or its limit cleared). The row's own door: it moves nothing. */
+    limitWait: (id: string) => post(`${sid(id)}/limit-wait`),
     /** The terminal drawer's scrollback — the pane's own history, read with
      *  `capture-pane`. `lines` is the server's number, echoed back: this side
      *  never names one, so there is nothing for the two to disagree about.
@@ -511,17 +603,22 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  told how much sits above the screen. A non-2xx rejects with `ApiError`,
      *  whose `.body` carries the route's own `{error, detail?}`. */
     paneHistory: (id: string) =>
-      getJson<Extract<PaneHistoryReply, { ok: true }>>(`${sid(id)}/pane/history`),
-    pr: (id: string) => getJson<PrView>(`${sid(id)}/pr`),
+      getJson<Extract<PaneHistoryReply, { ok: true }>>(`${sid(id)}/pane/history`, { timeoutMs: LONG_READ_MS.paneHistory }),
+    pr: (id: string) => getJson<PrView>(`${sid(id)}/pr`, { timeoutMs: LONG_READ_MS.pr }),
     prOpen: (id: string, b: { title: string; body: string; draft: boolean }) => post(`${sid(id)}/pr`, b),
     /** `{force:true}` ONLY when it is true — `opts?.force === false` and an
      *  absent `opts` both send the byte-identical unforced request the route
      *  has always taken (no `content-type`, no body). The force flag is not a
      *  checkbox anywhere in the UI: it is a SECOND tap, made after the
      *  operator has read the `409 run-open` refusal, because the refusal is
-     *  the whole information. See `ArchiveConflictSheet`. */
-    archive: (id: string, opts?: { force?: boolean }) =>
-      post(`${sid(id)}/archive`, opts?.force === true ? { force: true } : undefined),
+     *  the whole information. See `ArchiveConflictSheet`.
+     *
+     *  Workspace lifecycle §5.2 adds the two other consents on the same rule — each a second tap after the refusal it
+     *  answers, each sent only when it is given: `interrupt` (after `session-busy`) and `programme: 'end'` (after
+     *  `coordinator-has-open-runs`). Resolves to the door's answer (`archivePartial` reads it), or `null` when a 2xx
+     *  carried nothing readable — an older server's `{ok:true}` with no `archived` reads as archived. */
+    archive: (id: string, opts?: ArchiveOptions) =>
+      postRead<ArchiveAnswer | null>(`${sid(id)}/archive`, null, archiveBody(opts)),
     restore: (id: string) => post(`${sid(id)}/restore`),
     /** `POST /forget` — registry-only removal of a dead non-workspace session.
      *  Every gate (not a workspace, not held, not alive) is ccd's, re-proven
@@ -533,18 +630,25 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  `bad-request`) because a client is not a security boundary. */
     hold: (id: string, reason: string) => post(`${sid(id)}/hold`, { reason }),
     release: (id: string) => post(`${sid(id)}/release`),
-    workspaceAudit: (id: string) => getJson<WsAudit>(`${sid(id)}/workspace/audit`),
+    workspaceAudit: (id: string) => getJson<WsAudit>(`${sid(id)}/workspace/audit`, { timeoutMs: LONG_READ_MS.workspaceAudit }),
     workspaceReap: async (id: string, expect: string): Promise<ReapResult> =>
       (await (await request(`${sid(id)}/workspace/reap`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ expect }),
       })).json()) as ReapResult,
-    prompt: (id: string, text: string, opts: { replaceDraft?: boolean; attachments?: string[] } = {}) =>
+    prompt: (id: string, text: string, opts: { replaceDraft?: boolean; attachments?: string[]; resume?: boolean } = {}) =>
       post(`${sid(id)}/prompt`, {
         text,
+        ...(opts.resume === true ? { resume: true } : {}),
         ...(opts.replaceDraft === undefined ? {} : { replaceDraft: opts.replaceDraft }),
         ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
       }),
+    /** `POST /api/sessions/:id/route` — the model/effort pickers' write
+     *  (routing spec 2026-09-14 §5.3, slice 4, Task 5). ONE field, ONE value:
+     *  the picker taps a single control, and the record is the arbiter, never
+     *  a slash command typed straight into the pane — see `prompt` above,
+     *  which stays exactly that for the operator's own composer text. */
+    route: (id: string, field: RouteField, value: string) => post(`${sid(id)}/route`, { field, value }),
     /** `POST /api/sessions/:id/kickoff` — queues the coordinator kickoff as
      *  DURABLE system mail instead of typing it into the pane (program-leverage
      *  wave 4). Deliberately adjacent to `prompt`, because the pair is the
@@ -600,14 +704,30 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       // rather than spelled inline the way that door spells it (D-1150).
       return { queued: answer.queued !== false };
     },
-    answerDialog: (id: string, dialogId: string, optionIndex: number) =>
-      post(`${sid(id)}/dialog`, { dialogId, optionIndex }),
-    /** Answer a hook-reported question by option index. `askKey` is minted
-     *  server-side and carried verbatim: the server re-reads the CURRENT
-     *  envelope and refuses unless the key still matches, so this can only ever
-     *  answer the question the client was actually shown. */
-    answerAsk: (id: string, askKey: string, optionIndexes: number[]) =>
-      post(`${sid(id)}/ask`, { askKey, optionIndexes }),
+    /** Move an AskUserQuestion's PANE to another tab (decision `ask-dialog-tab-route`): `prev`/`next` (the arrow keys),
+     *  `submit` (the review), or question tab k with the tab the sheet believes is up as `from`. Arrows only, each step
+     *  proved by the server. The 200 carries the screen the pane landed on as `next`, read like an answer's. */
+    answerDialogTab: async (id: string, req: DialogTabRequest): Promise<DialogAnswered> =>
+      answered(await postRead<unknown>(`${sid(id)}/dialog/tab`, ANSWERED, req)),
+    /** Answer session `id`'s question (W7 C7g, D-7185, D-7485): an option row, the own words, a multiSelect set or a
+     *  hooked ask by option index, as `body` (`shared/api.ts#QuestionAnswerBody`), to W3 Q3f's
+     *  `POST /api/questions/session-<id>/answer` (`answerLifecycle.ts#questionAnswerRequest`), the only door since C7p
+     *  (D-7194, D-7540), which retired the old ones and the `GET /health` read that chose between them. Its refusals
+     *  come by code (`DialogRefuseCode` and the rest, plus the family's `kind-mismatch`), and a 200's `next` is read as
+     *  a tapped row's is.
+     *
+     *  What each answer carries, as the four writers it replaced said (they went in C7g): an option row is answered by
+     *  INDEX, with the dialog it was shown. The own words (D-5047) are typed only once a capture proves the cursor on
+     *  the empty free-text row, and Enter is pressed only once a capture proves the row holds exactly `text`; a text the
+     *  server will not type is 400 `bad-text` (`isDialogText`), and typing changes the dialog's id. A multiSelect set
+     *  (D-5048) is the WHOLE set to leave ticked, never a toggle; a set it will not send is 400 `bad-indexes`
+     *  (`isDialogMultiIndexes`: empty, repeated, or outside 1..9). An ask's `askKey` is minted server-side and carried
+     *  verbatim: the server re-reads the CURRENT envelope and refuses unless the key still matches, so this can only
+     *  ever answer the question the client was shown. */
+    answerQuestion: async (id: string, body: QuestionAnswerBody): Promise<DialogAnswered> => {
+      const req = questionAnswerRequest(id, body);
+      return answered(await postRead<unknown>(req.path, ANSWERED, req.payload));
+    },
     /** One verified Enter on a box that already holds text — the rescue for a
      *  send whose Enter the pane swallowed twice.
      *
@@ -615,7 +735,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  `draft`, carried back verbatim). The server re-reads the box and refuses
      *  `box-mismatch` unless it still reads exactly that, so this can only ever
      *  submit the message the bubble is showing — the same correspondence rule
-     *  `answerAsk` applies with `askKey`. */
+     *  an ask's answer (`answerQuestion`) applies with `askKey`. */
     submit: (id: string, expect: string) => post(`${sid(id)}/submit`, { expect }),
     catchUp: (epoch: string | null, seq: number) =>
       getJson<CatchUp>(`/api/notifications/catchup?epoch=${encodeURIComponent(epoch ?? '')}&seq=${seq}`),
@@ -633,6 +753,38 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  one. */
     runs: (closed = false) =>
       getJson<{ runs: RunSummary[] }>(closed ? '/api/runs?closed=1' : '/api/runs'),
+    /** `GET /api/runs/:id` (D-6799) - one run plus the `spend` its bound sessions
+     *  have accrued per the usage sweep; `spend` is unmeasured, with a reason, when
+     *  the sweep cannot say. */
+    run: (id: number) => getJson<{ ok: true; run: RunSummary; spend: RunSpend }>(`/api/runs/${id}`),
+    /** `GET /api/runs/find` (D-8071, spec 2026-11-04 §11.4): the lookup and the close-order list in one slim read. Open
+     *  runs come on the first page only; `next` walks closed runs. An older server reads the path as `GET /api/runs/:id`
+     *  and refuses it, which a caller reads as a failed search. */
+    findRuns: (q: RunFindQuery, opts?: ReadOpts) => {
+      const p = new URLSearchParams();
+      if (q.q !== undefined && q.q !== '') p.set('q', q.q);
+      if (q.scope !== undefined) p.set('scope', q.scope);
+      if (q.closedBy !== undefined) p.set('closedBy', q.closedBy);
+      if (q.closedSince !== undefined) p.set('closedSince', String(q.closedSince));
+      if (q.program !== undefined) p.set('program', q.program);
+      if (q.limit !== undefined) p.set('limit', String(q.limit));
+      if (q.beforeAt !== undefined) p.set('beforeAt', String(q.beforeAt));
+      if (q.beforeId !== undefined) p.set('beforeId', String(q.beforeId));
+      const qs = p.toString();
+      return getJson<RunFindAnswer>(`/api/runs/find${qs === '' ? '' : `?${qs}`}`, opts);
+    },
+    /** `GET /api/programmes` (D-8075, spec 2026-11-04 §11.6): one row per programme and the runs closed since `since`, the
+     *  operator's local midnight in epoch ms (the server clamps it to the last 48 hours, A32). An older server has no such
+     *  route and answers 404, which a caller reads as no programme read. */
+    programmes: (since: number, opts?: ReadOpts) =>
+      getJson<ProgrammesAnswer>(`/api/programmes?since=${encodeURIComponent(String(Math.max(0, Math.floor(since))))}`, opts),
+    /** `GET /api/runs/:id/record` (D-8071, spec 2026-11-04 §11.5): any run's lasting record, open or closed, however old. One
+     *  read, no spend, no agent link. */
+    runRecord: (id: number, opts?: ReadOpts) => getJson<RunRecordAnswer>(`/api/runs/${id}/record`, opts),
+    /** `GET /api/runs/:id/items` (spec 2026-11-04 §8.4): the wave's declared ledger. Its first PWA caller is the run page. */
+    runItems: (id: number, opts?: ReadOpts) => getJson<RunItemsAnswer>(`/api/runs/${id}/items`, opts),
+    /** `GET /api/runs/:id/signals` (spec §8.4): the suite word and the failure kind the worker's last wave-done named. */
+    runSignals: (id: number, opts?: ReadOpts) => getJson<RunSignalsAnswer>(`/api/runs/${id}/signals`, opts),
     /** `POST /api/runs/:id/abandon` (spec §4.3, Task 12) — the operator's
      *  release valve for a wedged run, from the phone. The route (`server/src
      *  /coord/routes.ts:844`) reads NO body at all — `{intent:'abandon'}` is
@@ -655,11 +807,21 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  re-hold, and a `planned` run with no session, which does no fleet act
      *  at all — and only the first is worth a sentence about another run.
      *  `AbandonSheet` separates them on the run's own `sessionId`. */
-    abandonRun: async (id: number): Promise<{ released: boolean }> => {
-      const res = await request(`/api/runs/${id}/abandon`, { method: 'POST' });
-      const body = (await res.json().catch(() => ({}))) as { released?: unknown };
-      return { released: body.released !== false };
+    abandonRun: async (id: number, opts?: ReadOpts): Promise<CloseAnswer> => {
+      return closeAnswerOf(await request(`/api/runs/${id}/abandon`, { method: 'POST' }, opts));
     },
+    /** `POST /api/items/:id/act` (D-8076; spec 2026-11-04 §10): the operator's Abandon run on an end-request item. Session only
+     *  like `abandonRun`, and it answers as `abandonRun` does, so the one sheet reads the same refusals and `released` and
+     *  `childReclaim` fields. The server closes the item itself. `body` (D-8558) is a refused close's reason and the programme's
+     *  end; absent, the request is body-less as before. */
+    actItem: async (itemId: number, opts?: ReadOpts, body?: ItemActBody): Promise<CloseAnswer> =>
+      closeAnswerOf(await request(`/api/items/${itemId}/act`, body === undefined ? { method: 'POST' } : jsonInit(body), opts)),
+    /** `POST /api/items/:id/decline` (D-8076): Keep the run. The item closes as declined and its asker is told. Body-less. */
+    declineItem: (itemId: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${itemId}/decline`),
+    /** `POST /api/items/:id/act` on a release-review item (D-8293): Release a review child kept past its ceiling. Body-less and
+     *  session only. It abandons nothing: the item closes done and the child reclaim sweep takes the workspace on its next passes. */
+    releaseReviewItem: (itemId: number) =>
+      postJson<{ readonly ok: true; readonly released: true; readonly item: ItemView }>(`/api/items/${itemId}/act`),
     /** `POST /api/runs/:id/reclaim` — point a program's runs at a LIVING
      *  coordinator after the one they name has died. The wedge it opens is the
      *  one two readers create between them by answering the lowest-id
@@ -711,7 +873,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     claims: (opts?: { all?: boolean }): Promise<{ claims: ClaimSummary[] }> =>
       getJson<{ claims: ClaimSummary[] }>(
         opts?.all === true ? '/api/claims?all=1' : '/api/claims'),
-    interrupt: (id: string) => post(`${sid(id)}/interrupt`),
+    /** D-5237: `source` names the control that sent it (the keycap, the Escape key, a Deny); the server records it. */
+    interrupt: (id: string, source: InterruptRouteSource) => post(`${sid(id)}/interrupt`, { source }),
     /** `POST /api/coord/pause` (spec §4.2) — request `{paused}`, response
      *  `{ok:true, requested}` on success (the field is `requested`, never
      *  `paused`: the route ran a verb, it did not read the marker back).
@@ -721,6 +884,17 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  Ungated (no box token): the route is deliberately open, the same way
      *  every other same-origin PWA write is. */
     coordPause: (paused: boolean) => post('/api/coord/pause', { paused }),
+    /** `POST /api/coord/reclaim-pause` (child-reclamation wave 4, spec §5.8) —
+     *  the switch on automatic child reclamation. `state` is ccd's own on|off,
+     *  passed through. Like `coordPause`, `ChildReclaimBanner` ignores the
+     *  response and waits for the next `{type:'coord'}` frame's `reclaim` to
+     *  confirm. No box token: an operator's same-origin write. */
+    childReclaimPause: (state: 'on' | 'off') => post('/api/coord/reclaim-pause', { state }),
+    /** `POST /api/coord/pane-scope-stop` (D-7902): Settings › Automation › Stop leftovers, `{state}`. `requested`, never
+     *  the switch: the next `{type:'coord'}` frame's `paneScopeStop` is the answer, and the card settles on that.
+     *  `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have moved the switch. */
+    setPaneScopeStop: (state: PaneScopeStopState) =>
+      postJsonOr<{ readonly ok: true; readonly requested: PaneScopeStopState } | 'unreadable'>('/api/coord/pane-scope-stop', 'unreadable', { state }),
     /** `GET /api/coord/caps` — the two limits AND the two derived counts, in one
      *  shape and one round trip. They travel together because a cap without its
      *  usage is a number an operator cannot act on. 501 `not-configured` on a
@@ -741,6 +915,198 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  docstring requires. */
     setCoordCaps: (next: Partial<CoordCaps>) =>
       postJsonOr<CoordCapsView | 'unreadable'>('/api/coord/caps', 'unreadable', next),
+    /** `GET /api/coord/review-cap/:id` (D-6910): a work run's review-cap ask, composed by the refusal's own helper, with
+     *  when it was raised and lifted. `LiftCapSheet` reads it on open. Session-gated when armed; no box token. */
+    reviewCap: (run: number) => getJson<ReviewCapView>(`/api/coord/review-cap/${run}`),
+    /** `POST /api/coord/review-cap` (D-6795): the operator lifts the cap for one work run, exactly `{ run }`. Idempotent:
+     *  a second lift answers 200. `postJson`, so a refusal (404 not a work run, 400 a bad id) rejects with `ApiError`,
+     *  which the sheet says in words. Session-gated when armed; no box token. */
+    liftReviewCap: (run: number) =>
+      postJson<ReviewCapLiftAnswer>('/api/coord/review-cap', { run }),
+    /** `GET /api/coord/stall-watch` (stall watch settings, design 2026-10-05 §10, §13): the Settings page's Stall
+     *  watch section reads it through `useStallWatchView`, whose `asStallWatchView` is the wire guard, so the type here
+     *  is what the server promises, not what arrived. 501 `not-configured` on a box with no coordination database, and
+     *  404 `not-found` from an older server that lacks the route; the hook reads both as not available on this server
+     *  (departure `older-server-404-reads-not-configured` (D-4035)). */
+    stallWatch: (opts?: ReadOpts) => getJson<StallWatchView>('/api/coord/stall-watch', opts),
+    /** `POST /api/coord/stall-watch`: a PARTIAL, carrying only the field the operator moved, and `confirm` only when
+     *  it sends back the key a 409 `confirm-required` answered with. The server decides whether a write needs a
+     *  confirm (departure `server-decides-the-confirm` (D-4033)), so a 409 rejects with `ApiError` like every non-2xx,
+     *  and the section reads its body through `stallWriteRefusal`. Session-gated when armed, open dark; no box token.
+     *
+     *  `postJsonOr`, not `postJson`, for `setCoordCaps`' reason (D-1150): after a write, "the answer could not be
+     *  read" may well have stored the value, and is not "the request never happened". */
+    setStallWatch: (body: StallWatchRequest) =>
+      postJsonOr<StallWatchView | 'unreadable'>('/api/coord/stall-watch', 'unreadable', body),
+    /** `GET /api/face`: the operator's character, one server row (`{ character, updatedAt }`). */
+    getFace: () => getJson<FaceAnswer>('/api/face'),
+    /** `POST /api/face` `{ character }`: answers the row; a refusal (400 `bad-request`) rejects with `ApiError`. */
+    setFace: (character: CharacterName) => postJson<FaceAnswer>('/api/face', { character }),
+    /** `GET /api/coord/collect-lane` (path-identity spec 2026-10-12 §5.6, §5.7): the Settings page's Temp root
+     *  collector section reads it through `useCollectLaneView`, whose `asCollectLaneView` (`fleet/collectLaneRead.ts`) is the wire guard, so the
+     *  type here is what the server promises, not what arrived. `getJson`, as `stallWatch` is: a read changes
+     *  nothing, so its failure is only a failure, which the hook classifies (404 and 501 through
+     *  `settingsReadFailure`, a 503 `state-unmeasurable` as its own kind). Session-gated when armed, open dark; no
+     *  box token. */
+    collectLane: (opts?: ReadOpts) => getJson<CollectLaneView>('/api/coord/collect-lane', opts),
+    /** `POST /api/coord/collect-lane`: `{choice}`, plus `confirm` only as the key a 409 `confirm-required` or
+     *  `confirm-stale` answered with. The server decides the confirm, so a 409 rejects with `ApiError` like every
+     *  non-2xx, and the section reads its body through `collectLanePostRefusal`. Session-gated when armed, open dark,
+     *  with `live` refused while sign-in is dark; no box token.
+     *
+     *  `postJsonOr`, not `postJson`, for `setCoordCaps`' reason, stated in `postJsonOr`'s own docstring: after a
+     *  write, "the answer could not be read" may well have stored the choice, and is not "the request never
+     *  happened". */
+    setCollectLane: (body: CollectLaneRequest) =>
+      postJsonOr<CollectLaneView | 'unreadable'>('/api/coord/collect-lane', 'unreadable', body),
+    /** `GET /api/coord/dispatch-abandon` (D-7319): the switch of the act that abandons a dispatch that never came back.
+     *  Settings' Automation card reads it through `useDispatchAbandonView`, whose `asDispatchAbandonView` is the wire
+     *  guard. 501 `not-configured` and an older server's 404 read as not available. Session-gated when armed. */
+    dispatchAbandon: (opts?: ReadOpts) => getJson<DispatchAbandonView>('/api/coord/dispatch-abandon', opts),
+    /** `GET /api/coord/run-close` (D-8077, Task 26): each run-close lane group's state, would-close list and 7-day tally, for Advanced's
+     *  "What ccrc closes on its own". 501 `not-configured` and an older server's 404 reject like every non-2xx. Session-gated when armed. */
+    runClose: (opts?: ReadOpts) => getJson<RunCloseView>('/api/coord/run-close', opts),
+    /** `POST /api/coord/run-close`: `{group, choice}`; the reply is the same view, read after the write. `postJsonOr`, for
+     *  `setCoordCaps`' reason: an answer that could not be read may still have moved the switch. */
+    setRunClose: (body: RunCloseRequest) => postJsonOr<RunCloseView | 'unreadable'>('/api/coord/run-close', 'unreadable', body),
+    /** `GET /api/coord/scope-sweep` (D-7994): the sweep's two switches, as the registry reads them. Settings' Automation
+     *  card reads it through `useScopeSweepView`, whose `asScopeSweepView` is the wire guard. */
+    scopeSweep: (opts?: ReadOpts) => getJson<ScopeSweepView>('/api/coord/scope-sweep', opts),
+    /** `POST /api/coord/scope-sweep` (D-7994): the busy arm's switch. The reply is the same view, read after the verb
+     *  ran. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have moved the switch. */
+    setScopeSweepBusy: (body: ScopeSweepBusyRequest) =>
+      postJsonOr<ScopeSweepView | 'unreadable'>('/api/coord/scope-sweep', 'unreadable', body),
+    /** `GET /api/coord/delegation-adopt` (D-8114): the delegation lane's keep switch, the fleet box's two capabilities, what a
+     *  tap of each direction would be refused with, and the lane's last pass. Settings' Automation card reads it through
+     *  `useDelegationAdoptView`, whose `asDelegationAdoptView` is the wire guard. */
+    delegationAdopt: (opts?: ReadOpts) => getJson<DelegationAdoptView>('/api/coord/delegation-adopt', opts),
+    /** `POST /api/coord/delegation-adopt` (D-8114): the switch, `{on}`. The reply is the same view, read after the verb ran; a
+     *  refusal is `{ok:false, error}` in one of the door's words. `postJsonOr`, for `setCoordCaps`' reason: an answer that
+     *  could not be read may still have moved the switch. */
+    setDelegationAdopt: (body: DelegationAdoptRequest) =>
+      postJsonOr<DelegationAdoptView | 'unreadable'>('/api/coord/delegation-adopt', 'unreadable', body),
+    /** `GET /api/coord/lane-arm` (D-8274; spec 2026-10-28 R-6): Settings › Automation › Shadow lanes, every shadow lane's row.
+     *  The card reads it through `useLaneArmView`, whose `asLaneArmView` is the wire guard. 501 `not-configured` and an older
+     *  server's 404 read as not available. Session-gated when armed, open dark; no box token. */
+    laneArm: (opts?: ReadOpts) => getJson<LaneArmView>('/api/coord/lane-arm', opts),
+    /** `GET /api/fleet/overrides` (D-8382): every override the switchboard declares with its state, and the approvals
+     *  topology. Read only; Overrides in force and Security's approvals line read it through `useOverridesView`. */
+    fleetOverrides: (opts?: ReadOpts) => getJson<OverridesView>('/api/fleet/overrides', opts),
+    /** `GET /api/models/:lane` (D-8406): the lane's classes as its own model files say them, each class's model and its
+     *  catalogue label. Unknown on purpose: `asLaneModelsRead` (`lib/models.ts`) is the one reader of the answer, and an
+     *  older server's 404 rejects like every non-2xx. Read through `useLaneModels`. */
+    laneModels: (lane: string, opts?: ReadOpts) => getJson<unknown>(`/api/models/${encodeURIComponent(lane)}`, opts),
+    /** `POST /api/coord/lane-arm`: `{lane, choice}`, plus `confirm` only as the key a 409 `confirm-required` answered with. The
+     *  server decides the confirm, so a 409 rejects with `ApiError` like every non-2xx, and the card reads its body through
+     *  `laneArmWriteRefusal`. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have stored
+     *  the choice. */
+    setLaneArm: (body: LaneArmRequest) => postJsonOr<LaneArmView | 'unreadable'>('/api/coord/lane-arm', 'unreadable', body),
+    /** `POST /api/coord/dispatch-abandon`: `{choice:'on'|'off'}`. `postJsonOr` for `setCoordCaps`' reason: an answer that
+     *  could not be read may still have stored the choice. */
+    setDispatchAbandon: (body: DispatchAbandonRequest) =>
+      postJsonOr<DispatchAbandonView | 'unreadable'>('/api/coord/dispatch-abandon', 'unreadable', body),
+    /** `GET /api/coord/roll-idle` (D-7453): Settings › Automation › Roll idle sessions, `coordinators` or `off`
+     *  (`targets` null when the server could not read its row). Session-gated when armed, open dark; no box token. */
+    rollIdle: () => getJson<RollIdleView>('/api/coord/roll-idle'),
+    /** `POST /api/coord/roll-idle`: `{targets}`. `postJsonOr`, for `setCoordCaps`' reason: after a write, "the answer
+     *  could not be read" may well have stored the choice. */
+    setRollIdle: (targets: ClaudeRollTargets) =>
+      postJsonOr<RollIdleView | 'unreadable'>('/api/coord/roll-idle', 'unreadable', { targets }),
+    /** `GET /api/coord/plain-auto-memory` (Overlord W1a launch profiles PR B): Settings › Automation › Auto memory for plain
+     *  sessions, `off` or `on` (`choice` null when the server could not read its row). Session-gated when armed; no box token. */
+    plainAutoMemory: () => getJson<PlainAutoMemoryView & { readonly ok: true }>('/api/coord/plain-auto-memory'),
+    /** `POST /api/coord/plain-auto-memory`: `{choice}`. `postJsonOr`, for `setCoordCaps`' reason. */
+    setPlainAutoMemory: (choice: PlainAutoMemoryChoice) =>
+      postJsonOr<(PlainAutoMemoryView & { readonly ok: true }) | 'unreadable'>('/api/coord/plain-auto-memory', 'unreadable', { choice }),
+    /** `GET /api/testbox` (test box plan TB9, D-7411; spec 2026-10-28 §2.7): `{ok, testbox}`, the block the server's
+     *  poll last decided, `null` before its first pass. Settings › Automation › Test box reads it through
+     *  `useTestboxView`, whose `asTestboxBlock` is the wire guard, so the type here is the envelope only. */
+    testbox: (opts?: ReadOpts) => getJson<{ readonly ok: true; readonly testbox: unknown }>('/api/testbox', opts),
+    /** `POST /api/testbox/switch`: `{on}` and nothing else (the route refuses any other field). The answer is
+     *  `requested`, never the switch: the block's `switch` field, re-read, is the authoritative answer. */
+    setTestboxSwitch: (on: boolean) =>
+      postJsonOr<{ readonly ok: true; readonly requested: boolean } | 'unreadable'>('/api/testbox/switch', 'unreadable', { on }),
+    /** `POST /api/testbox/tools-sync`: no body; the release and the versions sent are the fleet host's own. */
+    testboxToolsSync: () =>
+      postJsonOr<{ readonly ok: boolean; readonly outcome?: unknown; readonly detail?: unknown } | 'unreadable'>(
+        '/api/testbox/tools-sync', 'unreadable'),
+    /** D-8289: `GET /api/testbox/builds`, `{ok, claudeBuilds}`, the trusted Claude Code builds (`readClaudeBuildRecords` is the guard), and
+     *  `POST /api/testbox/builds/capture`, `{build}`, the operator's Capture again on a failed build, answered with the re-read list. */
+    testboxBuilds: (opts?: ReadOpts) => getJson<{ readonly ok: true; readonly claudeBuilds: unknown }>('/api/testbox/builds', opts),
+    testboxBuildCapture: (build: string) =>
+      postJsonOr<{ readonly ok: true; readonly claudeBuilds: unknown } | 'unreadable'>('/api/testbox/builds/capture', 'unreadable', { build }),
+    /** `GET /api/testbox/admin` (test box connect plan TC12, D-8166): `{ok, status, events}`, session-gated. `useTestboxAdmin`
+     *  reads it through the shared status reader; the type here is the envelope only. */
+    testboxAdmin: (opts?: ReadOpts) => getJson<{ readonly ok: true; readonly status: unknown; readonly events: unknown }>('/api/testbox/admin', opts),
+    /** `POST /api/testbox/admin/:sub` (TC12): `{fields}` and nothing else; the answer is the re-read status, the ledger and what the act
+     *  may say. A 2xx the card cannot read is `unreadable` (it may have landed, so the card re-reads). `opts.signal` only: a write has no
+     *  time limit, because its outcome is never guessed. */
+    testboxAdminAct: async (sub: TestboxAdminSub, fields: TestboxAdminFields, opts?: ReadOpts) =>
+      (await (await request(`/api/testbox/admin/${sub}`, jsonInit({ fields }), opts)).json().catch(() => 'unreadable')) as
+        { readonly ok: true; readonly status: unknown; readonly events: unknown; readonly result?: unknown } | 'unreadable',
+    /** `GET /api/digest?day=` (coordinator-first routing spec §10, D-5300): the digest of what coordinators decided
+     *  in the operator's name for one UTC day, or, with no day, the newest whose window has closed. The digest screen
+     *  reads it through `asDigestAnswer`, the wire guard. Session-gated when armed; no box token. */
+    digest: (day?: string, opts?: ReadOpts) =>
+      getJson<DigestAnswer>(day === undefined ? '/api/digest' : `/api/digest?day=${encodeURIComponent(day)}`, opts),
+    /** `POST /api/digest/correct` (D-5300): one line's correction, mailed verbatim to that line's coordinator. A 409
+     *  (`not-coordinator`, `duplicate`) rejects with `ApiError` like every non-2xx. `postJson`, not `postJsonOr`: the
+     *  screen reads nothing off the answer but its arrival, and a write whose answer was unreadable is shown as sent
+     *  only after the next read of the digest says `corrected`. */
+    correctDigest: (body: DigestCorrectBody) => postJson<DigestCorrectAnswer>('/api/digest/correct', body),
+    /** `PUT /api/items/:id/secret` (desktop-polish PL6): a secret item's value, sent once to its own route, which stores it
+     *  in its protected slot and ticks the item with "set" and when, and the last four characters only for a value outgoing
+     *  text will mask. The value rides only in this body, and the answer carries the slot's state, never the value. A refusal
+     *  rejects with an `ApiError` like every non-2xx: before the write (`step-up-required`, `not-open`, `bad-slot`,
+     *  `secret-not-one-line`, `write-failed`, …) nothing is stored, and `stored-not-ticked` means the value IS stored and
+     *  the item is not ticked. Session-gated with a step-up when armed. */
+    saveItemSecret: async (id: number, value: string): Promise<SecretSaveAnswer> =>
+      (await request(`/api/items/${id}/secret`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ value }),
+      })).json() as Promise<SecretSaveAnswer>,
+    /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last 48 hours (D-8194), and
+     *  each programme's Goals, as the `waiting` frame carries them. The screen reads it again when the tab regains focus
+     *  (review 1336: a quiet fleet sends no frame when an item crosses its 30 minutes). Session-gated when armed. */
+    waiting: () => getJson<{ readonly ok: true; readonly waiting: WaitingView }>('/api/waiting'),
+    /** `GET /api/items/:id` (D-8194): one item by its id, whatever its state and however long ago it closed, so an item
+     *  opened by its number after it left the Recently cleared window still opens, read-only. `unknown-item` (404) for a number
+     *  no item has, or one the operator was never shown. Session-gated when armed. */
+    item: (id: number) => getJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}`),
+    /** `POST /api/items/:id/tick` (PL4): the operator marks an item done. `answer` rides only for a `decide` or a `value`
+     *  item; a `do` item sends no body at all. A refusal (`programme-ended`, `not-open`, `duplicate`, …) rejects with an
+     *  `ApiError` like every non-2xx, and the item is unchanged. */
+    tickItem: (id: number, answer?: string) =>
+      postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/tick`, answer === undefined ? undefined : { answer }),
+    /** `GET /api/programmes/:slug/goals` (PL4; PL5b): one programme's Goals, the spec it pins, its "In short" and the dated
+     *  list of what changed since approval, as the `waiting` frame carries them. The programme view reads it on arrival.
+     *  Session-gated when armed; a programme the box knows nothing of answers an empty view, never a refusal. */
+    goals: (slug: string) =>
+      getJson<{ readonly ok: true; readonly goals: GoalsView }>(`/api/programmes/${encodeURIComponent(slug)}/goals`),
+    /** `GET /api/programmes/:slug/secrets` (the PL6 follow-up, programme item 9): the programme's stored secrets by slot name,
+     *  with when each was saved and the item that asked for it, never any part of a value. `secrets-unreadable` (a store the
+     *  box could not read) rejects with an `ApiError`, never an empty list. Session-gated when armed. */
+    storedSecrets: (slug: string) => getJson<StoredSecretsAnswer>(`/api/programmes/${encodeURIComponent(slug)}/secrets`),
+    /** `DELETE /api/programmes/:slug/secrets/:slot` (programme item 9): removes one stored secret. A credential act: session-gated
+     *  with a step-up when armed. A refusal (`step-up-required`, `secret-not-stored`, `remove-failed`, …) rejects with an
+     *  `ApiError` like every non-2xx. No body is sent and none of the value comes back. */
+    removeStoredSecret: async (slug: string, slot: string): Promise<SecretRemoveAnswer> =>
+      (await request(`/api/programmes/${encodeURIComponent(slug)}/secrets/${encodeURIComponent(slot)}`, {
+        method: 'DELETE', headers: { accept: 'application/json' },
+      })).json() as Promise<SecretRemoveAnswer>,
+    /** `POST /api/items/:id/dismiss` (PL4): refused `programme-live` while the programme has an open run. */
+    dismissItem: (id: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/dismiss`),
+    /** `POST /api/answer-marks` (Overlord W1, §9.2.1): one of the operator's two marks on a row, ticked or not; it answers the
+     *  mark's new value. `not-markable` (the row left the list) rejects with an `ApiError` like every non-2xx. Session-gated when
+     *  armed; it works dark too. */
+    setAnswerMark: (kind: AnswerMarkKind, id: number, mark: AnswerMarkName, value: boolean) =>
+      postJson<{ readonly ok: true; readonly mark: AnswerMarkName; readonly answerMark: AnswerMarkView }>('/api/answer-marks', { kind, id, mark, value }),
+    /** `GET /api/sessions/:id/timers` (Overlord W1a, timers Task 13): the session's pending timers, notes masked and marked
+     *  untrusted. `unknown`: `timersWords.ts`' `readTimers` is the one reader. Session-gated when armed. */
+    sessionTimers: (id: string) => getJson<unknown>(`${sid(id)}/timers`),
+    /** `POST /api/sessions/:id/timers/:timerId/cancel`: the operator cancels one; a refusal rejects with its `ApiError`. */
+    cancelSessionTimer: (id: string, timerId: number) => postJson<unknown>(`${sid(id)}/timers/${timerId}/cancel`),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {
@@ -748,6 +1114,80 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       form.append('file', file, file.name);
       const res = await request(`${sid(id)}/upload`, { method: 'POST', body: form });
       return ((await res.json()) as { clip: StagedClip }).clip;
+    },
+    /**
+     * The Docs reader's loaders (spec 2026-10-01 4.3, 5.4): `DocsScreen`'s default `DocsLoaders`. Every call goes
+     * through `request`, so a 401 still raises the one login overlay, and carries the marker header through
+     * `DOCS_REQUEST_HEADER`/`DOCS_REQUEST_HEADER_VALUE` to the URL L0's `docsApi` builds. Each resolves a union and
+     * never rejects for a server answer (`docs/failures.ts`): it rejects only when the caller's signal aborts, or for
+     * a defect. `file` and `raster` refuse each other's paths by throwing `wrong-representation` before any request.
+     */
+    docs: ((): DocsLoaders & DocsHistoryLoader => {
+      const marker = { [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE };
+      // NO TIME LIMIT on the docs reads (`timeoutMs: null`, console speed C1): a loader never rejects for a server
+      // answer, and its slot vocabulary (`docs/failures.ts`) has no word for "slow", so a timeout would leave a screen
+      // waiting on a promise its reader never catches. The server bounds them (ccd's docs verbs, 15 to 20 s, after a
+      // read lane's wait of at most 10 s).
+      const unlimited: ReadOpts = { timeoutMs: null };
+      const read = async <T>(path: string, fields: readonly string[], init: RequestInit): Promise<DocsAnswer<T>> => {
+        try {
+          return await readDocsEnvelope<T>(await request(path, init, unlimited), fields);
+        } catch (err) {
+          // `request` folds an unreadable error body to '' and throws ApiError, so an abort mid-body arrives as one.
+          if (init.signal?.aborted) throw init.signal.reason;
+          return docsAnswerFromError(err);
+        }
+      };
+      return {
+        projects: () => read<DocsProjectsResponse>(docsApi.projects(), ['index'], { headers: marker }),
+        tree: (project, ref) =>
+          read<DocsTreeResponse>(docsApi.tree(project, ref), ['tree', 'refreshDue'], { headers: marker }),
+        file: (project, pin, signal) => {
+          if (contentClass(pin.path) === 'raster') throw new Error('wrong-representation');
+          return read<DocsFileResponse>(docsApi.file(project, pin), ['contentClass', 'show'], { headers: marker, signal });
+        },
+        raster: (project, pin, signal) => {
+          const declared = declaredRaster(pin.path);
+          if (declared === null) throw new Error('wrong-representation');
+          return (async () => {
+            try {
+              return await readDocsRaster(await request(docsApi.file(project, pin), { headers: marker, signal }, unlimited), declared);
+            } catch (err) {
+              if (signal?.aborted) throw signal.reason;
+              return docsAnswerFromError(err);
+            }
+          })();
+        },
+        refresh: (project, body) => read<DocsRefreshResponse>(docsApi.refresh(project), ['fetch', 'tree'], {
+          method: 'POST',
+          headers: { ...marker, 'content-type': 'application/json' },
+          body: JSON.stringify({ ref: body.ref, reason: body.reason }),
+        }),
+        history: (project, ask) => read<DocsHistoryResponse>(docsApi.history(project, ask), ['log'], { headers: marker }),
+      };
+    })(),
+    /** `POST /api/leases/:lease/operator-retain` (delegation broker wave 5, PR8; PR10's "Keep worktree"): the operator keeps a
+     *  worktree for another 7 days. Session-gated when armed; no box token. Body `{}`. */
+    operatorRetainLease: (leaseId: string): Promise<DoorAnswer> =>
+      doorPost(`/api/leases/${encodeURIComponent(leaseId)}/operator-retain`, {}),
+    /** `POST /api/leases/:lease/resolve` (PR8; PR10's "Attach to…" and "Not delegated"): attach to the worktree's OWN parent, or
+     *  say it is not delegated work. Session-gated when armed; no box token. Under O5-8 (c) `target` is a lease id. */
+    resolveLease: (target: string, body: { action: 'attach'; parent: string } | { action: 'foreign' }): Promise<DoorAnswer> =>
+      doorPost(`/api/leases/${encodeURIComponent(target)}/resolve`, body),
+    /**
+     * The reader lab's door (the reader lab plan of 2026-11-03, Task 9; the reader lab design, section 4). Through
+     * `request`, so a 401 raises the one login overlay and every other refusal rejects with its `ApiError`; the lab's run
+     * turns the answers into its words (`readerLab/run.ts`). `open` and `read` resolve the parsed body unchecked, which
+     * `readerLab/wire.ts` checks; `probe` is the console's own request to the probe, with its session, the cookie
+     * check's control.
+     */
+    readerLab: {
+      open: (): Promise<unknown> => postJson<unknown>(READER_LAB_RUNS_PATH),
+      read: (nonce: string): Promise<unknown> => getJson<unknown>(readerLabRunPath(nonce)),
+      close: (nonce: string): Promise<void> => post(readerLabClosePath(nonce)),
+      probe: async (nonce: string): Promise<void> => {
+        await request(readerLabProbePath(nonce, 'cookie-console'));
+      },
     },
   };
 }

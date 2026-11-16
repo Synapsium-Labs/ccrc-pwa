@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseRoster, RosterError, POOL_NAME_RE } from '../../shared/roster.js';
+import { parseRoster, RosterError, POOL_NAME_RE, CODEX_BRIDGE_MODES, CODEX_UPSTREAMS, EXEC_KINDS, type ExecKind } from '../../shared/roster.js';
 
 const one = (over: Record<string, unknown> = {}) => ({
   version: 1,
@@ -10,8 +10,32 @@ const one = (over: Record<string, unknown> = {}) => ({
   }],
 });
 
+
+/** A valid roster except for a reserved GPT-lane id — ccrc's `ccrc-codex` or `ccgpt-runtime`, or `ccgpt`,
+ *  another repository's live launcher (D-3478). Every kind is represented because the collision is
+ *  about the launcher name, not the account's current execution contract. */
+const toolchainCollisionRoster = (id: string, kind: ExecKind) => ({
+  version: 1,
+  accounts: [
+    {
+      id, label: id, configDirSuffix: `.${id}`,
+      exec: kind === 'codex'
+        ? {
+          kind, provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+          authDir: `.local/share/ccrc/codex/${id}`,
+        }
+        : { kind },
+      homeAble: true, hue: 'cyan', telemetry: kind === 'codex' ? 'codex' : 'anthropic',
+    },
+    ...(kind === 'upstream' ? [] : [{
+      id: 'claude', label: 'claude', configDirSuffix: '.claude',
+      exec: { kind: 'upstream' }, homeAble: true, hue: 'violet', telemetry: 'anthropic',
+    }]),
+  ],
+});
+
 /** A minimal valid two-account roster — one `upstream` `claude`, one
- *  `generated` `claude2` whose `exec` carries `secretsFile` when it is not
+ *  `generated` `claude9` whose `exec` carries `secretsFile` when it is not
  *  `undefined`. Used by the `exec.secretsFile` gate cases below. */
 const rosterWithSecrets = (secretsFile: string | undefined) => ({
   version: 1,
@@ -21,7 +45,7 @@ const rosterWithSecrets = (secretsFile: string | undefined) => ({
       exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
     },
     {
-      id: 'claude2', label: 'claude2', configDirSuffix: '.claude2',
+      id: 'claude9', label: 'claude9', configDirSuffix: '.claude9',
       exec: secretsFile !== undefined ? { kind: 'generated', secretsFile } : { kind: 'generated' },
       homeAble: true, hue: 'violet', telemetry: 'anthropic',
     },
@@ -35,6 +59,25 @@ describe('parseRoster', () => {
     expect(r.upstreamId).toBe('claude');
     expect(r.homeAble.map((a) => a.id)).toEqual(['claude']);
     expect(r.byId.get('claude')!.configDirSuffix).toBe('.claude');
+  });
+
+  it.each(['ccrc-codex', 'ccgpt-runtime', 'ccgpt'] as const)(
+    'refuses the reserved GPT-lane id %s for every execution kind',
+    (id) => {
+      for (const kind of EXEC_KINDS) {
+        try {
+          parseRoster(toolchainCollisionRoster(id, kind));
+          throw new Error(`expected ${id}/${kind} to be refused`);
+        } catch (e) {
+          expect((e as RosterError).message).toContain(`account id "${id}" collides with`);
+          expect((e as RosterError).remedy).toContain('Choose another account ID');
+        }
+      }
+    },
+  );
+
+  it.each(['ccd', 'ccrc', 'ccd-worker'])('keeps historical non-GPT toolchain-looking id %s valid', (id) => {
+    expect(() => parseRoster(one({ id, configDirSuffix: `.${id}` }))).not.toThrow();
   });
 
   // The label rule is a control-character ban, NOT a printable-ASCII
@@ -212,6 +255,59 @@ describe('parseRoster', () => {
     }
   });
 
+  // The two Overlord facts (H16): `fableBilling` and `continuity`. OPTIONAL in the file, `null` on the type, and a
+  // written `null` is refused exactly as `pool`'s is: absence is "nobody set it", a written null is a half-edit.
+  const factsAcct = (over: Record<string, unknown>) => ({ version: 1, accounts: [
+    { id: 'lane-a', label: 'lane-a', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+      homeAble: true, hue: 'cyan', telemetry: 'anthropic', ...over },
+  ] });
+
+  it('answers null for both facts on an account carrying neither', () => {
+    const a = parseRoster(factsAcct({})).byId.get('lane-a')!;
+    expect(a.fableBilling).toBeNull();
+    expect(a.continuity).toBeNull();
+  });
+
+  it('parses a billing word and a continuity record', () => {
+    const a = parseRoster(factsAcct({ fableBilling: 'credits', continuity: { recordedAt: 1760000000 } })).byId.get('lane-a')!;
+    expect(a.fableBilling).toBe('credits');
+    expect(a.continuity).toEqual({ recordedAt: 1760000000 });
+    expect(parseRoster(factsAcct({ fableBilling: 'included', continuity: { recordedAt: 0 } }))
+      .byId.get('lane-a')!.fableBilling).toBe('included');
+  });
+
+  it.each([
+    ['a written null fableBilling', { fableBilling: null }, 'fableBilling'],
+    ['a billing word outside the set', { fableBilling: 'free' }, 'fableBilling'],
+    ['a non-string billing', { fableBilling: 1 }, 'fableBilling'],
+    ['an inherited-name billing word', { fableBilling: 'toString' }, 'fableBilling'],
+    ['a written null continuity', { continuity: null }, 'continuity'],
+    ['a continuity that is a number', { continuity: 5 }, 'continuity'],
+    ['a continuity that is an array', { continuity: [] }, 'continuity'],
+    ['a continuity with no recordedAt', { continuity: {} }, 'continuity'],
+    ['a continuity with an extra key', { continuity: { recordedAt: 1, by: 'x' } }, 'continuity'],
+    ['a float recordedAt', { continuity: { recordedAt: 1.5 } }, 'continuity'],
+    ['a negative recordedAt', { continuity: { recordedAt: -1 } }, 'continuity'],
+    ['a string recordedAt', { continuity: { recordedAt: '1' } }, 'continuity'],
+    ['an unsafe-integer recordedAt', { continuity: { recordedAt: 2 ** 60 } }, 'continuity'],
+  ])('refuses %s, naming the field in the remedy', (_name, over, field) => {
+    let caught: unknown;
+    try { parseRoster(factsAcct(over)); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(RosterError);
+    expect((caught as RosterError).remedy).toContain(`"${field}"`);
+    expect((caught as RosterError).remedy).toContain('~/.ccrc/accounts.json');
+  });
+
+  it('does not warn about the two fact keys it understands', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      parseRoster(factsAcct({ fableBilling: 'included', continuity: { recordedAt: 7 } }));
+      expect(warn.mock.calls.some(([m]) => typeof m === 'string' && /fableBilling|continuity/.test(m))).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   // The grammar is ID_RE's, deliberately, and the boundary is worth pinning
   // rather than trusting to a shared regex source: `ccd` carries a
   // hand-typed bash copy of this literal (wave 2a landed it), and a drift in
@@ -255,6 +351,235 @@ describe('parseRoster', () => {
       warn.mockRestore();
     }
   });
+
+  // ── the fourth exec kind (2026-09-20 GPT-lane ownership design §4.1) ──
+  /** A minimal valid roster: the mandatory `upstream`, plus one `codex` lane
+   *  whose `exec` is `over` — so each gate below names exactly one field. */
+  const withCodex = (over: Record<string, unknown> = {}) => ({
+    version: 1,
+    accounts: [
+      {
+        id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+      },
+      {
+        id: 'codex-a', label: 'team·codex', configDirSuffix: '.claude-codex-a',
+        exec: {
+          kind: 'codex', provider: 'openai',
+          proxyPort: 45010, litellmPort: 45011,
+          authDir: '.local/share/ccrc/codex/codex-a',
+          ...over,
+        },
+        homeAble: true, hue: 'violet', telemetry: 'codex',
+      },
+    ],
+  });
+
+  it('accepts a codex lane and keeps every field of its exec', () => {
+    const r = parseRoster(withCodex());
+    const e = r.byId.get('codex-a')!.exec;
+    expect(e.kind).toBe('codex');
+    expect(e).toEqual({
+      kind: 'codex', provider: 'openai',
+      proxyPort: 45010, litellmPort: 45011,
+      authDir: '.local/share/ccrc/codex/codex-a',
+      bridge: 'litellm', upstream: 'backend',
+    });
+  });
+
+  // ── exec.bridge and exec.upstream (codex-bridge Stage 2, Task 10; spec D20) ──
+  // Additive: a roster written before the bridge has neither key, and it must
+  // keep meaning what it meant — a LiteLLM lane on the backend route. The
+  // default is the FIRST entry of each set, spelled nowhere else.
+  it('the two sets are the spec\'s words, the default first', () => {
+    expect([...CODEX_BRIDGE_MODES]).toEqual(['litellm', 'direct']);
+    expect([...CODEX_UPSTREAMS]).toEqual(['backend', 'siwc']);
+  });
+
+  it('a codex lane with neither key reads bridge litellm and upstream backend', () => {
+    const e = parseRoster(withCodex()).byId.get('codex-a')!.exec;
+    if (e.kind !== 'codex') throw new Error('expected the codex arm');
+    expect(e.bridge).toBe('litellm');
+    expect(e.upstream).toBe('backend');
+  });
+
+  it.each([
+    ['direct', 'backend'], ['litellm', 'siwc'], ['direct', 'siwc'],
+  ] as const)('a codex lane may name bridge %s and upstream %s, and keeps both', (bridge, upstream) => {
+    const e = parseRoster(withCodex({ bridge, upstream })).byId.get('codex-a')!.exec;
+    if (e.kind !== 'codex') throw new Error('expected the codex arm');
+    expect(e.bridge).toBe(bridge);
+    expect(e.upstream).toBe(upstream);
+  });
+
+  it('naming either key draws no unknown-key warning on a codex lane', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      parseRoster(withCodex({ bridge: 'direct', upstream: 'backend' }));
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => /bridge|upstream/.test(m))).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // A present value outside the set is REFUSED, never read as the default: a
+  // typo of `direct` that quietly ran the lane on LiteLLM would be a switch the
+  // operator asked for and never got. A written `null` is refused too (absence
+  // is the default, a null is a half-edit), as `pool` refuses one.
+  it.each([
+    ['an unknown word', 'proxy'], ['a near miss', 'Direct'], ['a written null', null],
+    ['a number', 1], ['an empty string', ''], ['a name Object.prototype carries', 'toString'],
+  ])('refuses exec.bridge as %s (bad-exec-bridge)', (_why, bridge) => {
+    let caught: unknown;
+    try { parseRoster(withCodex({ bridge })); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(RosterError);
+    expect((caught as RosterError).message).toMatch(/account "codex-a" has an invalid exec\.bridge/);
+    expect((caught as RosterError).remedy).toMatch(/"litellm" or "direct"/);
+  });
+
+  it.each([
+    ['an unknown word', 'chatgpt'], ['a near miss', 'Backend'], ['a written null', null],
+    ['a number', 0], ['an empty string', ''], ['a name Object.prototype carries', 'constructor'],
+  ])('refuses exec.upstream as %s (bad-exec-upstream)', (_why, upstream) => {
+    let caught: unknown;
+    try { parseRoster(withCodex({ upstream })); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(RosterError);
+    expect((caught as RosterError).message).toMatch(/account "codex-a" has an invalid exec\.upstream/);
+    expect((caught as RosterError).remedy).toMatch(/"backend" or "siwc"/);
+  });
+
+  it('a codex lane may carry a secretsFile, like every other kind', () => {
+    const r = parseRoster(withCodex({ secretsFile: '.cc-secrets/codex-a.env' }));
+    expect((r.byId.get('codex-a')!.exec as { secretsFile?: string }).secretsFile)
+      .toBe('.cc-secrets/codex-a.env');
+  });
+
+  it('names codex in the unknown-kind refusal, so the remedy lists every legal value', () => {
+    expect(() => parseRoster(withCodex({ kind: 'wrapper' })))
+      .toThrow(/"upstream", "generated", "external" or "codex"/);
+  });
+
+  // Each refusal is measured by NAME, not by "it throws": the remedy has to
+  // say which of the five things went wrong, because the operator's next
+  // action differs for each.
+  it.each([
+    ['a missing proxyPort', { proxyPort: undefined }, /missing or invalid exec\.proxyPort/],
+    ['a missing litellmPort', { litellmPort: undefined }, /missing or invalid exec\.litellmPort/],
+    ['a non-integer port', { proxyPort: 45010.5 }, /missing or invalid exec\.proxyPort/],
+    ['a string port', { proxyPort: '45010' }, /missing or invalid exec\.proxyPort/],
+    ['a privileged port', { proxyPort: 80 }, /out of range/],
+    ['a port above the TCP range', { litellmPort: 70000 }, /out of range/],
+  ])('refuses %s', (_why, over, re) => {
+    expect(() => parseRoster(withCodex(over))).toThrow(re);
+  });
+
+  it('refuses one port used twice in the same lane — the shim and LiteLLM need two', () => {
+    expect(() => parseRoster(withCodex({ litellmPort: 45010 })))
+      .toThrow(/exec\.proxyPort and exec\.litellmPort are both 45010/);
+  });
+
+  it('the remedy for an out-of-range port names the range, so the fix needs no second lookup', () => {
+    try {
+      parseRoster(withCodex({ proxyPort: 80 }));
+      throw new Error('expected a refusal');
+    } catch (e) {
+      expect((e as RosterError).remedy).toMatch(/1024/);
+      expect((e as RosterError).remedy).toMatch(/65535/);
+    }
+  });
+
+  it('accepts both inclusive Codex port endpoints in their distinct fields', () => {
+    expect(() => parseRoster(withCodex({ proxyPort: 1024, litellmPort: 65535 }))).not.toThrow();
+  });
+
+  it.each([
+    ['an absent authDir', { authDir: undefined }],
+    ['a non-string authDir', { authDir: 7 }],
+    ['an empty authDir', { authDir: '' }],
+    ['an absolute authDir', { authDir: '/etc/codex' }],
+    ['an authDir escaping $HOME', { authDir: '../elsewhere/auth' }],
+    ['an authDir with a trailing slash', { authDir: '.local/share/x/' }],
+    ['an authDir with a shell metacharacter', { authDir: '.local/$(id)' }],
+  ])('refuses %s', (_why, over) => {
+    expect(() => parseRoster(withCodex(over))).toThrow(/exec\.authDir/);
+  });
+
+  it.each([
+    ['a bare no-op segment', '.'],
+    ['a leading no-op segment', './.ccrc/auth'],
+    ['an interior no-op segment', '.local/./share/codex'],
+  ])('refuses an authDir with %s', (_why, authDir) => {
+    expect(() => parseRoster(withCodex({ authDir }))).toThrow(/invalid exec\.authDir/);
+  });
+
+  // The one refusal that is not a path-safety rule. `ccrc uninstall --purge`
+  // empties ~/.ccrc except `memory`; a lane's sign-in must not be destroyable
+  // by ccrc's own uninstall, so the roster refuses to put one
+  // there rather than documenting that it would be unwise.
+  it.each([
+    ['.ccrc/codex/codex-a/auth'],
+    ['.ccrc/auth'],
+  ])('refuses an authDir under ~/.ccrc (%s) — purge empties that tree', (dir) => {
+    expect(() => parseRoster(withCodex({ authDir: dir })))
+      .toThrow(/under \$HOME\/\.ccrc/);
+  });
+
+  it('a directory merely NAMED like .ccrc is not refused', () => {
+    // `.ccrc-backups` is a real sibling on a live box; a prefix test that
+    // caught it would refuse a legal path and send the operator hunting.
+    expect(() => parseRoster(withCodex({ authDir: '.ccrc-codex/auth' }))).not.toThrow();
+  });
+
+  it('refuses a codex lane with no provider — the kind means the backend it speaks to', () => {
+    expect(() => parseRoster(withCodex({ provider: undefined })))
+      .toThrow(/account "codex-a" has exec\.kind "codex" and .*exec\.provider/);
+  });
+
+  it('refuses a codex lane whose provider is not openai', () => {
+    expect(() => parseRoster(withCodex({ provider: 'anthropic' })))
+      .toThrow(/exec\.provider "anthropic".*"codex".*"openai"/);
+  });
+
+  // Whole-roster, not per-account: the collision is between two entries, so it
+  // belongs beside the duplicate-configDirSuffix gate and nowhere else.
+  const twoCodex = (bExec: Record<string, unknown>) => ({
+    version: 1,
+    accounts: [
+      {
+        id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+      },
+      {
+        id: 'codex-a', label: 'team·codex', configDirSuffix: '.claude-codex-a',
+        exec: {
+          kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+          authDir: '.local/share/ccrc/codex/codex-a',
+        },
+        homeAble: true, hue: 'violet', telemetry: 'codex',
+      },
+      {
+        id: 'codex-b', label: 'alt·codex', configDirSuffix: '.claude-codex-b',
+        exec: {
+          kind: 'codex', provider: 'openai', proxyPort: 45020, litellmPort: 45021,
+          authDir: '.local/share/ccrc/codex/codex-b', ...bExec,
+        },
+        homeAble: true, hue: 'amber', telemetry: 'codex',
+      },
+    ],
+  });
+
+  it('two codex lanes with disjoint port pairs parse', () => {
+    expect(parseRoster(twoCodex({})).accounts).toHaveLength(3);
+  });
+
+  it.each([
+    ["b's proxy collides with a's proxy", { proxyPort: 45010 }],
+    ["b's proxy collides with a's litellm", { proxyPort: 45011 }],
+    ["b's litellm collides with a's proxy", { litellmPort: 45010 }],
+  ])('refuses when %s', (_why, over) => {
+    expect(() => parseRoster(twoCodex(over)))
+      .toThrow(/accounts "codex-a" and "codex-b" both use port/);
+  });
 });
 
 describe('exec.secretsFile is a path, not merely a string', () => {
@@ -282,17 +607,17 @@ describe('exec.secretsFile is a path, not merely a string', () => {
   }
 
   it('accepts the shape every real account uses', () => {
-    const r = parseRoster(rosterWithSecrets('.cc-secrets/claude2-oauth.env'));
-    const acct = r.accounts.find((a) => a.id === 'claude2');
+    const r = parseRoster(rosterWithSecrets('.cc-secrets/claude9-oauth.env'));
+    const acct = r.accounts.find((a) => a.id === 'claude9');
     // `provider` is now on every generated exec — defaulted to `anthropic` for a
     // roster that predates the field, which is what this fixture is.
     expect(acct?.exec).toEqual(
-      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude2-oauth.env' });
+      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude9-oauth.env' });
   });
 
   it('still accepts a generated account with no secretsFile at all', () => {
     const r = parseRoster(rosterWithSecrets(undefined));
-    expect(r.accounts.find((a) => a.id === 'claude2')?.exec)
+    expect(r.accounts.find((a) => a.id === 'claude9')?.exec)
       .toEqual({ kind: 'generated', provider: 'anthropic' });
   });
 });
@@ -526,5 +851,41 @@ describe('exec.secretsFile is legal on all three kinds — and gated on all thre
     expect(execOf(rosterWithExec(
       { kind: 'external', provider: 'openai', secretsFile: '.cc-secrets/lane.env' }), 'lane'))
       .toEqual({ kind: 'external', provider: 'openai', secretsFile: '.cc-secrets/lane.env' });
+  });
+});
+
+// D-5521 (A26a): `telemetry` gains `openrouter`, the value A26 writes for an OpenRouter
+// lane. `roster-exec-parity.test.ts` holds the bare-Node mirror to the same set.
+describe('parseRoster — telemetry "openrouter" (D-5521)', () => {
+  const withKeyLane = (telemetry: unknown) => ({
+    version: 1,
+    accounts: [
+      { id: 'lane-a', label: 'lane-a', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'lane-d', label: 'lane-d', configDirSuffix: '.claude-lane-d',
+        exec: { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/lane-d-openrouter.env' },
+        homeAble: true, hue: 'amber', telemetry },
+    ],
+  });
+
+  it('keeps an openrouter lane\'s telemetry as written', () => {
+    expect(parseRoster(withKeyLane('openrouter')).byId.get('lane-d')!.telemetry).toBe('openrouter');
+  });
+
+  it('still refuses a value outside the four, naming them in the remedy', () => {
+    let caught: unknown;
+    try { parseRoster(withKeyLane('OpenRouter')); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(RosterError);
+    expect((caught as RosterError).message).toMatch(/invalid telemetry "OpenRouter": it must be "anthropic", "codex", "openrouter" or "none"\./);
+    expect((caught as RosterError).remedy).toMatch(/to "anthropic", "codex", "openrouter" or "none"\./);
+  });
+
+  it('refuses a name the value set inherits from Object.prototype (own keys only)', () => {
+    for (const bad of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) {
+      let caught: unknown;
+      try { parseRoster(withKeyLane(bad)); } catch (e) { caught = e; }
+      expect(caught, `took "${bad}"`).toBeInstanceOf(RosterError);
+      expect((caught as RosterError).message).toMatch(new RegExp(`invalid telemetry "${bad}"`));
+    }
   });
 });

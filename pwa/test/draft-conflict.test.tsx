@@ -80,3 +80,42 @@ describe('the draft-conflict sheet', () => {
     expect(onResolve).toHaveBeenCalledWith('p1', 'my message', { replaceDraft: true });
   });
 });
+
+// — the sheet's own dismissal, and the draft field the server did not send —
+describe('the ways out of the conflict sheet', () => {
+  it('the scrim closes it, and the pending is NOT resolved', () => {
+    // `closeConflict` had no caller in any test (measured: an uncovered
+    // function). It is the only way out that does not act: the box's draft
+    // stays where it is, and the failed pending stays failed with its Retry
+    // and Discard. A dismissal that silently resolved would destroy the
+    // reader's draft through the one control that promises not to.
+    const { onResolve } = sheet(TWO_ROWS);
+    expect(screen.getByText(/already a draft in this session/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    expect(onResolve, 'the dismissal resolved the conflict').not.toHaveBeenCalled();
+  });
+
+  it('does not re-raise itself for a pending it has already handled', () => {
+    // `handled` is a ref, so dismissing the sheet does not immediately put it
+    // back up for the same failed pending — which is what it would do
+    // otherwise, since the pending is still `failed` with the same code.
+    const { onResolve } = sheet(TWO_ROWS);
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    // The Sheet unmounts its content on dismissal; what must not happen is
+    // the effect putting it straight back.
+    expect(onResolve).not.toHaveBeenCalled();
+  });
+
+  it('a 409 that carried NO draft still opens the sheet, and says the box holds nothing', async () => {
+    // `draft: undefined` is a real shape — an older server, or an arm that
+    // withholds it. `?? ''` is what keeps the sheet openable at all; without
+    // it the Well renders `undefined` and the count reads off a non-string.
+    const rows = conflicted(TWO_ROWS);
+    render(
+      <Composer id="s" onSend={vi.fn()}
+                pending={[{ ...rows[0]!, key: 'p9', draft: undefined }]} onResolve={vi.fn()} />);
+    expect(await screen.findByText(/already a draft in this session/)).toBeInTheDocument();
+    expect(screen.getByTestId('draft-well').textContent).toBe('');
+  });
+});

@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ChatEvent } from '../../shared/api';
+import type { ChatEvent, SessionStreamMsg } from '../../shared/api';
 import { useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { ChatListInner } from '../src/session/ChatList';
+import { buildChatItems } from '../src/session/chatItems';
+import { foldsAway } from '../src/session/MessageBubble';
 import { Composer } from '../src/session/Composer';
 import { loadAcks } from '../src/lib/seen';
 import { SessionScreen } from '../src/screens/SessionScreen';
@@ -125,7 +127,7 @@ const MESH_RESULT =
   + ' You can now continue with these answers in mind.';
 
 /** Store whose socket is inert and whose api never reaches the network. */
-const makeStore = (id = 'claude:OpenClawHetzner'): SessionStore =>
+const makeStore = (id = 'claude:ProjectC'): SessionStore =>
   createSessionStore(id, {
     makeSocket: () =>
       ({
@@ -223,20 +225,20 @@ describe('ChatListInner', () => {
   });
 
   it('renders a sent clip path as the image, not the path', () => {
-    const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
-    render(<ChatListInner id="claude2-Proj" pending={[]} events={[
+    const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
+    render(<ChatListInner id="claude9-Proj" pending={[]} events={[
       { kind: 'user', uuid: 'u1', ts: NOW, text: `${P}\nwhat is this` },
     ]} />);
 
     const img = screen.getByRole('img', { name: 'clip-20260726-150340-a1b2.png' });
-    expect(img).toHaveAttribute('src', `${location.origin}/api/sessions/claude2-Proj/clip/clip-20260726-150340-a1b2.png`);
+    expect(img).toHaveAttribute('src', `${location.origin}/api/sessions/claude9-Proj/clip/clip-20260726-150340-a1b2.png`);
     expect(screen.getByText('what is this')).toBeInTheDocument();
     expect(screen.queryByText(new RegExp(P))).not.toBeInTheDocument();
   });
 
   it('falls back to the filename when the clip is gone from disk', () => {
-    const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
-    render(<ChatListInner id="claude2-Proj" pending={[]} events={[
+    const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
+    render(<ChatListInner id="claude9-Proj" pending={[]} events={[
       { kind: 'user', uuid: 'u1', ts: NOW, text: P },
     ]} />);
     fireEvent.error(screen.getByRole('img'));
@@ -253,12 +255,24 @@ describe('ChatListInner', () => {
   it('shows the same thumbnails on the optimistic bubble, from the object URL', () => {
     // chip -> pending -> confirmed must never flicker empty, so the pending bubble
     // renders the blob it inherited rather than waiting on a server round trip.
-    render(<ChatListInner id="claude2-Proj" events={[]} pending={[{
+    render(<ChatListInner id="claude9-Proj" events={[]} pending={[{
       key: 'p1', text: 'what is this', state: 'sending',
-      attachments: [{ path: '/home/u/.cc-clips/claude2-Proj/clip-1-a1b2.png', previewUrl: 'blob:mock/1' }],
+      attachments: [{ path: '/home/u/.cc-clips/claude9-Proj/clip-1-a1b2.png', previewUrl: 'blob:mock/1' }],
     }]} />);
     expect(screen.getByRole('img')).toHaveAttribute('src', 'blob:mock/1');
     expect(screen.getByText('what is this')).toBeInTheDocument();
+  });
+
+  // The optimistic bubble and the confirmed one must agree, or a send visibly
+  // changes shape the moment it lands. A document has no object URL by
+  // construction (the tray mints none), so both draw its name.
+  it('shows a pending document as the same name chip the confirmed bubble gives it', () => {
+    render(<ChatListInner id="claude9-Proj" events={[]} pending={[{
+      key: 'p2', text: 'read this', state: 'sending',
+      attachments: [{ path: '/home/u/.cc-clips/claude9-Proj/clip-1-a1b2-notes.md' }],
+    }]} />);
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+    expect(screen.getByText('clip-1-a1b2-notes.md')).toHaveClass('msg-attach-doc');
   });
 
   it('shows an asked question as a question, not as JSON', () => {
@@ -572,20 +586,20 @@ describe('SessionScreen', () => {
   it('acks the session on mount, written through to localStorage', () => {
     window.localStorage.clear();
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
-    expect(loadAcks()).toHaveProperty('claude:OpenClawHetzner');
+    render(<SessionScreen id="claude:ProjectC" store={store} />);
+    expect(loadAcks()).toHaveProperty('claude:ProjectC');
   });
 
   it('renders skeleton bubbles until the backlog arrives', () => {
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} />);
     // untouched store: uuid null — no backlog yet
     expect(screen.getAllByRole('status', { name: 'Loading' }).length).toBeGreaterThan(0);
   });
 
   it('dead session disables the composer and offers restart', () => {
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} />);
     seed(store, { uuid: 'u1', status: 'dead', events: [user('u1', 'last words')] });
 
     expect(screen.getByRole('textbox', { name: 'Message' })).toBeDisabled();
@@ -595,25 +609,25 @@ describe('SessionScreen', () => {
 
   it('shows the transcript diagnostic banner with the attempted path', () => {
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
-    seed(store, { uuid: 'u1', missingFile: '/home/rc/.claude/projects/x/u1.jsonl' });
+    render(<SessionScreen id="claude:ProjectC" store={store} />);
+    seed(store, { uuid: 'u1', missingFile: '/home/u/.claude/projects/x/u1.jsonl' });
 
     expect(screen.getByText("Can't find this session's transcript")).toBeInTheDocument();
-    expect(screen.getByText('/home/rc/.claude/projects/x/u1.jsonl')).toBeInTheDocument();
+    expect(screen.getByText('/home/u/.claude/projects/x/u1.jsonl')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open terminal' })).toBeInTheDocument();
   });
 
   it('focuses the composer on open with a fine pointer — no second click needed', async () => {
     stubPointer(true);
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} />);
     await flushTimers();
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveFocus();
   });
 
   it('leaves focus alone on a coarse pointer', async () => {
     const store = makeStore();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} />);
     await flushTimers();
     expect(screen.getByRole('textbox', { name: 'Message' })).not.toHaveFocus();
   });
@@ -625,6 +639,7 @@ describe('SessionScreen', () => {
     stubPointer(true);
     const store = makeStore();
     seed(store, {
+      askFrameSeen: true,
       dialog: {
         id: 'd1',
         title: 'Which migration strategy?',
@@ -634,7 +649,7 @@ describe('SessionScreen', () => {
         raw: '❯ 1. Expand–contract',
       },
     });
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} />);
+    render(<SessionScreen id="claude:ProjectC" store={store} />);
     await flushTimers();
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     // Radix marks the rest of the page aria-hidden while the dialog is open
@@ -797,5 +812,227 @@ describe('a usage limit reads as a harness line, not a reply (D-2366)', () => {
   it('without resetsAt: the sentence itself, still a limit line', () => {
     const { container } = render(<ChatListInner id="s" events={[limit()]} pending={[]} />);
     expect(container.querySelector('.sys-divider--limit')!.textContent).toBe(`usage limit · ${SENTENCE}`);
+  });
+});
+
+// D-5371: after Claude Code's idle compaction the chat's last item was the
+// folded recap, whose text says "Continue the conversation from where it left
+// off" — read as a stall. The notice row the parser now keeps says the truth.
+describe('an idle compaction reads as waiting for you, not as a stall (D-5371)', () => {
+  const NOTICE = 'Compacted while idle, before the prompt cache expired · turn off with "idleCompaction": false in settings.json';
+  const RECAP = 'This session is being continued from a previous conversation that ran out of context.\n\nSummary:\nthe things\n\nContinue the conversation from where it left off without asking the user any further questions.';
+  const events: ChatEvent[] = [
+    { kind: 'assistant', uuid: 'a1', ts: '2026-10-17T17:43:12.000Z', text: 'Here is the third question.' },
+    { kind: 'user', uuid: 's1', ts: '2026-10-17T18:37:58.500Z', text: RECAP, compaction: true },
+    { kind: 'system', uuid: 'n1', ts: '2026-10-17T18:37:59.980Z', text: NOTICE, origin: 'idle-compact' },
+  ];
+  it('the folded recap, then the pill — the pill is the last row, CC\'s sentence as its tooltip', () => {
+    const { container } = render(<ChatListInner id="s" events={events} pending={[]} />);
+    const pill = container.querySelector('.sys-divider--idle');
+    expect(pill).not.toBeNull();
+    expect(pill!.textContent).toBe('compacted while idle · nothing was running — waiting for you');
+    expect(pill!.getAttribute('title')).toBe(NOTICE);
+    const recap = container.querySelector('.compaction');
+    expect(recap).not.toBeNull();
+    // document order: the recap card comes before the pill
+    expect(recap!.compareDocumentPosition(pill!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector('.msg-user')).toBeNull();
+  });
+  it('the pill never folds, whatever its text', () => {
+    expect(foldsAway(events[2] as Extract<ChatEvent, { kind: 'system' }>)).toBe(false);
+  });
+});
+
+// D-5373: after an idle compaction the server may type ONE "continue" prompt
+// (the operator's "Nudge if work is open" ruling). Its user row must read as
+// the server's act, never as the operator speaking, so a turn that starts with
+// no one typing says why it started.
+describe('the idle-compaction nudge reads as the server\'s act, not the operator (D-5373)', () => {
+  const PROMPT = "Continue with your open tasks. If you were waiting for the operator's answer, say so in one line and stop.";
+  const events: ChatEvent[] = [
+    { kind: 'assistant', uuid: 'a1', ts: '2026-10-17T17:43:12.000Z', text: 'Step two is next.' },
+    { kind: 'system', uuid: 'n1', ts: '2026-10-17T18:37:59.980Z', text: 'Compacted while idle, before the prompt cache expired', origin: 'idle-compact' },
+    { kind: 'system', uuid: 'u3', ts: '2026-10-17T18:38:40.000Z', text: PROMPT, origin: 'idle-compact-nudge' },
+    { kind: 'assistant', uuid: 'a2', ts: '2026-10-17T18:38:44.000Z', text: 'Continuing with step two.' },
+  ];
+  it('a pill names the nudge, the prompt is its tooltip, and no user bubble is drawn for it', () => {
+    const { container } = render(<ChatListInner id="s" events={events} pending={[]} />);
+    const pill = container.querySelector('.sys-divider--nudge');
+    expect(pill).not.toBeNull();
+    expect(pill!.textContent).toBe('nudged after idle compaction · ccrc typed “continue”');
+    expect(pill!.getAttribute('title')).toBe(PROMPT);
+    expect(container.querySelector('.msg-user')).toBeNull();
+    // document order: the idle pill, then the nudge pill, then the turn it started
+    const idle = container.querySelector('.sys-divider--idle:not(.sys-divider--nudge)');
+    expect(idle!.compareDocumentPosition(pill!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+  it('the nudge pill never folds', () => {
+    expect(foldsAway(events[2] as Extract<ChatEvent, { kind: 'system' }>)).toBe(false);
+  });
+});
+
+describe('a system row that carries a BODY folds — it never floods the scroll', () => {
+  const TS = '2026-09-09T11:25:31.906Z';
+  const sysRow = (uuid: string, text: string): ChatEvent => ({ kind: 'system', uuid, ts: TS, text });
+  // The shape the harness injects: a locator line, markdown under it, tens of
+  // KB, hundreds of lines. A centred 11px-mono pill cannot tell that honestly —
+  // `.sys-divider` declares no `white-space`, so it arrives as one run.
+  const BODY = `Base directory for this skill: /home/x/.claude/skills/review-pr\n\n# Review PR\n${'lorem ipsum '.repeat(40)}\nthe last line of the body`;
+
+  it('collapses to a one-line head naming its first line, with the body one tap away', () => {
+    const { container } = render(<ChatListInner id="s" events={[sysRow('y1', BODY)]} pending={[]} />);
+    // not the operator's speech: no bubble, and no receipt claiming delivery
+    expect(container.querySelector('.msg-user')).toBeNull();
+    expect(container.querySelector('.msg-receipt')).toBeNull();
+    expect(container.querySelector('.sys-divider')).toBeNull();
+    expect(container.querySelector('.compaction--sys')).not.toBeNull();
+    const head = screen.getByRole('button', { name: /Base directory for this skill/ });
+    expect(head).toHaveAttribute('aria-expanded', 'false');
+    expect(document.body.textContent ?? '').not.toContain('the last line of the body');
+    fireEvent.click(head);
+    expect(screen.getByRole('button', { name: /Base directory for this skill/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(document.body.textContent ?? '').toContain('the last line of the body');
+  });
+
+  it('opens to the record\'s own text, not to Markdown — a literal asterisk survives', () => {
+    // The parser hands a system row a `text: string` and declares no format for
+    // it. Read as Markdown, `a*b*c` loses both asterisks and a `|` row becomes
+    // a table — the delivery layer inventing a format the parser never sent.
+    render(<ChatListInner id="s" events={[sysRow('y2', 'hook output\na*b*c multiply\n| a | b |')]} pending={[]} />);
+    fireEvent.click(screen.getByRole('button', { name: /hook output/ }));
+    const body = document.querySelector('.compaction-raw');
+    expect(body).not.toBeNull();
+    expect(body!.textContent).toContain('a*b*c multiply');
+    expect(body!.textContent).toContain('| a | b |');
+    expect(document.querySelector('.compaction-body table')).toBeNull();
+    expect(document.querySelector('.compaction-raw em')).toBeNull();
+  });
+
+  it('two lines is already a body — the newline is the predicate, not a size', () => {
+    const { container } = render(<ChatListInner id="s" events={[sysRow('y3', 'first line\nsecond line')]} pending={[]} />);
+    expect(container.querySelector('.sys-divider')).toBeNull();
+    expect(screen.getByRole('button', { name: /first line/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('a one-line system row is still the pill (unchanged)', () => {
+    const { container } = render(<ChatListInner id="s" events={[sysRow('y4', '/clear')]} pending={[]} />);
+    expect(container.querySelector('.sys-divider')).not.toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  // The refactor that made this fold shared: the /compact card had no test of
+  // its own, so this is the pin that says it did not move.
+  it('the /compact recap still folds with its own label, hint and Markdown body (unchanged)', () => {
+    const recap = 'This session is being continued from a previous conversation that ran out of context.\n\n## Summary\n\nthe things';
+    const { container } = render(
+      <ChatListInner id="s" events={[{ kind: 'user', uuid: 'y5', ts: TS, text: recap, compaction: true }]} pending={[]} />,
+    );
+    expect(container.querySelector('.compaction')).not.toBeNull();
+    expect(container.querySelector('.compaction--sys')).toBeNull();
+    const head = screen.getByRole('button', { name: /Context compacted/ });
+    expect(head.textContent).toContain('show summary');
+    fireEvent.click(head);
+    expect(container.querySelector('.compaction-body.msg-assist')).not.toBeNull();
+    expect(container.querySelector('.compaction-raw')).toBeNull();
+  });
+});
+
+// D-7361 (C7i): a summary Claude Code marks `isCompactSummary` in words other than the recap sentence carries the
+// server's flag. Before C7i it rendered as the operator's bubble; after, it is the compaction card like any recap.
+describe('a marker-only compaction summary folds into the compaction card (D-7361)', () => {
+  const TS = '2026-10-29T09:00:00.000Z';
+  const text = 'Summary of the work so far: the census landed.\n\n## Next\n\nthe drawer';
+  it('the flagged row is the card, closed, its summary one tap away; no user bubble', () => {
+    const { container } = render(
+      <ChatListInner id="s" events={[{ kind: 'user', uuid: 'm1', ts: TS, text, compaction: true }]} pending={[]} />,
+    );
+    expect(container.querySelector('.msg-user')).toBeNull();
+    expect(container.querySelector('.compaction')).not.toBeNull();
+    expect(container.querySelector('.compaction--sys')).toBeNull();
+    const head = screen.getByRole('button', { name: /Context compacted/ });
+    expect(head).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(head);
+    expect(container.querySelector('.compaction-body.msg-assist')?.textContent ?? '').toContain('the census landed');
+  });
+  it('the same words without the flag stay the operator\'s bubble', () => {
+    const { container } = render(<ChatListInner id="s" events={[{ kind: 'user', uuid: 'm2', ts: TS, text }]} pending={[]} />);
+    expect(container.querySelector('.compaction')).toBeNull();
+    expect(container.querySelector('.msg-user')).not.toBeNull();
+  });
+});
+
+describe('the quiet-gap divider measures from the newest time seen, not the last one (D-4950)', () => {
+  // An absorbed mid-turn message is stamped with its ENQUEUE time (the
+  // `queued_command` attachment's own `timestamp`), but it is written where
+  // the model took it — after records stamped minutes later. Measured on the
+  // fleet: an attachment stamped 10:01:56 written after a tool result stamped
+  // 10:06:06. Rewinding the divider's clock to it drew a timestamp divider
+  // under a turn that never went quiet.
+  const at = (kind: 'user' | 'assistant', uuid: string, hhmmss: string): ChatEvent =>
+    ({ kind, uuid, ts: `2026-07-20T${hhmmss}.000Z`, text: uuid } as ChatEvent);
+  const dividers = (events: ChatEvent[]): string[] =>
+    buildChatItems(events, []).filter((i) => i.kind === 'divider').map((i) => i.key);
+
+  it('a message that waited in the queue draws no divider after it', () => {
+    expect(dividers([
+      at('assistant', 'a0', '10:00:00'),
+      at('assistant', 'a1', '10:04:00'),
+      at('assistant', 'a2', '10:08:00'),
+      at('assistant', 'a3', '10:12:00'),
+      at('user', 'q1', '10:01:00'),        // absorbed: enqueued at 10:01, taken at 10:12
+      at('assistant', 'a4', '10:12:30'),
+    ])).toEqual(['div-a0']);
+  });
+
+  it('a real quiet gap still gets its divider', () => {
+    expect(dividers([
+      at('assistant', 'a0', '10:00:00'),
+      at('user', 'q1', '09:59:00'),
+      at('assistant', 'a1', '10:10:00'),
+    ])).toEqual(['div-a0', 'div-a1']);
+  });
+
+  // Review round 3 (RR2-PWA-1): the clock follows TRANSCRIPT time only. A
+  // local divider is minted with the PHONE's clock at "now" — the reason the
+  // store's own `newestTranscriptTs` skips it — so one counted here pinned the
+  // never-rewound clock at phone time, and every gap measured after it read
+  // negative.
+  const storeEvents = (msgs: SessionStreamMsg[]): ChatEvent[] => {
+    const store = makeStore('demo:dividers');
+    for (const m of msgs) store.getState().apply(m);
+    return store.getState().events;
+  };
+  const backlogOf = (uuid: string, events: ChatEvent[]): SessionStreamMsg =>
+    ({ type: 'backlog', uuid, events, offset: 100, file: `/t/${uuid}.jsonl`, missing: false });
+
+  it('after a rotation, the next backlog keeps its quiet-gap dividers — the "Session context reset" divider does not set the clock', () => {
+    const events = storeEvents([
+      backlogOf('u1', [at('assistant', 'p0', '08:00:00')]),
+      { type: 'rotated', uuid: 'u2' },
+      backlogOf('u2', [
+        at('assistant', 'a0', '09:00:00'), at('assistant', 'a1', '09:01:00'),
+        at('assistant', 'a2', '10:30:00'), at('assistant', 'a3', '12:00:00'),
+      ]),
+    ]);
+    expect(events[0], 'the reset divider stays on top of the new backlog').toMatchObject({ kind: 'system', uuid: expect.stringMatching(/^local-/) });
+    const keys = dividers(events);
+    expect(keys).toContain('div-a2');
+    expect(keys).toContain('div-a3');
+    expect(keys).not.toContain('div-a1');
+  });
+
+  it('a notice (a swap, a reconnect) does not suppress the dividers after it, whatever the phone clock reads', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2027-03-01T00:00:00.000Z'));   // a phone far ahead of the box
+      const events = storeEvents([
+        backlogOf('u1', [at('assistant', 'a0', '09:00:00')]),
+        { type: 'notice', message: 'cc swap: demo moved lane-a -> lane-b' },
+        { type: 'events', uuid: 'u1', offset: 200, events: [at('assistant', 'a1', '09:15:00')] },
+      ]);
+      expect(dividers(events)).toContain('div-a1');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

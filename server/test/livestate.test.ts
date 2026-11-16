@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { liveSessionStatus, readLiveState, readLiveStateMeasured } from '../src/livestate.js';
-import { localIO } from '../src/io.js';
+import { liveSessionStatus, liveStateReaderOver, liveStatusCoversDelegation, readLiveState, readLiveStateMeasured } from '../src/livestate.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
 
@@ -47,6 +47,30 @@ describe('liveSessionStatus', () => {
 
   it('treats an unrecognised future status as work, not rest', () => {
     expect(liveSessionStatus('reticulating')).toBe('busy');
+  });
+});
+
+// The 2.1.277 floor: from that build on (measured through 2.1.283) Claude
+// Code's own `busy` covers delegated work, a running Workflow included, so an
+// `idle` from its file has already ruled one out (fleet.ts gates the pane
+// row's promotion on this).
+describe('liveStatusCoversDelegation', () => {
+  it('is true from 2.1.277 on, across minor and major bumps', () => {
+    for (const v of ['2.1.277', '2.1.283', '2.1.1000', '2.2.0', '3.0.0', '10.0.0']) {
+      expect([v, liveStatusCoversDelegation(v)]).toEqual([v, true]);
+    }
+  });
+
+  it('is false below 2.1.277 — those builds are unmeasured, so the pane row keeps speaking', () => {
+    for (const v of ['2.1.276', '2.1.99', '2.0.999', '1.9.999', '0.0.0']) {
+      expect([v, liveStatusCoversDelegation(v)]).toEqual([v, false]);
+    }
+  });
+
+  it('is false, never a throw, for no version and for a string that is not X.Y.Z', () => {
+    for (const v of [null, '', 'v2.1.283', '2.1', 'latest', ' 2.1.283', '2.1.x']) {
+      expect([v, liveStatusCoversDelegation(v)]).toEqual([v, false]);
+    }
   });
 });
 
@@ -115,6 +139,19 @@ describe('readLiveState', () => {
     expect(liveSessionStatus(live!.status)).toBe('busy');
   });
 
+  // Review 244, F1 (workspace lifecycle wave 3): `String(raw.status ?? '')` turned a status that is not a string into
+  // one — `["idle"]` into `'idle'`, `true` into `'true'` — so the archive door's fail-closed read (`stopVerdict`) took
+  // an array for an idle pane and stopped it. ccd's `_ws_status` greps the raw bytes for `"status":"<word>"` and finds
+  // nothing in either. A status that is not a string is no status: `''`, which every reader already reads as work.
+  it('a `status` that is not a string reads as no status (`\'\'`) — never as the word its String() spells', async () => {
+    for (const status of [['idle'], true, 0, { idle: 1 }, null]) {
+      const { configDir, pid } = seedLive({ ...base, status });
+      const live = await readLiveStateMeasured(localIO, configDir, pid);
+      expect(live.ok, JSON.stringify(status)).toBe(true);
+      expect(live.ok && live.state.status, JSON.stringify(status)).toBe('');
+    }
+  });
+
   it('D-76: a non-string `waitingFor` degrades to null rather than reaching the wire', async () => {
     const { configDir, pid } = seedLive({ ...base, status: 'waiting', waitingFor: 17 });
     const live = await readLiveState(localIO, configDir, pid);
@@ -134,9 +171,9 @@ describe('readLiveState', () => {
 // Folding the fourth into the other three is what let `assembleFleet` and the
 // chat header paint `idle · 1m ago` over a session this box never managed to
 // look at — a card that says "at rest" on the strength of a permission bit.
-// `fleet.test.ts` pins both surfaces, and pins the ONE consumer that keeps
-// reading `idle` from this same failure on purpose (`liveStatus`, where
-// `idle` REFUSES an interrupt).
+// `fleet.test.ts` pins both surfaces. The interrupt route reads this same
+// failure as `idle` on purpose (`turnverdict.ts`'s `interruptVerdict`, where
+// an unread word REFUSES an interrupt).
 describe('readLiveStateMeasured — the distinction readLiveState folds', () => {
   it('a parseable file is the ok arm, carrying the state itself', async () => {
     const { configDir, pid } = seedLive(base);
@@ -182,31 +219,71 @@ describe('readLiveStateMeasured — the distinction readLiveState folds', () => 
     },
   );
 
-  it('a half-written file and a record with no sessionId are no-state too — the fold this type KEEPS', async () => {
-    // Both are files this reader successfully looked at and rejected, and no
-    // consumer branches between them: a `<pid>.json` caught mid-write is the
-    // same "nothing published yet" a missing one is, one poll tick from
-    // healing. Splitting them would be a wider type, not a finer measurement
-    // (`limits.ts:310`/`commands.ts:73` are the tree's own precedent for
-    // leaving an indifferent fold alone).
+  // D-5234: Claude Code rewrites `<pid>.json` in place, so a body caught
+  // mid-write is a read that measured nothing, not a pane that published
+  // nothing. It is read once more after 50 ms; still torn, it is `unmeasured`.
+  // An absent file and a well-formed record naming no session stay `no-state`.
+  /** A `FleetIO` that answers the live file's reads from `bodies` in order
+   *  (the last one repeating), counting them. */
+  const sequencedLiveIO = (pid: number, bodies: string[]): { io: FleetIO; reads: () => number } => {
+    let n = 0;
+    const io: FleetIO = {
+      ...localIO,
+      readFileMeasured: async (p, t, sig) => {
+        if (!p.endsWith(path.join('sessions', `${pid}.json`))) return localIO.readFileMeasured(p, t, sig);
+        const body = bodies[Math.min(n, bodies.length - 1)]!;
+        n += 1;
+        return { ok: true, content: body };
+      },
+    };
+    return { io, reads: () => n };
+  };
+
+  it('D-5234: a truncated body read twice is unmeasured, not no-state', async () => {
+    const { configDir, pid } = seedLive(base);
+    const { io, reads } = sequencedLiveIO(pid, ['{"pid":1,"sessionId":"0000']);
+    expect(await readLiveStateMeasured(io, configDir, pid)).toEqual({ ok: false, reason: 'unmeasured' });
+    expect(reads()).toBe(2);
+  });
+
+  it('D-5234: a torn body then a whole one is ok — the retry reads the finished write', async () => {
+    const { configDir, pid } = seedLive(base);
+    const { io, reads } = sequencedLiveIO(pid, ['{"pid":1,"sessionId":"0000', JSON.stringify(base)]);
+    const r = await readLiveStateMeasured(io, configDir, pid);
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.state.status).toBe('busy');
+    expect(reads()).toBe(2);
+  });
+
+  it('D-5234: an empty body read twice is unmeasured', async () => {
+    const { configDir, pid } = seedLive(base);
+    const { io } = sequencedLiveIO(pid, ['']);
+    expect(await readLiveStateMeasured(io, configDir, pid)).toEqual({ ok: false, reason: 'unmeasured' });
+  });
+
+  it('D-5234: a torn file on disk is unmeasured through localIO too', async () => {
     const truncated = path.join(mkTmp('ccrc-live-'), '.claude');
     mkdirSync(path.join(truncated, 'sessions'), { recursive: true });
     writeFileSync(path.join(truncated, 'sessions', '4242.json'), '{"pid":4242,"sessionId":"3');
     expect(await readLiveStateMeasured(localIO, truncated, 4242))
-      .toEqual({ ok: false, reason: 'no-state' });
-
-    const { sessionId: _omitted, ...noSessionId } = base;
-    const anon = seedLive(noSessionId);
-    expect(await readLiveStateMeasured(localIO, anon.configDir, anon.pid))
-      .toEqual({ ok: false, reason: 'no-state' });
+      .toEqual({ ok: false, reason: 'unmeasured' });
   });
 
-  it('readLiveState still folds all of them, so its four indifferent callers are untouched', async () => {
+  it('a well-formed record with no sessionId is still no-state, read once — the fold this type KEEPS', async () => {
+    const { sessionId: _omitted, ...noSessionId } = base;
+    const anon = seedLive(noSessionId);
+    const { io, reads } = sequencedLiveIO(anon.pid, [JSON.stringify(noSessionId)]);
+    expect(await readLiveStateMeasured(io, anon.configDir, anon.pid))
+      .toEqual({ ok: false, reason: 'no-state' });
+    expect(reads()).toBe(1);
+  });
+
+  it('readLiveState still folds all of them, so its indifferent callers are untouched', async () => {
     // The derivation, measured rather than assumed: the three fixtures the
     // cases above tell apart read back as one `null` through the legacy form.
     // This is the pin that keeps this task a WIDENING and not a change —
-    // `liveStatus`, `commands.ts`'s cwd lookup and both of `watch.ts`'s
-    // already-fail-shut gates go on seeing exactly what they saw before.
+    // `commands.ts`'s cwd lookup and `watch.ts`'s mail gate
+    // (through `mailTurnIdle`) go on seeing exactly what they saw before.
     const absent = seedLive(base);
     expect(await readLiveState(localIO, absent.configDir, 9999)).toBeNull();
 
@@ -216,5 +293,83 @@ describe('readLiveStateMeasured — the distinction readLiveState folds', () => 
     const degraded = seedLive(base);
     const io = degradedReadIO((p) => p.endsWith(path.join('sessions', `${degraded.pid}.json`)));
     expect(await readLiveState(io, degraded.configDir, degraded.pid)).toBeNull();
+  });
+});
+
+// Worker stall watch, wave 2 (spec §5.1): the live file's `startedAt`. It is the process start that the turn marker's
+// reader judges a marker older than as `stale`. Measured present, numeric, in epoch ms on 2.1.284 (sample below).
+describe('readLiveStateMeasured: startedAt, the process start the turn marker is judged against (stall watch wave 2, §5.1)', () => {
+  const startedAtOf = async (configDir: string, pid: number): Promise<number | null> => {
+    const r = await readLiveStateMeasured(localIO, configDir, pid);
+    if (!r.ok) throw new Error(`expected an ok read, got ${JSON.stringify(r)}`);
+    return r.state.startedAt;
+  };
+
+  it('a numeric startedAt is carried as measured (the 2.1.284 sample)', async () => {
+    const { configDir, pid } = seedLive({ ...base, startedAt: 1790624162602 });
+    expect(await startedAtOf(configDir, pid)).toBe(1790624162602);
+  });
+
+  it('an absent startedAt is null (a build that never wrote it), never 0', async () => {
+    const { configDir, pid } = seedLive(base);
+    expect(await startedAtOf(configDir, pid)).toBeNull();
+  });
+
+  it('a string startedAt is null: the live file writes a number, and a string is not one', async () => {
+    const { configDir, pid } = seedLive({ ...base, startedAt: '1790624162602' });
+    expect(await startedAtOf(configDir, pid)).toBeNull();
+  });
+
+  it('NaN and the other non-finite numbers are null: JSON carries NaN as null, and an overflowing literal parses to Infinity', async () => {
+    const nan = seedLive({ ...base, startedAt: NaN });
+    expect(await startedAtOf(nan.configDir, nan.pid)).toBeNull();
+    const configDir = path.join(mkTmp('ccrc-live-'), '.claude');
+    mkdirSync(path.join(configDir, 'sessions'), { recursive: true });
+    writeFileSync(path.join(configDir, 'sessions', '4242.json'), JSON.stringify(base).replace(/\}$/, ',"startedAt":1e400}'));
+    expect(await startedAtOf(configDir, 4242)).toBeNull();
+  });
+
+  it('the folded read carries it too', async () => {
+    const { configDir, pid } = seedLive({ ...base, startedAt: 1790624162602 });
+    expect((await readLiveState(localIO, configDir, pid))?.startedAt).toBe(1790624162602);
+  });
+});
+
+// D-7512: the reader `fleet.ts#assembleFleet` is handed. It must be `readLiveStateMeasured` over the io it was made
+// with, nothing more: the same answer under each of the live file's five conditions, from the same number of reads.
+describe('liveStateReaderOver: readLiveStateMeasured bound to one io (D-7512)', () => {
+  const PID = 4242;
+  const LIVE = path.join('sessions', `${PID}.json`);
+  const TORN = '{"pid":4242,"sessionId":"3';
+  /** A fresh double per read under test: the live file answers `bodies` in order (the last repeating), or, with
+   *  `null`, the inner io's own answer; every read of the live file is counted. */
+  const liveIO = (inner: FleetIO, bodies: string[] | null): { io: FleetIO; reads: () => number } => {
+    let n = 0;
+    const io: FleetIO = {
+      ...inner,
+      readFileMeasured: async (p, t, sig) => {
+        if (!p.endsWith(LIVE)) return inner.readFileMeasured(p, t, sig);
+        const i = n; n += 1;
+        return bodies === null ? inner.readFileMeasured(p, t, sig) : { ok: true, content: bodies[Math.min(i, bodies.length - 1)]! };
+      },
+    };
+    return { io, reads: () => n };
+  };
+  const conditions: [string, () => { io: FleetIO; reads: () => number }][] = [
+    ['absent', () => liveIO(localIO, null)],
+    ['unreadable', () => liveIO(degradedReadIO((p) => p.endsWith(LIVE)), null)],
+    ['torn once', () => liveIO(localIO, [TORN, JSON.stringify(base)])],
+    ['torn twice', () => liveIO(localIO, [TORN, TORN])],
+    ['well formed', () => liveIO(localIO, [JSON.stringify(base)])],
+  ];
+
+  it.each(conditions)('%s: the same read as readLiveStateMeasured, from the same number of reads', async (_c, make) => {
+    const configDir = path.join(mkTmp('ccrc-live-'), '.claude');
+    mkdirSync(path.join(configDir, 'sessions'), { recursive: true });
+    const direct = make();
+    const viaReader = make();
+    const expected = await readLiveStateMeasured(direct.io, configDir, PID);
+    expect(await liveStateReaderOver(viaReader.io)(configDir, PID)).toEqual(expected);
+    expect(viaReader.reads()).toBe(direct.reads());
   });
 });

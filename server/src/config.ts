@@ -1,12 +1,163 @@
-import { readFileSync } from 'node:fs';
+import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { defaultCoordDbPath } from './coord/db.js';
-import { defaultSessionsPath } from './auth/sessions.js';
+import { defaultSessionsPath } from './auth/paths.js';
 import { defaultPasskeysPath } from './auth/credentials.js';
 import { parseRoster, RosterError, type Roster } from '../../shared/roster.js';
+import { isNodeRole } from '../../shared/node-role.js';
+import { isReleaseSourceName } from '../../shared/release-notes.js';
+import { SPAWN_STALL_MS, type NodeRole } from '../../shared/api.js';
+import { DISPATCH_ABANDON_DEFAULT_MS } from '../../shared/dispatch-abandon.js';
+import { backupStaleHoursOf } from '../../shared/backup.js';
+import { privateTrackerKeysOf } from './linking/publicTextClasses.js';
+import type { FingerprintAnswer } from './accounts/mask.js';
+import { DEPS_SHED_AFTER_HOURS_DEFAULT, DEPS_SHED_PER_PASS_DEFAULT } from './depsShed.js';
+import {
+  WAKE_GATE_DEFAULT, WAKE_HEADROOM_MIN_GIB_DEFAULT, WAKE_HEADROOM_MIN_GIB_MAX, WAKE_PRESSURE_GATES, type WakeGateConfig, type WakePressureGate,
+} from './coord/wakeBudget.js';
 
 export type FleetMode = 'local' | 'remote';
+
+/**
+ * Where `CcrcConfig.role` came from (D-3174). The server had no
+ * role before the update control plane (design 2026-09-20 §6, §9); the box's
+ * recorded one is `CCRC_ROLE` in `~/.ccrc/ccrc.env`, written by `ccrc install`'s
+ * first write of that file and handed to this process by `ccrc.service`'s
+ * EnvironmentFile. THREE words, never two: `derived-absent` (nothing recorded
+ * — every box `deploy.sh` seeded, D-3106) and `derived-invalid` (a token
+ * outside `NodeRole`) have different remedies, so one never stands for the other.
+ */
+export type RoleSource = 'recorded' | 'derived-absent' | 'derived-invalid';
+
+/** The GitHub owner/repo the catalogue poller lists (design 2026-09-20 §7). */
+export interface ReleaseSource { owner: string; repo: string }
+
+/**
+ * The release source as READ (D-3175), failure included. No TS
+ * root may spell the org (`single-definition.test.ts`), so the pair reaches
+ * this process at runtime only: from the INSTALLED tree's `ccd/ccrc` — its two
+ * release-source lines, the same pair `ccrc update` downloads from — or from
+ * `CCRC_RELEASE_OWNER` + `CCRC_RELEASE_REPO` when BOTH are set. Every failure is a
+ * `why`, never a throw: `loadConfig` must boot a box whose tree is elsewhere,
+ * and the poller reports the failure as `no-release-source` and sends nothing.
+ * `tree-absent` (ENOENT) and `tree-unreadable` (any other errno — EACCES,
+ * EISDIR) are kept apart for `loadRoster`'s reason: a file that plainly exists
+ * is not fixed by reinstalling. `env-malformed` (D-3196)
+ * is an override the operator set and this process cannot use; it refuses
+ * rather than quietly polling the tree's pair instead.
+ */
+export type ReleaseSourceRead =
+  | { ok: true; owner: string; repo: string; from: 'env' | 'tree' }
+  | { ok: false; why: 'tree-absent' | 'tree-unreadable' | 'tree-malformed'; path: string }
+  | { ok: false; why: 'env-malformed'; path: null };
+
+/** The releases API root (design 2026-09-20 §7) — the sibling of `ccd/ccrc`'s
+ *  `CCRC_RELEASE_BASE_URL`, so a fixture server stands in for GitHub in tests. */
+export const DEFAULT_RELEASE_API_URL = 'https://api.github.com';
+/** How long an update may run before the server calls it failed (§10). Stored
+ *  from W2; nothing reads it until W4's dispatcher. */
+export const DEFAULT_UPDATE_DEADLINE_MS = 15 * 60_000;
+
+/** `CCRC_DISPATCH_ABANDON_MS` read (D-7319): unset or empty is the default, silently; a value below `SPAWN_STALL_MS` or
+ *  not a safe integer is the default too, said once, because a bound inside the `ws-add` ceiling could abandon a run
+ *  whose dispatch is still running. */
+export function dispatchAbandonMsOf(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DISPATCH_ABANDON_DEFAULT_MS;
+  const n = Number(raw.trim());
+  if (Number.isSafeInteger(n) && n >= SPAWN_STALL_MS) return n;
+  console.warn(`ccrc-server: CCRC_DISPATCH_ABANDON_MS=${JSON.stringify(raw.slice(0, 40))} is not a whole number of `
+    + `milliseconds at or above ${SPAWN_STALL_MS}; using ${DISPATCH_ABANDON_DEFAULT_MS}`);
+  return DISPATCH_ABANDON_DEFAULT_MS;
+}
+
+// One owner or repo name is `isReleaseSourceName` (`shared/release-notes.ts`): GitHub's own
+// character set, at most 100, never only dots (D-3196). It moved to L0 so the PWA's
+// pull-request links ask the same question of the pair this server sends (D-5549).
+
+/** D-8382: the degraded-mode reboot's target, or `null` when either key is unset or empty. The reboot route acts on the
+ *  pair; `GET /api/fleet/health` reports only whether there is one (`rebootConfigured`), so the token and the id never
+ *  leave the server. One function for both, so the button's state and the route's 501 cannot disagree. */
+export function fleetRebootTarget(c: Pick<CcrcConfig, 'hetznerToken' | 'fleetServerId'>): { token: string; serverId: string } | null {
+  return c.hetznerToken && c.fleetServerId ? { token: c.hetznerToken, serverId: c.fleetServerId } : null;
+}
+
+/**
+ * This box's role: the recorded `CCRC_ROLE` when it is a `NodeRole`, else
+ * DERIVED from the fleet mode — `remote` is the server box of a two-box
+ * fleet, `local` is the single box that is both. A bare `CCRC_ROLE=` line is
+ * absent (the house `||` rule); any other non-member is invalid, and says so.
+ */
+export function deriveRole(env: NodeJS.ProcessEnv, fleetMode: FleetMode): { role: NodeRole; roleSource: RoleSource } {
+  const raw = env.CCRC_ROLE;
+  if (isNodeRole(raw)) return { role: raw, roleSource: 'recorded' };
+  const role: NodeRole = fleetMode === 'remote' ? 'server' : 'both';
+  return { role, roleSource: raw === undefined || raw === '' ? 'derived-absent' : 'derived-invalid' };
+}
+
+/**
+ * `roleSource`'s reader (D-3174): the one boot line that says a role
+ * was DERIVED, and why. `NodeWire` carries the role and never where it came
+ * from, so without this line a `deploy.sh` box that never recorded one (D-3106)
+ * reads exactly like a box that did. `null` for a recorded role, which is not
+ * news. `index.ts` warns it once; the words are pinned here, not by a boot.
+ */
+export function derivedRoleNote(c: Pick<CcrcConfig, 'role' | 'roleSource' | 'fleetMode'>): string | null {
+  if (c.roleSource === 'recorded') return null;
+  const why = c.roleSource === 'derived-absent' ? 'absent' : 'invalid';
+  return `ccrc-server: CCRC_ROLE is ${why} in the environment — this box's role reads ${c.role} ` +
+    `(derived from CCRC_FLEET=${c.fleetMode})`;
+}
+
+/**
+ * The pair from a `ccd/ccrc` text: `CCRC_RELEASE_OWNER="…"` and
+ * `CCRC_RELEASE_REPO="…"` at the START of a line, each EXACTLY once (a second
+ * assignment is two answers, and this parser does not pick one), each value a
+ * plain name. `null` on anything else. The URL lines that READ the variables
+ * (`…/$CCRC_RELEASE_OWNER/…`) never match: they do not start with the name.
+ * Split on `\n` and anchored per line WITHOUT the `m` flag, so `$` is the end
+ * of the line: under `m`, `$` also matches before a bare `\r`, and a CRLF line
+ * would parse (measured with node, 2026-09-23).
+ */
+export function parseReleaseSource(ccrcText: string): ReleaseSource | null {
+  const lines = ccrcText.split('\n');
+  const pick = (re: RegExp): RegExpExecArray[] =>
+    lines.map((l) => re.exec(l)).filter((m): m is RegExpExecArray => m !== null);
+  const owners = pick(/^CCRC_RELEASE_OWNER="([^"]+)"$/);
+  const repos = pick(/^CCRC_RELEASE_REPO="([^"]+)"$/);
+  if (owners.length !== 1 || repos.length !== 1) return null;
+  const owner = owners[0]![1]!;
+  const repo = repos[0]![1]!;
+  return isReleaseSourceName(owner) && isReleaseSourceName(repo) ? { owner, repo } : null;
+}
+
+/**
+ * Synchronous, for `loadRoster`'s reason: `index.ts` calls `loadConfig()` at
+ * module top level with no `await`. BOTH env keys set → they decide, valid or
+ * refused; one set without the other is ignored (a half-written override is
+ * not an override) and the tree decides.
+ */
+export function readReleaseSource(env: NodeJS.ProcessEnv, installedCcrcPath: string): ReleaseSourceRead {
+  const envOwner = env.CCRC_RELEASE_OWNER;
+  const envRepo = env.CCRC_RELEASE_REPO;
+  if (envOwner && envRepo) {
+    return isReleaseSourceName(envOwner) && isReleaseSourceName(envRepo)
+      ? { ok: true, owner: envOwner, repo: envRepo, from: 'env' }
+      : { ok: false, why: 'env-malformed', path: null };
+  }
+  let text: string;
+  try {
+    text = readFileSync(installedCcrcPath, 'utf8');
+  } catch (err) {
+    return {
+      ok: false,
+      why: (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'tree-absent' : 'tree-unreadable',
+      path: installedCcrcPath,
+    };
+  }
+  const src = parseReleaseSource(text);
+  return src ? { ok: true, ...src, from: 'tree' } : { ok: false, why: 'tree-malformed', path: installedCcrcPath };
+}
 
 export interface CcrcConfig {
   host: string;
@@ -32,6 +183,13 @@ export interface CcrcConfig {
   accountsPath: string;
   /** 'remote' drives the fleet through ccrc-agent instead of local node:fs/exec — see server/src/remote/. */
   fleetMode: FleetMode;
+  /** This box's role in the update control plane (design 2026-09-20 §6, §9):
+   *  the role of its own `nodes` row, and whether this process writes its own
+   *  `~/.ccrc/update-intent` (`server`/`both` do). `deriveRole` decides it. */
+  role: NodeRole;
+  /** Where `role` came from — recorded, or derived because the record was
+   *  absent or invalid (D-3174). */
+  roleSource: RoleSource;
   agentUrl: string | null;
   agentToken: string | null;
   hetznerToken: string | null;
@@ -49,6 +207,44 @@ export interface CcrcConfig {
   mailTokenPath: string;
   /** The deploy's build stamp (deploy.sh stamp_build). Absent = dev boot. */
   buildInfoPath: string;
+  /** `<home>/.ccrc` — the directory the update control plane's node files live
+   *  in (`NODE_FILES`, `shared/agent-protocol.ts`). ONLY the W2 paths route
+   *  through it; the older `.ccrc` paths above keep their own spellings. In
+   *  remote mode the fleet node's files are read at this same absolute path
+   *  over the agent, the same-path assumption `registryDir` already makes. */
+  ccrcDir: string;
+  /** `<home>/ccrc/ccd/ccrc` — the INSTALLED tree's `ccrc`, the tree
+   *  `ccrc.service`'s ExecStart runs from; `releaseSource` is read from it. */
+  installedCcrcPath: string;
+  /** The catalogue's owner/repo, or why there is none (`readReleaseSource`). */
+  releaseSource: ReleaseSourceRead;
+  /** `CCRC_RELEASE_API_URL`, trailing slashes trimmed; `DEFAULT_RELEASE_API_URL`
+   *  when unset, a bare line, or nothing but slashes. */
+  releaseApiUrl: string;
+  /** `CCRC_UPDATE_DEADLINE_MS` as a positive safe integer, else
+   *  `DEFAULT_UPDATE_DEADLINE_MS`. Read by W4; carried from W2. */
+  updateDeadlineMs: number;
+  /** The deps-shed arm's thresholds (D-7278), deployment config with neutral defaults: `CCRC_DEPS_SHED_AFTER_HOURS`
+   *  (24), `CCRC_DEPS_SHED_PARKED_AFTER_HOURS` (unset: a parked run never sheds) and `CCRC_DEPS_SHED_PER_PASS` (1).
+   *  `depsShedConfigOf` reads them. */
+  depsShed: DepsShedConfig;
+  /** D-8122: the automatic wakes' memory gate, box settings with neutral defaults: `CCRC_WAKE_PRESSURE_GATE`
+   *  (warn|critical|off, default warn) and `CCRC_WAKE_HEADROOM_MIN_GIB` (default `CLAUDE_HEADROOM_GATE_BYTES`, 3).
+   *  `wakeGateConfigOf` reads them. */
+  wakeGate: WakeGateConfig;
+  /** D-7319: `CCRC_DISPATCH_ABANDON_MS`, how old a `planned` run's dispatch stamp must be, with no session bound,
+   *  before the server abandons it (`coord/abandonDeadDispatch.ts`). A safe integer at or above `SPAWN_STALL_MS` (the
+   *  console's own stalled threshold, itself at or above the `ws-add` ceiling), else `DISPATCH_ABANDON_DEFAULT_MS`; a
+   *  value set and refused says so once at load. */
+  dispatchAbandonMs: number;
+  /** D-7858: `CCRC_BACKUP_STALE_HOURS`, how old the fleet box's last successful backup may be before the backup block
+   *  reads `stale`. A whole number from 1 to `BACKUP_STALE_HOURS_MAX`, else `BACKUP_STALE_HOURS_DEFAULT` (36), read by
+   *  `backupStaleHoursOf` (shared/backup.ts), the decider's own vocabulary. */
+  backupStaleHours: number;
+  /** D-8181: `CCRC_PRIVATE_TRACKER_KEYS`, this installer's private tracker keys (comma-separated), whose ticket ids the
+   *  public-text check refuses in a public project's plan text. Empty by default: the keys are the installer's, never the
+   *  code's. Read by `privateTrackerKeysOf`; an entry outside the key shape is left out and said once at load. */
+  privateTrackerKeys: readonly string[];
   /**
    * Stage 3a's session gate — is it ARMED? `false` is the shipped default and
    * the whole deploy story: with the flag off `server/src/auth/gate.ts`'s one
@@ -86,7 +282,8 @@ export interface CcrcConfig {
    * and the Origin check are config-driven by design. Turning proxy trust on
    * would buy nothing today and would create a spoof surface for whatever
    * reads `req.ip` NEXT — a consumer that arrives armed by a setting nobody
-   * re-audits. `auth-routes.test.ts` pins the settlement: the string
+   * re-audits. The `@fastify/rate-limit` registration in `server.ts` is constant-keyed
+   * and reads no `req.ip` either: one global bucket, by design. `auth-routes.test.ts` pins the settlement: the string
    * `trustProxy` appears nowhere in `server/src` outside this docstring.
    *
    * The positive test is inverted relative to `authEnabled` — anything that is
@@ -162,31 +359,9 @@ export interface CcrcConfig {
   passkeysPath: string;
 }
 
-/**
- * THE ONE place a wrapper becomes a directory — every other reader of an
- * account's config dir (`fleet.ts`, `server.ts`, `commands.ts`, `watch.ts`,
- * `sessionws.ts`) calls this instead of indexing `cfg.roster.byId` directly
- * by wrapper name (`single-definition.test.ts` enforces it). `undefined` for
- * any id the roster does not have — a `SessionRecord.wrapper` read off disk
- * is an untrusted string (a stale build, a hand-edited registry file, or the
- * `'ghost-wrapper'` fixture `pr-sweep.test.ts` writes on purpose), and the
- * whole point of this function existing is that callers get one `undefined`
- * to check rather than a bare index into a map that might not have the key.
- *
- * The lookup is DATA, not a hand-typed table, and that is load-bearing: the
- * account roster's 5th member (`claude-dev0`) was once missing from a
- * hand-typed sibling of this map for its entire life (see this file's git
- * history), because that map used to be a second literal kept BESIDE the
- * roster instead of derived FROM it. Going through `cfg.roster.byId` — built
- * once, by `loadConfig`, straight from `~/.ccrc/accounts.json` — closes that
- * class of bug structurally: an account added to the roster gets a config
- * dir here with no second edit, and none can be silently skipped the way a
- * hand-typed table could be.
- */
-export function configDirFor(cfg: CcrcConfig, wrapper: string): string | undefined {
-  const account = cfg.roster.byId.get(wrapper);
-  return account ? path.join(cfg.home, account.configDirSuffix) : undefined;
-}
+/** `configDirFor` lives in `./configDir.js` (D-5896): it is a pure join, and its readers loaded this file, and with
+ *  it `coord/db.ts` and `node:sqlite`, to call it. Re-exported so every other import keeps working. */
+export { configDirFor } from './configDir.js';
 
 /**
  * Reads and validates `accountsPath` — synchronously, on purpose:
@@ -196,9 +371,16 @@ export function configDirFor(cfg: CcrcConfig, wrapper: string): string | undefin
  *
  * In remote fleet mode this still reads the LOCAL box's copy, unconditionally
  * — the server may run on a different machine from the accounts it manages
- * (that is the production topology), but deploy ships the same
- * `accounts.json` to both boxes, so there is no agent round-trip to make
- * here and no FleetIO indirection to add.
+ * (that is the production topology). It is NOT that the two boxes hold one
+ * file: `ship_roster` (`deploy/deploy.sh`) seeds `~/.ccrc/accounts.json` only
+ * when the box has none and never overwrites it afterwards, so each box's copy
+ * is hand-owned and the two can differ — which is precisely why
+ * `rosterAgreement` (`server/src/fleetstate.ts`) compares the generated
+ * projections continuously and the PWA banners `divergent`. What follows from
+ * that is the opposite of an argument for an agent round-trip: THIS box's
+ * roster is the one this server serves, answers `GET /api/accounts` from and
+ * builds argv against, so reading it locally is reading the right file, and a
+ * FleetIO indirection here would silently swap in the OTHER box's answer.
  *
  * Throws `RosterError` — never returns a partial or empty roster — when the
  * file is missing, unreadable, not valid JSON, or fails `parseRoster`'s
@@ -239,6 +421,65 @@ function loadRoster(accountsPath: string): Roster {
     );
   }
   return parseRoster(json);
+}
+
+/** The deps-shed arm's thresholds, in the units the arm reads (D-7278). */
+export interface DepsShedConfig {
+  readonly afterMs: number;
+  /** Null: unset, and a run parked at review, merge or close never sheds (A4, left unset by the operator's ruling). */
+  readonly parkedAfterMs: number | null;
+  readonly perPass: number;
+}
+
+/** One deps-shed key: a canonical positive whole number of at most nine digits, or null. An absent or empty value is
+ *  unset and silent; any other value that is not one says so once and is unset too. */
+function depsShedKey(env: NodeJS.ProcessEnv, key: string): number | null {
+  const raw = env[key];
+  if (raw === undefined || raw === '') return null;
+  if (/^[1-9][0-9]{0,8}$/.test(raw)) return Number(raw);
+  console.warn(`ccrc-server: ${key}=${JSON.stringify(raw.slice(0, 40))} is not a positive whole number; it reads as unset (the default).`);
+  return null;
+}
+
+/** The deps-shed thresholds from the environment (D-7278). Every one is deployment config with a neutral default. */
+export function depsShedConfigOf(env: NodeJS.ProcessEnv): DepsShedConfig {
+  const hour = 3_600_000;
+  const after = depsShedKey(env, 'CCRC_DEPS_SHED_AFTER_HOURS');
+  const parked = depsShedKey(env, 'CCRC_DEPS_SHED_PARKED_AFTER_HOURS');
+  const perPass = depsShedKey(env, 'CCRC_DEPS_SHED_PER_PASS');
+  return {
+    afterMs: (after ?? DEPS_SHED_AFTER_HOURS_DEFAULT) * hour,
+    parkedAfterMs: parked === null ? null : parked * hour,
+    perPass: perPass ?? DEPS_SHED_PER_PASS_DEFAULT,
+  };
+}
+
+/** The wake gate's two settings from the environment (D-8122). An absent or empty value is the default and silent; any
+ *  other value that is not one of the setting's own says so once and reads as the default. */
+export function wakeGateConfigOf(env: NodeJS.ProcessEnv): WakeGateConfig {
+  const rawGate = env['CCRC_WAKE_PRESSURE_GATE'];
+  let pressure: WakePressureGate = WAKE_GATE_DEFAULT.pressure;
+  if (rawGate !== undefined && rawGate !== '') {
+    if ((WAKE_PRESSURE_GATES as readonly string[]).includes(rawGate)) pressure = rawGate as WakePressureGate;
+    else console.warn(`ccrc-server: CCRC_WAKE_PRESSURE_GATE=${JSON.stringify(rawGate.slice(0, 40))} is not one of ${WAKE_PRESSURE_GATES.join('|')}; it reads as ${pressure} (the default).`);
+  }
+  const rawMin = env['CCRC_WAKE_HEADROOM_MIN_GIB'];
+  let gib = WAKE_HEADROOM_MIN_GIB_DEFAULT;
+  if (rawMin !== undefined && rawMin !== '') {
+    if (/^(0|[1-9][0-9]{0,3})$/.test(rawMin) && Number(rawMin) <= WAKE_HEADROOM_MIN_GIB_MAX) gib = Number(rawMin);
+    else console.warn(`ccrc-server: CCRC_WAKE_HEADROOM_MIN_GIB=${JSON.stringify(rawMin.slice(0, 40))} is not a whole number from 0 to ${WAKE_HEADROOM_MIN_GIB_MAX}; it reads as ${gib} (the default).`);
+  }
+  return { pressure, headroomMinBytes: gib * 2 ** 30 };
+}
+
+/** `CCRC_PRIVATE_TRACKER_KEYS` read for the config: the keys, and one line at load naming the entries left out. */
+function privateTrackerKeysRead(raw: string | undefined): readonly string[] {
+  const { keys, refused } = privateTrackerKeysOf(raw);
+  if (refused.length > 0) {
+    console.warn(`ccrc-server: CCRC_PRIVATE_TRACKER_KEYS leaves out ${refused.length} entr${refused.length === 1 ? 'y' : 'ies'} `
+      + 'that are not a tracker key (a letter, then up to 15 letters, digits or _).');
+  }
+  return keys;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
@@ -303,6 +544,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
       'default CCRC_ORIGIN come from this value.');
   }
   const port = portOk ? portNum : 7788;
+  // Hoisted for the `port`/`origin` reason above: `role` is derived FROM the
+  // fleet mode, and one expression read twice is how the two come to disagree.
+  const fleetMode: FleetMode = env.CCRC_FLEET === 'remote' ? 'remote' : 'local';
+  const { role, roleSource } = deriveRole(env, fleetMode);
+  const installedCcrcPath = path.join(home, 'ccrc', 'ccd', 'ccrc');
+  const releaseApiUrl = (env.CCRC_RELEASE_API_URL || '').replace(/\/+$/, '');
+  const deadlineNum = Number(env.CCRC_UPDATE_DEADLINE_MS);
+  const dispatchAbandonMs = dispatchAbandonMsOf(env.CCRC_DISPATCH_ABANDON_MS);
   return {
     // `||`, not `??`: a bare `CCRC_HOST=` EnvironmentFile line yields '', and
     // `listen({host: ''})` binds ALL interfaces — the opposite of the loopback
@@ -323,7 +572,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     projectsRoot: env.CCRC_PROJECTS_ROOT ?? path.join(home, 'projects'),
     roster,
     accountsPath,
-    fleetMode: env.CCRC_FLEET === 'remote' ? 'remote' : 'local',
+    fleetMode,
+    role,
+    roleSource,
     agentUrl: env.CCRC_AGENT_URL ?? null,
     agentToken: env.CCRC_AGENT_TOKEN ?? null,
     hetznerToken: env.CCRC_HETZNER_TOKEN ?? null,
@@ -340,6 +591,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     coordDbPath: env.CCRC_COORD_DB ?? defaultCoordDbPath(home),
     mailTokenPath: env.CCRC_MAIL_TOKEN_PATH ?? path.join(home, '.ccrc', 'mail.token'),
     buildInfoPath: path.join(home, '.ccrc', 'build.json'),
+    ccrcDir: path.join(home, '.ccrc'),
+    installedCcrcPath,
+    releaseSource: readReleaseSource(env, installedCcrcPath),
+    // `||` in effect for both knobs: '' trims to '' and falls to the default,
+    // and `Number('')` is 0, which the positive test refuses.
+    releaseApiUrl: releaseApiUrl || DEFAULT_RELEASE_API_URL,
+    updateDeadlineMs: Number.isSafeInteger(deadlineNum) && deadlineNum > 0 ? deadlineNum : DEFAULT_UPDATE_DEADLINE_MS,
+    depsShed: depsShedConfigOf(env),
+    wakeGate: wakeGateConfigOf(env),
+    dispatchAbandonMs,
+    backupStaleHours: backupStaleHoursOf(env.CCRC_BACKUP_STALE_HOURS),
+    privateTrackerKeys: privateTrackerKeysRead(env.CCRC_PRIVATE_TRACKER_KEYS),
     // The auth keys. Task 5 added ONLY the ones the gate itself consumes (the
     // plan parks config in Task 10, but there is no gating a route on a key
     // that does not exist); Task 8 adds `rpId`/`origin`/`passkeysPath`; Task 10
@@ -363,4 +626,80 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     origin: env.CCRC_ORIGIN || `http://localhost:${port}`,
     passkeysPath: env.CCRC_PASSKEYS_PATH || defaultPasskeysPath(home),
   };
+}
+
+// ── roster reload (D-5518, D-5513; accounts plan Task A12) ───────────────────────────────────────────────────────────
+
+/** What a verb's answer carries for `reloadRoster`: the roster as the box holds it now, the node it came from, and
+ *  the lane-secret fingerprints (A10's table; `null` when the answer carries none). */
+export interface RosterAnswer {
+  readonly roster: unknown;
+  readonly fleetIdentity: string | null;
+  readonly fingerprints: FingerprintAnswer | null;
+}
+
+/** A verb's stdout read as a `RosterAnswer` (`{roster, fleetIdentity, fingerprints?}`, spec §3.9), or `null` for an
+ *  answer that carries no roster (the subs that answer one lane, a refusal, anything that is not JSON). The
+ *  fingerprints' grammar is the masker's (`fingerprintAnswerOf`), taken as a port so this file loads nothing from an
+ *  outer ring (D-6058 (7); ARCH-04 stage 2, D-6045). */
+export function rosterAnswerOf(
+  stdout: string, fingerprintsOf: (stdout: string) => FingerprintAnswer | null,
+): RosterAnswer | null {
+  let o: { roster?: unknown; fleetIdentity?: unknown } | null;
+  try { o = JSON.parse(stdout) as typeof o; } catch { return null; }
+  if (o === null || typeof o !== 'object' || o.roster === undefined || o.roster === null || typeof o.roster !== 'object') {
+    return null;
+  }
+  return {
+    roster: o.roster,
+    fleetIdentity: typeof o.fleetIdentity === 'string' ? o.fleetIdentity : null,
+    fingerprints: fingerprintsOf(stdout),
+  };
+}
+
+export type RosterReload = { ok: true; changed: boolean } | { ok: false; why: 'fleet-identity' | 'roster-invalid' };
+
+export interface RosterReloadDeps {
+  /** The fleet node this server drives (`knownFleetIdentity`), or `null` when it is not known: then nothing reloads. */
+  fleetIdentity: () => string | null;
+  /** A10's table (`SecretMasker.offer`): absent in a test that reads the roster only. */
+  fingerprints?: { offer(answer: FingerprintAnswer | null, keep: ReadonlySet<string>): void };
+}
+
+/** The lanes that may hold fingerprint rows: a lane whose entry names a secret file, and a ccrc-owned Codex lane. */
+const secretLanesOf = (roster: Roster): ReadonlySet<string> =>
+  new Set(roster.accounts.filter((a) => a.exec.secretsFile !== undefined || a.exec.kind === 'codex').map((a) => a.id));
+
+/**
+ * THE SERVER'S ONE WAY TO TAKE A ROSTER THE BOX ANSWERED (D-5518; spec §3.9, G6). Every mutating sub's answer feeds
+ * it, and so does reconcile's `roster` sub. A roster from another fleet, or from a fleet this server cannot name, is
+ * refused and nothing changes; so is one `parseRoster` refuses. A good one swaps `cfg.roster` (the fleet-health
+ * agreement follows it: `server.ts` derives its own fingerprint from `cfg.roster` on every read) and, in remote mode,
+ * rewrites the controller's mirror 0644 atomically: a temp file renamed over it, so a reader mid-write sees the old
+ * file or the new one. In local mode the file is the box's own, written by the verb, and the server never writes it.
+ * Then A10's table: the answer's fingerprints are ingested with the current box-token generation, and every row of a
+ * lane the roster no longer holds a secret for is deleted (D-5513). Never throws.
+ */
+export function reloadRoster(cfg: CcrcConfig, answer: RosterAnswer, deps: RosterReloadDeps): RosterReload {
+  const ours = deps.fleetIdentity();
+  if (ours === null || answer.fleetIdentity === null || answer.fleetIdentity !== ours) return { ok: false, why: 'fleet-identity' };
+  let roster: Roster;
+  try { roster = parseRoster(answer.roster); } catch { return { ok: false, why: 'roster-invalid' }; }
+  const changed = JSON.stringify(roster) !== JSON.stringify(cfg.roster);
+  if (changed) {
+    if (cfg.fleetMode === 'remote') {
+      const tmp = path.join(path.dirname(cfg.accountsPath), `.${path.basename(cfg.accountsPath)}.tmp.${process.pid}`);
+      try {
+        writeFileSync(tmp, `${JSON.stringify(answer.roster, null, 2)}\n`, { mode: 0o644 });
+        chmodSync(tmp, 0o644);
+        renameSync(tmp, cfg.accountsPath);
+      } catch (e) {
+        rmSync(tmp, { force: true });
+        console.warn(`[roster] the mirror was not rewritten: ${(e as NodeJS.ErrnoException).code ?? 'error'}`);
+      }
+    }
+    cfg.roster = roster;
+  }
+  deps.fingerprints?.offer(answer.fingerprints, secretLanesOf(roster));
+  return { ok: true, changed };
 }

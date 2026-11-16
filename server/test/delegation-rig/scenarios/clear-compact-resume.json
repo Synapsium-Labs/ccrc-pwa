@@ -1,0 +1,19 @@
+{
+  "scenario": "clear-compact-resume", "covers": ["Q5"],
+  "steps": [
+    {"waitReady": 60}, {"type": "dlg c1"}, {"keys": ["Enter"]}, {"waitLabels": ["c1"], "timeoutS": 60},
+    {"type": "/clear"}, {"keys": ["Enter"]}, {"sleep": 3},
+    {"type": "dlg c2"}, {"keys": ["Enter"]}, {"waitLabels": ["c2"], "timeoutS": 60},
+    {"type": "/compact"}, {"keys": ["Enter"]}, {"sleep": 15},
+    {"kill9": true}, {"sleep": 3}, {"relaunch": true}, {"waitReady": 60},
+    {"type": "dlg c3"}, {"keys": ["Enter"]}, {"waitLabels": ["c3"], "timeoutS": 60},
+    {"type": "/exit"}, {"keys": ["Enter"]}, {"sleep": 5}
+  ],
+  "settleS": 3,
+  "entries": [
+    {"label": "c1", "match": {"kind": "tools", "lastUser": "dlg c1"}, "text": "DLG-C1"},
+    {"label": "c2", "match": {"kind": "tools", "lastUser": "dlg c2"}, "text": "DLG-C2"},
+    {"label": "c3", "match": {"kind": "tools", "lastUser": "dlg c3"}, "text": "DLG-C3"}
+  ],
+  "default": {"text": "DLG-WAIT", "repeat": true}
+}

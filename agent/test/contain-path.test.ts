@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { CONTAIN_PATH_ROOT_ENV } from './contain-path.globalsetup.js';
+import { RUN_DIR_ENV, RUN_PREFIX, RUN_QUIET_ENV, RUN_REFUSED_ENV } from '../../server/test/run-tmp.globalsetup.mjs';
 
 /** The pin for `contain-path.setup.ts`. Without it the containment is a config
  *  line nobody would miss until the fleet went down again — which is exactly
@@ -154,14 +155,17 @@ describe('PATH containment cleans up on the failure it exists to cause', () => {
     // child's stub directories out of `childTmp` — and the count below would
     // then read zero for the wrong reason, which is the one way this pin could
     // pass while the leak was back.
+    // The per-run temp parent's names likewise: the child makes its own run
+    // directory under `childTmp` (or, where that base is too long for a unix
+    // socket, refuses and works loose in it), and the count below covers both.
     const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: childTmp, CI: '1' };
-    delete env[CONTAIN_PATH_ROOT_ENV];
+    for (const k of [CONTAIN_PATH_ROOT_ENV, RUN_DIR_ENV, RUN_REFUSED_ENV, RUN_QUIET_ENV]) delete env[k];
 
     const r = spawnSync(process.execPath, [VITEST, 'run', '--root', scratch], {
       cwd: scratch, encoding: 'utf8', env,
     });
 
-    const left = readdirSync(childTmp).filter((f) => f.startsWith('ccrc-agent-containpath-'));
+    const left = readdirSync(childTmp).filter((f) => f.startsWith('ccrc-agent-containpath-') || f.startsWith(RUN_PREFIX));
     const detail = `\n--- child stdout ---\n${r.stdout}\n--- child stderr ---\n${r.stderr}`;
 
     // POSITIVE CONTROLS first, so a broken harness reads as a broken harness

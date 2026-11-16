@@ -300,8 +300,8 @@ convenience. `$REG/coordinator-paused` exists precisely so the coordinator
 pause route gated by the box token would hand the coordinator — which holds
 that token by design — its own unpause. The two doors are different because the
 two callers are different, and each act names its cause: run events already
-carry `causedBy ∈ {'coordinator','operator',<session id>}`
-(`coord/schema.ts:96`). Read routes (`GET /api/runs`, `GET /api/feed`) are
+carry `causedBy ∈ {'coordinator','operator',<session id>}` — and, since workspace lifecycle wave 4, `'sweep'`, the
+dead-coordinator lane's abandon (`coord/schema.ts:96`). Read routes (`GET /api/runs`, `GET /api/feed`) are
 already ungated and stay so.
 
 Honesty clause, in the register of fact 2 of Build 7's own spec: on a

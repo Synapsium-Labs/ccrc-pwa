@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-08-model-class-registry-design.md`, at `d3048253` on branch `feat/model-class-registry` (`git -C <spec-worktree> log -1 --oneline` → `d3048253 docs(models): registry is its own per-account file until account-connections merges; subagent is an explicit class-to-slot choice; discovery scope named apart from selectable; Plan 3 splits behind wave 4`). This plan implements spec §7's "Manual swap may downgrade, explicitly" and §8's third bullet.
 
-**Skeleton:** the locked skeleton for the plans is `/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-skeleton.md`. Its **"Rulings round 2"** (mails 279 and 280, 2026-09-08) OVERRIDES the "Locked interfaces" section above it, and this plan implements the round-2 shape: item 9 is what split the old Plan 3 into `…-3a-surfaces.md` and this file, and put this file behind account-pools wave 4's merge; `discovery`, the explicit `subagent`, the top-level `ccrc models` group and the three-column `.classes.tsv` are the round-2 names every sentence here uses.
+**Skeleton:** the locked skeleton for the plans is `<scratchpad>/mcr-skeleton.md`. Its **"Rulings round 2"** (mails 279 and 280, 2026-09-08) OVERRIDES the "Locked interfaces" section above it, and this plan implements the round-2 shape: item 9 is what split the old Plan 3 into `…-3a-surfaces.md` and this file, and put this file behind account-pools wave 4's merge; `discovery`, the explicit `subagent`, the top-level `ccrc models` group and the three-column `.classes.tsv` are the round-2 names every sentence here uses.
 
 ---
 
@@ -188,8 +188,8 @@ import type { Runner } from '../src/exec.js';
 
 describe('CCD_ARGV.swap', () => {
   it('is byte-identical to what it always was when no class is named', () => {
-    expect([...CCD_ARGV.swap('demo-quiet-basin', 'claude2', null)])
-      .toEqual(['swap', 'demo-quiet-basin', 'claude2']);
+    expect([...CCD_ARGV.swap('demo-quiet-basin', 'claude9', null)])
+      .toEqual(['swap', 'demo-quiet-basin', 'claude9']);
   });
 
   it('appends the flag AFTER the positionals, where every other builder here puts one', () => {
@@ -339,20 +339,20 @@ describe('FleetSession.modelClass', () => {
     // one registry file, `<id>.class`.
     const home = mkTmp('ccrc-fleet-class-');
     seedRoster(home);
-    seedSession(home, 'claude-a-MekWarLive', 'claude-a', { class: 'fable' });
+    seedSession(home, 'claude-a-project-f', 'claude-a', { class: 'fable' });
     const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const fleet = await assembleFleet(localIO, cfg, new Tmux(run), 1784600000);
-    expect(fleet.find((s) => s.id === 'claude-a-MekWarLive')?.modelClass).toBe('fable');
+    expect(fleet.find((s) => s.id === 'claude-a-project-f')?.modelClass).toBe('fable');
   });
 
   it('reads an EMPTY class file as no class — that is how ccd clears one', async () => {
     const home = mkTmp('ccrc-fleet-class-empty-');
     seedRoster(home);
-    seedSession(home, 'claude-a-MekWarLive', 'claude-a', { class: '' });
+    seedSession(home, 'claude-a-project-f', 'claude-a', { class: '' });
     const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
-    expect(fleet.find((s) => s.id === 'claude-a-MekWarLive')?.modelClass).toBeNull();
+    expect(fleet.find((s) => s.id === 'claude-a-project-f')?.modelClass).toBeNull();
   });
 });
 ```
@@ -407,7 +407,7 @@ Update `server/test/whitelist-subset.test.ts`'s sample:
   // CARRIES A CLASS: a bare sample would leave layer 2 proving only the
   // unflagged shape reachable, and the flagged one is what the SwapSheet's
   // explicit downgrade actually sends.
-  swap: ['demo-quiet-basin', 'claude2', 'opus'],
+  swap: ['demo-quiet-basin', 'claude9', 'opus'],
 ```
 
 and add, beside the `stop` assertion:
